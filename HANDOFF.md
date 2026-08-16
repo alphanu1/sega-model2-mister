@@ -1,27 +1,38 @@
 # Handoff
 
-**Updated:** 2026-08-16, after the first push (`5e8feb1`).
+**Updated:** 2026-08-16, after `03b03f8`.
 
 ---
 
 ## State
 
-Documentation only. **No RTL, no Quartus project, no simulation harness yet.**
+Documentation and scaffolding. **No RTL yet.** P1 is specified and ready to
+build against.
 
 | File | What it is |
 |---|---|
 | `docs/model2a-design-study.md` | The analysis. Whether it fits, and why that is still open. |
 | `docs/milestones.md` | The order of work, and the one number it is all sequenced to answer. |
+| `docs/p1-i960-spike.md` | **The current milestone.** i960KB scope, register model, opcode space, timing, memory map, exit criteria. |
 | `docs/mister-integration.md` | Framework traps already paid for on hardware. Read before wiring anything. |
 | `THIRD_PARTY.md` | Every licence, and how it was checked. |
+| `tools/bootstrap.sh` | Fetches and pins the five upstream dependencies. |
+| `deps.lock` | The pins. Enforced on fetch, not merely written afterwards. |
+| `.vscode/settings.json` | Hides six nested repositories from Source Control, with the reasoning. |
 | `LICENSE` | GPL-3, which porting from Model 1 forces rather than chooses. |
 
 Environment verified on this machine: Quartus Prime Lite **17.0.0 Build 595** at
 `/home/ben/intelFPGA_lite/17.0`, Verilator 5.050, iverilog. Quartus 24.1std is
 also installed and must not be used for a core build.
 
-`tools/model1-ref` is a read-only clone of the Model 1 core, currently at
-`4ff53be`. It is git-ignored and is not part of this repository.
+`tools/model1-ref` is a read-only clone of the Model 1 core at `6fd28aa`,
+**cloned from the local repository rather than GitHub** — that project's newest
+commits are not always pushed, and cloning upstream silently pins us behind. It
+tracks commits only: uncommitted work in that worktree is invisible here, which
+is not fixable and is worth remembering before concluding anything from it.
+
+Run `tools/bootstrap.sh` on a fresh checkout. `third_party/` and
+`tools/model1-ref/` are git-ignored and are not part of this repository.
 
 ---
 
@@ -56,11 +67,16 @@ CPU and the GPU first and defer everything that cannot change the answer.
 - **M2-G** — email srg320 about the SCSP licence. Send it now; a late yes is
   worth less than an early one.
 
-### Then
+### Then — P1, and it is specified
 
-P1 i960KB (pipelined, lockstepped against MAME on integer), P2 renderer, P3 the
-fit verdict, P4 TGP port, P5 sound and 2D, P6 integration. Detail in
-`docs/milestones.md`.
+`docs/p1-i960-spike.md` §6 has the order. First actual RTL task is the
+instruction decoder and the four instruction formats, fuzzed against
+`i960dis.cpp` — the disassembler is a free second opinion on field extraction.
+The FPU is deliberately step 8 of 8: it is the only part with no oracle, and
+M2-D measures the integer core.
+
+Then P2 renderer, P3 the fit verdict, P4 TGP port, P5 sound and 2D, P6
+integration. Detail in `docs/milestones.md`.
 
 ---
 
@@ -88,6 +104,30 @@ unchanged.
 
 **`N64_MiSTer` is GPL-3.0**, not merely readable. It is an architectural
 reference for the renderer, not only an M2-E comparable.
+
+**The i960's transcendentals are enormously slow, so the FPU can be microcoded.**
+`sinr`/`cosr` are 406 cycles, `sinrl`/`cosrl` 441, `logr` 438, against 10 for
+`addr` and 18 for `mulr`. At 25 MHz that caps `sinr` at ~1,000 per frame with the
+CPU doing nothing else. A CORDIC at ~64 iterations is ~6x faster than the
+silicon on the operations that dominate FPU area, and 36 cycles for `mulrl`
+affords an iterative 27x27 DSP multiply rather than a wide combinational one.
+This pushes the widest line in the i960 estimate toward the bottom of its
+2,500-6,000 range, and changes M2-B's purpose from verdict to mix.
+
+Held to the standing rule: MAME cycle counts are not hardware facts and these
+need checking against the i960KB timing manual. But `i960.cpp` differs from
+`v60.cpp` in a checkable way — per-opcode values, `remr` carrying `// (67 to
+75878 depending on opcodes!!!)`, one `// checkme` in the whole file. A flat
+average cannot produce that. The conclusion also survives the figures being
+wrong by a factor of two.
+
+**The register cache is cheaper than §5.2 assumed, and its depth is not free to
+change.** MAME copies sixteen words per `call` because it is software; in RTL a
+banked four-frame local file makes `call` a frame-pointer increment — ~2 M10K
+and ~128 ALM, against ~512 ALM for a flat flip-flop file of the same storage.
+But a spilled frame *writes to memory*, so cache depth is visible in the write
+stream lockstep compares. Four frames, matching the reference. Deeper caching
+later is a behaviour change needing its own verification, not a free win.
 
 ### Retracted
 
@@ -128,6 +168,20 @@ answer.
 **The renderer still has no bit-exact oracle**, and never will. Verification is
 by framebuffer comparison, which localises bugs poorly. Plan instrumentation
 accordingly.
+
+**The i960 FPU has no bit-exact oracle either, and the decision is unmade.**
+MAME models the four 80-bit registers as host `double`. Either verify against a
+software 80-bit reference — x86 `long double` is 80-bit and is the cheapest
+route to one — or implement 64-bit and document the deviation. The first is
+preferred and is the only option that makes lockstep meaningful for FP. Do not
+let this be decided by default.
+
+**P1 pipelines with no rehearsal.** M2-F was the cheap way to learn whether a
+pipelined CPU of this class closes timing on this part, on a 3,000 ALM block
+with an existing harness. Deferring the TGP removed it, so the largest
+from-scratch block goes first with nothing proven ahead of it. Accepted
+knowingly. If the Quartus spike misses, Model 1's M0 retiming notes are the
+closest prior art.
 
 ---
 
