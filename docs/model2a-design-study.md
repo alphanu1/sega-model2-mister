@@ -1,7 +1,9 @@
 # Sega Model 2A-CRX on Cyclone V — design study
 
-**Status: open, contingent on measurement.** Optimistic budget fits with ~3K spare;
-pessimistic budget is ~20K over. Every block is anchored to a named MAME device except the
+**Status: open, and materially better than it was.** Optimistic budget fits with ~3.8K
+spare against the 92% routing line; pessimistic is ~13.6K over. M2-E is closed and passed,
+which cut the renderer estimate from 15,000-25,000 to 8,000-14,000 on measured evidence
+and took the total from 38,500-61,300 down to **34,384-51,784**. Every block is anchored to a named MAME device except the
 renderer, and one gate (M2-C) is now closed. The problem is no longer only the renderer:
 **three blocks have no licence-compatible RTL to start from — the renderer, the i960 and
 the SCSP — and together they are 26,000 of the 38,500 optimistic total.**
@@ -483,22 +485,45 @@ renderer it was not previously called out as a sourcing problem.
 
 | Block | Optimistic | Pessimistic | Anchor |
 |---|---|---|---|
-| i960KB, pipelined | 7,000 | 13,500 | estimate — no RTL exists anywhere (5.4.3) |
-| 1x MB86234, pipelined | 3,000 | 5,000 | **measured 2,554 as an FSM** (5.4.1) |
-| **3D renderer — no oracle** | **15,000** | **25,000** | estimate — N64 RDP is the only comparable |
-| Sound, tilemap, I/O | 8,500 | 12,800 | fx68k measured; S24TILE written; SCSP estimate |
-| `sys/` framework | 5,000 | 5,000 | framework |
-| **Total** | **38,500** | **61,300** | |
-| **Against 41,509** | **fits, 3K spare** | **20K over** | |
+| i960KB, pipelined | 8,254 | 13,354 | **3,754 measured**; R4300i at 9,236 agrees |
+| 1x MB86234, pipelined | 3,000 | 5,000 | Model 1 measured 2,554 as an FSM |
+| **3D renderer** | **8,000** | **14,000** | **M2-E: RDP = 8,347, and more capable than we need** |
+| Sound, tilemap, I/O | 8,500 | 12,800 | `fx68k` reported; SCSP and S24TILE estimated |
+| `sys/` framework | 6,630 | 6,630 | **M2-E measured** — was estimated at 5,000 |
+| **Total** | **34,384** | **51,784** | |
+| **Against 41,509** | **fits, 7,125 spare** | **10,275 over** | |
+| **Against 92% routing** | **fits, 3,804 spare** | **13,596 over** | |
 
-Barely different from the previous revision's 39,500 / 62,500, and that is the point worth
-taking from section 5.4: **auditing the sources bought almost no area.** What it bought was
-one line moving from estimate to measurement, one block moving from "adapt existing RTL" to
-"write from scratch", and one block moving from "write from scratch" to "already done".
+Revised from **38,500 - 61,300** after M2-E. The optimistic case improved by
+4,116 ALM and the pessimistic by 9,516, almost entirely because the renderer
+estimate came down from 15,000-25,000 to 8,000-14,000 on measured evidence. The
+framework moved the other way, from an estimated 5,000 to a measured 6,630.
 
-The optimistic case still closes, and still by less than the error bar on the renderer.
-Two of the five rows — 22,000 of the 38,500 optimistic total, 57% of it — remain pure
-estimate with no RTL behind them, and they are the two largest.
+**Two of the five rows are now anchored to measurements on this device.** Two
+remain estimates with nothing built (SCSP, and the renderer above its RDP
+anchor), and one — the i960 — is half measured.
+
+**The 92% line is not decoration.** M2-E's compile failed to fit at 92% ALM with
+`Error (11802)`, and while that is a build-configuration difference rather than a
+property of the N64 design, it is direct evidence of where this device stops
+routing. Budget against 38,188, not 41,509.
+
+#### The other two resources, which this study has never budgeted
+
+ALM stopped being the only question the moment M2-E reported 111 DSP of 112.
+
+| | quantified | of | note |
+|---|---|---|---|
+| ALM | 34,384 - 51,784 | 41,509 | budget above |
+| **DSP** | **67 - 102** | **112** | never budgeted before; renderer alone wants 40-60 |
+| M10K | ~125 quantified | 553 | 77% still unbudgeted (§5.6) |
+
+The DSP row is assembled from: renderer 40-60 (RDP uses 61), i960 FPU 4-12,
+SCSP 2-8, `sys/` framework 17 measured, TGP 1 measured, our `i960_muldiv` 3
+measured. **The optimistic end leaves 45 blocks spare and the pessimistic end
+leaves 10.** §7 Tier 1's "push arithmetic into DSP blocks — 112 available, Model
+1 uses ~5" is therefore true only in the optimistic case, and must stop being
+described as free capacity.
 
 ### 5.5.1 M2-E — measured, and the renderer estimate was far too high
 
