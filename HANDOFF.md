@@ -1,12 +1,12 @@
 # Handoff
 
-**Updated:** 2026-08-16, after `697bcfe`.
+**Updated:** 2026-08-16, after `8400052`.
 
 ---
 
 ## State
 
-**P1 steps 1-4 of 8 are done**, and there is a first real area measurement.
+**P1 steps 1-5 of 8 are done**, and there is a first real area measurement.
 `make all` (lint + yosys portability + fuzz) passes from a clean checkout after
 `tools/bootstrap.sh`; `make quartus_all` reproduces the numbers below.
 
@@ -16,8 +16,8 @@
 | 2. Integer ALU, shifts, bit ops, condition codes | **done** — 4.3e9 field checks, 0 mismatches |
 | 3. Register file, register cache, call/ret and spill | **done** — registers + memory write stream, mutation-tested |
 | 4. Load/store, MEMA and the seven MEMB modes | **done** — AGU + load/store data path |
-| 5. Bus and I-cache, burst | **next** |
-| 6. Whole-CPU lockstep | |
+| 5. Bus and I-cache, burst | **done** — LSU, burst decoder, I-cache |
+| 6. Whole-CPU lockstep | **next** — the largest remaining piece |
 | 7. M2-D Quartus spike | flow built; partial numbers below |
 | 8. FPU | after the gate |
 
@@ -79,21 +79,17 @@ CPU and the GPU first and defer everything that cannot change the answer.
 - **M2-G** — email srg320 about the SCSP licence. Send it now; a late yes is
   worth less than an early one.
 
-### Then — P1 step 5
+### Then — P1 step 6, and it is the big one
 
-`docs/p1-i960-spike.md` §6 has the order. Next is the bus and the 512-byte
-direct-mapped I-cache, including burst. Two things it must carry that are
-already specified and not yet built:
+Every block P1 needs now exists except the sequencer. Step 6 is the top level
+that wires them together plus a transcribed whole-CPU `execute_run` to lockstep
+against, and it is larger than steps 1-5 combined. It is also where the pieces
+stop being independently testable: the pipeline, its hazards, the interaction
+between the register cache and instructions in flight (§10), and the branch and
+interrupt paths all land here.
 
-- **Unaligned access sequencing.** `i960_ldst` raises `unaligned` and stops
-  there deliberately. The reference splits an unaligned word or dword into byte
-  accesses assembled little-endian, which needs several bus cycles.
-- **The `BURST` regions.** Most of the Model 2A map is flagged burst (§5 of the
-  spike), so this is not an optimisation to add later — it is how this CPU talks
-  to almost everything.
-
-After that, step 6 (whole-CPU lockstep) needs a top level and a transcribed
-`execute_run`, and it is the largest single remaining piece of P1.
+Only after that does step 7 (M2-D) mean anything — a half-CPU's area does not
+answer the fit question.
 
 The FPU is deliberately step 8 of 8: it is the only part with no oracle, and
 M2-D measures the integer core.
@@ -115,7 +111,13 @@ sequencer, I-cache, bus and FPU do not exist yet.
 | `i960_regs` | 1,655 | 1,261 | 2,048 | 94.86 MHz |
 | `i960_agu` | 252 | 0 | 0 | comb |
 | `i960_ldst` | 126 | 0 | 0 | comb |
-| **total** | **2,988** | | | |
+| `i960_lsu` | 241 | 188 | 0 | 142.57 MHz |
+| `i960_memmap` | 35 | 0 | 0 | comb |
+| `i960_icache` | 472 | 861 | 4,096 M10K bits | **84.97 MHz** |
+| **total** | **3,736** | 2,310 | | |
+
+`i960_icache` is **under the gate's 90 MHz** at 84.97. The tag compare feeding
+the hit decision is the obvious suspect. Not addressed; recorded.
 
 Against 7,000-13,500 for the whole i960 including a 2,500-6,000 FPU, this tracks
 toward the lower half — **but it is not evidence of that yet**, because the
