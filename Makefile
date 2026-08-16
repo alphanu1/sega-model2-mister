@@ -35,6 +35,7 @@ VBUILD  = $(VERILATOR) --cc --exe --build -j 0 $(VFLAGS)
 
 DEC_RTL  := $(I960)/i960_dec.sv
 ALU_RTL  := $(I960)/i960_alu.sv
+REG_RTL  := $(I960)/i960_regs.sv
 
 TEST_ARGS := $(if $(RANDOM),+random=$(RANDOM),) $(if $(SEED),+seed=$(SEED),)
 
@@ -43,8 +44,8 @@ all: lint synth test
 
 # --------------------------------------------------------------------- lint
 
-.PHONY: lint lint_i960_dec lint_i960_alu
-lint: lint_i960_dec lint_i960_alu
+.PHONY: lint lint_i960_dec lint_i960_alu lint_i960_regs
+lint: lint_i960_dec lint_i960_alu lint_i960_regs
 
 lint_i960_dec:
 	@echo "== lint i960_dec"
@@ -53,6 +54,10 @@ lint_i960_dec:
 lint_i960_alu:
 	@echo "== lint i960_alu"
 	$(VERILATOR) --lint-only $(VFLAGS) --top-module i960_alu $(ALU_RTL)
+
+lint_i960_regs:
+	@echo "== lint i960_regs"
+	$(VERILATOR) --lint-only $(VFLAGS) --top-module i960_regs $(REG_RTL)
 
 # --------------------------------------------------------------------- synth
 #
@@ -69,8 +74,8 @@ lint_i960_alu:
 # inference is involved — Model 1 measured fp_mul at 1312 LUT6 under yosys and
 # 144 ALM in Quartus, because the multiplier left the fabric entirely.
 
-.PHONY: synth synth_i960_dec synth_i960_alu
-synth: synth_i960_dec synth_i960_alu
+.PHONY: synth synth_i960_dec synth_i960_alu synth_i960_regs
+synth: synth_i960_dec synth_i960_alu synth_i960_regs
 
 synth_i960_dec:
 	@echo "== synth i960_dec (yosys portability check)"
@@ -82,10 +87,15 @@ synth_i960_alu:
 	@$(YOSYS) -p "read_verilog -sv $(ALU_RTL); hierarchy -top i960_alu; proc; opt; techmap; opt; abc -lut 6; opt; stat" \
 	  | sed -n '/Local Count/,/^$$/p' | grep -E 'cells|lut|memor' || true
 
+synth_i960_regs:
+	@echo "== synth i960_regs (yosys portability check)"
+	@$(YOSYS) -p "read_verilog -sv $(REG_RTL); hierarchy -top i960_regs; proc; opt; techmap; opt; abc -lut 6; opt; stat" 2>/dev/null \
+	  | sed -n '/Local Count/,/^$$/p' | grep -E 'cells|lut|memor' || true
+
 # --------------------------------------------------------------------- tests
 
-.PHONY: test test_i960_dec test_i960_alu test_i960_alu_carrybug
-test: test_i960_dec test_i960_alu
+.PHONY: test test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs
+test: test_i960_dec test_i960_alu test_i960_regs
 
 test_i960_dec: obj_i960_dec/Vi960_dec
 	@echo "== test i960_dec"
@@ -110,6 +120,14 @@ test_i960_alu_carrybug: obj_i960_alu/Vi960_alu
 obj_i960_alu/Vi960_alu: $(ALU_RTL) $(TB)/tb_i960_alu.cpp $(TB)/i960_alu_ref.h
 	$(VBUILD) --top-module i960_alu -CFLAGS "-O2 -I../$(TB)" \
 	  --Mdir obj_i960_alu -o Vi960_alu $(ALU_RTL) $(TB)/tb_i960_alu.cpp
+
+test_i960_regs: obj_i960_regs/Vi960_regs
+	@echo "== test i960_regs"
+	./obj_i960_regs/Vi960_regs $(TEST_ARGS)
+
+obj_i960_regs/Vi960_regs: $(REG_RTL) $(TB)/tb_i960_regs.cpp $(TB)/i960_regs_ref.h
+	$(VBUILD) --top-module i960_regs -CFLAGS "-O2 -I../$(TB)" \
+	  --Mdir obj_i960_regs -o Vi960_regs $(REG_RTL) $(TB)/tb_i960_regs.cpp
 
 # ------------------------------------------------------------------- quartus
 #

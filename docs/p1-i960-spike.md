@@ -386,6 +386,53 @@ implements hardware carry; MAME's never sets it. `make test_i960_alu_carrybug`
 is a standing test that the divergence stays exactly where it is claimed — it
 **fails if the RTL stops diverging**.
 
+### Step 3 — register file and register cache. Done.
+
+`rtl/cpu/i960/i960_regs.sv`. 16 locals and 16 globals in flip-flops, four saved
+frames in MLAB, spill and fill to external memory beyond four frames, and the
+`call`/`ret`/`flushreg` sequencing.
+
+Compared against the reference on **all 32 architectural registers and the
+external memory operation stream**, after every frame operation. The stream is
+the point (§2.2): depth and the spill condition are invisible in the registers.
+
+| Run | Ops | Checks | Cycles | Mismatches |
+|---|---|---|---|---|
+| directed | depth 0-8, flushreg at every depth, type-7 call | — | — | 0 |
+| seed 1 | 20,000 | 733,523 | 335,644 | 0 |
+| seeds 2, 7, 12345 | 200,000 each | ~7.4 M each | ~3.5 M each | 0 |
+
+**Two design decisions worth keeping, both with the reasoning in the file:**
+
+- **The frames are copied, not banked.** The obvious optimisation — five frames
+  in one memory, `call` becomes a bank-pointer increment — is wrong here, and
+  subtly. MAME copies the locals into the cache and *does not clear them*, so
+  the callee inherits the caller's register values. A banked design would hand
+  the callee whatever the last call at that depth left behind. Both are
+  "undefined" to a compiler and different to a lockstep comparison. The copy is
+  made cheap instead of skipped: the cache is four words wide, so a frame moves
+  in 4 cycles rather than 16, inside the 9 the reference charges for `call`.
+- **MLAB, not M10K.** 2,048 bits would fit one M10K, but §5.6 says M10K is the
+  resource under pressure and ALM has headroom. `ramstyle = "MLAB"` spends LUTs
+  deliberately. Explicit tag so a regression is a build error.
+
+**The harness was mutation-tested**, because a stateful block passing first time
+deserves suspicion. Five deliberate faults, all caught:
+
+| Mutation | Caught by |
+|---|---|
+| spill one frame too early (depth 3) | memory op count, 16 vs 0 |
+| spill base masked `~0x7f` not `~0x3f` | memory op 16 address |
+| spill words written in reverse order | memory op 0 address |
+| RIP saved off by one word | `r2/RIP` |
+| `flushreg` leaves depth 1 not 0 | memory op count on the following `ret` |
+| PFP keeps the low 3 bits of FP | `r0/PFP` |
+
+Note two of six are visible **only** in the memory stream, which is the argument
+for comparing it. A seventh mutation — dropping the `fp_masked` use entirely —
+never reached the test: lint rejected it as an unused signal, which is why
+UNUSEDSIGNAL is not suppressed.
+
 ### What that does not prove
 
 **The reference and the RTL are two expressions by the same author from the same
