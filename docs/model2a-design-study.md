@@ -500,6 +500,55 @@ The optimistic case still closes, and still by less than the error bar on the re
 Two of the five rows — 22,000 of the 38,500 optimistic total, 57% of it — remain pure
 estimate with no RTL behind them, and they are the two largest.
 
+### 5.5.1 M2-E — measured, and the renderer estimate was far too high
+
+`N64_MiSTer` compiled for `5CSEBA6U23I7` with Quartus 17.0.0. Per-entity, from
+the fitter's own hierarchy table:
+
+| Entity | ALM | block memory bits | DSP |
+|---|---|---|---|
+| `sys_top` (whole core) | 38,492 | 1,323,859 | **111 / 112** |
+| `n64top` (the machine) | 30,486 | 939,029 | 84 |
+| **`cpu` — R4300i** | **9,236** | 207,872 | 9 |
+| — of which `cpu_FPU` | 2,297 | 0 | 0 |
+| **`RDP` — the rasterizer** | **8,347** | 202,357 | 61 |
+| `RSP` | 5,660 | 86,016 | 8 |
+| `VI` video interface | 2,206 | 202,752 | 6 |
+| `ascal` scaler (framework) | 2,012 | 315,488 | 17 |
+| `hps_io` (framework) | 993 | — | — |
+
+**Gate: RDP < 12K, R4300i < 12K. Both pass.**
+
+#### This is the most consequential measurement in the project so far
+
+**The renderer estimate was roughly 2-3x too high.** §5.5 carries 15,000-25,000
+for our rasterizer. A *more* capable one — trilinear, a colour combiner,
+coverage-based anti-aliasing, all things Model 2 does not need — costs **8,347
+ALM**. §2.1's claim that the renderer is "the widest estimate in the budget with
+no reference implementation to reason from" was true when written and is now
+answerable: there is a measured comparable and it is less than half the
+estimate's midpoint.
+
+**The i960 projection is validated.** The R4300i is 9,236 ALM including a 2,297
+ALM FPU, against our 8,254-13,354 projection for a broadly comparable 32-bit
+RISC. The two agree, which is the first independent check either number has had.
+
+#### And one finding that cuts the other way
+
+**DSP is at 111 of 112 — 99%.** §7 lists "push arithmetic into DSP blocks" as a
+Tier 1 area lever on the grounds that 112 exist and Model 1 uses ~5. That lever
+is real but it is *not* free capacity: a comparable renderer consumes essentially
+the entire DSP complement, 61 of them in the RDP alone. Model 2's renderer will
+want them for edge and attribute interpolation, texture coordinates and the
+perspective divide, and the i960's FPU will want more.
+
+**The N64 core did not fit**, failing at 92% ALM with `Error (11802): Can't fit
+design in device`. Since it ships on this hardware, that is a build-configuration
+difference rather than a property of the design, and it does not affect the
+per-entity figures above — those come from the fitter's placement before it gave
+up. But it is a standing warning that **92% ALM is where this device stops
+routing**, which makes the usable budget lower than 41,509 suggests.
+
 ### 5.6 M10K is not budgeted here, and the sister project says it binds
 
 **This section is a gap, not an analysis.** It exists because the Model 1 project reported,
@@ -514,43 +563,77 @@ budgets ALM to 1,000-ALM precision across five rows and **does not budget M10K a
 Section 6.5's "~111 KB of 696 KB, room to push microcode ROMs and lookup tables off the
 fabric" is the only figure, it counts three consumers, and it now looks optimistic.
 
-A first pass at what Model 2 actually wants, at 1.25 KB usable per block:
+The budget, with every row marked measured or estimated. One M10K is 10,240
+bits; a 32-bit-wide array wastes none of that, a narrower one does.
 
-| Consumer | Size | M10K | Source |
+| Consumer | bits | M10K | source |
 |---|---|---|---|
-| Tile colour + Z, double-buffered | 64 KB | ~52 | §6.3 |
-| Texture cache | 32 KB | ~26 | §6.4 |
-| MB86234 program store + RAM banks | — | 3 | measured |
-| fx68k microcode + nanocode ROMs | ~5 KB | 4-5 | reported |
-| i960 I-cache + tags | 512 B | ~2 | §5.2 |
-| S24TILE tile and char RAM | — | **unknown** | Model 1 has this figure |
-| SCSP voice state and DSP | — | **unknown** | |
-| MiSTer `sys/` scaler and framework | — | **unknown** | Model 1 has this figure |
-| **Named so far** | | **~88** | |
+| Tile colour + Z, 128x64 16bpp, double-buffered | 524,288 | **52** | §6.3, estimated |
+| Texture cache, 32 KB | 262,144 | **26** | §6.4, estimated — M2-A sizes it |
+| i960 I-cache, 512 B (tags are flip-flops) | 4,096 | **1** | **measured** |
+| MB86234 program store + RAM banks | 30,720 | **3** | **measured**, Model 1 M0 |
+| `fx68k` microcode + nanocode ROMs | ~40,960 | **4** | reported, not measured |
+| **quantified** | | **86** | **16% of 553** |
 
-The first five rows are the ones this document can already account for, and **78 of those
-88 blocks are the tile buffers and texture cache — the two things Model 1 does not have at
-all.** The three unknown rows are precisely where Model 1 spent most of its 409.
+And the rows nobody has a number for:
 
-The arithmetic that follows is obvious and unwelcome. It does not close on its own, and it
-cannot be settled by reasoning here, because the three unknown rows are the ones that
-decide it.
+| Consumer | why it is unknown |
+|---|---|
+| S24TILE tile RAM + char RAM | Model 1 has this figure; not yet extracted |
+| SCSP voice state, DSP, envelopes | unbuilt |
+| MiSTer `sys/` scaler, HPS I/O, audio | **measured** — see below |
+| i960 FPU coefficient ROMs | §7 Tier 1 explicitly puts them here |
+| renderer bin and line buffers | unbuilt |
 
-Consequences, in order:
+**The framework's own cost is now measured**, from M2-E's per-entity table:
+`sys_top` minus `emu` is **6,630 ALM**, and its two largest memory consumers are
+`ascal` at 315,488 block memory bits (~31 M10K) and `hps_io`. Call the framework
+**~35-40 M10K**, which lifts the quantified total from 86 to roughly **125 of
+553**.
 
-1. **Section 7's "push logic into M10K" lever may not exist.** It is listed under Tier 1,
-   no accuracy loss, worth spending freely. If M10K binds, that lever is not free — it is
-   the scarce resource, and moving the i960 FPU's coefficient ROMs there competes directly
-   with the texture cache.
-2. **Tier 2's "single texture unit rather than parallel" gets more attractive**, and a
-   smaller texture cache becomes a real lever rather than a concession — which makes M2-A's
-   hit-rate curve across 16/32/64 KB load-bearing rather than confirmatory.
-3. **The tile size in §6.2 is now a two-sided trade.** 128x64 was chosen for bin traffic;
-   it also sets the 52-block tile buffer directly. Halving tile height halves that.
+**23% of the device is accounted for and 77% is not.** That is the finding, and
+it is worse than "the budget is tight" — there is no budget.
 
-**This needs a real budget before P1, not after P2.** Added to P0 in `milestones.md`. The
-figures to collect are Model 1's actual per-consumer M10K breakdown — it has them — and
-the MiSTer `sys/` framework's own usage, which both projects pay and neither has isolated.
+For scale, M2-E also measured what a comparable machine spends: the N64 core
+uses **236 of 553 M10K (43%)** in total, with the RDP alone at 202,357 block
+memory bits (~20 M10K) and the R4300i at 207,872 (~21 M10K). That is a working
+renderer and CPU inside 41 blocks — far less than the 78 our tile buffers and
+texture cache are budgeted for, because the RDP streams from RDRAM rather than
+holding a tile on chip. **Our tile-based architecture trades M10K for external
+bandwidth, and M2-E is the first measurement of what that trade costs.**
+
+Two things are already clear from the quantified rows alone:
+
+- **The i960's own M10K appetite is negligible: one block.** The register cache
+  went to MLAB deliberately (§5.4.1 of `p1-i960-spike.md`) and the I-cache is a
+  single block. The CPU is not the problem here.
+- **78 of the 86 quantified blocks are the tile buffers and texture cache** —
+  the two structures Model 1 does not have at all. Model 1 reached 409 of 553
+  *without* them.
+
+If Model 2's non-renderer consumers resemble Model 1's, 409 + 78 = 487 of 553
+before the SCSP, the FPU ROMs or anything the renderer needs beyond its tile
+buffers. That does not obviously close, and it cannot be settled by argument
+because the unknown rows are the deciding ones.
+
+**This needs a real budget before P1, not after P2.****This needs a real budget before P1, not after P2.** Added to P0 in `milestones.md`. The
+figures to collect are Model 1's actual per-consumer M10K breakdown and the MiSTer `sys/`
+framework's own usage, which both projects pay and neither has isolated. The second of
+those falls out of M2-E for free: compiling `N64_MiSTer` produces a per-entity fit report
+in which `sys_top`'s framework blocks are itemised separately from the core's.
+
+**Levers, if it does not close.** All three are in §6 already and all three are ours to
+move, which is the one comfort here:
+
+- **Halve the tile height.** 128x64 is a bin-traffic choice (§6.2); the buffer cost is
+  linear in it. 128x32 halves 52 blocks to 26 at the price of more bin overhead.
+- **Shrink the texture cache.** M2-A sweeps 16/32/64 KB precisely so this is a measured
+  decision rather than a concession — 16 KB is 13 blocks instead of 26.
+- **Single-buffer the tile.** Costs a stall between rasterize and stream-out, saves 26.
+
+Together those three take the quantified 86 down to 34 without touching accuracy, which
+is why §5.6 is a scheduling problem rather than a kill condition — provided it is
+discovered before the RTL is written rather than after.
 
 ---
 
@@ -672,7 +755,7 @@ MAME's Model 2 driver on any modern SBC does the job better for zero effort.
 
 Ordered by cost. The first three need no FPGA design work.
 
-**M2-E — N64 core as measured comparable. Do first.**
+**M2-E — N64 core as measured comparable. CLOSED, PASS. See 5.7.**
 `N64_MiSTer` is open, targets this exact part, builds with the same Quartus. One compile
 gives a per-module fitter report.
 
