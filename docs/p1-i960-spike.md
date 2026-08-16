@@ -686,41 +686,69 @@ it, which is part of why assembly came in smaller.
 
 ### What the assembled number does and does not bound
 
-**It will change, upward, and by more than it looks.** The assembled design
-executes **66 of the reference's 159 mnemonics**. Fourteen more are structurally
-present but semantically incomplete, and **79 are absent entirely**.
+**3,174 ALM is 55% of an instruction set, not an i960.** Recounted after the
+COBR fix:
 
-The incomplete fourteen are a real defect rather than a gap, and worth naming:
-`cmpob<cc>` and `cmpib<cc>` **compare and then branch**, while the sequencer
-only branches on whatever `AC` already held; `test<cc>` writes a register and
-does not branch at all, and is currently treated as a branch. Both are wrong,
-not merely partial.
+| | mnemonics | |
+|---|---|---|
+| executed | **88** | 55% |
+| traps correctly (`fault<cc>`) | 8 | 5% |
+| **absent** | **63** | **40%** |
 
-Absent, largest first: the whole FPU (38), `fault<cc>` and fault handling (8),
-`test<cc>` (8), `emul`/`ediv` and conversions (6), integer multiply, remainder
-and divide (6), `spanbit`/`scanbit`/`modac`/`modpc` (5),
-`mov`/`movl`/`movt`/`movq` (4), `calls`/`flushreg` (2), `synmov` (2).
+Absent, by cost driver:
+
+| mnemonics | block |
+|---|---|
+| **38** | **the entire FPU** — transcendental, conversion/move, arithmetic |
+| 6 | integer multiply, remainder, divide |
+| 6 | `emul`, `ediv`, conversions, `scalerl` |
+| 5 | `spanbit`, `scanbit`, `dmovt`, `modac`, `modpc` |
+| 4 | `mov`, `movl`, `movt`, `movq` |
+| 2 | `calls`, `flushreg` |
+| 2 | `synmov`, `synmovq` |
 
 Projecting from the study's own per-block figures:
 
 | | ALM |
 |---|---|
-| assembled today | 3,155 |
-| integer multiply/divide, `emul`/`ediv` — will use DSP blocks | +400 .. 800 |
-| `mov` family, `spanbit`, `modac`, `calls`, `flushreg` | +300 .. 600 |
-| correct COBR compare-and-branch, `test<cc>` | +100 .. 200 |
-| `fault<cc>`, faults, interrupts | +200 .. 500 |
-| pipeline: hazard detection, forwarding, stalls (§5.2) | +1,500 .. 3,000 |
-| FPU, 38 mnemonics (§5.2) | +2,500 .. 6,000 |
-| **projected total** | **8,155 .. 14,255** |
-| study estimate §5.2 | 7,000 .. 13,500 |
+| assembled today | 3,174 |
+| integer mul/rem/div, `emul`/`ediv` — will claim DSP blocks | +400 .. 800 |
+| `mov` family, `spanbit`, `modac`, `calls`, `synmov` | +300 .. 600 |
+| `fault<cc>`, fault handling, interrupts | +200 .. 500 |
+| pipeline: hazards, forwarding, stalls | +1,500 .. 3,000 |
+| **FPU, 38 mnemonics** | **+2,500 .. 6,000** |
+| **projected complete i960KB** | **8,074 .. 14,074** |
+| study §5.2 estimate | 7,000 .. 13,500 |
 
-**This corrects an earlier claim in this document.** The per-module total was
-described as "tracking toward the lower half" of the estimate. With a proper
-accounting of what is missing it lands **mid-to-upper**, and the top of the
-projection sits slightly above the study's own ceiling. The five blocks measured
-first were the cheap ones; multiply, the FPU and the pipeline are all still ahead.
+The projection straddles the study's range and overshoots its ceiling slightly.
+Nothing here contradicts §5.2; it narrows nothing either.
 
+#### What it does to the fit question
+
+§5.5 allows the i960 and the renderer **25,009 ALM together** when the rest of
+the core lands optimistically. So:
+
+| i960 lands at | renderer may use | against its 15,000-25,000 estimate |
+|---|---|---|
+| 8,074 (best) | 16,935 | fits if the renderer is near its floor |
+| 14,074 (worst) | 10,935 | **below the renderer's floor — does not fit** |
+
+**Both blocks have to land low.** An i960 at the top of its range leaves the
+renderer less than its most optimistic estimate, and that is before the M10K
+question in §5.6. This is the same conclusion §9 already reached, now with one
+of the two numbers partially grounded instead of wholly estimated.
+
+#### What 3,174 is actually good for
+
+Three things, and none of them is an answer to the fit question:
+
+- **A floor.** The integer datapath cannot cost less than this.
+- **A proof the parts compose** — eight blocks, one arbitrated bus, lint-clean
+  on three toolchains, building on the real device, lockstepped against a
+  whole-CPU reference.
+- **A located critical path**, so the pipeline work is targeted.
+
+Two further reasons the number moves:
 Two further reasons the number moves:
 
 - **The 581 ALM assembly saved will not repeat.** It came from the fitter
