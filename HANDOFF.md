@@ -79,6 +79,17 @@ CPU and the GPU first and defer everything that cannot change the answer.
 - **M2-G** — email srg320 about the SCSP licence. Send it now; a late yes is
   worth less than an early one.
 
+### Deferred, not forgotten
+
+`docs/p1-i960-spike.md` carries an **optimisation backlog** with five items,
+each with a measurement behind it. The two that matter: the register file is 49%
+of the CPU and the measured critical path runs through its combinational read
+multiplexer, and the ALU describes six shifters, four comparators and three
+adders separately. Both are deferred because the pipeline has to decide read
+latency and datapath sharing anyway — doing them first means doing them twice.
+
+**Revisit that section when step 6 lands.**
+
 ### Then — P1 step 6, and it is the big one
 
 Every block P1 needs now exists except the sequencer. Step 6 is the top level

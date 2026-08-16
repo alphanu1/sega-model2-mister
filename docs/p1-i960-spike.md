@@ -795,6 +795,28 @@ your linter is not a convenience, it is a way to be confidently wrong.** Quartus
 will not tell you the RTL is nonsense; it will tell you how many ALMs the
 nonsense costs.
 
+### Optimisation backlog — deferred deliberately, with evidence
+
+Nothing here is speculative; each item has a measurement behind it. Deferred to
+after step 6 because every one is shaped by a decision the pipeline has to make
+anyway, and doing them first means doing them twice and re-verifying twice.
+
+**Revisit this section when step 6 lands.**
+
+| # | Item | Evidence | Est. | Blocked on |
+|---|---|---|---|---|
+| 1 | Register file to a memory with a **registered** read | 1,547 ALM, 49% of the CPU; the measured critical path `loc[10][3]` → `wd[9]` runs through one of its two combinational 32:1 read multiplexers | large — deletes both muxes and cuts the path | pipeline read latency is a step-6 decision |
+| 2 | Share the ALU datapath | 473 ALM assembled; six shift forms, four comparators and three adders described separately | moderate | none, but cheap to fold into the pipeline pass |
+| 3 | Delete `i960_ldst`'s dead data path | collapsed 126 → 3 ALM on assembly; `i960_lsu` re-implements extension and lane placement because the unaligned path must assemble bytes itself | ~0 area, real clarity | decide which module owns it |
+| 4 | Genuinely parameterise the frame-copy width `W` | the sweep that motivated it was invalid — the index expressions hardcode four rows | unknown until it can be measured | must lint at every W before any figure is believable |
+| 5 | Retime the I-cache tag compare | 84.97 MHz standalone, under the gate's 90 | unknown | may be moot once the pipeline sets the clock |
+
+Two items are **deferred cost rather than savings**, and must not be read as
+headroom: `i960_icache` shows 106 ALM only because the top ties `inval` to zero
+and the 32-entry invalidate loop was optimised away, and the 581 ALM that
+assembly saved came from deleting logic nothing consumed, which cannot repeat
+once everything has a consumer.
+
 ### What that does not prove
 
 **The reference and the RTL are two expressions by the same author from the same
