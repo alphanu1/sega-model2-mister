@@ -140,6 +140,29 @@ module i960_alu (
   assign addc_ovf = (addc_res[31] ^ src1[31]) & (addc_res[31] ^ src2[31]);
   assign subc_ovf = (src2[31] ^ src1[31]) & (src2[31] ^ subc_res[31]);
 
+  // ------------------------------------------------- bit scan (0x64.0/0x64.1)
+  //
+  // Both find the HIGHEST matching bit: the reference scans i = 31 down to 0
+  // and breaks on the first hit. Written here as an unconditional loop that
+  // overwrites from bit 0 upwards, so the last write wins and the result is the
+  // same — yosys rejects `break` inside a synthesis loop outright, which is
+  // Model 1's rtl-conventions.md rule and not a style preference.
+  logic [31:0] scanbit_res, spanbit_res;
+  logic        scanbit_hit, spanbit_hit;
+
+  always_comb begin
+    scanbit_res = 32'hffff_ffff; scanbit_hit = 1'b0;
+    spanbit_res = 32'hffff_ffff; spanbit_hit = 1'b0;
+    for (int i = 0; i < 32; i++) begin
+      if ( src1[i]) begin scanbit_res = 32'(i); scanbit_hit = 1'b1; end
+      if (~src1[i]) begin spanbit_res = 32'(i); spanbit_hit = 1'b1; end
+    end
+  end
+
+  // dmovt tests the low byte for an ASCII decimal digit, 0x30-0x39.
+  logic dmovt_bad;
+  assign dmovt_bad = (src1[7:0] < 8'h30) || (src1[7:0] > 8'h39);
+
   // ------------------------------------------------------------------ decode
 
   always_comb begin
@@ -232,6 +255,43 @@ module i960_alu (
             result    = subc_res[31:0];
             result_we = 1'b1;
             ac_out    = {ac_in[31:2], subc_res[32], subc_ovf};
+          end
+          default: valid = 1'b0;
+        endcase
+      end
+
+      // ------------------------------------------------------- 0x5c mov
+      8'h5c: begin
+        if (op2 == 4'hc) begin result = src1; result_we = 1'b1; end
+        else valid = 1'b0;
+      end
+
+      // ------------------------------- 0x64 bit scan, dmovt, modify AC
+      8'h64: begin
+        unique case (op2)
+          4'h0: begin                                   // spanbit
+            result = spanbit_res; result_we = 1'b1;
+            ac_out = {ac_in[31:3], spanbit_hit ? 3'b010 : 3'b000};
+          end
+          4'h1: begin                                   // scanbit
+            result = scanbit_res; result_we = 1'b1;
+            ac_out = {ac_in[31:3], scanbit_hit ? 3'b010 : 3'b000};
+          end
+          4'h4: begin                                   // dmovt
+            result = src1; result_we = 1'b1;
+            // The reference masks with 0xfff8, not ~7. As a 32-bit value that
+            // also clears AC[31:16], where every other site in the file uses
+            // ~7. Almost certainly a typo, but unlike the addc carry it still
+            // produces the correct condition code, so it is reproduced rather
+            // than corrected — the oracle wins where it is not demonstrably
+            // non-functional.
+            ac_out = (ac_in & 32'h0000_fff8) | (dmovt_bad ? 32'd2 : 32'd0);
+          end
+          4'h5: begin                                   // modac
+            // Writes the OLD AC to the destination, then updates AC under the
+            // mask in src1 with the value in src2.
+            result = ac_in; result_we = 1'b1;
+            ac_out = (ac_in & ~src1) | (src2 & src1);
           end
           default: valid = 1'b0;
         endcase

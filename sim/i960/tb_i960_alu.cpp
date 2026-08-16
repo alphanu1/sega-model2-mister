@@ -51,6 +51,9 @@ const OpInfo OPS[] = {
   {0x5a,0x6,"cmpdeco"}, {0x5a,0x7,"cmpdeci"}, {0x5a,0xc,"scanbyte"},
   {0x5a,0xe,"chkbit"},
   {0x5b,0x0,"addc"},    {0x5b,0x2,"subc"},
+  {0x5c,0xc,"mov"},
+  {0x64,0x0,"spanbit"}, {0x64,0x1,"scanbit"}, {0x64,0x4,"dmovt"},
+  {0x64,0x5,"modac"},
 };
 const int N_OPS = sizeof(OPS) / sizeof(OPS[0]);
 
@@ -119,7 +122,7 @@ void pass_exhaustive_opspace() {
   // Every op/op2 pair in 0x58-0x5b, implemented or not, so `valid` is checked
   // over the whole space rather than only where it should be true.
   uint64_t n = 0;
-  for (uint32_t op = 0x58; op <= 0x5b; ++op)
+  for (uint32_t op : {0x58u,0x59u,0x5au,0x5bu,0x5cu,0x64u})
     for (uint32_t op2 = 0; op2 < 16; ++op2)
       for (uint32_t s1 : {0x00000000u, 0xffffffffu, 0x12345678u})
         for (uint32_t s2 : {0x00000000u, 0xffffffffu, 0x9abcdef0u})

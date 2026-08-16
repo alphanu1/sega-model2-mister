@@ -185,6 +185,36 @@ inline AluOut alu(uint8_t op, uint8_t op2, uint32_t t1, uint32_t t2,
       }
       break;
 
+    case 0x5c:
+      if (op2 == 0xc) wr(t1);                                       // mov
+      else o.valid = false;
+      break;
+
+    case 0x64:
+      switch (op2) {
+        case 0x0: {                                                 // spanbit
+          uint32_t res = 0xffffffffu; bool hit = false;
+          for (int i = 31; i >= 0; i--) if (!(t1 & (1u << i))) { res = uint32_t(i); hit = true; break; }
+          o.ac = (o.ac & ~7u) | (hit ? 2u : 0u); wr(res); break;
+        }
+        case 0x1: {                                                 // scanbit
+          uint32_t res = 0xffffffffu; bool hit = false;
+          for (int i = 31; i >= 0; i--) if (t1 & (1u << i)) { res = uint32_t(i); hit = true; break; }
+          o.ac = (o.ac & ~7u) | (hit ? 2u : 0u); wr(res); break;
+        }
+        case 0x4:                                                   // dmovt
+          wr(t1);
+          // 0xfff8, not ~7 — see the RTL header. Reproduced, not corrected.
+          o.ac = (ac_in & 0xfff8u) | (((t1 & 0xff) < 0x30 || (t1 & 0xff) > 0x39) ? 2u : 0u);
+          break;
+        case 0x5:                                                   // modac
+          wr(ac_in);
+          o.ac = (ac_in & ~t1) | (t2 & t1);
+          break;
+        default: o.valid = false; break;
+      }
+      break;
+
     default: o.valid = false; break;
   }
 

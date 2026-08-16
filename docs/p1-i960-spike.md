@@ -691,9 +691,13 @@ COBR fix:
 
 | | mnemonics | |
 |---|---|---|
-| executed | **94** | 59% |
-| traps correctly (`fault<cc>`, `emul`/`ediv`) | 10 | 6% |
-| **absent** | **55** | **35%** |
+| executed | **103** | 63% |
+| traps correctly (`fault<cc>`, `emul`/`ediv`, `modpc`, `calls`) | 12 | 7% |
+| **absent** | **48** | **29%** |
+
+Counted from the source rather than by hand — `execute_op` dispatches **163**
+distinct mnemonics, not the 159 an earlier hand-tabulation in this document
+claimed. The earlier figure undercounted the multiply and divide blocks.
 
 Absent, by cost driver:
 
@@ -710,12 +714,12 @@ Projecting from the study's own per-block figures:
 
 | | ALM |
 |---|---|
-| assembled today | 3,521 |
+| assembled today | 3,626 |
 | `mov` family, `spanbit`, `modac`, `calls`, `synmov` | +300 .. 600 |
 | `fault<cc>`, fault handling, interrupts | +200 .. 500 |
 | pipeline: hazards, forwarding, stalls | +1,500 .. 3,000 |
 | **FPU, 38 mnemonics** | **+2,500 .. 6,000** |
-| **projected complete i960KB** | **8,021 .. 13,621** |
+| **projected complete i960KB** | **8,126 .. 13,726** |
 | study §5.2 estimate | 7,000 .. 13,500 |
 
 The projection straddles the study's range and overshoots its ceiling slightly.
@@ -728,8 +732,8 @@ the core lands optimistically. So:
 
 | i960 lands at | renderer may use | against its 15,000-25,000 estimate |
 |---|---|---|
-| 8,021 (best) | 16,988 | fits if the renderer is near its floor |
-| 13,621 (worst) | 11,388 | **below the renderer's floor — does not fit** |
+| 8,126 (best) | 16,883 | fits if the renderer is near its floor |
+| 13,726 (worst) | 11,283 | **below the renderer's floor — does not fit** |
 
 **Both blocks have to land low.** An i960 at the top of its range leaves the
 renderer less than its most optimistic estimate, and that is before the M10K
@@ -949,6 +953,33 @@ Integrated and lockstepped: the CPU is **3,521 ALM, 2 DSP, 44.66 MHz**, with
 163,881 retires per seed and zero mismatches. `emul` and `ediv` write a register
 pair, which needs the same sequencer support as `movl`/`movt`/`movq`, so `0x67`
 still traps on both sides rather than being half-wired.
+
+### `mov`, bit scan and the control registers
+
+Added to `i960_alu`: `mov` (`0x5c.c`), `spanbit`, `scanbit`, `dmovt` and
+`modac` (`0x64.0/1/4/5`). No sequencer change — they route through the existing
+ALU path, so integration was free. The ALU is now 42 operations and 973 ALM
+standalone.
+
+`spanbit` and `scanbit` find the **highest** matching bit: the reference scans
+from bit 31 down and breaks on the first hit. Written here as an unconditional
+loop from bit 0 up so the last write wins, which gives the same answer without a
+`break` — yosys rejects `break` inside a synthesis loop outright, and that is
+Model 1's rule rather than a style preference.
+
+**`dmovt` masks AC with `0xfff8`, not `~7`.** Every other site in the reference
+uses `~7`; as a 32-bit value this one also clears `AC[31:16]`. Almost certainly
+a typo, and it is **reproduced rather than corrected** — unlike the `addc`
+carry it still computes the condition code correctly, so it is not demonstrably
+non-functional and the oracle wins. The bar set in §2.3 of the design study is
+deliberately high, and this does not clear it.
+
+`modac` writes the **old** AC to its destination and then updates AC under a
+mask, so it both reads and writes the same architectural state in one
+instruction.
+
+Lockstep after integration: 171,610 retires per seed, zero mismatches. The CPU
+is **3,626 ALM, 2 DSP, 42.43 MHz** at 103 of 163 mnemonics.
 
 ### What that does not prove
 
