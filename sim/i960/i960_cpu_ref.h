@@ -106,11 +106,31 @@ struct Cpu {
       case FMT_REG: {
         const uint32_t s1 = d.src1_lit ? d.src1 : rf.r[d.src1];
         const uint32_t s2 = d.src2_lit ? d.src2 : rf.r[d.src2];
-        // 0x70 and 0x74 are multi-cycle and bypass the ALU. 0x67 writes a
-        // register pair and is not wired yet, so it traps on both sides.
+        // movl / movt / movq: 2, 3 or 4 consecutive registers. The
+        // destination mask differs per opcode; the SOURCE is never masked.
+        //
+        // OVERLAPPING SOURCE AND DESTINATION ARE UNDEFINED. The reference uses
+        // memcpy, and memcpy with overlapping regions is undefined in C —
+        // memmove is the defined one. The forward loop below propagates
+        // (r[28]=r[27], then r[29]=r[28] which is already r[27]); a vectorised
+        // or backward memcpy would not. The harness never generates an overlap,
+        // the same way it never generates a zero divisor.
+        if (d.op2 == 0xc && (d.op == 0x5d || d.op == 0x5e || d.op == 0x5f)) {
+          const uint8_t n    = (d.op == 0x5d) ? 2 : (d.op == 0x5e) ? 3 : 4;
+          const uint8_t base = d.srcdst & ((d.op == 0x5d) ? 0x1e : 0x1c);
+          if (d.src1_lit) for (uint8_t k = 0; k < n; k++) rf.r[(base + k) & 0x1f] = d.src1;
+          else            for (uint8_t k = 0; k < n; k++)
+                            rf.r[(base + k) & 0x1f] = rf.r[(d.src1 + k) & 0x1f];
+          IP = ip_next;
+          break;
+        }
+
+        // 0x70, 0x74 and 0x67 are multi-cycle and bypass the ALU.
         const MdOut m = i960ref::muldiv(d.op, d.op2, s1, s2, 0);
-        if (m.valid && d.op != 0x67) {
+        if (m.valid) {
           rf.r[d.srcdst] = m.lo;
+          // emul and ediv write a pair, and the destination is NOT masked.
+          if (m.pair) rf.r[(d.srcdst + 1) & 0x1f] = m.hi;
           IP = ip_next;
           break;
         }

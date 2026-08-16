@@ -129,7 +129,36 @@ int main(int argc, char **argv) {
     for (uint64_t k = 0; k < steps; ++k) {
       const int cls = int(rng() % 10);
       uint32_t insn;
-      if (cls == 9) {                                  // mul / div / rem / mod
+      if (cls == 7) {                                  // movl / movt / movq
+        const uint32_t blk = 0x5d + (rng() % 3);
+        const uint32_t n    = (blk == 0x5d) ? 2u : (blk == 0x5e) ? 3u : 4u;
+        const uint32_t sd   = rng() % 32;
+        const uint32_t base = sd & ((blk == 0x5d) ? 0x1eu : 0x1cu);
+        const bool lit = (rng() & 1);
+        // Source and destination must not overlap. memcpy with overlapping
+        // regions is undefined in the reference, so an overlap would compare
+        // this design against whatever the host's memcpy happened to do.
+        // Overlap must be tested on the WRAPPED index sets. A linear
+        // comparison misses src=30,n=4 (indices 30,31,0,1) colliding with
+        // base=0 — the register number is 5 bits and the copy wraps.
+        auto overlaps = [&](uint32_t a, uint32_t b) {
+          for (uint32_t i = 0; i < n; i++)
+            for (uint32_t j = 0; j < n; j++)
+              if (((a + i) & 31u) == ((b + j) & 31u)) return true;
+          return false;
+        };
+        uint32_t src = rng() % 32;
+        for (int t = 0; !lit && t < 64 && overlaps(src, base); ++t) src = rng() % 32;
+        if (!lit && overlaps(src, base)) src = (base + 8) & 0x1f;
+        insn = (blk << 24) | (sd << 19) | (0xcu << 7) | src;
+        if (lit) insn |= 0x0800;
+      } else if (cls == 6) {                           // emul / ediv
+        // srcdst is capped at 30: the destination is unmasked, so 31 would make
+        // the reference write m_r[32], one past the end of its array. Undefined
+        // there, so never generated — same rule as the zero divisor.
+        insn = (0x67u << 24) | ((rng() % 31) << 19) | ((rng() % 32) << 14)
+             | ((rng() & 1) << 7) | (1 + rng() % 31) | 0x0800;
+      } else if (cls == 9) {                           // mul / div / rem / mod
         const uint32_t blk = (rng() & 1) ? 0x70u : 0x74u;
         static const uint8_t U[] = {0x1,0x8,0xb}, S[] = {0x1,0x8,0x9,0xb};
         const uint32_t o2 = (blk == 0x70) ? U[rng()%3] : S[rng()%4];
@@ -146,7 +175,7 @@ int main(int argc, char **argv) {
              | (o2 << 7) | (rng() % 32);
         if (rng() & 1) insn |= 0x0800;
         if (rng() & 1) insn |= 0x1000;
-      } else if (cls < 5) {                            // REG ALU
+      } else if (cls < 3) {                            // REG ALU
         const uint32_t blk = 0x58 + (rng() % 4);
         uint32_t o2;
         if      (blk == 0x58) o2 = REG58[rng() % 15];
@@ -157,12 +186,12 @@ int main(int argc, char **argv) {
              | (o2 << 7) | (rng() % 32);
         if (rng() & 1) insn |= 0x0800;                 // src1 literal
         if (rng() & 1) insn |= 0x1000;                 // src2 literal
-      } else if (cls < 7) {                            // test<cc>
+      } else if (cls == 4) {                           // test<cc>
         insn = ((0x20 + (rng() % 8)) << 24) | ((rng() % 32) << 19);
-      } else if (cls < 9) {                            // cmpib<cc> / cmpob<cc>
+      } else if (cls == 3) {                           // cmpib<cc> / cmpob<cc>
         const uint32_t op = (rng() & 1) ? (0x31 + rng() % 6) : (0x39 + rng() % 6);
         insn = (op << 24) | ((rng() % 32) << 19) | ((rng() % 32) << 14) | 0x0008;
-      } else if (cls < 8) {                            // bbc / bbs
+      } else if (cls == 5) {                           // bbc / bbs
         insn = (((rng() & 1) ? 0x37u : 0x30u) << 24)
              | ((rng() % 32) << 19) | ((rng() % 32) << 14) | 0x2008;
       } else { insn = 0x5c0c0000u; }                   // unreachable filler

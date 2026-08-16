@@ -691,9 +691,9 @@ COBR fix:
 
 | | mnemonics | |
 |---|---|---|
-| executed | **103** | 63% |
-| traps correctly (`fault<cc>`, `emul`/`ediv`, `modpc`, `calls`) | 12 | 7% |
-| **absent** | **48** | **29%** |
+| executed | **108** | 66% |
+| traps correctly (`fault<cc>`, `modpc`, `calls`, `synmov`) | 12 | 7% |
+| **absent** | **43** | **26%** |
 
 Counted from the source rather than by hand — `execute_op` dispatches **163**
 distinct mnemonics, not the 159 an earlier hand-tabulation in this document
@@ -714,12 +714,12 @@ Projecting from the study's own per-block figures:
 
 | | ALM |
 |---|---|
-| assembled today | 3,626 |
+| assembled today | 3,754 |
 | `mov` family, `spanbit`, `modac`, `calls`, `synmov` | +300 .. 600 |
 | `fault<cc>`, fault handling, interrupts | +200 .. 500 |
 | pipeline: hazards, forwarding, stalls | +1,500 .. 3,000 |
 | **FPU, 38 mnemonics** | **+2,500 .. 6,000** |
-| **projected complete i960KB** | **8,126 .. 13,726** |
+| **projected complete i960KB** | **8,254 .. 13,354** |
 | study §5.2 estimate | 7,000 .. 13,500 |
 
 The projection straddles the study's range and overshoots its ceiling slightly.
@@ -732,8 +732,8 @@ the core lands optimistically. So:
 
 | i960 lands at | renderer may use | against its 15,000-25,000 estimate |
 |---|---|---|
-| 8,126 (best) | 16,883 | fits if the renderer is near its floor |
-| 13,726 (worst) | 11,283 | **below the renderer's floor — does not fit** |
+| 8,254 (best) | 16,755 | fits if the renderer is near its floor |
+| 13,354 (worst) | 11,655 | **below the renderer's floor — does not fit** |
 
 **Both blocks have to land low.** An i960 at the top of its range leaves the
 renderer less than its most optimistic estimate, and that is before the M10K
@@ -980,6 +980,46 @@ instruction.
 
 Lockstep after integration: 171,610 retires per seed, zero mismatches. The CPU
 is **3,626 ALM, 2 DSP, 42.43 MHz** at 103 of 163 mnemonics.
+
+### Multi-word and pair register writes
+
+`movl`, `movt`, `movq`, `emul` and `ediv` — one piece of sequencer work for five
+mnemonics. The register file has a single write port, so these take a cycle per
+word, with the source read one cycle ahead so the copy runs at one word per
+cycle after a one-cycle prologue.
+
+**The destination masks are not uniform, and `emul`/`ediv` have none:**
+
+| | destination |
+|---|---|
+| `movl` | `srcdst & 0x1e` |
+| `movt`, `movq` | `srcdst & 0x1c` |
+| `emul`, `ediv` | `srcdst & 0x1f` — **unmasked** |
+
+Unmasked means `emul` with `srcdst = 31` writes `m_r[32]`, one past the end of
+the reference's 32-entry array. That is a buffer overrun and therefore
+undefined, so the harness never generates it.
+
+The **source** of a `mov` is never masked either, so a misaligned source with an
+aligned destination is legal and has to work.
+
+#### A third undefined-behaviour case, and a bug in my own constraint
+
+The reference copies with `memcpy(m_r+t2, m_r+(opcode & 0x1f), n*4)`. **`memcpy`
+with overlapping regions is undefined in C** — `memmove` is the defined one. A
+forward loop propagates (`r[28]=r[27]`, then `r[29]=r[28]` which is already
+`r[27]`), a vectorised or backward copy does not. So overlapping source and
+destination joins the zero divisor and the out-of-range shift count on the list
+of things the fuzz must not generate.
+
+Constraining it took two attempts, and the first failure is worth recording. A
+linear test — `src + n <= base || base + n <= src` — misses **wraparound**:
+register numbers are five bits and the copy wraps, so `src = 30, n = 4` covers
+indices 30, 31, 0, 1 and collides with `base = 0` while passing the linear
+check. The overlap has to be tested on the wrapped index sets.
+
+Lockstep: 164,084 retires per seed, zero mismatches. The CPU is **3,754 ALM,
+3 DSP, 45.16 MHz** at 108 of 163 mnemonics.
 
 ### What that does not prove
 

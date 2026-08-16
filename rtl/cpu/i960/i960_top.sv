@@ -184,14 +184,10 @@ module i960_top (
   // claim DSP blocks. `md_valid` is checked before `alu_valid` in execute,
   // because the ALU reports these opcodes as invalid.
 
-  // md_pair and md_hi belong to emul and ediv, which write a register pair.
-  // Pair writes need the same sequencer support as movl/movt/movq and land in
-  // the same pass; 0x67 therefore still traps. Flagged rather than silently
-  // half-wired.
   /* verilator lint_off UNUSEDSIGNAL */
   logic        md_req, md_busy, md_done, md_valid, md_pair;
-  logic [31:0] md_lo, md_hi;
   /* verilator lint_on UNUSEDSIGNAL */
+  logic [31:0] md_lo, md_hi;
 
   i960_muldiv u_muldiv (
     .clk(clk), .rst_n(rst_n),
@@ -313,11 +309,47 @@ module i960_top (
     end
   end
 
+  // -------------------------------------------------- multi-word reg writes
+  //
+  // movl, movt and movq copy 2, 3 or 4 consecutive registers; emul and ediv
+  // write a pair. The register file has one write port, so these take a cycle
+  // per word.
+  //
+  // The destination masks differ and are NOT uniform:
+  //   movl  (srcdst & 0x1e)      movt, movq  (srcdst & 0x1c)
+  //   emul, ediv  (srcdst & 0x1f) — unmasked
+  //
+  // Unmasked means `emul` with srcdst = 31 writes r[32], one past the end of
+  // the reference's 32-entry array. That is a buffer overrun in the reference
+  // and therefore undefined; the harness never generates it, the same way it
+  // never generates a zero divisor. Here the index simply wraps.
+  //
+  // The SOURCE of a mov is not masked either — `opcode & 0x1f` — so a
+  // misaligned source with an aligned destination is legal and must work.
+  logic [2:0]  mw_n, mw_i;
+  logic [4:0]  mw_base, mw_src;
+  logic        mw_lit;
+  logic [31:0] mw_litval;
+
+  logic [4:0]  mov_base;
+  logic [2:0]  mov_n;
+  always_comb begin
+    case (d_op)
+      8'h5d:   begin mov_base = d_srcdst & 5'h1e; mov_n = 3'd2; end   // movl
+      8'h5e:   begin mov_base = d_srcdst & 5'h1c; mov_n = 3'd3; end   // movt
+      default: begin mov_base = d_srcdst & 5'h1c; mov_n = 3'd4; end   // movq
+    endcase
+  end
+
+  logic is_movx;
+  assign is_movx = (d_fmt == 2'd2) && (d_op2 == 4'hc) &&
+                   (d_op == 8'h5d || d_op == 8'h5e || d_op == 8'h5f);
+
   // ------------------------------------------------------------- sequencer
 
   typedef enum logic [3:0] {
     T_FETCH, T_FETCH_W, T_FETCH2, T_FETCH2_W, T_DECODE,
-    T_EXEC, T_MEM, T_MEM_W, T_MULDIV, T_WB, T_FRAME, T_TRAP
+    T_EXEC, T_MEM, T_MEM_W, T_MULDIV, T_MULTI, T_PAIR, T_WB, T_FRAME, T_TRAP
   } tstate_e;
 
   tstate_e ts;
@@ -450,7 +482,21 @@ module i960_top (
             end
 
             2'd2: begin                                   // REG
-              if (md_valid && d_op != 8'h67) begin
+              if (is_movx) begin
+                // First word now; the rest one per cycle. ra1 already holds the
+                // source base from decode, so rd1 is live this cycle.
+                mw_base   <= mov_base;
+                mw_n      <= mov_n;
+                mw_src    <= d_src1;
+                mw_lit    <= d_src1_lit;
+                mw_litval <= {27'd0, d_src1};
+                wa <= mov_base;
+                wd <= d_src1_lit ? {27'd0, d_src1} : rd1;
+                we <= 1'b1;
+                mw_i <= 3'd1;
+                ra1  <= d_src1 + 5'd1;
+                ts   <= T_MULTI;
+              end else if (md_valid) begin
                 // Multiply, divide, remainder and modulo. Multi-cycle and
                 // DSP-backed, so they leave the single-state execute path.
                 md_req <= 1'b1;
@@ -484,8 +530,35 @@ module i960_top (
           wa <= d_srcdst;
           wd <= md_lo;
           we <= 1'b1;
+          if (md_pair) begin
+            // emul and ediv write a pair, unmasked.
+            mw_base <= d_srcdst;
+            ts      <= T_PAIR;
+          end else begin
+            ip <= ip_next;
+            ts <= T_FETCH;
+          end
+        end
+
+        T_PAIR: begin
+          wa <= mw_base + 5'd1;
+          wd <= md_hi;
+          we <= 1'b1;
           ip <= ip_next;
           ts <= T_FETCH;
+        end
+
+        T_MULTI: begin
+          wa <= mw_base + {2'd0, mw_i};
+          wd <= mw_lit ? mw_litval : rd1;
+          we <= 1'b1;
+          if (mw_i + 3'd1 >= mw_n) begin
+            ip <= ip_next;
+            ts <= T_FETCH;
+          end else begin
+            mw_i <= mw_i + 3'd1;
+            ra1  <= mw_src + 5'({1'b0, mw_i}) + 5'd1;
+          end
         end
 
         T_MEM_W: begin
