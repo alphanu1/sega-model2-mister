@@ -74,7 +74,7 @@ conflated again.
 
 | Block | Reference | Bit-exact oracle? | Portable RTL? |
 |---|---|---|---|
-| i960KB | `src/devices/cpu/i960/i960.cpp` | **Integer yes, FP no** | **none exists (5.4.3)** |
+| i960KB | `src/devices/cpu/i960/i960.cpp` | **Integer yes except `addc`/`subc` carry (2.3), FP no** | **none exists (5.4.3)** |
 | MB86234 | `src/devices/cpu/mb86233/` — **empty subclass of MB86233** | Yes | **ours, verified (5.4.1)** |
 | 68000 | mature | Yes | `fx68k`, GPL-3.0 |
 | SCSP | `src/devices/sound/scsp.cpp`, BSD-3 | Yes | **none usable — Saturn RTL is unlicensed (5.3)** |
@@ -116,6 +116,47 @@ modelled as host doubles. FP results are therefore approximate, not bit-exact.
 
 An LLE i960 FPU cannot be lockstep-verified against MAME. Options: verify against a
 software 80-bit reference implementation, or accept 64-bit and document the deviation.
+
+### 2.3 The integer oracle has exactly one hole: `addc` and `subc` carry
+
+Found while writing the ALU. MAME computes the carry flag as:
+
+```cpp
+uint32_t t1, t2;  uint64_t res;
+res = t2+(t1+((m_AC>>1)&1));
+m_AC |= ((res) & (((uint64_t)1) << 32)) ? 0x2 : 0;    // set carry
+```
+
+Every operand is `uint32_t`, so the arithmetic wraps modulo 2^32 **before** it is widened
+to `uint64_t`. Bit 32 is therefore always zero and **MAME's `addc` and `subc` never set
+carry at all.** Verified directly: `0xffffffff + 1` yields `res = 0` with bit 32 clear;
+`0 - 1` yields `0xffffffff` with bit 32 clear.
+
+The `// set carry` comment and the deliberate `(uint64_t)1 << 32` mask make the intent
+unambiguous, so this is a C++ integer-promotion defect rather than a modelling decision.
+`addc` and `subc` exist to chain multi-word arithmetic; carry propagation is their whole
+purpose, and the silicon certainly produces it.
+
+**The RTL implements the hardware behaviour.** `CLAUDE.md` rule 11 puts the reference above
+this study, but its first clause reads "MAME, **or the silicon it models**", and
+`THIRD_PARTY.md` records that the behaviour of Intel's silicon is fact rather than MAME's
+expression of it. This is the case those clauses exist for.
+
+Cost, stated plainly: **the integer core is no longer a completely bit-exact oracle.**
+Whole-CPU lockstep (§7 criterion 2 of the spike) will diverge on any program using `addc`
+or `subc`, and that divergence is expected rather than a bug. The reference model carries a
+switch reproducing MAME's result so lockstep can still be run either way.
+
+The divergence is bounded and measured, not assumed. Over 12.8 M vectors covering all 64
+`op`/`op2` pairs in `0x58`-`0x5b`, the switch changes behaviour on exactly two operations —
+`5b.0` and `5b.2` — the union of AC bits that ever differ is exactly `0x00000002`, and
+`result`, `result_we` and `valid` never differ at all. `make test_i960_alu_carrybug` is a
+standing test that this stays true: it **fails if the RTL stops diverging**, because that
+would mean the defect had been reproduced.
+
+**Unknown, and it matters:** whether Model 2 games use `addc`/`subc`. Nothing in this
+project can answer that without program ROM. If they do not, the hole is theoretical. If
+they do, MAME's own arithmetic is wrong there and matching it would be the error.
 
 ---
 
@@ -775,6 +816,29 @@ architectural reference for the renderer and not only a fitter-report comparable
 
 Net effect on area: **1,000 ALM out of 39,500.** Effectively nothing. The value of R6 is
 entirely in knowing which numbers are measurements and which are hopes — see 5.5.
+
+**R7 — the integer oracle is not quite whole.** §2 carried "Integer yes" for the i960 from
+R5 onward, and it is very nearly true. Writing the ALU found one exception: MAME's `addc`
+and `subc` never set the carry flag, because their expression evaluates entirely in
+`uint32_t` and wraps before being widened to `uint64_t`. §2.3 has the detail and the
+decision — the RTL implements hardware carry and diverges deliberately.
+
+Worth separating two things this revision could be mistaken for. It is **not** a case of
+the study being wrong about MAME's quality; the file is otherwise an unusually careful
+model, which is why §3's cycle table is trustworthy enough to size the FPU from. And it is
+**not** licence to diverge whenever the reference looks inconvenient. The bar cleared here
+was: the intent is documented in the source itself, the defect is mechanical and
+demonstrable in three lines of C++, and the divergence is bounded by measurement rather
+than argument.
+
+**Third recurring failure mode, and this one is new:** a verification suite that passes
+enormously proves the two things being compared agree, not that either is right. The
+decoder cleared 6.0e9 field checks against a reference sharing its author and its source.
+The ALU cleared 4.26e9. Both numbers are worth exactly as much as the independence of the
+oracle behind them — which for the decoder was partial (`i960dis.cpp` could check the
+opcode set and formats, not the field positions) and for `addc`/`subc` was zero, because
+there the reference is the thing that is wrong. **State what an oracle cannot see, next to
+the number that makes it look unnecessary.**
 
 **Recurring failure mode:** treating MAME's cycle counts as hardware facts. Two wrong
 conclusions in this document from that alone. Both `mb86233.cpp` and `v60.cpp` carry

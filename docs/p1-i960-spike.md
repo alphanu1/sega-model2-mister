@@ -353,6 +353,39 @@ at the encoding's real boundaries (86), and random.
 Twenty fields compared on every vector, not just the field under test — a
 decoder that answers correctly and corrupts a neighbour is still broken.
 
+### Step 2 — integer ALU. Done.
+
+`rtl/cpu/i960/i960_alu.sv` against `sim/i960/i960_alu_ref.h`. 37 operations across
+REG opcodes `0x58`-`0x5b`: logic, bit, shift, arithmetic, compare and carry.
+
+Three passes: exhaustive over all 64 `op`/`op2` pairs including unimplemented
+ones so `valid` is checked across the whole space; directed at shift counts
+either side of 32, carry and borrow pairs, every bit position, `scanbyte` lane
+matching and the `concmp` skip condition; then per-opcode random with a biased
+operand pool, because uniform 32-bit random almost never produces `0`, `1`, `-1`,
+`0x80000000` or a shift count under 32 — which is where every one of these
+operations changes behaviour.
+
+| Run | Per op | Field checks | Mismatches |
+|---|---|---|---|
+| seed 1 | 10^6 | 142,007,232 | 0 |
+| seeds 2, 7, 12345 | 10^7 each | 1,420,007,232 each | 0 |
+
+Two behaviours that look like RTL bugs and are not, both replicated deliberately:
+
+- **Shift counts are not masked to five bits.** The reference tests `t1 >= 32` on
+  the full 32-bit value, so `shlo` by 100 gives zero rather than a shift by 4.
+  Masking is the obvious implementation and would diverge on every out-of-range
+  count. `rotate` and the bit operations *do* mask; the shifts do not.
+- **`addi` and `subi` do not detect overflow.** The reference marks them
+  `// #### overflow` and leaves them identical to `addo`/`subo`. Inventing
+  overflow here would diverge from the only oracle there is.
+
+**One deliberate divergence: `addc`/`subc` carry.** Design study §2.3. The RTL
+implements hardware carry; MAME's never sets it. `make test_i960_alu_carrybug`
+is a standing test that the divergence stays exactly where it is claimed — it
+**fails if the RTL stops diverging**.
+
 ### What that does not prove
 
 **The reference and the RTL are two expressions by the same author from the same
