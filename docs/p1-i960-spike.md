@@ -1104,6 +1104,70 @@ That reframing matters for the optimisation backlog too: item 1, moving the
 register file to a registered read, costs a cycle of read latency in a
 multi-cycle FSM but costs *nothing* in a pipeline, where it is simply a stage.
 
+### Profiling first, then a prefetch — CPI 7.33 to 3.31
+
+**The blocker was not what it was being called.** "The CPU needs a pipeline" was
+an assumption; profiling cycles by sequencer state said otherwise:
+
+| state | cyc/instr | share |
+|---|---|---|
+| `T_FETCH` | 1.07 | 14.5% |
+| **`T_FETCH_W`** | **4.27** | **58.2%** |
+| `T_DECODE` | 1.00 | 13.6% |
+| `T_EXEC` | 1.00 | 13.6% |
+
+**58% of all cycles were waiting for the instruction cache.** Execute was 14%. A
+five-stage pipeline would have attacked the 14%.
+
+Two contained changes followed, neither of them a pipeline:
+
+**1. Hold the I-cache fill request.** `bus_req` was registered and dropped after
+each word, costing ~3.7 cycles per word of a 4-word line. Holding it across the
+line with a combinational address gives one word per ack. CPI 7.33 → 6.58.
+
+**2. Prefetch, predicting sequential.** The request for the next instruction is
+issued during *decode* of the current one, so on a hit the sequencer returns
+straight to decode and skips both fetch states. A taken branch discards it and
+refetches — the misprediction cost is exactly the fetch being avoided, so the
+worst case is the old behaviour. Eight-byte forms need the cache port for their
+own displacement word and do not prefetch.
+
+| | before | after |
+|---|---|---|
+| straight-line, cold cache | 6.58 | **4.62** |
+| **looping code, warm cache** | 5.26 | **3.31** |
+| `T_FETCH_W`, warm | 2.25 | **0.30** |
+
+At the measured 45.53 MHz:
+
+| | CPI | M instr/s | vs 12.5-16.7 |
+|---|---|---|---|
+| looping code | 3.31 | **13.64** | **inside** |
+| cold straight-line | 4.62 | 9.77 | short |
+
+**The requirement is met for code that loops**, which is what game code does.
+The cold figure is dominated by a 25% miss rate that is an artefact of the
+harness — 60-instruction programs fetched once — and says more about the
+generator than the design.
+
+Cost: **45 ALM** (3,754 → 3,799) and Fmax unchanged at 45.53. Lockstep clean at
+120,000 retires per seed across three seeds.
+
+#### Two failures worth recording, both mine
+
+The prefetch did nothing on its first two attempts and both diagnoses were wrong
+before instrumentation settled it.
+
+- **First attempt: checked only the latched prefetch.** `ic_req` is registered,
+  so a request issued in decode has its `valid` arrive *during* `T_FETCH` — one
+  cycle after the latch would have caught it. The fix is to check the in-flight
+  case as well as the latched one.
+- **Second attempt: the code was never inserted.** The edit targeted a comment
+  that an earlier COBR fix had already rewritten, so the patch silently matched
+  nothing. Two rounds of reasoning about timing were spent on RTL that did not
+  contain the feature. **`pf_armed` counted zero the moment it was
+  instrumented**, which is what should have been done first.
+
 ### What that does not prove
 
 **The reference and the RTL are two expressions by the same author from the same

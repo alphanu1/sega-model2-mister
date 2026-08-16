@@ -62,7 +62,7 @@ module i960_icache #(
 
   // ------- refill side. One 4-word line burst per miss.
   output logic        bus_req,
-  output logic [31:0] bus_addr,
+  output logic [31:0] bus_addr,   // combinational — see the fill state
   input  logic [31:0] bus_rdata,
   input  logic        bus_ack
 );
@@ -112,6 +112,10 @@ module i960_icache #(
   end
 
   assign rd_raddr = {idx, word};
+
+  // Combinational so the address tracks fill_word within the same cycle the
+  // data for it is acked.
+  assign bus_addr = fill_base + {28'd0, fill_word, 2'b00};
   assign rd_waddr = {fill_idx, fill_word};
   assign rd_wdata = bus_rdata;
   assign rd_we    = (state == S_FILL) && bus_ack;
@@ -154,11 +158,15 @@ module i960_icache #(
         end
 
         S_FILL: begin
-          bus_req  <= 1'b1;
-          bus_addr <= fill_base + {28'd0, fill_word, 2'b00};
+          // Request is HELD across the whole line and the address is
+          // combinational, so a memory that acks every cycle delivers one word
+          // per cycle. The previous version registered both and dropped the
+          // request after each word, which measured ~3.7 cycles per word and
+          // made instruction fetch 58% of all cycles in the CPU.
+          bus_req <= 1'b1;
           if (bus_ack) begin
-            bus_req <= 1'b0;
             if (fill_word == 2'd3) begin
+              bus_req          <= 1'b0;
               ctag[fill_idx]   <= fill_tag;
               cvalid[fill_idx] <= 1'b1;
               state            <= S_DONE;

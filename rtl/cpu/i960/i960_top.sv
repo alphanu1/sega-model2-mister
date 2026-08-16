@@ -345,6 +345,25 @@ module i960_top (
   assign is_movx = (d_fmt == 2'd2) && (d_op2 == 4'hc) &&
                    (d_op == 8'h5d || d_op == 8'h5e || d_op == 8'h5f);
 
+  // --------------------------------------------------------------- prefetch
+  //
+  // Measured: instruction fetch was 58% of all cycles, and 53% even after the
+  // I-cache fill was fixed. On a hit the path still costs three cycles —
+  // T_FETCH to issue, then two in T_FETCH_W because the cache registers its
+  // read and then asserts valid. Execute is one cycle.
+  //
+  // So the request for the NEXT instruction is issued during decode of the
+  // current one, predicting sequential. By the time execute retires, a hit has
+  // landed and the sequencer goes straight back to decode, skipping both fetch
+  // states entirely. A taken branch discards the prefetch and refetches — the
+  // cost of a misprediction is exactly the fetch this scheme was avoiding, so
+  // the worst case is today's behaviour.
+  //
+  // Eight-byte instructions use the cache port in decode for their
+  // displacement word, so they do not prefetch and fall back to T_FETCH.
+  logic [31:0] pf_insn, pf_ip;
+  logic        pf_valid, pf_armed;
+
   // ------------------------------------------------------------- sequencer
 
   typedef enum logic [3:0] {
@@ -357,6 +376,10 @@ module i960_top (
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       ts        <= T_FETCH;
+      pf_valid  <= 1'b0;
+      pf_armed  <= 1'b0;
+      pf_insn   <= 32'd0;
+      pf_ip     <= 32'd0;
       ip        <= 32'd0;
       ip_next   <= 32'd4;
       insn      <= 32'd0;
@@ -380,6 +403,14 @@ module i960_top (
       ic_req   <= 1'b0;
       lsu_req  <= 1'b0;
       md_req   <= 1'b0;
+
+      // A prefetch issued in decode lands during execute. Capture it wherever
+      // the sequencer happens to be.
+      if (pf_armed && ic_valid) begin
+        pf_insn  <= ic_data;
+        pf_valid <= 1'b1;
+        pf_armed <= 1'b0;
+      end
       we       <= 1'b0;
       rf_call  <= 1'b0;
       rf_ret   <= 1'b0;
@@ -387,9 +418,32 @@ module i960_top (
 
       case (ts)
         T_FETCH: begin
-          fetch_addr <= ip;
-          ic_req     <= 1'b1;
-          ts         <= T_FETCH_W;
+          // Use the prefetched word when the prediction held. `pf_ip` is
+          // compared against the actual IP rather than trusted, so a taken
+          // branch or any redirect falls back automatically.
+          // Two ways the prediction can be good: already latched, or landing
+          // this very cycle. The second case matters — `ic_req` is registered,
+          // so a prefetch issued in decode has its `valid` arrive exactly here,
+          // one cycle after the latch would have caught it. Checking only the
+          // latched copy misses every hit and the prefetch does nothing, which
+          // is precisely what the first version measured.
+          if (pf_valid && pf_ip == ip) begin
+            insn     <= pf_insn;
+            ip_next  <= ip + 32'd4;
+            pf_valid <= 1'b0;
+            ts       <= T_DECODE;
+          end else if (pf_armed && ic_valid && pf_ip == ip) begin
+            insn     <= ic_data;
+            ip_next  <= ip + 32'd4;
+            pf_armed <= 1'b0;
+            ts       <= T_DECODE;
+          end else begin
+            fetch_addr <= ip;
+            ic_req     <= 1'b1;
+            pf_valid   <= 1'b0;
+            pf_armed   <= 1'b0;
+            ts         <= T_FETCH_W;
+          end
         end
 
         T_FETCH_W: if (ic_valid) begin
@@ -413,7 +467,16 @@ module i960_top (
             ip_next    <= ip + 32'd8;
             ts         <= T_FETCH2_W;
           end else begin
-            ts <= T_EXEC;
+            // Predict sequential and start the next fetch NOW, overlapping it
+            // with execute. Eight-byte forms take the branch above and use the
+            // cache port for their own displacement word instead, so they do
+            // not prefetch.
+            fetch_addr <= ip + 32'd4;
+            ic_req     <= 1'b1;
+            pf_ip      <= ip + 32'd4;
+            pf_armed   <= 1'b1;
+            pf_valid   <= 1'b0;
+            ts         <= T_EXEC;
           end
         end
 

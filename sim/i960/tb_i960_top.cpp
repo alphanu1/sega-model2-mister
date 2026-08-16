@@ -34,7 +34,17 @@ std::map<uint32_t,uint32_t> mem;
 uint64_t checks = 0, fails = 0, ticks = 0, retires = 0;
 const int MAX_REPORT = 10;
 
+// Cycles spent in each sequencer state. Measuring before optimising, because
+// the last time this project optimised on intuition it went after the wrong
+// block entirely.
+uint64_t state_cycles[16] = {0};
+const char *STATE_NAME[16] = {
+  "T_FETCH","T_FETCH_W","T_FETCH2","T_FETCH2_W","T_DECODE","T_EXEC",
+  "T_MEM","T_MEM_W","T_MULDIV","T_MULTI","T_PAIR","T_WB","T_FRAME","T_TRAP","?","?"
+};
+
 void tick() {
+  state_cycles[dut->rootp->i960_top__DOT__ts & 15]++;
   if (dut->bus_req) {
     const uint32_t a = dut->bus_addr & ~3u;
     auto it = mem.find(a);
@@ -236,6 +246,16 @@ int main(int argc, char **argv) {
   // Cycles per retired instruction. This is the number the pipeline exists to
   // reduce, and it is measured rather than estimated. It includes I-cache
   // misses and the per-program reset, so it is an upper bound on steady state.
+  if (total_retires) {
+    std::printf("\n  cycles by sequencer state, per retired instruction:\n");
+    for (int i = 0; i < 16; i++)
+      if (state_cycles[i])
+        std::printf("    %-12s %10llu  %6.2f cyc/instr  %5.1f%%\n",
+                    STATE_NAME[i], (unsigned long long)state_cycles[i],
+                    double(state_cycles[i]) / double(total_retires),
+                    100.0 * double(state_cycles[i]) / double(ticks));
+    std::printf("\n");
+  }
   if (total_retires)
     std::printf("  CPI (incl. reset and I-cache misses): %.2f\n",
                 double(ticks) / double(total_retires));
