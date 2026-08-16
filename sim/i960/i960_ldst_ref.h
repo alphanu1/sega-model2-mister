@@ -9,13 +9,13 @@ namespace i960ref {
 
 struct LdSt {
   bool is_load, is_store, no_mem, sign_ext, valid, unaligned;
-  uint8_t size, n_words;
+  uint8_t size, n_words, reg_mask;
   uint32_t ld_result, st_data;
   uint8_t st_be;
 };
 
 inline LdSt ldst(uint8_t op, uint8_t addr_lo, uint32_t rd, uint32_t sv) {
-  LdSt o{}; o.valid = true; o.size = 2; o.n_words = 1;
+  LdSt o{}; o.valid = true; o.size = 2; o.n_words = 1; o.reg_mask = 0x1f;
   switch (op) {
     case 0x80: o.is_load = true;  o.size = 0; break;                 // ldob u8
     case 0x82: o.is_store = true; o.size = 0; break;                 // stob
@@ -24,12 +24,12 @@ inline LdSt ldst(uint8_t op, uint8_t addr_lo, uint32_t rd, uint32_t sv) {
     case 0x8c: o.no_mem = true; break;                               // lda
     case 0x90: o.is_load = true;  break;                             // ld
     case 0x92: o.is_store = true; break;                             // st
-    case 0x98: o.is_load = true;  o.n_words = 2; break;              // ldl
-    case 0x9a: o.is_store = true; o.n_words = 2; break;              // stl
-    case 0xa0: o.is_load = true;  o.n_words = 3; break;              // ldt
-    case 0xa2: o.is_store = true; o.n_words = 3; break;              // stt
-    case 0xb0: o.is_load = true;  o.n_words = 4; break;              // ldq
-    case 0xb2: o.is_store = true; o.n_words = 4; break;              // stq
+    case 0x98: o.is_load = true;  o.n_words = 2; o.reg_mask = 0x1e; break;              // ldl
+    case 0x9a: o.is_store = true; o.n_words = 2; o.reg_mask = 0x1e; break;              // stl
+    case 0xa0: o.is_load = true;  o.n_words = 3; o.reg_mask = 0x1c; break;              // ldt
+    case 0xa2: o.is_store = true; o.n_words = 3; o.reg_mask = 0x1c; break;              // stt
+    case 0xb0: o.is_load = true;  o.n_words = 4; o.reg_mask = 0x1c; break;              // ldq
+    case 0xb2: o.is_store = true; o.n_words = 4; o.reg_mask = 0x1c; break;              // stq
     case 0xc0: o.is_load = true;  o.size = 0; o.sign_ext = true; break; // ldib s8
     case 0xc2: o.is_store = true; o.size = 0; break;                 // stib
     case 0xc8: o.is_load = true;  o.size = 1; o.sign_ext = true; break; // ldis s16

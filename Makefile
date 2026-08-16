@@ -38,6 +38,8 @@ ALU_RTL  := $(I960)/i960_alu.sv
 REG_RTL  := $(I960)/i960_regs.sv
 AGU_RTL  := $(I960)/i960_agu.sv
 LST_RTL  := $(I960)/i960_ldst.sv
+LSU_RTL  := $(I960)/i960_lsu.sv
+MAP_RTL  := $(I960)/i960_memmap.sv
 
 TEST_ARGS := $(if $(RANDOM),+random=$(RANDOM),) $(if $(SEED),+seed=$(SEED),)
 
@@ -46,8 +48,8 @@ all: lint synth test
 
 # --------------------------------------------------------------------- lint
 
-.PHONY: lint lint_i960_dec lint_i960_alu lint_i960_regs lint_i960_agu lint_i960_ldst
-lint: lint_i960_dec lint_i960_alu lint_i960_regs lint_i960_agu lint_i960_ldst
+.PHONY: lint lint_i960_dec lint_i960_alu lint_i960_regs lint_i960_agu lint_i960_ldst lint_i960_lsu lint_i960_memmap
+lint: lint_i960_dec lint_i960_alu lint_i960_regs lint_i960_agu lint_i960_ldst lint_i960_lsu lint_i960_memmap
 
 lint_i960_dec:
 	@echo "== lint i960_dec"
@@ -68,6 +70,14 @@ lint_i960_agu:
 lint_i960_ldst:
 	@echo "== lint i960_ldst"
 	$(VERILATOR) --lint-only $(VFLAGS) --top-module i960_ldst $(LST_RTL)
+
+lint_i960_lsu:
+	@echo "== lint i960_lsu"
+	$(VERILATOR) --lint-only $(VFLAGS) --top-module i960_lsu $(LSU_RTL)
+
+lint_i960_memmap:
+	@echo "== lint i960_memmap"
+	$(VERILATOR) --lint-only $(VFLAGS) --top-module i960_memmap $(MAP_RTL)
 
 # --------------------------------------------------------------------- synth
 #
@@ -114,8 +124,8 @@ synth_i960_ldst:
 
 # --------------------------------------------------------------------- tests
 
-.PHONY: test test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_agu test_i960_ldst
-test: test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst
+.PHONY: test test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu
+test: test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu
 
 test_i960_dec: obj_i960_dec/Vi960_dec
 	@echo "== test i960_dec"
@@ -165,6 +175,14 @@ obj_i960_ldst/Vi960_ldst: $(LST_RTL) $(TB)/tb_i960_ldst.cpp $(TB)/i960_ldst_ref.
 	$(VBUILD) --top-module i960_ldst -CFLAGS "-O2 -I../$(TB)" \
 	  --Mdir obj_i960_ldst -o Vi960_ldst $(LST_RTL) $(TB)/tb_i960_ldst.cpp
 
+test_i960_lsu: obj_i960_lsu/Vi960_lsu
+	@echo "== test i960_lsu"
+	./obj_i960_lsu/Vi960_lsu $(TEST_ARGS)
+
+obj_i960_lsu/Vi960_lsu: $(LSU_RTL) $(TB)/tb_i960_lsu.cpp $(TB)/i960_lsu_ref.h
+	$(VBUILD) --top-module i960_lsu -CFLAGS "-O2 -I../$(TB)" \
+	  --Mdir obj_i960_lsu -o Vi960_lsu $(LSU_RTL) $(TB)/tb_i960_lsu.cpp
+
 # ------------------------------------------------------------------- quartus
 #
 # 17.0.0 Build 595 only. 24.1std is installed on this machine and must not
@@ -181,8 +199,10 @@ SRCS_i960_alu  := $(ALU_RTL)
 SRCS_i960_regs := $(REG_RTL)
 SRCS_i960_agu  := $(AGU_RTL)
 SRCS_i960_ldst := $(LST_RTL)
+SRCS_i960_lsu  := $(LSU_RTL)
+SRCS_i960_memmap := $(MAP_RTL)
 
-QUARTUS_MODS := i960_dec i960_alu i960_regs i960_agu i960_ldst
+QUARTUS_MODS := i960_dec i960_alu i960_regs i960_agu i960_ldst i960_lsu i960_memmap
 
 # One module, real device, real toolchain. This is the only thing that gives
 # ALM, M10K and DSP — yosys gives LUT6, which is an indicator and not the same

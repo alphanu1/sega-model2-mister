@@ -46,6 +46,13 @@ module i960_ldst (
   output logic [1:0]  size,        // 0 = byte, 1 = half, 2 = word
   output logic        sign_ext,    // partial loads only
   output logic [2:0]  n_words,     // consecutive dwords: 1, 2, 3 or 4
+
+  // Register-number mask for the multi-word forms. The reference aligns the
+  // register group down: ldl/stl use (srcdst & 0x1e), and ldt/stt/ldq/stq use
+  // (srcdst & 0x1c) — note ldt moves three words but still aligns to four.
+  // Software that names an unaligned register gets the aligned group, silently,
+  // so masking in the caller is not optional decoration.
+  output logic [4:0]  reg_mask,
   output logic        valid,
 
   // Data path. `rd_data` is the aligned dword containing the target bytes.
@@ -65,6 +72,7 @@ module i960_ldst (
   always_comb begin
     is_load = 1'b0; is_store = 1'b0; no_mem = 1'b0;
     size    = 2'd2; sign_ext = 1'b0; n_words = 3'd1; valid = 1'b1;
+    reg_mask = 5'h1f;
     case (op)
       8'h80: begin is_load  = 1'b1; size = 2'd0; end                    // ldob
       8'h82: begin is_store = 1'b1; size = 2'd0; end                    // stob
@@ -73,12 +81,12 @@ module i960_ldst (
       8'h8c: begin no_mem   = 1'b1;              end                    // lda
       8'h90: begin is_load  = 1'b1;              end                    // ld
       8'h92: begin is_store = 1'b1;              end                    // st
-      8'h98: begin is_load  = 1'b1; n_words = 3'd2; end                 // ldl
-      8'h9a: begin is_store = 1'b1; n_words = 3'd2; end                 // stl
-      8'ha0: begin is_load  = 1'b1; n_words = 3'd3; end                 // ldt
-      8'ha2: begin is_store = 1'b1; n_words = 3'd3; end                 // stt
-      8'hb0: begin is_load  = 1'b1; n_words = 3'd4; end                 // ldq
-      8'hb2: begin is_store = 1'b1; n_words = 3'd4; end                 // stq
+      8'h98: begin is_load  = 1'b1; n_words = 3'd2; reg_mask = 5'h1e; end                 // ldl
+      8'h9a: begin is_store = 1'b1; n_words = 3'd2; reg_mask = 5'h1e; end                 // stl
+      8'ha0: begin is_load  = 1'b1; n_words = 3'd3; reg_mask = 5'h1c; end                 // ldt
+      8'ha2: begin is_store = 1'b1; n_words = 3'd3; reg_mask = 5'h1c; end                 // stt
+      8'hb0: begin is_load  = 1'b1; n_words = 3'd4; reg_mask = 5'h1c; end                 // ldq
+      8'hb2: begin is_store = 1'b1; n_words = 3'd4; reg_mask = 5'h1c; end                 // stq
       8'hc0: begin is_load  = 1'b1; size = 2'd0; sign_ext = 1'b1; end   // ldib
       8'hc2: begin is_store = 1'b1; size = 2'd0; end                    // stib
       8'hc8: begin is_load  = 1'b1; size = 2'd1; sign_ext = 1'b1; end   // ldis

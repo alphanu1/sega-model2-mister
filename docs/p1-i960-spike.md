@@ -484,7 +484,9 @@ FPU do not exist yet, so this is the cost of steps 1-4 and not of the CPU.
 | `i960_regs` | 1,655 | 1,261 | 2,048 | 0 | **94.86 MHz** |
 | `i960_agu` | 252 | 0 | 0 | 0 | comb |
 | `i960_ldst` | 126 | 0 | 0 | 0 | comb |
-| **Total** | **2,988** | 1,261 | 2,048 | 0 | |
+| `i960_lsu` | 241 | 188 | 0 | 0 | **142.57 MHz** |
+| `i960_memmap` | 35 | 0 | 0 | 0 | comb |
+| **Total** | **3,264** | 1,449 | 2,048 | 0 | |
 
 Against the 7,000-13,500 estimate for the whole i960 including a 2,500-6,000
 FPU, 2,988 for these five blocks tracks toward the lower half. **It is not
@@ -528,6 +530,62 @@ read address was held only for the cycle that issued it, and the array registers
 its output every cycle, so the data moved under the flush while the addresses
 stayed correct. It surfaced as **right address, wrong frame's word** — visible
 only in the memory stream comparison, which is the argument for having it.
+
+### Step 5 — bus sequencing and burst. Partially done.
+
+`rtl/cpu/i960/i960_lsu.sv` and `rtl/cpu/i960/i960_memmap.sv`. **The I-cache is
+not written yet**; the rest of step 5 is.
+
+The LSU turns one architectural load or store into the exact sequence of bus
+transactions the reference performs, in the same order — which is
+architecturally visible and therefore not free to optimise. Three behaviours
+drive it, and two are invisible in the final register value:
+
+- **Unaligned access splits into bytes.** The reference does not do a wide
+  access and rotate; it issues individual byte reads at `addr`, `addr+1`, ...
+  and assembles little-endian. An unaligned dword is four bus transactions, and
+  a device with side effects sees four accesses.
+- **Multi-word forms advance the address only in burst regions.**
+  `if (pack.second & BURST) t1 += 4;` — in a non-burst region every word of
+  `ldl`/`ldt`/`ldq` comes from the SAME address. That is how the coprocessor
+  FIFO at `0x00884000` is drained, and the reference says so. Getting it wrong
+  is silent: a burst-flagged FIFO returns four copies of the head word and the
+  geometry stream quietly fills with repeats.
+- **The destination register group aligns down** — `ldl` uses `srcdst & 0x1e`,
+  `ldt` and `ldq` use `& 0x1c`. `ldt` moves three words but still aligns to
+  four. Added to `i960_ldst` as `reg_mask`; it was missing.
+
+`i960_memmap` decodes the §5 table into that burst flag. Regions not listed are
+non-burst, which is the safe default: treating a burst region as non-burst costs
+cycles, while treating a FIFO as burst corrupts data.
+
+| Coverage | Requests | Checks | Mismatches |
+|---|---|---|---|
+| exhaustive offset x size x words x direction x burst | 384 | — | 0 |
+| directed non-burst `ldq` FIFO drain | 1 | — | 0 |
+| random, seed 1 | 200,000 | 1,265,853 | 0 |
+| random, seeds 2/7/12345 | 1,000,000 each | ~6.3 M each | 0 |
+
+Mutation-tested. Five faults, all caught: burst sense inverted, address always
+advancing, address never advancing, an unaligned word split into 2 bytes instead
+of 4, half-alignment tested on the wrong bit, and byte assembly big-endian.
+
+#### A third Quartus-only syntax rejection
+
+The LSU passed verilator and yosys and failed the build outright:
+
+```
+Error (10768): range must be the final index in the indexed name
+```
+
+`bus_rdata[{cur_addr[1:0], 3'd0} +: 8][7]` — indexing the result of a
+part-select. Quartus 17.0 will not have it. Same family as Model 1's rule about
+bit selects on a function call, same fix: name the intermediate.
+
+That is now three constructs this project has found which one toolchain accepts
+and another rejects — module-header package import, enum-typed port, and
+indexing a part-select — which is the whole argument for `make synth` and for
+running the fitter early rather than at the end.
 
 ### What that does not prove
 

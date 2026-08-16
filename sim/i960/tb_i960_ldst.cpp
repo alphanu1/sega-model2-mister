@@ -30,6 +30,7 @@ void check(uint8_t op, uint8_t lo, uint32_t rd, uint32_t sv, const char *why) {
     { "size",      dut->size,      r.size,      m },
     { "sign_ext",  dut->sign_ext,  r.sign_ext,  m },
     { "n_words",   dut->n_words,   r.n_words,   m },
+    { "reg_mask",  dut->reg_mask,  r.reg_mask,  m },
     { "unaligned", dut->unaligned, r.unaligned, m },
     { "ld_result", dut->ld_result, r.ld_result, m && r.is_load },
     { "st_data",   dut->st_data,   r.st_data,   m && r.is_store },
