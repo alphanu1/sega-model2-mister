@@ -740,6 +740,61 @@ instruction from 7.71 to 9.83 — so the net throughput gain was far smaller tha
 the Fmax figure suggested. **Fmax alone is not the metric; Fmax divided by CPI
 is.** Quote both or neither.
 
+### Where the area actually is, and what is worth optimising
+
+Per-entity, from the assembled fit report. Optimising by intuition would have
+gone after the wrong block.
+
+| Instance | ALM assembled | standalone | note |
+|---|---|---|---|
+| **`i960_regs`** | **1,547.6** | 1,655 | **49% of the CPU** |
+| top-level glue | 656.1 | — | sequencer and arbiter |
+| `i960_alu` | 473.6 | 852 | |
+| `i960_agu` | 163.4 | 252 | |
+| `i960_lsu` | 140.6 | 241 | |
+| `i960_icache` | 106.0 | 472 | `inval` tied off — see below |
+| `i960_memmap` | 37.4 | 35 | |
+| `i960_dec` | 26.7 | 103 | |
+| `i960_ldst` | **3.0** | 126 | duplicated data path deleted |
+
+Two of these are not what they look like. `i960_ldst` collapsing to 3 ALM
+confirms the duplication noted above — the fitter deleted a data path nothing
+consumed. And `i960_icache` dropping from 472 to 106 is **deferred cost, not a
+saving**: the top ties `inval` to zero, so the 32-entry invalidate loop was
+optimised away. It returns the moment anything drives it.
+
+**The register file is the target, and the reason is structural.** It holds 32
+registers in flip-flops with two *combinational* read ports, which is two 32-bit
+32:1 multiplexers — and the measured critical path runs straight through one of
+them (`loc[10][3]` → `wd[9]`). Moving the file to a memory with a **registered**
+read would delete both multiplexers and cut that path. It is also what a
+pipelined front end wants anyway, which is why it belongs to step 6 rather than
+being a standalone tidy-up: read latency is a pipeline-structure decision.
+
+Second target is `i960_alu` at 473 ALM assembled, where six shift forms, four
+comparators and three adders are described separately and could share a barrel
+shifter and one adder/subtractor.
+
+#### A measurement that was wrong, and the process fix
+
+A frame-copy width sweep — `W` = 1, 2, 4 words per cycle — appeared to show
+W=1 as both smaller and faster. **The numbers were invalid and are retracted.**
+`W` is not genuinely parameterised: the index expressions hardcode four rows, so
+W=1 and W=2 produce RTL that does not lint. Quartus accepted the width
+mismatches verilator rejects and produced plausible figures for a design that
+could never run.
+
+That is rule 8 broken — nothing goes to the fitter until it is clean locally —
+and the fix is systemic rather than a resolution to be more careful:
+**`make quartus` now depends on `lint_$(MOD)`**, so an unlintable module cannot
+reach the fitter at all. Verified by breaking the RTL deliberately and watching
+the build refuse.
+
+The lesson generalises past this project: **a tool being more permissive than
+your linter is not a convenience, it is a way to be confidently wrong.** Quartus
+will not tell you the RTL is nonsense; it will tell you how many ALMs the
+nonsense costs.
+
 ### What that does not prove
 
 **The reference and the RTL are two expressions by the same author from the same

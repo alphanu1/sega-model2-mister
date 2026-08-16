@@ -52,8 +52,8 @@ all: lint synth test
 
 # --------------------------------------------------------------------- lint
 
-.PHONY: lint lint_i960_dec lint_i960_alu lint_i960_regs lint_i960_agu lint_i960_ldst lint_i960_lsu lint_i960_memmap lint_i960_icache
-lint: lint_i960_dec lint_i960_alu lint_i960_regs lint_i960_agu lint_i960_ldst lint_i960_lsu lint_i960_memmap lint_i960_icache
+.PHONY: lint lint_i960_dec lint_i960_alu lint_i960_regs lint_i960_agu lint_i960_ldst lint_i960_lsu lint_i960_memmap lint_i960_icache lint_i960_top
+lint: lint_i960_dec lint_i960_alu lint_i960_regs lint_i960_agu lint_i960_ldst lint_i960_lsu lint_i960_memmap lint_i960_icache lint_i960_top
 
 lint_i960_dec:
 	@echo "== lint i960_dec"
@@ -86,6 +86,10 @@ lint_i960_memmap:
 lint_i960_icache:
 	@echo "== lint i960_icache"
 	$(VERILATOR) --lint-only $(VFLAGS) --top-module i960_icache $(ICA_RTL)
+
+lint_i960_top:
+	@echo "== lint i960_top"
+	$(VERILATOR) --lint-only $(VFLAGS) --top-module i960_top $(TOP_RTL)
 
 # --------------------------------------------------------------------- synth
 #
@@ -226,7 +230,12 @@ QUARTUS_MODS := i960_dec i960_alu i960_regs i960_agu i960_ldst i960_lsu i960_mem
 # ALM, M10K and DSP — yosys gives LUT6, which is an indicator and not the same
 # currency. Model 1 measured fp_mul at 1312 LUT6 and 144 ALM because the
 # multiplier left the fabric into a DSP block.
-quartus:
+# Rule 8 is enforced here rather than remembered. Quartus accepts width
+# mismatches that verilator rejects, so RTL that cannot lint can still produce
+# a plausible-looking ALM figure from a design that would never work — which is
+# exactly how an invalid frame-width comparison got measured and briefly
+# believed. Lint first, always.
+quartus: lint_$(MOD)
 	@test -x $(QUARTUS)/quartus_map || { echo "Quartus 17.0 not found at $(QUARTUS)"; exit 1; }
 	@mkdir -p $(QDIR)
 	@srcs=""; for f in $(SRCS_$(MOD)); do \
