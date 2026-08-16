@@ -1,20 +1,20 @@
 # Handoff
 
-**Updated:** 2026-08-16, after `499564d`.
+**Updated:** 2026-08-16, after `390b77b`.
 
 ---
 
 ## State
 
-**P1 step 1 of 8 is done.** The i960 instruction decoder is written, linted and
-fuzz-verified. `make lint` and `make test` both pass from a clean checkout after
-`tools/bootstrap.sh`.
+**P1 steps 1 and 2 of 8 are done.** Decoder and integer ALU are written, linted
+and fuzz-verified. `make lint` and `make test` both pass from a clean checkout
+after `tools/bootstrap.sh`.
 
 | Step | State |
 |---|---|
 | 1. Decoder and the four formats | **done** — 6.0e9 field checks, 0 mismatches |
-| 2. Integer ALU, shifts, bit ops, condition codes | next |
-| 3. Register file, register cache, call/ret and spill | |
+| 2. Integer ALU, shifts, bit ops, condition codes | **done** — 4.3e9 field checks, 0 mismatches |
+| 3. Register file, register cache, call/ret and spill | next |
 | 4. Load/store, MEMA and the seven MEMB modes | |
 | 5. Bus and I-cache, burst | |
 | 6. Whole-CPU lockstep | |
@@ -79,12 +79,13 @@ CPU and the GPU first and defer everything that cannot change the answer.
 - **M2-G** — email srg320 about the SCSP licence. Send it now; a late yes is
   worth less than an early one.
 
-### Then — P1 step 2
+### Then — P1 step 3
 
-`docs/p1-i960-spike.md` §6 has the order. Next is the integer ALU: shifts, bit
-ops, compare, and the condition codes in `AC`. Per-opcode fuzz, 10^6 operand
-pairs each, every flag compared — the decoder harness in `sim/i960/` is the
-template.
+`docs/p1-i960-spike.md` §6 has the order. Next is the register file and register
+cache: `call`, `ret`, `callx`, `balx` and the spill path. Compare the memory
+write stream, not only the registers — spill depth is architecturally invisible
+and memory-visible, so four frames matching the reference is a correctness
+requirement rather than a sizing choice (§2.2 of the spike).
 
 The FPU is deliberately step 8 of 8: it is the only part with no oracle, and
 M2-D measures the integer core.
@@ -142,6 +143,26 @@ and ~128 ALM, against ~512 ALM for a flat flip-flop file of the same storage.
 But a spilled frame *writes to memory*, so cache depth is visible in the write
 stream lockstep compares. Four frames, matching the reference. Deeper caching
 later is a behaviour change needing its own verification, not a free win.
+
+**MAME's `addc` and `subc` never set carry, so the integer oracle has one hole.**
+Its expression evaluates entirely in `uint32_t` and wraps before being widened to
+`uint64_t`, so the bit-32 carry test can never be true. Verified: `0xffffffff + 1`
+gives `res = 0` with bit 32 clear. The `// set carry` comment and the deliberate
+`(uint64_t)1 << 32` mask show the intent, so it is an integer-promotion defect
+rather than a modelling choice — and these two instructions exist to chain
+multi-word arithmetic.
+
+**The RTL implements hardware carry and diverges on purpose** (design study §2.3,
+R7). Whole-CPU lockstep will therefore diverge on any program using `addc` or
+`subc`, and that is expected rather than a bug. The divergence is bounded by
+measurement: over 12.8 M vectors across all 64 `op`/`op2` pairs in `0x58`-`0x5b`
+it touches exactly two operations, the union of differing AC bits is exactly
+`0x00000002`, and `result`, `result_we` and `valid` never differ.
+`make test_i960_alu_carrybug` guards this and **fails if the RTL stops
+diverging**.
+
+**Unknown and unanswerable here:** whether Model 2 games actually use `addc` or
+`subc`. It needs program ROM. If they do not, the hole is theoretical.
 
 ### Retracted
 
