@@ -81,6 +81,10 @@ early one.
 
 ## P1 — i960KB
 
+**Specification: `p1-i960-spike.md`.** Scope, register model, opcode space,
+timing, memory map, deliverables and exit criteria, taken from the reference
+rather than from secondary sources.
+
 The main CPU. **No open-source i960 exists in any HDL** (§5.4.3) — this is
 from scratch, and it is the larger of the two remaining unknowns to actually be
 buildable.

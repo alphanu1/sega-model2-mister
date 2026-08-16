@@ -136,10 +136,32 @@ This raises the FPU floor from earlier estimates. A microcoded FPU sharing one d
 still works — CORDIC or polynomial approximation with coefficient ROMs in M10K — but it
 must cover transcendentals at extended precision, which is not a 1-2K block.
 
-**M2-B remains worth running.** Implemented is not the same as hot. If the games issue a
-few hundred FP ops per frame, a microcoded unit at tens of cycles per op costs nothing in
-frame time and the area saving is real. If they issue tens of thousands, the unit needs
-to be fast and therefore large.
+**M2-B remains worth running, but for less than it was.** Implemented is not the same as
+hot — and the hardware has now answered most of the question by itself.
+
+`i960.cpp` carries differentiated per-opcode cycle counts, and the transcendentals are
+enormous: `sinr` and `cosr` are **406** cycles, `sinrl`/`cosrl` **441**, `logr` **438**,
+`tanr` 293, `atanr` 267, `sqrtr` 104. Basic arithmetic is cheap by comparison — `addr` and
+`subr` 10, `mulr` 18, `divr` 35, `mulrl` 36, `divrl` 77.
+
+At 25 MHz, 406 cycles caps `sinr` at ~61,600/second — **~1,000 per frame**, and that is
+the ceiling with the CPU doing nothing else. Games cannot be issuing tens of thousands of
+transcendentals per frame because the part cannot retire them.
+
+**So the microcoded FPU is not a compromise.** A CORDIC at ~64 iterations would be roughly
+six times faster than the silicon on exactly the operations that dominate FPU area, and 36
+cycles for `mulrl` is ample budget for an iterative 27x27 DSP multiply rather than a wide
+combinational one. This pushes the FPU toward the bottom of its 2,500-6,000 range.
+
+Per section 4.1's standing rule these figures are not yet hardware facts and must be
+checked against the i960KB timing manual. But `i960.cpp` is a different case from
+`v60.cpp`: values differ per opcode, `remr` carries `// (67 to 75878 depending on
+opcodes!!!)`, and exactly one op is hedged `// checkme`. A flat average cannot produce
+that. **And the conclusion survives the figures being wrong by a factor of two.**
+
+What M2-B is still needed for is the **mix** — basic arithmetic versus transcendental —
+which sizes the adder and multiplier, the parts running at 10 and 18 cycles that cannot be
+microcoded away. Run it for that, not for the verdict. Detail in `p1-i960-spike.md` §4.
 
 ---
 
@@ -551,7 +573,10 @@ microcode ROMs and lookup tables off the fabric.
 ### Tier 1 — no accuracy loss
 
 - **Microcode the i960 FPU.** Shared datapath, CORDIC or polynomial with coefficient ROMs
-  in M10K. Worth 2-3K. Contingent on M2-B showing FP is not hot.
+  in M10K. Worth 2-3K. **No longer contingent on M2-B** — section 3 shows the silicon
+  itself caps transcendentals at ~1,000 per frame, so a microcoded unit is faster than the
+  part it replaces. Note the coefficient ROMs land in M10K, which section 5.6 says is the
+  resource under pressure; count them there, not as free.
 - **Push arithmetic into DSP blocks.** 112 available, Model 1 uses ~5. Edge and attribute
   interpolators, texture coordinate math, perspective divide all map to 27x27 MAC.
 - **Push logic into M10K.** ~585 KB spare after section 6.5.
