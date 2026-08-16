@@ -684,6 +684,62 @@ itself, which left `i960_ldst`'s data path with nothing to drive. **One of the
 two should own it.** Recorded rather than suppressed; the fitter already deleted
 it, which is part of why assembly came in smaller.
 
+### What the assembled number does and does not bound
+
+**It will change, upward, and by more than it looks.** The assembled design
+executes **66 of the reference's 159 mnemonics**. Fourteen more are structurally
+present but semantically incomplete, and **79 are absent entirely**.
+
+The incomplete fourteen are a real defect rather than a gap, and worth naming:
+`cmpob<cc>` and `cmpib<cc>` **compare and then branch**, while the sequencer
+only branches on whatever `AC` already held; `test<cc>` writes a register and
+does not branch at all, and is currently treated as a branch. Both are wrong,
+not merely partial.
+
+Absent, largest first: the whole FPU (38), `fault<cc>` and fault handling (8),
+`test<cc>` (8), `emul`/`ediv` and conversions (6), integer multiply, remainder
+and divide (6), `spanbit`/`scanbit`/`modac`/`modpc` (5),
+`mov`/`movl`/`movt`/`movq` (4), `calls`/`flushreg` (2), `synmov` (2).
+
+Projecting from the study's own per-block figures:
+
+| | ALM |
+|---|---|
+| assembled today | 3,155 |
+| integer multiply/divide, `emul`/`ediv` — will use DSP blocks | +400 .. 800 |
+| `mov` family, `spanbit`, `modac`, `calls`, `flushreg` | +300 .. 600 |
+| correct COBR compare-and-branch, `test<cc>` | +100 .. 200 |
+| `fault<cc>`, faults, interrupts | +200 .. 500 |
+| pipeline: hazard detection, forwarding, stalls (§5.2) | +1,500 .. 3,000 |
+| FPU, 38 mnemonics (§5.2) | +2,500 .. 6,000 |
+| **projected total** | **8,155 .. 14,255** |
+| study estimate §5.2 | 7,000 .. 13,500 |
+
+**This corrects an earlier claim in this document.** The per-module total was
+described as "tracking toward the lower half" of the estimate. With a proper
+accounting of what is missing it lands **mid-to-upper**, and the top of the
+projection sits slightly above the study's own ceiling. The five blocks measured
+first were the cheap ones; multiply, the FPU and the pipeline are all still ahead.
+
+Two further reasons the number moves:
+
+- **The 581 ALM assembly saved will not repeat.** It came from the fitter
+  deleting logic nothing consumed — chiefly the duplicated `i960_ldst` data
+  path. Once everything has a consumer there is nothing left to delete.
+- **DSP usage is currently zero.** Integer multiply and the FPU's iterative
+  27x27 multiply will both claim blocks. 112 exist and Model 1 uses 49, so this
+  is headroom rather than risk — but it means ALM alone stops being the whole
+  picture.
+
+**On Fmax, two forces oppose each other and the product is what matters.**
+Pipelining splits the measured critical path and should raise 43.91 MHz
+substantially. Against that, §4.1 expects 15-25% degradation at high
+utilization, and Model 1's M0 recorded the trap directly: retiming raised its
+Fmax from 51.47 to 72.17 MHz, a 40% gain, while *also* raising cycles per
+instruction from 7.71 to 9.83 — so the net throughput gain was far smaller than
+the Fmax figure suggested. **Fmax alone is not the metric; Fmax divided by CPI
+is.** Quote both or neither.
+
 ### What that does not prove
 
 **The reference and the RTL are two expressions by the same author from the same

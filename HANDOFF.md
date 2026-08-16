@@ -119,10 +119,22 @@ sequencer, I-cache, bus and FPU do not exist yet.
 `i960_icache` is **under the gate's 90 MHz** at 84.97. The tag compare feeding
 the hit decision is the obvious suspect. Not addressed; recorded.
 
-Against 7,000-13,500 for the whole i960 including a 2,500-6,000 FPU, this tracks
-toward the lower half — **but it is not evidence of that yet**, because the
-sequencer and pipeline control are the parts not written and assembly costs more
-than the sum of parts.
+**Assembled `i960_top`: 3,155 ALM, 43.91 MHz.** Area fell 581 ALM on assembly
+because the fitter deleted logic nothing consumed; Fmax roughly halved against
+the slowest block, because the critical path is created by assembly —
+`i960_regs|loc[10][3]` → `wd[9]`, register read through ALU to writeback in one
+FSM state, which is exactly where a pipeline boundary goes.
+
+**Do not read 3,155 as the i960's cost.** It executes 66 of 159 mnemonics, 14
+more are semantically wrong (`cmpob`/`cmpib` do not compare; `test<cc>` is
+treated as a branch), and 79 are absent including the entire FPU, integer
+multiply/divide and all fault handling. Projected total with the missing blocks
+and the pipeline: **8,155 - 14,255 ALM**, against the study's 7,000-13,500.
+
+That **corrects an earlier note in this file** describing the per-module total as
+tracking toward the lower half. It does not: the five blocks measured first were
+the cheap ones. The 581 ALM assembly saved will also not repeat, and DSP usage
+is currently zero — multiply and the FPU will both claim blocks.
 
 ## Findings
 
