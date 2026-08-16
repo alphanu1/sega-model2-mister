@@ -142,13 +142,39 @@ module i960_top (
   assign src1_val = d_src1_lit ? {27'd0, d_src1} : rd1;
   assign src2_val = d_src2_lit ? {27'd0, d_src2} : rd2;
 
+  // COBR operands use different fields and a different literal bit from REG:
+  //   get_1_ci  bit 13 selects literal, field (insn>>19)&0x1f
+  //   get_2_ci  always a register,      field (insn>>14)&0x1f
+  // The register file is read with ra1 = srcdst for COBR, so rd1 carries the
+  // first operand in both formats and only the literal test differs.
+  logic [31:0] ci1_val, ci2_val;
+  assign ci1_val = d_dst_lit ? {27'd0, d_srcdst} : rd1;
+  assign ci2_val = rd2;
+
+  // The compare is routed through the ALU rather than duplicated here: 0x5a.0
+  // is cmpo (unsigned) and 0x5a.1 is cmpi (signed), which is exactly what
+  // cmpob<cc> and cmpib<cc> need. Sharing it costs two operand muxes and saves
+  // a second 32-bit comparator.
+  logic        is_cobr_cmp;
+  logic [7:0]  alu_op;
+  logic [3:0]  alu_op2;
+  logic [31:0] alu_s1, alu_s2;
+
+  assign is_cobr_cmp = (d_fmt == 2'd1) &&
+                       ((d_op >= 8'h31 && d_op <= 8'h36) ||
+                        (d_op >= 8'h39 && d_op <= 8'h3e));
+  assign alu_op  = is_cobr_cmp ? 8'h5a : d_op;
+  assign alu_op2 = is_cobr_cmp ? (d_op[3] ? 4'd1 : 4'd0) : d_op2;  // 0x39+ signed
+  assign alu_s1  = is_cobr_cmp ? ci1_val : src1_val;
+  assign alu_s2  = is_cobr_cmp ? ci2_val : src2_val;
+
   // ---------------------------------------------------------------- ALU
 
   logic [31:0] alu_result, ac, alu_ac;
   logic        alu_we, alu_valid;
 
   i960_alu u_alu (
-    .op(d_op), .op2(d_op2), .src1(src1_val), .src2(src2_val), .ac_in(ac),
+    .op(alu_op), .op2(alu_op2), .src1(alu_s1), .src2(alu_s2), .ac_in(ac),
     .result(alu_result), .result_we(alu_we), .ac_out(alu_ac), .valid(alu_valid)
   );
 
@@ -273,11 +299,6 @@ module i960_top (
 
   tstate_e ts;
 
-  // COBR condition: the mask is the low three bits of the opcode, tested
-  // against AC[2:0], exactly as bxx() does.
-  logic cond_true;
-  assign cond_true = |(ac[2:0] & d_op[2:0]);
-
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       ts        <= T_FETCH;
@@ -324,7 +345,8 @@ module i960_top (
         T_DECODE: begin
           // Operand register numbers are presented now; the file reads
           // combinationally so the values are available next state.
-          ra1 <= d_src1;
+          // COBR reads (insn>>19) on port 1; REG and MEM read src1 there.
+          ra1 <= (d_fmt == 2'd1) ? d_srcdst : d_src1;
           ra2 <= d_src2;
           if (!d_valid || d_memb_bad) begin
             trap_op <= d_op;
@@ -355,17 +377,52 @@ module i960_top (
                   wa <= 5'd30; wd <= ip_next; we <= 1'b1;
                   ip <= ip + d_disp; ts <= T_FETCH;
                 end
-                default: begin                                            // b<cc>
-                  if (d_op[7:3] == 5'b00010) ip <= cond_true ? (ip + d_disp) : ip_next;
-                  else                       ip <= ip_next;
-                  ts <= T_FETCH;
+                default: begin
+                  if (d_op[7:3] == 5'b00010) begin                        // b<cc>
+                    // bxx masks the IP after a taken branch; plain b does not.
+                    ip <= (|(ac[2:0] & d_op[2:0]))
+                            ? ((ip_next + d_disp) & 32'hffff_fffc) : ip_next;
+                    ts <= T_FETCH;
+                  end else begin
+                    trap_op <= d_op;                                      // fault<cc>
+                    ts      <= T_TRAP;
+                  end
                 end
               endcase
             end
 
             2'd1: begin                                   // COBR
-              ip <= cond_true ? (ip + d_disp) : ip_next;
               ts <= T_FETCH;
+              if (d_op[7:3] == 5'b00100) begin
+                // test<cc>: writes 1 or 0 and does NOT branch. testno (0x20)
+                // tests !(AC & 7); the rest test AC & (op & 7).
+                wa <= d_srcdst;
+                wd <= ((d_op[2:0] == 3'd0) ? (~|ac[2:0]) : (|(ac[2:0] & d_op[2:0])))
+                      ? 32'd1 : 32'd0;
+                we <= 1'b1;
+                ip <= ip_next;
+              end else if (d_op == 8'h30 || d_op == 8'h37) begin
+                // bbc / bbs: bit test, set the condition code, branch. Note the
+                // IP is NOT masked here, unlike bxx_s below — that asymmetry is
+                // in the reference and is reproduced rather than tidied.
+                if (ci2_val[ci1_val[4:0]] == (d_op == 8'h37)) begin
+                  ac <= {ac[31:3], 3'b010};
+                  ip <= ip_next + d_disp;
+                end else begin
+                  ac <= {ac[31:3], 3'b000};
+                  ip <= ip_next;
+                end
+              end else if (is_cobr_cmp) begin
+                // cmpob<cc> / cmpib<cc>: compare, THEN branch on the result of
+                // that compare — not on whatever AC happened to hold. Missing
+                // this was the first defect whole-CPU lockstep found.
+                ac <= alu_ac;
+                ip <= (|(alu_ac[2:0] & d_op[2:0])) ? ((ip_next + d_disp) & 32'hffff_fffc)
+                                                   : ip_next;
+              end else begin
+                trap_op <= d_op;
+                ts      <= T_TRAP;
+              end
             end
 
             2'd2: begin                                   // REG

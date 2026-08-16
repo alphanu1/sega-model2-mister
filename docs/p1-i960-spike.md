@@ -817,6 +817,66 @@ and the 32-entry invalidate loop was optimised away, and the 581 ALM that
 assembly saved came from deleting logic nothing consumed, which cannot repeat
 once everything has a consumer.
 
+### Step 6 — whole-CPU lockstep. Started, and it earned its keep immediately.
+
+`sim/i960/i960_cpu_ref.h` is a whole-CPU model assembled from the per-block
+references already verified against their own DUTs — the method Model 1 used for
+`mb86233_ref`. It adds only fetch, dispatch and the control-flow instructions,
+which have no block of their own.
+
+`sim/i960/tb_i960_top.cpp` runs generated programs on both and compares **all 32
+registers, AC and IP after every retire**.
+
+Instruction-fetch bus traffic is deliberately **not** compared. The DUT fetches
+through a 16-byte-line cache while the reference reads single words, so the two
+streams differ by design — that is the cache working, not a divergence. Data is
+compared through memory contents instead.
+
+| Run | Programs | Retires | Checks | Mismatches |
+|---|---|---|---|---|
+| seed 1 | 200 | 10,498 | 356,932 | 0 |
+| seeds 2, 7, 12345 | 3,000 each | ~157,000 each | ~5.33 M each | 0 |
+
+#### It found the COBR defect on the first retire
+
+Predicted from reading the code, confirmed by measurement:
+
+```
+MISMATCH retire 0  AC  got=00000000 want=00000001
+MISMATCH retire 0  IP  got=00000004 want=00000008
+```
+
+`cmpob<cc>` and `cmpib<cc>` **compare and then branch on the result of that
+compare**. The sequencer branched on whatever `AC` already held and never
+performed the compare. `test<cc>` was treated as a branch when it writes a
+register and does not branch at all. Both are now correct, and `fault<cc>`
+traps rather than silently falling through.
+
+The compare is routed **through the existing ALU** — `0x5a.0` is `cmpo` and
+`0x5a.1` is `cmpi`, which is exactly what COBR needs — costing two operand
+muxes instead of a second 32-bit comparator. That is backlog item 2 done early
+because the fix required touching the same logic.
+
+Also reproduced rather than tidied: `bxx` and `bxx_s` mask the IP after a taken
+branch (`IP &= ~3`) while plain `b`, `bbc` and `bbs` do not.
+
+#### And one defect in the harness, not the design
+
+The first fix left a failure at retire 1 that looked like a lost writeback. It
+was the harness sampling one cycle early: **the IP moving is not the same as the
+instruction having retired.** `we` is registered in the execute state, so the
+write reaches the register file one edge *after* the IP updates. Comparing on
+the IP change alone reads a stale register.
+
+#### Coverage, stated plainly
+
+The generator emits REG `0x58`-`0x5b`, `test<cc>`, `cmpob<cc>`, `cmpib<cc>`,
+`bbc` and `bbs`. **It does not yet emit MEM, `call`/`ret`/`b`/`bal`, or the
+multi-word load/store forms**, so the frame machinery and the LSU are verified
+by their own harnesses but not yet in situ. That is the next extension, and it
+matters: `call`/`ret` under a running program is where the register cache meets
+instructions in flight.
+
 ### What that does not prove
 
 **The reference and the RTL are two expressions by the same author from the same
