@@ -1,13 +1,25 @@
 # Handoff
 
-**Updated:** 2026-08-16, after `03b03f8`.
+**Updated:** 2026-08-16, after `499564d`.
 
 ---
 
 ## State
 
-Documentation and scaffolding. **No RTL yet.** P1 is specified and ready to
-build against.
+**P1 step 1 of 8 is done.** The i960 instruction decoder is written, linted and
+fuzz-verified. `make lint` and `make test` both pass from a clean checkout after
+`tools/bootstrap.sh`.
+
+| Step | State |
+|---|---|
+| 1. Decoder and the four formats | **done** — 6.0e9 field checks, 0 mismatches |
+| 2. Integer ALU, shifts, bit ops, condition codes | next |
+| 3. Register file, register cache, call/ret and spill | |
+| 4. Load/store, MEMA and the seven MEMB modes | |
+| 5. Bus and I-cache, burst | |
+| 6. Whole-CPU lockstep | |
+| 7. M2-D Quartus spike | the gate |
+| 8. FPU | after the gate |
 
 | File | What it is |
 |---|---|
@@ -67,11 +79,13 @@ CPU and the GPU first and defer everything that cannot change the answer.
 - **M2-G** — email srg320 about the SCSP licence. Send it now; a late yes is
   worth less than an early one.
 
-### Then — P1, and it is specified
+### Then — P1 step 2
 
-`docs/p1-i960-spike.md` §6 has the order. First actual RTL task is the
-instruction decoder and the four instruction formats, fuzzed against
-`i960dis.cpp` — the disassembler is a free second opinion on field extraction.
+`docs/p1-i960-spike.md` §6 has the order. Next is the integer ALU: shifts, bit
+ops, compare, and the condition codes in `AC`. Per-opcode fuzz, 10^6 operand
+pairs each, every flag compared — the decoder harness in `sim/i960/` is the
+template.
+
 The FPU is deliberately step 8 of 8: it is the only part with no oracle, and
 M2-D measures the integer core.
 
@@ -184,6 +198,23 @@ knowingly. If the Quartus spike misses, Model 1's M0 retiming notes are the
 closest prior art.
 
 ---
+
+**A fuzz suite this size measures internal consistency, not correctness.** The
+decoder passed 6.0e9 field checks against its reference with zero mismatches,
+and both were written by the same author from the same source — a misreading of
+`i960.cpp` appears in both and the suite agrees enthusiastically.
+
+The only independent check available was `i960dis.cpp`'s mnemonic table, written
+separately from the `execute_op` dispatch our opcode set came from. It confirmed
+no opcode was invented and no format boundary disagrees. It could not check
+field positions, because it was the source for none of them.
+
+**So the literal-select bit numbers, the MEMB mode and scale fields, and both
+displacement widths are transcribed, not verified.** Closing that needs the
+i960KB Programmer's Reference Manual (270567-001, cited in `i960dis.cpp`'s own
+header) or real Model 2A program ROM decoding to sensible instruction sequences.
+Worth doing before step 5, because a wrong field position will present as a bus
+bug and be looked for in the wrong place.
 
 ## What was wrong, and the lesson
 
