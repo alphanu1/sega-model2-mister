@@ -81,9 +81,25 @@ early one.
 
 ## P1 — i960KB
 
-**Specification: `p1-i960-spike.md`.** Scope, register model, opcode space,
-timing, memory map, deliverables and exit criteria, taken from the reference
-rather than from secondary sources.
+**Specification and running status: `p1-i960-spike.md`.** Scope, register model,
+opcode space, timing, memory map, deliverables and exit criteria, taken from the
+reference rather than from secondary sources.
+
+**Status, 2026-08-16.** Steps 1-6 of 8 are done. Nine RTL modules plus an
+integration top, all lint-clean on verilator, yosys and Quartus 17.0, all
+fuzz- or mutation-verified, and whole-CPU lockstepped against a transcribed
+reference.
+
+| | |
+|---|---|
+| instruction coverage | **108 of 163** mnemonics (66%) |
+| assembled CPU | **3,754 ALM, 3 DSP, 45.16 MHz** |
+| projected complete | 8,254 - 13,354 ALM |
+
+The integer core is complete except faults, two supervisor instructions and the
+FPU. **What remains is not more opcodes — it is the pipeline**, which is what
+step 7's M2-D gate actually measures and what the optimisation backlog is
+blocked on.
 
 The main CPU. **No open-source i960 exists in any HDL** (§5.4.3) — this is
 from scratch, and it is the larger of the two remaining unknowns to actually be
@@ -102,6 +118,13 @@ Order:
    if FP is cold; a wider unit if it is hot. The full transcendental set is
    implemented in MAME and therefore used (§3) — it cannot be dropped.
 4. **M2-D** — standalone Quartus spike, 5CSEBA6U23I7, pipelined.
+
+**On what "pipelined" has to achieve here**, because §4.3's headline figure is
+easy to misread. The 123-164 MHz there is what a *9.83-CPI FSM* would need. The
+requirement is throughput, not clock: 12.5-16.7 M instr/s. At the measured
+45 MHz a 3-CPI design delivers 15 M and a 2-CPI design 22.5 M. **The pipeline
+needs low CPI more than it needs a high clock**, and it can afford to lose some
+Fmax to hazard logic if it buys enough CPI.
 
 **Exit:** *Pass* < 12K ALM and > 90 MHz. *Fail* > 18K ALM — and §9's close
 condition applies.

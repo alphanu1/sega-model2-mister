@@ -1021,6 +1021,53 @@ check. The overlap has to be tested on the wrapped index sets.
 Lockstep: 164,084 retires per seed, zero mismatches. The CPU is **3,754 ALM,
 3 DSP, 45.16 MHz** at 108 of 163 mnemonics.
 
+### CPI, measured — and it is worse than this document assumed
+
+The lockstep harness now reports cycles per retired instruction. Measured on the
+assembled design at 45.16 MHz:
+
+| Instruction mix | CPI | M instr/s | vs the 12.5-16.7 needed |
+|---|---|---|---|
+| ALU only | 7.33 | 6.16 | 2.0x short |
+| ALU + 10% multiply/divide | 11.89 | 3.80 | 3.3x short |
+| the harness's full mix | 15.86 | 2.85 | **5.6x short** |
+
+**This corrects an estimate made earlier in this document.** The assembled
+design was described as doing "~6 cycles per instruction" and being "about half"
+the required throughput. Neither was measured. The real base is 7.33 CPI for
+pure ALU work, and the multi-cycle divider dominates any mix containing it — a
+32-bit restoring division is ~68 cycles, so 10% divides adds ~4.5 CPI on its
+own.
+
+Two things follow, and they pull in opposite directions:
+
+- **The synthetic mix is not real code.** No compiled program is 10% divides.
+  The honest planning figure is the ALU-only 7.33, not the 15.86 headline.
+- **Even 7.33 is 2x short**, and that is before faults, interrupts and the FPU
+  add states. The FSM cannot get there by tuning.
+
+#### What the pipeline actually has to achieve
+
+§4.3's "123-164 MHz" is easy to misread: that is what a *9.83-CPI* design would
+need. The requirement is **throughput**, and it can be met from either
+direction:
+
+| | CPI | Fmax needed |
+|---|---|---|
+| today | 7.33 | 92-122 MHz |
+| 4 CPI | 4 | 50-67 MHz |
+| 2 CPI | 2 | **25-33 MHz** |
+
+At the **already-measured 45.16 MHz**, a 2-CPI design delivers 22.6 M instr/s
+and a 3-CPI design 15.0 M — both inside the requirement. So the pipeline needs
+**low CPI far more than it needs a high clock**, and it can afford to spend Fmax
+on hazard logic if that is what buys the CPI. A four- or five-stage design at
+1.5-2 CPI clears the requirement at a clock the design already reaches.
+
+That reframing matters for the optimisation backlog too: item 1, moving the
+register file to a registered read, costs a cycle of read latency in a
+multi-cycle FSM but costs *nothing* in a pipeline, where it is simply a stage.
+
 ### What that does not prove
 
 **The reference and the RTL are two expressions by the same author from the same

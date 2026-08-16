@@ -17,8 +17,8 @@
 | 3. Register file, register cache, call/ret and spill | **done** — registers + memory write stream, mutation-tested |
 | 4. Load/store, MEMA and the seven MEMB modes | **done** — AGU + load/store data path |
 | 5. Bus and I-cache, burst | **done** — LSU, burst decoder, I-cache |
-| 6. Whole-CPU lockstep | **next** — the largest remaining piece |
-| 7. M2-D Quartus spike | flow built; partial numbers below |
+| 6. Whole-CPU lockstep | **done** — found the COBR defect on retire 0 |
+| 7. M2-D Quartus spike + **pipeline** | **next** — the pipeline is the real work |
 | 8. FPU | after the gate |
 
 | File | What it is |
@@ -78,6 +78,22 @@ CPU and the GPU first and defer everything that cannot change the answer.
   software cache model across 16/32/64 KB and 2/4/8-way.
 - **M2-G** — email srg320 about the SCSP licence. Send it now; a late yes is
   worth less than an early one.
+
+### Measured CPI — the pipeline's actual target
+
+| mix | CPI | M instr/s at 45.16 MHz |
+|---|---|---|
+| ALU only | 7.33 | 6.16 |
+| + 10% multiply/divide | 11.89 | 3.80 |
+| harness full mix | 15.86 | 2.85 |
+
+Requirement is 12.5-16.7 M instr/s, so even the ALU-only figure is **2x short**.
+An earlier note in this file said "~6 cycles per instruction, about half" — that
+was an estimate and it was optimistic; 7.33 is measured.
+
+**The pipeline needs low CPI more than a high clock.** At the already-measured
+45.16 MHz, 2 CPI gives 22.6 M instr/s and 3 CPI gives 15.0 M — both clear the
+requirement. It can afford to lose Fmax to hazard logic if that buys CPI.
 
 ### Deferred, not forgotten
 

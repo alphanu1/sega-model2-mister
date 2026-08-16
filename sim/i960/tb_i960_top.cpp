@@ -233,6 +233,12 @@ int main(int argc, char **argv) {
   }
 
   dut->final(); delete dut;
+  // Cycles per retired instruction. This is the number the pipeline exists to
+  // reduce, and it is measured rather than estimated. It includes I-cache
+  // misses and the per-program reset, so it is an upper bound on steady state.
+  if (total_retires)
+    std::printf("  CPI (incl. reset and I-cache misses): %.2f\n",
+                double(ticks) / double(total_retires));
   std::printf("  %llu programs, %llu retires, %llu checks over %llu cycles\n",
               (unsigned long long)progs, (unsigned long long)total_retires,
               (unsigned long long)checks, (unsigned long long)ticks);
