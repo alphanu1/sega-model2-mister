@@ -483,27 +483,54 @@ renderer it was not previously called out as a sourcing problem.
 
 ### 5.5 Total
 
-| Block | Optimistic | Pessimistic | Anchor |
-|---|---|---|---|
-| i960KB, pipelined | 8,254 | 13,354 | **3,754 measured**; R4300i at 9,236 agrees |
-| 1x MB86234, pipelined | 3,000 | 5,000 | Model 1 measured 2,554 as an FSM |
-| **3D renderer** | **8,000** | **14,000** | **M2-E: RDP = 8,347, and more capable than we need** |
-| Sound, tilemap, I/O | 8,500 | 12,800 | `fx68k` reported; SCSP and S24TILE estimated |
-| `sys/` framework | 6,630 | 6,630 | **M2-E measured** — was estimated at 5,000 |
-| **Total** | **34,384** | **51,784** | |
-| **Against 41,509** | **fits, 7,125 spare** | **10,275 over** | |
-| **Against 92% routing** | **fits, 3,804 spare** | **13,596 over** | |
+| Block | Optimistic | Pessimistic | Status | Basis |
+|---|---|---|---|---|
+| i960KB, pipelined | 8,254 | 13,354 | **part measured** | 3,754 of it built and fitted here |
+| 1x MB86234, pipelined | 3,000 | 5,000 | estimate | Model 1 measured 2,554 as an FSM |
+| 3D renderer | 8,000 | 14,000 | **estimate** | analogy to a *different* renderer — see below |
+| Sound, tilemap, I/O | 8,500 | 12,800 | estimate | `fx68k` reported; SCSP, S24TILE unbuilt |
+| `sys/` framework | 6,630 | 6,630 | **measured** | same framework, same device, from M2-E |
+| **Total** | **34,384** | **51,784** | | |
+| **Against 41,509** | fits, 7,125 spare | 10,275 over | | |
+| **Against 92% routing** | **fits, 3,804 spare** | 13,596 over | | |
 
-Revised from **38,500 - 61,300** after M2-E. The optimistic case improved by
-4,116 ALM and the pessimistic by 9,516, almost entirely because the renderer
-estimate came down from 15,000-25,000 to 8,000-14,000 on measured evidence. The
-framework moved the other way, from an estimated 5,000 to a measured 6,630.
+Revised from **38,500 - 61,300** after M2-E, almost entirely on the renderer row.
 
-**Two of the five rows are now anchored to measurements on this device.** Two
-remain estimates with nothing built (SCSP, and the renderer above its RDP
-anchor), and one — the i960 — is half measured.
+#### Only two figures here are measurements of *this* design
 
-**The 92% line is not decoration.** M2-E's compile failed to fit at 92% ALM with
+An earlier version of this table put "M2-E: RDP = 8,347" in an "Anchor" column
+against a renderer row reading 8,000-14,000, which implies the measurement
+produced the range. **It did not, and the distinction matters.**
+
+- **`sys/` framework, 6,630** — a measurement of the thing itself. The MiSTer
+  framework is the same code on the same device whichever core wraps it.
+- **i960, 3,754 of 8,254-13,354** — a measurement of the part that exists.
+- **Everything else is an estimate**, including the renderer.
+
+**What M2-E actually established about the renderer** is that a textured,
+Z-buffered, mipmapped, bilinear *and trilinear* rasterizer with a colour
+combiner and coverage-based anti-aliasing costs **8,347 ALM on this exact part
+with this exact toolchain**. That is a real and useful fact. It is not our
+renderer.
+
+The 8,000-14,000 range is a judgement about how far our architecture differs,
+and the differences run both ways:
+
+| cheaper than the RDP | more expensive than the RDP |
+|---|---|
+| no trilinear filtering | tile binning — §6.2, which the RDP has no equivalent of |
+| no colour combiner | on-chip tile buffer management and double-buffering |
+| no coverage-based anti-aliasing | texture cache controller — the RDP streams from RDRAM |
+
+Roughly a wash at the optimistic end, hence 8,000. The pessimistic 14,000 is
+~1.7x the RDP and is a guess at how badly the binning and tile machinery could
+go. **Neither bound is measured**, and the row should be read as "an informed
+estimate that finally has something to be informed by", not as a result.
+
+The honest summary of what M2-E changed: it removed the possibility that the
+renderer is 25,000 ALM. It did not establish what the renderer is.
+
+**The 92% line is not decoration.****The 92% line is not decoration.** M2-E's compile failed to fit at 92% ALM with
 `Error (11802)`, and while that is a build-configuration difference rather than a
 property of the N64 design, it is direct evidence of where this device stops
 routing. Budget against 38,188, not 41,509.
