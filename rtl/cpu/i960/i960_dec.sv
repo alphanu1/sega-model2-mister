@@ -9,7 +9,7 @@
 // any later version. See LICENSE for the full text.
 //
 // Encoding transcribed from MAME's i960 device (BSD-3-Clause, Farfetch'd and
-// R. Belmont). See i960_pkg.sv and THIRD_PARTY.md.
+// R. Belmont). See THIRD_PARTY.md.
 //
 // ---------------------------------------------------------------------------
 //
@@ -34,12 +34,26 @@
 // so it is trapped loudly rather than implemented blind. A game that needs
 // more announces itself instead of drifting.
 
-module i960_dec
-  import i960_pkg::*;
-(
+// Constants are localparams in this module rather than a package. A package
+// costs portability for no gain while there is one consumer: yosys 0.66's
+// native frontend rejects both the module-header import form
+//   module i960_dec import i960_pkg::*; (...)
+//     ERROR: syntax error, unexpected TOK_IMPORT
+// and a user-defined enum used as a port type
+//     ERROR: syntax error, unexpected TOK_ID, expecting ')'
+// while the file-scope `import pkg::*;` that yosys does accept trips the
+// IMPORTSTAR warning in the other linter. Model 1's rtl-conventions.md requires
+// all three toolchains to accept the code. Reintroduce a package when constants
+// are genuinely shared, and gate it on `make synth` that day.
+//
+// Note the two lines above are worded to avoid starting with a certain tool's
+// name: a comment beginning with it is parsed as a pragma and fails the very
+// lint it describes. Also from Model 1's conventions, also paid for once.
+
+module i960_dec (
   input  logic [31:0] insn,
 
-  output fmt_e        fmt,
+  output logic [1:0]  fmt,        // FMT_* below
   output logic [7:0]  op,          // insn[31:24]
   output logic [3:0]  op2,         // REG sub-opcode, insn[10:7]
   output logic        valid,       // opcode is implemented by the reference
@@ -67,6 +81,44 @@ module i960_dec
   // CTRL is 24-bit, COBR is 13-bit. Meaningless for REG and MEM.
   output logic [31:0] disp
 );
+
+  // ------------------------------------------------------------- constants
+  //
+  // Format ranges follow i960dis.cpp's mnemonic table, where the format column
+  // is 1=CTRL, 2=COBR, 3=MEM, 4=REG:
+  //
+  //   0x00-0x1f  CTRL   24-bit displacement            (0x00-0x07 unused)
+  //   0x20-0x3f  COBR   13-bit displacement, 2 operands
+  //   0x40-0x7f  REG    three operands                (0x40-0x57 unused)
+  //   0x80-0xff  MEM    load/store, MEMA or MEMB
+
+  localparam logic [1:0] FMT_CTRL = 2'd0;
+  localparam logic [1:0] FMT_COBR = 2'd1;
+  localparam logic [1:0] FMT_REG  = 2'd2;
+  localparam logic [1:0] FMT_MEM  = 2'd3;
+
+  // Each operand position selects register-or-literal with a DIFFERENT bit,
+  // and they are not adjacent. From i960.cpp:
+  //   get_1_ri  src1   bit 11   field opcode[4:0]
+  //   get_2_ri  src2   bit 12   field opcode[18:14]
+  //   set_ri    dst    bit 13   field opcode[23:19]   (literal here is illegal)
+  //   get_1_ci  COBR   bit 13   field opcode[23:19]
+  //
+  // Bit 12 also distinguishes MEMA from MEMB. Same bit, different meaning,
+  // resolved by format — which is why format is decoded first and everything
+  // else is qualified by it.
+
+  // MEMB addressing modes the reference implements. Everything else reaches
+  // fatalerror there, so it is unreachable in practice and trapped here.
+  // Modes 5, C, D, E and F consume a following displacement dword, making the
+  // instruction eight bytes rather than four.
+  localparam logic [3:0] MEMB_ABASE       = 4'h4; // r[abase]
+  localparam logic [3:0] MEMB_IP_DISP     = 4'h5; // disp + IP of next insn
+  localparam logic [3:0] MEMB_ABASE_INDEX = 4'h7; // r[abase] + (r[index]<<scale)
+  localparam logic [3:0] MEMB_DISP        = 4'hc; // disp
+  localparam logic [3:0] MEMB_DISP_ABASE  = 4'hd; // disp + r[abase]
+  localparam logic [3:0] MEMB_DISP_INDEX  = 4'he; // disp + (r[index]<<scale)
+  localparam logic [3:0] MEMB_DISP_BOTH   = 4'hf; // disp + r[abase] + (r[index]<<scale)
 
   // ------------------------------------------------------------------ format
   //
@@ -97,13 +149,13 @@ module i960_dec
   assign index       = insn[4:0];
   assign scale       = insn[9:7];
 
-  assign src1_lit    = insn[BIT_SRC1_LIT];
-  assign src2_lit    = insn[BIT_SRC2_LIT];
-  assign dst_lit     = insn[BIT_DST_LIT];
+  assign src1_lit    = insn[11];
+  assign src2_lit    = insn[12];
+  assign dst_lit     = insn[13];
 
-  assign memb        = insn[BIT_MEMB];
+  assign memb        = insn[12];
   assign memb_mode   = insn[13:10];
-  assign mema_rel    = insn[BIT_MEMA_REL];
+  assign mema_rel    = insn[13];
   assign mema_offset = insn[12:0];
 
   // ------------------------------------------------------------ displacement

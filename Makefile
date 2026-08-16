@@ -8,6 +8,7 @@
 #   make test                    every module fuzz test
 #   make test_i960_alu           one module
 #   make test_i960_alu_carrybug  prove a claimed divergence is where it is claimed
+#   make synth                   yosys parse+synth check (portability gate)
 #   make quartus                 core build (17.0.0 only)
 #
 # RANDOM= overrides the random-vector count, SEED= the seed. Both exist so a
@@ -15,6 +16,7 @@
 # order of magnitude deeper without editing anything.
 
 VERILATOR ?= verilator
+YOSYS     ?= yosys
 QUARTUS   ?= /home/ben/intelFPGA_lite/17.0/quartus/bin
 RANDOM    ?=
 SEED      ?=
@@ -30,14 +32,14 @@ TB      := $(SIM_DIR)/i960
 VFLAGS := -Wall -Wno-DECLFILENAME --timing
 VBUILD  = $(VERILATOR) --cc --exe --build -j 0 $(VFLAGS)
 
-I960_PKG := $(I960)/i960_pkg.sv
-DEC_RTL  := $(I960_PKG) $(I960)/i960_dec.sv
+
+DEC_RTL  := $(I960)/i960_dec.sv
 ALU_RTL  := $(I960)/i960_alu.sv
 
 TEST_ARGS := $(if $(RANDOM),+random=$(RANDOM),) $(if $(SEED),+seed=$(SEED),)
 
-.PHONY: all lint test clean distclean
-all: lint test
+.PHONY: all lint synth test clean distclean
+all: lint synth test
 
 # --------------------------------------------------------------------- lint
 
@@ -51,6 +53,34 @@ lint_i960_dec:
 lint_i960_alu:
 	@echo "== lint i960_alu"
 	$(VERILATOR) --lint-only $(VFLAGS) --top-module i960_alu $(ALU_RTL)
+
+# --------------------------------------------------------------------- synth
+#
+# Portability gate. Model 1's rtl-conventions.md requires code to pass
+# verilator, yosys AND Quartus 17.0, because each rejects things the others
+# accept and the expensive one is 25 minutes away. This has already caught the
+# module-header package import, which verilator takes and yosys refuses:
+#   module i960_dec import i960_pkg::*; (...)
+#     ERROR: syntax error, unexpected TOK_IMPORT
+# File-scope `import i960_pkg::*;` before the module works in both.
+#
+# The LUT6 counts this prints are a rough indicator, NOT an area measurement.
+# Only Quartus gives ALM, and the two disagree badly where DSP or memory
+# inference is involved — Model 1 measured fp_mul at 1312 LUT6 under yosys and
+# 144 ALM in Quartus, because the multiplier left the fabric entirely.
+
+.PHONY: synth synth_i960_dec synth_i960_alu
+synth: synth_i960_dec synth_i960_alu
+
+synth_i960_dec:
+	@echo "== synth i960_dec (yosys portability check)"
+	@$(YOSYS) -p "read_verilog -sv $(DEC_RTL); hierarchy -top i960_dec; proc; opt; techmap; opt; abc -lut 6; opt; stat" \
+	  | sed -n '/Local Count/,/^$$/p' | grep -E 'cells|lut|memor' || true
+
+synth_i960_alu:
+	@echo "== synth i960_alu (yosys portability check)"
+	@$(YOSYS) -p "read_verilog -sv $(ALU_RTL); hierarchy -top i960_alu; proc; opt; techmap; opt; abc -lut 6; opt; stat" \
+	  | sed -n '/Local Count/,/^$$/p' | grep -E 'cells|lut|memor' || true
 
 # --------------------------------------------------------------------- tests
 
