@@ -1,24 +1,24 @@
 # Handoff
 
-**Updated:** 2026-08-16, after `390b77b`.
+**Updated:** 2026-08-16, after `697bcfe`.
 
 ---
 
 ## State
 
-**P1 steps 1 and 2 of 8 are done.** Decoder and integer ALU are written, linted
-and fuzz-verified. `make lint` and `make test` both pass from a clean checkout
-after `tools/bootstrap.sh`.
+**P1 steps 1-4 of 8 are done**, and there is a first real area measurement.
+`make all` (lint + yosys portability + fuzz) passes from a clean checkout after
+`tools/bootstrap.sh`; `make quartus_all` reproduces the numbers below.
 
 | Step | State |
 |---|---|
 | 1. Decoder and the four formats | **done** — 6.0e9 field checks, 0 mismatches |
 | 2. Integer ALU, shifts, bit ops, condition codes | **done** — 4.3e9 field checks, 0 mismatches |
-| 3. Register file, register cache, call/ret and spill | next |
-| 4. Load/store, MEMA and the seven MEMB modes | |
-| 5. Bus and I-cache, burst | |
+| 3. Register file, register cache, call/ret and spill | **done** — registers + memory write stream, mutation-tested |
+| 4. Load/store, MEMA and the seven MEMB modes | **done** — AGU + load/store data path |
+| 5. Bus and I-cache, burst | **next** |
 | 6. Whole-CPU lockstep | |
-| 7. M2-D Quartus spike | the gate |
+| 7. M2-D Quartus spike | flow built; partial numbers below |
 | 8. FPU | after the gate |
 
 | File | What it is |
@@ -79,13 +79,21 @@ CPU and the GPU first and defer everything that cannot change the answer.
 - **M2-G** — email srg320 about the SCSP licence. Send it now; a late yes is
   worth less than an early one.
 
-### Then — P1 step 3
+### Then — P1 step 5
 
-`docs/p1-i960-spike.md` §6 has the order. Next is the register file and register
-cache: `call`, `ret`, `callx`, `balx` and the spill path. Compare the memory
-write stream, not only the registers — spill depth is architecturally invisible
-and memory-visible, so four frames matching the reference is a correctness
-requirement rather than a sizing choice (§2.2 of the spike).
+`docs/p1-i960-spike.md` §6 has the order. Next is the bus and the 512-byte
+direct-mapped I-cache, including burst. Two things it must carry that are
+already specified and not yet built:
+
+- **Unaligned access sequencing.** `i960_ldst` raises `unaligned` and stops
+  there deliberately. The reference splits an unaligned word or dword into byte
+  accesses assembled little-endian, which needs several bus cycles.
+- **The `BURST` regions.** Most of the Model 2A map is flagged burst (§5 of the
+  spike), so this is not an optimisation to add later — it is how this CPU talks
+  to almost everything.
+
+After that, step 6 (whole-CPU lockstep) needs a top level and a transcribed
+`execute_run`, and it is the largest single remaining piece of P1.
 
 The FPU is deliberately step 8 of 8: it is the only part with no oracle, and
 M2-D measures the integer core.
@@ -94,6 +102,25 @@ Then P2 renderer, P3 the fit verdict, P4 TGP port, P5 sound and 2D, P6
 integration. Detail in `docs/milestones.md`.
 
 ---
+
+## Measured on the real device
+
+Quartus 17.0.0, `5CSEBA6U23I7`, virtual pins, I/O cut. **Not M2-D** — the
+sequencer, I-cache, bus and FPU do not exist yet.
+
+| Module | ALM | Reg | MLAB bits | Fmax |
+|---|---|---|---|---|
+| `i960_dec` | 103 | 0 | 0 | comb |
+| `i960_alu` | 852 | 0 | 0 | comb |
+| `i960_regs` | 1,655 | 1,261 | 2,048 | 94.86 MHz |
+| `i960_agu` | 252 | 0 | 0 | comb |
+| `i960_ldst` | 126 | 0 | 0 | comb |
+| **total** | **2,988** | | | |
+
+Against 7,000-13,500 for the whole i960 including a 2,500-6,000 FPU, this tracks
+toward the lower half — **but it is not evidence of that yet**, because the
+sequencer and pipeline control are the parts not written and assembly costs more
+than the sum of parts.
 
 ## Findings
 
@@ -163,6 +190,22 @@ diverging**.
 
 **Unknown and unanswerable here:** whether Model 2 games actually use `addc` or
 `subc`. It needs program ROM. If they do not, the hole is theoretical.
+
+**A memory that simulates perfectly can still be flip-flops.** The register
+cache was written with the array indexed inside the control FSM. Every test
+passed. Quartus refused to infer it — `RAM logic "rcache" is uninferred due to
+unsupported read-during-write behavior`, `Total MLAB memory bits : 0` — and it
+became 2,048 flip-flops.
+
+| | ALM | Reg | MLAB bits | Fmax |
+|---|---|---|---|---|
+| in flip-flops | 2,355 | 3,303 | 0 | 68.44 MHz |
+| in MLAB | 1,655 | 1,261 | 2,048 | 94.86 MHz |
+
+**30% of the module and 26 MHz.** The fix is a dedicated write port and a
+dedicated *registered* read port with their own address signals, rather than
+indexing the array inside the FSM. Watch the register count, not the memory
+count — it moves first.
 
 ### Retracted
 
