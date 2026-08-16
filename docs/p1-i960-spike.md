@@ -486,7 +486,8 @@ FPU do not exist yet, so this is the cost of steps 1-4 and not of the CPU.
 | `i960_ldst` | 126 | 0 | 0 | 0 | comb |
 | `i960_lsu` | 241 | 188 | 0 | 0 | **142.57 MHz** |
 | `i960_memmap` | 35 | 0 | 0 | 0 | comb |
-| **Total** | **3,264** | 1,449 | 2,048 | 0 | |
+| `i960_icache` | 472 | 861 | 0 (4,096 M10K bits) | 0 | 84.97 MHz |
+| **Total** | **3,736** | 2,310 | 2,048 MLAB + 4,096 M10K | 0 | |
 
 Against the 7,000-13,500 estimate for the whole i960 including a 2,500-6,000
 FPU, 2,988 for these five blocks tracks toward the lower half. **It is not
@@ -531,10 +532,9 @@ its output every cycle, so the data moved under the flush while the addresses
 stayed correct. It surfaced as **right address, wrong frame's word** — visible
 only in the memory stream comparison, which is the argument for having it.
 
-### Step 5 — bus sequencing and burst. Partially done.
+### Step 5 — bus, burst and I-cache. Done.
 
-`rtl/cpu/i960/i960_lsu.sv` and `rtl/cpu/i960/i960_memmap.sv`. **The I-cache is
-not written yet**; the rest of step 5 is.
+`rtl/cpu/i960/i960_lsu.sv`, `i960_memmap.sv` and `i960_icache.sv`.
 
 The LSU turns one architectural load or store into the exact sequence of bus
 transactions the reference performs, in the same order — which is
@@ -569,6 +569,50 @@ cycles, while treating a FIFO as burst corrupts data.
 Mutation-tested. Five faults, all caught: burst sense inverted, address always
 advancing, address never advancing, an unaligned word split into 2 bytes instead
 of 4, half-alignment tested on the wrong bit, and byte assembly big-endian.
+
+#### The I-cache has no oracle and needs none
+
+512 bytes, direct-mapped, 16-byte lines. **MAME models no instruction cache at
+all** — its `m_cache` is an address-space accessor, and IAC `0x89`, "invalidate
+internal instruction cache", is logged rather than executed. So this block is
+architecturally invisible: it changes cycle counts and nothing else, and it
+cannot diverge from a reference that has nothing to diverge from.
+
+It is therefore verified by **transparency** — every fetch must return exactly
+what external memory holds — checked on every fetch rather than only on misses.
+
+**Transparency alone is not enough, and that is a trap worth naming.** A cache
+that never hits is perfectly transparent and completely useless, and a
+correctness-only harness passes it without complaint. So the miss rate is
+asserted as well:
+
+| Pattern | Requirement | Measured |
+|---|---|---|
+| sequential walk, 4x cache size | ~0.25 (a 16-byte line serves four dwords) | **0.250** |
+| second pass over cache-sized data | zero misses | **0** |
+
+Mutation-tested, and the two checks divide the work between them: a fill that
+never marks its line valid is caught by the **miss rate** (1.000, out of
+bounds), while an inverted tag comparison, a word select using `~addr[3:2]` and
+a line index one bit too narrow are caught by **transparency**.
+
+The standing assumption is that instruction memory does not change underneath
+the cache. Model 2 executes from ROM, so there is no self-modifying code and no
+DMA into the instruction stream. **If that ever stops being true this block
+becomes wrong, and silently** — which is why `inval` exists although nothing
+drives it yet.
+
+Memory inference came out as intended, and the report says so explicitly:
+`cdata` inferred to M10K (4,096 block memory bits) while `ctag` is "uninferred
+due to asynchronous read logic", which is correct — tags are compared
+combinationally on every fetch and must be flip-flops. M10K for the data is the
+opposite call to the register cache's MLAB, for the opposite reason: 4,096 bits
+is a third of one M10K but about seven MLABs, and §5.6's pressure is on blocks
+rather than on bits.
+
+**`i960_icache` reads 84.97 MHz, under the gate's 90.** The tag compare feeding
+the hit decision is the obvious suspect. Not addressed yet, and recorded rather
+than glossed.
 
 #### A third Quartus-only syntax rejection
 
