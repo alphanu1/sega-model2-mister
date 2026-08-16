@@ -1,0 +1,64 @@
+# Assistant working file — never committed
+CLAUDE.md
+
+# ---- Reference material, not part of this project ----
+# tools/model1-ref is a separate read-only clone of the Model 1 core, used as a
+# source of portable RTL. It has its own upstream and its own history.
+tools/
+
+# ---- ROMs and ROM-derived data ----
+# .mra files are fine (they describe a layout); the bytes are not.
+*.zip
+*.7z
+*.rom
+*.bin
+*.ic*
+*.mpr
+*.epr
+roms/
+rom/
+releases/*.rbf
+
+# ---- Quartus build output ----
+db/
+incremental_db/
+output_files/
+simulation/
+greybox_tmp/
+timing/
+tmp-clearbox/
+hc_output/
+hps_isw_handoff/
+.qsys_edit/
+*.qws
+*.rpt
+*.summary
+*.smsg
+*.sof
+*.pof
+*.rbf
+*.jdi
+*.pin
+*.done
+*.qar
+*.qarlog
+*.sopcinfo
+*.bak
+c5_pin_model_dump.txt
+PLLJ_PLLSPE_INFO.txt
+
+# ---- Simulation output ----
+obj_dir/
+*.vcd
+*.fst
+*.wlf
+transcript
+work/
+verilator.log
+
+# ---- Editor / OS ----
+*.swp
+*~
+.DS_Store
+.vscode/
+.idea/
