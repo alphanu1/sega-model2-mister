@@ -136,8 +136,24 @@ branch target, not a crash.
 counts are not hardware facts, and that rule has already produced two wrong
 conclusions in this project when ignored.
 
-`i960.cpp` is a different case from `v60.cpp`, and the difference is checkable
-rather than a matter of taste:
+**Corrected.** An earlier version of this section argued that `i960.cpp` was a
+different case from `v60.cpp` and could be relied on. That argument was wrong in
+its structure, and the correction matters because the FPU sizing in §4.2 was
+built on it.
+
+The reasoning was: `v60.cpp` hedges pervasively, `i960.cpp` hedges once, so the
+i960 figures must be transcribed from Intel's published table. **That is
+inference from the absence of a disclaimer, and absence of a disclaimer is not
+evidence of accuracy.** Re-checked: `i960.cpp` carries no header caveat of any
+kind, and MAME's own device documentation makes no accuracy claim about
+instruction cycle counts in either direction. Nothing in the file says the
+numbers are measured, and nothing says they are not.
+
+MAME's cycle counts are estimates unless proven otherwise. That is this
+project's own standing rule — design study §4.1 lists "treating MAME's cycle
+counts as hardware facts" as a recurring failure mode that has already produced
+two wrong conclusions — and it applies here too. The table below is what the
+file contains, not what the silicon does:
 
 | | `v60.cpp` | `i960.cpp` |
 |---|---|---|
@@ -147,10 +163,13 @@ rather than a matter of taste:
 | Hedges | pervasive | one, `expr`: `// checkme` |
 
 A flat average cannot produce a data-dependent range for one opcode and a
-distinct value for every other. This reads as transcription from the i960KB
-published timing table. **Verify it against that manual before anything
-load-bearing rests on it** — but note the conclusion below survives the figures
-being wrong by a factor of two.
+distinct value for every other, so *something* differentiated these numbers. But
+"differentiated" is not "measured": a careful author working from a datasheet
+and a careful author working from judgement both produce differentiated values.
+
+**The only thing that settles it is the i960KB Programmer's Reference Manual,
+270567-001**, which `i960dis.cpp`'s own header cites. Until someone reads it,
+every conclusion drawn from the table below is a hypothesis.
 
 ### 4.1 Measured from the reference
 
@@ -186,31 +205,48 @@ At 25 MHz, the ceiling if the CPU did nothing else at all:
 | `sinr` | 406 | 61,576 | **1,026** |
 | `sinrl` | 441 | 56,689 | **945** |
 
-**The silicon is extremely slow at transcendentals.** A CORDIC at ~64 iterations
+**If these figures are real, the silicon is extremely slow at transcendentals.**
+A CORDIC at ~64 iterations
 costs ~64 cycles; the real part takes 406 for the same function. A fully
 microcoded FPU sharing one datapath would be roughly **six times faster than the
 chip it replaces**, on the operations that dominate its area.
 
-Three consequences:
+Three consequences — **all conditional on the figures being approximately
+right**, which is exactly what is not established:
 
 1. **Microcode the transcendental set.** Design study §7 lists this under Tier 1
-   as worth 2-3K ALM "contingent on M2-B showing FP is not hot". The contingency
-   is weaker than it looked: the hardware itself caps transcendental throughput
-   at ~1,000 per frame. Games cannot be issuing tens of thousands.
+   as worth 2-3K ALM "contingent on M2-B showing FP is not hot". If the cycle
+   counts hold, the hardware itself caps transcendental throughput at ~1,000 per
+   frame and the contingency largely evaporates. **If they do not hold, the
+   contingency stands and M2-B decides.** The earlier claim that this was
+   settled was over-confident.
 2. **Iterate the extended multiplier.** 36 cycles for `mulrl` is ample budget for
    a multi-pass 27x27 DSP approach rather than a wide combinational multiplier.
    112 DSP blocks exist and Model 1 uses 49.
-3. **This pushes the FPU toward the bottom of its 2,500-6,000 ALM range**, which
-   is the widest line in the i960 estimate.
+3. **This would push the FPU toward the bottom of its 2,500-6,000 ALM range**,
+   which is the widest line in the i960 estimate — and that is precisely why it
+   must not be assumed. The projection in this document keeps the **full**
+   2,500-6,000 range for exactly this reason.
 
-### 4.3 M2-B's purpose changes
+### 4.3 M2-B is not optional after all
 
-M2-B asked whether FP is hot enough to need a fast unit. §4.2 answers most of
-that from the hardware. What M2-B is still needed for is the **mix**: how much
-basic arithmetic versus transcendental. That sizes the adder and multiplier — the
-parts that run at 10 and 18 cycles and therefore cannot be microcoded away.
+An earlier version of this section said M2-B's purpose had "changed from verdict
+to mix", because the hardware's own slowness answered the question. That rested
+on the cycle counts being real, which is not established.
 
-Run it, but for the mix, not the verdict.
+**M2-B stands as originally written.** It counts FP instructions per frame by
+opcode class from actual game execution, which depends on no cycle model at all
+— it is a count of what the games issue. That makes it the one piece of evidence
+here that survives the timing table being wrong, and it is measured by
+instrumenting MAME rather than by trusting it.
+
+Two independent things would settle the FPU:
+
+- **270567-001** — does Intel's table match `i960.cpp`'s numbers?
+- **M2-B** — how many transcendentals do the games actually issue per frame?
+
+Either alone is useful. Both agreeing would make the microcoded FPU a
+measurement rather than a hope.
 
 ### 4.4 Fabric clock
 

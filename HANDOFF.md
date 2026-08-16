@@ -197,12 +197,16 @@ affords an iterative 27x27 DSP multiply rather than a wide combinational one.
 This pushes the widest line in the i960 estimate toward the bottom of its
 2,500-6,000 range, and changes M2-B's purpose from verdict to mix.
 
-Held to the standing rule: MAME cycle counts are not hardware facts and these
-need checking against the i960KB timing manual. But `i960.cpp` differs from
-`v60.cpp` in a checkable way — per-opcode values, `remr` carrying `// (67 to
-75878 depending on opcodes!!!)`, one `// checkme` in the whole file. A flat
-average cannot produce that. The conclusion also survives the figures being
-wrong by a factor of two.
+**Downgraded to a hypothesis.** The argument that `i960.cpp` could be trusted
+where `v60.cpp` could not inferred accuracy from the absence of a disclaimer,
+which proves nothing — the file has no header caveat and MAME claims nothing
+about cycle accuracy either way. The "survives being wrong by 2x" hedge only
+helps if the figures are in the right region at all.
+
+Two things would settle it: the i960KB Programmer's Reference Manual
+**270567-001**, and **M2-B**, which counts what games actually issue and depends
+on no cycle model. Until then the budget keeps the full 2,500-6,000 FPU range
+and M2-B stays on the critical path. Design study R8.
 
 **The register cache is cheaper than §5.2 assumed, and its depth is not free to
 change.** MAME copies sixteen words per `call` because it is software; in RTL a

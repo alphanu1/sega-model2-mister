@@ -194,15 +194,32 @@ six times faster than the silicon on exactly the operations that dominate FPU ar
 cycles for `mulrl` is ample budget for an iterative 27x27 DSP multiply rather than a wide
 combinational one. This pushes the FPU toward the bottom of its 2,500-6,000 range.
 
-Per section 4.1's standing rule these figures are not yet hardware facts and must be
-checked against the i960KB timing manual. But `i960.cpp` is a different case from
-`v60.cpp`: values differ per opcode, `remr` carries `// (67 to 75878 depending on
-opcodes!!!)`, and exactly one op is hedged `// checkme`. A flat average cannot produce
-that. **And the conclusion survives the figures being wrong by a factor of two.**
+**Corrected — and this weakens the conclusion above.** An earlier revision argued that
+`i960.cpp` could be trusted where `v60.cpp` could not, because the i960 values differ per
+opcode and are barely hedged while the V60's are flat and disclaimed. That is inference
+from the *absence* of a disclaimer, which is not evidence of accuracy. Re-checked:
+`i960.cpp` carries no header caveat at all, and MAME's own documentation makes no accuracy
+claim about instruction cycle counts either way.
 
-What M2-B is still needed for is the **mix** — basic arithmetic versus transcendental —
-which sizes the adder and multiplier, the parts running at 10 and 18 cycles that cannot be
-microcoded away. Run it for that, not for the verdict. Detail in `p1-i960-spike.md` §4.
+Section 4.1's rule therefore applies here exactly as it applies everywhere else: **MAME's
+cycle counts are estimates unless proven otherwise.** Differentiated is not measured — a
+careful author working from a datasheet and a careful author working from judgement both
+produce differentiated numbers.
+
+The hedge that the conclusion "survives the figures being wrong by a factor of two" only
+helps if the figures are in the right region at all. If they were invented it does no work
+whatsoever.
+
+So this is a **hypothesis, not a finding**, and two things would settle it: the i960KB
+Programmer's Reference Manual **270567-001** (cited in `i960dis.cpp`'s own header), and
+**M2-B**, which counts what the games actually issue and depends on no cycle model at all.
+The area budget in section 5.2 deliberately keeps the **full** 2,500-6,000 FPU range
+rather than moving toward the bottom on the strength of this.
+
+**M2-B therefore stands as originally written**, and is more important than the previous
+revision implied. It counts FP instructions per frame by opcode class from real game
+execution, which depends on no cycle model at all — making it the one piece of evidence
+here that survives the timing table being wrong. Detail in `p1-i960-spike.md` §4.
 
 ---
 
@@ -614,10 +631,11 @@ microcode ROMs and lookup tables off the fabric.
 ### Tier 1 — no accuracy loss
 
 - **Microcode the i960 FPU.** Shared datapath, CORDIC or polynomial with coefficient ROMs
-  in M10K. Worth 2-3K. **No longer contingent on M2-B** — section 3 shows the silicon
-  itself caps transcendentals at ~1,000 per frame, so a microcoded unit is faster than the
-  part it replaces. Note the coefficient ROMs land in M10K, which section 5.6 says is the
-  resource under pressure; count them there, not as free.
+  in M10K. Worth 2-3K. **Contingent on M2-B**, as originally written — section 3's
+  argument that the silicon caps transcendentals at ~1,000 per frame rests on MAME cycle
+  counts that are not verified, so it does not remove the contingency. Note the
+  coefficient ROMs land in M10K, which section 5.6 says is the resource under pressure;
+  count them there, not as free.
 - **Push arithmetic into DSP blocks.** 112 available, Model 1 uses ~5. Edge and attribute
   interpolators, texture coordinate math, perspective divide all map to 27x27 MAC.
 - **Push logic into M10K.** ~585 KB spare after section 6.5.
@@ -840,7 +858,20 @@ opcode set and formats, not the field positions) and for `addc`/`subc` was zero,
 there the reference is the thing that is wrong. **State what an oracle cannot see, next to
 the number that makes it look unnecessary.**
 
-**Recurring failure mode:** treating MAME's cycle counts as hardware facts. Two wrong
+**R8 — the cycle-count rule applies to `i960.cpp` too.** R6 and the P1 work leaned on
+`i960.cpp`'s per-opcode timings to argue the FPU could be microcoded, justifying it on the
+grounds that this file is more careful than `v60.cpp`. The justification was structurally
+unsound: it inferred accuracy from the absence of a disclaimer. The file has no header
+caveat, and MAME claims nothing about cycle accuracy in either direction.
+
+Nothing about the FPU plan is now known to be wrong — a microcoded shared datapath may
+well be right. What changed is that it is a hypothesis again rather than a settled finding,
+M2-B is back on the critical path for that decision, and the budget keeps the full
+2,500-6,000 range. **This is the recurring failure mode below, caught for the third time,
+and the first two were in this document's own history.** The rule is not "check v60.cpp";
+it is "check any cycle count before building on it".
+
+**Recurring failure mode:** treating MAME's cycle counts as hardware facts. Three wrong
 conclusions in this document from that alone. Both `mb86233.cpp` and `v60.cpp` carry
 timing models that are explicitly approximations, and `v60.cpp` says so in a comment.
 Check the source before building an argument on a cycle count.
