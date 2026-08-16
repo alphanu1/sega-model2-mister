@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Sega Model 2 core for MiSTer FPGA — Copyright (C) 2026 alphanu1
+# Quartus settings template for a synthesis-only spike.
+#
+# Not a MiSTer core project. No sys/ framework, no pin assignments, no .rbf.
+# Purpose is one number: what does a single module cost on the real device.
+#
+# The placeholders below are substituted by the Makefile. Do not write either
+# token in a comment: every occurrence is substituted, the source replacement
+# contains newlines, and a token inside a comment splits it and leaves the
+# trailing prose as a bare line Quartus rejects with
+# "Error (125048): Error reading Quartus Prime Settings File".
+
+set_global_assignment -name FAMILY "Cyclone V"
+set_global_assignment -name DEVICE 5CSEBA6U23I7
+set_global_assignment -name TOP_LEVEL_ENTITY @MODULE@
+set_global_assignment -name PROJECT_OUTPUT_DIRECTORY output_files
+
+set_global_assignment -name ORIGINAL_QUARTUS_VERSION 17.0.0
+set_global_assignment -name LAST_QUARTUS_VERSION "17.0.0 Lite Edition"
+
+# Match MiSTer core conventions so the numbers transfer.
+set_global_assignment -name OPTIMIZATION_MODE "Balanced"
+set_global_assignment -name VERILOG_INPUT_VERSION SYSTEMVERILOG_2005
+set_global_assignment -name VERILOG_SHOW_LMF_MAPPING_MESSAGES OFF
+
+# Virtual-pin everything. A spike has far more ports than the package has pins,
+# and without this the fitter fails before it reports anything useful.
+set_instance_assignment -name VIRTUAL_PIN ON -to *
+
+# The clock is caught by that wildcard too, which produces
+#   Critical Warning (15725): clock port is fed by virtual pin
+# and timing analysis treats it as a ripple clock. Expected in this flow and
+# left alone. Model 1 tried both obvious fixes and recorded that neither works:
+# VIRTUAL_PIN OFF on the clock is accepted and has no effect because the
+# wildcard wins, and a location assignment fails outright with
+#   Error (171011): node is type Combinational cell
+# Fmax here is register-to-register and the SDC cuts every I/O path, so the
+# ripple clock does not enter the measured numbers.
+
+set_global_assignment -name SDC_FILE spike.sdc
+
+@SRCS@

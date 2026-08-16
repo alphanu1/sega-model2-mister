@@ -471,6 +471,64 @@ RTL was correct throughout. **When a brand-new harness reports mass failure on
 its first run, suspect the harness before the design** — the reverse is the
 common case only once the harness has passed something.
 
+### Measured on the real device — partial M2-D
+
+Quartus Prime Lite 17.0.0 Build 595, `5CSEBA6U23I7`, virtual pins, I/O paths
+cut. `make quartus_all`. **This is not M2-D**: the sequencer, I-cache, bus and
+FPU do not exist yet, so this is the cost of steps 1-4 and not of the CPU.
+
+| Module | ALM | Registers | MLAB bits | DSP | Fmax |
+|---|---|---|---|---|---|
+| `i960_dec` | 103 | 0 | 0 | 0 | comb |
+| `i960_alu` | 852 | 0 | 0 | 0 | comb |
+| `i960_regs` | 1,655 | 1,261 | 2,048 | 0 | **94.86 MHz** |
+| `i960_agu` | 252 | 0 | 0 | 0 | comb |
+| `i960_ldst` | 126 | 0 | 0 | 0 | comb |
+| **Total** | **2,988** | 1,261 | 2,048 | 0 | |
+
+Against the 7,000-13,500 estimate for the whole i960 including a 2,500-6,000
+FPU, 2,988 for these five blocks tracks toward the lower half. **It is not
+evidence of that yet** — the sequencer and pipeline control are missing and
+assembly costs more than the sum of parts.
+
+Note `i960_regs` clears the gate's >90 MHz on its own, which is worth exactly
+what a standalone number is worth: Model 1's M0 recorded that isolated Fmax is
+pessimistic because the critical path terminates at virtual pins with nothing to
+retime against, and that the instance-level figure is what a gate should read.
+
+#### The register cache did not infer, and only Quartus could say so
+
+Written with the array read directly inside the control FSM, the build reported:
+
+```
+Info (276009): RAM logic "rcache" is uninferred due to unsupported
+               read-during-write behavior
+Total MLAB memory bits : 0
+```
+
+It became flip-flops. The cost, measured before and after the fix:
+
+| | ALM | Registers | MLAB bits | Fmax |
+|---|---|---|---|---|
+| cache in flip-flops | 2,355 | 3,303 | 0 | 68.44 MHz |
+| cache in MLAB | **1,655** | **1,261** | **2,048** | **94.86 MHz** |
+
+**30% of the module's area and 26 MHz**, from a memory idiom that simulates
+identically either way. Every test passed in both configurations. This is the
+standing rule earning its place twice over: only a Quartus build can tell you
+where storage landed, and the register count is what shows it first.
+
+The fix is a dedicated write port and a dedicated *registered* read port, each
+with its own address, rather than indexing the array inside the FSM. That costs
+a cycle of read latency, so the fill and flush paths split into issue and
+capture states.
+
+Restructuring introduced a second bug the harness caught immediately: the flush
+read address was held only for the cycle that issued it, and the array registers
+its output every cycle, so the data moved under the flush while the addresses
+stayed correct. It surfaced as **right address, wrong frame's word** — visible
+only in the memory stream comparison, which is the argument for having it.
+
 ### What that does not prove
 
 **The reference and the RTL are two expressions by the same author from the same

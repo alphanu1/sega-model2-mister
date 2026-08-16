@@ -78,3 +78,6 @@ verilator.log
 # personal state.
 .vscode/*
 !.vscode/settings.json
+
+# Quartus spike output
+build/

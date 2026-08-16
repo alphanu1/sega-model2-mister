@@ -172,10 +172,51 @@ obj_i960_ldst/Vi960_ldst: $(LST_RTL) $(TB)/tb_i960_ldst.cpp $(TB)/i960_ldst_ref.
 # differs between versions. Re-run map, not just fit — a fit-only rerun reuses
 # the previous netlist and reports success for a setting that breaks the build.
 
-.PHONY: quartus
+.PHONY: quartus quartus_all quartus_report
+MOD  ?= i960_alu
+QDIR := build/quartus/$(MOD)
+
+SRCS_i960_dec  := $(DEC_RTL)
+SRCS_i960_alu  := $(ALU_RTL)
+SRCS_i960_regs := $(REG_RTL)
+SRCS_i960_agu  := $(AGU_RTL)
+SRCS_i960_ldst := $(LST_RTL)
+
+QUARTUS_MODS := i960_dec i960_alu i960_regs i960_agu i960_ldst
+
+# One module, real device, real toolchain. This is the only thing that gives
+# ALM, M10K and DSP — yosys gives LUT6, which is an indicator and not the same
+# currency. Model 1 measured fp_mul at 1312 LUT6 and 144 ALM because the
+# multiplier left the fabric into a DSP block.
 quartus:
-	@test -x $(QUARTUS)/quartus_sh || { echo "Quartus 17.0 not found at $(QUARTUS)"; exit 1; }
-	@echo "no Quartus project yet — P1 reaches this at spike stage (M2-D)"; exit 1
+	@test -x $(QUARTUS)/quartus_map || { echo "Quartus 17.0 not found at $(QUARTUS)"; exit 1; }
+	@mkdir -p $(QDIR)
+	@srcs=""; for f in $(SRCS_$(MOD)); do \
+	  srcs="$$srcs\nset_global_assignment -name SYSTEMVERILOG_FILE ../../../$$f"; done; \
+	  sed -e 's/@MODULE@/$(MOD)/g' -e "s|@SRCS@|$$srcs|" quartus/spike.qsf.in > $(QDIR)/$(MOD).qsf
+	@cp quartus/spike.sdc $(QDIR)/spike.sdc
+	@echo 'PROJECT_REVISION = "$(MOD)"' > $(QDIR)/$(MOD).qpf
+	@cd $(QDIR) && PATH="$(QUARTUS)):$$PATH" sh -c \
+	   '$(QUARTUS)/quartus_map $(MOD) >map.log 2>&1 && \
+	    $(QUARTUS)/quartus_fit $(MOD) >fit.log 2>&1 && \
+	    $(QUARTUS)/quartus_sta $(MOD) >sta.log 2>&1' \
+	  || { echo "FAILED — see $(QDIR)/*.log"; tail -5 $(QDIR)/map.log $(QDIR)/fit.log 2>/dev/null; exit 1; }
+	@$(MAKE) --no-print-directory quartus_report MOD=$(MOD)
+
+# Always re-run map, never fit alone: a fit-only rerun reuses the previous
+# netlist and reports success for a setting that actually breaks the build.
+quartus_all:
+	@for m in $(QUARTUS_MODS); do $(MAKE) --no-print-directory quartus MOD=$$m || exit 1; done
+
+quartus_report:
+	@printf '%-12s ' "$(MOD)"
+	@alm=$$(grep -m1 'Logic utilization (in ALMs)' $(QDIR)/output_files/$(MOD).fit.rpt 2>/dev/null | sed 's/.*; *\([0-9,]*\) *\/.*/\1/'); \
+	 reg=$$(grep -m1 'Total registers' $(QDIR)/output_files/$(MOD).fit.rpt 2>/dev/null | sed 's/.*; *\([0-9,]*\) *;.*/\1/'); \
+	 m10k=$$(grep -m1 'Total block memory bits' $(QDIR)/output_files/$(MOD).fit.rpt 2>/dev/null | sed 's/.*; *\([0-9,]*\) *\/.*/\1/'); \
+	 dsp=$$(grep -m1 'Total DSP Blocks' $(QDIR)/output_files/$(MOD).fit.rpt 2>/dev/null | sed 's/.*; *\([0-9,]*\) *\/.*/\1/'); \
+	 fmax=$$(grep -A3 '; Fmax  *; Restricted Fmax' $(QDIR)/output_files/$(MOD).sta.rpt 2>/dev/null | grep -m1 -oE '^; [0-9]+\.[0-9]+ MHz' | grep -oE '[0-9.]+'); \
+	 mlab=$$(grep -m1 'Total MLAB memory bits' $(QDIR)/output_files/$(MOD).map.rpt 2>/dev/null | sed 's/.*; *\([0-9,]*\) *;.*/\1/'); \
+	 printf 'ALM %-7s reg %-6s MLABbits %-6s DSP %-3s Fmax %s\n' "$${alm:-?}" "$${reg:-?}" "$${mlab:-0}" "$${dsp:-?}" "$${fmax:-comb (no clock)}"
 
 # --------------------------------------------------------------------- clean
 

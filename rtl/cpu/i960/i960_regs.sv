@@ -53,6 +53,22 @@
 // single read port: Quartus 17.0 will not infer a two-write-port memory, and
 // the array is never cleared in reset.
 //
+// MEASURED, and the first attempt failed. Written with the array read directly
+// inside the control FSM, Quartus reported:
+//
+//   Info (276009): RAM logic "rcache" is uninferred due to unsupported
+//                  read-during-write behavior
+//   Total MLAB memory bits : 0
+//
+// It became flip-flops instead: 3,303 registers and 2,355 ALM for the module.
+// Simulation cannot see this — Verilator has no opinion about where storage
+// lands — and it is why the standing rule is to watch the register count, not
+// just the memory count. The array now has a dedicated write port and a
+// dedicated registered read port driven by their own address signals, which is
+// the pattern the tool infers. The read latency that buys costs one extra
+// cycle per row on the fill and flush paths, which is why those states are
+// split into issue and capture.
+//
 // ---------------------------------------------------------------------------
 // Cache depth is architecturally invisible and memory-visible.
 //
@@ -111,8 +127,21 @@ module i960_regs #(
   logic [31:0] glb [0:15];
 
   // Four saved frames, four words per row. MLAB rather than M10K — see header.
+  // Dedicated ports: one write, one registered read, each with its own address.
+  // Reading the array inside the control FSM is what defeated inference.
   (* ramstyle = "MLAB" *) logic [W*32-1:0] rcache [0:CACHE_SZ-1];
   logic [31:0] rcache_frame_addr [0:CACHE_FRAMES-1];
+
+  logic            rc_we;
+  logic [3:0]      rc_waddr;
+  logic [3:0]      rc_raddr;
+  logic [W*32-1:0] rc_wdata;
+  logic [W*32-1:0] rc_q;
+
+  always_ff @(posedge clk) begin
+    if (rc_we) rcache[rc_waddr] <= rc_wdata;
+    rc_q <= rcache[rc_raddr];
+  end
 
   // Depth counter, exactly MAME's m_rcache_pos. Signed, because do_ret_0
   // decrements first and tests for < 0 to detect the post-flushreg case.
@@ -132,8 +161,10 @@ module i960_regs #(
     S_CALL_SAVE,     // current locals -> cache slot, or -> memory if too deep
     S_CALL_FIN,
     S_RET_LOAD,      // cache slot -> current locals, or memory -> locals
+    S_RET_CAP,       // registered cache read lands here
     S_RET_FIN,
-    S_FLUSH          // cached frames -> memory
+    S_FLUSH_RD,      // issue a cache row read
+    S_FLUSH_WR       // drive its four words out to memory
   } state_e;
 
   state_e      state;
@@ -152,8 +183,26 @@ module i960_regs #(
   // concatenation rather than a multiply.
   logic [3:0]  rc_wr_idx;
   logic [3:0]  rc_fl_idx;
+  logic [1:0]  fl_word;      // word within the row being flushed
   assign rc_wr_idx = {slot, idx[3:2]};
   assign rc_fl_idx = {fl_frame[1:0], idx[3:2]};
+
+  // Memory port drive. Combinational from state so the array block above stays
+  // a plain inferrable template with nothing conditional inside it.
+  always_comb begin
+    rc_we    = (state == S_CALL_SAVE) && !to_memory;
+    rc_waddr = rc_wr_idx;
+    rc_wdata = {loc[{idx[3:2], 2'd3}], loc[{idx[3:2], 2'd2}],
+                loc[{idx[3:2], 2'd1}], loc[{idx[3:2], 2'd0}]};
+    // The read address must be HELD for as long as rc_q is being consumed, not
+    // just during the cycle that issues it: the array registers rc_q every
+    // cycle, so letting the address move mid-row silently replaces the data
+    // under the flush. That produced correct addresses carrying the wrong
+    // frame's words — the exact shape of bug the memory-stream comparison is
+    // there to catch.
+    rc_raddr = (state == S_FLUSH_RD || state == S_FLUSH_WR) ? rc_fl_idx
+                                                            : rc_wr_idx;
+  end
 
   assign busy = (state != S_IDLE);
 
@@ -172,6 +221,7 @@ module i960_regs #(
       rcache_pos    <= 32'sd0;
       idx           <= 4'd0;
       fl_frame      <= 3'd0;
+      fl_word       <= 2'd0;
       mem_req       <= 1'b0;
       mem_we        <= 1'b0;
       next_ip_valid <= 1'b0;
@@ -222,7 +272,7 @@ module i960_regs #(
             // every cached frame out and resets the depth to zero.
             fl_frame <= 3'd0;
             idx      <= 4'd0;
-            state    <= (rcache_pos > 32'sd0) ? S_FLUSH : S_IDLE;
+            state    <= (rcache_pos > 32'sd0) ? S_FLUSH_RD : S_IDLE;
             if (rcache_pos <= 32'sd0) rcache_pos <= 32'sd0;
           end
         end
@@ -242,9 +292,8 @@ module i960_regs #(
             end
           end else begin
             // Into the cache, four words per cycle.
-            rcache[rc_wr_idx] <=
-              {loc[{idx[3:2], 2'd3}], loc[{idx[3:2], 2'd2}],
-               loc[{idx[3:2], 2'd1}], loc[{idx[3:2], 2'd0}]};
+            // rc_we / rc_waddr / rc_wdata are driven above; nothing to do here
+            // but record the frame address and advance.
             rcache_frame_addr[slot] <= spill_base;
             if (idx[3:2] == 2'd3) state <= S_CALL_FIN;
             else                  idx   <= idx + 4'd4;
@@ -279,12 +328,16 @@ module i960_regs #(
               else              idx   <= idx + 4'd1;
             end
           end else begin
-            {loc[{idx[3:2], 2'd3}], loc[{idx[3:2], 2'd2}],
-             loc[{idx[3:2], 2'd1}], loc[{idx[3:2], 2'd0}]} <=
-              rcache[rc_wr_idx];
-            if (idx[3:2] == 2'd3) state <= S_RET_FIN;
-            else                  idx   <= idx + 4'd4;
+            // Address is presented this cycle; the registered read lands next.
+            state <= S_RET_CAP;
           end
+        end
+
+        S_RET_CAP: begin
+          {loc[{idx[3:2], 2'd3}], loc[{idx[3:2], 2'd2}],
+           loc[{idx[3:2], 2'd1}], loc[{idx[3:2], 2'd0}]} <= rc_q;
+          if (idx[3:2] == 2'd3) state <= S_RET_FIN;
+          else begin idx <= idx + 4'd4; state <= S_RET_LOAD; end
         end
 
         S_RET_FIN: begin
@@ -294,24 +347,36 @@ module i960_regs #(
         end
 
         // ----------------------------------------------------------- flush
-        S_FLUSH: begin
+        S_FLUSH_RD: begin
+          // Address presented; rc_q is valid next cycle.
+          fl_word <= 2'd0;
+          state   <= S_FLUSH_WR;
+        end
+
+        S_FLUSH_WR: begin
           mem_req   <= 1'b1;
           mem_we    <= 1'b1;
-          mem_addr  <= rcache_frame_addr[fl_frame[1:0]] + {26'd0, idx, 2'b00};
-          mem_wdata <= rcache[rc_fl_idx][{idx[1:0], 5'd0} +: 32];
+          mem_addr  <= rcache_frame_addr[fl_frame[1:0]] + {26'd0, idx[3:2], fl_word, 2'b00};
+          mem_wdata <= rc_q[{fl_word, 5'd0} +: 32];
           if (mem_ack) begin
             mem_req <= 1'b0;
-            if (idx == 4'd15) begin
-              idx <= 4'd0;
-              if ($signed({29'd0, fl_frame}) + 32'sd1 >= rcache_pos ||
-                  fl_frame == 3'(CACHE_FRAMES - 1)) begin
-                rcache_pos <= 32'sd0;
-                state      <= S_IDLE;
+            if (fl_word == 2'd3) begin
+              if (idx[3:2] == 2'd3) begin
+                idx <= 4'd0;
+                if ($signed({29'd0, fl_frame}) + 32'sd1 >= rcache_pos ||
+                    fl_frame == 3'(CACHE_FRAMES - 1)) begin
+                  rcache_pos <= 32'sd0;
+                  state      <= S_IDLE;
+                end else begin
+                  fl_frame <= fl_frame + 3'd1;
+                  state    <= S_FLUSH_RD;
+                end
               end else begin
-                fl_frame <= fl_frame + 3'd1;
+                idx   <= idx + 4'd4;
+                state <= S_FLUSH_RD;
               end
             end else begin
-              idx <= idx + 4'd1;
+              fl_word <= fl_word + 2'd1;
             end
           end
         end
