@@ -337,7 +337,52 @@ that makes criterion 2 meaningful for FP.
 
 ---
 
-## 9. Risks specific to this milestone
+## 9. Verification status
+
+### Step 1 — decoder. Done.
+
+`rtl/cpu/i960/i960_dec.sv` against `sim/i960/i960_dec_ref.h`, three passes:
+exhaustive over opcode byte x MEMB mode x sub-format (32,768 vectors), directed
+at the encoding's real boundaries (86), and random.
+
+| Run | Vectors | Field checks | Mismatches |
+|---|---|---|---|
+| seed 1 | 10^7 | 200,657,080 | 0 |
+| seeds 2, 7, 12345 | 10^8 each | 2,000,657,080 each | 0 |
+
+Twenty fields compared on every vector, not just the field under test — a
+decoder that answers correctly and corrupts a neighbour is still broken.
+
+### What that does not prove
+
+**The reference and the RTL are two expressions by the same author from the same
+source.** A misreading of `i960.cpp` appears in both and the fuzz agrees
+enthusiastically. Six billion field checks measure internal consistency, not
+correctness against Intel's encoding.
+
+The partial mitigation is a genuinely independent cross-check: `i960dis.cpp`'s
+`mnemonic[256]` table was written separately from `i960.cpp`'s `execute_op`
+dispatch, and our opcode set was built from the dispatch. Comparing them:
+
+- **84 opcodes claimed implemented; none unknown to the disassembler.** No
+  opcode was invented.
+- **Zero format disagreements** across all 84. The range boundaries at `0x20`,
+  `0x40` and `0x80` agree with the table's per-entry format column.
+- 11 opcodes the disassembler knows and we deliberately trap: `cmpibno` (0x38),
+  `cmpibo` (0x3f), eight REG sub-blocks, and `dcinva` (0xad). This is the
+  architectural set exceeding the implemented set, which is §1's stated position
+  rather than a gap.
+
+**Still unverified: the field positions.** Bit numbers for `src1`/`src2`/`dst`
+literal selects, the MEMB mode and scale fields, and the two displacement widths
+all come from `i960.cpp` alone. The disassembler cannot check them because it
+was used as the source for none of them. Closing this needs either the i960KB
+Programmer's Reference Manual (270567-001, cited in `i960dis.cpp`'s own header)
+or real Model 2A program ROM decoding to sensible instruction sequences. **Until
+one of those happens, treat field positions as transcribed rather than
+verified.**
+
+## 10. Risks specific to this milestone
 
 **No pipelining rehearsal.** M2-F was the cheap way to learn whether a pipelined
 CPU of this class closes timing on this part, on a 3,000 ALM block with an

@@ -53,7 +53,13 @@ c5_pin_model_dump.txt
 PLLJ_PLLSPE_INFO.txt
 
 # ---- Simulation output ----
-obj_dir/
+# Every Verilator build directory. One per module, named obj_<module> by the
+# Makefile, so the pattern must be a wildcard — plain `obj_dir/` matches only
+# Verilator's default and silently misses obj_i960_dec/ and every sibling.
+obj_*/
+*.o
+*.d
+*.a
 *.vcd
 *.fst
 *.wlf
