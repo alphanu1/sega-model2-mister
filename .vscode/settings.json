@@ -1,0 +1,55 @@
+{
+  // Six git repositories live under this workspace and only one of them is
+  // this project. VS Code auto-detects every nested .git and lists them all in
+  // Source Control, which is worse than noise: the panel silently switches
+  // which repo it is showing, so Model 1's commits appear under a Model 2
+  // workspace and read as contamination when nothing has crossed over.
+  //
+  //   tools/model1-ref    read-only mirror of the Model 1 core, cloned from
+  //                       the LOCAL repo. Source of portable RTL. Never edited.
+  //   third_party/*       upstream clones vendored by tools/bootstrap.sh.
+  //                       Reference material with four different licences, one
+  //                       of which forbids copying outright.
+  //
+  // MAME additionally trips the "too many active changes" warning. Its index
+  // carries 31,442 entries while only 27 files are on disk, the rest marked
+  // skip-worktree by the --no-cone sparse checkout. That is intentional — it is
+  // what keeps the clone small instead of several GB — but VS Code counts index
+  // entries rather than honouring skip-worktree and hits its 10,000 limit.
+  //
+  // Listed explicitly rather than using git.autoRepositoryDetection, because
+  // reading third_party/mame/src/devices/cpu/i960/ is routine work during P1
+  // and the "openEditors" mode would re-activate the repo the moment those
+  // files are opened.
+  "git.ignoredRepositories": [
+    "tools/model1-ref",
+    "third_party/mame",
+    "third_party/template",
+    "third_party/fx68k",
+    "third_party/n64",
+    "third_party/saturn"
+  ],
+
+  // Keep the file watcher off ~300 MB of vendored source and its history.
+  // Deliberately NOT added to search.exclude: MAME is the oracle for every
+  // block in this core and grepping it is a daily activity.
+  "files.watcherExclude": {
+    "**/third_party/**": true,
+    "**/tools/model1-ref/**": true,
+    "**/obj_*/**": true,
+    "**/db/**": true,
+    "**/incremental_db/**": true,
+    "**/output_files/**": true
+  },
+
+  "[systemverilog]": {
+    "editor.insertSpaces": true,
+    "editor.tabSize": 2
+  },
+  "[verilog]": {
+    "editor.insertSpaces": true,
+    "editor.tabSize": 2
+  },
+  "files.trimTrailingWhitespace": true,
+  "files.insertFinalNewline": true
+}

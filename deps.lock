@@ -1,0 +1,7 @@
+# Pinned upstream revisions. Regenerate with tools/bootstrap.sh --update
+# 2026-08-16T18:03:15Z
+template       MiSTer-devel/Template_MiSTer         0874acdf053ff42c8dd179685d4ef95f577ce429
+fx68k          ijor/fx68k                           0602ee4627b10f301298f2673d826cdd6baa9327
+n64            MiSTer-devel/N64_MiSTer              adbf9b5d41bcc8b6dc3ad00821e2cd062847ab4f
+saturn         srg320/Saturn                        19ab08424136d5506bc1952d921be94d46930e02
+mame           mamedev/mame                         c690a9ed43fa84ffc05eb653d133cf063678e998

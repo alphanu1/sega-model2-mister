@@ -2,9 +2,14 @@
 CLAUDE.md
 
 # ---- Reference material, not part of this project ----
-# tools/model1-ref is a separate read-only clone of the Model 1 core, used as a
-# source of portable RTL. It has its own upstream and its own history.
-tools/
+# A separate read-only clone of the Model 1 core, used as a source of portable
+# RTL. It has its own upstream and its own history.
+tools/model1-ref/
+
+# Upstream dependencies, fetched by tools/bootstrap.sh and pinned in deps.lock.
+# Never vendored into the repository: licence terms differ per dependency and
+# one of them forbids copying outright.
+third_party/
 
 # ---- ROMs and ROM-derived data ----
 # .mra files are fine (they describe a layout); the bytes are not.
@@ -60,5 +65,10 @@ verilator.log
 *.swp
 *~
 .DS_Store
-.vscode/
 .idea/
+
+# Editor config IS tracked — it carries the reasoning for why six nested git
+# repositories are hidden from Source Control. Everything else under .vscode is
+# personal state.
+.vscode/*
+!.vscode/settings.json
