@@ -433,6 +433,44 @@ for comparing it. A seventh mutation — dropping the `fp_masked` use entirely �
 never reached the test: lint rejected it as an unused signal, which is why
 UNUSEDSIGNAL is not suppressed.
 
+### Step 4 — addressing and load/store. Done.
+
+Two modules, both combinational.
+
+`rtl/cpu/i960/i960_agu.sv` — MEMA and the seven MEMB modes. The port is 14 bits,
+not 32: everything above bit 13 selects registers the *caller* fetches, and
+passing the whole word would leave 18 bits unread.
+
+`rtl/cpu/i960/i960_ldst.sv` — width, sign versus zero extension, byte-lane
+placement and store byte enables. The signed/unsigned split is a table rather
+than an arithmetic expression on opcode bit 6: `ldob`/`ldib` and `ldos`/`ldis`
+differ only in that bit, which is exactly the kind of thing that folds into a
+neat expression and is subtly wrong.
+
+| Module | Coverage | Field checks | Mismatches |
+|---|---|---|---|
+| `i960_agu` | structural + directed + 5e6 random | 14,690,983 | 0 |
+| `i960_agu` | 5e7 random x 3 seeds | ~1.47e8 each | 0 |
+| `i960_ldst` | **exhaustive** 256 opcodes x 4 offsets x patterns, + 2e6 random | 19,041,842 | 0 |
+
+Directed coverage targets the three things that read wrongly in the reference:
+MEMB mode 5 adds the **post-increment** IP (an off-by-four is a silently wrong
+target, not a crash); the MEMA offset is **zero-extended**, not signed; and a
+scaled index discards bits shifted past 32.
+
+**Unaligned access is deliberately not handled here.** The reference splits an
+unaligned word or dword into byte accesses assembled little-endian, which needs
+several bus cycles. `i960_ldst` raises `unaligned` and leaves the sequencing to
+the bus unit in step 5.
+
+**A harness bug masqueraded as an RTL bug**, and it is worth recording because
+the symptom was convincing: 2,811,643 mismatches, all showing `ea` as zero. The
+cause was an edit that inserted a `//` comment mid-line in the testbench,
+swallowing the two operand assignments that followed it on the same line. The
+RTL was correct throughout. **When a brand-new harness reports mass failure on
+its first run, suspect the harness before the design** — the reverse is the
+common case only once the harness has passed something.
+
 ### What that does not prove
 
 **The reference and the RTL are two expressions by the same author from the same

@@ -36,6 +36,8 @@ VBUILD  = $(VERILATOR) --cc --exe --build -j 0 $(VFLAGS)
 DEC_RTL  := $(I960)/i960_dec.sv
 ALU_RTL  := $(I960)/i960_alu.sv
 REG_RTL  := $(I960)/i960_regs.sv
+AGU_RTL  := $(I960)/i960_agu.sv
+LST_RTL  := $(I960)/i960_ldst.sv
 
 TEST_ARGS := $(if $(RANDOM),+random=$(RANDOM),) $(if $(SEED),+seed=$(SEED),)
 
@@ -44,8 +46,8 @@ all: lint synth test
 
 # --------------------------------------------------------------------- lint
 
-.PHONY: lint lint_i960_dec lint_i960_alu lint_i960_regs
-lint: lint_i960_dec lint_i960_alu lint_i960_regs
+.PHONY: lint lint_i960_dec lint_i960_alu lint_i960_regs lint_i960_agu lint_i960_ldst
+lint: lint_i960_dec lint_i960_alu lint_i960_regs lint_i960_agu lint_i960_ldst
 
 lint_i960_dec:
 	@echo "== lint i960_dec"
@@ -58,6 +60,14 @@ lint_i960_alu:
 lint_i960_regs:
 	@echo "== lint i960_regs"
 	$(VERILATOR) --lint-only $(VFLAGS) --top-module i960_regs $(REG_RTL)
+
+lint_i960_agu:
+	@echo "== lint i960_agu"
+	$(VERILATOR) --lint-only $(VFLAGS) --top-module i960_agu $(AGU_RTL)
+
+lint_i960_ldst:
+	@echo "== lint i960_ldst"
+	$(VERILATOR) --lint-only $(VFLAGS) --top-module i960_ldst $(LST_RTL)
 
 # --------------------------------------------------------------------- synth
 #
@@ -74,8 +84,8 @@ lint_i960_regs:
 # inference is involved — Model 1 measured fp_mul at 1312 LUT6 under yosys and
 # 144 ALM in Quartus, because the multiplier left the fabric entirely.
 
-.PHONY: synth synth_i960_dec synth_i960_alu synth_i960_regs
-synth: synth_i960_dec synth_i960_alu synth_i960_regs
+.PHONY: synth synth_i960_dec synth_i960_alu synth_i960_regs synth_i960_agu synth_i960_ldst
+synth: synth_i960_dec synth_i960_alu synth_i960_regs synth_i960_agu synth_i960_ldst
 
 synth_i960_dec:
 	@echo "== synth i960_dec (yosys portability check)"
@@ -92,10 +102,20 @@ synth_i960_regs:
 	@$(YOSYS) -p "read_verilog -sv $(REG_RTL); hierarchy -top i960_regs; proc; opt; techmap; opt; abc -lut 6; opt; stat" 2>/dev/null \
 	  | sed -n '/Local Count/,/^$$/p' | grep -E 'cells|lut|memor' || true
 
+synth_i960_agu:
+	@echo "== synth i960_agu (yosys portability check)"
+	@$(YOSYS) -p "read_verilog -sv $(AGU_RTL); hierarchy -top i960_agu; proc; opt; techmap; opt; abc -lut 6; opt; stat" 2>/dev/null \
+	  | sed -n '/Local Count/,/^$$/p' | grep -E 'cells|lut|memor' || true
+
+synth_i960_ldst:
+	@echo "== synth i960_ldst (yosys portability check)"
+	@$(YOSYS) -p "read_verilog -sv $(LST_RTL); hierarchy -top i960_ldst; proc; opt; techmap; opt; abc -lut 6; opt; stat" 2>/dev/null \
+	  | sed -n '/Local Count/,/^$$/p' | grep -E 'cells|lut|memor' || true
+
 # --------------------------------------------------------------------- tests
 
-.PHONY: test test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs
-test: test_i960_dec test_i960_alu test_i960_regs
+.PHONY: test test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_agu test_i960_ldst
+test: test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst
 
 test_i960_dec: obj_i960_dec/Vi960_dec
 	@echo "== test i960_dec"
@@ -128,6 +148,22 @@ test_i960_regs: obj_i960_regs/Vi960_regs
 obj_i960_regs/Vi960_regs: $(REG_RTL) $(TB)/tb_i960_regs.cpp $(TB)/i960_regs_ref.h
 	$(VBUILD) --top-module i960_regs -CFLAGS "-O2 -I../$(TB)" \
 	  --Mdir obj_i960_regs -o Vi960_regs $(REG_RTL) $(TB)/tb_i960_regs.cpp
+
+test_i960_agu: obj_i960_agu/Vi960_agu
+	@echo "== test i960_agu"
+	./obj_i960_agu/Vi960_agu $(TEST_ARGS)
+
+obj_i960_agu/Vi960_agu: $(AGU_RTL) $(TB)/tb_i960_agu.cpp $(TB)/i960_agu_ref.h
+	$(VBUILD) --top-module i960_agu -CFLAGS "-O2 -I../$(TB)" \
+	  --Mdir obj_i960_agu -o Vi960_agu $(AGU_RTL) $(TB)/tb_i960_agu.cpp
+
+test_i960_ldst: obj_i960_ldst/Vi960_ldst
+	@echo "== test i960_ldst"
+	./obj_i960_ldst/Vi960_ldst $(TEST_ARGS)
+
+obj_i960_ldst/Vi960_ldst: $(LST_RTL) $(TB)/tb_i960_ldst.cpp $(TB)/i960_ldst_ref.h
+	$(VBUILD) --top-module i960_ldst -CFLAGS "-O2 -I../$(TB)" \
+	  --Mdir obj_i960_ldst -o Vi960_ldst $(LST_RTL) $(TB)/tb_i960_ldst.cpp
 
 # ------------------------------------------------------------------- quartus
 #
