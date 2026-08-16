@@ -41,6 +41,9 @@ LST_RTL  := $(I960)/i960_ldst.sv
 LSU_RTL  := $(I960)/i960_lsu.sv
 MAP_RTL  := $(I960)/i960_memmap.sv
 ICA_RTL  := $(I960)/i960_icache.sv
+# The assembled CPU. Order matters only for readability; Quartus resolves by name.
+TOP_RTL  := $(DEC_RTL) $(ALU_RTL) $(REG_RTL) $(AGU_RTL) $(LST_RTL) \
+            $(LSU_RTL) $(MAP_RTL) $(ICA_RTL) $(I960)/i960_top.sv
 
 TEST_ARGS := $(if $(RANDOM),+random=$(RANDOM),) $(if $(SEED),+seed=$(SEED),)
 
@@ -203,7 +206,7 @@ obj_i960_icache/Vi960_icache: $(ICA_RTL) $(TB)/tb_i960_icache.cpp
 # differs between versions. Re-run map, not just fit — a fit-only rerun reuses
 # the previous netlist and reports success for a setting that breaks the build.
 
-.PHONY: quartus quartus_all quartus_report
+.PHONY: quartus quartus_all quartus_report quartus_paths
 MOD  ?= i960_alu
 QDIR := build/quartus/$(MOD)
 
@@ -215,8 +218,9 @@ SRCS_i960_ldst := $(LST_RTL)
 SRCS_i960_lsu  := $(LSU_RTL)
 SRCS_i960_memmap := $(MAP_RTL)
 SRCS_i960_icache := $(ICA_RTL)
+SRCS_i960_top    := $(TOP_RTL)
 
-QUARTUS_MODS := i960_dec i960_alu i960_regs i960_agu i960_ldst i960_lsu i960_memmap i960_icache
+QUARTUS_MODS := i960_dec i960_alu i960_regs i960_agu i960_ldst i960_lsu i960_memmap i960_icache i960_top
 
 # One module, real device, real toolchain. This is the only thing that gives
 # ALM, M10K and DSP — yosys gives LUT6, which is an indicator and not the same
@@ -241,6 +245,15 @@ quartus:
 # netlist and reports success for a setting that actually breaks the build.
 quartus_all:
 	@for m in $(QUARTUS_MODS); do $(MAKE) --no-print-directory quartus MOD=$$m || exit 1; done
+
+# Where the critical path actually runs. The STA summary gives slack and Fmax
+# but not endpoints, and Model 1's M0 recorded attributing a miss to the wrong
+# stage once — retiming there would have cost a pipeline stage and moved Fmax by
+# nothing. Run this before touching anything for timing.
+quartus_paths:
+	@test -d $(QDIR) || { echo "run 'make quartus MOD=$(MOD)' first"; exit 1; }
+	@cd $(QDIR) && $(QUARTUS)/quartus_sta -t ../../../quartus/report_timing.tcl $(MOD) 2>&1 \
+	  | grep -E 'SLACK|FROM|TO ' | head -12
 
 quartus_report:
 	@printf '%-12s ' "$(MOD)"

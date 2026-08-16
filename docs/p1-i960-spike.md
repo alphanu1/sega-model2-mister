@@ -631,6 +631,59 @@ and another rejects — module-header package import, enum-typed port, and
 indexing a part-select — which is the whole argument for `make synth` and for
 running the fitter early rather than at the end.
 
+### Integration — the assembled design, and the number that matters
+
+`rtl/cpu/i960/i960_top.sv` wires all eight blocks together behind one arbitrated
+bus port, driven by a multi-cycle sequencer. Every port is connected and nothing
+dangles, so the fitter sees representative loading.
+
+**It is not the design §4.4 requires.** That section is unambiguous that a
+multi-cycle FSM does not close timing. This sequencer is multi-cycle; its job is
+to connect the blocks, expose the assembled critical path, and be the skeleton
+the pipeline replaces.
+
+| | ALM | Registers | MLAB | Fmax |
+|---|---|---|---|---|
+| sum of the eight parts | 3,736 | 2,310 | 2,048 | 84.97 - 142.57 MHz |
+| **assembled `i960_top`** | **3,155** | 1,915 | 2,048 | **43.91 MHz** |
+
+Two results, and the second is the important one.
+
+**Area went down by 581 ALM on assembly.** The fitter optimises across module
+boundaries and removes what nothing consumes — including the duplicated data
+path noted below. A sum of per-module figures is therefore an over-estimate
+here, not the under-estimate one might assume.
+
+**Fmax roughly halved against the slowest individual block.** This is Model 1's
+M0 finding reproduced exactly: "no individual block is near this — the critical
+path is created by assembly". Per-module Fmax cannot show it, because in
+isolation the path terminates at virtual pins with nothing to retime against.
+
+`make quartus_paths` names the endpoints rather than guessing:
+
+```
+SLACK 17.226   FROM i960_regs:u_regs|loc[10][3]   TO wd[9]
+```
+
+Register-file read → operand mux → ALU → writeback register, all combinational
+inside one FSM state. **That is precisely where a pipeline stage boundary goes**,
+which turns §4.4 from an argument into a measurement: the requirement to
+pipeline is now empirical.
+
+Sanity on throughput, and it agrees with §4.4's table. At 43.91 MHz with this
+sequencer's ~6 cycles per instruction, the core retires ~7.3 M instr/s against
+the 12.5-16.7 M/s a 25 MHz i960 needs — roughly half, from the direction §4.4
+predicted.
+
+#### A duplicated data path, found by integration
+
+Lint at the top level showed `ls_ldres`, `ls_stdata` and `ls_stbe` with no
+consumer. That is not dead-signal noise: `i960_lsu` performs its own sign
+extension and lane placement, because the unaligned path has to assemble bytes
+itself, which left `i960_ldst`'s data path with nothing to drive. **One of the
+two should own it.** Recorded rather than suppressed; the fitter already deleted
+it, which is part of why assembly came in smaller.
+
 ### What that does not prove
 
 **The reference and the RTL are two expressions by the same author from the same
