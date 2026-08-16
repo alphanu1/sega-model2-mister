@@ -129,7 +129,15 @@ int main(int argc, char **argv) {
     for (uint64_t k = 0; k < steps; ++k) {
       const int cls = int(rng() % 10);
       uint32_t insn;
-      if (cls < 5) {                                   // REG ALU
+      if (cls == 9) {                                  // mul / div / rem / mod
+        const uint32_t blk = (rng() & 1) ? 0x70u : 0x74u;
+        static const uint8_t U[] = {0x1,0x8,0xb}, S[] = {0x1,0x8,0x9,0xb};
+        const uint32_t o2 = (blk == 0x70) ? U[rng()%3] : S[rng()%4];
+        // src1 is the divisor. A literal keeps it non-zero, which the
+        // reference leaves undefined for every opcode except divo.
+        insn = (blk << 24) | ((rng() % 32) << 19) | ((rng() % 32) << 14)
+             | (o2 << 7) | (1 + rng() % 31) | 0x0800;
+      } else if (cls < 5) {                            // REG ALU
         const uint32_t blk = 0x58 + (rng() % 4);
         uint32_t o2;
         if      (blk == 0x58) o2 = REG58[rng() % 15];
@@ -145,10 +153,10 @@ int main(int argc, char **argv) {
       } else if (cls < 9) {                            // cmpib<cc> / cmpob<cc>
         const uint32_t op = (rng() & 1) ? (0x31 + rng() % 6) : (0x39 + rng() % 6);
         insn = (op << 24) | ((rng() % 32) << 19) | ((rng() % 32) << 14) | 0x0008;
-      } else {                                         // bbc / bbs
+      } else if (cls < 9) {                            // bbc / bbs
         insn = (((rng() & 1) ? 0x37u : 0x30u) << 24)
              | ((rng() % 32) << 19) | ((rng() % 32) << 14) | 0x2008;
-      }
+      } else { insn = 0x5c0c0000u; }                   // unreachable filler
       prog.push_back(insn);
     }
     for (size_t k = 0; k < prog.size(); ++k) mem[uint32_t(k*4)] = prog[k];

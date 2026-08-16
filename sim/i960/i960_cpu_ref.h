@@ -19,6 +19,7 @@
 #include "i960_agu_ref.h"
 #include "i960_ldst_ref.h"
 #include "i960_regs_ref.h"
+#include "i960_muldiv_ref.h"
 
 namespace i960ref {
 
@@ -105,6 +106,14 @@ struct Cpu {
       case FMT_REG: {
         const uint32_t s1 = d.src1_lit ? d.src1 : rf.r[d.src1];
         const uint32_t s2 = d.src2_lit ? d.src2 : rf.r[d.src2];
+        // 0x70 and 0x74 are multi-cycle and bypass the ALU. 0x67 writes a
+        // register pair and is not wired yet, so it traps on both sides.
+        const MdOut m = i960ref::muldiv(d.op, d.op2, s1, s2, 0);
+        if (m.valid && d.op != 0x67) {
+          rf.r[d.srcdst] = m.lo;
+          IP = ip_next;
+          break;
+        }
         const AluOut a = i960ref::alu(d.op, d.op2, s1, s2, AC);
         if (!a.valid) { trapped = true; trap_op = d.op; break; }
         AC = a.ac;

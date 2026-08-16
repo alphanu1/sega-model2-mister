@@ -691,17 +691,16 @@ COBR fix:
 
 | | mnemonics | |
 |---|---|---|
-| executed | **88** | 55% |
-| traps correctly (`fault<cc>`) | 8 | 5% |
-| **absent** | **63** | **40%** |
+| executed | **94** | 59% |
+| traps correctly (`fault<cc>`, `emul`/`ediv`) | 10 | 6% |
+| **absent** | **55** | **35%** |
 
 Absent, by cost driver:
 
 | mnemonics | block |
 |---|---|
 | **38** | **the entire FPU** — transcendental, conversion/move, arithmetic |
-| 6 | integer multiply, remainder, divide |
-| 6 | `emul`, `ediv`, conversions, `scalerl` |
+| 6 | `emul`, `ediv`, conversions, `scalerl` — pair writes, see below |
 | 5 | `spanbit`, `scanbit`, `dmovt`, `modac`, `modpc` |
 | 4 | `mov`, `movl`, `movt`, `movq` |
 | 2 | `calls`, `flushreg` |
@@ -711,13 +710,12 @@ Projecting from the study's own per-block figures:
 
 | | ALM |
 |---|---|
-| assembled today | 3,174 |
-| integer mul/rem/div, `emul`/`ediv` — will claim DSP blocks | +400 .. 800 |
+| assembled today | 3,521 |
 | `mov` family, `spanbit`, `modac`, `calls`, `synmov` | +300 .. 600 |
 | `fault<cc>`, fault handling, interrupts | +200 .. 500 |
 | pipeline: hazards, forwarding, stalls | +1,500 .. 3,000 |
 | **FPU, 38 mnemonics** | **+2,500 .. 6,000** |
-| **projected complete i960KB** | **8,074 .. 14,074** |
+| **projected complete i960KB** | **8,021 .. 13,621** |
 | study §5.2 estimate | 7,000 .. 13,500 |
 
 The projection straddles the study's range and overshoots its ceiling slightly.
@@ -730,8 +728,8 @@ the core lands optimistically. So:
 
 | i960 lands at | renderer may use | against its 15,000-25,000 estimate |
 |---|---|---|
-| 8,074 (best) | 16,935 | fits if the renderer is near its floor |
-| 14,074 (worst) | 10,935 | **below the renderer's floor — does not fit** |
+| 8,021 (best) | 16,988 | fits if the renderer is near its floor |
+| 13,621 (worst) | 11,388 | **below the renderer's floor — does not fit** |
 
 **Both blocks have to land low.** An i960 at the top of its range leaves the
 renderer less than its most optimistic estimate, and that is before the M10K
@@ -904,6 +902,53 @@ multi-word load/store forms**, so the frame machinery and the LSU are verified
 by their own harnesses but not yet in situ. That is the next extension, and it
 matters: `call`/`ret` under a running program is where the register cache meets
 instructions in flight.
+
+### Integer multiply, divide, remainder and modulo
+
+`rtl/cpu/i960/i960_muldiv.sv` — `mulo`, `muli`, `remo`, `remi`, `modi`, `divo`,
+`divi`, plus `emul`/`ediv` in the module though not yet in the CPU.
+
+**372 ALM, 3 DSP blocks, 105.63 MHz.** The first DSP usage in the project: 3 of
+112, with Model 1 using 49, so this is the cheap direction. The multiplier is a
+plain `*` so Quartus infers DSP; the divider is iterative restoring division at
+a cycle per bit, which cannot use DSP but has budget — the reference charges 37
+cycles for a divide.
+
+Two simplifications that came out of writing it:
+
+- **One multiplier, not two.** The low 32 bits of an NxN product are identical
+  whether the operands are read as signed or unsigned, so `muli` and `mulo`
+  differ only in the half they discard and both take the low half. The
+  reference computes them with different casts, which is a C++ typing detail
+  rather than two operations.
+- **A 33-bit divider datapath, not 64.** The partial remainder is always less
+  than the divisor, so it fits in 32 bits plus one for the bit shifted in. A
+  64-bit comparator and subtractor would be three times the width for no reach.
+
+**A zero divisor is undefined in the reference for every opcode except `divo`**,
+which carries an explicit guard its author labelled `// HACK!`. `divi`, `remo`,
+`remi` and `modi` have none, so C++ leaves the result undefined. Resolved the
+way Model 1 resolved shift counts above 31: implement something deterministic —
+quotient 0, remainder = dividend, matching `divo` — and **constrain the fuzz
+rather than compare against undefined behaviour**. `divo` with a zero divisor
+*is* defined and is compared directly.
+
+**`modi` reads the sign of an overflowed product, and that is not a bug.** The
+reference tests `(src2*src1) < 0` on `int32_t`, so the condition is bit 31 of
+the *truncated* 32-bit product, not the true sign — the two differ whenever the
+multiply overflows, as `0x7fffffff * 3` does. Computing it in `int64_t` looks
+tidier and is wrong; the first version of the reference here did exactly that
+and the harness caught it.
+
+| Run | Checks | Mismatches |
+|---|---|---|
+| directed sign/truncation + op space + seed 1 | 648,648 | 0 |
+| seeds 2, 7, 12345 at 10^6 | ~3.23 M each | 0 |
+
+Integrated and lockstepped: the CPU is **3,521 ALM, 2 DSP, 44.66 MHz**, with
+163,881 retires per seed and zero mismatches. `emul` and `ediv` write a register
+pair, which needs the same sequencer support as `movl`/`movt`/`movq`, so `0x67`
+still traps on both sides rather than being half-wired.
 
 ### What that does not prove
 

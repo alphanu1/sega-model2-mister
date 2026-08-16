@@ -178,6 +178,29 @@ module i960_top (
     .result(alu_result), .result_we(alu_we), .ac_out(alu_ac), .valid(alu_valid)
   );
 
+  // ------------------------------------------------------- multiply/divide
+  //
+  // 0x70, 0x74 and 0x67 do not go through the ALU: they are multi-cycle and
+  // claim DSP blocks. `md_valid` is checked before `alu_valid` in execute,
+  // because the ALU reports these opcodes as invalid.
+
+  // md_pair and md_hi belong to emul and ediv, which write a register pair.
+  // Pair writes need the same sequencer support as movl/movt/movq and land in
+  // the same pass; 0x67 therefore still traps. Flagged rather than silently
+  // half-wired.
+  /* verilator lint_off UNUSEDSIGNAL */
+  logic        md_req, md_busy, md_done, md_valid, md_pair;
+  logic [31:0] md_lo, md_hi;
+  /* verilator lint_on UNUSEDSIGNAL */
+
+  i960_muldiv u_muldiv (
+    .clk(clk), .rst_n(rst_n),
+    .req(md_req), .op(d_op), .op2(d_op2),
+    .src1(src1_val), .src2(src2_val), .src2_hi(32'd0),
+    .busy(md_busy), .done(md_done),
+    .res_lo(md_lo), .res_hi(md_hi), .res_pair(md_pair), .valid(md_valid)
+  );
+
   // ---------------------------------------------------------------- AGU
 
   logic [31:0] ea;
@@ -294,7 +317,7 @@ module i960_top (
 
   typedef enum logic [3:0] {
     T_FETCH, T_FETCH_W, T_FETCH2, T_FETCH2_W, T_DECODE,
-    T_EXEC, T_MEM, T_MEM_W, T_WB, T_FRAME, T_TRAP
+    T_EXEC, T_MEM, T_MEM_W, T_MULDIV, T_WB, T_FRAME, T_TRAP
   } tstate_e;
 
   tstate_e ts;
@@ -324,6 +347,7 @@ module i960_top (
     end else begin
       ic_req   <= 1'b0;
       lsu_req  <= 1'b0;
+      md_req   <= 1'b0;
       we       <= 1'b0;
       rf_call  <= 1'b0;
       rf_ret   <= 1'b0;
@@ -426,7 +450,12 @@ module i960_top (
             end
 
             2'd2: begin                                   // REG
-              if (alu_valid) begin
+              if (md_valid && d_op != 8'h67) begin
+                // Multiply, divide, remainder and modulo. Multi-cycle and
+                // DSP-backed, so they leave the single-state execute path.
+                md_req <= 1'b1;
+                ts     <= T_MULDIV;
+              end else if (alu_valid) begin
                 ac <= alu_ac;
                 wa <= d_srcdst; wd <= alu_result; we <= alu_we;
                 ip <= ip_next;
@@ -449,6 +478,14 @@ module i960_top (
               end
             end
           endcase
+        end
+
+        T_MULDIV: if (md_done) begin
+          wa <= d_srcdst;
+          wd <= md_lo;
+          we <= 1'b1;
+          ip <= ip_next;
+          ts <= T_FETCH;
         end
 
         T_MEM_W: begin
