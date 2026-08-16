@@ -211,7 +211,7 @@ module i960_top (
   );
 
   logic [31:0] alu_or_ea;
-  assign alu_or_ea = (d_fmt == 2'd3) ? ea : (ip + d_disp);
+  assign alu_or_ea = (d_fmt == 2'd3) ? ea : (ip_next + d_disp);   // call target
 
   // ------------------------------------------------------------- load/store
 
@@ -437,12 +437,22 @@ module i960_top (
             ip_next  <= ip + 32'd4;
             pf_armed <= 1'b0;
             ts       <= T_DECODE;
-          end else begin
+          end else if (!ic_busy) begin
+            // Only issue when the cache is idle. A prediction that turns out
+            // wrong can leave a fill in flight for the line we no longer want;
+            // the cache ignores a request while filling, so issuing anyway
+            // meant T_FETCH_W then accepted the STALE fill's `valid` and
+            // executed the wrong instruction. Waiting costs the redirect a few
+            // cycles and is the difference between a prefetch and a bug.
             fetch_addr <= ip;
             ic_req     <= 1'b1;
             pf_valid   <= 1'b0;
             pf_armed   <= 1'b0;
             ts         <= T_FETCH_W;
+          end else begin
+            // Cache busy with a discarded prefetch — drop it and wait.
+            pf_valid <= 1'b0;
+            pf_armed <= 1'b0;
           end
         end
 
@@ -489,12 +499,17 @@ module i960_top (
           case (d_fmt)
             2'd0: begin                                   // CTRL
               case (d_op)
-                8'h08: begin ip <= ip + d_disp; ts <= T_FETCH; end        // b
+                // The reference advances m_IP past the instruction BEFORE
+                // execute_op runs, so `m_IP += get_disp()` is ip_next + disp,
+                // not ip + disp. Both this module and its reference model had
+                // `ip + d_disp` and agreed with each other, which is exactly
+                // why lockstep could not see it.
+                8'h08: begin ip <= ip_next + d_disp; ts <= T_FETCH; end   // b
                 8'h09: begin rf_call <= 1'b1;   ts <= T_FRAME; end        // call
                 8'h0a: begin rf_ret  <= 1'b1;   ts <= T_FRAME; end        // ret
                 8'h0b: begin                                              // bal
                   wa <= 5'd30; wd <= ip_next; we <= 1'b1;
-                  ip <= ip + d_disp; ts <= T_FETCH;
+                  ip <= ip_next + d_disp; ts <= T_FETCH;
                 end
                 default: begin
                   if (d_op[7:3] == 5'b00010) begin                        // b<cc>
@@ -502,8 +517,26 @@ module i960_top (
                     ip <= (|(ac[2:0] & d_op[2:0]))
                             ? ((ip_next + d_disp) & 32'hffff_fffc) : ip_next;
                     ts <= T_FETCH;
+                  end else if (d_op == 8'h18) begin                       // faultno
+                    // The reference makes this a conditional BRANCH, not a
+                    // fault: `if(!(m_AC & 7)) m_IP += get_disp(opcode);`.
+                    // Note it does not mask the IP, unlike bxx.
+                    ip <= (~|ac[2:0]) ? (ip_next + d_disp) : ip_next;
+                    ts <= T_FETCH;
+                  end else if (d_op[7:3] == 5'b00011) begin                // fault<cc>
+                    // fxx() reaches fatalerror when the condition holds:
+                    //   "Taking the fault on a FAULT insn not yet supported"
+                    // and does nothing at all when it does not. §1 scopes the
+                    // taken case out, so trap it and fall through otherwise.
+                    if (|(ac[2:0] & d_op[2:0])) begin
+                      trap_op <= d_op;
+                      ts      <= T_TRAP;
+                    end else begin
+                      ip <= ip_next;
+                      ts <= T_FETCH;
+                    end
                   end else begin
-                    trap_op <= d_op;                                      // fault<cc>
+                    trap_op <= d_op;
                     ts      <= T_TRAP;
                   end
                 end

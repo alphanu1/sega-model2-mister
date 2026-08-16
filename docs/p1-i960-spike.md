@@ -727,9 +727,9 @@ COBR fix:
 
 | | mnemonics | |
 |---|---|---|
-| executed | **108** | 66% |
-| traps correctly (`fault<cc>`, `modpc`, `calls`, `synmov`) | 12 | 7% |
-| **absent** | **43** | **26%** |
+| executed | **116** | 71% |
+| traps correctly (`fault<cc>` taken, `modpc`, `calls`, `synmov`) | 12 | 7% |
+| **absent** | **47** | **29%** |
 
 Counted from the source rather than by hand — `execute_op` dispatches **163**
 distinct mnemonics, not the 159 an earlier hand-tabulation in this document
@@ -750,7 +750,7 @@ Projecting from the study's own per-block figures:
 
 | | ALM |
 |---|---|
-| assembled today | 3,754 |
+| assembled today | 3,812 |
 | `mov` family, `spanbit`, `modac`, `calls`, `synmov` | +300 .. 600 |
 | `fault<cc>`, fault handling, interrupts | +200 .. 500 |
 | pipeline: hazards, forwarding, stalls | +1,500 .. 3,000 |
@@ -1167,6 +1167,58 @@ before instrumentation settled it.
   nothing. Two rounds of reasoning about timing were spent on RTL that did not
   contain the feature. **`pf_armed` counted zero the moment it was
   instrumented**, which is what should have been done first.
+
+### Faults, and two bugs the fault work exposed
+
+`faultno` and `fault<cc>` are implemented exactly as the reference has them,
+which is not what the names suggest. `faultno` (`0x18`) is a **conditional
+branch** — `if(!(m_AC & 7)) m_IP += get_disp(opcode);` — and does not mask the
+IP the way `bxx` does. `fault<cc>` (`0x19`-`0x1f`) does nothing when the
+condition is false and reaches `fatalerror` when it is true, so the taken case
+traps here, which §1 already scoped out.
+
+Adding them was eight mnemonics of easy work that exposed two harder problems.
+
+#### The prefetch had a redirect hazard
+
+Introducing frequent taken branches made the prefetch fail, and the failure was
+subtle: a prediction that turns out wrong can leave the I-cache **mid-fill for a
+line no longer wanted**. The cache ignores a request while filling, so the
+redirect was dropped — and `T_FETCH_W` then accepted the *stale* fill's `valid`
+and executed the wrong instruction.
+
+Fixed by only issuing a redirect when the cache is idle. The cost is a few
+cycles on a misprediction; the alternative is a CPU that silently executes the
+wrong instruction after a branch. Retires per run went from ~24,000 to ~64,000
+because the bug had been causing spurious traps.
+
+#### And a bug lockstep could never have caught
+
+`m_IP += 4` happens in the reference's fetch loop **before** `execute_op` runs,
+so inside it `m_IP` is already `ip_next`. Every CTRL displacement is therefore
+relative to `ip_next`:
+
+```
+case 0x08: m_IP += get_disp(opcode);   //  ip_next + (sext24 - 4)  ==  ip + sext24
+```
+
+The RTL computed `ip + d_disp`, four bytes short. **So did the reference model.**
+They agreed with each other, so no amount of lockstep would ever have reported
+it — `b`, `bal` and `call` were all wrong in both, in the same direction.
+
+This is R7 made concrete: *a suite that passes enormously proves the two things
+compared agree, not that either is right.* It was found by reading the fetch
+loop while chasing something else, and the fix is verified by now generating
+`b` and `bal` in the harness — which the previous test set never did, which is
+why the bug survived.
+
+#### A process failure, recorded
+
+During the bisect above, `make ... >/dev/null 2>&1` hid a compile error, and
+several runs afterwards reported PASS **from a stale binary**. It is the same
+shape as running Quartus before lint: a silenced tool reporting success for
+something that was never built. `make` output should not be discarded when its
+result is being used as evidence.
 
 ### What that does not prove
 

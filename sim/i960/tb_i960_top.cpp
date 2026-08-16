@@ -31,6 +31,7 @@ namespace {
 Vi960_top   *dut = nullptr;
 i960ref::Cpu ref;
 std::map<uint32_t,uint32_t> mem;
+uint32_t exec_ip = 0, exec_insn = 0;   // the instruction just retired
 uint64_t checks = 0, fails = 0, ticks = 0, retires = 0;
 const int MAX_REPORT = 10;
 
@@ -87,8 +88,9 @@ bool compare(uint64_t n) {
     if (dreg(i) != ref.rf.r[i]) {
       ok = false;
       if (fails < MAX_REPORT)
-        std::printf("  MISMATCH retire %llu  %-4s got=%08x want=%08x  (IP %08x)\n",
-                    (unsigned long long)n, rn(i), dreg(i), ref.rf.r[i], ref.IP);
+        std::printf("  MISMATCH retire %llu  %-4s got=%08x want=%08x  (IP %08x insn %08x)\n",
+                    (unsigned long long)n, rn(i), dreg(i), ref.rf.r[i],
+                    exec_ip, exec_insn);
       ++fails;
     }
   }
@@ -185,7 +187,7 @@ int main(int argc, char **argv) {
              | (o2 << 7) | (rng() % 32);
         if (rng() & 1) insn |= 0x0800;
         if (rng() & 1) insn |= 0x1000;
-      } else if (cls < 3) {                            // REG ALU
+      } else if (cls == 0) {                           // REG ALU
         const uint32_t blk = 0x58 + (rng() % 4);
         uint32_t o2;
         if      (blk == 0x58) o2 = REG58[rng() % 15];
@@ -196,6 +198,16 @@ int main(int argc, char **argv) {
              | (o2 << 7) | (rng() % 32);
         if (rng() & 1) insn |= 0x0800;                 // src1 literal
         if (rng() & 1) insn |= 0x1000;                 // src2 literal
+      } else if (cls == 1) {                           // b / bal
+        // Short forward displacements only, so the target stays inside the
+        // program rather than landing in unwritten memory every time.
+        const uint32_t d = 4u + 4u * (rng() % 6);
+        insn = (((rng() & 1) ? 0x0bu : 0x08u) << 24) | ((d + 4u) & 0x00ffffffu);
+      } else if (cls == 2) {                           // faultno / fault<cc>
+        // Only the not-taken path of fault<cc> is generated: the taken path is
+        // fatalerror in the reference and §1 scopes it out, so both sides trap
+        // and there is nothing to compare.
+        insn = ((0x18u + (rng() % 8)) << 24) | (rng() % 0x10000u & ~3u);
       } else if (cls == 4) {                           // test<cc>
         insn = ((0x20 + (rng() % 8)) << 24) | ((rng() % 32) << 19);
       } else if (cls == 3) {                           // cmpib<cc> / cmpob<cc>
@@ -235,6 +247,7 @@ int main(int argc, char **argv) {
       // one edge AFTER the IP updates. Sampling on the IP change alone compares
       // the architectural state one cycle early and reports a stale register.
       tick();
+      exec_ip = ref.IP; exec_insn = ref.rd(ref.IP);
       ref.step();
       if (ref.trapped) { ++trapped_progs; break; }
       ++retires; ++total_retires;

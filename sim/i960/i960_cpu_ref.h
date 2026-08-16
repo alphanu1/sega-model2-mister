@@ -67,18 +67,29 @@ struct Cpu {
     switch (d.fmt) {
       case FMT_CTRL:
         switch (d.op) {
-          case 0x08: IP += disp24(insn); break;                       // b
+          // m_IP is already past the instruction when execute_op runs, so
+          // every CTRL displacement is relative to ip_next, not ip.
+          case 0x08: IP = ip_next + disp24(insn); break;               // b
           case 0x09: {                                                // call
-            const uint32_t tgt = IP + disp24(insn);
+            const uint32_t tgt = ip_next + disp24(insn);
             rf.call(ip_next, tgt, 0, 0);
             IP = tgt;
             break;
           }
           case 0x0a: IP = rf.ret(); break;                            // ret
-          case 0x0b: rf.r[0x1e] = ip_next; IP += disp24(insn); break; // bal
+          case 0x0b: rf.r[0x1e] = ip_next; IP = ip_next + disp24(insn); break; // bal
           default:
             if (d.op >= 0x10 && d.op <= 0x17) { IP = ip_next; bxx(insn, d.op & 7); }
-            else { trapped = true; trap_op = d.op; }
+            else if (d.op == 0x18) {
+              // faultno is a conditional branch in the reference, and does not
+              // mask the IP the way bxx does.
+              IP = ip_next;
+              if (!(AC & 7)) IP += disp24(insn);
+            } else if (d.op >= 0x19 && d.op <= 0x1f) {
+              // fxx: fatalerror when taken, nothing when not.
+              if (AC & (d.op & 7)) { trapped = true; trap_op = d.op; }
+              else IP = ip_next;
+            } else { trapped = true; trap_op = d.op; }
             break;
         }
         break;
