@@ -1639,3 +1639,52 @@ reads as working.
    ~1.15 CPI.
 4. Then re-measure. 4.96 - 1.0 - 1.15 ~= 2.8 CPI ~= 9.5 M instr/s, with the
    remainder from Fmax once the execute path is split.
+
+## Two-deep prefetch: worth ~0.6 CPI, and not correct yet
+
+Built the queue the previous entry identified as the first work item — chain a
+second request the moment the first lands, so a word is in flight for N+2 while
+N executes.
+
+**The mechanism works: CPI 4.96 -> 4.36 in the run that reached the failure.**
+That is ~0.6 CPI, or 5.39 -> 6.13 M instr/s, and it confirms prefetch depth was
+the right diagnosis. It is **not correct**, and was reverted.
+
+```
+MISMATCH retire 39  r14  got=0000001d want=0000001a  (IP 000000d4 insn 58761019)
+```
+
+### What was fixed along the way, and is worth keeping
+
+The first version had the front end still issuing its own prefetch for `ip+4`
+while the promotion had already supplied that word. The two fought over
+`fetch_addr`/`pf_ip`, and `pf_ip` ended up naming an address the promoted word
+did not match — so the queue handed over the wrong instruction. Fixed by
+prefetching **beyond** whatever the queue holds: `ip+8` when the deeper slot has
+just been promoted, `ip+4` otherwise.
+
+That was a real bug and the fix is right. It was not the only one.
+
+### What is still wrong, and how to approach it
+
+The same mismatch survives, so at least one more coherence hole remains between
+the two slots and the redirect path. Candidates, in the order worth checking:
+
+1. **Branch redirect flushes only the shallow slot.** `pf_valid` is cleared on a
+   redirect but `pf2_valid` may survive with a word for the untaken path, and
+   the promotion guard (`pf2_ip == ip + 4`) can be satisfied coincidentally
+   after a branch lands somewhere sequential.
+2. **`T_FETCH`'s own issue path** clears `pf_valid`/`pf_armed` but knows nothing
+   about slot 2.
+3. **The len2 path** takes the cache port for its displacement word while a slot
+   2 request may be outstanding.
+
+**Do not patch this incrementally.** Two rounds of that produced a fix that was
+individually correct and still left the same symptom. The queue wants designing
+as a queue — one place that owns fill, promote and flush, with the invariant
+stated (slot k holds the word at `ip + 4(k+1)`, or is invalid) — rather than two
+sets of registers maintained by three separate code paths.
+
+**Estimated value confirmed at ~0.6 CPI**, which makes it worth doing properly:
+4.96 -> ~4.36, and it unblocks the fetch/execute overlap already known to be
+correct and worth ~1.0 more.
