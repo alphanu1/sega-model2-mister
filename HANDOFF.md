@@ -1002,3 +1002,41 @@ already justified as "roughly a wash" — cheaper without trilinear, the colour
 combiner and coverage AA, more expensive with binning and a texture cache. Both
 measurements are consistent with that judgement. **The pessimistic 14,000 is
 1.7x the RDP and remains the least supported number in the budget.**
+
+### Two arrays landed where the RTL says they should not, and only the fitter knew
+
+Fixing the M10K report immediately paid for itself twice.
+
+**1. `rcache_frame_addr` — 128 bits in a 10 Kbit block.** Four words, inferred
+into an `altsyncram`. Pinned to logic: **−1 M10K, −16 ALM, Fmax unchanged.**
+Pure waste, cleanly removed.
+
+**2. `ctag` — the I-cache tag array, and this one is not about area.** Inferred
+into an `altsyncram`, 736 bits in a block. The cache header states the tags stay
+in flip-flops *"because it is read and compared combinationally on every fetch"*
+— and `hit = cvalid[idx] && (ctag[idx] == tag)` depends on exactly that. **A
+synchronous RAM read is not a combinational read, so the simulated circuit and
+the synthesised circuit were not the same design.** Verilator models the array
+combinationally and cannot see it; the standing rule that only a Quartus build
+can tell you where memory landed is precisely this case.
+
+Pinned to logic: **−1 M10K, +192 ALM, +665 registers, Fmax unchanged at 26.75.**
+
+**Do not read that as a good resource trade — it is not.** One M10K of 553 is
+noise; 192 ALM is real. The justification is correctness, not area: the design
+should be the circuit the RTL describes, and relying on Quartus's
+"Add Pass-Through Logic to Inferred RAMs" to rescue a combinational read from a
+synchronous memory is both fragile and invisible to every test we have.
+
+If ALM later becomes binding, this is a legitimate candidate to revisit — but
+only with evidence that the inferred form is actually correct, which nothing in
+the current suite can provide.
+
+**Assembled now: 7,239 ALM, 4,209 reg, 1 M10K, 7 DSP, 26.75 MHz.**
+
+**The general lesson, and it is the fourth today.** The M10K column had been
+extracted and dropped since the first measurement. Two RTL defects had been
+sitting in the design the whole time, both invisible to simulation, both
+obvious the moment the number was printed. **An unreported measurement is not a
+measurement**, and the cost of not printing it was two wrong circuits rather
+than one wrong number.

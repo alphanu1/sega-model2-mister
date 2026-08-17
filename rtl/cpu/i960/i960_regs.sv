@@ -130,6 +130,14 @@ module i960_regs #(
   // Dedicated ports: one write, one registered read, each with its own address.
   // Reading the array inside the control FSM is what defeated inference.
   (* ramstyle = "MLAB" *) logic [W*32-1:0] rcache [0:CACHE_SZ-1];
+  // Four words. Quartus inferred this into an altsyncram and spent a whole
+  // 10 Kbit M10K block on 128 bits -- one of 553, for a resource §5.6 records
+  // as the one under pressure on this part while ALM has headroom. It is
+  // addressed by two different indices in the same cycle and is far too small
+  // to be worth a block, so it is pinned to logic. Caught only because the
+  // fitter report started printing M10K; it had been extracting and discarding
+  // that column since the first measurement.
+  (* ramstyle = "logic" *)
   logic [31:0] rcache_frame_addr [0:CACHE_FRAMES-1];
 
   logic            rc_we;

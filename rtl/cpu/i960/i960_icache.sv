@@ -75,6 +75,15 @@ module i960_icache #(
   // Validity lives in the tag array, which is where a reset can be afforded.
   (* ramstyle = "M10K" *) logic [31:0] cdata [0:LINES*4-1];
 
+  // Pinned to logic, and this is not a tidy-up. Quartus inferred the tag array
+  // into an altsyncram -- a 10 Kbit M10K block for 736 bits -- and the header
+  // above states the tags stay in flip-flops precisely because `hit` compares
+  // them COMBINATIONALLY on every fetch. A synchronous RAM read is not
+  // combinational, so the inferred version and the simulated version were not
+  // the same circuit: verilator models the array combinationally and cannot
+  // see this, which is the standing rule about memory inference exactly.
+  // Found only once the fitter report started printing M10K.
+  (* ramstyle = "logic" *)
   logic [TAG_W-1:0] ctag  [0:LINES-1];
   logic             cvalid[0:LINES-1];
 
