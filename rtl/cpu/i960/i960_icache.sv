@@ -52,11 +52,21 @@ module i960_icache #(
 
   // ------- fetch side
   input  logic        req,
+  // Demand or speculative. Only a demand request may ABORT a fill in progress:
+  // that is what lets a redirect pre-empt a line nothing wants any more. A
+  // speculative one must not, or a prefetch issued while a demand fill is in
+  // flight kills the fill the sequencer is waiting on and it waits forever.
+  input  logic        req_demand,
   // [31:2], not [31:0]: instructions are dword-aligned so the low two bits are
   // always zero. Declaring the full width leaves them unread, which is the
   // pattern the lint is kept un-suppressed to catch.
   input  logic [31:2] addr,
   output logic [31:0] data,
+  // The address this `valid` answers. With a single outstanding request the
+  // requester may assume every valid is its own; with a prefetch queue two can
+  // be in flight and a speculative hit completes while a demand fetch is still
+  // being waited for. `valid` alone cannot separate them.
+  output logic [31:2] vaddr,
   output logic        valid,                  // `data` is good this cycle
   output logic        busy,
 
@@ -113,6 +123,8 @@ module i960_icache #(
   logic [31:0] cdata_q;
   logic        rd_we;
   logic [IDX_W+1:0] rd_waddr, rd_raddr;
+  logic [31:2]      req_addr_q;   // the address `valid` answers
+  logic             req_accept;   // a request is being taken this cycle
   logic [31:0] rd_wdata;
 
   always_ff @(posedge clk) begin
@@ -120,7 +132,23 @@ module i960_icache #(
     cdata_q <= cdata[rd_raddr];
   end
 
-  assign rd_raddr = {idx, word};
+  // THE READ ADDRESS IS LIVE WHEN A REQUEST IS TAKEN AND LATCHED AFTERWARDS.
+  //
+  // `cdata_q` is registered from this every cycle. Using the live `addr`
+  // throughout means the data follows wherever the requester has since moved
+  // rather than the request being answered -- correct only while the requester
+  // holds one address until answered, which a prefetch queue does not. Using
+  // the latched address throughout is also wrong: it is a cycle late, so a hit
+  // reads with the previous request's address.
+  //
+  // Both were measured. Live-only latched the wrong word into the prefetch
+  // queue; latched-only produced 856 block-harness mismatches.
+  assign req_accept = req && ((state == S_IDLE) || (state == S_DONE) ||
+                              ((state == S_FILL) && req_demand &&
+                               ((idx != fill_idx) || (tag != fill_tag))));
+  assign rd_raddr = req_accept ? {idx, word}
+                               : {req_addr_q[IDX_W+3:4], req_addr_q[3:2]};
+  assign vaddr    = req_addr_q;
 
   // Combinational so the address tracks fill_word within the same cycle the
   // data for it is acked.
@@ -134,9 +162,10 @@ module i960_icache #(
   integer i;
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      state     <= S_IDLE;
-      bus_req   <= 1'b0;
-      valid     <= 1'b0;
+      state      <= S_IDLE;
+      bus_req    <= 1'b0;
+      valid      <= 1'b0;
+      req_addr_q <= '0;
       fill_word <= 2'd0;
       fill_idx  <= '0;
       fill_tag  <= '0;
@@ -152,6 +181,7 @@ module i960_icache #(
       case (state)
         S_IDLE: begin
           if (req) begin
+            req_addr_q <= addr;
             if (hit) begin
               // cdata_q is registered from rd_raddr this cycle, so it is good
               // next cycle — which is when `valid` asserts.
@@ -179,15 +209,23 @@ module i960_icache #(
           // request after each word, which measured ~3.7 cycles per word and
           // made instruction fetch 58% of all cycles in the CPU.
           bus_req <= 1'b1;
+
+          // A request for the line already being filled is SATISFIED by that
+          // fill, so it becomes the request this `valid` answers. Without it
+          // the answer still names the address the fill started on, and a
+          // redirect within the same line receives the wrong word. Placed
+          // before the abort below so a different-line request overrides it.
+          if (req && (idx == fill_idx) && (tag == fill_tag)) req_addr_q <= addr;
           // A redirect -- taken branch or mispredicted prefetch -- can ask for
           // a different line mid-fill. Restart on it rather than making the
           // requester wait out a line nothing wants.
-          if (req && ((idx != fill_idx) || (tag != fill_tag))) begin
+          if (req && req_demand && ((idx != fill_idx) || (tag != fill_tag))) begin
             fill_idx    <= idx;
             fill_tag    <= tag;
             fill_word   <= 2'd0;
             fill_base   <= {addr[31:4], 4'd0};
             cvalid[idx] <= 1'b0;
+            req_addr_q  <= addr;
           end else if (bus_ack) begin
             if (fill_word == 2'd3) begin
               bus_req          <= 1'b0;
@@ -206,6 +244,7 @@ module i960_icache #(
           // for `busy`. Answering it with `valid` regardless hands over the
           // just-filled line's data read at the NEW address.
           if (req && !hit) begin
+            req_addr_q  <= addr;
             fill_idx    <= idx;
             fill_tag    <= tag;
             fill_word   <= 2'd0;

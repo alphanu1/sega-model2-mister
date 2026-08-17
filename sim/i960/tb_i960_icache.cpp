@@ -97,10 +97,10 @@ bool fetch(uint32_t a, const char *why) {
 //   1. the redirect's word is delivered, not the abandoned line's;
 //   2. the abandoned line must not later answer a hit with half-filled data.
 bool abort_case(uint32_t a, uint32_t b, int delay, const char *why) {
-  dut->addr = a >> 2; dut->req = 1; tick(); dut->req = 0;
+  dut->addr = a >> 2; dut->req = 1; dut->req_demand = 1; tick(); dut->req = 0;
   for (int i = 0; i < delay; i++) tick();       // fill under way
 
-  dut->addr = b >> 2; dut->req = 1; tick(); dut->req = 0;
+  dut->addr = b >> 2; dut->req = 1; dut->req_demand = 1; tick(); dut->req = 0;
   int i = 0;
   for (; i < 200 && !dut->valid; i++) tick();
   if (i == 200) {
@@ -121,7 +121,7 @@ bool abort_case(uint32_t a, uint32_t b, int delay, const char *why) {
 }
 
 void reset() {
-  dut->rst_n = 0; dut->req = 0; dut->inval = 0; dut->bus_ack = 0;
+  dut->rst_n = 0; dut->req = 0; dut->req_demand = 1; dut->inval = 0; dut->bus_ack = 0;
   for (int i = 0; i < 4; i++) tick();
   dut->rst_n = 1; tick();
 }

@@ -466,13 +466,14 @@ module i960_top (
 
   /* verilator lint_off UNUSEDSIGNAL */
   logic        ic_req, ic_valid, ic_busy, ic_breq;
+  logic [31:2] ic_vaddr;
   /* verilator lint_on UNUSEDSIGNAL */
   logic [31:0] ic_data, ic_baddr;
 
   i960_icache u_icache (
     .clk(clk), .rst_n(rst_n), .inval(1'b0),
-    .req(ic_req), .addr(fetch_addr[31:2]), .data(ic_data),
-    .valid(ic_valid), .busy(ic_busy),
+    .req(ic_req), .req_demand(1'b1), .addr(fetch_addr[31:2]), .data(ic_data),
+    .valid(ic_valid), .vaddr(ic_vaddr), .busy(ic_busy),
     .bus_req(ic_breq), .bus_addr(ic_baddr),
     .bus_rdata(bus_rdata), .bus_ack(ic_back)
   );
