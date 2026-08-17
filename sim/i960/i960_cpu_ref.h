@@ -293,17 +293,41 @@ struct Cpu {
           for (uint8_t w = 0; w < l.n_words; ++w) {
             if (l.is_store) {
               const uint32_t v = rf.r[(base + w) & 0x1f];
-              uint32_t dcur = rd(t1);
-              if (l.size == 0)      dcur = (dcur & ~(0xffu << ((t1 & 3) * 8)))
-                                          | ((v & 0xffu) << ((t1 & 3) * 8));
-              else if (l.size == 1) dcur = (t1 & 2) ? ((dcur & 0x0000ffffu) | (v << 16))
-                                                    : ((dcur & 0xffff0000u) | (v & 0xffffu));
-              else                  dcur = v;
-              wr(t1, dcur);
+              // BYTE-WISE, because a store need not be aligned. The previous
+              // form replaced the whole word at `t1 & ~3` for a word store and
+              // used `t1 & 2` for a half, both of which assume alignment -- so
+              // `st` to 0xd66 wrote all four bytes of 0xd64 instead of its
+              // upper half and the lower half of 0xd68. MAME's memory system
+              // splits an unaligned access; this now does too.
+              //
+              // Reached only once the generator stopped emitting exclusively
+              // word-aligned offsets.
+              const uint8_t nb = (l.size == 0) ? 1 : (l.size == 1) ? 2 : 4;
+              for (uint8_t k = 0; k < nb; ++k) {
+                const uint32_t ba = t1 + k;
+                uint32_t word = rd(ba);
+                word = (word & ~(0xffu << ((ba & 3) * 8)))
+                     | (((v >> (k * 8)) & 0xffu) << ((ba & 3) * 8));
+                wr(ba, word);
+              }
             } else {
-              const uint32_t dv = rd(t1);
-              const LdSt e = i960ref::ldst(d.op, t1 & 3, dv, 0);
-              rf.r[(base + w) & 0x1f] = e.ld_result;
+              // BYTE-WISE for the same reason as the store above: an unaligned
+              // load spans two words, and reading a single word at `t1 & ~3`
+              // and extracting from it silently returned the wrong half. `ld`
+              // from 0xb17 needs one byte of 0xb14 and three of 0xb18.
+              const uint8_t nb = (l.size == 0) ? 1 : (l.size == 1) ? 2 : 4;
+              uint32_t raw = 0;
+              for (uint8_t k = 0; k < nb; ++k) {
+                const uint32_t ba = t1 + k;
+                raw |= ((rd(ba) >> ((ba & 3) * 8)) & 0xffu) << (k * 8);
+              }
+              uint32_t res;
+              if      (l.size == 0) res = l.sign_ext ? uint32_t(int32_t(int8_t (raw)))
+                                                     : (raw & 0xffu);
+              else if (l.size == 1) res = l.sign_ext ? uint32_t(int32_t(int16_t(raw)))
+                                                     : (raw & 0xffffu);
+              else                  res = raw;
+              rf.r[(base + w) & 0x1f] = res;
             }
             if (burst) t1 += 4;
           }

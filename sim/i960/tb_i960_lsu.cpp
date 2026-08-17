@@ -34,6 +34,15 @@ uint32_t st_words[4];
 std::vector<uint32_t>        loaded;
 
 void tick() {
+  // Present the store word BEFORE sampling the bus. bus_wdata is combinational
+  // from st_word now, so sampling first captures the previous word's value --
+  // which was invisible while the LSU registered its bus outputs, and showed up
+  // as 480 mismatches the moment it stopped. The caller in i960_top holds
+  // st_word from a registered read, so this ordering is what the real design
+  // does; the harness was relying on a delay that no longer exists.
+  dut->st_word = st_words[dut->cur_idx & 3];
+  dut->eval();
+
   // Serve the bus. Ack held while req is asserted, never pulsed.
   if (dut->bus_req) {
     const uint32_t da = dut->bus_addr & ~3u;
@@ -70,11 +79,6 @@ void tick() {
     // must be captured at the ack is now the only value that survives.
     dut->bus_rdata = 0xdeadbeefu ^ uint32_t(ticks * 2654435761u);
   }
-  // The caller presents the word being stored, selected by the LIVE index.
-  // `word_idx` is deliberately one behind so it pairs with `ld_word`; a store
-  // needs the word being issued right now, which is `cur_idx`. Using the wrong
-  // one here fed every word of a multi-word store from the same slot.
-  dut->st_word = st_words[dut->cur_idx & 3];
 
   dut->clk = 0; dut->eval();
   dut->clk = 1; dut->eval();

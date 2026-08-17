@@ -1441,3 +1441,52 @@ registered in the same place and would have to move with it**, which is a wider
 change than it looks and was not attempted at the end of a long session.
 
 That is worth roughly one cycle per word out of seven.
+
+## Unaligned access was never generated either; the REFERENCE was wrong
+
+Attempting the next LSU optimisation (combinational bus outputs, CPI 8.07 ->
+7.22) broke the byte-split path outright — and **the whole-CPU harness passed
+it.** The block harness caught it. That is the exact reverse of the load
+defects, which the block harness could not express and the CPU harness found.
+**Both levels are load-bearing and neither is redundant.**
+
+Cause: the generator emitted **word-aligned offsets only**, so the LSU's split
+path — reached exclusively by unaligned byte/half/word access — was unreachable
+at CPU level. Now byte-granular for the single-word forms; multi-word forms stay
+aligned, since `ldl`/`ldt`/`ldq` have alignment rules of their own.
+
+Turning it on found **two reference defects**, both the same shape, and in both
+cases the RTL was right:
+
+- **Unaligned store.** The reference replaced the whole word at `t1 & ~3` for a
+  word store and used `t1 & 2` for a half — both assume alignment. `st` to
+  `0xd66` wrote all four bytes of `0xd64` instead of its upper half and the
+  lower half of `0xd68`.
+- **Unaligned load.** It read one word at `t1 & ~3` and extracted from it, so
+  `ld` from `0xb17` returned the wrong bytes: it needs one byte of `0xb14` and
+  three of `0xb18`.
+
+Both now work byte-wise, which is what MAME's memory system does with an
+unaligned access.
+
+### The store-stream check was replaced by a memory-state check
+
+The write-stream comparison added earlier was **wrong in a way worth recording**.
+An unaligned access legitimately becomes several byte transactions in the DUT
+and stays one logical store in the reference, so comparing transaction counts
+fails a correct implementation — it reported `dut=4 ref=1` for a single `st`.
+
+What must agree is the **result**, so the data window is now compared **after
+every retire**. Per-retire is the load-bearing part: comparing only at the end
+lets a store to the wrong address be overwritten before anyone looks, which is
+how the `stt` defect survived "zero divergence".
+
+**All 15 suites pass. Coverage mix 4,577 retires; daytona mix passes.
+CPI 8.69** — up from 8.07 because unaligned accesses genuinely cost more and are
+now being measured instead of skipped.
+
+### The combinational-bus optimisation: reverted, and now testable
+
+Worth ~1 cycle per access (CPI 8.07 -> 7.22, ~10%). It breaks splitting. It was
+reverted, and **the coverage that would have caught it now exists** — so the
+next attempt gets an immediate verdict rather than a silent regression.

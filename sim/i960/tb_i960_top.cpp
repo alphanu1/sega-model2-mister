@@ -409,7 +409,21 @@ int main(int argc, char **argv) {
         static const uint8_t LS[] = {0x80,0x82,0x88,0x8a,0x90,0x92,
                                      0x98,0x9a,0xa0,0xa2,0xb0,0xb2};
         const uint32_t op  = LS[rng() % (sizeof LS / sizeof LS[0])];
-        const uint32_t off = 0x800u + ((rng() % 0x200u) << 2);
+        // UNALIGNED ADDRESSES for the single-word forms. Word-aligned offsets
+        // only was a silent coverage hole: the LSU's byte-split path is reached
+        // exclusively by unaligned byte/half/word access, so the whole-CPU
+        // harness could not exercise it at all. A combinational-bus change that
+        // broke splitting outright passed here and was caught only by the block
+        // harness -- the reverse of the load bugs, where the CPU harness caught
+        // what the block one could not. Both levels are needed and neither is
+        // redundant.
+        //
+        // Multi-word forms stay aligned: ldl/ldt/ldq have alignment rules of
+        // their own and an unaligned one is not a case the design promises.
+        const bool multi = (op == 0x98 || op == 0x9a || op == 0xa0 ||
+                            op == 0xa2 || op == 0xb0 || op == 0xb2);
+        const uint32_t off = multi ? (0x800u + ((rng() % 0x180u) << 2))
+                                   : (0x800u + (rng() % 0x600u));
         // Multi-word forms mask the destination register, so a high srcdst is
         // fine, but keep it out of r0-r2 (PFP/SP/RIP) to avoid perturbing the
         // frame machinery in a test aimed at the memory path.
@@ -512,28 +526,31 @@ int main(int argc, char **argv) {
       // program at that point, the same as a trap.
       if (ref.fp_denorm_operand) { ++denorm_skips; break; }
       if (ref.fp_nan_result)     { ++nan_stops;    break; }
-      // Compare the WRITE STREAM, not just the final memory. A store to the
-      // wrong address shows up in the final image only if nothing overwrites
-      // it, and shows up as a register mismatch only if something later loads
-      // it -- which is how the daytona-mix divergence was first seen, 29
-      // retires after the store that caused it.
-      if (dut_stores.size() != ref.stores.size() && fails < MAX_REPORT) {
-        std::printf("  STORE COUNT retire %llu  dut=%zu ref=%zu  (insn %08x)\n",
-                    (unsigned long long)r, dut_stores.size(),
-                    ref.stores.size(), exec_insn);
-        ++fails; break;
-      }
-      for (size_t i = 0; i < dut_stores.size(); ++i) {
-        if (dut_stores[i] != ref.stores[i]) {
-          if (fails < MAX_REPORT)
-            std::printf("  STORE #%zu retire %llu  dut=%08x:%08x ref=%08x:%08x"
-                        "  (insn %08x)\n", i, (unsigned long long)r,
-                        dut_stores[i].first, dut_stores[i].second,
-                        ref.stores[i].first, ref.stores[i].second, exec_insn);
-          ++fails; break;
+      // Compare the DATA MEMORY after every retire, not the bus transaction
+      // stream. The stream was the first attempt and it is wrong: an unaligned
+      // access legitimately becomes several byte transactions in the DUT and
+      // stays one logical store in the reference, so comparing counts fails a
+      // correct implementation. What must agree is the RESULT.
+      //
+      // Per-retire is the point -- comparing only at the end lets a store to
+      // the wrong address be overwritten before anyone looks, which is how the
+      // stt defect survived "zero divergence" for so long.
+      {
+        bool bad = false;
+        for (const auto &kv : mem) {
+          if (kv.first < 0x800) continue;          // program, not data
+          auto it = ref.rf.mem.find(kv.first);
+          const uint32_t rv = (it == ref.rf.mem.end()) ? 0xffffffffu : it->second;
+          if (rv != kv.second) {
+            if (fails < MAX_REPORT)
+              std::printf("  MEMSTATE retire %llu  %08x dut=%08x ref=%08x"
+                          "  (insn %08x)\n", (unsigned long long)r,
+                          kv.first, kv.second, rv, exec_insn);
+            bad = true; break;
+          }
         }
+        if (bad) { ++fails; break; }
       }
-      if (fails) break;
       ++retires; ++total_retires;
       if (!compare(r)) break;
     }
