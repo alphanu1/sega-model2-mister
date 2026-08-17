@@ -81,3 +81,27 @@ verilator.log
 
 # Quartus spike output
 build/
+
+# MAME output. It writes these into the working directory on every run.
+#
+# `nvram/` is the reason this section is not merely tidiness: it holds EEPROM
+# and battery-backed RAM contents dumped out of the game, which is ROM-DERIVED
+# DATA and must never enter this repository. `cfg/` and the rest are machine
+# state and personal settings that would be noise even if they were harmless.
+#
+# Runs should also pass -cfg_directory/-nvram_directory outside the tree, per
+# tools/m2b-mame.sh. This section is the safety net, not the mechanism.
+cfg/
+nvram/
+sta/
+snap/
+diff/
+inp/
+memcard/
+comment/
+ui/
+mame.ini
+ui.ini
+error.log
+debug.log
+*.tr
