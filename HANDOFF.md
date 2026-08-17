@@ -1490,3 +1490,55 @@ now being measured instead of skipped.
 Worth ~1 cycle per access (CPI 8.07 -> 7.22, ~10%). It breaks splitting. It was
 reverted, and **the coverage that would have caught it now exists** — so the
 next attempt gets an immediate verdict rather than a silent regression.
+
+## The I-cache lever cannot be measured, and the fetch cost is an artifact
+
+Swept `LINES` over 32, 64, 128 and 256 — **512 B to 4 KB — and got byte-identical
+CPI and hit rate every time.** 7.58 CPI, 67.7% hits, 15,392 fill-wait cycles,
+unchanged.
+
+The misses are **compulsory, not capacity**. The generator emits 200
+straight-line programs of 60 instructions with the cache cold at each start, so
+every line is fetched exactly once and no cache of any size can help. With a
+16-byte line — four instructions — 67.7% is close to the structural ceiling for
+code that is executed once.
+
+**Real code is nothing like this.** M2-B's Daytona sample executed 38,987
+instructions over 4,265 distinct PCs: **9.1x average PC reuse**. The generator's
+reuse is 1.0x. Loops are where an instruction cache earns its keep and the
+generator has none.
+
+### What this invalidates, including advice given an hour ago
+
+The three-lever plan estimated "I-cache 67.7% -> 90% saves ~1.0 CPI". **That
+estimate is not supportable.** The 67.7% is a property of the test workload, not
+of the cache, and cannot be improved by making the cache bigger. The real hit
+rate under 9.1x reuse is unknown and probably far higher — which means:
+
+- **The fetch component of CPI 7.58 (2.66 cyc/instr, 35% of the total) is
+  inflated by an artifact.** Real fetch cost is likely much lower.
+- **The measured 3.53 M instr/s is therefore pessimistic**, by an unknown margin.
+- **Cache sizing must not be decided on this workload.** A sweep that returns
+  identical numbers for an 8x size range is not evidence that size does not
+  matter; it is evidence that the workload cannot see it.
+
+Same failure mode as R9, and the fifth instance today of a measurement that
+looked meaningful and was measuring the harness: the FP check that could not
+run, the M10K column that was dropped, the generator with no loads, the LSU
+harness that could not express its own bug, and now a cache benchmark with no
+temporal locality.
+
+### What has to happen before the pipeline
+
+**The generator needs loops.** Backward branches with a bounded trip count,
+so instructions are executed more than once and the fetch path is exercised the
+way real code exercises it. Until then:
+
+- the fetch share of CPI is not trustworthy,
+- the I-cache cannot be sized,
+- and the pipeline's benefit cannot be estimated either, since its dominant
+  stall is exactly the one being mismeasured.
+
+**Do the loops before the pipeline.** Building a pipeline against a workload
+that cannot see its main benefit would produce a number as uninterpretable as
+the CPI figures were before M2-B.
