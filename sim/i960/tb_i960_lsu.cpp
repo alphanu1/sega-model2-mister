@@ -45,6 +45,9 @@ void tick() {
         if (dut->bus_be & (1 << lane))
           d = (d & ~(0xffu << (lane*8))) | (dut->bus_wdata & (0xffu << (lane*8)));
       mem[da] = d;
+      // Poison the read bus on a write cycle too: nothing may rely on rdata
+      // surviving from an earlier read.
+      dut->bus_rdata = 0xbaadf00du ^ uint32_t(ticks * 2654435761u);
       stream.push_back({dut->bus_addr, (uint8_t)dut->bus_be, true, dut->bus_wdata});
     } else {
       dut->bus_rdata = cur;
@@ -53,9 +56,25 @@ void tick() {
     dut->bus_ack = 1;
   } else {
     dut->bus_ack = 0;
+    // POISON THE BUS WHENEVER IT IS NOT ACKING A READ.
+    //
+    // This harness previously left bus_rdata holding its last value, which made
+    // it stable across the extension state -- and i960_lsu extends `ld_word` in
+    // S_NEXT, one state AFTER the ack. A DUT reading the live bus there looked
+    // correct here and returned a later bus word in the real design, where the
+    // instruction cache owns the bus by then. 1,265,853 passing checks could
+    // not see it; the whole-CPU harness found it only once its generator
+    // learned to emit loads.
+    //
+    // Real hardware makes no such promise, so neither does this. A value that
+    // must be captured at the ack is now the only value that survives.
+    dut->bus_rdata = 0xdeadbeefu ^ uint32_t(ticks * 2654435761u);
   }
-  // The caller presents the word being stored, selected by word_idx.
-  dut->st_word = st_words[dut->word_idx & 3];
+  // The caller presents the word being stored, selected by the LIVE index.
+  // `word_idx` is deliberately one behind so it pairs with `ld_word`; a store
+  // needs the word being issued right now, which is `cur_idx`. Using the wrong
+  // one here fed every word of a multi-word store from the same slot.
+  dut->st_word = st_words[dut->cur_idx & 3];
 
   dut->clk = 0; dut->eval();
   dut->clk = 1; dut->eval();
