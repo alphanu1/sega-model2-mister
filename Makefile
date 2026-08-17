@@ -334,6 +334,39 @@ SRCS_i960_fpmisc := $(FPX_RTL)
 SRCS_i960_fpcvt  := $(FPC_RTL)
 SRCS_i960_top    := $(TOP_RTL)
 
+# ---------------------------------------------------------------------------
+# M2-E proxies: third-party cores measured on THIS part, for area only.
+#
+# Not our code and never will be -- srg320/Saturn carries NO LICENCE, so this
+# is measurement and reading only (THIRD_PARTY.md, design study 5.3/R6).
+# Compiling locally to count ALMs is not distribution; copying a line of it
+# would be.
+#
+# SCSP is the prize: Model 2 uses the SAME chip, so this is a direct
+# measurement of a Model 2 block rather than a proxy, replacing a from-scratch
+# 3,000-5,000 ALM estimate. VDP1 is a quad rasterizer like Model 2's, but with
+# no Z-buffer, no mipmapping and no filtering, so it bounds the renderer from
+# BELOW where the N64 RDP's 8,347 bounds it from above.
+SAT := third_party/saturn
+SRCS_SCSP := $(SAT)/SCSP/SCSP_pkg.sv $(SAT)/SCSP/SCSP.sv
+SRCS_VDP1 := $(SAT)/VDP1/VDP1_pkg.sv $(SAT)/VDP1/VDP1.sv
+SRCS_VDP2 := $(SAT)/VDP2/VDP2_pkg.sv $(SAT)/VDP2/VDP2.sv
+
+# Rule 8's lint gate exists to stop OUR unlintable RTL reaching the fitter. It
+# is meaningless against code we neither own nor may modify, so these targets
+# elaborate rather than lint -- enough to prove the fitter is being handed
+# something real, without pretending we can fix what it reports.
+# These instantiate Altera megafunctions (altsyncram), which verilator cannot
+# elaborate without the vendor libraries and Quartus instantiates natively. So
+# there is no pre-fitter check available for them at all, and saying so is
+# better than running a command that always passes. The figure these produce is
+# an AREA MEASUREMENT of somebody else's verified core -- it is not evidence
+# about anything we wrote, and rule 8 still applies in full to rtl/.
+lint_SCSP lint_VDP1 lint_VDP2:
+	@echo "== $(@:lint_%=%): third-party, area measurement only"
+	@echo "   no pre-fitter check possible (Altera megafunctions); rule 8 unaffected"
+
+
 QUARTUS_MODS := i960_dec i960_alu i960_regs i960_agu i960_ldst i960_lsu i960_memmap i960_icache i960_muldiv i960_fpmul i960_fpadd i960_fpdiv i960_fpsqrt i960_fpmisc i960_fpcvt i960_top
 
 # One module, real device, real toolchain. This is the only thing that gives

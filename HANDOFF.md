@@ -853,3 +853,89 @@ cannot help across a line boundary, which is exactly where the misses are.
 Keep R9 in view: this workload is 200 short programs that each start cold, so
 its miss rate is pessimistic against real code with loops. Do not tune line size
 against it and believe the number.
+
+---
+
+## ST-V / Saturn as an M2-E proxy — SCSP measured, and it is cheaper than budgeted
+
+Suggested by the user, and it is a better comparable than the N64 in one place
+decisively and in another partially.
+
+### The result
+
+`srg320/Saturn` SCSP, Quartus 17.0.0, `5CSEBA6U23I7`:
+
+```
+SCSP   ALM 2,030   reg 2,379   MLAB bits 0   DSP 2   Fmax 76.73 MHz
+```
+
+**This is not a proxy. Model 2 uses the same SCSP.** It replaces a from-scratch
+estimate of **3,000-5,000 ALM** with a measurement of **2,030** — between 1,000
+and 3,000 ALM cheaper than budgeted, in the "sound + 2D" bucket that carries
+8,500-12,800 of the non-CPU/GPU total. Fmax 76.73 is far above anything this
+design needs.
+
+Caveat on the figure: it is srg320's implementation, not ours, and we may not
+copy it (see below), so ours could differ. But it bounds the block with a real
+number on the real part, which is what M2-E is for.
+
+### Where ST-V beats the N64, and where it does not
+
+- **SCSP: decisively.** Same chip, so a direct measurement rather than a proxy.
+- **Era and vendor:** Saturn 1994 vs N64 1996; Sega vs Nintendo.
+- **VDP1 as a renderer proxy: partially, and as a FLOOR not an anchor.** It is a
+  quad rasterizer and so is Model 2's renderer, where the RDP is triangle-based
+  — a real architectural similarity. But §5.5 records Model 2 as having texture
+  mapping, bilinear, mipmapping **and a Z-buffer**, and VDP1 has none of those.
+  So VDP1 bounds the renderer from **below** where the RDP's 8,347 bounds it
+  from **above**. Two measurements bracketing it beats either alone, which is
+  better than the "replace N64 with ST-V" framing.
+
+**Licence, re-verified rather than recalled:** `srg320/Saturn` and
+`MiSTer-devel/Saturn_MiSTer` both still return `NO LICENSE`. Measurement and
+reading only; copying a line is not permitted. Compiling locally to count ALMs
+is not distribution.
+
+**Worth knowing for M2-G:** srg320 licenses `SNES_MiSTer`, `FpgaSnes` and
+`Main_MiSTer` as GPL-3.0 while `Saturn`, `Saturn_hw`, `SH`, `32X` and `S32X` all
+carry none. The omission is a choice, not an oversight, which makes the M2-G
+email a sharper question: *you GPL-3 your SNES core; would you grant the same
+for the SCSP?*
+
+**Still to measure:** VDP1 and VDP2. The Makefile wires them up
+(`make quartus MOD=VDP1`). They instantiate Altera megafunctions, so verilator
+cannot elaborate them and there is no pre-fitter check — recorded in the
+Makefile rather than papered over with a command that always passes. Rule 8 is
+unaffected; it governs `rtl/`.
+
+## Critical-word-first — ATTEMPTED AND REVERTED
+
+A miss currently waits the whole 4-word fill plus a done cycle before `valid`,
+when the word actually wanted could be handed over on the first ack. Starting
+the burst at the requested word and delivering it straight off the bus should
+save ~3 cycles per miss, against 9,455 fill-wait cycles.
+
+Four iterations at block level, reverted. **What it produced is still worth
+having:**
+
+1. **Abort and ack must be mutually exclusive.** Written as two separate `if`s,
+   a cycle carrying both did both — the restart reset `fill_word`/`fill_cnt` and
+   the ack then incremented them, so the abandoned burst continued into the new
+   line's slots. Found and fixed; any future attempt needs this.
+2. **The real blocker is that `req` is a one-cycle pulse.** Any cycle where the
+   cache cannot service it loses it entirely. Critical-word-first adds cycles
+   where that happens — a same-line request arriving on the critical-word ack
+   assigns `fill_served` both 0 and 1 in the same cycle. Compensating with
+   flags (`fill_served`, `early_valid`) is the wrong shape and produced stalls
+   at redirect delays 4-5 that survived three different guards.
+   **A pending-request latch — capture `req`/`addr` when unservable, replay on
+   return to `S_IDLE` — is the prerequisite, not an optimisation.** This is the
+   second time that conclusion has been reached from a different direction.
+3. **The block harness cannot currently measure this.** Its miss counter is
+   "did I see `bus_req` while waiting", which counts a background fill as a
+   miss — the sequential walk read 0.500 against a true 0.25. **So the harness
+   cannot evaluate critical-word-first even if the RTL were right.** Fix the
+   hit/miss definition first.
+
+Order for the next attempt, and it is not the order that was tried: pending-
+request latch, then the harness's miss definition, then critical-word-first.
