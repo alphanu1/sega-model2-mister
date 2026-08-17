@@ -135,8 +135,19 @@ module i960_lsu (
   // from the start of a line.
   logic [7:0]  rd_byte;
   logic [15:0] rd_half;
-  assign rd_byte = bus_rdata[{cur_addr[1:0], 3'd0} +: 8];
-  assign rd_half = cur_addr[1] ? bus_rdata[31:16] : bus_rdata[15:0];
+  // Extracted from the CAPTURED word, not from the live bus. The extraction
+  // happens in S_NEXT, one state after the ack, and `bus_rdata` belongs to
+  // whatever the bus is doing by then -- an instruction fetch, usually. The
+  // split path always captured (`assemble <= rd_byte_split` at ack time) and
+  // the non-split path did not, which is the asymmetry that hid this: word
+  // loads happened to read a stale 0xffffffff and looked correct, while byte
+  // and half loads returned whatever had since appeared on the bus.
+  //
+  // Never reached before now, because the whole-CPU generator emitted no
+  // load or store at all.
+  logic [31:0] rd_q;
+  assign rd_byte = rd_q[{cur_addr[1:0], 3'd0} +: 8];
+  assign rd_half = cur_addr[1] ? rd_q[31:16] : rd_q[15:0];
 
   logic [7:0] rd_byte_split;
   assign rd_byte_split = bus_rdata[{byte_addr[1:0], 3'd0} +: 8];
@@ -162,6 +173,7 @@ module i960_lsu (
       store_q  <= 1'b0;
       sext_q   <= 1'b0;
       burst_q  <= 1'b0;
+      rd_q     <= 32'd0;
     end else begin
       ld_we <= 1'b0;
       done  <= 1'b0;
@@ -213,6 +225,7 @@ module i960_lsu (
                 bidx <= bidx + 2'd1;
               end
             end else begin
+              rd_q  <= bus_rdata;   // capture at the ack, extend next state
               state <= S_NEXT;
             end
           end
@@ -235,7 +248,7 @@ module i960_lsu (
                                         : {24'd0,            rd_byte};
                 2'd1: ld_word <= sext_q ? {{16{rd_half[15]}}, rd_half}
                                         : {16'd0,            rd_half};
-                default: ld_word <= bus_rdata;
+                default: ld_word <= rd_q;
               endcase
             end
           end

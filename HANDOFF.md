@@ -1193,3 +1193,43 @@ memory path they should have been dominated by was never executed at all.**
 
 Do not reweight to `+mix=daytona` and quote a number until this defect is fixed:
 a mix that is 49% load/store, run against a broken load path, measures nothing.
+
+### Load path defect one: FIXED. The load word was read a cycle after the bus
+
+`ld_word` is extended in `S_NEXT`, one state **after** the ack — but `rd_byte`
+and `rd_half` were combinational from **`bus_rdata`**, which by then belongs to
+whatever the bus is doing next, usually an instruction fetch.
+
+**The asymmetry is what hid it.** The split/unaligned path always captured at
+ack time (`assemble[...] <= rd_byte_split`); the non-split path captured
+nothing. And word-sized loads read a stale `0xffffffff` often enough to look
+correct, so only byte and half loads showed it.
+
+Fixed by capturing `bus_rdata` into `rd_q` at the ack and extending from that.
+`ldob` now returns `0xff` from unmapped memory as it should.
+
+**Why it survived until today: the whole-CPU generator emitted no loads or
+stores at all**, and `test_i960_lsu` drives the LSU's bus directly, so its model
+holds `bus_rdata` stable across the extension state. The block harness could not
+express the failure and the CPU harness never tried. *A defect that needs two
+levels to see is a defect that outlives both.*
+
+### Load path defect two: OPEN, and located
+
+```
+MISMATCH retire 12  g8  got=873bdc44 want=ffffffff  (IP 00000044 insn a0c00a34)
+```
+
+`ldt` — a three-word load from `0xa34`, all three words unmapped, so all three
+should be `0xffffffff`. The **first** word is wrong, and the value looks like
+real data rather than a stale bus word.
+
+So: single-word loads are now correct, multi-word are not. The loop is
+`S_NEXT -> S_XFER` advancing `cur_addr` only in a burst region, and the
+suspicion is the address rather than the data, since every word at that address
+reads the same `0xffffffff`. **Do not read the loop and conclude — probe
+`cur_addr`, `widx` and `bus_addr` per word.** Reading the LSU carefully is
+exactly what produced the wrong answer on defect one; the `[lsu]` probe found
+it in a single run.
+
+`make test_i960_top` remains FAILING, deliberately.

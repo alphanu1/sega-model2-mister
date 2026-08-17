@@ -73,6 +73,12 @@ void dump_ring() {
 
 void tick() {
   const int ts_now = dut->rootp->i960_top__DOT__ts & 15;
+  if (bus_probe && dut->rootp->i960_top__DOT__lsu_ldwe)
+    std::printf("  [lsu] ldwe widx=%d ldword=%08x mask=%02x srcdst=%02d ts=%d\n",
+                dut->rootp->i960_top__DOT__lsu_widx,
+                dut->rootp->i960_top__DOT__lsu_ldword,
+                dut->rootp->i960_top__DOT__ls_regmask,
+                dut->rootp->i960_top__DOT__d_srcdst, ts_now);
   {
     Trace &e = ring[ring_n % 64];
     e.t = ticks; e.ts = ts_now;
