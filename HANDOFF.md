@@ -1802,3 +1802,66 @@ sequencer for reasons that live in the cache.
 the cycle it is latched rather than dozens of retires later as a wrong register,
 and it costs nothing. It is the reason this attempt produced a diagnosis rather
 than a fifth hypothesis.
+
+## Prefetch queue: three cache-interface defects found, one still open
+
+Fifth attempt, and it produced a **complete diagnosis** rather than another
+symptom. Two of the three required changes are proven; the third is a genuine
+redesign of the cache's read path and is why this is not landed.
+
+### Added to the cache, and both are correct
+
+1. **`vaddr` — the address each `valid` answers.** With one outstanding request
+   a requester may assume every valid is its own. With a queue it may not: a
+   prefetch that hits completes while a demand fetch is being waited for, and
+   `T_FETCH_W` latched its word as the next instruction. `vaddr` removed the
+   wrong-word latching outright.
+2. **`req_demand` — only a demand request may abort a fill.** The abort is
+   load-bearing for redirects, but a *speculative* request that aborts kills the
+   fill the sequencer is waiting on, and it waits forever. Two earlier attempts
+   deadlocked on precisely this.
+
+Both pass the block harness's redirect pass. Both are worth keeping.
+
+### Also required, and NOT solved: the data must match the answer
+
+`cdata_q` is registered from `rd_raddr`, and `rd_raddr` is derived from the
+**live** `addr`. So the data returned follows wherever the requester has since
+moved, not the request being answered. Correct while the requester holds one
+address until answered — which a queue does not.
+
+`vaddr` and `data` therefore disagree. The invariant caught it exactly:
+
+```
+[PREFETCH] latched 22600000 at ip=000000d4, memory has 5cd89617   pf_ip=000000d4 v1
+```
+
+Slot 0 held the wrong word **for its own stated address**.
+
+Reading the array at the latched request address instead broke the ordinary
+case — `req_addr_q` is registered, so a hit reads with a stale address, and the
+block harness reported 856 mismatches. **The read path needs the live address at
+request time and the latched one afterwards**, which is a redesign rather than a
+patch, and is where the next attempt starts.
+
+### Sequencer findings, both confirmed
+
+- **No extra register read ports are needed.** `rd1`/`rd2` are registered, so the
+  retiring instruction's result is computed from their current values and
+  latched on the same edge that loads the successor's operands.
+- **The harness needed a retire-ordered view, and the fix is known.** With
+  overlap, retires are back-to-back, and the extra tick that let the registered
+  write land also retired the successor — comparing two instructions ahead of
+  the reference. Applying the pending `we`/`wa`/`wd` inside `dreg()` instead
+  gives exactly the retiring instruction's state with no extra tick and no
+  assumption about retire length. **That change is required before any
+  pipelining lands** and is recorded here rather than in the tree, since the
+  multi-cycle design still needs the extra tick.
+
+### Kept: the prefetch invariant
+
+Whenever the front end latches a word, it must equal memory at `ip`. Four
+attempts produced four symptoms and no cause; with this, the fifth named the
+cause in one run. It is in the tree, costs nothing, and passes.
+
+**Tree green: 15/15, CPI 4.96, both mixes.**

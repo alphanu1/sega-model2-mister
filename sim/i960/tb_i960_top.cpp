@@ -89,6 +89,25 @@ void dump_ring() {
 
 void tick() {
   const int ts_now = dut->rootp->i960_top__DOT__ts & 15;
+  // PREFETCH INVARIANT, checked in the cycle a word is latched: whatever the
+  // front end accepts must be the word actually at `ip`. A front end that hands
+  // over the wrong instruction otherwise surfaces as a wrong register dozens of
+  // retires later, with nothing pointing back at the fetch -- which is how four
+  // attempts at a prefetch queue each produced a symptom and no diagnosis.
+  // Costs nothing and turns that class of bug into a named cause immediately.
+  if ((ts_now == 0 || ts_now == 1) && dut->rootp->i960_top__DOT__fetch_word_ok) {
+    const uint32_t at = dut->rootp->i960_top__DOT__ip;
+    auto it = mem.find(at);
+    const uint32_t want = (it == mem.end()) ? 0xffffffffu : it->second;
+    const uint32_t got  = dut->rootp->i960_top__DOT__fetch_word;
+    if (got != want && pf_bad < 6) {
+      std::printf("  [PREFETCH] latched %08x at ip=%08x, memory has %08x"
+                  "   pf_ip=%08x v%d\n", got, at, want,
+                  dut->rootp->i960_top__DOT__pf_ip,
+                  dut->rootp->i960_top__DOT__pf_valid);
+      ++pf_bad; ++fails;
+    }
+  }
   // PREFETCH INVARIANT, checked at the moment a word is latched: whatever the
   // front end accepts must be the word actually at `ip`. A prefetch queue that
   // hands over the wrong instruction shows up downstream as a wrong register,
