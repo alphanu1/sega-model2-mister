@@ -587,3 +587,77 @@ Restating the target for whoever builds it:
 - **Do not spend effort on 90 MHz.** It is a proxy that has now been measured
   against reality and found to be ~3.3x stricter than the requirement it stands
   for. Fix the criterion or it will drive the wrong work.
+
+---
+
+## T_DECODE removed — and the bottleneck is now instruction fetch
+
+`i960_top`: **7,015 ALM, 3,504 reg, 2,048 MLAB bits, 7 DSP, Fmax 27.72 MHz.**
+All 15 suites pass, 147,060 checks, zero divergence.
+
+### What changed
+
+Even at a 100% prefetch hit rate, `T_FETCH` → `T_DECODE` → `T_EXEC` could not
+beat 3 CPI, and 3 CPI at 27.44 MHz is 9.15 M instr/s against a 12.5 M floor. The
+decoder is combinational and ~103 ALM, so it now reads the word **arriving**
+during a fetch state: the register numbers, the trap check and the prefetch
+decision are all available in the cycle the instruction lands. `T_FETCH` and
+`T_FETCH_W` merged into one body so the front end is written once.
+
+Measured: **65,630 → 61,560 cycles**, 1.05 cyc/instr, matching `T_DECODE`'s old
+1.14 exactly.
+
+### The Fmax loss was a false path, not the decode
+
+The first version cost 27.44 → 24.63 MHz, and the obvious explanation — decode
+now sits in the fetch path — was wrong. Selecting one decoder's input with
+`(ts == T_FETCH) ? fetch_word : insn` creates a **static** path
+`ip → (pf_ip == ip) → dec_in → decode → ALU → wd`. No cycle ever uses it, since
+during `T_EXEC` the decoder reads the latched word — but static timing cannot
+know that, and it became the critical path at `ip[26] → wd[13]` with **negative
+slack**.
+
+Two decoders remove it structurally, for +109 ALM: the arriving-word decode
+feeds only the register numbers and the front-end decisions and never reaches
+writeback. Chosen over an SDC false-path exception because **a constraint that
+stops being true fails silently, whereas a structural fix cannot rot.**
+Fmax came back to 27.72, marginally past the original.
+
+**Measure before redesigning, again.** The guessed cause was the decode path;
+the measured cause was a multiplexer. Third time this session that reading the
+source produced a plausible wrong answer and the timing report produced the
+right one.
+
+### Do not report 13.86 M instr/s. The average is 5.20.
+
+A simple instruction on a prefetch hit is now 2 CPI, which at 27.72 MHz is
+13.86 M instr/s and clears the floor. **That is the best case and it is not what
+the design delivers.** The measured average:
+
+| | cyc/instr | |
+|---|---|---|
+| `T_FETCH` | 2.39 | |
+| `T_FETCH_W` | 1.89 | |
+| **fetch subtotal** | **4.28** | **80% of a simple instruction** |
+| `T_EXEC` | 1.05 | |
+| **simple instruction** | **5.33 CPI** | **5.20 M instr/s — short** |
+
+**The pipeline structure is no longer the bottleneck; instruction fetch is.**
+For 12.5 M the budget is 2.22 CPI, so fetch must average **1.17 cycles against
+4.28 now**. Where the 4.28 goes:
+
+- **60.8% prefetch hit rate** — 4,101 fetches, 2,493 hits.
+- **6,948 fill-wait cycles.** A 16-byte line is 4 instructions, so purely
+  sequential code cannot miss less than 25% of the time. Larger lines or a
+  deeper prefetch attack this directly.
+- **4,626 cycles stuck in `T_FETCH`** waiting for a *discarded* prefetch's fill
+  to drain, because the cache ignores requests while filling. This is the
+  self-inflicted portion and the most promising: invalidating the line at fill
+  start would make an abort safe, letting a redirect pre-empt a fill it no
+  longer wants. Not attempted — it is the exact area that produced the stale-
+  fill bug, and it wants its own session.
+
+**Caveat, and it is R9 again:** this workload is 200 short programs that each
+start cold, so the miss rate is pessimistic against real code with loops. The
+hit rate is exactly the sort of number M2-B would replace with a measurement.
+Do not tune the cache against this workload and believe the result.
