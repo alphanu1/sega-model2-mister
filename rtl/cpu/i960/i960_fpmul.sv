@@ -142,7 +142,9 @@ module i960_fpmul (
   assign man_rnd = {1'b0, man_trunc} + {52'd0, round_up};
   assign exp_rnd = man_rnd[52] ? (en + 13'sd1) : en;
 
-  assign res_man = man_rnd[52] ? man_rnd[52:1] : man_rnd[51:0];
+  // Same rounding-carry rule as the adder: a carry into bit 52 means 2.0, so
+  // the mantissa is zero and the exponent increments.
+  assign res_man = man_rnd[51:0];
   assign res_exp = exp_rnd;
 
 endmodule

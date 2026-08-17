@@ -420,6 +420,48 @@ sequencer, and §7's Tier 1 lever assumes DSP is free capacity — M2-E already
 showed a comparable renderer wanting 61 of 112. Four per FP multiply is a
 number the DSP budget in §5.5 now has to carry.
 
+`rtl/cpu/i960/i960_fpadd.sv` — IEEE-754 double add/subtract, two cycles.
+
+| | ALM | DSP | Fmax |
+|---|---|---|---|
+| `i960_fpadd` (double) | **785** | 0 | 51.89 MHz |
+| `i960_fpmul` (double) | 326 | 4 | 64.02 MHz |
+| Model 1 `fp_add` (single) | 411 | 0 | 76.35 MHz |
+| Model 1 `fp_mul` (single) | 144 | 1 | 116.85 MHz |
+
+2.07 M checks per seed across three seeds, plus 450 specials and **79,916
+near-cancellation pairs** — operands within a few ulps of each other, generated
+deliberately because uniform random almost never produces massive cancellation
+and that is where an adder is most likely to be wrong.
+
+Model 1's M0 recorded `fp_add` as the block holding its whole TGP's critical
+path, and at 51.89 MHz this one is the slowest block in P1 so far. That is the
+same pressure at double width, and the same fix — splitting it from two stages
+to four — is available when a measurement asks for it.
+
+#### Three rounding bugs, and where each hid
+
+Worth recording individually because each was invisible to a different part of
+the suite:
+
+- **Leading-zero target off by one.** `lz = 56 - i` placed the leading one at
+  bit 56 instead of 55, halving every result. Caught immediately by `0 + 1`.
+- **Rounding carry mishandled.** When rounding carries into bit 52 the mantissa
+  has become exactly 2.0, so the result is exponent+1 with a **zero** mantissa —
+  the code shifted the mantissa right instead, giving 1.5 where 1.0 was wanted.
+  **The multiplier had the same bug** and its six million checks had never hit
+  the case; it was fixed in both.
+- **Sticky lost on the carry shift.** When an addition carries out, the `>> 1`
+  normalisation drops bit 0 — the sticky position. That turns "slightly more
+  than half an ulp" into an exact tie, which rounds to even instead of up and
+  lands one ulp low. **One failure in ~90,000 random pairs**, on the carry path
+  only, and invisible to every directed case.
+
+The last one is the useful lesson: the specials and the cancellation sweep both
+passed clean while it was present. It took uniform random volume to surface a
+one-in-90,000 path, and then a hand-worked numeric trace to locate it — reasoning
+about the design had already produced two wrong diagnoses.
+
 **Deviations recorded rather than discovered later.** Subnormal operands and
 results are flushed, exponent overflow becomes infinity and underflow becomes
 zero. The host implements subnormals properly, so a program that produces one
