@@ -485,16 +485,71 @@ renderer it was not previously called out as a sourcing problem.
 
 | Block | Optimistic | Pessimistic | Status | Basis |
 |---|---|---|---|---|
-| i960KB, pipelined | 8,254 | 13,354 | **part measured** | 3,754 of it built and fitted here |
+| i960KB + FPU | 9,000 | 14,000 | **7,079 measured** | assembled and fitted here, 7 DSP, 26.78 MHz |
 | 1x MB86234, pipelined | 3,000 | 5,000 | estimate | Model 1 measured 2,554 as an FSM |
-| 3D renderer | 8,000 | 14,000 | **estimate** | analogy to a *different* renderer — see below |
-| Sound, tilemap, I/O | 8,500 | 12,800 | estimate | `fx68k` reported; SCSP, S24TILE unbuilt |
+| 3D renderer | 8,000 | 14,000 | **estimate, now bracketed** | RDP 8,347 above; VDP1 below, unrun |
+| Sound, tilemap, I/O | 7,530 | 9,830 | **SCSP measured** | SCSP 2,030 — same chip; 68000/S24TILE still estimates |
 | `sys/` framework | 6,630 | 6,630 | **measured** | same framework, same device, from M2-E |
-| **Total** | **34,384** | **51,784** | | |
-| **Against 41,509** | fits, 7,125 spare | 10,275 over | | |
-| **Against 92% routing** | **fits, 3,804 spare** | 13,596 over | | |
+| **Total** | **34,160** | **49,460** | | |
+| **Against 41,509** | fits, 7,349 spare | 7,951 over | | |
+| **Against 92% routing** | **fits, 4,028 spare** | 11,272 over | | |
 
-Revised from **38,500 - 61,300** after M2-E, almost entirely on the renderer row.
+Revised from **34,384 - 51,784**. The optimistic end barely moved (-224); the
+pessimistic end came down 2,324, entirely because the SCSP stopped being a
+guess.
+
+#### What is actually PROVEN, on this part, with Quartus 17.0.0
+
+**15,739 ALM — 38% of the device — is now measured rather than estimated.**
+
+| | ALM | whose RTL | what it proves |
+|---|---|---|---|
+| i960KB + FPU | **7,079** | **ours** | the CPU as built: integer, FPU, I-cache, register file, 7 DSP, 26.78 MHz |
+| `sys/` framework | **6,630** | upstream | the same framework on the same device, whichever core wraps it |
+| SCSP | **2,030** | srg320 | the *same chip* Model 2 uses, fitted on the target part |
+| **total measured** | **15,739** | | |
+| of which our own RTL | 13,709 | | |
+
+The three have different standing and it matters:
+
+- **7,079 is ours and is the strongest number in this document.** It is not a
+  proxy or an analogy — it is the thing itself, fitted.
+- **6,630 is upstream's, but it is the identical code**, so it transfers exactly.
+- **2,030 is srg320's implementation of the SCSP, not ours.** Ours could differ.
+  It bounds the block with a real figure on the real part, which is what M2-E is
+  for, but it is not a measurement of code we will ship.
+
+#### The i960 row: mostly measured, and what the remainder is
+
+7,079 of the 9,000-14,000 exists and is fitted. The remainder is not more of
+the same — it is a specific, listable set:
+
+| still to build | why it is not free |
+|---|---|
+| six glibc transcendentals | `sin cos tan atan log exp`, bit-exact; coefficient tables should land in M10K, not ALM |
+| faults | absent entirely, and they touch the sequencer |
+| `synmov`/`synmovq`, `calls`, `modpc`, interrupts | bounded opcode work |
+| `rl` double-precision forms | needs four register reads against a two-port file |
+| the pipeline | throughput is 5.69 M instr/s against a 12.5 floor |
+
+The optimistic 9,000 assumes the transcendentals go mostly to M10K and the
+pipeline costs little area; the pessimistic 14,000 assumes neither. **Neither
+end is measured, but the base under them now is** — which is the difference
+between this row and the renderer row.
+
+#### The renderer row is now bracketed rather than anchored
+
+M2-E gave a **ceiling**: the N64 RDP, a textured, Z-buffered, mipmapped,
+bilinear *and trilinear* rasterizer with a colour combiner and coverage AA,
+costs **8,347 ALM on this exact part**. Model 2 needs less than that.
+
+ST-V gives the **floor**, once run: Saturn's VDP1 is a quad rasterizer like
+Model 2's — where the RDP is triangle-based — but with no Z-buffer, no
+mipmapping and no filtering, all of which Model 2 has. So it must come in under
+our renderer.
+
+**Two measurements bracketing an estimate is worth more than one anchoring it**,
+and neither is our renderer. The 8,000-14,000 stands until VDP1 is measured.
 
 #### Only two figures here are measurements of *this* design
 

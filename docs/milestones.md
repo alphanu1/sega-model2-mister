@@ -17,21 +17,25 @@ the CPU or the renderer come to:
 
 | | TGP | sound + 2D | `sys/` | total |
 |---|---|---|---|---|
-| optimistic | 3,000 | 8,500 | 5,000 | **16,500** |
-| pessimistic | 5,000 | 12,800 | 5,000 | **22,800** |
+| optimistic | 3,000 | 7,530 | **6,630** | **17,160** |
+| pessimistic | 5,000 | 9,830 | **6,630** | **21,460** |
 
 Which leaves, for the i960KB and the 3D renderer together:
 
-| Rest of core lands at | CPU + GPU may use |
+| Rest of core lands at | CPU + GPU may use (of 38,188 at 92%) |
 |---|---|
-| optimistic, 16,500 | **25,009 ALM** |
-| pessimistic, 22,800 | **18,709 ALM** |
+| optimistic, 17,160 | **21,028 ALM** |
+| pessimistic, 21,460 | **16,728 ALM** |
 
-Against a current estimate for those two of **22,000 to 38,500**.
+Against a current figure for those two of **17,000 to 28,000**, of which
+**7,079 is measured** — the i960 as assembled and fitted.
 
-So the optimistic case clears by ~3,000 ALM and the pessimistic case misses by
-~13,500, and **every one of those four numbers is an estimate with no RTL behind
-it.** That is the entire uncertainty of the project, concentrated in two blocks.
+So the optimistic case clears by ~4,000 ALM and the pessimistic case misses by
+~11,300. **That is still the entire uncertainty of the project, but it is no
+longer four numbers with no RTL behind them.** `sys/` (6,630) and the SCSP
+(2,030, same chip) are measured, and the i960 row is now mostly built. The
+renderer is the one row with nothing of ours in it, and it is bracketed rather
+than anchored: the N64 RDP's 8,347 above, Saturn's VDP1 below.
 
 **Therefore: build the i960 and the renderer first.** They are 57% of the
 optimistic budget, they are the only two blocks with no licence-compatible RTL
