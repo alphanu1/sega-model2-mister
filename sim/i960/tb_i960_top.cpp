@@ -117,9 +117,10 @@ void tick() {
     const uint32_t a = dut->bus_addr & ~3u;
     if (bus_probe && a >= 0x800) {
       auto i2 = mem.find(a);
-      std::printf("  [bus] %s addr=%08x be=%x rdata=%08x wdata=%08x\n",
+      std::printf("  [bus] %s addr=%08x be=%x rdata=%08x wdata=%08x insn=%08x\n",
                   dut->bus_we ? "WR" : "RD", dut->bus_addr, dut->bus_be,
-                  (i2 == mem.end()) ? 0xffffffffu : i2->second, dut->bus_wdata);
+                  (i2 == mem.end()) ? 0xffffffffu : i2->second, dut->bus_wdata,
+                  dut->rootp->i960_top__DOT__insn);
     }
     auto it = mem.find(a);
     const uint32_t cur = (it == mem.end()) ? 0xffffffffu : it->second;
