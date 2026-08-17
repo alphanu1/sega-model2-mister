@@ -16,7 +16,8 @@
 //      displacement widths, and the -4 borrow.
 //   3. Random words, defaulting to 10^7.
 //
-// CLAUDE.md rule 8 says to sweep an order of magnitude past what you believe.
+// The project rules require sweeping an order of magnitude past what you
+// believe.
 // Pass 1 is not a sweep, it is the whole space of the axes that matter; pass 3
 // exists because the axes that matter are only the ones already thought of.
 

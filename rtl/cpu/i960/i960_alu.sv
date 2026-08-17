@@ -48,8 +48,8 @@
 // a modelling decision. addc and subc exist to chain multi-word arithmetic;
 // carry propagation is their entire purpose, and hardware certainly produces it.
 //
-// **This module implements the hardware behaviour, not MAME's.** Per CLAUDE.md
-// rule 11 the reference wins over the study, but the silicon wins over the
+// **This module implements the hardware behaviour, not MAME's.** Under the
+// project rules the reference wins over the study, but the silicon wins over the
 // reference where the reference demonstrably fails to model it — and per
 // THIRD_PARTY.md the behaviour of Intel's silicon is fact rather than MAME's
 // expression of it.

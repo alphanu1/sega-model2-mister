@@ -139,7 +139,7 @@ unambiguous, so this is a C++ integer-promotion defect rather than a modelling d
 `addc` and `subc` exist to chain multi-word arithmetic; carry propagation is their whole
 purpose, and the silicon certainly produces it.
 
-**The RTL implements the hardware behaviour.** `CLAUDE.md` rule 11 puts the reference above
+**The RTL implements the hardware behaviour.** The project rules put the reference above
 this study, but its first clause reads "MAME, **or the silicon it models**", and
 `THIRD_PARTY.md` records that the behaviour of Intel's silicon is fact rather than MAME's
 expression of it. This is the case those clauses exist for.
