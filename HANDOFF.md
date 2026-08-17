@@ -661,3 +661,64 @@ For 12.5 M the budget is 2.22 CPI, so fetch must average **1.17 cycles against
 start cold, so the miss rate is pessimistic against real code with loops. The
 hit rate is exactly the sort of number M2-B would replace with a measurement.
 Do not tune the cache against this workload and believe the result.
+
+### I-cache fill abort — ATTEMPTED AND REVERTED
+
+The 4,626 self-inflicted stall cycles are still there. The attempt is recorded
+because it eliminated three hypotheses, and the next attempt should not pay for
+them again.
+
+**The idea.** The requester waits for `!ic_busy` before issuing, so a
+mispredicted prefetch leaves a fill in flight for a line nothing wants and the
+next demand fetch waits it out. Let the cache **abandon** a fill when a
+different line is requested, and drop the `!ic_busy` guard.
+
+**The safety condition, which is correct and worth keeping.** `cvalid` is only
+set on completion, but the *data* array is written word by word during the fill.
+So a line that was valid under a different tag has its data destroyed while
+still advertising a hit. Harmless while fills always completed; fatal once they
+can be abandoned. `cvalid[idx] <= 1'b0` at fill **start** fixes it. Any future
+attempt needs this.
+
+**The failure, unchanged across three fixes:**
+
+```
+MISMATCH retire 13  g4  got=2094df56 want=00000016  (IP 00000044 insn 5fb80e16)
+                    g5  got=68351c4c want=00000016
+                    g6  got=99002e43 want=00000016
+                    g7  got=6443cdb3 want=00000016
+```
+
+`5fb80e16` is `movq` with `src1_lit` set, so all four registers should take the
+literal 22. They took what looks like memory contents, which means the **latched
+instruction word was not this instruction** — the fetch delivered the wrong
+word.
+
+**Three hypotheses, each plausible, each eliminated by making the change and
+re-running:**
+
+1. *A speculative prefetch hijacks the demand fill.* The front end also issues
+   `ic_req`, so a prefetch could abort the fill `T_FETCH_W` is waiting on.
+   Gated the prefetch on `!ic_busy`. **No change.**
+2. *`S_DONE` answers a request it did not service.* It asserts `valid`
+   unconditionally and ignores `req`; `busy` used to cover `S_DONE` so the
+   requester never issued there. Made `S_DONE` service a miss. **No change.**
+3. *The abandoned line's partial data is readable.* Addressed by the invalidate
+   above, which was in from the first version. **Not the cause.**
+
+**Next attempt starts with instrumentation, not a fix.** Log every `(state, req,
+addr, fill_base, valid, data)` tuple for the failing program and find which
+cycle hands over the wrong word. Three eliminated guesses is the same signal
+that the `sqrtr` bug gave earlier today, and the answer there came from a
+per-cycle probe within minutes of giving up on reading the source.
+
+**Standing suspicion for next time:** `req` is a one-cycle pulse and `addr` is
+held, so any state that does not consume a `req` in the cycle it arrives loses
+it entirely. A pending-request latch — capture `req`/`addr` when they cannot be
+serviced, replay on return to `S_IDLE` — is probably the right shape, rather
+than patching each state to handle arrivals.
+
+**Also worth knowing: the block harness does not exercise this at all.**
+`test_i960_icache` passes with 201,232 fetches because it never issues while
+busy. Whatever lands next needs a directed abort test at block level, or the
+whole-CPU harness stays the only thing that can see it.
