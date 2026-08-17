@@ -426,8 +426,20 @@ number the DSP budget in §5.5 now has to carry.
 |---|---|---|---|
 | `i960_fpadd` (double) | **785** | 0 | 51.89 MHz |
 | `i960_fpmul` (double) | 326 | 4 | 64.02 MHz |
+| `i960_fpdiv` (double) | 319 | 0 | 66.15 MHz |
+| **FPU datapath total** | **1,430** | **4** | limited by `fpadd` at 51.89 |
 | Model 1 `fp_add` (single) | 411 | 0 | 76.35 MHz |
 | Model 1 `fp_mul` (single) | 144 | 1 | 116.85 MHz |
+
+The divider is restoring, one quotient bit per cycle, 56 cycles. That is slow
+and it does not matter: the reference charges 35 cycles for `divr` and 77 for
+`divrl`, so it sits inside the budget the timing model already assumes. A
+radix-4 or Newton-Raphson unit would be faster and would cost DSP blocks, which
+M2-E's finding about the renderer makes the wrong currency to spend.
+
+Its bug was uniform rather than rare: shifting the remainder **before** the
+first compare computes `2*fa/fb`, so every result came out exactly one binade
+too large. Restoring division compares first, then shifts. Caught by `1 / 1`.
 
 2.07 M checks per seed across three seeds, plus 450 specials and **79,916
 near-cancellation pairs** — operands within a few ulps of each other, generated
