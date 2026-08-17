@@ -427,9 +427,37 @@ int main(int argc, char **argv) {
         // MEMB), bit 13 = 0 selects a plain offset rather than r[abase] +
         // offset. Offset is 12 bits, so the data window is 0x800-0xFFC --
         // clear of the program, which sits at 0 and is `steps` words long.
-        static const uint8_t LS[] = {0x80,0x82,0x88,0x8a,0x90,0x92,
-                                     0x98,0x9a,0xa0,0xa2,0xb0,0xb2};
-        const uint32_t op  = LS[rng() % (sizeof LS / sizeof LS[0])];
+        // Form weights MEASURED from Daytona (M2-B), per mille of memory ops.
+        // Two things were wrong with picking uniformly from twelve forms:
+        //
+        //  - the sign-extending loads 0xc0/0xc2/0xc8/0xca were absent entirely,
+        //    and they are ~7% of real memory operations -- never executed at
+        //    CPU level despite being implemented;
+        //  - multi-word ldl/stl/ldt/stt/ldq/stq were picked HALF the time and
+        //    are 0.36% of real memory operations. They are the most expensive
+        //    forms there are, so T_MEM_W was dominated by instructions that
+        //    barely occur.
+        //
+        // In coverage mode the weights are flattened, because a rare form that
+        // is wrong is still wrong.
+        static const struct { uint8_t op; uint16_t w; } LS[] = {
+          {0x90, 407}, {0x92, 400},                 // ld, st
+          {0xc8,  52}, {0xca,  32},                 // ldis, stis
+          {0x88,  31}, {0x80,  25},                 // ldos, ldob
+          {0x8a,  18}, {0xc0,  16},                 // stos, ldib
+          {0x82,  12}, {0xc2,   3},                 // stob, stib
+          {0x98,   1}, {0x9a,   1}, {0xa0,   1},    // ldl, stl, ldt
+          {0xa2,   1}, {0xb0,   1}, {0xb2,   1},    // stt, ldq, stq
+        };
+        const int NLS = int(sizeof LS / sizeof LS[0]);
+        uint32_t op = 0x90;
+        if (mix_daytona) {
+          int tw = 0; for (int q = 0; q < NLS; ++q) tw += LS[q].w;
+          int pick = int(rng() % uint64_t(tw));
+          for (int q = 0; q < NLS; ++q) { pick -= LS[q].w; if (pick < 0) { op = LS[q].op; break; } }
+        } else {
+          op = LS[rng() % uint64_t(NLS)].op;
+        }
         // UNALIGNED ADDRESSES for the single-word forms. Word-aligned offsets
         // only was a silent coverage hole: the LSU's byte-split path is reached
         // exclusively by unaligned byte/half/word access, so the whole-CPU
@@ -443,8 +471,25 @@ int main(int argc, char **argv) {
         // their own and an unaligned one is not a case the design promises.
         const bool multi = (op == 0x98 || op == 0x9a || op == 0xa0 ||
                             op == 0xa2 || op == 0xb0 || op == 0xb2);
-        const uint32_t off = multi ? (0x800u + ((rng() % 0x180u) << 2))
-                                   : (0x800u + (rng() % 0x600u));
+        // ALIGNMENT is weighted too, and for the same reason as the form mix.
+        // Only half-word and word accesses can split (a byte access never
+        // does), and splitting costs several bus cycles -- so generating
+        // byte-granular addresses uniformly makes the memory path look far more
+        // expensive than compiler-generated code, which aligns its accesses.
+        //
+        // coverage: byte-granular, because the split path must be exercised.
+        // daytona: aligned to the access size, with a small unaligned tail.
+        uint32_t off;
+        if (multi) {
+          off = 0x800u + ((rng() % 0x180u) << 2);
+        } else if (!mix_daytona || (rng() % 100) < 3) {
+          off = 0x800u + (rng() % 0x600u);           // any alignment
+        } else {
+          const uint32_t sz = (op == 0x80 || op == 0x82 || op == 0xc0 || op == 0xc2) ? 1u
+                            : (op == 0x88 || op == 0x8a || op == 0xc8 || op == 0xca) ? 2u
+                                                                                     : 4u;
+          off = (0x800u + (rng() % 0x600u)) & ~(sz - 1u);
+        }
         // Multi-word forms mask the destination register, so a high srcdst is
         // fine, but keep it out of r0-r2 (PFP/SP/RIP) to avoid perturbing the
         // frame machinery in a test aimed at the memory path.
