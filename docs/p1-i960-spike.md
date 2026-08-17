@@ -428,7 +428,8 @@ number the DSP budget in §5.5 now has to carry.
 | `i960_fpmul` (double) | 326 | 4 | 64.02 MHz |
 | `i960_fpdiv` (double) | 319 | 0 | 66.15 MHz |
 | `i960_fpsqrt` (double) | 249 | 0 | 89.90 MHz |
-| **FPU datapath total** | **1,679** | **4** | limited by `fpadd` at 51.89 |
+| `i960_fpmisc` (cmp/cvt/round/scale/logb) | 1,252 | 0 | comb |
+| **FPU total so far** | **2,931** | **4** | limited by `fpadd` at 51.89 |
 | Model 1 `fp_add` (single) | 411 | 0 | 76.35 MHz |
 | Model 1 `fp_mul` (single) | 144 | 1 | 116.85 MHz |
 
@@ -535,6 +536,38 @@ Two bugs, and the second is worth keeping:
   divider's shape looked right and produced roots wrong by a *non-obvious*
   factor rather than a clean binade, which made the failures much harder to read
   than the divider's uniform "everything is 2x too large".
+
+#### The rest of the exactly-specified group
+
+`rtl/cpu/i960/i960_fpmisc.sv` — `cmpr`/`cmprl`, `logbnr`, `cvtir`/`cvtilr`,
+`cvtri`/`cvtzri`, `roundr`, `scaler`/`scalerl`. 1,252 ALM, combinational, no DSP.
+3.3 M checks per seed across three seeds, every operation crossed with all four
+rounding modes, zero mismatches.
+
+**The rounding mode is AC[31:30] and it is not round-to-nearest-even:** 0 is
+round half *away from zero* (C's `round()`), 1 floor, 2 ceil, 3 truncate. Model
+1's M0 recorded the same trap on the TGP's `cfxd` — a mode field saying "round
+to nearest" usually means half-to-even, and here it does not.
+
+Three bugs, and the last is the one worth carrying forward:
+
+- **`cvtzri` ignored the mode field.** The `z` means "toward zero" and it
+  truncates regardless of AC[31:30], where `cvtri` honours it. Exposed by an
+  *unused-parameter* warning, not by a test — the constant had no reader because
+  the two conversions shared a path they should not have.
+- **Sub-unity rounding was short-circuited to zero.** `0.5` rounds to `1`, and
+  the fractional field needs more than 52 bits once |x| < 1. Capping it made
+  `0.25` look like `0.5`.
+- **A harness bug that disabled its own NaN check.** `U{dut->y}.d` initialises
+  the *first* union member, so an integer argument is **converted** to double
+  rather than reinterpreted. Every "both are NaN, skip" guard built on it was
+  silently false. The other four FP harnesses use `U got; got.u = ...` and are
+  unaffected — checked rather than assumed.
+
+That last one is the same family as the stale-binary incident: a check that
+looks present, reads plausibly, and does nothing. It only surfaced because the
+arithmetic underneath it had become correct enough for NaN handling to be the
+last thing left failing.
 
 ## 9. Known unverifiable
 
