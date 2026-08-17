@@ -45,6 +45,7 @@ MDV_RTL  := $(I960)/i960_muldiv.sv
 FPM_RTL  := $(I960)/i960_fpmul.sv
 FPA_RTL  := $(I960)/i960_fpadd.sv
 FPD_RTL  := $(I960)/i960_fpdiv.sv
+FPS_RTL  := $(I960)/i960_fpsqrt.sv
 # The assembled CPU. Order matters only for readability; Quartus resolves by name.
 TOP_RTL  := $(DEC_RTL) $(ALU_RTL) $(REG_RTL) $(AGU_RTL) $(LST_RTL) \
             $(LSU_RTL) $(MAP_RTL) $(ICA_RTL) $(MDV_RTL) $(I960)/i960_top.sv
@@ -56,8 +57,8 @@ all: lint synth test
 
 # --------------------------------------------------------------------- lint
 
-.PHONY: lint lint_i960_dec lint_i960_alu lint_i960_regs lint_i960_agu lint_i960_ldst lint_i960_lsu lint_i960_memmap lint_i960_icache lint_i960_muldiv lint_i960_fpmul lint_i960_fpadd lint_i960_fpdiv lint_i960_top
-lint: lint_i960_dec lint_i960_alu lint_i960_regs lint_i960_agu lint_i960_ldst lint_i960_lsu lint_i960_memmap lint_i960_icache lint_i960_muldiv lint_i960_fpmul lint_i960_fpadd lint_i960_fpdiv lint_i960_top
+.PHONY: lint lint_i960_dec lint_i960_alu lint_i960_regs lint_i960_agu lint_i960_ldst lint_i960_lsu lint_i960_memmap lint_i960_icache lint_i960_muldiv lint_i960_fpmul lint_i960_fpadd lint_i960_fpdiv lint_i960_fpsqrt lint_i960_top
+lint: lint_i960_dec lint_i960_alu lint_i960_regs lint_i960_agu lint_i960_ldst lint_i960_lsu lint_i960_memmap lint_i960_icache lint_i960_muldiv lint_i960_fpmul lint_i960_fpadd lint_i960_fpdiv lint_i960_fpsqrt lint_i960_top
 
 lint_i960_dec:
 	@echo "== lint i960_dec"
@@ -106,6 +107,10 @@ lint_i960_fpadd:
 lint_i960_fpdiv:
 	@echo "== lint i960_fpdiv"
 	$(VERILATOR) --lint-only $(VFLAGS) --top-module i960_fpdiv $(FPD_RTL)
+
+lint_i960_fpsqrt:
+	@echo "== lint i960_fpsqrt"
+	$(VERILATOR) --lint-only $(VFLAGS) --top-module i960_fpsqrt $(FPS_RTL)
 
 lint_i960_top:
 	@echo "== lint i960_top"
@@ -156,8 +161,8 @@ synth_i960_ldst:
 
 # --------------------------------------------------------------------- tests
 
-.PHONY: test test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_top
-test: test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_top
+.PHONY: test test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_top
+test: test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_top
 
 test_i960_dec: obj_i960_dec/Vi960_dec
 	@echo "== test i960_dec"
@@ -255,6 +260,14 @@ obj_i960_fpdiv/Vi960_fpdiv: $(FPD_RTL) $(TB)/tb_i960_fpdiv.cpp
 	$(VBUILD) --top-module i960_fpdiv -CFLAGS "-O2 -I../$(TB)" \
 	  --Mdir obj_i960_fpdiv -o Vi960_fpdiv $(FPD_RTL) $(TB)/tb_i960_fpdiv.cpp
 
+test_i960_fpsqrt: obj_i960_fpsqrt/Vi960_fpsqrt
+	@echo "== test i960_fpsqrt"
+	./obj_i960_fpsqrt/Vi960_fpsqrt $(TEST_ARGS)
+
+obj_i960_fpsqrt/Vi960_fpsqrt: $(FPS_RTL) $(TB)/tb_i960_fpsqrt.cpp
+	$(VBUILD) --top-module i960_fpsqrt -CFLAGS "-O2 -I../$(TB)" \
+	  --Mdir obj_i960_fpsqrt -o Vi960_fpsqrt $(FPS_RTL) $(TB)/tb_i960_fpsqrt.cpp
+
 test_i960_top: obj_i960_top/Vi960_top
 	@echo "== test i960_top (whole-CPU lockstep)"
 	./obj_i960_top/Vi960_top $(TEST_ARGS)
@@ -288,9 +301,10 @@ SRCS_i960_muldiv := $(MDV_RTL)
 SRCS_i960_fpmul  := $(FPM_RTL)
 SRCS_i960_fpadd  := $(FPA_RTL)
 SRCS_i960_fpdiv  := $(FPD_RTL)
+SRCS_i960_fpsqrt := $(FPS_RTL)
 SRCS_i960_top    := $(TOP_RTL)
 
-QUARTUS_MODS := i960_dec i960_alu i960_regs i960_agu i960_ldst i960_lsu i960_memmap i960_icache i960_muldiv i960_fpmul i960_fpadd i960_fpdiv i960_top
+QUARTUS_MODS := i960_dec i960_alu i960_regs i960_agu i960_ldst i960_lsu i960_memmap i960_icache i960_muldiv i960_fpmul i960_fpadd i960_fpdiv i960_fpsqrt i960_top
 
 # One module, real device, real toolchain. This is the only thing that gives
 # ALM, M10K and DSP — yosys gives LUT6, which is an indicator and not the same

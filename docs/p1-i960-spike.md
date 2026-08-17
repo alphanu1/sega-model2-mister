@@ -427,7 +427,8 @@ number the DSP budget in §5.5 now has to carry.
 | `i960_fpadd` (double) | **785** | 0 | 51.89 MHz |
 | `i960_fpmul` (double) | 326 | 4 | 64.02 MHz |
 | `i960_fpdiv` (double) | 319 | 0 | 66.15 MHz |
-| **FPU datapath total** | **1,430** | **4** | limited by `fpadd` at 51.89 |
+| `i960_fpsqrt` (double) | 249 | 0 | 89.90 MHz |
+| **FPU datapath total** | **1,679** | **4** | limited by `fpadd` at 51.89 |
 | Model 1 `fp_add` (single) | 411 | 0 | 76.35 MHz |
 | Model 1 `fp_mul` (single) | 144 | 1 | 116.85 MHz |
 
@@ -480,6 +481,60 @@ zero. The host implements subnormals properly, so a program that produces one
 **will** diverge; the harness excludes them so the suite measures the
 multiplier rather than a known difference. Rounding is round-to-nearest-even
 only, which is what the reference's host mode does.
+
+### 8.2 Transcendentals — the oracle runs out a third time
+
+**The reference computes transcendentals with the host's `libm`**:
+
+```cpp
+case 0xc: // sinr
+    set_rif(opcode, sin(t1f));
+```
+
+`libm` is not correctly rounded, differs between platforms and versions, and
+cannot be reproduced in RTL without reimplementing its exact algorithms. So for
+the transcendental group there is **no bit-exact oracle available at any
+price** — a different position from §2.2's FPU precision problem, which at
+least had a defined answer to aim at.
+
+**Decision: bit-exact to the reference.** Taken deliberately, with the cost
+understood: it ties this core's transcendental results to one `libm`'s
+algorithms, and a different host would change what "correct" means.
+
+**Not all of the group needs that.** Several operations are exactly specified by
+IEEE-754, so a correct implementation is bit-exact *by definition* rather than
+by imitation — and the host produces the same answer for the same reason:
+
+| exactly specified | needs the reference's own algorithm |
+|---|---|
+| `sqrtr`, `sqrtrl` — IEEE requires correct rounding | `sinr`, `cosr`, `tanr` |
+| `cmpr`, `cmprl` | `atanr`, `atanrl` |
+| `roundr`, `roundrl` | `logr`, `logepr`, `logrl` |
+| `remr` — IEEE remainder | `expr`, `exprl` |
+| `logbnr`, `logbnrl` — exponent extract | |
+
+The `r` forms help further: they round the double result back to **single**, and
+a correctly-rounded single result matches a correctly-rounded double rounded to
+single in all but vanishingly rare cases.
+
+#### `sqrt`, and why its bugs were harder to read than the divider's
+
+`rtl/cpu/i960/i960_fpsqrt.sv` — 249 ALM, no DSP, 89.90 MHz, 56 cycles against
+the reference's 104. Digit-by-digit, no multiplier. 603,516 checks per seed
+across three seeds plus every perfect square to 3999 and a sweep of both
+exponent parities. Zero mismatches.
+
+Two bugs, and the second is worth keeping:
+
+- **Exponent parity inverted.** The bias is 1023, which is *odd*, so an odd
+  biased exponent means an **even** unbiased one. Having that backwards swapped
+  both branches and every result was wrong by a factor of sqrt(2).
+- **One radicand bit per step instead of two.** Square root consumes two bits
+  per step and shifts the remainder by two, with a trial subtrahend of
+  `4*root + 1` — division consumes one and uses `2*root + 1`. Reusing the
+  divider's shape looked right and produced roots wrong by a *non-obvious*
+  factor rather than a clean binade, which made the failures much harder to read
+  than the divider's uniform "everything is 2x too large".
 
 ## 9. Known unverifiable
 
