@@ -1717,3 +1717,36 @@ trace record.
 **Worth ~0.6 CPI (4.96 -> 4.36), confirmed by measurement**, so it remains the
 right next item — and it unblocks the fetch/execute overlap, which is already
 written, known correct, and worth ~1.0 more.
+
+### Prefetch queue, third attempt: one more real bug found, symptom unchanged
+
+Followed the rule and instrumented instead of guessing a fourth time. The ring
+buffer, extended with both slots, showed it immediately:
+
+```
+t=3838  ts=T_FETCH  ip=000000b4 | pf 000000b4 v0   pf2 000000ac v0
+t=3839  ts=T_EXEC   ip=000000b4 | pf 000000b8 v0   pf2 000000b8 v0
+```
+
+**`pf2_valid` was 0 on every cycle of the entire run.** Slot 1 never once
+became valid, so the queue was never two deep and the measured 0.6 CPI gain
+came from something else entirely — worth knowing before anyone trusts that
+figure.
+
+Cause: the consume path cleared `pf2_armed` unconditionally, cancelling the
+in-flight deeper request on every single instruction. Clearing belongs only on a
+redirect. **That is a real bug and the fix is right** — and the mismatch is
+still identical, at the same retire, on the same instruction.
+
+**Four hypotheses eliminated, three of them real bugs that needed fixing
+anyway.** The instrumentation was worth it — it disproved that the queue was
+working at all, which every previous measurement had implicitly assumed.
+
+Reverted. Tree green: 15/15, CPI 4.96, both mixes, nothing uncommitted.
+
+**Next: the same trace, but keyed on the failure rather than read at the tail.**
+Print the ring only for the program that fails and widen it to cover retire 39,
+then find the cycle where `insn` is latched while `pf_ip != ip`. The dump
+currently shows the last 64 interesting cycles of the whole run, which is not
+necessarily the failing program at all — that is why the trace above shows
+healthy sequential fetching and no fault.
