@@ -1040,3 +1040,82 @@ sitting in the design the whole time, both invisible to simulation, both
 obvious the moment the number was printed. **An unreported measurement is not a
 measurement**, and the cost of not printing it was two wrong circuits rather
 than one wrong number.
+
+---
+
+## M2-B — CLOSED. The i960's FPU is cold, and the workload is load/store bound
+
+Measured on real hardware behaviour: MAME 0.289, `daytona93`, traced with the
+debugger across four sample points spanning 90 emulated seconds.
+
+**The sample is a full 3D demo race**, confirmed by screenshot rather than
+assumed — complete track, cliff geometry, scenery, six cars, textured
+throughout. Visually this is the "Daytona at speed" the study names as a worst
+case. It is attract mode, not interactive play: the scripted coin insert did not
+register (`CREDIT 0/3`), and the difference between demo and interactive is
+input handling, which is negligible against a render load.
+
+Execution is genuine and distributed — **4,265 distinct PCs, hottest 0.3%, top
+ten 2.8%** — so this is not a wait loop being sampled.
+
+### The mix, over 150,501 instructions
+
+| class | count | share |
+|---|---|---|
+| **load/store** | 79,575 | **52.9%** |
+| integer ALU | 20,453 | 13.6% |
+| move | 14,643 | 9.7% |
+| compare/branch | 14,078 | 9.4% |
+| address (`lda`) | 12,072 | 8.0% |
+| call/return | 7,098 | 4.7% |
+| **FP** | **1,238** | **0.8%** |
+| other | 1,344 | 0.9% |
+
+### M2-B verdict: PASS, decisively
+
+The gate was *"low enough that a microcoded FPU costs no frame time"*.
+
+**FP is 0.8% of instructions, and every one of them is basic arithmetic.
+Zero transcendentals in 150,501 instructions.** Not one `sinr`, `cosr`, `tanr`,
+`atanr`, `logr` or `expr`.
+
+That makes architectural sense and is the first evidence for it: **the TGP does
+the geometry**, so the i960 is the game CPU, not the maths engine. It moves data.
+
+Two consequences for P1, and both reduce work:
+
+- **The FPU can be microcoded and shared.** A wide FPU would be silicon spent on
+  0.8% of instructions.
+- **The six glibc transcendentals may not be needed at all.** They were carrying
+  a large share of the i960's remaining 1,921-6,921 ALM. *Caveat: absence over
+  8 frames is not proof of never* — a per-race-start call would not appear here.
+  Before deleting them, sample across a race start and a menu.
+
+### What this does NOT establish, and the trap is R8
+
+The trace shows **18,813 instructions per frame**, which at 60 fps is ~1.13 M
+instructions/second — against the 12.5-16.7 M/s the study requires. **Do not
+conclude the i960 only needs 1.13 M/s.**
+
+`model2.cpp` calls **`i960_stall()`**, and the driver's own notes say the timing
+*"may need wait state emulation to fix"*. The instruction *rate* is a product of
+MAME's stall model, which is exactly the class of figure R8 was written about
+after it produced two wrong conclusions in this document.
+
+**The mix is reliable; the rate is not.** Which opcodes a program executes is
+determined by the program. How many it executes per frame is determined by
+MAME's timing model, and that model is acknowledged imperfect by its own
+authors.
+
+### The immediately actionable result — this is R9's answer
+
+The lockstep generator emits instruction classes roughly uniformly, which is why
+`T_MULDIV` was 53% of measured cycles and CPI read 15.91. **Real code is 52.9%
+load/store and 0.8% FP.** Divides are enormously over-represented and memory
+enormously under-represented in every CPI figure this project has produced.
+
+**Reweight the generator to the measured mix and re-measure CPI.** That converts
+throughput from a number that cannot be interpreted into one that can, and it is
+the first time that has been possible. Expect it to move a long way: our memory
+path is multi-cycle (`T_MEM`/`T_MEM_W`) and is currently 1.5% of the synthetic
+profile against 52.9% of reality.
