@@ -1750,3 +1750,55 @@ then find the cycle where `insn` is latched while `pf_ip != ip`. The dump
 currently shows the last 64 interesting cycles of the whole run, which is not
 necessarily the failing program at all — that is why the trace above shows
 healthy sequential fetching and no fault.
+
+### Prefetch queue: the blocker is the CACHE INTERFACE, not the sequencer
+
+Fourth attempt, and the instrumentation finally named the fault instead of
+another symptom. Added a **prefetch invariant** to the harness — whenever the
+front end latches a word, it must equal memory at `ip` — and it fired
+immediately:
+
+```
+[PREFETCH] latched 32c34008 at ip=000000d4, memory has 58761019
+           pf_ip=000000c0 v0   pf2_ip=000000c0 v0
+```
+
+**Neither slot was valid.** The word came from `T_FETCH_W` accepting `ic_valid`
+— a *prefetch's* completion mistaken for the demand fetch's. `i960_icache`
+returns `valid` and `data` with **no indication of which request it is
+answering**. With one outstanding request that is safe by construction. With a
+queue it is not: a prefetch that hits completes while a demand fetch is being
+waited for, and the wait state cannot tell the two apart.
+
+**This is an interface problem, and the sequencer cannot fix it.** Three
+sequencer-level fixes were tried and all failed for the same underlying reason:
+
+1. flush slot 1 on redirect — clearing the flag does not un-issue the request;
+2. count outstanding "stray" answers and discard them — **deadlocks**, because an
+   *aborted* fill never answers, so the count never clears;
+3. chain the deeper request only during `T_EXEC` — narrows the window, does not
+   close it, since the front end also issues prefetches.
+
+### What the next attempt needs, concretely
+
+**`i960_icache` must name the address its `valid` answers.** Prototyped here as
+an extra `vaddr` output latched when a request is accepted, with `T_FETCH_W`
+matching `ic_vaddr == ip[31:2]`. That much is right and removed the wrong-word
+latching outright.
+
+It still stalled, because a second requirement was not met: **a speculative
+prefetch must never abort a demand fill.** The cache aborts on any request for a
+different line — correct and load-bearing for redirects — so a prefetch issued
+while a demand fill is in flight kills it and the sequencer waits forever. The
+cache needs to distinguish demand from speculative requests, e.g. a `req_prio`
+input where only a demand request may abort.
+
+**Both changes are in `i960_icache`, are small, and are testable at block level**
+by the redirect pass that already exists. Do them there, with the block harness,
+before touching the sequencer again — the last four attempts all failed in the
+sequencer for reasons that live in the cache.
+
+**Kept: the prefetch invariant check.** It catches a wrong instruction word at
+the cycle it is latched rather than dozens of retires later as a wrong register,
+and it costs nothing. It is the reason this attempt produced a diagnosis rather
+than a fifth hypothesis.
