@@ -1688,3 +1688,32 @@ sets of registers maintained by three separate code paths.
 **Estimated value confirmed at ~0.6 CPI**, which makes it worth doing properly:
 4.96 -> ~4.36, and it unblocks the fetch/execute overlap already known to be
 correct and worth ~1.0 more.
+
+### Prefetch queue, second attempt: redirect flush was NOT the cause either
+
+Rebuilt the queue as one change rather than a patch, with the invariant stated
+and slot 1 flushed on every path that invalidates slot 0 — the candidate the
+previous entry ranked first. **Identical mismatch, same retire, same
+instruction:**
+
+```
+MISMATCH retire 39  r14  got=0000001d want=0000001a  (IP 000000d4 insn 58761019)
+```
+
+Three hypotheses eliminated now: the front end's duplicate `ip+4` issue (a real
+bug, fixed, not this one), slot ordering, and redirect flushing. Reverted.
+
+**Next attempt starts with instrumentation, not a fourth hypothesis.** That rule
+has been right every time today it was followed and wrong every time it was not
+— the `sqrtr` bug, the FP-register gap and the store-index bug all fell to a
+probe within one run after inspection had failed repeatedly.
+
+Concretely: dump `(ip, pf_ip, pf_valid, pf2_ip, pf2_valid, fetch_word, insn)`
+per cycle for the failing program and find the cycle where `insn` is latched
+from a slot whose address does not match `ip`. The whole-CPU harness already has
+the ring buffer for exactly this; it needs the two extra slots added to the
+trace record.
+
+**Worth ~0.6 CPI (4.96 -> 4.36), confirmed by measurement**, so it remains the
+right next item — and it unblocks the fetch/execute overlap, which is already
+written, known correct, and worth ~1.0 more.
