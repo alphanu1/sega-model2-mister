@@ -114,22 +114,57 @@ module i960_top (
 
   tstate_e ts;
 
-  // The decoder sees the word ARRIVING during a fetch state, and the latched
-  // word everywhere else. This is what removes T_DECODE: the register numbers,
-  // the trap check and the prefetch decision are all available in the cycle the
-  // instruction lands, so fetch goes straight to execute. Even at a 100%
-  // prefetch hit rate the old FETCH -> DECODE -> EXEC walk could not beat
-  // 3 CPI, and 3 CPI at 27.44 MHz is 9.15 M instr/s against a 12.5 M floor.
+  // One decoder reads the word ARRIVING during a fetch state (u_dec_in), the
+  // other reads the latched word (u_dec). This is what removes T_DECODE: the
+  // register numbers, the trap check and the prefetch decision are all
+  // available in the cycle the instruction lands, so fetch goes straight to
+  // execute. Even at a 100% prefetch hit rate the old FETCH -> DECODE -> EXEC
+  // walk could not beat 3 CPI, and 3 CPI at 27.44 MHz is 9.15 M instr/s against
+  // a 12.5 M floor.
   //
   // T_DECODE is retained in the enum but is now unreachable; the state numbers
   // are load-bearing for the harness profile, so renumbering them would
   // silently relabel every measurement taken so far.
+  //
+  // TWO decoders, not one muxed decoder, and the reason is a measured false
+  // path. Selecting the decoder input with `(ts == T_FETCH) ? fetch_word : insn`
+  // creates a static path ip -> (pf_ip == ip) -> dec_in -> decode -> ALU -> wd.
+  // No cycle ever uses it -- during T_EXEC the decoder reads the latched word --
+  // but static timing does not know that, and it became the critical path at
+  // ip[26] -> wd[13] with NEGATIVE slack, costing 27.44 -> 24.63 MHz.
+  //
+  // A second decoder costs ~103 ALM and removes the path outright: the
+  // arriving-word decode feeds only the register numbers and the front-end
+  // decisions, and never reaches writeback. Cheaper than an SDC false-path
+  // exception, and it cannot rot -- a constraint that stops being true fails
+  // silently, whereas this is structural.
   logic        fetch_word_ok;
-  logic [31:0] fetch_word, dec_in;
-  assign dec_in = ((ts == T_FETCH) || (ts == T_FETCH_W)) ? fetch_word : insn;
+  logic [31:0] fetch_word;
+
+  logic [1:0]  f_fmt;
+  logic [7:0]  f_op;
+  logic        f_valid, f_len2, f_memb_bad;
+  logic [4:0]  f_src1, f_src2, f_srcdst;
+  /* verilator lint_off UNUSEDSIGNAL */
+  logic [3:0]  f_op2, f_memb_mode;
+  logic        f_src1_lit, f_src2_lit, f_dst_lit, f_memb, f_mema_rel;
+  logic [4:0]  f_abase, f_index;
+  logic [2:0]  f_scale;
+  logic [12:0] f_mema_offset;
+  logic [31:0] f_disp;
+  /* verilator lint_on UNUSEDSIGNAL */
+
+  i960_dec u_dec_in (
+    .insn(fetch_word), .fmt(f_fmt), .op(f_op), .op2(f_op2), .valid(f_valid),
+    .insn_len2(f_len2), .src1(f_src1), .src2(f_src2), .srcdst(f_srcdst),
+    .src1_lit(f_src1_lit), .src2_lit(f_src2_lit), .dst_lit(f_dst_lit),
+    .memb(f_memb), .memb_mode(f_memb_mode), .abase(f_abase), .index(f_index),
+    .scale(f_scale), .mema_rel(f_mema_rel), .mema_offset(f_mema_offset),
+    .memb_bad(f_memb_bad), .disp(f_disp)
+  );
 
   i960_dec u_dec (
-    .insn(dec_in), .fmt(d_fmt), .op(d_op), .op2(d_op2), .valid(d_valid),
+    .insn(insn), .fmt(d_fmt), .op(d_op), .op2(d_op2), .valid(d_valid),
     .insn_len2(d_len2), .src1(d_src1), .src2(d_src2), .srcdst(d_srcdst),
     .src1_lit(d_src1_lit), .src2_lit(d_src2_lit), .dst_lit(d_dst_lit),
     .memb(d_memb), .memb_mode(d_memb_mode), .abase(d_abase), .index(d_index),
@@ -574,8 +609,11 @@ module i960_top (
     case (ts)
       // COBR reads (insn>>19) on port 1; REG and MEM read src1 there. Driven
       // from the arriving word, so rd1/rd2 are valid when T_EXEC begins.
-      T_FETCH, T_FETCH_W, T_FETCH2_W:
-        ra1 = (d_fmt == 2'd1) ? d_srcdst : d_src1;
+      T_FETCH, T_FETCH_W: begin
+        ra1 = (f_fmt == 2'd1) ? f_srcdst : f_src1;
+        ra2 = f_src2;
+      end
+      T_FETCH2_W: ra1 = (d_fmt == 2'd1) ? d_srcdst : d_src1;
       T_EXEC: begin
         if      (is_movx)        ra1 = d_src1 + 5'd1;   // second word of movl/t/q
         else if (d_fmt == 2'd3)  ra1 = d_srcdst & ls_regmask;  // store source
@@ -660,10 +698,10 @@ module i960_top (
             // --- what T_DECODE used to do, now in the cycle the word lands ---
             // The decoder is reading the ARRIVING word (see dec_in), so these
             // describe the instruction being latched now, not the previous one.
-            if (!d_valid || d_memb_bad) begin
-              trap_op <= d_op;
+            if (!f_valid || f_memb_bad) begin
+              trap_op <= f_op;
               ts      <= T_TRAP;
-            end else if (d_len2) begin
+            end else if (f_len2) begin
               fetch_addr <= ip + 32'd4;
               ic_req     <= 1'b1;
               ip_next    <= ip + 32'd8;
