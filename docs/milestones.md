@@ -85,21 +85,36 @@ early one.
 opcode space, timing, memory map, deliverables and exit criteria, taken from the
 reference rather than from secondary sources.
 
-**Status, 2026-08-16.** Steps 1-6 of 8 are done. Nine RTL modules plus an
-integration top, all lint-clean on verilator, yosys and Quartus 17.0, all
-fuzz- or mutation-verified, and whole-CPU lockstepped against a transcribed
-reference.
+**Status, 2026-08-17.** Steps 1-6 of 8 are done, with the FPU integrated and
+whole-CPU lockstepped. All 15 suites pass at 147,060 checks and zero divergence.
 
 | | |
 |---|---|
-| instruction coverage | **108 of 163** mnemonics (66%) |
-| assembled CPU | **3,754 ALM, 3 DSP, 45.16 MHz** |
-| projected complete | 8,254 - 13,354 ALM |
+| assembled CPU | **7,015 ALM, 7 DSP, 27.72 MHz** |
+| simple instruction, prefetch hit | **2 CPI** = 13.86 M instr/s |
+| simple instruction, measured average | **5.33 CPI** = 5.20 M instr/s |
 
-The integer core is complete except faults, two supervisor instructions and the
-FPU. **What remains is not more opcodes — it is the pipeline**, which is what
-step 7's M2-D gate actually measures and what the optimisation backlog is
-blocked on.
+**The bottleneck moved, and it is no longer the pipeline.** `T_DECODE` was
+removed — the decoder reads the arriving word, so fetch goes straight to
+execute — which put the front end at 2 CPI. Instruction fetch then became 80%
+of a simple instruction at **4.28 cyc/instr**, against the **1.17** that a
+12.5 M instr/s target allows.
+
+So the remaining P1 work is **instruction fetch**, not sequencing:
+
+- 60.8% prefetch hit rate; 6,948 fill-wait cycles. A 16-byte line is four
+  instructions, so sequential code cannot miss less than 25%. Longer lines or a
+  next-line prefetch attack this.
+- 4,626 cycles waiting out a *discarded* prefetch's fill. Self-inflicted.
+  A fill-abort was attempted and reverted — see `HANDOFF.md` for the failure
+  signature and the three hypotheses already eliminated.
+
+**The 90 MHz in step 7's exit criterion is a proxy and it is ~3.3x stricter than
+the throughput requirement it stands for.** Judge on throughput. Area has never
+been the constraint: 7,015 against a 12K pass band.
+
+Still absent: faults entirely, the `rl` double-precision forms, `remr`, the six
+glibc transcendentals, `synmov`/`synmovq`, `calls`, `modpc` and interrupts.
 
 The main CPU. **No open-source i960 exists in any HDL** (§5.4.3) — this is
 from scratch, and it is the larger of the two remaining unknowns to actually be
