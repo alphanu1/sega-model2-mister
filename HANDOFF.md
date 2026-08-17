@@ -1865,3 +1865,63 @@ attempts produced four symptoms and no cause; with this, the fifth named the
 cause in one run. It is in the tree, costs nothing, and passes.
 
 **Tree green: 15/15, CPI 4.96, both mixes.**
+
+## Prefetch queue and overlap: both now WORK, and neither is landed
+
+Two more attempts on the corrected cache interface. Both got materially
+further, and the reason neither is committed is measurement, not correctness.
+
+### The queue is correct and it is a REGRESSION on its own
+
+With `vaddr`, `req_demand` and the fixed read path in place, the two-deep queue
+passes everything — 15/15 suites, both mixes, zero divergence, and the prefetch
+invariant silent.
+
+**CPI 4.96 -> 5.07.** Slower. The queue does not reduce `T_FETCH` by itself; it
+only makes the overlap possible, and meanwhile the extra speculative traffic
+costs cycles. **Committing it alone would add logic and lose CPI**, so it is
+not committed. It is only worth landing together with the overlap.
+
+One fix inside it worth keeping for next time: the chain must not be gated on
+`ts == T_EXEC`. The shallow prefetch actually lands during `T_FETCH`, where it
+is consumed directly, so gating on execute meant the deeper request was never
+issued and slot 1 never filled. The correct gate is "not while a demand fetch
+is outstanding" — `ts != T_FETCH_W && ts != T_FETCH2_W`.
+
+### The overlap FIRES and gives CPI 4.76, with one correctness failure left
+
+With the queue filling properly, the fetch/execute overlap engages for the
+first time: **`T_FETCH` 1.02 -> 0.90 cyc/instr, CPI 4.96 -> 4.76.**
+
+```
+MISMATCH retire 23  r11  got=00000001 want=bc7f8110  (IP 00000074 insn 5819d50c)
+MISMATCH retire 23  IP   got=0000007c want=00000078
+```
+
+The IP runs one instruction ahead of the reference, with a register wrong
+alongside it. **The harness change is in and correct** — `dreg()` applies the
+pending `we`/`wa`/`wd` instead of ticking again, which is what a design with
+back-to-back retires needs — so the remaining fault is more likely in the
+overlap's own bookkeeping than in the comparison.
+
+**Prime suspect, untested:** the post-case override sets `ip <= ip_next` and
+promotes the queue, but the ALU path in the case has already set `ip <= ip_next`
+and, on some paths, touched the prefetch registers. Two writers to the same
+state in one cycle is the shape of every bug found today. The override should
+be the ONLY writer of `ip`, `pf_*` and `ts` on the overlapped path.
+
+### Where this leaves the target
+
+The route is no longer speculative — every step has been executed at least once
+and measured:
+
+| step | status | CPI |
+|---|---|---|
+| baseline | committed, green | 4.96 |
+| + queue | works, regression alone | 5.07 |
+| + overlap | fires, one bug | **4.76** |
+| + memory as a stage | not attempted | est. ~3.6 |
+
+The cache interface that makes all of it possible **is committed and costs
+nothing** — `vaddr`, `req_demand`, and a read path that answers the request it
+names rather than whatever address the requester has moved to.
