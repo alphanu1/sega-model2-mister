@@ -1011,6 +1011,37 @@ conclusions in this document from that alone. Both `mb86233.cpp` and `v60.cpp` c
 timing models that are explicitly approximations, and `v60.cpp` says so in a comment.
 Check the source before building an argument on a cycle count.
 
+**R9 — a CPI figure is a property of the instruction mix, not of the CPU.** The P1
+work has quoted two CPI numbers for the same RTL — 3.31 and 18.50 — and both are
+correct. 3.31 was warm-cache on an integer mix before the FPU was integrated; 18.50 is
+the current whole-CPU lockstep, where `T_MULDIV` alone is **53.2% of all cycles at 9.84
+cyc/instr**. Nothing regressed between them: the fuzz generator emits instruction
+classes roughly uniformly, so divides are represented far above their frequency in real
+code, and the FPU added a second multi-cycle unit to the same synthetic stream.
+
+*What was believed:* that measured CPI on the lockstep harness was a throughput figure
+for §4.3's 12.5-16.7 M instr/s requirement.
+
+*What is now known:* it is a throughput figure for the **generator's** mix, which was
+built for coverage — every opcode exercised roughly equally — and coverage weighting is
+close to the opposite of frequency weighting. Any CPI derived from it is an upper bound
+on cycles, not an estimate.
+
+*How established:* per-state cycle profiling in `tb_i960_top.cpp`, after the FP request
+strobes were fixed. Fetch was 58% of cycles before the I-cache fill hold and sequential
+prefetch; it is now 24.5% and divide dominates.
+
+**This raises M2-B's value and changes what it is for.** It was scoped as "how hot is
+FP, to decide whether the FPU can be microcoded". It is now also the **only** source of
+the instruction-mix weighting that turns a cycle profile into a throughput number.
+Without it, P1's exit criterion 4 can be measured (Fmax, ALM) but the §4.3 throughput
+argument cannot be evaluated at all.
+
+**Third recurring failure mode:** quoting a derived number without its basis. The 3.31
+was not wrong when written and is not wrong now — it simply never carried the mix it was
+measured on, so it read as a property of the design. Record the conditions with the
+number or the number will be reused somewhere it does not apply.
+
 **Second recurring failure mode, from R6:** asserting that third-party RTL exists and is
 licence-compatible without opening the repository. R5 did this three times in one table and
 was wrong twice — once against the project and once in its favour. A licence claim is a

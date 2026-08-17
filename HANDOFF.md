@@ -421,10 +421,33 @@ the diverged word stays in the register file and every later retire fails on
 state already known to differ. The program must be **abandoned**, exactly like a
 trap. *Skipping a comparison does not undo a write.*
 
-Both are counted and printed so an exclusion cannot quietly become the run:
-**111 programs end on a subnormal and 18 on a NaN result, of 200.** That is a
-high truncation rate and it caps coverage depth — worth reducing by constraining
-the generator's FP operand ranges, but it is polish, not correctness.
+**Then the subnormal flush was modelled instead of excluded**, and the
+truncation went to zero. The flush is a two-line predicate written from §8.1 —
+exponent 0, mantissa non-zero, return signed zero — not read off the RTL, so it
+does not agree with the design by construction. If a unit flushed something it
+should not, this would still diverge. It does not.
+
+| | excluded | modelled |
+|---|---|---|
+| retires | 2,205 | **3,870** |
+| FP ops | 514 | **828** |
+| writes to fp0-fp3 | 58 | **115** |
+| field checks | 83,790 | **147,060** |
+| programs truncated | 111 + 18 | **0 + 33** |
+
+**Modelling a known deviation beats excluding it, when the deviation has a
+short specification.** Excluding threw away 111 of 200 programs and truncated
+them at their *deepest* retires, which is where the interesting state is.
+Modelling turned the same deviation into 147,060 assertions that the flush is
+exactly right.
+
+**33 programs still end on a NaN result, and that is left alone deliberately.**
+The units do not share one NaN rule: `i960_fpdiv` emits a canonical
+`0x7ff8_0000_0000_0000`, while `i960_fpcvt` propagates sign and payload through
+narrowing. Modelling each unit's NaN would mean transcribing each unit's rule
+into the reference — which is precisely the agree-by-construction failure the
+reference exists to avoid. 16.5% truncation is the honest price of keeping the
+oracle independent.
 
 ### Proof the check works
 

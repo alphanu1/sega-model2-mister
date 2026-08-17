@@ -53,10 +53,21 @@ struct Cpu {
   // register file and breaks every retire after it — so the program ends here,
   // the same as for a flushed subnormal.
   bool fp_nan_result = false;
-  double u2f_t(uint32_t v) {
-    if (((v >> 23) & 0xff) == 0 && (v & 0x7fffff) != 0) fp_denorm_operand = true;
+  // Modelled, not excluded. Abandoning every program that touched a subnormal
+  // cost 111 of 200 -- most of the run, and it truncated at the deepest
+  // retires first, which is where the interesting state is. The flush is a
+  // two-line predicate written from the specification (§8.1) rather than read
+  // off the RTL, so it does not agree with the design by construction: if a
+  // unit flushes something it should not, this still diverges.
+  static double flush_s(uint32_t v) {
+    if (((v >> 23) & 0xff) == 0 && (v & 0x7fffff) != 0)
+      return (v & 0x80000000u) ? -0.0 : 0.0;
     return u2f(v);
   }
+  static double flush_d(double d) {
+    return (std::fpclassify(d) == FP_SUBNORMAL) ? std::copysign(0.0, d) : d;
+  }
+  double u2f_t(uint32_t v) { return flush_s(v); }
   static uint32_t f2u(double d) { float f = (float)d; uint32_t v; std::memcpy(&v, &f, 4); return v; }
 
   // The literal forms select fp0-fp3, or 1.0 at index 0x16, else 0.0.
@@ -202,19 +213,17 @@ struct Cpu {
           if (handled) {
             if (!wr_cc) {
               if (wr_int)            rf.r[d.srcdst] = ires;
-              else if (d.dst_lit)    fp[d.srcdst & 3] = fres;
+              else if (d.dst_lit)    fp[d.srcdst & 3] = flush_d(fres);
               else {
-                const uint32_t u = f2u(fres);
+                // The result flushes too, not only the operands: a pair of
+                // normal singles can divide to a subnormal one.
+                uint32_t u = f2u(fres);
+                if (((u >> 23) & 0xff) == 0 && (u & 0x7fffff) != 0)
+                  u &= 0x80000000u;
                 rf.r[d.srcdst] = u;
                 fp_sdest       = d.srcdst;
-                // The result flushes too, not only the operands: a pair of
-                // normal singles can divide to a subnormal one, which the unit
-                // stores as zero and the host stores intact.
-                if (((u >> 23) & 0xff) == 0 && (u & 0x7fffff) != 0)
-                  fp_denorm_operand = true;
               }
-              if (!wr_int && std::isnan(fres))                    fp_nan_result    = true;
-              if (!wr_int && std::fpclassify(fres) == FP_SUBNORMAL) fp_denorm_operand = true;
+              if (!wr_int && std::isnan(fres)) fp_nan_result = true;
             }
             IP = ip_next;
             break;
