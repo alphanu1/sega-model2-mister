@@ -94,6 +94,7 @@ const char *rn(int i) {
 
 uint64_t denorm_skips = 0;
 uint64_t nan_stops    = 0;
+bool     probe_fp     = false;
 
 bool compare(uint64_t n) {
   // Skip the retire outright when the reference widened a subnormal single.
@@ -161,6 +162,7 @@ int main(int argc, char **argv) {
   uint64_t progs = 200, steps = 60, seed = 1;
   for (int i = 1; i < argc; ++i) {
     if (!std::strncmp(argv[i], "+random=", 8)) progs = std::strtoull(argv[i]+8, nullptr, 10);
+    if (!std::strcmp (argv[i], "+probe_fp"))  probe_fp = true;
     if (!std::strncmp(argv[i], "+seed=", 6))   seed  = std::strtoull(argv[i]+6, nullptr, 10);
   }
   dut = new Vi960_top;
@@ -321,8 +323,33 @@ int main(int argc, char **argv) {
     for (uint64_t r = 0; r < steps && fails == 0; ++r) {
       const uint32_t ip_before = dip();
       int guard = 0;
+      // Probe every cycle of an FP op with an fp0-fp3 destination. There are
+      // only a handful in the whole run, so this is cheap, and it answers which
+      // branch of the T_FP writeback actually fires -- which five rounds of
+      // reading the source could not.
+      const uint32_t iw_now = ref.rd(ref.IP);
+      const uint32_t o_now  = iw_now >> 24;
+      const bool probe = probe_fp &&
+                         (o_now==0x78||o_now==0x68||o_now==0x6c||o_now==0x67) &&
+                         (iw_now & 0x2000);
+      if (probe) std::printf("[probe] insn %08x op2=%x IP %08x\n",
+                             iw_now, (iw_now >> 7) & 0xf, ip_before);
       // advance until the sequencer has moved on to the next instruction
-      while (guard++ < 400 && dip() == ip_before && !dut->trap) tick();
+      while (guard++ < 400 && dip() == ip_before && !dut->trap) {
+        if (probe)
+          std::printf("        ts=%2d req=%d done=%d busy=%d fp_a=%016llx "
+                      "sqrt=%d valid=%d dstlit=%d fpr2=%016llx\n",
+                      dut->rootp->i960_top__DOT__ts,
+                      dut->rootp->i960_top__DOT__fsqrt_req,
+                      dut->rootp->i960_top__DOT__fsqrt_done,
+                      dut->rootp->i960_top__DOT__fsqrt_busy,
+                      (unsigned long long)dut->rootp->i960_top__DOT__fp_a,
+                      dut->rootp->i960_top__DOT__fp_is_sqrt,
+                      dut->rootp->i960_top__DOT__fp_valid,
+                      dut->rootp->i960_top__DOT__d_dst_lit,
+                      (unsigned long long)dfp(2));
+        tick();
+      }
       if (dut->trap) break;
       if (guard >= 400) { std::printf("STALL at IP %08x\n", ip_before); ++fails; break; }
       // IP moving is not the same as the instruction having retired. `we` is

@@ -539,10 +539,23 @@ module i960_top (
       rf_ret    <= 1'b0;
       rf_flush  <= 1'b0;
       fetch_addr<= 32'd0;
+      fadd_req  <= 1'b0;
+      fmul_req  <= 1'b0;
+      fdiv_req  <= 1'b0;
+      fsqrt_req <= 1'b0;
     end else begin
       ic_req   <= 1'b0;
       lsu_req  <= 1'b0;
       md_req   <= 1'b0;
+      // These are one-cycle strobes and were missing from this list. Left
+      // asserted, a unit restarts the instant it returns to idle, spins
+      // permanently busy, and the NEXT instruction of that type reads `done`
+      // from the spurious run rather than its own -- which is how a sqrtr
+      // retired without ever writing its FP register.
+      fadd_req  <= 1'b0;
+      fmul_req  <= 1'b0;
+      fdiv_req  <= 1'b0;
+      fsqrt_req <= 1'b0;
 
       // A prefetch issued in decode lands during execute. Capture it wherever
       // the sequencer happens to be.
