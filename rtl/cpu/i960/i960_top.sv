@@ -197,6 +197,120 @@ module i960_top (
     .res_lo(md_lo), .res_hi(md_hi), .res_pair(md_pair), .valid(md_valid)
   );
 
+  // ------------------------------------------------------------------ FPU
+  //
+  // Single-precision (`r`) forms only for now. The `rl` forms read and write
+  // register PAIRS, which needs four register reads against the file's two
+  // ports and therefore its own fetch sequence — flagged rather than
+  // half-wired, the same way emul/ediv were before the pair writes existed.
+  //
+  // Operand rules, from get_1_rif / get_2_rif:
+  //   bit 11 / bit 12 clear -> a general register, reinterpreted as single
+  //   set                   -> index < 4 selects fp0-fp3, 0x16 means 1.0,
+  //                            anything else means 0.0
+
+  logic [63:0] fpr [0:3];                        // fp0-fp3, 64-bit per §8
+
+  logic [63:0] fp_a_wide, fp_b_wide, fp_res_wide;
+  logic [31:0] fp_res_single;
+
+  i960_fpcvt u_cvt_a (.s_in(rd1), .d_out(fp_a_wide),
+                      .d_in(fp_res_wide), .s_out(fp_res_single));
+  // Only the widening half of this instance is used — the narrowing path
+  // belongs to u_cvt_a, which sees the result. Named explicitly rather than
+  // left empty so the intent is visible.
+  i960_fpcvt u_cvt_b (.s_in(rd2), .d_out(fp_b_wide),
+                      .d_in(64'd0), .s_out(cvt_b_dead));
+
+  function automatic logic [63:0] fp_lit(input logic [4:0] idx,
+                                         input logic [63:0] fpsel);
+    if (idx < 5'd4)        fp_lit = fpsel;
+    else if (idx == 5'h16) fp_lit = 64'h3ff0_0000_0000_0000;   // 1.0
+    else                   fp_lit = 64'd0;
+  endfunction
+
+  logic [63:0] fp_a, fp_b;
+  assign fp_a = d_src1_lit ? fp_lit(d_src1, fpr[d_src1[1:0]]) : fp_a_wide;
+  assign fp_b = d_src2_lit ? fp_lit(d_src2, fpr[d_src2[1:0]]) : fp_b_wide;
+
+  logic        fadd_req, fadd_done, fmul_req, fmul_done;
+  // busy is not consulted: the sequencer waits on `done` and issues nothing
+  // else meanwhile, so there is no second requester to arbitrate against.
+  /* verilator lint_off UNUSEDSIGNAL */
+  logic        fdiv_req, fdiv_done, fdiv_busy;
+  logic        fsqrt_req, fsqrt_done, fsqrt_busy;
+  logic [31:0] cvt_b_dead;
+  /* verilator lint_on UNUSEDSIGNAL */
+  logic [63:0] fadd_y, fmul_y, fdiv_y, fsqrt_y, fmisc_y;
+  logic [31:0] fmisc_yi;
+  logic [2:0]  fmisc_cc;
+  logic        fadd_sub;
+
+  i960_fpadd  u_fpadd  (.clk(clk), .rst_n(rst_n), .req(fadd_req),
+                        .sub(fadd_sub), .a(fp_b), .b(fp_a),
+                        .y(fadd_y), .done(fadd_done));
+  i960_fpmul  u_fpmul  (.clk(clk), .rst_n(rst_n), .req(fmul_req),
+                        .a(fp_b), .b(fp_a), .y(fmul_y), .done(fmul_done));
+  i960_fpdiv  u_fpdiv  (.clk(clk), .rst_n(rst_n), .req(fdiv_req),
+                        .a(fp_b), .b(fp_a), .y(fdiv_y),
+                        .busy(fdiv_busy), .done(fdiv_done));
+  i960_fpsqrt u_fpsqrt (.clk(clk), .rst_n(rst_n), .req(fsqrt_req),
+                        .a(fp_a), .y(fsqrt_y),
+                        .busy(fsqrt_busy), .done(fsqrt_done));
+
+  logic [2:0] fmisc_op;
+  assign fp_res_wide = fp_is_add  ? fadd_y
+                     : fp_is_mul  ? fmul_y
+                     : fp_is_div  ? fdiv_y
+                     : fp_is_sqrt ? fsqrt_y
+                                  : fmisc_y;
+  i960_fpmisc u_fpmisc (.op(fmisc_op), .rmode(ac[31:30]),
+                        .a(fp_a), .b(fp_b), .ai(src1_val),
+                        .y(fmisc_y), .yi(fmisc_yi), .cc(fmisc_cc));
+
+  // Which unit an opcode belongs to, and whether it is wired at all.
+  logic fp_is_add, fp_is_mul, fp_is_div, fp_is_sqrt, fp_is_misc, fp_valid;
+  always_comb begin
+    fp_is_add = 1'b0; fp_is_mul = 1'b0; fp_is_div = 1'b0;
+    fp_is_sqrt = 1'b0; fp_is_misc = 1'b0; fadd_sub = 1'b0;
+    fmisc_op = 3'd7;
+    case (d_op)
+      8'h78: case (d_op2)                        // single-precision arithmetic
+               4'hf: fp_is_add = 1'b1;                              // addr
+               4'hd: begin fp_is_add = 1'b1; fadd_sub = 1'b1; end   // subr
+               4'hc: fp_is_mul = 1'b1;                              // mulr
+               4'hb: fp_is_div = 1'b1;                              // divr
+               default: ;
+             endcase
+      8'h68: case (d_op2)
+               4'h5: begin fp_is_misc = 1'b1; fmisc_op = 3'd0; end  // cmpr
+               4'h8: fp_is_sqrt = 1'b1;                             // sqrtr
+               4'ha: begin fp_is_misc = 1'b1; fmisc_op = 3'd1; end  // logbnr
+               4'hb: begin fp_is_misc = 1'b1; fmisc_op = 3'd5; end  // roundr
+               default: ;
+             endcase
+      8'h6c: case (d_op2)
+               4'h0: begin fp_is_misc = 1'b1; fmisc_op = 3'd3; end  // cvtri
+               4'h2: begin fp_is_misc = 1'b1; fmisc_op = 3'd4; end  // cvtzri
+               4'h9: begin fp_is_misc = 1'b1; fmisc_op = 3'd7; end  // movr
+               default: ;
+             endcase
+      8'h67: case (d_op2)
+               4'h4: begin fp_is_misc = 1'b1; fmisc_op = 3'd2; end  // cvtir
+               4'h7: begin fp_is_misc = 1'b1; fmisc_op = 3'd6; end  // scaler
+               default: ;
+             endcase
+      default: ;
+    endcase
+    fp_valid = fp_is_add | fp_is_mul | fp_is_div | fp_is_sqrt | fp_is_misc;
+  end
+
+  // cmpr writes only the condition code; cvtri and cvtzri write an integer;
+  // everything else writes a float through the narrowing path.
+  logic fp_writes_int, fp_writes_cc;
+  assign fp_writes_cc  = fp_is_misc && (fmisc_op == 3'd0);
+  assign fp_writes_int = fp_is_misc && ((fmisc_op == 3'd3) || (fmisc_op == 3'd4));
+
   // ---------------------------------------------------------------- AGU
 
   logic [31:0] ea;
@@ -368,7 +482,8 @@ module i960_top (
 
   typedef enum logic [3:0] {
     T_FETCH, T_FETCH_W, T_FETCH2, T_FETCH2_W, T_DECODE,
-    T_EXEC, T_MEM, T_MEM_W, T_MULDIV, T_MULTI, T_PAIR, T_WB, T_FRAME, T_TRAP
+    T_EXEC, T_MEM, T_MEM_W, T_MULDIV, T_MULTI, T_PAIR, T_FP, T_WB, T_FRAME,
+    T_TRAP
   } tstate_e;
 
   tstate_e ts;
@@ -376,6 +491,10 @@ module i960_top (
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       ts        <= T_FETCH;
+      fpr[0]    <= 64'd0;
+      fpr[1]    <= 64'd0;
+      fpr[2]    <= 64'd0;
+      fpr[3]    <= 64'd0;
       pf_valid  <= 1'b0;
       pf_armed  <= 1'b0;
       pf_insn   <= 32'd0;
@@ -592,6 +711,15 @@ module i960_top (
                 mw_i <= 3'd1;
                 ra1  <= d_src1 + 5'd1;
                 ts   <= T_MULTI;
+              end else if (fp_valid) begin
+                // Single-cycle units (fpmisc) still route through T_FP so the
+                // writeback path is shared and there is one place that knows
+                // how an FP result reaches a register.
+                fadd_req  <= fp_is_add;
+                fmul_req  <= fp_is_mul;
+                fdiv_req  <= fp_is_div;
+                fsqrt_req <= fp_is_sqrt;
+                ts        <= T_FP;
               end else if (md_valid) begin
                 // Multiply, divide, remainder and modulo. Multi-cycle and
                 // DSP-backed, so they leave the single-state execute path.
@@ -654,6 +782,23 @@ module i960_top (
           end else begin
             mw_i <= mw_i + 3'd1;
             ra1  <= mw_src + 5'({1'b0, mw_i}) + 5'd1;
+          end
+        end
+
+        T_FP: begin
+          if (fp_is_misc || fadd_done || fmul_done || fdiv_done || fsqrt_done) begin
+            if (fp_writes_cc) begin
+              ac <= {ac[31:3], fmisc_cc};
+            end else if (fp_writes_int) begin
+              wa <= d_srcdst; wd <= fmisc_yi; we <= 1'b1;
+            end else if (d_dst_lit) begin
+              // A "literal" destination on an FP op selects fp0-fp3.
+              fpr[d_srcdst[1:0]] <= fp_res_wide;
+            end else begin
+              wa <= d_srcdst; wd <= fp_res_single; we <= 1'b1;
+            end
+            ip <= ip_next;
+            ts <= T_FETCH;
           end
         end
 

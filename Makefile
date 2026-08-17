@@ -50,7 +50,9 @@ FPX_RTL  := $(I960)/i960_fpmisc.sv
 FPC_RTL  := $(I960)/i960_fpcvt.sv
 # The assembled CPU. Order matters only for readability; Quartus resolves by name.
 TOP_RTL  := $(DEC_RTL) $(ALU_RTL) $(REG_RTL) $(AGU_RTL) $(LST_RTL) \
-            $(LSU_RTL) $(MAP_RTL) $(ICA_RTL) $(MDV_RTL) $(I960)/i960_top.sv
+            $(LSU_RTL) $(MAP_RTL) $(ICA_RTL) $(MDV_RTL) \
+            $(FPM_RTL) $(FPA_RTL) $(FPD_RTL) $(FPS_RTL) $(FPX_RTL) $(FPC_RTL) \
+            $(I960)/i960_top.sv
 
 TEST_ARGS := $(if $(RANDOM),+random=$(RANDOM),) $(if $(SEED),+seed=$(SEED),)
 

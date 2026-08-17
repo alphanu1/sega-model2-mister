@@ -20,11 +20,25 @@
 #include "i960_ldst_ref.h"
 #include "i960_regs_ref.h"
 #include "i960_muldiv_ref.h"
+#include <cmath>
+#include <cstring>
 
 namespace i960ref {
 
 struct Cpu {
-  Regs     rf;                 // r[32], rcache, memory and its op stream
+  Regs     rf;
+  double   fp[4] = {0,0,0,0};        // fp0-fp3, held as double per spike §8
+
+  // u2f / f2u: a general register reinterpreted as IEEE single, and back.
+  static double u2f(uint32_t v) { float f; std::memcpy(&f, &v, 4); return (double)f; }
+  static uint32_t f2u(double d) { float f = (float)d; uint32_t v; std::memcpy(&v, &f, 4); return v; }
+
+  // The literal forms select fp0-fp3, or 1.0 at index 0x16, else 0.0.
+  double fp_lit(uint32_t idx) const {
+    if (idx < 4) return fp[idx];
+    if (idx == 0x16) return 1.0;
+    return 0.0;
+  }                 // r[32], rcache, memory and its op stream
   uint32_t AC = 0;
   uint32_t IP = 0;
   bool     trapped = false;
@@ -117,6 +131,50 @@ struct Cpu {
       case FMT_REG: {
         const uint32_t s1 = d.src1_lit ? d.src1 : rf.r[d.src1];
         const uint32_t s2 = d.src2_lit ? d.src2 : rf.r[d.src2];
+
+        // ---- single-precision FP, the subset wired into the CPU ----
+        {
+          const double fa = d.src1_lit ? fp_lit(d.src1) : u2f(rf.r[d.src1]);
+          const double fb = d.src2_lit ? fp_lit(d.src2) : u2f(rf.r[d.src2]);
+          bool handled = true, wr_int = false, wr_cc = false;
+          double fres = 0.0; uint32_t ires = 0;
+          const int rm = int((AC >> 30) & 3);
+          auto rti = [&](double v) {
+            switch (rm) { case 0: return std::round(v); case 1: return std::floor(v);
+                          case 2: return std::ceil(v);  default: return std::trunc(v); }
+          };
+          switch ((uint32_t(d.op) << 8) | d.op2) {
+            case 0x78f: fres = fb + fa; break;                       // addr
+            case 0x78d: fres = fb - fa; break;                       // subr
+            case 0x78c: fres = fb * fa; break;                       // mulr
+            case 0x78b: fres = fb / fa; break;                       // divr
+            case 0x688: fres = std::sqrt(fa); break;                 // sqrtr
+            case 0x68a: fres = std::logb(fa); break;                 // logbnr
+            case 0x68b: fres = rti(fa); break;                       // roundr
+            case 0x685: {                                            // cmpr
+              wr_cc = true;
+              AC &= ~7u;
+              if (!(std::isnan(fa) || std::isnan(fb)))
+                AC |= (fa < fb) ? 4 : (fa == fb) ? 2 : 1;
+              break;
+            }
+            case 0x6c0: wr_int = true; ires = uint32_t(int32_t(rti(fa))); break;   // cvtri
+            case 0x6c2: wr_int = true; ires = uint32_t(int32_t(fa)); break;        // cvtzri
+            case 0x6c9: fres = fa; break;                                          // movr
+            case 0x674: fres = double(int32_t(s1)); break;                          // cvtir
+            case 0x677: fres = fb * std::pow(2.0, double(int32_t(s1))); break;      // scaler
+            default: handled = false; break;
+          }
+          if (handled) {
+            if (!wr_cc) {
+              if (wr_int)            rf.r[d.srcdst] = ires;
+              else if (d.dst_lit)    fp[d.srcdst & 3] = fres;
+              else                   rf.r[d.srcdst] = f2u(fres);
+            }
+            IP = ip_next;
+            break;
+          }
+        }
         // movl / movt / movq: 2, 3 or 4 consecutive registers. The
         // destination mask differs per opcode; the SOURCE is never masked.
         //

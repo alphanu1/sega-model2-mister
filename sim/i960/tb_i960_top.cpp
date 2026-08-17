@@ -178,6 +178,19 @@ int main(int argc, char **argv) {
         // reference leaves undefined for every opcode except divo.
         insn = (blk << 24) | ((rng() % 32) << 19) | ((rng() % 32) << 14)
              | (o2 << 7) | (1 + rng() % 31) | 0x0800;
+      } else if (cls == 4) {                           // single-precision FP
+        static const uint32_t FPOPS[] = {
+          0x78fu, 0x78du, 0x78cu, 0x78bu,      // addr subr mulr divr
+          0x688u, 0x68au, 0x68bu, 0x685u,      // sqrtr logbnr roundr cmpr
+          0x6c0u, 0x6c2u, 0x6c9u,              // cvtri cvtzri movr
+          0x674u, 0x677u };                    // cvtir scaler
+        const uint32_t sel = FPOPS[rng() % (sizeof FPOPS / sizeof FPOPS[0])];
+        insn = ((sel >> 8) << 24) | ((rng() % 32) << 19)
+             | ((rng() % 32) << 14) | ((sel & 0xf) << 7) | (rng() % 32);
+        if (rng() & 1) insn |= 0x0800;
+        if (rng() & 1) insn |= 0x1000;
+        // A literal destination writes fp0-fp3 and needs bits 23:21 clear.
+        if ((rng() % 4) == 0) insn = (insn | 0x2000u) & ~0x00e00000u;
       } else if (cls == 8) {                           // mov / bit scan / modac
         static const uint8_t B64[] = {0x0,0x1,0x4,0x5};
         const bool use5c = (rng() & 1);
@@ -208,7 +221,7 @@ int main(int argc, char **argv) {
         // fatalerror in the reference and §1 scopes it out, so both sides trap
         // and there is nothing to compare.
         insn = ((0x18u + (rng() % 8)) << 24) | (rng() % 0x10000u & ~3u);
-      } else if (cls == 4) {                           // test<cc>
+      } else if (cls == 41) {                          // test<cc>
         insn = ((0x20 + (rng() % 8)) << 24) | ((rng() % 32) << 19);
       } else if (cls == 3) {                           // cmpib<cc> / cmpob<cc>
         const uint32_t op = (rng() & 1) ? (0x31 + rng() % 6) : (0x39 + rng() % 6);

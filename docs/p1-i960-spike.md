@@ -587,6 +587,42 @@ crossed with four mantissas and both signs, plus narrowing tie cases where bit
 block that worked first time, which is what an exact widening and one
 well-understood rounding buys.
 
+#### The FP blocks wired in
+
+Single-precision `r` forms only: `addr`, `subr`, `mulr`, `divr`, `sqrtr`,
+`logbnr`, `roundr`, `cmpr`, `cvtri`, `cvtzri`, `movr`, `cvtir`, `scaler` — 13
+mnemonics, taking coverage to **129 of 163**.
+
+The `rl` forms read and write register **pairs**, which needs four register
+reads against the file's two ports and therefore its own fetch sequence. Left
+unwired and trapping rather than half-built, the same call as `emul`/`ediv`
+before the pair writes existed.
+
+`fp0`-`fp3` exist as four 64-bit registers, with the literal forms selecting
+them, `0x16` meaning 1.0 and anything else 0.0. A "literal" destination writes
+an FP register rather than a general one.
+
+| | ALM | DSP | Fmax |
+|---|---|---|---|
+| `i960_top` before FP | 3,812 | 3 | 42.94 MHz |
+| **`i960_top` with FP** | **6,685** | **7** | **25.61 MHz** |
+
+**Fmax fell to 25.61 MHz**, which matters: §4.3's table says a 2-CPI design
+needs 25-33 MHz, so this is now at the very bottom of the acceptable band with
+nothing spare. The FP adder was already the slowest block at 51.89 MHz
+standalone, and assembling it behind the same shared operand muxes as everything
+else has cost more. **This is the first measurement that makes the optimisation
+backlog urgent rather than deferred** — item 1, moving the register file to a
+registered read, targets exactly the path these operand muxes feed.
+
+**A verification gap, stated because the suite does not cover it:** whole-CPU
+lockstep compares the 32 general registers, AC and IP. It does **not** compare
+`fp0`-`fp3`, so an instruction whose only effect is an FP-register write is
+executed by both sides and checked by neither. The datapath blocks are verified
+exhaustively on their own, so this is a plumbing gap rather than an arithmetic
+one — but it is a gap, and closing it means teaching the harness to read the FP
+file the way it already reads the general one.
+
 ## 9. Known unverifiable
 
 **The FPU has no bit-exact oracle.** MAME declares `double m_fp[4]`, modelling
@@ -958,9 +994,9 @@ COBR fix:
 
 | | mnemonics | |
 |---|---|---|
-| executed | **116** | 71% |
+| executed | **129** | 79% |
 | traps correctly (`fault<cc>` taken, `modpc`, `calls`, `synmov`) | 12 | 7% |
-| **absent** | **47** | **29%** |
+| **absent** | **34** | **21%** |
 
 Counted from the source rather than by hand — `execute_op` dispatches **163**
 distinct mnemonics, not the 159 an earlier hand-tabulation in this document
@@ -981,12 +1017,12 @@ Projecting from the study's own per-block figures:
 
 | | ALM |
 |---|---|
-| assembled today | 3,812 |
+| assembled today | 6,685 |
 | `mov` family, `spanbit`, `modac`, `calls`, `synmov` | +300 .. 600 |
 | `fault<cc>`, fault handling, interrupts | +200 .. 500 |
 | pipeline: hazards, forwarding, stalls | +1,500 .. 3,000 |
 | **FPU, 38 mnemonics** | **+2,500 .. 6,000** |
-| **projected complete i960KB** | **8,254 .. 13,354** |
+| **projected complete i960KB** | **8,185 .. 11,185** |
 | study §5.2 estimate | 7,000 .. 13,500 |
 
 The projection straddles the study's range and overshoots its ceiling slightly.
@@ -999,8 +1035,8 @@ the core lands optimistically. So:
 
 | i960 lands at | renderer may use | against its 15,000-25,000 estimate |
 |---|---|---|
-| 8,254 (best) | 16,755 | fits if the renderer is near its floor |
-| 13,354 (worst) | 11,655 | **below the renderer's floor — does not fit** |
+| 8,185 (best) | 16,824 | fits if the renderer is near its floor |
+| 11,185 (worst) | 13,824 | fits if the renderer is near its floor |
 
 **Both blocks have to land low.** An i960 at the top of its range leaves the
 renderer less than its most optimistic estimate, and that is before the M10K
