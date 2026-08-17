@@ -1336,3 +1336,68 @@ and it is the same move that fixed the load side (`rd_q`).
 `make test_i960_top` FAILS. Left that way: the check is correct and the defect
 is real, and gating either would restore a green suite that proves less than it
 claims — which is what the last four findings have all been.
+
+### FIXED, and the first real throughput number
+
+The LSU now **waits for its operand** instead of the caller compensating for the
+read latency. A new `S_OPD` state announces the index it wants and spends one
+cycle letting the registered read deliver it. **Stores only** — a load has no
+operand to fetch and pays nothing.
+
+That is the move that works precisely because it removes the caller's timing
+from the problem rather than modelling it. Word 0's address comes from `T_EXEC`
+and later words from `S_NEXT`, so no constant offset could ever suit both; the
+LSU asking and waiting is indifferent to where the address came from. Same shape
+as `rd_q` on the load side.
+
+**All 15 suites pass, with the store stream compared:**
+
+| mix | retires | checks | result |
+|---|---|---|---|
+| coverage | 4,577 | 173,926 | PASS |
+| **daytona** | **9,769** | **371,222** | **PASS** |
+
+## The first interpretable throughput figure this project has had
+
+| mix | CPI | dominant state | at 26.75 MHz |
+|---|---|---|---|
+| coverage (uniform, divide-heavy) | 13.65 | `T_MULDIV` 53.7% | 1.96 M instr/s |
+| **daytona (M2-B measured)** | **9.49** | **`T_MEM_W` 51.6%** | **2.82 M instr/s** |
+
+Every previous figure was measured on a mix with **no loads or stores at all**.
+This one is weighted by what Daytona actually executes.
+
+**Against the study's 12.5-16.7 M instr/s, this is 4.4x short.** Reaching 12.5 M
+at today's clock needs CPI 2.14 against 9.49.
+
+### Where the time goes, and it is one place
+
+`T_MEM_W` is **4.90 cyc/instr averaged over all instructions**, and at 49%
+load/store that is **~10 cycles per memory access**. Nothing else is close:
+fetch is 2.53 combined, execute 1.00, and divide — which dominated every
+previous measurement — is 0.84.
+
+**The bus model in the harness acks every cycle**, so those ten cycles are not
+memory latency. They are the LSU's own state machine: `S_IDLE -> S_OPD ->
+S_XFER -> S_NEXT -> S_DONE` per word, plus `T_MEM`/`T_MEM_W` around it in the
+sequencer. One of those cycles is the `S_OPD` this fix just added.
+
+**That is the next target and it is well posed:** cut the per-access cycle count,
+not the clock and not the fetch path. A 4.4x throughput gap sitting behind a
+single state machine that spends ten cycles doing a one-cycle bus transaction is
+a better problem to have than a diffuse one.
+
+Note the i960KB has no data cache and neither does this design, which is
+architecturally correct — so this is sequencing overhead to remove, not a cache
+to add.
+
+### The three CPI figures now on record, and which to quote
+
+| figure | mix | status |
+|---|---|---|
+| 3.31 | integer-only, pre-FPU, warm cache | historical, do not quote |
+| 13.65 | uniform coverage | valid for coverage, meaningless for throughput |
+| **9.49** | **Daytona-measured** | **the throughput figure** |
+
+R9 said a CPI is a property of the mix. There are now three, all correct, and
+only one answers the fit question.

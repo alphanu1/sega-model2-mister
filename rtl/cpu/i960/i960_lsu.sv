@@ -83,7 +83,15 @@ module i960_lsu (
   input  logic        bus_ack
 );
 
-  typedef enum logic [1:0] { S_IDLE, S_XFER, S_NEXT, S_DONE } state_e;
+  // S_OPD exists because the caller's register read is REGISTERED: r[base+widx]
+  // arrives one cycle after the address is presented. Rather than compensate
+  // for that in the caller -- which cannot work, because word 0's address comes
+  // from T_EXEC and later words from S_NEXT, so no constant offset suits both --
+  // the LSU announces the index it wants and spends one cycle waiting for it.
+  //
+  // Stores only. A load has no operand to fetch, so it goes straight to S_XFER
+  // and pays nothing.
+  typedef enum logic [2:0] { S_IDLE, S_OPD, S_XFER, S_NEXT, S_DONE } state_e;
   state_e state;
 
   logic [31:0] cur_addr;     // address of the word currently being moved
@@ -114,6 +122,10 @@ module i960_lsu (
   // r[base + cur_idx] while this word is being issued, whereas `word_idx` is
   // deliberately one behind so it matches ld_word. Two indices because they
   // answer two different questions.
+  // The index whose register value the caller must present. Held from the
+  // moment the word is selected until S_XFER has consumed it, so the operand is
+  // stable for the whole transfer -- including a byte-split store, which reads
+  // several lanes out of the same word across several bus cycles.
   assign cur_idx = widx;
 
   // Alignment test, exactly the reference's: a half needs bit 0 clear, a word
@@ -208,9 +220,16 @@ module i960_lsu (
             widx     <= 3'd0;
             bidx     <= 2'd0;
             assemble <= 32'd0;
-            state    <= S_XFER;
+            // A store must wait for the caller to deliver r[base+0]; a load has
+            // no operand and goes straight to the transfer.
+            state    <= is_store ? S_OPD : S_XFER;
           end
         end
+
+        // One cycle for the registered read to deliver r[base + widx]. `cur_idx`
+        // already announces widx, so the caller's address was presented on the
+        // way in and rd1 is valid on the way out.
+        S_OPD: state <= S_XFER;
 
         S_XFER: begin
           bus_req  <= 1'b1;
@@ -279,7 +298,7 @@ module i960_lsu (
             widx <= widx + 3'd1;
             // THE non-obvious line. Only a burst region advances.
             if (burst_q) cur_addr <= cur_addr + 32'd4;
-            state <= S_XFER;
+            state <= store_q ? S_OPD : S_XFER;
           end
         end
 
