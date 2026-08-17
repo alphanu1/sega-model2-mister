@@ -118,6 +118,19 @@ module i960_top (
   // ----------------------------------------------------------- register file
 
   logic [4:0]  ra1, ra2, wa;
+
+  // Read addresses are COMBINATIONAL, driven one state ahead of the consumer,
+  // because i960_regs now registers its read. Each address below sits in the
+  // state before the one that uses the data, which is exactly where the old
+  // registered assignments sat -- the expressions are unchanged, only the cycle
+  // they take effect. The register file supplies the delay that the sequencer
+  // used to.
+  //
+  // The address must also stay STABLE for as long as its data is in use, not
+  // merely for the cycle that issues it: rd1 re-registers every cycle, so a
+  // moving address silently replaces the operand under a multi-cycle consumer.
+  // That is why T_MEM_W holds the store source and why the default is d_src1 --
+  // it keeps the operand steady across T_EXEC, T_FP and T_MULDIV.
   logic [31:0] rd1, rd2, wd;
   logic        we;
   logic        rf_call, rf_ret, rf_flush, rf_busy, rf_ip_valid;
@@ -509,6 +522,27 @@ module i960_top (
 
   tstate_e ts;
 
+  // Read-address drive. See the note at the ra1/ra2 declaration: each case is
+  // the state BEFORE the consumer, and the expressions are the ones the
+  // registered assignments used.
+  always_comb begin
+    ra1 = d_src1;
+    ra2 = d_src2;
+    case (ts)
+      // COBR reads (insn>>19) on port 1; REG and MEM read src1 there.
+      T_DECODE: ra1 = (d_fmt == 2'd1) ? d_srcdst : d_src1;
+      T_EXEC: begin
+        if      (is_movx)        ra1 = d_src1 + 5'd1;   // second word of movl/t/q
+        else if (d_fmt == 2'd3)  ra1 = d_srcdst & ls_regmask;  // store source
+      end
+      // Held, not merely issued: a multi-word store consumes st_value over
+      // several cycles and the address must not move under it.
+      T_MEM, T_MEM_W: ra1 = d_srcdst & ls_regmask;
+      T_MULTI:        ra1 = mw_src + 5'({1'b0, mw_i}) + 5'd1;
+      default: ;
+    endcase
+  end
+
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       ts        <= T_FETCH;
@@ -533,8 +567,6 @@ module i960_top (
       we        <= 1'b0;
       wa        <= 5'd0;
       wd        <= 32'd0;
-      ra1       <= 5'd0;
-      ra2       <= 5'd0;
       rf_call   <= 1'b0;
       rf_ret    <= 1'b0;
       rf_flush  <= 1'b0;
@@ -616,11 +648,6 @@ module i960_top (
         end
 
         T_DECODE: begin
-          // Operand register numbers are presented now; the file reads
-          // combinationally so the values are available next state.
-          // COBR reads (insn>>19) on port 1; REG and MEM read src1 there.
-          ra1 <= (d_fmt == 2'd1) ? d_srcdst : d_src1;
-          ra2 <= d_src2;
           if (!d_valid || d_memb_bad) begin
             trap_op <= d_op;
             ts      <= T_TRAP;
@@ -743,7 +770,6 @@ module i960_top (
                 wd <= d_src1_lit ? {27'd0, d_src1} : rd1;
                 we <= 1'b1;
                 mw_i <= 3'd1;
-                ra1  <= d_src1 + 5'd1;
                 ts   <= T_MULTI;
               end else if (fp_valid) begin
                 // Single-cycle units (fpmisc) still route through T_FP so the
@@ -776,7 +802,6 @@ module i960_top (
                 wa <= d_srcdst; wd <= ea; we <= 1'b1;
                 ip <= ip_next; ts <= T_FETCH;
               end else begin
-                ra1     <= d_srcdst & ls_regmask;
                 lsu_req <= 1'b1;
                 ts      <= T_MEM_W;
               end
@@ -815,7 +840,6 @@ module i960_top (
             ts <= T_FETCH;
           end else begin
             mw_i <= mw_i + 3'd1;
-            ra1  <= mw_src + 5'({1'b0, mw_i}) + 5'd1;
           end
         end
 

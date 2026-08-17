@@ -482,3 +482,65 @@ the earlier 3.31 was a warm-cache figure on a different mix without FP.
 real instruction mix, which is exactly what **M2-B** measures — still open, and
 its value just went up: it now sets the CPI weighting as well as scoping the
 FPU. Do not quote a CPI figure without saying which mix produced it.
+
+---
+
+## Register file registered read — done, and it did not deliver
+
+**Measured, not estimated:** Fmax 25.29 → **27.3 MHz**, +8%. The optimisation
+backlog called this item "large". It was the best-evidenced item in that table —
+1,547 ALM, 49% of the CPU, and the measured critical path ran straight through
+it — and it bought 8%.
+
+| | before | after |
+|---|---|---|
+| critical path | `ra1[2]` → `wd[28]` | `rd1[29]` → `wd[26]` |
+| slack | 0.451 | **3.370** |
+| Fmax | 25.29 MHz | **27.3 MHz** |
+| lockstep cycles | 65,630 | **65,630** |
+
+The change worked; the path just moved. The register read was the **first half**
+of the path, and the second half is the execute datapath — operand through the
+ALU and the result multiplexing into writeback. Slack went up sevenfold, so the
+cut was real. It was not where the remaining time is.
+
+**The latency cost zero cycles**, which was the part expected to be expensive.
+Every read address was already presented in the state before its consumer, so
+`ra1`/`ra2` became combinational drives in `i960_top` and the register file
+supplies the cycle the sequencer used to. Identical cycle count, identical
+retire count, identical checks. The item was recorded as "blocked on a step-6
+pipeline decision" — the decision turned out to be free.
+
+**The conclusion is the useful part: 90 MHz is not reachable by optimisation.**
+From 27.3 that is a 3.3x reduction in path delay and there is no remaining
+single structure worth 3.3x. Backlog items 2-5 should not be attempted as Fmax
+work — at best they are area and clarity. The execute path has to be split
+across stages, which is the pipeline.
+
+### The write bypass: written, mutation-tested, then deliberately removed
+
+A read-during-write forwarding path was written first, on the reasoning that
+relying on the sequencer's spacing would be an unstated assumption. **Both
+bypass forms were then mutation-tested and both SURVIVED** — across 3,870
+retires and 147,060 checks, nothing distinguishes having it from not.
+
+Chasing why that was so produced the real finding. The only reachable
+read-during-write is an **overlapping `movl`/`movt`/`movq`** (`movl r4, r5`),
+where `T_MULTI` writes word *i* while reading word *i+1*. And that case **has no
+oracle**: MAME implements all three with `memcpy` on overlapping regions
+(`i960.cpp`, cases 0x5d/0x5e/0x5f), which is undefined in C. The reference
+transcribed it faithfully and the generator excludes it.
+
+So the bypass was not insurance — it **silently changed behaviour in the one
+case nothing can check**. With it an overlapping `movl` propagates; without it,
+and in the original combinational design, it does not. It was removed.
+
+**A refactor must not change semantics the oracle cannot check.** The instinct
+that added the bypass was the right instinct applied to the wrong case: dead in
+every checked case, and behaviour-changing in the only unchecked one. Mutation
+testing is what turned "probably fine" into a decision — the surviving mutant
+was the finding, not a failure of the suite.
+
+**Open, and unresolvable from MAME:** what real i960 silicon does with an
+overlapping `movl`. Only the i960KB manual or hardware answers it. Recorded here
+so it is not rediscovered as a bug.

@@ -1155,11 +1155,33 @@ anyway, and doing them first means doing them twice and re-verifying twice.
 
 | # | Item | Evidence | Est. | Blocked on |
 |---|---|---|---|---|
-| 1 | Register file to a memory with a **registered** read | 1,547 ALM, 49% of the CPU; the measured critical path `loc[10][3]` → `wd[9]` runs through one of its two combinational 32:1 read multiplexers | large — deletes both muxes and cuts the path | pipeline read latency is a step-6 decision |
+| 1 | ~~Register file to a memory with a **registered** read~~ **DONE, and the estimate was wrong** | measured critical path was `ra1[2]` → `wd[28]`, through a combinational 32:1 read mux, the ALU/FP result muxing and into writeback | predicted "large"; **delivered 25.29 → 27.3 MHz, +8%** | — |
 | 2 | Share the ALU datapath | 473 ALM assembled; six shift forms, four comparators and three adders described separately | moderate | none, but cheap to fold into the pipeline pass |
 | 3 | Delete `i960_ldst`'s dead data path | collapsed 126 → 3 ALM on assembly; `i960_lsu` re-implements extension and lane placement because the unaligned path must assemble bytes itself | ~0 area, real clarity | decide which module owns it |
 | 4 | Genuinely parameterise the frame-copy width `W` | the sweep that motivated it was invalid — the index expressions hardcode four rows | unknown until it can be measured | must lint at every W before any figure is believable |
 | 5 | Retime the I-cache tag compare | 84.97 MHz standalone, under the gate's 90 | unknown | may be moot once the pipeline sets the clock |
+
+**Item 1 is done and it did not deliver.** It was the best-evidenced item in
+this table — 49% of the CPU, and the measured critical path ran straight through
+it — and cutting it moved Fmax by 8%. The path simply moved from `ra1[2]` →
+`wd[28]` to `rd1[29]` → `wd[26]`: the register read was the *first* half, and
+the second half is the execute datapath, operand through ALU and the result
+multiplexing into writeback. Slack went 0.451 → 3.370, so the change was real;
+it just was not where the remaining time is.
+
+Two things follow, and the second is the one that matters:
+
+- **The read latency cost zero cycles.** Every read address was already
+  presented in the state before its consumer, so `i960_top` drives `ra1`/`ra2`
+  combinationally and the file supplies the cycle the sequencer used to. The
+  lockstep run takes the same 65,630 cycles either way. This was the item the
+  table called "blocked on a step-6 decision"; the decision turned out to be
+  free.
+- **90 MHz is not reachable by optimisation.** From 27.3 that is a 3.3x
+  reduction in path delay, and there is no single mux left that is worth 3.3x.
+  It requires the execute path split across stages — the pipeline, not the
+  backlog. **Items 2-5 should not be attempted as Fmax work**; at best they are
+  area and clarity, and item 5 was already flagged as possibly moot.
 
 Two items are **deferred cost rather than savings**, and must not be read as
 headroom: `i960_icache` shows 106 ALM only because the top ties `inval` to zero

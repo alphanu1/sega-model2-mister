@@ -85,8 +85,13 @@ bool settle(const char *what) {
 }
 
 uint32_t dut_reg(int i) {
+  // The read port is registered now (see i960_regs.sv), so the address has to
+  // be presented an edge before the data is valid. Reading it through the port
+  // rather than reaching into the array keeps this a test OF the port.
+  // Safe to clock here: `we` is cleared by wr_reg and the op_* strobes are
+  // pulsed, so an idle file stays idle across this edge.
   dut->ra1 = i & 0x1f;
-  dut->eval();
+  tick();
   return dut->rd1;
 }
 

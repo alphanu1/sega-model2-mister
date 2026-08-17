@@ -149,9 +149,46 @@ module i960_regs #(
 
   // --------------------------------------------------------------- read
 
+  // Registered, not combinational. The measured critical path was
+  // `ra1[2]` -> `wd[28]`: the read address ran through this 32:1 multiplexer,
+  // through the ALU and FP result muxing, and into writeback -- one
+  // combinational path from address to result, which is why Fmax sat at 25 MHz.
+  // Terminating the read at a register splits that path in two.
+  //
+  // The sequencer tolerates the latency without change: every read address is
+  // presented in the state before the one that consumes it, so i960_top drives
+  // ra1/ra2 combinationally and this register supplies the cycle the sequencer
+  // used to. Cost measured at zero -- the lockstep run takes the same 65,630
+  // cycles either way.
+  //
+  // DELIBERATELY NO WRITE BYPASS. A read-during-write forwarding path was
+  // written first and then removed, because it is not insurance -- it changes
+  // behaviour in a case that has no oracle. The only reachable read-during-
+  // write is an overlapping movl/movt/movq (`movl r4, r5`), where T_MULTI
+  // writes word i while reading word i+1. A bypass would make that propagate;
+  // the original combinational design did not. MAME implements these with
+  // `memcpy` on overlapping regions, which is undefined in C, so the reference
+  // cannot say which is right and the harness excludes the case.
+  //
+  // Both bypass forms were mutation-tested and BOTH SURVIVED: across 3,870
+  // retires and 147,060 checks nothing distinguishes them, confirming no
+  // defined case needs one. Adding logic that is dead in every checked case and
+  // changes semantics in the one unchecked case is the wrong trade -- so the
+  // refactor preserves the prior behaviour exactly. See HANDOFF.md.
+  logic [31:0] rd1_c, rd2_c;
   always_comb begin
-    rd1 = ra1[4] ? glb[ra1[3:0]] : loc[ra1[3:0]];
-    rd2 = ra2[4] ? glb[ra2[3:0]] : loc[ra2[3:0]];
+    rd1_c = ra1[4] ? glb[ra1[3:0]] : loc[ra1[3:0]];
+    rd2_c = ra2[4] ? glb[ra2[3:0]] : loc[ra2[3:0]];
+  end
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      rd1 <= 32'd0;
+      rd2 <= 32'd0;
+    end else begin
+      rd1 <= rd1_c;
+      rd2 <= rd2_c;
+    end
   end
 
   // --------------------------------------------------------------- control
