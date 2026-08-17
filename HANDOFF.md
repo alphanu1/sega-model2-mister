@@ -346,88 +346,116 @@ reference when it moves and read what changed, rather than only taking files
 from it.**
 
 ---
+## FP-register verification — closed
 
-## FP-register verification — closed as a check, open as a defect
-
-**Suite state: `make test_i960_top` FAILS.** Committed failing deliberately, so
-the defect is visible rather than carried as a note.
+**All 15 suites pass.** The fp0-fp3 comparison is verified by mutation, not
+assumed.
 
 ### The gap was real, and it was not what it looked like
 
-The fp0-fp3 comparison had been in the harness for some time and had never
-failed. It was **inert**: `i960_cpu_ref.h` dispatched on
-`(d.op << 8) | d.op2` against `case 0x78f:` labels. Opcode and sub-opcode pack
-as `0xOOS` across *three* hex digits, so the shift is 4. With 8, no label ever
-matched, `handled` stayed false, and the reference **trapped on every FP
-instruction** — which ended the lockstep loop before it reached a single
-comparison. The DUT was executing FP the whole time and nothing was reading it.
+The comparison had been in the harness for some time and had never failed. It
+was **inert**: `i960_cpu_ref.h` dispatched on `(d.op << 8) | d.op2` against
+`case 0x78f:` labels. Opcode and sub-opcode pack as `0xOOS` across *three* hex
+digits, so the shift is 4. With 8, no label matched, `handled` stayed false, and
+the reference **trapped on every FP instruction** — ending the lockstep loop
+before it reached a single comparison. The DUT was executing FP the whole time
+with nothing reading it.
 
-This is the same defect class as the generator's `0x78f >> 8`, found earlier the
-same day, and the fourth time a check that looked present did nothing. **A check
-that has never failed is not evidence; it is an untested branch.**
+Same defect class as the generator's `0x78f >> 8` found the same day, and the
+fourth instance of a check that looked present and did nothing. **A check that
+has never failed is not evidence; it is an untested branch.**
 
-### Real bugs this then exposed
+### The bug that mattered: a request strobe that was never lowered
 
-1. **Stale `done` retiring the wrong result.** `T_FP` accepted *any* unit's
-   `done`, so a strobe left by an earlier instruction could retire a result the
-   current instruction never computed. Now qualified per-unit
-   (`fp_is_sqrt && fsqrt_done`). The multi-cycle units — divide and sqrt — are
-   exactly where that window is widest.
-2. **`scaler` read the wrong operand.** Its FP source is src2; every other
+`fadd_req`, `fmul_req`, `fdiv_req` and `fsqrt_req` were set in `T_EXEC` and
+never cleared. They were missing from the per-cycle default block that already
+clears `ic_req`, `lsu_req` and `md_req`, and absent from reset.
+
+Left asserted, a unit **restarts the instant it returns to idle** and spins
+permanently busy — so the next instruction of that type reads a `done` from the
+spurious run rather than its own. It presented as `sqrtr` retiring without ever
+writing its FP register.
+
+It was throttling the entire run, not just breaking sqrt:
+
+| | before | after |
+|---|---|---|
+| retires | 256 | **2,205** |
+| FP ops executed | 53 | **514** |
+| writes to fp0-fp3 | 4 | **58** |
+| field checks | 9,728 | **83,790** |
+
+**The lesson is the default block, not the strobe.** Three request signals were
+in it and four were not, in the same module, with nothing to make the omission
+visible. A one-cycle strobe that is never lowered does not fail loudly; it makes
+a unit quietly always-busy, and the damage lands on the *next* instruction of
+that type — which is why five rounds of reading the writeback path all came back
+clean. It was found by probing every cycle of an FP op, after the reading
+approach had been exhausted. **When successive hypotheses are each eliminated by
+inspection, stop inspecting and instrument.**
+
+### Two other real defects the working check then exposed
+
+1. **`scaler` read the wrong operand.** Its FP source is src2; every other
    fpmisc op reads src1.
-3. **`scaler` is a multiply, not an exponent add.** The reference computes
+2. **`scaler` is a multiply, not an exponent add.** The reference computes
    `t2f * pow(2.0, n)`. When `pow` overflows, `0 * inf` is NaN — an exponent add
    returns zero. Now routed through `i960_fpmul` with 2^n materialised as a
-   double, so every special case is the multiplier's already-verified logic.
+   double, so the special cases are the multiplier's already-verified logic.
 
-### Deviations that had to be excluded, and why skipping was not enough
+### Deviations reach architectural state, and skipping is not enough
 
-Two recorded deviations (§8.1) reach architectural state, and that changes how a
-harness must handle them:
+Two recorded deviations (§8.1) write to registers, which changes what a harness
+must do about them:
 
-- **Subnormal flush.** The units flush, the host does not. At block level this
-  is rare; at CPU level it is common, because *any* small integer left in a
-  register is a subnormal when reinterpreted as a single — `0x1b` is 3.8e-44, so
-  `0 / 0x1b` is 0 on the host and 0/0 = NaN once the divisor flushes. It applies
-  to results as well as operands: two normal singles can divide to a subnormal.
+- **Subnormal flush.** The units flush, the host does not. Common at CPU level
+  and rare at block level, because *any* small integer left in a register is a
+  subnormal read as a single — `0x1b` is 3.8e-44, so `0 / 0x1b` is 0 on the host
+  and 0/0 = NaN once the divisor flushes. It applies to results too: two normal
+  singles can divide to a subnormal.
 - **NaN payload.** The units emit one canonical quiet NaN; the host propagates
   the operand's sign and payload.
 
-First attempt skipped the comparison for that retire. **That was wrong** — the
-diverged word stays in the register file and every later retire in the program
-fails on state already known to differ. The program must be **abandoned** at
-that point, exactly like a trap. Skipping a comparison does not undo a write.
+The first attempt **skipped the comparison** for that retire. That was wrong —
+the diverged word stays in the register file and every later retire fails on
+state already known to differ. The program must be **abandoned**, exactly like a
+trap. *Skipping a comparison does not undo a write.*
 
-Both are counted and printed, so an exclusion cannot quietly become most of the
-run: currently **13 programs end on a subnormal, 1 on a NaN result, out of 200**.
+Both are counted and printed so an exclusion cannot quietly become the run:
+**111 programs end on a subnormal and 18 on a NaN result, of 200.** That is a
+high truncation rate and it caps coverage depth — worth reducing by constraining
+the generator's FP operand ranges, but it is polish, not correctness.
 
-### Where it stands
+### Proof the check works
 
-256 retires against 113 before, 53 FP ops executed, **4 of them writing fp0-fp3**
-— so the comparison is now demonstrably reading real content.
+Three mutations, each **killed**:
 
-**One unresolved defect, and the evidence is contradictory:**
+| mutation | result |
+|---|---|
+| `fpr[d_srcdst[1:0] ^ 1]` — wrong register | killed |
+| FP writeback stores `64'd0` — dropped result | killed |
+| `fp_lit` 0x16 returns 0.0 instead of 1.0 | killed |
+
+## CPI is mix-dependent, and the synthetic mix is not Model 2's
+
+Worth stating plainly because a single CPI number has been quoted in two places
+and they measure different things:
 
 ```
-MISMATCH retire 1  fp2  got=0000000000000000 want=43940b9ff8b76ef9
-                        (insn 6815a407 = sqrtr, s1=07, dst_lit=1)
-[dbg] r7=79c8e8c3  fsqrt_y=0  fpr = 0/0/0/0
+T_MULDIV   21699 cycles   9.84 cyc/instr   53.2%   <- dominant
+T_FETCH     5343 cycles   2.42 cyc/instr   13.1%
+T_FETCH_W   4648 cycles   2.11 cyc/instr   11.4%
+T_FP        3350 cycles   1.52 cyc/instr    8.2%
+CPI 18.50 (incl. reset and I-cache misses)
 ```
 
-`r7` is a valid large single and the expected root matches it exactly. The IP
-advanced, so the instruction retired — but no FP register was written. Checked
-and **eliminated**: `fp_valid` does dispatch `0x68.8`; `is_movx` does not
-capture it (it requires op2 == 0xc); `d_dst_lit` is bit 13 in both the RTL and
-the reference and is 1 here; `fp_writes_cc` and `fp_writes_int` are both false
-for sqrt; the accessor is proven good by a write/read-back probe. `fsqrt_y = 0`
-at compare time may be a red herring — the unit likely clears its output on
-returning to idle, several cycles after the retire.
+Fetch was 58% of cycles before the I-cache fill hold and sequential prefetch
+went in; it is now 24.5% and **divide dominates**. But the fuzz generator emits
+instruction classes roughly uniformly, so divides are enormously
+over-represented against real code. 18.50 is the CPI of the generator's mix, and
+the earlier 3.31 was a warm-cache figure on a different mix without FP.
 
-**The next move is a waveform, not another hypothesis.** Dump `T_FP`, `fsqrt_req`,
-`fsqrt_done` and `fp_a` for that single program and find which branch of the
-writeback actually fires. Five successive guesses were each eliminated by
-inspection, which is the signal to stop guessing and look.
-
-Do not extend the FPU — the `rl` forms, `remr`, the transcendentals — until this
-closes. All of them write fp0-fp3, and until this is understood that path is
-unproven in exactly the dimension they depend on.
+**Neither is the throughput number the fit question needs.** That requires the
+real instruction mix, which is exactly what **M2-B** measures — still open, and
+its value just went up: it now sets the CPI weighting as well as scoping the
+FPU. Do not quote a CPI figure without saying which mix produced it.
