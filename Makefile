@@ -411,11 +411,11 @@ quartus_report:
 	@printf '%-12s ' "$(MOD)"
 	@alm=$$(grep -m1 'Logic utilization (in ALMs)' $(QDIR)/output_files/$(MOD).fit.rpt 2>/dev/null | sed 's/.*; *\([0-9,]*\) *\/.*/\1/'); \
 	 reg=$$(grep -m1 'Total registers' $(QDIR)/output_files/$(MOD).fit.rpt 2>/dev/null | sed 's/.*; *\([0-9,]*\) *;.*/\1/'); \
-	 m10k=$$(grep -m1 'Total block memory bits' $(QDIR)/output_files/$(MOD).fit.rpt 2>/dev/null | sed 's/.*; *\([0-9,]*\) *\/.*/\1/'); \
+	 m10k=$$(grep -m1 'M10K blocks' $(QDIR)/output_files/$(MOD).fit.rpt 2>/dev/null | sed 's/.*; *\([0-9,]*\) *\/.*/\1/'); \
 	 dsp=$$(grep -m1 'Total DSP Blocks' $(QDIR)/output_files/$(MOD).fit.rpt 2>/dev/null | sed 's/.*; *\([0-9,]*\) *\/.*/\1/'); \
 	 fmax=$$(grep -A3 '; Fmax  *; Restricted Fmax' $(QDIR)/output_files/$(MOD).sta.rpt 2>/dev/null | grep -m1 -oE '^; [0-9]+\.[0-9]+ MHz' | grep -oE '[0-9.]+'); \
 	 mlab=$$(grep -m1 'Total MLAB memory bits' $(QDIR)/output_files/$(MOD).map.rpt 2>/dev/null | sed 's/.*; *\([0-9,]*\) *;.*/\1/'); \
-	 printf 'ALM %-7s reg %-6s MLABbits %-6s DSP %-3s Fmax %s\n' "$${alm:-?}" "$${reg:-?}" "$${mlab:-0}" "$${dsp:-?}" "$${fmax:-comb (no clock)}"
+	 printf 'ALM %-7s reg %-6s M10K %-4s MLABbits %-6s DSP %-3s Fmax %s\n' "$${alm:-?}" "$${reg:-?}" "$${m10k:-0}" "$${mlab:-0}" "$${dsp:-?}" "$${fmax:-comb (no clock)}"
 
 # --------------------------------------------------------------------- clean
 

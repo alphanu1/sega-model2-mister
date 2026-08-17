@@ -939,3 +939,66 @@ having:**
 
 Order for the next attempt, and it is not the order that was tried: pending-
 request latch, then the harness's miss definition, then critical-word-first.
+
+---
+
+## M10K was being measured and thrown away — M2-H now has data
+
+`make quartus_report` extracted the M10K figure into a shell variable and never
+printed it. Every Quartus measurement this project has taken has silently
+discarded the resource that **M2-H exists to budget**, and that Model 1 found
+**binding at 409/553 on this same part** while ALM had headroom.
+
+**Fourth instance of this pattern today**: the FP-register comparison that could
+never run, the generator's `>> 8` opcode packing, the reference's dispatch
+shift, and now this. Three of the four were a value computed correctly and then
+not used. *Computing a thing is not checking it, and extracting a thing is not
+reporting it.*
+
+Fixed, and every build already on disk was re-reported without refitting.
+
+### M10K, measured
+
+| module | ALM | M10K of 553 | note |
+|---|---|---|---|
+| `i960_top` (ours) | 7,079 | **3** | the whole CPU |
+| ├ `i960_icache` | 472 | 1 | 512 B instruction cache |
+| └ `i960_regs` | 1,655 | 1 | plus 2,048 MLAB bits |
+| `SCSP` (srg320) | 2,030 | **26** | same chip Model 2 uses |
+| `VDP1` (srg320) | 2,537 | 0 | 512 MLAB bits instead |
+
+**The i960 is not an M10K problem: 3 blocks of 553.** That is worth knowing
+before the pipeline work, because a pipeline usually adds buffering and this
+says there is room for it.
+
+**The SCSP at 26 is the first real number for the sound block**, against a
+budget that had none at all.
+
+**Open, and it should be checked:** `i960_regs` reports **1 M10K plus 2,048 MLAB
+bits**, when the design intent recorded in its header is MLAB *only* — chosen
+deliberately because §5.6 puts the pressure on M10K blocks rather than bits. One
+block is not a crisis, but it is one more than the header says should be there,
+and the header explains at length why. Either the rationale or the RTL is wrong.
+
+### VDP1 measured: 2,537 ALM, 3 DSP, 31.52 MHz, 0 M10K
+
+The renderer floor, completing the bracket M2-E started:
+
+| | ALM | what it is |
+|---|---|---|
+| N64 RDP | 8,347 | Z-buffered, mipmapped, bilinear **and trilinear**, colour combiner, coverage AA |
+| **Model 2 renderer** | **8,000 - 14,000 (est.)** | Z-buffered, mipmapped, bilinear, **plus** tile binning and a texture cache |
+| Saturn VDP1 | **2,537** | quad rasterizer, **no** Z-buffer, mipmapping or filtering |
+
+**What this does and does not establish.** VDP1 is architecturally closer to us
+than the RDP — both rasterize quads, the RDP does triangles — so 2,537 is a
+meaningful floor for the *rasterizer core*. But it lacks every feature that
+makes Model 2's renderer expensive, so the gap between 2,537 and 8,000 is
+precisely the Z-buffer, filtering, mipmapping and tile machinery. It does not
+narrow the estimate; it says where the money goes.
+
+The 8,000 optimistic sits essentially *at* the RDP's 8,347, which the study
+already justified as "roughly a wash" — cheaper without trilinear, the colour
+combiner and coverage AA, more expensive with binning and a texture cache. Both
+measurements are consistent with that judgement. **The pessimistic 14,000 is
+1.7x the RDP and remains the least supported number in the budget.**
