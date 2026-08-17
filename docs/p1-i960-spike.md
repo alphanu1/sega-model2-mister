@@ -429,7 +429,8 @@ number the DSP budget in §5.5 now has to carry.
 | `i960_fpdiv` (double) | 319 | 0 | 66.15 MHz |
 | `i960_fpsqrt` (double) | 249 | 0 | 89.90 MHz |
 | `i960_fpmisc` (cmp/cvt/round/scale/logb) | 1,252 | 0 | comb |
-| **FPU total so far** | **2,931** | **4** | limited by `fpadd` at 51.89 |
+| `i960_fpcvt` (single <-> double) | 175 | 0 | comb |
+| **FPU total so far** | **3,106** | **4** | limited by `fpadd` at 51.89 |
 | Model 1 `fp_add` (single) | 411 | 0 | 76.35 MHz |
 | Model 1 `fp_mul` (single) | 144 | 1 | 116.85 MHz |
 
@@ -568,6 +569,23 @@ That last one is the same family as the stale-binary incident: a check that
 looks present, reads plausibly, and does nothing. It only surfaced because the
 arithmetic underneath it had become correct enough for NaN handling to be the
 last thing left failing.
+
+#### Single/double conversion — the operand plumbing
+
+`rtl/cpu/i960/i960_fpcvt.sv`, 175 ALM. Every `r`-form instruction reads through
+`u2f` and writes through `f2u`; the `rl` forms use register pairs and need no
+conversion.
+
+**This is what makes §8's argument hold.** Computing the `r` forms in double and
+narrowing once is equivalent to single-precision arithmetic *because the single
+rounding happens here*. Widening is exact — single's significand and exponent
+both fit double with room — so nothing is lost on the way in.
+
+2.98 M checks per seed across three seeds, with **every single exponent value**
+crossed with four mantissas and both signs, plus narrowing tie cases where bit
+28 decides round-to-even. Zero mismatches, and no bugs found — the first FP
+block that worked first time, which is what an exact widening and one
+well-understood rounding buys.
 
 ## 9. Known unverifiable
 
