@@ -1401,3 +1401,43 @@ to add.
 
 R9 said a CPI is a property of the mix. There are now three, all correct, and
 only one answers the fit question.
+
+## Retire aligned accesses at the ack — CPI 9.49 -> 8.07
+
+`S_NEXT` existed because the load extension happened a state after the ack. That
+was the original defect; capturing into `rd_q` fixed the correctness and left
+the extra state behind. Doing the work **in the ack cycle** removes the state
+entirely, which is where the throughput gap lives.
+
+`rd_byte`/`rd_half` now read the LIVE bus again — correct **here** precisely
+because it is the ack cycle, which is what the first version got wrong by doing
+it one state later.
+
+The byte-split path still uses `S_NEXT`: its last byte is merged into `assemble`
+by that cycle's own non-blocking write, so the assembled word is not readable
+until the next cycle. Aligned accesses are the common case and now pay nothing
+for it.
+
+| | before | after |
+|---|---|---|
+| CPI, daytona mix | 9.49 | **8.07** |
+| `T_MEM_W` | 4.90 cyc/instr (51.6%) | **3.43 (42.4%)** |
+| per memory access | ~10 cycles | **~7 cycles** |
+| throughput at 26.75 MHz | 2.82 M instr/s | **3.31 M instr/s** |
+
+All 15 suites pass; daytona mix 9,769 retires / 371,222 checks with the write
+stream compared.
+
+**Still 3.8x short of 12.5 M instr/s, and still in the same place.** `T_MEM_W`
+remains the largest single cost at 42.4%.
+
+### The next cycle to remove, identified but not taken
+
+`bus_req` is set inside `S_XFER` as a registered assignment, so the request does
+not appear until the cycle *after* the state is entered — every access spends a
+cycle in `S_XFER` doing nothing but raising a request. Asserting it on the
+transition into `S_XFER` would remove that, **but `bus_addr` and `bus_wdata` are
+registered in the same place and would have to move with it**, which is a wider
+change than it looks and was not attempted at the end of a long session.
+
+That is worth roughly one cycle per word out of seven.

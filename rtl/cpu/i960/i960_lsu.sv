@@ -174,9 +174,13 @@ module i960_lsu (
   //
   // Never reached before now, because the whole-CPU generator emitted no
   // load or store at all.
-  logic [31:0] rd_q;
-  assign rd_byte = rd_q[{cur_addr[1:0], 3'd0} +: 8];
-  assign rd_half = cur_addr[1] ? rd_q[31:16] : rd_q[15:0];
+  // Extracted from the LIVE bus, which is correct HERE because this is now used
+  // in the cycle the ack arrives, not a state later. The original defect was
+  // doing this extraction in S_NEXT, where bus_rdata belongs to whatever the
+  // bus is doing next; the fix then was to capture into rd_q, and the fix now
+  // is to do the work at the ack and skip the state entirely.
+  assign rd_byte = bus_rdata[{cur_addr[1:0], 3'd0} +: 8];
+  assign rd_half = cur_addr[1] ? bus_rdata[31:16] : bus_rdata[15:0];
 
   logic [7:0] rd_byte_split;
   assign rd_byte_split = bus_rdata[{byte_addr[1:0], 3'd0} +: 8];
@@ -202,7 +206,6 @@ module i960_lsu (
       store_q  <= 1'b0;
       sext_q   <= 1'b0;
       burst_q  <= 1'b0;
-      rd_q     <= 32'd0;
       ld_widx  <= 3'd0;
     end else begin
       ld_we <= 1'b0;
@@ -262,8 +265,34 @@ module i960_lsu (
                 bidx <= bidx + 2'd1;
               end
             end else begin
-              rd_q  <= bus_rdata;   // capture at the ack, extend next state
-              state <= S_NEXT;
+              // ALIGNED PATH RETIRES HERE. Everything S_NEXT used to do for
+              // this case is done in the ack cycle, which removes a state per
+              // word -- and per-access cycles are where the throughput gap is:
+              // T_MEM_W measured 4.90 cyc/instr, ~10 cycles per access, against
+              // a bus that acks immediately.
+              //
+              // The byte-split path still needs S_NEXT: its last byte is merged
+              // into `assemble` by this very cycle's non-blocking write, so the
+              // assembled word is not readable until the next one.
+              if (!store_q) begin
+                ld_we   <= 1'b1;
+                ld_widx <= widx;
+                case (sz)
+                  2'd0: ld_word <= sext_q ? {{24{rd_byte[7]}},  rd_byte}
+                                          : {24'd0,            rd_byte};
+                  2'd1: ld_word <= sext_q ? {{16{rd_half[15]}}, rd_half}
+                                          : {16'd0,            rd_half};
+                  default: ld_word <= bus_rdata;
+                endcase
+              end
+              if (widx + 3'd1 >= nw) begin
+                done  <= 1'b1;
+                state <= S_IDLE;
+              end else begin
+                widx <= widx + 3'd1;
+                if (burst_q) cur_addr <= cur_addr + 32'd4;
+                state <= store_q ? S_OPD : S_XFER;
+              end
             end
           end
         end
@@ -274,21 +303,19 @@ module i960_lsu (
           if (!store_q) begin
             ld_we   <= 1'b1;
             ld_widx <= widx;
+            // Reachable only for a split access; the guard states that rather
+            // than relying on it.
             if (split) begin
               case (sz)
                 2'd1: ld_word <= sext_q ? {{16{assemble[15]}}, assemble[15:0]}
                                         : {16'd0,             assemble[15:0]};
                 default: ld_word <= assemble;
               endcase
-            end else begin
-              case (sz)
-                2'd0: ld_word <= sext_q ? {{24{rd_byte[7]}},  rd_byte}
-                                        : {24'd0,            rd_byte};
-                2'd1: ld_word <= sext_q ? {{16{rd_half[15]}}, rd_half}
-                                        : {16'd0,            rd_half};
-                default: ld_word <= rd_q;
-              endcase
             end
+            // No non-split branch here any more: an aligned access retires in
+            // the ack cycle in S_XFER, and only the byte-split path reaches
+            // this state -- it needs one extra cycle for `assemble` to become
+            // readable after its last byte is merged.
           end
 
           assemble <= 32'd0;
