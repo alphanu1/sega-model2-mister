@@ -88,6 +88,7 @@ void dump_ring() {
 
 void tick() {
   const int ts_now = dut->rootp->i960_top__DOT__ts & 15;
+
   if (bus_probe && dut->bus_req && (dut->bus_addr & ~3u) >= 0x800 && !dut->bus_we)
     std::printf("  [req] bus_addr=%08x cur=%08x widx=%d nw=%d burst=%d\n",
                 dut->bus_addr,

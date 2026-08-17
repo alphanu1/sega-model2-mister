@@ -1588,3 +1588,54 @@ long enough to reach steady state.** Neither condition holds yet. The honest
 position is that the cache is currently unsized and unsizable with this harness,
 and that the "67.7% -> 90%" estimate should be treated as withdrawn rather than
 merely revised.
+
+## Fetch/execute overlap: built, correct, and it never fires. Prefetch depth is why
+
+Built the first real pipelining step — hand the register ports to the successor
+during execute so the fetch state disappears on a prefetch hit. It **passed all
+15 suites and changed CPI by nothing**: 4.96 before and after, `T_FETCH` still
+1.02 cyc/instr.
+
+Instrumented rather than assumed: **`fetch_word_ok` was false in all 50,174
+execute cycles.** The overlap was never once eligible.
+
+### One good finding, which cost nothing to prove
+
+**No extra register read ports are needed.** The design note assumed they were
+the prerequisite, because instruction N+1's read must happen while N holds both
+ports. They do not, because `rd1`/`rd2` are **registered**: this instruction's
+result is computed from their current values during `T_EXEC` and latched on the
+same edge that loads the successor's operands. Both are correct. That removes
+the item the design called "the first work item".
+
+### The actual blocker is prefetch DEPTH
+
+The prefetch is issued when instruction N's word lands and takes about two
+cycles to arrive. A simple instruction retires in two cycles — `T_FETCH` then
+`T_EXEC`. **So the prefetch lands exactly at the retire boundary**, which is
+precisely why `T_FETCH` costs one cycle on a hit rather than being free. During
+`T_EXEC` it has not arrived.
+
+Compounded by a correct fix from earlier today: `pf_armed <= pf_issued` arms the
+prefetch one cycle after issue, which stopped it capturing the previous demand
+fetch's stale `valid`. With a one-cycle `T_EXEC`, that arming has not happened
+yet either.
+
+**Overlap therefore needs the prefetch running TWO instructions ahead, not one**
+— a small queue rather than a single `pf_insn`/`pf_ip` pair. That is the real
+first work item, and it is a much smaller job than adding register ports.
+
+Reverted; the machinery was correct but dead, and dead logic costs area and
+reads as working.
+
+### Revised plan, in dependency order
+
+1. **Two-deep prefetch queue.** Prerequisite for everything below. Small,
+   contained, and independently testable via the existing hit-rate counter.
+2. **Fetch/execute overlap.** Already written once and known correct — the
+   condition and the post-case override can be lifted from this session's
+   history. Worth ~1.0 CPI.
+3. **Memory as a stage.** `T_MEM_W` is 1.64 cyc/instr, ~3.3 per access. Worth
+   ~1.15 CPI.
+4. Then re-measure. 4.96 - 1.0 - 1.15 ~= 2.8 CPI ~= 9.5 M instr/s, with the
+   remainder from Fmax once the execute path is split.
