@@ -49,6 +49,8 @@ const char *STATE_NAME[16] = {
 
 uint64_t fetch_enter = 0, fetch_hit = 0, fetch_stall = 0, ic_fill_cyc = 0;
 
+bool bus_probe = false;
+
 struct Trace { uint64_t t; int ts; int req, valid, busy; uint32_t addr, data, insn, ip; };
 Trace ring[4096];
 size_t ring_n = 0;
@@ -100,6 +102,12 @@ void tick() {
   }
   if (dut->bus_req) {
     const uint32_t a = dut->bus_addr & ~3u;
+    if (bus_probe && a >= 0x800) {
+      auto i2 = mem.find(a);
+      std::printf("  [bus] %s addr=%08x be=%x rdata=%08x wdata=%08x\n",
+                  dut->bus_we ? "WR" : "RD", dut->bus_addr, dut->bus_be,
+                  (i2 == mem.end()) ? 0xffffffffu : i2->second, dut->bus_wdata);
+    }
     auto it = mem.find(a);
     const uint32_t cur = (it == mem.end()) ? 0xffffffffu : it->second;
     if (dut->bus_we) {
@@ -145,6 +153,40 @@ uint64_t denorm_skips = 0;
 uint64_t nan_stops    = 0;
 bool     probe_fp     = false;
 
+// Instruction-class weighting.
+//
+// Two modes, and the default is NOT the realistic one on purpose.
+//
+//   coverage (default) -- every class roughly equally often. Frequency in real
+//     code is irrelevant to a verifier: a rare instruction that is wrong is
+//     still wrong, and weighting by frequency would bury it.
+//
+//   daytona (+mix=daytona) -- the mix MEASURED from Daytona USA under MAME
+//     (M2-B): 52.9% load/store, 13.6% integer ALU, 9.7% move, 9.4%
+//     compare/branch, 8.0% lda, 0.8% FP. Use this for CPI and throughput, where
+//     frequency is the only thing that matters.
+//
+// Reporting a CPI figure without saying which mix produced it is what R9 exists
+// to prevent -- the two differ by a large factor, and neither is wrong.
+enum { C_REGALU=0, C_BRANCH=1, C_FAULT=2, C_CMPBR=3, C_FP=4, C_BBX=5,
+       C_EMUL=6, C_MOVX=7, C_MOV=8, C_MULDIV=9, C_LDST=10, C_LDA=11, C_TEST=12,
+       C_N=13 };
+
+bool mix_daytona = false;
+
+// coverage: near-uniform. daytona: M2-B's measured shares, in percent.
+const int W_COVER[C_N]  = { 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 4 };
+const int W_DAYTON[C_N] = { 12, 4, 0, 6, 1, 2, 1, 3, 10, 1, 49, 8, 3 };
+
+int pick_class(std::mt19937_64 &rng) {
+  const int *w = mix_daytona ? W_DAYTON : W_COVER;
+  int total = 0;
+  for (int i = 0; i < C_N; ++i) total += w[i];
+  int r = int(rng() % uint64_t(total));
+  for (int i = 0; i < C_N; ++i) { r -= w[i]; if (r < 0) return i; }
+  return C_REGALU;
+}
+
 bool compare(uint64_t n) {
   // Skip the retire outright when the reference widened a subnormal single.
   // The units flush, the host does not, and the divergence is real but already
@@ -159,7 +201,24 @@ bool compare(uint64_t n) {
     if (dreg(i) != ref.rf.r[i] && !fp_nan_ok) {
       ok = false;
       if (fails < MAX_REPORT)
-        if (fails == 0) dump_ring();
+        if (fails == 0) {
+          // Loads and stores are new to this generator. A load divergence is
+          // often a STORE divergence surfacing later, so compare the data
+          // windows before blaming the load.
+          int shown = 0;
+          for (const auto &kv : mem) {
+            if (kv.first < 0x800) continue;
+            auto it = ref.rf.mem.find(kv.first);
+            const uint32_t r = (it == ref.rf.mem.end()) ? 0xffffffffu : it->second;
+            if (r != kv.second && shown < 8) {
+              std::printf("  MEMDIFF %08x  dut=%08x ref=%08x\n",
+                          kv.first, kv.second, r);
+              ++shown;
+            }
+          }
+          if (!shown) std::printf("  (data memory agrees; divergence is in the load path)\n");
+          dump_ring();
+        }
         std::printf("  MISMATCH retire %llu  %-4s got=%08x want=%08x  (IP %08x insn %08x)\n",
                     (unsigned long long)n, rn(i), dreg(i), ref.rf.r[i],
                     exec_ip, exec_insn);
@@ -213,6 +272,8 @@ int main(int argc, char **argv) {
   for (int i = 1; i < argc; ++i) {
     if (!std::strncmp(argv[i], "+random=", 8)) progs = std::strtoull(argv[i]+8, nullptr, 10);
     if (!std::strcmp (argv[i], "+probe_fp"))  probe_fp = true;
+    if (!std::strcmp (argv[i], "+bus_probe")) bus_probe = true;
+    if (!std::strcmp (argv[i], "+mix=daytona")) mix_daytona = true;
     if (!std::strncmp(argv[i], "+seed=", 6))   seed  = std::strtoull(argv[i]+6, nullptr, 10);
   }
   dut = new Vi960_top;
@@ -233,7 +294,7 @@ int main(int argc, char **argv) {
     // 0x00500000 is burst-flagged; the program sits at 0.
     std::vector<uint32_t> prog;
     for (uint64_t k = 0; k < steps; ++k) {
-      const int cls = int(rng() % 10);
+      const int cls = pick_class(rng);
       uint32_t insn;
       if (cls == 7) {                                  // movl / movt / movq
         const uint32_t blk = 0x5d + (rng() % 3);
@@ -319,11 +380,27 @@ int main(int argc, char **argv) {
         // fatalerror in the reference and §1 scopes it out, so both sides trap
         // and there is nothing to compare.
         insn = ((0x18u + (rng() % 8)) << 24) | (rng() % 0x10000u & ~3u);
-      } else if (cls == 41) {                          // test<cc>
+      } else if (cls == 12) {                          // test<cc>
         insn = ((0x20 + (rng() % 8)) << 24) | ((rng() % 32) << 19);
       } else if (cls == 3) {                           // cmpib<cc> / cmpob<cc>
         const uint32_t op = (rng() & 1) ? (0x31 + rng() % 6) : (0x39 + rng() % 6);
         insn = (op << 24) | ((rng() % 32) << 19) | ((rng() % 32) << 14) | 0x0008;
+      } else if (cls == 10) {                          // load / store  (MEMA)
+        // MEMA absolute: bit 12 must be 0 (that is what selects MEMA over
+        // MEMB), bit 13 = 0 selects a plain offset rather than r[abase] +
+        // offset. Offset is 12 bits, so the data window is 0x800-0xFFC --
+        // clear of the program, which sits at 0 and is `steps` words long.
+        static const uint8_t LS[] = {0x80,0x82,0x88,0x8a,0x90,0x92,
+                                     0x98,0x9a,0xa0,0xa2,0xb0,0xb2};
+        const uint32_t op  = LS[rng() % (sizeof LS / sizeof LS[0])];
+        const uint32_t off = 0x800u + ((rng() % 0x200u) << 2);
+        // Multi-word forms mask the destination register, so a high srcdst is
+        // fine, but keep it out of r0-r2 (PFP/SP/RIP) to avoid perturbing the
+        // frame machinery in a test aimed at the memory path.
+        insn = (op << 24) | (((rng() % 24) + 4) << 19) | (0u << 14) | off;
+      } else if (cls == 11) {                          // lda
+        insn = (0x8cu << 24) | (((rng() % 24) + 4) << 19)
+             | (0u << 14) | (0x800u + ((rng() % 0x200u) << 2));
       } else if (cls == 5) {                           // bbc / bbs
         insn = (((rng() & 1) ? 0x37u : 0x30u) << 24)
              | ((rng() % 32) << 19) | ((rng() % 32) << 14) | 0x2008;

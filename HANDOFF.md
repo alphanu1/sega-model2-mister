@@ -1119,3 +1119,77 @@ throughput from a number that cannot be interpreted into one that can, and it is
 the first time that has been possible. Expect it to move a long way: our memory
 path is multi-cycle (`T_MEM`/`T_MEM_W`) and is currently 1.5% of the synthetic
 profile against 52.9% of reality.
+
+---
+
+## Reweighting the generator found something worse than a bad weighting
+
+**`make test_i960_top` FAILS. Committed that way deliberately — the bug is real
+and hiding it would undo the point of finding it.**
+
+The plan was to reweight the lockstep generator to M2-B's measured mix. It could
+not be done, because of what the generator turned out not to contain.
+
+### The whole-CPU lockstep has never executed a load or a store
+
+The class selector is `rng() % 10` over ten classes, and **none of them emit a
+MEM-format instruction**. Confirmed against the profile: **zero `T_MEM` and zero
+`T_MEM_W` cycles across the entire run.**
+
+**52.9% of real instructions — the single largest class by a factor of four —
+had never been executed at CPU level.** Every "3,870 retires, 147,060 checks,
+zero divergence" result this project has reported was silent about more than
+half of what a Model 2 program does.
+
+A second, smaller instance of the same thing: `cls == 41` is dead code, because
+`rng() % 10` cannot produce 41. **`test<cc>` has never been generated either.**
+
+### Fixed, and it found a defect on the first run
+
+Added `C_LDST` (the twelve MEMA load/store forms), `C_LDA`, and revived
+`test<cc>` as `C_TEST`. Weighting is now table-driven with two modes, and the
+default is deliberately **not** the realistic one:
+
+- **coverage (default)** — near-uniform. Frequency is irrelevant to a verifier:
+  a rare instruction that is wrong is still wrong, and weighting by frequency
+  buries it.
+- **`+mix=daytona`** — M2-B's measured shares, for CPI and throughput, where
+  frequency is the only thing that matters.
+
+First run, retire 4:
+
+```
+MISMATCH retire 4  r10  got=00000009 want=000000ff  (IP 0000001c insn 80500a70)
+```
+
+`ldob r10, 0xa70` — a byte load from unmapped memory, which reads `0xffffffff`,
+so the byte is `0xff`.
+
+**Narrowed by instrumentation rather than inspection**, and the elimination is
+worth keeping:
+
+- **Data memory agrees.** Both sides' data windows are identical, so this is not
+  a store divergence surfacing later.
+- **The bus transaction is correct**: `RD addr=00000a70 be=1 rdata=ffffffff`.
+  Right address, right byte enable, right data returned.
+- **Addressing and arbitration are therefore not at fault.** The MEMA effective
+  address is right and the LSU won the bus.
+
+**So the defect sits between the bus data arriving and the register writeback —
+`i960_lsu`'s extension/lane extraction, or the writeback path in `i960_top`.**
+That is a small, well-bounded area to search, and the harness now reproduces it
+on the first program.
+
+Note the arbiter was read carefully and looked correct, and it *is* correct.
+Inspection has produced a confident wrong answer three times today; the bus
+probe settled it in one run. **Instrument earlier than feels necessary.**
+
+### Why this matters more than the CPI number that prompted it
+
+The reweighting was supposed to make throughput interpretable. It has instead
+shown that the verification behind every result so far excluded the dominant
+instruction class. **The CPI figures were not merely weighted wrongly — the
+memory path they should have been dominated by was never executed at all.**
+
+Do not reweight to `+mix=daytona` and quote a number until this defect is fixed:
+a mix that is 49% load/store, run against a broken load path, measures nothing.
