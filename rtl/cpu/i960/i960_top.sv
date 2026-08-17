@@ -250,13 +250,34 @@ module i960_top (
                         .sub(fadd_sub), .a(fp_b), .b(fp_a),
                         .y(fadd_y), .done(fadd_done));
   i960_fpmul  u_fpmul  (.clk(clk), .rst_n(rst_n), .req(fmul_req),
-                        .a(fp_b), .b(fp_a), .y(fmul_y), .done(fmul_done));
+                        .a(fp_b), .b(fp_is_scale ? pow2 : fp_a),
+                        .y(fmul_y), .done(fmul_done));
   i960_fpdiv  u_fpdiv  (.clk(clk), .rst_n(rst_n), .req(fdiv_req),
                         .a(fp_b), .b(fp_a), .y(fdiv_y),
                         .busy(fdiv_busy), .done(fdiv_done));
   i960_fpsqrt u_fpsqrt (.clk(clk), .rst_n(rst_n), .req(fsqrt_req),
                         .a(fp_a), .y(fsqrt_y),
                         .busy(fsqrt_busy), .done(fsqrt_done));
+
+  // scaler takes its FP operand from src2 and its integer from src1, unlike
+  // every other fpmisc operation which reads src1. Feeding it fp_a silently
+  // scaled the wrong value.
+  logic fp_is_scale;
+  assign fp_is_scale = (d_op == 8'h67) && (d_op2 == 4'h7);
+
+  // scaler is `t2f * pow(2.0, n)` in the reference — a genuine multiply, not an
+  // exponent add. The difference shows when pow overflows: 0 * inf is NaN,
+  // where adding to the exponent returns zero. So 2^n is materialised as a
+  // double and pushed through the multiplier, which already handles every
+  // special case correctly.
+  logic signed [12:0] pow2_exp;
+  logic [63:0]        pow2;
+  assign pow2_exp = $signed(src1_val[12:0]) + 13'sd1023;
+  assign pow2 = ($signed(src1_val) >  32'sd1023) ? {1'b0, 11'h7ff, 52'd0}
+              : ($signed(src1_val) < -32'sd1074) ? 64'd0
+              : (pow2_exp >= 13'sd2047)          ? {1'b0, 11'h7ff, 52'd0}
+              : (pow2_exp <= 13'sd0)             ? 64'd0
+                                                 : {1'b0, pow2_exp[10:0], 52'd0};
 
   logic [2:0] fmisc_op;
   assign fp_res_wide = fp_is_add  ? fadd_y
@@ -297,7 +318,7 @@ module i960_top (
              endcase
       8'h67: case (d_op2)
                4'h4: begin fp_is_misc = 1'b1; fmisc_op = 3'd2; end  // cvtir
-               4'h7: begin fp_is_misc = 1'b1; fmisc_op = 3'd6; end  // scaler
+               4'h7: fp_is_mul = 1'b1;                              // scaler
                default: ;
              endcase
       default: ;
@@ -786,7 +807,15 @@ module i960_top (
         end
 
         T_FP: begin
-          if (fp_is_misc || fadd_done || fmul_done || fdiv_done || fsqrt_done) begin
+          // Each unit's done is qualified by whether THIS instruction issued
+          // to it. Accepting any unit's done lets a stale strobe from an
+          // earlier instruction retire the wrong result — and the multi-cycle
+          // units (divide, sqrt) are exactly where that window is wide.
+          if (fp_is_misc
+              || (fp_is_add  && fadd_done)
+              || (fp_is_mul  && fmul_done)
+              || (fp_is_div  && fdiv_done)
+              || (fp_is_sqrt && fsqrt_done)) begin
             if (fp_writes_cc) begin
               ac <= {ac[31:3], fmisc_cc};
             end else if (fp_writes_int) begin

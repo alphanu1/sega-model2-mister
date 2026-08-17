@@ -31,6 +31,32 @@ struct Cpu {
 
   // u2f / f2u: a general register reinterpreted as IEEE single, and back.
   static double u2f(uint32_t v) { float f; std::memcpy(&f, &v, 4); return (double)f; }
+
+  // The FP units flush subnormal singles to zero; the host does not. That is a
+  // recorded deviation (p1-i960-spike.md §8.1), not a defect, and it is reached
+  // here far more often than at block level: any arithmetic can leave a small
+  // integer in a register, and a small integer reinterpreted as a single IS a
+  // subnormal. 0x1b is 3.8e-44, and `0 / 3.8e-44` is 0 on the host but 0/0 = NaN
+  // once the divisor flushes. Flagged rather than avoided, so the suite skips
+  // exactly the deviation and still compares everything else on that retire.
+  bool fp_denorm_operand = false;
+  // Which general register this retire's FP result narrowed into, or -1. A
+  // single-precision NaN's sign and payload differ between the units' canonical
+  // quiet NaN and the host's propagation — recorded, and already exempted for
+  // fp0-fp3. Naming the register keeps that exemption to exactly the word the
+  // FP unit wrote, so an integer result that merely looks like a NaN is still
+  // compared bit for bit.
+  int  fp_sdest = -1;
+  // Set when this retire's FP result is a NaN. The units emit one canonical
+  // quiet NaN; the host propagates the operand's payload and sign. Exempting
+  // the comparison is not enough, because the differing word stays in the
+  // register file and breaks every retire after it — so the program ends here,
+  // the same as for a flushed subnormal.
+  bool fp_nan_result = false;
+  double u2f_t(uint32_t v) {
+    if (((v >> 23) & 0xff) == 0 && (v & 0x7fffff) != 0) fp_denorm_operand = true;
+    return u2f(v);
+  }
   static uint32_t f2u(double d) { float f = (float)d; uint32_t v; std::memcpy(&v, &f, 4); return v; }
 
   // The literal forms select fp0-fp3, or 1.0 at index 0x16, else 0.0.
@@ -71,6 +97,9 @@ struct Cpu {
 
   void step() {
     if (trapped) return;
+    fp_denorm_operand = false;
+    fp_sdest          = -1;
+    fp_nan_result     = false;
     const uint32_t insn = rd(IP);
     const Decoded d = i960ref::decode(insn);
     const uint32_t ip_next = IP + (d.insn_len2 ? 8 : 4);
@@ -134,8 +163,8 @@ struct Cpu {
 
         // ---- single-precision FP, the subset wired into the CPU ----
         {
-          const double fa = d.src1_lit ? fp_lit(d.src1) : u2f(rf.r[d.src1]);
-          const double fb = d.src2_lit ? fp_lit(d.src2) : u2f(rf.r[d.src2]);
+          const double fa = d.src1_lit ? fp_lit(d.src1) : u2f_t(rf.r[d.src1]);
+          const double fb = d.src2_lit ? fp_lit(d.src2) : u2f_t(rf.r[d.src2]);
           bool handled = true, wr_int = false, wr_cc = false;
           double fres = 0.0; uint32_t ires = 0;
           const int rm = int((AC >> 30) & 3);
@@ -143,7 +172,12 @@ struct Cpu {
             switch (rm) { case 0: return std::round(v); case 1: return std::floor(v);
                           case 2: return std::ceil(v);  default: return std::trunc(v); }
           };
-          switch ((uint32_t(d.op) << 8) | d.op2) {
+          // Opcode and sub-opcode pack as 0xOOS across THREE hex digits, so
+          // the shift is 4, not 8. With 8 the labels never matched, `handled`
+          // was always false, and every FP instruction trapped in the reference
+          // while the DUT executed it — which ended the lockstep loop before it
+          // could compare anything and made the FP-register check look inert.
+          switch ((uint32_t(d.op) << 4) | d.op2) {
             case 0x78f: fres = fb + fa; break;                       // addr
             case 0x78d: fres = fb - fa; break;                       // subr
             case 0x78c: fres = fb * fa; break;                       // mulr
@@ -169,7 +203,18 @@ struct Cpu {
             if (!wr_cc) {
               if (wr_int)            rf.r[d.srcdst] = ires;
               else if (d.dst_lit)    fp[d.srcdst & 3] = fres;
-              else                   rf.r[d.srcdst] = f2u(fres);
+              else {
+                const uint32_t u = f2u(fres);
+                rf.r[d.srcdst] = u;
+                fp_sdest       = d.srcdst;
+                // The result flushes too, not only the operands: a pair of
+                // normal singles can divide to a subnormal one, which the unit
+                // stores as zero and the host stores intact.
+                if (((u >> 23) & 0xff) == 0 && (u & 0x7fffff) != 0)
+                  fp_denorm_operand = true;
+              }
+              if (!wr_int && std::isnan(fres))                    fp_nan_result    = true;
+              if (!wr_int && std::fpclassify(fres) == FP_SUBNORMAL) fp_denorm_operand = true;
             }
             IP = ip_next;
             break;

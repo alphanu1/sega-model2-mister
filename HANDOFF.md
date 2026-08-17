@@ -344,3 +344,90 @@ same device, and its commit messages carry findings that exist nowhere else.
 M10K binding came from a commit message, not from any document. **Pull that
 reference when it moves and read what changed, rather than only taking files
 from it.**
+
+---
+
+## FP-register verification — closed as a check, open as a defect
+
+**Suite state: `make test_i960_top` FAILS.** Committed failing deliberately, so
+the defect is visible rather than carried as a note.
+
+### The gap was real, and it was not what it looked like
+
+The fp0-fp3 comparison had been in the harness for some time and had never
+failed. It was **inert**: `i960_cpu_ref.h` dispatched on
+`(d.op << 8) | d.op2` against `case 0x78f:` labels. Opcode and sub-opcode pack
+as `0xOOS` across *three* hex digits, so the shift is 4. With 8, no label ever
+matched, `handled` stayed false, and the reference **trapped on every FP
+instruction** — which ended the lockstep loop before it reached a single
+comparison. The DUT was executing FP the whole time and nothing was reading it.
+
+This is the same defect class as the generator's `0x78f >> 8`, found earlier the
+same day, and the fourth time a check that looked present did nothing. **A check
+that has never failed is not evidence; it is an untested branch.**
+
+### Real bugs this then exposed
+
+1. **Stale `done` retiring the wrong result.** `T_FP` accepted *any* unit's
+   `done`, so a strobe left by an earlier instruction could retire a result the
+   current instruction never computed. Now qualified per-unit
+   (`fp_is_sqrt && fsqrt_done`). The multi-cycle units — divide and sqrt — are
+   exactly where that window is widest.
+2. **`scaler` read the wrong operand.** Its FP source is src2; every other
+   fpmisc op reads src1.
+3. **`scaler` is a multiply, not an exponent add.** The reference computes
+   `t2f * pow(2.0, n)`. When `pow` overflows, `0 * inf` is NaN — an exponent add
+   returns zero. Now routed through `i960_fpmul` with 2^n materialised as a
+   double, so every special case is the multiplier's already-verified logic.
+
+### Deviations that had to be excluded, and why skipping was not enough
+
+Two recorded deviations (§8.1) reach architectural state, and that changes how a
+harness must handle them:
+
+- **Subnormal flush.** The units flush, the host does not. At block level this
+  is rare; at CPU level it is common, because *any* small integer left in a
+  register is a subnormal when reinterpreted as a single — `0x1b` is 3.8e-44, so
+  `0 / 0x1b` is 0 on the host and 0/0 = NaN once the divisor flushes. It applies
+  to results as well as operands: two normal singles can divide to a subnormal.
+- **NaN payload.** The units emit one canonical quiet NaN; the host propagates
+  the operand's sign and payload.
+
+First attempt skipped the comparison for that retire. **That was wrong** — the
+diverged word stays in the register file and every later retire in the program
+fails on state already known to differ. The program must be **abandoned** at
+that point, exactly like a trap. Skipping a comparison does not undo a write.
+
+Both are counted and printed, so an exclusion cannot quietly become most of the
+run: currently **13 programs end on a subnormal, 1 on a NaN result, out of 200**.
+
+### Where it stands
+
+256 retires against 113 before, 53 FP ops executed, **4 of them writing fp0-fp3**
+— so the comparison is now demonstrably reading real content.
+
+**One unresolved defect, and the evidence is contradictory:**
+
+```
+MISMATCH retire 1  fp2  got=0000000000000000 want=43940b9ff8b76ef9
+                        (insn 6815a407 = sqrtr, s1=07, dst_lit=1)
+[dbg] r7=79c8e8c3  fsqrt_y=0  fpr = 0/0/0/0
+```
+
+`r7` is a valid large single and the expected root matches it exactly. The IP
+advanced, so the instruction retired — but no FP register was written. Checked
+and **eliminated**: `fp_valid` does dispatch `0x68.8`; `is_movx` does not
+capture it (it requires op2 == 0xc); `d_dst_lit` is bit 13 in both the RTL and
+the reference and is 1 here; `fp_writes_cc` and `fp_writes_int` are both false
+for sqrt; the accessor is proven good by a write/read-back probe. `fsqrt_y = 0`
+at compare time may be a red herring — the unit likely clears its output on
+returning to idle, several cycles after the retire.
+
+**The next move is a waveform, not another hypothesis.** Dump `T_FP`, `fsqrt_req`,
+`fsqrt_done` and `fp_a` for that single program and find which branch of the
+writeback actually fires. Five successive guesses were each eliminated by
+inspection, which is the signal to stop guessing and look.
+
+Do not extend the FPU — the `rl` forms, `remr`, the transcendentals — until this
+closes. All of them write fp0-fp3, and until this is understood that path is
+unproven in exactly the dimension they depend on.
