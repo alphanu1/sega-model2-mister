@@ -69,6 +69,7 @@ module i960_lsu (
   // form is being moved; the caller adds it to the masked base register.
   output logic [2:0]  word_idx,
   input  logic [31:0] st_word,       // caller presents the word being stored
+  output logic [2:0]  cur_idx,      // live word index, for the STORE source
   output logic [31:0] ld_word,
   output logic        ld_we,
 
@@ -97,7 +98,23 @@ module i960_lsu (
   logic [31:0] assemble;     // little-endian accumulator
 
   assign busy     = (state != S_IDLE);
-  assign word_idx = widx;
+  // The index that goes with ld_word, captured when ld_word is, NOT the live
+  // counter. S_NEXT asserts ld_we and advances widx in the same cycle, so a
+  // consumer sampling `widx` alongside `ld_we` sees the NEXT word's index --
+  // writebacks landed on 1,2,2 instead of 0,1,2, leaving the first destination
+  // register untouched and the last written twice.
+  //
+  // Same defect class as rd_q above: a value read one state after the one that
+  // produced it. Both were unreachable until the whole-CPU generator learned to
+  // emit loads.
+  logic [2:0] ld_widx;
+  assign word_idx = ld_widx;
+
+  // Stores need the LIVE index, not the captured one: the caller has to present
+  // r[base + cur_idx] while this word is being issued, whereas `word_idx` is
+  // deliberately one behind so it matches ld_word. Two indices because they
+  // answer two different questions.
+  assign cur_idx = widx;
 
   // Alignment test, exactly the reference's: a half needs bit 0 clear, a word
   // needs both low bits clear, a byte is always aligned.
@@ -174,6 +191,7 @@ module i960_lsu (
       sext_q   <= 1'b0;
       burst_q  <= 1'b0;
       rd_q     <= 32'd0;
+      ld_widx  <= 3'd0;
     end else begin
       ld_we <= 1'b0;
       done  <= 1'b0;
@@ -235,7 +253,8 @@ module i960_lsu (
           // Retire the word. A partial load extends here rather than in
           // i960_ldst, because the split path assembles its own value.
           if (!store_q) begin
-            ld_we <= 1'b1;
+            ld_we   <= 1'b1;
+            ld_widx <= widx;
             if (split) begin
               case (sz)
                 2'd1: ld_word <= sext_q ? {{16{assemble[15]}}, assemble[15:0]}

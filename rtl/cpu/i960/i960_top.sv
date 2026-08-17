@@ -443,6 +443,7 @@ module i960_top (
 
   /* verilator lint_off UNUSEDSIGNAL */
   logic        lsu_req, lsu_busy, lsu_done, lsu_ldwe;
+  logic [2:0]  lsu_curidx;
   /* verilator lint_on UNUSEDSIGNAL */
   logic [2:0]  lsu_widx;
   logic [31:0] lsu_ldword;
@@ -454,7 +455,7 @@ module i960_top (
     .clk(clk), .rst_n(rst_n),
     .req(lsu_req), .addr(ea), .size(ls_size), .n_words(ls_nwords),
     .is_store(ls_store), .sign_ext(ls_sext), .is_burst(mm_burst),
-    .busy(lsu_busy), .done(lsu_done),
+    .busy(lsu_busy), .done(lsu_done), .cur_idx(lsu_curidx),
     .word_idx(lsu_widx), .st_word(rd1), .ld_word(lsu_ldword), .ld_we(lsu_ldwe),
     .bus_req(lsu_breq), .bus_we(lsu_bwe), .bus_addr(lsu_baddr),
     .bus_be(lsu_bbe), .bus_wdata(lsu_bwdata),
@@ -620,7 +621,11 @@ module i960_top (
       end
       // Held, not merely issued: a multi-word store consumes st_value over
       // several cycles and the address must not move under it.
-      T_MEM, T_MEM_W: ra1 = d_srcdst & ls_regmask;
+      // Multi-word stores read consecutive registers. Held fixed, every word
+      // of an stl/stt/stq wrote the SAME register's value to consecutive
+      // addresses -- visible in the data-memory comparison as one value
+      // repeated. Only reachable once the generator emitted stores.
+      T_MEM, T_MEM_W: ra1 = (d_srcdst & ls_regmask) + {2'd0, lsu_curidx};
       T_MULTI:        ra1 = mw_src + 5'({1'b0, mw_i}) + 5'd1;
       default: ;
     endcase

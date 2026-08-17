@@ -1233,3 +1233,51 @@ exactly what produced the wrong answer on defect one; the `[lsu]` probe found
 it in a single run.
 
 `make test_i960_top` remains FAILING, deliberately.
+
+### Load/store: three defects fixed, one open. `make test` is GREEN (15/15)
+
+All three were the same shape — **a value read one state after the one that
+produced it** — and none was reachable before the generator learned to emit
+loads and stores.
+
+| # | defect | symptom |
+|---|---|---|
+| 1 | `ld_word` extended from live `bus_rdata` in `S_NEXT`, one state after the ack | `ldob` returned a later bus word; captured into `rd_q` at the ack |
+| 2 | `word_idx` was the live counter, which `S_NEXT` advances in the same cycle it asserts `ld_we` | `ldt` wrote registers 1,2,2 instead of 0,1,2 — first destination never written, last written twice |
+| 3 | `ra1` held fixed across `T_MEM`/`T_MEM_W` | every word of an `stl`/`stt`/`stq` stored the SAME register to consecutive addresses |
+
+Defect 3 needed a second index on the LSU: `word_idx` is deliberately one behind
+so it matches `ld_word`, while a store needs the **live** index because the
+caller must present `r[base + cur_idx]` while that word is being issued. Two
+indices because they answer two different questions.
+
+Default (coverage) mix: **4,577 retires, 173,926 checks, zero divergence.**
+
+### Open: `+mix=daytona` still diverges on the store path
+
+```
+MISMATCH retire 29  g4  got=ffffff21 want=ffffffff  (IP 000000a4 insn 90a009a8)
+MEMDIFF 000009a8   dut=ffffff21 ref=ffffffff
+```
+
+`ld r20, 0x9a8` reads what the DUT itself stored there earlier and the reference
+did not — so an earlier **byte store went to an address the reference did not
+write**. The load is innocent; it is reporting a store that already diverged.
+
+The coverage mix passes and the daytona mix does not, which is exactly why the
+weighting exists: at 49% load/store it reaches store cases the near-uniform mix
+does not. **Keep both. The realistic mix is not a replacement for the coverage
+mix — it is a second axis.**
+
+### CPI: report the coverage figure, NOT the daytona one, until this closes
+
+| mix | CPI | dominant state |
+|---|---|---|
+| coverage (passing) | **13.57** | `T_MULDIV` 54.1% |
+| daytona (FAILING, truncated) | 9.28 | `T_MEM_W` 48.0% |
+
+**The 9.28 is from a run that aborts at retire 29 and must not be quoted.** What
+it does show, and this part is already informative, is the shape flipping
+exactly as M2-B predicted: divide-dominated becomes memory-dominated,
+`T_MEM_W` at **4.46 cyc/instr**. The memory path is where the CPI is, and it was
+never measured before because it was never executed.

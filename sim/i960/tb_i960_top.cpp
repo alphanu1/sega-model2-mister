@@ -73,6 +73,13 @@ void dump_ring() {
 
 void tick() {
   const int ts_now = dut->rootp->i960_top__DOT__ts & 15;
+  if (bus_probe && dut->bus_req && (dut->bus_addr & ~3u) >= 0x800 && !dut->bus_we)
+    std::printf("  [req] bus_addr=%08x cur=%08x widx=%d nw=%d burst=%d\n",
+                dut->bus_addr,
+                dut->rootp->i960_top__DOT__u_lsu__DOT__cur_addr,
+                dut->rootp->i960_top__DOT__u_lsu__DOT__widx,
+                dut->rootp->i960_top__DOT__u_lsu__DOT__nw,
+                dut->rootp->i960_top__DOT__u_lsu__DOT__burst_q);
   if (bus_probe && dut->rootp->i960_top__DOT__lsu_ldwe)
     std::printf("  [lsu] ldwe widx=%d ldword=%08x mask=%02x srcdst=%02d ts=%d\n",
                 dut->rootp->i960_top__DOT__lsu_widx,
