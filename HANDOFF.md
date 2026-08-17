@@ -1281,3 +1281,58 @@ it does show, and this part is already informative, is the shape flipping
 exactly as M2-B predicted: divide-dominated becomes memory-dominated,
 `T_MEM_W` at **4.46 cyc/instr**. The memory path is where the CPI is, and it was
 never measured before because it was never executed.
+
+---
+
+## The store stream was never compared. It is now, and the suite is not green
+
+**Correction to the previous entry.** It reported the default coverage mix as
+"4,577 retires, 173,926 checks, zero divergence". That was true and misleading:
+**the harness never compared the data-memory write stream**, which the exit
+criteria (§7 criterion 2) explicitly require. A store to the wrong address or
+with the wrong value is invisible to a register comparison unless something
+later loads it back — which is exactly how the daytona divergence was first
+seen, 29 retires after the store that caused it.
+
+Added: every store the reference performs is logged in order, the DUT's bus
+writes are logged in order, and the two are compared **per retire**.
+
+It found a real defect on the default mix immediately:
+
+```
+STORE #1 retire 27  dut=00000f70:309efaf2 ref=00000f70:3ec85418  (insn a2c00f6c)
+```
+
+`stt` — store triple. **Right address, wrong value, from word 1 onward.** The
+defect was always present; the previous "zero divergence" simply did not look at
+stores.
+
+### Why it is not fixed yet, and what was eliminated
+
+Reads are registered in the caller, so `rd1` lags `ra1` by a cycle. When the LSU
+issues word *N* from `S_XFER` it sees word *N-1*'s register value.
+
+Two attempts, both measured, both wrong in opposite directions:
+
+| attempt | word 0 | words 1+ |
+|---|---|---|
+| `ra1 = base + cur_idx` (committed) | correct | **wrong** |
+| `ra1 = base + cur_idx + 1` | **wrong** | correct |
+| `cur_idx = (S_NEXT) ? widx+1 : widx` | broke `stob` at retire 15 | — |
+
+**A constant offset cannot work**, and that is the finding: word 0's address is
+presented from `T_EXEC` and reaches `S_XFER` after a *different* delay than
+every later word, which is presented from `S_NEXT`. Any fixed offset fixes one
+end and breaks the other. The third attempt tried to make the announced index
+state-dependent and regressed single-word stores, so the timing is subtler than
+"advance one state early" too.
+
+**The likely correct shape is for the LSU to own the value rather than the
+caller** — latch `st_word` into a register when each word's address is known,
+instead of reading it combinationally at issue. That removes the caller's read
+latency from the critical path entirely rather than trying to compensate for it,
+and it is the same move that fixed the load side (`rd_q`).
+
+`make test_i960_top` FAILS. Left that way: the check is correct and the defect
+is real, and gating either would restore a green suite that proves less than it
+claims — which is what the last four findings have all been.

@@ -14,6 +14,8 @@
 
 #pragma once
 #include <cstdint>
+#include <vector>
+#include <utility>
 #include "i960_dec_ref.h"
 #include "i960_alu_ref.h"
 #include "i960_agu_ref.h"
@@ -86,7 +88,15 @@ struct Cpu {
     auto it = rf.mem.find(a & ~3u);
     return (it == rf.mem.end()) ? 0xffffffffu : it->second;   // never zero
   }
-  void wr(uint32_t a, uint32_t v) { rf.mem[a & ~3u] = v; }
+  // Every store this reference performs, in order. The exit criteria call for
+  // comparing the data-memory write stream and the whole-CPU harness never did
+  // -- which is why a store divergence could only ever surface indirectly, as a
+  // later load reading a value the other side never wrote.
+  std::vector<std::pair<uint32_t,uint32_t>> stores;
+  void wr(uint32_t a, uint32_t v) {
+    rf.mem[a & ~3u] = v;
+    stores.emplace_back(a & ~3u, v);
+  }
 
   // get_1_ci: bit 13 selects literal, field is (op>>19)&0x1f.
   uint32_t g1ci(uint32_t o) const {

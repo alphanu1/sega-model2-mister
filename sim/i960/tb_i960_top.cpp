@@ -50,6 +50,7 @@ const char *STATE_NAME[16] = {
 uint64_t fetch_enter = 0, fetch_hit = 0, fetch_stall = 0, ic_fill_cyc = 0;
 
 bool bus_probe = false;
+std::vector<std::pair<uint32_t,uint32_t>> dut_stores;
 
 struct Trace { uint64_t t; int ts; int req, valid, busy; uint32_t addr, data, insn, ip; };
 Trace ring[4096];
@@ -130,6 +131,7 @@ void tick() {
         if (dut->bus_be & (1 << l))
           d = (d & ~(0xffu << (l*8))) | (dut->bus_wdata & (0xffu << (l*8)));
       mem[a] = d;
+      dut_stores.emplace_back(a, d);
     } else {
       dut->bus_rdata = cur;
     }
@@ -302,7 +304,7 @@ int main(int argc, char **argv) {
   uint64_t total_retires = 0, trapped_progs = 0;
 
   for (uint64_t p = 0; p < progs && fails == 0; ++p) {
-    mem.clear(); ref = i960ref::Cpu();
+    mem.clear(); ref = i960ref::Cpu(); dut_stores.clear();
 
     // Generate a straight-line program of REG and COBR forms. Work RAM at
     // 0x00500000 is burst-flagged; the program sits at 0.
@@ -510,6 +512,28 @@ int main(int argc, char **argv) {
       // program at that point, the same as a trap.
       if (ref.fp_denorm_operand) { ++denorm_skips; break; }
       if (ref.fp_nan_result)     { ++nan_stops;    break; }
+      // Compare the WRITE STREAM, not just the final memory. A store to the
+      // wrong address shows up in the final image only if nothing overwrites
+      // it, and shows up as a register mismatch only if something later loads
+      // it -- which is how the daytona-mix divergence was first seen, 29
+      // retires after the store that caused it.
+      if (dut_stores.size() != ref.stores.size() && fails < MAX_REPORT) {
+        std::printf("  STORE COUNT retire %llu  dut=%zu ref=%zu  (insn %08x)\n",
+                    (unsigned long long)r, dut_stores.size(),
+                    ref.stores.size(), exec_insn);
+        ++fails; break;
+      }
+      for (size_t i = 0; i < dut_stores.size(); ++i) {
+        if (dut_stores[i] != ref.stores[i]) {
+          if (fails < MAX_REPORT)
+            std::printf("  STORE #%zu retire %llu  dut=%08x:%08x ref=%08x:%08x"
+                        "  (insn %08x)\n", i, (unsigned long long)r,
+                        dut_stores[i].first, dut_stores[i].second,
+                        ref.stores[i].first, ref.stores[i].second, exec_insn);
+          ++fails; break;
+        }
+      }
+      if (fails) break;
       ++retires; ++total_retires;
       if (!compare(r)) break;
     }
