@@ -722,3 +722,42 @@ than patching each state to handle arrivals.
 `test_i960_icache` passes with 201,232 fetches because it never issues while
 busy. Whatever lands next needs a directed abort test at block level, or the
 whole-CPU harness stays the only thing that can see it.
+
+---
+
+## Pushed, 2026-08-17 — `aa8a6ba..78e2bfb`, 12 commits
+
+Tree green: all 15 suites, 147,060 checks, zero divergence. `i960_top` at
+**7,015 ALM, 7 DSP, 27.72 MHz** on Quartus 17.0.0 / `5CSEBA6U23I7`.
+
+### One finding from the pre-push check, worth keeping
+
+The rules file was cited **by filename** in three tracked files —
+`docs/model2a-design-study.md`, `rtl/cpu/i960/i960_alu.sv` and
+`sim/i960/tb_i960_dec.cpp`. That file is git-ignored, so the public tree
+carried citations to something not in it, and the rules permit exactly one
+reference to it: its line in `.gitignore`. Rewritten to cite the rule rather
+than the file.
+
+It predated this session and had already been pushed, which is the point worth
+recording: **it survived because nothing checks for it.** The check that caught
+it is one grep, and it belongs in the pre-push routine rather than in whoever
+happens to look:
+
+```
+git grep -ilE 'claude|anthropic' -- .        # must return .gitignore and nothing else
+git log --format='%an <%ae>' @{u}..HEAD | sort -u    # must be the one author
+git log --format='%B' @{u}..HEAD | grep -icE 'co-authored|generated with'   # must be 0
+```
+
+The authorship and trailer checks were clean; only the filename citation was
+not. A rule with no test is a rule that drifts.
+
+### Where the next session starts
+
+**Instruction fetch, not sequencing.** 4.28 of the 5.33 cycles a simple
+instruction costs, against the 1.17 a 12.5 M instr/s target allows. The
+fill-abort attempt and its three eliminated hypotheses are recorded above —
+start with the per-cycle instrumentation, not another fix, and add a directed
+abort test to `test_i960_icache`, which currently cannot see that class of bug
+at all.
