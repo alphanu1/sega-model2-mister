@@ -349,6 +349,18 @@ approach works.
    *Pass* < 12K ALM and > 90 MHz. *Fail* > 18K ALM — design study §9 close
    condition.
 
+   **The 90 MHz here is a proxy and it has now been measured against the thing
+   it stands for.** The requirement is throughput — 12.5-16.7 M instr/s — and at
+   the measured **27.44 MHz** a 2-CPI design delivers 13.72 M and clears it with
+   no Fmax work at all. 90 MHz is roughly 3.3x stricter than the requirement.
+   **Judge this criterion on throughput, and record the CPI and the mix beside
+   any figure quoted against it** (R9). Area is unchanged at 6,986 ALM and has
+   never been the binding constraint.
+
+   The corollary is less comfortable: *"Target 2 CPI, accept 4"* no longer has a
+   fallback. 4 CPI needs 50 MHz and 3 CPI needs 37.5 MHz, against 27.44
+   measured. **2 CPI is the target and there is currently no retreat from it.**
+
 Criterion 3 has the same limitation Model 1 hit at M0: the i960 does not boot
 anything alone. It will reach the point where it waits on the TGP or the
 renderer, and that is correct behaviour, not a failure. Plan for a stimulus

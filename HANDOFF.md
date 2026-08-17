@@ -544,3 +544,46 @@ was the finding, not a failure of the suite.
 **Open, and unresolvable from MAME:** what real i960 silicon does with an
 overlapping `movl`. Only the i960KB manual or hardware answers it. Recorded here
 so it is not rediscovered as a bug.
+
+### Final measurement, and what it means for the gate
+
+`i960_top`, Quartus 17.0.0, `5CSEBA6U23I7`:
+
+```
+ALM 6,986   reg 3,487   MLAB bits 2,048   DSP 7   Fmax 27.44 MHz
+```
+
+**Area is not the problem and never has been.** 6,986 against a 12K pass band,
+inside the budget the fit question depends on. The clock is the problem.
+
+**But "90 MHz" is the wrong number to be failing against**, and the milestones
+document already says so at §P1: *"The requirement is throughput, not clock:
+12.5-16.7 M instr/s."* The 90 MHz in exit criterion 4 is a proxy, and at the
+measured Fmax the proxy and the requirement disagree sharply:
+
+| CPI | at 27.44 MHz | verdict |
+|---|---|---|
+| 1.5 | 18.29 M instr/s | clears |
+| **2.0** | **13.72 M instr/s** | **clears** |
+| 2.5 | 10.98 M instr/s | short |
+| 3.0 | 9.15 M instr/s | short |
+| 4.0 | 6.86 M instr/s | short |
+
+**A 2-CPI pipeline meets the requirement at today's clock, with no Fmax work at
+all.** That is the single most useful number produced this session, and it
+inverts the conclusion the 90 MHz gate was pushing toward.
+
+It also kills the fallback. Milestones §P1 says *"Target 2 CPI, accept 4."*
+**Accept-4 is dead** unless Fmax roughly doubles: 4 CPI needs 50 MHz and 3 CPI
+needs 37.5 MHz, against 27.44 measured. The pipeline has to be the aggressive
+version, and "we can always settle for 4 CPI" is no longer available as a
+retreat.
+
+Restating the target for whoever builds it:
+
+- **Primary: 2 CPI.** Everything else is secondary, including Fmax.
+- Fmax buys margin, not viability — every MHz above 27.44 widens the CPI budget
+  (37.5 MHz would make 3 CPI viable, restoring the fallback).
+- **Do not spend effort on 90 MHz.** It is a proxy that has now been measured
+  against reality and found to be ~3.3x stricter than the requirement it stands
+  for. Fix the criterion or it will drive the wrong work.
