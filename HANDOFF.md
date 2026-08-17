@@ -1542,3 +1542,49 @@ way real code exercises it. Until then:
 **Do the loops before the pipeline.** Building a pipeline against a workload
 that cannot see its main benefit would produce a number as uninterpretable as
 the CPI figures were before M2-B.
+
+## Loops added: CPI 7.58 -> 5.98, and the cache question is still open
+
+`+loops` closes an unconditional backward branch over part of the program and
+extends the retire budget, so instructions execute more than once. Off by
+default — a loop narrows what one program covers, and the default mix exists to
+cover instruction forms.
+
+| | straight-line | `+loops` |
+|---|---|---|
+| prefetch hit rate | 67.7% | **83.0%** |
+| CPI (daytona mix) | 7.58 | **5.98** |
+| retires | 9,769 | **51,885** |
+| checks | 371,222 | **1,971,630** |
+| throughput at 26.73 MHz | 3.53 M instr/s | **4.47 M instr/s** |
+
+All 15 suites pass. **The fetch cost really was inflated by the absence of
+loops, and 26% of the measured CPI was an artifact of straight-line code.**
+
+### The cache-size question is NOT answered, and the estimate remains unsupported
+
+Swept `LINES` again with loops: 512 B, 1 KB, 2 KB, 4 KB — **still byte-identical.**
+The working set at the 60-instruction default is 240 bytes and fits in the
+smallest cache, so size cannot matter.
+
+Raised the program to 1,200 instructions (4.8 KB working set, 1.2 KB loop body)
+to force capacity misses, and swept 512 B / 2 KB / 8 KB. **Still identical**, and
+this time the reason is NOT understood. The build was verified clean and
+`LINES=512` confirmed in the source, so it is not a stale binary.
+
+The visible clue: only **3,001 fetches against ~48,000 expected retires**, so the
+long programs are trapping early and barely entering the loop. 1,200 random
+instructions make an early trap near-certain. That is a *plausible* explanation
+and it has not been confirmed — **do not treat it as the answer.**
+
+**What is established, and it points the other way from the earlier estimate:**
+Daytona's sample touched **4,265 distinct PCs, about 17 KB** — 34x a 512 B
+cache. Real code does not fit. So the earlier claim that real code would hit
+*better* than the test is unsupported, and the opposite is at least as likely:
+a 512 B cache against a 17 KB working set will thrash.
+
+**Sizing the I-cache needs a workload whose working set is real and which runs
+long enough to reach steady state.** Neither condition holds yet. The honest
+position is that the cache is currently unsized and unsizable with this harness,
+and that the "67.7% -> 90%" estimate should be treated as withdrawn rather than
+merely revised.

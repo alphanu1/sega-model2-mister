@@ -50,6 +50,20 @@ const char *STATE_NAME[16] = {
 uint64_t fetch_enter = 0, fetch_hit = 0, fetch_stall = 0, ic_fill_cyc = 0;
 
 bool bus_probe = false;
+
+// Straight-line programs have NO temporal locality: every instruction runs once,
+// so every I-cache miss is compulsory and no cache of any size can help. An
+// LINES sweep from 512 B to 4 KB returned byte-identical numbers because of it.
+//
+// Real code loops. M2-B's Daytona sample executed 38,987 instructions over 4,265
+// distinct PCs -- 9.1x average PC reuse. `+loops` closes an unconditional
+// backward branch over part of the program and extends the retire budget, so
+// instructions execute repeatedly and the fetch path is exercised the way real
+// code exercises it.
+//
+// Off by default: a loop narrows what a single program covers, and the default
+// mix exists to cover instruction forms. Use it for fetch and cache work.
+bool loop_mode = false;
 std::vector<std::pair<uint32_t,uint32_t>> dut_stores;
 
 struct Trace { uint64_t t; int ts; int req, valid, busy; uint32_t addr, data, insn, ip; };
@@ -289,8 +303,15 @@ int main(int argc, char **argv) {
     if (!std::strncmp(argv[i], "+random=", 8)) progs = std::strtoull(argv[i]+8, nullptr, 10);
     if (!std::strcmp (argv[i], "+probe_fp"))  probe_fp = true;
     if (!std::strcmp (argv[i], "+bus_probe")) bus_probe = true;
+    if (!std::strcmp (argv[i], "+loops"))     loop_mode = true;
     if (!std::strcmp (argv[i], "+mix=daytona")) mix_daytona = true;
     if (!std::strncmp(argv[i], "+seed=", 6))   seed  = std::strtoull(argv[i]+6, nullptr, 10);
+    // Program length is the WORKING SET, and the working set is what decides
+    // whether cache size matters. At the 60-instruction default the footprint
+    // is 240 bytes and fits in any cache, which is why an 8x LINES sweep
+    // returned identical numbers even after loops were added. Daytona's sample
+    // touched 4,265 distinct PCs -- about 17 KB, or 34x a 512 B cache.
+    if (!std::strncmp(argv[i], "+steps=", 7)) steps = std::strtoull(argv[i]+7, nullptr, 10);
   }
   dut = new Vi960_top;
   std::printf("i960_top whole-CPU lockstep\n");
@@ -437,6 +458,17 @@ int main(int argc, char **argv) {
       } else { insn = 0x5c0c0000u; }                   // unreachable filler
       prog.push_back(insn);
     }
+    if (loop_mode && prog.size() >= 16) {
+      // Unconditional backward branch: target = IP + field, so the field is
+      // simply (top - at) * 4 as a negative 24-bit value. It never falls
+      // through, which is deliberate -- the retire budget below bounds the run,
+      // and a conditional loop whose counter the random body could clobber
+      // would terminate unpredictably and make the measurement noisy.
+      const size_t top = prog.size() / 4;
+      const size_t at  = prog.size() / 2;
+      const int32_t field = int32_t((top - at) * 4);
+      prog[at] = (0x08u << 24) | (uint32_t(field) & 0x00ffffffu);
+    }
     for (size_t k = 0; k < prog.size(); ++k) mem[uint32_t(k*4)] = prog[k];
     ref.rf.mem = mem;
 
@@ -477,7 +509,8 @@ int main(int argc, char **argv) {
   }
 
     // Run, comparing at each retire. The DUT retires when it re-enters fetch.
-    for (uint64_t r = 0; r < steps && fails == 0; ++r) {
+    const uint64_t budget = loop_mode ? steps * 5 : steps;
+    for (uint64_t r = 0; r < budget && fails == 0; ++r) {
       const uint32_t ip_before = dip();
       int guard = 0;
       // Probe every cycle of an FP op with an fp0-fp3 destination. There are
