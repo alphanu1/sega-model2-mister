@@ -106,6 +106,19 @@ module i960_lsu (
   logic [31:0] assemble;     // little-endian accumulator
 
   assign busy     = (state != S_IDLE);
+
+  // Bus outputs combinational from registered state only. Registered, they
+  // appeared the cycle AFTER S_XFER was entered, so every access spent a cycle
+  // merely raising a request. No loop: bus_req depends on `state`, never on
+  // bus_ack -- the ack retires the state and the state drops the request.
+  assign bus_req   = (state == S_XFER);
+  assign bus_we    = store_q;
+  assign bus_addr  = word_split ? byte_addr : cur_addr;
+  assign bus_be    = word_split ? (4'b0001 << byte_addr[1:0]) : be_full;
+  assign bus_wdata = word_split ? {4{st_byte_split}}
+                   : (sz == 2'd0) ? {4{st_word[7:0]}}
+                   : (sz == 2'd1) ? {2{st_word[15:0]}}
+                                  : st_word;
   // The index that goes with ld_word, captured when ld_word is, NOT the live
   // counter. S_NEXT asserts ld_we and advances widx in the same cycle, so a
   // consumer sampling `widx` alongside `ld_we` sees the NEXT word's index --
@@ -191,8 +204,6 @@ module i960_lsu (
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       state    <= S_IDLE;
-      bus_req  <= 1'b0;
-      bus_we   <= 1'b0;
       ld_we    <= 1'b0;
       done     <= 1'b0;
       widx     <= 3'd0;
@@ -222,6 +233,13 @@ module i960_lsu (
             burst_q  <= is_burst;
             widx     <= 3'd0;
             bidx     <= 2'd0;
+            // Set here rather than in S_XFER. It used to be assigned alongside
+            // the registered bus drive, and moving that drive combinational
+            // took this with it -- leaving nbytes at 0, so a byte-split access
+            // finished after one byte instead of two. The block harness caught
+            // it as "op count got=1 want=2"; the whole-CPU harness could not,
+            // until unaligned addresses were generated.
+            nbytes   <= (size == 2'd1) ? 2'd1 : 2'd3;
             assemble <= 32'd0;
             // A store must wait for the caller to deliver r[base+0]; a load has
             // no operand and goes straight to the transfer.
@@ -235,26 +253,13 @@ module i960_lsu (
         S_OPD: state <= S_XFER;
 
         S_XFER: begin
-          bus_req  <= 1'b1;
-          bus_we   <= store_q;
-          split    <= word_split;
-
-          if (word_split) begin
-            // One byte at a time, little-endian. nbytes is the last index.
-            nbytes    <= (sz == 2'd1) ? 2'd1 : 2'd3;
-            bus_addr  <= byte_addr;
-            bus_be    <= 4'b0001 << byte_addr[1:0];
-            bus_wdata <= {4{st_byte_split}};
-          end else begin
-            bus_addr  <= cur_addr;
-            bus_be    <= be_full;
-            bus_wdata <= (sz == 2'd0) ? {4{st_word[7:0]}}
-                       : (sz == 2'd1) ? {2{st_word[15:0]}}
-                                      : st_word;
-          end
-
           if (bus_ack) begin
-            bus_req <= 1'b0;
+            // Latched for S_NEXT, which needs to know how this word was
+            // fetched after cur_addr may have moved on. Assigned alongside the
+            // registered bus drive before, and lost with it -- which made a
+            // split access retire down the aligned path and return the raw bus
+            // word instead of the assembled halfword.
+            split <= word_split;
             if (word_split) begin
               if (!store_q)
                 assemble[{bidx, 3'd0} +: 8] <= rd_byte_split;
