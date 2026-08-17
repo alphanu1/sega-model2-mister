@@ -356,7 +356,78 @@ harness rather than a boot.
 
 ---
 
-## 8. Known unverifiable
+## 8. FPU precision — decided, not defaulted
+
+§2.2 of the design study records that MAME models the four 80-bit registers as
+host `double`, and this document's §8 says the choice between matching that and
+implementing true 80-bit must be made explicitly. **Decision: 64-bit double,
+matching the reference.**
+
+The operand model is what makes this smaller than it sounds. From
+`get_1_rif` / `get_1_rifl`:
+
+| form | operand source | width |
+|---|---|---|
+| `r` (single) | one general register, reinterpreted | **32-bit IEEE single** |
+| `rl` (extended) | a general register **pair** | **64-bit IEEE double** |
+| either, literal | `fp0`-`fp3`, or `0x16` = 1.0, else 0.0 | the FP registers |
+
+**64-bit is already the architectural interchange format.** Everything that
+crosses between the FPU and the register file or memory is 32 or 64 bits wide.
+The 80-bit format exists only inside `fp0`-`fp3`, so the deviation is confined to
+the precision of intermediates held in those four registers between instructions.
+
+Three reasons for taking it:
+
+- **It is the only verifiable option.** The oracle is `double`. An 80-bit unit
+  could not be lockstep-verified against anything this project has, which §2.2
+  already identifies as the FPU's central problem.
+- **MAME runs the games correctly at 64-bit**, so the titles do not depend on
+  extended-precision intermediates surviving between instructions.
+- **80-bit costs materially more.** A 64-bit mantissa datapath against a 53-bit
+  one is wider adders, more DSP blocks for the multiply, and more of both for
+  the transcendental sequencer — spent on precision that cannot be checked.
+
+**This is a real deviation from the silicon and is recorded as one.** It is not
+"the FPU is 64-bit because that was easier"; it is that the extra 11 bits of
+mantissa are unverifiable, unused by the software, and not free. If a game is
+ever found that depends on them, this decision is where to look.
+
+Note also `set_rif` rounds a double result back to single for `r` ops.
+Computing in double and rounding once to single is equivalent to direct
+single-precision arithmetic for add, subtract, multiply and divide, so the
+`r` forms need no separate single-precision datapath.
+
+### 8.1 The first FPU datapath block, measured
+
+`rtl/cpu/i960/i960_fpmul.sv` — IEEE-754 double multiply, round-to-nearest-even,
+two cycles.
+
+| | ALM | DSP | Fmax |
+|---|---|---|---|
+| `i960_fpmul` (double, 53x53) | **326** | **4** | 64.02 MHz |
+| Model 1 `fp_mul` (single, 24x24) | 144 | 1 | 116.85 MHz |
+
+Verified against **the host's own `double` multiply**, which is the actual
+oracle here rather than a transcription of one — MAME computes in host `double`,
+so the two are the same thing. 1.97 M checks per seed across three seeds,
+including every combination of zero, negative zero, both infinities, NaN and
+the exponent extremes. Zero mismatches.
+
+**The DSP cost is the finding.** Four blocks for one double multiply against one
+for single. The FPU needs a multiplier, a divider and a transcendental
+sequencer, and §7's Tier 1 lever assumes DSP is free capacity — M2-E already
+showed a comparable renderer wanting 61 of 112. Four per FP multiply is a
+number the DSP budget in §5.5 now has to carry.
+
+**Deviations recorded rather than discovered later.** Subnormal operands and
+results are flushed, exponent overflow becomes infinity and underflow becomes
+zero. The host implements subnormals properly, so a program that produces one
+**will** diverge; the harness excludes them so the suite measures the
+multiplier rather than a known difference. Rounding is round-to-nearest-even
+only, which is what the reference's host mode does.
+
+## 9. Known unverifiable
 
 **The FPU has no bit-exact oracle.** MAME declares `double m_fp[4]`, modelling
 four 80-bit extended registers as host doubles (§2.2 of the design study). An LLE
@@ -373,7 +444,7 @@ that makes criterion 2 meaningful for FP.
 
 ---
 
-## 9. Verification status
+## 10. Verification status
 
 ### Step 1 — decoder. Done.
 
@@ -1249,7 +1320,7 @@ or real Model 2A program ROM decoding to sensible instruction sequences. **Until
 one of those happens, treat field positions as transcribed rather than
 verified.**
 
-## 10. Risks specific to this milestone
+## 11. Risks specific to this milestone
 
 **No pipelining rehearsal.** M2-F was the cheap way to learn whether a pipelined
 CPU of this class closes timing on this part, on a 3,000 ALM block with an
