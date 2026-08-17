@@ -161,20 +161,28 @@ module i960_regs #(
   // used to. Cost measured at zero -- the lockstep run takes the same 65,630
   // cycles either way.
   //
-  // DELIBERATELY NO WRITE BYPASS. A read-during-write forwarding path was
-  // written first and then removed, because it is not insurance -- it changes
-  // behaviour in a case that has no oracle. The only reachable read-during-
-  // write is an overlapping movl/movt/movq (`movl r4, r5`), where T_MULTI
-  // writes word i while reading word i+1. A bypass would make that propagate;
-  // the original combinational design did not. MAME implements these with
-  // `memcpy` on overlapping regions, which is undefined in C, so the reference
-  // cannot say which is right and the harness excludes the case.
+  // WRITE BYPASS, and it earns its place -- but it did not always. The history
+  // is worth keeping, because the same evidence gave opposite answers either
+  // side of a front-end change.
   //
-  // Both bypass forms were mutation-tested and BOTH SURVIVED: across 3,870
-  // retires and 147,060 checks nothing distinguishes them, confirming no
-  // defined case needs one. Adding logic that is dead in every checked case and
-  // changes semantics in the one unchecked case is the wrong trade -- so the
-  // refactor preserves the prior behaviour exactly. See HANDOFF.md.
+  // When the sequencer still had a T_DECODE state, both bypass forms were
+  // mutation-tested and BOTH SURVIVED: across 3,870 retires and 147,060 checks
+  // nothing distinguished having them. It was removed as dead logic that also
+  // changed semantics in a case with no oracle -- an overlapping movl/movt/movq
+  // (`movl r4, r5`), where T_MULTI writes word i while reading word i+1, and
+  // which MAME implements with memcpy on overlapping regions (undefined in C).
+  //
+  // Removing T_DECODE made the hazard ordinary. The read address is now
+  // presented in the same cycle the previous instruction's write lands, where
+  // T_FETCH and T_DECODE used to separate them, so a plain read returns the
+  // stale word. Restored, and BOTH mutants are now KILLED.
+  //
+  // The lesson is about the evidence, not the bypass: "no test distinguishes
+  // this" is a statement about the design as it stands, and it expires the
+  // moment the pipeline around it changes. Re-run the mutation, do not recall
+  // the result. The overlapping-movl behaviour is still unspecified by the
+  // oracle; it now propagates, and only the i960KB manual or silicon can say
+  // whether that is right. See HANDOFF.md.
   logic [31:0] rd1_c, rd2_c;
   always_comb begin
     rd1_c = ra1[4] ? glb[ra1[3:0]] : loc[ra1[3:0]];
@@ -186,8 +194,8 @@ module i960_regs #(
       rd1 <= 32'd0;
       rd2 <= 32'd0;
     end else begin
-      rd1 <= rd1_c;
-      rd2 <= rd2_c;
+      rd1 <= (we && (wa == ra1)) ? wd : rd1_c;
+      rd2 <= (we && (wa == ra2)) ? wd : rd2_c;
     end
   end
 

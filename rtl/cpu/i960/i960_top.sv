@@ -106,8 +106,30 @@ module i960_top (
   logic [31:0] d_disp;
   /* verilator lint_on UNUSEDSIGNAL */
 
+  typedef enum logic [3:0] {
+    T_FETCH, T_FETCH_W, T_FETCH2, T_FETCH2_W, T_DECODE,
+    T_EXEC, T_MEM, T_MEM_W, T_MULDIV, T_MULTI, T_PAIR, T_FP, T_WB, T_FRAME,
+    T_TRAP
+  } tstate_e;
+
+  tstate_e ts;
+
+  // The decoder sees the word ARRIVING during a fetch state, and the latched
+  // word everywhere else. This is what removes T_DECODE: the register numbers,
+  // the trap check and the prefetch decision are all available in the cycle the
+  // instruction lands, so fetch goes straight to execute. Even at a 100%
+  // prefetch hit rate the old FETCH -> DECODE -> EXEC walk could not beat
+  // 3 CPI, and 3 CPI at 27.44 MHz is 9.15 M instr/s against a 12.5 M floor.
+  //
+  // T_DECODE is retained in the enum but is now unreachable; the state numbers
+  // are load-bearing for the harness profile, so renumbering them would
+  // silently relabel every measurement taken so far.
+  logic        fetch_word_ok;
+  logic [31:0] fetch_word, dec_in;
+  assign dec_in = ((ts == T_FETCH) || (ts == T_FETCH_W)) ? fetch_word : insn;
+
   i960_dec u_dec (
-    .insn(insn), .fmt(d_fmt), .op(d_op), .op2(d_op2), .valid(d_valid),
+    .insn(dec_in), .fmt(d_fmt), .op(d_op), .op2(d_op2), .valid(d_valid),
     .insn_len2(d_len2), .src1(d_src1), .src2(d_src2), .srcdst(d_srcdst),
     .src1_lit(d_src1_lit), .src2_lit(d_src2_lit), .dst_lit(d_dst_lit),
     .memb(d_memb), .memb_mode(d_memb_mode), .abase(d_abase), .index(d_index),
@@ -514,13 +536,34 @@ module i960_top (
 
   // ------------------------------------------------------------- sequencer
 
-  typedef enum logic [3:0] {
-    T_FETCH, T_FETCH_W, T_FETCH2, T_FETCH2_W, T_DECODE,
-    T_EXEC, T_MEM, T_MEM_W, T_MULDIV, T_MULTI, T_PAIR, T_FP, T_WB, T_FRAME,
-    T_TRAP
-  } tstate_e;
 
-  tstate_e ts;
+  // Which instruction word, if any, is arriving this cycle. Split out of the
+  // sequencer so the decoder can see it (dec_in) and so both fetch states share
+  // one definition of "the word landed".
+  //
+  // `pf_ip` is compared against the actual IP rather than trusted, so a taken
+  // branch or any redirect falls back automatically. Two ways a prediction can
+  // be good: already latched, or landing this very cycle -- `ic_req` is
+  // registered, so a prefetch issued alongside execute has its `valid` arrive
+  // exactly here, one cycle after a latched-only check would catch it. Checking
+  // only the latched copy misses every hit and the prefetch does nothing, which
+  // is precisely what the first version measured.
+  always_comb begin
+    fetch_word_ok = 1'b0;
+    fetch_word    = ic_data;
+    case (ts)
+      T_FETCH: begin
+        if (pf_valid && (pf_ip == ip)) begin
+          fetch_word_ok = 1'b1;
+          fetch_word    = pf_insn;
+        end else if (pf_armed && ic_valid && (pf_ip == ip)) begin
+          fetch_word_ok = 1'b1;
+        end
+      end
+      T_FETCH_W: fetch_word_ok = ic_valid;
+      default: ;
+    endcase
+  end
 
   // Read-address drive. See the note at the ra1/ra2 declaration: each case is
   // the state BEFORE the consumer, and the expressions are the ones the
@@ -529,8 +572,10 @@ module i960_top (
     ra1 = d_src1;
     ra2 = d_src2;
     case (ts)
-      // COBR reads (insn>>19) on port 1; REG and MEM read src1 there.
-      T_DECODE: ra1 = (d_fmt == 2'd1) ? d_srcdst : d_src1;
+      // COBR reads (insn>>19) on port 1; REG and MEM read src1 there. Driven
+      // from the arriving word, so rd1/rd2 are valid when T_EXEC begins.
+      T_FETCH, T_FETCH_W, T_FETCH2_W:
+        ra1 = (d_fmt == 2'd1) ? d_srcdst : d_src1;
       T_EXEC: begin
         if      (is_movx)        ra1 = d_src1 + 5'd1;   // second word of movl/t/q
         else if (d_fmt == 2'd3)  ra1 = d_srcdst & ls_regmask;  // store source
@@ -602,71 +647,51 @@ module i960_top (
       rf_flush <= 1'b0;
 
       case (ts)
-        T_FETCH: begin
-          // Use the prefetched word when the prediction held. `pf_ip` is
-          // compared against the actual IP rather than trusted, so a taken
-          // branch or any redirect falls back automatically.
-          // Two ways the prediction can be good: already latched, or landing
-          // this very cycle. The second case matters — `ic_req` is registered,
-          // so a prefetch issued in decode has its `valid` arrive exactly here,
-          // one cycle after the latch would have caught it. Checking only the
-          // latched copy misses every hit and the prefetch does nothing, which
-          // is precisely what the first version measured.
-          if (pf_valid && pf_ip == ip) begin
-            insn     <= pf_insn;
-            ip_next  <= ip + 32'd4;
+        // T_FETCH and T_FETCH_W share one body. The front end below appears
+        // ONCE on purpose: it used to live in T_DECODE, and duplicating it into
+        // the prefetch-hit path and the fill path is exactly how those two
+        // drift apart without either copy looking wrong.
+        T_FETCH, T_FETCH_W: begin
+          if (fetch_word_ok) begin
+            insn     <= fetch_word;
             pf_valid <= 1'b0;
-            ts       <= T_DECODE;
-          end else if (pf_armed && ic_valid && pf_ip == ip) begin
-            insn     <= ic_data;
-            ip_next  <= ip + 32'd4;
             pf_armed <= 1'b0;
-            ts       <= T_DECODE;
-          end else if (!ic_busy) begin
+
+            // --- what T_DECODE used to do, now in the cycle the word lands ---
+            // The decoder is reading the ARRIVING word (see dec_in), so these
+            // describe the instruction being latched now, not the previous one.
+            if (!d_valid || d_memb_bad) begin
+              trap_op <= d_op;
+              ts      <= T_TRAP;
+            end else if (d_len2) begin
+              fetch_addr <= ip + 32'd4;
+              ic_req     <= 1'b1;
+              ip_next    <= ip + 32'd8;
+              ts         <= T_FETCH2_W;
+            end else begin
+              // Predict sequential and start the next fetch NOW, overlapping it
+              // with execute. Eight-byte forms take the branch above and use
+              // the cache port for their displacement word instead.
+              fetch_addr <= ip + 32'd4;
+              ic_req     <= 1'b1;
+              ip_next    <= ip + 32'd4;
+              pf_ip      <= ip + 32'd4;
+              pf_armed   <= 1'b1;
+              ts         <= T_EXEC;
+            end
+          end else if (ts == T_FETCH) begin
             // Only issue when the cache is idle. A prediction that turns out
             // wrong can leave a fill in flight for the line we no longer want;
             // the cache ignores a request while filling, so issuing anyway
-            // meant T_FETCH_W then accepted the STALE fill's `valid` and
-            // executed the wrong instruction. Waiting costs the redirect a few
-            // cycles and is the difference between a prefetch and a bug.
-            fetch_addr <= ip;
-            ic_req     <= 1'b1;
-            pf_valid   <= 1'b0;
-            pf_armed   <= 1'b0;
-            ts         <= T_FETCH_W;
-          end else begin
-            // Cache busy with a discarded prefetch — drop it and wait.
+            // meant the wait state then accepted the STALE fill's `valid` and
+            // executed the wrong instruction.
             pf_valid <= 1'b0;
             pf_armed <= 1'b0;
-          end
-        end
-
-        T_FETCH_W: if (ic_valid) begin
-          insn    <= ic_data;
-          ip_next <= ip + 32'd4;
-          ts      <= T_DECODE;
-        end
-
-        T_DECODE: begin
-          if (!d_valid || d_memb_bad) begin
-            trap_op <= d_op;
-            ts      <= T_TRAP;
-          end else if (d_len2) begin
-            fetch_addr <= ip + 32'd4;
-            ic_req     <= 1'b1;
-            ip_next    <= ip + 32'd8;
-            ts         <= T_FETCH2_W;
-          end else begin
-            // Predict sequential and start the next fetch NOW, overlapping it
-            // with execute. Eight-byte forms take the branch above and use the
-            // cache port for their own displacement word instead, so they do
-            // not prefetch.
-            fetch_addr <= ip + 32'd4;
-            ic_req     <= 1'b1;
-            pf_ip      <= ip + 32'd4;
-            pf_armed   <= 1'b1;
-            pf_valid   <= 1'b0;
-            ts         <= T_EXEC;
+            if (!ic_busy) begin
+              fetch_addr <= ip;
+              ic_req     <= 1'b1;
+              ts         <= T_FETCH_W;
+            end
           end
         end
 

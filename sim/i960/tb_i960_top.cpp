@@ -47,8 +47,25 @@ const char *STATE_NAME[16] = {
   "T_TRAP","?"
 };
 
+uint64_t fetch_enter = 0, fetch_hit = 0, fetch_stall = 0, ic_fill_cyc = 0;
+
 void tick() {
-  state_cycles[dut->rootp->i960_top__DOT__ts & 15]++;
+  const int ts_now = dut->rootp->i960_top__DOT__ts & 15;
+  state_cycles[ts_now]++;
+  // Where the fetch cycles actually go. T_FETCH costs 1 cycle when the
+  // prefetch predicted correctly and much more otherwise, so the average alone
+  // cannot say whether the cost is a missing prediction or a slow fill.
+  {
+    static int ts_prev = -1;
+    if (ts_now == 0 && ts_prev != 0) ++fetch_enter;          // entered T_FETCH
+    // Probe the signal, not a state transition: T_DECODE was removed, and a
+    // hit-counter keyed on "T_FETCH -> T_DECODE" then silently read 0% rather
+    // than reporting that it had stopped measuring anything.
+    if (ts_now == 0 && dut->rootp->i960_top__DOT__fetch_word_ok) ++fetch_hit;
+    if (ts_prev == 0 && ts_now == 0) ++fetch_stall;          // stuck in T_FETCH
+    if (ts_now == 1)                 ++ic_fill_cyc;          // waiting on a fill
+    ts_prev = ts_now;
+  }
   if (dut->bus_req) {
     const uint32_t a = dut->bus_addr & ~3u;
     auto it = mem.find(a);
@@ -395,6 +412,11 @@ int main(int argc, char **argv) {
   std::printf("  %llu ended early: subnormal FP operand, %llu: NaN result"
               "  (both recorded deviations)\n",
               (unsigned long long)denorm_skips, (unsigned long long)nan_stops);
+  std::printf("  fetch: %llu entered, %llu prefetch hits (%.1f%%), "
+              "%llu extra T_FETCH cycles, %llu fill-wait cycles\n",
+              (unsigned long long)fetch_enter, (unsigned long long)fetch_hit,
+              100.0 * double(fetch_hit) / double(fetch_enter ? fetch_enter : 1),
+              (unsigned long long)fetch_stall, (unsigned long long)ic_fill_cyc);
   std::printf("  %llu programs, %llu retires, %llu checks over %llu cycles\n",
               (unsigned long long)progs, (unsigned long long)total_retires,
               (unsigned long long)checks, (unsigned long long)ticks);
