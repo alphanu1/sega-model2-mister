@@ -25,12 +25,14 @@
 #include "Vi960_top.h"
 #include "Vi960_top___024root.h"
 #include "verilated.h"
+#include <cmath>
 #include "i960_cpu_ref.h"
 
 namespace {
 Vi960_top   *dut = nullptr;
 i960ref::Cpu ref;
 std::map<uint32_t,uint32_t> mem;
+uint64_t fpwrites = 0, fpany = 0;
 uint32_t exec_ip = 0, exec_insn = 0;   // the instruction just retired
 uint64_t checks = 0, fails = 0, ticks = 0, retires = 0;
 const int MAX_REPORT = 10;
@@ -73,6 +75,14 @@ uint32_t dreg(int i) {
                   : dut->rootp->i960_top__DOT__u_regs__DOT__glb[i-16];
 }
 uint32_t dac() { return dut->rootp->i960_top__DOT__ac; }
+
+// fp0-fp3. Comparing these closes a real gap: an instruction whose only effect
+// is an FP-register write was previously executed by both sides and checked by
+// neither.
+uint64_t dfp(int i) { return dut->rootp->i960_top__DOT__fpr[i]; }
+uint64_t ref_fp_bits(int i) {
+  uint64_t b; std::memcpy(&b, &ref.fp[i], 8); return b;
+}
 uint32_t dip() { return dut->rootp->i960_top__DOT__ip; }
 
 const char *rn(int i) {
@@ -94,6 +104,23 @@ bool compare(uint64_t n) {
       ++fails;
     }
   }
+  for (int i = 0; i < 4; i++) {
+    ++checks;
+    const uint64_t g = dfp(i), w = ref_fp_bits(i);
+    // NaN payloads may differ between a hardware canonical quiet NaN and the
+    // host's propagation, and that is a recorded deviation rather than a bug,
+    // so both-NaN is accepted. Everything else is compared bit for bit.
+    double gd, wd; std::memcpy(&gd, &g, 8); std::memcpy(&wd, &w, 8);
+    if (g != w && !(std::isnan(gd) && std::isnan(wd))) {
+      ok = false;
+      if (fails < MAX_REPORT)
+        std::printf("  MISMATCH retire %llu  fp%d  got=%016llx want=%016llx\n",
+                    (unsigned long long)n, i,
+                    (unsigned long long)g, (unsigned long long)w);
+      ++fails;
+    }
+  }
+
   ++checks;
   if (dac() != ref.AC) {
     ok = false;
@@ -184,8 +211,12 @@ int main(int argc, char **argv) {
           0x688u, 0x68au, 0x68bu, 0x685u,      // sqrtr logbnr roundr cmpr
           0x6c0u, 0x6c2u, 0x6c9u,              // cvtri cvtzri movr
           0x674u, 0x677u };                    // cvtir scaler
+        // The table packs opcode and sub-opcode as 0xOOS across THREE hex
+        // digits, so the opcode is (sel >> 4) & 0xff. Using sel >> 8 yields
+        // 0x07 for 0x78f -- an invalid opcode that traps, which is why the
+        // FP-register-destination path was never once reached.
         const uint32_t sel = FPOPS[rng() % (sizeof FPOPS / sizeof FPOPS[0])];
-        insn = ((sel >> 8) << 24) | ((rng() % 32) << 19)
+        insn = (((sel >> 4) & 0xffu) << 24) | ((rng() % 32) << 19)
              | ((rng() % 32) << 14) | ((sel & 0xf) << 7) | (rng() % 32);
         if (rng() & 1) insn |= 0x0800;
         if (rng() & 1) insn |= 0x1000;
@@ -261,6 +292,9 @@ int main(int argc, char **argv) {
       // the architectural state one cycle early and reports a stale register.
       tick();
       exec_ip = ref.IP; exec_insn = ref.rd(ref.IP);
+      { const uint32_t iw = exec_insn; const uint32_t o = iw>>24;
+        if (o==0x78||o==0x68||o==0x6c||o==0x67) fpany++;
+        if ((o==0x78||o==0x68||o==0x6c||o==0x67) && (iw&0x2000) && !(iw&0x00e00000)) fpwrites++; }
       ref.step();
       if (ref.trapped) { ++trapped_progs; break; }
       ++retires; ++total_retires;
@@ -285,6 +319,7 @@ int main(int argc, char **argv) {
   if (total_retires)
     std::printf("  CPI (incl. reset and I-cache misses): %.2f\n",
                 double(ticks) / double(total_retires));
+  std::printf("  FP ops executed: %llu, of which FP-register destination: %llu\n", (unsigned long long)fpany, (unsigned long long)fpwrites);
   std::printf("  %llu programs, %llu retires, %llu checks over %llu cycles\n",
               (unsigned long long)progs, (unsigned long long)total_retires,
               (unsigned long long)checks, (unsigned long long)ticks);

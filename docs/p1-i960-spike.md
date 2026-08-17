@@ -615,13 +615,30 @@ else has cost more. **This is the first measurement that makes the optimisation
 backlog urgent rather than deferred** — item 1, moving the register file to a
 registered read, targets exactly the path these operand muxes feed.
 
-**A verification gap, stated because the suite does not cover it:** whole-CPU
-lockstep compares the 32 general registers, AC and IP. It does **not** compare
-`fp0`-`fp3`, so an instruction whose only effect is an FP-register write is
-executed by both sides and checked by neither. The datapath blocks are verified
-exhaustively on their own, so this is a plumbing gap rather than an arithmetic
-one — but it is a gap, and closing it means teaching the harness to read the FP
-file the way it already reads the general one.
+#### The FP-register gap — half closed, and the half that is not is recorded
+
+Lockstep now reads `fp0`-`fp3` from the DUT and compares them against the
+reference every retire, alongside the 32 general registers, AC and IP.
+
+**It is not yet proven to have teeth, and until it is, treat it as absent.**
+Three mutations that should have tripped it — writing to the wrong FP register,
+dropping the write entirely, and finally storing a literal `0xDEADBEEFDEADBEEF`
+— all passed. Something between the DUT's FP-register write and the harness's
+read is not connected, and it has not been found yet.
+
+Closing this uncovered a real bug elsewhere, which is why the mutation testing
+was worth doing even without a result. The generator packed each FP opcode as
+three hex digits and extracted the opcode with `sel >> 8`, so `0x78f` produced
+opcode **`0x07`** — invalid, trapping immediately. **Every "FP op" the suite had
+been running was actually an invalid-opcode trap**, and the 150 the first
+counter saw were `emul`/`ediv` arriving from a different generator class. After
+the fix, 312 FP operations execute per run and 43 of them target an FP register.
+
+So the position is: the FP arithmetic is verified exhaustively block by block,
+the FP instructions now genuinely execute under whole-CPU lockstep and agree on
+every general register, AC and IP — and the FP register file itself is compared
+by code that has not yet been shown to work. **That last clause is the honest
+one and it should stay in this document until a mutation fails.**
 
 ## 9. Known unverifiable
 
