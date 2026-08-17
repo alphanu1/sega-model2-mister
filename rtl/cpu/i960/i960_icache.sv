@@ -152,6 +152,12 @@ module i960_icache #(
               fill_tag  <= tag;
               fill_word <= 2'd0;
               fill_base <= {addr[31:4], 4'd0};
+              // Invalidate BEFORE filling. cvalid is only set on completion,
+              // but the data array is written word by word during the fill, so
+              // a line valid under a different tag has its data destroyed while
+              // still advertising a hit. Harmless while fills always completed;
+              // required once they can be abandoned.
+              cvalid[idx] <= 1'b0;
               state     <= S_FILL;
             end
           end
@@ -164,7 +170,16 @@ module i960_icache #(
           // request after each word, which measured ~3.7 cycles per word and
           // made instruction fetch 58% of all cycles in the CPU.
           bus_req <= 1'b1;
-          if (bus_ack) begin
+          // A redirect -- taken branch or mispredicted prefetch -- can ask for
+          // a different line mid-fill. Restart on it rather than making the
+          // requester wait out a line nothing wants.
+          if (req && ((idx != fill_idx) || (tag != fill_tag))) begin
+            fill_idx    <= idx;
+            fill_tag    <= tag;
+            fill_word   <= 2'd0;
+            fill_base   <= {addr[31:4], 4'd0};
+            cvalid[idx] <= 1'b0;
+          end else if (bus_ack) begin
             if (fill_word == 2'd3) begin
               bus_req          <= 1'b0;
               ctag[fill_idx]   <= fill_tag;
@@ -177,9 +192,21 @@ module i960_icache #(
         end
 
         S_DONE: begin
-          // One cycle for the registered read of the just-filled line.
-          valid <= 1'b1;
-          state <= S_IDLE;
+          // One cycle for the registered read of the just-filled line -- but a
+          // request can arrive during it now that the requester no longer waits
+          // for `busy`. Answering it with `valid` regardless hands over the
+          // just-filled line's data read at the NEW address.
+          if (req && !hit) begin
+            fill_idx    <= idx;
+            fill_tag    <= tag;
+            fill_word   <= 2'd0;
+            fill_base   <= {addr[31:4], 4'd0};
+            cvalid[idx] <= 1'b0;
+            state       <= S_FILL;
+          end else begin
+            valid <= 1'b1;
+            state <= S_IDLE;
+          end
         end
 
         default: state <= S_IDLE;

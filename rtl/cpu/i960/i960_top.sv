@@ -567,7 +567,7 @@ module i960_top (
   // Eight-byte instructions use the cache port in decode for their
   // displacement word, so they do not prefetch and fall back to T_FETCH.
   logic [31:0] pf_insn, pf_ip;
-  logic        pf_valid, pf_armed;
+  logic        pf_valid, pf_armed, pf_issued;
 
   // ------------------------------------------------------------- sequencer
 
@@ -635,6 +635,7 @@ module i960_top (
       fpr[3]    <= 64'd0;
       pf_valid  <= 1'b0;
       pf_armed  <= 1'b0;
+      pf_issued <= 1'b0;
       pf_insn   <= 32'd0;
       pf_ip     <= 32'd0;
       ip        <= 32'd0;
@@ -674,6 +675,18 @@ module i960_top (
 
       // A prefetch issued in decode lands during execute. Capture it wherever
       // the sequencer happens to be.
+      // Arm one cycle AFTER issuing, never in the same cycle. `ic_valid` is a
+      // pulse, and the front end now issues the prefetch in the very cycle the
+      // previous DEMAND fetch's valid is still asserted -- T_DECODE used to sit
+      // between them. Arming immediately captured that stale valid and stored
+      // the PREVIOUS instruction as the prefetched one; because pf_ip still
+      // matched, T_FETCH then accepted it and executed the wrong word.
+      //
+      // Cost is nothing: the request is registered, so the earliest a genuine
+      // valid can arrive is the cycle this makes pf_armed true.
+      pf_armed  <= pf_issued;
+      pf_issued <= 1'b0;
+
       if (pf_armed && ic_valid) begin
         pf_insn  <= ic_data;
         pf_valid <= 1'b1;
@@ -714,22 +727,23 @@ module i960_top (
               ic_req     <= 1'b1;
               ip_next    <= ip + 32'd4;
               pf_ip      <= ip + 32'd4;
-              pf_armed   <= 1'b1;
+              pf_issued  <= 1'b1;
               ts         <= T_EXEC;
             end
           end else if (ts == T_FETCH) begin
-            // Only issue when the cache is idle. A prediction that turns out
-            // wrong can leave a fill in flight for the line we no longer want;
-            // the cache ignores a request while filling, so issuing anyway
-            // meant the wait state then accepted the STALE fill's `valid` and
-            // executed the wrong instruction.
-            pf_valid <= 1'b0;
-            pf_armed <= 1'b0;
-            if (!ic_busy) begin
-              fetch_addr <= ip;
-              ic_req     <= 1'b1;
-              ts         <= T_FETCH_W;
-            end
+            // Issue unconditionally. This waited for `!ic_busy` because the
+            // cache ignored requests while filling, so a mispredicted prefetch
+            // left a fill in flight for a line nothing wanted and the wait
+            // state accepted its stale `valid`. The cache now ABANDONS a fill
+            // when a different line is requested, so the request is honoured.
+            // Do not restore the guard without removing the abort; they are a
+            // pair, and test_i960_icache's redirect pass is what holds the
+            // cache to its half of it.
+            pf_valid   <= 1'b0;
+            pf_armed   <= 1'b0;
+            fetch_addr <= ip;
+            ic_req     <= 1'b1;
+            ts         <= T_FETCH_W;
           end
         end
 

@@ -49,8 +49,40 @@ const char *STATE_NAME[16] = {
 
 uint64_t fetch_enter = 0, fetch_hit = 0, fetch_stall = 0, ic_fill_cyc = 0;
 
+struct Trace { uint64_t t; int ts; int req, valid, busy; uint32_t addr, data, insn, ip; };
+Trace ring[4096];
+size_t ring_n = 0;
+
+void dump_ring() {
+  std::printf("  --- front-end activity (req/valid/latch only) ---\n");
+  const size_t start = ring_n < 4096 ? 0 : ring_n - 4096;
+  uint32_t prev_insn = 0;
+  for (size_t k = start; k < ring_n; ++k) {
+    const Trace &e = ring[k % 4096];
+    const bool interesting = e.req || e.valid || (e.insn != prev_insn);
+    prev_insn = e.insn;
+    if (!interesting) continue;
+    std::printf("   t=%-6llu ts=%-2d req=%d valid=%d busy=%d addr=%08x "
+                "data=%08x insn=%08x ip=%08x\n",
+                (unsigned long long)e.t, e.ts, e.req, e.valid, e.busy,
+                e.addr, e.data, e.insn, e.ip);
+  }
+}
+
 void tick() {
   const int ts_now = dut->rootp->i960_top__DOT__ts & 15;
+  {
+    Trace &e = ring[ring_n % 64];
+    e.t = ticks; e.ts = ts_now;
+    e.req   = dut->rootp->i960_top__DOT__ic_req;
+    e.valid = dut->rootp->i960_top__DOT__ic_valid;
+    e.busy  = dut->rootp->i960_top__DOT__ic_busy;
+    e.addr  = dut->rootp->i960_top__DOT__fetch_addr;
+    e.data  = dut->rootp->i960_top__DOT__ic_data;
+    e.insn  = dut->rootp->i960_top__DOT__insn;
+    e.ip    = dut->rootp->i960_top__DOT__ip;
+    ++ring_n;
+  }
   state_cycles[ts_now]++;
   // Where the fetch cycles actually go. T_FETCH costs 1 cycle when the
   // prefetch predicted correctly and much more otherwise, so the average alone
@@ -127,6 +159,7 @@ bool compare(uint64_t n) {
     if (dreg(i) != ref.rf.r[i] && !fp_nan_ok) {
       ok = false;
       if (fails < MAX_REPORT)
+        if (fails == 0) dump_ring();
         std::printf("  MISMATCH retire %llu  %-4s got=%08x want=%08x  (IP %08x insn %08x)\n",
                     (unsigned long long)n, rn(i), dreg(i), ref.rf.r[i],
                     exec_ip, exec_insn);

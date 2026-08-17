@@ -86,6 +86,40 @@ bool fetch(uint32_t a, const char *why) {
   return true;
 }
 
+// Issue a request, let the fill get under way, then REDIRECT to a different
+// line. This models what the CPU does on a taken branch or a mispredicted
+// prefetch, and nothing else in this harness reaches it: `fetch()` waits for
+// `valid` before issuing again, so the cache is never asked for anything while
+// it is busy. That blind spot is why a whole-CPU lockstep failure was the only
+// symptom of this the last time it was attempted.
+//
+// Two things must hold, and the second is the one that bites:
+//   1. the redirect's word is delivered, not the abandoned line's;
+//   2. the abandoned line must not later answer a hit with half-filled data.
+bool abort_case(uint32_t a, uint32_t b, int delay, const char *why) {
+  dut->addr = a >> 2; dut->req = 1; tick(); dut->req = 0;
+  for (int i = 0; i < delay; i++) tick();       // fill under way
+
+  dut->addr = b >> 2; dut->req = 1; tick(); dut->req = 0;
+  int i = 0;
+  for (; i < 200 && !dut->valid; i++) tick();
+  if (i == 200) {
+    std::printf("  STALL   [%s] redirect %08x -> %08x after %d, bus_req=%d\n",
+                why, a, b, delay, dut->bus_req);
+    ++fails; return false;
+  }
+  if (dut->data != peek(b)) {
+    if (fails < MAX_REPORT)
+      std::printf("  MISMATCH[%s] redirect %08x -> %08x after %d: "
+                  "got=%08x want=%08x\n",
+                  why, a, b, delay, dut->data, peek(b));
+    ++fails; return false;
+  }
+  // Now read the abandoned line. A partially filled line that still advertises
+  // a hit returns whichever words happened to land before the redirect.
+  return fetch(a, "after-abort");
+}
+
 void reset() {
   dut->rst_n = 0; dut->req = 0; dut->inval = 0; dut->bus_ack = 0;
   for (int i = 0; i < 4; i++) tick();
@@ -119,6 +153,23 @@ int main(int argc, char **argv) {
     std::printf("  sequential walk 4x cache size      : miss rate %.3f %s\n",
                 rate, ok ? "(expected ~0.25)" : "*** OUT OF BOUNDS ***");
     if (!ok) ++fails;
+  }
+
+  // Redirect mid-fill, at every point in a 4-word fill and across line and
+  // set boundaries. Currently EXPECTED TO FAIL: the cache ignores a request
+  // while filling, so this is the specification for the abort, written before
+  // the abort.
+  {
+    reset();
+    const uint64_t f0 = fails;
+    for (int delay = 0; delay < 6; ++delay) {
+      abort_case(0x0000, 0x0040, delay, "next-line");
+      abort_case(0x0100, 0x1100, delay, "same-set-other-tag");
+      abort_case(0x0200, 0x0210, delay, "near");
+      abort_case(0x0300, 0x0304, delay, "same-line");
+    }
+    std::printf("  redirect mid-fill                  : %llu failures\n",
+                (unsigned long long)(fails - f0));
   }
 
   // Second pass over data that fits entirely in the cache must never miss.
