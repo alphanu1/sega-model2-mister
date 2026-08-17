@@ -662,7 +662,7 @@ start cold, so the miss rate is pessimistic against real code with loops. The
 hit rate is exactly the sort of number M2-B would replace with a measurement.
 Do not tune the cache against this workload and believe the result.
 
-### I-cache fill abort — ATTEMPTED AND REVERTED
+### I-cache fill abort — attempted and reverted (RESOLVED later; see below)
 
 The 4,626 self-inflicted stall cycles are still there. The attempt is recorded
 because it eliminated three hypotheses, and the next attempt should not pay for
@@ -761,3 +761,95 @@ fill-abort attempt and its three eliminated hypotheses are recorded above —
 start with the per-cycle instrumentation, not another fix, and add a directed
 abort test to `test_i960_icache`, which currently cannot see that class of bug
 at all.
+
+---
+
+## I-cache fill abort — resolved, and the method is the point
+
+`i960_top`: **7,079 ALM, 3,492 reg, 7 DSP, Fmax 26.78 MHz.** All 15 suites,
+147,060 checks, zero divergence.
+
+The previous attempt was reverted with three hypotheses eliminated by
+inspection. It was solved by doing exactly what that note said to do, in that
+order — **write the block-level test, then instrument.** Neither step was a
+fix, and both were skipped the first time.
+
+### Step 1: the test the harness could not previously express
+
+A directed redirect pass in `test_i960_icache` issues a fetch, lets the fill
+start, then asks for a different line — at every point in a 4-word fill, across
+line and set boundaries. It **reproduced the failure at block level
+immediately**, where it is minutes to debug rather than a whole-CPU lockstep
+divergence 13 retires deep.
+
+That blind spot was real and worth naming: `fetch()` waits for `valid` before
+issuing again, so in 201,232 fetches the harness had **never once** asked the
+cache for anything while it was busy. It was not that the test was weak; the
+scenario was inexpressible.
+
+With that test the cache abort passed in isolation — which is what located the
+fault in `i960_top` rather than the cache, after two sessions of assuming the
+cache was wrong.
+
+### Step 2: the ring buffer found it in one run
+
+64 cycles of front-end state, dumped on the first mismatch:
+
+```
+t=855  ts=T_FETCH  valid=1  addr=00000044  data=5fb80e16  insn=1900bcd4  ip=00000044
+t=856  ts=T_EXEC   req=1    addr=00000048  data=5fb80e16  insn=1900bcd4  ip=00000044
+```
+
+The correct word is **right there** with `valid` asserted, and `insn` does not
+update. One cycle earlier the front end had issued the prefetch and armed it in
+the same cycle the *previous demand fetch's* `valid` was still asserted, so the
+prefetch captured that stale valid and stored the previous instruction as the
+prefetched word. `pf_ip` still matched, so `T_FETCH` accepted it and executed
+the wrong instruction.
+
+**Removing `T_DECODE` deleted the cycle that used to separate those two events.**
+A latent ordering assumption that had been safe became live — the same shape as
+the register-file write bypass, which was dead logic until the same change made
+it load-bearing. Two ordering assumptions broken by one restructure.
+
+Fix: arm one cycle after issuing (`pf_armed <= pf_issued`). Costs nothing — the
+request is registered, so the earliest a genuine valid can arrive is the cycle
+this makes `pf_armed` true.
+
+### What it bought, and what it cost
+
+| | before | after |
+|---|---|---|
+| waiting out a discarded fill | 4,626 | **601** |
+| fill-wait cycles | 6,948 | 9,455 |
+| total cycles | 61,560 | **60,037** |
+| fetch cost | 4.28 cyc/instr | **3.66** |
+| simple instruction | 5.33 CPI | **4.71** |
+| Fmax | 27.72 | 26.78 |
+| **throughput** | 5.20 M instr/s | **5.69 M instr/s** (+9.3%) |
+
+Fills rise because an abandoned line is refetched if wanted later — the abort
+trades stall cycles for refill cycles and wins, but by less than the stall
+figure alone suggested.
+
+**Sweeping the abort threshold over `fill_word <= 0, 1, 2` gives byte-identical
+cycle counts.** Redirects always arrive at `fill_word 0`, so there is never
+partial work to preserve and the policy question is moot. Worth having measured
+rather than tuned: the obvious refinement — "don't abandon a nearly-complete
+fill" — is dead code in this design.
+
+### Next, and it is the same target
+
+**Fill-wait is now the dominant fetch cost at 2.44 cyc/instr**, up from 1.89.
+Throughput is 5.69 against a 12.5 floor, so this is still roughly half-way.
+
+The abort attacked the *stall*; what remains is the **miss rate** itself, and
+neither longer lines nor a next-line prefetch has been tried. A 16-byte line is
+four instructions, so sequential code cannot miss less than 25% — that ceiling
+is structural and only a bigger line or a genuine next-line prefetch moves it.
+The 57.5% prefetch hit rate is a next-*word* prediction, which by construction
+cannot help across a line boundary, which is exactly where the misses are.
+
+Keep R9 in view: this workload is 200 short programs that each start cold, so
+its miss rate is pessimistic against real code with loops. Do not tune line size
+against it and believe the number.
