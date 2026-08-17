@@ -1583,3 +1583,88 @@ reading a local. Design it in from the start.
 
 **Area is unknown to a factor of two** — 7,000 to 13,500. M2-E gives an R4300i
 proxy on this part before any of this is written, which is why it comes first.
+
+---
+
+## The pipeline: what it has to achieve, and the design it implies
+
+Written after the measurement work that made the target meaningful. Every
+number here is measured on the Daytona-weighted mix with loops
+(`+mix=daytona +loops`), which is the only mix that answers a throughput
+question — see R9.
+
+### The target, and it is now close
+
+| | CPI | at 26.73 MHz |
+|---|---|---|
+| measured today | **4.96** | 5.39 M instr/s |
+| required | **2.14** | 12.5 M instr/s |
+
+**A 2.3x gap.** It was 3.5x this morning and none of the closing came from
+changing what the RTL computes — it came from three LSU defects and from the
+measurement becoming honest.
+
+### Where the 4.96 goes
+
+```
+T_FETCH     1.02      fetch issue, 1 cycle even on a prefetch hit
+T_FETCH_W   0.48      I-cache fill waits, 83% hit rate
+T_EXEC      1.00      one cycle, every instruction
+T_MEM_W     1.64      ~3.3 cycles per access, at 49% load/store
+T_MULDIV    0.69      genuinely iterative
+other       0.13
+```
+
+**These are a serial sum.** Every instruction pays fetch, then execute, then
+memory. That is the whole problem and no amount of state-shaving fixes it —
+three rounds of that took 2.82 to 5.39 M instr/s and the remaining states each
+do real work.
+
+### What the pipeline buys, arithmetically
+
+- **Fetch overlaps execute**: removes `T_FETCH` + `T_FETCH_W` ~= **1.50 CPI**
+- **Memory becomes a stage**: 3.3 cycles per access -> ~1, ~= **1.15 CPI**
+- Divide stays; a scoreboard lets independent instructions continue past it
+
+**4.96 - 1.50 - 1.15 ~= 2.3 CPI ~= 11.6 M instr/s.** With the Fmax that
+splitting the `rd1 -> wd` execute path buys, 12.5 M closes. **The arithmetic
+works, which it did not this morning.**
+
+### The design, and the one hard constraint
+
+Five stages: **F** fetch | **D** decode + register read | **X** execute |
+**M** memory | **W** writeback.
+
+**The binding constraint is the register file, not the sequencer.** It has two
+read ports and a *registered* read, which is why `T_FETCH` costs a cycle even on
+a prefetch hit: that cycle is where the next instruction's address is presented.
+Overlapping F with X means instruction N+1's register read must happen while
+instruction N is still using both ports — so **the pipeline needs either a third
+and fourth read port or a read-port schedule that guarantees no conflict.**
+
+Two attempts at overlap without addressing this both failed, in opposite
+directions, and the reason was the same each time: word 0's address arrives from
+one state and later words from another, so no fixed compensation suits both.
+**Do not attempt F/X overlap until the read ports are settled.** That is the
+first work item, not the sequencer.
+
+Hazards, in the order they will bite:
+1. **Load-use** — 49% of instructions are memory, so this is the common case,
+   not the corner case. Forwarding from M to X is mandatory.
+2. **RAW on the register file** — the write bypass already exists and is
+   mutation-proven; it becomes load-bearing for more cases.
+3. **Branch redirect** — the prefetch already handles the common path at 83%,
+   and `pf_ip == ip` comparison already validates it.
+
+### Verification is already in place, and that is the point
+
+The harness that will catch a pipelining bug the day it is written already
+exists: whole-CPU lockstep, per-retire register **and data-memory** comparison,
+both instruction mixes, loops, unaligned access, and mutation-proven checks.
+That is what makes a rewrite of this size affordable.
+
+**One warning from today, five times over:** a green suite is not evidence
+unless you know what it cannot express. The FP check that could not run, the
+M10K column that was dropped, the generator with no loads, the LSU harness that
+could not express its own bug, and a cache benchmark with no temporal locality.
+Before trusting a pipeline result, ask what the harness still cannot see.
