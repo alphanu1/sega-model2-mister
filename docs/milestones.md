@@ -95,8 +95,8 @@ whole-CPU lockstepped. All 15 suites pass at 147,060 checks and zero divergence.
 | | |
 |---|---|
 | assembled CPU | **7,015 ALM, 7 DSP, 27.72 MHz** |
-| simple instruction, prefetch hit | **2 CPI** = 13.86 M instr/s |
-| simple instruction, measured average | **5.33 CPI** = 5.20 M instr/s |
+| throughput, Daytona mix with loops | **3.91 CPI = 6.86 M instr/s** |
+| **Daytona's measured demand** | **0.93 M instr/s — met with 7.4x margin (R10)** |
 
 **The bottleneck moved, and it is no longer the pipeline.** `T_DECODE` was
 removed — the decoder reads the arriving word, so fetch goes straight to

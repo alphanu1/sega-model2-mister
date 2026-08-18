@@ -2589,3 +2589,53 @@ without costing a cycle, and it is the only remaining lever that is not blocked.
 has called for since the beginning would *not*, on its own, fix Fmax on this
 design. It would fix CPI. Those are different problems here, and only one of
 them has a structural answer.
+
+## THE THROUGHPUT REQUIREMENT IS MET. It was met before this session started.
+
+Measured, not inferred: **Daytona's i960 executes ~15,400 instructions of work
+per frame = 0.93 M instr/s. The core delivers 6.86 M instr/s. 7.4x margin.**
+
+| frame | instructions | in a spin loop | distinct PCs | hottest PC |
+|---|---|---|---|---|
+| 1 | 14,469 | 14 (0.1%) | 4,201 | 0.4% |
+| 2 | 14,474 | 14 (0.1%) | 4,207 | 0.4% |
+| 3 | 17,441 | 14 (0.1%) | 4,159 | 0.5% |
+
+Three single-frame traces of `daytona93` under MAME 0.289. The work is genuine
+and distributed — 4,200 distinct PCs per frame, hottest 0.4%, **0.1% spinning**
+— so this is not a CPU idling against a slow emulator.
+
+**The 12.5-16.7 M instr/s figure was the chip's capability, never the game's
+demand.** A 25 MHz i960KB at 1.5-2 CPI delivers that. Nothing ever measured what
+Model 2 software needs.
+
+### Why this survives R8
+
+R8 warns that MAME's cycle counts are estimates and `model2.cpp` calls
+`i960_stall()`. **This measurement does not use MAME's cycle model.** It counts
+instructions between *frame boundaries*, and the frame boundary comes from video
+hardware. The remaining objection — MAME starving the CPU so it never finishes
+its per-frame work — is answered three ways: the game renders correctly
+(screenshot), the per-frame count is **stable across frames**, meaning a fixed
+workload rather than work-until-vblank, and there is almost no spinning.
+
+### What this changes
+
+- **P1's throughput exit criterion is met**, with margin. The pipeline that §4.3
+  has demanded since the beginning is **not required for Model 2**. It would be
+  required to match the real chip, which nobody asked for.
+- **The remaining i960 work is functional**: faults, `synmov`/`synmovq`,
+  `calls`, `modpc`, interrupts, the `rl` forms. M2-B already suggested the six
+  transcendentals may be unnecessary.
+- **Area, not speed, is what the fit question needs from this core** — and at
+  6,986 ALM against a 12K band it has been comfortable throughout.
+
+### The lesson, and it is the third instance
+
+A full session went into throughput. Every step was real — 2.82 -> 6.86 M
+instr/s, six defects fixed, seven coverage holes closed — but **the target was
+never verified**. R9 was a CPI quoted without its instruction mix; this is a
+throughput target quoted without its workload. The measurement that settles it
+took hours and could have been done first.
+
+**Before optimising against a number, establish what measured it.**

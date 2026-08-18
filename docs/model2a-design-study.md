@@ -1097,6 +1097,49 @@ was not wrong when written and is not wrong now — it simply never carried the 
 measured on, so it read as a property of the design. Record the conditions with the
 number or the number will be reused somewhere it does not apply.
 
+**R10 — the i960 throughput requirement was the chip's capability, not the game's
+demand, and the design already exceeds the demand by 7x.** P1 has been measured all
+along against **12.5-16.7 M instr/s**. That figure is what a 25 MHz i960KB at 1.5-2 CPI
+can *deliver*. It was never a measurement of what Model 2 software *needs*.
+
+*What was believed:* that the core must reach 12.5 M instr/s to run Model 2, and that the
+multi-cycle sequencer's shortfall against it was the project's second-largest risk.
+
+*What is now known:* Daytona's i960 executes **~15,400 instructions of work per frame**,
+which at 60 fps is **0.93 M instr/s**. The assembled core delivers **6.86 M instr/s**.
+**The requirement is met with roughly 7.4x margin, and has been for some time.**
+
+*How established:* three single-frame traces (17 ms each) of `daytona93` under MAME
+0.289, instrumented via the debugger. 14,469 / 14,474 / 17,441 instructions. The work is
+genuine and distributed — **4,200 distinct PCs per frame, hottest 0.4%, and only 0.1% of
+instructions in a spin loop** — so this is not a CPU idling against a slow emulation. The
+sample is a full 3D demo race, confirmed by screenshot.
+
+*Why the figure is trustworthy despite R8.* R8 warns that MAME's cycle counts are
+estimates, and `model2.cpp` does call `i960_stall()`. But this measurement does not use
+MAME's cycle model: it counts **instructions between frame boundaries**, and the frame
+boundary is set by video hardware. The remaining objection — that MAME might be starving
+the CPU so it never finishes its per-frame work — is answered by the game running
+correctly, by the per-frame count being stable across frames (a fixed workload, not
+work-until-vblank), and by the near-total absence of spinning.
+
+*Consequences, and they are large:*
+
+- **P1's throughput exit criterion is met.** The pipeline the spike document has demanded
+  since §4.3 is **not required for Model 2**. It would still be required to match the real
+  chip, which is a different and unasked question.
+- **A session of optimisation was spent against an unverified number.** Throughput went
+  2.82 -> 6.86 M instr/s and every step was real, but the target it was chasing was never
+  the requirement. The measurement that would have shown this cost hours.
+- **The i960's remaining work is functional, not performance**: faults, `synmov`/`calls`/
+  `modpc`, interrupts, the `rl` forms. M2-B already indicated the transcendentals may be
+  unnecessary.
+
+**Third recurring failure mode, and it now has three instances:** optimising against a
+figure whose basis was never checked. R9 was CPI quoted without its instruction mix; this
+is a throughput target quoted without its workload. **Before optimising against a number,
+establish what measured it.**
+
 **Second recurring failure mode, from R6:** asserting that third-party RTL exists and is
 licence-compatible without opening the repository. R5 did this three times in one table and
 was wrong twice — once against the project and once in its favour. A licence claim is a
