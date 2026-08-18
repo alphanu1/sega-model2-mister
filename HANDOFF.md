@@ -2192,3 +2192,45 @@ only against the queue. Run it here first.
 
 **Overlap value is unchanged and still the largest single lever: ~1.0 CPI**, with
 `T_FETCH` + `T_EXEC` now 52% of all cycles.
+
+### Overlap round 7: a DUPLICATED invariant was manufacturing the failures
+
+The single most useful finding of this round is about the harness, not the RTL.
+
+**`tb_i960_top.cpp` contained TWO copies of the prefetch invariant.** One gated
+on a running program, one not. The ungated copy fired during reset — comparing
+the new program's memory against a word left over from the previous program —
+and every edit made to "the check" went to the *other* copy, so the probes never
+changed what was printed.
+
+**Several rounds of this bug were chasing a check that was reporting a defect
+that did not exist.** The `[PREFETCH] latched ... at ip=000000d4` failure,
+recorded twice in this file as a real symptom, was that duplicate.
+
+With the duplicate removed, both invariants go silent and a **different, real**
+failure appears at retire 1 on a `movl` — which the duplicate had been masking
+by failing first every run.
+
+**Rules, extending the four already recorded:**
+
+5. **Grep for duplicates before trusting an invariant.** `grep -c` on the
+   comment banner would have caught this in one command, and was not run for
+   several rounds.
+6. **A probe that does not change its output when edited is not being run.**
+   That signal appeared twice and was read as "the bug is elsewhere" rather than
+   "the edit did not take".
+
+### The shorter route is real and is worth keeping in mind
+
+Also established this round, and independent of the bug: the two-deep prefetch
+queue is **not needed**. Issuing the prefetch combinationally in the cycle the
+current word lands buys the same cycle of latency, so the successor's word
+arrives during `T_EXEC` with no second slot, no promotion and no flush rules.
+Six attempts at the queue; the goal was reachable without it.
+
+That variant passes all 15 suites on its own and is worth 0.02 CPI without the
+overlap, so it is only worth landing together with it.
+
+**Overlap value unchanged: ~1.0 CPI, the largest single lever, with
+`T_FETCH` + `T_EXEC` at 52% of cycles.** Next session starts from the retire-1
+`movl` failure, which is the first *real* symptom this feature has produced.
