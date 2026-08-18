@@ -132,8 +132,54 @@ module i960_alu (
   logic        addc_ovf, subc_ovf;
 
   assign carry_in = ac_in[1];
-  assign addc_res = {1'b0, src2} + {1'b0, src1} + {32'd0, carry_in};
-  assign subc_res = {1'b0, src2} - ({1'b0, src1} + {32'd0, carry_in});
+  // ONE ADDER for every add and subtract form.
+  //
+  // Written as six separate expressions -- addo/addi, subo/subi, cmpinc,
+  // cmpdec, addc, subc -- each of which synthesises its own 32-bit carry chain.
+  // The chain is the deepest structure in this module and the module sits on
+  // the CPU's critical path (`rd1 -> wd`), so six of them cost both area and
+  // depth for no reason: at most one is selected in any cycle.
+  //
+  // Subtraction is the usual `a + ~b + 1`, which lets one adder serve both
+  // directions. addc and subc need the carry OUT, so the adder is 33 bits wide
+  // and every form reads its result from the same place.
+  logic [31:0] add_b_in;
+  logic        add_sub, add_cin;
+  logic [32:0] add_res;
+
+  always_comb begin
+    add_b_in = src1;
+    add_sub  = 1'b0;
+    add_cin  = 1'b0;
+    unique case (op)
+      // Plain subtraction is a + ~b + 1, so the carry-in IS the subtract flag.
+      8'h59: begin                                   // addo/addi, subo/subi
+        add_sub = (op2 == 4'h2) || (op2 == 4'h3);
+        add_cin = add_sub;
+      end
+      8'h5a: begin                                   // cmpinc / cmpdec
+        add_b_in = 32'd1;
+        add_sub  = (op2 == 4'h6) || (op2 == 4'h7);
+        add_cin  = add_sub;
+      end
+      8'h5b: begin                                   // addc / subc
+        add_sub = (op2 == 4'h2);
+        add_cin = (op2 == 4'h2) ? ~carry_in : carry_in;
+      end
+      default: ;
+    endcase
+  end
+
+  assign add_res = add_sub
+                 ? ({1'b0, src2} + {1'b0, ~add_b_in} + {32'd0, add_cin})
+                 : ({1'b0, src2} + {1'b0,  add_b_in} + {32'd0, add_cin});
+
+  assign addc_res = add_res;
+  // Bit 32 means opposite things in the two formulations. The original
+  // `a - (b + cin)` wraps, so bit 32 is a BORROW; `a + ~b + cin` produces a
+  // CARRY, which is its complement. addc wants the carry as-is, subc wants the
+  // borrow, so only subc inverts.
+  assign subc_res = {~add_res[32], add_res[31:0]};
 
   // Overflow expressions are the reference's, which are correct as written
   // because they operate on 32-bit values only.
@@ -204,8 +250,8 @@ module i960_alu (
           // The reference marks addi and subi "#### overflow" and does not
           // detect it, so they are identical to addo and subo. Replicated:
           // inventing overflow here would diverge from the only oracle there is.
-          4'h0, 4'h1: result = src2 + src1;            // addo, addi
-          4'h2, 4'h3: result = src2 - src1;            // subo, subi
+          4'h0, 4'h1: result = add_res[31:0];          // addo, addi
+          4'h2, 4'h3: result = add_res[31:0];          // subo, subi
           4'h8: result = sh_ge32 ? 32'd0 : (src2 >> sh);           // shro
           4'ha: begin                                              // shrdi
             if (sh_ge32)                 result = 32'd0;
@@ -233,10 +279,10 @@ module i960_alu (
           // otherwise — not merely unwritten, genuinely skipped.
           4'h2: if (!ac_in[2]) ac_out = {ac_in[31:3], ccon_u};      // concmpo
           4'h3: if (!ac_in[2]) ac_out = {ac_in[31:3], ccon_s};      // concmpi
-          4'h4: begin ac_out = {ac_in[31:3], cc_u}; result = src2 + 32'd1; result_we = 1'b1; end // cmpinco
-          4'h5: begin ac_out = {ac_in[31:3], cc_s}; result = src2 + 32'd1; result_we = 1'b1; end // cmpinci
-          4'h6: begin ac_out = {ac_in[31:3], cc_u}; result = src2 - 32'd1; result_we = 1'b1; end // cmpdeco
-          4'h7: begin ac_out = {ac_in[31:3], cc_s}; result = src2 - 32'd1; result_we = 1'b1; end // cmpdeci
+          4'h4: begin ac_out = {ac_in[31:3], cc_u}; result = add_res[31:0]; result_we = 1'b1; end // cmpinco
+          4'h5: begin ac_out = {ac_in[31:3], cc_s}; result = add_res[31:0]; result_we = 1'b1; end // cmpinci
+          4'h6: begin ac_out = {ac_in[31:3], cc_u}; result = add_res[31:0]; result_we = 1'b1; end // cmpdeco
+          4'h7: begin ac_out = {ac_in[31:3], cc_s}; result = add_res[31:0]; result_we = 1'b1; end // cmpdeci
           4'hc: ac_out = {ac_in[31:3], scanbyte_hit ? 3'b010 : 3'b000};  // scanbyte
           4'he: ac_out = {ac_in[31:3], src2[src1[4:0]] ? 3'b010 : 3'b000}; // chkbit
           default: valid = 1'b0;
