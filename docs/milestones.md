@@ -346,6 +346,14 @@ already booted this framework.
 
 ## Standing rules for every milestone
 
+**`docs/differential-testing.md` applies to every milestone from P1 onward.**
+When behaviour diverges from MAME, diff against the oracle before theorising. The
+Model 1 core reached a CPU bug it could not find by simulation and this is what
+resolved it — three real defects in about two hours, two of them CPU bugs that had
+survived its entire suite. Expect to need it here for the i960's interrupt bring-up
+and for the TGP.
+
+
 - **Fuzz and simulate before the fitter.** A Quartus build is the most expensive
   way to find an error.
 - **Simulate what hardware does**, not what is convenient: stream ROMs through
