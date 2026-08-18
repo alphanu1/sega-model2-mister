@@ -2020,3 +2020,51 @@ overlap lands one instruction too far. Check who writes `ip_next` on the
 **Ruled out and not worth re-testing:** the harness (passes with the overlap
 disabled and everything else in), double advances in the steady state, wrong
 instruction words on either latch path, and the RAW hazard.
+
+### Prefetch queue: STOP. Read this before the next attempt.
+
+Six attempts. The cache-interface work that came out of it is committed and
+correct. **The queue itself is not landed, and the last two rounds produced
+contradictory readings, which means the instrumentation was misleading rather
+than converging.**
+
+**A real harness bug wasted most of a round, and it is the important lesson.**
+The retire loop still contained the extra `tick()` — the one that lets a
+registered write land, correct for a two-cycle retire and *wrong* with
+back-to-back retires, where it retires the successor too. It had been correctly
+removed earlier, lost in a revert, and my re-removal targeted text
+(`ip_at_retire`) that no longer existed, so it **silently did nothing**. Every
+overlap measurement after that point was taken with the harness double-stepping.
+
+That invalidated a conclusion recorded in this file: the "fault localised to the
+`T_FP` -> overlap boundary, `ip` advancing 8 bytes" was **my harness stepping
+twice**, not the design. Do not chase it.
+
+**Where the contradiction stands.** With the tick removed and both the queue and
+overlap in, the *latch* invariant fires (a wrong word handed over at `ip`) while
+the *slot* invariant — same signals, same cycle, checked immediately before —
+stays silent. Both cannot be true. One of the two checks is wrong, and finding
+which is the first task, before any RTL is touched.
+
+**Rules for the next attempt, earned expensively:**
+
+1. **Verify every harness edit applied.** Three separate `replace` calls this
+   session silently matched nothing after a revert changed the surrounding text.
+   Assert on the pattern, or diff afterwards.
+2. **Gate every invariant on "a program is running."** `mem` is rebuilt per
+   program, so a check that runs during reset compares the new program's memory
+   against the previous program's queue and reports a defect that is not one.
+   Two invariants failed this way and cost a round each.
+3. **Reconcile the two invariants before trusting either.** They disagree today.
+4. Do not re-test: the RAW hazard (forwarding added, correct, not the cause),
+   wrong words on the overlap's `T_EXEC` latch (checked, clean), and steady-state
+   double advances (measured, one per retire).
+
+**Value, still measured and still worth it:** overlap CPI 4.96 -> 4.76, queue
+required for it but a regression alone at 5.07. That is ~1.0 CPI of the 2.8 CPI
+needed to reach 12.5 M instr/s.
+
+**Honest position:** this feature has consumed more of a session than it has
+returned. The memory stage — `T_MEM_W` at 1.64 cyc/instr, ~33% of CPI, estimated
+~1.15 CPI — is worth comparable throughput, is independent of all of this, and
+has none of the accumulated confusion. **Consider doing that first.**
