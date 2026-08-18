@@ -281,7 +281,11 @@ struct Cpu {
         const LdSt   l = i960ref::ldst(d.op, g.ea & 3, 0, 0);
         if (!g.valid || !l.valid) { trapped = true; trap_op = d.op; break; }
 
-        if (l.no_mem) {                                                // lda
+        if (l.no_mem && d.op == 0x86) {                               // callx
+          rf.call(ip_next, g.ea, 0, 0);
+          IP = g.ea;
+          break;
+        } else if (l.no_mem) {                                         // lda
           rf.r[d.srcdst] = g.ea;
         } else {
           const uint8_t base = d.srcdst & l.reg_mask;

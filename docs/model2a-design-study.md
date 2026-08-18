@@ -1146,3 +1146,92 @@ was wrong twice — once against the project and once in its favour. A licence c
 fact about a file, and checking it costs one API call. **Neither a search result nor a
 recollection is a licence check.** `THIRD_PARTY.md` records the verification, not the
 belief.
+
+---
+
+**R11 — the sequencer called twice for every `call`, and no test could see it because
+the generator emitted no calls.** `callx` was the last mnemonic Daytona executes that P1
+had not implemented. Adding it exposed a defect that had been latent in `call` and `ret`
+since the frame machinery was written.
+
+*What was believed:* that the register file's `busy` output was sufficient to hold the
+sequencer in `T_FRAME` until a frame operation completed, and that the whole-CPU lockstep
+covered the frame path because `i960_regs` has a passing unit test.
+
+*What is now known:* two defects, both real.
+
+1. **`T_FRAME` exited one cycle early, always.** `busy` is `state != S_IDLE` inside
+   `i960_regs`, and in the first `T_FRAME` cycle the register file has not yet *seen* the
+   request — `op_call` is only being presented on that edge, so `busy` is still low. The
+   sequencer left immediately, and because `next_ip_valid` is a one-cycle strobe that had
+   not pulsed, `ip` was unchanged: it refetched the same instruction and executed the call
+   again. Usually this was harmless by accident, since the second strobe landed while the
+   file was mid-save and `S_CALL_SAVE` ignores `op_call`. But when the refetch was slow —
+   an I-cache fill — the file finished the whole frame and was back in `S_IDLE` before the
+   sequencer returned, and the second strobe was a *real* second call. **One `callx` was
+   observed building five frames and spilling to memory.** Fixed by making the strobes part
+   of the wait condition: `!rf_busy && !rf_call && !rf_ret && !rf_flush`.
+2. **The call target was presented live rather than latched.** `next_ip` is sampled in
+   `S_CALL_FIN`, several cycles after `op_call`, so the target must hold for the whole
+   frame sequence. For `callx` the target is `ea`, which depends on `rd1`/`rd2` — and those
+   change the moment `ra1`/`ra2` revert to their defaults on leaving `T_EXEC`. CTRL `call`
+   never exposed it because its target is `ip_next + disp`, with no register dependency.
+
+*How established:* a counter on `rf_call` assertions per retire. The first hypothesis —
+that the DUT was not reaching the frame machinery at all — was **wrong**, and the counter
+disproved it in one run by reading 6. A directed program containing exactly one `callx` and
+nothing else that can move the frame then isolated the target problem from the count
+problem; the two had been producing a single confusing symptom.
+
+*Why nothing caught it:* **the whole-CPU generator never emitted `call` or `ret`.** The
+frame path had a thorough unit test that drives `op_call` directly — and a unit test that
+drives the request itself cannot possibly observe a *sequencer* that drives it twice. This
+is the recurring failure mode of §10 in its sharpest form: a check that looks present and
+does nothing. The generator now emits `callx`, and the register seeding gives SP and FP a
+real home, which was never needed while nothing called.
+
+*Second-order finding.* A random program clobbers SP or FP, and the next call then spills
+sixteen words wherever that garbage points — including over the program. The i960's
+instruction cache has no coherency with data writes, so the DUT keeps executing the stale
+line while the reference, which has no cache, reads the new bytes. Both are correct and
+they cannot agree. Recorded as a deviation and the program is abandoned, exactly as for a
+subnormal operand. Likewise a `callx` targeting its own address recurses forever with the
+IP never changing, which the harness's "IP moved" retire detector reads as a stall.
+
+---
+
+**R12 — `cvtri` overflow was untested by construction, and wrong in two separate ways.**
+The whole-CPU suite had been passing on one seed. Sweeping seeds after R11 failed two of
+them on `cvtri`, and both were pre-existing.
+
+*What was believed:* that `eu > 31` identified an out-of-range conversion, and that
+`test_i960_fpmisc` covered the conversion path — it passes 1.2 M checks.
+
+*What is now known:*
+
+1. **The exponent test misses an entire band.** An exponent of exactly 31 covers magnitudes
+   from 2^31 up to 2^32, every one of which is out of int32 range **except** -2^31, which is
+   representable. `-3.18e9` wrapped silently to a positive value.
+2. **Rounding can carry the magnitude past 2^32.** `4294967295.5` rounds to 2^32, and the
+   shifted result was being truncated to 32 bits *before* the range check — so it read as
+   `0`, an entirely plausible small in-range value. The check must inspect the full-width
+   shift, not `int_abs[31]`.
+
+*Why the unit test passed anyway:* it contained the line
+`if (r < -2147483648.0 || r > 2147483647.0) return;` — **it skipped every out-of-range
+input**. The overflow path was excluded from a test whose entire purpose included it. The
+skip existed to avoid undefined behaviour in the C++ reference; the correct treatment is to
+*state* the expected value, not to decline to check.
+
+*A decision the oracle rule settles.* MAME casts a `double` to `int32_t`, which is
+undefined in C++ and yields x86's indefinite value `0x8000_0000`. The i960 manual instead
+specifies the truncated low 32 bits when the integer-overflow fault is masked. These
+disagree. **The oracle wins** (rule 11, order of authority), so the RTL returns
+`0x8000_0000`. This is recorded rather than buried because it is a case where MAME's
+behaviour is an artifact of its host rather than a model of the silicon — the same species
+of trap as R8, in a value rather than a cycle count. Nothing in Daytona converts an
+out-of-range float, so no game behaviour depends on the choice.
+
+*Cost:* the corrected range check and the latched call target together measure **6,979
+ALM** for `i960_top`, against 6,986 before — flat. Fmax moves 27.3 -> 26.84 MHz, which is
+immaterial against the 7.4x throughput margin established in R10.

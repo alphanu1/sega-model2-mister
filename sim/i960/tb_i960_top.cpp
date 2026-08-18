@@ -89,7 +89,9 @@ void dump_ring() {
   }
 }
 
+uint64_t rf_call_cnt = 0, frame_cyc = 0;
 void tick() {
+  if (dut->rootp->i960_top__DOT__rf_call) ++rf_call_cnt;
   const int ts_now = dut->rootp->i960_top__DOT__ts & 15;
   // PREFETCH INVARIANT, checked in the cycle a word is latched: whatever the
   // front end accepts must be the word actually at `ip`. A front end that hands
@@ -278,9 +280,13 @@ bool compare(uint64_t n) {
           if (!shown) std::printf("  (data memory agrees; divergence is in the load path)\n");
           dump_ring();
         }
-        std::printf("  MISMATCH retire %llu  %-4s got=%08x want=%08x  (IP %08x insn %08x)\n",
+        std::printf("  MISMATCH retire %llu  %-4s got=%08x want=%08x  (IP %08x insn %08x"
+                    " src1=r%d:%08x src2=r%d:%08x dstlit=%d)\n",
                     (unsigned long long)n, rn(i), dreg(i), ref.rf.r[i],
-                    exec_ip, exec_insn);
+                    exec_ip, exec_insn,
+                    exec_insn & 0x1f, ref.rf.r[exec_insn & 0x1f],
+                    (exec_insn >> 14) & 0x1f, ref.rf.r[(exec_insn >> 14) & 0x1f],
+                    !!(exec_insn & 0x2000));
       ++fails;
     }
   }
@@ -327,12 +333,15 @@ bool compare(uint64_t n) {
 
 int main(int argc, char **argv) {
   Verilated::commandArgs(argc, argv);
-  uint64_t progs = 200, steps = 60, seed = 1;
+  uint64_t progs = 200, steps = 60, seed = 1, smc_stops = 0;
+  bool directed = false, dtrace = false;
   for (int i = 1; i < argc; ++i) {
     if (!std::strncmp(argv[i], "+random=", 8)) progs = std::strtoull(argv[i]+8, nullptr, 10);
     if (!std::strcmp (argv[i], "+probe_fp"))  probe_fp = true;
     if (!std::strcmp (argv[i], "+bus_probe")) bus_probe = true;
     if (!std::strcmp (argv[i], "+loops"))     loop_mode = true;
+    if (!std::strcmp (argv[i], "+directed"))  directed  = true;
+    if (!std::strcmp (argv[i], "+dtrace"))    dtrace    = true;
     if (!std::strcmp (argv[i], "+mix=daytona")) mix_daytona = true;
     if (!std::strncmp(argv[i], "+seed=", 6))   seed  = std::strtoull(argv[i]+6, nullptr, 10);
     // Program length is the WORKING SET, and the working set is what decides
@@ -523,14 +532,41 @@ int main(int argc, char **argv) {
         // fine, but keep it out of r0-r2 (PFP/SP/RIP) to avoid perturbing the
         // frame machinery in a test aimed at the memory path.
         insn = (op << 24) | (((rng() % 24) + 4) << 19) | (0u << 14) | off;
-      } else if (cls == 11) {                          // lda
-        insn = (0x8cu << 24) | (((rng() % 24) + 4) << 19)
-             | (0u << 14) | (0x800u + ((rng() % 0x200u) << 2));
+      } else if (cls == 11) {                          // lda / callx
+        if ((rng() % 8) == 0) {
+          // Target CODE, not the data window: callx transfers control, so an
+          // address in the data window would execute whatever the random data
+          // happened to be. Word-aligned and inside the program.
+          // Never its own slot. A callx that targets itself recurses forever
+          // with the IP never changing, so the harness's "IP moved" retire
+          // detector cannot fire and a perfectly correct DUT is reported as a
+          // stall. Both sides would agree; there is simply nothing to measure.
+          uint32_t t = uint32_t(rng() % steps);
+          if (t == uint32_t(k)) t = uint32_t((k + 1) % steps);
+          insn = (0x86u << 24) | ((t * 4u) & 0xfffu);
+        } else {
+          insn = (0x8cu << 24) | (((rng() % 24) + 4) << 19)
+               | (0u << 14) | (0x800u + ((rng() % 0x200u) << 2));
+        }
       } else if (cls == 5) {                           // bbc / bbs
         insn = (((rng() & 1) ? 0x37u : 0x30u) << 24)
              | ((rng() % 32) << 19) | ((rng() % 32) << 14) | 0x2008;
       } else { insn = 0x5c0c0000u; }                   // unreachable filler
       prog.push_back(insn);
+    }
+    if (directed) {
+      // Every filler is an `lda` writing a distinct constant to a distinct
+      // register in r4..r27 -- never g15/FP, r0/PFP, r1/SP or r2/RIP. So the
+      // ONLY instruction in this program that can move the frame is the callx
+      // at 0, and any frame divergence is unambiguously its.
+      prog.assign(size_t(steps), 0u);
+      for (size_t k = 0; k < prog.size(); ++k)
+        prog[k] = (0x8cu << 24) | (uint32_t((k % 24) + 4) << 19)
+                | (0x100u + uint32_t(k) * 4u);
+      // callx to 0x20 (MEMA, absolute offset, no base register). Control lands
+      // at prog[8] and runs forward from there; there is deliberately no `ret`,
+      // because a return would fold two questions into one failure.
+      prog[0] = (0x86u << 24) | 0x20u;
     }
     if (loop_mode && prog.size() >= 16) {
       // Unconditional backward branch: target = IP + field, so the field is
@@ -563,6 +599,16 @@ int main(int argc, char **argv) {
       if (i < 16) dut->rootp->i960_top__DOT__u_regs__DOT__loc[i] = v;
       else        dut->rootp->i960_top__DOT__u_regs__DOT__glb[i-16] = v;
     }
+    // The i960 requires a valid stack before any call. Seeding SP/FP at random
+    // was invisible while the generator emitted no calls; with callx it puts a
+    // 16-word frame spill wherever the seed happened to land -- including on
+    // top of the program, which is self-modifying code the I-cache does not
+    // track. 0x2000 is clear of the program (<0x100) and of the data window
+    // (0x800-0xe00), and frames grow upward from there well within the budget.
+    // The spilled words are ordinary memory and ARE compared per retire.
+    ref.rf.r[31] = 0x2000;  ref.rf.r[1] = 0x2040;   // FP, SP
+    dut->rootp->i960_top__DOT__u_regs__DOT__glb[15] = 0x2000;
+    dut->rootp->i960_top__DOT__u_regs__DOT__loc[1]  = 0x2040;
     ref.AC = 0; ref.IP = 0;
     checking = true; ++gate_arms;
 
@@ -585,6 +631,7 @@ int main(int argc, char **argv) {
 
     // Run, comparing at each retire. The DUT retires when it re-enters fetch.
     const uint64_t budget = loop_mode ? steps * 5 : steps;
+    uint64_t calls_prev = rf_call_cnt;
     for (uint64_t r = 0; r < budget && fails == 0; ++r) {
       const uint32_t ip_before = dip();
       int guard = 0;
@@ -623,6 +670,15 @@ int main(int argc, char **argv) {
       // the architectural state one cycle early and reports a stale register.
       tick();
       exec_ip = ref.IP; exec_insn = ref.rd(ref.IP);
+      const uint64_t last_calls = calls_prev; calls_prev = rf_call_cnt;
+      if (directed || dtrace)
+        std::printf("  [dir] r%-3llu calls=%llu IP dut=%08x ref=%08x insn=%08x | "
+                    "PFP %08x/%08x SP %08x/%08x RIP %08x/%08x FP %08x/%08x\n",
+                    (unsigned long long)r,
+                    (unsigned long long)(rf_call_cnt - last_calls), dip(),
+                    ref.IP, exec_insn,
+                    dreg(0), ref.rf.r[0], dreg(1),  ref.rf.r[1],
+                    dreg(2), ref.rf.r[2], dreg(31), ref.rf.r[31]);
       { const uint32_t iw = exec_insn; const uint32_t o = iw>>24;
         if (o==0x78||o==0x68||o==0x6c||o==0x67) fpany++;
         if ((o==0x78||o==0x68||o==0x6c||o==0x67) && (iw&0x2000) && !(iw&0x00e00000)) fpwrites++; }
@@ -634,6 +690,26 @@ int main(int argc, char **argv) {
       // program at that point, the same as a trap.
       if (ref.fp_denorm_operand) { ++denorm_skips; break; }
       if (ref.fp_nan_result)     { ++nan_stops;    break; }
+      // SELF-MODIFYING CODE. A random program can clobber SP or FP, and the
+      // next call then spills sixteen words wherever that garbage points --
+      // including over the program. The i960 has an instruction cache with no
+      // coherency against data writes (real code must invalidate explicitly),
+      // so the DUT keeps executing the stale line while the reference, which
+      // has no cache, reads the new bytes. Both behave correctly and they
+      // cannot agree.
+      //
+      // Recorded deviation, handled like the subnormal operand and the zero
+      // divisor: abandon the program rather than measure the deviation. Without
+      // this the generator reports a register divergence dozens of retires
+      // later with nothing pointing back at the overwrite.
+      {
+        bool smc = false;
+        for (size_t k = 0; k < prog.size(); ++k) {
+          auto it = ref.rf.mem.find(uint32_t(k * 4));
+          if (it != ref.rf.mem.end() && it->second != prog[k]) { smc = true; break; }
+        }
+        if (smc) { ++smc_stops; break; }
+      }
       // Compare the DATA MEMORY after every retire, not the bus transaction
       // stream. The stream was the first attempt and it is wrong: an unaligned
       // access legitimately becomes several byte transactions in the DUT and
@@ -684,8 +760,9 @@ int main(int argc, char **argv) {
                 double(ticks) / double(total_retires));
   std::printf("  FP ops executed: %llu, of which FP-register destination: %llu\n", (unsigned long long)fpany, (unsigned long long)fpwrites);
   std::printf("  %llu ended early: subnormal FP operand, %llu: NaN result"
-              "  (both recorded deviations)\n",
-              (unsigned long long)denorm_skips, (unsigned long long)nan_stops);
+              ", %llu: self-modifying code  (all recorded deviations)\n",
+              (unsigned long long)denorm_skips, (unsigned long long)nan_stops,
+              (unsigned long long)smc_stops);
   std::printf("  fetch: %llu entered, %llu prefetch hits (%.1f%%), "
               "%llu extra T_FETCH cycles, %llu fill-wait cycles\n",
               (unsigned long long)fetch_enter, (unsigned long long)fetch_hit,

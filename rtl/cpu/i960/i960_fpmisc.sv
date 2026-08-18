@@ -175,14 +175,36 @@ module i960_fpmisc (
 
   // Integer result: shift the significand down to the units position. No
   // short-circuit on a negative exponent — 0.5 rounds to 1, not to 0.
+  // Keep the shift at full width. Truncating it to 32 bits first destroys the
+  // evidence: rounding can carry the magnitude up past 2^32 -- 4294967295.5
+  // rounds to 2^32 -- and the truncated result is then 0, which looks like a
+  // small in-range value and passes any test that only inspects bit 31.
+  logic [56:0] shifted;
+  assign shifted = rounded >> fbits;
+
   logic [31:0] int_abs;
   always_comb begin
     if (eu > 13'sd31) int_abs = 32'h8000_0000;
-    else              int_abs = 32'(rounded >> fbits);
+    else              int_abs = shifted[31:0];
   end
 
-  assign yi = a_nan ? 32'h8000_0000
-                    : (sa ? (~int_abs + 32'd1) : int_abs);
+  // Overflow is NOT `eu > 31`. An exponent of exactly 31 covers magnitudes in
+  // [2^31, 2^32), all of which are out of int32 range -- except -2^31, which is
+  // representable. Testing the exponent alone silently wrapped -3.18e9 to a
+  // positive value and agreed with nothing.
+  //
+  // The out-of-range value is 0x8000_0000, matching the oracle. MAME casts a
+  // double to int32_t, which is undefined in C++ and yields x86's indefinite
+  // value; the i960 manual instead specifies the truncated low 32 bits when the
+  // integer-overflow fault is masked. Those disagree, and the oracle wins --
+  // see the design study for the record. Daytona converts no out-of-range
+  // float, so nothing in the game depends on which was chosen.
+  logic ovf;
+  assign ovf = (eu > 13'sd31) || (|shifted[56:32]) ||
+               (shifted[31] && !(sa && (shifted[30:0] == 31'd0)));
+
+  assign yi = (a_nan || ovf) ? 32'h8000_0000
+                             : (sa ? (~int_abs + 32'd1) : int_abs);
 
   // Integral double result. The integral value is rounded * 2^(eu-52), so it
   // is renormalised rather than pasted back under the original exponent —

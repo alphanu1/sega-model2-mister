@@ -200,7 +200,7 @@ module i960_top (
     .ra1(ra1), .ra2(ra2), .rd1(rd1), .rd2(rd2),
     .wa(wa), .wd(wd), .we(we),
     .op_call(rf_call), .op_ret(rf_ret), .op_flushreg(rf_flush),
-    .call_ip(ip_next), .call_target(alu_or_ea), .call_type(3'd0),
+    .call_ip(ip_next), .call_target(call_tgt), .call_type(3'd0),
     .call_stack(32'd0),
     .busy(rf_busy), .next_ip(rf_next_ip), .next_ip_valid(rf_ip_valid),
     .mem_req(rf_mem_req), .mem_we(rf_mem_we), .mem_addr(rf_mem_addr),
@@ -415,6 +415,13 @@ module i960_top (
     .ea(ea), .needs_disp(agu_needs_disp), .valid(agu_valid)
   );
 
+  // The call target must be LATCHED, not presented live. `next_ip` is sampled
+  // in S_CALL_FIN, several cycles after `op_call`, so the target has to hold
+  // for the whole frame sequence. For callx the target is `ea`, which depends
+  // on rd1/rd2 -- and those change the moment ra1/ra2 revert to their defaults
+  // on leaving T_EXEC. CTRL `call` never exposed this because its target is
+  // `ip_next + disp`, with no register dependency at all.
+  logic [31:0] call_tgt;
   logic [31:0] alu_or_ea;
   assign alu_or_ea = (d_fmt == 2'd3) ? ea : (ip_next + d_disp);   // call target
 
@@ -674,6 +681,7 @@ module i960_top (
       wa        <= 5'd0;
       wd        <= 32'd0;
       rf_call   <= 1'b0;
+      call_tgt  <= 32'd0;
       rf_ret    <= 1'b0;
       rf_flush  <= 1'b0;
       fetch_addr<= 32'd0;
@@ -783,7 +791,8 @@ module i960_top (
                 // `ip + d_disp` and agreed with each other, which is exactly
                 // why lockstep could not see it.
                 8'h08: begin ip <= ip_next + d_disp; ts <= T_FETCH; end   // b
-                8'h09: begin rf_call <= 1'b1;   ts <= T_FRAME; end        // call
+                8'h09: begin rf_call <= 1'b1; call_tgt <= alu_or_ea;
+                             ts <= T_FRAME; end                          // call
                 8'h0a: begin rf_ret  <= 1'b1;   ts <= T_FRAME; end        // ret
                 8'h0b: begin                                              // bal
                   wa <= 5'd30; wd <= ip_next; we <= 1'b1;
@@ -896,6 +905,8 @@ module i960_top (
             default: begin                                // MEM
               if (!ls_valid || !agu_valid) begin
                 trap_op <= d_op; ts <= T_TRAP;
+              end else if (ls_nomem && (d_op == 8'h86)) begin  // callx
+                rf_call <= 1'b1; call_tgt <= ea; ts <= T_FRAME;
               end else if (ls_nomem) begin                // lda
                 wa <= d_srcdst; wd <= ea; we <= 1'b1;
                 ip <= ip_next; ts <= T_FETCH;
@@ -982,7 +993,26 @@ module i960_top (
           if (lsu_done_now || lsu_done) begin ip <= ip_next; ts <= T_FETCH; end
         end
 
-        T_FRAME: if (!rf_busy) begin
+        // The strobe must be part of the wait condition. `busy` is
+        // `state != S_IDLE` in the register file, and the register file has not
+        // yet SEEN the request in the first T_FRAME cycle -- op_call is only
+        // being presented then, so busy is still low and this exits one cycle
+        // early, before the frame operation has started. The sequencer then
+        // refetches the same instruction, because `rf_ip_valid` is a one-cycle
+        // strobe that has not pulsed yet, and executes the call a second time.
+        //
+        // Usually harmless by accident: the second strobe lands while the file
+        // is mid-save and S_CALL_SAVE ignores op_call, so it is swallowed. But
+        // when the refetch is slow -- an I-cache fill -- the file finishes the
+        // whole frame and is back in S_IDLE before the sequencer returns, and
+        // then the second strobe is a REAL second call. One callx was observed
+        // building five frames and spilling to memory.
+        //
+        // Neither `call` nor `ret` was ever emitted by the whole-CPU generator,
+        // so nothing had exercised this path at CPU level; the register-file
+        // unit test drives op_call directly and cannot see a sequencer that
+        // asserts it twice.
+        T_FRAME: if (!rf_busy && !rf_call && !rf_ret && !rf_flush) begin
           if (rf_ip_valid) ip <= rf_next_ip;
           ts <= T_FETCH;
         end

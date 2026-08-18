@@ -2693,37 +2693,63 @@ One generator note worth keeping: `callx`'s address is a **call target**, so it
 must point at code. Aimed into the data window it calls unwritten memory and
 executes `0xffffffff`, which tests the trap path instead of the call.
 
-### callx: dispatch confirmed, target latching fixed, one divergence left
+### callx lands, and it took two latent frame defects with it
 
-Instrumented rather than inferred. **`rf_call` asserts 100 times in a run, so
-`callx` does reach the frame machinery** — the earlier conclusion that "the DUT
-is not performing the call" was wrong.
+`callx` is implemented and verified. Daytona now executes **no unimplemented
+mnemonic**: all 80 distinct mnemonics in the 196,885-instruction sample are
+covered.
 
-**One real bug found and fixed along the way, and it is latent regardless:**
-`call_target` was presented **live** as `alu_or_ea`. `op_call` is sampled during
-`T_FRAME`, and for `callx` the target is `ea`, which depends on `rd1`/`rd2` --
-and those change the moment `ra1`/`ra2` revert to their defaults on leaving
-`T_EXEC`. CTRL `call` never exposed it because its target is `ip_next + disp`,
-with no register dependency. **The target must be latched when the call is
-issued.** That fix is correct and should be kept whenever `callx` lands.
+Getting there found four things, recorded as **R11** and **R12** in the study.
 
-It did not close the divergence:
+**The sequencer called twice for every call.** `T_FRAME` exited on `!rf_busy`,
+but `busy` is `state != S_IDLE` and the register file has not yet *seen* the
+request in the first `T_FRAME` cycle. So it left one cycle early, every time,
+refetched the same instruction and called again. Usually swallowed by accident;
+when the refetch was slow (an I-cache fill) it was a **real** second call. One
+`callx` was seen building five frames and spilling to memory. This was latent in
+`call` and `ret` too.
 
-```
-MISMATCH retire 43  g15  got=00000009 want=9d3d02c0
-```
+**The call target was live, not latched.** `next_ip` is sampled in `S_CALL_FIN`,
+several cycles after `op_call`. `callx`'s target is `ea`, which moves as soon as
+`ra1`/`ra2` revert on leaving `T_EXEC`.
 
-Eliminated, with evidence, so they are not re-tested:
-- the `ldst` decode, the sequencer branch, MEM-format classification, and
-  `lsu_req` staying low -- all verified present;
-- "the DUT never calls" -- disproved by the `rf_call` counter;
-- a live call target -- fixed, symptom unchanged.
+**Nothing could have caught either: the whole-CPU generator never emitted `call`
+or `ret`.** `i960_regs` has a thorough unit test, and a unit test that drives
+`op_call` itself cannot see a sequencer that drives it twice. Fixed at the
+source -- the generator now emits `callx`, and SP/FP are seeded to a real stack,
+which nothing needed while nothing called.
 
-`g15` is FP and `9` is not 64-aligned, so it was written by an ordinary
-instruction: the two sides are executing **different code** by retire 43, which
-means the call transferred somewhere different or returned differently. **Next:
-log the IP immediately after each `callx` on both sides** -- that distinguishes
-a wrong target from a wrong return, and no check so far separates those.
+**`cvtri` overflow was wrong twice, and the unit test skipped it.** Sweeping
+seeds after the above failed two of them, both pre-existing. `eu > 31` misses the
+whole exponent-31 band (2^31..2^32 is out of range except -2^31); and rounding
+can carry past 2^32, which was truncated to 32 bits *before* the range check and
+read as `0`. `tb_i960_fpmisc.cpp` contained `if (r < -2147483648.0 || r >
+2147483647.0) return;` -- it skipped every out-of-range input, so the overflow
+path was excluded from the test whose purpose included it. Now checked, plus a
+directed walk of the int32 boundary in both directions and all four rounding
+modes.
 
-Reverted. An unverified instruction is the same as no instruction, and this one
-is 0.26% of Daytona -- worth doing correctly rather than quickly.
+Two new recorded deviations in the whole-CPU harness, both abandon-the-program
+like the subnormal operand: **self-modifying code** (a clobbered SP/FP sends a
+frame spill over the program; the I-cache has no coherency with data writes and
+the reference has no cache) and **a `callx` targeting its own address** (correct
+infinite recursion that the "IP moved" retire detector reads as a stall).
+
+**State:** 15/15 suites pass; the whole-CPU lockstep is clean across **24 seeds**
+(it had been run on one). `T_FRAME` is now genuinely exercised at 2.6% of cycles.
+`i960_top` measures **6,979 ALM** (6,986 before -- flat), Fmax 27.3 -> 26.84 MHz,
+immaterial against the 7.4x throughput margin of R10.
+
+**Remaining i960 work**, none of it on Daytona's executed path:
+
+- faults and interrupts -- absent entirely, and both touch the sequencer
+- `synmov`/`synmovq`, `calls`, `modpc` -- bounded supervisor work
+- `rl` double-precision FP forms (four register reads against a two-port file);
+  `remr`
+- six glibc transcendentals -- M2-B found zero in Daytona; confirm before building
+- P1 exit criterion 3: real Model 2A ROM execution with no unimplemented-path hits
+
+**Worth doing next, on the evidence above:** the frame defects were invisible
+because a whole class of instruction was never generated. `calls`, `ret` and
+`flushreg` are still not emitted by the whole-CPU generator, and `ret` in
+particular has a spill/reload path that only the unit test has ever driven.

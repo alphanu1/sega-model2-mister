@@ -65,10 +65,18 @@ void chk_cvtir(int32_t I) {
 void chk_cvtri(double A, int rm, bool trunc_mode) {
   if (is_sub(A) || std::isnan(A) || std::isinf(A)) return;
   const double r = rti(A, trunc_mode ? 3 : rm);
-  if (r < -2147483648.0 || r > 2147483647.0) return;      // out of int32 range
+  // Out of int32 range is CHECKED, not skipped. Skipping it is why the module
+  // tested `eu > 31` for overflow -- which misses the entire exponent-31 band,
+  // where every magnitude from 2^31 up to 2^32 is out of range except -2^31 --
+  // and this test passed anyway. The C++ cast is undefined for those inputs, so
+  // the expected value is written out rather than computed.
+  const bool oor = (r < -2147483648.0 || r > 2147483647.0);
   set(trunc_mode ? OP_CVTZRI : OP_CVTRI, A, 0, 0, rm);
-  const uint32_t want = (uint32_t)(int32_t)r;
-  ++checks; if (dut->yi != want) fail(trunc_mode ? "cvtzri" : "cvtri", "yi", dut->yi, want);
+  const uint32_t want = oor ? 0x80000000u : (uint32_t)(int32_t)r;
+  ++checks; if (dut->yi != want) {
+    std::printf("    [cvtri in] A=%.10g rm=%d trunc=%d oor=%d\n", A, rm, trunc_mode, oor);
+    fail(trunc_mode ? "cvtzri" : "cvtri", "yi", dut->yi, want);
+  }
 }
 void chk_round(double A, int rm) {
   if (is_sub(A)) return;
@@ -112,6 +120,21 @@ int main(int argc, char **argv) {
   for (double h : {0.5,1.5,2.5,3.5,-0.5,-1.5,-2.5,-3.5,4.5,-4.5})
     for (int rm = 0; rm < 4; ++rm) { chk_round(h, rm); chk_cvtri(h, rm, false); }
   std::printf("  halfway cases in all four rounding modes\n");
+
+  // The int32 boundary, walked directly. Random 64-bit patterns reach the
+  // exponent-31 band about one time in 2048 and each one has to survive the
+  // subnormal and NaN filters, so the random sweep alone is not a boundary
+  // test. -2^31 is representable and +2^31 is not, and that asymmetry is the
+  // whole of the bug this was written for.
+  for (double b : {2147483646.0, 2147483647.0, 2147483648.0, 2147483649.0,
+                   4294967295.0, 4294967296.0, 8589934592.0,
+                   -2147483647.0, -2147483648.0, -2147483649.0,
+                   -4294967296.0, -8589934592.0})
+    for (double d : {-1.5, -0.5, 0.0, 0.5, 1.5})
+      for (int rm = 0; rm < 4; ++rm) {
+        chk_cvtri(b + d, rm, false); chk_cvtri(b + d, rm, true);
+      }
+  std::printf("  int32 boundary walked, both directions, all rounding modes\n");
 
   for (int64_t I : {0LL,1LL,-1LL,2147483647LL,-2147483648LL,12345678LL,-12345678LL}) chk_cvtir((int32_t)I);
 

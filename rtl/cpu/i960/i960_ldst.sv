@@ -79,6 +79,7 @@ module i960_ldst (
       8'h88: begin is_load  = 1'b1; size = 2'd1; end                    // ldos
       8'h8a: begin is_store = 1'b1; size = 2'd1; end                    // stos
       8'h8c: begin no_mem   = 1'b1;              end                    // lda
+      8'h86: begin no_mem   = 1'b1;              end                    // callx
       8'h90: begin is_load  = 1'b1;              end                    // ld
       8'h92: begin is_store = 1'b1;              end                    // st
       8'h98: begin is_load  = 1'b1; n_words = 3'd2; reg_mask = 5'h1e; end                 // ldl
