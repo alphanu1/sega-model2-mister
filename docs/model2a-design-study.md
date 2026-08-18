@@ -1,9 +1,10 @@
 # Sega Model 2A-CRX on Cyclone V — design study
 
-**Status: open, and materially better than it was.** Optimistic budget fits with ~3.8K
-spare against the 92% routing line; pessimistic is ~13.6K over. M2-E is closed and passed,
-which cut the renderer estimate from 15,000-25,000 to 8,000-14,000 on measured evidence
-and took the total from 38,500-61,300 down to **34,384-51,784**. Every block is anchored to a named MAME device except the
+**Status: the fit question is answered in the affirmative, on measurements.** Optimistic
+budget fits with **14.1K spare** against the 92% routing line; pessimistic is 1.7K over it
+and still fits the raw device. The total is **24,454-40,293**, down from 34,160-49,460 and
+originally 38,500-61,300 — and the movement came from *fitting six blocks*, not from a
+better argument. Only two rows in the budget are still estimates (§5.5). Every block is anchored to a named MAME device except the
 renderer, and one gate (M2-C) is now closed. The problem is no longer only the renderer:
 **three blocks have no licence-compatible RTL to start from — the renderer, the i960 and
 the SCSP — and together they are 26,000 of the 38,500 optimistic total.**
@@ -288,9 +289,14 @@ and that is where i960 implementations get expensive. Section 5 carries that cos
 
 ### 5.1 Anchors and conversion
 
-Strongest anchor is a measurement in the right currency, from this flow, on this part:
-**MB86233 = 2,554 ALM, 1 DSP block, 3 M10K**, including a full IEEE-754 single multiplier
-and adder, register file, AGU and sequencer.
+Strongest anchor is a measurement in the right currency, from this flow, on this part.
+**Re-measured at `tools/model1-ref` f48c842: MB86233 = 2,344 ALM, 1 DSP, 6 M10K, 43.86
+MHz**, including a full IEEE-754 single multiplier and adder, register file, AGU and
+sequencer. The earlier figure here was 2,554 ALM / 3 M10K; the core has since moved work
+into M10K, which is the direction that project's own resource finding predicts.
+
+The strongest anchor is now our own: **`i960_top` = 6,979 ALM**, an entire CPU with FPU,
+fitted here. See §5.5 for every block measured in every currency.
 
 **LE-to-ALM conversion.** 2:1 is the theoretical maximum, reached only when two
 independent functions of <=4 inputs share <=8 distinct inputs. Real CPU logic is mux-heavy
@@ -483,32 +489,77 @@ renderer it was not previously called out as a sourcing problem.
 
 ### 5.5 Total
 
+Every row that could be measured on this part, through this flow, now has been.
+Six blocks were fitted for this revision; only two rows remain estimates.
+
 | Block | Optimistic | Pessimistic | Status | Basis |
 |---|---|---|---|---|
-| i960KB + FPU | 9,000 | 14,000 | **7,079 measured** | assembled and fitted here, 7 DSP, 26.78 MHz |
-| 1x MB86234, pipelined | 3,000 | 5,000 | estimate | Model 1 measured 2,554 as an FSM |
-| 3D renderer | 8,000 | 14,000 | **estimate, now bracketed** | RDP 8,347 above; VDP1 below, unrun |
-| Sound, tilemap, I/O | 7,530 | 9,830 | **SCSP measured** | SCSP 2,030 — same chip; 68000/S24TILE still estimates |
+| i960KB + FPU | 6,979 | 9,500 | **6,979 measured** | assembled and fitted here. Optimistic = as built; pessimistic adds faults, interrupts, transcendentals and the `rl` forms |
+| 1x MB86234 | 2,344 | 4,000 | **2,344 measured (MB86233)** | Model 1's coprocessor, same family, fitted here. Pessimistic assumes pipelining |
+| 3D renderer | 2,537 | 8,347 | **bracketed, both ends measured** | VDP1 2,537 (floor: no Z, no perspective); RDP 8,347 (ceiling: more capable than Model 2 needs) |
+| Sound: SCSP + 68000 | 4,164 | 4,164 | **both measured** | SCSP 2,030 (same chip) + fx68k 2,134 (the core we intend to port) |
+| Tilemap + I/O | 1,800 | 7,652 | **ceiling measured** | VDP2 6,852 is a *ceiling* — Saturn's tilemap is far richer than Model 2's System 24 layer. I/O 315-5649 small |
 | `sys/` framework | 6,630 | 6,630 | **measured** | same framework, same device, from M2-E |
-| **Total** | **34,160** | **49,460** | | |
-| **Against 41,509** | fits, 7,349 spare | 7,951 over | | |
-| **Against 92% routing** | **fits, 4,028 spare** | 11,272 over | | |
+| **Total** | **24,454** | **40,293** | | |
+| **Against 41,910 ALM (device)** | fits, 17,456 spare | fits, 1,617 spare | | |
+| **Against 92% routing (38,557)** | **fits, 14,103 spare** | **1,736 over** | | |
 
-Revised from **34,384 - 51,784**. The optimistic end barely moved (-224); the
-pessimistic end came down 2,324, entirely because the SCSP stopped being a
-guess.
+Revised from **34,160 - 49,460**. Both ends moved a long way down, and none of it
+came from a better argument — it came from fitting six blocks instead of guessing
+at them. **The optimistic case now fits with room to spare, and even the
+pessimistic case fits the raw device.**
+
+#### Every measurement, in every currency
+
+The device is **41,910 ALM, 553 M10K, 112 DSP**. ALM has been the only currency
+this budget tracked; M10K is the one the Model 1 project found binding, so it is
+tabulated here too. All figures are Quartus 17.0.0 Build 595, 5CSEBA6U23I7,
+each block fitted standalone.
+
+| Block | ALM | registers | M10K | MLAB bits | DSP | Fmax | whose RTL |
+|---|---|---|---|---|---|---|---|
+| `i960_top` | **6,979** | 4,212 | 1 | 2,048 | 7 | 26.84 | **ours** |
+| `sys/` framework | **6,630** | — | — | — | — | — | upstream (M2-E) |
+| VDP2 (tilemap ceiling) | **6,852** | 9,184 | 4 | 272 | 12 | 65.73 | srg320 |
+| N64 RDP (renderer ceiling) | **8,347** | — | — | — | — | — | N64_MiSTer (M2-E) |
+| VDP1 (renderer floor) | **2,537** | 1,707 | 0 | 512 | 3 | 31.52 | srg320 |
+| `mb86233_core` | **2,344** | 1,819 | 6 | 0 | 1 | 43.86 | Model 1 (sister project) |
+| fx68k | **2,134** | 1,412 | 6 | 0 | 0 | 68.45 | ijor, GPL-3 — to port |
+| SCSP | **2,030** | 2,379 | 26 | 0 | 2 | 76.73 | srg320 |
+
+**Totalling the blocks a Model 2A actually needs** — i960 + MB86234 + renderer +
+SCSP + 68000 + tilemap + `sys/`:
+
+| | ALM | M10K | DSP |
+|---|---|---|---|
+| optimistic (VDP1 floor, modest tilemap) | 24,454 | ~45 | ~14 |
+| pessimistic (RDP ceiling, VDP2 tilemap) | 40,293 | ~55 | ~28 |
+| **device** | **41,910** | **553** | **112** |
+
+**M10K is not the binding resource for Model 2, and now that is measured rather
+than assumed.** The blocks together use tens of M10K against 553. That answers
+the concern the fx68k pull raised for the Model 1 project — it is real there and
+does not transfer here — with one caveat stated plainly: **the renderer's
+framebuffer and texture cache are not in these numbers**, because no renderer RTL
+exists. A 496x384 16-bit framebuffer alone is 3.0 Mbit, or 298 M10K, and that is
+the number to watch. DSP at ~28 of 112 is comfortable in every case.
 
 #### What is actually PROVEN, on this part, with Quartus 17.0.0
 
-**15,739 ALM — 38% of the device — is now measured rather than estimated.**
+**Six blocks totalling 31,506 ALM have been fitted on the target device.** Of the
+blocks a Model 2A needs, the measured total is **15,743 ALM of directly-usable
+figures** (i960 6,979 + `sys/` 6,630 + SCSP 2,030) plus bracketing proxies for
+everything else.
 
 | | ALM | whose RTL | what it proves |
 |---|---|---|---|
-| i960KB + FPU | **7,079** | **ours** | the CPU as built: integer, FPU, I-cache, register file, 7 DSP, 26.78 MHz |
+| i960KB + FPU | **6,979** | **ours** | the CPU as built: integer, FPU, I-cache, register file, 7 DSP, 26.84 MHz |
 | `sys/` framework | **6,630** | upstream | the same framework on the same device, whichever core wraps it |
 | SCSP | **2,030** | srg320 | the *same chip* Model 2 uses, fitted on the target part |
-| **total measured** | **15,739** | | |
-| of which our own RTL | 13,709 | | |
+| fx68k | **2,134** | ijor | the *actual core we intend to port*, GPL-3 and licence-clear |
+| MB86233 | **2,344** | Model 1 | the coprocessor's *sister part*, from a project measuring the same silicon |
+| **total measured** | **20,117** | | |
+| of which ours or portable | 11,457 | | |
 
 The three have different standing and it matters:
 
@@ -1295,3 +1346,48 @@ its rates alone when an instruction's cost depends on machine state.** A call co
 six cycles from the register cache and roughly sixty through memory, and nothing in a table
 of mnemonic frequencies says which. The check that makes this durable is not a better
 number, it is the generator printing its spill rate beside the measured one on every run.
+
+---
+
+**R14 — interrupts are required for Daytona, not optional, and "all 80 mnemonics
+implemented" does not mean the CPU can run the game.** R11 closed the last mnemonic Daytona
+executes. That is a real milestone and it is not the same claim as "the i960 is done".
+
+*What was believed:* that with `callx` built, the executed-instruction coverage was
+complete and the remaining i960 work — faults, interrupts, `synmov`, `modpc` — was a list of
+things Daytona does not reach. The remaining-work table filed interrupts under "bounded
+opcode work".
+
+*What is now known:* **Model 2 drives four i960 interrupt lines.** From
+`model2.cpp::irq_update()`:
+
+```
+m_maincpu->set_input_line(I960_IRQ0, m_intreq & 0b0000'0000'0001 ? ...);
+m_maincpu->set_input_line(I960_IRQ1, m_intreq & 0b0000'0000'0010 ? ...);
+m_maincpu->set_input_line(I960_IRQ2, m_intreq & 0b0011'1111'1100 ? ...);
+m_maincpu->set_input_line(I960_IRQ3, m_intreq & 0b1100'0000'0000 ? ...);
+```
+
+Twelve request sources — vblank, four timers, the sound UART — folded onto four lines. The
+core has **no `irq` port at all**, so none of this can be delivered.
+
+*Corroboration from the traces, and it is independent of MAME's interrupt model.* Over
+233,878 traced instructions there are 4,802 `call` and 612 `callx` but **5,602 `ret`** — 188
+more returns than calls. Some of that is window-boundary effect, but an interrupt return is
+a `ret` with no matching call in the trace, and 188 over three frames is the right order for
+an interrupt-driven game.
+
+*Consequence.* Interrupts are not a completeness item, they are a **prerequisite for
+executing Model 2 code at all**, and they are the gate in front of P1 exit criterion 3.
+They are also not merely an opcode: the mechanism needs the PRCB interrupt table, vectoring,
+a type-7 call onto a separate interrupt stack, the IP/AC save into the new frame, and `ret`
+dispatching on `PFP[2:0]` to undo it.
+
+*And a shared blind spot to fix with it.* **Both the module and its reference ignore
+`PFP[2:0]` entirely** — `ret` always performs a type-0 return. They therefore agree, and
+lockstep is silent. This is R11's lesson exactly: the reference and the design shared an
+omission, so no amount of fuzzing could see it. MAME switches on the type and
+`fatalerror`s on 1-6.
+
+*The honest scorecard.* Daytona's *instruction set* is complete. Daytona's *machine* is
+not.

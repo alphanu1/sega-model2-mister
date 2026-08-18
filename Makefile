@@ -350,7 +350,24 @@ SRCS_i960_top    := $(TOP_RTL)
 SAT := third_party/saturn
 SRCS_SCSP := $(SAT)/SCSP/SCSP_pkg.sv $(SAT)/SCSP/SCSP.sv
 SRCS_VDP1 := $(SAT)/VDP1/VDP1_pkg.sv $(SAT)/VDP1/VDP1.sv
-SRCS_VDP2 := $(SAT)/VDP2/VDP2_pkg.sv $(SAT)/VDP2/VDP2.sv
+SRCS_VDP2 := $(SAT)/VDP2/VDP2_pkg.sv $(SAT)/VDP2/VDP2_MEM.sv $(SAT)/VDP2/VDP2.sv
+
+# Third-party blocks measured to replace budget ESTIMATES with figures on this
+# part, through this flow. None of this code ships; it is measured because an
+# estimate with no anchor is the weakest row in the budget.
+#
+#   fx68k     the sound 68000 we intend to port (GPL-3.0, THIRD_PARTY.md)
+#   MB86233   Model 1's geometry coprocessor, from tools/model1-ref. Model 2's
+#             MB86234 is the same family, so this bounds a row that has only ever
+#             carried a 3,000-5,000 estimate. READ ONLY: the build directory is
+#             ours, nothing is written inside the reference clone.
+FX  := third_party/fx68k
+M1R := tools/model1-ref/rtl/tgp
+SRCS_fx68k    := $(FX)/uaddrPla.sv $(FX)/fx68kAlu.sv $(FX)/fx68k.sv
+SRCS_mb86233_core := $(M1R)/mb86233_pkg.sv $(M1R)/fp_add.sv $(M1R)/fp_mul.sv \
+                 $(M1R)/fp_div.sv $(M1R)/mb86233_dec.sv $(M1R)/mb86233_alu.sv \
+                 $(M1R)/mb86233_agu.sv $(M1R)/mb86233_regs.sv $(M1R)/mb86233_mem.sv \
+                 $(M1R)/mb86233_xfer.sv $(M1R)/mb86233_seq.sv $(M1R)/mb86233_core.sv
 
 # Rule 8's lint gate exists to stop OUR unlintable RTL reaching the fitter. It
 # is meaningless against code we neither own nor may modify, so these targets
@@ -362,7 +379,7 @@ SRCS_VDP2 := $(SAT)/VDP2/VDP2_pkg.sv $(SAT)/VDP2/VDP2.sv
 # better than running a command that always passes. The figure these produce is
 # an AREA MEASUREMENT of somebody else's verified core -- it is not evidence
 # about anything we wrote, and rule 8 still applies in full to rtl/.
-lint_SCSP lint_VDP1 lint_VDP2:
+lint_SCSP lint_VDP1 lint_VDP2 lint_fx68k lint_mb86233_core:
 	@echo "== $(@:lint_%=%): third-party, area measurement only"
 	@echo "   no pre-fitter check possible (Altera megafunctions); rule 8 unaffected"
 

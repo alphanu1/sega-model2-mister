@@ -2754,15 +2754,56 @@ the general case and took three separate traces to see in full.
 been run on one). `i960_top` measures **6,979 ALM** (6,986 before -- flat), Fmax
 27.3 -> 26.84 MHz.
 
-**Remaining i960 work**, none of it on Daytona's executed path:
+**Remaining i960 work.** Daytona's *instruction set* is complete; Daytona's
+*machine* is not.
 
-- faults and interrupts -- absent entirely, and both touch the sequencer
-- `synmov`/`synmovq`, `calls`, `modpc` -- bounded supervisor work; note `calls`
-  measures 0.000% in the traces
+- **interrupts — a prerequisite, not a completeness item (R14).** Model 2 drives
+  **four** i960 interrupt lines from a 12-bit request register (vblank, four
+  timers, sound UART) via `model2.cpp::irq_update()`. **The core has no `irq`
+  port at all.** Needs the PRCB interrupt table, vectoring, a type-7 call onto a
+  separate interrupt stack, the IP/AC save, and `ret` dispatching on `PFP[2:0]`.
+  This gates P1 exit criterion 3.
+- **`ret` ignores `PFP[2:0]` in BOTH the module and the reference**, so they agree
+  and lockstep is silent — R11's lesson repeating. MAME switches on the type and
+  `fatalerror`s on 1-6. Fix with interrupts.
+- faults — absent entirely, and they touch the sequencer
+- `synmov`/`synmovq`, `calls`, `modpc` — bounded; `calls` measures 0.000% in the
+  traces
 - `rl` double-precision FP forms (four register reads against a two-port file);
   `remr`
-- six glibc transcendentals -- M2-B found zero in Daytona; confirm before building
-- P1 exit criterion 3: real Model 2A ROM execution with no unimplemented-path hits
+- six glibc transcendentals — M2-B found zero in Daytona; confirm before building
+
+### Every block measured, in every currency
+
+Six blocks fitted this session on 5CSEBA6U23I7 with Quartus 17.0.0. The budget
+now has **two estimate rows left**; everything else is a figure.
+
+| Block | ALM | reg | M10K | MLAB bits | DSP | Fmax | whose RTL |
+|---|---|---|---|---|---|---|---|
+| `i960_top` | **6,979** | 4,212 | 1 | 2,048 | 7 | 26.84 | **ours** |
+| `sys/` framework | **6,630** | — | — | — | — | — | upstream (M2-E) |
+| VDP2 (tilemap ceiling) | **6,852** | 9,184 | 4 | 272 | 12 | 65.73 | srg320 |
+| N64 RDP (renderer ceiling) | **8,347** | — | — | — | — | — | N64 (M2-E) |
+| VDP1 (renderer floor) | **2,537** | 1,707 | 0 | 512 | 3 | 31.52 | srg320 |
+| `mb86233_core` | **2,344** | 1,819 | 6 | 0 | 1 | 43.86 | Model 1 |
+| fx68k | **2,134** | 1,412 | 6 | 0 | 0 | 68.45 | ijor, GPL-3 |
+| SCSP | **2,030** | 2,379 | 26 | 0 | 2 | 76.73 | srg320 |
+
+Device: **41,910 ALM, 553 M10K, 112 DSP**. Budget total **24,454 - 40,293 ALM**
+(was 34,160 - 49,460). **The optimistic case fits with 14.1K spare against the
+92% routing line; the pessimistic case fits the raw device.**
+
+**M10K is not binding here, and that is now measured rather than assumed** — tens
+of blocks against 553. One caveat stated plainly: **the renderer's framebuffer and
+texture cache are in none of these numbers**, because no renderer RTL exists. A
+496x384 16-bit framebuffer alone is 3.0 Mbit = 298 M10K. That is the number to
+watch, and it is the only resource question still open.
+
+`tools/model1-ref` pulled to **f48c842** per rule 10. Its new commit is docs-only
+but carries a warning worth honouring: **its TGP trace figures recorded before
+2026-08-18 are invalid** — the bench's microcode loader assigned `uc_data`/`uc_addr`
+non-blockingly, so the coprocessor executed from the wrong addresses. Area
+measurements are unaffected, which is why the MB86233 re-measure above stands.
 
 **The standing lesson from this session, and it is the fourth instance.** Every
 defect found here was in code that had a passing test. The frame path had a unit
