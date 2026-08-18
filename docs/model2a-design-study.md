@@ -5,8 +5,10 @@ the renderer, pulled forward from P5/P6. The decision and its cost are recorded 
 This study is unaffected: it still holds that the fit question governs, and P1.5
 explicitly does not advance it.
 
-**Throughput caveat (R15): the i960 demand figure is withdrawn.** The area figures below
-are unaffected — they are fitter output, not traces.
+**Throughput: settled by R16 at ~3.0x margin** (R10 and R13 were withdrawn by R15; R16
+replaces them from verified-uncollapsed traces). Demand is 30,949 instructions of work per
+frame; the core runs it in 33.4% of a frame. Area figures were never affected — they are
+fitter output, not traces.
 
 **Status: the fit question is answered in the affirmative, on measurements.** Optimistic
 budget fits with **14.1K spare** against the 92% routing line; pessimistic is 1.7K over it
@@ -591,7 +593,7 @@ the same — it is a specific, listable set:
 | interrupts | absent entirely; no `irq` port exists. Needs the PRCB interrupt table, vectoring, a type-7 call onto the interrupt stack, and the IP/AC save-restore |
 | `synmov`/`synmovq`, `calls`, `modpc` | bounded opcode work. `calls` measures 0.000% in the Daytona traces (R13) |
 | `rl` double-precision forms | needs four register reads against a two-port file |
-| the pipeline | **REOPENED by R15.** It was struck on R10's grounds that the 12.5 M floor was the chip's capability rather than the game's demand — and R10's demand measurement is withdrawn, because every trace behind it was loop-collapsed. What survives: our Fmax is **26.84 MHz against the real part's 25**, so the clock is met, but our multi-cycle sequencer runs ~4-5 CPI against the real chip's 1.3-2. The gap is structural, not incidental. Whether Daytona needs the real rate is once again **unmeasured** |
+| ~~the pipeline~~ | **struck again by R16, now on measured grounds.** It was struck on R10's grounds that the 12.5 M floor was the chip's capability rather than the game's demand — and R10's demand measurement is withdrawn, because every trace behind it was loop-collapsed. Fmax is **26.84 MHz against the real part's 25**, so the clock is met. Our ~5 CPI against the chip's 1.3-2 is real, but **71-73% of Daytona's instruction stream is two poll loops**, measured over 12 consecutive frames: demand is 30,949 instructions of work per frame, run in **33.4% of a frame**. The pipeline is not required for Model 2 |
 
 The optimistic 9,000 assumes the transcendentals go mostly to M10K and the
 pipeline costs little area; the pessimistic 14,000 assumes neither. **Neither
@@ -1481,3 +1483,85 @@ The warning was transcribed into this repository and the traces were not re-run
 against it. **A lesson recorded is not a lesson applied.** `tools/i960-trace.sh`
 now refuses to return any trace containing a collapse marker, which is the only
 form of this that survives being forgotten.
+
+---
+
+**R16 — the throughput question, measured properly at last: ~3x margin, and the
+reason the earlier answers were wrong is now visible.** R15 withdrew R10 and R13.
+This replaces them, from traces taken with the collapse flag *verified* rather
+than assumed.
+
+*Method.* `tools/mame_i960_frame_trace.lua` starts the trace on a frame notifier
+at frame 2300 of `daytona93` attract mode (~40 s in, the same window R10 used),
+runs 12 consecutive frames, marks each boundary with `tracelog`, and
+`tools/i960-trace.sh` refuses any trace containing a collapse marker. 1,285,223
+instructions, 0 markers.
+
+*The measurement.*
+
+| | per frame |
+|---|---|
+| total instructions | 106,754 - 107,883 (mean **107,101**) |
+| spin-loop instructions | 76,758 - 77,746 (**71.3 - 72.7%**) |
+| **work** | 29,208 - **30,949** |
+| distinct PCs | ~5,000 |
+
+Two poll loops account for all of the spin:
+
+```
+000012B0: ldob    0x500000,r3        69.2% of the frame, 37,000 iterations
+000012B8: cmpibe  r3,g0,0x12b0
+0001166C: ld      0x91fff0,r3         2.6%
+00011674: cmpibne 0,r3,0x1166c
+```
+
+*The decisive observation, and it is the one R10 asserted without ever showing.*
+**The total is near-constant while the work varies.** Across 12 frames the total
+moves 1.1% (106,754-107,883) while the work moves 6% (29,208-30,949), and at a
+lighter point in attract mode (frame 3200) the work drops to 6,464 while the total
+*stays* at 110,739. The CPU executes a fixed number of instructions per frame
+because **it spins to fill whatever time is left**. So the total is **capacity, not
+demand** — and a poll loop that runs fewer times still exits, because what it waits
+on is driven by real time, not by CPU speed.
+
+*The answer.*
+
+- **Demand is peak work per frame: 30,949 instructions**, or 1.78 M instr/s at
+  57.5 fps.
+- At the core's **5.33 M instr/s**, that is **5.81 ms of a 17.39 ms frame — 33.4%
+  utilisation, about 3.0x headroom.**
+- The 5.33 figure is **conservative**, because R13's mix over-weighted the
+  expensive frame operations (below), so the true CPI is lower.
+
+*R13's census, recounted on clean data* (work-only, 356,587 instructions):
+
+| mnemonic | R13 (collapsed) | R16 (clean) |
+|---|---|---|
+| `call` | 2.053% | **1.543%** |
+| `ret` | 2.395% | **1.772%** |
+| `callx` | 0.262% | **0.225%** |
+| `calls` | 0.000% | 0.000% |
+| `flushreg` | 0.000% | 0.000% |
+
+Overstated by ~30%, in the predicted direction: collapsing hides loop bodies, so
+it under-represents the cheap loads and branches that fill loops and
+over-represents everything else. **The generator mix should be re-derived from
+this trace**; until it is, the CPI of 5.04 stands as an upper bound.
+
+*So where R10, R13 and R15 each landed.*
+
+| | work/frame | demand | margin |
+|---|---|---|---|
+| R10 | 15,400 | 0.93 M instr/s | 7.4x |
+| R13 | (same) | (same) | 5.7x |
+| R15 | withdrawn | withdrawn | unproven |
+| **R16** | **30,949** | **1.78 M instr/s** | **~3.0x** |
+
+**R10's conclusion survives; its number was out by 2x and its evidence was
+invalid.** The pipeline is still not required for Model 2 — but that now rests on
+a measured 72% spin fraction rather than a claimed 0.1%.
+
+*The caveat that remains, and it is the same one R10 had.* This is **attract
+mode**, sampled at three points across 14 frames. Gameplay is not sampled and
+could be heavier. That is a bounded, known gap rather than an assumption — and
+the tooling to close it now exists and refuses to lie.

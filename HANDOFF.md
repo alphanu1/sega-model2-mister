@@ -2693,6 +2693,54 @@ One generator note worth keeping: `callx`'s address is a **call target**, so it
 must point at code. Aimed into the data window it calls unwritten memory and
 executes `0xffffffff`, which tests the trap path instead of the call.
 
+### SETTLED (R16): ~3.0x throughput headroom, measured properly
+
+R15 withdrew R10 and R13. **R16 replaces them, and R10's conclusion survives with
+its number out by 2x and its evidence replaced.**
+
+Twelve consecutive attract-mode frames at frame 2300 of `daytona93`, traced with
+the collapse flag **verified** (1,285,223 instructions, 0 collapse markers):
+
+| | per frame |
+|---|---|
+| total | 106,754 - 107,883 (mean 107,101) |
+| spin | 71.3 - 72.7% |
+| **work** | 29,208 - **30,949** |
+
+Two poll loops are all of it — `ldob 0x500000`/`cmpibe` at **69.2%** of the frame,
+and `ld 0x91fff0`/`cmpibne` at 2.6%.
+
+**The decisive observation, which R10 asserted and never showed: the total is
+near-constant while the work varies.** Total moves 1.1% across 12 frames while
+work moves 6%, and at a lighter point work drops to 6,464 while the total holds at
+110,739. The CPU spins to fill the frame, so **the total is capacity, not demand**
+— and a poll loop that runs fewer times still exits, because what it waits on is
+driven by real time.
+
+**Demand: 30,949 instructions of work per frame = 1.78 M instr/s. At 5.33 M
+instr/s that is 5.81 ms of a 17.39 ms frame — 33.4%, about 3.0x headroom.** And
+5.33 is conservative: R13's mix over-weighted the expensive frame ops.
+
+**R13's census recounted clean** (work-only, 356,587 instructions): `call` 1.543%
+(was 2.053%), `ret` 1.772% (was 2.395%), `callx` 0.225% (was 0.262%) — overstated
+~30%, in the predicted direction. **The generator mix should be re-derived from
+this trace**; until then CPI 5.04 is an upper bound.
+
+| | work/frame | demand | margin |
+|---|---|---|---|
+| R10 | 15,400 | 0.93 M/s | 7.4x |
+| R13 | same | same | 5.7x |
+| R15 | withdrawn | withdrawn | unproven |
+| **R16** | **30,949** | **1.78 M/s** | **~3.0x** |
+
+Same caveat R10 had, now stated as a bounded gap: **attract mode only**, 14 frames
+at three points. Gameplay is unsampled and could be heavier. The tooling to close
+it exists and refuses to return a collapsed trace.
+
+**Tooling:** `tools/i960-trace.sh` (verifies, refuses collapse markers) and
+`tools/mame_i960_frame_trace.lua` (frame-notifier driven, `tracelog` boundary
+markers, works around the unresolved long-`gtime` failure).
+
 ### RETRACTION (R15): the i960 throughput numbers came from loop-collapsed traces
 
 **Read this before quoting any instructions/second figure.**

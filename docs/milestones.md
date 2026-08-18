@@ -37,12 +37,12 @@ longer four numbers with no RTL behind them.** `sys/` (6,630) and the SCSP
 renderer is the one row with nothing of ours in it, and it is bracketed rather
 than anchored: the N64 RDP's 8,347 above, Saturn's VDP1 below.
 
-> **R15 note.** The reasoning below, and the P1.5 decision after it, were written
-> against a throughput position that has since been withdrawn. The **area** case is
-> unaffected and still holds — it is fitter output. The **timing** case is reopened:
-> our 26.84 MHz clears the real part's 25 MHz, but our ~4-5 CPI against the chip's
-> 1.3-2 is a structural gap, and whether Daytona needs the real rate is unmeasured.
-> P1.5 is unaffected either way: it contains no CPU.
+> **R15/R16 note.** The throughput figures below were withdrawn by R15 and replaced
+> by R16, measured from verified-uncollapsed traces: **71-73% of Daytona's
+> instruction stream is two poll loops**, demand is **30,949 instructions of work per
+> frame**, and the core runs that in **33.4% of a frame — about 3.0x headroom**. The
+> pipeline remains unnecessary for Model 2, now on measured grounds rather than a
+> claimed 0.1% spin fraction. The **area** case was never affected.
 
 **Therefore: build the i960 and the renderer first.** They are 57% of the
 optimistic budget, they are the only two blocks with no licence-compatible RTL
