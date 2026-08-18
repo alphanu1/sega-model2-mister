@@ -1925,3 +1925,35 @@ and measured:
 The cache interface that makes all of it possible **is committed and costs
 nothing** — `vaddr`, `req_demand`, and a read path that answers the request it
 names rather than whatever address the requester has moved to.
+
+### Overlap: the harness is PROVEN correct; the fault is in the overlap
+
+Isolated it rather than guessing. With `exec_can_overlap` forced to `1'b0` and
+**every other change kept** — the queue, the addressed valid, and the harness's
+retire-ordered comparison — the suite **passes**.
+
+So:
+
+- **The harness change is correct.** Removing the extra tick and applying the
+  pending `we`/`wa`/`wd` inside `dreg()` gives exactly the retiring
+  instruction's state, for both the two-cycle and the back-to-back case. This
+  is the change that must land before any pipelining, and it is now verified
+  independently of the thing it was written for.
+- **The overlap causes an extra retire.** The DUT ends up one instruction ahead
+  of the reference from retire 23, which means one harness iteration advanced
+  the DUT twice.
+
+The cycle trace shows the overlap itself behaving correctly — one instruction
+per cycle, `ip` 0x74 -> 0x78 -> ... — so the extra advance is at a **boundary**:
+most likely the transition from a multi-cycle instruction (`T_MULDIV` at 0x70 in
+the failing case) back into an overlapped sequence, where the retire that ends
+the multi-cycle instruction and the first overlapped retire land in the same
+harness iteration.
+
+**Next: instrument the boundary, not the steady state.** Count overlap firings
+and compare against retires — if firings + normal retires exceeds retires
+counted, the double advance is proven and localised. The steady state has
+already been traced and is correct, so tracing more of it will not help.
+
+Measured value stands at CPI 4.96 -> 4.76 for the overlap, and the queue is
+required for it but is a regression alone (5.07).
