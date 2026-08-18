@@ -131,6 +131,7 @@ module i960_muldiv (
   logic [32:0] divisor_ext;
   logic [63:0] quot;
   logic [6:0]  bitcnt;
+  logic        is_e_q;      // this operation has a 64-bit dividend
   logic        q_neg, r_neg, div_by_zero;
   // modi adds the divisor back when the operands' product is negative and the
   // remainder is non-zero. The condition is bit 31 of the 32-bit product, taken
@@ -165,6 +166,7 @@ module i960_muldiv (
       rem_acc  <= 33'd0;
       quot     <= 64'd0;
       bitcnt   <= 7'd0;
+      is_e_q   <= 1'b0;
       q_neg    <= 1'b0;
       r_neg    <= 1'b0;
       div_by_zero <= 1'b0;
@@ -187,11 +189,20 @@ module i960_muldiv (
             r_neg <= is_signed && src2[31];
             div_by_zero <= (src1 == 32'd0);
             mod_prod_neg <= prod_u[31];
+            // A 32-bit dividend goes in the HIGH half and runs 32 steps, not
+            // the low half for 64. `shifted` takes quot[63], so a dividend in
+            // the low half spends the first 32 iterations shifting out zeros
+            // and producing zero quotient bits -- half the latency of every
+            // ordinary divide, wasted. ediv genuinely has a 64-bit dividend and
+            // keeps all 64.
+            //
+            // Divide was 17.6% of all cycles on ~1% of instructions.
             dvd_mag <= is_e ? {src2_hi, src2}
-                            : (is_signed && src2[31]) ? {32'd0, (~src2 + 32'd1)}
-                                                      : {32'd0, src2};
+                            : (is_signed && src2[31]) ? {(~src2 + 32'd1), 32'd0}
+                                                      : {src2, 32'd0};
             dsr_mag <= (is_signed && !is_e && src1[31]) ? (~src1 + 32'd1) : src1;
             src1_q  <= src1;
+            is_e_q  <= is_e;
             rem_acc <= 33'd0;
             bitcnt  <= 7'd0;
             state   <= S_DIV;
@@ -216,7 +227,7 @@ module i960_muldiv (
             quot <= dvd_mag;
             divisor_ext <= {1'b0, dsr_mag};
             bitcnt <= 7'd1;
-          end else if (bitcnt <= 7'd64) begin
+          end else if (bitcnt <= (is_e_q ? 7'd64 : 7'd32)) begin
             if (shifted >= divisor_ext) begin
               rem_acc <= shifted - divisor_ext;
               quot    <= {quot[62:0], 1'b1};
