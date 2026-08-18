@@ -2547,3 +2547,45 @@ Both halves of `throughput = Fmax / CPI` now have the same answer:
 incremental route returned +143% this session (2.82 -> 6.84 M instr/s) and is
 now exhausted -- every remaining lever has been measured and each is worth
 under 2%, negative, or blocked on the same missing cache abstraction.
+
+## Fmax: three stage boundaries measured, none pays. The delay is INSIDE the units
+
+| configuration | CPI | Fmax | throughput |
+|---|---|---|---|
+| baseline | 3.91 | 26.76 | **6.84 M instr/s** |
+| + X/W boundary (ALU result registered) | 4.12 | 27.20 | 6.60 |
+| + D/X boundary (decode registered) | 3.91 | 26.54 | 6.79 |
+| + both | 4.12 | 26.60 | 6.46 |
+
+**Every cut moves the limit rather than lifting it**, and the path report says
+why each time:
+
+- baseline: `rd1 -> wd`
+- with X/W cut: `insn[11] -> wd` — a different path, nearly as long
+- with both: **back to `rd1 -> wd`**, slack 2.628 -> 2.409
+
+`rd1` feeds the ALU *and* the AGU, and both end at `wd` — `lda` writes
+`wd <= ea`. Registering the ALU's output simply promotes the AGU's path. There
+is a **plateau** of comparable paths, all of the form
+`register -> one functional unit -> wd`.
+
+### The conclusion, and it is well evidenced now
+
+**A stage boundary cannot lift Fmax here, because the delay is inside the
+functional units rather than between them.** Cutting at a unit's output leaves
+`rd1 -> unit`, which the X/W experiment showed is most of the delay: registering
+the ALU output bought 1.6%.
+
+So a universal writeback stage — every unit's result through one register —
+would cost ~1.0 CPI (break-even needs Fmax > 33.6 MHz) and, by the same
+measurement, would not get there.
+
+**Fmax work means making the units shallower**, which is backlog item 2 (share
+the ALU datapath: 973 ALM, six shift forms, four comparators and three adders
+described separately) and its equivalent for the AGU. That reduces logic depth
+without costing a cycle, and it is the only remaining lever that is not blocked.
+
+**What is now measured rather than assumed:** the pipeline the spike document
+has called for since the beginning would *not*, on its own, fix Fmax on this
+design. It would fix CPI. Those are different problems here, and only one of
+them has a structural answer.
