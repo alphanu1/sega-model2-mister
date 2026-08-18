@@ -32,9 +32,9 @@ recorded rather than referenced in place.
 |---|---|---|
 | MB86234 TGP | `rtl/tgp/` — 12 modules, 3,179 lines | MAME's `mb86234_device` is an empty subclass of `mb86233_device`, so this transfers unmodified. Design study §5.4.1. |
 | S24TILE tilemap | `rtl/video/m1_tile_*.sv`, `m1_palette.sv` | Model 1 and Model 2 instantiate the same chip. Base addresses differ. |
-| SDRAM controller | `rtl/mem/m1_sdram.sv` | |
-| ROM loader | `rtl/io/m1_rom_loader.sv` | Carries the `ioctl_wait` gating fixes |
-| Clock domain crossing | `rtl/mem/m1_cdc_*.sv`, `m1_fetch_bridge.sv` | |
+| **SDRAM controller — COPIED, `rtl/mem/m2_sdram.sv`** | `rtl/mem/m1_sdram.sv` @ **`b895e6c`** | Renamed only. NOT yet instantiated. Lints clean with `-Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-WIDTHEXPAND`; those six warnings are upstream's and the file is deliberately unedited. |
+| **ROM loader — COPIED, `rtl/io/m2_rom_loader.sv`** | `rtl/io/m1_rom_loader.sv` @ **`b895e6c`** | Renamed only. NOT yet instantiated. Carries the `ioctl_wait` gating fixes: `ioctl_wait` asks the HPS to stop rather than stopping it, so writes go to a short FIFO and the wait asserts while it still has room. |
+| **CDC — COPIED, `rtl/mem/m2_cdc_port.sv`, `m2_cdc_pulse.sv`** | `rtl/mem/m1_cdc_*.sv` @ **`b895e6c`** | Renamed only. NOT yet instantiated. `m1_fetch_bridge.sv` not taken yet. |
 | **Debug overlay — COPIED, in `rtl/video/m2_diag.sv`** | `rtl/video/m1_diag.sv` @ **`b895e6c`** | Changed: module and file renamed `m1_`->`m2_`, header retargeted. Logic untouched. Instantiated with NWORDS=4. |
 | **Video timing — COPIED, in `rtl/video/m2_video_timing.sv`** | `rtl/video/m1_video_timing.sv` @ **`f48c842`** | **No retiming.** MAME declares both machines identically — Model 1 `set_raw(XTAL(16'000'000), 656, 0, 496, 424, 0, 384)`, Model 2 `set_raw(32_MHz_XTAL/2, 656, 0, 496, 424, 0, 384)`. Changed: module and file renamed `m1_`->`m2_`, header and one comment retargeted. Logic untouched. Verified against MAME's numbers by `sim/video/tb_m2_video_timing.cpp`. |
 | Verification harness | `Makefile`, `sim/` | Per-module fuzz targets and the lockstep bridge |

@@ -2693,6 +2693,38 @@ One generator note worth keeping: `callx`'s address is a **call target**, so it
 must point at code. Aimed into the data window it calls unwritten memory and
 executes `0xffffffff`, which tests the trap path instead of the call.
 
+### P1.5 step 3 STARTED: modules lifted, NOT yet wired
+
+**Deliberately bounded.** The four modules are in `rtl/` and lint clean; nothing is
+instantiated, so the build and `make test` (16 suites) are untouched and green.
+Integration is the next session's work, not a half-finished tree.
+
+| file | lines | from `b895e6c` |
+|---|---|---|
+| `rtl/mem/m2_sdram.sv` | 741 | `m1_sdram.sv` |
+| `rtl/io/m2_rom_loader.sv` | 316 | `m1_rom_loader.sv` |
+| `rtl/mem/m2_cdc_port.sv` | 173 | `m1_cdc_port.sv` |
+| `rtl/mem/m2_cdc_pulse.sv` | 59 | `m1_cdc_pulse.sv` |
+
+Renamed only — logic untouched. `m2_sdram.sv` raises six lint warnings
+(`UNUSEDSIGNAL`, `UNUSEDPARAM`, `WIDTHEXPAND`); **they are upstream's and the file
+is deliberately unedited**, so it is linted with those three suppressed. Do not
+"fix" them here; fix them upstream or leave them.
+
+**What integration must get right, in order of how expensive it is to get wrong:**
+
+1. **One access is `req & ack`, not one cycle of `req`.** `i960_lsu.sv` holds
+   `bus_req` for the whole transfer state. Harmless for RAM, fatal for the FIFO
+   and I/O behind it. `docs/mister-integration.md`.
+2. **`ioctl_wait` gated on `ioctl_download`** — it stalls the HPS itself
+   otherwise. The lifted loader already carries the fix and the FIFO that makes it
+   work: `ioctl_wait` *asks* the host to stop and it does not stop instantly.
+3. **Memory out of reset on PLL lock and stays out**, separate from game reset.
+   `Model2.sv` already splits `mem_rst_n` from `game_rst_n` for exactly this.
+4. **`mem_ready` and `rom_loaded` are different facts** and must not share a signal.
+5. **Layout is `docs/rom-layout.md`** — 43.62 MB, fits a 128 MB board with 84 MB
+   spare, no DDR3 split needed. `m2_fetch_bridge` not yet taken.
+
 ### P1.5 step 2 DONE: the overlay is in, and it prints the timing numbers
 
 `rtl/video/m2_diag.sv`, lifted from Model 1 at `b895e6c`, wired over the test
