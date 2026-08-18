@@ -2496,3 +2496,54 @@ reached from the other direction, and it is now reached twice independently.
 waiting" is not a miss once fills continue behind delivered words, and no
 version of this change can be evaluated while the metric moves with the
 mechanism.
+
+## Fmax: the design is limited by a FAMILY of paths, not one
+
+Throughput is Fmax / CPI, and a whole session went into CPI while Fmax sat at
+26.76 MHz with the critical path unchanged since morning: `rd1 -> wd`, register
+read through the ALU and result muxing into writeback.
+
+**Tested the obvious cut.** A second execute stage latches the ALU result, so
+`rd1 -> ALU -> mux -> wd` becomes two halves. All 15 suites pass.
+
+| | CPI | Fmax | throughput |
+|---|---|---|---|
+| baseline | 3.91 | 26.76 | **6.84 M instr/s** |
+| split execute | 4.12 | 27.20 | 6.60 M instr/s |
+
+**It costs 0.21 CPI and buys 1.6% of Fmax.** Break-even needed 28.2 MHz. A
+regression, and reverted.
+
+### Why, and this is the useful part
+
+With the ALU path cut, the critical path became **`insn[11] -> wd`** — a
+*different* path of almost the same length, running from the instruction
+register through decode and operand select into writeback. Slack 2.628 -> 3.232;
+the limit moved rather than lifted.
+
+**So the design is not limited by one long path. It is limited by a family of
+comparable paths that all begin at a register feeding decode/execute and all end
+at `wd`.** Cutting one promotes the next. That is why:
+
+- registering the register-file read (this morning) bought 8%, not the "large"
+  the backlog predicted;
+- splitting the execute datapath buys 1.6%;
+- and any further single-path surgery will buy about as little.
+
+**Fmax needs a stage boundary that ALL of these paths cross, which is what a
+pipeline is** — not a targeted cut. Piecemeal Fmax work is now measured, twice,
+as not paying.
+
+### What that means for the remaining 1.83x
+
+Both halves of `throughput = Fmax / CPI` now have the same answer:
+
+- **CPI**: `T_EXEC` at 1.00 is irreducible without overlapping stages; the fetch
+  levers need the cache's outstanding-request record; everything cheap is done.
+- **Fmax**: limited by a family of paths, liftable only by a real stage
+  boundary.
+
+**Both roads lead to the same place, and it is a genuine pipeline.** The
+incremental route returned +143% this session (2.82 -> 6.84 M instr/s) and is
+now exhausted -- every remaining lever has been measured and each is worth
+under 2%, negative, or blocked on the same missing cache abstraction.
