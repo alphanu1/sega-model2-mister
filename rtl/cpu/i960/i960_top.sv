@@ -442,7 +442,20 @@ module i960_top (
   i960_memmap u_memmap (.addr(ea), .is_burst(mm_burst));
 
   /* verilator lint_off UNUSEDSIGNAL */
-  logic        lsu_req, lsu_busy, lsu_done, lsu_ldwe;
+  // COMBINATIONAL, asserted during T_EXEC rather than registered into T_MEM_W.
+  //
+  // Registered, the LSU did not see the request until the first T_MEM_W cycle,
+  // so that cycle was spent merely accepting it -- one of the three a load
+  // costs, against a bus that acks immediately. Driving it from the execute
+  // state lets the LSU be in its transfer state by the time T_MEM_W begins.
+  //
+  // Its inputs are ready: `ea` is combinational from the AGU, and `ls_*` from
+  // i960_ldst, both valid throughout T_EXEC. Stores gain nothing (they still
+  // wait in S_OPD for the register value) and lose nothing.
+  logic        lsu_busy, lsu_done, lsu_ldwe;
+  logic        lsu_req;
+  assign lsu_req = (ts == T_EXEC) && (d_fmt == 2'd3) &&
+                   ls_valid && agu_valid && !ls_nomem;
   logic [2:0]  lsu_curidx;
   /* verilator lint_on UNUSEDSIGNAL */
   logic [2:0]  lsu_widx;
@@ -653,7 +666,6 @@ module i960_top (
       trap_op   <= 8'd0;
       halted    <= 1'b0;
       ic_req    <= 1'b0;
-      lsu_req   <= 1'b0;
       we        <= 1'b0;
       wa        <= 5'd0;
       wd        <= 32'd0;
@@ -667,7 +679,6 @@ module i960_top (
       fsqrt_req <= 1'b0;
     end else begin
       ic_req   <= 1'b0;
-      lsu_req  <= 1'b0;
       md_req   <= 1'b0;
       // These are one-cycle strobes and were missing from this list. Left
       // asserted, a unit restarts the instant it returns to idle, spins
@@ -885,8 +896,7 @@ module i960_top (
                 wa <= d_srcdst; wd <= ea; we <= 1'b1;
                 ip <= ip_next; ts <= T_FETCH;
               end else begin
-                lsu_req <= 1'b1;
-                ts      <= T_MEM_W;
+                ts <= T_MEM_W;   // lsu_req is already asserted, see above
               end
             end
           endcase
