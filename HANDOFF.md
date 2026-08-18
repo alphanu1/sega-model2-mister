@@ -2109,3 +2109,48 @@ Remaining measured levers, in order of confidence:
 | fetch/execute overlap | ~1.0 CPI | works, blocked on prefetch queue — **see the STOP note** |
 | memory as a full stage | ~0.6 CPI left | `T_MEM_W` still 1.19; the store path still pays `S_OPD` |
 | I-cache miss cost | 0.49 cyc/instr | 82.5% hit rate; unsized, and unsizable on this workload |
+
+## Memory retire and divide latency — CPI 4.51 -> 3.91
+
+**Retire in the ack cycle.** `done` and `ld_we` were registered, so the
+sequencer spent a whole cycle merely *noticing* an access had finished. The LSU
+now also exposes `ld_we_now`/`ld_word_now`/`done_now` — the same retire known
+combinationally in the ack cycle — and `T_MEM_W` acts on those. The registered
+forms remain for the byte-split path, which retires a state later out of
+`assemble` and cannot be known early.
+
+**`T_MEM_W` 1.19 -> 0.74 cyc/instr.** Fmax 27.78 -> 26.67, and the net is still
+positive: 6.16 -> 6.54 M instr/s.
+
+**Divide ran at double length.** The restoring divider always took 64
+iterations. `shifted` takes `quot[63]`, and a 32-bit dividend sat in the LOW
+half of `dvd_mag` — so the first 32 iterations shifted out zeros and produced
+zero quotient bits. Half the latency of every ordinary divide, wasted, on a
+state that was **17.6% of all cycles for about 1% of instructions**.
+
+A 32-bit dividend now goes in the high half and runs 32 steps; `ediv` keeps 64.
+**`T_MULDIV` 0.72 -> 0.55 cyc/instr** — less than half, because multiplies share
+the state.
+
+### Position
+
+```
+i960_top   7,137 ALM   1 M10K   7 DSP   Fmax 26.76
+CPI 3.91   ->  6.84 M instr/s   against 12.5 M   =  1.83x gap
+session:   2.82 -> 6.84 M instr/s
+```
+
+Profile now, and the shape has changed completely from this morning:
+
+```
+T_FETCH    1.02   26%   <- the overlap's target
+T_EXEC     1.00   26%   <- the overlap's target
+T_MEM_W    0.74   19%   was 1.64
+T_MULDIV   0.55   14%   was 0.84
+T_FETCH_W  0.51   13%
+```
+
+**Fetch plus execute is now 52% of all cycles**, and collapsing them is exactly
+what the fetch/execute overlap does — worth ~1.0 CPI, which alone would give
+~9.1 M instr/s. It remains blocked on the prefetch queue; see the STOP note and
+its four rules before attempting it again.
