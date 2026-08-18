@@ -2639,3 +2639,56 @@ throughput target quoted without its workload. The measurement that settles it
 took hours and could have been done first.
 
 **Before optimising against a number, establish what measured it.**
+
+## The i960's remaining work is ONE instruction, not thirty-four
+
+Cross-referenced 196,885 instructions of Daytona traces against what the design
+implements. **80 distinct mnemonics executed; exactly one is missing:**
+
+```
+callx    513    0.261%
+```
+
+Every other mnemonic the game uses is built. The coverage figure of "129 of 163"
+counts the *architecture*; against the *workload* it is 79 of 80.
+
+**That reframes the remaining i960 work completely.** The 34 unimplemented
+mnemonics are not 34 tasks — they are one task plus a list of things Daytona
+never executes. The six glibc transcendentals, the `rl` forms and `remr` do not
+appear at all, consistent with M2-B finding zero transcendentals.
+
+*Caveat, and it is real:* one game, in attract mode running a full demo race.
+Interactive play adds input handling. Other Model 2 titles may use more. But as
+a scoping measurement it is far better than building all 34 and discovering
+which are dead.
+
+### callx: implemented, and NOT yet correct
+
+`callx` is MEM format — compute the effective address, then call it. Both halves
+already existed: the AGU produces `ea`, `call_target` is already wired to
+`alu_or_ea` which selects `ea` for MEM format, and the frame machinery is the
+same one `call` uses. Joining them is a few lines in `i960_ldst`, the sequencer,
+and both references.
+
+Done, and it diverges:
+
+```
+MISMATCH retire 43  g15  got=00000009 want=9d3d02c0   (later instruction)
+```
+
+`g15` is FP, and `FP = (SP + 63) & ~63` is always 64-aligned — `9` is not a
+frame pointer. **The reference performs the call and the DUT does not**, with
+the divergence surfacing later on an unrelated instruction.
+
+Verified present and therefore NOT the cause: `8'h86` decodes in `i960_ldst`
+with `no_mem`, the sequencer's `d_op == 8'h86` branch exists, `0x86` is MEM
+format, and `lsu_req` correctly stays low for it.
+
+Worth checking next: whether the DUT reaches `T_FRAME` at all for `callx`
+(count entries with and without it generated), and whether `agu_valid` holds for
+its addressing mode. Reverted rather than committed -- an implementation the
+harness has not verified is the same as no implementation.
+
+One generator note worth keeping: `callx`'s address is a **call target**, so it
+must point at code. Aimed into the data window it calls unwritten memory and
+executes `0xffffffff`, which tests the trap path instead of the call.
