@@ -37,6 +37,13 @@ longer four numbers with no RTL behind them.** `sys/` (6,630) and the SCSP
 renderer is the one row with nothing of ours in it, and it is bracketed rather
 than anchored: the N64 RDP's 8,347 above, Saturn's VDP1 below.
 
+> **R15 note.** The reasoning below, and the P1.5 decision after it, were written
+> against a throughput position that has since been withdrawn. The **area** case is
+> unaffected and still holds — it is fitter output. The **timing** case is reopened:
+> our 26.84 MHz clears the real part's 25 MHz, but our ~4-5 CPI against the chip's
+> 1.3-2 is a structural gap, and whether Daytona needs the real rate is unmeasured.
+> P1.5 is unaffected either way: it contains no CPU.
+
 **Therefore: build the i960 and the renderer first.** They are 57% of the
 optimistic budget, they are the only two blocks with no licence-compatible RTL
 anywhere (§5.4.3, §2.1), and they carry the widest error bars. Nothing else

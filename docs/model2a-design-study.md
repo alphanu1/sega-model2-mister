@@ -591,7 +591,7 @@ the same — it is a specific, listable set:
 | interrupts | absent entirely; no `irq` port exists. Needs the PRCB interrupt table, vectoring, a type-7 call onto the interrupt stack, and the IP/AC save-restore |
 | `synmov`/`synmovq`, `calls`, `modpc` | bounded opcode work. `calls` measures 0.000% in the Daytona traces (R13) |
 | `rl` double-precision forms | needs four register reads against a two-port file |
-| ~~the pipeline~~ | **struck by R10.** The 12.5 M floor was the chip's capability, not the game's demand. Measured demand is 0.93 M instr/s against 5.33 delivered (R13) — the pipeline is not required for Model 2 |
+| the pipeline | **REOPENED by R15.** It was struck on R10's grounds that the 12.5 M floor was the chip's capability rather than the game's demand — and R10's demand measurement is withdrawn, because every trace behind it was loop-collapsed. What survives: our Fmax is **26.84 MHz against the real part's 25**, so the clock is met, but our multi-cycle sequencer runs ~4-5 CPI against the real chip's 1.3-2. The gap is structural, not incidental. Whether Daytona needs the real rate is once again **unmeasured** |
 
 The optimistic 9,000 assumes the transcendentals go mostly to M10K and the
 pipeline costs little area; the pessimistic 14,000 assumes neither. **Neither
