@@ -2068,3 +2068,44 @@ needed to reach 12.5 M instr/s.
 returned. The memory stage — `T_MEM_W` at 1.64 cyc/instr, ~33% of CPI, estimated
 ~1.15 CPI — is worth comparable throughput, is independent of all of this, and
 has none of the accumulated confusion. **Consider doing that first.**
+
+## Memory path: request issued during execute — CPI 4.96 -> 4.51
+
+`lsu_req` was registered, so the LSU did not see the request until the first
+`T_MEM_W` cycle. That cycle was spent **merely accepting** it — one of the three
+a load costs, against a bus that acks immediately. Driving it combinationally
+from `T_EXEC` puts the LSU in its transfer state by the time `T_MEM_W` begins.
+
+Its inputs are ready throughout execute: `ea` is combinational from the AGU,
+the `ls_*` controls from `i960_ldst`. Stores gain nothing — they still wait in
+`S_OPD` for the register value — and lose nothing.
+
+| | before | after |
+|---|---|---|
+| `T_MEM_W` | 1.64 cyc/instr (33%) | **1.19 (26.3%)** |
+| CPI | 4.96 | **4.51** |
+| Fmax | 26.73 | **27.78** |
+| ALM | 7,227 | 7,238 (+11) |
+| **throughput** | 5.39 M instr/s | **6.16 M instr/s** |
+
+**Chosen over the LSU-side fast-issue path**, which was attempted twice and
+failed both times — the second stalling the block harness with no clear cause.
+This saves the same cycle without touching the state machine three defects were
+recently fixed in. *When two routes reach the same cycle, prefer the one that
+does not modify the component with recent history.*
+
+Fmax rose rather than fell, so the added combinational path is not on the
+critical one; the gain is most likely the cache-interface work landing.
+
+### Standing position
+
+**6.16 M instr/s against 12.5 M — a 2.03x gap**, from 4.4x at the start of the
+session. Area 7,238 ALM against a 12K pass band, M10K 1 of 553.
+
+Remaining measured levers, in order of confidence:
+
+| lever | worth | state |
+|---|---|---|
+| fetch/execute overlap | ~1.0 CPI | works, blocked on prefetch queue — **see the STOP note** |
+| memory as a full stage | ~0.6 CPI left | `T_MEM_W` still 1.19; the store path still pays `S_OPD` |
+| I-cache miss cost | 0.49 cyc/instr | 82.5% hit rate; unsized, and unsizable on this workload |
