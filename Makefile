@@ -173,8 +173,8 @@ synth_i960_ldst:
 
 # --------------------------------------------------------------------- tests
 
-.PHONY: test test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top
-test: test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top
+.PHONY: test test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top
+test: test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top
 
 test_i960_dec: obj_i960_dec/Vi960_dec
 	@echo "== test i960_dec"
@@ -296,6 +296,17 @@ obj_i960_fpcvt/Vi960_fpcvt: $(FPC_RTL) $(TB)/tb_i960_fpcvt.cpp
 	$(VBUILD) --top-module i960_fpcvt -CFLAGS "-O2 -I../$(TB)" \
 	  --Mdir obj_i960_fpcvt -o Vi960_fpcvt $(FPC_RTL) $(TB)/tb_i960_fpcvt.cpp
 
+test_m2_video_timing: obj_m2_vt/Vm2_video_timing
+	@echo "== test m2_video_timing (against MAME set_raw)"
+	./obj_m2_vt/Vm2_video_timing
+
+obj_m2_vt/Vm2_video_timing: $(VID_RTL) sim/video/tb_m2_video_timing.cpp
+	$(VBUILD) --top-module m2_video_timing -CFLAGS "-O2" \
+	  --Mdir obj_m2_vt -o Vm2_video_timing $(VID_RTL) sim/video/tb_m2_video_timing.cpp
+
+lint_m2_video_timing lint_m2_testpattern:
+	@verilator --lint-only -Wall -Wno-DECLFILENAME $(SRCS_$(@:lint_%=%))
+
 test_i960_top: obj_i960_top/Vi960_top
 	@echo "== test i960_top (whole-CPU lockstep)"
 	./obj_i960_top/Vi960_top $(TEST_ARGS)
@@ -333,6 +344,9 @@ SRCS_i960_fpsqrt := $(FPS_RTL)
 SRCS_i960_fpmisc := $(FPX_RTL)
 SRCS_i960_fpcvt  := $(FPC_RTL)
 SRCS_i960_top    := $(TOP_RTL)
+VID_RTL := rtl/video/m2_video_timing.sv
+SRCS_m2_video_timing := $(VID_RTL)
+SRCS_m2_testpattern  := rtl/video/m2_testpattern.sv
 
 # ---------------------------------------------------------------------------
 # M2-E proxies: third-party cores measured on THIS part, for area only.

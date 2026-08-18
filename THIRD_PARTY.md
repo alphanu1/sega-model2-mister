@@ -20,7 +20,7 @@ MAME does this deliberately.
 ## In use
 
 ### alphanu1/sega-model1-mister — GPL-3.0-or-later
-*Verified 2026-08-16 · pinned at `6fd28aa`, cloned from the local repository rather than GitHub*
+*Verified 2026-08-18 · pinned at `f48c842`, cloned from the local repository rather than GitHub*
 
 Our own Model 1 core, and the largest single source of RTL here. Available as a
 read-only reference clone at `tools/model1-ref`, which is git-ignored and not
@@ -36,7 +36,7 @@ recorded rather than referenced in place.
 | ROM loader | `rtl/io/m1_rom_loader.sv` | Carries the `ioctl_wait` gating fixes |
 | Clock domain crossing | `rtl/mem/m1_cdc_*.sv`, `m1_fetch_bridge.sv` | |
 | Debug overlay | `rtl/video/m1_diag.sv` | 307 ALM measured |
-| Video timing | `rtl/video/m1_video_timing.sv` | Retimed for 496x384 |
+| **Video timing — COPIED, in `rtl/video/m2_video_timing.sv`** | `rtl/video/m1_video_timing.sv` @ **`f48c842`** | **No retiming.** MAME declares both machines identically — Model 1 `set_raw(XTAL(16'000'000), 656, 0, 496, 424, 0, 384)`, Model 2 `set_raw(32_MHz_XTAL/2, 656, 0, 496, 424, 0, 384)`. Changed: module and file renamed `m1_`->`m2_`, header and one comment retargeted. Logic untouched. Verified against MAME's numbers by `sim/video/tb_m2_video_timing.cpp`. |
 | Verification harness | `Makefile`, `sim/` | Per-module fuzz targets and the lockstep bridge |
 
 **Not ported:** `rtl/cpu/v60/` — Model 2's main CPU is the i960KB. Nothing from
