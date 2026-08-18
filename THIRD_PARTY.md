@@ -20,7 +20,7 @@ MAME does this deliberately.
 ## In use
 
 ### alphanu1/sega-model1-mister — GPL-3.0-or-later
-*Verified 2026-08-18 · pinned at `198e1d9`, cloned from the local repository rather than GitHub*
+*Verified 2026-08-18 · pinned at `b895e6c`, cloned from the local repository rather than GitHub*
 
 Our own Model 1 core, and the largest single source of RTL here. Available as a
 read-only reference clone at `tools/model1-ref`, which is git-ignored and not

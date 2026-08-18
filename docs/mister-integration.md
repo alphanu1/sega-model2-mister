@@ -130,6 +130,46 @@ Two lessons, and the second is the bigger one:
 
 ## Clocking
 
+### A side-effecting target acts on the HANDSHAKE, never on the level
+
+**One access is `req & ack`, not one cycle of `req`.**
+
+A master holds its request until acknowledged — ours does: `i960_lsu.sv` drives
+`bus_req = (state == S_XFER)` and drops it when `bus_ack` retires the state. That
+is correct, and for RAM it is also harmless, because reading the same word twice
+returns the same word.
+
+**For anything with a side effect it is not harmless.** A FIFO, a
+read-to-clear status register, an auto-incrementing port: each cycle the level is
+high looks like another access.
+
+The Model 1 core hit exactly this in its TGP (`b895e6c`, measured not inferred).
+Its coprocessor asserts `mem_req` across two states because a registered RAM read
+needs the address to stay put, and its FIFO logic was:
+
+```systemverilog
+assign fifo_in_pop   = fifo_rd && fifo_in_valid;    // fired EVERY cycle
+assign fifo_out_push = fifo_wr && !fifo_out_full;   // likewise
+```
+
+So every `mov (x1), b` consumed **two** command words and every `mov p, (bx1)`
+pushed its result **twice**. The symptom was a hardware deadlock — the coprocessor
+waiting forever for a word the CPU had already sent — and the double push was
+found one minute after the double pop was fixed, because the first correct result
+printed twice. **Left alone it would have fed a duplicate and gone wrong one
+command later, which is far harder to see than the deadlock that was hiding it.**
+
+The fix shape is worth copying: a `popped`/`pushed` flag that clears when the
+request drops, so the action happens once however long the access is held; the pop
+fires on the first cycle the data is actually present, so an access that arrives at
+an empty FIFO still completes when the other side fills it; and the ack accepts
+"already done" as complete.
+
+**This applies to every peripheral P1.5 step 3 and beyond attaches to the i960
+bus** — the ROM loader, the geometry FIFO, the I/O chip, read-to-clear status. It
+is cheap to get right up front and produces a deadlock plus a masked duplicate if
+got wrong.
+
 ### Use the generated PLL IP, and name it `pll`
 
 `sys_top.sdc` puts every core PLL output into one clock group by matching a

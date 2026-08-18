@@ -2693,6 +2693,39 @@ One generator note worth keeping: `callx`'s address is a **call target**, so it
 must point at code. Aimed into the data window it calls unwritten memory and
 executes `0xffffffff`, which tests the trap path instead of the call.
 
+### One access is `req & ack`, not one cycle of `req` — pulled at `b895e6c`
+
+Model 1 found a TGP FIFO bug that **transfers straight to our bus fabric**, and
+P1.5 step 3 is where we build it.
+
+Its coprocessor holds `mem_req` across two states (a registered RAM read needs the
+address to stay put), and its FIFO logic popped/pushed on the *level*:
+
+```systemverilog
+assign fifo_in_pop   = fifo_rd && fifo_in_valid;    // fired EVERY cycle
+assign fifo_out_push = fifo_wr && !fifo_out_full;   // likewise
+```
+
+Every `mov (x1), b` consumed **two** command words; every `mov p, (bx1)` pushed
+**twice**. Symptom: a hardware deadlock, the copro waiting for a word the V60 had
+already sent. **The double push was found one minute after the double pop was
+fixed, because the first correct result printed twice** — left alone it would have
+fed a duplicate and gone wrong one command later, much harder to see than the
+deadlock hiding it.
+
+**Our exposure is real but on the peripheral side.** `i960_lsu.sv` drives
+`bus_req = (state == S_XFER)` and drops it on `bus_ack` — correct, and harmless
+for RAM, because reading the same word twice returns the same word. It is *not*
+harmless for a FIFO, a read-to-clear register, or an auto-incrementing port.
+**Every peripheral step 3 attaches must count one access per handshake.** Recorded
+as a standing rule in `docs/mister-integration.md`, with the fix shape worth
+copying: a `popped`/`pushed` flag cleared when the request drops, the pop firing on
+the first cycle data is actually present so an access to an empty FIFO still
+completes, and the ack accepting "already done".
+
+**`mb86233_core` re-measured: 2,355 ALM, unchanged** — the fix is in `m1_tgp.sv`,
+outside the core. Budget row stands.
+
 ### R17: Model 1 has measured that MEMORY, not the CPU, is the throughput lever
 
 Pulled `tools/model1-ref` to **`198e1d9`** (15 new commits) per rule 10. Two of
