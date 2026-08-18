@@ -2366,3 +2366,43 @@ reads the filled line back.
 
 Round 9 changes were reverted; the atomic slot is worth re-applying when the
 cache is fixed, since it is correct and costs nothing.
+
+### Round 10: correction — the cache is NOT proven corrupt, and speculation is safe
+
+**Retraction.** Round 9 concluded "the cache returns the wrong word for 0xd4"
+from this line:
+
+```
+icv=0  icva=000000d4  icd=22600000
+```
+
+**`icv` is 0.** The cache was not answering, so `ic_data` was merely the array's
+last registered read and carries no claim about correctness. Concluding cache
+corruption from a signal sampled while its qualifier is low is the same error as
+reading a bus during a cycle nobody acked — and it is the third over-conclusion
+on this feature.
+
+**What is now genuinely established**, by a directed block-level test rather
+than inference: `spec_during_fill()` issues a speculative request in the middle
+of a demand fill, at every point in it, against lines that do and do not alias
+the one being filled, then reads back every word of the filled line.
+**All pass.** So speculative traffic during a fill does *not* corrupt the line,
+does not abort the fill, and does not rename its answer.
+
+That test is committed and is a permanent coverage addition — the harness had no
+way to express speculative traffic before, which is precisely the traffic a
+prefetching front end generates.
+
+**So the overlap's fault is still not located.** What is known:
+
+- the slot is atomic and still ends up holding a wrong word for its own address;
+- the capture check (word vs memory at capture time) is silent;
+- the cache contract check (valid implies data == memory[vaddr]) is silent;
+- speculative-during-fill is now proven safe at block level.
+
+**Next, and it must be a check that cannot be silent for the wrong reason:**
+sample `pf_insn`/`pf_ip` on *every* cycle they change, log the writing path, and
+diff against memory. Every check so far has sampled a condition; this needs to
+sample a *transition*. Three of this feature's rounds have been lost to a check
+that was silent because it was disabled, duplicated, or gated on a signal that
+was low.

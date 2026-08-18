@@ -120,6 +120,34 @@ bool abort_case(uint32_t a, uint32_t b, int delay, const char *why) {
   return fetch(a, "after-abort");
 }
 
+// Speculative requests arriving DURING a fill, then the filled line read back.
+// Nothing else in this harness issues a request the cache may not abort, and
+// that is exactly the traffic a prefetching front end generates. The whole-CPU
+// harness sees the consequence -- a wrong instruction word -- many cycles after
+// the line is corrupted, with nothing pointing at the cache.
+bool spec_during_fill(uint32_t line, uint32_t spec, int delay, const char *why) {
+  // Demand miss on `line` starts a fill.
+  dut->addr = line >> 2; dut->req = 1; dut->req_demand = 1; tick(); dut->req = 0;
+  for (int i = 0; i < delay; i++) tick();
+
+  // Speculative request mid-fill. It must not abort the fill, must not rename
+  // the answer, and must not leave the line marked valid with partial data.
+  dut->addr = spec >> 2; dut->req = 1; dut->req_demand = 0; tick();
+  dut->req = 0; dut->req_demand = 1;
+
+  int i = 0;
+  for (; i < 200 && !dut->valid; i++) tick();
+  if (i == 200) {
+    std::printf("  STALL   [%s] fill %08x + spec %08x after %d\n",
+                why, line, spec, delay);
+    ++fails; return false;
+  }
+  // Every word of the filled line must now be correct.
+  bool ok = true;
+  for (uint32_t w = 0; w < 4; ++w) ok &= fetch(line + w * 4, "after-spec");
+  return ok;
+}
+
 void reset() {
   dut->rst_n = 0; dut->req = 0; dut->req_demand = 1; dut->inval = 0; dut->bus_ack = 0;
   for (int i = 0; i < 4; i++) tick();
@@ -169,6 +197,20 @@ int main(int argc, char **argv) {
       abort_case(0x0300, 0x0304, delay, "same-line");
     }
     std::printf("  redirect mid-fill                  : %llu failures\n",
+                (unsigned long long)(fails - f0));
+  }
+
+  // Speculative traffic during a fill, at every point in it and against lines
+  // that do and do not alias the one being filled.
+  {
+    reset();
+    const uint64_t f0 = fails;
+    for (int delay = 0; delay < 6; ++delay) {
+      spec_during_fill(0x0400, 0x0500, delay, "other-line");
+      spec_during_fill(0x0600, 0x1600, delay, "same-set");
+      spec_during_fill(0x0800, 0x0804, delay, "same-line");
+    }
+    std::printf("  speculative during fill            : %llu failures\n",
                 (unsigned long long)(fails - f0));
   }
 
