@@ -2693,6 +2693,54 @@ One generator note worth keeping: `callx`'s address is a **call target**, so it
 must point at code. Aimed into the data window it calls unwritten memory and
 executes `0xffffffff`, which tests the trap path instead of the call.
 
+### RETRACTION (R15): the i960 throughput numbers came from loop-collapsed traces
+
+**Read this before quoting any instructions/second figure.**
+
+Every i960 trace taken before 2026-08-18 used `trace <file>,:maincpu` with **no
+loop flag**, so MAME collapsed loops and printed `(loops for N instructions)`
+instead of the bodies. Measured over the three traces R10 used:
+
+| trace | printed | hidden | true total |
+|---|---|---|---|
+| f1 | 14,469 | 49,149 | 63,618 |
+| f2 | 14,474 | 73,647 | 88,121 |
+| f3 | 17,441 | 95,480 | 112,921 |
+
+**77-85% of executed instructions were never in the file** — and they were exactly
+the loop bodies, which is the population the "0.1% spin" claim was about. A
+verified-uncollapsed 17 ms window shows 322,707 instructions across **148 distinct
+PCs, with the top 20 accounting for 99.8%**, against R10's "4,200 distinct PCs,
+hottest 0.4%".
+
+**Withdrawn:** R10's 15,400 instr/frame, its 0.93 M instr/s, its 4,200 distinct
+PCs, its 0.1% spin fraction; R13's mnemonic census and call-depth distribution,
+and therefore the generator mix, CPI 5.04 and **5.33 M instr/s**.
+
+**Not established:** the corrected requirement. The clean window above is a *boot*
+frame; R10's were ~40 s in during a demo race. A settled uncollapsed trace has not
+been produced — a long `gtime` in a debugscript yields no trace file here,
+unresolved and recorded in the tool.
+
+**So: the margin is unproven, not disproven.** If most recovered instructions are
+spin, R10's conclusion survives with a smaller margin, because a poll loop that
+runs fewer times still exits. If they are work, the core is at or below
+requirement. Neither may be claimed yet.
+
+**Area figures are unaffected** — they are fitter output, not traces.
+
+`tools/i960-trace.sh` is the fix: it always passes `noloop`, and **refuses to
+return any trace containing a collapse marker**. It also records two mechanics
+that cost an hour — `gtime` is milliseconds, and long `gtime` values silently
+produce no trace.
+
+This is the fourth instance of the same error (R9, R10, R13, R15): a number used
+without establishing what produced it. It is the worst of them, because
+`docs/differential-testing.md` was written the same day and its first named
+artifact, carried from the Model 1 core, is "**`noloop` is not optional**". The
+warning was transcribed and not applied. **A lesson recorded is not a lesson
+applied**, and the only durable form is a tool that refuses.
+
 ### callx lands, the frame path gets its first real test, and the throughput figure is corrected downward
 
 `callx` is implemented and verified. Daytona now executes **no unimplemented

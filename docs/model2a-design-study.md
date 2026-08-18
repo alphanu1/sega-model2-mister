@@ -5,6 +5,9 @@ the renderer, pulled forward from P5/P6. The decision and its cost are recorded 
 This study is unaffected: it still holds that the fit question governs, and P1.5
 explicitly does not advance it.
 
+**Throughput caveat (R15): the i960 demand figure is withdrawn.** The area figures below
+are unaffected — they are fitter output, not traces.
+
 **Status: the fit question is answered in the affirmative, on measurements.** Optimistic
 budget fits with **14.1K spare** against the 92% routing line; pessimistic is 1.7K over it
 and still fits the raw device. The total is **24,454-40,293**, down from 34,160-49,460 and
@@ -1167,10 +1170,12 @@ multi-cycle sequencer's shortfall against it was the project's second-largest ri
 which at 60 fps is **0.93 M instr/s**. The assembled core delivers **6.86 M instr/s**.
 **The requirement is met with roughly 7.4x margin, and has been for some time.**
 
-> **Corrected by R13.** The 6.86 figure was produced by a mix containing no `call` or
-> `ret` at all, which is 4.4% of Daytona's instructions and among the most expensive work
-> the design does. The corrected figure is **5.33 M instr/s**, a **5.7x** margin. The
-> conclusion of this entry is unchanged; the number is not.
+> **Corrected by R13, then WITHDRAWN by R15.** R13 corrected the figure to 5.33 M
+> instr/s on a 5.7x margin. **R15 withdraws the demand side of this entry entirely:**
+> every trace it rests on was loop-collapsed and omitted 77-85% of the instructions
+> that executed — including, specifically, the spin-loop bodies this entry counted as
+> 0.1%. The margin is **unproven, not disproven**, and no figure here may be quoted
+> until a settled uncollapsed trace is counted.
 
 *How established:* three single-frame traces (17 ms each) of `daytona93` under MAME
 0.289, instrumented via the debugger. 14,469 / 14,474 / 17,441 instructions. The work is
@@ -1396,3 +1401,83 @@ omission, so no amount of fuzzing could see it. MAME switches on the type and
 
 *The honest scorecard.* Daytona's *instruction set* is complete. Daytona's *machine* is
 not.
+
+---
+
+**R15 — every i960 trace before 2026-08-18 was loop-collapsed, and the throughput
+argument rests on them.** R10 and R13 are both affected. This is a retraction, not
+a refinement.
+
+*What was believed:* that `trace <file>,:maincpu` produced a countable instruction
+stream. Three figures were derived from it: Daytona executes ~15,400 instructions
+per frame (0.93 M instr/s), across 4,200 distinct PCs, with **0.1% of instructions
+in a spin loop**.
+
+*What is now known:* MAME collapses loops by default and prints
+`(loops for N instructions)` in place of the bodies. Measured over the three
+single-frame traces R10 used:
+
+| trace | printed | hidden in collapse | true total |
+|---|---|---|---|
+| f1 | 14,469 | 49,149 | 63,618 |
+| f2 | 14,474 | 73,647 | 88,121 |
+| f3 | 17,441 | 95,480 | 112,921 |
+
+**77-85% of the instructions that executed were never in the file.** And they were
+not a random 80%: they were precisely the loop bodies, which is exactly the
+population the "0.1% spin" claim was about. The measurement excluded the thing it
+was measuring.
+
+An uncollapsed 17 ms window, taken with the flag verified rather than assumed,
+shows the shape the collapsed trace could not:
+
+```
+total instructions: 322,707      distinct PCs: 148
+top 20 PCs: 99.8% of all instructions
+hottest: 0x16B0-0x16BC, a four-instruction loop, 47,543 iterations
+```
+
+Against R10's "4,200 distinct PCs, hottest 0.4%". The collapsed trace showed the
+*variety* of the code and hid the *repetition*, so it inverted the picture.
+
+*What this invalidates.*
+
+- **R10's 15,400 instructions/frame and 0.93 M instr/s.** Withdrawn.
+- **R10's "0.1% of instructions in a spin loop".** Withdrawn, and it was the load
+  -bearing claim: the whole argument was that Daytona's *work* is small, and the
+  evidence for "this is work, not waiting" came from a file with the waiting
+  removed.
+- **R13's mnemonic census** (`call` 2.053%, `ret` 2.395%, `callx` 0.262%) and its
+  **call-depth distribution**, both counted over the same collapsed traces. The
+  generator mix, and therefore CPI 5.04 and **5.33 M instr/s**, inherit the bias.
+
+*What is NOT yet known, and must not be asserted.* The corrected requirement. The
+uncollapsed window above is a **boot** frame, not attract mode — a boot frame is
+legitimately dominated by clear-and-wait loops, and R10's traces were taken ~40 s
+in, during a demo race. A settled uncollapsed trace has not yet been produced: a
+long `gtime` in a debugscript yields no trace file here, unresolved, and recorded
+in `tools/i960-trace.sh`.
+
+**So the position is: the margin is unproven, not disproven.** If most of the
+recovered instructions are spin, R10's conclusion survives with a much smaller
+stated margin, because a poll loop that runs fewer times still exits. If they are
+work, the core is at or below the requirement. **Neither may be claimed until a
+settled attract-mode trace is counted.**
+
+*The pattern, and this is the fourth instance.* R9: a CPI quoted without its mix.
+R10: a throughput target quoted without its workload. R13: a mix specified by
+rates when cost depended on machine state. R15: **a workload counted from a file
+that omitted most of the workload.** Every one is the same error — a number used
+without establishing what produced it.
+
+It is worse than the others in one respect. `docs/differential-testing.md` was
+written *the same day*, and its first named artifact, carried over from the Model 1
+core, is:
+
+> **`noloop` is not optional.** Without it MAME's tracer collapses loops and
+> prints `(loops for 620 instructions)`.
+
+The warning was transcribed into this repository and the traces were not re-run
+against it. **A lesson recorded is not a lesson applied.** `tools/i960-trace.sh`
+now refuses to return any trace containing a collapse marker, which is the only
+form of this that survives being forgotten.
