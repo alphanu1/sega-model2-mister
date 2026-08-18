@@ -216,6 +216,38 @@ same counts. `m1_video_timing.sv` is already correct for Model 2.
 | | Step | Lift from | The trap, already paid for |
 |---|---|---|---|
 | 1 | Top level, PLL, video timing to a test pattern | `m1_video_timing` (unchanged) | **Name the PLL `pll` and generate it from the IP tool**, or `sys_top.sdc`'s clock groups match nothing and a passing build fails on hardware |
+
+**Step 1 status: the RTL is done and verified; the framework is not.**
+
+- `rtl/video/m2_video_timing.sv` — copied at `f48c842`, **51 ALM**, verified against
+  MAME's `set_raw` by `sim/video/tb_m2_video_timing.cpp` (278,144 pixel clocks per
+  frame, 424 lines, 496x384 visible, 57.52 Hz).
+- `rtl/video/m2_testpattern.sv` — ours, **83 ALM**. Border, eight bars, corner
+  markers, and a block that marches one bar per second for liveness.
+
+**The PLL does NOT transfer, and this was checked rather than assumed.** Model 1's
+has two outputs, 80 MHz and **19.2 MHz** — and 19.2 is its V60 core clock, which
+Model 2 does not have. It must be regenerated.
+
+**Model 2's frequencies are unusually clean, which helps.** MAME declares the
+pixel clock as `32_MHz_XTAL/2`, so **16 MHz is exactly 32 MHz halved** — a 32 MHz
+PLL output with a divide-by-two clock enable is exact, with no fractional
+division and no drift. Proposed outputs:
+
+| output | frequency | for |
+|---|---|---|
+| 0 | ~80 MHz | SDRAM |
+| 1 | 32 MHz | video, `ce_pix` = /2 -> exactly 16 MHz |
+| 2 | ~25 MHz | i960 (the real part's rate; ours fits at 26.84) |
+
+`pll_0002.v` in the Model 1 tree is a direct parameterised instantiation of
+`altera_pll`, not a Qsys black box, so the equivalent can be written by hand with
+these frequencies rather than needing the GUI. **It must still be named `pll`.**
+
+**Next actions, in order:** write the `pll` wrapper; copy MiSTer `sys/` from
+`third_party/template`; write the core's `emu` module wiring timing + pattern to
+`VGA_*`; add `.qsf`/`.qpf`/`files.qip`; build an `.rbf`. The first four are
+desk work; only the last costs 25 minutes.
 | 2 | **Debug overlay** | `m1_diag`, 307 ALM measured | The screen is the only output channel. Hex digits, not blocks. This runs **before** the first board test, not after the fifth failure |
 | 3 | SDRAM and ROM loader | `m1_sdram`, `m1_rom_loader`, `m1_cdc_port`, `bw_monitor` | `ioctl_wait` stalls the HPS itself — always gate it on `ioctl_download`. Memory comes out of reset on PLL lock and stays out, separate from game reset. `mem_ready` and `rom_loaded` are different facts and must not share a signal |
 | 4 | S24TILE | `m1_tile_fetch`, `m1_tile_decode`, `m1_tile_mixer`, `m1_palette` | Rebase char RAM to `0x01080000` |

@@ -2693,6 +2693,37 @@ One generator note worth keeping: `callx`'s address is a **call target**, so it
 must point at code. Aimed into the data window it calls unwritten memory and
 executes `0xffffffff`, which tests the trap path instead of the call.
 
+### P1.5 started: video timing and test pattern done, framework next
+
+**Step 1 RTL is complete and verified. The MiSTer framework is not started.**
+
+- `rtl/video/m2_video_timing.sv` — Model 1's module copied at `f48c842`, **51
+  ALM**. **No retiming was needed** (MAME declares both machines identically), and
+  `sim/video/tb_m2_video_timing.cpp` asserts it against MAME's `set_raw` rather
+  than its own parameters: 278,144 pixel clocks/frame, 424 lines, 496x384 visible
+  with every visible line exactly 496, and 57.52 Hz. `make test` is now 16 suites.
+- `rtl/video/m2_testpattern.sv` — ours, **83 ALM**. Border proves nothing is
+  cropped, eight bars prove channel order, corner markers prove orientation, and a
+  block marching one bar per second proves liveness.
+
+**The PLL does not transfer — checked, not assumed.** Model 1's outputs are 80 MHz
+and 19.2 MHz; 19.2 is its V60 clock. Model 2 must regenerate it, and its
+frequencies are clean: MAME's pixel clock is `32_MHz_XTAL/2`, so **16 MHz is
+exactly 32 MHz halved** — no fractional division. Proposed: ~80 MHz SDRAM, 32 MHz
+video with `ce_pix` = /2, ~25 MHz i960. `pll_0002.v` in the Model 1 tree is a
+direct `altera_pll` instantiation rather than a Qsys black box, so the equivalent
+can be hand-written. **It must be named `pll`** or `sys_top.sdc`'s clock groups
+match nothing and a passing build fails on hardware.
+
+**Next, in order:** the `pll` wrapper; copy MiSTer `sys/` from
+`third_party/template`; the core `emu` module wiring timing + pattern to `VGA_*`;
+`.qsf`/`.qpf`/`files.qip`; then an `.rbf`. Only the last costs a build.
+
+One testbench trap recorded at the site: `vblank_start` is high ON cycle 0 of the
+frame, so ticking past it before counting drops that cycle and every total comes
+out one short — which reads exactly like an off-by-one in the RTL counters, and
+was reported as one.
+
 ### SETTLED (R16): ~3.0x throughput headroom, measured properly
 
 R15 withdrew R10 and R13. **R16 replaces them, and R10's conclusion survives with
