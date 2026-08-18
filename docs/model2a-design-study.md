@@ -300,7 +300,7 @@ and that is where i960 implementations get expensive. Section 5 carries that cos
 ### 5.1 Anchors and conversion
 
 Strongest anchor is a measurement in the right currency, from this flow, on this part.
-**Re-measured at `tools/model1-ref` f48c842: MB86233 = 2,344 ALM, 1 DSP, 6 M10K, 43.86
+**Re-measured at `tools/model1-ref` `198e1d9`: MB86233 = 2,355 ALM, 1 DSP, 6 M10K, 46.66
 MHz**, including a full IEEE-754 single multiplier and adder, register file, AGU and
 sequencer. The earlier figure here was 2,554 ALM / 3 M10K; the core has since moved work
 into M10K, which is the direction that project's own resource finding predicts.
@@ -505,7 +505,7 @@ Six blocks were fitted for this revision; only two rows remain estimates.
 | Block | Optimistic | Pessimistic | Status | Basis |
 |---|---|---|---|---|
 | i960KB + FPU | 6,979 | 9,500 | **6,979 measured** | assembled and fitted here. Optimistic = as built; pessimistic adds faults, interrupts, transcendentals and the `rl` forms |
-| 1x MB86234 | 2,344 | 4,000 | **2,344 measured (MB86233)** | Model 1's coprocessor, same family, fitted here. Pessimistic assumes pipelining |
+| 1x MB86234 | 2,355 | 4,000 | **2,355 measured (MB86233)** | Model 1's coprocessor, same family, fitted here. Pessimistic assumes pipelining |
 | 3D renderer | 2,537 | 8,347 | **bracketed, both ends measured** | VDP1 2,537 (floor: no Z, no perspective); RDP 8,347 (ceiling: more capable than Model 2 needs) |
 | Sound: SCSP + 68000 | 4,164 | 4,164 | **both measured** | SCSP 2,030 (same chip) + fx68k 2,134 (the core we intend to port) |
 | Tilemap + I/O | 1,800 | 7,652 | **ceiling measured** | VDP2 6,852 is a *ceiling* — Saturn's tilemap is far richer than Model 2's System 24 layer. I/O 315-5649 small |
@@ -533,7 +533,7 @@ each block fitted standalone.
 | VDP2 (tilemap ceiling) | **6,852** | 9,184 | 4 | 272 | 12 | 65.73 | srg320 |
 | N64 RDP (renderer ceiling) | **8,347** | — | — | — | — | — | N64_MiSTer (M2-E) |
 | VDP1 (renderer floor) | **2,537** | 1,707 | 0 | 512 | 3 | 31.52 | srg320 |
-| `mb86233_core` | **2,344** | 1,819 | 6 | 0 | 1 | 43.86 | Model 1 (sister project) |
+| `mb86233_core` | **2,355** | 1,842 | 6 | 0 | 1 | 46.66 | Model 1 @ `198e1d9`, after its TGP fixes |
 | fx68k | **2,134** | 1,412 | 6 | 0 | 0 | 68.45 | ijor, GPL-3 — to port |
 | SCSP | **2,030** | 2,379 | 26 | 0 | 2 | 76.73 | srg320 |
 
@@ -567,7 +567,7 @@ everything else.
 | `sys/` framework | **6,630** | upstream | the same framework on the same device, whichever core wraps it |
 | SCSP | **2,030** | srg320 | the *same chip* Model 2 uses, fitted on the target part |
 | fx68k | **2,134** | ijor | the *actual core we intend to port*, GPL-3 and licence-clear |
-| MB86233 | **2,344** | Model 1 | the coprocessor's *sister part*, from a project measuring the same silicon |
+| MB86233 | **2,355** | Model 1 | the coprocessor's *sister part*, from a project measuring the same silicon |
 | **total measured** | **20,117** | | |
 | of which ours or portable | 11,457 | | |
 
@@ -1565,3 +1565,63 @@ a measured 72% spin fraction rather than a claimed 0.1%.
 mode**, sampled at three points across 14 frames. Gameplay is not sampled and
 could be heavier. That is a bounded, known gap rather than an assumption — and
 the tooling to close it now exists and refuses to lie.
+
+---
+
+**R17 — the Model 1 core has measured, on this silicon, that the CPU's throughput
+lever is the memory subsystem and not the CPU. R16's margin is measured against a
+bus that does not exist yet.** Pulled from `tools/model1-ref` at `198e1d9` per rule
+10, and it changes what R16 means without changing what R16 measured.
+
+*What that project found* (`e490688`). Its V60 runs at **30.49 CPI** over 819,812
+instructions, and it counted where the cycles go directly rather than reasoning
+about it:
+
+```
+data-stalled   9,625,651 (38%)
+fetch-stalled  6,819,902 (27%)
+either        16,435,859 (65%)
+```
+
+**Roughly 20 of the 30.5 CPI is waiting on memory and ~10 is execution**, and the
+two buckets barely overlap — a single arbitrated bus serialising them rather than
+hiding one behind the other. Its CPU in isolation is ~6 CPI against MAME's implied
+8, so **the 3.18x gap to the reference is almost entirely the memory subsystem**,
+and extracting or optimising the CPU would not close it.
+
+*Why this lands on us.* **R16's CPI of 5.04, and the ~3.0x headroom derived from
+it, were measured in simulation against an idealised bus.** The whole-CPU
+lockstep's memory answers on demand; it models no SDRAM latency, no refresh, and
+no contention. On hardware the i960 will share SDRAM with the renderer, the TGP,
+sound and video — five masters, which is the configuration Model 1 measured 65%
+stall under.
+
+**So R16 stands as measured and must not be quoted as a hardware margin.** It
+says: *given a bus that answers immediately, the core has 3.0x headroom against
+Daytona's work.* It does not say the assembled core will. Model 1's numbers are
+the closest available evidence for the gap between those two statements, and they
+are not reassuring — a 3.18x memory-induced gap against a 3.0x margin leaves
+nothing.
+
+*What follows, and it is a design consequence rather than a caveat.* If memory is
+the lever, the i960's instruction cache stops being an optimisation and becomes
+load-bearing. It already exists (`i960_icache.sv`) and measures a hit rate against
+a workload; **what has never been measured is its hit rate against real Daytona
+code under realistic latency.** That is the number to get before any pipeline
+discussion resumes, and it can be had from the R16 traces plus a latency model,
+without hardware.
+
+*A second finding from the same pull, on M10K* (`1df103e`). The Model 1 core now
+sits at **452 of 553 M10K — 82%** — with 29,536 ALM. §5.5 concluded M10K is not
+binding for us, from **standalone block measurements** that contain no memory
+subsystem, no caches and no FIFOs. Our own step-1 build already uses 56 M10K for
+framework plus a test pattern. **That conclusion is weaker than it reads and
+should be re-taken once the memory subsystem exists**; a comparable machine on the
+same part at 82% is the strongest evidence available, and it points the other way.
+
+*Method note worth keeping.* That project reached its number on the third attempt.
+The first was arithmetic dressed as a finding; the second used a sweep script that
+hardcoded `-GCEDIV=3` while the design shipped `ce_cpu(1'b1)`, so **every number it
+had ever produced described a CPU getting one cycle in three**. Its own commit
+calls it "third misleading instrument today". The same failure mode as R15 here,
+in a different project, on the same day.

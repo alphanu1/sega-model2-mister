@@ -2693,6 +2693,46 @@ One generator note worth keeping: `callx`'s address is a **call target**, so it
 must point at code. Aimed into the data window it calls unwritten memory and
 executes `0xffffffff`, which tests the trap path instead of the call.
 
+### R17: Model 1 has measured that MEMORY, not the CPU, is the throughput lever
+
+Pulled `tools/model1-ref` to **`198e1d9`** (15 new commits) per rule 10. Two of
+its findings land directly on ours.
+
+**Its V60 runs at 30.49 CPI, and 65% of cycles are memory stalls** — 38% data,
+27% fetch, barely overlapping, because a single arbitrated bus serialises them.
+Its CPU in isolation is ~6 CPI against MAME's implied 8, so **the 3.18x gap to the
+reference is almost entirely the memory subsystem**, and optimising the CPU would
+not close it.
+
+**That reframes R16 without contradicting it.** Our CPI 5.04 and ~3.0x headroom
+were measured against an idealised bus — the lockstep harness answers memory on
+demand, with no SDRAM latency, refresh or contention. On hardware the i960 shares
+SDRAM with the renderer, TGP, sound and video: five masters, the configuration
+Model 1 measured 65% stall under. **R16 stands as measured and must not be quoted
+as a hardware margin.** A 3.18x memory-induced gap against a 3.0x margin leaves
+nothing.
+
+**Design consequence:** the i960's instruction cache stops being an optimisation
+and becomes load-bearing. `i960_icache.sv` exists, but **its hit rate against real
+Daytona code under realistic latency has never been measured** — and that can be
+had from the R16 traces plus a latency model, with no hardware. That is the number
+to get before any pipeline discussion resumes.
+
+**Second finding, on M10K:** Model 1 now sits at **452/553 M10K (82%)** with 29,536
+ALM. Our §5.5 conclusion that M10K is not binding came from **standalone blocks**
+with no memory subsystem, caches or FIFOs — and our own step-1 build already uses
+56 M10K for framework plus a test pattern. That conclusion is weaker than it reads
+and should be re-taken once the memory subsystem exists.
+
+**TGP re-measured after its fixes: 2,355 ALM** (was 2,344), Fmax 46.66. Budget row
+unchanged.
+
+Method note worth keeping: that project reached its cycle number on the **third**
+attempt — the first was arithmetic dressed as a finding, the second used a sweep
+that hardcoded `-GCEDIV=3` while the design shipped `ce_cpu(1'b1)`, so every number
+it ever produced described a CPU getting one cycle in three. Same failure mode as
+R15 here, same day, different project.
+
 ### P1.5 step 1 DONE: a timing-clean .rbf that draws a test pattern
 
 **`output_files/Model2.rbf` builds, 0 errors, and meets timing with no negative
