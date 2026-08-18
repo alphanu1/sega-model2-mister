@@ -5,9 +5,9 @@ blank screen or a frozen loading bar and no other output. None of it is
 Model 1 specific — it is the framework, the toolchain and the SDRAM. Read it
 before wiring up the next core.
 
-The rule that generated most of this list: **the FPGA fabric has exactly one
-output channel, and it is the screen.** No printf, no debugger, nothing inside
-the core can tell you what it is doing. Plan for that on day one rather than
+The rule that generated most of this list: **assume the screen is the core's
+only output channel, but know that it is not the only one available.** The
+distinction was wrong here twice and is worth getting right. Plan for that on day one rather than
 after the fifth twenty-five minute Quartus build that comes back "still white".
 
 **Stated precisely, because the earlier wording was wrong and would cost
@@ -18,8 +18,24 @@ parsing, file I/O, `ioctl_download` progress, OSD state — and it is exactly th
 right instrument for the framework deadlocks listed below, `ioctl_wait` among
 them, which otherwise present as a blank screen with no information at all.
 
-What it cannot do is see inside the fabric. For that there are two tools and
-they are not interchangeable:
+What HPS logging cannot do is see inside the fabric — it has no knowledge of
+your HDL, so there is no "debug info about the running core" to switch on.
+
+**The core can, however, drive the serial port itself.** `sys/emu_ports.vh`
+exposes `UART_TXD`/`UART_RXD`/`UART_CTS`/`UART_RTS` to `emu`, and `sys_top.v`
+wires them to `cyclonev_hps_interface_peripheral_uart` — the HPS UART, the same
+one the Linux console uses. It is there for emulated serial devices (modems,
+MIDI), and nothing stops a core putting its own bytes on it. **A minimal
+transmitter is tens of LUTs, and that is a genuine printf.**
+
+Two caveats before relying on it: the port is shared with the Linux console, so
+a core writing to it collides with whatever else is using the line; and it is
+still a *core-authored* channel, so it tells you only what the RTL was written
+to say. It does not replace the overlay for always-on state, and it does not
+replace SignalTap for watching a signal.
+
+For seeing inside the fabric there are then three tools, and they are not
+interchangeable:
 
 - **SignalTap** (in Quartus 17.0): a real logic analyser on the running device.
   Costs M10K and routing, needs a rebuild per probe set, and is the only way to
@@ -27,6 +43,9 @@ they are not interchangeable:
 - **The debug overlay** (`m1_diag`, 307 ALM, measured): always available, costs
   nothing per query, and is why it should be running *before* the first board
   test rather than after the fifth failed one.
+- **A core-driven UART**: a serial log from inside the fabric, at tens of LUTs.
+  Best for a stream of events over time — a trace — where the overlay shows a
+  snapshot and SignalTap needs a rebuild per probe set.
 
 And a third that outranks both while a block is still being built: **the
 simulation harness**. For anything reproducible in Verilator, hardware
