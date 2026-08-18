@@ -2459,3 +2459,40 @@ removing a state removes its cycles; it moves them.
 CPI 3.91 = **6.84 M instr/s against 12.5 M**, and the next-largest items are
 `T_EXEC` at 1.00 (irreducible without a real pipeline) and `T_FETCH_W` at 0.51
 (I-cache misses, unsizable on this workload).
+
+### Critical-word-first: third attempt, third failure, and a pattern worth naming
+
+The miss penalty is the right target — a miss costs ~5 cycles (four words plus
+a done cycle) before the requested word is available, and in a pipelined design
+it stalls the whole pipe rather than one state.
+
+Third attempt, reverted like the first two. The block harness caught every step
+immediately, which is the system working:
+
+1. Suppressing the completion `valid` once the critical word is delivered
+   **stalls a same-line request** — that request was never answered, because the
+   early delivery consumed the answer meant for the earlier one.
+2. Clearing `fill_early` for such a request answers it but **breaks the
+   redirect cases**, which then take the early path they should not.
+3. The sequential miss rate reads 0.25 -> 0.33 -> 0.50 across the attempts, and
+   part of that is a harness artifact: the counter treats "saw `bus_req` while
+   waiting" as a miss, and with a line still filling behind an early delivery it
+   sees one on hits too.
+
+**The pattern across all three attempts is the same**: `valid` is a single
+undifferentiated answer, and critical-word-first creates a state where *some*
+requests have been answered and others have not. The cache cannot express that.
+`vaddr` was added for exactly this class of problem and is not sufficient — it
+says which address an answer is for, not whether a given requester is still
+owed one.
+
+**What a fourth attempt needs, and it is a design change rather than a patch:**
+an outstanding-request record — who asked, for what, and whether they have been
+answered — so early delivery can satisfy one requester without silently
+consuming another's answer. That is the same conclusion the prefetch queue work
+reached from the other direction, and it is now reached twice independently.
+
+**Also required first: fix the harness's miss counter.** "Saw `bus_req` while
+waiting" is not a miss once fills continue behind delivered words, and no
+version of this change can be evaluated while the metric moves with the
+mechanism.
