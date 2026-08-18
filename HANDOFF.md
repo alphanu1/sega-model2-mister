@@ -2692,3 +2692,38 @@ harness has not verified is the same as no implementation.
 One generator note worth keeping: `callx`'s address is a **call target**, so it
 must point at code. Aimed into the data window it calls unwritten memory and
 executes `0xffffffff`, which tests the trap path instead of the call.
+
+### callx: dispatch confirmed, target latching fixed, one divergence left
+
+Instrumented rather than inferred. **`rf_call` asserts 100 times in a run, so
+`callx` does reach the frame machinery** — the earlier conclusion that "the DUT
+is not performing the call" was wrong.
+
+**One real bug found and fixed along the way, and it is latent regardless:**
+`call_target` was presented **live** as `alu_or_ea`. `op_call` is sampled during
+`T_FRAME`, and for `callx` the target is `ea`, which depends on `rd1`/`rd2` --
+and those change the moment `ra1`/`ra2` revert to their defaults on leaving
+`T_EXEC`. CTRL `call` never exposed it because its target is `ip_next + disp`,
+with no register dependency. **The target must be latched when the call is
+issued.** That fix is correct and should be kept whenever `callx` lands.
+
+It did not close the divergence:
+
+```
+MISMATCH retire 43  g15  got=00000009 want=9d3d02c0
+```
+
+Eliminated, with evidence, so they are not re-tested:
+- the `ldst` decode, the sequencer branch, MEM-format classification, and
+  `lsu_req` staying low -- all verified present;
+- "the DUT never calls" -- disproved by the `rf_call` counter;
+- a live call target -- fixed, symptom unchanged.
+
+`g15` is FP and `9` is not 64-aligned, so it was written by an ordinary
+instruction: the two sides are executing **different code** by retire 43, which
+means the call transferred somewhere different or returned differently. **Next:
+log the IP immediately after each `callx` on both sides** -- that distinguishes
+a wrong target from a wrong return, and no check so far separates those.
+
+Reverted. An unverified instruction is the same as no instruction, and this one
+is 0.26% of Daytona -- worth doing correctly rather than quickly.
