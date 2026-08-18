@@ -2326,3 +2326,43 @@ capture — that has been tried twice and treats the symptom.
 
 **Value unchanged: ~1.0 CPI, the largest remaining lever, `T_FETCH` + `T_EXEC`
 at 52% of cycles.**
+
+### Round 9: the corruption is IN THE CACHE ARRAY, not the front end
+
+Made the prefetch slot atomic — `pf_ip`, `pf_insn` and `pf_valid` written only
+together, with `pf_req_ip` holding the address a prefetch was *issued* for. That
+is the right structure and it passes the baseline unchanged (15/15, CPI 3.91),
+but **it did not fix the overlap**, which finally localised the fault.
+
+Printing the whole slot at the failure:
+
+```
+latched 22600000 at ip=000000d4, mem 5cd89617
+  pf_insn=22600000 pf_ip=000000d4 v1 armed=0 req_ip=000000d4
+  icv=0 icva=000000d4 icd=22600000
+```
+
+`ic_data` is **22600000 for `ic_vaddr` = 0xd4**, while memory holds `5cd89617`.
+**The cache is returning the wrong word for that address** — the slot faithfully
+captured what the cache gave it. The front end, the capture and the slot are all
+correct.
+
+**Why the cache check missed it:** it is gated on `ic_valid`, so it samples only
+the cycles the cache is answering. A corrupted *line sitting in the array* is
+invisible to it between answers. Extend it to check `data` against memory
+whenever `vaddr` names a mapped address, not only when `valid` is high.
+
+**Prime suspect: a line marked valid with partial data.** `cvalid[idx]` is
+cleared at fill start and set at completion, which is correct for an abandoned
+fill — but speculative requests now arrive during fills, and the `S_DONE` path
+starts a new fill on `req && !hit` without re-checking who owns the line. A
+speculative miss landing there can begin a fill that a later demand adopts.
+
+**This is the first round that puts the defect inside `i960_icache` with
+evidence rather than suspicion**, and it is the fourth time this feature's fault
+has turned out to live one level below where it showed. Fix it at block level:
+add a directed test that issues speculative requests during a fill and then
+reads the filled line back.
+
+Round 9 changes were reverted; the atomic slot is worth re-applying when the
+cache is fixed, since it is correct and costs nothing.
