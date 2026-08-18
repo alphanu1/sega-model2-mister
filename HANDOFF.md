@@ -1983,3 +1983,40 @@ invariant, not by reading the RTL.
 
 Ruled out and worth not re-testing: the harness (passes with the overlap
 disabled and everything else in), double advances, and IP skips.
+
+### Overlap: the fault is localised to one boundary, with an exact symptom
+
+Extended the prefetch invariant to the overlap's `T_EXEC` latch, as the previous
+entry prescribed. **It does not fire** — the instruction words the overlap
+latches are correct. Also added forwarding for the in-flight write (a genuine
+RAW hazard: the successor's operands are read while the current instruction is
+still executing, so `we`/`wa`/`wd` describe the *previous* write). **That did
+not fix it either**, though the forwarding is correct and needed regardless.
+
+A retire-by-retire IP log of both sides then gave the exact symptom:
+
+```
+r22   dut=00000074 ref=00000074  insn=6770c806        FP op at 0x70
+r23   dut=0000007c ref=00000078  insn=5819d50c   <== DIVERGED
+```
+
+**The DUT advances 0x74 -> 0x7c: eight bytes for a four-byte REG instruction.**
+Not a skipped instruction and not a wrong word — an `ip` that moves twice as far
+as it should, once.
+
+**The boundary is `T_FP` -> `T_FETCH` -> `T_EXEC(overlap)`.** The preceding
+instruction is FP, which `exec_can_overlap` excludes, so the overlap fires on
+the *first* instruction after a multi-cycle one. That is the untested
+transition: every other path into the overlap comes from another overlapped
+instruction or from a plain fetch.
+
+**Prime suspect: `ip_next` is already advanced when the overlap reads it.** The
+override does `ip <= ip_next; ip_next <= ip_next + 4`, which is correct only if
+`ip_next` still describes *this* instruction's successor. Coming out of a
+multi-cycle state, some path appears to have advanced `ip_next` already, so the
+overlap lands one instruction too far. Check who writes `ip_next` on the
+`T_FP`/`T_MULDIV` retire paths and on the fetch that follows.
+
+**Ruled out and not worth re-testing:** the harness (passes with the overlap
+disabled and everything else in), double advances in the steady state, wrong
+instruction words on either latch path, and the RAW hazard.
