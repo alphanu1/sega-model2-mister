@@ -2234,3 +2234,48 @@ overlap, so it is only worth landing together with it.
 **Overlap value unchanged: ~1.0 CPI, the largest single lever, with
 `T_FETCH` + `T_EXEC` at 52% of cycles.** Next session starts from the retire-1
 `movl` failure, which is the first *real* symptom this feature has produced.
+
+### Correction: the duplicate did NOT manufacture the failure
+
+The previous entry claimed a duplicated prefetch invariant was reporting a
+defect that did not exist. **That was wrong and is retracted.**
+
+The two copies were identical except that the second did not increment `fails`,
+so it only ever **double-printed**. Neither fires spuriously during reset —
+both require `fetch_word_ok`, which requires a valid prefetch, and there is none
+during reset.
+
+What actually suppressed the failure was a `checking` gate added in the same
+round whose anchor line did not match, so `checking` never became true and the
+invariant was silenced entirely. Removing a real check and calling the symptom
+an artifact is the more embarrassing of the two mistakes, and it is exactly what
+rule 1 (verify the edit applied) exists to prevent.
+
+**The `[PREFETCH] latched ... at ip=000000d4` failure is REAL.** It is the
+overlap's first genuine symptom and remains the place to start.
+
+The duplicate is removed anyway — it is committed, it doubled every message, and
+one invariant is easier to reason about than two.
+
+### Where the overlap stands after round 7
+
+Three distinct defects are now known on this path, in order of discovery:
+
+1. **Demand must win the cache address mux.** `ic_addr_eff` was
+   `pf_req_now ? pf_req_addr : fetch_addr`, which serviced a *demand* request at
+   the prefetch's address whenever both fired. Fixed to `ic_req ? fetch_addr :
+   pf_req_addr`.
+2. **The prefetch capture must be address-qualified**, since the overlap issues
+   its own requests and more than one answer is in flight. Applied.
+3. **OPEN: `ic_data` and `ic_vaddr` disagree under the combinational request.**
+   With (1) and (2) both in, the capture still stores a wrong word for an
+   address that matches `ic_vaddr` — so the cache is naming one address and
+   returning another's data. Prime suspect is the `S_FILL` "same line adopts the
+   fill" rule, which sets `req_addr_q <= addr` for *any* same-line request
+   including a speculative one, so a prefetch can rename the answer a demand
+   fill is about to deliver. That rule was added for a redirect-within-a-line
+   case and predates speculative requests existing.
+
+**Fix (3) in the cache, at block level, before touching the sequencer again** —
+the same lesson as rounds 1-4, where four sequencer fixes failed for a reason
+that lived in the cache.
