@@ -1109,6 +1109,11 @@ multi-cycle sequencer's shortfall against it was the project's second-largest ri
 which at 60 fps is **0.93 M instr/s**. The assembled core delivers **6.86 M instr/s**.
 **The requirement is met with roughly 7.4x margin, and has been for some time.**
 
+> **Corrected by R13.** The 6.86 figure was produced by a mix containing no `call` or
+> `ret` at all, which is 4.4% of Daytona's instructions and among the most expensive work
+> the design does. The corrected figure is **5.33 M instr/s**, a **5.7x** margin. The
+> conclusion of this entry is unchanged; the number is not.
+
 *How established:* three single-frame traces (17 ms each) of `daytona93` under MAME
 0.289, instrumented via the debugger. 14,469 / 14,474 / 17,441 instructions. The work is
 genuine and distributed — **4,200 distinct PCs per frame, hottest 0.4%, and only 0.1% of
@@ -1235,3 +1240,56 @@ out-of-range float, so no game behaviour depends on the choice.
 *Cost:* the corrected range check and the latched call target together measure **6,979
 ALM** for `i960_top`, against 6,986 before — flat. Fmax moves 27.3 -> 26.84 MHz, which is
 immaterial against the 7.4x throughput margin established in R10.
+
+---
+
+**R13 — the measured throughput omitted 4.4% of the workload, and it was the expensive
+4.4%.** R10 established the margin using a Daytona-mix CPI of 3.91, giving 6.86 M instr/s.
+That mix contained **no `call` and no `ret`**, because the whole-CPU generator emitted
+neither (R11). Adding them at their measured rates moves the figure.
+
+*What was believed:* that `+mix=daytona` reproduced Daytona's instruction mix, having been
+built from M2-B's measured class shares — 52.9% load/store, 13.6% ALU, 9.7% move, 9.4%
+compare/branch, 8.0% lda, 0.8% FP.
+
+*What is now known:* those shares sum to 94.4%, and a good part of the remainder is the
+frame operations. Counted directly from the same traces, over 233,878 instructions:
+
+| mnemonic   | count | share  |
+|------------|-------|--------|
+| `call`     | 4,802 | 2.053% |
+| `ret`      | 5,602 | 2.395% |
+| `callx`    |   612 | 0.262% |
+| `bal`      |    37 | 0.016% |
+| `calls`    |     0 | 0.000% |
+| `flushreg` |     0 | 0.000% |
+
+**Corrected figures: CPI 5.04, and 26.84 / 5.04 = 5.33 M instr/s against a demand of 0.93
+M instr/s — a 5.7x margin.** R10's conclusion stands; its number does not.
+
+*A second lesson, and it is the sharper one: the rate was not enough.* Emitting `call` and
+`ret` independently at 2.053% and 2.395% produced **CPI 6.71 and T_FRAME at 42% of all
+cycles** — because `ret` slightly outnumbers `call`, so the modelled depth sits at zero and
+almost every `ret` underflows into a sixteen-word reload from memory. That is a property of
+the generator, not of the design.
+
+What actually determines the cost is **how often a call exceeds the 4-frame register cache
+and spills**. Measured from the traces by tracking depth through every call and ret:
+
+```
+depth after call:  1:6.3%  2:22.3%  3:10.0%  4:6.4%  5:1.8%  6:2.1%  7:0.3%
+max depth 7;  calls at depth >= 4, which spill to memory: 8.5%
+```
+
+**Daytona's register cache absorbs 91.5% of its calls.** The generator now models depth
+while emitting and holds it in that band; it reports its own spill rate next to the
+measured one every run, so the mix cannot silently drift again. It currently runs at
+**9.5%** against the measured 8.5% — slightly conservative, which is the right direction
+for a figure used as a margin.
+
+*Why this is R9 a third time.* R9 said a CPI is a property of the instruction mix. R10 said
+a throughput target is a property of the workload. This adds: **a mix is not specified by
+its rates alone when an instruction's cost depends on machine state.** A call costs about
+six cycles from the register cache and roughly sixty through memory, and nothing in a table
+of mnemonic frequencies says which. The check that makes this durable is not a better
+number, it is the generator printing its spill rate beside the measured one on every run.

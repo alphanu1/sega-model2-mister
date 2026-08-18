@@ -89,9 +89,17 @@ void dump_ring() {
   }
 }
 
-uint64_t rf_call_cnt = 0, frame_cyc = 0;
+uint64_t rf_call_cnt = 0, rf_ret_cnt = 0, frame_cyc = 0;
+// Sampled at each call, so it is directly comparable with the depth
+// histogram measured from the Daytona traces.
+uint64_t depth_hist[12] = {0};
 void tick() {
-  if (dut->rootp->i960_top__DOT__rf_call) ++rf_call_cnt;
+  if (dut->rootp->i960_top__DOT__rf_call) {
+    ++rf_call_cnt;
+    const int dp = (int)dut->rootp->i960_top__DOT__u_regs__DOT__rcache_pos;
+    if (dp >= 0 && dp < 11) ++depth_hist[dp + 1];
+  }
+  if (dut->rootp->i960_top__DOT__rf_ret)  ++rf_ret_cnt;
   const int ts_now = dut->rootp->i960_top__DOT__ts & 15;
   // PREFETCH INVARIANT, checked in the cycle a word is latched: whatever the
   // front end accepts must be the word actually at `ip`. A front end that hands
@@ -231,13 +239,21 @@ bool     probe_fp     = false;
 // to prevent -- the two differ by a large factor, and neither is wrong.
 enum { C_REGALU=0, C_BRANCH=1, C_FAULT=2, C_CMPBR=3, C_FP=4, C_BBX=5,
        C_EMUL=6, C_MOVX=7, C_MOV=8, C_MULDIV=9, C_LDST=10, C_LDA=11, C_TEST=12,
-       C_N=13 };
+       C_FRAME=13, C_N=14 };
 
 bool mix_daytona = false;
 
 // coverage: near-uniform. daytona: M2-B's measured shares, in percent.
-const int W_COVER[C_N]  = { 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 4 };
-const int W_DAYTON[C_N] = { 12, 4, 0, 6, 1, 2, 1, 3, 10, 1, 49, 8, 3 };
+// C_FRAME is call/ret, and its Daytona weight is MEASURED, not assumed: 4,802
+// call and 5,602 ret in 233,878 traced instructions -- 2.053% and 2.395%, so
+// 4.4% together, taken out of the load/store share to keep the total at 100.
+// `calls` and `flushreg` are 0.000% and are generated in coverage mode only.
+// Getting this wrong is not cosmetic: emitting frame ops at the coverage rate
+// moved the measured CPI from 3.91 to 5.77, which is R9 exactly -- a CPI is a
+// property of the mix, and a mix that is not the game's produces a number that
+// describes nothing.
+const int W_COVER[C_N]  = { 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 4, 8 };
+const int W_DAYTON[C_N] = { 12, 4, 0, 6, 1, 2, 1, 3, 10, 1, 45, 8, 3, 4 };
 
 int pick_class(std::mt19937_64 &rng) {
   const int *w = mix_daytona ? W_DAYTON : W_COVER;
@@ -333,7 +349,7 @@ bool compare(uint64_t n) {
 
 int main(int argc, char **argv) {
   Verilated::commandArgs(argc, argv);
-  uint64_t progs = 200, steps = 60, seed = 1, smc_stops = 0;
+  uint64_t progs = 200, steps = 60, seed = 1, smc_stops = 0, oob_stops = 0;
   bool directed = false, dtrace = false;
   for (int i = 1; i < argc; ++i) {
     if (!std::strncmp(argv[i], "+random=", 8)) progs = std::strtoull(argv[i]+8, nullptr, 10);
@@ -368,6 +384,7 @@ int main(int argc, char **argv) {
     // Generate a straight-line program of REG and COBR forms. Work RAM at
     // 0x00500000 is burst-flagged; the program sits at 0.
     std::vector<uint32_t> prog;
+    int gen_depth = 0;      // modelled call depth, see the frame class below
     for (uint64_t k = 0; k < steps; ++k) {
       const int cls = pick_class(rng);
       uint32_t insn;
@@ -450,6 +467,53 @@ int main(int argc, char **argv) {
         // program rather than landing in unwritten memory every time.
         const uint32_t d = 4u + 4u * (rng() % 6);
         insn = (((rng() & 1) ? 0x0bu : 0x08u) << 24) | ((d + 4u) & 0x00ffffffu);
+      } else if (cls == 13) {                          // call / ret / flushreg
+        // Emitted for the same reason as callx: the frame path had a passing
+        // unit test and two defects in it, and a unit test that drives op_call
+        // itself cannot possibly see a SEQUENCER that drives it twice.
+        //
+        // `ret` below depth zero is not undefined -- both the module and the
+        // reference reload from PFP & ~63, and the harness seeds a consistent
+        // frame there so the return lands somewhere real. That is the only path
+        // outside the unit test that exercises the frame RELOAD.
+        //
+        // Daytona executes no `flushreg` at all, so it is coverage-mode only;
+        // generating it in the measured mix would be inventing a workload.
+        // DEPTH MATTERS MORE THAN RATE. Daytona's call depth was measured from
+        // the same traces: max 7, and only 8.5% of calls happen at depth >= 4,
+        // so 91.5% are absorbed by the 4-frame register cache. Emitting call and
+        // ret independently at their measured rates does NOT reproduce that --
+        // ret slightly outnumbers call, depth sits at zero, and almost every ret
+        // underflows into a sixteen-word reload from memory. That put T_FRAME at
+        // 42% of all cycles, which is an artifact of the generator and not a
+        // property of the design.
+        //
+        // So the depth is modelled while generating and kept in Daytona's band.
+        // It is approximate -- a call jumps forward and skips instructions, which
+        // the static model cannot follow -- but it is far closer than ignoring
+        // depth entirely.
+        const uint32_t pick = rng() % 100;
+        if (!mix_daytona && pick < 8) {
+          insn = (0x66u << 24) | (0xdu << 7);                          // flushreg
+          gen_depth = 0;
+        } else if (gen_depth == 0 || (gen_depth < 3 && pick < 54)) {
+          const uint32_t d = 4u + 4u * (rng() % 6);
+          insn = (0x09u << 24) | ((d + 4u) & 0x00ffffffu);             // call
+          ++gen_depth;
+        } else if (!prog.empty() &&
+                   ((prog.back() >> 24) == 0x09u || (prog.back() >> 24) == 0x86u)) {
+          // A `ret` must never sit immediately after a call. The return address
+          // a call records is ip_next, so a ret at that address returns to
+          // ITSELF, forever -- correct on both sides, and invisible to a harness
+          // whose retire boundary is "the IP moved". This is the general form of
+          // the callx-targets-ip_next case; emit a second call instead.
+          const uint32_t d = 4u + 4u * (rng() % 6);
+          insn = (0x09u << 24) | ((d + 4u) & 0x00ffffffu);
+          ++gen_depth;
+        } else {
+          insn = 0x0a000000u;                                          // ret
+          --gen_depth;
+        }
       } else if (cls == 2) {                           // faultno / fault<cc>
         // Only the not-taken path of fault<cc> is generated: the taken path is
         // fatalerror in the reference and §1 scopes it out, so both sides trap
@@ -533,16 +597,22 @@ int main(int argc, char **argv) {
         // frame machinery in a test aimed at the memory path.
         insn = (op << 24) | (((rng() % 24) + 4) << 19) | (0u << 14) | off;
       } else if (cls == 11) {                          // lda / callx
-        if ((rng() % 8) == 0) {
+        // 1-in-32 of an 8% class is 0.25%, against 0.262% measured.
+        if ((rng() % (mix_daytona ? 32u : 8u)) == 0) {
           // Target CODE, not the data window: callx transfers control, so an
           // address in the data window would execute whatever the random data
           // happened to be. Word-aligned and inside the program.
-          // Never its own slot. A callx that targets itself recurses forever
-          // with the IP never changing, so the harness's "IP moved" retire
-          // detector cannot fire and a perfectly correct DUT is reported as a
-          // stall. Both sides would agree; there is simply nothing to measure.
+          // Neither its own slot nor the next one. Its own slot recurses
+          // forever with the IP never changing. The NEXT slot is subtler and
+          // took a trace to see: the return address a call records is ip_next,
+          // so calling ip_next means the callee's return address is the callee
+          // itself -- and if that callee happens to be a `ret`, it returns to
+          // itself forever. Both are architecturally correct and both agree
+          // with the reference; the harness simply has no retire boundary to
+          // detect when the IP does not move, and reports a stall.
           uint32_t t = uint32_t(rng() % steps);
-          if (t == uint32_t(k)) t = uint32_t((k + 1) % steps);
+          if (t == uint32_t(k) || t == uint32_t(k + 1))
+            t = uint32_t((k + 2) % steps);
           insn = (0x86u << 24) | ((t * 4u) & 0xfffu);
         } else {
           insn = (0x8cu << 24) | (((rng() % 24) + 4) << 19)
@@ -580,6 +650,25 @@ int main(int argc, char **argv) {
       prog[at] = (0x08u << 24) | (uint32_t(field) & 0x00ffffffu);
     }
     for (size_t k = 0; k < prog.size(); ++k) mem[uint32_t(k*4)] = prog[k];
+    // A resident frame at 0x2000, self-consistent so that returning below depth
+    // zero lands somewhere real. Both the module and the reference reload from
+    // PFP & ~63 when the register cache underflows, and without this they agree
+    // on a return address read out of unwritten memory and then walk off into
+    // unmapped space -- which abandoned 30% of programs and threw away the
+    // frame RELOAD path, the one thing outside the unit test that drives it.
+    // PFP and SP inside the frame match the seeded registers, so any number of
+    // returns stay consistent. RIP is 4, an ordinary instruction.
+    mem[0x2000] = 0x2000;    // PFP
+    mem[0x2004] = 0x2040;    // SP
+    mem[0x2008] = 0x0000'0004;   // RIP
+    // The return slot must not itself return. A `ret` landing on a `ret` whose
+    // RIP is its own address is correct and loops forever with the IP never
+    // moving, which the "IP moved" retire detector reads as a stall -- the same
+    // shape as a callx targeting its own address. One slot of randomness is a
+    // cheap price for a return address that always makes progress.
+    if (prog.size() > 1) { prog[1] = (0x8cu << 24) | (4u << 19) | 0x900u;
+                           mem[4] = prog[1]; }
+    for (uint32_t w = 3; w < 16; ++w) mem[0x2000 + w * 4] = 0xa5a50000u | w;
     ref.rf.mem = mem;
 
     // Reset, then seed both register files identically.
@@ -607,8 +696,10 @@ int main(int argc, char **argv) {
     // (0x800-0xe00), and frames grow upward from there well within the budget.
     // The spilled words are ordinary memory and ARE compared per retire.
     ref.rf.r[31] = 0x2000;  ref.rf.r[1] = 0x2040;   // FP, SP
+    ref.rf.r[0]  = 0x2000;                          // PFP
     dut->rootp->i960_top__DOT__u_regs__DOT__glb[15] = 0x2000;
     dut->rootp->i960_top__DOT__u_regs__DOT__loc[1]  = 0x2040;
+    dut->rootp->i960_top__DOT__u_regs__DOT__loc[0]  = 0x2000;
     ref.AC = 0; ref.IP = 0;
     checking = true; ++gate_arms;
 
@@ -631,7 +722,7 @@ int main(int argc, char **argv) {
 
     // Run, comparing at each retire. The DUT retires when it re-enters fetch.
     const uint64_t budget = loop_mode ? steps * 5 : steps;
-    uint64_t calls_prev = rf_call_cnt;
+    uint64_t calls_prev = rf_call_cnt, rets_prev = rf_ret_cnt;
     for (uint64_t r = 0; r < budget && fails == 0; ++r) {
       const uint32_t ip_before = dip();
       int guard = 0;
@@ -671,14 +762,19 @@ int main(int argc, char **argv) {
       tick();
       exec_ip = ref.IP; exec_insn = ref.rd(ref.IP);
       const uint64_t last_calls = calls_prev; calls_prev = rf_call_cnt;
+      const uint64_t last_rets  = rets_prev;  rets_prev  = rf_ret_cnt;
       if (directed || dtrace)
-        std::printf("  [dir] r%-3llu calls=%llu IP dut=%08x ref=%08x insn=%08x | "
-                    "PFP %08x/%08x SP %08x/%08x RIP %08x/%08x FP %08x/%08x\n",
+        std::printf("  [dir] r%-3llu calls=%llu rets=%llu IP dut=%08x ref=%08x insn=%08x | "
+                    "PFP %08x/%08x SP %08x/%08x RIP %08x/%08x FP %08x/%08x"
+                    " pos %d/%d\n",
                     (unsigned long long)r,
-                    (unsigned long long)(rf_call_cnt - last_calls), dip(),
+                    (unsigned long long)(rf_call_cnt - last_calls),
+                    (unsigned long long)(rf_ret_cnt - last_rets), dip(),
                     ref.IP, exec_insn,
                     dreg(0), ref.rf.r[0], dreg(1),  ref.rf.r[1],
-                    dreg(2), ref.rf.r[2], dreg(31), ref.rf.r[31]);
+                    dreg(2), ref.rf.r[2], dreg(31), ref.rf.r[31],
+                    (int)dut->rootp->i960_top__DOT__u_regs__DOT__rcache_pos,
+                    (int)ref.rf.rcache_pos);
       { const uint32_t iw = exec_insn; const uint32_t o = iw>>24;
         if (o==0x78||o==0x68||o==0x6c||o==0x67) fpany++;
         if ((o==0x78||o==0x68||o==0x6c||o==0x67) && (iw&0x2000) && !(iw&0x00e00000)) fpwrites++; }
@@ -710,6 +806,13 @@ int main(int argc, char **argv) {
         }
         if (smc) { ++smc_stops; break; }
       }
+      // The IP must stay inside the program. `ret` below depth zero reloads a
+      // frame from unwritten memory and returns to whatever RIP that yields;
+      // both sides do the same thing and agree, but the fetch then walks
+      // unmapped address space and the run stops meaning anything. Bound it
+      // rather than generating around it -- the generator cannot know at emit
+      // time what the depth will be at execute time.
+      if (ref.IP >= uint32_t(prog.size() * 4)) { ++oob_stops; break; }
       // Compare the DATA MEMORY after every retire, not the bus transaction
       // stream. The stream was the first attempt and it is wrong: an unaligned
       // access legitimately becomes several byte transactions in the DUT and
@@ -760,9 +863,22 @@ int main(int argc, char **argv) {
                 double(ticks) / double(total_retires));
   std::printf("  FP ops executed: %llu, of which FP-register destination: %llu\n", (unsigned long long)fpany, (unsigned long long)fpwrites);
   std::printf("  %llu ended early: subnormal FP operand, %llu: NaN result"
-              ", %llu: self-modifying code  (all recorded deviations)\n",
+              ", %llu: self-modifying code, %llu: IP left the program"
+              "  (all recorded deviations)\n",
               (unsigned long long)denorm_skips, (unsigned long long)nan_stops,
-              (unsigned long long)smc_stops);
+              (unsigned long long)smc_stops, (unsigned long long)oob_stops);
+  {
+    uint64_t tot = 0; for (int i = 0; i < 12; ++i) tot += depth_hist[i];
+    if (tot) {
+      uint64_t deep = 0; for (int i = 4; i < 12; ++i) deep += depth_hist[i];
+      std::printf("  call depth after call:");
+      for (int i = 1; i < 9; ++i)
+        if (depth_hist[i]) std::printf(" %d:%.1f%%", i, 100.0*double(depth_hist[i])/double(tot));
+      std::printf("   >=4 (spills to memory): %.1f%%"
+                  "   [Daytona measured: 8.5%%, max depth 7]\n",
+                  100.0 * double(deep) / double(tot));
+    }
+  }
   std::printf("  fetch: %llu entered, %llu prefetch hits (%.1f%%), "
               "%llu extra T_FETCH cycles, %llu fill-wait cycles\n",
               (unsigned long long)fetch_enter, (unsigned long long)fetch_hit,

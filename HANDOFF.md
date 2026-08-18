@@ -2693,63 +2693,79 @@ One generator note worth keeping: `callx`'s address is a **call target**, so it
 must point at code. Aimed into the data window it calls unwritten memory and
 executes `0xffffffff`, which tests the trap path instead of the call.
 
-### callx lands, and it took two latent frame defects with it
+### callx lands, the frame path gets its first real test, and the throughput figure is corrected downward
 
 `callx` is implemented and verified. Daytona now executes **no unimplemented
 mnemonic**: all 80 distinct mnemonics in the 196,885-instruction sample are
-covered.
+covered. Study entries **R11**, **R12** and **R13**.
 
-Getting there found four things, recorded as **R11** and **R12** in the study.
-
-**The sequencer called twice for every call.** `T_FRAME` exited on `!rf_busy`,
-but `busy` is `state != S_IDLE` and the register file has not yet *seen* the
-request in the first `T_FRAME` cycle. So it left one cycle early, every time,
-refetched the same instruction and called again. Usually swallowed by accident;
-when the refetch was slow (an I-cache fill) it was a **real** second call. One
-`callx` was seen building five frames and spilling to memory. This was latent in
+**Two latent frame defects, neither reachable before now.** `T_FRAME` exited on
+`!rf_busy`, but `busy` is `state != S_IDLE` and the register file has not yet
+*seen* the request in the first `T_FRAME` cycle -- so it left one cycle early
+every time, refetched the same instruction and called again. Usually swallowed by
+accident; when the refetch was slow (an I-cache fill) it was a **real** second
+call, and one `callx` was seen building five frames and spilling to memory. And
+the call target was presented live rather than latched, though `next_ip` is
+sampled in `S_CALL_FIN` several cycles later -- `callx`'s target is `ea`, which
+moves as soon as `ra1`/`ra2` revert on leaving `T_EXEC`. Both were latent in
 `call` and `ret` too.
 
-**The call target was live, not latched.** `next_ip` is sampled in `S_CALL_FIN`,
-several cycles after `op_call`. `callx`'s target is `ea`, which moves as soon as
-`ra1`/`ra2` revert on leaving `T_EXEC`.
+**Neither could have been caught: the whole-CPU generator emitted no `call` or
+`ret` at all.** `i960_regs` has a thorough unit test, and a unit test that drives
+`op_call` itself cannot see a *sequencer* that drives it twice. The generator now
+emits `call`, `callx`, `ret` and `flushreg`, and seeds SP/FP plus a resident frame
+at 0x2000 so a return below depth zero lands somewhere real -- that is the only
+path outside the unit test that exercises the frame **reload**.
 
-**Nothing could have caught either: the whole-CPU generator never emitted `call`
-or `ret`.** `i960_regs` has a thorough unit test, and a unit test that drives
-`op_call` itself cannot see a sequencer that drives it twice. Fixed at the
-source -- the generator now emits `callx`, and SP/FP are seeded to a real stack,
-which nothing needed while nothing called.
+**`cvtri` overflow was wrong twice and the unit test skipped it.** `eu > 31`
+misses the whole exponent-31 band (2^31..2^32 is out of range except -2^31), and
+rounding can carry past 2^32, which was truncated to 32 bits *before* the range
+check and read as `0`. `tb_i960_fpmisc.cpp` contained `if (r < -2147483648.0 || r
+> 2147483647.0) return;` -- it skipped every out-of-range input, so 1.2M passing
+checks never touched the path. Now checked, plus a directed walk of the int32
+boundary both directions in all four rounding modes. MAME's answer here is x86's
+indefinite value from a UB cast, not the manual's; the oracle wins and it is
+recorded rather than buried.
 
-**`cvtri` overflow was wrong twice, and the unit test skipped it.** Sweeping
-seeds after the above failed two of them, both pre-existing. `eu > 31` misses the
-whole exponent-31 band (2^31..2^32 is out of range except -2^31); and rounding
-can carry past 2^32, which was truncated to 32 bits *before* the range check and
-read as `0`. `tb_i960_fpmisc.cpp` contained `if (r < -2147483648.0 || r >
-2147483647.0) return;` -- it skipped every out-of-range input, so the overflow
-path was excluded from the test whose purpose included it. Now checked, plus a
-directed walk of the int32 boundary in both directions and all four rounding
-modes.
+**Throughput corrected: 6.86 -> 5.33 M instr/s.** R10's 6.86 came from a mix with
+no calls in it. Counted from the same traces: `call` 2.053%, `ret` 2.395%, `callx`
+0.262%, `calls` and `flushreg` 0.000%. **The margin over the 0.93 M instr/s demand
+is 5.7x rather than 7.4x. R10's conclusion is unaffected -- the pipeline is still
+not required.**
 
-Two new recorded deviations in the whole-CPU harness, both abandon-the-program
-like the subnormal operand: **self-modifying code** (a clobbered SP/FP sends a
-frame spill over the program; the I-cache has no coherency with data writes and
-the reference has no cache) and **a `callx` targeting its own address** (correct
-infinite recursion that the "IP moved" retire detector reads as a stall).
+**The sharper half of that: the rate alone was not enough.** Emitting call and ret
+at their measured rates gave CPI 6.71 and T_FRAME at 42% of cycles, because ret
+slightly outnumbers call, depth sits at zero, and nearly every ret underflows into
+a sixteen-word memory reload. What sets the cost is how often a call exceeds the
+4-frame cache. Measured from the traces: **max depth 7, and only 8.5% of calls
+spill**. The generator now models depth while emitting and **prints its own spill
+rate beside the measured one every run** -- currently 9.5% vs 8.5%, conservative
+in the right direction -- so the mix cannot drift silently again.
 
-**State:** 15/15 suites pass; the whole-CPU lockstep is clean across **24 seeds**
-(it had been run on one). `T_FRAME` is now genuinely exercised at 2.6% of cycles.
-`i960_top` measures **6,979 ALM** (6,986 before -- flat), Fmax 27.3 -> 26.84 MHz,
-immaterial against the 7.4x throughput margin of R10.
+**Four harness deviations recorded, all abandoning the program like a subnormal
+operand or a legitimate self-loop the retire detector cannot see:** self-modifying
+code (a clobbered SP/FP sends a frame spill over the program; the I-cache has no
+coherency with data writes), the IP leaving the program, a `callx` targeting its
+own slot, and a `ret` immediately after a call -- the return address a call
+records is `ip_next`, so a `ret` there returns to itself forever. That last one is
+the general case and took three separate traces to see in full.
+
+**State:** 15/15 suites pass; whole-CPU lockstep clean across **48 seeds** (it had
+been run on one). `i960_top` measures **6,979 ALM** (6,986 before -- flat), Fmax
+27.3 -> 26.84 MHz.
 
 **Remaining i960 work**, none of it on Daytona's executed path:
 
 - faults and interrupts -- absent entirely, and both touch the sequencer
-- `synmov`/`synmovq`, `calls`, `modpc` -- bounded supervisor work
+- `synmov`/`synmovq`, `calls`, `modpc` -- bounded supervisor work; note `calls`
+  measures 0.000% in the traces
 - `rl` double-precision FP forms (four register reads against a two-port file);
   `remr`
 - six glibc transcendentals -- M2-B found zero in Daytona; confirm before building
 - P1 exit criterion 3: real Model 2A ROM execution with no unimplemented-path hits
 
-**Worth doing next, on the evidence above:** the frame defects were invisible
-because a whole class of instruction was never generated. `calls`, `ret` and
-`flushreg` are still not emitted by the whole-CPU generator, and `ret` in
-particular has a spill/reload path that only the unit test has ever driven.
+**The standing lesson from this session, and it is the fourth instance.** Every
+defect found here was in code that had a passing test. The frame path had a unit
+test that could not observe the bug by construction; `cvtri` had a test that
+skipped the failing inputs by construction; the CPI had a mix missing an entire
+instruction class. **Ask what a passing test cannot see, not whether it passes.**
