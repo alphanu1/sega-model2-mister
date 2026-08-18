@@ -2279,3 +2279,50 @@ Three distinct defects are now known on this path, in order of discovery:
 **Fix (3) in the cache, at block level, before touching the sequencer again** —
 the same lesson as rounds 1-4, where four sequencer fixes failed for a reason
 that lived in the cache.
+
+### Round 8: the cache is EXONERATED; the fault is the capture/pf_ip ordering
+
+Two things established, both by measurement rather than reading.
+
+**1. Same-line fill adoption is now demand-only.** The `S_FILL` rule that lets a
+request for the line being filled become the request the `valid` answers applied
+to *any* request, including a speculative one — so a prefetch could rename an
+answer a demand fetch was waiting for. Restricted to `req_demand`. **Committed:
+block harness clean, whole-CPU clean, no behaviour change to the current
+design.** It was not the overlap's bug, but it is a latent one that only a
+speculative requester can reach.
+
+**2. The cache is consistent, and this is now checked.** A new invariant asserts
+the cache's contract directly: **whenever `valid` is high, `data` must be the
+word at `vaddr`.** It stays silent across the whole run with the overlap in.
+
+That matters because two rounds could not tell "the cache answers
+inconsistently" from "the front end captures the wrong answer" using only the
+consuming end. Now they are separated, and **the cache is exonerated.**
+
+### The remaining fault, stated precisely
+
+`pf_insn` is captured from `ic_data` when `ic_vaddr == pf_ip`, **while the front
+end updates `pf_ip` in the same cycle**:
+
+```
+capture (before the case):  if (pf_armed && ic_valid && ic_vaddr == pf_ip)
+                                pf_insn <= ic_data;   // matches the OLD pf_ip
+front end (in the case):        pf_ip   <= ip + 4;    // pf_ip becomes something else
+```
+
+Both are non-blocking, so `pf_insn` ends up describing the address `pf_ip` held
+*before* the update, while `pf_ip` names a different one. The slot is then
+internally inconsistent — exactly what the invariant reports.
+
+In the current design this is harmless because every path that updates `pf_ip`
+also clears `pf_valid`, so the inconsistent slot is never consumed. **The
+overlap adds a path where it is not cleared**, and the stale word is handed over
+as an instruction.
+
+**The fix is to make one place own the slot**: `pf_ip`, `pf_insn` and `pf_valid`
+should be written together or not at all. Do not add another guard to the
+capture — that has been tried twice and treats the symptom.
+
+**Value unchanged: ~1.0 CPI, the largest remaining lever, `T_FETCH` + `T_EXEC`
+at 52% of cycles.**

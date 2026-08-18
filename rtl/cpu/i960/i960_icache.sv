@@ -215,7 +215,14 @@ module i960_icache #(
           // the answer still names the address the fill started on, and a
           // redirect within the same line receives the wrong word. Placed
           // before the abort below so a different-line request overrides it.
-          if (req && (idx == fill_idx) && (tag == fill_tag)) req_addr_q <= addr;
+          // DEMAND only. A same-line request is satisfied by this fill and so
+          // becomes the request the valid answers -- but a SPECULATIVE one must
+          // not rename an answer a demand fetch is waiting for. This rule was
+          // written for a redirect within a line and predates speculative
+          // requests existing; with a prefetch issuing its own requests it let
+          // `vaddr` name one address while `data` carried another's word.
+          if (req && req_demand && (idx == fill_idx) && (tag == fill_tag))
+            req_addr_q <= addr;
           // A redirect -- taken branch or mispredicted prefetch -- can ask for
           // a different line mid-fill. Restart on it rather than making the
           // requester wait out a line nothing wants.
