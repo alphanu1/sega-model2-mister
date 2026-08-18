@@ -453,6 +453,8 @@ module i960_top (
   // i960_ldst, both valid throughout T_EXEC. Stores gain nothing (they still
   // wait in S_OPD for the register value) and lose nothing.
   logic        lsu_busy, lsu_done, lsu_ldwe;
+  logic        lsu_ldwe_now, lsu_done_now;
+  logic [31:0] lsu_ldword_now;
   logic        lsu_req;
   assign lsu_req = (ts == T_EXEC) && (d_fmt == 2'd3) &&
                    ls_valid && agu_valid && !ls_nomem;
@@ -469,6 +471,8 @@ module i960_top (
     .req(lsu_req), .addr(ea), .size(ls_size), .n_words(ls_nwords),
     .is_store(ls_store), .sign_ext(ls_sext), .is_burst(mm_burst),
     .busy(lsu_busy), .done(lsu_done), .cur_idx(lsu_curidx),
+    .ld_we_now(lsu_ldwe_now), .ld_word_now(lsu_ldword_now),
+    .done_now(lsu_done_now),
     .word_idx(lsu_widx), .st_word(rd1), .ld_word(lsu_ldword), .ld_we(lsu_ldwe),
     .bus_req(lsu_breq), .bus_we(lsu_bwe), .bus_addr(lsu_baddr),
     .bus_be(lsu_bbe), .bus_wdata(lsu_bwdata),
@@ -962,13 +966,20 @@ module i960_top (
         end
 
         T_MEM_W: begin
-          // Loaded words are written back as they arrive.
-          if (lsu_ldwe) begin
+          // Loaded words are written back as they arrive. The `_now` forms are
+          // the same retire seen a cycle earlier, in the ack itself, which is
+          // what removes the cycle the sequencer used to spend noticing.
+          // Byte-split accesses still arrive on the registered path.
+          if (lsu_ldwe_now) begin
+            wa <= (d_srcdst & ls_regmask) + {2'd0, lsu_curidx};
+            wd <= lsu_ldword_now;
+            we <= 1'b1;
+          end else if (lsu_ldwe) begin
             wa <= (d_srcdst & ls_regmask) + {2'd0, lsu_widx};
             wd <= lsu_ldword;
             we <= 1'b1;
           end
-          if (lsu_done) begin ip <= ip_next; ts <= T_FETCH; end
+          if (lsu_done_now || lsu_done) begin ip <= ip_next; ts <= T_FETCH; end
         end
 
         T_FRAME: if (!rf_busy) begin

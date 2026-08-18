@@ -71,6 +71,16 @@ module i960_lsu (
   input  logic [31:0] st_word,       // caller presents the word being stored
   output logic [2:0]  cur_idx,      // live word index, for the STORE source
   output logic [31:0] ld_word,
+
+  // COMBINATIONAL mirrors of the retire, valid in the ack cycle rather than the
+  // one after. `done` and `ld_we` are registered, so the sequencer spent a
+  // whole cycle merely noticing an access had finished -- one of the two a load
+  // costs against a bus that acks immediately. These let it act in the same
+  // cycle; the registered versions stay for the byte-split path, which retires
+  // a state later out of `assemble` and cannot be known early.
+  output logic        ld_we_now,
+  output logic [31:0] ld_word_now,
+  output logic        done_now,
   output logic        ld_we,
 
   // ------- bus
@@ -106,6 +116,17 @@ module i960_lsu (
   logic [31:0] assemble;     // little-endian accumulator
 
   assign busy     = (state != S_IDLE);
+
+  // The aligned, non-split retire, known combinationally in the ack cycle.
+  logic retire_now;
+  assign retire_now  = (state == S_XFER) && bus_ack && !word_split;
+  assign ld_we_now   = retire_now && !store_q;
+  assign done_now    = retire_now && ((widx + 3'd1) >= nw);
+  assign ld_word_now = (sz == 2'd0) ? (sext_q ? {{24{rd_byte[7]}},  rd_byte}
+                                              : {24'd0,            rd_byte})
+                     : (sz == 2'd1) ? (sext_q ? {{16{rd_half[15]}}, rd_half}
+                                              : {16'd0,            rd_half})
+                                    : bus_rdata;
 
   // Bus outputs combinational from registered state only. Registered, they
   // appeared the cycle AFTER S_XFER was entered, so every access spent a cycle
