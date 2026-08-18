@@ -46,6 +46,9 @@ assign AUDIO_L   = 0;
 assign AUDIO_R   = 0;
 assign AUDIO_MIX = 0;
 
+// LED_USER included deliberately: the first build left it undriven, which is
+// exactly the warning this block exists to avoid.
+assign LED_USER  = 0;
 assign LED_DISK  = 0;
 assign LED_POWER = 0;
 assign BUTTONS   = 0;
