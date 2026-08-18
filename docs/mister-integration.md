@@ -5,10 +5,34 @@ blank screen or a frozen loading bar and no other output. None of it is
 Model 1 specific — it is the framework, the toolchain and the SDRAM. Read it
 before wiring up the next core.
 
-The rule that generated most of this list: **a MiSTer core has exactly one
-output channel, and it is the screen.** Everything else — no serial console, no
-printf, no debugger — is absent. Plan for that on day one rather than after the
-fifth twenty-five minute Quartus build that comes back "still white".
+The rule that generated most of this list: **the FPGA fabric has exactly one
+output channel, and it is the screen.** No printf, no debugger, nothing inside
+the core can tell you what it is doing. Plan for that on day one rather than
+after the fifth twenty-five minute Quartus build that comes back "still white".
+
+**Stated precisely, because the earlier wording was wrong and would cost
+someone a real channel at P6.** The *system* does have a serial console: set
+`debug=1` in `mister.ini` and attach USB-mini to the DE10-Nano's UART port, and
+`Main_MiSTer` logs to it. That is the **HPS side** — core loading, config
+parsing, file I/O, `ioctl_download` progress, OSD state — and it is exactly the
+right instrument for the framework deadlocks listed below, `ioctl_wait` among
+them, which otherwise present as a blank screen with no information at all.
+
+What it cannot do is see inside the fabric. For that there are two tools and
+they are not interchangeable:
+
+- **SignalTap** (in Quartus 17.0): a real logic analyser on the running device.
+  Costs M10K and routing, needs a rebuild per probe set, and is the only way to
+  watch a signal on hardware.
+- **The debug overlay** (`m1_diag`, 307 ALM, measured): always available, costs
+  nothing per query, and is why it should be running *before* the first board
+  test rather than after the fifth failed one.
+
+And a third that outranks both while a block is still being built: **the
+simulation harness**. For anything reproducible in Verilator, hardware
+debugging is strictly worse — the lockstep harness gives every internal signal,
+cycle-accurate, diffed against a reference, millions of checks per run. Reach
+for the board when the bug needs the board, not before.
 
 ---
 
