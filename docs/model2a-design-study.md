@@ -521,16 +521,18 @@ The three have different standing and it matters:
 
 #### The i960 row: mostly measured, and what the remainder is
 
-7,079 of the 9,000-14,000 exists and is fitted. The remainder is not more of
+7,079 of the 9,000-14,000 exists and is fitted. (`i960_top` alone measures **6,979
+ALM** as of R12, flat across the `callx` and `cvtri` work.) The remainder is not more of
 the same — it is a specific, listable set:
 
 | still to build | why it is not free |
 |---|---|
 | six glibc transcendentals | `sin cos tan atan log exp`, bit-exact; coefficient tables should land in M10K, not ALM |
 | faults | absent entirely, and they touch the sequencer |
-| `synmov`/`synmovq`, `calls`, `modpc`, interrupts | bounded opcode work |
+| interrupts | absent entirely; no `irq` port exists. Needs the PRCB interrupt table, vectoring, a type-7 call onto the interrupt stack, and the IP/AC save-restore |
+| `synmov`/`synmovq`, `calls`, `modpc` | bounded opcode work. `calls` measures 0.000% in the Daytona traces (R13) |
 | `rl` double-precision forms | needs four register reads against a two-port file |
-| the pipeline | throughput is 5.69 M instr/s against a 12.5 floor |
+| ~~the pipeline~~ | **struck by R10.** The 12.5 M floor was the chip's capability, not the game's demand. Measured demand is 0.93 M instr/s against 5.33 delivered (R13) — the pipeline is not required for Model 2 |
 
 The optimistic 9,000 assumes the transcendentals go mostly to M10K and the
 pipeline costs little area; the pessimistic 14,000 assumes neither. **Neither
