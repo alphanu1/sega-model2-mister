@@ -51,6 +51,8 @@ uint64_t fetch_enter = 0, fetch_hit = 0, fetch_stall = 0, ic_fill_cyc = 0;
 
 bool bus_probe = false;
 int pf_bad = 0;
+bool checking = false;
+uint64_t gate_arms = 0;
 
 // Straight-line programs have NO temporal locality: every instruction runs once,
 // so every I-cache miss is compulsory and no cache of any size can help. An
@@ -95,7 +97,13 @@ void tick() {
   // retires later, with nothing pointing back at the fetch -- which is how four
   // attempts at a prefetch queue each produced a symptom and no diagnosis.
   // Costs nothing and turns that class of bug into a named cause immediately.
-  if ((ts_now == 0 || ts_now == 1) && dut->rootp->i960_top__DOT__fetch_word_ok) {
+  // Gated on a running program. `mem` is rebuilt BEFORE the DUT is reset, so
+  // during those reset cycles the prefetch slot still holds the PREVIOUS
+  // program's word and this would compare it against the NEW program's memory.
+  // That artifact was reported as a real defect across several rounds of
+  // fetch/execute overlap work before it was identified.
+  if (checking && (ts_now == 0 || ts_now == 1) &&
+      dut->rootp->i960_top__DOT__fetch_word_ok) {
     const uint32_t at = dut->rootp->i960_top__DOT__ip;
     auto it = mem.find(at);
     const uint32_t want = (it == mem.end()) ? 0xffffffffu : it->second;
@@ -556,6 +564,7 @@ int main(int argc, char **argv) {
       else        dut->rootp->i960_top__DOT__u_regs__DOT__glb[i-16] = v;
     }
     ref.AC = 0; ref.IP = 0;
+    checking = true; ++gate_arms;
 
   // Self-test of the FP-register plumbing, once. Write a known value into the
   // DUT's fp file and read it back through the same accessor the comparison
@@ -653,6 +662,7 @@ int main(int argc, char **argv) {
       ++retires; ++total_retires;
       if (!compare(r)) break;
     }
+    checking = false;
   }
 
   dut->final(); delete dut;
@@ -681,6 +691,9 @@ int main(int argc, char **argv) {
               (unsigned long long)fetch_enter, (unsigned long long)fetch_hit,
               100.0 * double(fetch_hit) / double(fetch_enter ? fetch_enter : 1),
               (unsigned long long)fetch_stall, (unsigned long long)ic_fill_cyc);
+  // Printed so a gate that never arms cannot silently disable the check --
+  // that happened once and turned a real symptom into an apparent artifact.
+  std::printf("  invariant gate armed %llu times\n", (unsigned long long)gate_arms);
   std::printf("  %llu programs, %llu retires, %llu checks over %llu cycles\n",
               (unsigned long long)progs, (unsigned long long)total_retires,
               (unsigned long long)checks, (unsigned long long)ticks);

@@ -2406,3 +2406,56 @@ diff against memory. Every check so far has sampled a condition; this needs to
 sample a *transition*. Three of this feature's rounds have been lost to a check
 that was silent because it was disabled, duplicated, or gated on a signal that
 was low.
+
+## Fetch/execute overlap: RESOLVED, and the answer is that it does not pay
+
+After ten rounds, both questions are answered.
+
+### It was never broken. The check was.
+
+The failure that survived nine rounds was a **cross-program artifact**. `mem` is
+rebuilt before the DUT is reset, so during those reset cycles the prefetch slot
+still holds the *previous* program's word and the invariant compared it against
+the *new* program's memory. Gated on a running program, **the overlap passes
+everything**: 4,501 retires, 171,038 checks, zero divergence, all 15 suites.
+
+The slot-transition log is what settled it — logging every change of
+`pf_insn`/`pf_ip` with the memory truth showed the same address holding two
+different values at two times, with **no bus write between them**. Memory had
+not changed; it had been *replaced*.
+
+**The gate is now committed, and it prints how many times it armed.** A gate
+that silently never arms turned a real symptom into an apparent artifact once
+already; a counter makes that impossible to miss.
+
+### And measured, it is a regression
+
+| | baseline | with overlap |
+|---|---|---|
+| `T_FETCH` | 1.02 | **0.84** |
+| `T_FETCH_W` | 0.51 | **0.79** |
+| CPI | **3.91** | 4.02 |
+
+The overlap does exactly what it was designed to do — it removes 0.18 cyc/instr
+of fetch state — and **costs 0.29 in fill waits.** The instructions it
+short-circuits are the ones already in cache, so what still reaches `T_FETCH` is
+disproportionately a miss. Making speculative misses drop instead of fill
+changed nothing (0.80 vs 0.79), so it is selection, not wasted fills.
+
+**~1.0 CPI was the estimate. Measured, it is −0.11.** The estimate assumed
+removing a state removes its cycles; it moves them.
+
+### What is kept
+
+- **The invariant gate**, with its arm counter.
+- **`spec_during_fill()`** in the cache harness — speculative traffic during a
+  fill, proven safe.
+- **Demand-only same-line fill adoption** in the cache.
+- Recorded, not kept: the atomic prefetch slot and the combinational prefetch
+  request are both correct and cost nothing; they are only worth applying if
+  something later needs a word during execute.
+
+**The remaining gap is not in fetch.** With the overlap eliminated as a lever,
+CPI 3.91 = **6.84 M instr/s against 12.5 M**, and the next-largest items are
+`T_EXEC` at 1.00 (irreducible without a real pipeline) and `T_FETCH_W` at 0.51
+(I-cache misses, unsizable on this workload).
