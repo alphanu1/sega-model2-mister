@@ -49,6 +49,37 @@ so that a project that cannot fit says so before most of the effort is spent.
 
 ---
 
+### The order changed once, deliberately: P1.5 was inserted
+
+**Decision: a 2D proof-of-concept on real hardware runs before the renderer.**
+This departs from everything above, so the reasoning is recorded rather than
+implied.
+
+*Why it is defensible now and would not have been before.* The paragraph above
+exists to avoid spending effort on a core that cannot fit. Six blocks have since
+been fitted on the target part (study §5.5): the budget moved from 34,160-49,460
+to **24,454-40,293**, with **20,117 ALM measured**, and the optimistic case now
+clears the 92% routing line by 14.1K. The risk that this ordering was built to
+manage — pouring work into a project that says no at the end — has dropped a long
+way. It has not vanished: the pessimistic case is still 1.7K over, and the
+renderer is still the row with none of our RTL in it.
+
+*What it buys.* Every trap in `mister-integration.md` is a **bring-up** trap, and
+they are found by putting a build on a board, not by simulating. Finding them
+with eight blocks in the design is far cheaper than finding them with thirty. It
+also produces the debug overlay, without which nothing after it is debuggable on
+hardware — and it produces something a person can look at, which no amount of
+passing lockstep does.
+
+*What it costs, stated plainly.* **P1.5 does not advance the fit question at
+all.** Every block in it is either measured already or small. If the answer to
+the fit question is eventually no, P1.5 is work thrown away — which is exactly
+what the paragraph above warns against. That is accepted knowingly, on the
+grounds that the odds of that no are materially lower than when this document
+was written.
+
+---
+
 ## P0 — Measure without building. **Do first.**
 
 No FPGA design work. Days, not weeks, and it moves three estimates toward
@@ -156,6 +187,58 @@ decision be made by default.
 
 ---
 
+## P1.5 — 2D on hardware. The POC slice.
+
+**Goal: an `.rbf` that boots on a DE10-Nano and puts a verified Model 2 tilemap
+frame on a screen.** No CPU, no 3D, no sound.
+
+This is a slice of P5 and P6 pulled forward, not new work — see the decision
+above. P5 and P6 keep everything not listed here.
+
+**It is cheap because the blocks exist.** `tools/model1-ref` has all of them, and
+S24TILE is *the same chip* Model 2 uses. Everything lifted is copied into `rtl/`
+with its source commit pinned in `THIRD_PARTY.md`; nothing is referenced in place
+and nothing under `tools/` is edited.
+
+**The video timing transfers unchanged, which was not expected.** P5 said
+"retimed to 496x384". It needs no retiming: MAME declares Model 1 as
+`set_raw(XTAL(16'000'000), 656, 0, 496, 424, 0, 384)` and Model 2 as
+`set_raw(32_MHz_XTAL/2, 656, 0, 496, 424, 0, 384)` — the same pixel clock and the
+same counts. `m1_video_timing.sv` is already correct for Model 2.
+
+| | Step | Lift from | The trap, already paid for |
+|---|---|---|---|
+| 1 | Top level, PLL, video timing to a test pattern | `m1_video_timing` (unchanged) | **Name the PLL `pll` and generate it from the IP tool**, or `sys_top.sdc`'s clock groups match nothing and a passing build fails on hardware |
+| 2 | **Debug overlay** | `m1_diag`, 307 ALM measured | The screen is the only output channel. Hex digits, not blocks. This runs **before** the first board test, not after the fifth failure |
+| 3 | SDRAM and ROM loader | `m1_sdram`, `m1_rom_loader`, `m1_cdc_port`, `bw_monitor` | `ioctl_wait` stalls the HPS itself — always gate it on `ioctl_download`. Memory comes out of reset on PLL lock and stays out, separate from game reset. `mem_ready` and `rom_loaded` are different facts and must not share a signal |
+| 4 | S24TILE | `m1_tile_fetch`, `m1_tile_decode`, `m1_tile_mixer`, `m1_palette` | Rebase char RAM to `0x01080000` |
+| 5 | **The oracle** | MAME | see below |
+
+### Step 5 is what makes this a test rather than a hope
+
+Model 2's tilemap contents are written **by the CPU**, and there is no CPU in this
+slice. So there is nothing on screen unless it is supplied.
+
+**Dump the tilemap RAM and the palette out of MAME at a known frame, load them
+through the ROM loader as though they were ROM, render, and compare against
+MAME's screenshot of that same frame.** That gives the 2D path a real oracle with
+no CPU dependency — the same discipline the i960 got, applied to pixels instead of
+registers. Without it this milestone proves only that the board draws *something*.
+
+Pick the frame deliberately: one where the tilemap carries visible content.
+
+**Exit criteria**
+
+1. Builds under Quartus 17.0 and boots on a DE10-Nano; stable 496x384 video.
+2. The overlay renders legible hex digits **on hardware**, photographed.
+3. A canned state loads over `ioctl` without stalling the HPS.
+4. The rendered frame matches MAME's screenshot for the same frame.
+
+**Explicitly not in scope:** the i960 (it has no interrupts yet — study R14), the
+renderer, sound, and any claim about the fit question.
+
+---
+
 ## P2 — 3D renderer
 
 The largest block, the widest error bar, and **the only block in the design with
@@ -236,7 +319,13 @@ Cheap in risk except for one block.
 | 315-5649, I8251, NVRAM, FIFOs | from scratch, small | MAME BSD-3 references |
 
 Also ported from Model 1 here: SDRAM controller, ROM loader, CDC, bandwidth
-monitor, video timing (retimed to 496x384).
+monitor, video timing.
+
+**Much of this row moved to P1.5** — S24TILE, the SDRAM controller, the ROM
+loader, CDC and video timing are all pulled forward into the hardware POC. What
+remains in P5 is the 68000, the SCSP, and the small I/O blocks. And the video
+timing needs **no** retiming: Model 1 and Model 2 declare identical `set_raw`
+parameters in MAME (see P1.5).
 
 ---
 
@@ -246,6 +335,12 @@ Top level, MiSTer framework, MRA, hardware bring-up. Every trap in
 `mister-integration.md` applies, and the debug overlay (`m1_diag`, 307 ALM,
 measured) should be ported and running **before** the first board test, not
 after the fifth failed one.
+
+**The first bring-up moved to P1.5.** The framework, PLL, video timing, SDRAM,
+ROM loader and overlay are brought up there against a 2D-only design. What
+remains in P6 is integrating the CPU, TGP, renderer and sound into that shell,
+plus the MRA — a much smaller and much better-understood job once a board has
+already booted this framework.
 
 ---
 

@@ -1,5 +1,10 @@
 # Sega Model 2A-CRX on Cyclone V — design study
 
+**Order note:** `docs/milestones.md` now runs a **P1.5 — 2D on hardware** slice before
+the renderer, pulled forward from P5/P6. The decision and its cost are recorded there.
+This study is unaffected: it still holds that the fit question governs, and P1.5
+explicitly does not advance it.
+
 **Status: the fit question is answered in the affirmative, on measurements.** Optimistic
 budget fits with **14.1K spare** against the 92% routing line; pessimistic is 1.7K over it
 and still fits the raw device. The total is **24,454-40,293**, down from 34,160-49,460 and
