@@ -2154,3 +2154,41 @@ T_FETCH_W  0.51   13%
 what the fetch/execute overlap does — worth ~1.0 CPI, which alone would give
 ~9.1 M instr/s. It remains blocked on the prefetch queue; see the STOP note and
 its four rules before attempting it again.
+
+### A shorter route to the overlap, and where it still fails
+
+The two-deep prefetch queue existed **only** to get a word into `T_EXEC`. There
+is a cheaper way to the same place: **issue the prefetch combinationally, in the
+cycle the current word lands, instead of registering it into the next.** That
+buys one cycle of cache latency, so the answer arrives *during* `T_EXEC` rather
+than at the retire boundary — no second slot, no promotion, no flush rules.
+
+It works and is correct: `ic_req_eff = ic_req || pf_req_now`, address
+`ip + 4`, `req_demand` low so a speculative request can never abort a demand
+fill. **All 15 suites pass with it in.**
+
+**On its own it is worth 0.02 CPI (3.91 -> 3.89)** — nothing, because it does
+not remove a state. It is purely an enabler, so it was not kept: it adds
+combinational paths to the cache request for no standalone gain.
+
+**With the overlap on top, a wrong word still reaches the front end**, always at
+the same address:
+
+```
+[PREFETCH] latched 22600000 at ip=000000d4, memory has 5cd89617   pf_ip=000000d4 v1
+```
+
+`pf_valid` is set and `pf_ip` matches `ip`, so `pf_insn` itself is wrong —
+captured for the right address with the wrong data. Address-qualifying the
+capture against `ic_vaddr` did **not** fix it, and the early prefetch alone does
+not provoke it, so it is specific to the overlap's own re-arm path
+(`pf_ip <= ip_next + 4`, `pf_issued`, `ic_req` in the post-case override).
+
+**Next, and it is one experiment rather than a hypothesis:** the queue invariant
+(every valid slot holds the word its address claims, checked every cycle,
+gated on a running program) tells you the cycle `pf_insn` goes wrong. That check
+exists in this file's history and was never run against *this* configuration —
+only against the queue. Run it here first.
+
+**Overlap value is unchanged and still the largest single lever: ~1.0 CPI**, with
+`T_FETCH` + `T_EXEC` now 52% of all cycles.
