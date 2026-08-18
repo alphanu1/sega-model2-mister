@@ -1957,3 +1957,29 @@ already been traced and is correct, so tracing more of it will not help.
 
 Measured value stands at CPI 4.96 -> 4.76 for the overlap, and the queue is
 required for it but is a regression alone (5.07).
+
+### Overlap: two more mechanisms eliminated, and what is left
+
+Instrumented the boundary as the previous entry prescribed. **Neither suspected
+mechanism is the cause:**
+
+- **No double advance.** Counting DUT IP changes against harness retires shows
+  exactly one per retire, every retire, up to the failure.
+- **No illegal IP jump.** Every advance of 8 in a single tick is a legitimate
+  taken COBR branch (`ts = T_FETCH`, overlap not firing, opcodes 0x30/0x37/0x39
+  with +8 displacements). The overlap never skips an instruction.
+
+So the DUT advances correctly and lands on the right addresses, yet by retire 23
+it is executing a different instruction from the reference. **The divergence is
+in WHICH instruction is executed at a correct address**, not in the address
+sequence — which points at the queue delivering a stale or wrong word on a path
+the prefetch invariant does not cover, rather than at the overlap's sequencing.
+
+Note the invariant only checks words latched in `T_FETCH`/`T_FETCH_W`. **The
+overlap latches `insn <= pf_insn` in `T_EXEC`, which the invariant never sees.**
+That is almost certainly the gap: extend the check to the overlap path first —
+it is two lines, and every previous round of this bug was solved by an
+invariant, not by reading the RTL.
+
+Ruled out and worth not re-testing: the harness (passes with the overlap
+disabled and everything else in), double advances, and IP skips.
