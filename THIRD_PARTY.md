@@ -38,6 +38,16 @@ recorded rather than referenced in place.
 | Debug overlay | `rtl/video/m1_diag.sv` | 307 ALM measured |
 | **Video timing — COPIED, in `rtl/video/m2_video_timing.sv`** | `rtl/video/m1_video_timing.sv` @ **`f48c842`** | **No retiming.** MAME declares both machines identically — Model 1 `set_raw(XTAL(16'000'000), 656, 0, 496, 424, 0, 384)`, Model 2 `set_raw(32_MHz_XTAL/2, 656, 0, 496, 424, 0, 384)`. Changed: module and file renamed `m1_`->`m2_`, header and one comment retargeted. Logic untouched. Verified against MAME's numbers by `sim/video/tb_m2_video_timing.cpp`. |
 | Verification harness | `Makefile`, `sim/` | Per-module fuzz targets and the lockstep bridge |
+| **PLL — NOT ported** | `rtl/pll/` | Checked, does not transfer: Model 1's outputs are 80 MHz and **19.2 MHz**, and 19.2 is its V60 core clock. Ours is written by hand in `rtl/pll/pll.v` — the generator emits a plain parameterised `altera_pll` instantiation, not a Qsys black box, so the structure is followed rather than the file copied. |
+
+### MiSTer-devel/Template_MiSTer — GPL-2.0-or-later
+*Copied 2026-08-18 from `third_party/template`*
+
+| Copied | To | Note |
+|---|---|---|
+| `sys/` framework | `sys/` | Unmodified. GPL-2.0-**or-later**, so it is used here under GPL-3. This is the 6,630 ALM row in the budget (§5.5), measured via M2-E. |
+| `Template.qsf`, `Template.qpf` | `Model2.qsf`, `Model2.qpf` | Renamed only. `sys/sys.tcl` supplies FAMILY and DEVICE (5CSEBA6U23I7), and `PRE_FLOW_SCRIPT_FILE` generates `build_id.v` — which `quartus_map` alone does not run, so a direct map invocation needs it generated first. |
+| `Template.sv` structure | `Model2.sv` | Port list via `sys/emu_ports.vh`; the unused-output assignments and `hps_io` instantiation follow the template. The core logic is ours. |
 
 **Not ported:** `rtl/cpu/v60/` — Model 2's main CPU is the i960KB. Nothing from
 the V60 transfers (design study R4).

@@ -2693,6 +2693,46 @@ One generator note worth keeping: `callx`'s address is a **call target**, so it
 must point at code. Aimed into the data window it calls unwritten memory and
 executes `0xffffffff`, which tests the trap path instead of the call.
 
+### P1.5 step 1 DONE: a timing-clean .rbf that draws a test pattern
+
+**`output_files/Model2.rbf` builds, 0 errors, and meets timing with no negative
+slack anywhere.** Not yet run on hardware.
+
+| | |
+|---|---|
+| ALM | **7,170 / 41,910 (17%)** |
+| M10K | 56 / 553 (10%) |
+| DSP | 33 / 112 (29%) |
+| PLLs | 3 / 6 |
+
+Ours is 134 ALM of that (timing 51, pattern 83); the rest is `sys/`. **That
+independently corroborates the 6,630 framework figure** the budget carries from
+M2-E — this build measures ~7,036 for framework plus PLL plus `hps_io` wiring.
+
+**The one real trap, and the doc had already warned about it.** The first
+`rtl/pll/pll.v` put `altera_pll altera_pll_i` directly inside `pll` — correctly
+named at both ends, but with no `pll_inst` level. `sys/sys_top.sdc` groups core
+clocks by matching the whole instance path `*|pll|pll_inst|altera_pll_i|*`, an
+empty `get_clocks` makes `set_clock_groups` a silent no-op, and so **the design
+was not timed at all**: −36.5 ns setup on a 31.25 ns clock, −45.1 on the HDMI PLL,
+−13.2 on audio — while reporting success and emitting an .rbf. Restoring the level
+took every one of those to zero.
+
+The framework PLLs failing made the symptom point away from the cause. And
+`docs/mister-integration.md` has carried this warning, quoting −87 ns, since
+before this core existed. **Second time in one session that a written-down lesson
+did not prevent the thing it described** (see R15). Both fixes are now guards
+rather than prose: `Model2.sdc` counts the matched clocks and raises a Quartus
+error when the count is zero, so the build fails instead of passing vacuously.
+
+**Files:** `Model2.sv` (emu top), `Model2.qsf/.qpf/.sdc`, `files.qip`,
+`rtl/pll/pll.{v,qip}`, `sys/` copied from the MiSTer template. Build with
+`quartus_sh --flow compile Model2`; note `quartus_map` alone does not run the
+pre-flow script that generates `build_id.v`.
+
+**Next: step 2, the debug overlay** (`m1_diag`, 307 ALM) — before any board test,
+not after the fifth failure.
+
 ### P1.5 started: video timing and test pattern done, framework next
 
 **Step 1 RTL is complete and verified. The MiSTer framework is not started.**

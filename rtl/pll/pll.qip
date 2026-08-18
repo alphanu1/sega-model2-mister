@@ -1,0 +1,7 @@
+# Instance assignments the IP generator writes alongside an altera_pll. Without
+# these the PLL still fits, but with generator defaults rather than the ones
+# MiSTer cores are built and timed against.
+set_instance_assignment -name PLL_COMPENSATION_MODE DIRECT   -to "*pll_core*|altera_pll:altera_pll_i*|*"
+set_instance_assignment -name PLL_AUTO_RESET ON              -to "*pll_core*|altera_pll:altera_pll_i*|*"
+set_instance_assignment -name PLL_BANDWIDTH_PRESET AUTO      -to "*pll_core*|altera_pll:altera_pll_i*|*"
+set_global_assignment -name VERILOG_FILE [file join $::quartus(qip_path) "pll.v"]

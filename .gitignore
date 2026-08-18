@@ -30,6 +30,9 @@ incremental_db/
 output_files/
 simulation/
 greybox_tmp/
+build_flow.log
+jtag.cdf
+c5_pin_model_dump.txt
 timing/
 tmp-clearbox/
 hc_output/
@@ -105,3 +108,4 @@ ui.ini
 error.log
 debug.log
 *.tr
+build_id.v

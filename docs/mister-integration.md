@@ -144,6 +144,27 @@ the clocks match nothing, fall outside every group, and get timed against the
 audio PLL. Result: **−87 ns of setup slack, a build that reports success, and
 nothing running on hardware.**
 
+**Sharpened 2026-08-18, having hit it anyway.** The rule is not only about the
+module NAME, and not only about `altera_pll_i`. It is about the **whole instance
+path**, and the level that is easiest to lose is `pll_inst`:
+
+```
+   pll  ->  <inner module> pll_inst  ->  altera_pll altera_pll_i
+```
+
+`rtl/pll/pll.v` was first written with `altera_pll altera_pll_i` directly inside
+`pll` — correctly named at both ends, and still missing `pll_inst`. Functionally
+identical, constraint-wise fatal. Measured cost on this core: **−36.5 ns of setup
+slack on a 31.25 ns clock, plus −45.1 on the HDMI PLL and −13.2 on audio**, all of
+which vanished when the level was restored. The framework PLLs were failing only
+because the core's unconstrained clocks were being timed against them, so the
+symptom points away from the cause.
+
+**This section existed, quoting −87 ns, and did not prevent it.** The durable form
+is the guard below, now in `Model2.sdc`: it counts the matched clocks and raises a
+Quartus *error* when the count is zero, so the build fails instead of passing
+vacuously.
+
 An empty `get_clocks` makes `set_clock_groups` a silent no-op, so check it:
 
 ```tcl
