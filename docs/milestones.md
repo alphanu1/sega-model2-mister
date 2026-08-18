@@ -249,7 +249,7 @@ these frequencies rather than needing the GUI. **It must still be named `pll`.**
 `VGA_*`; add `.qsf`/`.qpf`/`files.qip`; build an `.rbf`. The first four are
 desk work; only the last costs 25 minutes.
 | 2 | ~~**Debug overlay**~~ **DONE** | `m1_diag` -> `rtl/video/m2_diag.sv` @ `b895e6c` | The screen is the only output channel. Hex digits, not blocks. This runs **before** the first board test, not after the fifth failure |
-| 3 | SDRAM and ROM loader | `m1_sdram`, `m1_rom_loader`, `m1_cdc_port`, `bw_monitor` | **One access is `req & ack`, not one cycle of `req`** — a side-effecting target must act on the handshake. The Model 1 TGP popped every FIFO word twice and deadlocked on hardware (`mister-integration.md`).<br> `ioctl_wait` stalls the HPS itself — always gate it on `ioctl_download`. Memory comes out of reset on PLL lock and stays out, separate from game reset. `mem_ready` and `rom_loaded` are different facts and must not share a signal |
+| 3 | ~~SDRAM and ROM loader~~ **WIRED, unverified on hardware** | `m1_sdram`, `m1_rom_loader`, `m1_cdc_port`, `bw_monitor` | **One access is `req & ack`, not one cycle of `req`** — a side-effecting target must act on the handshake. The Model 1 TGP popped every FIFO word twice and deadlocked on hardware (`mister-integration.md`).<br> `ioctl_wait` stalls the HPS itself — always gate it on `ioctl_download`. Memory comes out of reset on PLL lock and stays out, separate from game reset. `mem_ready` and `rom_loaded` are different facts and must not share a signal |
 | 4 | S24TILE | `m1_tile_fetch`, `m1_tile_decode`, `m1_tile_mixer`, `m1_palette` | Rebase char RAM to `0x01080000` |
 | 5 | **The oracle** | MAME | see below |
 

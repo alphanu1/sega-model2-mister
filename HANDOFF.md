@@ -2693,6 +2693,55 @@ One generator note worth keeping: `callx`'s address is a **call target**, so it
 must point at code. Aimed into the data window it calls unwritten memory and
 executes `0xffffffff`, which tests the trap path instead of the call.
 
+### P1.5 step 3 WIRED: SDRAM + ROM loader in, with a readback that proves it
+
+**Builds, 0 errors, timing clean. 7,707 ALM (18%), 58 M10K.** Not on hardware yet.
+
+The whole memory path is instantiated in the 80 MHz domain and the overlay now
+carries seven words, the last two of which are **the first two 32-bit words read
+back out of SDRAM**:
+
+| word | meaning |
+|---|---|
+| 0 | `B0ADCAFE` magic |
+| 1 | frame counter (liveness) |
+| 2 | lines/frame — must be `1A8` |
+| 3 | visible pixels/line — must be `1F0` |
+| 4 | status: `pll_locked`, `mem_ready`, `rom_loaded`, `overflow` |
+| 5 | **ROM word 0, read back from SDRAM** |
+| 6 | **ROM word 1, read back from SDRAM** |
+
+Loading a ROM nothing reads proves nothing. Compare 5 and 6 against the ROM file
+by eye; **if the read capture phase is wrong they come back shifted**, which is
+the failure the new OSD option exists for — so this is also how that option gets
+set, instead of guessing one 25-minute build at a time.
+
+**Three things carried over from the Model 1 core that would each have cost a
+build:**
+
+- **`T_REFI(600)`, not the default 700.** T_REFI is in clock cycles and this
+  domain is 80 MHz: 8192 rows in 64 ms is 625 cycles. 700 under-refreshes and
+  presents as *random ROM corruption*, not as a timing setting.
+- **`SDRAM_CLK = ~clk_sdram`.** The device is clocked on the falling edge, so no
+  phase-shifted PLL output is needed.
+- **Selectable read capture phase**, defaulting to CL+2. Model 1's board returned
+  every burst shifted right by one 16-bit word because the real device answers
+  half a period away from the simulation model.
+
+**Two findings from the integration itself:**
+
+1. **`NP=1` does not elaborate** — the arbiter indexes `grant[2]` unconditionally.
+   Using `NP=5` with four ports tied off rather than editing lifted code; ports
+   1-4 become the CPU, tilemap and renderer.
+2. **This controller addresses 32 MB**, being `[24:1]` with 2 bank and 13 row
+   bits. **Model 2's ROM set is 43.62 MB, so the full set does not fit it on any
+   board.** Fine for P1.5 — the 2D milestone needs the tilemap dump, palette and
+   character data, well under a megabyte — and it must not be forgotten for P6,
+   where it needs widening for a 128 MB module or the DDR3 split.
+
+**Next: step 4, S24TILE** (`m1_tile_fetch/decode/mixer`, `m1_palette`, char RAM
+rebased to `0x01080000`), then step 5's MAME-dump oracle.
+
 ### P1.5 step 3 STARTED: modules lifted, NOT yet wired
 
 **Deliberately bounded.** The four modules are in `rtl/` and lint clean; nothing is

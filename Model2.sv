@@ -29,8 +29,6 @@ assign ADC_BUS  = 'Z;
 assign USER_OUT = '1;
 assign {UART_RTS, UART_TXD, UART_DTR} = 0;
 assign {SD_SCK, SD_MOSI, SD_CS} = 'Z;
-assign {SDRAM_DQ, SDRAM_A, SDRAM_BA, SDRAM_CLK, SDRAM_CKE, SDRAM_DQML, SDRAM_DQMH,
-        SDRAM_nWE, SDRAM_nCAS, SDRAM_nRAS, SDRAM_nCS} = 'Z;
 assign {DDRAM_CLK, DDRAM_BURSTCNT, DDRAM_ADDR, DDRAM_DIN, DDRAM_BE, DDRAM_RD, DDRAM_WE} = '0;
 
 assign VGA_SL  = 0;
@@ -68,6 +66,14 @@ localparam CONF_STR = {
 	"-;",
 	"O[122:121],Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
 	"-;",
+	// The read capture phase is an OSD option rather than a constant because the
+	// Model 1 core found its board returned every burst shifted right by one
+	// 16-bit word. Its m2_sdram derivation of CL+3 is against a model that
+	// presents data on the same edge the controller uses, while the real device
+	// is clocked on the INVERSE of clk_sdram and answers half a period away.
+	// Guessing this one 25-minute build at a time is the alternative.
+	"O[5:4],SDRAM phase,CL+2,CL+3,CL+4,CL+5;",
+	"-;",
 	"R[0],Reset and close OSD;",
 	"v,0;",
 	"V,v",`BUILD_DATE
@@ -87,8 +93,19 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 	.forced_scandoubler(forced_scandoubler),
 	.buttons(buttons),
 	.status(status),
-	.ps2_key(ps2_key)
+	.ps2_key(ps2_key),
+
+	.ioctl_download(ioctl_download),
+	.ioctl_index(ioctl_index),
+	.ioctl_wr(ioctl_wr),
+	.ioctl_addr(ioctl_addr),
+	.ioctl_dout(ioctl_dout),
+	.ioctl_wait(ioctl_wait)
 );
+
+wire        ioctl_download, ioctl_wr, ioctl_wait;
+wire [15:0] ioctl_index, ioctl_dout;
+wire [26:0] ioctl_addr;
 
 ///////////////////////   CLOCKS   ///////////////////////////////
 //
@@ -123,6 +140,121 @@ always @(posedge clk_vid) ce_pix <= ~ce_pix;
 // adding it later does not require rewiring reset.
 wire mem_rst_n  = pll_locked;
 wire game_rst_n = pll_locked & ~RESET & ~status[0] & ~buttons[1];
+
+///////////////////////   SDRAM AND ROM   ///////////////////////
+//
+// ADDRESS WIDTH, AND WHAT IT MEANS FOR MODEL 2. This controller is `[24:1]`
+// throughout with 2 bank bits and 13 row bits: 16M 16-bit words, i.e. **32 MB**.
+// Model 2's ROM set is **43.62 MB** (docs/rom-layout.md), so the full set does
+// NOT fit what this addresses, on any board.
+//
+// Fine for P1.5, and it must not be forgotten for P6. The 2D milestone needs the
+// tilemap dump, palette and character data — well under a megabyte. Carrying the
+// whole ROM needs this controller widened for a 128 MB module, or the DDR3 split
+// docs/rom-layout.md sets aside. Recorded now rather than discovered later.
+
+wire        mem_ready, sd_dq_oe, rom_loaded, ldr_overflow;
+wire [15:0] sd_dq_o;
+wire        ldr_wr_req, ldr_wr_ack;
+wire [24:1] ldr_wr_addr;
+wire [15:0] ldr_wr_din;
+wire  [1:0] ldr_wr_be;
+
+logic        rb_req;
+logic [24:1] rb_addr;
+wire         rb_ack;
+wire  [63:0] rb_dout;
+
+// NP=5, NOT 1. The controller's arbiter indexes grant[2] unconditionally, so a
+// narrower port count fails to elaborate. The lifted file is left unedited and
+// the four unused ports are tied off instead -- synthesis removes what they
+// drive, and the alternative is forking from the reference over an arbiter
+// detail. Port 0 is the readback; 1-4 become the CPU, tilemap and renderer.
+localparam int unsigned NPORTS = 5;
+logic [NPORTS-1:0]        p_req;
+logic [NPORTS-1:0][24:1]  p_addr;
+wire  [NPORTS-1:0][63:0]  p_dout;
+wire  [NPORTS-1:0]        p_ack;
+
+always_comb begin
+	p_req  = '0;
+	p_addr = '0;
+	p_req[0]  = rb_req;
+	p_addr[0] = rb_addr;
+end
+assign rb_dout = p_dout[0];
+assign rb_ack  = p_ack[0];
+
+// T_REFI IS IN CLOCK CYCLES AND THIS DOMAIN IS 80 MHz: 8192 rows in 64 ms is one
+// refresh every 7.8125 us, which is 625 cycles. The default of 700 suits 100 MHz
+// and UNDER-REFRESHES here — a data-retention fault that presents as random ROM
+// corruption rather than as a timing setting.
+m2_sdram #(.NP(NPORTS), .T_REFI(600)) u_sdram (
+	.clk(clk_sdram), .rst_n(mem_rst_n), .ready(mem_ready),
+	// OSD order is CL+2..CL+5 and the selector's own encoding puts CL+3 at zero,
+	// so the two are mapped rather than passed through.
+	.rd_lat_sel(status[5:4] == 2'd0 ? 2'd1 :
+	            status[5:4] == 2'd1 ? 2'd0 : status[5:4]),
+	.sd_cke(SDRAM_CKE), .sd_cs_n(SDRAM_nCS), .sd_ras_n(SDRAM_nRAS),
+	.sd_cas_n(SDRAM_nCAS), .sd_we_n(SDRAM_nWE), .sd_ba(SDRAM_BA),
+	.sd_a(SDRAM_A), .sd_dqm({SDRAM_DQMH, SDRAM_DQML}),
+	.sd_dq_o(sd_dq_o), .sd_dq_oe(sd_dq_oe), .sd_dq_i(SDRAM_DQ),
+	.wr_req(ldr_wr_req), .wr_addr(ldr_wr_addr), .wr_din(ldr_wr_din),
+	.wr_be(ldr_wr_be), .wr_ack(ldr_wr_ack),
+	.p_req(p_req), .p_we('0), .p_addr(p_addr), .p_din('0), .p_be('1),
+	.p_dout(p_dout), .p_ack(p_ack),
+	.dbg_req(), .dbg_grant()
+);
+
+assign SDRAM_DQ  = sd_dq_oe ? sd_dq_o : 16'bZ;
+assign SDRAM_CLK = ~clk_sdram;   // the device is clocked on the falling edge
+
+// `ioctl_wait` STALLS THE HPS ITSELF, so the loader gates it on `ioctl_download`
+// internally — and it ASKS the host to stop rather than stopping it, which is why
+// it buffers into a FIFO with margin instead of trusting the wait to take effect.
+m2_rom_loader u_loader (
+	.clk(clk_sdram), .rst(~mem_rst_n),
+	.mem_ready(mem_ready),
+	.ioctl_download(ioctl_download), .ioctl_index(ioctl_index),
+	.ioctl_wr(ioctl_wr), .ioctl_addr(ioctl_addr), .ioctl_dout(ioctl_dout),
+	.ioctl_wait(ioctl_wait),
+	.sdr_wr_req(ldr_wr_req), .sdr_wr_addr(ldr_wr_addr),
+	.sdr_wr_din(ldr_wr_din), .sdr_wr_be(ldr_wr_be), .sdr_wr_ack(ldr_wr_ack),
+	.tgp_wr(), .tgp_addr(), .tgp_din(),
+	.rom_loaded(rom_loaded), .overflow(ldr_overflow)
+);
+
+// READBACK, WHICH IS THE POINT OF THIS STEP. Loading a ROM that nothing reads
+// proves nothing. After `rom_loaded` this walks the first two 32-bit words out of
+// SDRAM onto the overlay, to be compared against the ROM file by eye. If the read
+// capture phase is wrong they come back SHIFTED — which is the failure the OSD
+// option exists for, so this is also how that option gets set.
+logic [31:0] rb_w0, rb_w1;
+logic  [1:0] rb_state;
+
+always_ff @(posedge clk_sdram or negedge mem_rst_n) begin
+	if (!mem_rst_n) begin
+		rb_req <= 1'b0; rb_addr <= 24'd0; rb_state <= 2'd0;
+		rb_w0 <= 32'd0; rb_w1 <= 32'd0;
+	end else begin
+		case (rb_state)
+			2'd0: if (rom_loaded) begin rb_addr <= 24'd0; rb_req <= 1'b1; rb_state <= 2'd1; end
+			// ONE ACCESS PER HANDSHAKE, not per cycle of the request: it drops on
+			// ack. Harmless against RAM, and the habit is the point — the Model 1
+			// TGP popped every FIFO word twice by acting on the level instead.
+			2'd1: if (rb_ack) begin rb_w0 <= rb_dout[31:0]; rb_req <= 1'b0;
+			                        rb_addr <= 24'd2; rb_state <= 2'd2; end
+			2'd2: begin rb_req <= 1'b1; rb_state <= 2'd3; end
+			2'd3: if (rb_ack) begin rb_w1 <= rb_dout[31:0]; rb_req <= 1'b0; end
+			default: ;
+		endcase
+	end
+end
+
+// Static once captured, so a two-flop synchroniser on the status bit is enough:
+// the data is not moving when the video domain reads it.
+logic [2:0] loaded_sync;
+always_ff @(posedge clk_vid) loaded_sync <= {loaded_sync[1:0], rom_loaded};
 
 ///////////////////////   VIDEO   ////////////////////////////////
 
@@ -212,7 +344,7 @@ end
 
 wire [7:0] ov_r, ov_g, ov_b;
 
-m2_diag #(.NWORDS(4)) u_diag
+m2_diag #(.NWORDS(7)) u_diag
 (
 	.clk(clk_vid),
 	.ce_pix(ce_pix),
@@ -220,10 +352,14 @@ m2_diag #(.NWORDS(4)) u_diag
 	.enable(1'b1),
 	.hb(hblank),
 	.vb(vblank),
-	.words({ {21'd0, vispix_ctr_l},      // 3
-	         {22'd0, line_ctr_l},        // 2
-	         frame_ctr,                  // 1
-	         32'hB0ADCAFE }),            // 0
+	.words({ rb_w1,                                     // 6  ROM word 1
+	         rb_w0,                                     // 5  ROM word 0
+	         {27'd0, ldr_overflow, loaded_sync[2],
+	          mem_ready, pll_locked},                   // 4  status
+	         {21'd0, vispix_ctr_l},                     // 3  pixels = 1F0
+	         {22'd0, line_ctr_l},                       // 2  lines  = 1A8
+	         frame_ctr,                                 // 1  liveness
+	         32'hB0ADCAFE }),                           // 0  magic
 	.in_r(pat_r), .in_g(pat_g), .in_b(pat_b),
 	.out_r(ov_r), .out_g(ov_g), .out_b(ov_b)
 );
