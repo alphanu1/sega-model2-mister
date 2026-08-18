@@ -2693,6 +2693,30 @@ One generator note worth keeping: `callx`'s address is a **call target**, so it
 must point at code. Aimed into the data window it calls unwritten memory and
 executes `0xffffffff`, which tests the trap path instead of the call.
 
+### P1.5 step 2 DONE: the overlay is in, and it prints the timing numbers
+
+`rtl/video/m2_diag.sv`, lifted from Model 1 at `b895e6c`, wired over the test
+pattern. Build: **7,256 ALM (+86), 0 errors, timing clean.**
+
+It reports four words, and the point is that two of them are **assertions the
+board can fail**:
+
+| word | value | meaning |
+|---|---|---|
+| 0 | `B0ADCAFE` | magic — a garbled overlay is obvious rather than plausible |
+| 1 | frame counter | liveness, numerically, wrapping |
+| 2 | lines last frame | **must read `000001A8`** (424) |
+| 3 | visible pixels per line | **must read `000001F0`** (496) |
+
+Those are MAME's `set_raw` numbers. `sim/video/tb_m2_video_timing.cpp` already
+asserts them in simulation — **simulation proving them and silicon proving them
+are different claims**, and until now only the first had been made. If the board
+shows anything other than 1A8 and 1F0, the timing is wrong on hardware regardless
+of what the testbench says.
+
+**Next: step 3, SDRAM + ROM loader.** The standing rule from `b895e6c` applies from
+its first peripheral — **one access is `req & ack`, not one cycle of `req`**.
+
 ### One access is `req & ack`, not one cycle of `req` — pulled at `b895e6c`
 
 Model 1 found a TGP FIFO bug that **transfers straight to our bus fabric**, and

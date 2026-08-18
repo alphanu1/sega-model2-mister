@@ -169,14 +169,73 @@ m2_testpattern u_pattern
 	.b(pat_b)
 );
 
+///////////////////////   OVERLAY   //////////////////////////////
+//
+// The pattern proves the picture is THERE. The overlay proves it is RIGHT, by
+// printing the numbers instead of leaving them to the eye:
+//
+//   0  magic 0xB0ADCAFE -- a garbled overlay is obvious rather than plausible
+//   1  frame counter    -- liveness, numerically, and it wraps
+//   2  lines last frame -- MUST read 000001A8 (424)
+//   3  visible pixels per line -- MUST read 000001F0 (496)
+//
+// Those are MAME's set_raw numbers (docs and sim/video/tb_m2_video_timing.cpp
+// assert the same two). Simulation proving them and silicon proving them are
+// different claims, and until now only the first had been made.
+
+reg [31:0] frame_ctr;
+reg  [9:0] line_ctr,  line_ctr_l;
+reg [10:0] vispix_ctr, vispix_ctr_l;
+reg        vblank_dd;
+
+always @(posedge clk_vid) begin
+  if (!mem_rst_n) begin
+    frame_ctr <= 0; line_ctr <= 0; vispix_ctr <= 0;
+    line_ctr_l <= 0; vispix_ctr_l <= 0;
+  end else if (ce_pix) begin
+    vblank_dd <= vblank;
+    // Count visible pixels on ONE line only, so the figure is per-line and not
+    // per-frame: it is latched at the end of a line and reset immediately.
+    if (visible) vispix_ctr <= vispix_ctr + 1'd1;
+    if (hcnt == 10'd0) begin
+      if (|vispix_ctr) vispix_ctr_l <= vispix_ctr;
+      vispix_ctr <= 0;
+      line_ctr   <= line_ctr + 1'd1;
+    end
+    if (vblank & ~vblank_dd) begin       // frame boundary
+      frame_ctr  <= frame_ctr + 1'd1;
+      line_ctr_l <= line_ctr;
+      line_ctr   <= 0;
+    end
+  end
+end
+
+wire [7:0] ov_r, ov_g, ov_b;
+
+m2_diag #(.NWORDS(4)) u_diag
+(
+	.clk(clk_vid),
+	.ce_pix(ce_pix),
+	.rst_n(mem_rst_n),
+	.enable(1'b1),
+	.hb(hblank),
+	.vb(vblank),
+	.words({ {21'd0, vispix_ctr_l},      // 3
+	         {22'd0, line_ctr_l},        // 2
+	         frame_ctr,                  // 1
+	         32'hB0ADCAFE }),            // 0
+	.in_r(pat_r), .in_g(pat_g), .in_b(pat_b),
+	.out_r(ov_r), .out_g(ov_g), .out_b(ov_b)
+);
+
 assign CLK_VIDEO = clk_vid;
 assign CE_PIXEL  = ce_pix;
 
 assign VGA_DE = ~(hblank | vblank);
 assign VGA_HS = hs;
 assign VGA_VS = vs;
-assign VGA_R  = pat_r;
-assign VGA_G  = pat_g;
-assign VGA_B  = pat_b;
+assign VGA_R  = ov_r;
+assign VGA_G  = ov_g;
+assign VGA_B  = ov_b;
 
 endmodule
