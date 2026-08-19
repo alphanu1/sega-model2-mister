@@ -2736,6 +2736,48 @@ the controller's geometry is parameterised and its ports widened, the loader tak
 **`check_mra` earned its place immediately** — it caught me putting `--` back into
 an XML comment while restoring the MRA, which is the exact fault it was added for.
 
+### i960 interrupts, increment 3: the core boots itself from low memory
+
+**`T_BOOT` reads the startup record before the first instruction fetch**, the way
+the real part does (MAME `device_reset`):
+
+```
+SAT = mem[0]     PRCB = mem[4]     IP = mem[12]
+```
+
+Verified, not assumed — the harness checks the loaded values against the record it
+laid down:
+
+```
+[boot] SAT=dead5a70 PRCB=deadfbcb IP=00000100  loaded from mem[0]/mem[4]/mem[12]
+```
+
+**That check exists because arriving at `PROG_BASE` proves only that the IP is
+right, and it would have been right by accident if the walk had never run.** SAT
+and PRCB carry distinctive values in the record for exactly that reason. The
+harness no longer pokes the IP at all.
+
+A boot master sits above the register-file spill in the bus arbiter, which is safe
+because it only runs in `T_BOOT`, before any other master can have work. On the
+last read it sets `ip`, mirrors it into `pf_ip` and invalidates the prefetch slot,
+so the first fetch goes to the loaded address rather than to whatever the front end
+speculated from the reset value of 0.
+
+**7,055 -> 7,082 ALM**, lint clean, 17 suites green, 12 seeds clean.
+
+**`PRCB` is now real, so `take_interrupt` is buildable.** What remains for
+interrupts:
+
+1. **`ICR` needs a write path.** MAME's `m_ICR` is set by the game; find how (it is
+   not a plain memory write — check `sysctl`) before guessing.
+2. **`take_interrupt`** — the sequence is written out in the increment-1 notes:
+   PRCB+20/+24, the vector fetch at `int_tab + 36 + (vector-8)*4`, the stack
+   computation, `do_call(IRQV, 7, SP)`, three frame writes, then the PC update.
+3. **The `irq[3:0]` input and the immediate path** — vector from the `ICR` byte,
+   priority = vector/8, taken when `cpu_pri < priority`.
+4. **Type-7 `ret` restoring PC and AC**, which is deliberately absent on both
+   sides today so they stay identical.
+
 ### i960 interrupts, increment 2: the architectural state exists
 
 `PC`, `SAT`, `PRCB` and `ICR` are registers in both the module and the reference,

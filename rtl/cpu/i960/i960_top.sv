@@ -140,6 +140,7 @@ module i960_top (
   /* verilator lint_on UNUSEDSIGNAL */
 
   typedef enum logic [3:0] {
+    T_BOOT,
     T_FETCH, T_FETCH_W, T_FETCH2, T_FETCH2_W, T_DECODE,
     T_EXEC, T_MEM, T_MEM_W, T_MULDIV, T_MULTI, T_PAIR, T_FP, T_WB, T_FRAME,
     T_TRAP
@@ -551,6 +552,18 @@ module i960_top (
   // data access in progress cannot be abandoned without losing the transaction.
   // Register-file spill outranks both because it is mid-frame-operation.
 
+  // BOOT MASTER. The i960 reads its startup state from low memory before it
+  // executes anything (MAME i960.cpp device_reset):
+  //
+  //     SAT = mem[0]     PRCB = mem[4]     IP = mem[12]
+  //
+  // It sits ABOVE the register-file spill in priority, which is safe because it
+  // only ever runs in T_BOOT, before any other master can have work.
+  logic        boot_req;
+  logic [31:0] boot_addr;
+  logic        boot_ack;
+  logic  [1:0] boot_step;
+
   logic rf_mem_ack, lsu_back, ic_back;
 
   always_comb begin
@@ -562,8 +575,12 @@ module i960_top (
     rf_mem_ack = 1'b0;
     lsu_back   = 1'b0;
     ic_back    = 1'b0;
+    boot_ack   = 1'b0;
 
-    if (rf_mem_req) begin
+    if (boot_req) begin
+      bus_req = 1'b1; bus_we = 1'b0; bus_addr = boot_addr; bus_be = 4'b1111;
+      boot_ack = bus_ack;
+    end else if (rf_mem_req) begin
       bus_req = 1'b1; bus_we = rf_mem_we; bus_addr = rf_mem_addr;
       bus_wdata = rf_mem_wdata; bus_be = 4'b1111;
       rf_mem_ack = bus_ack;
@@ -695,7 +712,7 @@ module i960_top (
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      ts        <= T_FETCH;
+      ts        <= T_BOOT;
       fpr[0]    <= 64'd0;
       fpr[1]    <= 64'd0;
       fpr[2]    <= 64'd0;
@@ -718,6 +735,9 @@ module i960_top (
       trap_op   <= 8'd0;
       halted    <= 1'b0;
       ic_req    <= 1'b0;
+      boot_req  <= 1'b1;
+      boot_addr <= 32'd0;
+      boot_step <= 2'd0;
       we        <= 1'b0;
       wa        <= 5'd0;
       wd        <= 32'd0;
@@ -768,6 +788,30 @@ module i960_top (
       rf_flush <= 1'b0;
 
       case (ts)
+        // --------------------------------------------------------- boot
+        // Three reads before the first instruction fetch, in the order the real
+        // part does them. Nothing else is running: the front end has not been
+        // asked for anything, so no other master can be mid-transaction.
+        T_BOOT: if (boot_ack) begin
+          case (boot_step)
+            2'd0: begin sat_reg  <= bus_rdata; boot_addr <= 32'd4;
+                        boot_step <= 2'd1; end
+            2'd1: begin prcb_reg <= bus_rdata; boot_addr <= 32'd12;
+                        boot_step <= 2'd2; end
+            default: begin
+              // mem[12] is the initial IP. The prefetch slot is left invalid, so
+              // the first fetch goes to this address rather than to whatever the
+              // front end had speculated from the reset value of 0.
+              ip       <= bus_rdata;
+              pf_ip    <= bus_rdata;
+              pf_valid <= 1'b0;
+              pf_armed <= 1'b0;
+              boot_req <= 1'b0;
+              ts       <= T_FETCH;
+            end
+          endcase
+        end
+
         // T_FETCH and T_FETCH_W share one body. The front end below appears
         // ONCE on purpose: it used to live in T_DECODE, and duplicating it into
         // the prefetch-hit path and the fill path is exactly how those two

@@ -692,15 +692,29 @@ int main(int argc, char **argv) {
     // Reset, then seed both register files identically.
     dut->rst_n = 0; dut->bus_ack = 0;
     for (int i = 0; i < 4; i++) tick();
-    // Set the IP BEFORE the first cycle out of reset, not after. Poking it later
-    // leaves the front end already fetching from 0: the prefetch invariant caught
-    // exactly that, latching dead5a70 -- the SAT word at mem[0] -- while ip read
-    // 0x100. The prefetch slot is invalidated with it.
-    dut->rootp->i960_top__DOT__ip       = PROG_BASE;
-    dut->rootp->i960_top__DOT__pf_ip    = PROG_BASE;
-    dut->rootp->i960_top__DOT__pf_valid = 0;
-    dut->rootp->i960_top__DOT__pf_armed = 0;
+    // NO LONGER POKED. The module now walks the boot record itself in T_BOOT --
+    // mem[0] to SAT, mem[4] to PRCB, mem[12] to the IP -- so it arrives at
+    // PROG_BASE the way the real part does. The harness only has to lay the
+    // record down, which it did above.
     dut->rst_n = 1; tick();
+    // Let the three boot reads complete before the reference is started.
+    for (int g = 0; g < 200 && dip() != PROG_BASE; ++g) tick();
+    // CHECK THE BOOT ACTUALLY HAPPENED. Arriving at PROG_BASE proves only that
+    // the IP is right, and it would be right by accident if the walk had not run
+    // at all and something else had set it. SAT and PRCB have distinctive values
+    // in the record for exactly this reason.
+    {
+      static bool boot_checked = false;
+      if (!boot_checked) {
+        boot_checked = true;
+        const uint32_t sat  = dut->rootp->i960_top__DOT__sat_reg;
+        const uint32_t prcb = dut->rootp->i960_top__DOT__prcb_reg;
+        std::printf("  [boot] SAT=%08x PRCB=%08x IP=%08x  %s\n", sat, prcb, dip(),
+                    (sat == 0xdead5a70u && prcb == 0xdeadfbcbu && dip() == PROG_BASE)
+                      ? "loaded from mem[0]/mem[4]/mem[12]" : "BOOT DID NOT RUN");
+        if (!(sat == 0xdead5a70u && prcb == 0xdeadfbcbu)) ++fails;
+      }
+    }
     for (int i = 0; i < 32; i++) {
       uint32_t v = uint32_t(rng());
       // Keep every register a NORMAL single when read as a float. The FP units
