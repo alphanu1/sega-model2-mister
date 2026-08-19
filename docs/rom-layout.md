@@ -88,3 +88,38 @@ document, not a description of working behaviour.
 **Packaging note:** MiSTer's MRA flow reads `.zip`. The set to hand here is
 `daytona93.7z`, which must be repacked as `daytona93.zip` — the MRA names it that
 way. The bytes never enter this repository either way.
+
+
+---
+
+## The 2D test blob (P1.5 step 5)
+
+There is no CPU in the P1.5 slice, so nothing writes the tilemap and the screen is
+black however good the fetcher is. The oracle is a **captured tilemap state**,
+dumped out of MAME at a known frame:
+
+```
+M2_FRAME=2300 M2_OUT=<dir> mame daytona93 -rompath ... \
+  -sound none -video none -nothrottle -skip_gameinfo \
+  -autoboot_script tools/mame_m2_tiledump.lua
+```
+
+It reads three regions from `model2.cpp`'s map and writes them little-endian:
+
+| i960 address | size | file | blob offset |
+|---|---|---|---|
+| `0x01000000` | 0x10000 | `tile.bin` | `0x000000` |
+| `0x01800000` | 0x04000 | `palette.bin` | `0x010000` |
+| `0x01080000` | 0x80000 | `char.bin` | `0x014000` |
+
+Concatenated that is **0x94000, 592 KB** — comfortably inside the 32 MB this
+controller addresses, unlike the full 43.62 MB game set. `mra/Model2 2D Tilemap
+Test.mra` loads it.
+
+**Verified to contain real content before being trusted**: 39.7% of the tile RAM,
+55.9% of the char RAM and 38.6% of the palette are bytes other than `00` or `FF`.
+A dump of an empty tilemap would have looked like a working pipeline producing a
+black screen.
+
+**`m2tiles.bin` is ROM-derived and never enters this repository.** The `.mra` and
+the extractor do; the bytes do not.
