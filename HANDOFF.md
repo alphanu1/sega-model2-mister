@@ -2736,6 +2736,45 @@ the controller's geometry is parameterised and its ports widened, the loader tak
 **`check_mra` earned its place immediately** — it caught me putting `--` back into
 an XML comment while restoring the MRA, which is the exact fault it was added for.
 
+### CAUTION on my own evidence, from the Model 1 core at `d53a149`
+
+That project found **six TGP defects in a day** and wrote down two lessons that
+apply directly here, so they are recorded before the next session repeats them.
+
+**1. A suite can pass because it does not model the conditions the fault lives
+in.** Their `mb86233_agu` ran 3,000,000 cases and missed a defect "because it
+tests the AGU as a combinational function while the fault is in *when* the core
+applies it — nothing in that suite has a stalling memory."
+
+**2. "diverged=0 has now been cited as evidence three times and found not to
+be."**
+
+**Both land on me.** I have cited `test_m2_sdram`'s **74,729 checks, 0 fails** as
+proof the SDRAM controller is sound at least four times today. That suite is
+better than the AGU case — it has a device model with protocol checking — but it
+runs under Verilator against a *model*, not the board, and the fault in play is
+one the model does not reproduce. **It is evidence the controller is logically
+consistent with the model. It is not evidence the controller works.**
+
+**3. Their fault class is worth checking for directly:** the AGU post-increment
+"fired once per CYCLE, not once per access", because the state is held while the
+access completes — the same shape as the FIFO pop/push that preceded it. Our copy
+engine clears `cp_req` on ack, so it is one action per handshake; but `p_ack` is
+held for `ACK_HOLD` cycles, and **anything that samples an ack as a level rather
+than an edge in this design is suspect.**
+
+### And a hypothesis I got wrong, recorded before the board disproves it
+
+I argued the fault was the single-word read path because the copy engine was "the
+only consumer of a `blen=1` port". **That is false.** `Model1.sv` line 429 reads
+`.sdr_dout(p_dout[0][15:0])` — its V60 uses port 0, single-word, and that core
+works on hardware. So `blen=1` is exercised and sound in the sister project.
+
+The deployed build still discriminates, because our port-0 usage differs from
+theirs in one respect that remains untested: **theirs is sporadic CPU traffic,
+ours is 36,864 back-to-back reads at maximum rate.** If moving to port 1 fixes it,
+the difference is the access *pattern*, not the port width.
+
 ### The tilemap renderer is VERIFIED against MAME, point by point
 
 Checked after the first garbled render, because porting Model 1's renderer without
