@@ -1707,3 +1707,69 @@ internal organisation. The correction was not better reasoning — it was walkin
 the parameter down one step at a time against a checksum over 36,864 real words,
 which is the only test that distinguishes a working geometry from an aliasing one.
 **A single-address test passes at every setting**, including the broken one.
+
+---
+
+**R20 — a sentinel that collides with a legal value is not a sentinel, and it
+cost four wrong diagnoses.** `synmov` is the only instruction that writes `ICR`,
+and `ICR` supplies the vector byte for all four IRQ lines, so nothing about
+interrupts is reachable without it. Its lockstep divergence was:
+
+```
+MEMSTATE retire 22  6bc4a65c dut=deadfbcb ref=ffffffff  (insn 6004c006)
+```
+
+*What was believed.* That the module was at fault — it was the new code, and
+`ref=ffffffff` reads as "the reference never wrote here", since unwritten memory
+returns `0xFFFFFFFF` by the standing rule in `docs/mister-integration.md`. Four
+successive hypotheses were spent on the module's bus timing, including a
+`callx`-shaped latching fix that produced a **bit-identical** failure and should
+have ended that line of enquiry on the spot.
+
+*What is now known.* The reference **did** write, and what it wrote was
+`0xFFFFFFFF`. `synmov` was the only memory operation in the reference reaching
+`Regs::read`/`Regs::write` instead of the CPU's own `rd()`/`wr()`, and the two
+differ in a way nothing else exposed:
+
+| | aligns address | records in `stores` |
+|---|---|---|
+| `CpuRef::rd`/`wr` | yes, `a & ~3` | yes |
+| `Regs::read`/`write` | **no** | **no** |
+
+With an unaligned source address every lookup missed the map and returned the
+unwritten sentinel, which was then written to the destination as data. **The
+harness cannot distinguish a written `0xFFFFFFFF` from unwritten memory**, so the
+symptom presented as the reference not executing the instruction at all.
+
+*How it was established.* One decode of `6004c006` — `src2 = r19`, no literal
+bit — against the two accessors' definitions. This is the same shape as R15: the
+instrument was the suspect and was never checked, and reasoning about the
+reference substituted for reading it.
+
+*Two further faults found while fixing it, neither of which was failing anything:*
+
+- **`ICR` was never compared.** The suite reported zero mismatches on `synmov`
+  while the one path that matters was unchecked. The memory-to-memory case is
+  covered by the per-retire memory sweep, but the ICR case writes **no memory by
+  definition** — a module that dropped the write entirely was indistinguishable
+  from one that performed it. Now compared, and mutation-tested both ways
+  (corrupt the write, and drop it): each is caught at retire 2.
+- **`ts & 15` had silently stopped covering the state field.** `ts` is five bits
+  with eighteen states; the mask wrapped `T_SYNMOV_RD` (16) onto `T_FETCH` (0)
+  and `T_SYNMOV_WR` (17) onto `T_FETCH_W` (1). The enum comment in
+  `i960_top.sv` asserts that *appending* new states protects the prefetch
+  invariant — that was true up to sixteen states and stopped being true at the
+  seventeenth. **Appending was necessary and never sufficient.** While it was
+  wrong the prefetch invariant ran during both `synmov` states, and the
+  histogram booked 334 `synmov` cycles as "extra `T_FETCH` cycles" — a
+  measurement, quoted in fetch statistics, that was describing the wrong state.
+
+*The rule.* Coverage counters are now printed for `synmov` (284 executed, 50 of
+them the ICR path) and the run warns if the ICR path never fired, because a green
+suite that never executed the instruction is the failure this entry is about.
+
+*Alignment.* `synmov` is an atomic word operation and the i960 requires both
+operands word-aligned. MAME splits an unaligned `read_dword` across two words,
+but that is its memory system rather than the silicon it models, so both sides
+state the alignment rule independently and **nothing is claimed about unaligned
+`synmov`**.

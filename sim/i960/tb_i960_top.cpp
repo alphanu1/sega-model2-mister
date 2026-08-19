@@ -40,14 +40,27 @@ const int MAX_REPORT = 10;
 // Cycles spent in each sequencer state. Measuring before optimising, because
 // the last time this project optimised on intuition it went after the wrong
 // block entirely.
-uint64_t state_cycles[16] = {0};
-const char *STATE_NAME[16] = {
+// 32 entries, and the mask below is 31, NOT 15. `ts` is five bits and there are
+// eighteen states: `& 15` wrapped T_SYNMOV_RD (16) onto T_FETCH (0) and
+// T_SYNMOV_WR (17) onto T_FETCH_W (1). The enum comment in i960_top.sv claims
+// that appending new states protects the prefetch invariant -- that stopped
+// being true at the seventeenth state. Appending is necessary and was never
+// sufficient; the mask has to cover the field. Consequences while it was 15:
+// the prefetch invariant ran during both synmov states and compared a fetch
+// word that was not being latched, and the histogram booked synmov cycles as
+// T_FETCH, so the states appeared to cost nothing.
+uint64_t state_cycles[32] = {0};
+const char *STATE_NAME[32] = {
   "T_FETCH","T_FETCH_W","T_FETCH2","T_FETCH2_W","T_DECODE","T_EXEC",
   "T_MEM","T_MEM_W","T_MULDIV","T_MULTI","T_PAIR","T_FP","T_WB","T_FRAME",
-  "T_TRAP","?"
+  "T_TRAP","T_BOOT","T_SYNMOV_RD","T_SYNMOV_WR",
+  "?","?","?","?","?","?","?","?","?","?","?","?","?","?"
 };
 
 uint64_t fetch_enter = 0, fetch_hit = 0, fetch_stall = 0, ic_fill_cyc = 0;
+// Run-wide synmov coverage. `ref` is reconstructed per program, so its own
+// counters have to be drained into these before it is replaced.
+uint64_t syn_total = 0, syn_icr_total = 0;
 
 bool bus_probe = false;
 int pf_bad = 0;
@@ -100,7 +113,7 @@ void tick() {
     if (dp >= 0 && dp < 11) ++depth_hist[dp + 1];
   }
   if (dut->rootp->i960_top__DOT__rf_ret)  ++rf_ret_cnt;
-  const int ts_now = dut->rootp->i960_top__DOT__ts & 15;
+  const int ts_now = dut->rootp->i960_top__DOT__ts & 31;
   // PREFETCH INVARIANT, checked in the cycle a word is latched: whatever the
   // front end accepts must be the word actually at `ip`. A front end that hands
   // over the wrong instruction otherwise surfaces as a wrong register dozens of
@@ -202,6 +215,7 @@ uint32_t dreg(int i) {
                   : dut->rootp->i960_top__DOT__u_regs__DOT__glb[i-16];
 }
 uint32_t dac() { return dut->rootp->i960_top__DOT__ac; }
+uint32_t dicr() { return dut->rootp->i960_top__DOT__icr_reg; }
 
 // fp0-fp3. Comparing these closes a real gap: an instruction whose only effect
 // is an FP-register write was previously executed by both sides and checked by
@@ -254,7 +268,7 @@ bool mix_daytona = false;
 // describes nothing.
 // synmov is generated at weight ZERO until the divergence below is resolved.
 // Turning it on is one number, and the failing case is recorded in HANDOFF.
-const int W_COVER[C_N]  = { 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 4, 8, 0 };
+const int W_COVER[C_N]  = { 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 4, 8, 6 };
 // synmov measures 0.000% in the Daytona traces, so the measured mix gets none.
 const int W_DAYTON[C_N] = { 12, 4, 0, 6, 1, 2, 1, 3, 10, 1, 45, 8, 3, 4, 0 };
 
@@ -338,6 +352,23 @@ bool compare(uint64_t n) {
                   (unsigned long long)n, dac(), ref.AC);
     ++fails;
   }
+
+  // ICR. Compared because synmov's WHOLE PURPOSE is to write it -- it supplies
+  // the vector byte for each of the four IRQ lines and nothing else sets it.
+  // Without this the synmov suite ran green while the one path that matters
+  // was unchecked: the memory-to-memory case is compared by the per-retire
+  // memory sweep, but the ICR case writes NO memory by definition, so a module
+  // that dropped the write entirely would have looked identical to one that
+  // performed it. icr_writes below is printed so a run that never took the
+  // path cannot report as coverage.
+  ++checks;
+  if (dicr() != ref.ICR) {
+    ok = false;
+    if (fails < MAX_REPORT)
+      std::printf("  MISMATCH retire %llu  ICR  got=%08x want=%08x  (insn %08x)\n",
+                  (unsigned long long)n, dicr(), ref.ICR, exec_insn);
+    ++fails;
+  }
   ++checks;
   if (dip() != ref.IP) {
     ok = false;
@@ -395,6 +426,7 @@ int main(int argc, char **argv) {
   uint64_t total_retires = 0, trapped_progs = 0;
 
   for (uint64_t p = 0; p < progs && fails == 0; ++p) {
+    syn_total += ref.syn_count; syn_icr_total += ref.syn_icr_count;
     mem.clear(); ref = i960ref::Cpu(); dut_stores.clear();
 
     // Generate a straight-line program of REG and COBR forms. Work RAM at
@@ -909,7 +941,7 @@ int main(int argc, char **argv) {
   // misses and the per-program reset, so it is an upper bound on steady state.
   if (total_retires) {
     std::printf("\n  cycles by sequencer state, per retired instruction:\n");
-    for (int i = 0; i < 16; i++)
+    for (int i = 0; i < 32; i++)
       if (state_cycles[i])
         std::printf("    %-12s %10llu  %6.2f cyc/instr  %5.1f%%\n",
                     STATE_NAME[i], (unsigned long long)state_cycles[i],
@@ -949,6 +981,13 @@ int main(int argc, char **argv) {
   std::printf("  %llu programs, %llu retires, %llu checks over %llu cycles\n",
               (unsigned long long)progs, (unsigned long long)total_retires,
               (unsigned long long)checks, (unsigned long long)ticks);
+  // Drain the final program's counters -- the loop drains at each reset, which
+  // means the last program's are still in `ref` when the run ends.
+  syn_total += ref.syn_count; syn_icr_total += ref.syn_icr_count;
+  std::printf("  synmov: %llu executed, %llu of them the ICR path\n",
+              (unsigned long long)syn_total, (unsigned long long)syn_icr_total);
+  if (!syn_icr_total)
+    std::printf("  WARNING: the ICR path never executed -- synmov is UNCHECKED\n");
   std::printf("  %llu mismatches\n", (unsigned long long)fails);
   if (fails) { std::printf("FAIL\n"); return 1; }
   std::printf("PASS\n"); return 0;

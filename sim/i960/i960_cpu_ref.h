@@ -85,6 +85,11 @@ struct Cpu {
   uint32_t SAT = 0, PRCB = 0; // loaded from mem[0] and mem[4] at reset on real
                               // silicon; the boot sequence is a later increment
   uint32_t ICR = 0xff000000;  // one vector byte per IRQ line
+  // Coverage, not state. A synmov suite reporting zero mismatches means nothing
+  // if it never executed one, and the ICR path in particular is reachable only
+  // when a source register happens to hold 0xff000004 -- which a random
+  // generator never produces, so it is seeded deliberately. Both are printed.
+  uint64_t syn_count = 0, syn_icr_count = 0;
   uint32_t IP = 0;
   bool     trapped = false;
   uint8_t  trap_op = 0;
@@ -221,9 +226,34 @@ struct Cpu {
         //   if (t1 == 0xff000004) ICR = mem[t2]; else mem[t1] = mem[t2];
         //   AC[2:0] = 2
         if (d.op == 0x60 && d.op2 == 0x0) {
+          // rd()/wr(), NOT rf.read()/rf.write(). The first version used the
+          // Regs accessors and was wrong twice over, and neither fault was
+          // visible in the divergence it produced:
+          //
+          //   1. rf.read() does not align -- it looks up mem[a] raw, where
+          //      rd() looks up mem[a & ~3]. With an unaligned source address
+          //      every lookup missed and returned the 0xFFFFFFFF sentinel for
+          //      unwritten memory. The reference then WROTE 0xFFFFFFFF to the
+          //      destination, and the harness compares a written 0xFFFFFFFF
+          //      against unwritten memory as equal -- so the symptom read as
+          //      "the reference never executed the instruction" and four
+          //      inferences were spent on the module, which was not at fault.
+          //      A sentinel that collides with a legal value cannot be
+          //      distinguished from absence. That is the R15 shape again.
+          //
+          //   2. rf.write() bypasses `stores`, so a synmov store never entered
+          //      the store stream the exit criteria compare.
+          //
+          // Alignment is the spec, not a copy of the module: synmov is an
+          // atomic word operation and the i960 requires both operands word
+          // aligned. MAME splits an unaligned read_dword across two words, but
+          // that is its memory system, not the silicon it models -- so the
+          // generator does not emit unaligned synmov, and nothing here is
+          // claimed about that case.
           const uint32_t t1 = s1, t2 = s2;
-          const uint32_t v  = rf.read(t2);
-          if (t1 == 0xff000004u) ICR = v; else rf.write(t1, v);
+          const uint32_t v  = rd(t2);
+          ++syn_count;
+          if (t1 == 0xff000004u) { ICR = v; ++syn_icr_count; } else wr(t1, v);
           AC = (AC & ~7u) | 2u;
           IP = ip_next;
           break;

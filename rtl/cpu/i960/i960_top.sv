@@ -1011,15 +1011,20 @@ module i960_top (
               // It uses the aux master rather than the LSU because both
               // addresses are register values, not a decoded effective address.
               if ((d_op == 8'h60) && (d_op2 == 4'h0)) begin
-                // BOTH addresses are latched here, and the request is raised in
-                // the NEXT state from the latched value. Driving boot_addr
-                // directly at dispatch made the module read address 4 -- a boot
-                // walk address -- because the bus register was being consumed
-                // before the dispatch cycle's write to it had landed. Same shape
-                // as callx, where the call target had to be latched rather than
-                // presented live.
-                syn_dst  <= d_src1_lit ? {27'd0, d_src1} : rd1;
-                syn_src  <= d_src2_lit ? {27'd0, d_src2} : rd2;
+                // BOTH addresses are latched here and the request is raised in
+                // the NEXT state, the same shape as callx. Note this was NOT
+                // what fixed the original divergence: latching produced a
+                // bit-identical failure, and the fault was in the reference's
+                // accessors. It is kept because presenting a register value
+                // live to the bus register is the callx defect exactly, and a
+                // later change to when rd1/rd2 settle would reintroduce it.
+                //
+                // Word aligned because synmov is an atomic WORD operation and
+                // the i960 requires both operands aligned. The reference states
+                // the same rule independently; neither is copying the other,
+                // and the downstream bus is not relied on to drop the bits.
+                syn_dst  <= (d_src1_lit ? {27'd0, d_src1} : rd1) & 32'hffff_fffc;
+                syn_src  <= (d_src2_lit ? {27'd0, d_src2} : rd2) & 32'hffff_fffc;
                 aux_we   <= 1'b0;
                 boot_req <= 1'b0;
                 ts       <= T_SYNMOV_RD;
