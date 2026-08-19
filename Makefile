@@ -173,8 +173,8 @@ synth_i960_ldst:
 
 # --------------------------------------------------------------------- tests
 
-.PHONY: test test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top
-test: test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top
+.PHONY: test test_m2_sdram test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top
+test: test_m2_sdram test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top
 
 test_i960_dec: obj_i960_dec/Vi960_dec
 	@echo "== test i960_dec"
@@ -296,6 +296,17 @@ obj_i960_fpcvt/Vi960_fpcvt: $(FPC_RTL) $(TB)/tb_i960_fpcvt.cpp
 	$(VBUILD) --top-module i960_fpcvt -CFLAGS "-O2 -I../$(TB)" \
 	  --Mdir obj_i960_fpcvt -o Vi960_fpcvt $(FPC_RTL) $(TB)/tb_i960_fpcvt.cpp
 
+# The controller against a device MODEL, lifted with it. This is how the ROM
+# readback gets diagnosed without spending a 25-minute build per hypothesis.
+test_m2_sdram: obj_m2_sdram/Vm2_sdram_harness
+	@echo "== test m2_sdram (controller against the device model)"
+	./obj_m2_sdram/Vm2_sdram_harness
+
+obj_m2_sdram/Vm2_sdram_harness: $(SDR_RTL) sim/mem/tb_m2_sdram.cpp
+	$(VBUILD) --top-module m2_sdram_harness -CFLAGS "-O2 -I../sim/mem" \
+	  -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-WIDTHEXPAND -Wno-SYNCASYNCNET \
+	  --Mdir obj_m2_sdram -o Vm2_sdram_harness $(SDR_RTL) sim/mem/tb_m2_sdram.cpp
+
 test_m2_video_timing: obj_m2_vt/Vm2_video_timing
 	@echo "== test m2_video_timing (against MAME set_raw)"
 	./obj_m2_vt/Vm2_video_timing
@@ -347,6 +358,8 @@ SRCS_i960_top    := $(TOP_RTL)
 VID_RTL := rtl/video/m2_video_timing.sv
 SRCS_m2_video_timing := $(VID_RTL)
 SRCS_m2_testpattern  := rtl/video/m2_testpattern.sv
+SDR_RTL := rtl/mem/m2_sdram.sv rtl/mem/bw_monitor.sv sim/mem/sdram_model.sv sim/mem/m2_sdram_harness.sv
+SRCS_m2_sdram := rtl/mem/m2_sdram.sv
 
 # ---------------------------------------------------------------------------
 # M2-E proxies: third-party cores measured on THIS part, for area only.

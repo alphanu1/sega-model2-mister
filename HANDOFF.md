@@ -2693,6 +2693,47 @@ One generator note worth keeping: `callx`'s address is a **call target**, so it
 must point at code. Aimed into the data window it calls unwritten memory and
 executes `0xffffffff`, which tests the trap path instead of the call.
 
+### SECOND HARDWARE RUN: video path fully confirmed; ROM readback narrowed
+
+**Everything in the video path is now proven on silicon.** `word2 = 000001A8`,
+`word3 = 000001F0`, `word4 = 00000007` (clean top bit, `pll_locked` + `mem_ready`
++ `rom_loaded`, no overflow) — all three defects from the first run are fixed and
+verified on the board. **MiSTer's own info panel independently reports
+`496x384  24.40KHz  57.5Hz`**, which is MAME's `set_raw` agreed by the framework
+rather than by us.
+
+**The ROM readback is still wrong, and it is now NARROWED.**
+
+| | probe | expected | read |
+|---|---|---|---|
+| word5 | word addr 8 | `FFFFF6E0` | `000000FF` |
+| word6 | word addr 4, upper half | `00000860` | `00000000` |
+
+**It is address-independent.** `word5` read `000000FF` from address 0 in the first
+build and `000000FF` from address 8 in the second. **That rules out the SDRAM
+capture phase** — a wrong phase shifts data, it does not return a constant. Do not
+spend builds cycling the OSD option; that is not the fault.
+
+**And it is not the controller.** `make test_m2_sdram` now runs the Model 1
+controller testbench against its device model, lifted with it: **74,729 checks, 0
+fails, 0 protocol violations, 95,607 reads, 6,625 writes**, with five contending
+ports. The controller works.
+
+**So the fault is in the integration**, and the candidates are:
+
+1. **The readback FSM** (`Model2.sv`). Its state 2 asserts `rb_req` and moves to
+   state 3 unconditionally — if the controller can ack in that same cycle, the ack
+   is missed and `rb_w1` never latches. `word6 = 00000000` is consistent with
+   exactly that.
+2. **Loader address mapping** — where `ioctl_addr` lands in SDRAM. Nothing has ever
+   checked that the loader's writes go where the readback looks.
+3. Byte lane / interleave orientation.
+
+**Next step is simulation, not another board build.** `sim/mem/` now has the
+device model, the harness and the testbench. Extending the harness to drive
+`m2_rom_loader` into `m2_sdram` and read back reproduces the whole path on a
+desk — which is what the last two builds should have been.
+
 ### FIRST HARDWARE RUN: video path CONFIRMED, ROM readback does NOT match
 
 Photographed on a DE10-Nano, loaded via the MRA (so a real ROM was streamed).

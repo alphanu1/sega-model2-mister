@@ -38,6 +38,7 @@ recorded rather than referenced in place.
 | **Debug overlay — COPIED, in `rtl/video/m2_diag.sv`** | `rtl/video/m1_diag.sv` @ **`b895e6c`** | Changed: module and file renamed `m1_`->`m2_`, header retargeted. Logic untouched. Instantiated with NWORDS=4. |
 | **Video timing — COPIED, in `rtl/video/m2_video_timing.sv`** | `rtl/video/m1_video_timing.sv` @ **`f48c842`** | **No retiming.** MAME declares both machines identically — Model 1 `set_raw(XTAL(16'000'000), 656, 0, 496, 424, 0, 384)`, Model 2 `set_raw(32_MHz_XTAL/2, 656, 0, 496, 424, 0, 384)`. Changed: module and file renamed `m1_`->`m2_`, header and one comment retargeted. Logic untouched. Verified against MAME's numbers by `sim/video/tb_m2_video_timing.cpp`. |
 | Verification harness | `Makefile`, `sim/` | Per-module fuzz targets and the lockstep bridge |
+| **SDRAM sim — COPIED, `sim/mem/`** | `sim/mem/tb_m1_sdram.cpp`, `m1_sdram_harness.sv`, `sdram_model.sv`, `rtl/mem/bw_monitor.sv` @ **`b895e6c`** | Renamed only. Controller vs device model, five contending ports: 74,729 checks, 0 fails, 0 protocol violations. |
 | **PLL — NOT ported** | `rtl/pll/` | Checked, does not transfer: Model 1's outputs are 80 MHz and **19.2 MHz**, and 19.2 is its V60 core clock. Ours is written by hand in `rtl/pll/pll.v` — the generator emits a plain parameterised `altera_pll` instantiation, not a Qsys black box, so the structure is followed rather than the file copied. |
 
 ### MiSTer-devel/Template_MiSTer — GPL-2.0-or-later
