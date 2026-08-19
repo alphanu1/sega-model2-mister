@@ -436,6 +436,19 @@ end
 // COPY ENGINE. Walks tile RAM then the palette out of SDRAM into on-chip memory
 // after the ROM has landed. Port 0, which returns a single word per request --
 // 36,864 reads, once, at startup.
+// CHECKSUMS OVER WHAT WAS ACTUALLY COPIED. One number validates all 32,768 tile
+// RAM words and all 4,096 palette words, which two spot probes cannot -- and the
+// control registers at 0x5000/0x5004 are all zero in this capture, so they are
+// useless as a probe.
+//
+// Expected, computed from the dump files:
+//   tile RAM  XOR A66F  SUM16 51B7   -> word5 = A66F51B7
+//   palette   XOR 5BFD  SUM16 D5AF   -> word6 = 5BFDD5AF
+//
+// Both right: the copy is perfect and the fault is in the renderer.
+// Either wrong: the data never arrived intact and the renderer is innocent.
+logic [15:0] cp_xor_t, cp_sum_t, cp_xor_p, cp_sum_p;
+
 logic            cp_req, cp_done;
 logic [SDR_AW:1] cp_addr;
 logic [15:0]     cp_wdata;
@@ -446,6 +459,8 @@ always_ff @(posedge clk_sdram or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
 		cp_req <= 1'b0; cp_done <= 1'b0; cp_idx <= 16'd0;
 		cp_pal_phase <= 1'b0; cp_addr <= '0;
+		cp_xor_t <= 16'd0; cp_sum_t <= 16'd0;
+		cp_xor_p <= 16'd0; cp_sum_p <= 16'd0;
 	end else if (!cp_done) begin
 		if (!cp_req && rom_loaded) begin
 			cp_addr <= (cp_pal_phase ? PAL_BASE : TRAM_BASE) + SDR_AW'(cp_idx);
@@ -455,10 +470,14 @@ always_ff @(posedge clk_sdram or negedge mem_rst_n) begin
 			cp_wdata <= p_dout[0][15:0];
 			if (!cp_pal_phase) begin
 				tram[cp_idx[14:0]] <= p_dout[0][15:0];
+				cp_xor_t <= cp_xor_t ^ p_dout[0][15:0];
+				cp_sum_t <= cp_sum_t + p_dout[0][15:0];
 				if (cp_idx == 16'h7FFF) begin cp_idx <= 0; cp_pal_phase <= 1'b1; end
 				else cp_idx <= cp_idx + 16'd1;
 			end else begin
 				pal[cp_idx[11:0]] <= p_dout[0][15:0];
+				cp_xor_p <= cp_xor_p ^ p_dout[0][15:0];
+				cp_sum_p <= cp_sum_p + p_dout[0][15:0];
 				if (cp_idx == 16'h0FFF) cp_done <= 1'b1;
 				else cp_idx <= cp_idx + 16'd1;
 			end
@@ -598,8 +617,8 @@ m2_diag #(.NWORDS(7)) u_diag
 	.enable(1'b1),
 	.hb(tile_hb),
 	.vb(tile_vb),
-	.words({ rb_w0,                                     // 6  STORED at words 8/9
-	         {pr_w9, pr_w8},                            // 5  ARRIVED for words 8/9
+	.words({ {cp_xor_p, cp_sum_p},                       // 6  palette, want 5BFDD5AF
+	         {cp_xor_t, cp_sum_t},                      // 5  tile RAM, want A66F51B7
 	         // 32 BITS, not 31. The first version was {27'd0, ...} = 31, which
 	         // shifted every word above it by one bit: the board showed word4 as
 	         // 80000007, its top bit being rb_w0's LSB bleeding down. A short
