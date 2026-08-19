@@ -178,7 +178,23 @@ wire game_rst_n = pll_locked & ~RESET & ~status[0] & ~buttons[1];
 // column bits and a 26-bit word address. That is the ONLY decomposition reaching
 // 64M words on the connector's 13 address and 2 bank pins, and both geometries
 // are proven against the device model (make test_m2_sdram, test_m2_sdram128).
-localparam int unsigned SDR_COL  = 11;
+// BACK TO 9, WHICH IS WHAT THE MODEL 1 CORE RUNS AND WHAT WORKS ON THIS BOARD.
+//
+// 11 column bits was MY change, to reach 128 MB, and the geometry behind it was
+// REASONED from the connector's pin count rather than measured: 13 address pins
+// and 2 bank pins admit 4 banks x 8192 rows x 2048 columns, so I concluded that
+// must be the part. That is an inference, not a measurement.
+//
+// If the module is not 2048 columns, A11 driven as a column bit ALIASES. That is
+// invisible to a test which reads one address forever -- the SDRAM self-test,
+// which passes -- and destroys a walk across 36,864 addresses, which is the copy
+// engine. It also explains checksums that change between runs, since what a given
+// address aliases onto depends on what was written where.
+//
+// 9 gives 32 MB, which holds the 592 KB tilemap blob comfortably. If the copy
+// comes good at 9, the geometry is the fault and must be MEASURED before it is
+// widened again, not deduced.
+localparam int unsigned SDR_COL  = 9;
 localparam int unsigned SDR_AW   = 2 + 13 + SDR_COL;   // 26
 
 wire        mem_ready, sd_dq_oe, rom_loaded, ldr_overflow;
@@ -248,6 +264,20 @@ assign rb_ack  = p_ack[1];
 // 8192 rows in 64 ms is one refresh every 7.8125 us, which is 312 cycles at 40 MHz
 // and 625 at 80. Too large UNDER-REFRESHES, and that presents as random ROM
 // corruption rather than as a timing setting.
+// TIMING DELIBERATELY OVERSIZED, as a single test of the whole parameter space.
+//
+// Every read port has now failed for the copy engine while the self-test passes
+// on the same ports, so it is not the port and not the burst length. The one
+// difference left is the ACCESS PATTERN: the self-test reads four words at one
+// address, staying inside a single open row, while the copy engine walks 36,864
+// addresses across about eighteen rows and pays ACTIVATE, PRECHARGE and refresh
+// interaction on every crossing. Row management is the part the passing test
+// never exercises.
+//
+// Rather than sweep one parameter per ten-minute build, all of them are doubled
+// at once. If comfortable row timing fixes it the cause is in this group and can
+// then be narrowed; if it does not, the entire timing-parameter space is
+// eliminated in one build and the fault is elsewhere.
 m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(300)) u_sdram (
 	.clk(clk_sdram), .rst_n(mem_rst_n), .ready(mem_ready),
 	// OSD order is CL+2..CL+5 and the selector's own encoding puts CL+3 at zero,
