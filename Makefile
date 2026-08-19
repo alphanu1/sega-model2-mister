@@ -558,12 +558,21 @@ release: check_mra
 	@echo "release tree in $(RELEASE):"
 	@cd $(RELEASE) && find . -type f | sort | sed 's/^/  /'
 	@echo ""
-	@echo "  TODAY (no ROM needed): copy Model2.rbf to /media/fat/_Other/ and run it."
+	@echo "  Copy Model2.rbf to /media/fat/_Other/ to run it standalone."
 	@echo "  Overlay must read  word2=000001A8  word3=000001F0  -- MAME set_raw."
 	@echo ""
-	@echo "  The .mra is NOT usable yet: the loader has no consumer, and the full"
-	@echo "  ROM set is 43.62 MB against the 32 MB this controller addresses."
-	@echo "  See docs/rom-layout.md."
+	@echo "  2D TILEMAP TEST: copy the .mra to _Arcade/ and m2tiles.zip alongside"
+	@echo "  your other zips. It renders a captured Daytona frame; there is no CPU"
+	@echo "  in the core yet, so nothing else writes the tilemap."
+	@echo ""
+	@echo "  m2tiles.zip NOW NEEDS A FOURTH SECTION, the colour translation table"
+	@echo "  at 0x094000. An image without it still works -- the core checks the"
+	@echo "  section and falls back to the old expansion -- but the colours stay"
+	@echo "  slightly wrong. Regenerate it with tools/mame_m2_tiledump.lua and"
+	@echo "  concatenate tile, palette, char, colorxlat in that order. Study R27."
+	@echo ""
+	@echo "  The full 43.62 MB ROM set fits: this controller addresses 64 MB, a"
+	@echo "  MEASURED figure, not the 32 MB earlier notes assumed. Study R19."
 
 # --------------------------------------------------------------------- clean
 

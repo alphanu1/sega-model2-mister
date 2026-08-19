@@ -92,8 +92,13 @@ hardware because the picture is otherwise right.
 
 ## For the morning: what is flashable, and what to expect
 
-A build was started at the end of the session. If `output_files/Model2.rbf`
-exists, `make release` gathers it with the `.mra` into `build/release`.
+**The build completed and is packaged in `build/release`.** Quartus 17.0, full
+compile, **0 errors**, timing closed with every clock positive — the core's own
+PLL outputs have 13.09 ns and 14.35 ns of slack, and the clock names carry the
+`emu|pll|pll_inst|...` hierarchy, which is what `sys_top.sdc` matches on.
+
+Whole core: **9,004 ALM (21%), 164 M10K (30%), 36 DSP (32%)** — and that is
+still without the i960 in it.
 
 **Two files must go to the device together:**
 
@@ -126,7 +131,9 @@ Copy to the device:
 
 - `build/release/Model2.rbf` → the MiSTer, replacing the current core
 - `build/release/_Arcade/Model2 2D Tilemap Test.mra` → `_Arcade/`
-- the regenerated `m2tiles.zip` → wherever the current one lives
+- the regenerated `m2tiles.zip` → wherever the current one lives. One is already
+  built and waiting; ask for its path rather than rebuilding it, since it is
+  ROM-derived and deliberately outside this repository.
 
 To regenerate the image (it is ROM-derived and is not in this repository):
 
