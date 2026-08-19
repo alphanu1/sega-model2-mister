@@ -92,7 +92,22 @@ wire [10:0] ps2_key;
 // chasing the SDRAM capture phase, which was never involved.
 hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
 (
-	.clk_sys(clk_vid),
+	// clk_sdram, NOT clk_vid, AND THAT IS THE WHOLE POINT.
+	//
+	// m2_rom_loader is clocked on clk_sdram. Running hps_io on a different clock
+	// puts ioctl_wr, ioctl_addr and ioctl_dout across an UNSYNCHRONISED domain
+	// crossing, so the loader samples 16-bit data while it is changing and
+	// captures one byte from one value and the other byte from another.
+	//
+	// That is exactly what the board showed: every LOW byte of the ROM correct
+	// and every HIGH byte wrong, with the wrong bytes not appearing anywhere in
+	// the ROM. The SDRAM self-test passed throughout because it lives entirely
+	// inside clk_sdram, and the 0x0020 tilemap blob hid it because every high
+	// byte in it is zero.
+	//
+	// The Model 1 core runs hps_io on clk_sys, the same domain as its loader.
+	// This core split them, and cost five hardware builds finding out.
+	.clk_sys(clk_sdram),
 	.HPS_BUS(HPS_BUS),
 	.EXT_BUS(),
 	.gamma_bus(),
