@@ -488,8 +488,16 @@ quartus_report:
 # a file describing a ROM layout is fine and the bytes are not.
 RELEASE := build/release
 
-.PHONY: release
-release:
+# An .mra that does not parse is a black screen with no error, and both of these
+# were committed broken before being checked once. XML comments may not contain a
+# double hyphen, which is what did it.
+check_mra:
+	@python3 -c "import xml.etree.ElementTree as ET, glob, sys; \
+	  [ET.parse(f) for f in sorted(glob.glob('mra/*.mra'))] and \
+	  print('mra: %d file(s) parse' % len(glob.glob('mra/*.mra')))"
+
+.PHONY: release check_mra
+release: check_mra
 	@test -f output_files/Model2.rbf || { \
 	  echo "no output_files/Model2.rbf -- run: quartus_sh --flow compile Model2"; exit 1; }
 	@rm -rf $(RELEASE)
