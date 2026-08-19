@@ -2736,6 +2736,87 @@ the controller's geometry is parameterised and its ports widened, the loader tak
 **`check_mra` earned its place immediately** — it caught me putting `--` back into
 an XML comment while restoring the MRA, which is the exact fault it was added for.
 
+### OPEN AND PARKED: the ROM high byte reads as 0x00. Possibly a ghost.
+
+**Parked deliberately after eight hardware builds.** Everything below is
+eliminated by measurement, not by argument, so a future session does not repeat
+it. **Read this before touching the ROM path again.**
+
+**The symptom, stable across every build:**
+
+```
+word5  FFFFF6E0   what ARRIVED over ioctl        correct
+word6  00FF00E0   what came back from SDRAM      high byte of each word is 0x00
+word4  00000087   PLL locked, mem ready, ROM loaded, no overflow, SELF-TEST PASSING
+```
+
+**What is PROVEN GOOD, each by a measurement:**
+
+| | evidence |
+|---|---|
+| SDRAM device, both byte lanes | self-test writes `AA55 5AA5 FF00 00FF` at the 64 MB mark and reads all four back exactly, looping |
+| the SDRAM write port | the self-test uses the *same* port |
+| the data arriving | a probe latches `ioctl_dout` itself: `FFFFF6E0`, correct |
+| the controller and loader in simulation | `test_m2_romload` drives the real ROM words through loader -> SDRAM -> readback, 0 mismatches |
+| the controller at both geometries | 74,729 checks at 32 MB, 58,739 at 128 MB, 0 fails, 0 protocol violations |
+
+**What has been ELIMINATED, each by a build:**
+
+- **Capture phase** — the range was CL+2..CL+5 and the board needs earlier; moved
+  to CL+1..CL+3 and the symptom is unchanged. (The range *was* wrong; fixing it
+  did not fix this.)
+- **Clock speed** — 80 MHz -> 40 MHz, unchanged.
+- **Clock domain crossing** — `hps_io` moved from `clk_vid` to `clk_sdram`, the
+  loader's domain, unchanged. Kept because it is correct regardless.
+- **M10K read latency** — the drain now waits a cycle between launching the read
+  and asserting the request, unchanged.
+- **Byte-lane splitting** — `fifo_data` split into two 8-bit M10K arrays as
+  `docs/` requires, confirmed in the fitter report, unchanged.
+- **Inferred memory itself** — `ramstyle = "logic"`, no memory anywhere in the
+  loader path, **10,118 ALM (19% -> 43%)**, unchanged. **The FIFO is exonerated.**
+- **Bus widths** — 16 bits end to end at every point, checked not assumed.
+- **MRA size wrap** — real, fixed, and not this.
+
+**THE LEADING HYPOTHESIS, and it is untested:**
+
+**The data in SDRAM may be correct and the READBACK may be wrong.** The self-test
+reads through **port 2**; the ROM readback reads through **port 1**. That is now
+the only structural difference left between a path that works and a path that does
+not. Point the ROM readback at port 2, or the self-test at port 1, and the answer
+falls out in one build. **Do this first.**
+
+**Why it may be a ghost:** every "expected" value is computed from *my* reading of
+the MRA's interleave (`map="0021"`/`map="2100"`). If MiSTer assembles the stream
+differently, the ROM in SDRAM could be correct-but-different and the readback
+correct, with only the expectation wrong. The arrived-probe showing `FFFFF6E0`
+argues against this, but it does not settle it — that probe reads the stream, not
+the ROM file. **Dumping what MiSTer actually delivers and diffing it against the
+ROM would settle it without hardware.**
+
+### i960: what is NOT implemented, for when the CPU comes back
+
+Daytona executes 80 distinct mnemonics and **all 80 are built**. What remains is
+machine, not instruction set:
+
+- **Interrupts — a prerequisite, not a completeness item (study R14).** Model 2
+  drives **four** i960 interrupt lines from a twelve-source register (vblank, four
+  timers, sound UART) via `model2.cpp::irq_update()`. **The core has no `irq` port
+  at all.** Needs the PRCB interrupt table, vectoring, a type-7 call onto a
+  separate interrupt stack, the IP/AC save, and `ret` dispatching on `PFP[2:0]`.
+  **This gates P1 exit criterion 3.**
+- **`ret` ignores `PFP[2:0]` in BOTH the module and its reference**, so they agree
+  and lockstep is silent. MAME switches on the type and `fatalerror`s on 1-6.
+- **Faults** — absent entirely; they touch the sequencer.
+- `synmov`/`synmovq`, `calls`, `modpc` — bounded; `calls` measures 0.000% in the
+  traces.
+- `rl` double-precision FP forms (four register reads against a two-port file);
+  `remr`.
+- Six glibc transcendentals — M2-B found zero in Daytona; confirm before building.
+- **Throughput (R16):** ~3.0x headroom on measured demand, but that is against an
+  *idealised* bus. R17 records Model 1 measuring 65% of its CPU's cycles as memory
+  stalls, so the i960's I-cache hit rate under realistic latency is the number to
+  get before any pipeline discussion resumes.
+
 ### P1.5 STEP 3 CLOSED: ROM path proven end to end on hardware
 
 Board reads, running `Model2 2D Tilemap Test`:
