@@ -215,9 +215,10 @@ same counts. `m1_video_timing.sv` is already correct for Model 2.
 
 | | Step | Lift from | The trap, already paid for |
 |---|---|---|---|
-| 1 | Top level, PLL, video timing to a test pattern | `m1_video_timing` (unchanged) | **Name the PLL `pll` and generate it from the IP tool**, or `sys_top.sdc`'s clock groups match nothing and a passing build fails on hardware |
+| 1 | ~~Top level, PLL, video timing to a test pattern~~ **DONE, PROVEN ON HARDWARE** | `m1_video_timing` (unchanged) | **Name the PLL `pll` and generate it from the IP tool**, or `sys_top.sdc`'s clock groups match nothing and a passing build fails on hardware |
 
-**Step 1 status: the RTL is done and verified; the framework is not.**
+**Step 1 status: DONE and proven on hardware.** MiSTer's own info panel reports
+`496x384  24.40KHz  57.5Hz`, which is MAME's `set_raw` agreed by the framework.
 
 - `rtl/video/m2_video_timing.sv` — copied at `f48c842`, **51 ALM**, verified against
   MAME's `set_raw` by `sim/video/tb_m2_video_timing.cpp` (278,144 pixel clocks per

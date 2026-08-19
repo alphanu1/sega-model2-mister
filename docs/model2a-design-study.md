@@ -529,6 +529,7 @@ each block fitted standalone.
 | Block | ALM | registers | M10K | MLAB bits | DSP | Fmax | whose RTL |
 |---|---|---|---|---|---|---|---|
 | `i960_top` | **6,979** | 4,212 | 1 | 2,048 | 7 | 26.84 | **ours** |
+| P1.5 core as built (framework + PLL + video timing + overlay + SDRAM + loader + **S24TILE**) | **8,428** | — | **163** | — | — | — | **ours + upstream, MEASURED ON HARDWARE** |
 | `sys/` framework | **6,630** | — | — | — | — | — | upstream (M2-E) |
 | VDP2 (tilemap ceiling) | **6,852** | 9,184 | 4 | 272 | 12 | 65.73 | srg320 |
 | N64 RDP (renderer ceiling) | **8,347** | — | — | — | — | — | N64_MiSTer (M2-E) |
@@ -545,6 +546,12 @@ SCSP + 68000 + tilemap + `sys/`:
 | optimistic (VDP1 floor, modest tilemap) | 24,454 | ~45 | ~14 |
 | pessimistic (RDP ceiling, VDP2 tilemap) | 40,293 | ~55 | ~28 |
 | **device** | **41,910** | **553** | **112** |
+
+**M10K, now with a real integrated datapoint.** The P1.5 core — framework, PLL,
+video timing, overlay, SDRAM controller, ROM loader and the S24TILE tilemap —
+measures **163 M10K of 553 (29%)** on hardware, against 56 before the tilemap went
+in. So the tilemap alone costs ~107 blocks, and that is the first figure here taken
+from an assembled, *working* core rather than from blocks fitted standalone.
 
 **M10K is not the binding resource for Model 2, and now that is measured rather
 than assumed.** The blocks together use tens of M10K against 553. That answers
