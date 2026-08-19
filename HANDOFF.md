@@ -2693,6 +2693,57 @@ One generator note worth keeping: `callx`'s address is a **call target**, so it
 must point at code. Aimed into the data window it calls unwritten memory and
 executes `0xffffffff`, which tests the trap path instead of the call.
 
+### FIRST HARDWARE RUN: video path CONFIRMED, ROM readback does NOT match
+
+Photographed on a DE10-Nano, loaded via the MRA (so a real ROM was streamed).
+
+**Confirmed working on silicon:** magic `B0ADCAFE`, frame counter running,
+`pll_locked` + `mem_ready` + `rom_loaded` all set, bar order R,G,B,C,M,Y,W,grey
+correct, border present on all edges, corner marker, marching block visible. **The
+framework, PLL, video timing, clock enables and the whole video path are proven on
+hardware, not just in simulation.**
+
+**Three defects, all found by the overlay, none in the design under test:**
+
+1. `word2 = 1A7`, `word3 = 1EF` — off by one against MAME's `1A8`/`1F0`. **Both
+   mine, both in the counters**, not the timing module (which sim asserts against
+   MAME and passes). Same cause in each: reset and increment fired on the *same*
+   edge — `hcnt==0` is a visible pixel, and the frame boundary lands on a line
+   boundary — so the later non-blocking assignment won and the item being closed
+   was never counted. **Third instrument bug this session.**
+2. The status word was `{27'd0, ...}` = **31 bits, not 32**. A short field in a
+   concatenation does not warn, it silently reindexes: every word above it shifted
+   by one bit, which is why word4 read `80000007` with `rb_w0`'s LSB bleeding into
+   its top bit. Decoding the photo required un-shifting by hand.
+3. **Address 0 was a useless probe.** The i960 ROM legitimately begins
+   `00000000`, so a correct read and a dead read are indistinguishable. Probes are
+   now chosen for signature value.
+
+**The open question, and it is a real one.** Un-shifting the photo gives
+`rb_w0 = 000000FF`, `rb_w1 = 000000FF`. The ROM says they should have been
+`00000000` and `000000C0`. **Neither matches, and both reads returned the same
+value** — so the ROM path is not yet proven and may be broken.
+
+Candidates, in the order worth testing:
+
+- **SDRAM read capture phase.** The OSD option exists for exactly this; Model 1's
+  board needed CL+2 because the real device answers half a period away from the
+  simulation model. Cycle it and watch the two words.
+- Loader address mapping — where `ioctl_addr` lands in SDRAM.
+- Byte lane or interleave orientation.
+
+**Next build is ready** (`build/release/Model2.rbf`, timing clean, 7,738 ALM) with
+all three defects fixed and probes reading:
+
+| word | address | **expected** |
+|---|---|---|
+| 5 | word 8 | **`FFFFF6E0`** |
+| 6 | word 4, upper half | **`00000860`** |
+
+Both signatures come from the interleaved stream the MRA builds. If they read
+correctly, the ROM path is proven end to end. If they read shifted, the capture
+phase is the cause and the OSD option is the fix.
+
 ### `make release` gathers the flashable files
 
 ```

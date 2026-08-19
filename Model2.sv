@@ -238,14 +238,21 @@ always_ff @(posedge clk_sdram or negedge mem_rst_n) begin
 		rb_w0 <= 32'd0; rb_w1 <= 32'd0;
 	end else begin
 		case (rb_state)
-			2'd0: if (rom_loaded) begin rb_addr <= 24'd0; rb_req <= 1'b1; rb_state <= 2'd1; end
+			// PROBE ADDRESSES ARE CHOSEN, NOT DEFAULT. Address 0 is useless: the
+			// i960 ROM legitimately begins 00000000, so a correct read and a dead
+			// read are indistinguishable. These two carry signatures, taken from
+			// the interleaved stream the MRA builds:
+			//
+			//   word 8/9   -> FFFFF6E0
+			//   word 6/7   -> 00000860   (read aligned at 4, upper half of the burst)
+			2'd0: if (rom_loaded) begin rb_addr <= 24'd8; rb_req <= 1'b1; rb_state <= 2'd1; end
 			// ONE ACCESS PER HANDSHAKE, not per cycle of the request: it drops on
 			// ack. Harmless against RAM, and the habit is the point — the Model 1
 			// TGP popped every FIFO word twice by acting on the level instead.
 			2'd1: if (rb_ack) begin rb_w0 <= rb_dout[31:0]; rb_req <= 1'b0;
-			                        rb_addr <= 24'd2; rb_state <= 2'd2; end
+			                        rb_addr <= 24'd4; rb_state <= 2'd2; end
 			2'd2: begin rb_req <= 1'b1; rb_state <= 2'd3; end
-			2'd3: if (rb_ack) begin rb_w1 <= rb_dout[31:0]; rb_req <= 1'b0; end
+			2'd3: if (rb_ack) begin rb_w1 <= rb_dout[63:32]; rb_req <= 1'b0; end
 			default: ;
 		endcase
 	end
@@ -328,15 +335,28 @@ always @(posedge clk_vid) begin
     vblank_dd <= vblank;
     // Count visible pixels on ONE line only, so the figure is per-line and not
     // per-frame: it is latched at the end of a line and reset immediately.
-    if (visible) vispix_ctr <= vispix_ctr + 1'd1;
+    // BOTH COUNTERS WERE OFF BY ONE ON HARDWARE, and the board is what found it:
+    // 1A7 and 1EF where MAME's set_raw says 1A8 and 1F0.
+    //
+    // The cause is the same in both. The reset and the increment fired on the
+    // SAME edge -- hcnt==0 is a visible pixel, and the frame boundary lands on a
+    // line boundary -- so the later non-blocking assignment won and the pixel or
+    // line being closed was never counted. The timing module is not implicated;
+    // sim/video/tb_m2_video_timing.cpp asserts 424 and 496 against MAME and
+    // passes. This was the instrument, for the third time this session.
+    //
+    // Fix: the closing edge counts the item it is closing, rather than dropping
+    // it in favour of the reset.
     if (hcnt == 10'd0) begin
       if (|vispix_ctr) vispix_ctr_l <= vispix_ctr;
-      vispix_ctr <= 0;
+      vispix_ctr <= visible ? 11'd1 : 11'd0;   // hcnt==0 is itself visible
       line_ctr   <= line_ctr + 1'd1;
+    end else if (visible) begin
+      vispix_ctr <= vispix_ctr + 1'd1;
     end
-    if (vblank & ~vblank_dd) begin       // frame boundary
+    if (vblank & ~vblank_dd) begin       // frame boundary, on a line boundary
       frame_ctr  <= frame_ctr + 1'd1;
-      line_ctr_l <= line_ctr;
+      line_ctr_l <= line_ctr + 1'd1;     // count the line the reset consumes
       line_ctr   <= 0;
     end
   end
@@ -354,7 +374,11 @@ m2_diag #(.NWORDS(7)) u_diag
 	.vb(vblank),
 	.words({ rb_w1,                                     // 6  ROM word 1
 	         rb_w0,                                     // 5  ROM word 0
-	         {27'd0, ldr_overflow, loaded_sync[2],
+	         // 32 BITS, not 31. The first version was {27'd0, ...} = 31, which
+	         // shifted every word above it by one bit: the board showed word4 as
+	         // 80000007, its top bit being rb_w0's LSB bleeding down. A short
+	         // field in a concatenation does not warn, it silently reindexes.
+	         {28'd0, ldr_overflow, loaded_sync[2],
 	          mem_ready, pll_locked},                   // 4  status
 	         {21'd0, vispix_ctr_l},                     // 3  pixels = 1F0
 	         {22'd0, line_ctr_l},                       // 2  lines  = 1A8
