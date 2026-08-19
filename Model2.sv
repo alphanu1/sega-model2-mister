@@ -84,7 +84,13 @@ wire  [1:0] buttons;
 wire [127:0] status;
 wire [10:0] ps2_key;
 
-hps_io #(.CONF_STR(CONF_STR)) hps_io
+// WIDE(1) IS NOT OPTIONAL. It makes ioctl_dout 16 bits and ioctl_addr advance by
+// two per word, which is exactly what m2_rom_loader's header says it expects.
+// Left at the default WIDE=0 the port is EIGHT bits, our 16-bit wire silently
+// zero-extends a byte, and the ROM lands in SDRAM as garbage — which read back
+// from the board as an address-independent 000000FF and cost two hardware builds
+// chasing the SDRAM capture phase, which was never involved.
+hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
 (
 	.clk_sys(clk_vid),
 	.HPS_BUS(HPS_BUS),
@@ -179,11 +185,17 @@ wire  [NPORTS-1:0]        p_ack;
 always_comb begin
 	p_req  = '0;
 	p_addr = '0;
-	p_req[0]  = rb_req;
-	p_addr[0] = rb_addr;
+	// PORT 1, NOT PORT 0. m2_sdram's blen() is hardcoded per port: ports 1-3
+	// burst FOUR 16-bit words, filling the whole 64-bit p_dout, while ports 0
+	// and 4 return ONE. On port 0 the readback got a correct low half and a
+	// permanently zero upper half -- which reads like a broken controller and
+	// is a port-selection mistake. The CPU takes port 0 precisely because it
+	// wants single words; 1-3 are the streaming ports.
+	p_req[1]  = rb_req;
+	p_addr[1] = rb_addr;
 end
-assign rb_dout = p_dout[0];
-assign rb_ack  = p_ack[0];
+assign rb_dout = p_dout[1];
+assign rb_ack  = p_ack[1];
 
 // T_REFI IS IN CLOCK CYCLES AND THIS DOMAIN IS 80 MHz: 8192 rows in 64 ms is one
 // refresh every 7.8125 us, which is 625 cycles. The default of 700 suits 100 MHz

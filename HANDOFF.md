@@ -2693,6 +2693,51 @@ One generator note worth keeping: `callx`'s address is a **call target**, so it
 must point at code. Aimed into the data window it calls unwritten memory and
 executes `0xffffffff`, which tests the trap path instead of the call.
 
+### ROM READBACK SOLVED IN SIMULATION: two bugs, both mine, found in one morning
+
+Built `sim/mem/m2_romload_harness.sv` + `tb_m2_romload.cpp` — the hardware path on
+a desk: **ioctl -> m2_rom_loader -> m2_sdram -> readback**, with the readback FSM
+copied verbatim from `Model2.sv`. `make test` is now **17 suites**.
+
+**Bug 1: `hps_io` was instantiated without `WIDE(1)`.** The loader's own header
+says it expects 16-bit `ioctl_dout` with `ioctl_addr` advancing by two. Left at the
+default, `WIDE=0` makes the port **8 bits**, our 16-bit wire silently zero-extends
+a byte, and the ROM lands as garbage. **That is the `000000FF` the board reported**
+— a byte, zero-extended. Model 1 has `.WIDE(1)`; I had copied the template's
+instantiation instead.
+
+**Bug 2: the readback was on port 0, which does not burst.** `m2_sdram`'s `blen()`
+is hardcoded per port: **ports 1-3 burst four 16-bit words and fill the whole
+64-bit `p_dout`; ports 0 and 4 return ONE.** On port 0 the readback got a correct
+low half and a permanently zero upper half — which reads like a broken controller
+and is a port-selection mistake. The CPU takes port 0 *because* it wants single
+words; 1-3 are the streaming ports. **Relevant to the tilemap wiring next.**
+
+**The harness now passes with both signatures exact** — `rb_w0 = FFFFF6E0`,
+`rb_w1 = 00000860` — and it corroborates Model 1's hardware claim as a bonus:
+
+| `rd_lat_sel` | result |
+|---|---|
+| 0 (CL+3) | **exact** — what the device *model* wants |
+| 1 (CL+2) | `f6e00000` / `08600000` — **shifted by exactly one 16-bit word** |
+
+That is the symptom the Model 1 core documented seeing on its board, reproduced
+in simulation. The board default stays CL+2 because the real device is clocked on
+the inverse of the controller clock and answers half a period away; the model is
+not, and wants CL+3. **Two different numbers for a physical reason, now
+demonstrated rather than asserted.**
+
+**Method note.** Two hardware builds were spent on this before the harness
+existed, and the first hypothesis — the capture phase — was wrong. The project's
+own rule says fuzz and simulate before building. The harness took under an hour
+and found both bugs; the builds found neither.
+
+Two instrument errors along the way, both logged and both worth remembering: the
+write log sampled *before* the clock edge and printed nothing while the device
+model was serving 16 writes; and it gated on `req && ack`, which never coincide on
+this interface because the loader pulses the request for one cycle and the
+controller acks two cycles later.
+
 ### SECOND HARDWARE RUN: video path fully confirmed; ROM readback narrowed
 
 **Everything in the video path is now proven on silicon.** `word2 = 000001A8`,
