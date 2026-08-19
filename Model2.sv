@@ -358,6 +358,31 @@ wire st_ok = (st_got == 64'h00FF_FF00_5AA5_AA55);
 // Both wrong: the data is already wrong when the HPS hands it over.
 // 5 right, 6 wrong: the loader or the write path corrupts it.
 logic [15:0] pr_w8, pr_w9;
+
+// THE MISSING LINK. Arrived is correct and stored is wrong; this is what the
+// loader PRESENTS to the controller, latched on the rising edge of the write
+// request -- which is exactly when the controller captures it.
+//
+//   word5 = ARRIVED over ioctl        (known correct: FFFFF6E0)
+//   word6 = PRESENTED by the loader   (want FFFFF6E0)
+//
+// Presented correct -> the loader is fine and the controller drops the high byte.
+// Presented wrong   -> the loader corrupts it between ioctl and its own output,
+//                      and the FIFO is already exonerated, so it is the path
+//                      around the FIFO.
+logic [15:0] pw_w8, pw_w9;
+logic        ldr_req_d;
+always_ff @(posedge clk_sdram or negedge mem_rst_n) begin
+	if (!mem_rst_n) begin
+		pw_w8 <= 16'd0; pw_w9 <= 16'd0; ldr_req_d <= 1'b0;
+	end else begin
+		ldr_req_d <= ldr_wr_req;
+		if (ldr_wr_req && !ldr_req_d) begin
+			if (ldr_wr_addr == SDR_AW'(8)) pw_w8 <= ldr_wr_din;
+			if (ldr_wr_addr == SDR_AW'(9)) pw_w9 <= ldr_wr_din;
+		end
+	end
+end
 always_ff @(posedge clk_sdram or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
 		pr_w8 <= 16'd0; pr_w9 <= 16'd0;
@@ -617,8 +642,8 @@ m2_diag #(.NWORDS(7)) u_diag
 	.enable(1'b1),
 	.hb(tile_hb),
 	.vb(tile_vb),
-	.words({ {cp_xor_p, cp_sum_p},                       // 6  palette, want 5BFDD5AF
-	         {cp_xor_t, cp_sum_t},                      // 5  tile RAM, want A66F51B7
+	.words({ {pw_w9, pw_w8},                             // 6  PRESENTED, want FFFFF6E0
+	         {pr_w9, pr_w8},                            // 5  ARRIVED, want FFFFF6E0
 	         // 32 BITS, not 31. The first version was {27'd0, ...} = 31, which
 	         // shifted every word above it by one bit: the board showed word4 as
 	         // 80000007, its top bit being rb_w0's LSB bleeding down. A short
