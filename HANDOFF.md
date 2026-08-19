@@ -2693,6 +2693,37 @@ One generator note worth keeping: `callx`'s address is a **call target**, so it
 must point at code. Aimed into the data window it calls unwritten memory and
 executes `0xffffffff`, which tests the trap path instead of the call.
 
+### P1.5 STEP 3 CLOSED: ROM path proven end to end on hardware
+
+Board reads, running `Model2 2D Tilemap Test`:
+
+```
+B0ADCAFE   0000034E   000001A8   000001F0   00000007   00200020   00200020
+magic      frames     lines      pixels     status     ROM w8/9   ROM w6/7
+```
+
+**Both ROM signatures exact.** MRA -> `ioctl` -> `m2_rom_loader` -> `m2_sdram` ->
+readback is proven on silicon, together with the video path. Step 3 is closed.
+
+**And it identified why Daytona failed.** The full set is **43.62 MB** and
+`m2_sdram` addresses **32 MB** (`[24:1]`, 2 bank + 13 row bits). Loading all of it
+**wraps by 11.62 MB and overwrites its own start**, which is where the i960
+program lives — so the board read `FFFFFFFF` (padding from the tail of the
+stream) at exactly the addresses the program should occupy. The same build with a
+592 KB payload read the expected signature at both probes, which is what made it
+a measurement rather than a theory.
+
+**`mra/Daytona USA (Deluxe 93).mra` is trimmed to 22.25 MB** — i960 program, main
+data, copro data, textures — and the polygons, samples and comms program are
+omitted with the reason written into the file. Restoring them needs the controller
+widened for a 128 MB module, or the DDR3 split. **P6 work, now with a hardware
+measurement behind it rather than an estimate.**
+
+**My error, and worth naming.** I measured 43.62 MB and 32 MB, wrote both into
+`docs/rom-layout.md` and into `Model2.sv`'s comments, concluded "fine for P1.5" —
+and left the MRA loading the full set anyway. The two numbers were a page apart.
+It cost a board test.
+
 ### ROM READBACK SOLVED IN SIMULATION: two bugs, both mine, found in one morning
 
 Built `sim/mem/m2_romload_harness.sv` + `tb_m2_romload.cpp` — the hardware path on
