@@ -31,6 +31,24 @@
 // about -- "a passing build fails on hardware" -- reached by a route neither
 // anticipated. The rule is not only about the module NAME.
 //
+// SDRAM AT 40 MHz, DELIBERATELY AND TEMPORARILY.
+//
+// The board returns data that changes with the read capture phase but is never
+// correct at any of the four settings. Wrong logic would fail in simulation too,
+// and it does not: the controller passes 74,729 checks at 32 MB and 58,739 at
+// 128 MB against the device model, and the loader-to-readback path passes as
+// well. A capture window merely misplaced would be fixed by one of the phases.
+//
+// Neither fits, and both are consistent with MARGINAL TIMING: at 80 MHz the
+// device is clocked on the inverse of the controller clock, which gives it only
+// a half period of skew and no true phase shift. Halving the clock doubles every
+// margin without changing a line of logic, so if the data comes back correct the
+// cause is timing and the fix is a properly phase-shifted SDRAM_CLK. If it is
+// still wrong, timing is exonerated and the fault is elsewhere.
+//
+// T_REFI follows the clock: 8192 rows in 64 ms is one refresh every 7.8125 us,
+// which is 312 cycles at 40 MHz rather than 625 at 80.
+//
 // FREQUENCIES, AND WHY THESE
 //
 // MAME declares Model 2's pixel clock as `32_MHz_XTAL/2` -- so 16 MHz is
@@ -39,7 +57,7 @@
 // and a frame rate of 16e6/(656*424) = 57.52 Hz that matches the reference
 // rather than approximating it.
 //
-//   outclk_0   80 MHz   SDRAM
+//   outclk_0   40 MHz   SDRAM  (was 80; see the note below)
 //   outclk_1   32 MHz   video domain; ce_pix = /2 gives exactly 16 MHz
 //   outclk_2   25 MHz   i960. The real part's rate; ours fits at 26.84 MHz
 //                       (study §5.5), so this is the reference speed and not a
@@ -82,7 +100,7 @@ module pll_core (
     .reference_clock_frequency("50.0 MHz"),
     .operation_mode("direct"),
     .number_of_clocks(3),
-    .output_clock_frequency0("80.000000 MHz"),
+    .output_clock_frequency0("40.000000 MHz"),
     .phase_shift0("0 ps"),
     .duty_cycle0(50),
     .output_clock_frequency1("32.000000 MHz"),

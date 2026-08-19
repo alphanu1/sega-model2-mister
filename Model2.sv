@@ -204,11 +204,11 @@ end
 assign rb_dout = p_dout[1];
 assign rb_ack  = p_ack[1];
 
-// T_REFI IS IN CLOCK CYCLES AND THIS DOMAIN IS 80 MHz: 8192 rows in 64 ms is one
-// refresh every 7.8125 us, which is 625 cycles. The default of 700 suits 100 MHz
-// and UNDER-REFRESHES here — a data-retention fault that presents as random ROM
+// T_REFI IS IN CLOCK CYCLES. This domain is temporarily 40 MHz (see rtl/pll/pll.v):
+// 8192 rows in 64 ms is one refresh every 7.8125 us, which is 312 cycles at 40 MHz
+// and 625 at 80. Too large UNDER-REFRESHES, and that presents as random ROM
 // corruption rather than as a timing setting.
-m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(600)) u_sdram (
+m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(300)) u_sdram (
 	.clk(clk_sdram), .rst_n(mem_rst_n), .ready(mem_ready),
 	// OSD order is CL+2..CL+5 and the selector's own encoding puts CL+3 at zero,
 	// so the two are mapped rather than passed through.
