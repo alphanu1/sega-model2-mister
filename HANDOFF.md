@@ -2736,6 +2736,52 @@ the controller's geometry is parameterised and its ports widened, the loader tak
 **`check_mra` earned its place immediately** — it caught me putting `--` back into
 an XML comment while restoring the MRA, which is the exact fault it was added for.
 
+### P1.5 STEP 4: the tilemap RENDERS. Structured, not correct.
+
+**First tiles on screen.** The pipeline runs end to end: copy engine completes (the
+test pattern is gone, which is the designed signal that it finished), tiles are
+fetched from SDRAM per line, decoded, mixed and palettised, and the overlay sits
+on top. `word4 = 00000087`, `word5/6 = 00200020` — the correct readback for the
+tilemap blob.
+
+**And it incidentally cleared the parked ROM fault's leading hypothesis.** Char
+data is fetched on a **burst port**, the same class the failing ROM readback used
+and the self-test did not. It fetches successfully and produces structured output,
+so that port class works. **The port-1-vs-port-2 hypothesis is weakened; the
+interleave-expectation theory is now the stronger of the two.**
+
+**The picture is wrong in a specific way:** regular fine vertical striping, and
+large flat blocks of magenta and orange. That is misaddressed or mis-ordered
+*data*, not a broken pipeline — a broken pipeline gives black or noise.
+
+**Checked and NOT the cause:**
+
+- **Palette width.** `pal_addr` is 12 bits from the mixer, which is the S24TILE
+  colour index. Model 2's 16 KB palette RAM is larger than the tilemap indexes,
+  so copying 4,096 entries is right and the other half belongs to the renderer.
+- **Char addressing.** `char_addr = {tile_num, 4'b0000} + {map_y[2:0], 1'b0}` —
+  16 words per tile, 16-bit word addressing — and `CHAR_BASE + char_addr` matches
+  what the Model 1 core does.
+- **COLUMNS.** Already 62 for both machines (496/8).
+
+**The leading candidate, untested: the byte and word order of the MAME dump.**
+`tools/mame_m2_tiledump.lua` reads with `read_u32` and packs little-endian, which
+is the i960's view of memory. But `segas24_tile_device::char_r` is a device
+accessor, and if it transforms the data — bit or byte reordering — the linear dump
+is not what the fetcher expects. **Check `segaic24.cpp`'s `char_r`/`char_w`
+against a straight linear read before changing any RTL.** The dump is cheap to
+regenerate; the RTL is not.
+
+**Second candidate:** Model 2's tile RAM layout versus Model 1's. Control
+registers are read from tile RAM at word `0x5000`/`0x5004`; if Model 2 places
+them elsewhere, scroll and layer control would be garbage while the glyph data
+was fine, which fits large flat blocks.
+
+**Resources with the tilemap in:** 8,428 ALM (20%), **163 M10K (29%)** — up from
+56, being on-chip tile RAM and palette. That is the first real M10K datapoint for
+the budget and it is worth carrying into §5.5: the tilemap alone costs ~107
+blocks.
+
 ### OPEN AND PARKED: the ROM high byte reads as 0x00. Possibly a ghost.
 
 **Parked deliberately after eight hardware builds.** Everything below is
