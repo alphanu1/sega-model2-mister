@@ -212,11 +212,23 @@ int main(int argc, char** argv) {
   // bit 1: bank is [23:22], row is [21:9], column is [8:0]. Getting these
   // shifts wrong puts the shadow memory and the device at different
   // locations, which looks exactly like a broken read path.
+  // GEOMETRY-DRIVEN, not hardcoded. TB_COL_BITS must match the -GCOL_BITS the
+  // harness was built with: 9 for a 32 MB module, 11 for 128 MB. If the two
+  // disagree the shadow memory and the device sit at different locations, which
+  // looks exactly like a broken read path -- the trap the comment above names.
+#ifndef TB_COL_BITS
+#define TB_COL_BITS 9
+#endif
+  const uint32_t CB = TB_COL_BITS;
+  const uint32_t AWB = 2 + 13 + CB;             // total word-address bits
+  printf("test: geometry %u column bits -> %u MB module\n",
+         CB, (1u << AWB) / (1024u * 1024u) * 2u);
   auto pick_addr = [&](std::mt19937& r) -> uint32_t {
     uint32_t bank = r() & 3;
-    uint32_t row  = r() % 6;          // few rows, so conflicts are common
-    uint32_t col  = r() & 0x1ff;      // 9 column bits on a 32 MB module
-    return (bank << 22) | (row << 9) | col;
+    uint32_t row  = r() % 6;                    // few rows, so conflicts happen
+    uint32_t col  = r() & ((1u << CB) - 1u);
+    // 0-based value bit 0 is address bit 1, so bank sits at AWB-2.
+    return (bank << (AWB - 2)) | (row << CB) | col;
   };
 
   printf("test: ROM download writes, then read back through every port\n");

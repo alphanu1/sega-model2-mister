@@ -217,6 +217,8 @@ module sdram_model #(
 
   int unsigned k;
   logic [COL_BITS-1:0] col;
+  logic [11:0]         colfull;
+  assign colfull = {a[12], a[11], a[9:0]};
   longint              adr;
   logic [DQ_BITS-1:0]  cur;
   longint              eff_pre;
@@ -292,7 +294,13 @@ module sdram_model #(
             if ((cyc - t_act[ba]) < longint'(T_RCD))
               flag(V_TRCD, $sformatf("tRCD: access %0d cycles after ACTIVATE",
                                      cyc - t_act[ba]));
-            col = a[COL_BITS-1:0];
+            // COLUMN BITS MAP TO A0..A9 THEN A11, A12 -- never A10, which is
+            // the auto-precharge flag this same model tests at line ~340. A
+            // straight slice a[COL_BITS-1:0] is correct up to TEN column bits
+            // and wrong at eleven, where it takes the precharge flag as a
+            // column bit. That made a correct 128 MB controller look broken:
+            // 3,965 data mismatches with ZERO protocol violations.
+            col = colfull[COL_BITS-1:0];
             adr = addr_of(ba, open_row[ba], col);
             if (cmd == C_READ) begin
               rd_due[ba] <= cyc + longint'(CL);

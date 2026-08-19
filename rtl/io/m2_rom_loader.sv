@@ -110,6 +110,11 @@ module m2_rom_loader #(
   parameter int unsigned WAIT_MARGIN = 256,
 
   // ioctl index carrying the ROM stream.
+  // SDRAM word-address width. 24 = 32 MB module, 26 = 128 MB. It must match the
+  // controller's geometry: a loader narrower than the controller silently wraps
+  // the stream over its own start, which is a black screen with no error and is
+  // exactly what a 43.62 MB set did on hardware against a 24-bit address.
+  parameter int unsigned SDR_AW = 24,
   parameter logic [15:0] ROM_INDEX = 16'd0
 ) (
   input  logic        clk,
@@ -132,7 +137,7 @@ module m2_rom_loader #(
   // SDRAM download write port. Contract is one transaction per rising edge of
   // req, single outstanding — see m1_sdram.sv.
   output logic        sdr_wr_req,
-  output logic [24:1] sdr_wr_addr,
+  output logic [SDR_AW:1] sdr_wr_addr,
   output logic [15:0] sdr_wr_din,
   output logic [1:0]  sdr_wr_be,
   input  logic        sdr_wr_ack,
@@ -167,7 +172,7 @@ module m2_rom_loader #(
   // 20,480 flip-flops, which Quartus builds without complaint — the same silent
   // fallback documented in rtl/m1_mainram.sv. The ramstyle makes a regression a
   // build error rather than half the device.
-  (* ramstyle = "M10K" *) logic [24:1] fifo_addr [FIFO_DEPTH];
+  (* ramstyle = "M10K" *) logic [SDR_AW:1] fifo_addr [FIFO_DEPTH];
   (* ramstyle = "M10K" *) logic [15:0] fifo_data [FIFO_DEPTH];
   logic [AW:0]        wptr, rptr;          // one extra bit distinguishes full
   logic [AW:0]        level;
@@ -246,7 +251,7 @@ module m2_rom_loader #(
           if (fifo_full) begin
             overflow <= 1'b1;
           end else begin
-            fifo_addr[wptr[AW-1:0]] <= ioctl_addr[24:1];
+            fifo_addr[wptr[AW-1:0]] <= ioctl_addr[SDR_AW:1];
             fifo_data[wptr[AW-1:0]] <= ioctl_dout;
             wptr <= wptr + 1'b1;
           end

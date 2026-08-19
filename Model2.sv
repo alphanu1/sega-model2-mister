@@ -159,15 +159,22 @@ wire game_rst_n = pll_locked & ~RESET & ~status[0] & ~buttons[1];
 // whole ROM needs this controller widened for a 128 MB module, or the DDR3 split
 // docs/rom-layout.md sets aside. Recorded now rather than discovered later.
 
+// 128 MB module: 4 banks x 8192 rows x 2048 columns of 16-bit words, so 11
+// column bits and a 26-bit word address. That is the ONLY decomposition reaching
+// 64M words on the connector's 13 address and 2 bank pins, and both geometries
+// are proven against the device model (make test_m2_sdram, test_m2_sdram128).
+localparam int unsigned SDR_COL  = 11;
+localparam int unsigned SDR_AW   = 2 + 13 + SDR_COL;   // 26
+
 wire        mem_ready, sd_dq_oe, rom_loaded, ldr_overflow;
 wire [15:0] sd_dq_o;
 wire        ldr_wr_req, ldr_wr_ack;
-wire [24:1] ldr_wr_addr;
+wire [SDR_AW:1] ldr_wr_addr;
 wire [15:0] ldr_wr_din;
 wire  [1:0] ldr_wr_be;
 
 logic        rb_req;
-logic [24:1] rb_addr;
+logic [SDR_AW:1] rb_addr;
 wire         rb_ack;
 wire  [63:0] rb_dout;
 
@@ -178,7 +185,7 @@ wire  [63:0] rb_dout;
 // detail. Port 0 is the readback; 1-4 become the CPU, tilemap and renderer.
 localparam int unsigned NPORTS = 5;
 logic [NPORTS-1:0]        p_req;
-logic [NPORTS-1:0][24:1]  p_addr;
+logic [NPORTS-1:0][SDR_AW:1]  p_addr;
 wire  [NPORTS-1:0][63:0]  p_dout;
 wire  [NPORTS-1:0]        p_ack;
 
@@ -201,7 +208,7 @@ assign rb_ack  = p_ack[1];
 // refresh every 7.8125 us, which is 625 cycles. The default of 700 suits 100 MHz
 // and UNDER-REFRESHES here — a data-retention fault that presents as random ROM
 // corruption rather than as a timing setting.
-m2_sdram #(.NP(NPORTS), .T_REFI(600)) u_sdram (
+m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(600)) u_sdram (
 	.clk(clk_sdram), .rst_n(mem_rst_n), .ready(mem_ready),
 	// OSD order is CL+2..CL+5 and the selector's own encoding puts CL+3 at zero,
 	// so the two are mapped rather than passed through.
@@ -224,7 +231,7 @@ assign SDRAM_CLK = ~clk_sdram;   // the device is clocked on the falling edge
 // `ioctl_wait` STALLS THE HPS ITSELF, so the loader gates it on `ioctl_download`
 // internally — and it ASKS the host to stop rather than stopping it, which is why
 // it buffers into a FIFO with margin instead of trusting the wait to take effect.
-m2_rom_loader u_loader (
+m2_rom_loader #(.SDR_AW(SDR_AW)) u_loader (
 	.clk(clk_sdram), .rst(~mem_rst_n),
 	.mem_ready(mem_ready),
 	.ioctl_download(ioctl_download), .ioctl_index(ioctl_index),
@@ -246,7 +253,7 @@ logic  [1:0] rb_state;
 
 always_ff @(posedge clk_sdram or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
-		rb_req <= 1'b0; rb_addr <= 24'd0; rb_state <= 2'd0;
+		rb_req <= 1'b0; rb_addr <= '0; rb_state <= 2'd0;
 		rb_w0 <= 32'd0; rb_w1 <= 32'd0;
 	end else begin
 		case (rb_state)
@@ -257,12 +264,12 @@ always_ff @(posedge clk_sdram or negedge mem_rst_n) begin
 			//
 			//   word 8/9   -> FFFFF6E0
 			//   word 6/7   -> 00000860   (read aligned at 4, upper half of the burst)
-			2'd0: if (rom_loaded) begin rb_addr <= 24'd8; rb_req <= 1'b1; rb_state <= 2'd1; end
+			2'd0: if (rom_loaded) begin rb_addr <= SDR_AW'(8); rb_req <= 1'b1; rb_state <= 2'd1; end
 			// ONE ACCESS PER HANDSHAKE, not per cycle of the request: it drops on
 			// ack. Harmless against RAM, and the habit is the point — the Model 1
 			// TGP popped every FIFO word twice by acting on the level instead.
 			2'd1: if (rb_ack) begin rb_w0 <= rb_dout[31:0]; rb_req <= 1'b0;
-			                        rb_addr <= 24'd4; rb_state <= 2'd2; end
+			                        rb_addr <= SDR_AW'(4); rb_state <= 2'd2; end
 			2'd2: begin rb_req <= 1'b1; rb_state <= 2'd3; end
 			2'd3: if (rb_ack) begin rb_w1 <= rb_dout[63:32]; rb_req <= 1'b0; end
 			default: ;

@@ -61,6 +61,20 @@
 `timescale 1ns/1ps
 
 module m2_sdram #(
+  // GEOMETRY. COL_BITS is the only free variable: the MiSTer SDRAM connector
+  // gives 13 address pins and 2 bank pins, so with 13 row bits the module size is
+  // decided entirely by the column count.
+  //
+  //    9 -> 8192 x 512  x 4 =  32 MB   (the 32 MB modules)
+  //   10 -> 8192 x 1024 x 4 =  64 MB
+  //   11 -> 8192 x 2048 x 4 = 128 MB
+  //
+  // Column bits map to A0..A9 then A11, A12 -- SKIPPING A10, which is the
+  // auto-precharge flag. That is why ten column bits taken as [10:1] aliases:
+  // it puts a column bit where the precharge flag lives. See the note below.
+  parameter int unsigned COL_BITS = 9,
+  parameter int unsigned ROW_BITS = 13,
+  parameter int unsigned BA_BITS  = 2,
   parameter int unsigned NP = 5,      // read/write ports, see D8
 
   // Device timing, in clk cycles. Defaults suit -7E parts around 100 MHz.
@@ -119,7 +133,7 @@ module m2_sdram #(
   // ROM download. Highest priority while it is active; game logic is held in
   // reset during download, so starving the other ports costs nothing.
   input  logic                 wr_req,
-  input  logic [24:1]          wr_addr,
+  input  logic [AW:1]          wr_addr,
   input  logic [15:0]          wr_din,
   input  logic [1:0]           wr_be,
   output logic                 wr_ack,
@@ -127,7 +141,7 @@ module m2_sdram #(
   // Masters. Word-addressed; a burst port's address must be burst-aligned.
   input  logic [NP-1:0]        p_req,
   input  logic [NP-1:0]        p_we,
-  input  logic [NP-1:0][24:1]  p_addr,
+  input  logic [NP-1:0][AW:1]  p_addr,
   input  logic [NP-1:0][15:0]  p_din,
   input  logic [NP-1:0][1:0]   p_be,
   output logic [NP-1:0][63:0]  p_dout,
@@ -226,7 +240,7 @@ module m2_sdram #(
   // ADDRESS DECODE
   //
   // A 32 MB module is 8192 rows x 512 columns x 4 banks of 16-bit words, so
-  // 13 + 9 + 2 = 24 bits, which is exactly the [24:1] word address the ports
+  // 13 + 9 + 2 = 24 bits, which is exactly the [AW:1] word address the ports
   // supply. Column is therefore NINE bits.
   //
   // s32's controller takes the column from [10:1] — ten bits — which with 13
@@ -234,7 +248,19 @@ module m2_sdram #(
   // between row and column. Copying that here would have aliased every
   // address pair differing only in bit 10 onto one location, which reads as
   // sporadic data corruption rather than as an address fault.
-  localparam int unsigned COL_BITS = 9;
+  // Word-address width implied by the geometry: bank + row + column.
+  localparam int unsigned AW = BA_BITS + ROW_BITS + COL_BITS;
+
+  // Column value placed on the address bus, skipping A10.
+  function automatic logic [12:0] col_a(input logic [AW:1] a);
+    logic [11:0] c;
+    c = 12'(a[COL_BITS:1]);
+    col_a       = '0;
+    col_a[9:0]  = c[9:0];
+    col_a[10]   = 1'b0;      // no auto-precharge: the row stays open
+    col_a[11]   = c[10];
+    col_a[12]   = c[11];
+  endfunction
 
   logic [3:0]  cmd;
   assign {sd_cs_n, sd_ras_n, sd_cas_n, sd_we_n} = cmd;
@@ -250,12 +276,12 @@ module m2_sdram #(
   // Metadata is captured with the request because arbitration may delay a
   // port long after the producer moved on to its next address.
   logic [NP-1:0]        pend;
-  logic [NP-1:0][24:1]  addr_p;
+  logic [NP-1:0][AW:1]  addr_p;
   logic [NP-1:0][15:0]  din_p;
   logic [NP-1:0][1:0]   be_p;
   logic [NP-1:0]        we_p;
   logic                 wr_pend;
-  logic [24:1]          wr_addr_p;
+  logic [AW:1]          wr_addr_p;
   logic [15:0]          wr_din_p;
   logic [1:0]           wr_be_p;
 
@@ -330,7 +356,7 @@ module m2_sdram #(
   // ------------------------------------------------------------- transfer
   logic [$clog2(NP+1)-1:0] grant;
   logic                    grant_is_wr;
-  logic [24:1]             xfer_addr;
+  logic [AW:1]             xfer_addr;
   logic [3:0]              rd_total, rd_issued, rd_captured;
   logic                    is_write;
   logic [15:0]             din_r;
@@ -348,16 +374,16 @@ module m2_sdram #(
   // masters coexist, because D8 puts them in different address regions and
   // therefore usually in different banks.
   logic [3:0]  bank_open;
-  logic [12:0] bank_row [4];
+  logic [ROW_BITS-1:0] bank_row [4];
   // Cycles still owed to tRAS before that bank's row may be precharged. With
   // auto-precharge the device enforced this internally; taking that back means
   // taking the obligation back with it.
   logic [3:0]  ras_cnt [4];
 
   logic [1:0]  tbank;
-  logic [12:0] trow;
-  assign tbank = xfer_addr[24:23];
-  assign trow  = xfer_addr[22:10];
+  logic [ROW_BITS-1:0] trow;
+  assign tbank = xfer_addr[AW:AW-1];
+  assign trow  = xfer_addr[AW-2:COL_BITS+1];
 
   // A transfer whose bank and row are already open skips PRECHARGE and
   // ACTIVATE. This is the entire reason locality is worth anything: measured
@@ -574,7 +600,7 @@ module m2_sdram #(
               // A write drives DQ, so it may not be issued while read data is
               // still returning on the same wires. Reads have no such
               // restriction, which is what lets them overlap.
-              logic [24:1] sel;
+              logic [AW:1] sel;
               if (wr_pend && !wr_inflight && !pipe_busy) begin
                 grant       <= ($clog2(NP+1))'(WIDX);
                 grant_is_wr <= 1'b1;
@@ -643,8 +669,8 @@ module m2_sdram #(
 
           S_ACT: begin
             cmd       <= C_ACT;
-            sd_ba     <= xfer_addr[24:23];
-            sd_a      <= xfer_addr[22:10];
+            sd_ba     <= xfer_addr[AW:AW-1];
+            sd_a      <= 13'(xfer_addr[AW-2:COL_BITS+1]);
             bank_row[tbank]  <= trow;
             bank_open[tbank] <= 1'b1;
             ras_cnt[tbank]   <= 4'(T_RAS - 1);
@@ -659,8 +685,8 @@ module m2_sdram #(
 
           S_WR: begin
             cmd      <= C_WRITE;
-            sd_ba    <= xfer_addr[24:23];
-            sd_a     <= {3'b000, 1'b0, xfer_addr[9:1]};  // A10 low: keep row open
+            sd_ba    <= xfer_addr[AW:AW-1];
+            sd_a     <= col_a(xfer_addr);   // A10 low inside col_a: keep row open
             sd_dq_o  <= din_r;
             sd_dq_oe <= 1'b1;
             sd_dqm   <= ~be_r;
@@ -689,13 +715,13 @@ module m2_sdram #(
             // One READ per cycle. The last one carries A10, requesting
             // auto-precharge, so the row closes without a separate command.
             cmd        <= C_READ;
-            sd_ba      <= xfer_addr[24:23];
+            sd_ba      <= xfer_addr[AW:AW-1];
             // A10 low: the row stays open so the next transfer to it can skip
             // PRECHARGE and ACTIVATE entirely. A10 is the auto-precharge bit
             // and the column is nine bits, so A9 is padded explicitly — a
             // packing of {3'b000, x, col} would land x on A9, which the device
             // ignores.
-            sd_a       <= {2'b00, 1'b0, 1'b0, xfer_addr[9:1]};
+            sd_a       <= col_a(xfer_addr);
             // Injected at the selected depth, not at the top of the
             // pipeline: the tag reaches slot 0 after cap_depth cycles, which
             // is what decides which bus word is called word 0.
@@ -707,7 +733,7 @@ module m2_sdram #(
             // Bursts wrap inside the open row: incrementing the full address
             // would walk off the end of the row on the last column and read
             // from a row that was never activated.
-            xfer_addr[9:1] <= xfer_addr[9:1] + 1'b1;
+            xfer_addr[COL_BITS:1] <= xfer_addr[COL_BITS:1] + 1'b1;
             rd_issued  <= rd_issued + 1'b1;
             if (rd_issued + 1'b1 == rd_total) begin
               // Straight back to arbitration. The row stays open, and the data

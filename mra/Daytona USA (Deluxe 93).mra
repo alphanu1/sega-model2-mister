@@ -6,9 +6,14 @@
       Layout contract: docs/rom-layout.md. Derived from MAME 0.289
       model2.cpp ROM_START(daytona93).
 
-      NOT VERIFIED. The core's ROM loader does not exist yet (P1.5 step 3), so
-      nothing has ever consumed this stream. Offsets below are the intended
-      contract, not observed behaviour.
+      FULL 43.62 MB SET. The SDRAM controller now addresses 128 MB (11 column
+      bits, 26-bit word address), proven against the device model at both
+      geometries: make test_m2_sdram and test_m2_sdram128.
+
+      This file was briefly trimmed to 22.25 MB because the controller addressed
+      only 32 MB and the full set wrapped over its own start, which the board
+      showed as FFFFFFFF where the i960 program should be. That constraint is
+      gone; the trim is not a thing to reinstate.
 
       The ROM_COPY mirrors in main_data (0x900000 -> 0xa00000..0xf00000) are
       deliberately NOT repeated here. Shipping six duplicate megabytes over
@@ -60,22 +65,41 @@
             <part name="mpr-16516.26" crc="a260d45d" map="2100"/>
         </interleave>
 
-        <!--
-          POLYGONS, SAMPLES AND THE COMMS PROGRAM ARE DELIBERATELY OMITTED.
+        <!-- 0x1640000  polygons, 0xd00000 -->
+        <interleave output="32">
+            <part name="mpr-16523.ic16" crc="2f484d42" map="0021"/>
+            <part name="mpr-16518.ic20" crc="df683bf7" map="2100"/>
+        </interleave>
+        <interleave output="32">
+            <part name="mpr-16524.ic17" crc="34658bd7" map="0021"/>
+            <part name="mpr-16519.ic21" crc="facd1c81" map="2100"/>
+        </interleave>
+        <interleave output="32">
+            <part name="mpr-16525.ic18" crc="fb517521" map="0021"/>
+            <part name="mpr-16520.ic22" crc="d66bd9bd" map="2100"/>
+        </interleave>
+        <interleave output="32">
+            <part name="epr-16646.ic19" crc="7ba9fd6b" map="0021"/>
+            <part name="epr-16645.ic23" crc="78fe0b8a" map="2100"/>
+        </interleave>
 
-          The full set is 43.62 MB and m2_sdram addresses 32 MB, being [24:1]
-          with two bank and thirteen row bits. Loading all of it WRAPS by 11.62
-          MB and overwrites its own start, which is where the i960 program lives.
+        <!-- 0x2340000  68000 sound program, 0x40000 (16-bit, byte-swapped) -->
+        <interleave output="16">
+            <part name="epr-16489.7" crc="c20e543e" map="12"/>
+        </interleave>
+        <interleave output="16">
+            <part name="epr-16490.8" crc="c24edaab" map="12"/>
+        </interleave>
 
-          That was measured, not deduced: with the full set loaded the board read
-          FFFFFFFF at word 8 and word 4 (padding from the tail of the stream),
-          and with a 592 KB payload the same build read the expected signature at
-          both. See docs/rom-layout.md.
+        <!-- 0x2380000  MPCM samples, 0x800000 -->
+        <part name="mpr-16491.32" crc="89920903"/>
+        <part name="mpr-16492.33" crc="459e701b"/>
+        <part name="mpr-16493.4"  crc="9990db15"/>
+        <part name="mpr-16494.5"  crc="600e1d6c"/>
 
-          What remains here is 22.25 MB and fits: i960 program, main data, copro
-          data and textures. Restoring the rest needs the controller widened for
-          a 128 MB module, or the DDR3 split. That is P6 work.
-        -->
+        <!-- 0x2b80000  comms program, 0x20000 -->
+        <part name="epr-16726.bin" crc="c179b8c7"/>
+
     </rom>
 
     <!-- No DIP switches are wired yet; the core has no inputs. -->

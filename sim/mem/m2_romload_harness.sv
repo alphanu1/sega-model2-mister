@@ -15,7 +15,10 @@
 
 `timescale 1ns/1ps
 
-module m2_romload_harness (
+module m2_romload_harness #(
+  parameter int unsigned COL_BITS = 11,
+  parameter int unsigned SDR_AW = 2 + 13 + COL_BITS
+) (
   input  logic        clk,
   input  logic        rst_n,
   // Swept by the testbench. The device MODEL presents data on the same edge
@@ -45,13 +48,13 @@ module m2_romload_harness (
   // Write-path observability: the readback proves data came back, this proves
   // WHERE it went. Nothing had ever checked the two agree.
   output logic        dbg_wr_req,
-  output logic [24:1] dbg_wr_addr,
+  output logic [SDR_AW:1] dbg_wr_addr,
   output logic [15:0] dbg_wr_din,
   output logic        dbg_wr_ack,
 
   output logic        dbg_rb_req,
   output logic        dbg_rb_ack,
-  output logic [24:1] dbg_rb_addr,
+  output logic [SDR_AW:1] dbg_rb_addr,
   output logic [63:0] dbg_rb_dout,
 
   output int unsigned violations,
@@ -62,16 +65,16 @@ module m2_romload_harness (
   localparam int unsigned NP = 5;
 
   logic        ldr_wr_req, ldr_wr_ack;
-  logic [24:1] ldr_wr_addr;
+  logic [SDR_AW:1] ldr_wr_addr;
   logic [15:0] ldr_wr_din;
   logic  [1:0] ldr_wr_be;
 
   logic [NP-1:0]       p_req, p_ack;
-  logic [NP-1:0][24:1] p_addr;
+  logic [NP-1:0][SDR_AW:1] p_addr;
   logic [NP-1:0][63:0] p_dout;
 
   logic        rb_req;
-  logic [24:1] rb_addr;
+  logic [SDR_AW:1] rb_addr;
   wire  [63:0] rb_dout = p_dout[1];
   wire         rb_ack  = p_ack[1];
 
@@ -107,7 +110,7 @@ module m2_romload_harness (
 
   // INIT_NOP shortened only; every other number matches Model2.sv, including
   // T_REFI(600) for the 80 MHz domain.
-  m2_sdram #(.NP(NP), .T_REFI(600), .INIT_NOP(600)) u_sdram (
+  m2_sdram #(.COL_BITS(COL_BITS), .NP(NP), .T_REFI(600), .INIT_NOP(600)) u_sdram (
     .clk(clk), .rst_n(rst_n), .ready(mem_ready),
     .rd_lat_sel(rd_lat_sel),
     .sd_cke(cke), .sd_cs_n(cs_n), .sd_ras_n(ras_n), .sd_cas_n(cas_n),
@@ -120,7 +123,7 @@ module m2_romload_harness (
     .dbg_req(), .dbg_grant()
   );
 
-  m2_rom_loader u_loader (
+  m2_rom_loader #(.SDR_AW(SDR_AW)) u_loader (
     .clk(clk), .rst(~rst_n),
     .mem_ready(mem_ready),
     .ioctl_download(ioctl_download), .ioctl_index(ioctl_index),
@@ -133,7 +136,7 @@ module m2_romload_harness (
     .rom_loaded(rom_loaded), .overflow(overflow)
   );
 
-  sdram_model #(.COL_BITS(9), .T_REFI(781), .REFI_SLACK(9)) device (
+  sdram_model #(.COL_BITS(COL_BITS), .T_REFI(781), .REFI_SLACK(9)) device (
     .clk(clk), .cke(cke), .cs_n(cs_n), .ras_n(ras_n), .cas_n(cas_n),
     .we_n(we_n), .ba(ba), .a(a), .dqm(dqm),
     .dq_i(dq_c2m), .dq_oe_i(dq_oe_c),
@@ -145,13 +148,13 @@ module m2_romload_harness (
   // ---- VERBATIM FROM Model2.sv, and it must stay that way ----------------
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      rb_req <= 1'b0; rb_addr <= 24'd0; rb_state <= 2'd0;
+      rb_req <= 1'b0; rb_addr <= '0; rb_state <= 2'd0;
       rb_w0 <= 32'd0; rb_w1 <= 32'd0;
     end else begin
       case (rb_state)
-        2'd0: if (rom_loaded) begin rb_addr <= 24'd8; rb_req <= 1'b1; rb_state <= 2'd1; end
+        2'd0: if (rom_loaded) begin rb_addr <= SDR_AW'(8); rb_req <= 1'b1; rb_state <= 2'd1; end
         2'd1: if (rb_ack) begin rb_w0 <= rb_dout[31:0]; rb_req <= 1'b0;
-                                rb_addr <= 24'd4; rb_state <= 2'd2; end
+                                rb_addr <= SDR_AW'(4); rb_state <= 2'd2; end
         2'd2: begin rb_req <= 1'b1; rb_state <= 2'd3; end
         2'd3: if (rb_ack) begin rb_w1 <= rb_dout[63:32]; rb_req <= 1'b0; end
         default: ;

@@ -2693,6 +2693,49 @@ One generator note worth keeping: `callx`'s address is a **call target**, so it
 must point at code. Aimed into the data window it calls unwritten memory and
 executes `0xffffffff`, which tests the trap path instead of the call.
 
+### SDRAM widened to 128 MB, and the full Daytona set restored
+
+**Sorted rather than left hanging.** `m2_sdram` now addresses **128 MB** and the
+Daytona MRA carries all **29 parts / 43.62 MB** again. Build clean at **7,796
+ALM**, timing clean, 17 suites green. Deployed.
+
+**The geometry was forced, not guessed.** The MiSTer connector gives 13 address
+pins and 2 bank pins, so with 13 row bits the module size is decided entirely by
+the column count, and only one value reaches 64M words:
+
+| `COL_BITS` | geometry | size |
+|---|---|---|
+| 9 | 8192 x 512 x 4 | 32 MB |
+| 10 | 8192 x 1024 x 4 | 64 MB |
+| **11** | **8192 x 2048 x 4** | **128 MB** |
+
+**Column bits map to A0-A9 then A11, A12, skipping A10** — the auto-precharge
+flag. That is why the Model 1 comment records ten column bits taken as `[10:1]`
+aliasing: it puts a column bit where the precharge flag lives.
+
+**Both geometries are proven against the device model**, and the 32 MB case is
+kept as a regression net:
+
+```
+make test_m2_sdram      9 column bits ->  32 MB   74,729 checks, 0 fails
+make test_m2_sdram128  11 column bits -> 128 MB   58,739 checks, 0 fails
+```
+
+**A real bug in the lifted device model, found by doing this.** At 11 column bits
+it reported **3,965 data mismatches with ZERO protocol violations** — timing
+perfect, addressing wrong. The model took `col = a[COL_BITS-1:0]`, a straight
+slice that is correct up to ten bits and at eleven **consumes A10, the
+auto-precharge flag it tests elsewhere in the same file**. A correct controller
+looked broken. Corrected to `{a[12], a[11], a[9:0]}`; **worth reporting upstream,
+since Model 1 will hit it the moment it goes past 32 MB.**
+
+Changes to lifted code are recorded in `THIRD_PARTY.md` rather than made quietly:
+the controller's geometry is parameterised and its ports widened, the loader takes
+`SDR_AW`, and the harness and testbench take the geometry as a parameter.
+
+**`check_mra` earned its place immediately** — it caught me putting `--` back into
+an XML comment while restoring the MRA, which is the exact fault it was added for.
+
 ### P1.5 STEP 3 CLOSED: ROM path proven end to end on hardware
 
 Board reads, running `Model2 2D Tilemap Test`:
