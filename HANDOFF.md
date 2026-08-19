@@ -116,6 +116,38 @@ partial or corrupt section cannot half-replace it.
 **None of this was tested on hardware** — the device was off. The simulation
 result is what makes it safe to try, not a substitute for trying it.
 
+### Steps, in order
+
+```
+make release                       # gathers the .rbf and .mra into build/release
+```
+
+Copy to the device:
+
+- `build/release/Model2.rbf` → the MiSTer, replacing the current core
+- `build/release/_Arcade/Model2 2D Tilemap Test.mra` → `_Arcade/`
+- the regenerated `m2tiles.zip` → wherever the current one lives
+
+To regenerate the image (it is ROM-derived and is not in this repository):
+
+```
+M2_FRAME=2300 M2_OUT=<dir> mame daytona93 -autoboot_script tools/mame_m2_tiledump.lua
+cat <dir>/tile.bin <dir>/palette.bin <dir>/char.bin <dir>/colorxlat.bin > m2tiles.bin
+zip m2tiles.zip m2tiles.bin
+```
+
+If the colours look wrong rather than merely different, the fallback did not
+engage — read `dbg` word 5/6, the copy checksums, before changing anything.
+
+### Then: the integration that is actually left
+
+`i960_top` is still not in `Model2.sv`. That is the step that turns this from a
+board displaying a captured frame into a board running the game, and it is
+specified by `sim/i960/tb_i960_rom.cpp`, which models the address decode, the
+interrupt registers and the V-blank injection and is verified against MAME.
+It needs SDRAM **write** ports, which `m2_sdram` does not have — char RAM is
+512 KB and cannot live in M10K.
+
 ## Findings worth carrying, all of them about instruments
 
 Every real defect this session was in a check, not in the design. The pattern is
