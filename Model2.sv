@@ -200,6 +200,8 @@ always_comb begin
 	// wants single words; 1-3 are the streaming ports.
 	p_req[1]  = rb_req;
 	p_addr[1] = rb_addr;
+	p_req[2]  = st_rd_req;
+	p_addr[2] = st_rd_addr;
 end
 assign rb_dout = p_dout[1];
 assign rb_ack  = p_ack[1];
@@ -218,8 +220,10 @@ m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(300)) u_sdram (
 	.sd_cas_n(SDRAM_nCAS), .sd_we_n(SDRAM_nWE), .sd_ba(SDRAM_BA),
 	.sd_a(SDRAM_A), .sd_dqm({SDRAM_DQMH, SDRAM_DQML}),
 	.sd_dq_o(sd_dq_o), .sd_dq_oe(sd_dq_oe), .sd_dq_i(SDRAM_DQ),
-	.wr_req(ldr_wr_req), .wr_addr(ldr_wr_addr), .wr_din(ldr_wr_din),
-	.wr_be(ldr_wr_be), .wr_ack(ldr_wr_ack),
+	.wr_req(st_run ? st_req : ldr_wr_req),
+	.wr_addr(st_run ? st_addr : ldr_wr_addr),
+	.wr_din(st_run ? st_din : ldr_wr_din),
+	.wr_be(2'b11), .wr_ack(ldr_wr_ack),
 	.p_req(p_req), .p_we('0), .p_addr(p_addr), .p_din('0), .p_be('1),
 	.p_dout(p_dout), .p_ack(p_ack),
 	.dbg_req(), .dbg_grant()
@@ -279,6 +283,66 @@ always_ff @(posedge clk_sdram or negedge mem_rst_n) begin
 			2'd3: if (rb_ack) begin rb_w1 <= rb_dout[63:32]; rb_req <= 1'b0;
 			                        rb_state <= 2'd0; end
 			default: ;
+		endcase
+	end
+end
+
+///////////////////////   SDRAM SELF-TEST   //////////////////////
+//
+// FOUR BUILDS WERE SPENT INFERRING FROM ROM DATA, which is the wrong instrument:
+// it cannot separate a write fault from a read fault, the ROM's content is not
+// chosen to expose byte lanes, and the tilemap blob used to "prove" the path is
+// 0x0020 repeated, every high byte zero, so a dead high lane reads it perfectly.
+//
+// This writes patterns chosen so each failure mode is distinguishable, to an
+// address the ROM never occupies, then reads them back as one burst:
+//
+//   write AA55 5AA5 FF00 00FF  ->  word5 = 5AA5AA55, word6 = 00FFFF00 if correct
+//
+//   high lane reads zero      -> word5 = 00A50055
+//   high byte never written   -> word5 = FFA5FF55   (unwritten reads FF)
+//   lanes swapped             -> word5 = A55A55AA
+//   address aliasing          -> patterns repeat or shift
+//
+// It runs after rom_loaded, when the loader is idle, drives the same write port
+// through a mux, and loops so the OSD phase option stays live.
+
+localparam logic [15:0] STP0 = 16'hAA55, STP1 = 16'h5AA5,
+                        STP2 = 16'hFF00, STP3 = 16'h00FF;
+localparam logic [SDR_AW:1] ST_BASE = SDR_AW'(32'h2000000);   // 64 MB mark
+
+logic            st_run, st_req, st_rd_req;
+logic [SDR_AW:1] st_addr, st_rd_addr;
+logic [15:0]     st_din;
+logic [3:0]      st_state;
+logic [63:0]     st_got;
+
+assign st_run = rom_loaded && (st_state >= 4'd1) && (st_state <= 4'd8);
+
+always_ff @(posedge clk_sdram or negedge mem_rst_n) begin
+	if (!mem_rst_n) begin
+		st_state <= 4'd0; st_req <= 1'b0; st_rd_req <= 1'b0;
+		st_addr <= '0; st_rd_addr <= '0; st_din <= 16'd0; st_got <= 64'd0;
+	end else begin
+		case (st_state)
+			4'd0: if (rom_loaded) begin
+				st_addr <= ST_BASE; st_din <= STP0; st_req <= 1'b1; st_state <= 4'd1;
+			end
+			4'd1: if (ldr_wr_ack) begin st_req <= 1'b0; st_state <= 4'd2; end
+			4'd2: begin st_addr <= ST_BASE + SDR_AW'(1); st_din <= STP1;
+			            st_req <= 1'b1; st_state <= 4'd3; end
+			4'd3: if (ldr_wr_ack) begin st_req <= 1'b0; st_state <= 4'd4; end
+			4'd4: begin st_addr <= ST_BASE + SDR_AW'(2); st_din <= STP2;
+			            st_req <= 1'b1; st_state <= 4'd5; end
+			4'd5: if (ldr_wr_ack) begin st_req <= 1'b0; st_state <= 4'd6; end
+			4'd6: begin st_addr <= ST_BASE + SDR_AW'(3); st_din <= STP3;
+			            st_req <= 1'b1; st_state <= 4'd7; end
+			4'd7: if (ldr_wr_ack) begin st_req <= 1'b0; st_state <= 4'd8; end
+			4'd8: begin st_rd_addr <= ST_BASE; st_rd_req <= 1'b1; st_state <= 4'd9; end
+			4'd9: if (p_ack[2]) begin
+				st_got <= p_dout[2]; st_rd_req <= 1'b0; st_state <= 4'd8;
+			end
+			default: st_state <= 4'd0;
 		endcase
 	end
 end
@@ -397,8 +461,8 @@ m2_diag #(.NWORDS(7)) u_diag
 	.enable(1'b1),
 	.hb(hblank),
 	.vb(vblank),
-	.words({ rb_w1,                                     // 6  ROM word 1
-	         rb_w0,                                     // 5  ROM word 0
+	.words({ st_got[63:32],                             // 6  want 00FFFF00
+	         st_got[31:0],                              // 5  want 5AA5AA55
 	         // 32 BITS, not 31. The first version was {27'd0, ...} = 31, which
 	         // shifted every word above it by one bit: the board showed word4 as
 	         // 80000007, its top bit being rb_w0's LSB bleeding down. A short
