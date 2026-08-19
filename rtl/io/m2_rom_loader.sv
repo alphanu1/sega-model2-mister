@@ -173,7 +173,15 @@ module m2_rom_loader #(
   // fallback documented in rtl/m1_mainram.sv. The ramstyle makes a regression a
   // build error rather than half the device.
   (* ramstyle = "M10K" *) logic [SDR_AW:1] fifo_addr [FIFO_DEPTH];
-  (* ramstyle = "M10K" *) logic [15:0] fifo_data [FIFO_DEPTH];
+  // SPLIT INTO BYTE LANES. This is the standing rule in docs/, and it is here
+  // because the board stored every LOW byte of the ROM correctly and every HIGH
+  // byte as exactly 0x00, while the same write port driven from a REGISTER by
+  // the SDRAM self-test was perfect in both lanes. A single 16-bit-wide M10K
+  // array is what the rule warns against, and simulation cannot see it: the
+  // simulator models the array as registers, so the loader-to-readback test
+  // passes either way.
+  (* ramstyle = "M10K" *) logic [7:0] fifo_data_lo [FIFO_DEPTH];
+  (* ramstyle = "M10K" *) logic [7:0] fifo_data_hi [FIFO_DEPTH];
   logic [AW:0]        wptr, rptr;          // one extra bit distinguishes full
   logic               rd_armed;            // M10K read launched, data next cycle
   logic [AW:0]        level;
@@ -253,7 +261,8 @@ module m2_rom_loader #(
             overflow <= 1'b1;
           end else begin
             fifo_addr[wptr[AW-1:0]] <= ioctl_addr[SDR_AW:1];
-            fifo_data[wptr[AW-1:0]] <= ioctl_dout;
+            fifo_data_lo[wptr[AW-1:0]] <= ioctl_dout[7:0];
+            fifo_data_hi[wptr[AW-1:0]] <= ioctl_dout[15:8];
             wptr <= wptr + 1'b1;
           end
         end else if (is_tgp) begin
@@ -304,7 +313,8 @@ module m2_rom_loader #(
       // same port and was always correct -- that difference is what localised it.
       end else if (!fifo_empty && mem_ready && !rd_armed) begin
         sdr_wr_addr <= fifo_addr[rptr[AW-1:0]];
-        sdr_wr_din  <= fifo_data[rptr[AW-1:0]];
+        sdr_wr_din  <= {fifo_data_hi[rptr[AW-1:0]],
+                        fifo_data_lo[rptr[AW-1:0]]};
         rd_armed    <= 1'b1;
       end else if (rd_armed) begin
         rd_armed    <= 1'b0;
