@@ -1,6 +1,6 @@
 # Handoff
 
-**Updated:** 2026-08-19, after `ddd7ba8`.
+**Updated:** 2026-08-19, after `9e0f33f`.
 
 ---
 
@@ -95,9 +95,10 @@ the instrument is a suspect of equal standing to the module.**
 
 ## Known gaps, stated plainly
 
-- **The differential test compares program counters only.** Two runs can agree on
-  every PC and disagree on every value. **Write-stream comparison is the next
-  instrument.**
+- ~~The differential test compares program counters only.~~ **Closed.**
+  `tools/i960-datadiff.sh` compares the data too: tile RAM, char RAM and palette,
+  **606,208 bytes, identical** (R26). The CPU side of the 2D path is verified end
+  to end. The 3D path still has no oracle at all (§2.1).
 - Still unimplemented in the i960: faults, `calls`, `remr`, the `rl` FP forms and
   transcendentals. None is reached by Daytona's boot in 803,355 instructions.
   They must be measured for **Fmax** as well as area — the margin is now 1.4 MHz.
