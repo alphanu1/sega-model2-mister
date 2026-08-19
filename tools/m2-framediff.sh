@@ -30,10 +30,17 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-FRAME="${1:-2300}"
+FRAME="${1:-120}"
 SET="${2:-daytona93}"
 WORK="${M2_FRAME_OUT:-${TMPDIR:-/tmp}/m2-framediff}"
-FLOOR="${M2_MATCH_FLOOR:-30000}"
+# Frame 120 is Daytona's settings screen: TILEMAP ONLY, no polygons anywhere on
+# it, so an exact whole-frame match is both possible and required. Frames 60, 90
+# and 150 are the same and also match exactly.
+#
+# Later frames composite the 3D scene, which we do not render at all, so they
+# can only be held to a floor. Pass a frame and set M2_MATCH_FLOOR to use one.
+EXACT="${M2_EXACT:-1}"
+FLOOR="${M2_MATCH_FLOOR:-0}"
 
 command -v mame >/dev/null || { echo "mame not on PATH — skipping"; exit 0; }
 [ -x "$ROOT/obj_m2_vf/Vm2_video" ] || { echo "build first: make obj_m2_vf/Vm2_video"; exit 1; }
@@ -56,9 +63,9 @@ done
 
 "$ROOT/obj_m2_vf/Vm2_video" "+in=$WORK" "+out=$WORK/ours" | sed 's/^/  /'
 
-python3 - "$WORK" "$FLOOR" <<'PY'
+python3 - "$WORK" "$FLOOR" "$EXACT" <<'PY'
 import struct, zlib, sys, collections
-work, floor = sys.argv[1], int(sys.argv[2])
+work, floor, exact = sys.argv[1], int(sys.argv[2]), sys.argv[3] == "1"
 W, H = 496, 384
 px   = struct.unpack("<%dI" % (W*H), open(f"{work}/screen.raw", "rb").read())
 ours = open(f"{work}/ours.raw", "rb").read()
@@ -82,10 +89,16 @@ png(f"{work}/diffmask.png", [b'\x00' + bytes(mask[y*W*3:(y+1)*W*3]) for y in ran
 png(f"{work}/mame.png",     [b'\x00' + b''.join(mrows[y*W:(y+1)*W]) for y in range(H)])
 
 pct = 100.0 * same / (W*H)
-print(f"  {same} of {W*H} pixels identical ({pct:.1f}%)   floor {floor}")
+print(f"  {same} of {W*H} pixels identical ({pct:.1f}%)")
 print(f"  wrote {work}/diffmask.png (green = identical) and {work}/mame.png")
-if same < floor:
-    print("  REGRESSED below the floor")
-    sys.exit(1)
-print("  OK — residual should be the 3D scene; check the mask if it moved")
+if exact:
+    if same != W*H:
+        print(f"  FAIL — a tilemap-only frame must match EXACTLY; {W*H - same} pixels differ")
+        sys.exit(1)
+    print("  EXACT — whole frame identical to MAME")
+else:
+    if same < floor:
+        print(f"  REGRESSED below the floor {floor}")
+        sys.exit(1)
+    print("  OK — residual should be the 3D scene; check the mask if it moved")
 PY

@@ -2145,3 +2145,43 @@ simulation is what makes that change safe to make later, which is the right orde
 from a core measuring the same family of hardware, and the ONE thing that
 differed was the thing nobody re-checked. **A ported module's comments are
 evidence about the core it came from, not about this one.**
+
+
+---
+
+**R28 — the 2D renderer is bit-exact against MAME over a whole frame.** P1.5's
+exit criterion 4 is now met as an assertion rather than an impression.
+
+`tools/m2-framediff.sh` renders a frame with `m2_video` from MAME's own tilemap
+capture and compares every pixel with MAME's screen:
+
+| frame | content | result |
+|---|---|---|
+| 60 | settings screen | **190,464 / 190,464 identical (100%)** |
+| 90 | settings screen | **100%** |
+| 120 | settings screen | **100%** |
+| 150 | settings screen | **100%** |
+| 200+ | attract, with 3D | 16-19%, residual is exactly the polygon scene |
+
+**The default is frame 120 and it demands 100%, not a floor.** Daytona's settings
+screen is tilemap only — no polygons anywhere on it — so an exact whole-frame
+match is both possible and required, and anything less is a defect. Later frames
+composite a 3D image we do not render at all, so they can only be held to a
+floor; that mode still exists and is what `M2_MATCH_FLOOR` selects.
+
+*It is sensitive to one bit.* Perturbing a single colour-translation entry by 1
+fails the test with 2,054 differing pixels — every non-black pixel on the screen.
+That is what makes it worth having: R27's fault was a few units per channel and
+survived being looked at on hardware indefinitely.
+
+*What is now established for the 2D path, end to end:*
+
+1. The i960 executes Daytona's real boot code identically to MAME (R25).
+2. The tile, char and palette data it produces are byte-identical (R26, with its
+   stated limits).
+3. The renderer turns that data into **pixels identical to MAME** (this entry).
+
+**The remaining 2D risk is the wiring, not either end** — `i960_top` is still not
+instantiated in `Model2.sv`, and the colour translation table is not yet loaded
+on hardware. Both are integration, and both now have a verified specification to
+be integrated against.
