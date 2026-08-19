@@ -599,6 +599,10 @@ wire       tile_hs, tile_vs, tile_hb, tile_vb;
 m2_video u_tilemap (
 	.clk(clk_vid), .ce_pix(ce_pix), .rst_n(mem_rst_n & cp_done),
 	.tile_mask(14'h3FFF),
+	// Colour translation table not loaded yet: it powers up holding pal5bit,
+	// which is exactly what this rendered before the table existed, so the
+	// picture on hardware is unchanged until the loader is wired up.
+	.xlat_we(1'b0), .xlat_addr(7'd0), .xlat_din(8'd0),
 	.tram_addr(tram_addr), .tram_data(tram_data),
 	.char_req(char_req), .char_addr(char_addr),
 	.char_data(char_data), .char_ack(char_ack),

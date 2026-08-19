@@ -2050,8 +2050,21 @@ regions the 2D path reads:
 | char RAM `0x01080000` | 524,288 bytes | **identical** |
 | palette `0x01800000` | 16,384 bytes | **identical** |
 
-**606,208 bytes, zero differing.** The tilemap layout, the glyph data and the
-palette that Daytona's boot code builds are bit-exact against the oracle.
+**606,208 bytes, zero differing.**
+
+*And that number is weaker than it looks — recorded here rather than left to be
+quoted.* At the poll loop the boot has not drawn anything yet: tile RAM and char
+RAM are **entirely zero on both sides**, and only 52 bytes of the palette are
+non-zero. So this establishes that the two agree, and that we write zeros where
+MAME writes zeros — it does **not** establish that a tilemap with content would
+match.
+
+**Both sides stall in the same place, which is why.** Daytona's boot polls
+`0x01c00040` for the sound board; MAME loops there 140,803 times in 50 ms and
+never leaves, and our harness has no sound board at all. Getting a content-rich
+comparison out of this instrument needs the sound handshake modelled. **What
+closed the gap instead was R27**, which compares rendered pixels from a
+frame-2300 capture where the tilemap is full.
 
 *Why an instruction address and not a frame number.* `mame_m2_tiledump.lua` syncs
 on a frame, which is right when there is no CPU on our side and the state is
@@ -2066,3 +2079,69 @@ verified end to end: real ROM in, correct pixel-source data out. It says nothing
 about the renderer that consumes it — `m2_video` is verified separately against
 canned MAME state — and nothing about the 3D path, which has no oracle at all
 (§2.1). **The remaining 2D risk is now in the wiring, not in either end.**
+
+
+---
+
+**R27 — the palette was Model 1's, and every fill colour in every game was
+wrong.** Found by rendering a frame and comparing it against MAME pixel by pixel,
+which is a thing this project had never done: P1.5's exit criterion 4 ("the
+rendered frame matches MAME's screenshot") was judged on hardware, by eye.
+
+`rtl/video/m2_palette.sv` was `m1_palette.sv` copied across. It did `pal5bit` —
+`(x << 3) | (x >> 2)` — plus a bit-15 intensity/shade halving, and carried a
+comment citing MAME as the source for the intensity bit. **That citation does not
+describe Model 2.** `model2.cpp palette_w`:
+
+```c
+u8 r = m_colorxlat[(0x0080 >> 1) + (((palcolor >> 0) & 0x1f) << 8)];
+u8 g = m_colorxlat[(0x4080 >> 1) + (((palcolor >> 5) & 0x1f) << 8)];
+u8 b = m_colorxlat[(0x8080 >> 1) + (((palcolor >> 10) & 0x1f) << 8)];
+r = m_gamma_table[r]; g = m_gamma_table[g]; b = m_gamma_table[b];
+```
+
+Each 5-bit channel indexes a **colour translation RAM the game programs** at
+`0x01810000`, and the result goes through a gamma curve. **Bit 15 is not read at
+all.**
+
+*Measured against Daytona's real table, dumped from MAME:*
+
+| 5-bit | colorxlat | gamma | `pal5bit` (what we had) |
+|---|---|---|---|
+| 2 | 81 | **22** | 16 |
+| 9 | 123 | **78** | 74 |
+| 23 | 207 | **190** | 189 |
+| 31 | 255 | **255** | 255 |
+
+**Only the endpoints agreed.** That is exactly why it survived being looked at on
+hardware: the picture is right, every fill is a few units off, and nothing about
+that is visible without a pixel comparison. In the diff mask it showed up as
+glyph **outlines** matching and their **fills** not — a shape that says "colour",
+not "layout", and is worth recognising on sight.
+
+*The table costs 96 bytes, not 48 KB.* It is indexed at a stride of 256 words, so
+only 32 entries per channel are ever read out of 24,576.
+
+*The gamma is MAME's, not the hardware's,* and its own comment says so — "this
+works OK for most games / real cabinets probably have their monitors calibrated
+depending on the game". It is applied by default because matching the oracle is
+what makes a pixel comparison mean anything, and it is a **parameter** so a
+hardware A/B can turn it off without an edit. `255/191` in 16.16 is 87,496, which
+reproduces MAME's table at every point including 255, where a coarser multiplier
+gives 254.
+
+*Result.* Matching pixels went from 15,795 to **34,664 of 190,464**, and the
+residual is now exactly the 3D scene MAME composites and we do not render — the
+2D glyphs are solid in the mask. A whole-frame match is not available until P2
+exists, so `tools/m2-framediff.sh` holds a floor rather than demanding 100%.
+
+*Deliberately NOT changed on hardware tonight.* The table **powers up holding
+`pal5bit`**, so a core that has not loaded it renders exactly as the board does
+today. Wiring the loader needs the copy engine extended and the MRA regenerated
+to carry `colorxlat.bin`, and that could not be tested — the device is off. The
+simulation is what makes that change safe to make later, which is the right order.
+
+*The provenance lesson, and it is the same one as R22.* The module was lifted
+from a core measuring the same family of hardware, and the ONE thing that
+differed was the thing nobody re-checked. **A ported module's comments are
+evidence about the core it came from, not about this one.**

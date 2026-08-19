@@ -363,6 +363,20 @@ obj_i960_top/Vi960_top: $(TOP_RTL) $(TB)/tb_i960_top.cpp $(TB)/i960_cpu_ref.h
 	$(VBUILD) --top-module i960_top --public-flat-rw -CFLAGS "-O2 -I../$(TB)" \
 	  --Mdir obj_i960_top -o Vi960_top $(TOP_RTL) $(TB)/tb_i960_top.cpp
 
+# Render a whole frame out of m2_video, from the tile/char/palette images our
+# own i960 built. Skips when they are absent.
+test_m2_video_frame: obj_m2_vf/Vm2_video
+	@echo "== test m2_video (frame render)"
+	@./obj_m2_vf/Vm2_video $(TEST_ARGS)
+
+M2V_RTL := rtl/video/m2_video_timing.sv rtl/video/m2_tile_decode.sv \
+           rtl/video/m2_tile_fetch.sv rtl/video/m2_tile_mixer.sv \
+           rtl/video/m2_palette.sv rtl/video/m2_video.sv
+
+obj_m2_vf/Vm2_video: $(M2V_RTL) sim/video/tb_m2_video_frame.cpp
+	$(VBUILD) -Wno-fatal --top-module m2_video -CFLAGS "-O2" \
+	  --Mdir obj_m2_vf -o Vm2_video $(M2V_RTL) sim/video/tb_m2_video_frame.cpp
+
 # Real ROM execution. P1 exit criterion 3, and the only test here whose input
 # this project did not write. Skips with a message when the set is absent -- a
 # missing ROM is not a broken build, and NO ROM BYTE ENTERS THE REPOSITORY.

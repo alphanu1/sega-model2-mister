@@ -21,6 +21,12 @@ local REGIONS = {
   { name = "tile",    base = 0x01000000, size = 0x010000 },
   { name = "char",    base = 0x01080000, size = 0x080000 },
   { name = "palette", base = 0x01800000, size = 0x004000 },
+  -- The colour translation RAM. Model 2's palette is NOT a plain 5-to-8 bit
+  -- expansion: model2.cpp palette_w indexes this table with each 5-bit channel
+  -- and then applies a gamma curve. Only 96 of its entries are ever read --
+  -- 32 per channel at a stride of 256 words -- but the whole region is dumped
+  -- because the stride is worth confirming from real data rather than trusting.
+  { name = "colorxlat", base = 0x01810000, size = 0x00c000 },
 }
 
 M2_TILEDUMP_SUB = emu.add_machine_frame_notifier(function()

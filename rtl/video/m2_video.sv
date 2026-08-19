@@ -60,6 +60,12 @@ module m2_video #(
 
   input  logic [13:0] tile_mask,
 
+  // Colour translation table load. Written by whatever owns the colorxlat RAM
+  // -- the copy engine today, the i960 once it is wired in.
+  input  logic        xlat_we,
+  input  logic  [6:0] xlat_addr,
+  input  logic  [7:0] xlat_din,
+
   // Tile RAM, on chip. The V60 owns the other port.
   output logic [14:0] tram_addr,
   input  logic [15:0] tram_data,
@@ -686,8 +692,39 @@ module m2_video #(
 
   assign pal_addr = mixed;
 
+  // COLOUR TRANSLATION TABLE. Model 2's palette runs each 5-bit channel through
+  // a RAM the game programs at 0x01810000 before the gamma curve -- see
+  // m2_palette.sv. The game writes it at a stride of 256 words, so only 32
+  // entries per channel are ever read and the whole thing is 96 bytes.
+  //
+  // It POWERS UP holding pal5bit, the expansion this module used before the
+  // translation existed. That is deliberate: a core that has not loaded the
+  // table renders exactly as it did, so adding this cannot regress the picture
+  // on hardware, and loading it can only make the colours more correct.
+  //
+  // Layout: {channel, value}, channel 0 = R, 1 = G, 2 = B.
+  logic [7:0] xlat_tbl [96];
+  initial begin
+    for (int c = 0; c < 3; c++)
+      for (int i = 0; i < 32; i++)
+        xlat_tbl[c*32 + i] = {i[4:0], i[4:2]};      // pal5bit
+  end
+  always_ff @(posedge clk)
+    if (xlat_we) xlat_tbl[xlat_addr] <= xlat_din;
+
+  logic [4:0] x_r5, x_g5, x_b5;
+  logic [7:0] x_r, x_g, x_b;
+  assign x_r = xlat_tbl[{2'd0, x_r5}];
+  assign x_g = xlat_tbl[{2'd1, x_g5}];
+  assign x_b = xlat_tbl[{2'd2, x_b5}];
+
   logic [7:0] pr, pg, pb;
-  m2_palette pal (.entry(pal_data), .r(pr), .g(pg), .b(pb));
+  m2_palette pal (
+    .entry(pal_data),
+    .x_r5(x_r5), .x_g5(x_g5), .x_b5(x_b5),
+    .x_r(x_r),   .x_g(x_g),   .x_b(x_b),
+    .r(pr), .g(pg), .b(pb)
+  );
 
   // The colour for column hcnt is not ready in the same pixel it is addressed:
   // the line buffer read is registered, and so is the palette RAM. Both settle
