@@ -289,7 +289,8 @@ always_ff @(posedge clk_sdram or negedge mem_rst_n) begin
 			//
 			//   word 8/9   -> FFFFF6E0
 			//   word 6/7   -> 00000860   (read aligned at 4, upper half of the burst)
-			2'd0: if (rom_loaded) begin rb_addr <= SDR_AW'(8); rb_req <= 1'b1; rb_state <= 2'd1; end
+			// Also waits for the copy, for the same reason.
+			2'd0: if (rom_loaded && cp_done) begin rb_addr <= SDR_AW'(8); rb_req <= 1'b1; rb_state <= 2'd1; end
 			// ONE ACCESS PER HANDSHAKE, not per cycle of the request: it drops on
 			// ack. Harmless against RAM, and the habit is the point — the Model 1
 			// TGP popped every FIFO word twice by acting on the level instead.
@@ -407,7 +408,12 @@ always_ff @(posedge clk_sdram or negedge mem_rst_n) begin
 		st_addr <= '0; st_rd_addr <= '0; st_din <= 16'd0; st_got <= 64'd0;
 	end else begin
 		case (st_state)
-			4'd0: if (rom_loaded) begin
+			// WAITS FOR THE COPY. The copy engine, this self-test and the ROM
+			// readback were all looping concurrently, three read ports issuing at
+			// once, and the copy is the one whose result is displayed. Diagnostics
+			// contending with the thing being diagnosed is its own bug; they now
+			// start only once the copy has finished.
+			4'd0: if (rom_loaded && cp_done) begin
 				st_addr <= ST_BASE; st_din <= STP0; st_req <= 1'b1; st_state <= 4'd1;
 			end
 			4'd1: if (ldr_wr_ack) begin st_req <= 1'b0; st_state <= 4'd2; end
@@ -649,8 +655,8 @@ m2_diag #(.NWORDS(7)) u_diag
 	.enable(1'b1),
 	.hb(tile_hb),
 	.vb(tile_vb),
-	.words({ {pw_w9, pw_w8},                             // 6  PRESENTED, want 8CC78CC6
-	         {pr_w9, pr_w8},                            // 5  ARRIVED, want 8CC78CC6
+	.words({ {cp_xor_p, cp_sum_p},                       // 6  palette,  want 5BFDD5AF
+	         {cp_xor_t, cp_sum_t},                      // 5  tile RAM, want A66F51B7
 	         // 32 BITS, not 31. The first version was {27'd0, ...} = 31, which
 	         // shifted every word above it by one bit: the board showed word4 as
 	         // 80000007, its top bit being rb_w0's LSB bleeding down. A short
