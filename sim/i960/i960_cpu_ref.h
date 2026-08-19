@@ -81,7 +81,10 @@ struct Cpu {
   uint32_t AC = 0;
   // Process controls. MAME resets it to 0x001f2002: priority 31, supervisor mode
   // and the interrupt flag set. Only the ret type-7 path touches it so far.
-  uint32_t PC = 0x001f2002;
+  uint32_t PC = 0x001f2002;   // process controls
+  uint32_t SAT = 0, PRCB = 0; // loaded from mem[0] and mem[4] at reset on real
+                              // silicon; the boot sequence is a later increment
+  uint32_t ICR = 0xff000000;  // one vector byte per IRQ line
   uint32_t IP = 0;
   bool     trapped = false;
   uint8_t  trap_op = 0;

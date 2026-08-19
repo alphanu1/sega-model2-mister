@@ -2736,6 +2736,41 @@ the controller's geometry is parameterised and its ports widened, the loader tak
 **`check_mra` earned its place immediately** — it caught me putting `--` back into
 an XML comment while restoring the MRA, which is the exact fault it was added for.
 
+### i960 interrupts, increment 2: the architectural state exists
+
+`PC`, `SAT`, `PRCB` and `ICR` are registers in both the module and the reference,
+with MAME's reset values from `device_reset`:
+
+| register | reset | why it matters |
+|---|---|---|
+| `PC` | `0x001f2002` | bit 13 is the interrupt flag, `[20:16]` the priority — `take_interrupt` reads both |
+| `SAT` | 0 | should be `mem[0]` |
+| `PRCB` | 0 | should be `mem[4]`; the interrupt table is at `PRCB+20` |
+| `ICR` | `0xff000000` | one vector byte per IRQ line |
+
+**6,979 -> 7,055 ALM** (+76), Fmax 26.84 -> 26.34, lint clean, 17 suites green.
+
+They are exposed as `dbg_pc/sat/prcb/icr` rather than lint-waived: they are written
+and not yet read, and on hardware the screen is the only output channel, so making
+them observable is what one would want regardless.
+
+**WHAT IS DELIBERATELY NOT DONE, and it blocks enabling interrupts:** loading
+`SAT = mem[0]`, `PRCB = mem[4]` and **`IP = mem[12]`** at reset. That needs a boot
+state machine issuing three reads before the first fetch, which means either a new
+bus master or a way for the sequencer to drive the LSU with no decoded instruction
+behind it. **Until it lands `PRCB` reads 0 and the interrupt table would be looked
+up at the wrong address**, so interrupts must not be enabled on top of this.
+
+It also matters independently of interrupts: **our core starts at IP 0 and the
+real part starts at `mem[12]`**, which is a difference any real ROM will notice.
+
+**The harness angle to think about first.** The lockstep generator writes its
+program at address 0, so `mem[0]`, `mem[4]` and `mem[12]` are program words. Once
+reset reads them, either the harness must lay down a real boot record and move the
+program (the generator uses absolute `callx` targets, so they shift too), or both
+sides agree on nonsense and most programs get abandoned by the out-of-range guard.
+**The first is the faithful option and is the work.**
+
 ### i960 interrupts, increment 1: `ret` now dispatches on the frame type
 
 **The shared blind spot R14 recorded is closed.** `ret` ignored `PFP[2:0]` in BOTH

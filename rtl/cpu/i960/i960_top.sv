@@ -50,6 +50,14 @@ module i960_top (
   // Observability. These exist so the design has real outputs and cannot be
   // optimised away, and because the screen is the only output channel this
   // project will ever have on hardware.
+  // System registers, exposed rather than lint-waived. They are written at reset
+  // and not yet read by anything -- the interrupt path that consumes them is the
+  // next increment -- and the screen is the only output channel on hardware, so
+  // making them observable is what one would want regardless.
+  output logic [31:0] dbg_pc,
+  output logic [31:0] dbg_sat,
+  output logic [31:0] dbg_prcb,
+  output logic [31:0] dbg_icr,
   output logic [31:0] dbg_ip,
   output logic [31:0] dbg_insn,
   output logic        trap,
@@ -58,6 +66,31 @@ module i960_top (
 );
 
   // ------------------------------------------------------------ architectural
+
+  // ARCHITECTURAL STATE THE INTERRUPT PATH CONSUMES, with MAME's reset values
+  // (i960.cpp device_reset). These are registers now; what is NOT yet done is
+  // loading SAT, PRCB and the initial IP from memory at reset --
+  //
+  //     SAT = mem[0]   PRCB = mem[4]   IP = mem[12]
+  //
+  // -- which needs a boot state machine issuing three reads before the first
+  // fetch, and therefore either a new bus master or a way for the sequencer to
+  // drive the LSU without a decoded instruction. That is its own increment.
+  // Until it lands, PRCB reads 0 and the interrupt table would be looked up at
+  // the wrong address, which is why interrupts are not yet enabled.
+  //
+  // PC bit 13 (0x2000) is the interrupt flag and PC[20:16] the priority; both
+  // are read by take_interrupt to decide whether an interrupt can be taken and
+  // which stack it uses.
+  logic [31:0] pc_reg;      // process controls
+  logic [31:0] sat_reg;     // system address table
+  logic [31:0] prcb_reg;    // processor control block
+  logic [31:0] icr_reg;     // interrupt control: one vector byte per IRQ line
+
+  assign dbg_pc   = pc_reg;
+  assign dbg_sat  = sat_reg;
+  assign dbg_prcb = prcb_reg;
+  assign dbg_icr  = icr_reg;
 
   logic [31:0] ip, ip_next, insn, disp_word;
 
@@ -673,6 +706,10 @@ module i960_top (
       pf_insn   <= 32'd0;
       pf_ip     <= 32'd0;
       ip        <= 32'd0;
+      pc_reg    <= 32'h001f_2002;   // priority 31, supervisor, interrupt flag
+      sat_reg   <= 32'd0;
+      prcb_reg  <= 32'd0;
+      icr_reg   <= 32'hff00_0000;   // IRQ3 vector 0xff, priority 31
       ip_next   <= 32'd4;
       insn      <= 32'd0;
       disp_word <= 32'd0;
