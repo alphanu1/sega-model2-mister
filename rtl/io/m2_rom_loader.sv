@@ -175,6 +175,7 @@ module m2_rom_loader #(
   (* ramstyle = "M10K" *) logic [SDR_AW:1] fifo_addr [FIFO_DEPTH];
   (* ramstyle = "M10K" *) logic [15:0] fifo_data [FIFO_DEPTH];
   logic [AW:0]        wptr, rptr;          // one extra bit distinguishes full
+  logic               rd_armed;            // M10K read launched, data next cycle
   logic [AW:0]        level;
 
   assign level = wptr - rptr;
@@ -227,7 +228,7 @@ module m2_rom_loader #(
 
   always_ff @(posedge clk or posedge rst) begin
     if (rst) begin
-      wptr <= '0; rptr <= '0;
+      wptr <= '0; rptr <= '0; rd_armed <= 1'b0;
       req_q <= 1'b0; busy <= 1'b0; ack_d <= 1'b0;
       sdr_wr_addr <= '0; sdr_wr_din <= '0;
       tgp_wr <= 1'b0; tgp_addr <= '0; tgp_din <= '0; tgp_lo <= '0;
@@ -288,9 +289,25 @@ module m2_rom_loader #(
           busy <= 1'b0;
           rptr <= rptr + 1'b1;
         end
-      end else if (!fifo_empty && mem_ready) begin
+      // ONE CYCLE BETWEEN LAUNCHING THE M10K READ AND ASSERTING THE REQUEST.
+      //
+      // fifo_addr and fifo_data are M10K (confirmed in the fitter report:
+      // 512x26 and 512x16). A registered M10K read presents its data on the
+      // cycle AFTER the address, and the previous version asserted req_q in the
+      // same cycle it launched the read, so the controller could latch
+      // sdr_wr_din before the memory had driven it.
+      //
+      // Simulation cannot see this: Verilator models the array as registers and
+      // both orderings look identical, which is why 17 passing suites and a
+      // clean loader-to-readback test coexisted with a board that stored the
+      // wrong bytes. The self-test writes its data from a REGISTER through the
+      // same port and was always correct -- that difference is what localised it.
+      end else if (!fifo_empty && mem_ready && !rd_armed) begin
         sdr_wr_addr <= fifo_addr[rptr[AW-1:0]];
         sdr_wr_din  <= fifo_data[rptr[AW-1:0]];
+        rd_armed    <= 1'b1;
+      end else if (rd_armed) begin
+        rd_armed    <= 1'b0;
         req_q       <= 1'b1;
         busy        <= 1'b1;
       end
