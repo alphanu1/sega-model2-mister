@@ -1672,3 +1672,38 @@ only A0-A9 with A10 left as the auto-precharge flag — no A11, and therefore no
 dependence on the inference that failed here. If 10 also aliases, the module is
 32 MB-organised whatever its capacity, and the DDR3 split returns as a real P6
 requirement rather than a contingency.
+
+
+---
+
+**R19 — the module's real geometry, measured: 1024 columns, 64 MB addressable.**
+R18 established that the geometry had been inferred rather than measured. It has
+now been measured, on hardware, by the only instrument that can settle it.
+
+| `COL_BITS` | addressable | result on this board |
+|---|---|---|
+| 9 | 32 MB | **works** — tile copy exact, attract screen renders |
+| **10** | **64 MB** | **works** — same, and this is the configuration to ship |
+| 11 | 128 MB | **aliases** — corrupt copy, garbled picture |
+
+**So the part presents 1024 columns, not 2048.** Ten column bits use the
+contiguous A0-A9 range and leave A10 as the auto-precharge flag; eleven is the
+first value that must drive a column bit on A11, and that is where it breaks.
+Whatever the module's stated capacity, **64 MB is what this controller can address
+through the MiSTer connector's 13 address and 2 bank pins.**
+
+*Consequences, and they are all good:*
+
+- **The 43.62 MB ROM set fits in 64 MB with 20 MB spare** (R13's figure). The
+  trimmed MRA is no longer needed and the full set is addressable.
+- **No DDR3 split.** `docs/rom-layout.md` sketched one when the ceiling looked like
+  32 MB; it is not required. Every consumer gets uniform SDRAM latency and the
+  renderer needs no DDR3 path or burst scheduling.
+- **The board minimum stands at 64 MB**, not 128, and that is now a measurement
+  rather than an inference. A 32 MB board cannot hold the set.
+
+*The method note worth keeping.* R18's fault was reasoning from pin counts to
+internal organisation. The correction was not better reasoning — it was walking
+the parameter down one step at a time against a checksum over 36,864 real words,
+which is the only test that distinguishes a working geometry from an aliasing one.
+**A single-address test passes at every setting**, including the broken one.

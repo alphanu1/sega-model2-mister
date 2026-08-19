@@ -2736,6 +2736,27 @@ the controller's geometry is parameterised and its ports widened, the loader tak
 **`check_mra` earned its place immediately** — it caught me putting `--` back into
 an XML comment while restoring the MRA, which is the exact fault it was added for.
 
+### SDRAM GEOMETRY MEASURED: 64 MB, and the full ROM set fits
+
+| `COL_BITS` | size | result |
+|---|---|---|
+| 9 | 32 MB | works |
+| **10** | **64 MB** | **works — ship this** |
+| 11 | 128 MB | aliases |
+
+**The part presents 1024 columns, not 2048.** Ten uses the contiguous A0-A9 range
+with A10 left as auto-precharge; eleven is the first value needing a column bit on
+A11, and that is where it breaks. Study **R19**.
+
+**The 43.62 MB ROM set fits in 64 MB with 20 MB spare.** No DDR3 split, no trimmed
+MRA, uniform SDRAM latency for every consumer, and the renderer needs no DDR3 path.
+The board minimum is 64 MB and that is now measured rather than inferred.
+
+**How it was settled:** walking the parameter down one step at a time against a
+checksum over 36,864 real words. **A single-address test passes at every setting,
+including the broken one** — which is precisely why the SDRAM self-test stayed
+green through twelve builds while the copy was corrupt.
+
 ### P1.5 COMPLETE: Model 2 2D RENDERS CORRECTLY ON HARDWARE
 
 **Daytona's attract screen, drawn by our tilemap, on a DE10-Nano.** Mountains,

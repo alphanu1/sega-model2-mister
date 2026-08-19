@@ -32,7 +32,9 @@ never tracked ROM.
 | 64 MB | Yes, 20 MB spare |
 | **128 MB** | Yes, 84 MB spare — the development target |
 
-**Development is on a 128 MB board, so the whole set lives in SDRAM and no DDR3
+**MEASURED (study R19): the controller addresses 64 MB on this board** — ten
+column bits work, eleven alias, so the part presents 1024 columns. The 43.62 MB
+set fits in 64 MB with 20 MB spare, the whole thing lives in SDRAM, and **no DDR3
 split is needed.** That is worth stating as a decision rather than a convenience,
 because it removes a real design problem: every consumer gets uniform,
 predictable latency, and the renderer does not need a DDR3 path or the burst
