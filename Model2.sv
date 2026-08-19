@@ -319,6 +319,12 @@ logic [15:0]     st_din;
 logic [3:0]      st_state;
 logic [63:0]     st_got;
 
+// The self-test collapses to a single bit rather than consuming two display
+// slots. It keeps running and keeps looping, so a regression in the SDRAM path
+// shows up as this bit dropping rather than as confusing ROM values -- which is
+// how four builds were spent.
+wire st_ok = (st_got == 64'h00FF_FF00_5AA5_AA55);
+
 assign st_run = rom_loaded && (st_state >= 4'd1) && (st_state <= 4'd8);
 
 always_ff @(posedge clk_sdram or negedge mem_rst_n) begin
@@ -351,8 +357,11 @@ end
 
 // Static once captured, so a two-flop synchroniser on the status bit is enough:
 // the data is not moving when the video domain reads it.
-logic [2:0] loaded_sync;
-always_ff @(posedge clk_vid) loaded_sync <= {loaded_sync[1:0], rom_loaded};
+logic [2:0] loaded_sync, st_ok_sync;
+always_ff @(posedge clk_vid) begin
+	loaded_sync <= {loaded_sync[1:0], rom_loaded};
+	st_ok_sync  <= {st_ok_sync[1:0],  st_ok};
+end
 
 ///////////////////////   VIDEO   ////////////////////////////////
 
@@ -463,14 +472,15 @@ m2_diag #(.NWORDS(7)) u_diag
 	.enable(1'b1),
 	.hb(hblank),
 	.vb(vblank),
-	.words({ st_got[63:32],                             // 6  want 00FFFF00
-	         st_got[31:0],                              // 5  want 5AA5AA55
+	.words({ rb_w1,                                     // 6  ROM word 6/7
+	         rb_w0,                                     // 5  ROM word 8/9
 	         // 32 BITS, not 31. The first version was {27'd0, ...} = 31, which
 	         // shifted every word above it by one bit: the board showed word4 as
 	         // 80000007, its top bit being rb_w0's LSB bleeding down. A short
 	         // field in a concatenation does not warn, it silently reindexes.
-	         {28'd0, ldr_overflow, loaded_sync[2],
-	          mem_ready, pll_locked},                   // 4  status
+	         {24'd0, st_ok_sync[2], 3'd0,
+	          ldr_overflow, loaded_sync[2],
+	          mem_ready, pll_locked},                   // 4  status, bit7=SDRAM OK
 	         {21'd0, vispix_ctr_l},                     // 3  pixels = 1F0
 	         {22'd0, line_ctr_l},                       // 2  lines  = 1A8
 	         frame_ctr,                                 // 1  liveness
