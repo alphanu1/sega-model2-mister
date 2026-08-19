@@ -217,6 +217,10 @@ always_comb begin
 	p_addr[1] = rb_addr;
 	p_req[2]  = st_rd_req;
 	p_addr[2] = st_rd_addr;
+	p_req[0]  = cp_req;
+	p_addr[0] = cp_addr;
+	p_req[3]  = char_req;
+	p_addr[3] = CHAR_BASE + SDR_AW'(char_addr);
 end
 assign rb_dout = p_dout[1];
 assign rb_ack  = p_ack[1];
@@ -401,6 +405,90 @@ always_ff @(posedge clk_vid) begin
 	st_ok_sync  <= {st_ok_sync[1:0],  st_ok};
 end
 
+///////////////////////   TILEMAP   /////////////////////////////
+//
+// S24TILE, the same chip Model 2 and Model 1 both use. No CPU exists in this
+// slice, so nothing writes the tilemap; the contents come from a state captured
+// out of MAME at a known frame (docs/rom-layout.md) and streamed in as ROM:
+//
+//   blob byte 0x000000  +0x10000   tile RAM  -> on-chip, SDRAM words 0x0000..0x7FFF
+//   blob byte 0x010000  +0x04000   palette   -> on-chip, SDRAM words 0x8000..0x9FFF
+//   blob byte 0x014000  +0x80000   char RAM  -> read from SDRAM at word 0xA000
+//
+// Tile RAM and the palette are small and randomly accessed, so they are copied
+// once into on-chip memory. Char data is 512 KB and streamed, so it stays in
+// SDRAM and is fetched per line, which is what the Model 1 core does.
+localparam logic [SDR_AW:1] TRAM_BASE = SDR_AW'(32'h00000);
+localparam logic [SDR_AW:1] PAL_BASE  = SDR_AW'(32'h08000);
+localparam logic [SDR_AW:1] CHAR_BASE = SDR_AW'(32'h0A000);
+
+(* ramstyle = "M10K" *) logic [15:0] tram [32768];
+(* ramstyle = "M10K" *) logic [15:0] pal  [4096];
+
+wire [14:0] tram_addr;
+wire [11:0] pal_addr;
+logic [15:0] tram_data, pal_data;
+always_ff @(posedge clk_vid) begin
+	tram_data <= tram[tram_addr];
+	pal_data  <= pal[pal_addr];
+end
+
+// COPY ENGINE. Walks tile RAM then the palette out of SDRAM into on-chip memory
+// after the ROM has landed. Port 0, which returns a single word per request --
+// 36,864 reads, once, at startup.
+logic            cp_req, cp_done;
+logic [SDR_AW:1] cp_addr;
+logic [15:0]     cp_wdata;
+logic [15:0]     cp_idx;
+logic            cp_pal_phase;
+
+always_ff @(posedge clk_sdram or negedge mem_rst_n) begin
+	if (!mem_rst_n) begin
+		cp_req <= 1'b0; cp_done <= 1'b0; cp_idx <= 16'd0;
+		cp_pal_phase <= 1'b0; cp_addr <= '0;
+	end else if (!cp_done) begin
+		if (!cp_req && rom_loaded) begin
+			cp_addr <= (cp_pal_phase ? PAL_BASE : TRAM_BASE) + SDR_AW'(cp_idx);
+			cp_req  <= 1'b1;
+		end else if (cp_req && p_ack[0]) begin
+			cp_req   <= 1'b0;
+			cp_wdata <= p_dout[0][15:0];
+			if (!cp_pal_phase) begin
+				tram[cp_idx[14:0]] <= p_dout[0][15:0];
+				if (cp_idx == 16'h7FFF) begin cp_idx <= 0; cp_pal_phase <= 1'b1; end
+				else cp_idx <= cp_idx + 16'd1;
+			end else begin
+				pal[cp_idx[11:0]] <= p_dout[0][15:0];
+				if (cp_idx == 16'h0FFF) cp_done <= 1'b1;
+				else cp_idx <= cp_idx + 16'd1;
+			end
+		end
+	end
+end
+
+// Char fetch, straight from SDRAM on a burst port.
+wire        char_req, char_ack;
+wire [17:0] char_addr;
+wire [31:0] char_data;
+assign char_ack  = p_ack[3];
+assign char_data = p_dout[3][31:0];
+
+wire [7:0] tile_r, tile_g, tile_b;
+wire       tile_hs, tile_vs, tile_hb, tile_vb;
+
+m2_video u_tilemap (
+	.clk(clk_vid), .ce_pix(ce_pix), .rst_n(mem_rst_n & cp_done),
+	.tile_mask(14'h3FFF),
+	.tram_addr(tram_addr), .tram_data(tram_data),
+	.char_req(char_req), .char_addr(char_addr),
+	.char_data(char_data), .char_ack(char_ack),
+	.pal_addr(pal_addr), .pal_data(pal_data),
+	.vid_r(tile_r), .vid_g(tile_g), .vid_b(tile_b),
+	.vid_hs(tile_hs), .vid_vs(tile_vs), .vid_hb(tile_hb), .vid_vb(tile_vb),
+	.vblank_irq(), .dbg_fetches(), .dbg_overruns(),
+	.dbg_layer_px(), .dbg_ctrl(), .dbg_layer_have()
+);
+
 ///////////////////////   VIDEO   ////////////////////////////////
 
 wire        hs, vs, hblank, vblank, visible;
@@ -508,8 +596,8 @@ m2_diag #(.NWORDS(7)) u_diag
 	.ce_pix(ce_pix),
 	.rst_n(mem_rst_n),
 	.enable(1'b1),
-	.hb(hblank),
-	.vb(vblank),
+	.hb(tile_hb),
+	.vb(tile_vb),
 	.words({ rb_w0,                                     // 6  STORED at words 8/9
 	         {pr_w9, pr_w8},                            // 5  ARRIVED for words 8/9
 	         // 32 BITS, not 31. The first version was {27'd0, ...} = 31, which
@@ -523,16 +611,22 @@ m2_diag #(.NWORDS(7)) u_diag
 	         {22'd0, line_ctr_l},                       // 2  lines  = 1A8
 	         frame_ctr,                                 // 1  liveness
 	         32'hB0ADCAFE }),                           // 0  magic
-	.in_r(pat_r), .in_g(pat_g), .in_b(pat_b),
+	// Until the copy engine has filled tile RAM and the palette there is
+	// nothing to draw, so the test pattern stands in. After that the tilemap
+	// takes over. Seeing the pattern persist therefore means the copy never
+	// finished, which is a different failure from a tilemap that draws nothing.
+	.in_r(cp_done ? tile_r : pat_r),
+	.in_g(cp_done ? tile_g : pat_g),
+	.in_b(cp_done ? tile_b : pat_b),
 	.out_r(ov_r), .out_g(ov_g), .out_b(ov_b)
 );
 
 assign CLK_VIDEO = clk_vid;
 assign CE_PIXEL  = ce_pix;
 
-assign VGA_DE = ~(hblank | vblank);
-assign VGA_HS = hs;
-assign VGA_VS = vs;
+assign VGA_DE = ~(tile_hb | tile_vb);
+assign VGA_HS = tile_hs;
+assign VGA_VS = tile_vs;
 assign VGA_R  = ov_r;
 assign VGA_G  = ov_g;
 assign VGA_B  = ov_b;
