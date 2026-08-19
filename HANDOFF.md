@@ -2736,6 +2736,57 @@ the controller's geometry is parameterised and its ports widened, the loader tak
 **`check_mra` earned its place immediately** — it caught me putting `--` back into
 an XML comment while restoring the MRA, which is the exact fault it was added for.
 
+### i960 interrupts, increment 1: `ret` now dispatches on the frame type
+
+**The shared blind spot R14 recorded is closed.** `ret` ignored `PFP[2:0]` in BOTH
+the module and its reference, so the two agreed and lockstep could never see it.
+MAME dispatches:
+
+| type | meaning | us |
+|---|---|---|
+| 0 | ordinary return | as before |
+| **1-6** | MAME `fatalerror` | **`ret_unsupported` -> trap**, both sides |
+| 7 | interrupt return | legal: `do_ret_0`, **PC/AC restore still missing** |
+
+**Type 7 is deliberately not trapped.** It is a *legal* return type, and trapping a
+legal one would be a different wrong answer. The module performs the `do_ret_0`
+half, which is all of it that is reachable — nothing in this core can create a
+type-7 frame until interrupts exist. **The reference deliberately does NOT restore
+PC/AC either**, so both sides are incomplete in the same way on purpose; a
+reference that restored AC while the module did not would diverge on the one
+register lockstep actually checks.
+
+**Two tests were asserting the old assumption and had to be corrected, not
+worked around:**
+
+- `tb_i960_regs`'s random *register write* could set PFP to an illegal type 1-6,
+  which its reference then returned from as though it were type 0. The type field
+  is now constrained to 0 or 7 — the other 29 bits stay random. Testing an
+  architecturally impossible input against a reference that pretends it is legal
+  proves nothing.
+- The "ret from type 7" case expected a plain return, which is correct, and is
+  why type 7 must not trap.
+
+17 suites green.
+
+### What the ORACLE says the rest of interrupts needs
+
+Read from `i960.cpp` before writing any more RTL:
+
+- **Reset:** `SAT = mem[0]`, `PRCB = mem[4]`, **`IP = mem[12]`**, `PC = 0x001f2002`,
+  `ICR = 0xff000000`. **Our core starts at IP 0 and reads none of this** — that
+  alone matters for running real ROM.
+- **The common path is register-only.** `execute_set_input` takes the *immediate*
+  path when `cpu_pri < priority`: three registers, no memory access. The
+  pending-table-in-memory path is only for interrupts that cannot be taken yet.
+  Model 2 uses "the cheapest solution" — four external lines, vectors straight
+  from `ICR` bytes, priority = vector/8.
+- **`take_interrupt`:** read `PRCB+20` (int table) and `PRCB+24` (int stack), then
+  `IRQV = mem[int_tab + 36 + (vector-8)*4]`; SP is the int stack unless already
+  interrupted (`PC & 0x2000`), then `(SP+63) & ~63`, `+64`; `do_call(IRQV, 7, SP)`;
+  write PC, AC and `vector-8` to `FP-16`, `FP-12`, `FP-8`; then
+  `PC &= ~0x1f00; PC |= lvl<<16; PC |= 0x2002`.
+
 ### SDRAM GEOMETRY MEASURED: 64 MB, and the full ROM set fits
 
 | `COL_BITS` | size | result |

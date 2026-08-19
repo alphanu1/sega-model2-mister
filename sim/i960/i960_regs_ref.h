@@ -81,6 +81,34 @@ struct Regs {
     (void)target;
   }
 
+  // do_ret. MAME dispatches on PFP[2:0] and this reference did not, which is why
+  // lockstep could not see it: the module ignored the type field too, so the two
+  // agreed while both were wrong. Study R14.
+  //
+  //   type 0  ordinary return
+  //   type 7  interrupt return: PC and AC come back from the frame BEFORE the
+  //           registers are reloaded, because do_ret_0 overwrites FP
+  //   1-6     MAME calls fatalerror; we trap, which is the same discipline
+  //
+  // ret_type is set by the caller from PFP[2:0]; ret_pc/ret_ac carry the restored
+  // values out for the sequencer to apply.
+  uint32_t ret_pc = 0, ret_ac = 0;
+  bool     ret_bad = false;
+
+  uint32_t ret_typed(uint32_t &pc_out, uint32_t &ac_out) {
+    const uint32_t type = r[PFP] & 7;
+    ret_bad = false;
+    if (type == 7) {
+      // Read BEFORE do_ret_0: it reloads the register file and moves FP.
+      pc_out = read(r[FP] - 16);
+      ac_out = read(r[FP] - 12);
+    } else if (type != 0 && type != 7) {
+      ret_bad = true;
+      return r[RIP];
+    }
+    return ret();
+  }
+
   // do_ret_0. Returns the IP to take.
   uint32_t ret() {
     r[FP] = r[PFP] & ~0x3fu;

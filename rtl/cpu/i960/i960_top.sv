@@ -191,6 +191,9 @@ module i960_top (
   logic [31:0] rd1, rd2, wd;
   logic        we;
   logic        rf_call, rf_ret, rf_flush, rf_busy, rf_ip_valid;
+  // A return type other than 0 -- see i960_regs.sv. Raised rather than
+  // silently performing an ordinary return.
+  logic        rf_ret_unsup;
   logic [31:0] rf_next_ip;
   logic        rf_mem_req, rf_mem_we;
   logic [31:0] rf_mem_addr, rf_mem_wdata;
@@ -200,6 +203,7 @@ module i960_top (
     .ra1(ra1), .ra2(ra2), .rd1(rd1), .rd2(rd2),
     .wa(wa), .wd(wd), .we(we),
     .op_call(rf_call), .op_ret(rf_ret), .op_flushreg(rf_flush),
+    .ret_unsupported(rf_ret_unsup),
     .call_ip(ip_next), .call_target(call_tgt), .call_type(3'd0),
     .call_stack(32'd0),
     .busy(rf_busy), .next_ip(rf_next_ip), .next_ip_valid(rf_ip_valid),
@@ -1012,7 +1016,10 @@ module i960_top (
         // so nothing had exercised this path at CPU level; the register-file
         // unit test drives op_call directly and cannot see a sequencer that
         // asserts it twice.
-        T_FRAME: if (!rf_busy && !rf_call && !rf_ret && !rf_flush) begin
+        T_FRAME: if (rf_ret_unsup) begin
+          // Unsupported return type: announce it instead of returning wrongly.
+          trap_op <= 8'h0a; ts <= T_TRAP;
+        end else if (!rf_busy && !rf_call && !rf_ret && !rf_flush) begin
           if (rf_ip_valid) ip <= rf_next_ip;
           ts <= T_FETCH;
         end

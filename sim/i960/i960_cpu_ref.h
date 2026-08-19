@@ -79,6 +79,9 @@ struct Cpu {
     return 0.0;
   }                 // r[32], rcache, memory and its op stream
   uint32_t AC = 0;
+  // Process controls. MAME resets it to 0x001f2002: priority 31, supervisor mode
+  // and the interrupt flag set. Only the ret type-7 path touches it so far.
+  uint32_t PC = 0x001f2002;
   uint32_t IP = 0;
   bool     trapped = false;
   uint8_t  trap_op = 0;
@@ -140,7 +143,28 @@ struct Cpu {
             IP = tgt;
             break;
           }
-          case 0x0a: IP = rf.ret(); break;                            // ret
+          case 0x0a: {                                               // ret
+            // Dispatch on PFP[2:0], which this reference and the module both
+            // ignored -- so they agreed and lockstep stayed silent (R14).
+            uint32_t pc_new = PC, ac_new = AC;
+            const uint32_t nip = rf.ret_typed(pc_new, ac_new);
+            // Types 1-6 AND 7 both trap for now: nothing in this core can create
+            // a type-7 frame until interrupts exist, and trapping means the day
+            // they do arrive it announces itself rather than half-working. The
+            // module raises ret_unsupported on the same condition.
+            // 1-6 trap, matching MAME's fatalerror and the module's
+            // ret_unsupported. Type 7 is the interrupt return and is legal: it
+            // performs the same do_ret_0 as type 0. The PC and AC restore that
+            // MAME also does is deliberately NOT applied here, because the
+            // module cannot do it yet and a reference that restores AC while the
+            // module does not would diverge on the one register lockstep checks.
+            // Both sides are therefore incomplete in the same way, on purpose,
+            // and it lands with the interrupt work.
+            if (rf.ret_bad) { trapped = true; trap_op = d.op; break; }
+            (void)pc_new; (void)ac_new;
+            IP = nip;
+            break;
+          }
           case 0x0b: rf.r[0x1e] = ip_next; IP = ip_next + disp24(insn); break; // bal
           default:
             if (d.op >= 0x10 && d.op <= 0x17) { IP = ip_next; bxx(insn, d.op & 7); }

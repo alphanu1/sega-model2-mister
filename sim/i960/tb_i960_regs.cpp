@@ -267,7 +267,17 @@ int main(int argc, char **argv) {
   for (uint64_t k = 0; k < rounds && fails == 0; k++) {
     const int roll = static_cast<int>(rng() % 100);
     if (roll < 8) {
-      wr_reg(static_cast<int>(rng() % 32), static_cast<uint32_t>(rng()));
+      {
+        // PFP[2:0] IS THE RETURN TYPE, and only 0 and 7 are architecturally
+        // legal -- MAME fatalerrors on 1 to 6 and the module now raises
+        // ret_unsupported for them. A random write to r0 could previously
+        // manufacture an illegal type, which the old reference then returned
+        // from as though it were type 0. Keep the other 29 bits random.
+        const int      reg = static_cast<int>(rng() % 32);
+        uint32_t       val = static_cast<uint32_t>(rng());
+        if (reg == 0) val = (val & ~7u) | ((rng() & 1) ? 7u : 0u);
+        wr_reg(reg, val);
+      }
     } else if (roll < 12) {
       do_flush(); depth = 0;
       if (!compare("rand flushreg")) break;

@@ -96,7 +96,22 @@ module i960_regs #(
 
   // ------- frame operations. Assert for one cycle with `busy` low.
   input  logic        op_call,       // do_call
-  input  logic        op_ret,        // do_ret_0
+  input  logic        op_ret,        // do_ret
+  // PFP[2:0] IS THE RETURN TYPE, and this module ignored it. So did its
+  // reference, which is why lockstep stayed silent -- the two agreed while both
+  // were wrong (study R14). MAME dispatches: 0 is an ordinary return, 7 is an
+  // interrupt return that also restores PC and AC from the frame, and 1 to 6 are
+  // fatalerror.
+  //
+  // Types 1-6 now raise this rather than silently performing a type-0 return.
+  //
+  // TYPE 7 IS NOT AN ERROR: it is the interrupt return, and MAME performs a full
+  // do_ret_0 for it and then restores PC and AC from the frame. This module does
+  // the do_ret_0 half, which is all of it that is reachable -- nothing here can
+  // create a type-7 frame until interrupts exist. The PC and AC restore lands
+  // with the interrupt work, and its absence is recorded rather than trapped,
+  // because trapping a legal return type would be a different wrong answer.
+  output logic        ret_unsupported,
   input  logic        op_flushreg,   // flushreg
   input  logic [31:0] call_ip,       // IP of the instruction after the call
   input  logic [31:0] call_target,   // new IP
@@ -278,6 +293,7 @@ module i960_regs #(
       mem_req       <= 1'b0;
       mem_we        <= 1'b0;
       next_ip_valid <= 1'b0;
+      ret_unsupported <= 1'b0;
       to_memory     <= 1'b0;
       spill_base    <= 32'd0;
       slot          <= 2'd0;
@@ -308,6 +324,9 @@ module i960_regs #(
             spill_base <= fp_masked;
             idx        <= 4'd0;
             state      <= S_CALL_SAVE;
+          end else if (op_ret && (loc[R_PFP][2:0] != 3'd0)
+                                && (loc[R_PFP][2:0] != 3'd7)) begin
+            ret_unsupported <= 1'b1;
           end else if (op_ret) begin
             // do_ret_0 step 1: FP <- PFP & ~0x3f, then the depth decrements and
             // decides where the frame comes from.
