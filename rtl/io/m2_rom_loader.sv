@@ -172,7 +172,7 @@ module m2_rom_loader #(
   // 20,480 flip-flops, which Quartus builds without complaint — the same silent
   // fallback documented in rtl/m1_mainram.sv. The ramstyle makes a regression a
   // build error rather than half the device.
-  (* ramstyle = "M10K" *) logic [SDR_AW:1] fifo_addr [FIFO_DEPTH];
+  (* ramstyle = "logic" *) logic [SDR_AW:1] fifo_addr [FIFO_DEPTH];
   // SPLIT INTO BYTE LANES. This is the standing rule in docs/, and it is here
   // because the board stored every LOW byte of the ROM correctly and every HIGH
   // byte as exactly 0x00, while the same write port driven from a REGISTER by
@@ -180,8 +180,22 @@ module m2_rom_loader #(
   // array is what the rule warns against, and simulation cannot see it: the
   // simulator models the array as registers, so the loader-to-readback test
   // passes either way.
-  (* ramstyle = "M10K" *) logic [7:0] fifo_data_lo [FIFO_DEPTH];
-  (* ramstyle = "M10K" *) logic [7:0] fifo_data_hi [FIFO_DEPTH];
+  // ramstyle "logic" IS A DIAGNOSTIC, not a design decision.
+  //
+  // The board stores every LOW byte of the ROM correctly and every HIGH byte as
+  // exactly 0x00, while the SDRAM self-test driving the same write port from a
+  // register is perfect in both lanes. Widths are 16 bits end to end, the byte
+  // lanes are split as docs/ requires, the read is given its cycle, and the data
+  // arriving over ioctl is confirmed correct. Everything that distinguishes the
+  // two paths has been eliminated except ONE: the loader's data comes out of
+  // inferred memory and the self-test's does not.
+  //
+  // So take the memory out. If the high byte survives in logic and dies in M10K,
+  // the fault is inference and nothing else, with no ambiguity left to argue
+  // about. If it dies here too, the FIFO is exonerated and the fault is
+  // somewhere I have not looked.
+  (* ramstyle = "logic" *) logic [7:0] fifo_data_lo [FIFO_DEPTH];
+  (* ramstyle = "logic" *) logic [7:0] fifo_data_hi [FIFO_DEPTH];
   logic [AW:0]        wptr, rptr;          // one extra bit distinguishes full
   logic               rd_armed;            // M10K read launched, data next cycle
   logic [AW:0]        level;
