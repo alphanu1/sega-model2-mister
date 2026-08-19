@@ -349,6 +349,19 @@ bool compare(uint64_t n) {
 
 int main(int argc, char **argv) {
   Verilated::commandArgs(argc, argv);
+  // THE PROGRAM MOVES OFF ADDRESS 0 TO MAKE ROOM FOR A BOOT RECORD.
+  //
+  // A real i960 reads SAT from mem[0], PRCB from mem[4] and its initial IP from
+  // mem[12] at reset (MAME i960.cpp device_reset). This harness wrote its program
+  // at 0, so those three words WERE program. Laying down a real boot record and
+  // starting the program above it is the faithful arrangement, and it has to come
+  // before the module's reset reads them -- otherwise both sides would agree on
+  // nonsense and the out-of-range guard would abandon nearly every program.
+  //
+  // Done first and on its own, so it is verifiable as a behaviour-preserving
+  // change: with the initial IP set to PROG_BASE on both sides, every existing
+  // test must still pass before reset is allowed to depend on any of it.
+  const uint32_t PROG_BASE = 0x100;
   uint64_t progs = 200, steps = 60, seed = 1, smc_stops = 0, oob_stops = 0;
   bool directed = false, dtrace = false;
   for (int i = 1; i < argc; ++i) {
@@ -613,7 +626,7 @@ int main(int argc, char **argv) {
           uint32_t t = uint32_t(rng() % steps);
           if (t == uint32_t(k) || t == uint32_t(k + 1))
             t = uint32_t((k + 2) % steps);
-          insn = (0x86u << 24) | ((t * 4u) & 0xfffu);
+          insn = (0x86u << 24) | ((PROG_BASE + t * 4u) & 0xfffu);
         } else {
           insn = (0x8cu << 24) | (((rng() % 24) + 4) << 19)
                | (0u << 14) | (0x800u + ((rng() % 0x200u) << 2));
@@ -649,7 +662,12 @@ int main(int argc, char **argv) {
       const int32_t field = int32_t((top - at) * 4);
       prog[at] = (0x08u << 24) | (uint32_t(field) & 0x00ffffffu);
     }
-    for (size_t k = 0; k < prog.size(); ++k) mem[uint32_t(k*4)] = prog[k];
+    // Boot record, as the real part expects it.
+    mem[0x0] = 0xdead5a70;                  // SAT   (value is arbitrary here)
+    mem[0x4] = 0xdeadfbcb;                  // PRCB  (likewise)
+    mem[0x8] = 0x00000000;
+    mem[0xc] = PROG_BASE;                   // initial IP
+    for (size_t k = 0; k < prog.size(); ++k) mem[PROG_BASE + uint32_t(k*4)] = prog[k];
     // A resident frame at 0x2000, self-consistent so that returning below depth
     // zero lands somewhere real. Both the module and the reference reload from
     // PFP & ~63 when the register cache underflows, and without this they agree
@@ -660,20 +678,28 @@ int main(int argc, char **argv) {
     // returns stay consistent. RIP is 4, an ordinary instruction.
     mem[0x2000] = 0x2000;    // PFP
     mem[0x2004] = 0x2040;    // SP
-    mem[0x2008] = 0x0000'0004;   // RIP
+    mem[0x2008] = PROG_BASE + 4;  // RIP
     // The return slot must not itself return. A `ret` landing on a `ret` whose
     // RIP is its own address is correct and loops forever with the IP never
     // moving, which the "IP moved" retire detector reads as a stall -- the same
     // shape as a callx targeting its own address. One slot of randomness is a
     // cheap price for a return address that always makes progress.
     if (prog.size() > 1) { prog[1] = (0x8cu << 24) | (4u << 19) | 0x900u;
-                           mem[4] = prog[1]; }
+                           mem[PROG_BASE + 4] = prog[1]; }
     for (uint32_t w = 3; w < 16; ++w) mem[0x2000 + w * 4] = 0xa5a50000u | w;
     ref.rf.mem = mem;
 
     // Reset, then seed both register files identically.
     dut->rst_n = 0; dut->bus_ack = 0;
     for (int i = 0; i < 4; i++) tick();
+    // Set the IP BEFORE the first cycle out of reset, not after. Poking it later
+    // leaves the front end already fetching from 0: the prefetch invariant caught
+    // exactly that, latching dead5a70 -- the SAT word at mem[0] -- while ip read
+    // 0x100. The prefetch slot is invalidated with it.
+    dut->rootp->i960_top__DOT__ip       = PROG_BASE;
+    dut->rootp->i960_top__DOT__pf_ip    = PROG_BASE;
+    dut->rootp->i960_top__DOT__pf_valid = 0;
+    dut->rootp->i960_top__DOT__pf_armed = 0;
     dut->rst_n = 1; tick();
     for (int i = 0; i < 32; i++) {
       uint32_t v = uint32_t(rng());
@@ -700,7 +726,7 @@ int main(int argc, char **argv) {
     dut->rootp->i960_top__DOT__u_regs__DOT__glb[15] = 0x2000;
     dut->rootp->i960_top__DOT__u_regs__DOT__loc[1]  = 0x2040;
     dut->rootp->i960_top__DOT__u_regs__DOT__loc[0]  = 0x2000;
-    ref.AC = 0; ref.IP = 0;
+    ref.AC = 0; ref.IP = PROG_BASE;
     checking = true; ++gate_arms;
 
   // Self-test of the FP-register plumbing, once. Write a known value into the
@@ -801,7 +827,7 @@ int main(int argc, char **argv) {
       {
         bool smc = false;
         for (size_t k = 0; k < prog.size(); ++k) {
-          auto it = ref.rf.mem.find(uint32_t(k * 4));
+          auto it = ref.rf.mem.find(PROG_BASE + uint32_t(k * 4));
           if (it != ref.rf.mem.end() && it->second != prog[k]) { smc = true; break; }
         }
         if (smc) { ++smc_stops; break; }
@@ -812,7 +838,8 @@ int main(int argc, char **argv) {
       // unmapped address space and the run stops meaning anything. Bound it
       // rather than generating around it -- the generator cannot know at emit
       // time what the depth will be at execute time.
-      if (ref.IP >= uint32_t(prog.size() * 4)) { ++oob_stops; break; }
+      if (ref.IP <  PROG_BASE ||
+          ref.IP >= PROG_BASE + uint32_t(prog.size() * 4)) { ++oob_stops; break; }
       // Compare the DATA MEMORY after every retire, not the bus transaction
       // stream. The stream was the first attempt and it is wrong: an unaligned
       // access legitimately becomes several byte transactions in the DUT and
