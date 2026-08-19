@@ -83,6 +83,20 @@ int main(int argc, char **argv) {
     std::printf("SKIP (run tools/i960-datadiff.sh first, or pass +in=<dir>)\n");
     return 0;
   }
+  // An ALL-ZERO tile RAM is a real and correct state, not a failure: it is what
+  // the boot dump holds, because Daytona has not drawn anything by the time it
+  // stalls waiting for the sound board. Rendering it produces a black frame,
+  // and calling that a renderer failure would be wrong. Skip and say why.
+  {
+    bool any = false;
+    for (uint16_t w : tram) if (w) { any = true; break; }
+    if (!any) {
+      std::printf("m2_video frame: tile RAM in %s is entirely zero\n", in.c_str());
+      std::printf("SKIP (nothing has been drawn yet -- use a dump from a frame "
+                  "with content, e.g. tools/m2-framediff.sh)\n");
+      return 0;
+    }
+  }
   std::printf("m2_video frame render\n");
   std::printf("  tile %zu words, char %zu words, palette %zu words  (from %s)\n",
               tram.size(), chr.size(), pal.size(), in.c_str());
