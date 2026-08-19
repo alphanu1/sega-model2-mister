@@ -1,5 +1,5 @@
 <misterromdescription>
-    <!--
+    <!—
       Sega Model 2 core for MiSTer FPGA - Copyright (C) 2026 alphanu1
       SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -19,7 +19,7 @@
         0x010000 +0x04000   palette   (from i960 0x01800000)
         0x014000 +0x80000   char RAM  (from i960 0x01080000)
 
-      Total 0x94000, 592 KB -- comfortably inside the 32 MB this SDRAM
+      Total 0x94000, 592 KB — comfortably inside the 32 MB this SDRAM
       controller addresses, unlike the full 43.62 MB game set.
     -->
     <name>Model 2 2D Tilemap Test</name>
