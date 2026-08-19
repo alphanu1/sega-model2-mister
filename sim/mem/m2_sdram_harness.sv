@@ -126,6 +126,15 @@ module m2_sdram_harness #(
 
   // The same timing numbers, so the checker is checking the clock the
   // controller was built for.
+  // THE MODEL TAKES THE SAME COL_BITS AS THE CONTROLLER, AND THAT IS A BLIND
+  // SPOT, not an oversight to fix here: a geometry mismatch with the REAL part
+  // is invisible to this suite, because the model and the controller agree with
+  // each other while both are wrong about the board. 74,729 checks passed at
+  // COL_BITS=11 while the hardware aliased.
+  //
+  // This is the trap docs/differential-testing.md names: a reference written
+  // from the same reading as the implementation catches a slip between the two,
+  // never a shared misreading. Geometry can only be settled on hardware.
   sdram_model #(
     .COL_BITS(COL_BITS),
     .T_RCD(T_RCD), .T_RP(T_RP), .T_RC(T_RC), .T_RAS(T_RAS), .T_WR(T_WR),
