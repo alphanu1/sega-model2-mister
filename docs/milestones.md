@@ -279,6 +279,34 @@ renderer, sound, and any claim about the fit question.
 
 ---
 
+## P1 exit criteria — MET, including the third
+
+All three are met as of `ddd7ba8`.
+
+1. **Lockstep against a MAME transcription** — 19 suites green, mutation-tested.
+2. **Area and Fmax measured on the real part** — 7,807 ALM, Fmax 26.4 MHz,
+   Quartus 17.0 (study R23).
+3. **Real ROM execution** — `make test_i960_rom` runs the real daytona93 program
+   ROM; `tools/i960-diff.sh` shows **803,355 instructions identical to MAME**,
+   uncollapsed (study R25).
+
+**The i960 is complete as a CPU and is not the risk any more.** What remains of
+it — faults, `calls`, `remr`, the `rl` FP forms, transcendentals — is not reached
+by Daytona's boot and can be added against the same instruments.
+
+### The next step is integration, not more CPU
+
+`i960_top` is **not instantiated in `Model2.sv`**. The hardware core has no CPU:
+the tilemap on the DE10-Nano is fed canned MAME state. Wiring the CPU in is what
+turns P1.5's POC into a board that runs the game, and
+`sim/i960/tb_i960_rom.cpp` is the specification for it — it already models the
+address decode, the interrupt registers and V-blank injection, and it is verified
+against MAME. **Port that decode rather than re-deriving it.** Three constraints
+it establishes are in `HANDOFF.md`; the sharpest is that **daytona93 is
+`model2o`, not 2A-CRX**, and the two board variants differ in the memory map.
+
+---
+
 ## P2 — 3D renderer
 
 The largest block, the widest error bar, and **the only block in the design with

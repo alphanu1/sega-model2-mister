@@ -1,52 +1,107 @@
 # Handoff
 
-**Updated:** 2026-08-16, after `8400052`.
+**Updated:** 2026-08-19, after `ddd7ba8`.
 
 ---
 
 ## State
 
-**P1 steps 1-5 of 8 are done**, and there is a first real area measurement.
-`make all` (lint + yosys portability + fuzz) passes from a clean checkout after
-`tools/bootstrap.sh`; `make quartus_all` reproduces the numbers below.
+**The i960 is done as a CPU.** It runs Daytona's real boot code and its program
+counter stream is identical to MAME's for 803,355 instructions. `make test` is
+**19 suites green**; `make lint` is clean; `tools/i960-diff.sh` reproduces the
+differential result whenever MAME is on PATH.
 
 | Step | State |
 |---|---|
-| 1. Decoder and the four formats | **done** — 6.0e9 field checks, 0 mismatches |
-| 2. Integer ALU, shifts, bit ops, condition codes | **done** — 4.3e9 field checks, 0 mismatches |
-| 3. Register file, register cache, call/ret and spill | **done** — registers + memory write stream, mutation-tested |
-| 4. Load/store, MEMA and the seven MEMB modes | **done** — AGU + load/store data path |
-| 5. Bus and I-cache, burst | **done** — LSU, burst decoder, I-cache |
-| 6. Whole-CPU lockstep | **done** — found the COBR defect on retire 0 |
-| 7. M2-D Quartus spike + **pipeline** | **next** — the pipeline is the real work |
-| 8. FPU | after the gate |
+| 1. Decoder and the four formats | **done** |
+| 2. Integer ALU, shifts, bit ops, condition codes | **done** |
+| 3. Register file, register cache, call/ret and spill | **done** |
+| 4. Load/store, MEMA and the seven MEMB modes | **done** |
+| 5. Bus and I-cache, burst | **done** |
+| 6. Whole-CPU lockstep | **done** |
+| 7. FPU | **done** |
+| 8. **Interrupts, `modpc`, `synmov`/`synmovq`, IAC, `bx`/`balx`** | **done** |
+| 9. **Real ROM execution vs MAME** | **done — 803,355 instructions identical** |
 
-| File | What it is |
-|---|---|
-| `docs/model2a-design-study.md` | The analysis. Whether it fits, and why that is still open. |
-| `docs/milestones.md` | The order of work, and the one number it is all sequenced to answer. |
-| `docs/p1-i960-spike.md` | **The current milestone.** i960KB scope, register model, opcode space, timing, memory map, exit criteria. |
-| `docs/mister-integration.md` | Framework traps already paid for on hardware. Read before wiring anything. |
-| `THIRD_PARTY.md` | Every licence, and how it was checked. |
-| `tools/bootstrap.sh` | Fetches and pins the five upstream dependencies. |
-| `deps.lock` | The pins. Enforced on fetch, not merely written afterwards. |
-| `.vscode/settings.json` | Hides six nested repositories from Source Control, with the reasoning. |
-| `LICENSE` | GPL-3, which porting from Model 1 forces rather than chooses. |
+**P1.5 is done and proven on hardware**: 496x384 video, the overlay, SDRAM at the
+measured 64 MB geometry, the S24TILE tilemap rendering Daytona's attract screen
+correctly from canned MAME state.
 
-Environment verified on this machine: Quartus Prime Lite **17.0.0 Build 595** at
-`/home/ben/intelFPGA_lite/17.0`, Verilator 5.050, iverilog. Quartus 24.1std is
-also installed and must not be used for a core build.
+**Measured, Quartus 17.0, `5CSEBA6U23I7`:** `i960_top` = **7,807 ALM**, 4,872
+registers, 1 M10K, 7 DSP, **Fmax 26.4 MHz**. The interrupt controller cost 828
+ALM and 0.44 MHz of headroom (R23). The budget is i960 + renderer under ~25,000
+ALM, so **~17,200 ALM remain for the renderer** — wider than §5.2 assumed.
 
-`tools/model1-ref` is a read-only clone of the Model 1 core at `6fd28aa`,
-**cloned from the local repository rather than GitHub** — that project's newest
-commits are not always pushed, and cloning upstream silently pins us behind. It
-tracks commits only: uncommitted work in that worktree is invisible here, which
-is not fixable and is worth remembering before concluding anything from it.
+## The one thing that is NOT done, and it is the next step
 
-Run `tools/bootstrap.sh` on a fresh checkout. `third_party/` and
-`tools/model1-ref/` are git-ignored and are not part of this repository.
+**The hardware core has no CPU in it.** `i960_top` is not instantiated in
+`Model2.sv` — the tilemap on the DE10-Nano is fed canned MAME state through the
+ROM loader. Everything above is simulation.
 
----
+Wiring the CPU into `Model2.sv` is what turns the POC from "the board draws a
+frame we supplied" into "the board runs the game". `sim/i960/tb_i960_rom.cpp` is
+the specification for it: it already models the address decode, the interrupt
+registers and the V-blank injection that the hardware top level needs, and it is
+verified against MAME. **Port that decode, do not re-derive it.**
+
+Three things it establishes that the hardware integration must honour:
+
+1. **daytona93 is `model2o`, not 2A-CRX.** `0x00220000-0x0023ffff` is a ROM
+   mirror of the program ROM's second half, and board RAM is 128 KB not 256.
+   The core will need both maps, selected per game (R25).
+2. **`main_data` must be mapped at `0x02000000` and again at `0x06000000`.** The
+   boot copies code out of it into RAM and jumps there.
+3. **V-blank is IRQ0**, gated by the enable register at `0x00e80004`, and
+   `0x00e80000` is `intreq &= data` on write — an ACK, not a store. Treating it
+   as a store leaves the request asserted and the handler re-enters forever.
+
+## What this session changed
+
+- **The whole interrupt controller** — `execute_set_input`, the immediate slot,
+  the queue into the interrupt table, `check_pending_irqs`, `take_interrupt` and
+  the type-7 return that restores PC and AC. Study R21, R22, R23.
+- **`modpc`**, without which none of it is reachable by real code (R24).
+- **`synmov` fixed** — the fault was in the reference, not the module (R20).
+- **`synmovq`, the IAC port, `bx`, `balx`** — all found missing by the ROM run.
+- **`make test_i960_rom`** and **`tools/i960-diff.sh`** (R25).
+- **`make test_i960_top_irq`** — a strict-coverage soak, separate from the
+  default run because `steps` is the program length and changing it would move
+  the CPI that R16 rests on.
+
+## Findings worth carrying, all of them about instruments
+
+Every real defect this session was in a check, not in the design. The pattern is
+consistent enough to state as a rule: **when a lockstep divergence is reported,
+the instrument is a suspect of equal standing to the module.**
+
+- **A sentinel that collides with a legal value is not a sentinel.** Unwritten
+  memory reads `0xFFFFFFFF`; a reference that *writes* `0xFFFFFFFF` is
+  indistinguishable from one that wrote nothing. This produced four wrong
+  diagnoses on `synmov` (R20) and later hid a `synmovq` mutation entirely (R25).
+- **Fix the accessor, not the caller.** R20 fixed `synmov`'s call site and left
+  `Regs::read`/`write` unaligned; the second instance surfaced immediately in
+  `ret_typed` (R22).
+- **"The IP changed" is not a retire detector.** Interrupts break it three ways.
+  The module now exports an instruction-acceptance counter (R22).
+- **Appending enum states was necessary and never sufficient** — `ts & 15`
+  silently stopped covering a five-bit field at the seventeenth state (R20).
+- **A green suite that never executed the instruction proves nothing.** Coverage
+  counters are printed, and `+strictcov` makes zero coverage a failure.
+- **From the Model 1 project, `9b3b70a`:** a COLLAPSED trace can report
+  IDENTICAL for tens of thousands of instructions while one side is wedged in a
+  loop the other does not have. The counts file carries the difference. Written
+  into `docs/differential-testing.md` before we build the trace that would have
+  the same blind spot.
+
+## Known gaps, stated plainly
+
+- **The differential test compares program counters only.** Two runs can agree on
+  every PC and disagree on every value. **Write-stream comparison is the next
+  instrument.**
+- Still unimplemented in the i960: faults, `calls`, `remr`, the `rl` FP forms and
+  transcendentals. None is reached by Daytona's boot in 803,355 instructions.
+  They must be measured for **Fmax** as well as area — the margin is now 1.4 MHz.
+- The renderer (P2) has not been started.
 
 ## The question everything is sequenced to answer
 
