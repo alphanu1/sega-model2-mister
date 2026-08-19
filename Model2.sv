@@ -522,6 +522,11 @@ end
 localparam logic [SDR_AW:1] TRAM_BASE = SDR_AW'(32'h00000);
 localparam logic [SDR_AW:1] PAL_BASE  = SDR_AW'(32'h08000);
 localparam logic [SDR_AW:1] CHAR_BASE = SDR_AW'(32'h0A000);
+// Colour translation table, appended after char RAM. Model 2's palette runs
+// each 5-bit channel through it before the gamma curve -- m2_palette.sv, study
+// R27 -- and without it every fill colour in every game is a few units out.
+// Byte 0x094000 in the image, which is word 0x4A000.
+localparam logic [SDR_AW:1] XLAT_BASE = SDR_AW'(32'h4A000);
 
 (* ramstyle = "M10K" *) logic [15:0] tram [32768];
 (* ramstyle = "M10K" *) logic [15:0] pal  [4096];
@@ -554,34 +559,91 @@ logic            cp_req, cp_done;
 logic [SDR_AW:1] cp_addr;
 logic [15:0]     cp_wdata;
 logic [15:0]     cp_idx;
-logic            cp_pal_phase;
+logic  [1:0]     cp_phase;          // 0 tile RAM, 1 palette, 2 translation table
+
+// The translation table is read at a STRIDE OF 256 WORDS, three channels of 32
+// entries, so 96 reads rather than a walk. MAME's base offsets are 0x0080>>1,
+// 0x4080>>1 and 0x8080>>1 in words.
+logic [SDR_AW:1] xlat_rd_addr;
+always_comb begin
+	case (cp_idx[6:5])
+		2'd0:    xlat_rd_addr = XLAT_BASE + SDR_AW'(32'h0040);
+		2'd1:    xlat_rd_addr = XLAT_BASE + SDR_AW'(32'h2040);
+		default: xlat_rd_addr = XLAT_BASE + SDR_AW'(32'h4040);
+	endcase
+	xlat_rd_addr = xlat_rd_addr + SDR_AW'({cp_idx[4:0], 8'd0});
+end
+
+// STAGED, then committed. The table only replaces pal5bit if the data looks
+// like a translation table -- entry 0 maps to 0 and entry 31 to 255 on every
+// channel. A core loaded with an image that predates this section would
+// otherwise read 96 words of whatever follows char RAM as a colour curve and
+// turn the picture to noise, and the device cannot be tested from here, so the
+// guard stands in for trying it.
+//
+// It is STAGED rather than written as it arrives because a guard that trips
+// part way through has already corrupted the entries before it: writing on
+// arrival and blocking the rest leaves a half-replaced table, which is worse
+// than either accepting or rejecting the lot.
+logic [7:0] xlat_stage [96];
+logic       xlat_ok;
+logic [7:0] xlat_first;
+logic       xlat_we_r;
+logic [6:0] xlat_addr_r;
+logic [7:0] xlat_din_r;
 
 always_ff @(posedge clk_sdram or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
 		cp_req <= 1'b0; cp_done <= 1'b0; cp_idx <= 16'd0;
-		cp_pal_phase <= 1'b0; cp_addr <= '0;
+		cp_phase <= 2'd0; cp_addr <= '0;
 		cp_xor_t <= 16'd0; cp_sum_t <= 16'd0;
 		cp_xor_p <= 16'd0; cp_sum_p <= 16'd0;
+		xlat_we_r <= 1'b0; xlat_addr_r <= 7'd0; xlat_din_r <= 8'd0;
+		xlat_ok <= 1'b1; xlat_first <= 8'd0;
 	end else if (!cp_done) begin
-		if (!cp_req && rom_loaded) begin
-			cp_addr <= (cp_pal_phase ? PAL_BASE : TRAM_BASE) + SDR_AW'(cp_idx);
+		xlat_we_r <= 1'b0;
+		if (cp_phase == 2'd3) begin
+			// Commit phase: no bus traffic, one entry per cycle.
+			xlat_we_r   <= xlat_ok;
+			xlat_addr_r <= cp_idx[6:0];
+			xlat_din_r  <= xlat_stage[cp_idx[6:0]];
+			if (cp_idx == 16'd95) cp_done <= 1'b1;
+			else cp_idx <= cp_idx + 16'd1;
+		end else if (!cp_req && rom_loaded) begin
+			case (cp_phase)
+				2'd0:    cp_addr <= TRAM_BASE + SDR_AW'(cp_idx);
+				2'd1:    cp_addr <= PAL_BASE  + SDR_AW'(cp_idx);
+				default: cp_addr <= xlat_rd_addr;
+			endcase
 			cp_req  <= 1'b1;
 		end else if (cp_req && p_ack[2]) begin
 			cp_req   <= 1'b0;
 			cp_wdata <= p_dout[2][15:0];
-			if (!cp_pal_phase) begin
-				tram[cp_idx[14:0]] <= p_dout[2][15:0];
-				cp_xor_t <= cp_xor_t ^ p_dout[2][15:0];
-				cp_sum_t <= cp_sum_t + p_dout[2][15:0];
-				if (cp_idx == 16'h7FFF) begin cp_idx <= 0; cp_pal_phase <= 1'b1; end
-				else cp_idx <= cp_idx + 16'd1;
-			end else begin
-				pal[cp_idx[11:0]] <= p_dout[2][15:0];
-				cp_xor_p <= cp_xor_p ^ p_dout[2][15:0];
-				cp_sum_p <= cp_sum_p + p_dout[2][15:0];
-				if (cp_idx == 16'h0FFF) cp_done <= 1'b1;
-				else cp_idx <= cp_idx + 16'd1;
-			end
+			case (cp_phase)
+				2'd0: begin
+					tram[cp_idx[14:0]] <= p_dout[2][15:0];
+					cp_xor_t <= cp_xor_t ^ p_dout[2][15:0];
+					cp_sum_t <= cp_sum_t + p_dout[2][15:0];
+					if (cp_idx == 16'h7FFF) begin cp_idx <= 0; cp_phase <= 2'd1; end
+					else cp_idx <= cp_idx + 16'd1;
+				end
+				2'd1: begin
+					pal[cp_idx[11:0]] <= p_dout[2][15:0];
+					cp_xor_p <= cp_xor_p ^ p_dout[2][15:0];
+					cp_sum_p <= cp_sum_p + p_dout[2][15:0];
+					if (cp_idx == 16'h0FFF) begin cp_idx <= 0; cp_phase <= 2'd2; end
+					else cp_idx <= cp_idx + 16'd1;
+				end
+				default: begin
+					xlat_stage[cp_idx[6:0]] <= p_dout[2][7:0];
+					if (cp_idx[4:0] == 5'd0)  xlat_first <= p_dout[2][7:0];
+					if (cp_idx[4:0] == 5'd31 &&
+					    !(xlat_first == 8'd0 && p_dout[2][7:0] == 8'd255))
+						xlat_ok <= 1'b0;
+					if (cp_idx == 16'd95) begin cp_idx <= 0; cp_phase <= 2'd3; end
+					else cp_idx <= cp_idx + 16'd1;
+				end
+			endcase
 		end
 	end
 end
@@ -602,7 +664,10 @@ m2_video u_tilemap (
 	// Colour translation table not loaded yet: it powers up holding pal5bit,
 	// which is exactly what this rendered before the table existed, so the
 	// picture on hardware is unchanged until the loader is wired up.
-	.xlat_we(1'b0), .xlat_addr(7'd0), .xlat_din(8'd0),
+	// The table replaces pal5bit only when the loaded data passes the sanity
+	// check above; an image without a translation section leaves the renderer
+	// exactly as it was.
+	.xlat_we(xlat_we_r & xlat_ok), .xlat_addr(xlat_addr_r), .xlat_din(xlat_din_r),
 	.tram_addr(tram_addr), .tram_data(tram_data),
 	.char_req(char_req), .char_addr(char_addr),
 	.char_data(char_data), .char_ack(char_ack),

@@ -1,6 +1,6 @@
 # Handoff
 
-**Updated:** 2026-08-19, after `9e0f33f`.
+**Updated:** 2026-08-20, after the video session.
 
 ---
 
@@ -55,6 +55,25 @@ Three things it establishes that the hardware integration must honour:
    `0x00e80000` is `intreq &= data` on write — an ACK, not a store. Treating it
    as a store leaves the request asserted and the handler re-enters forever.
 
+## The 2D path is verified end to end
+
+Three links, each against MAME, each an assertion rather than an impression:
+
+| link | instrument | result |
+|---|---|---|
+| CPU executes the real ROM | `tools/i960-diff.sh` | **803,355 instructions identical** |
+| the data it builds | `tools/i960-datadiff.sh` | tile/char/palette byte-identical (see R26's stated limits) |
+| the renderer turns it into pixels | `tools/m2-framediff.sh` | **10 tilemap-only frames, 190,464/190,464 pixels each** |
+
+`tools/m2-framediff.sh` defaults to frame 120 and **demands 100%**, not a floor.
+It is sensitive to one bit: perturbing a single colour-translation entry by 1
+fails it with 2,054 differing pixels.
+
+**It found a real defect immediately** — `m2_palette.sv` was Model 1's module
+copied across, and Model 2's palette is a different mechanism (R27). Every fill
+colour in every game was a few units out, and it had survived being looked at on
+hardware because the picture is otherwise right.
+
 ## What this session changed
 
 - **The whole interrupt controller** — `execute_set_input`, the immediate slot,
@@ -67,6 +86,35 @@ Three things it establishes that the hardware integration must honour:
 - **`make test_i960_top_irq`** — a strict-coverage soak, separate from the
   default run because `steps` is the program length and changing it would move
   the CPI that R16 rests on.
+- **The palette rewritten to Model 2's actual path** — colour translation table
+  plus gamma, replacing Model 1's `pal5bit` and its inapplicable intensity bit
+  (R27), and a whole-frame pixel comparison to hold it (R28).
+
+## For the morning: what is flashable, and what to expect
+
+A build was started at the end of the session. If `output_files/Model2.rbf`
+exists, `make release` gathers it with the `.mra` into `build/release`.
+
+**Two files must go to the device together:**
+
+1. the new `Model2.rbf`
+2. a **regenerated `m2tiles.zip`** — the image now carries a fourth section, the
+   colour translation table, at `0x094000`
+
+**Expected visible change: slightly different fill colours, nothing else.** The
+layout, text and structure are already pixel-exact; R27 moved values by a few
+units per channel. If the picture changes in any other way, the load path is
+wrong, not the palette.
+
+**It is safe to flash the .rbf without the new zip.** The table powers up holding
+the old `pal5bit` expansion, and the loader sanity checks the section — entry 0
+must map to 0 and entry 31 to 255 on all three channels — falling back to the old
+behaviour if it is absent or wrong. An old image renders exactly as it does now.
+The table is also STAGED and committed only if the whole thing passes, so a
+partial or corrupt section cannot half-replace it.
+
+**None of this was tested on hardware** — the device was off. The simulation
+result is what makes it safe to try, not a substitute for trying it.
 
 ## Findings worth carrying, all of them about instruments
 

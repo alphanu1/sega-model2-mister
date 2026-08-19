@@ -2155,13 +2155,12 @@ exit criterion 4 is now met as an assertion rather than an impression.
 `tools/m2-framediff.sh` renders a frame with `m2_video` from MAME's own tilemap
 capture and compares every pixel with MAME's screen:
 
-| frame | content | result |
+| frames | content | result |
 |---|---|---|
-| 60 | settings screen | **190,464 / 190,464 identical (100%)** |
-| 90 | settings screen | **100%** |
-| 120 | settings screen | **100%** |
-| 150 | settings screen | **100%** |
-| 200+ | attract, with 3D | 16-19%, residual is exactly the polygon scene |
+| 30, 45, 60, 75, 90, 105, 120, 135, 150, 165 | settings screen, tilemap only | **190,464 / 190,464 identical — 100%, every one** |
+| 180 and later | attract, with the 3D scene composited | 16-19%, residual is exactly the polygon scene |
+
+**Ten consecutive tilemap-only frames, every pixel, no exceptions.**
 
 **The default is frame 120 and it demands 100%, not a floor.** Daytona's settings
 screen is tilemap only — no polygons anywhere on it — so an exact whole-frame
