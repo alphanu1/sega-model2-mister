@@ -305,7 +305,7 @@ MHz**, including a full IEEE-754 single multiplier and adder, register file, AGU
 sequencer. The earlier figure here was 2,554 ALM / 3 M10K; the core has since moved work
 into M10K, which is the direction that project's own resource finding predicts.
 
-The strongest anchor is now our own: **`i960_top` = 6,979 ALM**, an entire CPU with FPU,
+The strongest anchor is now our own: **`i960_top` = 7,807 ALM**, an entire CPU with FPU,
 fitted here. See §5.5 for every block measured in every currency.
 
 **LE-to-ALM conversion.** 2:1 is the theoretical maximum, reached only when two
@@ -504,7 +504,7 @@ Six blocks were fitted for this revision; only two rows remain estimates.
 
 | Block | Optimistic | Pessimistic | Status | Basis |
 |---|---|---|---|---|
-| i960KB + FPU | 6,979 | 9,500 | **6,979 measured** | assembled and fitted here. Optimistic = as built; pessimistic adds faults, interrupts, transcendentals and the `rl` forms |
+| i960KB + FPU | 7,807 | 9,500 | **7,807 measured** | assembled and fitted here, interrupts included. Optimistic = as built; pessimistic adds faults, transcendentals and the `rl` forms |
 | 1x MB86234 | 2,355 | 4,000 | **2,355 measured (MB86233)** | Model 1's coprocessor, same family, fitted here. Pessimistic assumes pipelining |
 | 3D renderer | 2,537 | 8,347 | **bracketed, both ends measured** | VDP1 2,537 (floor: no Z, no perspective); RDP 8,347 (ceiling: more capable than Model 2 needs) |
 | Sound: SCSP + 68000 | 4,164 | 4,164 | **both measured** | SCSP 2,030 (same chip) + fx68k 2,134 (the core we intend to port) |
@@ -528,7 +528,7 @@ each block fitted standalone.
 
 | Block | ALM | registers | M10K | MLAB bits | DSP | Fmax | whose RTL |
 |---|---|---|---|---|---|---|---|
-| `i960_top` | **6,979** | 4,212 | 1 | 2,048 | 7 | 26.84 | **ours** |
+| `i960_top` | **7,807** | 4,872 | 1 | 2,048 | 7 | 26.4 | **ours** |
 | P1.5 core as built (framework + PLL + video timing + overlay + SDRAM + loader + **S24TILE**) | **8,428** | — | **163** | — | — | — | **ours + upstream, MEASURED ON HARDWARE** |
 | `sys/` framework | **6,630** | — | — | — | — | — | upstream (M2-E) |
 | VDP2 (tilemap ceiling) | **6,852** | 9,184 | 4 | 272 | 12 | 65.73 | srg320 |
@@ -565,12 +565,12 @@ the number to watch. DSP at ~28 of 112 is comfortable in every case.
 
 **Six blocks totalling 31,506 ALM have been fitted on the target device.** Of the
 blocks a Model 2A needs, the measured total is **15,743 ALM of directly-usable
-figures** (i960 6,979 + `sys/` 6,630 + SCSP 2,030) plus bracketing proxies for
+figures** (i960 7,807 + `sys/` 6,630 + SCSP 2,030) plus bracketing proxies for
 everything else.
 
 | | ALM | whose RTL | what it proves |
 |---|---|---|---|
-| i960KB + FPU | **6,979** | **ours** | the CPU as built: integer, FPU, I-cache, register file, 7 DSP, 26.84 MHz |
+| i960KB + FPU | **7,807** | **ours** | the CPU as built: integer, FPU, I-cache, register file, interrupts, 7 DSP, 26.4 MHz |
 | `sys/` framework | **6,630** | upstream | the same framework on the same device, whichever core wraps it |
 | SCSP | **2,030** | srg320 | the *same chip* Model 2 uses, fitted on the target part |
 | fx68k | **2,134** | ijor | the *actual core we intend to port*, GPL-3 and licence-clear |
@@ -589,7 +589,7 @@ The three have different standing and it matters:
 
 #### The i960 row: mostly measured, and what the remainder is
 
-7,079 of the 9,000-14,000 exists and is fitted. (`i960_top` alone measures **6,979
+7,907 of the 9,000-14,000 exists and is fitted. (`i960_top` alone measures **7,807
 ALM** as of R12, flat across the `callx` and `cvtri` work.) The remainder is not more of
 the same — it is a specific, listable set:
 
@@ -1877,3 +1877,90 @@ interrupt path into a failure. It reaches 88 dequeues and kills that mutation.
 It is a separate invocation on purpose: `steps` is the program length, so raising
 it on the default run would change the working set, the I-cache hit rate and
 therefore **the measured CPI that R16 rests on**.
+
+---
+
+**R23 — the interrupt controller costs 828 ALM, and it is measured, not
+estimated.** Quartus 17.0, `5CSEBA6U23I7`, map + fit + sta:
+
+| | before interrupts | with interrupts | delta |
+|---|---|---|---|
+| ALM | 6,979 | **7,807** | **+828** |
+| registers | 4,212 | 4,872 | +660 |
+| M10K | 1 | 1 | 0 |
+| DSP | 7 | 7 | 0 |
+| Fmax | 26.84 MHz | **26.4 MHz** | **-0.44** |
+
+*What it bought:* the four external lines with edge detection, the ICR vector
+lookup, the immediate slot, the queue into the interrupt table, the priority
+scan that dequeues, `take_interrupt` with its nested-stack test and three process
+saves, and the type-7 return that restores PC and AC. §5.2's pessimistic column
+had budgeted interrupts inside its 9,500 estimate; **the measured total is still
+below it.**
+
+*Effect on the fit question.* The budget is i960 + renderer under ~25,000 ALM.
+The i960 side is now **7,807 measured**, leaving **~17,200 for the renderer**.
+§5.2's own pessimistic i960 figure was 13,500, so the CPU has come in materially
+under its own worst case and the renderer's room is wider than the study
+assumed, not narrower.
+
+*Fmax is the number to watch, not ALM.* 26.4 MHz still clears the real part's
+~25 MHz, but the margin has gone from 1.84 MHz to 1.4 MHz and this is the second
+change in a row to take some. **The remaining i960 work — faults, `calls`,
+transcendentals — has to be measured for Fmax as well as area**, and if the
+margin reaches zero the answer is a pipeline stage in the aux-bus path, not a
+retreat from correctness. Do not accept an Fmax figure from a fit-only rerun;
+`quartus_map` must run too, per the build rules.
+
+---
+
+**R24 — `modpc`, and why the interrupt path was unreachable without it.** MAME
+`i960.cpp` 0x65.5:
+
+```c
+t1 = m_PC;  t2 = get_2_ri(opcode);
+m_PC = (m_PC & ~t2) | (m_r[(opcode>>19) & 0x1f] & t2);
+set_ri(opcode, t1);
+if ((t1 >> 16 & 0x1f) > (m_PC >> 16 & 0x1f)) check_pending_irqs();
+```
+
+**This is the only instruction that lowers the CPU priority.** PC resets to
+`0x001f2002` — priority 31 — and the eligibility test
+`((cpu_pri < priority) || (priority == 31))` then admits *only* priority-31
+interrupts. Everything else queues and is never dequeued. So R22's controller,
+complete and verified, would have been dead code on real hardware: a game opens
+itself to its raster and TGP interrupts by calling `modpc`, and nothing else does.
+
+The harness had been papering over this by **seeding PC with a random priority
+per program**, which was the right call to get the controller tested but is not a
+substitute for the instruction.
+
+*Two implementation notes worth keeping.*
+
+- **`srcdst` is read as a source and then written with the old PC**, which no
+  other REG-format instruction does — the read port presents `src1` there. It
+  costs one extra sequencer state (`T_MODPC`) to present `ra1 = srcdst` a cycle
+  early. A mutation pointing that read at `src1` is caught.
+- **The dequeue check is on a DECREASE, not a change.** Reproduced exactly, and
+  the distinction is real rather than pedantic: level 31 is eligible regardless
+  of CPU priority, so a `modpc` that RAISES the priority would still release a
+  queued level-31 interrupt if the test were `!=`.
+
+*That mutation initially SURVIVED*, and fixing the test rather than accepting it
+is the point. Priority-31 vectors are 8 of 256 random ICR bytes — about 3% — and
+a queued level 31 additionally needs the immediate slot already occupied. The
+harness now biases ICR bytes toward 248-255 and drives paired edges in one
+window. With that, the mutation dies.
+
+*Effect on coverage, which is the other reason this matters:* enabling `modpc`
+took the default run from **4 dequeues to 52**, and the soak to 106. It is the
+realistic mechanism by which a queued interrupt is released, and until it existed
+the dequeue path was being reached only by accident.
+
+*One harness artifact found alongside.* The prefetch invariant fired on a
+recorded deviation. A store into the program image makes the module's I-cache and
+the cacheless reference disagree, and **both are correct** — the SMC check
+abandons the program, but it runs at the end of the window and an interrupt can
+redirect into the just-overwritten program *within the same window*. The
+invariant is now gated on the program image being clean. Same class as the rest
+of R22: the instrument, not the design.

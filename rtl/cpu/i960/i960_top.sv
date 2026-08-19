@@ -156,6 +156,18 @@ module i960_top (
   logic  [4:0] cpu_pri;
   assign cpu_pri = pc_reg[20:16];
 
+  // modpc, 0x65.5. Named here because the read-address drive below needs it
+  // one state earlier than T_EXEC: modpc reads srcdst as a SOURCE, which no
+  // other REG-format instruction does.
+  logic is_modpc;
+  assign is_modpc = (d_op == 8'h65) && (d_op2 == 4'h5);
+  // The PC modpc is about to install. Named because the eligibility test needs
+  // its priority field, and a part-select of an expression is not legal here.
+  logic [31:0] modpc_new_pc;
+  assign modpc_new_pc  = (pc_reg & ~src2_val) | (rd1 & src2_val);
+  logic  [4:0] modpc_new_pri;
+  assign modpc_new_pri = modpc_new_pc[20:16];
+
   // Observability for the lockstep harness, which has to tell three things
   // apart that all look like "the IP moved": an instruction retiring, an
   // interrupt being taken at a boundary, and a dequeue after a type-7 ret.
@@ -307,7 +319,7 @@ module i960_top (
     T_EXEC, T_MEM, T_MEM_W, T_MULDIV, T_MULTI, T_PAIR, T_FP, T_WB, T_FRAME,
     T_TRAP,
     T_BOOT, T_SYNMOV_RD, T_SYNMOV_WR,
-    T_INTR, T_RET7
+    T_INTR, T_RET7, T_MODPC
   } tstate_e;
 
   tstate_e ts;
@@ -875,6 +887,9 @@ module i960_top (
       T_EXEC: begin
         if      (is_movx)        ra1 = d_src1 + 5'd1;   // second word of movl/t/q
         else if (d_fmt == 2'd3)  ra1 = d_srcdst & ls_regmask;  // store source
+        // modpc takes srcdst as an operand and writes the OLD PC back to it.
+        // Presented here so rd1 is valid when T_MODPC runs next cycle.
+        else if (is_modpc)       ra1 = d_srcdst;
       end
       // Held, not merely issued: a multi-word store consumes st_value over
       // several cycles and the address must not move under it.
@@ -1248,7 +1263,15 @@ module i960_top (
               //
               // It uses the aux master rather than the LSU because both
               // addresses are register values, not a decoded effective address.
-              if ((d_op == 8'h60) && (d_op2 == 4'h0)) begin
+              if (is_modpc) begin
+                // set_ri is a fatalerror on the literal form, so that is a trap
+                // here rather than a silently-dropped write.
+                if (d_dst_lit) begin
+                  trap_op <= 8'h65; ts <= T_TRAP;
+                end else begin
+                  ts <= T_MODPC;   // rd1 (= r[srcdst]) is valid next cycle
+                end
+              end else if ((d_op == 8'h60) && (d_op2 == 4'h0)) begin
                 // BOTH addresses are latched here and the request is raised in
                 // the NEXT state, the same shape as callx. Note this was NOT
                 // what fixed the original divergence: latching produced a
@@ -1451,6 +1474,24 @@ module i960_top (
             rf_ret  <= 1'b1;
             ts      <= T_FRAME;
           end
+        end
+
+        // ------------------------------------------------------------ modpc
+        // One state, because srcdst has to be READ before it is written and the
+        // REG read port presents src1 there for every other instruction.
+        T_MODPC: begin
+          pc_reg <= modpc_new_pc;
+          wa     <= d_srcdst;
+          wd     <= pc_reg;                       // set_ri writes the OLD PC
+          we     <= 1'b1;
+          ip     <= ip_next;
+          // Only a priority that went DOWN can release a queued interrupt, and
+          // MAME checks on exactly that condition rather than on any change.
+          if (cpu_pri > modpc_new_pri) begin
+            intr_mode <= M_PEND;
+            intr_step <= 4'd0;
+            ts        <= T_INTR;
+          end else ts <= T_FETCH;
         end
 
         // ------------------------------------------------------- interrupts

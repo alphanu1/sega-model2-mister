@@ -145,6 +145,7 @@ struct Cpu {
   bool     imm_irq   = false;       // the single immediate slot MAME models
   uint32_t imm_vector = 0, imm_pri = 0;
   uint64_t intr_taken = 0, intr_queued = 0, intr_dequeued = 0;
+  uint64_t pend_calls = 0;   // how often check_pending_irqs ran at all
 
   // execute_set_input. EDGE triggered: MAME returns immediately if the line is
   // already in the requested state, and does nothing at all on a falling edge.
@@ -221,6 +222,7 @@ struct Cpu {
   // has just been given up. Scans priorities high to low and takes the first
   // vector found at the first eligible level.
   void check_pending_irqs() {
+    ++pend_calls;
     static const uint32_t lvlmask[4] = { 0x000000ffu, 0x0000ff00u,
                                          0x00ff0000u, 0xff000000u };
     const uint32_t int_tab = rd(PRCB + 20);
@@ -401,6 +403,33 @@ struct Cpu {
           if (t1 == 0xff000004u) { ICR = v; ++syn_icr_count; } else wr(t1, v);
           AC = (AC & ~7u) | 2u;
           IP = ip_next;
+          break;
+        }
+
+        // ---- modpc: the only way the CPU priority ever comes down ----
+        //
+        // MAME i960.cpp 0x65.5. Without it PC keeps its reset priority of 31,
+        // the eligibility test ((cpu_pri < priority) || (priority == 31))
+        // admits only priority-31 interrupts, and every other vector queues
+        // forever -- so the whole interrupt path is unreachable by real code.
+        // This is what a game calls to open the CPU up to its raster and TGP
+        // interrupts.
+        //
+        //   t1 = old PC
+        //   PC = (PC & ~mask) | (r[srcdst] & mask)     mask = get_2_ri
+        //   r[srcdst] = t1                             (set_ri)
+        //   if the priority went DOWN, a queued interrupt may now be eligible
+        //
+        // srcdst is read as a source and then written with the old PC, in that
+        // order.
+        if (d.op == 0x65 && d.op2 == 0x5) {
+          if (d.dst_lit) { trapped = true; trap_op = d.op; break; }  // MAME fatalerrors
+          const uint32_t t1 = PC;
+          const uint32_t t2 = s2;
+          PC = (PC & ~t2) | (rf.r[d.srcdst] & t2);
+          rf.r[d.srcdst] = t1;
+          IP = ip_next;
+          if (((t1 >> 16) & 0x1fu) > ((PC >> 16) & 0x1fu)) check_pending_irqs();
           break;
         }
 

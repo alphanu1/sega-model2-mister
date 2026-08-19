@@ -62,6 +62,15 @@ uint64_t fetch_enter = 0, fetch_hit = 0, fetch_stall = 0, ic_fill_cyc = 0;
 // counters have to be drained into these before it is replaced.
 uint64_t syn_total = 0, syn_icr_total = 0;
 uint32_t irq_state = 0;
+// Set the moment a bus write lands inside the program image. The prefetch
+// invariant is meaningless afterwards: the module's I-cache holds the old
+// word and the cacheless reference reads the new one, and BOTH ARE CORRECT.
+// The SMC check at the end of the window abandons the program, but it runs
+// after the window -- and an interrupt can redirect into the just-overwritten
+// program within the SAME window, so the invariant fired first and counted a
+// failure for a recorded deviation.
+uint32_t prog_lo = 0, prog_hi = 0;
+bool     prog_dirty = false;
 bool     irq_enable = true;
 bool     itrace     = false;
 bool     strictcov  = false;
@@ -136,7 +145,7 @@ void tick() {
   // program's word and this would compare it against the NEW program's memory.
   // That artifact was reported as a real defect across several rounds of
   // fetch/execute overlap work before it was identified.
-  if (checking && (ts_now == 0 || ts_now == 1) &&
+  if (checking && !prog_dirty && (ts_now == 0 || ts_now == 1) &&
       dut->rootp->i960_top__DOT__fetch_word_ok) {
     const uint32_t at = dut->rootp->i960_top__DOT__ip;
     auto it = mem.find(at);
@@ -209,6 +218,7 @@ void tick() {
           d = (d & ~(0xffu << (l*8))) | (dut->bus_wdata & (0xffu << (l*8)));
       mem[a] = d;
       dut_stores.emplace_back(a, d);
+      if (a >= prog_lo && a < prog_hi) prog_dirty = true;
     } else {
       dut->bus_rdata = cur;
     }
@@ -272,7 +282,7 @@ bool     probe_fp     = false;
 // to prevent -- the two differ by a large factor, and neither is wrong.
 enum { C_REGALU=0, C_BRANCH=1, C_FAULT=2, C_CMPBR=3, C_FP=4, C_BBX=5,
        C_EMUL=6, C_MOVX=7, C_MOV=8, C_MULDIV=9, C_LDST=10, C_LDA=11, C_TEST=12,
-       C_FRAME=13, C_SYNMOV=14, C_N=15 };
+       C_FRAME=13, C_SYNMOV=14, C_MODPC=15, C_N=16 };
 
 bool mix_daytona = false;
 
@@ -287,9 +297,9 @@ bool mix_daytona = false;
 // describes nothing.
 // synmov is generated at weight ZERO until the divergence below is resolved.
 // Turning it on is one number, and the failing case is recorded in HANDOFF.
-const int W_COVER[C_N]  = { 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 4, 8, 6 };
+const int W_COVER[C_N]  = { 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 4, 8, 6, 5 };
 // synmov measures 0.000% in the Daytona traces, so the measured mix gets none.
-const int W_DAYTON[C_N] = { 12, 4, 0, 6, 1, 2, 1, 3, 10, 1, 45, 8, 3, 4, 0 };
+const int W_DAYTON[C_N] = { 12, 4, 0, 6, 1, 2, 1, 3, 10, 1, 45, 8, 3, 4, 0, 0 };
 
 int pick_class(std::mt19937_64 &rng) {
   const int *w = mix_daytona ? W_DAYTON : W_COVER;
@@ -560,6 +570,16 @@ int main(int argc, char **argv) {
         // program rather than landing in unwritten memory every time.
         const uint32_t d = 4u + 4u * (rng() % 6);
         insn = (((rng() & 1) ? 0x0bu : 0x08u) << 24) | ((d + 4u) & 0x00ffffffu);
+      } else if (cls == 15) {                          // modpc
+        // The mask decides how much of PC moves. Biased hard towards the
+        // priority field, because that is the only part of PC anything else in
+        // the core reads -- a uniformly random 32-bit mask almost never changes
+        // the priority, and modpc's whole reason to exist is that it does.
+        // Never the literal destination form: set_ri is a fatalerror there and
+        // both sides trap, which ends the program rather than testing anything.
+        const uint32_t sd = 1u + (rng() % 24);
+        const uint32_t s2 = 1u + (rng() % 24);
+        insn = (0x65u << 24) | (sd << 19) | (s2 << 14) | (0x5u << 7);
       } else if (cls == 14) {                          // synmov
         // src1 is the destination address, src2 the source. Both are register
         // values, which is why synmov cannot use the LSU's decoded effective
@@ -778,6 +798,8 @@ int main(int argc, char **argv) {
     for (uint32_t w = 0; w < 8; ++w) mem[INT_TAB + 4 + w * 4] = 0;
     for (uint32_t v = 8; v < 256; ++v) mem[INT_TAB + 36 + (v - 8) * 4] = PROG_BASE;
     for (size_t k = 0; k < prog.size(); ++k) mem[PROG_BASE + uint32_t(k*4)] = prog[k];
+    prog_lo = PROG_BASE; prog_hi = PROG_BASE + uint32_t(prog.size() * 4);
+    prog_dirty = false;
     // A resident frame at 0x2000, self-consistent so that returning below depth
     // zero lands somewhere real. Both the module and the reference reload from
     // PFP & ~63 when the register cache underflows, and without this they agree
@@ -854,6 +876,13 @@ int main(int argc, char **argv) {
     // The spilled words are ordinary memory and ARE compared per retire.
     ref.rf.r[31] = 0x2000;  ref.rf.r[1] = 0x2040;   // FP, SP
     ref.rf.r[0]  = 0x2000;                          // PFP
+    // r2 carries a priority-field mask so modpc actually MOVES the priority.
+    // With random register contents the mask is random too, and the odds of it
+    // covering bits 16-20 while the source supplies a different value there are
+    // small enough that the check_pending_irqs arm of modpc would hardly ever
+    // fire -- the instruction would execute constantly and test one path.
+    ref.rf.r[2] = 0x001f0000u;
+    dut->rootp->i960_top__DOT__u_regs__DOT__loc[2] = 0x001f0000u;
     // r3 holds the magic synmov destination, so the ICR path gets exercised.
     ref.rf.r[3]  = 0xff000004;
     dut->rootp->i960_top__DOT__u_regs__DOT__loc[3] = 0xff000004;
@@ -903,7 +932,17 @@ int main(int argc, char **argv) {
     //   byte 8..247   priority 1..30 -- eligible only below the CPU priority
     //   byte 248..255 priority 31 -- always eligible
     {
-      const uint32_t icr = uint32_t(rng() & 0xffffffffu);
+      uint32_t icr = uint32_t(rng() & 0xffffffffu);
+      // Bias some bytes into 248..255, which is priority 31. Level 31 is the
+      // one level that is ALWAYS eligible regardless of the CPU priority, so it
+      // is the only level that can distinguish "modpc lowered the priority"
+      // from "modpc changed the priority" -- and a mutation swapping those
+      // survived while priority-31 vectors were the 3% a uniform byte gives.
+      // A queued level 31 needs the immediate slot already occupied, which is
+      // what the paired-edge generator above produces.
+      for (int b = 0; b < 4; ++b)
+        if ((rng() % 3) == 0)
+          icr = (icr & ~(0xffu << (b * 8))) | ((248u + (rng() % 8)) << (b * 8));
       ref.ICR = icr;
       dut->rootp->i960_top__DOT__icr_reg = icr;
     }
@@ -1142,10 +1181,11 @@ int main(int argc, char **argv) {
         if (dut_took != ref_took) {
           if (fails < MAX_REPORT)
             std::printf("  INTRCOUNT retire %llu  dut took %llu, ref took %llu"
-                        "  (insn %08x IP %08x)  dut PC=%08x ref PC=%08x\n",
+                        "  (insn %08x IP %08x)  dut PC=%08x ref PC=%08x"
+                        "  ref check_pending ran %llu times\n",
                         (unsigned long long)r, (unsigned long long)dut_took,
                         (unsigned long long)ref_took, exec_insn, exec_ip,
-                        dpc(), ref.PC);
+                        dpc(), ref.PC, (unsigned long long)ref.pend_calls);
           ++fails; break;
         }
       }
