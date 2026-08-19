@@ -47,6 +47,15 @@ module i960_top (
   input  logic [31:0] bus_rdata,
   input  logic        bus_ack,
 
+  // The four external interrupt lines. Sega and Namco both wired the i960 in
+  // "normal" mode only, which is the subset MAME implements and the only one
+  // modelled here. LEVEL inputs, sampled at an instruction boundary; a rising
+  // edge is what raises an interrupt. These arrive from other clock domains on
+  // hardware and need a two-flop synchroniser at the integration boundary --
+  // that belongs in Model2.sv, not here, so this port expects a synchronous
+  // signal.
+  input  logic  [3:0] irq,
+
   // Observability. These exist so the design has real outputs and cannot be
   // optimised away, and because the screen is the only output channel this
   // project will ever have on hardware.
@@ -58,6 +67,22 @@ module i960_top (
   output logic [31:0] dbg_sat,
   output logic [31:0] dbg_prcb,
   output logic [31:0] dbg_icr,
+  // Interrupt observability. Real outputs for the same reason the rest are:
+  // the screen is the only output channel on hardware, and an overlay showing
+  // "how many interrupts has this core taken" is the first question worth
+  // asking when a game boots to a black screen. The lockstep harness needs
+  // them too -- it has to tell an instruction retiring apart from an interrupt
+  // being taken, and both look like the IP moving.
+  output logic [31:0] dbg_intr_cnt,
+  output logic        dbg_intr_work,
+  // Instructions ACCEPTED, which is exactly one per instruction executed --
+  // the sequencer latches `insn` once and runs it to completion. This exists
+  // because "the IP changed" is not a retire detector and failed three
+  // different ways once interrupts arrived: taking an interrupt moves the IP
+  // without retiring, a handler address can equal the IP the window opened at,
+  // and a type-7 frame can make `ret` return to its own address so the IP never
+  // moves at all. Counting the one unambiguous event removes the whole class.
+  output logic [31:0] dbg_acc_cnt,
   output logic [31:0] dbg_ip,
   output logic [31:0] dbg_insn,
   output logic        trap,
@@ -89,10 +114,133 @@ module i960_top (
   logic [31:0] prcb_reg;    // processor control block
   logic [31:0] icr_reg;     // interrupt control: one vector byte per IRQ line
 
+  // ------------------------------------------------------- interrupt state
+  // Transcribed from MAME i960.cpp. Three microprograms share one state and a
+  // step counter, because every step is a single aux-bus transaction and a flat
+  // sequence can be read against the source line by line:
+  //
+  //   M_Q     execute_set_input's else branch -- queue into the interrupt table
+  //   M_TAKE  take_interrupt
+  //   M_PEND  check_pending_irqs -- the dequeue after a type-7 ret
+  //
+  // WHEN an interrupt is taken is the one place this does not follow MAME
+  // literally. MAME calls check_immediate_irqs() once per execute_run(), a
+  // scheduler timeslice boundary, which is an emulator artifact; silicon takes
+  // it at the next instruction boundary and so does this. The reference states
+  // the same rule, because a difference here diverges on timing alone.
+  localparam logic [1:0] M_Q = 2'd0, M_TAKE = 2'd1, M_PEND = 2'd2;
+
+  logic  [3:0] irq_prev;    // last sampled line state, for edge detection
+  logic  [3:0] irq_edge;    // rising edges captured and not yet processed
+  logic        imm_irq;     // the single immediate slot MAME models
+  logic  [7:0] imm_vector;
+  logic  [4:0] imm_pri;
+
+  logic [31:0] it_base;     // interrupt table, from PRCB+20
+  logic [31:0] int_sp;      // interrupt stack, from PRCB+24
+  logic [31:0] irqv;        // handler address out of the table
+  logic [31:0] scratch;     // read-modify-write holding register
+  logic [31:0] pend_pri;    // the priority summary word
+  logic [31:0] vword;       // the vector word for one priority group
+  logic [31:0] intr_stack;
+  logic  [7:0] cur_vec;
+  logic  [4:0] cur_lvl;
+  logic  [4:0] take_idx;    // bit position within vword, latched before it moves
+  logic  [3:0] intr_step;
+  logic  [1:0] intr_mode;
+  logic        intr_call;   // this call is the type-7 interrupt call
+  logic        pend_abort;  // a flagged level with no vector under it
+  logic        ret7;        // a type-7 return is in flight
+  logic [31:0] ret7_pc, ret7_ac;
+
+  logic  [4:0] cpu_pri;
+  assign cpu_pri = pc_reg[20:16];
+
+  // Observability for the lockstep harness, which has to tell three things
+  // apart that all look like "the IP moved": an instruction retiring, an
+  // interrupt being taken at a boundary, and a dequeue after a type-7 ret.
+  // intr_taken_cnt counts completed take_interrupts; intr_work says the
+  // sequencer is not yet at a settled boundary.
+  logic [31:0] intr_taken_cnt;
+  logic [31:0] acc_cnt;
+  logic        intr_work;
+
+  // Lowest-numbered pending edge first. MAME's order is whatever the driving
+  // machine calls execute_set_input in; a fixed order is needed for lockstep,
+  // and the reference uses the same one.
+  //
+  // COMBINATIONAL, not the register: an edge arriving in the same cycle as the
+  // boundary test must be visible to that test. Testing the register alone
+  // delays it by a cycle, and whether that cycle mattered depended on whether
+  // the boundary happened to be a prefetch hit -- so it would have diverged
+  // against the reference only sometimes, which is the worst kind.
+  logic [3:0] irq_edge_now;
+  assign irq_edge_now = irq_edge | (irq & ~irq_prev);
+
+  logic [1:0] edge_line;
+  always_comb begin
+    if      (irq_edge_now[0]) edge_line = 2'd0;
+    else if (irq_edge_now[1]) edge_line = 2'd1;
+    else if (irq_edge_now[2]) edge_line = 2'd2;
+    else                      edge_line = 2'd3;
+  end
+
+  logic [7:0] edge_vec;
+  always_comb begin
+    case (edge_line)
+      2'd0:    edge_vec = icr_reg[7:0];
+      2'd1:    edge_vec = icr_reg[15:8];
+      2'd2:    edge_vec = icr_reg[23:16];
+      default: edge_vec = icr_reg[31:24];
+    endcase
+  end
+  logic [4:0] edge_pri;
+  assign edge_pri = edge_vec[7:3];          // priority = vector / 8
+
+  assign intr_work = (|irq_edge_now) ||
+                     (imm_irq && ((cpu_pri < imm_pri) || (imm_pri == 5'd31)));
+
+  // check_pending_irqs' scan: highest priority that is both pending and
+  // eligible. MAME walks 31 down to 0 and takes the first hit, so this is a
+  // find-highest-set over the eligible mask. Level 31 is always eligible.
+  logic [31:0] pend_elig;
+  assign pend_elig = pend_pri &
+                     ({1'b1, 31'd0} | (32'hffff_ffff << ({1'b0, cpu_pri} + 6'd1)));
+  logic [4:0] top_lvl;
+  logic       have_lvl;
+  always_comb begin
+    top_lvl  = 5'd0;
+    have_lvl = 1'b0;
+    for (int i = 0; i < 32; i++)
+      if (pend_elig[i]) begin top_lvl = 5'(i); have_lvl = 1'b1; end
+  end
+
+  // ...and within that level's byte, the highest vector set.
+  logic [7:0] lvl_byte;
+  always_comb begin
+    case (cur_lvl[1:0])
+      2'd0:    lvl_byte = vword[7:0];
+      2'd1:    lvl_byte = vword[15:8];
+      2'd2:    lvl_byte = vword[23:16];
+      default: lvl_byte = vword[31:24];
+    endcase
+  end
+  logic [2:0] top_bit;
+  logic       have_bit;
+  always_comb begin
+    top_bit  = 3'd0;
+    have_bit = 1'b0;
+    for (int i = 0; i < 8; i++)
+      if (lvl_byte[i]) begin top_bit = 3'(i); have_bit = 1'b1; end
+  end
+
   assign dbg_pc   = pc_reg;
   assign dbg_sat  = sat_reg;
   assign dbg_prcb = prcb_reg;
   assign dbg_icr  = icr_reg;
+  assign dbg_intr_cnt  = intr_taken_cnt;
+  assign dbg_intr_work = intr_work;
+  assign dbg_acc_cnt   = acc_cnt;
 
   logic [31:0] ip, ip_next, insn, disp_word;
 
@@ -145,15 +293,21 @@ module i960_top (
   //
   // NEW STATES GO AT THE END, and that is not cosmetic. T_FETCH and T_FETCH_W
   // must keep encodings 0 and 1: sim/i960/tb_i960_top.cpp's prefetch invariant
-  // reads `ts & 15` and tests for those two numerically. Putting the boot state
-  // first silently repointed that invariant at T_BOOT and T_SYNMOV_RD, which
-  // would have disabled the check that has already caught two real faults today
-  // -- without failing anything.
+  // tests for those two numerically. Putting the boot state first silently
+  // repointed that invariant, which would have disabled a check that has caught
+  // real faults -- without failing anything.
+  //
+  // Appending was NEVER SUFFICIENT on its own, and this comment used to claim it
+  // was. The harness masked `ts & 15`; at the seventeenth state T_SYNMOV_RD (16)
+  // wrapped onto T_FETCH (0) and T_SYNMOV_WR (17) onto T_FETCH_W (1), so the
+  // invariant ran during both synmov states and the cycle histogram booked them
+  // as fetch. The mask is now 31 and the arrays are 32 entries. Study R20.
   typedef enum logic [4:0] {
     T_FETCH, T_FETCH_W, T_FETCH2, T_FETCH2_W, T_DECODE,
     T_EXEC, T_MEM, T_MEM_W, T_MULDIV, T_MULTI, T_PAIR, T_FP, T_WB, T_FRAME,
     T_TRAP,
-    T_BOOT, T_SYNMOV_RD, T_SYNMOV_WR
+    T_BOOT, T_SYNMOV_RD, T_SYNMOV_WR,
+    T_INTR, T_RET7
   } tstate_e;
 
   tstate_e ts;
@@ -235,6 +389,8 @@ module i960_top (
   logic [31:0] rd1, rd2, wd;
   logic        we;
   logic        rf_call, rf_ret, rf_flush, rf_busy, rf_ip_valid;
+  logic [31:0] cur_fp, cur_sp;
+  logic  [2:0] cur_pfp_type;
   // A return type other than 0 -- see i960_regs.sv. Raised rather than
   // silently performing an ordinary return.
   logic        rf_ret_unsup;
@@ -248,8 +404,13 @@ module i960_top (
     .wa(wa), .wd(wd), .we(we),
     .op_call(rf_call), .op_ret(rf_ret), .op_flushreg(rf_flush),
     .ret_unsupported(rf_ret_unsup),
-    .call_ip(ip_next), .call_target(call_tgt), .call_type(3'd0),
-    .call_stack(32'd0),
+    // take_interrupt's do_call takes the CURRENT ip, not ip_next: it runs at an
+    // instruction boundary, so the instruction to resume at is the one not yet
+    // executed. An ordinary call is past its instruction and uses ip_next.
+    .call_ip(intr_call ? ip : ip_next), .call_target(call_tgt),
+    .call_type(intr_call ? 3'd7 : 3'd0),
+    .call_stack(intr_stack),
+    .cur_fp(cur_fp), .cur_sp(cur_sp), .cur_pfp_type(cur_pfp_type),
     .busy(rf_busy), .next_ip(rf_next_ip), .next_ip_valid(rf_ip_valid),
     .mem_req(rf_mem_req), .mem_we(rf_mem_we), .mem_addr(rf_mem_addr),
     .mem_wdata(rf_mem_wdata), .mem_rdata(bus_rdata), .mem_ack(rf_mem_ack)
@@ -759,6 +920,30 @@ module i960_top (
       aux_wdata <= 32'd0;
       syn_dst   <= 32'd0;
       syn_src   <= 32'd0;
+      irq_prev  <= 4'd0;
+      irq_edge  <= 4'd0;
+      imm_irq   <= 1'b0;
+      imm_vector<= 8'd0;
+      imm_pri   <= 5'd0;
+      it_base   <= 32'd0;
+      int_sp    <= 32'd0;
+      irqv      <= 32'd0;
+      scratch   <= 32'd0;
+      pend_pri  <= 32'd0;
+      vword     <= 32'd0;
+      intr_stack<= 32'd0;
+      cur_vec   <= 8'd0;
+      cur_lvl   <= 5'd0;
+      take_idx  <= 5'd0;
+      intr_step <= 4'd0;
+      intr_mode <= M_Q;
+      intr_call <= 1'b0;
+      pend_abort<= 1'b0;
+      ret7      <= 1'b0;
+      ret7_pc   <= 32'd0;
+      ret7_ac   <= 32'd0;
+      intr_taken_cnt <= 32'd0;
+      acc_cnt        <= 32'd0;
       we        <= 1'b0;
       wa        <= 5'd0;
       wd        <= 32'd0;
@@ -807,6 +992,15 @@ module i960_top (
       rf_call  <= 1'b0;
       rf_ret   <= 1'b0;
       rf_flush <= 1'b0;
+
+      // Edge capture runs every cycle; the boundary handler below consumes one
+      // edge at a time and reasserts this expression with that line masked off.
+      // Written as a full re-evaluation rather than relying on a later bit
+      // assignment overriding an earlier whole-vector one -- that is legal
+      // SystemVerilog and it is also exactly the kind of subtlety that reads as
+      // correct while doing something else.
+      irq_prev <= irq;
+      irq_edge <= irq_edge | (irq & ~irq_prev);
 
       case (ts)
         // --------------------------------------------------------- boot
@@ -869,8 +1063,42 @@ module i960_top (
         // the prefetch-hit path and the fill path is exactly how those two
         // drift apart without either copy looking wrong.
         T_FETCH, T_FETCH_W: begin
-          if (fetch_word_ok) begin
+          // INSTRUCTION BOUNDARY. Edges are processed first and one at a time,
+          // then the immediate slot is checked -- the same order as the
+          // reference, where the harness calls set_irq for each line and step()
+          // then calls check_immediate_irqs. Queueing returns here, so a second
+          // edge is picked up on re-entry.
+          //
+          // Only in T_FETCH, never T_FETCH_W: the latter is mid-fill, which is
+          // not a boundary. An interrupt arriving during a fill is taken after
+          // that instruction retires.
+          if ((ts == T_FETCH) && !boot_req && (|irq_edge_now)) begin
+            irq_edge <= irq_edge_now & ~(4'd1 << edge_line);
+            if (edge_vec == 8'd0) begin
+              // Vector 0 means the line is in IAC mode, which MAME logs and
+              // declines to handle. Dropping it is the same behaviour.
+            end else if (((cpu_pri < edge_pri) || (edge_pri == 5'd31))
+                         && !imm_irq) begin
+              imm_irq    <= 1'b1;
+              imm_vector <= edge_vec;
+              imm_pri    <= edge_pri;
+            end else begin
+              cur_vec   <= edge_vec;
+              intr_mode <= M_Q;
+              intr_step <= 4'd0;
+              ts        <= T_INTR;
+            end
+          end else if ((ts == T_FETCH) && !boot_req && imm_irq &&
+                       ((cpu_pri < imm_pri) || (imm_pri == 5'd31))) begin
+            imm_irq   <= 1'b0;
+            cur_vec   <= imm_vector;
+            cur_lvl   <= imm_pri;
+            intr_mode <= M_TAKE;
+            intr_step <= 4'd0;
+            ts        <= T_INTR;
+          end else if (fetch_word_ok) begin
             insn     <= fetch_word;
+            acc_cnt  <= acc_cnt + 32'd1;
             pf_valid <= 1'b0;
             pf_armed <= 1'b0;
 
@@ -930,7 +1158,17 @@ module i960_top (
                 8'h08: begin ip <= ip_next + d_disp; ts <= T_FETCH; end   // b
                 8'h09: begin rf_call <= 1'b1; call_tgt <= alu_or_ea;
                              ts <= T_FRAME; end                          // call
-                8'h0a: begin rf_ret  <= 1'b1;   ts <= T_FRAME; end        // ret
+                8'h0a: begin                                              // ret
+                  // A type-7 frame restores PC and AC from FP-16/FP-12, and
+                  // they must be READ BEFORE do_ret_0, which moves FP. Types
+                  // 1-6 still reach the register file and raise
+                  // ret_unsupported there.
+                  if (cur_pfp_type == 3'd7) begin
+                    intr_step <= 4'd0; ts <= T_RET7;
+                  end else begin
+                    rf_ret <= 1'b1; ts <= T_FRAME;
+                  end
+                end
                 8'h0b: begin                                              // bal
                   wa <= 5'd30; wd <= ip_next; we <= 1'b1;
                   ip <= ip_next + d_disp; ts <= T_FETCH;
@@ -1180,8 +1418,223 @@ module i960_top (
           trap_op <= 8'h0a; ts <= T_TRAP;
         end else if (!rf_busy && !rf_call && !rf_ret && !rf_flush) begin
           if (rf_ip_valid) ip <= rf_next_ip;
-          ts <= T_FETCH;
+          if (ret7) begin
+            ret7   <= 1'b0;
+            ac     <= ret7_ac;
+            pc_reg <= ret7_pc;
+            // Giving up the priority this interrupt ran at can release a queued
+            // one, so MAME checks here. pc_reg lands this cycle, so the scan
+            // next cycle sees the RESTORED priority -- which is the one the
+            // eligibility test has to use.
+            intr_mode <= M_PEND;
+            intr_step <= 4'd0;
+            ts        <= T_INTR;
+          end else ts <= T_FETCH;
         end
+
+        // -------------------------------------------------- type-7 return
+        // Two reads, then the ordinary return. FP is still the interrupt
+        // frame's here; do_ret_0 moves it, which is why this cannot be folded
+        // into T_FRAME.
+        T_RET7: if (!boot_req) begin
+          aux_we    <= 1'b0;
+          boot_addr <= (intr_step == 4'd0) ? (cur_fp - 32'd16) : (cur_fp - 32'd12);
+          boot_req  <= 1'b1;
+        end else if (boot_ack) begin
+          boot_req <= 1'b0;
+          if (intr_step == 4'd0) begin
+            ret7_pc   <= bus_rdata;
+            intr_step <= 4'd1;
+          end else begin
+            ret7_ac <= bus_rdata;
+            ret7    <= 1'b1;
+            rf_ret  <= 1'b1;
+            ts      <= T_FRAME;
+          end
+        end
+
+        // ------------------------------------------------------- interrupts
+        T_INTR: case (intr_mode)
+
+          // ---- execute_set_input, the queue branch. Two read-modify-writes:
+          // a priority summary at int_tab, and one bit per vector in the word
+          // for that priority group.
+          M_Q: if (!boot_req) begin
+            boot_req <= 1'b1;
+            case (intr_step)
+              4'd0: begin aux_we <= 1'b0; boot_addr <= prcb_reg + 32'd20; end
+              4'd1: begin aux_we <= 1'b0; boot_addr <= it_base; end
+              4'd2: begin aux_we <= 1'b1; boot_addr <= it_base;
+                          aux_wdata <= scratch | (32'd1 << cur_vec[7:3]); end
+              4'd3: begin aux_we <= 1'b0;
+                          boot_addr <= it_base + {27'd0, cur_vec[7:5], 2'b00}
+                                               + 32'd4; end
+              default: begin aux_we <= 1'b1;
+                          boot_addr <= it_base + {27'd0, cur_vec[7:5], 2'b00}
+                                               + 32'd4;
+                          aux_wdata <= scratch | (32'd1 << cur_vec[4:0]); end
+            endcase
+          end else if (boot_ack) begin
+            boot_req <= 1'b0;
+            case (intr_step)
+              4'd0: begin it_base <= bus_rdata; intr_step <= 4'd1; end
+              4'd1: begin scratch <= bus_rdata; intr_step <= 4'd2; end
+              4'd2: begin                       intr_step <= 4'd3; end
+              4'd3: begin scratch <= bus_rdata; intr_step <= 4'd4; end
+              default: begin aux_we <= 1'b0; ts <= T_FETCH; end
+            endcase
+          end
+
+          // ---- take_interrupt ----
+          M_TAKE: case (intr_step)
+            4'd0, 4'd1, 4'd2: if (!boot_req) begin
+              aux_we   <= 1'b0;
+              boot_req <= 1'b1;
+              case (intr_step)
+                4'd0: boot_addr <= prcb_reg + 32'd20;
+                4'd1: boot_addr <= prcb_reg + 32'd24;
+                // int_tab + 36 + (vector-8)*4. MAME does not guard vector < 8,
+                // and the wrap is reproduced rather than corrected: vectors
+                // below 8 are reserved on the part, so the address it forms is
+                // undefined either way and inventing a guard here would make
+                // this disagree with the oracle for no gain.
+                default: boot_addr <= it_base + 32'd36
+                                    + ((({24'd0, cur_vec}) - 32'd8) << 2);
+              endcase
+            end else if (boot_ack) begin
+              boot_req <= 1'b0;
+              case (intr_step)
+                4'd0: it_base <= bus_rdata;
+                4'd1: int_sp  <= bus_rdata;
+                default: irqv <= bus_rdata;
+              endcase
+              intr_step <= intr_step + 4'd1;
+            end
+
+            // do_call(IRQV, 7, SP). A nested interrupt keeps the running SP; a
+            // first one switches to the dedicated interrupt stack. PC bit 13 is
+            // the interrupt flag. The +64 is MAME's padding against a save
+            // underflow and is not optional -- the three writes below land
+            // under FP.
+            4'd3: begin
+              rf_call    <= 1'b1;
+              intr_call  <= 1'b1;
+              call_tgt   <= irqv;
+              intr_stack <= ((((pc_reg[13] ? cur_sp : int_sp) + 32'd63)
+                              & 32'hffff_ffc0) + 32'd64);
+              intr_step  <= 4'd4;
+            end
+
+            4'd4: if (!rf_busy && !rf_call && !rf_ret && !rf_flush) begin
+              intr_call <= 1'b0;
+              intr_step <= 4'd5;
+            end
+
+            // Save the interrupted process state under the NEW frame.
+            4'd5, 4'd6, 4'd7: if (!boot_req) begin
+              aux_we   <= 1'b1;
+              boot_req <= 1'b1;
+              case (intr_step)
+                4'd5: begin boot_addr <= cur_fp - 32'd16; aux_wdata <= pc_reg; end
+                4'd6: begin boot_addr <= cur_fp - 32'd12; aux_wdata <= ac; end
+                default: begin boot_addr <= cur_fp - 32'd8;
+                               aux_wdata <= {24'd0, cur_vec} - 32'd8; end
+              endcase
+            end else if (boot_ack) begin
+              boot_req  <= 1'b0;
+              intr_step <= intr_step + 4'd1;
+            end
+
+            default: begin
+              aux_we <= 1'b0;
+              // MAME clears 0x1f00 -- bits 8 to 12 -- and then ORs the new level
+              // into bits 16 to 20 WITHOUT clearing them first. Its own comment
+              // says "clear priority", and 0x1f00 is not the priority field, so
+              // the priority accumulates bits across nested interrupts. That is
+              // the oracle's behaviour and it is what the games were validated
+              // against, so it is reproduced exactly. Recorded in study R21;
+              // do not "fix" it without evidence from silicon.
+              pc_reg <= ((pc_reg & ~32'h0000_1f00)
+                         | ({27'd0, cur_lvl} << 16)) | 32'h0000_2002;
+              ip     <= irqv;
+              ts     <= T_FETCH;
+              intr_taken_cnt <= intr_taken_cnt + 32'd1;
+            end
+          endcase
+
+          // ---- check_pending_irqs ----
+          default: case (intr_step)
+            4'd0, 4'd1: if (!boot_req) begin
+              aux_we    <= 1'b0;
+              boot_req  <= 1'b1;
+              boot_addr <= (intr_step == 4'd0) ? (prcb_reg + 32'd20) : it_base;
+            end else if (boot_ack) begin
+              boot_req <= 1'b0;
+              if (intr_step == 4'd0) begin it_base  <= bus_rdata; intr_step <= 4'd1; end
+              else                   begin pend_pri <= bus_rdata; intr_step <= 4'd2; end
+            end
+
+            4'd2: if (!have_lvl) ts <= T_FETCH;      // nothing eligible
+                  else begin cur_lvl <= top_lvl; intr_step <= 4'd3; end
+
+            4'd3: if (!boot_req) begin
+              aux_we    <= 1'b0;
+              boot_addr <= it_base + {27'd0, cur_lvl[4:2], 2'b00} + 32'd4;
+              boot_req  <= 1'b1;
+            end else if (boot_ack) begin
+              boot_req  <= 1'b0;
+              vword     <= bus_rdata;
+              intr_step <= 4'd4;
+            end
+
+            // take_idx is latched HERE because step 5 rewrites vword, and
+            // top_bit is combinational from it.
+            4'd4: if (!have_bit) begin
+              pend_abort <= 1'b1;
+              intr_step  <= 4'd7;
+            end else begin
+              take_idx   <= {cur_lvl[1:0], top_bit};
+              cur_vec    <= {cur_lvl[4:2], cur_lvl[1:0], top_bit};
+              pend_abort <= 1'b0;
+              intr_step  <= 4'd5;
+            end
+
+            4'd5: if (!boot_req) begin
+              aux_we    <= 1'b1;
+              boot_addr <= it_base + {27'd0, cur_lvl[4:2], 2'b00} + 32'd4;
+              aux_wdata <= vword & ~(32'd1 << take_idx);
+              boot_req  <= 1'b1;
+            end else if (boot_ack) begin
+              boot_req  <= 1'b0;
+              aux_we    <= 1'b0;
+              vword     <= vword & ~(32'd1 << take_idx);
+              intr_step <= 4'd6;
+            end
+
+            // If that level has no vectors left, clear its summary bit too.
+            4'd6: intr_step <= (lvl_byte == 8'd0) ? 4'd7 : 4'd8;
+
+            4'd7: if (!boot_req) begin
+              aux_we    <= 1'b1;
+              boot_addr <= it_base;
+              aux_wdata <= pend_pri & ~(32'd1 << cur_lvl);
+              boot_req  <= 1'b1;
+            end else if (boot_ack) begin
+              boot_req <= 1'b0;
+              aux_we   <= 1'b0;
+              // A flagged level with no vector under it is a corrupt table.
+              // MAME logs, clears the level and gives up rather than taking
+              // anything; reproduced, because a generator can build this state.
+              if (pend_abort) ts <= T_FETCH;
+              else            intr_step <= 4'd8;
+            end
+
+            default: begin
+              intr_mode <= M_TAKE;
+              intr_step <= 4'd0;
+            end
+          endcase
+        endcase
 
         T_TRAP: begin
           trap   <= 1'b1;

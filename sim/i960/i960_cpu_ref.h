@@ -127,6 +127,142 @@ struct Cpu {
   void bxx(uint32_t o, uint32_t mask)   { if (AC & mask) { IP += disp24(o); IP &= ~3u; } }
   void bxx_s(uint32_t o, uint32_t mask) { if (AC & mask) { IP += disp13(o); IP &= ~3u; } }
 
+  // ------------------------------------------------------------------
+  // Interrupt controller. Transcribed from MAME i960.cpp: execute_set_input,
+  // check_immediate_irqs, check_pending_irqs and take_interrupt. Only the four
+  // external lines in "normal" mode are supported, which is the same subset
+  // MAME implements and the only one Sega and Namco wired.
+  //
+  // WHEN an interrupt is taken is the one place this does NOT follow MAME
+  // literally. MAME calls check_immediate_irqs() once per execute_run(), i.e.
+  // at a scheduler timeslice boundary, which is an emulator artifact -- silicon
+  // takes it at the next instruction boundary. Both this reference and the
+  // module check before every instruction. The rule has to be identical on both
+  // sides or lockstep diverges on timing alone, and "before every instruction"
+  // is the one that describes hardware.
+  // ------------------------------------------------------------------
+  uint32_t irq_line_state = 0;      // one bit per line, for edge detection
+  bool     imm_irq   = false;       // the single immediate slot MAME models
+  uint32_t imm_vector = 0, imm_pri = 0;
+  uint64_t intr_taken = 0, intr_queued = 0, intr_dequeued = 0;
+
+  // execute_set_input. EDGE triggered: MAME returns immediately if the line is
+  // already in the requested state, and does nothing at all on a falling edge.
+  void set_irq(int line, bool state) {
+    const bool prev = ((irq_line_state >> line) & 1u) != 0;
+    if (prev == state) return;
+    irq_line_state = (irq_line_state & ~(1u << line)) | (uint32_t(state) << line);
+    if (!state) return;
+
+    // The vector is one byte of ICR per line, which is why synmov had to work
+    // before any of this could: nothing else writes ICR.
+    const uint32_t vector = (ICR >> (line * 8)) & 0xffu;
+    if (!vector) return;            // IAC mode; MAME logs and gives up, so do we
+    const uint32_t priority = vector / 8;
+    const uint32_t cpu_pri  = (PC >> 16) & 0x1fu;
+
+    if (((cpu_pri < priority) || (priority == 31)) && !imm_irq) {
+      imm_irq = true; imm_vector = vector; imm_pri = priority;
+    } else {
+      // Queue it in the interrupt table. Two bitfields: a priority summary at
+      // int_tab, and one bit per vector in the word for that priority group.
+      ++intr_queued;
+      const uint32_t int_tab = rd(PRCB + 20);
+      wr(int_tab, rd(int_tab) | (1u << priority));
+      const uint32_t word    = ((vector / 32) * 4) + 4;
+      const uint32_t wordofs = vector % 32;
+      wr(int_tab + word, rd(int_tab + word) | (1u << wordofs));
+    }
+  }
+
+  void take_interrupt(uint32_t vector, uint32_t lvl) {
+    ++intr_taken;
+    const uint32_t int_tab = rd(PRCB + 20);
+    const uint32_t int_SP  = rd(PRCB + 24);
+    const uint32_t IRQV    = rd(int_tab + 36 + (vector - 8) * 4);
+
+    // A nested interrupt keeps the current SP; a first one switches to the
+    // dedicated interrupt stack. PC bit 13 is the interrupt flag.
+    uint32_t SP = (PC & 0x2000u) ? rf.r[Regs::SP] : int_SP;
+    SP = (SP + 63) & ~63u;
+    SP += 64;                       // MAME's padding against a save underflow
+
+    // RIP is the instruction we will resume at, and we are AT a boundary, so
+    // it is IP -- not ip_next, which does not exist here.
+    rf.call(IP, IRQV, 7, SP);
+
+    wr(rf.r[Regs::FP] - 16, PC);
+    wr(rf.r[Regs::FP] - 12, AC);
+    wr(rf.r[Regs::FP] -  8, vector - 8);
+
+    PC &= ~0x1f00u;                 // priority, state, trace-fault, trace enable
+    PC |= (lvl << 16);
+    PC |= 0x2002u;                  // supervisor mode and the interrupt flag
+    IP  = IRQV;
+  }
+
+  // Called by the HARNESS, not by step(). Taking an interrupt is its own
+  // comparable event: the module reaches a settled boundary with a new IP and
+  // no instruction retired, so folding this into step() -- which would then
+  // also execute the handler's first instruction -- puts the two sides one
+  // instruction apart. Keeping it separate also buys a comparison point
+  // immediately after the entry, which is the only place take_interrupt's three
+  // saves and its PC update can be checked before something else overwrites
+  // them.
+  void check_immediate_irqs() {
+    const uint32_t cpu_pri = (PC >> 16) & 0x1fu;
+    if (imm_irq && ((cpu_pri < imm_pri) || (imm_pri == 31))) {
+      take_interrupt(imm_vector, imm_pri);
+      imm_irq = false;
+    }
+  }
+
+  // Dequeue. Called after a type-7 ret, when the priority the interrupt ran at
+  // has just been given up. Scans priorities high to low and takes the first
+  // vector found at the first eligible level.
+  void check_pending_irqs() {
+    static const uint32_t lvlmask[4] = { 0x000000ffu, 0x0000ff00u,
+                                         0x00ff0000u, 0xff000000u };
+    const uint32_t int_tab = rd(PRCB + 20);
+    const uint32_t cpu_pri = (PC >> 16) & 0x1fu;
+    uint32_t pending_pri = rd(int_tab);
+
+    for (int lvl = 31; lvl >= 0; --lvl) {
+      if (!(pending_pri & (1u << lvl))) continue;
+      if (!((cpu_pri < uint32_t(lvl)) || (lvl == 31))) continue;
+
+      const uint32_t word  = uint32_t((lvl / 4) * 4) + 4;
+      const int      wordl = (lvl % 4) * 8;
+      const int      wordh = wordl + 8 - 1;
+      uint32_t vword = rd(int_tab + word);
+
+      int take = -1;
+      for (int irq = wordh; irq >= wordl; --irq) {
+        if (vword & (1u << irq)) {
+          vword &= ~(1u << irq);
+          wr(int_tab + word, vword);
+          take = irq;
+          break;
+        }
+      }
+      // A level flagged with no vector under it is a corrupt table. MAME logs
+      // and clears the level to recover; the behaviour is reproduced rather
+      // than tidied, because a generator CAN build this state.
+      if (take == -1) {
+        pending_pri &= ~(1u << lvl);
+        wr(int_tab, pending_pri);
+        return;
+      }
+      if (!(vword & lvlmask[lvl % 4])) {
+        pending_pri &= ~(1u << lvl);
+        wr(int_tab, pending_pri);
+      }
+      ++intr_dequeued;
+      take_interrupt(uint32_t(take + ((lvl / 4) * 32)), uint32_t(lvl));
+      return;
+    }
+  }
+
   void step() {
     if (trapped) return;
     fp_denorm_operand = false;
@@ -155,22 +291,31 @@ struct Cpu {
             // Dispatch on PFP[2:0], which this reference and the module both
             // ignored -- so they agreed and lockstep stayed silent (R14).
             uint32_t pc_new = PC, ac_new = AC;
+            // Sampled BEFORE ret_typed, which calls do_ret_0 and reloads all
+            // sixteen locals -- PFP included. Reading the type afterwards reads
+            // the CALLER's PFP, so every type-7 return would have looked like
+            // whatever the frame below it was.
+            const bool type7 = (rf.r[Regs::PFP] & 7u) == 7u;
             const uint32_t nip = rf.ret_typed(pc_new, ac_new);
-            // Types 1-6 AND 7 both trap for now: nothing in this core can create
-            // a type-7 frame until interrupts exist, and trapping means the day
-            // they do arrive it announces itself rather than half-working. The
-            // module raises ret_unsupported on the same condition.
             // 1-6 trap, matching MAME's fatalerror and the module's
-            // ret_unsupported. Type 7 is the interrupt return and is legal: it
-            // performs the same do_ret_0 as type 0. The PC and AC restore that
-            // MAME also does is deliberately NOT applied here, because the
-            // module cannot do it yet and a reference that restores AC while the
-            // module does not would diverge on the one register lockstep checks.
-            // Both sides are therefore incomplete in the same way, on purpose,
-            // and it lands with the interrupt work.
+            // ret_unsupported. Type 7 is the interrupt return: do_ret_0 as for
+            // type 0, and then PC and AC come back from the frame. ret_typed
+            // reads them BEFORE the reload, because do_ret_0 moves FP.
+            //
+            // The PC/AC restore used to be deliberately omitted here on the
+            // grounds that the module could not do it either -- two sides
+            // incomplete in the same way, which is R14 exactly. It is now
+            // applied on both, and the type-7 frame is reachable because
+            // take_interrupt builds one.
             if (rf.ret_bad) { trapped = true; trap_op = d.op; break; }
-            (void)pc_new; (void)ac_new;
             IP = nip;
+            if (type7) {
+              AC = ac_new;
+              PC = pc_new;
+              // Giving up the priority this interrupt ran at can release a
+              // queued one. MAME checks here and the check can retarget IP.
+              check_pending_irqs();
+            }
             break;
           }
           case 0x0b: rf.r[0x1e] = ip_next; IP = ip_next + disp24(insn); break; // bal

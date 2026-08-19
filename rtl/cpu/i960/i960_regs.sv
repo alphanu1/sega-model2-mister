@@ -121,6 +121,16 @@ module i960_regs #(
   output logic [31:0] next_ip,       // IP the sequencer should take
   output logic        next_ip_valid,
 
+  // Taps the interrupt path needs. take_interrupt saves PC, AC and the vector
+  // at FP-16/-12/-8 AFTER the type-7 call has moved FP, a type-7 ret reads them
+  // back from FP BEFORE do_ret_0 moves it again, and the return type itself is
+  // PFP[2:0]. Dedicated outputs rather than borrowing ra1/ra2, which decode
+  // owns -- sharing them would make the interrupt sequence depend on what the
+  // interrupted instruction happened to be reading.
+  output logic [31:0] cur_fp,
+  output logic [31:0] cur_sp,
+  output logic  [2:0] cur_pfp_type,
+
   // ------- external memory, request/ack. Ack is a level, not a pulse:
   // docs/mister-integration.md — a pulsed ack to a ce-gated requester is
   // missed and the requester waits forever. That fault bit Model 1 twice.
@@ -282,6 +292,10 @@ module i960_regs #(
 
   logic [31:0] fp_masked;
   assign fp_masked = glb[G_FP] & 32'hffff_ffc0;   // FP & ~0x3f
+
+  assign cur_fp       = glb[G_FP];
+  assign cur_sp       = loc[R_SP];
+  assign cur_pfp_type = loc[R_PFP][2:0];
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin

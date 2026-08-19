@@ -1773,3 +1773,107 @@ operands word-aligned. MAME splits an unaligned `read_dword` across two words,
 but that is its memory system rather than the silicon it models, so both sides
 state the alignment rule independently and **nothing is claimed about unaligned
 `synmov`**.
+
+---
+
+**R21 — MAME's take_interrupt does not clear the priority field, and that is
+reproduced deliberately.** `i960.cpp` take_interrupt ends:
+
+```c
+m_PC &= ~0x1f00;    // clear priority, state, trace-fault pending, and trace enable
+m_PC |= (lvl<<16);  // set CPU level to current IRQ level
+m_PC |= 0x2002;     // set supervisor mode & interrupt flag
+```
+
+The CPU priority is `(m_PC >> 16) & 0x1f` — bits 16 to 20. `0x1f00` is bits 8 to
+12. **The mask does not touch the field the comment names**, so the new level is
+OR-ed into a field that was never cleared and the priority accumulates bits
+across nested interrupts.
+
+*This is reproduced exactly, in both the module and the reference.* Rule 1 of the
+project's order of authority is that the reference source wins, and the games
+were validated against this behaviour — Daytona's handlers ran on a CPU that
+accumulated priority bits, and any code that depends on the resulting eligibility
+pattern depends on this. Substituting `0x1f0000` because it looks like what was
+meant is a silent behavioural change to the one register that decides which
+interrupts are allowed to fire.
+
+**It is mutation-tested in that direction**: changing the mask to `0x1f0000`
+fails lockstep. So the quirk is not merely reproduced, it is *observed* — if a
+future change "corrects" it, the suite says so.
+
+*What is not established.* Whether silicon behaves this way. Nothing here
+distinguishes "the i960 does this" from "MAME has a typo that the games happen
+not to expose". If a real board ever contradicts it, this entry is where to
+start, and the change is one mask in two files.
+
+---
+
+**R22 — two whole classes of instrument fault, found by making interrupts work.**
+Neither was a design error; both were checks that could not see what they claimed
+to check, and both had already produced wrong diagnoses.
+
+*Class 1: an accessor that does not align, and R20's fix that did not reach it.*
+R20 traced a synmov divergence to `Regs::read`/`Regs::write` — which look up
+`mem[a]` raw where the CPU reference's `rd()`/`wr()` mask with `~3`. R20 fixed
+**the call site**: synmov was switched to `rd`/`wr`. The accessor was left as it
+was, and the second instance surfaced immediately in the interrupt work:
+
+```
+MISMATCH retire 94  PC   got=00000100 want=ffffffff  (insn 0a000000)
+```
+
+A type-7 `ret` reads the saved PC from `FP-16`. The generator can write `r31`
+as an ordinary register, so `FP` was `0x1f`; `FP-16` is `0x0f`; the module's bus
+drops the low two bits and fetched `mem[0x0c]`, while `Regs::read` missed the map
+and returned the unwritten sentinel. **The same fault, the same symptom, the same
+misreading available.** The accessors now align, which is where R20 should have
+fixed it. *Fix the accessor, not the caller.*
+
+*Class 2: "the IP changed" is not a retire detector.* The lockstep harness closed
+each comparison window on the IP moving. That is sound only while every
+instruction moves the IP by a fixed amount and nothing else moves it. Interrupts
+break it three separate ways, and each one presented as a different bug in
+`take_interrupt`:
+
+| what happened | how it looked |
+|---|---|
+| an interrupt moves IP without retiring anything | reference one instruction behind; RIP 4 too high |
+| a handler address equals the IP the window opened at | window ran on into the handler — two instructions against one |
+| a type-7 frame makes `ret` return to its own address | the `ret` executed twice, desynchronising the register-cache depth |
+
+The third is the worst: it surfaced **fifteen retires later** as a frame reloaded
+from memory while the reference reloaded from cache, with nothing pointing at the
+`ret`. The module now exports an instruction-acceptance counter and the window
+closes on that — one unambiguous event, one instruction, no inference.
+
+*Also found while fixing these, none of which was failing anything:*
+
+- **`ICR` was never compared** (R20), and **`PC` was never compared at all.** PC
+  is the register that says whether an interrupt entry and a type-7 return
+  actually happened; the entry rewrites its priority field and flags and the
+  return restores the whole word. Both are compared now.
+- **The interrupt lines were not cleared before reset.** `irq_prev` resets to 0
+  while the pin still held the previous program's value, so releasing reset
+  captured a rising edge the reference never saw and the module took an interrupt
+  at retire 0 of a program the reference knew nothing about.
+- **Edge ordering.** The module scans `irq_edge` from bit 0 up; the harness fed
+  the reference in the order the generator drew the lines. Whenever the second
+  line drawn was the lower one the two disagreed about which interrupt got the
+  single immediate slot.
+- **Edge timing.** The harness told the reference about an edge *before* the
+  instruction; the module acts on it at the boundary *after*. Identical for every
+  instruction except the one that matters — `synmov` to `0xff000004` IS the write
+  to ICR, so a line whose vector was 0 (IAC mode, dropped) before it becomes a
+  live priority-31 vector after it.
+
+*Coverage, and a mutation that survived.* At the default program length a whole
+run produced **four** dequeues, and a mutation reversing the priority scan in
+`check_pending_irqs` **passed**. The path ran; it never ran with enough levels
+pending for the direction to matter. `make test_i960_top_irq` is a separate
+invocation at `+steps=400` with `+strictcov`, which turns zero coverage on any
+interrupt path into a failure. It reaches 88 dequeues and kills that mutation.
+
+It is a separate invocation on purpose: `steps` is the program length, so raising
+it on the default run would change the working set, the I-cache hit rate and
+therefore **the measured CPI that R16 rests on**.

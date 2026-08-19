@@ -53,14 +53,25 @@ uint64_t state_cycles[32] = {0};
 const char *STATE_NAME[32] = {
   "T_FETCH","T_FETCH_W","T_FETCH2","T_FETCH2_W","T_DECODE","T_EXEC",
   "T_MEM","T_MEM_W","T_MULDIV","T_MULTI","T_PAIR","T_FP","T_WB","T_FRAME",
-  "T_TRAP","T_BOOT","T_SYNMOV_RD","T_SYNMOV_WR",
-  "?","?","?","?","?","?","?","?","?","?","?","?","?","?"
+  "T_TRAP","T_BOOT","T_SYNMOV_RD","T_SYNMOV_WR","T_INTR","T_RET7",
+  "?","?","?","?","?","?","?","?","?","?","?","?"
 };
 
 uint64_t fetch_enter = 0, fetch_hit = 0, fetch_stall = 0, ic_fill_cyc = 0;
 // Run-wide synmov coverage. `ref` is reconstructed per program, so its own
 // counters have to be drained into these before it is replaced.
 uint64_t syn_total = 0, syn_icr_total = 0;
+uint32_t irq_state = 0;
+bool     irq_enable = true;
+bool     itrace     = false;
+bool     strictcov  = false;
+int      pend_line = 0;
+bool     pend_state = false;
+bool     pend_valid = false;
+int      pend2_line = 0;
+bool     pend2_state = false;
+bool     pend2_valid = false;
+uint64_t irq_edges = 0, intr_total = 0, queued_total = 0, dequeued_total = 0;
 
 bool bus_probe = false;
 int pf_bad = 0;
@@ -216,6 +227,14 @@ uint32_t dreg(int i) {
 }
 uint32_t dac() { return dut->rootp->i960_top__DOT__ac; }
 uint32_t dicr() { return dut->rootp->i960_top__DOT__icr_reg; }
+uint32_t dpc()  { return dut->rootp->i960_top__DOT__pc_reg; }
+// A settled instruction boundary: in T_FETCH with no interrupt work left to
+// do. "The IP moved" is no longer sufficient on its own -- taking an interrupt
+// moves it without retiring anything, and a type-7 ret moves it and then keeps
+// running the dequeue.
+bool at_boundary() {
+  return (dut->rootp->i960_top__DOT__ts & 31) == 0 && !dut->dbg_intr_work;
+}
 
 // fp0-fp3. Comparing these closes a real gap: an instruction whose only effect
 // is an FP-register write was previously executed by both sides and checked by
@@ -361,6 +380,19 @@ bool compare(uint64_t n) {
   // that dropped the write entirely would have looked identical to one that
   // performed it. icr_writes below is printed so a run that never took the
   // path cannot report as coverage.
+  // PC. take_interrupt rewrites the priority field and sets the supervisor and
+  // interrupt flags, and a type-7 ret restores the whole word from the frame --
+  // so PC is the register that says whether the entry and the return actually
+  // happened, and it was not compared at all before interrupts existed.
+  ++checks;
+  if (dpc() != ref.PC) {
+    ok = false;
+    if (fails < MAX_REPORT)
+      std::printf("  MISMATCH retire %llu  PC   got=%08x want=%08x  (insn %08x)\n",
+                  (unsigned long long)n, dpc(), ref.PC, exec_insn);
+    ++fails;
+  }
+
   ++checks;
   if (dicr() != ref.ICR) {
     ok = false;
@@ -396,6 +428,12 @@ int main(int argc, char **argv) {
   // change: with the initial IP set to PROG_BASE on both sides, every existing
   // test must still pass before reset is allowed to depend on any of it.
   const uint32_t PROG_BASE = 0x100;
+  // Clear of the program (<0x100), the data window (0x800-0xe00) and the
+  // resident frame at 0x2000. The interrupt stack is above all of them because
+  // take_interrupt rounds it up and adds 64 before any frame lands on it.
+  const uint32_t PRCB_BASE = 0x1000;
+  const uint32_t INT_TAB   = 0x1400;
+  const uint32_t INT_STACK = 0x3000;
   uint64_t progs = 200, steps = 60, seed = 1, smc_stops = 0, oob_stops = 0;
   bool directed = false, dtrace = false;
   for (int i = 1; i < argc; ++i) {
@@ -406,6 +444,9 @@ int main(int argc, char **argv) {
     if (!std::strcmp (argv[i], "+directed"))  directed  = true;
     if (!std::strcmp (argv[i], "+dtrace"))    dtrace    = true;
     if (!std::strcmp (argv[i], "+mix=daytona")) mix_daytona = true;
+    if (!std::strcmp (argv[i], "+noirq"))      irq_enable  = false;
+    if (!std::strcmp (argv[i], "+itrace"))     itrace      = true;
+    if (!std::strcmp (argv[i], "+strictcov"))  strictcov   = true;
     if (!std::strncmp(argv[i], "+seed=", 6))   seed  = std::strtoull(argv[i]+6, nullptr, 10);
     // Program length is the WORKING SET, and the working set is what decides
     // whether cache size matters. At the 60-instruction default the footprint
@@ -427,6 +468,10 @@ int main(int argc, char **argv) {
 
   for (uint64_t p = 0; p < progs && fails == 0; ++p) {
     syn_total += ref.syn_count; syn_icr_total += ref.syn_icr_count;
+  intr_total += ref.intr_taken; queued_total += ref.intr_queued;
+  dequeued_total += ref.intr_dequeued;
+    intr_total += ref.intr_taken; queued_total += ref.intr_queued;
+    dequeued_total += ref.intr_dequeued;
     mem.clear(); ref = i960ref::Cpu(); dut_stores.clear();
 
     // Generate a straight-line program of REG and COBR forms. Work RAM at
@@ -711,9 +756,27 @@ int main(int argc, char **argv) {
     }
     // Boot record, as the real part expects it.
     mem[0x0] = 0xdead5a70;                  // SAT   (value is arbitrary here)
-    mem[0x4] = 0xdeadfbcb;                  // PRCB  (likewise)
+    mem[0x4] = PRCB_BASE;                   // PRCB  -- REAL now, see below
     mem[0x8] = 0x00000000;
     mem[0xc] = PROG_BASE;                   // initial IP
+
+    // The interrupt path dereferences PRCB, so PRCB can no longer be the
+    // arbitrary 0xdeadfbcb it was while interrupts did not exist.
+    //
+    //   PRCB+20 -> interrupt table      PRCB+24 -> interrupt stack
+    //
+    // The table is a pending-priority summary word, eight vector words, and
+    // then one handler address per vector at +36+(v-8)*4. Every handler points
+    // at PROG_BASE: the vector comes from an ICR byte, synmov writes ICR from
+    // whatever a random register addressed, so ANY of the 256 vectors can come
+    // up and every one of them has to land somewhere executable or the run just
+    // stops. Pointing them all at the program start keeps the run alive without
+    // making any vector special.
+    mem[PRCB_BASE + 20] = INT_TAB;
+    mem[PRCB_BASE + 24] = INT_STACK;
+    mem[INT_TAB] = 0;                       // no priorities pending at start
+    for (uint32_t w = 0; w < 8; ++w) mem[INT_TAB + 4 + w * 4] = 0;
+    for (uint32_t v = 8; v < 256; ++v) mem[INT_TAB + 36 + (v - 8) * 4] = PROG_BASE;
     for (size_t k = 0; k < prog.size(); ++k) mem[PROG_BASE + uint32_t(k*4)] = prog[k];
     // A resident frame at 0x2000, self-consistent so that returning below depth
     // zero lands somewhere real. Both the module and the reference reload from
@@ -737,6 +800,13 @@ int main(int argc, char **argv) {
     ref.rf.mem = mem;
 
     // Reset, then seed both register files identically.
+    // The interrupt lines go low BEFORE reset, not in the seeding block below.
+    // irq_prev resets to 0 while the pin still holds the PREVIOUS program's
+    // value, so releasing reset with it high captures a rising edge that the
+    // reference never saw -- the module then took an interrupt at retire 0 of a
+    // program the reference knew nothing about. State leaking across programs,
+    // and it only appeared once a program actually left a line asserted.
+    irq_state = 0; dut->irq = 0; pend_valid = false; pend2_valid = false;
     dut->rst_n = 0; dut->bus_ack = 0;
     for (int i = 0; i < 4; i++) tick();
     // NO LONGER POKED. The module now walks the boot record itself in T_BOOT --
@@ -757,9 +827,9 @@ int main(int argc, char **argv) {
         const uint32_t sat  = dut->rootp->i960_top__DOT__sat_reg;
         const uint32_t prcb = dut->rootp->i960_top__DOT__prcb_reg;
         std::printf("  [boot] SAT=%08x PRCB=%08x IP=%08x  %s\n", sat, prcb, dip(),
-                    (sat == 0xdead5a70u && prcb == 0xdeadfbcbu && dip() == PROG_BASE)
+                    (sat == 0xdead5a70u && prcb == PRCB_BASE && dip() == PROG_BASE)
                       ? "loaded from mem[0]/mem[4]/mem[12]" : "BOOT DID NOT RUN");
-        if (!(sat == 0xdead5a70u && prcb == 0xdeadfbcbu)) ++fails;
+        if (!(sat == 0xdead5a70u && prcb == PRCB_BASE)) ++fails;
       }
     }
     for (int i = 0; i < 32; i++) {
@@ -791,6 +861,67 @@ int main(int argc, char **argv) {
     dut->rootp->i960_top__DOT__u_regs__DOT__loc[1]  = 0x2040;
     dut->rootp->i960_top__DOT__u_regs__DOT__loc[0]  = 0x2000;
     ref.AC = 0; ref.IP = PROG_BASE;
+    // SAT and PRCB. The MODULE walks the boot record itself in T_BOOT; the
+    // reference has no boot sequence, so it has to be handed the same values or
+    // its PRCB stays 0 and every interrupt-table lookup dereferences address 20
+    // -- unwritten memory, 0xFFFFFFFF, and take_interrupt then writes the saved
+    // PC somewhere that is not the frame. The symptom is a memory divergence at
+    // the frame address with the reference showing "unwritten", which reads as
+    // "the reference did not take the interrupt" and is not that at all.
+    // Asserted below against what the module actually loaded, so the two cannot
+    // drift apart silently.
+    ref.SAT  = 0xdead5a70u;
+    ref.PRCB = PRCB_BASE;
+
+    // PC is SEEDED, not left at reset. MAME resets it to 0x001f2002 -- priority
+    // 31 -- and at priority 31 the eligibility test ((cpu_pri < priority) ||
+    // (priority == 31)) admits ONLY priority-31 interrupts. Every other vector
+    // queues and take_interrupt is never reached, so a run left at the reset
+    // value exercises one path out of three and looks like coverage. Real code
+    // lowers the priority with modpc, which this core does not have yet, so the
+    // harness does it directly on both sides.
+    //
+    // Bit 13 is the interrupt flag and picks which stack take_interrupt uses --
+    // the dedicated one, or the running SP for a nested interrupt. Randomised
+    // so both arms are reached.
+    {
+      const uint32_t pri = uint32_t(rng() % 32);
+      const uint32_t iflag = (rng() & 1) ? 0x2000u : 0u;
+      const uint32_t pcv = (0x001f2002u & ~0x001f2000u) | (pri << 16) | iflag;
+      ref.PC = pcv;
+      dut->rootp->i960_top__DOT__pc_reg = pcv;
+    }
+    // ICR is SEEDED too, for the same reason PC is. It resets to 0xff000000 and
+    // synmov overwhelmingly writes it from unwritten memory, so the vector was
+    // 0xff nearly every time -- priority 31, which the eligibility test always
+    // admits. Every interrupt therefore went down the immediate path and the
+    // queue and the dequeue were never reached at all, while the suite reported
+    // green. Random bytes spread the priorities:
+    //
+    //   byte 0        the line is in IAC mode and MAME drops it
+    //   byte 1..7     priority 0 -- never eligible, so it queues and stays
+    //   byte 8..247   priority 1..30 -- eligible only below the CPU priority
+    //   byte 248..255 priority 31 -- always eligible
+    {
+      const uint32_t icr = uint32_t(rng() & 0xffffffffu);
+      ref.ICR = icr;
+      dut->rootp->i960_top__DOT__icr_reg = icr;
+    }
+    // Advance until instruction 0 IS IN FLIGHT before the first window opens.
+    // Every later window inherits an in-flight instruction from the extra
+    // tick() at the end of the one before it; window 0 had none, so the module
+    // sat at a settled boundary and took a pending interrupt BEFORE retiring
+    // anything -- the one window whose order was "take, then execute" while the
+    // reference did "execute, then take". RIP came out 4 low and the IPs were
+    // swapped. This makes all windows the same shape rather than teaching the
+    // comparison about a special case.
+    //
+    // A single tick was not enough: the prefetch is empty after boot, so the
+    // first fetch misses and one tick leaves the module in T_FETCH_W with
+    // nothing accepted. Then window 0 ended at instruction 0's ACCEPTANCE
+    // rather than after it executed, and the module read one instruction
+    // behind the reference. Wait for the acceptance itself.
+    for (int g = 0; g < 200 && dut->dbg_acc_cnt == 0; ++g) tick();
     checking = true; ++gate_arms;
 
   // Self-test of the FP-register plumbing, once. Write a known value into the
@@ -815,6 +946,46 @@ int main(int argc, char **argv) {
     uint64_t calls_prev = rf_call_cnt, rets_prev = rf_ret_cnt;
     for (uint64_t r = 0; r < budget && fails == 0; ++r) {
       const uint32_t ip_before = dip();
+      // Drive the interrupt lines. Changed ONLY here -- at an instruction
+      // boundary, with the reference told at the same point. The two sides
+      // agree on when an edge happened only if it is presented at the same
+      // boundary; moving a line mid-instruction would have the module capture
+      // it a boundary later than the reference, and the divergence would look
+      // like a take_interrupt bug.
+      if (irq_enable && (rng() % 24) == 0) {
+        const int  line = int(rng() % 4);
+        const bool st   = !((irq_state >> line) & 1u);
+        irq_state = (irq_state & ~(1u << line)) | (uint32_t(st) << line);
+        dut->irq  = irq_state;
+        // The reference is told AFTER ref.step(), not here. The module sees the
+        // pin change during the instruction and acts on it at the boundary that
+        // FOLLOWS -- so the vector it looks up in ICR is the post-instruction
+        // one. Telling the reference now evaluates the edge against the
+        // pre-instruction ICR, which is the same value for every instruction
+        // except the one that matters: synmov to 0xff000004 IS the write to
+        // ICR, and a line whose vector was 0 (IAC mode, dropped) before it
+        // becomes a live priority-31 vector after it. The module took that
+        // interrupt and the reference had dropped it.
+        pend_line = line; pend_state = st; pend_valid = true;
+        ++irq_edges;
+        // Sometimes move a SECOND line in the same window. The immediate slot
+        // holds one interrupt; a second edge arriving while it is occupied is
+        // the other way into the queue, and with one edge per window it was
+        // unreachable. Lines are processed in ASCENDING order on both sides --
+        // the module scans irq_edge low bit first and the reference is told in
+        // the same order, because MAME's order is whatever the driving machine
+        // happens to call execute_set_input in and lockstep needs it fixed.
+        if ((rng() % 3) == 0) {
+          const int  l2 = int(rng() % 4);
+          if (l2 != line) {
+            const bool s2 = !((irq_state >> l2) & 1u);
+            irq_state = (irq_state & ~(1u << l2)) | (uint32_t(s2) << l2);
+            dut->irq  = irq_state;
+            pend2_line = l2; pend2_state = s2; pend2_valid = true;
+            ++irq_edges;
+          }
+        }
+      }
       int guard = 0;
       // Probe every cycle of an FP op with an fp0-fp3 destination. There are
       // only a handful in the whole run, so this is cheap, and it answers which
@@ -827,8 +998,39 @@ int main(int argc, char **argv) {
                          (iw_now & 0x2000);
       if (probe) std::printf("[probe] insn %08x op2=%x IP %08x\n",
                              iw_now, (iw_now >> 7) & 0xf, ip_before);
-      // advance until the sequencer has moved on to the next instruction
-      while (guard++ < 400 && dip() == ip_before && !dut->trap) {
+      // Advance until the sequencer has moved on AND settled at a boundary.
+      // The second half is new and is not cosmetic: taking an interrupt moves
+      // the IP without retiring anything, and a type-7 ret moves it and then
+      // runs the dequeue, so "the IP changed" now exits mid-sequence and
+      // compares against a reference that has not done the same work.
+      const uint32_t intr_before = dut->dbg_intr_cnt;
+      const uint64_t ref_taken_before = ref.intr_taken;
+      // ONE WINDOW = ONE INSTRUCTION, measured by the module's acceptance
+      // counter rather than inferred from the IP. "The IP changed" failed three
+      // separate ways once interrupts existed, each looking like a different
+      // bug in take_interrupt:
+      //
+      //   - taking an interrupt moves the IP without retiring anything, so the
+      //     window closed with the reference one instruction behind;
+      //   - every vector here points at PROG_BASE, so an interrupt taken in the
+      //     first window left the IP exactly where it started and the window
+      //     ran on into the handler -- two instructions against one;
+      //   - a type-7 frame makes `ret` return to its own address, so the IP
+      //     never moves and the `ret` executed twice, desynchronising the
+      //     register-cache depth. That one surfaced 15 retires later as a frame
+      //     reloaded from memory, pointing nowhere near the cause.
+      //
+      // The counter increments once per instruction latched. Waiting for the
+      // NEXT acceptance means instruction N has completed and any interrupt at
+      // the boundary after it has been taken.
+      // The acceptance IS the settle point, so there is no boundary term: the
+      // module cannot accept an instruction while it still has interrupt work,
+      // because the boundary check in T_FETCH runs ahead of the fetch. Adding
+      // `|| !at_boundary()` overshot by an instruction every window -- the
+      // module leaves T_FETCH in the same cycle it accepts, so the boundary
+      // test was false exactly when the count said stop.
+      const uint32_t acc_before = dut->dbg_acc_cnt;
+      while (guard++ < 400 && !dut->trap && dut->dbg_acc_cnt == acc_before) {
         if (probe)
           std::printf("        ts=%2d req=%d done=%d busy=%d fp_a=%016llx "
                       "sqrt=%d valid=%d dstlit=%d fpr2=%016llx\n",
@@ -845,11 +1047,16 @@ int main(int argc, char **argv) {
       }
       if (dut->trap) break;
       if (guard >= 400) { std::printf("STALL at IP %08x\n", ip_before); ++fails; break; }
-      // IP moving is not the same as the instruction having retired. `we` is
-      // registered in the execute state, so the write reaches the register file
-      // one edge AFTER the IP updates. Sampling on the IP change alone compares
-      // the architectural state one cycle early and reports a stale register.
-      tick();
+      // NO EXTRA TICK. It used to be needed because the window closed when the
+      // IP changed, which is the execute state's own edge -- `we` is registered
+      // there, so the register write had not landed yet and one more tick was
+      // required to see it.
+      //
+      // Closing on the ACCEPTANCE of the next instruction already includes that
+      // edge: the write and the accept both complete on the cycle after execute.
+      // Keeping the tick here executed the whole next instruction, because a
+      // simple op finishes in one T_EXEC cycle -- the module then read one
+      // instruction AHEAD of the reference.
       exec_ip = ref.IP; exec_insn = ref.rd(ref.IP);
       const uint64_t last_calls = calls_prev; calls_prev = rf_call_cnt;
       const uint64_t last_rets  = rets_prev;  rets_prev  = rf_ret_cnt;
@@ -868,7 +1075,80 @@ int main(int argc, char **argv) {
       { const uint32_t iw = exec_insn; const uint32_t o = iw>>24;
         if (o==0x78||o==0x68||o==0x6c||o==0x67) fpany++;
         if ((o==0x78||o==0x68||o==0x6c||o==0x67) && (iw&0x2000) && !(iw&0x00e00000)) fpwrites++; }
+      if (itrace && (dut->dbg_intr_cnt != intr_before))
+        std::printf("  [irq] r%llu DUT TOOK (cnt %u->%u)  dut: imm=%d vec=%02x "
+                    "pri=%u edge=%x prev=%x icr=%08x | ref: imm=%d vec=%02x pri=%u\n",
+                    (unsigned long long)r, intr_before, dut->dbg_intr_cnt,
+                    dut->rootp->i960_top__DOT__imm_irq,
+                    dut->rootp->i960_top__DOT__imm_vector,
+                    dut->rootp->i960_top__DOT__imm_pri,
+                    dut->rootp->i960_top__DOT__irq_edge,
+                    dut->rootp->i960_top__DOT__irq_prev,
+                    dicr(),
+                    ref.imm_irq ? 1 : 0, ref.imm_vector, ref.imm_pri);
+      // A window is "retire one instruction, THEN maybe take an interrupt at
+      // the boundary" -- never one or the other. The module always has an
+      // instruction in flight when the window opens, because the extra tick()
+      // above accepted it, and it can only take an interrupt from T_FETCH,
+      // which it reaches after that instruction completes.
+      //
+      // The first version branched: take_interrupt OR step, on the theory that
+      // an interrupt entry retires nothing. It retires nothing itself -- but
+      // the instruction already in flight retires anyway, so the reference sat
+      // one instruction behind and the module's RIP came out 4 too high. That
+      // read as a call_ip bug in take_interrupt and is not one.
+      //
+      // check_immediate_irqs is called unconditionally and is self-gating: the
+      // window only ends at a SETTLED boundary, so if it would take something
+      // here, the module would not have settled either.
       ref.step();
+      // Edge processing, at the boundary AFTER the instruction -- see above.
+      if (pend_valid) {
+        const bool     im_before = ref.imm_irq;
+        const uint64_t q_before  = ref.intr_queued;
+        // ASCENDING LINE ORDER, not the order the generator picked them. The
+        // module scans irq_edge from bit 0 up and processes the lowest pending
+        // line first; feeding the reference in pick order puts the two sides in
+        // different orders whenever the second line drawn is the lower one, and
+        // order decides which of the two gets the single immediate slot.
+        if (pend2_valid && pend2_line < pend_line) {
+          ref.set_irq(pend2_line, pend2_state);
+          ref.set_irq(pend_line,  pend_state);
+        } else {
+          ref.set_irq(pend_line, pend_state);
+          if (pend2_valid) ref.set_irq(pend2_line, pend2_state);
+        }
+        if (itrace)
+          std::printf("  [irq] r%llu line=%d->%d  ICR ref=%08x dut=%08x  "
+                      "PC ref=%08x dut=%08x  ref: %s\n",
+                      (unsigned long long)r, pend_line, pend_state ? 1 : 0,
+                      ref.ICR, dicr(), ref.PC, dpc(),
+                      (ref.imm_irq && !im_before) ? "latched immediate"
+                        : (ref.intr_queued != q_before) ? "queued"
+                        : "dropped/no-change");
+        pend_valid = false;
+      }
+      pend2_valid = false;
+      ref.check_immediate_irqs();
+      // Compare the TAKE COUNT every window. take_interrupt performs a call, so
+      // one side taking an interrupt the other did not desynchronises the
+      // register-cache depth -- and that surfaces many retires later as a `ret`
+      // reloading from memory while the other side reloads from cache, with
+      // nothing pointing back at the interrupt. Checked here, where it is one
+      // number.
+      {
+        const uint64_t dut_took = dut->dbg_intr_cnt - intr_before;
+        const uint64_t ref_took = (ref.intr_taken - ref_taken_before);
+        if (dut_took != ref_took) {
+          if (fails < MAX_REPORT)
+            std::printf("  INTRCOUNT retire %llu  dut took %llu, ref took %llu"
+                        "  (insn %08x IP %08x)  dut PC=%08x ref PC=%08x\n",
+                        (unsigned long long)r, (unsigned long long)dut_took,
+                        (unsigned long long)ref_took, exec_insn, exec_ip,
+                        dpc(), ref.PC);
+          ++fails; break;
+        }
+      }
       if (ref.trapped) { ++trapped_progs; break; }
       // A flushed subnormal does not just make one comparison wrong — it writes
       // a diverged value into a register, and every later retire in the program
@@ -986,8 +1266,35 @@ int main(int argc, char **argv) {
   syn_total += ref.syn_count; syn_icr_total += ref.syn_icr_count;
   std::printf("  synmov: %llu executed, %llu of them the ICR path\n",
               (unsigned long long)syn_total, (unsigned long long)syn_icr_total);
-  if (!syn_icr_total)
+  if (!syn_icr_total) {
     std::printf("  WARNING: the ICR path never executed -- synmov is UNCHECKED\n");
+    if (strictcov) ++fails;
+  }
+  std::printf("  interrupts: %llu edges, %llu taken, %llu queued, %llu dequeued\n",
+              (unsigned long long)irq_edges, (unsigned long long)intr_total,
+              (unsigned long long)queued_total, (unsigned long long)dequeued_total);
+  // +strictcov turns the coverage warnings into failures. The interrupt soak
+  // uses it, because at the default program length only about four dequeues
+  // happen in a whole run and a mutation that reverses the priority scan
+  // SURVIVED -- the path ran, but not often enough or with enough levels
+  // pending for the direction to matter. A warning nobody reads is not a check.
+  //
+  // The default run deliberately does NOT set it: `steps` is the program
+  // length, so raising it changes the working set, the I-cache hit rate and
+  // therefore the measured CPI that R16 rests on. The soak is a separate
+  // invocation for exactly that reason.
+  if (irq_enable && !intr_total) {
+    std::printf("  WARNING: no interrupt was ever taken -- take_interrupt is UNCHECKED\n");
+    if (strictcov) ++fails;
+  }
+  if (irq_enable && !dequeued_total) {
+    std::printf("  WARNING: nothing was ever dequeued -- check_pending_irqs is UNCHECKED\n");
+    if (strictcov) ++fails;
+  }
+  if (strictcov && irq_enable && queued_total == 0) {
+    std::printf("  WARNING: nothing was ever queued -- the queue path is UNCHECKED\n");
+    ++fails;
+  }
   std::printf("  %llu mismatches\n", (unsigned long long)fails);
   if (fails) { std::printf("FAIL\n"); return 1; }
   std::printf("PASS\n"); return 0;

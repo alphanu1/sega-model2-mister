@@ -150,3 +150,43 @@ Not yet built here, and the shape is known from Model 1:
 `dbg_ip` must name **the last instruction that ran**, assigned on dispatch — not
 published ahead of an interrupt check, which on Model 1 made the core appear to
 execute one instruction it had not.
+
+---
+
+## A collapsed trace that says IDENTICAL can be hiding a loop only one side has
+
+**From the Model 1 project, `9b3b70a`.** Worth having here before we build the
+i960 trace, because it is a blind spot in the exact instrument this document
+tells you to build.
+
+That core's v60 trace ran to 1.5 billion cycles and reported **IDENTICAL for
+25,685 instructions with zero resync sites** — while our side yielded the same
+25,685 collapsed instructions at both 700 M and 1.5 B and the reference reached
+5,193,988. "Identical" and "stuck" were both true at once.
+
+The reason: **both streams are collapsed to one instance per repeating period.**
+A loop present in one side and absent in the other leaves the PC *sequences*
+identical — the collapse erases exactly the difference. Collapsing is what makes
+a long trace comparable at all (see item 1 above), and it is also what hides
+this.
+
+**The counts file is what carries the difference.** Not the sequence — the
+iteration count per collapsed body:
+
+```
+ours  ff8ac3,ff8ac6,ff8ac8,ff8aca,ff8acd   counts 6..14
+MAME  same body                            count 20, consistently
+```
+
+which disassembles to a null-terminated string copy emitting 16-bit tile codes —
+the text routine, running on both sides and copying different strings.
+
+**So: emit a counts file alongside the collapsed trace, and diff it too.** A
+collapsed-sequence comparison alone cannot report this class at all, and it will
+tell you everything matches while the core is wedged. Note also that the counts
+file only reports loops collapsed on **both** sides, so it is a partial
+instrument as well — a loop only one side collapses needs the raw stream.
+
+This is the same shape as R15 and R20 in the design study: the instrument was
+believed and never checked, and it was capable of reporting agreement it had not
+established.

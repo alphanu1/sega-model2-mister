@@ -43,13 +43,28 @@ struct Regs {
   // Unwritten memory reads 0xFFFFFFFF, never zero. docs/mister-integration.md:
   // zero is a legal instruction, a legal tile number and a black palette entry,
   // so a core let loose on zeroed memory looks far healthier than it is.
+  // WORD ALIGNED, both of them. They were not, and it cost the same diagnosis
+  // twice (study R20, then R22): the CPU reference's own rd()/wr() mask with
+  // ~3 and these did not, so an unaligned address missed the map entirely and
+  // returned the unwritten sentinel instead of the word the module's bus would
+  // have fetched. R20 fixed the synmov CALL SITE rather than the accessor, and
+  // the second instance turned up in ret_typed -- which reads FP-16 with a raw
+  // FP, and a generator that can write r31 directly can make FP 0x1f.
+  //
+  // Aligning is right, not merely convenient: the frame pointer is maintained
+  // 64-byte aligned by call and ret, so an unaligned FP is outside the
+  // architecture and only reachable because the generator writes r31 as an
+  // ordinary register. The module's bus drops the low two bits, and so does
+  // every other memory access in this reference.
   uint32_t read(uint32_t a) {
+    a &= ~3u;
     auto it = mem.find(a);
     const uint32_t v = (it == mem.end()) ? 0xffffffffu : it->second;
     stream.push_back({a, v, false});
     return v;
   }
   void write(uint32_t a, uint32_t v) {
+    a &= ~3u;
     mem[a] = v;
     stream.push_back({a, v, true});
   }
