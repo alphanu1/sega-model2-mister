@@ -2736,6 +2736,50 @@ the controller's geometry is parameterised and its ports widened, the loader tak
 **`check_mra` earned its place immediately** — it caught me putting `--` back into
 an XML comment while restoring the MRA, which is the exact fault it was added for.
 
+### i960 interrupts, increment 4: synmov built, and a divergence LEFT OPEN
+
+**`synmov` is the only way `ICR` is ever written** (MAME `i960.cpp` 0x60.0), and
+`ICR` supplies the vector byte for each external IRQ line — so interrupts are
+unreachable without it. It is a memory-to-memory dword move with one magic
+destination:
+
+```
+t1 = src1 (destination address)      t2 = src2 (source address)
+if (t1 == 0xff000004) ICR = mem[t2]; else mem[t1] = mem[t2];
+AC[2:0] = 2
+```
+
+**Implemented in both the reference and the module.** The module uses the boot
+walk's bus master, generalised to an "aux master" with a write phase, because
+synmov's two addresses are *register values* rather than a decoded effective
+address — the LSU cannot supply that. Two states, `T_SYNMOV_RD` and
+`T_SYNMOV_WR`.
+
+**IT IS NOT VERIFIED, AND THE GENERATOR WEIGHT IS ZERO.** Turning it on is one
+number in `W_COVER`. With it enabled the lockstep fails:
+
+```
+MEMSTATE retire 22  6bc4a65c dut=deadfbcb ref=ffffffff  (insn 6004c006)
+```
+
+`insn 6004c006` decodes src1=6 (destination), src2=19 (source), op2=0. **The DUT
+read address 4** — it wrote `deadfbcb`, which is the PRCB word at `mem[4]` — where
+the reference read `r19`. So the module's source address is wrong, and 4 is one of
+the boot walk's own addresses, which points at `boot_addr` not being updated when
+the synmov dispatch believed it was. The reference wrote to its own `t1`
+elsewhere, which is why the check reports the DUT's address as absent rather than
+differing.
+
+**Next step, and do not skip it:** confirm what `rd1`/`rd2` actually hold during
+`T_EXEC` for a REG-format instruction before changing anything. `ra1`/`ra2` are
+driven a state ahead and revert on leaving `T_EXEC` — that is exactly what bit
+`callx`, where the call target had to be latched rather than presented live. This
+smells like the same fault in a new place. **Latching both addresses at dispatch,
+as `call_tgt` does, is the likely fix.**
+
+**Also still open for interrupts:** `take_interrupt` itself, the `irq[3:0]` input
+and immediate path, and type-7 `ret` restoring PC and AC.
+
 ### i960 interrupts, increment 3: the core boots itself from low memory
 
 **`T_BOOT` reads the startup record before the first instruction fetch**, the way

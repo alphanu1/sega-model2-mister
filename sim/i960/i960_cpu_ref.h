@@ -209,6 +209,26 @@ struct Cpu {
         const uint32_t s1 = d.src1_lit ? d.src1 : rf.r[d.src1];
         const uint32_t s2 = d.src2_lit ? d.src2 : rf.r[d.src2];
 
+        // ---- synmov: the only way ICR is ever written ----
+        //
+        // MAME i960.cpp 0x60.0: a memory-to-memory dword move, with ONE special
+        // destination. `synmov 0xff000004, src` loads the interrupt control
+        // register instead of writing memory, and ICR is what supplies the vector
+        // byte for each of the four external IRQ lines. Nothing else sets it, so
+        // interrupts are unreachable without this instruction.
+        //
+        //   t1 = destination address (src1)   t2 = source address (src2)
+        //   if (t1 == 0xff000004) ICR = mem[t2]; else mem[t1] = mem[t2];
+        //   AC[2:0] = 2
+        if (d.op == 0x60 && d.op2 == 0x0) {
+          const uint32_t t1 = s1, t2 = s2;
+          const uint32_t v  = rf.read(t2);
+          if (t1 == 0xff000004u) ICR = v; else rf.write(t1, v);
+          AC = (AC & ~7u) | 2u;
+          IP = ip_next;
+          break;
+        }
+
         // ---- single-precision FP, the subset wired into the CPU ----
         {
           const double fa = d.src1_lit ? fp_lit(d.src1) : u2f_t(rf.r[d.src1]);

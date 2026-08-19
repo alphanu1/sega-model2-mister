@@ -239,7 +239,7 @@ bool     probe_fp     = false;
 // to prevent -- the two differ by a large factor, and neither is wrong.
 enum { C_REGALU=0, C_BRANCH=1, C_FAULT=2, C_CMPBR=3, C_FP=4, C_BBX=5,
        C_EMUL=6, C_MOVX=7, C_MOV=8, C_MULDIV=9, C_LDST=10, C_LDA=11, C_TEST=12,
-       C_FRAME=13, C_N=14 };
+       C_FRAME=13, C_SYNMOV=14, C_N=15 };
 
 bool mix_daytona = false;
 
@@ -252,8 +252,11 @@ bool mix_daytona = false;
 // moved the measured CPI from 3.91 to 5.77, which is R9 exactly -- a CPI is a
 // property of the mix, and a mix that is not the game's produces a number that
 // describes nothing.
-const int W_COVER[C_N]  = { 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 4, 8 };
-const int W_DAYTON[C_N] = { 12, 4, 0, 6, 1, 2, 1, 3, 10, 1, 45, 8, 3, 4 };
+// synmov is generated at weight ZERO until the divergence below is resolved.
+// Turning it on is one number, and the failing case is recorded in HANDOFF.
+const int W_COVER[C_N]  = { 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 4, 8, 0 };
+// synmov measures 0.000% in the Daytona traces, so the measured mix gets none.
+const int W_DAYTON[C_N] = { 12, 4, 0, 6, 1, 2, 1, 3, 10, 1, 45, 8, 3, 4, 0 };
 
 int pick_class(std::mt19937_64 &rng) {
   const int *w = mix_daytona ? W_DAYTON : W_COVER;
@@ -480,6 +483,18 @@ int main(int argc, char **argv) {
         // program rather than landing in unwritten memory every time.
         const uint32_t d = 4u + 4u * (rng() % 6);
         insn = (((rng() & 1) ? 0x0bu : 0x08u) << 24) | ((d + 4u) & 0x00ffffffu);
+      } else if (cls == 14) {                          // synmov
+        // src1 is the destination address, src2 the source. Both are register
+        // values, which is why synmov cannot use the LSU's decoded effective
+        // address. r3 is seeded to 0xff000004 below, so roughly a third of these
+        // exercise the ICR path -- the one that must NOT write memory.
+        // src1 is the DESTINATION and src2 the SOURCE -- MAME uses get_1_ri and
+        // get_2_ri, not srcdst. The first version put the destination in the
+        // srcdst field, which is not what either the reference or the module
+        // reads.
+        const uint32_t dst = ((rng() % 3) == 0) ? 3u : (4u + (rng() % 20));
+        const uint32_t src = 4u + (rng() % 20);
+        insn = (0x60u << 24) | (src << 14) | (0x0u << 7) | dst;
       } else if (cls == 13) {                          // call / ret / flushreg
         // Emitted for the same reason as callx: the frame path had a passing
         // unit test and two defects in it, and a unit test that drives op_call
@@ -737,6 +752,9 @@ int main(int argc, char **argv) {
     // The spilled words are ordinary memory and ARE compared per retire.
     ref.rf.r[31] = 0x2000;  ref.rf.r[1] = 0x2040;   // FP, SP
     ref.rf.r[0]  = 0x2000;                          // PFP
+    // r3 holds the magic synmov destination, so the ICR path gets exercised.
+    ref.rf.r[3]  = 0xff000004;
+    dut->rootp->i960_top__DOT__u_regs__DOT__loc[3] = 0xff000004;
     dut->rootp->i960_top__DOT__u_regs__DOT__glb[15] = 0x2000;
     dut->rootp->i960_top__DOT__u_regs__DOT__loc[1]  = 0x2040;
     dut->rootp->i960_top__DOT__u_regs__DOT__loc[0]  = 0x2000;

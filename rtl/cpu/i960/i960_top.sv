@@ -82,6 +82,7 @@ module i960_top (
   // PC bit 13 (0x2000) is the interrupt flag and PC[20:16] the priority; both
   // are read by take_interrupt to decide whether an interrupt can be taken and
   // which stack it uses.
+  logic [31:0] syn_dst;     // synmov destination, held across the two phases
   logic [31:0] pc_reg;      // process controls
   logic [31:0] sat_reg;     // system address table
   logic [31:0] prcb_reg;    // processor control block
@@ -139,11 +140,19 @@ module i960_top (
   logic [31:0] d_disp;
   /* verilator lint_on UNUSEDSIGNAL */
 
-  typedef enum logic [3:0] {
-    T_BOOT,
+  // Five bits now: the boot walk and synmov's two phases took it past sixteen.
+  //
+  // NEW STATES GO AT THE END, and that is not cosmetic. T_FETCH and T_FETCH_W
+  // must keep encodings 0 and 1: sim/i960/tb_i960_top.cpp's prefetch invariant
+  // reads `ts & 15` and tests for those two numerically. Putting the boot state
+  // first silently repointed that invariant at T_BOOT and T_SYNMOV_RD, which
+  // would have disabled the check that has already caught two real faults today
+  // -- without failing anything.
+  typedef enum logic [4:0] {
     T_FETCH, T_FETCH_W, T_FETCH2, T_FETCH2_W, T_DECODE,
     T_EXEC, T_MEM, T_MEM_W, T_MULDIV, T_MULTI, T_PAIR, T_FP, T_WB, T_FRAME,
-    T_TRAP
+    T_TRAP,
+    T_BOOT, T_SYNMOV_RD, T_SYNMOV_WR
   } tstate_e;
 
   tstate_e ts;
@@ -559,10 +568,16 @@ module i960_top (
   //
   // It sits ABOVE the register-file spill in priority, which is safe because it
   // only ever runs in T_BOOT, before any other master can have work.
+  // Generalised into an AUX MASTER once synmov needed the same thing: an access
+  // whose address comes from somewhere other than the AGU. It serves the boot
+  // walk and then synmov, which cannot use the LSU because its two addresses are
+  // register values rather than a decoded effective address.
   logic        boot_req;
   logic [31:0] boot_addr;
   logic        boot_ack;
   logic  [1:0] boot_step;
+  logic        aux_we;
+  logic [31:0] aux_wdata;
 
   logic rf_mem_ack, lsu_back, ic_back;
 
@@ -578,7 +593,8 @@ module i960_top (
     boot_ack   = 1'b0;
 
     if (boot_req) begin
-      bus_req = 1'b1; bus_we = 1'b0; bus_addr = boot_addr; bus_be = 4'b1111;
+      bus_req = 1'b1; bus_we = aux_we; bus_addr = boot_addr; bus_be = 4'b1111;
+      bus_wdata = aux_wdata;
       boot_ack = bus_ack;
     end else if (rf_mem_req) begin
       bus_req = 1'b1; bus_we = rf_mem_we; bus_addr = rf_mem_addr;
@@ -738,6 +754,9 @@ module i960_top (
       boot_req  <= 1'b1;
       boot_addr <= 32'd0;
       boot_step <= 2'd0;
+      aux_we    <= 1'b0;
+      aux_wdata <= 32'd0;
+      syn_dst   <= 32'd0;
       we        <= 1'b0;
       wa        <= 5'd0;
       wd        <= 32'd0;
@@ -810,6 +829,31 @@ module i960_top (
               ts       <= T_FETCH;
             end
           endcase
+        end
+
+        // ------------------------------------------------------- synmov
+        T_SYNMOV_RD: if (boot_ack) begin
+          if (syn_dst == 32'hff00_0004) begin
+            // The interrupt control register, not memory.
+            icr_reg  <= bus_rdata;
+            boot_req <= 1'b0;
+            ac       <= {ac[31:3], 3'd2};
+            ip       <= ip_next;
+            ts       <= T_FETCH;
+          end else begin
+            aux_wdata <= bus_rdata;
+            boot_addr <= syn_dst;
+            aux_we    <= 1'b1;
+            ts        <= T_SYNMOV_WR;
+          end
+        end
+
+        T_SYNMOV_WR: if (boot_ack) begin
+          boot_req <= 1'b0;
+          aux_we   <= 1'b0;
+          ac       <= {ac[31:3], 3'd2};
+          ip       <= ip_next;
+          ts       <= T_FETCH;
         end
 
         // T_FETCH and T_FETCH_W share one body. The front end below appears
@@ -950,7 +994,21 @@ module i960_top (
             end
 
             2'd2: begin                                   // REG
-              if (is_movx) begin
+              // synmov: a dword from mem[src2] to mem[src1], except that the
+              // magic destination 0xff000004 loads ICR instead. That is the only
+              // way ICR is ever written, and ICR supplies the vector byte for
+              // each external IRQ line -- so interrupts are unreachable without
+              // it (MAME i960.cpp 0x60.0).
+              //
+              // It uses the aux master rather than the LSU because both
+              // addresses are register values, not a decoded effective address.
+              if ((d_op == 8'h60) && (d_op2 == 4'h0)) begin
+                syn_dst   <= d_src1_lit ? {27'd0, d_src1} : rd1;
+                boot_addr <= d_src2_lit ? {27'd0, d_src2} : rd2;
+                aux_we    <= 1'b0;
+                boot_req  <= 1'b1;
+                ts        <= T_SYNMOV_RD;
+              end else if (is_movx) begin
                 // First word now; the rest one per cycle. ra1 already holds the
                 // source base from decode, so rd1 is live this cycle.
                 mw_base   <= mov_base;
