@@ -340,6 +340,29 @@ logic [63:0]     st_got;
 // how four builds were spent.
 wire st_ok = (st_got == 64'h00FF_FF00_5AA5_AA55);
 
+// WHAT ARRIVED versus WHAT WAS STORED, at the same two words.
+//
+// The SDRAM self-test passes, so the memory and the write port are good, which
+// means the ROM data is already wrong before it is stored. Everything so far has
+// inferred that from what came back out. This latches ioctl_dout itself as it
+// goes past, at the byte addresses corresponding to stream words 8 and 9.
+//
+//   word5 = what ARRIVED over ioctl   -> expect FFFFF6E0
+//   word6 = what is IN SDRAM there    -> expect FFFFF6E0
+//
+// Both right: the fault is downstream of here, in the readback.
+// Both wrong: the data is already wrong when the HPS hands it over.
+// 5 right, 6 wrong: the loader or the write path corrupts it.
+logic [15:0] pr_w8, pr_w9;
+always_ff @(posedge clk_sdram or negedge mem_rst_n) begin
+	if (!mem_rst_n) begin
+		pr_w8 <= 16'd0; pr_w9 <= 16'd0;
+	end else if (ioctl_download && ioctl_wr) begin
+		if (ioctl_addr == 27'h10) pr_w8 <= ioctl_dout;   // stream word 8
+		if (ioctl_addr == 27'h12) pr_w9 <= ioctl_dout;   // stream word 9
+	end
+end
+
 assign st_run = rom_loaded && (st_state >= 4'd1) && (st_state <= 4'd8);
 
 always_ff @(posedge clk_sdram or negedge mem_rst_n) begin
@@ -487,8 +510,8 @@ m2_diag #(.NWORDS(7)) u_diag
 	.enable(1'b1),
 	.hb(hblank),
 	.vb(vblank),
-	.words({ rb_w1,                                     // 6  ROM word 6/7
-	         rb_w0,                                     // 5  ROM word 8/9
+	.words({ rb_w0,                                     // 6  STORED at words 8/9
+	         {pr_w9, pr_w8},                            // 5  ARRIVED for words 8/9
 	         // 32 BITS, not 31. The first version was {27'd0, ...} = 31, which
 	         // shifted every word above it by one bit: the board showed word4 as
 	         // 80000007, its top bit being rb_w0's LSB bleeding down. A short
