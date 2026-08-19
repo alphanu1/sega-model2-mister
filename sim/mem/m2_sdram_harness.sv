@@ -109,7 +109,11 @@ module m2_sdram_harness #(
     .T_WR(T_WR), .CL(CL), .T_REFI(T_REFI), .INIT_NOP(INIT_NOP), .ACK_HOLD(2)
   ) dut (
     .clk(clk), .rst_n(rst_n), .ready(ready),
-    .rd_lat_sel(2'd0),   // CL+3, what this harness is baselined on
+    // CL+3, what the device MODEL needs, and after the selector range moved
+    // earlier for the board that is selector 3, not 0. The renumbering broke
+    // this test immediately -- 23,744 mismatches -- which is the harness doing
+    // its job: the model's correct value is not the board's.
+    .rd_lat_sel(2'd3),
     .sd_cke(cke), .sd_cs_n(cs_n), .sd_ras_n(ras_n), .sd_cas_n(cas_n),
     .sd_we_n(we_n), .sd_ba(ba), .sd_a(a), .sd_dqm(dqm),
     .sd_dq_o(dq_c2m), .sd_dq_oe(dq_oe_c), .sd_dq_i(dq_m2c),

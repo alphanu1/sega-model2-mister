@@ -228,10 +228,17 @@ module m2_sdram #(
   always_ff @(posedge clk) begin
     if (!rst_n) cap_depth <= 4'(RD_LAT_DEF);
     else case (rd_lat_sel)
-      2'd0:    cap_depth <= 4'(CL + 3);   // unconnected lands here, by design
-      2'd1:    cap_depth <= 4'(CL + 2);
-      2'd2:    cap_depth <= 4'(CL + 4);
-      default: cap_depth <= 4'(CL + 5);
+      // RANGE MOVED EARLIER, on hardware evidence. It was CL+2..CL+5, and the
+      // board needs EARLIER than CL+2: a write-then-read self-test of AA55,
+      // 5AA5, FF00, 00FF came back as 5AA5, FF00, 00FF, 00FF -- the burst
+      // shifted by exactly one 16-bit word, meaning capture starts one cycle
+      // too late. No setting in the old range could correct that, which is why
+      // cycling the OSD option produced garbage at every position and was
+      // wrongly read as "the phase is not involved".
+      2'd0:    cap_depth <= 4'(CL + 1);   // unconnected lands here, by design
+      2'd1:    cap_depth <= 4'(CL + 0);
+      2'd2:    cap_depth <= 4'(CL + 2);
+      default: cap_depth <= 4'(CL + 3);
     endcase
   end
 

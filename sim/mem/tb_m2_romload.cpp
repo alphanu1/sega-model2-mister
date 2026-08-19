@@ -63,12 +63,12 @@ int main(int argc, char **argv) {
     0xf6e0, 0xffff, 0x0000, 0x0000, 0x0000, 0x0000, 0xffff, 0xffff
   };
 
-  // Default 0 = CL+3, which is what the device MODEL wants. The BOARD wants
+  // Default 3 = CL+3, which is what the device MODEL wants. The BOARD wants
   // CL+2 (sel 1), because the real device is clocked on the inverse of the
   // controller clock and answers half a period away. Both are exercised below;
   // sel 1 here produces exactly the one-16-bit-word shift the Model 1 core
   // documented seeing on hardware, which is how that claim got corroborated.
-  const int sel = (argc > 1) ? atoi(argv[1]) : 0;
+  const int sel = (argc > 1) ? atoi(argv[1]) : 3;   // 3 = CL+3 after the range moved
   dut->rd_lat_sel = sel;
   dut->rst_n = 0; dut->ioctl_download = 0; dut->ioctl_wr = 0;
   dut->ioctl_index = 0; dut->ioctl_addr = 0; dut->ioctl_dout = 0;

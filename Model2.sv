@@ -72,7 +72,7 @@ localparam CONF_STR = {
 	// presents data on the same edge the controller uses, while the real device
 	// is clocked on the INVERSE of clk_sdram and answers half a period away.
 	// Guessing this one 25-minute build at a time is the alternative.
-	"O[5:4],SDRAM phase,CL+2,CL+3,CL+4,CL+5;",
+	"O[5:4],SDRAM phase,CL+1,CL+0,CL+2,CL+3;",
 	"-;",
 	"R[0],Reset and close OSD;",
 	"v,0;",
@@ -214,8 +214,10 @@ m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(300)) u_sdram (
 	.clk(clk_sdram), .rst_n(mem_rst_n), .ready(mem_ready),
 	// OSD order is CL+2..CL+5 and the selector's own encoding puts CL+3 at zero,
 	// so the two are mapped rather than passed through.
-	.rd_lat_sel(status[5:4] == 2'd0 ? 2'd1 :
-	            status[5:4] == 2'd1 ? 2'd0 : status[5:4]),
+	// Labels match what selecting them does: 0->CL+1, 1->CL+0, 2->CL+2, 3->CL+3.
+	// The default is CL+1, one cycle EARLIER than the old default of CL+2, which
+	// the self-test showed captures the burst one 16-bit word late.
+	.rd_lat_sel(status[5:4]),
 	.sd_cke(SDRAM_CKE), .sd_cs_n(SDRAM_nCS), .sd_ras_n(SDRAM_nRAS),
 	.sd_cas_n(SDRAM_nCAS), .sd_we_n(SDRAM_nWE), .sd_ba(SDRAM_BA),
 	.sd_a(SDRAM_A), .sd_dqm({SDRAM_DQMH, SDRAM_DQML}),
