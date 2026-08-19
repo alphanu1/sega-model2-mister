@@ -178,7 +178,21 @@ wire game_rst_n = pll_locked & ~RESET & ~status[0] & ~buttons[1];
 // column bits and a 26-bit word address. That is the ONLY decomposition reaching
 // 64M words on the connector's 13 address and 2 bank pins, and both geometries
 // are proven against the device model (make test_m2_sdram, test_m2_sdram128).
-// BACK TO 9, WHICH IS WHAT THE MODEL 1 CORE RUNS AND WHAT WORKS ON THIS BOARD.
+// TEN COLUMN BITS: 64 MB, which holds the 43.62 MB ROM set.
+//
+// Nine is proven on this board -- it is what the Model 1 core runs, and at nine
+// the tile copy checksums are exact and Daytona's attract screen renders. But
+// nine only addresses 32 MB and the full ROM set does not fit.
+//
+// Ten is the right target rather than eleven for a structural reason. Column bits
+// map to A0..A9, then A11 and A12, SKIPPING A10, which is the auto-precharge flag.
+// Ten needs only the contiguous A0..A9 range and leaves A10 alone. Eleven is the
+// first value that must drive a column bit on A11, and therefore the first that
+// depends on the part actually having 2048 columns -- the inference that failed
+// and cost twelve builds (study R18).
+//
+// If ten also aliases, the module is organised as 32 MB whatever its capacity, and
+// the DDR3 split becomes a real P6 requirement instead of a contingency.
 //
 // 11 column bits was MY change, to reach 128 MB, and the geometry behind it was
 // REASONED from the connector's pin count rather than measured: 13 address pins
@@ -194,7 +208,7 @@ wire game_rst_n = pll_locked & ~RESET & ~status[0] & ~buttons[1];
 // 9 gives 32 MB, which holds the 592 KB tilemap blob comfortably. If the copy
 // comes good at 9, the geometry is the fault and must be MEASURED before it is
 // widened again, not deduced.
-localparam int unsigned SDR_COL  = 9;
+localparam int unsigned SDR_COL  = 10;
 localparam int unsigned SDR_AW   = 2 + 13 + SDR_COL;   // 26
 
 wire        mem_ready, sd_dq_oe, rom_loaded, ldr_overflow;
