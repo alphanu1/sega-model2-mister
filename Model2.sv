@@ -271,7 +271,13 @@ always_ff @(posedge clk_sdram or negedge mem_rst_n) begin
 			2'd1: if (rb_ack) begin rb_w0 <= rb_dout[31:0]; rb_req <= 1'b0;
 			                        rb_addr <= SDR_AW'(4); rb_state <= 2'd2; end
 			2'd2: begin rb_req <= 1'b1; rb_state <= 2'd3; end
-			2'd3: if (rb_ack) begin rb_w1 <= rb_dout[63:32]; rb_req <= 1'b0; end
+			// LOOPS, and that matters. The first version ran once and latched, so
+			// changing the SDRAM phase in the OSD could not alter what was shown
+			// and the test reported "no change" whatever the setting. That is a
+			// null result from a dead instrument, which is worse than no result:
+			// it was read as evidence that the phase is not involved.
+			2'd3: if (rb_ack) begin rb_w1 <= rb_dout[63:32]; rb_req <= 1'b0;
+			                        rb_state <= 2'd0; end
 			default: ;
 		endcase
 	end

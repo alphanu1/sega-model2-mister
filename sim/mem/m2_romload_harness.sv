@@ -156,7 +156,8 @@ module m2_romload_harness #(
         2'd1: if (rb_ack) begin rb_w0 <= rb_dout[31:0]; rb_req <= 1'b0;
                                 rb_addr <= SDR_AW'(4); rb_state <= 2'd2; end
         2'd2: begin rb_req <= 1'b1; rb_state <= 2'd3; end
-        2'd3: if (rb_ack) begin rb_w1 <= rb_dout[63:32]; rb_req <= 1'b0; end
+        2'd3: if (rb_ack) begin rb_w1 <= rb_dout[63:32]; rb_req <= 1'b0;
+                                rb_state <= 2'd0; end
         default: ;
       endcase
     end
