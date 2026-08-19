@@ -2029,3 +2029,40 @@ to the harness, both the R20 sentinel collision again:
 - The IAC message had to be seeded into **both** memory maps; `ref.rf.mem = mem`
   is a copy taken earlier, and seeding only the harness's map diverged at the
   message address itself.
+
+
+---
+
+**R26 — the data matches too, byte for byte, and that closes the CPU side of the
+2D path.** R25 compared program counters and said explicitly what it did not
+establish: two runs can agree on every instruction and disagree on every store,
+because a wrong store changes the PC stream only if the program reads it back
+and branches on it, which it may never do.
+
+`tools/i960-datadiff.sh` runs the real `daytona93` ROM through our i960 and
+through MAME to the **same instruction address** — `0x228240`, the DPRAM poll
+loop the boot enters once it has finished writing — and compares the three
+regions the 2D path reads:
+
+| region | size | result |
+|---|---|---|
+| tile RAM `0x01000000` | 65,536 bytes | **identical** |
+| char RAM `0x01080000` | 524,288 bytes | **identical** |
+| palette `0x01800000` | 16,384 bytes | **identical** |
+
+**606,208 bytes, zero differing.** The tilemap layout, the glyph data and the
+palette that Daytona's boot code builds are bit-exact against the oracle.
+
+*Why an instruction address and not a frame number.* `mame_m2_tiledump.lua` syncs
+on a frame, which is right when there is no CPU on our side and the state is
+being supplied. Here both sides execute and they do **not** keep the same
+wall-clock: our harness has no sound board, so it sits in the DPRAM poll loop
+that MAME walks straight through. Comparing at "frame 2" compares two different
+moments and reports a difference that is a scheduling artifact. An instruction
+address means the same thing on both sides.
+
+*What this closes, and what it does not.* The CPU-side content of the 2D path is
+verified end to end: real ROM in, correct pixel-source data out. It says nothing
+about the renderer that consumes it — `m2_video` is verified separately against
+canned MAME state — and nothing about the 3D path, which has no oracle at all
+(§2.1). **The remaining 2D risk is now in the wiring, not in either end.**

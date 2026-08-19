@@ -220,10 +220,12 @@ int main(int argc, char **argv) {
   uint64_t max_insn = 200000;
   bool     trace    = false;
   const char *tracefile = nullptr;
+  const char *dumpdir = nullptr;
   for (int i = 1; i < argc; i++) {
     if (!std::strncmp(argv[i], "+insn=", 6)) max_insn = std::strtoull(argv[i]+6, nullptr, 10);
     if (!std::strcmp (argv[i], "+trace"))    trace = true;
     if (!std::strncmp(argv[i], "+out=", 5))  tracefile = argv[i]+5;
+    if (!std::strncmp(argv[i], "+dump=", 6)) dumpdir   = argv[i]+6;
   }
 
   const char *rp = std::getenv("M2_ROMPATH");
@@ -346,6 +348,30 @@ int main(int argc, char **argv) {
   std::printf("\n  regions written:\n");
   for (auto &kv : touched)
     std::printf("    %-16s %llu words\n", kv.first.c_str(), (unsigned long long)kv.second);
+
+  // Dump what the CPU built, in the same layout tools/mame_m2_tiledump.lua
+  // writes, so the two are directly comparable. This is the DATA half of the
+  // differential test: the PC comparison proves the core executed the same
+  // instructions, and proves nothing at all about the values it stored.
+  if (dumpdir) {
+    struct { const char *name; uint32_t base, size; } R[] = {
+      { "tile",    0x01000000u, 0x010000u },
+      { "char",    0x01080000u, 0x080000u },
+      { "palette", 0x01800000u, 0x004000u },
+    };
+    for (auto &r : R) {
+      const std::string fn = std::string(dumpdir) + "/" + r.name + ".bin";
+      FILE *f = std::fopen(fn.c_str(), "wb");
+      if (!f) { std::printf("  cannot write %s\n", fn.c_str()); continue; }
+      for (uint32_t a = r.base; a < r.base + r.size; a += 4) {
+        const uint32_t v = mem_read(a);
+        const uint8_t b[4] = { uint8_t(v), uint8_t(v>>8), uint8_t(v>>16), uint8_t(v>>24) };
+        std::fwrite(b, 1, 4, f);
+      }
+      std::fclose(f);
+    }
+    std::printf("  dumped tile/char/palette to %s\n", dumpdir);
+  }
 
   const bool ok = (insns >= 1000) && !dut->trap && !stall;
   std::printf("\n%s\n", ok ? "PASS" : "FAIL");
