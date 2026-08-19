@@ -2736,6 +2736,34 @@ the controller's geometry is parameterised and its ports widened, the loader tak
 **`check_mra` earned its place immediately** — it caught me putting `--` back into
 an XML comment while restoring the MRA, which is the exact fault it was added for.
 
+### The tilemap renderer is VERIFIED against MAME, point by point
+
+Checked after the first garbled render, because porting Model 1's renderer without
+reading the oracle for Model 2 was the wrong way round. **Every decode rule
+matches `segaic24.cpp` exactly**, so the RTL is not where the fault is:
+
+| | MAME | our RTL |
+|---|---|---|
+| tile mask | `S24TILE(config, m_tiles, 0, 0x3fff)` in `model2.cpp` | `14'h3FFF` |
+| tile number | `val & tile_mask` | `tile_word[13:0] & tile_mask` |
+| colour | `(val >> 7) & 0xff` | `tile_word[14:7]` |
+| palette index | colour x 16 + pixel | `{colour, pixel}`, 12 bits |
+| char address | 16 words per tile | `{tile_num,4'b0}+{map_y[2:0],1'b0}` |
+| map bases | `0x0000/0x1000/0x2000/0x3000` | `{1'b0, layer, ...}` |
+| map scan | `TILEMAP_SCAN_ROWS`, 64x64 of 8x8 | `{map_y[8:3], map_x[8:3]}` |
+| control regs | `tile_ram[0x5000]`, `[0x5004]` | `15'h5000`, `15'h5004` |
+| `char_r` | linear `uint16_t[]`, no transform | linear dump |
+
+**`tile_mask` was the one value I had guessed** when wiring, and it happens to be
+right — Model 2 configures `0x3fff`. It is now verified rather than assumed.
+
+**So the renderer is exonerated on every statically checkable point**, which makes
+the copy checksums the discriminator. If tile RAM reads `A66F51B7` and the palette
+`5BFDD5AF`, the data is intact and a renderer that matches MAME is drawing it
+wrongly — which points at the char fetch path or the line buffer, neither of which
+can be checked by reading. If either checksum is wrong, the data never arrived and
+the renderer was never implicated.
+
 ### P1.5 STEP 4: the tilemap RENDERS. Structured, not correct.
 
 **First tiles on screen.** The pipeline runs end to end: copy engine completes (the
