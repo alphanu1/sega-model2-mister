@@ -1625,3 +1625,43 @@ hardcoded `-GCEDIV=3` while the design shipped `ce_cpu(1'b1)`, so **every number
 had ever produced described a CPU getting one cycle in three**. Its own commit
 calls it "third misleading instrument today". The same failure mode as R15 here,
 in a different project, on the same day.
+
+---
+
+**R18 — the SDRAM geometry was inferred, not measured, and it cost a day.** P1.5's
+tilemap rendered garbage for twelve hardware builds. The cause was a change I had
+made myself and never suspected.
+
+*What was believed:* that a 128 MB module on the MiSTer connector must be 4 banks
+x 8192 rows x 2048 columns, because 13 address pins and 2 bank pins admit exactly
+that and nothing else reaches 64M words. `COL_BITS` was set to 11 on that basis.
+
+*What is now known:* it aliases on this board. With `COL_BITS = 9` — the value the
+Model 1 core runs on the same hardware — the tile copy checksums come back
+**exactly right** (`A66F51B7`, `5BFDD5AF`) and Daytona's attract screen renders
+correctly.
+
+*Why it took so long, and the lesson is about the evidence rather than the bug.*
+Column aliasing is **invisible to a test that reads one address repeatedly** and
+**fatal to a walk across many**. The SDRAM self-test reads four words at a single
+address and passed on every build; the copy engine walks 36,864 addresses and
+failed on every build. That pattern was visible from the start and read as a port
+problem, a burst-length problem, a clock-domain problem, a byte-lane problem and a
+capture-phase problem in turn. **Every one of those was code I had not changed. The
+one thing I had changed was never on the list.**
+
+*The simulation could not have caught it, and that is structural.*
+`m2_sdram_harness` configures `sdram_model` with the **same `COL_BITS`** as the
+controller, so the model and the controller agree with each other while both are
+wrong about the part. 74,729 checks passed at `COL_BITS = 11`. This is exactly the
+trap `docs/differential-testing.md` names: a reference written from the same
+reading as the implementation catches a slip between the two and never a shared
+misreading. **Geometry can only be settled on hardware**, and the blind spot is now
+recorded in the harness itself.
+
+*Consequences for the budget.* 32 MB does not hold the 43.62 MB ROM set (R13's
+figure). **The next step is `COL_BITS = 10` for 64 MB**, which covers it and needs
+only A0-A9 with A10 left as the auto-precharge flag — no A11, and therefore no
+dependence on the inference that failed here. If 10 also aliases, the module is
+32 MB-organised whatever its capacity, and the DDR3 split returns as a real P6
+requirement rather than a contingency.

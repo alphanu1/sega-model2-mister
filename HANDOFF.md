@@ -2736,6 +2736,38 @@ the controller's geometry is parameterised and its ports widened, the loader tak
 **`check_mra` earned its place immediately** — it caught me putting `--` back into
 an XML comment while restoring the MRA, which is the exact fault it was added for.
 
+### P1.5 COMPLETE: Model 2 2D RENDERS CORRECTLY ON HARDWARE
+
+**Daytona's attract screen, drawn by our tilemap, on a DE10-Nano.** Mountains,
+grass, the VR button graphic, INSERT COIN(S), CREDIT 0/3, the SEGA logo. Both copy
+checksums exact: **`A66F51B7`** and **`5BFDD5AF`**.
+
+The whole chain is proven on silicon: MRA -> `ioctl` -> loader -> SDRAM -> copy
+engine -> on-chip tile RAM and palette -> S24TILE fetch, decode, mix, palettise ->
+video timing -> overlay -> screen.
+
+**The cause was `COL_BITS`, which I had changed myself and never suspected.** The
+geometry for a 128 MB module was **inferred** from the connector's pin count, not
+measured. At 11 it aliases on this board. At **9** — the value the Model 1 core
+runs on the same hardware — everything is correct. Study **R18**.
+
+**Why it took twelve builds, and the lesson is about evidence:** column aliasing is
+invisible to a test that reads one address repeatedly and fatal to a walk across
+many. The self-test (four words, one address) passed every time; the copy engine
+(36,864 addresses) failed every time. That split was visible from the first result
+and I read it as a port problem, a burst-length problem, a clock-domain problem, a
+byte-lane problem and a capture-phase problem in turn — **all code I had not
+touched. The one thing I had changed was never on the list.**
+
+The question that broke it was not mine: *"how comes my Model1 is fine with the
+SDRAM?"* The answer was that it does not run the same configuration.
+
+**NEXT: `COL_BITS = 10` for 64 MB.** 32 MB does not hold the 43.62 MB ROM set. Ten
+covers it and needs only A0-A9, leaving A10 as auto-precharge — no A11, so no
+dependence on the inference that just failed. If 10 also aliases, the module is
+32 MB-organised whatever its capacity and the DDR3 split becomes a real P6
+requirement.
+
 ### CAUTION on my own evidence, from the Model 1 core at `d53a149`
 
 That project found **six TGP defects in a day** and wrote down two lessons that
