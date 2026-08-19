@@ -213,12 +213,22 @@ always_comb begin
 	// permanently zero upper half -- which reads like a broken controller and
 	// is a port-selection mistake. The CPU takes port 0 precisely because it
 	// wants single words; 1-3 are the streaming ports.
-	p_req[1]  = rb_req;
-	p_addr[1] = rb_addr;
 	p_req[2]  = st_rd_req;
 	p_addr[2] = st_rd_addr;
-	p_req[0]  = cp_req;
-	p_addr[0] = cp_addr;
+	// PORT 1, NOT PORT 0. m2_sdram's blen() gives ports 1-3 a four-word burst and
+	// ports 0 and 4 a single word, and the copy engine was the ONLY consumer of a
+	// single-word read -- and the only reader that fails. The self-test on port 2
+	// and the char fetch on port 3 both burst four and both behave.
+	//
+	// The checksums also CHANGED between two runs of identical hardware and data
+	// (00E32CDB then 00E7958F), so the corruption is not deterministic, which
+	// rules out a decode or wiring mistake and fits a capture path that is only
+	// exercised by the single-word case.
+	//
+	// Port 1 is free here: the ROM readback that shares it now waits for cp_done,
+	// so the two never overlap.
+	p_req[1]  = cp_req  ? cp_req  : rb_req;
+	p_addr[1] = cp_req  ? cp_addr : rb_addr;
 	p_req[3]  = char_req;
 	p_addr[3] = CHAR_BASE + SDR_AW'(char_addr);
 end
@@ -503,19 +513,19 @@ always_ff @(posedge clk_sdram or negedge mem_rst_n) begin
 		if (!cp_req && rom_loaded) begin
 			cp_addr <= (cp_pal_phase ? PAL_BASE : TRAM_BASE) + SDR_AW'(cp_idx);
 			cp_req  <= 1'b1;
-		end else if (cp_req && p_ack[0]) begin
+		end else if (cp_req && p_ack[1]) begin
 			cp_req   <= 1'b0;
-			cp_wdata <= p_dout[0][15:0];
+			cp_wdata <= p_dout[1][15:0];
 			if (!cp_pal_phase) begin
-				tram[cp_idx[14:0]] <= p_dout[0][15:0];
-				cp_xor_t <= cp_xor_t ^ p_dout[0][15:0];
-				cp_sum_t <= cp_sum_t + p_dout[0][15:0];
+				tram[cp_idx[14:0]] <= p_dout[1][15:0];
+				cp_xor_t <= cp_xor_t ^ p_dout[1][15:0];
+				cp_sum_t <= cp_sum_t + p_dout[1][15:0];
 				if (cp_idx == 16'h7FFF) begin cp_idx <= 0; cp_pal_phase <= 1'b1; end
 				else cp_idx <= cp_idx + 16'd1;
 			end else begin
-				pal[cp_idx[11:0]] <= p_dout[0][15:0];
-				cp_xor_p <= cp_xor_p ^ p_dout[0][15:0];
-				cp_sum_p <= cp_sum_p + p_dout[0][15:0];
+				pal[cp_idx[11:0]] <= p_dout[1][15:0];
+				cp_xor_p <= cp_xor_p ^ p_dout[1][15:0];
+				cp_sum_p <= cp_sum_p + p_dout[1][15:0];
 				if (cp_idx == 16'h0FFF) cp_done <= 1'b1;
 				else cp_idx <= cp_idx + 16'd1;
 			end
