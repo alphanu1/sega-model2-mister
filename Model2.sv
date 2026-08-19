@@ -378,8 +378,8 @@ always_ff @(posedge clk_sdram or negedge mem_rst_n) begin
 	end else begin
 		ldr_req_d <= ldr_wr_req;
 		if (ldr_wr_req && !ldr_req_d) begin
-			if (ldr_wr_addr == SDR_AW'(8)) pw_w8 <= ldr_wr_din;
-			if (ldr_wr_addr == SDR_AW'(9)) pw_w9 <= ldr_wr_din;
+			if (ldr_wr_addr == SDR_AW'(137)) pw_w8 <= ldr_wr_din;
+			if (ldr_wr_addr == SDR_AW'(138)) pw_w9 <= ldr_wr_din;
 		end
 	end
 end
@@ -387,8 +387,15 @@ always_ff @(posedge clk_sdram or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
 		pr_w8 <= 16'd0; pr_w9 <= 16'd0;
 	end else if (ioctl_download && ioctl_wr) begin
-		if (ioctl_addr == 27'h10) pr_w8 <= ioctl_dout;   // stream word 8
-		if (ioctl_addr == 27'h12) pr_w9 <= ioctl_dout;   // stream word 9
+		// WORDS 137/138 OF THE TILEMAP BLOB: 8CC6 and 8CC7.
+		//
+		// The previous probe used words 8/9, whose value in this blob is 0x0020
+		// twice -- ZERO HIGH BYTE. A fault that zeroes high bytes is invisible on
+		// such data, so the probe read 00200020 at every stage and proved nothing.
+		// That is the same trap that made the tilemap blob 'prove' step 3 earlier.
+		// These two have non-zero high bytes and therefore CAN fail.
+		if (ioctl_addr == 27'h112) pr_w8 <= ioctl_dout;
+		if (ioctl_addr == 27'h114) pr_w9 <= ioctl_dout;
 	end
 end
 
@@ -642,8 +649,8 @@ m2_diag #(.NWORDS(7)) u_diag
 	.enable(1'b1),
 	.hb(tile_hb),
 	.vb(tile_vb),
-	.words({ {pw_w9, pw_w8},                             // 6  PRESENTED, want FFFFF6E0
-	         {pr_w9, pr_w8},                            // 5  ARRIVED, want FFFFF6E0
+	.words({ {pw_w9, pw_w8},                             // 6  PRESENTED, want 8CC78CC6
+	         {pr_w9, pr_w8},                            // 5  ARRIVED, want 8CC78CC6
 	         // 32 BITS, not 31. The first version was {27'd0, ...} = 31, which
 	         // shifted every word above it by one bit: the board showed word4 as
 	         // 80000007, its top bit being rb_w0's LSB bleeding down. A short
