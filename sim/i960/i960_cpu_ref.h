@@ -89,7 +89,7 @@ struct Cpu {
   // if it never executed one, and the ICR path in particular is reachable only
   // when a source register happens to hold 0xff000004 -- which a random
   // generator never produces, so it is seeded deliberately. Both are printed.
-  uint64_t syn_count = 0, syn_icr_count = 0;
+  uint64_t syn_count = 0, syn_icr_count = 0, iac_count = 0;
   uint32_t IP = 0;
   bool     trapped = false;
   uint8_t  trap_op = 0;
@@ -210,6 +210,28 @@ struct Cpu {
   // immediately after the entry, which is the only place take_interrupt's three
   // saves and its PC update can be checked before something else overwrites
   // them.
+  // send_iac. MAME i960.cpp. The Inter-Agent Communication port is how the i960
+  // is reconfigured at run time, and Daytona's boot code uses it: after
+  // clearing RAM and building a PRCB at 0x0053f400 it issues message 0x93,
+  // which repoints SAT and PRCB at the new block and jumps. Without this the
+  // core executes 33,000 instructions of real code and then stops -- which is
+  // exactly what it did.
+  void send_iac(uint32_t adr) {
+    const uint32_t i0 = rd(adr), i1 = rd(adr + 4);
+    const uint32_t i2 = rd(adr + 8), i3 = rd(adr + 12);
+    switch (i0 >> 24) {
+      case 0x41: check_pending_irqs(); break;         // test for pending
+      case 0x80: wr(i1, SAT); wr(i1 + 4, PRCB); break;// store SAT and PRCB
+      case 0x93: SAT = i1; PRCB = i2; IP = i3; break; // reinit
+      // Generate IRQ, invalidate I-cache, breakpoints, stop, continue. MAME
+      // logs and ignores every one of them, and so does this: there is no
+      // instruction cache to invalidate that a coherent design would need told,
+      // and the rest are debug facilities.
+      case 0x40: case 0x89: case 0x8f: case 0x91: case 0x92: break;
+      default: trapped = true; trap_op = 0x60; break; // MAME fatalerrors
+    }
+  }
+
   void check_immediate_irqs() {
     const uint32_t cpu_pri = (PC >> 16) & 0x1fu;
     if (imm_irq && ((cpu_pri < imm_pri) || (imm_pri == 31))) {
@@ -406,6 +428,28 @@ struct Cpu {
           break;
         }
 
+        // ---- synmovq: the quad move, and the IAC port ----
+        //
+        // MAME i960.cpp 0x60.2. Four dwords, unless the destination is the
+        // magic 0xff000010 -- then the source address points at a four-word
+        // IAC message instead and nothing is copied.
+        //
+        // IP IS SET BEFORE send_iac RUNS, not after. Message 0x93 assigns the
+        // IP itself, and advancing afterwards would land one instruction past
+        // the address the boot code asked to resume at.
+        if (d.op == 0x60 && d.op2 == 0x2) {
+          const uint32_t t1 = s1, t2 = s2;
+          IP = ip_next;
+          if (t1 == 0xff000010u) {
+            ++iac_count;
+            send_iac(t2);
+          } else {
+            for (int i = 0; i < 4; ++i) wr(t1 + uint32_t(i) * 4, rd(t2 + uint32_t(i) * 4));
+          }
+          AC = (AC & ~7u) | 2u;
+          break;
+        }
+
         // ---- modpc: the only way the CPU priority ever comes down ----
         //
         // MAME i960.cpp 0x65.5. Without it PC keeps its reset priority of 31,
@@ -535,6 +579,17 @@ struct Cpu {
         if (l.no_mem && d.op == 0x86) {                               // callx
           rf.call(ip_next, g.ea, 0, 0);
           IP = g.ea;
+          break;
+        } else if (l.no_mem && d.op == 0x84) {                        // bx
+          IP = g.ea;
+          break;
+        } else if (l.no_mem && d.op == 0x85) {                        // balx
+          // MAME writes m_IP, which is already PAST this instruction, so the
+          // return address is ip_next -- not ip. Same trap the CTRL
+          // displacements had, and the reason they are all relative to ip_next.
+          const uint32_t t1 = g.ea;
+          rf.r[d.srcdst] = ip_next;
+          IP = t1;
           break;
         } else if (l.no_mem) {                                         // lda
           rf.r[d.srcdst] = g.ea;

@@ -23,6 +23,8 @@ inline LdSt ldst(uint8_t op, uint8_t addr_lo, uint32_t rd, uint32_t sv) {
     case 0x8a: o.is_store = true; o.size = 1; break;                 // stos
     case 0x8c: o.no_mem = true; break;                               // lda
     case 0x86: o.no_mem = true; break;                               // callx
+    case 0x84: o.no_mem = true; break;                               // bx
+    case 0x85: o.no_mem = true; break;                               // balx
     case 0x90: o.is_load = true;  break;                             // ld
     case 0x92: o.is_store = true; break;                             // st
     case 0x98: o.is_load = true;  o.n_words = 2; o.reg_mask = 0x1e; break;              // ldl

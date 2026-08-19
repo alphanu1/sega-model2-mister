@@ -80,6 +80,13 @@ module i960_ldst (
       8'h8a: begin is_store = 1'b1; size = 2'd1; end                    // stos
       8'h8c: begin no_mem   = 1'b1;              end                    // lda
       8'h86: begin no_mem   = 1'b1;              end                    // callx
+      // bx and balx are BRANCHES that reach their target through the MEM-format
+      // address generator, so they arrive here rather than in the CTRL block.
+      // They were missing, and the real Daytona boot code hits `bx` at 0x920
+      // after clearing RAM -- 32,878 instructions in, which is exactly the kind
+      // of gap a generated instruction mix cannot find.
+      8'h84: begin no_mem   = 1'b1;              end                    // bx
+      8'h85: begin no_mem   = 1'b1;              end                    // balx
       8'h90: begin is_load  = 1'b1;              end                    // ld
       8'h92: begin is_store = 1'b1;              end                    // st
       8'h98: begin is_load  = 1'b1; n_words = 3'd2; reg_mask = 5'h1e; end                 // ldl

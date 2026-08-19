@@ -1964,3 +1964,68 @@ abandons the program, but it runs at the end of the window and an interrupt can
 redirect into the just-overwritten program *within the same window*. The
 invariant is now gated on the program image being clean. Same class as the rest
 of R22: the instrument, not the design.
+
+---
+
+**R25 — the i960 runs Daytona's real boot code, matching MAME instruction for
+instruction.** P1's third exit criterion, and the first test here whose input
+this project did not write.
+
+`make test_i960_rom` loads the real `daytona93` program ROM and runs it through
+`i960_top`; `tools/i960-diff.sh` compares the resulting program-counter stream
+against MAME's, uncollapsed.
+
+**803,355 instructions, identical, zero divergences.** The core boots from the
+ROM's own boot record, clears RAM, programs its wait states, reinitialises
+itself through the IAC port, writes 12,292 words of tilemap, 16 palette entries
+and 64 texture/luma words, and ends in the same DPRAM poll loop MAME reaches.
+
+**It programs `ICR` to `0x0f0e0d0c` and enables the V-blank interrupt.** The
+interrupt controller of R22 and the `modpc` of R24 are not speculative
+infrastructure — the game configures them directly, and the run confirms the
+vector bytes land where the eligibility test reads them.
+
+*Four defects this found that nothing else could have.* Every one was reached
+only by real code, after tens of thousands of instructions, and every one had
+passed a green lockstep suite:
+
+| defect | where it surfaced |
+|---|---|
+| `bx` and `balx` not implemented at all | 32,878 instructions in, immediately after the RAM clear |
+| `synmovq` and the whole IAC port missing | 33,197 in — Daytona reinitialises through IAC 0x93 |
+| `main_data` ROM not modelled | boot copies code out of it into RAM and jumps there |
+| the memory map taken from the wrong board variant | 521,748 in, trapping on opcode 0x00 |
+
+The last is the one worth keeping. **daytona93 is `model2o`, the ORIGINAL Model 2
+board, not the 2A-CRX this study targets**, and the two differ exactly here:
+
+```
+model2o:    map(0x00200000, 0x0021ffff).ram()                             // 128 KB
+            map(0x00220000, 0x0023ffff).rom().region("maincpu", 0x20000)  // ROM MIRROR
+model2a:    map(0x00200000, 0x0023ffff).ram()                             // 256 KB
+```
+
+Treating the upper half as RAM read zero where the boot code calls `0x00227cf0`.
+The symptom — a trap on opcode `0x00` half a million instructions in — points at
+the decoder and is a memory map copied from the wrong variant. **When the ROM set
+and the board variant disagree, the ROM set wins**; the core must eventually
+carry both maps, selected per game.
+
+*What this does NOT establish.* Program counters only. Two runs can agree on
+every PC and disagree on every value — a store to the wrong address surfaces only
+when the PC stream finally reacts to it, which may be never. **Write-stream
+comparison is the next instrument**, and `docs/differential-testing.md` describes
+it. Do not read "803,355 identical" as "the data path is verified".
+
+*And the generator caught up afterwards, which is the discipline that matters.*
+`bx`, `balx` and `synmovq` are now generated in lockstep too, so they are held by
+both instruments rather than only by the ROM run. Getting there needed two fixes
+to the harness, both the R20 sentinel collision again:
+
+- `synmovq` with random register pointers copies **unwritten memory to unwritten
+  memory**, so every word moved is `0xFFFFFFFF` and a mutation copying three
+  words instead of four is invisible. It now uses seeded pointers into a data
+  window filled with per-address values.
+- The IAC message had to be seeded into **both** memory maps; `ref.rf.mem = mem`
+  is a copy taken earlier, and seeding only the harness's map diverged at the
+  message address itself.

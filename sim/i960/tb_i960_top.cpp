@@ -282,7 +282,7 @@ bool     probe_fp     = false;
 // to prevent -- the two differ by a large factor, and neither is wrong.
 enum { C_REGALU=0, C_BRANCH=1, C_FAULT=2, C_CMPBR=3, C_FP=4, C_BBX=5,
        C_EMUL=6, C_MOVX=7, C_MOV=8, C_MULDIV=9, C_LDST=10, C_LDA=11, C_TEST=12,
-       C_FRAME=13, C_SYNMOV=14, C_MODPC=15, C_N=16 };
+       C_FRAME=13, C_SYNMOV=14, C_MODPC=15, C_BRX=16, C_N=17 };
 
 bool mix_daytona = false;
 
@@ -297,9 +297,9 @@ bool mix_daytona = false;
 // describes nothing.
 // synmov is generated at weight ZERO until the divergence below is resolved.
 // Turning it on is one number, and the failing case is recorded in HANDOFF.
-const int W_COVER[C_N]  = { 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 4, 8, 6, 5 };
+const int W_COVER[C_N]  = { 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 4, 8, 6, 5, 4 };
 // synmov measures 0.000% in the Daytona traces, so the measured mix gets none.
-const int W_DAYTON[C_N] = { 12, 4, 0, 6, 1, 2, 1, 3, 10, 1, 45, 8, 3, 4, 0, 0 };
+const int W_DAYTON[C_N] = { 12, 4, 0, 6, 1, 2, 1, 3, 10, 1, 45, 8, 3, 4, 0, 0, 2 };
 
 int pick_class(std::mt19937_64 &rng) {
   const int *w = mix_daytona ? W_DAYTON : W_COVER;
@@ -570,6 +570,16 @@ int main(int argc, char **argv) {
         // program rather than landing in unwritten memory every time.
         const uint32_t d = 4u + 4u * (rng() % 6);
         insn = (((rng() & 1) ? 0x0bu : 0x08u) << 24) | ((d + 4u) & 0x00ffffffu);
+      } else if (cls == 16) {                          // bx / balx
+        // MEMA ABSOLUTE, with the target inside the program. These reach their
+        // destination through the MEM-format address generator, so an ordinary
+        // register-sourced form would branch to whatever junk the register
+        // held and end the program on the IP bound -- testing the bound rather
+        // than the instruction. bit 12 clear selects MEMA, bit 13 clear makes
+        // the 13-bit offset absolute.
+        const uint32_t tgt = PROG_BASE + 4u * uint32_t(rng() % 16);
+        const uint32_t op  = (rng() & 1) ? 0x85u : 0x84u;   // balx : bx
+        insn = (op << 24) | ((1u + (rng() % 24)) << 19) | (tgt & 0x0fffu);
       } else if (cls == 15) {                          // modpc
         // The mask decides how much of PC moves. Biased hard towards the
         // priority field, because that is the only part of PC anything else in
@@ -589,9 +599,23 @@ int main(int argc, char **argv) {
         // get_2_ri, not srcdst. The first version put the destination in the
         // srcdst field, which is not what either the reference or the module
         // reads.
-        const uint32_t dst = ((rng() % 3) == 0) ? 3u : (4u + (rng() % 20));
-        const uint32_t src = 4u + (rng() % 20);
-        insn = (0x60u << 24) | (src << 14) | (0x0u << 7) | dst;
+        // op2 0 is synmov, op2 2 is synmovq. r3 holds 0xff000004 (the ICR) and
+        // r5 holds 0xff000010 (the IAC port), so both magic destinations come
+        // up; anything else is an ordinary move. The quad form's IAC messages
+        // are seeded in the data window below.
+        // The quad form uses SEEDED POINTERS, r6 and r7, not random registers.
+        // With random ones both the source and the destination address
+        // unwritten memory, so every word copied is 0xFFFFFFFF and writing it
+        // is indistinguishable from not writing it -- a mutation copying three
+        // words instead of four SURVIVED for exactly that reason. Same sentinel
+        // collision as R20. r6 and r7 point at distinct four-word blocks in the
+        // seeded data window, so a short copy leaves the destination holding a
+        // value that differs.
+        const bool quad = (rng() % 3) == 0;
+        const uint32_t dst = quad ? (((rng() % 3) == 0) ? 5u : 7u)
+                                  : (((rng() % 3) == 0) ? 3u : (4u + (rng() % 20)));
+        const uint32_t src = quad ? 6u : (4u + (rng() % 20));
+        insn = (0x60u << 24) | (src << 14) | ((quad ? 0x2u : 0x0u) << 7) | dst;
       } else if (cls == 13) {                          // call / ret / flushreg
         // Emitted for the same reason as callx: the frame path had a passing
         // unit test and two defects in it, and a unit test that drives op_call
@@ -883,6 +907,46 @@ int main(int argc, char **argv) {
     // fire -- the instruction would execute constantly and test one path.
     ref.rf.r[2] = 0x001f0000u;
     dut->rootp->i960_top__DOT__u_regs__DOT__loc[2] = 0x001f0000u;
+    // r5 holds synmovq's IAC port, and r4 points at a message for it. Without a
+    // real message every IAC would read whatever the source register addressed
+    // and dispatch on a random type byte, which traps on both sides and ends
+    // the program -- so the path would be generated constantly and tested never.
+    //
+    // 0x93 (reinit) is deliberately NOT generated: it assigns SAT, PRCB and the
+    // IP from the message, and an IP outside the program ends the run. It is
+    // the one Daytona actually uses and it is covered by the ROM differential
+    // test, which is the stronger evidence anyway.
+    {
+      static const uint8_t IAC_TYPES[] = { 0x41, 0x80, 0x89, 0x8f, 0x91, 0x92, 0x40 };
+      const uint32_t iac_at = 0x0b00;
+      // The data window carries DISTINCT values, not the unwritten sentinel.
+      // A synmovq copying three words instead of four was invisible while both
+      // the source's and the destination's fourth word read 0xFFFFFFFF -- the
+      // mutation ran and changed nothing observable. With a per-address pattern
+      // any short copy leaves the destination holding its own old value, which
+      // differs. Seeded on both sides, so it is state, not an asymmetry.
+      for (uint32_t a = 0x800; a < 0xe00; a += 4) {
+        const uint32_t v = 0xda7a0000u | (a >> 2);
+        mem[a] = v; ref.rf.mem[a] = v;
+      }
+      // BOTH maps. `ref.rf.mem = mem` is a COPY taken further up, so seeding
+      // only the harness's map leaves the reference reading unwritten memory
+      // here -- which showed up immediately as a memory-state divergence at
+      // the message address itself.
+      const uint32_t w0 = uint32_t(IAC_TYPES[rng() % 7]) << 24;
+      mem[iac_at]      = w0;          ref.rf.mem[iac_at]      = w0;
+      mem[iac_at + 4]  = 0x0c00;      ref.rf.mem[iac_at + 4]  = 0x0c00;
+      mem[iac_at + 8]  = 0;           ref.rf.mem[iac_at + 8]  = 0;
+      mem[iac_at + 12] = 0;           ref.rf.mem[iac_at + 12] = 0;
+      ref.rf.r[4] = iac_at;
+      ref.rf.r[5] = 0xff000010u;
+      ref.rf.r[6] = 0x0b40;                 // synmovq source block
+      ref.rf.r[7] = 0x0b80;                 // and its destination
+      dut->rootp->i960_top__DOT__u_regs__DOT__loc[4] = iac_at;
+      dut->rootp->i960_top__DOT__u_regs__DOT__loc[5] = 0xff000010u;
+      dut->rootp->i960_top__DOT__u_regs__DOT__loc[6] = 0x0b40;
+      dut->rootp->i960_top__DOT__u_regs__DOT__loc[7] = 0x0b80;
+    }
     // r3 holds the magic synmov destination, so the ICR path gets exercised.
     ref.rf.r[3]  = 0xff000004;
     dut->rootp->i960_top__DOT__u_regs__DOT__loc[3] = 0xff000004;

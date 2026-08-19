@@ -151,6 +151,12 @@ module i960_top (
   logic        intr_call;   // this call is the type-7 interrupt call
   logic        pend_abort;  // a flagged level with no vector under it
   logic        ret7;        // a type-7 return is in flight
+  // synmovq / send_iac. Only the message TYPE of the first IAC word is kept --
+  // the low 24 bits are never read by any message MAME implements.
+  logic  [7:0] iac_msg;
+  logic [31:0] iac1, iac2, iac3;
+  logic  [3:0] synq_step;
+  logic        synq_iac;
   logic [31:0] ret7_pc, ret7_ac;
 
   logic  [4:0] cpu_pri;
@@ -319,7 +325,7 @@ module i960_top (
     T_EXEC, T_MEM, T_MEM_W, T_MULDIV, T_MULTI, T_PAIR, T_FP, T_WB, T_FRAME,
     T_TRAP,
     T_BOOT, T_SYNMOV_RD, T_SYNMOV_WR,
-    T_INTR, T_RET7, T_MODPC
+    T_INTR, T_RET7, T_MODPC, T_SYNQ
   } tstate_e;
 
   tstate_e ts;
@@ -957,6 +963,12 @@ module i960_top (
       ret7      <= 1'b0;
       ret7_pc   <= 32'd0;
       ret7_ac   <= 32'd0;
+      iac_msg   <= 8'd0;
+      iac1      <= 32'd0;
+      iac2      <= 32'd0;
+      iac3      <= 32'd0;
+      synq_step <= 4'd0;
+      synq_iac  <= 1'b0;
       intr_taken_cnt <= 32'd0;
       acc_cnt        <= 32'd0;
       we        <= 1'b0;
@@ -1271,6 +1283,21 @@ module i960_top (
                 end else begin
                   ts <= T_MODPC;   // rd1 (= r[srcdst]) is valid next cycle
                 end
+              end else if ((d_op == 8'h60) && (d_op2 == 4'h2)) begin
+                // synmovq. Destination 0xff000010 is the IAC port and copies
+                // nothing; anything else is a four-dword move.
+                syn_dst   <= (d_src1_lit ? {27'd0, d_src1} : rd1) & 32'hffff_fffc;
+                syn_src   <= (d_src2_lit ? {27'd0, d_src2} : rd2) & 32'hffff_fffc;
+                synq_iac  <= ((d_src1_lit ? {27'd0, d_src1} : rd1) == 32'hff00_0010);
+                synq_step <= 4'd0;
+                aux_we    <= 1'b0;
+                boot_req  <= 1'b0;
+                ts        <= T_SYNQ;
+              end else if ((d_op == 8'h60) && (d_op2 != 4'h0)) begin
+                // MAME fatalerrors on every other 0x60 sub-opcode. Announce it
+                // rather than falling through to the ALU, which would execute
+                // something unrelated.
+                trap_op <= 8'h60; ts <= T_TRAP;
               end else if ((d_op == 8'h60) && (d_op2 == 4'h0)) begin
                 // BOTH addresses are latched here and the request is raised in
                 // the NEXT state, the same shape as callx. Note this was NOT
@@ -1331,6 +1358,13 @@ module i960_top (
                 trap_op <= d_op; ts <= T_TRAP;
               end else if (ls_nomem && (d_op == 8'h86)) begin  // callx
                 rf_call <= 1'b1; call_tgt <= ea; ts <= T_FRAME;
+              end else if (ls_nomem && (d_op == 8'h84)) begin  // bx
+                ip <= ea; ts <= T_FETCH;
+              end else if (ls_nomem && (d_op == 8'h85)) begin  // balx
+                // The link register takes ip_next, because MAME's m_IP is
+                // already past the instruction when execute_op runs.
+                wa <= d_srcdst; wd <= ip_next; we <= 1'b1;
+                ip <= ea; ts <= T_FETCH;
               end else if (ls_nomem) begin                // lda
                 wa <= d_srcdst; wd <= ea; we <= 1'b1;
                 ip <= ip_next; ts <= T_FETCH;
@@ -1474,6 +1508,84 @@ module i960_top (
             rf_ret  <= 1'b1;
             ts      <= T_FRAME;
           end
+        end
+
+        // --------------------------------------------------------- synmovq
+        T_SYNQ: if (synq_iac) begin
+          case (synq_step)
+            // Four reads of the IAC message.
+            4'd0, 4'd1, 4'd2, 4'd3: if (!boot_req) begin
+              aux_we    <= 1'b0;
+              boot_addr <= syn_src + {28'd0, synq_step[1:0], 2'b00};
+              boot_req  <= 1'b1;
+            end else if (boot_ack) begin
+              boot_req <= 1'b0;
+              case (synq_step[1:0])
+                2'd0:    iac_msg <= bus_rdata[31:24];
+                2'd1:    iac1    <= bus_rdata;
+                2'd2:    iac2    <= bus_rdata;
+                default: iac3    <= bus_rdata;
+              endcase
+              synq_step <= synq_step + 4'd1;
+            end
+
+            4'd4: begin
+              ac <= {ac[31:3], 3'd2};
+              case (iac_msg)
+                // Reinit. THE IP COMES FROM THE MESSAGE, so this must not
+                // advance to ip_next -- Daytona's boot builds a PRCB in work
+                // RAM, points the CPU at it with this, and resumes at 0x924.
+                8'h93: begin
+                  sat_reg  <= iac1;
+                  prcb_reg <= iac2;
+                  ip       <= iac3;
+                  ts       <= T_FETCH;
+                end
+                8'h80: synq_step <= 4'd5;              // store SAT and PRCB
+                8'h41: begin                           // test for pending
+                  ip        <= ip_next;
+                  intr_mode <= M_PEND;
+                  intr_step <= 4'd0;
+                  ts        <= T_INTR;
+                end
+                // Generate IRQ, invalidate I-cache, breakpoints, stop,
+                // continue: MAME logs and ignores each one.
+                default: begin ip <= ip_next; ts <= T_FETCH; end
+              endcase
+            end
+
+            default: if (!boot_req) begin             // steps 5 and 6
+              aux_we    <= 1'b1;
+              boot_addr <= (synq_step == 4'd5) ? iac1 : (iac1 + 32'd4);
+              aux_wdata <= (synq_step == 4'd5) ? sat_reg : prcb_reg;
+              boot_req  <= 1'b1;
+            end else if (boot_ack) begin
+              boot_req <= 1'b0;
+              if (synq_step == 4'd5) synq_step <= 4'd6;
+              else begin
+                aux_we <= 1'b0;
+                ip     <= ip_next;
+                ts     <= T_FETCH;
+              end
+            end
+          endcase
+        end else if (!boot_req) begin
+          // Memory to memory, four dwords. Even steps read the source, odd
+          // steps write the destination; synq_step[2:1] is the word index.
+          aux_we    <= synq_step[0];
+          boot_addr <= (synq_step[0] ? syn_dst : syn_src)
+                     + {28'd0, synq_step[2:1], 2'b00};
+          aux_wdata <= scratch;
+          boot_req  <= 1'b1;
+        end else if (boot_ack) begin
+          boot_req <= 1'b0;
+          if (!synq_step[0]) scratch <= bus_rdata;
+          if (synq_step == 4'd7) begin
+            aux_we <= 1'b0;
+            ac     <= {ac[31:3], 3'd2};
+            ip     <= ip_next;
+            ts     <= T_FETCH;
+          end else synq_step <= synq_step + 4'd1;
         end
 
         // ------------------------------------------------------------ modpc
