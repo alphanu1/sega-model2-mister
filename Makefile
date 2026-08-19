@@ -448,6 +448,41 @@ quartus_report:
 	 mlab=$$(grep -m1 'Total MLAB memory bits' $(QDIR)/output_files/$(MOD).map.rpt 2>/dev/null | sed 's/.*; *\([0-9,]*\) *;.*/\1/'); \
 	 printf 'ALM %-7s reg %-6s M10K %-4s MLABbits %-6s DSP %-3s Fmax %s\n' "$${alm:-?}" "$${reg:-?}" "$${m10k:-0}" "$${mlab:-0}" "$${dsp:-?}" "$${fmax:-comb (no clock)}"
 
+# --------------------------------------------------------------------- release
+# Gather the .rbf and the .mra into one tree laid out the way MiSTer expects, so
+# flashing is a copy rather than an assembly job. Two arrangements, because the
+# core is currently useful in both:
+#
+#   Model2.rbf            top level -- launch it DIRECTLY from the MiSTer menu.
+#                         This is the one to use today: steps 1-3 need no ROM,
+#                         and a bare .rbf placed where the menu browses is listed.
+#   _Arcade/*.mra         the arcade flow, for when the loader has something to
+#   _Arcade/cores/*.rbf   load. `_Arcade/cores` is NOT browsed directly -- those
+#                         cores launch via their .mra.
+#
+# The .rbf is a build artifact and stays out of git; the .mra is tracked, because
+# a file describing a ROM layout is fine and the bytes are not.
+RELEASE := build/release
+
+.PHONY: release
+release:
+	@test -f output_files/Model2.rbf || { \
+	  echo "no output_files/Model2.rbf -- run: quartus_sh --flow compile Model2"; exit 1; }
+	@rm -rf $(RELEASE)
+	@mkdir -p $(RELEASE)/_Arcade/cores
+	@cp output_files/Model2.rbf $(RELEASE)/Model2.rbf
+	@cp output_files/Model2.rbf $(RELEASE)/_Arcade/cores/Model2.rbf
+	@cp mra/*.mra $(RELEASE)/_Arcade/
+	@echo "release tree in $(RELEASE):"
+	@cd $(RELEASE) && find . -type f | sort | sed 's/^/  /'
+	@echo ""
+	@echo "  TODAY (no ROM needed): copy Model2.rbf to /media/fat/_Other/ and run it."
+	@echo "  Overlay must read  word2=000001A8  word3=000001F0  -- MAME set_raw."
+	@echo ""
+	@echo "  The .mra is NOT usable yet: the loader has no consumer, and the full"
+	@echo "  ROM set is 43.62 MB against the 32 MB this controller addresses."
+	@echo "  See docs/rom-layout.md."
+
 # --------------------------------------------------------------------- clean
 
 clean:

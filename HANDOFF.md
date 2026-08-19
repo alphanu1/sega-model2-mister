@@ -2693,6 +2693,27 @@ One generator note worth keeping: `callx`'s address is a **call target**, so it
 must point at code. Aimed into the data window it calls unwritten memory and
 executes `0xffffffff`, which tests the trap path instead of the call.
 
+### `make release` gathers the flashable files
+
+```
+build/release/Model2.rbf                          <- launch this directly today
+build/release/_Arcade/Daytona USA (Deluxe 93).mra
+build/release/_Arcade/cores/Model2.rbf
+```
+
+`output_files/` is git-ignored, as build folders are, and `mra/` is tracked — a
+file describing a ROM layout is fine, the bytes are not. Nothing gathered the two
+until now.
+
+**For the board today: copy `Model2.rbf` to `/media/fat/_Other/` and run it.**
+Steps 1-3 need no ROM. `_Arcade/cores` is not browsed directly; those launch via
+their `.mra`, which is not usable yet — the loader has no consumer and the full
+set is 43.62 MB against the 32 MB the controller addresses.
+
+**What to read off the screen:** `word2 = 000001A8` and `word3 = 000001F0`. Those
+are MAME's `set_raw` numbers, already asserted in simulation — silicon agreeing is
+a separate claim.
+
 ### P1.5 step 3 WIRED: SDRAM + ROM loader in, with a readback that proves it
 
 **Builds, 0 errors, timing clean. 7,707 ALM (18%), 58 M10K.** Not on hardware yet.
