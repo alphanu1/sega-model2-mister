@@ -2770,8 +2770,25 @@ the synmov dispatch believed it was. The reference wrote to its own `t1`
 elsewhere, which is why the check reports the DUT's address as absent rather than
 differing.
 
-**Next step, and do not skip it:** confirm what `rd1`/`rd2` actually hold during
-`T_EXEC` for a REG-format instruction before changing anything. `ra1`/`ra2` are
+**The latching fix was TRIED AND DID NOT WORK** — both addresses are now latched
+at dispatch and the request raised from the latched value in the next state, and
+the failure is bit-identical: `MEMSTATE retire 22 6bc4a65c dut=deadfbcb
+ref=ffffffff`, same address, same value. So the callx-shaped hypothesis is wrong
+and is recorded as such.
+
+**What the evidence actually says, re-read:** the DUT wrote to `0x6bc4a65c`, and
+that address matches the REFERENCE's own `t1 = r[6]`. Had the reference executed
+`synmov` it would have written *something* to that same address. It wrote nothing.
+**So the reference's branch is not firing, and the module may be correct.**
+
+Checked and eliminated: `0x60 < 0x80` so the format is `FMT_REG`; the branch sits
+at the top of that case, before anything that could intercept; `op2` really is
+`(insn >> 7) & 0xf` and is 0 for `6004c006`; and bit 11 is clear so `src1_lit` is
+false on both sides.
+
+**Next step: instrument the reference, do not reason about it.** Print whether the
+branch is entered and what `t1`/`t2` it computes for `insn 6004c006`. One printf
+settles what four inferences have not. The module is not the suspect. `ra1`/`ra2` are
 driven a state ahead and revert on leaving `T_EXEC` — that is exactly what bit
 `callx`, where the call target had to be latched rather than presented live. This
 smells like the same fault in a new place. **Latching both addresses at dispatch,

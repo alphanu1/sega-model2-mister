@@ -83,6 +83,7 @@ module i960_top (
   // are read by take_interrupt to decide whether an interrupt can be taken and
   // which stack it uses.
   logic [31:0] syn_dst;     // synmov destination, held across the two phases
+  logic [31:0] syn_src;     // and its source, latched for the same reason
   logic [31:0] pc_reg;      // process controls
   logic [31:0] sat_reg;     // system address table
   logic [31:0] prcb_reg;    // processor control block
@@ -757,6 +758,7 @@ module i960_top (
       aux_we    <= 1'b0;
       aux_wdata <= 32'd0;
       syn_dst   <= 32'd0;
+      syn_src   <= 32'd0;
       we        <= 1'b0;
       wa        <= 5'd0;
       wd        <= 32'd0;
@@ -832,7 +834,10 @@ module i960_top (
         end
 
         // ------------------------------------------------------- synmov
-        T_SYNMOV_RD: if (boot_ack) begin
+        T_SYNMOV_RD: if (!boot_req) begin
+          boot_addr <= syn_src;
+          boot_req  <= 1'b1;
+        end else if (boot_ack) begin
           if (syn_dst == 32'hff00_0004) begin
             // The interrupt control register, not memory.
             icr_reg  <= bus_rdata;
@@ -844,11 +849,14 @@ module i960_top (
             aux_wdata <= bus_rdata;
             boot_addr <= syn_dst;
             aux_we    <= 1'b1;
+            boot_req  <= 1'b0;
             ts        <= T_SYNMOV_WR;
           end
         end
 
-        T_SYNMOV_WR: if (boot_ack) begin
+        T_SYNMOV_WR: if (!boot_req) begin
+          boot_req <= 1'b1;
+        end else if (boot_ack) begin
           boot_req <= 1'b0;
           aux_we   <= 1'b0;
           ac       <= {ac[31:3], 3'd2};
@@ -1003,11 +1011,18 @@ module i960_top (
               // It uses the aux master rather than the LSU because both
               // addresses are register values, not a decoded effective address.
               if ((d_op == 8'h60) && (d_op2 == 4'h0)) begin
-                syn_dst   <= d_src1_lit ? {27'd0, d_src1} : rd1;
-                boot_addr <= d_src2_lit ? {27'd0, d_src2} : rd2;
-                aux_we    <= 1'b0;
-                boot_req  <= 1'b1;
-                ts        <= T_SYNMOV_RD;
+                // BOTH addresses are latched here, and the request is raised in
+                // the NEXT state from the latched value. Driving boot_addr
+                // directly at dispatch made the module read address 4 -- a boot
+                // walk address -- because the bus register was being consumed
+                // before the dispatch cycle's write to it had landed. Same shape
+                // as callx, where the call target had to be latched rather than
+                // presented live.
+                syn_dst  <= d_src1_lit ? {27'd0, d_src1} : rd1;
+                syn_src  <= d_src2_lit ? {27'd0, d_src2} : rd2;
+                aux_we   <= 1'b0;
+                boot_req <= 1'b0;
+                ts       <= T_SYNMOV_RD;
               end else if (is_movx) begin
                 // First word now; the rest one per cycle. ra1 already holds the
                 // source base from decode, so rd1 is live this cycle.
