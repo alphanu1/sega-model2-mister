@@ -2264,7 +2264,7 @@ else if (ldr_wr_req && ldr_wr_ack && (ldr_wr_addr > ldr_top)) ldr_top <= ldr_wr_
 its own comment says "req pulsed so the controller sees a rising edge" — and
 then waits for the ACK EDGE. So `req && ack` is never simultaneously true,
 `ldr_top` stayed at zero, `game_image` was permanently false, and the copy engine
-ran on all 43.88 MB.
+ran on all 43.62 MB.
 
 *Why this is worth an entry rather than a one-line fix.* `docs/mister-integration.md`
 says **one access is `req & ack`, not one cycle of `req`**, and
@@ -2721,7 +2721,7 @@ ROM image, so the read was correct and the *branch* that led there was not.
 wrong; they cannot say where it stops being right, and with hardcoded spans each
 probe is a 25-minute build. The sweep base is now an OSD option — region N is
 word `N*0x100000` for 2 MB, and `tools/rom_csum.py --region N` folds the same
-span — so bisecting 43.88 MB costs menu clicks instead of builds. `--scan`
+span — so bisecting 43.62 MB costs menu clicks instead of builds. `--scan`
 prints the whole table at once.
 
 One caveat is built into both sides: **regions past the end of the image prove
@@ -2730,3 +2730,74 @@ unwritten read returns by contract, but nothing wrote those words in the chip
 either and real SDRAM comes up holding whatever it holds. For daytona93 the
 image ends at word `0x15EFFFF`, so regions 0-20 are evidence and region 21 is
 not.
+
+**R39 — the chip held the image the whole time. The reference did not.** The
+sweep bisect ran, the board matched regions 0-16 and disagreed on 17-20, and
+the disagreement was in `tools/rom_csum.py`.
+
+*How it was found without another build.* Four wrong numbers are more
+informative than one. Rather than ask for more regions, the readings were tested
+against every single-address-bit fault the controller could have -- each bit of
+the 25-bit word address forced, cleared and flipped, folding the host image at
+the resulting source and comparing:
+
+```
+region 18: reads from word 0x1220000 (bit 17) -> MATCH
+region 20: reads from word 0x1420000 (bit 17) -> MATCH
+```
+
+Not a stuck bit. Both regions read `base + 0x20000` -- **the same displacement,
+0x20000 words, 256 KB** -- which is not an address fault at all. It is an
+offset, and an offset means the two sides disagree about where a part begins.
+
+*The defect.* Daytona's two 68000 sound ROMs are declared
+
+```xml
+<interleave output="16">
+  <part name="epr-16489.7" crc="c20e543e" map="12"/>
+</interleave>
+```
+
+`output="16"` with `map="12"` is a **byte swap**: two bytes in, two bytes out.
+`build_image` ignored the `output` attribute and assumed 32 throughout, so it
+emitted four bytes for every two and made each part `0x20000` too long. Two such
+parts, `0x40000` = 256 KB, and every part after them sat 256 KB late in the
+reconstruction while the board had them in the right place.
+
+Corrected, the image is **0x2BA0000 = 43.62 MB**, and the whole table agrees:
+
+| rgn | 17 | 18 | 19 | 20 |
+|---|---|---|---|---|
+| board | `7D7E94` | `DB4D7D` | `BCBA2C` | `19E937` |
+| tool, fixed | `7D7E94` | `DB4D7D` | `BCBA2C` | `19E937` |
+
+*What this exonerates.* All of it. The SDRAM controller, the capture phase, the
+64 MB geometry of R19, the FIFO, the loader. **And the loader's high-water mark,
+which read "256 KB short of the MRA's length" and was called a symptom for three
+sessions.** It was short by exactly the amount the tool was long. It was right.
+The one instrument reporting the truth was the one under suspicion.
+
+*Why the control did not catch it.* The original sweep folded the first 64 KB of
+program ROM and matched exactly, and that match was used to license the far-end
+number. It was a real control and it was correctly reasoned about -- but it sat
+at word 0, **before every part whose offset was wrong**. A control upstream of
+the fault cannot see the fault. It proves the fold arithmetic, the port, the
+capture phase and the host tool agree *on that region*, which is exactly what
+was claimed for it, and no more.
+
+The generalisation, which is the reusable part: **a control must be able to
+fail.** Placing one where the suspected mechanism cannot reach it produces
+confidence without evidence. Region 16 makes the same point from the other side
+-- it is byte-identical to region 15 in the image, so it would have matched even
+under an alias, and a "pass" there means nothing either.
+
+*And what it does not exonerate.* The trap is still real. R38's finding stands
+on its own evidence: simulation, run to a real instruction budget, traps too,
+after 19.57M instructions and a null-pointer dereference. Memory was the leading
+theory and it is now dead, which leaves the CPU or the memory map, and both are
+reproducible in a harness with MAME as an oracle.
+
+*Pattern.* R38 was a default read as a behaviour. R39 is a reference read as an
+oracle. Both are the same shape as the six already recorded: **the model was
+gentler than the thing it modelled**, and in both cases the hardware was
+reporting correctly while the instrument was believed over it.

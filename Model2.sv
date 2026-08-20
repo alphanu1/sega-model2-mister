@@ -75,7 +75,7 @@ localparam CONF_STR = {
 	"O[5:4],SDRAM phase,CL+1,CL+0,CL+2,CL+3;",
 	// WHICH 2 MB OF THE CHIP THE PORT-4 SWEEP FOLDS. Selectable because the
 	// alternative is a 25-minute build per probe, and locating a corruption in
-	// 43.88 MB takes more than one probe. Region N covers word N*0x100000 for
+	// 43.62 MB takes more than one probe. Region N covers word N*0x100000 for
 	// 0x100000 words; tools/rom_csum.py --region N folds the same span of the
 	// image. Changing this restarts the sweep, so it costs a menu click.
 	"O[10:6],Sweep region (2MB),0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31;",
@@ -592,9 +592,16 @@ localparam logic [SDR_AW:1] XLAT_BASE = SDR_AW'(32'h4A000);
 // ------------------------------------------------------------- the game map
 //
 // Word addresses, and they sit ABOVE the ROM image the MRA lays down. The
-// Daytona MRA loads 0x2BE0000 bytes -- 43.88 MB, computed from the part sizes
-// rather than assumed -- so the RAM regions start at a word address clear of
-// it. Total with RAM is about 45.6 MB, inside the 64 MB R19 MEASURED.
+// Daytona MRA loads 0x2BA0000 bytes -- 43.62 MB -- so the RAM regions start at
+// a word address clear of it. Total with RAM is about 45.6 MB, inside the 64 MB
+// R19 MEASURED. GAME_WORK sits 0x30000 words above the last ROM word, which is
+// margin, not a coincidence to rely on.
+//
+// This figure was 0x2BE0000 until R39. `tools/rom_csum.py` expanded two
+// output="16" byte-swap interleaves as though they were 32-bit, adding 256 KB
+// that is not in the set, and every part after Daytona's 68000 sound ROMs then
+// sat 256 KB late in the reconstruction. The BOARD had them in the right place
+// throughout; the reference did not.
 //
 // These are ROM offsets from the MRA's own ordering:
 //   0x00000000  program ROM   (epr-16530a + epr-16531a, interleaved to 32 bits)
@@ -789,7 +796,7 @@ end
 //             game ROM, so the CPU MUST STAY IN RESET: released, it would
 //             execute whatever the capture happens to contain and write over
 //             the tilemap it is supposed to be displaying.
-//   large  -- the game, 43.88 MB. The copy engine must NOT run: its bases point
+//   large  -- the game, 43.62 MB. The copy engine must NOT run: its bases point
 //             at what is now the program ROM, so it would spend 36,864 reads
 //             copying code into tile RAM, and the CPU owns those arrays anyway.
 //
@@ -802,7 +809,7 @@ always_ff @(posedge clk_sdram or negedge mem_rst_n) begin
 	// level handshake the numbered ports use: m2_rom_loader PULSES req and drops
 	// it immediately -- "req pulsed so the controller sees a rising edge" -- then
 	// waits for the ACK EDGE. So `req && ack` is never true, ldr_top stayed 0,
-	// game_image was permanently false, and the copy engine ran on the 43.88 MB
+	// game_image was permanently false, and the copy engine ran on the 43.62 MB
 	// game image and filled tile RAM with i960 program code. That is what the
 	// board displayed as scrolling colour noise.
 	//
@@ -989,7 +996,7 @@ assign cpu_io_rdata =
 // finding that with hardcoded spans is one 25-minute build per probe.
 //
 // Region N is word N*0x100000 for 0x100000 words -- 2 MB, so 22 regions cover
-// the 43.88 MB set. tools/rom_csum.py --region N folds the same span of the
+// the 43.62 MB set. tools/rom_csum.py --region N folds the same span of the
 // image. Walk N until the two disagree; that boundary is the fault.
 //
 // ONLY REGIONS WHOLLY INSIDE THE IMAGE MEAN ANYTHING. Past the end the host

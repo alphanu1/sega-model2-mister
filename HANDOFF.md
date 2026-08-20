@@ -78,48 +78,66 @@ a difference between them — but the reasoning is now the other way round: not
 that hardware fails where simulation succeeds, but that **both fail the same
 way**.
 
-## The sweep, and how to bisect with it
+## The SDRAM is verified end to end — and the fault was in the reference
 
-The overlay's port-4 sweep folds a region of SDRAM and shows the result. Its
-control region matched `tools/rom_csum.py` **exactly**, which is what makes the
-mismatching region believable rather than an instrument artefact (R38).
+**All 21 regions of the Daytona set now fold identically on the board and on the
+host.** The chip holds the image. This closes a line of investigation that ran
+for three sessions and was aimed at the wrong component throughout.
 
-**Region N is word `N*0x100000` — 2 MB — and it is an OSD option**, so probing a
-different part of the chip is a menu click, not a 25-minute build.
+The board matched regions 0–16 and disagreed on 17–20. Rather than ask for more
+readings, the four wrong values were tested against every single-address-bit
+fault the controller could produce — each bit of the 25-bit word address forced,
+cleared and flipped, folding the host image at the resulting source:
 
-On the host:
+```
+region 18: reads from word 0x1220000 (bit 17) -> MATCH
+region 20: reads from word 0x1420000 (bit 17) -> MATCH
+```
+
+Both read `base + 0x20000` — the *same* displacement, 256 KB. That is not an
+address fault, it is an offset, and an offset means the two sides disagree about
+where a part begins.
+
+`tools/rom_csum.py` ignored the `output` attribute on `<interleave>`. Daytona's
+two 68000 sound ROMs are `output="16" map="12"` — a byte swap, two bytes in and
+two bytes out — and the tool emitted four for every two, making each part
+`0x20000` too long. **The image is 43.62 MB, not 43.88.**
+
+**And the loader's high-water mark was right all along.** It read "256 KB short
+of the MRA's length" and was treated as a symptom; it was short by exactly the
+amount the tool was long. The one instrument reporting the truth was the one
+under suspicion. Study R39.
+
+**What that exonerates:** the SDRAM controller, the capture phase, R19's 64 MB
+geometry, the FIFO, and the loader. Memory was the leading theory for the trap.
+It is now dead, which leaves the CPU or the memory map — and both are
+reproducible in simulation.
+
+**What it costs to have learned:** the original control folded the first 64 KB
+of program ROM, matched exactly, and was used to license the far-end number. It
+was a real control, correctly reasoned about — and it sat at word 0, *before
+every part whose offset was wrong*. **A control must be able to fail.** Region
+16 makes the point from the other side: it is byte-identical to region 15, so it
+would have matched even under an alias.
+
+## Using the sweep
+
+Region N is word `N*0x100000` — 2 MB — selectable from the OSD, restarting on
+change. On the host:
 
 ```
 python3 tools/rom_csum.py "mra/Daytona USA (Deluxe 93).mra" /home/ben/roms/Model2 --scan
 ```
 
-For daytona93 that prints:
-
-| rgn | expected | | rgn | expected | | rgn | expected |
-|---|---|---|---|---|---|---|---|
-| 0 | `25E723` | | 8 | `F578C0` | | 16 | `06D6CC` |
-| 1 | `054FB2` | | 9 | `C0E971` | | 17 | `D74A62` |
-| 2 | `FB65EC` | | 10 | `A8196E` | | 18 | `CDE292` |
-| 3 | `FA35F1` | | 11 | `82B1E2` | | 19 | `EF07A7` |
-| 4 | `79FA07` | | 12 | `A76A16` | | 20 | `167511` |
-| 5 | `B020CC` | | 13 | `1B298F` | | 21 | *past the end* |
-| 6 | `05D3FD` | | 14 | `FD6ADB` | | | |
-| 7 | `526F18` | | 15 | `06D6CC` | | | |
-
-Regions 15 and 16 fold identically because they **are** byte-identical in the
-image — a genuine mirror in the ROM layout, checked, not a tool bug.
-
 On the board, read two overlay rows together:
 
 - **row 13** — `DD00000N`. `DD` means the sweep FINISHED; `00` means it is still
-  running and row 12 is a partial total, not a result. `N` is the region, so row
-  12 can never be read against the wrong expectation.
+  running and row 12 is a partial total, not a result. `N` is the region.
 - **row 12** — the fold.
 
-Walk N up from 0. The first region where the board disagrees with the table is
-where the load stops arriving. **Regions past 20 are not evidence** — the host
-tool substitutes `0xFFFF` beyond the image end because that is what an unwritten
-read returns by contract, but nothing wrote those words in the chip either.
+Regions past the image end are marked by `--scan` and are not evidence: the host
+tool substitutes `0xFFFF` there because that is what an unwritten read returns by
+contract, but nothing wrote those words in the chip either.
 
 ### Flashing
 

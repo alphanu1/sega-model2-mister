@@ -61,17 +61,35 @@ def build_image(mra_path, zip_dir, extra=()):
             raise SystemExit(f"missing from zips: {nm}")
         for ch in rom:
             if ch.tag == 'interleave':
+                # `output` IS NOT ALWAYS 32, and assuming it was is what made
+                # this tool disagree with the board. Daytona's two 68000 sound
+                # ROMs are output="16" map="12" -- a byte swap that produces
+                # exactly as many bytes as it consumes. Expanding them to 32
+                # bits made each one 0x20000 too long, so every part after them
+                # sat 256 KB late in the reconstruction while the board had it
+                # in the right place. The board was right. See study R39.
+                ow    = int(ch.get('output', '32')) // 8   # output bytes/group
                 parts = [read(p.get('name')) for p in ch]
                 maps  = [p.get('map') for p in ch]
-                n = max(len(p) for p in parts)
+                for mp in maps:
+                    if len(mp) != ow:
+                        raise SystemExit(f"map {mp!r} is not {ow} bytes wide")
+                # Input bytes consumed per group is the largest digit used, so
+                # a byte swap (map "12") consumes two and emits two.
+                gs = [max((int(d) for d in mp if d != '0'), default=0)
+                      for mp in maps]
+                ngroups = max((len(p) + g - 1) // g
+                              for p, g in zip(parts, gs) if g)
                 # map digits run MOST significant output byte first; digit d
                 # means "input byte d" (1-based), 0 means contribute nothing.
-                for i in range(0, n, 2):
-                    word = bytearray(4)
-                    for part, mp in zip(parts, maps):
+                for i in range(ngroups):
+                    word = bytearray(ow)
+                    for part, mp, g in zip(parts, maps, gs):
+                        if not g: continue
+                        base = i * g
                         for oi, d in enumerate(reversed(mp)):
                             if d == '0': continue
-                            src = i + int(d) - 1
+                            src = base + int(d) - 1
                             if src < len(part): word[oi] = part[src]
                     out += word
             elif ch.tag == 'part' and ch.get('name'):
