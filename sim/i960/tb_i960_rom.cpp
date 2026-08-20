@@ -115,6 +115,8 @@ static std::map<uint32_t, uint64_t> unmapped_rd, unmapped_wr;
 // then sits in a poll loop forever -- which reads as "the CPU stopped" and is
 // actually "the machine never told it a frame had ended".
 static uint32_t intreq = 0, intena = 0;
+static bool dpram0 = false;
+static uint32_t dpram_fill = 0;
 
 static void drive_irq() {
   dut->irq = uint8_t(((intreq & 0x001u) ? 1u : 0u) |
@@ -127,6 +129,20 @@ static uint32_t mem_read(uint32_t a) {
   a &= ~3u;
   if (a == 0x00e80000u) return intreq;          // irq_request_r
   if (a == 0x00e80004u) return intena;          // irq_enable_r
+  // EXPERIMENT, not a model. The boot polls the sound board's dual-port RAM at
+  // 0x01c00040 and will not proceed until it reads 0. There is no sound board
+  // here, so it never does -- and MAME sits in the same loop for its whole
+  // trace window. +dpram0 answers "what is actually gating the first drawn
+  // frame" by forcing the poll to succeed. It is a switch precisely because it
+  // is a lie: nothing downstream of it is evidence about the real machine.
+  // The DPRAM is 8 BITS WIDE, at bytes 0 and 2 of each dword -- MAME's map says
+  // .umask32(0x00ff00ff). So 0x01c00040 and 0x01c00042 are two bytes of ONE
+  // word, and an override keyed on the byte address is keyed on nothing: the
+  // read has already been masked to the word. The first version of this
+  // experiment did exactly that and reported identical cycle counts for every
+  // value it was given, which is what a switch that changes nothing looks like.
+  if (dpram0 && a >= 0x01c00000u && a < 0x01c01000u)
+    return (a == 0x01c00040u) ? ((dpram_fill & 0xffu) << 16) : 0u;
   // The 0x00220000 ROM mirror, model2o only. Checked before the RAM map so it
   // cannot be shadowed by a stray write.
   if (a >= 0x00220000u && a < 0x00240000u) {
@@ -226,6 +242,8 @@ int main(int argc, char **argv) {
     if (!std::strcmp (argv[i], "+trace"))    trace = true;
     if (!std::strncmp(argv[i], "+out=", 5))  tracefile = argv[i]+5;
     if (!std::strncmp(argv[i], "+dump=", 6)) dumpdir   = argv[i]+6;
+    if (!std::strcmp (argv[i], "+dpram0"))   dpram0    = true;
+    if (!std::strncmp(argv[i], "+dpfill=", 8)) dpram_fill = uint32_t(std::strtoul(argv[i]+8, nullptr, 16));
   }
 
   const char *rp = std::getenv("M2_ROMPATH");
