@@ -164,9 +164,23 @@ module m2_sdram #(
   // from cap[2], cap[1], cap[0], so a length of 2 would take two of those from
   // stale slots. So it bursts 4 and the requester picks its half — see
   // m1_integrated, which aligns the address down and selects on bit 1.
+  // PORT 0 BURSTS FOUR TOO. It used to return a single word, and a single-word
+  // read carries A10 -- auto-precharge -- on its FIRST command, because the
+  // first word is also the last. The row therefore closes tRCD+1 cycles after
+  // it was activated, which is inside tRAS on a real device and tolerated by a
+  // behavioural model. Ports 1 to 3 burst four and issue the precharge on the
+  // fourth, comfortably clear of it.
+  //
+  // That is the asymmetry the board showed: the tilemap copy engine and the
+  // character fetch read correctly on ports 2 and 3 while the CPU on port 0
+  // read zero from the same SDRAM, at every capture depth the OSD offers.
+  //
+  // A 64-bit p_dout holds four words, so the CPU's 32-bit access now takes ONE
+  // transaction instead of two -- which also removes the held-acknowledge
+  // hazard of study R32 rather than working around it.
   function automatic logic [3:0] blen(input int unsigned p);
     case (p)
-      1, 2, 3: blen = 4'd4;
+      0, 1, 2, 3: blen = 4'd4;
       default: blen = 4'd1;
     endcase
   endfunction

@@ -2382,3 +2382,56 @@ that drives it — a pulsed request read as a level, an address one past the end
 read as in range, an acknowledge held for two cycles read as one. **None was
 visible in simulation, and all three were named by the overlay on the first
 frame.**
+
+
+---
+
+**R33 — a single-word read auto-precharges on its first command, and the CPU was
+the only port doing single-word reads.** The overlay split the problem in one
+reading:
+
+```
+row 2  = 00000860   the SAME words, read through PORT 1
+row 10 = 00000004   the address port 0 last asked for
+row 11 = 00000000   what port 0 got back
+```
+
+**The ROM is in SDRAM and port 1 reads it correctly.** Port 0 asks for plausible
+addresses and receives zero. That eliminated the loader, the MRA layout, the
+memory map and the decoder in a single frame.
+
+*The mechanism.* `m2_sdram`'s `S_RD` asserts A10 — auto-precharge — on the
+**last** word of a burst. For a single-word read the first word **is** the last,
+so the row closes about `tRCD + 1` cycles after it was activated, inside `tRAS`.
+A behavioural model tolerates that; a device need not. Ports 1 to 3 burst four
+and issue the precharge on the fourth, clear of it.
+
+That is exactly the asymmetry the board showed: **the copy engine on port 2 and
+the character fetch on port 3 read correctly while the CPU on port 0 read zero
+from the same SDRAM, at every capture depth the OSD offers.**
+
+*The fix removes the case rather than tuning it.* `blen()` now gives port 0 four
+words like the others, and since `p_dout` is 64 bits the CPU's 32-bit access
+takes **one** transaction instead of two — which also deletes the held-ack
+hazard of R32 rather than working around it.
+
+*Three testbenches, three models of the same controller, three drifts.* This is
+the through-line of R32 and R33 and it is worth stating once:
+
+| model | said | controller says |
+|---|---|---|
+| `tb_m2_cpu_bridge.cpp` | ack lasts 1 cycle | `ACK_HOLD` = 2 |
+| `tb_m2_cpu_bridge.cpp` | port 0 returns 1 word | now 4 |
+| `tb_m2_sdram.cpp` | port 3 returns 1 word | `blen()` says 4 |
+| `m2_sdram_harness.sv` | `rd_lat_sel` = 3 | the core ships 0 |
+
+**Every one of these was written by the same hand as the code it tests, and each
+agreed with that code rather than with the device.** A hand-written model of a
+block is a second opinion from the same source. The composition test —
+`make test_m2_cpu_sdram`, real bridge against real controller — exists because of
+this and reproduced the hardware symptom on its first run.
+
+*What is still open.* The model needs `rd_lat_sel = 3` where the board works at
+0, and changing the OSD setting on hardware does not help. **That disagreement
+is unexplained**, and it means the simulation cannot be trusted to choose the
+capture depth. It is recorded rather than reasoned away.

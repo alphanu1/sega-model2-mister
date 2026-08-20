@@ -70,7 +70,18 @@ static void step() {
         if (pb & 2) cur = uint16_t((cur & 0x00ff) | (pd & 0xff00));
         sdram[pa] = cur;
       } else {
-        dut->sd_dout = sdram.count(pa) ? sdram[pa] : 0xffff;
+        // A FOUR-WORD BURST, because that is what port 0 now does -- blen()
+        // gives ports 0 to 3 four words. Returning one and zero-filling the
+        // rest is what this model used to do, and it is how a model drifts
+        // from the thing it models: the bridge reads p_dout[31:0] and would
+        // have seen a permanently zero high half.
+        uint64_t d = 0;
+        for (int w = 0; w < 4; ++w) {
+          const uint32_t a = pa + uint32_t(w);
+          const uint64_t v = sdram.count(a) ? sdram[a] : 0xffffu;
+          d |= v << (16 * w);
+        }
+        dut->sd_dout = d;
       }
       dut->sd_ack = 1;
       ackhold = 1;                 // this cycle plus one more = ACK_HOLD of 2

@@ -252,7 +252,7 @@ module m2_cpu_bridge #(
   //
   // On hardware that made the i960 read its boot IP as 0x00600860 where the ROM
   // holds 0x00000860 -- the low half right, the high half not.
-  typedef enum logic [2:0] { S_IDLE, S_LO, S_LO_W, S_HI, S_HI_W, S_DONE } st_e;
+  typedef enum logic [2:0] { S_IDLE, S_LO, S_LO_W, S_HI, S_HI_W, S_RDB, S_DONE } st_e;
   st_e  st;
   logic half;
 
@@ -281,6 +281,16 @@ module m2_cpu_bridge #(
             T_SDRAM: begin
               if (r_we && is_rom) begin
                 ack_mem <= 1'b1; st <= S_DONE;    // .rom().nopw()
+              end else if (!r_we) begin
+                // ONE BURST. Port 0 returns four 16-bit words in p_dout, and
+                // the two we want are words 0 and 1 -- the burst starts at the
+                // address requested. Two transactions are no longer needed, and
+                // the second one was where the held-acknowledge hazard lived.
+                sd_addr <= sd_word;
+                sd_we   <= 1'b0;
+                sd_be   <= 2'b11;
+                sd_req  <= 1'b1;
+                st      <= S_RDB;
               end else begin
                 sd_addr <= sd_word;
                 sd_we   <= r_we;
@@ -364,6 +374,15 @@ module m2_cpu_bridge #(
             ack_mem        <= 1'b1;
             st             <= S_DONE;
           end
+        end
+
+        // A burst read: both halves arrive together in p_dout[31:0].
+        S_RDB: if (sd_ack) begin
+          sd_req        <= 1'b0;
+          r_rdata       <= sd_dout[31:0];
+          dbg_last_addr <= {7'd0, sd_addr};
+          dbg_last_dout <= sd_dout[31:0];
+          st            <= S_HI_W;      // still let the ack fall before answering
         end
 
         // Both halves are in. Wait for the second ack to fall before answering,
