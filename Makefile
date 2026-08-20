@@ -173,8 +173,8 @@ synth_i960_ldst:
 
 # --------------------------------------------------------------------- tests
 
-.PHONY: test test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
-test: test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
+.PHONY: test test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram test_fx68k
+test: test_fx68k test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
 
 test_i960_dec: obj_i960_dec/Vi960_dec
 	@echo "== test i960_dec"
@@ -408,6 +408,42 @@ test_i960_rom: obj_i960_rom/Vi960_rom
 obj_i960_rom/Vi960_rom: $(TOP_RTL) $(TB)/tb_i960_rom.cpp
 	$(VBUILD) --top-module i960_top -CFLAGS "-O2 -I../$(TB)" \
 	  --Mdir obj_i960_rom -o Vi960_rom $(TOP_RTL) $(TB)/tb_i960_rom.cpp
+
+# ---------------------------------------------------------------- sound CPU
+#
+# fx68k on a real bus. THIRD_PARTY.md carried "does it simulate under
+# Verilator?" as an open question for two sessions; it does, and the answer
+# needed a bus rather than a clock. A C++ harness that drove enPhi1/enPhi2 and
+# the data bus by hand never saw the core fetch a vector, and could not
+# distinguish a broken core from a broken harness. The bus is RTL now.
+#
+# ITS OWN FLAGS, and they are not the project's VFLAGS. This is third-party
+# code and it does not lint to our standard:
+#   -Wno-UNOPTFLAT     Nanod/Irdecod are genuinely circular combinationally
+#   -Wno-WIDTH*        19 width warnings in the original, none of them ours
+#   --no-assert        fx68kAlu.sv:313 is a `unique case` that matches nothing
+#                      while the ALU is idle, and $stops during reset if armed
+# Waiving them here rather than in VFLAGS keeps our own RTL held to -Wall.
+#
+# RUN FROM third_party/fx68k. fx68k's $readmemb takes a bare filename, so the
+# microcode and nanocode ROMs are found relative to the WORKING DIRECTORY. Load
+# them and the core executes; miss them and the sequencer is full of zeros,
+# which is indistinguishable from a core that does not work -- so the test
+# reports "no bus cycles at all" and names this as the first thing to check.
+
+FX68K_RTL := third_party/fx68k/fx68k.sv third_party/fx68k/fx68kAlu.sv \
+             third_party/fx68k/uaddrPla.sv
+FX68K_VFLAGS := -Wno-fatal -Wno-UNOPTFLAT -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC --no-assert
+
+.PHONY: test_fx68k
+test_fx68k: obj_fx68k/Vfx68k_harness
+	@echo "== test fx68k (the 68000 executes a program over a modelled bus)"
+	@cd third_party/fx68k && $(CURDIR)/obj_fx68k/Vfx68k_harness $(TEST_ARGS)
+
+obj_fx68k/Vfx68k_harness: sim/sound/fx68k_harness.sv sim/sound/tb_fx68k.cpp $(FX68K_RTL)
+	$(VERILATOR) --cc --exe --build -j 0 -sv $(FX68K_VFLAGS) \
+	  --top-module fx68k_harness --Mdir obj_fx68k -o Vfx68k_harness \
+	  -CFLAGS "-O2" sim/sound/fx68k_harness.sv $(FX68K_RTL) sim/sound/tb_fx68k.cpp
 
 # ------------------------------------------------------------------- quartus
 #

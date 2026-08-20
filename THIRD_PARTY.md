@@ -107,11 +107,35 @@ It then elaborates, compiles and runs. Required flags:
   drive the core standalone; the real integration will supply `enPhi1`/`enPhi2`
   itself.
 
-**Still open: it has not been made to BOOT.** A throwaway harness gets it
-built and running but never sees it fetch a reset vector — `ASn` falls once and
-`oRESETn` never moves. That is as likely to be the harness as the core and is
-not evidence against fx68k; a proper bus model is part of the sound-board work,
-not a prerequisite to it.
+**And it EXECUTES.** `make test_fx68k` loads a four-instruction program over a
+modelled bus and checks that a value the program computed arrives at an address
+the program chose:
+
+```
+ticks 289, bus cycles 11, writes 1, last address 000100
+mem[0x100] = 1234 (want 1234)
+fx68k EXECUTES: reset vector read, immediate decoded,
+absolute-long write completed (first write at tick 285).
+```
+
+Reset vector read from memory, fetch from the address in it, immediate decoded,
+absolute-long write completed. A core that merely elaborates does none of that.
+
+**The earlier failure was the harness, not the core.** A C++ testbench drove
+`enPhi1`/`enPhi2` and the data bus by hand and never saw a vector fetch, and
+there was no way to tell which side was wrong. The bus is RTL now
+(`sim/sound/fx68k_harness.sv`), where the timing relationships are the ones the
+68000 specifies.
+
+Two things in that harness are deliberate and worth keeping when it grows into
+the real sound board:
+
+- **DTACK is registered off AS, not tied low.** Tying it acknowledges before the
+  address is valid, which a synchronous model tolerates and real memory does
+  not. Mutating it to a constant makes the test fail correctly -- one bus cycle,
+  no write -- so the acknowledge path is actually being exercised.
+- **The test asserts a computed value at a chosen address**, not "it did not
+  crash". The old harness never crashed either, and taught us nothing.
 
 **Superseded note.** Rule 8
 and every verification practice here assume a block can be exercised in
