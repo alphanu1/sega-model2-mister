@@ -59,12 +59,14 @@ int main(int argc, char **argv) {
   ck("window readback 0x105", rd_byte(0x105), 0x82);
   ck("window readback 0x117", rd_byte(0x117), 0x00);
 
-  // Before the reply lands, the status byte is untouched.
-  ck("status before reply", rd_byte(0x21), 0x00);
+  // The status is on the BOARD'S schedule, not a reply to that write. The boot
+  // waits for 0x40 before it writes the window at all, so a status that only
+  // arrives afterwards is a deadlock -- see the note in the RTL.
+  ck("status before its time", rd_byte(0x21), 0x00);
 
   for (int i = 0; i < 4000; i++) tick();
 
-  ck("status after reply",   rd_byte(0x21), 0x40);
+  ck("status on schedule",   rd_byte(0x21), 0x40);
   ck("window fill 0x143",    rd_byte(0x143), 0xff);
   ck("window fill 0x160",    rd_byte(0x160), 0xff);
   ck("window fill 0x17b",    rd_byte(0x17b), 0xff);
@@ -91,6 +93,16 @@ int main(int argc, char **argv) {
   for (int i = 0; i < 6000; i++) tick();
   ck("flag cleared after self-test", rd_byte(0x20), 0x00);
   ck("status kept across clear",     rd_byte(0x21), 0x40);
+
+  // AND IT ANSWERS AGAIN. A board that clears once is a description of the
+  // reference's timeline rather than of the board, and it deadlocks a CPU
+  // slower than the reference: the single clear lands before the command
+  // arrives, and the command is never answered. This is the check that fails
+  // if the one-shot ever comes back.
+  wr_byte(0x20, 0x03);
+  ck("second request seen",   rd_byte(0x20), 0x03);
+  for (int i = 0; i < 100; i++) tick();
+  ck("second request answered", rd_byte(0x20), 0x00);
 
   std::printf("m2_ioboard checks=%d fails=%d\n", checks, fails);
   std::printf("%s\n", fails ? "FAIL" : "PASS");

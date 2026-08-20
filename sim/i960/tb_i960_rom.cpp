@@ -165,6 +165,80 @@ static int      rdw_n  = 0;
 // comparable by instruction; both reach 178 V-blanks over the same 3.1 seconds
 // because both are driven by the same 57.5 Hz refresh, and R37's handshake
 // moves on frames -- 1, 7, 8, 10, 21, 175.
+// THE I/O BOARD, modelled the way rtl/io/m2_ioboard.sv models it, so the two
+// can disagree visibly rather than quietly. This is the device the boot has
+// been waiting on since R40 -- 0x01c00000 is an MB8421 dual-port RAM whose far
+// side is SEGA_MODEL1IO, not the sound board.
+//
+// Two replies on two triggers, measured in docs/io-board.md:
+//   status 0x21 -> 0x40  one frame after the i960 writes its block
+//   flag   0x20 -> 0x00  at frame 174, on the board's own self-test, whatever
+//                        the i960 has done in the meantime
+//
+// Driven off the V-BLANK COUNT rather than a cycle count, because that is the
+// axis the measurement is on and the two machines do not agree on cycles.
+static uint8_t  io_dp[2048];
+static bool     io_win_written = false;
+static uint64_t io_win_frame   = 0;
+static bool     io_status_done = false;
+static bool     io_flag_cleared = false;
+static bool     io_board = true;          // +noioboard turns it off
+static uint64_t io_selftest_frame = 174;
+// Frame 7, measured. The window fill rides on the same event because that is
+// when it was observed, and its attribution is still inferred either way.
+static uint64_t io_status_frame  = 7;
+
+// THE STATUS BYTE IS NOT A REPLY TO THE WINDOW WRITE. That was the first model
+// and the boot disproved it in one run: it parks at
+//
+//   0022824C: ldob    0x1c00042,g4      ; status
+//   00228254: setbit  6,0,g1            ; 0x40
+//   00228258: cmpibne g4,g1,0x22824c    ; spin until status == 0x40
+//   0022825C: mov     3,g2
+//   00228260: stob    g2,0x1c00040      ; only THEN write the flag again
+//
+// waiting for 0x40 BEFORE it writes anything into the window. So the board
+// raises the status on its own schedule -- frame 7 -- and the window write at
+// frame 6 was concurrent, not causal. Two events in consecutive frames are not
+// a cause and an effect, and reading them as one produced a model that
+// deadlocks against the very code it was built from.
+static void io_board_step() {
+  if (!io_board) return;
+  if (!io_status_done && vblanks >= io_status_frame) {
+    io_dp[0x21] = 0x40;
+    for (uint32_t n = 0x143; n <= 0x17b; n++) io_dp[n] = 0xff;
+    io_dp[0x17c] = 0x01;
+    io_status_done = true;
+  }
+  // ONCE AWAKE, THE BOARD ANSWERS; IT IS NOT A ONE-SHOT.
+  //
+  // The first version cleared the flag exactly once, at frame 174, on the
+  // reasoning that MAME clears it exactly once. That is true of MAME and it
+  // deadlocks here, because our i960 is roughly three times slower per frame:
+  // it had not yet written its command when the single clear fired, so the
+  // clear landed on nothing and the command that arrived afterwards was never
+  // answered. The boot parked at
+  //
+  //   00228268: ldob    0x1c00040,g4
+  //   00228270: cmpibne 0,g4,0x228268
+  //
+  // A one-shot is a description of the reference's TIMELINE, not of the
+  // board's behaviour. The behaviour, which Model 1 established by reading the
+  // Z80 ROM, is that the board is not listening until its self-test finishes
+  // and answers requests after that. Modelled that way it does not depend on
+  // the two machines running at the same speed.
+  //
+  // KNOWN DIVERGENCE, stated rather than papered over: on the reference the
+  // flag STAYS set after boot -- the CPU re-raises it once a frame as a
+  // doorbell and it is never cleared again. This clears it every time. That is
+  // wrong for the post-boot phase and right for the phase the boot is in, and
+  // the differential will say when it starts to matter.
+  if (vblanks >= io_selftest_frame && io_dp[0x20] != 0x00) {
+    io_dp[0x20] = 0x00;
+    io_flag_cleared = true;
+  }
+}
+
 static std::vector<uint8_t> sndcap;
 static const uint32_t SNDCAP_BASE = 0x01c00000u;
 static uint32_t sndcap_len = 0x1000;
@@ -233,6 +307,11 @@ static uint32_t mem_read_inner(uint32_t a) {
   // because the DPRAM is eight bits wide at bytes 0 and 2. This is what
   // Model2.sv implements, and it gets further than the 4 KB MAME capture --
   // same boot, and SENSIBLE settings values where the recording gave garbage.
+  if (io_board && a >= 0x01c00000u && a < 0x01c01000u) {
+    io_board_step();
+    const uint32_t k = (a - 0x01c00000u) >> 2;      // dword -> DPRAM byte pair
+    return uint32_t(io_dp[2*k]) | (uint32_t(io_dp[2*k + 1]) << 16);
+  }
   if (a >= 0x01c00000u && a < 0x01c01000u) {
     if (dpram0) return (a == 0x01c00040u) ? ((dpram_fill & 0xffu) << 16) : 0u;
     return (a == 0x01c00040u) ? 0x00400000u : 0u;
@@ -306,6 +385,18 @@ static void mem_write(uint32_t a, uint32_t v, uint8_t be) {
   // irq_ack_w CLEARS the bits that are set in the written value -- `m_intreq &=
   // data`. Treating it as a plain store leaves the request asserted and the
   // handler re-enters forever.
+  if (io_board && a >= 0x01c00000u && a < 0x01c01000u) {
+    const uint32_t k = (a - 0x01c00000u) >> 2;
+    if (be & 0x1) io_dp[2*k]     = uint8_t(v);
+    if (be & 0x4) io_dp[2*k + 1] = uint8_t(v >> 16);
+    // A write INTO THE WINDOW arms the reply. Watching the write and not the
+    // contents, because the request is the write: a poll of the same address
+    // looks identical in the RAM and means the opposite thing.
+    const uint32_t n = 2*k;
+    if (n >= 0x100 && n <= 0x17f) { io_win_written = true; io_win_frame = vblanks; }
+    io_board_step();
+    return;
+  }
   if (a == 0x00e80000u) { intreq &= v; drive_irq(); return; }
   if (a == 0x00e80004u) { intena  = v; return; }
   if (a == 0x0098000cu) { videoctl = v; return; }        // videoctl_w
@@ -373,6 +464,7 @@ int main(int argc, char **argv) {
       rdw_hi = c ? uint32_t(std::strtoul(c+1, nullptr, 16)) : rdw_lo;
     }
     if (!std::strcmp (argv[i], "+rdlog"))     rd_log    = true;
+    if (!std::strcmp (argv[i], "+noioboard")) io_board  = false;
     // +watch=LO,HI prints IP and the fetched instruction word for every
     // instruction retired in that range. The differential compares PROGRAM
     // COUNTERS; when it says we branched where MAME fell through, the next

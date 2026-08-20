@@ -429,7 +429,7 @@ test_m2_ioboard: obj_m2_io/Vm2_ioboard
 	@./obj_m2_io/Vm2_ioboard $(TEST_ARGS)
 
 obj_m2_io/Vm2_ioboard: rtl/io/m2_ioboard.sv sim/io/tb_m2_ioboard.cpp
-	$(VBUILD) --top-module m2_ioboard -GSELFTEST_CYCLES=5000 -GREPLY_CYCLES=1000 \
+	$(VBUILD) --top-module m2_ioboard -GSELFTEST_CYCLES=5000 -GSTATUS_CYCLES=1000 \
 	  --Mdir obj_m2_io -o Vm2_ioboard -CFLAGS "-O2" \
 	  rtl/io/m2_ioboard.sv sim/io/tb_m2_ioboard.cpp
 

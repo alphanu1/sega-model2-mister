@@ -63,10 +63,23 @@ module m2_ioboard #(
   // 75,652,174 -- a 27-bit counter, and it counts once.
   parameter int          SELFTEST_CYCLES = 75_652_174,
 
-  // Cycles between the i960 writing into the window and the board completing
-  // it. MAME does it in the following frame; anything under a frame reproduces
-  // that, and 25,000 is ~1 ms, comfortably inside one.
-  parameter int          REPLY_CYCLES    = 25_000,
+  // Cycles from reset before the board raises the status byte. MEASURED at
+  // frame 7 of a 57.5 Hz refresh -- 0.122 s, or 3,043,478 cycles at 25 MHz.
+  //
+  // THIS IS NOT A REPLY TO THE WINDOW WRITE, and modelling it as one deadlocks
+  // against the code it was built from. The boot parks at
+  //
+  //   0022824C: ldob    0x1c00042,g4      ; status
+  //   00228254: setbit  6,0,g1            ; 0x40
+  //   00228258: cmpibne g4,g1,0x22824c    ; spin until status == 0x40
+  //   0022825C: mov     3,g2
+  //   00228260: stob    g2,0x1c00040      ; only THEN write the flag again
+  //
+  // waiting for 0x40 BEFORE it writes anything into the window. The window
+  // write at frame 6 and the status at frame 7 are consecutive, and reading
+  // two consecutive events as a cause and an effect produced a board that the
+  // boot could never get past.
+  parameter int          STATUS_CYCLES   = 3_043_478,
 
   // What the board leaves in the status byte at DPRAM 0x21. Observed 0x40.
   parameter logic [7:0]  STATUS_READY    = 8'h40,
@@ -103,9 +116,6 @@ module m2_ioboard #(
 );
 
   localparam logic [9:0] FLAG_W  = 10'h010;   // DPRAM 0x20 low, 0x21 high
-  localparam logic [9:0] WIN_LO  = 10'h080;   // DPRAM 0x100
-  localparam logic [9:0] WIN_HI  = 10'h0BF;   // DPRAM 0x17f
-
   localparam logic [10:0] FILL_FROM = 11'h143;
   localparam logic [10:0] FILL_TO   = 11'h17b;
   localparam logic [10:0] FILL_MARK = 11'h17c;
@@ -123,10 +133,11 @@ module m2_ioboard #(
   // ------------------------------------------------------------- the board
   logic [26:0] selftest;
   logic        awake;              // self-test finished; the flag is watched now
-  logic        flag_cleared;       // it is cleared once, as on the real board
+  logic        flag_cleared;       // for the overlay: it has answered at least once
+  logic        status_pulse;       // one cycle: write the status byte
+  logic        answer;             // one cycle: clear the flag
 
-  logic [15:0] reply;              // countdown to completing the window
-  logic        win_written;
+  logic [26:0] stat_ctr;
   logic        status_done;
 
   logic [10:0] fill;               // byte address while completing the window
@@ -138,10 +149,6 @@ module m2_ioboard #(
   // is the same information for 16 bits.
   logic  [7:0] sh_flag, sh_status;
 
-  // A CPU write into the window arms the reply. Watching the WRITE and not the
-  // contents, because the request is the write: a poll of the same address
-  // looks identical in the RAM and means the opposite thing.
-  wire win_wr = sel & we & (word >= WIN_LO) & (word <= WIN_HI);
   wire cpu_wr = sel & we;
 
   // The board's own write, for the cycles the CPU is not using the port.
@@ -163,12 +170,12 @@ module m2_ioboard #(
       // the ones in docs/io-board.md by eye.
       b_data = (fill <= FILL_TO) ? {8'hff, 8'hff} : {8'h01, 8'h01};
       b_be   = fill[0] ? 2'b10 : 2'b01;
-    end else if (status_done) begin
+    end else if (status_pulse) begin
       b_we   = 1'b1;
       b_word = FLAG_W;
       b_data = {STATUS_READY, 8'd0};
       b_be   = 2'b10;                       // the status byte only
-    end else if (flag_cleared) begin
+    end else if (answer) begin
       b_we   = 1'b1;
       b_word = FLAG_W;
       b_data = 16'd0;
@@ -179,33 +186,47 @@ module m2_ioboard #(
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       selftest <= '0; awake <= 1'b0; flag_cleared <= 1'b0;
-      reply <= '0; win_written <= 1'b0; status_done <= 1'b0;
+      stat_ctr <= '0; status_done <= 1'b0; status_pulse <= 1'b0; answer <= 1'b0;
       fill <= FILL_FROM; filling <= 1'b0;
       sh_flag <= 8'd0; sh_status <= 8'd0;
       dbg <= '0;
     end else begin
-      status_done  <= 1'b0;
-      flag_cleared <= 1'b0;
+      status_pulse <= 1'b0;
+      answer       <= 1'b0;
 
       // The self-test. It counts once and then stops; `awake` latches.
       if (!awake) begin
-        if (selftest == 27'(SELFTEST_CYCLES - 1)) begin
-          awake        <= 1'b1;
-          flag_cleared <= 1'b1;             // answer the outstanding request
-        end else selftest <= selftest + 27'd1;
+        if (selftest == 27'(SELFTEST_CYCLES - 1)) awake <= 1'b1;
+        else selftest <= selftest + 27'd1;
       end
 
-      // Completing the window, one byte per cycle, after the i960 has written
-      // into it. Re-armed by a later write, which is what the real board would
-      // do and costs nothing to allow.
-      if (win_wr) begin
-        win_written <= 1'b1;
-        reply       <= 16'(REPLY_CYCLES > 65535 ? 65535 : REPLY_CYCLES);
-      end else if (win_written && reply != 16'd0) begin
-        reply <= reply - 16'd1;
-      end else if (win_written && reply == 16'd0) begin
-        win_written <= 1'b0;
-        status_done <= 1'b1;
+      // ONCE AWAKE, THE BOARD ANSWERS; IT IS NOT A ONE-SHOT.
+      //
+      // The first version cleared the flag exactly once, because MAME clears
+      // it exactly once. That is a description of the reference's TIMELINE,
+      // not of the board's behaviour, and it deadlocks: our i960 is about
+      // three times slower per frame, so it had not yet written its command
+      // when the single clear fired. The clear landed on nothing, the command
+      // that followed was never answered, and the boot parked at
+      //
+      //   00228268: ldob    0x1c00040,g4
+      //   00228270: cmpibne 0,g4,0x228268
+      //
+      // Modelled as "not listening until the self-test finishes, answering
+      // after that" it does not depend on the two machines running at the same
+      // speed. KNOWN DIVERGENCE, stated rather than hidden: on the reference
+      // the flag STAYS set after boot, re-raised once a frame as a doorbell and
+      // never cleared again. This clears it every time -- right for the phase
+      // the boot is in, wrong afterwards, and the differential will say when it
+      // begins to matter.
+      if (awake && sh_flag != 8'd0 && !answer) answer <= 1'b1;
+
+      // The status byte, on the board's own schedule.
+      if (!status_done) begin
+        if (stat_ctr == 27'(STATUS_CYCLES - 1)) begin
+          status_done  <= 1'b1;
+          status_pulse <= 1'b1;
+        end else stat_ctr <= stat_ctr + 27'd1;
       end
 
       // THE FILL STARTS THE CYCLE AFTER THE STATUS WRITE, NOT THE SAME ONE.
@@ -215,7 +236,7 @@ module m2_ioboard #(
       // 00000000 want 00000040", with every fill byte correct. One port means
       // two replies cannot be issued on one cycle, and saying so in the
       // sequencing is clearer than widening the arbiter to hide it.
-      if (status_done && COMPLETE_WINDOW) begin
+      if (status_pulse && COMPLETE_WINDOW) begin
         filling <= 1'b1;
         fill    <= FILL_FROM;
       end
@@ -233,11 +254,11 @@ module m2_ioboard #(
         if (be[0]) sh_flag   <= wdata[7:0];
         if (be[2]) sh_status <= wdata[23:16];
       end else if (b_we && b_word == FLAG_W) begin
-        if (b_be[0]) sh_flag   <= b_data[7:0];
+        if (b_be[0]) begin sh_flag <= b_data[7:0]; flag_cleared <= 1'b1; end
         if (b_be[1]) sh_status <= b_data[15:8];
       end
 
-      dbg <= {4'd0, awake, filling, win_written, 1'b0,
+      dbg <= {3'd0, flag_cleared, awake, filling, status_done, 1'b0,
               sh_status, sh_flag, 8'd0};
     end
   end

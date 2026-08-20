@@ -96,6 +96,64 @@ visible as a state rather than as the answer.
   Model 1, because it is the board's Z80 running its own power-on self-test, and
   it happens once. Our flag clears at frame 174, which is the same shape.
 
+## Two things the boot disproved, and they are the design
+
+**The status byte is not a reply to the window write.** That was the first model
+— frame 6 the i960 writes its block, frame 7 the status goes to `0x40`, so the
+one causes the other. The boot disproved it in a single run by parking at
+
+```
+0022824C: ldob    0x1c00042,g4      ; status
+00228254: setbit  6,0,g1            ; 0x40
+00228258: cmpibne g4,g1,0x22824c    ; spin until status == 0x40
+0022825C: mov     3,g2
+00228260: stob    g2,0x1c00040      ; only THEN write the flag again
+```
+
+It waits for `0x40` **before** it writes the window at all. Two events in
+consecutive frames are not a cause and an effect, and reading them as one
+produced a board the boot could never get past. The status is on the board's
+own schedule.
+
+**The flag is not cleared once.** MAME clears it exactly once, at frame 174, so
+the first model cleared it once. That is a description of the reference's
+*timeline*, not of the board's behaviour, and it deadlocks: our i960 is about
+three times slower per frame, so it had not yet written its command when the
+single clear fired. The clear landed on nothing and the command that followed
+was never answered — the boot parked at `00228268 / 00228270`, the next poll
+along.
+
+Modelled as Model 1 established it — **not listening until the self-test
+finishes, answering after that** — it no longer depends on the two machines
+running at the same speed.
+
+**Known divergence, stated rather than hidden:** on the reference the flag
+*stays* set after boot, re-raised once a frame as a doorbell and never cleared
+again. Ours clears it every time. Right for the phase the boot is in, wrong
+afterwards, and the differential will say when it starts to matter.
+
+## Result
+
+With the board modelled, the boot no longer traps:
+
+| | distinct IPs | interrupts | outcome |
+|---|---|---|---|
+| sound-constant stub | 2,205 | 175 | **trapped** at IP 0, null pointer |
+| I/O board | 1,355 | 74 | runs 25,000,000 instructions, no trap |
+
+The differential agrees to **2,609,803** MAME instructions and then diverges
+where MAME takes an interrupt mid-loop and we do not:
+
+```
+-1    mame=00000b20  ours=00000b20      stos r8,0x18000(r4)
+>>>   mame=00000e00  ours=00000b28      stq  g0,(sp)   <- a handler prologue
+```
+
+That is the natural limit of a PC comparison between machines of different
+speeds: an asynchronous interrupt lands at a different instruction, and no
+resynchronisation can or should paper over it. Past this point the meaningful
+comparison is of DATA, not of program counters.
+
 ## What is not established
 
 Whether daytona93 polls the input region at `0x00-0x0e` the way Model 1 does,
