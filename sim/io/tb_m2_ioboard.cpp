@@ -67,34 +67,19 @@ int main(int argc, char **argv) {
   for (int i = 0; i < 4000; i++) tick();
 
   ck("status on schedule",   rd_byte(0x21), 0x40);
-  // THE BOARD SUPPLIES THE WHOLE BLOCK. The i960 copies DPRAM 0x100-0x17f into
-  // backup SRAM and will not go on until it has -- 0022827C reads (g6) with
-  // g6 = 0x1c00200 and stores to (g5) with g5 = 0x1d00000 -- so a window that
-  // is only partly filled is copied in as zeros and rejected.
+  // THE BOARD DOES NOT SUPPLY THE BLOCK, and the window stays as the i960 left
+  // it. The reference i960 copies the window into backup SRAM, validates what
+  // it copied against a ROM signature, finds it invalid and initialises backup
+  // SRAM itself -- so a board that helpfully fills the window makes that
+  // compare succeed and the i960 skips its own initialisation. The differential
+  // against MAME diverges at 2,609,803 with the window empty and 1,300,259
+  // with it filled, and hardware cannot tell the two apart.
   //
-  // These expectations are typed from MAME's dump independently of the RTL
-  // table. That is a weaker safeguard than it looks -- the Model 1 core did the
-  // same and still propagated one bad reading into both -- which is why the
-  // dump was sampled at five frames and checked identical rather than taken
-  // once.
-  ck("block 'S'",            rd_byte(0x100), 0x53);
-  ck("block 'E'",            rd_byte(0x101), 0x45);
-  ck("block 'G'",            rd_byte(0x102), 0x47);
-  ck("block 'A'",            rd_byte(0x103), 0x41);
-  ck("block 0x105",          rd_byte(0x105), 0x82);
-  ck("block 0x109",          rd_byte(0x109), 0xeb);
-  ck("block 0x11b",          rd_byte(0x11b), 0x01);
-  ck("block 0x120",          rd_byte(0x120), 0x01);
-  ck("block 0x12f gap",      rd_byte(0x12f), 0x00);
-  ck("block 0x132",          rd_byte(0x132), 0x14);
-  ck("block 0x139",          rd_byte(0x139), 0x01);
-  ck("block 0x13a tail",     rd_byte(0x13a), 0xff);
-  ck("block 0x160 tail",     rd_byte(0x160), 0xff);
-  ck("block 0x17b tail",     rd_byte(0x17b), 0xff);
-  ck("block 0x17c mark",     rd_byte(0x17c), 0x01);
-  ck("block 0x17f end",      rd_byte(0x17f), 0x00);
-  ck("did not overrun",      rd_byte(0x180), 0x00);
-  ck("did not underrun",     rd_byte(0x0ff), 0x00);
+  // Built with -GCOMPLETE_WINDOW=1 these fail, which is the point of keeping
+  // the parameter: the wrong reading stays reproducible on demand.
+  ck("window left alone 0x100", rd_byte(0x100), 0x00);
+  ck("window left alone 0x160", rd_byte(0x160), 0x00);
+  ck("window left alone 0x17c", rd_byte(0x17c), 0x00);
 
   // The i960 raises the flag and polls it. The board is still in self-test.
   wr_byte(0x20, 0x01);

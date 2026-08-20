@@ -2867,3 +2867,65 @@ repeating every twelve instructions. That is a real behavioural difference being
 absorbed silently by the instrument built to find it. A span now qualifies only
 if it is at least 8 instructions AND is L-periodic for at least 3 iterations:
 5 resyncs, and the honest divergence point is 2,564,287.
+
+**R41 — the I/O board must NOT supply the identity block, and only the
+differential could say so.** Three readings of one protocol, the third measured.
+
+*Reading 1: the i960 writes the block and the board completes the tail.* The
+status reply was hung off the window write. The boot deadlocked: it waits for
+status `0x40` **before** it writes the window, so it waited for a status it
+would not get until it wrote a window it would not write until it had the
+status. Disproved in one run.
+
+*Reading 2: the board supplies the block and the i960 copies it in.* The
+disassembly says DPRAM is the source, plainly:
+
+```
+00228230: lda  0x1c00200,g6      ; DPRAM window
+00228238: lda  0x1d00000,g5      ; backup SRAM
+0022827C: ldob (g6),g4 / stob g4,(g5)
+```
+
+and Model 1's `122988c` says exactly this about exactly this board. Both facts
+are true. The conclusion drawn from them was still wrong.
+
+*Reading 3, what the reference does.* The i960 copies whatever is in the window
+— **zeros**, that early — into backup SRAM, and then validates it:
+
+```
+00227CF4: ldl    0x1d00000,g4    ; what was copied in
+00227CFC: ldq    0x23c150,g0     ; "SEGA..." from ROM
+00227D04: cmpibe g4,g0,0x227de4  ; already valid? skip
+00227D08: stq    g0,0x1d00000    ; otherwise initialise it here
+```
+
+It finds it invalid and **initialises backup SRAM itself**. A board that
+helpfully fills the window makes that compare succeed, so the i960 skips its own
+initialisation and diverges from the reference immediately.
+
+That also explains the observation reading 1 was built on. The window's contents
+later match backup SRAM byte for byte because **the i960 put them there**, not
+because the board did — the same correlation, read three different ways, and it
+never carried a direction.
+
+*The measurement:*
+
+| window | differential diverges at |
+|---|---|
+| board pushes the 128-byte block | 1,300,259 |
+| board pushes nothing | **2,609,803** |
+
+*And the point of the entry.* **Hardware could not tell these apart.** Overlay
+row 8 read `00001001` — 4,097 tile writes — with the block pushed and without
+it, exactly as it had for the four builds before. A regression that doubles the
+distance to the first divergence was invisible on the device and obvious against
+the reference in one run.
+
+The differential had not been run since the block was added. It was added on the
+strength of a disassembly and a sibling project's commit, both of which were
+accurate, and neither of which was the reference executing. **Reading the source
+is not running the oracle**, and this project has now spent four hardware builds
+on the difference.
+
+`COMPLETE_WINDOW` stays as a parameter so the wrong reading is reproducible on
+demand: built with it on, three checks in `test_m2_ioboard` fail.

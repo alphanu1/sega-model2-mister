@@ -183,6 +183,10 @@ static uint64_t io_win_frame   = 0;
 static bool     io_status_done = false;
 static bool     io_flag_cleared = false;
 static bool     io_board = true;          // +noioboard turns it off
+// +noblock: leave the 128-byte window empty, which is what COMPLETE_WINDOW=0
+// does in the RTL. Present so the two readings of this protocol can be
+// compared against MAME rather than argued about.
+static bool     io_push_block = true;
 static uint64_t io_selftest_frame = 174;
 // Frame 7, measured. The window fill rides on the same event because that is
 // when it was observed, and its attribution is still inferred either way.
@@ -226,7 +230,7 @@ static void io_board_step() {
       0xff,0xff,0xff,0xff, 0xff,0xff,0xff,0xff, 0xff,0xff,0xff,0xff,
       0xff,0xff,0xff,0xff, 0xff,0xff,0xff,0xff, 0xff,0xff,0xff,0xff,
       0xff,0xff,0xff,0xff, 0x01,0x00,0x00,0x00 };
-    for (uint32_t i = 0; i < 128; i++) io_dp[0x100 + i] = blk[i];
+    if (io_push_block) for (uint32_t i = 0; i < 128; i++) io_dp[0x100 + i] = blk[i];
     io_status_done = true;
   }
   // ONCE AWAKE, THE BOARD ANSWERS; IT IS NOT A ONE-SHOT.
@@ -484,6 +488,7 @@ int main(int argc, char **argv) {
     }
     if (!std::strcmp (argv[i], "+rdlog"))     rd_log    = true;
     if (!std::strcmp (argv[i], "+noioboard")) io_board  = false;
+    if (!std::strcmp (argv[i], "+noblock"))   io_push_block = false;
     // +watch=LO,HI prints IP and the fetched instruction word for every
     // instruction retired in that range. The differential compares PROGRAM
     // COUNTERS; when it says we branched where MAME fell through, the next

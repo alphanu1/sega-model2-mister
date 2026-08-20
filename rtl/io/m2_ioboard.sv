@@ -84,13 +84,37 @@ module m2_ioboard #(
   // What the board leaves in the status byte at DPRAM 0x21. Observed 0x40.
   parameter logic [7:0]  STATUS_READY    = 8'h40,
 
-  // Pushing the 128-byte identity block into DPRAM 0x100-0x17f.
+  // Pushing the 128-byte identity block into DPRAM 0x100-0x17f. OFF, and the
+  // reason is the third reading this protocol has had.
   //
-  // NOT OPTIONAL IN PRACTICE -- the i960 copies the window into backup SRAM and
-  // will not go on until it has, so without this it copies zeros and loops. It
-  // stays a parameter because turning it off is the one-line way to reproduce
-  // that failure on demand, and the suite uses it as a mutation.
-  parameter bit          COMPLETE_WINDOW = 1'b1
+  //   1. "The i960 writes the block and the board completes the tail." The
+  //      status reply was hung off the window write, and the boot deadlocked
+  //      waiting for a status it would not get until it wrote a window it would
+  //      not write until it had the status.
+  //
+  //   2. "The board supplies the block; the i960 copies it in." The
+  //      disassembly at 0022827C plainly reads DPRAM and writes backup SRAM, so
+  //      DPRAM is the source. Model 1's `122988c` says the same about the same
+  //      board. Both true, and the conclusion still wrong.
+  //
+  //   3. What the reference actually does. The i960 copies whatever is in the
+  //      window -- ZEROS, that early -- into backup SRAM, then VALIDATES it:
+  //
+  //        00227CF4: ldl    0x1d00000,g4    ; what was copied in
+  //        00227CFC: ldq    0x23c150,g0     ; "SEGA..." from ROM
+  //        00227D04: cmpibe g4,g0,0x227de4  ; already valid? skip
+  //        00227D08: stq    g0,0x1d00000    ; otherwise initialise it here
+  //
+  //      finds it invalid, and initialises backup SRAM ITSELF. Supplying the
+  //      block makes that compare succeed and the i960 skips its own
+  //      initialisation -- so the window's later contents match backup SRAM
+  //      because the i960 put them there, which is what reading (1) saw and
+  //      misattributed.
+  //
+  // MEASURED, not argued: the differential against MAME diverges at 2,609,803
+  // instructions with the window left empty and at 1,300,259 with the block
+  // pushed. HARDWARE COULD NOT TELL THESE APART -- row 8 read 4,097 either way.
+  parameter bit          COMPLETE_WINDOW = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
