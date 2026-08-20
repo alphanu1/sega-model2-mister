@@ -1,6 +1,6 @@
 # Handoff
 
-**Updated:** 2026-08-20, after the video session.
+**Updated:** 2026-08-20, after the I/O board session.
 
 ---
 
@@ -11,9 +11,10 @@ counter stream is identical to MAME's for 803,355 instructions. `make lint` is
 clean and `tools/i960-diff.sh` reproduces the differential result whenever MAME
 is on PATH.
 
-**`make test` is NOT green.** Every i960 and video suite passes; `test_m2_sdram`
-does not, on a pre-existing port-3 burst defect that predates the CPU
-integration and is not the hardware trap. Stated here rather than left to be
+**`make test` is NOT green.** Every i960 and video suite passes, and
+`test_fx68k` and `test_m2_ioboard` are new and green; `test_m2_sdram` does not
+pass, on a pre-existing port-3 burst defect that predates the CPU integration
+and is not the hardware fault. Stated here rather than left to be
 rediscovered — a red suite that is *known* red still hides the next regression,
 so this is a debt, not a footnote.
 
@@ -42,41 +43,67 @@ ALM, so **~17,200 ALM remain for the renderer** — wider than §5.2 assumed.
 binding resource, not ALM — ~107 blocks are recoverable (64 from the duplicated
 tile RAM, ~43 from ascal) and that recovery is a P2 prerequisite.
 
-## Where it actually is: the CPU runs on hardware, and memory is wrong
+## Where it actually is
 
-**`i960_top` IS in `Model2.sv` now and the board executes Daytona's boot.** The
-overlay shows the CPU accepting instructions, reading the PRCB, writing tile RAM
-and getting *past* the sound-board poll. Then it traps, at `0x0022E914`.
+**The i960 runs on hardware and does not trap.** Row 4 reads `3B03` — trap
+clear, halt clear, game image, copy done, self-test ok, loader ok, memory ready
+— where it used to read `FB03` with trap and halt both set. Row 5 climbs through
+hundreds of millions of instructions.
 
-**And so does simulation.** Run to a real instruction budget rather than
-`tb_i960_rom.cpp`'s 200,000-instruction default:
+**It is stuck in one place**, the I/O board exchange at `0x2282xx`, and row 8 has
+read `00001001` — 4,097 tile writes — across four builds while four separate
+real defects were fixed underneath it.
+
+### 4,097 is not a symptom of anything in particular
+
+That number has now been attributed to the sound handshake (R37), to a missing
+identity block, to 16 KB of backup SRAM that did not exist, and to a clock
+domain crossing. **It was never evidence for any of them.** It is what this boot
+does when it cannot complete the exchange at `0x228230-0x2282cc`, whatever the
+reason, and it will read the same next time something in there is wrong. Do not
+treat it as a fingerprint.
+
+### The exchange, and what each part needs
 
 ```
-executed 19573571 instructions over 77368693 cycles, 2205 distinct IPs
-final IP 00000000  PC=00000000  ICR=0f0e0d0c  interrupts taken 175
-TRAPPED on op 00 at IP 00000000
-178 vblanks asserted, intena=401 intreq=000
-unmapped reads: ffffffec x1, fffffff0 x1, fffffffc x108
+00228230: lda  0x1c00200,g6      ; g6 = DPRAM window   -- the SOURCE
+00228238: lda  0x1d00000,g5      ; g5 = backup SRAM    -- the DESTINATION
+00228240: ldob 0x1c00040,g4      ; wait flag == 0
+0022824C: ldob 0x1c00042,g4      ; wait status == 0x40
+0022825C: mov  3,g2
+00228260: stob g2,0x1c00040      ; command 3
+00228268: ldob 0x1c00040,g4      ; wait flag == 0
+0022827C: ldob (g6),g4 / stob g4,(g5)   ; copy 128 bytes, stride 2 -> stride 1
+002282CC: ble  0x0022827c
+002282D0: ldq  0x1d00010,g0      ; and reads it straight back
 ```
 
-175 interrupts serviced, 178 V-blanks, nineteen and a half million instructions
-— then a branch to zero, preceded by reads at a null base with small negative
-offsets. **A null pointer, dereferenced.**
+Four things must all be right, and each was wrong in turn:
 
-This is the single most useful fact in this handoff, and an earlier version of
-it was wrong in a way worth knowing about: the divergence between board and
-simulation that this section used to describe **did not exist**. It was a
-200,000-instruction default being read as a behaviour (R38). Ask what a test's
-budget is before reading its endpoint as a result.
+1. **The I/O board must answer** — status `0x40` on its own schedule, flag
+   cleared after its power-on self-test. `rtl/io/m2_ioboard.sv`. Confirmed
+   working on hardware: overlay row 14 reads `1A400000`.
+2. **The board must supply the 128-byte identity block.** It is the source, not
+   the destination — `docs/io-board.md` had the arrow backwards for one build.
+3. **Backup SRAM must exist.** `0x01d00000-0x01d03fff`, 16 KB, powering up all
+   ones. The bridge routed it to `T_IO` with a comment saying "backup" and
+   nothing answered, so the copy went into a void.
+4. **Both must be in the I/O clock domain.** `io_sel`, `io_addr` and the
+   `r_rdata` sample are in `m2_cpu_bridge`'s `clk_mem`, which is `clk_sdram` at
+   40 MHz. Clocking them on `clk_i960` is a crossing with no synchroniser, and
+   **its failure is selective**: a poll survives it, a one-shot sequential read
+   does not. That is why row 14 was perfect on every build while the 128-byte
+   copy arrived corrupted.
 
-**So the trap is reproducible in simulation**, where MAME is an oracle, every
-signal is visible and a run costs minutes instead of a 25-minute build and a
-walk to the device. **That is where to chase it.**
+(4) is the most recent fix and is **not yet confirmed on hardware.**
 
-The sound stub is still not the cause — a defect both sides share cannot explain
-a difference between them — but the reasoning is now the other way round: not
-that hardware fails where simulation succeeds, but that **both fail the same
-way**.
+### If row 8 still reads 4,097
+
+Do not guess again. The next instrument is a hardware-visible count of reads in
+`0x01c00200-0x01c002fe` and of writes to `0x01d0xxxx`, so the overlay says
+whether the copy is running and whether it is landing. Three of the four fixes
+above were found by reading MAME's disassembly and MAME's machine config, not by
+building.
 
 ## The SDRAM is verified end to end — and the fault was in the reference
 
