@@ -22,7 +22,7 @@
 
 set -euo pipefail
 
-IP="${M2_MISTER_IP:?set M2_MISTER_IP to the board's address}"
+IP="${M2_MISTER_IP:?set M2_MISTER_IP to the address of the board}"   # no apostrophe: ${VAR:?word} quote-processes the word
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TILES="${1:-}"
 SSH="ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10"
