@@ -2495,3 +2495,56 @@ condition patches to the old form kept racing; the state machine does not.
 (R32, R33 and these two). Every one was written by the same hand as the code it
 tests. That is the single most expensive pattern in this project's history and it
 is worth more than any individual fix recorded here.
+
+
+---
+
+**R35 — the Jaguar core rejected DDR3 for latency, and our tile RAM is
+duplicated in M10K.** Two findings, one from outside and one from our own fit
+report.
+
+*What the Jaguar core does (MiSTer-devel/Jaguar_MiSTer).* It is the closest
+comparable: a machine whose object processor and blitter want more memory
+bandwidth than one SDRAM gives.
+
+- **"The core is now using SDRAM for cart loading and for main RAM as well as
+  BIOSes and memtrack save data. So SDRAM is _required_."** DDR3 is not used.
+- **DDR3 was tried and abandoned on LATENCY, not capacity.** The reported
+  failure is that games "exhibit lines across the screen, probably because it's
+  unable to fill the line buffers quickly enough from DDR". Its README still
+  lists "Maybe caching with DDR" as an open idea rather than a solution.
+- **Dual SDRAM is its bandwidth answer:** "All known games now appear to work
+  correctly with dual ram builds. For single ram builds all boot, some with
+  glitches or slow down".
+
+*Why this matters here.* `docs/rom-layout.md` sketched a DDR3 split when the
+SDRAM ceiling looked like 32 MB, and R19 removed the need by measuring 64 MB.
+**This is independent evidence that the split would have been a mistake even if
+it had been necessary**: our character fetch is a line-buffer fill, per line,
+which is precisely the access pattern that broke the Jaguar core on DDR. If P2's
+texture bandwidth ever exceeds one SDRAM, **dual SDRAM is the proven lever and
+DDR3 is not.**
+
+*And our own number, which is worse than it looks.* The fit reports **237 M10K
+blocks (43%) for 1.65 Mbit (29%)** — block count is the constraint, not capacity.
+The reason is in the report:
+
+```
+altsyncram:tram_rtl_0   bits=524288   M10K=64
+altsyncram:tram_rtl_1   bits=524288   M10K=64
+```
+
+**Tile RAM is stored TWICE.** 512 Kbit needs 51 blocks ideally and takes 128,
+because the array now has three accesses — the renderer reading on `clk_vid`, and
+the CPU reading *and* writing on `clk_sdram` — and M10K is dual-port. Quartus
+duplicated the whole array to provide the third port.
+
+**Adding the CPU's read port to tile RAM cost 64 blocks, 12% of the device**, for
+an access games make far less often than they write. Recovering it is a design
+question for the renderer budget rather than a bug: P2 wants colour and Z
+double-buffered on chip (§6) plus a 32 KB texture cache, which is roughly 160-200
+blocks against the 316 now free.
+
+*The general rule, which the M10K-versus-bits gap states plainly:* **on this part
+an array's cost is set by its port count and shape, not by its size.** A third
+accessor does not cost a little more, it costs another copy.
