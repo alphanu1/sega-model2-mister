@@ -1020,6 +1020,23 @@ wire [15:0] bak_writes;
 //
 // So the board answered, the block was pushed, backup SRAM existed, and the
 // copy still arrived corrupted -- 4,097 tile writes for a third build.
+// THE CPU'S ACTUAL I/O TRAFFIC, latched. Everything else in this overlay is a
+// count or a state; this is the address the i960 presented and the word it got
+// back. The counters have narrowed the fault to "the copy runs with the wrong
+// pointer" -- row 17 says the polls read 4000 and pass, row 10 unwinds to
+// 0x22825C so the block is executing, and rows 15/16 say the window is never
+// read and backup SRAM never written. If g6 held 0x01c00200 those counters
+// could not both be zero. This says what it holds instead.
+logic [31:0] io_last_addr, io_last_data;
+always_ff @(posedge clk_sdram or negedge cpu_rst_n) begin
+	if (!cpu_rst_n) begin
+		io_last_addr <= 32'd0; io_last_data <= 32'd0;
+	end else if (cpu_io_sel) begin
+		io_last_addr <= cpu_io_addr;
+		io_last_data <= cpu_io_rdata;
+	end
+end
+
 m2_backup u_backup (
 	.clk(clk_sdram),
 	.sel(bak_sel),
@@ -1303,7 +1320,7 @@ always_ff @(posedge clk_vid) begin
 	ldr_top_sync  <= ldr_top;
 end
 
-m2_diag #(.NWORDS(18)) u_diag
+m2_diag #(.NWORDS(20)) u_diag
 (
 	.clk(clk_vid),
 	.ce_pix(ce_pix),
@@ -1331,7 +1348,9 @@ m2_diag #(.NWORDS(18)) u_diag
 	// counts reads of the flag dword; lower half is {status, flag} exactly as
 	// returned on rdata. If this disagrees with row 14 the read path is wrong,
 	// and row 14 alone could never have said so.
-	.words({ {iob_flag_rd, iob_seen},                   // 17 flag reads / value seen
+	.words({ io_last_data,                              // 19 last I/O word returned
+	         io_last_addr,                              // 18 last I/O address presented
+	         {iob_flag_rd, iob_seen},                   // 17 flag reads / value seen
 	         bak_w0,                                    // 16 backup SRAM dword 0
 	         {iob_win_rd, bak_writes},                  // 15 window reads / backup writes
 	         iob_dbg,                                   // 14 I/O board

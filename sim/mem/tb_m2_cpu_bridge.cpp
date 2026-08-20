@@ -38,6 +38,7 @@ static std::map<uint32_t, uint16_t> sdram;
 static std::vector<uint16_t> tram(32768, 0), pal(4096, 0);
 static std::vector<uint8_t>  xlat(96, 0);
 static std::map<uint32_t, uint32_t> io_regs;
+static uint32_t io_rdata_q = 0;   // the registered peripheral read, see tick()
 
 static uint64_t fails = 0, checks = 0;
 
@@ -99,7 +100,21 @@ static void step() {
     if (dut->io_sel) {
       if (dut->io_we) io_regs[dut->io_addr] = dut->io_wdata;
     }
-    dut->io_rdata = io_regs.count(dut->io_addr) ? io_regs[dut->io_addr] : 0xa5a50000u;
+    // A REGISTERED I/O READ, because that is what the peripherals are.
+    //
+    // This was combinational from io_addr, which is a peripheral that answers
+    // in the same instant it is addressed. m2_ioboard and m2_backup hold their
+    // state in M10K and present it one clk_mem later -- they have to, because
+    // an asynchronously read 1024x16 array is not an MLAB on this part, it is
+    // 16,384 flip-flops and 7,899 ALM.
+    //
+    // The bridge captures r_rdata <= io_rdata in the SAME cycle it raises
+    // io_sel, so it samples one cycle before io_sel is visible. With a
+    // combinational model that is invisible. With a registered one it is the
+    // whole question, and it is the only link between the i960 and the I/O
+    // board that nothing exercised.
+    dut->io_rdata = io_rdata_q;
+    io_rdata_q = io_regs.count(dut->io_addr) ? io_regs[dut->io_addr] : 0xa5a50000u;
   }
 
   if (cpu_edge) { dut->clk_cpu = 0; dut->eval(); }
@@ -238,6 +253,23 @@ int main(int argc, char **argv) {
     expect("fifo_control read", v, 1u);
     access(true, 0x00e80004u, 0x00000001u, 0xf, nullptr);
     expect("irq_enable write", io_regs[0x00e80004u], 1u);
+
+    // THE ACCESS THE BOOT IS STUCK ON, exactly as it makes it.
+    //
+    //   0022824C: ldob 0x1c00042,g4   ; byte 2 of the I/O board's flag dword
+    //   00228258: cmpibne g4,g1,...   ; loop until it reads 0x40
+    //
+    // A BYTE read, byte lane 2, of a dword whose other live byte is at lane 0.
+    // On hardware the board returns 00400000 -- confirmed on the overlay -- and
+    // the boot loops anyway, so the question is whether the word survives the
+    // bridge intact and with the right lanes. Nothing here read a single byte
+    // from I/O before: every I/O access in this suite was full-width.
+    io_regs[0x01c00040u] = 0x00400000u;
+    io_regs[0x01c00042u] = 0x00400000u;
+    access(false, 0x01c00040u, 0, 0x1, &v);
+    expect("I/O byte read, lane 0", v, 0x00400000u);
+    access(false, 0x01c00042u, 0, 0x4, &v);
+    expect("I/O byte read, lane 2", v, 0x00400000u);
   }
 
   // ---- an unmapped access is counted, not silently answered ----
