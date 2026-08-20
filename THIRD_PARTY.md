@@ -245,3 +245,39 @@ writes only under `build/`, which is git-ignored.
 - [ ] No `srg320/Saturn` code present anywhere in the tree
 - [ ] `tools/` not present in the published tree
 - [ ] ROM images are not distributed. Ever.
+
+
+### Model 1 core — `sega-model1-mister`, GPL-3.0
+
+*Pinned at `72131a3`, read 2026-08-20.*
+
+`rtl/io/m2_ioboard.sv` is derived in SHAPE from that project's
+`rtl/io/m1_ioboard.sv` — the same device, since `model2o` instantiates
+`SEGA_MODEL1IO` with bios `epr14869c` and Model 1 runs `EPR-14869` behind the
+same 315-5338A. **The protocol is not copied**, because on this machine it runs
+the other way round: there the board pushes a 128-byte identity block the V60
+reads, here the i960 writes the block and the board completes it. Measured, not
+assumed — see `docs/io-board.md`.
+
+What IS taken is the engineering, and it is the expensive half:
+
+- **One shared write port.** The MB8421 is a true dual-port RAM; that project
+  measured what asking Quartus 17.0 for a second write port costs — **192 ALM
+  becoming 16,059**. Against ~7,400 ALM of headroom here, that single number
+  decided the design.
+- **The turnaround is not a mailbox latency** but the board's Z80 running its
+  power-on self-test before it ever looks at the flag, which is why it is
+  enormous and happens once (their `292e628`).
+- **The flag is a command code, not a doorbell** — 1 acknowledges, 2 copies the
+  window, 3 restarts. Clearing on any non-zero write is right for 1, which is
+  why boot gets as far as it does, and silently wrong for 2 and 3 (`779a0b4`).
+- **Sweep at the board's rate, not every free cycle**, which is what turns a
+  rare collision into a constant one (`6fd28aa`).
+- **Sample a window another processor is filling more than once.** They took the
+  identity block from one snapshot mid-push, got six bytes wrong — one gating
+  the coprocessor path — and propagated it into the RTL, the testbench and the
+  docs, which looks like three artefacts and is one reading (`6e5aed4`).
+
+Their `m1_uart_tx` is a debug printf channel and NOT a sound UART; three things
+in that repo get called a UART and conflating them has cost time there already.
+Our sound path is the i8251 at `0x01c80000`.
