@@ -243,9 +243,9 @@ always_comb begin
 	p_we   = '0;
 	p_din  = '0;
 	p_be   = '1;
-	p_we[0]  = cpu_sd_we;
-	p_din[0] = cpu_sd_din;
-	p_be[0]  = cpu_sd_be;
+	p_we[1]  = cpu_sd_we;
+	p_din[1] = cpu_sd_din;
+	p_be[1]  = cpu_sd_be;
 	// PORT 1, NOT PORT 0. m2_sdram's blen() is hardcoded per port: ports 1-3
 	// burst FOUR 16-bit words, filling the whole 64-bit p_dout, while ports 0
 	// and 4 return ONE. On port 0 the readback got a correct low half and a
@@ -266,8 +266,19 @@ always_comb begin
 	//
 	// Port 1 is free here: the ROM readback that shares it now waits for cp_done,
 	// so the two never overlap.
-	p_req[1]  = rb_req;
-	p_addr[1] = rb_addr;
+	// SWAPPED WITH THE CPU, deliberately, as an A/B.
+	//
+	// Port 1 reads the boot vector correctly on hardware and port 0 returns zero
+	// for the same SDRAM at the same capture depth, and since both now burst
+	// four words it is not the burst length. Whether the fault follows the PORT
+	// or follows the CPU is the whole question, and swapping them answers it:
+	//
+	//   CPU works on 1, readback fails on 0  -> the fault is the port
+	//   CPU still fails on 1                 -> the fault is the CPU path
+	//
+	// Either outcome is worth a build. Neither is a guess.
+	p_req[0]  = rb_req;
+	p_addr[0] = rb_addr;
 	// PORT 2 FOR THE COPY, which is the one port known to work.
 	//
 	// Port 0 failed (single word) and port 1 failed (four-word burst), while the
@@ -281,11 +292,11 @@ always_comb begin
 	p_addr[3] = CHAR_BASE + SDR_AW'(char_addr);
 	// PORT 0 IS THE CPU'S, and it is the single-word port on purpose: the
 	// bridge issues one 16-bit access at a time, and ports 1-3 burst four.
-	p_req[0]  = cpu_sd_req;
-	p_addr[0] = cpu_sd_addr;
+	p_req[1]  = cpu_sd_req;
+	p_addr[1] = cpu_sd_addr;
 end
-assign rb_dout = p_dout[1];
-assign rb_ack  = p_ack[1];
+assign rb_dout = p_dout[0];
+assign rb_ack  = p_ack[0];
 
 // T_REFI IS IN CLOCK CYCLES. This domain is temporarily 40 MHz (see rtl/pll/pll.v):
 // 8192 rows in 64 ms is one refresh every 7.8125 us, which is 312 cycles at 40 MHz
@@ -805,7 +816,7 @@ wire [31:0] cpu_dbg_pc, cpu_dbg_ip, cpu_dbg_insn, cpu_dbg_icr, cpu_dbg_intr, cpu
 // question the IP cannot: whether the boot record came back correctly. An IP of
 // zero could be a bad read or a CPU that never started, and these separate them.
 wire [31:0] cpu_dbg_sat, cpu_dbg_prcb;
-wire [31:0] cpu_dbg_laddr, cpu_dbg_ldout;
+wire [31:0] cpu_dbg_laddr, cpu_dbg_ldout, cpu_dbg_p6, cpu_dbg_p2;
 wire        cpu_trap, cpu_halted;
 wire [7:0]  cpu_trap_op;
 
@@ -845,7 +856,7 @@ m2_cpu_bridge #(.AW(SDR_AW), .BOARD_2A(1'b0)) u_cpu_bridge (
 
 	.sd_req(cpu_sd_req), .sd_we(cpu_sd_we), .sd_addr(cpu_sd_addr),
 	.sd_din(cpu_sd_din), .sd_be(cpu_sd_be),
-	.sd_dout(p_dout[0]), .sd_ack(p_ack[0]),
+	.sd_dout(p_dout[1]), .sd_ack(p_ack[1]),
 
 	.oc_tram_we(cpu_tram_we), .oc_pal_we(cpu_pal_we),
 	.oc_addr(cpu_oc_addr), .oc_din(cpu_oc_din),
@@ -859,7 +870,8 @@ m2_cpu_bridge #(.AW(SDR_AW), .BOARD_2A(1'b0)) u_cpu_bridge (
 
 	.dbg_cpu_reads(cpu_dbg_rd), .dbg_cpu_writes(cpu_dbg_wr),
 	.dbg_unmapped(cpu_dbg_unmapped),
-	.dbg_last_addr(cpu_dbg_laddr), .dbg_last_dout(cpu_dbg_ldout)
+	.dbg_last_addr(cpu_dbg_laddr), .dbg_last_dout(cpu_dbg_ldout),
+	.dbg_probe6(cpu_dbg_p6), .dbg_probe2(cpu_dbg_p2)
 );
 
 // ------------------------------------------------------------ the I/O the
@@ -1074,8 +1086,8 @@ m2_diag #(.NWORDS(12)) u_diag
 	// and neither of those can be inferred from a checksum.
 	.words({ cpu_dbg_ldout,                             // 11 port 0: last data
 	         cpu_dbg_laddr,                             // 10 port 0: last address, want 6
-	         cpu_dbg_unmapped,                          // 9  bridge: unmapped
-	         cpu_dbg_rd,                                // 8  bridge: reads issued
+	         cpu_dbg_p2,                                // 9  BRIDGE read of word 2, want 000000C0
+	         cpu_dbg_p6,                                // 8  BRIDGE read of word 6, want 00000860
 	         cpu_dbg_prcb,                              // 7  PRCB read at boot, want 000000C0
 	         cpu_dbg_ip,                                // 6  where the CPU is
 	         cpu_dbg_acc,                               // 5  instructions accepted

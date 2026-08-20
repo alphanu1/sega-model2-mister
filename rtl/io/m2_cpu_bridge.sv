@@ -115,7 +115,15 @@ module m2_cpu_bridge #(
   // three facts together do not say whether the address is wrong or the data
   // is. These do.
   output logic [31:0] dbg_last_addr,
-  output logic [31:0] dbg_last_dout
+  output logic [31:0] dbg_last_dout,
+  output logic [31:0] dbg_probe6,
+  output logic [31:0] dbg_probe2,
+
+  // WHAT THIS BRIDGE GETS FOR WORD 6, latched the first time it reads it.
+  // The ROM readback reads the same word through the same controller and gets
+  // 00000860; this bridge gets zero for the words either side of it. Same
+  // address, two readers, one number each -- which is the only way left to
+  // tell a bad read from a bad address.
 );
 
   // ------------------------------------------------------------ CDC: request
@@ -265,6 +273,7 @@ module m2_cpu_bridge #(
       r_rdata <= 32'd0;
       dbg_cpu_reads <= 32'd0; dbg_cpu_writes <= 32'd0; dbg_unmapped <= 32'd0;
       dbg_last_addr <= 32'd0; dbg_last_dout <= 32'd0;
+      dbg_probe6 <= 32'hEEEE_EEEE; dbg_probe2 <= 32'hEEEE_EEEE;
     end else begin
       oc_tram_we <= 1'b0; oc_pal_we <= 1'b0; oc_xlat_we <= 1'b0;
       io_sel     <= 1'b0;
@@ -382,6 +391,10 @@ module m2_cpu_bridge #(
           r_rdata       <= sd_dout[31:0];
           dbg_last_addr <= {7'd0, sd_addr};
           dbg_last_dout <= sd_dout[31:0];
+          // EEEEEEEE means the address was never read at all, which is a
+          // different fault from reading it and getting zero.
+          if (sd_addr == AW'(6)) dbg_probe6 <= sd_dout[31:0];
+          if (sd_addr == AW'(2)) dbg_probe2 <= sd_dout[31:0];
           st            <= S_HI_W;      // still let the ack fall before answering
         end
 
