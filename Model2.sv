@@ -209,7 +209,7 @@ wire game_rst_n = pll_locked & ~RESET & ~status[0] & ~buttons[1];
 // comes good at 9, the geometry is the fault and must be MEASURED before it is
 // widened again, not deduced.
 localparam int unsigned SDR_COL  = 10;
-localparam int unsigned SDR_AW   = 2 + 13 + SDR_COL;   // 26
+localparam int unsigned SDR_AW   = 2 + 13 + SDR_COL;   // 25 with COL_BITS=10
 
 wire        mem_ready, sd_dq_oe, rom_loaded, ldr_overflow;
 wire [15:0] sd_dq_o;
@@ -407,7 +407,31 @@ end
 
 localparam logic [15:0] STP0 = 16'hAA55, STP1 = 16'h5AA5,
                         STP2 = 16'hFF00, STP3 = 16'h00FF;
-localparam logic [SDR_AW:1] ST_BASE = SDR_AW'(32'h2000000);   // 64 MB mark
+// INSIDE THE ADDRESS SPACE, and that is not a detail. SDR_AW is 25 bits, so the
+// controller addresses 0x2000000 words -- exactly 64 MB -- and the last valid
+// word is 0x1FFFFFF. The old value here was 0x2000000, ONE PAST THE END, and
+// SDR_AW'() truncated it to ZERO: the self-test wrote AA55 5AA5 FF00 00FF over
+// word addresses 0 to 3, which is byte addresses 0 to 7, which is the i960's
+// BOOT RECORD -- SAT at 0 and PRCB at 4.
+//
+// It cost nothing for as long as nothing executed from SDRAM. The first boot of
+// the CPU on hardware read its own startup state out of a memory test pattern,
+// jumped to it, and trapped after one instruction. The overlay showed IP =
+// AA55AA55, which is the pattern rather than an address.
+//
+// 0x1F00000 is inside the space and clear of the game map, whose highest region
+// (char RAM) ends at 0x16D0000.
+localparam logic [SDR_AW:1] ST_BASE = SDR_AW'(32'h1F00000);
+
+// An address that does not fit is a wrap, not an error, and a wrap to zero is
+// the worst possible landing place. Checked at elaboration so it can never
+// again be discovered on a board.
+initial begin
+	if (32'h1F00000 >= (32'd1 << SDR_AW))
+		$error("ST_BASE does not fit in SDR_AW=%0d bits and will wrap", SDR_AW);
+	if (32'h16D0000 >= (32'd1 << SDR_AW))
+		$error("the game map does not fit in SDR_AW=%0d bits", SDR_AW);
+end
 
 logic            st_run, st_req, st_rd_req;
 logic [SDR_AW:1] st_addr, st_rd_addr;

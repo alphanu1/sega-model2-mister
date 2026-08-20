@@ -2288,3 +2288,46 @@ expected result is a BLACK screen with a CPU that is executing. The overlay has
 been repointed at the loader's highest address and at the CPU's instruction
 count and IP, so "executing and stalled" can be told apart from "not running",
 which the copy checksums could not.
+
+
+---
+
+**R31 — the SDRAM self-test was writing its patterns over the boot record, and
+had been all along.** Second hardware run with the CPU in the core. The mode
+detection from R30 now works — the overlay shows `game_image` set and the loader
+reaching 22.8 M words — and the screen is black with the CPU **trapped after one
+instruction** at `IP = AA55AA55`.
+
+`AA55AA55` is not an address. It is `STP0`, the first pattern the SDRAM
+self-test writes.
+
+*The arithmetic.* `SDR_AW = 2 + 13 + COL_BITS`, which with the measured
+`COL_BITS = 10` (R19) is **25 bits** — exactly 0x2000000 words, exactly 64 MB,
+last valid word 0x1FFFFFF. The self-test's base was:
+
+```systemverilog
+localparam logic [SDR_AW:1] ST_BASE = SDR_AW'(32'h2000000);   // 64 MB mark
+```
+
+**One past the end.** `SDR_AW'()` truncated it to **zero**, so the four patterns
+landed at word addresses 0 to 3 — byte addresses 0 to 7 — which is
+`SAT` at 0 and `PRCB` at 4. The i960 read its startup state out of a memory test
+pattern, jumped to it and trapped.
+
+*Why it survived this long.* **Nothing had ever executed from SDRAM.** Every
+earlier use read tile RAM, the palette and character data from addresses far
+above zero, so a corrupted first eight bytes was invisible — and the self-test
+reported `st_ok` because it verified its own patterns at the address it had
+actually written. **A test that checks the place it wrote is not checking the
+place it meant to write.**
+
+*The class, and it is the third address-arithmetic fault in this project.* R18
+inferred SDRAM geometry from pin counts; R25 took a memory map from the wrong
+board variant; this one lets an out-of-range constant wrap silently. **An address
+that does not fit is not an error in Verilog, it is a wrap** — and a wrap to zero
+lands on the one structure the CPU cannot boot without.
+
+There is now an elaboration-time `$error` on both `ST_BASE` and the top of the
+game map against `1 << SDR_AW`, so the next one fails the build rather than the
+board. The stale `// 26` comment on `SDR_AW` — left from when `COL_BITS` was 11 —
+is corrected; it is what made the value look right on inspection.
