@@ -51,17 +51,44 @@ changes. Over 400 frames it has three distinct states:
 30: 02 02 14 1c 00 01 00 01 04 01 ff ff ff ff ff ff
 ```
 
-**THE CPU WRITES THIS BLOCK; THE BOARD DOES NOT SUPPLY IT.** That is the
-opposite of Model 1, where the V60 block-*reads* an identity block the board
-pushes, and where a core that left the window empty looped forever with every
-input byte underneath it already correct (their `122988c`). Here the bytes are
-byte-for-byte what MAME's `backup1` NVRAM holds at `0x1d00000` — the i960 copies
-its backup SRAM outward.
+**THE BOARD SUPPLIES THIS BLOCK AND THE i960 COPIES IT INTO BACKUP SRAM.** It is
+the same as Model 1 after all.
 
-So the board's part of this exchange is: **complete the window** (`0x43-0x7b` to
-`ff`, `0x7c` to `01`) and **set status `0x21` to `0x40`**, at frame 7. Then the
-CPU drives the flag `01 -> 03 -> 02 -> 01`, and the flag finally clears to `00`
-at frame 174 (R37).
+This file said the opposite for one build, and the correction is the useful
+part. The window's contents are byte-for-byte what MAME's `backup1` NVRAM holds
+at `0x1d00000`, and that was read as the i960 copying its backup SRAM *outward*.
+**A correlation between two memories does not carry a direction.** The
+disassembly does:
+
+```
+00228230: lda  0x1c00200,g6      ; g6 = DPRAM window   -- the SOURCE
+00228238: lda  0x1d00000,g5      ; g5 = backup SRAM    -- the DESTINATION
+00228240: ldob 0x1c00040,g4      ; wait flag == 0
+0022824C: ldob 0x1c00042,g4      ; wait status == 0x40
+0022825C: mov  3,g2
+00228260: stob g2,0x1c00040      ; command 3
+00228268: ldob 0x1c00040,g4      ; wait flag == 0
+0022827C: ldob (g6),g4           ; then copy 128 bytes,
+00228280: stob g4,(g5)           ; DPRAM at stride 2 -> SRAM at stride 1
+002282CC: ble  0x0022827c
+```
+
+Model 1's `122988c` had already established exactly this on exactly this board —
+*"the V60 block-reads all of it once, immediately after its first handshake is
+answered, and will not go on to poll its controls until it has… ours read zeros
+and looped at `fe1433` forever"* — and it was read, quoted into this file, and
+then overridden by the misreading.
+
+**What it cost:** one hardware build. The board answered the handshake perfectly
+— overlay row 14 read `1A400000`: awake, status `0x40`, flag cleared — and the
+i960 then copied 128 bytes of M10K power-up zeros into backup SRAM, rejected
+them, and span in `0x2282xx` with **4,097 tile writes** against simulation's
+12,292. The same 4,097 the old sound-constant stub produced, which is what a
+boot that never gets past this block looks like.
+
+So the board's part is: **push all 128 bytes** of the block, and **set status
+`0x21` to `0x40`**. Then the CPU drives the flag `01 -> 03 -> 02 -> 01` and the
+flag clears at frame 174 (R37).
 
 ### Frame 6 is a partial write
 

@@ -84,13 +84,12 @@ module m2_ioboard #(
   // What the board leaves in the status byte at DPRAM 0x21. Observed 0x40.
   parameter logic [7:0]  STATUS_READY    = 8'h40,
 
-  // Completing the window: 0x143-0x17b to 0xff and 0x17c to 0x01.
+  // Pushing the 128-byte identity block into DPRAM 0x100-0x17f.
   //
-  // ATTRIBUTED BY INFERENCE, NOT BY MEASUREMENT. The state is observed -- those
-  // bytes hold those values from frame 7 -- but nothing here establishes that
-  // the BOARD wrote them rather than the i960 finishing its own block. It is a
-  // parameter so the differential can settle it: turn it off, and if the boot
-  // still reaches the same instruction, the i960 was writing them.
+  // NOT OPTIONAL IN PRACTICE -- the i960 copies the window into backup SRAM and
+  // will not go on until it has, so without this it copies zeros and loops. It
+  // stays a parameter because turning it off is the one-line way to reproduce
+  // that failure on demand, and the suite uses it as a mutation.
   parameter bit          COMPLETE_WINDOW = 1'b1
 ) (
   input  logic        clk,
@@ -116,9 +115,8 @@ module m2_ioboard #(
 );
 
   localparam logic [9:0] FLAG_W  = 10'h010;   // DPRAM 0x20 low, 0x21 high
-  localparam logic [10:0] FILL_FROM = 11'h143;
-  localparam logic [10:0] FILL_TO   = 11'h17b;
-  localparam logic [10:0] FILL_MARK = 11'h17c;
+  localparam logic [10:0] FILL_FROM = 11'h100;
+  localparam logic [10:0] FILL_LAST = 11'h17f;
 
   // TWO 1024 x 8 LANES, ONE WRITE PORT, REGISTERED READ.
   //
@@ -167,6 +165,64 @@ module m2_ioboard #(
 
   assign rdata = {8'd0, q_hi, 8'd0, q_lo};
 
+
+  // THE IDENTITY BLOCK. The board supplies all 128 bytes of DPRAM 0x100-0x17f
+  // and the i960 copies them into backup SRAM before it will go on:
+  //
+  //   00228230: lda  0x1c00200,g6      ; source = DPRAM window
+  //   00228238: lda  0x1d00000,g5      ; dest   = backup SRAM
+  //   0022827C: ldob (g6),g4           ; DPRAM is the SOURCE
+  //   00228280: stob g4,(g5)
+  //
+  // read at stride 2 because the DPRAM is eight bits wide at bytes 0 and 2 of
+  // each dword, written at stride 1 into ordinary RAM.
+  //
+  // THIS FILE PREVIOUSLY HAD THE ARROW BACKWARDS. docs/io-board.md said "the
+  // i960 writes the block; the board does not supply it", from a frame-by-frame
+  // dump in which the window's contents matched backup SRAM exactly. They match
+  // because the i960 had just copied them THAT way. A correlation between two
+  // memories does not carry a direction, and the disassembly does.
+  //
+  // Model 1's `122988c` had already found this on the same board -- "the V60
+  // block-reads all of it once, immediately after its first handshake is
+  // answered, and will not go on to poll its controls until it has... ours read
+  // zeros and looped at fe1433 forever" -- and it was read, written into our own
+  // docs, and then overridden by the misread measurement.
+  //
+  // Values are MAME's, sampled at frames 10, 60, 120, 300 and 900 and identical
+  // at all five (tools/mame_m2_idblock.lua). Sampled repeatedly because the
+  // Model 1 core took this block from ONE snapshot mid-push and got six bytes
+  // wrong, one of which gated its coprocessor path.
+  function automatic logic [7:0] idblk(input logic [6:0] i);
+    case (i)
+      7'h00: idblk = 8'h53; 7'h01: idblk = 8'h45;  // "SEGA"
+      7'h02: idblk = 8'h47; 7'h03: idblk = 8'h41;
+      7'h04: idblk = 8'h40; 7'h05: idblk = 8'h82;
+      7'h06: idblk = 8'h01; 7'h07: idblk = 8'h00;
+      7'h08: idblk = 8'hbc; 7'h09: idblk = 8'heb;
+      7'h0a: idblk = 8'h00; 7'h0b: idblk = 8'h00;
+      7'h0c: idblk = 8'h00;
+      7'h10: idblk = 8'h00; 7'h11: idblk = 8'h01;
+      7'h12: idblk = 8'h01; 7'h13: idblk = 8'h01;
+      7'h14: idblk = 8'h00; 7'h15: idblk = 8'h03;
+      7'h16: idblk = 8'h03; 7'h17: idblk = 8'h00;
+      7'h18: idblk = 8'h00; 7'h19: idblk = 8'h00;
+      7'h1a: idblk = 8'h00; 7'h1b: idblk = 8'h01;
+      7'h20: idblk = 8'h01;
+      7'h21, 7'h22, 7'h23, 7'h24, 7'h25, 7'h26, 7'h27,
+      7'h28, 7'h29, 7'h2a, 7'h2b, 7'h2c, 7'h2d, 7'h2e, 7'h2f:
+                   idblk = 8'h00;
+      7'h30: idblk = 8'h02; 7'h31: idblk = 8'h02;
+      7'h32: idblk = 8'h14; 7'h33: idblk = 8'h1c;
+      7'h34: idblk = 8'h00; 7'h35: idblk = 8'h01;
+      7'h36: idblk = 8'h00; 7'h37: idblk = 8'h01;
+      7'h38: idblk = 8'h04; 7'h39: idblk = 8'h01;
+      7'h7c: idblk = 8'h01;
+      7'h7d, 7'h7e, 7'h7f: idblk = 8'h00;
+      default: idblk = 8'hff;
+    endcase
+  endfunction
+
   // ------------------------------------------------------------- the board
   logic [26:0] selftest;
   logic        awake;              // self-test finished; the flag is watched now
@@ -202,10 +258,7 @@ module m2_ioboard #(
     if (filling) begin
       b_we   = 1'b1;
       b_word = fill[10:1];
-      // 0xff across 0x143-0x17b, then 0x01 at 0x17c. Written as a range test
-      // rather than a counter comparison so the constants in the file match
-      // the ones in docs/io-board.md by eye.
-      b_data = (fill <= FILL_TO) ? {8'hff, 8'hff} : {8'h01, 8'h01};
+      b_data = {idblk(fill[6:0]), idblk(fill[6:0])};
       b_be   = fill[0] ? 2'b10 : 2'b01;
     end else if (status_pulse) begin
       b_we   = 1'b1;
@@ -279,7 +332,7 @@ module m2_ioboard #(
       end
 
       if (filling) begin
-        if (fill == FILL_MARK) filling <= 1'b0;
+        if (fill == FILL_LAST) filling <= 1'b0;
         else                   fill    <= fill + 11'd1;
       end
 

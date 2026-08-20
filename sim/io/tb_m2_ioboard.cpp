@@ -54,16 +54,10 @@ int main(int argc, char **argv) {
   for (int i = 0; i < 8; i++) tick();
   d->rst_n = 1;
 
-  // The i960's block: what MAME shows it writing, first 0x43 bytes.
-  static const uint8_t head[] = {
-    0x53,0x45,0x47,0x41, 0x40,0x82,0x01,0x00, 0xbc,0xeb,0x00,0x00,
-    0x00,0xff,0xff,0xff, 0x00,0x01,0x01,0x01, 0x00,0x03,0x03,0x00 };
-  for (unsigned i = 0; i < sizeof(head); i++) wr_byte(0x100 + i, head[i]);
-
-  // It reads back what it wrote: the window is RAM, not a register file.
-  ck("window readback 0x100", rd_byte(0x100), 0x53);
-  ck("window readback 0x105", rd_byte(0x105), 0x82);
-  ck("window readback 0x117", rd_byte(0x117), 0x00);
+  // The window is RAM as well as a block source: the i960 writes elsewhere in
+  // it, so a write must stick.
+  wr_byte(0x1f0, 0x5a);
+  ck("window is writable",   rd_byte(0x1f0), 0x5a);
 
   // The status is on the BOARD'S schedule, not a reply to that write. The boot
   // waits for 0x40 before it writes the window at all, so a status that only
@@ -73,13 +67,34 @@ int main(int argc, char **argv) {
   for (int i = 0; i < 4000; i++) tick();
 
   ck("status on schedule",   rd_byte(0x21), 0x40);
-  ck("window fill 0x143",    rd_byte(0x143), 0xff);
-  ck("window fill 0x160",    rd_byte(0x160), 0xff);
-  ck("window fill 0x17b",    rd_byte(0x17b), 0xff);
-  ck("window mark 0x17c",    rd_byte(0x17c), 0x01);
-  ck("fill did not overrun", rd_byte(0x17d), 0x00);
-  ck("fill did not underrun",rd_byte(0x142), 0x00);
-  ck("head survived fill",   rd_byte(0x100), 0x53);
+  // THE BOARD SUPPLIES THE WHOLE BLOCK. The i960 copies DPRAM 0x100-0x17f into
+  // backup SRAM and will not go on until it has -- 0022827C reads (g6) with
+  // g6 = 0x1c00200 and stores to (g5) with g5 = 0x1d00000 -- so a window that
+  // is only partly filled is copied in as zeros and rejected.
+  //
+  // These expectations are typed from MAME's dump independently of the RTL
+  // table. That is a weaker safeguard than it looks -- the Model 1 core did the
+  // same and still propagated one bad reading into both -- which is why the
+  // dump was sampled at five frames and checked identical rather than taken
+  // once.
+  ck("block 'S'",            rd_byte(0x100), 0x53);
+  ck("block 'E'",            rd_byte(0x101), 0x45);
+  ck("block 'G'",            rd_byte(0x102), 0x47);
+  ck("block 'A'",            rd_byte(0x103), 0x41);
+  ck("block 0x105",          rd_byte(0x105), 0x82);
+  ck("block 0x109",          rd_byte(0x109), 0xeb);
+  ck("block 0x11b",          rd_byte(0x11b), 0x01);
+  ck("block 0x120",          rd_byte(0x120), 0x01);
+  ck("block 0x12f gap",      rd_byte(0x12f), 0x00);
+  ck("block 0x132",          rd_byte(0x132), 0x14);
+  ck("block 0x139",          rd_byte(0x139), 0x01);
+  ck("block 0x13a tail",     rd_byte(0x13a), 0xff);
+  ck("block 0x160 tail",     rd_byte(0x160), 0xff);
+  ck("block 0x17b tail",     rd_byte(0x17b), 0xff);
+  ck("block 0x17c mark",     rd_byte(0x17c), 0x01);
+  ck("block 0x17f end",      rd_byte(0x17f), 0x00);
+  ck("did not overrun",      rd_byte(0x180), 0x00);
+  ck("did not underrun",     rd_byte(0x0ff), 0x00);
 
   // The i960 raises the flag and polls it. The board is still in self-test.
   wr_byte(0x20, 0x01);
