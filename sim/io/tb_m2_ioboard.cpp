@@ -36,8 +36,14 @@ static void wr_byte(uint32_t n, uint8_t v) {
   tick();
   d->sel = 0; d->we = 0; d->be = 0;
 }
+// The read is REGISTERED now -- the store is M10K, not LUTRAM, because as
+// LUTRAM it silently became 16,384 flip-flops. So present the address, clock
+// once, then sample. On the real path the bridge holds the address for a
+// dispatch cycle before it asserts io_sel, which is the same thing.
 static uint8_t rd_byte(uint32_t n) {
-  d->sel = 1; d->we = 0; d->word = n >> 1; d->eval();
+  d->sel = 1; d->we = 0; d->word = n >> 1;
+  tick();
+  d->sel = 0;
   return (n & 1) ? uint8_t(d->rdata >> 16) : uint8_t(d->rdata);
 }
 

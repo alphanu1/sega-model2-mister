@@ -120,15 +120,33 @@ module m2_ioboard #(
   localparam logic [10:0] FILL_TO   = 11'h17b;
   localparam logic [10:0] FILL_MARK = 11'h17c;
 
-  // 1024 x 16, asynchronously read because the i960's I/O read path is a
-  // combinational mux. Tagged MLAB rather than left to inference: as M10K this
-  // is two blocks, and M10K is the binding resource on this part while LAB area
-  // is not -- 26 MLABs is the cheaper side of that trade. Never cleared in
-  // reset, per the standing rule; power-up content is the FPGA's zeros and the
-  // boot writes what it reads.
-  (* ramstyle = "MLAB" *) logic [15:0] dp [1024];
+  // 1024 x 16, in M10K, READ SYNCHRONOUSLY.
+  //
+  // THE FIRST VERSION WAS ASYNCHRONOUSLY READ AND TAGGED MLAB, and that cost
+  // 7,899 ALM. The tag was ignored -- byte-lane write enables on a 1024-deep
+  // asynchronously read array is not a shape Quartus 17.0 infers as LUTRAM --
+  // and the whole thing became flip-flops. The build was clean and timing
+  // closed, which is how it nearly reached the board: total registers went
+  // 20,087 to 36,473, and 36,473 - 20,087 is 16,386 against an array of exactly
+  // 1024 x 16 = 16,384 bits. Whole-core ALM went 17,532 to 25,431, past the
+  // ~25,000 the fit question is about, with no renderer in it yet.
+  //
+  // A RAM TAG IS A REQUEST, NOT AN INSTRUCTION, and simulation cannot see
+  // whether it was honoured -- study section 8 says memory inference is visible
+  // only in a Quartus build. Check the register count, not the tag.
+  //
+  // Two blocks instead, against 316 free. The read is registered, which the
+  // i960's I/O path can absorb because `word` comes from the bridge's latched
+  // r_addr and is stable for a dispatch cycle before io_sel is ever asserted --
+  // so the data is already out of the memory by the time the bridge samples it.
+  //
+  // Never cleared in reset, per the standing rule.
+  (* ramstyle = "M10K" *) logic [15:0] dp [1024];
+  logic [15:0] dp_q;
 
-  assign rdata = {8'd0, dp[word][15:8], 8'd0, dp[word][7:0]};
+  always_ff @(posedge clk) dp_q <= dp[word];
+
+  assign rdata = {8'd0, dp_q[15:8], 8'd0, dp_q[7:0]};
 
   // ------------------------------------------------------------- the board
   logic [26:0] selftest;
