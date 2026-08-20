@@ -2232,3 +2232,59 @@ replay: it will clear RAM, reinitialise through IAC, and sit there. The
 simulation path gets past it only because `+dpram` replays bytes recorded from
 MAME. Baking that capture into the game image is the obvious next step and is not
 done. **Nothing here has been tested on hardware.**
+
+
+---
+
+**R30 — `req && ack` is the rule for the numbered ports and NOT for the loader's
+write port, and assuming otherwise put program ROM on the screen.** First
+hardware run of the core with the i960 in it: Daytona rendered as scrolling
+colour noise with the overlay intact.
+
+The overlay said what it was, once read rather than glanced at:
+
+```
+word4 = 00000087   PLL locked, SDRAM ready, ROM loaded, no overflow, self-test OK
+word5 = C3E101F3   tile RAM copy checksum
+word6 = 0D3D0CAF   palette copy checksum
+```
+
+**Those checksums should have been zero.** The copy engine is meant to be
+skipped for a game image; a non-zero checksum means it ran, and what it copied
+was the i960's program ROM into tile RAM. The renderer then drew executable code
+as tiles, which is exactly what colour noise is.
+
+*The cause.* The mode is chosen by the highest address the loader wrote:
+
+```systemverilog
+else if (ldr_wr_req && ldr_wr_ack && (ldr_wr_addr > ldr_top)) ldr_top <= ldr_wr_addr;
+```
+
+`m2_rom_loader` **pulses** its request and drops it before the answer arrives —
+its own comment says "req pulsed so the controller sees a rising edge" — and
+then waits for the ACK EDGE. So `req && ack` is never simultaneously true,
+`ldr_top` stayed at zero, `game_image` was permanently false, and the copy engine
+ran on all 43.88 MB.
+
+*Why this is worth an entry rather than a one-line fix.* `docs/mister-integration.md`
+says **one access is `req & ack`, not one cycle of `req`**, and
+`m2_cpu_bridge`'s own header repeats it — that rule was written down, quoted in
+the module I had just built, and still applied to the wrong interface. **It is
+the rule for the NUMBERED PORTS.** The dedicated write port is a different
+protocol: pulse the request, watch for the acknowledge edge. Two handshakes on
+one controller, and the difference is documented only inside the loader.
+
+The address is presented with the request, so sampling on `req` alone is correct
+and does not depend on when the controller answers.
+
+*What it cost, and what it did not.* One build. It cost nothing else because the
+overlay carried the copy checksums — a diagnostic added for a different fault
+entirely, months of work earlier, that named this one on sight. **The screen is
+the only output channel, and a number on it is worth more than a theory.**
+
+*A note on what the fix does not fix.* With the mode detected correctly the game
+still will not draw: it stalls in the sound-board handshake (R25), so the
+expected result is a BLACK screen with a CPU that is executing. The overlay has
+been repointed at the loader's highest address and at the CPU's instruction
+count and IP, so "executing and stalled" can be told apart from "not running",
+which the copy checksums could not.

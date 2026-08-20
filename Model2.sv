@@ -750,7 +750,17 @@ end
 logic [SDR_AW:1] ldr_top;
 always_ff @(posedge clk_sdram or negedge mem_rst_n) begin
 	if (!mem_rst_n) ldr_top <= '0;
-	else if (ldr_wr_req && ldr_wr_ack && (ldr_wr_addr > ldr_top)) ldr_top <= ldr_wr_addr;
+	// ON req ALONE, not req AND ack. This dedicated write port does NOT use the
+	// level handshake the numbered ports use: m2_rom_loader PULSES req and drops
+	// it immediately -- "req pulsed so the controller sees a rising edge" -- then
+	// waits for the ACK EDGE. So `req && ack` is never true, ldr_top stayed 0,
+	// game_image was permanently false, and the copy engine ran on the 43.88 MB
+	// game image and filled tile RAM with i960 program code. That is what the
+	// board displayed as scrolling colour noise.
+	//
+	// The address is presented with the request, so sampling on req is correct
+	// and does not depend on when the controller answers.
+	else if (ldr_wr_req && (ldr_wr_addr > ldr_top)) ldr_top <= ldr_wr_addr;
 end
 wire game_image = rom_loaded && (ldr_top > SDR_AW'(32'h0080000));
 
@@ -1000,6 +1010,19 @@ end
 
 wire [7:0] ov_r, ov_g, ov_b;
 
+// The overlay runs on clk_vid and these all live on clk_sdram or clk_i960, so
+// they cross with two flops. They are status bits and counters read by eye --
+// a torn counter is a wrong digit for one frame, not a wrong decision.
+logic [2:0] game_sync, cp_done_sync, cpu_trap_sync, cpu_halt_sync;
+logic [SDR_AW:1] ldr_top_sync;
+always_ff @(posedge clk_vid) begin
+	game_sync     <= {game_sync[1:0],     game_image};
+	cp_done_sync  <= {cp_done_sync[1:0],  cp_done};
+	cpu_trap_sync <= {cpu_trap_sync[1:0], cpu_trap};
+	cpu_halt_sync <= {cpu_halt_sync[1:0], cpu_halted};
+	ldr_top_sync  <= ldr_top;
+end
+
 m2_diag #(.NWORDS(7)) u_diag
 (
 	.clk(clk_vid),
@@ -1008,17 +1031,24 @@ m2_diag #(.NWORDS(7)) u_diag
 	.enable(1'b1),
 	.hb(tile_hb),
 	.vb(tile_vb),
-	.words({ {cp_xor_p, cp_sum_p},                       // 6  palette,  want 5BFDD5AF
-	         {cp_xor_t, cp_sum_t},                      // 5  tile RAM, want A66F51B7
+	// REPOINTED AT THE CPU. The copy checksums did their job -- they proved the
+	// copy engine RAN on a game image, which it must not, and that is why the
+	// board showed program ROM rendered as tiles. What is needed now is whether
+	// the loader saw a game-sized image at all and whether the CPU is executing,
+	// and neither of those can be inferred from a checksum.
+	.words({ cpu_dbg_ip,                                // 6  where the CPU is
+	         cpu_dbg_acc,                               // 5  instructions accepted
 	         // 32 BITS, not 31. The first version was {27'd0, ...} = 31, which
 	         // shifted every word above it by one bit: the board showed word4 as
 	         // 80000007, its top bit being rb_w0's LSB bleeding down. A short
 	         // field in a concatenation does not warn, it silently reindexes.
-	         {24'd0, st_ok_sync[2], 3'd0,
-	          ldr_overflow, loaded_sync[2],
-	          mem_ready, pll_locked},                   // 4  status, bit7=SDRAM OK
-	         {21'd0, vispix_ctr_l},                     // 3  pixels = 1F0
-	         {22'd0, line_ctr_l},                       // 2  lines  = 1A8
+	         {16'd0, cpu_trap_sync[2], cpu_halt_sync[2],
+	          game_sync[2], cp_done_sync[2],
+	          st_ok_sync[2], ldr_overflow,
+	          loaded_sync[2], mem_ready,
+	          6'd0, pll_locked, 1'b1},                  // 4  status, see below
+	         {7'd0, ldr_top_sync},                      // 3  highest word loaded
+	         {22'd0, line_ctr_l},                       // 2  lines = 1A8
 	         frame_ctr,                                 // 1  liveness
 	         32'hB0ADCAFE }),                           // 0  magic
 	// Until the copy engine has filled tile RAM and the palette there is
