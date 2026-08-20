@@ -235,7 +235,17 @@ module m2_cpu_bridge #(
   //
   // Two halves for anything 16 bits wide, one for I/O. `half` names which is in
   // flight; the low half lands in bits 15:0 and the high half in 31:16.
-  typedef enum logic [1:0] { S_IDLE, S_LO, S_HI, S_DONE } st_e;
+  // S_LO_W and S_HI_W wait for the controller's ACK TO FALL before the next
+  // request goes out. m2_sdram holds p_ack for ACK_HOLD cycles -- 2, by its own
+  // parameter, "so requesters on a slower synchronous clock see exactly one
+  // rising edge" -- and this bridge runs on the SAME clock as the controller.
+  // Issuing the second half while the first half's ack is still asserted means
+  // sampling it immediately and capturing the FIRST word again, so a 32-bit read
+  // returns its low half in both halves.
+  //
+  // On hardware that made the i960 read its boot IP as 0x00600860 where the ROM
+  // holds 0x00000860 -- the low half right, the high half not.
+  typedef enum logic [2:0] { S_IDLE, S_LO, S_LO_W, S_HI, S_HI_W, S_DONE } st_e;
   st_e  st;
   logic half;
 
@@ -252,7 +262,10 @@ module m2_cpu_bridge #(
       io_sel     <= 1'b0;
 
       case (st)
-        S_IDLE: if (req_mem && !ack_mem) begin
+        // !sd_ack as well as req_mem: the previous access's ack may still be
+        // held when the next request arrives, and issuing into it has exactly
+        // the same effect as issuing into it below.
+        S_IDLE: if (req_mem && !ack_mem && !sd_ack) begin
           if (r_we) dbg_cpu_writes <= dbg_cpu_writes + 32'd1;
           else      dbg_cpu_reads  <= dbg_cpu_reads  + 32'd1;
           half <= 1'b0;
@@ -305,16 +318,7 @@ module m2_cpu_bridge #(
             if (sd_ack) begin
               sd_req <= 1'b0;
               if (!r_we) r_rdata[15:0] <= sd_dout[15:0];
-              if (!half) begin
-                half    <= 1'b1;
-                sd_addr <= sd_word + AW'(1);
-                sd_din  <= r_wdata[31:16];
-                sd_be   <= r_be[3:2];
-                sd_req  <= 1'b1;
-                st      <= S_HI;
-              end else begin
-                ack_mem <= 1'b1; st <= S_DONE;
-              end
+              st <= S_LO_W;              // let the held ack fall first
             end
           end else begin
             // Registered read: the low word was addressed in S_IDLE and is
@@ -328,19 +332,42 @@ module m2_cpu_bridge #(
           end
         end
 
+        // Ack has fallen: the high half is safe to issue.
+        S_LO_W: if (!sd_ack) begin
+          half    <= 1'b1;
+          sd_addr <= sd_word + AW'(1);
+          sd_din  <= r_wdata[31:16];
+          sd_be   <= r_be[3:2];
+          sd_req  <= 1'b1;
+          st      <= S_HI;
+        end
+
         S_HI: begin
           if (tgt == T_SDRAM) begin
             if (sd_ack) begin
               sd_req <= 1'b0;
               if (!r_we) r_rdata[31:16] <= sd_dout[15:0];
-              ack_mem <= 1'b1;
-              st      <= S_DONE;
+              st <= S_HI_W;
             end
           end else begin
             r_rdata[31:16] <= (tgt == T_TRAM) ? oc_tram_q : oc_pal_q;
             ack_mem        <= 1'b1;
             st             <= S_DONE;
           end
+        end
+
+        // Both halves are in. Wait for the second ack to fall before answering,
+        // so the next access cannot start into a held ack either.
+        //
+        // DEFENSIVE, and honestly labelled: unlike S_LO_W, this wait and the
+        // !sd_ack guard in S_IDLE are NOT proven necessary by the testbench --
+        // removing either still passes. They are kept because the next access
+        // is separated from this one only by the CPU-domain crossing, whose
+        // length is a clock ratio rather than a guarantee, and this is the
+        // exact hazard that put a wrong boot vector on the board.
+        S_HI_W: if (!sd_ack) begin
+          ack_mem <= 1'b1;
+          st      <= S_DONE;
         end
 
         // Hold ack until the requester has seen it and dropped req. Without
@@ -350,6 +377,11 @@ module m2_cpu_bridge #(
           ack_mem <= 1'b0;
           st      <= S_IDLE;
         end
+
+        // Six named states in a three-bit type leaves two unreachable
+        // encodings. Naming them costs nothing and means a glitch into one is
+        // recoverable rather than a permanent stall.
+        default: st <= S_IDLE;
       endcase
     end
   end

@@ -2331,3 +2331,54 @@ There is now an elaboration-time `$error` on both `ST_BASE` and the top of the
 game map against `1 << SDR_AW`, so the next one fails the build rather than the
 board. The stale `// 26` comment on `SDR_AW` — left from when `COL_BITS` was 11 —
 is corrected; it is what made the value look right on inspection.
+
+
+---
+
+**R32 — the bridge sampled an acknowledge that was still held from the previous
+access, and the testbench could not see it because the model was easier than the
+controller.** Third hardware run. R31's fix worked — the CPU now reads a real
+boot record — and the overlay showed:
+
+```
+word5 = 00000002   two instructions accepted
+word6 = 00600860   the IP
+```
+
+The ROM holds `0x00000860` at byte 12. **The low half is right and the high half
+is not**, which is a much sharper statement than "it crashed".
+
+*The cause.* `m2_sdram` holds `p_ack` for `ACK_HOLD` cycles — 2, by its own
+parameter, "so requesters on a slower synchronous clock see exactly one rising
+edge with ack high". `m2_cpu_bridge` runs on the **same** clock as the
+controller, and it issued the second 16-bit half in the same cycle it captured
+the first, while that ack was still asserted. It then sampled the still-held ack
+and captured the **first word again**.
+
+A 32-bit read therefore returned its low half in both halves.
+
+*Why the testbench passed it.* The SDRAM model in `tb_m2_cpu_bridge.cpp` acked
+for **one** cycle. **A model that is easier than the thing it models does not
+test the thing it models** — and this one was written by the same person, on the
+same day, as the bridge that assumed the same thing. Correcting the model to hold
+ack for two cycles reproduces the fault immediately: `got=100d100d`,
+`want=0000100d`.
+
+*On mutation testing, and a correction worth keeping.* Three mutations removing
+the new waits all **SURVIVED**, which briefly looked like the fix being
+unnecessary. They were not faithful to the bug: each issued the second half one
+cycle later than the original did, and a two-cycle hold tolerates that. The
+faithful mutation — reinstate the issue in the same cycle as the capture — is
+caught, `got=beefbeef want=deadbeef`.
+
+**A mutation that is milder than the defect proves nothing about the defect.**
+Only the `S_LO_W` wait is established as necessary; the `S_HI_W` wait and the
+`S_IDLE` ack guard are defensive and are labelled as such in the source rather
+than presented as verified.
+
+*The pattern across R30, R31 and R32.* All three are the same shape: an
+interface's actual behaviour differing from the behaviour assumed by the code
+that drives it — a pulsed request read as a level, an address one past the end
+read as in range, an acknowledge held for two cycles read as one. **None was
+visible in simulation, and all three were named by the overlay on the first
+frame.**

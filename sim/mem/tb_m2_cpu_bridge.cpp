@@ -50,11 +50,20 @@ static void step() {
   const bool mem_edge = (tk % MEM_DIV) == 0;
 
   if (mem_edge) {
-    // SDRAM model: single-word port, acks the cycle after the request.
+    // SDRAM model: single-word port. ACK IS HELD FOR ACK_HOLD CYCLES, which is
+    // 2 -- m2_sdram's own parameter, "requesters on a slower synchronous clock
+    // must see exactly one rising edge with ack high".
+    //
+    // The first version of this model acked for ONE cycle, and that is why it
+    // passed a bridge that samples an ack still held from the previous
+    // transaction. A model that is easier than the thing it models does not
+    // test the thing it models.
     static bool pend = false;
+    static int  ackhold = 0;
     static uint32_t pa = 0; static bool pw = false; static uint16_t pd = 0; static uint8_t pb = 3;
-    dut->sd_ack = 0;
-    if (pend) {
+    if (ackhold > 0) { --ackhold; dut->sd_ack = 1; }
+    else dut->sd_ack = 0;
+    if (pend && ackhold == 0) {
       if (pw) {
         uint16_t cur = sdram.count(pa) ? sdram[pa] : 0xffff;
         if (pb & 1) cur = uint16_t((cur & 0xff00) | (pd & 0x00ff));
@@ -64,8 +73,9 @@ static void step() {
         dut->sd_dout = sdram.count(pa) ? sdram[pa] : 0xffff;
       }
       dut->sd_ack = 1;
+      ackhold = 1;                 // this cycle plus one more = ACK_HOLD of 2
       pend = false;
-    } else if (dut->sd_req) {
+    } else if (dut->sd_req && ackhold == 0) {
       pa = dut->sd_addr; pw = dut->sd_we; pd = dut->sd_din; pb = dut->sd_be;
       pend = true;
     }
