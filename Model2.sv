@@ -1000,8 +1000,25 @@ wire [31:0] iob_dbg;
 wire        bak_sel = cpu_io_sel && (cpu_io_addr[23:14] == 10'b11_0100_0000);
 wire [31:0] bak_rdata;
 
+// CLOCKED ON clk_sdram, NOT clk_i960, AND THAT IS THE WHOLE POINT.
+//
+// io_sel, io_addr and the r_rdata sample all live in m2_cpu_bridge's clk_mem
+// domain, which is clk_sdram. Clocking a REGISTERED read on a different clock
+// is a crossing with no synchroniser, and its failure is selective in a way
+// that looks like a data bug rather than a timing one:
+//
+//   a POLL survives it -- the same address read over and over, the value
+//   settles, and the read eventually returns the right byte. Overlay row 14 was
+//   perfect and the i960 cleared both handshake polls.
+//
+//   a ONE-SHOT SEQUENTIAL READ does not. The 128-byte block copy at 0022827C
+//   reads each address once, and each read can return the previous address's
+//   data.
+//
+// So the board answered, the block was pushed, backup SRAM existed, and the
+// copy still arrived corrupted -- 4,097 tile writes for a third build.
 m2_backup u_backup (
-	.clk(clk_i960),
+	.clk(clk_sdram),
 	.sel(bak_sel),
 	.we(cpu_io_we),
 	.word(cpu_io_addr[13:2]),
@@ -1010,8 +1027,15 @@ m2_backup u_backup (
 	.rdata(bak_rdata)
 );
 
-m2_ioboard u_ioboard (
-	.clk(clk_i960),
+m2_ioboard #(
+	// RESCALED TO clk_sdram. These are measured in FRAMES -- status at 7 and
+	// the board's self-test at 174 of a 57.5 Hz refresh -- so moving the module
+	// to a 40 MHz clock moves the constants with it. At 25 MHz they were
+	// 3,043,478 and 75,652,174; here they are 0.1217 s and 3.026 s of 40 MHz.
+	.STATUS_CYCLES  (4_869_565),
+	.SELFTEST_CYCLES(121_043_478)
+) u_ioboard (
+	.clk(clk_sdram),
 	.rst_n(cpu_rst_n),
 	.sel(iob_sel),
 	.we(cpu_io_we),
