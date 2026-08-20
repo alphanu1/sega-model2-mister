@@ -993,7 +993,7 @@ assign cpu_io_rdata =
 wire        iob_sel   = cpu_io_sel && (cpu_io_addr[23:12] == 12'hc00);
 wire [31:0] iob_rdata;
 wire [31:0] iob_dbg;
-wire [15:0] iob_win_rd;
+wire [15:0] iob_win_rd, iob_flag_rd, iob_seen;
 
 // Backup SRAM, 0x01d00000-0x01d03fff. It did not exist: the bridge routed this
 // to T_IO and nothing answered, so the i960's copy of the I/O board's identity
@@ -1047,7 +1047,8 @@ m2_ioboard #(
 	.be(cpu_io_be),
 	.wdata(cpu_io_wdata),
 	.rdata(iob_rdata),
-	.dbg(iob_dbg), .dbg_win_rd(iob_win_rd)
+	.dbg(iob_dbg), .dbg_win_rd(iob_win_rd),
+	.dbg_flag_rd(iob_flag_rd), .dbg_seen(iob_seen)
 );
 
 // ---------------------------------------------------------- PORT 4 SWEEP
@@ -1302,7 +1303,7 @@ always_ff @(posedge clk_vid) begin
 	ldr_top_sync  <= ldr_top;
 end
 
-m2_diag #(.NWORDS(17)) u_diag
+m2_diag #(.NWORDS(18)) u_diag
 (
 	.clk(clk_vid),
 	.ce_pix(ce_pix),
@@ -1326,7 +1327,12 @@ m2_diag #(.NWORDS(17)) u_diag
 	// intact; FFFFFFFF is the power-up value and means nothing was written at
 	// all; anything else means it arrived corrupted. Row 8's tile-write count
 	// has now meant four different things and cannot distinguish those.
-	.words({ bak_w0,                                    // 16 backup SRAM dword 0
+	// 17 WHAT THE i960 READ, not what the board believes it wrote. Upper half
+	// counts reads of the flag dword; lower half is {status, flag} exactly as
+	// returned on rdata. If this disagrees with row 14 the read path is wrong,
+	// and row 14 alone could never have said so.
+	.words({ {iob_flag_rd, iob_seen},                   // 17 flag reads / value seen
+	         bak_w0,                                    // 16 backup SRAM dword 0
 	         {iob_win_rd, bak_writes},                  // 15 window reads / backup writes
 	         iob_dbg,                                   // 14 I/O board
 	         {sw_done ? 8'hDD : 8'h00, 19'd0, sw_sel},  // 13 sweep region + done
