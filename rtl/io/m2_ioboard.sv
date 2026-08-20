@@ -120,33 +120,52 @@ module m2_ioboard #(
   localparam logic [10:0] FILL_TO   = 11'h17b;
   localparam logic [10:0] FILL_MARK = 11'h17c;
 
-  // 1024 x 16, in M10K, READ SYNCHRONOUSLY.
+  // TWO 1024 x 8 LANES, ONE WRITE PORT, REGISTERED READ.
   //
-  // THE FIRST VERSION WAS ASYNCHRONOUSLY READ AND TAGGED MLAB, and that cost
-  // 7,899 ALM. The tag was ignored -- byte-lane write enables on a 1024-deep
-  // asynchronously read array is not a shape Quartus 17.0 infers as LUTRAM --
-  // and the whole thing became flip-flops. The build was clean and timing
-  // closed, which is how it nearly reached the board: total registers went
-  // 20,087 to 36,473, and 36,473 - 20,087 is 16,386 against an array of exactly
-  // 1024 x 16 = 16,384 bits. Whole-core ALM went 17,532 to 25,431, past the
-  // ~25,000 the fit question is about, with no renderer in it yet.
+  // THIS SHAPE IS NOT A PREFERENCE, IT IS THE PROJECT'S STANDING RULE, and it
+  // took two builds to remember it:
   //
-  // A RAM TAG IS A REQUEST, NOT AN INSTRUCTION, and simulation cannot see
-  // whether it was honoured -- study section 8 says memory inference is visible
-  // only in a Quartus build. Check the register count, not the tag.
+  //   "Split memories into byte lanes, tag them (* ramstyle = "M10K" *), and
+  //    never clear an array in reset."   -- CLAUDE.md, and mister-integration.md
   //
-  // Two blocks instead, against 316 free. The read is registered, which the
-  // i960's I/O path can absorb because `word` comes from the bridge's latched
-  // r_addr and is stable for a dispatch cycle before io_sel is ever asserted --
-  // so the data is already out of the memory by the time the bridge samples it.
+  // The first version was one 1024 x 16 array with byte-lane write ENABLES,
+  // asynchronously read, tagged MLAB. The tag was ignored and it became 16,384
+  // flip-flops: +7,899 ALM, whole-core 17,532 -> 25,431. Retagging it M10K and
+  // registering the read changed nothing -- RAM blocks stayed at 237, registers
+  // went UP to 36,640 -- because the shape was still wrong in two ways at once:
+  // byte enables instead of lanes, and TWO write address expressions in one
+  // always block (`dp[word]` and `dp[b_word]`), which is not a single write
+  // port however it is tagged.
   //
-  // Never cleared in reset, per the standing rule.
-  (* ramstyle = "M10K" *) logic [15:0] dp [1024];
-  logic [15:0] dp_q;
+  // Both builds reported Successful with timing closed. A RAM TAG IS A REQUEST,
+  // NOT AN INSTRUCTION, simulation cannot see the difference, and the fitter
+  // will not tell you it declined -- the register count is the only witness.
+  //
+  // So: the address, data and enables are muxed into ONE write port before the
+  // memory, and each byte lane is its own array with a plain write enable.
+  (* ramstyle = "M10K" *) logic [7:0] dp_lo [1024];
+  (* ramstyle = "M10K" *) logic [7:0] dp_hi [1024];
+  logic [7:0] q_lo, q_hi;
 
-  always_ff @(posedge clk) dp_q <= dp[word];
+  // One write port. The CPU wins; the board's writes are a handful of bytes at
+  // two moments and the i960 is polling rather than writing when they land.
+  wire        wr_en   = cpu_wr | b_we;
+  wire  [9:0] wr_addr = cpu_wr ? word : b_word;
+  wire  [7:0] wr_lo   = cpu_wr ? wdata[7:0]   : b_data[7:0];
+  wire  [7:0] wr_hi   = cpu_wr ? wdata[23:16] : b_data[15:8];
+  wire        we_lo   = wr_en & (cpu_wr ? be[0] : b_be[0]);
+  wire        we_hi   = wr_en & (cpu_wr ? be[2] : b_be[1]);
 
-  assign rdata = {8'd0, dp_q[15:8], 8'd0, dp_q[7:0]};
+  always_ff @(posedge clk) begin
+    if (we_lo) dp_lo[wr_addr] <= wr_lo;
+    q_lo <= dp_lo[word];
+  end
+  always_ff @(posedge clk) begin
+    if (we_hi) dp_hi[wr_addr] <= wr_hi;
+    q_hi <= dp_hi[word];
+  end
+
+  assign rdata = {8'd0, q_hi, 8'd0, q_lo};
 
   // ------------------------------------------------------------- the board
   logic [26:0] selftest;
@@ -278,19 +297,6 @@ module m2_ioboard #(
 
       dbg <= {3'd0, flag_cleared, awake, filling, status_done, 1'b0,
               sh_status, sh_flag, 8'd0};
-    end
-  end
-
-  // ------------------------------------------------------- the shared port
-  // The CPU wins. Its writes are bursty and the board's are a handful of bytes
-  // at two moments, and the i960 is polling rather than writing when they land.
-  always_ff @(posedge clk) begin
-    if (cpu_wr) begin
-      if (be[0]) dp[word][7:0]  <= wdata[7:0];
-      if (be[2]) dp[word][15:8] <= wdata[23:16];
-    end else if (b_we) begin
-      if (b_be[0]) dp[b_word][7:0]  <= b_data[7:0];
-      if (b_be[1]) dp[b_word][15:8] <= b_data[15:8];
     end
   end
 
