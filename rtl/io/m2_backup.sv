@@ -48,7 +48,19 @@ module m2_backup (
   input  logic [11:0] word,       // dword index, address[13:2]
   input  logic  [3:0] be,
   input  logic [31:0] wdata,
-  output logic [31:0] rdata
+  output logic [31:0] rdata,
+
+  // WHAT THE COPY ACTUALLY LANDED. The i960 copies the I/O board's identity
+  // block to 0x01d00000 and reads it straight back, so dword 0 of this region
+  // is the whole question in one word: 41474553 is "SEGA" and the copy arrived
+  // intact, 00000000 is the shadow's own power-up value and means the i960
+  // never wrote dword 0 at all, and anything else means it arrived corrupted.
+  // Note it shadows the WRITE, not the array -- so it says what the i960 sent,
+  // which is the half a corrupted read would not show. A shadow register rather than a second read port,
+  // because a second asynchronous read on an M10K is answered by duplicating
+  // the array.
+  output logic [31:0] dbg_w0,
+  output logic [15:0] dbg_writes
 );
 
   (* ramstyle = "M10K" *) logic [7:0] b0 [4096];
@@ -63,6 +75,18 @@ module m2_backup (
   end
 
   logic [7:0] q0, q1, q2, q3;
+
+  always_ff @(posedge clk) begin
+    if (sel && we) begin
+      dbg_writes <= dbg_writes + 16'd1;
+      if (word == 12'd0) begin
+        if (be[0]) dbg_w0[7:0]   <= wdata[7:0];
+        if (be[1]) dbg_w0[15:8]  <= wdata[15:8];
+        if (be[2]) dbg_w0[23:16] <= wdata[23:16];
+        if (be[3]) dbg_w0[31:24] <= wdata[31:24];
+      end
+    end
+  end
 
   // Registered read, which the I/O path absorbs: `word` comes from the bridge's
   // latched r_addr and is stable through a dispatch cycle before io_sel is

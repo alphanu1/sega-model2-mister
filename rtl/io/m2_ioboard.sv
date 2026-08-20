@@ -111,7 +111,11 @@ module m2_ioboard #(
   output logic [31:0] rdata,
 
   // The screen is the only output channel, so the interesting state is a word.
-  output logic [31:0] dbg
+  output logic [31:0] dbg,
+  // Reads in the block window, 0x100-0x17f. The i960 reads all 128 bytes once
+  // per attempt, so this says whether the copy loop is running at all and how
+  // many times it has gone round -- which a tile-write count cannot.
+  output logic [15:0] dbg_win_rd
 );
 
   localparam logic [9:0] FLAG_W  = 10'h010;   // DPRAM 0x20 low, 0x21 high
@@ -243,6 +247,7 @@ module m2_ioboard #(
   logic  [7:0] sh_flag, sh_status;
 
   wire cpu_wr = sel & we;
+  wire win_rd = sel & ~we & (word >= 10'h080) & (word <= 10'h0bf);
 
   // The board's own write, for the cycles the CPU is not using the port.
   logic        b_we;
@@ -278,11 +283,12 @@ module m2_ioboard #(
       selftest <= '0; awake <= 1'b0; flag_cleared <= 1'b0;
       stat_ctr <= '0; status_done <= 1'b0; status_pulse <= 1'b0; answer <= 1'b0;
       fill <= FILL_FROM; filling <= 1'b0;
-      sh_flag <= 8'd0; sh_status <= 8'd0;
+      sh_flag <= 8'd0; sh_status <= 8'd0; dbg_win_rd <= 16'd0;
       dbg <= '0;
     end else begin
       status_pulse <= 1'b0;
       answer       <= 1'b0;
+      if (win_rd) dbg_win_rd <= dbg_win_rd + 16'd1;
 
       // The self-test. It counts once and then stops; `awake` latches.
       if (!awake) begin

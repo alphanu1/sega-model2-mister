@@ -993,12 +993,15 @@ assign cpu_io_rdata =
 wire        iob_sel   = cpu_io_sel && (cpu_io_addr[23:12] == 12'hc00);
 wire [31:0] iob_rdata;
 wire [31:0] iob_dbg;
+wire [15:0] iob_win_rd;
 
 // Backup SRAM, 0x01d00000-0x01d03fff. It did not exist: the bridge routed this
 // to T_IO and nothing answered, so the i960's copy of the I/O board's identity
 // block went into a void and read back as zeros. Study R41.
 wire        bak_sel = cpu_io_sel && (cpu_io_addr[23:14] == 10'b11_0100_0000);
 wire [31:0] bak_rdata;
+wire [31:0] bak_w0;
+wire [15:0] bak_writes;
 
 // CLOCKED ON clk_sdram, NOT clk_i960, AND THAT IS THE WHOLE POINT.
 //
@@ -1024,7 +1027,8 @@ m2_backup u_backup (
 	.word(cpu_io_addr[13:2]),
 	.be(cpu_io_be),
 	.wdata(cpu_io_wdata),
-	.rdata(bak_rdata)
+	.rdata(bak_rdata),
+	.dbg_w0(bak_w0), .dbg_writes(bak_writes)
 );
 
 m2_ioboard #(
@@ -1043,7 +1047,7 @@ m2_ioboard #(
 	.be(cpu_io_be),
 	.wdata(cpu_io_wdata),
 	.rdata(iob_rdata),
-	.dbg(iob_dbg)
+	.dbg(iob_dbg), .dbg_win_rd(iob_win_rd)
 );
 
 // ---------------------------------------------------------- PORT 4 SWEEP
@@ -1298,7 +1302,7 @@ always_ff @(posedge clk_vid) begin
 	ldr_top_sync  <= ldr_top;
 end
 
-m2_diag #(.NWORDS(15)) u_diag
+m2_diag #(.NWORDS(17)) u_diag
 (
 	.clk(clk_vid),
 	.ce_pix(ce_pix),
@@ -1318,7 +1322,13 @@ m2_diag #(.NWORDS(15)) u_diag
 	// bit1 filling, bit0 status raised. Then the status byte and the flag byte
 	// as the boot would read them -- the two that the old constant could only
 	// ever satisfy one of.
-	.words({ iob_dbg,                                   // 14 I/O board
+	// 16 IS THE COPY, IN ONE WORD. 41474553 is "SEGA" and the block arrived
+	// intact; FFFFFFFF is the power-up value and means nothing was written at
+	// all; anything else means it arrived corrupted. Row 8's tile-write count
+	// has now meant four different things and cannot distinguish those.
+	.words({ bak_w0,                                    // 16 backup SRAM dword 0
+	         {iob_win_rd, bak_writes},                  // 15 window reads / backup writes
+	         iob_dbg,                                   // 14 I/O board
 	         {sw_done ? 8'hDD : 8'h00, 19'd0, sw_sel},  // 13 sweep region + done
 	         {8'd0, sw_val},                            // 12 SWEEP fold of that region
 	         cpu_dbg_ldout,                             // 11 last data off the port
