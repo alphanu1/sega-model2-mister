@@ -268,6 +268,20 @@ static uint32_t mem_read_inner(uint32_t a) {
   }
   auto it = ram.find(a);
   if (it != ram.end()) return it->second;
+  // BACKUP SRAM POWERS UP ALL ONES, NOT ZERO.
+  //
+  //   NVRAM(config, "backup1", nvram_device::DEFAULT_ALL_1);
+  //
+  // Everything else MAME maps with .ram() is zero-filled, so this is the one
+  // region where "unwritten" is 0xFF. It is also the region whose contents the
+  // boot tests against a signature before deciding whether to initialise it,
+  // which makes the difference between 0x00 and 0xFF a branch rather than a
+  // detail.
+  //
+  // docs/mister-integration.md has said "unwritten memory reads 0xFFFF, never
+  // zero" since before this harness existed. The rule was written down, and
+  // this file broke it for the one region where MAME agrees with it.
+  if (a >= 0x01d00000u && a <= 0x01d03fffu) return 0xffffffffu;
   const char *r = region_of(a);
   if (!r) {
     if (!unmapped_rd[a]++) unmapped_rd_ip[a] = dut ? dut->dbg_ip : 0;

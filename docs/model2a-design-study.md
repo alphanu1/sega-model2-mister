@@ -2801,3 +2801,69 @@ reproducible in a harness with MAME as an oracle.
 oracle. Both are the same shape as the six already recorded: **the model was
 gentler than the thing it modelled**, and in both cases the hardware was
 reporting correctly while the instrument was believed over it.
+
+**R40 — the device blocking the boot is the I/O board, not the sound board, and
+backup SRAM powers up all ones.** Two findings, and the first one reverses a
+recommendation made in this session.
+
+*The poll is the I/O board.* The plan was to build the sound board, on the
+reasoning that the boot parks polling `0x01c00040` and that region is the sound
+board's dual-port RAM. Reading `model2.cpp`'s **model2o** map rather than
+assuming it:
+
+```cpp
+map(0x01c00000, 0x01c00fff).rw("dpram", mb8421_device::right_r, ...)   // 2k*8 DPRAM
+map(0x01c80000, 0x01c80003).rw(m_uart, i8251_device::read, ...)        // to the sound board
+...
+model1io_device &ioboard(SEGA_MODEL1IO(config, "ioboard"));
+ioboard.read_callback().set("dpram", mb8421_device::left_r);
+ioboard.write_callback().set("dpram", mb8421_device::left_w);
+```
+
+**The left side of that dual-port RAM is the I/O board.** The sound board is a
+`SEGAM1AUDIO` on an i8251 UART at `0x01c80000` — a different address, which the
+boot is not polling. So `ldob 0x1c00040,g4` is an I/O-board handshake, and every
+resync the differential reported as "a sound-handshake poll" was an I/O poll.
+
+The evidence never distinguished them. It showed a poll on a region whose
+*device* had not been checked, and the sound board was assumed because R36 and
+R37 had been about sound. **Two findings about a neighbourhood do not identify
+the next thing found in it.**
+
+*And Model 1 has already built it.* `tools/model1-ref/rtl/io/m1_ioboard.sv` is
+the same board, on the same protocol, at the same offset — Model 1's `0xc00040`
+is word `0x20` of the DPRAM and so is ours. It carries measurements this project
+would otherwise have to repeat:
+
+- the flag is raised by the CPU and **cleared by the responder**, not echoed;
+- the turnaround is **740,684 cycles**, because it is the I/O board's Z80
+  running its own self-test, not a mailbox latency — and it happens once;
+- after boot the flag is a fire-and-forget doorbell and is never cleared again;
+- the CPU block-reads an **identity block** at DPRAM `0x100-0x17f` before it
+  will poll anything, and nothing else writes it, so the board must supply it.
+
+That last one is the kind of thing a from-scratch implementation discovers after
+a week of a core sitting in a loop with every input byte underneath it correct.
+
+*Backup SRAM powers up all ones.* `NVRAM(config, "backup1",
+nvram_device::DEFAULT_ALL_1)`. Every other region MAME maps with `.ram()` is
+zero-filled; this one is not, and it is the region the boot tests against a
+signature before deciding whether to initialise it — so 0x00 versus 0xFF is a
+branch, not a detail. `docs/mister-integration.md` has said "unwritten memory
+reads 0xFFFF, never zero" since before the harness existed. **The rule was
+written down and the harness broke it**, in the one region where MAME agrees
+with it.
+
+Fixed, the differential moves from **2,553,593 to 2,564,287** matching
+instructions. Modest, real, and not the blocker — which is consistent with the
+blocker being a device that is not modelled at all.
+
+*A tool correction, recorded because it briefly produced a wrong number.*
+`i960-resync-diff.py` accepted a resynchronisation whenever the skipped span had
+few distinct PCs. A ONE-instruction skip over ONE distinct PC satisfies that,
+and the first run after the 0xFF fix reported **134 resyncs** and a divergence at
+3,505,968 — of which 129 were `ran on 1 instructions over 1 distinct PCs`,
+repeating every twelve instructions. That is a real behavioural difference being
+absorbed silently by the instrument built to find it. A span now qualifies only
+if it is at least 8 instructions AND is L-periodic for at least 3 iterations:
+5 resyncs, and the honest divergence point is 2,564,287.

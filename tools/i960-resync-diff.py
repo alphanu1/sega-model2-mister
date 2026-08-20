@@ -55,13 +55,33 @@ def find_pc(t, pc, start, limit):
         pos = (k // REC + 1) * REC
     return None
 
-def span_pcs(t, a, b, cap=64):
-    """Distinct PCs in [a,b), giving up past `cap` — a wait loop has few."""
+MIN_SKIP = 8          # below this it is not a loop, it is a difference
+MIN_ITERS = 3         # a cycle must actually repeat, not merely appear once
+
+def loop_span(t, a, b, cap=64):
+    """Distinct PCs in [a,b) if the span is a genuine wait loop, else None.
+
+    THE FIRST VERSION ONLY COUNTED DISTINCT PCs, and that let a ONE-instruction
+    skip over ONE distinct PC count as a resynchronisation. It is not a loop; it
+    is a divergence of one instruction, and accepting it hides exactly what this
+    tool exists to find. A run against the real traces reported 134 resyncs of
+    which most were `mame ran on 1 instructions over 1 distinct PCs`, repeating
+    every twelve instructions -- a real behavioural difference, absorbed silently.
+
+    A span qualifies only if it is long enough to be a loop AND actually
+    repeats: some period L where the span is L-periodic for at least MIN_ITERS
+    iterations. That is what distinguishes spinning from diverging.
+    """
+    n = b - a
+    if n < MIN_SKIP: return None
     seen = set()
     for k in range(a, b):
         seen.add(t[k])
         if len(seen) > cap: return None
-    return seen
+    for L in range(1, min(cap, n // MIN_ITERS) + 1):
+        if all(t[a + k] == t[a + k + L] for k in range(n - L)):
+            return seen
+    return None
 
 def main():
     mame, ours = Trace(sys.argv[1]), Trace(sys.argv[2])
@@ -83,7 +103,7 @@ def main():
                 ('mame', mame, i, ours, j), ('ours', ours, j, mame, i)):
             k = find_pc(t_run, t_other[other_i], run_i, max_skip)
             if k is None or k == run_i: continue
-            pcs = span_pcs(t_run, run_i, k)
+            pcs = loop_span(t_run, run_i, k)
             if pcs is None: continue          # too varied to be a wait loop
             if best is None or k - run_i < best[2]:
                 best = (who, k, k - run_i, len(pcs))
