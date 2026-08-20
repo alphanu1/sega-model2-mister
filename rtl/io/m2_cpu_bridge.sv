@@ -103,6 +103,12 @@ module m2_cpu_bridge #(
   output logic        io_we,
   output logic [31:0] io_addr,
   output logic [31:0] io_wdata,
+  // THE BYTE LANES, forwarded rather than dropped. The I/O board's dual-port
+  // RAM is eight bits wide at bytes 0 and 2 of each dword, so a `stob` to
+  // 0x01c00040 must not disturb the status byte at 0x01c00042 -- and without
+  // these an I/O write is all four lanes, which would have the CPU clearing
+  // the board's own reply every time it raised a command.
+  output logic  [3:0] io_be,
 
   // Observability. A core that decodes nothing looks identical to a core whose
   // CPU is not running, and both present as a black screen.
@@ -466,5 +472,6 @@ module m2_cpu_bridge #(
 
   assign io_addr  = r_addr;
   assign io_wdata = r_wdata;
+  assign io_be    = r_be;
 
 endmodule

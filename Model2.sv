@@ -854,6 +854,7 @@ wire [15:0] cpu_oc_din;
 wire  [6:0] cpu_xlat_addr_b;
 wire  [7:0] cpu_xlat_din_b;
 wire        cpu_io_sel, cpu_io_we;
+wire  [3:0] cpu_io_be;
 wire [31:0] cpu_io_addr, cpu_io_wdata, cpu_io_rdata;
 wire        cpu_sd_req, cpu_sd_we;
 wire [SDR_AW:1] cpu_sd_addr;
@@ -882,7 +883,7 @@ m2_cpu_bridge #(.AW(SDR_AW), .BOARD_2A(1'b0)) u_cpu_bridge (
 	.oc_xlat_din(cpu_xlat_din_b),
 
 	.io_rdata(cpu_io_rdata), .io_sel(cpu_io_sel), .io_we(cpu_io_we),
-	.io_addr(cpu_io_addr), .io_wdata(cpu_io_wdata),
+	.io_addr(cpu_io_addr), .io_wdata(cpu_io_wdata), .io_be(cpu_io_be),
 
 	.dbg_cpu_reads(cpu_dbg_rd), .dbg_cpu_writes(cpu_dbg_wr),
 	.dbg_unmapped(cpu_dbg_unmapped),
@@ -949,8 +950,18 @@ assign cpu_irq = { |(io_intreq & 12'hc00), |(io_intreq & 12'h3fc),
 // WORSE settings values, because a recording answers questions from a moment
 // that is not this one.
 //
-// It gets Daytona to its settings screen. It will not survive attract mode or
-// gameplay, and it is not a substitute for the sound board.
+// THE I/O BOARD ANSWERS ITS OWN REGION NOW. What used to be here was a constant
+// -- 0x0040_0000 at one word address, zero everywhere else -- arrived at by
+// sweeping values until the boot moved. It was called a sound-board stub and it
+// was never the sound board: 0x01c00000 is an MB8421 dual-port RAM whose far
+// side is SEGA_MODEL1IO, and the sound board is a UART at 0x01c80000 that the
+// boot does not touch. Study R40.
+//
+// The constant could not have gone further than it did. The boot waits for the
+// STATUS byte to read 0x40, then writes a command, then polls the FLAG byte for
+// zero -- two bytes of one dword, moving at different times for different
+// reasons. A constant satisfies whichever of them it was tuned for and deadlocks
+// the other.
 assign cpu_io_rdata =
 	// THE WORD ADDRESS, ignoring the low two bits. The boot reads BOTH byte
 	// 0x01c00040 and byte 0x01c00042 -- the DPRAM is eight bits wide at bytes 0
@@ -964,8 +975,7 @@ assign cpu_io_rdata =
 	// byte-versus-word confusion that made an earlier experiment report
 	// identical cycle counts for every value it was given -- found once, written
 	// down, then repeated in RTL.
-	(cpu_io_addr[23:2] == 22'h300010) ? 32'h0040_0000 :
-	(cpu_io_addr[23:12] == 12'h01c)   ? 32'd0 :
+	iob_sel                           ? iob_rdata :
 	(cpu_io_addr[23:0] == 24'h980004) ? 32'd1 :
 	(cpu_io_addr[23:0] == 24'h98000c) ? (io_videoctl[0]
 	                                      ? {29'd0, io_framenum[0], io_videoctl[1:0]}
@@ -973,6 +983,27 @@ assign cpu_io_rdata =
 	(cpu_io_addr[23:0] == 24'he80000) ? {20'd0, io_intreq} :
 	(cpu_io_addr[23:0] == 24'he80004) ? {20'd0, io_intena} :
 	32'd0;
+
+// ------------------------------------------------------------- I/O BOARD
+//
+// 0x01c00000-0x01c00fff. cpu_io_addr carries the low 24 bits, so the region is
+// 0xc00xxx here -- the same address the old stub matched as [23:2] == 0x300010,
+// which is 0xc00040.
+wire        iob_sel   = cpu_io_sel && (cpu_io_addr[23:12] == 12'hc00);
+wire [31:0] iob_rdata;
+wire [31:0] iob_dbg;
+
+m2_ioboard u_ioboard (
+	.clk(clk_i960),
+	.rst_n(cpu_rst_n),
+	.sel(iob_sel),
+	.we(cpu_io_we),
+	.word(cpu_io_addr[11:2]),
+	.be(cpu_io_be),
+	.wdata(cpu_io_wdata),
+	.rdata(iob_rdata),
+	.dbg(iob_dbg)
+);
 
 // ---------------------------------------------------------- PORT 4 SWEEP
 //
@@ -1226,7 +1257,7 @@ always_ff @(posedge clk_vid) begin
 	ldr_top_sync  <= ldr_top;
 end
 
-m2_diag #(.NWORDS(14)) u_diag
+m2_diag #(.NWORDS(15)) u_diag
 (
 	.clk(clk_vid),
 	.ce_pix(ce_pix),
@@ -1242,7 +1273,12 @@ m2_diag #(.NWORDS(14)) u_diag
 	// Row 13 names the region so row 12 can never be read against the wrong
 	// expectation: DD in the top byte means the sweep FINISHED, 00 means it is
 	// still running and row 12 is a partial total, not a result.
-	.words({ {sw_done ? 8'hDD : 8'h00, 19'd0, sw_sel},  // 13 sweep region + done
+	// 14 THE I/O BOARD. Top nibble: bit3 answered-at-least-once, bit2 awake,
+	// bit1 filling, bit0 status raised. Then the status byte and the flag byte
+	// as the boot would read them -- the two that the old constant could only
+	// ever satisfy one of.
+	.words({ iob_dbg,                                   // 14 I/O board
+	         {sw_done ? 8'hDD : 8'h00, 19'd0, sw_sel},  // 13 sweep region + done
 	         {8'd0, sw_val},                            // 12 SWEEP fold of that region
 	         cpu_dbg_ldout,                             // 11 last data off the port
 	         cpu_dbg_laddr,                             // 10 last address asked for
