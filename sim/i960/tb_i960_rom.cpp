@@ -38,6 +38,8 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <algorithm>
+#include <utility>
 
 static Vi960_top *dut;
 static uint64_t ticks = 0;
@@ -115,7 +117,10 @@ static std::map<uint32_t, uint64_t> unmapped_rd, unmapped_wr;
 // then sits in a poll loop forever -- which reads as "the CPU stopped" and is
 // actually "the machine never told it a frame had ended".
 static uint32_t intreq = 0, intena = 0;
+static uint32_t videoctl = 0;
+static uint64_t vblanks = 0;
 static bool dpram0 = false;
+static std::vector<uint8_t> dpram;
 static uint32_t dpram_fill = 0;
 
 static void drive_irq() {
@@ -125,8 +130,32 @@ static void drive_irq() {
                      ((intreq & 0xc00u) ? 8u : 0u));
 }
 
+// The addresses read in the recent past. A core sitting in a poll loop is
+// waiting on ONE address, and naming it is the difference between a diagnosis
+// and a guess -- decoding the loop by hand to work out which address a MEMA
+// form refers to is how that turns into an afternoon.
+static std::map<uint32_t, uint64_t> recent_rd;
+static bool rd_log = false;
+
 static uint32_t mem_read(uint32_t a) {
   a &= ~3u;
+  if (rd_log) ++recent_rd[a];
+  // fifo_control_r: MAME returns 1 when the coprocessor's output FIFO is EMPTY.
+  // Returning 0 -- which "unmapped reads as zero" does -- tells the game the
+  // copro still has work queued, and it waits for a drain that never comes.
+  // 2.5 million reads of this address is what that looks like.
+  //
+  // There is no TGP here, so "permanently drained" is the honest stub: it says
+  // the copro has finished, which for a copro that never starts is true.
+  if (a == 0x00980004u) return 1;
+  // videoctl_r: the frame-number bits the game uses for double buffering, plus
+  // the two control bits it wrote. Without a changing frame number a game that
+  // waits for the buffer to flip waits forever.
+  if (a == 0x0098000cu) {
+    const uint32_t fn = uint32_t(vblanks);
+    return (videoctl & 1u) ? (((fn & 1u) << 2) | (videoctl & 3u))
+                           : (((fn & 2u) << 1) | (videoctl & 3u));
+  }
   if (a == 0x00e80000u) return intreq;          // irq_request_r
   if (a == 0x00e80004u) return intena;          // irq_enable_r
   // EXPERIMENT, not a model. The boot polls the sound board's dual-port RAM at
@@ -141,6 +170,22 @@ static uint32_t mem_read(uint32_t a) {
   // read has already been masked to the word. The first version of this
   // experiment did exactly that and reported identical cycle counts for every
   // value it was given, which is what a switch that changes nothing looks like.
+  // A CANNED SOUND BOARD. daytona93 is model2o, whose sound board is a separate
+  // 68000 behind a dual-port RAM at 0x01c00000, and the i960's boot will not
+  // proceed until that board answers. Rather than emulate it to find out
+  // whether the rest works, this replays the DPRAM contents captured out of
+  // MAME at the moment its own boot cleared the handshake.
+  //
+  // It is a RECORDING, not a model: it cannot answer a command the capture did
+  // not contain, and anything reached through it is evidence about our CPU and
+  // renderer, not about the sound board.
+  if (!dpram.empty() && a >= 0x01c00000u && a < 0x01c01000u) {
+    const uint32_t o = a - 0x01c00000u;
+    if (o + 3 < dpram.size())
+      return uint32_t(dpram[o]) | (uint32_t(dpram[o+1]) << 8) |
+             (uint32_t(dpram[o+2]) << 16) | (uint32_t(dpram[o+3]) << 24);
+    return 0;
+  }
   if (dpram0 && a >= 0x01c00000u && a < 0x01c01000u)
     return (a == 0x01c00040u) ? ((dpram_fill & 0xffu) << 16) : 0u;
   // The 0x00220000 ROM mirror, model2o only. Checked before the RAM map so it
@@ -188,6 +233,7 @@ static void mem_write(uint32_t a, uint32_t v, uint8_t be) {
   // handler re-enters forever.
   if (a == 0x00e80000u) { intreq &= v; drive_irq(); return; }
   if (a == 0x00e80004u) { intena  = v; return; }
+  if (a == 0x0098000cu) { videoctl = v; return; }        // videoctl_w
   const char *r = region_of(a);
   if (!r) { ++unmapped_wr[a]; return; }
   uint32_t cur = ram.count(a) ? ram[a] : 0;
@@ -201,7 +247,6 @@ static void mem_write(uint32_t a, uint32_t v, uint8_t be) {
 // core that never leaves the interrupt handler, and that would look like a bug
 // in take_interrupt.
 static const uint64_t VBLANK_CYCLES = 434600;
-static uint64_t vblanks = 0;
 
 static void tick() {
   if ((ticks % VBLANK_CYCLES) == (VBLANK_CYCLES - 1)) {
@@ -237,12 +282,15 @@ int main(int argc, char **argv) {
   bool     trace    = false;
   const char *tracefile = nullptr;
   const char *dumpdir = nullptr;
+  const char *dpramfile = nullptr;
   for (int i = 1; i < argc; i++) {
     if (!std::strncmp(argv[i], "+insn=", 6)) max_insn = std::strtoull(argv[i]+6, nullptr, 10);
     if (!std::strcmp (argv[i], "+trace"))    trace = true;
     if (!std::strncmp(argv[i], "+out=", 5))  tracefile = argv[i]+5;
     if (!std::strncmp(argv[i], "+dump=", 6)) dumpdir   = argv[i]+6;
     if (!std::strcmp (argv[i], "+dpram0"))   dpram0    = true;
+    if (!std::strncmp(argv[i], "+dpram=", 7)) dpramfile = argv[i]+7;
+    if (!std::strcmp (argv[i], "+rdlog"))     rd_log    = true;
     if (!std::strncmp(argv[i], "+dpfill=", 8)) dpram_fill = uint32_t(std::strtoul(argv[i]+8, nullptr, 16));
   }
 
@@ -305,6 +353,9 @@ int main(int argc, char **argv) {
     std::memcpy(&main_data[d], &main_data[0x900000], 0x100000);
   std::printf("  main_data: %d of 6 files loaded\n", md_loaded);
 
+  if (dpramfile && load_file(dpramfile, dpram))
+    std::printf("  canned sound-board DPRAM: %zu bytes from %s\n", dpram.size(), dpramfile);
+
   dut = new Vi960_top;
   dut->rst_n = 0; dut->bus_ack = 0; dut->irq = 0;
   for (int i = 0; i < 8; i++) tick();
@@ -338,6 +389,14 @@ int main(int argc, char **argv) {
   }
   if (tf) std::fclose(tf);
 
+  if (rd_log) {
+    std::printf("\n  most-read addresses:\n");
+    std::vector<std::pair<uint64_t,uint32_t>> v;
+    for (auto &kv : recent_rd) v.push_back({kv.second, kv.first});
+    std::sort(v.rbegin(), v.rend());
+    for (size_t i = 0; i < v.size() && i < 8; ++i)
+      std::printf("    %08x  %llu reads\n", v[i].second, (unsigned long long)v[i].first);
+  }
   std::printf("\n  executed %llu instructions over %llu cycles, %zu distinct IPs\n",
               (unsigned long long)insns, (unsigned long long)ticks, ip_hits.size());
   std::printf("  final IP %08x  PC=%08x  ICR=%08x  interrupts taken %u\n",
@@ -376,6 +435,9 @@ int main(int argc, char **argv) {
       { "tile",    0x01000000u, 0x010000u },
       { "char",    0x01080000u, 0x080000u },
       { "palette", 0x01800000u, 0x004000u },
+      // The game programs this itself once it is past the sound handshake, so
+      // the render uses ITS table rather than a capture from MAME.
+      { "colorxlat", 0x01810000u, 0x00c000u },
     };
     for (auto &r : R) {
       const std::string fn = std::string(dumpdir) + "/" + r.name + ".bin";
