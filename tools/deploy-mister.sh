@@ -30,11 +30,14 @@ RBF="$ROOT/build/release/Model2.rbf"
 
 [ -f "$RBF" ] || { echo "no $RBF -- run: make release" >&2; exit 1; }
 
-$SSH "root@$IP" "
-  cp -f /media/fat/_Arcade/cores/Model2.rbf /media/fat/_Arcade/cores/Model2.rbf.prev 2>/dev/null || true
-  [ -n '$TILES' ] && cp -f /media/fat/games/mame/m2tiles.zip /media/fat/games/mame/m2tiles.zip.prev 2>/dev/null || true
-  mkdir -p /media/fat/_Arcade/cores /media/fat/games/mame
-"
+# Built as separate commands rather than one quoted block: the block carried a
+# nested `[ -n '$TILES' ]`, and single quotes inside a double-quoted remote
+# command are a quoting level this script does not need.
+$SSH "root@$IP" "mkdir -p /media/fat/_Arcade/cores /media/fat/games/mame"
+$SSH "root@$IP" "cp -f /media/fat/_Arcade/cores/Model2.rbf /media/fat/_Arcade/cores/Model2.rbf.prev 2>/dev/null || true"
+if [ -n "$TILES" ]; then
+  $SSH "root@$IP" "cp -f /media/fat/games/mame/m2tiles.zip /media/fat/games/mame/m2tiles.zip.prev 2>/dev/null || true"
+fi
 
 scp -o StrictHostKeyChecking=no "$RBF" "root@$IP:/media/fat/_Arcade/cores/Model2.rbf"
 scp -o StrictHostKeyChecking=no "$ROOT/mra/"*.mra "root@$IP:/media/fat/_Arcade/"
