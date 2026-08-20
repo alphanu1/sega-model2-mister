@@ -976,6 +976,7 @@ assign cpu_io_rdata =
 	// identical cycle counts for every value it was given -- found once, written
 	// down, then repeated in RTL.
 	iob_sel                           ? iob_rdata :
+	bak_sel                           ? bak_rdata :
 	(cpu_io_addr[23:0] == 24'h980004) ? 32'd1 :
 	(cpu_io_addr[23:0] == 24'h98000c) ? (io_videoctl[0]
 	                                      ? {29'd0, io_framenum[0], io_videoctl[1:0]}
@@ -992,6 +993,22 @@ assign cpu_io_rdata =
 wire        iob_sel   = cpu_io_sel && (cpu_io_addr[23:12] == 12'hc00);
 wire [31:0] iob_rdata;
 wire [31:0] iob_dbg;
+
+// Backup SRAM, 0x01d00000-0x01d03fff. It did not exist: the bridge routed this
+// to T_IO and nothing answered, so the i960's copy of the I/O board's identity
+// block went into a void and read back as zeros. Study R41.
+wire        bak_sel = cpu_io_sel && (cpu_io_addr[23:14] == 10'b11_0100_0000);
+wire [31:0] bak_rdata;
+
+m2_backup u_backup (
+	.clk(clk_i960),
+	.sel(bak_sel),
+	.we(cpu_io_we),
+	.word(cpu_io_addr[13:2]),
+	.be(cpu_io_be),
+	.wdata(cpu_io_wdata),
+	.rdata(bak_rdata)
+);
 
 m2_ioboard u_ioboard (
 	.clk(clk_i960),

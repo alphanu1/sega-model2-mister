@@ -314,6 +314,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_video.sv
 # The CPU and its bridge.
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/io/m2_cpu_bridge.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/io/m2_ioboard.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/io/m2_backup.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/i960/i960_dec.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/i960/i960_alu.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/i960/i960_regs.sv
