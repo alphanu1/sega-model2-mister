@@ -230,6 +230,9 @@ wire  [63:0] rb_dout;
 // detail. Port 0 is the readback; 1-4 become the CPU, tilemap and renderer.
 localparam int unsigned NPORTS = 5;
 logic [NPORTS-1:0]        p_req;
+logic [NPORTS-1:0]        p_we;
+logic [NPORTS-1:0][15:0]  p_din;
+logic [NPORTS-1:0][1:0]   p_be;
 logic [NPORTS-1:0][SDR_AW:1]  p_addr;
 wire  [NPORTS-1:0][63:0]  p_dout;
 wire  [NPORTS-1:0]        p_ack;
@@ -237,6 +240,12 @@ wire  [NPORTS-1:0]        p_ack;
 always_comb begin
 	p_req  = '0;
 	p_addr = '0;
+	p_we   = '0;
+	p_din  = '0;
+	p_be   = '1;
+	p_we[0]  = cpu_sd_we;
+	p_din[0] = cpu_sd_din;
+	p_be[0]  = cpu_sd_be;
 	// PORT 1, NOT PORT 0. m2_sdram's blen() is hardcoded per port: ports 1-3
 	// burst FOUR 16-bit words, filling the whole 64-bit p_dout, while ports 0
 	// and 4 return ONE. On port 0 the readback got a correct low half and a
@@ -270,6 +279,10 @@ always_comb begin
 	// The self-test also uses port 2 and waits for cp_done, so they never overlap.
 	p_req[3]  = char_req;
 	p_addr[3] = CHAR_BASE + SDR_AW'(char_addr);
+	// PORT 0 IS THE CPU'S, and it is the single-word port on purpose: the
+	// bridge issues one 16-bit access at a time, and ports 1-3 burst four.
+	p_req[0]  = cpu_sd_req;
+	p_addr[0] = cpu_sd_addr;
 end
 assign rb_dout = p_dout[1];
 assign rb_ack  = p_ack[1];
@@ -308,7 +321,7 @@ m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(300)) u_sdram (
 	.wr_addr(st_run ? st_addr : ldr_wr_addr),
 	.wr_din(st_run ? st_din : ldr_wr_din),
 	.wr_be(2'b11), .wr_ack(ldr_wr_ack),
-	.p_req(p_req), .p_we('0), .p_addr(p_addr), .p_din('0), .p_be('1),
+	.p_req(p_req), .p_we(p_we), .p_addr(p_addr), .p_din(p_din), .p_be(p_be),
 	.p_dout(p_dout), .p_ack(p_ack),
 	.dbg_req(), .dbg_grant()
 );
@@ -528,6 +541,22 @@ localparam logic [SDR_AW:1] CHAR_BASE = SDR_AW'(32'h0A000);
 // Byte 0x094000 in the image, which is word 0x4A000.
 localparam logic [SDR_AW:1] XLAT_BASE = SDR_AW'(32'h4A000);
 
+// ------------------------------------------------------------- the game map
+//
+// Word addresses, and they sit ABOVE the ROM image the MRA lays down. The
+// Daytona MRA loads 0x2BE0000 bytes -- 43.88 MB, computed from the part sizes
+// rather than assumed -- so the RAM regions start at a word address clear of
+// it. Total with RAM is about 45.6 MB, inside the 64 MB R19 MEASURED.
+//
+// These are ROM offsets from the MRA's own ordering:
+//   0x00000000  program ROM   (epr-16530a + epr-16531a, interleaved to 32 bits)
+//   0x00040000  main_data     (mpr-16528 onwards)
+localparam logic [SDR_AW:1] GAME_PROG  = SDR_AW'(32'h0000000);   // byte 0
+localparam logic [SDR_AW:1] GAME_DATA  = SDR_AW'(32'h0020000);   // byte 0x40000
+localparam logic [SDR_AW:1] GAME_WORK  = SDR_AW'(32'h1600000);   // 1 MB
+localparam logic [SDR_AW:1] GAME_BOARD = SDR_AW'(32'h1680000);   // 128 KB
+localparam logic [SDR_AW:1] GAME_CHAR  = SDR_AW'(32'h1690000);   // 512 KB
+
 (* ramstyle = "M10K" *) logic [15:0] tram [32768];
 (* ramstyle = "M10K" *) logic [15:0] pal  [4096];
 
@@ -537,6 +566,28 @@ logic [15:0] tram_data, pal_data;
 always_ff @(posedge clk_vid) begin
 	tram_data <= tram[tram_addr];
 	pal_data  <= pal[pal_addr];
+end
+
+// PORT B, on clk_sdram: the copy engine and the CPU share it. Port A above is
+// the renderer's, on clk_vid, and stays read-only. That is a true dual-port
+// M10K, which is what the part gives; a third accessor would not fit and is
+// why the copy engine and the bridge are muxed onto one port rather than given
+// one each.
+logic [15:0] cpu_tram_q, cpu_pal_q;
+// ONE always_ff, one port. The copy engine wins when it is running, which it
+// only does for the tilemap-test image, and the CPU is held in reset then --
+// so the two never actually contend. The priority is written down anyway,
+// because "they cannot overlap" is an argument and a mux is a guarantee.
+wire        ocb_tram_we = cp_tram_we | cpu_tram_we;
+wire        ocb_pal_we  = cp_pal_we  | cpu_pal_we;
+wire [14:0] ocb_addr    = (cp_tram_we | cp_pal_we) ? cp_wr_idx  : cpu_oc_addr;
+wire [15:0] ocb_din     = (cp_tram_we | cp_pal_we) ? cp_wr_data : cpu_oc_din;
+
+always_ff @(posedge clk_sdram) begin
+	cpu_tram_q <= tram[ocb_addr];
+	cpu_pal_q  <= pal[ocb_addr[11:0]];
+	if (ocb_tram_we) tram[ocb_addr]      <= ocb_din;
+	if (ocb_pal_we)  pal[ocb_addr[11:0]] <= ocb_din;
 end
 
 // COPY ENGINE. Walks tile RAM then the palette out of SDRAM into on-chip memory
@@ -554,6 +605,17 @@ end
 // Both right: the copy is perfect and the fault is in the renderer.
 // Either wrong: the data never arrived intact and the renderer is innocent.
 logic [15:0] cp_xor_t, cp_sum_t, cp_xor_p, cp_sum_p;
+
+// The copy engine no longer writes tile RAM and the palette directly. Those
+// arrays now have exactly TWO accessors -- the renderer on clk_vid and this
+// domain on clk_sdram -- because a third one costs RAM inference: Quartus
+// reported "cannot convert all sets of registers into RAM megafunctions" and
+// 512 Kbit of tile RAM became flip-flops, which is four times the whole
+// device. Three always_ff blocks touching one array is the cause; the copy
+// engine and the CPU are muxed onto one port below.
+logic        cp_tram_we, cp_pal_we;
+logic [14:0] cp_wr_idx;
+logic [15:0] cp_wr_data;
 
 logic            cp_req, cp_done;
 logic [SDR_AW:1] cp_addr;
@@ -600,9 +662,16 @@ always_ff @(posedge clk_sdram or negedge mem_rst_n) begin
 		cp_xor_p <= 16'd0; cp_sum_p <= 16'd0;
 		xlat_we_r <= 1'b0; xlat_addr_r <= 7'd0; xlat_din_r <= 8'd0;
 		xlat_ok <= 1'b1; xlat_first <= 8'd0;
+		cp_tram_we <= 1'b0; cp_pal_we <= 1'b0; cp_wr_idx <= 15'd0; cp_wr_data <= 16'd0;
 	end else if (!cp_done) begin
-		xlat_we_r <= 1'b0;
-		if (cp_phase == 2'd3) begin
+		xlat_we_r  <= 1'b0;
+		cp_tram_we <= 1'b0;
+		cp_pal_we  <= 1'b0;
+		if (game_image) begin
+			// Nothing to copy: the CPU writes tile RAM, the palette and the
+			// translation table itself.
+			cp_done <= 1'b1;
+		end else if (cp_phase == 2'd3) begin
 			// Commit phase: no bus traffic, one entry per cycle.
 			xlat_we_r   <= xlat_ok;
 			xlat_addr_r <= cp_idx[6:0];
@@ -621,14 +690,18 @@ always_ff @(posedge clk_sdram or negedge mem_rst_n) begin
 			cp_wdata <= p_dout[2][15:0];
 			case (cp_phase)
 				2'd0: begin
-					tram[cp_idx[14:0]] <= p_dout[2][15:0];
+					cp_tram_we <= 1'b1;
+					cp_wr_idx  <= cp_idx[14:0];
+					cp_wr_data <= p_dout[2][15:0];
 					cp_xor_t <= cp_xor_t ^ p_dout[2][15:0];
 					cp_sum_t <= cp_sum_t + p_dout[2][15:0];
 					if (cp_idx == 16'h7FFF) begin cp_idx <= 0; cp_phase <= 2'd1; end
 					else cp_idx <= cp_idx + 16'd1;
 				end
 				2'd1: begin
-					pal[cp_idx[11:0]] <= p_dout[2][15:0];
+					cp_pal_we  <= 1'b1;
+					cp_wr_idx  <= {3'd0, cp_idx[11:0]};
+					cp_wr_data <= p_dout[2][15:0];
 					cp_xor_p <= cp_xor_p ^ p_dout[2][15:0];
 					cp_sum_p <= cp_sum_p + p_dout[2][15:0];
 					if (cp_idx == 16'h0FFF) begin cp_idx <= 0; cp_phase <= 2'd2; end
@@ -647,6 +720,149 @@ always_ff @(posedge clk_sdram or negedge mem_rst_n) begin
 		end
 	end
 end
+
+// ============================================================== THE i960
+//
+// It runs at 25 MHz on its own PLL output because that is what it fits at --
+// 26.4 MHz measured, study R23 -- while everything it talks to runs at 40 MHz
+// with the SDRAM. m2_cpu_bridge owns that crossing; see its header for why it
+// is a handshake and not a FIFO, and for the req-versus-req-and-ack fault that
+// deadlocked the Model 1 TGP on hardware.
+//
+// HELD IN RESET UNTIL THE ROM HAS LANDED. The first thing the part does is read
+// its boot record from mem[0], mem[4] and mem[12]; releasing it before the
+// loader has finished means it reads whatever SDRAM powered up holding and
+// walks off into unmapped space, which presents as a dead CPU rather than as a
+// race.
+// WHICH IMAGE WAS LOADED, and therefore which of two modes this is.
+//
+//   small  -- the 2D tilemap test, 0xA0000 bytes of captured state. The copy
+//             engine walks it into tile RAM and the palette, and there is no
+//             game ROM, so the CPU MUST STAY IN RESET: released, it would
+//             execute whatever the capture happens to contain and write over
+//             the tilemap it is supposed to be displaying.
+//   large  -- the game, 43.88 MB. The copy engine must NOT run: its bases point
+//             at what is now the program ROM, so it would spend 36,864 reads
+//             copying code into tile RAM, and the CPU owns those arrays anyway.
+//
+// Decided by the highest address the loader wrote, which is a fact about the
+// image rather than a mode the user has to select correctly.
+logic [SDR_AW:1] ldr_top;
+always_ff @(posedge clk_sdram or negedge mem_rst_n) begin
+	if (!mem_rst_n) ldr_top <= '0;
+	else if (ldr_wr_req && ldr_wr_ack && (ldr_wr_addr > ldr_top)) ldr_top <= ldr_wr_addr;
+end
+wire game_image = rom_loaded && (ldr_top > SDR_AW'(32'h0080000));
+
+wire cpu_rst_n = mem_rst_n & rom_loaded & game_image;
+
+wire        cpu_req, cpu_we;
+wire [31:0] cpu_addr, cpu_wdata, cpu_rdata;
+wire  [3:0] cpu_be;
+wire        cpu_ack;
+wire [3:0]  cpu_irq;
+wire [31:0] cpu_dbg_pc, cpu_dbg_ip, cpu_dbg_insn, cpu_dbg_icr, cpu_dbg_intr, cpu_dbg_acc;
+wire        cpu_trap, cpu_halted;
+wire [7:0]  cpu_trap_op;
+
+i960_top u_i960 (
+	.clk(clk_i960), .rst_n(cpu_rst_n),
+	.bus_req(cpu_req), .bus_we(cpu_we), .bus_addr(cpu_addr), .bus_be(cpu_be),
+	.bus_wdata(cpu_wdata), .bus_rdata(cpu_rdata), .bus_ack(cpu_ack),
+	.irq(cpu_irq),
+	.dbg_pc(cpu_dbg_pc), .dbg_sat(), .dbg_prcb(), .dbg_icr(cpu_dbg_icr),
+	.dbg_intr_cnt(cpu_dbg_intr), .dbg_intr_work(), .dbg_acc_cnt(cpu_dbg_acc),
+	.dbg_ip(cpu_dbg_ip), .dbg_insn(cpu_dbg_insn),
+	.trap(cpu_trap), .trap_op(cpu_trap_op), .halted(cpu_halted)
+);
+
+wire        cpu_tram_we, cpu_pal_we, cpu_xlat_we_b;
+wire [14:0] cpu_oc_addr;
+wire [15:0] cpu_oc_din;
+wire  [6:0] cpu_xlat_addr_b;
+wire  [7:0] cpu_xlat_din_b;
+wire        cpu_io_sel, cpu_io_we;
+wire [31:0] cpu_io_addr, cpu_io_wdata, cpu_io_rdata;
+wire        cpu_sd_req, cpu_sd_we;
+wire [SDR_AW:1] cpu_sd_addr;
+wire [15:0] cpu_sd_din;
+wire  [1:0] cpu_sd_be;
+wire [31:0] cpu_dbg_rd, cpu_dbg_wr, cpu_dbg_unmapped;
+
+m2_cpu_bridge #(.AW(SDR_AW), .BOARD_2A(1'b0)) u_cpu_bridge (
+	.clk_cpu(clk_i960), .rst_n_cpu(cpu_rst_n),
+	.bus_req(cpu_req), .bus_we(cpu_we), .bus_addr(cpu_addr), .bus_be(cpu_be),
+	.bus_wdata(cpu_wdata), .bus_rdata(cpu_rdata), .bus_ack(cpu_ack),
+
+	.clk_mem(clk_sdram), .rst_n_mem(cpu_rst_n),
+	.base_prog(GAME_PROG), .base_data(GAME_DATA), .base_work(GAME_WORK),
+	.base_board(GAME_BOARD), .base_char(GAME_CHAR),
+
+	.sd_req(cpu_sd_req), .sd_we(cpu_sd_we), .sd_addr(cpu_sd_addr),
+	.sd_din(cpu_sd_din), .sd_be(cpu_sd_be),
+	.sd_dout(p_dout[0]), .sd_ack(p_ack[0]),
+
+	.oc_tram_we(cpu_tram_we), .oc_pal_we(cpu_pal_we),
+	.oc_addr(cpu_oc_addr), .oc_din(cpu_oc_din),
+	.oc_tram_q(cpu_tram_q), .oc_pal_q(cpu_pal_q),
+
+	.oc_xlat_we(cpu_xlat_we_b), .oc_xlat_addr(cpu_xlat_addr_b),
+	.oc_xlat_din(cpu_xlat_din_b),
+
+	.io_rdata(cpu_io_rdata), .io_sel(cpu_io_sel), .io_we(cpu_io_we),
+	.io_addr(cpu_io_addr), .io_wdata(cpu_io_wdata),
+
+	.dbg_cpu_reads(cpu_dbg_rd), .dbg_cpu_writes(cpu_dbg_wr),
+	.dbg_unmapped(cpu_dbg_unmapped)
+);
+
+// ------------------------------------------------------------ the I/O the
+// core answers itself. Transcribed from model2.cpp; each of these was found by
+// logging the address a poll loop was reading, not by reasoning about it.
+logic [11:0] io_intreq, io_intena;
+logic [31:0] io_videoctl;
+logic [31:0] io_framenum;
+logic        vbl_d, vbl_dd;
+
+// V-blank into bit 0, the same line MAME's screen_vblank sets. irq_update()
+// folds the twelve request bits onto the i960's four lines.
+always_ff @(posedge clk_sdram or negedge cpu_rst_n) begin
+	if (!cpu_rst_n) begin
+		io_intreq <= 12'd0; io_intena <= 12'd0; io_videoctl <= 32'd0;
+		io_framenum <= 32'd0; vbl_d <= 1'b0; vbl_dd <= 1'b0;
+	end else begin
+		vbl_d  <= vblank;
+		vbl_dd <= vbl_d;
+		if (vbl_d && !vbl_dd) begin
+			io_framenum <= io_framenum + 32'd1;
+			if (io_intena[0]) io_intreq[0] <= 1'b1;
+		end
+		if (cpu_io_sel && cpu_io_we) begin
+			// irq_ack_w is `m_intreq &= data`. Treating it as a store leaves the
+			// request asserted and the handler re-enters forever.
+			if (cpu_io_addr[23:0] == 24'he80000) io_intreq  <= io_intreq  & cpu_io_wdata[11:0];
+			if (cpu_io_addr[23:0] == 24'he80004) io_intena  <= cpu_io_wdata[11:0];
+			if (cpu_io_addr[23:0] == 24'h98000c) io_videoctl <= cpu_io_wdata;
+		end
+	end
+end
+
+assign cpu_irq = { |(io_intreq & 12'hc00), |(io_intreq & 12'h3fc),
+                   io_intreq[1],           io_intreq[0] };
+
+// fifo_control_r returns 1 when the coprocessor's output FIFO is EMPTY. There
+// is no TGP here, so "permanently drained" is the honest answer: it says the
+// copro has finished, which for a copro that never starts is true. Reading as
+// zero tells the game work is still queued and it waits forever -- 2.5 million
+// reads of one address is what that looked like in simulation.
+assign cpu_io_rdata =
+	(cpu_io_addr[23:0] == 24'h980004) ? 32'd1 :
+	(cpu_io_addr[23:0] == 24'h98000c) ? (io_videoctl[0]
+	                                      ? {29'd0, io_framenum[0], io_videoctl[1:0]}
+	                                      : {28'd0, io_framenum[1], 1'b0, io_videoctl[1:0]}) :
+	(cpu_io_addr[23:0] == 24'he80000) ? {20'd0, io_intreq} :
+	(cpu_io_addr[23:0] == 24'he80004) ? {20'd0, io_intena} :
+	32'd0;
 
 // Char fetch, straight from SDRAM on a burst port.
 wire        char_req, char_ack;
@@ -667,7 +883,12 @@ m2_video u_tilemap (
 	// The table replaces pal5bit only when the loaded data passes the sanity
 	// check above; an image without a translation section leaves the renderer
 	// exactly as it was.
-	.xlat_we(xlat_we_r & xlat_ok), .xlat_addr(xlat_addr_r), .xlat_din(xlat_din_r),
+	// The copy engine loads it at startup; the CPU owns it afterwards, and a
+	// game that programs its own table -- Daytona does, once it is past the
+	// sound handshake -- overwrites what was loaded.
+	.xlat_we(cpu_xlat_we_b | (xlat_we_r & xlat_ok)),
+	.xlat_addr(cpu_xlat_we_b ? cpu_xlat_addr_b : xlat_addr_r),
+	.xlat_din (cpu_xlat_we_b ? cpu_xlat_din_b  : xlat_din_r),
 	.tram_addr(tram_addr), .tram_data(tram_data),
 	.char_req(char_req), .char_addr(char_addr),
 	.char_data(char_data), .char_ack(char_ack),

@@ -310,3 +310,22 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_tile_fetch.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_tile_mixer.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_palette.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_video.sv
+
+# The CPU and its bridge.
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/io/m2_cpu_bridge.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/i960/i960_dec.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/i960/i960_alu.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/i960/i960_regs.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/i960/i960_agu.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/i960/i960_ldst.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/i960/i960_lsu.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/i960/i960_memmap.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/i960/i960_icache.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/i960/i960_muldiv.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/i960/i960_fpmul.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/i960/i960_fpadd.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/i960/i960_fpdiv.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/i960/i960_fpsqrt.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/i960/i960_fpmisc.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/i960/i960_fpcvt.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/i960/i960_top.sv

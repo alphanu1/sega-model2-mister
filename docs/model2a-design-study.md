@@ -2184,3 +2184,51 @@ survived being looked at on hardware indefinitely.
 instantiated in `Model2.sv`, and the colour translation table is not yet loaded
 on hardware. Both are integration, and both now have a verified specification to
 be integrated against.
+
+
+---
+
+**R29 — the i960 is in the core, and it fits with room to spare.** Quartus 17.0,
+full compile, 0 errors, timing closed.
+
+| | without the CPU | with it | device |
+|---|---|---|---|
+| ALM | 9,004 | **17,162** | 41,910 (41%) |
+| M10K | 164 | **237** | 553 (43%) |
+| DSP | 36 | **43** | 112 (38%) |
+
+*Slack, all positive:* `clk_i960` **+6.191 ns**, `clk_sdram` +10.627,
+`clk_vid` +14.780. The CPU's 25 MHz has the least margin, as expected from R23's
+26.4 MHz — but 6.19 ns of a 40 ns period is comfortable, not marginal.
+
+**The fit question now has both halves of its numerator measured for the first
+time.** 17,162 ALM is the whole core with CPU, tilemap, SDRAM and the MiSTer
+framework, against a ~25,000 budget that was only ever about the CPU plus the
+renderer. **24,748 ALM remain on the device.**
+
+*Two faults found by building it, both structural:*
+
+- **Three `always_ff` blocks touching one array kills RAM inference.** Adding the
+  CPU's port to tile RAM made it a third accessor — renderer on `clk_vid`, copy
+  engine and CPU on `clk_sdram` — and Quartus reported "cannot convert all sets
+  of registers into RAM megafunctions". 512 Kbit of tile RAM became flip-flops,
+  four times the whole device. The copy engine and the CPU are now muxed onto
+  one port, so the array has exactly two. **M10K is dual-port; a third accessor
+  is not a tight fit, it is a different thing entirely.**
+- **The `.qsf` file list had no trailing newline**, so an append keyed on the
+  last line silently did nothing and synthesis reported the CPU as an undefined
+  entity. The count printed afterwards said 13 where 30 was expected, which is
+  what an edit that did not apply looks like.
+
+*Two modes, decided by the image rather than by the user.* The loader's highest
+written address separates them: under 1 MB is the tilemap test — copy engine
+runs, **CPU held in reset**, behaviour identical to what is on the board today —
+and above it is the game, where the copy engine is skipped because its bases now
+point at the program ROM.
+
+*What this does NOT do.* **The game will not draw yet.** R25's boot stalls in the
+sound-board handshake, and on hardware there is no sound board and no capture to
+replay: it will clear RAM, reinitialise through IAC, and sit there. The
+simulation path gets past it only because `+dpram` replays bytes recorded from
+MAME. Baking that capture into the game image is the obvious next step and is not
+done. **Nothing here has been tested on hardware.**
