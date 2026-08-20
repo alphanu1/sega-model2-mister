@@ -188,3 +188,39 @@ and what it expects there. Model 1's layout — `0x00-0x07` scanned panel,
 `0x08-0x0a` IN.0/1/2, `0x0b-0x0d` DIP banks, `0x0e` port 6 — is from the same
 Z80 ROM and should carry over, but "should" is not a measurement and this
 project has spent a session on the difference.
+
+
+## Cleared, and what is left
+
+Four builds and a set of overlay counters have eliminated everything on the
+board's side of this exchange:
+
+| suspect | verdict |
+|---|---|
+| the I/O board answers the handshake | **cleared** — row 14 `1A400000`: awake, status `40`, flag cleared |
+| the i960 reads the right values | **cleared** — row 17 `4000`, row 18 `01C00042`, row 19 `00400000` |
+| the bridge delivers them intact | **cleared** — `test_m2_cpu_bridge`, 92 checks, with a registered peripheral model and byte reads at lanes 0 and 2 |
+| backup SRAM exists and powers up `0xFF` | built, 16 M10K |
+| the peripherals are in the I/O clock domain | fixed — `clk_sdram`, not `clk_i960` |
+
+Two of those the bridge suite would have hidden until it was corrected: it
+modelled I/O as **combinational** when both peripherals are registered, and
+every I/O access in it was **full-width** when the failing access is a single
+byte at lane 2.
+
+**What is left is the composition.** `i960_top` through `m2_cpu_bridge` into
+`m2_ioboard`, running the real code, is the only link still untested and the
+only place a fault can live that hardware shows and simulation does not —
+`tb_i960_rom.cpp` drives `i960_top` directly and has never had the bridge in the
+loop. That harness is the next thing to build, and it would have caught the last
+four fixes before they cost hardware builds.
+
+## What row 8 is not
+
+`00001001` — 4,097 tile writes — has been read as evidence for the sound
+handshake (R37), a missing identity block, absent backup SRAM, and a clock
+domain crossing. **It was never evidence for any of them.** It is what this boot
+does when it cannot complete the exchange at `0x228230-0x2282cc`, whatever the
+reason. Read rows 15, 16, 17 and 18 instead; between them they distinguish
+"never got there", "got there with the wrong pointer" and "read the wrong
+value", which a tile-write count cannot.

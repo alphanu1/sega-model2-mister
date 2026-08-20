@@ -2929,3 +2929,48 @@ on the difference.
 
 `COMPLETE_WINDOW` stays as a parameter so the wrong reading is reproducible on
 demand: built with it on, three checks in `test_m2_ioboard` fail.
+
+**R42 — the SDRAM suite's two failures were the harness, and R33 is confirmed
+from outside.** Both from the Kaneko core's independent port of this
+controller, against pristine unmodified Model 2 sources — same addresses, same
+values, so neither project's changes introduced them.
+
+*The failures.* A read that overlaps a write to the same address may
+legitimately return either value. The controller gives no ordering guarantee
+between independent ports with concurrent outstanding transactions and never
+claimed to; `tb_m2_sdram.cpp`'s shadow updates at write ISSUE time, so it
+expected only the post-write value. `pick_addr` uses six rows and four banks on
+purpose — "few rows, so conflicts happen" — which makes the collision common
+rather than exotic. Bisecting the stimulus localised it immediately:
+
+```
+writes with byte-enables:  2 fails
+writes, full words only:   1 fail
+no writes at all:          0 fails
+```
+
+Fixed in the harness, and **the count is reported rather than absorbed**:
+
+```
+reads accepted as raced (returned the legal pre-write value): 2
+m2_sdram: checks=123927 fails=0 violations=0
+```
+
+A run showing zero there would mean the test had quietly stopped covering the
+case it exists for. This suite had been red for the whole session and carried as
+a known debt against the controller. It was never the controller.
+
+*And R33 is confirmed.* That entry recorded that port 0's single-word read
+carries A10 — auto-precharge — on its first command, because the first word is
+also the last, closing the row inside tRAS: tolerated by a behavioural model,
+and on the board the CPU port reads zero while every other port reads fine from
+the same SDRAM. It was written up as **a theory a hardware test appeared to
+disprove**, with the burst-four change kept anyway on the strength of the
+reasoning.
+
+The same fault has now been found independently in another core, on the same
+controller, and described as the one defect that could not have been caught in
+simulation at all. **The theory was right and the test that seemed to refute it
+was measuring something else.** Recorded because the wrong conclusion was
+allowed to stand next to the right fix for several sessions, and a reader of R33
+alone would have drawn the wrong lesson from it.
