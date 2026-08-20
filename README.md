@@ -19,7 +19,8 @@ is actually built and measured, not a plan.
 | **SDRAM controller** | Five ports, 64 MB geometry, verified against the packed ROM image on hardware region by region. |
 | **I/O board** | Handshake answered on hardware. The boot does not yet clear the exchange that follows. |
 | **Sound board** | Not started. The 68000 (fx68k) builds, simulates and executes; the audio devices are not written. |
-| **3D renderer, TGP/copro** | Not started. |
+| **3D renderer** | Not started. |
+| **TGP / copro** | Stubbed, not implemented. `fifo_control` answers "finished" and the board identifies itself with the real `tgpid` string; the FIFO at `0x00884000`, `copro_ctl1` and `geo_ctl1` are not modelled. Measured as not gating the current boot — MAME's boot trace touches the region once. |
 
 On hardware the i960 executes, services interrupts and does not trap. It stops
 in the I/O board exchange; `docs/io-board.md` records exactly what has been

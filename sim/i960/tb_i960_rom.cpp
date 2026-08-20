@@ -277,6 +277,17 @@ static uint32_t mem_read_inner(uint32_t a) {
   // There is no TGP here, so "permanently drained" is the honest stub: it says
   // the copro has finished, which for a copro that never starts is true.
   if (a == 0x00980004u) return 1;
+  // tgpid_r: the copro board's sixteen-byte identity string. Zero here reads as
+  // "a board that answered and gave its name as nothing", which is the shape
+  // Model 1 was bitten by. Not the current blocker -- MAME's boot trace touches
+  // this region once, at 0x980000, and never reads the ID -- but known-wrong.
+  if (a >= 0x00980030u && a < 0x00980040u) {
+    static const uint8_t ID[16] = {0,'T','A','H',0,'A','K','O',
+                                   0,'Z','A','K',0,'M','T','K'};
+    const uint32_t o = a & 0xfu;
+    return uint32_t(ID[o]) | (uint32_t(ID[o|1]) << 8)
+         | (uint32_t(ID[o|2]) << 16) | (uint32_t(ID[o|3]) << 24);
+  }
   // videoctl_r: the frame-number bits the game uses for double buffering, plus
   // the two control bits it wrote. Without a changing frame number a game that
   // waits for the buffer to flip waits forever.

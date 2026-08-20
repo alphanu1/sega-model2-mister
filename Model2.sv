@@ -978,12 +978,37 @@ assign cpu_io_rdata =
 	iob_sel                           ? iob_rdata :
 	bak_sel                           ? bak_rdata :
 	(cpu_io_addr[23:0] == 24'h980004) ? 32'd1 :
+	// tgpid_r, 0x00980030-0x0098003f. A sixteen-byte signature the copro board
+	// identifies itself with:
+	//
+	//   unsigned char ID[]={0,'T','A','H',0,'A','K','O',0,'Z','A','K',0,'M','T','K'};
+	//
+	// Returning zero here is a stub that reads as "a board that answered and
+	// gave its name as nothing", which is the shape Model 1 was bitten by: an
+	// identity read that gates a path, answered plausibly and wrongly.
+	//
+	// NOT the current boot blocker, and that is measured rather than assumed --
+	// MAME's boot trace references this region once, at 0x980000, and never
+	// reads the ID. It is here because it is known-wrong and costs four LUTs,
+	// not because anything is waiting on it.
+	(cpu_io_addr[23:4] == 20'h98003) ? tgpid :
 	(cpu_io_addr[23:0] == 24'h98000c) ? (io_videoctl[0]
 	                                      ? {29'd0, io_framenum[0], io_videoctl[1:0]}
 	                                      : {28'd0, io_framenum[1], 1'b0, io_videoctl[1:0]}) :
 	(cpu_io_addr[23:0] == 24'he80000) ? {20'd0, io_intreq} :
 	(cpu_io_addr[23:0] == 24'he80004) ? {20'd0, io_intena} :
 	32'd0;
+
+// The ID is byte-wide; the i960 reads it a dword at a time and takes the lane
+// its address selects, so all four lanes carry the byte for that offset.
+wire [7:0] tgpid_b =
+	(cpu_io_addr[3:0] == 4'h1) ? 8'h54 : (cpu_io_addr[3:0] == 4'h2) ? 8'h41 :
+	(cpu_io_addr[3:0] == 4'h3) ? 8'h48 : (cpu_io_addr[3:0] == 4'h5) ? 8'h41 :
+	(cpu_io_addr[3:0] == 4'h6) ? 8'h4B : (cpu_io_addr[3:0] == 4'h7) ? 8'h4F :
+	(cpu_io_addr[3:0] == 4'h9) ? 8'h5A : (cpu_io_addr[3:0] == 4'hA) ? 8'h41 :
+	(cpu_io_addr[3:0] == 4'hB) ? 8'h4B : (cpu_io_addr[3:0] == 4'hD) ? 8'h4D :
+	(cpu_io_addr[3:0] == 4'hE) ? 8'h54 : (cpu_io_addr[3:0] == 4'hF) ? 8'h4B : 8'h00;
+wire [31:0] tgpid = {4{tgpid_b}};
 
 // ------------------------------------------------------------- I/O BOARD
 //
