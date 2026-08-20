@@ -913,7 +913,30 @@ assign cpu_irq = { |(io_intreq & 12'hc00), |(io_intreq & 12'h3fc),
 // copro has finished, which for a copro that never starts is true. Reading as
 // zero tells the game work is still queued and it waits forever -- 2.5 million
 // reads of one address is what that looked like in simulation.
+// THE SOUND BOARD, STUBBED -- two bytes, not an emulation.
+//
+// daytona93 is model2o, whose sound board is a separate 68000 behind a
+// dual-port RAM at 0x01c00000, and the i960's boot will not go past a poll of
+// it. There is no sound board here, so the poll is answered directly:
+//
+//   byte 0 of 0x01c00040 = 0x00    "no command outstanding"
+//   byte 2 of 0x01c00042 = 0x40    the status the boot waits for
+//
+// The DPRAM is EIGHT BITS WIDE at bytes 0 and 2 of each dword -- model2.cpp
+// maps it .umask32(0x00ff00ff) -- so both live in the same 32-bit word and the
+// value is 0x00400000.
+//
+// These two bytes are a HANDSHAKE STATUS, not game content, which is why this
+// lives in the core rather than in the ROM image. A 4 KB capture of MAME's
+// DPRAM was tried first and gets no further: it produced the same boot and
+// WORSE settings values, because a recording answers questions from a moment
+// that is not this one.
+//
+// It gets Daytona to its settings screen. It will not survive attract mode or
+// gameplay, and it is not a substitute for the sound board.
 assign cpu_io_rdata =
+	(cpu_io_addr[23:0] == 24'hc00040) ? 32'h0040_0000 :
+	(cpu_io_addr[23:12] == 12'h01c)   ? 32'd0 :
 	(cpu_io_addr[23:0] == 24'h980004) ? 32'd1 :
 	(cpu_io_addr[23:0] == 24'h98000c) ? (io_videoctl[0]
 	                                      ? {29'd0, io_framenum[0], io_videoctl[1:0]}

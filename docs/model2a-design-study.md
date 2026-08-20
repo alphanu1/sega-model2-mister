@@ -2548,3 +2548,48 @@ blocks against the 316 now free.
 *The general rule, which the M10K-versus-bits gap states plainly:* **on this part
 an array's cost is set by its port count and shape, not by its size.** A third
 accessor does not cost a little more, it costs another copy.
+
+
+---
+
+**R36 — the sound board is two bytes, not a 68000.** The i960 runs Daytona on
+hardware and parks in the sound-board poll (R34 got it that far). The board is a
+separate 68000 behind a dual-port RAM at `0x01c00000` and the boot will not go
+past it.
+
+*What was tried first, and why it was worse.* A 4 KB capture of MAME's DPRAM,
+taken at the moment its own boot cleared the handshake, replayed into the read
+path. It works — but the settings screen it produces shows **garbage values**
+(`55CREDIT(S)`, `#56`), because **a recording answers questions from a moment
+that is not this one.**
+
+*What is actually needed:* two bytes.
+
+```
+byte 0 of 0x01c00040 = 0x00     no command outstanding
+byte 2 of 0x01c00042 = 0x40     the status the boot waits for
+```
+
+Both live in the **same 32-bit word** — the DPRAM is eight bits wide at bytes 0
+and 2, `.umask32(0x00ff00ff)` — so the answer is the constant `0x00400000`.
+
+With that, the boot proceeds exactly as with the full capture: 62,392 words of
+character data, its own colour translation table, 79 V-blank interrupts, a
+tilemap with content — **and the settings screen renders with sensible values**,
+`USA / DELUXE / EASY / 0 CREDIT(S) / #1`, where the recording gave nonsense.
+
+**The smaller stub is the more correct one.** That is worth stating on its own:
+replaying captured state looked like the higher-fidelity option and was not,
+because the capture carries a moment's worth of context that no longer applies.
+
+*Why it lives in the core and not in the ROM image.* These two bytes are a
+handshake status, not game content, so nothing ROM-derived enters the build. The
+alternative — appending the capture to the MRA — also ran into an unresolved
+problem: **the loader's high-water mark on hardware is `0x015CFFFF`, 256 KB short
+of the MRA's own end**, with no overflow reported. Anything appended to the tail
+of that image might not arrive. That discrepancy is recorded and NOT explained;
+it does not affect the boot, which lives in the first 64 KB, but it will matter
+for texture data and should be settled before P2.
+
+*What this is not.* It gets Daytona to its settings screen. It will not survive
+attract mode or gameplay, and it is not a substitute for the sound board.

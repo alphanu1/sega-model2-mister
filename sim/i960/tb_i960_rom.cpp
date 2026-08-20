@@ -186,8 +186,15 @@ static uint32_t mem_read(uint32_t a) {
              (uint32_t(dpram[o+2]) << 16) | (uint32_t(dpram[o+3]) << 24);
     return 0;
   }
-  if (dpram0 && a >= 0x01c00000u && a < 0x01c01000u)
-    return (a == 0x01c00040u) ? ((dpram_fill & 0xffu) << 16) : 0u;
+  // THE SHIPPING STUB, and the default now. Two bytes answer the boot's poll:
+  // byte 0 of 0x01c00040 is 0 and byte 2 is 0x40, both in one 32-bit word
+  // because the DPRAM is eight bits wide at bytes 0 and 2. This is what
+  // Model2.sv implements, and it gets further than the 4 KB MAME capture --
+  // same boot, and SENSIBLE settings values where the recording gave garbage.
+  if (a >= 0x01c00000u && a < 0x01c01000u) {
+    if (dpram0) return (a == 0x01c00040u) ? ((dpram_fill & 0xffu) << 16) : 0u;
+    return (a == 0x01c00040u) ? 0x00400000u : 0u;
+  }
   // The 0x00220000 ROM mirror, model2o only. Checked before the RAM map so it
   // cannot be shadowed by a stray write.
   if (a >= 0x00220000u && a < 0x00240000u) {
