@@ -173,8 +173,8 @@ synth_i960_ldst:
 
 # --------------------------------------------------------------------- tests
 
-.PHONY: test test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge
-test: test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge
+.PHONY: test test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
+test: test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
 
 test_i960_dec: obj_i960_dec/Vi960_dec
 	@echo "== test i960_dec"
@@ -385,6 +385,18 @@ test_m2_cpu_bridge: obj_m2_bridge/Vm2_cpu_bridge
 obj_m2_bridge/Vm2_cpu_bridge: rtl/io/m2_cpu_bridge.sv sim/mem/tb_m2_cpu_bridge.cpp
 	$(VBUILD) --top-module m2_cpu_bridge -CFLAGS "-O2" \
 	  --Mdir obj_m2_bridge -o Vm2_cpu_bridge rtl/io/m2_cpu_bridge.sv sim/mem/tb_m2_cpu_bridge.cpp
+
+# The bridge against the REAL controller. Both pass their own tests; this is the
+# composition, which is what ships and what had never been tested together.
+test_m2_cpu_sdram: obj_m2_cs/Vm2_cpu_sdram_harness
+	@echo "== test m2_cpu_bridge + m2_sdram (the composition)"
+	@./obj_m2_cs/Vm2_cpu_sdram_harness $(TEST_ARGS)
+
+obj_m2_cs/Vm2_cpu_sdram_harness: rtl/io/m2_cpu_bridge.sv rtl/mem/m2_sdram.sv \
+	  sim/mem/sdram_model.sv sim/mem/m2_cpu_sdram_harness.sv sim/mem/tb_m2_cpu_sdram.cpp
+	$(VBUILD) -Wno-fatal --top-module m2_cpu_sdram_harness -CFLAGS "-O2" \
+	  --Mdir obj_m2_cs -o Vm2_cpu_sdram_harness rtl/io/m2_cpu_bridge.sv rtl/mem/m2_sdram.sv \
+	  sim/mem/sdram_model.sv sim/mem/m2_cpu_sdram_harness.sv sim/mem/tb_m2_cpu_sdram.cpp
 
 # Real ROM execution. P1 exit criterion 3, and the only test here whose input
 # this project did not write. Skips with a message when the set is absent -- a

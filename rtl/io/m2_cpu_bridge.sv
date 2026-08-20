@@ -108,7 +108,14 @@ module m2_cpu_bridge #(
   // CPU is not running, and both present as a black screen.
   output logic [31:0] dbg_cpu_reads,
   output logic [31:0] dbg_cpu_writes,
-  output logic [31:0] dbg_unmapped
+  output logic [31:0] dbg_unmapped,
+
+  // The last SDRAM word address issued and the last data captured. Reads are
+  // being issued, decoded correctly and coming back ZERO on hardware, and those
+  // three facts together do not say whether the address is wrong or the data
+  // is. These do.
+  output logic [31:0] dbg_last_addr,
+  output logic [31:0] dbg_last_dout
 );
 
   // ------------------------------------------------------------ CDC: request
@@ -257,6 +264,7 @@ module m2_cpu_bridge #(
       io_sel <= 1'b0; io_we <= 1'b0;
       r_rdata <= 32'd0;
       dbg_cpu_reads <= 32'd0; dbg_cpu_writes <= 32'd0; dbg_unmapped <= 32'd0;
+      dbg_last_addr <= 32'd0; dbg_last_dout <= 32'd0;
     end else begin
       oc_tram_we <= 1'b0; oc_pal_we <= 1'b0; oc_xlat_we <= 1'b0;
       io_sel     <= 1'b0;
@@ -318,6 +326,8 @@ module m2_cpu_bridge #(
             if (sd_ack) begin
               sd_req <= 1'b0;
               if (!r_we) r_rdata[15:0] <= sd_dout[15:0];
+              dbg_last_addr <= {7'd0, sd_addr};
+              dbg_last_dout <= {16'd0, sd_dout[15:0]};
               st <= S_LO_W;              // let the held ack fall first
             end
           end else begin

@@ -366,7 +366,12 @@ always_ff @(posedge clk_sdram or negedge mem_rst_n) begin
 			//   word 8/9   -> FFFFF6E0
 			//   word 6/7   -> 00000860   (read aligned at 4, upper half of the burst)
 			// Also waits for the copy, for the same reason.
-			2'd0: if (rom_loaded && cp_done) begin rb_addr <= SDR_AW'(8); rb_req <= 1'b1; rb_state <= 2'd1; end
+			// WORD 6, not 8: this now reads exactly what the i960's boot reads for
+			// its IP -- mem[12] is words 6 and 7 -- so it is the same data through a
+			// DIFFERENT PORT. Port 1 bursts four words and is known to work; the CPU
+			// is on port 0. If this reads 00000860 and the CPU reads 0, the data is
+			// in SDRAM and the fault is the CPU's port.
+			2'd0: if (rom_loaded && cp_done) begin rb_addr <= SDR_AW'(6); rb_req <= 1'b1; rb_state <= 2'd1; end
 			// ONE ACCESS PER HANDSHAKE, not per cycle of the request: it drops on
 			// ack. Harmless against RAM, and the habit is the point — the Model 1
 			// TGP popped every FIFO word twice by acting on the level instead.
@@ -796,6 +801,11 @@ wire  [3:0] cpu_be;
 wire        cpu_ack;
 wire [3:0]  cpu_irq;
 wire [31:0] cpu_dbg_pc, cpu_dbg_ip, cpu_dbg_insn, cpu_dbg_icr, cpu_dbg_intr, cpu_dbg_acc;
+// SAT and PRCB are what the boot walk READ OUT OF MEMORY. They answer the one
+// question the IP cannot: whether the boot record came back correctly. An IP of
+// zero could be a bad read or a CPU that never started, and these separate them.
+wire [31:0] cpu_dbg_sat, cpu_dbg_prcb;
+wire [31:0] cpu_dbg_laddr, cpu_dbg_ldout;
 wire        cpu_trap, cpu_halted;
 wire [7:0]  cpu_trap_op;
 
@@ -804,7 +814,8 @@ i960_top u_i960 (
 	.bus_req(cpu_req), .bus_we(cpu_we), .bus_addr(cpu_addr), .bus_be(cpu_be),
 	.bus_wdata(cpu_wdata), .bus_rdata(cpu_rdata), .bus_ack(cpu_ack),
 	.irq(cpu_irq),
-	.dbg_pc(cpu_dbg_pc), .dbg_sat(), .dbg_prcb(), .dbg_icr(cpu_dbg_icr),
+	.dbg_pc(cpu_dbg_pc), .dbg_sat(cpu_dbg_sat), .dbg_prcb(cpu_dbg_prcb),
+	.dbg_icr(cpu_dbg_icr),
 	.dbg_intr_cnt(cpu_dbg_intr), .dbg_intr_work(), .dbg_acc_cnt(cpu_dbg_acc),
 	.dbg_ip(cpu_dbg_ip), .dbg_insn(cpu_dbg_insn),
 	.trap(cpu_trap), .trap_op(cpu_trap_op), .halted(cpu_halted)
@@ -847,7 +858,8 @@ m2_cpu_bridge #(.AW(SDR_AW), .BOARD_2A(1'b0)) u_cpu_bridge (
 	.io_addr(cpu_io_addr), .io_wdata(cpu_io_wdata),
 
 	.dbg_cpu_reads(cpu_dbg_rd), .dbg_cpu_writes(cpu_dbg_wr),
-	.dbg_unmapped(cpu_dbg_unmapped)
+	.dbg_unmapped(cpu_dbg_unmapped),
+	.dbg_last_addr(cpu_dbg_laddr), .dbg_last_dout(cpu_dbg_ldout)
 );
 
 // ------------------------------------------------------------ the I/O the
@@ -1047,7 +1059,7 @@ always_ff @(posedge clk_vid) begin
 	ldr_top_sync  <= ldr_top;
 end
 
-m2_diag #(.NWORDS(7)) u_diag
+m2_diag #(.NWORDS(12)) u_diag
 (
 	.clk(clk_vid),
 	.ce_pix(ce_pix),
@@ -1060,7 +1072,12 @@ m2_diag #(.NWORDS(7)) u_diag
 	// board showed program ROM rendered as tiles. What is needed now is whether
 	// the loader saw a game-sized image at all and whether the CPU is executing,
 	// and neither of those can be inferred from a checksum.
-	.words({ cpu_dbg_ip,                                // 6  where the CPU is
+	.words({ cpu_dbg_ldout,                             // 11 port 0: last data
+	         cpu_dbg_laddr,                             // 10 port 0: last address, want 6
+	         cpu_dbg_unmapped,                          // 9  bridge: unmapped
+	         cpu_dbg_rd,                                // 8  bridge: reads issued
+	         cpu_dbg_prcb,                              // 7  PRCB read at boot, want 000000C0
+	         cpu_dbg_ip,                                // 6  where the CPU is
 	         cpu_dbg_acc,                               // 5  instructions accepted
 	         // 32 BITS, not 31. The first version was {27'd0, ...} = 31, which
 	         // shifted every word above it by one bit: the board showed word4 as
@@ -1072,7 +1089,7 @@ m2_diag #(.NWORDS(7)) u_diag
 	          loaded_sync[2], mem_ready,
 	          6'd0, pll_locked, 1'b1},                  // 4  status, see below
 	         {7'd0, ldr_top_sync},                      // 3  highest word loaded
-	         {22'd0, line_ctr_l},                       // 2  lines = 1A8
+	         rb_w0,                                     // 2  PORT 1 read of words 6/7, want 00000860
 	         frame_ctr,                                 // 1  liveness
 	         32'hB0ADCAFE }),                           // 0  magic
 	// Until the copy engine has filled tile RAM and the palette there is
