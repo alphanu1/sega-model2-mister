@@ -180,7 +180,10 @@ module m2_sdram #(
   // hazard of study R32 rather than working around it.
   function automatic logic [3:0] blen(input int unsigned p);
     case (p)
-      0, 1, 2, 3: blen = 4'd4;
+      // ALL FOUR PORTS BURST FOUR. Port 4 joined them for the read-back sweep,
+      // which folds four words per request; and a single-word read auto-
+      // precharges on its first command, which R33 records.
+      0, 1, 2, 3, 4: blen = 4'd4;
       default: blen = 4'd1;
     endcase
   endfunction

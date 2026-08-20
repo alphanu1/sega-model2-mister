@@ -2593,3 +2593,57 @@ for texture data and should be settled before P2.
 
 *What this is not.* It gets Daytona to its settings screen. It will not survive
 attract mode or gameplay, and it is not a substitute for the sound board.
+
+
+---
+
+**R37 — the sound handshake is a protocol, not a value, and the stub matched
+only half of it.** Two findings from finally tracing it instead of sweeping
+constants at it.
+
+*The stub was broken on hardware.* The core answered
+
+```systemverilog
+(cpu_io_addr[23:0] == 24'hc00040) ? 32'h0040_0000 :
+```
+
+but the boot reads **byte 0x01c00040 AND byte 0x01c00042**, and the DPRAM is
+eight bits wide at bytes 0 and 2 of the same dword. Comparing the RAW BYTE
+ADDRESS matches only the first, so the second read returned 0 where it needed
+0x40 and the boot stayed in the poll. The board said so precisely: **4,097 tile
+RAM writes against simulation's 12,292**, then stopped, with the IP back at
+`0x2282xx`. Fixed by comparing `[23:2]` — the word.
+
+**Simulation could not see it**: the harness masks the address to the word before
+comparing, so both byte addresses landed on the same case. This is the same
+byte-versus-word confusion that earlier made a sweep report identical cycle
+counts for every value it was given — found once, written down, and then
+repeated in RTL.
+
+*And the protocol itself, traced at last.* Read taps do not fire on this region
+— it is a device handler, not RAM — and debugger `printf` does not reach stdout,
+so `tools/mame_m2_dpram_watch.lua` samples the region every frame and reports
+only what changed:
+
+| frame | `0x01C00040` | `0x01C00042` |
+|---|---|---|
+| 1 | `01` | `00` |
+| 7 | | `00 -> 40` |
+| 8 | `01 -> 03` | |
+| 10 | `03 -> 02` | `40 -> 00` |
+| 21 | `02 -> 01` | `00 -> 40` |
+| **175** | **`01 -> 00`** | |
+
+**It is a request/acknowledge cycle**, not a constant. The poll waits for
+`0x...40` to reach `00`, which MAME does not reach until **frame 175** — about
+three seconds, which is why a 50 ms trace only ever showed it looping.
+
+So the core's constant is **"the board is already ready"** — the frame-175 state
+presented immediately. That is a legitimate shortcut and it is why simulation
+reaches the settings screen. **It is also a snapshot of one moment in a protocol
+that genuinely transitions, and it will not survive attract mode or gameplay.**
+
+*Method note.* Three instruments were tried before one worked: Lua read taps
+(silent, wrong kind of region), debugger watchpoints (output never reaches
+stdout), and frame sampling (works). Recorded so the next person tries the third
+first.

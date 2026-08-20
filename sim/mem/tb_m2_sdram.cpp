@@ -37,7 +37,10 @@
 static const int NP = 5;
 
 // Burst length per port, mirroring blen() in m2_sdram.sv.
-static int burst_of(int p) { return (p == 1 || p == 2) ? 4 : 1; }
+// MIRRORS blen() IN m2_sdram.sv, and it did not: it said ports 1 and 2 burst
+// four where blen() said 1, 2 AND 3, so port 3's burst was only ever checked
+// one word deep. All five ports burst four now.
+static int burst_of(int p) { (void)p; return 4; }
 
 struct Harness {
   Vm2_sdram_harness* d;

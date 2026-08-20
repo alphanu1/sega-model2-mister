@@ -279,6 +279,8 @@ always_comb begin
 	// Either outcome is worth a build. Neither is a guess.
 	p_req[0]  = rb_req;
 	p_addr[0] = rb_addr;
+	p_req[4]  = sw_req;
+	p_addr[4] = sw_addr;
 	// PORT 2 FOR THE COPY, which is the one port known to work.
 	//
 	// Port 0 failed (single word) and port 1 failed (four-word burst), while the
@@ -937,7 +939,19 @@ assign cpu_irq = { |(io_intreq & 12'hc00), |(io_intreq & 12'h3fc),
 // It gets Daytona to its settings screen. It will not survive attract mode or
 // gameplay, and it is not a substitute for the sound board.
 assign cpu_io_rdata =
-	(cpu_io_addr[23:0] == 24'hc00040) ? 32'h0040_0000 :
+	// THE WORD ADDRESS, ignoring the low two bits. The boot reads BOTH byte
+	// 0x01c00040 and byte 0x01c00042 -- the DPRAM is eight bits wide at bytes 0
+	// and 2 of the SAME dword -- and comparing the raw byte address matches only
+	// the first, so the second read returned 0 where it needed 0x40 and the boot
+	// stayed in the poll. The board showed it precisely: 4,097 tile RAM writes
+	// against simulation's 12,292, then stopped, with the IP back at 0x2282xx.
+	//
+	// Simulation could not see it: the harness masks the address to the word
+	// before comparing, so both byte addresses landed on the same case. Same
+	// byte-versus-word confusion that made an earlier experiment report
+	// identical cycle counts for every value it was given -- found once, written
+	// down, then repeated in RTL.
+	(cpu_io_addr[23:2] == 22'h300010) ? 32'h0040_0000 :
 	(cpu_io_addr[23:12] == 12'h01c)   ? 32'd0 :
 	(cpu_io_addr[23:0] == 24'h980004) ? 32'd1 :
 	(cpu_io_addr[23:0] == 24'h98000c) ? (io_videoctl[0]
@@ -946,6 +960,88 @@ assign cpu_io_rdata =
 	(cpu_io_addr[23:0] == 24'he80000) ? {20'd0, io_intreq} :
 	(cpu_io_addr[23:0] == 24'he80004) ? {20'd0, io_intena} :
 	32'd0;
+
+// ---------------------------------------------------------- PORT 4 SWEEP
+//
+// Does the chip return what was written? Nothing in this core has been able to
+// answer that. The loader's high-water mark is taken at the WRITE REQUEST --
+// before the FIFO, before the controller, before the device -- so it says what
+// the loader asked for and nothing about what is in the SDRAM. On this board it
+// reads 256 KB short of the MRA's own length, and that number alone cannot tell
+// a truncated load from a mis-measured one.
+//
+// Lifted in technique from the Model 1 core's `72131a3`, which makes exactly
+// this distinction: a fold at the ioctl input proves the bytes arrived AT THE
+// LOADER, which is not the question. Port 4 was tied off there and is tied off
+// here, so it costs nothing to use.
+//
+// Two regions, swept in order and latched separately:
+//   region 0  word 0x0000000 +0x8000   the program ROM, known good -- a control
+//   region 1  word 0x15C0000 +0x8000   the far end, where the shortfall is
+//
+// tools/rom_csum.py folds the packed image the same way. Equal means the region
+// survived the trip; different means it did not, and no capture-phase tuning
+// will help.
+logic            sw_req;
+logic [SDR_AW:1] sw_addr;
+logic [23:0]     sw_acc, sw_lo, sw_hi;
+logic [15:0]     sw_burst;
+logic  [1:0]     sw_state;
+logic            sw_region;
+
+function automatic logic [23:0] sw_fold(input logic [23:0] a, input logic [15:0] w);
+  logic [23:0] t;
+  begin
+    t = a + {8'd0, w};
+    sw_fold = {t[22:0], t[23]};      // rotate left, so ORDER matters
+  end
+endfunction
+
+always_ff @(posedge clk_sdram or negedge mem_rst_n) begin
+	if (!mem_rst_n) begin
+		sw_req <= 1'b0; sw_addr <= '0; sw_acc <= 24'd0;
+		sw_lo <= 24'd0; sw_hi <= 24'd0; sw_burst <= 16'd0;
+		sw_state <= 2'd0; sw_region <= 1'b0;
+	end else begin
+		case (sw_state)
+			2'd0: if (rom_loaded) begin      // start region 0
+				sw_addr <= '0; sw_acc <= 24'd0; sw_burst <= 16'd0;
+				sw_region <= 1'b0; sw_req <= 1'b1; sw_state <= 2'd1;
+			end
+			2'd1: if (p_ack[4]) begin
+				sw_req <= 1'b0;
+				sw_acc <= sw_fold(sw_fold(sw_fold(sw_fold(sw_acc,
+				            p_dout[4][15:0]),  p_dout[4][31:16]),
+				            p_dout[4][47:32]), p_dout[4][63:48]);
+				sw_state <= 2'd2;
+			end
+			2'd2: begin
+				// 0x8000 words at four per burst is 0x2000 bursts.
+				if (sw_burst == 16'h1FFF) begin
+					if (!sw_region) begin
+						sw_lo     <= sw_fold(sw_acc, 16'd0) ;  // latch, no more folding
+						sw_lo     <= sw_acc;
+						sw_region <= 1'b1;
+						sw_addr   <= SDR_AW'(32'h15C0000);
+						sw_acc    <= 24'd0;
+						sw_burst  <= 16'd0;
+						sw_req    <= 1'b1;
+						sw_state  <= 2'd1;
+					end else begin
+						sw_hi    <= sw_acc;
+						sw_state <= 2'd3;      // done, hold both values
+					end
+				end else begin
+					sw_addr  <= sw_addr + SDR_AW'(4);
+					sw_burst <= sw_burst + 16'd1;
+					sw_req   <= 1'b1;
+					sw_state <= 2'd1;
+				end
+			end
+			default: ;                          // finished
+		endcase
+	end
+end
 
 // Char fetch, straight from SDRAM on a burst port.
 wire        char_req, char_ack;
@@ -1096,7 +1192,7 @@ always_ff @(posedge clk_vid) begin
 	ldr_top_sync  <= ldr_top;
 end
 
-m2_diag #(.NWORDS(12)) u_diag
+m2_diag #(.NWORDS(14)) u_diag
 (
 	.clk(clk_vid),
 	.ce_pix(ce_pix),
@@ -1109,8 +1205,10 @@ m2_diag #(.NWORDS(12)) u_diag
 	// board showed program ROM rendered as tiles. What is needed now is whether
 	// the loader saw a game-sized image at all and whether the CPU is executing,
 	// and neither of those can be inferred from a checksum.
-	.words({ cpu_dbg_ldout,                             // 11 port 0: last data
-	         cpu_dbg_laddr,                             // 10 port 0: last address, want 6
+	.words({ {8'd0, sw_hi},                             // 13 SWEEP far end,     want 9F84E2
+	         {8'd0, sw_lo},                             // 12 SWEEP program ROM,  want 633A8F
+	         cpu_dbg_ldout,                             // 11 last data off the port
+	         cpu_dbg_laddr,                             // 10 last address asked for
 	         cpu_dbg_palwr,                             // 9  CPU writes to the PALETTE
 	         cpu_dbg_tramwr,                            // 8  CPU writes to TILE RAM
 	         cpu_dbg_prcb,                              // 7  PRCB read at boot, want 000000C0
@@ -1126,7 +1224,7 @@ m2_diag #(.NWORDS(12)) u_diag
 	          loaded_sync[2], mem_ready,
 	          6'd0, pll_locked, 1'b1},                  // 4  status, see below
 	         {7'd0, ldr_top_sync},                      // 3  highest word loaded
-	         rb_w0,                                     // 2  PORT 1 read of words 6/7, want 00000860
+	         rb_w0,                                     // 2  readback of words 6/7, want 00000860
 	         frame_ctr,                                 // 1  liveness
 	         32'hB0ADCAFE }),                           // 0  magic
 	// Until the copy engine has filled tile RAM and the palette there is
