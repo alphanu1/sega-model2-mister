@@ -263,6 +263,8 @@ int main(int argc, char **argv) {
     expect("read  count exact", dut->dbg_cpu_reads  - r0, 64);
   }
 
+  std::printf("  probe6=%08x probe2=%08x (EEEEEEEE = never read)\n",
+              dut->dbg_probe6, dut->dbg_probe2);
   std::printf("  %llu checks, %llu mismatches, %llu unmapped seen\n",
               (unsigned long long)checks, (unsigned long long)fails,
               (unsigned long long)dut->dbg_unmapped);

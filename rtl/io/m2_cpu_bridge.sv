@@ -116,14 +116,15 @@ module m2_cpu_bridge #(
   // is. These do.
   output logic [31:0] dbg_last_addr,
   output logic [31:0] dbg_last_dout,
-  output logic [31:0] dbg_probe6,
-  output logic [31:0] dbg_probe2,
 
-  // WHAT THIS BRIDGE GETS FOR WORD 6, latched the first time it reads it.
-  // The ROM readback reads the same word through the same controller and gets
-  // 00000860; this bridge gets zero for the words either side of it. Same
-  // address, two readers, one number each -- which is the only way left to
-  // tell a bad read from a bad address.
+  // WHAT THIS BRIDGE GETS FOR WORDS 6 AND 2, latched the first time each is
+  // read. The ROM readback reads word 6 through the same controller and gets
+  // 00000860; this bridge gets zero. Same address, two readers, one number
+  // each -- the only way left to tell a bad read from a bad address.
+  // EEEEEEEE means the address was never read at all, which is a different
+  // fault from reading it and getting zero.
+  output logic [31:0] dbg_probe6,
+  output logic [31:0] dbg_probe2
 );
 
   // ------------------------------------------------------------ CDC: request
