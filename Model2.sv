@@ -817,6 +817,7 @@ wire [31:0] cpu_dbg_pc, cpu_dbg_ip, cpu_dbg_insn, cpu_dbg_icr, cpu_dbg_intr, cpu
 // zero could be a bad read or a CPU that never started, and these separate them.
 wire [31:0] cpu_dbg_sat, cpu_dbg_prcb;
 wire [31:0] cpu_dbg_laddr, cpu_dbg_ldout, cpu_dbg_p6, cpu_dbg_p2;
+wire [31:0] cpu_dbg_tramwr, cpu_dbg_palwr;
 wire        cpu_trap, cpu_halted;
 wire [7:0]  cpu_trap_op;
 
@@ -871,7 +872,8 @@ m2_cpu_bridge #(.AW(SDR_AW), .BOARD_2A(1'b0)) u_cpu_bridge (
 	.dbg_cpu_reads(cpu_dbg_rd), .dbg_cpu_writes(cpu_dbg_wr),
 	.dbg_unmapped(cpu_dbg_unmapped),
 	.dbg_last_addr(cpu_dbg_laddr), .dbg_last_dout(cpu_dbg_ldout),
-	.dbg_probe6(cpu_dbg_p6), .dbg_probe2(cpu_dbg_p2)
+	.dbg_probe6(cpu_dbg_p6), .dbg_probe2(cpu_dbg_p2),
+	.dbg_tram_wr(cpu_dbg_tramwr), .dbg_pal_wr(cpu_dbg_palwr)
 );
 
 // ------------------------------------------------------------ the I/O the
@@ -1109,8 +1111,8 @@ m2_diag #(.NWORDS(12)) u_diag
 	// and neither of those can be inferred from a checksum.
 	.words({ cpu_dbg_ldout,                             // 11 port 0: last data
 	         cpu_dbg_laddr,                             // 10 port 0: last address, want 6
-	         cpu_dbg_p2,                                // 9  BRIDGE read of word 2, want 000000C0
-	         cpu_dbg_p6,                                // 8  BRIDGE read of word 6, want 00000860
+	         cpu_dbg_palwr,                             // 9  CPU writes to the PALETTE
+	         cpu_dbg_tramwr,                            // 8  CPU writes to TILE RAM
 	         cpu_dbg_prcb,                              // 7  PRCB read at boot, want 000000C0
 	         cpu_dbg_ip,                                // 6  where the CPU is
 	         cpu_dbg_acc,                               // 5  instructions accepted

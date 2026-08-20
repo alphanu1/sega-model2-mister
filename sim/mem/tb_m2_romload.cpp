@@ -89,6 +89,29 @@ int main(int argc, char **argv) {
     dut->ioctl_wr   = 1;  tick();
     dut->ioctl_wr   = 0;  tick();
   }
+  // ---- THE TOP OF THE ADDRESS RANGE, which this test never reached ----
+  //
+  // It has only ever fed the first few words. On hardware the loader's
+  // high-water mark came out 256 KB SHORT of the MRA's own end, with no
+  // overflow reported, and nothing here could have seen that: the whole
+  // question is whether a byte address near 0x2BE0000 -- 43.9 MB, which needs
+  // bit 25 -- survives the trip through ioctl_addr[SDR_AW:1] and the FIFO.
+  //
+  // Written as a jump rather than 23 million sequential writes. The loader
+  // carries the address per entry, so a jump is legal stimulus.
+  {
+    const uint32_t hi[] = { 0x02BDFFF0u, 0x02BDFFF2u, 0x02BDFFF4u, 0x02BDFFF6u };
+    const uint16_t hv[] = { 0x1111, 0x2222, 0x3333, 0x4444 };
+    for (int k = 0; k < 4; ++k) {
+      while (dut->ioctl_wait) tick();
+      dut->ioctl_addr = hi[k];
+      dut->ioctl_dout = hv[k];
+      dut->ioctl_wr = 1; tick();
+      dut->ioctl_wr = 0; tick();
+    }
+    std::printf("    fed 4 words at byte 0x%08X (word 0x%X)\n", hi[0], hi[0] >> 1);
+  }
+
   dut->ioctl_download = 0;
   tick();
 

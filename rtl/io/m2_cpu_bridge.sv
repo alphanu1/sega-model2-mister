@@ -125,6 +125,12 @@ module m2_cpu_bridge #(
   // fault from reading it and getting zero.
   output logic [31:0] dbg_probe6,
   output logic [31:0] dbg_probe2,
+  // Writes the CPU has made to TILE RAM and to the palette. The probes
+  // above proved the read path; these say whether anything is being drawn
+  // at all, which a screenful of noise cannot distinguish from drawing to
+  // the wrong place.
+  output logic [31:0] dbg_tram_wr,
+  output logic [31:0] dbg_pal_wr,
   // The memory side's own view: its state, and the three signals the
   // handshake turns on. Inferring these from the CPU side is what has been
   // failing.
@@ -299,6 +305,7 @@ module m2_cpu_bridge #(
       dbg_cpu_reads <= 32'd0; dbg_cpu_writes <= 32'd0; dbg_unmapped <= 32'd0;
       dbg_last_addr <= 32'd0; dbg_last_dout <= 32'd0;
       dbg_probe6 <= 32'hEEEE_EEEE; dbg_probe2 <= 32'hEEEE_EEEE;
+      dbg_tram_wr <= 32'd0; dbg_pal_wr <= 32'd0;
     end else begin
       oc_tram_we <= 1'b0; oc_pal_we <= 1'b0; oc_xlat_we <= 1'b0;
       io_sel     <= 1'b0;
@@ -339,6 +346,8 @@ module m2_cpu_bridge #(
               // word this cycle.
               oc_tram_we <= r_we && (tgt == T_TRAM);
               oc_pal_we  <= r_we && (tgt == T_PAL);
+              if (r_we && (tgt == T_TRAM)) dbg_tram_wr <= dbg_tram_wr + 32'd1;
+              if (r_we && (tgt == T_PAL))  dbg_pal_wr  <= dbg_pal_wr  + 32'd1;
               st         <= S_LO;
             end
             T_XLAT: begin

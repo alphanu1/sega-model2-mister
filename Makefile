@@ -571,6 +571,21 @@ check_mra:
 release: check_mra
 	@test -f output_files/Model2.rbf || { \
 	  echo "no output_files/Model2.rbf -- run: quartus_sh --flow compile Model2"; exit 1; }
+	@# REFUSE A STALE BITSTREAM. This has now shipped the wrong core twice: a
+	@# build fails or is killed, output_files still holds the previous .rbf, and
+	@# release copies it. The deploy then verifies it by md5 -- against itself --
+	@# and reports success, so the board is tested with a core that does not
+	@# contain the change being tested. An hour went into reading overlays that
+	@# were telling the truth about the wrong build.
+	@newer=$$(find Model2.sv Model2.qsf rtl sys -newer output_files/Model2.rbf \
+	          -type f \( -name '*.sv' -o -name '*.v' -o -name '*.qsf' \) 2>/dev/null | head -3); \
+	 if [ -n "$$newer" ]; then \
+	   echo "STALE: output_files/Model2.rbf is older than:"; \
+	   echo "$$newer" | sed 's/^/    /'; \
+	   echo "  rebuild first: quartus_sh --flow compile Model2"; exit 1; \
+	 fi
+	@grep -q 'Flow Status.*Successful' output_files/Model2.flow.rpt 2>/dev/null || { \
+	  echo "last Quartus flow did not report Successful -- refusing to release"; exit 1; }
 	@rm -rf $(RELEASE)
 	@mkdir -p $(RELEASE)/_Arcade/cores
 	@cp output_files/Model2.rbf $(RELEASE)/Model2.rbf
