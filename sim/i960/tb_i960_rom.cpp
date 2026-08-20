@@ -105,6 +105,12 @@ static const char *region_of(uint32_t a) {
 }
 
 static std::map<uint32_t, uint64_t> unmapped_rd, unmapped_wr;
+// WHICH INSTRUCTION DID IT. A count of unmapped reads says the CPU went
+// somewhere it should not; it does not say who sent it, and that is the only
+// part that leads anywhere. The IP is taken from the DUT at the moment of the
+// access -- first occurrence kept, because the first one is the cause and the
+// rest are usually the same loop repeating.
+static std::map<uint32_t, uint32_t> unmapped_rd_ip;
 
 // ------------------------------------------------- interrupt controller
 //
@@ -227,7 +233,9 @@ static uint32_t mem_read(uint32_t a) {
   auto it = ram.find(a);
   if (it != ram.end()) return it->second;
   const char *r = region_of(a);
-  if (!r) ++unmapped_rd[a];
+  if (!r) {
+    if (!unmapped_rd[a]++) unmapped_rd_ip[a] = dut ? dut->dbg_ip : 0;
+  }
   return 0;
 }
 
@@ -418,7 +426,8 @@ int main(int argc, char **argv) {
     int n = 0;
     for (auto &kv : unmapped_rd) {
       if (n++ >= 8) break;
-      std::printf("    %08x  %llu\n", kv.first, (unsigned long long)kv.second);
+      std::printf("    %08x  x%-8llu first read from IP %08x\n", kv.first,
+                  (unsigned long long)kv.second, unmapped_rd_ip[kv.first]);
     }
   }
   for (auto &kv : unmapped_wr)

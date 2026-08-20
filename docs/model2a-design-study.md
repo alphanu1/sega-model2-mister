@@ -2647,3 +2647,86 @@ that genuinely transitions, and it will not survive attract mode or gameplay.**
 (silent, wrong kind of region), debugger watchpoints (output never reaches
 stdout), and frame sampling (works). Recorded so the next person tries the third
 first.
+
+**R38 — the sound stub is not what is failing now, and the fold instrument is
+sound but was pointed at only two places.** Two results from the sweep build,
+and one of them closes the sound question for the moment.
+
+*The instrument is trustworthy.* The port-4 sweep was built with a control on
+purpose: region 0 folded the first 64 KB of program ROM, where the image is
+known to arrive, and region 1 folded the far end, where the loader's high-water
+mark is short. The board returned **`00633A8F` for the control — exactly the
+value `tools/rom_csum.py` computes** — and `00D16D4E` for the far end against an
+expected `9F84E2`. A control that matches to the bit is what licenses the second
+number: the fold, the port, the capture phase and the host tool all agree over
+64 KB, so the far-end disagreement is **the chip not holding the image**, not
+the instrument mis-measuring it.
+
+*And the sound stub is not the current blocker — but the first version of this
+entry proved it wrongly, and the wrong proof is the more useful record.*
+
+The claim was that hardware and simulation diverge under the same stub: hardware
+reaches `0x22E914` and traps, simulation "never enters `0x22Exxx`" and ends at
+`0x12F0`. **The simulation had run 200,000 instructions.** That is
+`tb_i960_rom.cpp`'s default `max_insn`, it is three orders of magnitude short of
+where the boot gets to, and `0x12F0` was not a spin loop -- it was simply where
+the cutoff fell. I read a step limit as a behaviour.
+
+Run to 20,000,000 instructions instead, and simulation says something different
+and much more useful:
+
+```
+  executed 19573571 instructions over 77368693 cycles, 2205 distinct IPs
+  final IP 00000000  PC=00000000  ICR=0f0e0d0c  interrupts taken 175
+  TRAPPED on op 00 at IP 00000000
+  178 vblanks asserted, intena=401 intreq=000
+  unmapped reads (top addresses):
+    ffffffec  1
+    fffffff0  1
+    fffffffc  108
+```
+
+**Both sides trap.** Simulation takes 175 interrupts, services 178 V-blanks,
+runs nineteen and a half million instructions -- and then branches to zero and
+executes a zero word. It also reads `0xFFFFFFEC`, `0xFFFFFFF0` and `0xFFFFFFFC`,
+which is a null base with a small negative offset: a null pointer, dereferenced
+just before control reaches zero.
+
+So the conclusion survives -- **the sound stub is not what breaks this boot**,
+since a defect both sides share cannot explain a difference between them -- but
+it survives for the opposite reason to the one first given. It is not that
+hardware fails where simulation succeeds. **It is that simulation fails too**,
+and simulation has MAME as an oracle, full visibility, and no 25-minute turn.
+
+*That relocates the whole investigation.* The trap was being chased on the board
+because the board was believed to be the only place it happened. It is
+reproducible in a harness that can be single-stepped against a reference.
+Nothing about the far-end SDRAM mismatch is explained away by this -- it is
+still real, still unexplained, and still worth bisecting -- but it is no longer
+the only lead, and it is the more expensive of the two to chase.
+
+*Method note, and it is the point of this entry.* The defect was a **default
+that looked like a result**. A run that stops early does not announce itself; it
+produces a number, and the number invites interpretation. R37's method note said
+to try frame sampling first because two instruments had failed silently before
+it. This is the same failure one level up: the instrument ran, returned, and was
+believed, and nobody asked what its limit was. **Ask what a test's budget is
+before reading its endpoint as a behaviour.**
+
+The `0x22E914` trap is separately not an unwritten-memory read, which was an
+earlier theory and was also wrong: word `0x1748E` genuinely holds `FFFF` in the
+ROM image, so the read was correct and the *branch* that led there was not.
+
+*What the instrument could not do.* Two hardcoded regions say the far end is
+wrong; they cannot say where it stops being right, and with hardcoded spans each
+probe is a 25-minute build. The sweep base is now an OSD option — region N is
+word `N*0x100000` for 2 MB, and `tools/rom_csum.py --region N` folds the same
+span — so bisecting 43.88 MB costs menu clicks instead of builds. `--scan`
+prints the whole table at once.
+
+One caveat is built into both sides: **regions past the end of the image prove
+nothing.** The host tool substitutes `0xFFFF` there because that is what an
+unwritten read returns by contract, but nothing wrote those words in the chip
+either and real SDRAM comes up holding whatever it holds. For daytona93 the
+image ends at word `0x15EFFFF`, so regions 0-20 are evidence and region 21 is
+not.

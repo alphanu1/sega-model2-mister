@@ -7,9 +7,15 @@
 ## State
 
 **The i960 is done as a CPU.** It runs Daytona's real boot code and its program
-counter stream is identical to MAME's for 803,355 instructions. `make test` is
-**19 suites green**; `make lint` is clean; `tools/i960-diff.sh` reproduces the
-differential result whenever MAME is on PATH.
+counter stream is identical to MAME's for 803,355 instructions. `make lint` is
+clean and `tools/i960-diff.sh` reproduces the differential result whenever MAME
+is on PATH.
+
+**`make test` is NOT green.** Every i960 and video suite passes; `test_m2_sdram`
+does not, on a pre-existing port-3 burst defect that predates the CPU
+integration and is not the hardware trap. Stated here rather than left to be
+rediscovered — a red suite that is *known* red still hides the next regression,
+so this is a debt, not a footnote.
 
 | Step | State |
 |---|---|
@@ -32,28 +38,104 @@ registers, 1 M10K, 7 DSP, **Fmax 26.4 MHz**. The interrupt controller cost 828
 ALM and 0.44 MHz of headroom (R23). The budget is i960 + renderer under ~25,000
 ALM, so **~17,200 ALM remain for the renderer** — wider than §5.2 assumed.
 
-## The one thing that is NOT done, and it is the next step
+**Whole core with the CPU in it: 17,339 ALM, and timing closes.** M10K is the
+binding resource, not ALM — ~107 blocks are recoverable (64 from the duplicated
+tile RAM, ~43 from ascal) and that recovery is a P2 prerequisite.
 
-**The hardware core has no CPU in it.** `i960_top` is not instantiated in
-`Model2.sv` — the tilemap on the DE10-Nano is fed canned MAME state through the
-ROM loader. Everything above is simulation.
+## Where it actually is: the CPU runs on hardware, and memory is wrong
 
-Wiring the CPU into `Model2.sv` is what turns the POC from "the board draws a
-frame we supplied" into "the board runs the game". `sim/i960/tb_i960_rom.cpp` is
-the specification for it: it already models the address decode, the interrupt
-registers and the V-blank injection that the hardware top level needs, and it is
-verified against MAME. **Port that decode, do not re-derive it.**
+**`i960_top` IS in `Model2.sv` now and the board executes Daytona's boot.** The
+overlay shows the CPU accepting instructions, reading the PRCB, writing tile RAM
+and getting *past* the sound-board poll. Then it traps, at `0x0022E914`.
 
-Three things it establishes that the hardware integration must honour:
+**And so does simulation.** Run to a real instruction budget rather than
+`tb_i960_rom.cpp`'s 200,000-instruction default:
 
-1. **daytona93 is `model2o`, not 2A-CRX.** `0x00220000-0x0023ffff` is a ROM
-   mirror of the program ROM's second half, and board RAM is 128 KB not 256.
-   The core will need both maps, selected per game (R25).
-2. **`main_data` must be mapped at `0x02000000` and again at `0x06000000`.** The
-   boot copies code out of it into RAM and jumps there.
-3. **V-blank is IRQ0**, gated by the enable register at `0x00e80004`, and
-   `0x00e80000` is `intreq &= data` on write — an ACK, not a store. Treating it
-   as a store leaves the request asserted and the handler re-enters forever.
+```
+executed 19573571 instructions over 77368693 cycles, 2205 distinct IPs
+final IP 00000000  PC=00000000  ICR=0f0e0d0c  interrupts taken 175
+TRAPPED on op 00 at IP 00000000
+178 vblanks asserted, intena=401 intreq=000
+unmapped reads: ffffffec x1, fffffff0 x1, fffffffc x108
+```
+
+175 interrupts serviced, 178 V-blanks, nineteen and a half million instructions
+— then a branch to zero, preceded by reads at a null base with small negative
+offsets. **A null pointer, dereferenced.**
+
+This is the single most useful fact in this handoff, and an earlier version of
+it was wrong in a way worth knowing about: the divergence between board and
+simulation that this section used to describe **did not exist**. It was a
+200,000-instruction default being read as a behaviour (R38). Ask what a test's
+budget is before reading its endpoint as a result.
+
+**So the trap is reproducible in simulation**, where MAME is an oracle, every
+signal is visible and a run costs minutes instead of a 25-minute build and a
+walk to the device. **That is where to chase it.**
+
+The sound stub is still not the cause — a defect both sides share cannot explain
+a difference between them — but the reasoning is now the other way round: not
+that hardware fails where simulation succeeds, but that **both fail the same
+way**.
+
+## The sweep, and how to bisect with it
+
+The overlay's port-4 sweep folds a region of SDRAM and shows the result. Its
+control region matched `tools/rom_csum.py` **exactly**, which is what makes the
+mismatching region believable rather than an instrument artefact (R38).
+
+**Region N is word `N*0x100000` — 2 MB — and it is an OSD option**, so probing a
+different part of the chip is a menu click, not a 25-minute build.
+
+On the host:
+
+```
+python3 tools/rom_csum.py "mra/Daytona USA (Deluxe 93).mra" /home/ben/roms/Model2 --scan
+```
+
+For daytona93 that prints:
+
+| rgn | expected | | rgn | expected | | rgn | expected |
+|---|---|---|---|---|---|---|---|
+| 0 | `25E723` | | 8 | `F578C0` | | 16 | `06D6CC` |
+| 1 | `054FB2` | | 9 | `C0E971` | | 17 | `D74A62` |
+| 2 | `FB65EC` | | 10 | `A8196E` | | 18 | `CDE292` |
+| 3 | `FA35F1` | | 11 | `82B1E2` | | 19 | `EF07A7` |
+| 4 | `79FA07` | | 12 | `A76A16` | | 20 | `167511` |
+| 5 | `B020CC` | | 13 | `1B298F` | | 21 | *past the end* |
+| 6 | `05D3FD` | | 14 | `FD6ADB` | | | |
+| 7 | `526F18` | | 15 | `06D6CC` | | | |
+
+Regions 15 and 16 fold identically because they **are** byte-identical in the
+image — a genuine mirror in the ROM layout, checked, not a tool bug.
+
+On the board, read two overlay rows together:
+
+- **row 13** — `DD00000N`. `DD` means the sweep FINISHED; `00` means it is still
+  running and row 12 is a partial total, not a result. `N` is the region, so row
+  12 can never be read against the wrong expectation.
+- **row 12** — the fold.
+
+Walk N up from 0. The first region where the board disagrees with the table is
+where the load stops arriving. **Regions past 20 are not evidence** — the host
+tool substitutes `0xFFFF` beyond the image end because that is what an unwritten
+read returns by contract, but nothing wrote those words in the chip either.
+
+### Flashing
+
+```
+make release
+```
+
+`make release` refuses a stale bitstream — it checks source mtimes against the
+`.rbf` and the Flow Status — because it shipped one twice.
+
+- `build/release/Model2.rbf` → the MiSTer
+- `build/release/_Arcade/Daytona USA (Deluxe 93).mra` → `_Arcade/`
+- `daytona93.zip` is already on the device
+
+`tools/deploy-mister.sh` does the copy and holds no credentials; it takes them
+from the environment (`SSH_ASKPASS`).
 
 ## The 2D path is verified end to end
 
@@ -74,7 +156,7 @@ copied across, and Model 2's palette is a different mechanism (R27). Every fill
 colour in every game was a few units out, and it had survived being looked at on
 hardware because the picture is otherwise right.
 
-## What this session changed
+## The video and interrupt session (history)
 
 - **The whole interrupt controller** — `execute_set_input`, the immediate slot,
   the queue into the interrupt table, `check_pending_irqs`, `take_interrupt` and
@@ -90,52 +172,10 @@ hardware because the picture is otherwise right.
   plus gamma, replacing Model 1's `pal5bit` and its inapplicable intensity bit
   (R27), and a whole-frame pixel comparison to hold it (R28).
 
-## For the morning: what is flashable, and what to expect
+## The 2D path, and what it needs to be flashed against
 
-**The build completed and is packaged in `build/release`.** Quartus 17.0, full
-compile, **0 errors**, timing closed with every clock positive — the core's own
-PLL outputs have 13.09 ns and 14.35 ns of slack, and the clock names carry the
-`emu|pll|pll_inst|...` hierarchy, which is what `sys_top.sdc` matches on.
-
-Whole core: **9,004 ALM (21%), 164 M10K (30%), 36 DSP (32%)** — and that is
-still without the i960 in it.
-
-**Two files must go to the device together:**
-
-1. the new `Model2.rbf`
-2. a **regenerated `m2tiles.zip`** — the image now carries a fourth section, the
-   colour translation table, at `0x094000`
-
-**Expected visible change: slightly different fill colours, nothing else.** The
-layout, text and structure are already pixel-exact; R27 moved values by a few
-units per channel. If the picture changes in any other way, the load path is
-wrong, not the palette.
-
-**It is safe to flash the .rbf without the new zip.** The table powers up holding
-the old `pal5bit` expansion, and the loader sanity checks the section — entry 0
-must map to 0 and entry 31 to 255 on all three channels — falling back to the old
-behaviour if it is absent or wrong. An old image renders exactly as it does now.
-The table is also STAGED and committed only if the whole thing passes, so a
-partial or corrupt section cannot half-replace it.
-
-**None of this was tested on hardware** — the device was off. The simulation
-result is what makes it safe to try, not a substitute for trying it.
-
-### Steps, in order
-
-```
-make release                       # gathers the .rbf and .mra into build/release
-```
-
-Copy to the device:
-
-- `build/release/Model2.rbf` → the MiSTer, replacing the current core
-- `build/release/_Arcade/Model2 2D Tilemap Test.mra` → `_Arcade/`
-- the regenerated `m2tiles.zip` → wherever the current one lives. One is already
-  built and waiting; ask for its path rather than rebuilding it, since it is
-  ROM-derived and deliberately outside this repository.
-
-To regenerate the image (it is ROM-derived and is not in this repository):
+The tilemap test image is ROM-derived and lives outside this repository. To
+regenerate it:
 
 ```
 M2_FRAME=2300 M2_OUT=<dir> mame daytona93 -autoboot_script tools/mame_m2_tiledump.lua
@@ -143,17 +183,12 @@ cat <dir>/tile.bin <dir>/palette.bin <dir>/char.bin <dir>/colorxlat.bin > m2tile
 zip m2tiles.zip m2tiles.bin
 ```
 
-If the colours look wrong rather than merely different, the fallback did not
-engage — read `dbg` word 5/6, the copy checksums, before changing anything.
-
-### Then: the integration that is actually left
-
-`i960_top` is still not in `Model2.sv`. That is the step that turns this from a
-board displaying a captured frame into a board running the game, and it is
-specified by `sim/i960/tb_i960_rom.cpp`, which models the address decode, the
-interrupt registers and the V-blank injection and is verified against MAME.
-It needs SDRAM **write** ports, which `m2_sdram` does not have — char RAM is
-512 KB and cannot live in M10K.
+The colour translation table at `0x094000` is the fourth section and an image
+built before R27 will not have it. The core sanity checks it — entry 0 must map
+to 0 and entry 31 to 255 on all three channels — and falls back to the old
+`pal5bit` expansion if it is absent or wrong, so an old image still renders
+exactly as it did. The table is staged and committed only if the whole section
+passes, so a corrupt one cannot half-replace it.
 
 ## Findings worth carrying, all of them about instruments
 

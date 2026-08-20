@@ -20,15 +20,35 @@
 # trip.
 #
 #   tools/rom_csum.py <mra> <zipdir> [start_word] [n_words]
+#   tools/rom_csum.py <mra> <zipdir> --region N      one 2 MB region, as the OSD
+#   tools/rom_csum.py <mra> <zipdir> --scan          every region, for bisecting
+#
+# --zip NAME.zip adds a zip to the search, repeatable. A MiSTer MRA names the
+# MERGED set it expects on the target ("daytona93.zip"), but a local MAME romset
+# is usually SPLIT, with the shared parts in the parent ("daytona.zip"). The MRA
+# is what the board loads and must not be edited to suit this tool, so the extra
+# zip is named here instead:
+#
+#   --zip daytona.zip
+#
+# --region N matches the core's "Sweep region (2MB)" OSD option exactly: word
+# N*0x100000 for 0x100000 words. Walk N on the board and here together; the
+# first N where they disagree is where the chip stops holding the image.
+#
+# PAST THE END OF THE IMAGE THIS MEANS NOTHING. Out there the fold below reads
+# 0xFFFF because that is what an unwritten read returns by contract -- but
+# nothing wrote those words in the chip either, and real SDRAM comes up holding
+# whatever it holds. --scan marks those regions rather than printing a number
+# that invites a comparison it cannot support.
 
 import sys, os, zipfile
 import xml.etree.ElementTree as ET
 
-def build_image(mra_path, zip_dir):
+def build_image(mra_path, zip_dir, extra=()):
     root = ET.parse(mra_path).getroot()
     out = bytearray()
     for rom in root.iter('rom'):
-        names = (rom.get('zip') or '').split('|')
+        names = (rom.get('zip') or '').split('|') + list(extra)
         zips = []
         for n in names:
             p = os.path.join(zip_dir, n.strip())
@@ -67,14 +87,42 @@ def fold(img, start_word, n_words):
         acc = ((acc << 1) | (acc >> 23)) & 0xffffff   # rotate, so order matters
     return acc
 
+RGN = 0x100000          # words per region -- 2 MB, and the core's OSD step
+
 if __name__ == '__main__':
     if len(sys.argv) < 3:
         raise SystemExit(__doc__)
     mra, zdir = sys.argv[1], sys.argv[2]
-    start = int(sys.argv[3], 0) if len(sys.argv) > 3 else 0
-    count = int(sys.argv[4], 0) if len(sys.argv) > 4 else 0x8000
-    img = build_image(mra, zdir)
+    argv, extra = sys.argv[3:], []
+    rest = []
+    i = 0
+    while i < len(argv):
+        if argv[i] == '--zip':
+            extra.append(argv[i+1]); i += 2
+        else:
+            rest.append(argv[i]); i += 1
+    img = build_image(mra, zdir, extra)
+    nwords = len(img) // 2
     print(f"  image      : 0x{len(img):X} bytes ({len(img)/1048576:.2f} MB)")
-    print(f"  last word  : 0x{len(img)//2 - 1:X}")
+    print(f"  last word  : 0x{nwords - 1:X}")
+
+    if rest and rest[0] == '--scan':
+        print(f"  {'rgn':>3}  {'first word':>10}  {'expected':>8}")
+        for n in range((nwords + RGN - 1) // RGN):
+            end = (n + 1) * RGN
+            tail = '' if end <= nwords else '   <- runs past the image, not evidence'
+            print(f"  {n:>3}  0x{n*RGN:08X}  {fold(img, n*RGN, RGN):06X}{tail}")
+        raise SystemExit(0)
+
+    if rest and rest[0] == '--region':
+        n = int(rest[1], 0)
+        start, count = n * RGN, RGN
+        if start + count > nwords:
+            print(f"  WARNING    : region {n} runs past the image; a mismatch here")
+            print(f"               proves nothing -- see the note in this file.")
+    else:
+        start = int(rest[0], 0) if len(rest) > 0 else 0
+        count = int(rest[1], 0) if len(rest) > 1 else 0x8000
+
     print(f"  fold over  : word 0x{start:X} .. 0x{start+count-1:X}")
     print(f"  EXPECTED   : {fold(img, start, count):06X}")

@@ -109,3 +109,6 @@ error.log
 debug.log
 *.tr
 build_id.v
+
+# Python bytecode, created whenever a tool here is imported rather than run
+__pycache__/

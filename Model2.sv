@@ -73,6 +73,12 @@ localparam CONF_STR = {
 	// is clocked on the INVERSE of clk_sdram and answers half a period away.
 	// Guessing this one 25-minute build at a time is the alternative.
 	"O[5:4],SDRAM phase,CL+1,CL+0,CL+2,CL+3;",
+	// WHICH 2 MB OF THE CHIP THE PORT-4 SWEEP FOLDS. Selectable because the
+	// alternative is a 25-minute build per probe, and locating a corruption in
+	// 43.88 MB takes more than one probe. Region N covers word N*0x100000 for
+	// 0x100000 words; tools/rom_csum.py --region N folds the same span of the
+	// image. Changing this restarts the sweep, so it costs a menu click.
+	"O[10:6],Sweep region (2MB),0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31;",
 	"-;",
 	"R[0],Reset and close OSD;",
 	"v,0;",
@@ -975,19 +981,34 @@ assign cpu_io_rdata =
 // LOADER, which is not the question. Port 4 was tied off there and is tied off
 // here, so it costs nothing to use.
 //
-// Two regions, swept in order and latched separately:
-//   region 0  word 0x0000000 +0x8000   the program ROM, known good -- a control
-//   region 1  word 0x15C0000 +0x8000   the far end, where the shortfall is
+// ONE region, and WHICH one is an OSD option. It began as two hardcoded spans
+// -- the program ROM as a control, and the far end where the shortfall is --
+// and those answered the question they were built for: the control matched
+// exactly, so the instrument is sound, and the far end did not, so the chip
+// genuinely does not hold the image. Neither says WHERE it stops matching, and
+// finding that with hardcoded spans is one 25-minute build per probe.
 //
-// tools/rom_csum.py folds the packed image the same way. Equal means the region
-// survived the trip; different means it did not, and no capture-phase tuning
-// will help.
+// Region N is word N*0x100000 for 0x100000 words -- 2 MB, so 22 regions cover
+// the 43.88 MB set. tools/rom_csum.py --region N folds the same span of the
+// image. Walk N until the two disagree; that boundary is the fault.
+//
+// ONLY REGIONS WHOLLY INSIDE THE IMAGE MEAN ANYTHING. Past the end the host
+// tool substitutes 0xFFFF, which is what an unwritten READ returns by contract
+// -- but nothing wrote those words in the chip either, and real SDRAM comes up
+// holding whatever it holds. A mismatch out there is not evidence.
 logic            sw_req;
 logic [SDR_AW:1] sw_addr;
-logic [23:0]     sw_acc, sw_lo, sw_hi;
-logic [15:0]     sw_burst;
+logic [23:0]     sw_acc, sw_val;
+logic [19:0]     sw_burst;
 logic  [1:0]     sw_state;
-logic            sw_region;
+logic  [4:0]     sw_sel;
+logic            sw_done;
+
+// status[] is written by the HPS and changes only when the user moves in the
+// OSD, so it is many orders of magnitude slower than clk_sdram and is read
+// directly -- the same treatment status[5:4] already gets on the controller's
+// capture phase.
+wire   [4:0]     sw_sel_i = status[10:6];
 
 function automatic logic [23:0] sw_fold(input logic [23:0] a, input logic [15:0] w);
   logic [23:0] t;
@@ -1000,13 +1021,29 @@ endfunction
 always_ff @(posedge clk_sdram or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
 		sw_req <= 1'b0; sw_addr <= '0; sw_acc <= 24'd0;
-		sw_lo <= 24'd0; sw_hi <= 24'd0; sw_burst <= 16'd0;
-		sw_state <= 2'd0; sw_region <= 1'b0;
+		sw_val <= 24'd0; sw_burst <= 20'd0;
+		sw_state <= 2'd0; sw_sel <= 5'd0; sw_done <= 1'b0;
 	end else begin
-		case (sw_state)
-			2'd0: if (rom_loaded) begin      // start region 0
-				sw_addr <= '0; sw_acc <= 24'd0; sw_burst <= 16'd0;
-				sw_region <= 1'b0; sw_req <= 1'b1; sw_state <= 2'd1;
+		// RESTART ON A NEW SELECTION -- but never out of state 1, which is the
+		// one state with a request outstanding on port 4. Dropping sw_req there
+		// does not cancel it; the controller still answers, and that ack would
+		// land in a sweep which had already zeroed its accumulator, folding one
+		// stale burst into the new region's total. A sweep is ~66 ms, so waiting
+		// for the in-flight burst to land costs nothing.
+		if (sw_sel != sw_sel_i && sw_state != 2'd1) begin
+			sw_sel   <= sw_sel_i;
+			sw_state <= 2'd0;
+			sw_req   <= 1'b0;
+			sw_done  <= 1'b0;
+		end else case (sw_state)
+			2'd0: if (rom_loaded) begin
+				sw_addr  <= SDR_AW'({sw_sel_i, 20'd0});
+				sw_sel   <= sw_sel_i;
+				sw_acc   <= 24'd0;
+				sw_burst <= 20'd0;
+				sw_done  <= 1'b0;
+				sw_req   <= 1'b1;
+				sw_state <= 2'd1;
 			end
 			2'd1: if (p_ack[4]) begin
 				sw_req <= 1'b0;
@@ -1016,29 +1053,19 @@ always_ff @(posedge clk_sdram or negedge mem_rst_n) begin
 				sw_state <= 2'd2;
 			end
 			2'd2: begin
-				// 0x8000 words at four per burst is 0x2000 bursts.
-				if (sw_burst == 16'h1FFF) begin
-					if (!sw_region) begin
-						sw_lo     <= sw_fold(sw_acc, 16'd0) ;  // latch, no more folding
-						sw_lo     <= sw_acc;
-						sw_region <= 1'b1;
-						sw_addr   <= SDR_AW'(32'h15C0000);
-						sw_acc    <= 24'd0;
-						sw_burst  <= 16'd0;
-						sw_req    <= 1'b1;
-						sw_state  <= 2'd1;
-					end else begin
-						sw_hi    <= sw_acc;
-						sw_state <= 2'd3;      // done, hold both values
-					end
+				// 0x100000 words at four per burst is 0x40000 bursts.
+				if (sw_burst == 20'h3FFFF) begin
+					sw_val   <= sw_acc;
+					sw_done  <= 1'b1;
+					sw_state <= 2'd3;
 				end else begin
 					sw_addr  <= sw_addr + SDR_AW'(4);
-					sw_burst <= sw_burst + 16'd1;
+					sw_burst <= sw_burst + 20'd1;
 					sw_req   <= 1'b1;
 					sw_state <= 2'd1;
 				end
 			end
-			default: ;                          // finished
+			default: ;                          // finished, hold sw_val
 		endcase
 	end
 end
@@ -1205,8 +1232,11 @@ m2_diag #(.NWORDS(14)) u_diag
 	// board showed program ROM rendered as tiles. What is needed now is whether
 	// the loader saw a game-sized image at all and whether the CPU is executing,
 	// and neither of those can be inferred from a checksum.
-	.words({ {8'd0, sw_hi},                             // 13 SWEEP far end,     want 9F84E2
-	         {8'd0, sw_lo},                             // 12 SWEEP program ROM,  want 633A8F
+	// Row 13 names the region so row 12 can never be read against the wrong
+	// expectation: DD in the top byte means the sweep FINISHED, 00 means it is
+	// still running and row 12 is a partial total, not a result.
+	.words({ {sw_done ? 8'hDD : 8'h00, 19'd0, sw_sel},  // 13 sweep region + done
+	         {8'd0, sw_val},                            // 12 SWEEP fold of that region
 	         cpu_dbg_ldout,                             // 11 last data off the port
 	         cpu_dbg_laddr,                             // 10 last address asked for
 	         cpu_dbg_palwr,                             // 9  CPU writes to the PALETTE
