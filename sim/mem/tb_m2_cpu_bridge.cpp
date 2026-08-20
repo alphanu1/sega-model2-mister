@@ -263,6 +263,59 @@ int main(int argc, char **argv) {
     expect("read  count exact", dut->dbg_cpu_reads  - r0, 64);
   }
 
+  std::printf("  [before boot walk] reads=%u last_addr=%08x last_dout=%08x\n",
+              dut->dbg_cpu_reads, dut->dbg_last_addr, dut->dbg_last_dout);
+
+  // ---- THE i960's BOOT WALK: req HELD, address changed ON THE ACK ----
+  //
+  // access() above drops bus_req after every ack, and that is not what the CPU
+  // does. Its boot master holds the request high for three reads and moves the
+  // address when the acknowledge arrives. Holding is the harder case and it is
+  // the one that shipped: the bridge sampled the address in the cycle it was
+  // answering, before the CPU had updated it, and every read came out one
+  // behind.
+  {
+    sdram[0x00000000u + 0] = 0x0000; sdram[0x00000000u + 1] = 0x0000;
+    sdram[0x00000000u + 2] = 0x00c0; sdram[0x00000000u + 3] = 0x0000;
+    sdram[0x00000000u + 6] = 0x0860; sdram[0x00000000u + 7] = 0x0000;
+    const uint32_t seq[3]  = { 0, 4, 12 };
+    const uint32_t want[3] = { 0x00000000u, 0x000000c0u, 0x00000860u };
+    int idx = 0;
+    // RISING EDGE. bus_ack is asserted for a whole CPU clock, which is eight of
+    // these ticks, and checking it per tick counts one acknowledge as eight.
+    // access() above hides this by breaking out on the first one; the boot walk
+    // does not, and it reported three reads completing on three consecutive
+    // ticks -- one real acknowledge, counted three times, which looked exactly
+    // like the bridge answering without going to memory.
+    bool ack_prev = false;
+    dut->bus_req = 1; dut->bus_we = 0; dut->bus_be = 0xf;
+    dut->bus_addr = seq[0];
+    for (int g = 0; g < 200000 && idx < 3; ++g) {
+      step();
+      const bool ack_now = dut->bus_ack;
+      const bool ack_rise = ack_now && !ack_prev;
+      ack_prev = ack_now;
+      if (ack_rise) {
+        std::printf("    boot read %d: asked %2u fetched %u got %08x accesses=%u  "
+                    "mstate=%02x (sd_ack=%d ack_mem=%d req_mem=%d st=%d)\n",
+                    idx, seq[idx], dut->dbg_last_addr, dut->bus_rdata, dut->dbg_cpu_reads,
+                    dut->dbg_mstate, (dut->dbg_mstate>>5)&1, (dut->dbg_mstate>>4)&1,
+                    (dut->dbg_mstate>>3)&1, dut->dbg_mstate&7);
+        std::printf("              at tick %llu\n", (unsigned long long)tk);
+        expect(idx == 0 ? "boot walk mem[0]" : idx == 1 ? "boot walk mem[4]"
+                                             : "boot walk mem[12]",
+               dut->bus_rdata, want[idx]);
+        ++idx;
+        // The address moves ON the ack, exactly as i960_top's T_BOOT does, and
+        // the request is NOT dropped.
+        if (idx < 3) dut->bus_addr = seq[idx];
+      }
+    }
+    if (idx < 3) { std::printf("  boot walk did not complete (%d of 3)\n", idx); ++fails; }
+    dut->bus_req = 0;
+    for (int k = 0; k < CPU_DIV * 4; ++k) step();
+  }
+
   std::printf("  probe6=%08x probe2=%08x (EEEEEEEE = never read)\n",
               dut->dbg_probe6, dut->dbg_probe2);
   std::printf("  %llu checks, %llu mismatches, %llu unmapped seen\n",

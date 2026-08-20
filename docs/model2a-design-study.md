@@ -2435,3 +2435,63 @@ this and reproduced the hardware symptom on its first run.
 0, and changing the OSD setting on hardware does not help. **That disagreement
 is unexplained**, and it means the simulation cannot be trusted to choose the
 capture depth. It is recorded rather than reasoned away.
+
+
+---
+
+**R34 — the i960 holds its request across a run of accesses and moves the address
+ON THE ACKNOWLEDGE, and the bridge sampled the address in the cycle it was
+answering.** Every read came out one behind.
+
+The overlay isolated it to the byte:
+
+```
+row 2 = 00000860   the readback's word 6
+row 8 = 00000860   the BRIDGE's word 6      -- its data path is fine
+row 9 = EEEEEEEE   the BRIDGE's word 2      -- never requested at all
+```
+
+**Reading the right place correctly and never asking for the other place** is a
+different fault from a bad read, and the two probes are what separated them.
+Everything else had already been eliminated: rows 2, 9 and 10 cleared the loader,
+the MRA layout, the memory map and the decoder, and swapping the CPU onto port 1
+cleared the arbiter.
+
+*The cause.* `i960_top`'s boot walk never drops `boot_req`:
+
+```systemverilog
+T_BOOT: if (boot_ack) begin
+  case (boot_step)
+    2'd0: begin sat_reg  <= bus_rdata; boot_addr <= 32'd4;  ... end
+    2'd1: begin prcb_reg <= bus_rdata; boot_addr <= 32'd12; ... end
+```
+
+The request is held high for all three reads and the address moves **on the
+acknowledge**, so in the cycle `bus_ack` is asserted `bus_addr` is still the
+address just serviced. The bridge started the next access there, sampled the
+stale address, and read `mem[0]` twice: `SAT` was right by luck, `PRCB` came back
+zero, and the boot took a zero IP.
+
+*The fix is an explicit four-phase handshake* — req-up, ack-up, req-down,
+**ack-down** — because "a request is present" is true continuously and cannot
+separate one access from the next. Only the acknowledge can. Condition-by-
+condition patches to the old form kept racing; the state machine does not.
+
+*Two testbench faults found on the way, and the second is the more embarrassing:*
+
+- **The testbench never held the request.** `access()` drops `bus_req` after every
+  acknowledge, so the pattern that shipped had no coverage. The i960's actual
+  boot walk is now a test, and reinstating the old handshake fails it in exactly
+  the hardware shape: read one fetches word 0 again, read two fetches word 2,
+  and word 6 is never requested.
+- **`bus_ack` was sampled per TICK rather than per edge.** It is asserted for a
+  whole CPU clock, which is eight simulation ticks, so one acknowledge counted as
+  eight and three reads appeared to complete on three consecutive ticks with no
+  memory traffic at all. That looked exactly like the bridge answering from
+  nowhere and sent this investigation after a deadlock that did not exist.
+  `access()` hid it by breaking out on the first acknowledge.
+
+**Five models of this system have now been gentler than the thing they model**
+(R32, R33 and these two). Every one was written by the same hand as the code it
+tests. That is the single most expensive pattern in this project's history and it
+is worth more than any individual fix recorded here.

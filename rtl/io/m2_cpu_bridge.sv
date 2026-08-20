@@ -124,7 +124,11 @@ module m2_cpu_bridge #(
   // EEEEEEEE means the address was never read at all, which is a different
   // fault from reading it and getting zero.
   output logic [31:0] dbg_probe6,
-  output logic [31:0] dbg_probe2
+  output logic [31:0] dbg_probe2,
+  // The memory side's own view: its state, and the three signals the
+  // handshake turns on. Inferring these from the CPU side is what has been
+  // failing.
+  output logic  [7:0] dbg_mstate
 );
 
   // ------------------------------------------------------------ CDC: request
@@ -135,9 +139,10 @@ module m2_cpu_bridge #(
   // the standard condition for not synchronising a data bus, and it is the
   // reason this is a handshake rather than a FIFO.
   logic        req_cpu;
+  typedef enum logic [1:0] { C_IDLE, C_WAIT, C_CLR } cph_e;
+  cph_e cph;
   logic  [1:0] req_sync, ack_sync;
   logic        req_mem, ack_mem;
-  logic        busy;
 
   logic        r_we;
   logic [31:0] r_addr, r_wdata;
@@ -146,27 +151,46 @@ module m2_cpu_bridge #(
 
   always_ff @(posedge clk_cpu or negedge rst_n_cpu) begin
     if (!rst_n_cpu) begin
-      req_cpu <= 1'b0; busy <= 1'b0; bus_ack <= 1'b0;
+      req_cpu <= 1'b0; bus_ack <= 1'b0; cph <= C_IDLE;
       ack_sync <= 2'd0;
       r_we <= 1'b0; r_addr <= 32'd0; r_wdata <= 32'd0; r_be <= 4'd0;
     end else begin
       ack_sync <= {ack_sync[0], ack_mem};
       bus_ack  <= 1'b0;
-      if (!busy && bus_req) begin
-        r_we    <= bus_we;
-        r_addr  <= bus_addr;
-        r_wdata <= bus_wdata;
-        r_be    <= bus_be;
-        req_cpu <= 1'b1;
-        busy    <= 1'b1;
-      end else if (busy && ack_sync[1]) begin
-        // The far side has answered. Drop the request and hold ack for one
-        // cycle, which is what the i960's bus expects.
-        req_cpu   <= 1'b0;
-        bus_rdata <= r_rdata;
-        bus_ack   <= 1'b1;
-        busy      <= 1'b0;
-      end
+      // AN EXPLICIT FOUR-PHASE HANDSHAKE, because the condition-by-condition
+      // version kept racing. The phases are req-up, ack-up, req-down, ACK-DOWN,
+      // and the last one is the one that is easy to leave out: without it the
+      // next access starts while the previous acknowledge is still working its
+      // way back through the synchroniser and completes IMMEDIATELY on stale
+      // data, having never reached memory at all.
+      //
+      // The i960 makes this unforgiving. It HOLDS bus_req high across a run of
+      // accesses and moves bus_addr ON THE ACK -- its boot walk reads mem[0],
+      // mem[4] and mem[12] without ever dropping the request -- so "a new
+      // request is present" is true continuously and cannot be used to separate
+      // one access from the next. Only the acknowledge can.
+      //
+      // On hardware this read word 0 three times: SAT was right by luck, PRCB
+      // came back 0 and the boot took a zero IP.
+      case (cph)
+        C_IDLE: if (bus_req && !ack_sync[1]) begin
+          r_we    <= bus_we;
+          r_addr  <= bus_addr;
+          r_wdata <= bus_wdata;
+          r_be    <= bus_be;
+          req_cpu <= 1'b1;
+          cph     <= C_WAIT;
+        end
+        C_WAIT: if (ack_sync[1]) begin
+          req_cpu   <= 1'b0;
+          bus_rdata <= r_rdata;
+          bus_ack   <= 1'b1;       // one cycle, which is what the i960 expects
+          cph       <= C_CLR;
+        end
+
+        // The fourth phase. Nothing starts until the acknowledge has gone away.
+        default: if (!ack_sync[1]) cph <= C_IDLE;
+      endcase
     end
   end
 
@@ -428,6 +452,8 @@ module m2_cpu_bridge #(
       endcase
     end
   end
+
+  assign dbg_mstate = {2'd0, sd_ack, ack_mem, req_mem, st[2:0]};
 
   assign io_addr  = r_addr;
   assign io_wdata = r_wdata;
