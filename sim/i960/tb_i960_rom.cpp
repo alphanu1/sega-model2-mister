@@ -142,6 +142,7 @@ static void drive_irq() {
 // form refers to is how that turns into an afternoon.
 static std::map<uint32_t, uint64_t> recent_rd;
 static bool rd_log = false;
+static uint32_t watch_lo = 1, watch_hi = 0;   // empty range by default
 
 static uint32_t mem_read(uint32_t a) {
   a &= ~3u;
@@ -306,6 +307,16 @@ int main(int argc, char **argv) {
     if (!std::strcmp (argv[i], "+dpram0"))   dpram0    = true;
     if (!std::strncmp(argv[i], "+dpram=", 7)) dpramfile = argv[i]+7;
     if (!std::strcmp (argv[i], "+rdlog"))     rd_log    = true;
+    // +watch=LO,HI prints IP and the fetched instruction word for every
+    // instruction retired in that range. The differential compares PROGRAM
+    // COUNTERS; when it says we branched where MAME fell through, the next
+    // question is whether we were even looking at the same instruction, and
+    // no PC stream can answer that.
+    if (!std::strncmp(argv[i], "+watch=", 7)) {
+      watch_lo = uint32_t(std::strtoul(argv[i]+7, nullptr, 16));
+      const char *c = std::strchr(argv[i], ',');
+      watch_hi = c ? uint32_t(std::strtoul(c+1, nullptr, 16)) : watch_lo;
+    }
     if (!std::strncmp(argv[i], "+dpfill=", 8)) dpram_fill = uint32_t(std::strtoul(argv[i]+8, nullptr, 16));
   }
 
@@ -362,9 +373,16 @@ int main(int argc, char **argv) {
   md_loaded += load32_word(main_data, "mpr-16527.9",  0x400002, 0x200000);
   md_loaded += load32_word(main_data, "epr-16534a.6", 0x800000, 0x100000);
   md_loaded += load32_word(main_data, "epr-16535a.7", 0x800002, 0x100000);
-  // ROM_COPY( "main_data", 0x900000, ... ) -- the same 1 MB appears at four
+  // ROM_COPY( "main_data", 0x900000, ... ) -- the same 1 MB appears at SIX
   // more addresses. MAME does this in the ROM definition, so the CPU sees it.
-  for (uint32_t d : {0xa00000u, 0xb00000u, 0xc00000u})
+  //
+  // SIX, not three, and not the four this comment used to claim. ROM_START(
+  // daytona93 ) lists 0xa00000 through 0xf00000; the code copied three and the
+  // comment said four, so 0xd00000-0xffffff read as zero here and as real data
+  // in MAME. A zero read from a mirror is a null pointer a few instructions
+  // later, which is exactly how it presented.
+  for (uint32_t d : {0xa00000u, 0xb00000u, 0xc00000u,
+                     0xd00000u, 0xe00000u, 0xf00000u})
     std::memcpy(&main_data[d], &main_data[0x900000], 0x100000);
   std::printf("  main_data: %d of 6 files loaded\n", md_loaded);
 
@@ -386,6 +404,7 @@ int main(int argc, char **argv) {
   uint64_t insns = 0, stall = 0;
   uint32_t last_ip = 0xffffffffu;
   std::map<uint32_t, uint64_t> ip_hits;
+  int watch_n = 0;
 
   while (insns < max_insn) {
     const uint32_t acc0 = dut->dbg_acc_cnt;
@@ -398,6 +417,10 @@ int main(int argc, char **argv) {
     const uint32_t ip = dut->dbg_ip;
     if (ip != last_ip) { ++ip_hits[ip]; last_ip = ip; }
     if (tf) std::fprintf(tf, "%08x\n", ip);
+    if (ip >= watch_lo && ip <= watch_hi && watch_n < 200) {
+      std::printf("  watch %08x  insn=%08x\n", ip, dut->dbg_insn);
+      ++watch_n;
+    }
     if (trace && insns < 64) std::printf("  %6llu  ip=%08x insn=%08x\n",
                                          (unsigned long long)insns, ip, dut->dbg_insn);
     ++insns;
