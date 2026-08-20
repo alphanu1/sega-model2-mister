@@ -1,6 +1,6 @@
 # Handoff
 
-**Updated:** 2026-08-20, after the I/O board session.
+**Updated:** 2026-08-20, after the I/O board session. `make test` is green.
 
 ---
 
@@ -11,10 +11,20 @@ counter stream is identical to MAME's for 803,355 instructions. `make lint` is
 clean and `tools/i960-diff.sh` reproduces the differential result whenever MAME
 is on PATH.
 
-**`make test` is NOT green.** Every i960 and video suite passes, and
-`test_fx68k` and `test_m2_ioboard` are new and green; `test_m2_sdram` does not
-pass, on a pre-existing port-3 burst defect that predates the CPU integration
-and is not the hardware fault. Stated here rather than left to be
+**`make test` IS green**, for the first time in several sessions. `test_m2_sdram`
+had been red throughout and was carried as a debt against the controller; it was
+the harness. A read overlapping a write to the same address may legitimately
+return either value, and the shadow model updated at write issue time so it
+expected only the later one. Diagnosed in the Kaneko core against pristine Model
+2 sources — same addresses, same values. Study R42.
+
+The raced-read count is REPORTED, not absorbed: a run showing zero would mean
+the test had stopped covering the case it exists for.
+
+```
+reads accepted as raced (returned the legal pre-write value): 2
+m2_sdram: checks=123927 fails=0 violations=0
+``` Stated here rather than left to be
 rediscovered — a red suite that is *known* red still hides the next regression,
 so this is a debt, not a footnote.
 
@@ -95,15 +105,49 @@ Four things must all be right, and each was wrong in turn:
    does not. That is why row 14 was perfect on every build while the 128-byte
    copy arrived corrupted.
 
-(4) is the most recent fix and is **not yet confirmed on hardware.**
+All four are now confirmed on hardware, and none of them was the last link —
+see below.
 
-### If row 8 still reads 4,097
+### What has been eliminated, and what has not
 
-Do not guess again. The next instrument is a hardware-visible count of reads in
-`0x01c00200-0x01c002fe` and of writes to `0x01d0xxxx`, so the overlay says
-whether the copy is running and whether it is landing. Three of the four fixes
-above were found by reading MAME's disassembly and MAME's machine config, not by
-building.
+| suspect | verdict |
+|---|---|
+| the I/O board answers the handshake | **cleared** — row 14 `1A400000`: awake, status `40`, flag cleared |
+| the i960 reads the right values | **cleared** — row 17 `4000`, row 18 `01C00042`, row 19 `00400000` |
+| the bridge delivers them intact | **cleared** — `test_m2_cpu_bridge`, 92 checks |
+| backup SRAM exists, powers up `0xFF` | built, 16 M10K |
+| peripherals in the I/O clock domain | fixed — `clk_sdram`, not `clk_i960` |
+
+**What is left is the composition.** `i960_top` through `m2_cpu_bridge` into
+`m2_ioboard`, running the real code, is the only untested link and the only
+place a fault can live that hardware shows and simulation does not.
+`tb_i960_rom.cpp` drives `i960_top` DIRECTLY — the bridge has never been in the
+loop — which is exactly why the ROM differential runs clean while the board does
+not.
+
+**Build that harness next.** It would have caught the last four fixes before
+they cost hardware builds, and it turns a 25-minute build-and-squint loop into a
+minutes-long one.
+
+Two gaps in the bridge suite were found and closed on the way, and both would
+have hidden this: it modelled I/O as **combinational** when both peripherals are
+registered, and every I/O access in it was **full-width** when the failing
+access is a single byte at lane 2.
+
+### Two process failures worth not repeating
+
+**The counters came seventh, not fourth.** Six hardware builds went on
+hypotheses reasoned from source rather than measured. Each fixed something
+genuinely broken — the I/O board, the block direction, backup SRAM, the clock
+domain — and none was the last link, because row 8 reads 4,097 for all of them.
+The overlay counters that narrowed it in a single reading should have been built
+after the second failed hypothesis.
+
+**A build watcher matched by process name.** `pgrep -x quartus_map` matches any
+Quartus on the machine; it picked up an unrelated build in another project and
+reported "still building" for forty minutes after this one had finished. Match
+the project name. An earlier wait-loop in the same session matched its own
+command line and never terminated — same shape, twice in one day.
 
 ## The SDRAM is verified end to end — and the fault was in the reference
 
