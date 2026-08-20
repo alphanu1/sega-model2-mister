@@ -143,8 +143,33 @@ static void drive_irq() {
 static std::map<uint32_t, uint64_t> recent_rd;
 static bool rd_log = false;
 static uint32_t watch_lo = 1, watch_hi = 0;   // empty range by default
+// +rdwatch=LO,HI logs every READ in an address range with the IP that issued
+// it and the value returned. +watch is keyed on the IP and answers "were we
+// looking at the same instruction"; this is keyed on the ADDRESS and answers
+// "did that instruction get the same data", which is the half a PC comparison
+// structurally cannot see.
+static uint32_t rdw_lo = 1, rdw_hi = 0;
+static int      rdw_n  = 0;
+// A PER-FRAME RECORDING OF THE SOUND WINDOW, indexed by our own V-blank count.
+// tools/mame_m2_sound_capture.lua writes it: frame N at offset N*SNDCAP_LEN.
+//
+// This is not a model of the sound board and cannot become one. It is an
+// ORACLE, in the same sense the PC differential is: it answers "if the sound
+// window held what MAME's held at this point in time, does the rest of the
+// machine agree with MAME?" A yes means every remaining defect is in the sound
+// board. A no means there is a second one, and finding that out costs an
+// afternoon rather than the days a real 68000 will take.
+//
+// Frames are the right axis and instruction counts are not. Our i960 retires
+// ~110,000 instructions per frame against MAME's ~307,000, so the two are not
+// comparable by instruction; both reach 178 V-blanks over the same 3.1 seconds
+// because both are driven by the same 57.5 Hz refresh, and R37's handshake
+// moves on frames -- 1, 7, 8, 10, 21, 175.
+static std::vector<uint8_t> sndcap;
+static const uint32_t SNDCAP_BASE = 0x01c00000u;
+static uint32_t sndcap_len = 0x1000;
 
-static uint32_t mem_read(uint32_t a) {
+static uint32_t mem_read_inner(uint32_t a) {
   a &= ~3u;
   if (rd_log) ++recent_rd[a];
   // fifo_control_r: MAME returns 1 when the coprocessor's output FIFO is EMPTY.
@@ -186,6 +211,16 @@ static uint32_t mem_read(uint32_t a) {
   // It is a RECORDING, not a model: it cannot answer a command the capture did
   // not contain, and anything reached through it is evidence about our CPU and
   // renderer, not about the sound board.
+  if (!sndcap.empty() && a >= SNDCAP_BASE && a < SNDCAP_BASE + sndcap_len) {
+    const uint64_t nf = sndcap.size() / sndcap_len;
+    // Past the end of the recording, hold the last frame. The capture is
+    // finite and the run is not; holding is wrong, but it is wrong in a way
+    // that shows up as a divergence rather than as zeros, which do not.
+    const uint64_t fr = (vblanks < nf) ? vblanks : (nf - 1);
+    const uint8_t *p = &sndcap[size_t(fr) * sndcap_len + (a - SNDCAP_BASE)];
+    return uint32_t(p[0]) | (uint32_t(p[1]) << 8) |
+           (uint32_t(p[2]) << 16) | (uint32_t(p[3]) << 24);
+  }
   if (!dpram.empty() && a >= 0x01c00000u && a < 0x01c01000u) {
     const uint32_t o = a - 0x01c00000u;
     if (o + 3 < dpram.size())
@@ -238,6 +273,16 @@ static uint32_t mem_read(uint32_t a) {
     if (!unmapped_rd[a]++) unmapped_rd_ip[a] = dut ? dut->dbg_ip : 0;
   }
   return 0;
+}
+
+static uint32_t mem_read(uint32_t a) {
+  const uint32_t v = mem_read_inner(a);
+  if (a >= rdw_lo && a <= rdw_hi && rdw_n < 60) {
+    std::printf("  rd %08x -> %08x   from IP %08x\n", a & ~3u, v,
+                dut ? dut->dbg_ip : 0);
+    ++rdw_n;
+  }
+  return v;
 }
 
 static void mem_write(uint32_t a, uint32_t v, uint8_t be) {
@@ -299,6 +344,7 @@ int main(int argc, char **argv) {
   const char *tracefile = nullptr;
   const char *dumpdir = nullptr;
   const char *dpramfile = nullptr;
+  const char *sndcapfile = nullptr;
   for (int i = 1; i < argc; i++) {
     if (!std::strncmp(argv[i], "+insn=", 6)) max_insn = std::strtoull(argv[i]+6, nullptr, 10);
     if (!std::strcmp (argv[i], "+trace"))    trace = true;
@@ -306,6 +352,12 @@ int main(int argc, char **argv) {
     if (!std::strncmp(argv[i], "+dump=", 6)) dumpdir   = argv[i]+6;
     if (!std::strcmp (argv[i], "+dpram0"))   dpram0    = true;
     if (!std::strncmp(argv[i], "+dpram=", 7)) dpramfile = argv[i]+7;
+    if (!std::strncmp(argv[i], "+sndcap=", 8)) sndcapfile = argv[i]+8;
+    if (!std::strncmp(argv[i], "+rdwatch=", 9)) {
+      rdw_lo = uint32_t(std::strtoul(argv[i]+9, nullptr, 16));
+      const char *c = std::strchr(argv[i]+9, ',');
+      rdw_hi = c ? uint32_t(std::strtoul(c+1, nullptr, 16)) : rdw_lo;
+    }
     if (!std::strcmp (argv[i], "+rdlog"))     rd_log    = true;
     // +watch=LO,HI prints IP and the fetched instruction word for every
     // instruction retired in that range. The differential compares PROGRAM
@@ -386,6 +438,13 @@ int main(int argc, char **argv) {
     std::memcpy(&main_data[d], &main_data[0x900000], 0x100000);
   std::printf("  main_data: %d of 6 files loaded\n", md_loaded);
 
+  if (sndcapfile) {
+    if (load_file(sndcapfile, sndcap) && sndcap.size() >= sndcap_len)
+      std::printf("  sound window recording: %zu frames of %u bytes from %s\n",
+                  sndcap.size() / sndcap_len, sndcap_len, sndcapfile);
+    else { std::printf("  cannot use %s as a sound recording\n", sndcapfile);
+           sndcap.clear(); }
+  }
   if (dpramfile && load_file(dpramfile, dpram))
     std::printf("  canned sound-board DPRAM: %zu bytes from %s\n", dpram.size(), dpramfile);
 

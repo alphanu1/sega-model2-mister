@@ -77,7 +77,43 @@ distributable under GPL-3 and our own files keep their or-later option.
 - 40 MHz against 11.2896 MHz is ample. Driven by `enPhi1`/`enPhi2` clock
   enables, not a raw clock.
 
-**Open, and it is not the licence: does it simulate under Verilator?** Rule 8
+**Does it simulate under Verilator? YES, with a two-word change.** This was the
+open question here and it is now answered.
+
+Verilator 5.050 rejects it as shipped:
+
+```
+%Error-BLKANDNBLK: fx68k.sv:293: Unsupported: Blocking and non-blocking
+assignments to same non-packed variable: 'fx68k.Nanod'
+```
+
+`s_nanod` and `s_irdecod` are unpacked structs written from both an
+`always_comb` and an `always_ff`. **Changed here:** both are declared
+`typedef struct packed`. Every member is already `logic`, so the layout is
+defined and the semantics are unchanged — Verilator supports mixed assignment
+to a packed variable, and Quartus accepts either form.
+
+It then elaborates, compiles and runs. Required flags:
+
+```
+-Wno-UNOPTFLAT -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC --no-assert +define+FX68K_TEST
+```
+
+- `UNOPTFLAT` — `Nanod`/`Irdecod` are genuinely circular combinationally.
+  Verilator iterates them, which costs simulation speed and is not a defect.
+- `--no-assert` — `fx68kAlu.sv:313` is a `unique case` that legitimately
+  matches nothing while the ALU is idle. Left on, it `$stop`s during reset.
+- `FX68K_TEST` — guards `fx68kTop`, the clock-divider wrapper. Only needed to
+  drive the core standalone; the real integration will supply `enPhi1`/`enPhi2`
+  itself.
+
+**Still open: it has not been made to BOOT.** A throwaway harness gets it
+built and running but never sees it fetch a reset vector — `ASn` falls once and
+`oRESETn` never moves. That is as likely to be the harness as the core and is
+not evidence against fx68k; a proper bus model is part of the sound-board work,
+not a prerequisite to it.
+
+**Superseded note.** Rule 8
 and every verification practice here assume a block can be exercised in
 simulation before it reaches the fitter. This is the criterion that decided tv80
 over T80 for the Model 1 I/O board. Fully synchronous SystemVerilog is a good
