@@ -2974,3 +2974,60 @@ simulation at all. **The theory was right and the test that seemed to refute it
 was measuring something else.** Recorded because the wrong conclusion was
 allowed to stand next to the right fix for several sessions, and a reader of R33
 alone would have drawn the wrong lesson from it.
+
+**R43 — the arbiter rotates the mask once, and what raising the SDRAM clock
+will cost.** `pll.v` records the 40 MHz SDRAM as "DELIBERATELY AND TEMPORARILY".
+The Kaneko16 core took the same controller to 96 MHz, and its findings say what
+that will actually involve here.
+
+*The arbiter was the whole of it, and not for the reason it looked.* The grant
+loop indexed with `(rr_next + j) % NP`. That is free while `NP` is a power of
+two — the synthesiser drops the high bits — and **a real divider once it is
+not**. Their `NP` went from 8 to 9 when a Z80 fetch port was added; ours has
+been **5 since it was written**, so it was never free.
+
+```
+                       before        after
+clk_sdram 96 MHz   -3.023 ns   +0.502 ns
+```
+
+Their first reading was that the two-pass arbiter wanted pipelining — an
+afternoon of surgery on the most delicate module in the design, to fix something
+that was one operator.
+
+Compare-and-subtract is not the answer either: it leaves `NP` adders in a
+priority chain, which closed at +0.615 ns and went to **-0.009 ns** as soon as
+four debug counters were added. Both forms are the same mistake — rotating once
+per candidate when it only has to happen once. Rotate the pending mask right by
+`rr_next`, take the lowest set bit, rotate the index back: one barrel shift, one
+priority encode, one adder.
+
+Applied here (`b5b2019`'s technique, our single-tier arithmetic). `m2_sdram`'s
+123,927 checks pass **unchanged to the number**, with the same cycle count and
+the same transaction count, because the behaviour is identical.
+
+*What else raising the clock will break.* Their `f36feab`: the ROM loader was
+left in the fast domain, the build **closed timing at +0.502 ns, and every game
+was broken at once**. Its inputs all come from `hps_io` on the slow clock, so it
+became an unsynchronised crossing; and it drove the slow side of the domain
+adapter while clocked fast, so `ACK_HOLD`'s two-cycle acknowledge — exactly one
+edge for a slow requester — was two edges for it, and every ROM write counted
+twice.
+
+**We have the same wiring and it is currently correct by coincidence.**
+`m2_rom_loader` and `hps_io` are both on `clk_sdram`, deliberately and with a
+comment explaining why. The moment `clk_sdram` stops being the system clock,
+that comment describes a bug. A corrupt ROM image presents as everything broken
+at once with nothing pointing at the memory clock.
+
+*And the guard.* `make release` now refuses a build with negative setup slack.
+"Flow Status: Successful" does not mean timing closed — Quartus reports success
+and lists the failing paths in the STA report. Their guard caught a 9 ps miss in
+a build that looked identical to the one before it. Verified here by running the
+extraction against the current report rather than assuming: no negative rows,
+worst case **0.183 ns**.
+
+That 0.183 ns is on `pll_hdmi` at 148.5 MHz — framework logic, not ours, and the
+same path their `SEED 7` note is about. We are on `SEED 1`. A marginal path
+there is placement luck rather than a design fault, and it is worth pinning to a
+seed that closes it once there is a build to confirm one.

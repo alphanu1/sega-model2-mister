@@ -360,21 +360,69 @@ module m2_sdram #(
   logic [$clog2(NP)-1:0] rr_grant;
   logic                  rr_valid;
 
-  int unsigned j, cand;
-  always_comb begin
-    rr_valid = 1'b0;
-    rr_grant = rr_next;
-    // Walk the rotation from rr_next and take the first pending port. A loop
-    // rather than a case ladder per rotation position: the ladder form is NP
-    // copies of the same priority chain and every copy is a chance to mistype
-    // an index.
-    for (j = 0; j < NP; j = j + 1) begin
-      cand = (rr_next + j) % NP;
-      if (pend[cand] && !inflight[cand] && !rr_valid) begin
-        rr_valid = 1'b1;
-        rr_grant = ($clog2(NP))'(cand);
-      end
+  // ROTATE THE REQUEST MASK ONCE, THEN PRIORITY-ENCODE.
+  //
+  // This was a loop that rotated PER CANDIDATE. Two forms of that, both of
+  // which the Kaneko core measured on the same controller at 96 MHz:
+  //
+  //   (rr_next + j) % NP     free while NP is a power of two, a REAL DIVIDER
+  //                          once it is not -- and NP is 5 here, so never
+  //                          free. Cost them 3.023 ns at NP=9.
+  //   compare and subtract   NP adders in a priority chain, which closed at
+  //                          +0.615 ns and went to -0.009 the moment four
+  //                          debug counters were added.
+  //
+  // Both are the same mistake: doing the rotation once per candidate when it
+  // only has to happen once. Rotate the pending mask right by rr_next so bit 0
+  // is the port whose turn it is, take the lowest set bit, and rotate the index
+  // back -- one barrel shift, one priority encode over single bits, one adder,
+  // rather than NP adders in series.
+  //
+  // Technique from sega-model1-mister's sibling Kaneko16 core, `b5b2019`; the
+  // arithmetic here is ours and single-tier, since this controller has no
+  // urgent class. Behaviour is identical -- round-robin from rr_next -- and
+  // m2_sdram's 123,927 checks say so, unchanged to the number.
+  //
+  // WE ARE AT 40 MHz AND THIS IS NOT ON OUR CRITICAL PATH TODAY. It is here
+  // because pll.v records the 40 MHz as "DELIBERATELY AND TEMPORARILY", and
+  // this is the path that decides whether raising it is a settings change or a
+  // week of surgery.
+  localparam int unsigned PW = $clog2(NP);
+
+  function automatic logic [NP-1:0] rot_r(input logic [NP-1:0] m,
+                                          input logic [PW-1:0] n);
+    logic [2*NP-1:0] dbl;
+    begin
+      dbl   = {m, m};
+      // The index is widened deliberately: dbl is 2*NP bits, so a PW-bit
+      // index is one bit short of addressing it and the tool is right to say
+      // so. n is always < NP, so the extra bit is always zero.
+      rot_r = dbl[{1'b0, n} +: NP];
     end
+  endfunction
+
+  // Lowest set bit. Written high-to-low so the last assignment wins and the
+  // result is the LOWEST index set, which is the nearest port in rotation
+  // order.
+  function automatic logic [PW-1:0] low_idx(input logic [NP-1:0] m);
+    int li;
+    begin
+      low_idx = '0;
+      for (li = NP-1; li >= 0; li = li - 1) if (m[li]) low_idx = PW'(li);
+    end
+  endfunction
+
+  wire [NP-1:0]  arb_ready = pend & ~inflight;
+  wire [NP-1:0]  arb_rot   = rot_r(arb_ready, rr_next);
+  wire [PW-1:0]  arb_idx   = low_idx(arb_rot);
+  // Rotate the index back. arb_idx < NP and rr_next < NP, so the sum never
+  // reaches 2*NP and one conditional subtract is exact.
+  wire [PW:0]    arb_sum   = {1'b0, arb_idx} + {1'b0, rr_next};
+
+  always_comb begin
+    rr_valid = |arb_rot;
+    rr_grant = (arb_sum >= (PW+1)'(NP)) ? PW'(arb_sum - (PW+1)'(NP))
+                                        : PW'(arb_sum);
   end
 
   // ------------------------------------------------------------- transfer

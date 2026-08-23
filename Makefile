@@ -646,6 +646,28 @@ release: check_mra
 	 fi
 	@grep -q 'Flow Status.*Successful' output_files/Model2.flow.rpt 2>/dev/null || { \
 	  echo "last Quartus flow did not report Successful -- refusing to release"; exit 1; }
+	@# REFUSE NEGATIVE SLACK. "Flow Status: Successful" does not mean timing
+	@# closed -- Quartus reports success and lists the failing paths in the STA
+	@# report, and a core that misses by picosecond margins works until it does
+	@# not, on someone else's board or in July.
+	@#
+	@# Taken from the Kaneko16 core, where exactly this guard caught a build that
+	@# had closed at +0.615 ns and went to -0.009 ns when four debug counters
+	@# were added: a nine-picosecond miss, in a build that otherwise looked
+	@# identical to the one before it.
+	@#
+	@# It reads the Setup Summary, not the whole report, because the whole report
+	@# also contains hold and recovery tables whose formatting differs.
+	@neg=$$(grep -A20 '; Setup Summary' output_files/Model2.sta.rpt 2>/dev/null \
+	        | grep -E '^; [^;]+; +-[0-9]' | sed 's/;/ /g' | awk '{print $$1, $$2}'); \
+	 if [ -n "$$neg" ]; then \
+	   echo "TIMING NOT CLOSED -- refusing to release. Negative setup slack on:"; \
+	   echo "$$neg" | sed 's/^/    /'; exit 1; \
+	 fi
+	@ws=$$(grep -A20 '; Setup Summary' output_files/Model2.sta.rpt 2>/dev/null \
+	       | grep -oE '; +-?[0-9]+\.[0-9]+ +;' | tr -d '; ' | sort -g | head -1); \
+	 echo "  timing closed, worst-case setup slack $${ws:-unknown} ns")
+
 	@rm -rf $(RELEASE)
 	@mkdir -p $(RELEASE)/_Arcade/cores
 	@cp output_files/Model2.rbf $(RELEASE)/Model2.rbf
