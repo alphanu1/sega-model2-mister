@@ -174,7 +174,7 @@ synth_i960_ldst:
 # --------------------------------------------------------------------- tests
 
 .PHONY: test test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram test_fx68k test_m2_ioboard
-test: test_fx68k test_m2_ioboard test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
+test: test_fx68k test_m2_ioboard test_m2_sdram_x2 test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
 
 test_i960_dec: obj_i960_dec/Vi960_dec
 	@echo "== test i960_dec"
@@ -408,6 +408,30 @@ test_i960_rom: obj_i960_rom/Vi960_rom
 obj_i960_rom/Vi960_rom: $(TOP_RTL) $(TB)/tb_i960_rom.cpp
 	$(VBUILD) --top-module i960_top -CFLAGS "-O2 -I../$(TB)" \
 	  --Mdir obj_i960_rom -o Vi960_rom $(TOP_RTL) $(TB)/tb_i960_rom.cpp
+
+# -------------------------------------------------- SDRAM at 2:1 (96/48 MHz)
+#
+# tb_m2_sdram tests the controller with NO SLOW DOMAIN to be misaligned with, so
+# it passes whether or not m2_sdram_x2 is right. This drives the slow side only
+# on slow edges, and drops `req` the cycle AFTER the acknowledge, which is what
+# a real requester does.
+#
+# Deleting the read-data bypass fails 1,786 of 2,560 checks. Deleting the
+# request mask fails nothing, and that is recorded in both files rather than
+# left to be discovered: this controller latches requests on their edge.
+
+.PHONY: test_m2_sdram_x2
+test_m2_sdram_x2: obj_x2/Vm2_sdram_x2_harness
+	@echo "== test m2_sdram_x2 (controller at 2x the core clock)"
+	@./obj_x2/Vm2_sdram_x2_harness $(TEST_ARGS)
+
+obj_x2/Vm2_sdram_x2_harness: sim/mem/m2_sdram_x2_harness.sv rtl/mem/m2_sdram_x2.sv \
+                             rtl/mem/m2_sdram.sv sim/mem/sdram_model.sv sim/mem/tb_m2_sdram_x2.cpp
+	$(VBUILD) --top-module m2_sdram_x2_harness -Wno-PINCONNECTEMPTY -Wno-SYNCASYNCNET \
+	  -Wno-WIDTHEXPAND -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM \
+	  --Mdir obj_x2 -o Vm2_sdram_x2_harness -CFLAGS "-O2" \
+	  sim/mem/m2_sdram_x2_harness.sv rtl/mem/m2_sdram_x2.sv rtl/mem/m2_sdram.sv \
+	  sim/mem/sdram_model.sv sim/mem/tb_m2_sdram_x2.cpp
 
 # ------------------------------------------------------------------ I/O board
 #

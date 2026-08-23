@@ -3054,3 +3054,62 @@ That 0.183 ns is on `pll_hdmi` at 148.5 MHz — framework logic, not ours, and t
 same path their `SEED 7` note is about. We are on `SEED 1`. A marginal path
 there is placement luck rather than a design fault, and it is worth pinning to a
 seed that closes it once there is a build to confirm one.
+
+**R44 — the SDRAM runs at 96 MHz, and the i960 moves to 24.** The 40 MHz in
+`pll.v` was a retreat from 80, and that file's own note diagnosed it: the device
+was clocked on the **inverse** of the controller clock, *"only a half period of
+skew and no true phase shift"*, and named the fix as a properly phase-shifted
+`SDRAM_CLK`. The Kaneko16 core has that working at 96 MHz, so this takes it.
+
+*What it cost, and it is not a rounding.* **96, 32 and 25 cannot share a PLL.**
+They need a VCO that is a common multiple of all three — 2400 MHz — and Cyclone V
+tops out near 1600. The VCO is 960 (50 × 96/5), and 96 (/10), 48 (/20), 32 (/30)
+and 24 (/40) are all exact divides of it. 25 is not. So the i960 runs at 24 MHz,
+4% below the real part, against a core already retiring at CPI ~3.95 where MAME's
+model is ~1. The frame rate does not move: it comes from the 32 MHz video clock
+and is still 16e6/(656×424) = 57.52 Hz exactly.
+
+| output | | |
+|---|---|---|
+| `general[0]` | 96 MHz | `m2_sdram`, alone |
+| `general[1]` | 48 MHz | `clk_sys` — everything else |
+| `general[2]` | 32 MHz | video |
+| `general[3]` | 24 MHz | i960 |
+| `general[4]` | 96 MHz, 180° | `SDRAM_CLK` pin |
+
+*The controller is alone in the fast domain.* Every requester — the i960's
+bridge, the tilemap copy engine, the character fetch, the sweep, the ROM loader
+— stays at 48 MHz behind `m2_sdram_x2`, which halves every round trip counted in
+core clocks without any of them changing. It is **not a CDC**: 96 and 48 are
+exact divides of one VCO, so the edges align and every slow signal is stable
+across two fast cycles.
+
+*And that answers the loader question from R43 properly.* The loader does not
+move to a slower clock and does not need a synchroniser; it stays on `clk_sys`
+with `hps_io`, where it already was, and the adapter carries its write port
+across. What made the Kaneko version corrupt every ROM was a loader clocked
+**fast** while driving the slow side of that adapter. Here it is on the slow side
+of both.
+
+*Three things that had to move with the clock, and one that would have been
+silent:*
+
+- `T_REFI` 300 → 750. 8192 rows in 64 ms is 7.8125 µs, which is 750 cycles at
+  96 MHz.
+- The I/O board's timers, again — they encode frames, not counts, so 40 → 48 MHz
+  moves them a third time.
+- **The self-test counter would have overflowed.** It was `logic [26:0]`, sized
+  by hand for 40 MHz. Frame 174 is 121,044,000 cycles there and **145,252,176 at
+  48**, which needs 28 bits — so it would have wrapped at 134,217,727 and the
+  board would have answered the handshake about a second early. That is a
+  protocol-shaped fault with a numeric cause. The counter is now sized from its
+  own parameter and cannot do it again.
+- The SDC **stopped cutting the memory and core clocks apart.** Cutting them was
+  right when nothing crossed between them; it is wrong now, and would have left
+  the one crossing that must be timed simply not analysed.
+
+*What is not yet known.* None of this has been built. Timing at 96 MHz is the
+open question — the arbiter rework in R43 removed what Kaneko measured as the
+binding path, but ours is a different design and the CPU bridge, copy engine and
+character fetch now all sit at 48 rather than 40. The suite is green, including a
+new 2:1 test whose read-data bypass mutation fails 1,786 of 2,560 checks.

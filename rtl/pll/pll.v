@@ -47,7 +47,7 @@
 // still wrong, timing is exonerated and the fault is elsewhere.
 //
 // T_REFI follows the clock: 8192 rows in 64 ms is one refresh every 7.8125 us,
-// which is 312 cycles at 40 MHz rather than 625 at 80.
+// which is 750 cycles at 96 MHz — it was 312 at 40.
 //
 // FREQUENCIES, AND WHY THESE
 //
@@ -57,9 +57,42 @@
 // and a frame rate of 16e6/(656*424) = 57.52 Hz that matches the reference
 // rather than approximating it.
 //
-//   outclk_0   40 MHz   SDRAM  (was 80; see the note below)
-//   outclk_1   32 MHz   video domain; ce_pix = /2 gives exactly 16 MHz
-//   outclk_2   25 MHz   i960. The real part's rate; ours fits at 26.84 MHz
+//   outclk_0   96 MHz   SDRAM controller, ALONE in this domain
+//   outclk_1   48 MHz   clk_sys: everything else. Exact /2 of outclk_0.
+//   outclk_2   32 MHz   video domain; ce_pix = /2 gives exactly 16 MHz
+//   outclk_3   24 MHz   i960
+//   outclk_4   96 MHz   SDRAM_CLK pin, 180 degrees from outclk_0
+//
+// 96 MHz, AND WHAT IT COST. The 40 MHz above was a retreat from 80, and the
+// note below diagnosed it: the device was clocked on the INVERSE of the
+// controller clock, "only a half period of skew and no true phase shift", and
+// said the fix was a properly phase-shifted SDRAM_CLK. outclk_4 is that fix —
+// its own output counter at 180 degrees, not an inversion.
+//
+// THE i960 MOVES FROM 25 MHz TO 24, and it is not a rounding. 96, 32 and 25
+// cannot share a PLL: they need a VCO that is a common multiple of all three,
+// which is 2400 MHz, and Cyclone V tops out near 1600. The VCO here is 960 —
+// 50 x 96/5 — and 96 (/10), 48 (/20), 32 (/30) and 24 (/40) are all exact
+// integer divides of it. 25 is not.
+//
+// 24 rather than 25 is a 4% reduction against a part this core is already far
+// from matching in throughput: our i960 retires at CPI ~3.95 against MAME's
+// ~1. The frame rate does not move, because it comes from the 32 MHz video
+// clock and is still 16e6/(656*424) = 57.52 Hz exactly.
+//
+// THE OUTPUTS MUST NOT ALL CARRY THE SAME SETTINGS. The Kaneko16 core had
+// three at 48 MHz / 0 ps / 50% and the IP gave all three ONE output counter:
+// the whole core became a single clock domain, one `pll` clock in the timing
+// netlist, Fmax 54.74 MHz, with the memory controller held down to the slowest
+// path among them. outclk_0 and outclk_4 are both 96 MHz here and differ only
+// in phase, which is exactly the case that triggers it — check the fit report
+// for five distinct clocks, not one.
+//
+// 48 MHz IS AN EXACT /2 OF 96 AND PHASE-ALIGNED, which is what makes
+// m2_sdram_x2 an adapter rather than a clock-domain crossing: every slow edge
+// coincides with a fast edge, every slow signal is stable across two fast
+// cycles, and there is no metastability to synchronise away. The SDC must TIME
+// the two against each other rather than cut them apart.
 //                       (study §5.5), so this is the reference speed and not a
 //                       limit we are pushing against.
 
@@ -68,9 +101,11 @@
 module pll (
     input  wire  refclk,     // 50 MHz from the board
     input  wire  rst,
-    output wire  outclk_0,   // 80 MHz  SDRAM
-    output wire  outclk_1,   // 32 MHz  video  (ce_pix /2 -> 16 MHz)
-    output wire  outclk_2,   // 25 MHz  i960
+    output wire  outclk_0,   // 96 MHz  SDRAM controller
+    output wire  outclk_1,   // 48 MHz  clk_sys, exact /2 of outclk_0
+    output wire  outclk_2,   // 32 MHz  video  (ce_pix /2 -> 16 MHz)
+    output wire  outclk_3,   // 24 MHz  i960
+    output wire  outclk_4,   // 96 MHz  SDRAM_CLK pin, 180 deg from outclk_0
     output wire  locked
   );
 
@@ -99,21 +134,29 @@ module pll_core (
     .fractional_vco_multiplier("false"),
     .reference_clock_frequency("50.0 MHz"),
     .operation_mode("direct"),
-    .number_of_clocks(3),
-    .output_clock_frequency0("40.000000 MHz"),
+    .number_of_clocks(5),
+    .output_clock_frequency0("96.000000 MHz"),
     .phase_shift0("0 ps"),
     .duty_cycle0(50),
-    .output_clock_frequency1("32.000000 MHz"),
+    .output_clock_frequency1("48.000000 MHz"),
     .phase_shift1("0 ps"),
     .duty_cycle1(50),
-    .output_clock_frequency2("25.000000 MHz"),
+    .output_clock_frequency2("32.000000 MHz"),
     .phase_shift2("0 ps"),
     .duty_cycle2(50),
+    .output_clock_frequency3("24.000000 MHz"),
+    .phase_shift3("0 ps"),
+    .duty_cycle3(50),
+    // 180 degrees at 96 MHz is half a 10.4167 ns period: 5208 ps. Stated in ps
+    // because that is the unit the IP takes; "180 deg" is not accepted here.
+    .output_clock_frequency4("96.000000 MHz"),
+    .phase_shift4("5208 ps"),
+    .duty_cycle4(50),
     .pll_type("General"),
     .pll_subtype("General")
   ) altera_pll_i (
     .rst        (rst),
-    .outclk     ({outclk_2, outclk_1, outclk_0}),
+    .outclk     ({outclk_4, outclk_3, outclk_2, outclk_1, outclk_0}),
     .locked     (locked),
     .fboutclk   ( ),
     .fbclk      (1'b0),

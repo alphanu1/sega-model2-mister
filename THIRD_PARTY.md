@@ -278,6 +278,22 @@ What IS taken is the engineering, and it is the expensive half:
   the coprocessor path — and propagated it into the RTL, the testbench and the
   docs, which looks like three artefacts and is one reading (`6e5aed4`).
 
+`rtl/mem/m2_sdram_x2.sv` is ported from the sibling **Kaneko16** core's
+`kaneko_sdram_x2.sv` at `6f59d8a`, which solved running this same controller at
+twice the core clock. Same author, GPL-3, so reuse is direct. What was changed:
+`NP` 7 to 5, `AW` to our 25, per-port write signals added (this controller lets
+a port write and port 0 does; theirs has no equivalent), and the header rewritten
+for our clocks and requesters. **The two hazards and their answers are theirs**,
+and both were found by a failure rather than by reasoning — the read-data bypass
+failed almost exactly half their reads without it.
+
+One of the two does not apply here and the file says so rather than implying
+otherwise: their request mask guards a controller that latches on the LEVEL, and
+`m2_sdram` latches on the edge (`p_req[i] && !req_d[i]`, forced by study R34
+because the i960 holds its request across a run of accesses). `test_m2_sdram_x2`
+passes with the mask deleted. It is kept as defence against a controller change,
+not against this controller.
+
 Their `m1_uart_tx` is a debug printf channel and NOT a sound UART; three things
 in that repo get called a UART and conflating them has cost time there already.
 Our sound path is the i8251 at `0x01c80000`.

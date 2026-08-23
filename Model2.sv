@@ -70,7 +70,7 @@ localparam CONF_STR = {
 	// Model 1 core found its board returned every burst shifted right by one
 	// 16-bit word. Its m2_sdram derivation of CL+3 is against a model that
 	// presents data on the same edge the controller uses, while the real device
-	// is clocked on the INVERSE of clk_sdram and answers half a period away.
+	// is clocked on the INVERSE of clk_sys and answers half a period away.
 	// Guessing this one 25-minute build at a time is the alternative.
 	"O[5:4],SDRAM phase,CL+1,CL+0,CL+2,CL+3;",
 	// WHICH 2 MB OF THE CHIP THE PORT-4 SWEEP FOLDS. Selectable because the
@@ -98,9 +98,9 @@ wire [10:0] ps2_key;
 // chasing the SDRAM capture phase, which was never involved.
 hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
 (
-	// clk_sdram, NOT clk_vid, AND THAT IS THE WHOLE POINT.
+	// clk_sys, NOT clk_vid, AND THAT IS THE WHOLE POINT.
 	//
-	// m2_rom_loader is clocked on clk_sdram. Running hps_io on a different clock
+	// m2_rom_loader is clocked on clk_sys. Running hps_io on a different clock
 	// puts ioctl_wr, ioctl_addr and ioctl_dout across an UNSYNCHRONISED domain
 	// crossing, so the loader samples 16-bit data while it is changing and
 	// captures one byte from one value and the other byte from another.
@@ -108,12 +108,12 @@ hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
 	// That is exactly what the board showed: every LOW byte of the ROM correct
 	// and every HIGH byte wrong, with the wrong bytes not appearing anywhere in
 	// the ROM. The SDRAM self-test passed throughout because it lives entirely
-	// inside clk_sdram, and the 0x0020 tilemap blob hid it because every high
+	// inside clk_sys, and the 0x0020 tilemap blob hid it because every high
 	// byte in it is zero.
 	//
 	// The Model 1 core runs hps_io on clk_sys, the same domain as its loader.
 	// This core split them, and cost five hardware builds finding out.
-	.clk_sys(clk_sdram),
+	.clk_sys(clk_sys),
 	.HPS_BUS(HPS_BUS),
 	.EXT_BUS(),
 	.gamma_bus(),
@@ -140,7 +140,9 @@ wire [26:0] ioctl_addr;
 // name, and a rename makes the constraints match nothing while still passing.
 // See rtl/pll/pll.v.
 
-wire clk_sdram;   // 80 MHz, unused in this step but generated so the PLL that
+wire clk_mem;        // 96 MHz, m2_sdram ONLY
+wire clk_sdram_pin;  // 96 MHz at 180 deg, drives SDRAM_CLK
+wire clk_sys;   // 48 MHz, the core domain. Was the SDRAM clock; see pll.v.
                   //         later steps need is the one being timed now
 wire clk_vid;     // 32 MHz
 wire clk_i960;    // 25 MHz, unused in this step
@@ -150,9 +152,11 @@ pll pll
 (
 	.refclk(CLK_50M),
 	.rst(0),
-	.outclk_0(clk_sdram),
-	.outclk_1(clk_vid),
-	.outclk_2(clk_i960),
+	.outclk_0(clk_mem),      // 96 MHz, the SDRAM controller alone
+	.outclk_1(clk_sys),      // 48 MHz, everything else. Exact /2, phase-aligned.
+	.outclk_2(clk_vid),      // 32 MHz
+	.outclk_3(clk_i960),     // 24 MHz -- see rtl/pll/pll.v for why not 25
+	.outclk_4(clk_sdram_pin),// 96 MHz at 180 deg, straight to the device pin
 	.locked(pll_locked)
 );
 
@@ -306,7 +310,7 @@ end
 assign rb_dout = p_dout[0];
 assign rb_ack  = p_ack[0];
 
-// T_REFI IS IN CLOCK CYCLES. This domain is temporarily 40 MHz (see rtl/pll/pll.v):
+// T_REFI IS IN CLOCK CYCLES, and this domain is now 96 MHz (see rtl/pll/pll.v):
 // 8192 rows in 64 ms is one refresh every 7.8125 us, which is 312 cycles at 40 MHz
 // and 625 at 80. Too large UNDER-REFRESHES, and that presents as random ROM
 // corruption rather than as a timing setting.
@@ -324,8 +328,43 @@ assign rb_ack  = p_ack[0];
 // at once. If comfortable row timing fixes it the cause is in this group and can
 // then be narrowed; if it does not, the entire timing-parameter space is
 // eliminated in one build and the fault is elsewhere.
-m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(300)) u_sdram (
-	.clk(clk_sdram), .rst_n(mem_rst_n), .ready(mem_ready),
+// THE CONTROLLER RUNS AT TWICE THE CORE CLOCK, with m2_sdram_x2 between.
+//
+// Every requester here -- the i960's bridge, the tilemap copy engine, the
+// character fetch, the read-back sweep and the ROM loader -- is on clk_sys, and
+// they cannot all follow the memory to 96 MHz. The adapter halves every round
+// trip as counted in CORE clocks without any of them changing.
+//
+// It is NOT a clock-domain crossing: 96 and 48 are /10 and /20 of one 960 MHz
+// VCO, so the edges are aligned and every slow signal is stable across two fast
+// cycles. It handles two pulse-width hazards instead, both of which the Kaneko16
+// core found the hard way -- see the module header.
+logic [NPORTS-1:0]           f_req, f_ack, f_we;
+logic [NPORTS-1:0][SDR_AW:1] f_addr;
+logic [NPORTS-1:0][15:0]     f_din;
+logic [NPORTS-1:0][1:0]      f_be;
+logic [NPORTS-1:0][63:0]     f_dout;
+logic                        f_wr_req, f_wr_ack;
+logic [SDR_AW:1]             f_wr_addr;
+logic [15:0]                 f_wr_din;
+logic [1:0]                  f_wr_be;
+
+m2_sdram_x2 #(.NP(NPORTS), .AW(SDR_AW)) u_sdram_x2 (
+	.clk_fast(clk_mem),
+	.s_req(p_req), .s_addr(p_addr), .s_ack(p_ack), .s_dout(p_dout),
+	.s_we(p_we),   .s_din(p_din),   .s_be(p_be),
+	.s_wr_req(st_run ? st_req : ldr_wr_req),
+	.s_wr_addr(st_run ? st_addr : ldr_wr_addr),
+	.s_wr_din(st_run ? st_din : ldr_wr_din),
+	.s_wr_be(2'b11), .s_wr_ack(ldr_wr_ack),
+	.f_req(f_req), .f_addr(f_addr), .f_ack(f_ack), .f_dout(f_dout),
+	.f_we(f_we),   .f_din(f_din),   .f_be(f_be),
+	.f_wr_req(f_wr_req), .f_wr_addr(f_wr_addr), .f_wr_din(f_wr_din),
+	.f_wr_be(f_wr_be),   .f_wr_ack(f_wr_ack)
+);
+
+m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(750)) u_sdram (
+	.clk(clk_mem), .rst_n(mem_rst_n), .ready(mem_ready),
 	// OSD order is CL+2..CL+5 and the selector's own encoding puts CL+3 at zero,
 	// so the two are mapped rather than passed through.
 	// Labels match what selecting them does: 0->CL+1, 1->CL+0, 2->CL+2, 3->CL+3.
@@ -336,23 +375,25 @@ m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(300)) u_sdram (
 	.sd_cas_n(SDRAM_nCAS), .sd_we_n(SDRAM_nWE), .sd_ba(SDRAM_BA),
 	.sd_a(SDRAM_A), .sd_dqm({SDRAM_DQMH, SDRAM_DQML}),
 	.sd_dq_o(sd_dq_o), .sd_dq_oe(sd_dq_oe), .sd_dq_i(SDRAM_DQ),
-	.wr_req(st_run ? st_req : ldr_wr_req),
-	.wr_addr(st_run ? st_addr : ldr_wr_addr),
-	.wr_din(st_run ? st_din : ldr_wr_din),
-	.wr_be(2'b11), .wr_ack(ldr_wr_ack),
-	.p_req(p_req), .p_we(p_we), .p_addr(p_addr), .p_din(p_din), .p_be(p_be),
-	.p_dout(p_dout), .p_ack(p_ack),
+	.wr_req(f_wr_req), .wr_addr(f_wr_addr), .wr_din(f_wr_din),
+	.wr_be(f_wr_be),   .wr_ack(f_wr_ack),
+	.p_req(f_req), .p_we(f_we), .p_addr(f_addr), .p_din(f_din), .p_be(f_be),
+	.p_dout(f_dout), .p_ack(f_ack),
 	.dbg_req(), .dbg_grant()
 );
 
 assign SDRAM_DQ  = sd_dq_oe ? sd_dq_o : 16'bZ;
-assign SDRAM_CLK = ~clk_sdram;   // the device is clocked on the falling edge
+// ITS OWN PLL OUTPUT AT 180 DEGREES, not an inversion of the controller clock.
+// pll.v's own note diagnosed the 80 MHz failure as exactly that inversion --
+// "only a half period of skew and no true phase shift" -- and named this as the
+// fix. outclk_4 is a real output counter with a real phase shift.
+assign SDRAM_CLK = clk_sdram_pin;
 
 // `ioctl_wait` STALLS THE HPS ITSELF, so the loader gates it on `ioctl_download`
 // internally — and it ASKS the host to stop rather than stopping it, which is why
 // it buffers into a FIFO with margin instead of trusting the wait to take effect.
 m2_rom_loader #(.SDR_AW(SDR_AW)) u_loader (
-	.clk(clk_sdram), .rst(~mem_rst_n),
+	.clk(clk_sys), .rst(~mem_rst_n),
 	.mem_ready(mem_ready),
 	.ioctl_download(ioctl_download), .ioctl_index(ioctl_index),
 	.ioctl_wr(ioctl_wr), .ioctl_addr(ioctl_addr), .ioctl_dout(ioctl_dout),
@@ -371,7 +412,7 @@ m2_rom_loader #(.SDR_AW(SDR_AW)) u_loader (
 logic [31:0] rb_w0, rb_w1;
 logic  [1:0] rb_state;
 
-always_ff @(posedge clk_sdram or negedge mem_rst_n) begin
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
 		rb_req <= 1'b0; rb_addr <= '0; rb_state <= 2'd0;
 		rb_w0 <= 32'd0; rb_w1 <= 32'd0;
@@ -497,7 +538,7 @@ logic [15:0] pr_w8, pr_w9;
 //                      around the FIFO.
 logic [15:0] pw_w8, pw_w9;
 logic        ldr_req_d;
-always_ff @(posedge clk_sdram or negedge mem_rst_n) begin
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
 		pw_w8 <= 16'd0; pw_w9 <= 16'd0; ldr_req_d <= 1'b0;
 	end else begin
@@ -508,7 +549,7 @@ always_ff @(posedge clk_sdram or negedge mem_rst_n) begin
 		end
 	end
 end
-always_ff @(posedge clk_sdram or negedge mem_rst_n) begin
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
 		pr_w8 <= 16'd0; pr_w9 <= 16'd0;
 	end else if (ioctl_download && ioctl_wr) begin
@@ -526,7 +567,7 @@ end
 
 assign st_run = rom_loaded && (st_state >= 4'd1) && (st_state <= 4'd8);
 
-always_ff @(posedge clk_sdram or negedge mem_rst_n) begin
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
 		st_state <= 4'd0; st_req <= 1'b0; st_rd_req <= 1'b0;
 		st_addr <= '0; st_rd_addr <= '0; st_din <= 16'd0; st_got <= 64'd0;
@@ -623,7 +664,7 @@ always_ff @(posedge clk_vid) begin
 	pal_data  <= pal[pal_addr];
 end
 
-// PORT B, on clk_sdram: the copy engine and the CPU share it. Port A above is
+// PORT B, on clk_sys: the copy engine and the CPU share it. Port A above is
 // the renderer's, on clk_vid, and stays read-only. That is a true dual-port
 // M10K, which is what the part gives; a third accessor would not fit and is
 // why the copy engine and the bridge are muxed onto one port rather than given
@@ -638,7 +679,7 @@ wire        ocb_pal_we  = cp_pal_we  | cpu_pal_we;
 wire [14:0] ocb_addr    = (cp_tram_we | cp_pal_we) ? cp_wr_idx  : cpu_oc_addr;
 wire [15:0] ocb_din     = (cp_tram_we | cp_pal_we) ? cp_wr_data : cpu_oc_din;
 
-always_ff @(posedge clk_sdram) begin
+always_ff @(posedge clk_sys) begin
 	cpu_tram_q <= tram[ocb_addr];
 	cpu_pal_q  <= pal[ocb_addr[11:0]];
 	if (ocb_tram_we) tram[ocb_addr]      <= ocb_din;
@@ -663,7 +704,7 @@ logic [15:0] cp_xor_t, cp_sum_t, cp_xor_p, cp_sum_p;
 
 // The copy engine no longer writes tile RAM and the palette directly. Those
 // arrays now have exactly TWO accessors -- the renderer on clk_vid and this
-// domain on clk_sdram -- because a third one costs RAM inference: Quartus
+// domain on clk_sys -- because a third one costs RAM inference: Quartus
 // reported "cannot convert all sets of registers into RAM megafunctions" and
 // 512 Kbit of tile RAM became flip-flops, which is four times the whole
 // device. Three always_ff blocks touching one array is the cause; the copy
@@ -709,7 +750,7 @@ logic       xlat_we_r;
 logic [6:0] xlat_addr_r;
 logic [7:0] xlat_din_r;
 
-always_ff @(posedge clk_sdram or negedge mem_rst_n) begin
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
 		cp_req <= 1'b0; cp_done <= 1'b0; cp_idx <= 16'd0;
 		cp_phase <= 2'd0; cp_addr <= '0;
@@ -803,7 +844,7 @@ end
 // Decided by the highest address the loader wrote, which is a fact about the
 // image rather than a mode the user has to select correctly.
 logic [SDR_AW:1] ldr_top;
-always_ff @(posedge clk_sdram or negedge mem_rst_n) begin
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	if (!mem_rst_n) ldr_top <= '0;
 	// ON req ALONE, not req AND ack. This dedicated write port does NOT use the
 	// level handshake the numbered ports use: m2_rom_loader PULSES req and drops
@@ -867,7 +908,7 @@ m2_cpu_bridge #(.AW(SDR_AW), .BOARD_2A(1'b0)) u_cpu_bridge (
 	.bus_req(cpu_req), .bus_we(cpu_we), .bus_addr(cpu_addr), .bus_be(cpu_be),
 	.bus_wdata(cpu_wdata), .bus_rdata(cpu_rdata), .bus_ack(cpu_ack),
 
-	.clk_mem(clk_sdram), .rst_n_mem(cpu_rst_n),
+	.clk_mem(clk_sys), .rst_n_mem(cpu_rst_n),
 	.base_prog(GAME_PROG), .base_data(GAME_DATA), .base_work(GAME_WORK),
 	.base_board(GAME_BOARD), .base_char(GAME_CHAR),
 
@@ -902,7 +943,7 @@ logic        vbl_d, vbl_dd;
 
 // V-blank into bit 0, the same line MAME's screen_vblank sets. irq_update()
 // folds the twelve request bits onto the i960's four lines.
-always_ff @(posedge clk_sdram or negedge cpu_rst_n) begin
+always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
 	if (!cpu_rst_n) begin
 		io_intreq <= 12'd0; io_intena <= 12'd0; io_videoctl <= 32'd0;
 		io_framenum <= 32'd0; vbl_d <= 1'b0; vbl_dd <= 1'b0;
@@ -1028,10 +1069,10 @@ wire [31:0] bak_rdata;
 wire [31:0] bak_w0;
 wire [15:0] bak_writes;
 
-// CLOCKED ON clk_sdram, NOT clk_i960, AND THAT IS THE WHOLE POINT.
+// CLOCKED ON clk_sys, NOT clk_i960, AND THAT IS THE WHOLE POINT.
 //
 // io_sel, io_addr and the r_rdata sample all live in m2_cpu_bridge's clk_mem
-// domain, which is clk_sdram. Clocking a REGISTERED read on a different clock
+// domain, which is clk_sys. Clocking a REGISTERED read on a different clock
 // is a crossing with no synchroniser, and its failure is selective in a way
 // that looks like a data bug rather than a timing one:
 //
@@ -1053,7 +1094,7 @@ wire [15:0] bak_writes;
 // read and backup SRAM never written. If g6 held 0x01c00200 those counters
 // could not both be zero. This says what it holds instead.
 logic [31:0] io_last_addr, io_last_data;
-always_ff @(posedge clk_sdram or negedge cpu_rst_n) begin
+always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
 	if (!cpu_rst_n) begin
 		io_last_addr <= 32'd0; io_last_data <= 32'd0;
 	end else if (cpu_io_sel) begin
@@ -1063,7 +1104,7 @@ always_ff @(posedge clk_sdram or negedge cpu_rst_n) begin
 end
 
 m2_backup u_backup (
-	.clk(clk_sdram),
+	.clk(clk_sys),
 	.sel(bak_sel),
 	.we(cpu_io_we),
 	.word(cpu_io_addr[13:2]),
@@ -1074,14 +1115,14 @@ m2_backup u_backup (
 );
 
 m2_ioboard #(
-	// RESCALED TO clk_sdram. These are measured in FRAMES -- status at 7 and
+	// RESCALED TO clk_sys. These are measured in FRAMES -- status at 7 and
 	// the board's self-test at 174 of a 57.5 Hz refresh -- so moving the module
 	// to a 40 MHz clock moves the constants with it. At 25 MHz they were
 	// 3,043,478 and 75,652,174; here they are 0.1217 s and 3.026 s of 40 MHz.
 	.STATUS_CYCLES  (4_869_565),
 	.SELFTEST_CYCLES(121_043_478)
 ) u_ioboard (
-	.clk(clk_sdram),
+	.clk(clk_sys),
 	.rst_n(cpu_rst_n),
 	.sel(iob_sel),
 	.we(cpu_io_we),
@@ -1131,7 +1172,7 @@ logic  [4:0]     sw_sel;
 logic            sw_done;
 
 // status[] is written by the HPS and changes only when the user moves in the
-// OSD, so it is many orders of magnitude slower than clk_sdram and is read
+// OSD, so it is many orders of magnitude slower than clk_sys and is read
 // directly -- the same treatment status[5:4] already gets on the controller's
 // capture phase.
 wire   [4:0]     sw_sel_i = status[10:6];
@@ -1144,7 +1185,7 @@ function automatic logic [23:0] sw_fold(input logic [23:0] a, input logic [15:0]
   end
 endfunction
 
-always_ff @(posedge clk_sdram or negedge mem_rst_n) begin
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
 		sw_req <= 1'b0; sw_addr <= '0; sw_acc <= 24'd0;
 		sw_val <= 24'd0; sw_burst <= 20'd0;
@@ -1332,7 +1373,7 @@ end
 
 wire [7:0] ov_r, ov_g, ov_b;
 
-// The overlay runs on clk_vid and these all live on clk_sdram or clk_i960, so
+// The overlay runs on clk_vid and these all live on clk_sys or clk_i960, so
 // they cross with two flops. They are status bits and counters read by eye --
 // a torn counter is a wrong digit for one frame, not a wrong decision.
 logic [2:0] game_sync, cp_done_sync, cpu_trap_sync, cpu_halt_sync;

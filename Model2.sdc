@@ -28,12 +28,42 @@ if {[llength $core_clks] == 0} {
     post_message -type error "Model2.sdc: refusing to constrain a design that is not timed."
 }
 
-# The three outputs are unrelated by construction -- 80 MHz SDRAM, 32 MHz video,
-# 25 MHz i960 -- and sys_top.sdc puts them in ONE group, which times them against
-# each other. Cut them explicitly. Nothing crosses between them in this step;
-# doing it now means the crossings that arrive later are explicit rather than
-# accidentally timed.
+# THE MEMORY CLOCK AND THE CORE CLOCK MUST BE TIMED AGAINST EACH OTHER.
+#
+# general[0] is 96 MHz (m2_sdram), general[1] is 48 MHz (clk_sys, everything
+# else) and general[4] is the 96 MHz SDRAM_CLK pin at 180 degrees. All three come
+# from one 960 MHz VCO at exact integer divides, so their edges are aligned and
+# m2_sdram_x2 is an ADAPTER rather than a clock-domain crossing: it relies on
+# every slow signal being stable across two fast cycles, which is a timed
+# relationship and not an asynchronous one.
+#
+# THIS FILE USED TO CUT THEM APART. That was right when the three outputs were
+# unrelated by construction and nothing crossed between them. Leaving it that
+# way now would stop the fitter timing the one crossing in the design that
+# actually has to be timed, and the paths through the adapter would simply not
+# be analysed -- a build that reports success and is not constrained where it
+# matters, which is the exact failure this file exists to prevent one level up.
+#
+# The video and i960 domains stay cut. Those crossings are genuine and handled:
+# m2_cpu_bridge carries the i960 across with a request/acknowledge handshake
+# (study R32, R34), and the tilemap is read through a dual-port memory.
 set_clock_groups -asynchronous \
-  -group [get_clocks -nowarn {*|pll|pll_inst|altera_pll_i|general[0].*|divclk}] \
-  -group [get_clocks -nowarn {*|pll|pll_inst|altera_pll_i|general[1].*|divclk}] \
-  -group [get_clocks -nowarn {*|pll|pll_inst|altera_pll_i|general[2].*|divclk}]
+  -group [get_clocks -nowarn {*|pll|pll_inst|altera_pll_i|general[0].*|divclk \
+                              *|pll|pll_inst|altera_pll_i|general[1].*|divclk \
+                              *|pll|pll_inst|altera_pll_i|general[4].*|divclk}] \
+  -group [get_clocks -nowarn {*|pll|pll_inst|altera_pll_i|general[2].*|divclk}] \
+  -group [get_clocks -nowarn {*|pll|pll_inst|altera_pll_i|general[3].*|divclk}]
+
+# FIVE OUTPUTS NOW, AND THE COUNT IS CHECKED. The Kaneko16 core gave three
+# outputs identical settings -- same frequency, same phase, same duty -- and the
+# IP responded by giving all three ONE output counter: the whole core collapsed
+# into a single clock domain, one clock in the timing netlist, Fmax 54.74 MHz.
+# general[0] and general[4] here are both 96 MHz and differ only in phase, which
+# is precisely that case, so a build that quietly produced fewer than five
+# distinct clocks would look like a timing regression with no cause.
+if {[llength $core_clks] != 0 && [llength $core_clks] < 5} {
+    post_message -type error \
+      "Model2.sdc: only [llength $core_clks] core PLL clocks exist, expected 5. \
+       Outputs with identical settings can be merged into one output counter by \
+       the IP -- see rtl/pll/pll.v. This build is not timed as designed."
+}

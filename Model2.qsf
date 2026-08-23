@@ -302,6 +302,7 @@ set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to USER_IO[*]
 set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to VGA_EN
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_diag.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/mem/m2_sdram.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/mem/m2_sdram_x2.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/mem/m2_cdc_port.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/mem/m2_cdc_pulse.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/io/m2_rom_loader.sv

@@ -61,7 +61,11 @@ module m2_ioboard #(
   // Cycles from reset before the board answers the flag. MEASURED: MAME clears
   // it on frame 174 of a 57.5 Hz refresh, which is 3.026 s. At 25 MHz that is
   // 75,652,174 -- a 27-bit counter, and it counts once.
-  parameter int          SELFTEST_CYCLES = 75_652_174,
+  // Defaults are for the 48 MHz core clock. THEY ENCODE A DURATION, NOT A
+  // COUNT: status at frame 7 and the board's self-test at frame 174 of a
+  // 57.5 Hz refresh. Every clock change has to move them, and the counter is
+  // sized from this parameter so that a change cannot silently overflow it.
+  parameter int          SELFTEST_CYCLES = 145_252_176,
 
   // Cycles from reset before the board raises the status byte. MEASURED at
   // frame 7 of a 57.5 Hz refresh -- 0.122 s, or 3,043,478 cycles at 25 MHz.
@@ -79,7 +83,7 @@ module m2_ioboard #(
   // write at frame 6 and the status at frame 7 are consecutive, and reading
   // two consecutive events as a cause and an effect produced a board that the
   // boot could never get past.
-  parameter int          STATUS_CYCLES   = 3_043_478,
+  parameter int          STATUS_CYCLES   = 5_843_478,
 
   // What the board leaves in the status byte at DPRAM 0x21. Observed 0x40.
   parameter logic [7:0]  STATUS_READY    = 8'h40,
@@ -262,7 +266,26 @@ module m2_ioboard #(
   endfunction
 
   // ------------------------------------------------------------- the board
-  logic [26:0] selftest;
+  // WIDTH DERIVED FROM THE PARAMETER, NOT WRITTEN OUT.
+  //
+  // This was `logic [26:0]`, sized by hand for the 40 MHz clock these timers
+  // were last scaled to. Moving to 48 MHz takes frame 174 from 121,044,000
+  // cycles to 145,252,176, which needs 28 bits -- so the counter would have
+  // wrapped at 134,217,727 and the board would have answered the handshake
+  // about a second early, which is the kind of fault that looks like a
+  // protocol error and is not one. Derived, it cannot happen again.
+  // Named rather than repeated: `($clog2(X))'(...)` as a cast parses in a way
+  // that produced a width warning at every use site, and one localparam is
+  // clearer than three copies of the expression anyway.
+  // TYPED CONSTANTS, not casts at the use site. `SW'(...)` was parsed as a
+  // part-select and produced a different width warning under the real build
+  // than under a standalone lint, which is a good sign the expression was not
+  // saying what it looked like. Declaring the width once, on constants of the
+  // counter's own type, leaves nothing to parse.
+  localparam int unsigned      SW            = $clog2(SELFTEST_CYCLES);
+  localparam logic [SW-1:0]    SELFTEST_MAX  = SW'(SELFTEST_CYCLES - 1);
+  localparam logic [SW-1:0]    SELFTEST_ONE  = 1;
+  logic [SW-1:0] selftest;
   logic        awake;              // self-test finished; the flag is watched now
   logic        flag_cleared;       // for the overlay: it has answered at least once
   logic        status_pulse;       // one cycle: write the status byte
@@ -332,8 +355,8 @@ module m2_ioboard #(
 
       // The self-test. It counts once and then stops; `awake` latches.
       if (!awake) begin
-        if (selftest == 27'(SELFTEST_CYCLES - 1)) awake <= 1'b1;
-        else selftest <= selftest + 27'd1;
+        if (selftest == SELFTEST_MAX) awake <= 1'b1;
+        else selftest <= selftest + SELFTEST_ONE;
       end
 
       // ONCE AWAKE, THE BOARD ANSWERS; IT IS NOT A ONE-SHOT.
