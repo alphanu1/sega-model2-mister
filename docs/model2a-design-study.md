@@ -3014,11 +3014,34 @@ adapter while clocked fast, so `ACK_HOLD`'s two-cycle acknowledge — exactly on
 edge for a slow requester — was two edges for it, and every ROM write counted
 twice.
 
-**We have the same wiring and it is currently correct by coincidence.**
-`m2_rom_loader` and `hps_io` are both on `clk_sdram`, deliberately and with a
-comment explaining why. The moment `clk_sdram` stops being the system clock,
-that comment describes a bug. A corrupt ROM image presents as everything broken
-at once with nothing pointing at the memory clock.
+**Checked here rather than assumed, and neither half is present.**
+
+*The crossing does not exist.* `hps_io` (`.clk_sys(clk_sdram)`),
+`m2_rom_loader` and `m2_sdram` are all on `outclk_0`. The PLL has three outputs
+— 40 MHz SDRAM, 32 MHz video, 25 MHz i960 — and no spare. Their fault was a
+loader on a *fast* clock fed by `hps_io` on a *slow* one; ours is one net for
+all three, so moving the loader to a different clock would **create** the
+crossing they removed, not fix it.
+
+*The ACK_HOLD double-count cannot happen here either.* That was the half that
+actually corrupted their image — a two-cycle acknowledge read as two writes.
+`m2_rom_loader` edge-detects:
+
+```systemverilog
+if (sdr_wr_ack && !ack_d) begin        // rising edge, not level
+```
+
+A two-cycle acknowledge has exactly one rising edge however wide it is in the
+requester's cycles, so this is robust to any clock ratio, including one that
+does not exist yet.
+
+*What is still true is the ordering.* When `clk_sdram` is raised, this becomes
+live in one step, and the fix belongs with that change: a fourth PLL output for
+`clk_sys`, `hps_io` and the loader moved onto it, and the loader's write path
+crossing into the memory domain. Doing it beforehand means a PLL regeneration
+and a build to prove nothing moved, for no behavioural gain today. A corrupt ROM
+image presents as everything broken at once with nothing pointing at the memory
+clock, so whoever raises the clock should read this first.
 
 *And the guard.* `make release` now refuses a build with negative setup slack.
 "Flow Status: Successful" does not mean timing closed — Quartus reports success
