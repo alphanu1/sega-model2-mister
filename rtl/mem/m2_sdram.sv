@@ -621,7 +621,12 @@ module m2_sdram #(
           16'd200: begin
             cmd   <= C_MRS;
             sd_ba <= 2'b00;
-            sd_a  <= 13'b000_0_00_010_0_000;   // CL2, sequential, burst 1
+            // CAS LATENCY FROM THE PARAMETER, NOT A LITERAL. This was
+            // 13'b000_0_00_010_0_000 -- CL2 hard-coded -- while `CL` was a
+            // parameter used for every latency calculation in the file. Two
+            // sources of truth for one number, and changing the parameter moved
+            // the capture window without telling the device.
+            sd_a  <= {3'b000, 1'b0, 2'b00, 3'(CL), 1'b0, 3'b000};
           end
           16'd1: begin ready <= 1'b1; state <= S_IDLE; end
           default: ;

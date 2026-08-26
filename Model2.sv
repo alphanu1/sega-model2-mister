@@ -375,7 +375,17 @@ m2_sdram_x2 #(.NP(NPORTS), .AW(SDR_AW)) u_sdram_x2 (
 	.f_wr_be(f_wr_be),   .f_wr_ack(f_wr_ack)
 );
 
-m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(750)) u_sdram (
+// CL3, NOT CL2, AT 96 MHz. The self-test's capture sweep ran all six depths
+// against a known 64-bit pattern and NONE of them read it back -- overlay word
+// 20 reported cal_done with a pass mask of zero. That is not a capture-phase
+// problem: a wrong depth moves whole 16-bit words, and the readback at CL+2 was
+// wrong in a SINGLE BIT, which is what a marginal device timing looks like.
+//
+// CL2 asks the device for data 20.8 ns after the READ command at 96 MHz. That
+// was never exercised above 40 MHz, where the same CL2 meant 50 ns. CL3 gives it
+// 31.25 ns, and every latency in the controller follows the parameter -- the
+// capture depths are CL+0..CL+5 -- so the sweep moves with it.
+m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(750), .CL(3)) u_sdram (
 	.clk(clk_mem), .rst_n(mem_rst_n), .ready(mem_ready),
 	// OSD order is CL+2..CL+5 and the selector's own encoding puts CL+3 at zero,
 	// so the two are mapped rather than passed through.
