@@ -153,6 +153,19 @@ module i960_icache #(
   // Combinational so the address tracks fill_word within the same cycle the
   // data for it is acked.
   assign bus_addr = fill_base + {28'd0, fill_word, 2'b00};
+
+  // A redirect asking for a line other than the one being filled. Combinational
+  // so it can be acted on in the same cycle an acknowledge arrives.
+  logic redir_now;
+  assign redir_now = (state == S_FILL) && req && req_demand &&
+                     ((idx != fill_idx) || (tag != fill_tag));
+
+  // Where a redirect is going, held from when it arrives until an acknowledge
+  // makes it safe to move the address. See S_FILL.
+  logic             redir_q;
+  logic [IDX_W-1:0] redir_idx;
+  logic [TAG_W-1:0] redir_tag;
+  logic [31:2]      redir_addr;
   assign rd_waddr = {fill_idx, fill_word};
   assign rd_wdata = bus_rdata;
   assign rd_we    = (state == S_FILL) && bus_ack;
@@ -170,6 +183,10 @@ module i960_icache #(
       fill_idx  <= '0;
       fill_tag  <= '0;
       fill_base <= 32'd0;
+      redir_q    <= 1'b0;
+      redir_idx  <= '0;
+      redir_tag  <= '0;
+      redir_addr <= '0;
       for (i = 0; i < LINES; i = i + 1) cvalid[i] <= 1'b0;
     end else begin
       valid <= 1'b0;
@@ -226,13 +243,50 @@ module i960_icache #(
           // A redirect -- taken branch or mispredicted prefetch -- can ask for
           // a different line mid-fill. Restart on it rather than making the
           // requester wait out a line nothing wants.
-          if (req && req_demand && ((idx != fill_idx) || (tag != fill_tag))) begin
-            fill_idx    <= idx;
-            fill_tag    <= tag;
+          //
+          // RESOLVED ON THE ACKNOWLEDGE, because `bus_addr` is combinational
+          // from `fill_base` and `bus_req` is HELD across the line. Moving
+          // `fill_base` the instant a redirect arrives moves the address under
+          // a fetch the memory has already taken; that fetch's data then lands
+          // and `rd_we` writes it at {fill_idx, fill_word} -- word 0 of the NEW
+          // line. The line is tagged for the redirect target and holds the
+          // abandoned address's word. Study R45.
+          //
+          // Measured against the real bridge: a prefetch of 0x920 was in flight
+          // when the boot's copy loop branched back to 0x910, so 0x910 answered
+          // with 0x920's contents -- `bx (g14)`, a return -- and the loop
+          // returned instead of iterating.
+          //
+          // TWO REGIMES HAVE TO WORK AND THAT IS WHAT MAKES THIS FIDDLY. Against
+          // a memory that acknowledges in the same cycle it is asked, nothing is
+          // ever outstanding and the redirect must take effect AT ONCE:
+          // deferring it there consumes an acknowledge the completion path
+          // needed, which test_i960_icache catches. Against the bridge, acks are
+          // many cycles apart and the redirect must WAIT. So the immediate path
+          // is taken when an acknowledge is already present this cycle, and the
+          // deferred path when it is not.
+          //
+          // The abandoned word is not discarded -- it is still written to the
+          // old line, which is correct data for a line nothing is waiting on.
+          if (bus_ack && (redir_now || redir_q)) begin
+            // Safe here: the outstanding fetch has just been answered, so
+            // moving the address starts a new transaction rather than
+            // corrupting one in progress.
+            redir_q     <= 1'b0;
+            fill_idx    <= redir_now ? idx  : redir_idx;
+            fill_tag    <= redir_now ? tag  : redir_tag;
+            fill_base   <= redir_now ? {addr[31:4], 4'd0}
+                                     : {redir_addr[31:4], 4'd0};
             fill_word   <= 2'd0;
-            fill_base   <= {addr[31:4], 4'd0};
-            cvalid[idx] <= 1'b0;
-            req_addr_q  <= addr;
+            cvalid[redir_now ? idx : redir_idx] <= 1'b0;
+            req_addr_q  <= redir_now ? addr : redir_addr;
+          end else if (redir_now) begin
+            // A fetch is outstanding. Remember where we are going and keep the
+            // address still until it is answered.
+            redir_q    <= 1'b1;
+            redir_idx  <= idx;
+            redir_tag  <= tag;
+            redir_addr <= addr;
           end else if (bus_ack) begin
             if (fill_word == 2'd3) begin
               bus_req          <= 1'b0;

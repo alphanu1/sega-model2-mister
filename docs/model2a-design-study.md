@@ -3172,8 +3172,38 @@ the bridge.
 Both are reverted. The suite is green and the harness reproduces the fault in
 five seconds, which is the right state to attempt a third fix from.
 
-*What the fix has to satisfy:* the address must not move while a transaction is
-outstanding; a redirect must still not wait out a line nothing wants; and
-`test_i960_icache`'s redirect and speculative passes must stay at zero — they
-are testing the same code against an immediate-ack memory, which is a different
-regime from the bridge and both have to work.
+*The fix, third attempt, and what made it work.* **Resolve the redirect on the
+acknowledge, with an immediate path when an acknowledge is already present.**
+
+```systemverilog
+if (bus_ack && (redir_now || redir_q)) begin   // safe: nothing outstanding
+  ... restart the fill at the redirect target
+end else if (redir_now) begin
+  redir_q <= 1'b1;  ...                        // remember; hold the address
+end else if (bus_ack) begin
+  ... normal word advance / completion
+end
+```
+
+The two earlier attempts each served one regime and broke the other. Against a
+memory that acknowledges in the same cycle it is asked, nothing is ever
+outstanding and the redirect must take effect **at once** — deferring it there
+consumes an acknowledge the completion path needed. Against the bridge, acks are
+many cycles apart and the redirect must **wait**. Keying on whether an
+acknowledge is present this cycle is what serves both.
+
+The abandoned word is not discarded — it is still written to the old line, which
+is correct data for a line nothing is waiting on.
+
+*Result:*
+
+| | before | after |
+|---|---|---|
+| boot copy | 7,545 / 65,536 | **65,536 / 65,536** |
+| trap | at `0022e914` | none, 3,000,000 instructions |
+| tile RAM writes | 4,097 | **41,868** |
+| differential against MAME | trapped at 474,490 | **2,602,357**, five clean resyncs |
+
+`test_i960_icache` stays at zero on both its redirect and speculative passes.
+The remaining divergence at `0x0b10-0x0b30` is interrupt timing and is the same
+one the direct-CPU harness reaches — this is no longer the blocker.
