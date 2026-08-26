@@ -203,6 +203,9 @@ int main(int argc, char **argv) {
   const char *bf = std::getenv("M2_BOOT_BUS");
   const uint32_t bus_from = bf ? uint32_t(std::strtoul(bf, nullptr, 10)) : 0;
   int n_bus = 0;
+  const char *cf = std::getenv("M2_BOOT_CYC");
+  const uint32_t cyc_from = cf ? uint32_t(std::strtoul(cf, nullptr, 10)) : 0;
+  int n_cyc = 0;
 
   while (d->dbg_acc < max_instr) {
     tick();
@@ -225,6 +228,20 @@ int main(int argc, char **argv) {
     // WHAT THE i960 WAS HANDED, for the accesses the boot is stuck on. The
     // overlay can show what the I/O board returned; only this can show what
     // arrived at the CPU, and the two are separated by the bridge.
+    // CYCLE BY CYCLE ACROSS ONE FETCH. Three explanations for this have now
+    // been wrong, all of them reasoned from summaries. This prints the state
+    // itself over a bounded window: the transaction is at a known instruction.
+    if (cyc_from && d->dbg_acc >= cyc_from && n_cyc < 260) {
+      static const char *ST[8] = {"IDLE","LO","LO_W","HI","HI_W","RDB","IOW","DONE"};
+      std::printf("      c i%-4u req=%d addr=%08x ack=%d rdata=%08x | "
+                  "st=%-4s reqm=%d ackm=%d sdack=%d sdreq=%d sdaddr=%07x\n",
+                  d->dbg_acc, d->obs_bus_req, d->obs_bus_addr, d->obs_bus_ack,
+                  d->obs_bus_rdata, ST[d->obs_mstate & 7],
+                  (d->obs_mstate >> 3) & 1, (d->obs_mstate >> 4) & 1,
+                  (d->obs_mstate >> 5) & 1, d->sd_req, d->sd_addr);
+      ++n_cyc;
+    }
+
     // THE COPY LOOP'S OWN BUS TRAFFIC. ldq/stq are 16-byte accesses, which the
     // i960 issues as four back-to-back 32-bit ones with bus_req HELD and the
     // address moving on the acknowledge -- study R34. That is the pattern the

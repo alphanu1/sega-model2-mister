@@ -3113,3 +3113,67 @@ open question — the arbiter rework in R43 removed what Kaneko measured as the
 binding path, but ours is a different design and the CPU bridge, copy engine and
 character fetch now all sit at 48 rather than 40. The suite is green, including a
 new 2:1 test whose read-data bypass mutation fails 1,786 of 2,560 checks.
+
+**R45 — the I-cache moves its fetch address under an outstanding transaction.**
+Root cause of the boot failure, established with a cycle-level dump rather than
+inferred. **The fix is not written yet** and two attempts at it made things
+worse; this entry exists so the next attempt starts from the evidence rather
+than from a summary.
+
+*What happens.* `i960_icache`'s `S_FILL` holds `bus_req` high across a whole
+line and drives `bus_addr` **combinationally** from `fill_base`:
+
+```systemverilog
+assign bus_addr = fill_base + {28'd0, fill_word, 2'b00};
+...
+// "A redirect ... can ask for a different line mid-fill. Restart on it"
+if (req && req_demand && ((idx != fill_idx) || (tag != fill_tag))) begin
+  fill_base <= {addr[31:4], 4'd0};      // moves bus_addr immediately
+```
+
+So a redirect moves the address under a transaction the memory has **already
+taken**. Its data arrives and is written at `{fill_idx, fill_word}` — word 0 of
+the *new* line. The line ends up tagged for the redirect target holding the
+abandoned address's word.
+
+*The cycle dump, against the real bridge:*
+
+```
+req=1 addr=00000920                       the fetch the bridge took
+req=1 addr=00000920
+req=1 addr=00000910                       redirect, one cycle later
+req=1 addr=00000910  reqm=1
+req=1 addr=00000910  st=RDB sdaddr=0000490    still fetching 0x920
+...
+req=1 addr=00000910  ack=1 rdata=84079000     0x920's contents
+```
+
+Byte `0x910` is answered with the contents of `0x920`, which is `bx (g14)` — a
+**return**. The boot's 128 KB copy loop returns instead of iterating on its
+second pass, board RAM is never filled, and the machine ends at `0022e914`, an
+address MAME never reaches in 12,000,944 instructions.
+
+*Why nothing caught it.* `tb_i960_rom` answers the bus from C++ with an
+immediate acknowledge, so a fetch is almost never still in flight when a
+redirect arrives. It takes a multi-cycle memory to hold the window open. 803,355
+instructions verified against MAME went through that path and none went through
+the bridge.
+
+*Two failed fixes, and why they failed.*
+
+1. **Defer every redirect to the next acknowledge.** Breaks
+   `test_i960_icache`'s redirect pass — 2 mismatches. With an immediate-ack
+   memory nothing is outstanding, and deferring consumes an acknowledge the
+   completion path needed.
+2. **Defer only when a fetch is outstanding.** 4 mismatches. The `outstanding`
+   flag is set from `bus_req`, which is held across the line, so it reads true
+   in cycles where nothing is actually in flight.
+
+Both are reverted. The suite is green and the harness reproduces the fault in
+five seconds, which is the right state to attempt a third fix from.
+
+*What the fix has to satisfy:* the address must not move while a transaction is
+outstanding; a redirect must still not wait out a line nothing wants; and
+`test_i960_icache`'s redirect and speculative passes must stay at zero — they
+are testing the same code against an immediate-ack memory, which is a different
+regime from the bridge and both have to work.

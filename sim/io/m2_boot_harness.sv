@@ -89,7 +89,8 @@ module m2_boot_harness #(
   // is normal traffic: study R34 established that the i960 holds bus_req across
   // a run of accesses and that m2_cpu_bridge LATCHES the address rather than
   // sampling it live, so movement after the latch is expected and harmless.
-  output logic [31:0] obs_addr_moved
+  output logic [31:0] obs_addr_moved,
+  output logic  [7:0] obs_mstate      // {0,0,sd_ack,ack_mem,req_mem,st[2:0]}
 );
 
   logic        bus_req, bus_we, bus_ack;
@@ -184,7 +185,7 @@ module m2_boot_harness #(
     .io_addr(cpu_io_addr), .io_wdata(cpu_io_wdata), .io_be(cpu_io_be),
     .dbg_cpu_reads(), .dbg_cpu_writes(), .dbg_unmapped(),
     .dbg_last_addr(), .dbg_last_dout(), .dbg_probe6(), .dbg_probe2(),
-    .dbg_tram_wr(dbg_tram_wr), .dbg_pal_wr(), .dbg_mstate()
+    .dbg_tram_wr(dbg_tram_wr), .dbg_pal_wr(), .dbg_mstate(obs_mstate)
   );
 
   // ---- the peripherals, real
