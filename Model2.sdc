@@ -21,11 +21,21 @@
 
 set core_clks [get_clocks -nowarn {*|pll|pll_inst|altera_pll_i|*[*].*|divclk}]
 if {[llength $core_clks] == 0} {
-    post_message -type error \
+    # CRITICAL WARNING, NOT ERROR, AND THAT DISTINCTION COST A BUILD.
+    #
+    # `post_message -type error` inside an SDC makes read_sdc FAIL, and a failed
+    # read_sdc means the design is fitted with NO CONSTRAINTS AT ALL. What
+    # Quartus then reports is "Can't fit design in device" -- a resource message,
+    # at 46% logic -- with the actual cause three lines earlier in another
+    # report. The guard meant to prevent a vacuous pass produced a misleading
+    # failure instead.
+    #
+    # `make release` enforces it against the finished STA report. Here it only
+    # has to be VISIBLE.
+    post_message -type critical_warning \
       "Model2.sdc: no core PLL clocks matched *|pll|pll_inst|altera_pll_i|*. \
        The PLL hierarchy does not match sys_top.sdc, so its clock groups are a \
        silent no-op and this build is NOT timed. See rtl/pll/pll.v."
-    post_message -type error "Model2.sdc: refusing to constrain a design that is not timed."
 }
 
 # THE MEMORY CLOCK AND THE CORE CLOCK MUST BE TIMED AGAINST EACH OTHER.
@@ -61,9 +71,9 @@ set_clock_groups -asynchronous \
 # general[0] and general[4] here are both 96 MHz and differ only in phase, which
 # is precisely that case, so a build that quietly produced fewer than five
 # distinct clocks would look like a timing regression with no cause.
-if {[llength $core_clks] != 0 && [llength $core_clks] < 5} {
-    post_message -type error \
-      "Model2.sdc: only [llength $core_clks] core PLL clocks exist, expected 5. \
-       Outputs with identical settings can be merged into one output counter by \
-       the IP -- see rtl/pll/pll.v. This build is not timed as designed."
-}
+# THE COUNT IS NOT CHECKED HERE. During the fitter's read_sdc the derived PLL
+# clocks are not all present yet -- this counted 1 on a build whose PLL had been
+# elaborated with all five, confirmed in the synthesis log -- so a count taken at
+# this point reports a state that is not final. `make release` checks it against
+# the finished STA report instead.
+

@@ -723,6 +723,27 @@ release: check_mra
 	 fi
 	@grep -q 'Flow Status.*Successful' output_files/Model2.flow.rpt 2>/dev/null || { \
 	  echo "last Quartus flow did not report Successful -- refusing to release"; exit 1; }
+	@# FIVE DISTINCT CORE PLL CLOCKS, checked where the answer is final.
+	@#
+	@# This was an SDC guard, and it fired during the fitter's read_sdc when the
+	@# derived clocks were not all present yet -- reporting 1 on a build whose
+	@# PLL had been elaborated with all five. Worse, `post_message -type error`
+	@# in an SDC makes read_sdc FAIL, so the design was fitted with no
+	@# constraints and Quartus reported "Can't fit design in device" at 46%
+	@# logic. The check is right; the place was wrong.
+	@#
+	@# It matters because outputs with identical settings can be merged into one
+	@# output counter by the IP -- general[0] and general[4] are both 96 MHz and
+	@# differ only in phase. The Kaneko16 core lost a whole design to that: three
+	@# outputs became one, the core collapsed to a single clock domain, and Fmax
+	@# fell to 54.74 MHz with no error anywhere.
+	@n=$$(grep -oE 'general\[[0-9]\]\.gpll~PLL_OUTPUT_COUNTER\|divclk' \
+	      output_files/Model2.sta.rpt 2>/dev/null | sort -u | wc -l); \
+	 if [ "$$n" -lt 5 ]; then \
+	   echo "only $$n distinct core PLL output clocks, expected 5 -- refusing to release"; \
+	   echo "  outputs with identical settings can be merged by the IP; see rtl/pll/pll.v"; \
+	   exit 1; \
+	 else echo "  core PLL clocks: $$n distinct outputs"; fi
 	@# REFUSE NEGATIVE SLACK. "Flow Status: Successful" does not mean timing
 	@# closed -- Quartus reports success and lists the failing paths in the STA
 	@# report, and a core that misses by picosecond margins works until it does

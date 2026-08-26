@@ -1168,6 +1168,8 @@ logic [SDR_AW:1] sw_addr;
 logic [23:0]     sw_acc, sw_val;
 logic [19:0]     sw_burst;
 logic  [1:0]     sw_state;
+logic [63:0]     sw_word;     // the burst, folded a word at a time
+logic  [1:0]     sw_wsel;
 logic  [4:0]     sw_sel;
 logic            sw_done;
 
@@ -1212,12 +1214,38 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 				sw_req   <= 1'b1;
 				sw_state <= 2'd1;
 			end
+			// ONE WORD PER CYCLE, NOT FOUR IN ONE.
+			//
+			// This folded all four words of the burst in a single cycle:
+			//
+			//   sw_acc <= sw_fold(sw_fold(sw_fold(sw_fold(sw_acc, w0), w1), w2), w3)
+			//
+			// which is four chained 24-bit add-and-rotates, launched from
+			// m2_sdram's p_ack[4] in the 96 MHz domain and latched in the 48 MHz
+			// one. At 40 MHz that fitted. At 48 it does not:
+			//
+			//   From  m2_sdram|p_ack[4]   To  sw_acc[23]
+			//   Data Delay 10.125 ns against a 10.417 ns relationship
+			//   Setup slack -0.623  (VIOLATED)
+			//
+			// It was the ONLY failing path in the whole design -- the 96 MHz
+			// memory domain closed at +1.567 ns -- and it is debug
+			// instrumentation, not the machine. Folding one word per cycle cuts
+			// the chain to a quarter and costs three extra cycles per burst on
+			// something that runs once and has no deadline.
 			2'd1: if (p_ack[4]) begin
-				sw_req <= 1'b0;
-				sw_acc <= sw_fold(sw_fold(sw_fold(sw_fold(sw_acc,
-				            p_dout[4][15:0]),  p_dout[4][31:16]),
-				            p_dout[4][47:32]), p_dout[4][63:48]);
-				sw_state <= 2'd2;
+				sw_req  <= 1'b0;
+				sw_word <= p_dout[4];
+				sw_wsel <= 2'd0;
+				sw_state <= 2'd3;
+			end
+
+			// Fold the four captured words, one each cycle, then advance.
+			2'd3: begin
+				sw_acc  <= sw_fold(sw_acc, sw_word[15:0]);
+				sw_word <= {16'd0, sw_word[63:16]};
+				if (sw_wsel == 2'd3) sw_state <= 2'd2;
+				else                 sw_wsel  <= sw_wsel + 2'd1;
 			end
 			2'd2: begin
 				// 0x100000 words at four per burst is 0x40000 bursts.
