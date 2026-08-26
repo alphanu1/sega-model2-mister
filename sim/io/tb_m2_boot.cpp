@@ -57,6 +57,14 @@ int main(int argc, char **argv) {
     if (!std::strncmp(argv[i], "+insn=", 6))
       max_instr = std::strtoull(argv[i] + 6, nullptr, 10);
 
+  // A PC STREAM FROM THE COMPOSITION, so the differential can be run against
+  // MAME through the REAL bridge. tb_i960_rom's stream comes from a path that
+  // has never included it, which is exactly how a bridge defect survived
+  // 803,355 verified instructions.
+  const char *outfile = nullptr;
+  for (int i = 1; i < argc; i++)
+    if (!std::strncmp(argv[i], "+out=", 5)) outfile = argv[i] + 5;
+
   const char *rp = std::getenv("M2_ROMPATH");
   const std::string dir = std::string(rp ? rp :
       (std::string(std::getenv("HOME") ? std::getenv("HOME") : ".") + "/roms/Model2"))
@@ -109,7 +117,16 @@ int main(int argc, char **argv) {
   bool busy = false;
   uint32_t pend_addr = 0;
 
+  const char *sf = std::getenv("M2_BOOT_SDR");
+  const uint32_t sdr_from = sf ? uint32_t(std::strtoul(sf, nullptr, 10)) : 0;
+  int n_sdr = 0;
+
   auto mem_tick = [&]() {
+    if (sdr_from && d->dbg_acc >= sdr_from && n_sdr < 60 && d->sd_req && !busy && !ack_left) {
+      std::printf("      sdr i%-4u %s word %07x\n", d->dbg_acc,
+                  d->sd_we ? "wr" : "rd", d->sd_addr);
+      ++n_sdr;
+    }
     if (!busy && d->sd_req && !ack_left) {
       busy = true; lat = 6; pend_addr = d->sd_addr;
       if (d->sd_we) {
@@ -171,9 +188,14 @@ int main(int argc, char **argv) {
   const uint64_t VBL = uint64_t(48e6 / 57.52);
   uint64_t next_vbl = VBL, vblanks = 0;
   uint64_t first_win_rd = 0;
+  FILE *out = outfile ? std::fopen(outfile, "wb") : nullptr;
+  uint32_t acc_prev = 0;
   const bool watch_io = std::getenv("M2_BOOT_IO") != nullptr;
   bool ack_prev = false;
   int  n_watch = 0;
+  const char *bf = std::getenv("M2_BOOT_BUS");
+  const uint32_t bus_from = bf ? uint32_t(std::strtoul(bf, nullptr, 10)) : 0;
+  int n_bus = 0;
 
   while (d->dbg_acc < max_instr) {
     tick();
@@ -184,11 +206,31 @@ int main(int argc, char **argv) {
       static int hold = 0;
       if (++hold > 200) { d->irq = 0; hold = 0; }
     }
+    // One line per RETIRED instruction, in the same 8-hex format tools/
+    // i960-resync-diff.py reads.
+    if (out && d->dbg_acc != acc_prev) {
+      std::fprintf(out, "%08x\n", d->dbg_ip);
+      acc_prev = d->dbg_acc;
+    }
+
     if (!first_win_rd && d->iob_win_rd) first_win_rd = d->dbg_acc;
 
     // WHAT THE i960 WAS HANDED, for the accesses the boot is stuck on. The
     // overlay can show what the I/O board returned; only this can show what
     // arrived at the CPU, and the two are separated by the bridge.
+    // THE COPY LOOP'S OWN BUS TRAFFIC. ldq/stq are 16-byte accesses, which the
+    // i960 issues as four back-to-back 32-bit ones with bus_req HELD and the
+    // address moving on the acknowledge -- study R34. That is the pattern the
+    // bridge finds hardest and the one nothing else exercises.
+    if (bus_from && d->dbg_acc >= bus_from && d->obs_bus_ack && !ack_prev
+        && n_bus < 80) {
+      std::printf("    i%-4u %08x be=%x %s %08x\n", d->dbg_acc,
+                  d->obs_bus_addr, d->obs_bus_be,
+                  d->obs_bus_we ? "wr" : "rd",
+                  d->obs_bus_we ? d->obs_bus_wdata : d->obs_bus_rdata);
+      ++n_bus;
+    }
+
     if (watch_io && d->obs_bus_ack && !ack_prev &&
         (d->obs_bus_addr & 0xfffffff0u) == 0x01c00040u && n_watch < 12) {
       std::printf("    bus %08x be=%x %s -> %08x\n", d->obs_bus_addr,
@@ -208,6 +250,34 @@ int main(int argc, char **argv) {
               d->iob_win_rd, d->bak_writes, d->bak_w0);
   std::printf("  tile RAM writes %u\n", d->dbg_tram_wr);
 
+  // DID THE BOOT'S FIRST BLOCK COPY LAND? Instruction 113 is
+  //
+  //   00000890: shlo 17,1,g0        ; 128 KB
+  //   0000089C: lda  0x200000,g2    ; board RAM
+  //   000008A4: bal  0x910          ; ldq/stq, 16 bytes an iteration
+  //
+  // copying the program ROM into board RAM. MAME runs that loop 8,192 times.
+  // Checking the destination is worth more than counting the loop: it says
+  // whether the machine ended up in the right state, not whether it took the
+  // expected route there.
+  {
+    const uint32_t BOARD = 0x1680000;   // GAME_BOARD, word address
+    size_t same = 0, diff = 0;
+    for (uint32_t w = 0; w < 0x10000; ++w) {
+      if (mem[BOARD + w] == mem[w]) ++same; else ++diff;
+    }
+    std::printf("  boot copy 0x0 -> 0x200000: %zu of %zu words match\n",
+                same, same + diff);
+    // The PATTERN names the fault. Duplicated words mean an address latched
+    // twice; a shift means one was missed; zeros or 0xffff mean the write never
+    // reached memory at all.
+    std::printf("    src:");
+    for (int w = 0; w < 12; ++w) std::printf(" %04x", mem[w]);
+    std::printf("\n    dst:");
+    for (int w = 0; w < 12; ++w) std::printf(" %04x", mem[BOARD + w]);
+    std::printf("\n");
+  }
+
   int fail = 0;
   if (d->iob_win_rd == 0) {
     std::printf("\n  REPRODUCED: the i960 never read the block window, which is\n"
@@ -219,6 +289,7 @@ int main(int argc, char **argv) {
                 "  This harness does NOT reproduce the hardware fault.\n",
                 (unsigned long long)first_win_rd);
   }
+  if (out) { std::fclose(out); std::printf("  PC stream written to %s\n", outfile); }
   std::printf("%s\n", fail ? "FAIL" : "PASS");
   delete d;
   return fail;

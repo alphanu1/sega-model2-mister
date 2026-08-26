@@ -77,7 +77,8 @@ module m2_boot_harness #(
   output logic [31:0] obs_bus_rdata,
   output logic        obs_bus_ack,
   output logic  [3:0] obs_bus_be,
-  output logic        obs_bus_we
+  output logic        obs_bus_we,
+  output logic [31:0] obs_bus_wdata
 );
 
   logic        bus_req, bus_we, bus_ack;
@@ -104,6 +105,7 @@ module m2_boot_harness #(
   assign obs_bus_ack   = bus_ack;
   assign obs_bus_be    = bus_be;
   assign obs_bus_we    = bus_we;
+  assign obs_bus_wdata = bus_wdata;
 
   i960_top u_cpu (
     .clk(clk_cpu), .rst_n(rst_n),
