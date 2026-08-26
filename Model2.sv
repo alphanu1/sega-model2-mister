@@ -1294,7 +1294,15 @@ logic            sw_req;
 logic [SDR_AW:1] sw_addr;
 logic [23:0]     sw_acc, sw_val;
 logic [19:0]     sw_burst;
-logic  [1:0]     sw_state;
+// THREE BITS. It was two, and pipelining the fold added a state that collided
+// with the one that means "finished": completion went to 3, state 3 folded four
+// words and returned to 2, which saw the burst count still at its limit and went
+// back to 3. An endless loop with sw_val reassigned every pass, so the fold read
+// as unreadable churn on the overlay while sw_done sat latched at DD.
+//
+// Every sweep reading taken since the fold was pipelined is therefore worthless,
+// including the ones used to reason about which SDRAM ports work.
+logic  [2:0]     sw_state;
 logic [63:0]     sw_word;     // the burst, folded a word at a time
 logic  [1:0]     sw_wsel;
 logic  [4:0]     sw_sel;
@@ -1318,7 +1326,7 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
 		sw_req <= 1'b0; sw_addr <= '0; sw_acc <= 24'd0;
 		sw_val <= 24'd0; sw_burst <= 20'd0;
-		sw_state <= 2'd0; sw_sel <= 5'd0; sw_done <= 1'b0;
+		sw_state <= 3'd0; sw_sel <= 5'd0; sw_done <= 1'b0;
 	end else begin
 		// RESTART ON A NEW SELECTION -- but never out of state 1, which is the
 		// one state with a request outstanding on port 4. Dropping sw_req there
@@ -1326,20 +1334,20 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		// land in a sweep which had already zeroed its accumulator, folding one
 		// stale burst into the new region's total. A sweep is ~66 ms, so waiting
 		// for the in-flight burst to land costs nothing.
-		if (sw_sel != sw_sel_i && sw_state != 2'd1) begin
+		if (sw_sel != sw_sel_i && sw_state != 3'd1) begin
 			sw_sel   <= sw_sel_i;
-			sw_state <= 2'd0;
+			sw_state <= 3'd0;
 			sw_req   <= 1'b0;
 			sw_done  <= 1'b0;
 		end else case (sw_state)
-			2'd0: if (rom_loaded) begin
+			3'd0: if (rom_loaded) begin
 				sw_addr  <= SDR_AW'({sw_sel_i, 20'd0});
 				sw_sel   <= sw_sel_i;
 				sw_acc   <= 24'd0;
 				sw_burst <= 20'd0;
 				sw_done  <= 1'b0;
 				sw_req   <= 1'b1;
-				sw_state <= 2'd1;
+				sw_state <= 3'd1;
 			end
 			// ONE WORD PER CYCLE, NOT FOUR IN ONE.
 			//
@@ -1360,31 +1368,32 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 			// instrumentation, not the machine. Folding one word per cycle cuts
 			// the chain to a quarter and costs three extra cycles per burst on
 			// something that runs once and has no deadline.
-			2'd1: if (p_ack[4]) begin
+			3'd1: if (p_ack[4]) begin
 				sw_req  <= 1'b0;
 				sw_word <= p_dout[4];
 				sw_wsel <= 2'd0;
-				sw_state <= 2'd3;
+				sw_state <= 3'd3;
 			end
 
 			// Fold the four captured words, one each cycle, then advance.
-			2'd3: begin
+			3'd3: begin
 				sw_acc  <= sw_fold(sw_acc, sw_word[15:0]);
 				sw_word <= {16'd0, sw_word[63:16]};
-				if (sw_wsel == 2'd3) sw_state <= 2'd2;
+				if (sw_wsel == 2'd3) sw_state <= 3'd2;
 				else                 sw_wsel  <= sw_wsel + 2'd1;
 			end
-			2'd2: begin
+			3'd2: begin
 				// 0x100000 words at four per burst is 0x40000 bursts.
 				if (sw_burst == 20'h3FFFF) begin
 					sw_val   <= sw_acc;
 					sw_done  <= 1'b1;
-					sw_state <= 2'd3;
+					sw_state <= 3'd4;      // distinct from the fold state
+
 				end else begin
 					sw_addr  <= sw_addr + SDR_AW'(4);
 					sw_burst <= sw_burst + 20'd1;
 					sw_req   <= 1'b1;
-					sw_state <= 2'd1;
+					sw_state <= 3'd1;
 				end
 			end
 			default: ;                          // finished, hold sw_val
