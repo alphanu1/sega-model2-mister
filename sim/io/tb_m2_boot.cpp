@@ -256,6 +256,7 @@ int main(int argc, char **argv) {
   std::printf("  window reads %u, backup writes %u, backup dword0 %08x\n",
               d->iob_win_rd, d->bak_writes, d->bak_w0);
   std::printf("  tile RAM writes %u\n", d->dbg_tram_wr);
+  std::printf("  bus address moved mid-transaction: %u times\n", d->obs_addr_moved);
 
   // DID THE BOOT'S FIRST BLOCK COPY LAND? Instruction 113 is
   //

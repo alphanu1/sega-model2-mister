@@ -78,7 +78,18 @@ module m2_boot_harness #(
   output logic        obs_bus_ack,
   output logic  [3:0] obs_bus_be,
   output logic        obs_bus_we,
-  output logic [31:0] obs_bus_wdata
+  output logic [31:0] obs_bus_wdata,
+  output logic        obs_bus_req,
+  // The address moving while a request is outstanding. NOT A FAULT, and this
+  // counter is kept only so the next person does not spend an afternoon
+  // deciding that it is.
+  //
+  // It reads ~765,000 in a 474,490-instruction boot, and reads EXACTLY THE SAME
+  // with i960_top's bus arbiter left combinational or given a locked grant. It
+  // is normal traffic: study R34 established that the i960 holds bus_req across
+  // a run of accesses and that m2_cpu_bridge LATCHES the address rather than
+  // sampling it live, so movement after the latch is expected and harmless.
+  output logic [31:0] obs_addr_moved
 );
 
   logic        bus_req, bus_we, bus_ack;
@@ -106,6 +117,41 @@ module m2_boot_harness #(
   assign obs_bus_be    = bus_be;
   assign obs_bus_we    = bus_we;
   assign obs_bus_wdata = bus_wdata;
+  assign obs_bus_req   = bus_req;
+
+  // A CORRECT DETECTOR THIS TIME. The first version counted
+  //
+  //   bus_req && prev_req && !bus_ack && bus_addr != prev_addr
+  //
+  // and reported 340,934 hits, which is a meaningless number: the i960 HOLDS
+  // bus_req across a run of accesses (study R34), so between two accesses the
+  // address changes legitimately in a cycle where there is no acknowledge. It
+  // was counting normal traffic, and it "did not improve" when the arbiter was
+  // changed because it was never measuring the arbiter.
+  //
+  // What is actually illegal is the address moving while ONE transaction is
+  // outstanding -- after the request was taken and before it was acknowledged.
+  logic [31:0] xact_addr;
+  logic        in_flight;
+  always_ff @(posedge clk_cpu or negedge rst_n) begin
+    if (!rst_n) begin
+      in_flight <= 1'b0; xact_addr <= 32'd0; obs_addr_moved <= 32'd0;
+    end else begin
+      // NOT ON THE ACKNOWLEDGE CYCLE. The i960 moves bus_addr ON the
+      // acknowledge, so a change in that cycle is the next access starting,
+      // not this one being corrupted. Excluding it is the difference between
+      // measuring the arbiter and measuring normal traffic -- which the two
+      // previous versions of this counter both got wrong, in different ways.
+      if (in_flight && !bus_ack && bus_addr != xact_addr)
+        obs_addr_moved <= obs_addr_moved + 32'd1;
+
+      if (bus_ack)      in_flight <= 1'b0;
+      else if (bus_req && !in_flight) begin
+        in_flight <= 1'b1;
+        xact_addr <= bus_addr;
+      end
+    end
+  end
 
   i960_top u_cpu (
     .clk(clk_cpu), .rst_n(rst_n),
