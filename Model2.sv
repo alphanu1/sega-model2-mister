@@ -922,7 +922,19 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 end
 wire game_image = rom_loaded && (ldr_top > SDR_AW'(32'h0080000));
 
-wire cpu_rst_n = mem_rst_n & rom_loaded & game_image;
+// THE CPU FOLLOWS THE GAME RESET; THE MEMORY DOES NOT.
+//
+// This was `mem_rst_n & rom_loaded & game_image`, and mem_rst_n is pll_locked
+// alone -- so pressing reset dropped game_rst_n and the i960 never saw it. Nor
+// did m2_ioboard or m2_backup, which are on this same net. Reset did nothing to
+// the machine, which makes every observation on the board unrepeatable: there
+// is no way to tell a counter that stopped from one that was never restarted.
+//
+// mem_rst_n stays exactly as it was, and that is the standing rule rather than
+// an oversight: "Memory comes out of reset on PLL lock and stays out, separate
+// from the game reset." The SDRAM's bring-up and the loaded image must survive
+// a reset; the CPU must not.
+wire cpu_rst_n = game_rst_n & rom_loaded & game_image;
 
 wire        cpu_req, cpu_we;
 wire [31:0] cpu_addr, cpu_wdata, cpu_rdata;
