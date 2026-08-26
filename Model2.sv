@@ -84,7 +84,12 @@ localparam CONF_STR = {
 	// every one of four settings is the symptom of a range that does not
 	// contain the answer, and this project has now read that symptom as "the
 	// phase is not involved" once already.
-	"O[7:5],SDRAM phase,CL+2,CL+0,CL+1,CL+3,CL+4,CL+5;",
+	// AUTO is the default and the right answer on a healthy board: the
+	// self-test sweeps all six depths against a known 64-bit pattern and takes
+	// the centre of the widest window that passed. The manual settings exist
+	// because a board that cannot be calibrated should still be usable, and
+	// because forcing a known value is how the calibration itself gets checked.
+	"O[7:5],SDRAM phase,Auto,CL+1,CL+2,CL+3,CL+4,CL+5;",
 	// WHICH 2 MB OF THE CHIP THE PORT-4 SWEEP FOLDS. Selectable because the
 	// alternative is a 25-minute build per probe, and locating a corruption in
 	// 43.62 MB takes more than one probe. Region N covers word N*0x100000 for
@@ -375,17 +380,14 @@ m2_sdram_x2 #(.NP(NPORTS), .AW(SDR_AW)) u_sdram_x2 (
 	.f_wr_be(f_wr_be),   .f_wr_ack(f_wr_ack)
 );
 
-// CL3, NOT CL2, AT 96 MHz. The self-test's capture sweep ran all six depths
-// against a known 64-bit pattern and NONE of them read it back -- overlay word
-// 20 reported cal_done with a pass mask of zero. That is not a capture-phase
-// problem: a wrong depth moves whole 16-bit words, and the readback at CL+2 was
-// wrong in a SINGLE BIT, which is what a marginal device timing looks like.
-//
-// CL2 asks the device for data 20.8 ns after the READ command at 96 MHz. That
-// was never exercised above 40 MHz, where the same CL2 meant 50 ns. CL3 gives it
-// 31.25 ns, and every latency in the controller follows the parameter -- the
-// capture depths are CL+0..CL+5 -- so the sweep moves with it.
-m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(750), .CL(3)) u_sdram (
+// CL2, WHICH IS WHAT WORKS ON THIS BOARD AT THIS CLOCK. Briefly changed to CL3
+// on the reasoning that a varying pass mask meant marginal device timing, and
+// CL2 at 96 MHz asks for data 20.8 ns after READ where at 40 MHz it meant 50.
+// The Kaneko16 core runs this same controller at 96 MHz on this same board with
+// CL2 and a capture of CL+4, so the device is not the limit and the latency did
+// not need raising. Reverted rather than left in as a harmless-looking change
+// that was aimed at the wrong thing.
+m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(750)) u_sdram (
 	.clk(clk_mem), .rst_n(mem_rst_n), .ready(mem_ready),
 	// OSD order is CL+2..CL+5 and the selector's own encoding puts CL+3 at zero,
 	// so the two are mapped rather than passed through.
@@ -395,7 +397,12 @@ m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(750), .CL(3)) u_sdram (
 	// SWEPT WHILE CALIBRATING, then held at what passed. The OSD still
 	// overrides once the sweep has finished and found nothing, so a board this
 	// cannot calibrate is still tunable by hand.
-	.rd_lat_sel(cal_done ? cal_best : cal_sel),
+	// AUTO BY DEFAULT, MANUAL WHEN ASKED. status[7:5] == 0 means "use the
+	// calibration"; 1..5 force CL+1..CL+5 so a board this cannot calibrate is
+	// still tunable by hand without a rebuild. During the sweep itself the
+	// controller follows cal_sel, because that is what is being measured.
+	.rd_lat_sel(!cal_done          ? cal_sel      :
+	            (status[7:5] != 0) ? status[7:5]  : cal_best),
 	.sd_cke(SDRAM_CKE), .sd_cs_n(SDRAM_nCS), .sd_ras_n(SDRAM_nRAS),
 	.sd_cas_n(SDRAM_nCAS), .sd_we_n(SDRAM_nWE), .sd_ba(SDRAM_BA),
 	.sd_a(SDRAM_A), .sd_dqm({SDRAM_DQMH, SDRAM_DQML}),
@@ -529,12 +536,48 @@ logic  [2:0]     cal_sel;
 logic  [5:0]     cal_mask;
 logic  [5:0]     cal_wait;
 logic            cal_done;
-// The lowest depth that passed, or the OSD's choice if none did. Lowest rather
-// than any, because a shallower capture that reads correctly has more margin
-// against the next thing that slows the path down.
-wire   [2:0]     cal_best = cal_mask[0] ? 3'd0 : cal_mask[1] ? 3'd1 :
-                            cal_mask[2] ? 3'd2 : cal_mask[3] ? 3'd3 :
-                            cal_mask[4] ? 3'd4 : cal_mask[5] ? 3'd5 : status[7:5];
+// THE CENTRE OF THE WIDEST PASSING RUN, not the lowest bit that happened to be
+// set.
+//
+// This picked the lowest, on the reasoning that "a shallower capture that reads
+// correctly has more margin against whatever slows the path down next". That is
+// backwards. A capture window is a CONTIGUOUS RUN of depths that work; its edges
+// are where the data is only just there and its centre is where it is safely
+// there. Picking the lowest set bit deliberately selects the ragged edge.
+//
+// The board proved it: the sweep saw CL+2 and CL+4 pass and CL+2 was chosen, and
+// CL+2 read the boot IP back wrong in a single bit while the Kaneko16 core runs
+// this same controller at this same clock on this same board at CL+4. The mask
+// was not even depth-ordered at the time -- index 0 was CL+2, 1 was CL+0 -- so
+// "lowest" did not mean "earliest" either.
+//
+// Six depths, so the runs are enumerated rather than computed. Longest first,
+// and among equals the later one, because a late window has the data settled
+// while an early one is waiting for it.
+wire [5:0] m = cal_mask;
+wire [2:0] cal_scan =
+  (m[1] & m[2] & m[3] & m[4] & m[5]) ? 3'd3 :   // 1-5, centre 3
+  (m[0] & m[1] & m[2] & m[3] & m[4]) ? 3'd2 :   // 0-4, centre 2
+  (m[2] & m[3] & m[4] & m[5])        ? 3'd3 :   // 2-5, centre 3 (later of 3,4)
+  (m[1] & m[2] & m[3] & m[4])        ? 3'd2 :
+  (m[0] & m[1] & m[2] & m[3])        ? 3'd1 :
+  (m[3] & m[4] & m[5])               ? 3'd4 :
+  (m[2] & m[3] & m[4])               ? 3'd3 :
+  (m[1] & m[2] & m[3])               ? 3'd2 :
+  (m[0] & m[1] & m[2])               ? 3'd1 :
+  (m[4] & m[5])                      ? 3'd5 :   // pair: take the later
+  (m[3] & m[4])                      ? 3'd4 :
+  (m[2] & m[3])                      ? 3'd3 :
+  (m[1] & m[2])                      ? 3'd2 :
+  (m[0] & m[1])                      ? 3'd1 :
+  m[5] ? 3'd5 : m[4] ? 3'd4 : m[3] ? 3'd3 :     // lone survivor: take it
+  m[2] ? 3'd2 : m[1] ? 3'd1 : m[0] ? 3'd0 :
+  3'd4;                                         // nothing passed: CL+4, which
+                                                // is what the Kaneko16 core uses
+                                                // on THIS board at THIS clock --
+                                                // a measured value from a
+                                                // working design, not a guess
+wire   [2:0]     cal_best = cal_scan;
 assign cal_done = (st_state == 4'd12);
 logic [SDR_AW:1] st_addr, st_rd_addr;
 logic [15:0]     st_din;

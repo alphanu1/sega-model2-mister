@@ -232,7 +232,7 @@ module m2_sdram #(
   // chosen depth. Simulation ties it to 1 and keeps CL+3, so every existing
   // harness measures what it always measured.
   localparam int unsigned RD_LAT     = CL + 5;   // pipeline depth, the maximum
-  localparam int unsigned RD_LAT_DEF = CL + 3;   // what the model needs
+  localparam int unsigned RD_LAT_DEF = CL + 4;   // what the board wants
 
   // Which stage the tag is injected at, so it reaches slot 0 after that many
   // cycles. Registered off the selector to keep a slow OSD bit out of the
@@ -245,29 +245,18 @@ module m2_sdram #(
   always_ff @(posedge clk) begin
     if (!rst_n) cap_depth <= 4'(RD_LAT_DEF);
     else case (rd_lat_sel)
-      // SELECTOR 0 IS CL+2, MEASURED AT 96 MHz. An unconnected or defaulted
-      // selector lands on index 0, so index 0 must be what the board wants.
+      // INDEX n IS CL+n. The order used to be CL+2, CL+0, CL+1, CL+3, CL+4,
+      // CL+5 -- chosen so that an unconnected selector landed on the value the
+      // board wanted -- and that made the calibration sweep's pass mask
+      // MEANINGLESS AS A SHAPE. A capture window is a contiguous run of depths
+      // that work, and finding its centre is the whole point of sweeping it;
+      // you cannot do that when bit 1 is two cycles from bit 0 and bit 2 is
+      // back between them.
       //
-      // The history is worth keeping because it has been wrong twice in
-      // opposite directions. At 40 MHz the range was CL+2..CL+5 and the board
-      // needed EARLIER: a write-then-read of AA55, 5AA5, FF00, 00FF came back
-      // as 5AA5, FF00, 00FF, 00FF, the burst shifted by exactly one 16-bit
-      // word. The range moved to CL+0..CL+3 with CL+1 first.
-      //
-      // At 96 MHz the same symptom appeared again -- the boot IP reading
-      // 0860FFFF where the ROM holds 00000860, the same value with its halves
-      // one word apart -- and the expectation was that the answer had moved
-      // LATER, to CL+4 or CL+5: the round trip is 2.4x longer in clock cycles
-      // and the Kaneko16 core wants CL+4 on this controller at this clock. The
-      // selector was widened to three bits to reach them.
-      //
-      // IT IS CL+2, which the two-bit range already contained. The range was
-      // never the problem; the default was. Widening was not wasted -- it is
-      // what proved the answer lies inside the range rather than beyond it --
-      // but the reasoning that motivated it did not survive the measurement.
-      3'd0:    cap_depth <= 4'(CL + 2);   // unconnected lands here, by design
-      3'd1:    cap_depth <= 4'(CL + 0);
-      3'd2:    cap_depth <= 4'(CL + 1);
+      // The default now comes from the calibration rather than from index 0.
+      3'd0:    cap_depth <= 4'(CL + 0);
+      3'd1:    cap_depth <= 4'(CL + 1);
+      3'd2:    cap_depth <= 4'(CL + 2);
       3'd3:    cap_depth <= 4'(CL + 3);
       3'd4:    cap_depth <= 4'(CL + 4);
       default: cap_depth <= 4'(CL + 5);
