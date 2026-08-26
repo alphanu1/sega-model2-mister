@@ -3207,3 +3207,36 @@ is correct data for a line nothing is waiting on.
 `test_i960_icache` stays at zero on both its redirect and speculative passes.
 The remaining divergence at `0x0b10-0x0b30` is interrupt timing and is the same
 one the direct-CPU harness reaches — this is no longer the blocker.
+
+**R46 — the boot runs on hardware at 96 MHz.** First build where the i960
+executes past the I/O board exchange on the device rather than in simulation.
+
+| overlay | reads | means |
+|---|---|---|
+| word 20 | `00001204` | capture sweep done, only CL+2 passes, CL+2 selected — **stable across four resets** |
+| row 2 | `00000860` | SDRAM reads back the boot IP correctly at 96 MHz |
+| row 16 | `41474553` | `"SEGA"` — the boot's 128 KB block copy landed in backup SRAM |
+| row 8 | `0000A394` | **41,876 tile RAM writes**, against 41,868 in simulation |
+| row 4 | `00003B03` | no trap, no halt, `st_ok` set, image loaded, PLL locked |
+
+**4,097 is finally behind us.** That number stood on every build for five
+sessions and was attributed in turn to the sound handshake (R37), a missing
+identity block, absent backup SRAM, a clock-domain crossing, and the bus
+arbiter. It was none of them: it was one combinational address in the I-cache
+moving a cycle early (R45), and it could only be found by putting the real
+bridge in the loop.
+
+*What it took, in order:* the composition harness (`test_m2_boot`), which
+reproduced every hardware symptom in five seconds; the bridge's `T_IO` sample,
+one cycle early against a registered peripheral; backup SRAM, which did not
+exist; the I-cache redirect; the SDRAM at 96 MHz behind a 2:1 adapter with a
+phase-shifted `SDRAM_CLK`; and a capture-depth sweep that calibrates itself.
+
+*The one number that is not comfortable.* The passing window is **one depth
+wide** — CL+1 and CL+3 both fail. It is stable, and stability across resets is
+what makes it trustworthy, but a single-cycle window has no margin against
+temperature or voltage drift. The Kaneko16 core sits at CL+4 on this same board
+at this same clock, so our data arrives about two cycles earlier than theirs;
+the likely causes are pin routing and the two extra PLL outputs. If this core
+ever becomes unreliable after warming up, that is the first thing to look at,
+and the sweep now measures it in one boot rather than a build per guess.
