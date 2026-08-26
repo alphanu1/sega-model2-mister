@@ -316,7 +316,7 @@ int main(int argc, char **argv) {
     // address moving on the acknowledge -- study R34. That is the pattern the
     // bridge finds hardest and the one nothing else exercises.
     if (bus_from && d->dbg_acc >= bus_from && d->obs_bus_ack && !ack_prev
-        && n_bus < 80) {
+        && (d->obs_bus_addr & 0xfff00000u) != 0x01000000u && n_bus < 40) {
       std::printf("    i%-4u %08x be=%x %s %08x\n", d->dbg_acc,
                   d->obs_bus_addr, d->obs_bus_be,
                   d->obs_bus_we ? "wr" : "rd",
