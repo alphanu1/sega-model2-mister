@@ -216,7 +216,10 @@ int main(int argc, char **argv) {
   const uint32_t bus_from = bf ? uint32_t(std::strtoul(bf, nullptr, 10)) : 0;
   int n_bus = 0;
   const bool watch_char = std::getenv("M2_BOOT_CHAR") != nullptr;
+  const char *csf = std::getenv("M2_BOOT_CHARSTREAM");
+  FILE *charstream = csf ? std::fopen(csf, "w") : nullptr;
   int n_char = 0;
+  uint64_t ldos_n = 0, ldos_bad = 0;
   const char *cf = std::getenv("M2_BOOT_CYC");
   const uint32_t cyc_from = cf ? uint32_t(std::strtoul(cf, nullptr, 10)) : 0;
   int n_cyc = 0;
@@ -256,6 +259,46 @@ int main(int argc, char **argv) {
       ++n_cyc;
     }
 
+    // THE SOURCE LOAD, which is where g4 comes from. The store address is
+    // right and the DATA is one halfword ahead, so the question is what
+    // `ldos (g7),g4` at 0001C478 returned and from where.
+    // EVERY source load checked against what memory holds, rather than a
+    // handful printed and reasoned about. The store address is right and the
+    // data is one halfword out, so either the load returns the wrong value or
+    // it reads the wrong place -- and this distinguishes them.
+    if (d->obs_bus_ack && !ack_prev && !d->obs_bus_we
+        && d->dbg_ip == 0x0001c478u) {
+      const uint32_t A = d->obs_bus_addr;
+      if (A >= 0x02000000u && A < 0x04000000u) {
+        const uint32_t word = 0x20000u + ((A - 0x02000000u) >> 1);
+        const uint16_t want = mem[word & 0x1ffffff];
+        const uint16_t got  = (A & 2) ? uint16_t(d->obs_bus_rdata >> 16)
+                                      : uint16_t(d->obs_bus_rdata);
+        ++ldos_n;
+        if (got != want) {
+          if (ldos_bad < 6)
+            std::printf("    ldos %08x be=%x got %04x want %04x\n",
+                        A, d->obs_bus_be, got, want);
+          ++ldos_bad;
+        }
+      }
+    }
+
+    // THE WRITE STREAM, in MAME's own tap format, so the two can be diffed
+    // line for line. Comparing finished memory scores ~60% either way on data
+    // that is mostly repeated 0x1111, which is how a one-word-shift theory came
+    // to be believed on two samples. A stream has no such ambiguity.
+    if (charstream && d->obs_bus_ack && !ack_prev && d->obs_bus_we
+        && (d->obs_bus_addr & 0xfff80000u) == 0x01080000u) {
+      // MAME's mask is per-BYTE-lane expanded to 32 bits; ours is a 4-bit
+      // enable, so it is expanded here rather than the comparison being taught
+      // about two formats.
+      uint32_t mask = 0;
+      for (int b = 0; b < 4; ++b) if (d->obs_bus_be & (1u << b)) mask |= 0xffu << (8*b);
+      std::fprintf(charstream, "%08x %08x %08x\n",
+                   d->obs_bus_addr, d->obs_bus_wdata, mask);
+    }
+
     // WHAT THE CPU PUTS ON THE BUS FOR CHAR RAM. The bridge issues equal
     // numbers of even and odd 16-bit writes, so the halves are both being
     // sent; the odd ones are arriving as zero. This shows the 32-bit word and
@@ -263,8 +306,8 @@ int main(int argc, char **argv) {
     // from.
     if (watch_char && d->obs_bus_ack && !ack_prev && d->obs_bus_we
         && (d->obs_bus_addr & 0xfff80000u) == 0x01080000u && d->obs_bus_wdata && n_char < 16) {
-      std::printf("    char wr %08x be=%x data=%08x\n",
-                  d->obs_bus_addr, d->obs_bus_be, d->obs_bus_wdata);
+      std::printf("    char wr %08x be=%x data=%08x  from IP %08x\n",
+                  d->obs_bus_addr, d->obs_bus_be, d->obs_bus_wdata, d->dbg_ip);
       ++n_char;
     }
 
@@ -299,6 +342,9 @@ int main(int argc, char **argv) {
   std::printf("  window reads %u, backup writes %u, backup dword0 %08x\n",
               d->iob_win_rd, d->bak_writes, d->bak_w0);
   std::printf("  tile RAM writes %u\n", d->dbg_tram_wr);
+  if (ldos_n)
+    std::printf("  source loads: %llu checked, %llu returned the wrong halfword\n",
+                (unsigned long long)ldos_n, (unsigned long long)ldos_bad);
   std::printf("  bus address moved mid-transaction: %u times\n", d->obs_addr_moved);
 
   // WHAT THE CPU BUILT, so it can be compared against MAME's own dump rather
@@ -392,6 +438,7 @@ int main(int argc, char **argv) {
                 (unsigned long long)first_win_rd);
   }
   if (out) { std::fclose(out); std::printf("  PC stream written to %s\n", outfile); }
+  if (charstream) { std::fclose(charstream); std::printf("  char write stream written\n"); }
   std::printf("%s\n", fail ? "FAIL" : "PASS");
   delete d;
   return fail;

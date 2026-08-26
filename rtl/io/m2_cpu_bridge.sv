@@ -511,7 +511,27 @@ module m2_cpu_bridge #(
         // A burst read: both halves arrive together in p_dout[31:0].
         S_RDB: if (sd_ack) begin
           sd_req        <= 1'b0;
-          r_rdata       <= sd_dout[31:0];
+          // THE BURST STARTS AT THE REQUESTED WORD, WHICH IS NOT ALWAYS THE
+          // DWORD'S LOW HALF.
+          //
+          // sd_addr is sd_word = r_addr[..:1], so sd_dout[15:0] holds the bytes
+          // at r_addr itself. For an aligned access those are the dword's bytes
+          // 0 and 1 and this is right. When r_addr[1] is set they are bytes 2
+          // and 3, and the i960 looks for them in the HIGH half -- the LSU's
+          // `rd_half = cur_addr[1] ? bus_rdata[31:16] : bus_rdata[15:0]`.
+          //
+          // Taking sd_dout[31:0] unconditionally handed it the two words
+          // starting at r_addr with the halves the wrong way round, so every
+          // unaligned halfword read returned its NEIGHBOUR. The boot's
+          // character copy is a halfword loop -- ldos/stos with both pointers
+          // advancing by 2 -- so every other load was wrong: 52,375 of 140,864
+          // in a single boot, every one of them with be=c.
+          //
+          // Nothing caught it because every read in the suite was full-width
+          // and dword-aligned, and because ALL SDRAM reads come through here --
+          // S_LO and S_HI are the write path. An earlier attempt at this fix
+          // was made in S_LO, where reads never go.
+          r_rdata       <= r_addr[1] ? {sd_dout[15:0], 16'd0} : sd_dout[31:0];
           dbg_last_addr <= {7'd0, sd_addr};
           dbg_last_dout <= sd_dout[31:0];
           // EEEEEEEE means the address was never read at all, which is a

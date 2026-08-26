@@ -239,6 +239,38 @@ int main(int argc, char **argv) {
     expect("main_data alias low half", v & 0xffffu, 0x7070u);
   }
 
+  // ---- unaligned halfword access, which is what char RAM is built from ----
+  //
+  // The boot's character copy is a halfword loop: `ldos (g7),g4` / `stos
+  // g4,(g6)` with both pointers advancing by 2, so every OTHER access has
+  // r_addr[1] set. On that one the enabled bytes are the dword's HIGH half,
+  // and SDRAM word r_addr[..:1] holds them -- not the low half.
+  //
+  // Nothing in this suite read or wrote a halfword before: every case was
+  // full-width, so the entire unaligned path was untested. 52,375 of 140,864
+  // source loads in the boot returned the wrong halfword and every one of them
+  // had be=c.
+  {
+    uint32_t v = 0;
+    // WORK RAM, not the program ROM. The first version of this case used
+    // 0x00000200, which decodes to T_SDRAM with is_rom set -- writes there are
+    // discarded on purpose, so two of the four checks failed for a reason that
+    // had nothing to do with alignment.
+    const uint32_t WR = 0x00500200u;                 // work RAM
+    const uint32_t W  = 0x20000u + ((WR & 0xfffffu) >> 1);
+    sdram[W]     = 0xaaaa;      // bytes 0,1 of the dword
+    sdram[W + 1] = 0x5555;      // bytes 2,3
+    access(false, WR,      0, 0x3, &v);
+    expect("halfword read, aligned",   v & 0xffffu,         0xaaaau);
+    access(false, WR + 2u, 0, 0xc, &v);
+    expect("halfword read, unaligned", (v >> 16) & 0xffffu, 0x5555u);
+
+    access(true, WR + 4u, 0x00001234u, 0x3, nullptr);
+    expect("halfword write, aligned",   sdram[W + 2], 0x1234u);
+    access(true, WR + 6u, 0x99990000u, 0xc, nullptr);
+    expect("halfword write, unaligned", sdram[W + 3], 0x9999u);
+  }
+
   // ---- the translation table ----
   //
   // ADDRESSES FROM model2.cpp, NOT FROM THE BRIDGE. This case used to write
