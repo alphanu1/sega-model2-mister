@@ -363,8 +363,24 @@ module m2_cpu_bridge #(
               end else begin
                 sd_addr <= sd_word;
                 sd_we   <= r_we;
-                sd_din  <= r_wdata[15:0];
-                sd_be   <= r_be[1:0];
+                // THE HALF THAT BELONGS AT THIS WORD, NOT ALWAYS THE LOW ONE.
+                //
+                // SDRAM word r_addr[18:1] holds bytes r_addr and r_addr+1, and
+                // those are the CPU dword's bytes r_addr[1:0] and r_addr[1:0]+1.
+                // For an ALIGNED access that is the low half; for one with
+                // r_addr[1] set it is the high half.
+                //
+                // This always sent r_wdata[15:0] with r_be[1:0], so an unaligned
+                // access sent the wrong half AND the byte enables that go with
+                // it -- 2'b00 -- which drops the write entirely. The i960
+                // splits an unaligned 32-bit store into two transactions, and
+                // one of the two was silently lost every time.
+                //
+                // Aligned accesses are unaffected, which is why the boot's own
+                // 128 KB copy matched 65,536 of 65,536 words while character
+                // data came out half written.
+                sd_din  <= r_addr[1] ? r_wdata[31:16] : r_wdata[15:0];
+                sd_be   <= r_addr[1] ? r_be[3:2]      : r_be[1:0];
                 sd_req  <= 1'b1;
                 st      <= S_LO;
               end
@@ -441,7 +457,13 @@ module m2_cpu_bridge #(
           if (tgt == T_SDRAM) begin
             if (sd_ack) begin
               sd_req <= 1'b0;
-              if (!r_we) r_rdata[15:0] <= sd_dout[15:0];
+              // Read back into the half this word belongs to, for the same
+              // reason the write picks a half: the CPU expects a byte at dword
+              // position r_addr[1:0], not always at position 0.
+              if (!r_we) begin
+                if (r_addr[1]) r_rdata[31:16] <= sd_dout[15:0];
+                else           r_rdata[15:0]  <= sd_dout[15:0];
+              end
               dbg_last_addr <= {7'd0, sd_addr};
               dbg_last_dout <= {16'd0, sd_dout[15:0]};
               st <= S_LO_W;              // let the held ack fall first
@@ -462,8 +484,12 @@ module m2_cpu_bridge #(
         S_LO_W: if (!sd_ack) begin
           half    <= 1'b1;
           sd_addr <= sd_word + AW'(1);
-          sd_din  <= r_wdata[31:16];
-          sd_be   <= r_be[3:2];
+          // The second word holds bytes r_addr+2 and r_addr+3. When r_addr[1]
+          // is set those belong to the NEXT dword and are not part of this
+          // transaction at all, so nothing is enabled -- the i960 will issue
+          // them separately.
+          sd_din  <= r_addr[1] ? 16'd0   : r_wdata[31:16];
+          sd_be   <= r_addr[1] ? 2'b00   : r_be[3:2];
           sd_req  <= 1'b1;
           st      <= S_HI;
         end
@@ -472,7 +498,7 @@ module m2_cpu_bridge #(
           if (tgt == T_SDRAM) begin
             if (sd_ack) begin
               sd_req <= 1'b0;
-              if (!r_we) r_rdata[31:16] <= sd_dout[15:0];
+              if (!r_we && !r_addr[1]) r_rdata[31:16] <= sd_dout[15:0];
               st <= S_HI_W;
             end
           end else begin

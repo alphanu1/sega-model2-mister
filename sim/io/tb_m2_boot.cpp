@@ -120,6 +120,8 @@ int main(int argc, char **argv) {
   // testing it.
   const char *lf = std::getenv("M2_BOOT_LAT");
   const int sdr_lat = lf ? std::atoi(lf) : 6;
+  // Declared before mem_tick, which uses them.
+  uint64_t char_even = 0, char_odd = 0;
   int  lat = 0, ack_left = 0;
   bool busy = false;
   uint32_t pend_addr = 0;
@@ -136,6 +138,16 @@ int main(int argc, char **argv) {
     }
     if (!busy && d->sd_req && !ack_left) {
       busy = true; lat = sdr_lat; pend_addr = d->sd_addr;
+      // WHAT THE BRIDGE ACTUALLY ISSUES INTO CHAR RAM, split by whether the
+      // word is even or odd. A 32-bit store becomes two 16-bit transactions,
+      // S_LO then S_HI, so the two counts should be equal. They are not on
+      // hardware: every odd word of char RAM is missing.
+      if (d->sd_we) {
+        const uint32_t CB = 0x1690000;
+        if (d->sd_addr >= CB && d->sd_addr < CB + 0x40000) {
+          if (d->sd_addr & 1) ++char_odd; else ++char_even;
+        }
+      }
       if (d->sd_we) {
         const uint16_t old = mem[pend_addr & 0x1ffffff];
         uint16_t v = d->sd_din;
@@ -203,6 +215,8 @@ int main(int argc, char **argv) {
   const char *bf = std::getenv("M2_BOOT_BUS");
   const uint32_t bus_from = bf ? uint32_t(std::strtoul(bf, nullptr, 10)) : 0;
   int n_bus = 0;
+  const bool watch_char = std::getenv("M2_BOOT_CHAR") != nullptr;
+  int n_char = 0;
   const char *cf = std::getenv("M2_BOOT_CYC");
   const uint32_t cyc_from = cf ? uint32_t(std::strtoul(cf, nullptr, 10)) : 0;
   int n_cyc = 0;
@@ -240,6 +254,18 @@ int main(int argc, char **argv) {
                   (d->obs_mstate >> 3) & 1, (d->obs_mstate >> 4) & 1,
                   (d->obs_mstate >> 5) & 1, d->sd_req, d->sd_addr);
       ++n_cyc;
+    }
+
+    // WHAT THE CPU PUTS ON THE BUS FOR CHAR RAM. The bridge issues equal
+    // numbers of even and odd 16-bit writes, so the halves are both being
+    // sent; the odd ones are arriving as zero. This shows the 32-bit word and
+    // byte enables the i960 presented, which is the only place that can come
+    // from.
+    if (watch_char && d->obs_bus_ack && !ack_prev && d->obs_bus_we
+        && (d->obs_bus_addr & 0xfff80000u) == 0x01080000u && d->obs_bus_wdata && n_char < 16) {
+      std::printf("    char wr %08x be=%x data=%08x\n",
+                  d->obs_bus_addr, d->obs_bus_be, d->obs_bus_wdata);
+      ++n_char;
     }
 
     // THE COPY LOOP'S OWN BUS TRAFFIC. ldq/stq are 16-byte accesses, which the
@@ -293,6 +319,26 @@ int main(int argc, char **argv) {
       std::printf("  wrote %s (%u words)\n", path.c_str(), n);
     };
     grab("tram.bin", false, 32768);
+    // CHAR RAM, straight out of the modelled SDRAM at GAME_CHAR. The tilemap
+    // says WHICH character to draw; this is the character. A correct tilemap
+    // over blank characters is a black screen, which is what the board shows.
+    {
+      std::string path = std::string(dd) + "/char.bin";
+      FILE *f = std::fopen(path.c_str(), "wb");
+      if (f) {
+        const uint32_t CHAR_BASE = 0x1690000;   // GAME_CHAR, word address
+        uint32_t nz = 0;
+        for (uint32_t w = 0; w < 0x40000; ++w) {
+          const uint16_t v = mem[CHAR_BASE + w];
+          if (v && v != 0xffff) ++nz;
+          std::fputc(v & 0xff, f); std::fputc(v >> 8, f);
+        }
+        std::fclose(f);
+        std::printf("  char RAM: %u of 262144 words written (non-zero, non-ffff)\n", nz);
+        std::printf("  char RAM writes issued: %llu even, %llu odd\n",
+                    (unsigned long long)char_even, (unsigned long long)char_odd);
+      }
+    }
     grab("pal.bin",  true,  4096);
     // How much of the palette is white, which is the specific question.
     uint32_t white = 0, nonzero = 0;
