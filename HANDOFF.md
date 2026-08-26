@@ -55,99 +55,71 @@ tile RAM, ~43 from ascal) and that recovery is a P2 prerequisite.
 
 ## Where it actually is
 
-**The i960 runs on hardware and does not trap.** Row 4 reads `3B03` — trap
-clear, halt clear, game image, copy done, self-test ok, loader ok, memory ready
-— where it used to read `FB03` with trap and halt both set. Row 5 climbs through
-hundreds of millions of instructions.
+The boot runs on hardware at 96 MHz and gets **15,880,053 instructions** into
+simulation before trapping. Tilemap, palette and character data all match MAME.
 
-**It is stuck in one place**, the I/O board exchange at `0x2282xx`, and row 8 has
-read `00001001` — 4,097 tile writes — across four builds while four separate
-real defects were fixed underneath it.
-
-### 4,097 is not a symptom of anything in particular
-
-That number has now been attributed to the sound handshake (R37), to a missing
-identity block, to 16 KB of backup SRAM that did not exist, and to a clock
-domain crossing. **It was never evidence for any of them.** It is what this boot
-does when it cannot complete the exchange at `0x228230-0x2282cc`, whatever the
-reason, and it will read the same next time something in there is wrong. Do not
-treat it as a fingerprint.
-
-### The exchange, and what each part needs
-
-```
-00228230: lda  0x1c00200,g6      ; g6 = DPRAM window   -- the SOURCE
-00228238: lda  0x1d00000,g5      ; g5 = backup SRAM    -- the DESTINATION
-00228240: ldob 0x1c00040,g4      ; wait flag == 0
-0022824C: ldob 0x1c00042,g4      ; wait status == 0x40
-0022825C: mov  3,g2
-00228260: stob g2,0x1c00040      ; command 3
-00228268: ldob 0x1c00040,g4      ; wait flag == 0
-0022827C: ldob (g6),g4 / stob g4,(g5)   ; copy 128 bytes, stride 2 -> stride 1
-002282CC: ble  0x0022827c
-002282D0: ldq  0x1d00010,g0      ; and reads it straight back
-```
-
-Four things must all be right, and each was wrong in turn:
-
-1. **The I/O board must answer** — status `0x40` on its own schedule, flag
-   cleared after its power-on self-test. `rtl/io/m2_ioboard.sv`. Confirmed
-   working on hardware: overlay row 14 reads `1A400000`.
-2. **The board must supply the 128-byte identity block.** It is the source, not
-   the destination — `docs/io-board.md` had the arrow backwards for one build.
-3. **Backup SRAM must exist.** `0x01d00000-0x01d03fff`, 16 KB, powering up all
-   ones. The bridge routed it to `T_IO` with a comment saying "backup" and
-   nothing answered, so the copy went into a void.
-4. **Both must be in the I/O clock domain.** `io_sel`, `io_addr` and the
-   `r_rdata` sample are in `m2_cpu_bridge`'s `clk_mem`, which is `clk_sdram` at
-   40 MHz. Clocking them on `clk_i960` is a crossing with no synchroniser, and
-   **its failure is selective**: a poll survives it, a one-shot sequential read
-   does not. That is why row 14 was perfect on every build while the 128-byte
-   copy arrived corrupted.
-
-All four are now confirmed on hardware, and none of them was the last link —
-see below.
-
-### What has been eliminated, and what has not
-
-| suspect | verdict |
+| | |
 |---|---|
-| the I/O board answers the handshake | **cleared** — row 14 `1A400000`: awake, status `40`, flag cleared |
-| the i960 reads the right values | **cleared** — row 17 `4000`, row 18 `01C00042`, row 19 `00400000` |
-| the bridge delivers them intact | **cleared** — `test_m2_cpu_bridge`, 92 checks |
-| backup SRAM exists, powers up `0xFF` | built, 16 M10K |
-| peripherals in the I/O clock domain | fixed — `clk_sdram`, not `clk_i960` |
+| char RAM write stream vs MAME | **identical** — all 143,072 writes |
+| words the game wrote, matching MAME | **100.00%** (124,784 of 124,784) |
+| tilemap / palette | 98.7% / 98.5% at the same frame |
+| `make test` | green, 24 PASS |
 
-**What is left is the composition.** `i960_top` through `m2_cpu_bridge` into
-`m2_ioboard`, running the real code, is the only untested link and the only
-place a fault can live that hardware shows and simulation does not.
-`tb_i960_rom.cpp` drives `i960_top` DIRECTLY — the bridge has never been in the
-loop — which is exactly why the ROM differential runs clean while the board does
-not.
+### What was fixed today
 
-**Build that harness next.** It would have caught the last four fixes before
-they cost hardware builds, and it turns a 25-minute build-and-squint loop into a
-minutes-long one.
+1. **Unaligned 32-bit accesses lost a half, in both directions.** `S_LO` always
+   sent `r_wdata[15:0]`; `S_RDB` always took `sd_dout[31:0]`. When `r_addr[1]`
+   is set the enabled bytes are the HIGH half, so writes were dropped and reads
+   returned the **neighbouring halfword**. The boot's character copy is a
+   halfword loop, so every second access was wrong — 52,375 of 140,864 source
+   loads. **All SDRAM reads come through `S_RDB`;** `S_LO`/`S_HI` is the write
+   path, and a first attempt at the read fix went into `S_LO`, where it compiled
+   and did nothing.
 
-Two gaps in the bridge suite were found and closed on the way, and both would
-have hidden this: it modelled I/O as **combinational** when both peripherals are
-registered, and every I/O access in it was **full-width** when the failing
-access is a single byte at lane 2.
+2. **The initial frame pointer was never read from the PRCB.** `i960.cpp`'s
+   `device_reset` does `FP = rd(PRCB+24)` and `SP = FP + 64`; the boot walk
+   stopped at the IP. FP stayed zero and frames allocated from `0x40, 0x80,
+   0xc0, 0x100` — the boot record and program ROM. **It survived 803,355
+   verified instructions because nothing touches memory until a frame spills,
+   and a spill needs depth > 4.**
 
-### Two process failures worth not repeating
+### The open fault
 
-**The counters came seventh, not fourth.** Six hardware builds went on
-hypotheses reasoned from source rather than measured. Each fixed something
-genuinely broken — the I/O board, the block direction, backup SRAM, the clock
-domain — and none was the last link, because row 8 reads 4,097 for all of them.
-The overlay counters that narrowed it in a single reading should have been built
-after the second failed hypothesis.
+A second `ret`, at `0x0001C690`, still branches to zero. The frame taps say why
+it *looks* wrong and not yet why it *is*:
 
-**A build watcher matched by process name.** `pgrep -x quartus_map` matches any
-Quartus on the machine; it picked up an unrelated build in another project and
-reported "still building" for forty minutes after this one had finished. Match
-the project name. An earlier wait-loop in the same session matched its own
-command line and never terminated — same shape, twice in one day.
+```
+i15424572  ip=0001c6a0  rip=0001c670 pfp=0053f6c0 pos=5 spill=1
+i15424576  ip=0001c670  rip=0001c670 pfp=ffffffff pos=4 spill=1
+```
+
+`pfp=ffffffff` is our unwritten-memory value, so the restore read memory nothing
+wrote. **And there is no bus traffic in `0x0053xxxx` after instruction
+15,000,000 at all** — the spill is not reaching the bus, even though
+`to_memory` is set, the port is fully wired (`mem_req/we/addr/wdata/rdata/ack`),
+and the arbiter ranks `rf_mem` second only to the boot master.
+
+So the next question is narrow: **does `rf_mem_req` ever assert, and is it
+granted?** Neither is exposed. Add a tap for `rf_mem_req`/`rf_mem_ack` and the
+arbiter's selection, and the answer is one five-second run away.
+
+### Instruments that now exist
+
+- `test_m2_boot` — the real boot through the real bridge, five seconds a run
+- `tools/mame_m2_charwrites.lua` — MAME's char-RAM write stream, diffable
+  line-for-line against ours (`M2_BOOT_CHARSTREAM`)
+- frame taps: `dbg_rip`, `dbg_pfp`, `dbg_rcache_pos`, `dbg_to_memory`
+- `M2_BOOT_FRAME`, `M2_BOOT_STACK`, `M2_BOOT_BUS`, `M2_BOOT_CHAR`, `M2_BOOT_SDR`
+- MAME disassembly and breakpoint-started traces via `-debugscript`, which is
+  how code outside the 12M-instruction trace window gets read
+
+### A caution about the overlay
+
+Two rows have now reported healthy while being meaningless: row 14 during the
+bridge bug (it showed the board's shadow registers, not what the CPU received)
+and row 12 after the sweep's fold was pipelined into a state that collided with
+"done" — `DD` latched while the value churned. **Check that a diagnostic can
+fail before believing it.**
 
 ## The SDRAM is verified end to end — and the fault was in the reference
 

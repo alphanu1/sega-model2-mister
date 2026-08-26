@@ -220,6 +220,8 @@ int main(int argc, char **argv) {
   FILE *charstream = csf ? std::fopen(csf, "w") : nullptr;
   int n_char = 0;
   uint64_t ldos_n = 0, ldos_bad = 0;
+  const bool stacktrace = std::getenv("M2_BOOT_STACK") != nullptr;
+  int n_stack = 0;
   const char *cf = std::getenv("M2_BOOT_CYC");
   const uint32_t cyc_from = cf ? uint32_t(std::strtoul(cf, nullptr, 10)) : 0;
   int n_cyc = 0;
@@ -252,8 +254,8 @@ int main(int argc, char **argv) {
     // never saved one; only the frame state distinguishes those.
     if (frametrace && d->dbg_acc != acc_prev2) {
       const uint32_t ip = d->dbg_ip;
-      if (ip == 0x0000268cu || ip == 0x00018d74u || ip == 0x00018de8u ||
-          ip == 0x00001a14u || ip == 0x00002698u) {
+      if (ip == 0x0001c66cu || ip == 0x0001c6a0u || ip == 0x0001c690u ||
+          ip == 0x0001c928u || ip == 0x0001c670u) {
         std::printf("    i%-9u ip=%08x  rip=%08x pfp=%08x pos=%d spill=%d\n",
                     d->dbg_acc, ip, d->dbg_rip, d->dbg_pfp,
                     int(d->dbg_rcache_pos), d->dbg_to_memory);
@@ -273,6 +275,18 @@ int main(int argc, char **argv) {
                   (d->obs_mstate >> 3) & 1, (d->obs_mstate >> 4) & 1,
                   (d->obs_mstate >> 5) & 1, d->sd_req, d->sd_addr);
       ++n_cyc;
+    }
+
+    // THE REGISTER-FRAME SPILL AND FILL. A `ret` whose PFP comes back as
+    // 0xffffffff read memory nothing had written, so the question is whether
+    // the matching spill wrote at all and to where.
+    if (stacktrace && d->obs_bus_ack && !ack_prev
+        && (d->obs_bus_addr & 0xffff0000u) == 0x00530000u && n_stack < 100000) {
+      if (d->dbg_acc > 15000000u && n_stack < 30)
+        std::printf("    stk %08x be=%x %s %08x  (i%u)\n", d->obs_bus_addr,
+                  d->obs_bus_be, d->obs_bus_we ? "wr" : "rd",
+                  d->obs_bus_we ? d->obs_bus_wdata : d->obs_bus_rdata, d->dbg_acc);
+      ++n_stack;
     }
 
     // THE SOURCE LOAD, which is where g4 comes from. The store address is
