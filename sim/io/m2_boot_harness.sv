@@ -90,6 +90,10 @@ module m2_boot_harness #(
   // a run of accesses and that m2_cpu_bridge LATCHES the address rather than
   // sampling it live, so movement after the latch is expected and harmless.
   output logic [31:0] obs_addr_moved,
+  output logic [31:0] dbg_rip,
+  output logic [31:0] dbg_pfp,
+  output logic signed [31:0] dbg_rcache_pos,
+  output logic        dbg_to_memory,
   output logic  [7:0] obs_mstate,     // {0,0,sd_ack,ack_mem,req_mem,st[2:0]}
   // Readable so the testbench can dump what the CPU actually built and compare
   // it against MAME's tilemap and palette rather than against a hope.
@@ -194,7 +198,9 @@ module m2_boot_harness #(
     .dbg_pc(dbg_pc), .dbg_sat(), .dbg_prcb(), .dbg_icr(),
     .dbg_intr_cnt(), .dbg_intr_work(), .dbg_acc_cnt(dbg_acc),
     .dbg_ip(dbg_ip), .dbg_insn(),
-    .trap(cpu_trap), .trap_op(), .halted(cpu_halt)
+    .trap(cpu_trap), .trap_op(), .halted(cpu_halt),
+    .dbg_rip(dbg_rip), .dbg_pfp(dbg_pfp),
+    .dbg_rcache_pos(dbg_rcache_pos), .dbg_to_memory(dbg_to_memory)
   );
 
   m2_cpu_bridge #(.AW(AW), .BOARD_2A(1'b0)) u_bridge (

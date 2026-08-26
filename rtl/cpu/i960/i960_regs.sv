@@ -130,6 +130,26 @@ module i960_regs #(
   output logic [31:0] cur_fp,
   output logic [31:0] cur_sp,
   output logic  [2:0] cur_pfp_type,
+  // FRAME STATE, for tracing a `ret` that goes somewhere impossible. cur_fp and
+  // cur_sp say where the frame IS; these say what it CONTAINS and whether the
+  // register cache is deep enough to hold it, which is the difference between
+  // a frame that was restored wrongly and one that was never saved.
+  // THE INITIAL FRAME POINTER, FROM THE PRCB. i960.cpp's device_reset:
+  //
+  //   m_r[I960_FP] = m_program.read_dword(m_PRCB+24);
+  //   m_r[I960_SP] = m_r[I960_FP] + 64;
+  //
+  // Without it FP starts at zero and frames allocate upwards from there --
+  // 0x40, 0x80, 0xc0, 0x100 -- which are the boot record and program ROM. That
+  // is invisible until the call depth exceeds the register cache, because
+  // nothing touches memory until a frame has to spill.
+  input  logic        boot_fp_we,
+  input  logic [31:0] boot_fp,
+
+  output logic [31:0] dbg_rip,
+  output logic [31:0] dbg_pfp,
+  output logic signed [31:0] dbg_rcache_pos,
+  output logic        dbg_to_memory,
 
   // ------- external memory, request/ack. Ack is a level, not a pulse:
   // docs/mister-integration.md — a pulsed ack to a ce-gated requester is
@@ -284,6 +304,11 @@ module i960_regs #(
 
   assign busy = (state != S_IDLE);
 
+  assign dbg_rip        = loc[R_RIP];
+  assign dbg_pfp        = loc[R_PFP];
+  assign dbg_rcache_pos = rcache_pos;
+  assign dbg_to_memory  = to_memory;
+
   // Frame pointer is g15. Named for readability; there is no separate storage.
   localparam int unsigned R_PFP = 0;
   localparam int unsigned R_SP  = 1;
@@ -323,6 +348,14 @@ module i960_regs #(
       if (we && !busy) begin
         if (wa[4]) glb[wa[3:0]] <= wd;
         else       loc[wa[3:0]] <= wd;
+      end
+
+      // Written outside the state machine: it happens once, during T_BOOT,
+      // before any instruction has executed and so before any state the
+      // machine below could be in.
+      if (boot_fp_we) begin
+        glb[G_FP] <= boot_fp;
+        loc[R_SP] <= boot_fp + 32'd64;
       end
 
       case (state)

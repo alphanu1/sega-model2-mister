@@ -87,7 +87,13 @@ module i960_top (
   output logic [31:0] dbg_insn,
   output logic        trap,
   output logic [7:0]  trap_op,
-  output logic        halted
+  output logic        halted,
+  // Frame state, so a `ret` that lands on an impossible address can be traced
+  // to what the frame held rather than inferred from where it went.
+  output logic [31:0] dbg_rip,
+  output logic [31:0] dbg_pfp,
+  output logic signed [31:0] dbg_rcache_pos,
+  output logic        dbg_to_memory
 );
 
   // ------------------------------------------------------------ architectural
@@ -430,6 +436,9 @@ module i960_top (
     .call_stack(intr_stack),
     .cur_fp(cur_fp), .cur_sp(cur_sp), .cur_pfp_type(cur_pfp_type),
     .busy(rf_busy), .next_ip(rf_next_ip), .next_ip_valid(rf_ip_valid),
+    .boot_fp_we(boot_fp_we), .boot_fp(boot_fp),
+    .dbg_rip(dbg_rip), .dbg_pfp(dbg_pfp),
+    .dbg_rcache_pos(dbg_rcache_pos), .dbg_to_memory(dbg_to_memory),
     .mem_req(rf_mem_req), .mem_we(rf_mem_we), .mem_addr(rf_mem_addr),
     .mem_wdata(rf_mem_wdata), .mem_rdata(bus_rdata), .mem_ack(rf_mem_ack)
   );
@@ -756,6 +765,8 @@ module i960_top (
   logic [31:0] boot_addr;
   logic        boot_ack;
   logic  [1:0] boot_step;
+  logic        boot_fp_we;
+  logic [31:0] boot_fp;
   logic        aux_we;
   logic [31:0] aux_wdata;
 
@@ -935,8 +946,10 @@ module i960_top (
       halted    <= 1'b0;
       ic_req    <= 1'b0;
       boot_req  <= 1'b1;
-      boot_addr <= 32'd0;
-      boot_step <= 2'd0;
+      boot_addr  <= 32'd0;
+      boot_step  <= 2'd0;
+      boot_fp    <= 32'd0;
+      boot_fp_we <= 1'b0;
       aux_we    <= 1'b0;
       aux_wdata <= 32'd0;
       syn_dst   <= 32'd0;
@@ -984,6 +997,11 @@ module i960_top (
       fdiv_req  <= 1'b0;
       fsqrt_req <= 1'b0;
     end else begin
+      // ONE SHOT. Set in T_BOOT's last step and cleared here, so the frame
+      // pointer is initialised once rather than held over every register the
+      // machine writes afterwards. A later assignment in this same block wins,
+      // so setting it below still takes effect on the cycle it is set.
+      boot_fp_we <= 1'b0;
       ic_req   <= 1'b0;
       md_req   <= 1'b0;
       // These are one-cycle strobes and were missing from this list. Left
@@ -1040,7 +1058,7 @@ module i960_top (
                         boot_step <= 2'd1; end
             2'd1: begin prcb_reg <= bus_rdata; boot_addr <= 32'd12;
                         boot_step <= 2'd2; end
-            default: begin
+            2'd2: begin
               // mem[12] is the initial IP. The prefetch slot is left invalid, so
               // the first fetch goes to this address rather than to whatever the
               // front end had speculated from the reset value of 0.
@@ -1048,8 +1066,29 @@ module i960_top (
               pf_ip    <= bus_rdata;
               pf_valid <= 1'b0;
               pf_armed <= 1'b0;
-              boot_req <= 1'b0;
-              ts       <= T_FETCH;
+              // A FOURTH READ: the initial frame pointer, at PRCB+24.
+              //
+              //   m_r[I960_FP] = m_program.read_dword(m_PRCB+24);   i960.cpp
+              //
+              // This walk used to stop at the IP, so FP stayed at its reset
+              // value of zero and frames allocated from there: 0x40, 0x80,
+              // 0xc0, 0x100. Those are the boot record and program ROM.
+              //
+              // It survived 803,355 instructions verified against MAME because
+              // NOTHING TOUCHES MEMORY UNTIL A FRAME SPILLS, and a spill needs
+              // the call depth to exceed the four-frame register cache. The
+              // boot reaches depth five once, in a tile-RAM fill at 0x18d74,
+              // and the spill wrote to 0x100 -- program ROM, where writes are
+              // discarded -- so the fill read ROM back and the closing `ret`
+              // took its return address from it and branched to zero.
+              boot_addr <= prcb_reg + 32'd24;
+              boot_step <= 2'd3;
+            end
+            default: begin
+              boot_fp    <= bus_rdata;
+              boot_fp_we <= 1'b1;
+              boot_req   <= 1'b0;
+              ts         <= T_FETCH;
             end
           endcase
         end

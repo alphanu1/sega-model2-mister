@@ -898,7 +898,16 @@ int main(int argc, char **argv) {
     // track. 0x2000 is clear of the program (<0x100) and of the data window
     // (0x800-0xe00), and frames grow upward from there well within the budget.
     // The spilled words are ordinary memory and ARE compared per retire.
-    ref.rf.r[31] = 0x2000;  ref.rf.r[1] = 0x2040;   // FP, SP
+    // FP AND SP COME FROM PRCB+24, NOT FROM A CHOSEN CONSTANT.
+    //
+    //   m_r[I960_FP] = m_program.read_dword(m_PRCB+24);
+    //   m_r[I960_SP] = m_r[I960_FP] + 64;              i960.cpp device_reset
+    //
+    // MAME uses that one word for BOTH the initial frame pointer and the
+    // interrupt stack pointer, so seeding FP to something else made the module
+    // and the reference disagree the moment the module started reading it --
+    // which is what it does now, as a fourth boot read.
+    ref.rf.r[31] = INT_STACK;  ref.rf.r[1] = INT_STACK + 64;   // FP, SP
     ref.rf.r[0]  = 0x2000;                          // PFP
     // r2 carries a priority-field mask so modpc actually MOVES the priority.
     // With random register contents the mask is random too, and the odds of it
@@ -950,9 +959,11 @@ int main(int argc, char **argv) {
     // r3 holds the magic synmov destination, so the ICR path gets exercised.
     ref.rf.r[3]  = 0xff000004;
     dut->rootp->i960_top__DOT__u_regs__DOT__loc[3] = 0xff000004;
-    dut->rootp->i960_top__DOT__u_regs__DOT__glb[15] = 0x2000;
-    dut->rootp->i960_top__DOT__u_regs__DOT__loc[1]  = 0x2040;
-    dut->rootp->i960_top__DOT__u_regs__DOT__loc[0]  = 0x2000;
+    // The module loads FP itself in T_BOOT now; these keep the two sides
+    // identical rather than fighting it.
+    dut->rootp->i960_top__DOT__u_regs__DOT__glb[15] = INT_STACK;
+    dut->rootp->i960_top__DOT__u_regs__DOT__loc[1]  = INT_STACK + 64;
+    dut->rootp->i960_top__DOT__u_regs__DOT__loc[0]  = 0x2000;   // PFP, as the ref
     ref.AC = 0; ref.IP = PROG_BASE;
     // SAT and PRCB. The MODULE walks the boot record itself in T_BOOT; the
     // reference has no boot sequence, so it has to be handed the same values or

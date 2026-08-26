@@ -223,6 +223,8 @@ int main(int argc, char **argv) {
   const char *cf = std::getenv("M2_BOOT_CYC");
   const uint32_t cyc_from = cf ? uint32_t(std::strtoul(cf, nullptr, 10)) : 0;
   int n_cyc = 0;
+  const bool frametrace = std::getenv("M2_BOOT_FRAME") != nullptr;
+  uint32_t acc_prev2 = 0;
 
   while (d->dbg_acc < max_instr) {
     tick();
@@ -245,6 +247,20 @@ int main(int argc, char **argv) {
     // WHAT THE i960 WAS HANDED, for the accesses the boot is stuck on. The
     // overlay can show what the I/O board returned; only this can show what
     // arrived at the CPU, and the two are separated by the bridge.
+    // THE FRAME, AT EVERY CALL AND RETURN IN THE FAILING ROUTINE. A `ret` that
+    // lands on 0x00000000 has either restored a frame whose RIP is zero or
+    // never saved one; only the frame state distinguishes those.
+    if (frametrace && d->dbg_acc != acc_prev2) {
+      const uint32_t ip = d->dbg_ip;
+      if (ip == 0x0000268cu || ip == 0x00018d74u || ip == 0x00018de8u ||
+          ip == 0x00001a14u || ip == 0x00002698u) {
+        std::printf("    i%-9u ip=%08x  rip=%08x pfp=%08x pos=%d spill=%d\n",
+                    d->dbg_acc, ip, d->dbg_rip, d->dbg_pfp,
+                    int(d->dbg_rcache_pos), d->dbg_to_memory);
+      }
+      acc_prev2 = d->dbg_acc;
+    }
+
     // CYCLE BY CYCLE ACROSS ONE FETCH. Three explanations for this have now
     // been wrong, all of them reasoned from summaries. This prints the state
     // itself over a bounded window: the transaction is at a known instruction.
