@@ -64,6 +64,33 @@ all: lint synth test
 .PHONY: lint lint_i960_dec lint_i960_alu lint_i960_regs lint_i960_agu lint_i960_ldst lint_i960_lsu lint_i960_memmap lint_i960_icache lint_i960_muldiv lint_i960_fpmul lint_i960_fpadd lint_i960_fpdiv lint_i960_fpsqrt lint_i960_fpmisc lint_i960_fpcvt lint_i960_top
 lint: lint_i960_dec lint_i960_alu lint_i960_regs lint_i960_agu lint_i960_ldst lint_i960_lsu lint_i960_memmap lint_i960_icache lint_i960_muldiv lint_i960_fpmul lint_i960_fpadd lint_i960_fpdiv lint_i960_fpsqrt lint_i960_fpmisc lint_i960_fpcvt lint_i960_top
 
+# THE PLL IS LINTED TOO, and it was not until a build failed.
+#
+# rtl/pll/pll.v is plain Verilog wrapping vendor IP, so it sat outside the
+# SystemVerilog sweep and nothing checked it. Taking the PLL from three outputs
+# to five, `outclk_3` and `outclk_4` were added to the wrapper's port list and
+# to the altera_pll instantiation, and missed in TWO places between them: the
+# inner module's port list and the wrapper's instantiation of it. Verilog
+# creates implicit nets rather than complaining, so both outputs dangled.
+#
+# Quartus said what had happened -- "created implicit net for outclk_4" -- as a
+# WARNING, in a log with 152 of them, and then failed for two other reasons
+# further downstream. The lint below turns that into an error before a
+# twenty-five minute build.
+#
+# altera_pll is vendor IP with no source here, so the module is linted with the
+# instantiation left unresolved: -Wno-MODMISSING checks this file's own wiring,
+# which is exactly what was wrong. UNDRIVEN and UNUSEDSIGNAL follow from the
+# same absence -- with the IP unresolved every output it should drive looks
+# dead -- and suppressing them does not weaken the check that matters, which is
+# IMPLICIT: a name used and never declared.
+.PHONY: lint_pll
+lint_pll:
+	@echo "== lint pll"
+	verilator --lint-only -Wall -Wno-DECLFILENAME -Wno-MODMISSING -Wno-UNDRIVEN \
+	  -Wno-UNUSEDSIGNAL -Wno-PINCONNECTEMPTY --top-module pll rtl/pll/pll.v
+
+
 lint_i960_dec:
 	@echo "== lint i960_dec"
 	$(VERILATOR) --lint-only $(VFLAGS) --top-module i960_dec $(DEC_RTL)

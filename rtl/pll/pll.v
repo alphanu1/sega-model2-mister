@@ -116,6 +116,8 @@ module pll (
     .outclk_0 (outclk_0),
     .outclk_1 (outclk_1),
     .outclk_2 (outclk_2),
+    .outclk_3 (outclk_3),
+    .outclk_4 (outclk_4),
     .locked   (locked)
   );
 
@@ -124,9 +126,11 @@ endmodule
 module pll_core (
     input  wire  refclk,
     input  wire  rst,
-    output wire  outclk_0,
-    output wire  outclk_1,
-    output wire  outclk_2,
+    output wire  outclk_0,   // 96 MHz  SDRAM controller
+    output wire  outclk_1,   // 48 MHz  clk_sys
+    output wire  outclk_2,   // 32 MHz  video
+    output wire  outclk_3,   // 24 MHz  i960
+    output wire  outclk_4,   // 96 MHz  SDRAM_CLK pin, 180 deg
     output wire  locked
   );
 
