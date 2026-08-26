@@ -220,6 +220,8 @@ int main(int argc, char **argv) {
   FILE *charstream = csf ? std::fopen(csf, "w") : nullptr;
   int n_char = 0;
   uint64_t ldos_n = 0, ldos_bad = 0;
+  uint64_t rf_req_cycles = 0, rf_ack_count = 0; uint32_t rf_last_addr = 0;
+  uint32_t rf_bad_first = 0, rf_bad_at = 0, rf_bad_ip = 0, rf_bad_pfp = 0;
   const bool stacktrace = std::getenv("M2_BOOT_STACK") != nullptr;
   int n_stack = 0;
   const char *cf = std::getenv("M2_BOOT_CYC");
@@ -276,6 +278,22 @@ int main(int argc, char **argv) {
                   (d->obs_mstate >> 5) & 1, d->sd_req, d->sd_addr);
       ++n_cyc;
     }
+
+    // DOES THE REGISTER FILE ASK, AND IS IT ANSWERED? Counted rather than
+    // printed: a spill is sixteen accesses and what matters is whether the
+    // count is zero.
+    if (d->dbg_rf_req) {
+      ++rf_req_cycles; rf_last_addr = d->dbg_rf_addr;
+      // The FIRST spill or fill whose address leaves work RAM. Everything after
+      // it is downstream of the same corruption, so only the first is evidence.
+      if (!rf_bad_first && (d->dbg_rf_addr < 0x00500000u || d->dbg_rf_addr >= 0x00600000u)) {
+        rf_bad_first = d->dbg_rf_addr;
+        rf_bad_at    = d->dbg_acc;
+        rf_bad_ip    = d->dbg_ip;
+        rf_bad_pfp   = d->dbg_pfp;
+      }
+    }
+    if (d->dbg_rf_ack) ++rf_ack_count;
 
     // THE REGISTER-FRAME SPILL AND FILL. A `ret` whose PFP comes back as
     // 0xffffffff read memory nothing had written, so the question is whether
@@ -372,6 +390,12 @@ int main(int argc, char **argv) {
   std::printf("  window reads %u, backup writes %u, backup dword0 %08x\n",
               d->iob_win_rd, d->bak_writes, d->bak_w0);
   std::printf("  tile RAM writes %u\n", d->dbg_tram_wr);
+  if (rf_bad_first)
+    std::printf("  FIRST frame access outside work RAM: addr %08x at instruction %u,"
+                " ip %08x, pfp %08x\n", rf_bad_first, rf_bad_at, rf_bad_ip, rf_bad_pfp);
+  std::printf("  register-frame memory: req asserted %llu cycles, %llu acks, last addr %08x\n",
+              (unsigned long long)rf_req_cycles, (unsigned long long)rf_ack_count,
+              rf_last_addr);
   if (ldos_n)
     std::printf("  source loads: %llu checked, %llu returned the wrong halfword\n",
                 (unsigned long long)ldos_n, (unsigned long long)ldos_bad);

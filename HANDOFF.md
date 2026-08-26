@@ -94,14 +94,36 @@ i15424576  ip=0001c670  rip=0001c670 pfp=ffffffff pos=4 spill=1
 ```
 
 `pfp=ffffffff` is our unwritten-memory value, so the restore read memory nothing
-wrote. **And there is no bus traffic in `0x0053xxxx` after instruction
-15,000,000 at all** — the spill is not reaching the bus, even though
-`to_memory` is set, the port is fully wired (`mem_req/we/addr/wdata/rdata/ack`),
-and the arbiter ranks `rf_mem` second only to the boot master.
+wrote.
 
-So the next question is narrow: **does `rf_mem_req` ever assert, and is it
-granted?** Neither is exposed. Add a tap for `rf_mem_req`/`rf_mem_ack` and the
-arbiter's selection, and the answer is one five-second run away.
+**The spill machinery itself works, and an earlier note here saying otherwise
+was wrong** — it came from a trace filtered to a single address. Taps on
+`rf_mem_req`/`rf_mem_ack`/`rf_mem_addr` show:
+
+```
+register-frame memory: req asserted 30412 cycles, 2048 acks, last addr fffffffc
+FIRST frame access outside work RAM: addr ffffffc0 at instruction 15880052,
+                                     ip 0001c690, pfp ffffffff
+```
+
+2,048 acks is exactly 128 frames x 16 words, and **every** frame access is
+inside work RAM until the very last one. So spills and fills are happening, to
+sane addresses, and being answered.
+
+What fails is that at the final `ret` the frame restored from work RAM brings
+back `PFP = 0xFFFFFFFF` — so the matching spill did not write what that fill
+reads. Spill and fill are both `spill_base + idx*4`, `spill_base` being
+`fp_masked` at the call and `PFP & ~0x3f` at the return, which should be the
+same address.
+
+**The next step is to log spill and fill address/data pairs for one frame and
+compare them** — which of the sixteen words differ, and whether the two agree on
+where the frame lives. `dbg_rf_addr` is already exposed; the data is not.
+
+A caution: `pfp = 0xFFFFFFFF` appears legitimately at the outermost frame, so it
+is not by itself evidence of corruption. An earlier reading here treated it as
+such, and the first genuinely out-of-range access is at instruction 15,880,052,
+not at 15,424,576.
 
 ### Instruments that now exist
 

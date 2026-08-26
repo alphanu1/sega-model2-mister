@@ -93,7 +93,14 @@ module i960_top (
   output logic [31:0] dbg_rip,
   output logic [31:0] dbg_pfp,
   output logic signed [31:0] dbg_rcache_pos,
-  output logic        dbg_to_memory
+  output logic        dbg_to_memory,
+  // Does the register file ASK for memory, and does the arbiter grant it? The
+  // spill for a frame at 0x53f6c0 produced no bus traffic at all while
+  // dbg_to_memory was set, so "it wants to spill" and "it is spilling" have to
+  // be distinguishable.
+  output logic        dbg_rf_req,
+  output logic        dbg_rf_ack,
+  output logic [31:0] dbg_rf_addr
 );
 
   // ------------------------------------------------------------ architectural
@@ -442,6 +449,10 @@ module i960_top (
     .mem_req(rf_mem_req), .mem_we(rf_mem_we), .mem_addr(rf_mem_addr),
     .mem_wdata(rf_mem_wdata), .mem_rdata(bus_rdata), .mem_ack(rf_mem_ack)
   );
+
+  assign dbg_rf_req  = rf_mem_req;
+  assign dbg_rf_ack  = rf_mem_ack;
+  assign dbg_rf_addr = rf_mem_addr;
 
   // Literal operands: the field is the value, not a register number.
   logic [31:0] src1_val, src2_val;
