@@ -245,18 +245,29 @@ module m2_sdram #(
   always_ff @(posedge clk) begin
     if (!rst_n) cap_depth <= 4'(RD_LAT_DEF);
     else case (rd_lat_sel)
-      // RANGE MOVED EARLIER, on hardware evidence. It was CL+2..CL+5, and the
-      // board needs EARLIER than CL+2: a write-then-read self-test of AA55,
-      // 5AA5, FF00, 00FF came back as 5AA5, FF00, 00FF, 00FF -- the burst
-      // shifted by exactly one 16-bit word, meaning capture starts one cycle
-      // too late. No setting in the old range could correct that, which is why
-      // cycling the OSD option produced garbage at every position and was
-      // wrongly read as "the phase is not involved".
-      // WIDENED TO REACH CL+4 AND CL+5 for the 96 MHz clock. RD_LAT is CL+5,
-      // so the pipeline already went this deep and only the selector did not.
-      3'd0:    cap_depth <= 4'(CL + 1);   // unconnected lands here, by design
+      // SELECTOR 0 IS CL+2, MEASURED AT 96 MHz. An unconnected or defaulted
+      // selector lands on index 0, so index 0 must be what the board wants.
+      //
+      // The history is worth keeping because it has been wrong twice in
+      // opposite directions. At 40 MHz the range was CL+2..CL+5 and the board
+      // needed EARLIER: a write-then-read of AA55, 5AA5, FF00, 00FF came back
+      // as 5AA5, FF00, 00FF, 00FF, the burst shifted by exactly one 16-bit
+      // word. The range moved to CL+0..CL+3 with CL+1 first.
+      //
+      // At 96 MHz the same symptom appeared again -- the boot IP reading
+      // 0860FFFF where the ROM holds 00000860, the same value with its halves
+      // one word apart -- and the expectation was that the answer had moved
+      // LATER, to CL+4 or CL+5: the round trip is 2.4x longer in clock cycles
+      // and the Kaneko16 core wants CL+4 on this controller at this clock. The
+      // selector was widened to three bits to reach them.
+      //
+      // IT IS CL+2, which the two-bit range already contained. The range was
+      // never the problem; the default was. Widening was not wasted -- it is
+      // what proved the answer lies inside the range rather than beyond it --
+      // but the reasoning that motivated it did not survive the measurement.
+      3'd0:    cap_depth <= 4'(CL + 2);   // unconnected lands here, by design
       3'd1:    cap_depth <= 4'(CL + 0);
-      3'd2:    cap_depth <= 4'(CL + 2);
+      3'd2:    cap_depth <= 4'(CL + 1);
       3'd3:    cap_depth <= 4'(CL + 3);
       3'd4:    cap_depth <= 4'(CL + 4);
       default: cap_depth <= 4'(CL + 5);

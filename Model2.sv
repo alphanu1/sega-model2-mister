@@ -84,7 +84,7 @@ localparam CONF_STR = {
 	// every one of four settings is the symptom of a range that does not
 	// contain the answer, and this project has now read that symptom as "the
 	// phase is not involved" once already.
-	"O[7:5],SDRAM phase,CL+1,CL+0,CL+2,CL+3,CL+4,CL+5;",
+	"O[7:5],SDRAM phase,CL+2,CL+0,CL+1,CL+3,CL+4,CL+5;",
 	// WHICH 2 MB OF THE CHIP THE PORT-4 SWEEP FOLDS. Selectable because the
 	// alternative is a 25-minute build per probe, and locating a corruption in
 	// 43.62 MB takes more than one probe. Region N covers word N*0x100000 for
@@ -382,7 +382,10 @@ m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(750)) u_sdram (
 	// Labels match what selecting them does: 0->CL+1, 1->CL+0, 2->CL+2, 3->CL+3.
 	// The default is CL+1, one cycle EARLIER than the old default of CL+2, which
 	// the self-test showed captures the burst one 16-bit word late.
-	.rd_lat_sel(status[7:5]),
+	// SWEPT WHILE CALIBRATING, then held at what passed. The OSD still
+	// overrides once the sweep has finished and found nothing, so a board this
+	// cannot calibrate is still tunable by hand.
+	.rd_lat_sel(cal_done ? cal_best : cal_sel),
 	.sd_cke(SDRAM_CKE), .sd_cs_n(SDRAM_nCS), .sd_ras_n(SDRAM_nRAS),
 	.sd_cas_n(SDRAM_nCAS), .sd_we_n(SDRAM_nWE), .sd_ba(SDRAM_BA),
 	.sd_a(SDRAM_A), .sd_dqm({SDRAM_DQMH, SDRAM_DQML}),
@@ -511,6 +514,18 @@ initial begin
 end
 
 logic            st_run, st_req, st_rd_req;
+// The capture-depth sweep: which of the six settings reads back the pattern.
+logic  [2:0]     cal_sel;
+logic  [5:0]     cal_mask;
+logic  [5:0]     cal_wait;
+logic            cal_done;
+// The lowest depth that passed, or the OSD's choice if none did. Lowest rather
+// than any, because a shallower capture that reads correctly has more margin
+// against the next thing that slows the path down.
+wire   [2:0]     cal_best = cal_mask[0] ? 3'd0 : cal_mask[1] ? 3'd1 :
+                            cal_mask[2] ? 3'd2 : cal_mask[3] ? 3'd3 :
+                            cal_mask[4] ? 3'd4 : cal_mask[5] ? 3'd5 : status[7:5];
+assign cal_done = (st_state == 4'd12);
 logic [SDR_AW:1] st_addr, st_rd_addr;
 logic [15:0]     st_din;
 logic [3:0]      st_state;
@@ -520,7 +535,11 @@ logic [63:0]     st_got;
 // slots. It keeps running and keeps looping, so a regression in the SDRAM path
 // shows up as this bit dropping rather than as confusing ROM values -- which is
 // how four builds were spent.
-wire st_ok = (st_got == 64'h00FF_FF00_5AA5_AA55);
+// ANY DEPTH READING CORRECTLY, not the one currently selected. During the
+// sweep the live comparison flickers as each depth is tried, so a status bit
+// taken from it says only what the last attempt did. `cal_mask` is what the
+// memory is capable of.
+wire st_ok = |cal_mask;
 
 // WHAT ARRIVED versus WHAT WAS STORED, at the same two words.
 //
@@ -583,6 +602,7 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
 		st_state <= 4'd0; st_req <= 1'b0; st_rd_req <= 1'b0;
 		st_addr <= '0; st_rd_addr <= '0; st_din <= 16'd0; st_got <= 64'd0;
+		cal_sel <= 3'd0; cal_mask <= 6'd0; cal_wait <= 6'd0;
 	end else begin
 		case (st_state)
 			// WAITS FOR THE COPY. The copy engine, this self-test and the ROM
@@ -603,10 +623,40 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 			4'd6: begin st_addr <= ST_BASE + SDR_AW'(3); st_din <= STP3;
 			            st_req <= 1'b1; st_state <= 4'd7; end
 			4'd7: if (ldr_wr_ack) begin st_req <= 1'b0; st_state <= 4'd8; end
-			4'd8: begin st_rd_addr <= ST_BASE; st_rd_req <= 1'b1; st_state <= 4'd9; end
-			4'd9: if (p_ack[2]) begin
-				st_got <= p_dout[2]; st_rd_req <= 1'b0; st_state <= 4'd8;
+			// CALIBRATE THE READ CAPTURE INSTEAD OF ASKING SOMEONE TO GUESS IT.
+			//
+			// The four words above are written at a known address; reading them
+			// back is a test whose right answer is known in advance. Doing that
+			// once, at whatever depth the OSD happens to be set to, throws away
+			// the fact that it can be done SIX TIMES and the depth that works
+			// identified outright.
+			//
+			// This project has been stuck on capture phase three times. At 40 MHz
+			// the range had to move earlier because the burst came back one
+			// 16-bit word late; at 96 MHz the board needs later than anything the
+			// two-bit selector could express, and the symptom -- garbage at every
+			// setting -- was once read as "the phase is not involved". A sweep
+			// with a known answer ends that argument each time the clock changes.
+			4'd8: begin
+				st_rd_addr <= ST_BASE; st_rd_req <= 1'b1; st_state <= 4'd9;
 			end
+			4'd9: if (p_ack[2]) begin
+				st_got <= p_dout[2]; st_rd_req <= 1'b0; st_state <= 4'd10;
+			end
+			4'd10: begin
+				// One bit per depth. The pattern is 64 bits of known data, so a
+				// depth that is off by a single 16-bit word cannot pass by luck.
+				cal_mask[cal_sel] <= (p_dout[2] == 64'h00FF_FF00_5AA5_AA55);
+				if (cal_sel == 3'd5) st_state <= 4'd12;
+				else begin
+					cal_sel  <= cal_sel + 3'd1;
+					cal_wait <= 6'd40;      // let cap_depth settle before reading
+					st_state <= 4'd11;
+				end
+			end
+			4'd11: if (cal_wait == 6'd0) st_state <= 4'd8;
+			       else                  cal_wait <= cal_wait - 6'd1;
+			4'd12: st_state <= 4'd12;      // done; cal_mask holds
 			default: st_state <= 4'd0;
 		endcase
 	end
@@ -1426,7 +1476,7 @@ always_ff @(posedge clk_vid) begin
 	ldr_top_sync  <= ldr_top;
 end
 
-m2_diag #(.NWORDS(20)) u_diag
+m2_diag #(.NWORDS(21)) u_diag
 (
 	.clk(clk_vid),
 	.ce_pix(ce_pix),
@@ -1454,7 +1504,17 @@ m2_diag #(.NWORDS(20)) u_diag
 	// counts reads of the flag dword; lower half is {status, flag} exactly as
 	// returned on rdata. If this disagrees with row 14 the read path is wrong,
 	// and row 14 alone could never have said so.
-	.words({ io_last_data,                              // 19 last I/O word returned
+	// 20 THE CAPTURE SWEEP, and it answers the question the OSD option was
+	// there to ask by hand:
+	//
+	//   bits 5:0   which of CL+0..CL+5 read the known pattern back
+	//   bits 10:8  the depth in use
+	//   bit  12    the sweep has finished
+	//
+	// 00001?3F would mean every depth works; 00001?00 means none does, and that
+	// is a result about the interface rather than a range that was too narrow.
+	.words({ {19'd0, cal_done, 1'b0, cal_best, 2'd0, cal_mask},  // 20 capture sweep
+	         io_last_data,                              // 19 last I/O word returned
 	         io_last_addr,                              // 18 last I/O address presented
 	         {iob_flag_rd, iob_seen},                   // 17 flag reads / value seen
 	         bak_w0,                                    // 16 backup SRAM dword 0
