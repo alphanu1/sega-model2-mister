@@ -297,7 +297,7 @@ module m2_cpu_bridge #(
   //
   // On hardware that made the i960 read its boot IP as 0x00600860 where the ROM
   // holds 0x00000860 -- the low half right, the high half not.
-  typedef enum logic [2:0] { S_IDLE, S_LO, S_LO_W, S_HI, S_HI_W, S_RDB, S_DONE } st_e;
+  typedef enum logic [2:0] { S_IDLE, S_LO, S_LO_W, S_HI, S_HI_W, S_RDB, S_IOW, S_DONE } st_e;
   st_e  st;
   logic half;
 
@@ -362,12 +362,31 @@ module m2_cpu_bridge #(
               ack_mem     <= 1'b1;
               st          <= S_DONE;
             end
+            // ONE CYCLE BETWEEN ASSERTING io_sel AND SAMPLING io_rdata.
+            //
+            // This used to do both on the same edge, which captures whatever
+            // the I/O side was presenting BEFORE the address it is being asked
+            // about had been clocked into it. That is correct for a
+            // combinational peripheral and one cycle early for a registered
+            // one, and m2_ioboard and m2_backup are both registered -- they
+            // have to be, because an asynchronously read array is not an MLAB
+            // on this part, it is flip-flops and 7,899 ALM.
+            //
+            // R34 IS WHY IT BITES. The i960 holds bus_req across a run of
+            // accesses and moves the address on the acknowledge, so on
+            // back-to-back accesses r_addr changes and this state is entered
+            // immediately, with the peripheral's registered output still
+            // showing the PREVIOUS address.
+            //
+            // On hardware that read as a boot stuck in a poll whose value was
+            // correct: the I/O board returned 00400000 for 0x01c00042 -- its
+            // own debug tap said so -- and the i960 was handed 00000000.
+            // Overlay rows 14 and 17 both reported healthy because both are on
+            // the far side of this sample.
             T_IO: begin
-              io_sel  <= 1'b1;
-              io_we   <= r_we;
-              r_rdata <= io_rdata;
-              ack_mem <= 1'b1;
-              st      <= S_DONE;
+              io_sel <= 1'b1;
+              io_we  <= r_we;
+              st     <= S_IOW;
             end
             default: begin
               dbg_unmapped <= dbg_unmapped + 32'd1;
@@ -376,6 +395,16 @@ module m2_cpu_bridge #(
               st           <= S_DONE;
             end
           endcase
+        end
+
+        // The registered I/O read, one cycle after the select. io_sel has
+        // already fallen by here -- it is cleared at the top of this block --
+        // which is right: a write lands on the cycle it is asserted, and a read
+        // only needs the address, which r_addr holds for the whole transaction.
+        S_IOW: begin
+          r_rdata <= io_rdata;
+          ack_mem <= 1'b1;
+          st      <= S_DONE;
         end
 
         // SDRAM low half, then high. The on-chip arrays answer in one cycle and

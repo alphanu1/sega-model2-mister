@@ -1,0 +1,212 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Sega Model 2 core for MiSTer FPGA
+// Copyright (C) 2026 alphanu1
+//
+// THE COMPOSITION: the i960 through the real bridge into the real peripherals.
+//
+// This exists because `tb_i960_rom` drives `i960_top` DIRECTLY, with a C++
+// memory answering its bus. Every one of the 803,355 instructions verified
+// against MAME went through that path, and none of them went through
+// `m2_cpu_bridge`. So the boot runs clean in simulation and stops on hardware,
+// and the link nothing covered is the one between them.
+//
+// The specific failure this is built to reproduce: on the board the i960 reads
+// the I/O board's flag and status correctly -- overlay row 17 returns 4000,
+// row 18 the address 01C00042, row 19 the word 00400000 -- satisfies all three
+// polls at 0x22824x-0x228270, and never reaches the copy loop eight
+// instructions later at 0x22827C. Rows 15 and 16 read zero: no window reads, no
+// backup-SRAM writes.
+//
+// WHAT IS REAL HERE AND WHAT IS NOT.
+//
+// Real: i960_top, m2_cpu_bridge with its two clock domains, m2_ioboard,
+// m2_backup, and the I/O read mux copied from Model2.sv. Those are the parts
+// under suspicion.
+//
+// Modelled in C++: the SDRAM behind the bridge's sd_* port. m2_sdram has
+// 123,927 checks of its own and is not what this is asking about; putting the
+// whole memory stack in RTL would make a fourteen-million-instruction boot take
+// hours to answer a question about a handshake.
+//
+// The tile RAM, palette and colour-translation arrays are modelled too, for the
+// same reason: the CPU writes them and never reads them back in this phase.
+
+`timescale 1ns/1ps
+
+module m2_boot_harness #(
+  parameter int unsigned AW = 25,
+  // Small enough to reach in simulation. The real ones are 5,843,478 and
+  // 145,252,176 -- three seconds of a 48 MHz clock -- and what is under test
+  // here is the sequence, not the constants.
+  parameter int          STATUS_CYCLES   = 20_000,
+  parameter int          SELFTEST_CYCLES = 200_000
+) (
+  input  logic        clk_cpu,
+  input  logic        clk_mem,
+  input  logic        rst_n,
+  input  logic  [3:0] irq,
+
+  // ---- the SDRAM port, answered in C++
+  output logic        sd_req,
+  output logic        sd_we,
+  output logic [AW:1] sd_addr,
+  output logic [15:0] sd_din,
+  output logic  [1:0] sd_be,
+  input  logic [63:0] sd_dout,
+  input  logic        sd_ack,
+
+  // ---- what the test asks about
+  output logic [31:0] dbg_pc,
+  output logic [31:0] dbg_acc,
+  output logic [15:0] iob_win_rd,     // reads of DPRAM 0x100-0x17f
+  output logic [15:0] iob_flag_rd,
+  output logic [15:0] iob_seen,
+  output logic [31:0] bak_w0,         // "SEGA" if the copy landed
+  output logic [15:0] bak_writes,
+  output logic [31:0] iob_dbg,
+  output logic [31:0] dbg_tram_wr,
+  output logic [31:0] dbg_ip,
+  output logic        cpu_trap,
+  output logic        cpu_halt,
+
+  // THE CPU'S OWN BUS, which is the one thing the overlay cannot show. The
+  // board proves what the I/O board returned; this proves what the i960 was
+  // handed.
+  output logic [31:0] obs_bus_addr,
+  output logic [31:0] obs_bus_rdata,
+  output logic        obs_bus_ack,
+  output logic  [3:0] obs_bus_be,
+  output logic        obs_bus_we
+);
+
+  logic        bus_req, bus_we, bus_ack;
+  logic [31:0] bus_addr, bus_wdata, bus_rdata;
+  logic  [3:0] bus_be;
+
+  // [31:24] is unread: every decode below is on the low 24 bits, which is what
+  // the top level does too.
+  /* verilator lint_off UNUSEDSIGNAL */
+  logic [31:0] cpu_io_addr;
+  /* verilator lint_on UNUSEDSIGNAL */
+  logic [31:0] cpu_io_wdata, cpu_io_rdata;
+  logic        cpu_io_sel, cpu_io_we;
+  logic  [3:0] cpu_io_be;
+
+  logic        oc_tram_we, oc_pal_we, oc_xlat_we;
+  logic [14:0] oc_addr;
+  logic [15:0] oc_din;
+  logic  [6:0] oc_xlat_addr;
+  logic  [7:0] oc_xlat_din;
+
+  assign obs_bus_addr  = bus_addr;
+  assign obs_bus_rdata = bus_rdata;
+  assign obs_bus_ack   = bus_ack;
+  assign obs_bus_be    = bus_be;
+  assign obs_bus_we    = bus_we;
+
+  i960_top u_cpu (
+    .clk(clk_cpu), .rst_n(rst_n),
+    .bus_req(bus_req), .bus_we(bus_we), .bus_addr(bus_addr), .bus_be(bus_be),
+    .bus_wdata(bus_wdata), .bus_rdata(bus_rdata), .bus_ack(bus_ack),
+    .irq(irq),
+    .dbg_pc(dbg_pc), .dbg_sat(), .dbg_prcb(), .dbg_icr(),
+    .dbg_intr_cnt(), .dbg_intr_work(), .dbg_acc_cnt(dbg_acc),
+    .dbg_ip(dbg_ip), .dbg_insn(),
+    .trap(cpu_trap), .trap_op(), .halted(cpu_halt)
+  );
+
+  m2_cpu_bridge #(.AW(AW), .BOARD_2A(1'b0)) u_bridge (
+    .clk_cpu(clk_cpu), .rst_n_cpu(rst_n),
+    .bus_req(bus_req), .bus_we(bus_we), .bus_addr(bus_addr), .bus_be(bus_be),
+    .bus_wdata(bus_wdata), .bus_rdata(bus_rdata), .bus_ack(bus_ack),
+    .clk_mem(clk_mem), .rst_n_mem(rst_n),
+    // The bases the top level uses for a game image.
+    // The top level's own bases for a game image (Model2.sv GAME_*), so the
+    // address arithmetic under test is the arithmetic that runs on the board.
+    .base_prog (AW'(32'h0000000)), .base_data (AW'(32'h0020000)),
+    .base_work (AW'(32'h1600000)), .base_board(AW'(32'h1680000)),
+    .base_char (AW'(32'h1690000)),
+    .sd_req(sd_req), .sd_we(sd_we), .sd_addr(sd_addr), .sd_din(sd_din),
+    .sd_be(sd_be), .sd_dout(sd_dout), .sd_ack(sd_ack),
+    .oc_tram_we(oc_tram_we), .oc_pal_we(oc_pal_we), .oc_addr(oc_addr),
+    .oc_din(oc_din), .oc_tram_q(16'hFFFF), .oc_pal_q(16'hFFFF),
+    .oc_xlat_we(oc_xlat_we), .oc_xlat_addr(oc_xlat_addr), .oc_xlat_din(oc_xlat_din),
+    .io_rdata(cpu_io_rdata), .io_sel(cpu_io_sel), .io_we(cpu_io_we),
+    .io_addr(cpu_io_addr), .io_wdata(cpu_io_wdata), .io_be(cpu_io_be),
+    .dbg_cpu_reads(), .dbg_cpu_writes(), .dbg_unmapped(),
+    .dbg_last_addr(), .dbg_last_dout(), .dbg_probe6(), .dbg_probe2(),
+    .dbg_tram_wr(dbg_tram_wr), .dbg_pal_wr(), .dbg_mstate()
+  );
+
+  // ---- the peripherals, real
+  wire        iob_sel = cpu_io_sel && (cpu_io_addr[23:12] == 12'hc00);
+  wire [31:0] iob_rdata;
+
+  m2_ioboard #(
+    .STATUS_CYCLES(STATUS_CYCLES), .SELFTEST_CYCLES(SELFTEST_CYCLES)
+  ) u_ioboard (
+    .clk(clk_mem), .rst_n(rst_n),
+    .sel(iob_sel), .we(cpu_io_we), .word(cpu_io_addr[11:2]),
+    .be(cpu_io_be), .wdata(cpu_io_wdata), .rdata(iob_rdata),
+    .dbg(iob_dbg), .dbg_win_rd(iob_win_rd),
+    .dbg_flag_rd(iob_flag_rd), .dbg_seen(iob_seen)
+  );
+
+  wire        bak_sel = cpu_io_sel && (cpu_io_addr[23:14] == 10'b11_0100_0000);
+  wire [31:0] bak_rdata;
+
+  m2_backup u_backup (
+    .clk(clk_mem), .sel(bak_sel), .we(cpu_io_we),
+    .word(cpu_io_addr[13:2]), .be(cpu_io_be), .wdata(cpu_io_wdata),
+    .rdata(bak_rdata), .dbg_w0(bak_w0), .dbg_writes(bak_writes)
+  );
+
+  // The I/O read mux, copied from Model2.sv. If these two ever disagree the
+  // harness stops being about the same machine, so it is worth diffing when
+  // either changes.
+  wire [7:0] tgpid_b =
+    (cpu_io_addr[3:0] == 4'h1) ? 8'h54 : (cpu_io_addr[3:0] == 4'h2) ? 8'h41 :
+    (cpu_io_addr[3:0] == 4'h3) ? 8'h48 : (cpu_io_addr[3:0] == 4'h5) ? 8'h41 :
+    (cpu_io_addr[3:0] == 4'h6) ? 8'h4B : (cpu_io_addr[3:0] == 4'h7) ? 8'h4F :
+    (cpu_io_addr[3:0] == 4'h9) ? 8'h5A : (cpu_io_addr[3:0] == 4'hA) ? 8'h41 :
+    (cpu_io_addr[3:0] == 4'hB) ? 8'h4B : (cpu_io_addr[3:0] == 4'hD) ? 8'h4D :
+    (cpu_io_addr[3:0] == 4'hE) ? 8'h54 : (cpu_io_addr[3:0] == 4'hF) ? 8'h4B : 8'h00;
+
+  logic [11:0] io_intreq, io_intena;
+  // Only the low bits are read, exactly as in Model2.sv -- videoctl's mode bit
+  // and the frame counter's parity. Kept full width so the shapes match the top
+  // level rather than quietly diverging from it.
+  /* verilator lint_off UNUSEDSIGNAL */
+  logic [31:0] io_videoctl;
+  logic [31:0] io_framenum;
+  /* verilator lint_on UNUSEDSIGNAL */
+
+  assign cpu_io_rdata =
+    iob_sel                           ? iob_rdata :
+    bak_sel                           ? bak_rdata :
+    (cpu_io_addr[23:4] == 20'h98003)  ? {4{tgpid_b}} :
+    (cpu_io_addr[23:0] == 24'h980004) ? 32'd1 :
+    (cpu_io_addr[23:0] == 24'h98000c) ? (io_videoctl[0]
+                                          ? {29'd0, io_framenum[0], io_videoctl[1:0]}
+                                          : {28'd0, io_framenum[1], 1'b0, io_videoctl[1:0]}) :
+    (cpu_io_addr[23:0] == 24'he80000) ? {20'd0, io_intreq} :
+    (cpu_io_addr[23:0] == 24'he80004) ? {20'd0, io_intena} :
+    32'd0;
+
+  always_ff @(posedge clk_mem or negedge rst_n) begin
+    if (!rst_n) begin
+      io_intreq <= '0; io_intena <= '0; io_videoctl <= '0; io_framenum <= '0;
+    end else if (cpu_io_sel && cpu_io_we) begin
+      if (cpu_io_addr[23:0] == 24'he80000) io_intreq   <= io_intreq & cpu_io_wdata[11:0];
+      if (cpu_io_addr[23:0] == 24'he80004) io_intena   <= cpu_io_wdata[11:0];
+      if (cpu_io_addr[23:0] == 24'h98000c) io_videoctl <= cpu_io_wdata;
+    end
+  end
+
+  /* verilator lint_off UNUSEDSIGNAL */
+  wire _unused = &{1'b0, oc_tram_we, oc_pal_we, oc_addr, oc_din,
+                   oc_xlat_we, oc_xlat_addr, oc_xlat_din, sd_we, sd_din, sd_be};
+  /* verilator lint_on UNUSEDSIGNAL */
+
+endmodule

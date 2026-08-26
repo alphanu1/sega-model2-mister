@@ -433,6 +433,32 @@ obj_x2/Vm2_sdram_x2_harness: sim/mem/m2_sdram_x2_harness.sv rtl/mem/m2_sdram_x2.
 	  sim/mem/m2_sdram_x2_harness.sv rtl/mem/m2_sdram_x2.sv rtl/mem/m2_sdram.sv \
 	  sim/mem/sdram_model.sv sim/mem/tb_m2_sdram_x2.cpp
 
+# ------------------------------------------------- the boot, through the bridge
+#
+# test_i960_rom drives i960_top DIRECTLY with a C++ memory, so every one of the
+# 803,355 instructions verified against MAME went through that path and none
+# went through m2_cpu_bridge. This runs the real boot through the real bridge
+# into the real I/O board and backup SRAM.
+#
+# It reproduced the hardware fault on its first run -- same I/O board state,
+# same 4,097 tile writes, same zero window reads -- and named it in one trace:
+# the I/O board returned 00400000 and the i960 was handed 00000000. Five
+# seconds, against a 25-minute build.
+
+.PHONY: test_m2_boot
+test_m2_boot: obj_boot/Vm2_boot_harness
+	@echo "== test m2_boot (the real boot through the real bridge)"
+	@./obj_boot/Vm2_boot_harness $(TEST_ARGS)
+
+obj_boot/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cpp \
+                           rtl/io/m2_cpu_bridge.sv rtl/io/m2_ioboard.sv rtl/io/m2_backup.sv \
+                           $(wildcard rtl/cpu/i960/*.sv)
+	$(VBUILD) --top-module m2_boot_harness -Wno-PINCONNECTEMPTY -Wno-UNUSEDPARAM \
+	  -Wno-WIDTHEXPAND -Wno-UNUSEDSIGNAL --Mdir obj_boot -o Vm2_boot_harness \
+	  -CFLAGS "-O2" sim/io/m2_boot_harness.sv rtl/io/m2_cpu_bridge.sv \
+	  rtl/io/m2_ioboard.sv rtl/io/m2_backup.sv $(wildcard rtl/cpu/i960/*.sv) \
+	  sim/io/tb_m2_boot.cpp
+
 # ------------------------------------------------------------------ I/O board
 #
 # BUILT WITH SMALL TIMERS. The real ones are 75,652,174 cycles of power-on
