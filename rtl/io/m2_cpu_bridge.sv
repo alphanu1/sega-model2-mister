@@ -281,7 +281,29 @@ module m2_cpu_bridge #(
   // is captured, which is what the S_IDLE -> S_LO -> S_HI walk below does.
   assign oc_addr      = r_addr[15:1] + {14'd0, half};
   assign oc_din       = half ? r_wdata[31:16] : r_wdata[15:0];
-  assign oc_xlat_addr = r_addr[7:1];
+  // THE COLOUR-TRANSLATION TABLE IS STRIDED, NOT PACKED.
+  //
+  // This was `r_addr[7:1]`, which keeps the low eight bits of the byte address
+  // and throws away everything that identifies the entry. model2.cpp reads it:
+  //
+  //   r = m_colorxlat[(0x0080 >> 1) + (((palcolor >> 0) & 0x1f) << 8)];
+  //   g = m_colorxlat[(0x4080 >> 1) + ...];
+  //   b = m_colorxlat[(0x8080 >> 1) + ...];
+  //
+  // so the entries this core keeps are at BYTE offsets 0x0080 + v*512 for red,
+  // 0x4080 + v*512 for green and 0x8080 + v*512 for blue, v = 0..31. The stride
+  // is 512 and the channel is bits 15:14. `r_addr[7:1]` sees neither: every one
+  // of the game's writes landed on the same few table entries, and the rest kept
+  // the pal5bit values the table powers up with.
+  //
+  // Only 96 of 24,576 entries are ever read -- 32 per channel -- which is why
+  // this is a 96-byte table and not 48 KB (study R27). That economy is exactly
+  // what makes the indexing load-bearing.
+  //
+  // Found from the board: the CPU builds a correct palette (4,036 of 4,096 words
+  // matching MAME) and a correct tilemap (32,340 of 32,768), and the screen was
+  // still white.
+  assign oc_xlat_addr = {r_addr[15:14], r_addr[13:9]};
 
   // ---------------------------------------------------------- the sequencer
   //
@@ -358,7 +380,13 @@ module m2_cpu_bridge #(
             end
             T_XLAT: begin
               oc_xlat_din <= r_wdata[7:0];
-              oc_xlat_we  <= r_we;
+              // ONLY THE 96 ENTRIES THAT ARE EVER READ. Every entry in this
+              // 48 KB region shares the low nine bits 0x080 exactly when it is
+              // one of them; the other 24,480 writes are real and go nowhere,
+              // which is the whole point of keeping 96 bytes instead of 48 KB.
+              // Without this gate the last write to any address in a 512-byte
+              // span overwrites the entry that span belongs to.
+              oc_xlat_we  <= r_we && (r_addr[8:0] == 9'h080);
               ack_mem     <= 1'b1;
               st          <= S_DONE;
             end

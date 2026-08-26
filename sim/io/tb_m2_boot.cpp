@@ -275,6 +275,37 @@ int main(int argc, char **argv) {
   std::printf("  tile RAM writes %u\n", d->dbg_tram_wr);
   std::printf("  bus address moved mid-transaction: %u times\n", d->obs_addr_moved);
 
+  // WHAT THE CPU BUILT, so it can be compared against MAME's own dump rather
+  // than guessed at from a photograph of a screen. The board shows white with a
+  // brief flicker of colour; the question that answers is whether the palette
+  // it wrote is white, and only a comparison can say.
+  if (const char *dd = std::getenv("M2_BOOT_DUMP")) {
+    auto grab = [&](const char *name, bool pal, uint32_t n) {
+      std::string path = std::string(dd) + "/" + name;
+      FILE *f = std::fopen(path.c_str(), "wb");
+      if (!f) return;
+      for (uint32_t a = 0; a < n; ++a) {
+        d->dump_addr = a; d->eval();
+        const uint16_t v = pal ? d->dump_pal : d->dump_tram;
+        std::fputc(v & 0xff, f); std::fputc(v >> 8, f);
+      }
+      std::fclose(f);
+      std::printf("  wrote %s (%u words)\n", path.c_str(), n);
+    };
+    grab("tram.bin", false, 32768);
+    grab("pal.bin",  true,  4096);
+    // How much of the palette is white, which is the specific question.
+    uint32_t white = 0, nonzero = 0;
+    for (uint32_t a = 0; a < 4096; ++a) {
+      d->dump_addr = a; d->eval();
+      const uint16_t v = d->dump_pal;
+      if (v) ++nonzero;
+      if ((v & 0x7fff) == 0x7fff) ++white;
+    }
+    std::printf("  palette: %u of 4096 non-zero, %u are full white (7FFF)\n",
+                nonzero, white);
+  }
+
   // DID THE BOOT'S FIRST BLOCK COPY LAND? Instruction 113 is
   //
   //   00000890: shlo 17,1,g0        ; 128 KB

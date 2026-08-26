@@ -90,7 +90,12 @@ module m2_boot_harness #(
   // a run of accesses and that m2_cpu_bridge LATCHES the address rather than
   // sampling it live, so movement after the latch is expected and harmless.
   output logic [31:0] obs_addr_moved,
-  output logic  [7:0] obs_mstate      // {0,0,sd_ack,ack_mem,req_mem,st[2:0]}
+  output logic  [7:0] obs_mstate,     // {0,0,sd_ack,ack_mem,req_mem,st[2:0]}
+  // Readable so the testbench can dump what the CPU actually built and compare
+  // it against MAME's tilemap and palette rather than against a hope.
+  input  logic [14:0] dump_addr,
+  output logic [15:0] dump_tram,
+  output logic [15:0] dump_pal
 );
 
   logic        bus_req, bus_we, bus_ack;
@@ -105,6 +110,33 @@ module m2_boot_harness #(
   logic [31:0] cpu_io_wdata, cpu_io_rdata;
   logic        cpu_io_sel, cpu_io_we;
   logic  [3:0] cpu_io_be;
+
+  // TILE RAM AND PALETTE, MODELLED RATHER THAN TIED TO 0xFFFF.
+  //
+  // These were both tied high, which is a peripheral that answers every read
+  // with all-ones. A game that read-modify-writes its palette would then write
+  // white everywhere, and this harness could not have shown it -- the very
+  // symptom the board is displaying. They are real arrays now, registered like
+  // the M10K they become, and the testbench can read them out to compare
+  // against MAME's own dump.
+  //
+  // Powering up at zero, which is what an M10K does; the standing 0xFFFF rule
+  // is about UNWRITTEN SDRAM, not about on-chip arrays.
+  (* ramstyle = "M10K" *) logic [15:0] tram [32768];
+  (* ramstyle = "M10K" *) logic [15:0] pal  [4096];
+  logic [15:0] oc_tram_q, oc_pal_q;
+
+  always_ff @(posedge clk_mem) begin
+    if (oc_tram_we) tram[oc_addr]        <= oc_din;
+    if (oc_pal_we)  pal[oc_addr[11:0]]   <= oc_din;
+    oc_tram_q <= tram[oc_addr];
+    oc_pal_q  <= pal[oc_addr[11:0]];
+  end
+
+  // A second read port purely for the dump. Costs a duplicated array in
+  // synthesis and nothing here, because this module is never synthesised.
+  assign dump_tram = tram[dump_addr];
+  assign dump_pal  = pal[dump_addr[11:0]];
 
   logic        oc_tram_we, oc_pal_we, oc_xlat_we;
   logic [14:0] oc_addr;
@@ -179,7 +211,7 @@ module m2_boot_harness #(
     .sd_req(sd_req), .sd_we(sd_we), .sd_addr(sd_addr), .sd_din(sd_din),
     .sd_be(sd_be), .sd_dout(sd_dout), .sd_ack(sd_ack),
     .oc_tram_we(oc_tram_we), .oc_pal_we(oc_pal_we), .oc_addr(oc_addr),
-    .oc_din(oc_din), .oc_tram_q(16'hFFFF), .oc_pal_q(16'hFFFF),
+    .oc_din(oc_din), .oc_tram_q(oc_tram_q), .oc_pal_q(oc_pal_q),
     .oc_xlat_we(oc_xlat_we), .oc_xlat_addr(oc_xlat_addr), .oc_xlat_din(oc_xlat_din),
     .io_rdata(cpu_io_rdata), .io_sel(cpu_io_sel), .io_we(cpu_io_we),
     .io_addr(cpu_io_addr), .io_wdata(cpu_io_wdata), .io_be(cpu_io_be),

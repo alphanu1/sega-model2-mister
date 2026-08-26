@@ -240,9 +240,35 @@ int main(int argc, char **argv) {
   }
 
   // ---- the translation table ----
+  //
+  // ADDRESSES FROM model2.cpp, NOT FROM THE BRIDGE. This case used to write
+  // 0x01810004 and expect entry 2, which is what `r_addr[7:1]` did -- the test
+  // was written from the implementation rather than from the reference, so it
+  // agreed with the bridge and with nothing real. docs/differential-testing.md
+  // names exactly this trap.
+  //
+  //   r = m_colorxlat[(0x0080 >> 1) + (((palcolor >> 0) & 0x1f) << 8)];
+  //   g = m_colorxlat[(0x4080 >> 1) + ...];
+  //   b = m_colorxlat[(0x8080 >> 1) + ...];
+  //
+  // so entry v of a channel is at BYTE offset base + v*512, base 0x0080 for
+  // red, 0x4080 for green, 0x8080 for blue. Only those 96 of the region's
+  // 24,576 words are ever read.
   {
-    access(true, 0x01810004u, 0x000000c3u, 0xf, nullptr);
-    expect("xlat entry 2", xlat[2], 0xc3);
+    const uint32_t XL = 0x01810000u;
+    access(true, XL + 0x0080u + 2u * 512u,  0x000000c3u, 0xf, nullptr);
+    expect("xlat R entry 2",  xlat[2],  0xc3);
+    access(true, XL + 0x4080u + 5u * 512u,  0x0000005au, 0xf, nullptr);
+    expect("xlat G entry 5",  xlat[37], 0x5a);
+    access(true, XL + 0x8080u + 31u * 512u, 0x000000ffu, 0xf, nullptr);
+    expect("xlat B entry 31", xlat[95], 0xff);
+
+    // AND THE OTHER 24,480 WRITES MUST GO NOWHERE. The game writes the whole
+    // region; keeping 96 bytes only works if everything else is discarded
+    // rather than folded onto an entry that happens to share low address bits.
+    const uint8_t before = xlat[2];
+    access(true, XL + 0x0080u + 2u * 512u + 4u, 0x00000011u, 0xf, nullptr);
+    expect("xlat ignores a non-entry write", xlat[2], before);
   }
 
   // ---- I/O reaches the register file and comes back ----
