@@ -31,7 +31,7 @@ module m2_cpu_sdram_harness #(
   // about the core -- on hardware, changing the OSD setting does NOT fix the
   // CPU's reads, so the model and the board do not agree here and the
   // simulation must not be trusted to pick the value.
-  parameter logic [1:0] RD_LAT_SEL = 2'd3
+  parameter logic [2:0] RD_LAT_SEL = 3'd3
 ) (
   input  logic        clk_cpu,
   input  logic        clk_mem,

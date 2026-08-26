@@ -129,7 +129,7 @@ module m2_sdram_x2_harness #(
     .clk(clk), .rst_n(rst_n), .ready(ready),
     // CL+3, which is what the device MODEL needs -- selector 3 after the range
     // moved earlier for the board. Not the board's value.
-    .rd_lat_sel(2'd3),
+    .rd_lat_sel(3'd3),
     .sd_cke(cke), .sd_cs_n(cs_n), .sd_ras_n(ras_n), .sd_cas_n(cas_n),
     .sd_we_n(we_n), .sd_ba(ba), .sd_a(a), .sd_dqm(dqm),
     .sd_dq_o(dq_o), .sd_dq_oe(dq_oe), .sd_dq_i(dq_i),

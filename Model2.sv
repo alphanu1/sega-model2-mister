@@ -72,13 +72,25 @@ localparam CONF_STR = {
 	// presents data on the same edge the controller uses, while the real device
 	// is clocked on the INVERSE of clk_sys and answers half a period away.
 	// Guessing this one 25-minute build at a time is the alternative.
-	"O[5:4],SDRAM phase,CL+1,CL+0,CL+2,CL+3;",
+	// THREE BITS NOW, REACHING CL+4 AND CL+5. The range was CL+0..CL+3, moved
+	// EARLIER on 40 MHz hardware evidence -- the burst came back shifted one
+	// 16-bit word late, so capture had to start sooner. At 96 MHz the round
+	// trip is 2.4x longer in clock cycles and the correction goes the other
+	// way: the Kaneko16 core, on this controller at 96 MHz, defaults to CL+5
+	// and found the board wants CL+4.
+	//
+	// RD_LAT is already CL+5, so the capture pipeline is deep enough; it was
+	// only the selector that could not reach. A board that reads garbage at
+	// every one of four settings is the symptom of a range that does not
+	// contain the answer, and this project has now read that symptom as "the
+	// phase is not involved" once already.
+	"O[7:5],SDRAM phase,CL+1,CL+0,CL+2,CL+3,CL+4,CL+5;",
 	// WHICH 2 MB OF THE CHIP THE PORT-4 SWEEP FOLDS. Selectable because the
 	// alternative is a 25-minute build per probe, and locating a corruption in
 	// 43.62 MB takes more than one probe. Region N covers word N*0x100000 for
 	// 0x100000 words; tools/rom_csum.py --region N folds the same span of the
 	// image. Changing this restarts the sweep, so it costs a menu click.
-	"O[10:6],Sweep region (2MB),0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31;",
+	"O[13:9],Sweep region (2MB),0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31;",
 	"-;",
 	"R[0],Reset and close OSD;",
 	"v,0;",
@@ -370,7 +382,7 @@ m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(750)) u_sdram (
 	// Labels match what selecting them does: 0->CL+1, 1->CL+0, 2->CL+2, 3->CL+3.
 	// The default is CL+1, one cycle EARLIER than the old default of CL+2, which
 	// the self-test showed captures the burst one 16-bit word late.
-	.rd_lat_sel(status[5:4]),
+	.rd_lat_sel(status[7:5]),
 	.sd_cke(SDRAM_CKE), .sd_cs_n(SDRAM_nCS), .sd_ras_n(SDRAM_nRAS),
 	.sd_cas_n(SDRAM_nCAS), .sd_we_n(SDRAM_nWE), .sd_ba(SDRAM_BA),
 	.sd_a(SDRAM_A), .sd_dqm({SDRAM_DQMH, SDRAM_DQML}),
@@ -1177,7 +1189,7 @@ logic            sw_done;
 // OSD, so it is many orders of magnitude slower than clk_sys and is read
 // directly -- the same treatment status[5:4] already gets on the controller's
 // capture phase.
-wire   [4:0]     sw_sel_i = status[10:6];
+wire   [4:0]     sw_sel_i = status[13:9];
 
 function automatic logic [23:0] sw_fold(input logic [23:0] a, input logic [15:0] w);
   logic [23:0] t;

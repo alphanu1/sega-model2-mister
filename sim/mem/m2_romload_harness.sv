@@ -25,7 +25,7 @@ module m2_romload_harness #(
   // the controller uses and wants CL+3 (sel 0); the real board is clocked on
   // the inverse and wants CL+2 (sel 1). They are different numbers for a
   // physical reason, so the harness must not hardcode either.
-  input  logic  [1:0] rd_lat_sel,
+  input  logic  [2:0] rd_lat_sel,
 
   // ioctl, exactly as hps_io presents it
   input  logic        ioctl_download,

@@ -115,7 +115,7 @@ module m2_sdram #(
   //   1 -> CL+2  (the board: its device is clocked on the inverse of clk_sys)
   //   2 -> CL+4
   //   3 -> CL+5
-  input  logic [1:0]           rd_lat_sel,
+  input  logic [2:0]           rd_lat_sel,
 
   // SDRAM device
   output logic                 sd_cke,
@@ -252,10 +252,14 @@ module m2_sdram #(
       // too late. No setting in the old range could correct that, which is why
       // cycling the OSD option produced garbage at every position and was
       // wrongly read as "the phase is not involved".
-      2'd0:    cap_depth <= 4'(CL + 1);   // unconnected lands here, by design
-      2'd1:    cap_depth <= 4'(CL + 0);
-      2'd2:    cap_depth <= 4'(CL + 2);
-      default: cap_depth <= 4'(CL + 3);
+      // WIDENED TO REACH CL+4 AND CL+5 for the 96 MHz clock. RD_LAT is CL+5,
+      // so the pipeline already went this deep and only the selector did not.
+      3'd0:    cap_depth <= 4'(CL + 1);   // unconnected lands here, by design
+      3'd1:    cap_depth <= 4'(CL + 0);
+      3'd2:    cap_depth <= 4'(CL + 2);
+      3'd3:    cap_depth <= 4'(CL + 3);
+      3'd4:    cap_depth <= 4'(CL + 4);
+      default: cap_depth <= 4'(CL + 5);
     endcase
   end
 

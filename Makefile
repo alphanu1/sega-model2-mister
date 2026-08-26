@@ -764,7 +764,7 @@ release: check_mra
 	 fi
 	@ws=$$(grep -A20 '; Setup Summary' output_files/Model2.sta.rpt 2>/dev/null \
 	       | grep -oE '; +-?[0-9]+\.[0-9]+ +;' | tr -d '; ' | sort -g | head -1); \
-	 echo "  timing closed, worst-case setup slack $${ws:-unknown} ns")
+	 echo "  timing closed, worst-case setup slack $${ws:-unknown} ns"
 
 	@rm -rf $(RELEASE)
 	@mkdir -p $(RELEASE)/_Arcade/cores
