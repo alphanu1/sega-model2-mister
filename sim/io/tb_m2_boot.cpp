@@ -113,6 +113,13 @@ int main(int argc, char **argv) {
   // mem cycles, which is m2_sdram's ACK_HOLD. The bridge waits for the ack to
   // FALL before its next access (S_LO_W / S_HI_W), so holding it is not
   // optional — a one-cycle ack would let it run ahead of the real controller.
+  // SWEEPING THE MEMORY LATENCY IS A DIAGNOSTIC, not a tuning knob. If the
+  // outcome changes with it, the fault is a handshake race rather than an
+  // address calculation -- and study rule 8 says to sweep an order of magnitude
+  // past the value you believe, or the test confirms the setting instead of
+  // testing it.
+  const char *lf = std::getenv("M2_BOOT_LAT");
+  const int sdr_lat = lf ? std::atoi(lf) : 6;
   int  lat = 0, ack_left = 0;
   bool busy = false;
   uint32_t pend_addr = 0;
@@ -128,7 +135,7 @@ int main(int argc, char **argv) {
       ++n_sdr;
     }
     if (!busy && d->sd_req && !ack_left) {
-      busy = true; lat = 6; pend_addr = d->sd_addr;
+      busy = true; lat = sdr_lat; pend_addr = d->sd_addr;
       if (d->sd_we) {
         const uint16_t old = mem[pend_addr & 0x1ffffff];
         uint16_t v = d->sd_din;
