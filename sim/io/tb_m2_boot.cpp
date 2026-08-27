@@ -93,6 +93,29 @@ int main(int argc, char **argv) {
   }
 
   // main_data at GAME_DATA = word 0x20000, same interleave.
+  // THE WHOLE MRA IMAGE, IF IT IS OFFERED. Everything below loads program ROM
+  // and SIX main_data files and leaves the other 34 MB at 0xffff, so the CPU
+  // reading the upper image -- where the graphics live -- has never been
+  // simulated at all. The board loads the full 43.62 MB through the MRA, and
+  // "it renders correctly in simulation" has therefore always been a statement
+  // about a PARTIAL image.
+  //
+  // Build the file with tools/rom_csum.py's build_image() and pass it in
+  // M2_BOOT_IMAGE. It is loaded at word 0, exactly as the loader places it, so
+  // every bridge address translation is exercised against real data.
+  if (const char *ip = std::getenv("M2_BOOT_IMAGE")) {
+    std::vector<uint8_t> full;
+    if (load_file(ip, full)) {
+      const size_t nw = full.size() / 2;
+      for (size_t w = 0; w < nw && w < mem.size(); ++w)
+        mem[w] = uint16_t(full[w*2] | (full[w*2+1] << 8));
+      std::printf("  FULL IMAGE: %zu bytes (%.2f MB), %zu words from %s\n",
+                  full.size(), double(full.size())/1048576.0, nw, ip);
+    } else {
+      std::printf("  M2_BOOT_IMAGE set but %s could not be read\n", ip);
+    }
+  }
+
   const uint32_t DATA_BASE = 0x20000;
   struct { const char *n; uint32_t off, len; } md[] = {
     {"mpr-16528.10", 0x000000, 0x200000}, {"mpr-16529.11", 0x000002, 0x200000},
