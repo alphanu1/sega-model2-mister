@@ -1524,13 +1524,25 @@ wire [17:0] cc_addr;
 // should be within a small factor; cf_nz stuck at zero while cf_all climbs says
 // the fetch path returns nothing, and the address or the crossing is at fault
 // rather than the renderer.
-logic [15:0] cf_all, cf_nz;
+// COUNTING SAID FETCHES ARRIVE AND ARE NON-ZERO -- row 22 saturated instantly
+// at FFFFFFFF -- so the path works and the earlier "returns nothing" theory is
+// dead. But NON-ZERO IS NOT VARIED. Unwritten memory reads 0xFFFF by this
+// project's standing rule, and an all-ones fetch is non-zero, makes every pixel
+// in the tile the same index, and so paints one flat colour per palette bank:
+// blue sky, green ground, which is the board's picture.
+//
+// So stop counting and show the data. `cd_last` is the most recent fetch and
+// `cd_ff` counts those that came back all-ones. FFFFFFFF in the low half with
+// cd_ff climbing means the fetch is reading memory nobody wrote, and the
+// address is wrong rather than the renderer.
+logic [31:0] cd_last;
+logic [15:0] cd_ff;
 always_ff @(posedge clk_vid or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
-		cf_all <= 16'd0; cf_nz <= 16'd0;
+		cd_last <= 32'd0; cd_ff <= 16'd0;
 	end else if (char_ack) begin
-		if (!(&cf_all)) cf_all <= cf_all + 16'd1;
-		if (|char_data && !(&cf_nz)) cf_nz <= cf_nz + 16'd1;
+		cd_last <= char_data;
+		if ((&char_data) && !(&cd_ff)) cd_ff <= cd_ff + 16'd1;
 	end
 end
 
@@ -1749,13 +1761,11 @@ m2_diag #(.NWORDS(23)) u_diag
 	//
 	// 00001?3F would mean every depth works; 00001?00 means none does, and that
 	// is a result about the interface rather than a range that was too narrow.
-	.words({ // 22 CHAR FETCHES: non-zero in the top half, total in the low half.
-	         // Both climbing means the fetch path works and the picture is the
-	         // renderer's problem. cf_nz at 0000 with cf_all climbing means the
-	         // fetches return zeros, which is what a screen of flat colour is.
-	         // Replaces the overrun counter, which read 00000000 twice -- true
-	         // both times, and the reason is that there is nothing to be late
-	         // with when every fetch comes back empty.
+	.words({ // 22 THE LAST CHARACTER FETCH, verbatim. FFFFFFFF means the fetch is
+	         // reading memory nobody ever wrote -- one flat colour per palette
+	         // bank, which is the board's sky and ground. Anything varied means
+	         // real glyph data is arriving. Replaces the fetch counters, which
+	         // saturated instantly and proved only that fetches happen.
 	         // OLD 22 LINE OVERRUNS (top half) and last line's worst-layer fetch
 	         // count (low byte). Zero overruns means the renderer keeps up and
 	         // missing text is NOT a budget problem; a climbing count means it
@@ -1767,14 +1777,13 @@ m2_diag #(.NWORDS(23)) u_diag
 	         // never arrived. Replaces the M10K copy probe, which did its job
 	         // (it proved the copy sound while the renderer starved, R49) and
 	         // reads zero on a game image by design.
-	         {cf_nz, cf_all},
+	         cd_last,
 	         // 21 ALL FOUR LAYERS, top 8 bits of each. The first version packed
 	         // only layers 0 and 1 and read 00000000 on a board visibly drawing
 	         // Daytona's sky and ground: the fixture uses layer 0 and Daytona
 	         // does not. An instrument covering half the cases reports a fault
 	         // when it means "not looking there". Fixture reads 00000031.
-	         {vid_layer_have[3][11:4], vid_layer_have[2][11:4],
-	          vid_layer_have[1][11:4], vid_layer_have[0][11:4]},
+	         {cd_ff, vid_layer_have[3][11:4], vid_layer_have[2][11:4]},
 	         {19'd0, cal_done, 1'b0, cal_best, 2'd0, cal_mask},  // 20 capture sweep
 	         io_last_data,                              // 19 last I/O word returned
 	         io_last_addr,                              // 18 last I/O address presented
