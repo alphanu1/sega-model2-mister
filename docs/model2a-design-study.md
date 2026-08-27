@@ -3793,3 +3793,48 @@ the data and applied both correctly; what it never asked was how much of the
 dword the access owned. Five instruments were built chasing the symptom — layer
 taps, per-channel counts, an overrun counter, a 64-M10K memory fold — and the
 fault was named by logging four bits that were already on the wire.
+
+---
+
+**R57 — the SDRAM interface has never been timing-constrained, and that is why
+builds are a lottery.** A build whose only source change was bounding the region
+sweep at `ldr_top` failed to boot: no SEGA handshake, black screen, and **row 20
+reading `00001400` — `cal_mask = 000000`, no capture depth passing at all**, with
+`cal_best` falling back to its "nothing passed" default. A clean rebuild produced
+a **byte-identical** core, so it was reproducible rather than fit luck.
+
+*The cause is not that change.* It is that neither `Model2.sdc` nor
+`sys/sys_top.sdc` contains a single `set_input_delay` or `set_output_delay` for
+any SDRAM pin, and there is no `create_generated_clock` for `SDRAM_CLK` as it
+arrives at the device. **The external timing relationship is invisible to the
+fitter.** It places and routes those paths arbitrarily, STA reports success
+because there is nothing to check, and whether the interface works is decided by
+where the fit happens to put things. Adding a 25-bit comparator to an idle
+port-4 state machine was enough to move it.
+
+*What this reframes.* R46 recorded the passing window as ONE depth wide and read
+it as a property of running at 96 MHz, worth watching. It is not that: it is an
+unconstrained interface that landed near-usable. The same cause covers the
+capture window moving between builds, `cal_mask` collapsing to zero, forcing
+CL+2 by hand failing to rescue it (the window was gone, not misplaced), and
+plausibly the shifting colours and flat sky/ground that were chased as logic
+faults for most of a session.
+
+*The fix, when it is done:* a `create_generated_clock` on the `SDRAM_CLK` output
+pin, `set_input_delay` for `SDRAM_DQ` against the device's tAC/tOH, and
+`set_output_delay` for address, control and write data against its tSU/tH. It
+will probably fail timing at first, and that is the point -- it would be
+reporting a violation that exists now and cannot currently be seen.
+
+*Deferred deliberately, with a canary.* The decision from the bench is to wire up
+more of the machine first and see whether the same trouble recurs. That is safe
+only because the instrument already exists: **`cal_mask` on row 20 is a
+per-build health check on the memory interface.** Several contiguous bits means
+the fit is sound; a narrow or empty mask means the interface broke and the new
+component is innocent. Read it before drawing any conclusion from a new build.
+
+*The rule:* **an interface to a device outside the FPGA is not constrained by
+constraining what is inside it.** Every clock in this design is timed, the PLL
+hierarchy is checked, the CDC crossings are now bounded -- and the one path that
+leaves the chip had nothing at all. A build can be green in every report this
+project checks and still not talk to its memory.

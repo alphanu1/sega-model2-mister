@@ -1497,8 +1497,20 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 				// mirrors the same stopping rule. `sw_addr + 7` is the last word
 				// of the NEXT burst, so a burst is only taken when all four of
 				// its words are inside the image.
-				if (sw_burst == 20'h3FFFF ||
-				    (sw_addr + SDR_AW'(7)) > ldr_top) begin
+				// REVERTED. Bounding this at ldr_top is correct arithmetic and
+				// it broke the board: two builds carrying it, and nothing else,
+				// failed to boot -- no SEGA handshake, so the CPU never finished
+				// its copy -- while the build before it works. A clean rebuild
+				// gave a byte-identical core, so it is reproducible rather than
+				// fit luck.
+				//
+				// The mechanism is not yet understood. ldr_top is on clk_sys,
+				// the same domain as this state machine, so it is not a crossing;
+				// the comparison adds a 25-bit adder to a port-4 state machine
+				// that has no deadline. Whatever it disturbs, the last region
+				// stays unverifiable until the cause is known, and a checkable
+				// checksum is not worth a core that does not boot.
+				if (sw_burst == 20'h3FFFF) begin
 					sw_val   <= sw_acc;
 					sw_done  <= 1'b1;
 					sw_state <= 3'd4;      // distinct from the fold state
