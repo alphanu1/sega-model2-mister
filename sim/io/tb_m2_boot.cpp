@@ -50,6 +50,7 @@ static bool load_file(const std::string &p, std::vector<uint8_t> &out) {
   return got == size_t(n);
 }
 
+static int g_e1n = 0, g_e0n = 0;
 static uint16_t g_tram[32768];
 static bool     g_tram_seen[32768];
 static uint16_t g_pal[8192];
@@ -393,6 +394,17 @@ int main(int argc, char **argv) {
       g_tram[d->obs_oc_addr]      = d->obs_oc_din;
       g_tram_seen[d->obs_oc_addr] = true;
     }
+    // EVERY WRITE TO ENTRY 1, which is white in the reference and black here.
+    if (d->obs_pal_we && d->obs_oc_addr == 1 && g_e1n < 24) {
+      std::printf("    pal[1] <= %04x   (bus %08x, instruction %u)\n",
+                  d->obs_oc_din, d->obs_bus_addr, (unsigned)d->dbg_acc);
+      ++g_e1n;
+    }
+    if (d->obs_pal_we && d->obs_oc_addr == 0 && g_e0n < 8) {
+      std::printf("    pal[0] <= %04x   (cpu bus addr %08x)\n",
+                  d->obs_oc_din, d->obs_bus_addr);
+      ++g_e0n;
+    }
     if (d->obs_pal_we && d->obs_oc_addr < 8192) {
       g_pal[d->obs_oc_addr]      = d->obs_oc_din;
       g_pal_seen[d->obs_oc_addr] = true;
@@ -491,6 +503,26 @@ int main(int argc, char **argv) {
                       q*8192, (q+1)*8192-1, nz);
         }
       }
+    }
+    // DUMP WHAT THIS CPU BUILT, so it can be rendered by test_m2_video_frame.
+    // The existing fixture is MAME's state; this is OURS. If the renderer draws
+    // MAME's correctly and ours with labels missing, the fault is in the data
+    // the CPU produces and the diff says exactly where.
+    if (const char *od = std::getenv("M2_DUMP_OUT")) {
+      auto put = [&](const char *nm, const void *p, size_t n) {
+        std::string q = std::string(od) + "/" + nm;
+        FILE *g = std::fopen(q.c_str(), "wb");
+        if (g) { std::fwrite(p, 1, n, g); std::fclose(g);
+                 std::printf("    wrote %s (%zu bytes)\n", q.c_str(), n); }
+      };
+      put("tile.bin", g_tram, sizeof(g_tram));
+      put("palette.bin", g_pal, sizeof(g_pal));
+      uint16_t xl[24576];
+      std::memset(xl, 0, sizeof(xl));
+      for (int c = 0; c < 3; ++c)
+        for (int i = 0; i < 32; ++i)
+          xl[(c == 0 ? 0x40 : c == 1 ? 0x2040 : 0x4040) + (i << 8)] = g_xlat[c*32 + i];
+      put("colorxlat.bin", xl, sizeof(xl));
     }
     int lo = 0, hi = 0;
     for (int i = 0; i < 4096; ++i) if (g_pal_seen[i]) ++lo;

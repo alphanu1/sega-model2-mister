@@ -3610,3 +3610,62 @@ hardware mirrors there.
 *The rule:* **a region's size is a fact to be looked up, not inferred from the
 array someone already wrote.** 4,096 was consistent with everything the fixture
 could show, and it was wrong by a factor of two.
+
+---
+
+**R54 — the missing text is the CPU destroying its own palette at instruction
+1,713,595, and it reproduces in simulation.** Daytona's test menu shows its green
+values and no white labels. Five things were eliminated first, each by
+measurement rather than argument: the colour translation table (all three
+channels dump identical correct 0→255 ramps), the palette's colour channels
+(per-channel write counts read `00202020`), a dead layer (row 21 widened to all
+four reads `FFFF0000`, layers 2 and 3 saturated), line overruns (row 22 read
+`00000000` — **the renderer keeps up, and the line buffer that was proposed
+would not have helped**), and the palette's size (R53, real and fixed, but not
+this).
+
+*The reproduction, which is the whole finding.* `test_m2_boot` was made to dump
+the tile RAM, palette and translation table **our own CPU builds**, and those
+were rendered through `test_m2_video_frame` instead of MAME's capture. The
+result is **468 non-black pixels against the reference's 2,054**, and the picture
+is the photograph from the bench: `ON`, `JPN`, `DELUXE`, `NORMAL` in green, every
+white label absent. The bug now lives in a five-second simulation.
+
+*The diff then names it exactly.* Tile RAM differs in **13 words of 32,768** and
+loses nothing. The palette differs in **64 entries, every one at `1 + 16k` for
+k = 0..63**, each written `0000` where the reference holds a colour — and
+**entry 1 is white**. Logging every write to that entry:
+
+```
+pal[1] <= ffff   (bus 01800000, instruction 1,478,810)   white written
+pal[1] <= fd02   (bus 01800000, instruction 1,483,100)
+pal[1] <= 0000   (bus 01800000, instruction 1,713,595)   white destroyed
+```
+
+*It is not the bridge.* `oc_addr = r_addr[15:1] + half` and `oc_din = half ?
+r_wdata[31:16] : r_wdata[15:0]` are correct, and MAME maps the region at
+`0x01800000-0x01803fff` with a **16-bit handler and no umask**
+(`model2.cpp:1059`), so a 32-bit store there writes both entries in MAME exactly
+as it does here. The stride-16 pattern is a zeroing loop walking 32 bytes at a
+time; entries 0, 16, 32 are zero in the reference too, so only the odd ones show
+as differences.
+
+*So the CPU is executing something MAME does not, and it does so at instruction
+1,713,595 — past the 803,355 the i960 has been differentially verified to.* That
+is the target: `tools/i960-diff.sh` aimed at the window around 1.7M, not another
+guess at the renderer.
+
+*Two instruments were built and one was wasted.* The overrun counter earned its
+build: `00000000` killed the bandwidth theory outright and stopped a line-buffer
+rewrite that the burstiness figure (max/mean 3.18×) had made look attractive. The
+tile-RAM fold probe did not: it cost **64 M10K** — Quartus duplicated the whole
+array for a third read port — and could never be read, because the menu cannot be
+held still and a fold of a moving screen compares against nothing. **Its
+precondition was not checked before it was built.** Removed.
+
+*The rule, and it is the one that has now paid three times in this session:*
+**when each half is verified against its own oracle and the assembled machine
+still fails, stop instrumenting the machine and render one half's real output
+through the other.** R51 and R53 both hid in the gap between two passing tests;
+this one was found by closing that gap in five seconds rather than by another
+25-minute build.
