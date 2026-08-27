@@ -223,6 +223,7 @@ int main(int argc, char **argv) {
   uint64_t rf_req_cycles = 0, rf_ack_count = 0; uint32_t rf_last_addr = 0;
   uint32_t rf_bad_first = 0, rf_bad_at = 0, rf_bad_ip = 0, rf_bad_pfp = 0;
   std::map<uint32_t,uint32_t> frame_shadow;
+  std::map<uint32_t,uint64_t> io_unclaimed;
   uint64_t fill_ok = 0, fill_wrong = 0, fill_unwritten = 0;
   const bool stacktrace = std::getenv("M2_BOOT_STACK") != nullptr;
   int n_stack = 0;
@@ -376,6 +377,25 @@ int main(int argc, char **argv) {
                    d->obs_bus_addr, d->obs_bus_wdata, mask);
     }
 
+    // I/O WRITES NOTHING CLAIMS. The bridge routes a wide range to T_IO and the
+    // mux answers a handful of addresses; everything else reads zero and its
+    // writes go nowhere. That is correct for the regions MAME marks nopw and
+    // wrong for anything the renderer needs, and the two are indistinguishable
+    // until they are counted.
+    if (d->obs_bus_ack && !ack_prev && d->obs_bus_we) {
+      const uint32_t a = d->obs_bus_addr;
+      const bool claimed =
+           (a >= 0x01000000u && a <  0x01020000u)   // tile RAM
+        || (a >= 0x01080000u && a <  0x01100000u)   // char RAM
+        || (a >= 0x01800000u && a <  0x01804000u)   // palette
+        || (a >= 0x01810000u && a <  0x0181c000u)   // colorxlat
+        || (a >= 0x01c00000u && a <  0x01c01000u)   // I/O board
+        || (a >= 0x01d00000u && a <  0x01d04000u)   // backup SRAM
+        || (a <  0x00600000u)                       // ROM, board and work RAM
+        || (a >= 0x02000000u && a <  0x04000000u);  // main_data
+      if (!claimed) ++io_unclaimed[a & 0xffffff00u];
+    }
+
     // WHAT THE CPU PUTS ON THE BUS FOR CHAR RAM. The bridge issues equal
     // numbers of even and odd 16-bit writes, so the halves are both being
     // sent; the odd ones are arriving as zero. This shows the 32-bit word and
@@ -422,6 +442,15 @@ int main(int argc, char **argv) {
   if (rf_bad_first)
     std::printf("  FIRST frame access outside work RAM: addr %08x at instruction %u,"
                 " ip %08x, pfp %08x\n", rf_bad_first, rf_bad_at, rf_bad_ip, rf_bad_pfp);
+  if (!io_unclaimed.empty()) {
+    std::printf("  writes to addresses nothing claims, by 256-byte page:\n");
+    std::vector<std::pair<uint64_t,uint32_t>> v;
+    for (auto &kv : io_unclaimed) v.push_back({kv.second, kv.first});
+    std::sort(v.rbegin(), v.rend());
+    for (size_t i = 0; i < v.size() && i < 12; ++i)
+      std::printf("    %08x  %llu writes\n", v[i].second,
+                  (unsigned long long)v[i].first);
+  }
   std::printf("  frame fills: %llu correct, %llu wrong, %llu from never-spilled addresses\n",
               (unsigned long long)fill_ok, (unsigned long long)fill_wrong,
               (unsigned long long)fill_unwritten);
