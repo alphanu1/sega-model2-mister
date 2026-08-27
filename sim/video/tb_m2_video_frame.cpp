@@ -33,6 +33,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <algorithm>
 
 static Vm2_video *dut;
 
@@ -58,6 +59,9 @@ static bool load_u16(const std::string &path, std::vector<uint16_t> &out) {
 static const int W = 496, H = 384;
 static std::vector<uint8_t> fb;
 
+static std::vector<int> g_line_fetch;
+static int g_line_n = 0;
+static bool g_hb_prev = false;
 static uint64_t g_fetches = 0, g_req_cycles = 0, g_cycles = 0;
 static bool g_req_prev = false;
 
@@ -143,6 +147,12 @@ int main(int argc, char **argv) {
     // Memory model, sampled before the edge.
     dut->tram_data = tram_q;
     dut->pal_data  = pal_q;
+    // PER-LINE FETCH DEMAND. Whether buffering more lines helps depends
+    // entirely on whether demand is bursty or uniformly over budget, and those
+    // two want opposite fixes.
+    if (dut->vid_hb && !g_hb_prev) { g_line_fetch.push_back(g_line_n); g_line_n = 0; }
+    g_hb_prev = dut->vid_hb;
+    if (dut->char_req && !g_req_prev) ++g_line_n;
     if (dut->char_req) ++g_req_cycles;
     if (dut->char_req && !g_req_prev) ++g_fetches;
     g_req_prev = dut->char_req;
@@ -223,6 +233,22 @@ int main(int argc, char **argv) {
   // values a working board must show. dbg_ctrl comes out of tile RAM itself
   // (m2_video line 504), so a board reading zero here has not got the tilemap
   // into M10K whatever the SDRAM readback says.
+  {
+    std::vector<int> v;
+    for (int x : g_line_fetch) if (x > 0) v.push_back(x);
+    if (!v.empty()) {
+      std::sort(v.begin(), v.end());
+      long sum = 0; for (int x : v) sum += x;
+      std::printf("  per-line fetch demand over %zu non-empty lines: "
+                  "mean %.1f  median %d  p90 %d  max %d\n",
+                  v.size(), double(sum)/double(v.size()),
+                  v[v.size()/2], v[(v.size()*9)/10], v.back());
+      std::printf("    burstiness max/mean = %.2fx  (>2x means buffering ahead "
+                  "smooths real variance; ~1x means demand is uniform and only "
+                  "fewer fetches or more bandwidth helps)\n",
+                  double(v.back()) / (double(sum)/double(v.size())));
+    }
+  }
   std::printf("  fetches %llu over %llu cycles; engine waiting on memory %llu "
               "cycles (%.1f%% of all time)\n",
               (unsigned long long)g_fetches, (unsigned long long)g_cycles,

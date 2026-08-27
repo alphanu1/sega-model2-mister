@@ -50,6 +50,8 @@ static bool load_file(const std::string &p, std::vector<uint8_t> &out) {
   return got == size_t(n);
 }
 
+static uint16_t g_tram[32768];
+static bool     g_tram_seen[32768];
 static uint16_t g_pal[8192];
 static bool     g_pal_seen[8192];
 static uint8_t g_xlat[96];
@@ -387,6 +389,10 @@ int main(int argc, char **argv) {
     // writes go nowhere. That is correct for the regions MAME marks nopw and
     // wrong for anything the renderer needs, and the two are indistinguishable
     // until they are counted.
+    if (d->obs_tram_we && d->obs_oc_addr < 32768) {
+      g_tram[d->obs_oc_addr]      = d->obs_oc_din;
+      g_tram_seen[d->obs_oc_addr] = true;
+    }
     if (d->obs_pal_we && d->obs_oc_addr < 8192) {
       g_pal[d->obs_oc_addr]      = d->obs_oc_din;
       g_pal_seen[d->obs_oc_addr] = true;
@@ -453,6 +459,39 @@ int main(int argc, char **argv) {
               d->iob_win_rd, d->bak_writes, d->bak_w0);
   std::printf("  tile RAM writes %u\n", d->dbg_tram_wr);
   {
+    // TILE RAM AS THE CPU BUILDS IT, against the captured frame. The board
+    // renders that capture pixel-perfectly and puts its content on LAYER 0,
+    // while the live game reports layers 2 and 3. Same screen must not land on
+    // different layers, so either the CPU writes elsewhere or the bridge does.
+    const char *dir = std::getenv("M2_PAL_REF");
+    int seen = 0; for (int i = 0; i < 32768; ++i) if (g_tram_seen[i]) ++seen;
+    std::printf("  tile RAM as the CPU builds it: %d/32768 words written\n", seen);
+    // Which quarter of tile RAM did it touch? The four layers occupy distinct
+    // regions, so this says which layers the CPU believes it is drawing on.
+    for (int q = 0; q < 4; ++q) {
+      int n = 0, nz = 0;
+      for (int i = q*8192; i < (q+1)*8192; ++i) {
+        if (g_tram_seen[i]) ++n;
+        if (g_tram_seen[i] && g_tram[i] != 0) ++nz;
+      }
+      std::printf("    words %5d-%5d: %5d written, %5d non-zero\n",
+                  q*8192, (q+1)*8192-1, n, nz);
+    }
+    if (dir) {
+      std::string path = std::string(dir) + "/tile.bin";
+      FILE *f = std::fopen(path.c_str(), "rb");
+      if (f) {
+        std::vector<uint16_t> ref(32768, 0);
+        size_t got = std::fread(ref.data(), 2, 32768, f);
+        std::fclose(f);
+        for (int q = 0; q < 4; ++q) {
+          int nz = 0;
+          for (size_t i = q*8192; i < (q+1)*8192 && i < got; ++i) if (ref[i]) ++nz;
+          std::printf("    reference words %5d-%5d: %5d non-zero\n",
+                      q*8192, (q+1)*8192-1, nz);
+        }
+      }
+    }
     int lo = 0, hi = 0;
     for (int i = 0; i < 4096; ++i) if (g_pal_seen[i]) ++lo;
     for (int i = 4096; i < 8192; ++i) if (g_pal_seen[i]) ++hi;
@@ -460,9 +499,9 @@ int main(int argc, char **argv) {
     // Compare against the captured frame if it is to hand. That image renders
     // white labels correctly through this same renderer, so any entry that
     // differs is a candidate for the missing white.
-    const char *dir = std::getenv("M2_PAL_REF");
-    if (dir) {
-      std::string path = std::string(dir) + "/palette.bin";
+    const char *dir2 = std::getenv("M2_PAL_REF");
+    if (dir2) {
+      std::string path = std::string(dir2) + "/palette.bin";
       FILE *f = std::fopen(path.c_str(), "rb");
       if (f) {
         std::vector<uint16_t> ref(8192, 0);

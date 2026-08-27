@@ -863,21 +863,13 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 			xlat_ch_cnt[cpu_xlat_addr_b[6:5]] <= xlat_ch_cnt[cpu_xlat_addr_b[6:5]] + 8'd1;
 	end
 end
-logic  [1:0] pb_state;
-logic [15:0] pb_tram, pb_pal;
 // ONE always_ff, one port. The copy engine wins when it is running, which it
 // only does for the tilemap-test image, and the CPU is held in reset then --
 // so the two never actually contend. The priority is written down anyway,
 // because "they cannot overlap" is an argument and a mux is a guarantee.
 wire        ocb_tram_we = cp_tram_we | cpu_tram_we;
 wire        ocb_pal_we  = cp_pal_we  | cpu_pal_we;
-// ADDRESS 1 WHILE PROBING. Port B is free the moment the copy finishes: the
-// copy engine is done and the CPU is still held in reset by cal_done, which
-// asserts later. Two cycles, then it hands the port back for good.
-wire        pb_probe   = cp_done && (pb_state != 2'd2);
-wire [14:0] ocb_addr    = (cp_tram_we | cp_pal_we) ? cp_wr_idx
-                        : pb_probe                 ? 15'd1
-                        : cpu_oc_addr;
+wire [14:0] ocb_addr    = (cp_tram_we | cp_pal_we) ? cp_wr_idx  : cpu_oc_addr;
 wire [15:0] ocb_din     = (cp_tram_we | cp_pal_we) ? cp_wr_data : cpu_oc_din;
 
 always_ff @(posedge clk_sys) begin
@@ -887,23 +879,49 @@ always_ff @(posedge clk_sys) begin
 	if (ocb_pal_we)  pal[ocb_addr[12:0]] <= ocb_din;
 end
 
-// WHAT ACTUALLY LANDED IN M10K. tram[1] is 0020 and pal[1] is FFFF in the
-// fixture, so row 22 reads 0020FFFF on a board whose copy worked and 00000000
-// on one where it did not. On a game image the copy is skipped by design, so
-// zero there is correct and expected.
+
+// ============================== TILE RAM READBACK, ON ITS OWN READ PORT
+//
+// THE ONE LINK NOTHING HAS EVER MEASURED. test_m2_boot proves what the bridge
+// EMITS -- the CPU builds a tile RAM matching the captured frame word for word.
+// test_m2_video_frame proves what the renderer DRAWS from that content: MAME's
+// picture, pixel for pixel. Both halves pass, and the assembled machine drops
+// lines of text on the board. Whether the writes actually arrive in M10K, on
+// hardware, with a live CPU, is the gap between those two oracles and nothing
+// covers it.
+//
+// A DEDICATED THIRD READ PORT, not a share of port B. Hijacking `ocb_addr`
+// would corrupt the CPU's own registered reads through the bridge, which is a
+// real fault introduced to chase a suspected one. Quartus duplicates the array
+// instead -- about 14 more M10K out of 283 free, which is the right trade.
+//
+// Same fold as the region sweep so the two are comparable, and so
+// tools/rom_csum.py's arithmetic can be reused to predict it from tile.bin.
+// The test menu is static, so the fold settles and can be compared; a screen
+// the CPU is actively redrawing will not settle, and a moving number is itself
+// the answer to "are the writes landing".
+logic [14:0] tf_addr;
+logic [15:0] tf_q;
+logic [23:0] tf_acc, tf_val;
+logic        tf_run;
+
+always_ff @(posedge clk_sys) tf_q <= tram[tf_addr];
+
 always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
-		pb_state <= 2'd0; pb_tram <= 16'd0; pb_pal <= 16'd0;
-	end else if (cp_done) begin
-		case (pb_state)
-			2'd0: pb_state <= 2'd1;                 // address applied, read is registered
-			2'd1: begin
-				pb_tram  <= cpu_tram_q;
-				pb_pal   <= cpu_pal_q;
-				pb_state <= 2'd2;
-			end
-			default: ;
-		endcase
+		tf_addr <= 15'd0; tf_acc <= 24'd0; tf_val <= 24'd0; tf_run <= 1'b0;
+	end else begin
+		// One word per cycle, one pass in 32,768 cycles -- 0.68 ms at 48 MHz, so
+		// it completes many times a frame and `tf_val` is always a whole pass.
+		tf_run  <= 1'b1;
+		if (tf_run) tf_acc <= sw_fold(tf_acc, tf_q);
+		if (tf_addr == 15'h7FFF) begin
+			tf_val  <= sw_fold(tf_acc, tf_q);
+			tf_acc  <= 24'd0;
+			tf_addr <= 15'd0;
+		end else begin
+			tf_addr <= tf_addr + 15'd1;
+		end
 	end
 end
 
@@ -1752,7 +1770,12 @@ m2_diag #(.NWORDS(23)) u_diag
 	//
 	// 00001?3F would mean every depth works; 00001?00 means none does, and that
 	// is a result about the interface rather than a range that was too narrow.
-	.words({ // 22 LINE OVERRUNS (top half) and last line's worst-layer fetch
+	.words({ // 22 TILE RAM FOLD, over all 32,768 words, same arithmetic as the
+	         // region sweep. Compare against tools/tram_csum.py on tile.bin. The
+	         // overrun counter it replaces did its job: it read 00000000, which
+	         // killed the bandwidth theory outright and saved building a line
+	         // buffer that would not have helped.
+	         // OLD 22 LINE OVERRUNS (top half) and last line's worst-layer fetch
 	         // count (low byte). Zero overruns means the renderer keeps up and
 	         // missing text is NOT a budget problem; a climbing count means it
 	         // does not. Replaces the per-channel xlat counts, which did their
@@ -1763,7 +1786,7 @@ m2_diag #(.NWORDS(23)) u_diag
 	         // never arrived. Replaces the M10K copy probe, which did its job
 	         // (it proved the copy sound while the renderer starved, R49) and
 	         // reads zero on a game image by design.
-	         {vid_overruns, 8'd0, vid_fetches},
+	         {8'd0, tf_val},
 	         // 21 ALL FOUR LAYERS, top 8 bits of each. The first version packed
 	         // only layers 0 and 1 and read 00000000 on a board visibly drawing
 	         // Daytona's sky and ground: the fixture uses layer 0 and Daytona

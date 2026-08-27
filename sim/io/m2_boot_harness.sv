@@ -70,6 +70,7 @@ module m2_boot_harness #(
   output logic [31:0] obs_prcb,
   output logic        obs_xlat_we,
   output logic        obs_pal_we,
+  output logic        obs_tram_we,
   output logic [14:0] obs_oc_addr,
   output logic [15:0] obs_oc_din,
   output logic  [6:0] obs_xlat_addr,
@@ -317,6 +318,7 @@ module m2_boot_harness #(
 // correctly on this same renderer; the live game does not. Either the CPU writes
 // a different palette or the bridge loses some of it, and only a comparison
 // against palette.bin can say which.
+assign obs_tram_we   = oc_tram_we;
 assign obs_pal_we    = oc_pal_we;
 assign obs_oc_addr   = oc_addr;
 assign obs_oc_din    = oc_din;
