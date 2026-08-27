@@ -907,6 +907,26 @@ always_ff @(posedge clk_sys) begin
 end
 
 
+// TRAM CELL PROBE, on its own read port (Quartus duplicates the array: ~64
+// M10K, temporary, and unlike the fold probe this target is STATIC -- the menu
+// cells are written once at boot, so the value is readable). The board renders
+// glyph value 8043 at cell 1108 and drops the same value at cell 1130: cell-
+// specific, value-independent. This reads the cell itself, OSD-selected on the
+// same O[16:14] Probe control, shown on overlay row 23:
+//   0:1129 want C033   1:1130 want 8043   2:1131 want 8052   3:1132 want 8045
+//   4:1368 want 802F   5:1385 want 8023   6:1387 want C031   7:1108 want 8043
+// Right value + not rendered = the render path drops the CELL.
+// Wrong value = the CPU's write did not land on the board.
+logic [14:0] tp_cell;
+logic [15:0] tp_q;
+always_comb case (status[16:14])
+	3'd0: tp_cell = 15'd1129;  3'd1: tp_cell = 15'd1130;
+	3'd2: tp_cell = 15'd1131;  3'd3: tp_cell = 15'd1132;
+	3'd4: tp_cell = 15'd1368;  3'd5: tp_cell = 15'd1385;
+	3'd6: tp_cell = 15'd1387;  default: tp_cell = 15'd1108;
+endcase
+always_ff @(posedge clk_sys) tp_q <= tram[tp_cell];
+
 // COPY ENGINE. Walks tile RAM then the palette out of SDRAM into on-chip memory
 // after the ROM has landed. Port 0, which returns a single word per request --
 // 36,864 reads, once, at startup.
@@ -1776,7 +1796,7 @@ always_ff @(posedge clk_vid) begin
 	ldr_top_sync  <= ldr_top;
 end
 
-m2_diag #(.NWORDS(23)) u_diag
+m2_diag #(.NWORDS(24)) u_diag
 (
 	.clk(clk_vid),
 	.ce_pix(ce_pix),
@@ -1813,7 +1833,8 @@ m2_diag #(.NWORDS(23)) u_diag
 	//
 	// 00001?3F would mean every depth works; 00001?00 means none does, and that
 	// is a result about the interface rather than a range that was too narrow.
-	.words({ // 22 THE LAST CHARACTER FETCH, verbatim. FFFFFFFF means the fetch is
+	.words({ {16'd0, tp_q},                             // 23 TRAM cell probe
+	         // 22 THE LAST CHARACTER FETCH, verbatim. FFFFFFFF means the fetch is
 	         // reading memory nobody ever wrote -- one flat colour per palette
 	         // bank, which is the board's sky and ground. Anything varied means
 	         // real glyph data is arriving. Replaces the fetch counters, which

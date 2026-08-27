@@ -50,7 +50,7 @@ static bool load_file(const std::string &p, std::vector<uint8_t> &out) {
   return got == size_t(n);
 }
 
-static int g_e1n = 0, g_e0n = 0, g_win = 0, g_bk_n = 0;
+static int g_e1n = 0, g_e0n = 0, g_win = 0, g_bk_n = 0, g_c3_n = 0;
 static const int FW = 496, FH = 384;
 static std::vector<uint8_t> g_frame(size_t(FW)*FH*3, 0);
 static int g_px = 0, g_py = 0, g_hb_p = 0, g_vb_p = 0;
@@ -511,6 +511,17 @@ int main(int argc, char **argv) {
     //
     // That is the last standing explanation for the missing 3 and 1, and this
     // is the measurement that confirms or kills it.
+    // THE '3' CELL, WORD 1129, AND ITS NEIGHBOUR THE 'C' CELL, 1130. Every
+    // write, with value and instruction: the digit renders in this harness and
+    // not on the board, and the write SEQUENCE is the last place the two can
+    // differ.
+    if (d->obs_tram_we && (d->obs_oc_addr == 1129 || d->obs_oc_addr == 1130) &&
+        g_c3_n < 40) {
+      std::printf("      T3 tram[%u] <= %04x  (insn %u ip %08x)\n",
+                  (unsigned)d->obs_oc_addr, d->obs_oc_din,
+                  (unsigned)d->dbg_acc, (unsigned)d->dbg_ip);
+      ++g_c3_n;
+    }
     if (d->obs_tram_we) {
       const uint64_t since = mem_edges - (next_vbl - VBL);
       if (since < 78725) ++g_tw_in_vbl; else ++g_tw_out_vbl;
