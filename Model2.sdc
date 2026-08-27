@@ -78,26 +78,37 @@ set_clock_groups -asynchronous \
 # the finished STA report instead.
 
 
-# ---- THE CHARACTER-FETCH CROSSING: CONSTRAINED, THEN REMOVED AGAIN
+# ---- THE CHARACTER-FETCH CROSSING, CONSTRAINED (third time; the story is the
+# point -- study R57/R58)
 #
-# set_net_delay and set_max_skew were added here to bound the clk_vid/clk_sys
-# character-fetch crossing, which the clock groups above leave physically
-# unconstrained. They are CORRECT and they broke the board: the build carrying
-# them failed to boot with cal_mask = 000000 -- no SDRAM capture depth passing at
-# all -- exactly as the build before it had.
+# First added because the clk_vid/clk_sys crossing in m2_char_cdc is physically
+# unbounded: the clock groups above cut the domains, right for analysis, and
+# the fitter is left free to route the crossing arbitrarily. The build carrying
+# them failed to boot -- and that was NOT these constraints being wrong. The
+# SDRAM interface was unconstrained, so ANY placement shift could silently
+# destroy the memory, and this one did. With the interface now constrained and
+# the other killer edit re-applied and absorbed (R58), these return under the
+# same proof protocol: build, boot, row 20 unchanged.
 #
-# That is the proof for study R57. The first breakage was blamed on bounding the
-# region sweep at ldr_top; reverting that did not fix it, so the sweep was never
-# the cause. What both changes have in common is that they MOVE PLACEMENT, and
-# the SDRAM interface has no timing constraints of any kind -- no input or output
-# delay, no generated clock for SDRAM_CLK at the device -- so wherever the fitter
-# happens to put those paths decides whether the machine can talk to its memory.
-# Two unrelated, individually correct changes each destroyed it.
-#
-# So this is not a deferrable problem. Until the SDRAM interface is constrained,
-# any edit that perturbs placement is liable to produce a core that passes every
-# report this project checks and does not boot. These constraints go back in
-# after that, not before.
+# set_net_delay applies between asynchronous clock groups where set_max_delay
+# does not; set_max_skew keeps each synchroniser's bits together. Collections
+# guarded: an empty match is a silent no-op, the trap this file exists for.
+set cdc_regs [get_registers -nowarn {*u_char_cdc|*}]
+set vid_regs [get_registers -nowarn {*u_tilemap|*}]
+
+if {[llength $cdc_regs] == 0} {
+    post_message -type critical_warning \
+      "Model2.sdc: no m2_char_cdc registers matched -- the character-fetch \
+       crossing between clk_vid and clk_sys is UNCONSTRAINED. See study R49."
+} else {
+    set_net_delay -max 5 -from $cdc_regs -to $cdc_regs
+    set_max_skew -to [get_registers -nowarn {*u_char_cdc|req_sync[*]}]  2
+    set_max_skew -to [get_registers -nowarn {*u_char_cdc|done_sync[*]}] 2
+    if {[llength $vid_regs] > 0} {
+        set_net_delay -max 5 -from $cdc_regs -to $vid_regs
+        set_net_delay -max 5 -from $vid_regs -to $cdc_regs
+    }
+}
 
 
 # ============================================================================
