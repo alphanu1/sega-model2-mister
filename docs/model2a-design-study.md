@@ -3669,3 +3669,73 @@ still fails, stop instrumenting the machine and render one half's real output
 through the other.** R51 and R53 both hid in the gap between two passing tests;
 this one was found by closing that gap in five seconds rather than by another
 25-minute build.
+
+---
+
+**R55 — the PC-stream differential cannot reach this fault either, and the
+reason is interrupt timing.** With R54's reproduction in hand, the obvious next
+move was to find where our i960 stops agreeing with MAME. Two tools exist for
+it and neither works here, for two different reasons, and both are worth writing
+down because the next person will reach for them first.
+
+*`i960-datadiff.sh` reports tile, char and palette IDENTICAL — and it is a true
+result about the wrong moment.* Its breakpoint is passed to MAME's debugger as
+`go $BP`, which is **hex**, so the default 228240 is `0x228240` — the sound poll
+loop. Worse, its "ours" side is `obj_i960_rom`, which has no I/O board and
+therefore stalls in that same loop forever while MAME walks past it and draws
+the menu. Both sides are dumped pre-menu; both hold `entry1=9090`, the value
+written at instruction 132,411. The comparison passes because nothing has
+happened yet on either side.
+
+*So the trace must come from `m2_boot_harness`*, which does get past the poll —
+it has the I/O board and the backup SRAM. It now emits one PC per retired
+instruction from `M2_BOOT_PCFROM` onward.
+
+*Setting the comparison up took three attempts, and the two failures were mine,
+not the tools':* MAME emits uppercase hex and we emit lowercase, and MAME's
+trace carries 126 non-record lines — `(interrupted at 000013E0, IRQ 0)` and
+blanks — which break `i960-resync-diff.py`'s fixed 9-byte record. Filter with
+`grep -E '^[0-9A-Fa-f]{8}:' | cut -c1-8 | tr 'A-F' 'a-f'`.
+
+*What it then found, and why it is not the answer.* Five resyncs across genuine
+poll loops (2-3 distinct PCs each, one of them 1,201,884 MAME instructions
+long — the CPI ratio, not a defect), then a divergence at `mame=2,602,332
+ours=573,916` inside this loop:
+
+```
+00000B0C: shlo    6,3,r6          r6 = 192, a COUNTED loop, not a wait
+00000B10: stos    r8,0x10000(r4)
+00000B18: stos    r8,0x14000(r4)   +0x4000 apart: the three colour-
+00000B20: stos    r8,0x18000(r4)   translation channels
+00000B28: addo    2,r4,r4
+00000B2C: cmpdeco 1,r6,r6
+00000B30: bl      0x00000b10
+```
+
+We leave it after `00000B18` for `0x00000e00`. That looked like a `cmpdeco`
+defect until the stream was checked: **`0x00000e00` appears 29 times in ours and
+38 times in MAME's**, so it is a routine both machines run, and we reach it
+*mid-loop, between two stores*. It is an interrupt.
+
+*And an interrupt landing at a different instruction is expected here, not a
+bug.* Our CPI is ~3.95 against MAME's ~1; V-blank arrives on wall-clock, so we
+retire roughly a quarter of the instructions per frame that MAME does and every
+interrupt lands at a different offset. `i960-resync-diff.py` was built to see
+past **poll loops** and does; it cannot see past this, and nothing in it claims
+to.
+
+*The instrument this actually needs is the one `i960-diff.sh`'s own header
+already names:* **write-stream comparison.** A PC stream cannot settle a
+disagreement about values, and a timing-shifted interrupt makes PC comparison
+useless long before the palette is written. Comparing the ordered sequence of
+`(address, value)` stores into `0x01800000-0x01803fff` on both machines is
+independent of when interrupts land and of how many instructions each side takes
+to get there, and it names the differing store directly. `docs/differential-
+testing.md` describes it; it does not exist yet.
+
+*The rule:* **a differential tool is only as good as the thing it compares, and
+PCs are the wrong thing once two machines run at different speeds.** Three
+sessions of instruments have now converged on the same conclusion from different
+directions — R54 found the fault by rendering one half's real output through the
+other, and this entry finds that the PC stream cannot localise it further. Data,
+not control flow, is what is left to compare.
