@@ -1510,6 +1510,30 @@ wire [31:0] char_data;
 wire        cc_req;
 wire [17:0] cc_addr;
 
+// IS THE CHARACTER FETCH RETURNING DATA AT ALL?
+//
+// The simulation overruns 509 times rendering Daytona's attract screen and the
+// board reports zero, which cannot both describe the same workload. Zero char
+// data explains it: every tile then renders as one flat colour out of its
+// palette bank -- blue sky, green ground, which is exactly what the board shows
+// -- there is almost nothing distinct left to fetch, the 16-entry cache hits
+// constantly, and no line ever runs late.
+//
+// So count what comes back. `cf_all` is every acknowledged fetch and `cf_nz`
+// those whose 32 bits were not zero. On a screen with any detail at all the two
+// should be within a small factor; cf_nz stuck at zero while cf_all climbs says
+// the fetch path returns nothing, and the address or the crossing is at fault
+// rather than the renderer.
+logic [15:0] cf_all, cf_nz;
+always_ff @(posedge clk_vid or negedge mem_rst_n) begin
+	if (!mem_rst_n) begin
+		cf_all <= 16'd0; cf_nz <= 16'd0;
+	end else if (char_ack) begin
+		if (!(&cf_all)) cf_all <= cf_all + 16'd1;
+		if (|char_data && !(&cf_nz)) cf_nz <= cf_nz + 16'd1;
+	end
+end
+
 m2_char_cdc u_char_cdc (
 	.clk_vid(clk_vid), .vid_rst_n(mem_rst_n & cp_done),
 	.v_req(char_req), .v_addr(char_addr),
@@ -1725,14 +1749,13 @@ m2_diag #(.NWORDS(23)) u_diag
 	//
 	// 00001?3F would mean every depth works; 00001?00 means none does, and that
 	// is a result about the interface rather than a range that was too narrow.
-	.words({ // 22 LINE OVERRUNS again (top half). It read 00000000 before R56,
-	         // when the white labels were absent and the board was fetching far
-	         // fewer distinct glyphs per line. Restoring them added demand, and
-	         // the two characters now missing -- the 3 of 3CREDIT(S) and the 1 of
-	         // # 1 -- are the LAST distinct glyph on the two longest lines, which
-	         // is what a line running out of fetch budget drops first. Measured,
-	         // not assumed. Replaces the per-channel xlat counts, which read
-	         // 00202020 and whose values test_m2_boot then proved correct.
+	.words({ // 22 CHAR FETCHES: non-zero in the top half, total in the low half.
+	         // Both climbing means the fetch path works and the picture is the
+	         // renderer's problem. cf_nz at 0000 with cf_all climbing means the
+	         // fetches return zeros, which is what a screen of flat colour is.
+	         // Replaces the overrun counter, which read 00000000 twice -- true
+	         // both times, and the reason is that there is nothing to be late
+	         // with when every fetch comes back empty.
 	         // OLD 22 LINE OVERRUNS (top half) and last line's worst-layer fetch
 	         // count (low byte). Zero overruns means the renderer keeps up and
 	         // missing text is NOT a budget problem; a climbing count means it
@@ -1744,7 +1767,7 @@ m2_diag #(.NWORDS(23)) u_diag
 	         // never arrived. Replaces the M10K copy probe, which did its job
 	         // (it proved the copy sound while the renderer starved, R49) and
 	         // reads zero on a game image by design.
-	         {vid_overruns, 8'd0, vid_fetches},
+	         {cf_nz, cf_all},
 	         // 21 ALL FOUR LAYERS, top 8 bits of each. The first version packed
 	         // only layers 0 and 1 and read 00000000 on a board visibly drawing
 	         // Daytona's sky and ground: the fixture uses layer 0 and Daytona
