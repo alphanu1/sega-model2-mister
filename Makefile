@@ -201,7 +201,7 @@ synth_i960_ldst:
 # --------------------------------------------------------------------- tests
 
 .PHONY: test test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram test_fx68k test_m2_ioboard
-test: test_fx68k test_m2_ioboard test_m2_sdram_x2 test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
+test: test_fx68k test_m2_ioboard test_m2_char_cdc test_m2_sdram_x2 test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
 
 test_i960_dec: obj_i960_dec/Vi960_dec
 	@echo "== test i960_dec"
@@ -448,6 +448,18 @@ obj_i960_rom/Vi960_rom: $(TOP_RTL) $(TB)/tb_i960_rom.cpp
 # left to be discovered: this controller latches requests on their edge.
 
 .PHONY: test_m2_sdram_x2
+# The character fetch crossing. m2_sdram_x2's premise -- that every requester is
+# on clk_sys -- is false for this one port, and the frequencies are not integer
+# multiples, so the failure could only ever show on hardware. Study R49.
+test_m2_char_cdc: obj_ccdc/Vm2_char_cdc
+	@echo "== test m2_char_cdc (character fetch, 48 MHz <-> 32 MHz)"
+	@./obj_ccdc/Vm2_char_cdc $(TEST_ARGS)
+
+obj_ccdc/Vm2_char_cdc: rtl/mem/m2_char_cdc.sv sim/mem/tb_m2_char_cdc.cpp
+	$(VBUILD) --top-module m2_char_cdc -Wno-UNUSEDSIGNAL \
+	  --Mdir obj_ccdc -o Vm2_char_cdc -CFLAGS "-O2" \
+	  rtl/mem/m2_char_cdc.sv sim/mem/tb_m2_char_cdc.cpp
+
 test_m2_sdram_x2: obj_x2/Vm2_sdram_x2_harness
 	@echo "== test m2_sdram_x2 (controller at 2x the core clock)"
 	@./obj_x2/Vm2_sdram_x2_harness $(TEST_ARGS)

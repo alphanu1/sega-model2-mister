@@ -317,8 +317,8 @@ always_comb begin
 	// target is the arbiter's grant-to-tag path, which is a few lines.
 	//
 	// The self-test also uses port 2 and waits for cp_done, so they never overlap.
-	p_req[3]  = char_req;
-	p_addr[3] = CHAR_BASE + SDR_AW'(char_addr);
+	p_req[3]  = cc_req;
+	p_addr[3] = CHAR_BASE + SDR_AW'(cc_addr);
 	// PORT 0 IS THE CPU'S, and it is the single-word port on purpose: the
 	// bridge issues one 16-bit access at a time, and ports 1-3 burst four.
 	p_req[1]  = cpu_sd_req;
@@ -1454,12 +1454,25 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	end
 end
 
-// Char fetch, straight from SDRAM on a burst port.
+// Char fetch. NOT straight from SDRAM: m2_video is on clk_vid and the memory
+// side is on clk_sys, and 48/32 is not an integer ratio, so a one-clk_sys ack
+// pulse is missed by clk_vid at four starting phases in twelve -- measured in
+// test_m2_char_cdc. The fetch engine holds char_req until acknowledged, so the
+// first missed ack hangs it for good. Study R49.
 wire        char_req, char_ack;
 wire [17:0] char_addr;
 wire [31:0] char_data;
-assign char_ack  = p_ack[3];
-assign char_data = p_dout[3][31:0];
+wire        cc_req;
+wire [17:0] cc_addr;
+
+m2_char_cdc u_char_cdc (
+	.clk_vid(clk_vid), .vid_rst_n(mem_rst_n & cp_done),
+	.v_req(char_req), .v_addr(char_addr),
+	.v_ack(char_ack), .v_data(char_data),
+	.clk_sys(clk_sys), .sys_rst_n(mem_rst_n),
+	.s_req(cc_req), .s_addr(cc_addr),
+	.s_ack(p_ack[3]), .s_data(p_dout[3][31:0])
+);
 
 // TILE WORDS ACCUMULATED PER LAYER, straight out of the renderer. The frame
 // simulation that reproduces MAME's picture ends with layer 0 holding 0x310 and

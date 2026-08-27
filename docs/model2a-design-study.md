@@ -3341,3 +3341,71 @@ debug tap needs to name the whole range of correct values, not the first one
 anybody happened to observe. Compare R38, where regions past the end of the
 image were being read as evidence, and the sweep had to be made say which those
 were.
+
+---
+
+**R49 — the character fetch was the one requester not on `clk_sys`, and
+`m2_sdram_x2`'s header said otherwise.** The 2D tilemap test has never rendered
+on hardware. It showed red, then black once R47 fixed the palette copy, and both
+were the same failure: every pixel was palette entry 0, garbage-red and then
+correctly black. There was never any tile content in the picture at all.
+
+*What the board proved, and it took two purpose-built overlay rows.* Row 2 read
+`00200020` — tile RAM words 6/7, matching the fixture byte for byte — so the
+data was in SDRAM and read back correctly. But row 2 only ever proved SDRAM, not
+the destination. Row 22 was added to probe the M10K copy directly (`tram[1]`,
+`pal[1]`) and read **`0020FFFF`**: the copy engine had done its job perfectly.
+Row 21 tapped `dbg_layer_have`, which `m2_video` had been generating and
+`Model2.sv` discarding all along, and read **`00000000`** against the `00000310`
+the correct render produces. Copy good, renderer consuming nothing.
+
+*The mechanism.* `m2_sdram_x2`'s header states:
+
+> *Every requester here — the i960's bridge, the tilemap copy engine, the
+> character fetch, the sweep and the ROM loader — is on clk_sys ... It is NOT a
+> clock-domain crossing.*
+
+That is true of every port but one. `m2_video` runs on **`clk_vid`, 32 MHz**, so
+`char_req`/`char_ack` cross 48 ↔ 32. Three things then compound:
+
+- 48 and 32 are **not integer multiples**. They share edges only every 62.5 ns,
+  so nothing from one is stable across a full cycle of the other — which is
+  exactly the property the 96/48 adapter relies on and this port does not have.
+- `m2_sdram` holds `p_ack` for `ACK_HOLD` = 2 fast cycles = one 48 MHz cycle =
+  20.8 ns. `clk_vid` samples every 31.25 ns. **`test_m2_char_cdc` measures it:
+  4 of 12 starting phases lose the pulse entirely.**
+- `Model2.sdc` cuts `clk_vid` against the memory group, so the path was never
+  timed and nothing reported it.
+
+`m2_tile_fetch` holds `char_req` until acknowledged, so the *first* missed ack
+hangs the fetch engine permanently — which is why `dbg_layer_have` is exactly
+zero rather than merely reduced. Modelling it as "the memory never answers"
+(`+charlat=100000`) reproduces the board: **0 non-black pixels of 190,464.**
+
+*Why every test passed.* Simulation answers `char_ack` in `m2_video`'s own clock
+domain. `test_m2_video_frame` renders MAME's frame pixel-for-pixel — 2,054
+non-black pixels in x 161–405, y 41–174 — and cannot see the crossing at all,
+because the crossing does not exist in that harness. **A latency sweep does not
+find this**: 1 → 80 cycles degrades the picture gracefully and never reaches
+zero. Only "the acknowledge is never seen" reproduces it.
+
+*The fix* is `rtl/mem/m2_char_cdc.sv`, a four-phase handshake: the request is
+synchronised into `clk_sys`, one SDRAM transaction is issued, the data is
+latched, and a `done` level is synchronised back and cleared only when the
+requester lets go. `v_ack` is a one-cycle **edge**, not a level, because
+`m2_tile_fetch` re-raises `char_req` immediately on acknowledgement and a level
+would still be high — the engine would read the previous character as the next
+one's. This is correct at any frequency pair, which is the point: the
+arrangement it replaces was correct only for a ratio nobody had written down.
+
+*`m2_cdc_port.sv` was considered and does not fit* — it is Model 1 heritage,
+unused here, takes a one-cycle pulse on both sides where this needs a held
+level, and is 16-bit where the character fetch needs 32.
+
+*The rule, and it is the study's oldest one in a new costume:* **a comment
+asserting "this is not a CDC" is a claim about every signal that crosses, and it
+decays the moment one of them moves.** The premise was written when it was true.
+What made it false was `m2_video` being on the video clock — which was not a
+change to the memory system at all, and so was never checked against the memory
+system's assumptions. Where a design depends on a frequency relationship, the
+relationship belongs in a test that fails when it changes, not in prose.
