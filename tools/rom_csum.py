@@ -107,6 +107,30 @@ def fold(img, start_word, n_words):
 
 RGN = 0x100000          # words per region -- 2 MB, and the core's OSD step
 
+def fold_bounded(img, base, last_word):
+    """The core's fold, stopping at the end of the loaded image.
+
+    MIRRORS m2_sdram's sweep EXACTLY, including the burst granularity: it folds
+    four words at a time and takes a burst only when all four are inside the
+    image, so `addr + 7 > last_word` ends it. Get this off by one burst and the
+    numbers disagree for a reason that has nothing to do with the memory.
+
+    This exists because 21 regions of 2 MB verify 42 MB of a 43.62 MB image and
+    the last 1.6 MB -- the top, where graphics data sits -- had no expected
+    value at all."""
+    acc, addr, bursts = 0, base, 0
+    while True:
+        for w in range(addr, addr + 4):
+            o = w * 2
+            v = (img[o] | (img[o+1] << 8)) if o + 1 < len(img) else 0xffff
+            acc = (acc + v) & 0xffffff
+            acc = ((acc << 1) | (acc >> 23)) & 0xffffff
+        bursts += 1
+        if bursts == 0x40000:      break
+        if addr + 7 > last_word:   break
+        addr += 4
+    return acc, bursts
+
 if __name__ == '__main__':
     if len(sys.argv) < 3:
         raise SystemExit(__doc__)
@@ -128,8 +152,17 @@ if __name__ == '__main__':
         print(f"  {'rgn':>3}  {'first word':>10}  {'expected':>8}")
         for n in range((nwords + RGN - 1) // RGN):
             end = (n + 1) * RGN
-            tail = '' if end <= nwords else '   <- runs past the image, not evidence'
-            print(f"  {n:>3}  0x{n*RGN:08X}  {fold(img, n*RGN, RGN):06X}{tail}")
+            if end <= nwords:
+                print(f"  {n:>3}  0x{n*RGN:08X}  {fold(img, n*RGN, RGN):06X}")
+            else:
+                # THE LAST REGION, WHICH USED TO HAVE NO EXPECTED VALUE AT ALL.
+                # 21 regions of 2 MB verify 42 MB of a 43.62 MB image; the top
+                # 1.6 MB went unchecked because a full-region fold there takes
+                # in memory nobody wrote. The core now bounds its sweep at the
+                # last loaded word, so this bounds the same way.
+                v, b = fold_bounded(img, n*RGN, nwords - 1)
+                print(f"  {n:>3}  0x{n*RGN:08X}  {v:06X}   <- PARTIAL: "
+                      f"{b} bursts, stops at the end of the image")
         raise SystemExit(0)
 
     if rest and rest[0] == '--region':

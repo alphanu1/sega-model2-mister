@@ -1481,8 +1481,24 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 				else                 sw_wsel  <= sw_wsel + 2'd1;
 			end
 			3'd2: begin
-				// 0x100000 words at four per burst is 0x40000 bursts.
-				if (sw_burst == 20'h3FFFF) begin
+				// 0x100000 words at four per burst is 0x40000 bursts -- OR the
+				// end of the loaded image, whichever comes first.
+				//
+				// THE LAST REGION WAS NEVER CHECKABLE. Daytona's image is 43.62
+				// MB and ends at word 0x15CFFFF; region 20 stops at 0x14FFFFF,
+				// so 21 regions of 2 MB verify 42 MB and leave 1.6 MB -- the TOP
+				// of the image, where graphics data sits -- with no expected
+				// value at all. tools/rom_csum.py refused to print one because a
+				// full-region fold there would include memory nobody wrote, and
+				// real SDRAM comes up holding whatever it holds.
+				//
+				// Bounding the fold at ldr_top fixes that: the last region now
+				// folds only the words that were actually loaded, and the tool
+				// mirrors the same stopping rule. `sw_addr + 7` is the last word
+				// of the NEXT burst, so a burst is only taken when all four of
+				// its words are inside the image.
+				if (sw_burst == 20'h3FFFF ||
+				    (sw_addr + SDR_AW'(7)) > ldr_top) begin
 					sw_val   <= sw_acc;
 					sw_done  <= 1'b1;
 					sw_state <= 3'd4;      // distinct from the fold state
