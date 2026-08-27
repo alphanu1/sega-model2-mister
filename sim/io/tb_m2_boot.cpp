@@ -51,6 +51,7 @@ static bool load_file(const std::string &p, std::vector<uint8_t> &out) {
 }
 
 static int g_e1n = 0, g_e0n = 0, g_win = 0;
+static uint64_t g_tw_in_vbl = 0, g_tw_out_vbl = 0, g_ss_in = 0, g_ss_out = 0;
 static uint16_t g_tram[32768];
 static bool     g_tram_seen[32768];
 static uint16_t g_pal[8192];
@@ -438,6 +439,30 @@ int main(int argc, char **argv) {
     // writes go nowhere. That is correct for the regions MAME marks nopw and
     // wrong for anything the renderer needs, and the two are indistinguishable
     // until they are counted.
+    // WHERE IN THE FRAME DO TILEMAP WRITES LAND?
+    //
+    // Real hardware updates the tilemap during V-blank, when the renderer is
+    // not scanning it. V-blank is 40 lines of 424, so 9.4% of the frame --
+    // 78,725 of the 834,492 mem cycles between interrupts. A real i960KB
+    // retires roughly four times the instructions we do in that window (our
+    // CPI is ~3.95), so work that fits there on the real machine can overrun
+    // into active display on ours. If the game clears a tile and then writes
+    // the character, and the clear lands in V-blank while the write slips past
+    // scanout, the renderer reads the CLEARED tile: blank, not garbage, and
+    // only for the characters that are rewritten every frame.
+    //
+    // That is the last standing explanation for the missing 3 and 1, and this
+    // is the measurement that confirms or kills it.
+    if (d->obs_tram_we) {
+      const uint64_t since = mem_edges - (next_vbl - VBL);
+      if (since < 78725) ++g_tw_in_vbl; else ++g_tw_out_vbl;
+      // STEADY STATE ONLY. The figures above include boot-time bulk drawing,
+      // when nothing is displayed and writing outside V-blank is entirely
+      // normal. What matters is the per-frame updates once a screen is up.
+      if (d->dbg_acc > 2000000) {
+        if (since < 78725) ++g_ss_in; else ++g_ss_out;
+      }
+    }
     if (d->obs_tram_we && d->obs_oc_addr < 32768) {
       g_tram[d->obs_oc_addr]      = d->obs_oc_din;
       g_tram_seen[d->obs_oc_addr] = true;
@@ -538,7 +563,19 @@ int main(int argc, char **argv) {
     // different layers, so either the CPU writes elsewhere or the bridge does.
     const char *dir = std::getenv("M2_PAL_REF");
     int seen = 0; for (int i = 0; i < 32768; ++i) if (g_tram_seen[i]) ++seen;
-    std::printf("  tile RAM as the CPU builds it: %d/32768 words written\n", seen);
+    {
+    const uint64_t t = g_tw_in_vbl + g_tw_out_vbl;
+    std::printf("  tilemap writes: %llu in V-blank, %llu during active display"
+                " (%.1f%% unsafe)\n",
+                (unsigned long long)g_tw_in_vbl, (unsigned long long)g_tw_out_vbl,
+                t ? 100.0 * double(g_tw_out_vbl) / double(t) : 0.0);
+    const uint64_t u = g_ss_in + g_ss_out;
+    std::printf("    steady state (after 2M instructions): %llu in V-blank, "
+                "%llu active (%.1f%% unsafe)\n",
+                (unsigned long long)g_ss_in, (unsigned long long)g_ss_out,
+                u ? 100.0 * double(g_ss_out) / double(u) : 0.0);
+  }
+  std::printf("  tile RAM as the CPU builds it: %d/32768 words written\n", seen);
     // Which quarter of tile RAM did it touch? The four layers occupy distinct
     // regions, so this says which layers the CPU believes it is drawing on.
     for (int q = 0; q < 4; ++q) {
