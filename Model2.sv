@@ -803,13 +803,21 @@ end
 // why the copy engine and the bridge are muxed onto one port rather than given
 // one each.
 logic [15:0] cpu_tram_q, cpu_pal_q;
+logic  [1:0] pb_state;
+logic [15:0] pb_tram, pb_pal;
 // ONE always_ff, one port. The copy engine wins when it is running, which it
 // only does for the tilemap-test image, and the CPU is held in reset then --
 // so the two never actually contend. The priority is written down anyway,
 // because "they cannot overlap" is an argument and a mux is a guarantee.
 wire        ocb_tram_we = cp_tram_we | cpu_tram_we;
 wire        ocb_pal_we  = cp_pal_we  | cpu_pal_we;
-wire [14:0] ocb_addr    = (cp_tram_we | cp_pal_we) ? cp_wr_idx  : cpu_oc_addr;
+// ADDRESS 1 WHILE PROBING. Port B is free the moment the copy finishes: the
+// copy engine is done and the CPU is still held in reset by cal_done, which
+// asserts later. Two cycles, then it hands the port back for good.
+wire        pb_probe   = cp_done && (pb_state != 2'd2);
+wire [14:0] ocb_addr    = (cp_tram_we | cp_pal_we) ? cp_wr_idx
+                        : pb_probe                 ? 15'd1
+                        : cpu_oc_addr;
 wire [15:0] ocb_din     = (cp_tram_we | cp_pal_we) ? cp_wr_data : cpu_oc_din;
 
 always_ff @(posedge clk_sys) begin
@@ -817,6 +825,26 @@ always_ff @(posedge clk_sys) begin
 	cpu_pal_q  <= pal[ocb_addr[11:0]];
 	if (ocb_tram_we) tram[ocb_addr]      <= ocb_din;
 	if (ocb_pal_we)  pal[ocb_addr[11:0]] <= ocb_din;
+end
+
+// WHAT ACTUALLY LANDED IN M10K. tram[1] is 0020 and pal[1] is FFFF in the
+// fixture, so row 22 reads 0020FFFF on a board whose copy worked and 00000000
+// on one where it did not. On a game image the copy is skipped by design, so
+// zero there is correct and expected.
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+	if (!mem_rst_n) begin
+		pb_state <= 2'd0; pb_tram <= 16'd0; pb_pal <= 16'd0;
+	end else if (cp_done) begin
+		case (pb_state)
+			2'd0: pb_state <= 2'd1;                 // address applied, read is registered
+			2'd1: begin
+				pb_tram  <= cpu_tram_q;
+				pb_pal   <= cpu_pal_q;
+				pb_state <= 2'd2;
+			end
+			default: ;
+		endcase
+	end
 end
 
 // COPY ENGINE. Walks tile RAM then the palette out of SDRAM into on-chip memory
@@ -1433,6 +1461,12 @@ wire [31:0] char_data;
 assign char_ack  = p_ack[3];
 assign char_data = p_dout[3][31:0];
 
+// TILE WORDS ACCUMULATED PER LAYER, straight out of the renderer. The frame
+// simulation that reproduces MAME's picture ends with layer 0 holding 0x310 and
+// layers 1-3 at zero, so that is what a working board must show. It is read in
+// clk_vid, which is the overlay's own clock.
+wire [11:0] vid_layer_have [4];
+
 wire [7:0] tile_r, tile_g, tile_b;
 wire       tile_hs, tile_vs, tile_hb, tile_vb;
 
@@ -1458,7 +1492,7 @@ m2_video u_tilemap (
 	.vid_r(tile_r), .vid_g(tile_g), .vid_b(tile_b),
 	.vid_hs(tile_hs), .vid_vs(tile_vs), .vid_hb(tile_hb), .vid_vb(tile_vb),
 	.vblank_irq(), .dbg_fetches(), .dbg_overruns(),
-	.dbg_layer_px(), .dbg_ctrl(), .dbg_layer_have()
+	.dbg_layer_px(), .dbg_ctrl(), .dbg_layer_have(vid_layer_have)
 );
 
 ///////////////////////   VIDEO   ////////////////////////////////
@@ -1575,7 +1609,7 @@ always_ff @(posedge clk_vid) begin
 	ldr_top_sync  <= ldr_top;
 end
 
-m2_diag #(.NWORDS(21)) u_diag
+m2_diag #(.NWORDS(23)) u_diag
 (
 	.clk(clk_vid),
 	.ce_pix(ce_pix),
@@ -1612,7 +1646,9 @@ m2_diag #(.NWORDS(21)) u_diag
 	//
 	// 00001?3F would mean every depth works; 00001?00 means none does, and that
 	// is a result about the interface rather than a range that was too narrow.
-	.words({ {19'd0, cal_done, 1'b0, cal_best, 2'd0, cal_mask},  // 20 capture sweep
+	.words({ {pb_tram, pb_pal},                                 // 22 the M10K copy: want 0020FFFF
+	         {8'd0, vid_layer_have[1], vid_layer_have[0]},      // 21 layer words: want 00000310
+	         {19'd0, cal_done, 1'b0, cal_best, 2'd0, cal_mask},  // 20 capture sweep
 	         io_last_data,                              // 19 last I/O word returned
 	         io_last_addr,                              // 18 last I/O address presented
 	         {iob_flag_rd, iob_seen},                   // 17 flag reads / value seen

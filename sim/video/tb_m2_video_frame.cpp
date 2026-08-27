@@ -212,6 +212,16 @@ int main(int argc, char **argv) {
   for (int r = 1; r < H; ++r)
     if (std::memcmp(&fb[size_t(r) * W * 3], &fb[size_t(r-1) * W * 3], size_t(W) * 3))
       ++distinct_rows;
+  // THE TAPS Model2.sv THROWS AWAY. This render is correct, so these are the
+  // values a working board must show. dbg_ctrl comes out of tile RAM itself
+  // (m2_video line 504), so a board reading zero here has not got the tilemap
+  // into M10K whatever the SDRAM readback says.
+  std::printf("  dbg_ctrl: %04x %04x   dbg_layer_have: %03x %03x %03x %03x\n"
+              "  dbg_fetches: %u  dbg_overruns: %u\n",
+              dut->dbg_ctrl[0], dut->dbg_ctrl[1],
+              dut->dbg_layer_have[0], dut->dbg_layer_have[1],
+              dut->dbg_layer_have[2], dut->dbg_layer_have[3],
+              (unsigned)dut->dbg_fetches, (unsigned)dut->dbg_overruns);
   std::printf("  %zu of %d pixels non-black, %zu row transitions\n",
               nonzero, W * H, distinct_rows);
 
