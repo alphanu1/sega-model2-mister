@@ -279,6 +279,18 @@ module m2_cpu_bridge #(
   // Combinational off `half`, and the data with it, because these are M10K with
   // a registered read: the address has to be presented a cycle before the value
   // is captured, which is what the S_IDLE -> S_LO -> S_HI walk below does.
+  // WHICH HALVES OF THE DWORD THIS ACCESS ACTUALLY OWNS.
+  //
+  // half_be: the word addressed by r_addr[15:1] -- the one written in S_IDLE.
+  // hi_be:   the word after it, which only a 32-bit aligned store reaches.
+  //
+  // The i960 replicates sub-word store data across the bus, which is why
+  // oc_din can keep taking r_wdata[15:0] for the first word regardless of
+  // r_addr[1]: a store to 0x01800002 with be=c was observed writing 9090
+  // correctly through that path. Only the ENABLES were wrong.
+  wire half_be = r_addr[1] ? (|r_be[3:2]) : (|r_be[1:0]);
+  wire hi_be   = ~r_addr[1] & (|r_be[3:2]);
+
   assign oc_addr      = r_addr[15:1] + {14'd0, half};
   assign oc_din       = half ? r_wdata[31:16] : r_wdata[15:0];
   // THE COLOUR-TRANSLATION TABLE IS STRIDED, NOT PACKED.
@@ -388,8 +400,21 @@ module m2_cpu_bridge #(
             T_TRAM, T_PAL: begin
               // `half` is already 0 here, so oc_addr and oc_din name the low
               // word this cycle.
-              oc_tram_we <= r_we && (tgt == T_TRAM);
-              oc_pal_we  <= r_we && (tgt == T_PAL);
+              //
+              // GATED ON THE BYTE ENABLES, WHICH THIS DID NOT DO (study R56).
+              // Both halves were written for EVERY store, which is right for a
+              // 32-bit one and destroys the neighbouring halfword for a 16-bit
+              // one. Daytona's `stis g0,0x1800000(g4)` at 0x2784 is a HALFWORD
+              // store: MAME clears palette entry 0 and leaves entry 1 holding
+              // ffff, and we cleared both -- which is precisely why its test
+              // menu drew green values and no white labels.
+              //
+              // `half_be` is the enable for the word this state writes. When
+              // r_addr[1] is set the access names the dword's UPPER half, and
+              // oc_addr is already r_addr[15:1], so the relevant enables are
+              // r_be[3:2] -- observed as be=c on stores to 0x01800002.
+              oc_tram_we <= r_we && (tgt == T_TRAM) && half_be;
+              oc_pal_we  <= r_we && (tgt == T_PAL)  && half_be;
               if (r_we && (tgt == T_TRAM)) dbg_tram_wr <= dbg_tram_wr + 32'd1;
               if (r_we && (tgt == T_PAL))  dbg_pal_wr  <= dbg_pal_wr  + 32'd1;
               st         <= S_LO;
@@ -474,8 +499,11 @@ module m2_cpu_bridge #(
             // the address and the write enable arrive together.
             r_rdata[15:0] <= (tgt == T_TRAM) ? oc_tram_q : oc_pal_q;
             half          <= 1'b1;
-            oc_tram_we    <= r_we && (tgt == T_TRAM);
-            oc_pal_we     <= r_we && (tgt == T_PAL);
+            // The SECOND halfword exists only for a full 32-bit aligned store.
+            // A halfword store has already written everything it owns, and
+            // writing here is what corrupted the entry next door.
+            oc_tram_we    <= r_we && (tgt == T_TRAM) && hi_be;
+            oc_pal_we     <= r_we && (tgt == T_PAL)  && hi_be;
             st            <= S_HI;
           end
         end

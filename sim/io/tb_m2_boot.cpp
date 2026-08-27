@@ -433,14 +433,14 @@ int main(int argc, char **argv) {
     }
     // EVERY WRITE TO ENTRY 1, which is white in the reference and black here.
     if (d->obs_pal_we && d->obs_oc_addr == 1 && g_e1n < 24) {
-      std::printf("    pal[1] <= %04x   (bus %08x, instruction %u, ip %08x)\n",
-                  d->obs_oc_din, d->obs_bus_addr, (unsigned)d->dbg_acc,
-                  (unsigned)d->dbg_ip);
+      std::printf("    pal[1] <= %04x   (bus %08x be=%x, instruction %u, ip %08x)\n",
+                  d->obs_oc_din, d->obs_bus_addr, d->obs_bus_be,
+                  (unsigned)d->dbg_acc, (unsigned)d->dbg_ip);
       ++g_e1n;
     }
     if (d->obs_pal_we && d->obs_oc_addr == 0 && g_e0n < 8) {
-      std::printf("    pal[0] <= %04x   (cpu bus addr %08x)\n",
-                  d->obs_oc_din, d->obs_bus_addr);
+      std::printf("    pal[0] <= %04x   (bus %08x be=%x)\n",
+                  d->obs_oc_din, d->obs_bus_addr, d->obs_bus_be);
       ++g_e0n;
     }
     if (d->obs_pal_we && d->obs_oc_addr < 8192) {

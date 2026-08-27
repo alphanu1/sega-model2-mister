@@ -3739,3 +3739,57 @@ sessions of instruments have now converged on the same conclusion from different
 directions — R54 found the fault by rendering one half's real output through the
 other, and this entry finds that the PC stream cannot localise it further. Data,
 not control flow, is what is left to compare.
+
+---
+
+**R56 — the bridge wrote both halves of every on-chip store, and a halfword
+store destroyed the entry next door.** Daytona's test menu rendered its green
+values with no white labels. `m2_cpu_bridge` asserted `oc_tram_we` / `oc_pal_we`
+in **both** `S_IDLE` and `S_LO` without ever consulting the byte enables, so
+every store to tile RAM or the palette wrote two 16-bit words. That is correct
+for a 32-bit store and destructive for a 16-bit one.
+
+The instruction is `stis g0,0x1800000(g4)` at `0x2784` — **store integer short**,
+a halfword. The CPU decodes it correctly (`i960_ldst.sv`: `8'hca … size = 2'd1`);
+only the bridge was wrong. The byte enables said so plainly once they were
+logged:
+
+```
+pal[0] <= 0000  (bus 01800000 be=3)   16-bit: owns the low word only
+pal[1] <= 0000  (bus 01800000 be=3)   written anyway -- the white destroyed
+pal[1] <= ffff  (bus 01800000 be=f)   32-bit: both words, correctly
+```
+
+*How it was finally caught, after five wrong theories.* A snapshot comparison
+could not distinguish "we execute a store MAME does not" from "we miss one MAME
+makes". `tools/mame_m2_palwatch.lua` samples the entries per frame instead —
+polling rather than tapping, because the palette is a device handler and study
+R37 records that write taps do not fire on those. MAME's timeline is decisive:
+
+```
+frame 25:  e0=fd02  e1=ffff     white written
+frame 26:  e0=0000  e1=ffff     entry 0 cleared, entry 1 SURVIVES
+frame 400: e0=0000  e1=ffff
+```
+
+MAME clears one entry where we cleared two. That is a store-width fault stated
+in one line, and nothing about the renderer, the palette's size, the layers or
+the fetch bandwidth could ever have produced it.
+
+*The result.* The palette our CPU builds now differs from MAME's capture in **0
+of 8,192 entries**, holds **60 of 60** white entries against the reference's 60,
+and our own output rendered through `m2_video` gives **2,054 of 190,464
+non-black pixels — identical to the reference**, with `dbg_layer_have` matching
+at `0x310`. The picture is the full menu: white labels, green values, and the
+`3` and `1` the bench reported missing.
+
+*This also affected TILE RAM*, on the same two lines, which is where the 13
+differing words of R54 came from — small, because the tilemap is mostly written
+32 bits at a time.
+
+*The rule, and it is the sharpest statement of the one this session kept
+re-learning:* **a write enable is not a width.** The bridge knew the address and
+the data and applied both correctly; what it never asked was how much of the
+dword the access owned. Five instruments were built chasing the symptom — layer
+taps, per-channel counts, an overrun counter, a 64-M10K memory fold — and the
+fault was named by logging four bits that were already on the wire.
