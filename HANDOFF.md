@@ -1,6 +1,65 @@
 # Handoff
 
-**Updated:** 2026-08-27, after the 2D bring-up session. `make test` is green at
+**Updated:** 2026-08-27, after the 2D bring-up session. `make test` green at 25.
+
+---
+
+## READ THIS FIRST: the SDRAM interface is unconstrained, and it is blocking
+
+**The board is on `d3335ae0`, which works. Do not assume a new build will.**
+
+Two individually CORRECT changes each stopped the machine booting — no SEGA
+handshake, black screen, and **row 20 reading `00001400`: `cal_mask = 000000`,
+no SDRAM capture depth passing at all**:
+
+1. bounding the region sweep at `ldr_top` (arithmetically right, study R52/R57)
+2. adding `set_net_delay`/`set_max_skew` to the character-fetch CDC (a real
+   unconstrained crossing, and the constraints are correct)
+
+Reverting (1) did NOT fix it; removing (2) reproduced `d3335ae0`
+**byte-identically**. So the fit is deterministic, neither change was wrong, and
+what they share is that both **move placement**.
+
+**The cause:** neither `Model2.sdc` nor `sys/sys_top.sdc` contains a single
+`set_input_delay`, `set_output_delay`, or `create_generated_clock` for
+`SDRAM_CLK` at the device. The 96 MHz clock definition constrains paths INSIDE
+the chip; nothing describes the round trip to the memory. So the fitter places
+the clock and data paths for that interface however it likes, STA reports
+success, and whether the core can read its memory is decided by luck.
+
+**The fix, and it is established MiSTer practice** (retroramblings.net/?p=515):
+
+```tcl
+create_generated_clock -name SDRAM_CLK_pin \
+  -source [get_pins {...general[4]...divclk}] [get_ports {SDRAM_CLK}]
+set_input_delay  -clock SDRAM_CLK_pin -max 6.4 [get_ports SDRAM_DQ[*]]
+set_input_delay  -clock SDRAM_CLK_pin -min 1.0 [get_ports SDRAM_DQ[*]]
+set_output_delay -clock SDRAM_CLK_pin -max 1.5 [get_ports SDRAM_*]
+set_output_delay -clock SDRAM_CLK_pin -min -0.8 [get_ports SDRAM_*]
+```
+
+Check the numbers against the DE10-Nano SDRAM module's own datasheet rather than
+borrowing another board's. **Expect it to fail timing at first** — that is the
+point; it would be reporting a violation that exists now and cannot be seen.
+
+**Why MiSTer does not supply this:** the framework ships no memory controller at
+all. Cores using the community `sdram.v` inherit a clock and phase thousands of
+installs have proven, so it works by convention. A custom controller at a custom
+clock — which `m2_sdram` at 96 MHz is — is outside that and must state its own.
+
+**Why it went unnoticed for the life of the project:** the boot self-test
+calibrates the capture depth at runtime (R47). That is good engineering and it
+MASKED the missing constraints, because as long as one depth works the interface
+looks fine. R46 recorded "the window is one depth wide" as a curiosity to watch
+rather than as evidence nothing was holding it.
+
+**Until this is done, `cal_mask` on row 20 is a per-build health check.** Several
+contiguous bits means the fit is sound; `000000` means the memory interface broke
+and whatever else changed is innocent. Read it before believing anything else on
+a new build.
+
+---
+ `make test` is green at
 25 PASS.
 
 ---
