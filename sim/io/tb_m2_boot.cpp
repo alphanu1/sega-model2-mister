@@ -50,7 +50,7 @@ static bool load_file(const std::string &p, std::vector<uint8_t> &out) {
   return got == size_t(n);
 }
 
-static int g_e1n = 0, g_e0n = 0;
+static int g_e1n = 0, g_e0n = 0, g_win = 0;
 static uint16_t g_tram[32768];
 static bool     g_tram_seen[32768];
 static uint16_t g_pal[8192];
@@ -211,6 +211,27 @@ int main(int argc, char **argv) {
     return 0;
   }
 
+  // PC STREAM, for tools/i960-resync-diff.py.
+  //
+  // THE EXISTING DIFF TOOLS CANNOT REACH THIS FAULT. Both drive obj_i960_rom,
+  // which has no I/O board, so it stalls forever in the poll loop at 0x228240
+  // while MAME walks past it and draws the menu. i960-datadiff.sh accordingly
+  // compares two pre-menu states and reports tile, char and palette IDENTICAL
+  // -- a true result about the wrong moment. This harness is the one that gets
+  // past the poll, because it has the board and the backup SRAM, so the trace
+  // has to come from here.
+  //
+  // One PC per retired instruction, from M2_BOOT_PCFROM onward, which keeps the
+  // file to the window around the divergence rather than 1.7 million lines.
+  FILE *pctr = nullptr;
+  uint64_t pcfrom = 0;
+  if (const char *pf = std::getenv("M2_BOOT_PCTRACE")) {
+    pctr = std::fopen(pf, "w");
+    if (const char *pfr = std::getenv("M2_BOOT_PCFROM"))
+      pcfrom = std::strtoull(pfr, nullptr, 10);
+  }
+  uint32_t pc_acc_prev = 0;
+
   // V-blank at 57.52 Hz against a 48 MHz mem clock.
   const uint64_t VBL = uint64_t(48e6 / 57.52);
   uint64_t next_vbl = VBL, vblanks = 0;
@@ -243,6 +264,10 @@ int main(int argc, char **argv) {
 
   while (d->dbg_acc < max_instr) {
     tick();
+    if (pctr && d->dbg_acc != pc_acc_prev) {
+      if (d->dbg_acc >= pcfrom) std::fprintf(pctr, "%08x\n", (unsigned)d->dbg_ip);
+      pc_acc_prev = d->dbg_acc;
+    }
     if (mem_edges >= next_vbl) {
       next_vbl += VBL; ++vblanks;
       d->irq = 0x1;                       // level, cleared below
@@ -394,10 +419,23 @@ int main(int argc, char **argv) {
       g_tram[d->obs_oc_addr]      = d->obs_oc_din;
       g_tram_seen[d->obs_oc_addr] = true;
     }
+    // THE BUS AROUND THE STORE THAT DESTROYS THE WHITE. IP 00002784 writes
+    // whatever its source holds; if the source reads zero, the loop copies zero
+    // faithfully and the fault is upstream of the palette entirely.
+    if (d->dbg_acc >= 1713540 && d->dbg_acc <= 1713600 &&
+        d->obs_bus_ack && !ack_prev && g_win < 60) {
+      std::printf("      [%u] ip %08x  %s %08x %08x\n",
+                  (unsigned)d->dbg_acc, (unsigned)d->dbg_ip,
+                  d->obs_bus_we ? "WR" : "rd",
+                  d->obs_bus_addr,
+                  d->obs_bus_we ? d->obs_bus_wdata : d->obs_bus_rdata);
+      ++g_win;
+    }
     // EVERY WRITE TO ENTRY 1, which is white in the reference and black here.
     if (d->obs_pal_we && d->obs_oc_addr == 1 && g_e1n < 24) {
-      std::printf("    pal[1] <= %04x   (bus %08x, instruction %u)\n",
-                  d->obs_oc_din, d->obs_bus_addr, (unsigned)d->dbg_acc);
+      std::printf("    pal[1] <= %04x   (bus %08x, instruction %u, ip %08x)\n",
+                  d->obs_oc_din, d->obs_bus_addr, (unsigned)d->dbg_acc,
+                  (unsigned)d->dbg_ip);
       ++g_e1n;
     }
     if (d->obs_pal_we && d->obs_oc_addr == 0 && g_e0n < 8) {
@@ -563,6 +601,7 @@ int main(int argc, char **argv) {
                                                                   : "NOT A 0..255 RAMP");
     }
   }
+  if (pctr) { std::fclose(pctr); std::printf("  PC trace written\n"); }
   std::printf("  PRCB as the CPU holds it at the end: %08x (boot value is 000000c0;\n"
               "    it legitimately CHANGES on a reinitialize IAC, so a different\n"
               "    value here is not by itself a fault)\n", d->obs_prcb);
