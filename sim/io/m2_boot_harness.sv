@@ -68,6 +68,9 @@ module m2_boot_harness #(
   output logic [31:0] dbg_tram_wr,
   output logic [31:0] dbg_ip,
   output logic [31:0] obs_prcb,
+  output logic        obs_xlat_we,
+  output logic  [6:0] obs_xlat_addr,
+  output logic  [7:0] obs_xlat_din,
   output logic        cpu_trap,
   output logic        cpu_halt,
 
@@ -227,6 +230,9 @@ module m2_boot_harness #(
     .oc_tram_we(oc_tram_we), .oc_pal_we(oc_pal_we), .oc_addr(oc_addr),
     .oc_din(oc_din), .oc_tram_q(oc_tram_q), .oc_pal_q(oc_pal_q),
     .oc_xlat_we(oc_xlat_we), .oc_xlat_addr(oc_xlat_addr), .oc_xlat_din(oc_xlat_din),
+// TAPPED: the colour translation table as Daytona programs it. The board counts
+// 32 writes per channel, which proves the ADDRESSES land; it says nothing about
+// the VALUES, and a table whose R and B ramps are wrong renders white as green.
     .io_rdata(cpu_io_rdata), .io_sel(cpu_io_sel), .io_we(cpu_io_we),
     .io_addr(cpu_io_addr), .io_wdata(cpu_io_wdata), .io_be(cpu_io_be),
     .dbg_cpu_reads(), .dbg_cpu_writes(), .dbg_unmapped(),
@@ -303,5 +309,9 @@ module m2_boot_harness #(
   wire _unused = &{1'b0, oc_tram_we, oc_pal_we, oc_addr, oc_din,
                    oc_xlat_we, oc_xlat_addr, oc_xlat_din, sd_we, sd_din, sd_be};
   /* verilator lint_on UNUSEDSIGNAL */
+
+assign obs_xlat_we   = oc_xlat_we;
+assign obs_xlat_addr = oc_xlat_addr;
+assign obs_xlat_din  = oc_xlat_din;
 
 endmodule

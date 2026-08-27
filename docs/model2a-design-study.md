@@ -3562,3 +3562,51 @@ running ahead of the thing that tells it where the data is.
 down.** R47 was correct about every reader it listed and the list was short by
 one, which no test could catch because the missing item was a diagnostic and
 diagnostics have no oracle of their own.
+
+---
+
+**R53 — the palette is 8,192 entries and half of every game's writes were
+landing on top of the other half.** Daytona's test menu rendered its green
+values and **no white labels**, and the ground alternated green and brown across
+resets. Two hypotheses were tested and both were wrong before the right one:
+
+*Wrong 1 — a dead colour channel.* White is (31,31,31): if the translation
+table's R and B map to zero while G survives, white renders green and so does
+green, and every colour collapses. It fits the symptom exactly. Row 22 was added
+to count translation-table writes per channel and read **`00202020`** — 32 to
+each, a complete table. Then `test_m2_boot` was tapped to dump the values the
+CPU actually programs, and all three channels are identical, correct 0→255
+ramps — the same table the fixture uses. Counting writes proved the addresses
+landed; only dumping the values could prove the table was right.
+
+*Wrong 2 — a dead layer.* Row 21 packed only `dbg_layer_have[1:0]` and read
+`00000000` on a board visibly drawing sky and ground. That was the instrument,
+not the machine: the fixture happens to use layer 0 and Daytona does not. Widened
+to all four, it reads `FFFF0000` — layers 3 and 2 saturated. The fetch path was
+never idle.
+
+*What it actually was.* `tools/mame_m2_tiledump.lua`, which captures the
+reference frame, gives the palette as `0x01800000 +0x004000` — **0x4000 bytes,
+8,192 16-bit words**. `m2_cpu_bridge` forms `oc_addr = r_addr[15:1]`, so that
+region yields indices 0..8191. `Model2.sv` held `pal[4096]` and indexed
+`pal[ocb_addr[11:0]]`. **Every palette write above entry 4095 wrapped onto the
+low half and overwrote the entries the tilemap draws with** — white among them.
+The alternating ground colour was the same aliasing: which of two writes to one
+physical entry landed last depended on timing, so it changed across resets.
+
+*Why the fixture is immune, and why that mattered so much.* The copy engine
+fills only the low 4,096 words and nothing ever writes above them, so the
+tilemap test cannot express this defect at all — it renders **pixel-perfectly**
+on the same hardware, in the same build, in the same frame, while a game does
+not. A reference image that exercises one write path cannot validate another.
+This is R51's shape repeated: the halves were each correct against their own
+oracle and the defect lived in what neither covered.
+
+*Checked at the same time and NOT a bug:* tile RAM is `0x010000` = 64 KB =
+32,768 words, which `tram[32768]` matches. The bridge decodes twice that, and
+`r_addr[15:1]` silently folds the upper half — which is correct, because the
+hardware mirrors there.
+
+*The rule:* **a region's size is a fact to be looked up, not inferred from the
+array someone already wrote.** 4,096 was consistent with everything the fixture
+could show, and it was wrong by a factor of two.

@@ -50,6 +50,9 @@ static bool load_file(const std::string &p, std::vector<uint8_t> &out) {
   return got == size_t(n);
 }
 
+static uint8_t g_xlat[96];
+static bool    g_xlat_seen[96];
+
 int main(int argc, char **argv) {
   Verilated::commandArgs(argc, argv);
   uint64_t max_instr = 3'000'000;
@@ -382,6 +385,10 @@ int main(int argc, char **argv) {
     // writes go nowhere. That is correct for the regions MAME marks nopw and
     // wrong for anything the renderer needs, and the two are indistinguishable
     // until they are counted.
+    if (d->obs_xlat_we && d->obs_xlat_addr < 96) {
+      g_xlat[d->obs_xlat_addr]      = d->obs_xlat_din;
+      g_xlat_seen[d->obs_xlat_addr] = true;
+    }
     if (d->obs_bus_ack && !ack_prev && d->obs_bus_we) {
       const uint32_t a = d->obs_bus_addr;
       const bool claimed =
@@ -439,6 +446,19 @@ int main(int argc, char **argv) {
   std::printf("  window reads %u, backup writes %u, backup dword0 %08x\n",
               d->iob_win_rd, d->bak_writes, d->bak_w0);
   std::printf("  tile RAM writes %u\n", d->dbg_tram_wr);
+  {
+    int n = 0; for (int i = 0; i < 96; ++i) if (g_xlat_seen[i]) ++n;
+    std::printf("  colour translation table, as the CPU programmed it (%d/96 written):\n", n);
+    static const char *ch = "RGB";
+    for (int c = 0; c < 3; ++c) {
+      std::printf("    %c: first=%3d last=%3d  [", ch[c],
+                  g_xlat[c*32 + 0], g_xlat[c*32 + 31]);
+      for (int i = 0; i < 8; ++i) std::printf("%d ", g_xlat[c*32 + i]);
+      std::printf("... %d %d]  %s\n", g_xlat[c*32+30], g_xlat[c*32+31],
+                  (g_xlat[c*32+0] == 0 && g_xlat[c*32+31] == 255) ? "ramp ok"
+                                                                  : "NOT A 0..255 RAMP");
+    }
+  }
   std::printf("  PRCB as the CPU holds it at the end: %08x (boot value is 000000c0;\n"
               "    it legitimately CHANGES on a reinitialize IAC, so a different\n"
               "    value here is not by itself a fault)\n", d->obs_prcb);

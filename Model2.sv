@@ -806,14 +806,32 @@ localparam logic [SDR_AW:1] GAME_CHAR  = SDR_AW'(32'h1690000);   // 512 KB
 wire [SDR_AW:1] char_base = game_image ? GAME_CHAR : CHAR_BASE;
 
 (* ramstyle = "M10K" *) logic [15:0] tram [32768];
-(* ramstyle = "M10K" *) logic [15:0] pal  [4096];
+// 8192 ENTRIES, NOT 4096. The palette at 0x01800000 is 0x4000 BYTES -- 8,192
+// 16-bit words -- confirmed against tools/mame_m2_tiledump.lua, which is what
+// captures the reference frame. m2_cpu_bridge forms oc_addr as r_addr[15:1], so
+// that region produces indices 0..8191, and this array was indexed
+// `pal[ocb_addr[11:0]]`: every write above 4095 WRAPPED ONTO THE LOW HALF and
+// overwrote the entries the tilemap draws with.
+//
+// Daytona's test menu came out with its green values and NO WHITE LABELS, and
+// the ground alternated green/brown across resets, because which of the two
+// writes to an aliased entry landed last depended on timing.
+//
+// The tilemap fixture never showed it: the copy engine fills only the low 4,096
+// and nothing writes above them, which is why that image renders pixel-perfectly
+// while a game does not. Study R53.
+//
+// The renderer still reads the low half -- m2_tile_mixer's `mixed` is 12 bits --
+// and that is not changed here. This stops the corruption; it does not claim the
+// tilemap can reach the upper half.
+(* ramstyle = "M10K" *) logic [15:0] pal  [8192];
 
 wire [14:0] tram_addr;
 wire [11:0] pal_addr;
 logic [15:0] tram_data, pal_data;
 always_ff @(posedge clk_vid) begin
 	tram_data <= tram[tram_addr];
-	pal_data  <= pal[pal_addr];
+	pal_data  <= pal[{1'b0, pal_addr}];
 end
 
 // PORT B, on clk_sys: the copy engine and the CPU share it. Port A above is
@@ -864,9 +882,9 @@ wire [15:0] ocb_din     = (cp_tram_we | cp_pal_we) ? cp_wr_data : cpu_oc_din;
 
 always_ff @(posedge clk_sys) begin
 	cpu_tram_q <= tram[ocb_addr];
-	cpu_pal_q  <= pal[ocb_addr[11:0]];
+	cpu_pal_q  <= pal[ocb_addr[12:0]];
 	if (ocb_tram_we) tram[ocb_addr]      <= ocb_din;
-	if (ocb_pal_we)  pal[ocb_addr[11:0]] <= ocb_din;
+	if (ocb_pal_we)  pal[ocb_addr[12:0]] <= ocb_din;
 end
 
 // WHAT ACTUALLY LANDED IN M10K. tram[1] is 0020 and pal[1] is FFFF in the
