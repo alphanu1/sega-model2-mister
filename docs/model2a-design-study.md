@@ -3517,3 +3517,48 @@ be two signals.** Where a value is consumed in two places and must match, derive
 it once. The alternative is a correctness property maintained by memory, and
 this one survived a clock-domain rewrite, a cache rewrite and four builds
 without anybody noticing it was there.
+
+---
+
+**R52 — R47 named four readers and there were five; the sweep was the fifth, and
+it is the one the study tells you to trust.** With R51 in place Daytona renders
+its horizon — sky and ground as two solid tile layers — and its overlay is
+legible. The port-4 sweep, folded over region 0, read **`006393E3`** against
+`tools/rom_csum.py`'s **`25E723`**, on a board whose i960 was at that moment
+executing **106 million instructions out of that very region** and whose row 3
+read `015CFFFF`, exactly the tool's `last word`. Both cannot be true of the
+memory. The memory was right.
+
+The sweep began at `3'd0: if (rom_loaded)`. R47 gated the copy engine, the ROM
+readback and `cpu_rst_n` on `cal_done` and enumerated the readers as "ports 0
+to 3" — the sweep sits on port 4 and was not in the list. A sweep runs ~66 ms
+and the calibration completes part way through it, so the fold mixed words
+captured at CL+0 with words captured at CL+2 and produced a total that matched
+nothing and never could.
+
+*A wrong instrument is worse than none*, and this is the second time in three
+findings that the instrument rather than the machine was at fault — R48 was a
+legend asserting the wrong expected value. Here the sweep is specifically what
+R38 says to compare ROM contents against. Anyone following that advice on this
+build would have concluded the image was corrupt and gone looking for a loader
+bug that does not exist.
+
+*Now gated, and the enumeration is written down so the next reader is checked
+against a list rather than a memory:*
+
+| port | requester | waits for |
+|---|---|---|
+| 0 | ROM readback | `cal_done` |
+| 1 | i960 bridge | `cpu_rst_n`, which includes `cal_done` |
+| 2 | copy engine / self-test | `cal_done` / **is** the calibration |
+| 3 | character fetch | `m2_video` reset, now `cp_done & cal_done` |
+| 4 | region sweep | `cal_done` |
+
+Port 3 was self-correcting — live re-reads rather than a latched copy — and was
+gated anyway, because "it fixes itself" is not a reason to leave a reader
+running ahead of the thing that tells it where the data is.
+
+*The rule:* **a fix that turns on an enumeration must write the enumeration
+down.** R47 was correct about every reader it listed and the list was short by
+one, which no test could catch because the missing item was a diagnostic and
+diagnostics have no oracle of their own.

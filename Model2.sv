@@ -1412,7 +1412,19 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 			sw_req   <= 1'b0;
 			sw_done  <= 1'b0;
 		end else case (sw_state)
-			3'd0: if (rom_loaded) begin
+			// cal_done, NOT rom_loaded alone. R47 gated the copy engine, the ROM
+			// readback and the CPU on the calibration and MISSED THIS ONE: the
+			// sweep is a fifth reader, on port 4, and it started as soon as the
+			// image landed. A sweep is ~66 ms and the calibration finishes part
+			// way through it, so the fold mixed words captured at CL+0 with words
+			// captured at CL+2 and produced a total that matched nothing.
+			//
+			// That is how it was caught: region 0 of Daytona folded to 006393E3
+			// against tools/rom_csum.py's 25E723, on a board whose CPU was
+			// executing 106 million instructions out of that very region. The
+			// memory was right and the instrument was wrong -- which is worse
+			// than no instrument, because this one is what R38 says to trust.
+			3'd0: if (rom_loaded && cal_done) begin
 				sw_addr  <= SDR_AW'({sw_sel_i, 20'd0});
 				sw_sel   <= sw_sel_i;
 				sw_acc   <= 24'd0;
@@ -1503,7 +1515,12 @@ wire [7:0] tile_r, tile_g, tile_b;
 wire       tile_hs, tile_vs, tile_hb, tile_vb;
 
 m2_video u_tilemap (
-	.clk(clk_vid), .ce_pix(ce_pix), .rst_n(mem_rst_n & cp_done),
+		// cal_done too: on a GAME image game_image short-circuits cp_done without
+	// reading anything, so the character fetch on port 3 would otherwise issue
+	// at CL+0 until the calibration caught up. Those are live re-reads rather
+	// than a latched copy, so it corrected itself -- but it is the last reader
+	// that was not waiting, and "it fixes itself" is not a reason to leave one.
+	.clk(clk_vid), .ce_pix(ce_pix), .rst_n(mem_rst_n & cp_done & cal_done),
 	.tile_mask(14'h3FFF),
 	// Colour translation table not loaded yet: it powers up holding pal5bit,
 	// which is exactly what this rendered before the table existed, so the
