@@ -1,6 +1,71 @@
 # Handoff
 
-**Updated:** 2026-08-20, after the I/O board session. `make test` is green.
+**Updated:** 2026-08-27, after the capture-ordering session. `make test` is
+green at 24 PASS.
+
+---
+
+## The red screen was an ordering bug, not a colour bug (study R47)
+
+The 2D tilemap test rendered **flat red** on the 96 MHz build. Daytona was
+unaffected, which is itself the clue.
+
+**Do not read "red screen" as "colour bug".** That reflex cost the first hour.
+What localised it was rendering the *good* case: `test_m2_video_frame` against
+the real `m2tiles` dump returns **2,054 non-black pixels of 190,464 in x
+161–405, y 41–174, white and green** — MAME's frame, pixel for pixel. That
+turned "something in this 2,000-line path" into "nothing in this path".
+
+**The mechanism.** `rd_lat_sel` follows `cal_sel` while `!cal_done`, and
+`cal_sel` resets to `3'd0`. The self-test that performs the calibration waited
+on `cp_done` — added for a real contention bug, and correct about the contention
+but backwards about the direction. So:
+
+```
+rom_loaded -> copy engine (CL+0) -> cp_done -> calibrate -> cal_done
+```
+
+The board's own sweep says CL+0 does not work: **word 20 reads `00001204`**,
+`cal_mask = 0b000100` — only CL+2 passes. The copy engine latches tile RAM, the
+palette and colorxlat into M10K **once**, so it did not merely read garbage, it
+*kept* it; calibrating afterwards cannot repair a copy already made. Char RAM is
+512 KB, too big to copy, so it is fetched live — after calibration, hence
+correctly. Real character pixels through a garbage tilemap and palette is
+exactly a screen of one flat wrong colour.
+
+**Why Daytona hid it.** `game_image` short-circuits `cp_done` without reading
+anything, so on a game image the copy engine is a no-op. The tilemap test was
+the only thing exercising that path.
+
+**It was not harmless on Daytona.** Two other readers were unguarded, and both
+had already produced bench symptoms misread as marginal SDRAM:
+
+- The **ROM readback** gated on `cp_done`, which `game_image` asserts early — so
+  it read at CL+0. That is the *"row 2 reads `FFFFFFFF`, then `00000860` after
+  three resets"* seen repeatedly.
+- The **i960** came out of reset on `rom_loaded`. Its first act is four reads —
+  SAT, PRCB, IP, initial FP — issued before calibration. The intermittent PRCB
+  and IP on the overlay were this.
+
+**The fix.** The self-test waits only on `rom_loaded`; the copy engine, the ROM
+readback and `cpu_rst_n` all wait on `cal_done`. `rom_loaded -> calibrate ->
+copy -> readback` has no cycle. `ST_BASE` is word `0x1F00000` (~62 MB), clear of
+both images, so the self-test is safe to run first.
+
+**The rule to carry:** *a calibration must complete before anything it
+calibrates is trusted, and a value latched once must never be captured on an
+uncalibrated path.* When a diagnostic and the thing it measures are ordered
+against each other, the measurement goes first.
+
+**Not a bug:** Quartus warns `10027 index expression is not wide enough` at
+`m2_video.sv:717–718`. It constant-folds the leading `2'd0`/`2'd1` and notes
+those indices cannot span all 96 entries. Line 719 (`{2'd2, x_b5}`, reaching
+element 95) does not warn. Intentional partitioning, not truncation.
+
+**The fixture.** `m2tiles.zip` md5 `aa8f3175bc61c2fd65017417d4bca26f`, 655,360
+bytes, goes in `/media/fat/games/mame/`. Layout is in the MRA and verified:
+tile `0x10000`, palette `0x4000`, char `0x80000`, colorxlat `0xC000`. All three
+colorxlat channels carry identical valid ramps 0→255, so `xlat_ok` passes.
 
 ---
 
