@@ -776,7 +776,25 @@ release: check_mra
 	 fi
 	@ws=$$(grep -A20 '; Setup Summary' output_files/Model2.sta.rpt 2>/dev/null \
 	       | grep -oE '; +-?[0-9]+\.[0-9]+ +;' | tr -d '; ' | sort -g | head -1); \
-	 echo "  timing closed, worst-case setup slack $${ws:-unknown} ns"
+	 echo "  timing closed, worst-case setup slack $${ws:-unknown} ns (ALL clocks)"
+	@# AND WHOSE IT IS. The line above is the global minimum, and on this board
+	@# that is almost always pll_hdmi -- MiSTer framework infrastructure that no
+	@# change to this core touches. Quoting it as "our slack" reads a healthy
+	@# build as a marginal one: 0.074 ns was reported for a build whose tightest
+	@# core clock was +2.350. The Makefile already warns, three targets up, that
+	@# the summary gives slack but not endpoints and that Model 1's M0 attributed
+	@# a miss to the wrong one. This is the same mistake with the sign reversed --
+	@# a number that is real, and about something else.
+	@#
+	@# The refusal above still covers EVERY clock, framework included: a negative
+	@# slack anywhere is still a failed build. This only says which is ours.
+	@core=$$(grep -A20 '; Setup Summary' output_files/Model2.sta.rpt 2>/dev/null \
+	        | grep 'emu|pll|pll_inst' \
+	        | awk -F';' '{s=$$3; n=$$2; gsub(/ /,"",s); \
+	                      sub(/^ +/,"",n); sub(/ +$$/,"",n); \
+	                      sub(/.*general/,"general",n); sub(/\..*/,"",n); \
+	                      print s" "n}' | sort -g | head -1); \
+	 echo "  this core's tightest clock:     $${core:-unknown} ns"
 
 	@rm -rf $(RELEASE)
 	@mkdir -p $(RELEASE)/_Arcade/cores
