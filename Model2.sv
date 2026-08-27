@@ -96,6 +96,11 @@ localparam CONF_STR = {
 	// 0x100000 words; tools/rom_csum.py --region N folds the same span of the
 	// image. Changing this restarts the sweep, so it costs a menu click.
 	"O[13:9],Sweep region (2MB),0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31;",
+	// ROW 2'S ADDRESS, SELECTABLE. The menu's missing glyphs are the only ones
+	// whose character data lives in GAME_CHAR's first SDRAM row; these presets
+	// read the exact words (sim-verified expected values in the comment at the
+	// readback) so the board can say whether that data is THERE and READABLE.
+	"O[16:14],Probe,bootIP,chr 3,chr 1,chr #,chr A,row2,bndry,chr0;",
 	"-;",
 	"R[0],Reset and close OSD;",
 	"v,0;",
@@ -468,7 +473,29 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 			// capture is calibrated and this read came back at CL+0. That is the
 			// "row 2 reads FFFFFFFF, then 00000860 after three resets" the bench
 			// saw -- it was never marginal SDRAM, it was an uncalibrated read.
-			2'd0: if (rom_loaded && cal_done) begin rb_addr <= SDR_AW'(6); rb_req <= 1'b1; rb_state <= 2'd1; end
+			// PRESET TABLE for the OSD probe. Expected values, computed from the
+			// simulation's own CPU-written char RAM (study R59 when it lands):
+			//   0 bootIP  word 0x0000006  00000860
+			//   1 chr 3   word 0x1690330  ff0000ff   <- the missing '3'
+			//   2 chr 1   word 0x1690310  ff00000f   <- the missing '1'
+			//   3 chr #   word 0x1690230  0f0000f0   same SDRAM row as digits
+			//   4 chr A   word 0x1690410  ff0000ff   next row; renders on board
+			//   5 row2    word 0x1690400  11ff0f11
+			//   6 bndry   word 0x16903fe  f000000f   last dword of the row
+			//   7 chr0    word 0x1690000  00000000
+			2'd0: if (rom_loaded && cal_done) begin
+				case (status[16:14])
+					3'd0: rb_addr <= SDR_AW'(32'h0000006);
+					3'd1: rb_addr <= SDR_AW'(32'h1690330);
+					3'd2: rb_addr <= SDR_AW'(32'h1690310);
+					3'd3: rb_addr <= SDR_AW'(32'h1690230);
+					3'd4: rb_addr <= SDR_AW'(32'h1690410);
+					3'd5: rb_addr <= SDR_AW'(32'h1690400);
+					3'd6: rb_addr <= SDR_AW'(32'h16903fe);
+					default: rb_addr <= SDR_AW'(32'h1690000);
+				endcase
+				rb_req <= 1'b1; rb_state <= 2'd1;
+			end
 			// ONE ACCESS PER HANDSHAKE, not per cycle of the request: it drops on
 			// ack. Harmless against RAM, and the habit is the point — the Model 1
 			// TGP popped every FIFO word twice by acting on the level instead.

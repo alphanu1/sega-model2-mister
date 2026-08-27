@@ -50,7 +50,7 @@ static bool load_file(const std::string &p, std::vector<uint8_t> &out) {
   return got == size_t(n);
 }
 
-static int g_e1n = 0, g_e0n = 0, g_win = 0;
+static int g_e1n = 0, g_e0n = 0, g_win = 0, g_bk_n = 0;
 static const int FW = 496, FH = 384;
 static std::vector<uint8_t> g_frame(size_t(FW)*FH*3, 0);
 static int g_px = 0, g_py = 0, g_hb_p = 0, g_vb_p = 0;
@@ -563,6 +563,19 @@ int main(int argc, char **argv) {
     // that this core routes to a stub -- bufferram at 0x00900000 (128 KB),
     // CPU control at 0x00e00000, the comm share at 0x01a00000 -- and the
     // colorxlat region is 48 KB where only 96 entries are stored.
+    // BACKUP SRAM SETTINGS WINDOW. The menu's missing digits are the credit
+    // and coin settings, which live here; the byte-walking loop at ip 0x5250
+    // reads them out. Log every access to the window so our contents can be
+    // diffed against MAME's backup1 at the same point in the program.
+    if (d->obs_bus_ack && !ack_prev &&
+        d->obs_bus_addr >= 0x01d001f0u && d->obs_bus_addr < 0x01d00260u &&
+        g_bk_n < 80) {
+      std::printf("      BK %s %08x be=%x %08x  (insn %u ip %08x)\n",
+                  d->obs_bus_we ? "WR" : "rd", d->obs_bus_addr, d->obs_bus_be,
+                  d->obs_bus_we ? d->obs_bus_wdata : d->obs_bus_rdata,
+                  (unsigned)d->dbg_acc, (unsigned)d->dbg_ip);
+      ++g_bk_n;
+    }
     if (d->obs_bus_ack && !ack_prev && !d->obs_bus_we) {
       const uint32_t a = d->obs_bus_addr;
       const bool backed =
