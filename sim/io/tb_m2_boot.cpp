@@ -51,6 +51,7 @@ static bool load_file(const std::string &p, std::vector<uint8_t> &out) {
 }
 
 static int g_e1n = 0, g_e0n = 0, g_win = 0;
+static std::map<uint32_t,uint64_t> g_rd_unbacked;
 static uint64_t g_tw_in_vbl = 0, g_tw_out_vbl = 0, g_ss_in = 0, g_ss_out = 0;
 static uint16_t g_tram[32768];
 static bool     g_tram_seen[32768];
@@ -499,6 +500,27 @@ int main(int argc, char **argv) {
       g_xlat[d->obs_xlat_addr]      = d->obs_xlat_din;
       g_xlat_seen[d->obs_xlat_addr] = true;
     }
+    // READS THAT COME BACK AS ZERO BECAUSE NOTHING BACKS THEM. Writes to an
+    // unimplemented region are merely lost; reads are worse, because the game
+    // acts on the value. MAME declares several regions here as plain .ram()
+    // that this core routes to a stub -- bufferram at 0x00900000 (128 KB),
+    // CPU control at 0x00e00000, the comm share at 0x01a00000 -- and the
+    // colorxlat region is 48 KB where only 96 entries are stored.
+    if (d->obs_bus_ack && !ack_prev && !d->obs_bus_we) {
+      const uint32_t a = d->obs_bus_addr;
+      const bool backed =
+           (a <  0x00200000u)                            // program ROM
+        || (a >= 0x00500000u && a <  0x00600000u)        // work RAM
+        || (a >= 0x01000000u && a <  0x01020000u)        // tile RAM
+        || (a >= 0x01080000u && a <  0x01100000u)        // char RAM
+        || (a >= 0x01800000u && a <  0x01804000u)        // palette
+        || (a >= 0x01c00000u && a <  0x01c01000u)        // I/O board
+        || (a >= 0x01d00000u && a <  0x01d04000u)        // backup SRAM
+        || (a >= 0x02000000u && a <  0x04000000u)        // main_data
+        || (a >= 0x06000000u && a <  0x07000000u)        // main_data alias
+        || (a >= 0x00220000u && a <  0x00240000u);       // ROM mirror
+      if (!backed) g_rd_unbacked[a & 0xffff0000u]++;
+    }
     if (d->obs_bus_ack && !ack_prev && d->obs_bus_we) {
       const uint32_t a = d->obs_bus_addr;
       const bool claimed =
@@ -668,6 +690,15 @@ int main(int argc, char **argv) {
   if (rf_bad_first)
     std::printf("  FIRST frame access outside work RAM: addr %08x at instruction %u,"
                 " ip %08x, pfp %08x\n", rf_bad_first, rf_bad_at, rf_bad_ip, rf_bad_pfp);
+  if (!g_rd_unbacked.empty()) {
+    std::printf("  READS from regions nothing backs (returned 0), by 64 KB:\n");
+    std::vector<std::pair<uint64_t,uint32_t>> v;
+    for (auto &kv : g_rd_unbacked) v.push_back({kv.second, kv.first});
+    std::sort(v.rbegin(), v.rend());
+    for (size_t i = 0; i < v.size() && i < 14; ++i)
+      std::printf("    %08x  %llu reads\n", v[i].second,
+                  (unsigned long long)v[i].first);
+  }
   if (!io_unclaimed.empty()) {
     std::printf("  writes to addresses nothing claims, by 256-byte page:\n");
     std::vector<std::pair<uint64_t,uint32_t>> v;

@@ -140,20 +140,27 @@ module m2_boot_harness #(
   // Powering up at zero, which is what an M10K does; the standing 0xFFFF rule
   // is about UNWRITTEN SDRAM, not about on-chip arrays.
   (* ramstyle = "M10K" *) logic [15:0] tram [32768];
-  (* ramstyle = "M10K" *) logic [15:0] pal  [4096];
+  // 8192, MATCHING Model2.sv. This was 4096 while the core was 8192, so the
+  // harness kept the aliasing R53 fixed: writes above entry 4095 wrapped onto
+  // the low half, and the CPU READ THAT BACK through oc_pal_q. The dumps looked
+  // clean because the testbench shadows the write STREAM at the full 13-bit
+  // address rather than this array, so the divergence was invisible in every
+  // result it produced. A harness that does not match the core is a statement
+  // about a different machine.
+  (* ramstyle = "M10K" *) logic [15:0] pal  [8192];
   logic [15:0] oc_tram_q, oc_pal_q;
 
   always_ff @(posedge clk_mem) begin
     if (oc_tram_we) tram[oc_addr]        <= oc_din;
-    if (oc_pal_we)  pal[oc_addr[11:0]]   <= oc_din;
+    if (oc_pal_we)  pal[oc_addr[12:0]]   <= oc_din;
     oc_tram_q <= tram[oc_addr];
-    oc_pal_q  <= pal[oc_addr[11:0]];
+    oc_pal_q  <= pal[oc_addr[12:0]];
   end
 
   // A second read port purely for the dump. Costs a duplicated array in
   // synthesis and nothing here, because this module is never synthesised.
   assign dump_tram = tram[dump_addr];
-  assign dump_pal  = pal[dump_addr[11:0]];
+  assign dump_pal  = pal[dump_addr[12:0]];
 
   logic        oc_tram_we, oc_pal_we, oc_xlat_we;
   logic [14:0] oc_addr;
