@@ -822,6 +822,29 @@ end
 // why the copy engine and the bridge are muxed onto one port rather than given
 // one each.
 logic [15:0] cpu_tram_q, cpu_pal_q;
+
+// XLAT WRITES, COUNTED PER CHANNEL. Daytona's test menu renders in green only,
+// where the tilemap fixture renders white labels and green values correctly on
+// the same hardware. White is (31,31,31): if the translation table's R and B
+// map to zero and G does not, white comes out green -- and so does green, so
+// every colour on the screen collapses to the one channel that survived.
+//
+// The fixture's table is loaded by the COPY ENGINE and is verified correct. On a
+// game image the CPU writes it instead, through m2_cpu_bridge's oc_xlat_* path,
+// and that path is the one nothing has ever measured. cpu_xlat_addr_b is
+// {channel, entry}, so bits [6:5] name the channel and 32 writes to each is a
+// complete table.
+logic [7:0] xlat_ch_cnt [3];
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+	if (!mem_rst_n) begin
+		xlat_ch_cnt[0] <= 8'd0; xlat_ch_cnt[1] <= 8'd0; xlat_ch_cnt[2] <= 8'd0;
+	end else if (cpu_xlat_we_b && (cpu_xlat_addr_b[6:5] != 2'd3)) begin
+		// Saturating: a count that wraps reads as a small number and says the
+		// opposite of what happened.
+		if (!(&xlat_ch_cnt[cpu_xlat_addr_b[6:5]]))
+			xlat_ch_cnt[cpu_xlat_addr_b[6:5]] <= xlat_ch_cnt[cpu_xlat_addr_b[6:5]] + 8'd1;
+	end
+end
 logic  [1:0] pb_state;
 logic [15:0] pb_tram, pb_pal;
 // ONE always_ff, one port. The copy engine wins when it is running, which it
@@ -1695,8 +1718,19 @@ m2_diag #(.NWORDS(23)) u_diag
 	//
 	// 00001?3F would mean every depth works; 00001?00 means none does, and that
 	// is a result about the interface rather than a range that was too narrow.
-	.words({ {pb_tram, pb_pal},                                 // 22 the M10K copy: want 0020FFFF
-	         {8'd0, vid_layer_have[1], vid_layer_have[0]},      // 21 layer words: want 00000310
+	.words({ // 22 XLAT WRITES PER CHANNEL: R low byte, then G, then B. A complete
+	         // table is 32 each -- 00202020. A zero byte names the channel that
+	         // never arrived. Replaces the M10K copy probe, which did its job
+	         // (it proved the copy sound while the renderer starved, R49) and
+	         // reads zero on a game image by design.
+	         {8'd0, xlat_ch_cnt[2], xlat_ch_cnt[1], xlat_ch_cnt[0]},
+	         // 21 ALL FOUR LAYERS, top 8 bits of each. The first version packed
+	         // only layers 0 and 1 and read 00000000 on a board visibly drawing
+	         // Daytona's sky and ground: the fixture uses layer 0 and Daytona
+	         // does not. An instrument covering half the cases reports a fault
+	         // when it means "not looking there". Fixture reads 00000031.
+	         {vid_layer_have[3][11:4], vid_layer_have[2][11:4],
+	          vid_layer_have[1][11:4], vid_layer_have[0][11:4]},
 	         {19'd0, cal_done, 1'b0, cal_best, 2'd0, cal_mask},  // 20 capture sweep
 	         io_last_data,                              // 19 last I/O word returned
 	         io_last_addr,                              // 18 last I/O address presented
