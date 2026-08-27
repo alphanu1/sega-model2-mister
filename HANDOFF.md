@@ -4,7 +4,21 @@
 
 ---
 
-## READ THIS FIRST: the SDRAM interface is unconstrained, and it is blocking
+## RESOLVED: the SDRAM interface is now constrained (R57/R58)
+
+The section below is kept as history. As of `e3b29916`: the interface is fully
+described in `Model2.sdc` (generated clock on the SDRAM_CLK pin, input/output
+delays, multicycle pairs matching the calibrated capture), closes with margin
+(reads +1.9, outputs +6.7), and BOTH former killer edits -- the ldr_top sweep
+bound and the CDC net-delay/skew constraints -- now coexist on it, verified
+booting on the board with row 20 unchanged at 00001204. Region 21 reads
+00DDC2C0, matching tools/rom_csum.py exactly: **the full 43.62 MB image is
+verified end to end.** Three Quartus 17.0 quirks are the price, documented in
+the SDC and R58: the quartus_map fence, the fitter's crash-on-exit (run
+quartus_sta and quartus_asm standalone, every build), and grep-able honesty
+about what the multicycle exceptions mean.
+
+## HISTORY: the SDRAM interface was unconstrained, and it was blocking
 
 **The board is on `d3335ae0`, which works. Do not assume a new build will.**
 
