@@ -1371,8 +1371,10 @@ m2_backup u_backup (
 	.be(cpu_io_be),
 	.wdata(cpu_io_wdata),
 	.rdata(bak_rdata),
+	.dbg_word(12'd5), .dbg_q(bak_dbg_q),
 	.dbg_w0(bak_w0), .dbg_writes(bak_writes)
 );
+wire [31:0] bak_dbg_q;
 
 m2_ioboard #(
 	// RESCALED TO clk_sys. These are measured in FRAMES -- status at 7 and
@@ -1833,7 +1835,10 @@ m2_diag #(.NWORDS(24)) u_diag
 	//
 	// 00001?3F would mean every depth works; 00001?00 means none does, and that
 	// is a result about the interface rather than a range that was too narrow.
-	.words({ {16'd0, tp_q},                             // 23 TRAM cell probe
+	.words({ // 23 TRAM cell probe -- except Probe=chr0, which shows the backup
+	         // SRAM dword at byte 0x14: the settings the digits are printed
+	         // from. Sim reads 00030300 there and prints '3'.
+	         (status[16:14] == 3'd7) ? bak_dbg_q : {16'd0, tp_q},
 	         // 22 THE LAST CHARACTER FETCH, verbatim. FFFFFFFF means the fetch is
 	         // reading memory nobody ever wrote -- one flat colour per palette
 	         // bank, which is the board's sky and ground. Anything varied means

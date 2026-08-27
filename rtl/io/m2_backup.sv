@@ -48,6 +48,8 @@ module m2_backup (
   input  logic [11:0] word,       // dword index, address[13:2]
   input  logic  [3:0] be,
   input  logic [31:0] wdata,
+  input  logic [11:0] dbg_word,
+  output logic [31:0] dbg_q,
   output logic [31:0] rdata,
 
   // WHAT THE COPY ACTUALLY LANDED. The i960 copies the I/O board's identity
@@ -109,5 +111,18 @@ module m2_backup (
   end
 
   assign rdata = {q3, q2, q1, q0};
+
+  // DEBUG READ PORT, fixed at one word, for the overlay probe. The game's
+  // settings splash prints its credit digits from the dword at byte 0x14 --
+  // word 5 -- (study R59): the simulation reads 00030300 there and prints
+  // '3'; the board prints a green space, so what the board's copy holds at
+  // draw time is the question this answers. Costs a second read port on each
+  // lane, which Quartus serves by duplication: ~4 M10K, debug-only.
+  logic [7:0] dq0, dq1, dq2, dq3;
+  always_ff @(posedge clk) begin
+    dq0 <= b0[dbg_word]; dq1 <= b1[dbg_word];
+    dq2 <= b2[dbg_word]; dq3 <= b3[dbg_word];
+  end
+  assign dbg_q = {dq3, dq2, dq1, dq0};
 
 endmodule

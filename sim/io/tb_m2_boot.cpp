@@ -50,7 +50,7 @@ static bool load_file(const std::string &p, std::vector<uint8_t> &out) {
   return got == size_t(n);
 }
 
-static int g_e1n = 0, g_e0n = 0, g_win = 0, g_bk_n = 0, g_c3_n = 0;
+static int g_e1n = 0, g_e0n = 0, g_win = 0, g_bk_n = 0, g_c3_n = 0, g_src_n = 0;
 static const int FW = 496, FH = 384;
 static std::vector<uint8_t> g_frame(size_t(FW)*FH*3, 0);
 static int g_px = 0, g_py = 0, g_hb_p = 0, g_vb_p = 0;
@@ -511,6 +511,17 @@ int main(int argc, char **argv) {
     //
     // That is the last standing explanation for the missing 3 and 1, and this
     // is the measurement that confirms or kills it.
+    // WHAT THE DRAW READS BEFORE WRITING THE '3'. The board draws green
+    // spaces where the sim draws the digit, so the game printed a blank
+    // value there: the INPUT to the print differs. This window catches the
+    // loads feeding the value just before the tram write at insn 1769120.
+    if (d->dbg_acc >= 1768950 && d->dbg_acc <= 1769125 &&
+        d->obs_bus_ack && !ack_prev && !d->obs_bus_we && g_src_n < 60) {
+      std::printf("      SRC rd %08x -> %08x  (insn %u ip %08x)\n",
+                  d->obs_bus_addr, d->obs_bus_rdata,
+                  (unsigned)d->dbg_acc, (unsigned)d->dbg_ip);
+      ++g_src_n;
+    }
     // THE '3' CELL, WORD 1129, AND ITS NEIGHBOUR THE 'C' CELL, 1130. Every
     // write, with value and instruction: the digit renders in this harness and
     // not on the board, and the write SEQUENCE is the last place the two can

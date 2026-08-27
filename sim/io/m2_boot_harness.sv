@@ -331,7 +331,8 @@ module m2_boot_harness #(
   m2_backup u_backup (
     .clk(clk_mem), .sel(bak_sel), .we(cpu_io_we),
     .word(cpu_io_addr[13:2]), .be(cpu_io_be), .wdata(cpu_io_wdata),
-    .rdata(bak_rdata), .dbg_w0(bak_w0), .dbg_writes(bak_writes)
+    .rdata(bak_rdata),
+    .dbg_word(12'd5), .dbg_q(), .dbg_w0(bak_w0), .dbg_writes(bak_writes)
   );
 
   // The I/O read mux, copied from Model2.sv. If these two ever disagree the
