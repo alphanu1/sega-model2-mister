@@ -77,3 +77,47 @@ set_clock_groups -asynchronous \
 # this point reports a state that is not final. `make release` checks it against
 # the finished STA report instead.
 
+
+# ---- THE CHARACTER-FETCH CROSSING, WHICH THE CLOCK GROUPS LEAVE UNCONSTRAINED
+#
+# m2_char_cdc carries the character fetch between clk_vid (32 MHz) and clk_sys
+# (48 MHz). Cutting those domains above is right for ANALYSIS -- they are
+# asynchronous and a setup check between them is meaningless -- but it also
+# means the fitter may route the crossing as long as it likes and STA still
+# reports success. That is this file's own header warning, in a second place,
+# and it bit: a build whose only source change was the region sweep, with
+# identical resources and closed timing, rendered a broken picture whose colours
+# changed on every reset. A rebuild produced a BYTE-IDENTICAL core, so it was
+# not fit-to-fit luck -- the placement moved and this unconstrained crossing
+# moved with it.
+#
+# Two of the four crossings are BUSES sampled without synchronisers: v_addr (18
+# bits) into s_addr_r, and s_hold (32 bits) out to the renderer. Both are stable
+# by protocol when read, but "stable" is a span of nanoseconds and nothing was
+# holding the routing inside it. Changing colours on each reset is what that
+# looks like.
+#
+# set_net_delay is the tool: unlike set_max_delay it applies even between
+# asynchronous clock groups. set_max_skew keeps each synchroniser's bits
+# together.
+#
+# AN EMPTY COLLECTION IS THE TRAP THIS FILE EXISTS FOR, so both are checked.
+set cdc_regs [get_registers -nowarn {*u_char_cdc|*}]
+set vid_regs [get_registers -nowarn {*u_tilemap|*}]
+
+if {[llength $cdc_regs] == 0} {
+    post_message -type critical_warning \
+      "Model2.sdc: no m2_char_cdc registers matched -- the character-fetch \
+       crossing between clk_vid and clk_sys is UNCONSTRAINED, and a placement \
+       change can break the picture without STA noticing. See \
+       rtl/mem/m2_char_cdc.sv and study R49."
+} else {
+    set_net_delay -max 5 -from $cdc_regs -to $cdc_regs
+    set_max_skew -to [get_registers -nowarn {*u_char_cdc|req_sync[*]}]  2
+    set_max_skew -to [get_registers -nowarn {*u_char_cdc|done_sync[*]}] 2
+    if {[llength $vid_regs] > 0} {
+        # s_hold out to the renderer, and char_req/char_addr back in.
+        set_net_delay -max 5 -from $cdc_regs -to $vid_regs
+        set_net_delay -max 5 -from $vid_regs -to $cdc_regs
+    }
+}
