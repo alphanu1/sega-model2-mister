@@ -318,7 +318,7 @@ always_comb begin
 	//
 	// The self-test also uses port 2 and waits for cp_done, so they never overlap.
 	p_req[3]  = cc_req;
-	p_addr[3] = CHAR_BASE + SDR_AW'(cc_addr);
+	p_addr[3] = char_base + SDR_AW'(cc_addr);
 	// PORT 0 IS THE CPU'S, and it is the single-word port on purpose: the
 	// bridge issues one 16-bit access at a time, and ports 1-3 burst four.
 	p_req[1]  = cpu_sd_req;
@@ -786,6 +786,25 @@ localparam logic [SDR_AW:1] GAME_WORK  = SDR_AW'(32'h1600000);   // 1 MB
 localparam logic [SDR_AW:1] GAME_BOARD = SDR_AW'(32'h1680000);   // 128 KB
 localparam logic [SDR_AW:1] GAME_CHAR  = SDR_AW'(32'h1690000);   // 512 KB
 
+// WHERE CHARACTER RAM LIVES, AS ONE SIGNAL, because two things that must agree
+// should not be two constants (study R51).
+//
+// They were. The CPU bridge was given GAME_CHAR -- word 0x1690000 -- and wrote
+// Daytona's characters there, while the renderer's fetch port read CHAR_BASE,
+// word 0x0A000, unconditionally. On the tilemap-test image those are the same
+// place, because the fixture puts char RAM at 0x14000 bytes and no CPU runs. On
+// a GAME image word 0x0A000 is program ROM, so the renderer drew Daytona's text
+// out of i960 instructions -- the same "program ROM rendered as tiles" this
+// board has shown once before, for a different reason.
+//
+// That is why R49's crossing and R50's cache fixed the tilemap test outright
+// and left Daytona UNCHANGED: its characters were never late, they were never
+// being read from the right address at all.
+//
+// Both consumers now take this wire. The failure mode required two constants to
+// be kept in step by hand, and this removes the hand.
+wire [SDR_AW:1] char_base = game_image ? GAME_CHAR : CHAR_BASE;
+
 (* ramstyle = "M10K" *) logic [15:0] tram [32768];
 (* ramstyle = "M10K" *) logic [15:0] pal  [4096];
 
@@ -1090,7 +1109,7 @@ m2_cpu_bridge #(.AW(SDR_AW), .BOARD_2A(1'b0)) u_cpu_bridge (
 
 	.clk_mem(clk_sys), .rst_n_mem(cpu_rst_n),
 	.base_prog(GAME_PROG), .base_data(GAME_DATA), .base_work(GAME_WORK),
-	.base_board(GAME_BOARD), .base_char(GAME_CHAR),
+	.base_board(GAME_BOARD), .base_char(char_base),
 
 	.sd_req(cpu_sd_req), .sd_we(cpu_sd_we), .sd_addr(cpu_sd_addr),
 	.sd_din(cpu_sd_din), .sd_be(cpu_sd_be),

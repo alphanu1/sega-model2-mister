@@ -3469,3 +3469,51 @@ rather than carry it.
 *The rule:* **a percentage is an average, and an average is the wrong instrument
 for a budget that is per-line.** 4.5% occupancy and 36 blown lines are the same
 measurement described two ways, and only one of them names the bug.
+
+---
+
+**R51 — Daytona's characters were never late, they were being read from the
+wrong address.** R49 gave the character fetch a working clock crossing and R50
+cut its fetches to fit the line budget. Together they made the 2D tilemap test
+**pixel-perfect on hardware** — the first time this core has rendered a
+MAME-captured frame correctly on the device. Daytona was **unchanged**.
+
+*That word is the whole finding.* R50 was a bandwidth fix, and bandwidth fixes
+are graded: they move a picture partway. A game that does not move at all is not
+short of bandwidth. It is doing something else entirely, and the two symptoms had
+been assumed to share a cause because they shared a screen.
+
+*What it was.* Character RAM lives in SDRAM because 512 KB will not fit in M10K.
+Its base was written down **twice**:
+
+| consumer | base | source |
+|---|---|---|
+| CPU bridge write path | `GAME_CHAR`, word `0x1690000` | `.base_char(GAME_CHAR)` |
+| renderer fetch port | `CHAR_BASE`, word `0x0A000` | `p_addr[3] = CHAR_BASE + …` |
+
+Both apply the same 18-bit word offset, so on the tilemap-test image they agree:
+the fixture puts char RAM at byte `0x14000` = word `0x0A000`, and no CPU runs. On
+a **game** image they do not. Daytona's i960 writes its characters to
+`0x1690000` and the renderer reads `0x0A000`, which on a 43.5 MB game image is
+program ROM. The board was drawing Daytona's text out of i960 instructions —
+"program ROM rendered as tiles", which this project has recorded once before for
+an unrelated reason, so the symptom was not even new.
+
+*Why every instrument missed it.* `test_m2_boot` checks the CPU's char writes
+against MAME and they are 100% correct — it has no renderer.
+`test_m2_video_frame` renders correctly — it has no CPU and no SDRAM. Each half
+was verified against a different oracle and each half was right. **The defect
+lived only in the agreement between them**, and nothing tested that, because
+nothing instantiated both.
+
+*The fix* is not a second conditional. It is `wire char_base = game_image ?
+GAME_CHAR : CHAR_BASE`, taken by the bridge and the fetch port alike, so the two
+cannot drift. The old arrangement required two constants to be kept in step by
+hand and offered nothing that would complain when they were not.
+
+*The rule, which is this project's oldest one read backwards:* "**one signal must
+not mean two things**" has a converse — **two things that must agree should not
+be two signals.** Where a value is consumed in two places and must match, derive
+it once. The alternative is a correctness property maintained by memory, and
+this one survived a clock-domain rewrite, a cache rewrite and four builds
+without anybody noticing it was there.
