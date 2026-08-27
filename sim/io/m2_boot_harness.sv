@@ -44,8 +44,27 @@ module m2_boot_harness #(
 ) (
   input  logic        clk_cpu,
   input  logic        clk_mem,
+  // THE RENDERER'S CLOCK. Adding it is the whole point of this harness now:
+  // every isolated test passes and the board still misbehaves, so the one
+  // configuration never simulated -- the CPU writing the tilemap WHILE the
+  // renderer reads it, with character fetches crossing clk_vid/clk_sys through
+  // the real m2_char_cdc -- is where the fault has to be.
+  input  logic        clk_vid,
+  input  logic        ce_pix,
   input  logic        rst_n,
   input  logic  [3:0] irq,
+
+  // ---- the renderer's own SDRAM port, answered in C++ like the CPU's.
+  // m2_sdram gives the character fetch a separate port; modelling it as one
+  // shared with the bridge would invent contention the hardware does not have.
+  output logic        sd2_req,
+  output logic [AW:1] sd2_addr,
+  input  logic        sd2_ack,
+  input  logic [31:0] sd2_dout,
+
+  // ---- the picture
+  output logic  [7:0] vid_r, vid_g, vid_b,
+  output logic        vid_hb, vid_vb,
 
   // ---- the SDRAM port, answered in C++
   output logic        sd_req,
@@ -159,6 +178,47 @@ module m2_boot_harness #(
 
   // A second read port purely for the dump. Costs a duplicated array in
   // synthesis and nothing here, because this module is never synthesised.
+  // PORT A, the renderer's, on clk_vid and read-only -- exactly as Model2.sv
+  // wires it. This is the port that has never coexisted with a live CPU on
+  // port B in any simulation.
+  wire [14:0] tram_addr;
+  wire [11:0] pal_addr;
+  logic [15:0] tram_data, pal_data;
+  always_ff @(posedge clk_vid) begin
+    tram_data <= tram[tram_addr];
+    pal_data  <= pal[{1'b0, pal_addr}];
+  end
+
+  wire        char_req, char_ack;
+  wire [17:0] char_addr;
+  wire [31:0] char_data;
+  wire [17:0] cc_addr;
+
+  m2_char_cdc u_char_cdc (
+    .clk_vid(clk_vid), .vid_rst_n(rst_n),
+    .v_req(char_req), .v_addr(char_addr),
+    .v_ack(char_ack), .v_data(char_data),
+    .clk_sys(clk_mem), .sys_rst_n(rst_n),
+    .s_req(sd2_req), .s_addr(cc_addr),
+    .s_ack(sd2_ack), .s_data(sd2_dout)
+  );
+  // GAME_CHAR, the same base Model2.sv uses for a game image.
+  assign sd2_addr = AW'(32'h1690000) + AW'(cc_addr);
+
+  m2_video u_video (
+    .clk(clk_vid), .ce_pix(ce_pix), .rst_n(rst_n),
+    .tile_mask(14'h3FFF),
+    .xlat_we(oc_xlat_we), .xlat_addr(oc_xlat_addr), .xlat_din(oc_xlat_din),
+    .tram_addr(tram_addr), .tram_data(tram_data),
+    .char_req(char_req), .char_addr(char_addr),
+    .char_data(char_data), .char_ack(char_ack),
+    .pal_addr(pal_addr), .pal_data(pal_data),
+    .vid_r(vid_r), .vid_g(vid_g), .vid_b(vid_b),
+    .vid_hs(), .vid_vs(), .vid_hb(vid_hb), .vid_vb(vid_vb),
+    .vblank_irq(), .dbg_fetches(), .dbg_overruns(),
+    .dbg_layer_px(), .dbg_ctrl(), .dbg_layer_have()
+  );
+
   assign dump_tram = tram[dump_addr];
   assign dump_pal  = pal[dump_addr[12:0]];
 

@@ -51,6 +51,10 @@ static bool load_file(const std::string &p, std::vector<uint8_t> &out) {
 }
 
 static int g_e1n = 0, g_e0n = 0, g_win = 0;
+static const int FW = 496, FH = 384;
+static std::vector<uint8_t> g_frame(size_t(FW)*FH*3, 0);
+static int g_px = 0, g_py = 0, g_hb_p = 0, g_vb_p = 0;
+static uint64_t g_nonblack = 0, g_frames_done = 0;
 static std::map<uint32_t,uint64_t> g_rd_unbacked;
 static uint64_t g_tw_in_vbl = 0, g_tw_out_vbl = 0, g_ss_in = 0, g_ss_out = 0;
 static uint16_t g_tram[32768];
@@ -139,7 +143,8 @@ int main(int argc, char **argv) {
               lo.size(), hi.size(), md_ok);
 
   d = new Vm2_boot_harness;
-  d->clk_cpu = 0; d->clk_mem = 0; d->rst_n = 0; d->irq = 0;
+  d->clk_cpu = 0; d->clk_mem = 0; d->clk_vid = 0; d->ce_pix = 0;
+  d->sd2_ack = 0; d->sd2_dout = 0; d->rst_n = 0; d->irq = 0;
   d->sd_ack = 0; d->sd_dout = 0;
 
   // The SDRAM: one word per transaction into sd_dout[15:0], acknowledged for two
@@ -207,19 +212,71 @@ int main(int argc, char **argv) {
     if (ack_left > 0) --ack_left;
   };
 
-  // clk_mem is twice clk_cpu, as on the board: 48 and 24 MHz.
-  uint64_t mem_edges = 0;
-  auto tick = [&]() {
-    d->clk_mem = 0; d->eval();
-    if ((mem_edges & 1) == 0) d->clk_cpu = 0;
-    d->eval();
-    d->clk_mem = 1;
-    if ((mem_edges & 1) == 0) d->clk_cpu = 1;
-    d->eval();
-    mem_tick();
-    d->eval();
-    ++mem_edges;
+  // THE RENDERER'S SDRAM PORT. Separate from the CPU's, as m2_sdram gives it,
+  // so this does not invent contention the hardware does not have. Latency is
+  // settable because the board's is not constant.
+  int sd2_left = -1;
+  uint32_t sd2_data = 0;
+  const int sd2_lat = std::getenv("M2_CHAR_LAT")
+                    ? std::atoi(std::getenv("M2_CHAR_LAT")) : 6;
+  auto sd2_tick = [&]() {
+    d->sd2_ack = 0;
+    if (sd2_left < 0 && d->sd2_req) {
+      const uint32_t a = d->sd2_addr & 0x1ffffff;
+      sd2_data = uint32_t(mem[a]) | (uint32_t(mem[(a + 1) & 0x1ffffff]) << 16);
+      sd2_left = sd2_lat;
+    } else if (sd2_left > 0) {
+      --sd2_left;
+    } else if (sd2_left == 0) {
+      d->sd2_dout = sd2_data;
+      d->sd2_ack  = 1;
+      sd2_left    = -1;
+    }
   };
+
+  // THREE CLOCKS, ON A 192 MHz BASE, because 48 and 32 do not divide each
+  // other. Half-periods are 2, 3 and 4 base steps: clk_mem 48 MHz, clk_vid 32
+  // MHz, clk_cpu 24 MHz -- the board's ratios exactly. Driving clk_vid as a
+  // simple divide of clk_mem would invent a phase relationship the hardware
+  // does not have, which is the whole thing this harness exists to model.
+  uint64_t mem_edges = 0, base_t = 0;
+  int mem_prev = 0, vid_prev = 0;
+
+  // ce_pix halves clk_vid to the 16 MHz dot clock, as Model2.sv does.
+  int ce_tog = 0;
+
+  auto base_step = [&]() {
+    const int m = int((base_t / 2) & 1);
+    const int v = int((base_t / 3) & 1);
+    const int c = int((base_t / 4) & 1);
+    // FRAME CAPTURE, on the falling edge of ce_pix so the pixel is settled.
+    // This is the picture the renderer produces WHILE the CPU is running, which
+    // is the configuration that has never been simulated.
+    if (v && !vid_prev && ce_tog) {
+      if (!d->vid_vb && !d->vid_hb) {
+        if (g_px < 10 && g_py < 10) { /* nothing: bounds set below */ }
+        if (g_py < FH && g_px < FW) {
+          const size_t o = (size_t(g_py) * FW + g_px) * 3;
+          g_frame[o+0] = d->vid_r; g_frame[o+1] = d->vid_g; g_frame[o+2] = d->vid_b;
+          if (d->vid_r || d->vid_g || d->vid_b) ++g_nonblack;
+        }
+        ++g_px;
+      }
+      if (d->vid_hb && !g_hb_p) { g_px = 0; if (!d->vid_vb) ++g_py; }
+      if (d->vid_vb && !g_vb_p) { ++g_frames_done; }
+      if (!d->vid_vb && g_vb_p) { g_py = 0; g_px = 0; }
+      g_hb_p = d->vid_hb; g_vb_p = d->vid_vb;
+    }
+    if (v && !vid_prev) { ce_tog ^= 1; d->ce_pix = ce_tog; }
+    d->clk_mem = m; d->clk_vid = v; d->clk_cpu = c;
+    d->eval();
+    if (m && !mem_prev) { mem_tick(); sd2_tick(); d->eval(); ++mem_edges; }
+    mem_prev = m; vid_prev = v;
+    ++base_t;
+  };
+
+  // One clk_mem cycle, so the loop below is unchanged.
+  auto tick = [&]() { for (int i = 0; i < 4; ++i) base_step(); };
 
   for (int i = 0; i < 64; ++i) tick();
   d->rst_n = 1;
@@ -690,6 +747,20 @@ int main(int argc, char **argv) {
   if (rf_bad_first)
     std::printf("  FIRST frame access outside work RAM: addr %08x at instruction %u,"
                 " ip %08x, pfp %08x\n", rf_bad_first, rf_bad_at, rf_bad_ip, rf_bad_pfp);
+  {
+    std::printf("  COMPOSITION: %llu frames scanned, %llu non-black pixels "
+                "in the last one captured\n",
+                (unsigned long long)g_frames_done, (unsigned long long)g_nonblack);
+    if (const char *fo = std::getenv("M2_FRAME_OUT")) {
+      FILE *f = std::fopen(fo, "wb");
+      if (f) {
+        std::fprintf(f, "P6\n%d %d\n255\n", FW, FH);
+        std::fwrite(g_frame.data(), 1, g_frame.size(), f);
+        std::fclose(f);
+        std::printf("    wrote %s\n", fo);
+      }
+    }
+  }
   if (!g_rd_unbacked.empty()) {
     std::printf("  READS from regions nothing backs (returned 0), by 64 KB:\n");
     std::vector<std::pair<uint64_t,uint32_t>> v;

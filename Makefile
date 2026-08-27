@@ -489,13 +489,19 @@ test_m2_boot: obj_boot/Vm2_boot_harness
 	@echo "== test m2_boot (the real boot through the real bridge)"
 	@./obj_boot/Vm2_boot_harness $(TEST_ARGS)
 
+# NOW CARRIES THE RENDERER TOO. Every isolated test passes and the board still
+# misbehaves, so what this harness is for is the one configuration nothing else
+# builds: the CPU writing tile RAM while m2_video reads it, with character
+# fetches crossing clk_vid/clk_sys through the real m2_char_cdc.
 obj_boot/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cpp \
                            rtl/io/m2_cpu_bridge.sv rtl/io/m2_ioboard.sv rtl/io/m2_backup.sv \
+                           rtl/mem/m2_char_cdc.sv $(wildcard rtl/video/*.sv) \
                            $(wildcard rtl/cpu/i960/*.sv)
 	$(VBUILD) --top-module m2_boot_harness -Wno-PINCONNECTEMPTY -Wno-UNUSEDPARAM \
 	  -Wno-WIDTHEXPAND -Wno-UNUSEDSIGNAL --Mdir obj_boot -o Vm2_boot_harness \
 	  -CFLAGS "-O2" sim/io/m2_boot_harness.sv rtl/io/m2_cpu_bridge.sv \
-	  rtl/io/m2_ioboard.sv rtl/io/m2_backup.sv $(wildcard rtl/cpu/i960/*.sv) \
+	  rtl/io/m2_ioboard.sv rtl/io/m2_backup.sv rtl/mem/m2_char_cdc.sv \
+	  $(wildcard rtl/video/*.sv) $(wildcard rtl/cpu/i960/*.sv) \
 	  sim/io/tb_m2_boot.cpp
 
 # ------------------------------------------------------------------ I/O board
