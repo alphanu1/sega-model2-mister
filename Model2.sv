@@ -1725,12 +1725,14 @@ m2_diag #(.NWORDS(23)) u_diag
 	//
 	// 00001?3F would mean every depth works; 00001?00 means none does, and that
 	// is a result about the interface rather than a range that was too narrow.
-	.words({ // 22 XLAT WRITES PER CHANNEL: R, then G, then B. 32 each is a
-	         // complete table. The tile-RAM fold that briefly lived here could
-	         // not be read: the menu cannot be held still long enough, and a
-	         // fold of a moving screen compares against nothing. It cost 64 M10K
-	         // to learn that, which is the price of an instrument whose
-	         // preconditions were not checked before building it.
+	.words({ // 22 LINE OVERRUNS again (top half). It read 00000000 before R56,
+	         // when the white labels were absent and the board was fetching far
+	         // fewer distinct glyphs per line. Restoring them added demand, and
+	         // the two characters now missing -- the 3 of 3CREDIT(S) and the 1 of
+	         // # 1 -- are the LAST distinct glyph on the two longest lines, which
+	         // is what a line running out of fetch budget drops first. Measured,
+	         // not assumed. Replaces the per-channel xlat counts, which read
+	         // 00202020 and whose values test_m2_boot then proved correct.
 	         // OLD 22 LINE OVERRUNS (top half) and last line's worst-layer fetch
 	         // count (low byte). Zero overruns means the renderer keeps up and
 	         // missing text is NOT a budget problem; a climbing count means it
@@ -1742,7 +1744,7 @@ m2_diag #(.NWORDS(23)) u_diag
 	         // never arrived. Replaces the M10K copy probe, which did its job
 	         // (it proved the copy sound while the renderer starved, R49) and
 	         // reads zero on a game image by design.
-	         {8'd0, xlat_ch_cnt[2], xlat_ch_cnt[1], xlat_ch_cnt[0]},
+	         {vid_overruns, 8'd0, vid_fetches},
 	         // 21 ALL FOUR LAYERS, top 8 bits of each. The first version packed
 	         // only layers 0 and 1 and read 00000000 on a board visibly drawing
 	         // Daytona's sky and ground: the fixture uses layer 0 and Daytona
