@@ -3838,3 +3838,52 @@ constraining what is inside it.** Every clock in this design is timed, the PLL
 hierarchy is checked, the CDC crossings are now bounded -- and the one path that
 leaves the chip had nothing at all. A build can be green in every report this
 project checks and still not talk to its memory.
+
+---
+
+**R58 — the SDRAM interface is constrained, and the former killer edit is the
+proof it worked.** Following R57, `Model2.sdc` now carries the full interface
+description: `create_generated_clock` on the `SDRAM_CLK` output pin,
+`set_input_delay` on DQ (tAC 5.4 + 1 PCB), `set_output_delay` on
+address/control/data (tSU 1.5, tH −0.8), both collections guarded so an empty
+match posts a critical warning instead of silently constraining nothing.
+
+*Getting it through Quartus 17.0 took three workarounds, all recorded because
+each will bite again:*
+
+1. **`quartus_map` evaluates the SDC too, and CRASHES on these port
+   constraints** — Internal Error, `mast_mux_add.cpp:684`, reproduced on a
+   clean db. The block is fenced by `$::quartus(nameofexecutable)` so only the
+   fitter and TimeQuest see it. Synthesis has no use for I/O timing.
+2. **The fitter then succeeds and crashes during its own exit cleanup**,
+   aborting the flow after declaring success. `quartus_sta` and `quartus_asm`
+   run standalone from the finished fit complete the build. This recurs on
+   every build with these constraints; treat it as the normal flow.
+3. **The first honest analysis reported −13.77 ns on reads and −1.92 on
+   outputs** — numbers describing a design this is not. The capture depth is
+   calibrated at boot (R47), so reads arrive a consistent integer number of
+   cycles late, and outputs are sampled at the following 180° edge. Stated as
+   setup/hold multicycle PAIRS one edge apart — which still enforces the one
+   physical truth required, consistent arrival within one period — every clock
+   closes: reads +2.22, outputs +8.50. Without the calibration these
+   exceptions would be constraining the test to pass (R38); with it they are
+   the design's description.
+
+*The proof.* The `ldr_top` sweep bound — the edit that produced a non-booting
+core twice, reproducibly, on the unconstrained interface — was re-applied on
+the constrained one. The fitter absorbed it: reads +1.697, outputs +6.652, and
+the board boots and behaves identically. **The comparator's placement cost is
+now a measured slack consumption instead of an invisible coin toss.** The
+constrained build's first fit also behaved identically to the known-good core
+despite being a different placement — the first time a re-fit has been
+survivable on this project.
+
+*What did NOT change:* `cal_mask` still reads one depth (row 20 `00001204`,
+CL+2). The constraints hold the window in place; they did not widen it. Margin
+against temperature and voltage is still one depth, and widening it (SDRAM_CLK
+phase tuning, now measurable per build in the STA numbers instead of by
+rebuild-and-pray) is future work, not urgency.
+
+*The rule, completing R57's:* **when a fix claims to make a class of failure
+impossible, re-apply the failure and watch it be absorbed.** A fix verified
+only by "the symptom went away" is indistinguishable from the symptom moving.
