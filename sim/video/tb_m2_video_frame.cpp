@@ -59,6 +59,9 @@ static bool load_u16(const std::string &path, std::vector<uint16_t> &out) {
 static const int W = 496, H = 384;
 static std::vector<uint8_t> fb;
 
+// Deterministic, so a failure is reproducible rather than a story about one run.
+static uint32_t g_rnd_s = 12345;
+static uint32_t g_rnd() { g_rnd_s = g_rnd_s * 1664525u + 1013904223u; return g_rnd_s >> 16; }
 static std::vector<int> g_line_fetch;
 static int g_line_n = 0;
 static bool g_hb_prev = false;
@@ -72,6 +75,7 @@ int main(int argc, char **argv) {
   std::string out = "/tmp/m2-frame";
   int frames = 3;
   int char_lat = 1;
+  int char_jit = 0;
   for (int i = 1; i < argc; i++) {
     if (!std::strncmp(argv[i], "+in=", 4))     in  = argv[i] + 4;
     if (!std::strncmp(argv[i], "+out=", 5))    out = argv[i] + 5;
@@ -81,6 +85,7 @@ int main(int argc, char **argv) {
     // reporting a BANDWIDTH problem, not a logic one, and the two must not be
     // confused. m2_video counts its own overruns for the same reason.
     if (!std::strncmp(argv[i], "+charlat=", 9)) char_lat = std::atoi(argv[i] + 9);
+    if (!std::strncmp(argv[i], "+charjit=", 9)) char_jit = std::atoi(argv[i] + 9);
   }
 
   if (!load_u16(in + "/tile.bin", tram) ||
@@ -165,7 +170,13 @@ int main(int argc, char **argv) {
       const uint16_t w0 = (a     < chr.size()) ? chr[a]     : 0;
       const uint16_t w1 = (a + 1 < chr.size()) ? chr[a + 1] : 0;
       char_pend = uint32_t(w0) | (uint32_t(w1) << 16);
-      cl = char_lat;
+      // JITTER, because real SDRAM latency is not constant: refresh, row
+      // activate and four-port arbitration all move it, and a fetch path with
+      // a race in it can pass at a fixed latency and fail at a varying one.
+      // The board renders every glyph but two while this harness renders all
+      // of them, and a constant latency is one of the few things the harness
+      // gets wrong on purpose.
+      cl = char_lat + (char_jit ? int(g_rnd() % uint32_t(char_jit + 1)) : 0);
       if (cl <= 0) { dut->char_data = char_pend; dut->char_ack = 1; }
       else char_busy = true;
     }

@@ -1,7 +1,79 @@
 # Handoff
 
-**Updated:** 2026-08-27, after the capture-ordering session. `make test` is
-green at 24 PASS.
+**Updated:** 2026-08-27, after the 2D bring-up session. `make test` is green at
+25 PASS.
+
+---
+
+## Where Daytona actually is
+
+**The 2D path renders on hardware.** Daytona boots, runs continuously, and draws
+its test menu with white labels and green values, plus a sky/ground horizon in
+attract mode. The **2D tilemap test is pixel-perfect on the device** against a
+MAME-captured frame. Both were black screens at the start of this session.
+
+**Verified from the board, by the bench:**
+
+| row | reads | means |
+|---|---|---|
+| 12 | `0025E723` | matches `tools/rom_csum.py` exactly — the 43.62 MB ROM image in SDRAM is byte-correct |
+| 3 | `015CFFFF` | the tool's `last word` exactly |
+| 20 | `00001204` | capture calibrated, CL+2, stable |
+| 16 | `41474553` | `"SEGA"` — the boot's 128 KB copy landed |
+| 4 | `00003B03` | no trap, no halt |
+| 7 | `0053F400` | PRCB after the reinitialize IAC, matching simulation |
+
+**What is left, and it is narrow:**
+
+1. **Two glyphs missing** — the `3` of `3CREDIT(S)` and the `1` of `# 1`.
+2. **Sky/ground banding** — green, then blue, then green, where it should be
+   sky over ground.
+3. **No 3D.** The road, cars and scenery need the renderer and TGP/copro, which
+   are not started. Flat colour planes are the correct picture for now.
+
+## The two glyphs: what has been ELIMINATED
+
+This matters more than the remaining candidates, because each was measured and
+several looked compelling:
+
+- **Fetch bandwidth — ruled out TWICE.** Row 22's overrun counter reads
+  `00000000` both before and after the white labels returned. With zero
+  overruns the renderer fetches everything it is asked for.
+- **Line buffering** — would not have helped. Demand is bursty (max/mean 3.18×)
+  so it looked attractive, but there is nothing to smooth when nothing is late.
+- **Latency jitter** — modelled in `test_m2_video_frame` with `+charjit=`. It
+  costs pixels only once it costs overruns, and the board has none.
+- **The colour translation table** — `test_m2_boot` dumps all three channels as
+  identical correct 0→255 ramps.
+- **The palette** — differs from MAME's capture in **0 of 8,192 entries** and
+  holds 60 of 60 whites.
+- **Character data** — rendering with OUR CPU's own `char.bin` still gives
+  2,054 pixels, identical to the reference.
+
+**The whole 2D chain, driven entirely by data our own CPU produced, is
+pixel-perfect in simulation — and the board is not.** So the difference is
+something the harness does not model: real SDRAM behaviour, the live
+`m2_char_cdc` crossing, or the CPU taking a different path on hardware because
+of the I/O board, inputs or NVRAM. Note that both missing glyphs are *dynamic
+values* (credit count, coin setting), which are read from backup SRAM — and a
+bus trace showed an unaligned read of `01d00216` returning `FFFFFF00` where the
+all-`0xFF` contract says `FFFFFFFF`. That is wrong on its own terms and is the
+first thing to chase.
+
+## How to reproduce the 2D state in five seconds
+
+Do not debug this on the board. The loop that found R56 is:
+
+```
+M2_BOOT_DUMP=<dir> M2_DUMP_OUT=<dir> ./obj_boot/Vm2_boot_harness +insn=4000000
+./obj_m2_vf/Vm2_video +in=<dir> +out=<dir>/r +frames=2 +charlat=10
+```
+
+That dumps the tile RAM, palette, colorxlat and char RAM **our CPU builds** and
+renders them through the real renderer. 2,054 non-black pixels means correct.
+`tools/mame_m2_palwatch.lua` gives MAME's side frame by frame for comparison.
+
+---
 
 ---
 
