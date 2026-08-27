@@ -69,6 +69,9 @@ module m2_boot_harness #(
   output logic [31:0] dbg_ip,
   output logic [31:0] obs_prcb,
   output logic        obs_xlat_we,
+  output logic        obs_pal_we,
+  output logic [14:0] obs_oc_addr,
+  output logic [15:0] obs_oc_din,
   output logic  [6:0] obs_xlat_addr,
   output logic  [7:0] obs_xlat_din,
   output logic        cpu_trap,
@@ -310,6 +313,13 @@ module m2_boot_harness #(
                    oc_xlat_we, oc_xlat_addr, oc_xlat_din, sd_we, sd_din, sd_be};
   /* verilator lint_on UNUSEDSIGNAL */
 
+// THE PALETTE AS THE CPU BUILDS IT. The captured fixture renders white labels
+// correctly on this same renderer; the live game does not. Either the CPU writes
+// a different palette or the bridge loses some of it, and only a comparison
+// against palette.bin can say which.
+assign obs_pal_we    = oc_pal_we;
+assign obs_oc_addr   = oc_addr;
+assign obs_oc_din    = oc_din;
 assign obs_xlat_we   = oc_xlat_we;
 assign obs_xlat_addr = oc_xlat_addr;
 assign obs_xlat_din  = oc_xlat_din;

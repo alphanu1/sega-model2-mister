@@ -1551,6 +1551,22 @@ m2_char_cdc u_char_cdc (
 // layers 1-3 at zero, so that is what a working board must show. It is read in
 // clk_vid, which is the overlay's own clock.
 wire [11:0] vid_layer_have [4];
+// LINE OVERRUNS, WHICH m2_video HAS COUNTED ALL ALONG AND NOTHING READ.
+//
+// An overrun is a scanline whose fetches did not finish before the next line
+// started. m2_video's own comment says what happens then: the bank does not
+// flip and the previous line is displayed again. Whole lines of text go
+// missing, which is exactly "the text further down does not show" -- and it
+// takes the white labels and the green values alike, because it is not a colour
+// fault at all.
+//
+// The frame render says the tilemap fixture overruns 0 times at the ten-cycle
+// round trip the board measures, and 36 times at fourteen. Daytona drives layers
+// 2 and 3 both saturated against the fixture's single layer of 784 words, and
+// its i960 competes for the same SDRAM, so its budget is far tighter. This
+// settles whether that is what is happening rather than inferring it.
+wire  [7:0] vid_fetches;
+wire [15:0] vid_overruns;
 
 wire [7:0] tile_r, tile_g, tile_b;
 wire       tile_hs, tile_vs, tile_hb, tile_vb;
@@ -1581,7 +1597,7 @@ m2_video u_tilemap (
 	.pal_addr(pal_addr), .pal_data(pal_data),
 	.vid_r(tile_r), .vid_g(tile_g), .vid_b(tile_b),
 	.vid_hs(tile_hs), .vid_vs(tile_vs), .vid_hb(tile_hb), .vid_vb(tile_vb),
-	.vblank_irq(), .dbg_fetches(), .dbg_overruns(),
+	.vblank_irq(), .dbg_fetches(vid_fetches), .dbg_overruns(vid_overruns),
 	.dbg_layer_px(), .dbg_ctrl(), .dbg_layer_have(vid_layer_have)
 );
 
@@ -1736,12 +1752,18 @@ m2_diag #(.NWORDS(23)) u_diag
 	//
 	// 00001?3F would mean every depth works; 00001?00 means none does, and that
 	// is a result about the interface rather than a range that was too narrow.
-	.words({ // 22 XLAT WRITES PER CHANNEL: R low byte, then G, then B. A complete
+	.words({ // 22 LINE OVERRUNS (top half) and last line's worst-layer fetch
+	         // count (low byte). Zero overruns means the renderer keeps up and
+	         // missing text is NOT a budget problem; a climbing count means it
+	         // does not. Replaces the per-channel xlat counts, which did their
+	         // job: they read 00202020, and test_m2_boot then dumped the values
+	         // and found all three ramps correct, so the table is not at fault.
+	         // OLD 22 XLAT WRITES PER CHANNEL: R low byte, then G, then B. A complete
 	         // table is 32 each -- 00202020. A zero byte names the channel that
 	         // never arrived. Replaces the M10K copy probe, which did its job
 	         // (it proved the copy sound while the renderer starved, R49) and
 	         // reads zero on a game image by design.
-	         {8'd0, xlat_ch_cnt[2], xlat_ch_cnt[1], xlat_ch_cnt[0]},
+	         {vid_overruns, 8'd0, vid_fetches},
 	         // 21 ALL FOUR LAYERS, top 8 bits of each. The first version packed
 	         // only layers 0 and 1 and read 00000000 on a board visibly drawing
 	         // Daytona's sky and ground: the fixture uses layer 0 and Daytona

@@ -50,6 +50,8 @@ static bool load_file(const std::string &p, std::vector<uint8_t> &out) {
   return got == size_t(n);
 }
 
+static uint16_t g_pal[8192];
+static bool     g_pal_seen[8192];
 static uint8_t g_xlat[96];
 static bool    g_xlat_seen[96];
 
@@ -385,6 +387,10 @@ int main(int argc, char **argv) {
     // writes go nowhere. That is correct for the regions MAME marks nopw and
     // wrong for anything the renderer needs, and the two are indistinguishable
     // until they are counted.
+    if (d->obs_pal_we && d->obs_oc_addr < 8192) {
+      g_pal[d->obs_oc_addr]      = d->obs_oc_din;
+      g_pal_seen[d->obs_oc_addr] = true;
+    }
     if (d->obs_xlat_we && d->obs_xlat_addr < 96) {
       g_xlat[d->obs_xlat_addr]      = d->obs_xlat_din;
       g_xlat_seen[d->obs_xlat_addr] = true;
@@ -447,6 +453,33 @@ int main(int argc, char **argv) {
               d->iob_win_rd, d->bak_writes, d->bak_w0);
   std::printf("  tile RAM writes %u\n", d->dbg_tram_wr);
   {
+    int lo = 0, hi = 0;
+    for (int i = 0; i < 4096; ++i) if (g_pal_seen[i]) ++lo;
+    for (int i = 4096; i < 8192; ++i) if (g_pal_seen[i]) ++hi;
+    std::printf("  palette as the CPU builds it: %d/4096 low entries, %d/4096 high\n", lo, hi);
+    // Compare against the captured frame if it is to hand. That image renders
+    // white labels correctly through this same renderer, so any entry that
+    // differs is a candidate for the missing white.
+    const char *dir = std::getenv("M2_PAL_REF");
+    if (dir) {
+      std::string path = std::string(dir) + "/palette.bin";
+      FILE *f = std::fopen(path.c_str(), "rb");
+      if (f) {
+        std::vector<uint16_t> ref(8192, 0);
+        size_t got = std::fread(ref.data(), 2, 8192, f);
+        std::fclose(f);
+        int diff = 0, first = -1, whites_ref = 0, whites_cpu = 0;
+        for (size_t i = 0; i < got && i < 4096; ++i) {
+          if (ref[i] == 0x7fff || ref[i] == 0xffff) ++whites_ref;
+          if (g_pal[i] == 0x7fff || g_pal[i] == 0xffff) ++whites_cpu;
+          if (g_pal_seen[i] && g_pal[i] != ref[i]) { if (first < 0) first = int(i); ++diff; }
+        }
+        std::printf("    vs %s (%zu words): %d written entries differ, first at %d\n",
+                    path.c_str(), got, diff, first);
+        std::printf("    entries holding white (7fff/ffff): reference %d, CPU %d\n",
+                    whites_ref, whites_cpu);
+      }
+    }
     int n = 0; for (int i = 0; i < 96; ++i) if (g_xlat_seen[i]) ++n;
     std::printf("  colour translation table, as the CPU programmed it (%d/96 written):\n", n);
     static const char *ch = "RGB";
