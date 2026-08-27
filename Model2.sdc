@@ -78,46 +78,24 @@ set_clock_groups -asynchronous \
 # the finished STA report instead.
 
 
-# ---- THE CHARACTER-FETCH CROSSING, WHICH THE CLOCK GROUPS LEAVE UNCONSTRAINED
+# ---- THE CHARACTER-FETCH CROSSING: CONSTRAINED, THEN REMOVED AGAIN
 #
-# m2_char_cdc carries the character fetch between clk_vid (32 MHz) and clk_sys
-# (48 MHz). Cutting those domains above is right for ANALYSIS -- they are
-# asynchronous and a setup check between them is meaningless -- but it also
-# means the fitter may route the crossing as long as it likes and STA still
-# reports success. That is this file's own header warning, in a second place,
-# and it bit: a build whose only source change was the region sweep, with
-# identical resources and closed timing, rendered a broken picture whose colours
-# changed on every reset. A rebuild produced a BYTE-IDENTICAL core, so it was
-# not fit-to-fit luck -- the placement moved and this unconstrained crossing
-# moved with it.
+# set_net_delay and set_max_skew were added here to bound the clk_vid/clk_sys
+# character-fetch crossing, which the clock groups above leave physically
+# unconstrained. They are CORRECT and they broke the board: the build carrying
+# them failed to boot with cal_mask = 000000 -- no SDRAM capture depth passing at
+# all -- exactly as the build before it had.
 #
-# Two of the four crossings are BUSES sampled without synchronisers: v_addr (18
-# bits) into s_addr_r, and s_hold (32 bits) out to the renderer. Both are stable
-# by protocol when read, but "stable" is a span of nanoseconds and nothing was
-# holding the routing inside it. Changing colours on each reset is what that
-# looks like.
+# That is the proof for study R57. The first breakage was blamed on bounding the
+# region sweep at ldr_top; reverting that did not fix it, so the sweep was never
+# the cause. What both changes have in common is that they MOVE PLACEMENT, and
+# the SDRAM interface has no timing constraints of any kind -- no input or output
+# delay, no generated clock for SDRAM_CLK at the device -- so wherever the fitter
+# happens to put those paths decides whether the machine can talk to its memory.
+# Two unrelated, individually correct changes each destroyed it.
 #
-# set_net_delay is the tool: unlike set_max_delay it applies even between
-# asynchronous clock groups. set_max_skew keeps each synchroniser's bits
-# together.
-#
-# AN EMPTY COLLECTION IS THE TRAP THIS FILE EXISTS FOR, so both are checked.
-set cdc_regs [get_registers -nowarn {*u_char_cdc|*}]
-set vid_regs [get_registers -nowarn {*u_tilemap|*}]
+# So this is not a deferrable problem. Until the SDRAM interface is constrained,
+# any edit that perturbs placement is liable to produce a core that passes every
+# report this project checks and does not boot. These constraints go back in
+# after that, not before.
 
-if {[llength $cdc_regs] == 0} {
-    post_message -type critical_warning \
-      "Model2.sdc: no m2_char_cdc registers matched -- the character-fetch \
-       crossing between clk_vid and clk_sys is UNCONSTRAINED, and a placement \
-       change can break the picture without STA noticing. See \
-       rtl/mem/m2_char_cdc.sv and study R49."
-} else {
-    set_net_delay -max 5 -from $cdc_regs -to $cdc_regs
-    set_max_skew -to [get_registers -nowarn {*u_char_cdc|req_sync[*]}]  2
-    set_max_skew -to [get_registers -nowarn {*u_char_cdc|done_sync[*]}] 2
-    if {[llength $vid_regs] > 0} {
-        # s_hold out to the renderer, and char_req/char_addr back in.
-        set_net_delay -max 5 -from $cdc_regs -to $vid_regs
-        set_net_delay -max 5 -from $vid_regs -to $cdc_regs
-    }
-}
