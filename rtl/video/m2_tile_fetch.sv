@@ -216,8 +216,40 @@ module m2_tile_fetch #(
   logic [31:0] ch_f;
   logic        f_have;
   logic [14:0] last_tile;
-  logic [17:0] last_char;
-  logic        tile_valid, char_valid;
+
+  // CHARACTER CACHE. One entry only ever caught CONSECUTIVE repeats, and a
+  // scanline of text is a small alphabet reused constantly rather than runs of
+  // one glyph. Every miss is a full round trip across the clk_vid/clk_sys
+  // crossing -- measured at ten clk_vid cycles on hardware (study R49) -- so
+  // the cheapest bandwidth there is comes from not asking twice.
+  //
+  // Cleared per scanline with the rest, for the reason the comment there gives.
+  // 16 IS THE CEILING, MEASURED. 12 renders perfectly at the ten-cycle round
+  // trip the board shows but fails at twelve; 16 is perfect through twelve; 24,
+  // 32 and 48 buy nothing more, because what is left after sixteen is genuinely
+  // distinct glyphs rather than repeats. So this is the smallest cache that
+  // reaches the ceiling, not a number picked for looking generous.
+  localparam int unsigned CC_N = 16;
+  // Derived, so it cannot drift out of step with CC_N the way a hand-written
+  // width already did once while this was being sized.
+  localparam int unsigned CC_W = $clog2(CC_N);
+  logic [17:0]     cc_addr [CC_N];
+  logic [31:0]     cc_data [CC_N];
+  logic [CC_N-1:0] cc_val;
+  logic [CC_W-1:0] cc_rr;              // round-robin replacement
+
+  logic        cc_hit;
+  logic [31:0] cc_hit_data;
+  always_comb begin
+    cc_hit      = 1'b0;
+    cc_hit_data = 32'd0;
+    for (int i = 0; i < CC_N; i++)
+      if (cc_val[i] && (cc_addr[i] == f_char_addr)) begin
+        cc_hit      = 1'b1;
+        cc_hit_data = cc_data[i];
+      end
+  end
+  logic        tile_valid;
 
   // Emit side: sx is the first pixel of the group being written, and rem is
   // how many pixels of the current tile are still to come. A group is the
@@ -324,9 +356,10 @@ module m2_tile_fetch #(
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       fst <= F_IDLE; fx <= '0; tw_f <= '0; ch_f <= '0; f_have <= 1'b0;
+      cc_val <= '0; cc_rr <= '0;
       tw_nonblank <= 1'b0;
-      last_tile <= '0; last_char <= '0;
-      tile_valid <= 1'b0; char_valid <= 1'b0;
+      last_tile <= '0;
+      tile_valid <= 1'b0;
       char_req <= 1'b0; fetches <= '0;
     end else if (start) begin
       tw_nonblank <= 1'b0;
@@ -338,7 +371,8 @@ module m2_tile_fetch #(
       fx         <= '0;
       f_have     <= 1'b0;
       tile_valid <= 1'b0;
-      char_valid <= 1'b0;
+      cc_val     <= '0;
+      cc_rr      <= '0;
       char_req   <= 1'b0;
       fetches    <= '0;
     end else begin
@@ -366,8 +400,9 @@ module m2_tile_fetch #(
 
         F_CHAR: begin
           // f_char_addr is valid now the tile word is latched.
-          if (char_valid && (f_char_addr == last_char)) begin
-            // ch_f already holds this character; nothing to ask for.
+          if (cc_hit) begin
+            // Already fetched this glyph on this line; nothing to ask for.
+            ch_f   <= cc_hit_data;
             f_have <= 1'b1;
             fst    <= F_FULL;
           end else if (!char_req) begin
@@ -375,8 +410,10 @@ module m2_tile_fetch #(
           end else if (char_ack) begin
             char_req   <= 1'b0;
             ch_f       <= char_data;
-            last_char  <= f_char_addr;
-            char_valid <= 1'b1;
+            cc_addr[cc_rr] <= f_char_addr;
+            cc_data[cc_rr] <= char_data;
+            cc_val[cc_rr]  <= 1'b1;
+            cc_rr <= (cc_rr == CC_W'(CC_N-1)) ? '0 : cc_rr + CC_W'(1);
             fetches    <= fetches + 8'd1;
             f_have     <= 1'b1;
             fst        <= F_FULL;

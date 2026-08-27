@@ -3409,3 +3409,63 @@ What made it false was `m2_video` being on the video clock — which was not a
 change to the memory system at all, and so was never checked against the memory
 system's assumptions. Where a design depends on a frequency relationship, the
 relationship belongs in a test that fails when it changes, not in prose.
+
+---
+
+**R50 — the character cache, and two measurements that contradicted what was
+obvious.** With R49's crossing in place the tilemap rendered on hardware for the
+first time, but `dbg_layer_have` read `00000224` against the correct `00000310`
+and the longest text lines came out as wrong glyphs. The frame render at
+`+charlat=10` reproduces that photograph **exactly** — same corrupted lines,
+same clean ones, same `0x224` — so the board's character fetch costs ten
+`clk_vid` cycles per glyph, and the whole remaining problem could be worked in
+simulation against a pixel-exact oracle.
+
+*The first thing that was obvious and wrong.* The four-phase handshake costs six
+`clk_vid` cycles per fetch at minimum memory latency, and the reason looked
+plainly like the return-to-zero: the engine cannot start the next fetch until
+the request has dropped and propagated both ways. A two-phase toggle removes
+that phase entirely. Implemented, it measured **7.0 cycles — worse.** Detecting
+a toggle needs a third synchroniser stage on the request side, and that costs
+more than the idle phase saved. Reverted. *The return-to-zero was never the
+expensive part;* it overlaps with the next request's synchronisation.
+
+*The second.* `test_m2_video_frame` reports the engine waits on memory for only
+**4.5% of all cycles** at lat=10. That is not a memory-bound renderer by any
+ordinary reading — and yet 36 lines overrun their budget, because the cost is
+not spread evenly. A handful of dense text lines carry far more fetches than the
+average, and they are the ones that fail. **An average hid the fault
+completely**; only the per-line overrun count showed it.
+
+*What actually worked.* `m2_tile_fetch` cached exactly one character, which
+catches only CONSECUTIVE repeats, and a line of text is a small alphabet reused
+constantly rather than runs of one glyph. Widening it:
+
+| entries | perfect up to |
+|---|---|
+| 1 | (board: `0x224` at lat 10) |
+| 12 | lat 12 fails, lat 10 ok |
+| **16** | **lat 12** |
+| 24, 32, 48 | lat 12 — no further gain |
+
+16 is the ceiling and the cheapest way to reach it: beyond it what remains is
+genuinely distinct glyphs, not repeats. Against the board's measured ten cycles
+that is 20% margin. The cache is cleared per scanline with `tile_valid`, which
+is not required for correctness — a character address encodes its row, so stale
+entries simply miss — but it is kept, because the entries would be dead weight.
+
+*What this does NOT fix.* The ceiling is lat=12 and Daytona is worse than the
+tilemap test, because its i960 competes for the same SDRAM and lengthens the
+round trip. If Daytona still corrupts, the next lever is not a bigger cache —
+that is measured flat — but **halving the fetches**: the SDRAM already returns
+four words and `char_data` takes two, so fetching rows N and N+1 together and
+keeping the cache across scanlines would serve two lines per fetch. Beyond that,
+the architectural answer is Model 1's, stated in `m2_cdc_port.sv`'s own header:
+put *memory, ROM loading and video* in the fast domain and only the CPU in the
+slow one. `m2_video` takes `ce_pix` precisely so its logic clock and its pixel
+rate are separable, so moving it to `clk_sys` would delete the R49 crossing
+rather than carry it.
+
+*The rule:* **a percentage is an average, and an average is the wrong instrument
+for a budget that is per-line.** 4.5% occupancy and 36 blown lines are the same
+measurement described two ways, and only one of them names the bug.

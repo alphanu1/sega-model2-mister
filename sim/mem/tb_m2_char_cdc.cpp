@@ -100,6 +100,7 @@ int main(int argc, char **argv) {
 
     // Memory side model: s_req -> after `lat` clk_sys cycles, one-cycle s_ack.
     int mem_count = -1;
+    uint64_t vid_edges_used = 0;
 
     for (uint64_t t = 0; t < 4000000 && acked < N; ++t) {
       Edges e = tick();
@@ -119,6 +120,7 @@ int main(int argc, char **argv) {
       }
 
       if (e.vid) {
+        if (issued > 0 && acked < N) ++vid_edges_used;
         if (d->v_ack && !waiting) ++acks_while_idle;
         if (waiting && d->v_ack) {
           if (d->v_data != expect) { ++bad_data; }
@@ -135,10 +137,15 @@ int main(int argc, char **argv) {
       }
     }
 
+    // THROUGHPUT IS THE NUMBER THAT MATTERS, not request-to-ack. The fetch
+    // engine is serial: what limits it is how soon the NEXT fetch can start,
+    // and a four-phase handshake makes it wait for the whole return-to-zero.
+    const double per_fetch = double(vid_edges_used) / double(acked ? acked : 1);
     const bool ok = (acked == N) && (bad_data == 0) && (acks_while_idle == 0);
-    std::printf("  mem latency %2d clk_sys: %2d/%d fetches acknowledged, "
-                "%d wrong data, %d stray acks  %s\n",
-                lat, acked, N, bad_data, acks_while_idle, ok ? "ok" : "FAIL");
+    std::printf("  mem latency %2d clk_sys: %2d/%d acknowledged, %d wrong, "
+                "%d stray, %5.1f clk_vid cycles per fetch  %s\n",
+                lat, acked, N, bad_data, acks_while_idle, per_fetch,
+                ok ? "ok" : "FAIL");
     if (!ok) ++fails;
     checks += 3;
   }

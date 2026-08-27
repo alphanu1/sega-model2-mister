@@ -58,6 +58,9 @@ static bool load_u16(const std::string &path, std::vector<uint16_t> &out) {
 static const int W = 496, H = 384;
 static std::vector<uint8_t> fb;
 
+static uint64_t g_fetches = 0, g_req_cycles = 0, g_cycles = 0;
+static bool g_req_prev = false;
+
 int main(int argc, char **argv) {
   Verilated::commandArgs(argc, argv);
 
@@ -140,6 +143,10 @@ int main(int argc, char **argv) {
     // Memory model, sampled before the edge.
     dut->tram_data = tram_q;
     dut->pal_data  = pal_q;
+    if (dut->char_req) ++g_req_cycles;
+    if (dut->char_req && !g_req_prev) ++g_fetches;
+    g_req_prev = dut->char_req;
+    ++g_cycles;
     dut->char_ack  = 0;
     if (char_busy) {
       if (--cl <= 0) { dut->char_data = char_pend; dut->char_ack = 1; char_busy = false; }
@@ -216,6 +223,11 @@ int main(int argc, char **argv) {
   // values a working board must show. dbg_ctrl comes out of tile RAM itself
   // (m2_video line 504), so a board reading zero here has not got the tilemap
   // into M10K whatever the SDRAM readback says.
+  std::printf("  fetches %llu over %llu cycles; engine waiting on memory %llu "
+              "cycles (%.1f%% of all time)\n",
+              (unsigned long long)g_fetches, (unsigned long long)g_cycles,
+              (unsigned long long)g_req_cycles,
+              100.0 * double(g_req_cycles) / double(g_cycles ? g_cycles : 1));
   std::printf("  dbg_ctrl: %04x %04x   dbg_layer_have: %03x %03x %03x %03x\n"
               "  dbg_fetches: %u  dbg_overruns: %u\n",
               dut->dbg_ctrl[0], dut->dbg_ctrl[1],
