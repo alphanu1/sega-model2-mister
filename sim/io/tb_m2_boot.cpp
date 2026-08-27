@@ -222,6 +222,8 @@ int main(int argc, char **argv) {
   uint64_t ldos_n = 0, ldos_bad = 0;
   uint64_t rf_req_cycles = 0, rf_ack_count = 0; uint32_t rf_last_addr = 0;
   uint32_t rf_bad_first = 0, rf_bad_at = 0, rf_bad_ip = 0, rf_bad_pfp = 0;
+  std::map<uint32_t,uint32_t> frame_shadow;
+  uint64_t fill_ok = 0, fill_wrong = 0, fill_unwritten = 0;
   const bool stacktrace = std::getenv("M2_BOOT_STACK") != nullptr;
   int n_stack = 0;
   const char *cf = std::getenv("M2_BOOT_CYC");
@@ -277,6 +279,33 @@ int main(int argc, char **argv) {
                   (d->obs_mstate >> 3) & 1, (d->obs_mstate >> 4) & 1,
                   (d->obs_mstate >> 5) & 1, d->sd_req, d->sd_addr);
       ++n_cyc;
+    }
+
+    // WHAT EACH SPILL WROTE, AND WHAT THE MATCHING FILL READ BACK. Addresses
+    // and counts already agree; the words themselves are the only thing left
+    // that can differ. A shadow of every frame word written, checked on every
+    // frame word read, so a mismatch names the address and the two values
+    // rather than being inferred from a corrupted PFP three returns later.
+    if (d->dbg_rf_ack) {
+      const uint32_t a = d->dbg_rf_addr;
+      if (d->dbg_rf_we) {
+        frame_shadow[a] = d->dbg_rf_wdata;
+      } else {
+        auto it = frame_shadow.find(a);
+        const uint32_t got = d->obs_bus_rdata;
+        if (it == frame_shadow.end()) {
+          if (fill_unwritten < 4)
+            std::printf("    frame fill %08x -> %08x, NOTHING EVER SPILLED THERE"
+                        "  (i%u ip %08x)\n", a, got, d->dbg_acc, d->dbg_ip);
+          ++fill_unwritten;
+        } else if (it->second != got) {
+          if (fill_wrong < 4)
+            std::printf("    frame fill %08x -> %08x, spill wrote %08x"
+                        "  (i%u ip %08x)\n", a, got, it->second,
+                        d->dbg_acc, d->dbg_ip);
+          ++fill_wrong;
+        } else ++fill_ok;
+      }
     }
 
     // DOES THE REGISTER FILE ASK, AND IS IT ANSWERED? Counted rather than
@@ -393,6 +422,9 @@ int main(int argc, char **argv) {
   if (rf_bad_first)
     std::printf("  FIRST frame access outside work RAM: addr %08x at instruction %u,"
                 " ip %08x, pfp %08x\n", rf_bad_first, rf_bad_at, rf_bad_ip, rf_bad_pfp);
+  std::printf("  frame fills: %llu correct, %llu wrong, %llu from never-spilled addresses\n",
+              (unsigned long long)fill_ok, (unsigned long long)fill_wrong,
+              (unsigned long long)fill_unwritten);
   std::printf("  register-frame memory: req asserted %llu cycles, %llu acks, last addr %08x\n",
               (unsigned long long)rf_req_cycles, (unsigned long long)rf_ack_count,
               rf_last_addr);

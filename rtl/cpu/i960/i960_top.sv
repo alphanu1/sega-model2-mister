@@ -100,7 +100,9 @@ module i960_top (
   // be distinguishable.
   output logic        dbg_rf_req,
   output logic        dbg_rf_ack,
-  output logic [31:0] dbg_rf_addr
+  output logic [31:0] dbg_rf_addr,
+  output logic        dbg_rf_we,
+  output logic [31:0] dbg_rf_wdata
 );
 
   // ------------------------------------------------------------ architectural
@@ -452,7 +454,9 @@ module i960_top (
 
   assign dbg_rf_req  = rf_mem_req;
   assign dbg_rf_ack  = rf_mem_ack;
-  assign dbg_rf_addr = rf_mem_addr;
+  assign dbg_rf_addr  = rf_mem_addr;
+  assign dbg_rf_we    = rf_mem_we;
+  assign dbg_rf_wdata = rf_mem_wdata;
 
   // Literal operands: the field is the value, not a register number.
   logic [31:0] src1_val, src2_val;
@@ -783,6 +787,53 @@ module i960_top (
 
   logic rf_mem_ack, lsu_back, ic_back;
 
+  // THE GRANT IS LOCKED FOR THE WHOLE TRANSACTION.
+  //
+  // Pure combinational priority is re-evaluated every cycle, so a
+  // higher-priority master raising its request mid-transaction moves bus_addr
+  // under a memory that has already latched the old one -- and bus_ack is then
+  // routed to whichever master is winning when it arrives. The loser sees an
+  // acknowledge for a transfer that went somewhere else.
+  //
+  // MEASURED, and it is intermittent because it needs a collision: 8 of 992
+  // register-frame fills read back a word the matching spill had written, with
+  // the fill returning 0xFFFFFFFF -- unwritten memory. The spill was
+  // acknowledged and lost. The aux/boot master outranks rf_mem and is what the
+  // INTERRUPT path uses (boot_addr <= cur_fp - 16), so a V-blank landing inside
+  // a sixteen-word frame spill is exactly the collision.
+  //
+  // A first attempt at this was reverted because a counter of "bus_addr moved
+  // while a request was outstanding" read the same with and without the lock.
+  // That counter was measuring normal traffic -- the i960 holds bus_req across
+  // a run of accesses and moves the address on the acknowledge (R34) -- so it
+  // could not see this. The frame shadow can.
+  //
+  // Priority order is unchanged: data before instruction, because an
+  // instruction fetch can always be retried. What changes is that the choice is
+  // made ONCE per transaction.
+  localparam logic [2:0] G_NONE = 3'd0, G_BOOT = 3'd1, G_RF = 3'd2,
+                         G_LSU  = 3'd3, G_IC   = 3'd4;
+
+  logic [2:0] sel_next, grant_q, gsel;
+
+  always_comb begin
+    if      (boot_req)   sel_next = G_BOOT;
+    else if (rf_mem_req) sel_next = G_RF;
+    else if (lsu_breq)   sel_next = G_LSU;
+    else if (ic_breq)    sel_next = G_IC;
+    else                 sel_next = G_NONE;
+  end
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n)                 grant_q <= G_NONE;
+    else if (grant_q == G_NONE) grant_q <= bus_ack ? G_NONE : sel_next;
+    else if (bus_ack)           grant_q <= G_NONE;
+  end
+
+  // A locked grant wins; otherwise this cycle's pick, so a transaction can
+  // still start in the cycle its requester raises the request.
+  assign gsel = (grant_q != G_NONE) ? grant_q : sel_next;
+
   always_comb begin
     bus_req   = 1'b0;
     bus_we    = 1'b0;
@@ -794,19 +845,19 @@ module i960_top (
     ic_back    = 1'b0;
     boot_ack   = 1'b0;
 
-    if (boot_req) begin
+    if (gsel == G_BOOT) begin
       bus_req = 1'b1; bus_we = aux_we; bus_addr = boot_addr; bus_be = 4'b1111;
       bus_wdata = aux_wdata;
       boot_ack = bus_ack;
-    end else if (rf_mem_req) begin
+    end else if (gsel == G_RF) begin
       bus_req = 1'b1; bus_we = rf_mem_we; bus_addr = rf_mem_addr;
       bus_wdata = rf_mem_wdata; bus_be = 4'b1111;
       rf_mem_ack = bus_ack;
-    end else if (lsu_breq) begin
+    end else if (gsel == G_LSU) begin
       bus_req = 1'b1; bus_we = lsu_bwe; bus_addr = lsu_baddr;
       bus_wdata = lsu_bwdata; bus_be = lsu_bbe;
       lsu_back = bus_ack;
-    end else if (ic_breq) begin
+    end else if (gsel == G_IC) begin
       bus_req = 1'b1; bus_we = 1'b0; bus_addr = ic_baddr; bus_be = 4'b1111;
       ic_back = bus_ack;
     end
