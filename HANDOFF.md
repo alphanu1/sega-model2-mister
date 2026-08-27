@@ -4,6 +4,52 @@
 
 ---
 
+## STATUS: what is PROVEN, and by which test
+
+Every claim below names its evidence. A claim without a test is not in this
+table.
+
+### i960 CPU — working, verified against MAME
+| claim | evidence |
+|---|---|
+| every unit correct | 25-suite `make test` green: decoder, ALU, regs/callret, AGU, ld/st, LSU, I-cache, muldiv, 7 FPU suites, whole-CPU lockstep, IRQ soak |
+| runs the real game | PC stream identical to MAME for **803,355 instructions** from the boot vector (`i960-diff.sh`) |
+| beyond that | resync differential clean to **2.6 M instructions** across 5 poll loops; sole divergence is interrupt arrival timing, expected at CPI 3.95 vs 1 (R55) |
+| on hardware | boots Daytona; PRCB after reinitialize IAC = `0053F400`, matching sim (R48); 106 M+ instructions, no trap, no halt; 128 KB boot copy 65,536/65,536 words, `"SEGA"` in backup SRAM |
+
+### SDRAM — working, verified end to end and now constrained
+| claim | evidence |
+|---|---|
+| controller correct | `test_m2_sdram`/`128`: **123,927 checks, 0 fails**; x2 adapter 2,560 checks |
+| the full 43.62 MB image is in the chip, byte-correct | **all 22 regions** fold to `rom_csum.py`'s values on the board, incl. bounded region 21 = `00DDC2C0` — the bench's "that's only 42 MB" catch closed |
+| arbitrary words readable | 8 sim-verified words (glyph data, boot IP) read back exactly via the OSD probe |
+| interface constrained | generated clock on the `SDRAM_CLK` pin + I/O delays + multicycle pairs; closes at reads +1.9 ns, outputs +6.6 ns (R57) |
+| constraints proven | BOTH former killer edits (sweep bound, CDC constraints) re-applied and absorbed; board boots identically (R58). `cal_mask` on row 20 is the per-build health check |
+
+### 2D renderer — working, pixel-exact against MAME
+| claim | evidence |
+|---|---|
+| renders MAME's frame | `test_m2_video_frame`: 2,054/190,464 non-black, bbox x 161-405 y 41-174 — pixel-identical to the capture |
+| on hardware | the 2D tilemap test is **pixel-perfect on the board** |
+| from our own CPU's data | boot-harness dumps (tile, palette, xlat, char) render identically — incl. the full attract title screen: logos, clouds, textured grass (R54/R56) |
+| concurrently with the CPU | composition harness (CPU + renderer + real char CDC, three true-ratio clocks) = same 2,054 pixels, at real I/O-board timing too |
+| the crossing | `m2_char_cdc` 64/64 fetches at every latency; the old direct path measured losing 4/12 phases (R49) |
+
+### I/O board & backup SRAM — working
+Handshake sequence verified in `test_m2_ioboard` (status, flag, self-test at
+real 121 M-cycle constants); backup SRAM byte-lane correct, holds the game's
+own "S-RAM CHECK OK" status string, survives resets by design.
+
+### Open items
+1. **Two menu digits print as green spaces** — localised to the settings dword
+   at backup byte `0x14` (sim: `00030300` → prints '3'); the probe reading it
+   off the board is deployed (Probe=chr0, row 23, during the menu).
+2. **Sound** — fx68k vendored and executing; no audio devices wired.
+3. **3D** — renderer and TGP/copro not started. Sky/ground planes are the
+   correct 2D-only picture.
+
+---
+
 ## RESOLVED: the SDRAM interface is now constrained (R57/R58)
 
 The section below is kept as history. As of `e3b29916`: the interface is fully
