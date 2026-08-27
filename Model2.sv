@@ -463,7 +463,12 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 			// DIFFERENT PORT. Port 1 bursts four words and is known to work; the CPU
 			// is on port 0. If this reads 00000860 and the CPU reads 0, the data is
 			// in SDRAM and the fault is the CPU's port.
-			2'd0: if (rom_loaded && cp_done) begin rb_addr <= SDR_AW'(6); rb_req <= 1'b1; rb_state <= 2'd1; end
+			// cal_done, NOT cp_done: game_image short-circuits cp_done without
+			// reading anything, so on a game image cp_done asserts before the
+			// capture is calibrated and this read came back at CL+0. That is the
+			// "row 2 reads FFFFFFFF, then 00000860 after three resets" the bench
+			// saw -- it was never marginal SDRAM, it was an uncalibrated read.
+			2'd0: if (rom_loaded && cal_done) begin rb_addr <= SDR_AW'(6); rb_req <= 1'b1; rb_state <= 2'd1; end
 			// ONE ACCESS PER HANDSHAKE, not per cycle of the request: it drops on
 			// ack. Harmless against RAM, and the habit is the point — the Model 1
 			// TGP popped every FIFO word twice by acting on the level instead.
@@ -658,12 +663,25 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		cal_sel <= 3'd0; cal_mask <= 6'd0; cal_wait <= 6'd0;
 	end else begin
 		case (st_state)
-			// WAITS FOR THE COPY. The copy engine, this self-test and the ROM
-			// readback were all looping concurrently, three read ports issuing at
-			// once, and the copy is the one whose result is displayed. Diagnostics
-			// contending with the thing being diagnosed is its own bug; they now
-			// start only once the copy has finished.
-			4'd0: if (rom_loaded && cp_done) begin
+			// RUNS FIRST, AND EVERYTHING THAT READS SDRAM WAITS FOR IT.
+			//
+			// This used to wait for the copy engine, to stop three read ports
+			// issuing at once. That ordering was exactly backwards, and it cost
+			// the 2D tilemap test its picture (study R47). `rd_lat_sel` follows
+			// `cal_sel` while `!cal_done`, and `cal_sel` resets to 0 -- so
+			// ANY read issued before this completes is captured at CL+0. At 40
+			// MHz that happened to be close enough; at 96 MHz the board reads
+			// CL+2 and CL+0 is two words early, i.e. garbage.
+			//
+			// The copy engine reads tile RAM, the palette and colorxlat ONCE and
+			// latches them into M10K, so it does not merely read garbage, it
+			// KEEPS it -- calibrating afterwards cannot repair a copy already
+			// made. Char RAM is fetched live and so came back correct, which is
+			// why the screen showed real pixels in one flat wrong colour.
+			//
+			// Contention is still avoided; the wait just points the other way.
+			// ST_BASE is word 0x1F00000, ~62 MB up, clear of both images.
+			4'd0: if (rom_loaded) begin
 				st_addr <= ST_BASE; st_din <= STP0; st_req <= 1'b1; st_state <= 4'd1;
 			end
 			4'd1: if (ldr_wr_ack) begin st_req <= 1'b0; st_state <= 4'd2; end
@@ -889,7 +907,9 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 			xlat_din_r  <= xlat_stage[cp_idx[6:0]];
 			if (cp_idx == 16'd95) cp_done <= 1'b1;
 			else cp_idx <= cp_idx + 16'd1;
-		end else if (!cp_req && rom_loaded) begin
+		// NOT UNTIL THE CAPTURE IS CALIBRATED. This copy is made once and kept
+		// (study R47), so reading it at the wrong depth is permanent.
+		end else if (!cp_req && rom_loaded && cal_done) begin
 			case (cp_phase)
 				2'd0:    cp_addr <= TRAM_BASE + SDR_AW'(cp_idx);
 				2'd1:    cp_addr <= PAL_BASE  + SDR_AW'(cp_idx);
@@ -987,7 +1007,12 @@ wire game_image = rom_loaded && (ldr_top > SDR_AW'(32'h0080000));
 // an oversight: "Memory comes out of reset on PLL lock and stays out, separate
 // from the game reset." The SDRAM's bring-up and the loaded image must survive
 // a reset; the CPU must not.
-wire cpu_rst_n = game_rst_n & rom_loaded & game_image;
+// HELD UNTIL THE CAPTURE IS CALIBRATED (study R47). The i960's first act out
+// of reset is four reads -- SAT, PRCB, IP and the initial FP -- and they were
+// being issued at CL+0 because cal_sel resets to 0 and calibration had not run
+// yet. Boot vectors captured two words early are garbage, and the CPU then runs
+// from them. The overlay's intermittent PRCB/IP was this, not marginal SDRAM.
+wire cpu_rst_n = game_rst_n & rom_loaded & game_image & cal_done;
 
 wire        cpu_req, cpu_we;
 wire [31:0] cpu_addr, cpu_wdata, cpu_rdata;

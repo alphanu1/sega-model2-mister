@@ -3240,3 +3240,79 @@ at this same clock, so our data arrives about two cycles earlier than theirs;
 the likely causes are pin routing and the two extra PLL outputs. If this core
 ever becomes unreliable after warming up, that is the first thing to look at,
 and the sweep now measures it in one boot rather than a build per guess.
+
+---
+
+**R47 — the capture calibration ran *after* the readers it exists to serve, so
+everything that read SDRAM at boot read it at CL+0.** The 2D tilemap test came
+back a flat red screen on the 96 MHz build. The reflex reading was a colour
+fault — red means R survived and G/B did not — and that reading was wrong in an
+instructive way.
+
+*What was eliminated, and how.* The colour path is fine end to end. The copy
+engine's source addressing matches `model2.cpp` exactly (`0x40`, `0x2040`,
+`0x4040` in words, stride 256); the CPU path's `{r_addr[15:14], r_addr[13:9]}`
+and the copy engine's `cp_idx[6:0]` produce the same `{channel, value}` index
+that `m2_video` reads back; and `xlat_ok` gates all 96 entries as a unit, so a
+half-loaded table cannot exist. The fixture was verified byte by byte — all
+three channels carry identical valid ramps 0→255. Then the decisive test:
+`test_m2_video_frame` was run against that exact dump and rendered **2,054
+non-black pixels of 190,464 in a bounding box of x 161–405, y 41–174, in white
+and green** — pixel-for-pixel MAME's frame. The 2D pipeline was never at fault.
+
+*The actual mechanism.* `rd_lat_sel` follows `cal_sel` while `!cal_done`, and
+`cal_sel` resets to `3'd0`. The self-test that performs the calibration waited
+on `cp_done` — added deliberately, to stop three read ports issuing at once
+while the copy was being diagnosed. That made the ordering:
+
+```
+rom_loaded → copy engine (CL+0) → cp_done → calibrate → cal_done
+```
+
+Every read before `cal_done` was captured at CL+0. The board's own sweep says
+CL+0 does not work: word 20 reads `00001204`, i.e. `cal_mask = 0b000100` —
+**only CL+2 passes**. So the copy engine read garbage, and because it copies
+tile RAM, the palette and colorxlat into M10K exactly once, it did not merely
+read garbage, it *kept* it. Calibrating afterwards cannot repair a copy already
+made. Char RAM is 512 KB, too big to copy, so it is fetched live on port 3 —
+after calibration, hence correctly. Correct character pixels indexed through a
+garbage tilemap and a garbage palette is precisely a screen of real pixels in
+one flat wrong colour.
+
+*Why Daytona did not show it.* `game_image` short-circuits `cp_done` without
+reading anything, so on a game image the copy engine is a no-op and the tilemap
+test was the only thing exercising that path. The bug was invisible on the
+target we were actually driving.
+
+*But it was not harmless there.* Two other readers were also unguarded, and
+both had already produced bench symptoms that were misread as marginal SDRAM:
+
+- **The ROM readback** gated on `cp_done`, which `game_image` asserts early —
+  so on Daytona it read at CL+0. That is the "row 2 reads `FFFFFFFF`, then
+  `00000860` after three resets" seen repeatedly on the bench.
+- **The i960 itself** came out of reset on `rom_loaded`. Its first act is four
+  reads — SAT, PRCB, IP and the initial FP — issued before calibration. Boot
+  vectors captured two words early are garbage, and the CPU then runs from them.
+  The intermittent PRCB and IP on the overlay were this.
+
+*The fix is an ordering one:* the self-test now waits only on `rom_loaded`, and
+the copy engine, the ROM readback and `cpu_rst_n` all wait on `cal_done`. The
+chain `rom_loaded → calibrate → copy → readback` has no cycle, and contention is
+still avoided — the wait simply points the other way. `ST_BASE` is word
+`0x1F00000`, ~62 MB up, clear of both images, so the self-test is safe to run
+first.
+
+*The generalisable rule, and it is the one this project keeps paying for:*
+**a calibration must complete before anything it calibrates is trusted, and a
+value that is latched once must never be captured on an uncalibrated path.**
+The guard that caused this was itself a fix — added for a real contention bug —
+and it was correct about the contention and wrong about the direction. When a
+diagnostic and the thing it measures are ordered against each other, the
+measurement goes first.
+
+*A note on the reflex.* "Red screen → colour bug" cost the first hour. The
+colour hypothesis was cheap to test and false; what actually localised the fault
+was rendering the real fixture through the real pipeline in simulation and
+getting MAME's frame back. Reproducing the good case is as diagnostic as
+reproducing the bad one — it converts "something in this 2,000-line path" into
+"nothing in this path", which is what left the ordering as the only candidate.
