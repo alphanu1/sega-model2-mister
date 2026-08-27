@@ -1625,7 +1625,14 @@ m2_diag #(.NWORDS(21)) u_diag
 	         cpu_dbg_laddr,                             // 10 last address asked for
 	         cpu_dbg_palwr,                             // 9  CPU writes to the PALETTE
 	         cpu_dbg_tramwr,                            // 8  CPU writes to TILE RAM
-	         cpu_dbg_prcb,                              // 7  PRCB read at boot, want 000000C0
+	         // 7 PRCB. 000000C0 IS ONLY THE BOOT VALUE. Daytona reinitializes
+	         // the PRCB through an IAC (i960_top line 1641, prcb_reg <= iac2),
+	         // after which this legitimately reads 0053F400 -- confirmed against
+	         // the boot harness, whose stream matches MAME for 803,355
+	         // instructions. A changed value here means the CPU got FURTHER, not
+	         // that the read was wrong; the old legend said the opposite and
+	         // cost a diagnosis. Study R48.
+	         cpu_dbg_prcb,                              // 7  PRCB: 000000C0 at boot, 0053F400 once reinitialized
 	         cpu_dbg_ip,                                // 6  where the CPU is
 	         cpu_dbg_acc,                               // 5  instructions accepted
 	         // 32 BITS, not 31. The first version was {27'd0, ...} = 31, which

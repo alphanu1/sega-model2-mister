@@ -3316,3 +3316,28 @@ was rendering the real fixture through the real pipeline in simulation and
 getting MAME's frame back. Reproducing the good case is as diagnostic as
 reproducing the bad one — it converts "something in this 2,000-line path" into
 "nothing in this path", which is what left the ordering as the only candidate.
+
+---
+
+**R48 — `0053F400` in the PRCB is the boot succeeding, not failing.** The
+overlay's row 7 was labelled *"PRCB read at boot, want `000000C0`"*. The board
+read `0053F400` and it was briefly taken as a bad read on the CPU's port,
+because row 2 — an independent readback of the same memory through port 1 — was
+correct at the same moment, which looked like a port-0 fault.
+
+It is not a fault. `i960_top` line 1641 assigns `prcb_reg <= iac2` on a
+**reinitialize IAC**, and Daytona's boot issues one. Confirmed by tapping
+`dbg_prcb` in `test_m2_boot`, whose instruction stream matches MAME for 803,355
+instructions: the harness ends holding **`0053f400`**, the same value the board
+shows.
+
+So row 7 changing is evidence the CPU got *further*, not that a read went wrong.
+The old legend asserted the opposite, and an instrument that states the wrong
+expected value is worse than one with no legend at all — it converts a success
+into a bug report. The label now gives both values and says which is which.
+
+*The general form of this, and it is the third time it has been paid for:* a
+debug tap needs to name the whole range of correct values, not the first one
+anybody happened to observe. Compare R38, where regions past the end of the
+image were being read as evidence, and the sweep had to be made say which those
+were.

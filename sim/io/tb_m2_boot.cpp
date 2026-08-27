@@ -439,6 +439,9 @@ int main(int argc, char **argv) {
   std::printf("  window reads %u, backup writes %u, backup dword0 %08x\n",
               d->iob_win_rd, d->bak_writes, d->bak_w0);
   std::printf("  tile RAM writes %u\n", d->dbg_tram_wr);
+  std::printf("  PRCB as the CPU holds it at the end: %08x (boot value is 000000c0;\n"
+              "    it legitimately CHANGES on a reinitialize IAC, so a different\n"
+              "    value here is not by itself a fault)\n", d->obs_prcb);
   if (rf_bad_first)
     std::printf("  FIRST frame access outside work RAM: addr %08x at instruction %u,"
                 " ip %08x, pfp %08x\n", rf_bad_first, rf_bad_at, rf_bad_ip, rf_bad_pfp);

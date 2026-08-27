@@ -67,6 +67,7 @@ module m2_boot_harness #(
   output logic [31:0] iob_dbg,
   output logic [31:0] dbg_tram_wr,
   output logic [31:0] dbg_ip,
+  output logic [31:0] obs_prcb,
   output logic        cpu_trap,
   output logic        cpu_halt,
 
@@ -200,7 +201,7 @@ module m2_boot_harness #(
     .bus_req(bus_req), .bus_we(bus_we), .bus_addr(bus_addr), .bus_be(bus_be),
     .bus_wdata(bus_wdata), .bus_rdata(bus_rdata), .bus_ack(bus_ack),
     .irq(irq),
-    .dbg_pc(dbg_pc), .dbg_sat(), .dbg_prcb(), .dbg_icr(),
+    .dbg_pc(dbg_pc), .dbg_sat(), .dbg_prcb(obs_prcb), .dbg_icr(),
     .dbg_intr_cnt(), .dbg_intr_work(), .dbg_acc_cnt(dbg_acc),
     .dbg_ip(dbg_ip), .dbg_insn(),
     .trap(cpu_trap), .trap_op(), .halted(cpu_halt),
