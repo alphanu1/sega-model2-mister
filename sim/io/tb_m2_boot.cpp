@@ -50,6 +50,7 @@ static bool load_file(const std::string &p, std::vector<uint8_t> &out) {
   return got == size_t(n);
 }
 
+static int g_r5_n = 0;
 static int g_e1n = 0, g_e0n = 0, g_win = 0, g_bk_n = 0, g_c3_n = 0, g_src_n = 0, g_sw_n = 0;
 static const int FW = 496, FH = 384;
 static std::vector<uint8_t> g_frame(size_t(FW)*FH*3, 0);
@@ -344,7 +345,26 @@ int main(int argc, char **argv) {
   const bool frametrace = std::getenv("M2_BOOT_FRAME") != nullptr;
   uint32_t acc_prev2 = 0;
 
-  while (d->dbg_acc < max_instr) {
+  // WARM BOOT. +warmboot=N runs to N instructions, pulses reset, and runs a
+  // second boot to the +insn limit. The backup SRAM arrays have no reset, so
+  // boot 2 finds boot 1's settings -- the state every real board boot has and
+  // no simulation has ever had. The board's first settings read returns the
+  // correct 030300 and the draw still prints spaces; if boot 2 here writes
+  // C020 to cell 1129 where boot 1 wrote C033, the warm path is reproduced.
+  uint64_t warm_at = 0;
+  if (const char *wb = std::getenv("M2_WARMBOOT"))
+    warm_at = std::strtoull(wb, nullptr, 10);
+  bool warm_done = false;
+
+  while (d->dbg_acc < max_instr || (warm_at && !warm_done)) {
+    if (warm_at && !warm_done && d->dbg_acc >= warm_at) {
+      std::printf("  === WARM RESET at insn %u ===\n", (unsigned)d->dbg_acc);
+      d->rst_n = 0;
+      for (int i = 0; i < 64; ++i) tick();
+      d->rst_n = 1;
+      warm_done = true;
+      g_c3_n = 0; g_sw_n = 0; g_bk_n = 60;   // re-arm the cell log for boot 2
+    }
     tick();
     if (pctr && d->dbg_acc != pc_acc_prev) {
       if (d->dbg_acc >= pcfrom) std::fprintf(pctr, "%08x\n", (unsigned)d->dbg_ip);
@@ -598,6 +618,16 @@ int main(int argc, char **argv) {
                   d->obs_bus_addr, d->obs_bus_be, d->obs_bus_wdata,
                   (unsigned)d->dbg_acc, (unsigned)d->dbg_ip);
       ++g_sw_n;
+    }
+    // EVERY read of the settings dword, numbered -- the board capture's
+    // reference sequence.
+    if (d->obs_bus_ack && !ack_prev && !d->obs_bus_we &&
+        d->obs_bus_addr >= 0x01d00014u && d->obs_bus_addr < 0x01d00018u &&
+        g_r5_n < 20) {
+      std::printf("      RD5 #%d addr %08x -> %08x  (insn %u ip %08x)\n",
+                  g_r5_n, d->obs_bus_addr, d->obs_bus_rdata,
+                  (unsigned)d->dbg_acc, (unsigned)d->dbg_ip);
+      ++g_r5_n;
     }
     // BACKUP SRAM SETTINGS WINDOW. The menu's missing digits are the credit
     // and coin settings, which live here; the byte-walking loop at ip 0x5250

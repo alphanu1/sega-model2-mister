@@ -325,6 +325,21 @@ module m2_boot_harness #(
     .dbg_flag_rd(iob_flag_rd), .dbg_seen(iob_seen)
   );
 
+  // WARM-STATE PRELOAD. +bakinit=PREFIX loads PREFIX0..3.hex (from
+  // tools/nvm_split.py on a board's .nvm save) into the backup lanes before
+  // reset releases, so the simulation boots with the board's REAL persisted
+  // state rather than a synthesized one.
+  initial begin : bak_preload
+    string pfx;
+    if ($value$plusargs("bakinit=%s", pfx)) begin
+      $readmemh({pfx, "0.hex"}, u_backup.b0);
+      $readmemh({pfx, "1.hex"}, u_backup.b1);
+      $readmemh({pfx, "2.hex"}, u_backup.b2);
+      $readmemh({pfx, "3.hex"}, u_backup.b3);
+      $display("  backup SRAM preloaded from %s0..3.hex", pfx);
+    end
+  end
+
   wire        bak_sel = cpu_io_sel && (cpu_io_addr[23:14] == 10'b11_0100_0000);
   wire [31:0] bak_rdata;
 
@@ -332,7 +347,8 @@ module m2_boot_harness #(
     .clk(clk_mem), .sel(bak_sel), .we(cpu_io_we),
     .word(cpu_io_addr[13:2]), .be(cpu_io_be), .wdata(cpu_io_wdata),
     .rdata(bak_rdata),
-    .rst_n(rst_n), .dbg_word(12'd5), .dbg_q(), .dbg_first(), .dbg_w0(bak_w0), .dbg_writes(bak_writes)
+    .rst_n(rst_n), .hps_we(1'b0), .hps_word(12'd0), .hps_be(4'd0), .hps_wdata(32'd0),
+    .dbg_word(12'd5), .dbg_rd_sel(3'd0), .dbg_q(), .dbg_first(), .dbg_w0(bak_w0), .dbg_writes(bak_writes)
   );
 
   // The I/O read mux, copied from Model2.sv. If these two ever disagree the

@@ -149,10 +149,18 @@ hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
 	.ioctl_wr(ioctl_wr),
 	.ioctl_addr(ioctl_addr),
 	.ioctl_dout(ioctl_dout),
-	.ioctl_wait(ioctl_wait)
+	.ioctl_wait(ioctl_wait),
+	// NVRAM save: the framework reads backup SRAM back through ioctl_din when
+	// it saves the MRA's <nvram> section. upload_req stays 0 -- saves are
+	// host-initiated, the standard arcade pattern.
+	.ioctl_din(ioctl_din),
+	.ioctl_upload(ioctl_upload),
+	.ioctl_upload_req(1'b0),
+	.ioctl_upload_index()
 );
 
-wire        ioctl_download, ioctl_wr, ioctl_wait;
+wire        ioctl_download, ioctl_wr, ioctl_wait, ioctl_upload;
+wire [15:0] ioctl_din;
 wire [15:0] ioctl_index, ioctl_dout;
 wire [26:0] ioctl_addr;
 
@@ -1363,15 +1371,27 @@ always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
 	end
 end
 
+// NVRAM (MRA <nvram index="2">): load fills backup SRAM before the CPU is
+// released; save reads it back. 16-bit ioctl: word = addr[13:2], half = addr[1].
+wire nv_sel = (ioctl_index[5:0] == 6'd2);
+wire nv_we  = ioctl_download && nv_sel && ioctl_wr;
+assign ioctl_din = ioctl_addr[1] ? bak_dbg_q[31:16] : bak_dbg_q[15:0];
+
 m2_backup u_backup (
 	.clk(clk_sys), .rst_n(cpu_rst_n),
+	.hps_we(nv_we),
+	.hps_word(ioctl_addr[13:2]),
+	.hps_be(ioctl_addr[1] ? 4'b1100 : 4'b0011),
+	.hps_wdata({ioctl_dout, ioctl_dout}),
 	.sel(bak_sel),
 	.we(cpu_io_we),
 	.word(cpu_io_addr[13:2]),
 	.be(cpu_io_be),
 	.wdata(cpu_io_wdata),
 	.rdata(bak_rdata),
-	.dbg_word(12'd5), .dbg_q(bak_dbg_q), .dbg_first(bak_first),
+	.dbg_word((ioctl_upload && nv_sel) ? ioctl_addr[13:2] : 12'd5),
+	.dbg_rd_sel(status[16:14]),
+	.dbg_q(bak_dbg_q), .dbg_first(bak_first),
 	.dbg_w0(bak_w0), .dbg_writes(bak_writes)
 );
 wire [31:0] bak_dbg_q;
@@ -1842,8 +1862,9 @@ m2_diag #(.NWORDS(24)) u_diag
 	         // Probe=chr0: live settings dword. Probe=row2: {read count,
 	         // low 24 bits of the FIRST value the game read from it this boot}
 	         // -- FF...FF means the draw consumed uninitialised settings.
-	         (status[16:14] == 3'd7) ? bak_dbg_q :
-	         (status[16:14] == 3'd5) ? bak_first : {16'd0, tp_q},
+	         // 23 is now {total read count, read #(Probe+1) of the settings
+	         // dword, low 24 bits}. Step Probe 0..7 to walk the sequence.
+	         bak_first,
 	         // 22 THE LAST CHARACTER FETCH, verbatim. FFFFFFFF means the fetch is
 	         // reading memory nobody ever wrote -- one flat colour per palette
 	         // bank, which is the board's sky and ground. Anything varied means

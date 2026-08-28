@@ -22,6 +22,7 @@
     <name>Daytona USA (Deluxe '93)</name>
     <setname>daytona93</setname>
     <rbf>Model2</rbf>
+    <nvram index="2" size="16384"/>
     <mameversion>0289</mameversion>
     <year>1993</year>
     <manufacturer>Sega</manufacturer>

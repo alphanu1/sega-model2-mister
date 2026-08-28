@@ -52,7 +52,15 @@ module m2_backup (
   input  logic [11:0] word,       // dword index, address[13:2]
   input  logic  [3:0] be,
   input  logic [31:0] wdata,
+  // HPS ACCESS, for NVRAM save/load through the framework (study R59). The
+  // CPU is in reset for the whole download window, so the write mux cannot
+  // contend; upload reads reuse the debug read port.
+  input  logic        hps_we,
+  input  logic [11:0] hps_word,
+  input  logic  [3:0] hps_be,
+  input  logic [31:0] hps_wdata,
   input  logic [11:0] dbg_word,
+  input  logic  [2:0] dbg_rd_sel,
   output logic [31:0] dbg_q,
   output logic [31:0] dbg_first,
   output logic [31:0] rdata,
@@ -98,20 +106,26 @@ module m2_backup (
   // Registered read, which the I/O path absorbs: `word` comes from the bridge's
   // latched r_addr and is stable through a dispatch cycle before io_sel is
   // asserted, so the data is out of the memory before the bridge samples it.
+  // One write port per lane, CPU or HPS -- never both, because the CPU is in
+  // reset whenever hps_we can assert.
+  wire        wsel = (sel && we) || hps_we;
+  wire [11:0] ww   = hps_we ? hps_word  : word;
+  wire [31:0] wd   = hps_we ? hps_wdata : wdata;
+  wire  [3:0] wb   = hps_we ? hps_be    : (sel && we) ? be : 4'b0000;
   always_ff @(posedge clk) begin
-    if (sel && we && be[0]) b0[word] <= wdata[7:0];
+    if (wsel && wb[0]) b0[ww] <= wd[7:0];
     q0 <= b0[word];
   end
   always_ff @(posedge clk) begin
-    if (sel && we && be[1]) b1[word] <= wdata[15:8];
+    if (wsel && wb[1]) b1[ww] <= wd[15:8];
     q1 <= b1[word];
   end
   always_ff @(posedge clk) begin
-    if (sel && we && be[2]) b2[word] <= wdata[23:16];
+    if (wsel && wb[2]) b2[ww] <= wd[23:16];
     q2 <= b2[word];
   end
   always_ff @(posedge clk) begin
-    if (sel && we && be[3]) b3[word] <= wdata[31:24];
+    if (wsel && wb[3]) b3[ww] <= wd[31:24];
     q3 <= b3[word];
   end
 
@@ -136,17 +150,20 @@ module m2_backup (
   // the first read of word 5 after reset, plus a read counter. FFFFFFFF here
   // with 00030300 in dbg_q means the draw ran before the settings were
   // written; 00030300 here moves the fault downstream of the read.
-  logic        fr_taken;
+  // NUMBERED-READ CAPTURE. The first read of the settings dword returned the
+  // correct value on the board (read #1 latched 030300) and the digits still
+  // print as spaces -- but the dword is ZEROED AND REWRITTEN between that
+  // first read and the draw's own read (~#7 of 10 in simulation). So capture
+  // read #(dbg_rd_sel+1) specifically: stepping the selector through 0..7 on
+  // the bench walks the whole read sequence and finds the read that differs
+  // from the simulation's.
   logic [31:0] dbg_first_rd;
   logic  [7:0] fr_cnt;
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      fr_taken <= 1'b0; dbg_first_rd <= 32'd0; fr_cnt <= 8'd0;
+      dbg_first_rd <= 32'd0; fr_cnt <= 8'd0;
     end else if (sel && !we && word == 12'd5) begin
-      // rdata is registered one cycle behind `word`; by the time sel asserts
-      // for a dispatch the q's hold word 5 (the bridge holds the address a
-      // cycle ahead, same as the CPU read path relies on).
-      if (!fr_taken) begin fr_taken <= 1'b1; dbg_first_rd <= {q3, q2, q1, q0}; end
+      if (fr_cnt == {5'd0, dbg_rd_sel}) dbg_first_rd <= {q3, q2, q1, q0};
       if (!(&fr_cnt)) fr_cnt <= fr_cnt + 8'd1;
     end
   end
