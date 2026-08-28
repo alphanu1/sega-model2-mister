@@ -66,28 +66,26 @@ demands) gets built against seconds-long runs.
 
 ### ON THE BOARD NOW: build 284074ce
 
-R69 IS THE HEADLINE: THE BLANKING IS NORMAL. MAME blanks cells 1129,
-1130, 1131 and 1108 to 8020 by frame 240, exactly as our core does at
-ip 0x18DD0. Our core matches the reference. Every tile-cell reading was
-taken after the characters vanished, when those cells are legitimately
-blank in BOTH machines -- so the readings could never have told healthy
-from broken. R68 is retracted; there is no fault in the draw path.
+R70 IS THE HEADLINE: THE RTL IS CORRECT. Our composition renders the
+GAME ASSIGNMENTS menu complete and matching MAME's reference image --
+green '3' present, all four setting lines drawn -- with ZERO line
+overruns. Settings, firmware, exchange, formatter, backup, tile RAM,
+font, palette, colour table and renderer are proven correct TOGETHER
+against a reference image. The fault is the board's alone.
 
-DO NEXT, AND IT IS FREE: the OSD has `SDRAM phase` (Auto, CL+1..CL+5).
-Row 20 read 00001204 on the board, and bits 5:0 = 04 means only ONE of
-six capture depths reads the pattern back -- an interface with no margin.
-Marginal reads corrupt some fetches and not others, which is what a few
-missing characters looks like. Step the phase through every setting and
-watch whether the missing characters change. That is the cheapest
-remaining experiment and it may end the hunt.
+An earlier claim that the sim reproduced the fault was a capture-timing
+artifact (frame 56 vs MAME's 130, menu still being drawn) and is
+withdrawn. Same sampling error as R69, twice in one session.
 
-MEASURED AND SETTLED, do not re-investigate:
-  backup settings   00030300  clean
-  firmware window   00030300  clean, matches MAME
-  formatter store   3131      correct ASCII digits, 60 writes
-  tile cells        8020      NORMAL -- MAME does the same
-  cabinet switch    FFFF2xxx  scan runs, button never reaches the core
-                              (separate open bug, joystick_0 reads zero)
+READ NEXT, WHILE THE CHARACTERS ARE MISSING: overlay row 22, the last
+character fetch verbatim. Glyph data comes from SDRAM; the tilemap lives
+in on-chip M10K and probes clean, which is why every value we measured
+looked healthy. FFFFFFFF = the fetch reads memory nobody wrote; varied
+data = the fetch path is sound and the cause is elsewhere.
+
+Supporting evidence for the SDRAM-margin theory: row 20 reads 00001204,
+ONE working capture depth of six, and the board shows no picture at all
+in any other SDRAM phase.
 
 ### The tram cell probe, finally connected
 

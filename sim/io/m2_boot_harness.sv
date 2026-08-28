@@ -60,6 +60,11 @@ module m2_boot_harness #(
   // Cabinet switches, active low, MAME's IN0 order: bit2 is the TEST switch
   // (MAME calls it Service Mode) and FB is that switch held.
   input  logic  [7:0] cab_in0,
+  // LINE OVERRUNS: a scanline whose character fetches did not finish before
+  // the next line began. m2_video has counted them all along and the harness
+  // never looked. Whole rows of text going missing is exactly what they do.
+  output logic  [7:0] dbg_fetches_o,
+  output logic [15:0] dbg_overruns_o,
   output logic        clk_slow_o,
   input  logic        rl_req,
   input  logic [25:1] rl_addr,
@@ -245,7 +250,7 @@ module m2_boot_harness #(
     .pal_addr(pal_addr), .pal_data(pal_data),
     .vid_r(vid_r), .vid_g(vid_g), .vid_b(vid_b),
     .vid_hs(), .vid_vs(), .vid_hb(vid_hb), .vid_vb(vid_vb),
-    .vblank_irq(), .dbg_fetches(), .dbg_overruns(),
+    .vblank_irq(), .dbg_fetches(dbg_fetches_o), .dbg_overruns(dbg_overruns_o),
     .dbg_layer_px(), .dbg_ctrl(), .dbg_layer_have()
   );
 

@@ -4360,3 +4360,46 @@ rest of the text is fine" looks like. The OSD already exposes `SDRAM phase`
 watching whether the missing characters change is a free experiment with a
 real chance of ending this, and it should be done before any further
 instrument is built.
+
+
+**R70 — the RTL renders the screen CORRECTLY against the MAME reference image,
+so the fault is the board's alone.** The claim in the previous session note
+that simulation reproduced the missing characters was an artifact of the
+capture moment and is withdrawn. Captured at frame 56 the menu is
+part-drawn -- COUNTRY two scanlines tall, CABINET and DIFFICULTY absent, the
+green '3' missing -- because the game draws it progressively. Captured at
+frame 103, against MAME's reference at frame 130, our composition renders:
+
+  ADVERTISE SOUND  ON / COUNTRY  JPN / CABINET  DELUXE / DIFFICULTY  NORMAL
+  CREDIT TO START      3CREDIT(S) / COIN/CREDIT SETTING  # 1
+
+-- complete, with the green '3' present, matching the reference. That is the
+same sampling-moment error as R69, made twice in one session with two
+different instruments.
+
+*What this positively proves.* Settings, I/O firmware, the exchange, the
+formatter, backup SRAM, tile RAM, the font, the palette, the colour
+translation table and the renderer are correct TOGETHER, end to end, checked
+against a reference image rather than against expectations. Line overruns
+measure ZERO in the same run, so the fetch budget is not tight either. No
+value anywhere in the chain is wrong.
+
+*Which leaves board-only causes, and one is already indicated.* The same RTL
+misbehaves on hardware, so the difference is something simulation cannot
+model:
+
+ 1. **SDRAM read margin.** Row 20 reads `00001204`: one working capture depth
+    out of six, and the board shows NO PICTURE AT ALL in any other phase. The
+    tilemap lives in on-chip M10K and probes correct; the GLYPH data is
+    fetched from SDRAM. A marginal fetch corrupts some characters and not
+    others while leaving every probed value clean -- which is precisely the
+    symptom and precisely why every probe came back healthy.
+ 2. **Memory inference.** Per the standing rules, simulation cannot see
+    whether an array landed in M10K or in logic. Only a build can.
+
+*The measurement that discriminates, already built.* Overlay row 22 latches
+THE LAST CHARACTER FETCH verbatim. Read while characters are missing:
+FFFFFFFF means the fetch is reading memory nobody wrote, varied data means
+real glyphs are arriving and the fetch path is sound. That single reading
+separates cause 1 from everything else, and it has never been taken while the
+fault was visible.

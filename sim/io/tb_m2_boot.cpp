@@ -880,6 +880,8 @@ int main(int argc, char **argv) {
               d->iob_dbg, d->iob_flag_rd, d->iob_seen);
   std::printf("  window reads %u, backup writes %u, backup dword0 %08x\n",
               d->iob_win_rd, d->bak_writes, d->bak_w0);
+  std::printf("  LINE OVERRUNS: %u   worst-line fetches: %u\n",
+              (unsigned)d->dbg_overruns_o, (unsigned)d->dbg_fetches_o);
   std::printf("  tile RAM writes %u\n", d->dbg_tram_wr);
   {
     // TILE RAM AS THE CPU BUILDS IT, against the captured frame. The board
