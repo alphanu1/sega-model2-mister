@@ -4444,3 +4444,52 @@ shape of the fault, and it costs nothing to make defined: give the arrays
 explicit read-during-write handling, or move the CPU's tilemap read off the
 shared array (measure first whether the game reads tile RAM at all -- if it
 only writes, the second read port and its 64 M10K disappear with it).
+
+
+**R72 — the video moves onto clk_sys, which makes the tilemap's
+read-during-write DEFINED, and a 64 KB glyph cache takes SDRAM out of the 2D
+render path.** Four changes from one question: can the two clocks be related?
+
+*They can be removed.* clk_vid ran at 32 MHz with ce_pix at half that -- 16 MHz
+pixels. **48 / 3 = 16 MHz exactly**, so clk_sys reaches the same pixel rate with
+a one-in-three enable and the second clock is unnecessary. The renderer, the
+overlay and the timing generator now all run on clk_sys. Synthesis confirms the
+consequence: `tram_rtl_0` and `pal_rtl_0` NO LONGER APPEAR among the
+`Warning (276027)` dual-clock RAMs. Tilemap and palette read-during-write is
+defined behaviour on silicon now instead of undefined, the clk_vid-to-memory
+crossing no longer has to be cut in the SDC so those paths are timed, and the
+fetch engine gets 1.5x more cycles per scanline.
+
+*R71's supporting statistic was empty, and this retires it.* "90% of tilemap
+writes land during active display" was read as evidence the CPU fights the
+renderer. But V_VISIBLE=384 of V_TOTAL=424 makes blanking **9.4% of the
+frame**, so a writer that ignores blanking measures 90.6% by arithmetic alone.
+The timing matches MAME's set_raw exactly. The number says nothing about the
+game and never did; the dual-clock hazard was real, the evidence offered for
+its severity was not.
+
+*The glyph cache.* Glyph pixels were the only part of the 2D path still read
+from SDRAM, and the pattern is 9,084x redundant (71.6 M fetches, 7,883 distinct
+words, 985 KB span). `m2_char_cache` holds 16,384 words -- 64 KB, sized with
+headroom over the 30.8 KB measured rather than fitted to it. Direct-mapped, one
+word per line, valid bits carried in the tag RAM and swept at reset. Its
+testbench: 10,128 reads with ZERO wrong, 100% hit on warm data, **96.7% on the
+real glyph access shape**, and correct data under deliberate conflict
+thrashing. Live hit/miss counters ship with it so the size is revisited against
+evidence.
+
+*And the overlay is off by default* (`O[19]`), which it should always have
+been: 24 rows of hex painted over the top-left of the picture, exactly where
+the game puts its own text.
+
+*What this does NOT yet claim.* None of it is proven to fix the board. The
+flat-colour attract screen points at the character fetch, and the cache changes
+that path radically -- 9,000x fewer SDRAM transactions, served from on-chip
+memory in the renderer's own clock domain -- so if the fault is in the fetch or
+its crossing, this is the change most likely to move it. If the board still
+renders two flat colours afterwards, the fetch is returning bad data at the
+source and row 22 is still the reading that says so.
+
+*Self-inflicted, recorded so it is not repeated:* the first build of this failed
+because the new module was created but never added to `Model2.qsf`. Quartus does
+not glob; a new RTL file is invisible until the project lists it.

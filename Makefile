@@ -201,7 +201,7 @@ synth_i960_ldst:
 # --------------------------------------------------------------------- tests
 
 .PHONY: test test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram test_fx68k test_m2_ioboard
-test: test_fx68k test_m2_ioboard test_m2_char_cdc test_m2_sdram_x2 test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
+test: test_fx68k test_m2_ioboard test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
 
 test_i960_dec: obj_i960_dec/Vi960_dec
 	@echo "== test i960_dec"
@@ -540,6 +540,14 @@ obj_boot_rm/Vm2_boot_harness: $(BOOTSRC) sim/io/tb_m2_boot.cpp
 	  -Wno-SYNCASYNCNET \
 	  -Wno-DECLFILENAME --Mdir obj_boot_rm -o Vm2_boot_harness \
 	  -CFLAGS "-O2" $(BOOTSRC) sim/io/tb_m2_boot.cpp
+
+test_m2_char_cache: obj_charcache/Vm2_char_cache
+	@./obj_charcache/Vm2_char_cache
+
+obj_charcache/Vm2_char_cache: rtl/video/m2_char_cache.sv sim/video/tb_m2_char_cache.cpp
+	$(VERILATOR) --cc --exe --build -j 0 $(VFLAGS) --top-module m2_char_cache \
+	  --Mdir obj_charcache -o Vm2_char_cache -CFLAGS -O2 \
+	  rtl/video/m2_char_cache.sv sim/video/tb_m2_char_cache.cpp
 
 test_m2_ioz80: obj_ioz80/Vm2_ioz80_harness
 	@echo "== test m2_ioz80 (real firmware on tv80)"

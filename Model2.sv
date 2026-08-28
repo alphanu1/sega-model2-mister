@@ -104,6 +104,12 @@ localparam CONF_STR = {
 	"-;",
 	"R[17],Save settings (NVRAM);",
 	"O[18],Probe page,0,1;",
+	// OFF BY DEFAULT. The overlay is 24 rows of hex painted over the top-left
+	// of the picture, which is exactly where the game puts its own text. It
+	// stays compiled in -- the probes cost nothing now that they observe write
+	// buses instead of adding memory ports -- but it should not be in the way
+	// of looking at the game.
+	"O[19],Debug overlay,Off,On;",
 	"R[0],Reset and close OSD;",
 	// The button-definition line lives at the END of the menu block. Placed
 	// between the two R items it silently broke everything after it -- the OSD
@@ -205,8 +211,33 @@ pll pll
 
 // EXACTLY half of 32 MHz. MAME declares Model 2's pixel clock as
 // `32_MHz_XTAL/2`, so this is the reference rate and not an approximation of it.
-reg ce_pix;
-always @(posedge clk_vid) ce_pix <= ~ce_pix;
+// ONE CLOCK FOR THE PICTURE AND THE MEMORY THAT FEEDS IT.
+//
+// The renderer used to run on clk_vid (32 MHz, ce_pix = /2 = 16 MHz) while the
+// tilemap and palette were written from clk_sys. Two unrelated clocks on one
+// array is a DUAL-CLOCK RAM, and Quartus says so plainly:
+//
+//   Warning (276027): Inferred dual-clock RAM node "emu:emu|tram_rtl_0" ...
+//   The read-during-write behavior of a dual-clock RAM is UNDEFINED and may
+//   not match the behavior of the original design.
+//
+// Undefined on silicon, well-defined in Verilator -- the exact divergence the
+// standing rules warn simulation cannot see, sitting on the path that makes
+// the picture. It also forced the clk_vid/memory crossing to be CUT in the
+// SDC, so those paths were never timed at all.
+//
+// 48 / 3 = 16 MHz EXACTLY, the same pixel rate clk_vid/2 produced, so the
+// second clock is not needed to hit it. Running the video on clk_sys with a
+// one-in-three enable makes tram and pal SINGLE-clock: Quartus then adds
+// pass-through logic and read-during-write becomes defined, the crossing
+// becomes a real timed path, and the renderer gets 1.5x more cycles per line
+// for its fetches into the bargain.
+reg [1:0] ce_div;
+reg       ce_pix;
+always @(posedge clk_sys) begin
+	ce_div <= (ce_div == 2'd2) ? 2'd0 : ce_div + 2'd1;
+	ce_pix <= (ce_div == 2'd1);
+end
 
 // Memory comes out of reset on PLL lock and STAYS out, separately from the
 // game reset. One signal must not mean two things -- docs/mister-integration.md.
@@ -790,7 +821,7 @@ end
 // Static once captured, so a two-flop synchroniser on the status bit is enough:
 // the data is not moving when the video domain reads it.
 logic [2:0] loaded_sync, st_ok_sync;
-always_ff @(posedge clk_vid) begin
+always_ff @(posedge clk_sys) begin
 	loaded_sync <= {loaded_sync[1:0], rom_loaded};
 	st_ok_sync  <= {st_ok_sync[1:0],  st_ok};
 end
@@ -883,7 +914,7 @@ wire [SDR_AW:1] char_base = game_image ? GAME_CHAR : CHAR_BASE;
 wire [14:0] tram_addr;
 wire [11:0] pal_addr;
 logic [15:0] tram_data, pal_data;
-always_ff @(posedge clk_vid) begin
+always_ff @(posedge clk_sys) begin
 	tram_data <= tram[tram_addr];
 	pal_data  <= pal[{1'b0, pal_addr}];
 end
@@ -1855,7 +1886,7 @@ wire [17:0] cc_addr;
 // address is wrong rather than the renderer.
 logic [31:0] cd_last;
 logic [15:0] cd_ff;
-always_ff @(posedge clk_vid or negedge mem_rst_n) begin
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
 		cd_last <= 32'd0; cd_ff <= 16'd0;
 	end else if (char_ack) begin
@@ -1864,10 +1895,37 @@ always_ff @(posedge clk_vid or negedge mem_rst_n) begin
 	end
 end
 
-m2_char_cdc u_char_cdc (
-	.clk_vid(clk_vid), .vid_rst_n(mem_rst_n & cp_done),
+// THE GLYPH CACHE SITS IN FRONT OF THE FETCH. Measured on a boot through the
+// menu and into attract: 71.6 M fetches serving 7,883 distinct words -- 9,084x
+// redundancy -- against a 985 KB address span far too large to hold outright.
+// 64 KB of on-chip storage covers the 30.8 KB actually touched with room for
+// gameplay, at ~59 M10K of the 241 free. Its own testbench measures 96.7% on
+// the real glyph access shape and returns correct data under deliberate
+// conflict thrashing.
+//
+// It also buys back what the 3D renderer will want: the fetches it absorbs are
+// SDRAM transactions that no longer cross the arbiter or occupy a slow port.
+wire        cache_m_req, cache_m_ack;
+wire [17:0] cache_m_addr;
+wire [31:0] cache_m_data;
+wire [31:0] char_hits, char_misses;
+
+m2_char_cache #(.IDX_BITS(14)) u_char_cache (
+	.clk(clk_sys), .rst_n(mem_rst_n & cp_done),
 	.v_req(char_req), .v_addr(char_addr),
 	.v_ack(char_ack), .v_data(char_data),
+	.m_req(cache_m_req), .m_addr(cache_m_addr),
+	.m_ack(cache_m_ack), .m_data(cache_m_data),
+	.dbg_hits(char_hits), .dbg_misses(char_misses)
+);
+
+// The crossing stays. Both sides now run on clk_sys, so it is a handshake
+// across one clock rather than two -- harmless, proven, and the cache means it
+// is exercised a few thousand times a frame instead of millions.
+m2_char_cdc u_char_cdc (
+	.clk_vid(clk_sys), .vid_rst_n(mem_rst_n & cp_done),
+	.v_req(cache_m_req), .v_addr(cache_m_addr),
+	.v_ack(cache_m_ack), .v_data(cache_m_data),
 	.clk_sys(clk_sys), .sys_rst_n(mem_rst_n),
 	.s_req(cc_req), .s_addr(cc_addr),
 	.s_ack(p_ack[3]), .s_data(p_dout[3][31:0])
@@ -1904,7 +1962,7 @@ m2_video u_tilemap (
 	// at CL+0 until the calibration caught up. Those are live re-reads rather
 	// than a latched copy, so it corrected itself -- but it is the last reader
 	// that was not waiting, and "it fixes itself" is not a reason to leave one.
-	.clk(clk_vid), .ce_pix(ce_pix), .rst_n(mem_rst_n & cp_done & cal_done),
+	.clk(clk_sys), .ce_pix(ce_pix), .rst_n(mem_rst_n & cp_done & cal_done),
 	.tile_mask(14'h3FFF),
 	// Colour translation table not loaded yet: it powers up holding pal5bit,
 	// which is exactly what this rendered before the table existed, so the
@@ -1957,7 +2015,7 @@ m2_video_timing u_timing
 wire vbs;
 assign vbs = vblank & ~vblank_d;
 reg vblank_d;
-always @(posedge clk_vid) if (ce_pix) vblank_d <= vblank;
+always @(posedge clk_sys) if (ce_pix) vblank_d <= vblank;
 
 m2_testpattern u_pattern
 (
@@ -1992,7 +2050,7 @@ reg  [9:0] line_ctr,  line_ctr_l;
 reg [10:0] vispix_ctr, vispix_ctr_l;
 reg        vblank_dd;
 
-always @(posedge clk_vid) begin
+always @(posedge clk_sys) begin
   if (!mem_rst_n) begin
     frame_ctr <= 0; line_ctr <= 0; vispix_ctr <= 0;
     line_ctr_l <= 0; vispix_ctr_l <= 0;
@@ -2034,7 +2092,7 @@ wire [7:0] ov_r, ov_g, ov_b;
 // a torn counter is a wrong digit for one frame, not a wrong decision.
 logic [2:0] game_sync, cp_done_sync, cpu_trap_sync, cpu_halt_sync;
 logic [SDR_AW:1] ldr_top_sync;
-always_ff @(posedge clk_vid) begin
+always_ff @(posedge clk_sys) begin
 	game_sync     <= {game_sync[1:0],     game_image};
 	cp_done_sync  <= {cp_done_sync[1:0],  cp_done};
 	cpu_trap_sync <= {cpu_trap_sync[1:0], cpu_trap};
@@ -2047,7 +2105,7 @@ m2_diag #(.NWORDS(24)) u_diag
 	.clk(clk_vid),
 	.ce_pix(ce_pix),
 	.rst_n(mem_rst_n),
-	.enable(1'b1),
+	.enable(status[19]),
 	.hb(tile_hb),
 	.vb(tile_vb),
 	// REPOINTED AT THE CPU. The copy checksums did their job -- they proved the
@@ -2201,7 +2259,7 @@ m2_diag #(.NWORDS(24)) u_diag
 	.out_r(ov_r), .out_g(ov_g), .out_b(ov_b)
 );
 
-assign CLK_VIDEO = clk_vid;
+assign CLK_VIDEO = clk_sys;
 assign CE_PIXEL  = ce_pix;
 
 assign VGA_DE = ~(tile_hb | tile_vb);
