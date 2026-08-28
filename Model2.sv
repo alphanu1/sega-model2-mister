@@ -1387,7 +1387,7 @@ end
 // so the Z80 leaves reset only with a program in front of it; without the
 // firmware the board stays silent and the game waits at its first poll --
 // loud, not subtle, exactly as a real cabinet with the ROM pulled would.
-wire fw_dl = ioctl_download && (ioctl_index[5:0] == 6'd1);
+wire fw_dl = ioctl_download && (ioctl_index[5:0] == 6'd3);   // 0=ROM 1=TGP 2=NVRAM
 logic fw_ready;
 always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	if (!mem_rst_n) fw_ready <= 1'b0;
