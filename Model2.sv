@@ -952,7 +952,29 @@ always_comb case (status[16:14])
 	3'd4: tp_cell = 15'd1368;  3'd5: tp_cell = 15'd1385;
 	3'd6: tp_cell = 15'd1387;  default: tp_cell = 15'd1108;
 endcase
-always_ff @(posedge clk_sys) tp_q <= tram[tp_cell];
+// OBSERVE THE WRITE, DO NOT ADD A READ PORT.
+//
+// This was `tp_q <= tram[tp_cell]`, and an M10K has exactly TWO ports. Tile
+// RAM already has both: the renderer reads on clk_vid, the CPU and copy
+// engine share the clk_sys read/write pair. Asking for a third reader makes
+// the fitter build a SECOND COMPLETE COPY of the array to serve it -- the
+// report shows tram fitted as two 32768x16 blocks at 64 M10K each, and block
+// memory implementation bits at 3,194,880 against 2,265,601 actually needed.
+// 128 of 312 M10K, spent on a debug probe.
+//
+// Watching the write bus costs nothing: no port, no duplication, and it
+// cannot disturb a CPU read the way stealing a cycle on the shared port
+// could. It reports the last value WRITTEN to the selected cell rather than
+// the cell's current contents, which for "what did the game put here" is the
+// same answer and is exactly the semantic the blanking watch already uses.
+//
+// Standing rule, paid for twice now (m2_backup's third read port produced
+// 131,795 combinational nodes and would not fit): a debug read port on a
+// memory is never free. Observe the write bus instead.
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+	if (!mem_rst_n)                                    tp_q <= 16'd0;
+	else if (ocb_tram_we && ocb_addr == tp_cell)       tp_q <= ocb_din;
+end
 
 // COPY ENGINE. Walks tile RAM then the palette out of SDRAM into on-chip memory
 // after the ROM has landed. Port 0, which returns a single word per request --

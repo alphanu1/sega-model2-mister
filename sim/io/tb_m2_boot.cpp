@@ -64,6 +64,17 @@ static const int FW = 496, FH = 384;
 static std::vector<uint8_t> g_frame(size_t(FW)*FH*3, 0);
 static int g_px = 0, g_py = 0, g_hb_p = 0, g_vb_p = 0;
 static uint64_t g_nonblack = 0, g_frames_done = 0;
+static const char *g_seq_dir = nullptr;
+// CHARACTER WORKING SET. Glyph pixels are the one part of the 2D path still
+// fetched from SDRAM; everything else (tilemap, palette, colour table) is
+// on-chip. If the set of words the renderer actually touches is small enough,
+// it could live in M10K too -- which would take SDRAM out of the 2D renderer
+// entirely. This counts the distinct addresses, which is the number that
+// decides it.
+#include <set>
+static std::set<uint32_t> g_char_words;
+static uint64_t g_char_fetches = 0;
+static uint64_t g_seq_every = 1;   // M2_FRAME_EVERY: keep every Nth frame
 static std::map<uint32_t,uint64_t> g_rd_unbacked;
 static uint64_t g_tw_in_vbl = 0, g_tw_out_vbl = 0, g_ss_in = 0, g_ss_out = 0;
 static uint16_t g_tram[32768];
@@ -255,6 +266,11 @@ int main(int argc, char **argv) {
   // ce_pix halves clk_vid to the 16 MHz dot clock, as Model2.sv does.
   int ce_tog = 0;
 
+  g_seq_dir = std::getenv("M2_FRAME_SEQ");
+  if (const char *fe = std::getenv("M2_FRAME_EVERY")) {
+    g_seq_every = std::strtoull(fe, nullptr, 10);
+    if (!g_seq_every) g_seq_every = 1;
+  }
   const bool real_mem = std::getenv("M2_REALMEM") != nullptr;
   {
     unsigned c = 0xff;
@@ -281,7 +297,23 @@ int main(int argc, char **argv) {
         ++g_px;
       }
       if (d->vid_hb && !g_hb_p) { g_px = 0; if (!d->vid_vb) ++g_py; }
-      if (d->vid_vb && !g_vb_p) { ++g_frames_done; }
+      if (d->vid_vb && !g_vb_p) {
+        ++g_frames_done;
+        // M2_FRAME_SEQ=dir writes EVERY completed frame, so the render can be
+        // watched as a sequence instead of judged from one still. Two of this
+        // session's wrong conclusions came from reading a single frame that
+        // happened to be captured mid-draw.
+        if (g_seq_dir && (g_frames_done % g_seq_every) == 0) {
+          char path[512];
+          std::snprintf(path, sizeof path, "%s/f%05llu.ppm", g_seq_dir,
+                        (unsigned long long)g_frames_done);
+          if (FILE *sf = std::fopen(path, "wb")) {
+            std::fprintf(sf, "P6\n%d %d\n255\n", FW, FH);
+            std::fwrite(g_frame.data(), 1, g_frame.size(), sf);
+            std::fclose(sf);
+          }
+        }
+      }
       if (!d->vid_vb && g_vb_p) { g_py = 0; g_px = 0; }
       g_hb_p = d->vid_hb; g_vb_p = d->vid_vb;
     }
@@ -294,6 +326,7 @@ int main(int argc, char **argv) {
       if (d->clk_slow_o && !slow_prev) ++mem_edges;   // the stack's own 48 MHz
       slow_prev = d->clk_slow_o;
     } else if (m && !mem_prev) { mem_tick(); sd2_tick(); d->eval(); ++mem_edges; }
+    if (d->sd2_req) { g_char_words.insert((uint32_t)d->sd2_addr); ++g_char_fetches; }
     mem_prev = m; vid_prev = v;
     ++base_t;
   };
@@ -880,6 +913,16 @@ int main(int argc, char **argv) {
               d->iob_dbg, d->iob_flag_rd, d->iob_seen);
   std::printf("  window reads %u, backup writes %u, backup dword0 %08x\n",
               d->iob_win_rd, d->bak_writes, d->bak_w0);
+  if (!g_char_words.empty()) {
+    const uint32_t lo = *g_char_words.begin(), hi = *g_char_words.rbegin();
+    std::printf("  CHARACTER WORKING SET: %zu distinct words of %llu fetches\n"
+                "    address span %08x..%08x = %u words (%.1f KB contiguous)\n"
+                "    touched %.1f KB; redundancy %.0fx\n",
+                g_char_words.size(), (unsigned long long)g_char_fetches,
+                lo, hi, hi - lo + 1, (hi - lo + 1) * 4.0 / 1024.0,
+                g_char_words.size() * 4.0 / 1024.0,
+                double(g_char_fetches) / double(g_char_words.size()));
+  }
   std::printf("  LINE OVERRUNS: %u   worst-line fetches: %u\n",
               (unsigned)d->dbg_overruns_o, (unsigned)d->dbg_fetches_o);
   std::printf("  tile RAM writes %u\n", d->dbg_tram_wr);

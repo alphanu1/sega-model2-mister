@@ -4403,3 +4403,44 @@ FFFFFFFF means the fetch is reading memory nobody wrote, varied data means
 real glyphs are arriving and the fetch path is sound. That single reading
 separates cause 1 from everything else, and it has never been taken while the
 fault was visible.
+
+**R71 — Quartus warns that the tilemap and palette RAMs have UNDEFINED
+read-during-write on hardware, and the CPU writes them during active display
+90% of the time.** Chasing why tile RAM fits as two 32768x16 arrays produced a
+finding worth far more than the duplication itself.
+
+*The duplication is not the debug probe.* That theory was tested and failed:
+the probe's read was replaced with a write-observer (no port, no array read),
+and tram still fits as `tram_rtl_0` and `tram_rtl_1`, 64 M10K each. The cause
+is structural -- TWO reads of the same array in two clock domains, the
+renderer's on `clk_vid` and the CPU's on `clk_sys` -- and Quartus builds one
+simple-dual-port RAM per read port. The write-observer is kept anyway: it is
+the right pattern for instruments and costs nothing.
+
+*The finding that matters is the synthesis warning:*
+
+    Warning (276027): Inferred dual-clock RAM node "emu:emu|tram_rtl_0" ...
+    The read-during-write behavior of a dual-clock RAM is UNDEFINED and may
+    not match the behavior of the original design.
+
+The same warning is raised for `pal_rtl_0`. Set that beside a measurement this
+project already had and never connected to it: **90-91% of all tilemap writes
+happen during ACTIVE DISPLAY** (37,693 during display against 3,990 in
+V-blank). The CPU is writing the tilemap while the renderer reads it, almost
+all the time, through a RAM whose behaviour in exactly that circumstance
+Quartus declares undefined on silicon and which Verilator models as
+well-defined.
+
+That is a genuine hardware/simulation divergence, flagged by the tool itself,
+sitting on the path that produces the picture -- and it is invisible to every
+simulation this project runs, which is precisely the class of fault the
+standing rules warn about ("simulation cannot see memory inference").
+
+*It is not yet proven to be the cause*, and the honest counter is that the
+board's flat-colour attract screen points at the CHARACTER fetch rather than
+the tilemap. But undefined read-during-write on the tilemap and palette would
+corrupt tile indices and colours intermittently and positionally, which is the
+shape of the fault, and it costs nothing to make defined: give the arrays
+explicit read-during-write handling, or move the CPU's tilemap read off the
+shared array (measure first whether the game reads tile RAM at all -- if it
+only writes, the second read port and its 64 M10K disappear with it).
