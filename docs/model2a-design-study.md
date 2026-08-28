@@ -3887,3 +3887,20 @@ rebuild-and-pray) is future work, not urgency.
 *The rule, completing R57's:* **when a fix claims to make a class of failure
 impossible, re-apply the failure and watch it be absorbed.** A fix verified
 only by "the symptom went away" is indistinguishable from the symptom moving.
+
+---
+
+**R59 — the Model 1 project hit R57's wall independently, and the two projects
+now cross-validate.** `tools/model1-ref` at `8788ede`: their fitter SEGFAULTS on
+the read-path multicycle (they made the read side opt-in and ship output-only);
+ours survived behind the `quartus_map` fence with registered NVRAM paths — same
+17.0 fragility class, different crash sites, both recorded. They corrected their
+generated clock's source the same way R57 did here (the dedicated phase-shifted
+PLL output drives the pin; sourcing clk_sys with -invert would model a
+relationship that does not exist) — independent convergence on the same fix.
+And their finding that `Fast Output Register` is REFUSED on `sd_a` (it carries
+both a clear and a load) reproduces here: 40 pack refusals on `sd_a[2,6,7,8]`
+and `sd_dq_oe`. Those outputs launch from fabric; STA computes against the real
+placement, so our +6.6 ns output slack already includes it and stays honest —
+noted so nobody later "fixes" the refusals expecting margin that is already
+counted.
