@@ -104,6 +104,7 @@ localparam CONF_STR = {
 	"-;",
 	"R[17],Save settings (NVRAM);",
 	"O[18],Probe page,0,1;",
+	"J1,Coin,Start,Test,Service;",
 	"R[0],Reset and close OSD;",
 	"v,0;",
 	"V,v",`BUILD_DATE
@@ -151,6 +152,7 @@ hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
 	.ioctl_wr(ioctl_wr),
 	.ioctl_addr(ioctl_addr),
 	.ioctl_dout(ioctl_dout),
+	.joystick_0(joystick_0),
 	.ioctl_wait(ioctl_wait),
 	// NVRAM save: the framework reads backup SRAM back through ioctl_din when
 	// it saves the MRA's <nvram> section. upload_req stays 0 -- saves are
@@ -165,6 +167,7 @@ hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
 	.ioctl_upload_index(8'd2)
 );
 
+wire [31:0] joystick_0;
 wire        ioctl_download, ioctl_wr, ioctl_wait, ioctl_upload;
 wire [15:0] ioctl_din;
 wire [15:0] ioctl_index, ioctl_dout;
@@ -1379,6 +1382,21 @@ end
 
 // NVRAM (MRA <nvram index="2">): load fills backup SRAM before the CPU is
 // released; save reads it back. 16-bit ioctl: word = addr[13:2], half = addr[1].
+// I/O FIRMWARE (MRA <rom index="1">, EPR-14869C): 16-bit ioctl stream split
+// into bytes for the Z80 board's ROM. fw_ready latches when the download ends
+// so the Z80 leaves reset only with a program in front of it; without the
+// firmware the board stays silent and the game waits at its first poll --
+// loud, not subtle, exactly as a real cabinet with the ROM pulled would.
+wire fw_dl = ioctl_download && (ioctl_index[5:0] == 6'd1);
+logic fw_ready;
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+	if (!mem_rst_n) fw_ready <= 1'b0;
+	else if (fw_ready_set) fw_ready <= 1'b1;
+end
+logic fw_dl_d;
+always_ff @(posedge clk_sys) fw_dl_d <= fw_dl;
+wire fw_ready_set = fw_dl_d && !fw_dl;   // download ended
+
 wire nv_sel = (ioctl_index[5:0] == 6'd2);
 logic [2:0] nv_save_sync;
 always_ff @(posedge clk_sys) nv_save_sync <= {nv_save_sync[1:0], status[17]};
@@ -1421,7 +1439,35 @@ wire [31:0] bak_dbg_q;
 wire [31:0] bak_first;
 
 
+// THE REAL I/O BOARD (study R61). EPR-14869C on tv80, talking to the same
+// DPRAM store through the 315-5338A command window. The behavioural exchange
+// stays compiled in as USE_Z80=0 fallback one parameter away, but the shipped
+// configuration is the real computer: it is what draws the credit digits.
+wire        zio_we;
+wire [10:0] zio_addr;
+wire  [7:0] zio_wdata, zio_rdata;
+
+m2_ioz80 #(.CEN_DIV(12)) u_ioz80 (
+	.clk(clk_sys), .rst_n(cpu_rst_n & fw_ready),
+	.fw_we(fw_dl && ioctl_wr),
+	.fw_addr(ioctl_addr[13:0]),
+	.fw_data(ioctl_addr[0] ? ioctl_dout[15:8] : ioctl_dout[7:0]),
+	.in0(iob_in0), .in1(iob_in1), .in2(8'hFF),
+	.adc0(8'h80), .adc1(8'h20), .adc2(8'h20), .adc3(8'h80),
+	.z_we(zio_we), .z_addr(zio_addr), .z_wdata(zio_wdata), .z_rdata(zio_rdata),
+	.dbg_ee(), .dbg_wrcnt(), .dbg_wr_stb(), .dbg_dout(), .dbg_di(),
+	.dbg_rd_end(), .dbg_ra(), .dbg_rdat(),
+	.dbg_m1_n(), .dbg_a(), .dbg_last_wr(), .dbg_pf()
+);
+
+// Cabinet inputs, model2.cpp daytona bit order, active low. TEST and SERVICE
+// come from the OSD-mapped buttons; the gearbox sits in neutral.
+wire [7:0] iob_in0 = ~{3'b000, joystick_0[5], joystick_0[7], joystick_0[6],
+                       1'b0, joystick_0[4]};
+wire [7:0] iob_in1 = 8'h8F;
+
 m2_ioboard #(
+	.USE_Z80(1'b1),
 	// RESCALED TO clk_sys. These are measured in FRAMES -- status at 7 and
 	// the board's self-test at 174 of a 57.5 Hz refresh -- so moving the module
 	// to a 40 MHz clock moves the constants with it. At 25 MHz they were
@@ -1436,6 +1482,8 @@ m2_ioboard #(
 	.word(cpu_io_addr[11:2]),
 	.be(cpu_io_be),
 	.wdata(cpu_io_wdata),
+	.z_we(zio_we && fw_ready), .z_addr(zio_addr), .z_wdata(zio_wdata),
+	.z_rdata(zio_rdata),
 	.rdata(iob_rdata),
 	.dbg(iob_dbg), .dbg_win_rd(iob_win_rd),
 	.dbg_flag_rd(iob_flag_rd), .dbg_seen(iob_seen)

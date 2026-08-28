@@ -58,6 +58,9 @@
 `timescale 1ns/1ps
 
 module m2_ioboard #(
+  // 1 = a real m2_ioz80 drives the store through the z_* port and the
+  // behavioural exchange below stays silent (R61). 0 = R37-R41's imitation.
+  parameter bit USE_Z80 = 1'b0,
   // Cycles from reset before the board answers the flag. MEASURED: MAME clears
   // it on frame 174 of a 57.5 Hz refresh, which is 3.026 s. At 25 MHz that is
   // 75,652,174 -- a 27-bit counter, and it counts once.
@@ -135,6 +138,11 @@ module m2_ioboard #(
   /* verilator lint_off UNUSEDSIGNAL */
   input  logic  [3:0] be,
   input  logic [31:0] wdata,
+  // The Z80 board's byte port; tie z_we low when the behavioural FSM serves.
+  input  logic        z_we,
+  input  logic [10:0] z_addr,
+  input  logic  [7:0] z_wdata,
+  output logic  [7:0] z_rdata,
   /* verilator lint_on UNUSEDSIGNAL */
   output logic [31:0] rdata,
 
@@ -189,22 +197,32 @@ module m2_ioboard #(
 
   // One write port. The CPU wins; the board's writes are a handful of bytes at
   // two moments and the i960 is polling rather than writing when they land.
-  wire        wr_en   = cpu_wr | b_we;
-  wire  [9:0] wr_addr = cpu_wr ? word : b_word;
-  wire  [7:0] wr_lo   = cpu_wr ? wdata[7:0]   : b_data[7:0];
-  wire  [7:0] wr_hi   = cpu_wr ? wdata[23:16] : b_data[15:8];
-  wire        we_lo   = wr_en & (cpu_wr ? be[0] : b_be[0]);
-  wire        we_hi   = wr_en & (cpu_wr ? be[2] : b_be[1]);
+  // Z80-SIDE PORT (study R61). When a real m2_ioz80 drives these, the
+  // behavioural state machine below must be quiet: tie Z80_SIDE high and the
+  // internal b_we never fires. Byte address: word = z_addr[10:1], lane =
+  // z_addr[0] -- the same mapping the i960's umask gives its two bytes.
+  wire        zb_we   = z_we;
+  wire  [9:0] zb_word = z_addr[10:1];
+  wire        wr_en   = cpu_wr | b_we | zb_we;
+  wire  [9:0] wr_addr = cpu_wr ? word : zb_we ? zb_word : b_word;
+  wire  [7:0] wr_lo   = cpu_wr ? wdata[7:0]   : zb_we ? z_wdata : b_data[7:0];
+  wire  [7:0] wr_hi   = cpu_wr ? wdata[23:16] : zb_we ? z_wdata : b_data[15:8];
+  wire        we_lo   = wr_en & (cpu_wr ? be[0] : zb_we ? ~z_addr[0] : b_be[0]);
+  wire        we_hi   = wr_en & (cpu_wr ? be[2] : zb_we ?  z_addr[0] : b_be[1]);
 
+  logic [7:0] zq_lo, zq_hi;
   always_ff @(posedge clk) begin
     if (we_lo) dp_lo[wr_addr] <= wr_lo;
-    q_lo <= dp_lo[word];
+    q_lo  <= dp_lo[word];
+    zq_lo <= dp_lo[z_addr[10:1]];
   end
   always_ff @(posedge clk) begin
     if (we_hi) dp_hi[wr_addr] <= wr_hi;
+    zq_hi <= dp_hi[z_addr[10:1]];
     q_hi <= dp_hi[word];
   end
 
+  assign z_rdata = z_addr[0] ? zq_hi : zq_lo;
   assign rdata = {8'd0, q_hi, 8'd0, q_lo};
 
 
@@ -319,17 +337,17 @@ module m2_ioboard #(
     b_data = 16'd0;
     b_be   = 2'b00;
     if (filling) begin
-      b_we   = 1'b1;
+      b_we   = !USE_Z80;
       b_word = fill[10:1];
       b_data = {idblk(fill[6:0]), idblk(fill[6:0])};
       b_be   = fill[0] ? 2'b10 : 2'b01;
     end else if (status_pulse) begin
-      b_we   = 1'b1;
+      b_we   = !USE_Z80;
       b_word = FLAG_W;
       b_data = {STATUS_READY, 8'd0};
       b_be   = 2'b10;                       // the status byte only
     end else if (answer) begin
-      b_we   = 1'b1;
+      b_we   = !USE_Z80;
       b_word = FLAG_W;
       b_data = 16'd0;
       b_be   = 2'b01;                       // the flag byte only

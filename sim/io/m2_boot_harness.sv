@@ -53,6 +53,11 @@ module m2_boot_harness #(
   input  logic        ce_pix,
   input  logic        rst_n,
   input  logic  [3:0] irq,
+  // I/O firmware load; fw_ready gates the Z80 out of reset.
+  input  logic        fw_we,
+  input  logic [13:0] fw_addr,
+  input  logic  [7:0] fw_data,
+  input  logic        fw_ready,
 
   // ---- the renderer's own SDRAM port, answered in C++ like the CPU's.
   // m2_sdram gives the character fetch a separate port; modelling it as one
@@ -315,12 +320,34 @@ module m2_boot_harness #(
   wire        iob_sel = cpu_io_sel && (cpu_io_addr[23:12] == 12'hc00);
   wire [31:0] iob_rdata;
 
+  // THE REAL BOARD, WHEN ITS FIRMWARE IS OFFERED. USE_Z80 follows the fw
+  // load port: the tb that loads EPR-14869C gets the firmware board; a tb
+  // that loads nothing keeps R37-R41's imitation, so every older test stands.
+  logic        zio_we;
+  logic [10:0] zio_addr;
+  logic  [7:0] zio_wdata, zio_rdata;
+
+  m2_ioz80 #(.CEN_DIV(12)) u_ioz80 (
+    .clk(clk_mem), .rst_n(rst_n & fw_ready),
+    .fw_we(fw_we), .fw_addr(fw_addr), .fw_data(fw_data),
+    .in0(8'hff), .in1(8'h8f), .in2(8'hff),
+    .adc0(8'h80), .adc1(8'h20), .adc2(8'h20), .adc3(8'h80),
+    .z_we(zio_we), .z_addr(zio_addr), .z_wdata(zio_wdata), .z_rdata(zio_rdata),
+    .dbg_ee(), .dbg_wrcnt(), .dbg_wr_stb(), .dbg_dout(), .dbg_di(),
+    .dbg_rd_end(), .dbg_ra(), .dbg_rdat(),
+    .dbg_m1_n(), .dbg_a(), .dbg_last_wr(), .dbg_pf()
+  );
+
   m2_ioboard #(
+    .USE_Z80(1'b1),
     .STATUS_CYCLES(STATUS_CYCLES), .SELFTEST_CYCLES(SELFTEST_CYCLES)
   ) u_ioboard (
     .clk(clk_mem), .rst_n(rst_n),
     .sel(iob_sel), .we(cpu_io_we), .word(cpu_io_addr[11:2]),
-    .be(cpu_io_be), .wdata(cpu_io_wdata), .rdata(iob_rdata),
+    .be(cpu_io_be), .wdata(cpu_io_wdata),
+    .z_we(zio_we && fw_ready), .z_addr(zio_addr), .z_wdata(zio_wdata),
+    .z_rdata(zio_rdata),
+    .rdata(iob_rdata),
     .dbg(iob_dbg), .dbg_win_rd(iob_win_rd),
     .dbg_flag_rd(iob_flag_rd), .dbg_seen(iob_seen)
   );

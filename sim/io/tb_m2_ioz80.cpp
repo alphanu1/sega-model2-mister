@@ -92,6 +92,12 @@ int main(int argc, char **argv) {
     d->g_we = 0;
     if (rp < replay.size() && t >= replay[rp].at) {
       d->g_we = 1; d->g_addr = replay[rp].a; d->g_wdata = replay[rp].v;
+      if (replay[rp].a >= 0x110 && replay[rp].a < 0x118) {
+        static int glog = 0;
+        if (glog < 30)
+          { std::printf("  GAME dp[%03x] <= %02x  (cycle %llu)\n", replay[rp].a,
+                        replay[rp].v, (unsigned long long)t); ++glog; }
+      }
       ++rp;
     }
     tick();
@@ -137,6 +143,14 @@ int main(int argc, char **argv) {
         }
       }
       last[a] = d->spy_data;
+      if (a >= 0x110 && a < 0x118) {
+        static int slog = 0;
+        if (slog < 30) {
+          std::printf("  FW  dp[%03x] <= %02x  (cycle %llu)\n", a, d->spy_data,
+                      (unsigned long long)t);
+          ++slog;
+        }
+      }
       if (a == 0x21 && d->spy_data == 0x40 && !status40_at) {
         status40_at = t;
         std::printf("  >>> status 0x40 at dp[0x21], cycle %llu -- the R40 "
@@ -168,6 +182,9 @@ int main(int argc, char **argv) {
   std::printf("  dp[0x200..0x21f] final: ");
   for (int a = 0x200; a < 0x220; ++a)
     std::printf("%02x ", last.count(a) ? last[a] : 0x00);
+  std::printf("\n  dp[0x100..0x11f] final: ");
+  for (int a = 0x100; a < 0x120; ++a)
+    std::printf("%02x ", last.count(a) ? last[a] : 0xee);   // ee = firmware never wrote
   std::printf("\n  dp[0x20..0x2f] final:   ");
   for (int a = 0x20; a < 0x30; ++a)
     std::printf("%02x ", last.count(a) ? last[a] : 0x00);

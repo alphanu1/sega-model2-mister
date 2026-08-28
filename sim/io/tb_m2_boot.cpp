@@ -281,6 +281,26 @@ int main(int argc, char **argv) {
   auto tick = [&]() { for (int i = 0; i < 4; ++i) base_step(); };
 
   for (int i = 0; i < 64; ++i) tick();
+  // THE REAL I/O FIRMWARE, when offered: M2_IOFW names EPR-14869C, and the
+  // harness swaps R37-R41's imitation for m2_ioz80 running it. This is the
+  // full-duplex composition: real i960 and real Z80, interlocking through the
+  // real flag/status protocol -- the instrument the half-duplex replay could
+  // not be (its fixed-time replay broke the interlock and the input scan
+  // swept the game's settings deposit).
+  d->fw_we = 0; d->fw_addr = 0; d->fw_data = 0; d->fw_ready = 0;
+  if (const char *fp = std::getenv("M2_IOFW")) {
+    FILE *ff = std::fopen(fp, "rb");
+    if (ff) {
+      std::vector<uint8_t> fwb(16384, 0xff);
+      size_t fn = std::fread(fwb.data(), 1, fwb.size(), ff);
+      std::fclose(ff);
+      for (int a = 0; a < 16384; ++a) {
+        d->fw_we = 1; d->fw_addr = a; d->fw_data = fwb[a]; tick();
+      }
+      d->fw_we = 0; d->fw_ready = 1;
+      std::printf("  I/O FIRMWARE loaded: %zu bytes -- the Z80 board is live\n", fn);
+    }
+  }
   d->rst_n = 1;
   if (const char *dl = std::getenv("M2_DPLOG")) g_dplog = std::fopen(dl, "w");
 

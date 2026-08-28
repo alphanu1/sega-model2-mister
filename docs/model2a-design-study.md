@@ -3959,3 +3959,29 @@ Next: the credit computation. The game's settings round-trip happens later in
 the dialogue (~1.7M instructions in); replaying the longer capture should show
 the firmware computing the credit fields the menu digits are printed from —
 the arithmetic whose absence was the whole R54-R56 hunt.
+
+---
+
+**R62 — the full-duplex composition draws the digit, and the real board ships.**
+`m2_ioz80` joined the boot harness: real i960 and real Z80 firmware,
+interlocking through the real flag/status protocol. The boot proceeds on the
+firmware's own timing (first window read at 614,827 against the HLE's 521,763),
+the exchange completes, and **`tram[1129] <= c033` at instruction 2,031,481** —
+the credit digit, drawn through the genuine credit path, frame capture
+confirming pixels on screen.
+
+*Why full-duplex was necessary:* the half-duplex replay (R61's harness feeding a
+captured game-side script on a fixed clock) broke the interlock — the game's
+settings deposit landed before the firmware's input scan swept the window, which
+looked like corruption and was only bad puppetry. A protocol has two live ends
+or it is not being tested.
+
+*Integration:* `Model2.sv` instantiates `m2_ioz80` with `USE_Z80=1` on the
+DPRAM store; the behavioural exchange remains one parameter away as fallback.
+The firmware arrives as MRA `<rom index="1">` (EPR-14869C, first 16 KB); the
+Z80 is held in reset until the download completes, so a build without the
+firmware behaves like a cabinet with the ROM pulled — loudly dead, not subtly
+wrong. IN0 carries the OSD-mapped Coin/Start/Test/Service buttons in
+model2.cpp's bit order; the ADC idles at centre/released. The board question —
+do the digits appear on hardware — is now one flash away, and for the first
+time the thing being flashed contains no imitated computers on the boot path.
