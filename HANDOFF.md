@@ -64,6 +64,34 @@ game side runs at true latency the sim should LOSE the race like the board --
 then the fix (honest BUSY/status modelling, or whatever the reproduced race
 demands) gets built against seconds-long runs.
 
+### ON THE BOARD NOW: the tram cell probe, finally connected
+
+Build f1faaf86, deployed 2026-08-28. 19,984 ALM / 312 M10K, all slack
+positive. One RTL change: overlay row 23 page 0 now shows the TRAM CELL
+probe, `{1'b0, tp_cell, tp_q}`.
+
+WHY IT MATTERED. tp_q was declared, clocked off tram[tp_cell], and wired
+to NOTHING -- orphaned when row 23 was repurposed to walk the settings
+dword. The OSD kept the probe names (chr 3, chr 1, chr #, chr A), so the
+row read like character cells while reporting the backup SRAM's
+first-read value. THE EARLIER "chr# - 20202020" READING WAS NOT A TILE
+CELL, and the conclusion drawn from it -- that the board writes spaces
+into the tilemap -- is withdrawn. Page 1 is untouched: all backup,
+settings and collision telemetry read exactly as before.
+
+WHAT TO READ. Boot to the screen with the missing characters, set Probe
+page = 0, step Probe 0..7 and read row 23 each time. The cell index rides
+in the top half, so 0469C033 is cell 1129 holding C033 and a value can
+never be attributed to the wrong cell. Expected: 0:1129 C033, 1:1130
+8043, 2:1131 8052, 3:1132 8045, 4:1368 802F, 5:1385 8023, 6:1387 C031,
+7:1108 8043.
+
+  right value + glyph missing on screen -> the render path drops the CELL
+  wrong value                           -> the CPU's write never landed
+
+Those have opposite fixes and simulation cannot choose between them: the
+composition renders this menu correctly.
+
 ### The race is reproduced, the crash was ours, the blanking is open (R64)
 
 Study R64 has the full account. Short form: the REAL_MEM composition works

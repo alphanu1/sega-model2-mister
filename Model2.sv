@@ -2000,10 +2000,23 @@ m2_diag #(.NWORDS(24)) u_diag
 	         // formatter's own store, caught at the SDRAM port.
 	         // page1/Probe4: {reset edges, Z80 window writes, last window
 	         // address} -- the collision telemetry and the reset counter.
+	         // PAGE 0 IS THE TRAM CELL, WHICH IS WHAT THE PROBE NAMES HAVE
+	         // ALWAYS SAID AND WHAT THIS ROW HAS NEVER SHOWN. tp_q was
+	         // declared, clocked off tram[tp_cell] and then wired to nothing
+	         // when this mux was repurposed to walk the settings dword, so
+	         // every "chr N" reading taken from this row was in fact the
+	         // backup SRAM's first-read value under a character's name. The
+	         // cell index rides along in the top half so a reading can never
+	         // again be attributed to the wrong cell: 0469C033 is cell 1129
+	         // holding C033. Right value + glyph absent on screen = the
+	         // render path drops the CELL; wrong value = the CPU's write
+	         // never landed. Page 1 keeps the backup and collision telemetry
+	         // exactly as it was.
 	         (status[18] && status[16:14] == 3'd4) ?
 	             {rst_edges, zw_win_cnt, 5'd0, zw_last} :
 	         (status[18] && status[16:14] == 3'd5) ? {8'd0, vsw_cnt, vsw_data} :
-	         (status[18] && status[16:14] >= 3'd6) ? bak_dbg_q : bak_first,
+	         (status[18] && status[16:14] >= 3'd6) ? bak_dbg_q :
+	         status[18] ? bak_first : {1'b0, tp_cell, tp_q},
 	         // 22 THE LAST CHARACTER FETCH, verbatim. FFFFFFFF means the fetch is
 	         // reading memory nobody ever wrote -- one flat colour per palette
 	         // bank, which is the board's sky and ground. Anything varied means
