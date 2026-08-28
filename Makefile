@@ -784,7 +784,16 @@ release: check_mra
 	 fi
 	@grep -q 'Flow Status.*Successful' output_files/Model2.flow.rpt 2>/dev/null || { \
 	  echo "last Quartus flow did not report Successful -- refusing to release"; exit 1; }
-	@# FIVE DISTINCT CORE PLL CLOCKS, checked where the answer is final.
+	@# FOUR DISTINCT CORE PLL CLOCKS, checked where the answer is final.
+	@#
+	@# It was five until the video moved onto clk_sys with a one-in-three enable
+	@# (48/3 = 16 MHz, the exact old pixel rate). outclk_2's 32 MHz then had no
+	@# consumer, so the fitter drops it and four is now correct. The check stays
+	@# because the hazard it guards has not gone away: outputs with identical
+	@# settings can still be merged into one counter, and this caught a real
+	@# stale-release today -- the count fell to four, the release refused, and
+	@# the deploy would have pushed the PREVIOUS bitstream while a test was run
+	@# against it. Which it did, before the number was corrected.
 	@#
 	@# This was an SDC guard, and it fired during the fitter's read_sdc when the
 	@# derived clocks were not all present yet -- reporting 1 on a build whose
@@ -800,8 +809,8 @@ release: check_mra
 	@# fell to 54.74 MHz with no error anywhere.
 	@n=$$(grep -oE 'general\[[0-9]\]\.gpll~PLL_OUTPUT_COUNTER\|divclk' \
 	      output_files/Model2.sta.rpt 2>/dev/null | sort -u | wc -l); \
-	 if [ "$$n" -lt 5 ]; then \
-	   echo "only $$n distinct core PLL output clocks, expected 5 -- refusing to release"; \
+	 if [ "$$n" -lt 4 ]; then \
+	   echo "only $$n distinct core PLL output clocks, expected 4 -- refusing to release"; \
 	   echo "  outputs with identical settings can be merged by the IP; see rtl/pll/pll.v"; \
 	   exit 1; \
 	 else echo "  core PLL clocks: $$n distinct outputs"; fi

@@ -1721,6 +1721,44 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 end
 wire trap_edge = cpu_trap && !trap_d;
 
+// A RING OF CONSECUTIVE INSTRUCTION POINTERS.
+//
+// Sampling every 1.4 ms cannot show a branch, and a branch is what has to be
+// found: the board runs this loop where simulation leaves it after 39
+// iterations. So record 512 CONSECUTIVE retired IPs into a block RAM at full
+// speed, then read them out slowly over the wire. One buffer-full is a real
+// instruction trace from hardware, which no amount of sampling can substitute
+// for.
+//
+// Free-running: it always holds the most recent 512 instructions. The dump
+// walks the buffer once per pass and repeats, so consecutive passes show
+// whether the machine is in a repeating cycle and exactly how long that cycle
+// is.
+(* ramstyle = "M10K" *) logic [31:0] ipring [512];
+logic [8:0]  ip_wr;
+logic [31:0] acc_d;
+always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
+	if (!cpu_rst_n) begin ip_wr <= '0; acc_d <= '0; end
+	else begin
+		acc_d <= cpu_dbg_acc;
+		if (cpu_dbg_acc != acc_d) begin      // one entry per retired instruction
+			ipring[ip_wr] <= cpu_dbg_ip;
+			ip_wr <= ip_wr + 9'd1;
+		end
+	end
+end
+
+// The reader: walks all 512 entries, one per streamer slot, forever.
+logic [8:0]  ip_rd;
+logic [31:0] ipring_q;
+always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
+	if (!cpu_rst_n) ip_rd <= '0;
+	else begin
+		ipring_q <= ipring[ip_rd];
+		if (prof_tick) ip_rd <= ip_rd + 9'd1;
+	end
+end
+
 // A PROFILER, WHICH IS WHAT THIS SHOULD HAVE HAD FROM THE START.
 //
 // The board reaches 0x5368-0x53E0, runs 0x1CE38 four times where simulation
@@ -1740,7 +1778,14 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		prof_tick <= (prof_div == 16'd0);
 	end
 end
-wire        uart_a_valid = prof_tick || trap_edge;
+// PROFILER OFF, DESCRIPTOR READS ON THE PRIORITY CHANNEL.
+//
+// The last capture returned ZERO descriptor reads, which is ambiguous: either
+// the board never reads that region, or the profiler starved the channel that
+// would have said so. That starvation has now cost two captures, so remove the
+// competition entirely rather than reason about budgets again. Channel A is the
+// question; nothing else shares the wire.
+wire        uart_a_valid = rd_v || trap_edge;
 // WHAT THE STUCK LOOP READS.
 //
 // The board sits in the counted loop at 0x1BA8-0x1BCC and never appears in the
@@ -1748,16 +1793,53 @@ wire        uart_a_valid = prof_tick || trap_edge;
 // terminate has a wrong count, and the count comes from memory -- so capture
 // every CPU read the routine makes, with the value it got back. Simulation
 // runs this loop 39 times and leaves.
-logic        rd_v;
-logic [24:0] rd_ad;
-logic [31:0] rd_dt;
+logic            rd_v;
+logic [24:0]     rd_ad;
+logic [31:0]     rd_dt;
+logic [SDR_AW:1] sd_a_d;      // the address bus, sampled -- never tapped live
+logic            sd_rq_d;
+logic [31:0]     sd_dt_d;
 always_ff @(posedge clk_sys or negedge mem_rst_n) begin
-	if (!mem_rst_n) begin rd_v <= 1'b0; rd_ad <= '0; rd_dt <= '0; end
+	if (!mem_rst_n) begin
+		rd_v <= 1'b0; rd_ad <= '0; rd_dt <= '0;
+		sd_a_d <= '0; sd_rq_d <= 1'b0; sd_dt_d <= '0;
+	end
 	else begin
-		rd_v  <= cpu_sd_req && !cpu_sd_we && p_ack[1]
-		         && (cpu_dbg_ip[31:8] == 24'h00001B);
-		rd_ad <= 25'(cpu_sd_addr);
-		rd_dt <= p_dout[1][31:0];
+		// REPOINTED AT THE INTERRUPT PATH. The clk_vid/ce_pix mismatch was a
+		// real bug and fixing it changed nothing: the board sits in the same
+		// loop, polling work RAM 0x511008 for a flag an interrupt handler
+		// should set. So measure the interrupt directly instead of inferring
+		// it -- how many V-blank edges the core has seen, whether the game has
+		// ENABLED the interrupt (io_intena), and whether any request is
+		// pending (io_intreq).
+		// THE ALLOCATOR'S READS. Simulation's routine at 0x1718 walks a
+		// descriptor table, carves blocks, and advances by the SIZE field it
+		// reads at offset 8. Simulation gets 0x300 there; the board's later
+		// loop reads ZERO, so the descriptor read is returning nothing.
+		//
+		// Worth noting what this tests that nothing else has: the ROM checksums
+		// were folded by the SWEEP on port 4. The CPU reads on port 1. Those
+		// are different paths and only one of them has ever been verified.
+		// FILTER ON THE ADDRESS, NOT THE IP. The IP filter behaved oddly --
+		// it captured reads whose addresses belong to a different routine --
+		// so gate on the thing being questioned instead. Simulation's allocator
+		// reads its descriptor table at i960 0x0022F1F4, which the bridge maps
+		// to SDRAM word 0x188FA (base_prog + 0x10000 + addr[16:1]). Capture
+		// every CPU read in that neighbourhood, with what came back.
+		// REGISTER FIRST, COMPARE SECOND. Hanging the comparator straight off
+		// cpu_sd_addr put combinational load on the CPU's live SDRAM address
+		// bus and the board went BLACK -- the same failure the tilemap tap
+		// caused earlier, and the third time an instrument has broken the thing
+		// it was measuring. The bus is sampled into flops here; every
+		// comparison happens a cycle later, where nothing depends on it.
+		sd_a_d   <= cpu_sd_addr;
+		sd_rq_d  <= cpu_sd_req && !cpu_sd_we && p_ack[1];
+		sd_dt_d  <= p_dout[1][31:0];
+		rd_v  <= sd_rq_d
+		         && (sd_a_d >= SDR_AW'(25'h10000))
+		         && (sd_a_d <  SDR_AW'(25'h20000));   // the whole ROM mirror
+		rd_ad <= 25'(sd_a_d);
+		rd_dt <= sd_dt_d;
 	end
 end
 wire        uart_b2_valid = rd_v;
@@ -1766,7 +1848,7 @@ wire [31:0] uart_dropped;
 
 m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	.clk(clk_sys), .rst_n(mem_rst_n),
-	.a_valid(uart_a_valid), .a_addr(cpu_dbg_ip),
+	.a_valid(uart_a_valid), .a_addr({7'd0, rd_ad}),
 	// THE RETIRED-INSTRUCTION COUNT RIDES ALONG WITH THE IP.
 //
 // The profile says 91% of the board's time goes on the four memory
@@ -1775,8 +1857,9 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 // simulation finishes this initialisation in 15.9 M instructions. Two
 // consecutive samples give the instruction rate directly, which settles
 // whether this is a wrong branch or a slow machine.
-	.a_data(cpu_dbg_acc),
-	.b_valid(uart_b2_valid), .b_addr({7'd0, rd_ad}), .b_data(rd_dt),
+	.a_data(rd_dt),
+	.b_valid(uart_b2_valid), .b_addr(io_framenum),
+	.b_data({8'd0, io_intena, io_intreq}),
 	.a_tag(8'h58), .b_tag(8'h4C),          // 'X' profile, 'L' loop read
 	.enable(1'b1),
 	.tx(UART_TXD), .dbg_dropped(uart_dropped)
@@ -2183,7 +2266,7 @@ wire  [7:0] pat_r, pat_g, pat_b;
 
 m2_video_timing u_timing
 (
-	.clk(clk_vid),
+	.clk(clk_sys),
 	.ce_pix(ce_pix),
 	.rst_n(mem_rst_n),
 	.hcnt(hcnt),
@@ -2208,7 +2291,7 @@ always @(posedge clk_sys) if (ce_pix) vblank_d <= vblank;
 
 m2_testpattern u_pattern
 (
-	.clk(clk_vid),
+	.clk(clk_sys),
 	.ce_pix(ce_pix),
 	.rst_n(game_rst_n),
 	.hcnt(hcnt),
@@ -2291,7 +2374,7 @@ end
 
 m2_diag #(.NWORDS(24)) u_diag
 (
-	.clk(clk_vid),
+	.clk(clk_sys),
 	.ce_pix(ce_pix),
 	.rst_n(mem_rst_n),
 	.enable(status[19]),

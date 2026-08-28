@@ -80,6 +80,9 @@ static uint64_t g_tw_in_vbl = 0, g_tw_out_vbl = 0, g_ss_in = 0, g_ss_out = 0;
 static uint16_t g_tram[32768];
 static std::map<uint32_t, std::map<uint16_t,int>> g_tram_ip;
 static std::map<uint32_t,int> g_prof;
+static int g_flagw = 0;
+static int g_loopr = 0;
+static int g_ptrw = 0;
 static bool g_draw_seen = false;
 static uint64_t g_draw_insn = 0;
 static bool     g_tram_seen[32768];
@@ -728,6 +731,41 @@ int main(int argc, char **argv) {
     // same run here has writers the board never executes, those IPs name the
     // routines that do not run on hardware.
     if (d->obs_tram_we) g_tram_ip[(uint32_t)d->dbg_ip][d->obs_oc_din & 0xffff]++;
+    // WHAT THE SAME LOOP READS HERE. The board reads the SAME two addresses
+    // every iteration -- 0x511000 -> 80000000 and 0x511008 -> 0 -- which is why
+    // a counted loop never ends: it is not advancing. Simulation runs this loop
+    // 39 times and leaves, so its read sequence is the answer.
+    if (d->obs_bus_ack && !ack_prev && !d->obs_bus_we &&
+        d->dbg_ip >= 0x00001718u && d->dbg_ip <= 0x00001754u && g_loopr < 40) {
+      std::printf("      LOOPRD ip %08x  addr %08x -> %08x\n",
+                  (unsigned)d->dbg_ip, (unsigned)d->obs_bus_addr,
+                  (unsigned)d->obs_bus_rdata);
+      ++g_loopr;
+    }
+    // WHO WRITES THE POINTER. Simulation loads 0x00505100 from work RAM
+    // 0x501224 and the loop then reads a bound of 0x300 at base+8. The board
+    // has 0x00511000 there and reads a bound of ZERO -- which is why its loop
+    // misbehaves. The pointer is the fault; this names what puts it there.
+    if (d->obs_bus_ack && !ack_prev && d->obs_bus_we &&
+        (d->obs_bus_addr & 0xFFFFFFFCu) == 0x00501224u && g_ptrw < 12) {
+      std::printf("      PTR 0x501224 <= %08x  be=%x  (insn %u ip %08x)\n",
+                  (unsigned)d->obs_bus_wdata, (unsigned)d->obs_bus_be,
+                  (unsigned)d->dbg_acc, (unsigned)d->dbg_ip);
+      ++g_ptrw;
+    }
+    // WHO WRITES THE FLAG THE BOARD IS WAITING ON.
+    //
+    // The board sits in the counted loop at 0x1BA8 polling i960 0x511008 --
+    // SDRAM word 0x1608804 -- for a non-zero value that never arrives. The loop
+    // is a legitimate wait; the bug is whatever should set that flag. This runs
+    // where it DOES work, so it names the writer instead of guessing at one.
+    if (d->obs_bus_ack && !ack_prev && d->obs_bus_we &&
+        (d->obs_bus_addr & 0xFFFFFFFCu) == 0x00511008u && g_flagw < 12) {
+      std::printf("      FLAG 0x511008 <= %08x  be=%x  (insn %u ip %08x)\n",
+                  (unsigned)d->obs_bus_wdata, (unsigned)d->obs_bus_be,
+                  (unsigned)d->dbg_acc, (unsigned)d->dbg_ip);
+      ++g_flagw;
+    }
     // THE SAME PROFILE THE BOARD NOW TAKES, so the two histograms compare.
     // Sampling the IP on a free-running divider rather than per instruction
     // matches what hardware can afford and keeps the populations comparable.

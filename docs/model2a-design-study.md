@@ -4575,3 +4575,57 @@ empty source. Channel A now latches every CPU read and, on a tilemap write of
 zero, emits the address and data of the read that preceded it. That converts
 "the map is blank" into "the CPU read <address> and got <value>", which names
 the region instead of the symptom.
+
+**R75 — the CPU's read path is PROVEN GOOD, and the board is looping in the
+I/O board command routine.** A night of serial-channel work, with the fault
+narrowed from "a dozen subsystems" to one routine.
+
+*The read path is not the fault, and this is measured, not argued.* Ten CPU
+reads of the ROM mirror were captured on hardware and compared against the ROM
+image byte for byte:
+
+    sd word 17878 -> 58A3D090   ROM 58A3D090   MATCH
+    sd word 14388 -> 8C803000   ROM 8C803000   MATCH
+    sd word 14220 -> 80A03000   ROM 80A03000   MATCH
+    ... 10 of 10 correct
+
+So the bridge, the arbiter, port 1 and the ROM-mirror translation all work.
+That kills the "32-bit reads lose their low halfword" hypothesis, which had
+fitted the two numbers available at the time (0x80000000 survives, 0x00000300
+becomes 0) and was wrong.
+
+*Where the board actually is.* The hottest read by far -- 3,110 of 4,129 in a
+90-second capture -- is i960 `0x0022F0F0`, a subroutine MAME's trace shows
+being called from `0x00228700`, immediately after `setbit 7,0,g2`. That is the
+**I/O board command path**, the same 0x2287xx/0x2288xx region as the settings
+exchange. The board also reads `0x228430`-`0x22843C` repeatedly, whose operands
+include `0x01C00040` -- the I/O board flag address.
+
+*What that suggests, and it is not yet proven.* R63 found the settings exchange
+returning the firmware's `7F FF` input-scan pattern instead of settings. The
+composition recovers from that; the board may instead RETRY FOREVER. That would
+produce exactly what is observed: the game never completes initialisation, the
+allocator's later work never happens, block sizes stay zero, the loop at
+0x1BA8 gets a bound of zero, and nothing is ever drawn. The exchange
+contamination would then be the root cause after all -- not of missing
+characters directly, but of the game never getting past setup.
+
+*The chain, with every link now measured:*
+
+    I/O board command loop (3,110 calls)   <- the board sits here
+      -> allocator's descriptor work never completes
+      -> block size field stays 0        (board 0, sim 0x80)
+      -> pointer at 0x501224 wrong       (board 0x511000, sim 0x505100)
+      -> loop bound at base+8 is 0       (board 0, sim 0x300)
+      -> the 0x1BA8 loop never finishes
+      -> no drawing routine ever runs
+      -> two flat colour tiles
+
+*Instrument failures, recorded because they cost more than the bug did.* Three
+in one session. A shared throttle starved the channel that mattered and
+reported ZERO tilemap writes across a boot, which read as a finding. Then a
+comparator hung on the tilemap write bus blacked the screen. Then a comparator
+hung on `cpu_sd_addr` blacked it again -- 0.358 ns of slack does not survive a
+25-bit magnitude compare on a live bus. **STANDING RULE: never tap a live bus.
+Register it, compare a cycle later.** Both black screens and one worthless
+capture came from ignoring that.
