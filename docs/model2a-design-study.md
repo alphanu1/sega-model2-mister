@@ -4160,3 +4160,52 @@ Recorded with its evidence for whoever has the msm6253 datasheet open.
 Nothing depends on it yet because steering has never been exercised, but
 it would put the wheel hard over and both pedals off-centre the moment it
 is.
+
+
+**R66 — the blanking is measured on the board, the window contents are wrong
+against MAME, and the late-firmware explanation is dead.** The board finally
+answered the question simulation could not, through the tram cell probe of
+R65's build.
+
+*The measurement.* With the characters visibly gone, cell 1130 reads
+`046A8020` -- the cell index 0x46A followed by **0x8020, a SPACE** -- and the
+live settings dword reads contaminated at the same moment. So the digits are
+written correctly, displayed, and then OVERWRITTEN. The board's own words:
+"the text appears (CR, 3) for a microsecond, then the test menu arrives, then
+disappears." This retires two theories at once: the font is not missing the
+glyphs, and the render path is not dropping the cells. Something rewrites
+them with spaces once the settings go bad.
+
+*The window is wrong against the oracle.* MAME's DPRAM window 0x100-0x17f
+holds the game's own deposited block -- `53 45 47 41` ("SEGA"), the identity
+bytes, then the settings `00 01 01 01 00 03 03 00` -- and it is byte-for-byte
+STABLE across hundreds of frames. Ours fills the same window with `7F FF`
+repeating, which is the Z80's power-on RAM test pattern. So our I/O board
+writes over the game's settings block where the real one leaves it alone.
+That is a genuine divergence from the reference and it is the best lead the
+project has on the digits.
+
+*But the reset-ordering explanation for it is wrong, and it was tested rather
+than assumed.* The theory was that our Z80 leaves reset only when `fw_ready`
+latches at the end of the firmware download, which the MRA sends LAST, so the
+board's Z80 wakes seconds after the i960 has drawn the menu and wipes the
+window underneath it. Delaying the firmware to instruction 3,000,000 -- past
+the point where the digits are drawn in a normal run -- does NOT blank them:
+the game simply draws later (4.97M instead of 2.03M) and renders correctly.
+**The game blocks at the I/O poll until the board answers**, so the ordering
+is self-correcting and no firmware arrival time can produce the symptom.
+`cpu_rst_n` is therefore NOT gated on `fw_ready`, and the one-line change that
+looked obvious would have fixed nothing.
+
+*Also corrected:* R64's claim that simulation never blanks the digits was an
+artifact of stopping too early. A 40M-instruction run rewrites both cells with
+`8020` at instruction 15,906,364 (ip 0x18dd0), both in the same instruction --
+a bulk clear, consistent with the normal menu teardown on the way to attract
+rather than with the board's selective fault, but the claim as stated in R64
+was wrong and runs must now go past 16M to say anything about blanking.
+
+*The open question, and the instrument for it.* Does our Z80 write the window
+ONCE at power-on, or repeatedly during play? Once is harmless given the game
+waits for the board; repeatedly is the fault. The core already counts this --
+overlay row 23, page 1, Probe "chr A" carries {reset edges, Z80 window write
+count, last window address} -- and it has never been read.
