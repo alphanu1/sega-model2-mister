@@ -27,7 +27,7 @@
          Z80 core replaces the behavioural exchange. Loaded at index 1 into the
          board's 16 KB ROM; the Z80 stays in reset without it. -->
     <rom index="3" zip="daytona93.zip" md5="none">
-        <part name="epr-14869c.25" length="0x4000"/>
+        <part name="epr-14869c.25"/>
     </rom>
     <mameversion>0289</mameversion>
     <year>1993</year>
