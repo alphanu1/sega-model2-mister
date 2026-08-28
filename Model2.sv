@@ -1180,6 +1180,22 @@ wire  [7:0] cpu_xlat_din_b;
 wire        cpu_io_sel, cpu_io_we;
 wire  [3:0] cpu_io_be;
 wire [31:0] cpu_io_addr, cpu_io_wdata, cpu_io_rdata;
+// THE '3' BYTE'S WRITE, LATCHED AT THE SDRAM PORT (R63). The formatter's
+// stob to 0x53e541 arrives here as a write to word 0x161F2A0 with the upper
+// byte enabled. If this latch shows 33xx the write was issued and the fault is
+// in the memory path; if it never fires, the formatter never ran on the board
+// and the branch above it diverges. Count in the top byte, data below.
+logic [7:0]  vsw_cnt;
+logic [15:0] vsw_data;
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+	if (!mem_rst_n) begin vsw_cnt <= 8'd0; vsw_data <= 16'd0; end
+	else if (cpu_sd_req && cpu_sd_we && cpu_sd_addr == SDR_AW'(32'h161F2A0)
+	         && cpu_sd_be[1]) begin
+		if (!(&vsw_cnt)) vsw_cnt <= vsw_cnt + 8'd1;
+		vsw_data <= cpu_sd_din;
+	end
+end
+
 wire        cpu_sd_req, cpu_sd_we;
 wire [SDR_AW:1] cpu_sd_addr;
 wire [15:0] cpu_sd_din;
@@ -1953,6 +1969,9 @@ m2_diag #(.NWORDS(24)) u_diag
 	         // Probe 0-3: reads #8-11 -- the board's draw-read is #9. Page 1,
 	         // Probe 6: live word 4 (coin-mode bytes 0x10-0x13). Page 1,
 	         // Probe 7: live word 5 (settings dword).
+	         // page1/Probe5: {writes-to-'3'-byte count, last data} -- the
+	         // formatter's own store, caught at the SDRAM port.
+	         (status[18] && status[16:14] == 3'd5) ? {8'd0, vsw_cnt, vsw_data} :
 	         (status[18] && status[16:14] >= 3'd6) ? bak_dbg_q : bak_first,
 	         // 22 THE LAST CHARACTER FETCH, verbatim. FFFFFFFF means the fetch is
 	         // reading memory nobody ever wrote -- one flat colour per palette
