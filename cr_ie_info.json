@@ -7,10 +7,10 @@
 	"error" : {
 		"executable" : "quartus_fit",
 		"comment" : "not_applicable",
-		"error_message" : "Segment Violation at 0x7fc763023638",
+		"error_message" : "Segment Violation at 0x7fbe66bf4d38",
 		"source_file" : "unknown",
 		"line" : "0",
-		"stack_trace" : "\t0x7fc83412ee4f: tsm_sta + 0x32ee4f (_ZN23STA_COLLECTION_ATCL_OBJD0Ev + 0xf)\n\t0x7fc84a62b0be: ccl_atcl + 0x2b0be (_ZN8ATCL_OBJ23tcl_freeInternalRepProcEP7Tcl_Obj + 0x100)\n\t0x7fc843b08610: tcl8.6 + 0x108610 (TclFreeObj + 0xd0)\n\t0x7fc843b30ec1: tcl8.6 + 0x130ec1 (UnsetVarStruct + 0x511)\n\t0x7fc843b31253: tcl8.6 + 0x131253 (TclDeleteNamespaceVars + 0xd3)\n\t0x7fc843b03fc0: tcl8.6 + 0x103fc0 (TclTeardownNamespace + 0x20)\n\t0x7fc843a50433: tcl8.6 + 0x50433 (DeleteInterpProc + 0x123)\n\t0x7fc84a619d82: ccl_atcl + 0x19d82 (_Z13atcl_exe_finiv + 0x46)\n\t0x7fc84cc41d56: ccl_msg + 0x41d56 (_Z12msg_exe_finiv + 0x46)\n\t0x7fc84cc427ea: ccl_msg + 0x427ea (_Z12msg_exe_mainiPPKcPFiiS1_E + 0xab)\n\t0x7fc841627781: c.so.6 + 0x27781\n\t0x7fc8416278b9: c.so.6 + 0x278b9 (__libc_start_main + 0x89)\n\t   0x4030b5: quartus_fit + 0x30b5\n",
+		"stack_trace" : "\t0x7fbf3792ee4f: tsm_sta + 0x32ee4f (_ZN23STA_COLLECTION_ATCL_OBJD0Ev + 0xf)\n\t0x7fbf4de2b0be: ccl_atcl + 0x2b0be (_ZN8ATCL_OBJ23tcl_freeInternalRepProcEP7Tcl_Obj + 0x100)\n\t0x7fbf47308610: tcl8.6 + 0x108610 (TclFreeObj + 0xd0)\n\t0x7fbf47330ec1: tcl8.6 + 0x130ec1 (UnsetVarStruct + 0x511)\n\t0x7fbf47331253: tcl8.6 + 0x131253 (TclDeleteNamespaceVars + 0xd3)\n\t0x7fbf47303fc0: tcl8.6 + 0x103fc0 (TclTeardownNamespace + 0x20)\n\t0x7fbf47250433: tcl8.6 + 0x50433 (DeleteInterpProc + 0x123)\n\t0x7fbf4de19d82: ccl_atcl + 0x19d82 (_Z13atcl_exe_finiv + 0x46)\n\t0x7fbf50441d56: ccl_msg + 0x41d56 (_Z12msg_exe_finiv + 0x46)\n\t0x7fbf504427ea: ccl_msg + 0x427ea (_Z12msg_exe_mainiPPKcPFiiS1_E + 0xab)\n\t0x7fbf44e27781: c.so.6 + 0x27781\n\t0x7fbf44e278b9: c.so.6 + 0x278b9 (__libc_start_main + 0x89)\n\t   0x4030b5: quartus_fit + 0x30b5\n",
 		"subsystem" : "unknown"
 	},
 	"quartus" : {

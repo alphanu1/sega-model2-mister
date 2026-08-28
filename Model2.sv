@@ -1196,6 +1196,29 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	end
 end
 
+// EXCHANGE-COLLISION TELEMETRY (R63). The board's settings arrive in backup
+// as 7F FF 7F -- the Z80's input-scan pattern -- so the firmware's window
+// refill and the game's settings deposit collide in the DPRAM. Count the
+// Z80's writes into the window (bytes 0x100-0x17f) and latch the LAST one's
+// address, so the scan's cadence and reach are readable from the bench.
+// Plus a game-reset edge counter: 'reset does not work' becomes a number.
+logic [7:0]  zw_win_cnt;
+logic [10:0] zw_last;
+logic [7:0]  rst_edges;
+logic        grst_d;
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+	if (!mem_rst_n) begin
+		zw_win_cnt <= 8'd0; zw_last <= 11'd0; rst_edges <= 8'd0; grst_d <= 1'b1;
+	end else begin
+		if (zio_we && fw_ready && zio_addr >= 11'h100 && zio_addr < 11'h180) begin
+			if (!(&zw_win_cnt)) zw_win_cnt <= zw_win_cnt + 8'd1;
+			zw_last <= zio_addr;
+		end
+		grst_d <= game_rst_n;
+		if (grst_d && !game_rst_n && !(&rst_edges)) rst_edges <= rst_edges + 8'd1;
+	end
+end
+
 wire        cpu_sd_req, cpu_sd_we;
 wire [SDR_AW:1] cpu_sd_addr;
 wire [15:0] cpu_sd_din;
@@ -1971,6 +1994,10 @@ m2_diag #(.NWORDS(24)) u_diag
 	         // Probe 7: live word 5 (settings dword).
 	         // page1/Probe5: {writes-to-'3'-byte count, last data} -- the
 	         // formatter's own store, caught at the SDRAM port.
+	         // page1/Probe4: {reset edges, Z80 window writes, last window
+	         // address} -- the collision telemetry and the reset counter.
+	         (status[18] && status[16:14] == 3'd4) ?
+	             {rst_edges, zw_win_cnt, 5'd0, zw_last} :
 	         (status[18] && status[16:14] == 3'd5) ? {8'd0, vsw_cnt, vsw_data} :
 	         (status[18] && status[16:14] >= 3'd6) ? bak_dbg_q : bak_first,
 	         // 22 THE LAST CHARACTER FETCH, verbatim. FFFFFFFF means the fetch is
