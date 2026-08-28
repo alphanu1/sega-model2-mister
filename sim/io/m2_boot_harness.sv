@@ -348,7 +348,7 @@ module m2_boot_harness #(
     .word(cpu_io_addr[13:2]), .be(cpu_io_be), .wdata(cpu_io_wdata),
     .rdata(bak_rdata),
     .rst_n(rst_n), .hps_we(1'b0), .hps_word(12'd0), .hps_be(4'd0), .hps_wdata(32'd0),
-    .dbg_word(12'd5), .dbg_rd_sel(3'd0), .dbg_q(), .dbg_first(), .dbg_w0(bak_w0), .dbg_writes(bak_writes)
+    .dbg_word(12'd5), .dbg_rd_sel(4'd0), .dbg_q(), .dbg_q4(), .dbg_first(), .dbg_w0(bak_w0), .dbg_writes(bak_writes)
   );
 
   // The I/O read mux, copied from Model2.sv. If these two ever disagree the

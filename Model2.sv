@@ -103,6 +103,7 @@ localparam CONF_STR = {
 	"O[16:14],Probe,bootIP,chr 3,chr 1,chr #,chr A,row2,bndry,chr0;",
 	"-;",
 	"R[17],Save settings (NVRAM);",
+	"O[18],Probe page,0,1;",
 	"R[0],Reset and close OSD;",
 	"v,0;",
 	"V,v",`BUILD_DATE
@@ -1409,12 +1410,13 @@ m2_backup u_backup (
 	.wdata(cpu_io_wdata),
 	.rdata(bak_rdata),
 	.dbg_word(nv_word_r),
-	.dbg_rd_sel(status[16:14]),
-	.dbg_q(bak_dbg_q), .dbg_first(bak_first),
+	.dbg_rd_sel({status[18], status[16:14]}),
+	.dbg_q(bak_dbg_q), .dbg_q4(bak_dbg_q4), .dbg_first(bak_first),
 	.dbg_w0(bak_w0), .dbg_writes(bak_writes)
 );
 wire [31:0] bak_dbg_q;
 wire [31:0] bak_first;
+wire [31:0] bak_dbg_q4;
 
 m2_ioboard #(
 	// RESCALED TO clk_sys. These are measured in FRAMES -- status at 7 and
@@ -1883,7 +1885,12 @@ m2_diag #(.NWORDS(24)) u_diag
 	         // -- FF...FF means the draw consumed uninitialised settings.
 	         // 23 is now {total read count, read #(Probe+1) of the settings
 	         // dword, low 24 bits}. Step Probe 0..7 to walk the sequence.
-	         bak_first,
+	         // 23: page 0 (O18=0): {reads, read #(Probe) captured}. Page 1,
+	         // Probe 0-3: reads #8-11 -- the board's draw-read is #9. Page 1,
+	         // Probe 6: live word 4 (coin-mode bytes 0x10-0x13). Page 1,
+	         // Probe 7: live word 5 (settings dword).
+	         (status[18] && status[16:14] == 3'd6) ? bak_dbg_q4 :
+	         (status[18] && status[16:14] == 3'd7) ? bak_dbg_q  : bak_first,
 	         // 22 THE LAST CHARACTER FETCH, verbatim. FFFFFFFF means the fetch is
 	         // reading memory nobody ever wrote -- one flat colour per palette
 	         // bank, which is the board's sky and ground. Anything varied means
