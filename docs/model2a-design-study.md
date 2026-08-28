@@ -4106,3 +4106,38 @@ criterion (a copy-back carrying 7F/FF is the race reproduced); and the
 behavioural SDRAM's unwritten cells return `DEFAULT_DATA = '0`, which violates
 the unwritten-reads-`0xFFFF` rule — masked today because the streamed image
 covers the space, open as a model gap.
+
+**R65 — the Test button path is correct, the DIPs are a dead end, and the
+analog readout is off by one bit.** Three results from putting MAME's own
+input tables next to the Z80 board, taken because the TEST and SERVICE
+buttons do nothing on the board and the request was for DIP switches instead.
+
+*The DIPs would not have helped.* `mame daytona93 -listxml` defines three
+banks — `ioboard:dsw1`, `dsw2`, `dsw3` — and **all twenty-four bits are
+"Unused"**. There is no self-test DIP on this game; test mode is the TEST
+switch. Wiring DIPs into the OSD would produce a menu that does nothing.
+
+*The bit map was already right, and so is the whole path.* MAME's `IN0`:
+0x01 Coin 1, 0x02 Coin 2, **0x04 Service Mode (the TEST switch)**, 0x08
+Service 1, 0x10 1P Start, 0x20/0x40/0x80 VR1-3; `IN1` bit 0 is VR4. Our
+`iob_in0` places Test at bit 2 and Service at bit 3, which matches. The
+oracle for the rest: MAME's DPRAM byte 0x08 reads `FF` idle and `FB` with
+Service Mode held, and byte 0x09 reads `8F`. Driving our own board with
+`in0=FB` through the real firmware produces **`dp[0x08] = FB`, `dp[0x09] =
+8F`** — identical. The game polls byte 0x08 (it appears as `R 008 ff` in
+every dialogue capture). So controller bit -> port -> firmware -> DPRAM ->
+game is proven end to end in simulation, and a non-working TEST button on
+the board is not an RTL fault. The remaining candidate is the MiSTer side:
+a core whose buttons have never been assigned in "Define buttons" has no
+J1 mapping at all.
+
+*And the analog channels are shifted.* Same comparison, bytes 0x00-0x07:
+MAME idle reads `80 20 20 ...` (steering centred, pedals released) where
+ours reads `00 40 40 ...`. Every value is its MAME counterpart shifted LEFT
+by one — 0x80 becomes 0x00, 0x20 becomes 0x40. The MSM6253 model in
+`m2_ioz80.sv` loads `adc_shift` on the write strobe and shifts on `rd_end`,
+and one shift happens before the first bit is consumed, so the byte the
+firmware assembles is off by one place and the MSB is lost. Nothing has
+depended on this yet because steering has never been exercised, but it
+would put the wheel hard over and both pedals off-centre the moment it is.
+Fix batched with the next build rather than spent on its own.

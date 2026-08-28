@@ -44,7 +44,12 @@ int main(int argc, char **argv) {
       cycles = std::strtoull(argv[i] + 8, nullptr, 10);
 
   // Idle inputs: everything released, active low; gearbox (in1[6:4]) neutral.
-  d->in0 = 0xff; d->in1 = 0x8f; d->in2 = 0xff;
+  // M2_IN0 overrides the idle cabinet inputs. MAME's oracle: DPRAM byte 0x08
+  // reads FF idle and FB with Service Mode (the TEST switch) held, so driving
+  // in0=0xfb here must produce the same byte if our port wiring is right.
+  unsigned in0v = 0xff;
+  if (const char *iv = std::getenv("M2_IN0")) in0v = std::strtoul(iv, nullptr, 16);
+  d->in0 = in0v; d->in1 = 0x8f; d->in2 = 0xff;
   d->adc0 = 0x80; d->adc1 = 0x20; d->adc2 = 0x20; d->adc3 = 0x80;
   d->g_we = 0; d->g_addr = 0; d->g_wdata = 0;
 
@@ -207,6 +212,9 @@ int main(int argc, char **argv) {
   std::printf("\n  dp[0x100..0x11f] final: ");
   for (int a = 0x100; a < 0x120; ++a)
     std::printf("%02x ", last.count(a) ? last[a] : 0xee);   // ee = firmware never wrote
+  std::printf("\n  dp[0x00..0x0f] final:   ");
+  for (int a = 0; a < 0x10; ++a)
+    std::printf("%02x ", last.count(a) ? last[a] : 0xee);
   std::printf("\n  dp[0x20..0x2f] final:   ");
   for (int a = 0x20; a < 0x30; ++a)
     std::printf("%02x ", last.count(a) ? last[a] : 0x00);
