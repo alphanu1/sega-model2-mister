@@ -104,8 +104,12 @@ localparam CONF_STR = {
 	"-;",
 	"R[17],Save settings (NVRAM);",
 	"O[18],Probe page,0,1;",
-	"J1,Coin,Start,Test,Service;",
 	"R[0],Reset and close OSD;",
+	// The button-definition line lives at the END of the menu block. Placed
+	// between the two R items it silently broke everything after it -- the OSD
+	// Reset stopped pulsing status[0], measured as a reset-edge counter that
+	// ignored the button entirely.
+	"J1,Coin,Start,Test,Service;",
 	"v,0;",
 	"V,v",`BUILD_DATE
 };
