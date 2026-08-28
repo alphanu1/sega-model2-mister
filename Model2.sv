@@ -1642,17 +1642,21 @@ end
 //
 // Read it with `debug=1` in mister.ini and a terminal on the DE10-Nano's UART
 // at 115200 8N1.
-wire        uart_a_valid = cpu_sd_req && cpu_sd_we
-                        && cpu_sd_addr >= GAME_CHAR
-                        && cpu_sd_addr <  GAME_CHAR + SDR_AW'(25'h80000);
+// CHANNEL A REPOINTED AT THE TILEMAP. The character channel did its job in one
+// capture: the CPU DOES write glyph data (82 W lines through a boot, non-zero),
+// and the renderer only ever asks for TWELVE addresses -- offsets 0x0-0xE and
+// 0x30000-0x3000E -- against 7,883 in simulation. It is drawing tile 0 and one
+// other, everywhere, and tile 0's glyph is legitimately blank. The glyph path
+// was never the fault; the TILEMAP is. So watch what goes into it.
+wire        uart_a_valid = ocb_tram_we;
 wire        uart_b_valid = char_ack;
 wire [31:0] uart_dropped;
 
 m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	.clk(clk_sys), .rst_n(mem_rst_n),
-	.a_valid(uart_a_valid), .a_addr({7'd0, 25'(cpu_sd_addr)}), .a_data({16'd0, cpu_sd_din}),
+	.a_valid(uart_a_valid), .a_addr({17'd0, ocb_addr}), .a_data({16'd0, ocb_din}),
 	.b_valid(uart_b_valid), .b_addr({7'd0, cf_addr}),          .b_data(char_data),
-	.a_tag(8'h57), .b_tag(8'h52),          // 'W' and 'R'
+	.a_tag(8'h54), .b_tag(8'h52),          // 'T' tilemap write, 'R' char fetch
 	.enable(1'b1),
 	.tx(UART_TXD), .dbg_dropped(uart_dropped)
 );

@@ -4493,3 +4493,45 @@ source and row 22 is still the reading that says so.
 *Self-inflicted, recorded so it is not repeated:* the first build of this failed
 because the new module was created but never added to `Model2.qsf`. Quartus does
 not glob; a new RTL file is invisible until the project lists it.
+
+**R73 — the UART channel found it in two captures: the tilemap is the fault,
+not the glyphs.** The core got a serial printf (R72's transmitter, wired to two
+tagged channels) and it produced more usable evidence in five minutes than the
+overlay produced in a day.
+
+*Capture 1, 30 seconds at the flat-colour attract screen:* 7,172 character
+fetches, **every one returning 00000000**, across **eight distinct addresses**.
+No CPU writes to the character region in that window.
+
+*Capture 2, across a full core reload:* **82 W lines** -- the CPU DOES upload
+character data, and it is non-zero (`00001991`, `00006786`, `00003146`). The
+"never written" reading from capture 1 was a window that began long after boot.
+Across the whole boot the renderer requested **twelve** addresses: offsets
+0x0-0xE and 0x30000-0x3000E from GAME_CHAR.
+
+*The conclusion, and it retires the entire glyph investigation.* Simulation
+fetches **7,883 distinct character words** rendering the same screen. The board
+fetches twelve. The renderer is not reading the wrong data -- it is being told
+to draw **tile 0 and one other tile, everywhere**, and tile 0's glyph is
+legitimately blank, so it faithfully paints one flat colour per palette bank.
+The character fetch, the CDC, the cache, the SDRAM path and the decode were all
+working correctly the entire time, on a tilemap that contains almost nothing.
+
+That is why every glyph-side change landed without effect (R72's cache, the
+single-clock move), and it explains the one thing that never fitted: the tile
+cells probed at the MENU held correct values (8020, c033, 8043) while attract
+shows nothing. The menu's tilemap is written correctly. The attract screen's is
+not.
+
+*What the channel is worth, recorded because the lesson is bigger than the bug.*
+The overlay shows eight hex digits, of one value, at the moment someone is
+looking. It produced four wrong conclusions in a day: two values attributed to
+the wrong probe, two read at a moment when the value was legitimately something
+else. The serial channel showed 7,172 events with addresses AND data AND
+ordering, and answered in one capture a question six builds had failed to
+settle. `docs/mister-integration.md` had said it was available; CLAUDE.md's
+summary said "No serial", and the summary is what governed.
+
+*Next:* channel A repointed from character writes to TILEMAP writes
+(`ocb_tram_we`, tagged 'T'), which shows directly what the CPU puts in the map
+and whether the attract screen's tilemap is ever written at all.
