@@ -4229,3 +4229,44 @@ the window is exonerated, `7FFF7FFF` means the RAM-test pattern is landing on
 the game's settings block. Unlike the counter it cannot saturate into
 ambiguity, and unlike the previous rows it is a direct comparison against a
 known oracle value.
+
+
+**R67 — the window is CLEAN and the backup is not, so the corruption is in
+the copy, and R63's original mechanism is back.** The instrument built at the
+end of R66 was read on the board: window offsets 0x114-0x117, latched as our
+Z80 writes them, return **`00030300`** -- byte-for-byte what MAME's real
+machine holds. Our firmware deposits correct settings. The window is
+exonerated, and with it the RAM-test-clobber theory that R66 called the
+project's best lead.
+
+What that leaves is sharper than anything before it, because two measurements
+now bracket the fault from both sides:
+
+  the firmware's side of the window   00030300   correct (this entry)
+  the game's side, in backup SRAM     7F FF 7F   contaminated (R63)
+
+The same block, correct where the firmware writes it and corrupt where the
+game files it. **The corruption is therefore in the copy-back itself, and it
+is a timing fault, not a data fault**: the game reads the window BEFORE the
+firmware has refilled it, picking up whatever the previous occupant was -- the
+`7F FF` RAM-test pattern -- and writes that to backup. The firmware then fills
+the window correctly, which is why a later probe of the window shows clean
+settings while the digits stay blank. That is exactly the sequencing race R63
+described (deposit -> command -> firmware response -> copy-back, with the
+copy-back beating the response), and it survived being written off in R64.
+
+Why R64 was wrong to retire it: the phase sweep showed the composition
+recovering in all ten orderings, and the conclusion drawn was "the exchange is
+exonerated". But the sim WINS this race and the board LOSES it, so a sweep of
+sim orderings could only ever show recoveries. Exonerating a race on evidence
+that cannot exhibit it was a mistake in reasoning, not in measurement.
+
+*Where the interlock actually lives, and the next measurement.* The game's
+guard is the flag/status handshake at DPRAM 0x20/0x21: write command, wait for
+the firmware to answer, then copy. With `USE_Z80=1` the HLE flag machine is
+silenced and the real firmware drives it, so the question is whether the game
+is seeing a flag that says "ready" too early -- a stale or wrongly-returned
+status read letting it proceed before the refill. The live backup settings
+dword (row 23, page 1, Probe "chr0" -- backup word 5, the dword the digits are
+printed from) must be read and reported as an exact value to confirm the
+bracket above from the board rather than from R63's older capture.
