@@ -102,6 +102,7 @@ localparam CONF_STR = {
 	// readback) so the board can say whether that data is THERE and READABLE.
 	"O[16:14],Probe,bootIP,chr 3,chr 1,chr #,chr A,row2,bndry,chr0;",
 	"-;",
+	"R[17],Save settings (NVRAM);",
 	"R[0],Reset and close OSD;",
 	"v,0;",
 	"V,v",`BUILD_DATE
@@ -155,8 +156,12 @@ hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
 	// host-initiated, the standard arcade pattern.
 	.ioctl_din(ioctl_din),
 	.ioctl_upload(ioctl_upload),
-	.ioctl_upload_req(1'b0),
-	.ioctl_upload_index()
+	// THE CORE MUST ASK. MiSTer writes the MRA's <nvram> section back only
+	// when the core pulses upload_req -- wiring it to zero means no save ever
+	// happens, however the ini is set. The OSD's "Save settings" line pulses
+	// it with index 2.
+	.ioctl_upload_req(nv_save_req),
+	.ioctl_upload_index(8'd2)
 );
 
 wire        ioctl_download, ioctl_wr, ioctl_wait, ioctl_upload;
@@ -1374,6 +1379,9 @@ end
 // NVRAM (MRA <nvram index="2">): load fills backup SRAM before the CPU is
 // released; save reads it back. 16-bit ioctl: word = addr[13:2], half = addr[1].
 wire nv_sel = (ioctl_index[5:0] == 6'd2);
+logic [2:0] nv_save_sync;
+always_ff @(posedge clk_sys) nv_save_sync <= {nv_save_sync[1:0], status[17]};
+wire nv_save_req = nv_save_sync[1] & ~nv_save_sync[2];
 wire nv_we  = ioctl_download && nv_sel && ioctl_wr;
 assign ioctl_din = ioctl_addr[1] ? bak_dbg_q[31:16] : bak_dbg_q[15:0];
 
