@@ -312,13 +312,23 @@ int main(int argc, char **argv) {
   if (const char *fl = std::getenv("M2_FWLATE"))
     fw_late = std::strtoull(fl, nullptr, 10);
   std::vector<uint8_t> fw_pending;
+  std::vector<uint8_t> fw_rm;   // real-memory mode: held until clk_slow runs
   if (const char *fp = std::getenv("M2_IOFW")) {
     FILE *ff = std::fopen(fp, "rb");
     if (ff) {
       std::vector<uint8_t> fwb(16384, 0xff);
       size_t fn = std::fread(fwb.data(), 1, fwb.size(), ff);
       std::fclose(ff);
-      if (fw_late == 0) {
+      // REAL_MEM: the fw ROM's clock is the stack's clk_slow, and that
+      // divider is held while rst_n=0 -- a load issued here would strobe a
+      // dead clock and write NOTHING (the first composition run proved it:
+      // the Z80 woke on an empty ROM and the exchange never began). Hold
+      // the bytes; the real-memory block below loads them after reset,
+      // with the Z80 still held by fw_ready=0.
+      if (fw_late == 0 && real_mem) {
+        fw_rm = fwb;
+        std::printf("  I/O FIRMWARE held for post-reset load (real memory)\n");
+      } else if (fw_late == 0) {
         for (int a = 0; a < 8192; ++a) {
           d->fw_we = 1; d->fw_addr = a;
           d->fw_data = fwb[a*2] | (fwb[a*2+1] << 8); tick();
@@ -338,6 +348,14 @@ int main(int argc, char **argv) {
     // Device init first, then the image, CPU held throughout.
     d->cpu_hold = 1;
     while (!d->mem_ready_o) tick();
+    if (!fw_rm.empty()) {
+      for (int a = 0; a < 8192; ++a) {
+        d->fw_we = 1; d->fw_addr = a;
+        d->fw_data = fw_rm[a*2] | (fw_rm[a*2+1] << 8); tick();
+      }
+      d->fw_we = 0; d->fw_ready = 1;
+      std::printf("  I/O FIRMWARE loaded post-reset -- the Z80 board is live\n");
+    }
     std::printf("  REAL MEMORY ready; streaming the image...\n");
     uint64_t words = mem_words;   // set below where the image was read
     for (uint64_t w = 1; w <= words; ++w) {

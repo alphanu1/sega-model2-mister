@@ -64,6 +64,29 @@ game side runs at true latency the sim should LOSE the race like the board --
 then the fix (honest BUSY/status modelling, or whatever the reproduced race
 demands) gets built against seconds-long runs.
 
+### The composition's first run, and its one bench trap
+
+The REAL_MEM composition builds and runs end to end: device init, the
+43.62 MB image streamed through the wr port, 2.1 M instructions at true
+SDRAM latency. The first full run failed in a way worth keeping: the
+firmware load was issued while `rst_n=0`, and in REAL_MEM the fw ROM's
+clock is the stack's own `clk_slow` -- whose divider is HELD IN RESET.
+Every fw_we strobed a dead clock, zero words landed, the Z80 woke on an
+empty ROM, and the game parked forever at 0x228240 polling dp[0x20] for
+an answer that could never come. The C++-memory path never sees this
+because the tb drives clk_mem itself, reset or not.
+
+Rule extracted: **in the REAL_MEM composition nothing can be loaded on
+the divided clock while rst_n is low.** The fw bytes are now held and
+loaded after reset release (the Z80 stays parked by fw_ready=0 until
+they are in). `$readmemh` preloads (backup SRAM) are clockless and
+immune. Second run in flight.
+
+Also learned: the tb's end-of-run reports that inspect `mem[]` (boot-copy
+compare, unclaimed-region survey) describe the STREAMED IMAGE, not the
+live device, in REAL_MEM mode -- the device's writes land in the RTL
+model. Read them accordingly.
+
 ### Open items
 1. **Two menu digits print as green spaces** — localised to the settings dword
    at backup byte `0x14` (sim: `00030300` → prints '3'); the probe reading it
