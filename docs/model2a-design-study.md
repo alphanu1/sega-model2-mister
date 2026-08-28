@@ -4131,13 +4131,32 @@ the board is not an RTL fault. The remaining candidate is the MiSTer side:
 a core whose buttons have never been assigned in "Define buttons" has no
 J1 mapping at all.
 
+*The game receives it too, and still does nothing.* Driving the whole
+composition with `in0=FB` from reset: the game reads DPRAM byte 0x08
+**forty-four times and gets `FB` every time**, and its execution is
+byte-for-byte identical to the released-switch run -- same instruction
+count, same tram writes, same pixel total. So the switch reaches the game
+and the game ignores it. The likely reason is that it is ALREADY in test
+mode: the frame capture is the GAME ASSIGNMENTS screen, which the game
+forces when its settings fail validation, so holding TEST inside the menu
+changes nothing visible. Simulation therefore cannot discriminate further,
+and the board needs an instrument instead -- overlay row 23, page 1, Probe
+"bootIP" now shows {raw in0, the byte the firmware deposited, scan count},
+which separates "the press never reaches the core" from "the firmware is
+not scanning" from "the game is ignoring it".
+
 *And the analog channels are shifted.* Same comparison, bytes 0x00-0x07:
 MAME idle reads `80 20 20 ...` (steering centred, pedals released) where
 ours reads `00 40 40 ...`. Every value is its MAME counterpart shifted LEFT
 by one — 0x80 becomes 0x00, 0x20 becomes 0x40. The MSM6253 model in
-`m2_ioz80.sv` loads `adc_shift` on the write strobe and shifts on `rd_end`,
-and one shift happens before the first bit is consumed, so the byte the
-firmware assembles is off by one place and the MSB is lost. Nothing has
-depended on this yet because steering has never been exercised, but it
-would put the wheel hard over and both pedals off-centre the moment it is.
-Fix batched with the next build rather than spent on its own.
+`m2_ioz80.sv` returns `adc_shift[7]` and shifts once on `rd_end`, which on
+inspection matches msm6253.cpp exactly -- so the extra shift comes from
+somewhere else, most likely a dummy read the firmware issues while waiting
+for the conversion, which our model consumes as a data bit and the real
+chip does not. THE MECHANISM IS NOT PINNED, so nothing is changed here:
+the reference source wins over a plausible edit, and an unverified "fix"
+to a shift register is exactly how an off-by-one becomes an off-by-two.
+Recorded with its evidence for whoever has the msm6253 datasheet open.
+Nothing depends on it yet because steering has never been exercised, but
+it would put the wheel hard over and both pedals off-centre the moment it
+is.

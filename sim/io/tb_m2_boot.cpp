@@ -256,6 +256,12 @@ int main(int argc, char **argv) {
   int ce_tog = 0;
 
   const bool real_mem = std::getenv("M2_REALMEM") != nullptr;
+  {
+    unsigned c = 0xff;
+    if (const char *cv = std::getenv("M2_IN0")) c = std::strtoul(cv, nullptr, 16);
+    d->cab_in0 = c;
+    if (c != 0xff) std::printf("  CABINET in0 = %02x (bit2 clear = TEST held)\n", c);
+  }
   int slow_prev = 0;
   auto base_step = [&]() {
     const int m = int((base_t / 2) & 1);

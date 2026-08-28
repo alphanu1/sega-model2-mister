@@ -57,6 +57,9 @@ module m2_boot_harness #(
   // Holds the i960 (only) in reset while the ROM streams into the device
   // model -- the loader's job on hardware, the testbench's here.
   input  logic        cpu_hold,
+  // Cabinet switches, active low, MAME's IN0 order: bit2 is the TEST switch
+  // (MAME calls it Service Mode) and FB is that switch held.
+  input  logic  [7:0] cab_in0,
   output logic        clk_slow_o,
   input  logic        rl_req,
   input  logic [25:1] rl_addr,
@@ -397,7 +400,7 @@ module m2_boot_harness #(
   m2_ioz80 #(.CEN_DIV(12)) u_ioz80 (
     .clk(clk_m), .rst_n(rst_n & fw_ready),
     .fw_we(fw_we), .fw_addr(fw_addr), .fw_data(fw_data),
-    .in0(8'hff), .in1(8'h8f), .in2(8'hff),
+    .in0(cab_in0), .in1(8'h8f), .in2(8'hff),
     .adc0(8'h80), .adc1(8'h20), .adc2(8'h20), .adc3(8'h80),
     .z_we(zio_we), .z_addr(zio_addr), .z_wdata(zio_wdata), .z_rdata(zio_rdata),
     .dbg_ee(), .dbg_wrcnt(), .dbg_wr_stb(), .dbg_dout(), .dbg_di(),

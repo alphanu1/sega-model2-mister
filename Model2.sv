@@ -1516,6 +1516,30 @@ m2_ioz80 #(.CEN_DIV(12)) u_ioz80 (
 	.dbg_m1_n(), .dbg_a(), .dbg_last_wr(), .dbg_pf()
 );
 
+// WHERE DOES THE TEST SWITCH STOP? The buttons are mapped, the firmware path
+// is proven in simulation (R65: in0=FB puts FB in DPRAM byte 0x08, byte for
+// byte what MAME's machine does), and the board still does nothing. Three
+// places it can die, and this row separates them without another guess:
+//
+//   in0 stays FF while the button is held -> the press never reaches the core
+//   in0 goes FB but dp08 stays FF         -> the firmware is not scanning
+//   both go FB                            -> the game is ignoring the switch
+//
+// dp08 is latched off the Z80's own DPRAM write port, so it is what the
+// firmware actually deposited, not what we hope it deposited. The counter
+// proves the scan is running at all: frozen means no input scan, climbing
+// means the firmware is sweeping the ports as it should.
+logic [7:0]  dp08_latch;
+logic [15:0] dp08_wr_cnt;
+always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
+	if (!cpu_rst_n) begin
+		dp08_latch <= 8'hFF; dp08_wr_cnt <= 16'd0;
+	end else if (zio_we && zio_addr == 11'h008) begin
+		dp08_latch  <= zio_wdata;
+		if (!(&dp08_wr_cnt)) dp08_wr_cnt <= dp08_wr_cnt + 16'd1;
+	end
+end
+
 // Cabinet inputs, model2.cpp daytona bit order, active low. TEST and SERVICE
 // come from the OSD-mapped buttons; the gearbox sits in neutral.
 wire [7:0] iob_in0 = ~{3'b000, joystick_0[5], joystick_0[7], joystick_0[6],
@@ -2012,6 +2036,12 @@ m2_diag #(.NWORDS(24)) u_diag
 	         // render path drops the CELL; wrong value = the CPU's write
 	         // never landed. Page 1 keeps the backup and collision telemetry
 	         // exactly as it was.
+	         // Page 1 / Probe 0 (bootIP): the cabinet-switch diagnostic above,
+	         // {raw in0, the byte the firmware deposited, scan count}. It
+	         // displaces the settings read #8, which the exchange's
+	         // exoneration (R64) made the least useful thing on this row.
+	         (status[18] && status[16:14] == 3'd0) ?
+	             {iob_in0, dp08_latch, dp08_wr_cnt} :
 	         (status[18] && status[16:14] == 3'd4) ?
 	             {rst_edges, zw_win_cnt, 5'd0, zw_last} :
 	         (status[18] && status[16:14] == 3'd5) ? {8'd0, vsw_cnt, vsw_data} :
