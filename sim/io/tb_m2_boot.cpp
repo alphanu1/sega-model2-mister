@@ -50,6 +50,7 @@ static bool load_file(const std::string &p, std::vector<uint8_t> &out) {
   return got == size_t(n);
 }
 
+static FILE *g_dplog = nullptr;
 static int g_r5_n = 0;
 static int g_e1n = 0, g_e0n = 0, g_win = 0, g_bk_n = 0, g_c3_n = 0, g_src_n = 0, g_sw_n = 0;
 static const int FW = 496, FH = 384;
@@ -281,6 +282,7 @@ int main(int argc, char **argv) {
 
   for (int i = 0; i < 64; ++i) tick();
   d->rst_n = 1;
+  if (const char *dl = std::getenv("M2_DPLOG")) g_dplog = std::fopen(dl, "w");
 
   if (std::getenv("M2_BOOT_TRACE")) {
     for (int i = 0; i < 400; ++i) {
@@ -656,6 +658,15 @@ int main(int argc, char **argv) {
         || (a >= 0x06000000u && a <  0x07000000u)        // main_data alias
         || (a >= 0x00220000u && a <  0x00240000u);       // ROM mirror
       if (!backed) g_rd_unbacked[a & 0xffff0000u]++;
+    }
+    if (g_dplog && d->obs_bus_ack && !ack_prev &&
+        d->obs_bus_addr >= 0x01c00000u && d->obs_bus_addr < 0x01c01000u) {
+      std::fprintf(g_dplog, "%c %03x %02x %u\n",
+                   d->obs_bus_we ? 'W' : 'R',
+                   (d->obs_bus_addr - 0x01c00000u) >> 1,
+                   d->obs_bus_we ? (d->obs_bus_wdata & 0xff)
+                                 : (d->obs_bus_rdata & 0xff),
+                   (unsigned)d->dbg_acc);
     }
     if (d->obs_bus_ack && !ack_prev && d->obs_bus_we) {
       const uint32_t a = d->obs_bus_addr;

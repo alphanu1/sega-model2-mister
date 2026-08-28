@@ -3926,3 +3926,36 @@ vendor-and-integrate with clean licences: T80, jt12, mb86233 (ours-adjacent),
 fx68k. The Model 1 reference has no audio RTL yet, so MultiPCM work here flows
 back to it — the reverse of the fx68k direction, closing the loop the study's
 tooling section hoped for.
+
+---
+
+**R61 — first light: EPR-14869C runs on tv80 and performs the exchange.** The
+real I/O firmware, on a real Z80, standalone in `test_m2_ioz80`: given the
+game's captured opening (replayed from a boot-harness DPRAM dialogue log), it
+clears the flag, scans the inputs into `0x00-0x0f`, fills the whole window
+`0x100-0x17f`, and writes **status `0x40` at `dp[0x21]`** — the R40 handshake,
+produced by the program R40 could only imitate. 1,511 writes, 147 addresses.
+
+*The wake-up protocol, which no HLE knew:* the game writes **"SEGA" into bytes
+`0x1a-0x1d`** and raises the flag; the firmware polls `0x1a` through the
+315-5338A's serial-read path and idles correctly forever on an empty DPRAM —
+which is why the board first appeared dead standalone, and why R40's "status at
+frame 7 unprompted" was really "status shortly after the game's opening move".
+
+*R41 is confirmed by the silicon's own program:* zero firmware writes to the
+identity block at `0x200-0x27f`. The game writes it; the board never does.
+
+*What it took, all recorded in the module:* the 93C46 EEPROM behind PA7/PA6/PA5
+and PG7, whose absence left the boot retrying a serial read forever; NEGEDGE
+memory reads, because tv80 expects async-ROM shape and a posedge-registered
+read serves fw[previous A] — observed as `ld (hl),n` storing the byte before
+its operand; and trailing-edge write commit with latched A/dout, because tv80
+settles dout after the strobe rises. The DPRAM sits BEHIND the 315-5338A
+(commands 0x00/0x01 set an address from the serial register, 0x07 writes,
+reg 0x0c reads, 0x70-0x77 write bytes 0-7 directly) — the byte-at-a-time shape
+every DPRAM trace always showed.
+
+Next: the credit computation. The game's settings round-trip happens later in
+the dialogue (~1.7M instructions in); replaying the longer capture should show
+the firmware computing the credit fields the menu digits are printed from —
+the arithmetic whose absence was the whole R54-R56 hunt.

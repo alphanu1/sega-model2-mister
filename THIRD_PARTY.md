@@ -297,3 +297,23 @@ not against this controller.
 Their `m1_uart_tx` is a debug printf channel and NOT a sound UART; three things
 in that repo get called a UART and conflating them has cost time there already.
 Our sound path is the i8251 at `0x01c80000`.
+
+## hutch31/tv80 — MIT
+
+- **Upstream:** https://github.com/hutch31/tv80
+- **Commit:** 66a131c38d05
+- **Files:** `rtl/cpu/tv80/tv80_core.v`, `tv80_alu.v`, `tv80_mcode.v`,
+  `tv80_reg.v`, `tv80s.v`, `LICENSE`
+- **Licence:** MIT (Guy Hutchison, 2004) — compatible with this project's
+  GPL-3-or-later; the MIT text is retained in every file header and in
+  `rtl/cpu/tv80/LICENSE`.
+- **What it is:** a Verilog Z80, the port of Wallner's T80. Chosen over the
+  VHDL T80 because this project's whole verification method runs through
+  Verilator, which does not read VHDL — one source must serve simulation and
+  synthesis both.
+- **Why it is here:** the Model 1 I/O board (Sega 837-8950, shared by Model 1
+  and model2o cabinets) is a Z80 running `EPR-14869`, and study R60 replaces
+  the behavioural board with the real firmware on this core.
+- **Changes:** `tv80s.v` — the `cen` clock-enable is exposed as a module port
+  (upstream hardwires it to 1 in this wrapper; `tv80_core` has always taken
+  it). Two lines, marked in-file.

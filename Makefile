@@ -519,6 +519,22 @@ obj_boot/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cpp \
 # neither half can be removed without the suite noticing.
 
 .PHONY: test_m2_ioboard
+# THE REAL FIRMWARE, FIRST LIGHT. Runs EPR-14869C on tv80 and watches what it
+# does to the DPRAM -- the discovery instrument for retiring R37-R41's HLE.
+# Not in `make test` until its testimony is read and strong assertions exist.
+test_m2_ioz80: obj_ioz80/Vm2_ioz80_harness
+	@echo "== test m2_ioz80 (real firmware on tv80)"
+	@./obj_ioz80/Vm2_ioz80_harness $(TEST_ARGS)
+
+obj_ioz80/Vm2_ioz80_harness: sim/io/m2_ioz80_harness.sv rtl/io/m2_ioz80.sv \
+                             $(wildcard rtl/cpu/tv80/*.v) sim/io/tb_m2_ioz80.cpp
+	$(VBUILD) --top-module m2_ioz80_harness -Wno-PINCONNECTEMPTY -Wno-UNUSEDPARAM \
+	  -Wno-WIDTHEXPAND -Wno-UNUSEDSIGNAL -Wno-DECLFILENAME \
+	  --Mdir obj_ioz80 -o Vm2_ioz80_harness -CFLAGS "-O2" \
+	  sim/io/m2_ioz80_harness.sv rtl/io/m2_ioz80.sv rtl/cpu/tv80/tv80s.v \
+	  rtl/cpu/tv80/tv80_core.v rtl/cpu/tv80/tv80_alu.v rtl/cpu/tv80/tv80_mcode.v \
+	  rtl/cpu/tv80/tv80_reg.v sim/io/tb_m2_ioz80.cpp
+
 test_m2_ioboard: obj_m2_io/Vm2_ioboard
 	@echo "== test m2_ioboard (the two replies, on their two triggers)"
 	@./obj_m2_io/Vm2_ioboard $(TEST_ARGS)
