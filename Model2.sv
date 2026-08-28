@@ -1648,13 +1648,30 @@ end
 // 0x30000-0x3000E -- against 7,883 in simulation. It is drawing tile 0 and one
 // other, everywhere, and tile 0's glyph is legitimately blank. The glyph path
 // was never the fault; the TILEMAP is. So watch what goes into it.
-wire        uart_a_valid = ocb_tram_we;
+// REGISTERED, NOT TAPPED. Wiring the streamer straight onto ocb_tram_we /
+// ocb_addr / ocb_din put a combinational load on the tilemap WRITE path -- the
+// one feeding the M10K -- and the board went from two flat colours to a fully
+// black screen, intermittently: the first boot after that build rendered, later
+// ones did not, which is how a marginal path presents. Restoring the previous
+// core brought the picture back, which is what identified it.
+//
+// The instrument must not disturb its subject. Flopping the tap first means the
+// streamer loads a register output instead of the write bus, and the write path
+// sees exactly what it saw before this file grew a debug channel.
+logic        tw_v;
+logic [14:0] tw_a;
+logic [15:0] tw_d;
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+	if (!mem_rst_n) begin tw_v <= 1'b0; tw_a <= '0; tw_d <= '0; end
+	else begin tw_v <= ocb_tram_we; tw_a <= ocb_addr; tw_d <= ocb_din; end
+end
+wire        uart_a_valid = tw_v;
 wire        uart_b_valid = char_ack;
 wire [31:0] uart_dropped;
 
 m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	.clk(clk_sys), .rst_n(mem_rst_n),
-	.a_valid(uart_a_valid), .a_addr({17'd0, ocb_addr}), .a_data({16'd0, ocb_din}),
+	.a_valid(uart_a_valid), .a_addr({17'd0, tw_a}), .a_data({16'd0, tw_d}),
 	.b_valid(uart_b_valid), .b_addr({7'd0, cf_addr}),          .b_data(char_data),
 	.a_tag(8'h54), .b_tag(8'h52),          // 'T' tilemap write, 'R' char fetch
 	.enable(1'b1),
