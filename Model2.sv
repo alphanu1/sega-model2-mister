@@ -1383,7 +1383,18 @@ logic [2:0] nv_save_sync;
 always_ff @(posedge clk_sys) nv_save_sync <= {nv_save_sync[1:0], status[17]};
 wire nv_save_req = nv_save_sync[1] & ~nv_save_sync[2];
 wire nv_we  = ioctl_download && nv_sel && ioctl_wr;
-assign ioctl_din = ioctl_addr[1] ? bak_dbg_q[31:16] : bak_dbg_q[15:0];
+// REGISTERED BOTH WAYS. Driven combinationally, hps_io's ioctl_upload fed
+// the debug-port address mux whose data fed ioctl_din straight back into
+// hps_io, and Quartus 17.0's fitter timing engine CRASHED on the apparent
+// cycle -- Internal Error, sta_scc.cpp:1041, reproduced on a clean db. The
+// HPS polls over SPI, so a cycle of latency on each side is free.
+logic [15:0] nv_din_r;
+logic [11:0] nv_word_r;
+always_ff @(posedge clk_sys) begin
+	nv_word_r <= (ioctl_upload && nv_sel) ? ioctl_addr[13:2] : 12'd5;
+	nv_din_r  <= ioctl_addr[1] ? bak_dbg_q[31:16] : bak_dbg_q[15:0];
+end
+assign ioctl_din = nv_din_r;
 
 m2_backup u_backup (
 	.clk(clk_sys), .rst_n(cpu_rst_n),
@@ -1397,7 +1408,7 @@ m2_backup u_backup (
 	.be(cpu_io_be),
 	.wdata(cpu_io_wdata),
 	.rdata(bak_rdata),
-	.dbg_word((ioctl_upload && nv_sel) ? ioctl_addr[13:2] : 12'd5),
+	.dbg_word(nv_word_r),
 	.dbg_rd_sel(status[16:14]),
 	.dbg_q(bak_dbg_q), .dbg_first(bak_first),
 	.dbg_w0(bak_w0), .dbg_writes(bak_writes)
