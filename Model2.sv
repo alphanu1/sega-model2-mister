@@ -1392,7 +1392,10 @@ wire nv_we  = ioctl_download && nv_sel && ioctl_wr;
 logic [15:0] nv_din_r;
 logic [11:0] nv_word_r;
 always_ff @(posedge clk_sys) begin
-	nv_word_r <= (ioctl_upload && nv_sel) ? ioctl_addr[13:2] : 12'd5;
+	// Upload owns the port; otherwise page 1 / Probe 6 selects word 4
+	// (the coin-mode dword) and everything else watches word 5.
+	nv_word_r <= (ioctl_upload && nv_sel)          ? ioctl_addr[13:2] :
+	             (status[18] && status[16:14] == 3'd6) ? 12'd4 : 12'd5;
 	nv_din_r  <= ioctl_addr[1] ? bak_dbg_q[31:16] : bak_dbg_q[15:0];
 end
 assign ioctl_din = nv_din_r;
@@ -1411,12 +1414,12 @@ m2_backup u_backup (
 	.rdata(bak_rdata),
 	.dbg_word(nv_word_r),
 	.dbg_rd_sel({status[18], status[16:14]}),
-	.dbg_q(bak_dbg_q), .dbg_q4(bak_dbg_q4), .dbg_first(bak_first),
+	.dbg_q(bak_dbg_q), .dbg_first(bak_first),
 	.dbg_w0(bak_w0), .dbg_writes(bak_writes)
 );
 wire [31:0] bak_dbg_q;
 wire [31:0] bak_first;
-wire [31:0] bak_dbg_q4;
+
 
 m2_ioboard #(
 	// RESCALED TO clk_sys. These are measured in FRAMES -- status at 7 and
@@ -1889,8 +1892,7 @@ m2_diag #(.NWORDS(24)) u_diag
 	         // Probe 0-3: reads #8-11 -- the board's draw-read is #9. Page 1,
 	         // Probe 6: live word 4 (coin-mode bytes 0x10-0x13). Page 1,
 	         // Probe 7: live word 5 (settings dword).
-	         (status[18] && status[16:14] == 3'd6) ? bak_dbg_q4 :
-	         (status[18] && status[16:14] == 3'd7) ? bak_dbg_q  : bak_first,
+	         (status[18] && status[16:14] >= 3'd6) ? bak_dbg_q : bak_first,
 	         // 22 THE LAST CHARACTER FETCH, verbatim. FFFFFFFF means the fetch is
 	         // reading memory nobody ever wrote -- one flat colour per palette
 	         // bank, which is the board's sky and ground. Anything varied means

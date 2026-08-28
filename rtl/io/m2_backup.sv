@@ -63,7 +63,6 @@ module m2_backup (
   input  logic  [3:0] dbg_rd_sel,
   output logic [31:0] dbg_q,
   output logic [31:0] dbg_first,
-  output logic [31:0] dbg_q4,
   output logic [31:0] rdata,
 
   // WHAT THE COPY ACTUALLY LANDED. The i960 copies the I/O board's identity
@@ -138,13 +137,11 @@ module m2_backup (
   // '3'; the board prints a green space, so what the board's copy holds at
   // draw time is the question this answers. Costs a second read port on each
   // lane, which Quartus serves by duplication: ~4 M10K, debug-only.
-  // Live word 4 as well: bytes 0x10-0x13, the coin-mode field the draw may
-  // gate on. Same duplicated-port trick as dbg_q.
-  logic [7:0] e0, e1, e2, e3;
-  always_ff @(posedge clk) begin
-    e0 <= b0[12'd4]; e1 <= b1[12'd4]; e2 <= b2[12'd4]; e3 <= b3[12'd4];
-  end
-  assign dbg_q4 = {e3, e2, e1, e0};
+  // WORD 4 COMES THROUGH THE SAME PORT, ADDRESS-MUXED. A separate always_ff
+  // reading the lanes was a THIRD read port, M10K has two, and Quartus
+  // decomposed all 16 KB into logic: 131,795 combinational nodes against the
+  // device's 83,820. The R53 lesson restated: an array's port count is part of
+  // its type, and one reader too many silently changes what it is.
 
   logic [7:0] dq0, dq1, dq2, dq3;
   always_ff @(posedge clk) begin
