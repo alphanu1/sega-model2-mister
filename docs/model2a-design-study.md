@@ -4021,3 +4021,53 @@ misplacement likely also meant Test/Coin/Start were never mapped at all.
 true latency and loses the race the way the board does. The fix (modelling the
 BUSY/ready status honestly, or whatever the race demands once reproducible)
 gets built against that.
+
+**R64 — the contamination reproduces in simulation, and it is a phase, not a
+latency.** The R63 instrument was built and run: the boot harness with
+`REAL_MEM=1` swaps the C++ memory for the genuine stack — `m2_sdram_x2_harness`
+whole (adapter + controller + behavioural device), the 43.62 MB image streamed
+through the loader's write port with the i960 held, the CPU and char ports on
+the stack's slow ports, the game side at true SDRAM latency. Two composition
+traps cost a run each and are recorded because they will bite again:
+
+1. **Nothing can be loaded on the divided clock while `rst_n` is low.** The
+   stack's `clk_slow` divider is reset-gated; a firmware load issued during
+   reset strobes a dead clock and writes nothing. The Z80 woke on an empty ROM
+   and the game parked forever at the flag poll. Loads move after reset
+   release, the Z80 held meanwhile by `fw_ready=0`.
+2. **p0 is the only read/write slow port.** The CPU was first placed on
+   read-only p1 — `p1_we` does not exist — so every RAM write vanished
+   silently. The game ran 686K instructions on ROM and on-chip state alone,
+   then trapped fetching an interrupt vector from RAM nothing had written:
+   PRCB+20 read zero, handler address `ffffffff`. The tb's flight recorder
+   (last 64 bus transactions, dumped at first trap) is what caught it, and it
+   stays.
+
+With the composition honest, the result overturned R63's mechanism: **the 7F FF
+copy-back reproduces in BOTH memory models** — identical `SET WR` sequences at
+fast and true latency — so the determinant is not the game-side critical
+section stretched by SDRAM. It is the **Z80's start phase relative to the
+game**. Firmware mid-initialization when command 03 arrives: the flag clears
+after a ~93K-instruction wait and the window is served as the input-scan
+pattern `7F FF 7F FF…` — byte-for-byte the board's backup capture. Firmware
+long-idle (the warm-boot runs): the response is immediate and clean, and the
+race never existed.
+
+And the second overturn: **contamination alone does not blank the digits.**
+The game validates the block, rejects the garbage, writes defaults
+`01010100`/`00030300` at ip `0x227d60`, deposits them back to the firmware
+(commands 01/02), re-reads them clean in a later exchange, and the attract
+text renders — tram `8043` ('C') and `c033` ('3') at instruction ~2.03M, in
+both memory models, 198 V-blanks at true pacing. The board blanks exactly
+these characters. The one ordering the composition has not yet replicated is
+the board's own: the firmware image arrives LAST over ioctl, seconds after
+the game has parked on the exchange — `M2_FWLATE`, run in flight as this is
+written.
+
+Bench honesty items from the same session: the DPRAM dialogue logger read the
+even byte for both halves of a word (fixed — historical R-lines in dialogue
+captures double the even byte); the harness verdict now tests the real
+criterion (a copy-back carrying 7F/FF is the race reproduced); and the
+behavioural SDRAM's unwritten cells return `DEFAULT_DATA = '0`, which violates
+the unwritten-reads-`0xFFFF` rule — masked today because the streamed image
+covers the space, open as a model gap.

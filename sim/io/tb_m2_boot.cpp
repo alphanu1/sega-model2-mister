@@ -726,7 +726,7 @@ int main(int argc, char **argv) {
     // produced it.
     if (d->obs_bus_ack && !ack_prev && d->obs_bus_we &&
         d->obs_bus_addr >= 0x01d00010u && d->obs_bus_addr < 0x01d00018u &&
-        g_sw_n < 30) {
+        g_sw_n < 120) {
       std::printf("      SET WR %08x be=%x %08x  (insn %u ip %08x)\n",
                   d->obs_bus_addr, d->obs_bus_be, d->obs_bus_wdata,
                   (unsigned)d->dbg_acc, (unsigned)d->dbg_ip);
@@ -743,7 +743,7 @@ int main(int argc, char **argv) {
     // reference sequence.
     if (d->obs_bus_ack && !ack_prev && !d->obs_bus_we &&
         d->obs_bus_addr >= 0x01d00014u && d->obs_bus_addr < 0x01d00018u &&
-        g_r5_n < 20) {
+        g_r5_n < 60) {
       std::printf("      RD5 #%d addr %08x -> %08x  (insn %u ip %08x)\n",
                   g_r5_n, d->obs_bus_addr, d->obs_bus_rdata,
                   (unsigned)d->dbg_acc, (unsigned)d->dbg_ip);
