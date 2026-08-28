@@ -505,7 +505,13 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 					3'd0: rb_addr <= SDR_AW'(32'h0000006);
 					3'd1: rb_addr <= SDR_AW'(32'h1690330);
 					3'd2: rb_addr <= SDR_AW'(32'h1690310);
-					3'd3: rb_addr <= SDR_AW'(32'h1690230);
+					// REPOINTED (R63): the formatted value string at work RAM
+					// 0x53e540 -- the digit's last stop before the draw. Sim
+					// writes ' ','3',NUL there: expect xx003320. xx002020 on the
+					// board means the FORMATTER emitted spaces and the divergence
+					// is inside or upstream of 0x10c4, with the settings byte
+					// already proven correct.
+					3'd3: rb_addr <= SDR_AW'(32'h161F2A0);
 					3'd4: rb_addr <= SDR_AW'(32'h1690410);
 					3'd5: rb_addr <= SDR_AW'(32'h1690400);
 					3'd6: rb_addr <= SDR_AW'(32'h16903fe);

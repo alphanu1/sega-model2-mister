@@ -52,6 +52,7 @@ static bool load_file(const std::string &p, std::vector<uint8_t> &out) {
 
 static FILE *g_dplog = nullptr;
 static int g_r5_n = 0;
+static int g_vs_n = 0;
 static int g_e1n = 0, g_e0n = 0, g_win = 0, g_bk_n = 0, g_c3_n = 0, g_src_n = 0, g_sw_n = 0;
 static const int FW = 496, FH = 384;
 static std::vector<uint8_t> g_frame(size_t(FW)*FH*3, 0);
@@ -586,6 +587,17 @@ int main(int argc, char **argv) {
                   d->obs_bus_addr, d->obs_bus_rdata,
                   (unsigned)d->dbg_acc, (unsigned)d->dbg_ip);
       ++g_src_n;
+    }
+    // THE FORMATTED VALUE STRING at 0x53e540: the digit travels settings ->
+    // formatter (0x10c4) -> this string -> the draw. The board's blank means
+    // the STRING holds spaces; these are its writes.
+    if (d->obs_bus_ack && !ack_prev && d->obs_bus_we &&
+        d->obs_bus_addr >= 0x0053e540u && d->obs_bus_addr < 0x0053e548u &&
+        g_vs_n < 24) {
+      std::printf("      VSTR [%08x] <= %08x be=%x (insn %u ip %08x)\n",
+                  d->obs_bus_addr, d->obs_bus_wdata, d->obs_bus_be,
+                  (unsigned)d->dbg_acc, (unsigned)d->dbg_ip);
+      ++g_vs_n;
     }
     // THE '3' CELL, WORD 1129, AND ITS NEIGHBOUR THE 'C' CELL, 1130. Every
     // write, with value and instruction: the digit renders in this harness and
