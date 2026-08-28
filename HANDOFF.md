@@ -64,7 +64,32 @@ game side runs at true latency the sim should LOSE the race like the board --
 then the fix (honest BUSY/status modelling, or whatever the reproduced race
 demands) gets built against seconds-long runs.
 
-### ON THE BOARD NOW: the tram cell probe, finally connected
+### ON THE BOARD NOW: build 02b50380
+
+Deployed 2026-08-28. 19,984 ALM / 312 M10K, worst-case setup slack
+0.333 ns across all clocks, 5 distinct PLL outputs. Two instruments,
+both on overlay row 23:
+
+PAGE 0 -- THE TRAM CELL, per the Probe names. Readings start with the
+cell index (046A = cell 1130), so a value can never be attributed to the
+wrong cell. Take Probe "chr 3" (cell 1130, want 8043) and Probe "chr0"
+(cell 1108, want 8043): the SAME glyph value that renders at 1108 and
+does not at 1130. Right value + glyph absent = the render path drops the
+CELL; wrong value = the CPU's write never landed.
+
+PAGE 1 / Probe "bootIP" -- THE CABINET SWITCH, {raw in0, the byte the
+firmware deposited at dp[0x08], scan count}. in0 stuck FF while TEST is
+held = the press never reaches the core; in0 FB with the byte stuck FF =
+the firmware is not scanning; both FB = the game has it and ignores it,
+which is what the composition does (R65). A frozen count means the input
+sweep is not running at all.
+
+REMEMBER TO RELOAD THE CORE after a deploy -- replacing the .rbf on the
+card does not touch the bitstream already in the FPGA, and readings taken
+without reloading come back in the PREVIOUS build's format. That has now
+cost one round of readings.
+
+### The tram cell probe, finally connected
 
 Build f1faaf86, deployed 2026-08-28. 19,984 ALM / 312 M10K, all slack
 positive. One RTL change: overlay row 23 page 0 now shows the TRAM CELL
