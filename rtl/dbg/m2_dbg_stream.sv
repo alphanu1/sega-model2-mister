@@ -59,24 +59,40 @@ module m2_dbg_stream #(
   logic        pend;
   logic [7:0]  p_tag;
   logic [31:0] p_addr, p_data;
-  logic [31:0] budget;
+  // SEPARATE BUDGETS, AND CHANNEL A HAS PRIORITY.
+  //
+  // One shared budget starved the channel that mattered. Channel B (character
+  // fetches) fires thousands of times a second and channel A (tilemap writes)
+  // comparatively rarely, so with a single ~4 ms window B took essentially
+  // every slot and A was counted as a drop and never printed. The log showed
+  // ZERO tilemap writes across a full boot, which read as "the tilemap is
+  // never written" and was in fact "the instrument never got to say so".
+  //
+  // A is the rare, interesting channel: it gets its own, much shorter budget
+  // and wins arbitration. B keeps the long one and fills the gaps.
+  logic [31:0] budget_a, budget_b;
 
-  wire allowed = (budget == 32'd0);
+  wire allow_a = (budget_a == 32'd0);
+  wire allow_b = (budget_b == 32'd0);
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       pend <= 1'b0; p_tag <= 8'h3F; p_addr <= '0; p_data <= '0;
-      budget <= '0; dbg_dropped <= '0;
+      budget_a <= '0; budget_b <= '0; dbg_dropped <= '0;
     end else begin
-      if (budget != 32'd0) budget <= budget - 32'd1;
+      if (budget_a != 32'd0) budget_a <= budget_a - 32'd1;
+      if (budget_b != 32'd0) budget_b <= budget_b - 32'd1;
 
       if (a_valid || b_valid) begin
-        if (!pend && allowed && enable) begin
-          pend   <= 1'b1;
-          p_tag  <= a_valid ? a_tag  : b_tag;
-          p_addr <= a_valid ? a_addr : b_addr;
-          p_data <= a_valid ? a_data : b_data;
-          budget <= 32'(BUDGET_CYC);
+        if (!pend && enable && ((a_valid && allow_a) || (b_valid && allow_b))) begin
+          pend <= 1'b1;
+          if (a_valid && allow_a) begin
+            p_tag <= a_tag; p_addr <= a_addr; p_data <= a_data;
+            budget_a <= 32'(BUDGET_CYC / 16);   // the rare channel, sampled finer
+          end else begin
+            p_tag <= b_tag; p_addr <= b_addr; p_data <= b_data;
+            budget_b <= 32'(BUDGET_CYC);
+          end
         end else if (enable) begin
           // Counted, not stalled: an instrument must not change what it
           // measures. The summary prints this so the log cannot imply

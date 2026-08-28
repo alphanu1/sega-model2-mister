@@ -299,7 +299,10 @@ int main(int argc, char **argv) {
       if (d->vid_hb && !g_hb_p) { g_px = 0; if (!d->vid_vb) ++g_py; }
       if (d->vid_vb && !g_vb_p) {
         ++g_frames_done;
-        // M2_FRAME_SEQ=dir writes EVERY completed frame, so the render can be
+        // TILEMAP CONTENT CENSUS, to put beside the board's UART capture. The
+      // board fetches only tiles 0, 1, 24576 and 24577 -- blank tiles with two
+      // attributes -- so the question is what the SAME code writes here.
+      // M2_FRAME_SEQ=dir writes EVERY completed frame, so the render can be
         // watched as a sequence instead of judged from one still. Two of this
         // session's wrong conclusions came from reading a single frame that
         // happened to be captured mid-draw.
@@ -944,6 +947,31 @@ int main(int argc, char **argv) {
                 "%llu active (%.1f%% unsafe)\n",
                 (unsigned long long)g_ss_in, (unsigned long long)g_ss_out,
                 u ? 100.0 * double(g_ss_out) / double(u) : 0.0);
+  }
+  // WHAT TILE INDICES THE MAP ACTUALLY NAMES. The board fetches only tiles 0,
+  // 1, 24576 and 24577 -- blank tiles wearing two attributes -- which is two
+  // flat colours. This says what the same code produces here, so the two can
+  // be compared as populations rather than as single cells.
+  {
+    std::map<uint16_t,int> idx_hist, attr_hist;
+    int nonblank = 0;
+    for (int i = 0; i < 32768; ++i) {
+      const uint16_t w = g_tram[i];
+      if (!w) continue;
+      ++nonblank;
+      idx_hist[w & 0x3FFF]++;
+      attr_hist[uint16_t(w >> 14)]++;
+    }
+    std::printf("  TILEMAP CENSUS: %d non-zero cells, %zu distinct indices, "
+                "%zu distinct attributes\n",
+                nonblank, idx_hist.size(), attr_hist.size());
+    std::printf("    most common indices:");
+    std::vector<std::pair<int,uint16_t>> v;
+    for (auto &kv : idx_hist) v.push_back({kv.second, kv.first});
+    std::sort(v.rbegin(), v.rend());
+    for (size_t i = 0; i < v.size() && i < 6; ++i)
+      std::printf(" %u(x%d)", v[i].second, v[i].first);
+    std::printf("\n");
   }
   std::printf("  tile RAM as the CPU builds it: %d/32768 words written\n", seen);
     // Which quarter of tile RAM did it touch? The four layers occupy distinct
