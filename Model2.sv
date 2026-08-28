@@ -1396,6 +1396,11 @@ end
 logic fw_dl_d;
 always_ff @(posedge clk_sys) fw_dl_d <= fw_dl;
 wire fw_ready_set = fw_dl_d && !fw_dl;   // download ended
+logic fw_seen;
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+	if (!mem_rst_n) fw_seen <= 1'b0;
+	else if (fw_dl && ioctl_wr) fw_seen <= 1'b1;
+end
 
 wire nv_sel = (ioctl_index[5:0] == 6'd2);
 logic [2:0] nv_save_sync;
@@ -1449,7 +1454,9 @@ wire  [7:0] zio_wdata, zio_rdata;
 
 m2_ioz80 #(.CEN_DIV(12)) u_ioz80 (
 	.clk(clk_sys), .rst_n(cpu_rst_n & fw_ready),
-	.fw_we(fw_dl && ioctl_wr),
+	// First 16 KB only: the EPROM is 64 KB, the Z80 maps 0x0000-0x3fff, and a
+	// wrapping fw_addr[13:0] would leave the LAST quarter in the ROM.
+	.fw_we(fw_dl && ioctl_wr && (ioctl_addr < 27'd16384)),
 	.fw_addr(ioctl_addr[13:0]),
 	.fw_data(ioctl_addr[0] ? ioctl_dout[15:8] : ioctl_dout[7:0]),
 	.in0(iob_in0), .in1(iob_in1), .in2(8'hFF),
@@ -1995,7 +2002,10 @@ m2_diag #(.NWORDS(24)) u_diag
 	          game_sync[2], cp_done_sync[2],
 	          st_ok_sync[2], ldr_overflow,
 	          loaded_sync[2], mem_ready,
-	          6'd0, pll_locked, 1'b1},                  // 4  status, see below
+	          // bits 7:6 -- the I/O firmware: bit 7 = fw_ready (Z80 out of
+	          // reset), bit 6 = at least one firmware byte arrived. 00 here
+	          // with a black screen means the MRA's rom index 3 never came.
+	          4'd0, fw_ready, fw_seen, pll_locked, 1'b1},   // 4  status
 	         {7'd0, ldr_top_sync},                      // 3  highest word loaded
 	         rb_w0,                                     // 2  readback of words 6/7, want 00000860
 	         frame_ctr,                                 // 1  liveness
