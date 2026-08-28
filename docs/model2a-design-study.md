@@ -4270,3 +4270,50 @@ status read letting it proceed before the refill. The live backup settings
 dword (row 23, page 1, Probe "chr0" -- backup word 5, the dword the digits are
 printed from) must be read and reported as an exact value to confirm the
 bracket above from the board rather than from R63's older capture.
+
+
+**R68 — everything upstream of the tilemap is CLEAN, and the fault is between
+the formatted string and the tile cell.** Four board measurements in sequence
+finally bracket it to one step:
+
+  backup settings dword (page 1, "chr0")     00030300   correct
+  firmware's window bytes (page 1, "chr 3")  00030300   correct, matches MAME
+  formatter's own store (page 1, "row2")     cnt 0x3C, data 3131 -- ASCII "11"
+  tile cell 1130 (page 0)                    8020       A SPACE
+
+The settings are right, the I/O board is right, and the formatter is writing
+genuine digit characters into the string buffer -- sixty times over. The value
+becomes 0x20 only between that buffer and the tile cell.
+
+**This retires every theory this project has held about the digits.** The
+exchange race (R63), the window clobber (R66), the reset ordering (R66), the
+copy-back corruption (R67) and the render path dropping cells (R64/R65) are
+all upstream of the measured-clean boundary. R67 in particular is wrong on its
+own evidence: it argued the copy-back stores garbage, which would mean the
+digits never appeared at all -- but the board SHOWS them for a moment before
+they vanish, which requires good settings at the first draw. That observation
+came from watching the screen, not from any probe, and it falsified a
+conclusion three instruments had failed to touch.
+
+*What is left, and why it is a better question.* The remaining step is the
+draw: the routine reads the formatted string back out of work RAM and writes
+character codes into tile RAM. The question is no longer "which value is
+corrupt" but "which instruction writes the space", which is directly
+observable rather than inferred. Build 284074ce latches the CPU's IP at the
+moment a space is written into the probed cell, with a count and the value:
+
+  page 1, Probe "chr #"   {count, value} -- a count of ZERO is the decisive
+                          case: nothing ever wrote a space, so tile RAM is
+                          being corrupted without a write and the fault is in
+                          the memory holding it, not in any code
+  page 1, Probe "chr 1"   the IP that wrote it. 0001CDDC or 0001CE38 is the
+                          same routine that drew the digit, and the bug is in
+                          what it reads back; any other address names code
+                          clobbering a cell it never drew
+
+*Standing lesson, now paid for twice in one session.* Both of this session's
+real breakthroughs came from the screen, not the probes -- "it shows for a
+split second" and "CR, 3 appear then disappear". Probes answer the question
+they were built for and are silent about the one that matters. R65's orphaned
+probe and R66's misattributed register are the same failure from the other
+direction: an instrument trusted past what it actually measures.

@@ -1540,6 +1540,30 @@ always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
 	end
 end
 
+// WHO WRITES THE SPACE. Everything upstream is now measured CLEAN on the
+// board: backup holds 00030300, the firmware's window holds 00030300, and the
+// formatter's own store carries ASCII digits (3131). The character only
+// becomes 0x20 somewhere between the formatted string and this tile cell, so
+// the useful question is no longer "what value" but "which instruction".
+//
+// This latches the CPU's IP at the moment a SPACE is written into the cell the
+// Probe selects, alongside the value, and counts those writes. A blanking
+// write from the same routine that drew the digit (0x1cddc / 0x1ce38) means
+// the draw itself formatted a space; an IP anywhere else names the code that
+// clobbers a cell it did not draw.
+logic [31:0] blank_ip;
+logic [15:0] blank_val;
+logic  [7:0] blank_cnt;
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+	if (!mem_rst_n) begin
+		blank_ip <= 32'd0; blank_val <= 16'd0; blank_cnt <= 8'd0;
+	end else if (ocb_tram_we && ocb_addr == tp_cell && ocb_din[7:0] == 8'h20) begin
+		blank_ip  <= cpu_dbg_ip;
+		blank_val <= ocb_din;
+		if (!(&blank_cnt)) blank_cnt <= blank_cnt + 8'd1;
+	end
+end
+
 // WHAT THE Z80 PUTS IN THE SETTINGS BYTES OF THE WINDOW, which is the whole
 // question reduced to one word. MAME's real machine holds 00 03 03 00 at
 // window offsets 0x114-0x117 and holds it stable for hundreds of frames; our
@@ -2070,6 +2094,13 @@ m2_diag #(.NWORDS(24)) u_diag
 	         // Page 1 / Probe "chr 3": the settings bytes as the Z80 writes
 	         // them. 00030300 matches MAME and exonerates the window;
 	         // 7FFF7FFF is the RAM-test pattern clobbering the deposit.
+	         // Page 1 / Probe "chr 1": WHO BLANKED THE PROBED CELL -- the IP
+	         // of the instruction that wrote a space into it. Probe "chr #"
+	         // gives the count and the value, so a zero count means the cell
+	         // was never blanked by a write and the fault is in the render.
+	         (status[18] && status[16:14] == 3'd2) ? blank_ip :
+	         (status[18] && status[16:14] == 3'd3) ?
+	             {8'd0, blank_cnt, blank_val} :
 	         (status[18] && status[16:14] == 3'd1) ? zw_set :
 	         (status[18] && status[16:14] == 3'd4) ?
 	             {rst_edges, zw_win_cnt, 5'd0, zw_last} :

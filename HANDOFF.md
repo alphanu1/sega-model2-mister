@@ -64,34 +64,36 @@ game side runs at true latency the sim should LOSE the race like the board --
 then the fix (honest BUSY/status modelling, or whatever the reproduced race
 demands) gets built against seconds-long runs.
 
-### ON THE BOARD NOW: build 661411f5
+### ON THE BOARD NOW: build 284074ce
 
-Deployed 2026-08-28. 19,984 ALM / 312 M10K, worst-case setup slack
-0.097 ns, 5 distinct PLL outputs. RELOAD THE CORE after deploying --
-replacing the .rbf does not touch the bitstream already in the FPGA, and
-readings taken without reloading come back in the previous build's
-format. That has cost one round of readings already.
+Deployed 2026-08-28. 19,984 ALM / 312 M10K, slack 0.535 ns. RELOAD THE
+CORE after deploying -- the .rbf on the card is not the bitstream in the
+FPGA, and that has cost a round of readings once already.
 
-Overlay row 23:
+MEASURED CLEAN (R68), do not re-investigate:
+  backup settings   00030300   page 1, Probe "chr0"
+  firmware window   00030300   page 1, Probe "chr 3"  (matches MAME)
+  formatter store   3131       page 1, Probe "row2"   (ASCII "11", 60x)
+  tile cell 1130    8020       page 0                 (a SPACE)
 
-  page 0, any Probe   the TRAM cell, {cell index, value}. 046A8043 is
-                      cell 1130 holding the glyph; 046A8020 is a SPACE.
-                      MEASURED: 046A8020 -- the digit is overwritten.
+So the corruption is BETWEEN the formatted string and the tile cell.
+Everything upstream is proven good on the hardware itself.
 
-  page 1, Probe chr 3 THE LIVE QUESTION. The window's settings bytes
-                      (offsets 0x114-0x117) as the Z80 writes them.
-                      00030300 matches MAME and exonerates the window;
-                      7FFF7FFF is the RAM-test pattern landing on the
-                      game's deposit.
+READ NEXT:
+  page 1, Probe "chr #"   {count, value} of space-writes to the probed
+                          cell. COUNT ZERO is decisive: nothing wrote the
+                          space, so tile RAM is corrupted without a write
+                          and the fault is the memory, not the code.
+  page 1, Probe "chr 1"   the IP that wrote the space. 0001CDDC/0001CE38
+                          = the routine that drew the digit is blanking
+                          it; anything else names foreign code.
 
-  page 1, Probe bootIP {raw in0, byte the firmware deposited at dp[0x08],
-                      scan count}. MEASURED FFFF2xxx rising: the scan
-                      runs, the button never reaches the core.
-
-  page 1, Probe chr A {reset edges, window write count, last window
-                      address}. Counter SATURATES at FF and two
-                      legitimate exchanges reach it -- cannot distinguish
-                      normal from faulty. Do not build on it.
+DEAD ENDS -- do not build on these:
+  page 1, Probe "chr A"   window counter SATURATES at FF; two legitimate
+                          exchanges reach it. Says nothing.
+  page 1, Probe "bootIP"  cabinet switch. MEASURED FFFF2xxx rising: the
+                          firmware's input scan runs, but the button
+                          never reaches the core. Separate open bug.
 
 ### The tram cell probe, finally connected
 
