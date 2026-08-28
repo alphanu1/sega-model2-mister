@@ -524,6 +524,23 @@ obj_boot/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cpp \
 # THE REAL FIRMWARE, FIRST LIGHT. Runs EPR-14869C on tv80 and watches what it
 # does to the DPRAM -- the discovery instrument for retiring R37-R41's HLE.
 # Not in `make test` until its testimony is read and strong assertions exist.
+# THE REAL-MEMORY COMPOSITION (R63): the boot harness with m2_sdram + the x2
+# adapter + the device model in place of the C++ array, so the game side runs
+# at true latency and the digit race becomes reproducible at the desk.
+BOOTSRC := sim/io/m2_boot_harness.sv rtl/io/m2_cpu_bridge.sv \
+           rtl/io/m2_ioboard.sv rtl/io/m2_backup.sv rtl/io/m2_ioz80.sv \
+           $(wildcard rtl/cpu/tv80/*.v) rtl/mem/m2_char_cdc.sv \
+           rtl/mem/m2_sdram_x2.sv rtl/mem/m2_sdram.sv \
+           sim/mem/m2_sdram_x2_harness.sv sim/mem/sdram_model.sv \
+           $(wildcard rtl/video/*.sv) $(wildcard rtl/cpu/i960/*.sv)
+
+obj_boot_rm/Vm2_boot_harness: $(BOOTSRC) sim/io/tb_m2_boot.cpp
+	$(VBUILD) --top-module m2_boot_harness -GREAL_MEM=1 \
+	  -Wno-PINCONNECTEMPTY -Wno-UNUSEDPARAM -Wno-WIDTHEXPAND -Wno-UNUSEDSIGNAL \
+	  -Wno-SYNCASYNCNET \
+	  -Wno-DECLFILENAME --Mdir obj_boot_rm -o Vm2_boot_harness \
+	  -CFLAGS "-O2" $(BOOTSRC) sim/io/tb_m2_boot.cpp
+
 test_m2_ioz80: obj_ioz80/Vm2_ioz80_harness
 	@echo "== test m2_ioz80 (real firmware on tv80)"
 	@./obj_ioz80/Vm2_ioz80_harness $(TEST_ARGS)

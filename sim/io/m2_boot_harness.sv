@@ -40,8 +40,30 @@ module m2_boot_harness #(
   // 145,252,176 -- three seconds of a 48 MHz clock -- and what is under test
   // here is the sequence, not the constants.
   parameter int          STATUS_CYCLES   = 20_000,
-  parameter int          SELFTEST_CYCLES = 200_000
+  parameter int          SELFTEST_CYCLES = 200_000,
+  // See the clk96 port comment: 1 swaps the C++ SDRAM for the real stack.
+  parameter bit          REAL_MEM        = 1'b0
 ) (
+  // REAL_MEM=1 replaces the C++ SDRAM with the genuine stack -- m2_sdram_x2 +
+  // m2_sdram + sdram_model, lifted whole from sim/mem/m2_sdram_x2_harness.sv.
+  // The game side then runs at TRUE memory latency, which is the variable the
+  // digit race (study R63) turns on: the C++ array shortens the game's
+  // critical section and wins a race the board loses. clk96 drives the fast
+  // domain; the memory clock the rest of the harness runs on becomes the
+  // stack's own clk_slow, exported on clk_slow_o for the testbench's edge
+  // accounting. The ROM image streams through rl_* into the DEVICE MODEL the
+  // way the loader streams it on hardware.
+  input  logic        clk96,
+  // Holds the i960 (only) in reset while the ROM streams into the device
+  // model -- the loader's job on hardware, the testbench's here.
+  input  logic        cpu_hold,
+  output logic        clk_slow_o,
+  input  logic        rl_req,
+  input  logic [25:1] rl_addr,
+  input  logic [15:0] rl_din,
+  output logic        rl_ack,
+  output logic        mem_ready_o,
+
   input  logic        clk_cpu,
   input  logic        clk_mem,
   // THE RENDERER'S CLOCK. Adding it is the whole point of this harness now:
@@ -174,7 +196,7 @@ module m2_boot_harness #(
   (* ramstyle = "M10K" *) logic [15:0] pal  [8192];
   logic [15:0] oc_tram_q, oc_pal_q;
 
-  always_ff @(posedge clk_mem) begin
+  always_ff @(posedge clk_m) begin
     if (oc_tram_we) tram[oc_addr]        <= oc_din;
     if (oc_pal_we)  pal[oc_addr[12:0]]   <= oc_din;
     oc_tram_q <= tram[oc_addr];
@@ -203,9 +225,9 @@ module m2_boot_harness #(
     .clk_vid(clk_vid), .vid_rst_n(rst_n),
     .v_req(char_req), .v_addr(char_addr),
     .v_ack(char_ack), .v_data(char_data),
-    .clk_sys(clk_mem), .sys_rst_n(rst_n),
+    .clk_sys(clk_m), .sys_rst_n(rst_n),
     .s_req(sd2_req), .s_addr(cc_addr),
-    .s_ack(sd2_ack), .s_data(sd2_dout)
+    .s_ack(sd2_ack_i), .s_data(sd2_dout_i)
   );
   // GAME_CHAR, the same base Model2.sv uses for a game image.
   assign sd2_addr = AW'(32'h1690000) + AW'(cc_addr);
@@ -276,7 +298,7 @@ module m2_boot_harness #(
   end
 
   i960_top u_cpu (
-    .clk(clk_cpu), .rst_n(rst_n),
+    .clk(clk_cpu), .rst_n(rst_n & ~cpu_hold),
     .bus_req(bus_req), .bus_we(bus_we), .bus_addr(bus_addr), .bus_be(bus_be),
     .bus_wdata(bus_wdata), .bus_rdata(bus_rdata), .bus_ack(bus_ack),
     .irq(irq),
@@ -290,11 +312,51 @@ module m2_boot_harness #(
     .dbg_rf_we(dbg_rf_we), .dbg_rf_wdata(dbg_rf_wdata)
   );
 
+  // ---------------------------------------------------------- memory stack
+  // One clock name serves both worlds: clk_m is the tb's clk_mem when the
+  // memory is C++, and the real stack's own /2 of clk96 when it is not.
+  logic clk_slow_int;
+  wire  clk_m = REAL_MEM ? clk_slow_int : clk_mem;
+  assign clk_slow_o = clk_slow_int;
+
+  logic        rm_p1_ack, rm_p3_ack, rm_ready;
+  logic [63:0] rm_p1_dout, rm_p3_dout;
+
+  generate if (REAL_MEM) begin : g_realmem
+    m2_sdram_x2_harness #(.COL_BITS(10)) u_mem (
+      .clk(clk96), .rst_n(rst_n), .clk_slow(clk_slow_int), .ready(rm_ready),
+      .wr_req(rl_req), .wr_addr(rl_addr), .wr_din(rl_din),
+      .wr_be(2'b11), .wr_ack(rl_ack),
+      .p0_req(1'b0), .p0_we(1'b0), .p0_addr('0), .p0_din('0), .p0_be('0),
+      .p1_req(sd_req), .p1_addr(sd_addr),
+      .p2_req(1'b0), .p2_addr('0),
+      .p3_req(sd2_req), .p3_addr(sd2_addr),
+      .p4_req(1'b0), .p4_addr('0),
+      .p0_dout(), .p1_dout(rm_p1_dout), .p2_dout(),
+      .p3_dout(rm_p3_dout), .p4_dout(),
+      .p0_ack(), .p1_ack(rm_p1_ack), .p2_ack(), .p3_ack(rm_p3_ack), .p4_ack(),
+      .violations(), .v_flags(), .reads_served(), .writes_served()
+    );
+  end else begin : g_cxxmem
+    assign clk_slow_int = clk_mem;
+    assign rl_ack = 1'b1;
+    assign rm_ready = 1'b1;
+    assign rm_p1_ack = 1'b0; assign rm_p3_ack = 1'b0;
+    assign rm_p1_dout = '0;  assign rm_p3_dout = '0;
+  end endgenerate
+  assign mem_ready_o = rm_ready;
+
+  // In REAL_MEM the C++ answers are ignored and the stack's stand in.
+  wire        sd_ack_i  = REAL_MEM ? rm_p1_ack  : sd_ack;
+  wire [63:0] sd_dout_i = REAL_MEM ? rm_p1_dout : sd_dout;
+  wire        sd2_ack_i  = REAL_MEM ? rm_p3_ack        : sd2_ack;
+  wire [31:0] sd2_dout_i = REAL_MEM ? rm_p3_dout[31:0] : sd2_dout;
+
   m2_cpu_bridge #(.AW(AW), .BOARD_2A(1'b0)) u_bridge (
     .clk_cpu(clk_cpu), .rst_n_cpu(rst_n),
     .bus_req(bus_req), .bus_we(bus_we), .bus_addr(bus_addr), .bus_be(bus_be),
     .bus_wdata(bus_wdata), .bus_rdata(bus_rdata), .bus_ack(bus_ack),
-    .clk_mem(clk_mem), .rst_n_mem(rst_n),
+    .clk_mem(clk_m), .rst_n_mem(rst_n),
     // The bases the top level uses for a game image.
     // The top level's own bases for a game image (Model2.sv GAME_*), so the
     // address arithmetic under test is the arithmetic that runs on the board.
@@ -302,7 +364,7 @@ module m2_boot_harness #(
     .base_work (AW'(32'h1600000)), .base_board(AW'(32'h1680000)),
     .base_char (AW'(32'h1690000)),
     .sd_req(sd_req), .sd_we(sd_we), .sd_addr(sd_addr), .sd_din(sd_din),
-    .sd_be(sd_be), .sd_dout(sd_dout), .sd_ack(sd_ack),
+    .sd_be(sd_be), .sd_dout(sd_dout_i), .sd_ack(sd_ack_i),
     .oc_tram_we(oc_tram_we), .oc_pal_we(oc_pal_we), .oc_addr(oc_addr),
     .oc_din(oc_din), .oc_tram_q(oc_tram_q), .oc_pal_q(oc_pal_q),
     .oc_xlat_we(oc_xlat_we), .oc_xlat_addr(oc_xlat_addr), .oc_xlat_din(oc_xlat_din),
@@ -328,7 +390,7 @@ module m2_boot_harness #(
   logic  [7:0] zio_wdata, zio_rdata;
 
   m2_ioz80 #(.CEN_DIV(12)) u_ioz80 (
-    .clk(clk_mem), .rst_n(rst_n & fw_ready),
+    .clk(clk_m), .rst_n(rst_n & fw_ready),
     .fw_we(fw_we), .fw_addr(fw_addr), .fw_data(fw_data),
     .in0(8'hff), .in1(8'h8f), .in2(8'hff),
     .adc0(8'h80), .adc1(8'h20), .adc2(8'h20), .adc3(8'h80),
@@ -342,7 +404,7 @@ module m2_boot_harness #(
     .USE_Z80(1'b1),
     .STATUS_CYCLES(STATUS_CYCLES), .SELFTEST_CYCLES(SELFTEST_CYCLES)
   ) u_ioboard (
-    .clk(clk_mem), .rst_n(rst_n),
+    .clk(clk_m), .rst_n(rst_n),
     .sel(iob_sel), .we(cpu_io_we), .word(cpu_io_addr[11:2]),
     .be(cpu_io_be), .wdata(cpu_io_wdata),
     .z_we(zio_we && fw_ready), .z_addr(zio_addr), .z_wdata(zio_wdata),
@@ -371,7 +433,7 @@ module m2_boot_harness #(
   wire [31:0] bak_rdata;
 
   m2_backup u_backup (
-    .clk(clk_mem), .sel(bak_sel), .we(cpu_io_we),
+    .clk(clk_m), .sel(bak_sel), .we(cpu_io_we),
     .word(cpu_io_addr[13:2]), .be(cpu_io_be), .wdata(cpu_io_wdata),
     .rdata(bak_rdata),
     .rst_n(rst_n), .hps_we(1'b0), .hps_word(12'd0), .hps_be(4'd0), .hps_wdata(32'd0),
@@ -410,7 +472,7 @@ module m2_boot_harness #(
     (cpu_io_addr[23:0] == 24'he80004) ? {20'd0, io_intena} :
     32'd0;
 
-  always_ff @(posedge clk_mem or negedge rst_n) begin
+  always_ff @(posedge clk_m or negedge rst_n) begin
     if (!rst_n) begin
       io_intreq <= '0; io_intena <= '0; io_videoctl <= '0; io_framenum <= '0;
     end else if (cpu_io_sel && cpu_io_we) begin

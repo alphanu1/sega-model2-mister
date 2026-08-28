@@ -39,6 +39,7 @@ static Vm2_boot_harness *d;
 // 25-bit word address space, 64 MB. Unwritten reads 0xFFFF, per the standing
 // rule in docs/mister-integration.md — never zero.
 static std::vector<uint16_t> mem;
+static uint64_t mem_words = 0;
 
 static bool load_file(const std::string &p, std::vector<uint8_t> &out) {
   FILE *f = std::fopen(p.c_str(), "rb");
@@ -120,6 +121,7 @@ int main(int argc, char **argv) {
         mem[w] = uint16_t(full[w*2] | (full[w*2+1] << 8));
       std::printf("  FULL IMAGE: %zu bytes (%.2f MB), %zu words from %s\n",
                   full.size(), double(full.size())/1048576.0, nw, ip);
+      mem_words = nw;
     } else {
       std::printf("  M2_BOOT_IMAGE set but %s could not be read\n", ip);
     }
@@ -248,6 +250,8 @@ int main(int argc, char **argv) {
   // ce_pix halves clk_vid to the 16 MHz dot clock, as Model2.sv does.
   int ce_tog = 0;
 
+  const bool real_mem = std::getenv("M2_REALMEM") != nullptr;
+  int slow_prev = 0;
   auto base_step = [&]() {
     const int m = int((base_t / 2) & 1);
     const int v = int((base_t / 3) & 1);
@@ -273,13 +277,25 @@ int main(int argc, char **argv) {
     if (v && !vid_prev) { ce_tog ^= 1; d->ce_pix = ce_tog; }
     d->clk_mem = m; d->clk_vid = v; d->clk_cpu = c;
     d->eval();
-    if (m && !mem_prev) { mem_tick(); sd2_tick(); d->eval(); ++mem_edges; }
+    d->clk96 = int(base_t & 1);
+    if (real_mem) {
+      d->eval();
+      if (d->clk_slow_o && !slow_prev) ++mem_edges;   // the stack's own 48 MHz
+      slow_prev = d->clk_slow_o;
+    } else if (m && !mem_prev) { mem_tick(); sd2_tick(); d->eval(); ++mem_edges; }
     mem_prev = m; vid_prev = v;
     ++base_t;
   };
 
   // One clk_mem cycle, so the loop below is unchanged.
   auto tick = [&]() { for (int i = 0; i < 4; ++i) base_step(); };
+
+  // REAL MEMORY. The binary decides (built with -GREAL_MEM=1); the tb follows
+  // its lead: clk96 toggles every base tick, the memory-edge accounting keys
+  // off the stack's exported clk_slow, the C++ SDRAM answers are ignored by
+  // the harness, and the ROM image streams through the rl_* port into the
+  // DEVICE MODEL after its init -- the loader's role, played at the bench.
+
 
   for (int i = 0; i < 64; ++i) tick();
   // THE REAL I/O FIRMWARE, when offered: M2_IOFW names EPR-14869C, and the
@@ -316,7 +332,25 @@ int main(int argc, char **argv) {
       }
     }
   }
+  d->cpu_hold = 0; d->rl_req = 0; d->rl_addr = 0; d->rl_din = 0;
   d->rst_n = 1;
+  if (real_mem) {
+    // Device init first, then the image, CPU held throughout.
+    d->cpu_hold = 1;
+    while (!d->mem_ready_o) tick();
+    std::printf("  REAL MEMORY ready; streaming the image...\n");
+    uint64_t words = mem_words;   // set below where the image was read
+    for (uint64_t w = 1; w <= words; ++w) {
+      d->rl_req = 1; d->rl_addr = w; d->rl_din = mem[w];
+      do { tick(); } while (!d->rl_ack);
+      d->rl_req = 0; tick();
+      if ((w % 2000000) == 0)
+        std::printf("    ... %llu / %llu words\n",
+                    (unsigned long long)w, (unsigned long long)words);
+    }
+    std::printf("  image streamed; releasing the CPU\n");
+    d->cpu_hold = 0;
+  }
   if (const char *dl = std::getenv("M2_DPLOG")) g_dplog = std::fopen(dl, "w");
 
   if (std::getenv("M2_BOOT_TRACE")) {
