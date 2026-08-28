@@ -64,28 +64,40 @@ game side runs at true latency the sim should LOSE the race like the board --
 then the fix (honest BUSY/status modelling, or whatever the reproduced race
 demands) gets built against seconds-long runs.
 
-### ON THE BOARD NOW: build 284074ce
+### ON THE BOARD NOW: build 6a8bbc08 (R72)
 
-R70 IS THE HEADLINE: THE RTL IS CORRECT. Our composition renders the
-GAME ASSIGNMENTS menu complete and matching MAME's reference image --
-green '3' present, all four setting lines drawn -- with ZERO line
-overruns. Settings, firmware, exchange, formatter, backup, tile RAM,
-font, palette, colour table and renderer are proven correct TOGETHER
-against a reference image. The fault is the board's alone.
+Deployed 2026-08-28. 20,100 ALM (48%), 386 M10K (70%), worst-case setup
+slack 0.606 ns, 5 distinct PLL clocks. The fitter did NOT crash on exit
+this build -- first time with the SDRAM constraints in place.
 
-An earlier claim that the sim reproduced the fault was a capture-timing
-artifact (frame 56 vs MAME's 130, menu still being drawn) and is
-withdrawn. Same sampling error as R69, twice in one session.
+WHAT CHANGED, and why it may matter to the missing glyphs:
 
-READ NEXT, WHILE THE CHARACTERS ARE MISSING: overlay row 22, the last
-character fetch verbatim. Glyph data comes from SDRAM; the tilemap lives
-in on-chip M10K and probes clean, which is why every value we measured
-looked healthy. FFFFFFFF = the fetch reads memory nobody wrote; varied
-data = the fetch path is sound and the cause is elsewhere.
+1. ONE CLOCK FOR THE PICTURE. clk_vid is gone; the renderer, overlay and
+   timing generator run on clk_sys with ce_pix one-in-three (48/3 = 16 MHz,
+   the exact old pixel rate). Synthesis confirms tram_rtl_0 and pal_rtl_0
+   have LEFT the Warning(276027) dual-clock list, so tilemap and palette
+   read-during-write is defined on silicon now, and the clk_vid crossing
+   the SDC had to cut is a timed path.
 
-Supporting evidence for the SDRAM-margin theory: row 20 reads 00001204,
-ONE working capture depth of six, and the board shows no picture at all
-in any other SDRAM phase.
+2. 64 KB GLYPH CACHE (m2_char_cache) in front of the character fetch.
+   Glyph pixels were the last part of the 2D path read from SDRAM, at
+   9,084x redundancy. Own testbench: 10,128 reads zero wrong, 96.7% hit
+   on the real access shape.
+
+3. DEBUG OVERLAY OFF BY DEFAULT -- OSD "Debug overlay", O[19].
+
+LOOK AT THE ATTRACT SCREEN FIRST. The board rendered it as two flat
+colours (blue sky, green ground), which is the signature of the character
+fetch returning uniform data. Both changes above land on exactly that
+path. If it is still two flat colours, the fetch is bad at the SOURCE and
+overlay row 22 (last character fetch, verbatim) is the reading that says
+so -- turn the overlay on to read it.
+
+MEASURED CLEAN, do not re-investigate: backup settings 00030300, firmware
+window 00030300 (matches MAME), formatter store 3131, tile cells blank
+NORMALLY (MAME does the same), zero line overruns, V-blank timing matches
+MAME set_raw exactly. The cabinet TEST button never reaches the core
+(joystick_0 reads zero) -- separate open bug.
 
 ### The tram cell probe, finally connected
 
