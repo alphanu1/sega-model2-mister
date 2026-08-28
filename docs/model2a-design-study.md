@@ -4069,7 +4069,35 @@ rather than a single lost boot exchange. The game re-runs the exchange every
 few frames forever; each one can race; one poisoned copy-back after attract
 begins blanks the digits on the next redraw. The sims stopped one clean
 exchange after recovery. Deep runs (6M instructions at true latency, 12M at
-fast pacing) now hunt a late re-contamination.
+fast pacing) found no such thing: the repeating traffic is the input-scan
+poll, not a settings re-read, and only two settings exchanges occur in a
+12M-instruction run. The re-contamination theory is unsupported.
+
+**The exchange is then exonerated outright.** The Z80's arrival phase was
+swept across three orders of magnitude — `M2_FWLATE` at 0, 50K, 200K, 400K,
+600K, 614K (mid-exchange), 620K, 700K, 1M and 2M instructions. **Every one
+of the ten contaminates, and every one recovers and renders**: `tram[1129] =
+c033`, `tram[1130] = 8043`, unchanged across the sweep. There is no phase in
+which the game fails to repair the block. Whatever blanks the board's
+characters, it is not this race, and R63's digit mechanism is now closed as
+a cause even though the contamination it identified is real.
+
+What the composition positively proves, from the same runs: the renderer
+draws Daytona's GAME ASSIGNMENTS menu correctly at true latency — white
+labels ("ADVERTISE SOUND", "COUNTRY") with green setting values, on a
+496x384 frame captured while the CPU runs. Font, tilemap, palette, colour
+translation, the char CDC and the settings path all work end to end in
+simulation. The board's fault is therefore in something simulation does not
+yet model, and the remaining asymmetries worth attacking are hardware-only:
+the fitted timing of the char and backup paths, and the board's own probe
+readings (`02FF017F`) which no simulated run reproduces.
+
+Eliminated by inspection in the same pass, so they are not re-run: the char
+CDC has no drop path at all (a four-phase handshake that stalls, never
+discards); line overruns are counted and the board reports zero; the NVRAM
+HPS write port is correctly gated (`ioctl_download && index==2 && ioctl_wr`)
+so it cannot steal a CPU write; and `m2_backup` is wired identically in
+Model2.sv and the boot harness, both clocked in the bridge's domain.
 
 Bench honesty items from the same session: the DPRAM dialogue logger read the
 even byte for both halves of a word (fixed — historical R-lines in dialogue

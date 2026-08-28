@@ -80,10 +80,21 @@ the tb's new flight recorder). With the composition honest:
   writes defaults 01010100/00030300, re-reads them clean, and renders
   '3'/'C' (tram c033/8043) in every ordering tried -- including the
   board's firmware-last ordering (M2_FWLATE).
-- The board still blanks. Its probes showed 02FF017F -- defaults and scan
-  bytes INTERLEAVED -- pointing at ongoing periodic re-contamination by
-  the every-few-frames heartbeat exchange, not a one-time boot loss. Deep
-  runs (6M insns real / 12M fast) are hunting a late re-contamination.
+- THE EXCHANGE IS EXONERATED. The Z80 arrival phase was swept over three
+  orders of magnitude (FWLATE 0 .. 2M, ten points): all ten contaminate,
+  all ten recover, tram1129=c033 tram1130=8043 every time. Deep runs found
+  no late re-contamination either -- the repeating traffic is the input
+  poll, not a settings re-read. R63's digit mechanism is closed as a cause.
+- The composition RENDERS THE MENU CORRECTLY at true latency: white
+  "ADVERTISE SOUND"/"COUNTRY" with green values, frame captured while the
+  CPU runs. Font, tilemap, palette, colour translation, char CDC and the
+  settings path are all proven together in simulation.
+- So the board's fault is outside what the sim models. Also eliminated this
+  pass: the char CDC has no drop path (four-phase, stalls not drops); line
+  overruns are counted and the board reads zero; the NVRAM HPS port is
+  correctly gated; m2_backup is wired identically in both. The next lever
+  is hardware-only -- fitted timing on the char/backup paths, and a fresh
+  board probe of the settings dword and the tile cells that blank.
 
 Bench notes: the DPRAM dialogue logger's R-lines used to double the even
 byte of each word (fixed; treat old captures accordingly). The harness
