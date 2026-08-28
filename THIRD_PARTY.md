@@ -317,3 +317,4 @@ Our sound path is the i8251 at `0x01c80000`.
 - **Changes:** `tv80s.v` — the `cen` clock-enable is exposed as a module port
   (upstream hardwires it to 1 in this wrapper; `tv80_core` has always taken
   it). Two lines, marked in-file.
+# Copied from the Model 1 project (local clone 8788ede) -- same author, same licence.

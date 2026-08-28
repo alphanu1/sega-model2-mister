@@ -3985,3 +3985,39 @@ wrong. IN0 carries the OSD-mapped Coin/Start/Test/Service buttons in
 model2.cpp's bit order; the ADC idles at centre/released. The board question —
 do the digits appear on hardware — is now one flash away, and for the first
 time the thing being flashed contains no imitated computers on the boot path.
+
+---
+
+**R63 — the digits are a protocol race, the reset was a misplaced menu line,
+and the firmware's own code names the missing arbitration.** The day the real
+I/O board went live on hardware (R61-62), three instruments converged:
+
+*The digits.* The board's settings dword arrives in backup as **`7F FF 7F` —
+the firmware's input-scan pattern**. The exchange is sequenced deposit ->
+command -> firmware response -> copy-back, and the board's copy-back runs
+before the response lands. The composition wins this race; the board loses it;
+the difference is the game-side critical section stretched by real SDRAM
+latency on top of our CPI 3.95 (R55's speed gap finally drawing blood against a
+free-running peripheral). The formatter was exonerated by inspection -- pure
+register arithmetic that cannot emit spaces -- and by a write-latch at the
+SDRAM port.
+
+*The firmware's testimony.* Its DPRAM primitives wait on status bits 0 and 3
+with timeouts and a retry budget at work-RAM 0x5803 -- machinery for a real
+MB8421's BUSY arbitration. Our 315-5338A model returns a constant 0x08, so
+every wait passes instantly: the interlock the protocol was designed around
+does not exist in our model. Window access costs the Z80 ~12us per byte through
+the command interface, so refills take milliseconds and interleaving is normal;
+the SEQUENCING, not byte atomicity, is what the status machinery protects.
+
+*The reset.* Dead since the Z80 build -- and measured dead: a game-reset edge
+counter ignored the OSD button entirely. The cause was the `J1` button line
+placed between the two `R` items in CONF_STR, silently breaking parsing of
+everything after it. Button definitions live at the END of the menu block; the
+misplacement likely also meant Test/Coin/Start were never mapped at all.
+
+*Next instrument, now unavoidable:* the composition with the real memory stack
+-- m2_sdram, the x2 adapter, the behavioural SDRAM -- so the game side runs at
+true latency and loses the race the way the board does. The fix (modelling the
+BUSY/ready status honestly, or whatever the race demands once reproducible)
+gets built against that.
