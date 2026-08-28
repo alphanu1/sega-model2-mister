@@ -125,7 +125,7 @@ int main(int argc, char **argv) {
                   (unsigned long long)t);
       ++rlog;
     }
-    if (d->spy_ee != ee_prev && ee_log < 80) {
+    if (d->spy_ee != ee_prev && ee_log < 4000) {
       std::printf("  EE cs=%d clk=%d di=%d do=%d st=%d ewen=%d  (cycle %llu)\n",
                   (d->spy_ee>>7)&1, (d->spy_ee>>6)&1, (d->spy_ee>>5)&1,
                   (d->spy_ee>>4)&1, (d->spy_ee>>1)&7, d->spy_ee&1,
@@ -151,6 +151,27 @@ int main(int argc, char **argv) {
                       (unsigned long long)t);
           ++slog;
         }
+      }
+      // THE ORDERING QUESTION (R64): flag/status writes and window fills,
+      // every one, timestamped -- does the firmware clear the flag before
+      // or after the window holds settings?
+      if (a == 0x20 || a == 0x21) {
+        static int flog = 0;
+        if (flog < 200) {
+          std::printf("  FLAG dp[%02x] <= %02x  (cycle %llu)\n", a,
+                      d->spy_data, (unsigned long long)t);
+          ++flog;
+        }
+      } else if (a >= 0x100 && a < 0x180) {
+        static int wlog2 = 0; static uint64_t wlast = 0;
+        // First write of each burst and every 32nd after, so a 128-byte
+        // fill reads as a few lines, not 128.
+        if (wlog2 < 400 && (t - wlast > 2000 || ((a & 0x1f) == 0))) {
+          std::printf("  WIN  dp[%03x] <= %02x  (cycle %llu)\n", a,
+                      d->spy_data, (unsigned long long)t);
+          ++wlog2;
+        }
+        wlast = t;
       }
       if (a == 0x21 && d->spy_data == 0x40 && !status40_at) {
         status40_at = t;
