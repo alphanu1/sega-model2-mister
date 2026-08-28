@@ -305,6 +305,8 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/mem/m2_sdram.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/mem/m2_sdram_x2.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/mem/m2_char_cdc.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_char_cache.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/dbg/m2_uart_tx.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/dbg/m2_dbg_stream.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/mem/m2_cdc_port.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/mem/m2_cdc_pulse.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/io/m2_rom_loader.sv

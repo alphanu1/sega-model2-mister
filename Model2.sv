@@ -27,7 +27,9 @@ module emu
 
 assign ADC_BUS  = 'Z;
 assign USER_OUT = '1;
-assign {UART_RTS, UART_TXD, UART_DTR} = 0;
+assign {UART_RTS, UART_DTR} = 0;
+// UART_TXD is driven by the debug streamer at the bottom of this file. The
+// core's own printf -- see rtl/dbg/m2_dbg_stream.sv for why it exists.
 assign {SD_SCK, SD_MOSI, SD_CS} = 'Z;
 assign {DDRAM_CLK, DDRAM_BURSTCNT, DDRAM_ADDR, DDRAM_DIN, DDRAM_BE, DDRAM_RD, DDRAM_WE} = '0;
 
@@ -1593,6 +1595,68 @@ always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
 	end
 end
 
+// DOES THE CPU EVER WRITE THE CHARACTERS, AND WHERE DOES THE RENDERER LOOK?
+//
+// Row 22 reads mostly ZEROS on the board -- not FFFFFFFF -- and zero glyph data
+// paints one flat colour per tile, which is the blue sky and green ground the
+// board shows. GAME_CHAR is CPU-written scratch, not ROM, so zeros mean either
+// the CPU never wrote the characters or the renderer is reading somewhere the
+// writes did not land. These two counters separate those:
+//
+//   cw_cnt frozen at 0  -> the CPU never wrote the char region at all
+//   cw_cnt climbing     -> it did, so the write and the read disagree, and
+//                          cf_addr says where the renderer is actually looking
+//
+// cf_addr is the FULL SDRAM word address the fetch port presents, so it can be
+// compared directly against GAME_CHAR = 0x1690000 and against cw_last.
+logic [15:0] cw_cnt;
+logic [24:0] cw_last;
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+	if (!mem_rst_n) begin cw_cnt <= 16'd0; cw_last <= 25'd0; end
+	else if (cpu_sd_req && cpu_sd_we
+	         && cpu_sd_addr >= GAME_CHAR
+	         && cpu_sd_addr <  GAME_CHAR + SDR_AW'(25'h80000)) begin
+		if (!(&cw_cnt)) cw_cnt <= cw_cnt + 16'd1;
+		cw_last <= 25'(cpu_sd_addr);
+	end
+end
+logic [24:0] cf_addr;
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+	if (!mem_rst_n)   cf_addr <= 25'd0;
+	else if (cc_req)  cf_addr <= 25'(char_base + SDR_AW'(cc_addr));
+end
+
+// THE SERIAL CHANNEL. docs/mister-integration.md said this was available and
+// was not acted on; CLAUDE.md's summary flattened it to "No serial", and that
+// is what actually governed. The cost was a session spent reading eight hex
+// digits at a time off a photograph, in which two values were attributed to
+// the wrong probe and two more were read at a moment when the value was
+// legitimately something else.
+//
+// Two channels, chosen to answer the question actually open: what the CPU
+// WRITES into the character region against what the renderer READS out of it,
+// interleaved on one wire so they are timestamped against each other.
+//
+//   W <addr> <data>   a CPU write landing inside GAME_CHAR
+//   R <addr> <data>   a character fetch, address and the word it returned
+//
+// Read it with `debug=1` in mister.ini and a terminal on the DE10-Nano's UART
+// at 115200 8N1.
+wire        uart_a_valid = cpu_sd_req && cpu_sd_we
+                        && cpu_sd_addr >= GAME_CHAR
+                        && cpu_sd_addr <  GAME_CHAR + SDR_AW'(25'h80000);
+wire        uart_b_valid = char_ack;
+wire [31:0] uart_dropped;
+
+m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
+	.clk(clk_sys), .rst_n(mem_rst_n),
+	.a_valid(uart_a_valid), .a_addr({7'd0, 25'(cpu_sd_addr)}), .a_data({16'd0, cpu_sd_din}),
+	.b_valid(uart_b_valid), .b_addr({7'd0, cf_addr}),          .b_data(char_data),
+	.a_tag(8'h57), .b_tag(8'h52),          // 'W' and 'R'
+	.enable(1'b1),
+	.tx(UART_TXD), .dbg_dropped(uart_dropped)
+);
+
 // WHO WRITES THE SPACE. Everything upstream is now measured CLEAN on the
 // board: backup holds 00030300, the firmware's window holds 00030300, and the
 // formatter's own store carries ASCII digits (3131). The character only
@@ -2178,6 +2242,13 @@ m2_diag #(.NWORDS(24)) u_diag
 	         // of the instruction that wrote a space into it. Probe "chr #"
 	         // gives the count and the value, so a zero count means the cell
 	         // was never blanked by a write and the fault is in the render.
+	         // Page 1 / Probe "chr A" was the saturating window counter and
+	         // said nothing; it now carries the char-write count and the last
+	         // address the CPU wrote in the char region.
+	         (status[18] && status[16:14] == 3'd4) ? {cw_cnt, 7'd0, cw_last[24:16]} :
+	         // Page 1 / Probe "bndry": where the renderer is actually fetching.
+	         // Compare against GAME_CHAR = 0x1690000.
+	         (status[18] && status[16:14] == 3'd6) ? {7'd0, cf_addr} :
 	         (status[18] && status[16:14] == 3'd2) ? blank_ip :
 	         (status[18] && status[16:14] == 3'd3) ?
 	             {8'd0, blank_cnt, blank_val} :
