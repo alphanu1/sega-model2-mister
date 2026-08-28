@@ -52,6 +52,11 @@ static bool load_file(const std::string &p, std::vector<uint8_t> &out) {
 }
 
 static FILE *g_dplog = nullptr;
+static bool g_set_contam = false;
+// Last bus transactions, dumped once when the CPU first traps or halts --
+// the black-box flight recorder for a crash whose cause is a memory answer.
+struct BusEv { uint32_t addr, data; uint32_t insn; uint8_t we, be; };
+static BusEv g_ring[64]; static unsigned g_ring_n = 0; static bool g_ring_dumped = false;
 static int g_r5_n = 0;
 static int g_vs_n = 0;
 static int g_e1n = 0, g_e0n = 0, g_win = 0, g_bk_n = 0, g_c3_n = 0, g_src_n = 0, g_sw_n = 0;
@@ -726,6 +731,13 @@ int main(int argc, char **argv) {
                   d->obs_bus_addr, d->obs_bus_be, d->obs_bus_wdata,
                   (unsigned)d->dbg_acc, (unsigned)d->dbg_ip);
       ++g_sw_n;
+      // THE RACE'S FINGERPRINT (R63): a settings copy-back carrying the
+      // firmware's input-scan bytes instead of digits. 7f and ff are the
+      // scan pattern; real settings bytes here are small BCD-ish values.
+      {
+        const uint8_t b = uint8_t(d->obs_bus_wdata & 0xff);
+        if (b == 0x7f || b == 0xff) g_set_contam = true;
+      }
     }
     // EVERY read of the settings dword, numbered -- the board capture's
     // reference sequence.
@@ -765,13 +777,45 @@ int main(int argc, char **argv) {
         || (a >= 0x00220000u && a <  0x00240000u);       // ROM mirror
       if (!backed) g_rd_unbacked[a & 0xffff0000u]++;
     }
+    if (d->obs_bus_ack && !ack_prev) {
+      BusEv &e = g_ring[g_ring_n++ & 63];
+      e.addr = d->obs_bus_addr;
+      e.we   = d->obs_bus_we; e.be = d->obs_bus_be;
+      e.data = d->obs_bus_we ? d->obs_bus_wdata : d->obs_bus_rdata;
+      e.insn = (uint32_t)d->dbg_acc;
+    }
+    if ((d->cpu_trap || d->cpu_halt) && !g_ring_dumped) {
+      g_ring_dumped = true;
+      std::printf("  FLIGHT RECORDER at first trap/halt (insn %u, ip %08x):\n",
+                  (unsigned)d->dbg_acc, (unsigned)d->dbg_ip);
+      const unsigned n = g_ring_n < 64 ? g_ring_n : 64;
+      for (unsigned i = 0; i < n; ++i) {
+        const BusEv &e = g_ring[(g_ring_n - n + i) & 63];
+        std::printf("    %s %08x be=%x %08x  insn %u\n",
+                    e.we ? "W" : "R", e.addr, e.be, e.data, e.insn);
+      }
+    }
+    // WHO WRITES THE INTERRUPT TABLE POINTER, AND WHEN. The crash read
+    // PRCB+20 (0x53f414) as zero mid-run; this names every write that lands
+    // in PRCB[0x10..0x1f] so the fill can be placed against the interrupt.
+    if (d->obs_bus_ack && !ack_prev && d->obs_bus_we &&
+        d->obs_bus_addr >= 0x0053f410u && d->obs_bus_addr < 0x0053f420u) {
+      static int pn = 0;
+      if (pn < 20) {
+        std::printf("      PRCB WR %08x be=%x %08x  (insn %u ip %08x)\n",
+                    d->obs_bus_addr, d->obs_bus_be, d->obs_bus_wdata,
+                    (unsigned)d->dbg_acc, (unsigned)d->dbg_ip);
+        ++pn;
+      }
+    }
     if (g_dplog && d->obs_bus_ack && !ack_prev &&
         d->obs_bus_addr >= 0x01c00000u && d->obs_bus_addr < 0x01c01000u) {
       std::fprintf(g_dplog, "%c %03x %02x %u\n",
                    d->obs_bus_we ? 'W' : 'R',
                    (d->obs_bus_addr - 0x01c00000u) >> 1,
                    d->obs_bus_we ? (d->obs_bus_wdata & 0xff)
-                                 : (d->obs_bus_rdata & 0xff),
+                                 : ((d->obs_bus_rdata
+                                     >> (8 * (d->obs_bus_addr & 3))) & 0xff),
                    (unsigned)d->dbg_acc);
     }
     if (d->obs_bus_ack && !ack_prev && d->obs_bus_we) {
@@ -1067,13 +1111,19 @@ int main(int argc, char **argv) {
 
   int fail = 0;
   if (d->iob_win_rd == 0) {
-    std::printf("\n  REPRODUCED: the i960 never read the block window, which is\n"
-                "  what the board shows. The fault is in this composition and can\n"
-                "  now be stepped.\n");
+    std::printf("\n  BLOCKED: the i960 never read the block window -- the\n"
+                "  exchange itself is broken in this composition. Step that\n"
+                "  before asking about the race.\n");
     fail = 1;
+  } else if (g_set_contam) {
+    std::printf("\n  RACE REPRODUCED: the settings copy-back (first window read\n"
+                "  at instruction %llu) carried the firmware's input-scan bytes\n"
+                "  (7F/FF) -- the exact contamination the board measures (R63).\n",
+                (unsigned long long)first_win_rd);
   } else {
-    std::printf("\n  the copy ran (first window read at instruction %llu).\n"
-                "  This harness does NOT reproduce the hardware fault.\n",
+    std::printf("\n  clean exchange (first window read at instruction %llu):\n"
+                "  the copy-back carried real settings and the race was won.\n"
+                "  The board loses it; this run did not reproduce that.\n",
                 (unsigned long long)first_win_rd);
   }
   if (out) { std::fclose(out); std::printf("  PC stream written to %s\n", outfile); }

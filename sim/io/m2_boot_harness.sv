@@ -327,14 +327,19 @@ module m2_boot_harness #(
       .clk(clk96), .rst_n(rst_n), .clk_slow(clk_slow_int), .ready(rm_ready),
       .wr_req(rl_req), .wr_addr(rl_addr), .wr_din(rl_din),
       .wr_be(2'b11), .wr_ack(rl_ack),
-      .p0_req(1'b0), .p0_we(1'b0), .p0_addr('0), .p0_din('0), .p0_be('0),
-      .p1_req(sd_req), .p1_addr(sd_addr),
+      // p0 is the ONE read/write slow port -- the CPU goes there. The first
+      // composition put the CPU on read-only p1 and every RAM write vanished:
+      // the game ran 686K instructions on ROM and on-chip state alone, then
+      // died fetching an interrupt vector from RAM nothing had ever written.
+      .p0_req(sd_req), .p0_we(sd_we), .p0_addr(sd_addr),
+      .p0_din(sd_din), .p0_be(sd_be),
+      .p1_req(1'b0), .p1_addr('0),
       .p2_req(1'b0), .p2_addr('0),
       .p3_req(sd2_req), .p3_addr(sd2_addr),
       .p4_req(1'b0), .p4_addr('0),
-      .p0_dout(), .p1_dout(rm_p1_dout), .p2_dout(),
+      .p0_dout(rm_p1_dout), .p1_dout(), .p2_dout(),
       .p3_dout(rm_p3_dout), .p4_dout(),
-      .p0_ack(), .p1_ack(rm_p1_ack), .p2_ack(), .p3_ack(rm_p3_ack), .p4_ack(),
+      .p0_ack(rm_p1_ack), .p1_ack(), .p2_ack(), .p3_ack(rm_p3_ack), .p4_ack(),
       .violations(), .v_flags(), .reads_served(), .writes_served()
     );
   end else begin : g_cxxmem
