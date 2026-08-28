@@ -66,34 +66,28 @@ demands) gets built against seconds-long runs.
 
 ### ON THE BOARD NOW: build 284074ce
 
-Deployed 2026-08-28. 19,984 ALM / 312 M10K, slack 0.535 ns. RELOAD THE
-CORE after deploying -- the .rbf on the card is not the bitstream in the
-FPGA, and that has cost a round of readings once already.
+R69 IS THE HEADLINE: THE BLANKING IS NORMAL. MAME blanks cells 1129,
+1130, 1131 and 1108 to 8020 by frame 240, exactly as our core does at
+ip 0x18DD0. Our core matches the reference. Every tile-cell reading was
+taken after the characters vanished, when those cells are legitimately
+blank in BOTH machines -- so the readings could never have told healthy
+from broken. R68 is retracted; there is no fault in the draw path.
 
-MEASURED CLEAN (R68), do not re-investigate:
-  backup settings   00030300   page 1, Probe "chr0"
-  firmware window   00030300   page 1, Probe "chr 3"  (matches MAME)
-  formatter store   3131       page 1, Probe "row2"   (ASCII "11", 60x)
-  tile cell 1130    8020       page 0                 (a SPACE)
+DO NEXT, AND IT IS FREE: the OSD has `SDRAM phase` (Auto, CL+1..CL+5).
+Row 20 read 00001204 on the board, and bits 5:0 = 04 means only ONE of
+six capture depths reads the pattern back -- an interface with no margin.
+Marginal reads corrupt some fetches and not others, which is what a few
+missing characters looks like. Step the phase through every setting and
+watch whether the missing characters change. That is the cheapest
+remaining experiment and it may end the hunt.
 
-So the corruption is BETWEEN the formatted string and the tile cell.
-Everything upstream is proven good on the hardware itself.
-
-READ NEXT:
-  page 1, Probe "chr #"   {count, value} of space-writes to the probed
-                          cell. COUNT ZERO is decisive: nothing wrote the
-                          space, so tile RAM is corrupted without a write
-                          and the fault is the memory, not the code.
-  page 1, Probe "chr 1"   the IP that wrote the space. 0001CDDC/0001CE38
-                          = the routine that drew the digit is blanking
-                          it; anything else names foreign code.
-
-DEAD ENDS -- do not build on these:
-  page 1, Probe "chr A"   window counter SATURATES at FF; two legitimate
-                          exchanges reach it. Says nothing.
-  page 1, Probe "bootIP"  cabinet switch. MEASURED FFFF2xxx rising: the
-                          firmware's input scan runs, but the button
-                          never reaches the core. Separate open bug.
+MEASURED AND SETTLED, do not re-investigate:
+  backup settings   00030300  clean
+  firmware window   00030300  clean, matches MAME
+  formatter store   3131      correct ASCII digits, 60 writes
+  tile cells        8020      NORMAL -- MAME does the same
+  cabinet switch    FFFF2xxx  scan runs, button never reaches the core
+                              (separate open bug, joystick_0 reads zero)
 
 ### The tram cell probe, finally connected
 

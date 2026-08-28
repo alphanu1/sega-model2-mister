@@ -4317,3 +4317,46 @@ split second" and "CR, 3 appear then disappear". Probes answer the question
 they were built for and are silent about the one that matters. R65's orphaned
 probe and R66's misattributed register are the same failure from the other
 direction: an instrument trusted past what it actually measures.
+
+
+**R69 — the blanking is CORRECT BEHAVIOUR: MAME does it too, and R68 is
+retracted.** The oracle was finally asked the right question -- not "what is
+in the window" but "what does the real machine hold in these very cells, over
+time". Reading MAME's tile RAM every 120 frames:
+
+  frame 120   1129=c033  1130=8043  1131=8052  1108=8043   the glyphs
+  frame 240   1129=8020  1130=8020  1131=8020  1108=8020   ALL SPACES
+  frame 360   8020 throughout, and so on
+
+**The real machine blanks the same four cells, to the same value, on its own.**
+The clear at ip 0x18DD0 that the board reported and that our own 40M run
+reproduced is the game tearing down the menu, and our core matches the
+reference exactly. There is no fault at 0x18DD0, no fault between the
+formatted string and the tile cell, and R68's conclusion is withdrawn in full.
+
+*What went wrong in the reasoning, because it is the fourth time this session.*
+Every tile-cell reading was taken AFTER the characters had vanished -- that is
+when the board is easiest to read. But those cells are legitimately blank then,
+in MAME and in our core alike, so the measurement could only ever return 8020
+and could never distinguish healthy from broken. The probe was sound; the
+sampling moment made it meaningless. R65's orphaned probe, R66's misattributed
+register, R67's theory that contradicted the screen, and now this: four
+distinct ways to be confidently wrong with a working instrument.
+
+*What the digits question actually requires.* The characters must be compared
+WHILE the menu is displayed -- MAME's frame 120, not its frame 240. Our own
+composition already renders that screen correctly at true SDRAM latency
+(R64's frame capture: white ADVERTISE SOUND / COUNTRY with green values), and
+MAME holds the glyphs at the same point. So RTL and reference agree, and the
+divergence is the BOARD's alone.
+
+*The live hypothesis, and it is cheap to test.* Overlay row 20 read `00001204`
+on the board. Per its own definition, bits 5:0 name which of CL+0..CL+5 read
+the pattern back: `04` is a SINGLE working depth out of six. The SDRAM read
+interface has no margin at all, and marginal reads corrupt some fetches and
+not others -- which is exactly what "a few characters are missing while the
+rest of the text is fine" looks like. The OSD already exposes `SDRAM phase`
+(Auto, CL+1..CL+5) precisely so this can be walked by hand. Stepping it and
+watching whether the missing characters change is a free experiment with a
+real chance of ending this, and it should be done before any further
+instrument is built.
