@@ -3904,3 +3904,25 @@ and `sd_dq_oe`. Those outputs launch from fabric; STA computes against the real
 placement, so our +6.6 ns output slack already includes it and stays honest —
 noted so nobody later "fixes" the refusals expecting margin that is already
 counted.
+
+---
+
+**R60 — the SCSP is off Daytona's critical path, and the ecosystem covers more
+than the audit credited.** `model2.cpp` line 2580: model2o games take
+`SEGAM1AUDIO` — the Model 1 audio board, 68000 + YM3438 + 2× MultiPCM — with the
+SCSP belonging to 2A-CRX. So §5.3's highest-risk block ("SCSP: none usable, must
+be written, high") does not gate the bring-up target at all. Daytona's sound is
+fx68k (vendored, suites green) + jt12 for the YM3438 (Jotego, GPL-3, proven in
+the Genesis core) + MultiPCM, which must be written but is a 28-voice sample
+player, far simpler than an SCSP, + the i8251 link.
+
+The same audit pass, prompted from the bench ("is there not already a core for
+this?"), reclassifies the I/O board: it is a COMPUTER (Z80 + EPR-14869, 64 KB,
+in the daytona93 romset, CRC-verified) and will be run as one on a T80 rather
+than imitated — R37-R41's HLE stalled exactly where the board computes rather
+than responds (the credit digits). Remaining blocks needing original RTL are
+now exactly two: MultiPCM and the 3D renderer. Everything else is
+vendor-and-integrate with clean licences: T80, jt12, mb86233 (ours-adjacent),
+fx68k. The Model 1 reference has no audio RTL yet, so MultiPCM work here flows
+back to it — the reverse of the fx68k direction, closing the loop the study's
+tooling section hoped for.
