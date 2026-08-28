@@ -50,7 +50,7 @@ static bool load_file(const std::string &p, std::vector<uint8_t> &out) {
   return got == size_t(n);
 }
 
-static int g_e1n = 0, g_e0n = 0, g_win = 0, g_bk_n = 0, g_c3_n = 0, g_src_n = 0;
+static int g_e1n = 0, g_e0n = 0, g_win = 0, g_bk_n = 0, g_c3_n = 0, g_src_n = 0, g_sw_n = 0;
 static const int FW = 496, FH = 384;
 static std::vector<uint8_t> g_frame(size_t(FW)*FH*3, 0);
 static int g_px = 0, g_py = 0, g_hb_p = 0, g_vb_p = 0;
@@ -515,7 +515,8 @@ int main(int argc, char **argv) {
     // spaces where the sim draws the digit, so the game printed a blank
     // value there: the INPUT to the print differs. This window catches the
     // loads feeding the value just before the tram write at insn 1769120.
-    if (d->dbg_acc >= 1768950 && d->dbg_acc <= 1769125 &&
+    if (((d->dbg_acc >= 1765330 && d->dbg_acc <= 1765450) ||
+         (d->dbg_acc >= 1768950 && d->dbg_acc <= 1769125)) &&
         d->obs_bus_ack && !ack_prev && !d->obs_bus_we && g_src_n < 60) {
       std::printf("      SRC rd %08x -> %08x  (insn %u ip %08x)\n",
                   d->obs_bus_addr, d->obs_bus_rdata,
@@ -585,6 +586,19 @@ int main(int argc, char **argv) {
     // that this core routes to a stub -- bufferram at 0x00900000 (128 KB),
     // CPU control at 0x00e00000, the comm share at 0x01a00000 -- and the
     // colorxlat region is 48 KB where only 96 entries are stored.
+    // WHO WRITES THE SETTINGS DWORD, AND WHEN. The digits are printed from
+    // backup byte 0x14 (read at ip 229c64, insn 1769032). Log every write to
+    // bytes 0x10-0x17 with value and instruction, so the board's reading of
+    // that dword can be matched against the exact write that should have
+    // produced it.
+    if (d->obs_bus_ack && !ack_prev && d->obs_bus_we &&
+        d->obs_bus_addr >= 0x01d00010u && d->obs_bus_addr < 0x01d00018u &&
+        g_sw_n < 30) {
+      std::printf("      SET WR %08x be=%x %08x  (insn %u ip %08x)\n",
+                  d->obs_bus_addr, d->obs_bus_be, d->obs_bus_wdata,
+                  (unsigned)d->dbg_acc, (unsigned)d->dbg_ip);
+      ++g_sw_n;
+    }
     // BACKUP SRAM SETTINGS WINDOW. The menu's missing digits are the credit
     // and coin settings, which live here; the byte-walking loop at ip 0x5250
     // reads them out. Log every access to the window so our contents can be

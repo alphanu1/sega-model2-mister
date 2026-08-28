@@ -1364,17 +1364,18 @@ always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
 end
 
 m2_backup u_backup (
-	.clk(clk_sys),
+	.clk(clk_sys), .rst_n(cpu_rst_n),
 	.sel(bak_sel),
 	.we(cpu_io_we),
 	.word(cpu_io_addr[13:2]),
 	.be(cpu_io_be),
 	.wdata(cpu_io_wdata),
 	.rdata(bak_rdata),
-	.dbg_word(12'd5), .dbg_q(bak_dbg_q),
+	.dbg_word(12'd5), .dbg_q(bak_dbg_q), .dbg_first(bak_first),
 	.dbg_w0(bak_w0), .dbg_writes(bak_writes)
 );
 wire [31:0] bak_dbg_q;
+wire [31:0] bak_first;
 
 m2_ioboard #(
 	// RESCALED TO clk_sys. These are measured in FRAMES -- status at 7 and
@@ -1838,7 +1839,11 @@ m2_diag #(.NWORDS(24)) u_diag
 	.words({ // 23 TRAM cell probe -- except Probe=chr0, which shows the backup
 	         // SRAM dword at byte 0x14: the settings the digits are printed
 	         // from. Sim reads 00030300 there and prints '3'.
-	         (status[16:14] == 3'd7) ? bak_dbg_q : {16'd0, tp_q},
+	         // Probe=chr0: live settings dword. Probe=row2: {read count,
+	         // low 24 bits of the FIRST value the game read from it this boot}
+	         // -- FF...FF means the draw consumed uninitialised settings.
+	         (status[16:14] == 3'd7) ? bak_dbg_q :
+	         (status[16:14] == 3'd5) ? bak_first : {16'd0, tp_q},
 	         // 22 THE LAST CHARACTER FETCH, verbatim. FFFFFFFF means the fetch is
 	         // reading memory nobody ever wrote -- one flat colour per palette
 	         // bank, which is the board's sky and ground. Anything varied means

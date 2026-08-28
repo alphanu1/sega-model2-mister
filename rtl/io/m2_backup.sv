@@ -43,6 +43,10 @@
 
 module m2_backup (
   input  logic        clk,
+  // FOR THE DEBUG LATCH ONLY. The memory arrays stay reset-free by design --
+  // backup survives a game reset -- but "first read of this boot" must re-arm
+  // on each reset to mean anything.
+  input  logic        rst_n,
   input  logic        sel,
   input  logic        we,
   input  logic [11:0] word,       // dword index, address[13:2]
@@ -50,6 +54,7 @@ module m2_backup (
   input  logic [31:0] wdata,
   input  logic [11:0] dbg_word,
   output logic [31:0] dbg_q,
+  output logic [31:0] dbg_first,
   output logic [31:0] rdata,
 
   // WHAT THE COPY ACTUALLY LANDED. The i960 copies the I/O board's identity
@@ -124,5 +129,27 @@ module m2_backup (
     dq2 <= b2[dbg_word]; dq3 <= b3[dbg_word];
   end
   assign dbg_q = {dq3, dq2, dq1, dq0};
+
+  // WHAT THE GAME'S FIRST READ OF THE SETTINGS DWORD ACTUALLY RETURNED. The
+  // board holds the correct 00030300 at menu time and still prints blanks, so
+  // the question is what value the DRAW consumed: this latches the rdata of
+  // the first read of word 5 after reset, plus a read counter. FFFFFFFF here
+  // with 00030300 in dbg_q means the draw ran before the settings were
+  // written; 00030300 here moves the fault downstream of the read.
+  logic        fr_taken;
+  logic [31:0] dbg_first_rd;
+  logic  [7:0] fr_cnt;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      fr_taken <= 1'b0; dbg_first_rd <= 32'd0; fr_cnt <= 8'd0;
+    end else if (sel && !we && word == 12'd5) begin
+      // rdata is registered one cycle behind `word`; by the time sel asserts
+      // for a dispatch the q's hold word 5 (the bridge holds the address a
+      // cycle ahead, same as the CPU read path relies on).
+      if (!fr_taken) begin fr_taken <= 1'b1; dbg_first_rd <= {q3, q2, q1, q0}; end
+      if (!(&fr_cnt)) fr_cnt <= fr_cnt + 8'd1;
+    end
+  end
+  assign dbg_first = {fr_cnt, dbg_first_rd[23:0]};
 
 endmodule
