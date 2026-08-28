@@ -4204,8 +4204,28 @@ a bulk clear, consistent with the normal menu teardown on the way to attract
 rather than with the board's selective fault, but the claim as stated in R64
 was wrong and runs must now go past 16M to say anything about blanking.
 
-*The open question, and the instrument for it.* Does our Z80 write the window
-ONCE at power-on, or repeatedly during play? Once is harmless given the game
-waits for the board; repeatedly is the fault. The core already counts this --
-overlay row 23, page 1, Probe "chr A" carries {reset edges, Z80 window write
-count, last window address} -- and it has never been read.
+*The window counter was read, and it cannot settle the question -- but it
+corrects a misreading that R63 and R64 were partly built on.* Page 1 / Probe
+"chr A" returned `05FF017F`: reset edges 5, window write count **0xFF
+SATURATED**, last window address 0x17F. The counter is 8 bits and two
+legitimate 128-byte exchanges reach 255 on their own, so saturation proves
+nothing about whether the Z80 keeps rewriting the window during play.
+
+More importantly: **the board's earlier `02FF017F` reading was THIS register,
+not the settings dword.** It decodes as reset edges 2, the same saturated
+window counter, the same last address 0x17F. The reading of it as "defaults
+and scan bytes interleaved in the settings" -- the observation the
+re-contamination theory in R63/R64 rested on -- was a misattribution of a
+probe value, and no board measurement of interleaved settings bytes has ever
+actually been taken. The lesson is the one R65 already paid for once: a probe
+whose row is shared must carry its own identity, or its readings will be
+attributed to whatever theory is current.
+
+*The instrument that does settle it.* MAME holds `00 03 03 00` at window
+offsets 0x114-0x117 and holds it stable; the question is what OUR firmware
+deposits there. Row 23, page 1, Probe "chr 3" now latches those four bytes as
+the Z80 writes them: `00030300` means the firmware writes real settings and
+the window is exonerated, `7FFF7FFF` means the RAM-test pattern is landing on
+the game's settings block. Unlike the counter it cannot saturate into
+ambiguity, and unlike the previous rows it is a direct comparison against a
+known oracle value.

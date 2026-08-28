@@ -1540,6 +1540,31 @@ always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
 	end
 end
 
+// WHAT THE Z80 PUTS IN THE SETTINGS BYTES OF THE WINDOW, which is the whole
+// question reduced to one word. MAME's real machine holds 00 03 03 00 at
+// window offsets 0x114-0x117 and holds it stable for hundreds of frames; our
+// board fills the window with the 7F FF RAM-test pattern. This latches the
+// bytes AS THE Z80 WRITES THEM, so it says what our I/O board actually
+// deposits rather than what survives:
+//
+//   00030300  the firmware writes real settings -- the window is not the fault
+//   7FFF7FFF  the RAM-test pattern lands on the game's settings block
+//
+// The existing window counter cannot answer this: it saturates at 255, and two
+// legitimate 128-byte exchanges reach that on their own.
+logic [31:0] zw_set;
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+	if (!mem_rst_n) zw_set <= 32'd0;
+	else if (zio_we && zio_addr >= 11'h114 && zio_addr < 11'h118) begin
+		case (zio_addr[1:0])
+			2'd0: zw_set[7:0]   <= zio_wdata;
+			2'd1: zw_set[15:8]  <= zio_wdata;
+			2'd2: zw_set[23:16] <= zio_wdata;
+			2'd3: zw_set[31:24] <= zio_wdata;
+		endcase
+	end
+end
+
 // Cabinet inputs, model2.cpp daytona bit order, active low. TEST and SERVICE
 // come from the OSD-mapped buttons; the gearbox sits in neutral.
 wire [7:0] iob_in0 = ~{3'b000, joystick_0[5], joystick_0[7], joystick_0[6],
@@ -2042,6 +2067,10 @@ m2_diag #(.NWORDS(24)) u_diag
 	         // exoneration (R64) made the least useful thing on this row.
 	         (status[18] && status[16:14] == 3'd0) ?
 	             {iob_in0, dp08_latch, dp08_wr_cnt} :
+	         // Page 1 / Probe "chr 3": the settings bytes as the Z80 writes
+	         // them. 00030300 matches MAME and exonerates the window;
+	         // 7FFF7FFF is the RAM-test pattern clobbering the deposit.
+	         (status[18] && status[16:14] == 3'd1) ? zw_set :
 	         (status[18] && status[16:14] == 3'd4) ?
 	             {rst_edges, zw_win_cnt, 5'd0, zw_last} :
 	         (status[18] && status[16:14] == 3'd5) ? {8'd0, vsw_cnt, vsw_data} :
