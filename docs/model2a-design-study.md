@@ -4059,10 +4059,17 @@ The game validates the block, rejects the garbage, writes defaults
 (commands 01/02), re-reads them clean in a later exchange, and the attract
 text renders — tram `8043` ('C') and `c033` ('3') at instruction ~2.03M, in
 both memory models, 198 V-blanks at true pacing. The board blanks exactly
-these characters. The one ordering the composition has not yet replicated is
-the board's own: the firmware image arrives LAST over ioctl, seconds after
-the game has parked on the exchange — `M2_FWLATE`, run in flight as this is
-written.
+these characters. The board's own ordering was then replicated too
+— firmware arriving last, the game already parked on the exchange
+(`M2_FWLATE=1000000`) — and it ALSO recovers and renders. Every simulated
+ordering recovers; the board does not. The live hypothesis follows from the
+board's probes: row 23 read the settings dword as `02FF017F`, defaults and
+scan bytes INTERLEAVED, which is the signature of ongoing re-contamination
+rather than a single lost boot exchange. The game re-runs the exchange every
+few frames forever; each one can race; one poisoned copy-back after attract
+begins blanks the digits on the next redraw. The sims stopped one clean
+exchange after recovery. Deep runs (6M instructions at true latency, 12M at
+fast pacing) now hunt a late re-contamination.
 
 Bench honesty items from the same session: the DPRAM dialogue logger read the
 even byte for both halves of a word (fixed — historical R-lines in dialogue
