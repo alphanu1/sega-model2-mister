@@ -40,6 +40,30 @@ Handshake sequence verified in `test_m2_ioboard` (status, flag, self-test at
 real 121 M-cycle constants); backup SRAM byte-lane correct, holds the game's
 own "S-RAM CHECK OK" status string, survives resets by design.
 
+### The digit race, and the instrument being built for it (R63)
+
+The exchange is deposit -> command -> firmware response -> copy-back. The
+board's copy-back beats the response: backup receives `7F FF 7F` (the Z80's
+input-scan pattern) instead of the settings. The composition wins this race
+because its C++ memory shortens the game's critical section; the board loses it
+under real SDRAM latency on top of CPI 3.95. The firmware's own primitives
+(disassembled: `0x7A4-0x8D0`) wait on 315-5338A status bits 0/3 with timeouts
+and a retry budget at Z80 RAM `0x5803` -- MB8421 BUSY arbitration our model
+replaces with a constant `0x08`.
+
+**Next build: `m2_boot_harness` with `REAL_MEM=1`** -- replace the C++ memory
+with `sim/mem/m2_sdram_x2_harness.sv` instantiated whole (it is a complete
+subsystem: x2 adapter + m2_sdram + sdram_model, fast clock in, slow ports out,
+and it generates its own clk_slow). Wiring: bridge `sd_*` -> p1, char fetch ->
+p3 (+`GAME_CHAR` base), ROM image streamed through the wr port before reset
+release, p0/p2/p4 idle, harness `clk_mem` replaced by the subsystem's
+`clk_slow` under the parameter, tb drives a 96 MHz clock at base half-period 1.
+Its header's warning is on-theme: the 2:1 read-data bypass "failed almost
+exactly half of all reads" and is invisible in single-domain tests. When the
+game side runs at true latency the sim should LOSE the race like the board --
+then the fix (honest BUSY/status modelling, or whatever the reproduced race
+demands) gets built against seconds-long runs.
+
 ### Open items
 1. **Two menu digits print as green spaces** — localised to the settings dword
    at backup byte `0x14` (sim: `00030300` → prints '3'); the probe reading it
