@@ -4535,3 +4535,43 @@ summary said "No serial", and the summary is what governed.
 *Next:* channel A repointed from character writes to TILEMAP writes
 (`ocb_tram_we`, tagged 'T'), which shows directly what the CPU puts in the map
 and whether the attract screen's tilemap is ever written at all.
+
+**R74 — the CPU writes zeros into the tilemap because what it READS is zero.
+The renderer was never at fault, and neither was the tilemap.** The serial
+channel, once its two self-inflicted faults were fixed, gave the answer in one
+capture.
+
+*The measurement.* 4,185 sampled tilemap writes across a boot:
+
+  00000000   4,175 times
+  00003000       3      (tile 12288 -- simulation's top background tile)
+  00000020       3      (tile 32    -- simulation's most common index)
+  00008020       2
+  00003D8D       2      (tile 15757 -- simulation's third)
+
+The CPU writes the CORRECT values when it has them, and zeros the rest of the
+time. Simulation fills 12,289 non-zero cells over 1,651 distinct indices; the
+board writes ~99.8% zeros. Every subsystem downstream -- the renderer, the char
+fetch, the glyph cache, the tilemap memory, the palette -- was working
+faithfully on data that was zero before it ever arrived.
+
+*Two instrument failures that each looked like a finding, recorded because they
+cost more than the bug.* The channel first reported ZERO tilemap writes across
+a full boot, which read as "the game never writes the map". It was a single
+shared throttle: character fetches fire thousands of times a second, tilemap
+writes rarely, so the fetches took every slot and the writes were counted as
+drops. Then, tapped combinationally onto `ocb_tram_we`/`ocb_addr`/`ocb_din`,
+the streamer loaded the tilemap WRITE path into the M10K and the board went
+BLACK -- intermittently, rendering on the first boot after that build and not
+on later ones. Restoring the previous core brought the picture back, which is
+what identified it. The streamer already refused to STALL, on the principle
+that an instrument must not change what it measures; the same principle applied
+to fanout and had not been honoured. The tap is now registered.
+
+*Where the fault must be.* One step further upstream: whatever the game reads
+to build its tilemap returns zero on hardware and real data in simulation. That
+is the same shape as the character region -- correct addresses, correct code,
+empty source. Channel A now latches every CPU read and, on a tilemap write of
+zero, emits the address and data of the read that preceded it. That converts
+"the map is blank" into "the CPU read <address> and got <value>", which names
+the region instead of the symptom.

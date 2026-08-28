@@ -1665,13 +1665,36 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin tw_v <= 1'b0; tw_a <= '0; tw_d <= '0; end
 	else begin tw_v <= ocb_tram_we; tw_a <= ocb_addr; tw_d <= ocb_din; end
 end
-wire        uart_a_valid = tw_v;
+
+// WHAT DID THE CPU READ, JUST BEFORE IT WROTE A BLANK TILE?
+//
+// The board writes 00000000 into the tilemap 4,175 times out of 4,185 sampled,
+// and writes the CORRECT values (0x3000, 0x0020, 0x3D8D -- simulation's three
+// most common indices) the other ten times. The renderer, the fetch, the caches
+// and the memory are all doing their jobs: the CPU is faithfully storing zeros
+// because what it reads is zero. So stop watching the write and watch its
+// SOURCE.
+//
+// Every CPU read is latched; a tilemap write of zero then emits the address and
+// data of the read that preceded it. That turns "the map is blank" into "the
+// CPU read <this address> and got <this>", which names the region at fault
+// instead of the symptom.
+logic [24:0] rd_a;
+logic [31:0] rd_d;
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+	if (!mem_rst_n) begin rd_a <= '0; rd_d <= '0; end
+	else if (cpu_sd_req && !cpu_sd_we && p_ack[1]) begin
+		rd_a <= 25'(cpu_sd_addr);
+		rd_d <= p_dout[1][31:0];
+	end
+end
+wire        uart_a_valid = tw_v && (tw_d == 16'd0);
 wire        uart_b_valid = char_ack;
 wire [31:0] uart_dropped;
 
 m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	.clk(clk_sys), .rst_n(mem_rst_n),
-	.a_valid(uart_a_valid), .a_addr({17'd0, tw_a}), .a_data({16'd0, tw_d}),
+	.a_valid(uart_a_valid), .a_addr({7'd0, rd_a}), .a_data(rd_d),
 	.b_valid(uart_b_valid), .b_addr({7'd0, cf_addr}),          .b_data(char_data),
 	.a_tag(8'h54), .b_tag(8'h52),          // 'T' tilemap write, 'R' char fetch
 	.enable(1'b1),
