@@ -78,6 +78,10 @@ static uint64_t g_seq_every = 1;   // M2_FRAME_EVERY: keep every Nth frame
 static std::map<uint32_t,uint64_t> g_rd_unbacked;
 static uint64_t g_tw_in_vbl = 0, g_tw_out_vbl = 0, g_ss_in = 0, g_ss_out = 0;
 static uint16_t g_tram[32768];
+static std::map<uint32_t, std::map<uint16_t,int>> g_tram_ip;
+static std::map<uint32_t,int> g_prof;
+static bool g_draw_seen = false;
+static uint64_t g_draw_insn = 0;
 static bool     g_tram_seen[32768];
 static uint16_t g_pal[8192];
 static bool     g_pal_seen[8192];
@@ -719,6 +723,25 @@ int main(int argc, char **argv) {
         if (since < 78725) ++g_ss_in; else ++g_ss_out;
       }
     }
+    // WHICH CODE WRITES THE TILEMAP. The board shows a clear loop at 0001A15C
+    // and ONE fill at 0000D0B6 writing tile 0x3000, and nothing else. If the
+    // same run here has writers the board never executes, those IPs name the
+    // routines that do not run on hardware.
+    if (d->obs_tram_we) g_tram_ip[(uint32_t)d->dbg_ip][d->obs_oc_din & 0xffff]++;
+    // THE SAME PROFILE THE BOARD NOW TAKES, so the two histograms compare.
+    // Sampling the IP on a free-running divider rather than per instruction
+    // matches what hardware can afford and keeps the populations comparable.
+    if ((mem_edges & 0xFFFF) == 0) g_prof[(uint32_t)d->dbg_ip & 0xFFFFFF00]++;
+    // THE CALL PATH INTO THE BACKGROUND DRAWER. 00018EA4 writes 23,769 tiles
+    // here and NEVER executes on the board, which runs only the per-frame
+    // scroll update. Whatever gates it is the fault, so record the instruction
+    // stream leading to its first write.
+    if (d->obs_tram_we && (uint32_t)d->dbg_ip == 0x00018EA4 && !g_draw_seen) {
+      g_draw_seen = true;
+      g_draw_insn = (uint64_t)d->dbg_acc;
+      std::printf("      BACKGROUND DRAWER first write at insn %llu\n",
+                  (unsigned long long)g_draw_insn);
+    }
     if (d->obs_tram_we && d->obs_oc_addr < 32768) {
       g_tram[d->obs_oc_addr]      = d->obs_oc_din;
       g_tram_seen[d->obs_oc_addr] = true;
@@ -962,6 +985,36 @@ int main(int argc, char **argv) {
       idx_hist[w & 0x3FFF]++;
       attr_hist[uint16_t(w >> 14)]++;
     }
+  {
+    std::printf("  IP PROFILE (256-byte buckets, top 12):\n");
+    std::vector<std::pair<int,uint32_t>> v;
+    for (auto &kv : g_prof) v.push_back({kv.second, kv.first});
+    std::sort(v.rbegin(), v.rend());
+    int tot = 0; for (auto &p2 : v) tot += p2.first;
+    for (size_t i = 0; i < v.size() && i < 12; ++i)
+      std::printf("    %08x  %6d  %5.1f%%\n", v[i].second, v[i].first,
+                  100.0 * v[i].first / (tot ? tot : 1));
+  }
+  {
+    std::printf("  TILEMAP WRITERS (ip -> writes, distinct values):\n");
+    std::vector<std::pair<int,uint32_t>> v;
+    for (auto &kv : g_tram_ip) {
+      int n = 0; for (auto &d : kv.second) n += d.second;
+      v.push_back({n, kv.first});
+    }
+    std::sort(v.rbegin(), v.rend());
+    for (size_t i = 0; i < v.size() && i < 12; ++i) {
+      auto &m = g_tram_ip[v[i].second];
+      std::printf("    ip %08x  %7d writes, %3zu distinct values, top:",
+                  v[i].second, v[i].first, m.size());
+      std::vector<std::pair<int,uint16_t>> d;
+      for (auto &kv : m) d.push_back({kv.second, kv.first});
+      std::sort(d.rbegin(), d.rend());
+      for (size_t j = 0; j < d.size() && j < 3; ++j)
+        std::printf(" %04x(x%d)", d[j].second, d[j].first);
+      std::printf("\n");
+    }
+  }
     std::printf("  TILEMAP CENSUS: %d non-zero cells, %zu distinct indices, "
                 "%zu distinct attributes\n",
                 nonblank, idx_hist.size(), attr_hist.size());

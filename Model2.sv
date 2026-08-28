@@ -1688,15 +1688,96 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		rd_d <= p_dout[1][31:0];
 	end
 end
-wire        uart_a_valid = tw_v && (tw_d == 16'd0);
+// WHICH CODE WRITES WHAT. The "last read" latch caught instruction fetches --
+// 0x5000 returning 8A283000, three thousand times -- because fetches share the
+// port. It did establish something real though: the game runs a CLEAR loop,
+// writing zeros on purpose, which is what you do before filling a tilemap.
+//
+// So the question is not "why zeros" but "does the FILL ever run". Emitting the
+// instruction pointer beside the data separates the two loops: the clear will
+// have one IP and write 0000, the fill another and write real indices. If only
+// one IP ever appears, the fill never runs at all.
+logic [31:0] tw_ip;
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+	if (!mem_rst_n) tw_ip <= '0;
+	else            tw_ip <= cpu_dbg_ip;
+end
+// TRAPS GET THE PRIORITY CHANNEL.
+//
+// The i960 core implements exactly the opcode set the REFERENCE implements;
+// anything MAME reaches fatalerror on is trapped LOUDLY rather than
+// implemented blind, so "a game that needs more announces itself instead of
+// drifting" (docs/p1-i960-spike.md S1). A trap would explain the board
+// precisely: the clear loop runs, one fill runs, and the remaining drawing
+// routines never happen.
+//
+// So watch for it. A trap emits the IP it happened at and the opcode that
+// caused it -- which either names an instruction to implement, or rules the
+// whole question out. Rising edge only: a held trap must not flood the wire.
+logic trap_d;
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+	if (!mem_rst_n) trap_d <= 1'b0;
+	else            trap_d <= cpu_trap;
+end
+wire trap_edge = cpu_trap && !trap_d;
+
+// A PROFILER, WHICH IS WHAT THIS SHOULD HAVE HAD FROM THE START.
+//
+// The board reaches 0x5368-0x53E0, runs 0x1CE38 four times where simulation
+// runs it 18,816, and never reaches the background drawer at all. That is not
+// "blocked at a point" -- it is doing far less work everywhere, and the way to
+// see that is to sample WHERE THE CPU IS rather than guess from what it writes.
+//
+// Free-running sample of the instruction pointer, one every ~1 ms. Against the
+// same histogram from simulation it shows directly which loop the board sits
+// in and simulation does not.
+logic [15:0] prof_div;
+logic        prof_tick;
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+	if (!mem_rst_n) begin prof_div <= '0; prof_tick <= 1'b0; end
+	else begin
+		prof_div  <= prof_div + 16'd1;
+		prof_tick <= (prof_div == 16'd0);
+	end
+end
+wire        uart_a_valid = prof_tick || trap_edge;
+// WHAT THE STUCK LOOP READS.
+//
+// The board sits in the counted loop at 0x1BA8-0x1BCC and never appears in the
+// 0x1Axx code that simulation enters it from. A counted loop that does not
+// terminate has a wrong count, and the count comes from memory -- so capture
+// every CPU read the routine makes, with the value it got back. Simulation
+// runs this loop 39 times and leaves.
+logic        rd_v;
+logic [24:0] rd_ad;
+logic [31:0] rd_dt;
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+	if (!mem_rst_n) begin rd_v <= 1'b0; rd_ad <= '0; rd_dt <= '0; end
+	else begin
+		rd_v  <= cpu_sd_req && !cpu_sd_we && p_ack[1]
+		         && (cpu_dbg_ip[31:8] == 24'h00001B);
+		rd_ad <= 25'(cpu_sd_addr);
+		rd_dt <= p_dout[1][31:0];
+	end
+end
+wire        uart_b2_valid = rd_v;
 wire        uart_b_valid = char_ack;
 wire [31:0] uart_dropped;
 
 m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	.clk(clk_sys), .rst_n(mem_rst_n),
-	.a_valid(uart_a_valid), .a_addr({7'd0, rd_a}), .a_data(rd_d),
-	.b_valid(uart_b_valid), .b_addr({7'd0, cf_addr}),          .b_data(char_data),
-	.a_tag(8'h54), .b_tag(8'h52),          // 'T' tilemap write, 'R' char fetch
+	.a_valid(uart_a_valid), .a_addr(cpu_dbg_ip),
+	// THE RETIRED-INSTRUCTION COUNT RIDES ALONG WITH THE IP.
+//
+// The profile says 91% of the board's time goes on the four memory
+// instructions of one loop -- ld/st stalling, not spinning. If the CPU is
+// simply too slow, the routines that "never run" have merely not been reached:
+// simulation finishes this initialisation in 15.9 M instructions. Two
+// consecutive samples give the instruction rate directly, which settles
+// whether this is a wrong branch or a slow machine.
+	.a_data(cpu_dbg_acc),
+	.b_valid(uart_b2_valid), .b_addr({7'd0, rd_ad}), .b_data(rd_dt),
+	.a_tag(8'h58), .b_tag(8'h4C),          // 'X' profile, 'L' loop read
 	.enable(1'b1),
 	.tx(UART_TXD), .dbg_dropped(uart_dropped)
 );

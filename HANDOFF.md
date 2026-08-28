@@ -4465,3 +4465,33 @@ defect found here was in code that had a passing test. The frame path had a unit
 test that could not observe the bug by construction; `cvtri` had a test that
 skipped the failing inputs by construction; the CPI had a mix missing an entire
 instruction class. **Ask what a passing test cannot see, not whether it passes.**
+
+### Queued: the i960 clock, and the throughput deficit behind it
+
+Two speed deficits stack, measured 2026-08-28:
+
+  real i960   25 MHz, CPI ~1     25.0 M insn/s
+  our core    24 MHz, CPI 3.95    6.1 M insn/s   4.1x slower  (R55)
+  MEASURED on the board           1.2 M insn/s   5.2x slower again
+  total                                          21x slower than hardware
+
+24 MHz is not a rounding of 25: 96, 32 and 25 cannot share a VCO, and 960
+gives exact divisors for 96 (/10), 48 (/20), 32 (/30), 24 (/40). See
+rtl/pll/pll.v.
+
+BUMP THE i960 TO clk_sys (48 MHz). Because our CPI is 4x wrong, matching
+the CLOCK guarantees the THROUGHPUT is wrong -- and a game's real-time
+behaviour depends on instructions retired per second, not the clock
+label. R63's digit race was lost precisely because our CPU was too slow
+against a free-running peripheral. 48 MHz halves the deficit and costs
+nothing new: clk_sys already exists, from the same VCO, and closes timing
+for everything else. The open question is whether the i960 itself closes
+at 48 -- it has only ever been constrained to 24.
+
+The other 5x is memory stalls: 91% of profile samples in the stuck loop
+land on loads and stores. Candidates are the bridge turning every 32-bit
+access into two 16-bit SDRAM transactions plus a multi-state walk, the
+five-port arbiter, and an interface with one working capture depth.
+
+NEITHER FIXES THE CURRENT BUG. The board executed 117.6 M instructions
+against the 15.9 M simulation needs to draw attract, and drew nothing.
