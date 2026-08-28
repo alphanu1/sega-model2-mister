@@ -55,8 +55,8 @@ module m2_boot_harness #(
   input  logic  [3:0] irq,
   // I/O firmware load; fw_ready gates the Z80 out of reset.
   input  logic        fw_we,
-  input  logic [13:0] fw_addr,
-  input  logic  [7:0] fw_data,
+  input  logic [12:0] fw_addr,
+  input  logic [15:0] fw_data,
   input  logic        fw_ready,
 
   // ---- the renderer's own SDRAM port, answered in C++ like the CPU's.

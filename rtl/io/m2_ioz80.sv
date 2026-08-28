@@ -54,10 +54,13 @@ module m2_ioz80 #(
   input  logic        clk,
   input  logic        rst_n,
 
-  // Firmware load, byte-wide (ioctl index 1 in Model2.sv).
+  // Firmware load, 16-BIT WIDE. hps_io runs WIDE=1: ioctl_addr advances by 2
+  // and each ioctl_wr carries two bytes. The first byte-wide version stored
+  // only the even bytes -- half a firmware, a rogue Z80, and a boot that hangs
+  // exactly like a cabinet with a corrupt EPROM. fw_addr is the WORD address.
   input  logic        fw_we,
-  input  logic [13:0] fw_addr,
-  input  logic  [7:0] fw_data,
+  input  logic [12:0] fw_addr,
+  input  logic [15:0] fw_data,
 
   // Cabinet inputs, ACTIVE LOW at rest (0xff = nothing pressed), matching
   // model2.cpp's port definitions: IN0 = {VR3,VR2,VR1,START1,SERVICE,TEST,
@@ -141,7 +144,7 @@ module m2_ioz80 #(
   // ------------------------------------------------------------ ROM and RAM
   // Registered reads settle within one 48 MHz cycle; the Z80 samples many
   // cycles later under CEN pacing, so no wait states are needed.
-  (* ramstyle = "M10K" *) logic [7:0] fw  [16384];
+  (* ramstyle = "M10K" *) logic [15:0] fw [8192];
   (* ramstyle = "M10K" *) logic [7:0] ram [8192];
   // NEGEDGE READS, and this is load-bearing. tv80 drives A on a rising CEN
   // edge and samples data against later rising edges of the same paced clock;
@@ -150,11 +153,18 @@ module m2_ioz80 #(
   // Reading on the falling edge puts fresh data on the bus half a cycle after
   // the address, which is the async-ROM shape every T80-family design expects,
   // and M10K clocks on either edge without complaint.
-  logic [7:0] fw_q, ram_q;
+  logic [15:0] fw_w;
+  logic  [7:0] ram_q;
+  logic  [7:0] fw_q;
+  logic        fw_a0;
   always_ff @(posedge clk) begin
     if (fw_we) fw[fw_addr] <= fw_data;
   end
-  always_ff @(negedge clk) fw_q <= fw[A[13:0]];
+  always_ff @(negedge clk) begin
+    fw_w  <= fw[A[13:1]];
+    fw_a0 <= A[0];
+  end
+  assign fw_q = fw_a0 ? fw_w[15:8] : fw_w[7:0];
   always_ff @(posedge clk) begin
     if (wr_stb && aw_l[15:13] == 3'b010) ram[aw_l[12:0]] <= dw_l;   // 0x4000-0x5fff
   end

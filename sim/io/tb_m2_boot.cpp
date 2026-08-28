@@ -288,17 +288,31 @@ int main(int argc, char **argv) {
   // not be (its fixed-time replay broke the interlock and the input scan
   // swept the game's settings deposit).
   d->fw_we = 0; d->fw_addr = 0; d->fw_data = 0; d->fw_ready = 0;
+  // M2_FWLATE=N defers the firmware load to instruction N, replicating the
+  // board's ordering: the MRA's later parts arrive after rom_loaded has
+  // released the i960, so the Z80 wakes mid-boot there, not before reset.
+  uint64_t fw_late = 0;
+  if (const char *fl = std::getenv("M2_FWLATE"))
+    fw_late = std::strtoull(fl, nullptr, 10);
+  std::vector<uint8_t> fw_pending;
   if (const char *fp = std::getenv("M2_IOFW")) {
     FILE *ff = std::fopen(fp, "rb");
     if (ff) {
       std::vector<uint8_t> fwb(16384, 0xff);
       size_t fn = std::fread(fwb.data(), 1, fwb.size(), ff);
       std::fclose(ff);
-      for (int a = 0; a < 16384; ++a) {
-        d->fw_we = 1; d->fw_addr = a; d->fw_data = fwb[a]; tick();
+      if (fw_late == 0) {
+        for (int a = 0; a < 8192; ++a) {
+          d->fw_we = 1; d->fw_addr = a;
+          d->fw_data = fwb[a*2] | (fwb[a*2+1] << 8); tick();
+        }
+        d->fw_we = 0; d->fw_ready = 1;
+        std::printf("  I/O FIRMWARE loaded: %zu bytes -- the Z80 board is live\n", fn);
+      } else {
+        fw_pending = fwb;
+        std::printf("  I/O FIRMWARE held for late load at insn %llu\n",
+                    (unsigned long long)fw_late);
       }
-      d->fw_we = 0; d->fw_ready = 1;
-      std::printf("  I/O FIRMWARE loaded: %zu bytes -- the Z80 board is live\n", fn);
     }
   }
   d->rst_n = 1;
@@ -379,6 +393,14 @@ int main(int argc, char **argv) {
   bool warm_done = false;
 
   while (d->dbg_acc < max_instr || (warm_at && !warm_done)) {
+    if (!fw_pending.empty() && d->dbg_acc >= fw_late) {
+      for (int a = 0; a < 8192; ++a) {
+        d->fw_we = 1; d->fw_addr = a;
+        d->fw_data = fw_pending[a*2] | (fw_pending[a*2+1] << 8); tick();
+      }
+      d->fw_we = 0; d->fw_ready = 1; fw_pending.clear();
+      std::printf("  I/O FIRMWARE late-loaded at insn %u\n", (unsigned)d->dbg_acc);
+    }
     if (warm_at && !warm_done && d->dbg_acc >= warm_at) {
       std::printf("  === WARM RESET at insn %u ===\n", (unsigned)d->dbg_acc);
       d->rst_n = 0;

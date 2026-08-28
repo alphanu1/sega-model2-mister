@@ -1457,8 +1457,8 @@ m2_ioz80 #(.CEN_DIV(12)) u_ioz80 (
 	// First 16 KB only: the EPROM is 64 KB, the Z80 maps 0x0000-0x3fff, and a
 	// wrapping fw_addr[13:0] would leave the LAST quarter in the ROM.
 	.fw_we(fw_dl && ioctl_wr && (ioctl_addr < 27'd16384)),
-	.fw_addr(ioctl_addr[13:0]),
-	.fw_data(ioctl_addr[0] ? ioctl_dout[15:8] : ioctl_dout[7:0]),
+	.fw_addr(ioctl_addr[13:1]),
+	.fw_data(ioctl_dout),
 	.in0(iob_in0), .in1(iob_in1), .in2(8'hFF),
 	.adc0(8'h80), .adc1(8'h20), .adc2(8'h20), .adc3(8'h80),
 	.z_we(zio_we), .z_addr(zio_addr), .z_wdata(zio_wdata), .z_rdata(zio_rdata),

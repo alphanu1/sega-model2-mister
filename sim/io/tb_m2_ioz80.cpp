@@ -53,8 +53,9 @@ int main(int argc, char **argv) {
   // Load the first 16 KB while in reset.
   d->rst_n = 0; d->fw_we = 0;
   for (int i = 0; i < 4; ++i) tick();
-  for (int a = 0; a < 16384; ++a) {
-    d->fw_we = 1; d->fw_addr = a; d->fw_data = fw[a]; tick();
+  for (int a = 0; a < 8192; ++a) {
+    d->fw_we = 1; d->fw_addr = a;
+    d->fw_data = fw[a*2] | (fw[a*2+1] << 8); tick();
   }
   d->fw_we = 0;
   for (int i = 0; i < 8; ++i) tick();

@@ -18,8 +18,8 @@ module m2_ioz80_harness #(
   input  logic        rst_n,
 
   input  logic        fw_we,
-  input  logic [13:0] fw_addr,
-  input  logic  [7:0] fw_data,
+  input  logic [12:0] fw_addr,
+  input  logic [15:0] fw_data,
 
   input  logic  [7:0] in0, in1, in2,
   input  logic  [7:0] adc0, adc1, adc2, adc3,
