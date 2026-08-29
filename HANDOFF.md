@@ -1,6 +1,103 @@
 # Handoff
 
-**Updated:** 2026-08-29, after the I/O board session. `make test` green at 26.
+**Updated:** 2026-08-29, after the attract-mode session. `make test` green at 27.
+
+## ATTRACT MODE RENDERS, AND ANIMATES
+
+Daytona USA's attract screen draws on the DE10-Nano from the real i960 running
+the real game code, with the real Z80 I/O board firmware, and the INSERT COIN
+prompt blinks. map 2 holds 1,356 distinct artwork tiles against MAME's 1,274.
+
+### The blocker was a byte store landing in all four lanes
+
+The i960 replicates a stored byte across the word and relies on the byte
+ENABLES to pick a lane -- correct i960 behaviour -- and every lane was written.
+So the loop count at work RAM 0x501084 read 0x27272727 instead of 0x27.
+
+0x27 is 39, exactly MAME's value and exactly the passes simulation makes. At
+nine instructions a pass and 1.16 M instructions/s, 656 million passes is about
+85 MINUTES. That is why the screen appeared after a night and never sooner, and
+why a restart always lost it. Never intermittent -- arithmetic.
+
+Every hop that carries the enables verifies: the CPU asserts be=0001, the bridge
+forwards be=01 (measured on the board), the x2 adapter passes them through, the
+controller drives sd_dqm = ~be, the pins are assigned and constrained, and
+simulation gets all four lanes right against the device model. Bypassing the
+data cache changes nothing. That leaves the SDRAM module -- DQM tied low is
+common on these boards and would look exactly like this, invisible to every test
+we own because they all test the FPGA.
+
+**The Model 1 project reached the same conclusion independently**, on the same
+hardware: its newest commit is "Read-modify-write partial SDRAM writes: no byte
+mask reaches the device".
+
+So partial writes now read, merge in the fabric, and write back full width. No
+mask reaches the device. Costs 2.3%. Study R82/R84.
+
+### Also fixed this session
+
+| what | measured |
+|---|---|
+| I/O board DIP multiplex (R76) | the firmware throws that switch 24,948 times a minute; we answered with controller state |
+| MSM6253 shifted a bit early (R77) | every analog byte was doubled; scan output now byte-identical to MAME |
+| glyph cache had NO invalidation | added, per-line -- it served pre-upload zeros |
+| glyph cache indexed an always-zero bit | half the M10K was unreachable; 61.4% -> 82.6% |
+| glyph cache line was half a burst | 82.6% -> 93.56%; overruns 27.1 -> 6.99 per frame |
+| CPU had no data cache | 2 KB at 99.57%, sized from an 813,751-address trace |
+| bridge crossed 48/24 with synchronisers | same PLL, exact 2:1 -- halved. CPI 22.67 -> 17.16, 1.32x |
+
+`tools/i960-datadiff.sh` now reports tile RAM, char RAM and palette all
+**IDENTICAL to MAME**, byte for byte.
+
+### Sound: started
+
+The serial link between the main board and the sound board is built and
+verified against MAME's own byte stream (it emits exactly 59 bytes over attract
+mode). daytona93's sound board is the MODEL 1 board -- 68000 + YM3438 + TWO
+MultiPCMs -- not the SCSP the study budgets. Sized by synthesising each
+candidate standalone on this part:
+
+    fx68k                2,100 ALM   6 M10K   already in tree
+    jt12 (YM3438)          777 ALM   8 M10K   meathax/s32, GPL-3
+    s32_multipcm x2      4,484 ALM   0 M10K   meathax/s32, GPL-3
+    68K work RAM 16 KB       ~0     13 M10K
+    total               ~7,660 ALM  ~27 M10K
+
+Study §5.5 budgets 4,164 for "SCSP + 68000", which is the wrong board and 3,496
+ALM light. The risk moves the other way: §5.3 calls sound "high risk -- must be
+written", and for this board the cores exist and are licence-compatible.
+
+### Open
+
+- **The pixel-exact frame test fails by 173,299 of 190,464 pixels**, identically
+  with two line-buffer banks and four, so it is pre-existing. The data feeding
+  it is byte-perfect, so this is the renderer or the comparison's frame
+  alignment. Best-posed open question.
+- ~7 overruns per frame remain (1.8% of lines). Four line buffers were written
+  and PARKED: m2-framediff.sh measures burstiness at 1.87x against its own 2x
+  threshold for "buffering helps", and 8.3% memory wait is not a starved engine.
+  Parked copy in the scratchpad; R85 records the counter bug it must fix first.
+- Core sequencing is now 8.23 of the 17.16 CPI -- memory is no longer the
+  majority cost.
+
+### Instrument failures this session, because they cost more than the bugs
+
+Five, all the same shape -- the instrument answered a different question than
+the one asked:
+
+- a capture whose payload was not gated by its own strobe: 128 lines of a flag
+  poll wore a window read's clothes
+- a channel firing thousands of times a second starved the prioritised one to
+  zero, which read as "the game never touches the window"
+- a per-write census sampled one write per burst, always the first: 99.81% zero
+  where a counter said 35% non-zero
+- a self-test that hijacked port 2, which the copy engine owns, and BROKE THE
+  BOARD
+- a saturating counter read as a rate: "overruns have stopped" when they had not
+
+**Standing rule: prefer a counter in RTL to a sampled stream, and never take a
+port another master owns.**
+
 
 ## THE ATTRACT-SCREEN HUNT: two real faults found and fixed on hardware
 
