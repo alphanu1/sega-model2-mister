@@ -328,7 +328,13 @@ int main(int argc, char **argv) {
       g_hb_p = d->vid_hb; g_vb_p = d->vid_vb;
     }
     if (v && !vid_prev) { ce_tog ^= 1; d->ce_pix = ce_tog; }
-    d->clk_mem = m; d->clk_vid = v; d->clk_cpu = c;
+    // EXPERIMENT (M2_SAMECLK=1): drive the CPU from the memory clock, which
+    // collapses the four-phase handshake to a same-domain one. This measures the
+    // CEILING for moving the i960 into clk_sys before committing to the refactor:
+    // it also doubles the CPU clock, so the clock-enable version -- which keeps
+    // 24 MHz -- is worth roughly half of whatever this shows.
+    static const bool same_clk = std::getenv("M2_SAMECLK") != nullptr;
+    d->clk_mem = m; d->clk_vid = v; d->clk_cpu = same_clk ? m : c;
     d->eval();
     d->clk96 = int(base_t & 1);
     if (real_mem) {
@@ -518,7 +524,9 @@ int main(int argc, char **argv) {
   // very slow accesses or many quick ones, and those are opposite fixes: the
   // first is the SDRAM path, the second is a data cache. Counting completed
   // transactions separates them.
-  uint64_t prof_txn = 0;
+  FILE *dtr = nullptr;
+  if (const char *dt = std::getenv("M2_DTRACE")) dtr = std::fopen(dt, "w");
+  uint64_t prof_txn = 0, prof_txn_wr = 0, prof_wait_wr = 0;
   int prof_ack_prev = 0;
   // WHICH STATE EATS THE 18.5 CYCLES? The sequencer is
   // IDLE,LO,LO_W,HI,HI_W,RDB,IOW,DONE and obs_mstate carries st in bits 2:0.
@@ -550,7 +558,19 @@ int main(int argc, char **argv) {
       ++prof_req;
       if (!d->obs_bus_ack) ++prof_waiting;
     }
-    if (d->obs_bus_ack && !prof_ack_prev) ++prof_txn;
+    if (d->obs_bus_ack && !prof_ack_prev) {
+      ++prof_txn;
+      if (d->obs_bus_we) ++prof_txn_wr;
+      // DATA ADDRESS TRACE, for modelling a data cache offline before building
+      // one. The same method sized the instruction cache and killed that plan
+      // for the cost of a text file instead of a Quartus run.
+      if (dtr && !d->obs_bus_we) std::fprintf(dtr, "%08x\n", (unsigned)d->obs_bus_addr);
+    }
+    // A WRITE NEED NOT BLOCK. Reads must: the instruction wants the value.
+    // Writes only need to be ordered, so every cycle spent waiting on one is a
+    // cycle a posted-write buffer would give back. Counted separately because
+    // that is the size of the prize.
+    if (d->obs_bus_req && !d->obs_bus_ack && d->obs_bus_we) ++prof_wait_wr;
     prof_ack_prev = d->obs_bus_ack;
     ++prof_st[d->obs_mstate & 7];
     if (pctr && d->dbg_acc != pc_acc_prev) {
@@ -1358,6 +1378,18 @@ int main(int argc, char **argv) {
                   " %.1f cycles of wait each\n",
                   (unsigned long long)prof_txn, double(prof_txn)/double(insns),
                   prof_txn ? double(prof_waiting)/double(prof_txn) : 0.0);
+      std::printf("    of which WRITES     %12llu   %5.1f%%   waiting on them:"
+                  " %llu cycles -> %.2f of the CPI\n",
+                  (unsigned long long)prof_txn_wr,
+                  100.0*double(prof_txn_wr)/double(prof_txn ? prof_txn : 1),
+                  (unsigned long long)prof_wait_wr,
+                  double(prof_wait_wr)/double(insns));
+      {
+        const double h = d->obs_dc_hits, m = d->obs_dc_miss;
+        std::printf("    DATA CACHE          hits %.0f  misses %.0f  hit rate %.2f%%"
+                    "   (modelled 97.86%% on reads alone)\n", h, m,
+                    (h+m) ? 100.0*h/(h+m) : 0.0);
+      }
       static const char *ST[8]={"IDLE","LO","LO_W","HI","HI_W","RDB","IOW","DONE"};
       std::printf("    bridge sequencer, cycles in each state:\n");
       for (int i = 0; i < 8; ++i)
@@ -1367,6 +1399,7 @@ int main(int argc, char **argv) {
                     prof_txn ? double(prof_st[i])/double(prof_txn) : 0.0);
     }
   }
+  if (dtr) { std::fclose(dtr); std::printf("  data address trace written\n"); }
   if (out) { std::fclose(out); std::printf("  PC stream written to %s\n", outfile); }
   if (charstream) { std::fclose(charstream); std::printf("  char write stream written\n"); }
   std::printf("%s\n", fail ? "FAIL" : "PASS");

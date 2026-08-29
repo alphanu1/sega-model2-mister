@@ -165,6 +165,8 @@ module m2_boot_harness #(
   output logic [31:0] dbg_rf_addr,
   output logic        dbg_rf_we,
   output logic [31:0] dbg_rf_wdata,
+  output logic [31:0] obs_dc_hits,
+  output logic [31:0] obs_dc_miss,
   output logic  [7:0] obs_mstate,     // {0,0,sd_ack,ack_mem,req_mem,st[2:0]}
   // Readable so the testbench can dump what the CPU actually built and compare
   // it against MAME's tilemap and palette rather than against a hope.
@@ -370,6 +372,7 @@ module m2_boot_harness #(
   wire [31:0] sd2_dout_i = REAL_MEM ? rm_p3_dout[31:0] : sd2_dout;
 
   m2_cpu_bridge #(.AW(AW), .BOARD_2A(1'b0)) u_bridge (
+    .dbg_dc_hits(obs_dc_hits), .dbg_dc_miss(obs_dc_miss),
     .char_wr(), .char_wr_addr(),
     .clk_cpu(clk_cpu), .rst_n_cpu(rst_n),
     .bus_req(bus_req), .bus_we(bus_we), .bus_addr(bus_addr), .bus_be(bus_be),

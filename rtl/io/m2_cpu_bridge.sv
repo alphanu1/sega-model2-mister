@@ -147,7 +147,13 @@ module m2_cpu_bridge #(
   // The memory side's own view: its state, and the three signals the
   // handshake turns on. Inferring these from the CPU side is what has been
   // failing.
-  output logic  [7:0] dbg_mstate
+  output logic  [7:0] dbg_mstate,
+  // The data cache's own telemetry. Modelled at 97.86% before it was built;
+  // the board must be able to say whether it agrees, because a simulated hit
+  // rate that hardware did not share is exactly what the glyph cache did
+  // (96.7% modelled against 51.8% measured).
+  output logic [31:0] dbg_dc_hits,
+  output logic [31:0] dbg_dc_miss
 );
 
   // ------------------------------------------------------------ CDC: request
@@ -338,9 +344,94 @@ module m2_cpu_bridge #(
   //
   // On hardware that made the i960 read its boot IP as 0x00600860 where the ROM
   // holds 0x00000860 -- the low half right, the high half not.
-  typedef enum logic [2:0] { S_IDLE, S_LO, S_LO_W, S_HI, S_HI_W, S_RDB, S_IOW, S_DONE } st_e;
+  // S_DCK joins them, so the encoding needs a fourth bit.
+  typedef enum logic [3:0] { S_IDLE, S_LO, S_LO_W, S_HI, S_HI_W, S_RDB, S_IOW, S_DONE,
+                             S_DCK } st_e;
   st_e  st;
   logic half;
+
+  // ----------------------------------------------------------- DATA CACHE
+  //
+  // MEASURED BEFORE IT WAS BUILT. An 813,751-address read trace from the boot
+  // harness, modelled offline exactly as the instruction cache was:
+  //
+  //     size   ways   hit%     M10K
+  //     2KB      1    97.86     2.1
+  //    16KB      1    97.89    16.4
+  //
+  // 2 KB takes the whole prize; sixteen buys 0.03 points. The working set is
+  // 16,910 distinct lines and heavily reused, which is why so little goes so
+  // far. Reads are 83.5% of the CPU's memory traffic and carry ~19.7 of the
+  // 32.45 CPI, so removing 97.9% of them is the largest lever this core has.
+  //
+  // EIGHT-BYTE LINES, because that is exactly one burst. Every port returns
+  // four 16-bit words in a 64-bit p_dout, so a line fill costs ONE transaction
+  // and discards nothing -- where today a 32-bit read uses half of what it
+  // fetches and throws the rest away.
+  //
+  // TAGS IN M10K, READ REGISTERED, and this is the i960_icache lesson paid
+  // forward: that file pins its tags to logic because `hit` compares them
+  // combinationally, which cost 736 bits of flip-flops there and would cost
+  // 5,632 here. A registered tag costs ONE cycle in S_DCK, against the ~19 a
+  // miss costs, so the trade is not close.
+  //
+  // WRITE-THROUGH, INVALIDATE, NO ALLOCATE. Writes already go to SDRAM and
+  // simply drop the line they land on. Every T_SDRAM region is written by the
+  // CPU alone once it is running -- work RAM, char RAM and backup are CPU-only,
+  // ROM is read-only, and the ROM loader finishes before the CPU starts -- so
+  // there is no other master to be coherent with. The DPRAM is T_IO and is
+  // never cached, which is what keeps the I/O board's side correct.
+  localparam int unsigned DC_LINES = 256;                 // x 8 B = 2 KB
+  localparam int unsigned DC_IDXW  = $clog2(DC_LINES);    // 8
+  localparam int unsigned DC_TAGW  = 32 - DC_IDXW - 3;    // 21
+
+  (* ramstyle = "M10K" *) logic [63:0]          dc_data [DC_LINES];
+  (* ramstyle = "M10K" *) logic [DC_TAGW:0]     dc_tag  [DC_LINES];   // {valid,tag}
+
+  logic [63:0]        dc_q;
+  logic [DC_TAGW:0]   dc_tq;
+  logic [DC_IDXW-1:0] dc_a;
+  logic               dc_dwe, dc_twe;
+  logic [63:0]        dc_din;
+  logic [DC_TAGW:0]   dc_tin;
+
+  wire [DC_IDXW-1:0] dc_idx  = r_addr[DC_IDXW+2:3];
+  wire [DC_TAGW-1:0] dc_tagv = r_addr[31:DC_IDXW+3];
+  logic [DC_TAGW-1:0] dc_tag_r;
+  logic               dc_sweeping;
+  logic [DC_IDXW-1:0] dc_sweep;
+  logic               dc_inval;     // a write is dropping this line
+
+  always_ff @(posedge clk_mem) begin
+    dc_q  <= dc_data[dc_a];
+    dc_tq <= dc_tag [dc_a];
+    if (dc_dwe) dc_data[dc_a] <= dc_din;
+    if (dc_twe) dc_tag [dc_a] <= dc_tin;
+  end
+
+  wire dc_hit = dc_tq[DC_TAGW] && (dc_tq[DC_TAGW-1:0] == dc_tag_r);
+
+  // The array port, one owner per cycle. The reset sweep outranks everything --
+  // nothing may be served from a cache whose valid bits are still uninitialised
+  // -- then a fill, then a write's invalidate, and otherwise the lookup.
+  always_comb begin
+    dc_a   = dc_idx;
+    dc_dwe = 1'b0;
+    dc_twe = 1'b0;
+    dc_din = sd_dout[63:0];
+    dc_tin = {1'b1, dc_tag_r};
+    if (dc_sweeping) begin
+      dc_a   = dc_sweep;
+      dc_twe = 1'b1;
+      dc_tin = '0;
+    end else if (st == S_RDB && sd_ack) begin
+      dc_dwe = 1'b1;                       // fill: ROM and RAM alike
+      dc_twe = 1'b1;
+    end else if (dc_inval) begin
+      dc_twe = 1'b1;
+      dc_tin = '0;
+    end
+  end
 
   always_ff @(posedge clk_mem or negedge rst_n_mem) begin
     if (!rst_n_mem) begin
@@ -350,6 +441,9 @@ module m2_cpu_bridge #(
       io_sel <= 1'b0; io_we <= 1'b0;
       r_rdata <= 32'd0;
       dbg_cpu_reads <= 32'd0; dbg_cpu_writes <= 32'd0; dbg_unmapped <= 32'd0;
+      // Nothing may be served from valid bits that were never initialised.
+      dc_sweeping <= 1'b1; dc_sweep <= '0; dc_inval <= 1'b0; dc_tag_r <= '0;
+      dbg_dc_hits <= 32'd0; dbg_dc_miss <= 32'd0;
       dbg_last_addr <= 32'd0; dbg_last_dout <= 32'd0;
       dbg_probe6 <= 32'hEEEE_EEEE; dbg_probe2 <= 32'hEEEE_EEEE;
       dbg_tram_wr <= 32'd0; dbg_pal_wr <= 32'd0;
@@ -357,11 +451,18 @@ module m2_cpu_bridge #(
       oc_tram_we <= 1'b0; oc_pal_we <= 1'b0; oc_xlat_we <= 1'b0;
       io_sel     <= 1'b0;
 
+      // The cache's own housekeeping, before any state runs.
+      dc_inval <= 1'b0;
+      if (dc_sweeping) begin
+        dc_sweep <= dc_sweep + 1'b1;
+        if (dc_sweep == DC_IDXW'(DC_LINES - 1)) dc_sweeping <= 1'b0;
+      end
+
       case (st)
         // !sd_ack as well as req_mem: the previous access's ack may still be
         // held when the next request arrives, and issuing into it has exactly
         // the same effect as issuing into it below.
-        S_IDLE: if (req_mem && !ack_mem && !sd_ack) begin
+        S_IDLE: if (req_mem && !ack_mem && !sd_ack && !dc_sweeping) begin
           if (r_we) dbg_cpu_writes <= dbg_cpu_writes + 32'd1;
           else      dbg_cpu_reads  <= dbg_cpu_reads  + 32'd1;
           half <= 1'b0;
@@ -370,16 +471,20 @@ module m2_cpu_bridge #(
               if (r_we && is_rom) begin
                 ack_mem <= 1'b1; st <= S_DONE;    // .rom().nopw()
               end else if (!r_we) begin
-                // ONE BURST. Port 0 returns four 16-bit words in p_dout, and
-                // the two we want are words 0 and 1 -- the burst starts at the
-                // address requested. Two transactions are no longer needed, and
-                // the second one was where the held-acknowledge hazard lived.
-                sd_addr <= sd_word;
-                sd_we   <= 1'b0;
-                sd_be   <= 2'b11;
-                sd_req  <= 1'b1;
-                st      <= S_RDB;
+                // ASK THE CACHE FIRST. The arrays were addressed with dc_idx
+                // combinationally this cycle, so S_DCK can compare next cycle.
+                // 97.9% of reads end there and never reach the memory at all.
+                dc_tag_r <= dc_tagv;
+                st       <= S_DCK;
               end else begin
+                // WRITE-THROUGH, INVALIDATE, NO ALLOCATE. The write reaches
+                // memory exactly as before and drops whatever line it lands on.
+                // That is the whole coherency story for a cache no other master
+                // can get behind: work RAM, char RAM and backup are CPU-only,
+                // ROM is read-only, and the ROM loader finishes before the CPU
+                // starts. The DPRAM is T_IO and is never cached, which is what
+                // keeps the I/O board's side correct.
+                dc_inval <= 1'b1;
                 sd_addr <= sd_word;
                 sd_we   <= r_we;
                 // THE HALF THAT BELONGS AT THIS WORD, NOT ALWAYS THE LOW ONE.
@@ -543,6 +648,30 @@ module m2_cpu_bridge #(
           end
         end
 
+        // THE LOOKUP. One cycle, because the tags are in M10K and read
+        // registered -- see the note on the storage above for why that trade is
+        // not close.
+        S_DCK: begin
+          if (dc_hit) begin
+            r_rdata <= r_addr[2] ? dc_q[63:32] : dc_q[31:0];
+            ack_mem <= 1'b1;
+            dbg_dc_hits <= dbg_dc_hits + 32'd1;
+            st      <= S_DONE;
+          end else begin
+            // LINE-ALIGNED, so one four-word burst fills the whole line and
+            // nothing is discarded. It also restores natural dword alignment:
+            // the burst used to start at the requested HALFWORD, which is why
+            // the fixup below had to exist.
+            // sd_word is [AW:1], so the line's low two WORD bits are [2:1].
+            sd_addr <= {sd_word[AW:3], 2'b00};
+            sd_we   <= 1'b0;
+            sd_be   <= 2'b11;
+            sd_req  <= 1'b1;
+            dbg_dc_miss <= dbg_dc_miss + 32'd1;
+            st      <= S_RDB;
+          end
+        end
+
         // A burst read: both halves arrive together in p_dout[31:0].
         S_RDB: if (sd_ack) begin
           sd_req        <= 1'b0;
@@ -566,7 +695,12 @@ module m2_cpu_bridge #(
           // and dword-aligned, and because ALL SDRAM reads come through here --
           // S_LO and S_HI are the write path. An earlier attempt at this fix
           // was made in S_LO, where reads never go.
-          r_rdata       <= r_addr[1] ? {sd_dout[15:0], 16'd0} : sd_dout[31:0];
+          // THE BURST IS NOW LINE-ALIGNED, so the halfword fixup this comment
+          // describes is GONE: sd_dout holds the whole eight-byte line in
+          // natural order, and the dword the CPU asked for is picked by
+          // r_addr[2]. The LSU still selects its halfword with cur_addr[1],
+          // which is what it expects to do.
+          r_rdata       <= r_addr[2] ? sd_dout[63:32] : sd_dout[31:0];
           dbg_last_addr <= {7'd0, sd_addr};
           dbg_last_dout <= sd_dout[31:0];
           // EEEEEEEE means the address was never read at all, which is a
