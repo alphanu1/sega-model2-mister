@@ -5311,3 +5311,42 @@ no diff to point at. Both copies are now one committed copy under
 instead: `-Wno-BLKANDNBLK`. THIRD_PARTY.md's "needs a two-word change" is
 withdrawn. It needs no change at all, which is the only version of this that
 survives an upstream bump.
+
+**R88 — the sound ROM is at MRA byte 0x2350000, not the 0x2340000 the MRA's own
+comment says, and it needs a byte swap the i960 does not.** Both halves of that
+were wrong in the first integration and the board reported it precisely.
+
+*Where.* The comment is not the authority and neither is arithmetic over the
+section list — the BUILT IMAGE is. Searching it for the opening bytes of
+`epr-16489.7` finds them at **0x2350000**, with `epr-16490.8` at 0x2370000 (256 KB
+contiguous) and the four 2 MB sample ROMs from **0x2390000**. The comment is 64 KB
+low. R39 records the same class of error in the other direction, from
+`rom_csum.py` expanding a byte-swap interleave as though it were 32-bit.
+
+*Which way round.* The loader's mapping is the identity — stream byte N is SDRAM
+byte N — so a 16-bit SDRAM word holds `{byte 2W+1, byte 2W}`, little end first.
+That is right for the i960 and backwards for a 68000. The image at 0x2350000
+begins `00 f0 ff fe`, which packs to 0xF000 and reads as a stack pointer of
+0xF000FEFF instead of 0x00F0FFFE — and 0x00F0FFFE is the top of the sound board's
+64 KB RAM, which is how you know which one is right.
+
+The swap belongs at the READER, not in the loader. The loader serves six other
+consumers correctly, and byte order is a property of the reader rather than of
+the image: the same bytes are right for one CPU and wrong for the other.
+
+*How the board said so, which is the part worth keeping.* Attaching the real
+sound board changed what the link's byte counter MEANS, and the new meaning is
+more useful than the old one. With the far end drained — `b_rx_ack` tied to
+`b_rx_valid` — the count said "the i960 sent its stream", and it read 48 with a
+signature matching MAME. With a real i8251 on the other end it says "the sound
+board is READING its UART", because that i8251 refuses a second byte until the
+68000 has consumed the first, and the link then blocks the i960 on TXRDY.
+
+It read **2**. Two bytes is exactly a receiver that took one byte into its
+holding register and never read it: the first is delivered, the second is
+accepted by the wire and cannot be handed over. So the 68000 was not running,
+and the same counter that had been proving the transmit path was now, unchanged,
+reporting the state of the receiver. That is a signal meaning two things — which
+this project has a rule against — and the honest fix was to add the 68000's own
+bus address and cycle count rather than keep reading the link's count as though
+it still answered the old question.

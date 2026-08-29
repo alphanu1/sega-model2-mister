@@ -41,9 +41,14 @@ assign HDMI_FREEZE   = 0;
 assign HDMI_BLACKOUT = 0;
 assign HDMI_BOB_DEINT = 0;
 
-assign AUDIO_S   = 0;
-assign AUDIO_L   = 0;
-assign AUDIO_R   = 0;
+// THE SOUND BOARD'S OUTPUT, SIGNED. AUDIO_S says which, and it was 0 --
+// unsigned -- while nothing drove the buses. jt12 emits signed 16-bit, so the
+// flag has to move with the data: leave it at 0 and every negative sample
+// becomes a very loud positive one, which is the classic full-scale buzz over
+// the top of otherwise correct music.
+assign AUDIO_S   = 1;
+assign AUDIO_L   = snd_l;
+assign AUDIO_R   = snd_r;
 assign AUDIO_MIX = 0;
 
 // LED_USER included deliberately: the first build left it undriven, which is
@@ -314,7 +319,22 @@ wire  [63:0] rb_dout;
 // the four unused ports are tied off instead -- synthesis removes what they
 // drive, and the alternative is forking from the reference over an arbiter
 // detail. Port 0 is the readback; 1-4 become the CPU, tilemap and renderer.
-localparam int unsigned NPORTS = 5;
+localparam int unsigned NPORTS = 6;   // 5 is the sound board's ROM fetch
+
+// THE 68000 SOUND PROGRAM, 256 KB, at MRA byte offset 0x2350000 -- and the MRA's
+// own comment says 0x2340000, which is 64 KB wrong. The comment is not the
+// authority and neither is arithmetic over the section list; the built image is.
+// Searching it for the first bytes of epr-16489.7 finds them at 0x2350000, with
+// epr-16490.8 at 0x2370000 -- 256 KB contiguous -- and the samples after it at
+// 0x2390000. Study R39 records the same class of error in the other direction.
+//
+// Declared up here rather than with the other GAME_* constants because the port
+// mux below needs it.
+localparam logic [SDR_AW:1] GAME_SND = SDR_AW'(32'h11a8000);   // byte 0x2350000
+localparam logic [SDR_AW:1] GAME_PCM = SDR_AW'(32'h11c8000);   // byte 0x2390000, 8 MB
+
+wire        snd_rom_req;
+wire [17:1] snd_rom_addr;
 logic [NPORTS-1:0]        p_req;
 logic [NPORTS-1:0]        p_we;
 logic [NPORTS-1:0][15:0]  p_din;
@@ -376,6 +396,13 @@ always_comb begin
 	// target is the arbiter's grant-to-tag path, which is a few lines.
 	//
 	// The self-test also uses port 2 and waits for cp_done, so they never overlap.
+	// PORT 5, THE SOUND BOARD'S ROM FETCH. Requested ALIGNED, because the
+	// controller bursts four 16-bit words into a 64-bit p_dout and the burst is
+	// aligned; the word actually wanted is selected out of it. Three of every
+	// four fetches are therefore free to a CPU reading sequentially, which is
+	// what a 68000 does almost all the time.
+	p_req[5]  = snd_rom_req;
+	p_addr[5] = GAME_SND + SDR_AW'({snd_rom_addr[17:3], 2'b00});
 	p_req[3]  = cc_req;
 	p_addr[3] = char_base + SDR_AW'(cc_addr);
 	// PORT 0 IS THE CPU'S, and it is the single-word port on purpose: the
@@ -1450,9 +1477,8 @@ always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
 	end
 end
 
-wire  [7:0] a_tx_d, a_rx_d, b_tx_d, b_rx_d;
+wire  [7:0] a_tx_d, a_rx_d;
 wire        a_tx_v, a_tx_a, a_rx_v, a_rx_a;
-wire        b_tx_v, b_tx_a, b_rx_v;
 
 m2_i8251 u_uart_main (
 	.clk(clk_sys), .rst_n(cpu_rst_n),
@@ -1469,11 +1495,60 @@ m2_sound_link u_snd_link (
 	.clk(clk_sys), .rst_n(cpu_rst_n),
 	.a_tx_data(a_tx_d), .a_tx_valid(a_tx_v), .a_tx_ack(a_tx_a),
 	.a_rx_data(a_rx_d), .a_rx_valid(a_rx_v), .a_rx_ack(a_rx_a),
-	// The sound board's end, drained until it exists.
-	.b_tx_data(8'd0), .b_tx_valid(1'b0), .b_tx_ack(b_tx_a),
-	.b_rx_data(b_rx_d), .b_rx_valid(b_rx_v), .b_rx_ack(b_rx_v),
+	// THE FAR END IS REAL NOW. It was drained -- b_rx_ack tied to b_rx_valid --
+	// so the i960 was never blocked while there was nothing to receive the
+	// bytes. The board's 48 bytes went out over that wire and matched MAME's
+	// signature exactly; they now go to a 68000 that reads them.
+	.b_tx_data(b_tx_d), .b_tx_valid(b_tx_v), .b_tx_ack(b_tx_a),
+	.b_rx_data(b_rx_d), .b_rx_valid(b_rx_v), .b_rx_ack(b_rx_a),
 	.dbg_a_bytes(snd_bytes), .dbg_a_last(snd_last), .dbg_a_sig(snd_sig)
 );
+
+// ------------------------------------------------------- the sound board
+//
+// The Model 1 board: fx68k, a YM3438 and 64 KB of RAM, with the two MULTIPCMs
+// still to come. Study R87 has the map and how it was established.
+//
+// ITS OWN RESET, HELD UNTIL THE ROM IS THERE. The 68000 fetches its reset
+// vector from SDRAM, so releasing it before the loader has finished means it
+// reads whatever the image holds at that moment -- 0xFFFF on an empty
+// controller -- and takes an address error it never recovers from. mem_rst_n
+// and cp_done are the same pair the renderer waits on.
+wire [7:0]  b_rx_d, b_tx_d;
+wire        b_rx_v, b_rx_a, b_tx_v, b_tx_a;
+wire        snd_rom_ack = p_ack[5];
+// BYTE SWAPPED, BECAUSE THE 68000 IS BIG-ENDIAN AND THE LOADER IS NOT.
+//
+// The ROM loader's mapping is the identity -- stream byte N is SDRAM byte N --
+// and a 16-bit SDRAM word therefore holds {byte 2W+1, byte 2W}, little end
+// first. That is right for the i960 and backwards for a 68000: the image at
+// 0x2350000 begins 00 f0 ff fe, which packs to 0xF000 and reads as a stack
+// pointer of 0xF000FEFF instead of 0x00F0FFFE.
+//
+// Swapping HERE rather than in the loader is deliberate. The loader serves
+// every other consumer correctly and byte order is a property of the reader,
+// not of the image -- the same bytes are right for one CPU and wrong for the
+// other. One place that knows this CPU is big-endian beats a special case in a
+// path that six other things depend on.
+wire [15:0] snd_rom_w   = p_dout[5][{1'b0, snd_rom_addr[2:1]} * 16 +: 16];
+wire [15:0] snd_rom_q   = {snd_rom_w[7:0], snd_rom_w[15:8]};
+wire signed [15:0] snd_l, snd_r;
+
+m2_sound_board u_sndboard (
+	.clk(clk_sys), .rst_n(cpu_rst_n & mem_rst_n & cp_done),
+	.rx_data(b_rx_d), .rx_valid(b_rx_v), .rx_ack(b_rx_a),
+	.tx_data(b_tx_d), .tx_valid(b_tx_v), .tx_ack(b_tx_a),
+	.rom_req(snd_rom_req), .rom_addr(snd_rom_addr),
+	.rom_ack(snd_rom_ack), .rom_data(snd_rom_q),
+	.ym_sel(), .ym_we(), .ym_addr(), .ym_din(),
+	.pcm_sel(), .pcm_we(), .pcm_bank(), .pcm_addr(), .pcm_din(),
+	.snd_l(snd_l), .snd_r(snd_r),
+	.dbg_pc(snd_pc), .dbg_insns(snd_insns),
+	.dbg_ym_writes(snd_ymw), .dbg_pcm_writes(snd_pcmw)
+);
+
+wire [31:0] snd_pc, snd_insns;
+wire [15:0] snd_ymw, snd_pcmw;
 
 assign cpu_irq = { |(io_intreq & 12'hc00), |(io_intreq & 12'h3fc),
                    io_intreq[1],           io_intreq[0] };
@@ -2176,7 +2251,13 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// either sends that stream or it does not -- and that is checkable
 	// before a single sound chip exists. Overruns ride in the low half so
 	// the tearing work stays visible at the same time.
-	.a_valid(prof_tick), .a_addr(snd_sig),
+	// THE 68000'S OWN STATE, because the link's byte count now answers a
+	// different question than it did. With the far end drained the count said
+	// "the i960 sent its stream"; with a real receiver attached it says "the
+	// sound board is reading its UART", and a board that stops at two bytes is
+	// reporting that its 68000 is not running -- which is what happened. The
+	// last bus address and the cycle count say whether it is alive and where.
+	.a_valid(prof_tick), .a_addr({snd_bytes[7:0], snd_pc[23:0]}),
 	// THE RETIRED-INSTRUCTION COUNT RIDES ALONG WITH THE IP.
 //
 // The profile says 91% of the board's time goes on the four memory
@@ -2185,10 +2266,10 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 // simulation finishes this initialisation in 15.9 M instructions. Two
 // consecutive samples give the instruction rate directly, which settles
 // whether this is a wrong branch or a slow machine.
-	.a_data({uart_sel_cnt, snd_bytes[7:0], snd_last}),
+	.a_data(snd_insns),
 	.b_valid(uart_b2_valid), .b_addr(char_hits),
 	.b_data(char_misses),
-	.a_tag(8'h53), .b_tag(8'h48),          // 'S' signature | selcnt:bytes:last
+	.a_tag(8'h53), .b_tag(8'h48),          // 'S' linkbytes:68kPC | 68k bus cycles
 	                                       // 'H' glyph cache hits | misses
 	                                       // '0' map0 min|max : sum
 	                                       // 'T' write count + trap/PA

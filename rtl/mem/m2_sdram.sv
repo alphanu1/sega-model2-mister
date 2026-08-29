@@ -183,7 +183,12 @@ module m2_sdram #(
       // ALL FOUR PORTS BURST FOUR. Port 4 joined them for the read-back sweep,
       // which folds four words per request; and a single-word read auto-
       // precharges on its first command, which R33 records.
-      0, 1, 2, 3, 4: blen = 4'd4;
+      // Port 5 is the sound board's 68000 fetching its program ROM, and it
+      // joins them for the same reason rather than taking the single-word
+      // path: a single-word read auto-precharges on its first command (R33),
+      // and a four-word burst also gives the 68000's sequential fetch three
+      // free words out of every four.
+      0, 1, 2, 3, 4, 5: blen = 4'd4;
       default: blen = 4'd1;
     endcase
   endfunction
