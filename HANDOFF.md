@@ -1,6 +1,64 @@
 # Handoff
 
-**Updated:** 2026-08-27, after the 2D bring-up session. `make test` green at 25.
+**Updated:** 2026-08-29, after the I/O board session. `make test` green at 26.
+
+## THE ATTRACT-SCREEN HUNT: two real faults found and fixed on hardware
+
+Both were found by measuring the SAME FIRMWARE on both machines and diffing
+the bytes, not by reasoning about either. Simulation was not the oracle here
+and could not have been -- it renders the attract screen with the same RTL
+that fails on the board.
+
+**1. The I/O board's ports are multiplexed, and we implemented one side.**
+Port A bit 0 of the 315-5338A is a control switch: clear, PB/PC/PD carry the
+cabinet controls; set, they carry the board's OWN three DIP banks, and the
+analog channels swap banks with it. We always returned the controls. The
+firmware itself proves the mechanism -- EPR-14869C has a matched pair of
+routines at 0x07F9 (`AND FEh`) and 0x0807 (`OR 01h`) writing `(IY+0)` -- and on
+hardware it throws that switch **24,948 times in 60 seconds**. Study R76.
+
+**2. The MSM6253 shifted a bit early, so every analog byte was doubled.**
+R65's "ADC off-by-one", with a mechanism at last. The old code emitted
+`adc_shift[7]` combinationally and shifted on the read's TRAILING edge -- two
+events that must agree exactly once per read, and did not. Eight independent
+bytes showed one relationship, `value << 1`:
+
+    DPRAM   board  MAME   fed in
+    0x00     00     80    0x80    steering
+    0x01     40     20    0x20    accelerator
+    0x04-07  FE     FF    0xFF    the secondary bank
+
+Bound capture and shift to the SAME edge, as the reference does. Study R77.
+
+### What that bought, measured on the board
+
+| before | after |
+|---|---|
+| scan area disagreed with MAME on every analog byte | **byte-identical** at every address the firmware writes |
+| settings block written with only `7F`/`FF` | **all 29 sampled offsets match MAME's block exactly** |
+
+### What is still open
+
+The firmware pre-fills the settings block with **`0x7F` where MAME fills it
+with `0xFF`** -- one bit, PG bit 7, which is the EEPROM data line. MAME does
+the same two-pass fill (frame 7 all-`FF`, frame 10 the real block), so the
+sequence is right and only that bit differs. Whether the attract screen now
+renders was NOT established before this was written; the correct block content
+reaching the game is necessary, not proven sufficient.
+
+Standing instrument rules earned this session, all three the hard way:
+- **Gate a capture's payload by the same condition that raises its strobe.**
+  Assigning it unconditionally made a trap print an unrelated address, and 128
+  lines of a flag poll nearly became a finding.
+- **Telemetry that fires constantly must be a HEARTBEAT carrying cumulative
+  counts.** A channel firing thousands of times a second starved the
+  prioritised channel to zero -- priority only applies when the UART is idle.
+- **Verify the deployed md5 against `output_files/` every time.** The deploy
+  copies `build/release/`, and `make release` had not been re-run, so a core 25
+  minutes stale was measured and briefly believed.
+
+---
+
 
 ---
 
