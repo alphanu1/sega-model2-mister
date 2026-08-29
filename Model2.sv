@@ -1312,7 +1312,7 @@ wire  [1:0] cpu_sd_be;
 wire [31:0] cpu_dbg_rd, cpu_dbg_wr, cpu_dbg_unmapped;
 
 m2_cpu_bridge #(.AW(SDR_AW), .BOARD_2A(1'b0)) u_cpu_bridge (
-	.char_wr(cpu_char_wr),
+	.char_wr(cpu_char_wr), .char_wr_addr(cpu_char_wr_addr),
 	.clk_cpu(clk_i960), .rst_n_cpu(cpu_rst_n),
 	.bus_req(cpu_req), .bus_we(cpu_we), .bus_addr(cpu_addr), .bus_be(cpu_be),
 	.bus_wdata(cpu_wdata), .bus_rdata(cpu_rdata), .bus_ack(cpu_ack),
@@ -1883,12 +1883,16 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		end
 	end
 end
+logic [31:0] cr_hi;              // cycles with char_req asserted
 always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
-		cf_cnt <= 32'd0; cf_nz <= 32'd0;
-	end else if (char_ack) begin
-		cf_cnt <= cf_cnt + 32'd1;
-		if (|char_data) cf_nz <= cf_nz + 32'd1;
+		cf_cnt <= 32'd0; cf_nz <= 32'd0; cr_hi <= 32'd0;
+	end else begin
+		if (char_req) cr_hi <= cr_hi + 32'd1;
+		if (char_ack) begin
+			cf_cnt <= cf_cnt + 32'd1;
+			if (|char_data) cf_nz <= cf_nz + 32'd1;
+		end
 	end
 end
 wire        uart_a_valid = hb_tick;
@@ -2052,10 +2056,10 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 // simulation finishes this initialisation in 15.9 M instructions. Two
 // consecutive samples give the instruction rate directly, which settles
 // whether this is a wrong branch or a slow machine.
-	.a_data(cf_nz),
-	.b_valid(uart_b2_valid), .b_addr(pl_cnt),
-	.b_data(pl_nz),
-	.a_tag(8'h43), .b_tag(8'h50),          // 'C' glyph fetches, 'P' palette reads
+	.a_data(cr_hi),
+	.b_valid(uart_b2_valid), .b_addr(char_hits),
+	.b_data(char_misses),
+	.a_tag(8'h43), .b_tag(8'h48),          // 'C' acks|req-cycles, 'H' hits|misses
 	                                       // 'T' write count + trap/PA
 	.enable(1'b1),
 	.tx(UART_TXD), .dbg_dropped(uart_dropped)
@@ -2353,7 +2357,8 @@ end
 // colour per layer -- the exact symptom. Counted on the ack, so this is fetches
 // and not idle cycles.
 logic [31:0] cf_cnt, cf_nz;
-wire        cpu_char_wr;   // the CPU wrote a glyph; the cache must forget
+wire        cpu_char_wr;        // the CPU wrote a glyph
+wire [17:0] cpu_char_wr_addr;   // and this is which one
 wire        char_req, char_ack;
 wire [17:0] char_addr;
 wire [31:0] char_data;
@@ -2417,7 +2422,7 @@ m2_char_cache #(.IDX_BITS(14)) u_char_cache (
 	.v_ack(char_ack), .v_data(char_data),
 	.m_req(cache_m_req), .m_addr(cache_m_addr),
 	.m_ack(cache_m_ack), .m_data(cache_m_data),
-	.inval(cpu_char_wr),
+	.inval(cpu_char_wr), .inval_idx(cpu_char_wr_addr[13:0]),
 	.dbg_hits(char_hits), .dbg_misses(char_misses)
 );
 

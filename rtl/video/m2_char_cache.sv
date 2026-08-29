@@ -74,7 +74,24 @@ module m2_char_cache #(
   //
   // Re-enters the sweep the reset path already has, so this costs no new
   // mechanism. Uploads are bursts, so it sweeps a few times and then warms once.
+  // ONE LINE, NOT THE WHOLE CACHE, AND THE DIFFERENCE IS THE WHOLE POINT.
+  //
+  // The first version of this re-entered the reset sweep. That is correct and
+  // useless: the game writes glyphs CONTINUOUSLY, every write restarted a
+  // 16,384-cycle sweep, the sweep never finished, and a cache that is forever
+  // initialising never acks -- so the renderer's glyph fetch starves and paints
+  // exactly the same flat colours the stale zeros did. Invalidate-everything is
+  // the correct answer to the wrong question.
+  //
+  // So drop the ONE line the write lands on. It costs a single cycle stolen
+  // from the lookup, cannot starve anything, and is what a write-through cache
+  // over writable memory has to do.
   input  logic                   inval,
+  // THE INDEX ONLY. Direct-mapped: the line at this index either holds the word
+  // that was written -- in which case it must go -- or holds a different one, in
+  // which case dropping it costs one refill and is still correct. Comparing tags
+  // to avoid that would add a read port to save nothing.
+  input  logic [IDX_BITS-1:0]    inval_idx,
   output logic [31:0]            dbg_hits,
   output logic [31:0]            dbg_misses
 );
@@ -127,6 +144,14 @@ module m2_char_cache #(
       S_FILL: begin mem_addr = idx_r; cd_we = 1'b1; ct_we = 1'b1; end
       default: ;
     endcase
+    // A write to the glyph memory beats anything else wanting the tag port
+    // this cycle. Never during the reset sweep, which is clearing them anyway.
+    if (inval && st != S_INIT) begin
+      mem_addr = inval_idx;
+      ct_we    = 1'b1;
+      ct_din   = '0;                       // valid = 0
+      cd_we    = 1'b0;
+    end
   end
 
   wire hit = ct_q[TAG_BITS] && (ct_q[TAG_BITS-1:0] == tag_r);
@@ -136,10 +161,6 @@ module m2_char_cache #(
       st <= S_INIT; sweep <= '0; idx_r <= '0; tag_r <= '0;
       m_req <= 1'b0; m_addr <= '0; v_ack <= 1'b0; hold <= '0;
       dbg_hits <= '0; dbg_misses <= '0;
-    end else if (inval) begin
-      // Whatever it was doing, start again: a fill in flight would otherwise
-      // commit a line read before the write that invalidated it.
-      st <= S_INIT; sweep <= '0; m_req <= 1'b0; v_ack <= 1'b0;
     end else begin
       v_ack <= 1'b0;
       case (st)

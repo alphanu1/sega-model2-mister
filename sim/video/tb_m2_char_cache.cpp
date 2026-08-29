@@ -149,8 +149,8 @@ int main(int argc, char **argv) {
       ++fails;
     }
 
-    d->inval = 1; tick(); d->inval = 0;
-    for (int i = 0; i < 40000; ++i) tick();           // let the sweep complete
+    d->inval_idx = a & 0x3fff; d->inval = 1; tick(); d->inval = 0;
+    for (int i = 0; i < 8; ++i) tick();               // one line, one cycle
 
     const uint32_t after = read_word(a, 3);
     ++checks;

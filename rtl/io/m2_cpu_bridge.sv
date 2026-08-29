@@ -96,6 +96,10 @@ module m2_cpu_bridge #(
   // A WRITE LANDED IN THE CHAR REGION, so the glyph cache in front of it must
   // drop what it holds. Without this it serves pre-upload zeros forever.
   output logic        char_wr,
+  // Which glyph word, so the cache drops ONE line instead of everything. The
+  // same [18:1] slice the SDRAM address is formed from, so the two cannot
+  // disagree about which word was written.
+  output logic [17:0] char_wr_addr,
   output logic        oc_xlat_we,
   output logic  [6:0] oc_xlat_addr,
   output logic  [7:0] oc_xlat_din,
@@ -606,6 +610,7 @@ module m2_cpu_bridge #(
   // rather than a tap on a live bus.
   assign char_wr = r_we && (r_addr >= 32'h0108_0000) && (r_addr < 32'h0110_0000)
                    && (st == S_LO);
+  assign char_wr_addr = r_addr[18:1];
 
   assign dbg_mstate = {2'd0, sd_ack, ack_mem, req_mem, st[2:0]};
 
