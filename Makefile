@@ -201,7 +201,7 @@ synth_i960_ldst:
 # --------------------------------------------------------------------- tests
 
 .PHONY: test test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram test_fx68k test_m2_ioboard
-test: test_fx68k test_m2_ioboard test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
+test: test_m2_sndlink test_fx68k test_m2_ioboard test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
 
 test_i960_dec: obj_i960_dec/Vi960_dec
 	@echo "== test i960_dec"
@@ -540,6 +540,17 @@ obj_boot_rm/Vm2_boot_harness: $(BOOTSRC) sim/io/tb_m2_boot.cpp
 	  -Wno-SYNCASYNCNET \
 	  -Wno-DECLFILENAME --Mdir obj_boot_rm -o Vm2_boot_harness \
 	  -CFLAGS "-O2" $(BOOTSRC) sim/io/tb_m2_boot.cpp
+
+test_m2_sndlink: obj_sndlink/Vm2_sndlink_harness
+	@echo "== test m2_sndlink (the sound board serial link, against MAME's bytes)"
+	@./obj_sndlink/Vm2_sndlink_harness
+
+obj_sndlink/Vm2_sndlink_harness: rtl/sound/m2_i8251.sv rtl/sound/m2_sound_link.sv \
+                                 sim/sound/m2_sndlink_harness.sv sim/sound/tb_m2_sndlink.cpp
+	$(VERILATOR) --cc --exe --build -j 0 $(VFLAGS) --top-module m2_sndlink_harness \
+	  --Mdir obj_sndlink -o Vm2_sndlink_harness -CFLAGS -O2 \
+	  rtl/sound/m2_i8251.sv rtl/sound/m2_sound_link.sv \
+	  sim/sound/m2_sndlink_harness.sv sim/sound/tb_m2_sndlink.cpp
 
 test_m2_char_cache: obj_charcache/Vm2_char_cache
 	@./obj_charcache/Vm2_char_cache
