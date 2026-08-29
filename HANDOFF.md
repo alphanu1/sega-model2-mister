@@ -1,6 +1,57 @@
 # Handoff
 
-**Updated:** 2026-08-29, after the attract-mode session. `make test` green at 27.
+**Updated:** 2026-08-29, after the sound session. `make test` green at 28.
+
+## SOUND: THE LINK IS BYTE-EXACT ON HARDWARE, THE 68000 RUNS THE REAL ROM
+
+Two independent results, both measured, neither an impression.
+
+**The serial link is proven on the board.** 59 port writes, 48 data bytes, and an
+order-sensitive rotate-xor signature of **0x6AE52ED8 — identical to MAME's**. A
+count would not have been enough and neither would a sum or an xor: this is a
+command protocol, so order is all of it.
+
+It sent ZERO bytes for a whole build cycle, and the cause is worth keeping.
+`uart_irq` was driven and connected to nothing. The symptom points the wrong
+way — the eleven CONTROL writes still happen, because those are mainline
+initialisation, and not one of the forty-eight DATA bytes ever does, which reads
+as a broken data path. Daytona NEVER reads the i8251's status; a read tap over
+900 frames of attract mode fires zero times. **The line 10 interrupt handler IS
+the transmit loop.** Both of MAME's triggers are needed — the TXRDY edge alone
+never starts, because after the command byte enables TxEN the transmitter is
+already free and there is no edge left to catch.
+
+Three counters found it in one measurement where reasoning had failed twice: is
+the address selected, does a data write reach the device, does the link take the
+byte. 11 / 0 / 0, and 11 is exactly MAME's control-write count.
+
+**The sound 68000 runs 72,035 of MAME's own instructions**, fx68k on the real
+256 KB ROM, locked step against a debugger trace of `:m1audio:sndcpu` from reset.
+It stops on the YM3438's timer B flag, which the firmware's main loop sequences
+music on — the hardware not existing yet, not a defect, asserted as a floor for
+the real chip to raise. Study **R87** has the map, the ROM layout, and the three
+walls found along the way.
+
+### What is next, in order
+
+1. **YM3438 (jt12)** — the timer B flag at `0xD00001` bit 1 is the exact thing
+   blocking instruction 72,036. This is the highest-value next piece.
+2. **Two MULTIPCMs** — currently stubbed to "not busy", which is the minimum
+   that lets the board boot.
+3. **A sixth SDRAM port** for the sound ROM. All five are in use. Simulation
+   serves the ROM port directly, so the CPU was provable without it.
+
+### Sound M10K, and ~80 blocks that are recoverable
+
+Currently 449/553 (81%). The largest memories are the glyph cache at 128 and
+the tilemap at 128, and **the Model 1 project measured that half of a tilemap
+like ours is CPU/video duplication** (`82fb928`): Quartus 17.0 silently
+replicates a one-write-two-reads array rather than inferring a shared true
+dual-port, and refuses the TDP template outright with Error 276001. Ours has
+exactly that shape — video reads `tram_data`, the CPU reads and writes
+`cpu_tram_q`. **~64 blocks from tram and ~15 from the palette, for an explicit
+altsyncram.** That is a better lever than shrinking the glyph cache because it
+costs no hit rate. Not yet attempted here.
 
 ## ATTRACT MODE RENDERS, AND ANIMATES
 
