@@ -68,6 +68,10 @@ module m2_ioz80 #(
   input  logic  [7:0] in0,
   input  logic  [7:0] in1,
   input  logic  [7:0] in2,
+  // BUSY from the DPRAM, so the firmware's status waits mean something. See the
+  // note in m2_ioboard: with a constant status the firmware never waits and
+  // refills the window under the game's feet.
+  input  logic        dp_busy,
   input  logic  [7:0] adc0,   // steering, centre 0x80
   input  logic  [7:0] adc1,   // accelerator, idle 0x20
   input  logic  [7:0] adc2,   // brake, idle 0x20
@@ -226,7 +230,12 @@ module m2_ioz80 #(
       4'ha: io_q = ser_out;
       4'hb: io_q = cmd_r;
       4'hc: io_q = z_rdata;          // dpram[io_address]
-      4'hd: io_q = 8'h08;            // status, per 315_5338a.cpp
+      // STATUS. Bit 3 stays set -- the firmware's second wait, at 0x82f, waits
+      // for it and a clear bit there would hang the boot. Bit 0 is BUSY, and it
+      // is now REAL: raised while the game is inside the block window, which is
+      // exactly what the MB8421 does and what the firmware's 0x815 loop was
+      // written to wait on.
+      4'hd: io_q = {4'd0, 3'b001, dp_busy};   // 0x08 idle, 0x09 busy
       default: ;
     endcase
   end

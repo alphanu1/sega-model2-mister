@@ -57,11 +57,18 @@ if {[llength $core_clks] == 0} {
 # The video and i960 domains stay cut. Those crossings are genuine and handled:
 # m2_cpu_bridge carries the i960 across with a request/acknowledge handshake
 # (study R32, R34), and the tilemap is read through a dual-port memory.
+# general[2] -- the old 32 MHz video clock -- IS GONE, and its group with it.
+# The renderer, timing generator and overlay all moved onto clk_sys with a
+# one-in-three enable (48/3 = 16 MHz, the exact old pixel rate), so that PLL
+# output has no consumer and the fitter drops it. Leaving a clock group that
+# names a clock which no longer exists is not a warning: it gave
+#   Internal Error: Sub-system: DTM, File: dtm_node.cpp, Line: 772, node != 0
+# in FITTER PLACEMENT PREPARATION -- three builds died on it, each looking like
+# a different problem, because the crash moves as other settings change.
 set_clock_groups -asynchronous \
   -group [get_clocks -nowarn {*|pll|pll_inst|altera_pll_i|general[0].*|divclk \
                               *|pll|pll_inst|altera_pll_i|general[1].*|divclk \
                               *|pll|pll_inst|altera_pll_i|general[4].*|divclk}] \
-  -group [get_clocks -nowarn {*|pll|pll_inst|altera_pll_i|general[2].*|divclk}] \
   -group [get_clocks -nowarn {*|pll|pll_inst|altera_pll_i|general[3].*|divclk}]
 
 # FIVE OUTPUTS NOW, AND THE COUNT IS CHECKED. The Kaneko16 core gave three

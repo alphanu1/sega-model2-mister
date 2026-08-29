@@ -989,6 +989,9 @@ int main(int argc, char **argv) {
   }
   std::printf("  LINE OVERRUNS: %u   worst-line fetches: %u\n",
               (unsigned)d->dbg_overruns_o, (unsigned)d->dbg_fetches_o);
+  std::printf("  DPRAM WINDOW: game %u accesses, Z80 %u writes, COLLISIONS %u\n",
+              (unsigned)d->dbg_win_game_o, (unsigned)d->dbg_win_z80_o,
+              (unsigned)d->dbg_collide_o);
   std::printf("  tile RAM writes %u\n", d->dbg_tram_wr);
   {
     // TILE RAM AS THE CPU BUILDS IT, against the captured frame. The board

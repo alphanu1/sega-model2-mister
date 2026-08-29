@@ -1552,6 +1552,26 @@ wire [31:0] bak_first;
 // DPRAM store through the 315-5338A command window. The behavioural exchange
 // stays compiled in as USE_Z80=0 fallback one parameter away, but the shipped
 // configuration is the real computer: it is what draws the credit digits.
+wire        dp_busy;    // MB8421 arbitration, m2_ioboard -> m2_ioz80
+
+// DO THE TWO SIDES ACTUALLY COLLIDE, ON THE BOARD? Simulation renders
+// correctly every time, so it cannot answer this -- only the hardware can.
+// Count game-side window accesses, Z80 window writes, and the cycles where
+// both happen at once. Zero collisions would mean the BUSY fix addresses
+// nothing and the contamination comes from somewhere else entirely.
+logic [15:0] col_cnt, wing_cnt, winz_cnt;
+wire game_in_win = cpu_io_sel && (cpu_io_addr[23:12] == 12'hc00)
+                   && (cpu_io_addr[11:2] >= 10'h080)
+                   && (cpu_io_addr[11:2] <= 10'h0bf);
+wire z80_in_win  = zio_we && (zio_addr >= 11'h100) && (zio_addr < 11'h180);
+always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
+	if (!cpu_rst_n) begin col_cnt <= '0; wing_cnt <= '0; winz_cnt <= '0; end
+	else begin
+		if (game_in_win && !(&wing_cnt))              wing_cnt <= wing_cnt + 1;
+		if (z80_in_win  && !(&winz_cnt))              winz_cnt <= winz_cnt + 1;
+		if (game_in_win && z80_in_win && !(&col_cnt)) col_cnt  <= col_cnt  + 1;
+	end
+end
 wire        zio_we;
 wire [10:0] zio_addr;
 wire  [7:0] zio_wdata, zio_rdata;
@@ -1563,7 +1583,7 @@ m2_ioz80 #(.CEN_DIV(12)) u_ioz80 (
 	.fw_we(fw_dl && ioctl_wr && (ioctl_addr < 27'd16384)),
 	.fw_addr(ioctl_addr[13:1]),
 	.fw_data(ioctl_dout),
-	.in0(iob_in0), .in1(iob_in1), .in2(8'hFF),
+	.in0(iob_in0), .in1(iob_in1), .in2(8'hFF), .dp_busy(dp_busy),
 	.adc0(8'h80), .adc1(8'h20), .adc2(8'h20), .adc3(8'h80),
 	.z_we(zio_we), .z_addr(zio_addr), .z_wdata(zio_wdata), .z_rdata(zio_rdata),
 	.dbg_ee(), .dbg_wrcnt(), .dbg_wr_stb(), .dbg_dout(), .dbg_di(),
@@ -1853,8 +1873,8 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		rd_v  <= io_sel_d && (io_addr_d[23:12] == 12'hc00);
 		// Top bit of the address field flags a write, so reads and writes are
 		// distinguishable in one stream.
-		rd_ad <= {io_we_d, 12'd0, io_addr_d[11:0]};   // bit24 = write
-		rd_dt <= io_dat_d;
+		rd_ad <= {9'd0, wing_cnt};                    // game window accesses
+		rd_dt <= {winz_cnt, col_cnt};                 // Z80 writes | COLLISIONS
 	end
 end
 wire        uart_b2_valid = rd_v;
@@ -1955,7 +1975,8 @@ m2_ioboard #(
 	.z_rdata(zio_rdata),
 	.rdata(iob_rdata),
 	.dbg(iob_dbg), .dbg_win_rd(iob_win_rd),
-	.dbg_flag_rd(iob_flag_rd), .dbg_seen(iob_seen)
+	.dbg_flag_rd(iob_flag_rd), .dbg_seen(iob_seen),
+	.win_busy(dp_busy)
 );
 
 // ---------------------------------------------------------- PORT 4 SWEEP

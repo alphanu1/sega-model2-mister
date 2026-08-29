@@ -161,7 +161,29 @@ module m2_ioboard #(
   // zero backup writes to prove it. A shadow of a write is not evidence about
   // a read.
   output logic [15:0] dbg_flag_rd,     // reads of the flag dword
-  output logic [15:0] dbg_seen         // {status, flag} as returned to the CPU
+  output logic [15:0] dbg_seen,        // {status, flag} as returned to the CPU
+
+  // THE ARBITRATION THE PROTOCOL WAS BUILT AROUND, AND WHICH WE NEVER HAD.
+  //
+  // The real part is an MB8421 dual-port RAM: when both sides reach for the
+  // same place it raises BUSY at the later one, and the 315-5338A reports that
+  // in its status register. The firmware waits on it -- its own code, at 0x815:
+  //
+  //     LD B,0Fh          ; a timeout of 15
+  //     LD A,(IY+13)      ; read status
+  //     BIT 0,A           ; test BUSY
+  //     JR NZ,0819h       ; wait while it is set
+  //
+  // Our status register returned a constant 0x08. Bit 0 always clear means the
+  // firmware NEVER waits, so it refills the window while the game is reading
+  // it, the game gets the input-scan pattern instead of settings (R63's 7F FF),
+  // rejects it, and reissues the exchange -- forever. That is the board's
+  // 3,554 polls, and the reason nothing downstream ever starts.
+  //
+  // win_busy says the game is inside the block window right now. Held for a
+  // few cycles because the firmware samples this at 4 MHz through a paced Z80
+  // and a single 48 MHz pulse would be invisible to it.
+  output logic        win_busy
 );
 
   localparam logic [9:0] FLAG_W  = 10'h010;   // DPRAM 0x20 low, 0x21 high
@@ -323,6 +345,15 @@ module m2_ioboard #(
 
   wire cpu_wr = sel & we;
   wire win_rd  = sel & ~we & (word >= 10'h080) & (word <= 10'h0bf);
+  // Any game-side access to the window, read or write, holds BUSY.
+  wire win_acc = sel & (word >= 10'h080) & (word <= 10'h0bf);
+  logic [4:0] busy_hold;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n)          busy_hold <= 5'd0;
+    else if (win_acc)    busy_hold <= 5'd31;      // stretch so a 4 MHz Z80 sees it
+    else if (|busy_hold) busy_hold <= busy_hold - 5'd1;
+  end
+  assign win_busy = |busy_hold;
   wire flag_rd = sel & ~we & (word == FLAG_W);
 
   // The board's own write, for the cycles the CPU is not using the port.

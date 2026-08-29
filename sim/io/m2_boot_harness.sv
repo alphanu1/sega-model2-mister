@@ -60,6 +60,10 @@ module m2_boot_harness #(
   // Cabinet switches, active low, MAME's IN0 order: bit2 is the TEST switch
   // (MAME calls it Service Mode) and FB is that switch held.
   input  logic  [7:0] cab_in0,
+  // DO THE TWO SIDES ACTUALLY COLLIDE? Testable rather than assertable: count
+  // cycles where the game is inside the block window AND the Z80 is writing it.
+  // Zero collisions would mean the BUSY fix addresses nothing.
+  output logic [31:0] dbg_collide_o, dbg_win_game_o, dbg_win_z80_o,
   // LINE OVERRUNS: a scanline whose character fetches did not finish before
   // the next line began. m2_video has counted them all along and the harness
   // never looked. Whole rows of text going missing is exactly what they do.
@@ -398,6 +402,21 @@ module m2_boot_harness #(
   // THE REAL BOARD, WHEN ITS FIRMWARE IS OFFERED. USE_Z80 follows the fw
   // load port: the tb that loads EPR-14869C gets the firmware board; a tb
   // that loads nothing keeps R37-R41's imitation, so every older test stands.
+  wire game_in_win = cpu_io_sel && (cpu_io_addr[23:12] == 12'hc00)
+                     && (cpu_io_addr[11:2] >= 10'h080)
+                     && (cpu_io_addr[11:2] <= 10'h0bf);
+  wire z80_in_win  = zio_we && (zio_addr >= 11'h100) && (zio_addr < 11'h180);
+  always_ff @(posedge clk_m or negedge rst_n) begin
+    if (!rst_n) begin
+      dbg_collide_o <= '0; dbg_win_game_o <= '0; dbg_win_z80_o <= '0;
+    end else begin
+      if (game_in_win)               dbg_win_game_o <= dbg_win_game_o + 1;
+      if (z80_in_win)                dbg_win_z80_o  <= dbg_win_z80_o  + 1;
+      if (game_in_win && z80_in_win) dbg_collide_o  <= dbg_collide_o  + 1;
+    end
+  end
+
+  logic        dp_busy_s;
   logic        zio_we;
   logic [10:0] zio_addr;
   logic  [7:0] zio_wdata, zio_rdata;
@@ -405,7 +424,7 @@ module m2_boot_harness #(
   m2_ioz80 #(.CEN_DIV(12)) u_ioz80 (
     .clk(clk_m), .rst_n(rst_n & fw_ready),
     .fw_we(fw_we), .fw_addr(fw_addr), .fw_data(fw_data),
-    .in0(cab_in0), .in1(8'h8f), .in2(8'hff),
+    .in0(cab_in0), .in1(8'h8f), .in2(8'hff), .dp_busy(dp_busy_s),
     .adc0(8'h80), .adc1(8'h20), .adc2(8'h20), .adc3(8'h80),
     .z_we(zio_we), .z_addr(zio_addr), .z_wdata(zio_wdata), .z_rdata(zio_rdata),
     .dbg_ee(), .dbg_wrcnt(), .dbg_wr_stb(), .dbg_dout(), .dbg_di(),
@@ -425,7 +444,8 @@ module m2_boot_harness #(
     .rdata(iob_rdata),
     .dbg(iob_dbg), .dbg_win_rd(iob_win_rd),
     .dbg_flag_rd(iob_flag_rd), .dbg_seen(iob_seen)
-  );
+  ,
+    .win_busy(dp_busy_s));
 
   // WARM-STATE PRELOAD. +bakinit=PREFIX loads PREFIX0..3.hex (from
   // tools/nvm_split.py on a board's .nvm save) into the backup lanes before

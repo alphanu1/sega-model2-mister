@@ -65,7 +65,7 @@ module m2_ioz80_harness #(
   m2_ioz80 #(.CEN_DIV(CEN_DIV)) u_board (
     .clk(clk), .rst_n(rst_n),
     .fw_we(fw_we), .fw_addr(fw_addr), .fw_data(fw_data),
-    .in0(in0), .in1(in1), .in2(in2),
+    .in0(in0), .in1(in1), .in2(in2), .dp_busy(1'b0),
     .adc0(adc0), .adc1(adc1), .adc2(adc2), .adc3(adc3),
     .z_we(z_we), .z_addr(z_addr), .z_wdata(z_wdata), .z_rdata(z_rdata),
     .dbg_ee(spy_ee), .dbg_wrcnt(spy_wrcnt), .dbg_wr_stb(spy_wr), .dbg_dout(spy_dout), .dbg_di(spy_di),
