@@ -106,6 +106,13 @@ module m2_video #(
   // guessing, because the two look identical on a screen and have nothing in
   // common as bugs.
   output logic [15:0] dbg_overruns,
+  // OVERRUNS IN THE LAST FRAME, latched at vblank.
+  //
+  // dbg_overruns saturates at 65535 and gets there during warm-up, so it can
+  // say "there were overruns" and never "there are overruns NOW" -- which is
+  // the only question worth asking while chasing flicker. A per-frame count
+  // answers it and cannot saturate: a frame has 384 lines.
+  output logic [15:0] dbg_ovr_frame,
 
   // WHICH TILEMAPS ARE ACTUALLY REACHING THE SCREEN.
   //
@@ -166,6 +173,7 @@ module m2_video #(
 
   // ------------------------------------------------------------- timing
   logic [9:0] hcnt, vcnt;
+  logic [15:0] ovr_acc;     // overruns this frame, latched at vblank
   logic       hblank, vblank, visible, line_start, vblank_start;
   logic       hsync_i, vsync_i;
   logic [8:0] line_number;
@@ -449,11 +457,17 @@ module m2_video #(
     if (!rst_n) begin
       q <= Q_IDLE; cur_layer <= '0; cur_line <= '0;
       hscr_r <= '0; vscr_r <= '0; ctrl_r <= '0; f_start <= 1'b0;
+      ovr_acc <= '0; dbg_ovr_frame <= '0;
       dbg_ctrl[0] <= '0; dbg_ctrl[1] <= '0;
       mask_r <= '0; mask_i <= '0;
       seq_tram_addr <= '0; seq_owns_tram <= 1'b1;
       bank <= 1'b0; dbg_fetches <= '0; dbg_overruns <= '0;
     end else begin
+      // A whole frame's overruns, latched where they are counted.
+      if (vblank_start) begin
+        dbg_ovr_frame <= ovr_acc;
+        ovr_acc       <= '0;
+      end
       f_start <= 1'b0;
 
       case (q)
@@ -573,6 +587,10 @@ module m2_video #(
           // Saturating, not wrapping: a counter that rolls over reads as a
           // small number on a screen and says the opposite of what happened.
           if (line_start && !(&dbg_overruns)) dbg_overruns <= dbg_overruns + 1'd1;
+          if (line_start && !(&ovr_acc))       ovr_acc      <= ovr_acc + 1'd1;
+          // The latch lives here too: one process must own ovr_acc, and the
+          // increment cannot move to the stats process without dragging the
+          // whole sequencer state with it.
 
           if (f_done) begin
             if (f_fetches > dbg_fetches) dbg_fetches <= f_fetches;

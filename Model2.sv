@@ -2066,7 +2066,7 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// it painted two flat colours -- so this is exactly when to expect them.
 	// Reported with the per-line fetch count and the glyph cache's hit rate,
 	// because those say WHY and not merely how many.
-	.a_valid(prof_tick), .a_addr({16'd0, vid_overruns}),
+	.a_valid(prof_tick), .a_addr({vid_ovr_frame, vid_overruns}),
 	// THE RETIRED-INSTRUCTION COUNT RIDES ALONG WITH THE IP.
 //
 // The profile says 91% of the board's time goes on the four memory
@@ -2685,6 +2685,7 @@ wire [11:0] vid_layer_have [4];
 // settles whether that is what is happening rather than inferring it.
 wire  [7:0] vid_fetches;
 wire [15:0] vid_overruns;
+wire [15:0] vid_ovr_frame;   // overruns in the LAST FRAME
 
 wire [7:0] tile_r, tile_g, tile_b;
 wire       tile_hs, tile_vs, tile_hb, tile_vb;
@@ -2716,6 +2717,7 @@ m2_video u_tilemap (
 	.vid_r(tile_r), .vid_g(tile_g), .vid_b(tile_b),
 	.vid_hs(tile_hs), .vid_vs(tile_vs), .vid_hb(tile_hb), .vid_vb(tile_vb),
 	.vblank_irq(), .dbg_fetches(vid_fetches), .dbg_overruns(vid_overruns),
+	.dbg_ovr_frame(vid_ovr_frame),
 	.dbg_layer_px(vid_layer_px), .dbg_ctrl(vid_ctrl),
 	.dbg_layer_have(vid_layer_have)
 );
