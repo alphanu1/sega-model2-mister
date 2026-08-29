@@ -4784,3 +4784,84 @@ its strobes are ideal, and the error is a silent factor of two.
 0x100-0x17f stops being swept once the scan feeding it is correct. The
 reference writes that block ONCE and never touches it again; this core was
 sweeping it three times a minute with the shifted values.
+
+**R78 — the instruction cache is NOT the bottleneck, CPI is ~21 rather than
+3.95, and two thirds of the machine's time is spent waiting on memory.** Three
+corrections, all measured, and the first cancels a piece of queued work.
+
+*The instruction cache plan is dead.* Modelled against a 4,000,000-instruction
+trace from the boot harness, direct-mapped with 16-byte lines exactly as
+`i960_icache` indexes:
+
+    LINES   size   hit%    tag FFs
+       32   512B   99.97       768     <- what is built today
+      128     2KB  99.98      2816
+      512     8KB  100.00    10240
+
+**512 bytes already hits 99.97%.** The queued "512 B -> 8 KB" would buy 0.03
+percentage points for ~10,000 tag flip-flops -- and the tags CANNOT go in M10K,
+because `hit` compares them combinationally on every fetch (see the header of
+that file, which records Quartus inferring an altsyncram and silently changing
+the circuit). It would cost thousands of ALM and gain nothing. **Do not do it.**
+
+*R55's CPI of 3.95 is wrong by five times.* Measured two ways that agree:
+
+    boot harness, real SDRAM controller   CPI 22.67
+    the board itself, 1.16 M insn/s at 24 MHz   CPI 20.7
+
+*Where the cycles actually go*, over 1.5 M instructions with the real
+controller:
+
+    WAITING on memory   65.6% of cycles   -> 14.87 of the CPI
+    core sequencing     34.4% of cycles   ->  7.80 of the CPI
+    bus transactions    0.805 per instruction, 18.5 cycles of wait EACH
+
+**18.5 cycles of wait per access is the single biggest number in this core.**
+At 24 MHz against SDRAM at 96 MHz that is ~74 SDRAM cycles for one access,
+where a page-hit read should cost under ten. It is not the memory being slow,
+it is the path around it, and `m2_cpu_bridge`'s own sequencer says why: every
+32-bit access is TWO independent 16-bit transactions,
+`S_LO -> S_LO_W -> S_HI -> S_HI_W`, and each `_W` state waits for the
+controller's ack to FALL before the next request may go out. `m2_sdram` holds
+ack for `ACK_HOLD` = 2 cycles, so each half costs a full round trip plus the
+hold. Two of those per access, across the 24/48/96 MHz domains.
+
+*The levers, in order of measured value:*
+
+  1. **Serve a 32-bit access as one 2-word burst** instead of two independent
+     transactions. Halves the round trips.
+  2. **Drop the ack hold for this requester.** `ACK_HOLD` exists "so requesters
+     on a slower synchronous clock see exactly one rising edge", and the bridge
+     comment states this bridge runs on the SAME clock as the controller -- so
+     for it the hold is pure overhead. Note `S_HI_W` and the `S_IDLE` guard are
+     already labelled DEFENSIVE and not proven necessary; `S_LO_W` IS necessary
+     and has a hardware failure behind it (boot IP read as 0x00600860 where the
+     ROM holds 0x00000860). Do not remove that one without replacing what it
+     guarantees.
+  3. **A data cache.** 0.805 accesses per instruction, and the I-cache result
+     above shows the working set is small; there is no D-cache at all today.
+
+Eliminating the memory wait entirely would take CPI from 22.7 to 7.8, which is
+2.9x. The core's own sequencing at 7.80 CPI is then the next target.
+
+*Separately, the drawing fault is NOT the renderer and NOT the I/O board.* The
+tilemap census on hardware, by writing instruction:
+
+    IP 0001a15c   5167 writes  100% zero      <- dominates
+    IP 0001ce38     10 writes   20% zero      <- the real fill, correct values
+                                                 (0020, 3000, 3d8d -- exactly
+                                                 simulation's three commonest)
+
+and the routine disassembles as
+
+    0001a0c4: ldos  0x501300,r3     ; reads WORK RAM
+    0001a104: ldos  0x501320,r11    ; the bit source
+    0001a10c: and / rotate / or     ; scatters r11's bits into r4,r6,r8,r10
+    0001a15c: stos  0x100a000,r3    ; stores the result into tile RAM
+
+It is a bit-plane expander writing faithfully what it reads, and it reads
+**zero**, from the same `0x501xxx` work-RAM region where R75 already found the
+board's pointer wrong (0x511000 against simulation's 0x505100). The drawing
+code is correct and is being handed data nobody produced. **R76 and R77 did not
+move this ratio (99.76% -> 99.81% zero), which is the evidence that the I/O
+board faults and this one are separate.**

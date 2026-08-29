@@ -1855,7 +1855,7 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		end
 	end
 end
-wire        uart_a_valid = zw_v;
+wire        uart_a_valid = tw_v;
 // WHAT THE STUCK LOOP READS.
 //
 // The board sits in the counted loop at 0x1BA8-0x1BCC and never appears in the
@@ -1957,23 +1957,39 @@ end
 // the payload that actually needs every line.
 localparam int unsigned HB_CYC = 4_800_000;    // 100 ms at 48 MHz
 logic [22:0] hb_ctr;
-logic        hb_tick;
+logic        hb_tick, hb_tick_b;
 always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
-		hb_ctr <= 23'd0; hb_tick <= 1'b0;
-	end else if (hb_ctr == 23'(HB_CYC - 1)) begin
-		hb_ctr <= 23'd0; hb_tick <= 1'b1;
+		hb_ctr <= 23'd0; hb_tick <= 1'b0; hb_tick_b <= 1'b0;
 	end else begin
-		hb_ctr <= hb_ctr + 23'd1; hb_tick <= 1'b0;
+		hb_tick   <= (hb_ctr == 23'd0);
+		hb_tick_b <= (hb_ctr == 23'(HB_CYC / 2));   // 50 ms later, so they
+		                                            // cannot shadow each other
+		hb_ctr <= (hb_ctr == 23'(HB_CYC - 1)) ? 23'd0 : hb_ctr + 23'd1;
 	end
 end
-wire        uart_b2_valid = hb_tick || trap_edge;
+
+// IS IT DRAWING, AND HOW FAST IS IT THINKING?
+//
+// The attract screen renders, so the question is no longer whether the game
+// works but whether it is simply too slow -- R55 put the board at CPI 3.95
+// against a real i960's ~1. Two counters sampled on a known tick answer that
+// without any inference: consecutive samples of the retired-instruction count
+// give instructions per second directly, and the frame number beside it gives
+// the frame rate, so the instruction BUDGET PER FRAME falls out of the pair.
+// That budget is the thing animation is spent from.
+logic [31:0] tram_cnt;
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+	if (!mem_rst_n)         tram_cnt <= 32'd0;
+	else if (cpu_tram_we)   tram_cnt <= tram_cnt + 32'd1;
+end
+wire        uart_b2_valid = hb_tick_b || trap_edge;
 wire        uart_b_valid = char_ack;
 wire [31:0] uart_dropped;
 
 m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	.clk(clk_sys), .rst_n(mem_rst_n),
-	.a_valid(uart_a_valid), .a_addr(zw_ad),
+	.a_valid(uart_a_valid), .a_addr(tw_ip),
 	// THE RETIRED-INSTRUCTION COUNT RIDES ALONG WITH THE IP.
 //
 // The profile says 91% of the board's time goes on the four memory
@@ -1982,10 +1998,11 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 // simulation finishes this initialisation in 15.9 M instructions. Two
 // consecutive samples give the instruction rate directly, which settles
 // whether this is a wrong branch or a slow machine.
-	.a_data(zw_dt),
-	.b_valid(uart_b2_valid), .b_addr({zw_cnt, iob_seccnt}),
+	.a_data({1'b0, tw_a, tw_d}),
+	.b_valid(uart_b2_valid), .b_addr(tram_cnt),
 	.b_data({23'd0, cpu_trap, iob_pa}),
-	.a_tag(8'h5A), .b_tag(8'h50),          // 'Z' firmware write, 'P' heartbeat
+	.a_tag(8'h4D), .b_tag(8'h54),          // 'M' IP | cell+value
+	                                       // 'T' write count + trap/PA
 	.enable(1'b1),
 	.tx(UART_TXD), .dbg_dropped(uart_dropped)
 );

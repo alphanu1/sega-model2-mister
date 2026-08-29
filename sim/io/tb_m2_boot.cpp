@@ -499,6 +499,28 @@ int main(int argc, char **argv) {
     warm_at = std::strtoull(wb, nullptr, 10);
   bool warm_done = false;
 
+  // WHERE DO THE CYCLES ACTUALLY GO?
+  //
+  // The board runs 21.6x slower than the reference and the instruction cache
+  // was assumed to be the reason. It is not: modelled against a 4 M instruction
+  // trace, 512 B already hits 99.97%, and 8 KB buys 0.03 points for thousands
+  // of tag flip-flops. So the stall is not misses, and the next guess should be
+  // measured rather than made.
+  //
+  // This splits CPI in two without touching the RTL: cycles in which the CPU
+  // has a bus request outstanding and has not been answered are MEMORY stalls;
+  // everything else is the core's own sequencing. Those two numbers point at
+  // completely different pieces of work, which is why guessing between them has
+  // been expensive.
+  uint64_t prof_cycles = 0, prof_waiting = 0, prof_req = 0;
+  uint32_t prof_acc0 = d->dbg_acc;
+  // LATENCY OR COUNT? Waiting 14.87 cycles per instruction is either a few
+  // very slow accesses or many quick ones, and those are opposite fixes: the
+  // first is the SDRAM path, the second is a data cache. Counting completed
+  // transactions separates them.
+  uint64_t prof_txn = 0;
+  int prof_ack_prev = 0;
+
   while (d->dbg_acc < max_instr || (warm_at && !warm_done)) {
     if (!fw_pending.empty() && d->dbg_acc >= fw_late) {
       for (int a = 0; a < 8192; ++a) {
@@ -517,6 +539,13 @@ int main(int argc, char **argv) {
       g_c3_n = 0; g_sw_n = 0; g_bk_n = 60;   // re-arm the cell log for boot 2
     }
     tick();
+    ++prof_cycles;
+    if (d->obs_bus_req) {
+      ++prof_req;
+      if (!d->obs_bus_ack) ++prof_waiting;
+    }
+    if (d->obs_bus_ack && !prof_ack_prev) ++prof_txn;
+    prof_ack_prev = d->obs_bus_ack;
     if (pctr && d->dbg_acc != pc_acc_prev) {
       if (d->dbg_acc >= pcfrom) std::fprintf(pctr, "%08x\n", (unsigned)d->dbg_ip);
       pc_acc_prev = d->dbg_acc;
@@ -1298,6 +1327,31 @@ int main(int argc, char **argv) {
                 "  the copy-back carried real settings and the race was won.\n"
                 "  The board loses it; this run did not reproduce that.\n",
                 (unsigned long long)first_win_rd);
+  }
+  {
+    const uint64_t insns = uint64_t(d->dbg_acc) - prof_acc0;
+    std::printf("\n  CYCLE PROFILE over %llu instructions:\n",
+                (unsigned long long)insns);
+    if (insns) {
+      std::printf("    cycles              %12llu   CPI %.2f\n",
+                  (unsigned long long)prof_cycles, double(prof_cycles)/double(insns));
+      std::printf("    bus request up      %12llu   %5.1f%% of cycles\n",
+                  (unsigned long long)prof_req, 100.0*double(prof_req)/double(prof_cycles));
+      std::printf("    WAITING on memory   %12llu   %5.1f%% of cycles"
+                  "   -> %.2f of the CPI\n",
+                  (unsigned long long)prof_waiting,
+                  100.0*double(prof_waiting)/double(prof_cycles),
+                  double(prof_waiting)/double(insns));
+      std::printf("    core sequencing     %12llu   %5.1f%% of cycles"
+                  "   -> %.2f of the CPI\n",
+                  (unsigned long long)(prof_cycles - prof_waiting),
+                  100.0*double(prof_cycles-prof_waiting)/double(prof_cycles),
+                  double(prof_cycles-prof_waiting)/double(insns));
+      std::printf("    bus transactions    %12llu   %.3f per instruction,"
+                  " %.1f cycles of wait each\n",
+                  (unsigned long long)prof_txn, double(prof_txn)/double(insns),
+                  prof_txn ? double(prof_waiting)/double(prof_txn) : 0.0);
+    }
   }
   if (out) { std::fclose(out); std::printf("  PC stream written to %s\n", outfile); }
   if (charstream) { std::fclose(charstream); std::printf("  char write stream written\n"); }

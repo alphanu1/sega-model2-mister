@@ -425,6 +425,9 @@ module m2_boot_harness #(
     .clk(clk_m), .rst_n(rst_n & fw_ready),
     .fw_we(fw_we), .fw_addr(fw_addr), .fw_data(fw_data),
     .in0(cab_in0), .in1(8'h8f), .in2(8'hff), .dp_busy(dp_busy_s),
+    // The board's own DIP banks. Daytona defines all 24 bits PORT_DIPUNUSED
+    // with the default equal to the mask, so each bank reads 0xFF.
+    .dsw1(8'hFF), .dsw2(8'hFF), .dsw3(8'hFF),
     .adc0(8'h80), .adc1(8'h20), .adc2(8'h20), .adc3(8'h80),
     .z_we(zio_we), .z_addr(zio_addr), .z_wdata(zio_wdata), .z_rdata(zio_rdata),
     .dbg_ee(), .dbg_wrcnt(), .dbg_wr_stb(), .dbg_dout(), .dbg_di(),
