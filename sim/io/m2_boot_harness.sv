@@ -370,6 +370,7 @@ module m2_boot_harness #(
   wire [31:0] sd2_dout_i = REAL_MEM ? rm_p3_dout[31:0] : sd2_dout;
 
   m2_cpu_bridge #(.AW(AW), .BOARD_2A(1'b0)) u_bridge (
+    .char_wr(),
     .clk_cpu(clk_cpu), .rst_n_cpu(rst_n),
     .bus_req(bus_req), .bus_we(bus_we), .bus_addr(bus_addr), .bus_be(bus_be),
     .bus_wdata(bus_wdata), .bus_rdata(bus_rdata), .bus_ack(bus_ack),

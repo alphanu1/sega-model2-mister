@@ -913,12 +913,39 @@ wire [SDR_AW:1] char_base = game_image ? GAME_CHAR : CHAR_BASE;
 // tilemap can reach the upper half.
 (* ramstyle = "M10K" *) logic [15:0] pal  [8192];
 
+logic [31:0] vrd_cnt, vrd_nz;    // renderer reads: total, and non-zero
+logic [31:0] pl_cnt, pl_nz;      // palette reads: total, and non-zero
 wire [14:0] tram_addr;
 wire [11:0] pal_addr;
 logic [15:0] tram_data, pal_data;
 always_ff @(posedge clk_sys) begin
 	tram_data <= tram[tram_addr];
+	// WHAT THE RENDERER ACTUALLY GETS OUT.
+	//
+	// The CPU writes 42,013 NON-ZERO tile indices on hardware -- measured, not
+	// sampled -- and the screen is two flat colours. Both cannot be true unless
+	// the picture is lost between this array and the screen. So count what comes
+	// OUT of the read port the same way the writes were counted: unbiased, and
+	// on the board.
+	//
+	// If the renderer reads essentially nothing but zero while the CPU has
+	// written 42,013 non-zero cells, the fault is this array's read path -- the
+	// address it is given, or the memory itself. If it reads plenty of non-zero,
+	// the tilemap is fine and the fault is downstream in palette or mixing.
+	// Either answer removes half the remaining search.
+	if (!mem_rst_n) begin
+		vrd_cnt <= 32'd0; vrd_nz <= 32'd0;
+	end else begin
+		vrd_cnt <= vrd_cnt + 32'd1;
+		if (|tram_data) vrd_nz <= vrd_nz + 32'd1;
+	end
 	pal_data  <= pal[{1'b0, pal_addr}];
+	if (!mem_rst_n) begin
+		pl_cnt <= 32'd0; pl_nz <= 32'd0;
+	end else begin
+		pl_cnt <= pl_cnt + 32'd1;
+		if (|pal_data) pl_nz <= pl_nz + 32'd1;
+	end
 end
 
 // PORT B, on clk_sys: the copy engine and the CPU share it. Port A above is
@@ -1285,6 +1312,7 @@ wire  [1:0] cpu_sd_be;
 wire [31:0] cpu_dbg_rd, cpu_dbg_wr, cpu_dbg_unmapped;
 
 m2_cpu_bridge #(.AW(SDR_AW), .BOARD_2A(1'b0)) u_cpu_bridge (
+	.char_wr(cpu_char_wr),
 	.clk_cpu(clk_i960), .rst_n_cpu(cpu_rst_n),
 	.bus_req(cpu_req), .bus_we(cpu_we), .bus_addr(cpu_addr), .bus_be(cpu_be),
 	.bus_wdata(cpu_wdata), .bus_rdata(cpu_rdata), .bus_ack(cpu_ack),
@@ -1855,7 +1883,15 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		end
 	end
 end
-wire        uart_a_valid = tw_v;
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+	if (!mem_rst_n) begin
+		cf_cnt <= 32'd0; cf_nz <= 32'd0;
+	end else if (char_ack) begin
+		cf_cnt <= cf_cnt + 32'd1;
+		if (|char_data) cf_nz <= cf_nz + 32'd1;
+	end
+end
+wire        uart_a_valid = hb_tick;
 // WHAT THE STUCK LOOP READS.
 //
 // The board sits in the counted loop at 0x1BA8-0x1BCC and never appears in the
@@ -1978,10 +2014,28 @@ end
 // give instructions per second directly, and the frame number beside it gives
 // the frame rate, so the instruction BUDGET PER FRAME falls out of the pair.
 // That budget is the thing animation is spent from.
-logic [31:0] tram_cnt;
+// COUNT, DO NOT SAMPLE.
+//
+// The per-write census was biased and said so only after the fact: the eight
+// stores of a burst execute inside ~50 cycles while the streamer stays busy
+// 1.74 ms after each line, so it caught exactly ONE write per burst -- always
+// the first -- and one instruction appeared to be 5,167 of 5,245 writes. That
+// is the instrument, not the game.
+//
+// A counter cannot be biased. The question that matters is unbiased and small:
+// of everything the game writes into the tilemap, HOW MUCH IS A REAL TILE
+// INDEX? Simulation draws the attract screen with 12,289 non-zero cells, so if
+// this core is drawing, the non-zero count climbs to that order and stops. If
+// it stays near nothing, the screen was never drawn regardless of how busy the
+// write bus looks.
+logic [31:0] tram_cnt, tram_nz;
 always_ff @(posedge clk_sys or negedge mem_rst_n) begin
-	if (!mem_rst_n)         tram_cnt <= 32'd0;
-	else if (cpu_tram_we)   tram_cnt <= tram_cnt + 32'd1;
+	if (!mem_rst_n) begin
+		tram_cnt <= 32'd0; tram_nz <= 32'd0;
+	end else if (cpu_tram_we) begin
+		tram_cnt <= tram_cnt + 32'd1;
+		if (|cpu_oc_din) tram_nz <= tram_nz + 32'd1;
+	end
 end
 wire        uart_b2_valid = hb_tick_b || trap_edge;
 wire        uart_b_valid = char_ack;
@@ -1989,7 +2043,7 @@ wire [31:0] uart_dropped;
 
 m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	.clk(clk_sys), .rst_n(mem_rst_n),
-	.a_valid(uart_a_valid), .a_addr(tw_ip),
+	.a_valid(uart_a_valid), .a_addr(cf_cnt),
 	// THE RETIRED-INSTRUCTION COUNT RIDES ALONG WITH THE IP.
 //
 // The profile says 91% of the board's time goes on the four memory
@@ -1998,10 +2052,10 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 // simulation finishes this initialisation in 15.9 M instructions. Two
 // consecutive samples give the instruction rate directly, which settles
 // whether this is a wrong branch or a slow machine.
-	.a_data({1'b0, tw_a, tw_d}),
-	.b_valid(uart_b2_valid), .b_addr(tram_cnt),
-	.b_data({23'd0, cpu_trap, iob_pa}),
-	.a_tag(8'h4D), .b_tag(8'h54),          // 'M' IP | cell+value
+	.a_data(cf_nz),
+	.b_valid(uart_b2_valid), .b_addr(pl_cnt),
+	.b_data(pl_nz),
+	.a_tag(8'h43), .b_tag(8'h50),          // 'C' glyph fetches, 'P' palette reads
 	                                       // 'T' write count + trap/PA
 	.enable(1'b1),
 	.tx(UART_TXD), .dbg_dropped(uart_dropped)
@@ -2293,6 +2347,13 @@ end
 // pulse is missed by clk_vid at four starting phases in twelve -- measured in
 // test_m2_char_cdc. The fetch engine holds char_req until acknowledged, so the
 // first missed ack hangs it for good. Study R49.
+// GLYPH FETCH CENSUS. Tilemap writes are 35% non-zero and the renderer reads
+// 38.7% non-zero, so the picture survives as far as the tile word. The next
+// thing a pixel needs is its GLYPH, and a glyph of all zeros paints one flat
+// colour per layer -- the exact symptom. Counted on the ack, so this is fetches
+// and not idle cycles.
+logic [31:0] cf_cnt, cf_nz;
+wire        cpu_char_wr;   // the CPU wrote a glyph; the cache must forget
 wire        char_req, char_ack;
 wire [17:0] char_addr;
 wire [31:0] char_data;
@@ -2356,6 +2417,7 @@ m2_char_cache #(.IDX_BITS(14)) u_char_cache (
 	.v_ack(char_ack), .v_data(char_data),
 	.m_req(cache_m_req), .m_addr(cache_m_addr),
 	.m_ack(cache_m_ack), .m_data(cache_m_data),
+	.inval(cpu_char_wr),
 	.dbg_hits(char_hits), .dbg_misses(char_misses)
 );
 

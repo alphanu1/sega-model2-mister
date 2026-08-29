@@ -93,6 +93,9 @@ module m2_cpu_bridge #(
   input  logic [15:0] oc_pal_q,
 
   // Colour translation table, 96 entries.
+  // A WRITE LANDED IN THE CHAR REGION, so the glyph cache in front of it must
+  // drop what it holds. Without this it serves pre-upload zeros forever.
+  output logic        char_wr,
   output logic        oc_xlat_we,
   output logic  [6:0] oc_xlat_addr,
   output logic  [7:0] oc_xlat_din,
@@ -598,6 +601,11 @@ module m2_cpu_bridge #(
       endcase
     end
   end
+
+  // r_we/r_addr are the LATCHED request, so this is registered by construction
+  // rather than a tap on a live bus.
+  assign char_wr = r_we && (r_addr >= 32'h0108_0000) && (r_addr < 32'h0110_0000)
+                   && (st == S_LO);
 
   assign dbg_mstate = {2'd0, sd_ack, ack_mem, req_mem, st[2:0]};
 

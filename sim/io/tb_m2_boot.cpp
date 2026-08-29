@@ -520,6 +520,12 @@ int main(int argc, char **argv) {
   // transactions separates them.
   uint64_t prof_txn = 0;
   int prof_ack_prev = 0;
+  // WHICH STATE EATS THE 18.5 CYCLES? The sequencer is
+  // IDLE,LO,LO_W,HI,HI_W,RDB,IOW,DONE and obs_mstate carries st in bits 2:0.
+  // Histogramming it says whether the cost is the ack-fall waits (LO_W/HI_W),
+  // the requests themselves (LO/HI, i.e. real SDRAM latency), or the tail.
+  // Changing the bridge before knowing this would be a guess.
+  uint64_t prof_st[8] = {0,0,0,0,0,0,0,0};
 
   while (d->dbg_acc < max_instr || (warm_at && !warm_done)) {
     if (!fw_pending.empty() && d->dbg_acc >= fw_late) {
@@ -546,6 +552,7 @@ int main(int argc, char **argv) {
     }
     if (d->obs_bus_ack && !prof_ack_prev) ++prof_txn;
     prof_ack_prev = d->obs_bus_ack;
+    ++prof_st[d->obs_mstate & 7];
     if (pctr && d->dbg_acc != pc_acc_prev) {
       if (d->dbg_acc >= pcfrom) std::fprintf(pctr, "%08x\n", (unsigned)d->dbg_ip);
       pc_acc_prev = d->dbg_acc;
@@ -1351,6 +1358,13 @@ int main(int argc, char **argv) {
                   " %.1f cycles of wait each\n",
                   (unsigned long long)prof_txn, double(prof_txn)/double(insns),
                   prof_txn ? double(prof_waiting)/double(prof_txn) : 0.0);
+      static const char *ST[8]={"IDLE","LO","LO_W","HI","HI_W","RDB","IOW","DONE"};
+      std::printf("    bridge sequencer, cycles in each state:\n");
+      for (int i = 0; i < 8; ++i)
+        std::printf("      %-5s %12llu  %5.1f%%  %6.2f cycles per transaction\n",
+                    ST[i], (unsigned long long)prof_st[i],
+                    100.0*double(prof_st[i])/double(prof_cycles),
+                    prof_txn ? double(prof_st[i])/double(prof_txn) : 0.0);
     }
   }
   if (out) { std::fclose(out); std::printf("  PC stream written to %s\n", outfile); }

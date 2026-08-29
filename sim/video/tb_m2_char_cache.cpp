@@ -31,7 +31,13 @@ static uint64_t cyc = 0;
 
 // Reference memory: the value at an address is a hash of it, so a wrong word
 // is caught wherever it comes from.
-static uint32_t ref(uint32_t a) { return (a * 2654435761u) ^ 0xA5A5A5A5u; }
+// `epoch` stands in for the game UPLOADING new glyphs: the same address starts
+// returning something else. Nothing else in this file changes behaviour with
+// it, so a stale read is unambiguous.
+static uint32_t epoch = 0;
+static uint32_t ref(uint32_t a) {
+  return ((a * 2654435761u) ^ 0xA5A5A5A5u) + epoch * 0x01010101u;
+}
 
 static int  fails = 0, checks = 0;
 static uint64_t mem_reqs = 0;
@@ -123,6 +129,39 @@ int main(int argc, char **argv) {
     check(0x40 + span, 2);
   }
   std::printf("  conflict thrash: %d total checks, %d wrong\n", checks, fails);
+
+  // 5. COHERENCY, which is the property whose absence blanked the screen.
+  //
+  // The char region is RAM and the game uploads glyphs into it. A cache with no
+  // invalidation serves its filled lines forever, including lines filled BEFORE
+  // the upload -- which read as zeros, and a glyph of zeros paints one flat
+  // colour. The cache passed 10,128 correctness checks without ever being asked
+  // whether it can FORGET, which is exactly why this was missed.
+  {
+    const uint32_t a = 0x1234;
+    const uint32_t before = read_word(a, 3);          // fill the line
+    if (before != ref(a)) { std::printf("  FAIL: cold read wrong\n"); ++fails; }
+
+    ++epoch;                                          // the glyphs are rewritten
+    const uint32_t stale = read_word(a, 3);
+    if (stale != before) {
+      std::printf("  FAIL: cache should still be holding its line here\n");
+      ++fails;
+    }
+
+    d->inval = 1; tick(); d->inval = 0;
+    for (int i = 0; i < 40000; ++i) tick();           // let the sweep complete
+
+    const uint32_t after = read_word(a, 3);
+    ++checks;
+    if (after != ref(a)) {
+      std::printf("  FAIL: after inval got %08x, want %08x -- the cache did "
+                  "NOT forget, and this is the blank-screen bug\n", after, ref(a));
+      ++fails;
+    } else {
+      std::printf("  invalidate: line refetched after the data changed\n");
+    }
+  }
 
   std::printf("  memory transactions issued: %llu\n",
               (unsigned long long)mem_reqs);

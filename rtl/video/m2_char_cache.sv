@@ -62,6 +62,19 @@ module m2_char_cache #(
   input  logic                   m_ack,
   input  logic [31:0]            m_data,
 
+  // INVALIDATE. THE CACHE WAS INCOHERENT, AND THAT IS WHY THE SCREEN WAS FLAT.
+  //
+  // The char region is RAM: the game UPLOADS its glyphs into it. This cache had
+  // no invalidation of any kind, so a filled line served forever -- including
+  // lines filled BEFORE the upload, which read as zeros. A glyph of all zeros
+  // paints one flat colour and two layers paint two, which is exactly what the
+  // board showed. It also explains why it rendered ONCE and never again: whether
+  // the picture appears depends on whether a line happened to be filled after
+  // the upload or before it, which is a race rather than a state.
+  //
+  // Re-enters the sweep the reset path already has, so this costs no new
+  // mechanism. Uploads are bursts, so it sweeps a few times and then warms once.
+  input  logic                   inval,
   output logic [31:0]            dbg_hits,
   output logic [31:0]            dbg_misses
 );
@@ -123,6 +136,10 @@ module m2_char_cache #(
       st <= S_INIT; sweep <= '0; idx_r <= '0; tag_r <= '0;
       m_req <= 1'b0; m_addr <= '0; v_ack <= 1'b0; hold <= '0;
       dbg_hits <= '0; dbg_misses <= '0;
+    end else if (inval) begin
+      // Whatever it was doing, start again: a fill in flight would otherwise
+      // commit a line read before the write that invalidated it.
+      st <= S_INIT; sweep <= '0; m_req <= 1'b0; v_ack <= 1'b0;
     end else begin
       v_ack <= 1'b0;
       case (st)
