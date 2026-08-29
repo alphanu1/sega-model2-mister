@@ -4929,3 +4929,38 @@ sampled stream.** Three wrong conclusions this session came from sampling --
 the trap that was a flag poll, the starved channel that read as "never
 written", and the burst-leader census above. Every one was corrected by a
 counter, and a counter costs a few flip-flops.
+
+**R80 — the maps and the glyphs are BOTH correct on hardware; the fault is
+glyph fetch THROUGHPUT, which is the same memory path that limits the CPU.**
+
+*Everything feeding the renderer is right, measured against the reference:*
+
+    map2 real tiles   board 4,480 writes   MAME 4,096 content   agrees
+    map3 real tiles   board 4,096          MAME 4,096           exact
+    map1              board 0              MAME 0               exact
+    map0 real tiles   board 96             MAME 459             short
+    glyph upload      2,566,683 words written, 2,243,516 non-zero, THEN STOPS
+    MAME's char RAM   62.8% non-zero; our fetches return 53.1% non-zero
+
+*And the output is two flat bands, measured at the pin:* 524 colour changes per
+frame over 16.00 Mpix/s, which is ~2.3 per scanline -- a horizon and nothing
+else. A drawn screen is thousands.
+
+*The one number that is wrong:*
+
+    glyph fetches        97,565/s
+    a full screen needs  ~4,100,000/s
+    cache hit rate       51.8% on hardware, 96.7% in simulation
+
+Every miss takes the slow path through the SAME asynchronous CDC that costs the
+CPU 18.5 cycles per access (R78). Most tiles never receive their glyph in time,
+render transparent, and tilemap 2's TILEMAP_DRAW_OPAQUE pass shows through as
+flat colour. **So the memory path is not only the speed problem, it is also the
+picture problem, and one fix addresses both.**
+
+*Note on the hit rate.* The cache is 16,384 lines direct-mapped with a 4-bit
+tag over an 18-bit space, so sixteen addresses alias to each line against a
+measured working set spanning 985 KB. Simulation's 96.7% was measured on a
+captured access pattern; hardware's 51.8% is the live one. That gap is worth its
+own investigation once the memory path is fixed, because a cache that misses
+half the time cannot hide a slow miss.
