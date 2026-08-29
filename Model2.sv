@@ -1311,7 +1311,7 @@ wire [15:0] cpu_sd_din;
 wire  [1:0] cpu_sd_be;
 wire [31:0] cpu_dbg_rd, cpu_dbg_wr, cpu_dbg_unmapped;
 
-m2_cpu_bridge #(.AW(SDR_AW), .BOARD_2A(1'b0)) u_cpu_bridge (
+m2_cpu_bridge #(.AW(SDR_AW), .BOARD_2A(1'b0), .DCACHE_EN(1'b1)) u_cpu_bridge (
 	.dbg_dc_hits(dc_hits), .dbg_dc_miss(dc_miss),
 	.char_wr(cpu_char_wr), .char_wr_addr(cpu_char_wr_addr),
 	.clk_cpu(clk_i960), .rst_n_cpu(cpu_rst_n),
@@ -2053,7 +2053,10 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// speed and read out slowly. Sampling cannot show a BRANCH, and a branch
 	// is now the whole question -- the background fill at 0x1ce38 runs while
 	// the artwork at 0x1c904/0x1c770 and the text at 0x18ea4 never do.
-	.a_valid(prof_tick), .a_addr(lc_wdat),
+	// THE A/B: with DCACHE_EN=0 the read path is exactly the pre-cache one,
+	// so if the count still reads 0x27272727 the cache is innocent and the
+	// fault is below the bridge. map2's fold says whether it is drawing.
+	.a_valid(prof_tick), .a_addr(lc_cnt),
 	// THE RETIRED-INSTRUCTION COUNT RIDES ALONG WITH THE IP.
 //
 // The profile says 91% of the board's time goes on the four memory
@@ -2062,10 +2065,10 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 // simulation finishes this initialisation in 15.9 M instructions. Two
 // consecutive samples give the instruction rate directly, which settles
 // whether this is a wrong branch or a slow machine.
-	.a_data(sd_seen),
+	.a_data({fold_min[2], fold_max[2]}),
 	.b_valid(uart_b2_valid), .b_addr({fold_min[0], fold_max[0]}),
 	.b_data(fold_sum[0]),
-	.a_tag(8'h42), .b_tag(8'h30),          // 'B' cpu write | what the bridge sent
+	.a_tag(8'h4C), .b_tag(8'h30),          // 'L' loop count | map2 min:max
 	                                       // '0' map0 min|max : sum
 	                                       // 'T' write count + trap/PA
 	.enable(1'b1),

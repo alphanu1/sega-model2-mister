@@ -38,7 +38,16 @@
 
 `timescale 1ns/1ps
 
+// DCACHE_EN LETS THE CACHE BE TAKEN OUT OF THE PATH ENTIRELY.
+//
+// Every observation of the byte smear at 0x501084 comes from a build that
+// already had the data cache, so it has never been excluded as the CAUSE. With
+// this at 0 the read path is exactly what it was before the cache existed --
+// unaligned single burst, r_addr[1] halfword selection -- and the board can say
+// whether the smear survives without it. Simulation cannot answer this: it
+// reads the value correctly either way.
 module m2_cpu_bridge #(
+  parameter bit DCACHE_EN = 1'b1,
   parameter int unsigned AW = 25,        // SDRAM word address width
   parameter bit          BOARD_2A = 0    // 0 = model2o, 1 = 2A-CRX
 ) (
@@ -386,7 +395,29 @@ module m2_cpu_bridge #(
   // holds 0x00000860 -- the low half right, the high half not.
   // S_DCK joins them, so the encoding needs a fourth bit.
   typedef enum logic [3:0] { S_IDLE, S_LO, S_LO_W, S_HI, S_HI_W, S_RDB, S_IOW, S_DONE,
-                             S_DCK } st_e;
+                             S_DCK, S_RMW, S_RMW_W } st_e;
+
+  // READ-MODIFY-WRITE FOR SUB-WORD WRITES, because byte enables do not reach
+  // the memory on this board.
+  //
+  // Measured: the CPU issues a byte store (data 0x27272727, be=0001 -- correct
+  // i960 behaviour, it replicates the byte and relies on the enables), the
+  // bridge forwards be=01 (verified on hardware), and every lane still lands.
+  // The x2 adapter passes be through combinationally, the controller captures
+  // it on the request edge and drives sd_dqm = ~be, the pins are assigned and
+  // constrained, and simulation gets all four lanes right against the device
+  // model. Bypassing the data cache changes nothing, so it is not that either.
+  //
+  // Every hop verifies and the result is still wrong, which leaves the SDRAM
+  // module: DQM tied low is common on these boards, and it would make every
+  // byte write land in all four lanes exactly as observed -- invisible to every
+  // test we own, because they all test the FPGA.
+  //
+  // So stop depending on it. A partial write READS the word, merges the enabled
+  // bytes here, and writes back FULL WIDTH. No mask reaches the device.
+  logic [31:0] rmw_dat;
+  logic        rmw_done;
+  wire         needs_rmw = r_we && (r_be != 4'b1111);
   st_e  st;
   logic half;
 
@@ -483,6 +514,7 @@ module m2_cpu_bridge #(
       dbg_cpu_reads <= 32'd0; dbg_cpu_writes <= 32'd0; dbg_unmapped <= 32'd0;
       // Nothing may be served from valid bits that were never initialised.
       dc_sweeping <= 1'b1; dc_sweep <= '0; dc_inval <= 1'b0; dc_tag_r <= '0;
+      rmw_dat <= 32'd0; rmw_done <= 1'b0;
       dbg_dc_hits <= 32'd0; dbg_dc_miss <= 32'd0;
       dbg_last_addr <= 32'd0; dbg_last_dout <= 32'd0;
       dbg_probe6 <= 32'hEEEE_EEEE; dbg_probe2 <= 32'hEEEE_EEEE;
@@ -510,12 +542,26 @@ module m2_cpu_bridge #(
             T_SDRAM: begin
               if (r_we && is_rom) begin
                 ack_mem <= 1'b1; st <= S_DONE;    // .rom().nopw()
-              end else if (!r_we) begin
+              end else if (!r_we && DCACHE_EN) begin
                 // ASK THE CACHE FIRST. The arrays were addressed with dc_idx
                 // combinationally this cycle, so S_DCK can compare next cycle.
                 // 97.9% of reads end there and never reach the memory at all.
                 dc_tag_r <= dc_tagv;
                 st       <= S_DCK;
+              end else if (!r_we) begin
+                // Cache bypassed: the pre-cache path, byte for byte.
+                sd_addr <= sd_word;
+                sd_we   <= 1'b0;
+                sd_be   <= 2'b11;
+                sd_req  <= 1'b1;
+                st      <= S_RDB;
+              end else if (needs_rmw && !rmw_done) begin
+                dc_inval <= 1'b1;
+                sd_addr  <= {sd_word[AW:3], 2'b00};
+                sd_we    <= 1'b0;
+                sd_be    <= 2'b11;
+                sd_req   <= 1'b1;
+                st       <= S_RMW;
               end else begin
                 // WRITE-THROUGH, INVALIDATE, NO ALLOCATE. The write reaches
                 // memory exactly as before and drops whatever line it lands on.
@@ -543,8 +589,10 @@ module m2_cpu_bridge #(
                 // Aligned accesses are unaffected, which is why the boot's own
                 // 128 KB copy matched 65,536 of 65,536 words while character
                 // data came out half written.
-                sd_din  <= r_addr[1] ? r_wdata[31:16] : r_wdata[15:0];
-                sd_be   <= r_addr[1] ? r_be[3:2]      : r_be[1:0];
+                sd_din  <= rmw_done ? (r_addr[1] ? rmw_dat[31:16] : rmw_dat[15:0])
+                                    : (r_addr[1] ? r_wdata[31:16] : r_wdata[15:0]);
+                sd_be   <= rmw_done ? 2'b11
+                                    : (r_addr[1] ? r_be[3:2] : r_be[1:0]);
                 sd_req  <= 1'b1;
                 st      <= S_LO;
               end
@@ -668,8 +716,9 @@ module m2_cpu_bridge #(
           // is set those belong to the NEXT dword and are not part of this
           // transaction at all, so nothing is enabled -- the i960 will issue
           // them separately.
-          sd_din  <= r_addr[1] ? 16'd0   : r_wdata[31:16];
-          sd_be   <= r_addr[1] ? 2'b00   : r_be[3:2];
+          sd_din  <= r_addr[1] ? 16'd0
+                     : (rmw_done ? rmw_dat[31:16] : r_wdata[31:16]);
+          sd_be   <= r_addr[1] ? 2'b00 : (rmw_done ? 2'b11 : r_be[3:2]);
           sd_req  <= 1'b1;
           st      <= S_HI;
         end
@@ -712,6 +761,27 @@ module m2_cpu_bridge #(
           end
         end
 
+        // The read half of a read-modify-write. WAIT FOR THE ACK TO FALL
+        // before re-dispatching: returning straight to S_IDLE walks into the
+        // held-acknowledge hazard S_LO_W and S_HI_W exist to avoid, which is
+        // R32's wrong boot vector.
+        S_RMW: if (sd_ack) begin
+          sd_req <= 1'b0;
+          rmw_dat[7:0]   <= r_be[0] ? r_wdata[7:0]
+                            : (r_addr[2] ? sd_dout[39:32] : sd_dout[7:0]);
+          rmw_dat[15:8]  <= r_be[1] ? r_wdata[15:8]
+                            : (r_addr[2] ? sd_dout[47:40] : sd_dout[15:8]);
+          rmw_dat[23:16] <= r_be[2] ? r_wdata[23:16]
+                            : (r_addr[2] ? sd_dout[55:48] : sd_dout[23:16]);
+          rmw_dat[31:24] <= r_be[3] ? r_wdata[31:24]
+                            : (r_addr[2] ? sd_dout[63:56] : sd_dout[31:24]);
+          rmw_done <= 1'b1;
+          st       <= S_RMW_W;
+        end
+
+        // The ack has fallen; now the write may be issued.
+        S_RMW_W: if (!sd_ack) st <= S_IDLE;
+
         // A burst read: both halves arrive together in p_dout[31:0].
         S_RDB: if (sd_ack) begin
           sd_req        <= 1'b0;
@@ -740,7 +810,9 @@ module m2_cpu_bridge #(
           // natural order, and the dword the CPU asked for is picked by
           // r_addr[2]. The LSU still selects its halfword with cur_addr[1],
           // which is what it expects to do.
-          r_rdata       <= r_addr[2] ? sd_dout[63:32] : sd_dout[31:0];
+          r_rdata       <= DCACHE_EN ? (r_addr[2] ? sd_dout[63:32] : sd_dout[31:0])
+                                     : (r_addr[1] ? {sd_dout[15:0], 16'd0}
+                                                  : sd_dout[31:0]);
           dbg_last_addr <= {7'd0, sd_addr};
           dbg_last_dout <= sd_dout[31:0];
           // EEEEEEEE means the address was never read at all, which is a
@@ -768,7 +840,8 @@ module m2_cpu_bridge #(
         // this the crossing can fire twice for one access, which is the
         // req-versus-req-and-ack fault named at the top.
         S_DONE: if (!req_mem) begin
-          ack_mem <= 1'b0;
+          ack_mem  <= 1'b0;
+          rmw_done <= 1'b0;
           st      <= S_IDLE;
         end
 
