@@ -157,15 +157,40 @@ module m2_ioz80 #(
   logic  [7:0] ram_q;
   logic  [7:0] fw_q;
   logic        fw_a0;
-  always_ff @(posedge clk) begin
-    if (fw_we) fw[fw_addr] <= fw_data;
-  end
+  // ONE EDGE, for the same reason as the work RAM below: a posedge write against
+  // a negedge read makes this a dual-clock M10K whose read-during-write Quartus
+  // declares UNDEFINED on silicon and Verilator models as defined. The download
+  // and execution do not overlap in practice, so this one is unlikely to bite --
+  // but "unlikely" is how the work RAM's version would have been described too,
+  // and an undefined array holding the firmware is not worth keeping for the
+  // sake of half a cycle.
   always_ff @(negedge clk) begin
+    if (fw_we) fw[fw_addr] <= fw_data;
     fw_w  <= fw[A[13:1]];
     fw_a0 <= A[0];
   end
   assign fw_q = fw_a0 ? fw_w[15:8] : fw_w[7:0];
-  always_ff @(posedge clk) begin
+  // WRITE ON THE SAME EDGE AS THE READ, AND THAT IS THE POINT.
+  //
+  // This wrote on posedge while the read below happens on negedge, so Quartus
+  // inferred a DUAL-CLOCK M10K and said what that costs:
+  //
+  //   Warning (276027): Inferred dual-clock RAM node "m2_ioz80|ram_rtl_0" ...
+  //   The read-during-write behavior of a dual-clock RAM is UNDEFINED and may
+  //   not match the behavior of the original design.
+  //
+  // Undefined on silicon, well-defined in Verilator -- so the Z80 can read back
+  // a byte it has just written and get one answer here and another on the
+  // board. This is the firmware's own work RAM: its DPRAM retry budget lives at
+  // 0x5803 (R63) along with every other piece of its state, and it is read and
+  // written constantly.
+  //
+  // Moving the write to the falling edge makes the array single-clock, which
+  // gives it DEFINED read-during-write, and costs nothing else: aw_l and dw_l
+  // are already latched and stable, and the Z80 is paced at CEN_DIV=12 so half
+  // a cycle of write delay is invisible to it. The read keeps the async-ROM
+  // shape tv80 needs -- data half a cycle after the address.
+  always_ff @(negedge clk) begin
     if (wr_stb && aw_l[15:13] == 3'b010) ram[aw_l[12:0]] <= dw_l;   // 0x4000-0x5fff
   end
   always_ff @(negedge clk) ram_q <= ram[A[12:0]];

@@ -1796,13 +1796,12 @@ wire        uart_a_valid = rd_v || trap_edge;
 logic            rd_v;
 logic [24:0]     rd_ad;
 logic [31:0]     rd_dt;
-logic [SDR_AW:1] sd_a_d;      // the address bus, sampled -- never tapped live
-logic            sd_rq_d;
-logic [31:0]     sd_dt_d;
+logic            io_sel_d, io_we_d;   // sampled, never tapped live
+logic [31:0]     io_addr_d, io_dat_d;
 always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
 		rd_v <= 1'b0; rd_ad <= '0; rd_dt <= '0;
-		sd_a_d <= '0; sd_rq_d <= 1'b0; sd_dt_d <= '0;
+		io_sel_d <= 1'b0; io_we_d <= 1'b0; io_addr_d <= '0; io_dat_d <= '0;
 	end
 	else begin
 		// REPOINTED AT THE INTERRUPT PATH. The clk_vid/ce_pix mismatch was a
@@ -1820,6 +1819,15 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		// Worth noting what this tests that nothing else has: the ROM checksums
 		// were folded by the SWEEP on port 4. The CPU reads on port 1. Those
 		// are different paths and only one of them has ever been verified.
+		// THE I/O EXCHANGE ITSELF. The board calls the I/O board command routine
+		// 3,110 times in 90 seconds; the question is whether it is RETRYING a
+		// failed exchange forever. Capture every CPU access to the DPRAM window
+		// -- read or write, address and value -- and the retry shows as the same
+		// command reissued with the same answer coming back.
+		//
+		// REGISTERED, per the standing rule. Two black screens today came from
+		// hanging comparators on live buses; this samples first and compares a
+		// cycle later.
 		// FILTER ON THE ADDRESS, NOT THE IP. The IP filter behaved oddly --
 		// it captured reads whose addresses belong to a different routine --
 		// so gate on the thing being questioned instead. Simulation's allocator
@@ -1832,14 +1840,21 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		// caused earlier, and the third time an instrument has broken the thing
 		// it was measuring. The bus is sampled into flops here; every
 		// comparison happens a cycle later, where nothing depends on it.
-		sd_a_d   <= cpu_sd_addr;
-		sd_rq_d  <= cpu_sd_req && !cpu_sd_we && p_ack[1];
-		sd_dt_d  <= p_dout[1][31:0];
-		rd_v  <= sd_rq_d
-		         && (sd_a_d >= SDR_AW'(25'h10000))
-		         && (sd_a_d <  SDR_AW'(25'h20000));   // the whole ROM mirror
-		rd_ad <= 25'(sd_a_d);
-		rd_dt <= sd_dt_d;
+		io_sel_d  <= cpu_io_sel;
+		io_we_d   <= cpu_io_we;
+		io_addr_d <= cpu_io_addr;
+		io_dat_d  <= cpu_io_we ? cpu_io_wdata : cpu_io_rdata;
+		// The DPRAM window only -- 0x01C00000..0x01C00FFF.
+		// BACK ON THE THREAD THE UART FOUND. The board calls the I/O board
+		// command routine 0x22F0F0 (from 0x228700) 3,110 times in 90 seconds.
+		// That is the game hammering the exchange. Capture the DPRAM traffic
+		// itself -- every CPU read and write of the window -- and a retry loop
+		// shows as the same command reissued with the same answer returning.
+		rd_v  <= io_sel_d && (io_addr_d[23:12] == 12'hc00);
+		// Top bit of the address field flags a write, so reads and writes are
+		// distinguishable in one stream.
+		rd_ad <= {io_we_d, 12'd0, io_addr_d[11:0]};   // bit24 = write
+		rd_dt <= io_dat_d;
 	end
 end
 wire        uart_b2_valid = rd_v;
@@ -1989,6 +2004,8 @@ logic [63:0]     sw_word;     // the burst, folded a word at a time
 logic  [1:0]     sw_wsel;
 logic  [4:0]     sw_sel;
 logic            sw_done;
+logic            sw_done_d, sw_emit;
+logic  [7:0]     sw_runs;
 
 // status[] is written by the HPS and changes only when the user moves in the
 // OSD, so it is many orders of magnitude slower than clk_sys and is read
@@ -2009,6 +2026,7 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		sw_req <= 1'b0; sw_addr <= '0; sw_acc <= 24'd0;
 		sw_val <= 24'd0; sw_burst <= 20'd0;
 		sw_state <= 3'd0; sw_sel <= 5'd0; sw_done <= 1'b0;
+		sw_done_d <= 1'b0; sw_emit <= 1'b0; sw_runs <= 8'd0;
 	end else begin
 		// RESTART ON A NEW SELECTION -- but never out of state 1, which is the
 		// one state with a request outstanding on port 4. Dropping sw_req there
@@ -2016,6 +2034,28 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		// land in a sweep which had already zeroed its accumulator, folding one
 		// stale burst into the new region's total. A sweep is ~66 ms, so waiting
 		// for the in-flight burst to land costs nothing.
+		// AUTO-REPEAT, TO TEST THE MEMORY ITSELF.
+		//
+		// REAL_MEM renders attract correctly at the board's own speed, so the
+		// fault is not logic and not timing. What simulation cannot model is a
+		// marginal physical interface -- and this board has ONE working capture
+		// depth of six. Corruption at even 1-in-10,000 reads would pass a
+		// ten-read spot check and still be fatal: one bad pointer during
+		// initialisation and the game never recovers.
+		//
+		// So fold the SAME 2 MB region again and again. A memory that returns
+		// the same data every time folds to the same value every time. Any
+		// variation is proof the reads are unreliable, which no amount of
+		// staring at logic would ever show.
+		sw_emit <= 1'b0;
+		if (sw_done && !sw_done_d) begin
+			sw_emit  <= 1'b1;          // one pulse per completed fold
+			sw_runs  <= sw_runs + 8'd1;
+			sw_state <= 3'd0;          // and immediately go round again
+			sw_done  <= 1'b0;
+		end
+		sw_done_d <= sw_done;
+
 		if (sw_sel != sw_sel_i && sw_state != 3'd1) begin
 			sw_sel   <= sw_sel_i;
 			sw_state <= 3'd0;
