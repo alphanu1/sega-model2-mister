@@ -245,8 +245,9 @@ module m2_ioz80 #(
 
   wire io_sel  = (A[15:4] == 12'h800);   // 0x8000-0x800f
   wire adc_sel = (A[15:2] == 14'h3000);  // 0xc000-0xc003
-  logic adc_sel_d;
-  always_ff @(posedge clk) adc_sel_d <= mem_rd && adc_sel;
+  // ONE PULSE AT THE READ'S LEADING EDGE. See the ADC block below for why the
+  // shift is bound to this rather than to the read's end.
+  wire adc_rd_start = mem_rd && !mem_rd_d && adc_sel;
 
   // Reads. dpram reads go through z_rdata: z_addr tracks io_address
   // continuously, the DPRAM's registered read settles long before the paced
@@ -423,9 +424,39 @@ module m2_ioz80 #(
   // ------------------------------------------------------------ MSM6253 ADC
   // address_w latches the selected channel into a shift register; d0_r shifts
   // it out MSB-first, one bit per read, in bit 0.
+  // ATOMIC CAPTURE-THEN-SHIFT, because the two were separable and drifted.
+  //
+  // MEASURED ON HARDWARE, against MAME running the same firmware: every analog
+  // byte the firmware deposited was its input shifted LEFT BY ONE.
+  //
+  //     DPRAM   board  MAME   fed in
+  //     0x00     00     80    0x80     steering
+  //     0x01     40     20    0x20     accelerator
+  //     0x02     40     20    0x20     brake
+  //     0x04-07  FE     FF    0xFF     the secondary bank
+  //
+  // Eight independent bytes, one relationship: the first read returned bit 6
+  // instead of bit 7, so a shift happened between the channel latch and the
+  // first read. This is R65's "ADC off-by-one", with a mechanism at last.
+  //
+  // The old shape emitted `adc_shift[7]` combinationally and shifted on the
+  // read's TRAILING edge, which is two events that must agree exactly once per
+  // read. The reference makes them one event:
+  //
+  //     bool msm6253_device::shift_out() {
+  //       bool msb = BIT(m_shift_register, 7);
+  //       m_shift_register <<= 1;
+  //       return msb;
+  //     }
+  //
+  // So capture and shift on the SAME edge and hold the bit for the read. Under
+  // CEN pacing the Z80 samples many cycles after the strobe rises -- the same
+  // assumption the registered ROM and RAM reads above already rest on -- so a
+  // bit registered on the leading edge is settled long before it is latched.
   logic [7:0] adc_shift;
+  logic       adc_bit;
   always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) adc_shift <= 8'd0;
+    if (!rst_n) begin adc_shift <= 8'd0; adc_bit <= 1'b1; end
     else if (wr_stb && aw_l[15:2] == 14'h3000) begin
       case (aw_l[1:0])
         // "analog port switching is handled by two 74hc4066 analog switches"
@@ -437,8 +468,9 @@ module m2_ioz80 #(
         2'd2: adc_shift <= secondary ? 8'hFF : adc2;
         2'd3: adc_shift <= secondary ? 8'hFF : adc3;
       endcase
-    end else if (rd_end && adc_sel_d) begin
-      adc_shift <= {adc_shift[6:0], 1'b0};
+    end else if (adc_rd_start) begin
+      adc_bit   <= adc_shift[7];              // the bit this read returns
+      adc_shift <= {adc_shift[6:0], 1'b0};    // and it is consumed by taking it
     end
   end
 
@@ -448,7 +480,9 @@ module m2_ioz80 #(
     if      (A[15:14] == 2'b00) di = fw_q;                    // 0x0000-0x3fff
     else if (A[15:13] == 3'b010) di = ram_q;                  // 0x4000-0x5fff
     else if (io_sel)             di = io_q;
-    else if (adc_sel)            di = {7'h7f, adc_shift[7]};
+    // d0_r returns the bit in position 0 with the unmapped bits reading as
+    // ones: `shift_out() | (space.unmap() & 0xfe)`.
+    else if (adc_sel)            di = {7'h7f, adc_bit};
   end
 
 endmodule

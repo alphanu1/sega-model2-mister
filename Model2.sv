@@ -1593,7 +1593,10 @@ m2_ioz80 #(.CEN_DIV(12)) u_ioz80 (
 	// bit is unused for this game, so a switch would only offer a way to be
 	// wrong. They are ports so a game that does use them can drive them.
 	.dsw1(8'hFF), .dsw2(8'hFF), .dsw3(8'hFF),
-	.adc0(8'h80), .adc1(8'h20), .adc2(8'h20), .adc3(8'h80),
+	// an_callback<0..2> are STEER/ACCEL/BRAKE; <3> is never bound for this
+	// game and an unbound devcb_read8 reads 0xFF, which is what MAME's
+	// firmware deposits at DPRAM 0x03.
+	.adc0(8'h80), .adc1(8'h20), .adc2(8'h20), .adc3(8'hFF),
 	.z_we(zio_we), .z_addr(zio_addr), .z_wdata(zio_wdata), .z_rdata(zio_rdata),
 	.dbg_ee(), .dbg_wrcnt(), .dbg_wr_stb(), .dbg_dout(), .dbg_di(),
 	.dbg_rd_end(), .dbg_ra(), .dbg_rdat(),
@@ -1835,7 +1838,7 @@ logic [15:0] zw_cnt;                 // block-window writes, cumulative
 // Same firmware, same nominal inputs. Any byte that differs is the fault, and
 // it names itself. 0x00-0x2f also catches the flag/status pair at 0x20-0x21 and
 // the "SEGA" wake-up bytes at 0x1a-0x1d.
-wire         zw_blk = zio_we_d && (zio_addr_d <= 11'h02f);
+wire         zw_blk = zio_we_d && (zio_addr_d >= 11'h100) && (zio_addr_d <= 11'h17f);
 always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
 		zio_we_d <= 1'b0; zio_addr_d <= 11'd0; zio_wdata_d <= 8'd0;

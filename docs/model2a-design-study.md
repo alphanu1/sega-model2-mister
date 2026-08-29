@@ -4726,3 +4726,61 @@ to 0xFF as ports (so a game that uses them can drive them), the full simulation
 suite passes, and the change is provably inert wherever secondary is not
 selected. Whether it restores the settings block, and with it the attract
 screen, is the next measurement -- not a claim this entry is entitled to make.
+
+**R77 — the MSM6253's shift was two events where the reference has one, and
+every analog byte the I/O board produced was its input SHIFTED LEFT BY ONE.**
+R65 recorded an "ADC off-by-one" and deliberately left it unfixed pending a
+verified mechanism. This is that mechanism, and the fix is confirmed against
+the reference byte for byte.
+
+*How it was found: the same firmware, measured on both machines.* MAME's I/O
+board deposits its input scan at DPRAM 0x00-0x0d, and those bytes are exactly
+knowable. Ours were captured off the board over the serial channel. Eight
+independent bytes, one relationship:
+
+    DPRAM   board  MAME   fed in
+    0x00     00     80    0x80    steering
+    0x01     40     20    0x20    accelerator
+    0x02     40     20    0x20    brake
+    0x04-07  FE     FF    0xFF    the secondary analog bank
+
+`0x80 << 1 = 0x00`, `0x20 << 1 = 0x40`, `0xFF << 1 = 0xFE`. The first read
+returned bit 6 instead of bit 7, so one shift happened between the channel
+latch and the first read.
+
+*The cause is structural, not arithmetic.* The old code emitted
+`adc_shift[7]` combinationally and shifted on the read's TRAILING edge --
+**two events that have to agree exactly once per read, and did not.** The
+reference makes them a single indivisible act:
+
+    bool msm6253_device::shift_out() {
+      bool msb = BIT(m_shift_register, 7);
+      m_shift_register <<= 1;      // consumed by the act of taking it
+      return msb;
+    }
+
+So capture and shift now happen on the SAME edge -- the read's leading edge --
+and the bit is held for the rest of the strobe. Under CEN pacing the Z80
+samples many cycles after the strobe rises, which is the assumption the
+registered ROM and RAM reads in the same file already rest on.
+
+*Also corrected:* `an_callback<3>` is never bound for this game, and an unbound
+`devcb_read8` reads 0xFF, so `adc3` is 0xFF rather than 0x80. That is the byte
+MAME's firmware deposits at DPRAM 0x03.
+
+*Confirmed on hardware.* The I/O board's scan output is now byte-identical to
+the reference across every address it writes:
+
+    addr  000 001 002 003 004 005 006 007 009 00b 00c 00d
+    board  80  20  20  FF  FF  FF  FF  FF  8F  FF  FF  FF
+    MAME   80  20  20  FF  FF  FF  FF  FF  8F  FF  FF  FF
+
+*The general lesson, which has now cost this project twice.* A read with a side
+effect must be ONE event in the RTL, not a combinational output plus a
+separate strobe that shifts. The two drift, simulation does not notice because
+its strobes are ideal, and the error is a silent factor of two.
+
+*Still open at the time of writing:* whether the settings block at DPRAM
+0x100-0x17f stops being swept once the scan feeding it is correct. The
+reference writes that block ONCE and never touches it again; this core was
+sweeping it three times a minute with the shifted values.
