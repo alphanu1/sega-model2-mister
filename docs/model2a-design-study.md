@@ -5110,3 +5110,60 @@ when those are confused.
 bypassed, and it must come before any further fix.** Simulation cannot answer it:
 it reads 0x27 correctly with the cache present, so whatever is happening is
 hardware-only and only the board can say.
+
+**R85 — the tearing is scanline overruns, the glyph cache line fixed most of it,
+and the measurement says DEEPER BUFFERING IS NOT THE NEXT LEVER.**
+
+*Two cache faults, both found by asking what the address bits actually do.*
+
+  1. **The index used a bit that is always zero.** m2_tile_decode computes
+     `char_addr = {tile_num, 4'b0000} + {map_y[2:0], 1'b0}` -- both terms have
+     bit 0 clear -- and the cache indexed on v_addr[13:0]. Only even lines were
+     reachable and HALF the M10K sat idle.
+  2. **The line stored half of what the burst fetched.** A miss returns four
+     16-bit words in a 64-bit p_dout and the line held two, discarding the next
+     ROW of the same tile -- which the next scanline then fetched again. The
+     locality is exact: rows sit at char_addr, +2, +4 ... +14 and consecutive
+     scanlines read consecutive rows.
+
+*Measured on hardware, in sequence:*
+
+    glyph hit rate    61.4%  ->  82.6%  ->  93.56%
+    overruns/frame     27.1  ->   27.1  ->   6.99   (of 384 lines)
+
+Neither cost any M10K: 8,192 x 64 bits is the 64 KB that 16,384 x 32 was.
+
+*Why a per-frame counter had to exist first.* dbg_overruns saturates at 65535
+and reaches it during warm-up, so it can say "there were overruns" and never
+"there are overruns NOW". Reading its stopped-incrementing state as "fixed" was
+wrong and the screen said so. A frame has 384 lines; the per-frame count cannot
+saturate.
+
+*And why the next step is NOT four line buffers.* m2-framediff.sh measures the
+demand directly:
+
+    per-line fetch demand over 1470 non-empty lines:
+        mean 61.5  median 66  p90 82  max 115
+    burstiness max/mean = 1.87x
+    engine waiting on memory: 8.3% of all time
+
+The tool states the rule it was built with: above 2x, buffering ahead smooths
+real variance; near 1x, only fewer fetches or more bandwidth help. **1.87x is
+below that line**, and 8.3% memory wait is not a starved engine. Four banks were
+written, cost ~6 M10K, and are PARKED rather than shipped -- the evidence does
+not support them, and shipping on reasoning after this session's record would be
+indefensible.
+
+*An instrument note, because the parked version has one.* Decoupling the fetch
+from the beam invalidates the overrun definition: "line_start arrived while the
+sequencer was in Q_RUN" is normal operation for a FIFO that always runs, and it
+reported 1195 against the two-bank 32 in the same simulation. The correct
+definition for that design is "line_start arrived with nready == 0", and any
+future attempt must change the counter in the same commit as the buffering.
+
+*Separately, and worth its own investigation:* the pixel-exact frame test FAILS
+by 173,299 of 190,464 pixels, and it fails identically with two banks and with
+four, so it is pre-existing and not caused by either change. The data feeding it
+is byte-perfect -- tools/i960-datadiff.sh reports tile RAM, char RAM and palette
+all IDENTICAL to MAME -- so this is the renderer or the comparison's frame
+alignment, not the game state. It is the obvious next thread.
