@@ -5167,3 +5167,39 @@ four, so it is pre-existing and not caused by either change. The data feeding it
 is byte-perfect -- tools/i960-datadiff.sh reports tile RAM, char RAM and palette
 all IDENTICAL to MAME -- so this is the renderer or the comparison's frame
 alignment, not the game state. It is the obvious next thread.
+
+**R86 — the four-word glyph line cost 64 M10K, not zero, and the glyph cache is
+now the largest memory in the design.** Correcting c122bea, which claimed "same
+storage: 8,192 x 64 bits is the 64 KB that 16,384 x 32 was, so M10K is unchanged".
+
+The BITS are the same. The BLOCKS are not. An M10K is 10,240 bits but at most
+20 bits wide per block in true dual-port mode, so a 64-bit word needs four
+blocks side by side where a 32-bit word needs two -- and the array went from
+~64 blocks to 128. Whole-design M10K moved 389 -> 449 of 553, and that jump was
+attributed to a UART with no arrays in it before the fitter report was read
+properly.
+
+    128  glyph cache cdata     <- largest single memory
+    128  tilemap tram (2 x 64)
+     31  palette
+     16  Z80 firmware ROM
+      8  Z80 RAM
+      6  glyph cache tags
+   ~145  framework (ascal)
+
+*What the 64 blocks bought, measured:* hit rate 82.6% -> 93.56%, overruns per
+frame 27.1 -> 6.99. That is a fair trade at 70% occupancy and worth revisiting
+at 90%.
+
+*The lever, if 3D needs it:* 4,096 x 64 keeps the four-word line's locality --
+which is where most of the gain came from, since a tile's rows are read on
+consecutive scanlines -- at roughly the old block count. Untested; it should be
+modelled from a glyph trace before it is built, the way the data cache was.
+
+*Two reading errors worth recording, because both were confident and wrong.*
+The fitter's memory table was parsed with the wrong column and reported the
+i960's register cache as the biggest consumer at 128 blocks. That array is
+16 x 128 bits -- 2 Kbit, in MLAB, exactly as its own comment intends -- and 128
+was its port WIDTH. The M10K column is 20, not 21, and "Total Inapplicable" is a
+row, not a memory. A number lifted from a table without checking which column it
+came from is not a measurement.
