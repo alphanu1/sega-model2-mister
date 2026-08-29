@@ -43,6 +43,7 @@ module m2_sndlink_harness #(
   // dword, so the test should exercise the same ports the core uses.
   logic [7:0] a_data_o, a_stat_o, b_data_o, b_stat_o;
   logic       a_tx_v, a_tx_a, a_rx_v, a_rx_a;
+  logic       a_irx, a_itx, b_irx, b_itx;   // the split flags; this test uses irq
   logic       b_tx_v, b_tx_a, b_rx_v, b_rx_a;
 
   m2_i8251 u_a (
@@ -50,7 +51,7 @@ module m2_sndlink_harness #(
     .sel(a_sel), .we(a_we), .addr(a_addr), .din(a_din), .dout(a_dout), .data_o(a_data_o), .stat_o(a_stat_o),
     .tx_data(a_tx_d), .tx_valid(a_tx_v), .tx_ack(a_tx_a),
     .rx_data(a_rx_d), .rx_valid(a_rx_v), .rx_ack(a_rx_a),
-    .irq(a_irq)
+    .irq(a_irq), .irq_rx(a_irx), .irq_tx(a_itx)
   );
 
   m2_i8251 u_b (
@@ -58,7 +59,7 @@ module m2_sndlink_harness #(
     .sel(b_sel), .we(b_we), .addr(b_addr), .din(b_din), .dout(b_dout), .data_o(b_data_o), .stat_o(b_stat_o),
     .tx_data(b_tx_d), .tx_valid(b_tx_v), .tx_ack(b_tx_a),
     .rx_data(b_rx_d), .rx_valid(b_rx_v), .rx_ack(b_rx_a),
-    .irq(b_irq)
+    .irq(b_irq), .irq_rx(b_irx), .irq_tx(b_itx)
   );
 
   m2_sound_link #(.BYTE_CYCLES(BYTE_CYCLES)) u_link (
@@ -69,6 +70,8 @@ module m2_sndlink_harness #(
     .b_rx_data(b_rx_d), .b_rx_valid(b_rx_v), .b_rx_ack(b_rx_a),
     .dbg_a_bytes(dbg_a_bytes), .dbg_a_last(dbg_a_last), .dbg_a_sig(dbg_a_sig)
   );
+
+  wire _unused = &{1'b0, a_irx, a_itx, b_irx, b_itx, 1'b0};
 
   assign a_stat = a_stat_o;
   assign b_stat = b_stat_o;

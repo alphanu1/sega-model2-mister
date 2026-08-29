@@ -5230,3 +5230,84 @@ unrelated line and left its own stale. It survived because the game writes
 glyphs mostly at init and the reset sweep clears everything. A parameter that
 widens must be followed to every place it is indexed, and a port that silently
 zero-extends will not tell you.
+
+**R87 — the sound board is the MODEL 1 board, not SCSP, and its 68000 now runs
+72,035 of MAME's own instructions.** §5.5 budgets "SCSP + 68000 = 4,164 ALM" for
+sound. That is the wrong board for this game and the row should not be relied on.
+
+`model2.cpp` gives model2o a `SEGAM1AUDIO` — the same device `model1.cpp` uses.
+There is no SCSP anywhere near daytona93. The board is an M68000, a YM3438 and
+**two** MULTIPCMs, and the main board reaches it over one serial pair and
+nothing else.
+
+*The map, read out of MAME's own `address_map` rather than transcribed:*
+
+    000000-03FFFF  ROM 256 KB @ +0          C40000/C50000  MULTIPCM 1 + bank
+    080000-09FFFF  ROM 128 KB @ +0x20000    C60000/C70000  MULTIPCM 2 + bank
+    C20000-C20003  i8251                    D00000-D00007  YM3438
+                                            F00000-F0FFFF  RAM 64 KB
+
+The second ROM window is not more ROM. The `.mra` already carries both files —
+68000 program at byte 0x2340000, 8 MB of PCM at 0x2380000 — so no ROM work was
+needed, but the LAYOUT was got wrong twice and the ROM settles it without
+guessing. `epr-16489.7` begins `f0 00 fe ff 00 00 00 03`; byte-swap each 16-bit
+word and that is SP = 0x00F0FFFE, the top of the 64 KB RAM, and PC = 0x00000300,
+exactly where MAME's trace starts. Unswapped it is 0xF000FEFF and 0x00000003,
+neither of which is anything. And the two files are CONCATENATED, not
+interleaved: the `.mra` has two single-part `<interleave>` blocks, and MAME's
+second window reading region offset 0x20000 is where the second file begins.
+
+*Three walls, each found by lockstep, each a different kind of thing.*
+
+1. **The MULTIPCM must answer "not busy".** `00035A: move.b $c40001.l, D3 /
+   btst #0 / bne $35a` is the first thing after the RAM clear. The standing rule
+   that unwritten memory reads 0xFFFF is right for UNMAPPED space and wrong
+   here: the device is mapped, 0xFF leaves bit 0 set, and the board hangs at
+   instruction 65,561 having matched MAME exactly to that point.
+
+2. **The two ends of the link do NOT take the same interrupt.** The main board
+   ORs TXRDY and RXRDY — `sound_ready_w` is literally
+   `if (m_uart->txrdy_r() || m_uart->rxrdy_r())`, and TXRDY is what paces the
+   i960's transmit loop. The sound board's 68000 must take RX ONLY. TXRDY is
+   high whenever the transmitter is free, which is nearly always, so an IPL
+   driven from the OR is asserted permanently: the instant the firmware unmasks
+   interrupts with `move #$2100, SR` at 0x51E it re-enters the handler forever.
+   One `irq` output serving both ends looked economical and was wrong.
+
+3. **The boundary, which is not a defect.** At 72,035:
+
+       000542: move.b $d00001.l, D3
+       000548: btst   #$1, D3
+       00054C: beq    $554
+
+   and MAME does not take that branch. Bit 1 of the YM3438's status is TIMER B
+   OVERFLOW, and the firmware's main loop sequences music on it. A stub that
+   reports zero says the timer never expires. The board genuinely does not have
+   the hardware yet, so this is where it stops — asserted as a floor, and the
+   real YM3438 is what raises it.
+
+*What was verified before any of that.* The link itself is byte-exact on
+hardware: 59 port writes, 48 data bytes, and an order-sensitive rotate-xor
+signature of 0x6AE52ED8 identical to MAME's. The board also emits it in the
+right ORDER, which a sum or an xor would not have caught.
+
+*And the reason the stream was zero for a whole build cycle.* `uart_irq` was
+driven and connected to nothing. The symptom points the wrong way: the eleven
+CONTROL writes still happen, because those are mainline initialisation, and not
+one of the forty-eight DATA bytes ever does — which reads as a broken data path
+rather than a missing interrupt. Daytona never reads the i8251's status; a read
+tap over 900 frames fires zero times. The line 10 handler IS the transmit loop.
+Both of MAME's triggers are needed: the TXRDY edge alone never starts, because
+after the command byte enables TxEN the transmitter is already free and there is
+no edge left to catch. `irq_mask_delayed_update` re-testing the level on the
+mask write is what fires the first one.
+
+*A process failure worth more than the finding.* `third_party/fx68k/` was
+already a working clone with a local patch, and it was overwritten from another
+project's copy of the same commit without checking. `git status` on this repo
+cannot see that — `third_party/` is git-ignored — so a passing test broke with
+no diff to point at. Both copies are now one committed copy under
+`rtl/sound/fx68k/`, unmodified, and the patch it needed is a Verilator flag
+instead: `-Wno-BLKANDNBLK`. THIRD_PARTY.md's "needs a two-word change" is
+withdrawn. It needs no change at all, which is the only version of this that
+survives an upstream bump.

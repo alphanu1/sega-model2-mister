@@ -1354,6 +1354,7 @@ logic        vbl_d, vbl_dd;
 // V-blank into bit 0, the same line MAME's screen_vblank sets. irq_update()
 // folds the twelve request bits onto the i960's four lines.
 wire  uart_irq;      // TXRDY|RXRDY, gated by TxEN/RxEN -- txrdy_r()||rxrdy_r()
+wire  uart_irq_rx, uart_irq_tx;   // the halves; the i960 takes the OR, the 68000 takes RX
 logic uart_irq_d;
 always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
 	if (!cpu_rst_n) begin
@@ -1461,7 +1462,7 @@ m2_i8251 u_uart_main (
 	.dout(uart_dout), .data_o(uart_data_byte), .stat_o(uart_status_byte),
 	.tx_data(a_tx_d), .tx_valid(a_tx_v), .tx_ack(a_tx_a),
 	.rx_data(a_rx_d), .rx_valid(a_rx_v), .rx_ack(a_rx_a),
-	.irq(uart_irq)
+	.irq(uart_irq), .irq_rx(uart_irq_rx), .irq_tx(uart_irq_tx)
 );
 
 m2_sound_link u_snd_link (

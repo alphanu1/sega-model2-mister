@@ -200,8 +200,8 @@ synth_i960_ldst:
 
 # --------------------------------------------------------------------- tests
 
-.PHONY: test test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram test_fx68k test_m2_ioboard
-test: test_m2_sndlink test_fx68k test_m2_ioboard test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
+.PHONY: test test_m2_sndboard test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram test_fx68k test_m2_ioboard
+test: test_m2_sndlink test_fx68k test_m2_sndboard test_m2_ioboard test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
 
 test_i960_dec: obj_i960_dec/Vi960_dec
 	@echo "== test i960_dec"
@@ -357,6 +357,43 @@ obj_m2_romload/Vm2_romload_harness: $(RLD_RTL) sim/mem/tb_m2_romload.cpp
 	  -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-WIDTHEXPAND -Wno-SYNCASYNCNET \
 	  -Wno-PINCONNECTEMPTY \
 	  --Mdir obj_m2_romload -o Vm2_romload_harness $(RLD_RTL) sim/mem/tb_m2_romload.cpp
+
+SNDB_RTL := rtl/sound/fx68k/fx68k.sv rtl/sound/fx68k/fx68kAlu.sv \
+            rtl/sound/fx68k/uaddrPla.sv rtl/sound/m2_i8251.sv \
+            rtl/sound/m2_sound_board.sv sim/sound/m2_sndboard_harness.sv
+
+# RUN FROM obj_sndboard. fx68k's microcode and nanocode are $readmemb'd by
+# RELATIVE path, so they are found in the working directory or not at all --
+# and when they are not, the CPU comes up with an all-zero microword and dies on
+# an unrelated-looking `unique case` assertion in the ALU.
+test_m2_sndboard: obj_sndboard/Vm2_sndboard_harness
+	@echo "== test m2_sndboard (the sound 68000 on the real ROM, against MAME)"
+	@cp -f rtl/sound/fx68k/microrom.mem rtl/sound/fx68k/nanorom.mem obj_sndboard/
+	@cd obj_sndboard && ./Vm2_sndboard_harness
+
+# fx68k IS UPSTREAM'S, BYTE FOR BYTE, and two flags are what keeps it that way.
+#
+# THIRD_PARTY.md recorded this as needing "a two-word change" -- packing
+# s_irdecod and s_nanod so Verilator accepts the mixed blocking/non-blocking
+# writes. It does not. -Wno-BLKANDNBLK accepts the construct as it stands, which
+# is better than editing a cycle-exact CPU: nothing to re-apply on an upstream
+# bump, and nothing to get subtly wrong.
+#
+# --no-assert-case is the second. fx68k's ALU has a `unique case` on the
+# microword, and before reset is released that word is all zeroes and matches no
+# arm. Verilator's runtime check fires at time 0, in the ALU, which reads as a
+# decode fault in a CPU that has not started yet. The condition is real and
+# harmless; the assertion is what has to go.
+#
+# The remaining -Wno-* are upstream's own warnings plus the deliberately empty
+# pins on a CPU whose FC/BG/E outputs nothing here uses.
+obj_sndboard/Vm2_sndboard_harness: $(SNDB_RTL) sim/sound/tb_m2_sndboard.cpp
+	$(VBUILD) --top-module m2_sndboard_harness -CFLAGS "-O2" \
+	  -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-WIDTHEXPAND -Wno-SYNCASYNCNET \
+	  -Wno-PINCONNECTEMPTY -Wno-VARHIDDEN -Wno-WIDTHTRUNC -Wno-CASEINCOMPLETE \
+	  -Wno-UNOPTFLAT -Wno-MULTIDRIVEN -Wno-LATCH \
+	  -Wno-BLKANDNBLK -Wno-ALWCOMBORDER --no-assert-case \
+	  --Mdir obj_sndboard -o Vm2_sndboard_harness $(SNDB_RTL) sim/sound/tb_m2_sndboard.cpp
 
 test_m2_video_timing: obj_m2_vt/Vm2_video_timing
 	@echo "== test m2_video_timing (against MAME set_raw)"
@@ -596,22 +633,39 @@ obj_m2_io/Vm2_ioboard: rtl/io/m2_ioboard.sv sim/io/tb_m2_ioboard.cpp
 #   -Wno-WIDTH*        19 width warnings in the original, none of them ours
 #   --no-assert        fx68kAlu.sv:313 is a `unique case` that matches nothing
 #                      while the ALU is idle, and $stops during reset if armed
+#   -Wno-BLKANDNBLK    s_nanod and s_irdecod are written from both a blocking
+#                      and a non-blocking context. THIRD_PARTY.md recorded this
+#                      as needing "a two-word change" -- packing the structs --
+#                      and it does not: the flag accepts the construct as it
+#                      stands. That is the better answer, because the file then
+#                      stays byte-for-byte upstream's and there is nothing to
+#                      re-apply on a bump. It also removes a real hazard, which
+#                      is how it was found: a patched copy in a git-ignored
+#                      directory is invisible to `git status` on this repo, and
+#                      overwriting it from another project's clone silently
+#                      broke this test.
 # Waiving them here rather than in VFLAGS keeps our own RTL held to -Wall.
 #
-# RUN FROM third_party/fx68k. fx68k's $readmemb takes a bare filename, so the
+# ONE COPY, IN rtl/, NOT third_party/. It was third_party/fx68k, which cannot
+# work for the core: third_party/ is git-ignored, so a Quartus build on any
+# other checkout would have no CPU. Simulation and synthesis now read the same
+# committed files.
+#
+# RUN FROM rtl/sound/fx68k. fx68k's $readmemb takes a bare filename, so the
 # microcode and nanocode ROMs are found relative to the WORKING DIRECTORY. Load
 # them and the core executes; miss them and the sequencer is full of zeros,
 # which is indistinguishable from a core that does not work -- so the test
 # reports "no bus cycles at all" and names this as the first thing to check.
 
-FX68K_RTL := third_party/fx68k/fx68k.sv third_party/fx68k/fx68kAlu.sv \
-             third_party/fx68k/uaddrPla.sv
-FX68K_VFLAGS := -Wno-fatal -Wno-UNOPTFLAT -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC --no-assert
+FX68K_RTL := rtl/sound/fx68k/fx68k.sv rtl/sound/fx68k/fx68kAlu.sv \
+             rtl/sound/fx68k/uaddrPla.sv
+FX68K_VFLAGS := -Wno-fatal -Wno-UNOPTFLAT -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC \
+                -Wno-BLKANDNBLK -Wno-ALWCOMBORDER --no-assert
 
 .PHONY: test_fx68k
 test_fx68k: obj_fx68k/Vfx68k_harness
 	@echo "== test fx68k (the 68000 executes a program over a modelled bus)"
-	@cd third_party/fx68k && $(CURDIR)/obj_fx68k/Vfx68k_harness $(TEST_ARGS)
+	@cd rtl/sound/fx68k && $(CURDIR)/obj_fx68k/Vfx68k_harness $(TEST_ARGS)
 
 obj_fx68k/Vfx68k_harness: sim/sound/fx68k_harness.sv sim/sound/tb_fx68k.cpp $(FX68K_RTL)
 	$(VERILATOR) --cc --exe --build -j 0 -sv $(FX68K_VFLAGS) \

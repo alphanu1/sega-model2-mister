@@ -73,7 +73,22 @@ module m2_i8251 (
 
   // For the interrupt the i960 takes on RXRDY/TXRDY (model2.cpp gates it on
   // m_intena, so the core wires this into the same request register).
-  output logic       irq
+  output logic       irq,
+  // AND THE TWO SEPARATELY, because the two ends of this link do NOT take the
+  // same interrupt and combining them breaks the sound board outright.
+  //
+  // The main board ORs them -- model2.cpp's sound_ready_w is literally
+  // `if (m_uart->txrdy_r() || m_uart->rxrdy_r())` -- because TXRDY is what
+  // paces the i960's transmit loop.
+  //
+  // The sound board's 68000 must take RX only. TXRDY is high whenever the
+  // transmitter is free, which is nearly always, so an IPL driven from the OR
+  // is asserted permanently: the moment the firmware unmasks interrupts with
+  // `move #$2100, SR` at 0x51E it re-enters the handler forever and never
+  // executes another mainline instruction. That is exactly what it did, at
+  // instruction 71,385, having matched MAME perfectly up to that point.
+  output logic       irq_rx,
+  output logic       irq_tx
 );
 
   // ------------------------------------------------------------- registers
@@ -173,6 +188,8 @@ module m2_i8251 (
 
   // RxEN/TxEN are command bits 2 and 0; the interrupt follows whichever is
   // enabled, which is what model2.cpp's txrdy_r()/rxrdy_r() gate does.
-  assign irq = (rxrdy && cmd_r[2]) || (txrdy && cmd_r[0]);
+  assign irq_rx = rxrdy && cmd_r[2];
+  assign irq_tx = txrdy && cmd_r[0];
+  assign irq    = irq_rx || irq_tx;
 
 endmodule

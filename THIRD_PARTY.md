@@ -59,6 +59,25 @@ for opcode numbering, status flag positions and the exponent/mantissa
 accessors. **Those headers travel with the file.** Retain them.
 
 ### ijor/fx68k — GPL-3.0
+*IN USE 2026-08-29 · `rtl/sound/fx68k/` @ **`0602ee4`** · UNMODIFIED*
+
+**Copied byte for byte, and it stays that way.** The earlier assessment below
+said this needs "a two-word change" — packing `s_irdecod` and `s_nanod` so
+Verilator accepts their mixed blocking/non-blocking writes. **That is withdrawn.**
+`-Wno-BLKANDNBLK` accepts the construct as it stands, and an unmodified file has
+nothing to re-apply on an upstream bump. `--no-assert-case` is the second flag:
+`fx68kAlu.sv:313` is a `unique case` on the microword, which is all zeroes before
+reset is released and matches no arm, so the runtime check fires at time 0 in the
+ALU and reads as a decode fault in a CPU that has not started.
+
+`fx68k.sv` uses CRLF line endings. Keep them; a whitespace-only reformat would
+make every future upstream diff unreadable.
+
+`microrom.mem` and `nanorom.mem` are `$readmemb`'d by BARE FILENAME, so they are
+found relative to the WORKING DIRECTORY or not at all — and when they are not,
+the CPU comes up with an all-zero microword and dies on that same unrelated
+looking ALU assertion. Simulation runs from the directory holding them.
+
 *Verified 2026-08-16 · assessment reconciled with Model 1 `4ff53be`*
 
 Cycle-exact 68000 in SystemVerilog, for the sound CPU at 11.2896 MHz. GPL-3 to
