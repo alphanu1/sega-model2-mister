@@ -1353,9 +1353,12 @@ logic        vbl_d, vbl_dd;
 
 // V-blank into bit 0, the same line MAME's screen_vblank sets. irq_update()
 // folds the twelve request bits onto the i960's four lines.
+wire  uart_irq;      // TXRDY|RXRDY, gated by TxEN/RxEN -- txrdy_r()||rxrdy_r()
+logic uart_irq_d;
 always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
 	if (!cpu_rst_n) begin
 		io_intreq <= 12'd0; io_intena <= 12'd0; io_videoctl <= 32'd0;
+		uart_irq_d <= 1'b0;
 		io_framenum <= 32'd0; vbl_d <= 1'b0; vbl_dd <= 1'b0;
 	end else begin
 		vbl_d  <= vblank;
@@ -1371,6 +1374,36 @@ always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
 			if (cpu_io_addr[23:0] == 24'he80004) io_intena  <= cpu_io_wdata[11:0];
 			if (cpu_io_addr[23:0] == 24'h98000c) io_videoctl <= cpu_io_wdata;
 		end
+
+		// ---- THE SOUND INTERRUPT, WHICH IS WHAT ACTUALLY SENDS THE BYTES.
+		//
+		// Line 10. model2.cpp raises it from sound_ready_w whenever TXRDY or
+		// RXRDY changes and either is then active, and again from
+		// irq_mask_delayed_update when the mask itself is written.
+		//
+		// This is the whole transmit engine and it took a board measurement to
+		// see it: Daytona NEVER reads the i8251's status -- a read tap over 900
+		// frames of attract mode fires zero times -- so nothing in the mainline
+		// waits for the transmitter. The handler is the loop. TXRDY rises when
+		// a byte finishes, that raises line 10, the handler writes the next
+		// byte, TXRDY falls. The link's own pacing clocks the stream.
+		//
+		// Wire the i8251's irq to nothing and the symptom is exact and
+		// misleading: the eleven CONTROL writes still happen, because those are
+		// mainline initialisation, and not one of the forty-eight DATA bytes
+		// ever does. Which is what the board reported -- uart_sel 11, data
+		// writes 0 -- and reads as a broken data path rather than a missing
+		// interrupt.
+		//
+		// BOTH triggers are needed. The edge alone never starts: after the
+		// command byte enables TxEN, TXRDY is ALREADY high, so there is no edge
+		// left to catch and the first interrupt never arrives. The mask write
+		// is what fires it, exactly as irq_mask_delayed_update does.
+		uart_irq_d <= uart_irq;
+		if (io_intena[10] && ((uart_irq && !uart_irq_d) ||
+		                      (uart_irq && cpu_io_sel && cpu_io_we &&
+		                       cpu_io_addr[23:0] == 24'he80004 && cpu_io_wdata[10])))
+			io_intreq[10] <= 1'b1;
 	end
 end
 
@@ -1396,7 +1429,6 @@ wire  [7:0] uart_dout, uart_data_byte, uart_status_byte;
 // access names byte 0 ALONE. Status polls are wider or name byte 2 and must
 // leave the received byte where it is.
 wire        uart_rd_dat = uart_sel && !cpu_io_we && cpu_io_be[0] && !cpu_io_be[2];
-wire        uart_irq;
 wire [31:0] snd_bytes;
 wire  [7:0] snd_last;
 
