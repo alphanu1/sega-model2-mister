@@ -166,8 +166,8 @@ module m2_cpu_bridge #(
   logic        req_cpu;
   typedef enum logic [1:0] { C_IDLE, C_WAIT, C_CLR } cph_e;
   cph_e cph;
-  logic  [1:0] req_sync, ack_sync;
   logic        req_mem, ack_mem;
+  logic        ack_cpu;          // ack_mem, one CPU flop later
 
   logic        r_we;
   logic [31:0] r_addr, r_wdata;
@@ -176,11 +176,12 @@ module m2_cpu_bridge #(
 
   always_ff @(posedge clk_cpu or negedge rst_n_cpu) begin
     if (!rst_n_cpu) begin
-      req_cpu <= 1'b0; bus_ack <= 1'b0; cph <= C_IDLE;
-      ack_sync <= 2'd0;
+      req_cpu <= 1'b0; bus_ack <= 1'b0; cph <= C_IDLE; ack_cpu <= 1'b0;
       r_we <= 1'b0; r_addr <= 32'd0; r_wdata <= 32'd0; r_be <= 4'd0;
     end else begin
-      ack_sync <= {ack_sync[0], ack_mem};
+      // The same single flop in the other direction, for the same reason: one
+      // stage of settling, not two of synchronising.
+      ack_cpu <= ack_mem;
       bus_ack  <= 1'b0;
       // AN EXPLICIT FOUR-PHASE HANDSHAKE, because the condition-by-condition
       // version kept racing. The phases are req-up, ack-up, req-down, ACK-DOWN,
@@ -198,7 +199,7 @@ module m2_cpu_bridge #(
       // On hardware this read word 0 three times: SAT was right by luck, PRCB
       // came back 0 and the boot took a zero IP.
       case (cph)
-        C_IDLE: if (bus_req && !ack_sync[1]) begin
+        C_IDLE: if (bus_req && !ack_cpu) begin
           r_we    <= bus_we;
           r_addr  <= bus_addr;
           r_wdata <= bus_wdata;
@@ -206,7 +207,7 @@ module m2_cpu_bridge #(
           req_cpu <= 1'b1;
           cph     <= C_WAIT;
         end
-        C_WAIT: if (ack_sync[1]) begin
+        C_WAIT: if (ack_cpu) begin
           req_cpu   <= 1'b0;
           bus_rdata <= r_rdata;
           bus_ack   <= 1'b1;       // one cycle, which is what the i960 expects
@@ -214,16 +215,55 @@ module m2_cpu_bridge #(
         end
 
         // The fourth phase. Nothing starts until the acknowledge has gone away.
-        default: if (!ack_sync[1]) cph <= C_IDLE;
+        default: if (!ack_cpu) cph <= C_IDLE;
       endcase
     end
   end
 
+  // NOT A CLOCK-DOMAIN CROSSING, AND THE DISTINCTION IS WORTH ~7 CYCLES AN
+  // ACCESS.
+  //
+  // clk_cpu and clk_mem come from ONE PLL at an exact 2:1 ratio -- 24 and 48
+  // MHz off the same VCO with integer dividers -- so their edges are aligned
+  // and every CPU-domain signal is stable across two memory cycles. There is
+  // no metastability here to synchronise away. m2_sdram_x2 makes exactly this
+  // argument for the 96/48 pair and carries no synchroniser for the same
+  // reason; this pair simply never had the argument applied to it.
+  //
+  // What the two flops cost: a four-phase handshake pays the synchroniser
+  // latency FOUR times -- req up, ack up, req down, ack down -- and the state
+  // histogram measured it as 7.12 cycles per transaction in S_DONE alone,
+  // against 4.42 for the SDRAM access it is wrapped around. With the data
+  // cache in front, protocol is essentially the whole cost of a memory access.
+  //
+  // The two hazards m2_sdram_x2 records still apply and are still handled:
+  // the acknowledge spans at least one slow cycle because S_DONE holds it
+  // until the request drops, and the request stays high for up to two fast
+  // cycles after the CPU sees the acknowledge, which is precisely what S_DONE
+  // is waiting out.
+  //
+  // ONE FLOP, NOT ZERO, AND THE TESTBENCH SAID SO.
+  //
+  // Sampling req_cpu directly broke two I/O reads, which came back holding the
+  // PREVIOUS transaction's value. The reason is in the original note above: the
+  // two flops were not only about metastability, they gave the PAYLOAD time to
+  // settle. r_addr is written in the CPU domain on the same edge req_cpu rises,
+  // so a memory domain that believes the request immediately can decode an
+  // address that has not arrived.
+  //
+  // One flop restores that guarantee -- the memory side sees the request half a
+  // CPU cycle later, by which time the payload is settled -- and still returns
+  // half the latency. Measured: S_DONE fell from 7.12 cycles per transaction to
+  // 1.14.
+  //
+  // This REQUIRES the two clocks to be declared related in Model2.sdc; they were
+  // in separate -asynchronous groups, which would leave these paths unchecked.
+  logic req_mem_r;
   always_ff @(posedge clk_mem or negedge rst_n_mem) begin
-    if (!rst_n_mem) req_sync <= 2'd0;
-    else            req_sync <= {req_sync[0], req_cpu};
+    if (!rst_n_mem) req_mem_r <= 1'b0;
+    else            req_mem_r <= req_cpu;
   end
-  assign req_mem = req_sync[1];
+  assign req_mem = req_mem_r;
 
   // --------------------------------------------------------------- decoding
   //

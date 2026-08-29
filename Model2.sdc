@@ -65,11 +65,26 @@ if {[llength $core_clks] == 0} {
 #   Internal Error: Sub-system: DTM, File: dtm_node.cpp, Line: 772, node != 0
 # in FITTER PLACEMENT PREPARATION -- three builds died on it, each looking like
 # a different problem, because the crash moves as other settings change.
+# general[3] -- the i960's 24 MHz -- IS NO LONGER ASYNCHRONOUS, and that is a
+# deliberate change with a measurement behind it.
+#
+# It comes off the SAME PLL as general[1] at an exact 2:1 ratio, so its edges
+# are aligned and there was never metastability to synchronise away. m2_sdram_x2
+# already makes that argument for the 96/48 pair and carries no synchroniser;
+# m2_cpu_bridge simply never had it applied, and paid two flops FOUR times over
+# on a four-phase handshake -- measured at 7.12 cycles per transaction in S_DONE
+# against 4.42 for the SDRAM access it wrapped.
+#
+# With the synchronisers gone the bridge samples across 48/24 directly, so those
+# paths MUST be timed rather than ignored. Every clock here comes from one PLL
+# with integer dividers, so they are all related and a single group is correct.
+# If this ever fails timing, the answer is to fix the path -- not to put the
+# group back, which would silence the check rather than the failure.
 set_clock_groups -asynchronous \
   -group [get_clocks -nowarn {*|pll|pll_inst|altera_pll_i|general[0].*|divclk \
                               *|pll|pll_inst|altera_pll_i|general[1].*|divclk \
-                              *|pll|pll_inst|altera_pll_i|general[4].*|divclk}] \
-  -group [get_clocks -nowarn {*|pll|pll_inst|altera_pll_i|general[3].*|divclk}]
+                              *|pll|pll_inst|altera_pll_i|general[3].*|divclk \
+                              *|pll|pll_inst|altera_pll_i|general[4].*|divclk}]
 
 # FIVE OUTPUTS NOW, AND THE COUNT IS CHECKED. The Kaneko16 core gave three
 # outputs identical settings -- same frequency, same phase, same duty -- and the
