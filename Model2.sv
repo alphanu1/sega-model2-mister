@@ -1374,6 +1374,57 @@ always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
 	end
 end
 
+// ---------------------------------------------------------- the sound link
+//
+// The i8251 the i960 talks to the sound board through, at 0x01c80000. Byte-wide
+// at bytes 0 and 2 of the dword -- model2.cpp maps it .umask16(0x00ff) -- so it
+// is the same shape as the I/O board's DPRAM: data in byte 0, status/command in
+// byte 2, and the byte enables say which one an access names.
+//
+// THE FAR END IS NOT HERE YET. The sound board's 68000, YM3438 and two
+// MultiPCMs are the next pieces; until they exist the link's B side is drained
+// so the i960 is never blocked -- a receiver that never acknowledges would stall
+// the wire after one byte and the game would sit waiting on TXRDY forever, which
+// would look exactly like a broken UART. The byte COUNT and the last byte are
+// reported over the serial channel, so the board can be checked against the
+// reference's 59 bytes before any of that arrives.
+wire        uart_sel = cpu_io_sel && (cpu_io_addr[23:2] == 22'h32_0000);
+wire        uart_ctl = uart_sel && cpu_io_be[2];      // byte 2: status/command
+wire        uart_dat = uart_sel && cpu_io_be[0];      // byte 0: data
+wire  [7:0] uart_dout, uart_data_byte, uart_status_byte;
+// A read consumes the data byte, so `sel` is asserted for a read only when the
+// access names byte 0 ALONE. Status polls are wider or name byte 2 and must
+// leave the received byte where it is.
+wire        uart_rd_dat = uart_sel && !cpu_io_we && cpu_io_be[0] && !cpu_io_be[2];
+wire        uart_irq;
+wire [31:0] snd_bytes;
+wire  [7:0] snd_last;
+
+wire  [7:0] a_tx_d, a_rx_d, b_tx_d, b_rx_d;
+wire        a_tx_v, a_tx_a, a_rx_v, a_rx_a;
+wire        b_tx_v, b_tx_a, b_rx_v;
+
+m2_i8251 u_uart_main (
+	.clk(clk_sys), .rst_n(cpu_rst_n),
+	.sel((cpu_io_we && (uart_dat | uart_ctl)) || uart_rd_dat),
+	.we(cpu_io_we), .addr(uart_ctl & ~uart_dat),
+	.din(uart_ctl & ~uart_dat ? cpu_io_wdata[23:16] : cpu_io_wdata[7:0]),
+	.dout(uart_dout), .data_o(uart_data_byte), .stat_o(uart_status_byte),
+	.tx_data(a_tx_d), .tx_valid(a_tx_v), .tx_ack(a_tx_a),
+	.rx_data(a_rx_d), .rx_valid(a_rx_v), .rx_ack(a_rx_a),
+	.irq(uart_irq)
+);
+
+m2_sound_link u_snd_link (
+	.clk(clk_sys), .rst_n(cpu_rst_n),
+	.a_tx_data(a_tx_d), .a_tx_valid(a_tx_v), .a_tx_ack(a_tx_a),
+	.a_rx_data(a_rx_d), .a_rx_valid(a_rx_v), .a_rx_ack(a_rx_a),
+	// The sound board's end, drained until it exists.
+	.b_tx_data(8'd0), .b_tx_valid(1'b0), .b_tx_ack(b_tx_a),
+	.b_rx_data(b_rx_d), .b_rx_valid(b_rx_v), .b_rx_ack(b_rx_v),
+	.dbg_a_bytes(snd_bytes), .dbg_a_last(snd_last)
+);
+
 assign cpu_irq = { |(io_intreq & 12'hc00), |(io_intreq & 12'h3fc),
                    io_intreq[1],           io_intreq[0] };
 
@@ -1414,6 +1465,10 @@ assign cpu_irq = { |(io_intreq & 12'hc00), |(io_intreq & 12'h3fc),
 // reasons. A constant satisfies whichever of them it was tuned for and deadlocks
 // the other.
 assign cpu_io_rdata =
+	// The sound UART, byte 0 = data and byte 2 = status. Read as a dword the
+	// i960 gets both, which is what .umask16(0x00ff) presents.
+	(cpu_io_addr[23:2] == 22'h32_0000)
+		? {8'd0, uart_status_byte, 8'd0, uart_data_byte} :
 	// THE WORD ADDRESS, ignoring the low two bits. The boot reads BOTH byte
 	// 0x01c00040 and byte 0x01c00042 -- the DPRAM is eight bits wide at bytes 0
 	// and 2 of the SAME dword -- and comparing the raw byte address matches only
@@ -2066,7 +2121,12 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// it painted two flat colours -- so this is exactly when to expect them.
 	// Reported with the per-line fetch count and the glyph cache's hit rate,
 	// because those say WHY and not merely how many.
-	.a_valid(prof_tick), .a_addr({vid_ovr_frame, vid_overruns}),
+	// THE SOUND LINK, against the reference's own count. MAME emits exactly
+	// 59 bytes to this port over 900 frames of attract mode, so the board
+	// either sends that stream or it does not -- and that is checkable
+	// before a single sound chip exists. Overruns ride in the low half so
+	// the tearing work stays visible at the same time.
+	.a_valid(prof_tick), .a_addr({snd_bytes[15:0], vid_ovr_frame}),
 	// THE RETIRED-INSTRUCTION COUNT RIDES ALONG WITH THE IP.
 //
 // The profile says 91% of the board's time goes on the four memory
@@ -2075,10 +2135,10 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 // simulation finishes this initialisation in 15.9 M instructions. Two
 // consecutive samples give the instruction rate directly, which settles
 // whether this is a wrong branch or a slow machine.
-	.a_data({24'd0, vid_fetches}),
+	.a_data({16'd0, snd_last, vid_fetches}),
 	.b_valid(uart_b2_valid), .b_addr(char_hits),
 	.b_data(char_misses),
-	.a_tag(8'h4F), .b_tag(8'h48),          // 'O' overruns | fetches per line
+	.a_tag(8'h53), .b_tag(8'h48),          // 'S' sndbytes:overruns | last:fetches
 	                                       // 'H' glyph cache hits | misses
 	                                       // '0' map0 min|max : sum
 	                                       // 'T' write count + trap/PA
@@ -2648,7 +2708,7 @@ m2_char_cache #(.IDX_BITS(14)) u_char_cache (
 	.v_ack(char_ack), .v_data(char_data),
 	.m_req(cache_m_req), .m_addr(cache_m_addr),
 	.m_ack(cache_m_ack), .m_data(cache_m_data),
-	.inval(cpu_char_wr), .inval_idx(cpu_char_wr_addr[14:2]),
+	.inval(cpu_char_wr), .inval_idx(cpu_char_wr_addr[15:2]),
 	.dbg_hits(char_hits), .dbg_misses(char_misses)
 );
 

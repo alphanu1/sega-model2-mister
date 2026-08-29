@@ -5168,16 +5168,15 @@ is byte-perfect -- tools/i960-datadiff.sh reports tile RAM, char RAM and palette
 all IDENTICAL to MAME -- so this is the renderer or the comparison's frame
 alignment, not the game state. It is the obvious next thread.
 
-**R86 — the four-word glyph line cost 64 M10K, not zero, and the glyph cache is
-now the largest memory in the design.** Correcting c122bea, which claimed "same
-storage: 8,192 x 64 bits is the 64 KB that 16,384 x 32 was, so M10K is unchanged".
+**R86 — the four-word glyph line DOUBLED the cache and cost 64 M10K, and the
+tilemap cannot stall a line.** Correcting c122bea, which claimed "same storage:
+8,192 x 64 bits is the 64 KB that 16,384 x 32 was".
 
-The BITS are the same. The BLOCKS are not. An M10K is 10,240 bits but at most
-20 bits wide per block in true dual-port mode, so a 64-bit word needs four
-blocks side by side where a 32-bit word needs two -- and the array went from
-~64 blocks to 128. Whole-design M10K moved 389 -> 449 of 553, and that jump was
-attributed to a UART with no arrays in it before the fitter report was read
-properly.
+It is not 8,192 lines. `LINES` is `1 << IDX_BITS` and IDX_BITS stayed at 14
+across that commit, so the array went from `[31:0] cdata[16384]` to
+`[63:0] cdata[16384]` — 16,384 lines throughout, each line twice as wide.
+512 Kbit became 1,024 Kbit. The cache DOUBLED, 64 KB to 128 KB, and the +64
+M10K is simply twice the memory. Whole-design M10K moved 389 → 449 of 553.
 
     128  glyph cache cdata     <- largest single memory
     128  tilemap tram (2 x 64)
@@ -5187,19 +5186,47 @@ properly.
       6  glyph cache tags
    ~145  framework (ascal)
 
-*What the 64 blocks bought, measured:* hit rate 82.6% -> 93.56%, overruns per
-frame 27.1 -> 6.99. That is a fair trade at 70% occupancy and worth revisiting
-at 90%.
+*Which memory can actually stall a line, since the visible symptom points the
+other way.* What tears on screen is the tile layer, and it is natural to read
+that as the tilemap arriving late. It is not, and it cannot be: `m2_tile_fetch`
+reads the tilemap over `tram_addr`/`tram_data` with NO handshake — a registered
+M10K read that answers next cycle, every cycle. The only port in the line that
+can wait is `char_req`/`char_ack`, the glyph pixels, and those come from SDRAM.
 
-*The lever, if 3D needs it:* 4,096 x 64 keeps the four-word line's locality --
-which is where most of the gain came from, since a tile's rows are read on
-consecutive scanlines -- at roughly the old block count. Untested; it should be
-modelled from a glyph trace before it is built, the way the data cache was.
+The two are the same layer. tram says WHICH tile; the glyph cache says WHAT IT
+LOOKS LIKE — `char_data` is eight 4bpp pixels, the tile's own bitmap. So "only
+the tiles tear" and "the glyph fetch stalls" are one observation and its cause,
+not competing explanations. The decisive evidence is that the intervention was
+made ENTIRELY on the glyph path and overruns fell 27.1 → 6.99 per frame. Had the
+tilemap been the bottleneck, caching glyphs would have changed nothing.
 
-*Two reading errors worth recording, because both were confident and wrong.*
-The fitter's memory table was parsed with the wrong column and reported the
-i960's register cache as the biggest consumer at 128 blocks. That array is
-16 x 128 bits -- 2 Kbit, in MLAB, exactly as its own comment intends -- and 128
-was its port WIDTH. The M10K column is 20, not 21, and "Total Inapplicable" is a
-row, not a memory. A number lifted from a table without checking which column it
-came from is not a measurement.
+*What the 64 blocks bought, measured:* hit rate 82.6% → 93.56%, overruns per
+frame 27.1 → 6.99.
+
+*The lever, if 3D needs the blocks back:* IDX_BITS 13 halves it to 64 KB at the
+old block count while KEEPING the four-word line — and the four-word line is
+where the gain came from, since a tile's rows sit at +0,+2,…,+14 and are read on
+consecutive scanlines, so one miss now fills four rows instead of one. Measure
+that from a glyph trace before building it, the way the data cache was sized.
+Untested.
+
+*Three reading errors in one investigation, all confident, all wrong.* The
+fitter's memory table was first parsed with the wrong column and reported the
+i960's register cache as the biggest consumer at 128 blocks — that array is
+16 x 128 bits, in MLAB, and 128 was its port WIDTH. The M10K column is 20, not
+21, and "Total Inapplicable" is a row, not a memory. Then the +64 was explained
+as 64-bit words packing badly into narrow blocks, without checking whether the
+line COUNT had also changed. It had not — which was the whole point, and made
+the array twice the size. A number lifted from a table without checking its
+column, and a ratio explained without checking both of its terms, are not
+measurements.
+
+*And the widening left a real defect behind, found while writing this up.*
+IDX_BITS went 13 → 14 but `Model2.sv` still drove `inval_idx` with
+`cpu_char_wr_addr[14:2]` — thirteen bits into a fourteen-bit port. Every CPU
+write to glyph memory invalidated a line in the LOWER half of the cache
+regardless of which half it belonged to: a write above 32 KB invalidated an
+unrelated line and left its own stale. It survived because the game writes
+glyphs mostly at init and the reset sweep clears everything. A parameter that
+widens must be followed to every place it is indexed, and a port that silently
+zero-extends will not tell you.
