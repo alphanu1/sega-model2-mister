@@ -5350,3 +5350,47 @@ reporting the state of the receiver. That is a signal meaning two things — whi
 this project has a rule against — and the honest fix was to add the 68000's own
 bus address and cycle count rather than keep reading the link's count as though
 it still answered the old question.
+
+**R89 — the sound ROM is at byte 0x2340000, the MRA said so, and the board found
+it by looking. R88's correction was itself wrong.** Three answers were asserted
+for one address in one session, and the way out was to stop asserting.
+
+R88 recorded the ROM at 0x2350000 on the strength of searching an image rebuilt
+by `tools/rom_csum.py`. That is wrong. **A reconstruction is not the image**, and
+R39 already recorded this same tool disagreeing with the board about these same
+68000 sound ROMs, with the same verdict: "The BOARD had them in the right place
+throughout; the reference did not." Reaching for it again, for the same region,
+and believing it over the MRA was the mistake — not the arithmetic.
+
+*What actually happened, which is only legible with both attempts side by side:*
+
+| attempt | base | swap | result |
+|---|---|---|---|
+| 1 | 0x2340000 (right) | none (wrong) | garbage, PC 0xD684D0 |
+| 2 | 0x2350000 (wrong) | swapped (right) | garbage, vector 84D6 84D3 |
+
+Each attempt had exactly one of the two halves right, so each failed, and the
+second failure looked like confirmation that the first fix had been necessary.
+Two independent unknowns changed together is the whole error: had the swap gone
+in on its own, attempt 1 would have booted.
+
+The byte swap itself stands and R88's reasoning for it is sound. The loader's
+mapping is the identity, so an SDRAM word holds `{byte 2W+1, byte 2W}` — right
+for a little-endian i960, backwards for a 68000 — and it belongs at the reader,
+because byte order is a property of the reader and not of the image.
+
+*The fix is that the address is no longer written down.* `GAME_SND` is deleted.
+At power-up the core sweeps 64 KB-aligned candidates over 8 MB of SDRAM looking
+for the 68000's reset vector, which is a four-word signature that appears nowhere
+else: SP = 0x00F0FFFE, the top of the sound board's own 64 KB RAM, then
+PC = 0x00000300, where MAME's trace starts. 448 candidates, one four-word burst
+each, microseconds once at 96 MHz. It reported word 0x11A0000 — byte 0x2340000.
+
+Two properties beyond being right. The CPU is held in reset unless the scan
+succeeds, so a future ROM reshuffle stops the sound board instead of running it
+on whatever sits at a stale constant — which is precisely the failure this
+replaces. And the answer survives any change to the MRA's layout without anyone
+having to notice.
+
+An address nobody can verify by reading is not a constant. It is a guess with a
+name, and this project now has two entries about the same guess.

@@ -330,8 +330,12 @@ localparam int unsigned NPORTS = 6;   // 5 is the sound board's ROM fetch
 //
 // Declared up here rather than with the other GAME_* constants because the port
 // mux below needs it.
-localparam logic [SDR_AW:1] GAME_SND = SDR_AW'(32'h11a8000);   // byte 0x2350000
-localparam logic [SDR_AW:1] GAME_PCM = SDR_AW'(32'h11c8000);   // byte 0x2390000, 8 MB
+// GAME_SND IS GONE ON PURPOSE. Three different answers were asserted for it --
+// the MRA's comment said byte 0x2340000, a rebuilt image said 0x2350000, and
+// the board disagreed with both readings of itself -- and the scan below
+// settles it by looking: 0x2340000, which is what the MRA said. An address
+// nobody can verify by reading is not a constant, it is a guess with a name.
+// GAME_PCM will be found the same way when the MULTIPCMs arrive.
 
 wire        snd_rom_req;
 wire [17:1] snd_rom_addr;
@@ -401,8 +405,11 @@ always_comb begin
 	// aligned; the word actually wanted is selected out of it. Three of every
 	// four fetches are therefore free to a CPU reading sequentially, which is
 	// what a 68000 does almost all the time.
-	p_req[5]  = snd_rom_req;
-	p_addr[5] = GAME_SND + SDR_AW'({snd_rom_addr[17:3], 2'b00});
+	// PORT 5 IS THE SCANNER'S UNTIL IT FINISHES, then the 68000's. They never
+	// overlap: the CPU is held in reset until snd_found.
+	p_req[5]  = snd_found ? snd_rom_req : sc_req;
+	p_addr[5] = snd_found ? (snd_base + SDR_AW'({snd_rom_addr[17:3], 2'b00}))
+	                      : sc_addr;
 	p_req[3]  = cc_req;
 	p_addr[3] = char_base + SDR_AW'(cc_addr);
 	// PORT 0 IS THE CPU'S, and it is the single-word port on purpose: the
@@ -1532,10 +1539,83 @@ wire        snd_rom_ack = p_ack[5];
 // path that six other things depend on.
 wire [15:0] snd_rom_w   = p_dout[5][{1'b0, snd_rom_addr[2:1]} * 16 +: 16];
 wire [15:0] snd_rom_q   = {snd_rom_w[7:0], snd_rom_w[15:8]};
+
+// THE SOUND ROM FINDS ITSELF, because neither the MRA's comment nor a
+// reconstruction of the image can be trusted to say where it is.
+//
+// The comment said byte 0x2340000. Searching a rebuilt image said 0x2350000.
+// The board, reading 0x2350000, fetched 84D6 84D3 84DD 84DA -- structured
+// garbage with a constant byte, which is the signature of the wrong REGION
+// rather than the wrong byte order. Study R39 already records this exact
+// disagreement and which side won: "The BOARD had them in the right place
+// throughout; the reference did not." tools/rom_csum.py reconstructs the
+// image, and a reconstruction is not the image.
+//
+// So stop asserting an address and go and find one. The 68000's reset vector is
+// a four-word signature that appears nowhere else: stack pointer 0x00F0FFFE --
+// the top of the sound board's own 64 KB RAM -- followed by PC 0x00000300. Sweep
+// 64 KB-aligned candidates, which is the granularity every section in this MRA
+// actually lands on, and stop at the first match.
+//
+// 448 candidates, one four-word burst each, at 96 MHz. It costs microseconds
+// once, and it is right across any future reshuffle of the ROM layout.
+localparam logic [SDR_AW:1] SND_SCAN_LO   = SDR_AW'(32'h0800000);
+localparam logic [SDR_AW:1] SND_SCAN_HI   = SDR_AW'(32'h1600000);
+localparam logic [SDR_AW:1] SND_SCAN_STEP = SDR_AW'(32'h0008000);   // 64 KB
+
+typedef enum logic [1:0] { SC_IDLE, SC_REQ, SC_WAIT, SC_DONE } scan_t;
+scan_t          sc_st;
+logic [SDR_AW:1] sc_addr, snd_base;
+logic            sc_req, snd_found;
+logic [31:0]     sc_first;      // what the first candidate held, for the log
+
+// The swapped view of the burst, which is what the 68000 would see.
+wire [15:0] sc_w0 = {p_dout[5][ 7: 0], p_dout[5][15: 8]};
+wire [15:0] sc_w1 = {p_dout[5][23:16], p_dout[5][31:24]};
+wire [15:0] sc_w2 = {p_dout[5][39:32], p_dout[5][47:40]};
+wire [15:0] sc_w3 = {p_dout[5][55:48], p_dout[5][63:56]};
+wire        sc_hit = (sc_w0 == 16'h00f0) && (sc_w1 == 16'hfffe)
+                  && (sc_w2 == 16'h0000) && (sc_w3 == 16'h0300);
+
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+	if (!mem_rst_n) begin
+		sc_st <= SC_IDLE; sc_addr <= SND_SCAN_LO; sc_req <= 1'b0;
+		snd_base <= SND_SCAN_LO; snd_found <= 1'b0; sc_first <= 32'd0;
+	end else begin
+		case (sc_st)
+			SC_IDLE: if (cp_done) begin
+				sc_req <= 1'b1;
+				sc_st  <= SC_REQ;
+			end
+			SC_REQ: sc_st <= SC_WAIT;
+			SC_WAIT: if (p_ack[5]) begin
+				sc_req <= 1'b0;
+				if (sc_addr == SND_SCAN_LO) sc_first <= {sc_w0, sc_w1};
+				if (sc_hit) begin
+					snd_base  <= sc_addr;
+					snd_found <= 1'b1;
+					sc_st     <= SC_DONE;
+				end else if (sc_addr >= SND_SCAN_HI) begin
+					// Not found. Stop, and say so by leaving snd_found clear --
+					// the 68000 then stays in reset rather than executing
+					// whatever happens to be at a guessed address, which is the
+					// failure this replaces.
+					sc_st <= SC_DONE;
+				end else begin
+					sc_addr <= sc_addr + SND_SCAN_STEP;
+					sc_st   <= SC_IDLE;
+				end
+			end
+			default: ;
+		endcase
+		if (sc_st == SC_IDLE && !cp_done) sc_req <= 1'b0;
+	end
+end
+
 wire signed [15:0] snd_l, snd_r;
 
 m2_sound_board u_sndboard (
-	.clk(clk_sys), .rst_n(cpu_rst_n & mem_rst_n & cp_done),
+	.clk(clk_sys), .rst_n(cpu_rst_n & mem_rst_n & cp_done & snd_found),
 	.rx_data(b_rx_d), .rx_valid(b_rx_v), .rx_ack(b_rx_a),
 	.tx_data(b_tx_d), .tx_valid(b_tx_v), .tx_ack(b_tx_a),
 	.rom_req(snd_rom_req), .rom_addr(snd_rom_addr),
@@ -2257,7 +2337,10 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// sound board is reading its UART", and a board that stops at two bytes is
 	// reporting that its 68000 is not running -- which is what happened. The
 	// last bus address and the cycle count say whether it is alive and where.
-	.a_valid(prof_tick), .a_addr({snd_bytes[7:0], snd_pc[23:0]}),
+	// SCAN RESULT IN THE TOP BYTE, the 68000's own state below it. The scan
+	// answered its question -- byte 0x2340000, which is what the MRA said all
+	// along -- and the live question is now whether the CPU runs.
+	.a_valid(prof_tick), .a_addr({snd_found, snd_bytes[6:0], snd_pc[23:0]}),
 	// THE RETIRED-INSTRUCTION COUNT RIDES ALONG WITH THE IP.
 //
 // The profile says 91% of the board's time goes on the four memory
@@ -2267,10 +2350,10 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 // consecutive samples give the instruction rate directly, which settles
 // whether this is a wrong branch or a slow machine.
 	.a_data(snd_insns),
-	.b_valid(uart_b2_valid), .b_addr(char_hits),
-	.b_data(char_misses),
-	.a_tag(8'h53), .b_tag(8'h48),          // 'S' linkbytes:68kPC | 68k bus cycles
-	                                       // 'H' glyph cache hits | misses
+	.b_valid(uart_b2_valid), .b_addr(snd_pc),
+	.b_data(snd_insns),
+	.a_tag(8'h53), .b_tag(8'h48),          // 'S' found:linkbytes:68kPC | 68k bus cycles
+	                                       // 'H' the 68000's reset vector: want 00F0FFFE 00000300
 	                                       // '0' map0 min|max : sum
 	                                       // 'T' write count + trap/PA
 	.enable(1'b1),
