@@ -152,6 +152,8 @@ int main(int argc, char **argv) {
   int prev_as = 0;
   uint32_t first_pc = 0xffffffff;
   size_t ri = 0, resyncs = 0, skipped = 0;
+  int fm_min = 0, fm_max = 0;
+  long fm_n = 0, fm_nz = 0;
   uint32_t stuck_at = 0;
   long stuck_since = 0;
   long c = 0;
@@ -204,6 +206,13 @@ int main(int argc, char **argv) {
         }
       }
     }
+    {
+      int16_t l = int16_t(d->snd_l);
+      if (l != 0) ++fm_nz;
+      if (l < fm_min) fm_min = l;
+      if (l > fm_max) fm_max = l;
+      ++fm_n;
+    }
     prev_as = d->obs_as;
     if (!ref.empty() && ri >= ref.size()) break;
     // A divergence shows as the reference standing still while the board keeps
@@ -214,6 +223,16 @@ int main(int argc, char **argv) {
 
   std::printf("  ran %ld cycles, %u bus cycles, first ROM read at %06X\n",
               c, (unsigned)d->dbg_insns, first_pc);
+
+  // THE FM OUTPUT ITSELF. A CPU that follows MAME's path and emits silence has
+  // not made sound, and that is the whole point of the exercise. Reported as
+  // range and a count of non-zero samples: a dead channel is zero, a
+  // mis-clocked one is a rail, and correct FM is neither.
+  std::printf("  FM output: %d..%d over %ld samples, %ld non-zero\n",
+              fm_min, fm_max, fm_n, fm_nz);
+  if (fm_n > 0 && fm_nz == 0) {
+    std::printf("  NOTE the FM is silent -- the CPU ran but nothing was voiced\n");
+  }
 
   int fails = 0;
   if (first_pc != 0x000000) {
@@ -242,13 +261,22 @@ int main(int argc, char **argv) {
     //
     // and MAME does NOT take that branch. Bit 1 of the YM3438's status is the
     // TIMER B OVERFLOW flag, and the firmware's main loop sequences music on
-    // it. A stub that reports zero says the timer never expires, so the board
-    // takes the branch MAME does not and the paths part -- correctly, because
-    // at that point the board genuinely does not have the hardware.
+    // it. With the chip STUBBED that flag never sets, so the board took the
+    // branch MAME does not and the paths parted at 72,035 -- correctly, since
+    // the hardware did not exist.
     //
-    // This is the boundary, not a defect, and it is asserted as a FLOOR so a
-    // regression is caught while the real YM3438 is what raises it.
-    const size_t FLOOR = 72000;
+    // With the real jt12 in place that wall moved to 98,025, and the one after
+    // it is a DIFFERENT KIND OF THING. The board now gets the flag; it simply
+    // reaches the poll at a different absolute moment than MAME does, so the
+    // two read it in different states at 0x5CC. That is relative timing between
+    // a 10 MHz CPU and an 8 MHz timer, not a defect, and no amount of work on
+    // this core will make two independent emulations agree on it -- the
+    // standing rule is that a MAME cycle count is not a hardware fact.
+    //
+    // So instruction lockstep has given what it can give. Past here the honest
+    // instrument is the AUDIO, checked below: silence and noise are both
+    // obvious, and neither depends on the two machines staying in step.
+    const size_t FLOOR = 98000;
     if (ri < FLOOR) {
       std::printf("  FAIL matched %zu, below the established floor of %zu\n", ri, FLOOR);
       ++fails;

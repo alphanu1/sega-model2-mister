@@ -58,6 +58,31 @@ Olivier Galibert's BSD-3-Clause attribution in their headers — `mb86233_pkg.sv
 for opcode numbering, status flag positions and the exponent/mantissa
 accessors. **Those headers travel with the file.** Retain them.
 
+### jotego/jt12 — GPL-3.0
+*IN USE 2026-08-29 · `rtl/sound/jt12/` @ **`4cf1c5b`** · UNMODIFIED*
+
+The YM3438 (OPN2C) on the sound board, at MAME's own figure of 8,000,000 Hz —
+which divides 48 MHz by exactly six, so it takes a counter rather than the phase
+accumulator the 10 MHz 68000 needs. Copyright Jose Tejada Gomez; GPL-3 to GPL-3,
+so reuse is direct.
+
+`cfg/jt12.yaml` declares `hdl/*.v` plus `hdl/adpcm/*.v` — 57 files. The ADPCM
+helpers are not optional even for plain OPN2: `jt12_pcm_interpol.v` instantiates
+`jt10_adpcm_div`.
+
+**One write per bus cycle, and it takes a pulse.** `jt12_top` forms its strobe as
+`write = !cs_n && !wr_n`, a LEVEL, and acts on it in a clocked block. A 68000
+write cycle at 10 MHz is about 400 ns and spans three 8 MHz enables, so passing
+the bus signals straight through applies every register write three times. Most
+registers do not care; the key-on register at 0x28 and the timer controls do, and
+the symptom would be notes that retrigger rather than anything obviously broken.
+`m2_sound_board.sv` latches address and data on the cycle's leading edge and
+holds the strobe for exactly one enable.
+
+Verilator waivers are upstream's own: EOFNEWLINE, PROCASSINIT, GENUNNAMED, and
+the width family. Held in the target's flags, not in VFLAGS, so our RTL stays at
+-Wall.
+
 ### ijor/fx68k — GPL-3.0
 *IN USE 2026-08-29 · `rtl/sound/fx68k/` @ **`0602ee4`** · UNMODIFIED*
 

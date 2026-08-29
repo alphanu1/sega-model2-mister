@@ -66,10 +66,13 @@ module m2_sound_board #(
   // ---- what the audio chips will hang off, counted until they exist
   output logic        ym_sel,   output logic       ym_we,
   output logic  [1:0] ym_addr,  output logic [7:0] ym_din,
-  input  logic  [7:0] ym_dout,
   output logic        pcm_sel,  output logic       pcm_we,
   output logic        pcm_bank, // which of the two
   output logic  [2:0] pcm_addr, output logic [7:0] pcm_din,
+
+  // ---- the mix
+  output logic signed [15:0] snd_l,
+  output logic signed [15:0] snd_r,
 
   // ---- for the debug channel
   output logic [31:0] dbg_pc,
@@ -184,6 +187,61 @@ module m2_sound_board #(
     if (uart_irq_rx) ipl_n = 3'b101;      // level 2, active low
   end
 
+  // ------------------------------------------------------------- YM3438
+  //
+  // MAME's own figure, from -listxml: YM3438 OPN2C at 8,000,000 Hz. 48/8 is
+  // six exactly, so this is a counter and not the accumulator the 68000 needs.
+  //
+  // ONE WRITE PER BUS CYCLE, WHICH TAKES A PULSE. jt12_top forms its internal
+  // strobe as `write = !cs_n && !wr_n` -- a LEVEL -- and acts on it inside a
+  // clocked block. A 68000 write cycle at 10 MHz lasts about 400 ns, which
+  // spans three 8 MHz enables, so passing the bus signals straight through
+  // applies every register write three times. Most registers do not care; the
+  // key-on register at 0x28 and the timer controls do, and a bug there would
+  // show up as notes that retrigger rather than as anything obviously wrong.
+  //
+  // So: latch address and data at the START of the cycle and hold the strobe
+  // for exactly one enable. The payload is latched with the edge that raises
+  // the strobe -- gating a capture by the same condition that raises it is a
+  // rule this project has already paid for twice.
+  logic [2:0] ym_div;
+  wire        ym_cen = (ym_div == 3'd0);
+  logic       ym_wr_pend, ym_bus_d;
+  logic [1:0] ym_a_r;
+  logic [7:0] ym_d_r;
+  wire        ym_bus = sel_ym && ds && we;
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      ym_div <= 3'd0; ym_wr_pend <= 1'b0; ym_bus_d <= 1'b0;
+      ym_a_r <= 2'd0; ym_d_r <= 8'd0;
+    end else begin
+      ym_div   <= (ym_div == 3'd5) ? 3'd0 : ym_div + 3'd1;
+      ym_bus_d <= ym_bus;
+      if (ym_bus && !ym_bus_d) begin
+        ym_a_r     <= addr[2:1];
+        ym_d_r     <= oedb[7:0];
+        ym_wr_pend <= 1'b1;
+      end else if (ym_cen) begin
+        ym_wr_pend <= 1'b0;
+      end
+    end
+  end
+
+  wire  [7:0] ym_dout_i;
+  wire signed [15:0] ym_l, ym_r;
+  wire               ym_sample;
+  wire               ym_irq_n;
+
+  jt12 u_ym (
+    .rst(!rst_n), .clk(clk), .cen(ym_cen),
+    .din(ym_d_r), .addr(ym_a_r),
+    .cs_n(!ym_wr_pend), .wr_n(!ym_wr_pend),
+    .dout(ym_dout_i), .irq_n(ym_irq_n),
+    .en_hifi_pcm(1'b0),
+    .snd_right(ym_r), .snd_left(ym_l), .snd_sample(ym_sample)
+  );
+
   // -------------------------------------------------------- device stubs
   assign ym_sel   = sel_ym && ds;
   assign ym_we    = we;
@@ -242,7 +300,7 @@ module m2_sound_board #(
     if      (sel_rom)  iedb = rom_q;
     else if (sel_ram)  iedb = {ram_hq, ram_lq};
     else if (sel_uart) iedb = {8'hff, addr[1] ? uart_stat_o : uart_data_o};
-    else if (sel_ym)   iedb = {8'hff, ym_dout};
+    else if (sel_ym)   iedb = {8'hff, ym_dout_i};
     // THE MULTIPCM MUST ANSWER "NOT BUSY" OR THE BOARD NEVER BOOTS. This is a
     // stub, and the value in it is not arbitrary:
     //
@@ -279,6 +337,10 @@ module m2_sound_board #(
     end
   end
 
-  wire _unused = &{1'b0, uart_dout, uart_irq, uart_irq_tx, sel_bnk1, sel_bnk2, eab[23:18], 1'b0};
+  // Only the FM for now; the MULTIPCMs mix in when they exist.
+  assign snd_l = ym_l;
+  assign snd_r = ym_r;
+
+  wire _unused = &{1'b0, uart_dout, uart_irq, uart_irq_tx, ym_irq_n, ym_sample, sel_bnk1, sel_bnk2, eab[23:18], 1'b0};
 
 endmodule

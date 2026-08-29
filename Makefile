@@ -358,8 +358,10 @@ obj_m2_romload/Vm2_romload_harness: $(RLD_RTL) sim/mem/tb_m2_romload.cpp
 	  -Wno-PINCONNECTEMPTY \
 	  --Mdir obj_m2_romload -o Vm2_romload_harness $(RLD_RTL) sim/mem/tb_m2_romload.cpp
 
+JT12_RTL := $(wildcard rtl/sound/jt12/*.v)
 SNDB_RTL := rtl/sound/fx68k/fx68k.sv rtl/sound/fx68k/fx68kAlu.sv \
             rtl/sound/fx68k/uaddrPla.sv rtl/sound/m2_i8251.sv \
+            $(JT12_RTL) \
             rtl/sound/m2_sound_board.sv sim/sound/m2_sndboard_harness.sv
 
 # RUN FROM obj_sndboard. fx68k's microcode and nanocode are $readmemb'd by
@@ -393,6 +395,9 @@ obj_sndboard/Vm2_sndboard_harness: $(SNDB_RTL) sim/sound/tb_m2_sndboard.cpp
 	  -Wno-PINCONNECTEMPTY -Wno-VARHIDDEN -Wno-WIDTHTRUNC -Wno-CASEINCOMPLETE \
 	  -Wno-UNOPTFLAT -Wno-MULTIDRIVEN -Wno-LATCH \
 	  -Wno-BLKANDNBLK -Wno-ALWCOMBORDER --no-assert-case \
+	  -Wno-WIDTH -Wno-UNSIGNED -Wno-CMPCONST -Wno-REALCVT -Wno-SELRANGE \
+	  -Wno-IMPLICIT -Wno-ASCRANGE -Wno-SIDEEFFECT -Wno-EOFNEWLINE \
+	  -Wno-PROCASSINIT -Wno-GENUNNAMED -Irtl/sound/jt12 \
 	  --Mdir obj_sndboard -o Vm2_sndboard_harness $(SNDB_RTL) sim/sound/tb_m2_sndboard.cpp
 
 test_m2_video_timing: obj_m2_vt/Vm2_video_timing

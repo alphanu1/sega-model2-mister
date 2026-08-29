@@ -35,12 +35,13 @@ module m2_sndboard_harness #(
 
   // Bus observation, so the testbench can follow instruction fetches without
   // reaching inside the CPU.
+  output logic signed [15:0] snd_l,
+  output logic signed [15:0] snd_r,
+
   output logic        obs_as,
   output logic [23:0] obs_addr,
   output logic        obs_we
 );
-
-  wire [7:0] ym_dout = 8'h00;   // not busy; the real part comes later
 
   m2_sound_board u_board (
     .clk(clk), .rst_n(rst_n),
@@ -48,7 +49,8 @@ module m2_sndboard_harness #(
     .tx_data(tx_data), .tx_valid(tx_valid), .tx_ack(tx_ack),
     .rom_req(rom_req), .rom_addr(rom_addr),
     .rom_ack(rom_ack), .rom_data(rom_data),
-    .ym_sel(), .ym_we(), .ym_addr(), .ym_din(), .ym_dout(ym_dout),
+    .ym_sel(), .ym_we(), .ym_addr(), .ym_din(),
+    .snd_l(snd_l), .snd_r(snd_r),
     .pcm_sel(), .pcm_we(), .pcm_bank(), .pcm_addr(), .pcm_din(),
     .dbg_pc(dbg_pc), .dbg_insns(dbg_insns),
     .dbg_ym_writes(dbg_ym_writes), .dbg_pcm_writes(dbg_pcm_writes)
