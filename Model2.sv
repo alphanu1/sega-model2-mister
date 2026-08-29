@@ -1400,6 +1400,23 @@ wire        uart_irq;
 wire [31:0] snd_bytes;
 wire  [7:0] snd_last;
 
+// THREE COUNTERS, BECAUSE "no bytes came out" HAS THREE DIFFERENT CAUSES and
+// they need different fixes. Does the address get selected at all; does a data
+// write reach the device; does the link take the byte. Counting all three says
+// which hop is broken instead of which hop is suspected. MAME writes this port
+// 59 times over 900 frames -- 11 control, 48 data, first data byte at frame 13 --
+// and never reads it back, so the board has a number to be wrong against.
+logic [15:0] uart_sel_cnt, uart_wr_cnt;
+always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
+	if (!cpu_rst_n) begin
+		uart_sel_cnt <= 16'd0;
+		uart_wr_cnt  <= 16'd0;
+	end else begin
+		if (uart_sel && !(&uart_sel_cnt))                  uart_sel_cnt <= uart_sel_cnt + 16'd1;
+		if (cpu_io_we && uart_dat && !(&uart_wr_cnt))      uart_wr_cnt  <= uart_wr_cnt + 16'd1;
+	end
+end
+
 wire  [7:0] a_tx_d, a_rx_d, b_tx_d, b_rx_d;
 wire        a_tx_v, a_tx_a, a_rx_v, a_rx_a;
 wire        b_tx_v, b_tx_a, b_rx_v;
@@ -2126,7 +2143,7 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// either sends that stream or it does not -- and that is checkable
 	// before a single sound chip exists. Overruns ride in the low half so
 	// the tearing work stays visible at the same time.
-	.a_valid(prof_tick), .a_addr({snd_bytes[15:0], vid_ovr_frame}),
+	.a_valid(prof_tick), .a_addr({uart_sel_cnt, snd_bytes[15:0]}),
 	// THE RETIRED-INSTRUCTION COUNT RIDES ALONG WITH THE IP.
 //
 // The profile says 91% of the board's time goes on the four memory
@@ -2135,10 +2152,10 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 // simulation finishes this initialisation in 15.9 M instructions. Two
 // consecutive samples give the instruction rate directly, which settles
 // whether this is a wrong branch or a slow machine.
-	.a_data({16'd0, snd_last, vid_fetches}),
+	.a_data({uart_wr_cnt, snd_last, vid_fetches}),
 	.b_valid(uart_b2_valid), .b_addr(char_hits),
 	.b_data(char_misses),
-	.a_tag(8'h53), .b_tag(8'h48),          // 'S' sndbytes:overruns | last:fetches
+	.a_tag(8'h53), .b_tag(8'h48),          // 'S' selcnt:linkbytes | wrcnt:last:fetches
 	                                       // 'H' glyph cache hits | misses
 	                                       // '0' map0 min|max : sum
 	                                       // 'T' write count + trap/PA
