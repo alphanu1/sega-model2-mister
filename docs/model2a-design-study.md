@@ -5061,3 +5061,52 @@ initialises byte by byte are being corrupted wholesale, which is a far better
 explanation of "the drawing routines never run" than anything in the renderer --
 and R79/R80's stage-by-stage census was measuring a pipeline that was healthy
 because the corruption is upstream of all of it.
+
+**R83 — two attempted fixes for R82's byte smear, both reverted, and a gap in
+the evidence that should have been closed first.**
+
+*What still stands from R82.* The loop count at 0x501084 reads 0x27272727 where
+MAME holds 0x00000027; the CPU issues a byte store (data 0x27272727, be=0001 --
+correct i960 behaviour, since it replicates the byte and relies on the enables)
+and every lane lands. 0x27 is 39, exactly simulation's pass count, and 656
+million passes at 9 instructions each is ~85 minutes -- which is why the board
+drew the attract screen overnight and never sooner.
+
+*Attempt 1: a byte-enable self-test driving port 2. REVERTED, and it BROKE THE
+BOARD.* Port 2 is shared with the tilemap copy engine and the self-test read
+path; driving `p_we[2]`/`p_req[2]` from a new test hijacked it, the copy engine
+stopped, and the tilemap went completely unwritten (map0 fold min=ffff max=0000
+against a working board's min=0020 max=c058). **An instrument must not take a
+port another master owns.** That is the fourth time this session an instrument
+has damaged the thing it was measuring; the previous three were a live-bus tap,
+a starved channel and a burst-biased census.
+
+Its result was also unreadable twice over: the first version zeroed a word that
+was probably already zero, so "the masked write did nothing" and "the fill did
+nothing" gave the same answer. Fill with 0xFFFF, not 0x0000, so all three
+outcomes are distinct.
+
+*Attempt 2: read-modify-write for sub-word writes. REVERTED, UNTESTED.* Reading
+the word, merging the enabled bytes in the FPGA and writing back full width
+removes the dependency on byte enables entirely, and it is correct regardless of
+which hop drops them. It passed all 26 tests, kept every byte lane correct in
+the CPU+SDRAM integration test, cost 2.3% (CPI 17.56 against 17.16) and left the
+instruction stream identical for 586,139 instructions. It was never evaluated on
+hardware because the board was ALREADY broken by attempt 1, and the identical
+bitstream md5 after reverting it proved that. The patch is kept at
+/tmp/bridge_rmw_attempt.sv.
+
+*THE GAP, and it is the important part of this entry.* **Every observation of
+0x27272727 comes from a build that already had the data cache.** The cache was
+added in the same session and has never been A/B'd against this symptom, so it
+cannot yet be excluded as the CAUSE rather than an innocent bystander. Its line
+is 8 bytes indexed by CPU byte address while the fill aligns the SDRAM WORD
+address -- those agree only because every region base is 4-word aligned, which
+was checked (GAME_WORK = 0x1600000) and holds. But "the arithmetic works out" is
+not the same as "measured", and R78 through R82 are a record of what happens
+when those are confused.
+
+**The next measurement is therefore an A/B of the loop count with the data cache
+bypassed, and it must come before any further fix.** Simulation cannot answer it:
+it reads 0x27 correctly with the cache present, so whatever is happening is
+hardware-only and only the board can say.
