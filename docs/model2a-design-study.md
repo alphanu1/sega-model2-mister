@@ -5001,3 +5001,63 @@ draw the two tiles they are given. R79 and R80's stage-by-stage census was
 measuring a pipeline that was working correctly the whole time. The fault is
 upstream of the first tilemap write, in whatever gates the drawing routines,
 which is where R75 left it.
+
+**R82 — THE STUCK LOOP HAS A CAUSE: a byte store lands in all four lanes, so a
+loop count of 0x27 becomes 0x27272727 and the loop runs for 85 minutes instead
+of microseconds.** This is why the attract screen appeared overnight and never
+within a person's patience.
+
+*The loop, disassembled from the board's own instruction trace:*
+
+    00001b98: ld   0x501084,r4     ; the loop COUNT
+    00001ba0: ld   0x501224,r3     ; the base pointer
+    00001ba8: ld   0x0(r3),r5      ; walk descriptors, advancing by the size
+    00001bc0: ld   0x8(r3),r5      ;   at offset 8
+    00001bc4: addi r5,r3,r3
+    00001bc8: cmpdeco 1,r4,r4      ; count down
+    00001bcc: bl   0x1ba8
+
+*Measured, three ways:*
+
+    MAME              count=00000013  base=00505100  size=00000300   19 passes
+    simulation                                                       39 passes
+    BOARD             count=27272727  base=00505100                 ~656,000,000
+
+The base pointer is now CORRECT -- R75 measured 0x511000 and something fixed
+since has repaired it. The COUNT is the fault, and its shape names the
+mechanism: **0x27 replicated into all four byte lanes.** 0x27 is 39, which is
+exactly the number of passes simulation makes.
+
+At nine instructions a pass and 1.16 M instructions/s, 656 million passes is
+about 85 minutes. The board was left overnight and drew the attract screen;
+a restart lost it. That is not intermittency, it is arithmetic.
+
+*What the CPU actually writes, captured off its own bus:*
+
+    write data=27272727  be=0001     <- a BYTE store, byte replicated
+    write data=2B2B2B2B  be=0001
+    write data=00000000  be=1111     <- the word is zeroed first
+
+The i960 replicates a stored byte across the word and relies on the ENABLES to
+pick a lane -- that is correct i960 behaviour. With the word zeroed and only
+lane 0 enabled, memory must hold 0x00000027. It holds 0x27272727, so **every
+lane was written and the byte enables were lost.**
+
+*Where it is NOT.* Read in source, the whole chain is correct:
+m2_cpu_bridge computes `sd_be <= r_addr[1] ? r_be[3:2] : r_be[1:0]`,
+m2_sdram_x2 passes it through as `f_be[g] = s_be[g]`, and m2_sdram drives
+`sd_dqm <= ~be_r` from `be_p[rr_grant]`. Every hop reads right and the result is
+wrong, which is the signature of source and silicon disagreeing.
+
+*Instrument warning, because it cost a measurement.* A snoop filtered on the
+bridge's `sd_addr` for that word ALSO catches the second half of an access to
+the PRECEDING dword -- S_LO_W writes `sd_word+1` with `r_be[3:2]` -- and that
+half legitimately carries be=00. Reading it as "the bridge sends be=0" is wrong.
+Filter on the transaction, not the address.
+
+*Why this matters far beyond one loop.* `stob` is common, and every byte store
+to SDRAM is currently smearing its value across four bytes. Structures the game
+initialises byte by byte are being corrupted wholesale, which is a far better
+explanation of "the drawing routines never run" than anything in the renderer --
+and R79/R80's stage-by-stage census was measuring a pipeline that was healthy
+because the corruption is upstream of all of it.

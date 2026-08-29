@@ -2049,7 +2049,11 @@ wire [31:0] uart_dropped;
 
 m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	.clk(clk_sys), .rst_n(mem_rst_n),
-	.a_valid(tr_v), .a_addr(tr_ad),
+	// THE IP RING: 512 consecutive retired instructions, recorded at full
+	// speed and read out slowly. Sampling cannot show a BRANCH, and a branch
+	// is now the whole question -- the background fill at 0x1ce38 runs while
+	// the artwork at 0x1c904/0x1c770 and the text at 0x18ea4 never do.
+	.a_valid(prof_tick), .a_addr(lc_wdat),
 	// THE RETIRED-INSTRUCTION COUNT RIDES ALONG WITH THE IP.
 //
 // The profile says 91% of the board's time goes on the four memory
@@ -2058,10 +2062,10 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 // simulation finishes this initialisation in 15.9 M instructions. Two
 // consecutive samples give the instruction rate directly, which settles
 // whether this is a wrong branch or a slow machine.
-	.a_data(tr_dt),
+	.a_data(sd_seen),
 	.b_valid(uart_b2_valid), .b_addr({fold_min[0], fold_max[0]}),
 	.b_data(fold_sum[0]),
-	.a_tag(8'h54), .b_tag(8'h30),          // 'T' map2 cell : value AS READ
+	.a_tag(8'h42), .b_tag(8'h30),          // 'B' cpu write | what the bridge sent
 	                                       // '0' map0 min|max : sum
 	                                       // 'T' write count + trap/PA
 	.enable(1'b1),
@@ -2431,6 +2435,79 @@ logic [31:0] mapreal [4];
 // to match. MAME's map2 holds 1,274 distinct values between 0x3000 and 0x3d8d;
 // if this comes back as a handful of values, that is the flat screen and it is
 // a data fault, not a rendering one.
+// THE TWO WORDS THAT DECIDE THE STUCK LOOP.
+//
+// 0x1b98 loads the loop COUNT from 0x501084 and 0x1ba0 the base POINTER from
+// 0x501224; the loop then advances by the size at base+8 and counts down. MAME
+// holds count=0x13, base=0x00505100, size=0x300 and leaves after nineteen
+// passes. R75 measured the board's base as 0x511000 with a size of ZERO, so its
+// pointer never advances and only the count can end the loop -- and a large
+// wrong count is a loop that runs for HOURS, which is exactly how long the board
+// sat before the attract screen appeared.
+//
+// So read both, off the CPU's own bus, registered before compared.
+logic [31:0] lc_cnt, lc_base, lc_wdat, lc_wbe;
+logic [31:0] sd_seen;
+logic        sdw_d;
+logic [SDR_AW:1] sdwa_d;
+logic [15:0] sdwd_d;
+logic  [1:0] sdwb_d;
+logic        cack_d, cwe_d;
+logic [31:0] caddr_d, crd_d, cwd_d;
+logic  [3:0] cbe_d;
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+	if (!mem_rst_n) begin
+		lc_cnt <= 32'hEEEE_EEEE; lc_base <= 32'hEEEE_EEEE;
+		lc_wdat <= 32'hEEEE_EEEE; lc_wbe <= 32'hEEEE_EEEE;
+		sd_seen <= 32'hEEEE_EEEE; sdw_d <= 1'b0; sdwa_d <= '0;
+		sdwd_d <= 16'd0; sdwb_d <= 2'd0;
+		cack_d <= 1'b0; cwe_d <= 1'b0; caddr_d <= 32'd0; crd_d <= 32'd0;
+		cwd_d <= 32'd0; cbe_d <= 4'd0;
+	end else begin
+		cack_d  <= cpu_ack;
+		cwe_d   <= cpu_we;
+		caddr_d <= cpu_addr;
+		crd_d   <= cpu_rdata;
+		cwd_d   <= cpu_wdata;
+		cbe_d   <= cpu_be;
+		if (cack_d && !cwe_d) begin
+			if (caddr_d == 32'h0050_1084) lc_cnt  <= crd_d;
+			if (caddr_d == 32'h0050_1224) lc_base <= crd_d;
+		end
+		// AND WHAT WAS WRITTEN THERE, WITH ITS BYTE ENABLES.
+		//
+		// The count reads back 0x27272727 where it should be 0x00000027 -- the
+		// byte 0x27 smeared across all four lanes, and 0x27 is 39, exactly the
+		// number of passes simulation makes. The i960 replicates a stored byte
+		// across the word and relies on the ENABLES to pick a lane, so the
+		// enables are the whole question:
+		//
+		//   data 27272727 be=1111 -> the game computed a bad value
+		//   data 27272727 be=0001 -> the memory path ignored the enables
+		//
+		// Those are opposite faults and guessing between them costs a build.
+		if (cack_d && cwe_d && caddr_d == 32'h0050_1084) begin
+			lc_wdat <= cwd_d;
+			lc_wbe  <= {28'd0, cbe_d};
+		end
+		// AND WHAT THE BRIDGE PRESENTS TO THE CONTROLLER FOR THAT WORD.
+		//
+		// The CPU writes 0x27272727 with be=0001 -- a byte store with the byte
+		// replicated, which is what the i960 does -- and the word reads back
+		// 0x27272727, so every lane was written. The bridge computes
+		// sd_be = r_be[1:0], the x2 adapter passes it through, and the
+		// controller drives sd_dqm = ~be. All three read correct in source, so
+		// the disagreement is between the source and the silicon, and only a
+		// measurement at the last unmeasured point can say which.
+		sdw_d  <= cpu_sd_req && cpu_sd_we;
+		sdwa_d <= cpu_sd_addr;
+		sdwd_d <= cpu_sd_din;
+		sdwb_d <= cpu_sd_be;
+		if (sdw_d && sdwa_d == SDR_AW'(GAME_WORK + (32'h0010_84 >> 1))) begin
+			sd_seen <= {sdwb_d, 6'd0, sdwd_d[7:0], sdwd_d[15:8]};
+		end
+	end
+end
 logic [14:0] tra_d1;
 logic        tr_v;
 logic [31:0] tr_ad, tr_dt;
