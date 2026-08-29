@@ -45,7 +45,16 @@ module m2_sound_link #(
   // reference emits a known 59 bytes over attract mode, so this is a byte-exact
   // oracle for the whole path before any sound chip exists.
   output logic [31:0] dbg_a_bytes,
-  output logic  [7:0] dbg_a_last
+  output logic  [7:0] dbg_a_last,
+  // AN ORDER-SENSITIVE SIGNATURE OF THE WHOLE STREAM, in one register.
+  //
+  // A count says how many bytes went; a sum or an xor says which bytes went but
+  // not in what order, and a command protocol is entirely order. Rotate the
+  // accumulator one bit and xor the byte in, and the same 48 bytes in a
+  // different order give a different answer. MAME's attract-mode stream is
+  // 0x6ae52ed8, so the board has a single number to be right or wrong against
+  // over a channel that carries two words a frame.
+  output logic [31:0] dbg_a_sig
 );
 
   localparam int unsigned CW = $clog2(BYTE_CYCLES);
@@ -62,7 +71,7 @@ module m2_sound_link #(
       a_tx_ack <= 1'b0; b_tx_ack <= 1'b0;
       a_rx_valid <= 1'b0; b_rx_valid <= 1'b0;
       a_rx_data <= 8'd0;  b_rx_data <= 8'd0;
-      dbg_a_bytes <= 32'd0; dbg_a_last <= 8'd0;
+      dbg_a_bytes <= 32'd0; dbg_a_last <= 8'd0; dbg_a_sig <= 32'd0;
     end else begin
       a_tx_ack <= 1'b0;
       b_tx_ack <= 1'b0;
@@ -75,6 +84,7 @@ module m2_sound_link #(
           a2b_busy    <= 1'b1;
           a_tx_ack    <= 1'b1;       // accepted; the sender may prepare another
           dbg_a_last  <= a_tx_data;
+          dbg_a_sig   <= {dbg_a_sig[30:0], dbg_a_sig[31]} ^ {24'd0, a_tx_data};
           if (!(&dbg_a_bytes)) dbg_a_bytes <= dbg_a_bytes + 32'd1;
         end
       end else if (a2b_busy) begin

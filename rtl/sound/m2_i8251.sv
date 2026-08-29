@@ -54,6 +54,13 @@ module m2_i8251 (
   input  logic       addr,
   input  logic [7:0] din,
   output logic [7:0] dout,
+  // BOTH REGISTERS, SEPARATELY, because the i960 reads them as one dword: the
+  // device is .umask16(0x00ff), so data is byte 0 and status byte 2 of the same
+  // 32-bit word. `dout` is the muxed view a byte-addressed master sees; these
+  // two let the top level present both without asserting `sel`, which matters --
+  // see the note on rd_data below, a status poll must not eat the data byte.
+  output logic [7:0] data_o,
+  output logic [7:0] stat_o,
 
   // ---- link side. One byte at a time, with an acknowledge, so the pacing
   // lives in the link rather than in either end.
@@ -97,10 +104,15 @@ module m2_i8251 (
   // The error bits are always clear -- see the header on why.
   wire [7:0] status = {1'b1, 1'b0, 3'b000, txempty, rxrdy, txrdy};
 
-  assign dout = addr ? status : rx_hold;
+  assign dout   = addr ? status : rx_hold;
+  assign data_o = rx_hold;
+  assign stat_o = status;
 
   // A read of the data register consumes the byte, exactly as the real part
-  // does; the flag must fall or the firmware reads the same byte forever.
+  // does; the flag must fall or the firmware reads the same byte forever. The
+  // top level therefore asserts `sel` for a read ONLY when the access names the
+  // data byte alone -- a firmware polling status with a wider access would
+  // otherwise consume a byte it never looked at.
   wire rd_data = sel && !we && !addr;
   wire wr_data = sel &&  we && !addr;
   wire wr_ctrl = sel &&  we &&  addr;

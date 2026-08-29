@@ -1429,7 +1429,7 @@ wire  [7:0] uart_dout, uart_data_byte, uart_status_byte;
 // access names byte 0 ALONE. Status polls are wider or name byte 2 and must
 // leave the received byte where it is.
 wire        uart_rd_dat = uart_sel && !cpu_io_we && cpu_io_be[0] && !cpu_io_be[2];
-wire [31:0] snd_bytes;
+wire [31:0] snd_bytes, snd_sig;
 wire  [7:0] snd_last;
 
 // THREE COUNTERS, BECAUSE "no bytes came out" HAS THREE DIFFERENT CAUSES and
@@ -1471,7 +1471,7 @@ m2_sound_link u_snd_link (
 	// The sound board's end, drained until it exists.
 	.b_tx_data(8'd0), .b_tx_valid(1'b0), .b_tx_ack(b_tx_a),
 	.b_rx_data(b_rx_d), .b_rx_valid(b_rx_v), .b_rx_ack(b_rx_v),
-	.dbg_a_bytes(snd_bytes), .dbg_a_last(snd_last)
+	.dbg_a_bytes(snd_bytes), .dbg_a_last(snd_last), .dbg_a_sig(snd_sig)
 );
 
 assign cpu_irq = { |(io_intreq & 12'hc00), |(io_intreq & 12'h3fc),
@@ -2175,7 +2175,7 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// either sends that stream or it does not -- and that is checkable
 	// before a single sound chip exists. Overruns ride in the low half so
 	// the tearing work stays visible at the same time.
-	.a_valid(prof_tick), .a_addr({uart_sel_cnt, snd_bytes[15:0]}),
+	.a_valid(prof_tick), .a_addr(snd_sig),
 	// THE RETIRED-INSTRUCTION COUNT RIDES ALONG WITH THE IP.
 //
 // The profile says 91% of the board's time goes on the four memory
@@ -2184,10 +2184,10 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 // simulation finishes this initialisation in 15.9 M instructions. Two
 // consecutive samples give the instruction rate directly, which settles
 // whether this is a wrong branch or a slow machine.
-	.a_data({uart_wr_cnt, snd_last, vid_fetches}),
+	.a_data({uart_sel_cnt, snd_bytes[7:0], snd_last}),
 	.b_valid(uart_b2_valid), .b_addr(char_hits),
 	.b_data(char_misses),
-	.a_tag(8'h53), .b_tag(8'h48),          // 'S' selcnt:linkbytes | wrcnt:last:fetches
+	.a_tag(8'h53), .b_tag(8'h48),          // 'S' signature | selcnt:bytes:last
 	                                       // 'H' glyph cache hits | misses
 	                                       // '0' map0 min|max : sum
 	                                       // 'T' write count + trap/PA

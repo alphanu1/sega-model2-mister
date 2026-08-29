@@ -77,6 +77,16 @@ static uint8_t b_read(int addr) {
   return v;
 }
 
+static void expect_u32(const char *what, uint32_t got, uint32_t want) {
+  ++checks;
+  if (got != want) {
+    std::printf("  FAIL %-34s got=%08x want=%08x\n", what, got, want);
+    ++fails;
+  } else {
+    std::printf("  %-36s %08x\n", what, got);
+  }
+}
+
 static void expect(const char *what, uint32_t got, uint32_t want) {
   ++checks;
   if (got != want) {
@@ -162,6 +172,12 @@ int main(int argc, char **argv) {
       }
   }
   std::printf("  main -> sound: %zu of %d bytes, in order\n", got.size(), N);
+
+  // THE SAME 48 BYTES, AS ONE NUMBER, so the board can be checked over a debug
+  // channel that carries two words a frame. Rotate-xor is order sensitive --
+  // a sum or an xor would pass on the right bytes in the wrong order, and a
+  // command protocol is entirely order. This is the value MAME's stream gives.
+  expect_u32("stream signature", d->dbg_a_sig, 0x6ae52ed8u);
 
   // RXRDY must fall once the byte is read, or the firmware reads it forever.
   expect("RXRDY after read", b_read(1) & 0x02, 0x00);
