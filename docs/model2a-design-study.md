@@ -4865,3 +4865,67 @@ board's pointer wrong (0x511000 against simulation's 0x505100). The drawing
 code is correct and is being handed data nobody produced. **R76 and R77 did not
 move this ratio (99.76% -> 99.81% zero), which is the evidence that the I/O
 board faults and this one are separate.**
+
+**R79 — the tilemap is written, read, and drawn; the screen is still flat. And
+R78's "the CPU writes zeros" is WRONG — it was the instrument.** This entry
+corrects R74, R75 and R78, all of which rest on a biased measurement.
+
+*The bias, because it cost the most.* The per-write tilemap census sampled ONE
+write per burst and always the same one. The routine at 0x1a120 issues eight
+stores inside ~50 cycles while the serial streamer stays busy 1.74 ms after each
+line, so the streamer caught the burst's FIRST store every time and nothing
+else. That produced "one instruction is 5,167 of 5,245 writes, 99.81% of them
+zero", which read as a finding and is an artefact. **Unbiased counters in RTL
+said 35% of tilemap writes are NON-ZERO.** A counter cannot be biased; a sampled
+stream can, and this one was, twice.
+
+*What is actually true, all measured on hardware with counters:*
+
+    CPU -> tilemap writes      35.0% non-zero
+    renderer <- tilemap reads  38.7% non-zero
+    glyph fetches              53.1% non-zero, 97,565/s
+    palette reads              97.6% non-zero
+    per-map non-zero writes    map0 8,315  map1 0  map2 12,672  map3 4,096
+    MAME's maps                map0 full   map1 empty  map2 full  map3 full
+
+Every stage carries data, and the map populations agree with the reference --
+including map1 being empty in both.
+
+*Where it stops:*
+
+    layer 0 pixels contributed        0
+    layer 1                           0
+    layer 2                     190,464   = 496 x 384, THE ENTIRE SCREEN
+    layer 3                           0
+    non-blank tile words: layers 0,1 = 0; layers 2,3 = saturated
+
+Layer 2 paints every pixel and the rest contribute nothing. That is the flat
+screen: `hit_cat0[2]` carries `opaque_pass` -- MAME draws tilemap 2 with
+TILEMAP_DRAW_OPAQUE -- so it paints even where transparent, and layer 3 sits
+behind it. The mixer's ordering was checked against model1_v.cpp's eight draw
+calls and is CORRECT.
+
+*Ruled out, so nobody repeats them:*
+
+  - **The layer disable.** `vscr[15]` switches a layer off for a frame. All four
+    scroll words read ZERO on the board, so no layer is disabled.
+  - **The glyph cache going stale.** It genuinely had NO invalidation and that
+    was a real bug (fixed), but the fetch rate is 97,565/s with or without it,
+    so it was never the throughput limiter.
+  - **A low glyph fetch rate as a cause.** 97,565/s against ~4.1 M/s for a full
+    screen looks damning until you notice `cc_hit`: the fetch engine keeps a
+    per-line glyph cache, so a UNIFORM map needs almost no fetches. A low rate
+    is a SYMPTOM of a flat picture, not its cause.
+  - **`layer >> 1` scroll indexing.** m2_video's header comment says
+    `0x5000 + (layer >> 1)`; the code at line 478 uses `0x5000 + cur_layer`. The
+    comment is stale. Reasoning from it produced a wrong pair-split theory.
+  - **Comparing "non-zero" against MAME's maps.** `tw_nonblank` excludes tile
+    0x20, the SPACE character, which is the commonest index in the reference
+    census. A lua script counting `!= 0` is therefore NOT measuring the same
+    thing, and map0 being "full" in MAME may be full of spaces.
+
+*The standing instrument rule this earns:* **prefer a counter in RTL to a
+sampled stream.** Three wrong conclusions this session came from sampling --
+the trap that was a flag poll, the starved channel that read as "never
+written", and the burst-leader census above. Every one was corrected by a
+counter, and a counter costs a few flip-flops.
