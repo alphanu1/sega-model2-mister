@@ -2056,7 +2056,17 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// THE A/B: with DCACHE_EN=0 the read path is exactly the pre-cache one,
 	// so if the count still reads 0x27272727 the cache is innocent and the
 	// fault is below the bridge. map2's fold says whether it is drawing.
-	.a_valid(prof_tick), .a_addr(lc_cnt),
+	// WITH THE LOOP FIXED, IS IT DRAWING? Snoop the renderer's own read port
+	// on map 2. MAME holds 1,274 distinct values there; the board held SIX,
+	// which was the flat screen. This says whether that has changed.
+	// SCANLINE OVERRUNS. An overrun is a line whose fetches did not finish
+	// before the next started: the bank does not flip and the previous line
+	// is shown again, which on a screen is flicker. Now that the artwork
+	// actually draws, the fetch engine has far more work per line than when
+	// it painted two flat colours -- so this is exactly when to expect them.
+	// Reported with the per-line fetch count and the glyph cache's hit rate,
+	// because those say WHY and not merely how many.
+	.a_valid(prof_tick), .a_addr({16'd0, vid_overruns}),
 	// THE RETIRED-INSTRUCTION COUNT RIDES ALONG WITH THE IP.
 //
 // The profile says 91% of the board's time goes on the four memory
@@ -2065,10 +2075,11 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 // simulation finishes this initialisation in 15.9 M instructions. Two
 // consecutive samples give the instruction rate directly, which settles
 // whether this is a wrong branch or a slow machine.
-	.a_data({fold_min[2], fold_max[2]}),
-	.b_valid(uart_b2_valid), .b_addr({fold_min[0], fold_max[0]}),
-	.b_data(fold_sum[0]),
-	.a_tag(8'h4C), .b_tag(8'h30),          // 'L' loop count | map2 min:max
+	.a_data({24'd0, vid_fetches}),
+	.b_valid(uart_b2_valid), .b_addr(char_hits),
+	.b_data(char_misses),
+	.a_tag(8'h4F), .b_tag(8'h48),          // 'O' overruns | fetches per line
+	                                       // 'H' glyph cache hits | misses
 	                                       // '0' map0 min|max : sum
 	                                       // 'T' write count + trap/PA
 	.enable(1'b1),
@@ -2637,7 +2648,7 @@ m2_char_cache #(.IDX_BITS(14)) u_char_cache (
 	.v_ack(char_ack), .v_data(char_data),
 	.m_req(cache_m_req), .m_addr(cache_m_addr),
 	.m_ack(cache_m_ack), .m_data(cache_m_data),
-	.inval(cpu_char_wr), .inval_idx(cpu_char_wr_addr[13:0]),
+	.inval(cpu_char_wr), .inval_idx(cpu_char_wr_addr[14:1]),
 	.dbg_hits(char_hits), .dbg_misses(char_misses)
 );
 

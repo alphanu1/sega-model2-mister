@@ -29,6 +29,17 @@
 static Vm2_char_cache *d;
 static uint64_t cyc = 0;
 
+// EVEN ADDRESSES ONLY, WHICH IS THE CACHE'S CONTRACT.
+//
+// A line is the PAIR (char_addr, char_addr+1) that holds one 8-pixel row, and
+// m2_tile_decode never produces an odd char_addr:
+//     char_addr = {tile_num, 4'b0000} + {map_y[2:0], 1'b0}
+// Both terms have bit 0 clear. The cache therefore indexes from bit 1 -- using
+// bit 0 would index on a value that never varies and waste half the M10K, which
+// is what it did. Presenting an odd address is outside the contract, so this
+// file stops doing it; the reference is defined per line for the same reason.
+#define EVEN(a) ((a) & ~1u)
+
 // Reference memory: the value at an address is a hash of it, so a wrong word
 // is caught wherever it comes from.
 // `epoch` stands in for the game UPLOADING new glyphs: the same address starts
@@ -36,6 +47,7 @@ static uint64_t cyc = 0;
 // it, so a stale read is unambiguous.
 static uint32_t epoch = 0;
 static uint32_t ref(uint32_t a) {
+  a = EVEN(a);
   return ((a * 2654435761u) ^ 0xA5A5A5A5u) + epoch * 0x01010101u;
 }
 
@@ -51,6 +63,7 @@ static void tick() {
 // One read through the cache, with the memory side answered after a delay that
 // stands in for SDRAM latency.
 static uint32_t read_word(uint32_t addr, int mem_latency) {
+  addr = EVEN(addr);
   d->v_req = 1; d->v_addr = addr;
   int wait = -1;
   uint32_t got = 0;
@@ -149,7 +162,7 @@ int main(int argc, char **argv) {
       ++fails;
     }
 
-    d->inval_idx = a & 0x3fff; d->inval = 1; tick(); d->inval = 0;
+    d->inval_idx = (EVEN(a) >> 1) & 0x3fff; d->inval = 1; tick(); d->inval = 0;
     for (int i = 0; i < 8; ++i) tick();               // one line, one cycle
 
     const uint32_t after = read_word(a, 3);

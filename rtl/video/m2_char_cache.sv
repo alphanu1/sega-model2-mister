@@ -52,7 +52,12 @@ module m2_char_cache #(
 
   // Renderer side.
   input  logic                   v_req,
+  // Bit 0 is DELIBERATELY unread: m2_tile_decode always produces an even
+  // char_addr, and a line is the pair it names. Reading it would index on a
+  // bit that never varies, which is what wasted half this cache.
+  /* verilator lint_off UNUSEDSIGNAL */
   input  logic [ADDR_BITS-1:0]   v_addr,
+  /* verilator lint_on UNUSEDSIGNAL */
   output logic                   v_ack,
   output logic [31:0]            v_data,
 
@@ -97,13 +102,25 @@ module m2_char_cache #(
 );
 
   localparam int unsigned LINES    = 1 << IDX_BITS;
-  localparam int unsigned TAG_BITS = ADDR_BITS - IDX_BITS;
+  // THE LOW ADDRESS BIT IS ALWAYS ZERO, so indexing on it wasted HALF the cache.
+  //
+  // m2_tile_decode: `char_addr = {tile_num, 4'b0000} + {map_y[2:0], 1'b0}` --
+  // both terms have bit 0 clear, so every glyph fetch is at an EVEN word, and a
+  // line is the pair (char_addr, char_addr+1) that holds one 8-pixel row. The
+  // index therefore used a bit that never varies: only even lines were ever
+  // reachable and half the M10K sat idle.
+  //
+  // Indexing from bit 1 doubles the effective cache for nothing. Measured cause
+  // to fix it: the hit rate on hardware is 61-63% against 96.7% in simulation,
+  // and the misses cost ~14 cycles each -- enough that about 5% of scanlines
+  // overrun their fetch budget, repeat, and show as flicker.
+  localparam int unsigned TAG_BITS = ADDR_BITS - IDX_BITS - 1;
 
   (* ramstyle = "M10K" *) logic [31:0]         cdata [LINES];
   (* ramstyle = "M10K" *) logic [TAG_BITS:0]   ctag  [LINES];   // {valid, tag}
 
-  wire [IDX_BITS-1:0]  req_idx = v_addr[IDX_BITS-1:0];
-  wire [TAG_BITS-1:0]  req_tag = v_addr[ADDR_BITS-1:IDX_BITS];
+  wire [IDX_BITS-1:0]  req_idx = v_addr[IDX_BITS:1];
+  wire [TAG_BITS-1:0]  req_tag = v_addr[ADDR_BITS-1:IDX_BITS+1];
 
   typedef enum logic [2:0] { S_INIT, S_IDLE, S_LOOK, S_MISS, S_FILL, S_ACK } st_t;
   st_t st;
@@ -186,7 +203,7 @@ module m2_char_cache #(
             st       <= S_ACK;
           end else begin
             m_req      <= 1'b1;
-            m_addr     <= {tag_r, idx_r};
+            m_addr     <= {tag_r, idx_r, 1'b0};   // the pair's even word
             dbg_misses <= dbg_misses + 1'd1;
             st         <= S_MISS;
           end
