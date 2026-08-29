@@ -2639,7 +2639,7 @@ end
 // SDRAM transactions that no longer cross the arbiter or occupy a slow port.
 wire        cache_m_req, cache_m_ack;
 wire [17:0] cache_m_addr;
-wire [31:0] cache_m_data;
+wire [63:0] cache_m_data;
 wire [31:0] char_hits, char_misses;
 
 m2_char_cache #(.IDX_BITS(14)) u_char_cache (
@@ -2648,7 +2648,7 @@ m2_char_cache #(.IDX_BITS(14)) u_char_cache (
 	.v_ack(char_ack), .v_data(char_data),
 	.m_req(cache_m_req), .m_addr(cache_m_addr),
 	.m_ack(cache_m_ack), .m_data(cache_m_data),
-	.inval(cpu_char_wr), .inval_idx(cpu_char_wr_addr[14:1]),
+	.inval(cpu_char_wr), .inval_idx(cpu_char_wr_addr[14:2]),
 	.dbg_hits(char_hits), .dbg_misses(char_misses)
 );
 
@@ -2661,7 +2661,9 @@ m2_char_cdc u_char_cdc (
 	.v_ack(cache_m_ack), .v_data(cache_m_data),
 	.clk_sys(clk_sys), .sys_rst_n(mem_rst_n),
 	.s_req(cc_req), .s_addr(cc_addr),
-	.s_ack(p_ack[3]), .s_data(p_dout[3][31:0])
+	// THE WHOLE BURST, not half of it: four 16-bit words fill p_dout and the
+	// cache line now holds all four.
+	.s_ack(p_ack[3]), .s_data(p_dout[3])
 );
 
 // TILE WORDS ACCUMULATED PER LAYER, straight out of the renderer. The frame

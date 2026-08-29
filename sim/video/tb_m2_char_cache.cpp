@@ -39,6 +39,7 @@ static uint64_t cyc = 0;
 // is what it did. Presenting an odd address is outside the contract, so this
 // file stops doing it; the reference is defined per line for the same reason.
 #define EVEN(a) ((a) & ~1u)
+#define LINE(a) ((a) & ~3u)
 
 // Reference memory: the value at an address is a hash of it, so a wrong word
 // is caught wherever it comes from.
@@ -71,7 +72,8 @@ static uint32_t read_word(uint32_t addr, int mem_latency) {
     if (d->m_req && wait < 0) { wait = mem_latency; ++mem_reqs; }
     if (wait == 0) {
       d->m_ack = 1;
-      d->m_data = ref(d->m_addr);
+      // A line is four words: both 32-bit rows it holds.
+      d->m_data = ((uint64_t)ref(d->m_addr + 2) << 32) | ref(d->m_addr);
     }
     tick();
     if (d->m_ack) { d->m_ack = 0; wait = -1; }
@@ -162,7 +164,7 @@ int main(int argc, char **argv) {
       ++fails;
     }
 
-    d->inval_idx = (EVEN(a) >> 1) & 0x3fff; d->inval = 1; tick(); d->inval = 0;
+    d->inval_idx = (LINE(a) >> 2) & 0x1fff; d->inval = 1; tick(); d->inval = 0;
     for (int i = 0; i < 8; ++i) tick();               // one line, one cycle
 
     const uint32_t after = read_word(a, 3);

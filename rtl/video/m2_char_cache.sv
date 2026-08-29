@@ -44,7 +44,16 @@
 
 module m2_char_cache #(
   // 14 -> 16,384 lines -> 64 KB of data. The tag narrows as this widens.
-  parameter int unsigned IDX_BITS = 14,
+  // FOUR-WORD LINES, SAME STORAGE. 8,192 x 64 bits is the 64 KB that 16,384 x
+  // 32 was, so this costs no M10K and halves the misses.
+  //
+  // The locality is exact rather than hopeful. m2_tile_decode puts a tile's
+  // rows at char_addr, +2, +4 ... +14, and consecutive SCANLINES read
+  // consecutive rows -- so a line holding rows N and N+1 is fetched on the even
+  // row and hit on the odd one. Measured cause: the hit rate is 82.6% and each
+  // miss costs ~14 cycles against a 24-cycle per-column budget, which is why
+  // 27 lines of every 384 overrun and repeat.
+  parameter int unsigned IDX_BITS = 13,
   parameter int unsigned ADDR_BITS = 18
 ) (
   input  logic                   clk,
@@ -65,7 +74,11 @@ module m2_char_cache #(
   output logic                   m_req,
   output logic [ADDR_BITS-1:0]   m_addr,
   input  logic                   m_ack,
-  input  logic [31:0]            m_data,
+  // 64 BITS, because that is what a burst returns and what a line holds. The
+  // port already fetched four 16-bit words per miss and this cache stored
+  // two of them, throwing away the next row of the same tile -- which the
+  // next scanline then had to fetch again.
+  input  logic [63:0]            m_data,
 
   // INVALIDATE. THE CACHE WAS INCOHERENT, AND THAT IS WHY THE SCREEN WAS FLAT.
   //
@@ -114,13 +127,16 @@ module m2_char_cache #(
   // to fix it: the hit rate on hardware is 61-63% against 96.7% in simulation,
   // and the misses cost ~14 cycles each -- enough that about 5% of scanlines
   // overrun their fetch budget, repeat, and show as flicker.
-  localparam int unsigned TAG_BITS = ADDR_BITS - IDX_BITS - 1;
+  localparam int unsigned TAG_BITS = ADDR_BITS - IDX_BITS - 2;
 
-  (* ramstyle = "M10K" *) logic [31:0]         cdata [LINES];
+  (* ramstyle = "M10K" *) logic [63:0]         cdata [LINES];
   (* ramstyle = "M10K" *) logic [TAG_BITS:0]   ctag  [LINES];   // {valid, tag}
 
-  wire [IDX_BITS-1:0]  req_idx = v_addr[IDX_BITS:1];
-  wire [TAG_BITS-1:0]  req_tag = v_addr[ADDR_BITS-1:IDX_BITS+1];
+  wire [IDX_BITS-1:0]  req_idx = v_addr[IDX_BITS+1:2];
+  wire [TAG_BITS-1:0]  req_tag = v_addr[ADDR_BITS-1:IDX_BITS+2];
+  // Which 32-bit half of the line the requester asked for. Bit 0 is still
+  // always zero -- a row is a PAIR of 16-bit words -- so bit 1 selects the row.
+  wire                 req_sel = v_addr[1];
 
   typedef enum logic [2:0] { S_INIT, S_IDLE, S_LOOK, S_MISS, S_FILL, S_ACK } st_t;
   st_t st;
@@ -128,16 +144,17 @@ module m2_char_cache #(
   logic [IDX_BITS-1:0] sweep;
   logic [IDX_BITS-1:0] idx_r;
   logic [TAG_BITS-1:0] tag_r;
-  logic [31:0]         hold;
+  logic [63:0]         hold;
+  logic                sel_r;
 
   // One read port, one write port, one clock: this infers a normal single-clock
   // block RAM with defined read-during-write, which is the whole point of the
   // renderer having moved onto clk_sys.
-  logic [31:0]       cd_q;
+  logic [63:0]       cd_q;
   logic [TAG_BITS:0] ct_q;
   logic              cd_we, ct_we;
   logic [IDX_BITS-1:0] mem_addr;
-  logic [31:0]         cd_din;
+  logic [63:0]         cd_din;
   logic [TAG_BITS:0]   ct_din;
 
   always_ff @(posedge clk) begin
@@ -175,7 +192,7 @@ module m2_char_cache #(
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      st <= S_INIT; sweep <= '0; idx_r <= '0; tag_r <= '0;
+      st <= S_INIT; sweep <= '0; idx_r <= '0; tag_r <= '0; sel_r <= 1'b0;
       m_req <= 1'b0; m_addr <= '0; v_ack <= 1'b0; hold <= '0;
       dbg_hits <= '0; dbg_misses <= '0;
     end else begin
@@ -190,6 +207,7 @@ module m2_char_cache #(
         S_IDLE: if (v_req) begin
           idx_r <= req_idx;
           tag_r <= req_tag;
+          sel_r <= req_sel;
           st    <= S_LOOK;
         end
 
@@ -203,7 +221,7 @@ module m2_char_cache #(
             st       <= S_ACK;
           end else begin
             m_req      <= 1'b1;
-            m_addr     <= {tag_r, idx_r, 1'b0};   // the pair's even word
+            m_addr     <= {tag_r, idx_r, 2'b00};  // the line's first word
             dbg_misses <= dbg_misses + 1'd1;
             st         <= S_MISS;
           end
@@ -229,6 +247,7 @@ module m2_char_cache #(
     end
   end
 
-  assign v_data = hold;
+  // The row the requester asked for, out of the pair the line holds.
+  assign v_data = sel_r ? hold[63:32] : hold[31:0];
 
 endmodule

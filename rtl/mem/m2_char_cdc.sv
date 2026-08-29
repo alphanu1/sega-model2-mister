@@ -54,7 +54,7 @@ module m2_char_cdc (
   input  logic        v_req,      // level, held until v_ack
   input  logic [17:0] v_addr,     // held for as long as v_req
   output logic        v_ack,      // ONE clk_vid cycle
-  output logic [31:0] v_data,     // valid at v_ack
+  output logic [63:0] v_data,     // valid at v_ack
 
   // Memory side: the m2_sdram_x2 slow domain.
   input  logic        clk_sys,
@@ -62,14 +62,14 @@ module m2_char_cdc (
   output logic        s_req,
   output logic [17:0] s_addr,
   input  logic        s_ack,
-  input  logic [31:0] s_data
+  input  logic [63:0] s_data
 );
 
   // ---------------------------------------------------------------- clk_sys
 
   logic [1:0]  req_sync;
   logic        s_busy, s_done;
-  logic [31:0] s_hold;
+  logic [63:0] s_hold;
   logic [17:0] s_addr_r;
 
   wire req_s = req_sync[1];
@@ -80,7 +80,7 @@ module m2_char_cdc (
       s_req    <= 1'b0;
       s_busy   <= 1'b0;
       s_done   <= 1'b0;
-      s_hold   <= 32'd0;
+      s_hold   <= 64'd0;
       s_addr_r <= 18'd0;
     end else begin
       req_sync <= {req_sync[0], v_req};
