@@ -4964,3 +4964,40 @@ measured working set spanning 985 KB. Simulation's 96.7% was measured on a
 captured access pattern; hardware's 51.8% is the live one. That gap is worth its
 own investigation once the memory path is fixed, because a cache that misses
 half the time cannot hide a slow miss.
+
+**R81 — the renderer is innocent: map 2 holds SIX distinct tile values where the
+reference holds 1,274, because the game's artwork and text routines never
+execute.** This is the flat screen, located at its source.
+
+*Measured by snooping the renderer's own read port* -- no extra port, no
+duplicated array, and it reports exactly what the picture is drawn from:
+
+    board map2, as READ:  37,989 samples, 2,659 distinct cells, 6 distinct VALUES
+        3d8d 21,414   3000 14,055   0020 1,980   0000 472   8020 67   0003 1
+    MAME  map2:           1,274 distinct values, range 3000..3d8d
+
+`0x3000` and `0x3d8d` are the flat backdrop pair. Everything else is missing.
+
+*And it names the routines, against the simulation writer census:*
+
+    0001ce38  18,816 writes, 4 distinct: 0020/3d8d/3000  the BACKGROUND  -- RUNS
+    0001c904   7,840 writes, 1,175 distinct               artwork        -- NEVER
+    0001c770   7,595 writes, 1,087 distinct               artwork        -- NEVER
+    00018ea4  23,769 writes,   225 distinct (8bc9,8b90)   TEXT           -- NEVER
+
+The background fill runs; the artwork and text routines do not. That is one
+cause for BOTH symptoms -- the two flat bands in attract, and "3CR" missing from
+the test screen, which is text from the same path.
+
+*Why folding the WRITES was not decisive, recorded because it cost a build.* The
+board's write range is 0x0020..0x8020, which CONTAINS MAME's 0x3000..0x3d8d, so
+spaces written while clearing widen the range without saying what the final
+content is. min/max over writes cannot distinguish "varied artwork" from "two
+tiles plus clearing". The read snoop can, and did.
+
+*What this closes.* The renderer, the tilemap array, its addressing, the mixer's
+draw order, the glyph path and the palette are ALL exonerated -- they faithfully
+draw the two tiles they are given. R79 and R80's stage-by-stage census was
+measuring a pipeline that was working correctly the whole time. The fault is
+upstream of the first tilemap write, in whatever gates the drawing routines,
+which is where R75 left it.

@@ -2049,7 +2049,7 @@ wire [31:0] uart_dropped;
 
 m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	.clk(clk_sys), .rst_n(mem_rst_n),
-	.a_valid(uart_a_valid), .a_addr(chw_cnt),
+	.a_valid(tr_v), .a_addr(tr_ad),
 	// THE RETIRED-INSTRUCTION COUNT RIDES ALONG WITH THE IP.
 //
 // The profile says 91% of the board's time goes on the four memory
@@ -2058,11 +2058,11 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 // simulation finishes this initialisation in 15.9 M instructions. Two
 // consecutive samples give the instruction rate directly, which settles
 // whether this is a wrong branch or a slow machine.
-	.a_data(chw_nz),
-	.b_valid(uart_b2_valid), .b_addr(mapreal[2]),
-	.b_data(mapreal[3]),
-	.a_tag(8'h47), .b_tag(8'h53),          // 'G' glyph writes | non-zero
-	                                       // 'S' real tiles map2|map3
+	.a_data(tr_dt),
+	.b_valid(uart_b2_valid), .b_addr({fold_min[0], fold_max[0]}),
+	.b_data(fold_sum[0]),
+	.a_tag(8'h54), .b_tag(8'h30),          // 'T' map2 cell : value AS READ
+	                                       // '0' map0 min|max : sum
 	                                       // 'T' write count + trap/PA
 	.enable(1'b1),
 	.tx(UART_TXD), .dbg_dropped(uart_dropped)
@@ -2412,6 +2412,57 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 end
 logic [31:0] mapnz [4];
 logic [31:0] mapreal [4];
+// IS THE CONTENT VARIED, OR ONE TILE REPEATED?
+//
+// tw_acc counts NON-BLANK tile words, not distinct ones, so a map filled with a
+// single repeated index saturates it and still paints one flat colour -- which
+// is exactly what layer 2 does. Counting cannot tell those apart; folding can.
+// XOR and SUM over the values written, plus the smallest and largest seen, are
+// four numbers MAME can be asked for exactly.
+// WHAT THE RENDERER READS OUT OF MAP 2, CELL BY CELL.
+//
+// Folding the WRITES was not decisive: the board's range 0x0020..0x8020
+// contains MAME's 0x3000..0x3d8d, so spaces written while clearing widen it
+// without saying what the final content is. The renderer reads that content
+// every frame, so snoop its own read port -- no extra port, no duplicated
+// array, and it reports exactly what the picture is drawn from.
+//
+// tram_data is registered one cycle behind tram_addr, so the address is delayed
+// to match. MAME's map2 holds 1,274 distinct values between 0x3000 and 0x3d8d;
+// if this comes back as a handful of values, that is the flat screen and it is
+// a data fault, not a rendering one.
+logic [14:0] tra_d1;
+logic        tr_v;
+logic [31:0] tr_ad, tr_dt;
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+	if (!mem_rst_n) begin
+		tra_d1 <= 15'd0; tr_v <= 1'b0; tr_ad <= 32'd0; tr_dt <= 32'd0;
+	end else begin
+		tra_d1 <= tram_addr;
+		tr_v   <= (tra_d1 >= 15'h2000) && (tra_d1 < 15'h3000);
+		if ((tra_d1 >= 15'h2000) && (tra_d1 < 15'h3000)) begin
+			tr_ad <= {17'd0, tra_d1};
+			tr_dt <= {16'd0, tram_data};
+		end
+	end
+end
+logic [15:0] fold_xor [4];
+logic [31:0] fold_sum [4];
+logic [15:0] fold_min [4];
+logic [15:0] fold_max [4];
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+	if (!mem_rst_n) begin
+		for (int i = 0; i < 4; i++) begin
+			fold_xor[i] <= 16'd0; fold_sum[i] <= 32'd0;
+			fold_min[i] <= 16'hFFFF; fold_max[i] <= 16'd0;
+		end
+	end else if (ocb_tram_we && |ocb_din && ocb_addr < 15'h4000) begin
+		fold_xor[ocb_addr[13:12]] <= fold_xor[ocb_addr[13:12]] ^ ocb_din;
+		fold_sum[ocb_addr[13:12]] <= fold_sum[ocb_addr[13:12]] + {16'd0, ocb_din};
+		if (ocb_din < fold_min[ocb_addr[13:12]]) fold_min[ocb_addr[13:12]] <= ocb_din;
+		if (ocb_din > fold_max[ocb_addr[13:12]]) fold_max[ocb_addr[13:12]] <= ocb_din;
+	end
+end
 always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
 		mapnz[0] <= 32'd0; mapnz[1] <= 32'd0;
