@@ -51,6 +51,9 @@ int main(int argc, char **argv) {
   if (const char *iv = std::getenv("M2_IN0")) in0v = std::strtoul(iv, nullptr, 16);
   d->in0 = in0v; d->in1 = 0x8f; d->in2 = 0xff;
   d->adc0 = 0x80; d->adc1 = 0x20; d->adc2 = 0x20; d->adc3 = 0x80;
+  // The board's own DIP banks. Daytona defines all 24 bits PORT_DIPUNUSED_DIPLOC
+  // with the default equal to the mask, so each bank reads 0xFF.
+  d->dsw1 = 0xff; d->dsw2 = 0xff; d->dsw3 = 0xff;
   d->g_we = 0; d->g_addr = 0; d->g_wdata = 0;
 
   auto tick = [&]() { d->clk = 0; d->eval(); d->clk = 1; d->eval(); };
@@ -94,6 +97,11 @@ int main(int argc, char **argv) {
 
   int m1_prev = 1, pcs = 0;
   uint8_t ee_prev = 0; int ee_log = 0;
+  // PA bit 0 is the control switch: 0 = cabinet inputs on PB/PC/PD, 1 = the
+  // board's own DIP banks. Counted, with the first selection's cycle, because
+  // "the firmware selects secondary" is the load-bearing claim and it must be
+  // observed rather than argued.
+  uint64_t pa_writes = 0, pa_secondary = 0, first_secondary = 0;
   for (uint64_t t = 0; t < cycles; ++t) {
     d->g_we = 0;
     if (rp < replay.size() && t >= replay[rp].at) {
@@ -118,6 +126,13 @@ int main(int argc, char **argv) {
       std::printf("  A=%04x di=%02x  (cycle %llu)\n", d->spy_a, d->spy_di,
                   (unsigned long long)t);
       a_prev = d->spy_a; ++alog;
+    }
+    if (d->spy_wr && d->spy_a == 0x8000) {          // PA, the control switch
+      ++pa_writes;
+      if (d->spy_dout & 1) {
+        if (!pa_secondary) first_secondary = t;
+        ++pa_secondary;
+      }
     }
     if (d->spy_wr && (d->spy_a & 0xfff0) == 0x8000 && t > 39000000 && wlog < 40) {
       std::printf("  IOW [%04x] <= %02x  (cycle %llu)\n", d->spy_a, d->spy_dout,
@@ -187,6 +202,11 @@ int main(int argc, char **argv) {
     }
   }
 
+  std::printf("  PA (control switch) writes: %llu, of which SECONDARY: %llu",
+              (unsigned long long)pa_writes, (unsigned long long)pa_secondary);
+  if (pa_secondary) std::printf("  (first at cycle %llu)",
+                                (unsigned long long)first_secondary);
+  std::printf("\n");
   std::printf("  write strobes: io=%d any=%d\n", d->spy_wrcnt >> 8, d->spy_wrcnt & 0xff);
   std::printf("  total Z80->DPRAM writes: %llu, distinct addresses: %zu\n",
               (unsigned long long)writes, last.size());

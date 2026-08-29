@@ -1576,6 +1576,8 @@ wire        zio_we;
 wire [10:0] zio_addr;
 wire  [7:0] zio_wdata, zio_rdata;
 
+wire  [7:0] iob_pa;       // PA latch; bit 0 selects the DIP banks
+wire [15:0] iob_seccnt;   // times the firmware has selected them
 m2_ioz80 #(.CEN_DIV(12)) u_ioz80 (
 	.clk(clk_sys), .rst_n(cpu_rst_n & fw_ready),
 	// First 16 KB only: the EPROM is 64 KB, the Z80 maps 0x0000-0x3fff, and a
@@ -1584,11 +1586,19 @@ m2_ioz80 #(.CEN_DIV(12)) u_ioz80 (
 	.fw_addr(ioctl_addr[13:1]),
 	.fw_data(ioctl_dout),
 	.in0(iob_in0), .in1(iob_in1), .in2(8'hFF), .dp_busy(dp_busy),
+	// The I/O BOARD's three DIP banks, not the game's. Daytona defines all 24
+	// bits PORT_DIPUNUSED_DIPLOC with the default equal to the mask, so every
+	// bank reads 0xFF -- and 0xFF is what the firmware must see when it selects
+	// secondary controls. Constants rather than OSD switches on purpose: every
+	// bit is unused for this game, so a switch would only offer a way to be
+	// wrong. They are ports so a game that does use them can drive them.
+	.dsw1(8'hFF), .dsw2(8'hFF), .dsw3(8'hFF),
 	.adc0(8'h80), .adc1(8'h20), .adc2(8'h20), .adc3(8'h80),
 	.z_we(zio_we), .z_addr(zio_addr), .z_wdata(zio_wdata), .z_rdata(zio_rdata),
 	.dbg_ee(), .dbg_wrcnt(), .dbg_wr_stb(), .dbg_dout(), .dbg_di(),
 	.dbg_rd_end(), .dbg_ra(), .dbg_rdat(),
-	.dbg_m1_n(), .dbg_a(), .dbg_last_wr(), .dbg_pf()
+	.dbg_m1_n(), .dbg_a(), .dbg_last_wr(), .dbg_pf(),
+	.dbg_pa(iob_pa), .dbg_seccnt(iob_seccnt)
 );
 
 // WHERE DOES THE TEST SWITCH STOP? The buttons are mapped, the firmware path
@@ -1805,7 +1815,44 @@ end
 // would have said so. That starvation has now cost two captures, so remove the
 // competition entirely rather than reason about budgets again. Channel A is the
 // question; nothing else shares the wire.
-wire        uart_a_valid = rd_v || trap_edge;
+// REGISTERED BEFORE COMPARED, per the standing rule -- two black screens came
+// from hanging comparators on live buses.
+logic        zio_we_d;
+logic [10:0] zio_addr_d;
+logic  [7:0] zio_wdata_d;
+logic        zw_v;
+logic [31:0] zw_ad, zw_dt;
+logic [15:0] zw_cnt;                 // block-window writes, cumulative
+// THE SCAN AREA, NOT THE BLOCK. The block capture did its job: the firmware
+// sweeps 0x100-0x17f with 7F/FF, 384 times a minute, where MAME's firmware
+// writes it ONCE (frame 10, "SEGA...") and never touches it again. So the
+// question moves upstream -- is the firmware's own input scan right? MAME puts
+// it at DPRAM 0x00-0x0d and the bytes are known exactly:
+//
+//     80 20 20 ff ff ff ff ff ff 8f ff ff ff ff
+//      ^steer  ^brake            ^in1/gearbox
+//
+// Same firmware, same nominal inputs. Any byte that differs is the fault, and
+// it names itself. 0x00-0x2f also catches the flag/status pair at 0x20-0x21 and
+// the "SEGA" wake-up bytes at 0x1a-0x1d.
+wire         zw_blk = zio_we_d && (zio_addr_d <= 11'h02f);
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+	if (!mem_rst_n) begin
+		zio_we_d <= 1'b0; zio_addr_d <= 11'd0; zio_wdata_d <= 8'd0;
+		zw_v <= 1'b0; zw_ad <= 32'd0; zw_dt <= 32'd0; zw_cnt <= 16'd0;
+	end else begin
+		zio_we_d    <= zio_we && fw_ready;
+		zio_addr_d  <= zio_addr;
+		zio_wdata_d <= zio_wdata;
+		zw_v <= zw_blk;
+		if (zw_blk) begin
+			zw_ad <= {21'd0, zio_addr_d};
+			zw_dt <= {24'd0, zio_wdata_d};
+			if (!(&zw_cnt)) zw_cnt <= zw_cnt + 16'd1;
+		end
+	end
+end
+wire        uart_a_valid = zw_v;
 // WHAT THE STUCK LOOP READS.
 //
 // The board sits in the counted loop at 0x1BA8-0x1BCC and never appears in the
@@ -1818,6 +1865,9 @@ logic [24:0]     rd_ad;
 logic [31:0]     rd_dt;
 logic            io_sel_d, io_we_d;   // sampled, never tapped live
 logic [31:0]     io_addr_d, io_dat_d;
+// Combinational off ALREADY-REGISTERED signals, so this is not a live-bus tap.
+wire win_rd_ev = io_sel_d && !io_we_d && (io_addr_d[23:12] == 12'hc00)
+                 && (io_addr_d[11:2] >= 10'h080) && (io_addr_d[11:2] <= 10'h0bf);
 always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
 		rd_v <= 1'b0; rd_ad <= '0; rd_dt <= '0;
@@ -1870,20 +1920,57 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		// That is the game hammering the exchange. Capture the DPRAM traffic
 		// itself -- every CPU read and write of the window -- and a retry loop
 		// shows as the same command reissued with the same answer returning.
-		rd_v  <= io_sel_d && (io_addr_d[23:12] == 12'hc00);
+		// The block window only, and reads only -- that is the payload the game
+		// judges. Collisions are counted alongside, so one capture answers both.
+		rd_v  <= win_rd_ev;
 		// Top bit of the address field flags a write, so reads and writes are
 		// distinguishable in one stream.
-		rd_ad <= {9'd0, wing_cnt};                    // game window accesses
-		rd_dt <= {winz_cnt, col_cnt};                 // Z80 writes | COLLISIONS
+		// WHAT THE GAME ACTUALLY READS OUT OF THE BLOCK WINDOW.
+		//
+		// It completes the handshake, reads the result, rejects it, reissues --
+		// thousands of times. So capture the RESULT: every game-side read of
+		// DPRAM 0x100-0x17f with the value returned. MAME's game reads real
+		// settings there; if the board reads something else, that difference is
+		// the thing being rejected, and it names itself.
+		if (win_rd_ev) begin
+			rd_ad <= {13'd0, io_addr_d[11:0]};    // which window byte
+			rd_dt <= io_dat_d;                    // and what came back
+		end
 	end
 end
-wire        uart_b2_valid = rd_v;
+// A HEARTBEAT, NOT AN EVENT, AND THE REASON IS A MEASUREMENT.
+//
+// This channel first fired on every change of the selection count, which
+// answered its question emphatically -- the firmware selects the DIP banks
+// 24,948 times in 60 seconds -- and in doing so SATURATED THE WIRE and starved
+// channel A to nothing. Zero window reads were captured, which would read as
+// "the game never touches the window" and is in fact "the instrument never got
+// to say so". That is the same failure as the shared-budget starvation, in a
+// new costume: channel A's priority only applies when the UART is IDLE, and a
+// channel firing thousands of times a second means it never is.
+//
+// So this is now a ~100 ms tick carrying the running totals. The counts are
+// cumulative, so sampling them cannot lose an event, and the wire is left for
+// the payload that actually needs every line.
+localparam int unsigned HB_CYC = 4_800_000;    // 100 ms at 48 MHz
+logic [22:0] hb_ctr;
+logic        hb_tick;
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+	if (!mem_rst_n) begin
+		hb_ctr <= 23'd0; hb_tick <= 1'b0;
+	end else if (hb_ctr == 23'(HB_CYC - 1)) begin
+		hb_ctr <= 23'd0; hb_tick <= 1'b1;
+	end else begin
+		hb_ctr <= hb_ctr + 23'd1; hb_tick <= 1'b0;
+	end
+end
+wire        uart_b2_valid = hb_tick || trap_edge;
 wire        uart_b_valid = char_ack;
 wire [31:0] uart_dropped;
 
 m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	.clk(clk_sys), .rst_n(mem_rst_n),
-	.a_valid(uart_a_valid), .a_addr({7'd0, rd_ad}),
+	.a_valid(uart_a_valid), .a_addr(zw_ad),
 	// THE RETIRED-INSTRUCTION COUNT RIDES ALONG WITH THE IP.
 //
 // The profile says 91% of the board's time goes on the four memory
@@ -1892,10 +1979,10 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 // simulation finishes this initialisation in 15.9 M instructions. Two
 // consecutive samples give the instruction rate directly, which settles
 // whether this is a wrong branch or a slow machine.
-	.a_data(rd_dt),
-	.b_valid(uart_b2_valid), .b_addr(io_framenum),
-	.b_data({8'd0, io_intena, io_intreq}),
-	.a_tag(8'h58), .b_tag(8'h4C),          // 'X' profile, 'L' loop read
+	.a_data(zw_dt),
+	.b_valid(uart_b2_valid), .b_addr({zw_cnt, iob_seccnt}),
+	.b_data({23'd0, cpu_trap, iob_pa}),
+	.a_tag(8'h5A), .b_tag(8'h50),          // 'Z' firmware write, 'P' heartbeat
 	.enable(1'b1),
 	.tx(UART_TXD), .dbg_dropped(uart_dropped)
 );

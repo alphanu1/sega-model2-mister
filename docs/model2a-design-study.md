@@ -4629,3 +4629,100 @@ hung on `cpu_sd_addr` blacked it again -- 0.358 ns of slack does not survive a
 25-bit magnitude compare on a live bus. **STANDING RULE: never tap a live bus.
 Register it, compare a cycle later.** Both black screens and one worthless
 capture came from ignoring that.
+
+**R76 — the I/O board firmware MULTIPLEXES its input ports between the cabinet
+controls and the board's OWN DIP switches, and this core implemented only half
+of it.** The board selects the DIP banks 24,948 times in 60 seconds on
+hardware, and every one of those returned controller state instead.
+
+*The mechanism, from four independent sources.* The 315-5338A's port A bit 0 is
+a control switch, and every input the firmware reads is selected on it:
+
+    // model1io.cpp, io_pa_w
+    // -------0  control switch (0 = first, 1 = second)
+    m_secondary_controls = bool(BIT(data, 0));
+
+    uint8_t model1io_device::io_pb_r()
+    { return m_secondary_controls ? m_dsw[0]->read() : m_in_cb[0](0); }
+    // io_pc_r -> m_dsw[1], io_pd_r -> m_dsw[2], and analog0_r..analog3_r
+    // likewise swap an_cb[0..3] for an_cb[4..7]
+
+`model1io.h` carries `required_ioport_array<3> m_dsw`: **the I/O board has three
+8-way DIP switches of its own, which are not the game's.** Daytona defines all
+24 bits `PORT_DIPUNUSED_DIPLOC(mask, mask, ...)` -- the default equals the mask
+-- so **each bank reads 0xFF**. `in_callback<2>` and `an_callback<3..7>` are
+never bound for `model2o`, and an unbound `devcb_read8` also reads 0xFF.
+
+*The firmware says so itself, independently of MAME.* EPR-14869C contains a
+matched pair of routines, and `IY` points at the 315-5338A, so `(IY+0)` is
+port A:
+
+    07F9: PUSH AF          ; select PRIMARY controls
+    07FA: LD  A,(IY+0)
+    07FD: AND FEh          ; clears bit 0
+    07FF: LD  (IY+0),A
+
+    0807: PUSH AF          ; select SECONDARY controls
+    0808: LD  A,(IY+0)
+    080B: OR  01h          ; sets bit 0
+    080D: LD  (IY+0),A
+
+This matters because it is evidence from the silicon's own program rather than
+from a model of it, and because simulation had said the opposite: the standalone
+I/O harness ran 40 M cycles, wrote port A 5,890 times, and selected secondary
+**zero** times -- the routine is only reached through the game-side dialogue the
+standalone harness does not have.
+
+*What the board was doing.* `m2_ioz80.sv` returned `in0`/`in1`/`in2`
+unconditionally and its own header recorded the gap -- "DSW1-3 when the firmware
+selects secondary controls -- **deferred until the game's own INPUT TEST screen
+can serve as the oracle**". The oracle arrived from the UART instead. DPRAM
+0x100, which holds `53 45` ("SE" of "SEGA"), was caught alternating with
+`7F FF` -- an idle analog reading and an idle digital one, i.e. the SCAN pattern
+written where the settings belong. That is R63's `7F FF`, now with a mechanism.
+
+*What was ELIMINATED on the way, all by measurement:*
+
+  - **The DPRAM wiring is correct.** `model2.cpp:1279` maps the i960 to the
+    mb8421's RIGHT port at `0x01c00000` with `umask32(0x00ff00ff)`, and the
+    ioboard's read/write callbacks to `left_r`/`left_w`. That is exactly this
+    core's arrangement.
+  - **The 315-5338A command set is correct.** Command `0x87` is a documented
+    no-op in the reference ("sent after setting up the address and when wanting
+    to receive serial data"), there is **no address auto-increment**, `0x0c`
+    reads at the latched address, and `0x0d` returns a constant `0x08`. The
+    suspicion that `0x87` armed something we ignored was wrong.
+  - **There are no DPRAM collisions.** A hardware capture across a boot counted
+    64 game-side window accesses, 64 Z80 writes and **zero** collisions. The
+    "both sides colliding in silicon" theory is dead, and with it the reason to
+    hang an MB8421 BUSY signal off a 5338A status bit that the reference
+    documents as "command acknowledged".
+  - **The CPU is not trapping.** `cpu_trap` reads 0 throughout. Note also that
+    `T_TRAP` sets `halted` and self-loops, so `trap` LATCHES: it can fire at
+    most once, and any count of its edges above one is an instrument artifact.
+
+*Instrument failures, again worth more than the bug.* Three more, all of the
+same family -- the instrument reporting something other than what it claimed:
+
+  - The capture assigned its payload (`rd_ad`/`rd_dt`) **unconditionally** every
+    cycle while strobing on `rd_v || trap_edge`. A trap therefore printed
+    whichever address merely happened to be in flight. 128 lines of a flag poll
+    wore a window read's clothes and were nearly read as a finding. **The
+    payload must be gated by the same condition that raises the strobe.**
+  - Channel A's "priority" in `m2_dbg_stream` only applies when the UART is
+    IDLE. A channel firing thousands of times a second means it never is, so
+    the prioritised channel was starved to **zero** lines -- which would have
+    read as "the game never touches the window". Same failure as the earlier
+    shared-budget starvation, in a new costume. Telemetry that fires constantly
+    must be a HEARTBEAT carrying cumulative counts, not an event.
+  - A stale bitstream was deployed and measured: `tools/deploy-mister.sh` copies
+    `build/release/Model2.rbf`, and `make release` had not been re-run, so the
+    board received a core 25 minutes older than the one just built. **Verify the
+    deployed md5 against `output_files/` every time**; the deploy's own "OK"
+    only proves the copy matched its source.
+
+*Status: NOT YET PROVEN.* The multiplex is implemented, the DIP banks are wired
+to 0xFF as ports (so a game that uses them can drive them), the full simulation
+suite passes, and the change is provably inert wherever secondary is not
+selected. Whether it restores the settings block, and with it the attract
+screen, is the next measurement -- not a claim this entry is entitled to make.

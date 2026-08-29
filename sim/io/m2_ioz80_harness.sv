@@ -22,6 +22,11 @@ module m2_ioz80_harness #(
   input  logic [15:0] fw_data,
 
   input  logic  [7:0] in0, in1, in2,
+  // The board's own DIP banks, exposed so the multiplex can be tested rather
+  // than assumed: the firmware selects between these and the cabinet inputs
+  // with PA bit 0, and getting that backwards is what wrote the input-scan
+  // pattern over the settings block.
+  input  logic  [7:0] dsw1, dsw2, dsw3,
   input  logic  [7:0] adc0, adc1, adc2, adc3,
 
   // Game-side access (the tb plays the i960's role).
@@ -66,11 +71,12 @@ module m2_ioz80_harness #(
     .clk(clk), .rst_n(rst_n),
     .fw_we(fw_we), .fw_addr(fw_addr), .fw_data(fw_data),
     .in0(in0), .in1(in1), .in2(in2), .dp_busy(1'b0),
+    .dsw1(dsw1), .dsw2(dsw2), .dsw3(dsw3),
     .adc0(adc0), .adc1(adc1), .adc2(adc2), .adc3(adc3),
     .z_we(z_we), .z_addr(z_addr), .z_wdata(z_wdata), .z_rdata(z_rdata),
     .dbg_ee(spy_ee), .dbg_wrcnt(spy_wrcnt), .dbg_wr_stb(spy_wr), .dbg_dout(spy_dout), .dbg_di(spy_di),
     .dbg_rd_end(spy_rd_end), .dbg_ra(spy_ra), .dbg_rdat(spy_rdat), .dbg_m1_n(spy_m1_n), .dbg_a(spy_a),
-    .dbg_last_wr(), .dbg_pf()
+    .dbg_last_wr(), .dbg_pf(), .dbg_pa(), .dbg_seccnt()
   );
 
 endmodule

@@ -429,7 +429,7 @@ module m2_boot_harness #(
     .z_we(zio_we), .z_addr(zio_addr), .z_wdata(zio_wdata), .z_rdata(zio_rdata),
     .dbg_ee(), .dbg_wrcnt(), .dbg_wr_stb(), .dbg_dout(), .dbg_di(),
     .dbg_rd_end(), .dbg_ra(), .dbg_rdat(),
-    .dbg_m1_n(), .dbg_a(), .dbg_last_wr(), .dbg_pf()
+    .dbg_m1_n(), .dbg_a(), .dbg_last_wr(), .dbg_pf(), .dbg_pa(), .dbg_seccnt()
   );
 
   m2_ioboard #(

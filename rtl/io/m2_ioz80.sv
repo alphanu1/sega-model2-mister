@@ -32,10 +32,12 @@
 // byte-at-a-time shape is exactly the exchange the DPRAM traces always showed.
 //
 // 315-5338A ports, per model1io.cpp's bindings:
-//   PB (1) / PC (2) / PD (3)  <- IN0 / IN1 / IN2   (DSW1-3 when the firmware
-//                                selects secondary controls -- deferred until
-//                                the game's own INPUT TEST screen can serve as
-//                                the oracle for the select bit)
+//   PB (1) / PC (2) / PD (3)  <- IN0 / IN1 / IN2, or DSW1-3 when the firmware
+//                                selects SECONDARY controls with PA bit 0.
+//                                No longer deferred: the multiplex is
+//                                implemented, and the oracle that closed it was
+//                                the UART, not the input test -- see the note
+//                                on `secondary` below.
 //   PE (4)                    <- drive board (absent: 0xff)
 //   PF (5)                    -> output latch (lamps etc.; latched, unused)
 //   PG (6)                    <- button board / EEPROM DO (absent: 0xff)
@@ -68,6 +70,14 @@ module m2_ioz80 #(
   input  logic  [7:0] in0,
   input  logic  [7:0] in1,
   input  logic  [7:0] in2,
+  // THE I/O BOARD'S OWN DIP BANKS, WHICH ARE NOT THE GAME'S. This board
+  // carries three 8-way switches of its own (model1io.h: required_ioport_array
+  // <3> m_dsw) and the firmware reaches them by MULTIPLEXING PB/PC/PD -- see
+  // `secondary` below. Daytona defines all 24 bits PORT_DIPUNUSED_DIPLOC with
+  // the default equal to the mask, so every bank reads 0xFF.
+  input  logic  [7:0] dsw1,
+  input  logic  [7:0] dsw2,
+  input  logic  [7:0] dsw3,
   // BUSY from the DPRAM, so the firmware's status waits mean something. See the
   // note in m2_ioboard: with a constant status the firmware never waits and
   // refills the window under the game's feet.
@@ -95,7 +105,14 @@ module m2_ioz80 #(
   output logic        dbg_m1_n,
   output logic [15:0] dbg_a,
   output logic [15:0] dbg_last_wr,   // {addr[7:0], data}
-  output logic  [7:0] dbg_pf
+  output logic  [7:0] dbg_pf,
+  // THE CONTROL SWITCH, ON THE WIRE. Bit 0 of PA decides whether PB/PC/PD carry
+  // the cabinet inputs or the board's DIP banks, and whether the firmware ever
+  // throws it is the load-bearing question -- so it is reported rather than
+  // reasoned about. The count saturates instead of wrapping: "many" and "a few"
+  // are different answers and a wrap would confuse them.
+  output logic  [7:0] dbg_pa,
+  output logic [15:0] dbg_seccnt
 );
 
   // ------------------------------------------------------------ Z80 pacing
@@ -207,6 +224,25 @@ module m2_ioz80 #(
   logic  [7:0] port_out [8];   // latched output ports (PA, PF, ...)
   logic  [7:0] dir_r;
 
+  // THE CONTROL SWITCH, and it is why the settings block was never right.
+  //
+  // model1io.cpp, io_pa_w:  "-------0  control switch (0 = first, 1 = second)"
+  // and every input port is muxed on it:
+  //
+  //     io_pb_r() { return m_secondary_controls ? m_dsw[0]->read() : m_in_cb[0](0); }
+  //
+  // This file previously returned the cabinet inputs UNCONDITIONALLY, and said
+  // so -- the multiplex was recorded above as deferred "until the game's own
+  // INPUT TEST screen can serve as the oracle". The UART became that oracle
+  // first: DPRAM 0x100, which holds "SEGA...", was caught alternating with
+  // 7F FF -- idle analog and idle digital, i.e. the SCAN pattern written where
+  // the settings belong. The firmware selects secondary, we hand it controls
+  // instead of switches, and the game rejects the block and reissues forever.
+  //
+  // No new register: PA writes already land in port_out[0], which is exactly
+  // where MAME takes the bit from.
+  wire secondary = port_out[0][0];
+
   wire io_sel  = (A[15:4] == 12'h800);   // 0x8000-0x800f
   wire adc_sel = (A[15:2] == 14'h3000);  // 0xc000-0xc003
   logic adc_sel_d;
@@ -220,9 +256,9 @@ module m2_ioz80 #(
     io_q = 8'hff;
     case (A[3:0])
       4'h0: io_q = port_out[0];
-      4'h1: io_q = in0;              // PB
-      4'h2: io_q = in1;              // PC
-      4'h3: io_q = in2;              // PD
+      4'h1: io_q = secondary ? dsw1 : in0;   // PB
+      4'h2: io_q = secondary ? dsw2 : in1;   // PC
+      4'h3: io_q = secondary ? dsw3 : in2;   // PD
       4'h4: io_q = 8'hff;            // PE: drive board absent
       4'h5: io_q = port_out[5];      // PF: output latch reads back
       4'h6: io_q = {ee_do, 7'h7f};   // PG bit 7: EEPROM DO
@@ -245,13 +281,17 @@ module m2_ioz80 #(
     if (!rst_n) begin
       io_address <= 16'd0; ser_out <= 8'd0; cmd_r <= 8'd0; dir_r <= 8'd0;
       z_we <= 1'b0; z_wdata <= 8'd0; z_addr_r <= 11'd0; dbg_last_wr <= 16'd0;
+      dbg_seccnt <= 16'd0;
       for (int i = 0; i < 8; i++) port_out[i] <= 8'd0;
     end else begin
       z_we <= 1'b0;
       if (wr_stb && aw_l[15:4] == 12'h800) begin
         case (aw_l[3:0])
-          4'h0, 4'h1, 4'h2, 4'h3, 4'h4, 4'h5, 4'h6:
+          4'h0, 4'h1, 4'h2, 4'h3, 4'h4, 4'h5, 4'h6: begin
             port_out[aw_l[2:0]] <= dw_l;
+            if (aw_l[3:0] == 4'h0 && dw_l[0] && !(&dbg_seccnt))
+              dbg_seccnt <= dbg_seccnt + 16'd1;
+          end
           4'h8: dir_r <= dw_l;
           4'h9: begin
             cmd_r <= dw_l;
@@ -282,6 +322,7 @@ module m2_ioz80 #(
   // Reads keep the port pointed at io_address continuously.
   assign z_addr = z_we ? z_addr_r : io_address[10:0];
   assign dbg_pf = port_out[5];
+  assign dbg_pa = port_out[0];
 
   // ------------------------------------------------------------ 93C46 EEPROM
   // The board's own settings store, bit-banged by the firmware through the
@@ -387,10 +428,14 @@ module m2_ioz80 #(
     if (!rst_n) adc_shift <= 8'd0;
     else if (wr_stb && aw_l[15:2] == 14'h3000) begin
       case (aw_l[1:0])
-        2'd0: adc_shift <= adc0;
-        2'd1: adc_shift <= adc1;
-        2'd2: adc_shift <= adc2;
-        2'd3: adc_shift <= adc3;
+        // "analog port switching is handled by two 74hc4066 analog switches"
+        // -- model1io.cpp, and analogN_r picks an_cb[N+4] when secondary is
+        // selected. model2o binds 0-2 only, so the secondary bank is unbound
+        // and an unbound devcb_read8 reads 0xFF.
+        2'd0: adc_shift <= secondary ? 8'hFF : adc0;
+        2'd1: adc_shift <= secondary ? 8'hFF : adc1;
+        2'd2: adc_shift <= secondary ? 8'hFF : adc2;
+        2'd3: adc_shift <= secondary ? 8'hFF : adc3;
       endcase
     end else if (rd_end && adc_sel_d) begin
       adc_shift <= {adc_shift[6:0], 1'b0};
