@@ -2047,7 +2047,7 @@ wire [31:0] uart_dropped;
 
 m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	.clk(clk_sys), .rst_n(mem_rst_n),
-	.a_valid(uart_a_valid), .a_addr(cf_cnt),
+	.a_valid(uart_a_valid), .a_addr(chw_cnt),
 	// THE RETIRED-INSTRUCTION COUNT RIDES ALONG WITH THE IP.
 //
 // The profile says 91% of the board's time goes on the four memory
@@ -2056,10 +2056,11 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 // simulation finishes this initialisation in 15.9 M instructions. Two
 // consecutive samples give the instruction rate directly, which settles
 // whether this is a wrong branch or a slow machine.
-	.a_data(cr_hi),
-	.b_valid(uart_b2_valid), .b_addr(char_hits),
-	.b_data(char_misses),
-	.a_tag(8'h43), .b_tag(8'h48),          // 'C' acks|req-cycles, 'H' hits|misses
+	.a_data(chw_nz),
+	.b_valid(uart_b2_valid), .b_addr(mapreal[2]),
+	.b_data(mapreal[3]),
+	.a_tag(8'h47), .b_tag(8'h53),          // 'G' glyph writes | non-zero
+	                                       // 'S' real tiles map2|map3
 	                                       // 'T' write count + trap/PA
 	.enable(1'b1),
 	.tx(UART_TXD), .dbg_dropped(uart_dropped)
@@ -2357,6 +2358,87 @@ end
 // colour per layer -- the exact symptom. Counted on the ack, so this is fetches
 // and not idle cycles.
 logic [31:0] cf_cnt, cf_nz;
+wire [17:0] vid_layer_px [4];
+// THE SCROLL REGISTERS THEMSELVES, SNOOPED AS THEY ARE WRITTEN.
+//
+// Three layers of four produce ZERO pixels and the fourth paints all 190,464.
+// A layer is switched off for the whole frame by bit 15 of its vertical scroll
+// word, and m2_video reads those from tile RAM: hscr at 0x5000 + (layer >> 1),
+// vscr at 0x5004 + (layer >> 1). So latch those four words as the CPU stores
+// them and read bit 15 directly, rather than inferring it from the symptom.
+// WHICH TILEMAP DOES THE GAME ACTUALLY FILL?
+//
+// The renderer maps layer N to tile RAM 0x1000*N, and layers 0 and 1 fetch ZERO
+// non-blank tile words while 2 and 3 saturate. Either the game never writes maps
+// 0 and 1 -- in which case the picture is expected somewhere we are not looking
+// -- or it does and our read addressing misses it. Counting NON-ZERO writes per
+// map settles which, and a counter cannot be biased the way the per-write census
+// was.
+// HOW MANY TIMES DOES THE PICTURE CHANGE COLOUR?
+//
+// Every stage measures healthy and the screen is two flat colours, so measure
+// the OUTPUT rather than another stage. A flat screen changes colour a handful
+// of times a frame; a drawn one changes thousands. This settles whether the
+// picture exists at all and is being lost after the mixer, or was never drawn --
+// and it cannot be argued with, unlike every stage census so far.
+logic [23:0] px_prev;
+logic [31:0] px_changes, px_total;
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+	if (!mem_rst_n) begin
+		px_prev <= 24'd0; px_changes <= 32'd0; px_total <= 32'd0;
+	end else if (ce_pix) begin
+		px_prev  <= {tile_r, tile_g, tile_b};
+		px_total <= px_total + 32'd1;
+		if ({tile_r, tile_g, tile_b} != px_prev) px_changes <= px_changes + 32'd1;
+	end
+end
+// DOES THE GAME UPLOAD ITS GLYPHS AT ALL?
+//
+// The tilemaps are RIGHT -- maps 2 and 3 match MAME's content exactly, 4,096
+// real tiles each -- and the screen is two flat bands. A correct tile index
+// pointing at a blank glyph paints one flat colour, so the glyph memory is the
+// only thing left between the two. cpu_char_wr already marks writes landing in
+// 0x01080000-0x010fffff; count them, and count how many carry data.
+logic [31:0] chw_cnt, chw_nz;
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+	if (!mem_rst_n) begin
+		chw_cnt <= 32'd0; chw_nz <= 32'd0;
+	end else if (cpu_char_wr) begin
+		chw_cnt <= chw_cnt + 32'd1;
+		if (|cpu_wdata) chw_nz <= chw_nz + 32'd1;
+	end
+end
+logic [31:0] mapnz [4];
+logic [31:0] mapreal [4];
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+	if (!mem_rst_n) begin
+		mapnz[0] <= 32'd0; mapnz[1] <= 32'd0;
+		mapnz[2] <= 32'd0; mapnz[3] <= 32'd0;
+		mapreal[0] <= 32'd0; mapreal[1] <= 32'd0;
+		mapreal[2] <= 32'd0; mapreal[3] <= 32'd0;
+	end else if (ocb_tram_we && |ocb_din && ocb_addr < 15'h4000) begin
+		mapnz[ocb_addr[13:12]] <= mapnz[ocb_addr[13:12]] + 32'd1;
+		// REAL CONTENT, BY THE RENDERER'S OWN RULE. tw_nonblank counts a tile
+		// only if it is non-zero AND not 0x20, the SPACE character -- so a map
+		// full of spaces is "non-zero" and still draws nothing. Splitting the
+		// count says whether the game composed a picture or wrote blanks, which
+		// "non-zero" alone cannot.
+		if ((ocb_din & 16'h3fff) != 16'h0020)
+			mapreal[ocb_addr[13:12]] <= mapreal[ocb_addr[13:12]] + 32'd1;
+	end
+end
+logic [15:0] scr_h0, scr_h1, scr_v0, scr_v1;
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+	if (!mem_rst_n) begin
+		scr_h0 <= 16'd0; scr_h1 <= 16'd0; scr_v0 <= 16'd0; scr_v1 <= 16'd0;
+	end else if (ocb_tram_we) begin
+		if (ocb_addr == 15'h5000) scr_h0 <= ocb_din;
+		if (ocb_addr == 15'h5001) scr_h1 <= ocb_din;
+		if (ocb_addr == 15'h5004) scr_v0 <= ocb_din;
+		if (ocb_addr == 15'h5005) scr_v1 <= ocb_din;
+	end
+end
+wire [15:0] vid_ctrl [2];
 wire        cpu_char_wr;        // the CPU wrote a glyph
 wire [17:0] cpu_char_wr_addr;   // and this is which one
 wire        char_req, char_ack;
@@ -2490,7 +2572,8 @@ m2_video u_tilemap (
 	.vid_r(tile_r), .vid_g(tile_g), .vid_b(tile_b),
 	.vid_hs(tile_hs), .vid_vs(tile_vs), .vid_hb(tile_hb), .vid_vb(tile_vb),
 	.vblank_irq(), .dbg_fetches(vid_fetches), .dbg_overruns(vid_overruns),
-	.dbg_layer_px(), .dbg_ctrl(), .dbg_layer_have(vid_layer_have)
+	.dbg_layer_px(vid_layer_px), .dbg_ctrl(vid_ctrl),
+	.dbg_layer_have(vid_layer_have)
 );
 
 ///////////////////////   VIDEO   ////////////////////////////////
