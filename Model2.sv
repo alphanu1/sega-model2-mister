@@ -974,9 +974,15 @@ localparam logic [SDR_AW:1] XLAT_BASE = SDR_AW'(32'h4A000);
 //   0x00040000  main_data     (mpr-16528 onwards)
 localparam logic [SDR_AW:1] GAME_PROG  = SDR_AW'(32'h0000000);   // byte 0
 localparam logic [SDR_AW:1] GAME_DATA  = SDR_AW'(32'h0020000);   // byte 0x40000
-localparam logic [SDR_AW:1] GAME_WORK  = SDR_AW'(32'h1600000);   // 1 MB
-localparam logic [SDR_AW:1] GAME_BOARD = SDR_AW'(32'h1680000);   // 128 KB
-localparam logic [SDR_AW:1] GAME_CHAR  = SDR_AW'(32'h1690000);   // 512 KB
+// MOVED UP 256 KB WHEN THE TGP TABLES WENT INTO THE MRA. R19 recorded the
+// margin above the last ROM word as deliberate rather than incidental -- 0x30000
+// words, 384 KB -- and adding the 256 KB of copro_tgp_tables took the image from
+// 0x2BB0000 to 0x2BF0000 and that margin down to 64 KB. Still positive, and 64 KB
+// is not margin: the next ROM anyone adds silently lands on work RAM, and the
+// symptom would be the game corrupting its own variables.
+localparam logic [SDR_AW:1] GAME_WORK  = SDR_AW'(32'h1620000);   // 1 MB
+localparam logic [SDR_AW:1] GAME_BOARD = SDR_AW'(32'h16a0000);   // 128 KB
+localparam logic [SDR_AW:1] GAME_CHAR  = SDR_AW'(32'h16b0000);   // 512 KB
 
 // WHERE CHARACTER RAM LIVES, AS ONE SIGNAL, because two things that must agree
 // should not be two constants (study R51).

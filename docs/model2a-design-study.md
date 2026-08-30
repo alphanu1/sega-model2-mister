@@ -6016,3 +6016,64 @@ the boot path against 17.5 measured on hardware during the first three minutes.
 Different workloads. Optimising against the boot path may not move the phase the
 board actually complains about, and a representative trace is worth having
 before the pipelining work starts.
+
+**R104 — the TGP is ported and verified; the missing piece was in the MRA, not
+the RTL.** 3D has a start, and the first real finding is an omission nobody could
+have noticed earlier.
+
+*What went in.* 4,400 lines from the Model 1 project at `4e7dee6`, unmodified,
+with the whole verification package: **~18.5 million fuzz cases across ten
+suites, zero failures, nothing uncovered.** `mb86233_xfer` is exhaustive at 256.
+MAME's `mb86234_device` is an empty subclass of `mb86233`, so this transfers —
+with 5.4.1's caveat that this is absence of evidence rather than proof.
+
+*The interface, from `model2.cpp`'s address map rather than description:*
+
+    0x00884000-0x00887fff  copro_fifo   read pops OUT, write pushes IN
+    0x00980000             copro_ctl1   bit 31 selects which
+    0x00980004             fifo_control read: 1 when OUT is empty
+
+**One address does two things and `copro_ctl1` bit 31 is the selector.** While
+that bit is set, a write to the FIFO port goes to the PROGRAM RAM at a counter
+the hardware keeps; clear, it pushes the input FIFO. Setting the bit halts the
+copro and zeroes the counter, clearing it boots — and it triggers on the bit
+CHANGING, not on its value, so a write leaving bit 31 alone does neither. FIFO
+depth is eight, from `setup(8, ...)`, not "deep enough": a FIFO that never fills
+hides the flow control the game relies on, exactly as an infinitely fast serial
+link did for the sound board.
+
+*THE MATH TABLES WERE NOT IN THE MRA.* The TGP reads sincos, atan, inv and isqrt
+through its IO space from `copro_tgp_tables` — `opr-14742a.45` and
+`opr-14743a.46`, 128 KB each, interleaved to 32 bits. This file did not carry
+them. **Nothing had asked for them**, because the coprocessor was stubbed as
+permanently finished, so the omission was invisible until a real TGP's table port
+had nowhere to read from. A stub does not merely defer work; it hides the
+requirements of the thing it stands in for.
+
+*And the offset is measured, not counted.* Adding 0x40000 to the previous
+section gives 0x2BA0000; the tables are at **0x2BB0000**. A 64 KB gap, in the
+same direction and of the same size as R88/R89 found for the 68000 sound ROM.
+The comments in the MRA are a description of intent and the built image is the
+authority.
+
+*A consequence that had to be caught rather than discovered later.* R19 recorded
+the gap between the last ROM word and `GAME_WORK` as deliberate margin — 0x30000
+words, 384 KB. The 256 KB of tables took the image from 0x2BB0000 to 0x2BF0000
+and that margin down to **64 KB**. Still positive, and 64 KB is not margin: the
+next ROM anyone adds lands on work RAM, and the symptom would be the game
+corrupting its own variables. `GAME_WORK`, `GAME_BOARD` and `GAME_CHAR` moved up
+256 KB; margin is 320 KB again.
+
+*What is not wired yet, stated rather than left to be found.* The TGP's RAM
+window (Model 1 arbitrates a shared V60/TGP RAM; Model 2's equivalent is the
+banked view in `copro_tgp_io_map` and has not been traced) is tied off, with the
+request brought out on `dbg_ram_req` so a design that starts depending on it is
+visible rather than silently wrong. The table and copro-data ports need SDRAM
+channels. And the geometry engine at 0x00800000 is a SEPARATE processor that
+shares only the naming.
+
+*Speed remains the open problem and clocking cannot solve it.* 9.83 CPI at
+72.17 MHz is 7.3 M instr/s against the 16.7 M a real 50 MHz part delivers — 44%.
+164 MHz would be needed at this CPI against an Fmax of 72. But pipelining
+shortens the critical path as well as the CPI, so the two compound rather than
+competing: 4.3 CPI at 100 MHz is 138%. Partial progress on each multiplies.

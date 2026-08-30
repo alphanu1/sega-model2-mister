@@ -107,7 +107,34 @@
         <!-- 0x2b80000  comms program, 0x20000 -->
         <part name="epr-16726.bin" crc="c179b8c7"/>
 
+        <!-- 0x2bb0000  TGP math tables, 0x40000  (MEASURED, see below)
+
+             The sincos, atan, inv and isqrt lookup tables the geometry
+             processor reads through its IO space: four 16K-word quadrants,
+             64K words in all. MAME's region is "copro_tgp_tables" and the
+             TGP's copro_sincos_r/atan_r/inv_r/isqrt_r index straight into it.
+
+             These were NOT in this file. Nothing had asked for them, because
+             the coprocessor was stubbed as permanently finished, so the
+             omission stayed invisible until the real TGP went in and its
+             table port had nowhere to read from. Interleaved to 32 bits like
+             every other paired ROM here; the region is u32 in MAME.
+
+             THE OFFSET IS MEASURED, NOT COUNTED. Adding 0x40000 to the end of
+             the previous section gives 0x2ba0000 and the tables are at
+             0x2bb0000 -- a 64 KB gap, which is the same discrepancy studies
+             R88 and R89 found for the 68000 sound ROM, in the same direction.
+             The comments in this file are a description of intent; the built
+             image is the authority. Found by searching it for the ROM's own
+             first bytes. -->
+        <interleave output="32">
+            <part name="opr-14742a.45" crc="90c6b117" map="0021"/>
+            <part name="opr-14743a.46" crc="ae7f446b" map="2100"/>
+        </interleave>
+
     </rom>
 
-    <!-- No DIP switches are wired yet; the core has no inputs. -->
+    <!-- Inputs are wired: coin, start, test, service, the four VR buttons,
+     a five-position gearbox and analog steering, accelerator and brake.
+     The board's own DIP banks read 0xFF, which is what Daytona expects. -->
 </misterromdescription>

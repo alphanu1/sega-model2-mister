@@ -38,7 +38,7 @@
 
 `timescale 1ns/1ps
 
-module m1_tgp #(
+module m2_tgp #(
   // See the io_rdata mux: forces unimplemented math-unit reads to 0 rather than
   // table-base data. An experiment switch, not a feature.
   parameter bit MATH_ZERO = 1'b0,
