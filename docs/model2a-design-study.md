@@ -5614,3 +5614,42 @@ It fails on PORT CONNECTION width mismatches only, and only in our own files.
 The vendored cores carry internal width warnings by the dozen; holding them to
 our standard would mean waiving the whole class, which is precisely how this got
 through.
+
+**R95 — the MULTIPCM's banking is the Model 1 board's, not System 32's, and that
+is why the music was right and the voices were a foghorn.** One function in a
+vendored core, and the only thing in it that does not transfer between two
+boards carrying the same chip.
+
+`segam1audio.cpp` gives each MULTIPCM a **two megabyte** space:
+
+    map(0x000000, 0x0fffff).rom();                 // first 1 MB, direct
+    map(0x100000, 0x1fffff).bankr(m_mpcmbank1);    // second 1 MB, banked
+    m_mpcmbank1->configure_entries(0, 4, region->base(), 0x100000);
+
+so the upper megabyte is a window onto one of FOUR one-megabyte pages of the
+4 MB region, selected by two bits. `s32_multipcm` banks in 512 KB pages with a
+three-bit selector split across two fields — a different scheme on the same
+part — and with Daytona's bank value of 0x01 it sends 0x100000 to 0x080000 and
+everything above 0x180000 into the first 512 KB.
+
+*Which is exactly the symptom the board reported.* Daytona's music sits below
+1 MB and was unbanked and correct throughout. The voice samples sit above it, so
+the words came out as a foghorn and a whine while the music was already right.
+A fault that is audible on half the content and silent on the other half is
+worth listening to as a bisection: "music good, voices wrong" pointed at an
+address transform that only applies above a boundary, and nothing else in the
+signal path has a boundary.
+
+*Two theories killed first, cheaply, and both worth recording as NOT the cause.*
+The core's own header says 12-bit packed samples "are identified and retained in
+state, but the bounded v1 datapath still fetches 8-bit", which is exactly the
+shape of a fault that mangles some samples and not others. It is not this:
+scanning the descriptor tables shows every entry 8-bit up to index ~215 in pcm1
+and ~192 in pcm2, with everything beyond that being sample data misread as
+descriptors. Daytona uses no 12-bit samples at all. And the bank VALUE was
+checked rather than assumed — a write tap on 0xC50000/0xC70000 across 400 frames
+shows 0x01 written to both chips, twice, and never changed.
+
+*The vendored file is now modified and THIRD_PARTY.md records it.* One function
+and one port: `banked()` and a two-bit `bank_sel` in place of the two three-bit
+fields. Everything else is upstream's.

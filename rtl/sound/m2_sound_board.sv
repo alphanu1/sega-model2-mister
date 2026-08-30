@@ -313,22 +313,19 @@ module m2_sound_board #(
   // right. One stage per chip: a stall in one must not throttle the other.
   wire ce_pcm1, ce_pcm2;
 
-  // The sample banks, at 0xC50000 and 0xC70000. Same field split the System 32
-  // sound system uses on the same chip: high bank in bits 5:3, low in 2:0.
-  logic [2:0] bank1_lo, bank1_hi, bank2_lo, bank2_hi;
+  // The sample banks, at 0xC50000 and 0xC70000. TWO BITS: segam1audio gives
+  // each chip a 2 MB space whose upper megabyte is a window onto one of four
+  // 1 MB pages, so the register selects a page and nothing else. Daytona writes
+  // 0x01 to both, twice, and never changes it.
+  logic [1:0] bank1, bank2;
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      bank1_lo <= 3'd0; bank1_hi <= 3'd0;
-      bank2_lo <= 3'd0; bank2_hi <= 3'd0;
+      bank1 <= 2'd0; bank2 <= 2'd0;
     end else begin
-      if (sel_bnk1 && we && ds) begin
-        bank1_hi <= oedb[5:3];
-        bank1_lo <= oedb[2:0];
-      end
-      if (sel_bnk2 && we && ds) begin
-        bank2_hi <= oedb[5:3];
-        bank2_lo <= oedb[2:0];
-      end
+      // Written to the ODD byte -- `move.b (A3), $c50001.l` -- so the value is
+      // on the low half of the bus.
+      if (sel_bnk1 && we && ds) bank1 <= oedb[1:0];
+      if (sel_bnk2 && we && ds) bank2 <= oedb[1:0];
     end
   end
 
@@ -346,7 +343,7 @@ module m2_sound_board #(
     .cs(sel_pcm1 && ds), .we(we), .addr(addr[2:1]), .wdata(oedb[7:0]), .rdata(),
     .rom_req(p1_creq), .rom_slot(p1_cslot), .rom_addr(p1_caddr),
     .rom_data(p1_cdata), .rom_ack(p1_cack),
-    .bank_lo(bank1_lo), .bank_hi(bank1_hi), .sample_stb(p1_stb),
+    .bank_sel(bank1), .sample_stb(p1_stb),
     .out_l(p1_raw_l), .out_r(p1_raw_r)
   );
 
@@ -363,7 +360,7 @@ module m2_sound_board #(
     .cs(sel_pcm2 && ds), .we(we), .addr(addr[2:1]), .wdata(oedb[7:0]), .rdata(),
     .rom_req(p2_creq), .rom_slot(p2_cslot), .rom_addr(p2_caddr),
     .rom_data(p2_cdata), .rom_ack(p2_cack),
-    .bank_lo(bank2_lo), .bank_hi(bank2_hi), .sample_stb(p2_stb),
+    .bank_sel(bank2), .sample_stb(p2_stb),
     .out_l(p2_raw_l), .out_r(p2_raw_r)
   );
 

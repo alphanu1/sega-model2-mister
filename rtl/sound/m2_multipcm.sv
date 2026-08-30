@@ -35,8 +35,9 @@ module m2_multipcm (
     input       [7:0] rom_data,
     input             rom_ack,
 
-    input       [2:0] bank_lo,
-    input       [2:0] bank_hi,
+    // TWO BITS, one of four 1 MB pages -- see banked() below. It was a pair of
+    // three-bit fields, which is System 32's scheme on the same chip.
+    input       [1:0] bank_sel,
 
     output reg signed [15:0] out_l,
     output reg signed [15:0] out_r
@@ -77,12 +78,28 @@ reg signed [21:0] acc_l, acc_r;
 integer ri;
 integer rj;
 
+// THE MODEL 1 BOARD'S BANKING, WHICH IS NOT SYSTEM 32's.
+//
+// This function is the one thing in this file that does not transfer between
+// the two boards, and getting it from the wrong one is audible as a foghorn.
+// segam1audio.cpp gives each MULTIPCM a TWO megabyte space:
+//
+//     map(0x000000, 0x0fffff).rom();                 // first 1 MB, direct
+//     map(0x100000, 0x1fffff).bankr(m_mpcmbank1);    // second 1 MB, banked
+//     m_mpcmbank1->configure_entries(0, 4, region->base(), 0x100000);
+//
+// so the upper megabyte is a window onto one of FOUR one-megabyte pages of the
+// 4 MB region. System 32 banks in 512 KB pages with a three-bit selector split
+// across two fields, and with Daytona's bank value of 0x01 that scheme sends
+// everything above 1 MB into the wrong place entirely -- 0x100000 reads from
+// 0x080000 and anything above 0x180000 reads from the first 512 KB.
+//
+// Daytona's music sits below 1 MB and was therefore correct throughout; the
+// voice samples sit above it, which is why the words came out as a whine while
+// the music was already right.
 function automatic [21:0] banked(input [21:0] a);
-begin
-    if (a < 22'h100000)      banked = a;
-    else if (a < 22'h180000) banked = {bank_lo, a[18:0]};
-    else                     banked = {bank_hi, a[18:0]};
-end
+    if (a < 22'h100000) banked = a;
+    else                banked = {bank_sel, a[19:0]};
 endfunction
 
 // MAME update_step: base=(1+pitch/1024), exponent=(signed octave-1).
