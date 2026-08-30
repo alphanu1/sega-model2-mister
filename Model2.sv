@@ -2492,10 +2492,10 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// obvious suspect is the i960's data cache being 2 KB. Two samples of these
 	// give the hit rate directly, in each phase, which says whether a bigger
 	// cache is the answer or whether the misses are compulsory.
-	.b_valid(uart_b2_valid), .b_addr(dc_hits),
-	.b_data(dc_miss),
+	.b_valid(uart_b2_valid), .b_addr(logic_frames),
+	.b_data(io_framenum),
 	.a_tag(8'h53), .b_tag(8'h48),          // 'S' retired IP (512-entry ring) | cumulative i960 instructions
-	                                       // 'H' i960 data-cache hits | misses, both cumulative
+	                                       // 'H' game logic frames | real vblanks -- the ratio is the speed
 	                                       // '0' map0 min|max : sum
 	                                       // 'T' write count + trap/PA
 	.enable(1'b1),
@@ -2690,6 +2690,33 @@ always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
 			if (!(&i960_coinack)) i960_coinack <= i960_coinack + 16'd1;
 			coinack_word <= cpu_io_addr[11:2];
 		end
+	end
+end
+
+// THE GAME'S LOGIC FRAME RATE, which is the number the board is actually
+// complaining about and which nothing so far has measured.
+//
+// The picture is SMOOTH and running at a quarter to an eighth speed. Smooth
+// rules out dropped frames -- the renderer is fine and each frame is drawn
+// completely. What is slow is the game advancing its own state, and that
+// reconciles with the 13% idle exactly: if a logic frame's work takes about
+// seven display frames and then waits one for the next vblank, the CPU is 87%
+// busy, 13% idle, and the game runs at an eighth speed. Those three numbers
+// agree, which none of the earlier framings managed.
+//
+// 0x12B0/0x12B8 is the wait. Counting how often it is ENTERED counts logic
+// frames -- occupancy says how long it waits, entries say how often. Against
+// io_framenum, which counts real vblanks at 57.5 Hz, the ratio IS the speed:
+// one entry per vblank is full speed, one per eight is what the board sees.
+logic [31:0] logic_frames;
+logic        in_wait, in_wait_d;
+always_comb in_wait = (cpu_dbg_ip == 32'h000012B0) || (cpu_dbg_ip == 32'h000012B8);
+always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
+	if (!cpu_rst_n) begin
+		logic_frames <= 32'd0; in_wait_d <= 1'b0;
+	end else begin
+		in_wait_d <= in_wait;
+		if (in_wait && !in_wait_d) logic_frames <= logic_frames + 32'd1;
 	end
 end
 

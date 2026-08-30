@@ -5817,3 +5817,52 @@ in the design the whole time.
 24 cycles per instruction". The i960's data cache is 2 KB; whether that is the
 binding constraint or the misses are compulsory is the next measurement, and the
 hit rate in each phase answers it directly.
+
+**R100 — the first phase is not slow because the CPU is behind; the CPU finishes
+early and waits. Three framings were wrong before this one, and each was
+consistent with the numbers available at the time.**
+
+*What the board actually sees:* the picture is SMOOTH and running at a quarter
+to an eighth speed. Smooth rules out dropped frames — the renderer draws every
+frame completely. What is slow is the game advancing its own state.
+
+*The measurements, in the order they were made and corrected:*
+
+1. **"A stall that clears."** i960 at 1.0 M instructions/s for three minutes then
+   3.2 M — 24 CPI down to 7.5. Read as memory pressure being relieved. Wrong: a
+   rate says how many instructions retire, never which ones.
+2. **"Scene 1 is expensive."** Reading `ipring` — recording the last 512 retired
+   IPs since the design was built and never once read out — showed the FAST
+   phase spending **70% of its time in a two-instruction wait loop** at
+   0x12B0/0x12B8. 7.2 CPI is a machine with nothing to do. Not faster: idle.
+3. **"One-time initialisation."** Wrong: MAME runs that same 0x010000-0x016FFF
+   block steadily at ~10% of instructions from 3.5 s onward. It is periodic.
+4. **"Grinding through work MAME finishes in seconds."** Wrong, and the board
+   said so: growing the data cache 2 KB → 16 KB took the hit rate from 55% to
+   88%, misses from 651 k/s to 215 k/s and the CPU from 1.00 M to 1.37 M
+   instructions/s — **and the phase did not shorten at all**, 200 s to 210 s.
+   The extra speed went entirely into idling more, 4% to 13%.
+
+*The framing that fits every number.* If a logic frame's work takes about seven
+display frames and then waits one for the next vblank, the CPU is 87% busy, 13%
+idle, and the game runs at an eighth speed. Those three figures agree, which
+none of the earlier readings managed, and it explains why a 37% faster CPU
+changed nothing visible: it moved the work from seven frames to five, still more
+than one, so the game still advances once per vblank-after-it-finishes.
+
+*And it is a MODE CHANGE at 210 s, not a speed change.* Either side of it the
+i960 runs entirely different code — 0x011xxx at 37% before and 0% after,
+0x018xxx at 0% before and 55% after. A phase of the game's own startup ending,
+not the machine catching up.
+
+*What is worth measuring next, and it is not another rate.* The ratio of logic
+frames to real vblanks. Occupancy of the wait loop says how long it waits;
+ENTRIES say how often, and entries against `io_framenum` at 57.5 Hz is the speed
+directly. One per vblank is full speed; one per eight is what the board sees.
+Everything up to here has been inferred from rates, and rates cannot tell a busy
+machine from an idle one.
+
+*The standing lesson, restated.* This project has a rule that a MAME cycle count
+is not a hardware fact. The companion is that an instruction rate is not a
+progress measure. Four framings survived contact with the rate data; the first
+one to survive contact with WHERE the CPU was, was the fourth.
