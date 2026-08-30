@@ -58,6 +58,32 @@ Olivier Galibert's BSD-3-Clause attribution in their headers — `mb86233_pkg.sv
 for opcode numbering, status flag positions and the exponent/mantissa
 accessors. **Those headers travel with the file.** Retain them.
 
+### alphanu1/sega-model1-mister — GPL-3.0-or-later (the TGP)
+*COPIED 2026-08-30 · `rtl/tgp/` and `sim/tgp/` @ **`4e7dee6`***
+
+The MB86234 geometry processor, 4,400 lines, unmodified. MAME's `mb86234_device`
+is an EMPTY SUBCLASS of `mb86233` — it overrides no method, adds no member, and
+forwards its constructor to the parent with a different DEVICE_TYPE tag — so the
+two are behaviourally identical there and this transfers without change. Study
+5.4.1, including the caveat: that is **absence of evidence, not proof of
+equivalence**. MAME modelling them identically means no Model 2 game has yet
+required a difference, and any divergence found later has no oracle behind it,
+because the oracle IS the thing asserting they are the same.
+
+**The verification came with it, which is why the whole thing was taken rather
+than the RTL alone.** All ten suites pass unchanged on this tree: ~18.5 million
+cases, zero failures, zero uncovered opcodes, addressing modes, registers or
+decode paths. `mb86233_xfer` is exhaustive at 256.
+
+`m1_copro_if.sv` and `m1_tgp.sv` are Model 1's wrappers and will need Model 2
+equivalents; the `mb86233_*` core and the `fp_*` units are the portable part.
+
+**Speed is the open problem, not correctness.** 9.83 CPI at 72.17 MHz is
+7.3 M instr/s against the ~16.7 M a 50 MHz MB86234 delivers — 44%. Clocking
+alone cannot close it: 164 MHz would be needed at this CPI, and Fmax is 72.
+Pipelining shortens the critical path as well as the CPI, so the two compound.
+Study M2-F.
+
 ### meathax/s32 — GPL-3.0
 *IN USE 2026-08-30 · `rtl/sound/m2_multipcm.sv` from `rtl/audio/s32_multipcm.sv` @ **`7905361`***
 

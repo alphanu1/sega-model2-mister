@@ -643,6 +643,55 @@ obj_charcache/Vm2_char_cache: rtl/video/m2_char_cache.sv sim/video/tb_m2_char_ca
 # four explicit true dual-port memories with nothing checking it. It holds the
 # game's SETTINGS, including coinage, so a fault here is not a visible glitch --
 # it is a game that quietly behaves as though configured differently.
+# ---------------------------------------------------------------------- TGP
+#
+# The MB86234 geometry processor, ported from the Model 1 project at 4e7dee6.
+# MAME's mb86234_device is an EMPTY SUBCLASS of mb86233 -- it overrides no
+# method, adds no member, and forwards its constructor to the parent -- so the
+# two are behaviourally identical there and this transfers unmodified. Study
+# 5.4.1, and the caveat that goes with it: that is absence of evidence rather
+# than proof of equivalence, since the oracle IS the thing asserting they are
+# the same.
+#
+# The verification comes with it, which is the point of taking the whole thing
+# rather than the RTL alone: per-unit fuzz benches and a whole-CPU lockstep
+# against a C++ reference model.
+TGP     := rtl/tgp
+TGP_PKG := $(TGP)/mb86233_pkg.sv
+TGP_FP  := $(TGP)/fp_mul.sv $(TGP)/fp_add.sv $(TGP)/fp_div.sv
+TGP_CORE := $(TGP_PKG) $(TGP_FP) \
+            $(TGP)/mb86233_alu.sv $(TGP)/mb86233_agu.sv $(TGP)/mb86233_seq.sv \
+            $(TGP)/mb86233_regs.sv $(TGP)/mb86233_mem.sv $(TGP)/mb86233_dec.sv \
+            $(TGP)/mb86233_xfer.sv $(TGP)/mb86233_core.sv
+
+TGPFLAGS := -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-WIDTHEXPAND -Wno-PINCONNECTEMPTY \
+            -Wno-DECLFILENAME -Wno-UNOPTFLAT -Wno-TIMESCALEMOD
+
+define TGP_UNIT
+obj_$(1)/V$(1): $(2) sim/tgp/tb_$(1).cpp
+	$$(VBUILD) --top-module $(1) -CFLAGS "-O2 -I../sim/tgp" $$(TGPFLAGS) \
+	  --Mdir obj_$(1) -o V$(1) $(2) sim/tgp/tb_$(1).cpp
+test_$(1): obj_$(1)/V$(1)
+	@echo "== test $(1)"
+	@./obj_$(1)/V$(1)
+endef
+
+$(eval $(call TGP_UNIT,fp_mul,$(TGP)/fp_mul.sv))
+$(eval $(call TGP_UNIT,fp_add,$(TGP)/fp_add.sv))
+$(eval $(call TGP_UNIT,fp_div,$(TGP)/fp_div.sv))
+$(eval $(call TGP_UNIT,mb86233_alu,$(TGP_PKG) $(TGP_FP) $(TGP)/mb86233_alu.sv))
+$(eval $(call TGP_UNIT,mb86233_agu,$(TGP)/mb86233_agu.sv))
+$(eval $(call TGP_UNIT,mb86233_regs,$(TGP_PKG) $(TGP)/mb86233_regs.sv))
+$(eval $(call TGP_UNIT,mb86233_mem,$(TGP)/mb86233_mem.sv))
+$(eval $(call TGP_UNIT,mb86233_dec,$(TGP)/mb86233_dec.sv))
+$(eval $(call TGP_UNIT,mb86233_xfer,$(TGP_PKG) $(TGP)/mb86233_xfer.sv))
+$(eval $(call TGP_UNIT,mb86233_seq,$(TGP_PKG) $(TGP)/mb86233_seq.sv))
+
+.PHONY: test_tgp
+test_tgp: test_fp_mul test_fp_add test_fp_div test_mb86233_alu test_mb86233_agu \
+          test_mb86233_regs test_mb86233_mem test_mb86233_dec test_mb86233_xfer \
+          test_mb86233_seq
+
 test_m2_backup: obj_backup/Vm2_backup
 	@echo "== test m2_backup (byte lanes, the 0xFF power-up, the save path)"
 	@./obj_backup/Vm2_backup
