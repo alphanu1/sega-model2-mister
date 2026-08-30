@@ -83,13 +83,13 @@ all: lint synth test
 # files. The third-party cores carry their own internal width warnings by the
 # dozen; holding them to our standard would mean waiving the whole class, which
 # is how this one got through.
-TOP_RTL := $(shell grep -oE "rtl/[a-z0-9_/]+\.(sv|v)" Model2.qsf | tr '\n' ' ')
+LINTTOP_RTL := $(shell grep -oiE "rtl/[a-z0-9_/]+\\.(sv|v)" Model2.qsf | tr "\\n" " ")
 
 .PHONY: lint_top
 lint_top:
 	@echo "== lint Model2.sv and everything it instantiates"
 	@verilator --lint-only -Wall -Wno-DECLFILENAME -Wno-fatal --top-module emu \
-	  -Irtl/sound/jt12 $(TOP_RTL) Model2.sv 2>&1 \
+	  -Irtl/sound/jt12 $(LINTTOP_RTL) Model2.sv 2>&1 \
 	  | grep -E "port connection" \
 	  | grep -vE "rtl/sound/(jt12|fx68k)/|rtl/sound/m2_multipcm" > .lint_top.tmp || true
 	@if [ -s .lint_top.tmp ]; then \

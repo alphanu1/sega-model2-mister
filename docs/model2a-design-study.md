@@ -5653,3 +5653,48 @@ shows 0x01 written to both chips, twice, and never changed.
 *The vendored file is now modified and THIRD_PARTY.md records it.* One function
 and one port: `banked()` and a two-bit `bank_sel` in place of the two three-bit
 fields. Everything else is upstream's.
+
+**R96 — 79 M10K blocks recovered by instantiating altsyncram explicitly, and
+`Model2.fit.rpt` is not a current document.** Two findings, and the second one
+invalidates several earlier readings.
+
+*The saving.* `tram` and `pal` were inferred arrays with one write port and two
+read ports, and Quartus 17.0 does not infer a true dual-port memory for that
+shape — it silently REPLICATES the array once per read port. The fitter named it
+plainly: `tram_rtl_0` at 64 blocks and `tram_rtl_1` at another 64 for a 512 Kbit
+memory whose floor is 52, plus `pal_rtl_0`/`pal_rtl_1` at 15 and 16. The Model 1
+project measured the same thing on the same idiom (`82fb928`) and found Quartus
+refuses the true dual-port inference template outright with Error 276001, so the
+saving needs an explicit instantiation.
+
+`m2_tdp_ram.sv` wraps `altsyncram` in `BIDIR_DUAL_PORT`: port A the CPU's, read
+and write; port B the renderer's, read only. **Both ports the same width is the
+condition for a single copy** — mixed-width true dual-port is what forces
+replication, and both of ours are 16 bits.
+
+    533 / 553 (96%)  ->  454 / 553 (82%)      -79 blocks
+    28,170 ALM (67%) ->  29,851 ALM (71%)     +1,681, and worth it
+    timing met at 0.228 ns
+
+*"OLD_DATA" IS NOT SUPPORTED and that is a real behaviour change.* The inferred
+array was non-blocking, so a read on the same cycle as a write to the same
+address returned the value from BEFORE the write. Cyclone V M10K cannot do
+read-first in bidirectional dual-port mode: Quartus rejects it with Error 14000,
+"uses an unsupported value for parameter port_a_read_during_write_mode". Only a
+build says so. With `DONT_CARE`, a cell read on the edge it is written returns
+either value — port A's own read is discarded (the CPU's reads and writes are
+separate transactions), and port B is one renderer read of one cell taking the
+old or new tile number for one cycle, which the real S24TILE arbitrates in
+silicon in a way we do not know either.
+
+*And the instrument was lying.* `quartus_fit` exits with status 2 — this project
+has recorded that as "crash-on-exit, expected" — and when it does it does NOT
+rewrite `output_files/Model2.fit.rpt`. The report was seven hours older than the
+`.rbf` beside it, so the per-memory breakdown read out of it showed the arrays
+that had just been REMOVED, still at 64 blocks each, and the totals showed 533
+after a build that produced 454.
+
+**`Model2.fit.summary` is written on every successful fit and is the file to
+read.** Every M10K figure quoted in R86 and since came from the stale report and
+should be re-checked against a summary before being relied on. A build's numbers
+must come from a file whose timestamp has been looked at.

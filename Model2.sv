@@ -968,7 +968,14 @@ localparam logic [SDR_AW:1] GAME_CHAR  = SDR_AW'(32'h1690000);   // 512 KB
 // be kept in step by hand, and this removes the hand.
 wire [SDR_AW:1] char_base = game_image ? GAME_CHAR : CHAR_BASE;
 
-(* ramstyle = "M10K" *) logic [15:0] tram [32768];
+// TILE RAM: one write port, two read ports, ONE set of M10K blocks.
+//
+// This was an inferred array and Quartus 17.0 REPLICATED it -- tram_rtl_0 at 64
+// blocks and tram_rtl_1 at another 64, for a 512 Kbit memory whose floor is 52.
+// The palette below did the same at 15 + 16. Seventy-nine blocks of a
+// 553-block device, spent holding two copies of something written on one port.
+// m2_tdp_ram.sv has the reasoning and the read-during-write semantics.
+wire [15:0] tram_q_cpu, tram_q_vid;
 // 8192 ENTRIES, NOT 4096. The palette at 0x01800000 is 0x4000 BYTES -- 8,192
 // 16-bit words -- confirmed against tools/mame_m2_tiledump.lua, which is what
 // captures the reference frame. m2_cpu_bridge forms oc_addr as r_addr[15:1], so
@@ -987,15 +994,22 @@ wire [SDR_AW:1] char_base = game_image ? GAME_CHAR : CHAR_BASE;
 // The renderer still reads the low half -- m2_tile_mixer's `mixed` is 12 bits --
 // and that is not changed here. This stops the corruption; it does not claim the
 // tilemap can reach the upper half.
-(* ramstyle = "M10K" *) logic [15:0] pal  [8192];
+wire [15:0] pal_q_cpu, pal_q_vid;
 
 logic [31:0] vrd_cnt, vrd_nz;    // renderer reads: total, and non-zero
 logic [31:0] pl_cnt, pl_nz;      // palette reads: total, and non-zero
 wire [14:0] tram_addr;
 wire [11:0] pal_addr;
-logic [15:0] tram_data, pal_data;
+// THE MEMORY'S OWN REGISTERED OUTPUT IS THE ONE CYCLE, not a stage before it.
+//
+// This was `tram_data <= tram[tram_addr]`: one cycle from address to data.
+// m2_tdp_ram already registers its output, so assigning tram_data from it in a
+// clocked block would make the read TWO cycles and shift the whole picture by a
+// pixel column -- a memory change quietly becoming a rendering change, which is
+// exactly what a packing fix must not do. Continuous, so the depth is identical.
+wire [15:0] tram_data = tram_q_vid;
+wire [15:0] pal_data  = pal_q_vid;
 always_ff @(posedge clk_sys) begin
-	tram_data <= tram[tram_addr];
 	// WHAT THE RENDERER ACTUALLY GETS OUT.
 	//
 	// The CPU writes 42,013 NON-ZERO tile indices on hardware -- measured, not
@@ -1015,7 +1029,6 @@ always_ff @(posedge clk_sys) begin
 		vrd_cnt <= vrd_cnt + 32'd1;
 		if (|tram_data) vrd_nz <= vrd_nz + 32'd1;
 	end
-	pal_data  <= pal[{1'b0, pal_addr}];
 	if (!mem_rst_n) begin
 		pl_cnt <= 32'd0; pl_nz <= 32'd0;
 	end else begin
@@ -1029,7 +1042,7 @@ end
 // M10K, which is what the part gives; a third accessor would not fit and is
 // why the copy engine and the bridge are muxed onto one port rather than given
 // one each.
-logic [15:0] cpu_tram_q, cpu_pal_q;
+wire  [15:0] cpu_tram_q, cpu_pal_q;
 
 // XLAT WRITES, COUNTED PER CHANNEL. Daytona's test menu renders in green only,
 // where the tilemap fixture renders white labels and green values correctly on
@@ -1062,12 +1075,32 @@ wire        ocb_pal_we  = cp_pal_we  | cpu_pal_we;
 wire [14:0] ocb_addr    = (cp_tram_we | cp_pal_we) ? cp_wr_idx  : cpu_oc_addr;
 wire [15:0] ocb_din     = (cp_tram_we | cp_pal_we) ? cp_wr_data : cpu_oc_din;
 
-always_ff @(posedge clk_sys) begin
-	cpu_tram_q <= tram[ocb_addr];
-	cpu_pal_q  <= pal[ocb_addr[12:0]];
-	if (ocb_tram_we) tram[ocb_addr]      <= ocb_din;
-	if (ocb_pal_we)  pal[ocb_addr[12:0]] <= ocb_din;
-end
+// The memories themselves. Port A is the CPU's -- reads and writes -- and port
+// B is the renderer's, read only. Both ports 16 bits wide, which is the
+// condition for a single copy: mixed-width true dual-port is what forces
+// replication.
+//
+// The renderer's read is registered ONE MORE TIME downstream (tram_data,
+// pal_data) exactly as it was, so the pipeline depth is unchanged: the inferred
+// version was `tram_data <= tram[addr]`, one cycle, and this is the memory's
+// own cycle plus that register. Both consumers already tolerated a registered
+// read; what matters is that the number did not move.
+m2_tdp_ram #(.DW(16), .AW(15)) u_tram (
+	.clk(clk_sys),
+	.a_addr(ocb_addr),  .a_din(ocb_din), .a_we(ocb_tram_we), .a_q(tram_q_cpu),
+	.b_addr(tram_addr), .b_q(tram_q_vid)
+);
+
+m2_tdp_ram #(.DW(16), .AW(13)) u_pal (
+	.clk(clk_sys),
+	.a_addr(ocb_addr[12:0]), .a_din(ocb_din), .a_we(ocb_pal_we), .a_q(pal_q_cpu),
+	.b_addr({1'b0, pal_addr}), .b_q(pal_q_vid)
+);
+
+// Same on the CPU side: the memory's output is already a cycle behind its
+// address, which is what `cpu_tram_q <= tram[ocb_addr]` was.
+assign cpu_tram_q = tram_q_cpu;
+assign cpu_pal_q  = pal_q_cpu;
 
 
 // TRAM CELL PROBE, on its own read port (Quartus duplicates the array: ~64

@@ -316,6 +316,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/m2_sound_link.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/m2_multipcm.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/m2_pcm_fetch.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/m2_pcm_rate.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/mem/m2_tdp_ram.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/m2_sound_board.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/fx68k/fx68k.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/fx68k/fx68kAlu.sv
