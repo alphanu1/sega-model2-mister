@@ -1,6 +1,98 @@
 # Handoff
 
-**Updated:** 2026-08-29, after the sound session. `make test` green at 28.
+**Updated:** 2026-08-30. `make test` green at 28.
+
+## SOUND WORKS. Music and voices both.
+
+Four faults, found in this order, and only the last one was audible as itself:
+
+1. **`uart_irq` was connected to nothing** (R87). The line 10 interrupt handler
+   IS the transmit loop -- Daytona never reads the i8251's status, so nothing in
+   the mainline waits for the transmitter. Symptom: the eleven CONTROL writes
+   happen and none of the forty-eight DATA bytes do, which reads as a broken
+   data path rather than a missing interrupt.
+2. **VPA tied high** (R90). A 68000 whose VPA never asserts runs a VECTORED
+   acknowledge, reads 0xFF off an unmapped bus and jumps through vector 255.
+   39.9 million bus cycles of line-1111 exception, never reading its UART.
+3. **A 19-bit port driving a 22-bit wire** (R94). The sample ports became bursts
+   and `Model2.sv` was not updated with them, so both chips read the wrong
+   address AND the wrong byte. This is the one that made it unlistenable for
+   four builds, and `make lint` never linted the top level at all.
+4. **System 32's banking on a Model 1 board** (R95). `segam1audio` gives each
+   MULTIPCM a 2 MB space whose upper half is one of four 1 MB pages; the
+   vendored core banks 512 KB pages with a three-bit selector. Music sits below
+   1 MB and was right all along; the voices sit above it and came out as a
+   foghorn.
+
+**`lint_top` now exists and was written by reintroducing bug 3 and checking
+Verilator names it.** A guard that does not catch the bug it exists for is worse
+than none, and that is only knowable by trying it.
+
+## M10K: 95 BLOCKS BACK, 96% -> 79%
+
+One write port and two read ports is not a shape Quartus 17.0 infers a true
+dual-port memory for -- it silently replicates the array once per read port.
+`m2_tdp_ram.sv` wraps `altsyncram` in `BIDIR_DUAL_PORT`; both ports must be the
+same width or replication returns. R96 and R97.
+
+    tram + palette   -79      m2_backup   -16      total 438/553
+    m2_ioboard dp_*  ~2 available, not taken
+    m2_char_cache    128 is its REAL size, not duplication
+
+**`OLD_DATA` read-during-write is not supported on Cyclone V M10K in that mode**
+and Quartus says so with Error 14000. `DONT_CARE` is a real behaviour change and
+R96 states where it can be observed.
+
+## TWO INSTRUMENTS WERE LYING, AND BOTH COST TIME
+
+- **`Model2.fit.rpt` is not rewritten when the fitter crashes on exit.** It was
+  SEVEN HOURS older than the `.rbf` beside it and still listed arrays that had
+  been removed. `Model2.fit.summary` is the file to read.
+- **Even `fit.summary` can be pre-crash.** The fitter can report Successful and
+  still not commit its database; the assembler then refuses with "Run Fitter
+  before Assembler" and `output_files/Model2.rbf` is left as the PREVIOUS build
+  with a fresh timestamp. **The only trustworthy signal is a changed `.rbf`
+  md5**, which the build script now checks and reports.
+
+## INPUTS: THE WHOLE CABINET IS WIRED
+
+`model2.cpp`'s `daytona` map is `model2` plus `gears`. Coin/Start/Test/Service
+were wired; the four VR buttons, the gearbox and every analog axis were not.
+
+Buttons are ordered by what is needed FIRST, not by the cabinet's numbering --
+VR1 Red and VR4 Green are the service menu's down and up and the board cannot be
+navigated without them, so they sit at 5 and 6.
+
+The gearbox is a STATE, not a button: `daytona_gearbox_r` returns
+`{0,2,1,6,5}` for N,1,2,3,4, deliberately not a binary count, because the real
+shifter is microswitches whose pattern the game reads. Gear Up/Down step the
+positions and that table converts.
+
+### OPEN: the coin does not credit
+
+Free play reaches game select, so the game is fine. Measured: the button reaches
+IN0 bit 0 (the core counts the edge), IN0/IN1 idle correctly at FF/8F, and NVRAM
+is live. MAME says a coin changes exactly ONE DPRAM byte, FF -> FE -- the Z80
+publishes the raw input scan and the **i960** does the crediting.
+
+A tap on every non-idle Z80 publication is built and NOT YET FLASHED. It
+deliberately does not assume the address: R65 records `in0` at DPRAM byte 0x08
+and a MAME write tap shows the coin at byte 0x10, and those cannot both be right
+under one arithmetic -- MAME's device is umasked to bytes 0 and 2 of each dword,
+so a linear byte index is not a word index.
+
+## STILL OPEN, in the user's priority order
+
+1. ~~Sound~~ and ~~M10K~~ done.
+2. **The coin credit** -- diagnostic built, awaiting a flash.
+3. **The three-minute CPU slowdown.** R93. 24.0 CPI slow against 7.5 settled,
+   and scene 1 is slow ONLY on first boot -- returning to it later it runs full
+   speed, so it is one-time state cleared by the first attract transition, not
+   that scene's content. The `ipring` wiring is written: 512 retired IPs have
+   been recorded into M10K since the design was built and `ipring_q` was never
+   consumed by anything.
+4. **3D.**
+5. Boosted CPU clock if still slow.
 
 ## SOUND: THE LINK IS BYTE-EXACT ON HARDWARE, THE 68000 RUNS THE REAL ROM
 
