@@ -5866,3 +5866,47 @@ machine from an idle one.
 is not a hardware fact. The companion is that an instruction rate is not a
 progress measure. Four framings survived contact with the rate data; the first
 one to survive contact with WHERE the CPU was, was the fourth.
+
+**R101 — 25 MHz is unreachable without giving up something worth more than the
+4% it buys, and the arithmetic says which.** Attempted, measured, reverted.
+
+The i960's real clock is 25 MHz (MAME's `-listxml`: `Intel 80960KB
+clock="25000000"`), and the timing report says the path can carry it — Fmax on
+`general[3]` is 29.1 MHz against 24 in use. `rtl/pll/pll.v` records 25 as
+impossible because "96, 32 and 25 cannot share a PLL: they need a VCO of 2400
+MHz and Cyclone V tops out near 1600". That is true of a 96 MHz family and is
+not a law: a VCO of **800 MHz = 50 x 16** gives 100 (/8), 50 (/16), 32 (/25) and
+**25 (/32)**, all exact, with both halving relationships intact.
+
+*So the PLL is not the obstacle. `ce_pix` is.* The renderer runs on `clk_sys`
+with a one-in-three enable, and 48/3 = 16 MHz exactly, which is what makes the
+frame rate 16e6/(656*424) = 57.5242 Hz. That divisor is also why the renderer
+could move onto `clk_sys` at all — it removed a dual-clock tram and palette
+whose read-during-write behaviour Quartus states outright is UNDEFINED.
+
+Three conditions must hold at once:
+
+    ce_pix = clk_sys / k = 16 MHz   ->  clk_sys in {16, 32, 48, 64, 80, 96, ...}
+    i960   = clk_sys / 2            ->  i960   in {8, 16, 24, 32, 40, 48}
+
+**25 is not in that set for any k.** Reaching it means breaking one of three
+things, and each costs more than it returns:
+
+* **the exact 2:1** — the CPU bridge's single-flop crossing becomes two-flop
+  synchronisers, roughly two extra cycles per bridge transaction on a CPI of
+  17.5. About -11% against the +4% gained. A net loss, and measurable as one.
+* **the integer pixel divisor** — a fractional enable puts +-20 ns of jitter on
+  a 62.5 ns pixel.
+* **the renderer's clock** — back to the dual-clock arrays that were removed on
+  purpose.
+
+*And the 4% is not the problem anyway.* R100 measures the game running at about
+a third of its logic rate and needing **3.4x**. 24 to 25 MHz is 4%. The gap is
+the core's cycles per instruction — roughly 11 of the 17.5 CPI is the i960
+itself, and a two-instruction compare-and-branch loop that hits in cache
+measures 7.2 CPI. That is where 3.4x has to come from, and no clock available on
+this part supplies it: even the full 29.1 MHz Fmax is only 1.2x.
+
+Recorded rather than left as a loose end, because "match the real 25 MHz" is an
+obvious and reasonable thing to want and the reason it is not free is four
+levels down.
