@@ -274,7 +274,7 @@ module m2_boot_harness #(
     .vid_r(vid_r), .vid_g(vid_g), .vid_b(vid_b),
     .vid_hs(), .vid_vs(), .vid_hb(vid_hb), .vid_vb(vid_vb),
     .vblank_irq(), .dbg_fetches(dbg_fetches_o), .dbg_overruns(dbg_overruns_o),
-    .dbg_ovr_frame(),
+    .dbg_ovr_frame(), .dbg_hscr(), .dbg_vscr(),
     .dbg_layer_px(), .dbg_ctrl(), .dbg_layer_have()
   );
 

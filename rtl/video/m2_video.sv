@@ -153,6 +153,15 @@ module m2_video #(
   // whether the game asked for a split and where, which separates "the game set
   // a mode we implement wrongly" from "we invented a split it never requested".
   output logic [15:0] dbg_ctrl [2],
+  // THE SCROLL REGISTERS THE RENDERER ACTUALLY USED, per layer, latched where
+  // they are consumed rather than re-read at vblank -- so they cannot disagree
+  // with what drove the picture. The board reports the grass and sky sitting
+  // still; the scrolling logic in m2_tile_decode is complete and correct
+  // (map_x = x - hscr, map_y = y + vscr, horizontal negated as segaic24 does),
+  // so either the game writes zero or these are read from the wrong words.
+  // One number settles which.
+  output logic [15:0] dbg_hscr [4],
+  output logic [15:0] dbg_vscr [4],
 
   // NON-BLANK TILE WORDS FETCHED PER LAYER PER FRAME — content, not wins.
   //
@@ -459,6 +468,7 @@ module m2_video #(
       hscr_r <= '0; vscr_r <= '0; ctrl_r <= '0; f_start <= 1'b0;
       ovr_acc <= '0; dbg_ovr_frame <= '0;
       dbg_ctrl[0] <= '0; dbg_ctrl[1] <= '0;
+      for (int i = 0; i < 4; i++) begin dbg_hscr[i] <= '0; dbg_vscr[i] <= '0; end
       mask_r <= '0; mask_i <= '0;
       seq_tram_addr <= '0; seq_owns_tram <= 1'b1;
       bank <= 1'b0; dbg_fetches <= '0; dbg_overruns <= '0;
@@ -494,12 +504,14 @@ module m2_video #(
         end
         Q_HSCR_W: begin
           hscr_r        <= tram_data;
+          dbg_hscr[cur_layer] <= tram_data;
           seq_tram_addr <= 15'h5004 + {13'd0, cur_layer};
           q             <= Q_VSCR;
         end
         Q_VSCR: q <= Q_VSCR_W;
         Q_VSCR_W: begin
           vscr_r        <= tram_data;
+          dbg_vscr[cur_layer] <= tram_data;
           // ctrl is the PAIR's EVEN vscr, not this layer's own register:
           // MAME reads tile_ram[0x5004 + ((layer >> 1) & 2)], which for our
           // 0..3 numbering is 0x5004 + (layer & 2). One register governs both

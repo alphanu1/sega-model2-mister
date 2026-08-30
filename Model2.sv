@@ -348,7 +348,7 @@ wire  [63:0] rb_dout;
 // the four unused ports are tied off instead -- synthesis removes what they
 // drive, and the alternative is forking from the reference over an arbiter
 // detail. Port 0 is the readback; 1-4 become the CPU, tilemap and renderer.
-localparam int unsigned NPORTS = 8;   // 5 = sound ROM, 6/7 = the two sample ROMs
+localparam int unsigned NPORTS = 10;  // 5 = sound ROM, 6/7 = samples, 8/9 = TGP
 
 // THE 68000 SOUND PROGRAM, 256 KB, at MRA byte offset 0x2350000 -- and the MRA's
 // own comment says 0x2340000, which is 64 KB wrong. The comment is not the
@@ -368,6 +368,12 @@ localparam int unsigned NPORTS = 8;   // 5 = sound ROM, 6/7 = the two sample ROM
 // from it is a fact about the MRA's section list rather than an address:
 // 0x40000 bytes is 0x20000 words. Derived, so it moves with the scan.
 localparam logic [SDR_AW:1] PCM_OFFS = SDR_AW'(32'h0020000);
+
+// The TGP's two read-only ROM windows, as WORD addresses.
+//   copro_data  byte 0x0A40000, 4 MB -- mpr-16537 + mpr-16536, interleaved
+//   tables      byte 0x2BB0000, 256 KB -- opr-14742a + opr-14743a, MEASURED
+localparam logic [SDR_AW:1] GAME_COPRO  = SDR_AW'(32'h0520000);
+localparam logic [SDR_AW:1] GAME_TGPTBL = SDR_AW'(32'h15d8000);
 
 wire        snd_rom_req;
 wire [17:1] snd_rom_addr;
@@ -470,6 +476,17 @@ always_comb begin
 	// samples gets seven of every eight bytes without a second request.
 	p_req[6]  = snd_found & pcm1_req;
 	p_addr[6] = snd_base + PCM_OFFS + SDR_AW'({pcm1_addr, 2'b00});
+	// PORTS 8 AND 9, THE TGP's TABLES AND DATA. Both read-only, both single
+	// words -- the TGP asks for one and waits, so a burst buys nothing here and
+	// the aligned-request dance the samples need does not apply.
+	//
+	// The table base is MEASURED rather than counted: arithmetic over the MRA's
+	// section list gives 0x2BA0000 and the built image has them at 0x2BB0000,
+	// the same 64 KB discrepancy R88/R89 found for the 68000 sound ROM.
+	p_req[8]  = tgp_tbl_req;
+	p_addr[8] = GAME_TGPTBL + SDR_AW'({tgp_tbl_addr, 1'b0});
+	p_req[9]  = tgp_dat_req;
+	p_addr[9] = GAME_COPRO + SDR_AW'({tgp_dat_addr, 1'b0});
 	p_req[7]  = snd_found & pcm2_req;
 	// FOUR MEGABYTES ON, AND THESE ARE WORD ADDRESSES. This was 0x400000,
 	// which as a WORD offset is eight megabytes, so the second sample chip read
@@ -2523,10 +2540,15 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// obvious suspect is the i960's data cache being 2 KB. Two samples of these
 	// give the hit rate directly, in each phase, which says whether a bigger
 	// cache is the answer or whether the misses are compulsory.
-	.b_valid(uart_b2_valid), .b_addr(logic_frames),
-	.b_data(io_framenum),
+	// THE SCROLL REGISTERS THE RENDERER USED, all four layers, packed as
+	// {h,v} pairs across two words. The board reports the grass and sky
+	// standing still and the decode is complete and correct, so this says
+	// whether the game writes zero or we read the wrong words.
+	.b_valid(uart_b2_valid),
+	.b_addr({vid_hscr[0][7:0], vid_vscr[0][7:0], vid_hscr[1][7:0], vid_vscr[1][7:0]}),
+	.b_data({vid_hscr[2][7:0], vid_vscr[2][7:0], vid_hscr[3][7:0], vid_vscr[3][7:0]}),
 	.a_tag(8'h53), .b_tag(8'h48),          // 'S' retired IP (512-entry ring) | cumulative i960 instructions
-	                                       // 'H' game logic frames | real vblanks -- the ratio is the speed
+	                                       // 'H' scroll h:v for layers 0,1 | layers 2,3 -- low bytes
 	                                       // '0' map0 min|max : sum
 	                                       // 'T' write count + trap/PA
 	.enable(1'b1),
@@ -3309,6 +3331,7 @@ wire [11:0] vid_layer_have [4];
 // its i960 competes for the same SDRAM, so its budget is far tighter. This
 // settles whether that is what is happening rather than inferring it.
 wire  [7:0] vid_fetches;
+wire [15:0] vid_hscr [4], vid_vscr [4];
 wire [15:0] vid_overruns;
 wire [15:0] vid_ovr_frame;   // overruns in the LAST FRAME
 
@@ -3342,6 +3365,7 @@ m2_video u_tilemap (
 	.vid_r(tile_r), .vid_g(tile_g), .vid_b(tile_b),
 	.vid_hs(tile_hs), .vid_vs(tile_vs), .vid_hb(tile_hb), .vid_vb(tile_vb),
 	.vblank_irq(), .dbg_fetches(vid_fetches), .dbg_overruns(vid_overruns),
+	.dbg_hscr(vid_hscr), .dbg_vscr(vid_vscr),
 	.dbg_ovr_frame(vid_ovr_frame),
 	.dbg_layer_px(vid_layer_px), .dbg_ctrl(vid_ctrl),
 	.dbg_layer_have(vid_layer_have)

@@ -192,6 +192,11 @@ module m2_sdram #(
       // consecutive bytes, so four words at a time gives it seven of
       // every eight without a second request.
       0, 1, 2, 3, 4, 5, 6, 7: blen = 4'd4;
+      // 8 and 9 are the TGP's table and data reads. It asks for ONE word and
+      // waits for it, so a four-word burst would fetch three it never looks at
+      // and hold the controller three times as long -- the opposite trade from
+      // the sample ports, where a voice reads forwards.
+      8, 9: blen = 4'd1;
       default: blen = 4'd1;
     endcase
   endfunction
