@@ -5542,3 +5542,41 @@ trivially extend to them is that mpr-16491 and mpr-16493 begin with the SAME
 sixteen bytes — the two chips' regions are not distinguishable by their first
 bytes. Deriving the second from the first, which is now done, at least makes one
 constant instead of two.
+
+**R93 — the first-boot slowdown is one-time state, not scene content, and it
+clears at the first attract transition.** Measured and observed, not yet
+explained; recorded so the next session does not re-derive it.
+
+*Measured on the board, i960 retired instructions per second:*
+
+    first load, 24-36 s : 1,887,560 /s     (boot code, cache-friendly loops)
+    first load, 36-98 s : 1,000,000 /s     24.0 cycles per instruction
+    after settling      : 3,182,410 /s      7.5 cycles per instruction
+
+A 3.2x difference, and CPI collapsing from 24 to 7.5 means memory stalls
+vanished rather than the machine finding less to do.
+
+*Observed, which is the part that identifies it:*
+
+    scene 1, first boot  SLOW
+    scene 2              fast
+    scene 3              fast
+    scene 4 (high score) fast
+    back to scene 1      FAST
+    scene 2 onwards      fast
+
+Scene 1 is slow ONLY the first time. Coming back to the same scene later it runs
+at full speed, so it is not that scene's content — it is a one-time state that
+is cleared by the first attract transition, and the CPU spends the intervening
+minutes stalling on memory rather than executing more instructions.
+
+*What it is not.* Not contention from the sound board: the 68000's own bus rate
+went slightly UP over the same interval (1,474,545 -> 1,664,880 cycles/s) while
+the i960 got three times faster, so nothing was yielding bandwidth to it.
+
+*The instrument for this already exists and has never been read.* `ipring` in
+`Model2.sv` records the last 512 retired instruction pointers into M10K and has
+done since the design was built; `ipring_q` was written and nothing ever
+consumed it. Reading it out during the slow phase names the code directly, and
+consecutive passes show whether the CPU is in a repeating cycle and how long
+that cycle is. That wiring is done and awaiting a build.
