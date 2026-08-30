@@ -188,7 +188,10 @@ module m2_sdram #(
       // path: a single-word read auto-precharges on its first command (R33),
       // and a four-word burst also gives the 68000's sequential fetch three
       // free words out of every four.
-      0, 1, 2, 3, 4, 5: blen = 4'd4;
+      // 6 and 7 are the MULTIPCMs' sample fetches; a voice reads
+      // consecutive bytes, so four words at a time gives it seven of
+      // every eight without a second request.
+      0, 1, 2, 3, 4, 5, 6, 7: blen = 4'd4;
       default: blen = 4'd1;
     endcase
   endfunction

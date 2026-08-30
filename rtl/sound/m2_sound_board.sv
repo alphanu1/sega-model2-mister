@@ -44,6 +44,7 @@ module m2_sound_board #(
   // exact even though no individual period is, which is what a sound CPU needs
   // -- a 4% error from rounding 4.8 down to 5 would put every tempo out.
   parameter int unsigned TICK_NUM = 20,     // 2 x 10 MHz: one enable per phase
+  parameter int unsigned PCM_NUM  = 10,     // the MULTIPCMs' own 10 MHz
   parameter int unsigned TICK_DEN = 48      // clk_sys
 ) (
   input  logic        clk,
@@ -63,12 +64,14 @@ module m2_sound_board #(
   input  logic        rom_ack,
   input  logic [15:0] rom_data,
 
-  // ---- what the audio chips will hang off, counted until they exist
-  output logic        ym_sel,   output logic       ym_we,
-  output logic  [1:0] ym_addr,  output logic [7:0] ym_din,
-  output logic        pcm_sel,  output logic       pcm_we,
-  output logic        pcm_bank, // which of the two
-  output logic  [2:0] pcm_addr, output logic [7:0] pcm_din,
+  // ---- the two MULTIPCMs' sample fetches. Separate 4 MB maps, so separate
+  // ports: model2.cpp gives pcm1 and pcm2 their own regions and MAME's own
+  // region contents confirm the split -- pcm1 is mpr-16491+16492, pcm2 is
+  // mpr-16493+16494, contiguous, so first 4 MB and second 4 MB of the image.
+  output logic        pcm1_rom_req,  output logic [21:0] pcm1_rom_addr,
+  input  logic  [7:0] pcm1_rom_data, input  logic        pcm1_rom_ack,
+  output logic        pcm2_rom_req,  output logic [21:0] pcm2_rom_addr,
+  input  logic  [7:0] pcm2_rom_data, input  logic        pcm2_rom_ack,
 
   // ---- the mix
   output logic signed [15:0] snd_l,
@@ -263,16 +266,69 @@ module m2_sound_board #(
     .snd_right(ym_r), .snd_left(ym_l), .snd_sample(ym_sample)
   );
 
-  // -------------------------------------------------------- device stubs
-  assign ym_sel   = sel_ym && ds;
-  assign ym_we    = we;
-  assign ym_addr  = addr[2:1];
-  assign ym_din   = oedb[7:0];
-  assign pcm_sel  = (sel_pcm1 | sel_pcm2) && ds;
-  assign pcm_we   = we;
-  assign pcm_bank = sel_pcm2;
-  assign pcm_addr = addr[3:1];
-  assign pcm_din  = oedb[7:0];
+  // ----------------------------------------------------------- MULTIPCM x2
+  //
+  // MAME's -listxml gives 10,000,000 Hz for both YMW-258-Fs, which does not
+  // divide 48 -- so this is the same phase accumulator the 68000 needs, at a
+  // single enable rather than two alternating phases.
+  //
+  // AND THIS IS WHERE DAYTONA'S SOUND ACTUALLY IS. Counting the firmware's own
+  // register traffic over a boot: 5,688 writes to the MULTIPCMs against 1,090
+  // to the YM3438. With the sample chips stubbed the board is CORRECTLY silent,
+  // which is what it was -- the FM measured non-zero only while its registers
+  // settled and nothing at all thereafter.
+  logic [$clog2(TICK_DEN):0] pacc;
+  logic                      ce_pcm;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      pacc <= '0; ce_pcm <= 1'b0;
+    end else if (pacc + PCM_NUM >= TICK_DEN) begin
+      pacc   <= pacc + PCM_NUM - TICK_DEN;
+      ce_pcm <= 1'b1;
+    end else begin
+      pacc   <= pacc + PCM_NUM;
+      ce_pcm <= 1'b0;
+    end
+  end
+
+  // The sample banks, at 0xC50000 and 0xC70000. Same field split the System 32
+  // sound system uses on the same chip: high bank in bits 5:3, low in 2:0.
+  logic [2:0] bank1_lo, bank1_hi, bank2_lo, bank2_hi;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      bank1_lo <= 3'd0; bank1_hi <= 3'd0;
+      bank2_lo <= 3'd0; bank2_hi <= 3'd0;
+    end else begin
+      if (sel_bnk1 && we && ds) begin
+        bank1_hi <= oedb[5:3];
+        bank1_lo <= oedb[2:0];
+      end
+      if (sel_bnk2 && we && ds) begin
+        bank2_hi <= oedb[5:3];
+        bank2_lo <= oedb[2:0];
+      end
+    end
+  end
+
+  wire signed [15:0] p1_l, p1_r, p2_l, p2_r;
+
+  m2_multipcm u_pcm1 (
+    .clk(clk), .ce(ce_pcm), .rst(!rst_n),
+    .cs(sel_pcm1 && ds), .we(we), .addr(addr[2:1]), .wdata(oedb[7:0]), .rdata(),
+    .rom_req(pcm1_rom_req), .rom_addr(pcm1_rom_addr),
+    .rom_data(pcm1_rom_data), .rom_ack(pcm1_rom_ack),
+    .bank_lo(bank1_lo), .bank_hi(bank1_hi),
+    .out_l(p1_l), .out_r(p1_r)
+  );
+
+  m2_multipcm u_pcm2 (
+    .clk(clk), .ce(ce_pcm), .rst(!rst_n),
+    .cs(sel_pcm2 && ds), .we(we), .addr(addr[2:1]), .wdata(oedb[7:0]), .rdata(),
+    .rom_req(pcm2_rom_req), .rom_addr(pcm2_rom_addr),
+    .rom_data(pcm2_rom_data), .rom_ack(pcm2_rom_ack),
+    .bank_lo(bank2_lo), .bank_hi(bank2_hi),
+    .out_l(p2_l), .out_r(p2_r)
+  );
 
   // --------------------------------------------------- bus cycle / DTACK
   // Everything but the ROM answers in one cycle. The ROM goes out to memory and
@@ -358,10 +414,22 @@ module m2_sound_board #(
     end
   end
 
-  // Only the FM for now; the MULTIPCMs mix in when they exist.
-  assign snd_l = ym_l;
-  assign snd_r = ym_r;
+  // THE MIX, WITH HEADROOM. Three signed 16-bit sources summed into 18 bits and
+  // shifted back down by two rather than clipped: the FM alone reached about
+  // 5,000 of 32,767 and the sample chips carry most of the level, so summing at
+  // full scale and saturating would clip on the loud passages that matter. A
+  // fixed 2-bit attenuation is quieter than the real board and is honest about
+  // it; the alternative is a limiter nobody has measured against hardware.
+  wire signed [17:0] mix_l = {{2{ym_l[15]}}, ym_l}
+                           + {{2{p1_l[15]}}, p1_l}
+                           + {{2{p2_l[15]}}, p2_l};
+  wire signed [17:0] mix_r = {{2{ym_r[15]}}, ym_r}
+                           + {{2{p1_r[15]}}, p1_r}
+                           + {{2{p2_r[15]}}, p2_r};
+  assign snd_l = mix_l[17:2];
+  assign snd_r = mix_r[17:2];
 
-  wire _unused = &{1'b0, uart_dout, uart_irq, uart_irq_tx, ym_irq_n, ym_sample, sel_bnk1, sel_bnk2, eab[23:18], 1'b0};
+  wire _unused = &{1'b0, uart_dout, uart_irq, uart_irq_tx, ym_irq_n, ym_sample,
+                   eab[23:18], 1'b0};
 
 endmodule

@@ -319,7 +319,7 @@ wire  [63:0] rb_dout;
 // the four unused ports are tied off instead -- synthesis removes what they
 // drive, and the alternative is forking from the reference over an arbiter
 // detail. Port 0 is the readback; 1-4 become the CPU, tilemap and renderer.
-localparam int unsigned NPORTS = 6;   // 5 is the sound board's ROM fetch
+localparam int unsigned NPORTS = 8;   // 5 = sound ROM, 6/7 = the two sample ROMs
 
 // THE 68000 SOUND PROGRAM, 256 KB, at MRA byte offset 0x2350000 -- and the MRA's
 // own comment says 0x2340000, which is 64 KB wrong. The comment is not the
@@ -335,10 +335,15 @@ localparam int unsigned NPORTS = 6;   // 5 is the sound board's ROM fetch
 // the board disagreed with both readings of itself -- and the scan below
 // settles it by looking: 0x2340000, which is what the MRA said. An address
 // nobody can verify by reading is not a constant, it is a guess with a name.
-// GAME_PCM will be found the same way when the MULTIPCMs arrive.
+// The samples sit immediately after the 256 KB program ROM, so their offset
+// from it is a fact about the MRA's section list rather than an address:
+// 0x40000 bytes is 0x20000 words. Derived, so it moves with the scan.
+localparam logic [SDR_AW:1] PCM_OFFS = SDR_AW'(32'h0020000);
 
 wire        snd_rom_req;
 wire [17:1] snd_rom_addr;
+wire        pcm1_req, pcm2_req;
+wire [21:0] pcm1_addr, pcm2_addr;
 logic [NPORTS-1:0]        p_req;
 logic [NPORTS-1:0]        p_we;
 logic [NPORTS-1:0][15:0]  p_din;
@@ -410,6 +415,23 @@ always_comb begin
 	p_req[5]  = snd_found ? snd_rom_req : sc_req;
 	p_addr[5] = snd_found ? (snd_base + SDR_AW'({snd_rom_addr[17:3], 2'b00}))
 	                      : sc_addr;
+	// PORTS 6 AND 7, THE TWO MULTIPCMS' SAMPLE FETCHES.
+	//
+	// 8 MB of samples sit immediately after the 256 KB program ROM, so their
+	// base is DERIVED from the one the scan found rather than asserted -- the
+	// two came out of the same MRA section list and move together. pcm1 is the
+	// first 4 MB and pcm2 the second, which is not the MRA's ordering taken on
+	// trust: MAME's own region contents were read back and matched against the
+	// files, and pcm1 is mpr-16491+16492 while pcm2 is mpr-16493+16494.
+	//
+	// The chips address bytes; SDRAM stores words. The word is fetched and the
+	// byte selected, four words at a time, so a voice reading consecutive
+	// samples gets seven of every eight bytes without a second request.
+	p_req[6]  = snd_found & pcm1_req;
+	p_addr[6] = snd_base + PCM_OFFS + SDR_AW'({pcm1_addr[21:3], 2'b00});
+	p_req[7]  = snd_found & pcm2_req;
+	p_addr[7] = snd_base + PCM_OFFS + SDR_AW'(23'h400000)
+	                     + SDR_AW'({pcm2_addr[21:3], 2'b00});
 	p_req[3]  = cc_req;
 	p_addr[3] = char_base + SDR_AW'(cc_addr);
 	// PORT 0 IS THE CPU'S, and it is the single-word port on purpose: the
@@ -1614,14 +1636,22 @@ end
 
 wire signed [15:0] snd_l, snd_r;
 
+// Byte out of the burst: word by [2:1], byte within it by [0].
+wire [7:0] pcm1_q = pcm1_addr[0] ? p_dout[6][{1'b0, pcm1_addr[2:1]} * 16 + 8 +: 8]
+                                 : p_dout[6][{1'b0, pcm1_addr[2:1]} * 16 +: 8];
+wire [7:0] pcm2_q = pcm2_addr[0] ? p_dout[7][{1'b0, pcm2_addr[2:1]} * 16 + 8 +: 8]
+                                 : p_dout[7][{1'b0, pcm2_addr[2:1]} * 16 +: 8];
+
 m2_sound_board u_sndboard (
 	.clk(clk_sys), .rst_n(cpu_rst_n & mem_rst_n & cp_done & snd_found),
 	.rx_data(b_rx_d), .rx_valid(b_rx_v), .rx_ack(b_rx_a),
 	.tx_data(b_tx_d), .tx_valid(b_tx_v), .tx_ack(b_tx_a),
 	.rom_req(snd_rom_req), .rom_addr(snd_rom_addr),
 	.rom_ack(snd_rom_ack), .rom_data(snd_rom_q),
-	.ym_sel(), .ym_we(), .ym_addr(), .ym_din(),
-	.pcm_sel(), .pcm_we(), .pcm_bank(), .pcm_addr(), .pcm_din(),
+	.pcm1_rom_req(pcm1_req), .pcm1_rom_addr(pcm1_addr),
+	.pcm1_rom_data(pcm1_q),  .pcm1_rom_ack(p_ack[6]),
+	.pcm2_rom_req(pcm2_req), .pcm2_rom_addr(pcm2_addr),
+	.pcm2_rom_data(pcm2_q),  .pcm2_rom_ack(p_ack[7]),
 	.snd_l(snd_l), .snd_r(snd_r),
 	.dbg_pc(snd_pc), .dbg_insns(snd_insns),
 	.dbg_ym_writes(snd_ymw), .dbg_pcm_writes(snd_pcmw)

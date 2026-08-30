@@ -35,6 +35,11 @@ module m2_sndboard_harness #(
 
   // Bus observation, so the testbench can follow instruction fetches without
   // reaching inside the CPU.
+  output logic        pcm1_req, output logic [21:0] pcm1_addr,
+  input  logic  [7:0] pcm1_data, input  logic        pcm1_ack,
+  output logic        pcm2_req, output logic [21:0] pcm2_addr,
+  input  logic  [7:0] pcm2_data, input  logic        pcm2_ack,
+
   output logic signed [15:0] snd_l,
   output logic signed [15:0] snd_r,
 
@@ -49,9 +54,11 @@ module m2_sndboard_harness #(
     .tx_data(tx_data), .tx_valid(tx_valid), .tx_ack(tx_ack),
     .rom_req(rom_req), .rom_addr(rom_addr),
     .rom_ack(rom_ack), .rom_data(rom_data),
-    .ym_sel(), .ym_we(), .ym_addr(), .ym_din(),
+    .pcm1_rom_req(pcm1_req), .pcm1_rom_addr(pcm1_addr),
+    .pcm1_rom_data(pcm1_data), .pcm1_rom_ack(pcm1_ack),
+    .pcm2_rom_req(pcm2_req), .pcm2_rom_addr(pcm2_addr),
+    .pcm2_rom_data(pcm2_data), .pcm2_rom_ack(pcm2_ack),
     .snd_l(snd_l), .snd_r(snd_r),
-    .pcm_sel(), .pcm_we(), .pcm_bank(), .pcm_addr(), .pcm_din(),
     .dbg_pc(dbg_pc), .dbg_insns(dbg_insns),
     .dbg_ym_writes(dbg_ym_writes), .dbg_pcm_writes(dbg_pcm_writes)
   );

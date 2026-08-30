@@ -362,6 +362,7 @@ JT12_RTL := $(wildcard rtl/sound/jt12/*.v)
 SNDB_RTL := rtl/sound/fx68k/fx68k.sv rtl/sound/fx68k/fx68kAlu.sv \
             rtl/sound/fx68k/uaddrPla.sv rtl/sound/m2_i8251.sv \
             $(JT12_RTL) \
+            rtl/sound/m2_multipcm.sv \
             rtl/sound/m2_sound_board.sv sim/sound/m2_sndboard_harness.sv
 
 # RUN FROM obj_sndboard. fx68k's microcode and nanocode are $readmemb'd by

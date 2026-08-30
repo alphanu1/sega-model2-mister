@@ -84,6 +84,21 @@ int main(int argc, char **argv) {
 
   // MAME's stream. Optional: without it this still runs and reports what the
   // board did, which is what a first bring-up needs.
+  // THE SAMPLE ROMS, 4 MB each. pcm1 is mpr-16491 + mpr-16492 and pcm2 is
+  // mpr-16493 + mpr-16494 -- established by reading MAME's own region contents
+  // and matching them against the files, not by assuming the MRA's order.
+  std::vector<uint8_t> pcm1, pcm2;
+  for (auto f : {"mpr-16491.32", "mpr-16492.33"}) {
+    std::vector<uint8_t> v;
+    if (load_file(dir + f, v)) pcm1.insert(pcm1.end(), v.begin(), v.end());
+  }
+  for (auto f : {"mpr-16493.4", "mpr-16494.5"}) {
+    std::vector<uint8_t> v;
+    if (load_file(dir + f, v)) pcm2.insert(pcm2.end(), v.begin(), v.end());
+  }
+  std::printf("  samples: pcm1 %.1f MB, pcm2 %.1f MB\n",
+              pcm1.size()/1048576.0, pcm2.size()/1048576.0);
+
   std::vector<uint32_t> ref;
   if (const char *tr = std::getenv("M2_SND_TRACE")) {
     FILE *f = std::fopen(tr, "r");
@@ -106,6 +121,8 @@ int main(int argc, char **argv) {
   d = new Vm2_sndboard_harness;
   d->rst_n = 0;
   d->rom_ack = 0; d->rom_data = 0;
+  d->pcm1_ack = 0; d->pcm1_data = 0;
+  d->pcm2_ack = 0; d->pcm2_data = 0;
   d->rx_data = 0; d->rx_valid = 0; d->tx_ack = 0;
 
   const int ROM_LAT = std::getenv("M2_SND_ROMLAT")
@@ -126,7 +143,9 @@ int main(int argc, char **argv) {
   // was assumed.
   const int ACK_HOLD = std::getenv("M2_SND_ACKHOLD")
                      ? std::atoi(std::getenv("M2_SND_ACKHOLD")) : 2;
-  int ack_left = 0;
+  int ack_left = 0, p1_ack_left = 0, p2_ack_left = 0;
+  int p1_lat = 0, p2_lat = 0;
+  bool p1_serving = false, p2_serving = false;
   auto tick = [&]() {
     if (d->rom_req && !serving && !d->rom_ack) { serving = true; lat = ROM_LAT; }
     if (serving) {
@@ -139,9 +158,31 @@ int main(int argc, char **argv) {
         serving = false;
       }
     }
+    // The two sample ports. Same latency model as the program ROM, because
+    // they contend for the same controller on hardware.
+    if (d->pcm1_req && !p1_serving && !d->pcm1_ack) { p1_serving = true; p1_lat = ROM_LAT; }
+    if (p1_serving) {
+      if (p1_lat > 0) --p1_lat;
+      else {
+        uint32_t a = d->pcm1_addr;
+        d->pcm1_data = (a < pcm1.size()) ? pcm1[a] : 0xff;
+        d->pcm1_ack = 1; p1_ack_left = ACK_HOLD; p1_serving = false;
+      }
+    }
+    if (d->pcm2_req && !p2_serving && !d->pcm2_ack) { p2_serving = true; p2_lat = ROM_LAT; }
+    if (p2_serving) {
+      if (p2_lat > 0) --p2_lat;
+      else {
+        uint32_t a = d->pcm2_addr;
+        d->pcm2_data = (a < pcm2.size()) ? pcm2[a] : 0xff;
+        d->pcm2_ack = 1; p2_ack_left = ACK_HOLD; p2_serving = false;
+      }
+    }
     d->clk = 0; d->eval();
     d->clk = 1; d->eval();
-    if (ack_left > 0 && --ack_left == 0) d->rom_ack = 0;
+    if (ack_left    > 0 && --ack_left    == 0) d->rom_ack  = 0;
+    if (p1_ack_left > 0 && --p1_ack_left == 0) d->pcm1_ack = 0;
+    if (p2_ack_left > 0 && --p2_ack_left == 0) d->pcm2_ack = 0;
   };
 
   // THE LINK, LIVE, WHICH THE HARDWARE HAS AND THIS TEST DID NOT.
@@ -199,8 +240,8 @@ int main(int argc, char **argv) {
   int prev_as = 0;
   uint32_t first_pc = 0xffffffff;
   size_t ri = 0, resyncs = 0, skipped = 0;
-  int fm_min = 0, fm_max = 0;
-  long fm_n = 0, fm_nz = 0;
+  int fm_min = 0, fm_max = 0, fm_tail_min = 0, fm_tail_max = 0;
+  long fm_n = 0, fm_nz = 0, fm_tail_n = 0, fm_tail_nz = 0;
   uint32_t stuck_at = 0;
   long stuck_since = 0;
   long c = 0;
@@ -269,6 +310,17 @@ int main(int argc, char **argv) {
       if (l < fm_min) fm_min = l;
       if (l > fm_max) fm_max = l;
       ++fm_n;
+      // WHEN, NOT JUST WHETHER. Counting non-zero samples over a whole run says
+      // nothing about whether the chip is still voicing anything at the end of
+      // it -- a burst of noise while the registers settle and then silence
+      // scores exactly the same as music. The last tenth is measured separately
+      // and it is the one that matters.
+      if (c > MAXC - MAXC / 10) {
+        ++fm_tail_n;
+        if (l != 0) ++fm_tail_nz;
+        if (l < fm_tail_min) fm_tail_min = l;
+        if (l > fm_tail_max) fm_tail_max = l;
+      }
     }
     prev_as = d->obs_as;
     if (!ref.empty() && ri >= ref.size()) break;
@@ -285,15 +337,32 @@ int main(int argc, char **argv) {
   // not made sound, and that is the whole point of the exercise. Reported as
   // range and a count of non-zero samples: a dead channel is zero, a
   // mis-clocked one is a rail, and correct FM is neither.
+  // WHERE THE SOUND IS SUPPOSED TO COME OUT. The Model 1 board has an FM chip
+  // and two sample chips, and which one carries the music is not a guess to
+  // make -- the firmware's own register traffic says. If it writes the
+  // MULTIPCMs far more than the YM, then a core with only the YM is correctly
+  // silent and the missing piece is named.
+  std::printf("  register writes: YM3438 %u, MULTIPCM %u\n",
+              (unsigned)d->dbg_ym_writes, (unsigned)d->dbg_pcm_writes);
   std::printf("  link: %ld of %zu bytes taken by the sound board\n",
               link_sent, sizeof link);
   std::printf("  FM output: %d..%d over %ld samples, %ld non-zero\n",
               fm_min, fm_max, fm_n, fm_nz);
-  if (fm_n > 0 && fm_nz == 0) {
-    std::printf("  NOTE the FM is silent -- the CPU ran but nothing was voiced\n");
-  }
+  std::printf("  FM, last tenth: %d..%d, %ld of %ld non-zero\n",
+              fm_tail_min, fm_tail_max, fm_tail_nz, fm_tail_n);
 
   int fails = 0;
+
+  // STILL VOICING AT THE END, which is the property that matters and the one
+  // the first version of this check missed. Counting non-zero samples over a
+  // whole run scored a burst of noise while the YM's registers settled exactly
+  // the same as music, and reported "the sound board makes sound" for a board
+  // that was silent from the first second onward. The tail says otherwise.
+  if (do_link && fm_tail_n > 0 && fm_tail_nz * 100 < fm_tail_n) {
+    std::printf("  FAIL silent at the end: %ld of %ld tail samples non-zero\n",
+                fm_tail_nz, fm_tail_n);
+    ++fails;
+  }
 
   // EVERY BYTE, OR THE BOARD IS NOT SERVICING ITS UART. One byte taken is the
   // signature of an interrupt that never returns: the first arrives, RXRDY

@@ -58,6 +58,25 @@ Olivier Galibert's BSD-3-Clause attribution in their headers — `mb86233_pkg.sv
 for opcode numbering, status flag positions and the exponent/mantissa
 accessors. **Those headers travel with the file.** Retain them.
 
+### meathax/s32 — GPL-3.0
+*IN USE 2026-08-30 · `rtl/sound/m2_multipcm.sv` from `rtl/audio/s32_multipcm.sv` @ **`7905361`***
+
+The Sega 315-5560 MultiPCM (Yamaha YMW-258-F GEW8), two of them, at MAME's
+figure of 10,000,000 Hz. **Changed: module renamed `s32_multipcm` → `m2_multipcm`.
+Nothing else.** System 32 and the Model 1 sound board carry the same part, and the
+register, descriptor and pitch semantics follow MAME's `multipcm.cpp`.
+
+**It is an HLE and says so in its own header**: "Envelope curves, interpolation
+and LFO modulation remain bounded approximations; the sample-selection/playback
+path is cycle deterministic." That is the right trade here — this is where
+Daytona's sound actually lives, and the alternative was silence.
+
+`rdata` is tied to 0, which is what the firmware needs: it polls bit 0 of
+0xC40001 as a busy flag and spins until it clears.
+
+Banking follows the reference's own field split — high bank in bits 5:3, low in
+2:0 — written to 0xC50000 for the first chip and 0xC70000 for the second.
+
 ### jotego/jt12 — GPL-3.0
 *IN USE 2026-08-29 · `rtl/sound/jt12/` @ **`4cf1c5b`** · UNMODIFIED*
 
