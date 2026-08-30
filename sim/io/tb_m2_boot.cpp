@@ -545,6 +545,8 @@ int main(int argc, char **argv) {
   uint64_t pf_m_wrong = 0, pf_m_late = 0;
   int ts_prev = -1;
   uint64_t prof_cpu_cycles = 0;
+  int pf_match_in_fetch = 0;
+  int pf_dump = 0;
 
   while (d->dbg_acc < max_instr || (warm_at && !warm_done)) {
     if (!fw_pending.empty() && d->dbg_acc >= fw_late) {
@@ -606,11 +608,26 @@ int main(int argc, char **argv) {
         // while T_FETCH2_W was burning 0.83 cycles an instruction.
         if (ts_prev == 0 && t != 0) {
           if      (t == 1) {                   // T_FETCH_W: a real miss
+            // pf_match is captured WHILE IN T_FETCH, below. Reading it on the
+            // edge that LEAVES the state reads an ip that has already moved to
+            // the next instruction, which made every ordinary sequential fetch
+            // look like a mispredicted branch -- 87% of them.
             ++pf_miss;
-            if (!d->obs_pf_match) ++pf_m_wrong; else ++pf_m_late;
+            if (!pf_match_in_fetch) ++pf_m_wrong; else ++pf_m_late;
           }
           else if (t == 3) ++pf_len2;          // T_FETCH2_W: two-word
           else             ++pf_hit;           // straight on: the prefetch paid
+        }
+        if (t == 0) {
+          pf_match_in_fetch = d->obs_pf_match;
+          // LOOK AT THE VALUES. Three rounds of reasoning about why pf_ip does
+          // not match ip have each been wrong; printing them settles it.
+          if (d->dbg_acc > 100000 && pf_dump < 16) {
+            std::printf("    T_FETCH: ip=%08x pf_ip=%08x  valid=%d armed=%d icv=%d\n",
+                        (unsigned)d->obs_ip, (unsigned)d->obs_pf_ip,
+                        d->obs_pf_valid, d->obs_pf_armed, d->obs_ic_valid);
+            ++pf_dump;
+          }
         }
         ts_prev = t;
         ++prof_ts[t];

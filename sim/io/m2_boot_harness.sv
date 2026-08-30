@@ -183,6 +183,8 @@ module m2_boot_harness #(
   output logic        obs_pf_armed,
   output logic        obs_pf_match,   // pf_ip == ip: the prediction was right
   output logic        obs_ic_valid,
+  output logic [31:0] obs_pf_ip,
+  output logic [31:0] obs_ip,
   // Readable so the testbench can dump what the CPU actually built and compare
   // it against MAME's tilemap and palette rather than against a hope.
   input  logic [14:0] dump_addr,
@@ -564,5 +566,7 @@ assign obs_xlat_din  = oc_xlat_din;
   assign obs_pf_armed = u_cpu.pf_armed;
   assign obs_pf_match = (u_cpu.pf_ip == u_cpu.ip);
   assign obs_ic_valid = u_cpu.ic_valid;
+  assign obs_pf_ip    = u_cpu.pf_ip;
+  assign obs_ip       = u_cpu.ip;
 
 endmodule

@@ -5956,3 +5956,63 @@ and needs 3.4x. With the 16 KB cache's 1.37x this is 1.43x of it. The remaining
 2.4x is the core's cycles per instruction: ~11 of the 17.5 CPI, and a
 two-instruction cache-resident compare-and-branch measures 7.2. 25 MHz is here
 because it is what the hardware is, not because it was going to help.
+
+**R103 — the i960's cost is instruction FETCH, not execution, and the direction
+from here is pipelining. Recorded now because the next session should not
+re-derive it.**
+
+*Measured in the boot harness, per instruction, in CPU cycles:*
+
+    T_FETCH      1.00      T_EXEC     1.00
+    T_FETCH_W    2.64      T_MEM_W    2.72
+    T_FETCH2_W   0.83      total      8.19
+
+    fetch total  4.47      execute    1.00
+
+**Fetch costs four and a half times what execution does.** That is the shape of
+a non-pipelined multi-cycle machine: it walks T_FETCH -> T_FETCH_W -> T_EXEC in
+strict sequence, so the fetch unit idles during execute and the execute unit
+idles during fetch.
+
+*A BIGGER INSTRUCTION CACHE IS NOT THE ANSWER, and this is worth recording
+because it is the obvious guess.* Swept 512 B to 8 KB with forced rebuilds:
+CPI identical to the digit at both. Those 2.64 cycles are the cache's LATENCY ON
+A HIT, not misses. That is the opposite of the data cache, where 2 KB -> 16 KB
+took the hit rate 55% -> 88% and was worth 1.37x on the board.
+
+*Prefetch already exists and works.* Sequential prediction, issued during
+execute. At instruction level in a hot four-instruction loop it hits three times
+in four, missing only on the branch back — which is the honest cost of
+predicting sequential. An aggregate counter reported 13% and disagrees with the
+instruction-level dump; the counter is the more likely to be wrong and the
+discrepancy is unresolved.
+
+*THE DIRECTION: pipelining.* Not more cache, not a faster clock. The clock is
+spent (R102: 25 MHz is the real part's, and Fmax is 31.2). The gap is 3.4x and
+the memory work has already returned 1.37x. Overlapping fetch with execute is
+worth up to the 4.47, and that is a rewrite of a ~3,000-line core with hazard
+detection, forwarding and branch handling.
+
+**Do not start that without first knowing exactly where the 4.47 goes.** The
+breakdown above is by STATE, which is not the same as by cause: T_FETCH_W's 2.64
+mixes icache hit latency, icache misses that reach SDRAM, and cycles lost to a
+mispredicted prefetch, and those need different parts of a pipeline to fix. The
+instrumentation to separate them is in `sim/io/tb_m2_boot.cpp` and works; what
+it needs is a counter that is right.
+
+*Five measurement errors in one session, all the same shape, all corrected --
+counting the right thing against the wrong clock or edge.* `prof_cycles` counts
+clk_mem and was read as CPU cycles, which made an 8.19 look like a 17.12 that
+"matched" the board's 17.5. The state histogram sampled at clk_mem while the
+sequencer runs at clk_cpu, counting every state twice -- which is why every
+figure came out an exact multiple of two. The same sampling read `pf_ip` against
+an `ip` that had not updated. The two-word counter watched a transition that
+never happens. **A profile is a measurement and deserves the same scepticism as
+any other; four of these looked entirely plausible until the next one exposed
+them.**
+
+*And the sim is NOT the board's slow phase.* 8.19 CPU cycles per instruction on
+the boot path against 17.5 measured on hardware during the first three minutes.
+Different workloads. Optimising against the boot path may not move the phase the
+board actually complains about, and a representative trace is worth having
+before the pipelining work starts.
