@@ -237,17 +237,42 @@ pll pll
 // the picture. It also forced the clk_vid/memory crossing to be CUT in the
 // SDC, so those paths were never timed at all.
 //
-// 48 / 3 = 16 MHz EXACTLY, the same pixel rate clk_vid/2 produced, so the
-// second clock is not needed to hit it. Running the video on clk_sys with a
-// one-in-three enable makes tram and pal SINGLE-clock: Quartus then adds
-// pass-through logic and read-during-write becomes defined, the crossing
-// becomes a real timed path, and the renderer gets 1.5x more cycles per line
-// for its fetches into the bargain.
-reg [1:0] ce_div;
+// Running the video on clk_sys makes tram and pal SINGLE-clock: Quartus adds
+// pass-through logic, read-during-write becomes defined, the crossing becomes a
+// real timed path, and the renderer gets more cycles per line for its fetches.
+//
+// SIXTEEN OF FIFTY, NOT ONE OF THREE, because clk_sys is 50 MHz now.
+//
+// It was clk_sys/3, and 48/3 = 16 MHz exactly. 50/3 is not 16, and the i960's
+// clock is 25 MHz -- the real part's -- which forces clk_sys to 50 because the
+// CPU bridge's crossing depends on an exact 2:1. Something had to give and this
+// is the cheapest thing available: the alternatives were the i960 on its own
+// PLL, which the bridge measured at six extra cycles a transaction (S_DONE
+// 7.12 against 1.14), or the renderer back on its own clock, which is a 36%
+// cut to its fetch budget and brings the tearing back.
+//
+// A phase accumulator, so the AVERAGE is exact: 16 pulses every 50 cycles is
+// 16 MHz, and the frame rate is still 16e6/(656*424) = 57.5242 Hz. What is not
+// exact is the SPACING -- consecutive enables sit 3 or 4 clk_sys cycles apart,
+// 60 or 80 ns against a uniform 62.5.
+//
+// That does not reach the picture. The video timing counts PIXELS, not
+// nanoseconds: every H and V position, the line length and the frame length are
+// all in units of ce_pix and are unchanged. The scaler latches a pixel per
+// enable into a line buffer and drives its output from its own clock, so what
+// varies is when a pixel is handed over, never which pixel or how many.
+localparam int unsigned CE_NUM = 16;      // 16 MHz
+localparam int unsigned CE_DEN = 50;      // clk_sys
+reg [5:0] ce_acc;
 reg       ce_pix;
 always @(posedge clk_sys) begin
-	ce_div <= (ce_div == 2'd2) ? 2'd0 : ce_div + 2'd1;
-	ce_pix <= (ce_div == 2'd1);
+	if (ce_acc + CE_NUM >= CE_DEN) begin
+		ce_acc <= ce_acc + 6'(CE_NUM) - 6'(CE_DEN);
+		ce_pix <= 1'b1;
+	end else begin
+		ce_acc <= ce_acc + 6'(CE_NUM);
+		ce_pix <= 1'b0;
+	end
 end
 
 // Memory comes out of reset on PLL lock and STAYS out, separately from the
@@ -526,7 +551,7 @@ m2_sdram_x2 #(.NP(NPORTS), .AW(SDR_AW)) u_sdram_x2 (
 // CL2 and a capture of CL+4, so the device is not the limit and the latency did
 // not need raising. Reverted rather than left in as a harmless-looking change
 // that was aimed at the wrong thing.
-m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(750)) u_sdram (
+m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(781)) u_sdram (
 	.clk(clk_mem), .rst_n(mem_rst_n), .ready(mem_ready),
 	// OSD order is CL+2..CL+5 and the selector's own encoding puts CL+3 at zero,
 	// so the two are mapped rather than passed through.
@@ -1710,7 +1735,7 @@ wire signed [15:0] snd_l, snd_r;
 // cache the chip cannot produce samples that fast, so the buffer runs dry.
 // The cache alone leaves the rate short and the period uneven. Together they
 // hold 100% with no underruns at every latency from 40 to 600 cycles.
-m2_sound_board #(.PCM_CACHE(1'b1), .PCM_RATE(1'b1)) u_sndboard (
+m2_sound_board #(.PCM_CACHE(1'b1), .PCM_RATE(1'b1), .TICK_DEN(50)) u_sndboard (
 	.clk(clk_sys), .rst_n(cpu_rst_n & mem_rst_n & cp_done & snd_found),
 	.rx_data(b_rx_d), .rx_valid(b_rx_v), .rx_ack(b_rx_a),
 	.tx_data(b_tx_d), .tx_valid(b_tx_v), .tx_ack(b_tx_a),
@@ -2738,8 +2763,8 @@ m2_ioboard #(
 	// the board's self-test at 174 of a 57.5 Hz refresh -- so moving the module
 	// to a 40 MHz clock moves the constants with it. At 25 MHz they were
 	// 3,043,478 and 75,652,174; here they are 0.1217 s and 3.026 s of 40 MHz.
-	.STATUS_CYCLES  (4_869_565),
-	.SELFTEST_CYCLES(121_043_478)
+	.STATUS_CYCLES  (5_072_464),
+	.SELFTEST_CYCLES(126_086_957)
 ) u_ioboard (
 	.clk(clk_sys),
 	.rst_n(cpu_rst_n),

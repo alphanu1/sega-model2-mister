@@ -5910,3 +5910,49 @@ this part supplies it: even the full 29.1 MHz Fmax is only 1.2x.
 Recorded rather than left as a loose end, because "match the real 25 MHz" is an
 obvious and reasonable thing to want and the reason it is not free is four
 levels down.
+
+**R102 — the i960 runs at 25 MHz, the real part's clock, and R101's objection was
+answered rather than overruled.** R101 concluded 25 MHz cost more than it bought.
+It was right about the costs it listed and wrong that there were only three.
+
+*The PLL was never the obstacle.* `pll.v` recorded 25 as impossible because "96,
+32 and 25 cannot share a PLL: they need a VCO of 2400 MHz and Cyclone V tops out
+near 1600." True of a 96 MHz family, not a law. A VCO of **800 MHz = 50 x 16**:
+
+    SDRAM  800/8  = 100 MHz      core is an exact /2 of SDRAM
+    core   800/16 =  50 MHz      i960 is an exact /2 of core
+    video  800/25 =  32 MHz
+    i960   800/32 =  25 MHz
+
+*Both relationships worth keeping survived, and they were the expensive ones.*
+`m2_sdram_x2` stays an ADAPTER rather than a clock-domain crossing, and the CPU
+bridge keeps its SINGLE-FLOP crossing — the bridge records two flops costing
+`S_DONE` **7.12 cycles per transaction against 1.14**, so an i960 on its own PLL
+would have paid about six cycles a transaction for four per cent of clock.
+`tram` and `pal` stay SINGLE-CLOCK, so read-during-write stays defined.
+
+*What gave was the pixel enable, and it is the cheapest of the four.* `ce_pix`
+was `clk_sys/3` and 48/3 = 16 MHz exactly; 50/3 is not. It is a 16-of-50 phase
+accumulator now: the average is 16.000 MHz and the frame rate is still
+16e6/(656*424) = 57.5242 Hz. The SPACING is not uniform — enables sit 3 or 4
+cycles apart against a nominal 3.125, 60 or 80 ns against 62.5.
+
+That does not reach the picture, and the board confirms it. The video timing
+counts PIXELS: every H and V position, the line length and the frame length are
+in units of `ce_pix` and are unchanged. The scaler latches one pixel per enable
+into a line buffer and drives its output from its own clock, so what moves is
+when a pixel is handed over, never which or how many.
+
+*Timing closes with headroom:* SDRAM 123.2 MHz Fmax against 100, clk_sys 61.6
+against 50, i960 31.2 against 25. Worst-case slack 0.442 ns.
+
+*32 MHz was asked for and is not reachable.* The chain is
+`SDRAM = 2 x clk_sys` and `i960 = clk_sys / 2`, so `SDRAM = 4 x i960`. An i960
+at 32 forces a 128 MHz controller against a measured Fmax of 116.7 in the 96 MHz
+build; 40 forces 160.
+
+*And 4% does not fix anything.* The game runs at about a third of its logic rate
+and needs 3.4x. With the 16 KB cache's 1.37x this is 1.43x of it. The remaining
+2.4x is the core's cycles per instruction: ~11 of the 17.5 CPI, and a
+two-instruction cache-resident compare-and-branch measures 7.2. 25 MHz is here
+because it is what the hardware is, not because it was going to help.

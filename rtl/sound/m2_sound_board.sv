@@ -50,7 +50,7 @@ module m2_sound_board #(
   parameter bit PCM_CACHE = 1'b1,          // per-voice sample line
   parameter bit PCM_RATE  = 1'b1,          // headroom + fixed-rate drain
   parameter int unsigned TICK_NUM = 20,     // 2 x 10 MHz: one enable per phase
-  parameter int unsigned TICK_DEN = 48      // clk_sys
+  parameter int unsigned TICK_DEN = 50      // clk_sys
 ) (
   input  logic        clk,
   input  logic        rst_n,
