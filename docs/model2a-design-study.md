@@ -5779,3 +5779,41 @@ counter output. Whether ours does the same would say if the coin routine runs at
 all, but the likelier answer is Daytona's own coinage configuration, which lives
 in backup RAM and is set from the service menu. That menu is reachable now: VR1
 Red and VR4 Green are its down and up.
+
+**R99 — the first attract scene is not a machine that is stalled, it is a
+machine that is BUSY. The "speed-up" afterwards is the CPU going idle.**
+The `ipring` buffer had recorded the last 512 retired instruction pointers since
+the design was built and had never once been read out; reading it inverts the
+question.
+
+*Profiled on the board, same instrument, both phases:*
+
+| | slow (CPI 23.9) | fast (CPI 7.2) |
+|---|---|---|
+| `0x0012B0` + `0x0012B8` | 4.5% | **70.4%** |
+| `0x001000-0x001FFF` | 5.8% | 73.3% |
+| `0x011000-0x011FFF` | **40.1%** | ~0% |
+| `0x010000`,`0x013000`,`0x016000` | 36% combined | ~0% |
+
+In the FAST phase the i960 spends seventy per cent of its time in a
+TWO-INSTRUCTION wait loop at 0x12B0/0x12B8. That is what 7.2 CPI is measuring —
+a machine with nothing to do, spinning in cache. It is not a faster machine.
+
+In the SLOW phase it is running a large body of real code across
+0x010000-0x016FFF that later scenes never touch, at 24 cycles per instruction.
+The picture animates slowly because the CPU cannot finish its frame, and the
+board's own observation confirms the shape: returning to scene 1 later runs at
+full speed because that one-time work has already been done.
+
+*Why this was mis-framed for two sessions.* An instruction RATE that triples
+looks like a stall clearing, and 24 CPI dropping to 7.5 looks like memory
+pressure being relieved. Both readings are consistent with the numbers and both
+are wrong. A rate says how many instructions retire, never which ones, and
+"faster" and "idle" are indistinguishable from the outside. Only knowing WHERE
+the CPU is separates them, and the instrument for that had been sitting unread
+in the design the whole time.
+
+*What the real question now is.* Not "why does it stall" but "why is that code
+24 cycles per instruction". The i960's data cache is 2 KB; whether that is the
+binding constraint or the misses are compulsory is the next measurement, and the
+hit rate in each phase answers it directly.

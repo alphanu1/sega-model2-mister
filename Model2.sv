@@ -2481,10 +2481,21 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// Paired with the sound board's bus-cycle count, because the two share the
 	// SDRAM and "the picture sped up" and "the sound did not" is exactly the
 	// kind of claim these two numbers settle.
-	.b_valid(uart_b2_valid), .b_addr({8'd0, iob_word4}),
-	.b_data({coin_edges[7:0], i960_coinack[13:0], coinack_word}),
+	// THE DATA CACHE, IN BOTH PHASES, because the profile reframed the
+	// question. The first attract scene is not a machine that is stalled -- it
+	// is a machine that is BUSY: 40% of its time in 0x011000-0x011FFF and 36%
+	// more across 0x010000/0x013000/0x016000, code that later scenes never
+	// touch. Afterwards it spends 70% of its time in a TWO-INSTRUCTION wait
+	// loop at 0x12B0/0x12B8, which is what 7.2 CPI actually measures: idling.
+	//
+	// So the slow phase is real work at 24 cycles per instruction, and the
+	// obvious suspect is the i960's data cache being 2 KB. Two samples of these
+	// give the hit rate directly, in each phase, which says whether a bigger
+	// cache is the answer or whether the misses are compulsory.
+	.b_valid(uart_b2_valid), .b_addr(dc_hits),
+	.b_data(dc_miss),
 	.a_tag(8'h53), .b_tag(8'h48),          // 'S' retired IP (512-entry ring) | cumulative i960 instructions
-	                                       // 'H' DPRAM word4 | coin edges : i960 byte-2 writes : last word
+	                                       // 'H' i960 data-cache hits | misses, both cumulative
 	                                       // '0' map0 min|max : sum
 	                                       // 'T' write count + trap/PA
 	.enable(1'b1),
