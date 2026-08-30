@@ -168,6 +168,21 @@ module m2_boot_harness #(
   output logic [31:0] obs_dc_hits,
   output logic [31:0] obs_dc_miss,
   output logic  [7:0] obs_mstate,     // {0,0,sd_ack,ack_mem,req_mem,st[2:0]}
+  // THE i960's OWN SEQUENCER STATE. Core sequencing is 10.30 of the 17.12 CPI
+  // -- the largest single term in the design and bigger than every memory stall
+  // put together -- and nothing has ever looked at where inside the core those
+  // cycles go. The CPU is a multi-cycle state machine, T_FETCH -> T_FETCH_W ->
+  // T_EXEC -> T_WB with more states for memory and two-word instructions, so
+  // the histogram of this signal IS the breakdown. Taken by hierarchical
+  // reference so the CPU is not modified to be measured.
+  output logic  [4:0] obs_ts,
+  // WHY the prefetch misses, which needs different fixes depending on the
+  // answer: a wrong prediction is a branch and is unavoidable, whereas a right
+  // prediction whose data has not arrived is a scheduling problem and is fixable.
+  output logic        obs_pf_valid,
+  output logic        obs_pf_armed,
+  output logic        obs_pf_match,   // pf_ip == ip: the prediction was right
+  output logic        obs_ic_valid,
   // Readable so the testbench can dump what the CPU actually built and compare
   // it against MAME's tilemap and palette rather than against a hope.
   input  logic [14:0] dump_addr,
@@ -257,6 +272,7 @@ module m2_boot_harness #(
     .vid_r(vid_r), .vid_g(vid_g), .vid_b(vid_b),
     .vid_hs(), .vid_vs(), .vid_hb(vid_hb), .vid_vb(vid_vb),
     .vblank_irq(), .dbg_fetches(dbg_fetches_o), .dbg_overruns(dbg_overruns_o),
+    .dbg_ovr_frame(),
     .dbg_layer_px(), .dbg_ctrl(), .dbg_layer_have()
   );
 
@@ -452,7 +468,8 @@ module m2_boot_harness #(
     .dbg(iob_dbg), .dbg_win_rd(iob_win_rd),
     .dbg_flag_rd(iob_flag_rd), .dbg_seen(iob_seen)
   ,
-    .win_busy(dp_busy_s));
+    .win_busy(dp_busy_s),
+    .dbg_word4());
 
   // WARM-STATE PRELOAD. +bakinit=PREFIX loads PREFIX0..3.hex (from
   // tools/nvm_split.py on a board's .nvm save) into the backup lanes before
@@ -461,10 +478,13 @@ module m2_boot_harness #(
   initial begin : bak_preload
     string pfx;
     if ($value$plusargs("bakinit=%s", pfx)) begin
-      $readmemh({pfx, "0.hex"}, u_backup.b0);
-      $readmemh({pfx, "1.hex"}, u_backup.b1);
-      $readmemh({pfx, "2.hex"}, u_backup.b2);
-      $readmemh({pfx, "3.hex"}, u_backup.b3);
+      // The four lanes moved inside m2_tdp_ram in R97 -- they were b0..b3
+      // here, and are the simulation array of each instance now. This
+      // harness is not in `make test`, so the rename broke it silently.
+      $readmemh({pfx, "0.hex"}, u_backup.u_b0.mem);
+      $readmemh({pfx, "1.hex"}, u_backup.u_b1.mem);
+      $readmemh({pfx, "2.hex"}, u_backup.u_b2.mem);
+      $readmemh({pfx, "3.hex"}, u_backup.u_b3.mem);
       $display("  backup SRAM preloaded from %s0..3.hex", pfx);
     end
   end
@@ -538,5 +558,11 @@ assign obs_oc_din    = oc_din;
 assign obs_xlat_we   = oc_xlat_we;
 assign obs_xlat_addr = oc_xlat_addr;
 assign obs_xlat_din  = oc_xlat_din;
+
+  assign obs_ts       = u_cpu.ts;
+  assign obs_pf_valid = u_cpu.pf_valid;
+  assign obs_pf_armed = u_cpu.pf_armed;
+  assign obs_pf_match = (u_cpu.pf_ip == u_cpu.ip);
+  assign obs_ic_valid = u_cpu.ic_valid;
 
 endmodule

@@ -534,6 +534,17 @@ int main(int argc, char **argv) {
   // the requests themselves (LO/HI, i.e. real SDRAM latency), or the tail.
   // Changing the bridge before knowing this would be a guess.
   uint64_t prof_st[8] = {0,0,0,0,0,0,0,0};
+  // WHERE THE CORE'S OWN CYCLES GO. Core sequencing is 10.30 of 17.12 CPI, the
+  // largest term in the design, and it has never been broken down.
+  uint64_t prof_ts[32] = {0};
+  // DOES THE PREFETCH ACTUALLY HIT? A successful one goes T_EXEC -> T_FETCH ->
+  // T_EXEC, skipping T_FETCH_W entirely; a miss goes T_FETCH -> T_FETCH_W. The
+  // transition out of T_FETCH is therefore the hit rate, and it needs no RTL
+  // change to see -- the state is already observable.
+  uint64_t pf_hit = 0, pf_miss = 0, pf_len2 = 0;
+  uint64_t pf_m_wrong = 0, pf_m_late = 0;
+  int ts_prev = -1;
+  uint64_t prof_cpu_cycles = 0;
 
   while (d->dbg_acc < max_instr || (warm_at && !warm_done)) {
     if (!fw_pending.empty() && d->dbg_acc >= fw_late) {
@@ -573,6 +584,40 @@ int main(int argc, char **argv) {
     if (d->obs_bus_req && !d->obs_bus_ack && d->obs_bus_we) ++prof_wait_wr;
     prof_ack_prev = d->obs_bus_ack;
     ++prof_st[d->obs_mstate & 7];
+    {
+      // SAMPLED ON THE CPU'S OWN EDGE, not on clk_mem. The sequencer changes
+      // state at clk_cpu, which is half clk_mem, so sampling every tick counted
+      // each state twice -- which is why every figure came out an exact
+      // multiple of two -- and read pf_ip against an `ip` that had not been
+      // updated yet, turning ordinary sequential fetches into "mispredictions".
+      // Two different wrong answers from one sampling mistake.
+      static int cpu_prev = 0;
+      int cpu_now = d->clk_cpu;
+      if (cpu_now && !cpu_prev) {
+        int t = d->obs_ts & 31;
+        // THE THREE WAYS OUT OF T_FETCH, which is the whole story:
+        //   -> T_EXEC      the prefetch had the word: no fetch cost at all
+        //   -> T_FETCH2_W  a two-word instruction, which by design cannot
+        //                  prefetch -- it needs the cache port for its own
+        //                  displacement word
+        //   -> T_FETCH_W   a real miss, waiting for the cache
+        // The first version lumped T_FETCH2_W in with the hits and watched the
+        // wrong transition for two-word instructions, reporting 0% of them
+        // while T_FETCH2_W was burning 0.83 cycles an instruction.
+        if (ts_prev == 0 && t != 0) {
+          if      (t == 1) {                   // T_FETCH_W: a real miss
+            ++pf_miss;
+            if (!d->obs_pf_match) ++pf_m_wrong; else ++pf_m_late;
+          }
+          else if (t == 3) ++pf_len2;          // T_FETCH2_W: two-word
+          else             ++pf_hit;           // straight on: the prefetch paid
+        }
+        ts_prev = t;
+        ++prof_ts[t];
+        ++prof_cpu_cycles;
+      }
+      cpu_prev = cpu_now;
+    }
     if (pctr && d->dbg_acc != pc_acc_prev) {
       if (d->dbg_acc >= pcfrom) std::fprintf(pctr, "%08x\n", (unsigned)d->dbg_ip);
       pc_acc_prev = d->dbg_acc;
@@ -1369,7 +1414,32 @@ int main(int argc, char **argv) {
                   (unsigned long long)prof_waiting,
                   100.0*double(prof_waiting)/double(prof_cycles),
                   double(prof_waiting)/double(insns));
-      std::printf("    core sequencing     %12llu   %5.1f%% of cycles"
+      {
+      static const char *TS[32] = {
+        "T_FETCH","T_FETCH_W","T_FETCH2","T_FETCH2_W","T_DECODE",
+        "T_EXEC","T_MEM","T_MEM_W","T_MULDIV","T_MULTI","T_PAIR","T_FP",
+        "T_WB","T_FRAME","14","15","16","17","18","19","20","21","22","23",
+        "24","25","26","27","28","29","30","31" };
+      const double pf_tot = double(pf_hit + pf_miss + pf_len2);
+      std::printf("\n    PREFETCH: %llu hits, %llu misses -> %.1f%% hit rate\n",
+                  (unsigned long long)pf_hit, (unsigned long long)pf_miss,
+                  pf_tot > 0 ? 100.0*double(pf_hit)/pf_tot : 0.0);
+      std::printf("      of the misses: %llu mispredicted (a branch), %llu right but LATE\n",
+                  (unsigned long long)pf_m_wrong, (unsigned long long)pf_m_late);
+      std::printf("    two-word instructions (cannot prefetch by design): %llu, %.1f%%\n",
+                  (unsigned long long)pf_len2,
+                  100.0*double(pf_len2)/double(d->dbg_acc));
+      std::printf("\n    WHERE THE CORE'S CYCLES GO -- CPU cycles per instruction"
+                  " (total %.2f):\n", double(prof_cpu_cycles)/double(d->dbg_acc));
+      for (int i = 0; i < 32; ++i)
+        if (prof_ts[i])
+          std::printf("      %-12s %12llu  %5.1f%%  -> %5.2f of the CPI\n",
+                      TS[i], (unsigned long long)prof_ts[i],
+                      100.0*double(prof_ts[i])/double(prof_cycles),
+                      double(prof_ts[i])/double(d->dbg_acc));
+      std::printf("\n");
+    }
+    std::printf("    core sequencing     %12llu   %5.1f%% of cycles"
                   "   -> %.2f of the CPI\n",
                   (unsigned long long)(prof_cycles - prof_waiting),
                   100.0*double(prof_cycles-prof_waiting)/double(prof_cycles),
