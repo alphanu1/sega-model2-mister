@@ -2482,9 +2482,9 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// SDRAM and "the picture sped up" and "the sound did not" is exactly the
 	// kind of claim these two numbers settle.
 	.b_valid(uart_b2_valid), .b_addr({8'd0, iob_word4}),
-	.b_data({coin_edges, iob_in0, iob_in1}),
+	.b_data({coin_edges[7:0], i960_coinack, iob_in0}),
 	.a_tag(8'h53), .b_tag(8'h48),          // 'S' retired IP (512-entry ring) | cumulative i960 instructions
-	                                       // 'H' DPRAM word4 changes:min:value | coin edges : IN0 : IN1
+	                                       // 'H' DPRAM word4 | coin edges : i960 coin-ack writes : IN0
 	                                       // '0' map0 min|max : sum
 	                                       // 'T' write count + trap/PA
 	.enable(1'b1),
@@ -2640,6 +2640,36 @@ wire [7:0] brake = joystick_0[11] ? 8'he0 : 8'h20;
 // is exactly the shape of "coins do nothing". If this reads 0xFFFFFFFF on a
 // fresh boot the .mif took; if it reads 0x00000000 it did not, and that is the
 // fault rather than anything to do with inputs.
+// DOES OUR i960 RESPOND TO THE COIN THE WAY MAME'S DOES?
+//
+// This is the last question in the chain and it separates the only two things
+// still possible. Everything upstream measures identical to MAME: the button
+// gives 20 edges for 20 presses, the Z80 publishes DPRAM word 4 with a
+// lowest-ever 0xFE exactly as MAME's does, and the i960 demonstrably reads that
+// byte because Start, Test and Service are bits of it and all three work.
+//
+// MAME's i960 answers a coin by starting a repeated write to 0x01c0001c byte 2
+// -- dword 7, the high lane -- which does NOT happen before the coin. So:
+//
+//   this counter stays 0  -> our i960 never runs its coin routine
+//   this counter climbs   -> it runs, and declines to award the credit
+//
+// The second would be coinage: MAME on a fresh nvram wants THREE coins, and
+// shows "CREDIT 0/3" climbing to "CREDITS 2/3" as they go in.
+logic [15:0] i960_coinack;
+logic        ack_seen_d;
+wire         coinack_wr = cpu_io_sel && cpu_io_we && cpu_io_be[2]
+                       && (cpu_io_addr[23:0] == 24'h00001c);
+always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
+	if (!cpu_rst_n) begin
+		i960_coinack <= 16'd0; ack_seen_d <= 1'b0;
+	end else begin
+		ack_seen_d <= coinack_wr;
+		if (coinack_wr && !ack_seen_d && !(&i960_coinack))
+			i960_coinack <= i960_coinack + 16'd1;
+	end
+end
+
 logic [15:0] coin_edges;
 logic        coin_d;
 always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
