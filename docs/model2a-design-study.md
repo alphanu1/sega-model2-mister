@@ -5394,3 +5394,49 @@ having to notice.
 
 An address nobody can verify by reading is not a constant. It is a guess with a
 name, and this project now has two entries about the same guess.
+
+**R90 — VPA was tied high, so every interrupt vectored through garbage. The
+sound board now takes all 48 bytes on hardware.** The user asked whether the new
+SDRAM port had its read/write release; it did, and asking sent me to look at the
+handshakes, which is where the real fault turned out not to be.
+
+A 68000 whose VPAn never asserts runs a VECTORED interrupt acknowledge: it drives
+FC = 7, reads the low byte of the data bus and uses it as a vector NUMBER.
+Nothing on this board answers an acknowledge cycle, so it read the unmapped
+default of 0xFF and jumped through vector 255 at 0x3FC into whatever was there.
+It then executed 0xFFFF, took the line-1111 exception at 0x2C, and looped —
+39,900,000 bus cycles of it on the board, never reading its UART.
+
+`segam1audio` raises this with `set_input_line(M68K_IRQ_2)`, which is
+AUTOVECTORED, so the firmware has filled in vector 26 at 0x68 → 0x000120. Assert
+VPA when `as && fc == 3'b111` and the 68000 takes it.
+
+*Why every test passed anyway, which is the part worth keeping.* The testbench
+never sent the board a byte. With `rx_valid` held at zero the RX interrupt never
+fired, so the acknowledge cycle was **unreachable**, and 98,025 instructions of
+verified lockstep said nothing whatever about it. A suite that cannot reach a
+path cannot defend it, and this one could not reach the single path the whole
+sound board exists to service.
+
+The A/B, once the link was driven, is unambiguous: **1 of 48 bytes with VPA tied
+high, 48 of 48 with it asserted.** One byte is the exact signature of an
+interrupt that never returns — the first arrives, RXRDY sets, the CPU vectors
+away and never reads it, and the wire blocks holding the second. The board had
+been reporting `linkbytes=2` throughout, which is that same fact seen from the
+sending end.
+
+*Three wrong theories were tested and killed first, cheaply, in simulation, and
+each is worth recording as a thing that is NOT the problem here:* the held
+acknowledge of R32 (swept ACK_HOLD 1→8, no effect), SDRAM latency under
+contention (swept ROM_LAT 6→600, all 48 bytes at every value), and the arrival
+time of the first byte (swept, no effect once the link was modelled at all). The
+testbench also modelled a one-cycle acknowledge where `m2_sdram` holds two, which
+could not have exposed R32's hazard even if it had been the fault; that is fixed
+and swept regardless.
+
+The default run is now 30,000,000 cycles rather than 2,000,000 and asserts that
+all 48 bytes are taken. The old length stopped before the first byte, which is
+precisely how this survived.
+
+On hardware: 48 of 48 bytes, and the 68000 in Daytona's main loop at 0x1632 /
+0x162E / 0x262E, all of which appear in MAME's own trace.

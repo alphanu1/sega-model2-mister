@@ -113,8 +113,21 @@ int main(int argc, char **argv) {
   int lat = 0;
   bool serving = false;
 
+  // THE ROM PORT, MODELLED AS THE REAL ONE BEHAVES -- INCLUDING A HELD ACK.
+  //
+  // This asserted rom_ack for exactly ONE cycle, and m2_sdram holds p_ack for
+  // ACK_HOLD, which is 2. A one-cycle ack cannot expose the held-acknowledge
+  // hazard of study R32 at all: a consumer that re-arms its request while the
+  // previous acknowledge is still high captures the OLD word, and every test
+  // here would pass while the board fetched stale data.
+  //
+  // The hold is a parameter and it is swept, because the point of a test is to
+  // find the value at which the design breaks and not to confirm the one that
+  // was assumed.
+  const int ACK_HOLD = std::getenv("M2_SND_ACKHOLD")
+                     ? std::atoi(std::getenv("M2_SND_ACKHOLD")) : 2;
+  int ack_left = 0;
   auto tick = [&]() {
-    // The ROM port, with latency.
     if (d->rom_req && !serving && !d->rom_ack) { serving = true; lat = ROM_LAT; }
     if (serving) {
       if (lat > 0) { --lat; }
@@ -122,13 +135,41 @@ int main(int argc, char **argv) {
         uint32_t wa = d->rom_addr;              // word address, 17:1
         d->rom_data = (wa < rom.size()) ? rom[wa] : 0xffff;
         d->rom_ack  = 1;
+        ack_left    = ACK_HOLD;
         serving = false;
       }
     }
     d->clk = 0; d->eval();
     d->clk = 1; d->eval();
-    if (d->rom_ack) d->rom_ack = 0;
+    if (ack_left > 0 && --ack_left == 0) d->rom_ack = 0;
   };
+
+  // THE LINK, LIVE, WHICH THE HARDWARE HAS AND THIS TEST DID NOT.
+  //
+  // Every run so far left rx_valid at zero, so the board's UART never received
+  // anything and its RX interrupt never fired. On hardware the i960 sends its
+  // 48 bytes within the first couple of hundred milliseconds, and that is a
+  // whole code path -- an interrupt, a handler, a queue -- that simulation has
+  // never entered. The board runs, takes vector 0x2C repeatedly and never reads
+  // its UART; a difference this large between the two is where to look first.
+  //
+  // MAME's own bytes, paced at the real line rate of 31,250 baud, which at
+  // 48 MHz is 15,360 cycles a byte.
+  static const uint8_t link[] = {
+    0xf8, 0xf8, 0xff,
+    0xbe, 0x14, 0x1f,  0xbe, 0x16, 0x02,  0xbe, 0x1b, 0x06,
+    0xbe, 0x1c, 0x03,  0xbe, 0x1d, 0x01,  0xbe, 0x1e, 0x02,
+    0xbe, 0x1f, 0x05,  0xbe, 0x36, 0x09,  0xbe, 0x17, 0x00,
+    0xbe, 0x18, 0x04,  0xbe, 0x35, 0x00,  0xbe, 0x34, 0x00,
+    0xae, 0x10, 0x08,  0xbe, 0x17, 0x00,  0xbe, 0x19, 0x00
+  };
+  const bool do_link = std::getenv("M2_SND_NOLINK") == nullptr;
+  const long LINK_AT   = std::getenv("M2_SND_LINKAT")
+                       ? std::atol(std::getenv("M2_SND_LINKAT")) : 3000000L;
+  const long BYTE_CYC  = 15360;
+  size_t link_i = 0;
+  long   link_next = LINK_AT;
+  long   link_sent = 0;
 
   for (int i = 0; i < 64; ++i) tick();
   d->rst_n = 1;
@@ -141,9 +182,15 @@ int main(int argc, char **argv) {
   // enough to prove the CPU boots and clears RAM; the full 285,571-instruction
   // lockstep is a deliberate M2_SND_TRACE run, because the trace is 12 MB of
   // MAME output and does not belong in the repository.
+  // LONG ENOUGH TO SEND THE LINK, EVEN WITHOUT A REFERENCE. It was 2,000,000,
+  // which stops before the first byte and is exactly why VPA being tied high
+  // survived: the board never took an interrupt, so the acknowledge cycle was
+  // unreachable and every test passed while the hardware looped 39.9 million
+  // bus cycles through a garbage vector. A suite that cannot reach a path
+  // cannot defend it.
   const long MAXC = std::getenv("M2_SND_CYCLES")
                   ? std::atol(std::getenv("M2_SND_CYCLES"))
-                  : (ref.empty() ? 2000000L : 600000000L);
+                  : (ref.empty() ? 30000000L : 600000000L);
   // MATCHED ON THE FLY, not collected and compared afterwards. The board's bus
   // carries prefetches and operand reads as well as instruction starts, so it
   // needs several times as many cycles as MAME has instructions -- collecting a
@@ -158,6 +205,16 @@ int main(int argc, char **argv) {
   long stuck_since = 0;
   long c = 0;
   for (; c < MAXC; ++c) {
+    // Offer the next byte when the wire is free and its line time has passed.
+    if (do_link && link_i < sizeof link && c >= link_next && !d->rx_valid) {
+      d->rx_data  = link[link_i];
+      d->rx_valid = 1;
+    }
+    if (d->rx_valid && d->rx_ack) {
+      d->rx_valid = 0;
+      ++link_i; ++link_sent;
+      link_next = c + BYTE_CYC;
+    }
     tick();
     if (d->obs_as && !prev_as) {
       uint32_t ad = d->obs_addr;
@@ -228,6 +285,8 @@ int main(int argc, char **argv) {
   // not made sound, and that is the whole point of the exercise. Reported as
   // range and a count of non-zero samples: a dead channel is zero, a
   // mis-clocked one is a rail, and correct FM is neither.
+  std::printf("  link: %ld of %zu bytes taken by the sound board\n",
+              link_sent, sizeof link);
   std::printf("  FM output: %d..%d over %ld samples, %ld non-zero\n",
               fm_min, fm_max, fm_n, fm_nz);
   if (fm_n > 0 && fm_nz == 0) {
@@ -235,6 +294,18 @@ int main(int argc, char **argv) {
   }
 
   int fails = 0;
+
+  // EVERY BYTE, OR THE BOARD IS NOT SERVICING ITS UART. One byte taken is the
+  // signature of an interrupt that never returns: the first arrives, RXRDY
+  // sets, the CPU vectors somewhere wrong and never reads it, so the wire
+  // blocks with the second byte in hand. That is precisely what the hardware
+  // reported -- two bytes across the link, one of them still held -- and what
+  // VPA tied high produces.
+  if (do_link && link_i < sizeof link) {
+    std::printf("  FAIL the sound board stopped reading its UART after %ld bytes\n",
+                link_sent);
+    ++fails;
+  }
   if (first_pc != 0x000000) {
     // The 68000 fetches its stack pointer from 0 and its PC from 4 before
     // anything else. Not seeing that means the CPU never came out of reset,

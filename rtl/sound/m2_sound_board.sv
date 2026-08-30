@@ -110,6 +110,27 @@ module m2_sound_board #(
   logic [15:0] iedb;
   logic        dtackn;
   logic  [2:0] ipl_n;
+  wire   [2:0] fc;
+
+  // AUTOVECTORED INTERRUPTS, WHICH MEANS VPA HAS TO BE ASSERTED.
+  //
+  // This was tied high, and the consequence is not subtle once seen. A 68000
+  // whose VPA never asserts runs a VECTORED acknowledge: it drives FC = 7,
+  // reads the low byte of the bus and uses it as a vector NUMBER. Nothing here
+  // answers an acknowledge cycle, so it read the unmapped default of 0xFF and
+  // jumped through vector 255 at 0x3FC -- into whatever happened to be there.
+  // The board then executed 0xFFFF, took the line-1111 exception at 0x2C, and
+  // looped: on hardware, 39.9 million bus cycles of it, never reading its UART.
+  //
+  // MAME's segam1audio raises this with set_input_line(M68K_IRQ_2), which is
+  // autovectored, so vector 26 at 0x68 is what the firmware has actually filled
+  // in. Assert VPA during the acknowledge and the 68000 takes it.
+  //
+  // It survived every simulation because the testbench never sent the board a
+  // byte: with rx_valid held at zero the RX interrupt never fired and this
+  // entire path was unreachable. The test now drives the link.
+  wire iack = as && (fc == 3'b111);
+  wire vpan = !iack;
 
   fx68k u_cpu (
     .clk(clk), .HALTn(1'b1),
@@ -117,9 +138,9 @@ module m2_sound_board #(
     .enPhi1(enPhi1), .enPhi2(enPhi2),
     .eRWn(rwn), .ASn(asn), .LDSn(ldsn), .UDSn(udsn),
     .E(), .VMAn(),
-    .FC0(), .FC1(), .FC2(),
+    .FC0(fc[0]), .FC1(fc[1]), .FC2(fc[2]),
     .BGn(), .oRESETn(), .oHALTEDn(),
-    .DTACKn(dtackn), .VPAn(1'b1), .BERRn(1'b1),
+    .DTACKn(dtackn), .VPAn(vpan), .BERRn(1'b1),
     .BRn(1'b1), .BGACKn(1'b1),
     .IPL0n(ipl_n[0]), .IPL1n(ipl_n[1]), .IPL2n(ipl_n[2]),
     .iEdb(iedb), .oEdb(oedb), .eab(eab)
