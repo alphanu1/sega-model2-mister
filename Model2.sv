@@ -1654,11 +1654,17 @@ m2_sound_board u_sndboard (
 	.pcm2_rom_data(pcm2_q),  .pcm2_rom_ack(p_ack[7]),
 	.snd_l(snd_l), .snd_r(snd_r),
 	.dbg_pc(snd_pc), .dbg_insns(snd_insns),
-	.dbg_ym_writes(snd_ymw), .dbg_pcm_writes(snd_pcmw)
+	.dbg_ym_writes(snd_ymw), .dbg_pcm_writes(snd_pcmw),
+	.dbg_pcm_samples(snd_samples),
+	.dbg_pcm_lat(snd_lat), .dbg_pcm_miss(snd_miss),
+	.dbg_pcm_under(snd_under), .dbg_pcm_level(snd_level)
 );
 
 wire [31:0] snd_pc, snd_insns;
 wire [15:0] snd_ymw, snd_pcmw;
+wire [31:0] snd_samples;
+wire [15:0] snd_lat, snd_miss, snd_under;
+wire  [7:0] snd_level;
 
 assign cpu_irq = { |(io_intreq & 12'hc00), |(io_intreq & 12'h3fc),
                    io_intreq[1],           io_intreq[0] };
@@ -2370,7 +2376,11 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// SCAN RESULT IN THE TOP BYTE, the 68000's own state below it. The scan
 	// answered its question -- byte 0x2340000, which is what the MRA said all
 	// along -- and the live question is now whether the CPU runs.
-	.a_valid(prof_tick), .a_addr({snd_found, snd_bytes[6:0], snd_pc[23:0]}),
+	// THE SAMPLE RATE, MEASURED ON THE BOARD. Two readings a second apart give
+	// it directly, against the chip's own 10 MHz / 224 = 44,643 Hz. "The sound
+	// is slow" has been reasoned about from simulated latencies for long
+	// enough; this is the number itself.
+	.a_valid(prof_tick), .a_addr(snd_samples),
 	// THE RETIRED-INSTRUCTION COUNT RIDES ALONG WITH THE IP.
 //
 // The profile says 91% of the board's time goes on the four memory
@@ -2379,10 +2389,10 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 // simulation finishes this initialisation in 15.9 M instructions. Two
 // consecutive samples give the instruction rate directly, which settles
 // whether this is a wrong branch or a slow machine.
-	.a_data(snd_insns),
+	.a_data({snd_under, snd_level, snd_miss[7:0]}),
 	.b_valid(uart_b2_valid), .b_addr(snd_pc),
 	.b_data(snd_insns),
-	.a_tag(8'h53), .b_tag(8'h48),          // 'S' found:linkbytes:68kPC | 68k bus cycles
+	.a_tag(8'h53), .b_tag(8'h48),          // 'S' cumulative PCM samples | underruns : buffer level : misses
 	                                       // 'H' the 68000's reset vector: want 00F0FFFE 00000300
 	                                       // '0' map0 min|max : sum
 	                                       // 'T' write count + trap/PA

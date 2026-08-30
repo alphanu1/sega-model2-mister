@@ -44,7 +44,6 @@ module m2_sound_board #(
   // exact even though no individual period is, which is what a sound CPU needs
   // -- a 4% error from rounding 4.8 down to 5 would put every tempo out.
   parameter int unsigned TICK_NUM = 20,     // 2 x 10 MHz: one enable per phase
-  parameter int unsigned PCM_NUM  = 10,     // the MULTIPCMs' own 10 MHz
   parameter int unsigned TICK_DEN = 48      // clk_sys
 ) (
   input  logic        clk,
@@ -68,10 +67,15 @@ module m2_sound_board #(
   // ports: model2.cpp gives pcm1 and pcm2 their own regions and MAME's own
   // region contents confirm the split -- pcm1 is mpr-16491+16492, pcm2 is
   // mpr-16493+16494, contiguous, so first 4 MB and second 4 MB of the image.
-  output logic        pcm1_rom_req,  output logic [21:0] pcm1_rom_addr,
-  input  logic  [7:0] pcm1_rom_data, input  logic        pcm1_rom_ack,
-  output logic        pcm2_rom_req,  output logic [21:0] pcm2_rom_addr,
-  input  logic  [7:0] pcm2_rom_data, input  logic        pcm2_rom_ack,
+  // FOUR-WORD BURSTS, not bytes. Each chip fetches one byte at a time and the
+  // controller returns four words, so seven of every eight were being thrown
+  // away -- and the chip stalls its own slot counter while a fetch is
+  // outstanding, so that waste came straight off the sample rate. See
+  // m2_pcm_fetch.sv, which holds the burst.
+  output logic        pcm1_rom_req,  output logic [21:3] pcm1_rom_addr,
+  input  logic [63:0] pcm1_rom_data, input  logic        pcm1_rom_ack,
+  output logic        pcm2_rom_req,  output logic [21:3] pcm2_rom_addr,
+  input  logic [63:0] pcm2_rom_data, input  logic        pcm2_rom_ack,
 
   // ---- the mix
   output logic signed [15:0] snd_l,
@@ -81,7 +85,17 @@ module m2_sound_board #(
   output logic [31:0] dbg_pc,
   output logic [31:0] dbg_insns,
   output logic [15:0] dbg_ym_writes,
-  output logic [15:0] dbg_pcm_writes
+  output logic [15:0] dbg_pcm_writes,
+  // Cumulative output samples from the first MULTIPCM. Two readings a second
+  // apart give the rate directly, against the chip's own 44,643 Hz.
+  output logic [31:0] dbg_pcm_samples,
+  output logic [15:0] dbg_pcm_lat,
+  output logic [15:0] dbg_pcm_miss,
+  // Underruns say whether the headroom is enough; the level says how close the
+  // buffer runs to empty. Both are the question "is the rate stage working",
+  // which is not answerable from the average rate.
+  output logic [15:0] dbg_pcm_under,
+  output logic  [7:0] dbg_pcm_level
 );
 
   // ----------------------------------------------------------- clock enables
@@ -277,19 +291,21 @@ module m2_sound_board #(
   // to the YM3438. With the sample chips stubbed the board is CORRECTLY silent,
   // which is what it was -- the FM measured non-zero only while its registers
   // settled and nothing at all thereafter.
-  logic [$clog2(TICK_DEN):0] pacc;
-  logic                      ce_pcm;
-  always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) begin
-      pacc <= '0; ce_pcm <= 1'b0;
-    end else if (pacc + PCM_NUM >= TICK_DEN) begin
-      pacc   <= pacc + PCM_NUM - TICK_DEN;
-      ce_pcm <= 1'b1;
-    end else begin
-      pacc   <= pacc + PCM_NUM;
-      ce_pcm <= 1'b0;
-    end
-  end
+  // THE CLOCK ENABLE IS NOT A FIXED DIVIDER ANY MORE, and this is the whole
+  // difference between sound that is flat and sound that crackles.
+  //
+  // The chip stops advancing while a fetch is outstanding, so memory latency
+  // stretches the sample PERIOD -- measured at 1075..3015 cycles against a
+  // nominal 1075, which is a sample rate moving by a factor of three from one
+  // sample to the next. A plain 10 MHz enable can only pass that straight
+  // through to the speaker.
+  //
+  // m2_pcm_rate runs each chip ABOVE 10 MHz so it can make up a stall, buffers
+  // what it produces, and drains that buffer at exactly 44,643 Hz. The chip is
+  // throttled by the buffer being full, so its average rate is the drain rate
+  // and its pitch and envelopes -- which advance per sample period -- stay
+  // right. One stage per chip: a stall in one must not throttle the other.
+  wire ce_pcm1, ce_pcm2;
 
   // The sample banks, at 0xC50000 and 0xC70000. Same field split the System 32
   // sound system uses on the same chip: high bank in bits 5:3, low in 2:0.
@@ -311,23 +327,46 @@ module m2_sound_board #(
   end
 
   wire signed [15:0] p1_l, p1_r, p2_l, p2_r;
+  wire signed [15:0] p1_raw_l, p1_raw_r, p2_raw_l, p2_raw_r;
+  wire               p1_stb, p2_stb;
+
+  wire        p1_creq, p1_cack, p2_creq, p2_cack;
+  wire  [4:0] p1_cslot, p2_cslot;
+  wire [21:0] p1_caddr, p2_caddr;
+  wire  [7:0] p1_cdata, p2_cdata;
 
   m2_multipcm u_pcm1 (
-    .clk(clk), .ce(ce_pcm), .rst(!rst_n),
+    .clk(clk), .ce(ce_pcm1), .rst(!rst_n),
     .cs(sel_pcm1 && ds), .we(we), .addr(addr[2:1]), .wdata(oedb[7:0]), .rdata(),
-    .rom_req(pcm1_rom_req), .rom_addr(pcm1_rom_addr),
-    .rom_data(pcm1_rom_data), .rom_ack(pcm1_rom_ack),
-    .bank_lo(bank1_lo), .bank_hi(bank1_hi),
-    .out_l(p1_l), .out_r(p1_r)
+    .rom_req(p1_creq), .rom_slot(p1_cslot), .rom_addr(p1_caddr),
+    .rom_data(p1_cdata), .rom_ack(p1_cack),
+    .bank_lo(bank1_lo), .bank_hi(bank1_hi), .sample_stb(p1_stb),
+    .out_l(p1_raw_l), .out_r(p1_raw_r)
+  );
+
+  m2_pcm_fetch u_p1fetch (
+    .clk(clk), .rst_n(rst_n),
+    .c_req(p1_creq), .c_slot(p1_cslot), .c_addr(p1_caddr), .c_ack(p1_cack), .c_data(p1_cdata),
+    .m_req(pcm1_rom_req), .m_addr(pcm1_rom_addr),
+    .m_ack(pcm1_rom_ack), .m_data(pcm1_rom_data),
+    .dbg_mean_lat(dbg_pcm_lat), .dbg_miss_1k(dbg_pcm_miss)
   );
 
   m2_multipcm u_pcm2 (
-    .clk(clk), .ce(ce_pcm), .rst(!rst_n),
+    .clk(clk), .ce(ce_pcm2), .rst(!rst_n),
     .cs(sel_pcm2 && ds), .we(we), .addr(addr[2:1]), .wdata(oedb[7:0]), .rdata(),
-    .rom_req(pcm2_rom_req), .rom_addr(pcm2_rom_addr),
-    .rom_data(pcm2_rom_data), .rom_ack(pcm2_rom_ack),
-    .bank_lo(bank2_lo), .bank_hi(bank2_hi),
-    .out_l(p2_l), .out_r(p2_r)
+    .rom_req(p2_creq), .rom_slot(p2_cslot), .rom_addr(p2_caddr),
+    .rom_data(p2_cdata), .rom_ack(p2_cack),
+    .bank_lo(bank2_lo), .bank_hi(bank2_hi), .sample_stb(p2_stb),
+    .out_l(p2_raw_l), .out_r(p2_raw_r)
+  );
+
+  m2_pcm_fetch u_p2fetch (
+    .clk(clk), .rst_n(rst_n),
+    .c_req(p2_creq), .c_slot(p2_cslot), .c_addr(p2_caddr), .c_ack(p2_cack), .c_data(p2_cdata),
+    .m_req(pcm2_rom_req), .m_addr(pcm2_rom_addr),
+    .m_ack(pcm2_rom_ack), .m_data(pcm2_rom_data),
+    .dbg_mean_lat(), .dbg_miss_1k()
   );
 
   // --------------------------------------------------- bus cycle / DTACK
@@ -403,8 +442,10 @@ module m2_sound_board #(
     if (!rst_n) begin
       dbg_pc <= 32'd0; dbg_insns <= 32'd0; as_d <= 1'b0;
       dbg_ym_writes <= 16'd0; dbg_pcm_writes <= 16'd0;
+      dbg_pcm_samples <= 32'd0;
     end else begin
       as_d <= as;
+      if (p1_stb) dbg_pcm_samples <= dbg_pcm_samples + 32'd1;
       if (as && !as_d) begin
         dbg_pc <= {8'd0, addr};
         if (!(&dbg_insns)) dbg_insns <= dbg_insns + 32'd1;
@@ -428,6 +469,20 @@ module m2_sound_board #(
                            + {{2{p2_r[15]}}, p2_r};
   assign snd_l = mix_l[17:2];
   assign snd_r = mix_r[17:2];
+
+  m2_pcm_rate u_rate1 (
+    .clk(clk), .rst_n(rst_n), .ce(ce_pcm1),
+    .s_valid(p1_stb), .s_l(p1_raw_l), .s_r(p1_raw_r),
+    .o_l(p1_l), .o_r(p1_r),
+    .dbg_underruns(dbg_pcm_under), .dbg_level(dbg_pcm_level)
+  );
+
+  m2_pcm_rate u_rate2 (
+    .clk(clk), .rst_n(rst_n), .ce(ce_pcm2),
+    .s_valid(p2_stb), .s_l(p2_raw_l), .s_r(p2_raw_r),
+    .o_l(p2_l), .o_r(p2_r),
+    .dbg_underruns(), .dbg_level()
+  );
 
   wire _unused = &{1'b0, uart_dout, uart_irq, uart_irq_tx, ym_irq_n, ym_sample,
                    eab[23:18], 1'b0};

@@ -5440,3 +5440,63 @@ precisely how this survived.
 
 On hardware: 48 of 48 bytes, and the 68000 in Daytona's main loop at 0x1632 /
 0x162E / 0x262E, all of which appear in MAME's own trace.
+
+**R91 — the MULTIPCM's output rate followed SDRAM latency, and the average rate
+is the wrong thing to measure.** Three builds were spent optimising a number
+that could not distinguish the two failures it was being used to judge.
+
+`m2_multipcm` advances its slot counter only while no fetch is outstanding:
+
+    else if (!rom_req) begin
+        tick <= tick + 1'b1;
+
+so memory latency does not delay a sample, it stretches the sample PERIOD.
+Measured against fetch latency in cycles, the period runs 1075..1805 at 100 and
+1075..3015 at 300, against a nominal 1075. That is a sample rate moving by a
+factor of nearly three from one sample to the next.
+
+*Why a change that improved every average made the sound worse.* With no cache
+EVERY fetch missed, so every period was equally long: uniformly flat, like a
+tape running slow, and tolerable. Adding a per-voice cache raised the average
+rate from 59% to 89% of nominal at high latency — and was reported from the
+board as "really bad… all crackly". Both statements are true. Average rate
+improved; STABILITY collapsed, because the miss count now varies per period.
+Crackle is a rate that moves, not a rate that is low, and the standard deviation
+of the period is the number that says so: 6.0% at latency 100, 15.8% at 300.
+
+*Two earlier attempts at this, both measured, both worth recording as ineffective.*
+A ONE-LINE buffer in front of the fetch made no difference whatever — identical
+figures to four digits with it enabled and disabled — because the chip
+round-robins 28 slots, so consecutive fetches come from 28 unrelated streams and
+every access evicts the one before. Its hit rate was zero. And answering a cache
+hit in one cycle instead of three also changed nothing, because the chip only
+issues fetches inside `if (ce)`, every 4.8 cycles: any acknowledge under about
+four cycles is free. Only MISSES cost anything.
+
+*The fix is not a faster cache.* `m2_pcm_rate` gives each chip an enable well
+above its nominal 10 MHz, buffers what it produces, and drains that buffer at
+exactly 48 MHz × 44,643 / 48,000,000. The chip is throttled by the buffer being
+full, so its average rate is the drain rate — pitch and envelopes advance per
+sample period and stay correct — and stalls are absorbed instead of reaching the
+speaker. The output rate is then a constant by construction rather than an
+average that happens to land near the right value.
+
+The headroom was sized by measurement, not taste. At a 600-cycle fetch latency
+the buffer ran dry 2,436 times at 13 MHz, 391 times at 16, and not at all at 20.
+The chip idles half the time at 20, which is the point: idle is what absorbs a
+stall.
+
+*And one thing that was checked only after the board reported a problem.* The
+cache was added for speed and never tested for CORRECTNESS. A cache returning
+the wrong byte does not sound slow, it sounds broken, and every measurement of
+the RATE would have looked fine while it did. It is now checked against the ROM
+on every read — 109,140 reads, 0 wrong — which should have been the first test
+written, not the last.
+
+*Where the sound actually is, for the record.* Counting the firmware's own
+register traffic over a boot: 5,688 writes to the MULTIPCMs against 1,090 to the
+YM3438. With the sample chips stubbed the core was correctly silent, and an
+earlier claim here that "the sound board makes sound" rested on counting
+non-zero samples across a whole run — which scores a burst of noise while the
+YM's registers settle exactly the same as music. Over the last tenth alone the
+FM was 0..0, 0 of 2,999,999 non-zero. Silent from the first second onward.

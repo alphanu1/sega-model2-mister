@@ -35,13 +35,35 @@ module m2_sndboard_harness #(
 
   // Bus observation, so the testbench can follow instruction fetches without
   // reaching inside the CPU.
-  output logic        pcm1_req, output logic [21:0] pcm1_addr,
-  input  logic  [7:0] pcm1_data, input  logic        pcm1_ack,
-  output logic        pcm2_req, output logic [21:0] pcm2_addr,
-  input  logic  [7:0] pcm2_data, input  logic        pcm2_ack,
+  output logic        pcm1_req, output logic [21:3] pcm1_addr,
+  input  logic [63:0] pcm1_data, input  logic        pcm1_ack,
+  output logic        pcm2_req, output logic [21:3] pcm2_addr,
+  input  logic [63:0] pcm2_data, input  logic        pcm2_ack,
 
   output logic signed [15:0] snd_l,
   output logic signed [15:0] snd_r,
+
+  // THE OUTPUT SAMPLE RATE, WHICH IS THE THING THAT IS ACTUALLY WRONG.
+  //
+  // Amplitude in the last tenth of a run measures whatever the music happens to
+  // be playing and moves non-monotonically with fetch latency, which makes it
+  // useless for the question at hand. The MULTIPCM emits one stereo sample per
+  // pass over its 28 slots, so counting slot wraps counts samples, and
+  // samples-per-second against the chip's own 10 MHz / 224 = 44,643 Hz says
+  // outright whether it is keeping time. Taken by hierarchical reference so
+  // nothing upstream is modified.
+  output logic [15:0] obs_under,
+  output logic  [4:0] obs_pcm_slot,
+
+  // THE CACHE'S ANSWERS, so they can be checked against the ROM itself. A cache
+  // was added for speed and never tested for CORRECTNESS, which is the wrong
+  // way round: a cache that returns the wrong byte does not sound slow, it
+  // sounds broken, and every measurement of the sample RATE would still look
+  // fine while it did.
+  output logic        obs_p1_req,
+  output logic        obs_p1_ack,
+  output logic [21:0] obs_p1_addr,
+  output logic  [7:0] obs_p1_data,
 
   output logic        obs_as,
   output logic [23:0] obs_addr,
@@ -60,9 +82,16 @@ module m2_sndboard_harness #(
     .pcm2_rom_data(pcm2_data), .pcm2_rom_ack(pcm2_ack),
     .snd_l(snd_l), .snd_r(snd_r),
     .dbg_pc(dbg_pc), .dbg_insns(dbg_insns),
-    .dbg_ym_writes(dbg_ym_writes), .dbg_pcm_writes(dbg_pcm_writes)
+    .dbg_ym_writes(dbg_ym_writes), .dbg_pcm_writes(dbg_pcm_writes),
+    .dbg_pcm_samples(), .dbg_pcm_lat(), .dbg_pcm_miss(),
+    .dbg_pcm_under(obs_under), .dbg_pcm_level()
   );
 
+  assign obs_pcm_slot = u_board.u_pcm1.slot;
+  assign obs_p1_req   = u_board.p1_creq;
+  assign obs_p1_ack   = u_board.p1_cack;
+  assign obs_p1_addr  = u_board.p1_caddr;
+  assign obs_p1_data  = u_board.p1_cdata;
   assign obs_as   = u_board.as;
   assign obs_addr = u_board.addr;
   assign obs_we   = u_board.we;

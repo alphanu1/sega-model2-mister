@@ -30,6 +30,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -125,8 +126,14 @@ int main(int argc, char **argv) {
   d->pcm2_ack = 0; d->pcm2_data = 0;
   d->rx_data = 0; d->rx_valid = 0; d->tx_ack = 0;
 
+  // TWO LATENCIES, NOT ONE. These were the same variable, and that made every
+  // reading of the sample rate uninterpretable: raising it slowed the 68000's
+  // own instruction fetch at the same time, so "silent at 80" was a CPU that
+  // had not started the music yet, read as a MULTIPCM cliff.
   const int ROM_LAT = std::getenv("M2_SND_ROMLAT")
                     ? std::atoi(std::getenv("M2_SND_ROMLAT")) : 6;
+  const int PCM_LAT = std::getenv("M2_SND_PCMLAT")
+                    ? std::atoi(std::getenv("M2_SND_PCMLAT")) : ROM_LAT;
   int lat = 0;
   bool serving = false;
 
@@ -160,21 +167,27 @@ int main(int argc, char **argv) {
     }
     // The two sample ports. Same latency model as the program ROM, because
     // they contend for the same controller on hardware.
-    if (d->pcm1_req && !p1_serving && !d->pcm1_ack) { p1_serving = true; p1_lat = ROM_LAT; }
+    if (d->pcm1_req && !p1_serving && !d->pcm1_ack) { p1_serving = true; p1_lat = PCM_LAT; }
     if (p1_serving) {
       if (p1_lat > 0) --p1_lat;
       else {
-        uint32_t a = d->pcm1_addr;
-        d->pcm1_data = (a < pcm1.size()) ? pcm1[a] : 0xff;
+        uint64_t a = uint64_t(d->pcm1_addr) * 8;   // burst index -> byte
+        uint64_t v = 0;
+        for (int b = 0; b < 8; ++b)
+          v |= uint64_t(a + b < pcm1.size() ? pcm1[a + b] : 0xff) << (b * 8);
+        d->pcm1_data = v;
         d->pcm1_ack = 1; p1_ack_left = ACK_HOLD; p1_serving = false;
       }
     }
-    if (d->pcm2_req && !p2_serving && !d->pcm2_ack) { p2_serving = true; p2_lat = ROM_LAT; }
+    if (d->pcm2_req && !p2_serving && !d->pcm2_ack) { p2_serving = true; p2_lat = PCM_LAT; }
     if (p2_serving) {
       if (p2_lat > 0) --p2_lat;
       else {
-        uint32_t a = d->pcm2_addr;
-        d->pcm2_data = (a < pcm2.size()) ? pcm2[a] : 0xff;
+        uint64_t a = uint64_t(d->pcm2_addr) * 8;
+        uint64_t v = 0;
+        for (int b = 0; b < 8; ++b)
+          v |= uint64_t(a + b < pcm2.size() ? pcm2[a + b] : 0xff) << (b * 8);
+        d->pcm2_data = v;
         d->pcm2_ack = 1; p2_ack_left = ACK_HOLD; p2_serving = false;
       }
     }
@@ -240,6 +253,10 @@ int main(int argc, char **argv) {
   int prev_as = 0;
   uint32_t first_pc = 0xffffffff;
   size_t ri = 0, resyncs = 0, skipped = 0;
+  long pcm_samples = 0, cache_reads = 0, cache_bad = 0;
+  long last_sample_c = 0, per_min = 1L<<30, per_max = 0, per_sum = 0, per_n = 0;
+  double per_sumsq = 0;
+  int  prev_slot = 0;
   int fm_min = 0, fm_max = 0, fm_tail_min = 0, fm_tail_max = 0;
   long fm_n = 0, fm_nz = 0, fm_tail_n = 0, fm_tail_nz = 0;
   uint32_t stuck_at = 0;
@@ -322,6 +339,38 @@ int main(int argc, char **argv) {
         if (l > fm_tail_max) fm_tail_max = l;
       }
     }
+    // EVERY BYTE THE CACHE HANDS BACK, AGAINST THE ROM. The chip captures
+    // c_data on the same edge it sees c_ack, so that is the edge to check.
+    if (d->obs_p1_ack && d->obs_p1_req) {
+      uint32_t a = d->obs_p1_addr;
+      uint8_t want = (a < pcm1.size()) ? pcm1[a] : 0xff;
+      ++cache_reads;
+      if (d->obs_p1_data != want) {
+        if (cache_bad < 6)
+          std::printf("  CACHE WRONG at %06X: got %02X want %02X\n",
+                      a, d->obs_p1_data, want);
+        ++cache_bad;
+      }
+    }
+    // THE PERIOD, NOT JUST THE RATE. A chip that is uniformly 50% slow sounds
+    // flat, like a tape running slow, and is tolerable. One that varies between
+    // 70% and 100% sounds warbly, and is much worse to listen to even though
+    // its AVERAGE rate is better. Average alone cannot tell those apart, which
+    // is why a change that raised the average was reported as sounding worse.
+    if (prev_slot == 27 && d->obs_pcm_slot == 0) {
+      ++pcm_samples;
+      if (last_sample_c) {
+        long per = c - last_sample_c;
+        if (pcm_samples > 200) {          // past the startup transient
+          if (per < per_min) per_min = per;
+          if (per > per_max) per_max = per;
+          per_sum += per; per_n++;
+          per_sumsq += double(per) * double(per);
+        }
+      }
+      last_sample_c = c;
+    }
+    prev_slot = d->obs_pcm_slot;
     prev_as = d->obs_as;
     if (!ref.empty() && ri >= ref.size()) break;
     // A divergence shows as the reference standing still while the board keeps
@@ -346,12 +395,33 @@ int main(int argc, char **argv) {
               (unsigned)d->dbg_ym_writes, (unsigned)d->dbg_pcm_writes);
   std::printf("  link: %ld of %zu bytes taken by the sound board\n",
               link_sent, sizeof link);
+  std::printf("  rate-stage underruns: %u\n", (unsigned)d->obs_under);
+  if (per_n > 0) {
+    double mean = double(per_sum) / per_n;
+    double var  = per_sumsq / per_n - mean * mean;
+    double sd   = var > 0 ? std::sqrt(var) : 0;
+    std::printf("  sample period: %ld..%ld cycles, mean %.0f, sd %.1f (%.1f%% jitter)\n",
+                per_min, per_max, mean, sd, 100.0 * sd / mean);
+  }
+  {
+    // 48 MHz / cycles-per-sample. The chip's own rate is 10 MHz / 224.
+    const double secs = double(c) / 48e6;
+    const double hz   = secs > 0 ? double(pcm_samples) / secs : 0;
+    std::printf("  MULTIPCM sample rate: %.0f Hz of 44643 (%.0f%%)\n",
+                hz, 100.0 * hz / 44643.0);
+  }
   std::printf("  FM output: %d..%d over %ld samples, %ld non-zero\n",
               fm_min, fm_max, fm_n, fm_nz);
   std::printf("  FM, last tenth: %d..%d, %ld of %ld non-zero\n",
               fm_tail_min, fm_tail_max, fm_tail_nz, fm_tail_n);
 
   int fails = 0;
+
+  std::printf("  sample cache: %ld reads, %ld wrong\n", cache_reads, cache_bad);
+  if (cache_bad) {
+    std::printf("  FAIL the sample cache returns wrong bytes\n");
+    ++fails;
+  }
 
   // STILL VOICING AT THE END, which is the property that matters and the one
   // the first version of this check missed. Counting non-zero samples over a

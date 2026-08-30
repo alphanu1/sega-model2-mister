@@ -18,6 +18,19 @@ module m2_multipcm (
     output      [7:0] rdata,
 
     output reg        rom_req,
+    // WHICH VOICE THIS FETCH IS FOR. Added; nothing else in this file changed.
+    // The chip round-robins 28 slots, so consecutive fetches come from 28
+    // unrelated sample streams and a cache that does not know which voice it is
+    // serving thrashes on every single access -- measured, no effect whatever.
+    // play_slot and df_slot are both written before rom_req rises, so this is a
+    // wire off existing state and changes no timing.
+    output wire [4:0] rom_slot,
+    // ONE STROBE PER OUTPUT SAMPLE. Added; the chip emits a stereo pair each
+    // time it finishes a pass over its 28 slots, so counting these counts the
+    // real sample rate -- 10 MHz / 224 = 44,643 Hz when it is keeping time. It
+    // is the only honest measure of "the sound is slow", because amplitude
+    // measures whatever the music is doing and moves the wrong way.
+    output reg        sample_stb,
     output reg [21:0] rom_addr,
     input       [7:0] rom_data,
     input             rom_ack,
@@ -30,6 +43,7 @@ module m2_multipcm (
 );
 
 assign rdata = 8'h00;
+assign rom_slot = rom_is_desc ? df_slot : play_slot;
 
 reg [7:0] sreg [0:27][0:7];
 reg [4:0] cur_slot;
@@ -127,6 +141,7 @@ always @(posedge clk) begin
         cur_slot_valid <= 1'b1;
         cur_reg <= 0;
         rom_req <= 0;
+        sample_stb <= 1'b0;
         rom_addr <= 0;
         rom_is_desc <= 0;
         desc_pending <= 0;
@@ -242,6 +257,7 @@ always @(posedge clk) begin
             end
         end
 
+        sample_stb <= 1'b0;
         if (ce) begin
             if (!df_busy && desc_pending != 0) begin
                 reg found;
@@ -273,6 +289,7 @@ always @(posedge clk) begin
                     tick <= 0;
                     if (slot == 5'd27) begin
                         slot <= 0;
+                        sample_stb <= 1'b1;
                         out_l <= clamp16(acc_l >>> 2);
                         out_r <= clamp16(acc_r >>> 2);
                         acc_l <= 0;
