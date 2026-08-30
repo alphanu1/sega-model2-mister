@@ -430,7 +430,15 @@ always_comb begin
 	p_req[6]  = snd_found & pcm1_req;
 	p_addr[6] = snd_base + PCM_OFFS + SDR_AW'({pcm1_addr[21:3], 2'b00});
 	p_req[7]  = snd_found & pcm2_req;
-	p_addr[7] = snd_base + PCM_OFFS + SDR_AW'(23'h400000)
+	// FOUR MEGABYTES ON, AND THESE ARE WORD ADDRESSES. This was 0x400000,
+	// which as a WORD offset is eight megabytes, so the second sample chip read
+	// four megabytes past the end of the samples and played whatever was there.
+	// It is the chip Daytona actually uses -- 4,128 register writes against 560
+	// for the first -- so almost all of the sound was garbage, at a sample rate
+	// measured on the board as 44,633 Hz of 44,643 with zero underruns. A
+	// correct rate playing wrong bytes is not distinguishable from a rate
+	// problem by listening, and two builds were spent on the rate.
+	p_addr[7] = snd_base + PCM_OFFS + SDR_AW'(23'h200000)
 	                     + SDR_AW'({pcm2_addr[21:3], 2'b00});
 	p_req[3]  = cc_req;
 	p_addr[3] = char_base + SDR_AW'(cc_addr);
@@ -2390,10 +2398,20 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 // consecutive samples give the instruction rate directly, which settles
 // whether this is a wrong branch or a slow machine.
 	.a_data({snd_under, snd_level, snd_miss[7:0]}),
-	.b_valid(uart_b2_valid), .b_addr(snd_pc),
+	// THE i960's OWN INSTRUCTION COUNT, so the first three minutes can be
+	// diagnosed rather than described. Two readings a known time apart give the
+	// rate directly; a machine that is slow for three minutes and then is not
+	// has either been waiting for something or executing something, and an
+	// instruction rate separates those outright -- a low rate that RISES is a
+	// stall clearing, a high rate throughout is work being done that stops.
+	//
+	// Paired with the sound board's bus-cycle count, because the two share the
+	// SDRAM and "the picture sped up" and "the sound did not" is exactly the
+	// kind of claim these two numbers settle.
+	.b_valid(uart_b2_valid), .b_addr(cpu_dbg_acc),
 	.b_data(snd_insns),
 	.a_tag(8'h53), .b_tag(8'h48),          // 'S' cumulative PCM samples | underruns : buffer level : misses
-	                                       // 'H' the 68000's reset vector: want 00F0FFFE 00000300
+	                                       // 'H' i960 retired instructions | 68000 bus cycles
 	                                       // '0' map0 min|max : sum
 	                                       // 'T' write count + trap/PA
 	.enable(1'b1),

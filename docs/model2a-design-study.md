@@ -5500,3 +5500,45 @@ earlier claim here that "the sound board makes sound" rested on counting
 non-zero samples across a whole run — which scores a burst of noise while the
 YM's registers settle exactly the same as music. Over the last tenth alone the
 FM was 0..0, 0 of 2,999,999 non-zero. Silent from the first second onward.
+
+**R92 — the second MULTIPCM was reading four megabytes past the end of the
+samples, and it is the one Daytona uses.** Two builds were spent on the sample
+RATE while the dominant sample chip played whatever happened to sit above the
+sound ROMs.
+
+`p_addr` is a WORD address. The offset from the first sample chip to the second
+was written as `0x400000`, which as a word offset is EIGHT megabytes; the second
+chip's 4 MB region begins four megabytes on, `0x200000` words. So every sample it
+fetched came from beyond the end of the image.
+
+*Which chip matters, from the firmware's own traffic:*
+
+    $c60001  4,128 writes     $c40001  560      (data)
+    $c60005  1,060            $c40005  168      (register select)
+    $c60003    948            $c40003   56      (slot select)
+
+Seven writes to the second chip for every one to the first. Almost all of
+Daytona's sound is on the chip that was reading nothing.
+
+*Why it took two builds to look here.* The board reported a sample rate of
+44,633 Hz against a nominal 44,643 — 100.0%, with zero buffer underruns, a
+healthy buffer level and an 88% cache hit rate. Every number said the timing was
+right, and the sound was still terrible. **A correct rate playing wrong bytes is
+not distinguishable from a rate problem by listening**, and the instinct on
+hearing bad audio was to keep measuring time.
+
+R91's rate stage is not wasted and is not the fix — the jitter it removes was
+real and measured, 1075..3015 cycles against a nominal 1075. Both faults were
+present at once, which is why fixing one of them changed the symptom without
+curing it.
+
+*The gap that let it through.* `sim/sound/tb_m2_sndboard.cpp` serves each chip
+its own correct 4 MB, so the fault lived entirely in `Model2.sv`'s SDRAM address
+arithmetic, which no test touches. The sound board's simulation cannot see where
+the top level points its memory ports. The program ROM does not have this
+problem any more because the board FINDS it (R89) rather than being told; the
+sample bases are still asserted, and the reason a signature scan does not
+trivially extend to them is that mpr-16491 and mpr-16493 begin with the SAME
+sixteen bytes — the two chips' regions are not distinguishable by their first
+bytes. Deriving the second from the first, which is now done, at least makes one
+constant instead of two.
