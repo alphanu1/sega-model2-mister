@@ -159,7 +159,18 @@ int main(int argc, char **argv) {
   dut->base_work = 0x20000; dut->base_board = 0x30000; dut->base_char = 0x38000;
   for (int i = 0; i < 200; ++i) step();
   dut->rst_n_cpu = 1; dut->rst_n_mem = 1;
-  for (int i = 0; i < 200; ++i) step();
+  // LONG ENOUGH FOR THE CACHE'S RESET SWEEP, WHICH IS NOT A FIXED NUMBER.
+  //
+  // The bridge clears every valid bit after reset one line per cycle, and
+  // refuses transactions until it has finished -- S_IDLE gates on
+  // !dc_sweeping. This wait was 200 cycles, which covered a 256-line cache and
+  // silently encoded that size: growing the cache to 2048 lines made the first
+  // write land during the sweep and the test reported work RAM reading zero,
+  // which looks like a bridge fault and is a testbench assumption.
+  //
+  // 8192 covers the largest cache anyone is likely to try next, and the cost of
+  // being generous here is nothing.
+  for (int i = 0; i < 8192; ++i) step();
 
   std::printf("m2_cpu_bridge\n");
 

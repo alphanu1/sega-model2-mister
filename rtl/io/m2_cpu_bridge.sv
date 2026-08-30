@@ -452,9 +452,23 @@ module m2_cpu_bridge #(
   // ROM is read-only, and the ROM loader finishes before the CPU starts -- so
   // there is no other master to be coherent with. The DPRAM is T_IO and is
   // never cached, which is what keeps the I/O board's side correct.
-  localparam int unsigned DC_LINES = 256;                 // x 8 B = 2 KB
-  localparam int unsigned DC_IDXW  = $clog2(DC_LINES);    // 8
-  localparam int unsigned DC_TAGW  = 32 - DC_IDXW - 3;    // 21
+  // 2 KB WAS NOT ENOUGH, MEASURED ON THE BOARD. The hit rate on the code the
+  // first three minutes run is 55 per cent -- two of every three accesses miss,
+  // 651,000 SDRAM round trips a second at one million instructions a second, so
+  // roughly two thirds of an instruction is a memory stall. That IS the 24
+  // cycles per instruction; nothing else needs to explain it.
+  //
+  // An earlier session measured this same cache at 99.57% on the boot path, so
+  // it is not the cache being wrong, it is this working set not fitting: 55% on
+  // a DIRECT-MAPPED cache is the signature of conflict thrashing rather than
+  // capacity alone.
+  //
+  // 2048 lines x 8 B = 16 KB, eight times the size, which is affordable now
+  // that R96 and R97 returned 95 M10K blocks. The tag narrows by three bits as
+  // the index widens, so the tag array barely grows.
+  localparam int unsigned DC_LINES = 2048;                // x 8 B = 16 KB
+  localparam int unsigned DC_IDXW  = $clog2(DC_LINES);    // 11
+  localparam int unsigned DC_TAGW  = 32 - DC_IDXW - 3;    // 18
 
   (* ramstyle = "M10K" *) logic [63:0]          dc_data [DC_LINES];
   (* ramstyle = "M10K" *) logic [DC_TAGW:0]     dc_tag  [DC_LINES];   // {valid,tag}

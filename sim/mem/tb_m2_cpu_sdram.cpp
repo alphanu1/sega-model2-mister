@@ -68,6 +68,7 @@ static bool cpu_read(uint32_t addr, uint32_t *out) {
 }
 
 static int write_acks = 0;
+static int fails_byte = 0;
 static void sd_write(uint32_t word_addr, uint16_t data) {
   dut->wr_req = 1; dut->wr_addr = word_addr; dut->wr_din = data;
   bool acked = false;
@@ -120,13 +121,54 @@ int main(int argc, char **argv) {
                 back, back == 0xdeadbeefu ? "ok" : "MISMATCH");
   }
 
+  // BYTE STORES MUST NOT SMEAR, which on hardware they do.
+  //
+  // The board's loop count at 0x501084 reads back 0x27272727 where it should be
+  // 0x00000027 -- the byte 0x27 in all four lanes -- and that turns a 39-pass
+  // loop into a 656-million-pass one, which is 85 minutes. The i960 replicates a
+  // stored byte across the word and relies on the ENABLES to pick a lane, so
+  // this replays exactly that: zero the word, store one byte with one enable,
+  // read it back.
+  //
+  // Every lane is tested because a fault that drops enables entirely and one
+  // that mishandles the high half look identical from lane 0 alone.
+  {
+    const uint32_t A = 0x00501084u;
+    struct { uint32_t be, wdat, want; } BT[] = {
+      { 0x1, 0x27272727u, 0x00000027u },
+      { 0x2, 0x27272727u, 0x00002700u },
+      { 0x4, 0x27272727u, 0x00270000u },
+      { 0x8, 0x27272727u, 0x27000000u },
+    };
+    for (auto &b : BT) {
+      // Zero the whole word first, exactly as the game does.
+      dut->bus_req = 1; dut->bus_we = 1; dut->bus_addr = A;
+      dut->bus_wdata = 0; dut->bus_be = 0xf;
+      for (int g = 0; g < 200000; ++g) { step(); if (dut->bus_ack) break; }
+      dut->bus_req = 0;
+      for (int k = 0; k < CPU_DIV * 4; ++k) step();
+      // Then the byte store.
+      dut->bus_req = 1; dut->bus_we = 1; dut->bus_addr = A;
+      dut->bus_wdata = b.wdat; dut->bus_be = b.be;
+      for (int g = 0; g < 200000; ++g) { step(); if (dut->bus_ack) break; }
+      dut->bus_req = 0;
+      for (int k = 0; k < CPU_DIV * 4; ++k) step();
+      uint32_t back = 0;
+      cpu_read(A, &back);
+      const bool ok = (back == b.want);
+      std::printf("  byte store be=%x: got=%08x want=%08x  %s\n",
+                  b.be, back, b.want, ok ? "ok" : "SMEARED");
+      if (!ok) ++fails_byte;
+    }
+  }
+
   struct { uint32_t addr, want; const char *name; } T[] = {
     { 0,  0x00000000u, "SAT  mem[0]"  },
     { 4,  0x000000c0u, "PRCB mem[4]"  },
     { 12, 0x00000860u, "IP   mem[12]" },
     { 16, 0xfffff6e0u, "     mem[16]" },
   };
-  int fails = 0;
+  int fails = fails_byte;
   for (auto &t : T) {
     uint32_t got = 0;
     if (!cpu_read(t.addr, &got)) {
