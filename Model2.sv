@@ -122,7 +122,7 @@ localparam CONF_STR = {
 	// between the two R items it silently broke everything after it -- the OSD
 	// Reset stopped pulsing status[0], measured as a reset-edge counter that
 	// ignored the button entirely.
-	"J1,Coin,Start,Test,Service;",
+	"J1,Coin,Start,Test,Service,VR1 Red,VR4 Green,Accel,Brake,Gear Up,Gear Down,VR2 Blue,VR3 Yellow;",
 	"v,0;",
 	"V,v",`BUILD_DATE
 };
@@ -170,6 +170,8 @@ hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
 	.ioctl_addr(ioctl_addr),
 	.ioctl_dout(ioctl_dout),
 	.joystick_0(joystick_0),
+	.joystick_l_analog_0(joy_analog),
+	.paddle_0(paddle),
 	.ioctl_wait(ioctl_wait),
 	// NVRAM save: the framework reads backup SRAM back through ioctl_din when
 	// it saves the MRA's <nvram> section. upload_req stays 0 -- saves are
@@ -185,6 +187,8 @@ hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
 );
 
 wire [31:0] joystick_0;
+wire [15:0] joy_analog;
+wire  [7:0] paddle;
 wire        ioctl_download, ioctl_wr, ioctl_wait, ioctl_upload;
 wire [15:0] ioctl_din;
 wire [15:0] ioctl_index, ioctl_dout;
@@ -1986,7 +1990,7 @@ m2_ioz80 #(.CEN_DIV(12)) u_ioz80 (
 	// an_callback<0..2> are STEER/ACCEL/BRAKE; <3> is never bound for this
 	// game and an unbound devcb_read8 reads 0xFF, which is what MAME's
 	// firmware deposits at DPRAM 0x03.
-	.adc0(8'h80), .adc1(8'h20), .adc2(8'h20), .adc3(8'hFF),
+	.adc0(steer), .adc1(accel), .adc2(brake), .adc3(8'hFF),
 	.z_we(zio_we), .z_addr(zio_addr), .z_wdata(zio_wdata), .z_rdata(zio_rdata),
 	.dbg_ee(), .dbg_wrcnt(), .dbg_wr_stb(), .dbg_dout(), .dbg_di(),
 	.dbg_rd_end(), .dbg_ra(), .dbg_rdat(),
@@ -2476,10 +2480,10 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// Paired with the sound board's bus-cycle count, because the two share the
 	// SDRAM and "the picture sped up" and "the sound did not" is exactly the
 	// kind of claim these two numbers settle.
-	.b_valid(uart_b2_valid), .b_addr(snd_samples),
-	.b_data({snd_under, snd_level, snd_miss[7:0]}),
+	.b_valid(uart_b2_valid), .b_addr(bak_first),
+	.b_data({coin_edges, iob_in0, iob_in1}),
 	.a_tag(8'h53), .b_tag(8'h48),          // 'S' retired IP (512-entry ring) | cumulative i960 instructions
-	                                       // 'H' PCM samples | underruns : buffer level : cache misses
+	                                       // 'H' backup RAM first dword | coin edges : IN0 : IN1
 	                                       // '0' map0 min|max : sum
 	                                       // 'T' write count + trap/PA
 	.enable(1'b1),
@@ -2535,11 +2539,117 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	end
 end
 
-// Cabinet inputs, model2.cpp daytona bit order, active low. TEST and SERVICE
-// come from the OSD-mapped buttons; the gearbox sits in neutral.
-wire [7:0] iob_in0 = ~{3'b000, joystick_0[5], joystick_0[7], joystick_0[6],
+// ---------------------------------------------------------- cabinet inputs
+//
+// model2.cpp's `daytona` port map, which is `model2` plus `gears` with IN0 and
+// IN1 modified. Four buttons were wired and the rest -- the four VR buttons,
+// the gearbox and every analog axis -- were not connected at all.
+//
+//   IN0  0x01 COIN1   0x02 COIN2   0x04 TEST    0x08 SERVICE
+//        0x10 START1  0x20 VR1 Red 0x40 VR2 Blue 0x80 VR3 Yellow    all active low
+//   IN1  0x01 VR4 Green (active low)   0x0e unused
+//        0x70 GEARBOX -- ACTIVE HIGH, and the one field here that is not
+//        0x80 unused
+//   IN2  unused, 0xff
+//
+// Analog goes through the I/O board's ADC: channel 0 steering with 0x80 at
+// centre, 1 accelerator and 2 brake both idling at 0x20. MAME's own limits are
+// PORT_MINMAX(0x20, 0xe0) on all three.
+wire [7:0] iob_in0 = ~{joystick_0[15], joystick_0[14], joystick_0[8],
+                       joystick_0[5], joystick_0[7], joystick_0[6],
                        1'b0, joystick_0[4]};
-wire [7:0] iob_in1 = 8'h8F;
+
+// THE GEARBOX IS A STATE, NOT A BUTTON. The cabinet has a five-position shifter
+// and MAME models it as five buttons feeding daytona_gearbox_r, which returns
+// gearvalue[] = {0, 2, 1, 6, 5} for N,1,2,3,4 -- deliberately NOT a binary
+// count, because the real shifter is a set of microswitches and the game reads
+// their pattern. A gamepad has no shifter, so Gear Up and Gear Down step
+// through the five positions and the same table converts.
+logic [2:0] gear;                    // 0=N, 1..4
+wire        gup   = joystick_0[12];
+wire        gdn   = joystick_0[13];
+logic       gup_d, gdn_d;
+always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
+	if (!cpu_rst_n) begin
+		gear <= 3'd0; gup_d <= 1'b0; gdn_d <= 1'b0;
+	end else begin
+		gup_d <= gup; gdn_d <= gdn;
+		if (gup && !gup_d && gear != 3'd4) gear <= gear + 3'd1;
+		if (gdn && !gdn_d && gear != 3'd0) gear <= gear - 3'd1;
+	end
+end
+logic [2:0] gearval;
+always_comb begin
+	case (gear)
+		3'd1:    gearval = 3'd2;
+		3'd2:    gearval = 3'd1;
+		3'd3:    gearval = 3'd6;
+		3'd4:    gearval = 3'd5;
+		default: gearval = 3'd0;     // neutral
+	endcase
+end
+
+wire [7:0] iob_in1 = {1'b1, gearval, 3'b111, ~joystick_0[9]};
+
+// STEERING: the analog stick, with the D-pad as a ramp for anyone without one.
+//
+// MAME's range is 0x20..0xe0, so +-96 about 0x80. The stick is signed +-127, so
+// three quarters of it lands exactly on that range. The digital ramp exists
+// because a menu that needs left and right is unusable on a d-pad otherwise,
+// and it is a RAMP rather than a jump to the rail so the wheel sweeps as a real
+// one would.
+wire signed [7:0] ax = joy_analog[7:0];
+wire signed [8:0] ax34 = {ax[7], ax} - {{3{ax[7]}}, ax[7:2]};   // x - x/4
+logic [7:0] steer_dig;
+logic [9:0] steer_div;
+always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
+	if (!cpu_rst_n) begin
+		steer_dig <= 8'h80; steer_div <= 10'd0;
+	end else begin
+		steer_div <= steer_div + 10'd1;
+		if (steer_div == 10'd0) begin
+			if (joystick_0[1]) begin                       // left
+				if (steer_dig > 8'h21) steer_dig <= steer_dig - 8'd1;
+			end else if (joystick_0[0]) begin              // right
+				if (steer_dig < 8'hdf) steer_dig <= steer_dig + 8'd1;
+			end else if (steer_dig > 8'h80) steer_dig <= steer_dig - 8'd1;
+			else if (steer_dig < 8'h80) steer_dig <= steer_dig + 8'd1;
+		end
+	end
+end
+wire use_stick = (ax > 8'sd12) || (ax < -8'sd12);
+wire [7:0] steer = |paddle ? paddle
+                 : use_stick ? 8'(9'sh080 + ax34)
+                 : steer_dig;
+
+// PEDALS: buttons, full travel. 0x20 idle to 0xe0 pressed, MAME's own limits.
+wire [7:0] accel = joystick_0[10] ? 8'he0 : 8'h20;
+wire [7:0] brake = joystick_0[11] ? 8'he0 : 8'h20;
+
+// COIN PATH INSTRUMENT. The board hears a coin -- it plays the sound -- and does
+// not credit it, and there are three different places that can be true in: the
+// button may not be reaching IN0 at all, the I/O board's Z80 may not be counting
+// it, or the credit may be arriving and being consumed. Counting the edge at the
+// pin separates the first from the other two, which is the split worth having
+// before guessing.
+//
+// The backup RAM's first dword rides along because it was just converted from an
+// inferred array to an explicit altsyncram, and unwritten backup MUST read 0xFF:
+// one that powers up as ZERO looks to the game like a valid all-zero save, which
+// is exactly the shape of "coins do nothing". If this reads 0xFFFFFFFF on a
+// fresh boot the .mif took; if it reads 0x00000000 it did not, and that is the
+// fault rather than anything to do with inputs.
+logic [15:0] coin_edges;
+logic        coin_d;
+always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
+	if (!cpu_rst_n) begin
+		coin_edges <= 16'd0; coin_d <= 1'b1;
+	end else begin
+		coin_d <= iob_in0[0];
+		if (coin_d && !iob_in0[0] && !(&coin_edges))
+			coin_edges <= coin_edges + 16'd1;   // active low: falling edge is a coin
+	end
+end
 
 m2_ioboard #(
 	.USE_Z80(1'b1),
