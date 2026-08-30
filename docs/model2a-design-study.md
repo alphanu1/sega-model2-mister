@@ -5742,3 +5742,40 @@ reads and writes one address and is genuinely 16,384 x 64 bits. The only way to
 reduce it is to make it smaller, which costs hit rate and tearing (R86). The
 I/O board's DPRAM has the same 1W2R shape but 1024x8 fits in a single block, so
 converting it saves two and is not worth the risk to a working handshake.
+
+**R98 — the coin reaches the i960 correctly; the game declines to credit it.**
+The whole input chain is measured good, so this is a configuration question and
+not a hardware one, and the measurement is worth keeping so nobody re-walks it.
+
+    button -> IN0 bit 0          20 edges for 20 presses
+    Z80 -> DPRAM word 4          lowest value ever written 0xFE
+    i960 reads DPRAM word 4      yes -- see below
+
+The last line needs no instrument. **Start, Test and Service are bits 4, 2 and 3
+of the SAME BYTE the coin is bit 0 of**, and all three work. There is no
+mechanism by which bit 0 of a byte arrives differently from bits 2, 3 and 4, so
+the i960 is reading that byte, seeing the coin, and not awarding a credit.
+
+Free play reaches game select, so the game itself runs.
+
+*Two numbering conventions made this look harder than it was.* R65 recorded in0
+landing in "DPRAM byte 0x08" and a MAME write tap showed a coin changing "byte
+0x10", which read as a contradiction for most of a session. They are the same
+place: MAME's DPRAM device is umasked to bytes 0 and 2 of each dword, so DPRAM
+byte 0x08 is i960 address 0x01c00010 is dword 4 is `dp_lo[4]`. A byte index into
+a umasked device is not a byte index into the device's own memory, and neither
+figure was wrong.
+
+*And an instrument that measured the wrong thing first.* The first version of
+this tap latched the last non-idle DPRAM write ANYWHERE. The Z80 writes word 1
+several times a frame, so it counted 255 writes and never held the coin at all.
+An instrument has to be selective about the signal it is measuring or the
+busiest one wins — the same lesson as the channel starvation in the debug
+streamer, arrived at from the other direction.
+
+*What remains, and it is not RTL.* MAME's i960 responds to a coin by starting a
+repeated write to 0x1c0001c byte 2 that does not happen before it — the coin
+counter output. Whether ours does the same would say if the coin routine runs at
+all, but the likelier answer is Daytona's own coinage configuration, which lives
+in backup RAM and is set from the service menu. That menu is reachable now: VR1
+Red and VR4 Green are its down and up.
