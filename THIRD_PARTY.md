@@ -71,6 +71,27 @@ and LFO modulation remain bounded approximations; the sample-selection/playback
 path is cycle deterministic." That is the right trade here — this is where
 Daytona's sound actually lives, and the alternative was silence.
 
+**CHANGED: `banked()` and the bank port — the two boards bank differently.**
+`segam1audio.cpp` gives each MULTIPCM a TWO megabyte space, the first megabyte
+direct and the second a window onto one of FOUR one-megabyte pages selected by
+two bits:
+
+    map(0x000000, 0x0fffff).rom();
+    map(0x100000, 0x1fffff).bankr(m_mpcmbank1);
+    m_mpcmbank1->configure_entries(0, 4, region->base(), 0x100000);
+
+System 32 banks the same part in 512 KB pages with a three-bit selector split
+across `bank_lo`/`bank_hi`. With Daytona's bank value of 0x01 that scheme sends
+0x100000 to 0x080000 and everything above 0x180000 into the first 512 KB — which
+was audible as correct music (below 1 MB, unbanked) and voice samples that came
+out as a foghorn (above it). Study R95.
+
+`banked()` is replaced and the two three-bit fields become one two-bit
+`bank_sel`. Nothing else in the file is touched. **Also added: `rom_slot` and
+`sample_stb` outputs**, both wires off existing state, changing no timing —
+`rom_slot` so the sample cache can index by voice, `sample_stb` so the output
+rate can be measured.
+
 `rdata` is tied to 0, which is what the firmware needs: it polls bit 0 of
 0xC40001 as a busy flag and spins until it clears.
 
