@@ -5698,3 +5698,47 @@ after a build that produced 454.
 read.** Every M10K figure quoted in R86 and since came from the stale report and
 should be re-checked against a summary before being relied on. A build's numbers
 must come from a file whose timestamp has been looked at.
+
+**R97 — 95 M10K blocks in total, and the one-write-two-read shape appears three
+times in this design.** R96 covered `tram` and `pal`; the survey that should have
+gone with it is here, because "are there others" is the question that turns one
+fix into a policy.
+
+*Every memory in the design, by shape:*
+
+| memory | shape | replicated | blocks |
+|---|---|---|---|
+| `tram`, `pal` | 1W **2R** | yes | 79 saved (R96) |
+| `m2_backup` b0-b3 | 1W **2R** — CPU and the HPS save path | yes | **16 saved** |
+| `m2_ioboard` dp_hi/dp_lo | 1W **2R** — i960 and Z80 | yes | ~2, not taken |
+| `m2_char_cache` cdata | 1W1R, same address | **no** | 128 is its real size |
+| sound board RAM, Z80 ROM/RAM, dc_tag, ipring | 1W1R | no | — |
+
+    533 / 553 (96%)  ->  438 / 553 (79%)      -95 blocks
+    28,170 ALM (67%) ->  30,095 ALM (72%)     +1,925
+    timing met at 0.471 ns
+
+*The backup was already flagged and the flag understated it by four times.* Its
+own comment reads "Costs a second read port on each lane, which Quartus serves
+by duplication: ~4 M10K, debug-only." The real figure is 16 — each 4096x8 lane
+needs FOUR blocks, not one, and all four lanes are duplicated. A cost estimated
+once in a comment and never re-measured against a fitter report drifts.
+
+*Port A carries the write and the CPU's read together*, which works because `ww`
+IS `word` whenever `hps_we` is low — that covers every CPU read and every CPU
+write — and when `hps_we` is high the read is discarded, because the CPU is held
+in reset for the whole of that transfer.
+
+*And the power-up value is part of the contract, not a detail.* Unwritten backup
+RAM must read 0xFF: a battery-backed RAM that powers up as ZERO looks to the
+game like a valid all-zero save. The inferred array got that from an `initial`
+block, which an explicit `altsyncram` does not have, so it comes from
+`rtl/mem/ff4096x8.mif` with `power_up_uninitialized` FALSE. Converting a memory
+without carrying its initial contents across would have been a silent save-data
+fault that no resource report could show.
+
+*What is NOT available.* `m2_char_cache`'s 128 blocks are not replication — it
+reads and writes one address and is genuinely 16,384 x 64 bits. The only way to
+reduce it is to make it smaller, which costs hit rate and tearing (R86). The
+I/O board's DPRAM has the same 1W2R shape but 1024x8 fits in a single block, so
+converting it saves two and is not worth the risk to a working handshake.

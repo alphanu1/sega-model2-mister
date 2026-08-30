@@ -310,6 +310,9 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/m2_i8251.sv
 # resolves those against the project directory and its search paths, so without
 # this the ROMs synthesise as all zeroes -- a CPU that fits, meets timing, and
 # executes nothing.
+# ff4096x8.mif -- the backup RAM powers up 0xFF and altsyncram takes that
+# from a file. Found via the search path, like fx68k's microcode.
+set_global_assignment -name SEARCH_PATH rtl/mem
 set_global_assignment -name SEARCH_PATH rtl/sound/fx68k
 set_global_assignment -name SEARCH_PATH rtl/sound/jt12
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/m2_sound_link.sv

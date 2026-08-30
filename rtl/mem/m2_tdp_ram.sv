@@ -66,7 +66,13 @@
 
 module m2_tdp_ram #(
   parameter int unsigned DW = 16,
-  parameter int unsigned AW = 15
+  parameter int unsigned AW = 15,
+  // A .mif for memories whose POWER-UP VALUE IS PART OF THE CONTRACT. The
+  // backup RAM must read 0xFF unwritten -- a battery-backed RAM that powers up
+  // as zero looks to the game like a valid all-zero save. The inferred array
+  // got that from an `initial` block; altsyncram gets it from a file, and
+  // power_up_uninitialized must be FALSE for it to be honoured.
+  parameter INIT_FILE = "UNUSED"
 ) (
   input  logic          clk,
 
@@ -83,6 +89,11 @@ module m2_tdp_ram #(
 
 `ifdef VERILATOR
   (* ramstyle = "M10K" *) logic [DW-1:0] mem [1 << AW];
+  // Simulation mirrors the .mif's effect without parsing it: the only init this
+  // design asks for is all-ones, and stating that here keeps the two paths
+  // honest about a value the game can see.
+  initial if (INIT_FILE != "UNUSED")
+    for (int i = 0; i < (1 << AW); i++) mem[i] = {DW{1'b1}};
   always_ff @(posedge clk) begin
     a_q <= mem[a_addr];
     b_q <= mem[b_addr];
@@ -109,6 +120,7 @@ module m2_tdp_ram #(
     .read_during_write_mode_port_a   ("DONT_CARE"),
     .read_during_write_mode_port_b   ("DONT_CARE"),
     .read_during_write_mode_mixed_ports ("DONT_CARE"),
+    .init_file                       (INIT_FILE),
     .power_up_uninitialized          ("FALSE"),
     .lpm_type                        ("altsyncram")
   ) u_ram (

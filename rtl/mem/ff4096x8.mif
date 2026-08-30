@@ -1,0 +1,12 @@
+-- Unwritten backup RAM reads 0xFF, which is a standing rule in this project and
+-- not a detail: a battery-backed RAM that powers up as zero looks to the game
+-- like a valid, all-zero save, and Daytona's boot treats that differently from
+-- an uninitialised one. The inferred array got this from an `initial` block;
+-- an explicit altsyncram gets it from here.
+DEPTH = 4096;
+WIDTH = 8;
+ADDRESS_RADIX = HEX;
+DATA_RADIX = HEX;
+CONTENT BEGIN
+  [000..FFF] : FF;
+END;

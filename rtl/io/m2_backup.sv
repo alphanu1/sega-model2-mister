@@ -78,18 +78,19 @@ module m2_backup (
   output logic [15:0] dbg_writes
 );
 
-  (* ramstyle = "M10K" *) logic [7:0] b0 [4096];
-  (* ramstyle = "M10K" *) logic [7:0] b1 [4096];
-  (* ramstyle = "M10K" *) logic [7:0] b2 [4096];
-  (* ramstyle = "M10K" *) logic [7:0] b3 [4096];
+  // FOUR LANES, EACH TRUE DUAL-PORT. These were inferred arrays with one write
+  // port and TWO read ports -- the CPU's and the HPS save path's -- and Quartus
+  // 17.0 replicates that shape rather than inferring a true dual-port, so each
+  // lane cost twice its blocks. Study R96 has the measurement on tram; this is
+  // the same fault in the same idiom.
+  //
+  // Port A carries the write and the CPU's read together, which works because
+  // `ww` IS `word` whenever the CPU writes -- the HPS only writes while the CPU
+  // is in reset, and its read result is discarded. Port B is the save path.
 
-  initial begin
-    for (int i = 0; i < 4096; i++) begin
-      b0[i] = 8'hff; b1[i] = 8'hff; b2[i] = 8'hff; b3[i] = 8'hff;
-    end
-  end
 
-  logic [7:0] q0, q1, q2, q3;
+  wire [7:0] q0, q1, q2, q3;
+  wire [7:0] dq0, dq1, dq2, dq3;
 
   always_ff @(posedge clk) begin
     if (sel && we) begin
@@ -112,22 +113,23 @@ module m2_backup (
   wire [11:0] ww   = hps_we ? hps_word  : word;
   wire [31:0] wd   = hps_we ? hps_wdata : wdata;
   wire  [3:0] wb   = hps_we ? hps_be    : (sel && we) ? be : 4'b0000;
-  always_ff @(posedge clk) begin
-    if (wsel && wb[0]) b0[ww] <= wd[7:0];
-    q0 <= b0[word];
-  end
-  always_ff @(posedge clk) begin
-    if (wsel && wb[1]) b1[ww] <= wd[15:8];
-    q1 <= b1[word];
-  end
-  always_ff @(posedge clk) begin
-    if (wsel && wb[2]) b2[ww] <= wd[23:16];
-    q2 <= b2[word];
-  end
-  always_ff @(posedge clk) begin
-    if (wsel && wb[3]) b3[ww] <= wd[31:24];
-    q3 <= b3[word];
-  end
+  // ONE ADDRESS SERVES THE WRITE AND THE CPU'S READ, in every case that can
+  // occur. `ww` is `word` whenever hps_we is low, which covers every CPU read
+  // and every CPU write; when hps_we is high the address is the HPS's and the
+  // read result is discarded, because the CPU is held in reset for the whole of
+  // that transfer. So port A takes `ww` unconditionally.
+  m2_tdp_ram #(.DW(8), .AW(12), .INIT_FILE("ff4096x8.mif")) u_b0 (
+    .clk(clk), .a_addr(ww), .a_din(wd[7:0]),   .a_we(wsel & wb[0]), .a_q(q0),
+    .b_addr(dbg_word), .b_q(dq0));
+  m2_tdp_ram #(.DW(8), .AW(12), .INIT_FILE("ff4096x8.mif")) u_b1 (
+    .clk(clk), .a_addr(ww), .a_din(wd[15:8]),  .a_we(wsel & wb[1]), .a_q(q1),
+    .b_addr(dbg_word), .b_q(dq1));
+  m2_tdp_ram #(.DW(8), .AW(12), .INIT_FILE("ff4096x8.mif")) u_b2 (
+    .clk(clk), .a_addr(ww), .a_din(wd[23:16]), .a_we(wsel & wb[2]), .a_q(q2),
+    .b_addr(dbg_word), .b_q(dq2));
+  m2_tdp_ram #(.DW(8), .AW(12), .INIT_FILE("ff4096x8.mif")) u_b3 (
+    .clk(clk), .a_addr(ww), .a_din(wd[31:24]), .a_we(wsel & wb[3]), .a_q(q3),
+    .b_addr(dbg_word), .b_q(dq3));
 
   assign rdata = {q3, q2, q1, q0};
 
@@ -143,11 +145,6 @@ module m2_backup (
   // device's 83,820. The R53 lesson restated: an array's port count is part of
   // its type, and one reader too many silently changes what it is.
 
-  logic [7:0] dq0, dq1, dq2, dq3;
-  always_ff @(posedge clk) begin
-    dq0 <= b0[dbg_word]; dq1 <= b1[dbg_word];
-    dq2 <= b2[dbg_word]; dq3 <= b3[dbg_word];
-  end
   assign dbg_q = {dq3, dq2, dq1, dq0};
 
   // WHAT THE GAME'S FIRST READ OF THE SETTINGS DWORD ACTUALLY RETURNED. The
