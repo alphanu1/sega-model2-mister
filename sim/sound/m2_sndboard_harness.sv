@@ -9,7 +9,9 @@
 `timescale 1ns/1ps
 
 module m2_sndboard_harness #(
-  parameter int unsigned ROM_LAT = 6      // clk_sys cycles, ~ an SDRAM burst
+  parameter int unsigned ROM_LAT = 6,     // clk_sys cycles, ~ an SDRAM burst
+  parameter bit PCM_CACHE = 1'b1,
+  parameter bit PCM_RATE  = 1'b1
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -70,7 +72,7 @@ module m2_sndboard_harness #(
   output logic        obs_we
 );
 
-  m2_sound_board u_board (
+  m2_sound_board #(.PCM_CACHE(PCM_CACHE), .PCM_RATE(PCM_RATE)) u_board (
     .clk(clk), .rst_n(rst_n),
     .rx_data(rx_data), .rx_valid(rx_valid), .rx_ack(rx_ack),
     .tx_data(tx_data), .tx_valid(tx_valid), .tx_ack(tx_ack),

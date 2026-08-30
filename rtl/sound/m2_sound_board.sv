@@ -43,6 +43,12 @@ module m2_sound_board #(
   // TICK_NUM every cycle and pulse when it crosses TICK_DEN. The average is
   // exact even though no individual period is, which is what a sound CPU needs
   // -- a 4% error from rounding 4.8 down to 5 would put every tempo out.
+  // The two sound stages, switchable from the top so they can be turned on one
+  // at a time against the board rather than together. Both were written for
+  // real, measured faults and both were bypassed while a THIRD fault -- a port
+  // width mismatch in Model2.sv, R94 -- was making everything unlistenable.
+  parameter bit PCM_CACHE = 1'b1,          // per-voice sample line
+  parameter bit PCM_RATE  = 1'b1,          // headroom + fixed-rate drain
   parameter int unsigned TICK_NUM = 20,     // 2 x 10 MHz: one enable per phase
   parameter int unsigned TICK_DEN = 48      // clk_sys
 ) (
@@ -344,7 +350,7 @@ module m2_sound_board #(
     .out_l(p1_raw_l), .out_r(p1_raw_r)
   );
 
-  m2_pcm_fetch u_p1fetch (
+  m2_pcm_fetch #(.BYPASS(!PCM_CACHE)) u_p1fetch (
     .clk(clk), .rst_n(rst_n),
     .c_req(p1_creq), .c_slot(p1_cslot), .c_addr(p1_caddr), .c_ack(p1_cack), .c_data(p1_cdata),
     .m_req(pcm1_rom_req), .m_addr(pcm1_rom_addr),
@@ -361,7 +367,7 @@ module m2_sound_board #(
     .out_l(p2_raw_l), .out_r(p2_raw_r)
   );
 
-  m2_pcm_fetch u_p2fetch (
+  m2_pcm_fetch #(.BYPASS(!PCM_CACHE)) u_p2fetch (
     .clk(clk), .rst_n(rst_n),
     .c_req(p2_creq), .c_slot(p2_cslot), .c_addr(p2_caddr), .c_ack(p2_cack), .c_data(p2_cdata),
     .m_req(pcm2_rom_req), .m_addr(pcm2_rom_addr),
@@ -470,14 +476,14 @@ module m2_sound_board #(
   assign snd_l = mix_l[17:2];
   assign snd_r = mix_r[17:2];
 
-  m2_pcm_rate u_rate1 (
+  m2_pcm_rate #(.BYPASS(!PCM_RATE)) u_rate1 (
     .clk(clk), .rst_n(rst_n), .ce(ce_pcm1),
     .s_valid(p1_stb), .s_l(p1_raw_l), .s_r(p1_raw_r),
     .o_l(p1_l), .o_r(p1_r),
     .dbg_underruns(dbg_pcm_under), .dbg_level(dbg_pcm_level)
   );
 
-  m2_pcm_rate u_rate2 (
+  m2_pcm_rate #(.BYPASS(!PCM_RATE)) u_rate2 (
     .clk(clk), .rst_n(rst_n), .ce(ce_pcm2),
     .s_valid(p2_stb), .s_l(p2_raw_l), .s_r(p2_raw_r),
     .o_l(p2_l), .o_r(p2_r),

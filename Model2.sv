@@ -1661,7 +1661,19 @@ wire signed [15:0] snd_l, snd_r;
 // well -- off a burst index -- is what made this wrong twice over. The whole
 // 64-bit burst goes down; the byte comes back out at the far end.
 
-m2_sound_board u_sndboard (
+// BOTH SOUND STAGES ON, and both are needed -- measured at a realistic
+// 300-cycle sample-fetch latency with the addressing finally correct:
+//
+//   neither      59% of nominal rate, 0 underruns
+//   cache only   89%,                 0 underruns
+//   rate only    65%,             9,672 underruns
+//   both        100%,                 0 underruns
+//
+// The rate stage ALONE starves: it drains at a fixed 44,643 Hz and without the
+// cache the chip cannot produce samples that fast, so the buffer runs dry.
+// The cache alone leaves the rate short and the period uneven. Together they
+// hold 100% with no underruns at every latency from 40 to 600 cycles.
+m2_sound_board #(.PCM_CACHE(1'b1), .PCM_RATE(1'b1)) u_sndboard (
 	.clk(clk_sys), .rst_n(cpu_rst_n & mem_rst_n & cp_done & snd_found),
 	.rx_data(b_rx_d), .rx_valid(b_rx_v), .rx_ack(b_rx_a),
 	.tx_data(b_tx_d), .tx_valid(b_tx_v), .tx_ack(b_tx_a),
