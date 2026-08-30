@@ -1938,6 +1938,7 @@ m2_backup u_backup (
 	.dbg_w0(bak_w0), .dbg_writes(bak_writes)
 );
 wire [31:0] bak_dbg_q;
+wire [23:0] iob_word4;
 wire [31:0] bak_first;
 
 
@@ -2480,10 +2481,10 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// Paired with the sound board's bus-cycle count, because the two share the
 	// SDRAM and "the picture sped up" and "the sound did not" is exactly the
 	// kind of claim these two numbers settle.
-	.b_valid(uart_b2_valid), .b_addr(bak_first),
+	.b_valid(uart_b2_valid), .b_addr({8'd0, iob_word4}),
 	.b_data({coin_edges, iob_in0, iob_in1}),
 	.a_tag(8'h53), .b_tag(8'h48),          // 'S' retired IP (512-entry ring) | cumulative i960 instructions
-	                                       // 'H' backup RAM first dword | coin edges : IN0 : IN1
+	                                       // 'H' DPRAM word4 changes:min:value | coin edges : IN0 : IN1
 	                                       // '0' map0 min|max : sum
 	                                       // 'T' write count + trap/PA
 	.enable(1'b1),
@@ -2672,7 +2673,8 @@ m2_ioboard #(
 	.rdata(iob_rdata),
 	.dbg(iob_dbg), .dbg_win_rd(iob_win_rd),
 	.dbg_flag_rd(iob_flag_rd), .dbg_seen(iob_seen),
-	.win_busy(dp_busy)
+	.win_busy(dp_busy),
+	.dbg_word4(iob_word4)
 );
 
 // ---------------------------------------------------------- PORT 4 SWEEP

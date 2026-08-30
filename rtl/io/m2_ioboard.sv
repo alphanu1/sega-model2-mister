@@ -183,7 +183,11 @@ module m2_ioboard #(
   // win_busy says the game is inside the block window right now. Held for a
   // few cycles because the firmware samples this at 4 MHz through a paced Z80
   // and a single 48 MHz pulse would be invisible to it.
-  output logic        win_busy
+  output logic        win_busy,
+  // The Z80's publication of DPRAM word 4 -- byte 0x10 to the i960, which
+  // MAME says is the ONE byte a coin changes. Tapped off the existing write,
+  // so it costs no read port. {distinct values seen, lowest, current}.
+  output logic [23:0] dbg_word4
 );
 
   localparam logic [9:0] FLAG_W  = 10'h010;   // DPRAM 0x20 low, 0x21 high
@@ -231,6 +235,50 @@ module m2_ioboard #(
   wire  [7:0] wr_hi   = cpu_wr ? wdata[23:16] : zb_we ? z_wdata : b_data[15:8];
   wire        we_lo   = wr_en & (cpu_wr ? be[0] : zb_we ? ~z_addr[0] : b_be[0]);
   wire        we_hi   = wr_en & (cpu_wr ? be[2] : zb_we ?  z_addr[0] : b_be[1]);
+
+  // WHAT THE Z80 PUBLISHES AT DPRAM WORD 4, which is byte 0x10 in the i960's
+  // view. MAME says a coin changes exactly that byte and nothing else -- ff to
+  // fe, bit 0 low for COIN1 -- so the Z80 publishes the input scan and the i960
+  // does the crediting. The pin is known good (the core counts the edge), free
+  // play works, and the coin still does not credit, so the question is whether
+  // this byte ever moves. Tapped off the existing write, which costs no port.
+  logic [7:0] dbg_w4_lo;
+  logic [7:0] dbg_w4_seen;         // how many distinct values it has taken
+  logic [7:0] dbg_w4_min;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      dbg_w4_lo <= 8'hff; dbg_w4_seen <= 8'd0; dbg_w4_min <= 8'hff;
+    end else begin
+      // WORD 4 SPECIFICALLY, which is the byte a coin moves.
+      //
+      // The first version of this latched the last non-idle write ANYWHERE, and
+      // the Z80 writes word 1 several times a frame, so the latch never held
+      // anything else: 255 writes counted and the coin invisible under them. An
+      // instrument has to be selective about the thing it is measuring or the
+      // busiest signal wins.
+      //
+      // The address is no longer a guess. MAME's DPRAM is umasked to bytes 0
+      // and 2 of each dword, so DPRAM byte 0x08 -- where R65 measured in0 -- is
+      // i960 address 0x01c00010 is dword 4 is dp_lo[4]. R65's "byte 0x08" and
+      // the MAME write tap's "byte 0x10" are the same place in two numberings.
+      //
+      // A coin is a transient of a few frames, so the MINIMUM ever written is
+      // what survives between samples; a coin shows as 0xFE, and 0xFF forever
+      // means the firmware never scanned one.
+      if (we_lo && wr_addr == 10'd4) begin
+        dbg_w4_lo <= wr_lo;
+        if (wr_lo < dbg_w4_min) dbg_w4_min <= wr_lo;
+      end
+      // AND ANYWHERE AT ALL, as a backstop: the word index of the last write
+      // whose value had bit 0 low. If the coin lands somewhere other than word
+      // 4 this says where, and the two together cannot both miss it.
+      if (we_lo && !wr_lo[0] && !(&dbg_w4_seen)) dbg_w4_seen <= {2'd0, wr_addr[5:0]};
+    end
+  end
+
+  // {word index of the last bit0-low write anywhere, lowest ever at word 4,
+  //  current value at word 4}
+  assign dbg_word4 = {dbg_w4_seen, dbg_w4_min, dbg_w4_lo};
 
   logic [7:0] zq_lo, zq_hi;
   always_ff @(posedge clk) begin
