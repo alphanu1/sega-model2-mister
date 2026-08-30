@@ -235,8 +235,8 @@ synth_i960_ldst:
 
 # --------------------------------------------------------------------- tests
 
-.PHONY: test test_m2_sndboard test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram test_fx68k test_m2_ioboard
-test: test_m2_sndlink test_fx68k test_m2_sndboard test_m2_ioboard test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
+.PHONY: test test_m2_backup test_m2_sndboard test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram test_fx68k test_m2_ioboard
+test: test_m2_backup test_m2_sndlink test_fx68k test_m2_sndboard test_m2_ioboard test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
 
 test_i960_dec: obj_i960_dec/Vi960_dec
 	@echo "== test i960_dec"
@@ -637,6 +637,20 @@ obj_charcache/Vm2_char_cache: rtl/video/m2_char_cache.sv sim/video/tb_m2_char_ca
 	$(VERILATOR) --cc --exe --build -j 0 $(VFLAGS) --top-module m2_char_cache \
 	  --Mdir obj_charcache -o Vm2_char_cache -CFLAGS -O2 \
 	  rtl/video/m2_char_cache.sv sim/video/tb_m2_char_cache.cpp
+
+# THE BACKUP RAM HAD NO TEST, and it was converted from four inferred arrays to
+# four explicit true dual-port memories with nothing checking it. It holds the
+# game's SETTINGS, including coinage, so a fault here is not a visible glitch --
+# it is a game that quietly behaves as though configured differently.
+test_m2_backup: obj_backup/Vm2_backup
+	@echo "== test m2_backup (byte lanes, the 0xFF power-up, the save path)"
+	@./obj_backup/Vm2_backup
+
+obj_backup/Vm2_backup: rtl/io/m2_backup.sv rtl/mem/m2_tdp_ram.sv sim/io/tb_m2_backup.cpp
+	$(VBUILD) --top-module m2_backup -CFLAGS "-O2" \
+	  -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-WIDTHEXPAND -Wno-PINCONNECTEMPTY \
+	  --Mdir obj_backup -o Vm2_backup \
+	  rtl/io/m2_backup.sv rtl/mem/m2_tdp_ram.sv sim/io/tb_m2_backup.cpp
 
 test_m2_ioz80: obj_ioz80/Vm2_ioz80_harness
 	@echo "== test m2_ioz80 (real firmware on tv80)"

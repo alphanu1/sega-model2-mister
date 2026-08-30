@@ -2482,9 +2482,9 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// SDRAM and "the picture sped up" and "the sound did not" is exactly the
 	// kind of claim these two numbers settle.
 	.b_valid(uart_b2_valid), .b_addr({8'd0, iob_word4}),
-	.b_data({coin_edges[7:0], i960_coinack, iob_in0}),
+	.b_data({coin_edges[7:0], i960_coinack[13:0], coinack_word}),
 	.a_tag(8'h53), .b_tag(8'h48),          // 'S' retired IP (512-entry ring) | cumulative i960 instructions
-	                                       // 'H' DPRAM word4 | coin edges : i960 coin-ack writes : IN0
+	                                       // 'H' DPRAM word4 | coin edges : i960 byte-2 writes : last word
 	                                       // '0' map0 min|max : sum
 	                                       // 'T' write count + trap/PA
 	.enable(1'b1),
@@ -2657,16 +2657,28 @@ wire [7:0] brake = joystick_0[11] ? 8'he0 : 8'h20;
 // The second would be coinage: MAME on a fresh nvram wants THREE coins, and
 // shows "CREDIT 0/3" climbing to "CREDITS 2/3" as they go in.
 logic [15:0] i960_coinack;
+logic  [9:0] coinack_word;
 logic        ack_seen_d;
-wire         coinack_wr = cpu_io_sel && cpu_io_we && cpu_io_be[2]
-                       && (cpu_io_addr[23:0] == 24'h00001c);
+// THE ADDRESS WAS WRONG THE FIRST TIME and the measurement it produced was
+// meaningless. The I/O board sits at 0xc00xxx in the window -- `iob_sel` is
+// `cpu_io_addr[23:12] == 12'hc00` -- so 0x01c0001c is offset 0xc0001c, not
+// 0x00001c. Comparing against the latter counted zero writes and read as "the
+// i960 never runs its coin routine", which was a statement about my arithmetic.
+//
+// So this no longer depends on getting one constant right: it counts EVERY
+// i960 write into the I/O board's window that names byte 2, and latches which
+// word the last one went to. Word 7 is 0x1c. If the count is zero the i960
+// really is writing nothing there; if it is not, the word index says where.
+wire         coinack_wr = iob_sel && cpu_io_we && cpu_io_be[2];
 always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
 	if (!cpu_rst_n) begin
-		i960_coinack <= 16'd0; ack_seen_d <= 1'b0;
+		i960_coinack <= 16'd0; coinack_word <= 10'd0; ack_seen_d <= 1'b0;
 	end else begin
 		ack_seen_d <= coinack_wr;
-		if (coinack_wr && !ack_seen_d && !(&i960_coinack))
-			i960_coinack <= i960_coinack + 16'd1;
+		if (coinack_wr && !ack_seen_d) begin
+			if (!(&i960_coinack)) i960_coinack <= i960_coinack + 16'd1;
+			coinack_word <= cpu_io_addr[11:2];
+		end
 	end
 end
 
