@@ -44,6 +44,17 @@
 `timescale 1ns/1ps
 
 module m2_pcm_rate #(
+  // BYPASS IS THE DEFAULT, for the same reason m2_pcm_fetch's is: the last
+  // arrangement the board reported as sounding like the game had neither of
+  // these stages. The jitter this removes is real and measured -- 1075..3015
+  // cycles against a nominal 1075 -- but a fix for a real fault that does not
+  // restore the sound is not yet the fix for THIS fault, and the way to find
+  // out which stage is responsible is to turn them on one at a time.
+  //
+  // Bypassed, the chip gets a plain 10 MHz enable and its samples pass straight
+  // through, which is exactly what it had four builds ago.
+  parameter bit BYPASS = 1'b1,
+  parameter int unsigned PLAIN_NUM = 10,   // the chip's own 10 MHz, when bypassed
   // 20/48 of 48 MHz is 20 MHz against the chip's nominal 10 -- two times over, and
   // sized by measurement rather than taste: at 13 the buffer ran dry 2,436 times
   // with a 600-cycle fetch latency, at 16 it ran dry 391 times, and at 20 it did
@@ -85,23 +96,24 @@ module m2_pcm_rate #(
   wire empty = (lvl == '0);
 
   // ---- the chip's clock enable, with headroom and a throttle
-  localparam int unsigned CW = $clog2(CE_DEN) + 1;
+  localparam int unsigned CW  = $clog2(CE_DEN) + 1;
+  localparam int unsigned NUM = BYPASS ? PLAIN_NUM : CE_NUM;
   logic [CW-1:0] cacc;
-  logic                    ce_raw;
+  logic          ce_raw;
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       cacc <= '0; ce_raw <= 1'b0;
-    end else if (cacc + CW'(CE_NUM) >= CW'(CE_DEN)) begin
-      cacc   <= cacc + CW'(CE_NUM) - CW'(CE_DEN);
+    end else if (cacc + CW'(NUM) >= CW'(CE_DEN)) begin
+      cacc   <= cacc + CW'(NUM) - CW'(CE_DEN);
       ce_raw <= 1'b1;
     end else begin
-      cacc   <= cacc + CW'(CE_NUM);
+      cacc   <= cacc + CW'(NUM);
       ce_raw <= 1'b0;
     end
   end
   // Withheld when the buffer is full: that is what holds the AVERAGE rate to
   // the drain rate rather than to the headroom.
-  assign ce = ce_raw && !full;
+  assign ce = BYPASS ? ce_raw : (ce_raw && !full);
 
   // ---- the drain, at exactly 44,643 Hz
   logic [31:0] oacc;
@@ -117,7 +129,7 @@ module m2_pcm_rate #(
 
       // Push and pop can land on the same edge; the level is adjusted once for
       // the pair so it never counts a sample twice or loses one.
-      case ({s_valid && !full, pop_tick && !empty})
+      case ({!BYPASS && s_valid && !full, !BYPASS && pop_tick && !empty})
         2'b10: begin fl[wp] <= s_l; fr[wp] <= s_r; wp <= wp + PW'(1); lvl <= lvl + 1'b1; end
         2'b01: begin o_l <= fl[rp]; o_r <= fr[rp]; rp <= rp + PW'(1); lvl <= lvl - 1'b1; end
         2'b11: begin
@@ -127,8 +139,14 @@ module m2_pcm_rate #(
         default: ;
       endcase
 
+      // Bypassed: the chip's samples go straight out, no buffer in the path.
+      if (BYPASS && s_valid) begin
+        o_l <= s_l;
+        o_r <= s_r;
+      end
+
       // Dry. Hold the last sample -- a repeat is flat, a zero is a click.
-      if (pop_tick && empty && !(&dbg_underruns))
+      if (!BYPASS && pop_tick && empty && !(&dbg_underruns))
         dbg_underruns <= dbg_underruns + 16'd1;
     end
   end

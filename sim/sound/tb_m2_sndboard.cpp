@@ -46,6 +46,28 @@ static bool load_file(const std::string &p, std::vector<uint8_t> &v) {
   return got == size_t(n);
 }
 
+// A WAV OF OUR OWN OUTPUT, so it can be compared against MAME's rather than
+// described. Three builds have now been reported as sounding bad and three
+// different real faults have been fixed without changing that, which means the
+// thing being fixed was never measured against what it should sound like.
+// MAME renders the same attract mode with -wavwrite; this writes the same
+// seconds from the same ROMs through our own chips.
+static void wav_write(const char *path, const std::vector<int16_t> &pcm, int rate) {
+  FILE *f = std::fopen(path, "wb");
+  if (!f) return;
+  const uint32_t nb = uint32_t(pcm.size() * 2);
+  auto u32 = [&](uint32_t v){ std::fputc(v&0xff,f); std::fputc((v>>8)&0xff,f);
+                              std::fputc((v>>16)&0xff,f); std::fputc((v>>24)&0xff,f); };
+  auto u16 = [&](uint16_t v){ std::fputc(v&0xff,f); std::fputc((v>>8)&0xff,f); };
+  std::fwrite("RIFF",1,4,f); u32(36+nb); std::fwrite("WAVE",1,4,f);
+  std::fwrite("fmt ",1,4,f); u32(16); u16(1); u16(2); u32(uint32_t(rate));
+  u32(uint32_t(rate)*4); u16(4); u16(16);
+  std::fwrite("data",1,4,f); u32(nb);
+  std::fwrite(pcm.data(),2,pcm.size(),f);
+  std::fclose(f);
+  std::printf("  wrote %s (%zu frames @ %d Hz)\n", path, pcm.size()/2, rate);
+}
+
 int main(int argc, char **argv) {
   Verilated::commandArgs(argc, argv);
 
@@ -254,6 +276,10 @@ int main(int argc, char **argv) {
   uint32_t first_pc = 0xffffffff;
   size_t ri = 0, resyncs = 0, skipped = 0;
   long pcm_samples = 0, cache_reads = 0, cache_bad = 0;
+  // Sampled at the OUTPUT rate the rate stage drains at, not per clock.
+  std::vector<int16_t> wav;
+  const char *wavpath = std::getenv("M2_SND_WAV");
+  long wav_acc = 0;
   long last_sample_c = 0, per_min = 1L<<30, per_max = 0, per_sum = 0, per_n = 0;
   double per_sumsq = 0;
   int  prev_slot = 0;
@@ -357,6 +383,14 @@ int main(int argc, char **argv) {
     // 70% and 100% sounds warbly, and is much worse to listen to even though
     // its AVERAGE rate is better. Average alone cannot tell those apart, which
     // is why a change that raised the average was reported as sounding worse.
+    if (wavpath) {
+      wav_acc += 44100;
+      if (wav_acc >= 48000000) {
+        wav_acc -= 48000000;
+        wav.push_back(int16_t(d->snd_l));
+        wav.push_back(int16_t(d->snd_r));
+      }
+    }
     if (prev_slot == 27 && d->obs_pcm_slot == 0) {
       ++pcm_samples;
       if (last_sample_c) {
@@ -417,6 +451,7 @@ int main(int argc, char **argv) {
 
   int fails = 0;
 
+  if (wavpath) wav_write(wavpath, wav, 44100);
   std::printf("  sample cache: %ld reads, %ld wrong\n", cache_reads, cache_bad);
   if (cache_bad) {
     std::printf("  FAIL the sample cache returns wrong bytes\n");
