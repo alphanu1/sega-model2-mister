@@ -62,7 +62,42 @@ all: lint synth test
 # --------------------------------------------------------------------- lint
 
 .PHONY: lint lint_i960_dec lint_i960_alu lint_i960_regs lint_i960_agu lint_i960_ldst lint_i960_lsu lint_i960_memmap lint_i960_icache lint_i960_muldiv lint_i960_fpmul lint_i960_fpadd lint_i960_fpdiv lint_i960_fpsqrt lint_i960_fpmisc lint_i960_fpcvt lint_i960_top
-lint: lint_i960_dec lint_i960_alu lint_i960_regs lint_i960_agu lint_i960_ldst lint_i960_lsu lint_i960_memmap lint_i960_icache lint_i960_muldiv lint_i960_fpmul lint_i960_fpadd lint_i960_fpdiv lint_i960_fpsqrt lint_i960_fpmisc lint_i960_fpcvt lint_i960_top
+# THE TOP LEVEL WAS NEVER LINTED. `make lint` ran the sixteen i960 modules and
+# nothing else, so every "lint clean" reported here was a statement about the
+# CPU and said nothing whatever about Model2.sv -- which is where every
+# integration bug in this project has actually been.
+#
+# It cost four builds of unusable sound. m2_sound_board's sample ports changed
+# from byte addresses to four-word bursts and Model2.sv was not updated with
+# them, so a 19-bit output drove a 22-bit wire: the burst index landed in the
+# low bits, p_addr then took [21:3] of a value that was already shifted and
+# divided it by eight a second time, and the byte select indexed off a burst
+# index. Both sample chips read the wrong address and the wrong byte out of it.
+#
+# Verilator names that exactly -- "Output port connection 'pcm1_rom_addr'
+# expects 19 bits on the pin connection, but pin connection's VARREF
+# 'pcm1_addr' generates 22 bits" -- and this target was written by REINTRODUCING
+# the bug and checking the message appears, rather than by assuming it would.
+#
+# Only PORT CONNECTION width mismatches fail the build, and only in our own
+# files. The third-party cores carry their own internal width warnings by the
+# dozen; holding them to our standard would mean waiving the whole class, which
+# is how this one got through.
+TOP_RTL := $(shell grep -oE "rtl/[a-z0-9_/]+\.(sv|v)" Model2.qsf | tr '\n' ' ')
+
+.PHONY: lint_top
+lint_top:
+	@echo "== lint Model2.sv and everything it instantiates"
+	@verilator --lint-only -Wall -Wno-DECLFILENAME -Wno-fatal --top-module emu \
+	  -Irtl/sound/jt12 $(TOP_RTL) Model2.sv 2>&1 \
+	  | grep -E "port connection" \
+	  | grep -vE "rtl/sound/(jt12|fx68k)/|rtl/sound/m2_multipcm" > .lint_top.tmp || true
+	@if [ -s .lint_top.tmp ]; then \
+	  echo "PORT WIDTH MISMATCH -- this is the class that cost four builds:"; \
+	  cat .lint_top.tmp; rm -f .lint_top.tmp; exit 1; \
+	 else echo "  no port width mismatches"; rm -f .lint_top.tmp; fi
+
+lint: lint_top lint_i960_dec lint_i960_alu lint_i960_regs lint_i960_agu lint_i960_ldst lint_i960_lsu lint_i960_memmap lint_i960_icache lint_i960_muldiv lint_i960_fpmul lint_i960_fpadd lint_i960_fpdiv lint_i960_fpsqrt lint_i960_fpmisc lint_i960_fpcvt lint_i960_top
 
 # THE PLL IS LINTED TOO, and it was not until a build failed.
 #

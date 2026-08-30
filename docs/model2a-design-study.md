@@ -5580,3 +5580,37 @@ done since the design was built; `ipring_q` was written and nothing ever
 consumed it. Reading it out during the slow phase names the code directly, and
 consecutive passes show whether the CPU is in a repeating cycle and how long
 that cycle is. That wiring is done and awaiting a build.
+
+**R94 — `make lint` never linted the top level, and four builds of unusable
+sound is what that cost.** The target ran the sixteen i960 modules and nothing
+else. Every "lint clean" reported in this project was a statement about the CPU
+and said nothing whatever about `Model2.sv` — which is where every integration
+fault here has actually been.
+
+*The fault it hid.* `m2_sound_board`'s sample ports changed from byte addresses
+to four-word bursts when `m2_pcm_fetch` was added, and `Model2.sv` was not
+updated with them. A 19-bit output drove a 22-bit wire, so the burst index
+landed in the LOW bits; `p_addr` then took `[21:3]` of a value that was already
+shifted and divided it by eight a second time, and the byte select indexed off a
+burst index. Both sample chips read the wrong address and the wrong byte out of
+it. The 64-bit `rom_data` port was likewise still being fed an 8-bit wire.
+
+*How long it survived, and why.* Four builds. In that time three separate REAL
+faults were found and fixed — the second chip reading four megabytes past the
+samples (R92), a sample rate that followed memory latency (R91), and a one-line
+cache with a hit rate of zero — and none of them changed the sound, because none
+of them was this. The search was for something that sounded wrong instead of for
+what CHANGED in the build that started sounding wrong, and the board had said
+"it was much better four builds ago" early enough to have pointed straight at it.
+
+*The guard, and it was tested rather than assumed.* Verilator names this
+exactly: "Output port connection 'pcm1_rom_addr' expects 19 bits on the pin
+connection, but pin connection's VARREF 'pcm1_addr' generates 22 bits." The new
+`lint_top` target was written by REINTRODUCING the bug and checking that message
+appears, then restoring — a guard that does not catch the bug it exists for is
+worse than none, and that is only knowable by trying it.
+
+It fails on PORT CONNECTION width mismatches only, and only in our own files.
+The vendored cores carry internal width warnings by the dozen; holding them to
+our standard would mean waiving the whole class, which is precisely how this got
+through.

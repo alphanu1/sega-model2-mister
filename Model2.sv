@@ -343,7 +343,19 @@ localparam logic [SDR_AW:1] PCM_OFFS = SDR_AW'(32'h0020000);
 wire        snd_rom_req;
 wire [17:1] snd_rom_addr;
 wire        pcm1_req, pcm2_req;
-wire [21:0] pcm1_addr, pcm2_addr;
+// BURST INDEX, NOT A BYTE ADDRESS. The sound board's sample ports became
+// four-word bursts when m2_pcm_fetch was added and these were left as [21:0]
+// byte addresses, so a 19-bit output drove a 22-bit wire: the burst index
+// landed in the LOW bits and everything downstream then treated it as a byte
+// address. p_addr took [21:3] of a value that was already shifted, dividing it
+// by eight a second time, and the byte select used bits of the burst index.
+// Both sample chips read the wrong address and picked the wrong byte out of it.
+//
+// That is what "horrible sound" was, for four builds. Three real faults were
+// found and fixed in that time -- none of them this one -- because the search
+// was for something that sounded wrong rather than for what CHANGED in the
+// build that started sounding wrong.
+wire [21:3] pcm1_addr, pcm2_addr;
 logic [NPORTS-1:0]        p_req;
 logic [NPORTS-1:0]        p_we;
 logic [NPORTS-1:0][15:0]  p_din;
@@ -428,7 +440,7 @@ always_comb begin
 	// byte selected, four words at a time, so a voice reading consecutive
 	// samples gets seven of every eight bytes without a second request.
 	p_req[6]  = snd_found & pcm1_req;
-	p_addr[6] = snd_base + PCM_OFFS + SDR_AW'({pcm1_addr[21:3], 2'b00});
+	p_addr[6] = snd_base + PCM_OFFS + SDR_AW'({pcm1_addr, 2'b00});
 	p_req[7]  = snd_found & pcm2_req;
 	// FOUR MEGABYTES ON, AND THESE ARE WORD ADDRESSES. This was 0x400000,
 	// which as a WORD offset is eight megabytes, so the second sample chip read
@@ -439,7 +451,7 @@ always_comb begin
 	// correct rate playing wrong bytes is not distinguishable from a rate
 	// problem by listening, and two builds were spent on the rate.
 	p_addr[7] = snd_base + PCM_OFFS + SDR_AW'(23'h200000)
-	                     + SDR_AW'({pcm2_addr[21:3], 2'b00});
+	                     + SDR_AW'({pcm2_addr, 2'b00});
 	p_req[3]  = cc_req;
 	p_addr[3] = char_base + SDR_AW'(cc_addr);
 	// PORT 0 IS THE CPU'S, and it is the single-word port on purpose: the
@@ -1645,10 +1657,9 @@ end
 wire signed [15:0] snd_l, snd_r;
 
 // Byte out of the burst: word by [2:1], byte within it by [0].
-wire [7:0] pcm1_q = pcm1_addr[0] ? p_dout[6][{1'b0, pcm1_addr[2:1]} * 16 + 8 +: 8]
-                                 : p_dout[6][{1'b0, pcm1_addr[2:1]} * 16 +: 8];
-wire [7:0] pcm2_q = pcm2_addr[0] ? p_dout[7][{1'b0, pcm2_addr[2:1]} * 16 + 8 +: 8]
-                                 : p_dout[7][{1'b0, pcm2_addr[2:1]} * 16 +: 8];
+// The byte select moved INTO m2_pcm_fetch with the burst, and doing it here as
+// well -- off a burst index -- is what made this wrong twice over. The whole
+// 64-bit burst goes down; the byte comes back out at the far end.
 
 m2_sound_board u_sndboard (
 	.clk(clk_sys), .rst_n(cpu_rst_n & mem_rst_n & cp_done & snd_found),
@@ -1657,9 +1668,9 @@ m2_sound_board u_sndboard (
 	.rom_req(snd_rom_req), .rom_addr(snd_rom_addr),
 	.rom_ack(snd_rom_ack), .rom_data(snd_rom_q),
 	.pcm1_rom_req(pcm1_req), .pcm1_rom_addr(pcm1_addr),
-	.pcm1_rom_data(pcm1_q),  .pcm1_rom_ack(p_ack[6]),
+	.pcm1_rom_data(p_dout[6]), .pcm1_rom_ack(p_ack[6]),
 	.pcm2_rom_req(pcm2_req), .pcm2_rom_addr(pcm2_addr),
-	.pcm2_rom_data(pcm2_q),  .pcm2_rom_ack(p_ack[7]),
+	.pcm2_rom_data(p_dout[7]), .pcm2_rom_ack(p_ack[7]),
 	.snd_l(snd_l), .snd_r(snd_r),
 	.dbg_pc(snd_pc), .dbg_insns(snd_insns),
 	.dbg_ym_writes(snd_ymw), .dbg_pcm_writes(snd_pcmw),
@@ -2388,7 +2399,19 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// it directly, against the chip's own 10 MHz / 224 = 44,643 Hz. "The sound
 	// is slow" has been reasoned about from simulated latencies for long
 	// enough; this is the number itself.
-	.a_valid(prof_tick), .a_addr(snd_samples),
+	// A REAL INSTRUCTION TRACE FROM THE SLOW PHASE, which is the only thing
+	// that names what the machine is doing for its first three minutes.
+	//
+	// The ring has been recording the last 512 retired IPs since the design was
+	// built and has never been read out -- ipring_q was written and nothing
+	// consumed it. The reader walks one entry per profiler tick and wraps, so
+	// consecutive passes show whether the CPU is in a repeating cycle and how
+	// long that cycle is.
+	//
+	// The retired-instruction count rides in the data half, so one channel
+	// still gives the rate as well as the trace: 24 cycles per instruction in
+	// the slow phase against 7.5 once it settles, measured on the board.
+	.a_valid(prof_tick), .a_addr(ipring_q),
 	// THE RETIRED-INSTRUCTION COUNT RIDES ALONG WITH THE IP.
 //
 // The profile says 91% of the board's time goes on the four memory
@@ -2397,7 +2420,7 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 // simulation finishes this initialisation in 15.9 M instructions. Two
 // consecutive samples give the instruction rate directly, which settles
 // whether this is a wrong branch or a slow machine.
-	.a_data({snd_under, snd_level, snd_miss[7:0]}),
+	.a_data(cpu_dbg_acc),
 	// THE i960's OWN INSTRUCTION COUNT, so the first three minutes can be
 	// diagnosed rather than described. Two readings a known time apart give the
 	// rate directly; a machine that is slow for three minutes and then is not
@@ -2408,10 +2431,10 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// Paired with the sound board's bus-cycle count, because the two share the
 	// SDRAM and "the picture sped up" and "the sound did not" is exactly the
 	// kind of claim these two numbers settle.
-	.b_valid(uart_b2_valid), .b_addr(cpu_dbg_acc),
-	.b_data(snd_insns),
-	.a_tag(8'h53), .b_tag(8'h48),          // 'S' cumulative PCM samples | underruns : buffer level : misses
-	                                       // 'H' i960 retired instructions | 68000 bus cycles
+	.b_valid(uart_b2_valid), .b_addr(snd_samples),
+	.b_data({snd_under, snd_level, snd_miss[7:0]}),
+	.a_tag(8'h53), .b_tag(8'h48),          // 'S' retired IP (512-entry ring) | cumulative i960 instructions
+	                                       // 'H' PCM samples | underruns : buffer level : cache misses
 	                                       // '0' map0 min|max : sum
 	                                       // 'T' write count + trap/PA
 	.enable(1'b1),
