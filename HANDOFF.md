@@ -1,6 +1,6 @@
 # Handoff
 
-**Updated:** 2026-08-30. `make test` green at 28.
+**Updated:** 2026-08-30. `make test` green at 29.
 
 ## SOUND WORKS. Music and voices both.
 
@@ -43,7 +43,7 @@ same width or replication returns. R96 and R97.
 and Quartus says so with Error 14000. `DONT_CARE` is a real behaviour change and
 R96 states where it can be observed.
 
-## TWO INSTRUMENTS WERE LYING, AND BOTH COST TIME
+## FOUR INSTRUMENTS WERE LYING, AND ALL FOUR COST TIME
 
 - **`Model2.fit.rpt` is not rewritten when the fitter crashes on exit.** It was
   SEVEN HOURS older than the `.rbf` beside it and still listed arrays that had
@@ -53,6 +53,32 @@ R96 states where it can be observed.
   before Assembler" and `output_files/Model2.rbf` is left as the PREVIOUS build
   with a fresh timestamp. **The only trustworthy signal is a changed `.rbf`
   md5**, which the build script now checks and reports.
+- **The boot sim ran with its I/O board unplugged and looked completely
+  healthy.** `M2_IOFW` was unset, so the Z80 never cleared the DPRAM request
+  flag and the i960 sat in the two-instruction spin at `0x228240` polling
+  `0x01c00040`. A 24-million-instruction run printed a full, internally
+  consistent cycle profile having executed **none of the game** -- 97.8% of
+  every retired instruction in one 4 KB page of work RAM. It was nearly read as
+  proof that the tilemap scroll is never written. R105.
+
+  Two things came out of it. The firmware now **defaults** to `epr-14869c.25`
+  beside the program ROMs, and a missing one warns by naming the spin rather
+  than booting into it -- `make test_m2_boot` had been running without it and
+  reporting FAIL, and now passes. And the boot sim prints a **4 KB-page
+  histogram of every retired PC**, with `M2_BOOT_PCHIT=<addr>` to count a single
+  address. A stalled boot is invisible in a cycle profile and obvious in the
+  histogram: one page at 97.8% is a spin, a healthy boot spreads over a dozen.
+  **Read the two together or the profile can be entirely real and mean nothing.**
+- **`lint_top` was reporting on a fraction of the design and not saying which
+  fraction.** Verilator exits at the first missing module, and `hps_io` (in
+  `sys/`) and the PLL (a `.qip`) were never passed in -- so it ended on
+  MODMISSING and every check needing full elaboration was skipped. Parse-time
+  warnings survived, which is why it kept saying "no port width mismatches"
+  truthfully while never having examined the design as a whole. It was missing
+  four undriven signals feeding SDRAM ports 8 and 9. Fixed by naming
+  `sys/hps_io.sv` and `rtl/pll/pll.v`, black-boxing the vendor `altera_pll` in
+  `sim/lint/`, and adding UNDRIVEN to the filter. R107. **`make lint` now fails,
+  correctly, until the coprocessor is wired.**
 
 ## INPUTS: THE WHOLE CABINET IS WIRED
 
@@ -80,6 +106,100 @@ deliberately does not assume the address: R65 records `in0` at DPRAM byte 0x08
 and a MAME write tap shows the coin at byte 0x10, and those cannot both be right
 under one arithmetic -- MAME's device is umasked to bytes 0 and 2 of each dword,
 so a linear byte index is not a word index.
+
+## THE TILEMAP SCROLL IS CORRECT, AND IT IS WAITING FOR THE CAMERA
+
+The sky and treeline sit still. They are supposed to, for now. R105.
+
+- **Nothing is hardcoded.** `m2_video` fetches hscr/vscr per layer per line from
+  tile RAM `0x5000`/`0x5004`, exactly as `segaic24` does, and
+  `m2_tile_decode` implements the arithmetic correctly.
+- **Only ONE layer ever scrolls.** MAME writes all eight words every frame from
+  a routine at `0x1a164`, and layers 0, 1 and 3 hold zero for the whole of
+  attract mode. Three still layers is the game, not a fault.
+- **The path is proven by a match, not by inspection.** `dbg_hscr[4]`/
+  `dbg_vscr[4]` latch what the renderer actually consumed. This core reports
+  layer 2 `vscr=2000`; MAME reports `v=2000` at the comparable point --
+  including bits 14:13 = 01, which is window mode, not scroll. A tied-off
+  register cannot produce `0x2000`.
+- **What is missing is the heading.** Layer 2's horizontal pan is zero until
+  MAME frame 165 and first moves on the exact frame the 3D driving demo replaces
+  the settings text page, then climbs `0008 0009 000a 000c 000d 0010 0013 0018`
+  -- a camera turning, once per frame. With the coprocessor stubbed there is no
+  camera, so the game computes zero and the horizon correctly does not move.
+
+**No work in `m2_video` will move that layer.** It comes back with the geometry.
+
+### PROVEN, not inferred -- and this core already matches the reference
+
+R106. Leave the copro booted and running, zero only the values the i960 pops out
+of its FIFO, and the game keeps drawing (70,378 tile writes at f200 rising to
+134,978 at f400 -- no deadlock, flow control untouched). What changes is only
+what was computed from copro results:
+
+    baseline            L2 hscr = 000c 0018 001b 0197 016e 007d   vscr = 2fe1 ... 2009
+    copro results = 0   L2 hscr = 0000 0000 0000 0000 0000 0000   vscr = 2000 ... 2000
+    THIS CORE           L2 hscr = 0000                            vscr = 2000
+
+**MAME with its coprocessor results zeroed produces our numbers exactly, on both
+registers.** The 2D path is not merely plausible, it agrees with the reference
+under matched conditions.
+
+A first attempt was confounded and is kept as a warning: holding `copro_ctl1`
+bit 31 set does not just halt the TGP, it is the SELECTOR, so every FIFO write
+goes into program RAM instead. Daytona freezes at 41,451 tile writes around
+frame 70. True, useful (the game will not proceed at all without the copro), and
+worthless for attributing the scroll.
+
+**This gives the TGP a free acceptance test.** Layer 2's `hscr` is one 16-bit
+number written once a frame that is identically zero without coprocessor output
+and moves the moment it becomes real. No framebuffer diff, no rasteriser needed
+-- `hscr` leaving zero is the first evidence the TGP works, and the baseline row
+above is the shape it should take.
+
+## THE COPROCESSOR IS WIRED IN (not yet run on hardware)
+
+`m2_copro` existed, was committed, and was connected to nothing: not
+instantiated in `Model2.sv`, not in `Model2.qsf` -- **no build ever flashed has
+contained a line of TGP** -- and it did not pass the TGP's `tbl_*`/`dat_*`
+through, so `tbl_ack` was unconnected and the first sincos lookup would have
+hung. All three are done, plus the math-table byte order verified against
+MAME's own `copro_tgp_tables` region (opr-14742a is bits 15:0, opr-14743a is
+31:16 -- the `.mra` interleave was already right).
+
+**Wiring it woke two latent SDRAM bugs, and the undriven signals were the only
+thing that had been suppressing them.** R108.
+
+1. **The read tag is 3 bits and there are 10 ports.** Ports 8/9 aliased onto
+   0/1 -- TGP table reads delivered into the i960's port and acknowledged there.
+   Fixed at both the declaration and the assignment that truncated (`grant[2:0]`);
+   widening one without the other does nothing.
+2. **`rd_total` is a single global register, so ports may not have different
+   burst lengths.** A grant mid-issue overwrites it and the earlier transaction
+   completes at the wrong word. Port 0 came back with two of four words and
+   zeros above. NOT fixed -- ports 8/9 burst four like everything else, which
+   makes it unreachable, and the constraint is written into `blen()`. **A port
+   with a different burst length reintroduces silent cross-port corruption.**
+
+`tb_m2_sdram` now drives all ten ports; it drove five while `blen()` had had ten
+entries for as long as the core had had ten ports. A configuration that exists
+only in the DUT is covered by nothing.
+
+### What is NOT yet verified
+
+- The copro is **not in the boot harness**, so the integration is unsimulated:
+  program upload, FIFO handshake and the TGP actually retiring have not been
+  seen end to end. The 10 TGP unit suites and the SDRAM suite pass; the join
+  between them has not been exercised.
+- **Fit is unknown.** The TGP is a whole processor and no `quartus_map` has been
+  run with it in. Per rule 11 that is a study-level number, not a detail.
+
+### The two acceptance tests, in order
+
+1. **Layer 2's `hscr` leaving zero.** One 16-bit number, written once a frame,
+   identically zero without coprocessor output (R106). First sign of life, and
+   it needs no rasteriser.
+2. **The service menu's own TGP test.** The real verdict.
 
 ## STILL OPEN, in the user's priority order
 

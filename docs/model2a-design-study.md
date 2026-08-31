@@ -6077,3 +6077,666 @@ shares only the naming.
 164 MHz would be needed at this CPI against an Fmax of 72. But pipelining
 shortens the critical path as well as the CPI, so the two compound rather than
 competing: 4.3 CPI at 100 MHz is 138%. Partial progress on each multiplies.
+
+**R105 — the tilemap scroll registers were never hardcoded and the path works;
+what is missing is the camera, and the run that said otherwise was measuring a
+CPU spinning on a handshake.** The question was why the sky and treeline sit
+still. Three answers were possible: the registers are tied to zero somewhere,
+the renderer reads the wrong words, or the game writes zero. It is the third,
+and zero is the *right* value for a core in this state.
+
+*The reference first, as the order of authority requires.* MAME writes tile RAM
+words `0x5000..0x5007` — hscr for layers 0..3, then vscr for layers 0..3 — from
+a routine at `0x1a164..0x1a19c`, eight writes every frame, 590 frames in 590
+frames. Only **layer 2** ever carries a non-zero value; layers 0, 1 and 3 stay
+at zero for the whole of attract mode. So three of the four layers not scrolling
+is not a defect to be explained, it is what the game does.
+
+*And layer 2's horizontal pan starts at frame 165, on the exact frame the 3D
+driving demo replaces the settings text screen.* Snapshots either side settle
+it: f120 is the ADVERTISE SOUND / COUNTRY / CABINET page with no polygons on it,
+f200 is the treeline and the pack of cars. `hscr` is `0000` through f160, first
+non-zero at f165, and then climbs `0008, 0009, 000a, 000c, 000d, 0010, 0013,
+0018` — a camera turning, sampled once a frame. Layer 2 is the sky and treeline
+band, and its scroll is derived from the heading. A core whose coprocessor is
+stubbed has no heading, so it writes zero, and the horizon correctly does not
+move. **This is not a video bug and no amount of work in `m2_video` will move
+that layer.** It comes back with the geometry, not before.
+
+*The mechanism is proven, not assumed.* `dbg_hscr[4]`/`dbg_vscr[4]` latch what
+the renderer actually consumed, at the point of consumption. At 32 M retired
+instructions this core reports `layer 2 : hscr=0000 vscr=2000`, and MAME reports
+`L2 h=0183 v=2000` at the comparable point. The `vscr` matches **exactly**,
+including bits 14:13 = 01 — window mode 1, not scroll — which means the fetch,
+the address, the latch and the layer indexing are all right, and the only
+disagreement left is the value the game computed. A tied-off register could not
+have produced `0x2000`.
+
+*Now the expensive part, and it is a measurement error of the same family as the
+five in R100.* Before the firmware was connected, a 24-million-instruction run
+reported all four layers at zero and `0x1a164` executed **zero times**. Read
+naively that is damning evidence the scroll is never written. It is nothing of
+the sort. The boot sim takes the I/O board firmware from `M2_IOFW`, and with the
+variable unset the Z80 board is dead, never clears the DPRAM request flag, and
+the i960 parks in the two-instruction spin at `0x228240`/`0x228248` polling
+`0x01c00040` — the handshake documented in `docs/io-board.md` and diagnosed here
+years of sessions ago. **97.8% of all 24 million retired instructions landed in
+one 4 KB page of work RAM.** The run took four minutes, printed a complete and
+plausible cycle profile, and had executed none of the game.
+
+The instrument that caught it is worth more than the finding: a 4 KB-page
+histogram of every retired PC, plus `M2_BOOT_PCHIT=<addr>` to count one address.
+A boot that is stuck does not look stuck in a cycle profile — every rate, every
+CPI, every state percentage is real and internally consistent — but it is
+unmistakable the moment you ask *where the instructions were*. One page at 97.8%
+is a spin; the healthy run spreads across `0x1000`, `0x1c000`, `0x17000`,
+`0x13000`, `0x11000` and a dozen more. **Any future profile should be read
+alongside that histogram, because a stalled boot is otherwise indistinguishable
+from a fast one.**
+
+*The fix is to remove the knob rather than remember it.* `M2_IOFW` now defaults
+to `epr-14869c.25` beside the program ROMs, and an absent firmware prints a
+warning naming the spin instead of quietly booting into it. `make test_m2_boot`
+had been running without the firmware and reporting FAIL; it passes. A default
+that matches the board is not a convenience — it is the difference between a
+harness that models the machine and one that models a machine with its I/O board
+unplugged.
+
+**R106 — the tilemap scroll is TGP-derived, proven causally, and this core
+already matches the reference under matched conditions.** R105 established that
+layer 2's horizontal pan begins on the frame the 3D demo starts and inferred
+that it was camera-derived. Inference is not proof, and the question deserved
+an experiment: is the number computed from coprocessor output, or is it i960
+game state this core should already be producing? Those have opposite
+consequences -- the second would make our zero a real bug.
+
+*The first experiment was confounded and is recorded because it was.* Holding
+`copro_ctl1` bit 31 set to keep the TGP halted does not only halt it: bit 31 is
+the selector, so every FIFO **write** is redirected into program RAM and the
+upload path is destroyed along with the processor. Daytona then stops dead --
+tile writes freeze at 41,451 around frame 70 and never resume. That is a real
+finding about the game (it will not proceed at all without the coprocessor) but
+it says nothing about the scroll, because nothing after frame 70 happens at all.
+A test that breaks two things cannot attribute the result to either.
+
+*The clean experiment leaves the copro running and zeroes only what the i960
+pops out of it.* The FIFOs still fill and drain, flow control is untouched, so
+the game cannot deadlock on it; everything the i960 computes for itself is
+unaffected and everything it computes FROM copro results goes wrong. Over 400
+frames:
+
+    baseline            L2 hscr = 000c 0018 001b 0197 016e 007d   vscr = 2fe1 2fea 208a 2fef 2009
+    copro results = 0   L2 hscr = 0000 0000 0000 0000 0000 0000   vscr = 2000 2000 2000 2000 2000
+    THIS CORE           L2 hscr = 0000                            vscr = 2000
+
+Tile writes keep climbing in the zeroed run -- 70,378 at f200 to 134,978 at f400
+-- so the game is alive and drawing throughout. It simply has no heading.
+
+**The reference with its coprocessor results zeroed produces this core's numbers
+exactly, on both registers.** That is the strongest statement available about
+the 2D path: it is not merely plausible, it agrees with MAME under matched
+conditions. The split is clean and worth stating in one line, because it
+predicts what will and will not change when the TGP lands:
+
+  * `vscr = 0x2000` is i960-side static configuration -- bits 14:13 = 01,
+    window mode 1, not a scroll value. We compute it correctly today.
+  * `hscr` is derived from coprocessor output. Zero is the correct answer for a
+    core without one.
+
+*What this closes, and what it opens.* It closes the tilemap-scroll question:
+there is no bug, and no work in `m2_video` or `m2_tile_decode` will move that
+layer. It opens a cheap and unusually good acceptance test for the TGP -- layer
+2's `hscr` is a single 16-bit number, written once a frame, that goes from
+identically zero to a specific moving sequence the moment coprocessor output
+becomes real. It needs no framebuffer comparison and no rasteriser. **When the
+TGP is connected, `hscr` leaving zero is the first evidence it works, and the
+sequence above is what it should look like.**
+
+**R107 — `lint_top` was reporting on a fraction of the design and not saying
+which fraction; four undriven signals feeding the SDRAM arbiter survived it.**
+R94 built `lint_top` after a 19-bit port drove a 22-bit wire through four
+builds, and it was written properly -- by reintroducing the bug and confirming
+Verilator names it. It has been reporting "no port width mismatches" ever since.
+It was telling the truth and it was still useless for a whole class of fault.
+
+`verilator --lint-only` exits at the first missing module. `hps_io` lives in
+`sys/` and the PLL is a `.qip`, so neither is matched by the grep that derives
+the file list from the qsf, and the run ended with two MODMISSING errors. **The
+checks that survive an early exit are the parse-time ones**; everything needing
+a complete elaboration -- UNDRIVEN above all -- is silently skipped. So the
+guard ran, passed, and had never examined the design as a whole.
+
+What it was missing: `tgp_tbl_req`, `tgp_dat_req`, `tgp_tbl_addr` and
+`tgp_dat_addr` are declared in `Model2.sv` and feed SDRAM ports 8 and 9, and
+**nothing drives any of them** -- `m2_copro` is not instantiated. Quartus ties
+them low without complaint, so the ports sit idle and the last build was
+harmless, but the RTL is wrong and the guard existed precisely to say so.
+
+The fix is to make elaboration complete: `sys/hps_io.sv` and `rtl/pll/pll.v` are
+named explicitly, the vendor `altera_pll` gets a lint-only black box in
+`sim/lint/`, and the filter gains UNDRIVEN. `sys/hps_io.sv` is not
+Verilator-clean (PROCASSWIRE) and `-Wno-fatal` carries it far enough. With that,
+the four signals are named immediately and `make lint` fails -- correctly, and
+it will keep failing until the coprocessor is wired.
+
+*The generalisation is the point, and it is the R94 lesson arriving a second
+time in a different costume.* A lint that cannot elaborate is not a weaker lint,
+it is a lint whose coverage is unknown, and unknown coverage reads exactly like
+full coverage from the outside. **Any tool that can exit early must be checked
+for whether it did**, because a clean report from a run that stopped is
+indistinguishable from a clean report from a run that finished.
+
+**R108 — wiring the coprocessor woke two latent SDRAM controller bugs, and the
+undriven signals R107 complained about were the only thing that had been
+suppressing them.** `Model2.sv` has declared NPORTS = 10 for a long time. Ports
+8 and 9 were addressed, arbitrated and counted, and nothing drove them. That is
+the state R107 caught. It is also the state that kept the core working.
+
+Extending `tb_m2_sdram` from five ports to ten -- the number the core actually
+instantiates -- failed immediately, on the i960's own port.
+
+*Bug one: the read tag is three bits wide and there are ten ports.*
+
+    logic [RD_LAT-1:0][2:0] tag_p;          // declaration
+    tag_p[cap_depth-1] <= grant[2:0];       // and the assignment that truncates
+
+`PW = $clog2(NP)` is 4. Ports 8 and 9 therefore aliased onto **0 and 1**: their
+read data was written into `p_dout[0]`/`p_dout[1]` and `p_ack` was raised there.
+Every TGP table lookup would have handed the i960 a float from the sincos table
+in place of the instruction or datum it asked for, and acknowledged it as
+correct. Widening the declaration alone does nothing -- the truncation is in the
+assignment, and both had to be found.
+
+*Bug two, and it is the more dangerous of the pair: `rd_total` is a single
+global register, so ports may not have different burst lengths.* The burst
+length is captured once per grant and `tag_last` is computed against it while
+words are still being issued. A transaction granted while another is mid-issue
+overwrites it, the earlier transaction is then declared complete at the wrong
+word, and its result is composed from however much had arrived. Port 0 came back
+with two of its four words and zeros above them.
+
+Nothing detects this and nothing bounds which port is hit. It had never fired
+because **every port that had ever been active bursts four**, which makes
+`rd_total` invariant. Ports 8 and 9 were the first to want anything else.
+
+*What was done, and what deliberately was not.* Bug one is fixed -- the tag is
+`PW` bits at both the declaration and the assignment. Bug two is **not** fixed:
+ports 8 and 9 burst four like everything else, which makes the defect
+unreachable, and the constraint is written into `blen()` where the next person
+choosing a burst length will read it. Fixing it properly means reworking the
+read-issue sequencing, which is not a change to make on the way to first light
+for a coprocessor. **Adding a port with a different burst length reintroduces
+silent cross-port data corruption.**
+
+The cost of uniformity is two wasted words per TGP lookup, on a port that blocks
+on every lookup anyway. The pair never straddles a row: `tbl_addr`/`dat_addr`
+are 32-bit word indices shifted left by one, so the address is always even, and
+a row's last column is an odd index -- word 1 is always in the same row as word
+0, whatever the burst does after it.
+
+*The lesson is about the test, not the controller.* `tb_m2_sdram` instantiated
+five ports because it always had. `blen()` had had ten entries for as long as
+`Model2.sv` had had ten ports, and two of those entries described behaviour the
+controller could not actually deliver. **A configuration that exists only in the
+DUT is not covered by anything**, and the suite reported green throughout. This
+is the same shape as R107 one layer down: the guard ran, passed, and was never
+looking at the thing that was wrong.
+
+**R109 — the coprocessor is wired in and it runs: 2,024 words uploaded, booted,
+46,022 instructions retired. It produces no output yet, and that is now the one
+open fault rather than a list of them.** Three things had to be true before this
+could be measured at all, and none of them were: `m2_copro` was not instantiated
+in `Model2.sv`, `rtl/tgp/*.sv` was not in `Model2.qsf` -- **no build ever
+flashed contained a line of TGP** -- and `m2_copro` did not pass the TGP's
+`tbl_*`/`dat_*` through, so `tbl_ack` was unconnected and the first math lookup
+would have waited forever.
+
+*The math tables were verified against the reference rather than reasoned
+about.* MAME's `:copro_tgp_tables` region begins `00000000 38c90fdb 39490fdb` --
+sin(0), sin(2*pi/65536), sin of twice that. Of the twenty-four ways to
+interleave two 128 KB ROMs into 32-bit words exactly one reproduces it:
+opr-14742a supplies bits 15:0 and opr-14743a bits 31:16, each little-endian
+within itself. The `.mra` already did this. Checking cost one script, and the
+last time a byte order was assumed instead it cost four builds (R94).
+
+*What the boot harness now shows, with the coprocessor in the loop:*
+
+    copro_ctl1        00000000     bit 31 cleared -- the copro was BOOTED
+    program uploaded  2024 words   the upload-through-FIFO-write path works
+    TGP retires       46022        pc=0046 -- it is EXECUTING
+    FIFO in pushed    8            which is the whole depth
+    FIFO out popped   0            and nothing has come back
+    table reads       1
+
+So the register interface, the bit-31 selector, the program upload, the boot
+edge and the processor itself all work. **The input FIFO is at its full depth of
+eight and the TGP has returned nothing**, which is precisely why layer 2's
+`hscr` is still zero (R106) -- the acceptance test is working as designed, and
+currently reporting failure honestly.
+
+The next question is narrow and worth stating so it is not re-derived: 46,022
+retires with one table read and no FIFO traffic is a **loop that touches neither
+FIFO**. Either the TGP is not seeing `fifo_in_valid` where its microcode looks
+for it, or it is waiting on something tied off -- the RAM window is acknowledged
+immediately with zero (`dbg_ram_req` exposes it) and that is the obvious
+suspect. A TGP program-counter trace is the instrument; the retire counter and
+`dbg_pc` are already brought out for it.
+
+*Fit, which rule 11 makes a study-level number rather than an implementation
+detail.* With the whole coprocessor in:
+
+    ALM          33,248 / 41,910   79%
+    M10K            452 / 553      82%     (438 before, so the TGP cost 14)
+    registers    44,817
+    DSP              45 / 112      40%
+
+**It fits, with 8,662 ALM and 101 M10K blocks in hand.** The ~25,000 ALM figure
+the study has carried for i960-plus-renderer is not the ceiling it was treated
+as; the ceiling is the part, and the part has room. Speed remains the open
+problem (R104), and nothing here changes that.
+
+*One incidental removal.* `m2_tgp` had an `initial` block zeroing
+`sincos_base`, `inv_base`, `isqrt_base` and `atan_base`, every one of which is
+already cleared in the reset branch of the always_ff above it. Pure redundancy,
+and Verilator reports the pair as MULTIDRIVEN -- an error under -Wall, which
+stopped the boot harness building the moment the coprocessor was added. The unit
+flow never saw it because `TGPFLAGS` filters more widely than the harness does.
+Removed rather than silenced; all ten TGP suites still pass unchanged.
+
+**R110 — RETRACTED, SEE R116. The claim below is wrong and the fix it
+describes was reverted.** It rested on a mis-addressed read of MAME's program
+space and would have discarded three of every four program words.
+
+~~The coprocessor FIFO port is NOT burst-capable, the i960 uploads with
+quad-word stores, and taking all four dwords stretched the TGP program four to
+one.~~ This was the whole of the "coprocessor runs but produces nothing" fault,
+and it is one line.
+
+`model2.cpp` says it in what it does not write:
+
+    map(0x00804000, 0x00807fff)...flags(i960_cpu_device::BURST);   geometry program
+    map(0x00880000, 0x00883fff)...flags(i960_cpu_device::BURST);   function port
+    map(0x00884000, 0x00887fff).rw(copro_fifo_r, copro_fifo_w);    <- NOT flagged
+
+The i960 stores quads. A burst-capable port takes all four dwords; this one
+takes the FIRST and the bus drops the other three. Our bridge decomposes the
+quad into four ordinary writes and `m2_copro` accepted every one.
+
+*How it presented, because the symptom pointed everywhere except here.* The
+upload looked perfect. `copro_ctl1` went `0 -> 80000000 -> 0` exactly once, with
+2,024 words between, matching MAME's own control sequence edge for edge. The
+2,024 words were verified **byte-identical to MAME's first 2,024 writes** on the
+same port. The TGP then executed that program faithfully -- our `0x49` held
+`fe000044`, literally "branch to 0x44", so the dead loop was correct behaviour
+for the program it had. Every component was right and the composition was wrong.
+
+*What settled it.* MAME's resident program satisfies
+
+    program[i] == write[4i]     0 mismatches across all 506 words
+
+and every one of those writes sits at a 16-byte-aligned offset. 2,024 / 4 = 506,
+which is also exactly the count of non-zero words in MAME's program store -- a
+number that had been sitting in the evidence for some time being read as a
+coincidence.
+
+*Two false trails, recorded because both cost time and both were reasonable.*
+First, the tied-off TGP RAM window was the prime suspect for a processor that
+retires without doing work; `dbg_ram_req` measured **zero** cycles and cleared
+it outright. Second, 2,024 was read as four uploads of 506 and the bit-31 edge
+detection was suspected; logging the control writes showed a single upload and
+cleared that too. Both were answered by instruments rather than by argument,
+and the instruments are worth more than the answers: a PC histogram and sequence
+for the TGP, the io-address histogram, and `dbg_op` -- the word AT the fetched
+PC, which is what finally separated "wrong program" from "wrong decode".
+
+*The fix and its result.* `copro_fifo_sel` gains `cpu_io_addr[3:2] == 2'b00`.
+The upload becomes 506 words, `program[0x4c]` and `program[0x57]` match MAME
+exactly, and the TGP settles at **pc 0x4c-0x52 -- MAME's own wait loop**, where
+MAME's TGP spends 63% of its time. It is running the reference's program from
+the reference's addresses.
+
+*Still open, and stated so it is not mistaken for done.* The TGP consumes
+commands (37 pushed, and the pushes continue past the 8-deep FIFO, so they are
+being drained) but has pushed nothing OUT. MAME issues roughly 65,000 command
+words over 300 frames against our 37, so the i960 is barely feeding it -- which
+is consistent with the game not yet being in the 3D path, and with layer 2's
+`hscr` still reading zero (R106). Whether that is a second fault or simply the
+game not having got there is the next question, and the acceptance test is
+unchanged.
+
+*The generalisation.* Bus ACCESS WIDTH is part of a port's contract, not a
+detail of the master. Three ports in ten lines of `model2.cpp` differ only in a
+flag, and the flag decides whether a device sees one word or four. Every port
+this core implements should be checked against that map for the same thing.
+
+**R111 — the coprocessor FIFOs BLOCK BOTH PROCESSORS IN BOTH DIRECTIONS, and
+this core implements none of it; two of the four cases silently discard data.**
+The specification is not inferred. It is `model2.cpp`'s `machine_start`, read
+against the callback order in `devices/machine/gen_fifo.h`:
+
+    m_copro_fifo_in->setup(8,
+      [] { m_copro_tgp->stall(); },                 // pop on empty  -> STALL the TGP
+      [] { m_copro_tgp->HALT   ASSERT; },           // still empty   -> HALT the TGP
+      [] { m_copro_tgp->HALT   CLEAR;  },           // data arrives  -> resume
+      [] { m_maincpu->HALT     ASSERT; },           // push on full  -> HALT THE i960
+      [] { m_maincpu->HALT     CLEAR;  }, ...
+
+    m_copro_fifo_out->setup(8,
+      [] { m_maincpu->i960_stall(); },              // pop on empty  -> STALL the i960
+      [] { m_maincpu->HALT     ASSERT; },
+      [] { m_maincpu->HALT     CLEAR;  },
+      [] { m_copro_tgp->HALT   ASSERT; },           // push on full  -> HALT the TGP
+      [] { m_copro_tgp->HALT   CLEAR;  }, ...
+
+`gen_fifo.h` states the contract in its own header: a pop on an empty FIFO
+"must ask the destination to try again (e.g. ->stall() or equivalent)", and if
+it is still empty after the sync "the destination device should be halted".
+
+*What this core does instead, all four wrong and two of them destructive:*
+
+| case                          | hardware        | `m2_copro` |
+|-------------------------------|-----------------|------------|
+| TGP pops empty input          | stall, then halt| runs on    |
+| i960 pushes into full input   | halt the i960   | **word dropped** |
+| i960 pops empty output        | stall, then halt| returns 0  |
+| TGP pushes into full output   | halt the TGP    | **word dropped** |
+
+The two drops are `else if (!fin_full)` and `if (tgp_out_push && !fout_full)`.
+Both look like sensible overflow guards and both are data loss: on the real
+board the FIFO going full is not an error, it is the flow control.
+
+*This explains the measurement that started the hunt.* The TGP runs Daytona's
+wait loop at 0x4c-0x57 **thirty million times without ever blocking** -- every
+address in the loop carries an identical sample count, so it is not stalling
+anywhere -- while MAME's TGP parks at 0x4c for 63% of its samples. A processor
+that should be asleep is instead spinning, and a full input FIFO silently eats
+the commands aimed at it. Only 37 pushes were ever recorded against MAME's tens
+of thousands.
+
+*It also retires a red herring.* `EMPTY_FIFO_READS_ZERO` in `m2_tgp` was the
+prime suspect and it is the wrong layer: the question is not what an empty read
+RETURNS, it is that the read must not complete at all. The fix is a handshake,
+not a value.
+
+*Scope, stated because it is larger than it looks.* Halting the i960 is not
+something `m2_copro` can do by itself -- it needs the bus to hold, which means
+`m2_cpu_bridge` must withhold its acknowledge for a copro access that cannot
+complete. That is the same mechanism the SDRAM path already uses, so the
+machinery exists, but it crosses a module boundary and the i960 has never been
+made to wait on a peripheral before. **The FIFOs are flow control, not
+buffers**, and a design that treats them as buffers loses commands rather than
+slowing down.
+
+**R112 — the ported TGP looks for its FIFOs at MODEL 1's addresses, which do
+not exist on Model 2.** This is the root cause of "the coprocessor runs and
+produces nothing", and it is the Model 1 inheritance the port never had checked.
+
+`rtl/tgp/mb86233_mem.sv`:
+
+    assign sel_fifo_in  = (addr == 17'h00100) && !we;
+    assign sel_fifo_out = (addr == 17'h00400) &&  we;
+    // comment cites copro_data_map -- which is MODEL 1's map
+
+Model 2's own data map has neither address:
+
+    void model2_tgp_state::copro_tgp_data_map(address_map &map)
+    {
+        map(0x0000, 0x00ff).ram();
+        map(0x0200, 0x03ff).ram();
+    }
+
+0x100 and 0x400 are holes. Model 2 puts the FIFOs in the REGISTER FILE space,
+which this port does not implement at all:
+
+    void model2_tgp_state::copro_tgp_rf_map(address_map &map)
+    {
+        map(0x0, 0x0).nopw();                      // leds? busy flag?
+        map(0x1, 0x1).r(m_copro_fifo_in,  read);   // commands IN
+        map(0x2, 0x2).w(m_copro_fifo_out, write);  // results OUT
+        map(0x3, 0x3).w(copro_tgp_bank_w);         // memory window bank
+    }
+
+*Measured on both sides, which is what makes it certain rather than plausible.*
+MAME pops the input FIFO **484,947** times in 300 frames, and a tap carrying the
+TGP's PC says **226,998 of those are at pc 0x004c** -- the instruction
+`012f4614` at the head of Daytona's wait loop -- with the rest at the command
+handlers (0x311, 0x316, 0x308, 0xbf, 0xc0, 0xba...) it only reaches once it has
+data. This core executes 0x004c **49 million times** and asserts `fifo_rd`
+**94** times. It runs the right instruction at the right address and does not
+recognise it as a FIFO access.
+
+*What this retires.* Three separate theories died on this measurement, all of
+them reasonable and all of them wrong:
+  * that the TGP was too SLOW -- the arithmetic says the stream needs 1.1 M
+    instr/s and we have 5.1 M at 50 MHz, five times over. Clocking was never
+    the blocker.
+  * that `EMPTY_FIFO_READS_ZERO` was the fault. It WAS a real defect -- the
+    parameter was declared, its reasoning documented at length, and the
+    instantiation never passed it, so an empty read withheld its acknowledge and
+    stalled the processor. Fixing it dropped `fifo_rd` from 154,767,628 stalled
+    cycles to 94. It was necessary and it was not sufficient.
+  * that the FIFO flow control was missing in all four directions (R111). Only
+    the writer-on-full case was actually wrong; a pop on empty returns zero by
+    design, and the microcode needs that zero.
+
+*The shape of the fix.* The register-file space has to exist: rf 1 read is the
+input FIFO, rf 2 write is the output FIFO, rf 3 write is the bank register that
+drives the `copro_tgp_memory_r` window, rf 0 is ignored. That means the decoder
+must route rf accesses distinctly from data accesses -- MAME's device declares
+AS_RF as a fourth address space alongside program, data and io, and this port
+folded it into data.
+
+**The generalisation is the one the whole session keeps arriving at.** The TGP
+core was lifted from the Model 1 project and every module was fuzz-verified
+against a reference -- ten suites, all passing. What was never verified is the
+part no unit test can see: WHICH MACHINE IT IS PLUGGED INTO. `copro_data_map`
+is named in the comment. Nobody checked that Model 2 has a different one.
+
+**R113 — the register-file routing works: the TGP now drains Daytona's command
+stream at the reference rate and receives the correct words. What remains is the
+DISPATCH, and it was validated against a Model 1 game.** R112 named the fault;
+this records the fix and what it exposed underneath.
+
+*The fix.* `mb86233_regs` routes rf index 1 to the input FIFO and index 2 to the
+output FIFO, and `mb86233_core` ORs that path with the old data-space one so the
+module stays usable on both machines -- on Model 2 the data addresses are holes
+and never fire, on Model 1 the register indices are ordinary storage and never
+fire. Measured before and after:
+
+    TGP popped        31  ->  435,204      (MAME: 484,947)
+    fifo_rd cycles    94  ->  2,935,127
+    input FIFO        permanently full -> 3 outstanding
+
+It is draining at essentially the reference rate.
+
+*And the words are right.* The first popped values against MAME's own push
+stream, same point in the boot:
+
+    MAME  00000000 00000000 41000000 00000000 3b8e38e4 438e8000 3f9e5556 3fb98e39 42e00000 ...
+    ours  00000000 00000000 41000000 00000000 3b8e38e4 438e8000 00000000 3fb98e39 42e00000 ...
+
+Identical but for one word. The command path is correct end to end.
+
+*What is still wrong, stated precisely so it is not re-derived.* The TGP visits
+23 program addresses, all of them the 0x4c-0x57 wait loop, and NEVER reaches the
+command handlers MAME reaches (0x311, 0x316, 0x308, 0xbf, 0xc0, 0xba, 0x30c,
+0xb5). The dispatch at 0x52 is `brul alw d` with `d = get_exp(b) + 0x53`, so
+b = 0 selects 0x53, the idle handler. Ours resolves to 0x53 every time while
+holding correct, non-zero command words -- so either `d` is not being computed
+from the popped value, or the computed branch is not taking the register value.
+
+*The provenance is the point.* `mb86233_core.sv` records that the branch was
+built and verified against "the **vr** microcode", which "has exactly one brul
+(0x0052, register form, reg 0x19)". `vr` is Virtua Racing -- a MODEL 1 game.
+The same file states outright that the MEMORY form "is not built yet". So the
+computed branch has been exercised by exactly one instance of one form in one
+Model 1 title, and Daytona's dispatch runs through it thousands of times a
+frame.
+
+**This is the third distinct Model 1 inheritance to surface in one session**,
+after the FIFO addresses (R112) and `EMPTY_FIFO_READS_ZERO` never being passed.
+The pattern is consistent and worth stating as a rule: **every module in
+`rtl/tgp/` was fuzz-verified against a reference, and the reference was Model
+1.** Passing unit tests say the module matches what it was compared against;
+they say nothing about which machine it is plugged into. Anything in that
+directory whose comments cite a Model 1 driver, a Model 1 game, or a Model 1
+address map should be treated as unverified for this project until checked
+against `model2.cpp`.
+
+
+**R114 - the coprocessor now pops correctly and register B is NEVER WRITTEN;
+the break is downstream of the FIFO, in the store-and-reload the microcode does
+between them.** R113 left the TGP draining the command stream at the reference
+rate while never dispatching. This narrows that to one register.
+
+*Measured over a full boot, sampling EVERY CYCLE rather than at the pop -- the
+write-back lands a cycle later, so a sample taken at the pop sees the old value
+and proves nothing:*
+
+    A  non-zero for  3,211,781 cycles      last 0000382d
+    B  non-zero for          0 cycles      NEVER WRITTEN
+    D  non-zero for 41,953,870 cycles      last 7fc00000  (a NaN)
+
+The dispatch is `D = get_exp(B) + base`. With B permanently zero it can only
+ever select the idle handler, which is exactly the observed behaviour: 23
+program addresses visited, all of them the wait loop, none of MAME's handlers.
+D holding a NaN says the arithmetic downstream is running on nothing.
+
+*Our pop decode is CORRECT, and establishing that meant undoing a wrong
+conclusion reached an hour earlier.* The instruction this core pops on,
+`1c1f2021`, is class 0x07 sub-op 7 with `r2 >> 6 == 6` -- MAME's
+`case 6: mov reg, reg`, which does `read_reg(r1)` then `write_reg(r2, v)`.
+r1 = 0x021 is register 0x21, which `read_reg` maps to rf 1, the input FIFO.
+r2 & 0x3f = 0x10, register A. So `1c1f2021` is `mov rf1, A` and popping there is
+right. The earlier reading of this file allowed only `r2 >> 6` of 0 or 1 to
+reach `read_reg` and therefore called our pop site wrong; case 6 reads r1 and
+was missed.
+
+*And MAME's CURPC is NOT usable for attributing memory accesses on this device.*
+A tap on the rf space reported 147,299 FIFO reads at pc 0x004c, whose program
+word is `012f4614` -- class 0x00, `lab`, which never calls `read_reg` at all.
+Other rows named pcs 0x308/0x311/0x316, all beyond the 506-word program, whose
+words read `00000000`. **PC-attributed measurements from a MAME memory tap must
+be corroborated by decoding the opcode**, which is what finally identified the
+real popping form.
+
+*Where the fault now sits.* `lab` (class 0x00 op 3) loads A from `ea_pre_0(r1)`
+and B from `ea_pre_1(r2) + 0x200`; at 0x4c that second address is `x1 + 0x200`,
+which on Model 2 is ordinary data RAM (`copro_tgp_data_map` maps 0x200-0x3ff).
+So B is loaded FROM RAM, and the RAM is empty. The microcode's flow is
+pop -> A -> STORE to data RAM -> later `lab` reloads it into B. A is right and
+the reload is empty, so the STORE is the next thing to verify: whether this core
+issues that data write at all, and to the address the reload expects.
+
+This core's `lab` is not the suspect: `S_LABB`/`S_LABB_W` capture both operands
+and `S_LAB_WA`/`S_LAB_WB` write A then B, with a recorded fix for exactly the
+bug of reading the second operand and discarding it.
+
+*Verified, same run: the store never happens.* A counter on the exact condition
+the RAM itself uses (`req && we && (sel_ram0 || sel_ram1)`, the same expression
+as `ram0[a0] <= wdata`) reports **ZERO data-RAM writes** across a full boot,
+against 58,645 successful FIFO pops. The TGP takes commands into A and never
+stores anything, so `lab` reloads an untouched RAM into B, B stays zero, and the
+dispatch can only ever select the idle handler.
+
+That is the frontier: **this core issues no data-space write for any
+instruction.** Whether that is a missing destination form in the decoder or a
+`mem_we` that never asserts is the next thing to establish, and it is a
+contained question -- one signal, one condition, and a working reference to diff
+against.
+
+**R115 - the FIFO register can now stall the pipeline, and the remaining
+divergence is control flow: we enter a wait loop the reference never enters.**
+
+*Fixed.* A register source completed in one cycle unconditionally, because
+before Model 2 no register could ever be busy. On Model 2 the input FIFO IS
+register 0x21, so `S_SRC` must be able to hold: MAME's pop on an empty FIFO
+returns zero AND calls `stall()`, and `goto do_stall` re-executes the
+instruction, so the read does not retire until a command arrives. The core now
+holds in `S_SRC` while `rf_fifo_rd && !fifo_ack`. Measured: **196,842,195 hold
+cycles** in one boot, with 58,633 commands still consumed. `EMPTY_FIFO_READS_ZERO`
+goes back to 0 -- the stall is the behaviour, and the zero it returns matters
+only for the value, not for whether the instruction completes.
+
+*Verified against the reference, instruction for instruction.* The class 0x07
+sub-op 7 table in `mb86233_xfer.sv` matches MAME's inner switch exactly -- case
+0 `mov reg,mem`, 1 `mov reg,mem(e)`, 2 `mov mem+0x200,reg`, 3 `mov mem,reg`,
+4 `mov mem(e),reg`, 5 `mov mem(o),reg`, 6 `mov reg,reg`. Two earlier suspicions
+were wrong and are recorded as such: `0xb6` is `mov mem(e),reg`, an IO read and
+not a store, and the `0x4c` handler entry really is only three instructions
+(`b5, b6, b7`) because `0xb7` is `brif always -> 0x4c`.
+
+*The divergence, located.* This core runs
+`0000 -> 0010..0015 -> 0016 -> 00b5 00b6 00b7 -> 004c` and then the 0x4c-0x57
+loop for ever. That loop has NO conditional exit -- 0x53/0x54/0x56 are `ldi` and
+transfer forms, 0x57 is `brif always` back to 0x4c -- so it is a terminal state,
+and its only pop (0x55) writes A, never B.
+
+**The reference is not in that loop.** Its hottest TGP data reads are 000, 07f,
+070, 073, 068 -- handler addresses -- and 0x14, which the loop's `lab` reads
+every single iteration, does not appear in the top twelve at all. MAME's B also
+takes popped command values (B = 12002424 immediately after data = 12002424),
+which only 0x11/0x13 can do, so its dispatch loop is 0x10-0x15 plus the jump
+table at 0x16-0x28, returning to 0x10 -- not 0x4c.
+
+So we take jump-table **entry 0** because `D = get_exp(B)` with B = 0, and entry
+0 leads to the terminal loop. The question for next session is narrow: what does
+the reference compute for D at the first dispatch, and by what path does it
+return to 0x10 rather than falling into 0x4c. Note the first two command words
+in the stream ARE 00000000, so B = 0 at the first dispatch is not by itself
+wrong -- the reference must leave the loop by a route this core does not take.
+
+*A measurement caveat worth keeping.* MAME's `CURPC` cannot be trusted inside a
+memory tap on this device: it attributed 147,299 rf reads to pc 0x004c, whose
+word is class 0x00 `lab` and cannot call `read_reg` at all, and named pcs beyond
+the 506-word program whose words read 00000000. Every PC-attributed measurement
+here was re-derived by decoding the opcode instead.
+
+
+**R116 - R110 WAS WRONG, and the error was a mis-addressed read of MAME's
+program space that manufactured its own corroboration.**
+
+The TGP's program space is WORD-addressed (`32, 16, -2`). It must be read as
+`ps:read_u32(word)`. Every dump this project took read `ps:read_u32(word * 4)`.
+
+*What that produced.* Sampling word*4 across a 2024-word program lands inside it
+only while `a*4 < 2024`, i.e. for the first **506** samples. That is the entire
+provenance of the "506-word program" -- a number that then appeared to confirm
+`program[i] == write[4i]` with zero mismatches, because both sides of the
+comparison were drawn from the same aliased sampling. 2024 / 4 = 506 was read as
+a burst ratio when it was an artifact of the stride.
+
+*Read correctly, in one run against a fetch tap that reports true word indices:*
+
+    MAME program: 2024 non-zero words of 4096
+    program[i] == write[i]   :  32 mismatches over 2064   <- 1:1
+    program[i] == write[4i]  : 521 mismatches over 525    <- nonsense
+
+`copro_fifo_w(u32 data)` pushes once per call and the map carries no burst flag
+for a reason: **one write is one word.** The `cpu_io_addr[3:2] == 2'b00` filter
+R110 added was discarding three of every four program words, and is reverted.
+
+*Immediate effect of the revert, same harness, same run length:*
+
+    program uploaded   506 -> 2024 words
+    B non-zero           0 -> 12,062,975 cycles
+    data-RAM writes      0 -> 50
+    trace now executes the whole 0x10-0x3e init block
+
+*What else this retracts.* Every static decode in R112-R115 that quoted program
+words -- the "0x4c-0x57 wait loop", the "jump table at 0x16-0x28", the decode of
+`012f4614`, the handler listing at 0xb5 -- was read from the wrong addresses and
+must be redone. The MEASURED findings in those entries survive, because they
+compared this core against the reference through counters rather than through
+disassembly: the rf-space FIFO routing (R112), the FIFO stall in S_SRC (R115),
+the unpassed `EMPTY_FIFO_READS_ZERO`, and the pop/push rates. It is the
+instruction-level archaeology that has to start again.
+
+*The lesson, and it is the third time this session in a different costume.*
+R107 was a guard that could not see the fault. R114 was a PC attribution that
+could not be trusted. This is a memory read whose ADDRESS UNIT was never
+checked against the device's own space configuration -- and it did not fail
+loudly, it returned plausible instruction words from the wrong places and
+supported a theory for two days. **Before reading a device's memory from a
+debugger or a script, verify the address unit against something the device
+itself produces.** The fetch tap was that something, and it took ten minutes.
