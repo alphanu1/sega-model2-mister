@@ -192,11 +192,29 @@ module m2_sdram #(
       // consecutive bytes, so four words at a time gives it seven of
       // every eight without a second request.
       0, 1, 2, 3, 4, 5, 6, 7: blen = 4'd4;
-      // 8 and 9 are the TGP's table and data reads. It asks for ONE word and
-      // waits for it, so a four-word burst would fetch three it never looks at
-      // and hold the controller three times as long -- the opposite trade from
-      // the sample ports, where a voice reads forwards.
-      8, 9: blen = 4'd1;
+      // 8 AND 9 BURST FOUR BECAUSE EVERY PORT MUST BURST THE SAME, AND THAT IS
+      // A CONSTRAINT OF THIS CONTROLLER, NOT A PREFERENCE.
+      //
+      // The TGP wants a PAIR -- its word is 32 bits and this memory's is 16, so
+      // one lookup is two SDRAM words and the other two are thrown away. Two
+      // was tried, and it corrupted OTHER PORTS' data.
+      //
+      // `rd_total` is a single global register (see the read-issue block). A
+      // transaction that is granted while another is still issuing overwrites
+      // its burst length, and `tag_last` is then computed against the wrong
+      // count: the earlier transaction completes early and is composed from
+      // however many words had arrived. Port 0 -- the i960 -- came back with
+      // two of its four words and zeros above them. Nothing in this controller
+      // detects it and nothing bounds which port is hit.
+      //
+      // Every port bursting four makes rd_total invariant, so the defect cannot
+      // fire. It is a real defect and it is recorded (R108) rather than fixed
+      // here, because fixing it means reworking the issue sequencing and this
+      // change is on the path to first light for the coprocessor. **Adding a
+      // port with a different burst length reintroduces silent cross-port
+      // corruption.** The cost of uniformity is two wasted words per TGP
+      // lookup on a port that blocks on every one of them anyway.
+      8, 9: blen = 4'd4;
       default: blen = 4'd1;
     endcase
   endfunction
@@ -508,7 +526,18 @@ module m2_sdram #(
   // buffers are what make that safe — a shared one would interleave two
   // masters' words into the same array.
   logic [RD_LAT-1:0]        tag_v;
-  logic [RD_LAT-1:0][2:0]   tag_p;      // port index
+  // PW BITS, NOT THREE. This was `[2:0]` while PW = $clog2(NP) is 4 for the
+  // ten ports the core instantiates, so ports 8 and 9 ALIASED ONTO 0 AND 1 in
+  // the read-tag pipeline: their data was delivered into p_dout[0]/p_dout[1]
+  // and acknowledged there, corrupting the i960's own reads with the
+  // coprocessor's table fetches.
+  //
+  // It was latent only because nothing drove ports 8 and 9 -- the undriven
+  // signals lint_top could not see (R107) were the only thing holding it off.
+  // Wiring the coprocessor would have fired it on the first table lookup, and
+  // the symptom would have been random CPU data corruption with a perfectly
+  // healthy-looking coprocessor.
+  logic [RD_LAT-1:0][PW-1:0] tag_p;      // port index
   logic [RD_LAT-1:0][1:0]   tag_w;      // word index within the burst
   logic [RD_LAT-1:0]        tag_last;
   logic [NP-1:0][3:0][15:0] cap;
@@ -650,7 +679,7 @@ module m2_sdram #(
 
         // Read capture, driven entirely by the tag that travelled with the CAS.
         tag_v    <= {1'b0, tag_v[RD_LAT-1:1]};
-        tag_p    <= {3'd0, tag_p[RD_LAT-1:1]};
+        tag_p    <= {PW'(0), tag_p[RD_LAT-1:1]};
         tag_w    <= {2'd0, tag_w[RD_LAT-1:1]};
         tag_last <= {1'b0, tag_last[RD_LAT-1:1]};
         if (tag_v[0]) begin
@@ -658,13 +687,24 @@ module m2_sdram #(
           if (tag_last[0]) begin
             // The final word and its buffer write share an edge, so deliver
             // the staged word directly rather than reading back a stale slot.
-            // Word index 0 on the last word means this was a single-word
-            // transfer; anything else means the full four.
-            if (tag_w[0] == 2'd0)
-              p_dout[tag_p[0]] <= {48'd0, dq_r};
-            else
-              p_dout[tag_p[0]] <= {dq_r, cap[tag_p[0]][2],
-                                   cap[tag_p[0]][1], cap[tag_p[0]][0]};
+            // The LAST word's index identifies the burst length, because a
+            // burst of N always ends at index N-1: 0 is a single word, 1 is a
+            // pair, 3 is the full four.
+            //
+            // The pair case exists for the TGP. It reads 32-bit words out of a
+            // 16-bit memory, so one logical fetch is two SDRAM words, and
+            // before this the `else` composed every non-single transfer from
+            // FOUR capture slots -- a 2-word burst would have taken cap[1] and
+            // cap[2] from whatever the previous transfer left there. Silent,
+            // and wrong only in the upper half, which is the exponent and sign
+            // of a float. Unused lanes are zeroed rather than left stale so a
+            // consumer reading past what it asked for sees zero, not history.
+            case (tag_w[0])
+              2'd0:    p_dout[tag_p[0]] <= {48'd0, dq_r};
+              2'd1:    p_dout[tag_p[0]] <= {32'd0, dq_r, cap[tag_p[0]][0]};
+              default: p_dout[tag_p[0]] <= {dq_r, cap[tag_p[0]][2],
+                                            cap[tag_p[0]][1], cap[tag_p[0]][0]};
+            endcase
             p_ack[tag_p[0]]    <= 1'b1;
             ack_cnt[tag_p[0]]  <= 2'(ACK_HOLD - 1);
           end
@@ -820,7 +860,12 @@ module m2_sdram #(
             // pipeline: the tag reaches slot 0 after cap_depth cycles, which
             // is what decides which bus word is called word 0.
             tag_v[cap_depth-1]    <= 1'b1;
-            tag_p[cap_depth-1]    <= grant[2:0];
+            // PW BITS. This took grant[2:0] -- three bits for a ten-port
+            // controller -- so ports 8 and 9 were tagged as 0 and 1 and their
+            // read data was delivered to, and acknowledged on, the i960's own
+            // port. Widening the tag's DECLARATION is not enough; this is the
+            // assignment that did the truncating.
+            tag_p[cap_depth-1]    <= PW'(grant);
             tag_w[cap_depth-1]    <= rd_issued[1:0];
             tag_last[cap_depth-1] <= (rd_issued + 1'b1 == rd_total);
             rd_bank_cnt[tbank]    <= cap_depth;

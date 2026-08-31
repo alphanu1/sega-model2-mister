@@ -92,6 +92,7 @@ module m2_cpu_sdram_harness #(
   logic  [1:0] b_be;
 
   m2_cpu_bridge #(.AW(AW), .BOARD_2A(1'b0)) u_bridge (
+    .io_stall(1'b0),   // no stalling peripheral in this harness
     .dbg_dc_hits(), .dbg_dc_miss(),
     .char_wr(), .char_wr_addr(),
     .clk_cpu(clk_cpu), .rst_n_cpu(rst_n),

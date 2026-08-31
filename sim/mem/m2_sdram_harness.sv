@@ -39,15 +39,25 @@ module m2_sdram_harness #(
   input  logic [1:0]  wr_be,
   output logic        wr_ack,
 
-  // p0 V60 (read/write), p1 tile char, p2 polygon/TGP, p3 sound 68000,
-  // p4 MultiPCM. See docs/00-decisions.md D8.
+  // ALL TEN PORTS THE CORE ACTUALLY HAS, not the first five.
+  //
+  // It was five, and blen() has had ten entries for a long time. Ports 8 and 9
+  // burst TWO -- the TGP's 32-bit word out of a 16-bit memory -- and a burst
+  // length that only exists in the DUT is not covered by anything: the
+  // controller's capture composed every non-single transfer from four slots,
+  // so a pair silently took half its result from the previous transfer. A test
+  // that drives 0..4 cannot see that no matter how long it runs.
   input  logic        p0_req, p1_req, p2_req, p3_req, p4_req,
+                      p5_req, p6_req, p7_req, p8_req, p9_req,
   input  logic        p0_we,
   input  logic [COL_BITS+15:1] p0_addr, p1_addr, p2_addr, p3_addr, p4_addr,
+                               p5_addr, p6_addr, p7_addr, p8_addr, p9_addr,
   input  logic [15:0] p0_din,
   input  logic [1:0]  p0_be,
   output logic [63:0] p0_dout, p1_dout, p2_dout, p3_dout, p4_dout,
+                      p5_dout, p6_dout, p7_dout, p8_dout, p9_dout,
   output logic        p0_ack, p1_ack, p2_ack, p3_ack, p4_ack,
+                      p5_ack, p6_ack, p7_ack, p8_ack, p9_ack,
 
   // Device model observability
   output int unsigned violations,
@@ -65,7 +75,7 @@ module m2_sdram_harness #(
   output logic [23:0] mon_total
 );
 
-  localparam int unsigned NP    = 5;
+  localparam int unsigned NP    = 10;   // all ten the core uses: 8 and 9 burst two
   localparam int unsigned T_RCD = 2;
   localparam int unsigned T_RP  = 2;
   localparam int unsigned T_RC  = 7;
@@ -84,18 +94,37 @@ module m2_sdram_harness #(
   logic [NP-1:0][63:0] p_dout;
   logic [NP-1:0]       dbg_req, dbg_grant;
 
-  assign p_req  = {p4_req, p3_req, p2_req, p1_req, p0_req};
-  assign p_we   = {4'b0000, p0_we};
-  assign p_addr = {p4_addr, p3_addr, p2_addr, p1_addr, p0_addr};
-  assign p_din  = {64'd0, p0_din};
-  assign p_be   = {8'd0, p0_be};
+  // Indexed rather than concatenated: a concatenation silently renumbers every
+  // port when one is added, and the width mismatch that follows is reported
+  // against the assignment, not against the port that moved.
+  always_comb begin
+    p_req  = '0;  p_we = '0;  p_addr = '0;  p_din = '0;  p_be = '1;
+    p_req[0] = p0_req; p_req[1] = p1_req; p_req[2] = p2_req; p_req[3] = p3_req;
+    p_req[4] = p4_req; p_req[5] = p5_req; p_req[6] = p6_req; p_req[7] = p7_req;
+    p_req[8] = p8_req; p_req[9] = p9_req;
+    p_addr[0] = p0_addr; p_addr[1] = p1_addr; p_addr[2] = p2_addr;
+    p_addr[3] = p3_addr; p_addr[4] = p4_addr; p_addr[5] = p5_addr;
+    p_addr[6] = p6_addr; p_addr[7] = p7_addr; p_addr[8] = p8_addr;
+    p_addr[9] = p9_addr;
+    p_we[0]  = p0_we;
+    p_din[0] = p0_din;
+    p_be[0]  = p0_be;
+  end
 
-  assign {p4_ack, p3_ack, p2_ack, p1_ack, p0_ack} = p_ack;
+  assign p0_ack = p_ack[0]; assign p1_ack = p_ack[1]; assign p2_ack = p_ack[2];
+  assign p3_ack = p_ack[3]; assign p4_ack = p_ack[4]; assign p5_ack = p_ack[5];
+  assign p6_ack = p_ack[6]; assign p7_ack = p_ack[7]; assign p8_ack = p_ack[8];
+  assign p9_ack = p_ack[9];
   assign p0_dout = p_dout[0];
   assign p1_dout = p_dout[1];
   assign p2_dout = p_dout[2];
   assign p3_dout = p_dout[3];
   assign p4_dout = p_dout[4];
+  assign p5_dout = p_dout[5];
+  assign p6_dout = p_dout[6];
+  assign p7_dout = p_dout[7];
+  assign p8_dout = p_dout[8];
+  assign p9_dout = p_dout[9];
 
   logic        cke, cs_n, ras_n, cas_n, we_n;
   logic [1:0]  ba, dqm;

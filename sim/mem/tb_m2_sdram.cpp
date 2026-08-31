@@ -34,12 +34,21 @@
 #include <random>
 #include <vector>
 
-static const int NP = 5;
+static const int NP = 10;
 
 // Burst length per port, mirroring blen() in m2_sdram.sv.
 // MIRRORS blen() IN m2_sdram.sv, and it did not: it said ports 1 and 2 burst
 // four where blen() said 1, 2 AND 3, so port 3's burst was only ever checked
-// one word deep. All five ports burst four now.
+// one word deep. That is why this is a function with the real table in it and
+// not a constant, and why the harness now instantiates all TEN ports: 8 and 9
+// burst TWO for the TGP, a length the controller could not previously deliver
+// at all -- its capture composed any non-single transfer from four slots, so a
+// pair took two of its lanes from the previous transfer. A burst length that
+// exists in blen() and is never driven by a test is not covered by it.
+// EVERY PORT BURSTS FOUR, and that is load-bearing rather than incidental --
+// see the blen() comment in m2_sdram.sv. A port with a different length
+// corrupts other ports' data through the shared rd_total, which is exactly
+// what ten active ports found the moment 8 and 9 asked for pairs.
 static int burst_of(int p) { (void)p; return 4; }
 
 struct Harness {
@@ -108,28 +117,40 @@ struct Harness {
     switch (p) {
       case 0: d->p0_req = v; break; case 1: d->p1_req = v; break;
       case 2: d->p2_req = v; break; case 3: d->p3_req = v; break;
-      default: d->p4_req = v; break;
+      case 4: d->p4_req = v; break; case 5: d->p5_req = v; break;
+      case 6: d->p6_req = v; break; case 7: d->p7_req = v; break;
+      case 8: d->p8_req = v; break;
+      default: d->p9_req = v; break;
     }
   }
   void setAddr(int p, uint32_t a) {
     switch (p) {
       case 0: d->p0_addr = a; break; case 1: d->p1_addr = a; break;
       case 2: d->p2_addr = a; break; case 3: d->p3_addr = a; break;
-      default: d->p4_addr = a; break;
+      case 4: d->p4_addr = a; break; case 5: d->p5_addr = a; break;
+      case 6: d->p6_addr = a; break; case 7: d->p7_addr = a; break;
+      case 8: d->p8_addr = a; break;
+      default: d->p9_addr = a; break;
     }
   }
   bool getAck(int p) {
     switch (p) {
       case 0: return d->p0_ack; case 1: return d->p1_ack;
       case 2: return d->p2_ack; case 3: return d->p3_ack;
-      default: return d->p4_ack;
+      case 4: return d->p4_ack; case 5: return d->p5_ack;
+      case 6: return d->p6_ack; case 7: return d->p7_ack;
+      case 8: return d->p8_ack;
+      default: return d->p9_ack;
     }
   }
   uint64_t getDout(int p) {
     switch (p) {
       case 0: return d->p0_dout; case 1: return d->p1_dout;
       case 2: return d->p2_dout; case 3: return d->p3_dout;
-      default: return d->p4_dout;
+      case 4: return d->p4_dout; case 5: return d->p5_dout;
+      case 6: return d->p6_dout; case 7: return d->p7_dout;
+      case 8: return d->p8_dout;
+      default: return d->p9_dout;
     }
   }
 
@@ -297,7 +318,7 @@ int main(int argc, char** argv) {
            h.checks, h.fails, h.d->violations);
   }
 
-  printf("test: all five masters concurrent, with p0 writes mixed in\n");
+  printf("test: all ten masters concurrent, with p0 writes mixed in\n");
   {
     long start_checks = h.checks;
     for (long n = 0; n < 120000; n++) {
