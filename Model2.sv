@@ -1914,9 +1914,14 @@ wire [31:0] tgpid = {4{tgpid_b}};
 // exactly the "506-word program" that theory rested on. Read correctly, MAME's
 // program is 2024 non-zero words and satisfies program[i] == write[i]. See R116.
 wire        copro_fifo_sel = cpu_io_sel && (cpu_io_addr[23:14] == 10'h221);
+// The function port. 0x00880000-0x00883fff, one region above the FIFO. The
+// command code is the address: MAME takes (offset >> 2) & 0xff of a dword
+// offset, which is bits 11:4 of the byte address.
+wire        copro_fn_sel   = cpu_io_sel && (cpu_io_addr[23:14] == 10'h220);
 wire        copro_ctl_sel  = cpu_io_sel && (cpu_io_addr[23:0]  == 24'h980000);
 wire        copro_fctl_sel = cpu_io_sel && (cpu_io_addr[23:0]  == 24'h980004);
 wire        copro_sel      = copro_fifo_sel | copro_ctl_sel | copro_fctl_sel;
+// The function port is write-only; it never contributes to the read mux.
 // Only the coprocessor can hold the bus today; the wire is named for the bus,
 // not for the coprocessor, so a second such peripheral ORs into it.
 wire        cpu_io_stall   = copro_stall;
@@ -1963,6 +1968,7 @@ m2_copro u_copro (
 	.clk(clk_sys), .rst_n(cpu_rst_n),
 	.sel_ctl(copro_ctl_sel), .sel_fifo(copro_fifo_sel),
 	.sel_fifoctl(copro_fctl_sel),
+	.sel_fn(copro_fn_sel), .fn_code(cpu_io_addr[11:4]),
 	.we(cpu_io_we), .wdata(cpu_io_wdata), .rdata(copro_rdata),
 	.stall(copro_stall),
 	// THE LOW TWO WORDS OF A FOUR-WORD BURST. The TGP's word is 32 bits and

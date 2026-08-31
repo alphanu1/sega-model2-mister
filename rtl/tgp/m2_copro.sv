@@ -58,6 +58,23 @@ module m2_copro (
   // ---- the i960's side
   input  logic        sel_ctl,      // 0x00980000, copro_ctl1
   input  logic        sel_fifo,     // 0x00884000-0x00887fff
+  // THE FUNCTION PORT, 0x00880000-0x00883fff, and it is how the game issues
+  // COMMANDS. model2.cpp:
+  //
+  //     void copro_function_port_w(offs_t offset, u32 data) {
+  //         u32 d = data & 0x800fffff;
+  //         u32 a = (offset >> 2) & 0xff;
+  //         d |= a << 23;
+  //         m_copro_fifo_in->push(u32(d));
+  //     }
+  //
+  // The command CODE is the ADDRESS, not the data: bits 30:23 of the pushed
+  // word, which is exactly the field get_exp() reads. The microcode dispatches
+  // on it. Without this port the coprocessor receives payloads and never a
+  // command, so its drain loop never exits, it produces no output, the i960
+  // reads its empty output FIFO, pushes that zero back, and the pair deadlock.
+  input  logic        sel_fn,
+  input  logic  [7:0] fn_code,      // cpu_io_addr[11:4]
   input  logic        sel_fifoctl,  // 0x00980004, fifo_control
   input  logic        we,
   input  logic [31:0] wdata,
@@ -196,11 +213,14 @@ module m2_copro (
 
   // THE FULL LINE. A program upload is never stalled -- it goes to program RAM
   // at a counter, not into the FIFO -- so only a genuine FIFO push can block.
-  assign stall = sel_fifo && we && !uploading && fin_full;
+  assign stall = ((sel_fifo && !uploading) || sel_fn) && we && fin_full;
 
   // A read of the FIFO port pops; a write pushes, or uploads.
   wire fifo_rd = sel_fifo && !we;
   wire fifo_wr = sel_fifo &&  we;
+  // A function-port write is an ordinary FIFO push with the code folded in.
+  wire fn_wr   = sel_fn   &&  we;
+  wire [31:0] fn_word = (wdata & 32'h800f_ffff) | {1'b0, fn_code, 23'd0};
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -250,6 +270,14 @@ module m2_copro (
       end
 
       if (sel_fifoctl && !we && !(&dbg_fctl_reads)) dbg_fctl_reads <= dbg_fctl_reads + 32'd1;
+
+      // ---- the function port: a command push, never a program upload
+      if (fn_wr && !fin_full) begin
+        fin[fin_wp[5:0]] <= fn_word;
+        fin_wp <= fin_wp + 7'd1;
+        dbg_push_data <= fn_word;
+        if (!(&dbg_in_pushed)) dbg_in_pushed <= dbg_in_pushed + 16'd1;
+      end
 
       // ---- the i960 popping the output FIFO
       if (fifo_rd && !fout_empty) begin

@@ -6887,3 +6887,64 @@ but its SETTLE_MS path fails for large settles and its `gtime` did not land the
 window where expected. Anchoring with `bpset <addr>` and then tracing is exact
 and cheap, and it is how this was finally read. The trace is UPPERCASE hex --
 a case-sensitive grep for the address finds nothing and looks like absence.
+
+**R120 - THE COPROCESSOR WORKS. The missing piece was a second write port whose
+ADDRESS carries the command code.**
+
+`model2.cpp` maps two write ports into the coprocessor, not one:
+
+    map(0x00880000, 0x00883fff).w(copro_function_port_w).flags(BURST);
+    map(0x00884000, 0x00887fff).rw(copro_fifo_r, copro_fifo_w);
+
+and the first is where commands come from:
+
+    void copro_function_port_w(offs_t offset, u32 data) {
+        u32 d = data & 0x800fffff;
+        u32 a = (offset >> 2) & 0xff;
+        d |= a << 23;
+        m_copro_fifo_in->push(u32(d));
+    }
+
+**The command code is the ADDRESS.** `(offset >> 2) & 0xff` -- bits 11:4 of the
+byte address -- is folded into bits 30:23 of the pushed word, which is exactly
+the field `get_exp()` reads. The microcode dispatches on it. The data half is
+only the payload, masked to 0x800fffff.
+
+This core decoded 0x884000 and 0x980000/4 and **not** 0x880000, so every command
+the game issued went nowhere. The coprocessor received payloads and never a
+command code.
+
+*Everything else followed from that one omission.* `get_exp(B)` was never the
+value the drain loop at 0x44-0x49 waits for, so it never exited; nothing was
+ever produced; the i960 read the empty output FIFO at 0xE2A8, got zero, pushed
+that zero back as the next command, and the pair sat in a self-sustaining
+deadlock. R117's "the i960 is computing zeros", R118's "r3 is wrong in a
+nine-instruction window" and R119's correction were all that single fact seen
+from further and further downstream.
+
+*Result, same harness, same run length:*
+
+    FIFO out popped   0 -> 3          the coprocessor produces results
+    B non-zero        0 -> 79,331,117 cycles, last 12802525
+    data-RAM writes  50 -> 54
+
+and the instruction trace now matches the reference exactly through the
+divergence and beyond:
+
+    0049 004a 004b 0055 0056 0057 0060 010a 010b 010c 010d 004c ... 0057 007d
+
+which is the reference's own path into the steady-state loop, including the
+0x7d -> 0x30a output push. `12802525` is precisely the command MAME pops at
+0x4c in steady state.
+
+*How it was found, because the method is the transferable part.* Not by reading
+the coprocessor. By asking where a specific value came from: the reference's
+TGP popped `04000001` at frame 13 with exponent 8, the drain loop's exit
+condition; a tap on the FIFO port showed that word was NEVER written there; so
+something else pushed it. Six lines of `grep -n "copro_fifo_in->push"` named
+every writer, and one of them was a port this core had never decoded.
+
+**The lesson is the one this project keeps paying for: a symptom seen from
+downstream tells you where it surfaced, not where it started.** Two days were
+spent inside the coprocessor, then a day inside the i960, for a missing address
+decode at the top level.

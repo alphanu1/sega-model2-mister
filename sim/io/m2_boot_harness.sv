@@ -513,6 +513,7 @@ module m2_boot_harness #(
   // 0x980004 with a constant 1 -- "the output FIFO is empty", true of a copro
   // that never starts and a lie about one that has.
   wire        copro_fifo_sel = cpu_io_sel && (cpu_io_addr[23:14] == 10'h221);
+  wire        copro_fn_sel   = cpu_io_sel && (cpu_io_addr[23:14] == 10'h220);
   wire        copro_ctl_sel  = cpu_io_sel && (cpu_io_addr[23:0]  == 24'h980000);
   wire        copro_fctl_sel = cpu_io_sel && (cpu_io_addr[23:0]  == 24'h980004);
   wire        copro_sel      = copro_fifo_sel | copro_ctl_sel | copro_fctl_sel;
@@ -523,6 +524,7 @@ module m2_boot_harness #(
     .clk(clk_m), .rst_n(rst_n),
     .sel_ctl(copro_ctl_sel), .sel_fifo(copro_fifo_sel),
     .sel_fifoctl(copro_fctl_sel),
+    .sel_fn(copro_fn_sel), .fn_code(cpu_io_addr[11:4]),
     .we(cpu_io_we), .wdata(cpu_io_wdata), .rdata(copro_rdata),
     .stall(copro_stall),
     .tbl_req(tgp_tbl_req), .tbl_addr(tgp_tbl_addr),
