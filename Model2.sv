@@ -489,10 +489,10 @@ always_comb begin
 	// The table base is MEASURED rather than counted: arithmetic over the MRA's
 	// section list gives 0x2BA0000 and the built image has them at 0x2BB0000,
 	// the same 64 KB discrepancy R88/R89 found for the 68000 sound ROM.
-	p_req[8]  = tgp_tbl_req;
-	p_addr[8] = GAME_TGPTBL + SDR_AW'({tgp_tbl_addr, 1'b0});
-	p_req[9]  = tgp_dat_req;
-	p_addr[9] = GAME_COPRO + SDR_AW'({tgp_dat_addr, 1'b0});
+	p_req[8]  = tgp_tbl_req_r;
+	p_addr[8] = GAME_TGPTBL + SDR_AW'({tgp_tbl_addr_r, 1'b0});
+	p_req[9]  = tgp_dat_req_r;
+	p_addr[9] = GAME_COPRO + SDR_AW'({tgp_dat_addr_r, 1'b0});
 	p_req[7]  = snd_found & pcm2_req;
 	// FOUR MEGABYTES ON, AND THESE ARE WORD ADDRESSES. This was 0x400000,
 	// which as a WORD offset is eight megabytes, so the second sample chip read
@@ -1949,11 +1949,26 @@ wire        tgp_unimpl;
 // why this changes nothing in simulation.
 logic        tgp_tbl_ack_r, tgp_dat_ack_r;
 logic [31:0] tgp_tbl_rdata_r, tgp_dat_rdata_r;
+// AND THE REQUEST SIDE, for the same reason and with the same measurement
+// behind it. Unregistered, EVERY failing setup path in the design ran from
+// mb86233_agu's address adder into m2_sdram's arbiter mux -- the TGP's AGU
+// computing an address that reached the memory controller combinationally,
+// at -0.784 ns on a 10 ns clock. The return path was registered first and the
+// critical path simply moved to the outbound one.
+//
+// A cycle each way costs nothing: the TGP issues one lookup and BLOCKS on it.
+logic        tgp_tbl_req_r, tgp_dat_req_r;
+logic [15:0] tgp_tbl_addr_r;
+logic [18:0] tgp_dat_addr_r;
 always_ff @(posedge clk_sys) begin
 	tgp_tbl_ack_r   <= p_ack[8];
 	tgp_tbl_rdata_r <= p_dout[8][31:0];
 	tgp_dat_ack_r   <= p_ack[9];
 	tgp_dat_rdata_r <= p_dout[9][31:0];
+	tgp_tbl_req_r   <= tgp_tbl_req;
+	tgp_tbl_addr_r  <= tgp_tbl_addr;
+	tgp_dat_req_r   <= tgp_dat_req;
+	tgp_dat_addr_r  <= tgp_dat_addr;
 end
 
 // CLOCKED ON clk_sys, DELIBERATELY, and speed is a separate question.

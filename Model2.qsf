@@ -35,7 +35,27 @@ set_global_assignment -name FINAL_PLACEMENT_OPTIMIZATION ALWAYS
 # and fp_b[56]). A single unroutable signal that MOVES between seeds is
 # congestion, not capacity.
 #
-# Everything below this line is tuned for SPEED: HIGH PERFORMANCE EFFORT,
+# THE AREA-MODE EXPERIMENT WAS RUN AND ABANDONED. Recorded so it is not
+# repeated.
+#
+# Turning the four PHYSICAL_SYNTHESIS options off crashes this fitter --
+# "Fatal Error: Segment Violation at (nil)" in
+# TDB_NETLIST_ATOM_DELETOR::delete_tdb_objects_of_cell, immediately after
+# placement succeeds -- four builds out of four, under both AGGRESSIVE AREA and
+# BALANCED, with and without the router option. No resource numbers are written
+# either, so the runs yield nothing at all.
+#
+# And it was not worth chasing. The Model 1 project measured Aggressive Area on
+# its full core at 595 ALM saved for 11 M10K and the timing slack, and recorded
+# "do not". 595 would not close this core's gap to the rasteriser anyway.
+#
+# The ALM the rasteriser needs comes from the design instead: the coprocessor's
+# input queue is 128 x 32 bits of FLIP-FLOPS because the TGP reads its head
+# asynchronously, which is about 2,000 ALM sitting in the resource we are short
+# of. As an M10K FIFO with a registered read it costs one block, and we have
+# ~101 spare.
+#
+# Previously: HIGH PERFORMANCE EFFORT,
 # physical synthesis with combinational resynthesis, register duplication and
 # retiming, plus router LCELL insertion. The fitter log shows what that costs --
 # "Created 190 register duplicates" -- so the design was being told to spend
@@ -46,9 +66,22 @@ set_global_assignment -name FINAL_PLACEMENT_OPTIMIZATION ALWAYS
 # It may cost some Fmax, which is measurable; a design that does not fit is not.
 set_global_assignment -name FITTER_AGGRESSIVE_ROUTABILITY_OPTIMIZATION ALWAYS
 set_global_assignment -name FITTER_EFFORT "STANDARD FIT"
+# BALANCED, NOT AGGRESSIVE AREA. Aggressive Area crashed this fitter twice in
+# succession -- "Fatal Error: Segment Violation at (nil)" after placement
+# succeeded, with no resource numbers written either time. The speed-tuned
+# builds get through placement AND routing and only fall over on exit, so this
+# is a worse failure and not the usual Quartus 17 flakiness. The duplication
+# settings below stay off, which is where most of the area comes from.
 set_global_assignment -name OPTIMIZATION_MODE "HIGH PERFORMANCE EFFORT"
 set_global_assignment -name ALLOW_POWER_UP_DONT_CARE ON
 set_global_assignment -name QII_AUTO_PACKED_REGISTERS NORMAL
+# BACK ON, AND NOT BY PREFERENCE. With this OFF the fitter dies with
+# "Fatal Error: Segment Violation at (nil)" immediately after placement, three
+# builds out of three, under both AGGRESSIVE AREA and BALANCED. With it on the
+# fitter completes placement AND routing and only falls over on exit, which is
+# the survivable failure -- quartus_sta and quartus_asm then finish the job on
+# the committed database. It is a ROUTER option and the crash is in routing.
+# The physical-synthesis options stay off; they are where the area is.
 set_global_assignment -name ROUTER_LCELL_INSERTION_AND_LOGIC_DUPLICATION ON
 set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC ON
 set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_DUPLICATION ON
@@ -66,7 +99,7 @@ set_global_assignment -name ECO_OPTIMIZE_TIMING ON
 set_global_assignment -name PERIPHERY_TO_CORE_PLACEMENT_AND_ROUTING_OPTIMIZATION ON
 set_global_assignment -name PHYSICAL_SYNTHESIS_ASYNCHRONOUS_SIGNAL_PIPELINING ON
 set_global_assignment -name ALM_REGISTER_PACKING_EFFORT MEDIUM
-set_global_assignment -name SEED 1
+set_global_assignment -name SEED 7
 
 #set_global_assignment -name VERILOG_MACRO "MISTER_FB=1"
 
