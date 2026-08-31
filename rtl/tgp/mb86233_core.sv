@@ -62,6 +62,9 @@ module mb86233_core (
 
   // Data-space external endpoints, forwarded from mb86233_mem: the input FIFO
   // at 0x0100 and the output FIFO at 0x0400.
+  output logic [31:0] dbg_fifo_hold,   // cycles the FIFO read held the pipe
+  output logic [31:0] dbg_wr_n,
+  output logic [16:0] dbg_wr_addr,
   output logic        fifo_rd,
   output logic        fifo_wr,
   output logic [31:0] fifo_wdata,
@@ -166,6 +169,18 @@ module mb86233_core (
   logic        rf_wr_en;
   logic [5:0]  rf_wr_addr;
   logic [31:0] rf_wr_data;
+  // Both routes to the FIFOs, ORed: the DATA-space one (Model 1's 0x100/0x400,
+  // kept so this core stays usable there) and the REGISTER-FILE one (Model 2's
+  // rf 1 / rf 2). On Model 2 the data addresses are holes and never fire; on
+  // Model 1 the register indices are ordinary storage and never fire.
+  logic        mem_fifo_rd, mem_fifo_wr;
+  logic [31:0] mem_fifo_wdata;
+  logic        rf_fifo_rd, rf_fifo_wr;
+  logic [31:0] rf_fifo_wdata;
+  assign fifo_rd    = mem_fifo_rd | rf_fifo_rd;
+  assign fifo_wr    = mem_fifo_wr | rf_fifo_wr;
+  assign fifo_wdata = rf_fifo_wr ? rf_fifo_wdata : mem_fifo_wdata;
+
   logic [5:0]  rf_rd_addr;
   logic [31:0] rf_rd_data;
   logic        rf_rd_unimpl, rf_wr_unimpl;
@@ -181,6 +196,8 @@ module mb86233_core (
   mb86233_regs u_regs (
     .clk(clk), .rst_n(rst_n),
     .rd_addr(rf_rd_addr), .rd_data(rf_rd_data), .rd_unimpl(rf_rd_unimpl),
+    .rf_fifo_rd(rf_fifo_rd), .rf_fifo_rdata(fifo_rdata),
+    .rf_fifo_wr(rf_fifo_wr), .rf_fifo_wdata(rf_fifo_wdata),
     .wr_en(rf_wr_en), .wr_addr(rf_wr_addr), .wr_data(rf_wr_data),
     .wr_unimpl(rf_wr_unimpl),
     .alu_d_we(alu_d_we), .alu_d(alu_d_val),
@@ -300,7 +317,8 @@ module mb86233_core (
     .clk(clk), .rst_n(rst_n),
     .req(mem_req), .we(mem_we), .addr(mem_addr), .wdata(mem_wdata),
     .rdata(mem_rdata), .stall(mem_stall),
-    .ext_rd(fifo_rd), .ext_wr(fifo_wr), .ext_wdata(fifo_wdata),
+    .dbg_wr_n(dbg_wr_n), .dbg_wr_addr(dbg_wr_addr),
+    .ext_rd(mem_fifo_rd), .ext_wr(mem_fifo_wr), .ext_wdata(mem_fifo_wdata),
     .ext_rdata(fifo_rdata), .ext_ack(fifo_ack),
     // Decode visibility, unused here but named rather than left empty: an
     // unmapped data access is a real condition the lockstep harness watches for.
@@ -453,6 +471,11 @@ module mb86233_core (
   assign dbg_st = st;  assign dbg_m = reg_m;
   assign dbg_mem_addr  = mem_addr;
   assign dbg_mem_wdata = mem_wdata;
+  always_ff @(posedge clk or negedge rst_n)
+    if (!rst_n) dbg_fifo_hold <= 32'd0;
+    else if ((state == S_SRC) && x_src_reg && rf_fifo_rd && !fifo_ack
+             && !(&dbg_fifo_hold)) dbg_fifo_hold <= dbg_fifo_hold + 32'd1;
+
   assign dbg_mem_we    = mem_req & mem_we;
   assign dbg_mem_re    = mem_req & ~mem_we;
   assign dbg_mem_rdata = mem_rdata;
@@ -525,8 +548,28 @@ module mb86233_core (
         end
 
         S_SRC: begin
-          if (x_src_reg) begin src_val <= rf_rd_data; state <= d_lab ? S_LABB : S_DST; end
-          else                                        state <= S_SRC_W;
+          // A REGISTER SOURCE NORMALLY COMPLETES IN ONE CYCLE, AND THE INPUT
+          // FIFO IS THE EXCEPTION.
+          //
+          // On Model 2 the FIFO is register 0x21 (AS_RF index 1), not a data
+          // address, so it arrives here rather than through the memory path
+          // that already knows how to wait. MAME's pop on an empty FIFO returns
+          // zero AND calls stall(), and `goto do_stall` re-executes the
+          // instruction -- so the read does not retire until a command arrives.
+          //
+          // Without this the microcode sails past its first pop with B = 0,
+          // computes a dispatch index of zero from get_exp(B), and falls into
+          // entry 0 of the jump table at 0x16 every time. That lands in the
+          // 0x4c wait loop, which has no conditional exit, and the coprocessor
+          // never leaves it. The reference is demonstrably NOT in that loop:
+          // its hottest data reads are 070/07f/068 (handler addresses) and
+          // 0x14 -- which the loop's `lab` reads every iteration -- does not
+          // appear at all.
+          if (x_src_reg && rf_fifo_rd && !fifo_ack) begin
+            // hold: the FIFO has nothing and this read must not complete
+          end else if (x_src_reg) begin
+            src_val <= rf_rd_data; state <= d_lab ? S_LABB : S_DST;
+          end else state <= S_SRC_W;
         end
 
         S_SRC_W: begin

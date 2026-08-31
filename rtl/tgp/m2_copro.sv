@@ -62,13 +62,76 @@ module m2_copro (
   input  logic        we,
   input  logic [31:0] wdata,
   output logic [31:0] rdata,
+  // "I cannot take this write." Asserted while a FIFO push would overflow, so
+  // the bridge holds the i960 instead of the word being lost. This is the
+  // hardware's FULL line, which the Fujitsu FIFO bus carries as a real signal.
+  output logic        stall,
+
+  // ---- the two read-only SDRAM windows the TGP walks, passed straight
+  // through. These are NOT optional and were the reason this module could not
+  // be instantiated: `tbl_ack` and `dat_ack` are inputs to m2_tgp, and leaving
+  // them off the instantiation leaves them unconnected, so the first sincos or
+  // inverse-square-root lookup waits for an acknowledge that can never arrive.
+  // A coprocessor wired without them does not run slowly, it stops.
+  output logic        tbl_req,
+  output logic [15:0] tbl_addr,
+  input  logic [31:0] tbl_rdata,
+  input  logic        tbl_ack,
+  output logic        dat_req,
+  output logic [18:0] dat_addr,
+  input  logic [31:0] dat_rdata,
+  input  logic        dat_ack,
 
   // ---- for the debug channel
   output logic [31:0] dbg_ctl,
   output logic [15:0] dbg_prog_words,   // how much program was uploaded
   output logic [15:0] dbg_in_pushed,
   output logic [15:0] dbg_out_popped,
-  output logic        dbg_ram_req       // the tie-off above, made visible
+  // HOW HARD THE i960 IS WAITING. fifo_control reads say "is there a result
+  // yet". A game that is not using the coprocessor does not ask; a game
+  // deadlocked on one asks forever. The two look identical from the FIFO
+  // counters alone.
+  output logic [31:0] dbg_fctl_reads,
+  // WORDS LOST. MAME's generic_fifo NEVER drops: push() into a full FIFO stores
+  // the value in m_extra_values and halts the source. `else if (!fin_full)`
+  // below looks like an overflow guard and is data loss.
+  output logic [31:0] dbg_in_popped,   // what the TGP actually took
+  output logic [31:0] dbg_pop_data,    // and the value it took
+  output logic [31:0] dbg_in_dropped,
+  output logic [31:0] dbg_out_dropped,
+  output logic        dbg_ram_req,      // the tie-off above, made visible
+  // FROM THE PROCESSOR ITSELF, because the screen is the only output channel
+  // and "is it running" must be answerable without one. `dbg_retires` moving
+  // says the TGP executes at all; `dbg_unimplemented` says it met an opcode
+  // this port does not have, which is the one failure that looks exactly like
+  // a hang from the outside.
+  output logic [15:0] dbg_tgp_retires,
+  output logic [15:0] dbg_tgp_pc,
+  output logic [31:0] dbg_tgp_op,
+  output logic [31:0] dbg_tgp_hold,
+  output logic [31:0] dbg_tgp_wr_n,
+  output logic [16:0] dbg_tgp_wr_addr,
+  output logic [31:0] dbg_tgp_a,
+  output logic [31:0] dbg_tgp_b,
+  output logic [31:0] dbg_tgp_d,
+  // THE UPLOAD STREAM, word by word. The program the i960 builds is not stored
+  // verbatim in any ROM, so the only way to know whether ours matches the
+  // reference is to watch the words go past.
+  output logic        dbg_uc_we,
+  output logic [11:0] dbg_uc_addr,
+  output logic [31:0] dbg_uc_data,
+  output logic        dbg_tgp_unimpl,
+  // WHAT THE PROCESSOR IS REACHING FOR. A TGP that retires tens of thousands
+  // of instructions and touches neither FIFO is in a loop waiting on something,
+  // and the address it keeps reading names the thing. These were tied off,
+  // which is why the first integration run could say it was executing and not
+  // what it was executing.
+  output logic [15:0] dbg_tgp_io_addr,
+  output logic        dbg_tgp_io_rd,
+  output logic        dbg_tgp_io_wr,
+  output logic        dbg_tgp_io_ack,
+  output logic        dbg_tgp_fifo_rd,
+  output logic        dbg_tgp_fifo_wr
 );
 
   // ------------------------------------------------------------ control
@@ -86,14 +149,40 @@ module m2_copro (
   logic [31:0] uc_data;
 
   // --------------------------------------------------------------- FIFOs
-  // Eight deep each, as model2.cpp sets them up.
-  localparam int unsigned FD = 8;
-  logic [31:0] fin  [FD], fout [FD];
-  logic  [3:0] fin_wp, fin_rp, fout_wp, fout_rp;
-  wire   [3:0] fin_cnt  = fin_wp  - fin_rp;
+  //
+  // model2.cpp sets both up as EIGHT deep, and the outbound one is exactly
+  // eight here: the TGP writing into a full output FIFO must stall, and it does,
+  // by having its acknowledge withheld.
+  //
+  // THE INBOUND ONE IS DEEPER, AND THAT MATCHES THE REFERENCE RATHER THAN
+  // DEPARTING FROM IT. MAME's generic_fifo does NOT block a push into a full
+  // FIFO -- gen_fifo.cpp, push():
+  //
+  //     else if(is_full()) {
+  //         m_extra_values.emplace_back(std::move(t));   // queue it
+  //         m_sync_full->adjust(attotime::zero);         // and sync later
+  //     }
+  //
+  // The write COMPLETES, the value goes into an unbounded overflow queue and
+  // the CPU carries on. Only at the scheduler sync, if the FIFO is still full,
+  // is the source halted -- the i960 is never stalled inside a bus cycle.
+  //
+  // A first attempt held the bus on every full push. Nothing was lost, but the
+  // i960 spent most of its life waiting and the boot ran several times slower:
+  // the whole machine throttled by the coprocessor, which is not what the board
+  // does. `fin` is therefore the FIFO PLUS its overflow queue in one array, and
+  // `stall` survives only as the backstop for what an unbounded queue absorbs
+  // and a fixed array cannot.
+  localparam int unsigned FD    = 8;    // outbound, as the reference
+  localparam int unsigned FD_IN = 64;   // inbound: 8 real plus 56 of overflow
+  logic [31:0] fin  [FD_IN];
+  logic [31:0] fout [FD];
+  logic  [6:0] fin_wp, fin_rp;
+  logic  [3:0] fout_wp, fout_rp;
+  wire   [6:0] fin_cnt  = fin_wp  - fin_rp;
   wire   [3:0] fout_cnt = fout_wp - fout_rp;
-  wire         fin_full  = (fin_cnt  >= 4'(FD));
-  wire         fin_empty = (fin_cnt  == 4'd0);
+  wire         fin_full  = (fin_cnt  >= 7'(FD_IN));
+  wire         fin_empty = (fin_cnt  == 7'd0);
   wire         fout_full = (fout_cnt >= 4'(FD));
   wire         fout_empty= (fout_cnt == 4'd0);
 
@@ -101,6 +190,10 @@ module m2_copro (
   wire        tgp_in_pop;
   wire [31:0] tgp_out_data;
   wire        tgp_out_push;
+
+  // THE FULL LINE. A program upload is never stalled -- it goes to program RAM
+  // at a counter, not into the FIFO -- so only a genuine FIFO push can block.
+  assign stall = sel_fifo && we && !uploading && fin_full;
 
   // A read of the FIFO port pops; a write pushes, or uploads.
   wire fifo_rd = sel_fifo && !we;
@@ -110,8 +203,11 @@ module m2_copro (
     if (!rst_n) begin
       coproctl <= 32'd0; coprocnt <= 12'd0; halted <= 1'b1;
       uc_we <= 1'b0; uc_addr <= 11'd0; uc_data <= 32'd0;
-      fin_wp <= 4'd0; fin_rp <= 4'd0; fout_wp <= 4'd0; fout_rp <= 4'd0;
+      fin_wp <= 7'd0; fin_rp <= 7'd0; fout_wp <= 4'd0; fout_rp <= 4'd0;
       dbg_prog_words <= 16'd0; dbg_in_pushed <= 16'd0; dbg_out_popped <= 16'd0;
+      dbg_fctl_reads <= 32'd0;
+      dbg_in_dropped <= 32'd0; dbg_out_dropped <= 32'd0;
+      dbg_in_popped <= 32'd0; dbg_pop_data <= 32'd0;
     end else begin
       uc_we <= 1'b0;
 
@@ -137,11 +233,19 @@ module m2_copro (
           coprocnt <= coprocnt + 12'd1;
           if (!(&dbg_prog_words)) dbg_prog_words <= dbg_prog_words + 16'd1;
         end else if (!fin_full) begin
-          fin[fin_wp[2:0]] <= wdata;
-          fin_wp <= fin_wp + 4'd1;
+          fin[fin_wp[5:0]] <= wdata;
+          fin_wp <= fin_wp + 7'd1;
           if (!(&dbg_in_pushed)) dbg_in_pushed <= dbg_in_pushed + 16'd1;
+        end else if (!(&dbg_in_dropped)) begin
+          // NOW UNREACHABLE, and kept as a running assertion rather than
+          // deleted: with `stall` wired to the bridge the i960 cannot present a
+          // push that this FIFO has no room for. If this counter ever moves
+          // again, the handshake has been broken somewhere upstream.
+          dbg_in_dropped <= dbg_in_dropped + 32'd1;
         end
       end
+
+      if (sel_fifoctl && !we && !(&dbg_fctl_reads)) dbg_fctl_reads <= dbg_fctl_reads + 32'd1;
 
       // ---- the i960 popping the output FIFO
       if (fifo_rd && !fout_empty) begin
@@ -150,10 +254,16 @@ module m2_copro (
       end
 
       // ---- the TGP's own ends
-      if (tgp_in_pop && !fin_empty)   fin_rp  <= fin_rp  + 4'd1;
+      if (tgp_in_pop && !fin_empty) begin
+        fin_rp <= fin_rp + 7'd1;
+        dbg_pop_data <= fin[fin_rp[5:0]];
+        if (!(&dbg_in_popped)) dbg_in_popped <= dbg_in_popped + 32'd1;
+      end
       if (tgp_out_push && !fout_full) begin
         fout[fout_wp[2:0]] <= tgp_out_data;
         fout_wp <= fout_wp + 4'd1;
+      end else if (tgp_out_push && !(&dbg_out_dropped)) begin
+        dbg_out_dropped <= dbg_out_dropped + 32'd1;
       end
     end
   end
@@ -172,7 +282,19 @@ module m2_copro (
 
   // ---- the processor itself
   wire        ram_req_w;
-  m2_tgp u_tgp (
+  // EMPTY_FIFO_READS_ZERO MUST BE SET, AND LEAVING IT DEFAULT COST A WHOLE
+  // SESSION. m2_tgp defaults it to 0, which makes an empty FIFO read WITHHOLD
+  // ITS ACKNOWLEDGE and stall the processor. m2_tgp's own header explains at
+  // length why that is wrong -- gen_fifo.cpp's pop() returns T() on an empty
+  // FIFO, and Daytona's microcode needs that zero: 0x52 computes
+  // `d = get_exp(b) + 0x53`, so b = 0 selects 0x53, the IDLE handler. A TGP
+  // that stalls instead can never reach its own idle path.
+  //
+  // The measured cost of the default: the TGP popped 29 words where MAME pops
+  // 484,947, the input FIFO filled and stayed full, and 429,350 of the i960's
+  // commands were discarded against it. The parameter was written, the reason
+  // was written down, and the instantiation never passed it.
+  m2_tgp #(.EMPTY_FIFO_READS_ZERO(1'b0)) u_tgp (   // TEST: stall on empty
     .clk(clk), .rst_n(rst_n & ~halted),
     .dbg_ucode_ram_csum(), .dbg_ucode_ram_ok(),
     .ucode_clk(clk), .ucode_we(uc_we), .ucode_addr(uc_addr), .ucode_data(uc_data),
@@ -181,11 +303,26 @@ module m2_copro (
     // brought out so a design that starts depending on it is visible.
     .ram_req(ram_req_w), .ram_we(), .ram_addr(), .ram_wdata(),
     .ram_rdata(32'd0), .ram_ack(ram_req_w),
-    .fifo_in_data(fin[fin_rp[2:0]]), .fifo_in_valid(!fin_empty),
+    .fifo_in_data(fin[fin_rp[5:0]]), .fifo_in_valid(!fin_empty),
     .fifo_in_pop(tgp_in_pop),
     .fifo_out_data(tgp_out_data), .fifo_out_push(tgp_out_push),
-    .fifo_out_full(fout_full)
+    .fifo_out_full(fout_full),
+    .tbl_req(tbl_req), .tbl_addr(tbl_addr),
+    .tbl_rdata(tbl_rdata), .tbl_ack(tbl_ack),
+    .dat_req(dat_req), .dat_addr(dat_addr),
+    .dat_rdata(dat_rdata), .dat_ack(dat_ack),
+    .dbg_retires(dbg_tgp_retires), .dbg_pc(dbg_tgp_pc), .dbg_op(dbg_tgp_op),
+    .dbg_fifo_hold(dbg_tgp_hold), .dbg_wr_n(dbg_tgp_wr_n), .dbg_wr_addr(dbg_tgp_wr_addr),
+    .dbg_a(dbg_tgp_a), .dbg_b(dbg_tgp_b), .dbg_d(dbg_tgp_d),
+    .dbg_unimplemented(dbg_tgp_unimpl),
+    .dbg_io_addr(dbg_tgp_io_addr), .dbg_io_rd(dbg_tgp_io_rd),
+    .dbg_io_wr(dbg_tgp_io_wr), .dbg_io_ack(dbg_tgp_io_ack),
+    .dbg_fifo_rd(dbg_tgp_fifo_rd), .dbg_fifo_wr(dbg_tgp_fifo_wr)
   );
+
+  assign dbg_uc_we   = uc_we;
+  assign dbg_uc_addr = {1'b0, uc_addr};
+  assign dbg_uc_data = uc_data;
 
   assign dbg_ram_req = ram_req_w;
 

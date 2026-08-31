@@ -65,6 +65,21 @@ module mb86233_regs (
   input  logic [31:0] wr_data,
   output logic        wr_unimpl,     // hit write_reg's logging default
 
+  // THE REGISTER FILE IS WHERE MODEL 2 PUTS ITS FIFOs, and that is the whole of
+  // R112. read_reg/write_reg send 0x20-0x2f to the AS_RF space:
+  //
+  //     if(r >= 0x20 && r < 0x30) return m_rf.read_dword(r & 0x1f);
+  //
+  // and model2.cpp's copro_tgp_rf_map puts the input FIFO at rf 1 and the
+  // output FIFO at rf 2. So register 0x21 is not storage, it is a pop, and
+  // 0x22 is a push. Model 1 reached the same FIFOs through DATA addresses
+  // 0x100/0x400, which on Model 2 are holes in copro_tgp_data_map -- this port
+  // inherited that decode and therefore polled an address that does not exist.
+  output logic        rf_fifo_rd,
+  input  logic [31:0] rf_fifo_rdata,
+  output logic        rf_fifo_wr,
+  output logic [31:0] rf_fifo_wdata,
+
   // ALU writeback. Wins over a write_reg to the same register: the ALU has
   // already applied the transfers-beat-integer / FP-beats-transfers rule.
   input  logic        alu_d_we,
@@ -140,10 +155,18 @@ module mb86233_regs (
   logic in_rf;
   assign in_rf = (rd_addr >= 6'h20) && (rd_addr < 6'h30);
 
+  // rd_addr defaults to 0 when no register read is in progress, so 0x21 can
+  // only appear on a genuine read -- there is no spurious pop. One access may
+  // span S_SRC and S_SRC_W; m2_tgp's `popped` latch makes that one pop.
+  assign rf_fifo_rd    = (rd_addr == 6'h21);
+  assign rf_fifo_wr    = wr_en && (wr_addr == 6'h22);
+  assign rf_fifo_wdata = wr_data;
+
   always_comb begin
     rd_unimpl = 1'b0;
     if (in_rf) begin
-      rd_data = rf[rd_addr[3:0]];
+      // rf 1 is the input FIFO, not a register.
+      rd_data = (rd_addr[3:0] == 4'd1) ? rf_fifo_rdata : rf[rd_addr[3:0]];
     end else begin
       unique case (rd_addr)
         6'h00: rd_data = {16'd0, b0};

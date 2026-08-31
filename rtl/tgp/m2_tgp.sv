@@ -123,6 +123,15 @@ module m2_tgp #(
   // Telemetry: is it executing, and is it retiring anything.
   output logic [15:0] dbg_retires,
   output logic [15:0] dbg_pc,
+  // THE WORD AT THAT PC. "Wrong program" and "wrong decode" need completely
+  // different fixes and look identical from a PC trace alone.
+  output logic [31:0] dbg_op,
+  output logic [31:0] dbg_fifo_hold,
+  output logic [31:0] dbg_wr_n,
+  output logic [16:0] dbg_wr_addr,
+  output logic [31:0] dbg_a,
+  output logic [31:0] dbg_b,
+  output logic [31:0] dbg_d,
   output logic        dbg_unimplemented,
 
   // What it is waiting on, if it has stopped. A retire count that freezes says
@@ -205,6 +214,10 @@ module m2_tgp #(
     end
   end
 
+  assign dbg_a = u_a;
+  assign dbg_b = u_b;
+  assign dbg_d = u_d;
+  assign dbg_op = prog_rdata;
   assign dbg_ucode_ram_csum = sw_csum;
   assign dbg_ucode_ram_ok   = sw_done;
 
@@ -235,6 +248,7 @@ module m2_tgp #(
     .prog_addr(prog_addr), .prog_rdata(prog_rdata),
     .io_addr(io_addr), .io_rd(io_rd), .io_wr(io_wr),
     .io_wdata(io_wdata), .io_rdata(io_rdata), .io_ack(io_ack),
+    .dbg_fifo_hold(dbg_fifo_hold), .dbg_wr_n(dbg_wr_n), .dbg_wr_addr(dbg_wr_addr),
     .fifo_rd(fifo_rd), .fifo_wr(fifo_wr), .fifo_wdata(fifo_wdata),
     .fifo_rdata(fifo_rdata), .fifo_ack(fifo_ack),
     .gpio(4'd0),
@@ -401,11 +415,13 @@ module m2_tgp #(
 
   logic [31:0] sincos_base, inv_base, isqrt_base;
   logic [31:0] atan_base [4];
-  integer zb;
-  initial begin
-    sincos_base = 32'd0; inv_base = 32'd0; isqrt_base = 32'd0;
-    for (zb = 0; zb < 4; zb = zb + 1) atan_base[zb] = 32'd0;
-  end
+  // No `initial` block here on purpose. There was one, zeroing all four of
+  // these, and every one of them is ALREADY cleared in the reset branch of the
+  // always_ff above -- so it was pure redundancy that made Verilator report
+  // them as MULTIDRIVEN (written from both an initial and an always_ff), which
+  // is an error under -Wall and stopped the boot harness building the moment
+  // the coprocessor was added to it. The unit-test flow never saw it because
+  // its own warning filter is wider.
 
   // sincos: ang = base + offset*0x4000, index = ang & 0x3fff, and the second
   // quadrant mirrors - std::min(0x4000 - index, 0x3fff), so index 0 maps to

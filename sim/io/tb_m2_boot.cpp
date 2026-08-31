@@ -33,6 +33,8 @@
 #include <cstdlib>
 #include <string>
 #include <vector>
+#include <map>
+#include <algorithm>
 
 static Vm2_boot_harness *d;
 
@@ -167,6 +169,33 @@ int main(int argc, char **argv) {
       if (word < mem.size()) mem[word] = uint16_t(f[w * 2] | (f[w * 2 + 1] << 8));
     }
   }
+  // THE TGP's MATH TABLES, at GAME_TGPTBL. 64K 32-bit words: sincos, atan,
+  // inverse and inverse-square-root quadrants.
+  //
+  // The interleave is NOT guessed. MAME's own :copro_tgp_tables region starts
+  // 00000000 38c90fdb 39490fdb -- sin of 0, of 2*pi/65536, of twice that --
+  // and only one arrangement of the two ROMs reproduces it: opr-14742a
+  // supplies bits 15:0 and opr-14743a bits 31:16, each little-endian within
+  // itself. That is what the .mra's interleave already produced, and checking
+  // it against the reference cost one script and settles a byte order that
+  // cost four builds the last time it was assumed (R94).
+  const uint32_t TBL_BASE = 0x15d8000;      // GAME_TGPTBL, word address
+  {
+    std::vector<uint8_t> ta, tb;
+    if (load_file(dir + "opr-14742a.45", ta) && load_file(dir + "opr-14743a.46", tb)) {
+      const size_t n = std::min(ta.size(), tb.size()) / 2;   // 32-bit words
+      for (size_t i = 0; i < n; ++i) {
+        const size_t w = TBL_BASE + i * 2;
+        if (w + 1 >= mem.size()) break;
+        mem[w    ] = uint16_t(ta[i*2] | (ta[i*2+1] << 8));
+        mem[w + 1] = uint16_t(tb[i*2] | (tb[i*2+1] << 8));
+      }
+      std::printf("  TGP math tables: %zu 32-bit words at word 0x%x\n", n, TBL_BASE);
+    } else {
+      std::printf("  WARNING: no TGP math tables -- every lookup reads 0xFFFF\n");
+    }
+  }
+
   std::printf("  program ROM %zu+%zu bytes, main_data files %d of 6\n",
               lo.size(), hi.size(), md_ok);
 
@@ -262,6 +291,120 @@ int main(int argc, char **argv) {
     }
   };
 
+  // THE COPROCESSOR'S TWO READ-ONLY WINDOWS, out of the same modelled memory.
+  //
+  // On the board these are SDRAM ports 8 and 9, which burst four and hand back
+  // the low pair; here the pair is all that is modelled, because the upper two
+  // words are discarded either way. Latency is deliberately non-zero: a window
+  // that answers in the same cycle hides whether the TGP actually waits on the
+  // acknowledge, and that is the handshake this harness exists to exercise.
+  const uint32_t COPRO_BASE = 0x520000;     // GAME_COPRO, word address
+  int tbl_left = -1, dat_left = -1;
+  uint32_t tbl_data = 0, dat_data = 0;
+  const int tgp_lat = std::getenv("M2_TGP_LAT")
+                    ? std::atoi(std::getenv("M2_TGP_LAT")) : 6;
+  uint64_t tbl_reads = 0, dat_reads = 0;
+  auto rd32 = [&](uint32_t w) -> uint32_t {
+    return uint32_t(mem[w & 0x1ffffff])
+         | (uint32_t(mem[(w + 1) & 0x1ffffff]) << 16);
+  };
+  // WHAT THE TGP IS DOING, sampled every clk_mem edge after it settles.
+  //
+  // "It retires instructions" and "it does useful work" are different claims,
+  // and the first was all the previous run could support. A processor looping
+  // on a status read it never sees change retires as fast as one doing work.
+  std::map<uint32_t,uint64_t> tgp_pc_hist, tgp_io_hist;
+  uint64_t tgp_ram_req_cyc = 0, tgp_fifo_rd_n = 0, tgp_fifo_wr_n = 0;
+  uint64_t tgp_io_rd_n = 0, tgp_io_wr_n = 0, tgp_io_ack_n = 0;
+  // THE FIRST PCs AFTER BOOT, in order. A histogram says where it ends up; a
+  // sequence says how it got there, and a wrong backward branch is only
+  // visible in the second.
+  std::vector<uint32_t> tgp_pc_seq;
+  std::map<uint32_t,uint32_t> tgp_prog;
+  uint32_t tgp_pc_prev = 0xffffffffu;
+  // THE UPLOAD/BOOT CYCLE, as it actually happened.
+  //
+  // copro_ctl1 bit 31 is a SELECTOR: while set, a write to the FIFO port goes
+  // to program RAM at a hardware counter; clear, it pushes the input FIFO. So
+  // every write to that port is routed by whatever this register holds, and a
+  // missed edge sends a program into the FIFO or a command into program memory.
+  // Logging the register alongside the running program-word count shows which.
+  std::vector<std::pair<uint32_t,uint32_t>> ctl_log;
+  uint32_t ctl_prev = 0xdeadbeefu;
+  // The upload stream, written out so it can be diffed against MAME's tap on
+  // the same port. Ours is (addr, data) at the point it lands in program RAM.
+  FILE *ucf = std::getenv("M2_UCLOG") ? std::fopen(std::getenv("M2_UCLOG"), "w") : nullptr;
+  uint64_t uc_n = 0;
+  std::vector<uint32_t> popvals, popA, popB, popD, popPC, popOP;
+  uint32_t popn_prev = 0;
+  // Sampled EVERY cycle, not at the pop: the destination write-back lands a
+  // cycle or more after the FIFO read, so a sample taken at the pop sees the
+  // old value and proves nothing.
+  uint64_t a_nz = 0, b_nz = 0, d_nz = 0;
+  uint32_t a_last = 0, b_last = 0, d_last = 0;
+  auto tgp_sample = [&]() {
+    if (d->obs_tgp_a) { ++a_nz; a_last = uint32_t(d->obs_tgp_a); }
+    if (d->obs_tgp_b) { ++b_nz; b_last = uint32_t(d->obs_tgp_b); }
+    if (d->obs_tgp_d) { ++d_nz; d_last = uint32_t(d->obs_tgp_d); }
+    if (uint32_t(d->obs_in_popped) != popn_prev) {
+      popn_prev = uint32_t(d->obs_in_popped);
+      if (popvals.size() < 24) {
+        popvals.push_back(uint32_t(d->obs_pop_data));
+        popA.push_back(uint32_t(d->obs_tgp_a));
+        popB.push_back(uint32_t(d->obs_tgp_b));
+        popD.push_back(uint32_t(d->obs_tgp_d));
+        popPC.push_back(uint32_t(d->obs_tgp_pc));
+        popOP.push_back(uint32_t(d->obs_tgp_op));
+      }
+    }
+    if (ucf && d->obs_uc_we) {
+      ++uc_n;
+      if (uc_n <= 2100)
+        std::fprintf(ucf, "%05llu %04x %08x\n", (unsigned long long)uc_n,
+                     (unsigned)d->obs_uc_addr, (unsigned)d->obs_uc_data);
+    }
+    if (uint32_t(d->obs_copro_ctl) != ctl_prev) {
+      ctl_prev = uint32_t(d->obs_copro_ctl);
+      if (ctl_log.size() < 40)
+        ctl_log.push_back({ctl_prev, uint32_t(d->obs_copro_prog)});
+    }
+    if (uint32_t(d->obs_tgp_pc) != tgp_pc_prev) {
+      tgp_pc_prev = uint32_t(d->obs_tgp_pc);
+      if (tgp_pc_seq.size() < 220) tgp_pc_seq.push_back(tgp_pc_prev);
+      // LAST sighting, not first. The game uploads the program more than once
+      // -- dbg_prog_words is cumulative and counted 2024 where MAME's resident
+      // program is 506 non-zero words -- so recording the first opcode at each
+      // address compares our EARLY upload against MAME's FINAL one and reports
+      // a mismatch that means nothing.
+      tgp_prog[tgp_pc_prev] = uint32_t(d->obs_tgp_op);
+    }
+    ++tgp_pc_hist[uint32_t(d->obs_tgp_pc)];
+    if (d->obs_tgp_io_rd) { ++tgp_io_rd_n; ++tgp_io_hist[uint32_t(d->obs_tgp_io_addr)]; }
+    if (d->obs_tgp_io_wr)   ++tgp_io_wr_n;
+    if (d->obs_tgp_io_ack)  ++tgp_io_ack_n;
+    if (d->obs_tgp_ram_req) ++tgp_ram_req_cyc;
+    if (d->obs_tgp_fifo_rd) ++tgp_fifo_rd_n;
+    if (d->obs_tgp_fifo_wr) ++tgp_fifo_wr_n;
+  };
+  auto tgp_tick = [&]() {
+    d->tgp_tbl_ack = 0;
+    if (tbl_left < 0 && d->tgp_tbl_req) {
+      tbl_data = rd32(TBL_BASE + (uint32_t(d->tgp_tbl_addr) << 1));
+      tbl_left = tgp_lat; ++tbl_reads;
+    } else if (tbl_left > 0) --tbl_left;
+    else if (tbl_left == 0) {
+      d->tgp_tbl_rdata = tbl_data; d->tgp_tbl_ack = 1; tbl_left = -1;
+    }
+    d->tgp_dat_ack = 0;
+    if (dat_left < 0 && d->tgp_dat_req) {
+      dat_data = rd32(COPRO_BASE + (uint32_t(d->tgp_dat_addr) << 1));
+      dat_left = tgp_lat; ++dat_reads;
+    } else if (dat_left > 0) --dat_left;
+    else if (dat_left == 0) {
+      d->tgp_dat_rdata = dat_data; d->tgp_dat_ack = 1; dat_left = -1;
+    }
+  };
+
   // THREE CLOCKS, ON A 192 MHz BASE, because 48 and 32 do not divide each
   // other. Half-periods are 2, 3 and 4 base steps: clk_mem 48 MHz, clk_vid 32
   // MHz, clk_cpu 24 MHz -- the board's ratios exactly. Driving clk_vid as a
@@ -341,7 +484,7 @@ int main(int argc, char **argv) {
       d->eval();
       if (d->clk_slow_o && !slow_prev) ++mem_edges;   // the stack's own 48 MHz
       slow_prev = d->clk_slow_o;
-    } else if (m && !mem_prev) { mem_tick(); sd2_tick(); d->eval(); ++mem_edges; }
+    } else if (m && !mem_prev) { mem_tick(); sd2_tick(); tgp_tick(); d->eval(); tgp_sample(); ++mem_edges; }
     if (d->sd2_req) { g_char_words.insert((uint32_t)d->sd2_addr); ++g_char_fetches; }
     mem_prev = m; vid_prev = v;
     ++base_t;
@@ -373,8 +516,29 @@ int main(int argc, char **argv) {
     fw_late = std::strtoull(fl, nullptr, 10);
   std::vector<uint8_t> fw_pending;
   std::vector<uint8_t> fw_rm;   // real-memory mode: held until clk_slow runs
-  if (const char *fp = std::getenv("M2_IOFW")) {
+  // THE I/O FIRMWARE IS NOT OPTIONAL, AND THAT IS WHY IT IS DEFAULTED.
+  //
+  // Without it the Z80 board never answers the DPRAM handshake and the i960
+  // parks at 0x228240 polling 0x01c00040 -- forever. That boot still retires
+  // instructions as fast as any other, still prints a full profile, and has
+  // executed none of the game: 97.8% of every instruction lands in one 4 KB
+  // page of work RAM. It is the most expensive kind of passing-looking run,
+  // and it was read once as evidence that the tilemap scroll registers were
+  // never written when what it actually measured was a CPU spinning on a
+  // handshake nobody had connected.
+  //
+  // A knob that must be remembered is a knob that will be forgotten, so the
+  // firmware defaults to the ROM sitting beside the program ROMs and M2_IOFW
+  // only overrides the path. If it is genuinely absent, say so loudly rather
+  // than booting into the spin.
+  const std::string iofw_def = dir + "epr-14869c.25";
+  const char *fp_env = std::getenv("M2_IOFW");
+  {
+    const char *fp = fp_env ? fp_env : iofw_def.c_str();
     FILE *ff = std::fopen(fp, "rb");
+    if (!ff)
+      std::printf("  WARNING: no I/O firmware at %s -- the Z80 board is dead and "
+                  "the i960 will spin on the 0x01c00040 handshake\n", fp);
     if (ff) {
       std::vector<uint8_t> fwb(16384, 0xff);
       size_t fn = std::fread(fwb.data(), 1, fwb.size(), ff);
@@ -463,6 +627,20 @@ int main(int argc, char **argv) {
       pcfrom = std::strtoull(pfr, nullptr, 10);
   }
   uint32_t pc_acc_prev = 0;
+
+  // WHERE THE CPU ACTUALLY IS, over the whole run.
+  //
+  // A boot that renders tiles has clearly reached the main loop, but that says
+  // nothing about which per-frame routines it runs. MAME writes the tilemap
+  // scroll from 0x1a164 every frame; if this core never executes that address
+  // the scroll cannot be anything but zero, and no amount of staring at the
+  // video path will show it. M2_BOOT_PCHIT=0x1a164 counts one address; the
+  // 4 KB histogram says where the time went, which is the same question asked
+  // without having to guess the address first.
+  const char *ph = std::getenv("M2_BOOT_PCHIT");
+  const uint32_t pchit_addr = ph ? uint32_t(std::strtoul(ph, nullptr, 0)) : 0;
+  uint64_t pchit_n = 0, retired = 0;
+  std::map<uint32_t,uint64_t> pc_hist;
 
   // V-blank at 57.52 Hz against a 48 MHz mem clock.
   const uint64_t VBL = uint64_t(48e6 / 57.52);
@@ -635,8 +813,12 @@ int main(int argc, char **argv) {
       }
       cpu_prev = cpu_now;
     }
-    if (pctr && d->dbg_acc != pc_acc_prev) {
-      if (d->dbg_acc >= pcfrom) std::fprintf(pctr, "%08x\n", (unsigned)d->dbg_ip);
+    if (d->dbg_acc != pc_acc_prev) {
+      const uint32_t ip = uint32_t(d->dbg_ip);
+      if (pctr && d->dbg_acc >= pcfrom) std::fprintf(pctr, "%08x\n", (unsigned)ip);
+      if (pchit_addr && ip == pchit_addr) ++pchit_n;
+      ++pc_hist[ip >> 12];
+      ++retired;
       pc_acc_prev = d->dbg_acc;
     }
     if (mem_edges >= next_vbl) {
@@ -1486,6 +1668,117 @@ int main(int argc, char **argv) {
                     prof_txn ? double(prof_st[i])/double(prof_txn) : 0.0);
     }
   }
+  {
+    std::printf("  COPROCESSOR:\n");
+    std::printf("    copro_ctl1        %08x\n", (unsigned)d->obs_copro_ctl);
+    std::printf("    program uploaded  %u words\n", (unsigned)d->obs_copro_prog);
+    std::printf("    FIFO in pushed    %u\n", (unsigned)d->obs_copro_in);
+    std::printf("    FIFO out popped   %u\n", (unsigned)d->obs_copro_out);
+    std::printf("    TGP retires       %u   pc=%04x%s\n",
+                (unsigned)d->obs_tgp_retires, (unsigned)d->obs_tgp_pc,
+                d->obs_tgp_unimpl ? "   *** UNIMPLEMENTED OPCODE ***" : "");
+    std::printf("    table reads       %llu    data reads %llu\n",
+                (unsigned long long)tbl_reads, (unsigned long long)dat_reads);
+    // A coprocessor that was uploaded and booted but retires nothing is the
+    // interesting failure, and it is invisible in anything else this harness
+    // prints.
+    if (d->obs_copro_prog && !d->obs_tgp_retires)
+      std::printf("    *** program uploaded but the TGP retired NOTHING ***\n");
+    std::printf("    i960 fifo_control polls  %u\n", (unsigned)d->obs_fctl_reads);
+    std::printf("    TGP popped        %u   (MAME: 484,947 against 257,709 pushes)\n", (unsigned)d->obs_in_popped);
+    std::printf("    WORDS DROPPED     in=%u  out=%u%s\n",
+                (unsigned)d->obs_in_dropped, (unsigned)d->obs_out_dropped,
+                (d->obs_in_dropped || d->obs_out_dropped) ? "   <<< DATA LOSS" : "");
+    { std::printf("    POP / B / D  (MAME: the pop lands in B, D = get_exp(B) + 0x58)\n");
+      for (size_t i = 0; i < popvals.size() && i < 14; ++i)
+        std::printf("      pop=%08x  A=%08x  B=%08x  D=%08x\n",
+                    popvals[i], popA[i], popB[i], popD[i]);
+      std::printf("      A non-zero for %llu cycles (last %08x)\n", (unsigned long long)a_nz, a_last);
+      std::printf("      B non-zero for %llu cycles (last %08x)\n", (unsigned long long)b_nz, b_last);
+      std::printf("      D non-zero for %llu cycles (last %08x)\n", (unsigned long long)d_nz, d_last);
+      std::printf("      FIFO read held the pipe for %u cycles\n", (unsigned)d->obs_tgp_hold);
+      std::printf("      TGP data-RAM writes: %u  (last addr %05x)\n",
+                  (unsigned)d->obs_tgp_wr_n, (unsigned)d->obs_tgp_wr_addr); }
+    std::printf("    io rd/wr/ack      %llu / %llu / %llu\n",
+                (unsigned long long)tgp_io_rd_n, (unsigned long long)tgp_io_wr_n,
+                (unsigned long long)tgp_io_ack_n);
+    std::printf("    fifo rd/wr        %llu / %llu\n",
+                (unsigned long long)tgp_fifo_rd_n, (unsigned long long)tgp_fifo_wr_n);
+    std::printf("    ram_req cycles    %llu   (the window is TIED OFF)\n",
+                (unsigned long long)tgp_ram_req_cyc);
+    {
+      std::vector<std::pair<uint64_t,uint32_t>> h;
+      for (auto &kv : tgp_pc_hist) h.push_back({kv.second, kv.first});
+      std::sort(h.rbegin(), h.rend());
+      std::printf("    WHERE THE TGP SITS -- top program addresses:\n");
+      for (size_t i = 0; i < h.size() && i < 8; ++i)
+        std::printf("      pc %04x  %10llu\n", h[i].second,
+                    (unsigned long long)h[i].first);
+      std::printf("    (%zu distinct program addresses seen)\n", tgp_pc_hist.size());
+    }
+    {
+      std::printf("    FIRST PCs AFTER BOOT, in order:\n     ");
+      for (size_t i = 0; i < tgp_pc_seq.size(); ++i)
+        std::printf(" %04x%s", tgp_pc_seq[i],
+                    ((i % 16) == 15 && i + 1 < tgp_pc_seq.size()) ? "\n     " : "");
+      std::printf("\n");
+    }
+    {
+      // Against MAME's own :copro_tgp_program, dumped at the same addresses.
+      std::printf("    copro_ctl1 WRITES (value : program words so far):\n     ");
+      for (size_t i = 0; i < ctl_log.size(); ++i)
+        std::printf(" %08x:%u%s", ctl_log[i].first, ctl_log[i].second,
+                    ((i % 5) == 4 && i + 1 < ctl_log.size()) ? "\n     " : "");
+      std::printf("\n");
+      static const struct { uint32_t a, w; } want[] = {
+        {0x44,0x000f4610},{0x45,0x000f7412},{0x46,0x000f4614},{0x47,0x1d3c4216},
+        {0x48,0x1c1c322b},{0x49,0x000f4619},{0x4a,0x1dbc421b},{0x4b,0x012f4611},
+        {0x4c,0x012f4614},{0x57,0xbf60004c},
+      };
+      std::printf("    PROGRAM AS FETCHED vs MAME:\n");
+      int bad = 0;
+      for (auto &e : want) {
+        auto it = tgp_prog.find(e.a);
+        if (it == tgp_prog.end()) { std::printf("      %04x  (never fetched)   want %08x\n", e.a, e.w); continue; }
+        const bool ok = (it->second == e.w);
+        if (!ok) ++bad;
+        std::printf("      %04x  %08x  want %08x  %s\n", e.a, it->second, e.w, ok ? "ok" : "<<< MISMATCH");
+      }
+      if (bad) std::printf("    *** the uploaded PROGRAM is wrong, not the decode ***\n");
+    }
+    if (!tgp_io_hist.empty()) {
+      std::vector<std::pair<uint64_t,uint32_t>> h;
+      for (auto &kv : tgp_io_hist) h.push_back({kv.second, kv.first});
+      std::sort(h.rbegin(), h.rend());
+      std::printf("    WHAT IT KEEPS READING -- top io addresses:\n");
+      for (size_t i = 0; i < h.size() && i < 8; ++i)
+        std::printf("      io %04x  %10llu\n", h[i].second,
+                    (unsigned long long)h[i].first);
+    }
+  }
+  {
+    std::printf("  WHERE THE CPU RAN -- top 4 KB pages of %llu retired:\n",
+                (unsigned long long)retired);
+    std::vector<std::pair<uint64_t,uint32_t>> h;
+    for (auto &kv : pc_hist) h.push_back({kv.second, kv.first});
+    std::sort(h.rbegin(), h.rend());
+    for (size_t i = 0; i < h.size() && i < 12; ++i)
+      std::printf("    %08x-%08x  %10llu  %5.1f%%\n",
+                  h[i].second << 12, (h[i].second << 12) | 0xfff,
+                  (unsigned long long)h[i].first,
+                  retired ? 100.0 * double(h[i].first) / double(retired) : 0.0);
+    if (pchit_addr)
+      std::printf("    PC %08x executed %llu times\n",
+                  pchit_addr, (unsigned long long)pchit_n);
+  }
+  {
+    std::printf("  TILEMAP SCROLL the renderer used, per layer:\n");
+    for (int i = 0; i < 4; ++i)
+      std::printf("    layer %d : hscr=%04x  vscr=%04x%s\n", i,
+                  d->obs_hscr[i], d->obs_vscr[i],
+                  (d->obs_hscr[i] || (d->obs_vscr[i] & 0x1ff)) ? "" : "   (no scroll)");
+  }
+  if (ucf) { std::fprintf(ucf, "-- total %llu\n", (unsigned long long)uc_n); std::fclose(ucf); std::printf("  upload stream written\n"); }
   if (dtr) { std::fclose(dtr); std::printf("  data address trace written\n"); }
   if (out) { std::fclose(out); std::printf("  PC stream written to %s\n", outfile); }
   if (charstream) { std::fclose(charstream); std::printf("  char write stream written\n"); }

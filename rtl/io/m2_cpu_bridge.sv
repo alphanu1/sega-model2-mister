@@ -115,6 +115,20 @@ module m2_cpu_bridge #(
 
   // I/O the core answers itself.
   input  logic [31:0] io_rdata,
+  // AN I/O TARGET MAY REFUSE TO COMPLETE, AND THE CPU MUST WAIT FOR IT.
+  //
+  // Every peripheral before this one answered in the cycle it was selected, so
+  // the sequencer never had to ask. The coprocessor's input FIFO is different:
+  // it is EIGHT DEEP AND IT IS THE FLOW CONTROL. MAME's generic_fifo never
+  // drops -- push() into a full FIFO queues the value and HALTS THE SOURCE --
+  // and this core dropped 429,406 of the i960's commands in one boot because a
+  // full FIFO looked like an overflow to guard against rather than a brake to
+  // obey.
+  //
+  // While io_stall is high the access is held: io_sel stays asserted, no
+  // acknowledge is returned, and the i960 waits exactly as it would on a real
+  // bus that is not ready. It costs nothing when nothing stalls.
+  input  logic        io_stall,
   output logic        io_sel,
   output logic        io_we,
   output logic [31:0] io_addr,
@@ -685,9 +699,17 @@ module m2_cpu_bridge #(
         // which is right: a write lands on the cycle it is asserted, and a read
         // only needs the address, which r_addr holds for the whole transaction.
         S_IOW: begin
-          r_rdata <= io_rdata;
-          ack_mem <= 1'b1;
-          st      <= S_DONE;
+          if (io_stall) begin
+            // Hold the access. io_sel is cleared at the top of this block every
+            // cycle, so re-assert it: the target must keep seeing a live select
+            // or it cannot tell when it becomes able to accept.
+            io_sel <= 1'b1;
+            io_we  <= r_we;
+          end else begin
+            r_rdata <= io_rdata;
+            ack_mem <= 1'b1;
+            st      <= S_DONE;
+          end
         end
 
         // SDRAM low half, then high. The on-chip arrays answer in one cycle and

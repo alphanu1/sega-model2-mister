@@ -61,7 +61,12 @@ module mb86233_mem (
   output logic        sel_ram1,
   output logic        sel_fifo_in,
   output logic        sel_fifo_out,
-  output logic        unmapped
+  output logic        unmapped,
+  // Does the microcode ever STORE to data RAM? `lab` reloads B from
+  // ea_pre_1(r2)+0x200, which is ordinary RAM on Model 2, so if nothing is
+  // written there B can only ever read zero -- which is exactly what happens.
+  output logic [31:0] dbg_wr_n,
+  output logic [16:0] dbg_wr_addr
 );
 
   // --------------------------------------------------------------- decode
@@ -121,6 +126,15 @@ module mb86233_mem (
   end
 
   // --------------------------------------------------------- external side
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      dbg_wr_n <= 32'd0; dbg_wr_addr <= 17'd0;
+    end else if (req && we && (sel_ram0 || sel_ram1)) begin
+      if (!(&dbg_wr_n)) dbg_wr_n <= dbg_wr_n + 32'd1;
+      dbg_wr_addr <= addr;
+    end
+  end
 
   assign ext_rd    = req & sel_fifo_in;
   assign ext_wr    = req & sel_fifo_out;

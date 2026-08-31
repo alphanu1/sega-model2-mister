@@ -378,6 +378,11 @@ localparam logic [SDR_AW:1] GAME_TGPTBL = SDR_AW'(32'h15d8000);
 wire        snd_rom_req;
 wire [17:1] snd_rom_addr;
 wire        pcm1_req, pcm2_req;
+// The TGP's two read-only windows: 64K words of sincos/atan/inv/isqrt tables,
+// and 2 M words of copro_data the geometry code walks.
+wire        tgp_tbl_req, tgp_dat_req;
+wire [15:0] tgp_tbl_addr;
+wire [18:0] tgp_dat_addr;
 // BURST INDEX, NOT A BYTE ADDRESS. The sound board's sample ports became
 // four-word bursts when m2_pcm_fetch was added and these were left as [21:0]
 // byte addresses, so a 19-bit output drove a 22-bit wire: the burst index
@@ -476,9 +481,10 @@ always_comb begin
 	// samples gets seven of every eight bytes without a second request.
 	p_req[6]  = snd_found & pcm1_req;
 	p_addr[6] = snd_base + PCM_OFFS + SDR_AW'({pcm1_addr, 2'b00});
-	// PORTS 8 AND 9, THE TGP's TABLES AND DATA. Both read-only, both single
-	// words -- the TGP asks for one and waits, so a burst buys nothing here and
-	// the aligned-request dance the samples need does not apply.
+	// PORTS 8 AND 9, THE TGP's TABLES AND DATA. Both read-only. The TGP asks
+	// for one 32-bit word and blocks on it, so only the low pair of each burst
+	// is used; the address is a 32-bit word index shifted left to reach this
+	// 16-bit memory.
 	//
 	// The table base is MEASURED rather than counted: arithmetic over the MRA's
 	// section list gives 0x2BA0000 and the built image has them at 0x2BB0000,
@@ -1495,6 +1501,7 @@ m2_cpu_bridge #(.AW(SDR_AW), .BOARD_2A(1'b0), .DCACHE_EN(1'b1)) u_cpu_bridge (
 	.oc_xlat_din(cpu_xlat_din_b),
 
 	.io_rdata(cpu_io_rdata), .io_sel(cpu_io_sel), .io_we(cpu_io_we),
+	.io_stall(cpu_io_stall),
 	.io_addr(cpu_io_addr), .io_wdata(cpu_io_wdata), .io_be(cpu_io_be),
 
 	.dbg_cpu_reads(cpu_dbg_rd), .dbg_cpu_writes(cpu_dbg_wr),
@@ -1840,7 +1847,10 @@ assign cpu_io_rdata =
 	// down, then repeated in RTL.
 	iob_sel                           ? iob_rdata :
 	bak_sel                           ? bak_rdata :
-	(cpu_io_addr[23:0] == 24'h980004) ? 32'd1 :
+	// THE COPROCESSOR, all three of its registers. The stub that used to sit
+	// here answered 0x980004 with a constant 1 -- "the output FIFO is empty",
+	// which is true of a copro that never starts and a lie about one that has.
+	copro_sel                         ? copro_rdata :
 	// tgpid_r, 0x00980030-0x0098003f. A sixteen-byte signature the copro board
 	// identifies itself with:
 	//
@@ -1872,6 +1882,114 @@ wire [7:0] tgpid_b =
 	(cpu_io_addr[3:0] == 4'hB) ? 8'h4B : (cpu_io_addr[3:0] == 4'hD) ? 8'h4D :
 	(cpu_io_addr[3:0] == 4'hE) ? 8'h54 : (cpu_io_addr[3:0] == 4'hF) ? 8'h4B : 8'h00;
 wire [31:0] tgpid = {4{tgpid_b}};
+
+// ----------------------------------------------------------- COPROCESSOR
+//
+// Three regions, from model2.cpp's map. cpu_io_addr carries the low 24 bits.
+//
+//   0x00884000-0x00887fff  copro_fifo   read pops the output FIFO; write
+//                                       pushes the input FIFO, OR writes the
+//                                       program -- copro_ctl1 bit 31 selects
+//   0x00980000             copro_ctl1
+//   0x00980004             fifo_control read: 1 when the output FIFO is empty
+//
+// A COMBINATIONAL rdata is correct here and a registered one would be wrong,
+// which is the opposite of m2_ioboard and worth stating. io_sel is a one-cycle
+// pulse and m2_cpu_bridge samples io_rdata DURING that cycle, so a peripheral
+// that registers on the address (the I/O board, which must, because an
+// asynchronously read array is flip-flops on this part) is ready in time,
+// while one that registered on the select would answer a cycle late. The FIFO
+// pop rides the same cycle: rdata presents the current head and the read
+// pointer advances on the edge that ends it, so the i960 gets the entry it
+// asked for rather than the one after it.
+// EVERY WRITE TO THIS PORT IS ONE FIFO WORD. copro_fifo_w takes a plain u32
+// and pushes once per call; there is no burst filtering.
+//
+// A previous version tested cpu_io_addr[3:2] == 0 here, on the theory that the
+// port is not burst-capable and takes only the first dword of the i960's quad
+// stores. That was WRONG, and it was wrong because of a bad measurement: MAME's
+// TGP program space is WORD-addressed, so it must be read as `read_u32(word)`,
+// and it had been read as `read_u32(word*4)`. Sampling word*4 across a
+// 2024-word program only lands inside it for the first 506 samples -- which is
+// exactly the "506-word program" that theory rested on. Read correctly, MAME's
+// program is 2024 non-zero words and satisfies program[i] == write[i]. See R116.
+wire        copro_fifo_sel = cpu_io_sel && (cpu_io_addr[23:14] == 10'h221);
+wire        copro_ctl_sel  = cpu_io_sel && (cpu_io_addr[23:0]  == 24'h980000);
+wire        copro_fctl_sel = cpu_io_sel && (cpu_io_addr[23:0]  == 24'h980004);
+wire        copro_sel      = copro_fifo_sel | copro_ctl_sel | copro_fctl_sel;
+// Only the coprocessor can hold the bus today; the wire is named for the bus,
+// not for the coprocessor, so a second such peripheral ORs into it.
+wire        cpu_io_stall   = copro_stall;
+wire [31:0] copro_rdata;
+wire        copro_stall;
+wire [31:0] copro_dbg_ctl;
+wire [15:0] copro_prog_words, copro_in_pushed, copro_out_popped;
+wire [31:0] copro_fctl_reads;
+wire        copro_ram_req;
+wire [15:0] tgp_retires, tgp_pc;
+wire        tgp_unimpl;
+
+// A REGISTER STAGE ON THE COPROCESSOR'S SDRAM RETURN, and it is a measured fix
+// rather than defensive pipelining.
+//
+// Wired straight through, EVERY failing setup path in the design ran from
+// m2_sdram's p_ack[8]/p_dout[8] to mb86233_core's src_val -- eight of the worst
+// eight, at -3.16 ns on a 20 ns clock. The table return fed combinationally
+// into the core's source multiplexer, so the SDRAM's output register and the
+// TGP's input register were separated by the whole of both.
+//
+// The cycle it costs is free: the TGP issues one lookup and BLOCKS on the
+// acknowledge, so a later ack is a later ack and nothing races it. The boot
+// harness already models these windows with six cycles of latency, which is
+// why this changes nothing in simulation.
+logic        tgp_tbl_ack_r, tgp_dat_ack_r;
+logic [31:0] tgp_tbl_rdata_r, tgp_dat_rdata_r;
+always_ff @(posedge clk_sys) begin
+	tgp_tbl_ack_r   <= p_ack[8];
+	tgp_tbl_rdata_r <= p_dout[8][31:0];
+	tgp_dat_ack_r   <= p_ack[9];
+	tgp_dat_rdata_r <= p_dout[9][31:0];
+end
+
+// CLOCKED ON clk_sys, DELIBERATELY, and speed is a separate question.
+//
+// It shares a clock with m2_cpu_bridge's io side and with the SDRAM ports it
+// reads through, so there is no crossing anywhere in this path. R104 measures
+// the TGP at 44% of the throughput a real 50 MHz part delivers and says
+// clocking alone cannot close that -- but a coprocessor that is slow is a
+// coprocessor that can be measured, and one behind an unsynchronised crossing
+// is neither.
+m2_copro u_copro (
+	.clk(clk_sys), .rst_n(cpu_rst_n),
+	.sel_ctl(copro_ctl_sel), .sel_fifo(copro_fifo_sel),
+	.sel_fifoctl(copro_fctl_sel),
+	.we(cpu_io_we), .wdata(cpu_io_wdata), .rdata(copro_rdata),
+	.stall(copro_stall),
+	// THE LOW TWO WORDS OF A FOUR-WORD BURST. The TGP's word is 32 bits and
+	// the memory's is 16, so one lookup needs a pair; the port bursts four
+	// because every port must burst the same length (see blen() in
+	// m2_sdram.sv -- a mixed length corrupts other ports), and the upper two
+	// words are discarded. Low half first, which is the order the MRA's
+	// interleave puts them in: opr-14742a supplies bits 15:0 and opr-14743a
+	// bits 31:16, verified against MAME's own copro_tgp_tables region.
+	//
+	// The pair never straddles a row. tbl_addr and dat_addr are shifted left
+	// by one so the address is always EVEN, and a burst wraps inside the open
+	// row -- the last column of a row is an odd index, so an even address is
+	// never the last column and word 1 is always in the same row as word 0.
+	.tbl_req(tgp_tbl_req), .tbl_addr(tgp_tbl_addr),
+	.tbl_rdata(tgp_tbl_rdata_r), .tbl_ack(tgp_tbl_ack_r),
+	.dat_req(tgp_dat_req), .dat_addr(tgp_dat_addr),
+	.dat_rdata(tgp_dat_rdata_r), .dat_ack(tgp_dat_ack_r),
+	.dbg_ctl(copro_dbg_ctl), .dbg_prog_words(copro_prog_words),
+	.dbg_in_pushed(copro_in_pushed), .dbg_out_popped(copro_out_popped),
+	.dbg_fctl_reads(copro_fctl_reads),
+	.dbg_in_popped(), .dbg_pop_data(), .dbg_in_dropped(), .dbg_out_dropped(),
+	.dbg_ram_req(copro_ram_req),
+	.dbg_tgp_retires(tgp_retires), .dbg_tgp_pc(tgp_pc),
+	.dbg_tgp_hold(), .dbg_tgp_wr_n(), .dbg_tgp_wr_addr(), .dbg_tgp_a(), .dbg_tgp_b(), .dbg_tgp_d(),
+	.dbg_tgp_unimpl(tgp_unimpl)
+);
 
 // ------------------------------------------------------------- I/O BOARD
 //

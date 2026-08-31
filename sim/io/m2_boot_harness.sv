@@ -176,6 +176,10 @@ module m2_boot_harness #(
   // the histogram of this signal IS the breakdown. Taken by hierarchical
   // reference so the CPU is not modified to be measured.
   output logic  [4:0] obs_ts,
+  // The scroll registers the renderer used, per layer. The board reports the
+  // grass and sky standing still; this says whether the game writes zero.
+  output logic [15:0] obs_hscr [4],
+  output logic [15:0] obs_vscr [4],
   // WHY the prefetch misses, which needs different fixes depending on the
   // answer: a wrong prediction is a branch and is unavoidable, whereas a right
   // prediction whose data has not arrived is a scheduling problem and is fixable.
@@ -189,7 +193,50 @@ module m2_boot_harness #(
   // it against MAME's tilemap and palette rather than against a hope.
   input  logic [14:0] dump_addr,
   output logic [15:0] dump_tram,
-  output logic [15:0] dump_pal
+  output logic [15:0] dump_pal,
+
+  // ---- THE COPROCESSOR, and its two read-only SDRAM windows.
+  // Served by the testbench out of the same modelled memory the CPU reads, so
+  // the math tables are the real ones from the ROMs rather than a pattern.
+  output logic        tgp_tbl_req,
+  output logic [15:0] tgp_tbl_addr,
+  input  logic [31:0] tgp_tbl_rdata,
+  input  logic        tgp_tbl_ack,
+  output logic        tgp_dat_req,
+  output logic [18:0] tgp_dat_addr,
+  input  logic [31:0] tgp_dat_rdata,
+  input  logic        tgp_dat_ack,
+  // Telemetry. `retires` moving is the whole question; `unimpl` is the one
+  // failure that looks identical to a hang from outside.
+  output logic [15:0] obs_tgp_retires,
+  output logic [15:0] obs_tgp_pc,
+  output logic [31:0] obs_tgp_op,
+  output logic [31:0] obs_tgp_hold,
+  output logic [31:0] obs_tgp_wr_n,
+  output logic [16:0] obs_tgp_wr_addr,
+  output logic [31:0] obs_tgp_a,
+  output logic [31:0] obs_tgp_b,
+  output logic [31:0] obs_tgp_d,
+  output logic        obs_uc_we,
+  output logic [11:0] obs_uc_addr,
+  output logic [31:0] obs_uc_data,
+  output logic        obs_tgp_unimpl,
+  output logic [31:0] obs_copro_ctl,
+  output logic [15:0] obs_copro_prog,
+  output logic [15:0] obs_copro_in,
+  output logic [15:0] obs_copro_out,
+  output logic [31:0] obs_fctl_reads,
+  output logic [31:0] obs_in_popped,
+  output logic [31:0] obs_pop_data,
+  output logic [31:0] obs_in_dropped,
+  output logic [31:0] obs_out_dropped,
+  output logic [15:0] obs_tgp_io_addr,
+  output logic        obs_tgp_io_rd,
+  output logic        obs_tgp_io_wr,
+  output logic        obs_tgp_io_ack,
+  output logic        obs_tgp_fifo_rd,
+  output logic        obs_tgp_fifo_wr,
+  output logic        obs_tgp_ram_req
 );
 
   logic        bus_req, bus_we, bus_ack;
@@ -274,7 +321,7 @@ module m2_boot_harness #(
     .vid_r(vid_r), .vid_g(vid_g), .vid_b(vid_b),
     .vid_hs(), .vid_vs(), .vid_hb(vid_hb), .vid_vb(vid_vb),
     .vblank_irq(), .dbg_fetches(dbg_fetches_o), .dbg_overruns(dbg_overruns_o),
-    .dbg_ovr_frame(), .dbg_hscr(), .dbg_vscr(),
+    .dbg_ovr_frame(), .dbg_hscr(obs_hscr), .dbg_vscr(obs_vscr),
     .dbg_layer_px(), .dbg_ctrl(), .dbg_layer_have()
   );
 
@@ -411,6 +458,7 @@ module m2_boot_harness #(
 // 32 writes per channel, which proves the ADDRESSES land; it says nothing about
 // the VALUES, and a table whose R and B ramps are wrong renders white as green.
     .io_rdata(cpu_io_rdata), .io_sel(cpu_io_sel), .io_we(cpu_io_we),
+    .io_stall(copro_stall),
     .io_addr(cpu_io_addr), .io_wdata(cpu_io_wdata), .io_be(cpu_io_be),
     .dbg_cpu_reads(), .dbg_cpu_writes(), .dbg_unmapped(),
     .dbg_last_addr(), .dbg_last_dout(), .dbg_probe6(), .dbg_probe2(),
@@ -455,6 +503,42 @@ module m2_boot_harness #(
     .dbg_ee(), .dbg_wrcnt(), .dbg_wr_stb(), .dbg_dout(), .dbg_di(),
     .dbg_rd_end(), .dbg_ra(), .dbg_rdat(),
     .dbg_m1_n(), .dbg_a(), .dbg_last_wr(), .dbg_pf(), .dbg_pa(), .dbg_seccnt()
+  );
+
+  // ---------------------------------------------------------- COPROCESSOR
+  // Same decode as Model2.sv. It replaces the fifo_control stub that answered
+  // 0x980004 with a constant 1 -- "the output FIFO is empty", true of a copro
+  // that never starts and a lie about one that has.
+  wire        copro_fifo_sel = cpu_io_sel && (cpu_io_addr[23:14] == 10'h221);
+  wire        copro_ctl_sel  = cpu_io_sel && (cpu_io_addr[23:0]  == 24'h980000);
+  wire        copro_fctl_sel = cpu_io_sel && (cpu_io_addr[23:0]  == 24'h980004);
+  wire        copro_sel      = copro_fifo_sel | copro_ctl_sel | copro_fctl_sel;
+  wire [31:0] copro_rdata;
+  wire        copro_stall;
+
+  m2_copro u_copro (
+    .clk(clk_m), .rst_n(rst_n),
+    .sel_ctl(copro_ctl_sel), .sel_fifo(copro_fifo_sel),
+    .sel_fifoctl(copro_fctl_sel),
+    .we(cpu_io_we), .wdata(cpu_io_wdata), .rdata(copro_rdata),
+    .stall(copro_stall),
+    .tbl_req(tgp_tbl_req), .tbl_addr(tgp_tbl_addr),
+    .tbl_rdata(tgp_tbl_rdata), .tbl_ack(tgp_tbl_ack),
+    .dat_req(tgp_dat_req), .dat_addr(tgp_dat_addr),
+    .dat_rdata(tgp_dat_rdata), .dat_ack(tgp_dat_ack),
+    .dbg_ctl(obs_copro_ctl), .dbg_prog_words(obs_copro_prog),
+    .dbg_in_pushed(obs_copro_in), .dbg_out_popped(obs_copro_out),
+    .dbg_fctl_reads(obs_fctl_reads),
+    .dbg_in_popped(obs_in_popped), .dbg_pop_data(obs_pop_data),
+    .dbg_in_dropped(obs_in_dropped), .dbg_out_dropped(obs_out_dropped),
+    .dbg_ram_req(obs_tgp_ram_req),
+    .dbg_tgp_retires(obs_tgp_retires), .dbg_tgp_pc(obs_tgp_pc),
+    .dbg_tgp_op(obs_tgp_op), .dbg_tgp_hold(obs_tgp_hold), .dbg_tgp_wr_n(obs_tgp_wr_n), .dbg_tgp_wr_addr(obs_tgp_wr_addr), .dbg_tgp_a(obs_tgp_a), .dbg_tgp_b(obs_tgp_b), .dbg_tgp_d(obs_tgp_d),
+    .dbg_uc_we(obs_uc_we), .dbg_uc_addr(obs_uc_addr), .dbg_uc_data(obs_uc_data),
+    .dbg_tgp_unimpl(obs_tgp_unimpl),
+    .dbg_tgp_io_addr(obs_tgp_io_addr), .dbg_tgp_io_rd(obs_tgp_io_rd),
+    .dbg_tgp_io_wr(obs_tgp_io_wr), .dbg_tgp_io_ack(obs_tgp_io_ack),
+    .dbg_tgp_fifo_rd(obs_tgp_fifo_rd), .dbg_tgp_fifo_wr(obs_tgp_fifo_wr)
   );
 
   m2_ioboard #(
@@ -526,7 +610,7 @@ module m2_boot_harness #(
     iob_sel                           ? iob_rdata :
     bak_sel                           ? bak_rdata :
     (cpu_io_addr[23:4] == 20'h98003)  ? {4{tgpid_b}} :
-    (cpu_io_addr[23:0] == 24'h980004) ? 32'd1 :
+    copro_sel                         ? copro_rdata :
     (cpu_io_addr[23:0] == 24'h98000c) ? (io_videoctl[0]
                                           ? {29'd0, io_framenum[0], io_videoctl[1:0]}
                                           : {28'd0, io_framenum[1], 1'b0, io_videoctl[1:0]}) :
