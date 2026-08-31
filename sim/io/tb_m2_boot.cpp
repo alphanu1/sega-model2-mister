@@ -360,7 +360,13 @@ int main(int argc, char **argv) {
   std::vector<uint32_t> unimpl_pc;
   std::vector<uint32_t> outvals;
   uint32_t outn_prev = 0;
+  // HOW HARD THE COPROCESSOR IS HOLDING THE CPU. If this is a large fraction of
+  // the run the i960 is not doing anything else -- including updating the
+  // tilemap, which is what a black screen looks like from the outside.
+  uint64_t cpu_held = 0, mem_cyc = 0;
   auto tgp_sample = [&]() {
+    ++mem_cyc;
+    if (d->obs_copro_stall) ++cpu_held;
     if (uint32_t(d->obs_out_pushed) != outn_prev) {
       outn_prev = uint32_t(d->obs_out_pushed);
       if (outvals.size() < 40) outvals.push_back(uint32_t(d->obs_out_data));
@@ -1764,6 +1770,9 @@ int main(int argc, char **argv) {
       { std::printf("      UNIMPLEMENTED fired on %llu cycles", (unsigned long long)unimpl_n);
         if (!unimpl_pc.empty()) { std::printf("   at pc:"); for (auto p : unimpl_pc) std::printf(" %04x", p); }
         std::printf("\n"); }
+      std::printf("      i960 HELD by the copro for %llu of %llu cycles (%.1f%%)\n",
+                  (unsigned long long)cpu_held, (unsigned long long)mem_cyc,
+                  mem_cyc ? 100.0*double(cpu_held)/double(mem_cyc) : 0.0);
       { std::printf("      TGP OUTPUT, ours (%u pushed):\n       ", (unsigned)d->obs_out_pushed);
         for (auto v : outvals) std::printf(" %08x", v);
         std::printf("\n        MAME idles pushing 00000000 from pc 030a, then at the\n"

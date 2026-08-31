@@ -196,15 +196,15 @@ module m2_copro (
   // `stall` survives only as the backstop for what an unbounded queue absorbs
   // and a fixed array cannot.
   localparam int unsigned FD    = 8;    // outbound, as the reference
-  localparam int unsigned FD_IN = 64;   // inbound: 8 real plus 56 of overflow
+  localparam int unsigned FD_IN = 512;  // 8 real plus 504 of overflow queue
   logic [31:0] fin  [FD_IN];
   logic [31:0] fout [FD];
-  logic  [6:0] fin_wp, fin_rp;
+  logic  [9:0] fin_wp, fin_rp;
   logic  [3:0] fout_wp, fout_rp;
-  wire   [6:0] fin_cnt  = fin_wp  - fin_rp;
+  wire   [9:0] fin_cnt  = fin_wp  - fin_rp;
   wire   [3:0] fout_cnt = fout_wp - fout_rp;
-  wire         fin_full  = (fin_cnt  >= 7'(FD_IN));
-  wire         fin_empty = (fin_cnt  == 7'd0);
+  wire         fin_full  = (fin_cnt  >= 10'(FD_IN));
+  wire         fin_empty = (fin_cnt  == 10'd0);
   wire         fout_full = (fout_cnt >= 4'(FD));
   wire         fout_empty= (fout_cnt == 4'd0);
 
@@ -215,7 +215,26 @@ module m2_copro (
 
   // THE FULL LINE. A program upload is never stalled -- it goes to program RAM
   // at a counter, not into the FIFO -- so only a genuine FIFO push can block.
-  assign stall = ((sel_fifo && !uploading) || sel_fn) && we && fin_full;
+  // NEVER STALL THE i960. THIS IS WHAT THE REFERENCE DOES, AND STALLING IT
+  // HALTED THE MACHINE ON HARDWARE.
+  //
+  // gen_fifo.cpp's push() ALWAYS completes -- a push into a full FIFO goes on
+  // an unbounded overflow queue and the source is only halted later, at a
+  // scheduler sync, by a mechanism that can release it. It never blocks the CPU
+  // inside a bus cycle.
+  //
+  // This held the bridge's acknowledge instead, with no timeout and no other
+  // way out: if the FIFO filled and the coprocessor did not drain it, the i960
+  // waited for ever. Simulation reported the hold at 0.0% of cycles and the
+  // board froze -- black tilemap, no text, attract stuck on its first screen --
+  // because the command volume in the harness is not the command volume of the
+  // real game.
+  //
+  // The queue is 512 deep instead, which is the overflow MAME models as
+  // unbounded, and the i960 is never held. `dbg_in_dropped` stays as the
+  // assertion: if it ever moves, the queue was too small and commands were
+  // lost, which is a visible failure rather than a hung machine.
+  assign stall = 1'b0;
 
   // A read of the FIFO port pops; a write pushes, or uploads.
   wire fifo_rd = sel_fifo && !we;
@@ -228,7 +247,7 @@ module m2_copro (
     if (!rst_n) begin
       coproctl <= 32'd0; coprocnt <= 12'd0; halted <= 1'b1;
       uc_we <= 1'b0; uc_addr <= 11'd0; uc_data <= 32'd0;
-      fin_wp <= 7'd0; fin_rp <= 7'd0; fout_wp <= 4'd0; fout_rp <= 4'd0;
+      fin_wp <= 10'd0; fin_rp <= 10'd0; fout_wp <= 4'd0; fout_rp <= 4'd0;
       dbg_prog_words <= 16'd0; dbg_in_pushed <= 16'd0; dbg_out_popped <= 16'd0;
       dbg_fctl_reads <= 32'd0;
       dbg_in_dropped <= 32'd0; dbg_out_dropped <= 32'd0;
@@ -259,8 +278,8 @@ module m2_copro (
           coprocnt <= coprocnt + 12'd1;
           if (!(&dbg_prog_words)) dbg_prog_words <= dbg_prog_words + 16'd1;
         end else if (!fin_full) begin
-          fin[fin_wp[5:0]] <= wdata;
-          fin_wp <= fin_wp + 7'd1;
+          fin[fin_wp[8:0]] <= wdata;
+          fin_wp <= fin_wp + 10'd1;
           dbg_push_data <= wdata;
           if (!(&dbg_in_pushed)) dbg_in_pushed <= dbg_in_pushed + 16'd1;
         end else if (!(&dbg_in_dropped)) begin
@@ -276,8 +295,8 @@ module m2_copro (
 
       // ---- the function port: a command push, never a program upload
       if (fn_wr && !fin_full) begin
-        fin[fin_wp[5:0]] <= fn_word;
-        fin_wp <= fin_wp + 7'd1;
+        fin[fin_wp[8:0]] <= fn_word;
+        fin_wp <= fin_wp + 10'd1;
         dbg_push_data <= fn_word;
         if (!(&dbg_in_pushed)) dbg_in_pushed <= dbg_in_pushed + 16'd1;
       end
@@ -290,8 +309,8 @@ module m2_copro (
 
       // ---- the TGP's own ends
       if (tgp_in_pop && !fin_empty) begin
-        fin_rp <= fin_rp + 7'd1;
-        dbg_pop_data <= fin[fin_rp[5:0]];
+        fin_rp <= fin_rp + 10'd1;
+        dbg_pop_data <= fin[fin_rp[8:0]];
         if (!(&dbg_in_popped)) dbg_in_popped <= dbg_in_popped + 32'd1;
       end
       if (tgp_out_push && !fout_full) begin
@@ -340,7 +359,7 @@ module m2_copro (
     // brought out so a design that starts depending on it is visible.
     .ram_req(ram_req_w), .ram_we(), .ram_addr(), .ram_wdata(),
     .ram_rdata(32'd0), .ram_ack(ram_req_w),
-    .fifo_in_data(fin[fin_rp[5:0]]), .fifo_in_valid(!fin_empty),
+    .fifo_in_data(fin[fin_rp[8:0]]), .fifo_in_valid(!fin_empty),
     .fifo_in_pop(tgp_in_pop),
     .fifo_out_data(tgp_out_data), .fifo_out_push(tgp_out_push),
     .fifo_out_full(fout_full),

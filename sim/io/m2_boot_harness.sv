@@ -233,6 +233,7 @@ module m2_boot_harness #(
   output logic [31:0] obs_push_data,
   output logic [31:0] obs_out_data,
   output logic [31:0] obs_out_pushed,
+  output logic        obs_copro_stall,
   output logic [31:0] obs_in_dropped,
   output logic [31:0] obs_out_dropped,
   output logic [15:0] obs_tgp_io_addr,
@@ -521,6 +522,7 @@ module m2_boot_harness #(
   wire        copro_sel      = copro_fifo_sel | copro_ctl_sel | copro_fctl_sel;
   wire [31:0] copro_rdata;
   wire        copro_stall;
+  assign obs_copro_stall = copro_stall;
 
   m2_copro u_copro (
     .clk(clk_m), .rst_n(rst_n),
