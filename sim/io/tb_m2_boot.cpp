@@ -337,6 +337,8 @@ int main(int argc, char **argv) {
   FILE *ucf = std::getenv("M2_UCLOG") ? std::fopen(std::getenv("M2_UCLOG"), "w") : nullptr;
   uint64_t uc_n = 0;
   std::vector<uint32_t> popvals, popA, popB, popD, popPC, popOP;
+  std::vector<uint32_t> pushvals;
+  uint32_t pushn_prev = 0;
   uint32_t popn_prev = 0;
   std::map<uint32_t,uint64_t> pop_pc_hist;
   // Sampled EVERY cycle, not at the pop: the destination write-back lands a
@@ -350,7 +352,23 @@ int main(int argc, char **argv) {
   // reference capture so the two can be read side by side.
   std::vector<std::string> loopst;
   uint32_t lpc_prev = 0xffffffffu;
+  // UNIMPLEMENTED IS A COMBINATIONAL WIRE, high only in the cycle it decodes.
+  // Sampling it once at the end of a run -- which is what this did -- reads
+  // zero almost regardless of how often it fires. Count every cycle and keep
+  // the first few program counters.
+  uint64_t unimpl_n = 0;
+  std::vector<uint32_t> unimpl_pc;
   auto tgp_sample = [&]() {
+    if (uint32_t(d->obs_copro_in) != pushn_prev) {
+      pushn_prev = uint32_t(d->obs_copro_in);
+      if (pushvals.size() < 300) pushvals.push_back(uint32_t(d->obs_push_data));
+    }
+    if (d->obs_tgp_unimpl) {
+      ++unimpl_n;
+      uint32_t p = uint32_t(d->obs_tgp_pc);
+      if (unimpl_pc.empty() || unimpl_pc.back() != p)
+        if (unimpl_pc.size() < 12) unimpl_pc.push_back(p);
+    }
     {
       uint32_t pc = uint32_t(d->obs_tgp_pc);
       if (pc != lpc_prev) {
@@ -378,7 +396,7 @@ int main(int argc, char **argv) {
     if (uint32_t(d->obs_in_popped) != popn_prev) {
       popn_prev = uint32_t(d->obs_in_popped);
       ++pop_pc_hist[uint32_t(d->obs_tgp_pc)];
-      if (popvals.size() < 24) {
+      if (popvals.size() < 300) {
         popvals.push_back(uint32_t(d->obs_pop_data));
         popA.push_back(uint32_t(d->obs_tgp_a));
         popB.push_back(uint32_t(d->obs_tgp_b));
@@ -1720,6 +1738,16 @@ int main(int argc, char **argv) {
                 (unsigned)d->obs_in_dropped, (unsigned)d->obs_out_dropped,
                 (d->obs_in_dropped || d->obs_out_dropped) ? "   <<< DATA LOSS" : "");
     { std::printf("    POP / B / D  (MAME: the pop lands in B, D = get_exp(B) + 0x58)\n");
+      if (const char *qf = std::getenv("M2_PUSHLOG")) {
+        FILE *g = std::fopen(qf, "w");
+        if (g) { for (auto v : pushvals) std::fprintf(g, "%08x\n", v); std::fclose(g);
+                 std::printf("      push stream written (%zu)\n", pushvals.size()); }
+      }
+      if (const char *pf = std::getenv("M2_POPLOG")) {
+        FILE *g = std::fopen(pf, "w");
+        if (g) { for (auto v : popvals) std::fprintf(g, "%08x\n", v); std::fclose(g);
+                 std::printf("      pop stream written (%zu values)\n", popvals.size()); }
+      }
       for (size_t i = 0; i < popvals.size() && i < 14; ++i)
         std::printf("      pop=%08x  A=%08x  B=%08x  D=%08x\n",
                     popvals[i], popA[i], popB[i], popD[i]);
@@ -1727,6 +1755,9 @@ int main(int argc, char **argv) {
       std::printf("      B non-zero for %llu cycles (last %08x)\n", (unsigned long long)b_nz, b_last);
       std::printf("      D non-zero for %llu cycles (last %08x)\n", (unsigned long long)d_nz, d_last);
       std::printf("      FIFO read held the pipe for %u cycles\n", (unsigned)d->obs_tgp_hold);
+      { std::printf("      UNIMPLEMENTED fired on %llu cycles", (unsigned long long)unimpl_n);
+        if (!unimpl_pc.empty()) { std::printf("   at pc:"); for (auto p : unimpl_pc) std::printf(" %04x", p); }
+        std::printf("\n"); }
       { std::printf("      WHERE OUR POPS HAPPEN (MAME pops at 0044 and 004c):\n");
         std::vector<std::pair<uint64_t,uint32_t>> h;
         for (auto &kv : pop_pc_hist) h.push_back({kv.second, kv.first});

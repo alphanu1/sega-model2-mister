@@ -97,6 +97,7 @@ module m2_copro (
   // below looks like an overflow guard and is data loss.
   output logic [31:0] dbg_in_popped,   // what the TGP actually took
   output logic [31:0] dbg_pop_data,    // and the value it took
+  output logic [31:0] dbg_push_data,   // and what the i960 put in
   output logic [31:0] dbg_in_dropped,
   output logic [31:0] dbg_out_dropped,
   output logic        dbg_ram_req,      // the tie-off above, made visible
@@ -209,7 +210,7 @@ module m2_copro (
       dbg_prog_words <= 16'd0; dbg_in_pushed <= 16'd0; dbg_out_popped <= 16'd0;
       dbg_fctl_reads <= 32'd0;
       dbg_in_dropped <= 32'd0; dbg_out_dropped <= 32'd0;
-      dbg_in_popped <= 32'd0; dbg_pop_data <= 32'd0;
+      dbg_in_popped <= 32'd0; dbg_pop_data <= 32'd0; dbg_push_data <= 32'd0;
     end else begin
       uc_we <= 1'b0;
 
@@ -237,6 +238,7 @@ module m2_copro (
         end else if (!fin_full) begin
           fin[fin_wp[5:0]] <= wdata;
           fin_wp <= fin_wp + 7'd1;
+          dbg_push_data <= wdata;
           if (!(&dbg_in_pushed)) dbg_in_pushed <= dbg_in_pushed + 16'd1;
         end else if (!(&dbg_in_dropped)) begin
           // NOW UNREACHABLE, and kept as a running assertion rather than

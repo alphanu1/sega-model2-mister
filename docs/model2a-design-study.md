@@ -6740,3 +6740,49 @@ loudly, it returned plausible instruction words from the wrong places and
 supported a theory for two days. **Before reading a device's memory from a
 debugger or a script, verify the address unit against something the device
 itself produces.** The fetch tap was that something, and it took ten minutes.
+
+**R117 - the coprocessor is faithful; the i960 is pushing zeros. The fault is
+upstream of the TGP entirely.**
+
+A lock-step diff of the command stream, ours against the reference's own writes
+to the FIFO port, over the first 76 commands after the program upload:
+
+    idx  ours      MAME
+      4  3b8e38e4  3b8e38e4
+      5  438e8000  438e8000
+      6  00000000  3f9e5556   <<<
+      7  3fb98e39  3fb98e39
+     ...
+     13  00000000  4260e0e2   <<<
+
+**18 of 76 differ, and every one of them is ours reading 00000000.** The popped
+stream shows the identical 18 mismatches at the identical indices, which is the
+point: the FIFO delivers exactly what it was given, in order, and the TGP
+consumes exactly what the FIFO delivers. Nothing between the i960 and the
+coprocessor loses or reorders anything.
+
+So the values are wrong before they are ever pushed. `3f9e5556` is about 1.238
+and `4260e0e2` about 56.2 -- ordinary single-precision geometry values, and
+roughly a quarter of them come out of this core as zero.
+
+*What this closes.* The TGP investigation is finished for now. Its FIFO routing
+(R112), its stall behaviour (R115), its decode table, its data-RAM
+initialisation and its instruction trace all match the reference. It sits in the
+drain loop because `get_exp(B)` of a zero command is zero, which is the correct
+response to the input it is given.
+
+*What it opens.* The i960's floating point. Every FP unit here passes a fuzz
+suite against a reference model -- fpadd, fpmul, fpdiv, fpsqrt, fpmisc, fpcvt --
+so the arithmetic is not obviously wrong in isolation. That leaves the
+integration: which instruction form reaches which unit, operand selection,
+result forwarding, or a path that silently returns zero. The project already has
+the instrument for this in `tools/i960-diff.sh` and `i960-datadiff.sh`; the task
+is to find the instruction that should produce 3f9e5556 and see what it does
+instead.
+
+*The generalisation, and it is the same shape as R116.* Two days were spent
+inside the coprocessor because that is where the symptom appeared. The symptom
+was downstream of the fault by an entire processor. **A component that faithfully
+transmits bad input looks exactly like a broken component**, and the only thing
+that separated them was comparing the DATA at the boundary rather than the
+behaviour inside.
