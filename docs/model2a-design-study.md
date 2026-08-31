@@ -6741,8 +6741,13 @@ supported a theory for two days. **Before reading a device's memory from a
 debugger or a script, verify the address unit against something the device
 itself produces.** The fetch tap was that something, and it took ten minutes.
 
-**R117 - the coprocessor is faithful; the i960 is pushing zeros. The fault is
-upstream of the TGP entirely.**
+**R117 - PARTLY WRONG, SEE R119.** The measurement stands -- the i960 does push
+zeros and the FIFO transmits them faithfully -- but the conclusion drawn from
+it, that the fault is upstream of the TGP, does not. The zeros are the i960
+READING this core's empty output FIFO.
+
+~~The coprocessor is faithful; the i960 is pushing zeros. The fault is
+upstream of the TGP entirely.~~
 
 A lock-step diff of the command stream, ours against the reference's own writes
 to the FIFO port, over the first 76 commands after the program upload:
@@ -6830,3 +6835,55 @@ a time produced `op=02` at 0xe2bc, which is not an i960 opcode at all -- it is
 the displacement of the `ld` before it. Any hand decode of i960 code must track
 instruction length, and the plausible-looking opcodes on either side are exactly
 what makes the error easy to miss.
+
+**R119 - the i960 is not computing those zeros, it is READING them out of the
+coprocessor's empty output FIFO. The loop is a deadlock this core starts.**
+
+A breakpoint-anchored disassembly of the window R118 narrowed, from the
+reference itself:
+
+    0000E2A8: ld      (g11)[g12],r3     <- READ the copro OUTPUT fifo into r3
+    0000E2AC: mov     0,g14
+    0000E2B0: st      r3,0x38(g13)
+    0000E2B4: st      r3,0x44(g13)
+    0000E2B8: ld      0x28b57a4,r4      <- r4 is a plain memory load
+    0000E2C0: lda     0x303,g14
+    0000E2C4: st      g14,0x30(g11)
+    0000E2C8: st      r3,(g11)[g12]     <- push r3 BACK to the copro
+    0000E2CC: st      r4,(g11)[g12]     <- push r4
+
+g11 = 0x00880000 and g12 = 0x00004000, so `(g11)[g12]` is 0x00884000: the
+coprocessor FIFO port. **r3 is a coprocessor RESULT, not an i960 computation.**
+r4 is a constant fetched from memory, which is exactly why this core gets r4
+right and r3 wrong -- the one value that depends on the TGP is the one that
+comes out zero.
+
+*So the causal chain runs the other way from R117.* The TGP produces no output;
+the i960 reads its empty output FIFO and gets zero; the i960 pushes that zero
+back as the next command; the TGP dispatches on `get_exp(0) = 0`, takes its idle
+handler, and produces no output. **It is self-sustaining, and this core starts
+it.** Every downstream observation -- 18 of 76 commands zero, B never carrying a
+real command, the drain loop never exiting -- is that one fact echoing.
+
+*What R117 got right and what it got wrong.* The measurement was sound: the i960
+does push zeros, the FIFO does transmit them faithfully, and the pop stream does
+carry the same mismatches at the same indices. The error was reading "the value
+is wrong before it is pushed" as "the i960 computed it wrongly", when the i960
+had loaded it from the coprocessor a few instructions earlier. **A value being
+wrong at a boundary says nothing about which side produced it until you know
+where it came from.**
+
+*Where this puts the work.* Back inside the TGP, but with a far better question
+than before: the first three commands (00000000, 00000000, 41000000, then
+00000000, 3b8e38e4, 438e8000) are pushed at 0xe098-0xe0a0 and 0x3948-0xe2a8,
+and the reference's TGP answers them before the i960 reads at 0xE2A8. This core
+never answers. So the question is not "why does the TGP produce nothing over a
+whole boot" but "what does the reference's TGP do with those first six words,
+and where does this core's handling of them stop" -- a bounded window with a
+known input and a known expected output.
+
+*Tooling note.* `tools/i960-trace.sh` works and produces disassembled traces,
+but its SETTLE_MS path fails for large settles and its `gtime` did not land the
+window where expected. Anchoring with `bpset <addr>` and then tracing is exact
+and cheap, and it is how this was finally read. The trace is UPPERCASE hex --
+a case-sensitive grep for the address finds nothing and looks like absence.
