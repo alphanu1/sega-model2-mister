@@ -129,6 +129,8 @@ module m2_tgp #(
   output logic [31:0] dbg_fifo_hold,
   output logic [31:0] dbg_wr_n,
   output logic [16:0] dbg_wr_addr,
+  output logic [31:0] dbg_wr_data,
+  output logic [31:0] dbg_st,
   output logic [31:0] dbg_a,
   output logic [31:0] dbg_b,
   output logic [31:0] dbg_d,
@@ -214,6 +216,7 @@ module m2_tgp #(
     end
   end
 
+  assign dbg_st = u_st;
   assign dbg_a = u_a;
   assign dbg_b = u_b;
   assign dbg_d = u_d;
@@ -248,7 +251,7 @@ module m2_tgp #(
     .prog_addr(prog_addr), .prog_rdata(prog_rdata),
     .io_addr(io_addr), .io_rd(io_rd), .io_wr(io_wr),
     .io_wdata(io_wdata), .io_rdata(io_rdata), .io_ack(io_ack),
-    .dbg_fifo_hold(dbg_fifo_hold), .dbg_wr_n(dbg_wr_n), .dbg_wr_addr(dbg_wr_addr),
+    .dbg_fifo_hold(dbg_fifo_hold), .dbg_wr_n(dbg_wr_n), .dbg_wr_addr(dbg_wr_addr), .dbg_wr_data(dbg_wr_data),
     .fifo_rd(fifo_rd), .fifo_wr(fifo_wr), .fifo_wdata(fifo_wdata),
     .fifo_rdata(fifo_rdata), .fifo_ack(fifo_ack),
     .gpio(4'd0),

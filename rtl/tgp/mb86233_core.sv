@@ -65,6 +65,7 @@ module mb86233_core (
   output logic [31:0] dbg_fifo_hold,   // cycles the FIFO read held the pipe
   output logic [31:0] dbg_wr_n,
   output logic [16:0] dbg_wr_addr,
+  output logic [31:0] dbg_wr_data,
   output logic        fifo_rd,
   output logic        fifo_wr,
   output logic [31:0] fifo_wdata,
@@ -317,7 +318,7 @@ module mb86233_core (
     .clk(clk), .rst_n(rst_n),
     .req(mem_req), .we(mem_we), .addr(mem_addr), .wdata(mem_wdata),
     .rdata(mem_rdata), .stall(mem_stall),
-    .dbg_wr_n(dbg_wr_n), .dbg_wr_addr(dbg_wr_addr),
+    .dbg_wr_n(dbg_wr_n), .dbg_wr_addr(dbg_wr_addr), .dbg_wr_data(dbg_wr_data),
     .ext_rd(mem_fifo_rd), .ext_wr(mem_fifo_wr), .ext_wdata(mem_fifo_wdata),
     .ext_rdata(fifo_rdata), .ext_ack(fifo_ack),
     // Decode visibility, unused here but named rather than left empty: an

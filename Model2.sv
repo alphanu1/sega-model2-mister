@@ -1987,7 +1987,7 @@ m2_copro u_copro (
 	.dbg_in_popped(), .dbg_pop_data(), .dbg_in_dropped(), .dbg_out_dropped(),
 	.dbg_ram_req(copro_ram_req),
 	.dbg_tgp_retires(tgp_retires), .dbg_tgp_pc(tgp_pc),
-	.dbg_tgp_hold(), .dbg_tgp_wr_n(), .dbg_tgp_wr_addr(), .dbg_tgp_a(), .dbg_tgp_b(), .dbg_tgp_d(),
+	.dbg_tgp_hold(), .dbg_tgp_wr_n(), .dbg_tgp_wr_addr(), .dbg_tgp_wr_data(), .dbg_tgp_st(), .dbg_tgp_a(), .dbg_tgp_b(), .dbg_tgp_d(),
 	.dbg_tgp_unimpl(tgp_unimpl)
 );
 

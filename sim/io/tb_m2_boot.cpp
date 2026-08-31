@@ -33,6 +33,7 @@
 #include <cstdlib>
 #include <string>
 #include <vector>
+#include <string>
 #include <map>
 #include <algorithm>
 
@@ -337,17 +338,46 @@ int main(int argc, char **argv) {
   uint64_t uc_n = 0;
   std::vector<uint32_t> popvals, popA, popB, popD, popPC, popOP;
   uint32_t popn_prev = 0;
+  std::map<uint32_t,uint64_t> pop_pc_hist;
   // Sampled EVERY cycle, not at the pop: the destination write-back lands a
   // cycle or more after the FIFO read, so a sample taken at the pop sees the
   // old value and proves nothing.
   uint64_t a_nz = 0, b_nz = 0, d_nz = 0;
   uint32_t a_last = 0, b_last = 0, d_last = 0;
+  std::vector<std::pair<uint32_t,uint32_t>> dwrites;
+  uint32_t dwn_prev = 0;
+  // The drain loop, instruction by instruction, in the same shape as the
+  // reference capture so the two can be read side by side.
+  std::vector<std::string> loopst;
+  uint32_t lpc_prev = 0xffffffffu;
   auto tgp_sample = [&]() {
+    {
+      uint32_t pc = uint32_t(d->obs_tgp_pc);
+      if (pc != lpc_prev) {
+        lpc_prev = pc;
+        // Skip the first visits: before the i960 sends anything the FIFO is
+        // legitimately empty and the loop is meant to spin. What matters is
+        // what it does once commands are flowing.
+        if (pc >= 0x44 && pc <= 0x4b && d->obs_in_popped > 2000 && loopst.size() < 24) {
+          char b[160];
+          std::snprintf(b, sizeof b, "%04x  A=%08x B=%08x D=%08x ST=%08x",
+                        pc, (unsigned)d->obs_tgp_a, (unsigned)d->obs_tgp_b,
+                        (unsigned)d->obs_tgp_d, (unsigned)d->obs_tgp_st);
+          loopst.push_back(b);
+        }
+      }
+    }
+    if (uint32_t(d->obs_tgp_wr_n) != dwn_prev) {
+      dwn_prev = uint32_t(d->obs_tgp_wr_n);
+      if (dwrites.size() < 24)
+        dwrites.push_back({uint32_t(d->obs_tgp_wr_addr), uint32_t(d->obs_tgp_wr_data)});
+    }
     if (d->obs_tgp_a) { ++a_nz; a_last = uint32_t(d->obs_tgp_a); }
     if (d->obs_tgp_b) { ++b_nz; b_last = uint32_t(d->obs_tgp_b); }
     if (d->obs_tgp_d) { ++d_nz; d_last = uint32_t(d->obs_tgp_d); }
     if (uint32_t(d->obs_in_popped) != popn_prev) {
       popn_prev = uint32_t(d->obs_in_popped);
+      ++pop_pc_hist[uint32_t(d->obs_tgp_pc)];
       if (popvals.size() < 24) {
         popvals.push_back(uint32_t(d->obs_pop_data));
         popA.push_back(uint32_t(d->obs_tgp_a));
@@ -370,7 +400,7 @@ int main(int argc, char **argv) {
     }
     if (uint32_t(d->obs_tgp_pc) != tgp_pc_prev) {
       tgp_pc_prev = uint32_t(d->obs_tgp_pc);
-      if (tgp_pc_seq.size() < 220) tgp_pc_seq.push_back(tgp_pc_prev);
+      if (tgp_pc_seq.size() < 400) tgp_pc_seq.push_back(tgp_pc_prev);
       // LAST sighting, not first. The game uploads the program more than once
       // -- dbg_prog_words is cumulative and counted 2024 where MAME's resident
       // program is 506 non-zero words -- so recording the first opcode at each
@@ -1697,6 +1727,26 @@ int main(int argc, char **argv) {
       std::printf("      B non-zero for %llu cycles (last %08x)\n", (unsigned long long)b_nz, b_last);
       std::printf("      D non-zero for %llu cycles (last %08x)\n", (unsigned long long)d_nz, d_last);
       std::printf("      FIFO read held the pipe for %u cycles\n", (unsigned)d->obs_tgp_hold);
+      { std::printf("      WHERE OUR POPS HAPPEN (MAME pops at 0044 and 004c):\n");
+        std::vector<std::pair<uint64_t,uint32_t>> h;
+        for (auto &kv : pop_pc_hist) h.push_back({kv.second, kv.first});
+        std::sort(h.rbegin(), h.rend());
+        for (size_t i = 0; i < h.size() && i < 6; ++i)
+          std::printf("        pc %04x : %llu\n", h[i].second, (unsigned long long)h[i].first); }
+      { std::printf("      DRAIN LOOP 0x44-0x4b, ours:\n");
+        for (auto &l : loopst) std::printf("        %s\n", l.c_str());
+        std::printf("      MAME: 0044 A=ff800000 B=00000000 D=ff819c90 ST=f8000009\n"
+                    "            0045 A=ff800000 B=04000001 D=ff819c90 ST=f8000009\n"
+                    "            0046 A=ff800000 B=04000001 D=00000008 ST=f8000009\n"
+                    "            0047 A=0000003f B=04000001 D=00000008 ST=f8000009\n"
+                    "            0048 A=00000008 B=04000001 D=00000008 ST=f8000001\n"
+                    "            0049 A=00000008 B=04000001 D=00000000 ST=f8000003\n"
+                    "            004a A=00000008 B=04000001 D=00000000 ST=f8000003\n"); }
+      { std::printf("      FIRST DATA-RAM WRITES:\n       ");
+        for (auto &w : dwrites) std::printf(" [%03x]=%08x", w.first, w.second);
+        std::printf("\n        MAME: [000]=0 [001]=1 [002]=ffffffff [003]=0 [004]=3f800000\n"
+                    "              [005]=bf800000 [006]=f [007]=130 [008]=130 [009]=0\n"
+                    "              [00a]=7 [00b]=8 [00c]=100 [00d]=200\n"); }
       std::printf("      TGP data-RAM writes: %u  (last addr %05x)\n",
                   (unsigned)d->obs_tgp_wr_n, (unsigned)d->obs_tgp_wr_addr); }
     std::printf("    io rd/wr/ack      %llu / %llu / %llu\n",
