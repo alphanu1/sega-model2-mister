@@ -196,15 +196,27 @@ module m2_copro (
   // `stall` survives only as the backstop for what an unbounded queue absorbs
   // and a fixed array cannot.
   localparam int unsigned FD    = 8;    // outbound, as the reference
-  localparam int unsigned FD_IN = 512;  // 8 real plus 504 of overflow queue
+  // 128, NOT 512, AND THE LIMIT IS FLIP-FLOPS RATHER THAN JUDGEMENT.
+  //
+  // `fifo_in_data` is read ASYNCHRONOUSLY -- the TGP sees the head combinationally
+  // -- and an asynchronously read array is not an M10K on this part, it is
+  // registers. At 512 entries that is 16 Kbit of flops and the design went to
+  // 45,005 ALM of 41,910: 107%, no fit. The same rule is already written down
+  // for the i960's arrays and it applies here.
+  //
+  // 128 is sixteen times the hardware's own depth and costs about 4 Kbit. The
+  // depth only has to be enough that `dbg_in_dropped` never moves, because
+  // nothing stalls any more: a full queue drops rather than halting the CPU,
+  // and the counter makes that visible.
+  localparam int unsigned FD_IN = 128;
   logic [31:0] fin  [FD_IN];
   logic [31:0] fout [FD];
-  logic  [9:0] fin_wp, fin_rp;
+  logic  [7:0] fin_wp, fin_rp;
   logic  [3:0] fout_wp, fout_rp;
-  wire   [9:0] fin_cnt  = fin_wp  - fin_rp;
+  wire   [7:0] fin_cnt  = fin_wp  - fin_rp;
   wire   [3:0] fout_cnt = fout_wp - fout_rp;
-  wire         fin_full  = (fin_cnt  >= 10'(FD_IN));
-  wire         fin_empty = (fin_cnt  == 10'd0);
+  wire         fin_full  = (fin_cnt  >= 8'(FD_IN));
+  wire         fin_empty = (fin_cnt  == 8'd0);
   wire         fout_full = (fout_cnt >= 4'(FD));
   wire         fout_empty= (fout_cnt == 4'd0);
 
@@ -247,7 +259,7 @@ module m2_copro (
     if (!rst_n) begin
       coproctl <= 32'd0; coprocnt <= 12'd0; halted <= 1'b1;
       uc_we <= 1'b0; uc_addr <= 11'd0; uc_data <= 32'd0;
-      fin_wp <= 10'd0; fin_rp <= 10'd0; fout_wp <= 4'd0; fout_rp <= 4'd0;
+      fin_wp <= 8'd0; fin_rp <= 8'd0; fout_wp <= 4'd0; fout_rp <= 4'd0;
       dbg_prog_words <= 16'd0; dbg_in_pushed <= 16'd0; dbg_out_popped <= 16'd0;
       dbg_fctl_reads <= 32'd0;
       dbg_in_dropped <= 32'd0; dbg_out_dropped <= 32'd0;
@@ -278,8 +290,8 @@ module m2_copro (
           coprocnt <= coprocnt + 12'd1;
           if (!(&dbg_prog_words)) dbg_prog_words <= dbg_prog_words + 16'd1;
         end else if (!fin_full) begin
-          fin[fin_wp[8:0]] <= wdata;
-          fin_wp <= fin_wp + 10'd1;
+          fin[fin_wp[6:0]] <= wdata;
+          fin_wp <= fin_wp + 8'd1;
           dbg_push_data <= wdata;
           if (!(&dbg_in_pushed)) dbg_in_pushed <= dbg_in_pushed + 16'd1;
         end else if (!(&dbg_in_dropped)) begin
@@ -295,8 +307,8 @@ module m2_copro (
 
       // ---- the function port: a command push, never a program upload
       if (fn_wr && !fin_full) begin
-        fin[fin_wp[8:0]] <= fn_word;
-        fin_wp <= fin_wp + 10'd1;
+        fin[fin_wp[6:0]] <= fn_word;
+        fin_wp <= fin_wp + 8'd1;
         dbg_push_data <= fn_word;
         if (!(&dbg_in_pushed)) dbg_in_pushed <= dbg_in_pushed + 16'd1;
       end
@@ -309,8 +321,8 @@ module m2_copro (
 
       // ---- the TGP's own ends
       if (tgp_in_pop && !fin_empty) begin
-        fin_rp <= fin_rp + 10'd1;
-        dbg_pop_data <= fin[fin_rp[8:0]];
+        fin_rp <= fin_rp + 8'd1;
+        dbg_pop_data <= fin[fin_rp[6:0]];
         if (!(&dbg_in_popped)) dbg_in_popped <= dbg_in_popped + 32'd1;
       end
       if (tgp_out_push && !fout_full) begin
@@ -359,7 +371,7 @@ module m2_copro (
     // brought out so a design that starts depending on it is visible.
     .ram_req(ram_req_w), .ram_we(), .ram_addr(), .ram_wdata(),
     .ram_rdata(32'd0), .ram_ack(ram_req_w),
-    .fifo_in_data(fin[fin_rp[8:0]]), .fifo_in_valid(!fin_empty),
+    .fifo_in_data(fin[fin_rp[6:0]]), .fifo_in_valid(!fin_empty),
     .fifo_in_pop(tgp_in_pop),
     .fifo_out_data(tgp_out_data), .fifo_out_push(tgp_out_push),
     .fifo_out_full(fout_full),
