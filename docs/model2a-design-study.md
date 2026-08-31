@@ -6786,3 +6786,47 @@ was downstream of the fault by an entire processor. **A component that faithfull
 transmits bad input looks exactly like a broken component**, and the only thing
 that separated them was comparing the DATA at the boundary rather than the
 behaviour inside.
+
+**R118 - the wrong value is register r3, computed in a nine-instruction window,
+and r4 beside it is correct.** R117 established that the i960 pushes zeros where
+the reference pushes floats. This narrows that to one register and a few
+instructions.
+
+The reference's i960 registers at the FIFO writes either side of the first
+mismatch:
+
+    push#6  pc=0000e2a8  data=438e8000   r3=438e8000  r4=3b8e38e4
+    push#7  pc=0000e2cc  data=3f9e5556   r3=3f9e5556  r4=3fb98e39
+
+Both pushes are `st` of a register to the FIFO port. Between 0xe2a8 and 0xe2cc
+the program recomputes BOTH r3 and r4. **This core gets r4 right -- 3fb98e39
+matches, and it is the next value we push -- and r3 comes out zero.** So the
+divergence is a single value produced somewhere in
+
+    e2ac  5cf01e00   REG
+    e2b0  921f6038   st
+    e2b4  921f6044   st
+    e2b8  90203000   ld     (MEMB: 028b57a4 at e2bc is its displacement, not
+    e2c0  8cf00303   lda     an opcode -- do not decode this window as one
+    e2c4  92f6e030   st      instruction per word)
+    e2c8  921edc1c   st
+
+*Why r4 being right matters.* It rules out a wholesale failure of the FP path or
+of this code being reached at all: the same window computes two values, one
+correct and one zero. Whatever is wrong is specific to how r3 is produced, not
+to the block.
+
+*What is NOT yet established.* Whether this core executes the same instruction
+sequence through that window. A branch taken differently would produce the same
+symptom, and the PC stream through 0xe2a0-0xe2d4 has not been compared. That is
+the next measurement, and `tools/i960-diff.sh` exists for it -- though it drives
+the standalone ROM harness, which does not reach this depth of boot, so it needs
+the boot harness's own PC trace (M2_BOOT_PCTRACE with M2_BOOT_PCFROM) against
+MAME's.
+
+*A decoding trap recorded because it cost time here.* i960 MEMB instructions
+carry a 32-bit displacement in a second word. Walking this region four bytes at
+a time produced `op=02` at 0xe2bc, which is not an i960 opcode at all -- it is
+the displacement of the `ld` before it. Any hand decode of i960 code must track
+instruction length, and the plausible-looking opcodes on either side are exactly
+what makes the error easy to miss.
