@@ -358,7 +358,13 @@ int main(int argc, char **argv) {
   // the first few program counters.
   uint64_t unimpl_n = 0;
   std::vector<uint32_t> unimpl_pc;
+  std::vector<uint32_t> outvals;
+  uint32_t outn_prev = 0;
   auto tgp_sample = [&]() {
+    if (uint32_t(d->obs_out_pushed) != outn_prev) {
+      outn_prev = uint32_t(d->obs_out_pushed);
+      if (outvals.size() < 40) outvals.push_back(uint32_t(d->obs_out_data));
+    }
     if (uint32_t(d->obs_copro_in) != pushn_prev) {
       pushn_prev = uint32_t(d->obs_copro_in);
       if (pushvals.size() < 300) pushvals.push_back(uint32_t(d->obs_push_data));
@@ -1758,6 +1764,11 @@ int main(int argc, char **argv) {
       { std::printf("      UNIMPLEMENTED fired on %llu cycles", (unsigned long long)unimpl_n);
         if (!unimpl_pc.empty()) { std::printf("   at pc:"); for (auto p : unimpl_pc) std::printf(" %04x", p); }
         std::printf("\n"); }
+      { std::printf("      TGP OUTPUT, ours (%u pushed):\n       ", (unsigned)d->obs_out_pushed);
+        for (auto v : outvals) std::printf(" %08x", v);
+        std::printf("\n        MAME idles pushing 00000000 from pc 030a, then at the\n"
+                    "        first command batch: 3f9e5556 3f5a7171 4260e0e2 42e00000\n"
+                    "        4289898a 430a7e7e 00000000 00000000 c08fd608 41840a7e\n"); }
       { std::printf("      WHERE OUR POPS HAPPEN (MAME pops at 0044 and 004c):\n");
         std::vector<std::pair<uint64_t,uint32_t>> h;
         for (auto &kv : pop_pc_hist) h.push_back({kv.second, kv.first});

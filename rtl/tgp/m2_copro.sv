@@ -104,6 +104,7 @@ module m2_copro (
   output logic [15:0] dbg_prog_words,   // how much program was uploaded
   output logic [15:0] dbg_in_pushed,
   output logic [15:0] dbg_out_popped,
+  output logic [31:0] dbg_out_pushed,
   // HOW HARD THE i960 IS WAITING. fifo_control reads say "is there a result
   // yet". A game that is not using the coprocessor does not ask; a game
   // deadlocked on one asks forever. The two look identical from the FIFO
@@ -115,6 +116,7 @@ module m2_copro (
   output logic [31:0] dbg_in_popped,   // what the TGP actually took
   output logic [31:0] dbg_pop_data,    // and the value it took
   output logic [31:0] dbg_push_data,   // and what the i960 put in
+  output logic [31:0] dbg_out_data,    // and what the TGP produced
   output logic [31:0] dbg_in_dropped,
   output logic [31:0] dbg_out_dropped,
   output logic        dbg_ram_req,      // the tie-off above, made visible
@@ -231,6 +233,7 @@ module m2_copro (
       dbg_fctl_reads <= 32'd0;
       dbg_in_dropped <= 32'd0; dbg_out_dropped <= 32'd0;
       dbg_in_popped <= 32'd0; dbg_pop_data <= 32'd0; dbg_push_data <= 32'd0;
+      dbg_out_data <= 32'd0; dbg_out_pushed <= 32'd0;
     end else begin
       uc_we <= 1'b0;
 
@@ -293,6 +296,8 @@ module m2_copro (
       end
       if (tgp_out_push && !fout_full) begin
         fout[fout_wp[2:0]] <= tgp_out_data;
+        dbg_out_data <= tgp_out_data;
+        if (!(&dbg_out_pushed)) dbg_out_pushed <= dbg_out_pushed + 32'd1;
         fout_wp <= fout_wp + 4'd1;
       end else if (tgp_out_push && !(&dbg_out_dropped)) begin
         dbg_out_dropped <= dbg_out_dropped + 32'd1;
