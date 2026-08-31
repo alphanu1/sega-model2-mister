@@ -79,23 +79,49 @@ all: lint synth test
 # 'pcm1_addr' generates 22 bits" -- and this target was written by REINTRODUCING
 # the bug and checking the message appears, rather than by assuming it would.
 #
-# Only PORT CONNECTION width mismatches fail the build, and only in our own
-# files. The third-party cores carry their own internal width warnings by the
+# IMPLICIT WIRES TOO, because Verilator creates one silently where Quartus
+# errors: an undeclared identifier in a port connection cost a build with
+# "object tgp_tbl_req is not declared" while this target reported clean. A guard
+# whose failure mode is a different tool's error message is only half a guard.
+#
+# Missing MODULES are not checked here: hps_io and pll live outside this file
+# list by design, so that class is all noise. Port widths and implicit wires are
+# both real and both silent. The third-party cores carry their own internal width warnings by the
 # dozen; holding them to our standard would mean waiving the whole class, which
 # is how this one got through.
 LINTTOP_RTL := $(shell grep -oiE "rtl/[a-z0-9_/]+\\.(sv|v)" Model2.qsf | tr "\\n" " ")
 
 .PHONY: lint_top
+# VERILATOR STOPS AT THE FIRST MISSING MODULE, AND STOPPING HID REAL FAULTS.
+#
+# This ran for months reporting "no port width mismatches" while four signals
+# feeding the SDRAM arbiter had nothing driving them at all. The reason is not
+# the filter: it is that `hps_io` and `pll` were never passed in, Verilator
+# exited with MODMISSING, and its whole-design checks -- UNDRIVEN among them --
+# run only AFTER elaboration completes. Parse-time warnings survived an early
+# exit and everything else was silently skipped, so the guard reported on a
+# fraction of the design and said nothing about which fraction.
+#
+# `hps_io` lives in sys/ and the PLL is a QIP, so neither is matched by the
+# LINTTOP_RTL grep over the qsf; both are named explicitly. The vendor
+# `altera_pll` has no source in the tree at all and gets a lint-only black box.
+# sys/hps_io.sv is not Verilator-clean (PROCASSWIRE), which is why -Wno-fatal
+# matters -- it elaborates far enough for the checks that matter here.
+#
+# This is the R94 lesson a second time: a guard that cannot see the bug it
+# exists for is worse than no guard, because it is believed.
 lint_top:
 	@echo "== lint Model2.sv and everything it instantiates"
 	@verilator --lint-only -Wall -Wno-DECLFILENAME -Wno-fatal --top-module emu \
-	  -Irtl/sound/jt12 $(LINTTOP_RTL) Model2.sv 2>&1 \
-	  | grep -E "port connection" \
-	  | grep -vE "rtl/sound/(jt12|fx68k)/|rtl/sound/m2_multipcm" > .lint_top.tmp || true
+	  -Irtl/sound/jt12 -Isys $(LINTTOP_RTL) \
+	  sys/hps_io.sv rtl/pll/pll.v sim/lint/altera_pll_stub.v Model2.sv 2>&1 \
+	  | grep -E "port connection|IMPLICIT|UNDRIVEN" \
+	  | grep -vE "For warning description|lint_off" \
+	  | grep -vE "sys/|rtl/pll/|sim/lint/|rtl/cpu/tv80/|rtl/sound/(jt12|fx68k)/|rtl/sound/m2_multipcm" > .lint_top.tmp || true
 	@if [ -s .lint_top.tmp ]; then \
-	  echo "PORT WIDTH MISMATCH -- this is the class that cost four builds:"; \
+	  echo "TOP-LEVEL WIRING FAULT (port width, implicit wire, undriven signal, missing module):"; \
 	  cat .lint_top.tmp; rm -f .lint_top.tmp; exit 1; \
-	 else echo "  no port width mismatches"; rm -f .lint_top.tmp; fi
+	 else echo "  no port width mismatches, no undriven signals"; rm -f .lint_top.tmp; fi
 
 lint: lint_top lint_i960_dec lint_i960_alu lint_i960_regs lint_i960_agu lint_i960_ldst lint_i960_lsu lint_i960_memmap lint_i960_icache lint_i960_muldiv lint_i960_fpmul lint_i960_fpadd lint_i960_fpdiv lint_i960_fpsqrt lint_i960_fpmisc lint_i960_fpcvt lint_i960_top
 
@@ -573,13 +599,13 @@ test_m2_boot: obj_boot/Vm2_boot_harness
 # fetches crossing clk_vid/clk_sys through the real m2_char_cdc.
 obj_boot/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cpp \
                            rtl/io/m2_cpu_bridge.sv rtl/io/m2_ioboard.sv rtl/io/m2_backup.sv rtl/mem/m2_tdp_ram.sv \
-                           rtl/io/m2_ioz80.sv rtl/mem/m2_tdp_ram.sv $(wildcard rtl/cpu/tv80/*.v) \
+                           rtl/io/m2_ioz80.sv rtl/mem/m2_tdp_ram.sv $(wildcard rtl/tgp/*.sv) $(wildcard rtl/cpu/tv80/*.v) \
                            rtl/mem/m2_char_cdc.sv $(wildcard rtl/video/*.sv) \
                            $(wildcard rtl/cpu/i960/*.sv)
 	$(VBUILD) --top-module m2_boot_harness -Wno-PINCONNECTEMPTY -Wno-UNUSEDPARAM \
 	  -Wno-WIDTHEXPAND -Wno-UNUSEDSIGNAL --Mdir obj_boot -o Vm2_boot_harness \
 	  -CFLAGS "-O2" sim/io/m2_boot_harness.sv rtl/io/m2_cpu_bridge.sv \
-	  rtl/io/m2_ioboard.sv rtl/io/m2_backup.sv rtl/mem/m2_tdp_ram.sv rtl/io/m2_ioz80.sv \
+	  rtl/io/m2_ioboard.sv rtl/io/m2_backup.sv rtl/mem/m2_tdp_ram.sv rtl/io/m2_ioz80.sv $(wildcard rtl/tgp/*.sv) \
 	  $(wildcard rtl/cpu/tv80/*.v) rtl/mem/m2_char_cdc.sv \
 	  $(wildcard rtl/video/*.sv) $(wildcard rtl/cpu/i960/*.sv) \
 	  sim/io/tb_m2_boot.cpp

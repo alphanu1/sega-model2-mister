@@ -27,6 +27,24 @@ set_global_assignment -name POWER_BOARD_THERMAL_MODEL "NONE (CONSERVATIVE)"
 set_global_assignment -name TIMEQUEST_MULTICORNER_ANALYSIS OFF
 set_global_assignment -name OPTIMIZE_POWER_DURING_FITTING OFF
 set_global_assignment -name FINAL_PLACEMENT_OPTIMIZATION ALWAYS
+# ROUTABILITY, WHICH THIS PROJECT HAD NEVER ASKED FOR.
+#
+# Adding the coprocessor took the design to 79% ALM / 82% M10K and the fitter
+# stopped closing -- not on a shortage, but on ONE contended routing resource at
+# a time, and a different one per seed (m2_pcm_fetch|buf_q, then i960 fp_a[55]
+# and fp_b[56]). A single unroutable signal that MOVES between seeds is
+# congestion, not capacity.
+#
+# Everything below this line is tuned for SPEED: HIGH PERFORMANCE EFFORT,
+# physical synthesis with combinational resynthesis, register duplication and
+# retiming, plus router LCELL insertion. The fitter log shows what that costs --
+# "Created 190 register duplicates" -- so the design was being told to spend
+# routing to buy speed and then failed to route.
+#
+# This is Intel's own documented remedy for the error we get, and it was never
+# set: "Guideline: Set Fitter Aggressive Routability Optimizations to Always".
+# It may cost some Fmax, which is measurable; a design that does not fit is not.
+set_global_assignment -name FITTER_AGGRESSIVE_ROUTABILITY_OPTIMIZATION ALWAYS
 set_global_assignment -name FITTER_EFFORT "STANDARD FIT"
 set_global_assignment -name OPTIMIZATION_MODE "HIGH PERFORMANCE EFFORT"
 set_global_assignment -name ALLOW_POWER_UP_DONT_CARE ON
@@ -418,3 +436,20 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/i960/i960_fpsqrt.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/i960/i960_fpmisc.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/i960/i960_fpcvt.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/i960/i960_top.sv
+
+# The coprocessor. mb86233_pkg declares the types the rest of these use, so
+# it is listed first -- Quartus resolves packages by compile order.
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/tgp/mb86233_pkg.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/tgp/fp_add.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/tgp/fp_mul.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/tgp/fp_div.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/tgp/mb86233_dec.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/tgp/mb86233_regs.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/tgp/mb86233_agu.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/tgp/mb86233_alu.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/tgp/mb86233_mem.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/tgp/mb86233_seq.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/tgp/mb86233_xfer.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/tgp/mb86233_core.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/tgp/m2_tgp.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/tgp/m2_copro.sv

@@ -123,13 +123,28 @@ if {[llength $cdc_regs] == 0} {
       "Model2.sdc: no m2_char_cdc registers matched -- the character-fetch \
        crossing between clk_vid and clk_sys is UNCONSTRAINED. See study R49."
 } else {
-    set_net_delay -max 5 -from $cdc_regs -to $cdc_regs
+    # set_net_delay IS DISABLED, AND IT IS NOT A STYLE CHOICE.
+    #
+    # With the coprocessor in the design, these three collection-to-collection
+    # net-delay assignments make Quartus 17.0 abort with
+    #
+    #     Internal Error: Sub-system: STA, File: sta_assignment_db.h, Line: 468
+    #
+    # at "Fitter placement preparation operations beginning" -- three times out
+    # of three, on a cleared database, deterministically. Removing this block
+    # and nothing else builds cleanly and produces a changed .rbf, which is the
+    # only trustworthy signal this project accepts. set_max_skew is kept: it is
+    # two assignments against two named synchroniser buses rather than an N-by-N
+    # product over a collection, and it is the part that actually keeps each
+    # synchroniser's bits together.
+    #
+    # WHAT THIS COSTS is stated rather than left to be discovered. set_net_delay
+    # was bounding the physical net delay across the clk_vid/clk_sys character
+    # crossing (R49, reinstated under R58's proof protocol). Without it that
+    # bound is gone; the synchronisers are still skew-bounded. If the character
+    # path misbehaves on hardware this is the first thing to look at.
     set_max_skew -to [get_registers -nowarn {*u_char_cdc|req_sync[*]}]  2
     set_max_skew -to [get_registers -nowarn {*u_char_cdc|done_sync[*]}] 2
-    if {[llength $vid_regs] > 0} {
-        set_net_delay -max 5 -from $cdc_regs -to $vid_regs
-        set_net_delay -max 5 -from $vid_regs -to $cdc_regs
-    }
 }
 
 
