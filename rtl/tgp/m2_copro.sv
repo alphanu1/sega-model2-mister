@@ -208,17 +208,28 @@ module m2_copro (
   // depth only has to be enough that `dbg_in_dropped` never moves, because
   // nothing stalls any more: a full queue drops rather than halting the CPU,
   // and the counter makes that visible.
-  localparam int unsigned FD_IN = 128;
-  logic [31:0] fin  [FD_IN];
-  logic [31:0] fout [FD];
-  logic  [7:0] fin_wp, fin_rp;
-  logic  [3:0] fout_wp, fout_rp;
-  wire   [7:0] fin_cnt  = fin_wp  - fin_rp;
-  wire   [3:0] fout_cnt = fout_wp - fout_rp;
-  wire         fin_full  = (fin_cnt  >= 8'(FD_IN));
-  wire         fin_empty = (fin_cnt  == 8'd0);
-  wire         fout_full = (fout_cnt >= 4'(FD));
-  wire         fout_empty= (fout_cnt == 4'd0);
+  localparam int unsigned FD_IN  = 128;
+  // OUTBOUND IS 128 NOW, NOT THE REFERENCE'S 8, AND THE DEPTH IS A DEADLOCK
+  // FIX RATHER THAN A GUESS AT THE HARDWARE.
+  //
+  // `m2_tgp` withholds the ack while `fifo_out_full` (see its line 369), so a
+  // full outbound FIFO HOLDS THE TGP mid-instruction. Measured on the board:
+  // the TGP pushed 121 results, the i960 stopped popping, and the core froze
+  // at pc 0x0481 with `fin` then overflowing behind it -- exactly the halt
+  // this file's header predicted. `gen_fifo.cpp` never blocks a push like
+  // that; it queues into an unbounded overflow instead. 128 is that overflow,
+  // bounded, and `dbg_out_dropped` says if it was ever not enough.
+  //
+  // It costs nothing. Both FIFOs are now M10K blocks rather than flip-flops,
+  // so 8 -> 128 is the same one block, and `fin` GIVES BACK about 1,500 ALM
+  // it was spending on 4,096 registers.
+  localparam int unsigned FD_OUT = 128;
+
+  wire [31:0] fin_q, fout_q;
+  wire        fin_valid, fout_valid, fin_full, fout_full;
+  wire [15:0] fin_count, fout_count;
+  wire        fin_empty  = !fin_valid;
+  wire        fout_empty = !fout_valid;
 
   // ---- the TGP's own handshakes
   wire        tgp_in_pop;
@@ -255,14 +266,33 @@ module m2_copro (
   wire fn_wr   = sel_fn   &&  we;
   wire [31:0] fn_word = (wdata & 32'h800f_ffff) | {1'b0, fn_code, 23'd0};
 
+  // Both write ports land in the same queue: the FIFO port carries payloads and
+  // the function port carries a command whose code is its address (R120). They
+  // decode different regions and cannot assert together.
+  wire        fin_push = (fifo_wr && !uploading) || fn_wr;
+  wire [31:0] fin_din  = fn_wr ? fn_word : wdata;
+  wire        fout_pop = fifo_rd && fout_valid;
+
+  m2_fifo_m10k #(.DW(32), .DEPTH(FD_IN)) u_fin (
+    .clk(clk), .rst_n(rst_n),
+    .push(fin_push), .din(fin_din),
+    .pop(tgp_in_pop), .q(fin_q), .q_valid(fin_valid),
+    .full(fin_full), .count(fin_count), .dropped(dbg_in_dropped)
+  );
+
+  m2_fifo_m10k #(.DW(32), .DEPTH(FD_OUT)) u_fout (
+    .clk(clk), .rst_n(rst_n),
+    .push(tgp_out_push), .din(tgp_out_data),
+    .pop(fout_pop), .q(fout_q), .q_valid(fout_valid),
+    .full(fout_full), .count(fout_count), .dropped(dbg_out_dropped)
+  );
+
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       coproctl <= 32'd0; coprocnt <= 12'd0; halted <= 1'b1;
       uc_we <= 1'b0; uc_addr <= 11'd0; uc_data <= 32'd0;
-      fin_wp <= 8'd0; fin_rp <= 8'd0; fout_wp <= 4'd0; fout_rp <= 4'd0;
       dbg_prog_words <= 16'd0; dbg_in_pushed <= 16'd0; dbg_out_popped <= 16'd0;
       dbg_fctl_reads <= 32'd0;
-      dbg_in_dropped <= 32'd0; dbg_out_dropped <= 32'd0;
       dbg_in_popped <= 32'd0; dbg_pop_data <= 32'd0; dbg_push_data <= 32'd0;
       dbg_out_data <= 32'd0; dbg_out_pushed <= 32'd0;
     end else begin
@@ -290,16 +320,9 @@ module m2_copro (
           coprocnt <= coprocnt + 12'd1;
           if (!(&dbg_prog_words)) dbg_prog_words <= dbg_prog_words + 16'd1;
         end else if (!fin_full) begin
-          fin[fin_wp[6:0]] <= wdata;
-          fin_wp <= fin_wp + 8'd1;
+          // u_fin takes the word; this is only the count.
           dbg_push_data <= wdata;
           if (!(&dbg_in_pushed)) dbg_in_pushed <= dbg_in_pushed + 16'd1;
-        end else if (!(&dbg_in_dropped)) begin
-          // NOW UNREACHABLE, and kept as a running assertion rather than
-          // deleted: with `stall` wired to the bridge the i960 cannot present a
-          // push that this FIFO has no room for. If this counter ever moves
-          // again, the handshake has been broken somewhere upstream.
-          dbg_in_dropped <= dbg_in_dropped + 32'd1;
         end
       end
 
@@ -307,31 +330,27 @@ module m2_copro (
 
       // ---- the function port: a command push, never a program upload
       if (fn_wr && !fin_full) begin
-        fin[fin_wp[6:0]] <= fn_word;
-        fin_wp <= fin_wp + 8'd1;
         dbg_push_data <= fn_word;
         if (!(&dbg_in_pushed)) dbg_in_pushed <= dbg_in_pushed + 16'd1;
       end
 
       // ---- the i960 popping the output FIFO
-      if (fifo_rd && !fout_empty) begin
-        fout_rp <= fout_rp + 4'd1;
+      if (fout_pop) begin
         if (!(&dbg_out_popped)) dbg_out_popped <= dbg_out_popped + 16'd1;
       end
 
       // ---- the TGP's own ends
-      if (tgp_in_pop && !fin_empty) begin
-        fin_rp <= fin_rp + 8'd1;
-        dbg_pop_data <= fin[fin_rp[6:0]];
+      if (tgp_in_pop && fin_valid) begin
+        dbg_pop_data <= fin_q;
         if (!(&dbg_in_popped)) dbg_in_popped <= dbg_in_popped + 32'd1;
       end
+      // `dbg_out_dropped` is u_fout's now. The old else-branch here could never
+      // fire -- m2_tgp gates fifo_out_push on !fifo_out_full -- so a blocked
+      // push counted as nothing and the counter read zero while the TGP was
+      // held. That is why the board showed out_drop=00 during the freeze.
       if (tgp_out_push && !fout_full) begin
-        fout[fout_wp[2:0]] <= tgp_out_data;
         dbg_out_data <= tgp_out_data;
         if (!(&dbg_out_pushed)) dbg_out_pushed <= dbg_out_pushed + 32'd1;
-        fout_wp <= fout_wp + 4'd1;
-      end else if (tgp_out_push && !(&dbg_out_dropped)) begin
-        dbg_out_dropped <= dbg_out_dropped + 32'd1;
       end
     end
   end
@@ -343,7 +362,7 @@ module m2_copro (
     rdata = 32'hFFFF_FFFF;                       // copro_prg_r's value
     if      (sel_ctl)     rdata = coproctl;
     else if (sel_fifoctl) rdata = {31'd0, fout_empty};
-    else if (sel_fifo)    rdata = fout_empty ? 32'd0 : fout[fout_rp[2:0]];
+    else if (sel_fifo)    rdata = fout_valid ? fout_q : 32'd0;
   end
 
   assign dbg_ctl = coproctl;
@@ -371,7 +390,7 @@ module m2_copro (
     // brought out so a design that starts depending on it is visible.
     .ram_req(ram_req_w), .ram_we(), .ram_addr(), .ram_wdata(),
     .ram_rdata(32'd0), .ram_ack(ram_req_w),
-    .fifo_in_data(fin[fin_rp[6:0]]), .fifo_in_valid(!fin_empty),
+    .fifo_in_data(fin_q), .fifo_in_valid(fin_valid),
     .fifo_in_pop(tgp_in_pop),
     .fifo_out_data(tgp_out_data), .fifo_out_push(tgp_out_push),
     .fifo_out_full(fout_full),
