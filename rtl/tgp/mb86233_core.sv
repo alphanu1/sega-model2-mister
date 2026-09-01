@@ -99,7 +99,9 @@ module mb86233_core (
   output logic [31:0] dbg_mem_rdata,
   output logic [7:0]  dbg_c0,
   output logic [7:0]  dbg_c1,
-  output logic [7:0]  dbg_rep
+  output logic [7:0]  dbg_rep,
+  // AS_RF 3, the coprocessor's memory bank. Study R133.
+  output logic [31:0] bank_reg
 );
 
   // ==================================================================
@@ -210,7 +212,7 @@ module mb86233_core (
     .c0(seq_c0), .c1(seq_c1),
     .reg_a(reg_a), .reg_b(reg_b), .reg_d(reg_d), .reg_p(reg_p),
     .b0(b0), .b1(b1), .x0(x0), .x1(x1), .i0(i0), .i1(i1),
-    .vsmr(vsmr), .sft(sft), .mask(mask)
+    .vsmr(vsmr), .sft(sft), .mask(mask), .bank_reg(bank_reg)
   );
 
   // M is NOT the MASK register. write_reg(0x3c) sets m_mask; m_m is written

@@ -1,6 +1,75 @@
 # Handoff
 
-**Updated:** 2026-09-01. `make test` green at 29.
+**Updated:** 2026-09-02. `make test` green at 29.
+
+## THE COPROCESSOR WAS READING AN INVENTED MEMORY MAP (R133, R134)
+
+`copro_tgp_io_map` puts the math units at 0x20-0x2b and everything else behind a
+VIEW whose base -- and whose very existence -- come from AS_RF register 3:
+
+    adr = (bank_reg & 0xff0000) | offset;
+    if (adr & 0x800000) -> copro data ROM
+    if (adr & 0x400000) -> bufferram, READ AND WRITTEN
+    else                -> 0
+    bank_w(d): bank_reg = d; if (d & 0xc00000) view.select else view.disable
+
+This core stored rf 3 and **read it from nowhere**. The base came from writes to
+io 0x2e, the target was chosen by OFFSET bit 15, the view was always on, and the
+coprocessor could not write bufferram at all. Four inventions.
+
+**Confirmed on the board:** `bank[23:16] = 0x40` -- bit 22 of the effective
+address, which is exactly the bufferram case. The register is live and points at
+the memory we never implemented. Every banked access ever made went elsewhere.
+
+Neither instrument could see it. The opcode fuzz compares SEMANTICS; the i960
+differential compares PROGRAM COUNTERS. **A processor can execute the right
+program and still read the wrong memory** -- it produces wrong VALUES, not
+divergence, which is the standing symptom: out_data = 0x42976767, a plausible
+float, and hscr stuck at zero.
+
+Fixed: rf 3 is the bank, the window derives from it, reads route by effective
+address bits 23/22, and buffer-RAM writes leave on the shared write port.
+
+## AND IT IS NOT ENOUGH TO ENABLE BUFFERRAM
+
+The copro no longer hangs -- io flags went from 7FFC0008, stuck on a write, to
+00000000 -- and the machine still does not reach attract mode with BUFFERRAM on.
+BUFFERRAM therefore stays 1'b0.
+
+Six explanations for that livelock have been proposed and killed by measurement.
+What is actually established:
+
+  * the mapping is correct: 106 checks, including the .mirror(0x60000) aliasing
+  * the i960 is byte-perfect against MAME for **521,752 instructions** with the
+    real I/O board in the loop (803,355 in the ROM harness)
+  * writes landing are harmless; READS break it (builds 39 vs 40)
+  * cache retention is not the cause (build 43)
+  * simulation will not reproduce it, even at 30 M instructions
+
+Next instrument: the i960's IP ring rather than a sampled IP. Sampling cannot
+show a branch, and the branch is the question.
+
+## THINGS THAT COST TIME TONIGHT, SO THEY DO NOT AGAIN
+
+- **Port 9 was read-only. Making it read-write cost four seeds** (-0.253 ..
+  -0.381, worsening) on the 96 MHz domain, worst paths `xfer_addr[19] -> cmd[0]`
+  and `be_r[1] -> cmd[0]` INSIDE m2_sdram. Writes belong on the shared write
+  port, which is idle during gameplay and outside the arbiter.
+- **A write request must DROP between the halves.** A dword is two transfers and
+  the port acks once; a held level is one request. `bi_` had it right already.
+- **Land the part of a finding that has a CONSUMER first.** R133's read half is
+  the correctness fix; the write half had no consumer (no geometrizer) and cost
+  ~100 minutes of builds to discover.
+- **READ THE FAILING PATH before changing a setting.** Twice tonight the path
+  named a cause that contradicted the obvious theory.
+- **Take the same reading on a WORKING build before treating it as evidence.**
+  0x0163Fxxx looked like a smoking gun and appears identically on builds that
+  boot fine.
+- **Quartus fails about one build in three** here: STA
+  `sta_assignment_db.h:468`, TDB `tdb_node.cpp:2080`, silent map exits, and OOM
+  against a concurrent Model 1 build. A seed change has cleared every one.
+- **`pgrep -f` matches other waiters' command lines.** Two build queues deadlocked
+  on each other's pattern text. Use `pgrep -x` on the binary.
 
 ## THE COPROCESSOR RUNS. The halt was an unacknowledged read of IO 0x2e.
 

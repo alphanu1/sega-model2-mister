@@ -534,6 +534,14 @@ module m2_boot_harness #(
     .tbl_req(tgp_tbl_req), .tbl_addr(tgp_tbl_addr),
     .tbl_rdata(tgp_tbl_rdata), .tbl_ack(tgp_tbl_ack),
     .dat_req(tgp_dat_req), .dat_addr(tgp_dat_addr),
+    // The banked window writes bufferram as well as reading the data ROM
+    // (R133). This harness models neither region, so the write side is
+    // observed and dropped -- the reads it does model are unaffected.
+    .dat_we(), .dat_wdata(), .dat_is_buf(), .dat_half(),
+    // Buffer-RAM writes leave on their own port; this harness models neither
+    // bufferram nor the shared write port, so the request is acked at once.
+    .bufw_req(), .bufw_addr(), .bufw_data(), .bufw_ack(1'b1),
+    .dbg_tgp_bank(),
     .dat_rdata(tgp_dat_rdata), .dat_ack(tgp_dat_ack),
     .dbg_ctl(obs_copro_ctl), .dbg_prog_words(obs_copro_prog),
     .dbg_in_pushed(obs_copro_in), .dbg_out_popped(obs_copro_out),

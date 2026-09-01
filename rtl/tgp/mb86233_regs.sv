@@ -120,7 +120,8 @@ module mb86233_regs (
   output logic [15:0] i1,
   output logic [15:0] vsmr,
   output logic [7:0]  sft,
-  output logic [15:0] mask
+  output logic [15:0] mask,
+  output logic [31:0] bank_reg
 );
 
   logic [15:0] sp;
@@ -198,6 +199,12 @@ module mb86233_regs (
 
   logic wr_rf;
   assign wr_rf = wr_en && (wr_addr >= 6'h20) && (wr_addr < 6'h30);
+
+  // AS_RF REGISTER 3 IS THE COPROCESSOR'S MEMORY BANK, and until now it was
+  // written here and read by nobody. `copro_tgp_bank_w` forms the base of
+  // EVERY banked memory access from it: bits 23:16 supply the window and
+  // bits 23:22 decide whether the window exists at all. Study R133.
+  assign bank_reg = rf[3];
 
   // c0/c1 live in the sequencer; forward the write rather than holding it.
   assign c0_we = wr_en && (wr_addr == 6'h0c);

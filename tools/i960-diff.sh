@@ -44,7 +44,12 @@ N=$(wc -l < "$WORK/mame.pc")
 # One extra instruction: MAME's tracer prints from the SECOND instruction it
 # executes, ours from the boot IP. Dropping our first line aligns them, and this
 # is an alignment, not a fudge — the streams match exactly afterwards.
-"$ROOT/obj_i960_rom/Vi960_rom" "+insn=$((N + 8))" "+out=$WORK/ours.raw" >/dev/null
+# EXTRA ARGS, because the trace is blind past the first thing the harness
+# cannot model. The DPRAM poll at 0x228240 stalls it at ~1.1M instructions --
+# real hardware walks through it, the C++ dpram model does not -- so every
+# divergence after that point is invisible. M2_DIFF_ARGS="+dpram=<image>"
+# feeds it MAME's own dpram and lets the comparison reach further.
+"$ROOT/obj_i960_rom/Vi960_rom" "+insn=$((N + 8))" "+out=$WORK/ours.raw" ${M2_DIFF_ARGS:-} >/dev/null
 tail -n +2 "$WORK/ours.raw" > "$WORK/ours.pc"
 
 python3 - "$WORK/mame.pc" "$WORK/ours.pc" <<'PY'

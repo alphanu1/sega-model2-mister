@@ -381,6 +381,11 @@ wire        pcm1_req, pcm2_req;
 // The TGP's two read-only windows: 64K words of sincos/atan/inv/isqrt tables,
 // and 2 M words of copro_data the geometry code walks.
 wire        tgp_tbl_req, tgp_dat_req;
+wire        tgp_dat_we, tgp_dat_is_buf, tgp_dat_half;
+wire        tgp_bufw_req;
+wire [18:0] tgp_bufw_addr;
+wire [15:0] tgp_bufw_data;
+wire [15:0] tgp_dat_wdata;
 wire [15:0] tgp_tbl_addr;
 wire [18:0] tgp_dat_addr;
 // BURST INDEX, NOT A BYTE ADDRESS. The sound board's sample ports became
@@ -491,8 +496,16 @@ always_comb begin
 	// the same 64 KB discrepancy R88/R89 found for the 68000 sound ROM.
 	p_req[8]  = tgp_tbl_req_r;
 	p_addr[8] = GAME_TGPTBL + SDR_AW'({tgp_tbl_addr_r, 1'b0});
+	// PORT 9 REACHES TWO REGIONS NOW, chosen by the coprocessor's bank register
+	// (R133). The reference's banked window is the copro data ROM when the
+	// effective address sets bit 23 and BUFFER RAM when it sets bit 22, and the
+	// buffer half is written as well as read -- that is how the coprocessor and
+	// the i960 share results, and this core has never had it.
 	p_req[9]  = tgp_dat_req_r;
-	p_addr[9] = GAME_COPRO + SDR_AW'({tgp_dat_addr_r, 1'b0});
+	p_addr[9] = (tgp_dat_is_buf_r ? GAME_BUFFER : GAME_COPRO)
+	            + SDR_AW'({tgp_dat_addr_r, tgp_dat_half_r});
+	// port 9 is READ ONLY. Buffer-RAM writes go out on the shared write port,
+	// which keeps p_we/p_din out of the arbiter's command decode.
 	p_req[7]  = snd_found & pcm2_req;
 	// FOUR MEGABYTES ON, AND THESE ARE WORD ADDRESSES. This was 0x400000,
 	// which as a WORD offset is eight megabytes, so the second sample chip read
@@ -557,9 +570,13 @@ m2_sdram_x2 #(.NP(NPORTS), .AW(SDR_AW)) u_sdram_x2 (
 	.clk_fast(clk_mem),
 	.s_req(p_req), .s_addr(p_addr), .s_ack(p_ack), .s_dout(p_dout),
 	.s_we(p_we),   .s_din(p_din),   .s_be(p_be),
-	.s_wr_req(bi_run ? bi_req : st_run ? st_req : geo_sd_busy ? geo_sd_req : ldr_wr_req),
-	.s_wr_addr(bi_run ? bi_addr : st_run ? st_addr : geo_sd_busy ? geo_sd_addr : ldr_wr_addr),
-	.s_wr_din(bi_run ? bi_din : st_run ? st_din : geo_sd_busy ? geo_sd_din : ldr_wr_din),
+	.s_wr_req(bi_run ? bi_req : st_run ? st_req : tgp_bufw_req ? 1'b1
+	          : geo_sd_busy ? geo_sd_req : ldr_wr_req),
+	.s_wr_addr(bi_run ? bi_addr : st_run ? st_addr
+	          : tgp_bufw_req ? (GAME_BUFFER + SDR_AW'(tgp_bufw_addr))
+	          : geo_sd_busy ? geo_sd_addr : ldr_wr_addr),
+	.s_wr_din(bi_run ? bi_din : st_run ? st_din : tgp_bufw_req ? tgp_bufw_data
+	          : geo_sd_busy ? geo_sd_din : ldr_wr_din),
 	.s_wr_be(2'b11), .s_wr_ack(ldr_wr_ack),
 	.f_req(f_req), .f_addr(f_addr), .f_ack(f_ack), .f_dout(f_dout),
 	.f_we(f_we),   .f_din(f_din),   .f_be(f_be),
@@ -1523,7 +1540,7 @@ wire [15:0] cpu_sd_din;
 wire  [1:0] cpu_sd_be;
 wire [31:0] cpu_dbg_rd, cpu_dbg_wr, cpu_dbg_unmapped;
 
-m2_cpu_bridge #(.BUFFERRAM(1'b0), .AW(SDR_AW), .BOARD_2A(1'b0), .DCACHE_EN(1'b1)) u_cpu_bridge (
+m2_cpu_bridge #(.BUFFERRAM(1'b0), .BUFFERRAM_WRONLY(1'b0), .AW(SDR_AW), .BOARD_2A(1'b0), .DCACHE_EN(1'b1)) u_cpu_bridge (
 	.dbg_dc_hits(dc_hits), .dbg_dc_miss(dc_miss),
 	.char_wr(cpu_char_wr), .char_wr_addr(cpu_char_wr_addr),
 	.clk_cpu(clk_i960), .rst_n_cpu(cpu_rst_n),
@@ -2028,6 +2045,7 @@ wire [15:0] tgp_retires, tgp_pc;
 // access and io_addr names which one.
 wire [31:0] tgp_op, tgp_hold;
 wire [15:0] tgp_io_addr;
+wire [31:0] tgp_bank;
 wire        tgp_io_rd, tgp_io_wr, tgp_io_ack, tgp_fifo_rd, tgp_fifo_wr;
 wire        tgp_unimpl;
 
@@ -2057,6 +2075,8 @@ logic [31:0] tgp_tbl_rdata_r, tgp_dat_rdata_r;
 logic        tgp_tbl_req_r, tgp_dat_req_r;
 logic [15:0] tgp_tbl_addr_r;
 logic [18:0] tgp_dat_addr_r;
+logic        tgp_dat_we_r, tgp_dat_is_buf_r, tgp_dat_half_r;
+logic [15:0] tgp_dat_wdata_r;
 always_ff @(posedge clk_sys) begin
 	tgp_tbl_ack_r   <= p_ack[8];
 	tgp_tbl_rdata_r <= p_dout[8][31:0];
@@ -2066,6 +2086,10 @@ always_ff @(posedge clk_sys) begin
 	tgp_tbl_addr_r  <= tgp_tbl_addr;
 	tgp_dat_req_r   <= tgp_dat_req;
 	tgp_dat_addr_r  <= tgp_dat_addr;
+	tgp_dat_we_r    <= tgp_dat_we;
+	tgp_dat_wdata_r <= tgp_dat_wdata;
+	tgp_dat_is_buf_r<= tgp_dat_is_buf;
+	tgp_dat_half_r  <= tgp_dat_half;
 end
 
 // CLOCKED ON clk_sys, DELIBERATELY, and speed is a separate question.
@@ -2098,6 +2122,10 @@ m2_copro u_copro (
 	.tbl_req(tgp_tbl_req), .tbl_addr(tgp_tbl_addr),
 	.tbl_rdata(tgp_tbl_rdata_r), .tbl_ack(tgp_tbl_ack_r),
 	.dat_req(tgp_dat_req), .dat_addr(tgp_dat_addr),
+	.dat_we(tgp_dat_we), .dat_wdata(tgp_dat_wdata), .dat_is_buf(tgp_dat_is_buf),
+	.dat_half(tgp_dat_half),
+	.bufw_req(tgp_bufw_req), .bufw_addr(tgp_bufw_addr), .bufw_data(tgp_bufw_data),
+	.bufw_ack(ldr_wr_ack),
 	.dat_rdata(tgp_dat_rdata_r), .dat_ack(tgp_dat_ack_r),
 	.dbg_ctl(copro_dbg_ctl), .dbg_prog_words(copro_prog_words),
 	.dbg_in_pushed(copro_in_pushed), .dbg_out_popped(copro_out_popped),
@@ -2111,7 +2139,7 @@ m2_copro u_copro (
 	.dbg_tgp_op(tgp_op), .dbg_tgp_hold(tgp_hold),
 	.dbg_tgp_io_addr(tgp_io_addr), .dbg_tgp_io_rd(tgp_io_rd),
 	.dbg_tgp_io_wr(tgp_io_wr), .dbg_tgp_io_ack(tgp_io_ack),
-	.dbg_tgp_fifo_rd(tgp_fifo_rd), .dbg_tgp_fifo_wr(tgp_fifo_wr),
+	.dbg_tgp_fifo_rd(tgp_fifo_rd), .dbg_tgp_fifo_wr(tgp_fifo_wr), .dbg_tgp_bank(tgp_bank),
 	.dbg_tgp_unimpl(tgp_unimpl)
 );
 
@@ -2466,6 +2494,14 @@ always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
 	end
 end
 
+// HOW FAR THE CPU HAS ADDRESSED. One comparator: a runaway clear climbs
+// forever, a bounded one stops. Cleared with the CPU so it measures a run.
+logic [31:0] laddr_max;
+always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
+	if (!cpu_rst_n)                   laddr_max <= 32'd0;
+	else if (cpu_dbg_laddr > laddr_max) laddr_max <= cpu_dbg_laddr;
+end
+
 // The reader: walks all 512 entries, one per streamer slot, forever.
 logic [8:0]  ip_rd;
 logic [31:0] ipring_q;
@@ -2755,7 +2791,19 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// out_popped 61 says a result is sitting unread, so the CPU has stopped
 	// rather than gone idle -- and a CPU stopped on a bus access is named by
 	// its IP and its last address, not by any coprocessor counter.
-	.a_valid(prof_tick), .a_addr(cpu_dbg_ip),
+	// UNMAPPED COUNT AND AN ADDRESS HIGH-WATER MARK, not the IP ring.
+	//
+	// Reading ipring_q into the streamer made quartus_fit die with
+	// "Internal Error: TDB, tdb_node.cpp:2080" on TWO consecutive seeds --
+	// 19 and 31 -- where the same design without it built fine. Two identical
+	// failures at different seeds is not placement luck, so the ring is left
+	// disconnected rather than fought.
+	//
+	// These answer the same question more cheaply anyway. A clear loop that
+	// RUNS AWAY writes unmapped space continuously, so dbg_unmapped races and
+	// laddr_max climbs; a loop that merely takes a long time leaves both
+	// still. The control is build 36, which works and can be read the same way.
+	.a_valid(prof_tick), .a_addr(cpu_dbg_unmapped),
 	// THE RETIRED-INSTRUCTION COUNT RIDES ALONG WITH THE IP.
 //
 // The profile says 91% of the board's time goes on the four memory
@@ -2764,7 +2812,7 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 // simulation finishes this initialisation in 15.9 M instructions. Two
 // consecutive samples give the instruction rate directly, which settles
 // whether this is a wrong branch or a slow machine.
-	.a_data(cpu_dbg_laddr),
+	.a_data(laddr_max),
 	// THE i960's OWN INSTRUCTION COUNT, so the first three minutes can be
 	// diagnosed rather than described. Two readings a known time apart give the
 	// rate directly; a machine that is slow for three minutes and then is not
@@ -2797,7 +2845,13 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// hscr IS THE ACCEPTANCE TEST (R106) and it is back on the wire now that
 	// the 0x2e halt is fixed. io flags stay alongside it: if the TGP stops
 	// again, io_rd high with io_ack low names the next unanswered region.
-	.b_addr({copro_out_popped, vid_hscr[2]}),   // unchanged: hscr is still the test
+	// THE BANK REGISTER, which is what R133 turns on. b_data still carries the
+	// TGP's io address and flags -- that pairing found the dropped-write hang.
+	// ONLY bank[23:16] MEANS ANYTHING -- it is the window base and its top two
+	// bits gate the view. Carrying all 32 routes a wide bus from inside the TGP
+	// to the streamer for no information, and this design is at the edge of
+	// closing on the SDRAM domain.
+	.b_addr({24'd0, tgp_bank[23:16]}),
 	.b_data({tgp_io_addr, 10'd0, tgp_unimpl, tgp_io_rd, tgp_io_wr, tgp_io_ack, tgp_fifo_rd, tgp_fifo_wr}),
 	.a_tag(8'h43), .b_tag(8'h48),          // 'C' copro in_pushed:out_pushed | TGP retires:pc
 	                                       // 'H' out_popped:hscr2 | io_addr:flags

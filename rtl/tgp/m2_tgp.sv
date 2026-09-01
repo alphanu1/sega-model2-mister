@@ -117,6 +117,21 @@ module m2_tgp #(
 
   output logic        dat_req,
   output logic [18:0] dat_addr,
+  output logic        dat_we,        // the window WRITES bufferram too
+  output logic [15:0] dat_wdata,
+  output logic        dat_is_buf,    // 1 = bufferram, 0 = copro data ROM
+  output logic        dat_half,      // which 16-bit half of the dword
+  // BUFFER-RAM WRITES GO OUT ON THEIR OWN PORT, not the read port. Making
+  // port 9 read-write cost the 96 MHz domain four seeds (-0.253 .. -0.381,
+  // worsening) because p_we/p_din/p_be widen the logic feeding m2_sdram's
+  // `cmd`. These go to the SHARED WRITE PORT instead -- the one the loader,
+  // the self-test and m2_geo take turns on -- which is idle during gameplay
+  // and outside the arbiter entirely. Measured need: 250 writes per 600
+  // frames, against 7,537 reads. Study R133.
+  output logic        bufw_req,
+  output logic [18:0] bufw_addr,     // word address within bufferram
+  output logic [15:0] bufw_data,
+  input  logic        bufw_ack,
   input  logic [31:0] dat_rdata,
   input  logic        dat_ack,
 
@@ -145,7 +160,11 @@ module m2_tgp #(
   output logic        dbg_io_wr,
   output logic        dbg_io_ack,
   output logic        dbg_fifo_rd,
-  output logic        dbg_fifo_wr
+  output logic        dbg_fifo_wr,
+  // The bank register itself (R133). If the microcode never writes rf 3 the
+  // window is disabled and sel_rom/sel_buf never assert -- which would make
+  // the whole banked path dead rather than wrong.
+  output logic [31:0] dbg_bank
 );
 
   // ------------------------------------------------------------ microcode ROM
@@ -263,7 +282,8 @@ module m2_tgp #(
     .dbg_a(u_a), .dbg_b(u_b), .dbg_d(u_d), .dbg_p(u_p), .dbg_st(u_st),
     .dbg_m(u_m), .dbg_mem_addr(u_maddr), .dbg_mem_wdata(u_mwdata),
     .dbg_mem_we(u_mwe), .dbg_mem_re(u_mre), .dbg_mem_rdata(u_mrdata),
-    .dbg_c0(u_c0), .dbg_c1(u_c1), .dbg_rep(u_rep)
+    .dbg_c0(u_c0), .dbg_c1(u_c1), .dbg_rep(u_rep),
+    .bank_reg(bank_reg)
   );
 
   // ------------------------------------------------------- data-space FIFOs
@@ -383,7 +403,6 @@ module m2_tgp #(
   // address coprocessor RAM before necessarily writing it.
   integer za;
   initial for (za = 0; za < 4; za = za + 1) copro_adr[za] = 32'd0;
-  logic [31:0] dat_base;
 
   wire        io_lo    = (io_addr[15:5] == 11'd0);
   wire        sel_radr = io_lo && (io_addr[2:0] == 3'd0);
@@ -392,8 +411,31 @@ module m2_tgp #(
 
   wire        io_mid   = (io_addr[15:5] == 11'd1);   // 0x20-0x3f
   wire        sel_math = io_mid && (io_addr[4:0] <= 5'h0b);
-  wire        sel_datb = io_mid && (io_addr[4:0] == 5'h0e);
-  wire        sel_datw = io_addr[15];               // 0x8000-0xffff
+  // ------------------------------------------------ THE BANKED WINDOW (R133)
+  //
+  // Everything in copro_tgp_io_map that is not a math unit sits behind a VIEW,
+  // and the view's base -- and its very existence -- come from AS_RF register 3:
+  //
+  //     copro_tgp_bank_w(d): bank_reg = d;
+  //                          if (d & 0xc00000) view.select(0); else view.disable();
+  //
+  //     adr = (bank_reg & 0xff0000) | offset;
+  //     if (adr & 0x800000) -> copro data ROM
+  //     if (adr & 0x400000) -> bufferram          (READ AND WRITTEN)
+  //     else                -> 0
+  //
+  // This core previously invented all of that: the base came from writes to io
+  // 0x2e, the target was chosen by OFFSET bit 15, the view was always on, and
+  // the coprocessor could not write bufferram at all. rf 3 was stored and never
+  // read. None of it showed up in the opcode fuzz or the i960 PC differential,
+  // because a processor can execute the right program and still read the wrong
+  // memory -- it produces wrong VALUES, not divergence.
+  wire [31:0] bank_reg;
+  assign dbg_bank = bank_reg;
+  wire [23:0] win_adr  = {bank_reg[23:16], io_addr};
+  wire        win_en   = |bank_reg[23:22];          // else the view is not there
+  wire        sel_rom  = win_en && win_adr[23];     // copro data ROM
+  wire        sel_buf  = win_en && !win_adr[23] && win_adr[22];   // bufferram
 
   // ---------------------------------------------------- the math units
   //
@@ -498,9 +540,64 @@ module m2_tgp #(
                        : (math_unit == 2'd1) ? atan_val
                        : (math_unit == 2'd2) ? inv_val
                        :                       isqrt_val;
-  assign dat_req  = (io_rd && sel_datw);
+  // ONE PORT, TWO REGIONS. The window reaches the copro data ROM or buffer
+  // RAM, and `dat_is_buf` tells the top level which base to add. Buffer RAM
+  // is WRITTEN as well as read -- copro_tgp_memory_w -- which is how the
+  // coprocessor and the i960 share results, and this core has never had it.
+  // A WRITE IS TWO TRANSACTIONS. The port carries 16 bits of write data and
+  // bufferram holds dwords, so the low half goes first and the access is not
+  // acknowledged until the high half lands. Reads need no such thing: the
+  // port is burst 4 and returns 64 bits at once.
+  // THE REQUEST MUST DROP BETWEEN THE HALVES. Holding it high across both is
+  // what hung the board: the shared write port takes a request, acknowledges it
+  // ONCE, and a level that never falls is one request, not two. Measured as
+  // io_addr=7ffc, io_wr=1, io_ack=0 with the bank correctly selecting bufferram.
+  // `bi_`, the buffer initialiser, already does it the right way -- assert,
+  // wait for the ack, drop, re-assert for the next word -- and this now matches.
+  logic wr_hi;        // which half is in flight
+  logic wr_pend;      // a request is outstanding on the port
+  logic wr_done;      // both halves have landed; hold the ack until io_wr falls
+  wire  wr_start = io_wr && sel_buf && !wr_done;
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      wr_hi <= 1'b0; wr_pend <= 1'b0; wr_done <= 1'b0;
+    end else if (!(io_wr && sel_buf)) begin
+      wr_hi <= 1'b0; wr_pend <= 1'b0; wr_done <= 1'b0;   // access over, re-arm
+    end else if (bufw_ack && wr_pend) begin
+      wr_pend <= 1'b0;                                    // drop the request
+      if (wr_hi) wr_done <= 1'b1;                         // high half landed
+      else       wr_hi   <= 1'b1;                         // now do the high half
+    end else if (wr_start && !wr_pend) begin
+      wr_pend <= 1'b1;                                    // raise the next one
+    end
+  end
+  // THE WRITE HALF IS DEFERRED, AND THIS IS A TIMING DECISION, NOT A DESIGN
+  // ONE. Port 9 was read-only until R133; giving it a write widened the logic
+  // feeding m2_sdram's `cmd` and the 96 MHz domain stopped closing -- four
+  // seeds at -0.253, -0.314, -0.381, worsening, with the worst path
+  // xfer_addr/be_r -> cmd[0] INSIDE the controller.
+  //
+  // The READ half is the correctness fix and it stays: the coprocessor was
+  // reading an invented map (base from io 0x2e, target from offset bit 15,
+  // rf 3 discarded). Nothing yet depends on the write half -- the geometrizer
+  // that would consume what the copro stores does not exist -- so it is worth
+  // no timing at all today. It lands with the geometrizer, and the way to
+  // land it is off the arbiter entirely: through the shared write port, as
+  // m2_geo already does. Study R133.
+  assign dat_req    = io_rd && (sel_rom || sel_buf);
+  assign dat_we     = 1'b0;      // port 9 stays READ ONLY
+  assign bufw_req   = wr_pend;
+  assign bufw_addr  = 19'({3'd0, win_adr[14:0], wr_hi});
+  assign bufw_data  = wr_hi ? io_wdata[31:16] : io_wdata[15:0];
+  assign dat_wdata  = wr_hi ? io_wdata[31:16] : io_wdata[15:0];
+  assign dat_is_buf = sel_buf;
+  assign dat_half   = wr_hi;
   // index = (base & ~0x7fff) | offset, masked to the ROM's word count.
-  assign dat_addr = {dat_base[18:15], io_addr[14:0]};
+  // The reference masks each region to its own size: the data ROM by its
+  // dword count, bufferram by 0x7fff. 19 bits carries either.
+  assign dat_addr = sel_buf ? 19'({4'd0, win_adr[14:0]})
+                            : 19'(win_adr[18:0]);
 
   // The copro RAM window drives m1_copro_if. Held until its acknowledge.
   assign ram_req   = (io_rd || io_wr) && sel_rdat;
@@ -517,7 +614,7 @@ module m2_tgp #(
     // is kept only so that experiment can be repeated, and the default path is
     // now the real function.
     else if (sel_math) io_rdata = MATH_ZERO ? 32'd0 : math_val;
-    else if (sel_datw) io_rdata = dat_rdata;
+    else if (sel_rom || sel_buf) io_rdata = dat_rdata;
   end
 
   // Register reads and writes finish immediately; anything behind memory waits.
@@ -526,25 +623,18 @@ module m2_tgp #(
                 : sel_math ? (io_wr || tbl_ack)
                 // 0x2e ACKS READS TOO, AND THIS HALTED THE COPROCESSOR.
                 //
-                // This selector exists to catch the WRITE that sets dat_base
-                // (below). The read half was never written, so `io_ack = io_wr`
-                // left every read of 0x2e unacknowledged and the TGP held
-                // mid-instruction, forever. Measured on the board: io_addr=002e,
-                // io_rd=1, io_ack=0, halted at pc 0x0481 after exactly 21,325
-                // retires -- identical across builds whose outbound FIFO differed
-                // 16x, which is what ruled out a handshake race and named this.
-                //
-                // The reference has no special case here at all. 0x2e falls into
-                // copro_tgp_io_map's banked view, and copro_tgp_memory_r ALWAYS
-                // answers: data ROM if the bank sets bit 23, bufferram if bit 22,
-                // otherwise `return 0`. It cannot stall. Zero is therefore the
-                // right answer for a clear bank, and io_rdata already defaults to
-                // it -- if the microcode turns out to need the banked data, that
-                // shows up as wrong values rather than a hang, and the bank
-                // register (rf 3) is where to implement it.
-                : sel_datb ? (io_rd || io_wr)
-                : sel_datw ? dat_ack
-                : (io_rd || io_wr);   // AS_RF LEDs and anything unmapped
+                // a windowed WRITE finishes on the second half only
+                // a write into the window is accepted and dropped, as the ROM
+                // half already is -- see the note on dat_req above
+                : sel_buf ? (io_wr ? wr_done : dat_ack)
+                // A WRITE TO THE ROM HALF IS DROPPED AND COMPLETES. The
+                // reference only stores when the effective address sets bit 22:
+                // copro_tgp_memory_w does nothing at all for the ROM bank. This
+                // read `sel_rom ? dat_ack` for both directions, so a write
+                // issued no request and then waited for its acknowledge --
+                // measured on the board as io_addr=7ffc, io_wr=1, io_ack=0.
+                : sel_rom ? (io_wr ? 1'b1 : dat_ack)
+                : (io_rd || io_wr);   // unmapped, AS_RF LEDs, bank clear
 
   assign dbg_io_addr = io_addr;
   assign dbg_io_rd   = io_rd;
@@ -556,11 +646,9 @@ module m2_tgp #(
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       for (int i = 0; i < 4; i++) copro_adr[i] <= '0;
-      dat_base <= '0;
       dbg_retires <= '0; dbg_pc <= '0;
     end else begin
       if (io_wr && sel_radr) copro_adr[radr_i] <= io_wdata;
-      if (io_wr && sel_datb) dat_base <= io_wdata;
 
       // THE TGP's INCREMENT: unconditional, and by four when bit 18 is set.
       // Not the V60's rule — see the header. MAME does this on both the read

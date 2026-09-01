@@ -96,6 +96,14 @@ module m2_copro (
   input  logic        tbl_ack,
   output logic        dat_req,
   output logic [18:0] dat_addr,
+  output logic        dat_we,
+  output logic [15:0] dat_wdata,
+  output logic        dat_is_buf,
+  output logic        dat_half,
+  output logic        bufw_req,
+  output logic [18:0] bufw_addr,
+  output logic [15:0] bufw_data,
+  input  logic        bufw_ack,
   input  logic [31:0] dat_rdata,
   input  logic        dat_ack,
 
@@ -153,7 +161,8 @@ module m2_copro (
   output logic        dbg_tgp_io_wr,
   output logic        dbg_tgp_io_ack,
   output logic        dbg_tgp_fifo_rd,
-  output logic        dbg_tgp_fifo_wr
+  output logic        dbg_tgp_fifo_wr,
+  output logic [31:0] dbg_tgp_bank
 );
 
   // ------------------------------------------------------------ control
@@ -397,6 +406,10 @@ module m2_copro (
     .tbl_req(tbl_req), .tbl_addr(tbl_addr),
     .tbl_rdata(tbl_rdata), .tbl_ack(tbl_ack),
     .dat_req(dat_req), .dat_addr(dat_addr),
+    .dat_we(dat_we), .dat_wdata(dat_wdata), .dat_is_buf(dat_is_buf),
+    .dat_half(dat_half),
+    .bufw_req(bufw_req), .bufw_addr(bufw_addr), .bufw_data(bufw_data),
+    .bufw_ack(bufw_ack),
     .dat_rdata(dat_rdata), .dat_ack(dat_ack),
     .dbg_retires(dbg_tgp_retires), .dbg_pc(dbg_tgp_pc), .dbg_op(dbg_tgp_op),
     .dbg_fifo_hold(dbg_tgp_hold), .dbg_wr_n(dbg_tgp_wr_n), .dbg_wr_addr(dbg_tgp_wr_addr), .dbg_wr_data(dbg_tgp_wr_data),
@@ -404,7 +417,7 @@ module m2_copro (
     .dbg_unimplemented(dbg_tgp_unimpl),
     .dbg_io_addr(dbg_tgp_io_addr), .dbg_io_rd(dbg_tgp_io_rd),
     .dbg_io_wr(dbg_tgp_io_wr), .dbg_io_ack(dbg_tgp_io_ack),
-    .dbg_fifo_rd(dbg_tgp_fifo_rd), .dbg_fifo_wr(dbg_tgp_fifo_wr)
+    .dbg_fifo_rd(dbg_tgp_fifo_rd), .dbg_fifo_wr(dbg_tgp_fifo_wr), .dbg_bank(dbg_tgp_bank)
   );
 
   assign dbg_uc_we   = uc_we;

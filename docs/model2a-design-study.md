@@ -7418,14 +7418,21 @@ measurements since say otherwise.
 than addressing new storage, and the last dword of the 128 KB does not run past
 the region. The decode, the halves and the mirror are all correct.
 
-*The reference never goes where we go.* Tapping the i960's whole program space
-in MAME over 900 attract frames:
+*The reference never goes where we go, AND THAT IS NOT THE FAULT.* Tapping the
+i960's whole program space in MAME over 900 attract frames:
 
     REFERENCE NEVER TOUCHES 0x01600000-0x0170ffff
 
-while our i960 walks 0x0163FB80, 84, 8E, 90 there. So this is not the game
-following its own pointer into unimplemented territory -- **it is our machine
-computing an address the real one never computes.**
+while our i960 walks 0x0163FB80, 84, 8E, 90 there. That is a real divergence and
+it still wants explaining -- but it is NOT what breaks the machine. Build 36,
+with BUFFERRAM off, shows the identical walk (0163FAFC, FB2A, FB46, FB66) while
+attract mode runs and "insert coin" flashes. The walk is ordinary traffic that
+sampling catches because a store queue to SDRAM is slow.
+
+**Recorded because it nearly became the answer.** An address that looks wrong,
+in a loop that looks stuck, on a build that IS broken, is not evidence until the
+same reading is taken on a build that WORKS. The control was one flash away and
+was not run first.
 
 *And the loop is a memory clear.* The code at the livelock, read out of the ROM
 through MAME:
@@ -7458,3 +7465,133 @@ The fault is hardware-only, which is the least convenient shape it could take.
 behind it rather than a suspect one. The next move is instrumentation, not
 theory: the i960's IP RING rather than a sampled IP, which shows the loop body
 and what it reads immediately before the address goes wrong.
+
+**R133 - THE COPROCESSOR'S BANKED MEMORY WINDOW IS AN INVENTED SCHEME. The bank
+register exists in the register file, is written by the microcode, and is read
+by NOTHING.**
+
+The TGP executes the reference's program from the reference's addresses (R120,
+R126) and its opcodes are fuzzed against a transcription of MAME. None of that
+touches the MEMORY MAP, and the memory map is wrong in four separate ways.
+
+*The reference.* `copro_tgp_io_map` puts the math units at 0x20-0x2b and
+everything else behind a VIEW whose handlers are:
+
+    copro_tgp_memory_r(offset):
+        adr = (m_copro_tgp_bank_reg & 0xff0000) | offset;
+        if (adr & 0x800000) return m_copro_data->as_u32(adr & mask);  // data ROM
+        if (adr & 0x400000) return m_bufferram[adr & 0x7fff];         // BUFFER RAM
+        return 0;
+
+    copro_tgp_memory_w(offset, data):
+        adr = (m_copro_tgp_bank_reg & 0xff0000) | offset;
+        if (adr & 0x400000) COMBINE_DATA(&m_bufferram[adr & 0x7fff]); // and WRITES it
+
+    copro_tgp_bank_w(data):                     // this is AS_RF register 3
+        m_copro_tgp_bank_reg = data;
+        if (data & 0xc00000) bank.select(0);    // the view is ENABLED by the bank
+        else                 bank.disable();    // otherwise it is not there at all
+
+*What this core does instead:*
+
+| | reference | this core |
+|---|---|---|
+| base of the window | `bank_reg`, written via **rf 3** | `dat_base`, written by **io 0x2e** |
+| what selects the target | effective addr bit 23 / bit 22 | **offset bit 15** (`sel_datw`) |
+| a write to io 0x2e | data into **bufferram** | sets a base register |
+| is the view enabled? | only when bank & 0xc00000 | **always** |
+| copro writes to bufferram | yes | **not implemented** |
+
+`mb86233_regs.sv` line 239 stores rf 3 like any other register -- `if (wr_rf)
+rf[wr_addr[3:0]] <= wr_data` -- and nothing ever reads `rf[3]`. So the register
+the reference uses to form EVERY banked address is captured and discarded.
+
+*It is not a corner case.* Tapping the copro's io space in MAME over 600 attract
+frames: **257,550 reads of the math units and 7,537 through the banked window.**
+The window is used about twelve times a frame.
+
+*Why nothing caught it.* Both instruments this project trusts are blind to it.
+The lockstep fuzz compares opcode SEMANTICS against a transcription; the i960
+differential compares PROGRAM COUNTERS. A processor can execute the right
+instructions in the right order out of the right program and still read the
+wrong memory -- and it will not diverge in either instrument, it will only
+produce wrong VALUES. Which is exactly the standing symptom: `dbg_out_data` =
+0x42976767, a plausible float, and layer 2's `hscr` -- copro-derived, R106 --
+stuck at zero.
+
+*The order this wants fixing in.* rf 3 first, since everything else derives from
+it: store it, use bits 23:16 as the window base, and gate the view on
+`bank & 0xc00000`. Then route `adr & 0x800000` to the copro data ROM (the
+existing `dat_req` path, whose address becomes `(bank & 0xff0000) | offset`
+rather than `{dat_base[18:15], io_addr[14:0]}`), and `adr & 0x400000` to buffer
+RAM in both directions. The copro writing bufferram is a new path this core has
+never had, and it is how the coprocessor and the i960 share results.
+
+*And it reframes R129/R132.* Buffer RAM has three consumers and this core serves
+one. Enabling it for the i960 alone was never going to be sufficient, and may
+never have been safe: the reference has the COPROCESSOR writing that memory too.
+
+**R134 - R133 CONFIRMED ON HARDWARE. The bank register is live, it points at
+buffer RAM, and the machine still does not boot with the region enabled.**
+
+R133 was read out of `model2.cpp`. This is the board agreeing with it.
+
+*The bank is written, and it selects the memory we never implemented.* With
+`rf[3]` brought out to the UART:
+
+    bank[23:16] = 0x40
+
+0x40 in bits 23:16 is **bit 22 of the effective address** -- `adr & 0x400000` --
+which is exactly the case `copro_tgp_memory_r` routes to `m_bufferram`. So the
+microcode does write AS_RF 3, it points the window at BUFFER RAM, and every
+banked access this core ever made went somewhere invented. The register was
+being stored and discarded (R133); it was never idle.
+
+*Three bugs of mine were found and fixed on the way, each named by the UART:*
+
+  1. **A write to the ROM half hung the coprocessor.** `io_addr=7ffc, io_wr=1,
+     io_ack=0`. The ack mux read `sel_rom ? dat_ack` for both directions, so a
+     write issued no request and then waited for its acknowledgement. The
+     reference drops ROM-bank writes silently -- `copro_tgp_memory_w` stores
+     only when `adr & 0x400000`.
+
+  2. **Making port 9 read-write cost the 96 MHz domain.** Four seeds at -0.253,
+     -0.314, -0.381, worsening, with the worst paths INSIDE the controller:
+     `xfer_addr[19] -> cmd[0]` and `be_r[1] -> cmd[0]`. Port 9 had been read-only
+     since it was built; `p_we`/`p_din`/`p_be` widen the logic feeding `cmd`.
+     Buffer-RAM writes now leave on the SHARED WRITE PORT instead -- the one the
+     loader, the self-test and m2_geo take turns on -- which is idle during
+     gameplay and outside the arbiter. Timing returned to +0.151 with the worst
+     path back on pll_hdmi. Measured need: **250 window writes per 600 frames
+     against 7,537 reads**, so the write is real but rare and the port suits it.
+
+  3. **The write request must DROP between the two halves.** A dword is two
+     16-bit transfers and the port acknowledges a request once; a level that
+     never falls is one request, not two. Held high, it hung at
+     `io_addr=7ffc, io_wr=1, io_ack=0` again. `bi_`, the buffer initialiser,
+     already had the right shape -- assert, wait, drop, re-assert -- and this
+     now matches it.
+
+*The result of fixing all three.* The TGP's io flags went from `7FFC0008` --
+stuck on a write -- to `00000000`, no access pending. **The coprocessor no
+longer hangs.** And the machine still does not reach attract mode with
+`BUFFERRAM` enabled.
+
+*So the standing position, stated plainly.* The copro now reads and writes the
+reference's memory map, which is a correctness fix that stands on its own and is
+confirmed live. It is NOT sufficient to make buffer RAM safe to enable. Six
+explanations for that livelock have now been proposed and killed by measurement
+(R127, R129, R132, and three tonight); what is established is only this:
+
+  * the mapping is correct -- 106 checks including the mirror and the region top
+  * the i960 is byte-perfect against MAME for **521,752 instructions** with the
+    real I/O board in the loop, and for 803,355 in the ROM harness
+  * writes landing are harmless; READS are what break it (builds 39 vs 40)
+  * cache retention is not the cause (build 43, fill suppression)
+  * simulation does not reproduce it at 30 M instructions
+
+The next instrument, and it is the one thing not yet tried: the i960's IP RING
+rather than a sampled IP, which shows the loop body and its branch. It killed
+two builds with `Internal Error: TDB, tdb_node.cpp:2080` when wired to the
+streamer, and that attribution is itself uncertain -- the same crash recurred
+with the ring disconnected. It wants a different route to the wire.

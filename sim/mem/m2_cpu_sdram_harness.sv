@@ -31,7 +31,12 @@ module m2_cpu_sdram_harness #(
   // about the core -- on hardware, changing the OSD setting does NOT fix the
   // CPU's reads, so the model and the board do not agree here and the
   // simulation must not be trusted to pick the value.
-  parameter logic [2:0] RD_LAT_SEL = 3'd3
+  parameter logic [2:0] RD_LAT_SEL = 3'd3,
+  // Passed through so the composition can be run with the cache OUT of the
+  // path. With it in, every SDRAM read takes the cached route and the plain
+  // read path is dead code -- which is how it bit-rotted unnoticed until a
+  // hardware build ran it (black screen, boot record read as FFFFFFFF).
+  parameter bit DCACHE_EN_TOP = 1'b1
 ) (
   input  logic        clk_cpu,
   input  logic        clk_mem,
@@ -91,7 +96,7 @@ module m2_cpu_sdram_harness #(
   logic [15:0] b_din;
   logic  [1:0] b_be;
 
-  m2_cpu_bridge #(.AW(AW), .BOARD_2A(1'b0)) u_bridge (
+  m2_cpu_bridge #(.AW(AW), .BOARD_2A(1'b0), .DCACHE_EN(DCACHE_EN_TOP)) u_bridge (
     .io_stall(1'b0),   // no stalling peripheral in this harness
     .dbg_dc_hits(), .dbg_dc_miss(),
     .char_wr(), .char_wr_addr(),

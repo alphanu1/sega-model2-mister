@@ -64,6 +64,8 @@
 module m2_cpu_bridge #(
   parameter bit DCACHE_EN = 1'b1,
   parameter bit BUFFERRAM = 1'b0,
+  parameter bit BUFFERRAM_WRONLY = 1'b0,   // writes land, reads still read 0
+  parameter bit BUFFER_NOCACHE   = 1'b1,   // buffer-RAM lines are never retained
   parameter int unsigned AW = 25,        // SDRAM word address width
   parameter bit          BOARD_2A = 0    // 0 = model2o, 1 = 2A-CRX
 ) (
@@ -329,10 +331,35 @@ module m2_cpu_bridge #(
   logic [AW:1] sd_word;          // 16-bit word address for the low half
   logic        is_rom;           // read-only: writes are dropped, as .rom().nopw()
 
+  // NEVER RETAIN A BUFFER-RAM LINE. Three reasons, each sufficient:
+  //
+  //   * the region has writers the cache cannot see -- the geo DMA and the
+  //     bi_ initialiser write it straight to SDRAM, so a retained line goes
+  //     stale with no invalidation. The DPRAM is kept out of the cache for
+  //     exactly this ("never cached... keeps the I/O board's side correct").
+  //   * the reference mirrors it (.mirror(0x60000)). The cache tags the CPU
+  //     address, so 0x900010 and 0x960010 are DIFFERENT lines naming the SAME
+  //     word -- a write through one alias invalidates only its own line, and
+  //     per-line invalidation can therefore never be coherent here, even with
+  //     the CPU as the only writer.
+  //   * the d-cache is this project's own addition, not the i960's. Excluding
+  //     a shared region is faithful by default.
+  //
+  // Implemented as FILL SUPPRESSION, not as a route down the plain read path:
+  // that path is dead code behind the cache, works in both simulations, and
+  // hung real hardware at the fourth boot-record read when DCACHE_EN=0 ran it
+  // (its second-half read is not burst-aligned, which the controller's port
+  // contract requires). The read still takes the proven aligned-burst route;
+  // the line is simply never written back into the cache, so every read
+  // misses and refetches. Slower, coherent, and one variable against the
+  // livelocked build.
+  logic nocache;
+
   always_comb begin
     tgt     = T_NONE;
     sd_word = '0;
     is_rom  = 1'b0;
+    nocache = 1'b0;
     if (r_addr < 32'h0020_0000) begin                       // program ROM
       tgt = T_SDRAM; is_rom = 1'b1;
       sd_word = base_prog + AW'(r_addr[20:1]);
@@ -350,9 +377,18 @@ module m2_cpu_bridge #(
     end else if (r_addr >= 32'h0108_0000 && r_addr < 32'h0110_0000) begin
       tgt = T_SDRAM;                                        // char RAM, 512 KB
       sd_word = base_char + AW'(r_addr[18:1]);
-    end else if (BUFFERRAM && r_addr >= 32'h0090_0000 && r_addr < 32'h0098_0000) begin
+    // BISECTED: writes only. This region does TWO things when it is enabled --
+    // writes start landing where they used to vanish, and reads start
+    // returning real data where they used to return the T_IO default of 0.
+    // Enabling both at once breaks the machine and four theories have died on
+    // it. `r_we` in the condition lets WRITES land while READS still fall
+    // through to T_IO and read 0, exactly as before, which splits the change
+    // in half: if this boots, the fault is in what the reads return.
+    end else if (BUFFERRAM && (r_we || !BUFFERRAM_WRONLY)
+                 && r_addr >= 32'h0090_0000 && r_addr < 32'h0098_0000) begin
       // 128 KB, and the mirror is free: [16:1] simply ignores the repeat.
       tgt = T_SDRAM;
+      nocache = BUFFER_NOCACHE;
       sd_word = base_buffer + AW'(r_addr[16:1]);
     end else if (r_addr >= 32'h0200_0000 && r_addr < 32'h0400_0000) begin
       tgt = T_SDRAM; is_rom = 1'b1;                         // main_data
@@ -555,8 +591,8 @@ module m2_cpu_bridge #(
       dc_twe = 1'b1;
       dc_tin = '0;
     end else if (st == S_RDB && sd_ack) begin
-      dc_dwe = 1'b1;                       // fill: ROM and RAM alike
-      dc_twe = 1'b1;
+      dc_dwe = !nocache;                   // fill: ROM and RAM alike -- but a
+      dc_twe = !nocache;                   // nocache region is never retained
     end else if (dc_inval) begin
       dc_twe = 1'b1;
       dc_tin = '0;
