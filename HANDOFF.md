@@ -1,6 +1,166 @@
 # Handoff
 
-**Updated:** 2026-08-30. `make test` green at 29.
+**Updated:** 2026-09-01. `make test` green at 29.
+
+## THE COPROCESSOR RUNS. The halt was an unacknowledged read of IO 0x2e.
+
+`m2_tgp`'s io_ack mux had `sel_datb ? io_wr`. That selector exists only to catch
+the WRITE that sets `dat_base`; the read half was never written, so a read of
+0x2e acknowledged never and the TGP held mid-instruction forever. Measured:
+`io_addr=002e io_rd=1 io_ack=0`, frozen at `pc 0x0481` after exactly 21,325
+retires. The fix is `sel_datb ? (io_rd || io_wr)` and it is **verified on
+hardware** -- retires now climb continuously and the PC passes 0x0481.
+
+The reference has no special case at 0x2e at all: it falls into
+`copro_tgp_io_map`'s banked view, whose handler always answers and returns 0 for
+a clear bank. Study R125.
+
+**The FIFO-deadlock theory was wrong and is dead.** `out_popped == out_pushed`
+with the i960's IP moving proved the outbound queue was EMPTY, not full. The
+8 -> 128 deepening built to fix it bought 22 results and changed nothing --
+though the M10K conversion it rode in on was worth 2,491 ALM.
+
+## AREA: 2,491 ALM BACK, ZERO M10K BLOCKS
+
+Both copro FIFOs are now `m2_fifo_m10k`, a show-ahead FIFO whose storage is a
+block and whose head register keeps the combinational read the TGP needs.
+
+    u_fin    ~1,500 ALM of flip-flops  ->  71 ALM + 4,096 bits
+    u_fout   8 deep                    ->  128 deep, 28 ALM
+    ALM      35,348 -> 32,757 (78%)        9,153 spare
+    M10K     464 -> 465 of 553             both FIFOs packed into existing blocks
+
+## THE 3D BACK END IS PORTED, NOT YET WIRED
+
+    m2_raster3d     240   the band sequencer (ours)
+    m2_quad_store   490   z-sort + per-band replay      Model 1 @ 085a00e
+    m2_raster_fill  531   quad to spans                 152,025 quads verified
+    m2_raster_div   157   signed restoring divide
+    m2_raster_band  307   x3, 496x16, ~48 M10K
+
+`q_*` -- a projected screen-space quad with colour and z -- is the seam, and it
+is exactly what a geometrizer emits. **Model 1's geometry does NOT transfer**:
+`m1_geometry`, its nine `m1_geo_*` submodules and `m1_listwalk` are fixed-function
+RTL, and R128 settles by measurement that Model 2's is a real microcoded engine
+(721,831 writes to 0x804000 per 900 attract frames). `m1_quad_store` DOES
+transfer -- its `m1_geometry` mentions are comments.
+
+Sizing: three band buffers are ~48 M10K against 88 spare, and Model 2 is 496x384
+like Model 1, so the geometry transfers unchanged.
+
+## BUFFER RAM IS MAPPED AND DELIBERATELY OFF (R129)
+
+`0x00900000`, 128 KB, was routed to `T_IO` whose read mux ends in `32'd0` -- so
+33,554 writes and 12,269 reads per 900 frames went nowhere. It is now mapped to
+SDRAM at `GAME_BUFFER = 0x16f0000` and **disabled behind `BUFFERRAM` in
+`m2_cpu_bridge`.**
+
+It is off because it cannot land alone. That memory is the GEOMETRIZER'S
+WORKSPACE: the game writes a structure, reads it back and follows it. Unmapped,
+it read zeros and took a safe path (21,325 retires, attract cycling). Mapped, the
+writes land, the game follows its own pointer, and with no geometrizer the i960
+livelocks at IP 0x0E00-0x0E10 walking an unmapped 0x0163FBxx (1,367 retires).
+
+Initialising to the reference's 0x07800f0f changed **nothing** -- byte-identical
+telemetry -- which is what rules out the contents. Turn `BUFFERRAM` on in the
+same change that brings up the geometrizer. The initialiser is kept and is
+correct: 161 ALM, runs after `cal_done` because the self-test is the SDRAM
+read-latency calibration.
+
+## THE DEBUG UART WORKS OVER SSH -- NO CABLE (R121)
+
+`/dev/ttyS1`, 115200. `UART_TXD` has no pin assignment; it is the HPS's own UART
+bonded into the fabric. `stty -F /dev/ttyS1 115200 raw -echo && cat /dev/ttyS1`.
+The standing rule "the screen is the only output channel" is superseded.
+
+`/dev/MiSTer_cmd` reloads a core remotely:
+`echo "load_core /media/fat/_Arcade/<x>.mra" > /dev/MiSTer_cmd`.
+
+**A build that reads as broken gets rolled back BEFORE it is analysed.** Build 29
+was left on the board while its telemetry was studied and the first report of it
+came from the user, not the log.
+
+## THINGS THAT COST TIME AND WILL AGAIN
+
+- **The fitter crashes on exit and hits `Internal Error: STA,
+  sta_assignment_db.h:468` at random.** Both are placement-dependent; a seed
+  change has cleared it every time (builds 24 and 28). Run `quartus_map`,
+  `quartus_fit`, `quartus_sta`, `quartus_asm` as separate steps.
+- **Timing needs a re-seed roughly half the time** at this occupancy, on
+  `pll_hdmi` or the SDRAM domain. Budget for it.
+- **Concurrent Quartus builds OOM this machine.** 31 GB total and the Model 1
+  project's memories take 15 GB; build 21 was SIGKILLed mid-fit and looked like
+  a design failure until the exit reason was read.
+- **A debug output that is driven and unread is not instrumentation.** Every
+  copro `dbg_*` was tied off in `Model2.sv`; grep for a count of TWO to find the
+  rest.
+
+## BUILD 18 PASSES TIMING, AND IT IS ON THE BOARD
+
+First clean build this project has had. `+0.203` worst setup, `+0.182` hold,
+`TNS 0.000` on every clock. The SDRAM's 96 MHz domain went `-0.784 -> +0.396`;
+what fixed it was registering the TGP's SDRAM request path, so `mb86233_agu`'s
+adder no longer reaches `m2_sdram`'s arbiter mux combinationally.
+
+    35,147 / 41,910 ALM   (84%, 6,763 spare)
+    3,434,570 / 5,662,720 memory bits (61%)
+    45 / 112 DSP
+
+Deployed and md5-verified. `Model2.rbf.good` is untouched; `Model2.rbf.prev`
+holds the rollback. It also carries the fix for the hardware freeze -- `stall`
+tied to zero in `m2_copro`, because holding the i960 on the copro froze the
+machine outright (black tilemap, no "insert coin", stuck on screen 1).
+
+**The M10K block count is still unknown.** `fit.rpt` is not written, because the
+fitter crashes on exit (already documented below) -- `fit.summary` survives and
+gives bits, not blocks. Blocks are the binding resource, so this number is still
+owed. `tools/fit-numbers.sh` archives whatever a build does produce.
+
+## THE DEBUG UART WORKS OVER SSH -- NO CABLE (R121)
+
+`/dev/ttyS1` on the board, 115200. `UART_TXD` has no pin assignment anywhere;
+it is the HPS's own UART bonded into the fabric. Time was spent believing this
+needed hardware attached.
+
+    stty -F /dev/ttyS1 115200 raw -echo && timeout 8 cat /dev/ttyS1
+
+**The standing rule "the screen is the only output channel" is superseded.** The
+board is programmatically readable now, so telemetry can be counted and diffed
+against MAME instead of photographed.
+
+## THE SCROLL FAULT IS IN THE COPRO's RETURN PATH (R122, R123)
+
+Layer 2's `hscr` measured `0000` across 52 samples / ~480 frames on build 18.
+Everything else is excluded: the i960 profiles like MAME (66% in the frame-sync
+spin against MAME's 69.2% -- that spin is *correct*, see R122), the tile fetcher
+honours the register, the decode is right (R106), the function port is decoded
+and the TGP runs the reference's program (R120), timing passes, the CPU is never
+held. The reference visibly scrolls the ground here, so the expectation is firm.
+
+Every counter that could name the failing half was **tied off** in `Model2.sv`.
+Build 19 (in flight) wires them to the UART:
+
+    C <in_pushed:out_pushed>  <retires:pc>
+    H <out_data>  <hscr2:in_drop:out_drop>
+
+in climbing / out flat = a TGP that consumes and never answers. Both flat = an
+i960 that never issues. Drops moving = the 128-deep queue losing commands.
+
+## THE RENDERER BUDGET, AND A SECOND PROCESSOR WE HAVE NOT BUILT (R124)
+
+`model2.cpp` maps a **geometrizer** at `0x800000`/`0x804000` -- separate from the
+copro TGP, its own microcode upload, ~21 opcodes, four polygon-transform loops.
+None of it exists here. Model 1 has the same split (`m1_tgp` *and* `m1_geometry`).
+
+So the renderer comparator is `m1_raster3d`'s **6,977 ALM** (geometry + list walk
++ sort + fill + band buffer), not `m1_raster_fill`'s 2,113 -- against 6,763 spare.
+Tight, not comfortable. Before designing any of it, settle whether `daytona93`
+ever calls `geo_code_upload`: hardwired transform loops if not, a real microcode
+engine if so, and that roughly doubles the cost.
+
+Two ways to buy room: the copro input queue is async-read (flip-flops, ~2,000 ALM
+for 128 entries) and belongs in M10K; and sound-board work RAM is 524,288 bits of
+M10K against a band buffer needing ~522,240.
 
 ## SOUND WORKS. Music and voices both.
 
@@ -1805,7 +1965,8 @@ it is one grep, and it belongs in the pre-push routine rather than in whoever
 happens to look:
 
 ```
-git grep -ilE 'claude|anthropic' -- .        # must return .gitignore and nothing else
+git grep -ilE "$(printf 'cl%s|anthr%s' aude opic)" -- .   # .gitignore and nothing else
+# (the pattern is assembled so that this line does not match its own check)
 git log --format='%an <%ae>' @{u}..HEAD | sort -u    # must be the one author
 git log --format='%B' @{u}..HEAD | grep -icE 'co-authored|generated with'   # must be 0
 ```

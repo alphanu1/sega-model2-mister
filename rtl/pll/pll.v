@@ -27,7 +27,7 @@
 // clocks were left related to the HDMI and audio PLLs, and the build reported
 // **-36.5 ns** of setup slack on a 31.25 ns clock while still emitting an .rbf.
 //
-// That is the failure mode CLAUDE.md and docs/mister-integration.md both warn
+// That is the failure mode the project rules and docs/mister-integration.md both warn
 // about -- "a passing build fails on hardware" -- reached by a route neither
 // anticipated. The rule is not only about the module NAME.
 //

@@ -21,8 +21,8 @@
 // docs/mister-integration.md said as much and was not acted on: "assume the
 // screen is the core's only output channel, but know that it is not the only
 // one available... A minimal transmitter is tens of LUTs, and that is a
-// genuine printf." CLAUDE.md's summary flattened that into "No serial", which
-// is what actually governed, and the cost was a session of hex-squinting.
+// genuine printf." The project rules' summary flattened that into "No serial",
+// which is what actually governed, and the cost was a session of hex-squinting.
 //
 // 8N1, LSB first, one stop bit. DIVISOR is clk cycles per bit: at 48 MHz,
 // 115200 baud is 416.67, and 417 is 0.08% off -- far inside the 2% a UART

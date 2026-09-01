@@ -112,3 +112,9 @@ build_id.v
 
 # Python bytecode, created whenever a tool here is imported rather than run
 __pycache__/
+
+# Quartus writes this next to the project file on every compile
+cr_ie_info.json
+# tools/fit-numbers.sh archives (it now defaults under build/, this is the net)
+fit-*.blocks
+fit-*.summary

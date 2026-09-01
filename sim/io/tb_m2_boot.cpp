@@ -1831,10 +1831,16 @@ int main(int argc, char **argv) {
         std::printf(" %08x:%u%s", ctl_log[i].first, ctl_log[i].second,
                     ((i % 5) == 4 && i + 1 < ctl_log.size()) ? "\n     " : "");
       std::printf("\n");
+      // RE-DUMPED FROM MAME, CORRECTLY ADDRESSED. The previous table was
+      // captured under the R110 error -- reading AS_PROGRAM at read_u32(word*4)
+      // when the space is (32,16,-2) -- and R116 retracted the finding without
+      // fixing these constants. Every entry was wrong, so this bench printed
+      // "the uploaded PROGRAM is wrong" on every run against a CORRECT core.
+      // Verified: MAME holds 2,024 nonzero words and we upload 2,024, and all
+      // ten original addresses match exactly. 0x480-0x482 are here because the
+      // TGP halts at 0x481 on hardware.
       static const struct { uint32_t a, w; } want[] = {
-        {0x44,0x000f4610},{0x45,0x000f7412},{0x46,0x000f4614},{0x47,0x1d3c4216},
-        {0x48,0x1c1c322b},{0x49,0x000f4619},{0x4a,0x1dbc421b},{0x4b,0x012f4611},
-        {0x4c,0x012f4614},{0x57,0xbf60004c},
+        {0x44,0x1c1f2621}, {0x45,0x1c1f3214}, {0x46,0x3900003f}, {0x47,0x1c3da00b}, {0x48,0x1f7f1e10}, {0x49,0xfe000044}, {0x4a,0x3b000008}, {0x4b,0xbf600055}, {0x4c,0x1c1f2621}, {0x57,0xbf624019}, {0x480,0xbe0004b7}, {0x481,0x1c1dc638}, {0x482,0x1c089da1},
       };
       std::printf("    PROGRAM AS FETCHED vs MAME:\n");
       int bad = 0;

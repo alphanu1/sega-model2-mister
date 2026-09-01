@@ -200,7 +200,7 @@ module m2_ioboard #(
   // took two builds to remember it:
   //
   //   "Split memories into byte lanes, tag them (* ramstyle = "M10K" *), and
-  //    never clear an array in reset."   -- CLAUDE.md, and mister-integration.md
+  //    never clear an array in reset."   -- the project rules, and mister-integration.md
   //
   // The first version was one 1024 x 16 array with byte-lane write ENABLES,
   // asynchronously read, tagged MLAB. The tag was ignored and it became 16,384

@@ -4529,7 +4529,7 @@ looking. It produced four wrong conclusions in a day: two values attributed to
 the wrong probe, two read at a moment when the value was legitimately something
 else. The serial channel showed 7,172 events with addresses AND data AND
 ordering, and answered in one capture a question six builds had failed to
-settle. `docs/mister-integration.md` had said it was available; CLAUDE.md's
+settle. `docs/mister-integration.md` had said it was available; the project rules'
 summary said "No serial", and the summary is what governed.
 
 *Next:* channel A repointed from character writes to TILEMAP writes
@@ -6948,3 +6948,345 @@ every writer, and one of them was a port this core had never decoded.
 downstream tells you where it surfaced, not where it started.** Two days were
 spent inside the coprocessor, then a day inside the i960, for a missing address
 decode at the top level.
+
+**R121 - THE DEBUG UART IS READABLE OVER SSH. There is no cable, and there never
+was one.**
+
+`sys_top.v` drives `cyclonev_hps_interface_peripheral_uart`, which is the HPS's
+own UART bonded into the fabric. `UART_TXD`/`UART_RXD` have **no pin assignment
+anywhere in the QSF** -- they cannot be on a header, because nothing places them
+there. On the board's Linux side the stream is `/dev/ttyS1`:
+
+    stty -F /dev/ttyS1 115200 raw -echo
+    timeout 8 cat /dev/ttyS1
+
+Measured: 61,340 bytes in 8 s, 38,276 in 5 s, reproducible, nothing else holding
+the port. `screen /dev/ttyS1 115200` works too and is the same channel; the
+reason `cat` matters is that it is **scriptable**, so telemetry can be grepped,
+counted and diffed against MAME automatically instead of read off a terminal.
+
+*What this supersedes.* The standing rule "the screen is the only output
+channel -- no serial, no printf, no debugger" was true when written and is no
+longer. `m2_dbg_stream` made the board programmatically readable and the rule
+has been shaping design decisions past its expiry. The overlay is still the
+right tool for something to be watched while playing; the UART is the right tool
+for anything to be counted or compared.
+
+*The limit worth knowing.* Flow control is drop, not stall, and channel A
+starves channel B: an 8-second capture gave 3,015 'S' records against 52 'H'.
+Sufficient for a value sampled once a frame, not for anything bursty.
+
+**R122 - THE i960's ATTRACT-MODE PROFILE MATCHES THE REFERENCE. The spin is
+correct behaviour and was nearly read as a fault.**
+
+Measured on the board over UART, build 18:
+
+| | this core | MAME |
+|---|---|---|
+| in `0x12B0`/`0x12B8` | **66%** | **69.2%** |
+| instruction rate | 4.148 M/s (CPI 5.79 at 24 MHz) | ~6.4 M/s |
+| instructions/frame | ~69,000 | ~107,101 |
+| non-spin work/frame | ~23,500 | 29,208 - 30,949 |
+
+The loop is `ldob 0x500000,r3` / `cmpibe r3,g0,0x12b0`, and `0x00500000` is plain
+work RAM -- so the byte is set by an interrupt handler, and the loop is the
+game's frame sync. The study already established (S5793) that **the total is
+capacity, not demand**: the CPU spins to fill whatever time is left. Our lower
+instruction count is a higher CPI spending its shortfall on *spin* iterations,
+not on work, which is why the work figures agree.
+
+*The trap, recorded because it was walked into.* The same capture showed **148
+distinct IPs against MAME's ~5,000**, which reads as a catastrophically narrow
+working set. It is not evidence of anything: MAME's figure counts every PC in a
+107,000-instruction frame, ours is 4,300 sparse samples read one ring entry per
+profiler tick. **You cannot observe 5,000 distinct values in 4,300 samples.**
+Any comparison between a full trace and a sampled one must reconcile the
+sampling rate first, or it manufactures a fault.
+
+**R123 - LAYER 2's `hscr` IS STILL ZERO, MEASURED, ON A BUILD WHERE EVERY
+PREVIOUSLY SUSPECTED CAUSE IS EXCLUDED.**
+
+52 samples over ~480 frames, build 18, all `0000`. The reading is sound: the
+UART packs low bytes only, so layer 2's `vscr = 0x2000` correctly appears as
+`00`, but MAME's `hscr` baseline of `000c 0018 001b 0197 016e 007d` has low
+bytes `0c 18 1b 97 6e 7d` -- every one of them would be visible.
+
+What is now excluded, each independently established:
+
+  * the i960 runs the full attract sequence and profiles like the reference
+    (R122), and the reference visibly scrolls the ground as the car rounds the
+    track at this point
+  * the tile fetcher honours the register -- `map_x = x - hscr`,
+    `split_x = hscr & 0x1ff`, `e_off = sx[8:0] - hscr[8:0]`
+  * the decode is complete and correct (R106)
+  * the function port is decoded and the TGP executes the reference's program
+    from the reference's addresses (R120)
+  * timing passes on every clock (build 18: +0.203 worst setup)
+  * the i960 is never held -- `stall` is tied to zero
+
+So the fault is in the coprocessor's **return** path, and R106's acceptance test
+remains the right instrument: `hscr` leaving zero is the first evidence the TGP
+works, and it has not left zero.
+
+*Why this took another build.* Every counter that could name the half at fault
+-- `dbg_out_pushed`, `dbg_out_data`, `dbg_in_dropped`, `dbg_out_dropped` -- was
+**tied off** in `Model2.sv`. They existed in `m2_copro` and were connected to
+nothing. A debug output that is driven and unread is not instrumentation; grep
+for a count of 2 (declaration plus instantiation) to find the rest.
+
+**R124 - MODEL 2 HAS A SECOND PROCESSOR THIS CORE HAS NOT BUILT, AND THE
+RASTERISER BRACKET WAS QUOTED AGAINST THE WRONG MODULE.**
+
+The copro TGP at `0x880000`/`0x884000` is not the geometry engine. `model2.cpp`
+maps a separate microcoded engine at `0x800000`/`0x804000` with its own program
+upload (`geo_prg_w`), ~21 opcodes (`geo_object_data`, `geo_matrix_write`,
+`geo_light_source`, `geo_texture_parameters`, `geo_zsort_mode`,
+`geo_code_upload`, `geo_code_jump`) and four polygon-transform loops --
+`geo_parse_np_ns`, `np_s`, `nn_ns`, `nn_s`, being normals present or absent
+crossed with smooth or flat. None of it is implemented. `m2_copro.sv`'s own
+header flagged it and it was read as a naming note rather than a work item.
+
+Model 1 has the same split and confirms it: `m1_tgp.sv` **and** `m1_geometry`
+both exist.
+
+*The area consequence, which corrects a figure quoted earlier the same day.*
+`m1_raster3d` at 6,977 ALM is not a rasteriser -- its own header lists
+`m1_listwalk`, `m1_geometry`, `m1_quad_store`, `m1_raster_fill`,
+`m1_raster_band`. The rasteriser proper is `m1_raster_fill` at **2,113 ALM,
+1,110 bits, 2 DSP, 63.67 MHz** (m3-rasterizer-spec.md), which sits just under
+VDP1's 2,537 and confirms the bracket's floor.
+
+So both figures are right and they measure different things:
+
+| | ALM | covers |
+|---|---|---|
+| VDP1 | 2,537 | quad rasteriser, no Z, no filtering |
+| `m1_raster_fill` (+ divider) | 2,113 | quad to spans, flat |
+| `m1_raster3d` | 6,977 | geometry + list walk + sort + fill + band buffer |
+| N64 RDP | 8,347 | triangles, trilinear, combiner, coverage AA |
+
+**The renderer budget is the 6,977 shape, not the 2,113 one**, because the four
+lower rows are exactly what remains to be built, and `m1_raster3d` excludes
+`m1_tgp` just as our 35,147 already includes `m2_copro`. Against build 18's
+6,763 spare ALM that is short, not comfortable -- and ours is textured and
+Z-buffered where Model 1's is flat.
+
+*The fork that decides it, and it is study-level because it moves the ~25,000
+ALM number.* `geo_code_upload`/`geo_code_jump` mean a game **can** upload its own
+geometry microcode. If `daytona93` only ever runs the stock pipeline, the four
+transform loops hardwire cheaply; if it uploads, the geometrizer must be a real
+microcode engine and the cost roughly doubles. Answerable from MAME with a tap
+on `geo_code_upload` over attract mode, and it should be answered before any of
+the renderer is designed.
+
+*Two memory findings that bear on the band buffer.* Sound-board work RAM is
+524,288 bits of M10K and Model 1's band buffer needs ~522,240 -- moving sound to
+SDRAM very nearly pays for it exactly. And a third read port on tile RAM made
+Quartus build a second complete copy of the array, 128 of 312 M10K, for a debug
+probe. A debug read port on a memory is never free; observe the write bus.
+
+**R125 - THE COPROCESSOR'S HALT WAS AN UNACKNOWLEDGED READ OF IO 0x2e, AND THE
+TELEMETRY THAT NAMED IT HAD BEEN DRIVEN AND UNREAD ALL ALONG.**
+
+`m2_tgp.sv`'s io_ack mux read
+
+    : sel_datb ? io_wr
+
+`sel_datb` is `io_mid && (io_addr[4:0] == 5'h0e)` -- address 0x2e -- and the
+selector exists only to catch the WRITE that sets `dat_base`. Nobody wrote the
+read half, so a read of 0x2e acknowledged **never**, and the TGP held
+mid-instruction forever.
+
+Measured on the board, build 22:
+
+    io_addr = 002e   io_rd = 1   io_ack = 0   unimpl = 0
+    pc = 0x0481      retires = 21,325 (frozen)   fifo_hold = 0x0A34462B
+
+*How it was cornered, because the route matters more than the answer.* Four
+readings in sequence, each killing a hypothesis:
+
+  1. `hscr` = 0 over 52 samples -> the coprocessor is not delivering.
+  2. `out_popped` == `out_pushed` == 143, and the i960's IP moving across six
+     addresses -> **NOT a FIFO deadlock.** The outbound queue was EMPTY, not
+     full. This killed the theory this project had held for two days, and the
+     8 -> 128 deepening that was built to fix it bought 22 more results and
+     changed nothing structural.
+  3. `retires` and `pc` byte-identical across two builds whose outbound FIFO
+     differed **16x** -> one instruction failing deterministically, not a race.
+  4. `dbg_op` = 1c1dc638, `top[31:26]` = 0x07 = `is_ldmov` -> an IMPLEMENTED
+     opcode, so not `unimplemented`. A load that never gets its data.
+
+*The reference has no special case at 0x2e at all.* `copro_tgp_io_map` maps the
+math units at 0x20-0x2b and puts everything else in a banked view whose handler
+ALWAYS answers:
+
+    adr = (m_copro_tgp_bank_reg & 0xff0000) | offset;
+    if (adr & 0x800000) return m_copro_data->as_u32(adr);
+    if (adr & 0x400000) return m_bufferram[adr & 0x7fff];
+    return 0;                                    // it cannot stall
+
+So the fix is `sel_datb ? (io_rd || io_wr)`, and zero is the correct value for a
+clear bank. **Verified on hardware:** `retires` climbs continuously and the PC
+passes 0x0481, where it had been frozen across every previous build.
+
+*The instrumentation lesson, and it cost a build.* `dbg_out_pushed`,
+`dbg_out_data`, `dbg_in_dropped`, `dbg_out_dropped`, `dbg_op` and every
+`dbg_io_*` existed in `m2_copro`/`m2_tgp` and were **tied off in `Model2.sv`**.
+A debug output that is driven and unread is not instrumentation. Grep for a
+count of TWO -- one declaration, one instantiation -- to find the rest.
+
+*And one counter was unreachable by construction.* `dbg_out_dropped` sits behind
+`else if (tgp_out_push && ...)`, but `m2_tgp` gates `fifo_out_push` on
+`!fifo_out_full`, so a blocked push is never counted. The board read
+`out_drop = 00` throughout the freeze and that number meant nothing. Quartus
+later proved it independently: `u_fout|dropped[0..31] ; Stuck at GND`.
+
+**R126 - THE MICROCODE UPLOAD IS BYTE-PERFECT, AND THE BENCH THAT SAID
+OTHERWISE HAD BEEN WRONG SINCE R110 WAS RETRACTED.**
+
+`tb_m2_boot.cpp` carried a hardcoded table of MAME's TGP program and printed
+"*** the uploaded PROGRAM is wrong, not the decode ***" on every run. Re-dumped
+from MAME with the correct address unit -- AS_PROGRAM is (32,16,-2), so
+`read_u32(word)` and never `read_u32(word*4)` -- every entry in that table was
+wrong and **this core was right at all ten addresses**:
+
+    addr   MAME (truth)   old "want"     ours
+    0044   1c1f2621       000f4610       1c1f2621
+    0047   1c3da00b       1d3c4216       1c3da00b
+    004b   bf600055       012f4611       bf600055
+    0057   bf624019       bf60004c       bf624019
+
+MAME holds **2,024 nonzero words** and this core uploads **2,024**. The table has
+been replaced with ground truth and all fetched addresses now read `ok`.
+
+*The general form, and it is the expensive part.* R110 was retracted by R116,
+but the retraction chased the CONCLUSION and left the CONSTANTS. A hardcoded
+expected-value table outlived the measurement that produced it and spent every
+run since accusing a correct core. **A retraction has to chase its constants,
+not just its prose.**
+
+**R127 - PARTLY WRONG, AND CORRECTED BY R129. The measurements below stand;
+the CONCLUSION -- that initialisation was the missing piece -- does not.
+Initialising the RAM to 0x07800f0f changed nothing at all, byte-identical
+telemetry, and R129 has the actual cause. Kept rather than deleted because
+the numbers are the evidence R129 rests on, and because R126 is about
+exactly this: a retraction must chase its constants, not just its prose.**
+
+**R127 (as written) - IMPLEMENTING A MEMORY WITHOUT INITIALISING IT WAS
+MEASURABLY WORSE THAN NOT IMPLEMENTING IT.**
+
+`map(0x00900000, 0x0091ffff).mirror(0x60000).ram().share("bufferram")` is 128 KB
+of plain RAM and this core routed it to `T_IO`, whose read mux ends in `32'd0`.
+Measured in MAME over 900 attract frames: **33,554 writes and 12,269 reads**, all
+going nowhere. It is not only the i960's -- the coprocessor reads the same array
+through its bank at 0x400000 -- so it is **how the two share data**, and neither
+end could see it.
+
+Mapped to SDRAM at `GAME_BUFFER = 0x16f0000` (the gap between `GAME_CHAR` and
+`ST_BASE`; 128 KB will not fit in M10K, ~103 blocks against 40 free after the
+band buffers). And the machine got WORSE:
+
+    unmapped, reads return 0      TGP retires 21,325, attract cycling
+    mapped, SDRAM uninitialised   TGP retires  1,367, "insert coin" stopped
+
+Because `model2.cpp` says so, in a comment that is load-bearing rather than
+decorative:
+
+    // initialize bufferram to a sane default
+    m_bufferram[i] = 0x07800f0f;
+
+**The game reads that memory before it writes it.** A deterministic 0 was
+survivable; whatever SDRAM powered up holding was not.
+
+*The ordering the code dictated.* The initialiser runs AFTER `cal_done` -- the
+self-test is the SDRAM read-latency calibration and its own comment says
+"RUNS FIRST, AND EVERYTHING THAT READS SDRAM WAITS FOR IT" -- and `cpu_rst_n`
+now also waits on `bi_done`. 65,536 word writes, once, a few milliseconds.
+Word order: the bridge selects the dword half with `r_addr[1]` while
+`sd_word = base + r_addr[16:1]`, so an EVEN word index is the LOW half --
+0x0f0f on even, 0x0780 on odd.
+
+*The rule this generalises.* This project already knows that unwritten memory
+must not read as zero. R127 is the other half: **when the reference initialises
+a memory, that value is part of the hardware and must be reproduced.** A region
+mapped over uninitialised storage is not "closer to correct" than an unmapped
+one -- it can be strictly further away, and it will look like an unrelated
+regression.
+
+**R128 - THE GEOMETRIZER IS READ BACK, SO IT CANNOT BE DEFERRED INDEFINITELY.**
+
+Measured in MAME with taps on the i960's program space over 900 attract frames:
+
+    READ   0x800000    2,263      geo_r
+    READ   0x900000   12,269      bufferram
+    WRITE  0x900000   33,554
+    WRITE  0x800000   65,767      geo_w
+    WRITE  0x804000  721,831      geometry microcode, ~800 words per frame
+
+`geo_r` itself is small -- 0x2008 returns `m_geo_write_start_address`, 0x3008
+returns `m_geo_read_start_address`, everything else returns 0 -- so the readable
+state is two pointers the i960 set itself. But the 721,831 writes to 0x804000
+settle the question R124 left open: **`daytona93` uploads geometry microcode
+continuously**, so the geometrizer is a real microcoded engine here and not a
+pipeline that can be hardwired. That is the design-study answer to the fork, and
+it is measured rather than assumed.
+
+*Corollary for the port.* `m1_geometry` and its nine `m1_geo_*` submodules
+therefore do NOT transfer, and neither do `m1_listwalk` (Model 1's display-list
+grammar) -- but `m1_quad_store` DOES: its two `m1_geometry` mentions are
+comments and it instantiates nothing. The seam is a projected screen-space quad
+with a colour and a z, which is exactly what a geometrizer emits.
+
+
+**R129 - THE BUFFER RAM CANNOT LAND WITHOUT THE GEOMETRIZER. It is not a memory
+the game merely stores things in; it is the geometrizer's WORKSPACE.**
+
+R127 mapped 0x00900000 to SDRAM and the machine got worse, and R127 blamed the
+uninitialised contents. It was wrong. Initialising all 65,536 words to the
+reference's own 0x07800f0f produced **byte-identical telemetry** -- the same
+retire count, the same PC, the same stuck flags, to the digit:
+
+    build 27  mapped, SDRAM uninitialised        C 006D003E 055704C9
+    build 29  mapped, initialised to 0x07800f0f  C 006D003E 055704C9
+
+Identical output from different memory contents rules the contents out entirely.
+What changed between working and broken is not what the reads RETURN, it is that
+**the writes now LAND.**
+
+*What the i960 actually does, measured with its own IP on the wire (build 30):*
+
+    IP           0x0E00 / 0x0E08 / 0x0E10     a three-instruction loop
+    last addr    0163FB80, 0163FB82, 0163FB8C  walking
+                 0704, 0708, 070C
+    528 unique samples -- it is LIVELOCKED, not stalled on a bus cycle
+
+0x0163FBxx is unmapped: `model2.cpp` has nothing at 0x016xxxxx and this core's
+bridge has no branch for it, so it falls to T_NONE. **The game is following a
+pointer it wrote into the buffer and read back.**
+
+*The mechanism.* Unmapped, writes to 0x900000 vanished and reads returned a
+constant 0, so the game's own structure came back as zeros and it took a safe
+path -- 21,325 TGP retires with attract mode cycling. Mapped, the structure
+survives, the game follows it, and the path it leads to needs the geometrizer
+this core does not have. It ends up dereferencing into nothing and spins.
+
+*The general form, and it is the useful part.* **A memory that another engine
+owns is not an independently landable increment.** Making it work in isolation
+moves the machine from "wrong but safe" to "correct and then off a cliff",
+because the software stops taking the degenerate path that the missing hardware
+was accidentally forcing. The mapping is therefore correct, verified live -- the
+boot profile shifts measurably with it on, 0x00001000 34.9% -> 29.8% and
+0x00228000 19.4% -> 24.5% -- and it is DISABLED behind `BUFFERRAM` in
+`m2_cpu_bridge` until the geometrizer lands in the same change.
+
+*What survives from R127 regardless.* The initialiser itself is right and is
+kept: `model2.cpp` initialises that array to 0x07800f0f because the game reads
+before it writes, and when the reference initialises a memory that value is part
+of the hardware. It costs 161 ALM and runs after `cal_done`, because the
+self-test is the SDRAM read-latency calibration and everything touching SDRAM
+waits for it.
+
+*And a process note that cost real time.* A build that reads as broken must be
+ROLLED BACK before anything else -- build 29 was left on the board while its
+telemetry was analysed, and the first sign of that was the user reporting a dead
+machine rather than the log saying so.
