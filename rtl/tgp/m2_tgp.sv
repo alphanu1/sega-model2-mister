@@ -524,7 +524,25 @@ module m2_tgp #(
   assign io_ack = sel_radr ? (io_rd || io_wr)
                 : sel_rdat ? ram_ack
                 : sel_math ? (io_wr || tbl_ack)
-                : sel_datb ? io_wr
+                // 0x2e ACKS READS TOO, AND THIS HALTED THE COPROCESSOR.
+                //
+                // This selector exists to catch the WRITE that sets dat_base
+                // (below). The read half was never written, so `io_ack = io_wr`
+                // left every read of 0x2e unacknowledged and the TGP held
+                // mid-instruction, forever. Measured on the board: io_addr=002e,
+                // io_rd=1, io_ack=0, halted at pc 0x0481 after exactly 21,325
+                // retires -- identical across builds whose outbound FIFO differed
+                // 16x, which is what ruled out a handshake race and named this.
+                //
+                // The reference has no special case here at all. 0x2e falls into
+                // copro_tgp_io_map's banked view, and copro_tgp_memory_r ALWAYS
+                // answers: data ROM if the bank sets bit 23, bufferram if bit 22,
+                // otherwise `return 0`. It cannot stall. Zero is therefore the
+                // right answer for a clear bank, and io_rdata already defaults to
+                // it -- if the microcode turns out to need the banked data, that
+                // shows up as wrong values rather than a hang, and the bank
+                // register (rf 3) is where to implement it.
+                : sel_datb ? (io_rd || io_wr)
                 : sel_datw ? dat_ack
                 : (io_rd || io_wr);   // AS_RF LEDs and anything unmapped
 
