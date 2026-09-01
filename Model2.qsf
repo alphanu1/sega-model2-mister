@@ -64,7 +64,22 @@ set_global_assignment -name FINAL_PLACEMENT_OPTIMIZATION ALWAYS
 # This is Intel's own documented remedy for the error we get, and it was never
 # set: "Guideline: Set Fitter Aggressive Routability Optimizations to Always".
 # It may cost some Fmax, which is measurable; a design that does not fit is not.
-set_global_assignment -name FITTER_AGGRESSIVE_ROUTABILITY_OPTIMIZATION ALWAYS
+# AUTOMATICALLY, NOT ALWAYS -- AND THE REASON IS THE FAILING PATH ITSELF.
+#
+# The worst path across several seeds is `hdmi_out_vs <= vs` in sys_top: two
+# registers, same clock, NO LOGIC BETWEEN THEM. A bare flop-to-flop path can
+# only fail on physical distance, which is why turning off
+# PHYSICAL_SYNTHESIS_COMBO_LOGIC_FOR_AREA gave a byte-identical result -- there
+# is nothing there to restructure. This option DELIBERATELY SPREADS LOGIC to
+# relieve congestion, and spreading is exactly what pulls two adjacent flops
+# apart. ALWAYS forces it everywhere; AUTOMATICALLY lets the fitter apply it
+# where it is actually needed.
+#
+# It was added for a real failure -- the fitter could not route at all, on a
+# different contended resource per seed -- so if routing fails again, this is
+# the line to put back. Model 1 closes at 91% ALM against our 78%, so
+# occupancy is not what is hurting us here.
+set_global_assignment -name FITTER_AGGRESSIVE_ROUTABILITY_OPTIMIZATION AUTOMATICALLY
 set_global_assignment -name FITTER_EFFORT "STANDARD FIT"
 # BALANCED, NOT AGGRESSIVE AREA. Aggressive Area crashed this fitter twice in
 # succession -- "Fatal Error: Segment Violation at (nil)" after placement
@@ -90,7 +105,13 @@ set_global_assignment -name OPTIMIZATION_TECHNIQUE SPEED
 set_global_assignment -name MUX_RESTRUCTURE ON
 set_global_assignment -name REMOVE_REDUNDANT_LOGIC_CELLS ON
 set_global_assignment -name AUTO_DELAY_CHAINS_FOR_HIGH_FANOUT_INPUT_PINS ON
-set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC_FOR_AREA ON
+# OFF: a leftover from the area experiment this file says was ABANDONED.
+# The design is in HIGH PERFORMANCE EFFORT with OPTIMIZATION_TECHNIQUE SPEED
+# and 8,940 ALM spare, so area-targeted combinational restructuring is buying
+# nothing and costing path depth. Turned off ALONE -- it is not one of the
+# four whose removal segfaults this fitter, and the A/B is seed 19, which
+# missed at -0.124 with it on.
+set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC_FOR_AREA OFF
 set_global_assignment -name ADV_NETLIST_OPT_SYNTH_WYSIWYG_REMAP ON
 set_global_assignment -name SYNTH_GATED_CLOCK_CONVERSION ON
 set_global_assignment -name PRE_MAPPING_RESYNTHESIS ON
@@ -487,3 +508,4 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/tgp/mb86233_core.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/tgp/m2_tgp.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/tgp/m2_copro.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/tgp/m2_fifo_m10k.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_geo.sv

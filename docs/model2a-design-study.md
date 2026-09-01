@@ -7213,7 +7213,15 @@ mapped over uninitialised storage is not "closer to correct" than an unmapped
 one -- it can be strictly further away, and it will look like an unrelated
 regression.
 
-**R128 - THE GEOMETRIZER IS READ BACK, SO IT CANNOT BE DEFERRED INDEFINITELY.**
+**R128 - PARTLY WRONG, CORRECTED BY R130. The access COUNTS below are right
+and they matter. The inference drawn from them -- that 721,831 writes to
+0x804000 mean the game uploads geometry microcode continuously, so the
+geometrizer must be a microcoded processor -- is WRONG. Most of those writes
+are DISPLAY-LIST DATA, and the reference discards the microcode entirely.
+See R130.**
+
+**R128 (as written) - THE GEOMETRIZER IS READ BACK, SO IT CANNOT BE DEFERRED
+INDEFINITELY.**
 
 Measured in MAME with taps on the i960's program space over 900 attract frames:
 
@@ -7290,3 +7298,163 @@ waits for it.
 ROLLED BACK before anything else -- build 29 was left on the board while its
 telemetry was analysed, and the first sign of that was the user reporting a dead
 machine rather than the log saying so.
+
+
+**R130 - THE GEOMETRIZER IS A DISPLAY-LIST INTERPRETER, NOT A PROCESSOR, AND THE
+MICROCODE UPLOAD IS DISCARDED BY THE REFERENCE.**
+
+R124 asked whether `geo_code_upload` meant the geometrizer had to be a real
+microcode engine, and R128 answered "yes" from the write count. Both were wrong,
+and the answer is four lines of `model2.cpp`:
+
+    void model2_state::geo_prg_w(u32 data) {
+        if (m_geoctl & 0x80000000) { m_geocnt++; }   // upload: COUNTS, DISCARDS
+        else                       { push_geo_data(data); }
+    }
+
+**The upload is counted and thrown away.** MAME implements no geometrizer
+microcode at all; `geo_process_command` hardcodes the standard pipeline. So the
+721,831 writes to 0x804000 are overwhelmingly `push_geo_data` -- the game
+streaming its DISPLAY LIST into buffer RAM through an auto-incrementing pointer,
+not instructions.
+
+*The machine, in full:*
+
+    0x00800000-0x00800fff   function writes -> push_geo_data
+    0x00801008 (w)          geo_write_start_address
+    0x00803008 (w)          geo_read_start_address
+    0x00802008 (r)          returns geo_write_start_address
+    0x00803008 (r)          returns geo_read_start_address
+    0x00804000-0x00807fff   geoctl[31] ? count+discard : push_geo_data
+    0x00980008              geo_ctl1, bit 31 = upload mode
+    0x00900000-0x0091ffff   bufferram: the display list itself
+
+    push_geo_data(d) { m_bufferram[m_geo_write_start_address/4] = d;
+                       m_geo_write_start_address += 4; }
+
+and once per frame, at vblank, gated on `(videocontrol & 1) == 0 || !(frame & 1)`:
+
+    geo_parse():  input = &bufferram[geo_read_start_address/4]
+                  opcode = *input++
+                  if (opcode & 0x80000000) -> jump to (opcode & 0x1ffff)/4
+                  else input = geo_process_command(opcode, input, &end)
+                  bounded by 0x8000 opcodes and the end of bufferram
+
+That is `m1_listwalk`'s shape -- a bounded walk over a command list with a jump
+opcode -- and NOT a processor. The renderer budget from R124 stands, but the
+front end is far cheaper than "double the cost" and needs no program memory,
+no instruction decode and no sequencer beyond a walk.
+
+*And it probably explains yesterday's livelock.* `geo_r` returns
+`geo_write_start_address` at 0x2008 and `geo_read_start_address` at 0x3008. This
+core returns **0** for both, because that region falls into the bridge's T_IO
+default. The game sets a pointer, reads it back as zero, and derives an address
+from it -- which is exactly the shape of the failure R129 recorded: the i960
+livelocked walking an unmapped 0x0163FBxx once buffer RAM writes started
+landing. Two pointer registers are cheap and are the first thing to build.
+
+*The lesson, and it is the same one twice in two days.* R128 inferred a design
+from an ACCESS COUNT without reading the handler the accesses reach. A large
+write count to a port named "program" is not evidence of a program: here it was
+one branch of an if, and the other branch is the whole traffic. **Read the
+handler, not the histogram.**
+
+**R131 - THE TIMING COIN FLIP WAS `FITTER_AGGRESSIVE_ROUTABILITY_OPTIMIZATION
+ALWAYS`, AND THE FAILING PATH NAMED IT.**
+
+Builds had been missing timing about half the time, on a different clock each
+seed -- `pll_hdmi` at -0.124, the SDRAM domain at -0.059 -- always by a hair,
+always a single path. Two things cracked it, and neither was a synthesis option.
+
+*First, the path was read instead of guessed.*
+
+    quartus_sta:  SLACK -0.124   FROM vs   TO hdmi_out_vs
+
+and in `sys/sys_top.v` those are two registers in the SAME always block on the
+SAME clock:
+
+    hdmi_out_vs <= vs;
+
+**A bare flop-to-flop path with no logic between it can only fail on physical
+distance.** That immediately explains why turning
+`PHYSICAL_SYNTHESIS_COMBO_LOGIC_FOR_AREA` off produced a BYTE-IDENTICAL result
+-- same slack, same TNS, same ALM count -- there is nothing there to restructure.
+A null result worth having: it is not a hidden drag on this design.
+
+*Second, occupancy was ruled out from outside.* Model 1 closes at 91% ALM on the
+same part; we were failing at 78%. So the problem was not how full the chip is,
+which is what sent the search to placement SETTINGS.
+
+`FITTER_AGGRESSIVE_ROUTABILITY_OPTIMIZATION` deliberately SPREADS LOGIC to
+relieve congestion, and spreading is exactly what pulls two adjacent flops apart.
+The A/B, same seed, one option changed:
+
+    seed 19, ALWAYS          -0.124  FAIL   32,970 ALM
+    seed 19, AUTOMATICALLY   +0.428  PASS   33,323 ALM
+
+**A 0.552 ns swing for 353 ALM**, and the worst path moved off HDMI entirely.
+
+*It was added for a real failure and the reason still stands.* At 79% the fitter
+could not route at all -- one contended resource at a time, a different one per
+seed. `AUTOMATICALLY` lets it apply the same optimisation where it is needed
+rather than everywhere. If routing ever fails again, `ALWAYS` is the line to put
+back, and this entry is why it was changed.
+
+*The rule.* When a path fails, READ IT before changing a setting. A failing path
+with no combinational logic is a placement problem and no amount of synthesis
+effort will touch it; a failing path inside the framework is not ours to fix at
+all. Both were true here, and both were invisible from the slack number alone.
+
+**R132 - THE BUFFER RAM MAPPING IS PROVEN CORRECT, AND ENABLING IT STILL BREAKS
+THE MACHINE. R129's EXPLANATION IS WRONG.**
+
+R129 said the game "writes a structure, reads it back and follows it", and that
+the livelock was the game proceeding down a path needing the geometrizer. Two
+measurements since say otherwise.
+
+*The mapping is not at fault.* `tb_m2_cpu_bridge` now covers the region directly
+-- 106 checks, 0 mismatches: a dword lands in two SDRAM words at
+`base + (offset >> 1)`, reads back whole, the `.mirror(0x60000)` aliases rather
+than addressing new storage, and the last dword of the 128 KB does not run past
+the region. The decode, the halves and the mirror are all correct.
+
+*The reference never goes where we go.* Tapping the i960's whole program space
+in MAME over 900 attract frames:
+
+    REFERENCE NEVER TOUCHES 0x01600000-0x0170ffff
+
+while our i960 walks 0x0163FB80, 84, 8E, 90 there. So this is not the game
+following its own pointer into unimplemented territory -- **it is our machine
+computing an address the real one never computes.**
+
+*And the loop is a memory clear.* The code at the livelock, read out of the ROM
+through MAME:
+
+    0e00  b2805000   stq    (0xb2 = store quad, 16 bytes)
+    0e04  59084810   addo
+    0e08  b2a05000   stq         four stq/addo pairs, 64 bytes an iteration
+    0e0c  59084810   addo
+    0e10  b2c05000   stq
+    ...
+    0e30  00500000   <- work RAM base, as data
+
+which is why the profiler only ever catches 0x0E00/0x0E08/0x0E10: the stores are
+where the time goes. The clear is running away.
+
+*What is excluded, each checked rather than assumed:* the mapping (above), the
+contents (initialising to the reference's own 0x07800f0f gave byte-identical
+telemetry, R127/R129), the burst flag (0x0090_0000-0x0098_0000 was already in
+`i960_memmap`'s table), cache aliasing (the tag is the full upper address), a
+region collision (`cc_addr` is exactly 18 bits and the ROM image ends near word
+0x15F8000), and the geometrizer's pointer registers (build 35 added them and
+livelocked identically).
+
+*And simulation does not reproduce it.* With `BUFFERRAM` on, the boot bench's CPU
+profile SHIFTS -- 0x00001000 34.9% -> 29.8%, 0x00228000 19.4% -> 24.5%, so the
+region is genuinely live -- but it never visits 0x0163Fxxx and never livelocks.
+The fault is hardware-only, which is the least convenient shape it could take.
+
+`BUFFERRAM` is therefore still off, and it is off with a proven-correct mapping
+behind it rather than a suspect one. The next move is instrumentation, not
+theory: the i960's IP RING rather than a sampled IP, which shows the loop body
+and what it reads immediately before the address goes wrong.

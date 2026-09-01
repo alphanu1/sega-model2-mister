@@ -557,9 +557,9 @@ m2_sdram_x2 #(.NP(NPORTS), .AW(SDR_AW)) u_sdram_x2 (
 	.clk_fast(clk_mem),
 	.s_req(p_req), .s_addr(p_addr), .s_ack(p_ack), .s_dout(p_dout),
 	.s_we(p_we),   .s_din(p_din),   .s_be(p_be),
-	.s_wr_req(bi_run ? bi_req : st_run ? st_req : ldr_wr_req),
-	.s_wr_addr(bi_run ? bi_addr : st_run ? st_addr : ldr_wr_addr),
-	.s_wr_din(bi_run ? bi_din : st_run ? st_din : ldr_wr_din),
+	.s_wr_req(bi_run ? bi_req : st_run ? st_req : geo_sd_busy ? geo_sd_req : ldr_wr_req),
+	.s_wr_addr(bi_run ? bi_addr : st_run ? st_addr : geo_sd_busy ? geo_sd_addr : ldr_wr_addr),
+	.s_wr_din(bi_run ? bi_din : st_run ? st_din : geo_sd_busy ? geo_sd_din : ldr_wr_din),
 	.s_wr_be(2'b11), .s_wr_ack(ldr_wr_ack),
 	.f_req(f_req), .f_addr(f_addr), .f_ack(f_ack), .f_dout(f_dout),
 	.f_we(f_we),   .f_din(f_din),   .f_be(f_be),
@@ -1523,7 +1523,7 @@ wire [15:0] cpu_sd_din;
 wire  [1:0] cpu_sd_be;
 wire [31:0] cpu_dbg_rd, cpu_dbg_wr, cpu_dbg_unmapped;
 
-m2_cpu_bridge #(.AW(SDR_AW), .BOARD_2A(1'b0), .DCACHE_EN(1'b1)) u_cpu_bridge (
+m2_cpu_bridge #(.BUFFERRAM(1'b0), .AW(SDR_AW), .BOARD_2A(1'b0), .DCACHE_EN(1'b1)) u_cpu_bridge (
 	.dbg_dc_hits(dc_hits), .dbg_dc_miss(dc_miss),
 	.char_wr(cpu_char_wr), .char_wr_addr(cpu_char_wr_addr),
 	.clk_cpu(clk_i960), .rst_n_cpu(cpu_rst_n),
@@ -1874,6 +1874,10 @@ assign cpu_irq = { |(io_intreq & 12'hc00), |(io_intreq & 12'h3fc),
 // reasons. A constant satisfies whichever of them it was tuned for and deadlocks
 // the other.
 assign cpu_io_rdata =
+	// geo_r: the game sets these and READS THEM BACK to find where it is.
+	// Returning 0 is the suspected cause of the R129 livelock.
+	(cpu_io_addr[23:0] == 24'h802008) ? geo_rd_wp :
+	(cpu_io_addr[23:0] == 24'h803008) ? geo_rd_rp :
 	// The sound UART, byte 0 = data and byte 2 = status. Read as a dword the
 	// i960 gets both, which is what .umask16(0x00ff) presents.
 	(cpu_io_addr[23:2] == 22'h32_0000)
@@ -1963,6 +1967,40 @@ wire        copro_fifo_sel = cpu_io_sel && (cpu_io_addr[23:14] == 10'h221);
 // command code is the address: MAME takes (offset >> 2) & 0xff of a dword
 // offset, which is bits 11:4 of the byte address.
 wire        copro_fn_sel   = cpu_io_sel && (cpu_io_addr[23:14] == 10'h220);
+// ------------------------------------------------------------- GEOMETRIZER
+// The front door only: two pointers and the push path. The reference DISCARDS
+// the microcode upload and hardcodes the pipeline, so there is no program
+// memory here and no decode -- see study R130. The list walk comes next.
+//
+//   0x00800000-0x00800fff  function writes -> push
+//   0x00801008 (w)         set write pointer      0x00802008 (r) read it back
+//   0x00803008 (w/r)       read pointer
+//   0x00804000-0x00807fff  geoctl[31] ? count+discard : push
+//   0x00980008             geo_ctl1
+wire geo_wr_ctl   = cpu_io_sel && cpu_io_we && (cpu_io_addr[23:0]  == 24'h980008);
+wire geo_wr_setwp = cpu_io_sel && cpu_io_we && (cpu_io_addr[23:0]  == 24'h801008);
+wire geo_wr_setrp = cpu_io_sel && cpu_io_we && (cpu_io_addr[23:0]  == 24'h803008);
+wire geo_wr_push  = cpu_io_sel && cpu_io_we &&
+                    ((cpu_io_addr[23:12] == 12'h800) ||          // 0x800000-0x800fff
+                     (cpu_io_addr[23:14] == 10'h201));           // 0x804000-0x807fff
+wire [31:0] geo_rd_wp, geo_rd_rp, geo_pushes, geo_dropped, geo_ctl_dbg;
+wire [15:0] geo_cnt_dbg;
+wire        geo_sd_req, geo_sd_busy;
+wire [SDR_AW:1] geo_sd_addr;
+wire [15:0] geo_sd_din;
+
+m2_geo #(.AW(SDR_AW), .DEPTH(128)) u_geo (
+	.clk(clk_sys), .rst_n(mem_rst_n),
+	.wr_ctl(geo_wr_ctl), .wr_setwp(geo_wr_setwp), .wr_setrp(geo_wr_setrp),
+	.wr_push(geo_wr_push), .wdata(cpu_io_wdata),
+	.rd_wp(geo_rd_wp), .rd_rp(geo_rd_rp),
+	.base_buffer(GAME_BUFFER),
+	.sd_wr_req(geo_sd_req), .sd_wr_addr(geo_sd_addr), .sd_wr_din(geo_sd_din),
+	.sd_wr_ack(ldr_wr_ack), .sd_busy(geo_sd_busy),
+	.dbg_pushes(geo_pushes), .dbg_dropped(geo_dropped),
+	.dbg_geocnt(geo_cnt_dbg), .dbg_geoctl(geo_ctl_dbg)
+);
+
 wire        copro_ctl_sel  = cpu_io_sel && (cpu_io_addr[23:0]  == 24'h980000);
 wire        copro_fctl_sel = cpu_io_sel && (cpu_io_addr[23:0]  == 24'h980004);
 wire        copro_sel      = copro_fifo_sel | copro_ctl_sel | copro_fctl_sel;

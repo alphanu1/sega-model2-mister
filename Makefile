@@ -514,7 +514,7 @@ test_m2_cpu_bridge: obj_m2_bridge/Vm2_cpu_bridge
 	@./obj_m2_bridge/Vm2_cpu_bridge $(TEST_ARGS)
 
 obj_m2_bridge/Vm2_cpu_bridge: rtl/io/m2_cpu_bridge.sv sim/mem/tb_m2_cpu_bridge.cpp
-	$(VBUILD) --top-module m2_cpu_bridge -CFLAGS "-O2" \
+	$(VBUILD) --top-module m2_cpu_bridge -GBUFFERRAM=1 -CFLAGS "-O2" \
 	  --Mdir obj_m2_bridge -o Vm2_cpu_bridge rtl/io/m2_cpu_bridge.sv sim/mem/tb_m2_cpu_bridge.cpp
 
 # The bridge against the REAL controller. Both pass their own tests; this is the

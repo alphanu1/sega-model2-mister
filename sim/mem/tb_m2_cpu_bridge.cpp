@@ -156,7 +156,7 @@ int main(int argc, char **argv) {
   dut->rst_n_cpu = 0; dut->rst_n_mem = 0;
   dut->bus_req = 0; dut->sd_ack = 0; dut->io_rdata = 0;
   dut->base_prog = 0x00000; dut->base_data = 0x40000;
-  dut->base_work = 0x20000; dut->base_board = 0x30000; dut->base_char = 0x38000;
+  dut->base_work = 0x20000; dut->base_board = 0x30000; dut->base_char = 0x38000; dut->base_buffer = 0x40000;
   for (int i = 0; i < 200; ++i) step();
   dut->rst_n_cpu = 1; dut->rst_n_mem = 1;
   // LONG ENOUGH FOR THE CACHE'S RESET SWEEP, WHICH IS NOT A FIXED NUMBER.
@@ -185,6 +185,34 @@ int main(int argc, char **argv) {
     expect("work RAM high word", sdram[0x20000 + ((0x00500010u & 0xfffffu) >> 1) + 1], 0xdead);
     access(false, 0x00500010u, 0, 0xf, &v);
     expect("work RAM readback", v, 0xdeadbeefu);
+  }
+
+  // ---- the shared buffer RAM at 0x00900000, 128 KB, mirrored to 0x0097ffff ----
+  //
+  // Mapping this region made the machine WORSE on hardware: the i960's clear
+  // loop at 0x0E00 walked into 0x0163Fxxx, which the reference never touches.
+  // Before blaming the game, prove the mapping itself: a dword must land in two
+  // SDRAM words at base + (offset >> 1), read back whole, and the mirror must
+  // alias rather than address new storage.
+  {
+    uint32_t v = 0;
+    access(true,  0x00900010u, 0xcafef00du, 0xf, nullptr);
+    expect("buffer low word",  sdram[0x40000 + ((0x00900010u & 0x1ffffu) >> 1)],     0xf00d);
+    expect("buffer high word", sdram[0x40000 + ((0x00900010u & 0x1ffffu) >> 1) + 1], 0xcafe);
+    access(false, 0x00900010u, 0, 0xf, &v);
+    expect("buffer readback", v, 0xcafef00du);
+
+    // the mirror: 0x920000 is the same 128 KB seen again
+    access(false, 0x00920010u, 0, 0xf, &v);
+    expect("buffer mirror reads the same", v, 0xcafef00du);
+    access(true,  0x00940010u, 0x12345678u, 0xf, nullptr);
+    access(false, 0x00900010u, 0, 0xf, &v);
+    expect("mirror write aliases", v, 0x12345678u);
+
+    // the top of the region must not run past 128 KB into whatever is next
+    access(true,  0x0091fffcu, 0xa5a55a5au, 0xf, nullptr);
+    expect("last dword low",  sdram[0x40000 + (0x1fffcu >> 1)],     0x5a5a);
+    expect("last dword high", sdram[0x40000 + (0x1fffcu >> 1) + 1], 0xa5a5);
   }
 
   // ---- program ROM is READ ONLY: the write must not land ----
