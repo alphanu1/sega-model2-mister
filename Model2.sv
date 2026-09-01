@@ -557,9 +557,9 @@ m2_sdram_x2 #(.NP(NPORTS), .AW(SDR_AW)) u_sdram_x2 (
 	.clk_fast(clk_mem),
 	.s_req(p_req), .s_addr(p_addr), .s_ack(p_ack), .s_dout(p_dout),
 	.s_we(p_we),   .s_din(p_din),   .s_be(p_be),
-	.s_wr_req(st_run ? st_req : ldr_wr_req),
-	.s_wr_addr(st_run ? st_addr : ldr_wr_addr),
-	.s_wr_din(st_run ? st_din : ldr_wr_din),
+	.s_wr_req(bi_run ? bi_req : st_run ? st_req : ldr_wr_req),
+	.s_wr_addr(bi_run ? bi_addr : st_run ? st_addr : ldr_wr_addr),
+	.s_wr_din(bi_run ? bi_din : st_run ? st_din : ldr_wr_din),
 	.s_wr_be(2'b11), .s_wr_ack(ldr_wr_ack),
 	.f_req(f_req), .f_addr(f_addr), .f_ack(f_ack), .f_dout(f_dout),
 	.f_we(f_we),   .f_din(f_din),   .f_be(f_be),
@@ -869,6 +869,49 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	end
 end
 
+// BUFFER RAM INITIALISATION, AND IT IS NOT OPTIONAL.
+//
+// model2.cpp: "initialize bufferram to a sane default", m_bufferram[i] =
+// 0x07800f0f. That comment exists because THE GAME READS THIS MEMORY BEFORE IT
+// WRITES IT, and the value is not zero.
+//
+// Mapping the RAM without initialising it is WORSE than leaving it unmapped.
+// Unmapped, reads returned a deterministic 0 and the machine reached 21,325 TGP
+// retires; mapped over uninitialised SDRAM it died at 1,367 with "insert coin"
+// no longer flashing. Both measured on the board, builds 25 and 27.
+//
+// AFTER cal_done, NOT BEFORE. The self-test above is the read-latency
+// calibration and everything touching SDRAM waits for it; this only writes, but
+// it shares the write port, so it takes its turn rather than racing. The i960
+// then waits for `bi_done` -- 65,536 word writes, a few milliseconds, once.
+//
+// Word order: the bridge selects the half with r_addr[1] and sd_word is
+// base + r_addr[16:1], so an EVEN word index is the LOW half of the dword.
+localparam int unsigned BUF_WORDS = 65536;      // 128 KB as 16-bit words
+logic            bi_run, bi_req, bi_done;
+logic [SDR_AW:1] bi_addr;
+logic [15:0]     bi_din;
+logic [16:0]     bi_idx;
+
+assign bi_run = rom_loaded && cal_done && !bi_done;
+
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+	if (!mem_rst_n) begin
+		bi_req <= 1'b0; bi_done <= 1'b0; bi_idx <= 17'd0;
+		bi_addr <= '0; bi_din <= 16'd0;
+	end else if (rom_loaded && cal_done && !bi_done) begin
+		if (!bi_req) begin
+			bi_addr <= GAME_BUFFER + SDR_AW'(bi_idx);
+			bi_din  <= bi_idx[0] ? 16'h0780 : 16'h0f0f;
+			bi_req  <= 1'b1;
+		end else if (ldr_wr_ack) begin
+			bi_req <= 1'b0;
+			if (bi_idx == 17'(BUF_WORDS - 1)) bi_done <= 1'b1;
+			else                              bi_idx  <= bi_idx + 17'd1;
+		end
+	end
+end
+
 assign st_run = rom_loaded && (st_state >= 4'd1) && (st_state <= 4'd8);
 
 always_ff @(posedge clk_sys or negedge mem_rst_n) begin
@@ -1006,6 +1049,8 @@ localparam logic [SDR_AW:1] GAME_DATA  = SDR_AW'(32'h0020000);   // byte 0x40000
 localparam logic [SDR_AW:1] GAME_WORK  = SDR_AW'(32'h1620000);   // 1 MB
 localparam logic [SDR_AW:1] GAME_BOARD = SDR_AW'(32'h16a0000);   // 128 KB
 localparam logic [SDR_AW:1] GAME_CHAR  = SDR_AW'(32'h16b0000);   // 512 KB
+// 0x16f0000 is the first word free after GAME_CHAR; ST_BASE is at 0x1F00000.
+localparam logic [SDR_AW:1] GAME_BUFFER = SDR_AW'(32'h16f0000);   // 128 KB, 0x00900000
 
 // WHERE CHARACTER RAM LIVES, AS ONE SIGNAL, because two things that must agree
 // should not be two constants (study R51).
@@ -1396,7 +1441,7 @@ wire game_image = rom_loaded && (ldr_top > SDR_AW'(32'h0080000));
 // being issued at CL+0 because cal_sel resets to 0 and calibration had not run
 // yet. Boot vectors captured two words early are garbage, and the CPU then runs
 // from them. The overlay's intermittent PRCB/IP was this, not marginal SDRAM.
-wire cpu_rst_n = game_rst_n & rom_loaded & game_image & cal_done;
+wire cpu_rst_n = game_rst_n & rom_loaded & game_image & cal_done & bi_done;
 
 wire        cpu_req, cpu_we;
 wire [31:0] cpu_addr, cpu_wdata, cpu_rdata;
@@ -1487,7 +1532,7 @@ m2_cpu_bridge #(.AW(SDR_AW), .BOARD_2A(1'b0), .DCACHE_EN(1'b1)) u_cpu_bridge (
 
 	.clk_mem(clk_sys), .rst_n_mem(cpu_rst_n),
 	.base_prog(GAME_PROG), .base_data(GAME_DATA), .base_work(GAME_WORK),
-	.base_board(GAME_BOARD), .base_char(char_base),
+	.base_board(GAME_BOARD), .base_char(char_base), .base_buffer(GAME_BUFFER),
 
 	.sd_req(cpu_sd_req), .sd_we(cpu_sd_we), .sd_addr(cpu_sd_addr),
 	.sd_din(cpu_sd_din), .sd_be(cpu_sd_be),
@@ -1930,8 +1975,22 @@ wire        copro_stall;
 wire [31:0] copro_dbg_ctl;
 wire [15:0] copro_prog_words, copro_in_pushed, copro_out_popped;
 wire [31:0] copro_fctl_reads;
+// THE COPRO'S ACCEPTANCE COUNTERS, ON THE UART. Layer 2's hscr stays zero
+// while the TGP returns nothing (R106, R120), and these say which half is at
+// fault: in_pushed climbing with out_pushed flat is a TGP that consumes and
+// never answers; both flat is an i960 that never issues; drops moving means
+// the 128-deep queue is losing commands the game believes it sent.
+wire [31:0] copro_out_data, copro_out_pushed, copro_in_dropped, copro_out_dropped;
 wire        copro_ram_req;
 wire [15:0] tgp_retires, tgp_pc;
+// WHY THE TGP STOPPED. It halts at pc 0x0481 after exactly 21,325 retires,
+// byte-identical across two builds whose outbound FIFO differed 16x -- so it
+// is not a handshake race, it is one instruction failing the same way. op is
+// the instruction word; io_rd or io_wr held with no ack is an unanswered IO
+// access and io_addr names which one.
+wire [31:0] tgp_op, tgp_hold;
+wire [15:0] tgp_io_addr;
+wire        tgp_io_rd, tgp_io_wr, tgp_io_ack, tgp_fifo_rd, tgp_fifo_wr;
 wire        tgp_unimpl;
 
 // A REGISTER STAGE ON THE COPROCESSOR'S SDRAM RETURN, and it is a measured fix
@@ -2005,10 +2064,16 @@ m2_copro u_copro (
 	.dbg_ctl(copro_dbg_ctl), .dbg_prog_words(copro_prog_words),
 	.dbg_in_pushed(copro_in_pushed), .dbg_out_popped(copro_out_popped),
 	.dbg_fctl_reads(copro_fctl_reads),
-	.dbg_in_popped(), .dbg_pop_data(), .dbg_push_data(), .dbg_out_data(), .dbg_out_pushed(), .dbg_in_dropped(), .dbg_out_dropped(),
+	.dbg_in_popped(), .dbg_pop_data(), .dbg_push_data(),
+	.dbg_out_data(copro_out_data), .dbg_out_pushed(copro_out_pushed),
+	.dbg_in_dropped(copro_in_dropped), .dbg_out_dropped(copro_out_dropped),
 	.dbg_ram_req(copro_ram_req),
 	.dbg_tgp_retires(tgp_retires), .dbg_tgp_pc(tgp_pc),
-	.dbg_tgp_hold(), .dbg_tgp_wr_n(), .dbg_tgp_wr_addr(), .dbg_tgp_wr_data(), .dbg_tgp_st(), .dbg_tgp_a(), .dbg_tgp_b(), .dbg_tgp_d(),
+	.dbg_tgp_wr_n(), .dbg_tgp_wr_addr(), .dbg_tgp_wr_data(), .dbg_tgp_st(), .dbg_tgp_a(), .dbg_tgp_b(), .dbg_tgp_d(),
+	.dbg_tgp_op(tgp_op), .dbg_tgp_hold(tgp_hold),
+	.dbg_tgp_io_addr(tgp_io_addr), .dbg_tgp_io_rd(tgp_io_rd),
+	.dbg_tgp_io_wr(tgp_io_wr), .dbg_tgp_io_ack(tgp_io_ack),
+	.dbg_tgp_fifo_rd(tgp_fifo_rd), .dbg_tgp_fifo_wr(tgp_fifo_wr),
 	.dbg_tgp_unimpl(tgp_unimpl)
 );
 
@@ -2242,7 +2307,7 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 end
 
 // THE SERIAL CHANNEL. docs/mister-integration.md said this was available and
-// was not acted on; CLAUDE.md's summary flattened it to "No serial", and that
+// was not acted on; the project rules' summary flattened it to "No serial", and that
 // is what actually governed. The cost was a session spent reading eight hex
 // digits at a time off a photograph, in which two values were attributed to
 // the wrong probe and two more were read at a moment when the value was
@@ -2648,7 +2713,11 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// The retired-instruction count rides in the data half, so one channel
 	// still gives the rate as well as the trace: 24 cycles per instruction in
 	// the slow phase against 7.5 once it settles, measured on the board.
-	.a_valid(prof_tick), .a_addr(ipring_q),
+	// WHERE THE i960 IS AND WHAT IT LAST TOUCHED. out_pushed 62 against
+	// out_popped 61 says a result is sitting unread, so the CPU has stopped
+	// rather than gone idle -- and a CPU stopped on a bus access is named by
+	// its IP and its last address, not by any coprocessor counter.
+	.a_valid(prof_tick), .a_addr(cpu_dbg_ip),
 	// THE RETIRED-INSTRUCTION COUNT RIDES ALONG WITH THE IP.
 //
 // The profile says 91% of the board's time goes on the four memory
@@ -2657,7 +2726,7 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 // simulation finishes this initialisation in 15.9 M instructions. Two
 // consecutive samples give the instruction rate directly, which settles
 // whether this is a wrong branch or a slow machine.
-	.a_data(cpu_dbg_acc),
+	.a_data(cpu_dbg_laddr),
 	// THE i960's OWN INSTRUCTION COUNT, so the first three minutes can be
 	// diagnosed rather than described. Two readings a known time apart give the
 	// rate directly; a machine that is slow for three minutes and then is not
@@ -2684,9 +2753,16 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// standing still and the decode is complete and correct, so this says
 	// whether the game writes zero or we read the wrong words.
 	.b_valid(uart_b2_valid),
-	.b_addr({vid_hscr[0][7:0], vid_vscr[0][7:0], vid_hscr[1][7:0], vid_vscr[1][7:0]}),
-	.b_data({vid_hscr[2][7:0], vid_vscr[2][7:0], vid_hscr[3][7:0], vid_vscr[3][7:0]}),
-	.a_tag(8'h53), .b_tag(8'h48),          // 'S' retired IP (512-entry ring) | cumulative i960 instructions
+	// out_data is measured and settled -- 0x42976767, a real float. What is not
+	// known is why the i960 stopped popping after ~113 results, so the wire
+	// carries the pop count and the CPU's IP instead.
+	// hscr IS THE ACCEPTANCE TEST (R106) and it is back on the wire now that
+	// the 0x2e halt is fixed. io flags stay alongside it: if the TGP stops
+	// again, io_rd high with io_ack low names the next unanswered region.
+	.b_addr({copro_out_popped, vid_hscr[2]}),   // unchanged: hscr is still the test
+	.b_data({tgp_io_addr, 10'd0, tgp_unimpl, tgp_io_rd, tgp_io_wr, tgp_io_ack, tgp_fifo_rd, tgp_fifo_wr}),
+	.a_tag(8'h43), .b_tag(8'h48),          // 'C' copro in_pushed:out_pushed | TGP retires:pc
+	                                       // 'H' out_popped:hscr2 | io_addr:flags
 	                                       // 'H' scroll h:v for layers 0,1 | layers 2,3 -- low bytes
 	                                       // '0' map0 min|max : sum
 	                                       // 'T' write count + trap/PA

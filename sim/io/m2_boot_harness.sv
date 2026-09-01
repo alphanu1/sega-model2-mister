@@ -454,7 +454,7 @@ module m2_boot_harness #(
     // address arithmetic under test is the arithmetic that runs on the board.
     .base_prog (AW'(32'h0000000)), .base_data (AW'(32'h0020000)),
     .base_work (AW'(32'h1600000)), .base_board(AW'(32'h1680000)),
-    .base_char (AW'(32'h1690000)),
+    .base_char (AW'(32'h1690000)), .base_buffer(AW'(32'h16d0000)),
     .sd_req(sd_req), .sd_we(sd_we), .sd_addr(sd_addr), .sd_din(sd_din),
     .sd_be(sd_be), .sd_dout(sd_dout_i), .sd_ack(sd_ack_i),
     .oc_tram_we(oc_tram_we), .oc_pal_we(oc_pal_we), .oc_addr(oc_addr),

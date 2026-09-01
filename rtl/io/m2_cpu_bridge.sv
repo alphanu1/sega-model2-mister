@@ -46,8 +46,24 @@
 // unaligned single burst, r_addr[1] halfword selection -- and the board can say
 // whether the smear survives without it. Simulation cannot answer this: it
 // reads the value correctly either way.
+// BUFFERRAM IS OFF, AND THAT IS A FINDING RATHER THAN AN OMISSION (R129).
+//
+// The mapping below is correct and was verified live -- the boot profile
+// shifts measurably when it is on. It is disabled because IT CANNOT LAND
+// ALONE. 0x00900000 is the GEOMETRIZER'S WORKSPACE: the game writes a
+// structure there, reads it back and follows it. Unmapped, the reads
+// returned 0 and the machine took a safe path (21,325 TGP retires, attract
+// cycling). Mapped, the writes LAND, the game follows its own pointer, and
+// with no geometrizer behind it the i960 livelocks at IP 0x0E00-0x0E10
+// walking an unmapped 0x0163FBxx (1,367 retires, attract stopped).
+//
+// Initialising the RAM to the reference's 0x07800f0f changed NOTHING --
+// byte-identical telemetry -- which is what rules out the contents and
+// names the writes landing as the cause. Turn this on in the same change
+// that brings up the geometrizer, not before.
 module m2_cpu_bridge #(
   parameter bit DCACHE_EN = 1'b1,
+  parameter bit BUFFERRAM = 1'b0,
   parameter int unsigned AW = 25,        // SDRAM word address width
   parameter bit          BOARD_2A = 0    // 0 = model2o, 1 = 2A-CRX
 ) (
@@ -73,6 +89,17 @@ module m2_cpu_bridge #(
   input  logic [AW:1] base_work,         // work RAM,      0x00500000
   input  logic [AW:1] base_board,        // board RAM,     0x00200000
   input  logic [AW:1] base_char,         // char RAM,      0x01080000
+  // THE SHARED BUFFER, 0x00900000, AND IT WAS NOT MAPPED AT ALL.
+  //
+  // `map(0x00900000,0x0091ffff).mirror(0x60000).ram().share("bufferram")` --
+  // 128 KB of plain RAM, and the region this core routed to T_IO, whose read
+  // mux ends in 32'd0. So every read returned zero and every write vanished.
+  // Measured in MAME over 900 attract frames: 33,554 writes and 12,269 reads.
+  // It is not only the i960's: the coprocessor reads the same memory through
+  // its bank at 0x400000, so this is how the two SHARE DATA, and neither side
+  // could see it. 128 KB will not fit in M10K here (~103 blocks against 40
+  // free after the band buffers), so it lives in SDRAM.
+  input  logic [AW:1] base_buffer,       // bufferram,     0x00900000
 
   // SDRAM port. Sixteen bits wide, so a 32-bit access is TWO transactions --
   // the sequencer below issues the low half then the high half.
@@ -323,6 +350,10 @@ module m2_cpu_bridge #(
     end else if (r_addr >= 32'h0108_0000 && r_addr < 32'h0110_0000) begin
       tgt = T_SDRAM;                                        // char RAM, 512 KB
       sd_word = base_char + AW'(r_addr[18:1]);
+    end else if (BUFFERRAM && r_addr >= 32'h0090_0000 && r_addr < 32'h0098_0000) begin
+      // 128 KB, and the mirror is free: [16:1] simply ignores the repeat.
+      tgt = T_SDRAM;
+      sd_word = base_buffer + AW'(r_addr[16:1]);
     end else if (r_addr >= 32'h0200_0000 && r_addr < 32'h0400_0000) begin
       tgt = T_SDRAM; is_rom = 1'b1;                         // main_data
       sd_word = base_data + AW'(r_addr[24:1]);
