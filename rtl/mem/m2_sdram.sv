@@ -214,7 +214,12 @@ module m2_sdram #(
       // port with a different burst length reintroduces silent cross-port
       // corruption.** The cost of uniformity is two wasted words per TGP
       // lookup on a port that blocks on every one of them anyway.
-      8, 9: blen = 4'd4;
+      // 10 IS THE GEOMETRIZER'S DISPLAY-LIST WALK, and it bursts four for the
+      // same reason 8 and 9 do: every port must burst the same or the read tag
+      // stream desynchronises and OTHER ports get corrupt data (R108). The walk
+      // reads one dword at a time and discards the other pair, which is the
+      // same bargain the TGP already makes.
+      8, 9, 10: blen = 4'd4;
       default: blen = 4'd1;
     endcase
   endfunction

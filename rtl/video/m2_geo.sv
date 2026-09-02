@@ -71,7 +71,19 @@ module m2_geo #(
   output logic [31:0]   dbg_pushes,
   output logic [31:0]   dbg_dropped,
   output logic [15:0]   dbg_geocnt,
-  output logic [31:0]   dbg_geoctl
+  output logic [31:0]   dbg_geoctl,
+
+  // ---- the display-list walk (R135)
+  input  logic          frame_start,     // one pulse at vblank
+  output logic          rd_req,
+  output logic [18:0]   rd_addr,         // dword index into bufferram
+  input  logic [31:0]   rd_data,
+  input  logic          rd_ack,
+
+  output logic [15:0]   dbg_walk_ops,    // opcodes retired this frame
+  output logic [15:0]   dbg_walk_objs,   // object_data commands seen
+  output logic [15:0]   dbg_walk_frames, // walks completed
+  output logic [7:0]    dbg_walk_unknown // an opcode the table does not cover
 );
 
   // ---------------------------------------------------------------- registers
@@ -143,6 +155,13 @@ module m2_geo #(
   logic [19:0] wr_ptr;
   logic [15:0] dw_hi;
 
+  // Deliberately unread, and named so lint does not have to guess: the queue's
+  // occupancy is covered by `dropped`, the walk only needs an opcode's top and
+  // jump fields out of rd_data, and wr_ptr's high bits and bit 0 fall outside
+  // bufferram's 128 KB.
+  wire _unused_geo = &{1'b0, q_count, rd_data[30:28], rd_data[22:17],
+                       wr_ptr[19:17], wr_ptr[0], 1'b0};
+
   assign sd_busy = (dst != D_IDLE);
   assign q_pop   = (dst == D_IDLE) && q_valid;
 
@@ -175,6 +194,133 @@ module m2_geo #(
           dst       <= D_IDLE;
         end
         default: dst <= D_IDLE;
+      endcase
+    end
+  end
+
+  // ======================================================================
+  // THE DISPLAY-LIST WALK
+  //
+  //     input = &bufferram[geo_read_start_address/4]
+  //     op = *input++
+  //     if (op & 0x80000000) input = &bufferram[(op & 0x1ffff)/4]   -- jump
+  //     else consume the operand words this opcode takes
+  //     bounded by 0x8000 opcodes and the end of bufferram
+  //
+  // EIGHT OPCODES, NOT TWENTY-ONE. Walking the real list dumped out of MAME
+  // retires 101 commands and reaches `end` cleanly using only:
+  //
+  //     object_data 60   matrix_write 33   focal 2   light 2
+  //     zsort 1          window_data 1     texture_data 1   end 1
+  //
+  // None of the six handlers whose length could not be confirmed appear at all.
+  // The count for the variable ones is READ FROM THE STREAM as the second
+  // operand, not decoded out of the opcode -- that was the open question.
+  //
+  // This walks and counts. It does not yet transform anything: object_data's
+  // four words name geometry that lives in the POLYGON ROM, and that is the
+  // next stage. Getting the walk right first means the opcode histogram on the
+  // UART can be compared against the 101/60/33 above, which is a real oracle.
+  typedef enum logic [2:0] { W_IDLE, W_FETCH, W_DECODE, W_SKIP, W_CNT } wstate_t;
+  wstate_t wst;
+  logic [18:0] w_ip;
+  logic [15:0] w_ops, w_skip;
+  logic [4:0]  w_op;
+
+  // Operand words per opcode. The upper half mirrors the lower for the ones
+  // this game uses, exactly as geo_process_command's switch does.
+  // The upper half of the opcode space mirrors the lower for every command
+  // this game uses, exactly as geo_process_command's switch does, so the
+  // length depends on the low four bits alone.
+  function automatic [15:0] oplen(input [3:0] c);
+    case (c)
+      4'h0: oplen = 16'd0;    // nop
+      4'h1: oplen = 16'd4;    // object_data: tpa, tha, oba, obc
+      4'h3: oplen = 16'd6;    // window_data
+      4'h7: oplen = 16'd1;    // mode
+      4'h8: oplen = 16'd1;    // zsort
+      4'h9: oplen = 16'd2;    // focal distance
+      4'ha: oplen = 16'd3;    // light source
+      4'hb: oplen = 16'd12;   // matrix: 3x4
+      4'hc: oplen = 16'd3;    // translate vector
+      4'hf: oplen = 16'd0;    // end
+      default: oplen = 16'hffff;   // variable or unsupported: see w_cnt
+    endcase
+  endfunction
+
+  wire is_var = (w_op[3:0] == 4'h4) || (w_op[3:0] == 4'h5);   // texture/polygon data
+  wire is_end = (w_op[3:0] == 4'hf);
+
+  assign rd_req  = (wst == W_FETCH) || (wst == W_CNT);
+  assign rd_addr = w_ip;
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      wst <= W_IDLE; w_ip <= 19'd0; w_ops <= 16'd0; w_skip <= 16'd0; w_op <= 5'd0;
+      dbg_walk_ops <= 16'd0; dbg_walk_objs <= 16'd0;
+      dbg_walk_frames <= 16'd0; dbg_walk_unknown <= 8'd0;
+    end else begin
+      case (wst)
+        W_IDLE: if (frame_start) begin
+          w_ip  <= 19'(geo_rp[19:2]);       // the read pointer is a BYTE address
+          w_ops <= 16'd0;
+          wst   <= W_FETCH;
+        end
+        // FETCH AND WAIT ARE ONE STATE. Asserting the request and then moving on
+        // unconditionally drops an acknowledge that arrives in the same cycle,
+        // which a fast memory does -- the walk then never advances at all.
+        W_FETCH: if (rd_ack) begin
+          if (rd_data[31]) begin                       // a jump
+            w_ip <= 19'(rd_data[16:2]);
+            wst  <= W_FETCH;
+          end else begin
+            w_op  <= rd_data[27:23];
+            w_ip  <= w_ip + 19'd1;
+            wst   <= W_DECODE;
+          end
+          w_ops <= w_ops + 16'd1;
+        end
+        W_DECODE: begin
+          if (w_op[3:0] == 4'h1) dbg_walk_objs <= dbg_walk_objs + 16'd1;
+          if (is_end) begin
+            dbg_walk_ops    <= w_ops;
+            dbg_walk_frames <= dbg_walk_frames + 16'd1;
+            wst <= W_IDLE;
+          end else if (is_var) begin
+            w_ip <= w_ip + 19'd1;            // step over the first operand
+            wst  <= W_CNT;                   // then read the count itself
+          end else if (oplen(w_op[3:0]) == 16'hffff) begin
+            dbg_walk_unknown <= {3'd0, w_op};   // stop rather than desynchronise
+            dbg_walk_ops     <= w_ops;
+            wst <= W_IDLE;
+          end else begin
+            w_skip <= oplen(w_op[3:0]);
+            wst    <= W_SKIP;
+          end
+        end
+        W_CNT: if (rd_ack) begin
+          // JUST THE COUNT. This state has already stepped past the count word
+          // itself, so adding one for it walks a word too far -- which lands on
+          // the operand AFTER the next command and desynchronises the whole
+          // list. It read as 1093 opcodes against an expected 101.
+          w_skip <= rd_data[15:0];
+          w_ip   <= w_ip + 19'd1;
+          wst    <= W_SKIP;
+        end
+        W_SKIP: begin
+          if (w_skip == 16'd0) wst <= W_FETCH;
+          else begin
+            w_ip   <= w_ip + 19'd1;
+            w_skip <= w_skip - 16'd1;
+          end
+          // the walk is bounded: bufferram is 0x8000 dwords, and a runaway list
+          // must stop rather than read forever
+          if (w_ip >= 19'h08000 || w_ops >= 16'h7fff) begin
+            dbg_walk_ops <= w_ops;
+            wst <= W_IDLE;
+          end
+        end
+        default: wst <= W_IDLE;
       endcase
     end
   end

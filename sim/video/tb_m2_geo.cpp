@@ -56,6 +56,7 @@ int main(int argc,char**argv){
   Verilated::commandArgs(argc,argv);
   d = new Vm2_geo;
   d->rst_n=0; d->base_buffer=BASE; d->sd_wr_ack=0;
+  d->frame_start=0; d->rd_data=0; d->rd_ack=0;
   d->wr_ctl=d->wr_setwp=d->wr_setrp=d->wr_push=0; d->wdata=0;
   for(int i=0;i<8;i++) tick();
   d->rst_n=1; idle(4);
@@ -135,6 +136,62 @@ int main(int argc,char**argv){
     ++fails;
   } else {
     std::printf("  overrun: %u dropped, counted, never stalled\n", d->dbg_dropped-drop0);
+  }
+
+  // ---- 7. THE DISPLAY-LIST WALK
+  //
+  // A SYNTHETIC list with the same shape as Daytona's, because the real one is
+  // ROM-derived and must not enter this repository. Walking the real list
+  // offline retires 101 opcodes -- 60 object_data, 33 matrix_write, 2 focal,
+  // 2 light, 1 zsort, 1 window, 1 texture_data, 1 end -- and this reproduces
+  // that mix exactly, plus a JUMP, which the real list also uses.
+  //
+  // What it proves: every opcode consumes the right number of operand words. A
+  // walker that miscounts even once desynchronises and reads operands as
+  // commands, which looks like a corrupt display list rather than a bug here.
+  {
+    std::vector<uint32_t> list(0x8000, 0);
+    size_t w = 0;
+    auto emit = [&](unsigned op, unsigned operands) {
+      list[w++] = op << 23;
+      for (unsigned i = 0; i < operands; i++) list[w++] = 0xdead0000u + i;
+    };
+    int want_ops = 0, want_objs = 0;
+    emit(0x08, 1);  want_ops++;                       // zsort
+    emit(0x03, 6);  want_ops++;                       // window
+    emit(0x09, 2);  want_ops++;                       // focal
+    emit(0x09, 2);  want_ops++;
+    emit(0x0a, 3);  want_ops++;                       // light
+    emit(0x0a, 3);  want_ops++;
+    // texture_data: one operand, then a COUNT read from the stream, then count words
+    list[w++] = 0x04u << 23; list[w++] = 0x11111111u; list[w++] = 5;
+    for (int i = 0; i < 5; i++) list[w++] = 0x22220000u + i;
+    want_ops++;
+    // a JUMP to the rest of the list, as the real one does after its preamble
+    size_t tail = 0x400;
+    // A jump counts as a retired opcode: geo_parse's op_count++ sits in the
+    // while condition, before the jump is tested.
+    list[w++] = 0x80000000u | uint32_t(tail * 4);  want_ops++;
+    w = tail;
+    for (int i = 0; i < 33; i++) { emit(0x0b, 12); want_ops++; }   // matrix
+    for (int i = 0; i < 60; i++) { emit(0x01, 4);  want_ops++; want_objs++; }
+    emit(0x0f, 0);  want_ops++;                       // end
+
+    d->rst_n = 0; for (int i = 0; i < 4; i++) tick(); d->rst_n = 1; idle(2);
+    d->frame_start = 1; tick(); d->frame_start = 0;
+    for (int i = 0; i < 200000; i++) {
+      d->rd_ack = 0;
+      if (d->rd_req) { d->rd_data = (d->rd_addr < list.size()) ? list[d->rd_addr] : 0; d->rd_ack = 1; }
+      tick();
+      if (d->dbg_walk_frames) break;
+    }
+    ++checks;
+    if (!d->dbg_walk_frames) { std::printf("  FAIL walk never reached end\n"); ++fails; }
+    else std::printf("  walk completed: %u opcodes, %u object_data\n",
+                     d->dbg_walk_ops, d->dbg_walk_objs);
+    ck("walk opcode count", d->dbg_walk_ops,  want_ops);
+    ck("walk object_data count", d->dbg_walk_objs, want_objs);
+    ck("no unknown opcode", d->dbg_walk_unknown, 0);
   }
 
   std::printf("m2_geo: checks=%d fails=%d\n", checks, fails);

@@ -348,7 +348,8 @@ wire  [63:0] rb_dout;
 // the four unused ports are tied off instead -- synthesis removes what they
 // drive, and the alternative is forking from the reference over an arbiter
 // detail. Port 0 is the readback; 1-4 become the CPU, tilemap and renderer.
-localparam int unsigned NPORTS = 10;  // 5 = sound ROM, 6/7 = samples, 8/9 = TGP
+localparam int unsigned NPORTS = 11;  // 5 = sound ROM, 6/7 = samples, 8/9 = TGP,
+                                      // 10 = the geometrizer's display-list walk
 
 // THE 68000 SOUND PROGRAM, 256 KB, at MRA byte offset 0x2350000 -- and the MRA's
 // own comment says 0x2340000, which is 64 KB wrong. The comment is not the
@@ -382,6 +383,18 @@ wire        pcm1_req, pcm2_req;
 // and 2 M words of copro_data the geometry code walks.
 wire        tgp_tbl_req, tgp_dat_req;
 wire        tgp_dat_we, tgp_dat_is_buf, tgp_dat_half;
+// The geometrizer walks its display list once a frame, on the same vblank
+// edge the frame counter uses. The reference gates it on videocontrol bit 0
+// or an even frame; that gate is not modelled yet, so it walks every frame.
+wire        geo_walk_start = vbl_d && !vbl_dd;
+wire        geo_rd_req;
+wire [18:0] geo_rd_addr;
+wire [15:0] geo_walk_ops, geo_walk_objs, geo_walk_frames;
+wire  [7:0] geo_walk_unknown;
+logic       geo_rd_req_r;
+logic [18:0] geo_rd_addr_r;
+logic       geo_rd_ack_r;
+logic [31:0] geo_rd_data_r;
 wire        tgp_bufw_req;
 wire [18:0] tgp_bufw_addr;
 wire [15:0] tgp_bufw_data;
@@ -501,6 +514,10 @@ always_comb begin
 	// effective address sets bit 23 and BUFFER RAM when it sets bit 22, and the
 	// buffer half is written as well as read -- that is how the coprocessor and
 	// the i960 share results, and this core has never had it.
+	// PORT 10: the geometrizer reading its display list out of buffer RAM.
+	// m2_geo could only WRITE that memory; the walk has to read it back.
+	p_req[10]  = geo_rd_req_r;
+	p_addr[10] = GAME_BUFFER + SDR_AW'({geo_rd_addr_r, 1'b0});
 	p_req[9]  = tgp_dat_req_r;
 	p_addr[9] = (tgp_dat_is_buf_r ? GAME_BUFFER : GAME_COPRO)
 	            + SDR_AW'({tgp_dat_addr_r, tgp_dat_half_r});
@@ -2015,7 +2032,12 @@ m2_geo #(.AW(SDR_AW), .DEPTH(128)) u_geo (
 	.sd_wr_req(geo_sd_req), .sd_wr_addr(geo_sd_addr), .sd_wr_din(geo_sd_din),
 	.sd_wr_ack(ldr_wr_ack), .sd_busy(geo_sd_busy),
 	.dbg_pushes(geo_pushes), .dbg_dropped(geo_dropped),
-	.dbg_geocnt(geo_cnt_dbg), .dbg_geoctl(geo_ctl_dbg)
+	.dbg_geocnt(geo_cnt_dbg), .dbg_geoctl(geo_ctl_dbg),
+	.frame_start(geo_walk_start),
+	.rd_req(geo_rd_req), .rd_addr(geo_rd_addr),
+	.rd_data(geo_rd_data_r), .rd_ack(geo_rd_ack_r),
+	.dbg_walk_ops(geo_walk_ops), .dbg_walk_objs(geo_walk_objs),
+	.dbg_walk_frames(geo_walk_frames), .dbg_walk_unknown(geo_walk_unknown)
 );
 
 wire        copro_ctl_sel  = cpu_io_sel && (cpu_io_addr[23:0]  == 24'h980000);
@@ -2090,6 +2112,10 @@ always_ff @(posedge clk_sys) begin
 	tgp_dat_wdata_r <= tgp_dat_wdata;
 	tgp_dat_is_buf_r<= tgp_dat_is_buf;
 	tgp_dat_half_r  <= tgp_dat_half;
+	geo_rd_req_r    <= geo_rd_req;
+	geo_rd_addr_r   <= geo_rd_addr;
+	geo_rd_ack_r    <= p_ack[10];
+	geo_rd_data_r   <= p_dout[10][31:0];
 end
 
 // CLOCKED ON clk_sys, DELIBERATELY, and speed is a separate question.
