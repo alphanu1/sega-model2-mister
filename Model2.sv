@@ -1540,7 +1540,7 @@ wire [15:0] cpu_sd_din;
 wire  [1:0] cpu_sd_be;
 wire [31:0] cpu_dbg_rd, cpu_dbg_wr, cpu_dbg_unmapped;
 
-m2_cpu_bridge #(.BUFFERRAM(1'b0), .BUFFERRAM_WRONLY(1'b0), .AW(SDR_AW), .BOARD_2A(1'b0), .DCACHE_EN(1'b1)) u_cpu_bridge (
+m2_cpu_bridge #(.BUFFERRAM(1'b1), .BUFFERRAM_WRONLY(1'b0), .AW(SDR_AW), .BOARD_2A(1'b0), .DCACHE_EN(1'b1)) u_cpu_bridge (
 	.dbg_dc_hits(dc_hits), .dbg_dc_miss(dc_miss),
 	.char_wr(cpu_char_wr), .char_wr_addr(cpu_char_wr_addr),
 	.clk_cpu(clk_i960), .rst_n_cpu(cpu_rst_n),
@@ -2803,7 +2803,10 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// RUNS AWAY writes unmapped space continuously, so dbg_unmapped races and
 	// laddr_max climbs; a loop that merely takes a long time leaves both
 	// still. The control is build 36, which works and can be read the same way.
-	.a_valid(prof_tick), .a_addr(cpu_dbg_unmapped),
+	// WHERE THE GAME IS WAITING. It boots, renders the tilemap and drives the
+	// sound board, then stops on the first attract frame -- so this is game
+	// logic waiting on something, not a stalled machine.
+	.a_valid(prof_tick), .a_addr(cpu_dbg_ip),
 	// THE RETIRED-INSTRUCTION COUNT RIDES ALONG WITH THE IP.
 //
 // The profile says 91% of the board's time goes on the four memory
@@ -2812,7 +2815,7 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 // simulation finishes this initialisation in 15.9 M instructions. Two
 // consecutive samples give the instruction rate directly, which settles
 // whether this is a wrong branch or a slow machine.
-	.a_data(laddr_max),
+	.a_data(cpu_dbg_laddr),
 	// THE i960's OWN INSTRUCTION COUNT, so the first three minutes can be
 	// diagnosed rather than described. Two readings a known time apart give the
 	// rate directly; a machine that is slow for three minutes and then is not
@@ -2851,8 +2854,8 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// bits gate the view. Carrying all 32 routes a wide bus from inside the TGP
 	// to the streamer for no information, and this design is at the edge of
 	// closing on the SDRAM domain.
-	.b_addr({24'd0, tgp_bank[23:16]}),
-	.b_data({tgp_io_addr, 10'd0, tgp_unimpl, tgp_io_rd, tgp_io_wr, tgp_io_ack, tgp_fifo_rd, tgp_fifo_wr}),
+	.b_addr({copro_in_pushed, copro_out_pushed[15:0]}),
+	.b_data({vid_hscr[2], copro_out_popped}),
 	.a_tag(8'h43), .b_tag(8'h48),          // 'C' copro in_pushed:out_pushed | TGP retires:pc
 	                                       // 'H' out_popped:hscr2 | io_addr:flags
 	                                       // 'H' scroll h:v for layers 0,1 | layers 2,3 -- low bytes

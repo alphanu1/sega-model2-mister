@@ -7595,3 +7595,75 @@ rather than a sampled IP, which shows the loop body and its branch. It killed
 two builds with `Internal Error: TDB, tdb_node.cpp:2080` when wired to the
 streamer, and that attribution is itself uncertain -- the same crash recurred
 with the ring disconnected. It wants a different route to the wire.
+
+**R135 - THE COPROCESSOR PIPELINE IS ALIVE END TO END, AND THE DISPLAY LIST'S
+WALKING RULE IS ESTABLISHED.**
+
+*The coprocessor works.* With R133's memory map and BUFFERRAM enabled, measured
+on the board over one 20-second capture:
+
+    in_pushed   7292 -> 7368     the i960 is feeding it
+    out_pushed  2149 -> 2173     the TGP is producing results
+    out_popped  2036 -> 2057     the i960 is reading them back
+
+All three climbing together. Two days earlier `out_pushed` was frozen at 121 and
+nothing came back. Commands in, results out, results consumed.
+
+*And the machine boots.* It renders the tilemap -- sky, grass, CREDIT 0/3, both
+logos -- plays sound, and stops on the first attract frame. `hscr` is still zero,
+which is now explained rather than mysterious: the game never reaches the code
+that computes it, because it is waiting for geometry.
+
+**BUFFERRAM IS NOT BROKEN. It never was after R133.** R129's original reading --
+"the game proceeds down a path that needs the geometrizer" -- was right, and was
+retracted here on bad grounds: MAME never touching 0x0163Fxxx is a separate and
+benign fact, and it was allowed to discredit a correct conclusion. Six
+explanations were chased afterwards. R127, R129, R132 are superseded by this.
+
+*The method failure worth recording.* Every "livelock" call from build 27 onward
+was made from telemetry alone. **Nobody asked what was on the screen.** The
+machine was booting and rendering; one question would have established that on
+day one, and it outranks any amount of counter-reading when a display and a
+person are both present.
+
+*The walking rule, which is what the interpreter gets written from.* geo_parse
+reads dwords from bufferram at geo_read_start_address, and per opcode
+`(op >> 23) & 0x1f`:
+
+| op | handler | words consumed |
+|---|---|---|
+| 00 | nop | 0 |
+| 01, 11 | object_data | 4 -- tpa, tha, oba, obc |
+| 03, 13 | window_data | 6 |
+| 04 | texture_data | 2 + count, count is the SECOND word |
+| 05, 15 | polygon_data | 2 + count, count is the SECOND word |
+| 07, 17 | mode | 1 |
+| 08, 18 | zsort_mode | 1 |
+| 09, 19 | focal_distance | 2 |
+| 0a, 1a | light_source | 3 |
+| 0b, 1b | matrix_write | 12 -- a 3x4 matrix |
+| 0c, 1c | translate_write | 3 |
+| 0f, 1f | end | 0, and ends the walk |
+| 10 | dummy | 1 |
+| 16 | lod | 1 |
+| 1e | code_jump | 1 |
+| 02, 12 | direct_data | 17 inline -- NOT yet confirmed |
+| 06 | texture_parameters | count-driven -- NOT yet confirmed |
+| 0d | data_mem_push | count-driven -- NOT yet confirmed |
+| 0e | test | loops of 0x32/0xb/0xc -- NOT yet confirmed |
+| 14 | log_data | count-driven -- NOT yet confirmed |
+| 1d | code_upload | count-driven -- NOT yet confirmed |
+
+**The count is read FROM THE STREAM, not from the opcode.** That was the open
+question and it makes the walker far simpler: no opcode field decoding, just a
+length word where the table says so.
+
+A jump is the top bit: `if (opcode & 0x80000000) input = &bufferram[(opcode &
+0x1ffff)/4]`, and the walk is bounded at 0x8000 opcodes and the end of bufferram.
+Verified against the real list dumped from MAME: index 9 is matrix_write and
+indices 10-21 are twelve IEEE floats, exactly as the table predicts.
+
+*What the walker still needs that does not exist.* A READ path from bufferram.
+`m2_geo` only writes it today. All ten SDRAM ports are in use, so this wants an
+eleventh -- and `m2_sdram`'s `blen()` must list it explicitly, because the
+default is 1 and R108 records that mixed burst lengths corrupt the controller.
