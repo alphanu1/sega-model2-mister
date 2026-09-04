@@ -2193,6 +2193,25 @@ logic [31:0] tgp_tbl_rdata_r, tgp_dat_rdata_r;
 //
 // A cycle each way costs nothing: the TGP issues one lookup and BLOCKS on it.
 logic        tgp_tbl_req_r, tgp_dat_req_r;
+// PORT 9 ON THE WIRE (R160). Counting request RISES against acknowledges is
+// what separated "issued and never answered" from "never issued" -- and it is
+// how R162's fix is confirmed rather than assumed.
+logic [15:0] dbg_p9_req_n, dbg_p9_ack_n;
+logic        dbg_p9_req_d, dbg_p9_ack_d;
+always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
+	if (!cpu_rst_n) begin
+		dbg_p9_req_n <= 16'd0; dbg_p9_ack_n <= 16'd0;
+		dbg_p9_req_d <= 1'b0;  dbg_p9_ack_d <= 1'b0;
+	end else begin
+		dbg_p9_req_d <= tgp_dat_req_r;
+		dbg_p9_ack_d <= tgp_dat_ack_r;
+		if (tgp_dat_req_r && !dbg_p9_req_d) dbg_p9_req_n <= dbg_p9_req_n + 16'd1;
+		// RISES, not levels: R162 holds the acknowledge while the request
+		// stands, so a level count would climb with time rather than with
+		// transactions and say nothing.
+		if (tgp_dat_ack_r && !dbg_p9_ack_d) dbg_p9_ack_n <= dbg_p9_ack_n + 16'd1;
+	end
+end
 logic [15:0] tgp_tbl_addr_r;
 logic [19:0] tgp_dat_addr_r;
 logic        tgp_dat_we_r, tgp_dat_is_buf_r, tgp_dat_half_r;
@@ -3027,8 +3046,8 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// THE WALK'S OWN NUMBERS. Against the offline oracle: 101 opcodes and 60
 	// object_data per frame. Anything else means it is reading the wrong memory
 	// or mis-counting an operand, and both look like a corrupt display list.
-	.b_addr({geo_walk_ops, geo_walk_objs}),
-	.b_data({geo_walk_frames, 8'd0, geo_walk_unknown}),
+	.b_addr({dbg_p9_req_n, dbg_p9_ack_n}),
+	.b_data({tgp_dat_req_r, tgp_dat_ack_r, tgp_dat_is_buf_r, tgp_dat_we_r, tgp_dat_addr_r[19:0], 8'd0}),
 	.a_tag(8'h43), .b_tag(8'h48),          // 'C' copro in_pushed:out_pushed | TGP retires:pc
 	                                       // 'H' out_popped:hscr2 | io_addr:flags
 	                                       // 'H' scroll h:v for layers 0,1 | layers 2,3 -- low bytes

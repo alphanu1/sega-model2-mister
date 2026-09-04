@@ -125,7 +125,29 @@ module m2_sdram_x2 #(
       assign f_we[g]   = s_we[g];
       assign f_din[g]  = s_din[g];
       assign f_be[g]   = s_be[g];
-      assign s_ack[g]  = f_ack[g];        // already two fast cycles wide
+      // STICKY WHILE THE REQUEST STANDS (R162), NOT A ONE-SHOT.
+      //
+      // MEASURED ON THE BOARD. The coprocessor froze at microcode 0x047C with
+      // port 9 reading `tgp_dat_req_r = 1, tgp_dat_ack_r = 0` at address
+      // 0x01057 -- a request issued and then never answered again.
+      //
+      // `done` latches on the acknowledge and clears ONLY when the slow side
+      // lowers its request, and `f_req` is masked by it. So the acknowledge is
+      // the single event that can retire a transaction, and if the requester
+      // misses it -- for any reason, in any state -- the port is dead: the
+      // request stays high, `done` stays high, `f_req` stays low, and no second
+      // acknowledge is ever generated. One missed pulse is a permanent hang,
+      // and it takes the whole coprocessor with it.
+      //
+      // Holding the acknowledge while `done` costs nothing and removes the
+      // class. A req/ack requester drops its request on the acknowledge, which
+      // clears `done` and the acknowledge with it; one that was not looking on
+      // the pulse cycle now sees it on the next. `s_dout` is already held
+      // across the same window by `dout_r`, so the data stays valid beside it.
+      //
+      // This does NOT paper over a missed acknowledge -- it makes missing one
+      // survivable, which is what a handshake is for.
+      assign s_ack[g]  = f_ack[g] | done;
 
       // BYPASSED ON THE ACKNOWLEDGE CYCLE, not just registered.
       //

@@ -5,85 +5,78 @@ claims are RETRACTED by R150.
 
 ## WHERE THE MACHINE IS
 
-On the card: `108fed3d` (seed 162) -- ROLLED BACK to this after the new build
-regressed. Tilemaps and CREDIT draw, stuck at attract frame 1.
+**THE THREE-DAY HANG IS FIXED.** One line in `m2_sdram_x2.sv`:
 
-Also on the card, not active: `Model2.rbf.r156` -- seed 204, +0.509, the best
-slack this project has had, carrying R151 + R156.
+    assign s_ack[g] = f_ack[g] | done;    // was: f_ack[g]
 
-## THE BOARD RESULT, AND R157 IS RETRACTED (R158)
+On the card: seed 702, +0.121, kept as `Model2.rbf.r162`. Measured over UART
+after a proper ROM settle:
 
-`Model2.rbf.r156` on hardware lost the tilemap entirely and stuck on the first
-screen. R157 blamed the shared write port (R144). **Wrong.** The UART named the
-state in one line -- 3,769 identical records:
+    prog_words   07E8 (2024)      the microcode upload COMPLETES
+    tgp_pc       04F6..050C       21 distinct -- the TGP RUNS
+    cpu_ip       0E00..0E54       94 distinct -- the CPU runs the geometry code
+    p9 ack_rises 87DA -> 37AA     wrapping: transactions flowing
+    flags        0                no trap, no halt, no stall
 
-    C 0000xxxx 00000000     tgp_pc = 0000, rd_total = 0, out_pushed = 0
+Against the previous three days: `tgp_pc` frozen at 047B, 8 reads, request
+asserted and never answered.
 
-**The coprocessor never left reset.** The CPU hung before releasing it, so it
-hung before drawing anything -- the missing tilemap was the absence of a CPU,
-not a corrupt one.
+## THE FAULT, AND WHY IT SURVIVED EVERY TEST
 
-    assign stall = fifo_rd && !fout_valid;     // R151, as built
-    m2_tgp ... .rst_n(rst_n & ~halted)         // halted=1 until coproctl is written
+`m2_sdram_x2`'s per-port adapter:
 
-A FIFO read while halted waits on `fout`; only the TGP fills `fout`; only the
-coproctl write starts the TGP; and the stall stops the CPU reaching it. The one
-event that would release the stall is the one the stall prevents. It also
-re-arms on every upload (`if (wdata[31]) halted <= 1'b1`).
+    if (!s_req[g])     done <= 1'b0;      // clears ONLY when the request drops
+    else if (f_ack[g]) done <= 1'b1;
+    assign f_req[g] = s_req[g] & ~done & ~f_ack[g];
+    assign s_ack[g] = f_ack[g];           // a ONE-SHOT
 
-**Fix, in the tree, lint-clean, simulated:**
+The acknowledge is the only event that can retire a transaction, and `done`
+masks off any retry. **Miss that one pulse and the port is dead for ever** --
+request high, `done` high, `f_req` low, no second acknowledge possible. One
+missed pulse took the whole coprocessor with it.
 
-    assign stall = fifo_rd && !fout_valid && !halted && !uploading;
+Holding the acknowledge while `done` stands costs nothing: a req/ack requester
+drops its request on the acknowledge, which clears `done` and the acknowledge
+with it; one that was not looking on the pulse cycle sees it on the next.
+`s_dout` is already held across the same window by `dout_r`.
 
-**Simulation cannot confirm it.** The harness gives byte-identical results with
-the gate and without -- mailbox clearing, 30 pointers matching MAME, IP
-000012b0. The deadlock never happens in sim, so the bench passes a build that is
-dead on the board. Only the UART's `tgp_pc` found it.
+**Why nothing caught it.** Port 9 is the TGP's data port. It is only exercised
+when the coprocessor actually reads, which only began with R151. And no bench
+reaches it: the boot harness answers `tgp_dat_*` from C++, `REAL_MEM` wires only
+ports 0 and 3, and all three SDRAM benches pass. **Port 9 had never been
+exercised against the real controller anywhere but the board.**
 
-## WHAT THE UART SAYS ABOUT THE OLD BUILDS
+## WHAT ELSE THIS SESSION SETTLED
 
-On `108fed3d`, TGP free-running `004C-0057` and `00B5-00B9` -- the dispatch and
-the idle handler, nothing else -- with 191 results pushed (all idle zeros) and
-**3 external reads in its lifetime**. R148/R149's pathology, confirmed on
-hardware. These builds are not working machines; they are coprocessors idling
-politely while the game waits.
+* **R151 stays and is good.** It takes the coprocessor from never starting
+  (idle loop, 3 reads, 191 zeros -- what 108fed3d and d27721c both do) to
+  reaching the command handler.
+* **R156 is reverted.** It costs the tilemap. Its target was real (sel_radr
+  stealing the io 0x10 read) but it gated `sel_math` in the same change on an
+  argument rather than a measurement. Return it narrowly, with a board result.
+* **R157 and R158 are withdrawn.** Both rest on UART captures taken 15 s after
+  `load_core` while the 43.62 MB ROM set was still downloading -- `rom_loaded`
+  low holds `cpu_rst_n` low, so they read a core in reset and it was reported
+  three times as a design failure. **Always settle, then confirm the TGP is out
+  of reset, before reading anything.**
+* **The screen is not a clean instrument.** The tilemap is on-chip, so a stalled
+  SDRAM leaves the last frame up. "Tiles present, frame 1" and "no tiles" are
+  not separable states.
+* **The SDRAM rework cannot be reverted:** the pre-d27721c controller misses
+  timing on all four seeds (-0.119 to -0.668), confirming it exists to close
+  timing. `S_MISS` is not a deadlock -- its counters free-run outside the state
+  case.
 
-## BOARD STATE
+## STILL OWED
 
-`Model2.rbf.wronly` (2ae6f8fc) is loaded -- the one where attract CYCLES, by
-skipping the mailbox handshake. Backups on the card, md5s confirmed:
-
-    .wronly    2ae6f8fc   attract cycles
-    .lastgood  a734d0d5   same shortcut
-    .good      a734d0d5   identical to .lastgood
-    .attract   3307dcc5
-    .r156      a80b7cfe   seed 204, +0.509, the deadlocking build
-    108fed3d              boots, tilemaps + CREDIT, stuck at frame 1
-
-**The OSD "Geometrizer walk" was left Off during testing and must go back On** --
-with it off these builds do not reach frame 1 at all.
-
-## R144 IS STILL REAL, AND STILL NOT THIS
-
-Five requesters, one broadcast `ldr_wr_ack`, and `m2_sdram_x2` passing
-`f_wr_addr`/`f_wr_din` combinationally so a higher-priority requester can move
-the address of a write already in flight. Model 1's `b0c6785` is the precedent.
-Fix it on its own evidence, not on this failure.
-
-## THE FIX, AND MODEL 1 HAS ALREADY WRITTEN IT
-
-`b0c6785`, "two masters share one write port":
-
-    So the two masters share one physical write port. The V60 has priority,
-    io_ack tells the responder its byte landed, and the responder holds the
-    write rather than dropping it -- a lost write hangs the handshake, which is
-    not a failure worth being relaxed about. Cost: 22 ALM.
-
-Ours needs the same, for five: a per-requester acknowledge derived from the
-grant, and a grant held from request to acknowledge so address and data cannot
-change mid-flight. Extracting the inline mux in `Model2.sv:672-680` into a
-testable module is the natural way to do it, because the harness cannot
-currently test it at all.
+* **Wire the TGP's ports 8 and 9 through `m2_sdram_x2` + `sdram_model` in the
+  boot harness**, as REAL_MEM already does for ports 0 and 3. This fault cost
+  three days precisely because no bench could reach that port.
+* **R156, narrowly** -- the io 0x10 read, without touching `sel_math`.
+* **R144** -- five requesters, one broadcast `ldr_wr_ack`, and `m2_sdram_x2`
+  passing address and data through combinationally. Model 1's `b0c6785` is the
+  precedent. Real, and not the cause of this.
+* `mb86233_regs` still 46,966 fails on register 0x21.
 
 ## THE i960 IS NOT SLOW. IT NEVER WAS (R150)
 
