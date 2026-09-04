@@ -771,6 +771,16 @@ $(eval $(call GEO_UNIT,geo_det,))
 $(eval $(call GEO_UNIT,geo_norm,rtl/video/m2_geo_rsqrt.sv))
 $(eval $(call GEO_UNIT,geo_rsqrt,))
 
+# The polygon sequencer: an object_data command becomes a stream of quads.
+obj_m2_geo_engine/Vm2_geo_engine_top: rtl/video/m2_geo_engine.sv rtl/video/m2_geo_xform.sv $(GEO_RTL) sim/video/geo_engine_top.sv sim/video/tb_m2_geo_engine.cpp
+	$(VBUILD) --top-module m2_geo_engine_top -CFLAGS "-O2" $(TGPFLAGS) -Irtl/tgp -Irtl/video \
+	  --Mdir obj_m2_geo_engine -o Vm2_geo_engine_top sim/video/geo_engine_top.sv \
+	  rtl/video/m2_geo_engine.sv rtl/video/m2_geo_xform.sv $(GEO_RTL) \
+	  sim/video/tb_m2_geo_engine.cpp
+test_m2_geo_engine: obj_m2_geo_engine/Vm2_geo_engine_top
+	@echo "== test m2_geo_engine (object_data -> quads: vertex order, links, rope)"
+	@./obj_m2_geo_engine/Vm2_geo_engine_top
+
 # The clipper has its own top: it drives m2_geo_project as well as the pool.
 obj_m2_geo_clip/Vtb_clip_top: rtl/video/m2_geo_clip.sv rtl/video/m2_geo_project.sv $(GEO_RTL) sim/video/tb_clip_top.sv sim/video/tb_m2_geo_clip.cpp
 	$(VBUILD) --top-module tb_clip_top -CFLAGS "-O2" $(TGPFLAGS) -Irtl/tgp -Irtl/video \
@@ -783,7 +793,7 @@ test_m2_geo_clip: obj_m2_geo_clip/Vtb_clip_top
 
 .PHONY: test_geo
 test_geo: test_m2_geo_xform test_m2_geo_project test_m2_geo_det test_m2_geo_rsqrt \
-          test_m2_geo_norm test_m2_geo_clip test_m2_geo
+          test_m2_geo_norm test_m2_geo_clip test_m2_geo test_m2_geo_engine
 
 # THE ASSEMBLED CORE, AND IT HAD NO RUN TARGET AT ALL.
 #
