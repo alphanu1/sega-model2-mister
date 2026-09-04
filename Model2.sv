@@ -2954,7 +2954,18 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// channel". The previous build measured THREE io reads in 45 s where MAME's
 	// TGP hammers its math units, which says the coprocessor is executing
 	// something, but not the geometry code. Retires and pc say which.
-	.a_valid(prof_tick), .a_addr({tgp_retires, tgp_pc}),
+	// THE INSTRUMENT NOW WATCHES THE i960, NOT THE TGP (R159).
+	//
+	// Three hardware failures in one session were each explained with a
+	// different mechanism and none could be told apart, because this channel
+	// carried only TGP state. `tgp_pc = 0000` says the coprocessor never left
+	// reset; it cannot say WHY, because the reason is always on the CPU side --
+	// the i960 is what writes coproctl and releases it.
+	//
+	// cpu_dbg_ip, cpu_trap, cpu_trap_op and cpu_halted have existed in this file
+	// the whole time and none of them reached a wire. `tgp_pc` is kept in the low
+	// half so nothing already learned is given up.
+	.a_valid(prof_tick), .a_addr(cpu_dbg_ip),
 	// THE RETIRED-INSTRUCTION COUNT RIDES ALONG WITH THE IP.
 //
 // The profile says 91% of the board's time goes on the four memory
@@ -2967,7 +2978,14 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// has been a constant 0x016FFFF8 in every capture of the spin, so it costs
 	// nothing to give up and the DATA is the one fact five builds of
 	// elimination could not supply. Swap back when the read path is understood.
-	.a_data({tgp_rd_total, copro_out_pushed[15:0]}),
+	// {trap, cpu halted, copro stall, uploading} : microcode words loaded : tgp pc
+	//
+	// `copro_prog_words` is the question the last three builds could not answer:
+	// zero means the upload never started, 2024 means it finished. With the IP
+	// beside it, one capture separates "the CPU never got there" from "it got
+	// there and hung" from "it trapped".
+	.a_data({cpu_trap, cpu_halted, copro_stall, copro_dbg_ctl[31],
+	         copro_prog_words[11:0], tgp_pc[15:0]}),
 	// THE i960's OWN INSTRUCTION COUNT, so the first three minutes can be
 	// diagnosed rather than described. Two readings a known time apart give the
 	// rate directly; a machine that is slow for three minutes and then is not
