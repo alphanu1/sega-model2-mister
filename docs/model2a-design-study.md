@@ -9321,3 +9321,78 @@ distinguishes two investigations that have nothing to do with each other.
 has had to be unpicked from the top. The rule already exists -- R147, one change
 per build, flashed and confirmed before the next is added -- and the cost of
 ignoring it is now measured in days rather than builds.
+
+---
+
+**R166 - PORT 9 HAS TWO OWNERS AND ONLY ONE OF THEM QUALIFIED ITS ACKNOWLEDGE.
+THE COPROCESSOR WAS RETIRING ITS READS WITH THE GEOMETRIZER'S DATA.**
+
+*The state on the board, with R151 + R162 + narrow R156 running.* The machine
+gets further than it ever has -- sound plays, the attract sequence executes, the
+coprocessor runs the whole command pipeline (`tgp_pc` 261 distinct across
+0481-04B5, 0684-06E2, 06EA-0796; `cpu_ip` reaching 0x228940 and 0x22F100). Then
+video falls to ~0.1 fps and it locks:
+
+    cpu_ip   0001166C / 00011674   99% of samples   the mailbox poll
+    tgp_pc   232 distinct, hottest 048F            the TGP is BUSY, not hung
+    p9       req/ack both wrapping                 memory healthy
+    flags    0, prog_words 07E8                    no stall, no trap
+
+Not a deadlock. The coprocessor is grinding in the vertex/transform loop and
+never reaches 0x4C4 to clear the mailbox, so the i960 waits for ever.
+
+*The arithmetic that says it is not slowness.* MAME's TGP runs 4.6 M
+instructions/second, so one Daytona frame is ~77,000 TGP instructions. Ours runs
+4.9 M/s (R149) and was taking ~10 s a frame: **~640x the reference workload.**
+Memory latency makes each instruction slower; it does not multiply the
+instruction COUNT. Something was feeding the loops a count hundreds of times too
+large -- the same failure as the 0xFFFFFFFF at 0x47C, one level on.
+
+*THE FAULT.* `Model2.sv` muxes port 9 between two owners:
+
+    p_req[9]  = tgp_dat_req_r | (geo_rd_req_r & ~tgp_dat_req_r);
+    p_addr[9] = tgp_dat_req_r ? (copro address) : (geo address);
+
+    geo_rd_ack_r    <= p_ack[9] & ~tgp_dat_req_r;   // QUALIFIED
+    tgp_dat_ack_r   <= p_ack[9];                    // NOT QUALIFIED
+
+**Every read the WALKER completed also acknowledged the COPROCESSOR**, which
+retired its own pending read with the walker's data. Garbage into `$0x69` (the
+display-list base) and `$0x4a` (its count), and a garbage count is billions of
+iterations.
+
+It can only bite while both owners are active. The walker has run since
+`f716321`; the coprocessor only began issuing real reads with R151 and R162.
+That is why this surfaced today and not in the three days before it.
+
+*THE FIX, AND IT COMES FROM THE WORKING CORE.* Ben's standing instruction --
+check Model 1, it has the same coprocessor and it works -- is what found it.
+`m1_integrated.sv` shares one memory port between the TGP's table and data
+reads and qualifies BOTH:
+
+    assign t_tbl_ack = t_mem_ack &&  t_tbl_req;
+    assign t_dat_ack = t_mem_ack && !t_tbl_req && t_dat_req;
+
+and adds a dead cycle so the address cannot move under a transaction already in
+flight:
+
+    wire t_owner_change = (t_tbl_req != t_prev_tbl);
+    wire t_mem_req = (t_tbl_req || t_dat_req) && !t_owner_change;
+
+Ours becomes `tgp_dat_ack_r <= p_ack[9] & tgp_dat_req_r;`. **The dead cycle is
+still owed** -- `p_addr[9]` switches combinationally the moment
+`tgp_dat_req_r` asserts, so a walker transaction in flight can still have its
+address moved.
+
+*THE PATTERN, NOW THREE TIMES IN ONE DAY.* R162: a shared port whose acknowledge
+was a one-shot, so one missed pulse killed it for ever. R144: a shared WRITE
+port with five requesters and one broadcast acknowledge. R166: a shared read
+port with two owners and one unqualified acknowledge. **Every handshake in this
+core that serves more than one master has been wrong in the same way**, and none
+of them could be caught by a bench, because no bench drives two owners of the
+same port at once.
+
+*What is owed as a result.* A directed multi-owner test for every shared port --
+two requesters, overlapping requests, checking that each retires on its own
+acknowledge with its own data. That is the bench that would have caught all
+three, and it does not exist.

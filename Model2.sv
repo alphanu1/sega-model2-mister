@@ -2193,6 +2193,27 @@ logic [31:0] tgp_tbl_rdata_r, tgp_dat_rdata_r;
 //
 // A cycle each way costs nothing: the TGP issues one lookup and BLOCKS on it.
 logic        tgp_tbl_req_r, tgp_dat_req_r;
+// THE TWO LOOP COUNTS (R165). The lock is the CPU spinning at 0x1166C -- 99% of
+// samples -- while the TGP grinds in the vertex/transform loop and never
+// reaches the mailbox clear at 0x4C4. Both loops that could do that are counted
+// down out of data RAM:
+//
+//   $0x4a  the display-list count, read at 0x47C. MAME: 6, 7, 8, 9, 0x14.
+//   $0x70  the inner countdown at 0x4F6-0x50C, derived from $0x4b.
+//
+// A garbage value in either is billions of iterations and looks exactly like a
+// hang. Simulation says both are small; this says what the board sees.
+wire [16:0] tgp_wr_addr;
+wire [31:0] tgp_wr_data;
+logic [31:0] dbg_cnt4a, dbg_cnt70;
+always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
+	if (!cpu_rst_n) begin
+		dbg_cnt4a <= 32'hEEEEEEEE; dbg_cnt70 <= 32'hEEEEEEEE;
+	end else begin
+		if (tgp_wr_addr[8:0] == 9'h04A) dbg_cnt4a <= tgp_wr_data;
+		if (tgp_wr_addr[8:0] == 9'h070) dbg_cnt70 <= tgp_wr_data;
+	end
+end
 // PORT 9 ON THE WIRE (R160). Counting request RISES against acknowledges is
 // what separated "issued and never answered" from "never issued" -- and it is
 // how R162's fix is confirmed rather than assumed.
@@ -2219,7 +2240,28 @@ logic [15:0] tgp_dat_wdata_r;
 always_ff @(posedge clk_sys) begin
 	tgp_tbl_ack_r   <= p_ack[8];
 	tgp_tbl_rdata_r <= p_dout[8][31:0];
-	tgp_dat_ack_r   <= p_ack[9];
+	// QUALIFIED BY OWNERSHIP (R166), AS THE WALKER'S ALREADY IS.
+	//
+	// Port 9 has TWO owners -- the coprocessor's data reads and the geometrizer
+	// walker -- muxed by `tgp_dat_req_r`. The walker's acknowledge is gated
+	// (`& ~tgp_dat_req_r`, below); the coprocessor's was not. So every read the
+	// WALKER completed also raised `tgp_dat_ack_r`, and the coprocessor retired
+	// its own pending read with the walker's data.
+	//
+	// That is garbage into $0x69 and $0x4a -- the display-list base and its
+	// count -- and a wrong count is billions of loop iterations, which is exactly
+	// what the board shows: the TGP grinding the vertex loop at 0x48F while the
+	// i960 waits at 0x1166C for a mailbox clear that never comes.
+	//
+	// It can only bite while BOTH owners are active, which is why it appeared the
+	// moment the coprocessor started doing real work and not before.
+	//
+	// Model 1 gets this right on its equivalent shared port, m1_integrated.sv:
+	//     assign t_tbl_ack = t_mem_ack &&  t_tbl_req;
+	//     assign t_dat_ack = t_mem_ack && !t_tbl_req && t_dat_req;
+	// per-owner qualification, plus a dead cycle on owner change. Same family as
+	// R144 on the write side.
+	tgp_dat_ack_r   <= p_ack[9] & tgp_dat_req_r;
 	tgp_dat_rdata_r <= p_dout[9][31:0];
 	tgp_tbl_req_r   <= tgp_tbl_req;
 	tgp_tbl_addr_r  <= tgp_tbl_addr;
@@ -2295,7 +2337,7 @@ m2_copro u_copro (
 	.dbg_in_dropped(copro_in_dropped), .dbg_out_dropped(copro_out_dropped),
 	.dbg_ram_req(copro_ram_req),
 	.dbg_tgp_retires(tgp_retires), .dbg_tgp_pc(tgp_pc),
-	.dbg_tgp_wr_n(), .dbg_tgp_wr_addr(), .dbg_tgp_wr_data(), .dbg_tgp_st(), .dbg_tgp_a(), .dbg_tgp_b(), .dbg_tgp_d(),
+	.dbg_tgp_wr_n(), .dbg_tgp_wr_addr(tgp_wr_addr), .dbg_tgp_wr_data(tgp_wr_data), .dbg_tgp_st(), .dbg_tgp_a(), .dbg_tgp_b(), .dbg_tgp_d(),
 	.dbg_tgp_op(tgp_op), .dbg_tgp_hold(tgp_hold),
 	.dbg_tgp_io_addr(tgp_io_addr), .dbg_tgp_io_rd(tgp_io_rd),
 	.dbg_tgp_io_wr(tgp_io_wr), .dbg_tgp_io_ack(tgp_io_ack), .dbg_ff_math(tgp_ff_math), .dbg_ff_rom(tgp_ff_rom), .dbg_ff_buf(tgp_ff_buf), .dbg_rd_total(tgp_rd_total),
@@ -3046,8 +3088,8 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// THE WALK'S OWN NUMBERS. Against the offline oracle: 101 opcodes and 60
 	// object_data per frame. Anything else means it is reading the wrong memory
 	// or mis-counting an operand, and both look like a corrupt display list.
-	.b_addr({dbg_p9_req_n, dbg_p9_ack_n}),
-	.b_data({tgp_dat_req_r, tgp_dat_ack_r, tgp_dat_is_buf_r, tgp_dat_we_r, tgp_dat_addr_r[19:0], 8'd0}),
+	.b_addr(dbg_cnt4a),      // the display-list count the TGP is looping on
+	.b_data(dbg_cnt70),      // and the inner countdown at 0x4F6
 	.a_tag(8'h43), .b_tag(8'h48),          // 'C' copro in_pushed:out_pushed | TGP retires:pc
 	                                       // 'H' out_popped:hscr2 | io_addr:flags
 	                                       // 'H' scroll h:v for layers 0,1 | layers 2,3 -- low bytes
