@@ -92,6 +92,21 @@ module m2_geo #(
   // Exposed so the bench can check them against a list it built, and because
   // the polygon fetch consumes oba/obc next.
   output logic [31:0]   mtx0, mtx4, mtx8, mtx11,  // corners of the 3x4, enough to prove order
+  // THE MATRIX AS A STREAM, not as twelve wires. The capture below already
+  // takes one operand per acknowledge in reference order, so the write enable,
+  // the index and the word are simply that loop made visible. m2_geo_xform
+  // wants exactly this shape (mat_we/mat_idx/mat_data), so nothing is
+  // reformatted between here and there -- and a 384-wire bundle never exists.
+  output logic          mat_we,
+  output logic [3:0]    mat_idx,
+  output logic [31:0]   mat_data,
+  // THE INTERLOCK. The walk and the geometry engine read the SAME SDRAM port,
+  // and two owners on one port is what cost this project four days (study
+  // R167). Rather than arbitrate, they take turns: the walk stops at an
+  // object_data until the engine has drained that object. It is what the
+  // reference does anyway -- geo_object_data does not return until geo_parse
+  // has walked every polygon -- so the serialisation is not a concession.
+  input  logic          eng_busy,
   output logic [31:0]   foc_x, foc_y,
   output logic [31:0]   obj_tpa, obj_tha, obj_oba, obj_obc,
   output logic          obj_valid,       // one pulse when an object_data is complete
@@ -240,7 +255,7 @@ module m2_geo #(
   // next stage. Getting the walk right first means the opcode histogram on the
   // UART can be compared against the 101/60/33 above, which is a real oracle.
   typedef enum logic [3:0] { W_IDLE, W_FETCH, W_DECODE, W_SKIP, W_CNT,
-                             W_TFIFO, W_DDSKIP, W_DDATTR, W_OPRD } wstate_t;
+                             W_TFIFO, W_DDSKIP, W_DDATTR, W_OPRD, W_OBJW } wstate_t;
   wstate_t wst;
   logic [18:0] w_ip;
   logic [15:0] w_ops, w_skip;
@@ -322,9 +337,14 @@ module m2_geo #(
   logic [31:0] mtx [12];
   logic [1:0]  w_cap;                    // which opcode's operands are being read
   logic [3:0]  w_ci;                     // operand index
+  logic        eng_seen;                 // the engine's busy has been observed high
   localparam logic [1:0] CAP_MTX = 2'd1, CAP_FOC = 2'd2, CAP_OBJ = 2'd3;
 
   assign mtx0 = mtx[0]; assign mtx4 = mtx[4]; assign mtx8 = mtx[8]; assign mtx11 = mtx[11];
+
+  assign mat_we   = (wst == W_OPRD) && rd_ack && (w_cap == CAP_MTX);
+  assign mat_idx  = w_ci;
+  assign mat_data = rd_data;
 
   wire is_mtx = (w_op == 5'h0b) || (w_op == 5'h1b);
   wire is_foc = (w_op == 5'h09) || (w_op == 5'h19);
@@ -342,7 +362,7 @@ module m2_geo #(
       wst <= W_IDLE; w_ip <= 19'd0; w_ops <= 16'd0; w_skip <= 16'd0; w_op <= 5'd0;
       dbg_walk_ops <= 16'd0; dbg_walk_objs <= 16'd0;
       dbg_walk_frames <= 16'd0; dbg_walk_unknown <= 8'd0;
-      w_cap <= 2'd0; w_ci <= 4'd0; obj_valid <= 1'b0;
+      w_cap <= 2'd0; w_ci <= 4'd0; obj_valid <= 1'b0; eng_seen <= 1'b0;
       dbg_mtx_n <= 16'd0; dbg_foc_n <= 16'd0;
       foc_x <= 32'd0; foc_y <= 32'd0;
       obj_tpa <= 32'd0; obj_tha <= 32'd0; obj_oba <= 32'd0; obj_obc <= 32'd0;
@@ -440,13 +460,32 @@ module m2_geo #(
           if (w_ci == cap_last) begin
             if (w_cap == CAP_MTX) dbg_mtx_n <= dbg_mtx_n + 16'd1;
             if (w_cap == CAP_FOC) dbg_foc_n <= dbg_foc_n + 16'd1;
-            // The object is announced only once its four words are in.
-            if (w_cap == CAP_OBJ) obj_valid <= 1'b1;
-            wst <= W_FETCH;
+            // The object is announced only once its four words are in, and
+            // the walk then STOPS until the engine reports the object drawn.
+            if (w_cap == CAP_OBJ) begin
+              obj_valid <= 1'b1;
+              eng_seen  <= 1'b0;
+              wst       <= W_OBJW;
+            end else begin
+              wst <= W_FETCH;
+            end
           end else begin
             w_ci <= w_ci + 4'd1;
           end
         end
+        // WAIT FOR THE ENGINE, IN TWO HALVES. busy rises the cycle AFTER
+        // start, so "wait until !busy" would fall straight through on the
+        // cycle obj_valid was raised and let the walk race ahead onto the
+        // port. Watch busy go up first, then come back down.
+        W_OBJW: begin
+          if (!eng_seen) begin
+            if (eng_busy) eng_seen <= 1'b1;
+          end else if (!eng_busy) begin
+            eng_seen <= 1'b0;
+            wst      <= W_FETCH;
+          end
+        end
+
         W_CNT: if (rd_ack) begin
           // JUST THE COUNT. This state has already stepped past the count word
           // itself, so adding one for it walks a word too far -- which lands on

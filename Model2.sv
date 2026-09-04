@@ -459,6 +459,16 @@ logic       geo_rd_req_r;
 logic [18:0] geo_rd_addr_r;
 logic       geo_rd_ack_r;
 logic [31:0] geo_rd_data_r;
+// The geometry engine's side of port 4. eng_base is decoded once per object
+// from oba and held, so the increment inside the engine never has to know
+// which memory it is walking.
+wire         eng_mem_req;
+wire [23:0]  eng_mem_addr;
+logic        eng_mem_req_r, eng_mem_ack_r;
+logic [23:0] eng_mem_idx_r;
+logic [31:0] eng_mem_data_r;
+logic [SDR_AW:1] eng_base_r;
+logic [15:0] dbg_p4_clash;
 // REGISTERED, like the read path already is. Unregistered, this ran
 // combinationally from mb86233_regs' b0 through win_adr, bufw_addr and the
 // shared-write-port mux into m2_sdram's wr_addr_p -- every failing path in
@@ -588,8 +598,18 @@ always_comb begin
 	//
 	// Port 4 was the SDRAM checksum sweeper, a debug facility whose only consumer
 	// is the overlay. It is the port Ben identified as free.
-	p_req[4]  = geo_rd_req_r;
-	p_addr[4] = GAME_BUFFER + SDR_AW'({geo_rd_addr_r, 1'b0});
+	//
+	// PORT 4 NOW CARRIES TWO READERS, AND THEY TAKE TURNS RATHER THAN SHARE.
+	// The walk stops at every object_data until the geometry engine reports
+	// that object drawn (m2_geo's eng_busy interlock), so exactly one of these
+	// two requests can be up at a time. That is what makes one port legal here
+	// where R167 made it fatal: there, the walker and the coprocessor were
+	// independent and genuinely overlapped. dbg_p4_clash below counts the
+	// cycles where both ask anyway -- if the interlock is ever wrong, that
+	// counter is non-zero rather than the picture being subtly incorrect.
+	p_req[4]  = geo_rd_req_r | eng_mem_req_r;
+	p_addr[4] = eng_mem_req_r ? (eng_base_r + SDR_AW'({eng_mem_idx_r, 1'b0}))
+	                          : (GAME_BUFFER + SDR_AW'({geo_rd_addr_r, 1'b0}));
 	// PORT 2 FOR THE COPY, which is the one port known to work.
 	//
 	// Port 0 failed (single word) and port 1 failed (four-word burst), while the
@@ -1215,6 +1235,17 @@ localparam logic [SDR_AW:1] GAME_BOARD = SDR_AW'(32'h16a0000);   // 128 KB
 localparam logic [SDR_AW:1] GAME_CHAR  = SDR_AW'(32'h16b0000);   // 512 KB
 // 0x16f0000 is the first word free after GAME_CHAR; ST_BASE is at 0x1F00000.
 localparam logic [SDR_AW:1] GAME_BUFFER = SDR_AW'(32'h16f0000);   // 128 KB, 0x00900000
+// POLYGON RAM, TWO OF THEM, AND THEY ARE NOT ON-CHIP.
+//
+// geo_object_data picks the memory an object is read from out of oba's top
+// bits: 0x01000000 -> fast polygon RAM, else 0x00800000 -> polygon ROM, else
+// slow polygon RAM. MAME's polygon_ram0/1 are 0x8000 DWORDS each -- 128 KB
+// apiece, 256 KB together, which is 205 M10K blocks of the 553 on this part.
+// M10K is the binding resource here (the fx68k pull established that), so they
+// go in SDRAM beside buffer RAM instead. They are written by the display list
+// itself, opcode 0x05 geo_polygon_data, not by the i960.
+localparam logic [SDR_AW:1] GAME_PRAM0  = SDR_AW'(32'h1710000);   // 128 KB, slow
+localparam logic [SDR_AW:1] GAME_PRAM1  = SDR_AW'(32'h1720000);   // 128 KB, fast
 
 // WHERE CHARACTER RAM LIVES, AS ONE SIGNAL, because two things that must agree
 // should not be two constants (study R51).
@@ -2182,8 +2213,102 @@ m2_geo #(.AW(SDR_AW), .DEPTH(128)) u_geo (
 	.rd_req(geo_rd_req), .rd_addr(geo_rd_addr),
 	.rd_data(geo_rd_data_r), .rd_ack(geo_rd_ack_r),
 	.dbg_walk_ops(geo_walk_ops), .dbg_walk_objs(geo_walk_objs),
-	.dbg_walk_frames(geo_walk_frames), .dbg_walk_unknown(geo_walk_unknown)
+	.dbg_walk_frames(geo_walk_frames), .dbg_walk_unknown(geo_walk_unknown),
+	.mtx0(), .mtx4(), .mtx8(), .mtx11(),
+	.mat_we(geo_mat_we), .mat_idx(geo_mat_idx), .mat_data(geo_mat_data),
+	.eng_busy(eng_busy),
+	.foc_x(geo_foc_x), .foc_y(geo_foc_y),
+	.obj_tpa(), .obj_tha(), .obj_oba(geo_obj_oba), .obj_obc(geo_obj_obc),
+	.obj_valid(geo_obj_valid),
+	.dbg_mtx_n(geo_mtx_n), .dbg_foc_n(geo_foc_n)
 );
+
+// WHICH MEMORY AN OBJECT LIVES IN, decoded exactly as geo_object_data decodes
+// it: 0x01000000 selects fast polygon RAM, else 0x00800000 selects the polygon
+// ROM, else slow polygon RAM. The base is latched with the object because the
+// engine's pointer increments and must not re-decode a moving address.
+//
+// The masks differ per memory and that is the reference's doing too: polygon
+// RAM is indexed `oba & 0x7fff` -- 15 bits, one 32K-dword window -- while the
+// ROM is masked to its own size. Ours is 12 MB, 3M dwords, so 22 bits covers it
+// and addresses past the end read whatever is there rather than wrapping into
+// something meaningful. MAME's polygon_rom_mask is not a power of two either.
+wire [SDR_AW:1] eng_base = geo_obj_oba_r[24] ? GAME_PRAM1
+                         : geo_obj_oba_r[23] ? GAME_POLY
+                                             : GAME_PRAM0;
+wire [23:0] eng_mem_idx  = (geo_obj_oba_r[24] || !geo_obj_oba_r[23])
+                         ? {9'd0, eng_mem_addr[14:0]}      // 32K-dword window
+                         : {2'd0, eng_mem_addr[21:0]};     // 4M-dword ROM window
+logic [31:0] geo_obj_oba_r;
+always_ff @(posedge clk_sys) if (geo_obj_valid) geo_obj_oba_r <= geo_obj_oba;
+
+wire        geo_mat_we;
+wire [3:0]  geo_mat_idx;
+wire [31:0] geo_mat_data, geo_foc_x, geo_foc_y, geo_obj_oba, geo_obj_obc;
+wire        geo_obj_valid, eng_busy;
+wire [15:0] geo_mtx_n, geo_foc_n;
+
+// THE GEOMETRY PIPELINE. object_data in, screen quads out; see m2_geometry.sv.
+//
+// THE CLIP WINDOW IS THE SCREEN, for now. Model 2 sets it per-object with
+// opcode 0x03 geo_window_data, which the walk currently steps over rather than
+// captures -- so every polygon is clipped to 496x384 and a game that relies on
+// a smaller viewport draws outside it. That is visible and wrong rather than
+// silent and wrong, which is the right way round while the pipeline is new.
+//
+// THE COLOUR IS FLAT AND CONSTANT. Lighting needs the normal transformed and
+// two dot products; texture needs the texture ROM and its own cache. Neither
+// changes the dataflow here, and the rasterizer takes a single 24-bit colour
+// with no texture input at all, so shape comes first and shading second.
+wire        q3d_valid, q3d_ready;
+wire signed [15:0] q3d_x0, q3d_y0, q3d_x1, q3d_y1, q3d_x2, q3d_y2, q3d_x3, q3d_y3;
+wire [23:0] q3d_col;
+wire [31:0] q3d_z;
+wire [15:0] geo_polys, geo_objs_done, geo_clip_in, geo_clip_out, geo_clip_drop;
+
+m2_geometry u_geometry (
+	.clk(clk_sys), .rst_n(mem_rst_n),
+	.start(geo_obj_valid), .oba(geo_obj_oba), .obc(geo_obj_obc), .busy(eng_busy),
+	.mat_we(geo_mat_we), .mat_idx(geo_mat_idx), .mat_data(geo_mat_data),
+	.foc_x(geo_foc_x), .foc_y(geo_foc_y),
+	.mem_req(eng_mem_req), .mem_addr(eng_mem_addr),
+	.mem_data(eng_mem_data_r), .mem_ack(eng_mem_ack_r),
+	// THE VIEWPORT, AND THESE ARE NOT PIXELS. a_* are the four frustum planes
+	// as SLOPES, tested as p.x < p.z * a_left and so on -- the clip happens in
+	// view space, before the divide. MAME builds them from the rasterizer's
+	// viewport and centre (model2_v.cpp:882); for a 496x384 screen centred at
+	// (248,192) they come out as -248, +248, +192, -192.
+	//
+	// STILL CONSTANT, AND THAT IS THE REMAINING GAP HERE. Model 2 sets the
+	// centre and viewport with rasterizer commands the core does not capture
+	// yet, and the CRTC sync registers offset them further. A game that moves
+	// its viewport draws to the wrong place -- visibly, rather than silently.
+	.xc(32'h43780000), .yc(32'h43400000),               // 248.0, 192.0
+	.a_left(32'hC3780000), .a_right(32'h43780000),      // -248.0, +248.0
+	.a_bottom(32'h43400000), .a_top(32'hC3400000),      // +192.0, -192.0
+	.flat_col(24'hC0C0C0),
+	.q_valid(q3d_valid), .q_ready(q3d_ready),
+	.q_x0(q3d_x0), .q_y0(q3d_y0), .q_x1(q3d_x1), .q_y1(q3d_y1),
+	.q_x2(q3d_x2), .q_y2(q3d_y2), .q_x3(q3d_x3), .q_y3(q3d_y3),
+	.q_col(q3d_col), .q_z(q3d_z),
+	.dbg_polys(geo_polys), .dbg_objects(geo_objs_done),
+	.dbg_clip_in(geo_clip_in), .dbg_clip_out(geo_clip_out),
+	.dbg_clip_dropped(geo_clip_drop)
+);
+
+// THE FRAME ENDS WHEN THE WALK DOES, and the walk's completion counter is the
+// only signal that says so. q_end is what releases the rasterizer's producer
+// from P_COLLECT into the sort, so without it nothing ever draws no matter how
+// many quads arrived.
+logic [15:0] walk_frames_d;
+logic        q3d_end;
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+	if (!mem_rst_n) begin walk_frames_d <= 16'd0; q3d_end <= 1'b0; end
+	else begin
+		walk_frames_d <= geo_walk_frames;
+		q3d_end       <= (geo_walk_frames != walk_frames_d);
+	end
+end
 
 wire        copro_ctl_sel  = cpu_io_sel && (cpu_io_addr[23:0]  == 24'h980000);
 wire        copro_fctl_sel = cpu_io_sel && (cpu_io_addr[23:0]  == 24'h980004);
@@ -2337,8 +2462,18 @@ always_ff @(posedge clk_sys) begin
 	tgp_bufw_addr_r <= tgp_bufw_addr;
 	tgp_bufw_data_r <= tgp_bufw_data;
 	tgp_bufw_ack_r  <= ldr_wr_ack & tgp_bufw_req_r;
-	geo_rd_ack_r    <= p_ack[4];      // port 4 has ONE owner now
+	// Each reader retires on the acknowledge ONLY when it was the one asking.
+	// Qualifying the ack is the fix R166 applied to the coprocessor's port and
+	// it is the same shape of bug: an unqualified p_ack retires a request that
+	// was never issued.
+	geo_rd_ack_r    <= p_ack[4] & geo_rd_req_r & ~eng_mem_req_r;
 	geo_rd_data_r   <= p_dout[4][31:0];
+	eng_mem_req_r   <= eng_mem_req;
+	eng_mem_idx_r   <= eng_mem_idx;
+	eng_base_r      <= eng_base;
+	eng_mem_ack_r   <= p_ack[4] & eng_mem_req_r;
+	eng_mem_data_r  <= p_dout[4][31:0];
+	if (geo_rd_req_r & eng_mem_req_r) dbg_p4_clash <= dbg_p4_clash + 16'd1;
 end
 
 // CLOCKED ON clk_sys, DELIBERATELY, and speed is a separate question.
@@ -3940,12 +4075,13 @@ wire [9:0] vid_x, vid_y;
 // of it is Model 1's, verified upstream over 152,025 quads and 31.6 M spans;
 // the sequencer around it is ours. See THIRD_PARTY.md and study R124.
 //
-// THE QUAD INPUT IS TIED OFF, and that is the whole remaining gap. `q_*` wants
-// a projected screen-space quad with a colour and a z, which is what the
-// geometrizer's transform stage will emit once object_data reads its objects
-// out of the polygon ROM. Until then q_end never pulses, so the producer never
-// leaves P_COLLECT, the consumer never runs, and scan_hit stays low -- the 3D
-// layer is present, wired and inert, and the 2D picture is untouched.
+// THE QUAD INPUT IS CONNECTED. m2_geometry above walks each object out of the
+// polygon ROM, transforms and focuses its vertices, clips them to the screen
+// and hands them here already in pixels. q_end pulses when the display-list
+// walk finishes, which is what releases the producer from P_COLLECT into the
+// sort -- without it quads accumulate and nothing ever draws.
+//
+// Flat colour, no texture, no lighting: shape first.
 wire [15:0] r3d_col;
 wire        r3d_hit;
 wire [15:0] r3d_quads, r3d_dropped, r3d_bands;
@@ -3954,10 +4090,10 @@ wire [31:0] r3d_pixels;
 m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(16), .NBUF(3)) u_raster3d (
 	.clk(clk_sys), .rst_n(mem_rst_n),
 	.frame_start(geo_walk_start),
-	.q_valid(1'b0), .q_ready(),
-	.q_x0(16'sd0), .q_y0(16'sd0), .q_x1(16'sd0), .q_y1(16'sd0),
-	.q_x2(16'sd0), .q_y2(16'sd0), .q_x3(16'sd0), .q_y3(16'sd0),
-	.q_col(24'd0), .q_z(32'd0), .q_moire(1'b0), .q_end(1'b0),
+	.q_valid(q3d_valid), .q_ready(q3d_ready),
+	.q_x0(q3d_x0), .q_y0(q3d_y0), .q_x1(q3d_x1), .q_y1(q3d_y1),
+	.q_x2(q3d_x2), .q_y2(q3d_y2), .q_x3(q3d_x3), .q_y3(q3d_y3),
+	.q_col(q3d_col), .q_z(q3d_z), .q_moire(1'b0), .q_end(q3d_end),
 	.scan_clk(clk_sys), .scan_x(vid_x), .scan_y(vid_y),
 	.scan_col(r3d_col), .scan_hit(r3d_hit),
 	.dbg_quads(r3d_quads), .dbg_dropped(r3d_dropped),

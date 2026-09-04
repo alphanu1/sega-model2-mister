@@ -543,6 +543,16 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/tgp/m2_tgp.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/tgp/m2_copro.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/tgp/m2_fifo_m10k.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_geo.sv
+# The geometry pipeline. m2_geometry ties these together; the arithmetic stages
+# are Model 1's, pinned in THIRD_PARTY.md, and m2_geo_engine/m2_geo_screen are
+# ours because the stream grammar and the (absent) projection are Model 2's.
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_geometry.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_geo_engine.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_geo_project.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_geo_xform.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_geo_clip.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_fp_pool.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/fp_to_int.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_raster3d.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_quad_store.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_raster_fill.sv

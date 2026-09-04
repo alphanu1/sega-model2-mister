@@ -9530,6 +9530,20 @@ transcribed here.
 
 ---
 
+**R172 - WITHDRAWN. IT SAID MODEL 2 HAS NO PERSPECTIVE DIVIDE. IT HAS ONE, IN
+THE RASTERIZER. SEE R174.**
+
+The entry as written is preserved below because the reasoning in it is the
+reasoning that produced a module which had to be deleted, and that is worth
+more than a tidy record. What it got right: `geo_parse` really does end at
+`apply_focus`, and a vertex really does leave the *geometrizer* as two
+multiplies past the transform. What it got wrong: it concluded from that that a
+vertex leaves the geometrizer **in pixels**. It does not -- it leaves in view
+space, and `model2_3d_project` divides by `pz` one block downstream. R172 read
+one function's end and called it the end of the pipeline.
+
+--- the original entry follows ---
+
 **R172 - MODEL 2 HAS NO PERSPECTIVE DIVIDE IN ITS GEOMETRY. `apply_focus` IS THE
 PROJECTION, AND IT IS TWO MULTIPLIES. ONE OF THE PORTED STAGES THEREFORE DOES
 NOT APPLY.**
@@ -9574,3 +9588,113 @@ by a divide per vertex. `fp_div` is 29 cycles and does not pipeline -- Model 1's
 own pool header calls two reciprocals a record "58 of the 68" cycle budget. Not
 needing it at all is the single largest arithmetic saving available here, and it
 was found by reading the reference rather than by assuming the ported stage fit.
+
+---
+
+**R173 - THE WALK AND THE GEOMETRY ENGINE SHARE ONE SDRAM PORT BY TAKING TURNS,
+NOT BY ARBITRATING. THE INTERLOCK IS IN THE WALKER.**
+
+Established while wiring `m2_geometry` into the top level.
+
+*The problem.* The display-list walk reads bufferram; the geometry engine reads
+the polygon ROM. Both are dword reads, both want SDRAM, and the core has one
+port free. R167 is exactly what happens when two independent owners are put on
+one port -- it cost four days and it did not announce itself, it made the
+coprocessor look broken.
+
+*Why this case is different, and why that is not luck.* `geo_object_data` in the
+reference does not return until `geo_parse` has walked every polygon of the
+object. The walk is *already* serialised behind the geometry in MAME; making the
+RTL do the same is reproducing the reference, not conceding to a resource
+limit. `m2_geo` gained an `eng_busy` input and a `W_OBJW` state: when an
+`object_data`'s four operands are in, the walk stops until the engine reports
+that object drawn.
+
+*The bug the interlock nearly had.* `busy` rises the cycle **after** `start`, so
+"wait until `!eng_busy`" falls straight through on the cycle `obj_valid` was
+raised, and the walk races back onto the port while the engine is still
+starting. `W_OBJW` watches `eng_busy` go high first, then come back down.
+
+*And `busy` must mean the whole pipeline.* The engine finishes reading an object
+long before its last polygon has been through four 29-cycle reciprocals and the
+clipper. `m2_geometry.busy` is therefore `eng_busy || quad projector not idle ||
+clipper not idle` -- `m2_geo_clip`'s `in_ready` is literally `kst == K_IDLE`, so
+that third term is exact. Two things ride on this being honest: the interlock
+above, and `q_end`, which releases the rasterizer's sort and would otherwise
+throw away whatever was still in flight at the end of a frame.
+
+*What is still not proved.* Port 4 now has two drivers whose non-overlap rests
+on this interlock rather than on structure. `dbg_p4_clash` counts cycles where
+both request anyway. If the interlock is ever wrong, that counter is non-zero --
+rather than the picture being subtly incorrect, which is the failure this
+project has been worst at seeing.
+
+*The bench had the same blind spot as every other one here.* `tb_m2_geo`
+deadlocked at the first `object_data` the moment the interlock went in, because
+it tied `eng_busy` low. That is the right failure -- it proves the wait actually
+blocks -- but it is also the third time a bench has been written with one
+requester where the design has two. Still outstanding: R144's shared write port,
+five requesters and one broadcast acknowledge.
+
+---
+
+**R174 - MODEL 2 DOES HAVE A PERSPECTIVE DIVIDE. IT IS IN THE RASTERIZER, AND
+THE CLIP IS A VIEW-SPACE FRUSTUM. THE GEOMETRY SHAPE IS MODEL 1'S SHAPE AFTER
+ALL. THIS REPLACES R172.**
+
+Established by `sim/video/tb_m2_geometry.cpp` hanging, then by reading
+`model2_v.cpp` past the end of `geo_parse`.
+
+*What the reference actually says.* `model2_3d_project` (model2_v.cpp:656):
+
+    v.x = crtc_xoffset + center[0] + (v.x / v.pz)
+    v.y = ((384 - center[1]) + crtc_yoffset) - (v.y / v.pz)
+
+and before it, `model2_3d_process_polygon` clips against four planes built from
+the viewport and the centre (model2_v.cpp:882), tested as
+`dot(v, normal) >= 0` with the normals carrying a `pz` component -- a frustum
+clip in **view** space, not a box test on pixels.
+
+*So the pipeline is:* transform -> `apply_focus` -> frustum clip in view space
+-> divide by z -> screen. Which is Model 1's pipeline exactly. `apply_focus`
+plays the part Model 1 gives to zoom, one stage earlier; that is the whole
+difference.
+
+*And the ported projector fits without modification.* `m2_geo_project`'s
+contract is
+
+    s.x = xc + (x/z * zoomx + viewx)      s.y = yc - (y/z * zoomy + viewy)
+
+which is Model 2's projection with `zoom = 1.0`, `view = 0`, `xc` absorbing
+`crtc_xoffset + center[0]` and `yc` absorbing `(384 - center[1]) +
+crtc_yoffset`. The four `a_*` clip slopes map onto MAME's four plane normals
+one for one under different names -- Model 1's `a_bottom` is MAME's *top* plane
+and vice versa, but the four half-spaces are identical. For a 496x384 screen
+centred at (248,192): `a_left = -248`, `a_right = +248`, `a_bottom = +192`,
+`a_top = -192`.
+
+*What R172 cost.* One module, `m2_geo_screen`, which answered the clipper's
+projector port with a float-to-int conversion on the belief that the vertices
+were already pixels. Deleted. Nothing else: the wrong belief never reached
+hardware, because the integration bench was written first.
+
+*How it was caught, and this is the point.* Every stage passed its own bench --
+xform 7,813, project 20,037, clip 2,003, the engine's grammar 15. The error was
+in the **join**, and it appeared as the clipper accepting a polygon and then
+neither emitting nor dropping it: `clip in=1 out=0 dropped=0`, a hang. Fed pixel
+coordinates, a frustum test `p.x < p.z * a_left` compares a pixel column
+against a slope times a depth and the polygon is neither in nor out of anything
+meaningful. On hardware that is a black screen -- indistinguishable from the
+geometry never running at all, which is the state this core spent four days in
+for a different reason.
+
+*A second, smaller lesson from the same bench.* Its first working version broke
+its run loop on the engine's `busy` and reported "no quads" for a pipeline that
+had simply not finished. A bench measuring its own impatience reads exactly like
+a design that does not work. It now runs a fixed budget.
+
+*The saving R172 claimed is gone.* There is no divide-free geometry here; the
+reciprocal is 29 cycles and does not pipeline, four vertices per polygon is
+about 120 cycles, and that puts roughly 2,700 polygons in a 60 Hz frame before
+the projector is the limit. That is the number to watch when real display lists
+arrive.

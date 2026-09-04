@@ -1,0 +1,214 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Sega Model 2 core for MiSTer FPGA
+// Copyright (C) 2026 alphanu1
+//
+// m2_geometry: does an object_data command become SCREEN QUADS?
+//
+// Every stage below this is already verified on its own -- xform at 7,813
+// checks, clip at 2,003, the engine's grammar at 15. What is new here is the
+// JOIN, and the join is where this project's expensive bugs have lived:
+//
+//   * THREE CLIENTS ON ONE POOL. The transform, the focus multiplies and the
+//     clipper all share one multiplier and one adder. If the round-robin or the
+//     tag routing is wrong, a result lands in the wrong stage and the picture
+//     is subtly incorrect rather than absent -- the hardest failure to see.
+//
+//   * ONE PROJECTOR, TWO REQUESTERS. The quad projector and the clipper both
+//     drive m2_geo_project. If the grant is ambiguous, whichever side lost
+//     still believes it was served and reads another vertex's pixels.
+//
+//   * VIEW SPACE IN, PIXELS OUT. The engine emits VIEW-space vertices; the
+//     divide happens in the projector. z = 1.0 makes x/z = x, so a vertex fed
+//     at x is expected at xc + x exactly -- no float comparison that "nearly"
+//     passed.
+//
+// THE FIRST VERSION OF THIS BENCH HAD THE GEOMETRY WRONG, and that is worth
+// recording. It was written believing study R172: that Model 2 has no
+// perspective divide and that apply_focus leaves a vertex already in pixels.
+// It fed pixel coordinates and clipped them against a pixel box, and the
+// clipper -- which tests p.x < p.z * a_left, a FRUSTUM plane in view space --
+// accepted the polygon and never emitted or dropped it. That hang is what sent
+// this back to MAME, where model2_3d_project divides by pz plainly. The bench
+// found a design error, not a wiring error, which is the whole reason for
+// writing one before a build.
+
+#include "Vm2_geometry.h"
+#include "verilated.h"
+#include <cstdio>
+#include <cstdint>
+#include <cstring>
+#include <vector>
+
+static Vm2_geometry* d;
+static std::vector<uint32_t> obj(4096, 0);
+static long checks = 0, fails = 0;
+
+static void tick() {
+  d->mem_ack = d->mem_req;
+  if (d->mem_req) d->mem_data = obj[d->mem_addr & 0xfff];
+  d->clk = 0; d->eval();
+  d->clk = 1; d->eval();
+}
+
+static uint32_t f2u(float f){ uint32_t u; std::memcpy(&u,&f,4); return u; }
+
+static void ck(const char* w, int32_t got, int32_t want) {
+  checks++;
+  if (got != want) { std::printf("  FAIL %-32s got=%d want=%d\n", w, got, want); fails++; }
+}
+
+static size_t put_v(size_t w, float x, float y, float z) {
+  obj[w++] = f2u(x); obj[w++] = f2u(y); obj[w++] = f2u(z);
+  return w;
+}
+
+static void load_identity() {
+  static const float I[12] = {1,0,0, 0,1,0, 0,0,1, 0,0,0};
+  for (int i = 0; i < 12; i++) { d->mat_we = 1; d->mat_idx = i; d->mat_data = f2u(I[i]); tick(); }
+  d->mat_we = 0; tick();
+}
+
+struct Quad { int32_t x0,y0,x1,y1,x2,y2,x3,y3; uint32_t col; };
+
+static std::vector<Quad> run_object() {
+  d->start = 1; tick(); d->start = 0;
+  std::vector<Quad> got;
+  // RUN THE WHOLE BUDGET. `busy` is the ENGINE's, and the engine finishes long
+  // before the four vertices have been through a 29-cycle reciprocal each and
+  // the clipper has run four planes over them. Breaking on it reported "no
+  // quads" for a pipeline that had simply not got there yet -- the bench
+  // measuring its own impatience.
+  for (int budget = 0; budget < 40000; budget++) {
+    tick();
+    if (d->q_valid && d->q_ready)
+      got.push_back({(int16_t)d->q_x0,(int16_t)d->q_y0,(int16_t)d->q_x1,(int16_t)d->q_y1,
+                     (int16_t)d->q_x2,(int16_t)d->q_y2,(int16_t)d->q_x3,(int16_t)d->q_y3,
+                     d->q_col});
+  }
+  std::printf("  [engine polys=%u objects=%u busy=%d]\n",
+              d->dbg_polys, d->dbg_objects, (int)d->busy);
+  return got;
+}
+
+int main(int argc, char** argv) {
+  Verilated::commandArgs(argc, argv);
+  d = new Vm2_geometry;
+  d->rst_n = 0; d->start = 0; d->q_ready = 1; d->mem_ack = 0; d->mat_we = 0;
+  // The four frustum planes as slopes, for a 496x384 screen centred at
+  // (248,192): a_left = (0-xc), a_right = (496-xc), a_bottom = (-0+yc),
+  // a_top = (-384+yc). See m2_geo_clip's header for the tests they feed.
+  d->xc = 0x43780000u; d->yc = 0x43400000u;               // 248.0, 192.0
+  d->a_left = 0xC3780000u; d->a_right  = 0x43780000u;     // -248.0, 248.0
+  d->a_bottom = 0x43400000u; d->a_top  = 0xC3400000u;     //  192.0, -192.0
+  d->flat_col = 0xC0C0C0u;
+  d->foc_x = f2u(1.0f); d->foc_y = f2u(1.0f);
+  d->oba = 0; d->obc = 32;
+  for (int i = 0; i < 8; i++) tick();
+  d->rst_n = 1; tick();
+  load_identity();
+
+  // ---- test 1: one quad, wholly on screen, lands where the projection says
+  //
+  // The engine's mapping is v0=P1(n-1) v1=P0(n-1) v2=P0(n) v3=P1(n), so laying
+  // the four corners down in stream order gives a square wound consistently.
+  // z = 1.0 throughout, so x/z = x and the projection reduces to
+  //     sx = xc + x = 248 + x        sy = yc - y = 192 - y
+  {
+    size_t w = 0;
+    w = put_v(w, -50.0f,  50.0f, 1.0f);    // P0(n-1) -> (198, 142)
+    w = put_v(w, -50.0f, -50.0f, 1.0f);    // P1(n-1) -> (198, 242)
+    obj[w++] = 0x00000001u;                // quad, link 0, (attr&3) != 0
+    w = put_v(w, 0.0f, 0.0f, 1.0f);        // normal, read and discarded
+    w = put_v(w,  50.0f,  50.0f, 1.0f);    // P0(n)   -> (298, 142)
+    w = put_v(w,  50.0f, -50.0f, 1.0f);    // P1(n)   -> (298, 242)
+    obj[w++] = 0x00000000u;                // terminate
+
+    auto got = run_object();
+    std::printf("test: an on-screen quad projects to the pixels the reference gives\n");
+    std::printf("  %zu quads out, clip in=%u out=%u dropped=%u\n",
+                got.size(), d->dbg_clip_in, d->dbg_clip_out, d->dbg_clip_dropped);
+    ck("quad count", (int32_t)got.size(), 1);
+    if (got.size() >= 1) {
+      ck("v0 = P1(n-1) x", got[0].x0, 198);  ck("v0 = P1(n-1) y", got[0].y0, 242);
+      ck("v1 = P0(n-1) x", got[0].x1, 198);  ck("v1 = P0(n-1) y", got[0].y1, 142);
+      ck("v2 = P0(n) x",   got[0].x2, 298);  ck("v2 = P0(n) y",   got[0].y2, 142);
+      ck("v3 = P1(n) x",   got[0].x3, 298);  ck("v3 = P1(n) y",   got[0].y3, 242);
+      ck("flat colour carried", (int32_t)got[0].col, 0xC0C0C0);
+    }
+    ck("clipper saw one polygon", (int32_t)d->dbg_clip_in, 1);
+  }
+
+  // ---- test 2: a quad wholly off the right edge is DROPPED, not drawn
+  //
+  // This is the check that the clipper is actually in the path. Without it, a
+  // pipeline that ignored the window entirely would pass test 1 unchanged.
+  {
+    d->rst_n = 0; for (int i = 0; i < 4; i++) tick(); d->rst_n = 1; tick();
+    load_identity();
+    size_t w = 0;
+    w = put_v(w, 2000.0f,  50.0f, 1.0f);   // x = 2000 > a_right(248)*z: outside
+    w = put_v(w, 2000.0f, -50.0f, 1.0f);
+    obj[w++] = 0x00000001u;
+    w = put_v(w, 0.0f, 0.0f, 1.0f);
+    w = put_v(w, 2100.0f,  50.0f, 1.0f);
+    w = put_v(w, 2100.0f, -50.0f, 1.0f);
+    obj[w++] = 0x00000000u;
+
+    auto got = run_object();
+    std::printf("test: an off-screen quad is dropped by the clipper\n");
+    std::printf("  %zu quads out, clip in=%u out=%u dropped=%u\n",
+                got.size(), d->dbg_clip_in, d->dbg_clip_out, d->dbg_clip_dropped);
+    ck("nothing drawn", (int32_t)got.size(), 0);
+    ck("counted as dropped", (int32_t)d->dbg_clip_dropped, 1);
+  }
+
+  // ---- test 3: THE POOL IS SHARED AND STILL CORRECT
+  //
+  // Focus of 2.0 in x and 4.0 in y makes the focus multiplies land on results
+  // distinguishable from the transform's and from the projector's, so a tag
+  // routed to the wrong client of the pool shows up as a coordinate scaled by
+  // the wrong factor rather than as a hang. With z = 1:
+  //     sx = 248 + 2*x        sy = 192 - 4*y
+  {
+    d->rst_n = 0; for (int i = 0; i < 4; i++) tick(); d->rst_n = 1; tick();
+    load_identity();
+    d->foc_x = f2u(2.0f); d->foc_y = f2u(4.0f);
+    size_t w = 0;
+    w = put_v(w, -50.0f,  10.0f, 1.0f);    // P0(n-1) -> (148, 152)
+    w = put_v(w, -50.0f, -10.0f, 1.0f);    // P1(n-1) -> (148, 232)
+    obj[w++] = 0x00000001u;
+    w = put_v(w, 0.0f, 0.0f, 1.0f);
+    w = put_v(w,  50.0f,  10.0f, 1.0f);    // P0(n)   -> (348, 152)
+    w = put_v(w,  50.0f, -10.0f, 1.0f);    // P1(n)   -> (348, 232)
+    obj[w++] = 0x00000000u;
+
+    auto got = run_object();
+    std::printf("test: focus and transform share one multiplier without crossing\n");
+    ck("quad count", (int32_t)got.size(), 1);
+    if (got.size() >= 1) {
+      ck("focus.x scales v1 x", got[0].x1, 148);
+      ck("focus.y scales v1 y", got[0].y1, 152);
+      ck("focus.y scales v0 y", got[0].y0, 232);
+      ck("focus.x scales v2 x", got[0].x2, 348);
+    }
+  }
+
+  // ---- test 4: THE PIPELINE DRAINS AND RESTARTS
+  //
+  // busy must fall and a second object must run. A clipper stuck waiting on its
+  // projector, or a pool grant never released, both show up here and nowhere
+  // else -- one object in isolation can hang on the very last vertex and still
+  // have produced the right quads.
+  {
+    auto got = run_object();
+    std::printf("test: a second object runs after the first drained\n");
+    ck("second object emitted", (int32_t)got.size(), 1);
+    ck("engine idle at the end", (int32_t)d->busy, 0);
+  }
+
+  std::printf("m2_geometry: checks=%ld fails=%ld\n", checks, fails);
+  std::printf("%s\n", fails ? "FAIL" : "PASS");
+  delete d;
+  return fails ? 1 : 0;
+}

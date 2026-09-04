@@ -792,8 +792,24 @@ test_m2_geo_clip: obj_m2_geo_clip/Vtb_clip_top
 	@./obj_m2_geo_clip/Vtb_clip_top
 
 .PHONY: test_geo
+# THE JOIN, which is the only thing the per-stage benches cannot cover: three
+# clients on one FP pool, the clipper's projector port answered by a type
+# conversion, and screen floats becoming pixels.
+obj_m2_geometry/Vm2_geometry: rtl/video/m2_geometry.sv rtl/video/m2_geo_engine.sv \
+    rtl/video/m2_geo_xform.sv rtl/video/m2_geo_clip.sv rtl/video/m2_geo_project.sv \
+    $(GEO_RTL) sim/video/tb_m2_geometry.cpp
+	$(VBUILD) --top-module m2_geometry -CFLAGS "-O2" $(TGPFLAGS) -Irtl/tgp -Irtl/video \
+	  --Mdir obj_m2_geometry -o Vm2_geometry \
+	  rtl/video/m2_geometry.sv rtl/video/m2_geo_engine.sv rtl/video/m2_geo_xform.sv \
+	  rtl/video/m2_geo_clip.sv rtl/video/m2_geo_project.sv $(GEO_RTL) \
+	  sim/video/tb_m2_geometry.cpp
+test_m2_geometry: obj_m2_geometry/Vm2_geometry
+	@echo "== test m2_geometry (object_data -> screen quads, end to end)"
+	@./obj_m2_geometry/Vm2_geometry
+
 test_geo: test_m2_geo_xform test_m2_geo_project test_m2_geo_det test_m2_geo_rsqrt \
-          test_m2_geo_norm test_m2_geo_clip test_m2_geo test_m2_geo_engine
+          test_m2_geo_norm test_m2_geo_clip test_m2_geo test_m2_geo_engine \
+          test_m2_geometry
 
 # THE ASSEMBLED CORE, AND IT HAD NO RUN TARGET AT ALL.
 #

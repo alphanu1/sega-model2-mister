@@ -56,7 +56,7 @@ int main(int argc,char**argv){
   Verilated::commandArgs(argc,argv);
   d = new Vm2_geo;
   d->rst_n=0; d->base_buffer=BASE; d->sd_wr_ack=0;
-  d->frame_start=0; d->rd_data=0; d->rd_ack=0;
+  d->frame_start=0; d->rd_data=0; d->rd_ack=0; d->eng_busy=0;
   d->wr_ctl=d->wr_setwp=d->wr_setrp=d->wr_push=0; d->wdata=0;
   for(int i=0;i<8;i++) tick();
   d->rst_n=1; idle(4);
@@ -248,7 +248,17 @@ int main(int argc,char**argv){
 
     d->rst_n = 0; for (int i = 0; i < 4; i++) tick(); d->rst_n = 1; idle(2);
     d->frame_start = 1; tick(); d->frame_start = 0;
+    // A STAND-IN GEOMETRY ENGINE. The walk now stops at every object_data
+    // until eng_busy has gone high and come back down, so a bench that leaves
+    // eng_busy tied low deadlocks at the first object -- which is exactly what
+    // this one did, reporting 1 object where 60 were due. Eight cycles is
+    // arbitrary; what matters is that busy rises after obj_valid and falls
+    // later, because the walker's two-halves wait is the thing under test.
+    int eng_cnt = 0;
     for (int i = 0; i < 200000; i++) {
+      if (d->obj_valid) eng_cnt = 8;
+      d->eng_busy = eng_cnt > 0;
+      if (eng_cnt) eng_cnt--;
       d->rd_ack = 0;
       if (d->rd_req) { d->rd_data = (d->rd_addr < list.size()) ? list[d->rd_addr] : 0; d->rd_ack = 1; }
       tick();
@@ -295,7 +305,11 @@ int main(int argc,char**argv){
     d->frame_start = 1; tick(); d->frame_start = 0;
     bool quiet = false;
     int  idle_run = 0;
+    int  eng_cnt = 0;
     for (int i = 0; i < 400000; i++) {
+      if (d->obj_valid) eng_cnt = 8;
+      d->eng_busy = eng_cnt > 0;
+      if (eng_cnt) { eng_cnt--; idle_run = 0; }
       d->rd_ack = 0;
       if (d->rd_req) { d->rd_data = 0xFFFFFFFFu; d->rd_ack = 1; idle_run = 0; }
       else if (++idle_run > 200) { quiet = true; break; }
