@@ -394,6 +394,36 @@ localparam logic [SDR_AW:1] PCM_OFFS = SDR_AW'(32'h0020000);
 //   tables      byte 0x2BB0000, 256 KB -- opr-14742a + opr-14743a, MEASURED
 localparam logic [SDR_AW:1] GAME_COPRO  = SDR_AW'(32'h0520000);
 localparam logic [SDR_AW:1] GAME_TGPTBL = SDR_AW'(32'h15d8000);
+// THE POLYGON ROM, WHERE THE GEOMETRY'S VERTICES LIVE (R169).
+//
+// geo_object_data's `oba` selects the source -- bit 24 fast polygon RAM, bit 23
+// polygon ROM, else slow polygon RAM -- and Model 2's models are in the ROM.
+// 12 MB of it, already loaded by the MRA and never read until now.
+//
+// The base is DERIVED FROM THE MRA'S STREAM ORDER, which is the only thing that
+// decides where a region lands: the loader writes what it is sent, in order.
+//
+//   maincpu      0x40000 B          words 0x000000..0x020000
+//   main_data    10 MB                    0x020000..0x520000   = GAME_DATA
+//   copro_data    4 MB                    0x520000..0x720000   = GAME_COPRO
+//   textures      8 MB (two pairs)        0x720000..0xB20000
+//   polygons     12 MB (three pairs)      0xB20000..0x1120000  = here
+//
+// The method is checked by the two constants it already has to reproduce:
+// GAME_DATA and GAME_COPRO both fall exactly where this arithmetic puts them.
+// It is verified rather than trusted -- see the boot harness, which reads word
+// 0xB20000 back and compares it against the interleaved first dword of
+// mpr-16523.ic16 / mpr-16518.ic20. R154 is why: the copro data ROM was never
+// loaded in simulation at all, and every read of it returned 0xFFFFFFFF while
+// the arithmetic said the base was right.
+//
+// TEXTURES ARE NOT CONTIGUOUS WITH MAME'S REGION, and the texture unit will
+// need to know. model2.cpp's "textures" is 16 MB with mpr-16522/16521 at
+// 0x000000 and mpr-16517/16516 at 0x800000 -- a 4 MB hole in the middle. The
+// MRA streams both pairs back to back with no gap, so an address computed
+// against MAME's layout is 4 MB out for everything above the hole. Recorded
+// now because it costs nothing here and is expensive to rediscover.
+localparam logic [SDR_AW:1] GAME_POLY   = SDR_AW'(32'h0b20000);   // 12 MB
 
 wire        snd_rom_req;
 wire [17:1] snd_rom_addr;

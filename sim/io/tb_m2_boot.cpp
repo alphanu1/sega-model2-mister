@@ -228,6 +228,43 @@ int main(int argc, char **argv) {
     std::printf("\n");
   }
 
+  // THE POLYGON ROM, AND WHETHER GAME_POLY IS WHERE THE ARITHMETIC SAYS (R169).
+  //
+  // 12 MB of models, loaded by the MRA and never read until the geometry engine
+  // needs them. The base is derived from the MRA's stream order rather than
+  // declared anywhere, so it is checked rather than trusted: R154 is the
+  // precedent -- the copro data ROM was never loaded here at all, every read of
+  // it returned 0xFFFFFFFF, and the arithmetic for ITS base was perfectly
+  // correct the whole time.
+  {
+    struct { const char *n; uint32_t off, len; } pg[] = {
+      {"mpr-16523.ic16", 0x000000, 0x200000}, {"mpr-16518.ic20", 0x000002, 0x200000},
+      {"mpr-16524.ic17", 0x400000, 0x200000}, {"mpr-16519.ic21", 0x400002, 0x200000},
+      {"mpr-16525.ic18", 0x800000, 0x200000}, {"mpr-16520.ic22", 0x800002, 0x200000},
+    };
+    int pg_ok = 0;
+    for (auto &e : pg) {
+      std::vector<uint8_t> f;
+      if (!load_file(dir + e.n, f)) continue;
+      ++pg_ok;
+      for (uint32_t w = 0; w * 2 < e.len && w * 2 < f.size(); ++w) {
+        const uint32_t byte = (e.off & ~3u) + w * 4 + (e.off & 2u);
+        const size_t   word = 0xb20000 + (byte >> 1);
+        if (word < mem.size()) mem[word] = uint16_t(f[w * 2] | (f[w * 2 + 1] << 8));
+      }
+    }
+    std::printf("  polygon ROM: %d/6 files at GAME_POLY word 0xb20000", pg_ok);
+    if (pg_ok == 6) {
+      // The first dword, interleaved as the region is: low word from ic16,
+      // high word from ic20. Non-zero is the whole point -- an unloaded region
+      // reads as the power-up pattern and would say the base was wrong.
+      std::printf("   dword 0 = %04x%04x", mem[0xb20000 + 1], mem[0xb20000]);
+      if (mem[0xb20000] == 0xffff && mem[0xb20000 + 1] == 0xffff)
+        std::printf("   <<< READS ALL-ONES: NOT LOADED, or the base is wrong");
+    }
+    std::printf("\n");
+  }
+
   // THE TGP's MATH TABLES, at GAME_TGPTBL. 64K 32-bit words: sincos, atan,
   // inverse and inverse-square-root quadrants.
   //
