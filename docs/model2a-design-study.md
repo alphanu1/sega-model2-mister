@@ -9458,3 +9458,72 @@ pipeline. **The rule is not "check Model 1 when stuck"; it is check Model 1
 FIRST, because it is the same author solving the same problem one board
 earlier.** R124's blanket ruling is what allowed this one to be skipped, which
 is the cost of a conclusion recorded more broadly than its evidence.
+
+---
+
+**R171 - THE POLYGON STREAM'S GRAMMAR, READ OUT OF THE REFERENCE BEFORE
+BUILDING THE SEQUENCER. IT IS NOT A TRIANGLE STRIP; THE LINK IS A FIELD IN THE
+ATTRIBUTE WORD.**
+
+Written down because it is the part of the geometry engine that fails silently:
+a wrong link produces geometry that is plausible everywhere and correct nowhere,
+and the only oracle this block has is a framebuffer comparison (study 2.1).
+
+*THE COMMAND BUFFER'S LAYOUT.* `model2_3d_push` treats the FIRST push as the
+command and does not store it, so `geo_object_data`'s three pushes land as:
+
+    push opcode>>23   -> cur_command = 1 (Polygon Data), NOT buffered
+    push tpa          -> buffer[0]
+    push tha          -> buffer[1]
+
+then `geo_parse_np_ns` fills:
+
+    p0.x,y,z          -> buffer[2..4]     P0(n-1)
+    p1.x,y,z          -> buffer[5..7]     P1(n-1)
+    attr              -> buffer[8]
+    luma<<15          -> buffer[9]
+    distance>>8       -> buffer[10]
+    point.x,y,z       -> buffer[11..13]   P0(n)
+    point.x,y,z       -> buffer[14..16]   P1(n), quads only
+
+and `model2_3d_process_polygon` reads them as
+
+    v[0] = [5..7]   v[1] = [2..4]   v[2] = [11..13]   v[3] = [14..16]
+
+Note v[0] and v[1] are the PREVIOUS pair and are swapped relative to buffer
+order. A triangle sets `[14..16] = [11..13]` -- "the rope of P1(n) is achieved
+by P0(n-1)".
+
+*AND THE CARRY IS A LINK TYPE, NOT A FIXED SLIDE.* After each polygon
+`command_index` returns to 8, so the next attribute overwrites [8] and the next
+points refill [11..16]. What [2..7] become is chosen by `(attr >> 8) & 3`:
+
+    0, 2   buffer[2..7] = buffer[11..16]     reuse P0(n) and P1(n)
+    1      buffer[5..7] = buffer[11..13]     reuse P0(n-1) and P0(n)
+    3      buffer[2..4] = buffer[14..16]     reuse P1(n-1) and P1(n)
+
+So the stream is a general strip/fan hybrid: type 0/2 advances both edges like a
+quad strip, type 1 pins P0(n-1) and fans, type 3 pins P1(n-1) and fans the other
+way. A sequencer that assumed a plain strip would be right only for type 0 and 2.
+
+*WHAT ENDS AN OBJECT.* `(attr & 3) == 0` terminates -- `cur_command` is cleared
+and the parser breaks out of its loop. `attr & 1` selects quad over triangle,
+and a triangle still CONSUMES three words for the point it does not use
+(`input += 3`), which is the kind of detail that desynchronises a reader that
+skips them instead.
+
+*WHAT THIS MEANS FOR A FLAT FIRST CUT.* Nothing above depends on lighting or
+texture. The normal is read and transformed only to compute `dotl`/`dotp` for
+luminance and the LOD, and `luma`/`distance` occupy buffer[9] and [10] which
+`process_polygon` reads for shading alone. A flat build must still READ and STEP
+OVER the normal's three words -- the stream position depends on it -- but need
+not transform it. The ported rasterizer takes a single 24-bit colour and has no
+texture input at all, so flat is the natural first target rather than a
+simplification that has to be undone later.
+
+*Provenance.* `model2_v.cpp`, `model2_3d_push` (the buffer discipline),
+`model2_3d_process_polygon` (the vertex mapping and the link switch), and
+`geo_parse_np_ns` (the read order). The other three parsers -- np_s, nn_ns,
+nn_s -- differ in whether a normal is present and whether specular is computed,
+selected by `geo->mode & 3`, and change the READ ORDER. Only np_ns is
+transcribed here.
