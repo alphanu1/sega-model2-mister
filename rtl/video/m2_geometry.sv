@@ -98,7 +98,7 @@ module m2_geometry (
   output logic [23:0] q_col,
   output logic [31:0] q_z,
 
-  output logic [15:0] dbg_polys, dbg_objects,
+  output logic [15:0] dbg_polys, dbg_objects, dbg_capped,
   output logic [15:0] dbg_clip_in, dbg_clip_out, dbg_clip_dropped
 );
 
@@ -145,7 +145,7 @@ module m2_geometry (
     .v0x(v0x), .v0y(v0y), .v0z(v0z), .v1x(v1x), .v1y(v1y), .v1z(v1z),
     .v2x(v2x), .v2y(v2y), .v2z(v2z), .v3x(v3x), .v3y(v3y), .v3z(v3z),
     .poly_attr(poly_attr),
-    .dbg_polys(dbg_polys), .dbg_objects(dbg_objects)
+    .dbg_polys(dbg_polys), .dbg_objects(dbg_objects), .dbg_capped(dbg_capped)
   );
   assign add_req[1] = 1'b0; assign add_a[1] = 32'd0; assign add_b[1] = 32'd0;
   assign add_sub[1] = 1'b0;

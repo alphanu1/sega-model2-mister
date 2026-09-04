@@ -2264,7 +2264,28 @@ wire        q3d_valid, q3d_ready;
 wire signed [15:0] q3d_x0, q3d_y0, q3d_x1, q3d_y1, q3d_x2, q3d_y2, q3d_x3, q3d_y3;
 wire [23:0] q3d_col;
 wire [31:0] q3d_z;
-wire [15:0] geo_polys, geo_objs_done, geo_clip_in, geo_clip_out, geo_clip_drop;
+wire [15:0] geo_polys, geo_objs_done, geo_capped;
+wire [15:0] geo_clip_in, geo_clip_out, geo_clip_drop;
+
+// WHICH MEMORY THE OBJECTS ACTUALLY POINT AT, counted per class.
+//
+// Without this a black screen says nothing: "the geometry does not work" and
+// "every object this game draws lives in polygon RAM, which nothing fills yet"
+// look identical on the display and lead to completely different work. Opcode
+// 0x05 geo_polygon_data is not implemented, so a PRAM object reads unwritten
+// SDRAM -- 0xFFFF..., whose low two bits are 3 and never terminate. The
+// engine's MAX_POLYS ceiling stops that becoming a 2.5-second freeze, and
+// geo_capped counts it.
+logic [15:0] geo_obj_rom, geo_obj_pram0, geo_obj_pram1;
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+	if (!mem_rst_n) begin
+		geo_obj_rom <= 16'd0; geo_obj_pram0 <= 16'd0; geo_obj_pram1 <= 16'd0;
+	end else if (geo_obj_valid) begin
+		if      (geo_obj_oba[24]) geo_obj_pram1 <= geo_obj_pram1 + 16'd1;
+		else if (geo_obj_oba[23]) geo_obj_rom   <= geo_obj_rom   + 16'd1;
+		else                      geo_obj_pram0 <= geo_obj_pram0 + 16'd1;
+	end
+end
 
 m2_geometry u_geometry (
 	.clk(clk_sys), .rst_n(mem_rst_n),
@@ -2291,7 +2312,7 @@ m2_geometry u_geometry (
 	.q_x0(q3d_x0), .q_y0(q3d_y0), .q_x1(q3d_x1), .q_y1(q3d_y1),
 	.q_x2(q3d_x2), .q_y2(q3d_y2), .q_x3(q3d_x3), .q_y3(q3d_y3),
 	.q_col(q3d_col), .q_z(q3d_z),
-	.dbg_polys(geo_polys), .dbg_objects(geo_objs_done),
+	.dbg_polys(geo_polys), .dbg_objects(geo_objs_done), .dbg_capped(geo_capped),
 	.dbg_clip_in(geo_clip_in), .dbg_clip_out(geo_clip_out),
 	.dbg_clip_dropped(geo_clip_drop)
 );
@@ -3270,13 +3291,31 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// THE WALK'S OWN NUMBERS. Against the offline oracle: 101 opcodes and 60
 	// object_data per frame. Anything else means it is reading the wrong memory
 	// or mis-counting an operand, and both look like a corrupt display list.
-	.b_addr(dbg_cnt4a),      // the display-list count the TGP is looping on
-	.b_data(dbg_cnt70),      // and the inner countdown at 0x4F6
+	// THE GEOMETRY, REPLACING THE TGP'S LOOP COUNTS. Those answered "is the
+	// coprocessor stuck in its display-list loop", which R167 settled; the live
+	// question is now whether the 3D pipeline sees anything to draw. Eight
+	// numbers, low byte each -- these are "non-zero and roughly how many"
+	// questions, not exact ones:
+	//
+	//   b_addr  objects to ROM : PRAM0 : PRAM1 : objects hitting MAX_POLYS
+	//   b_data  clipper in : out : dropped : quads reaching the rasterizer
+	//
+	// The first three of b_addr separate "the geometry is broken" from "every
+	// object this game draws lives in a polygon RAM that opcode 0x05 has never
+	// filled" -- two states that look identical on a black screen and need
+	// completely different work.
+	.b_addr({geo_obj_rom[7:0], geo_obj_pram0[7:0],
+	         geo_obj_pram1[7:0], geo_capped[7:0]}),
+	.b_data({geo_clip_in[7:0], geo_clip_out[7:0],
+	         geo_clip_drop[7:0], r3d_quads[7:0]})
 	.a_tag(8'h43), .b_tag(8'h48),          // 'C' copro in_pushed:out_pushed | TGP retires:pc
 	                                       // 'H' out_popped:hscr2 | io_addr:flags
 	                                       // 'H' scroll h:v for layers 0,1 | layers 2,3 -- low bytes
 	                                       // '0' map0 min|max : sum
 	                                       // 'T' write count + trap/PA
+	                                       // 'H' NOW: geometry. addr = objects
+	                                       //     rom:pram0:pram1:capped,
+	                                       //     data = clip in:out:dropped:quads
 	.enable(1'b1),
 	.tx(UART_TXD), .dbg_dropped(uart_dropped)
 );

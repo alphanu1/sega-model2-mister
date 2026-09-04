@@ -48,7 +48,25 @@
 
 `timescale 1ns/1ps
 
-module m2_geo_engine (
+module m2_geo_engine #(
+  // A CEILING ON POLYGONS PER OBJECT, AND IT IS A DEVIATION ON PURPOSE.
+  //
+  // "if count == 0 then rolls over to max size" gives 0xfffff -- 1,048,575
+  // polygons. At roughly 120 cycles each (four vertices through a 29-cycle
+  // reciprocal, plus the clipper) that is 126 M cycles, 2.5 SECONDS at 50 MHz,
+  // with the display-list walk stopped behind it. The picture would freeze and
+  // look like a hang.
+  //
+  // It matters because an object pointed at polygon RAM reads unwritten SDRAM
+  // today: opcode 0x05 geo_polygon_data is not implemented, so those reads
+  // return 0xFFFF... , whose low two bits are 3 -- never the terminator. A
+  // single such object runs to the ceiling.
+  //
+  // 4096 is well past any real Model 2 object and costs 8 ms in the worst case.
+  // dbg_capped counts objects that hit it, so this is a number on the debug
+  // stream rather than a silent truncation.
+  parameter int MAX_POLYS = 4096
+) (
   input  logic        clk,
   input  logic        rst_n,
 
@@ -104,7 +122,8 @@ module m2_geo_engine (
   output logic [31:0] poly_attr,
 
   output logic [15:0] dbg_polys,      // emitted this object
-  output logic [15:0] dbg_objects     // objects completed
+  output logic [15:0] dbg_objects,    // objects completed
+  output logic [15:0] dbg_capped      // objects that ran into MAX_POLYS
 );
 
   // ---------------------------------------------------------------- transform
@@ -165,6 +184,7 @@ module m2_geo_engine (
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       st <= E_IDLE; ret <= E_IDLE; busy <= 1'b0; poly_valid <= 1'b0;
+      dbg_capped <= 16'd0;
       ptr <= 24'd0; remain <= 32'd0; widx <= 2'd0; dst <= 2'd0; skipn <= 2'd0;
       attr <= 32'd0; xf_in_valid <= 1'b0;
       fmul_req <= 1'b0; fmul_a <= 32'd0; fmul_b <= 32'd0;
@@ -184,7 +204,8 @@ module m2_geo_engine (
           ptr    <= oba[23:0];
           // "if count == 0 then rolls over to max size" -- Virtual On and
           // Gunblade NY, per the reference. 0xfffff, not zero.
-          remain <= (obc == 32'd0) ? 32'h000fffff : obc;
+          remain <= ((obc == 32'd0) || (obc > 32'(MAX_POLYS)))
+                    ? 32'(MAX_POLYS) : obc;
           dbg_polys <= 16'd0;
           busy   <= 1'b1;
           widx   <= 2'd0; dst <= 2'd0;
@@ -260,7 +281,12 @@ module m2_geo_engine (
         E_ATTR: if (mem_ack) begin
           attr <= mem_data;
           ptr  <= ptr + 24'd1;
-          if ((mem_data[1:0] == 2'd0) || (remain == 32'd0)) st <= E_DONE;
+          if (remain == 32'd0) begin
+            // Stopped on the count, not on the terminator: either the object
+            // genuinely ran out, or the stream is not an object at all.
+            dbg_capped <= dbg_capped + 16'd1;
+            st <= E_DONE;
+          end else if (mem_data[1:0] == 2'd0) st <= E_DONE;
           else begin skipn <= 2'd3; st <= E_NORM; end
         end
 
