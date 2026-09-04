@@ -261,6 +261,28 @@ int main(int argc,char**argv){
     ck("walk opcode count", d->dbg_walk_ops,  want_ops);
     ck("walk object_data count", d->dbg_walk_objs, want_objs);
     ck("no unknown opcode", d->dbg_walk_unknown, 0);
+
+    // ---- 7b. THE GEOMETRY STATE IS CAPTURED, NOT STEPPED OVER (R168)
+    //
+    // Every operand in this list is 0xdead0000 + its index, so the captured
+    // words are predictable and their ORDER is checkable -- which is the point.
+    // model2_v.cpp reads all three of these as a flat run in order
+    // (geo_matrix_write, geo_focal_distance, geo_object_data); a walker that
+    // captured them shuffled would still count opcodes correctly and put every
+    // polygon in the wrong place.
+    ck("matrices captured",  d->dbg_mtx_n, 33);
+    ck("focal writes captured", d->dbg_foc_n, 2);
+    ck("matrix[0]",  d->mtx0,  0xdead0000);
+    ck("matrix[4]",  d->mtx4,  0xdead0004);
+    ck("matrix[8]",  d->mtx8,  0xdead0008);
+    ck("matrix[11]", d->mtx11, 0xdead000b);
+    ck("focus x", d->foc_x, 0xdead0000);
+    ck("focus y", d->foc_y, 0xdead0001);
+    // object_data: tpa, tha, oba, obc in that order
+    ck("object tpa", d->obj_tpa, 0xdead0000);
+    ck("object tha", d->obj_tha, 0xdead0001);
+    ck("object oba", d->obj_oba, 0xdead0002);
+    ck("object obc", d->obj_obc, 0xdead0003);
   }
 
   // UNWRITTEN MEMORY MUST NOT WALK FOREVER. SDRAM that nobody wrote reads

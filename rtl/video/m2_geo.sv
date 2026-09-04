@@ -80,6 +80,24 @@ module m2_geo #(
   input  logic [31:0]   rd_data,
   input  logic          rd_ack,
 
+  // ---- GEOMETRY STATE, captured rather than skipped (R168)
+  //
+  // The walk used to step over every operand blind. These three opcodes carry
+  // the state the transform needs, and model2_v.cpp reads them straight:
+  //
+  //   geo_matrix_write   12 words -> matrix[0..11]
+  //   geo_focal_distance  2 words -> focus.x, focus.y
+  //   geo_object_data     4 words -> tpa, tha, oba, obc
+  //
+  // Exposed so the bench can check them against a list it built, and because
+  // the polygon fetch consumes oba/obc next.
+  output logic [31:0]   mtx0, mtx4, mtx8, mtx11,  // corners of the 3x4, enough to prove order
+  output logic [31:0]   foc_x, foc_y,
+  output logic [31:0]   obj_tpa, obj_tha, obj_oba, obj_obc,
+  output logic          obj_valid,       // one pulse when an object_data is complete
+  output logic [15:0]   dbg_mtx_n,       // matrices captured
+  output logic [15:0]   dbg_foc_n,       // focal writes captured
+
   output logic [15:0]   dbg_walk_ops,    // opcodes retired this frame
   output logic [15:0]   dbg_walk_objs,   // object_data commands seen
   output logic [15:0]   dbg_walk_frames, // walks completed
@@ -221,8 +239,8 @@ module m2_geo #(
   // four words name geometry that lives in the POLYGON ROM, and that is the
   // next stage. Getting the walk right first means the opcode histogram on the
   // UART can be compared against the 101/60/33 above, which is a real oracle.
-  typedef enum logic [2:0] { W_IDLE, W_FETCH, W_DECODE, W_SKIP, W_CNT,
-                             W_TFIFO, W_DDSKIP, W_DDATTR } wstate_t;
+  typedef enum logic [3:0] { W_IDLE, W_FETCH, W_DECODE, W_SKIP, W_CNT,
+                             W_TFIFO, W_DDSKIP, W_DDATTR, W_OPRD } wstate_t;
   wstate_t wst;
   logic [18:0] w_ip;
   logic [15:0] w_ops, w_skip;
@@ -298,7 +316,25 @@ module m2_geo #(
   wire is_var  = is_cnt1 || is_cnt2 || is_cnt3;
   wire is_end  = (w_op == 5'h0f) || (w_op == 5'h1f);
 
-  assign rd_req  = (wst == W_FETCH) || (wst == W_CNT) || (wst == W_DDATTR);
+  // The captured geometry state. `mtx` is the live matrix the transform will
+  // use; only four of its words are brought out, which is enough to prove the
+  // order is right without routing 384 wires to the top level.
+  logic [31:0] mtx [12];
+  logic [1:0]  w_cap;                    // which opcode's operands are being read
+  logic [3:0]  w_ci;                     // operand index
+  localparam logic [1:0] CAP_MTX = 2'd1, CAP_FOC = 2'd2, CAP_OBJ = 2'd3;
+
+  assign mtx0 = mtx[0]; assign mtx4 = mtx[4]; assign mtx8 = mtx[8]; assign mtx11 = mtx[11];
+
+  wire is_mtx = (w_op == 5'h0b) || (w_op == 5'h1b);
+  wire is_foc = (w_op == 5'h09) || (w_op == 5'h19);
+  wire is_obj = (w_op == 5'h01) || (w_op == 5'h11);
+  wire [3:0] cap_last = (w_cap == CAP_MTX) ? 4'd11
+                      : (w_cap == CAP_FOC) ? 4'd1
+                                           : 4'd3;
+
+  assign rd_req  = (wst == W_FETCH) || (wst == W_CNT) || (wst == W_DDATTR)
+                || (wst == W_OPRD);
   assign rd_addr = w_ip;
 
   always_ff @(posedge clk or negedge rst_n) begin
@@ -306,7 +342,13 @@ module m2_geo #(
       wst <= W_IDLE; w_ip <= 19'd0; w_ops <= 16'd0; w_skip <= 16'd0; w_op <= 5'd0;
       dbg_walk_ops <= 16'd0; dbg_walk_objs <= 16'd0;
       dbg_walk_frames <= 16'd0; dbg_walk_unknown <= 8'd0;
+      w_cap <= 2'd0; w_ci <= 4'd0; obj_valid <= 1'b0;
+      dbg_mtx_n <= 16'd0; dbg_foc_n <= 16'd0;
+      foc_x <= 32'd0; foc_y <= 32'd0;
+      obj_tpa <= 32'd0; obj_tha <= 32'd0; obj_oba <= 32'd0; obj_obc <= 32'd0;
+      for (int k = 0; k < 12; k++) mtx[k] <= 32'd0;
     end else begin
+      obj_valid <= 1'b0;
       case (wst)
         W_IDLE: if (frame_start) begin
           // MASKED TO 0x1ffff FIRST, THEN /4 -- geo_parse is
@@ -362,6 +404,14 @@ module m2_geo #(
             // operand before it.
             if (!is_cnt3) w_ip <= w_ip + 19'd1;
             wst  <= W_CNT;
+          end else if (is_mtx || is_foc || is_obj) begin
+            // READ THESE OPERANDS RATHER THAN STEPPING OVER THEM. They carry
+            // the transform's state -- the matrix, the projection, and the
+            // object's address and count. Everything else stays a blind skip,
+            // which is what kept the walk cheap while it was only counting.
+            w_cap <= is_mtx ? CAP_MTX : is_foc ? CAP_FOC : CAP_OBJ;
+            w_ci  <= 4'd0;
+            wst   <= W_OPRD;
           end else if (oplen(w_op) == 16'hffff) begin
             dbg_walk_unknown <= {3'd0, w_op};   // stop rather than desynchronise
             dbg_walk_ops     <= w_ops;
@@ -369,6 +419,32 @@ module m2_geo #(
           end else begin
             w_skip <= oplen(w_op);
             wst    <= W_SKIP;
+          end
+        end
+        // One operand per acknowledge, straight into its destination. The
+        // reference reads each of these as a flat run of words in order
+        // (geo_matrix_write, geo_focal_distance, geo_object_data), so there is
+        // no reordering to get wrong here -- only the count.
+        W_OPRD: if (rd_ack) begin
+          case (w_cap)
+            CAP_MTX: mtx[w_ci] <= rd_data;
+            CAP_FOC: if (w_ci == 4'd0) foc_x <= rd_data; else foc_y <= rd_data;
+            default: case (w_ci)
+                       4'd0: obj_tpa <= rd_data;
+                       4'd1: obj_tha <= rd_data;
+                       4'd2: obj_oba <= rd_data;
+                       default: obj_obc <= rd_data;
+                     endcase
+          endcase
+          w_ip <= w_ip + 19'd1;
+          if (w_ci == cap_last) begin
+            if (w_cap == CAP_MTX) dbg_mtx_n <= dbg_mtx_n + 16'd1;
+            if (w_cap == CAP_FOC) dbg_foc_n <= dbg_foc_n + 16'd1;
+            // The object is announced only once its four words are in.
+            if (w_cap == CAP_OBJ) obj_valid <= 1'b1;
+            wst <= W_FETCH;
+          end else begin
+            w_ci <= w_ci + 4'd1;
           end
         end
         W_CNT: if (rd_ack) begin
