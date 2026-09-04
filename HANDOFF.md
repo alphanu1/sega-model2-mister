@@ -109,19 +109,60 @@ value. It does not: MAME writes the same 0xFFFFFFFF from the same instruction
 (0x46F, source `$2`). `{0}` in that disassembly is the transfer type, not "write
 zero" -- the zero at 0x4C4 is data-RAM `$0`.
 
-## STILL OPEN ON THIS PATH
+## THE COMMAND STREAM MATCHES FOR 110 WORDS, AND THE DIVERGENCE IS ONE
+## INSTRUCTION (R155)
 
-The counts differ from the reference: ours run 4, 0x12, 0x34, 0x70, 0xAC -- an
-arithmetic progression of 0x38 -- where MAME reads 6, 7, 8, 9, 0x14. **The
-handshake completes but the display lists being walked are not the
-reference's.** That is the next comparison and needs no fit.
+Our i960's command stream, dumped in order and diffed against MAME's, is
+**identical for 110 words**, then:
 
-Also unsettled, and harmless: MAME's ROM read at 0x7CF is 0xFF000030 where ours
-is 0x00000030. The ROM bytes genuinely contain 0x00000030 (dwords
-0x00/05/0A/0F are 0x3F800000, an identity matrix, so the interleave is right).
-MAME's extra top byte comes from `(bx1)` = b1 + x1 with a non-zero x1 supplied
-by the caller. It cannot reach the address -- both give bank 0x800000 and offset
-0x1087 -- but it is not explained.
+    idx 110   ours 00000000   MAME 00000146
+    idx 114   ours 00000000   MAME 00000146
+    idx 119   ours BDCCCCCD   MAME 80000000
+
+`BDCCCCCD` names its own cause: 0x11688 is `cmpobe 0,g0,0x116b4` and 0x116B4 is
+`lda 0xbdcccccd,g0` -- the constant the CPU substitutes **when the copro's first
+result dword reads zero**. Confirmed: 0x91FFF4 held bdcccccd, not MAME's 2.
+
+**It traces to one instruction.** Every display-list access is 0x30 low, and
+that 0x30 is built once at boot:
+
+    07CF  mov (bx1) (e), d     READ THE DATA ROM -> d
+    07D0  addd                 d = d + 0xFF800000
+    07D1  mov d, $0x69         the base for every command
+
+    pc=07cf  d=00000000     <<< should be 0x00000030
+    pc=07d0  d=ff800000         MAME: d=FF800030
+
+**The read itself is correct** -- the same run logs
+`dat_addr=00010 is_buf=0 -> 00000030`. The value is fetched and then not written
+to `d`. The same external read into DATA MEMORY (0x47C, `mov (x0+1)(e),$0x4a`)
+works, so it is the REGISTER destination that loses it.
+
+The instruction is group 0x07, op 7, `r2>>6 = 4` -- MAME's "mov mem (e), reg",
+whose `write_reg(r2, v)` runs AFTER `alu_post_1(alu)` and wins.
+
+**Already inspected and correct on paper** (do not re-read these):
+`mb86233_dec.sv:115` op7_sub=r2[8:6]=4; `mb86233_xfer.sv` 3'd4 decode;
+`core.sv:553-585` S_SRC_W latching io_rdata on io_ack; `core.sv:708-710` S_DST
+rf write to 0x19; `regs.sv:268` `6'h19: reg_d <= wr_data`; `core.sv:729`
+xfer_d_valid; `alu.sv:483-485` s2_xv priority.
+
+**First place to instrument:** `alu_active = d_lab | d_ldmov | d_repgrp`
+(core.sv:405) means the ALU pipeline RUNS for this instruction though its alu
+field is 0, and `regs.sv` lets `if (alu_d_we) reg_d <= alu_d;` override the
+write_reg path unconditionally. Both target reg_d in the same instruction.
+
+**Build the test, do not read more code:** a directed case in the mb86233
+differential suite -- group 0x07, op 7, sub 4, external source, register
+destination. The suite is green, so it does not cover this shape, which is why a
+defect this central survived.
+
+## PERSPECTIVE
+
+This is the FIRST defect this session in our own RTL. R150-R154 were all
+instruments: a shared MAME port, discarded writes, ROM-sourced reads, an
+unloaded ROM. With those cleared the core matches the reference for 110 command
+words and completes 37 mailbox handshakes in a 20 M-instruction run.
 
 ## THE 2:1 HANDSHAKE AUDIT: SAFE, AND THE RATIO IS WHY (R152)
 
@@ -177,14 +218,14 @@ zero never comes back for the real result. Stalling prevents it.
 
 ## NEXT STEPS, IN ORDER
 
-1. **Compare the display lists themselves.** The counts are an arithmetic
-   progression where MAME's are small and varied, so the walk is reading the
-   wrong structure. Log the copro's buffer-RAM read addresses at 0x47C and the
-   dwords around them, against MAME's `x0` and `dd@`.
-2. **Settle the 0x7CF top byte** -- MAME 0xFF000030 vs ours 0x00000030 -- by
-   reading `b1`/`x1` at that instruction in both.
-3. **Then fit.** Nothing on this path needs the fitter, and one change per build
-   still stands (R147). The two RTL lines of R151 are still unflashed.
+1. **A directed differential test for group 0x07 / op 7 / sub 4** -- external
+   source, register destination -- against `mb86233_ref`. Reproduce the zero,
+   then fix it. Do not read more RTL first; R155 lists what is already known
+   good.
+2. **Re-diff the command stream** once it is fixed. It matches for 110 words
+   now; the next divergence is the next target.
+3. **Then fit.** The two RTL lines of R151 are still unflashed and one change
+   per build still stands (R147).
 
 ## HOW TO REPRODUCE WITHOUT A FIT
 

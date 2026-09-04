@@ -460,6 +460,14 @@ int main(int argc, char **argv) {
   std::vector<DatR> datlog, buflog;
   uint64_t buf_reads_n = 0;
   std::vector<uint32_t> lcounts;
+  // THE DISPLAY-LIST POINTER, which is what the count is read relative to.
+  // 0x473 `mov rf1, a` pops it from the command FIFO; 0x475 `addd` makes
+  // d = $0x69 + a, so the count comes from ROM[a + 0x30]. MAME's sequence is
+  // 1057, 1180, 1049, ... -- two interleaved streams walking back by 0xE.
+  std::vector<uint32_t> lptrs;
+  std::vector<uint32_t> cmdstream;
+  struct InitS { uint32_t pc, d, a; };
+  std::vector<InitS> initlog;
   uint32_t lc_prev_pc = 0xffff;
   auto tgp_sample = [&]() {
     ++mem_cyc;
@@ -467,12 +475,27 @@ int main(int argc, char **argv) {
       const uint32_t pc = uint32_t(d->obs_tgp_pc);
       if (pc == 0x47e && lc_prev_pc != 0x47e && lcounts.size() < 24)
         lcounts.push_back(uint32_t(d->obs_tgp_d));
+      if (pc == 0x475 && lc_prev_pc != 0x475 && lptrs.size() < 30)
+        lptrs.push_back(uint32_t(d->obs_tgp_a));
+      // THE INIT THAT BUILDS $0x69. 07CF reads the data ROM into d, 07D0 adds
+      // a (=0x800000), 07D1 stores it. MAME has d = 0xFF800030 at 07D2. Ours
+      // behaves as though $0x69 = 0x800000 -- the ROM's 0x30 lost between the
+      // read and the add, which is a read-to-ALU hazard if it is real.
+      if (pc >= 0x7cc && pc <= 0x7d6 && pc != lc_prev_pc && initlog.size() < 24)
+        initlog.push_back({pc, uint32_t(d->obs_tgp_d), uint32_t(d->obs_tgp_a)});
       lc_prev_pc = pc;
     }
     if (d->obs_bufw_wr) {
       const uint32_t w = 0x16d0000u + uint32_t(d->obs_bufw_waddr);
       if (w < mem.size()) { mem[w] = uint16_t(d->obs_bufw_wdata); ++bufw_applied; }
-      if (uint32_t(d->obs_bufw_waddr) >> 1 == 0x07FFCu && mboxlog.size() < 40)
+      // THE WHOLE MAILBOX BLOCK, not just 0x7FFC. 0x4BC writes the result count
+      // to dword 0x7FFD and the CPU reads two result dwords at 0x91FFF4 and
+      // 0x91FFF8 -- dwords 0x7FFD and 0x7FFE. When the first reads zero the CPU
+      // branches at 0x11688 to 0x116B4 and substitutes the constant 0xBDCCCCCD,
+      // which is exactly what our command stream pushes where MAME pushes a
+      // real value.
+      if ((uint32_t(d->obs_bufw_waddr) >> 1) >= 0x07FFCu
+          && (uint32_t(d->obs_bufw_waddr) >> 1) <= 0x07FFEu && mboxlog.size() < 40)
         mboxlog.push_back({mem_cyc, uint32_t(d->obs_bufw_waddr),
                            uint16_t(d->obs_bufw_wdata), uint32_t(d->obs_tgp_pc)});
     }
@@ -483,6 +506,10 @@ int main(int argc, char **argv) {
     }
     if (uint32_t(d->obs_copro_in) != pushn_prev) {
       pushn_prev = uint32_t(d->obs_copro_in);
+      // THE COMMAND STREAM, in order, to diff against MAME's. dbg_push_data and
+      // dbg_in_pushed are written in the same always_ff, so sampling the value
+      // when the count moves pairs them correctly.
+      if (cmdstream.size() < 200) cmdstream.push_back(uint32_t(d->obs_push_data));
       // R148: WHERE the i960 is when it pushes. MAME pushes from 0x11C08 (the
       // routine at 0x11BD4 loading a struct at g13+0x1c..), 0x178DC/E4 and
       // 0x13C48..0x13DC4. Same PC with different data = wrong memory read;
@@ -1730,8 +1757,13 @@ int main(int argc, char **argv) {
                                  : "NON-ZERO -- the poll at 0x1166c cannot exit on this");
   }
   // What the CPU would actually read back, straight out of the array it polls.
-  std::printf("  MAILBOX as the CPU reads it (mem[base_buffer+0xFFF8..9]): %04x %04x\n",
-              mem[0x16d0000 + 0xFFF8], mem[0x16d0000 + 0xFFF9]);
+  std::printf("  MAILBOX BLOCK as the CPU reads it:\n");
+  std::printf("    0x91FFF0 (dword 7FFC, the flag)   = %04x%04x\n",
+              mem[BUF_BASE + 0xFFF9], mem[BUF_BASE + 0xFFF8]);
+  std::printf("    0x91FFF4 (dword 7FFD, result 1)   = %04x%04x   (MAME writes 2 here)\n",
+              mem[BUF_BASE + 0xFFFB], mem[BUF_BASE + 0xFFFA]);
+  std::printf("    0x91FFF8 (dword 7FFE, result 2)   = %04x%04x\n",
+              mem[BUF_BASE + 0xFFFD], mem[BUF_BASE + 0xFFFC]);
   std::printf("  CPU writes into the buffer-RAM window: %llu",
               (unsigned long long)cpu_buf_writes);
   if (cpu_buf_writes) std::printf("   word offsets %04x..%04x", cpu_buf_lo, cpu_buf_hi);
@@ -1752,6 +1784,30 @@ int main(int argc, char **argv) {
   std::printf("  buffer RAM at MAME's dword 0x1088: %04x %04x   at 0x11B1: %04x %04x\n",
               mem[BUF_BASE + 0x1088*2], mem[BUF_BASE + 0x1088*2 + 1],
               mem[BUF_BASE + 0x11B1*2], mem[BUF_BASE + 0x11B1*2 + 1]);
+  if (!cmdstream.empty()) {
+    if (const char *cf = std::getenv("M2_CMD_OUT")) {
+      if (FILE *f = std::fopen(cf, "w")) {
+        for (auto v : cmdstream) std::fprintf(f, "%08X\n", v);
+        std::fclose(f);
+        std::printf("  command stream (%zu words) written to %s\n",
+                    cmdstream.size(), cf);
+      }
+    }
+    std::printf("  COMMAND STREAM, first 24:");
+    for (size_t i = 0; i < cmdstream.size() && i < 24; ++i)
+      std::printf(" %08x", cmdstream[i]);
+    std::printf("\n");
+  }
+  if (!initlog.empty()) {
+    std::printf("  TGP INIT 0x7CC-0x7D6 (MAME: d=FF800030 at 07D2):\n");
+    for (auto &e : initlog)
+      std::printf("    pc=%04x  d=%08x  a=%08x\n", e.pc, e.d, e.a);
+  }
+  if (!lptrs.empty()) {
+    std::printf("  DISPLAY-LIST POINTERS at 0x475 (MAME: 1057 1180 1049 ...):");
+    for (auto v : lptrs) std::printf(" %x", v);
+    std::printf("\n");
+  }
   if (!lcounts.empty()) {
     std::printf("  DISPLAY-LIST COUNT at 0x47E (MAME reads 6,7,8,9,0x14):");
     for (auto c : lcounts) std::printf(" %08x", c);

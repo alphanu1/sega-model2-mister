@@ -8895,3 +8895,101 @@ loaded: **every one of them made the harness incapable of reporting the thing
 being asked of it, and in each case the number it did report was taken at face
 value first.** The rule from R149 has now been paid for four times in a day.
 The harness is part of the instrument and gets read like one.
+
+---
+
+**R155 - THE COMMAND STREAM MATCHES MAME FOR 110 WORDS. THE DIVERGENCE TRACES TO
+ONE INSTRUCTION: AN EXTERNAL READ INTO A REGISTER RETURNS ZERO, WHERE THE SAME
+READ INTO DATA MEMORY WORKS.**
+
+*The stream comparison.* With R154's ROM loaded, our i960's command stream was
+dumped in order and diffed against MAME's (watchpoint on 0x880000-0x887fff,
+first 2,024 fifo-port writes dropped as the microcode upload). **The first 110
+words are identical, word for word**, including the batch R144 disassembled:
+
+    idx 104..109   00017FFC 00000000 00001057 42E00000 430A7E7E 15002A2A
+    idx 110        ours 00000000   MAME 00000146    <<<
+    idx 114        ours 00000000   MAME 00000146    <<<
+    idx 119        ours BDCCCCCD   MAME 80000000    <<<
+
+`BDCCCCCD` names its own cause. `FUN_00011620` at 0x11688 is
+`cmpobe 0,g0,0x116b4`, and 0x116B4 is `lda 0xbdcccccd,g0` -- **the constant the
+CPU substitutes when the coprocessor's first result dword reads zero.** Our
+harness confirms it: 0x91FFF4 held `bdcccccd`, not the 2 that MAME's 0x4BC
+writes.
+
+*Tracing it back, and it ends at one instruction.* The display-list pointer at
+0x475 is right for the FIRST command and zero thereafter, and the pointers walk
+two interleaved streams in MAME (1057, 1180, 1049, 1172, 103B, 1164, ...
+stepping back by 0xE). Our count read lands on ROM dword 0x1057 where MAME's
+lands on 0x1087 -- exactly 0x30 low. That 0x30 is built once, at boot:
+
+    07CC  lia #0x800000        a = 0xFF800000  (sign-extended, ours and MAME's)
+    07CD  mov a, rf3           the data-ROM bank
+    07CE  ldi #0x10, b1
+    07CF  mov (bx1) (e), d     READ THE DATA ROM -> d
+    07D0  addd                 d = d + a
+    07D1  mov d, $0x69         the base every command is computed from
+
+Traced in the harness, one instruction per row:
+
+    pc=07ce  d=bdcccccd        (unchanged, as expected)
+    pc=07cf  d=00000000        <<< the read result -- should be 0x00000030
+    pc=07d0  d=ff800000            0 + 0xFF800000
+    pc=07d2  d=ff800000        MAME: d=FF800030
+
+**The memory read itself is correct** -- the same run logs
+`dat_addr=00010 is_buf=0 -> 00000030` for that access. The value is fetched and
+then not written to `d`. `$0x69` therefore comes out 0xFF800000 instead of
+0xFF800030, and every display-list access afterwards is 0x30 low.
+
+*The contrast that localises it.* The count read at 0x47C,
+`mov (x0+1) (e), $0x4a`, is the SAME external source with a DATA-MEMORY
+destination, and it works -- 0x152 was fetched and landed. So the external read
+path is sound; it is the register destination that loses the value.
+
+*The instruction, decoded.* `1C1E3380` is group 0x07 with `op = (opcode>>18)&7
+= 7`, `r2 = 0x119`, so `r2 >> 6 = 4` -- mb86233.cpp's **case 7 sub-case 4, "mov
+mem (e), reg"**:
+
+    u32 ea = ea_pre_1(r1);
+    u32 v  = m_io.read_dword(ea);
+    ...
+    alu_post_1(alu);
+    write_reg(r2, v);          // the transfer write is LAST, and wins
+
+*What was inspected and found correct on paper, so the fault is subtler than
+any of them.* Recorded so the next session does not re-read the same files:
+
+  * `mb86233_dec.sv:115` -- `op7_sub = r2[8:6]`, which is 4. Correct.
+  * `mb86233_xfer.sv` 3'd4 -- `src_space = EP_IO; src_bank = 1'b1;
+    dst_is_reg = 1'b1; dst_use_r2 = 1'b1`. Correct, and `ea_pre_1` matches.
+  * `mb86233_core.sv:553-585` -- S_SRC_W latches `src_val <= io_rdata` gated on
+    `io_ack`. Shared with the working 0x47C case.
+  * `mb86233_core.sv:708-710` -- S_DST asserts `rf_wr_en` with
+    `rf_wr_addr = d_r2[5:0]` = 0x19 and `rf_wr_data = src_val`.
+  * `mb86233_regs.sv:268` -- `6'h19: reg_d <= wr_data`. Present.
+  * `mb86233_core.sv:729` -- S_ALU sets
+    `xfer_d_valid = d_ldmov & x_dst_reg & (d_r2[5:0] == 6'h19)`.
+  * `mb86233_alu.sv:483-485` -- `s2_xv` gives the transfer priority over an
+    integer op, which is the reference's ordering.
+
+Every stage claims to do the right thing and the value still arrives as zero.
+Note `alu_active = d_lab | d_ldmov | d_repgrp` (`core.sv:405`), so the ALU
+pipeline RUNS for this instruction even though its `alu` field is 0, and both
+the S_DST register write and the ALU's `s2_xv` writeback target `reg_d` --
+`regs.sv` lets `if (alu_d_we) reg_d <= alu_d;` override the write_reg path
+unconditionally. That interaction is the first place to instrument.
+
+*The instrument to build next, rather than more reading.* A directed case in
+the `mb86233` differential suite: group 0x07, op 7, sub 4, external source,
+register destination, against `mb86233_ref`. The suite is green today, so it
+does not cover this shape -- which is why a defect this central survived.
+`mb86233_regs` remains red on 0x21 (rf1) at its long-standing 46,966, unrelated
+and still owed.
+
+*Perspective.* This is the FIRST defect of this session located in our own RTL.
+R150 through R154 were all instruments -- a shared MAME port, discarded writes,
+ROM-sourced reads, an unloaded ROM. With those cleared, the core's own command
+stream now matches the reference for 110 words and the mailbox handshake
+completes 37 times in a run.
