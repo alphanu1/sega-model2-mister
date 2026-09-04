@@ -755,6 +755,36 @@ test_m2_geo_xform: obj_m2_geo_xform/Vm2_geo_xform_top
 	@echo "== test m2_geo_xform (transform_point / transform_vector, on the shared pool)"
 	@./obj_m2_geo_xform/Vm2_geo_xform_top
 
+GEO_RTL := rtl/video/m2_fp_pool.sv rtl/video/fp_to_int.sv $(GEO_FP)
+define GEO_UNIT
+obj_m2_$(1)/Vm2_$(1)_top: rtl/video/m2_$(1).sv $$(GEO_RTL) $(2) sim/video/geo_wrappers.sv sim/video/tb_m2_$(1).cpp
+	$$(VBUILD) --top-module m2_$(1)_top -CFLAGS "-O2" $$(TGPFLAGS) -Irtl/tgp -Irtl/video \
+	  --Mdir obj_m2_$(1) -o Vm2_$(1)_top rtl/video/m2_$(1).sv $$(GEO_RTL) $(2) \
+	  sim/video/geo_wrappers.sv sim/video/tb_m2_$(1).cpp
+test_m2_$(1): obj_m2_$(1)/Vm2_$(1)_top
+	@echo "== test m2_$(1)"
+	@./obj_m2_$(1)/Vm2_$(1)_top
+endef
+
+$(eval $(call GEO_UNIT,geo_project,))
+$(eval $(call GEO_UNIT,geo_det,))
+$(eval $(call GEO_UNIT,geo_norm,rtl/video/m2_geo_rsqrt.sv))
+$(eval $(call GEO_UNIT,geo_rsqrt,))
+
+# The clipper has its own top: it drives m2_geo_project as well as the pool.
+obj_m2_geo_clip/Vtb_clip_top: rtl/video/m2_geo_clip.sv rtl/video/m2_geo_project.sv $(GEO_RTL) sim/video/tb_clip_top.sv sim/video/tb_m2_geo_clip.cpp
+	$(VBUILD) --top-module tb_clip_top -CFLAGS "-O2" $(TGPFLAGS) -Irtl/tgp -Irtl/video \
+	  --Mdir obj_m2_geo_clip -o Vtb_clip_top sim/video/tb_clip_top.sv \
+	  rtl/video/m2_geo_clip.sv rtl/video/m2_geo_project.sv $(GEO_RTL) \
+	  sim/video/tb_m2_geo_clip.cpp
+test_m2_geo_clip: obj_m2_geo_clip/Vtb_clip_top
+	@echo "== test m2_geo_clip (clipping and the float->screen conversion)"
+	@./obj_m2_geo_clip/Vtb_clip_top
+
+.PHONY: test_geo
+test_geo: test_m2_geo_xform test_m2_geo_project test_m2_geo_det test_m2_geo_rsqrt \
+          test_m2_geo_norm test_m2_geo_clip test_m2_geo
+
 # THE ASSEMBLED CORE, AND IT HAD NO RUN TARGET AT ALL.
 #
 # sim/tgp/tb_mb86233_core.cpp has existed since the TGP was ported and was never
