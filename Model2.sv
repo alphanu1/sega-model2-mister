@@ -540,8 +540,26 @@ always_comb begin
 	// Either outcome is worth a build. Neither is a guess.
 	p_req[0]  = rb_req;
 	p_addr[0] = rb_addr;
-	p_req[4]  = sw_req;
-	p_addr[4] = sw_addr;
+	// PORT 4 IS THE GEOMETRIZER WALKER'S NOW, NOT THE DEBUG SWEEPER'S (R167).
+	//
+	// The walker and the coprocessor used to SHARE port 9, muxed by
+	// `tgp_dat_req_r`. Two independent requesters cannot share one port: this
+	// controller's interface is one req/ack pair and one address per port, so the
+	// address moved under whichever transaction was already in flight and the
+	// single acknowledge could not say whose it was. Measured on the board -- the
+	// coprocessor retired its reads with the walker's data, its display-list base
+	// and count came back as garbage, and it ground ~640x the reference workload
+	// and never cleared the mailbox. Turning the walker off cured it outright,
+	// which is the proof.
+	//
+	// Separate ports remove the class rather than arbitrating it. The controller
+	// already arbitrates BETWEEN ports correctly; it was only ever wrong to put
+	// two owners on one.
+	//
+	// Port 4 was the SDRAM checksum sweeper, a debug facility whose only consumer
+	// is the overlay. It is the port Ben identified as free.
+	p_req[4]  = geo_rd_req_r;
+	p_addr[4] = GAME_BUFFER + SDR_AW'({geo_rd_addr_r, 1'b0});
 	// PORT 2 FOR THE COPY, which is the one port known to work.
 	//
 	// Port 0 failed (single word) and port 1 failed (four-word burst), while the
@@ -599,11 +617,10 @@ always_comb begin
 	//
 	// The coprocessor wins, because it STALLS THE TGP mid-instruction while it
 	// waits; the walk has a whole frame and can take its turn.
-	p_req[9]  = tgp_dat_req_r | (geo_rd_req_r & ~tgp_dat_req_r);
-	p_addr[9] = tgp_dat_req_r
-	          ? ((tgp_dat_is_buf_r ? GAME_BUFFER : GAME_COPRO)
-	             + SDR_AW'({tgp_dat_addr_r, tgp_dat_half_r}))
-	          : (GAME_BUFFER + SDR_AW'({geo_rd_addr_r, 1'b0}));
+	// PORT 9 IS THE COPROCESSOR'S ALONE (R167). The walker moved to port 4.
+	p_req[9]  = tgp_dat_req_r;
+	p_addr[9] = (tgp_dat_is_buf_r ? GAME_BUFFER : GAME_COPRO)
+	          + SDR_AW'({tgp_dat_addr_r, tgp_dat_half_r});
 	// port 9 is READ ONLY. Buffer-RAM writes go out on the shared write port,
 	// which keeps p_we/p_din out of the arbiter's command decode.
 	p_req[7]  = snd_found & pcm2_req;
@@ -2290,8 +2307,8 @@ always_ff @(posedge clk_sys) begin
 	tgp_bufw_addr_r <= tgp_bufw_addr;
 	tgp_bufw_data_r <= tgp_bufw_data;
 	tgp_bufw_ack_r  <= ldr_wr_ack & tgp_bufw_req_r;
-	geo_rd_ack_r    <= p_ack[9] & ~tgp_dat_req_r;
-	geo_rd_data_r   <= p_dout[9][31:0];
+	geo_rd_ack_r    <= p_ack[4];      // port 4 has ONE owner now
+	geo_rd_data_r   <= p_dout[4][31:0];
 end
 
 // CLOCKED ON clk_sys, DELIBERATELY, and speed is a separate question.
