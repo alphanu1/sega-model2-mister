@@ -9156,3 +9156,81 @@ the known defect fit the symptom's shape. It took ten minutes of UART to falsify
 **A plausible mechanism that matches a symptom is a hypothesis, not a diagnosis;
 the instrument that names the state is worth more than the one that fits the
 story.**
+
+---
+
+**R159/R160/R161 - THE COPROCESSOR HANGS ON AN SDRAM READ THAT IS ISSUED AND
+NEVER ANSWERED. R151 IS GOOD AND STAYS; R156 IS REVERTED. AND THE TILEMAP WAS
+NEVER A RELIABLE SIGNAL.**
+
+*Method note first, because it cost most of the day.* Four hardware builds were
+judged from captures taken 15 s after `load_core`. The ROM set is 43.62 MB over
+ioctl and had not finished; `rom_loaded` low holds `cpu_rst_n` low, so every one
+of those captures read `cpu_ip = 0`, `tgp_pc = 0000`, nothing uploaded -- the
+signature of a core held in reset, which was then reported three times as a
+design failure. **R157 (write-port corruption) and R158's premise (a stall
+deadlock at tgp_pc = 0000) both rest on those captures and are withdrawn.** The
+conclusion "d27721c fails too" was the same artifact; re-measured after settling,
+d27721c is identical to the known-good 108fed3d.
+
+*AND THE SCREEN IS NOT THE INSTRUMENT IT LOOKS LIKE.* The tilemap lives in
+on-chip RAM. When SDRAM stalls, the last frame stays on the display -- so
+"tiles present, stuck at frame 1" and "no tiles" are not cleanly separable
+states, and both were used as bisect evidence today. A frozen picture with tiles
+is exactly what a stalled memory path looks like.
+
+*What the bisect established, measured after proper settling:*
+
+    d27721c (base)   TGP idles 004C-0057 / 00B5-00B9 forever, 3 reads,
+                     191 idle zeros                      == 108fed3d
+    R151 alone       TGP REACHES THE COMMAND HANDLER: 8 reads, 62 results,
+                     then freezes at pc 047B             tiles intact
+    R151 + R156      tilemap gone
+
+So **R151 does what it was built to do** -- the coprocessor goes from never
+starting to doing real work -- and **R156 is what costs the tilemap**, and is
+reverted here. R156's target was real (the `sel_radr` theft of the io 0x10 read,
+measured) but it gated `sel_math` in the same change, on an argument from MAME's
+view semantics rather than a measurement. The two were never separated. It
+should return narrowly, with a board result.
+
+*THE ACTUAL FAULT, NAMED BY PORT-9 TELEMETRY.* The debug stream was repointed
+from the walker to SDRAM port 9:
+
+    C 0540047B 0008003E    retires 1344 frozen, pc 047B, 8 reads, 62 pushed
+    H 000506BE 80105700    req_rises 5
+                           tgp_dat_req_r = 1     <- request ASSERTED
+                           tgp_dat_ack_r = 0     <- never acknowledged
+                           is_buf = 0, we = 0    <- a READ of the copro data ROM
+                           addr = 0x01057
+
+pc 047B is `mov d, x0`, one instruction before `047C mov (x0+1)(e), $0x4a` --
+the display-list count read. **The coprocessor issues that read to port 9 and
+the controller never answers.** Not a request that was never made; one made and
+abandoned.
+
+*What is ruled out.*
+
+  * **Reverting the SDRAM controller is not available.** `m2_sdram.sv` restored
+    to its pre-d27721c form fails timing on all four seeds (-0.119 to -0.668),
+    which independently confirms d27721c's own claim that the row-comparator
+    rework exists to close timing. The rework is untested, not disproved.
+  * **`S_MISS` is not a deadlock.** Its exit condition waits on
+    `ras_cnt[dsp_bank]` and `rd_bank_cnt[dsp_bank]`, and both are decremented in
+    the free-running block at lines 686/695, outside the state case. It always
+    leaves.
+  * **Every simulation path is blind to this.** The boot harness answers
+    `tgp_dat_*` from C++, and `REAL_MEM` wires only ports 0 and 3. **Port 9 has
+    never been exercised against the real controller anywhere except the
+    board.** The three SDRAM benches pass and do not reach this pattern.
+
+*THE INSTRUMENT THAT IS OWED, AND IT IS WORTH MORE THAN THE NEXT GUESS.* Wire
+the TGP's ports 8 and 9 through `m2_sdram_x2` + `sdram_model` in the boot
+harness, as `REAL_MEM` already does for the CPU and char ports. That reproduces
+this at the desk with full visibility instead of at 25 minutes a hypothesis, and
+it closes the gap that let a port-9 fault survive every test in the suite.
+
+*Standing lesson, paid again and more expensively than before.* R149 said read
+the code behind a number before using it. Today's version: **read the CONDITIONS
+behind a measurement.** A capture during ROM download and a frozen frame buffer
+are both instruments reporting faithfully about the wrong moment.

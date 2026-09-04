@@ -488,12 +488,18 @@ module m2_tgp #(
   // copro RAM window. Model 2's io map has nothing at 0x00-0x1f but the view.
   // They are left reachable with the bank off rather than deleted, because
   // removing them is a separate change with no consumer asking for it.
-  wire        io_lo    = !win_en && (io_addr[15:5] == 11'd0);
+  // R156 IS REVERTED HERE ON HARDWARE EVIDENCE (R161). Gating these on the
+  // window cost the tilemap on the board: the TGP hung, the i960 stalled on
+  // its next FIFO read, and the CPU never drew. The 0x10 read R156 was aimed
+  // at is real and still owed -- but sel_math was gated with it, on an
+  // argument from MAME's view semantics rather than a measurement, and the
+  // pair has never been separated. Fix it narrowly, with a board result.
+  wire        io_lo    = (io_addr[15:5] == 11'd0);
   wire        sel_radr = io_lo && (io_addr[2:0] == 3'd0);
   wire        sel_rdat = io_lo && (io_addr[2:0] == 3'd1);
   wire [1:0]  radr_i   = io_addr[4:3];
 
-  wire        io_mid   = !win_en && (io_addr[15:5] == 11'd1);   // 0x20-0x3f
+  wire        io_mid   = (io_addr[15:5] == 11'd1);   // 0x20-0x3f
   wire        sel_math = io_mid && (io_addr[4:0] <= 5'h0b);
 
   // ---------------------------------------------------- the math units
