@@ -423,7 +423,20 @@ localparam logic [SDR_AW:1] GAME_TGPTBL = SDR_AW'(32'h15d8000);
 // MRA streams both pairs back to back with no gap, so an address computed
 // against MAME's layout is 4 MB out for everything above the hole. Recorded
 // now because it costs nothing here and is expensive to rediscover.
-localparam logic [SDR_AW:1] GAME_POLY   = SDR_AW'(32'h0b20000);   // 12 MB
+// THE POLYGON ROM: byte 0x1640000, 0xd00000 = 13 MB, not the 12 MB this line
+// used to claim. The MRA streams three 4 MB interleaved pairs
+// (mpr-16523/16518, 16524/16519, 16525/16520) plus a 1 MB pair
+// (epr-16646/16645), and the 68000 sound program starts immediately after at
+// byte 0x2340000 -- there is no gap.
+//
+// `oba` is a DWORD INDEX, not a byte address: the reference reads
+// polygon_rom[oba & mask] out of a u32 array, with mask = bytes/4 - 1. The
+// engine masks to 22 bits, which is that mask for a region padded to 16 MB.
+// An oba past the real 13 MB therefore reads the sound program rather than
+// wrapping the way MAME's non-power-of-two mask would. Left as is: it can only
+// happen for an object address the game never issues, and a wrong picture is
+// preferable to a mask that quietly disagrees with the reference.
+localparam logic [SDR_AW:1] GAME_POLY   = SDR_AW'(32'h0b20000);   // byte 0x1640000, 13 MB
 
 wire        snd_rom_req;
 wire [17:1] snd_rom_addr;
@@ -4306,6 +4319,29 @@ localparam bit DEBUG = 1'b0;
 localparam bit DEBUG = 1'b1;
 `endif
 
+// AND THE TWO INSTRUMENTS ARE NOW SEPARATELY SWITCHED, because the design
+// stopped fitting and they are not worth the same.
+//
+// The geometry pipeline is 5,500 ALUTs and it took the fitter from 79% to over
+// the edge: "requires 4220 LABs, the device contains only 4191". Something had
+// to go, and the overlay is the one whose premise has already expired -- the
+// standing rule that "the screen is the only output channel" was written when
+// nothing else could reach a cabinet, and R140 amended it when UART reached
+// /dev/ttyS1 over ssh. Every finding since R136 came off the UART, not the
+// screen.
+//
+// So m2_diag (443.5 ALM) goes and m2_dbg_stream (182.9 ALM) STAYS. Turning off
+// M2_NO_DEBUG would have taken both, and the UART is the only instrument that
+// can answer the question the next build exists to ask -- which memory the
+// display list's objects point at.
+//
+//     set_global_assignment -name VERILOG_MACRO "M2_NO_OVERLAY=1"
+`ifdef M2_NO_OVERLAY
+localparam bit OVERLAY = 1'b0;
+`else
+localparam bit OVERLAY = DEBUG;
+`endif
+
 // The overlay runs on clk_vid and these all live on clk_sys or clk_i960, so
 // they cross with two flops. They are status bits and counters read by eye --
 // a torn counter is a wrong digit for one frame, not a wrong decision.
@@ -4319,7 +4355,7 @@ always_ff @(posedge clk_sys) begin
 	ldr_top_sync  <= ldr_top;
 end
 
-generate if (DEBUG) begin : g_diag
+generate if (OVERLAY) begin : g_diag
 m2_diag #(.NWORDS(24)) u_diag
 (
 	.clk(clk_sys),

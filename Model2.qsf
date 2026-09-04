@@ -79,7 +79,20 @@ set_global_assignment -name FINAL_PLACEMENT_OPTIMIZATION ALWAYS
 # different contended resource per seed -- so if routing fails again, this is
 # the line to put back. Model 1 closes at 91% ALM against our 78%, so
 # occupancy is not what is hurting us here.
-set_global_assignment -name FITTER_AGGRESSIVE_ROUTABILITY_OPTIMIZATION AUTOMATICALLY
+#
+# BACK TO ALWAYS, ON THIS FILE'S OWN CRITERION. The paragraph above ends "if
+# routing fails again, this is the line to put back", and routing has failed
+# again: the geometry pipeline took the design to 41,714 of 41,910 ALM and the
+# fitter segfaulted in the router after placing at 99.5%.
+#
+# Two premises recorded above are now dead and are left in place as the record
+# of how the setting was reasoned about when they were alive:
+#   "Model 1 closes at 91% ALM against our 78%, so occupancy is not what is
+#    hurting us here" -- our occupancy is now 99.5%, and it is exactly what is
+#    hurting us.
+#   The hdmi_out_vs flop-to-flop path was the argument against spreading logic.
+#   A design that does not route has no Fmax to protect.
+set_global_assignment -name FITTER_AGGRESSIVE_ROUTABILITY_OPTIMIZATION ALWAYS
 set_global_assignment -name FITTER_EFFORT "STANDARD FIT"
 # BALANCED, NOT AGGRESSIVE AREA. Aggressive Area crashed this fitter twice in
 # succession -- "Fatal Error: Segment Violation at (nil)" after placement
@@ -87,7 +100,47 @@ set_global_assignment -name FITTER_EFFORT "STANDARD FIT"
 # builds get through placement AND routing and only fall over on exit, so this
 # is a worse failure and not the usual Quartus 17 flakiness. The duplication
 # settings below stay off, which is where most of the area comes from.
-set_global_assignment -name OPTIMIZATION_MODE "HIGH PERFORMANCE EFFORT"
+# AGGRESSIVE AREA. The paragraph above says it crashed this fitter twice; that
+# was with ROUTER_LCELL_INSERTION_AND_LOGIC_DUPLICATION OFF, which the note
+# below records as the difference between a crash after placement and a crash
+# on exit. It is ON now.
+#
+# THE MODEL 1 PROJECT MEASURED THIS ON A FULL CORE AND ITS ANSWER WAS "DO NOT":
+#
+#     default (HIGH PERFORMANCE EFFORT / SPEED)  30,206 ALM  452 M10K  +0.331 ns
+#     Aggressive Area / AREA                     29,611 ALM  463 M10K  +0.024 ns
+#                                                   -595       +11
+#
+# -- "it trades the binding resource ... M10K is the binding resource here, 82%
+# before this, 84% after, so it spends the scarce resource to save the plentiful
+# one" (model1-ref/docs/findings.md).
+#
+# THAT REASONING INVERTS HERE, WHICH IS WHY WE TAKE THE SETTING THEY REJECTED.
+# Ours is the opposite design: 99.5% ALM and 68% block memory. Spending M10K to
+# buy ALM is precisely the trade we want and precisely the one they could not
+# afford. The saving is small in absolute terms -- 2% on their core, so perhaps
+# 800 ALM on ours -- and it is the timing that will decide this, not the area:
+# they lost almost all their setup slack for it. Seed sweeping exists for that.
+# BALANCED, AND THE OTHER FOUR AREA SETTINGS STAY. Aggressive Area WORKED on
+# ALM -- 41,714 -> 37,109, 100% -> 89%, a saving of 4,605 -- and then the fitter
+# segfaulted anyway, because of how it bought them:
+#
+#     Total RAM Blocks : 553 / 553 ( 100 % )
+#     Total block memory bits : 4,282,232 / 5,662,720 ( 76 % )
+#
+# It moved logic into M10K during physical synthesis and filled every block on
+# the device. m2_geometry uses ZERO M10K at synthesis, so the 3D work did not
+# cause this -- the setting did, by spending the one resource we have least of.
+#
+# WHICH IS EXACTLY WHAT THE MODEL 1 PROJECT SAID IT WOULD DO. "It trades the
+# binding resource ... it spends the scarce resource to save the plentiful one."
+# The note above claims that reasoning inverts here because we are at 76% block
+# memory; it does not. 76% is BITS. The binding number is RAM BLOCKS, and a
+# memory too small to fill a block still costs a whole one -- 4,282,232 bits
+# would fit in 418 blocks and 553 are allocated. That misreading is recorded
+# rather than deleted because it is the second time this project has drawn a
+# confident conclusion from the wrong column of a fitter report.
+set_global_assignment -name OPTIMIZATION_MODE "BALANCED"
 set_global_assignment -name ALLOW_POWER_UP_DONT_CARE ON
 set_global_assignment -name QII_AUTO_PACKED_REGISTERS NORMAL
 # BACK ON, AND NOT BY PREFERENCE. With this OFF the fitter dies with
@@ -101,7 +154,9 @@ set_global_assignment -name ROUTER_LCELL_INSERTION_AND_LOGIC_DUPLICATION ON
 set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC ON
 set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_DUPLICATION ON
 set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_RETIMING ON
-set_global_assignment -name OPTIMIZATION_TECHNIQUE SPEED
+# AREA, NOT SPEED. The whole of the block below was tuned when there were
+# 8,940 ALM spare. There are 196.
+set_global_assignment -name OPTIMIZATION_TECHNIQUE AREA
 set_global_assignment -name MUX_RESTRUCTURE ON
 set_global_assignment -name REMOVE_REDUNDANT_LOGIC_CELLS ON
 set_global_assignment -name AUTO_DELAY_CHAINS_FOR_HIGH_FANOUT_INPUT_PINS ON
@@ -111,7 +166,11 @@ set_global_assignment -name AUTO_DELAY_CHAINS_FOR_HIGH_FANOUT_INPUT_PINS ON
 # nothing and costing path depth. Turned off ALONE -- it is not one of the
 # four whose removal segfaults this fitter, and the A/B is seed 19, which
 # missed at -0.124 with it on.
-set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC_FOR_AREA OFF
+# ON. The paragraph above justifies OFF with "the design is in HIGH PERFORMANCE
+# EFFORT with OPTIMIZATION_TECHNIQUE SPEED and 8,940 ALM spare, so area-targeted
+# combinational restructuring is buying nothing". Both halves of that are now
+# false: the technique is AREA and the spare is 196 ALM.
+set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC_FOR_AREA ON
 set_global_assignment -name ADV_NETLIST_OPT_SYNTH_WYSIWYG_REMAP ON
 set_global_assignment -name SYNTH_GATED_CLOCK_CONVERSION ON
 set_global_assignment -name PRE_MAPPING_RESYNTHESIS ON
@@ -119,7 +178,13 @@ set_global_assignment -name ROUTER_CLOCKING_TOPOLOGY_ANALYSIS ON
 set_global_assignment -name ECO_OPTIMIZE_TIMING ON
 set_global_assignment -name PERIPHERY_TO_CORE_PLACEMENT_AND_ROUTING_OPTIMIZATION ON
 set_global_assignment -name PHYSICAL_SYNTHESIS_ASYNCHRONOUS_SIGNAL_PIPELINING ON
-set_global_assignment -name ALM_REGISTER_PACKING_EFFORT MEDIUM
+# HIGH, AND THIS IS THE ONE AIMED AT THE MEASURED PROBLEM. m2_geometry is
+# 5,428 combinational ALUTs and 6,607 REGISTERS, and the total went from 33,195
+# ALM to 41,714 -- about 4,000 ALM more than the parts account for. An ALM holds
+# two combinational functions and four registers; above ~90% the fitter stops
+# finding compatible pairs and spends a whole ALM on what should share one. The
+# gap is packing collapse, so raise the packing effort.
+set_global_assignment -name ALM_REGISTER_PACKING_EFFORT HIGH
 set_global_assignment -name SEED 162
 
 #set_global_assignment -name VERILOG_MACRO "MISTER_FB=1"
@@ -131,10 +196,13 @@ set_global_assignment -name SEED 162
 #set_global_assignment -name VERILOG_MACRO "MISTER_DEBUG_NOHDMI=1"
 
 # disable bilinear filtering when downscaling
-#set_global_assignment -name VERILOG_MACRO "MISTER_DOWNSCALE_NN=1"
+# ENABLED: ascal is 2,907 ALUTs and these two are cosmetic scaler features with
+# no effect on what the game does. Cheapest area in the project -- they cost a
+# slightly harder downscale and non-adaptive scanlines, nothing else.
+set_global_assignment -name VERILOG_MACRO "MISTER_DOWNSCALE_NN=1"
 
 # disable adaptive scanline filtering
-#set_global_assignment -name VERILOG_MACRO "MISTER_DISABLE_ADAPTIVE=1"
+set_global_assignment -name VERILOG_MACRO "MISTER_DISABLE_ADAPTIVE=1"
 
 #use only 1MB per frame for scaler to free ~21MB DDR3 RAM
 #set_global_assignment -name VERILOG_MACRO "MISTER_SMALL_VBUF=1"
@@ -145,6 +213,13 @@ set_global_assignment -name SEED 162
 # not area bound. YC is the composite/S-Video encoder in sys_top.v; nothing in
 # this core drives it and no output we use goes through it.
 set_global_assignment -name VERILOG_MACRO "MISTER_DISABLE_YC=1"
+# THE ON-SCREEN OVERLAY IS OFF, AND THE UART IS NOT. See Model2.sv's OVERLAY
+# localparam. The geometry pipeline took the fit from 79% to "requires 4220
+# LABs, the device contains only 4191"; m2_diag is 443.5 ALM and every finding
+# since R136 came off /dev/ttyS1 rather than off the screen. m2_dbg_stream
+# stays -- it is the only instrument that can say which memory the display
+# list's objects point at, which is the question the 3D work now turns on.
+set_global_assignment -name VERILOG_MACRO "M2_NO_OVERLAY=1"
 
 # Disable ALSA audio output to save some resources.
 # ENABLED, 251.5 ALM. ALSA is the HPS/Linux audio channel INTO audio_out's
