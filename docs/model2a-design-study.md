@@ -8810,3 +8810,88 @@ instruments that could not have reported anything else -- R150's shared port,
 R151's discarded writes, and this entry's ROM-sourced reads. The rule stated in
 R149 and restated in R152 keeps being paid for: **before a number is used as
 evidence, read the code that produces it -- including the harness's.**
+
+---
+
+**R154 - THE COPROCESSOR DATA ROM WAS NEVER LOADED INTO THE BOOT HARNESS, AND
+THAT WAS THE DISPLAY-LIST COUNT. THE MAILBOX HANDSHAKE NOW COMPLETES, 37 TIMES
+IN A 20 M-INSTRUCTION RUN.**
+
+*The chain, followed to the bottom.* R153 left one question: is the count read
+from the wrong address, or is the right address empty? Neither, quite. The
+answer was a fourth harness gap behind both.
+
+The TGP's init computes the base every display-list access is built from:
+
+    07CC  lia #0x800000          a = 0x800000, the data-ROM bank
+    07CD  mov a, rf3             select it
+    07CE  ldi #0x10, b1
+    07CF  mov (bx1) (e), d       READ THE COPRO DATA ROM
+    07D0  addd                   d += 0x800000
+    07D1  mov d, $0x69           $0x69 -- the base
+
+and every command then does:
+
+    0474  mov $0x69, d
+    0475  addd : mov rf1, $0x53   d = $0x69 + the pushed pointer
+    0478  mov d, rf3              the bank
+    047B  mov d, x0               the offset
+    047C  mov (x0+1) (e), $0x4a   THE COUNT
+
+`tb_m2_boot.cpp` loads `main_data` at DATA_BASE and the TGP math tables at
+TBL_BASE. **It never loaded `copro_data` at GAME_COPRO at all**, so every read
+of that ROM returned the uninitialised 0xFFFFFFFF -- including the one at 0x7CF.
+MAME has `$0x69 = 0xFF800030`; ours came out 0x30 short, the count at 0x47C was
+fetched from dword 0x1057 instead of 0x1087, and read 0xFFFFFFFF. That is
+4.3 billion loop iterations, which is why 0x4BC and 0x4C4 were never reached.
+
+Loaded from `ROM_REGION32_LE("copro_data")` in model2.cpp -- `mpr-16537.ic28`
+low, `mpr-16536.ic29` high, the same interleave as main_data.
+
+*Measured, same command, 20 M instructions:*
+
+                              before        after
+    FIFO in pushed            109           1,571
+    FIFO out popped           62            548
+    TGP retires               1,381         61,627
+    distinct TGP pcs          410           812
+    copro buffer-RAM writes   2             178
+    dword 0x7FFC hits         2             74
+    display-list count        ffffffff      4, 12, 34, 70, ac, ...
+
+**And the handshake completes.** The mailbox log shows the full protocol
+cycling, exactly as the reference does it:
+
+    cyc 196283999  0fff8 : ffff   tgp pc=046e     the CPU's batch, armed
+    cyc 197513453  0fff8 : 0000   tgp pc=04c3     THE CLEAR
+    cyc 202258059  0fff8 : ffff   tgp pc=046e
+    cyc 202261913  0fff8 : 0000   tgp pc=04c3
+    ...
+
+37 complete handshakes in the run, against zero before. The CPU reaches code it
+had never reached: pages 0x0000e000 (7,484 instructions) and 0x00013000 (2,879)
+appear for the first time, and 0xE20C is the caller of the mailbox routine at
+0x11620 that Ghidra had already identified.
+
+*A discrepancy that does NOT matter, checked rather than assumed.* MAME's ROM
+read at 0x7CF is 0xFF000030 and ours is 0x00000030 -- the top byte differs. The
+ROM bytes were read directly and genuinely contain 0x00000030 at dword 0x10
+(with dwords 0x00/0x05/0x0A/0x0F all 0x3F800000, an identity matrix, so the
+interleave is right). The difference cannot reach the address: MAME computes
+`adr = (bank & 0xff0000) | (d & 0xffff)` and both sides give bank bits 0x800000
+and offset 0x1087. MAME's extra 0xFF000000 comes from `(bx1)` = b1 + x1 with a
+non-zero x1 at that call, which the caller supplies; it is worth settling but it
+is not this bug.
+
+*STILL OPEN.* The counts differ from the reference -- ours run 4, 0x12, 0x34,
+0x70, 0xAC, an arithmetic progression of 0x38, where MAME reads 6, 7, 8, 9,
+0x14. So the handshake completes but the display lists being walked are not the
+reference's. That is the next comparison, and like everything in R150-R154 it
+needs no fit.
+
+*Method, and this is the fourth time in one session.* R150's shared port,
+R151's discarded writes, R153's ROM-sourced reads, and now a ROM that was never
+loaded: **every one of them made the harness incapable of reporting the thing
+being asked of it, and in each case the number it did report was taken at face
+value first.** The rule from R149 has now been paid for four times in a day.
+The harness is part of the instrument and gets read like one.

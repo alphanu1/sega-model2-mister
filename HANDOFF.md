@@ -64,51 +64,64 @@ Measured, boot harness, BUFFERRAM=1, 20 M instructions, one variable:
 0x480-0x4b0 is the vertex-copy handler (`rep #0xc`), and 0x48f is MAME's hottest
 TGP address after the poll.
 
-## IT IS NOT FIXED, AND THE REASON IS NOW ONE MEASURED NUMBER (R153)
+## THE MAILBOX HANDSHAKE COMPLETES (R153, R154)
 
-**Correction to R151.** It reported "still ends at IP 0001166c" and guessed the
-coprocessor writes a non-zero mailbox value. That was measured against a harness
-that could not have produced any other result, and **the value we write is
-correct** -- MAME writes the same 0xFFFFFFFF from the same instruction.
+**37 complete handshakes in a 20 M-instruction run, against zero before.** The
+mailbox log shows the reference's own protocol cycling:
 
-**The harness was not modelling the memory the two sides share.** Three gaps,
-each alone fatal, all now fixed:
+    cyc 196283999  0fff8 : ffff   tgp pc=046e    armed by the CPU's batch
+    cyc 197513453  0fff8 : 0000   tgp pc=04c3    THE CLEAR
+    cyc 202258059  0fff8 : ffff   tgp pc=046e
+    cyc 202261913  0fff8 : 0000   tgp pc=04c3
 
-  1. buffer-RAM writes DISCARDED -- `bufw_data` used by nothing, `bufw_ack`
-     tied high, while the CPU reached buffer RAM through the bridge into SDRAM
-  2. buffer-RAM reads served from the DATA ROM -- `.dat_is_buf()` left
-     unconnected and `tgp_tick()` always using COPRO_BASE
-  3. `dat_addr` truncated 20 bits -> 19, silently dropping the top bit
+**FOUR harness gaps, all on the copro/buffer-RAM path, all fixed.** None of them
+was in the core; every one made the harness incapable of answering the question
+put to it:
 
-**The protocol, from MAME's microcode** (`focus copro_tgp` + breakpoints; a
-`dasm` before the upload is 2,048 zeros):
+  1. buffer-RAM writes DISCARDED -- `bufw_data` used by nothing, `bufw_ack` tied
+     high, while the CPU reached buffer RAM through the bridge into SDRAM
+  2. buffer-RAM reads served from the DATA ROM -- `.dat_is_buf()` unconnected
+  3. `dat_addr` truncated 20 bits -> 19
+  4. **the copro data ROM was never loaded at all** -- `tb_m2_boot.cpp` loads
+     main_data and the math tables and nothing at GAME_COPRO, so every read
+     returned 0xFFFFFFFF
 
-    CPU  0001163C  writes 0xFFFFFFFF to 0x91fff0          x50 in 6 s
-    TGP  0000046F  mov {0} $2,(x1)(e)   x1=0x7FFC $2=-1   x50
-    TGP  0000047C  reads the display-list COUNT from buffer RAM  (6,7,8,9,0x14)
-    TGP  00000481..04B5  the loop, counting it down
-    TGP  000004BC  writes the result count to 0x7FFD      x50
-    TGP  000004C4  mov {0} $0,(x1)(e)   x1=0x7FFC, ZERO   x50   <- THE CLEAR
-    CPU  0001166C  the poll exits
+(4) was the display-list count. The TGP's init at 0x7CF reads that ROM to build
+`$0x69`, the base every command is computed from (0x474/0x475/0x478). MAME has
+`$0x69 = 0xFF800030`; ours came out 0x30 short, so the count at 0x47C came from
+dword 0x1057 instead of 0x1087 and read 0xFFFFFFFF -- 4.3 billion iterations,
+and 0x4BC/0x4C4 were never reached. ROMs are `mpr-16537.ic28` (low) and
+`mpr-16536.ic29` (high), same interleave as main_data.
 
-The i960 never writes zero there -- watchpointed -- so 0x4C4 is the only
-clearing writer. `{0}` is the transfer type, NOT "write zero": the zero is
-data-RAM `$0`, checked with `dd@0`.
+                              before        after
+    FIFO in pushed            109           1,571
+    FIFO out popped           62            548
+    TGP retires               1,381         61,627
+    distinct TGP pcs          410           812
+    dword 0x7FFC hits         2             74
+    display-list count        ffffffff      4, 12, 34, 70, ac, ...
 
-**Our defect, measured with the harness fixed:**
+The CPU reaches code it never reached: pages 0x0000e000 and 0x00013000 appear
+for the first time, and 0xE20C is the caller of the mailbox routine at 0x11620.
 
-    DISPLAY-LIST COUNT at 0x47E:  ffffffff     MAME: 6, 7, 8, 9, 0x14
+**Correction to R151.** It guessed our coprocessor writes a non-zero mailbox
+value. It does not: MAME writes the same 0xFFFFFFFF from the same instruction
+(0x46F, source `$2`). `{0}` in that disassembly is the transfer type, not "write
+zero" -- the zero at 0x4C4 is data-RAM `$0`.
 
-4.3 billion iterations, so 0x4BC and 0x4C4 are never reached. The histogram
-agrees: 2,003,400 cycles at 0x48F, 569,792 at each of 0x49B/9D/9F/A0, no 0x4C4.
+## STILL OPEN ON THIS PATH
 
-0xFFFFFFFF is the standing signature for UNWRITTEN memory. The count is not
-corrupted -- it is read from somewhere nothing has written.
+The counts differ from the reference: ours run 4, 0x12, 0x34, 0x70, 0xAC -- an
+arithmetic progression of 0x38 -- where MAME reads 6, 7, 8, 9, 0x14. **The
+handshake completes but the display lists being walked are not the
+reference's.** That is the next comparison and needs no fit.
 
-**The one open question:** either the coprocessor's read address is wrong, or
-the CPU's display-list writes are not landing where it reads. MAME's `x0` at
-0x47D is ~0x1088/0x11B1; the same figure from our core is the next probe, and
-it needs no fit.
+Also unsettled, and harmless: MAME's ROM read at 0x7CF is 0xFF000030 where ours
+is 0x00000030. The ROM bytes genuinely contain 0x00000030 (dwords
+0x00/05/0A/0F are 0x3F800000, an identity matrix, so the interleave is right).
+MAME's extra top byte comes from `(bx1)` = b1 + x1 with a non-zero x1 supplied
+by the caller. It cannot reach the address -- both give bank 0x800000 and offset
+0x1087 -- but it is not explained.
 
 ## THE 2:1 HANDSHAKE AUDIT: SAFE, AND THE RATIO IS WHY (R152)
 
@@ -164,14 +177,14 @@ zero never comes back for the real result. Stalling prevents it.
 
 ## NEXT STEPS, IN ORDER
 
-1. **Capture the coprocessor's read address at 0x47C** and compare with MAME's
-   `x0` (~0x1088/0x11B1). That decides between "we read the wrong place" and
-   "the CPU's display list is not where we look".
-2. **If the address is right, dump what the CPU wrote to buffer RAM** around
-   dword 0x1088 in the same run. `mem[BUF_BASE + 0x1088*2]` reading 0xFFFF says
-   nobody wrote it.
-3. **Only then fit.** Nothing since the last build needs the fitter to progress,
-   and one change per build still stands (R147).
+1. **Compare the display lists themselves.** The counts are an arithmetic
+   progression where MAME's are small and varied, so the walk is reading the
+   wrong structure. Log the copro's buffer-RAM read addresses at 0x47C and the
+   dwords around them, against MAME's `x0` and `dd@`.
+2. **Settle the 0x7CF top byte** -- MAME 0xFF000030 vs ours 0x00000030 -- by
+   reading `b1`/`x1` at that instruction in both.
+3. **Then fit.** Nothing on this path needs the fitter, and one change per build
+   still stands (R147). The two RTL lines of R151 are still unflashed.
 
 ## HOW TO REPRODUCE WITHOUT A FIT
 

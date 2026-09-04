@@ -42,6 +42,12 @@ static Vm2_boot_harness *d;
 // 25-bit word address space, 64 MB. Unwritten reads 0xFFFF, per the standing
 // rule in docs/mister-integration.md — never zero.
 static std::vector<uint16_t> mem;
+// base_buffer, as passed to m2_cpu_bridge -- the SAME array the CPU reaches
+// buffer RAM through, so the coprocessor and the CPU finally share one memory.
+// File scope because mem_tick() is defined above the base constants it needs.
+static const uint32_t BUF_BASE = 0x16d0000;
+static uint64_t cpu_buf_writes = 0;
+static uint32_t cpu_buf_lo = 0xffffffffu, cpu_buf_hi = 0;
 static uint64_t mem_words = 0;
 
 static bool load_file(const std::string &p, std::vector<uint8_t> &out) {
@@ -185,6 +191,43 @@ int main(int argc, char **argv) {
       if (word < mem.size()) mem[word] = uint16_t(f[w * 2] | (f[w * 2 + 1] << 8));
     }
   }
+  // THE COPROCESSOR'S DATA ROM, AND IT WAS NEVER LOADED.
+  //
+  // Nothing wrote GAME_COPRO in this harness, so every copro data-ROM read
+  // returned the uninitialised 0xFFFFFFFF. That is not cosmetic: the TGP's
+  // init at 0x7CE reads dword 0x10 of this ROM and adds 0x800000 to make
+  // $0x69, the base every display-list access is computed from
+  // (0x474 `mov $0x69, d`, 0x475 `addd`, 0x478 `mov d, rf3`). MAME has
+  // $0x69 = 0xFF800030; with an all-ones read ours came out 0x30 short, so the
+  // count at 0x47C was fetched from dword 0x1057 instead of 0x1087 and read
+  // as 0xFFFFFFFF -- 4.3 billion loop iterations, and the mailbox never
+  // cleared.
+  //
+  // ROM_REGION32_LE("copro_data") in model2.cpp: two ROM_LOAD32_WORDs, the
+  // same low/high interleave as main_data above.
+  {
+    struct { const char *n; uint32_t off, len; } cd[] = {
+      {"mpr-16537.ic28", 0x000000, 0x200000},
+      {"mpr-16536.ic29", 0x000002, 0x200000},
+    };
+    int cd_ok = 0;
+    for (auto &e : cd) {
+      std::vector<uint8_t> f;
+      if (!load_file(dir + e.n, f)) continue;
+      ++cd_ok;
+      for (uint32_t w = 0; w * 2 < e.len && w * 2 < f.size(); ++w) {
+        const uint32_t byte = (e.off & ~3u) + w * 4 + (e.off & 2u);
+        const size_t   word = 0x520000 + (byte >> 1);
+        if (word < mem.size()) mem[word] = uint16_t(f[w * 2] | (f[w * 2 + 1] << 8));
+      }
+    }
+    std::printf("  copro data ROM: %d/2 files at word 0x520000", cd_ok);
+    if (cd_ok == 2)
+      std::printf("   dword 0x10 = %04x%04x (MAME: ff000030)",
+                  mem[0x520000 + 0x21], mem[0x520000 + 0x20]);
+    std::printf("\n");
+  }
+
   // THE TGP's MATH TABLES, at GAME_TGPTBL. 64K 32-bit words: sincos, atan,
   // inverse and inverse-square-root quadrants.
   //
@@ -259,6 +302,16 @@ int main(int argc, char **argv) {
           if (d->sd_addr & 1) ++char_odd; else ++char_even;
         }
       }
+      // DID ANYONE WRITE THE DISPLAY LIST? The TGP reads its loop count from
+      // buffer RAM at 0x47C and gets 0xFFFFFFFF, which is this project's
+      // signature for memory nobody has written. This says whether the CPU
+      // wrote the window at all, and where.
+      if (d->sd_we && pend_addr >= BUF_BASE && pend_addr < BUF_BASE + 0x10000) {
+        ++cpu_buf_writes;
+        const uint32_t off = pend_addr - BUF_BASE;
+        if (off < cpu_buf_lo) cpu_buf_lo = off;
+        if (off > cpu_buf_hi) cpu_buf_hi = off;
+      }
       if (d->sd_we) {
         const uint16_t old = mem[pend_addr & 0x1ffffff];
         uint16_t v = d->sd_din;
@@ -317,7 +370,7 @@ int main(int argc, char **argv) {
   const uint32_t COPRO_BASE = 0x520000;     // GAME_COPRO, word address
   // base_buffer, as passed to m2_cpu_bridge below -- the SAME array the CPU
   // reaches buffer RAM through, so the two sides finally share one memory.
-  const uint32_t BUF_BASE   = 0x16d0000;
+
   int tbl_left = -1, dat_left = -1;
   uint32_t tbl_data = 0, dat_data = 0;
   const int tgp_lat = std::getenv("M2_TGP_LAT")
@@ -403,6 +456,9 @@ int main(int argc, char **argv) {
   // it reaches zero does 0x4B4 fall through to the result store at 0x4BC and
   // the mailbox clear at 0x4C4. MAME reads 6, 7, 8, 9, 0x14 here (measured).
   // A wrong count here is a coprocessor that never finishes a command.
+  struct DatR { uint32_t addr; uint32_t isbuf; uint32_t data; uint32_t pc; };
+  std::vector<DatR> datlog, buflog;
+  uint64_t buf_reads_n = 0;
   std::vector<uint32_t> lcounts;
   uint32_t lc_prev_pc = 0xffff;
   auto tgp_sample = [&]() {
@@ -538,6 +594,19 @@ int main(int argc, char **argv) {
       // 0x481-0x4B5 and never reached the mailbox clear at 0x4C4.
       dat_data = rd32((d->tgp_dat_is_buf ? BUF_BASE : COPRO_BASE)
                       + (uint32_t(d->tgp_dat_addr) << 1));
+      // WHERE THE COUNT COMES FROM. 0x47C is `mov (x0+1)(e), $0x4a`; MAME's x0
+      // there is ~0x1088/0x11B1, small dword offsets into buffer RAM.
+      // EVERY read, with the pc, rather than filtering on 0x47C: the pc probe
+      // and the request are not necessarily in the same cycle, and filtering
+      // on a guess reported "none captured" while 115,757 reads were happening.
+      if (datlog.size() < 20)
+        datlog.push_back({uint32_t(d->tgp_dat_addr),
+                          uint32_t(d->tgp_dat_is_buf), dat_data,
+                          uint32_t(d->obs_tgp_pc)});
+      if (d->tgp_dat_is_buf && buflog.size() < 20)
+        buflog.push_back({uint32_t(d->tgp_dat_addr), 1, dat_data,
+                          uint32_t(d->obs_tgp_pc)});
+      if (d->tgp_dat_is_buf) ++buf_reads_n;
       dat_left = tgp_lat; ++dat_reads;
     } else if (dat_left > 0) --dat_left;
     else if (dat_left == 0) {
@@ -1663,6 +1732,26 @@ int main(int argc, char **argv) {
   // What the CPU would actually read back, straight out of the array it polls.
   std::printf("  MAILBOX as the CPU reads it (mem[base_buffer+0xFFF8..9]): %04x %04x\n",
               mem[0x16d0000 + 0xFFF8], mem[0x16d0000 + 0xFFF9]);
+  std::printf("  CPU writes into the buffer-RAM window: %llu",
+              (unsigned long long)cpu_buf_writes);
+  if (cpu_buf_writes) std::printf("   word offsets %04x..%04x", cpu_buf_lo, cpu_buf_hi);
+  std::printf("\n");
+  std::printf("  COPRO reads with is_buf=1 (buffer RAM): %llu of %llu data reads\n",
+              (unsigned long long)buf_reads_n, (unsigned long long)dat_reads);
+  auto dump = [&](const char *what, std::vector<DatR> &v) {
+    std::printf("  %s:\n", what);
+    if (v.empty()) { std::printf("    (none)\n"); return; }
+    for (auto &r : v)
+      std::printf("    dat_addr=%05x is_buf=%u -> %08x  tgp pc=%04x\n",
+                  r.addr, r.isbuf, r.data, r.pc);
+  };
+  dump("FIRST COPRO DATA READS (MAME's count comes from dword ~0x1088, is_buf=1)",
+       datlog);
+  dump("FIRST BUFFER-RAM READS", buflog);
+  // What is actually sitting where MAME reads its count.
+  std::printf("  buffer RAM at MAME's dword 0x1088: %04x %04x   at 0x11B1: %04x %04x\n",
+              mem[BUF_BASE + 0x1088*2], mem[BUF_BASE + 0x1088*2 + 1],
+              mem[BUF_BASE + 0x11B1*2], mem[BUF_BASE + 0x11B1*2 + 1]);
   if (!lcounts.empty()) {
     std::printf("  DISPLAY-LIST COUNT at 0x47E (MAME reads 6,7,8,9,0x14):");
     for (auto c : lcounts) std::printf(" %08x", c);
