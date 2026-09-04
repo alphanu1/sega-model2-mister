@@ -5,12 +5,89 @@ claims are RETRACTED by R150.
 
 ## WHERE THE MACHINE IS
 
-On the card: `108fed3d` (seed 162). Boots, tilemaps and CREDIT draw, no flashing
-INSERT COIN, stuck at attract frame 1. Built and NOT yet flashed: seed 172,
-+0.394, which adds the FIFO write-ack change.
+On the card: `108fed3d` (seed 162) -- ROLLED BACK to this after the new build
+regressed. Tilemaps and CREDIT draw, stuck at attract frame 1.
 
-In the working tree, simulated but NOT yet fitted or flashed: the two-line stall
-fix of R151, below.
+Also on the card, not active: `Model2.rbf.r156` -- seed 204, +0.509, the best
+slack this project has had, carrying R151 + R156.
+
+## THE BOARD RESULT: WORSE, AND IT IS A RAM ISSUE (R157)
+
+**`Model2.rbf.r156` on hardware: background tiles GONE, still stuck at frame 1.**
+Worse than the build it replaced, and it contradicts a simulation that says the
+mailbox clears and the command stream matches MAME for all 200 words captured.
+
+**"Revert R151" is not available -- measured, not argued.** With R151 reverted
+and R156 kept:
+
+    copro buffer-RAM writes: 0    dword 0x7FFC hits: 0
+    MAILBOX: NEVER WRITTEN        pc 0x47e never reached
+
+Straight back to the original failure. The stall is what makes the TGP park at
+004c and dispatch; without it the idle loop eats commands. The two changes are a
+pair.
+
+**Model 1's CPU does not free-run either**, contrary to what was assumed here for
+a while. `m1_copro_if.sv` on the `incremental` branch withholds the ack:
+
+    end else if (v60_acc && !(we && sel_fifo && a1 && fin_full)
+                         && !(!we && sel_fifo && !a1 && fout_empty)) begin
+
+and its header records that returning zero instead was tried on 2026-08-30 and
+reverted the same day. Free-running is what THIS core had until R151, and it is
+the shortcut that made attract look healthy.
+
+**So the fault is downstream, in memory -- and Ben identified the class from the
+Model 1 experience: their frame-1 sky-and-sea was a RAM issue too.**
+
+## WHY SIMULATION COULD NOT SEE IT
+
+    sim/io/m2_boot_harness.sv:  .bufw_ack(1'b1)
+
+The harness acknowledges every coprocessor buffer write instantly, with no
+arbitration and no other requester. **The shared SDRAM write port is entirely
+unmodelled.** Five requesters -- loader, `bi_*`, `st_*`, the geo walker, the
+copro -- share ONE broadcast acknowledge, `ldr_wr_ack` (R144, known and unfixed
+since 3 September). And in `m2_sdram_x2`:
+
+    assign f_wr_addr = s_wr_addr;   // COMBINATIONAL passthrough
+    assign f_wr_din  = s_wr_din;
+    assign s_wr_ack  = f_wr_ack;    // broadcast to everyone
+
+so a higher-priority requester asserting mid-flight changes the address and data
+WHILE the write is in flight, and both requesters retire on the one ack.
+
+This build is the first to drive that port hard: copro buffer writes went from
+178 to 850 per 20 M instructions, and the geo walker now has real display lists
+to walk. HANDOFF predicted exactly this: *"it will corrupt display lists once
+real geometry and copro results flow together."*
+
+## THE 30-SECOND TEST, BEFORE ANY BUILD
+
+`Model2.sv:121` already carries `"O[20],Geometrizer walk,On,Off;"` and
+`Model2.sv:2131` gives the walker the RAW ack (`.sd_wr_ack(ldr_wr_ack)`).
+
+Flash `Model2.rbf.r156`, set **Geometrizer walk = Off**, and COLD BOOT (an OSD
+reset does not re-init buffer RAM -- `bi_*` is tied to `mem_rst_n`).
+
+  * tiles come back -> the walker's writes corrupt the shared port. R144
+    confirmed; fix it next.
+  * tiles still gone -> the copro's own bufw path is preempting mid-transaction.
+
+## THE FIX, AND MODEL 1 HAS ALREADY WRITTEN IT
+
+`b0c6785`, "two masters share one write port":
+
+    So the two masters share one physical write port. The V60 has priority,
+    io_ack tells the responder its byte landed, and the responder holds the
+    write rather than dropping it -- a lost write hangs the handshake, which is
+    not a failure worth being relaxed about. Cost: 22 ALM.
+
+Ours needs the same, for five: a per-requester acknowledge derived from the
+grant, and a grant held from request to acknowledge so address and data cannot
+change mid-flight. Extracting the inline mux in `Model2.sv:672-680` into a
+testable module is the natural way to do it, because the harness cannot
+currently test it at all.
 
 ## THE i960 IS NOT SLOW. IT NEVER WAS (R150)
 
