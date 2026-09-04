@@ -9527,3 +9527,50 @@ simplification that has to be undone later.
 nn_s -- differ in whether a normal is present and whether specular is computed,
 selected by `geo->mode & 3`, and change the READ ORDER. Only np_ns is
 transcribed here.
+
+---
+
+**R172 - MODEL 2 HAS NO PERSPECTIVE DIVIDE IN ITS GEOMETRY. `apply_focus` IS THE
+PROJECTION, AND IT IS TWO MULTIPLIES. ONE OF THE PORTED STAGES THEREFORE DOES
+NOT APPLY.**
+
+Found while wiring the ported stages together, before anything was connected.
+
+*The reference path, end to end.* `geo_parse_np_ns` does exactly this per point:
+
+    transform_point(&point, geo->matrix);     9 mul, 9 add
+    apply_focus(geo, &point);                 x *= focus.x;  y *= focus.y
+    model2_3d_push(raster, f2u(point.x) >> 8);
+
+and `model2_3d_process_polygon` restores them with `u2f(buffer[n] << 8)` and
+clips. **There is no division by z at any point** -- checked across
+`process_polygon` and the render path. The transformed, focused x and y ARE the
+screen coordinates, as floats; the matrix carries whatever perspective the game
+wants.
+
+*What that means for the port.* `m2_geo_project` is Model 1's projection: a
+perspective divide by z with `xc/yc/zoomx/zoomy/viewx/viewy`. It is correctly
+ported and verified at 20,037 checks, and **it does not implement Model 2's
+projection.** It is kept -- it costs nothing unbuilt, and the four other stages
+around it do transfer -- but it must not be dropped into this pipeline on the
+assumption that "project" means the same thing on both boards. That assumption
+is exactly the shape of R124's error and of the sequencer's one-place shift: a
+name that matches while the semantics do not.
+
+`m2_geo_clip` takes both float and screen coordinates and drives a projector
+through its `pj_*` port to re-project vertices it creates while clipping. On
+Model 2 that re-projection is the focus multiply, not a divide, so the clipper
+either gets a Model 2-shaped projector on that port or is adapted. Deciding
+which is the next design question, and it is a real one rather than plumbing.
+
+*What the sequencer still owes.* `m2_geo_engine` currently applies
+`transform_point` only -- `m2_geo_xform` with `in_translate` set. **The focus
+multiply is not applied anywhere yet**, so its vertices are camera space, not
+screen space. Two multiplies per point, on the shared pool, between the
+transform and the clipper.
+
+*The simplification that follows.* Model 2's geometry is cheaper than Model 1's
+by a divide per vertex. `fp_div` is 29 cycles and does not pipeline -- Model 1's
+own pool header calls two reciprocals a record "58 of the 68" cycle budget. Not
+needing it at all is the single largest arithmetic saving available here, and it
+was found by reading the reference rather than by assuming the ported stage fit.
