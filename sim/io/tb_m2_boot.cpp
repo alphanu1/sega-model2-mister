@@ -315,6 +315,9 @@ int main(int argc, char **argv) {
   // that answers in the same cycle hides whether the TGP actually waits on the
   // acknowledge, and that is the handshake this harness exists to exercise.
   const uint32_t COPRO_BASE = 0x520000;     // GAME_COPRO, word address
+  // base_buffer, as passed to m2_cpu_bridge below -- the SAME array the CPU
+  // reaches buffer RAM through, so the two sides finally share one memory.
+  const uint32_t BUF_BASE   = 0x16d0000;
   int tbl_left = -1, dat_left = -1;
   uint32_t tbl_data = 0, dat_data = 0;
   const int tgp_lat = std::getenv("M2_TGP_LAT")
@@ -382,8 +385,41 @@ int main(int argc, char **argv) {
   // the run the i960 is not doing anything else -- including updating the
   // tilemap, which is what a black screen looks like from the outside.
   uint64_t cpu_held = 0, mem_cyc = 0;
+  // THE COPROCESSOR'S BUFFER-RAM WRITES, APPLIED TO THE MEMORY THE CPU READS.
+  //
+  // The harness used to count these and throw the data away -- `bufw_data` was
+  // wired to nothing and `bufw_ack` tied high -- while the CPU reached buffer
+  // RAM through the bridge, which maps it into SDRAM at base_buffer. So the two
+  // sides were not talking to the same memory at all, the mailbox at dword
+  // 0x7FFC could never clear however the coprocessor behaved, and a boot parked
+  // at 0x1166c proved nothing. Model2.sv routes these to
+  // `GAME_BUFFER + tgp_bufw_addr`; base_buffer here is 0x16d0000, so this is
+  // the same arithmetic against the same array.
+  struct MboxW { uint64_t cyc; uint32_t addr; uint16_t data; uint32_t pc; };
+  std::vector<MboxW> mboxlog;
+  uint64_t bufw_applied = 0;
+  // THE DISPLAY-LIST COUNT the TGP loops on. 0x47C reads it from BUFFER RAM
+  // into $0x4a, 0x47D moves it to d, and 0x481-0x4B5 counts it down; only when
+  // it reaches zero does 0x4B4 fall through to the result store at 0x4BC and
+  // the mailbox clear at 0x4C4. MAME reads 6, 7, 8, 9, 0x14 here (measured).
+  // A wrong count here is a coprocessor that never finishes a command.
+  std::vector<uint32_t> lcounts;
+  uint32_t lc_prev_pc = 0xffff;
   auto tgp_sample = [&]() {
     ++mem_cyc;
+    {
+      const uint32_t pc = uint32_t(d->obs_tgp_pc);
+      if (pc == 0x47e && lc_prev_pc != 0x47e && lcounts.size() < 24)
+        lcounts.push_back(uint32_t(d->obs_tgp_d));
+      lc_prev_pc = pc;
+    }
+    if (d->obs_bufw_wr) {
+      const uint32_t w = 0x16d0000u + uint32_t(d->obs_bufw_waddr);
+      if (w < mem.size()) { mem[w] = uint16_t(d->obs_bufw_wdata); ++bufw_applied; }
+      if (uint32_t(d->obs_bufw_waddr) >> 1 == 0x07FFCu && mboxlog.size() < 40)
+        mboxlog.push_back({mem_cyc, uint32_t(d->obs_bufw_waddr),
+                           uint16_t(d->obs_bufw_wdata), uint32_t(d->obs_tgp_pc)});
+    }
     if (d->obs_copro_stall) ++cpu_held;
     if (uint32_t(d->obs_out_pushed) != outn_prev) {
       outn_prev = uint32_t(d->obs_out_pushed);
@@ -495,7 +531,13 @@ int main(int argc, char **argv) {
     }
     d->tgp_dat_ack = 0;
     if (dat_left < 0 && d->tgp_dat_req) {
-      dat_data = rd32(COPRO_BASE + (uint32_t(d->tgp_dat_addr) << 1));
+      // THE BASE DEPENDS ON WHICH MEMORY IT IS, as Model2.sv does it:
+      // p_addr[9] = (dat_is_buf ? GAME_BUFFER : GAME_COPRO) + {dat_addr, half}.
+      // Serving buffer-RAM reads out of the data ROM gave the TGP a garbage
+      // display-list count at 0x47C, so it never terminated the loop at
+      // 0x481-0x4B5 and never reached the mailbox clear at 0x4C4.
+      dat_data = rd32((d->tgp_dat_is_buf ? BUF_BASE : COPRO_BASE)
+                      + (uint32_t(d->tgp_dat_addr) << 1));
       dat_left = tgp_lat; ++dat_reads;
     } else if (dat_left > 0) --dat_left;
     else if (dat_left == 0) {
@@ -1606,6 +1648,35 @@ int main(int argc, char **argv) {
   // whether OUR TGP ever tries -- and if it writes buffer RAM at all.
   std::printf("  COPRO buffer-RAM writes: %u   last word addr %08x   dword 0x7FFC hits: %u\n",
               d->obs_bufw_count, d->obs_bufw_last, d->obs_bufw_7ffc);
+  // THE VALUE, NOT JUST THE COUNT. The game writes 0xFFFFFFFF to 0x91FFF0 and
+  // polls until it reads 0 (R142/R144), so a write that is not zero leaves it
+  // spinning exactly as no write at all would.
+  std::printf("  COPRO writes APPLIED to buffer RAM: %llu\n",
+              (unsigned long long)bufw_applied);
+  if (d->obs_mbox == 0xEEEEEEEEu) {
+    std::printf("  MAILBOX dword 0x7FFC: NEVER WRITTEN by the coprocessor\n");
+  } else {
+    std::printf("  MAILBOX dword 0x7FFC: %08x   %s\n", d->obs_mbox,
+                d->obs_mbox == 0 ? "ZERO -- this is what the game waits for"
+                                 : "NON-ZERO -- the poll at 0x1166c cannot exit on this");
+  }
+  // What the CPU would actually read back, straight out of the array it polls.
+  std::printf("  MAILBOX as the CPU reads it (mem[base_buffer+0xFFF8..9]): %04x %04x\n",
+              mem[0x16d0000 + 0xFFF8], mem[0x16d0000 + 0xFFF9]);
+  if (!lcounts.empty()) {
+    std::printf("  DISPLAY-LIST COUNT at 0x47E (MAME reads 6,7,8,9,0x14):");
+    for (auto c : lcounts) std::printf(" %08x", c);
+    std::printf("\n");
+  } else {
+    std::printf("  DISPLAY-LIST COUNT at 0x47E: pc 0x47e never reached\n");
+  }
+  if (!mboxlog.empty()) {
+    std::printf("  MAILBOX WRITES (word addr : data @ tgp pc), first %u:\n",
+                (unsigned)mboxlog.size());
+    for (auto &m : mboxlog)
+      std::printf("    cyc %-12llu %05x : %04x   tgp pc=%04x\n",
+                  (unsigned long long)m.cyc, m.addr, m.data, m.pc);
+  }
 
   // WHAT THE CPU BUILT, so it can be compared against MAME's own dump rather
   // than guessed at from a photograph of a screen. The board shows white with a

@@ -169,6 +169,20 @@ module m2_boot_harness #(
   output logic [31:0] obs_bufw_count,
   output logic [31:0] obs_bufw_last,
   output logic [31:0] obs_bufw_7ffc,
+  // THE WRITE ITSELF, SO THE TESTBENCH CAN APPLY IT. Counting the writes was
+  // never enough: `bufw_data` was connected and then used by nothing, so the
+  // coprocessor's writes went nowhere while the CPU read buffer RAM out of
+  // SDRAM through the bridge. The mailbox therefore COULD NOT clear in
+  // simulation whatever the coprocessor did, and "still parked at 0x1166c" was
+  // a property of this harness rather than a result about the core.
+  // One-cycle pulse, with the address and data held beside it.
+  output logic        obs_bufw_wr,
+  output logic [18:0] obs_bufw_waddr,
+  output logic [15:0] obs_bufw_wdata,
+  // The assembled mailbox, as Model2.sv's `tgp_mbox` does it on hardware:
+  // word 0xFFF8 is the low half of dword 0x7FFC and 0xFFF9 the high half.
+  // The game writes 0xFFFFFFFF and polls for zero (R142).
+  output logic [31:0] obs_mbox,
   output logic [31:0] obs_addr_moved,
   output logic [31:0] dbg_rip,
   output logic [31:0] dbg_pfp,
@@ -217,7 +231,16 @@ module m2_boot_harness #(
   input  logic [31:0] tgp_tbl_rdata,
   input  logic        tgp_tbl_ack,
   output logic        tgp_dat_req,
-  output logic [18:0] tgp_dat_addr,
+  // TWENTY BITS, NOT NINETEEN. m2_copro widened `dat_addr` when the data ROM
+  // went from 2 MB to its full 4 MB; this port was left at 19 and silently
+  // truncated the top bit.
+  output logic [19:0] tgp_dat_addr,
+  // WHICH MEMORY THE READ IS FOR, AND IT WAS NOT CONNECTED. Model2.sv picks
+  // the base with it -- `(dat_is_buf ? GAME_BUFFER : GAME_COPRO)` -- and this
+  // harness served EVERY copro read from the data ROM. The TGP reads its
+  // display list, and the loop count at 0x47C, out of BUFFER RAM, so it was
+  // handed ROM bytes and looped on a garbage count.
+  output logic        tgp_dat_is_buf,
   input  logic [31:0] tgp_dat_rdata,
   input  logic        tgp_dat_ack,
   // Telemetry. `retires` moving is the whole question; `unimpl` is the one
@@ -547,12 +570,23 @@ module m2_boot_harness #(
     if (!rst_n) begin
       obs_bufw_count <= 32'd0; obs_bufw_last <= 32'hEEEEEEEE;
       obs_bufw_7ffc  <= 32'd0; cop_bufw_req_d <= 1'b0;
+      obs_bufw_wr    <= 1'b0;  obs_bufw_waddr <= 19'd0; obs_bufw_wdata <= 16'd0;
+      // NOT ZERO AT RESET. The game writes 0xFFFFFFFF and waits for zero, so a
+      // mailbox that powers up at zero is indistinguishable from one the
+      // coprocessor has cleared. 0xEEEEEEEE is "never written".
+      obs_mbox       <= 32'hEEEEEEEE;
     end else begin
       cop_bufw_req_d <= cop_bufw_req;
+      obs_bufw_wr    <= 1'b0;
       if (cop_bufw_req && !cop_bufw_req_d) begin   // rising edge: one write
         obs_bufw_count <= obs_bufw_count + 32'd1;
         obs_bufw_last  <= {13'd0, cop_bufw_addr};
+        obs_bufw_wr    <= 1'b1;
+        obs_bufw_waddr <= cop_bufw_addr;
+        obs_bufw_wdata <= cop_bufw_data;
         if (cop_bufw_addr[18:1] == 18'h07FFC) obs_bufw_7ffc <= obs_bufw_7ffc + 32'd1;
+        if (cop_bufw_addr == 19'h0FFF8) obs_mbox[15:0]  <= cop_bufw_data;
+        if (cop_bufw_addr == 19'h0FFF9) obs_mbox[31:16] <= cop_bufw_data;
       end
     end
   end
@@ -570,7 +604,7 @@ module m2_boot_harness #(
     // The banked window writes bufferram as well as reading the data ROM
     // (R133). This harness models neither region, so the write side is
     // observed and dropped -- the reads it does model are unaffected.
-    .dat_we(), .dat_wdata(), .dat_is_buf(), .dat_half(),
+    .dat_we(), .dat_wdata(), .dat_is_buf(tgp_dat_is_buf), .dat_half(),
     // Buffer-RAM writes leave on their own port; this harness models neither
     // bufferram nor the shared write port, so the request is acked at once.
     .bufw_req(cop_bufw_req), .bufw_addr(cop_bufw_addr), .bufw_data(cop_bufw_data), .bufw_ack(1'b1),

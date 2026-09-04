@@ -8719,3 +8719,94 @@ comes back for the real result. Stalling is what prevents it.
 *Method.* This entry exists because Ben supplied a hardware finding from the
 other project and the audit was run before a build rather than after a failure.
 Every previous entry in this range was written the other way round.
+
+---
+
+**R153 - THE MAILBOX PROTOCOL, COMPLETE, FROM THE MICROCODE. THE HARNESS COULD
+NOT HAVE SHOWN IT CLEARING: THREE STRUCTURAL GAPS ON THE COPRO/BUFFER-RAM PATH,
+ALL FIXED. OUR TGP NOW FAILS FOR ONE MEASURED REASON.**
+
+*First, a retraction from earlier the same day.* R151 reported "both runs still
+end at IP 0001166c" and offered two explanations, one being that our
+coprocessor writes a non-zero mailbox value. **That was measured against a
+harness that could not have produced any other result, and the value we write
+is CORRECT.** See below.
+
+*THE HARNESS WAS NOT MODELLING THE MEMORY THE TWO SIDES SHARE.* Three separate
+gaps, each of which alone is enough to make the handshake impossible:
+
+  1. **Buffer-RAM writes were discarded.** `bufw_data` was wired to the
+     observer and then used by nothing; `bufw_ack` was tied to 1'b1. The CPU
+     meanwhile reaches buffer RAM through the bridge, which maps it into SDRAM
+     at `base_buffer`. The two sides were not talking to the same memory, so
+     the mailbox at dword 0x7FFC could not clear however the coprocessor
+     behaved.
+  2. **Buffer-RAM reads were served from the DATA ROM.** `tgp_tick()` did
+     `rd32(COPRO_BASE + (dat_addr << 1))` unconditionally and `.dat_is_buf()`
+     was left unconnected on the instantiation. Model2.sv picks the base with
+     exactly that signal -- `p_addr[9] = (dat_is_buf ? GAME_BUFFER :
+     GAME_COPRO) + {dat_addr, dat_half}` -- so every display-list read in
+     simulation returned ROM bytes.
+  3. **`dat_addr` was truncated from 20 bits to 19.** The port was widened in
+     `m2_copro` when the data ROM went to its full 4 MB; the harness port was
+     left at `[18:0]` and dropped the top bit silently.
+
+All three are fixed, and the harness now shares one array between the CPU and
+the coprocessor.
+
+*THE PROTOCOL, END TO END, FROM MAME's OWN MICROCODE.* Read with `focus
+copro_tgp` and breakpoints, against the microcode as uploaded (a `dasm` of the
+TGP before the upload is 2,048 zeros):
+
+    CPU   0001163C  st r3,0x91fff0        writes 0xFFFFFFFF   x50 in 6 s
+    CPU   00011658  st ...,(g11)[g12]     pushes the batch
+    TGP   0000046F  mov {0} $2, (x1)(e)   x1=0x7FFC, $2=0xFFFFFFFF   x50
+    TGP   0000047C  mov (x0+1)(e), $0x4a  the display-list COUNT, from buffer
+                                          RAM at x0 ~ 0x1088. MAME: 6,7,8,9,0x14
+    TGP   00000481..04B5                  the loop, counting $0x4a down
+    TGP   000004BC  mov {0} $0x4b, (x1)(e)  x1=0x7FFD, the result count   x50
+    TGP   000004C4  mov {0} $0,    (x1)(e)  x1=0x7FFC, writes ZERO        x50
+    CPU   0001166C  ld 0x91fff0,r3        the poll exits
+
+Confirmed by watchpoint that **the i960 never writes zero there** -- 50 writes
+of 0xFFFFFFFF and one of 0x07800000, nothing else -- so 0x4C4 is the only
+clearing writer, and R144's "the TGP clears it to exactly zero" is now located
+in the microcode rather than inferred from the CPU's reads.
+
+*`{0}` IS NOT "WRITE ZERO".* It is the disassembler printing transfer-type
+`(opcode >> 18) & 7`, and `mb86233.cpp` cases 0 and 1 are byte-identical. The
+zero at 0x4C4 comes from the SOURCE, data-RAM `$0`, which the init sets to 0 --
+just as 0x46F's 0xFFFFFFFF comes from `$2`. Reading `{0}` as an immediate would
+have produced a wrong fix; the value was checked with `dd@0` and `dd@2` instead.
+
+*SO OUR 0x46F WRITE IS RIGHT.* MAME writes 0xFFFFFFFF to dword 0x7FFC from the
+same instruction with the same operand, 50 times. Our one such write is correct
+behaviour and not the defect.
+
+*THE DEFECT, MEASURED.* With all three harness gaps closed:
+
+    DISPLAY-LIST COUNT at 0x47E:  ffffffff        MAME: 6, 7, 8, 9, 0x14
+
+`$0x4a` is read from buffer RAM at 0x47C and counted down by the loop at
+0x481-0x4B5; 0x4B4 falls through to the result store and the clear only when it
+reaches zero. **0xFFFFFFFF is 4.3 billion iterations, so the loop never
+terminates, 0x4BC and 0x4C4 are never reached, and the mailbox is never
+cleared.** That is exactly what the pc histogram shows: 2,003,400 cycles at
+0x48F and 569,792 at each of 0x49B/0x49D/0x49F/0x4A0, with 0x4C4 absent.
+
+0xFFFFFFFF is this project's standing signature for **unwritten memory** -- the
+rule from `docs/mister-integration.md` that a read of memory nobody has written
+returns all-ones, never zero. So the count is not being corrupted; it is being
+read from somewhere nothing has written.
+
+*WHAT IS NOW OPEN, AND IT IS ONE QUESTION.* Either the coprocessor's read
+ADDRESS is wrong, or the CPU's display-list writes are not landing where it
+reads. MAME's `x0` at 0x47D is ~0x1088/0x11B1, small dword offsets into buffer
+RAM, and the same figure from our core has not yet been captured. That is the
+next probe and it needs no fit.
+
+*Method.* Three of this session's conclusions have now been drawn from
+instruments that could not have reported anything else -- R150's shared port,
+R151's discarded writes, and this entry's ROM-sourced reads. The rule stated in
+R149 and restated in R152 keeps being paid for: **before a number is used as
+evidence, read the code that produces it -- including the harness's.**

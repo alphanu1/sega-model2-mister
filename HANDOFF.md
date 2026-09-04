@@ -64,14 +64,51 @@ Measured, boot harness, BUFFERRAM=1, 20 M instructions, one variable:
 0x480-0x4b0 is the vertex-copy handler (`rep #0xc`), and 0x48f is MAME's hottest
 TGP address after the poll.
 
-## IT IS NOT FIXED, AND THAT IS THE POINT
+## IT IS NOT FIXED, AND THE REASON IS NOW ONE MEASURED NUMBER (R153)
 
-**Both runs still end at IP 0001166c.** Two mailbox writes in 20 M instructions
-and the game still spins: either the value is not the zero the poll wants, or it
-lands after the poll begins. The harness counts 0x7FFC hits but does NOT record
-the value -- that probe is the next step, and it is a harness change, not a fit.
+**Correction to R151.** It reported "still ends at IP 0001166c" and guessed the
+coprocessor writes a non-zero mailbox value. That was measured against a harness
+that could not have produced any other result, and **the value we write is
+correct** -- MAME writes the same 0xFFFFFFFF from the same instruction.
 
-Reporting a partial result as a fix is exactly how R141 and R143 went wrong.
+**The harness was not modelling the memory the two sides share.** Three gaps,
+each alone fatal, all now fixed:
+
+  1. buffer-RAM writes DISCARDED -- `bufw_data` used by nothing, `bufw_ack`
+     tied high, while the CPU reached buffer RAM through the bridge into SDRAM
+  2. buffer-RAM reads served from the DATA ROM -- `.dat_is_buf()` left
+     unconnected and `tgp_tick()` always using COPRO_BASE
+  3. `dat_addr` truncated 20 bits -> 19, silently dropping the top bit
+
+**The protocol, from MAME's microcode** (`focus copro_tgp` + breakpoints; a
+`dasm` before the upload is 2,048 zeros):
+
+    CPU  0001163C  writes 0xFFFFFFFF to 0x91fff0          x50 in 6 s
+    TGP  0000046F  mov {0} $2,(x1)(e)   x1=0x7FFC $2=-1   x50
+    TGP  0000047C  reads the display-list COUNT from buffer RAM  (6,7,8,9,0x14)
+    TGP  00000481..04B5  the loop, counting it down
+    TGP  000004BC  writes the result count to 0x7FFD      x50
+    TGP  000004C4  mov {0} $0,(x1)(e)   x1=0x7FFC, ZERO   x50   <- THE CLEAR
+    CPU  0001166C  the poll exits
+
+The i960 never writes zero there -- watchpointed -- so 0x4C4 is the only
+clearing writer. `{0}` is the transfer type, NOT "write zero": the zero is
+data-RAM `$0`, checked with `dd@0`.
+
+**Our defect, measured with the harness fixed:**
+
+    DISPLAY-LIST COUNT at 0x47E:  ffffffff     MAME: 6, 7, 8, 9, 0x14
+
+4.3 billion iterations, so 0x4BC and 0x4C4 are never reached. The histogram
+agrees: 2,003,400 cycles at 0x48F, 569,792 at each of 0x49B/9D/9F/A0, no 0x4C4.
+
+0xFFFFFFFF is the standing signature for UNWRITTEN memory. The count is not
+corrupted -- it is read from somewhere nothing has written.
+
+**The one open question:** either the coprocessor's read address is wrong, or
+the CPU's display-list writes are not landing where it reads. MAME's `x0` at
+0x47D is ~0x1088/0x11B1; the same figure from our core is the next probe, and
+it needs no fit.
 
 ## THE 2:1 HANDSHAKE AUDIT: SAFE, AND THE RATIO IS WHY (R152)
 
@@ -127,14 +164,14 @@ zero never comes back for the real result. Stalling prevents it.
 
 ## NEXT STEPS, IN ORDER
 
-1. **Record the mailbox VALUE, not just the hit count.** `obs_bufw_7ffc` in
-   `sim/io/m2_boot_harness.sv` counts; add the data word. That answers whether
-   the copro is writing zero.
-2. **Then compare against MAME's own mailbox writes.** A watchpoint on
-   bufferram dword 0x7FFC, both halves, with the TGP pc at each write.
-3. **Only then fit.** The change is two lines and its risk is the named Model 1
-   deadlock, which needs a consumer that stops draining -- and a CPU that
-   stalls on every result read drains by construction.
+1. **Capture the coprocessor's read address at 0x47C** and compare with MAME's
+   `x0` (~0x1088/0x11B1). That decides between "we read the wrong place" and
+   "the CPU's display list is not where we look".
+2. **If the address is right, dump what the CPU wrote to buffer RAM** around
+   dword 0x1088 in the same run. `mem[BUF_BASE + 0x1088*2]` reading 0xFFFF says
+   nobody wrote it.
+3. **Only then fit.** Nothing since the last build needs the fitter to progress,
+   and one change per build still stands (R147).
 
 ## HOW TO REPRODUCE WITHOUT A FIT
 
