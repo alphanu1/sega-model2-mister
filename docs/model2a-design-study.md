@@ -9396,3 +9396,65 @@ same port at once.
 two requesters, overlapping requests, checking that each retires on its own
 acknowledge with its own data. That is the bench that would have caught all
 three, and it does not exist.
+
+---
+
+**R170 - R124 IS TOO BROAD. MODEL 1'S GEOMETRY ARITHMETIC DOES TRANSFER; ITS
+DISPLAY-LIST GRAMMAR DOES NOT. THE TGP AND THE GEOMETRIZER ARE TWO DIFFERENT
+BLOCKS AND R124 TREATED THEM AS ONE.**
+
+*What R124 said*, recorded in THIRD_PARTY.md: "Model 1's geometry does NOT
+transfer: `m1_geometry` and its nine `m1_geo_*` submodules are fixed-function
+RTL, while Model 2's geometry is a MICROCODED engine running a program the game
+uploads."
+
+*Why that is half right.* **Model 2 has both blocks, not one.**
+
+  * The **TGP** (MB86234) is the microcoded processor -- it runs the 2,024-word
+    program the i960 uploads, and it is what R151/R162/R167 got working on
+    hardware. R124 is describing this correctly.
+  * The **geometrizer** is separate: the display list at 0x00800000 that
+    `geo_parse()` walks, with FIXED-FUNCTION opcodes -- `matrix_write` 0x0b,
+    `focal_distance` 0x09, `object_data` 0x01, `light` 0x0a. `m2_geo.sv` has
+    walked exactly that since `f716321`.
+
+The geometrizer is fixed-function and its arithmetic is `transform_point`,
+`transform_vector`, `apply_focus`, dot products and a projection -- the same
+operations Model 1's stages implement, on the same 3x4 matrix, loaded by the
+same opcode number (0x0b on both).
+
+*What actually transfers, and what does not.*
+
+    transfers      m1_fp_pool     the shared multiplier/adder/divider
+                   m1_geo_xform   transform_point / transform_vector
+                   m1_geo_project, m1_geo_clip, m1_geo_norm, m1_geo_det
+                   -- generic 3D arithmetic, not board-specific
+
+    does NOT       m1_geo_walk    Model 1's display-list grammar. Ours is
+                                  m2_geo.sv and stays ours.
+
+*The evidence.* `m1_geo_xform` ported unmodified but for the rename passes
+7,813 checks against host float with zero failures, including its own directed
+case proving the summation must be left to right. It streams at **19.0 cycles a
+transform**, 57.1 per three-transform record.
+
+*AND IT CORRECTED A DESIGN MISTAKE MADE HERE FIRST.* A hand-rolled
+`m2_geo_xform` was written before the reference was consulted: private `fp_mul`
+and `fp_add`, and a sequencer that waited for each result before issuing the
+next -- one stage of a four-stage pipeline busy and three idle, about 100 cycles
+for a single point. Model 1's own header records building exactly that and
+replacing it:
+
+    "The stages were first built with private units ... which is three of each.
+     ... 44 mul 43 add against a budget of 68 cycles a record. fp_mul and fp_add
+     are four-stage pipelines that retire one result per cycle, so ONE of each
+     runs at 65% and 63%. Three of each buys nothing at all; it was convenience,
+     not necessity, and it costs two multipliers and two adders."
+
+*Method.* This is the fourth time in two days that the Model 1 core held the
+answer and it was reached for late -- the per-owner acknowledge (R167), the
+stall semantics (R151), the shared write port (R144), and now the arithmetic
+pipeline. **The rule is not "check Model 1 when stuck"; it is check Model 1
+FIRST, because it is the same author solving the same problem one board
+earlier.** R124's blanket ruling is what allowed this one to be skipped, which
+is the cost of a conclusion recorded more broadly than its evidence.

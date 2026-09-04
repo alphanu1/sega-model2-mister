@@ -741,15 +741,19 @@ $(eval $(call TGP_UNIT,mb86233_dec,$(TGP)/mb86233_dec.sv))
 $(eval $(call TGP_UNIT,mb86233_xfer,$(TGP_PKG) $(TGP)/mb86233_xfer.sv))
 $(eval $(call TGP_UNIT,mb86233_seq,$(TGP_PKG) $(TGP)/mb86233_seq.sv))
 
-# THE GEOMETRY TRANSFORM, against the reference arithmetic bit for bit.
-obj_m2_geo_xform/Vm2_geo_xform: $(TGP)/fp_mul.sv $(TGP)/fp_add.sv rtl/video/m2_geo_xform.sv sim/video/tb_m2_geo_xform.cpp
-	$(VBUILD) --top-module m2_geo_xform -CFLAGS "-O2" $(TGPFLAGS) \
-	  --Mdir obj_m2_geo_xform -o Vm2_geo_xform \
-	  $(TGP)/fp_mul.sv $(TGP)/fp_add.sv rtl/video/m2_geo_xform.sv \
-	  sim/video/tb_m2_geo_xform.cpp
-test_m2_geo_xform: obj_m2_geo_xform/Vm2_geo_xform
-	@echo "== test m2_geo_xform (transform_point / transform_vector / apply_focus)"
-	@./obj_m2_geo_xform/Vm2_geo_xform
+# THE GEOMETRY STAGES, ported from the Model 1 core with their benches.
+# Each is tested through sim/video/geo_wrappers.sv, which ties the stage to the
+# shared FP pool exactly as the integrated design does -- testing a stage with
+# private units would prove something the real thing does not do.
+GEO_FP := $(TGP)/fp_mul.sv $(TGP)/fp_add.sv $(TGP)/fp_div.sv
+obj_m2_geo_xform/Vm2_geo_xform_top: rtl/video/m2_geo_xform.sv rtl/video/m2_fp_pool.sv $(GEO_FP) sim/video/geo_wrappers.sv sim/video/tb_m2_geo_xform.cpp
+	$(VBUILD) --top-module m2_geo_xform_top -CFLAGS "-O2" $(TGPFLAGS) -Irtl/tgp \
+	  --Mdir obj_m2_geo_xform -o Vm2_geo_xform_top \
+	  rtl/video/m2_geo_xform.sv rtl/video/m2_fp_pool.sv $(GEO_FP) \
+	  sim/video/geo_wrappers.sv sim/video/tb_m2_geo_xform.cpp
+test_m2_geo_xform: obj_m2_geo_xform/Vm2_geo_xform_top
+	@echo "== test m2_geo_xform (transform_point / transform_vector, on the shared pool)"
+	@./obj_m2_geo_xform/Vm2_geo_xform_top
 
 # THE ASSEMBLED CORE, AND IT HAD NO RUN TARGET AT ALL.
 #

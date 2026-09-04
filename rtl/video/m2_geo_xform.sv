@@ -1,6 +1,23 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Sega Model 2 core for MiSTer FPGA
+//
+// PORTED FROM THE MODEL 1 CORE, m1_geo_xform.sv @ 78481c420327, incremental branch.
+// Same author, same licence. See THIRD_PARTY.md.
+//
+// THIS REPLACES A HAND-ROLLED VERSION WRITTEN HERE FIRST, and the reason is
+// worth keeping. That one gave the stage a PRIVATE fp_mul and fp_add and
+// waited for each result before issuing the next operation -- one stage of a
+// four-stage pipeline, three idle. Model 1 had already built exactly that,
+// measured it, and replaced it with the shared pool: a polygon record needs
+// 44 multiplies and 43 adds against a 68-cycle budget, and the pipelines
+// retire one result a cycle, so ONE of each runs at 65%. Private units cost
+// two multipliers and two adders and buy nothing.
+//
+// Model 2 uses the same 3x4 matrix from the same display-list opcode (0x0b),
+// so the interface is unchanged. apply_focus is Model 2-specific and is a
+// separate stage; this block is transform_point and transform_vector only.
+//
 // Copyright (C) 2026 alphanu1
 //
 // This program is free software: you can redistribute it and/or modify it
@@ -8,35 +25,66 @@
 // Software Foundation, either version 3 of the License, or (at your option)
 // any later version. See LICENSE for the full text.
 //
-// THE GEOMETRY TRANSFORM: one point through the current matrix, then focus.
+// The geometry stage's matrix transform: a point through the 3x4 view matrix.
 //
-// model2_v.cpp, transform_point() and apply_focus(), verbatim:
+// Behavioural contract is MAME's model1_v.cpp view_t::transform_point (:38) and
+// transform_vector (:48):
 //
-//   tx = (x * m[0]) + (y * m[3]) + (z * m[6]) + m[9]
-//   ty = (x * m[1]) + (y * m[4]) + (z * m[7]) + m[10]
-//   tz = (x * m[2]) + (y * m[5]) + (z * m[8]) + m[11]
-//   x *= focus.x;  y *= focus.y
+//     xx = m[0]*x + m[3]*y + m[6]*z + m[ 9]
+//     yy = m[1]*x + m[4]*y + m[7]*z + m[10]
+//     zz = m[2]*x + m[5]*y + m[8]*z + m[11]
 //
-// transform_vector() is the same without the m[9..11] translate, which is what
-// `vec_only` selects -- normals are directions and must not be translated.
+// transform_vector is the same without the m[9..11] column, and is what the
+// polygon's normal goes through - a direction has no origin, so translating it
+// would be wrong.
 //
-// ONE MULTIPLIER AND ONE ADDER, SEQUENCED, AND THAT IS DELIBERATE. Eleven
-// multiplies and nine adds per point could be a wide parallel datapath, but the
-// area budget has the renderer and the i960 sharing what is left (milestones,
-// "the fit question reduces to one number") and M10K is already at 92%. A
-// sequencer costs two FP units and a handful of registers; the parallel version
-// costs eleven and nine. Latency is hidden behind the walk, which is waiting on
-// SDRAM for its vertex stream anyway.
+// THE YAW IS NOT IMPLEMENTED, AND THAT IS CORRECT. transform_point ends with
 //
-// THE ORDER OF OPERATIONS IS NOT AN IMPLEMENTATION DETAIL. Float add is not
-// associative, so `(a+b)+c` and `a+(b+c)` differ in the last bit, and the
-// rasterizer's screen coordinates are these values shifted right by 8. The
-// accumulation below is strictly left to right, matching the C, because the
-// only oracle this block has is a framebuffer comparison and a one-bit
-// difference in a vertex is a pixel in the wrong place with no error anywhere.
+//     p->x = ayyc * xx - ayys * zz;
+//     p->z = ayys * xx + ayyc * zz;
 //
-// fp_mul and fp_add are the TGP's own units, already verified in volume
-// (test_fp_mul 1,885,699 vectors, test_fp_add 1,968,564, both fails=0).
+// which looks like a second rotation and is not one: `ayy` is only ever written
+// inside an `#if 0` debug free-camera (model1_v.cpp:1793-1842), so it is always
+// 0, ayyc is always 1 and ayys always 0, and the pair reduces to x = xx, z = zz.
+// Building it would cost four multiplies and two adds per point - about 12% of
+// this module's arithmetic - to compute an identity. Checked before omitting.
+//
+// WHY IT IS BIT-EXACT AGAINST MAME AND NOT MERELY CLOSE
+//
+// MAME evaluates the geometry in host `float`, and fp_mul and fp_add are fuzzed
+// against host float directly (sim/tgp/tb_fp_mul.cpp: "reference is the host C
+// float, matching MAME's evaluation model"). So the same operations in the same
+// ORDER give the same bits, and the order is what this module is careful about:
+// floating-point addition is not associative, and summing the three products
+// left to right rather than as a balanced tree is a different answer in the last
+// place. MAME sums left to right. So does this.
+//
+// SCHEDULING, AND THE MEASUREMENT THAT FORCED IT
+//
+// A polygon record needs THREE transforms - two points and the normal - and the
+// budget is 68 cycles a record (docs/findings.md: 5,831 records in a peak frame,
+// 818,133 cycles - see the note on the budget in rtl/video/m1_raster3d.sv).
+//
+// The obvious structure - issue nine multiplies, wait for all nine, then three
+// rounds of adds each drained before the next - was built first and MEASURED at
+// **40 cycles a transform, 120 a record, 1.76x over budget**. The multiplier is
+// idle for 31 of those 40 cycles. That is what the throughput case in the bench
+// exists to catch, and it caught it.
+//
+// So the multiply and add phases are separate stages that run CONCURRENTLY on
+// different points, and the products live in a ping-pong bank so the adds of
+// point N-1 can read one bank while the multiplies of point N fill the other.
+//
+// The add schedule is fixed and spaced, not packed:
+//
+//     ac  0  1  2   |  5  6  7   |  10 11 12
+//         round 0      round 1      round 2
+//
+// Three-cycle gaps, not two. fp_add's latency is 4, so round 1's first add reads
+// a t[] the round-0 result must already have been WRITTEN to - issuing it on the
+// cycle that result arrives reads the old value, because the capture is
+// non-blocking. One cycle of slack is the difference between a correct sum and a
+// stale one, and it is invisible in a wave until the numbers are compared.
 
 `timescale 1ns/1ps
 
@@ -44,145 +92,203 @@ module m2_geo_xform (
   input  logic        clk,
   input  logic        rst_n,
 
-  input  logic        start,          // one cycle; ignored while busy
-  input  logic [31:0] px, py, pz,     // the point, IEEE-754 single
-  input  logic [31:0] m [12],         // the current matrix, column order as MAME
-  input  logic [31:0] fx, fy,         // focus
-  input  logic        vec_only,       // transform_vector: no translate, no focus
+  // The view matrix, written a float at a time by the display-list walker's
+  // command 0x0b. Held until the next one.
+  input  logic        mat_we,
+  input  logic [3:0]  mat_idx,        // 0..11
+  input  logic [31:0] mat_data,
 
-  output logic        busy,
-  output logic        done,           // one cycle when ox/oy/oz are valid
-  output logic [31:0] ox, oy, oz
+  // Point in.
+  input  logic        in_valid,
+  output logic        in_ready,
+  input  logic [31:0] in_x, in_y, in_z,
+  input  logic        in_translate,   // 1 = transform_point, 0 = transform_vector
+
+  // Shared arithmetic. See rtl/video/m2_fp_pool.sv: one multiplier and one adder
+  // serve every geometry stage, because a record needs 44 multiplies and 43 adds
+  // against a 68-cycle budget and the pipelines retire one a cycle.
+  output logic        mul_req,
+  output logic [31:0] mul_a, mul_b,
+  input  logic        mul_gnt,
+  input  logic        mul_rsp,
+  input  logic [31:0] mul_res,
+
+  output logic        add_req,
+  output logic [31:0] add_a, add_b,
+  output logic        add_sub,
+  input  logic        add_gnt,
+  input  logic        add_rsp,
+  input  logic [31:0] add_res,
+
+  // Point out, in issue order.
+  output logic        out_valid,
+  output logic [31:0] out_x, out_y, out_z
 );
 
-  // ---- the two arithmetic units, shared by the sequencer
-  logic        mul_in, add_in, mul_out, add_out;
-  logic [31:0] mul_a, mul_b, mul_q;
-  logic [31:0] add_a, add_b, add_q;
+  logic [31:0] mat [12];
+  always_ff @(posedge clk) if (mat_we) mat[mat_idx] <= mat_data;
 
-  fp_mul u_mul (.clk(clk), .rst_n(rst_n), .in_valid(mul_in),
-                .a(mul_a), .b(mul_b),
-                .out_valid(mul_out), .result(mul_q),
-                .overflow(), .underflow(), .invalid());
+  // ------------------------------------------------------------ product bank
+  // Two banks of nine products: one being filled by the multiplier for point N
+  // while the other is being summed for point N-1.
+  logic [31:0] r [2][9];
+  logic        fill_bank;      // bank the multiplier is writing
+  logic        sum_bank;       // bank the adder is reading
+  logic        bank_full;      // fill_bank holds a complete set of nine
+  logic        bank_trans;     // and whether that point wanted the translation
 
-  fp_add u_add (.clk(clk), .rst_n(rst_n), .in_valid(add_in),
-                .a(add_a), .b(add_b), .sub(1'b0),
-                .out_valid(add_out), .result(add_q),
-                .overflow(), .underflow(), .invalid());
+  // ------------------------------------------------------------ multiply stage
+  typedef enum logic [1:0] { M_IDLE, M_ISSUE, M_WAIT } mstate_t;
+  mstate_t mst;
 
-  // ---- sequencer
+  logic [31:0] px, py, pz;
+  logic        ptrans;
+  logic [3:0]  issue;          // multiplies issued, 0..8
+  logic [3:0]  got;            // results captured, 0..9
+
+  wire [1:0]  term  = 2'(issue % 4'd3);       // which of x, y, z
+  wire [1:0]  comp  = 2'(issue / 4'd3);       // which output component
+  wire [3:0]  m_sel = 4'({2'd0, term} * 4'd3 + {2'd0, comp});
+
+  assign mul_a = mat[m_sel];
+  assign mul_b = (term == 2'd0) ? px : (term == 2'd1) ? py : pz;
+
+  wire mul_out_valid = mul_rsp;
+  wire [31:0] mul_result = mul_res;
+
+  // ------------------------------------------------------------ add stage
+  typedef enum logic [1:0] { A_IDLE, A_RUN, A_OUT } astate_t;
+  astate_t ast;
+
+  logic [3:0]  ac;             // position in the add schedule, 0..12
+  logic [1:0]  a_got;          // results captured within the current round
+  logic [3:0]  a_total;        // results captured overall, 0..9
+  logic [31:0] t [3];
+  logic        atrans;
+
+  // Schedule: adds at ac 0,1,2 / 5,6,7 / 10,11,12. round = ac/5, comp = ac%5.
+  wire [1:0] a_round = 2'(ac / 4'd5);
+  wire [2:0] a_comp  = 3'(ac % 4'd5);
+  wire       a_slot  = (a_comp <= 3'd2);
+
+  wire [3:0]  ra    = 4'({1'd0, a_comp} * 4'd3);
+  assign add_a = (a_round == 2'd0) ? r[sum_bank][ra] : t[a_comp[1:0]];
+  assign add_b = (a_round == 2'd0) ? r[sum_bank][ra + 4'd1] :
+                 (a_round == 2'd1) ? r[sum_bank][ra + 4'd2]
+                                   : mat[4'd9 + {2'd0, a_comp[1:0]}];
+  assign add_sub = 1'b0;
+
+  wire        add_out_valid = add_rsp;
+  wire [31:0] add_result    = add_res;
+
+  // The last round is skipped for a vector: a direction has no origin.
+  wire [3:0] ac_last  = atrans ? 4'd12 : 4'd7;
+  wire [3:0] want_res = atrans ? 4'd9  : 4'd6;
+
+  assign mul_req = (mst == M_ISSUE);
+  assign add_req = (ast == A_RUN) && a_slot;
+
+  // A new point is taken when the multiplier is free AND the bank it would fill
+  // holds nothing the adder has yet to collect.
   //
-  // row  = which output component (0..2)
-  // term = which input component (0..2), then the translate
-  typedef enum logic [2:0] {
-    S_IDLE, S_MUL, S_MULW, S_ADDW, S_TRW, S_FOC, S_FOCW, S_DONE
-  } state_e;
-  state_e state;
+  // `!bank_full` and not `!(bank_full && fill_bank == sum_bank)`: fill_bank does
+  // not flip when the products are finished, it flips when the ADDER TAKES them,
+  // so between those two moments the full bank is still the one the multiplier
+  // would write. The identity test reads as the more careful condition and is
+  // the weaker one - it let the next point overwrite nine products that had not
+  // been summed yet. Streaming found it at result 18; one point at a time never
+  // could, because the bank was always collected before the next point arrived.
+  assign in_ready = (mst == M_IDLE) && !bank_full;
 
-  logic [1:0]  row, term, foc_i;
-  logic [31:0] acc;
-  logic [31:0] p   [3];
-  logic [31:0] res [3];
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      state <= S_IDLE; busy <= 1'b0; done <= 1'b0;
-      row <= 2'd0; term <= 2'd0; foc_i <= 2'd0; acc <= 32'd0;
-      ox <= 32'd0; oy <= 32'd0; oz <= 32'd0;
-      mul_in <= 1'b0; add_in <= 1'b0;
-      mul_a <= 32'd0; mul_b <= 32'd0; add_a <= 32'd0; add_b <= 32'd0;
+      mst <= M_IDLE; ast <= A_IDLE;
+      issue <= '0; got <= '0; ac <= '0; a_got <= '0; a_total <= '0;
+      fill_bank <= 1'b0; sum_bank <= 1'b0; bank_full <= 1'b0;
+      bank_trans <= 1'b0; atrans <= 1'b0;
+      px <= '0; py <= '0; pz <= '0; ptrans <= 1'b0;
+      out_valid <= 1'b0; out_x <= '0; out_y <= '0; out_z <= '0;
+      for (int b = 0; b < 2; b++)
+        for (int i = 0; i < 9; i++) r[b][i] <= '0;
+      for (int i = 0; i < 3; i++) t[i] <= '0;
     end else begin
-      mul_in <= 1'b0; add_in <= 1'b0; done <= 1'b0;
+      out_valid <= 1'b0;
 
-      case (state)
-        S_IDLE: if (start) begin
-          p[0] <= px; p[1] <= py; p[2] <= pz;
-          row <= 2'd0; term <= 2'd0; acc <= 32'd0;
-          busy <= 1'b1; state <= S_MUL;
-        end
+      // Results come back in issue order, so a counter places them.
+      if (mul_out_valid && got < 4'd9) begin
+        r[fill_bank][got] <= mul_result;
+        got               <= got + 4'd1;
+      end
+      if (add_out_valid && a_total < 4'd9) begin
+        t[a_got] <= add_result;
+        a_got    <= (a_got == 2'd2) ? 2'd0 : a_got + 2'd1;
+        a_total  <= a_total + 4'd1;
+      end
 
-        // p[term] * m[term*3 + row]
-        S_MUL: begin
-          mul_a  <= p[term];
-          mul_b  <= m[(term * 3) + row];
-          mul_in <= 1'b1;
-          state  <= S_MULW;
-        end
-
-        S_MULW: if (mul_out) begin
-          if (term == 2'd0) begin
-            // the first term seeds the accumulator; nothing to add to yet
-            acc  <= mul_q;
-            term <= 2'd1;
-            state <= S_MUL;
-          end else begin
-            add_a  <= acc;
-            add_b  <= mul_q;
-            add_in <= 1'b1;
-            state  <= S_ADDW;
+      // -------------------------------------------------- multiply stage
+      case (mst)
+        M_IDLE: begin
+          if (in_valid && in_ready) begin
+            px <= in_x; py <= in_y; pz <= in_z; ptrans <= in_translate;
+            issue <= '0; got <= '0;
+            mst <= M_ISSUE;
           end
         end
-
-        S_ADDW: if (add_out) begin
-          acc <= add_q;
-          if (term != 2'd2) begin
-            term  <= term + 2'd1;
-            state <= S_MUL;
-          end else if (vec_only) begin
-            begin
-              res[row] <= add_q;
-              if (row == 2'd2) begin
-                foc_i <= 2'd0;
-                state <= vec_only ? S_DONE : S_FOC;
-              end else begin
-                row   <= row + 2'd1;
-                term  <= 2'd0;
-                state <= S_MUL;
-              end
-            end   // a direction takes no translate
-          end else begin
-            add_a  <= add_q;
-            add_b  <= m[9 + row];       // + m[9], m[10], m[11]
-            add_in <= 1'b1;
-            state  <= S_TRW;
+        M_ISSUE: begin
+          // ONLY ON A GRANT. With a private multiplier every issue was accepted,
+          // so the counter could run free; sharing means a cycle where another
+          // stage won the arbitration, and advancing through it would skip a
+          // product and leave r[] one short forever.
+          if (mul_gnt) begin
+            if (issue == 4'd8) mst <= M_WAIT;  // stop at 8: m_sel must stay in range
+            else               issue <= issue + 4'd1;
           end
         end
-
-        S_TRW: if (add_out) begin
-          acc <= add_q;
-          begin
-              res[row] <= add_q;
-              if (row == 2'd2) begin
-                foc_i <= 2'd0;
-                state <= vec_only ? S_DONE : S_FOC;
-              end else begin
-                row   <= row + 2'd1;
-                term  <= 2'd0;
-                state <= S_MUL;
-              end
-            end
+        M_WAIT: begin
+          if (got == 4'd9) begin
+            bank_full  <= 1'b1;
+            bank_trans <= ptrans;
+            mst        <= M_IDLE;
+          end
         end
+        default: mst <= M_IDLE;
+      endcase
 
-        // x *= focus.x, y *= focus.y. z is left alone.
-        S_FOC: begin
-          mul_a  <= res[foc_i];
-          mul_b  <= (foc_i == 2'd0) ? fx : fy;
-          mul_in <= 1'b1;
-          state  <= S_FOCW;
+      // -------------------------------------------------- add stage
+      case (ast)
+        A_IDLE: begin
+          if (bank_full) begin
+            sum_bank  <= fill_bank;
+            atrans    <= bank_trans;
+            fill_bank <= ~fill_bank;
+            bank_full <= 1'b0;
+            ac        <= '0;
+            a_got     <= '0;
+            a_total   <= '0;
+            ast       <= A_RUN;
+          end
         end
-
-        S_FOCW: if (mul_out) begin
-          res[foc_i] <= mul_q;
-          if (foc_i == 2'd1) state <= S_DONE;
-          else begin foc_i <= 2'd1; state <= S_FOC; end
+        A_RUN: begin
+          // The schedule advances on a gap (no request) or on a granted add. A
+          // stall only STRETCHES the spacing between rounds, which is the safe
+          // direction: the gaps exist so a round reads a t[] the previous round
+          // has already written.
+          if (!a_slot || add_gnt) begin
+            if (ac == ac_last) ast <= A_OUT;
+            else               ac  <= ac + 4'd1;
+          end
         end
-
-        S_DONE: begin
-          ox <= res[0]; oy <= res[1]; oz <= res[2];
-          done <= 1'b1; busy <= 1'b0; state <= S_IDLE;
+        A_OUT: begin
+          if (a_total == want_res) begin
+            out_x     <= t[0];
+            out_y     <= t[1];
+            out_z     <= t[2];
+            out_valid <= 1'b1;
+            ast       <= A_IDLE;
+          end
         end
-
-        default: state <= S_IDLE;
+        default: ast <= A_IDLE;
       endcase
     end
   end
