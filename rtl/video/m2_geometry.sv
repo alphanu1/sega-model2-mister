@@ -99,7 +99,8 @@ module m2_geometry (
   output logic [31:0] q_z,
 
   output logic [15:0] dbg_polys, dbg_objects, dbg_capped,
-  output logic [15:0] dbg_clip_in, dbg_clip_out, dbg_clip_dropped
+  output logic [15:0] dbg_clip_in, dbg_clip_out, dbg_clip_dropped,
+  output logic [15:0] dbg_nonfinite    // polygons refused before the arithmetic
 );
 
   // ------------------------------------------------------------- the pool
@@ -221,6 +222,44 @@ module m2_geometry (
   logic        clip_in_ready;
   logic [31:0] hzmin;
 
+  // ---------------------------------------------------- THE GARBAGE GATE
+  //
+  // A POLYGON WITH A NaN OR AN INFINITY IN IT NEVER ENTERS THE ARITHMETIC, and
+  // this is a hang fix, not tidiness.
+  //
+  // On hardware Daytona's one object_data points at SLOW POLYGON RAM, and
+  // geo_polygon_data (opcode 0x05) is not implemented, so that RAM has never
+  // been written. Unwritten memory reads 0xFFFF... -- a standing requirement in
+  // docs/mister-integration.md that every bench here had ignored -- and
+  // 0xFFFFFFFF read as an IEEE-754 float is a NaN. The clipper accepted such a
+  // polygon and neither emitted nor dropped it:
+  //
+  //     H 00010000 04030000   objects rom=0 pram0=1, clip in=4 out=3 dropped=0
+  //
+  // frozen on every UART record. in_ready stayed low, so busy never fell, so
+  // the walker sat in W_OBJW and THE WHOLE DISPLAY-LIST WALK DIED after one
+  // object. Reproduced in tb_m2_geometry as in=1 out=0 dropped=0, busy stuck.
+  //
+  // MAME does not need this because it runs on host floats, where a NaN
+  // propagates through the clip tests, every comparison answers false, and the
+  // polygon simply fails to draw. Ours is a handshake pipeline: a stage that
+  // never answers stops everything behind it.
+  //
+  // The test is the exponent field alone -- 8'hFF is NaN or Infinity, and
+  // neither can be drawn -- so it is twelve 8-bit comparisons and no
+  // arithmetic. It is deliberately at the pipeline's mouth rather than inside
+  // the clipper: the property wanted is "garbage in the display list cannot
+  // wedge the geometry", and that is stronger than fixing one stage's reaction
+  // to one input.
+  function automatic logic nonfinite(input logic [31:0] f);
+    nonfinite = (f[30:23] == 8'hFF);
+  endfunction
+
+  wire poly_bad = nonfinite(v0x) | nonfinite(v0y) | nonfinite(v0z)
+                | nonfinite(v1x) | nonfinite(v1y) | nonfinite(v1z)
+                | nonfinite(v2x) | nonfinite(v2y) | nonfinite(v2z)
+                | nonfinite(v3x) | nonfinite(v3y) | nonfinite(v3z);
+
   assign poly_ready = (qst == Q_IDLE);
   assign w_pj_valid = (qst == Q_ISS);
   assign w_pj_x = hx[qi]; assign w_pj_y = hy[qi]; assign w_pj_z = hz[qi];
@@ -237,13 +276,19 @@ module m2_geometry (
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       qst <= Q_IDLE; qi <= 2'd0; clip_in_valid <= 1'b0; hzmin <= 32'd0;
+      dbg_nonfinite <= 16'd0;
       for (int k = 0; k < 4; k++) begin
         hx[k] <= 32'd0; hy[k] <= 32'd0; hz[k] <= 32'd0;
         sx[k] <= 16'sd0; sy[k] <= 16'sd0;
       end
     end else begin
       case (qst)
-        Q_IDLE: if (poly_valid) begin
+        // A refused polygon is still ACCEPTED from the engine -- poly_ready is
+        // high here -- it simply goes no further. Refusing to accept it would
+        // stall the engine instead of the clipper and fix nothing.
+        Q_IDLE: if (poly_valid && poly_bad) begin
+          dbg_nonfinite <= dbg_nonfinite + 16'd1;
+        end else if (poly_valid) begin
           hx[0] <= v0x; hy[0] <= v0y; hz[0] <= v0z;
           hx[1] <= v1x; hy[1] <= v1y; hz[1] <= v1z;
           hx[2] <= v2x; hy[2] <= v2y; hz[2] <= v2z;

@@ -262,6 +262,60 @@ int main(int argc, char** argv) {
     ck("pipeline idle after the cut", (int32_t)d->busy, 0);
   }
 
+  // ---- test 6: THE OBJECT THAT ISN'T THERE. Unwritten memory reads 0xFFFF...,
+  //      and 0xFFFFFFFF read as an IEEE-754 float is a NaN.
+  //
+  // This is not hypothetical. On hardware Daytona's display list points its one
+  // object_data at SLOW POLYGON RAM, and geo_polygon_data (opcode 0x05) is not
+  // implemented, so that RAM has never been written. The engine transformed
+  // NaN vertices, the projector divided by a NaN z, and the pipeline stopped:
+  //
+  //     H 00010000 04030000
+  //       objects rom=0 pram0=1 pram1=0 capped=0
+  //       clip in=4 out=3 dropped=0, quads=0
+  //
+  // -- frozen on every record. One polygon went into the clipper and never came
+  // out, so in_ready stayed low, so busy never fell, so the walker sat in
+  // W_OBJW and THE WHOLE DISPLAY LIST WALK DIED after one object.
+  //
+  // docs/mister-integration.md has required for a long time that tests use
+  // 0xFFFF for unwritten memory rather than zero. Every bench in this file fed
+  // clean floats. This one does not.
+  {
+    d->rst_n = 0; for (int i = 0; i < 4; i++) tick(); d->rst_n = 1; tick();
+    load_identity();
+    d->foc_x = f2u(1.0f); d->foc_y = f2u(1.0f);
+    for (size_t i = 0; i < obj.size(); i++) obj[i] = 0xFFFFFFFFu;
+
+    d->start = 1; tick(); d->start = 0;
+    bool went_busy = false;
+    int  idle_after_busy = 0;
+    for (int budget = 0; budget < 400000; budget++) {
+      tick();
+      if (d->busy) { went_busy = true; idle_after_busy = 0; }
+      else if (went_busy && ++idle_after_busy > 2000) break;
+    }
+    std::printf("test: an object of unwritten memory (0xFFFFFFFF = NaN) must not wedge\n");
+    std::printf("  clip in=%u out=%u dropped=%u, capped=%u, busy=%d\n",
+                d->dbg_clip_in, d->dbg_clip_out, d->dbg_clip_dropped,
+                d->dbg_capped, (int)d->busy);
+    checks++;
+    if (d->busy) {
+      std::printf("  FAIL pipeline still busy -- this is the hardware hang\n");
+      fails++;
+    } else {
+      std::printf("  pipeline drained and released busy\n");
+    }
+    // Every polygon the clipper accepted must be accounted for: emitted or
+    // dropped. One unaccounted polygon IS the hang.
+    checks++;
+    if (d->dbg_clip_in > d->dbg_clip_out + d->dbg_clip_dropped) {
+      std::printf("  FAIL %u polygons accepted but only %u emitted + %u dropped\n",
+                  d->dbg_clip_in, d->dbg_clip_out, d->dbg_clip_dropped);
+      fails++;
+    }
+  }
+
   std::printf("m2_geometry: checks=%ld fails=%ld\n", checks, fails);
   std::printf("%s\n", fails ? "FAIL" : "PASS");
   delete d;

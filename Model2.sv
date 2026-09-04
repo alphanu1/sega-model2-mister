@@ -2278,7 +2278,7 @@ wire signed [15:0] q3d_x0, q3d_y0, q3d_x1, q3d_y1, q3d_x2, q3d_y2, q3d_x3, q3d_y
 wire [23:0] q3d_col;
 wire [31:0] q3d_z;
 wire [15:0] geo_polys, geo_objs_done, geo_capped;
-wire [15:0] geo_clip_in, geo_clip_out, geo_clip_drop;
+wire [15:0] geo_clip_in, geo_clip_out, geo_clip_drop, geo_nonfinite;
 
 // WHICH MEMORY THE OBJECTS ACTUALLY POINT AT, counted per class.
 //
@@ -2327,7 +2327,7 @@ m2_geometry u_geometry (
 	.q_col(q3d_col), .q_z(q3d_z),
 	.dbg_polys(geo_polys), .dbg_objects(geo_objs_done), .dbg_capped(geo_capped),
 	.dbg_clip_in(geo_clip_in), .dbg_clip_out(geo_clip_out),
-	.dbg_clip_dropped(geo_clip_drop)
+	.dbg_clip_dropped(geo_clip_drop), .dbg_nonfinite(geo_nonfinite)
 );
 
 // THE FRAME ENDS WHEN THE WALK DOES, and the walk's completion counter is the
@@ -3319,8 +3319,11 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// completely different work.
 	.b_addr({geo_obj_rom[7:0], geo_obj_pram0[7:0],
 	         geo_obj_pram1[7:0], geo_capped[7:0]}),
+	// clip_dropped read 0 on hardware and the refusal count is the number that
+	// now moves, so it takes that byte. Between them: accepted, emitted, refused
+	// before the arithmetic, and reaching the rasterizer.
 	.b_data({geo_clip_in[7:0], geo_clip_out[7:0],
-	         geo_clip_drop[7:0], r3d_quads[7:0]}),
+	         geo_nonfinite[7:0], r3d_quads[7:0]}),
 	.a_tag(8'h43), .b_tag(8'h48),          // 'C' copro in_pushed:out_pushed | TGP retires:pc
 	                                       // 'H' out_popped:hscr2 | io_addr:flags
 	                                       // 'H' scroll h:v for layers 0,1 | layers 2,3 -- low bytes
@@ -3328,7 +3331,7 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	                                       // 'T' write count + trap/PA
 	                                       // 'H' NOW: geometry. addr = objects
 	                                       //     rom:pram0:pram1:capped,
-	                                       //     data = clip in:out:dropped:quads
+	                                       //     data = clip in:out:nonfinite:quads
 	.enable(1'b1),
 	.tx(UART_TXD), .dbg_dropped(uart_dropped)
 );

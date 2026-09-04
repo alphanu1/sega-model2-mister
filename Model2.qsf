@@ -140,7 +140,24 @@ set_global_assignment -name FITTER_EFFORT "STANDARD FIT"
 # would fit in 418 blocks and 553 are allocated. That misreading is recorded
 # rather than deleted because it is the second time this project has drawn a
 # confident conclusion from the wrong column of a fitter report.
-set_global_assignment -name OPTIMIZATION_MODE "BALANCED"
+# BACK TO AGGRESSIVE AREA, AND THE FLOW IS NOW RUN STAGE BY STAGE.
+#
+# BALANCED was tried after this and crashed in 4 minutes at I/O placement --
+# "Segment Violation at (nil)" with no resource numbers at all, which is a
+# worse failure than Aggressive Area's. Aggressive Area reaches
+#
+#     Fitter Status : Successful
+#     Logic utilization (in ALMs) : 37,109 / 41,910 ( 89 % )
+#
+# and only then segfaults ON EXIT. That is the survivable case this file
+# already describes: the fit is committed, and quartus_sta and quartus_asm can
+# finish the job on the database.
+#
+# THE DATABASE FROM THAT RUN WAS DESTROYED BY STARTING THE NEXT BUILD before
+# checking whether it had left something usable. Do not do that again: after a
+# fitter crash, run quartus_asm BEFORE launching anything else. `make rbf_rescue`
+# exists for exactly this.
+set_global_assignment -name OPTIMIZATION_MODE "AGGRESSIVE AREA"
 set_global_assignment -name ALLOW_POWER_UP_DONT_CARE ON
 set_global_assignment -name QII_AUTO_PACKED_REGISTERS NORMAL
 # BACK ON, AND NOT BY PREFERENCE. With this OFF the fitter dies with
@@ -156,6 +173,24 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_DUPLICATION ON
 set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_RETIMING ON
 # AREA, NOT SPEED. The whole of the block below was tuned when there were
 # 8,940 ALM spare. There are 196.
+# SPEED AGAIN, WITH AGGRESSIVE AREA KEPT. The two do different jobs and only
+# one of them was hurting. AGGRESSIVE AREA + AREA fits at 36,961 ALM (88%) and
+# MISSES TIMING on the 100 MHz SDRAM clock by -0.653 ns, TNS -5.895 -- which is
+# not a marginal miss on a clock the whole core depends on.
+#
+# Model 1's measurement said this would happen: Aggressive Area "costs most of
+# the timing margin", +0.331 ns -> +0.024 ns on their core. Ours went negative.
+#
+# So keep the mode that bought 4,600 ALM and put back the technique that pays
+# for the paths. If this closes, the fit and the timing are both had; if it
+# does not fit, the mode and the technique are not separable here and that is
+# itself the answer.
+# AREA. AGGRESSIVE AREA + SPEED was tried and produced nothing at all; AGGRESSIVE
+# AREA + AREA is the only combination that has committed a fit and booted on
+# hardware. It misses the 100 MHz SDRAM clock by -0.653 ns and the board runs
+# anyway -- attract mode, sound, tilemap -- so the miss is real but not fatal at
+# room temperature. Timing gets fixed by seed sweeping and by getting the
+# occupancy down, not by a technique that cannot produce a bitstream.
 set_global_assignment -name OPTIMIZATION_TECHNIQUE AREA
 set_global_assignment -name MUX_RESTRUCTURE ON
 set_global_assignment -name REMOVE_REDUNDANT_LOGIC_CELLS ON
