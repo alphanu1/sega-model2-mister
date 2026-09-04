@@ -9234,3 +9234,90 @@ it closes the gap that let a port-9 fault survive every test in the suite.
 the code behind a number before using it. Today's version: **read the CONDITIONS
 behind a measurement.** A capture during ROM download and a frozen frame buffer
 are both instruments reporting faithfully about the wrong moment.
+
+---
+
+**R164 - THE BISECT MAP, RECORDED BEFORE IT IS NEEDED. WHERE ATTRACT STOPPED
+CYCLING, WHAT MASKED EVERYTHING BEFORE IT, AND THE ONE BUILD THAT SETTLES
+WHETHER ANYTHING ELSE BROKE.**
+
+*Why this exists.* Ben's observation: attract cycled before the coprocessor went
+in, and **multiple additions landed between hardware tests**, so a regression in
+that stretch would never have been attributed. That is the same failure that cost
+this session a day with `d27721c`. The map is written down now, while it is
+cheap, rather than reconstructed later under pressure.
+
+*THE BOUNDARY, AND IT IS A ONE-LINE PARAMETER.* Traced through every commit that
+touches the parameter:
+
+    118cb77   .BUFFERRAM(1'b0), .BUFFERRAM_WRONLY(1'b0)    attract CYCLES
+    a9ace86   .BUFFERRAM(1'b1), .BUFFERRAM_WRONLY(1'b0)    stuck at frame 1
+    f716321   .BUFFERRAM(1'b1), .BUFFERRAM_WRONLY(1'b0)
+    d27721c   .BUFFERRAM(1'b1), .BUFFERRAM_WRONLY(1'b0)
+
+`m2_cpu_bridge.sv:67` -- `BUFFERRAM_WRONLY // writes land, reads still read 0`.
+The mailbox is at 0x91FFF0, inside that region, and the poll is
+`cmpibne 0,r3,0x1166c` -- **waiting for zero**. With BUFFERRAM off, or on with
+WRONLY, the read returns zero unconditionally and the poll exits on its first
+pass. The coprocessor is never waited for.
+
+So attract cycling has always been the same shortcut, whether it came from the
+region being unmapped (before `2ea8cc2`), mapped-but-disabled (`2ea8cc2` to
+`118cb77`), or write-only. **`a9ace86` is where the machine first asked the real
+question**, and it is a deliberate one-line change rather than a hidden fault.
+
+*THE RISK THAT REMAINS, AND IT IS REAL.* The shortcut masks everything behind it.
+Any of the twenty-two commits between the TGP being wired in and BUFFERRAM being
+enabled could have broken something that only shows once the CPU actually waits.
+None of them was tested on hardware alone.
+
+    62402ce  Port the MB86234 TGP and its whole verification suite   <- BASE
+      1 c3e146b Wire the TGP to the i960, and add the math tables
+      2 64f35e6 Report the scroll registers the renderer actually used
+      3 fcc59c5 SDRAM: the read tag was three bits wide and there are ten ports
+      4 69cb105 Build: routability, and a lint that could not see the fault
+      5 0e49c54 TGP: the FIFOs are in the register file on Model 2
+      6 992eef2 Study: R105-R116, and R110 retracted
+      7 110df30 TGP: instrument the drain loop, and correct the addressing
+      8 26cbe69 The coprocessor is faithful; the i960 is pushing zeros
+      9 97e3641 i960: the wrong value is r3, and r4 beside it is right
+     10 3b4be66 The i960 reads those zeros out of the copro's empty output FIFO
+     11 9e6d71c The coprocessor works: implement the function port at 0x00880000
+     12 b57d5a5 MRA: a double hyphen inside an XML comment blocked the release
+     13 41199bf Never stall the i960: the copro hold froze the machine
+     14 93424f8 Size the copro queue to what fits: 128, not 512
+     15 f94ca26 Register the TGP's SDRAM request path too
+     16 7e71afb The coprocessor's halt was a read of 0x2e that never acknowledged
+     17 f64fe2d Both coprocessor FIFOs into M10K
+     18 a8d4969 Port the 3D back end from Model 1
+     19 2ea8cc2 Map the shared buffer RAM, and leave it off
+     20 57aacea The boot bench was accusing a correct core, and R121-R129
+     21 3a211c1 Routability AUTOMATICALLY, not ALWAYS
+     22 118cb77 The coprocessor was reading an invented memory map
+     23 a9ace86 <- BUFFERRAM ENABLED. The real question begins here.
+     24 f716321 The geometrizer walks its display list
+     25 d27721c The command path is real, and R130-R149
+
+Note 3, 13, 15 and 17 in particular: an SDRAM read-tag width fix, the i960 stall
+removal, the TGP's SDRAM request path being registered, and both FIFOs moving to
+M10K. Every one of them touches the path that R162 has just been found broken
+on, and none was flashed alone.
+
+*THE ONE BUILD THAT SETTLES IT.* Build the CURRENT tree with
+`.BUFFERRAM_WRONLY(1'b1)` in `Model2.sv`'s bridge instantiation -- one
+character -- which restores the shortcut on top of everything since.
+
+  * **attract cycles** -> nothing in 1-22 is broken. The shortcut is the only
+    difference, the mailbox path is the sole remaining work, and the bisect
+    below is not needed.
+  * **attract does not cycle** -> something in 1-22 regressed while the shortcut
+    hid it. Bisect from `62402ce` with BUFFERRAM_WRONLY held at 1 throughout, so
+    the mailbox is out of the picture and only the regression moves.
+
+That is one build against roughly five for a blind binary search, and it
+distinguishes two investigations that have nothing to do with each other.
+
+*Method.* This is the third time in one session that a stack of untested commits
+has had to be unpicked from the top. The rule already exists -- R147, one change
+per build, flashed and confirmed before the next is added -- and the cost of
+ignoring it is now measured in days rather than builds.

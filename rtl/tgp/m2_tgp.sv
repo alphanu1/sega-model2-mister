@@ -494,7 +494,21 @@ module m2_tgp #(
   // at is real and still owed -- but sel_math was gated with it, on an
   // argument from MAME's view semantics rather than a measurement, and the
   // pair has never been separated. Fix it narrowly, with a board result.
-  wire        io_lo    = (io_addr[15:5] == 11'd0);
+  // NARROW R156 (R163): the window beats the MODEL 1 REGISTER FILE only.
+  //
+  // The measured fault is `sel_radr` stealing the coprocessor's data-ROM read
+  // at io 0x10 -- the init at 0x7CF that builds $0x69, the base every
+  // display-list access is computed from. That read is real, traced, and worth
+  // 0x30 on every address the coprocessor forms afterwards.
+  //
+  // The FULL R156 gated `io_mid` with it, so the math units went behind the
+  // window too. That half was an argument from MAME's view semantics, not a
+  // measurement, and on the board it cost the tilemap -- the TGP hung, the i960
+  // stalled on its next FIFO read, and the CPU never drew. The two were never
+  // separated. They are separated now: sel_radr/sel_rdat are Model 1
+  // inheritance that Model 2's io map does not have at all, so losing them to
+  // the window costs nothing; the math units keep their addresses.
+  wire        io_lo    = !win_en && (io_addr[15:5] == 11'd0);
   wire        sel_radr = io_lo && (io_addr[2:0] == 3'd0);
   wire        sel_rdat = io_lo && (io_addr[2:0] == 3'd1);
   wire [1:0]  radr_i   = io_addr[4:3];
