@@ -741,6 +741,16 @@ $(eval $(call TGP_UNIT,mb86233_dec,$(TGP)/mb86233_dec.sv))
 $(eval $(call TGP_UNIT,mb86233_xfer,$(TGP_PKG) $(TGP)/mb86233_xfer.sv))
 $(eval $(call TGP_UNIT,mb86233_seq,$(TGP_PKG) $(TGP)/mb86233_seq.sv))
 
+# THE GEOMETRY TRANSFORM, against the reference arithmetic bit for bit.
+obj_m2_geo_xform/Vm2_geo_xform: $(TGP)/fp_mul.sv $(TGP)/fp_add.sv rtl/video/m2_geo_xform.sv sim/video/tb_m2_geo_xform.cpp
+	$(VBUILD) --top-module m2_geo_xform -CFLAGS "-O2" $(TGPFLAGS) \
+	  --Mdir obj_m2_geo_xform -o Vm2_geo_xform \
+	  $(TGP)/fp_mul.sv $(TGP)/fp_add.sv rtl/video/m2_geo_xform.sv \
+	  sim/video/tb_m2_geo_xform.cpp
+test_m2_geo_xform: obj_m2_geo_xform/Vm2_geo_xform
+	@echo "== test m2_geo_xform (transform_point / transform_vector / apply_focus)"
+	@./obj_m2_geo_xform/Vm2_geo_xform
+
 # THE ASSEMBLED CORE, AND IT HAD NO RUN TARGET AT ALL.
 #
 # sim/tgp/tb_mb86233_core.cpp has existed since the TGP was ported and was never
@@ -767,7 +777,7 @@ test_mb86233_core: obj_mb86233_core/Vmb86233_core
 .PHONY: test_tgp
 test_tgp: test_fp_mul test_fp_add test_fp_div test_mb86233_alu test_mb86233_agu \
           test_mb86233_regs test_mb86233_mem test_mb86233_dec test_mb86233_xfer \
-          test_mb86233_seq test_mb86233_core
+          test_mb86233_seq test_mb86233_core test_m2_geo_xform
 
 test_m2_backup: obj_backup/Vm2_backup
 	@echo "== test m2_backup (byte lanes, the 0xFF power-up, the save path)"
