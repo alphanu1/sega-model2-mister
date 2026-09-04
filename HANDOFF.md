@@ -5,78 +5,97 @@ claims are RETRACTED by R150.
 
 ## WHERE THE MACHINE IS
 
-**THE THREE-DAY HANG IS FIXED.** One line in `m2_sdram_x2.sv`:
+**IT RUNS.** The coprocessor completes commands, the mailbox handshake cycles,
+and the game executes on hardware for the first time.
 
-    assign s_ack[g] = f_ack[g] | done;    // was: f_ack[g]
+On the card: seed 1304, +0.376, kept as `Model2.rbf.r167`.
 
-On the card: seed 702, +0.121, kept as `Model2.rbf.r162`. Measured over UART
-after a proper ROM settle:
+    $0x4a             00000000    was FFE5CB2F garbage
+    tgp_pc            372 distinct, reaching 004C, 046E/F, 04C3/04C4
+                      -- dispatch, mailbox arm, mailbox CLEAR
+    cpu_ip            655 then 717 distinct addresses
+    in the mailbox poll  ~2% of samples, was 99%
+    mailbox clears    8 then 5 per window, cycling continuously, no lock
 
-    prog_words   07E8 (2024)      the microcode upload COMPLETES
-    tgp_pc       04F6..050C       21 distinct -- the TGP RUNS
-    cpu_ip       0E00..0E54       94 distinct -- the CPU runs the geometry code
-    p9 ack_rises 87DA -> 37AA     wrapping: transactions flowing
-    flags        0                no trap, no halt, no stall
+## THE FOUR-DAY FAULT: TWO OWNERS ON ONE SDRAM PORT (R167)
 
-Against the previous three days: `tgp_pc` frozen at 047B, 8 reads, request
-asserted and never answered.
+    p_req[9]  = tgp_dat_req_r | (geo_rd_req_r & ~tgp_dat_req_r);
+    p_addr[9] = tgp_dat_req_r ? (copro address) : (geo address);
 
-## THE FAULT, AND WHY IT SURVIVED EVERY TEST
+The coprocessor's data reads and the geometrizer walker shared port 9. This
+controller's interface is **one req/ack pair and one address per port**, so the
+address moved under whichever transaction was in flight and the single
+acknowledge could not say whose it was. The coprocessor retired its reads with
+the walker's data -- garbage into `$0x69` (the display-list base) and `$0x4a`
+(its count) -- and a garbage count is billions of iterations. Hence ~640x the
+reference workload, 0.1 fps, and a lock with the i960 at 0x1166C.
 
-`m2_sdram_x2`'s per-port adapter:
+**It could only bite while both owners were active.** The walker has run since
+`f716321`; the coprocessor only began issuing real reads with R151 and R162.
+The bug did not exist until the coprocessor started working, which is why four
+days of hunting never found it.
 
-    if (!s_req[g])     done <= 1'b0;      // clears ONLY when the request drops
-    else if (f_ack[g]) done <= 1'b1;
-    assign f_req[g] = s_req[g] & ~done & ~f_ack[g];
-    assign s_ack[g] = f_ack[g];           // a ONE-SHOT
+Ben's OSD toggle settled it without a build: geometrizer walk OFF cured it
+outright. The fix is **separate ports, not arbitration** -- the controller
+already arbitrates between ports correctly.
 
-The acknowledge is the only event that can retire a transaction, and `done`
-masks off any retry. **Miss that one pulse and the port is dead for ever** --
-request high, `done` high, `f_req` low, no second acknowledge possible. One
-missed pulse took the whole coprocessor with it.
+    p_req[4]  = geo_rd_req_r;    the walker, alone
+    p_req[9]  = tgp_dat_req_r;   the coprocessor, alone
 
-Holding the acknowledge while `done` stands costs nothing: a req/ack requester
-drops its request on the acknowledge, which clears `done` and the acknowledge
-with it; one that was not looking on the pulse cycle sees it on the next.
-`s_dout` is already held across the same window by `dout_r`.
+Port 4 was the SDRAM checksum sweeper, whose question is long since answered.
 
-**Why nothing caught it.** Port 9 is the TGP's data port. It is only exercised
-when the coprocessor actually reads, which only began with R151. And no bench
-reaches it: the boot harness answers `tgp_dat_*` from C++, `REAL_MEM` wires only
-ports 0 and 3, and all three SDRAM benches pass. **Port 9 had never been
-exercised against the real controller anywhere but the board.**
+## THE THREE FIXES THAT GOT HERE, IN ORDER
 
-## WHAT ELSE THIS SESSION SETTLED
+  1. **R151** -- both FIFO pops stall their reader, as the reference does. Takes
+     the coprocessor from idling forever to dispatching commands.
+  2. **R162** -- `s_ack[g] = f_ack[g] | done`. The per-port acknowledge was a
+     one-shot masked by `done`, so ONE missed pulse killed the port for ever.
+  3. **R167** -- separate ports for the walker and the coprocessor.
 
-* **R151 stays and is good.** It takes the coprocessor from never starting
-  (idle loop, 3 reads, 191 zeros -- what 108fed3d and d27721c both do) to
-  reaching the command handler.
-* **R156 is reverted.** It costs the tilemap. Its target was real (sel_radr
-  stealing the io 0x10 read) but it gated `sel_math` in the same change on an
-  argument rather than a measurement. Return it narrowly, with a board result.
-* **R157 and R158 are withdrawn.** Both rest on UART captures taken 15 s after
-  `load_core` while the 43.62 MB ROM set was still downloading -- `rom_loaded`
-  low holds `cpu_rst_n` low, so they read a core in reset and it was reported
-  three times as a design failure. **Always settle, then confirm the TGP is out
-  of reset, before reading anything.**
-* **The screen is not a clean instrument.** The tilemap is on-chip, so a stalled
-  SDRAM leaves the last frame up. "Tiles present, frame 1" and "no tiles" are
-  not separable states.
-* **The SDRAM rework cannot be reverted:** the pre-d27721c controller misses
-  timing on all four seeds (-0.119 to -0.668), confirming it exists to close
-  timing. `S_MISS` is not a deadlock -- its counters free-run outside the state
-  case.
+Plus the **narrow half of R156**: gate only the Model 1 register window on the
+bank, never the math units. The full R156 cost the tilemap.
+
+## THE PATTERN, AND THE BENCH THAT IS OWED
+
+Three shared-port handshakes wrong the same way in one day:
+
+    R162   an acknowledge that was a one-shot
+    R144   five requesters on one broadcast acknowledge   (STILL LIVE)
+    R167   two owners on one port
+
+**Not one was catchable by the suite, because nothing in it drives two owners of
+a port at once.** A directed test -- two requesters, overlapping requests,
+checking each retires on its own acknowledge with its own data -- would have
+caught all three in a single run. That is the highest-value thing left.
 
 ## STILL OWED
 
-* **Wire the TGP's ports 8 and 9 through `m2_sdram_x2` + `sdram_model` in the
-  boot harness**, as REAL_MEM already does for ports 0 and 3. This fault cost
-  three days precisely because no bench could reach that port.
-* **R156, narrowly** -- the io 0x10 read, without touching `sel_math`.
-* **R144** -- five requesters, one broadcast `ldr_wr_ack`, and `m2_sdram_x2`
-  passing address and data through combinationally. Model 1's `b0c6785` is the
-  precedent. Real, and not the cause of this.
+* **R144** -- the shared WRITE port: five requesters, one broadcast
+  `ldr_wr_ack`, and `m2_sdram_x2` passing address and data through
+  combinationally. Same class as R167 and still live. It will bite when the
+  walker starts writing display lists. Model 1's `b0c6785` is the precedent.
+* **The multi-owner bench**, above.
+* **`sw_*` behind `M2_SDRAM_SWEEP`** -- staged, not deleted. Its header must say
+  that re-enabling needs a port assigned, since port 4 is the walker's now.
+* **An OSD reset does not reset the sound board** -- it keeps playing. Same
+  family as `bi_*` being tied to `mem_rst_n` rather than the game reset.
+* **Model 1's dead cycle on owner change** for any port that ever gets two
+  owners again.
 * `mb86233_regs` still 46,966 fails on register 0x21.
+
+## METHOD, PAID FOR EXPENSIVELY
+
+* **Wait for the ROM.** 43.62 MB over ioctl takes ~90 s. Four builds were judged
+  from captures taken at 15 s, read a core held in reset, and were reported as
+  design failures. R157 and R158's premise were withdrawn for this.
+* **The screen is not a clean instrument.** The tilemap is on-chip, so a stalled
+  SDRAM leaves the last frame up. "Tiles present" and "no tiles" are not
+  separable states.
+* **One seed is not a result.** Seeds 803 and 804, identical RTL: 804 dead, 803
+  running the game. Slack did not explain it -- 804 had the better margin.
+* **Check Model 1 first.** It has the same coprocessor and it works. Its
+  per-owner acknowledge qualification is the thing this whole session was
+  missing.
 
 ## THE i960 IS NOT SLOW. IT NEVER WAS (R150)
 
