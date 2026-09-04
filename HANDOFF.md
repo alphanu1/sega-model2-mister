@@ -1,7 +1,129 @@
 # Handoff
 
-**Updated:** 2026-09-04. Study entries R150-R151 added; R148 and R149's central
-claims are RETRACTED by R150.
+**Updated:** 2026-09-04, later. Study entries R173 and R174 added; **R172 is
+WITHDRAWN** -- Model 2 does have a perspective divide, and the entry is kept
+with its wrong reasoning intact because that reasoning is what produced a module
+that had to be deleted.
+
+## THE 3D PIPELINE IS CONNECTED
+
+`Model2.sv`'s `.q_valid(1'b0)` is gone. The rasterizer has been wired and inert
+since R124 and now has a producer:
+
+    m2_geo          the display-list walk, ours
+      | object_data
+    m2_geo_engine   the stream grammar: vertices, links, triangle rope (R171)
+      | transform_point + apply_focus -> VIEW space
+    the quad projector   four vertices through m2_geo_project, one at a time
+      |
+    m2_geo_clip     frustum clip in VIEW space; vertices it creates go back
+      |             through the SAME projector
+    q_*             m2_quad_store / m2_raster3d
+
+Flat colour, no texture, no lighting -- shape first. `m2_raster3d` takes one
+24-bit colour and has no texture input at all, so this is the natural first
+target rather than a simplification to undo later.
+
+**Verified in simulation, NOT YET SEEN ON HARDWARE.** A build with all of it is
+running as this is written. The geometry suite is 88,181 checks / 0 fails:
+xform 7,813, project 20,037, det 12,007, rsqrt 30,186, norm 16,100, clip 2,003,
+walker 32, engine 15, integration 20. Boot bench PASS, `lint_top` clean.
+Pre-geometry fit for reference: **33,195 ALM of 41,910 (79%)**, block memory
+68% -- the geometry's own cost is not yet known.
+
+### R172 WAS WRONG, AND THE BENCH CAUGHT IT BEFORE THE BUILD
+
+R172 read `geo_parse` to its end, saw it finish at `apply_focus`, and concluded
+Model 2 has no perspective divide -- that a vertex leaves the geometrizer
+already in pixels. It does not. `model2_3d_project` (model2_v.cpp:656) divides
+x and y by `pz`, and the clip before it is a **view-space frustum**, not a box
+test on pixels. The divide simply lives in the rasterizer rather than in the
+geometrizer, which is why reading `geo_parse` alone does not show it.
+
+So the shape is Model 1's shape after all: transform, focus, frustum clip,
+divide, screen. `apply_focus` plays the part Model 1 gives to zoom, one stage
+earlier -- that is the entire difference. `m2_geo_project` fits unmodified with
+`zoom = 1.0`, `view = 0`, `xc` absorbing `crtc_xoffset + center[0]` and `yc`
+absorbing `(384 - center[1]) + crtc_yoffset`.
+
+**How it showed up.** Every stage passed its own bench. The error was in the
+JOIN, and it appeared as the clipper accepting a polygon and then neither
+emitting nor dropping it: `clip in=1 out=0 dropped=0`. Fed pixel coordinates, a
+frustum test `p.x < p.z * a_left` compares a column against a slope times a
+depth and the polygon is neither in nor out of anything meaningful. **On
+hardware that is a black screen -- indistinguishable from the geometry never
+running at all**, which is the state this core spent four days in for an
+entirely different reason.
+
+Cost: one module, `m2_geo_screen`, deleted. Nothing reached hardware.
+
+A second, smaller lesson from the same bench: its first working version broke
+its run loop on the engine's `busy` and reported "no quads" for a pipeline that
+had simply not finished four 29-cycle reciprocals yet. **A bench measuring its
+own impatience reads exactly like a design that does not work.**
+
+### PORT 4 HAS TWO READERS AND THEY TAKE TURNS (R173)
+
+The walk reads bufferram; the engine reads the polygon ROM. That is the R167
+shape that cost four days. They do not arbitrate -- `m2_geo` stops at every
+`object_data` until the engine reports it drawn, which is what
+`geo_object_data` does in the reference anyway (it does not return until
+`geo_parse` has walked every polygon).
+
+Two things about it worth keeping:
+
+* `busy` rises the cycle AFTER `start`, so "wait until `!eng_busy`" falls
+  straight through and the walk races back onto the port. `W_OBJW` watches busy
+  go high FIRST, then come down.
+* `m2_geometry.busy` means the WHOLE pipeline, not the engine. The engine
+  finishes long before four reciprocals and the clipper do. `q_end` rides on it,
+  and an early `q_end` throws away whatever was still in flight at frame end.
+
+`dbg_p4_clash` counts cycles where both request anyway. If the interlock is ever
+wrong that is a number, not a subtly wrong picture.
+
+**`tb_m2_geo` deadlocked at the first `object_data` the moment the interlock
+went in**, because it drove one requester where the design has two. That is the
+right failure -- it proves the wait blocks -- and it is the THIRD bench here
+with that blind spot. **R144's shared write port is the one still live: five
+requesters, one broadcast `ldr_wr_ack`.**
+
+### WHAT TO READ OFF THE UART FIRST
+
+The 'H' record now carries the geometry instead of the TGP's loop counts:
+
+    b_addr   objects to ROM : PRAM0 : PRAM1 : objects hitting MAX_POLYS
+    b_data   clipper in : out : dropped : quads reaching the rasterizer
+
+The first three separate **"the geometry is broken"** from **"every object this
+game draws lives in a polygon RAM that opcode 0x05 has never filled"**. Those
+are the same black screen and need completely different work. Read them before
+changing anything.
+
+`geo_polygon_data` (opcode 0x05) is NOT implemented, so a PRAM object reads
+unwritten SDRAM -- `0xFFFF...`, whose low two bits are 3 and never terminate.
+`MAX_POLYS = 4096` stops that becoming a 2.5-second frozen picture per object;
+`dbg_capped` counts objects that reach the ceiling.
+
+### WHAT IS STILL CONSTANT AND SHOULD NOT BE
+
+* **The viewport.** `xc/yc = (248,192)` and the four clip slopes are hardcoded
+  for a 496x384 screen. Model 2 sets the centre and viewport with rasterizer
+  commands the core does not capture, and the CRTC sync registers offset them.
+  A game that moves its viewport draws to the wrong place -- visibly.
+* **The colour.** `flat_col = 0xC0C0C0`.
+* **The sort key** is min-z over the four vertices; `zsort_mode` is ignored.
+
+### THE NEXT PIECES, IN ORDER
+
+1. Read the UART counters on the running board. Everything below depends on
+   which of them are non-zero.
+2. `geo_polygon_data` (0x05) if PRAM objects are what Daytona uses. Route it
+   through the walker's EXISTING `sd_wr_*` output -- do not add a sixth
+   requester to R144's broken write port.
+3. `geo_window_data` (0x03) -> real viewport and clip planes.
+4. Lighting, then texture. `m2_geo_color` is NOT ported; Model 2's differs.
+5. The other three parsers: `np_s`, `nn_ns`, `nn_s`.
 
 ## WHERE THE MACHINE IS
 

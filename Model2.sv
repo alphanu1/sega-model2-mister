@@ -3307,7 +3307,7 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	.b_addr({geo_obj_rom[7:0], geo_obj_pram0[7:0],
 	         geo_obj_pram1[7:0], geo_capped[7:0]}),
 	.b_data({geo_clip_in[7:0], geo_clip_out[7:0],
-	         geo_clip_drop[7:0], r3d_quads[7:0]})
+	         geo_clip_drop[7:0], r3d_quads[7:0]}),
 	.a_tag(8'h43), .b_tag(8'h48),          // 'C' copro in_pushed:out_pushed | TGP retires:pc
 	                                       // 'H' out_popped:hscr2 | io_addr:flags
 	                                       // 'H' scroll h:v for layers 0,1 | layers 2,3 -- low bytes

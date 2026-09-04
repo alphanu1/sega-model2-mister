@@ -110,18 +110,40 @@ LINTTOP_RTL := $(shell grep -oiE "rtl/[a-z0-9_/]+\\.(sv|v)" Model2.qsf | tr "\\n
 #
 # This is the R94 lesson a second time: a guard that cannot see the bug it
 # exists for is worse than no guard, because it is believed.
+# A SYNTAX ERROR USED TO PASS THIS GUARD, and it cost a build.
+#
+# The filter below keeps only four warning classes; everything else, INCLUDING
+# "Verilog syntax error", was dropped on the floor, and the exit status is the
+# `if` on the filtered file, not verilator's. A missing comma between two port
+# connections in Model2.sv reported "no port width mismatches, no undriven
+# signals" here and then failed quartus_map in seven seconds.
+#
+# So the raw output is captured ONCE and asked two questions: is there a syntax
+# error in a file of ours, and is there a wiring fault. The first is fatal on
+# its own. This is R94's lesson for the third time -- a guard that cannot see
+# the class of bug it is standing in front of is worse than no guard, because
+# it is believed.
 lint_top:
 	@echo "== lint Model2.sv and everything it instantiates"
 	@verilator --lint-only -Wall -Wno-DECLFILENAME -Wno-fatal --top-module emu \
 	  -Irtl/sound/jt12 -Isys $(LINTTOP_RTL) \
-	  sys/hps_io.sv rtl/pll/pll.v sim/lint/altera_pll_stub.v Model2.sv 2>&1 \
+	  sys/hps_io.sv rtl/pll/pll.v sim/lint/altera_pll_stub.v Model2.sv > .lint_top.raw 2>&1 || true
+	@grep -E "syntax error|Cannot find file containing module" .lint_top.raw \
+	  | grep -vE "sys/|rtl/pll/|sim/lint/" > .lint_top.syn || true
+	@if [ -s .lint_top.syn ]; then \
+	  echo "SYNTAX ERROR OR MISSING MODULE -- quartus_map would fail on this:"; \
+	  cat .lint_top.syn; rm -f .lint_top.syn .lint_top.raw; exit 1; \
+	 fi
+	@rm -f .lint_top.syn
+	@cat .lint_top.raw \
 	  | grep -E "port connection|IMPLICIT|UNDRIVEN" \
 	  | grep -vE "For warning description|lint_off" \
 	  | grep -vE "sys/|rtl/pll/|sim/lint/|rtl/cpu/tv80/|rtl/sound/(jt12|fx68k)/|rtl/sound/m2_multipcm" > .lint_top.tmp || true
 	@if [ -s .lint_top.tmp ]; then \
 	  echo "TOP-LEVEL WIRING FAULT (port width, implicit wire, undriven signal, missing module):"; \
-	  cat .lint_top.tmp; rm -f .lint_top.tmp; exit 1; \
-	 else echo "  no port width mismatches, no undriven signals"; rm -f .lint_top.tmp; fi
+	  cat .lint_top.tmp; rm -f .lint_top.tmp .lint_top.raw; exit 1; \
+	 else echo "  no syntax errors, no port width mismatches, no undriven signals"; \
+	      rm -f .lint_top.tmp .lint_top.raw; fi
 
 lint: lint_top lint_i960_dec lint_i960_alu lint_i960_regs lint_i960_agu lint_i960_ldst lint_i960_lsu lint_i960_memmap lint_i960_icache lint_i960_muldiv lint_i960_fpmul lint_i960_fpadd lint_i960_fpdiv lint_i960_fpsqrt lint_i960_fpmisc lint_i960_fpcvt lint_i960_top
 
