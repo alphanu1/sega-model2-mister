@@ -202,12 +202,26 @@ wire [26:0] ioctl_addr;
 // name, and a rename makes the constraints match nothing while still passing.
 // See rtl/pll/pll.v.
 
-wire clk_mem;        // 96 MHz, m2_sdram ONLY
-wire clk_sdram_pin;  // 96 MHz at 180 deg, drives SDRAM_CLK
+wire clk_mem;        // 100 MHz, m2_sdram ONLY
+wire clk_sdram_pin;  // 100 MHz at 180 deg, drives SDRAM_CLK
 wire clk_sys;   // 50 MHz, the core domain, and the COPROCESSOR's clock.
                 // Exactly the real MB86234's 50 MHz, and an exact 2x clk_i960 --
                 // the board's own ratio. Model 1 had to retrofit 2:1 onto a
                 // 1:1 arrangement; this core was built at the ratio.
+                //
+                // THE WHOLE CHAIN IS EXACT AND THAT IS LOAD-BEARING, NOT
+                // COSMETIC: 100 / 50 / 25, every step an integer 2:1 off one
+                // PLL. Two handshakes depend on it. m2_sdram's ACK_HOLD = 2 is
+                // documented as "2 for a clk/2 requester" and gives a 50 MHz
+                // requester EXACTLY ONE rising edge with ack high -- at 96/50
+                // it would give one or two depending on phase, and a requester
+                // would take a stale ack for its next access. And
+                // m2_cpu_bridge registers io_sel on clk_mem = clk_sys, so a
+                // coprocessor select is exactly one copro cycle and a held
+                // access cannot double-push or double-pop a FIFO.
+                //
+                // Model 1 paid for this: its 2:1 handshake fired on every
+                // cycle the request was held. See R152.
                   //         later steps need is the one being timed now
 wire clk_vid;     // 32 MHz
 wire clk_i960;    // 25 MHz -- the real i960's clock, an exact /2 of clk_sys
@@ -217,11 +231,11 @@ pll pll
 (
 	.refclk(CLK_50M),
 	.rst(0),
-	.outclk_0(clk_mem),      // 96 MHz, the SDRAM controller alone
+	.outclk_0(clk_mem),      // 100 MHz, the SDRAM controller alone
 	.outclk_1(clk_sys),      // 50 MHz, everything else. Exact /2 of outclk_0.
 	.outclk_2(clk_vid),      // 32 MHz
 	.outclk_3(clk_i960),     // 25 MHz, exact /2 of clk_sys. See rtl/pll/pll.v.
-	.outclk_4(clk_sdram_pin),// 96 MHz at 180 deg, straight to the device pin
+	.outclk_4(clk_sdram_pin),// 100 MHz at 180 deg, straight to the device pin
 	.locked(pll_locked)
 );
 
@@ -613,7 +627,7 @@ end
 assign rb_dout = p_dout[0];
 assign rb_ack  = p_ack[0];
 
-// T_REFI IS IN CLOCK CYCLES, and this domain is now 96 MHz (see rtl/pll/pll.v):
+// T_REFI IS IN CLOCK CYCLES, and this domain is 100 MHz (see rtl/pll/pll.v):
 // 8192 rows in 64 ms is one refresh every 7.8125 us, which is 312 cycles at 40 MHz
 // and 625 at 80. Too large UNDER-REFRESHES, and that presents as random ROM
 // corruption rather than as a timing setting.

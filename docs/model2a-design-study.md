@@ -8610,3 +8610,112 @@ this replaces.
 conclusion the six lines above it forbid. Same family as R149's wrapping
 counter and R150's shared port: the instrument was real, the reading was
 partial. **Read the function, not its return statement.**
+
+---
+
+**R152 - THE 2:1 HANDSHAKE AUDIT MODEL 1 ASKED FOR. WE ARE SAFE, AND NOT BY
+ACCIDENT -- THE EXACT 100/50/25 CHAIN IS WHAT MAKES BOTH HANDSHAKES CORRECT.
+MODEL 1 ALSO CONFIRMS R151 INDEPENDENTLY.**
+
+*The warning.* Model 1 found that bringing its coprocessor to 2:1 broke the
+handshake, because the action fired on every cycle the request was held rather
+than once. Its `incremental` branch states the rule in
+`rtl/tgp/m1_copro_if.sv`:
+
+    `req` is HELD until `ack` ... The action fires once, on the cycle the
+    access completes, so a held request cannot double-pop a FIFO or
+    triple-increment the address.
+
+(Note for the reference clone: `main` and `wip-2to1` are both `57ce77e`, the 2:1
+WIP that is black on hardware. **`incremental` is the live branch** and rung 7,
+the 2:1 TGP itself, is still uncommitted there -- the standing blind spot.)
+
+*Why it does not bite us, checked rather than assumed.* Our exposure looks
+identical -- `fin_push` and `fout_pop` in `m2_copro.sv` carry NO edge
+qualification:
+
+    wire fin_push = (fifo_wr && !uploading) || fn_wr;
+    wire fout_pop = fifo_rd && fout_valid;
+
+They are safe because the SELECT is already one coprocessor cycle wide.
+`m2_cpu_bridge` registers `io_sel` in its `always_ff @(posedge clk_mem)` block,
+and the top level wires `.clk_cpu(clk_i960)` with `.clk_mem(clk_sys)`. The
+coprocessor runs on `clk_sys` too, so a select is generated in the
+coprocessor's OWN domain and lasts exactly one of its cycles. **The 2:1
+crossing lives inside the bridge, between clk_cpu and clk_mem, which is where
+Model 1 had to retrofit it.**
+
+*The empirical proof, and it was already in hand.* `dbg_prog_words` and
+`dbg_in_pushed` are both incremented per select-cycle, so a doubled select
+doubles them:
+
+    program uploaded  2024 words   MAME: 2024
+    FIFO in pushed     109         MAME:  109
+
+The boot harness DOES model the ratio (`clk_mem` 48 MHz, `clk_cpu` 24 MHz,
+copro on `clk_m`), so this is a live test of the crossing and not a 1:1
+simplification. Doubling would have read 4048 and 218.
+
+*THE RATIO IS LOAD-BEARING, AND ONE STEP OF IT WOULD HAVE BEEN A REAL BUG AT
+96 MHz.* `m2_sdram`'s parameter says so in its own words:
+
+    // Ack hold. Requesters on a slower synchronous clock must see exactly one
+    // rising edge with ack high, so this is 2 for a clk/2 requester.
+    parameter int unsigned ACK_HOLD = 2
+
+That invariant holds only if `clk_sys` is exactly half the memory clock. It is:
+the PLL is configured `output_clock_frequency0("100.000000 MHz")` and
+`output_clock_frequency1("50.000000 MHz")`. **Had the memory clock really been
+the 96 MHz that nineteen comments across four files still claim, a 2-cycle ack
+would be 20.83 ns against a 20 ns `clk_sys` period -- one rising edge or two
+depending on phase, and a requester taking a stale ack for its NEXT access.**
+That is Model 1's failure mode exactly, and the only thing standing between us
+and it is a frequency that the prose gets wrong.
+
+*So the finding is documentation, and it is not cosmetic.* Every NUMBER was
+migrated to 100 MHz correctly and independently verified here:
+
+    PLL          outclk_0/4 = 100.000000 MHz, outclk_1 = 50, outclk_3 = 25
+    phase_shift4 5000 ps      -- 180 deg at 100 MHz; the comment even records
+                                 that it "was 5208 for 96 MHz"
+    T_REFI       781          -- 7.81 us at 100 MHz (750 would be the 96 figure)
+    ACK_HOLD     2            -- correct for an exact clk/2 requester
+    Model2.sdc   "general[0] is 100 MHz ... general[0] and general[4] here are
+                 both 100 MHz and differ only in phase"
+
+The prose did not follow. `Model2.sv`'s clock declarations said 96 and are
+corrected here, with the ratio's consequences written beside them; the
+remainder are historical measurements or references to the Kaneko16 core, which
+genuinely ran at 96, and are left alone. **A stale frequency in a comment is
+not a cosmetic defect when a handshake's correctness is derived from it -- this
+audit spent its first pass concluding ACK_HOLD was broken, on the strength of a
+comment.**
+
+*AND MODEL 1 CONFIRMS R151 INDEPENDENTLY, FROM ITS OWN HARDWARE.* The header of
+`m1_copro_if.sv` on `incremental`:
+
+    AN EMPTY RESULT-FIFO READ STALLS. THIS WAS CHANGED TO RETURN ZERO ON
+    2026-08-30 AND REVERTED THE SAME DAY ...
+
+    gen_fifo.h says a pop on an empty fifo "returns zero" - and ALSO asks the
+    destination to retry, and halts it after a sync if the fifo is still empty.
+    The retry means the zero is never consumed ... Returning zero AND
+    completing lets the V60 consume the zero, and this is what that did:
+
+    the V60 reads twelve results into a matrix ... gets zeros, stores zeros,
+    and at command 673 pushes 00000000 x4 where the reference pushes four
+    floats. The real results then land in fout with nobody coming back for
+    them: fout fills, the TGP halts, fin fills, the V60 halts.
+
+    So both FIFO directions stall on empty, which is MAME's effective behaviour
+    in both.
+
+Two projects, two processors, the same source, the same conclusion, reached a
+week apart and each without the other. **It also names the deadlock R151 listed
+as its own named risk as a CONSEQUENCE of returning zero rather than of
+stalling** -- fout fills precisely because a consumer that took a zero never
+comes back for the real result. Stalling is what prevents it.
+
+*Method.* This entry exists because Ben supplied a hardware finding from the
+other project and the audit was run before a build rather than after a failure.
+Every previous entry in this range was written the other way round.

@@ -73,6 +73,58 @@ the value -- that probe is the next step, and it is a harness change, not a fit.
 
 Reporting a partial result as a fix is exactly how R141 and R143 went wrong.
 
+## THE 2:1 HANDSHAKE AUDIT: SAFE, AND THE RATIO IS WHY (R152)
+
+Ben's finding from Model 1: bringing its coprocessor to 2:1 broke the handshake
+because the action fired on every cycle the request was held. Its `incremental`
+branch states the rule -- **the action fires once, on the cycle the access
+completes, so a held request cannot double-pop a FIFO.**
+
+Reference-clone note: `main` and `wip-2to1` are BOTH `57ce77e`, the 2:1 WIP that
+is black on hardware. **`incremental` is the live branch.** Rung 7, the 2:1 TGP
+itself, is still uncommitted there.
+
+Our `fin_push` and `fout_pop` carry no edge qualification and look exposed. They
+are safe because `m2_cpu_bridge` registers `io_sel` on **clk_mem, which the top
+level wires to clk_sys -- the coprocessor's own clock.** A select is one copro
+cycle. The 2:1 crossing is inside the bridge, between clk_cpu and clk_mem.
+
+Proof already in hand: `dbg_prog_words` and `dbg_in_pushed` both count per
+select-cycle, and read 2024 / 109 against MAME's 2024 / 109. The harness models
+the ratio (clk_mem 48, clk_cpu 24), so that is a live test. Doubling would read
+4048 / 218.
+
+**But one step of the chain would be a genuine bug at 96 MHz.** m2_sdram's
+`ACK_HOLD = 2` says in its own comment that it exists so "requesters on a slower
+synchronous clock see exactly one rising edge" and is "2 for a clk/2 requester".
+At 100/50 that is exact. At 96/50 a 2-cycle ack is 20.83 ns against a 20 ns
+period -- one edge or two depending on phase, a requester taking a stale ack for
+its next access, which is Model 1's failure mode precisely.
+
+The PLL is 100 MHz (`output_clock_frequency0("100.000000 MHz")`) and every
+NUMBER is right for it: `phase_shift4` 5000 ps, `T_REFI(781)`, `ACK_HOLD 2`,
+and Model2.sdc's own text. **Nineteen comments across four files still say 96.**
+Model2.sv's clock declarations are corrected here with the consequences written
+beside them; the rest are historical measurements or Kaneko16 references, which
+genuinely were 96, and are left. This audit spent its first pass concluding
+ACK_HOLD was broken, on the strength of a comment.
+
+## MODEL 1 CONFIRMS R151 INDEPENDENTLY
+
+`m1_copro_if.sv` on `incremental`: *"AN EMPTY RESULT-FIFO READ STALLS. THIS WAS
+CHANGED TO RETURN ZERO ON 2026-08-30 AND REVERTED THE SAME DAY."* Their measured
+failure: the V60 reads twelve results, gets zeros, stores them, and pushes
+`00000000 x4` where the reference pushes four floats -- then *"fout fills, the
+TGP halts, fin fills, the V60 halts."*
+
+*"So both FIFO directions stall on empty, which is MAME's effective behaviour in
+both."* Two projects, two processors, the same source, the same conclusion, a
+week apart, neither aware of the other.
+
+**It also reframes R151's named risk.** The fout/fin deadlock is a CONSEQUENCE
+of returning zero, not of stalling: fout fills because a consumer that took a
+zero never comes back for the real result. Stalling prevents it.
+
 ## NEXT STEPS, IN ORDER
 
 1. **Record the mailbox VALUE, not just the hit count.** `obs_bufw_7ffc` in
