@@ -207,6 +207,61 @@ int main(int argc, char** argv) {
     ck("engine idle at the end", (int32_t)d->busy, 0);
   }
 
+  // ---- test 5: A POLYGON THAT STRADDLES A PLANE, which is the only case that
+  //      exercises the shared projector's arbiter at all.
+  //
+  // Tests 1 to 4 feed quads that are wholly inside or wholly outside. The
+  // clipper cuts nothing in either case, so it never creates a vertex, so it
+  // never drives pj_* -- and k_pj_valid had never once been asserted. The
+  // arbitration between the quad projector and the clipper, which is the piece
+  // most likely to be wrong and the piece that hangs the frame when it is, was
+  // untested by a bench that reported 20 passing checks.
+  //
+  // This quad crosses the right plane: x runs from -50 to +400 with z = 1, and
+  // a_right is 248. The clipper must cut it, project the two vertices it
+  // creates, and emit a quad clamped to the right edge.
+  {
+    d->rst_n = 0; for (int i = 0; i < 4; i++) tick(); d->rst_n = 1; tick();
+    load_identity();
+    d->foc_x = f2u(1.0f); d->foc_y = f2u(1.0f);
+    size_t w = 0;
+    w = put_v(w, -50.0f,  50.0f, 1.0f);   // P0(n-1) inside
+    w = put_v(w, -50.0f, -50.0f, 1.0f);   // P1(n-1) inside
+    obj[w++] = 0x00000001u;
+    w = put_v(w, 0.0f, 0.0f, 1.0f);
+    w = put_v(w, 400.0f,  50.0f, 1.0f);   // P0(n)   outside: 400 > 248
+    w = put_v(w, 400.0f, -50.0f, 1.0f);   // P1(n)   outside
+    obj[w++] = 0x00000000u;
+
+    auto got = run_object();
+    std::printf("test: a straddling quad is CUT, and the clipper's own vertices project\n");
+    std::printf("  %zu quads out, clip in=%u out=%u dropped=%u\n",
+                got.size(), d->dbg_clip_in, d->dbg_clip_out, d->dbg_clip_dropped);
+    ck("the clipper saw it",   (int32_t)d->dbg_clip_in, 1);
+    ck("not dropped whole",    (int32_t)d->dbg_clip_dropped, 0);
+    ck("something was emitted", (int32_t)(got.size() > 0), 1);
+    if (got.size() >= 1) {
+      // Every vertex of every emitted quad must be inside the right edge. The
+      // cut vertices come back through m2_geo_project via pj_*, so a broken
+      // arbiter shows up here as a coordinate belonging to another vertex --
+      // or, if it deadlocks instead, as nothing emitted at all above.
+      int32_t worst = -32768;
+      for (auto& q : got) {
+        for (int32_t v : {q.x0, q.x1, q.x2, q.x3}) if (v > worst) worst = v;
+      }
+      // xc + a_right = 248 + 248 = 496, the right edge, with a pixel of slack
+      // for the reciprocal's last place (see m2_geo_project's header).
+      checks++;
+      if (worst > 497) {
+        std::printf("  FAIL clipped quad still crosses the right edge: x=%d\n", worst);
+        fails++;
+      } else {
+        std::printf("  rightmost vertex after the cut: x=%d (edge is 496)\n", worst);
+      }
+    }
+    ck("pipeline idle after the cut", (int32_t)d->busy, 0);
+  }
+
   std::printf("m2_geometry: checks=%ld fails=%ld\n", checks, fails);
   std::printf("%s\n", fails ? "FAIL" : "PASS");
   delete d;
