@@ -221,7 +221,8 @@ module m2_geo #(
   // four words name geometry that lives in the POLYGON ROM, and that is the
   // next stage. Getting the walk right first means the opcode histogram on the
   // UART can be compared against the 101/60/33 above, which is a real oracle.
-  typedef enum logic [2:0] { W_IDLE, W_FETCH, W_DECODE, W_SKIP, W_CNT } wstate_t;
+  typedef enum logic [2:0] { W_IDLE, W_FETCH, W_DECODE, W_SKIP, W_CNT,
+                             W_TFIFO, W_DDSKIP, W_DDATTR } wstate_t;
   wstate_t wst;
   logic [18:0] w_ip;
   logic [15:0] w_ops, w_skip;
@@ -229,29 +230,75 @@ module m2_geo #(
 
   // Operand words per opcode. The upper half mirrors the lower for the ones
   // this game uses, exactly as geo_process_command's switch does.
-  // The upper half of the opcode space mirrors the lower for every command
-  // this game uses, exactly as geo_process_command's switch does, so the
-  // length depends on the low four bits alone.
-  function automatic [15:0] oplen(input [3:0] c);
+  // ALL THIRTY-TWO ENTRIES, NOT THE LOW NIBBLE. The upper half mirrors the
+  // lower for most commands, but NOT for three pairs, and keying on four bits
+  // gets every one of them wrong:
+  //
+  //     0x0d data_mem_push 2+count   vs  0x1d code_upload  1+3*count
+  //     0x0e test          complex   vs  0x1e code_jump    1
+  //     0x06 texture_params 2+2*cnt  vs  0x16 lod          1
+  //
+  // A count-driven command carries its length in the stream. `preop` is how many
+  // operands come BEFORE the count word, `mult` how many words each unit takes:
+  //
+  //     2 + count      preop 1, mult 1   texture_data, polygon_data,
+  //                                      data_mem_push, log_data
+  //     2 + 2*count    preop 1, mult 2   texture_parameters
+  //     1 + 3*count    preop 0, mult 3   code_upload
+  //
+  // 0x02/0x12 direct_data IS covered. Its length is set by a while loop rather
+  // than a count, but a loop is not an unknown: geo_direct_data takes tpa and
+  // tha, then two xyz points, then reads an attribute word and continues while
+  // its low two bits are nonzero -- 5 more words per vertex, 8 if bit 0 says
+  // quad rather than triangle. The terminating attribute is consumed too:
+  // `while (((attr = *input++) & 3) != 0)` steps past it on the exit test.
+  //
+  // ALL THIRTY-TWO OPCODES NOW HAVE A LENGTH. geo_process_command has no
+  // default case, so there is no such thing as an opcode the reference cannot
+  // measure -- halting was a stopgap, not a limit of what is knowable. The
+  // unknown branch below is kept as an assertion that should never fire.
+  //
+  // 0x0e test IS covered, and it is the reason the walk stopped on the board
+  // after 141 frames (dbg_walk_unknown reported 0x0e, which is the opcode, not
+  // a count). geo_test is the SELF TEST: it checks a 1,2,4,8... ramp through
+  // the FIFO and then checksums blocks of polygon ROM. It writes nothing and
+  // changes no geometrizer state -- on failure MAME only logerrors, and the
+  // real board lights an LED. So the walk owes it nothing but the right length:
+  //
+  //     32 words   the FIFO ramp
+  //    + 1 word    the block count
+  //    + 3*blocks  address, count, checksum per block
+  //
+  // Note where the count sits: at operand offset 32, not offset 1 like every
+  // other count-driven command, which is why it needs its own state rather
+  // than another entry in the preop/mult table above.
+  function automatic [15:0] oplen(input [4:0] c);
     case (c)
-      4'h0: oplen = 16'd0;    // nop
-      4'h1: oplen = 16'd4;    // object_data: tpa, tha, oba, obc
-      4'h3: oplen = 16'd6;    // window_data
-      4'h7: oplen = 16'd1;    // mode
-      4'h8: oplen = 16'd1;    // zsort
-      4'h9: oplen = 16'd2;    // focal distance
-      4'ha: oplen = 16'd3;    // light source
-      4'hb: oplen = 16'd12;   // matrix: 3x4
-      4'hc: oplen = 16'd3;    // translate vector
-      4'hf: oplen = 16'd0;    // end
-      default: oplen = 16'hffff;   // variable or unsupported: see w_cnt
+      5'h00, 5'h0f, 5'h1f:               oplen = 16'd0;   // nop, end
+      5'h07, 5'h08, 5'h10, 5'h16,
+      5'h17, 5'h18, 5'h1e:               oplen = 16'd1;   // mode, zsort, dummy,
+                                                          // lod, code_jump
+      5'h09, 5'h19:                      oplen = 16'd2;   // focal distance
+      5'h0a, 5'h0c, 5'h1a, 5'h1c:        oplen = 16'd3;   // light, translate
+      5'h01, 5'h11:                      oplen = 16'd4;   // object_data
+      5'h03, 5'h13:                      oplen = 16'd6;   // window_data
+      5'h0b, 5'h1b:                      oplen = 16'd12;  // matrix, 3x4
+      // 0x02/0x12 direct_data and 0x0e test have their own states, never here.
+      default:                           oplen = 16'hffff;
     endcase
   endfunction
 
-  wire is_var = (w_op[3:0] == 4'h4) || (w_op[3:0] == 4'h5);   // texture/polygon data
-  wire is_end = (w_op[3:0] == 4'hf);
+  // count-driven forms
+  wire is_cnt1 = (w_op == 5'h04) || (w_op == 5'h05) || (w_op == 5'h14)
+              || (w_op == 5'h15) || (w_op == 5'h0d);       // 2 + count
+  wire is_cnt2 = (w_op == 5'h06);                          // 2 + 2*count
+  wire is_cnt3 = (w_op == 5'h1d);                          // 1 + 3*count
+  wire is_test = (w_op == 5'h0e);                          // 32 + 1 + 3*blocks
+  wire is_dd   = (w_op == 5'h02) || (w_op == 5'h12);       // 8 + attribute loop
+  wire is_var  = is_cnt1 || is_cnt2 || is_cnt3;
+  wire is_end  = (w_op == 5'h0f) || (w_op == 5'h1f);
 
-  assign rd_req  = (wst == W_FETCH) || (wst == W_CNT);
+  assign rd_req  = (wst == W_FETCH) || (wst == W_CNT) || (wst == W_DDATTR);
   assign rd_addr = w_ip;
 
   always_ff @(posedge clk or negedge rst_n) begin
@@ -262,7 +309,14 @@ module m2_geo #(
     end else begin
       case (wst)
         W_IDLE: if (frame_start) begin
-          w_ip  <= 19'(geo_rp[19:2]);       // the read pointer is a BYTE address
+          // MASKED TO 0x1ffff FIRST, THEN /4 -- geo_parse is
+          // `(m_geo_read_start_address & 0x1ffff)/4`, and the mask is not
+          // decoration: the register holds 20 bits, so an unmasked [19:2] can
+          // start the walk at up to 0x3FFFF, past the 0x8000-dword end of
+          // bufferram, and the walk bounds out having retired ONE opcode with
+          // no unknown to explain it. That is what the board reported --
+          // ops=1, objs=0, frames frozen, unknown clear.
+          w_ip  <= 19'(geo_rp[16:2]);       // the read pointer is a BYTE address
           w_ops <= 16'd0;
           wst   <= W_FETCH;
         end
@@ -270,7 +324,16 @@ module m2_geo #(
         // unconditionally drops an acknowledge that arrives in the same cycle,
         // which a fast memory does -- the walk then never advances at all.
         W_FETCH: if (rd_ack) begin
-          if (rd_data[31]) begin                       // a jump
+          // THE BOUND LIVES HERE, NOT ONLY IN W_SKIP. A jump re-enters W_FETCH
+          // without passing through W_SKIP, so a list of nothing but jumps was
+          // unbounded -- and unwritten memory is exactly that list: it reads
+          // 0xFFFFFFFF, bit 31 is set, so every word is a jump to the same
+          // address and the walk never leaves this state. MAME cannot hit this
+          // because it fills bufferram with 0x07800f0f (an `end`) at reset.
+          if (w_ops >= 16'h7fff) begin
+            dbg_walk_ops <= w_ops;
+            wst <= W_IDLE;
+          end else if (rd_data[31]) begin              // a jump
             w_ip <= 19'(rd_data[16:2]);
             wst  <= W_FETCH;
           end else begin
@@ -286,15 +349,25 @@ module m2_geo #(
             dbg_walk_ops    <= w_ops;
             dbg_walk_frames <= dbg_walk_frames + 16'd1;
             wst <= W_IDLE;
+          end else if (is_dd) begin
+            // tpa, tha and two xyz points, then the attribute loop.
+            w_skip <= 16'd8;
+            wst    <= W_DDSKIP;
+          end else if (is_test) begin
+            // Step the FIFO ramp first; W_CNT then lands on the block count.
+            w_skip <= 16'd32;
+            wst    <= W_TFIFO;
           end else if (is_var) begin
-            w_ip <= w_ip + 19'd1;            // step over the first operand
-            wst  <= W_CNT;                   // then read the count itself
-          end else if (oplen(w_op[3:0]) == 16'hffff) begin
+            // code_upload's count IS the first operand; the others have one
+            // operand before it.
+            if (!is_cnt3) w_ip <= w_ip + 19'd1;
+            wst  <= W_CNT;
+          end else if (oplen(w_op) == 16'hffff) begin
             dbg_walk_unknown <= {3'd0, w_op};   // stop rather than desynchronise
             dbg_walk_ops     <= w_ops;
             wst <= W_IDLE;
           end else begin
-            w_skip <= oplen(w_op[3:0]);
+            w_skip <= oplen(w_op);
             wst    <= W_SKIP;
           end
         end
@@ -303,9 +376,48 @@ module m2_geo #(
           // itself, so adding one for it walks a word too far -- which lands on
           // the operand AFTER the next command and desynchronises the whole
           // list. It read as 1093 opcodes against an expected 101.
-          w_skip <= rd_data[15:0];
+          w_skip <= (is_cnt3 || is_test) ? (rd_data[15:0] * 16'd3)
+                  :  is_cnt2              ? (rd_data[15:0] * 16'd2)
+                                          :  rd_data[15:0];
           w_ip   <= w_ip + 19'd1;
           wst    <= W_SKIP;
+        end
+        // The FIFO ramp: 32 words stepped without reading them. The ramp's
+        // CONTENTS are a hardware self-test the board has already passed by the
+        // time we see it; only its length matters here.
+        W_TFIFO: begin
+          if (w_skip == 16'd0) wst <= W_CNT;
+          else begin
+            w_ip   <= w_ip + 19'd1;
+            w_skip <= w_skip - 16'd1;
+          end
+          if (w_ip >= 19'h08000) begin
+            dbg_walk_ops <= w_ops;
+            wst <= W_IDLE;
+          end
+        end
+        // direct_data's loop. W_DDSKIP always returns to W_DDATTR, so the
+        // same pair serves both the fixed 8-word preamble and each vertex.
+        W_DDSKIP: begin
+          if (w_skip == 16'd0) wst <= W_DDATTR;
+          else begin
+            w_ip   <= w_ip + 19'd1;
+            w_skip <= w_skip - 16'd1;
+          end
+          if (w_ip >= 19'h08000) begin
+            dbg_walk_ops <= w_ops;
+            wst <= W_IDLE;
+          end
+        end
+        W_DDATTR: if (rd_ack) begin
+          w_ip <= w_ip + 19'd1;               // the attribute is consumed either way
+          if ((rd_data[1:0] == 2'b00) || (w_ip >= 19'h08000)) begin
+            wst <= W_FETCH;                   // low two bits clear: list ends
+          end else begin
+            w_skip <= rd_data[0] ? 16'd8      // quad: luma, dist, xyz, xyz
+                                 : 16'd5;     // tri:  luma, dist, xyz
+            wst    <= W_DDSKIP;
+          end
         end
         W_SKIP: begin
           if (w_skip == 16'd0) wst <= W_FETCH;

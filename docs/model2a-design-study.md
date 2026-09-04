@@ -7667,3 +7667,781 @@ indices 10-21 are twelve IEEE floats, exactly as the table predicts.
 `m2_geo` only writes it today. All ten SDRAM ports are in use, so this wants an
 eleventh -- and `m2_sdram`'s `blen()` must list it explicitly, because the
 default is 1 and R108 records that mixed burst lengths corrupt the controller.
+
+---
+
+**R136 - FOUR SIMULATION TARGETS HAD NOT REBUILT SINCE 26 AUGUST. `make` EXPANDS
+A PREREQUISITE LIST WHEN IT READS THE RULE, AND THE LISTS WERE DEFINED 450 LINES
+BELOW THE RULES THAT NAMED THEM.**
+
+`SDR_RTL`, `RLD_RTL` and `VID_RTL` were defined near line 845 of the `Makefile`.
+The rules naming them as prerequisites are at lines 393, 406, 416 and 469. GNU
+make expands the prerequisite list at the moment it *reads* a rule, so all four
+expanded to the empty string and the targets had no RTL dependency at all:
+
+    $ make -q obj_m2_sdram/Vm2_sdram_harness    # with RTL 15 hours newer
+    UP TO DATE
+
+So `test_m2_sdram`, `test_m2_sdram128`, `test_m2_romload` and
+`test_m2_video_timing` ran a **stale binary** and printed `PASS` whenever the
+change under test was confined to RTL -- which is the normal case. A C++
+testbench edit rebuilt them; an RTL edit did not.
+
+*How it surfaced, and why nothing else would have caught it.* A state machine
+was added to `m2_sdram` and the test returned **411373 cycles / 32782
+transactions both before and after -- identical to the cycle.** A real FSM
+change cannot leave a saturated arbiter's schedule bit-identical. The suspicion
+came from the result being *too clean*, not from any failure.
+
+*Corrected.* The three lists are hoisted above their first use, with a comment
+saying why. A two-pass scan of the `Makefile` for prerequisites referencing a
+variable defined later reports nothing further.
+
+*What this costs retroactively.* Any conclusion drawn from those four targets
+about RTL changed since 26 August is unproven, not wrong -- it was never run.
+This is the second time this project has been misled by an instrument rather
+than by the device: R129's `DCACHE_EN=0` passed both simulations and hung the
+hardware. **The standing rule "fuzz and simulate before every build" silently
+assumed the simulation was of the current source.** Where a result matters, the
+build stamp of the binary that produced it is part of the result.
+
+---
+
+**R137 - THE SDRAM ROW COMPARATOR WAS ON THE COMMAND PATH, AND IT WAS THE
+CRITICAL PATH OF THE WHOLE DESIGN. GETTING IT OFF COSTS 2.7% OF THROUGHPUT.**
+
+`S_DISPATCH` exists, and its comment says it "keeps the port mux and the row
+comparator out of the command-output timing cone." It got the port mux out. The
+row comparator stayed in: `row_hit` was computed from the registered
+`xfer_addr` and acted on in the same cycle, so the cone ran
+
+    xfer_addr[25:24] -> tbank -> four 4:1 muxes (bank_open, bank_row,
+    ras_cnt, rd_bank_cnt) -> 13-bit row compare -> if/else nest -> cmd
+
+Post-fit, every failing path in the design was an instance of exactly this:
+
+    xfer_addr[25]_OTERM1467  -> cmd[0]   -0.117
+    xfer_addr[16]_...        -> cmd[0]   -0.097
+    xfer_addr[15]_...        -> cmd[0]   -0.057
+
+`[25:24]` are the bank bits and `[16:15]` are row bits into the comparator.
+
+*The fix.* `S_DISPATCH` now writes **no `cmd` whatsoever**. A row hit and a
+bank-closed miss both settle only `state`, which is a register boundary; only a
+*conflict* miss -- bank open on the wrong row, the one case that must issue
+PRECHARGE -- advances to a new `S_MISS`, which issues it from a registered
+`dsp_bank`. The row comparator no longer reaches the command pins by any route.
+
+*Measured, `tb_m2_sdram`, transactions per cycle:*
+
+    0.079689   before
+    0.077029   deferring every miss        -3.34%
+    0.077531   deferring conflicts only    -2.66%
+
+*The half-point that was not there.* Splitting the bank-closed leg back out was
+expected to recover most of the loss and recovered about a fifth of it. With ten
+ports over four banks, **most misses are conflict misses**, so the leg that pays
+is the common one. The refinement is kept because it is free, but the honest
+price of this fix is ~2.7% of SDRAM throughput, and it should be quoted that way
+rather than as "noise" -- which is what it was called before it was measured.
+
+*Standing note for the arbiter.* R108 and the port-count work already establish
+this datapath as the binding timing constraint, and every added port widens it.
+`cmd` is the endpoint that matters; anything combinational from `xfer_addr` to
+it will be the critical path again.
+
+---
+
+**R138 - THE WALK STOPPED AT FRAME 141 ON OPCODE 0x0e, `test`. IT IS THE
+SELF TEST, IT WRITES NOTHING, AND THE WALK OWES IT ONLY ITS LENGTH.**
+
+Read off the board over UART, unchanged across 45 seconds:
+
+    H 00050000 008D000E
+      ops  objs  frames unknown
+
+`dbg_walk_unknown` is **the opcode, not a count** -- `m2_geo.sv` assigns
+`{3'd0, w_op}`. So: 141 walks completed, then a walk that retired 5 opcodes hit
+**0x0e** and halted, and stayed halted. R130's note that the walk "halts on
+test by design rather than desynchronising" did exactly what it said.
+
+*What `geo_test` is.* From `model2_v.cpp`: a 1,2,4,8... ramp checked through the
+FIFO, then a list of polygon-ROM blocks checksummed. **It returns no value,
+writes no register and touches no geometrizer state.** A failure only
+`logerror`s in MAME and lights an LED on the real board. So the walk's entire
+obligation is to consume the right number of words:
+
+    32 words    FIFO ramp
+     + 1 word   block count
+     + 3*blocks address, count, checksum
+
+*Why it needed its own state.* The count sits at operand offset **32**, behind
+the ramp. Every other count-driven command carries its count at offset 0 or 1,
+which is what the `preop`/`mult` table expresses; `test` is the one length that
+table cannot describe. `W_TFIFO` steps the ramp, then falls into the existing
+`W_CNT` with a multiplier of 3.
+
+*Verified.* `tb_m2_geo` walks a list carrying `test` with **0, 1 and 40 blocks**
+and retires exactly the expected opcode total, `unknown` clear. The opcode total
+is the sharp check, not a bonus one: a wrong skip length desynchronises the
+remainder of the list, which is how the off-by-one in R130 read as 1093 opcodes
+against an expected 101.
+
+*The second fact in that telemetry, and it is the more important one.*
+`dbg_walk_objs` is **cumulative and reads 0**. Across 141 frames the walker has
+never seen a single `object_data`. Those frames were trivial lists. **No
+geometry has been walked yet at all** -- so nothing downstream of the walker,
+the transform stage included, has been exercised by the hardware even once. The
+walk reaching `test` is the first frame that carries real content.
+
+*Still not covered:* 0x02/0x12 `direct_data`, whose length is set by a while
+loop terminating on an operand's low bits. It has not appeared. The walk still
+halts on it by design, and `dbg_walk_unknown` will name it if it does.
+
+---
+
+**R139 - R135 WAS WRONG. ENABLING BUFFERRAM WAS A REGRESSION, AND A WORKING
+BUILD FROM NINETY MINUTES EARLIER WOULD HAVE SHOWN IT.**
+
+R135 concluded "BUFFERRAM IS NOT BROKEN. It never was after R133", and explained
+the stop at attract frame 1 as the game waiting for geometry. **Both halves of
+that are wrong.** Established by flashing the backups in order:
+
+    Model2.rbf.good     a734d0d5  08-31 12:56   attract cycles, INSERT COIN
+                                                flashes, coins accepted,
+                                                selection screens reached
+    Model2.rbf.attract  3307dcc5  09-02 22:09   cycles attract
+    (a9ace86            09-02 23:53   BUFFERRAM 1'b0 -> 1'b1)
+    build 53 onward               09-03         stuck at attract frame 1
+
+`a9ace86`'s only functional change is that one parameter. `118cb77` -- R133's
+copro memory map, which made the coprocessor write buffer RAM for real --
+predates the WORKING `.attract` build, so the copro's writes are not the cause.
+
+*Measured, not remembered.* The i960's instruction pointer, sampled over UART:
+
+                        distinct IPs   top IP's share
+    good  a734d0d5           823        367 / 12,935
+    broken 4cdd444a          174     10,642 / 16,972 at 0x1166C alone
+
+63% of samples at one address, 76% at two. The broken build spins; the good one
+executes broadly. The spin's last address is 0x016FFFF8 -- inside buffer RAM.
+
+*The mechanism, and why it only bites with BUFFERRAM on.* Unwritten SDRAM reads
+0xFFFFFFFF. Bit 31 set means JUMP, so the walker jumps, lands on another
+0xFFFFFFFF, and jumps again -- re-entering `W_FETCH` without ever passing
+through `W_SKIP`, which was the only place the `w_ops` bound was checked. The
+walk never terminated and held `rd_req` asserted permanently against SDRAM
+port 9.
+
+With **BUFFERRAM off** the i960's writes never reach SDRAM, so buffer RAM stays
+uniformly 0x07800f0f -- an `end` -- and every walk stops on its first word. With
+it **on**, the game's real display lists arrive and the walk runs for real. The
+parameter did not break the mapping; it delivered the input that exposed an
+unbounded loop.
+
+*Corrected in `m2_geo`:* the bound is now tested in `W_FETCH`, where the jump
+re-enters, not only in `W_SKIP`. `tb_m2_geo` feeds a walk nothing but
+0xFFFFFFFF and requires it to stop requesting; **that test was confirmed to FAIL
+with the bound removed and pass with it in**, so it tests the fix rather than
+agreeing with it.
+
+*The method failure, and it is the same one R135 itself named.* R135 was written
+from telemetry -- `in_pushed`/`out_pushed`/`out_popped` all climbing -- and
+concluded the pipeline was healthy. Three counters going up says traffic exists,
+not that the machine is further along than it was. **The previous build was
+sitting on the board's SD card the whole time and was never flashed back for
+comparison.** A regression is established by running the older build, not by
+reasoning about the newer one. R135's own closing lesson was "nobody asked what
+was on the screen"; this is that lesson again, one build later.
+
+---
+
+**R140 - "THE SCREEN IS THE ONLY OUTPUT CHANNEL" HAD A PREMISE, AND THE PREMISE
+IS NOW FALSE. THE DEBUG INSTRUMENTS COST 626 ALM AND ARE NOW COMPILE-TIME.**
+
+The standing rule in `docs/` reads:
+
+> The screen is the only output channel. No serial, no printf, no debugger.
+> Build the debug overlay early and render hex digits, not blocks.
+
+It is why `m2_diag` exists, and building it early was right. But it rests on a
+premise -- that nothing except the screen can reach a running board -- and that
+premise no longer holds. **UART reaches `/dev/ttyS1` at 115200 over ssh with no
+cable attached**, because `UART_TXD` has no pin assignment and is
+`cyclonev_hps_interface_peripheral_uart`. R136, R138 and R139 were every one of
+them established from that serial link, not from the overlay:
+
+    R138   the walk halting on opcode 0x0e, read straight off the H line
+    R139   823 distinct i960 IPs on the good build against 174 on the broken
+           one, 63% of them at a single address -- the regression, measured
+
+*What they cost, measured rather than estimated:*
+
+    m2_diag:u_diag             443.5 ALM
+    m2_dbg_stream:u_dbg_stream 182.9 ALM
+                               ------
+                               626.4 ALM   of 41,910 on the part
+
+The first estimate offered for this was "~100-300, probably", made by reading
+the entity table for the wrong module name and guessing at the rest. The real
+number is roughly double the top of that guess. **The overlay was a separate
+entity all along and could have been measured in one command.**
+
+*Amended, not dropped.* Both instruments stay in the source and ON BY DEFAULT.
+A `M2_NO_DEBUG` Verilog macro compiles both out for an area-constrained build:
+`m2_diag` is a pass-through filter, so its absence is three wires, and
+`UART_TXD` ties idle-high. Both configurations lint clean.
+
+*Why it is amended this way and not by deleting them.* Debug is scaffolding and
+a build that only plays the game should not carry it -- but the rule exists
+because instruments get cut first and regretted later, and this session is the
+argument for keeping them: the machine has been diagnosed three times today by
+exactly these two modules. The switch makes the cost optional. It does not make
+the instruments optional while the transform stage is unbuilt.
+
+*Standing note.* The fit question is whether the i960 and the renderer land
+under ~25,000 ALM together. 626 ALM is real against that number, and so is
+`MISTER_DISABLE_YC` (enabled) and `MISTER_DISABLE_ALSA` (251.5 ALM, HPS-sourced
+audio only -- `core_l`/`core_r`, the analog jack, HDMI and S/PDIF are all
+outside its guard and unaffected).
+
+---
+
+**R141 - IT IS THE CPU'S *READS* OF BUFFER RAM, NOT THE MAPPING AND NOT ANYTHING
+WRITING TO IT. `BUFFERRAM_WRONLY` RESTORES THE MACHINE AND WAKES THE WALKER.**
+
+Four builds of single-variable bisection, each measured on the board by the
+i960's instruction-pointer spread over UART:
+
+    build                          distinct IPs   top IP's share
+    .attract   BUFFERRAM off             823       367 / 12,935
+    a9ace86+   BUFFERRAM on              174    10,642 / 16,972  (63% at 0x1166C)
+    35d991a9   on, copro writes OFF      --     unchanged, still spinning
+    2ae6f8fc   on, WRONLY (reads -> 0)  1,174     1,058 / 15,084  (7%)
+
+`BUFFERRAM_WRONLY` maps buffer RAM and lets the i960's WRITES land, while its
+READS return 0 exactly as the unmapped path did. **The spin at 0x1166C
+disappears and the attract sequence runs -- flashing text confirmed on the
+screen.** The CPU executes over a wider address range than the known-good build.
+
+*What this eliminates, all of it measured rather than argued:*
+
+    buffer RAM uninitialised   NO -- bi_* fills 0x07800f0f, cpu_rst_n waits on bi_done
+    region overlap             NO -- GAME_CHAR ends exactly at GAME_BUFFER
+    base_buffer disagreement   NO -- one constant, bridge, geo and copro alike
+    write/read reordering      NO -- one port, four-phase handshake
+    the walker hogging SDRAM   NO -- it bounds out; masks fixed regardless
+    the COPROCESSOR's writes   NO -- disabled on hardware, still spun (35d991a9)
+    geo front door addressing  by INSPECTION only -- (ptr & 0x1ffff) >> 1 is
+                               right, but no build has taken these writes away
+
+What remains is what the i960 gets back when it READS buffer RAM -- and the
+GEO FRONT DOOR IS STILL A CANDIDATE FOR PUTTING IT THERE. `BUFFERRAM_WRONLY`
+does not clear it: the front door writes through the shared SDRAM write port,
+not through the bridge, so those writes still happen in 2ae6f8fc. They simply
+became invisible, because the CPU can no longer read them back. The copro test
+(35d991a9) disabled the COPROCESSOR's writes only and left the front door
+running.
+
+ANSWERED, 23493a75: BUFFERRAM fully on with the front door's writes disabled,
+and the board still stuck at frame 1 with no flashing text. **So both writers
+are now cleared by experiment, and NOTHING that writes buffer RAM is at fault.
+The i960's READ path is.**
+
+Five builds of elimination could not say WHAT it reads, only that reading is
+what breaks it. The bridge has captured the answer all along -- `dbg_last_dout`,
+the data returned by the last SDRAM read -- and Model2.sv wires it to
+`cpu_dbg_ldout` but streams `cpu_dbg_laddr` instead. The address has been a
+constant 0x016FFFF8 in every capture, so it carries no information the data
+would not. Swapped.
+
+*And the walker came alive.* `dbg_walk_frames` had been frozen at 139/141 in
+every build today; it now climbs -- 0x53, 0x59, 0x69, 0x6F across one capture.
+`ops` is 1 and `objs` still 0, which is consistent: each walk reads one word,
+finds the 0x07800f0f `end` the initialiser wrote, and stops. The game has not
+pushed real geometry this early in attract.
+
+*Why this is not the fix.* Real hardware lets the i960 read buffer RAM back --
+MAME maps it `.ram()` at 0x00900000 with no such asymmetry. WRONLY is a
+diagnostic that names the half at fault, and it may serve as a working
+configuration for the transform-stage work in the meantime, because the CPU's
+writes still reach SDRAM and the walker reads SDRAM directly rather than through
+the bridge. It must not be mistaken for correct.
+
+*Method note.* Simulation could not answer this. The boot harness had never run
+with BUFFERRAM on at all -- the bridge defaults it off and no harness overrode
+it -- so every green run tested the working configuration. Made switchable, and
+with buffer RAM initialised to match hardware, it still could not: the first
+divergence between the two configurations lands at instruction 697,522 inside
+the DPRAM poll at 0x228xxx that `tools/i960-diff.sh` already documents as
+unmodellable. **Four hardware builds settled what the simulator was structurally
+unable to reach.**
+
+---
+
+**R142 - THE GAME POLLS A MAILBOX AT 0x91FFF0 FOR ZERO, AND THE COPROCESSOR IS
+SUPPOSED TO CLEAR IT. `.attract` WAS NOT WORKING -- IT WAS SKIPPING THE
+HANDSHAKE.**
+
+Disassembled from the real program ROM through MAME's debugger, at the address
+the board has been spinning on all day:
+
+    0001166C: ld      0x91fff0,r3
+    00011674: cmpibne 0,r3,0x1166c      loop back unless r3 == 0
+    00011678: ld      0x91fff4,g0       then read the results
+    00011680: ld      0x91fff8,g1
+
+The i960 writes a command block, **waits for 0x91FFF0 to become ZERO**, and then
+reads two result words above it. 0x91FFF0 is buffer RAM byte offset 0x1FFF0 --
+dword 0x7FFC -- which is exactly the `0x016FFFF8` word address every UART
+capture reported. The coprocessor's banked window reaches the same dword
+(R133), and on real hardware the TGP is what clears it.
+
+*Why every build since a9ace86 spun.* `bi_*` initialises buffer RAM to
+0x07800F0F, which is not zero, and nothing in this core ever writes 0 to dword
+0x7FFC. The compare never falls through.
+
+**`.attract` WAS NEVER WORKING. It was skipping a synchronisation point.** With
+BUFFERRAM off the read returned a deterministic 0, which the poll read as "the
+coprocessor has finished" on every single pass. The game ran ahead of a
+handshake it was supposed to wait at. That is why enabling the mapping looked
+like a regression (R139): it was the first build in which the game actually
+ENFORCED the handshake, and this core does not satisfy it. `BUFFERRAM_WRONLY`
+(R141) restored the machine by the same accident, not by fixing anything.
+
+*What this costs the earlier entries.* R139 called enabling BUFFERRAM "a
+regression"; it is better described as the removal of an accident that was
+masking a missing feature. R141's isolation was correct in every step -- writes
+cleared by experiment, reads at fault -- and aimed at the wrong subsystem: the
+read path is fine and returns exactly what is in memory. Five hardware builds of
+elimination narrowed the question correctly and could not answer it, because the
+answer was not in our RTL at all. **One disassembly of the reference did what
+five builds could not, and it was available from the first hour.**
+
+*Standing lesson, and it is the third time this project has paid it.* R128
+inferred a design from a write histogram without reading the handler. R135
+declared a pipeline healthy from three counters without asking what was on the
+screen. This is the same failure once more: the board was telling us WHICH
+address it was stuck on from the very first capture, and nobody disassembled it.
+**When the machine names an address, disassemble it before theorising about the
+subsystem that serves it.**
+
+*What is actually needed.* The coprocessor must complete its mailbox: write 0 to
+buffer-RAM dword 0x7FFC when a command finishes, and the two result words the
+game reads at 0x91FFF4/0x91FFF8. The copro's write path into buffer RAM already
+exists and is correctly addressed (R133); what is unestablished is whether our
+TGP ever executes the microcode that performs the write. That is the next
+question, and it is a TGP question, not a bridge one.
+
+---
+
+**R143 - THE COPROCESSOR *DOES* WRITE THE MAILBOX, AT THE RIGHT ADDRESS, BOTH
+HALVES. R142's REMAINING QUESTION IS ANSWERED AND THE FAULT IS NARROWER AGAIN.**
+
+Measured on the board with the write probe finally wired (a36cc9e0), one
+40-second capture:
+
+    C 000002B0 0000FFF9      count 688,  last write word 0xFFF9
+    C 000002B2 0000FFFB
+    C 00000436 0000FFF9      count 1078 -- climbing throughout
+
+`bufw_addr` is `{win_adr[14:0], wr_hi}`, so word 0xFFF8/0xFFF9 is dword 0x7FFC
+-- **exactly the mailbox the game polls at 0x91FFF0** (R142). The coprocessor
+reaches it, repeatedly, at a rate of roughly ten writes a second.
+
+*The odd addresses are a sampling artifact, not evidence.* Every captured
+address is odd -- 0xFFF9, 0xFFFB, never 0xFFF8 -- which looks like the low half
+never being written and the dword therefore keeping 0x0f0f from the initialiser.
+It is not. `m2_tgp`'s handshake writes `wr_hi = 0` FIRST and flips to 1 after
+the acknowledge, so the low half leads and the high half is simply the one still
+latched when the slow profiler tick samples. **A probe that latches on every
+event and is read at a fraction of the event rate reports the last event, not
+the representative one.** Confirmed by reading the RTL, not by reasoning from
+the capture.
+
+*What this retires.* "Our coprocessor never writes buffer RAM" (stated from the
+1a66f6ae capture) was wrong twice: the probe was not wired to the stream at all
+in that build, and the count it appeared to show was `cpu_dbg_ip`, which read
+zero because the CPU was not running. The copro writes, at the right address,
+both halves.
+
+*What is left.* The game waits for the dword to read ZERO. The copro writes it
+and the game still spins, so the remaining possibilities are narrow:
+
+    1. the VALUE written is not zero -- our TGP computes a different status
+    2. the write does not reach SDRAM -- it is counted at the module boundary,
+       and nothing yet confirms it survives the shared write port
+    3. the game needs more than the flag -- the two result words at 0x91FFF4
+       and 0x91FFF8 are read immediately after the poll falls through
+
+The next probe is `bufw_data` for writes to 0xFFF8/0xFFF9 specifically, which
+separates (1) from (2) in one build. Reading the SDRAM word back would separate
+(2) as well.
+
+*Method note, and it is the same one three entries running.* The count field and
+the address field came from the same probe in the same build; one was
+informative and the other was misleading, and only reading the RTL distinguished
+them. A measurement is not evidence until the thing that produced it is
+understood -- R128 (histogram without the handler), R135 (counters without the
+screen), R142 (address without the disassembly), and now a sampling rate without
+the handshake.
+
+---
+
+**R144 - THE MAILBOX PROTOCOL, FROM THE ROM AND FROM MAME. THE CPU SETS IT TO
+0xFFFFFFFF AND THE TGP CLEARS IT TO EXACTLY ZERO, ~17 TIMES A SECOND.**
+
+Disassembled just above the poll (R142):
+
+    00011638: subo    1,0,r3          r3 = 0xFFFFFFFF
+    0001163C: st      r3,0x91fff0     the CPU SETS the mailbox non-zero
+    00011650: lda     0x17ffc,r3
+    00011658: st      r3,(g11)[g12]   command words to the copro FIFO
+    0001166C: ld      0x91fff0,r3
+    00011674: cmpibne 0,r3,0x1166c    wait for the copro to clear it
+    00011678: ld      0x91fff4,g0     then two result dwords
+    00011680: ld      0x91fff8,g1
+
+Confirmed live in MAME with i960-side watchpoints over 3 s of emulation:
+
+    CPU W mbox=FFFFFFFF   x51
+    CPU R mbox=FFFFFFFF   x12,112      the poll
+    CPU R mbox=00000000   x50          the copro cleared it -- 50 handshakes
+
+So the correct clearing value is **exactly 0**, the handshake completes about
+17 times a second, and the TGP also produces two result dwords at 0x7FFD/0x7FFE.
+R143's capture had our copro writing words 0xFFF9 AND 0xFFFB -- dwords 0x7FFC
+and 0x7FFD -- at ~10/s, which is the same shape at a comparable rate.
+
+*What is therefore left, and one build separates all three:* our TGP writes a
+non-zero value; or its 0 lands BEFORE the CPU's 0xFFFFFFFF and is overwritten;
+or the 0 never reaches SDRAM. The probe streams `tgp_mbox` (what the copro
+wrote, both halves) beside `cpu_dbg_ldout` (what the CPU reads back).
+
+*Ruled out by inspection while waiting.* `ACK_HOLD = 2` in m2_sdram: the write
+acknowledge is two fast cycles wide, exactly like the reads, so a 2:1 slow
+sampler sees it for one slow cycle and a stale ack cannot retire the high half
+early.
+
+*A real defect found on the way, NOT the cause of this bug, recorded so it is
+not lost.* The shared SDRAM write port has five requesters -- loader, `bi_*`,
+`st_*`, the geo front door, the copro -- and ONE acknowledge, `ldr_wr_ack`,
+qualified only by the copro. The geo front door takes it raw. The mux
+`tgp_bufw_req_r ? ... : geo_sd_busy ? ...` lets the copro preempt a geo write
+in flight; whichever address was on the bus is written and BOTH requesters
+retire. It cannot be today's cause -- with geo masked (23493a75) the copro had
+the port alone and the game still spun -- but it will corrupt display lists
+the moment real geometry and copro results flow together. Needs a lock or
+per-requester acks. Left unfixed on purpose: one variable per build.
+
+---
+
+**R145 - THE FITTER "CRASHES" WERE EXIT-TIME TCL TEARDOWN FAULTS AFTER A
+SUCCESSFUL FIT. EVERY ONE OF TODAY'S TWELVE WAS RECOVERABLE, AND THE SWEEP HAD
+BEEN THROWING THEM AWAY.**
+
+Twelve of ~26 fits today ended `*** Fatal Error: Segment Violation`. Every one
+had the same signature: the last fitter message was `Generated suppressed
+messages file` -- the end of the run -- and the top stack frame was
+`ATCL_OBJ::tcl_freeInternalRepProc`, a Tcl object free during shutdown. And
+every one had already written
+
+    Fitter Status : Successful
+
+to `Model2.fit.summary`. The placement and routing were done; the process died
+freeing memory on the way out. `s101`, reported as a crash, ran `quartus_sta`
+by hand and closed at **+0.479 -- the best slack of the day.**
+
+*Why the sweep lost them.* The per-seed subshell inherits `set -e`, so the
+fit's non-zero exit aborted it before `quartus_sta` ever ran, and the summary
+line then said "Segment Violation" beside an empty result. **The exit code was
+being read as the verdict; the verdict was in the summary file.** Fixed: the
+sweep now ignores the fit's exit status, requires `Fitter Status : Successful`,
+and runs STA on that. A seed is reported as a crash only when the fit is
+genuinely incomplete.
+
+*The suspected cause, and it is cheap to test.* Every Quartus run opens with
+
+    qenv.sh: warning: setlocale: LC_CTYPE: cannot change locale (en_US.UTF-8)
+
+because that locale is not installed on this machine -- `locale -a` has only
+`C.utf8`, and the shell is `en_GB.UTF-8`. A failed locale is a classic source of
+Tcl teardown faults. The sweep now exports `LC_ALL=C` for every Quartus
+invocation; whether the crash rate drops is measured, not assumed. It was also
+the "~1 in 3" instability this project had recorded as a fact of the tool.
+
+*Standing note.* This project's recorded crash rate, and the seed-sweep tooling
+built partly to absorb it, both rested on reading an exit code. Half of today's
+compute was spent re-fitting designs that had already fitted.
+
+---
+
+**R146 - THE EMPTY COMMAND FIFO MUST READ ZERO. THE PARAMETER EXISTED, THE
+REASON WAS WRITTEN DOWN, AND THE INSTANTIATION PASSED THE WRONG VALUE ANYWAY.**
+
+`m2_copro.sv` carries a comment saying `EMPTY_FIFO_READS_ZERO` **must be set**,
+that leaving it default "cost a whole session", and -- verbatim -- "the
+parameter was written, the reason was written down, and the instantiation never
+passed it." The line immediately beneath it read:
+
+    m2_tgp #(.EMPTY_FIFO_READS_ZERO(1'b0)) u_tgp (
+
+which is the default the comment names as the fault. **The note was written; the
+value was never changed.** Reading a comment is not reading the value beside it.
+
+*Why zero is right.* `gen_fifo.h`'s `pop()` returns `T()` on an empty FIFO and
+never stalls. Daytona's microcode needs that zero: `0052 brul alw d` jumps to
+`d = get_exp(b) + 0x53`, so an empty pop gives 0x53, the IDLE handler. A TGP
+that stalls instead cannot reach its own idle path and parks at 004C -- which
+is precisely where MAME's TGP sits between commands.
+
+*A SECOND defect on the same path, found while fixing the first.* Even with the
+parameter set, the combinational read was wrong:
+
+    fifo_rdata = popped ? pop_data
+               : (fifo_in_valid || EMPTY_FIFO_READS_ZERO) ? fifo_in_data : 32'd0;
+
+The parameter only ever meant "do not stall", but it was wired into the DATA mux
+as well, so an empty pop completed and handed back **stale `fifo_in_data`**. The
+latched path had it right (`fifo_in_valid ? fifo_in_data : 0`) and the
+combinational one did not -- and the acknowledge is combinational, so the core
+can take the stale word in the same cycle. Now `fifo_in_valid ? fifo_in_data :
+32'd0` unconditionally.
+
+*THE MODEL 1 CROSS-CHECK, AND IT CARRIES A WARNING WE MUST HEED.* Model 1 runs
+the same MB86233 and reached this conclusion first. Its `m1_tgp.sv` header says
+the behaviour is CORRECT and keeps it OFF on purpose:
+
+    BUT TURNING IT ON DEADLOCKS THE MACHINE, on the board and in simulation.
+    Unparking the coprocessor means it starts PRODUCING results, and our V60
+    never drains them: `fout` fills at ~400 M cycles, the TGP then stops taking
+    commands, `fin` fills, and both halt permanently around frame 340.
+    FLIP THIS TO 1 WHEN THAT IS FIXED.
+
+Their `520cf6a` proved that state inescapable: fin full and fout full refuse
+each other with no external event to break it.
+
+*Why we may nonetheless be able to afford it.* The precondition Model 1 is
+waiting on is a consumer that keeps up, and ours appears to. R135 measured the
+i960 draining results as fast as the TGP produces them -- `out_pushed`
+2149->2173 against `out_popped` 2036->2057 over the same capture. Model 1's V60
+is 1.63x too slow; our i960 is not.
+
+*THE OBJECTION HAS SINCE BEEN RETRACTED AND ITS PRECONDITION FIXED.* Two later
+Model 1 findings settle it:
+
+  * `520cf6a` re-examined the deadlock and concluded it is **"probably not the
+    crash"** -- the hardware signature was the TGP stalled at 004C on an EMPTY
+    command FIFO, "the opposite of the state proven here", and "the evidence
+    still points at the V60 going wrong first."
+  * The note's own escape clause is "FLIP THIS TO 1 WHEN THAT IS FIXED", the
+    "that" being the V60's speed deficit. `docs/INCREMENTAL.md` rungs 3 and 5
+    (FP pipelining, multiplexer reduction) both landed WORKING, and 2:1 took the
+    board from ~46% to ~97% of hardware speed, swaps 13-14 -> 27-29. **The
+    consumer now keeps up.** Model 1 has simply not gone back to flip it.
+
+So the one recorded objection was a consumer that could not drain results, and
+neither project has that consumer any more.
+
+**It remains a calculated risk with a named failure mode.** The signature to
+watch for is NOT the present stuck-at-frame-1: it is everything freezing
+together -- TGP retires stopping first, then the CPU stalling. If that appears,
+the fix is not wrong, the drain rate is, and the answer is the interlock work
+Model 1 describes rather than reverting to a value the reference calls incorrect.
+
+*Method note.* This is the second time today that reading the reference answered
+in minutes what hardware bisection could not (R142 was the first). It is also
+the second time a fix was found sitting UNAPPLIED beside its own explanation --
+R136's Makefile lists were defined below the rules that used them, and this
+parameter was documented and then passed wrong.
+
+---
+
+**R147 - LESSONS CARRIED OVER FROM THE MODEL 1 CORE, NOT CODE. SEVERAL OF THEM
+NAME FAILURES THIS PROJECT COMMITTED TODAY.**
+
+`tools/model1-ref` is a read-only mirror and nothing is lifted from it. What
+transfers is what its commit messages measured on the same device. Read at
+`incremental` (`aeb91d7`), `docs/INCREMENTAL.md` and the copro history.
+
+**1. One change per build, from a confirmed base, with the hardware result in
+the commit message.** Their rule, verbatim: *"Do not add the next change until
+the current one is confirmed and committed... Two days were spent flashing
+images containing eight changes at once and attributing each black screen to
+whichever piece had been touched most recently. Five different 'found it'
+moments all produced the same black screen, because the experiment could not
+distinguish them."*
+
+*We did this today.* `1a66f6ae` black-screened carrying walker fixes, YC, ALSA
+and a debug refactor at once, and it is STILL unattributed. The seed sweep makes
+four seeds cheap and made stacking changes feel cheap too; it is not.
+
+**2. A change present in every failing image is not thereby the cause.** 2:1 sat
+under suspicion for two days for exactly that reason; the bisect found the DATA
+CACHE. Their file now says in capitals that 2:1 has never been shown to fail.
+*We did this today too* -- the coprocessor's buffer writes were suspected on
+commit order alone and cleared only when a build finally tested them.
+
+**3. Staging must be cleared, and a stale file that still ELABORATES is worse
+than one that fails.** `tools/mister_project.sh` left `dbg_dc_dropped` from
+another branch in the staging copy; 102 errors was the lucky outcome. *Ours
+stages fresh (`rm -rf "$d"`) but SYMLINKS `rtl/`, so an edit made mid-fit is
+silently picked up by a later stage of the same build.* That cost a fit today
+when a walker edit landed after map had run. Fresh staging is not the same as a
+frozen source tree.
+
+**4. Telemetry that has never been read is not telemetry.** Their data cache
+carried `dbg_hits`, `dbg_misses` and `dbg_dropped` and *"NONE has ever been read
+on hardware"*, which is why its fault stayed unexplained. Compare R143: our
+copro write probe was not wired to the stream at all, and a value was reported
+from it anyway.
+
+**5. Standalone area estimates under-predict, and occupancy changes packing.**
+Their V60 rung measured -530 ALM standalone and -1,947 integrated -- a factor of
+three, in the unexpected direction -- because dropping from 98% to 93%
+occupancy gave the fitter room. Any ALM number this study quotes from a
+standalone `make quartus MOD=` is a lower bound on the integrated change, not an
+estimate of it.
+
+**6. A marginal slack figure may be placement, not design.** Four seeds on
+identical RTL spread 0.11 ns (-0.077, -0.037, +0.014, +0.035). *And a low
+positive number is not itself a fault*: Ben reports +0.012 running on the board.
+The black screen blamed on +0.081 today was blamed wrongly.
+
+**7. Two findings that are ours to use directly.** The empty-FIFO fix is correct
+behaviour and its one recorded objection has been retracted (R146). And the
+coprocessor ratio: the real board is a 50 MHz MB86234 against a 25 MHz i960, and
+**this core already runs exactly that** -- `clk_sys` 50 MHz for the copro,
+`clk_i960` 25 MHz -- where Model 1 had to retrofit 2:1 onto a 1:1 arrangement.
+`Model2.sv` said 48/24 in four comments; stale, and corrected.
+
+---
+
+**R148 - THE COPROCESSOR IS HEALTHY. THE i960 NEVER ASKS IT ANYTHING. THE DAY'S
+INSTRUMENTATION WAS AIMED ONE STAGE TOO FAR DOWNSTREAM.**
+
+Measured in the boot harness with BUFFERRAM on, 12 M instructions:
+
+    FIFO in pushed    4          MAME: 257,709
+    TGP popped        4          MAME: 484,947
+    TGP retires       7,159      idling correctly
+    TGP data-RAM init matches MAME word for word
+
+*The coprocessor is not broken.* Its init writes match the reference exactly --
+`[000]=0 [001]=1 [002]=ffffffff [004]=3f800000 [005]=bf800000 [006]=f [007]=130`
+-- and its steady loop is the genuine idle path:
+
+    004c mov rf1,b -> ... -> 0057 brul alw d -> 0058 -> 00b5 mov rf1,d
+    00b6 mov rf1,a -> 00b7 fadd -> 00b8 mov d,rf2 -> 00b9 brif alw #0x4c
+
+With an empty FIFO B is 0, `0053 brif !zrd #0xa1` does not branch, and the
+computed jump `d = get_exp(B) + 0x58` lands on 0x58 -- the idle handler, which
+reads two empty operands, adds them and pushes zero. Ours pushes 132 zeros;
+MAME idles pushing zeros from the same path. **This is correct behaviour.**
+
+*What the i960 actually sends.* Four words in the whole run:
+
+    04000001  12802525  12802525  12802525
+
+These are FUNCTION-PORT words -- the command code lives in bits 30:23 -- with
+**no float payload behind them.** MAME's first batch is
+`3f9e5556 3f5a7171 4260e0e2 42e00000 4289898a 430a7e7e`, real geometry operands,
+and it writes the FIFO port 173,552 times against 6,979 function-port writes.
+Ours writes the FIFO port essentially never.
+
+**So the coprocessor is not failing to answer. It is being asked the wrong
+question.** Compared word for word against MAME, before the first mailbox poll:
+
+    ours   04000001  12802525  12802525  12802525            (4 words)
+    MAME   BF600010  00000000  00000000  41000000  00000000
+           3B8E38E4  438E8000  3F9E5556  3FB98E39  42E00000  ... (32 words)
+
+MAME sends 32 FLOAT operands; we send four words, three of them IDENTICAL, none
+of them a float. 0x12802525 decodes as function code 0x25 with payload 0x2525 --
+the same command three times, unchanged. The counter was checked before this was
+believed: `dbg_in_pushed` increments for both the FIFO port and the function
+port, so four is the true total.
+
+*This is a DATA divergence, not a control-flow one, and that is why nothing
+caught it.* `tools/i960-diff.sh` compares PROGRAM COUNTERS and was byte-perfect
+for 521,752 instructions. R133 already recorded the shape: "a processor can
+execute the right program and still read the wrong memory -- it produces wrong
+VALUES, not divergence." The same blind spot, a second time.
+
+The repeated identical word is the lead: it is what a loop looks like when the
+value it reads never changes.
+
+*The method failure, and it is the day's largest.* Every build from `35d991a9`
+onward instrumented the COPROCESSOR -- its buffer writes, its mailbox value, its
+all-ones reads by source, its retires and pc. The i960's push count was
+measurable in the harness the entire time and was not looked at until Ben said,
+repeatedly, that the CPU side was where the fault must be. **A stalled consumer
+and an unfed producer look identical from the consumer's side; only the producer's
+output rate distinguishes them, and it was never measured.**
+
+*Where the question now goes.* Why does the i960 stop after four command words?
+It is not held by the coprocessor -- measured, `i960 HELD by the copro for 0 of
+110,254,956 cycles (0.0%)`. R142's mailbox wait explains why it stops
+PROGRESSING, but not why it never fed the coprocessor before reaching that wait.
+The next comparison is the i960's own instruction stream against MAME's around
+the first function-port write, which `tools/i960-diff.sh` already does.
+
+---
+
+**R149 - THE COPROCESSOR RUNS AT FULL SPEED. FIVE CONCLUSIONS FROM 3 SEPTEMBER
+RESTED ON MISREAD INSTRUMENTS AND ARE RETRACTED HERE.**
+
+`dbg_retires` is a 16-bit counter that WRAPS, and says so two lines above its
+own increment. Reading its first and last values as a total gave "10,815 retires
+in 40 seconds -- 270 instructions per second, four orders of magnitude below
+MAME". Measuring the DELTA between consecutive samples instead:
+
+    delta per sample   12,963 (x6257)  12,964 (x2725)  12,962 (x1436)
+    samples per second ~377
+    => 12,963 x 377 = 4.9 M instructions/second
+
+**MAME's TGP runs 4.6 M/s. Ours runs 4.9 M/s.** It is not slow, not stalled and
+not deadlocked. It never was.
+
+*What that retracts, in order:*
+
+  1. "The coprocessor is frozen at 270 instructions/second" -- WRONG, wrapping
+     counter read as a total.
+  2. "A full output FIFO deadlocks the TGP (Model 1's 520cf6a shape)" -- WRONG,
+     built on (1). Simulation had already shown `WORDS DROPPED out=0`, i.e. the
+     output FIFO never fills, and that was noted and then reasoned past.
+  3. "Our i960 sends 4 wrong words where MAME sends 32 floats" (R148) --
+     UNSOUND. The capture is sampled a cycle off `obs_push_data`: the same run
+     reported `04000001` at 12 M instructions and `00000000` at 60 M from the
+     same PC, and a deterministic simulation cannot do that. The COUNT stands;
+     the VALUES do not.
+  4. "Commands are popped at instructions that never read the FIFO" -- WRONG,
+     that trace samples at PUSH time, so its program counters are wherever the
+     TGP happened to be, not pop sites.
+  5. "The copro never writes buffer RAM" (from 1a66f6ae) -- already retracted in
+     R143; the probe was not wired to the stream at all.
+
+*What survives, measured and reliable:*
+
+    the TGP runs at ~4.9 M instructions/second, in its idle loop
+    109 commands arrive and are popped -- none is dispatched
+    pc never reaches 00a1, the command path
+    the coprocessor never writes the mailbox at dword 0x7FFC
+
+*The live hypothesis, and it is arithmetic rather than a guess.* The idle loop
+reads the command FIFO THREE times per iteration -- `004c mov rf1,b` (the
+dispatch), then `00b5 mov rf1,d` and `00b6 mov rf1,a` (the idle handler's two
+operands). Only the first is a dispatch. At ~272,000 loop iterations a second
+against ~4 commands a second, a command is far likelier to be eaten as an
+operand than to be seen by the dispatch. MAME survives the same race by pushing
+144,000 words a second, so a large share land on `004c`. **If this is right, the
+fault is not in the coprocessor at all -- it is that our i960 sends four
+commands a second where the reference sends tens of thousands.**
+
+*THE STANDING LESSON, PAID FIVE TIMES IN ONE DAY.* R128 read a histogram without
+the handler. R135 read counters without the screen. R142 read an address without
+the disassembly. R143 read a probe that was never wired. R149 read a wrapping
+counter as a total. **Before any number is used as evidence, read the code that
+produces it.** Every one of these cost a build, a wrong conclusion recorded in
+this study, or both.

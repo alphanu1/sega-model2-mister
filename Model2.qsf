@@ -120,7 +120,7 @@ set_global_assignment -name ECO_OPTIMIZE_TIMING ON
 set_global_assignment -name PERIPHERY_TO_CORE_PLACEMENT_AND_ROUTING_OPTIMIZATION ON
 set_global_assignment -name PHYSICAL_SYNTHESIS_ASYNCHRONOUS_SIGNAL_PIPELINING ON
 set_global_assignment -name ALM_REGISTER_PACKING_EFFORT MEDIUM
-set_global_assignment -name SEED 4
+set_global_assignment -name SEED 162
 
 #set_global_assignment -name VERILOG_MACRO "MISTER_FB=1"
 
@@ -139,11 +139,45 @@ set_global_assignment -name SEED 4
 #use only 1MB per frame for scaler to free ~21MB DDR3 RAM
 #set_global_assignment -name VERILOG_MACRO "MISTER_SMALL_VBUF=1"
 
-# Disable YC / Composite output to save some resources
-#set_global_assignment -name VERILOG_MACRO "MISTER_DISABLE_YC=1"
+# Disable YC / Composite output to save some resources.
+# ENABLED. Measured on the Model 1 core: a small ALM saving and a large slack
+# gain, which is the ratio that matters here -- the fitter path is timing bound,
+# not area bound. YC is the composite/S-Video encoder in sys_top.v; nothing in
+# this core drives it and no output we use goes through it.
+set_global_assignment -name VERILOG_MACRO "MISTER_DISABLE_YC=1"
 
-# Disable ALSA audio output to save some resources
-#set_global_assignment -name VERILOG_MACRO "MISTER_DISABLE_ALSA=1"
+# Disable ALSA audio output to save some resources.
+# ENABLED, 251.5 ALM. ALSA is the HPS/Linux audio channel INTO audio_out's
+# mixer, not an output: `core_l`/`core_r` carry this core's sound and sit
+# outside the ifndef, and the analog jack is gated by MISTER_DUAL_SDRAM (not
+# set) rather than by this. HDMI, the 3.5mm jack and S/PDIF all keep working.
+# Model 2 has no CD or HPS-streamed audio, so nothing here ever fed it.
+set_global_assignment -name VERILOG_MACRO "MISTER_DISABLE_ALSA=1"
+
+# EXPERIMENT, NOT A FIX -- remove once it has answered.
+# Keeps BUFFERRAM on and takes away ONLY the coprocessor's writes into shared
+# buffer RAM. If 2D returns, the copro is corrupting the game's display list
+# and the mapping was never at fault. See R139/R141.
+# ANSWERED: with copro writes off the board still spun, so the coprocessor is
+# not corrupting the display list. Removed.
+#set_global_assignment -name VERILOG_MACRO "M2_NO_COPRO_BUFW=1"
+
+# EXPERIMENT, NOT A FIX -- remove once it has answered.
+# BUFFERRAM stays mapped and the CPU's WRITES still land, but its READS return
+# 0 exactly as in the working .attract build. Splits "the mapping is wrong"
+# from "what the CPU reads back is wrong" in one build.
+# ANSWERED: reads->0 restored the machine and woke the walker. It is the
+# i960's READS of buffer RAM at fault, not the mapping and not its writes. R141.
+#set_global_assignment -name VERILOG_MACRO "M2_BUFFERRAM_WRONLY=1"
+
+# EXPERIMENT, NOT A FIX -- remove once it has answered.
+# BUFFERRAM fully on (reads enabled again) with the geometrizer front door's
+# push DMA into buffer RAM disabled. The last writer of that memory not yet
+# cleared by experiment; same shape as the copro test that exonerated 35d991a9.
+# ANSWERED: with the front door's writes off the board still spun. NOTHING
+# that writes buffer RAM is at fault -- copro and front door both cleared by
+# experiment. The read path itself is. R141.
+#set_global_assignment -name VERILOG_MACRO "M2_NO_GEO_BUFW=1"
 
 source sys/sys.tcl
 source sys/sys_analog.tcl
@@ -509,3 +543,8 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/tgp/m2_tgp.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/tgp/m2_copro.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/tgp/m2_fifo_m10k.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_geo.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_raster3d.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_quad_store.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_raster_fill.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_raster_div.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_raster_band.sv

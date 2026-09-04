@@ -175,6 +175,75 @@ int main(int argc,char**argv){
     w = tail;
     for (int i = 0; i < 33; i++) { emit(0x0b, 12); want_ops++; }   // matrix
     for (int i = 0; i < 60; i++) { emit(0x01, 4);  want_ops++; want_objs++; }
+    // THE THREE FORMS THAT DIFFER ACROSS THE OPCODE HALVES. Keying the length
+    // on the low nibble gets all three wrong, and the board found the first of
+    // them: it halted on 0x06 with unknown_opcode set, which is how we learned
+    // the game's real list carries commands MAME's frame-900 snapshot did not.
+    list[w++] = 0x06u << 23; list[w++] = 0x33333333u; list[w++] = 4;   // 2 + 2*count
+    for (int i = 0; i < 8; i++) list[w++] = 0x44440000u + i;
+    want_ops++;
+    list[w++] = 0x16u << 23; list[w++] = 0x55555555u;                  // lod: 1 word
+    want_ops++;
+    list[w++] = 0x0du << 23; list[w++] = 0x66666666u; list[w++] = 3;   // 2 + count
+    for (int i = 0; i < 3; i++) list[w++] = 0x77770000u + i;
+    want_ops++;
+    list[w++] = 0x1du << 23; list[w++] = 2;                            // 1 + 3*count
+    for (int i = 0; i < 6; i++) list[w++] = 0x88880000u + i;
+    want_ops++;
+    list[w++] = 0x1eu << 23; list[w++] = 0x99999999u;                  // code_jump: 1
+    want_ops++;
+
+    // 0x0e test -- 32 + 1 + 3*blocks. THIS IS THE ONE THAT STOPPED THE BOARD:
+    // 141 frames walked, then dbg_walk_unknown reported 0x0e. Its count sits at
+    // operand offset 32, behind the FIFO ramp, not at offset 1 like every other
+    // count-driven command, so it is the one length the preop/mult table cannot
+    // express. Swept 0, 1 and 40 blocks -- 40 is an order of magnitude past any
+    // plausible list, per the standing rule that a test which only tries the
+    // believed value confirms it instead of testing it.
+    for (unsigned blocks : {0u, 1u, 40u}) {
+      list[w++] = 0x0eu << 23;
+      uint32_t ramp = 1;
+      for (int i = 0; i < 32; i++) { list[w++] = ramp; ramp <<= 1; }   // 1,2,4,8...
+      list[w++] = blocks;
+      for (unsigned b = 0; b < blocks; b++) {
+        list[w++] = 0x00100000u + b;   // address
+        list[w++] = 0x10u;             // count
+        list[w++] = 0xabcd0000u + b;   // checksum
+      }
+      want_ops++;
+    }
+
+    // 0x02/0x12 direct_data -- 8 words, then an attribute loop that ends when
+    // the low two bits are clear. Its length is data-dependent, which is why it
+    // was left halting; a loop is not the same as an unknown, and MAME's
+    // geo_process_command has no default case, so every opcode is measurable.
+    // Swept: no vertices at all, a lone tri, a lone quad, and a 30-vertex run
+    // alternating tri and quad -- an order of magnitude past a plausible strip,
+    // and it is the alternation that would expose a wrong per-vertex stride.
+    auto emit_dd = [&](uint32_t op, const std::vector<bool>& quads) {
+      list[w++] = op << 23;
+      list[w++] = 0x0aa00000u;                       // tpa
+      list[w++] = 0x0bb00000u;                       // tha
+      for (int i = 0; i < 6; i++) list[w++] = 0x0c000000u + i;   // two xyz points
+      for (bool q : quads) {
+        list[w++] = q ? 0x00ffff03u : 0x00ffff02u;   // attr: bit0 = quad
+        list[w++] = 0x0d000000u;                     // luma
+        list[w++] = 0x0e000000u;                     // distance
+        for (int i = 0; i < 3; i++) list[w++] = 0x0f000000u + i;      // xyz
+        if (q) for (int i = 0; i < 3; i++) list[w++] = 0x11000000u + i; // 4th pt
+      }
+      list[w++] = 0x00ffff00u;                       // terminator: low 2 bits clear
+      want_ops++;
+    };
+    emit_dd(0x02, {});                                        // no vertices
+    emit_dd(0x02, {false});                                   // one tri
+    emit_dd(0x12, {true});                                    // one quad
+    {
+      std::vector<bool> mixed;
+      for (int i = 0; i < 30; i++) mixed.push_back(i & 1);
+      emit_dd(0x12, mixed);
+    }
+
     emit(0x0f, 0);  want_ops++;                       // end
 
     d->rst_n = 0; for (int i = 0; i < 4; i++) tick(); d->rst_n = 1; idle(2);
@@ -192,6 +261,27 @@ int main(int argc,char**argv){
     ck("walk opcode count", d->dbg_walk_ops,  want_ops);
     ck("walk object_data count", d->dbg_walk_objs, want_objs);
     ck("no unknown opcode", d->dbg_walk_unknown, 0);
+  }
+
+  // UNWRITTEN MEMORY MUST NOT WALK FOREVER. SDRAM that nobody wrote reads
+  // 0xFFFFFFFF, bit 31 is set, and bit 31 means JUMP -- so every word is a jump
+  // and the walk re-enters W_FETCH without ever passing through W_SKIP, where
+  // the only bound used to live. MAME cannot reach this state because it fills
+  // bufferram with 0x07800f0f (an `end`) at reset; we can, and did.
+  {
+    d->rst_n = 0; for (int i = 0; i < 4; i++) tick(); d->rst_n = 1; idle(2);
+    d->frame_start = 1; tick(); d->frame_start = 0;
+    bool quiet = false;
+    int  idle_run = 0;
+    for (int i = 0; i < 400000; i++) {
+      d->rd_ack = 0;
+      if (d->rd_req) { d->rd_data = 0xFFFFFFFFu; d->rd_ack = 1; idle_run = 0; }
+      else if (++idle_run > 200) { quiet = true; break; }
+      tick();
+    }
+    ++checks;
+    if (!quiet) { std::printf("  FAIL walk never stopped on unwritten memory\n"); ++fails; }
+    else std::printf("  unwritten memory: walk bounded, stopped requesting\n");
   }
 
   std::printf("m2_geo: checks=%d fails=%d\n", checks, fails);

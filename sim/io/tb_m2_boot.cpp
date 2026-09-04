@@ -88,6 +88,7 @@ static int g_loopr = 0;
 static int g_ptrw = 0;
 static bool g_draw_seen = false;
 static uint64_t g_draw_insn = 0;
+static std::map<uint32_t, std::map<uint32_t,uint32_t>> *g_st1578 = nullptr;
 static bool     g_tram_seen[32768];
 static uint16_t g_pal[8192];
 static bool     g_pal_seen[8192];
@@ -121,6 +122,20 @@ int main(int argc, char **argv) {
   }
 
   mem.assign(size_t(1) << 25, 0xffff);
+
+  // BUFFER RAM IS INITIALISED ON HARDWARE AND WAS NOT HERE. Model2.sv's bi_*
+  // writer fills 65,536 words with 0x07800f0f before the i960 leaves reset
+  // (cpu_rst_n is gated on bi_done), because MAME does the same at reset and
+  // calls it "a sane default": 0x07800f0f decodes as opcode 0x0f, geo_end, so
+  // a walk starting anywhere in untouched buffer RAM stops on its first word.
+  //
+  // Without this the harness models neither the board nor MAME but a third
+  // thing -- mapped but reading 0xFFFFFFFF -- and any conclusion drawn from
+  // BUFFERRAM_EN=1 was about that third thing. The harness maps base_buffer at
+  // word 0x16d0000; Model2.sv uses 0x16f0000, and the two need not agree
+  // because each is self-consistent.
+  for (uint32_t i = 0; i < 65536; ++i)
+    mem[0x16d0000 + i] = (i & 1) ? 0x0780 : 0x0f0f;
 
   // Program ROM: two 16-bit halves at 32-bit stride, at GAME_PROG = word 0.
   for (size_t w = 0; w * 2 < lo.size(); ++w) {
@@ -338,6 +353,9 @@ int main(int argc, char **argv) {
   uint64_t uc_n = 0;
   std::vector<uint32_t> popvals, popA, popB, popD, popPC, popOP;
   std::vector<uint32_t> pushvals;
+  std::vector<uint32_t> pushpcs;
+  struct Disp { uint32_t pc, b, pop; };
+  std::vector<Disp> dbg_disp;
   uint32_t pushn_prev = 0;
   uint32_t popn_prev = 0;
   std::map<uint32_t,uint64_t> pop_pc_hist;
@@ -373,6 +391,26 @@ int main(int argc, char **argv) {
     }
     if (uint32_t(d->obs_copro_in) != pushn_prev) {
       pushn_prev = uint32_t(d->obs_copro_in);
+      // R148: WHERE the i960 is when it pushes. MAME pushes from 0x11C08 (the
+      // routine at 0x11BD4 loading a struct at g13+0x1c..), 0x178DC/E4 and
+      // 0x13C48..0x13DC4. Same PC with different data = wrong memory read;
+      // a different PC = the CPU took a different path.
+      if (pushpcs.size() < 300) pushpcs.push_back(uint32_t(d->obs_ip));
+      // R150: the dispatch at 004c pops into B; B != 0 branches to the command
+      // path at 00a1. Ours never reaches 00a1 despite 109 commands arriving.
+      // Record the TGP pc at every pop, and B just after, to see where the
+      // command actually goes.
+      if (dbg_disp.size() < 40) dbg_disp.push_back({uint32_t(d->obs_tgp_pc), uint32_t(d->obs_tgp_b), uint32_t(d->obs_pop_data)});
+    }
+    // R148: the table-upload loop at 0x1578 stores r14 to (g10)[g12] and MAME
+    // counts every one as a FIFO push; ours counts none. Record the bus address
+    // the i960 actually emits at that instruction, and at the two neighbours.
+    { static std::map<uint32_t, std::map<uint32_t,uint32_t>> st1578;
+      uint32_t ip = uint32_t(d->obs_ip);
+      if ((ip == 0x1578 || ip == 0x1508 || ip == 0x150c) && d->obs_bus_we) {
+        auto &m = st1578[ip]; if (m.size() < 8) m[uint32_t(d->obs_bus_addr)]++;
+      }
+      g_st1578 = &st1578;
       if (pushvals.size() < 300) pushvals.push_back(uint32_t(d->obs_push_data));
     }
     if (d->obs_tgp_unimpl) {
@@ -1563,6 +1601,12 @@ int main(int argc, char **argv) {
                 (unsigned long long)ldos_n, (unsigned long long)ldos_bad);
   std::printf("  bus address moved mid-transaction: %u times\n", d->obs_addr_moved);
 
+  // R142: the game polls buffer-RAM dword 0x7FFC for zero and spins forever
+  // because nothing clears it. On real hardware the coprocessor does. This says
+  // whether OUR TGP ever tries -- and if it writes buffer RAM at all.
+  std::printf("  COPRO buffer-RAM writes: %u   last word addr %08x   dword 0x7FFC hits: %u\n",
+              d->obs_bufw_count, d->obs_bufw_last, d->obs_bufw_7ffc);
+
   // WHAT THE CPU BUILT, so it can be compared against MAME's own dump rather
   // than guessed at from a photograph of a screen. The board shows white with a
   // brief flicker of colour; the question that answers is whether the palette
@@ -1733,6 +1777,10 @@ int main(int argc, char **argv) {
     std::printf("    copro_ctl1        %08x\n", (unsigned)d->obs_copro_ctl);
     std::printf("    program uploaded  %u words\n", (unsigned)d->obs_copro_prog);
     std::printf("    FIFO in pushed    %u\n", (unsigned)d->obs_copro_in);
+    { std::printf("    AT EACH PUSH: tgp pc / B / last pop  (MAME dispatches from 004c to 00a1)\n");
+      for (auto &e : dbg_disp) std::printf("      pc=%04x B=%08x pop=%08x\n", e.pc, e.b, e.pop); }
+    if (g_st1578) for (auto &e : *g_st1578) { std::printf("    STORE @%05x -> bus addr:", e.first);
+      for (auto &a : e.second) std::printf(" %08x(x%u)", a.first, a.second); std::printf("\n"); }
     std::printf("    FIFO out popped   %u\n", (unsigned)d->obs_copro_out);
     std::printf("    TGP retires       %u   pc=%04x%s\n",
                 (unsigned)d->obs_tgp_retires, (unsigned)d->obs_tgp_pc,
@@ -1752,7 +1800,7 @@ int main(int argc, char **argv) {
     { std::printf("    POP / B / D  (MAME: the pop lands in B, D = get_exp(B) + 0x58)\n");
       if (const char *qf = std::getenv("M2_PUSHLOG")) {
         FILE *g = std::fopen(qf, "w");
-        if (g) { for (auto v : pushvals) std::fprintf(g, "%08x\n", v); std::fclose(g);
+        if (g) { for (size_t k = 0; k < pushvals.size(); ++k) std::fprintf(g, "%08x @%08x\n", pushvals[k], k < pushpcs.size() ? pushpcs[k] : 0u); std::fclose(g);
                  std::printf("      push stream written (%zu)\n", pushvals.size()); }
       }
       if (const char *pf = std::getenv("M2_POPLOG")) {

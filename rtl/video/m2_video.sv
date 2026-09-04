@@ -177,11 +177,18 @@ module m2_video #(
   //
   // Twelve bits, saturating: a map holds at most 4,096 words, and telling nothing
   // from something is all this has to do. Two fit in one overlay row.
-  output logic [11:0] dbg_layer_have [4]
+  output logic [11:0] dbg_layer_have [4],
+  // THE BEAM POSITION, for the 3D layer's scan-out. The band buffers are read
+  // by pixel and row, so the renderer needs the same counters the tilemap
+  // fetch uses rather than a second set that could drift from them.
+  output logic  [9:0] vid_x,
+  output logic  [9:0] vid_y
 );
 
   // ------------------------------------------------------------- timing
   logic [9:0] hcnt, vcnt;
+  assign vid_x = hcnt;
+  assign vid_y = vcnt;
   logic [15:0] ovr_acc;     // overruns this frame, latched at vblank
   logic       hblank, vblank, visible, line_start, vblank_start;
   logic       hsync_i, vsync_i;

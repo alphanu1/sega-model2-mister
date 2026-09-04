@@ -117,6 +117,8 @@ localparam CONF_STR = {
 	// buses instead of adding memory ports -- but it should not be in the way
 	// of looking at the game.
 	"O[19],Debug overlay,Off,On;",
+	// Off at power-up: an OSD bit is 0 until the user sets it.
+	"O[20],Geometrizer walk,On,Off;",
 	"R[0],Reset and close OSD;",
 	// The button-definition line lives at the END of the menu block. Placed
 	// between the two R items it silently broke everything after it -- the OSD
@@ -202,10 +204,13 @@ wire [26:0] ioctl_addr;
 
 wire clk_mem;        // 96 MHz, m2_sdram ONLY
 wire clk_sdram_pin;  // 96 MHz at 180 deg, drives SDRAM_CLK
-wire clk_sys;   // 48 MHz, the core domain. Was the SDRAM clock; see pll.v.
+wire clk_sys;   // 50 MHz, the core domain, and the COPROCESSOR's clock.
+                // Exactly the real MB86234's 50 MHz, and an exact 2x clk_i960 --
+                // the board's own ratio. Model 1 had to retrofit 2:1 onto a
+                // 1:1 arrangement; this core was built at the ratio.
                   //         later steps need is the one being timed now
 wire clk_vid;     // 32 MHz
-wire clk_i960;    // 25 MHz, unused in this step
+wire clk_i960;    // 25 MHz -- the real i960's clock, an exact /2 of clk_sys
 wire pll_locked;
 
 pll pll
@@ -213,9 +218,9 @@ pll pll
 	.refclk(CLK_50M),
 	.rst(0),
 	.outclk_0(clk_mem),      // 96 MHz, the SDRAM controller alone
-	.outclk_1(clk_sys),      // 48 MHz, everything else. Exact /2, phase-aligned.
+	.outclk_1(clk_sys),      // 50 MHz, everything else. Exact /2 of outclk_0.
 	.outclk_2(clk_vid),      // 32 MHz
-	.outclk_3(clk_i960),     // 24 MHz -- see rtl/pll/pll.v for why not 25
+	.outclk_3(clk_i960),     // 25 MHz, exact /2 of clk_sys. See rtl/pll/pll.v.
 	.outclk_4(clk_sdram_pin),// 96 MHz at 180 deg, straight to the device pin
 	.locked(pll_locked)
 );
@@ -348,8 +353,8 @@ wire  [63:0] rb_dout;
 // the four unused ports are tied off instead -- synthesis removes what they
 // drive, and the alternative is forking from the reference over an arbiter
 // detail. Port 0 is the readback; 1-4 become the CPU, tilemap and renderer.
-localparam int unsigned NPORTS = 11;  // 5 = sound ROM, 6/7 = samples, 8/9 = TGP,
-                                      // 10 = the geometrizer's display-list walk
+localparam int unsigned NPORTS = 10;  // 5 = sound ROM, 6/7 = samples, 8/9 = TGP
+                                      // (9 is SHARED with the display-list walk)
 
 // THE 68000 SOUND PROGRAM, 256 KB, at MRA byte offset 0x2350000 -- and the MRA's
 // own comment says 0x2340000, which is 64 KB wrong. The comment is not the
@@ -386,7 +391,22 @@ wire        tgp_dat_we, tgp_dat_is_buf, tgp_dat_half;
 // The geometrizer walks its display list once a frame, on the same vblank
 // edge the frame counter uses. The reference gates it on videocontrol bit 0
 // or an even frame; that gate is not modelled yet, so it walks every frame.
-wire        geo_walk_start = vbl_d && !vbl_dd;
+// WALKER ENABLE ON THE OSD, not a rebuild. The geo_rp mask fix (R142 work)
+// made the walker actually walk for the first time -- it used to bound out
+// after one opcode -- and the first build carrying it black-screened the board.
+// That is either the walker's new SDRAM traffic or something else, and a
+// compile-time switch costs a 25-minute fit per answer. status[20] settles it
+// by toggling a menu item.
+//
+// DEFAULT OFF, and deliberately: an OSD option is 0 at power-up, so the board
+// comes up with the walker quiet and in the state that had video. Turn it ON
+// from the menu to run the experiment. If the picture dies the moment it is
+// enabled, the walker is the cause and no rebuild was needed to prove it.
+// WALKER ON BY DEFAULT NOW. The OSD bit was added to test whether the walker
+// black-screened the board; with BUFFERRAM off the game runs and the walker is
+// the thing we actually want exercised, so the sense is inverted: status[20]
+// TURNS IT OFF. An OSD bit is 0 at power-up, so the default is ON.
+wire        geo_walk_start = vbl_d && !vbl_dd && !status[20];
 wire        geo_rd_req;
 wire [18:0] geo_rd_addr;
 wire [15:0] geo_walk_ops, geo_walk_objs, geo_walk_frames;
@@ -395,12 +415,54 @@ logic       geo_rd_req_r;
 logic [18:0] geo_rd_addr_r;
 logic       geo_rd_ack_r;
 logic [31:0] geo_rd_data_r;
+// REGISTERED, like the read path already is. Unregistered, this ran
+// combinationally from mb86233_regs' b0 through win_adr, bufw_addr and the
+// shared-write-port mux into m2_sdram's wr_addr_p -- every failing path in
+// build 56 was exactly that, at -0.520.
 wire        tgp_bufw_req;
+`ifdef M2_NO_COPRO_BUFW
+localparam bit COPRO_BUFW = 1'b0;
+`else
+localparam bit COPRO_BUFW = 1'b1;
+`endif
 wire [18:0] tgp_bufw_addr;
 wire [15:0] tgp_bufw_data;
+// COPRO BUFFER-RAM WRITE PROBE (R142). Counts RISING EDGES of the request --
+// the level is held until ack, so counting the level counts cycles, not writes.
+// Simulation cannot answer this: the boot harness runs the copro to 128 retires
+// against the board's thousands, so its zero is the zero of a module that never
+// ran, not evidence the write is absent.
+logic [31:0] tgp_bufw_count;
+logic [18:0] tgp_bufw_last;
+logic [31:0] tgp_mbox;
+wire  [15:0] tgp_ff_math, tgp_ff_rom, tgp_ff_buf, tgp_rd_total;   // R146 probe: all-ones io reads by source
+logic        tgp_bufw_d;
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+	if (!mem_rst_n) begin
+		tgp_bufw_count <= 32'd0; tgp_bufw_last <= 19'h7FFFF; tgp_bufw_d <= 1'b0;
+		tgp_mbox <= 32'hEEEEEEEE;   // EE = never written, distinct from 0 and from 0x07800f0f
+	end else begin
+		tgp_bufw_d <= tgp_bufw_req;
+		if (tgp_bufw_req && !tgp_bufw_d) begin
+			tgp_bufw_count <= tgp_bufw_count + 32'd1;
+			tgp_bufw_last  <= tgp_bufw_addr;
+			// THE MAILBOX VALUE, assembled from both halves as the copro writes
+			// them (R143: low first, then high). Word 0xFFF8 is the low half of
+			// dword 0x7FFC, 0xFFF9 the high. This is what the copro SAYS it put
+			// there; cpu_dbg_ldout alongside it is what the game READS back.
+			if (tgp_bufw_addr == 19'h0FFF8) tgp_mbox[15:0]  <= tgp_bufw_data;
+			if (tgp_bufw_addr == 19'h0FFF9) tgp_mbox[31:16] <= tgp_bufw_data;
+		end
+	end
+end
+
+logic       tgp_bufw_req_r;
+logic [18:0] tgp_bufw_addr_r;
+logic [15:0] tgp_bufw_data_r;
+logic       tgp_bufw_ack_r;
 wire [15:0] tgp_dat_wdata;
 wire [15:0] tgp_tbl_addr;
-wire [18:0] tgp_dat_addr;
+wire [19:0] tgp_dat_addr;
 // BURST INDEX, NOT A BYTE ADDRESS. The sound board's sample ports became
 // four-word bursts when m2_pcm_fetch was added and these were left as [21:0]
 // byte addresses, so a 19-bit output drove a 22-bit wire: the burst index
@@ -514,13 +576,20 @@ always_comb begin
 	// effective address sets bit 23 and BUFFER RAM when it sets bit 22, and the
 	// buffer half is written as well as read -- that is how the coprocessor and
 	// the i960 share results, and this core has never had it.
-	// PORT 10: the geometrizer reading its display list out of buffer RAM.
-	// m2_geo could only WRITE that memory; the walk has to read it back.
-	p_req[10]  = geo_rd_req_r;
-	p_addr[10] = GAME_BUFFER + SDR_AW'({geo_rd_addr_r, 1'b0});
-	p_req[9]  = tgp_dat_req_r;
-	p_addr[9] = (tgp_dat_is_buf_r ? GAME_BUFFER : GAME_COPRO)
-	            + SDR_AW'({tgp_dat_addr_r, tgp_dat_half_r});
+	// PORT 9 IS SHARED: the coprocessor's banked window and the geometrizer's
+	// display-list walk both read buffer RAM, and an ELEVENTH PORT IS NOT FREE.
+	// Every port widens the arbiter's whole chain -- pend & ~inflight, the
+	// rotate, the priority encode, the rotate back, then a 25-bit NP-way mux --
+	// and adding one took every failing path to `inflight[6] -> xfer_addr[8]`
+	// at -1.439 with TNS -47. A local two-way mux costs none of that.
+	//
+	// The coprocessor wins, because it STALLS THE TGP mid-instruction while it
+	// waits; the walk has a whole frame and can take its turn.
+	p_req[9]  = tgp_dat_req_r | (geo_rd_req_r & ~tgp_dat_req_r);
+	p_addr[9] = tgp_dat_req_r
+	          ? ((tgp_dat_is_buf_r ? GAME_BUFFER : GAME_COPRO)
+	             + SDR_AW'({tgp_dat_addr_r, tgp_dat_half_r}))
+	          : (GAME_BUFFER + SDR_AW'({geo_rd_addr_r, 1'b0}));
 	// port 9 is READ ONLY. Buffer-RAM writes go out on the shared write port,
 	// which keeps p_we/p_din out of the arbiter's command decode.
 	p_req[7]  = snd_found & pcm2_req;
@@ -587,12 +656,12 @@ m2_sdram_x2 #(.NP(NPORTS), .AW(SDR_AW)) u_sdram_x2 (
 	.clk_fast(clk_mem),
 	.s_req(p_req), .s_addr(p_addr), .s_ack(p_ack), .s_dout(p_dout),
 	.s_we(p_we),   .s_din(p_din),   .s_be(p_be),
-	.s_wr_req(bi_run ? bi_req : st_run ? st_req : tgp_bufw_req ? 1'b1
+	.s_wr_req(bi_run ? bi_req : st_run ? st_req : tgp_bufw_req_r ? 1'b1
 	          : geo_sd_busy ? geo_sd_req : ldr_wr_req),
 	.s_wr_addr(bi_run ? bi_addr : st_run ? st_addr
-	          : tgp_bufw_req ? (GAME_BUFFER + SDR_AW'(tgp_bufw_addr))
+	          : tgp_bufw_req_r ? (GAME_BUFFER + SDR_AW'(tgp_bufw_addr_r))
 	          : geo_sd_busy ? geo_sd_addr : ldr_wr_addr),
-	.s_wr_din(bi_run ? bi_din : st_run ? st_din : tgp_bufw_req ? tgp_bufw_data
+	.s_wr_din(bi_run ? bi_din : st_run ? st_din : tgp_bufw_req_r ? tgp_bufw_data_r
 	          : geo_sd_busy ? geo_sd_din : ldr_wr_din),
 	.s_wr_be(2'b11), .s_wr_ack(ldr_wr_ack),
 	.f_req(f_req), .f_addr(f_addr), .f_ack(f_ack), .f_dout(f_dout),
@@ -1557,7 +1626,8 @@ wire [15:0] cpu_sd_din;
 wire  [1:0] cpu_sd_be;
 wire [31:0] cpu_dbg_rd, cpu_dbg_wr, cpu_dbg_unmapped;
 
-m2_cpu_bridge #(.BUFFERRAM(1'b1), .BUFFERRAM_WRONLY(1'b0), .AW(SDR_AW), .BOARD_2A(1'b0), .DCACHE_EN(1'b1)) u_cpu_bridge (
+m2_cpu_bridge #(.BUFFERRAM(1'b1), .BUFFERRAM_WRONLY(1'b0)
+                  , .AW(SDR_AW), .BOARD_2A(1'b0), .DCACHE_EN(1'b1)) u_cpu_bridge (
 	.dbg_dc_hits(dc_hits), .dbg_dc_miss(dc_miss),
 	.char_wr(cpu_char_wr), .char_wr_addr(cpu_char_wr_addr),
 	.clk_cpu(clk_i960), .rst_n_cpu(cpu_rst_n),
@@ -2019,7 +2089,21 @@ wire geo_wr_push  = cpu_io_sel && cpu_io_we &&
                      (cpu_io_addr[23:14] == 10'h201));           // 0x804000-0x807fff
 wire [31:0] geo_rd_wp, geo_rd_rp, geo_pushes, geo_dropped, geo_ctl_dbg;
 wire [15:0] geo_cnt_dbg;
-wire        geo_sd_req, geo_sd_busy;
+wire        geo_sd_req, geo_sd_busy_raw;
+// GEO_BUFW: the front door's push DMA into SHARED buffer RAM -- the LAST
+// writer of that memory not yet cleared by experiment. BUFFERRAM_WRONLY does
+// not clear it: these writes go through the shared SDRAM write port, not the
+// bridge, so they still happen -- they merely became invisible when the CPU
+// stopped reading buffer RAM back. Masking geo_sd_busy (not just the request)
+// hands the port cleanly back to the loader instead of stranding the mux.
+// The front door DROPS on backpressure and counts it, so it cannot stall the
+// i960 -- measured, "overrun: 3205 dropped, counted, never stalled".
+`ifdef M2_NO_GEO_BUFW
+localparam bit GEO_BUFW = 1'b0;
+`else
+localparam bit GEO_BUFW = 1'b1;
+`endif
+wire geo_sd_busy = geo_sd_busy_raw & GEO_BUFW;
 wire [SDR_AW:1] geo_sd_addr;
 wire [15:0] geo_sd_din;
 
@@ -2030,7 +2114,7 @@ m2_geo #(.AW(SDR_AW), .DEPTH(128)) u_geo (
 	.rd_wp(geo_rd_wp), .rd_rp(geo_rd_rp),
 	.base_buffer(GAME_BUFFER),
 	.sd_wr_req(geo_sd_req), .sd_wr_addr(geo_sd_addr), .sd_wr_din(geo_sd_din),
-	.sd_wr_ack(ldr_wr_ack), .sd_busy(geo_sd_busy),
+	.sd_wr_ack(ldr_wr_ack), .sd_busy(geo_sd_busy_raw),
 	.dbg_pushes(geo_pushes), .dbg_dropped(geo_dropped),
 	.dbg_geocnt(geo_cnt_dbg), .dbg_geoctl(geo_ctl_dbg),
 	.frame_start(geo_walk_start),
@@ -2096,7 +2180,7 @@ logic [31:0] tgp_tbl_rdata_r, tgp_dat_rdata_r;
 // A cycle each way costs nothing: the TGP issues one lookup and BLOCKS on it.
 logic        tgp_tbl_req_r, tgp_dat_req_r;
 logic [15:0] tgp_tbl_addr_r;
-logic [18:0] tgp_dat_addr_r;
+logic [19:0] tgp_dat_addr_r;
 logic        tgp_dat_we_r, tgp_dat_is_buf_r, tgp_dat_half_r;
 logic [15:0] tgp_dat_wdata_r;
 always_ff @(posedge clk_sys) begin
@@ -2114,8 +2198,25 @@ always_ff @(posedge clk_sys) begin
 	tgp_dat_half_r  <= tgp_dat_half;
 	geo_rd_req_r    <= geo_rd_req;
 	geo_rd_addr_r   <= geo_rd_addr;
-	geo_rd_ack_r    <= p_ack[10];
-	geo_rd_data_r   <= p_dout[10][31:0];
+	// the walk only sees an acknowledge when the port was serving IT
+	// COPRO_BUFW: the coprocessor's writes into SHARED buffer RAM.
+	//
+	// These have been live since 118cb77 (R133) and looked innocent, because
+	// .attract came after it and works. It works because BUFFERRAM was OFF
+	// there: the i960 could not SEE what the copro wrote. a9ace86 turned the
+	// mapping on and pointed the CPU at a memory the coprocessor is writing
+	// into -- and our TGP runs a TRANSCRIBED microcode, so a wrong address or
+	// datum lands in the game's own display list.
+	//
+	// Set COPRO_BUFW=0 to keep BUFFERRAM on and take only these writes away.
+	// That is the single variable between "the CPU reads a buffer nothing else
+	// touches" and "the CPU reads a buffer the copro shares".
+	tgp_bufw_req_r  <= tgp_bufw_req & COPRO_BUFW;
+	tgp_bufw_addr_r <= tgp_bufw_addr;
+	tgp_bufw_data_r <= tgp_bufw_data;
+	tgp_bufw_ack_r  <= ldr_wr_ack & tgp_bufw_req_r;
+	geo_rd_ack_r    <= p_ack[9] & ~tgp_dat_req_r;
+	geo_rd_data_r   <= p_dout[9][31:0];
 end
 
 // CLOCKED ON clk_sys, DELIBERATELY, and speed is a separate question.
@@ -2151,7 +2252,7 @@ m2_copro u_copro (
 	.dat_we(tgp_dat_we), .dat_wdata(tgp_dat_wdata), .dat_is_buf(tgp_dat_is_buf),
 	.dat_half(tgp_dat_half),
 	.bufw_req(tgp_bufw_req), .bufw_addr(tgp_bufw_addr), .bufw_data(tgp_bufw_data),
-	.bufw_ack(ldr_wr_ack),
+	.bufw_ack(tgp_bufw_ack_r),
 	.dat_rdata(tgp_dat_rdata_r), .dat_ack(tgp_dat_ack_r),
 	.dbg_ctl(copro_dbg_ctl), .dbg_prog_words(copro_prog_words),
 	.dbg_in_pushed(copro_in_pushed), .dbg_out_popped(copro_out_popped),
@@ -2164,7 +2265,7 @@ m2_copro u_copro (
 	.dbg_tgp_wr_n(), .dbg_tgp_wr_addr(), .dbg_tgp_wr_data(), .dbg_tgp_st(), .dbg_tgp_a(), .dbg_tgp_b(), .dbg_tgp_d(),
 	.dbg_tgp_op(tgp_op), .dbg_tgp_hold(tgp_hold),
 	.dbg_tgp_io_addr(tgp_io_addr), .dbg_tgp_io_rd(tgp_io_rd),
-	.dbg_tgp_io_wr(tgp_io_wr), .dbg_tgp_io_ack(tgp_io_ack),
+	.dbg_tgp_io_wr(tgp_io_wr), .dbg_tgp_io_ack(tgp_io_ack), .dbg_ff_math(tgp_ff_math), .dbg_ff_rom(tgp_ff_rom), .dbg_ff_buf(tgp_ff_buf), .dbg_rd_total(tgp_rd_total),
 	.dbg_tgp_fifo_rd(tgp_fifo_rd), .dbg_tgp_fifo_wr(tgp_fifo_wr), .dbg_tgp_bank(tgp_bank),
 	.dbg_tgp_unimpl(tgp_unimpl)
 );
@@ -2764,6 +2865,7 @@ wire        uart_b2_valid = hb_tick_b || trap_edge;
 wire        uart_b_valid = char_ack;
 wire [31:0] uart_dropped;
 
+generate if (DEBUG) begin : g_dbg
 m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	.clk(clk_sys), .rst_n(mem_rst_n),
 	// THE IP RING: 512 consecutive retired instructions, recorded at full
@@ -2832,7 +2934,13 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// WHERE THE GAME IS WAITING. It boots, renders the tilemap and drives the
 	// sound board, then stops on the first attract frame -- so this is game
 	// logic waiting on something, not a stalled machine.
-	.a_valid(prof_tick), .a_addr(cpu_dbg_ip),
+	// C = <TGP retires : TGP pc> | <io reads : out_pushed>. MODEL 1'S LESSON,
+	// R147: the coprocessor's state must be on the wire or its faults are
+	// invisible -- "only visible because 2:1 put C= and R= on the printf
+	// channel". The previous build measured THREE io reads in 45 s where MAME's
+	// TGP hammers its math units, which says the coprocessor is executing
+	// something, but not the geometry code. Retires and pc say which.
+	.a_valid(prof_tick), .a_addr({tgp_retires, tgp_pc}),
 	// THE RETIRED-INSTRUCTION COUNT RIDES ALONG WITH THE IP.
 //
 // The profile says 91% of the board's time goes on the four memory
@@ -2841,7 +2949,11 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 // simulation finishes this initialisation in 15.9 M instructions. Two
 // consecutive samples give the instruction rate directly, which settles
 // whether this is a wrong branch or a slow machine.
-	.a_data(cpu_dbg_laddr),
+	// WHAT THE CPU ACTUALLY READ, not which address it asked for. The address
+	// has been a constant 0x016FFFF8 in every capture of the spin, so it costs
+	// nothing to give up and the DATA is the one fact five builds of
+	// elimination could not supply. Swap back when the read path is understood.
+	.a_data({tgp_rd_total, copro_out_pushed[15:0]}),
 	// THE i960's OWN INSTRUCTION COUNT, so the first three minutes can be
 	// diagnosed rather than described. Two readings a known time apart give the
 	// rate directly; a machine that is slow for three minutes and then is not
@@ -2880,8 +2992,11 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// bits gate the view. Carrying all 32 routes a wide bus from inside the TGP
 	// to the streamer for no information, and this design is at the edge of
 	// closing on the SDRAM domain.
-	.b_addr({copro_in_pushed, copro_out_pushed[15:0]}),
-	.b_data({vid_hscr[2], copro_out_popped}),
+	// THE WALK'S OWN NUMBERS. Against the offline oracle: 101 opcodes and 60
+	// object_data per frame. Anything else means it is reading the wrong memory
+	// or mis-counting an operand, and both look like a corrupt display list.
+	.b_addr({geo_walk_ops, geo_walk_objs}),
+	.b_data({geo_walk_frames, 8'd0, geo_walk_unknown}),
 	.a_tag(8'h43), .b_tag(8'h48),          // 'C' copro in_pushed:out_pushed | TGP retires:pc
 	                                       // 'H' out_popped:hscr2 | io_addr:flags
 	                                       // 'H' scroll h:v for layers 0,1 | layers 2,3 -- low bytes
@@ -2890,6 +3005,10 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	.enable(1'b1),
 	.tx(UART_TXD), .dbg_dropped(uart_dropped)
 );
+end else begin : g_nodbg
+	assign UART_TXD = 1'b1;        // idle high; a floating TX reads as framing errors
+	assign uart_dropped = 32'd0;   // read by the overlay, which is also gone
+end endgenerate
 
 // WHO WRITES THE SPACE. Everything upstream is now measured CLEAN on the
 // board: backup holds 00030300, the firmware's window holds 00030300, and the
@@ -3672,6 +3791,49 @@ wire [15:0] vid_overruns;
 wire [15:0] vid_ovr_frame;   // overruns in the LAST FRAME
 
 wire [7:0] tile_r, tile_g, tile_b;
+wire [9:0] vid_x, vid_y;
+
+// ------------------------------------------------------------ THE 3D LAYER
+//
+// m2_raster3d: quad_store sorts and replays per band, raster_fill turns a quad
+// into spans, and three band buffers are filled and displayed in rotation. All
+// of it is Model 1's, verified upstream over 152,025 quads and 31.6 M spans;
+// the sequencer around it is ours. See THIRD_PARTY.md and study R124.
+//
+// THE QUAD INPUT IS TIED OFF, and that is the whole remaining gap. `q_*` wants
+// a projected screen-space quad with a colour and a z, which is what the
+// geometrizer's transform stage will emit once object_data reads its objects
+// out of the polygon ROM. Until then q_end never pulses, so the producer never
+// leaves P_COLLECT, the consumer never runs, and scan_hit stays low -- the 3D
+// layer is present, wired and inert, and the 2D picture is untouched.
+wire [15:0] r3d_col;
+wire        r3d_hit;
+wire [15:0] r3d_quads, r3d_dropped, r3d_bands;
+wire [31:0] r3d_pixels;
+
+m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(16), .NBUF(3)) u_raster3d (
+	.clk(clk_sys), .rst_n(mem_rst_n),
+	.frame_start(geo_walk_start),
+	.q_valid(1'b0), .q_ready(),
+	.q_x0(16'sd0), .q_y0(16'sd0), .q_x1(16'sd0), .q_y1(16'sd0),
+	.q_x2(16'sd0), .q_y2(16'sd0), .q_x3(16'sd0), .q_y3(16'sd0),
+	.q_col(24'd0), .q_z(32'd0), .q_moire(1'b0), .q_end(1'b0),
+	.scan_clk(clk_sys), .scan_x(vid_x), .scan_y(vid_y),
+	.scan_col(r3d_col), .scan_hit(r3d_hit),
+	.dbg_quads(r3d_quads), .dbg_dropped(r3d_dropped),
+	.dbg_bands(r3d_bands), .dbg_pixels(r3d_pixels)
+);
+
+// The 3D layer sits OVER the tilemap where it painted, and shows the tilemap
+// where it did not -- rd_hit is exactly that question, and the band buffer
+// answers it per pixel. RGB565 out of the band, widened by replicating the top
+// bits so full-scale stays full-scale.
+wire [7:0] r3d_r8 = {r3d_col[15:11], r3d_col[15:13]};
+wire [7:0] r3d_g8 = {r3d_col[10:5],  r3d_col[10:9]};
+wire [7:0] r3d_b8 = {r3d_col[4:0],   r3d_col[4:2]};
+wire [7:0] mix_r  = r3d_hit ? r3d_r8 : tile_r;
+wire [7:0] mix_g  = r3d_hit ? r3d_g8 : tile_g;
+wire [7:0] mix_b  = r3d_hit ? r3d_b8 : tile_b;
 wire       tile_hs, tile_vs, tile_hb, tile_vb;
 
 m2_video u_tilemap (
@@ -3703,6 +3865,7 @@ m2_video u_tilemap (
 	.vblank_irq(), .dbg_fetches(vid_fetches), .dbg_overruns(vid_overruns),
 	.dbg_hscr(vid_hscr), .dbg_vscr(vid_vscr),
 	.dbg_ovr_frame(vid_ovr_frame),
+	.vid_x(vid_x), .vid_y(vid_y),
 	.dbg_layer_px(vid_layer_px), .dbg_ctrl(vid_ctrl),
 	.dbg_layer_have(vid_layer_have)
 );
@@ -3808,6 +3971,26 @@ end
 
 wire [7:0] ov_r, ov_g, ov_b;
 
+// DEBUG IS DEVELOPMENT SCAFFOLDING, AND IT IS NOT FREE: m2_diag is 443.5 ALM
+// and m2_dbg_stream is 182.9, so 626 ALM of a 41,910 ALM part is spent on
+// instruments a build that only plays the game does not need.
+//
+// It stays IN THE SOURCE and ON BY DEFAULT. The standing rule in docs/ -- "the
+// screen is the only output channel ... build the debug overlay early" -- was
+// written when nothing else could reach a cabinet, and it is why the overlay
+// exists at all. That premise is now false: UART reaches /dev/ttyS1 over ssh
+// with no cable, and R136, R138 and R139 were all established from it. So the
+// rule's conclusion is amended rather than dropped -- see R140. Turn the
+// instruments off for an area-constrained build, not because they stopped
+// earning their place.
+//
+//     set_global_assignment -name VERILOG_MACRO "M2_NO_DEBUG=1"
+`ifdef M2_NO_DEBUG
+localparam bit DEBUG = 1'b0;
+`else
+localparam bit DEBUG = 1'b1;
+`endif
+
 // The overlay runs on clk_vid and these all live on clk_sys or clk_i960, so
 // they cross with two flops. They are status bits and counters read by eye --
 // a torn counter is a wrong digit for one frame, not a wrong decision.
@@ -3821,6 +4004,7 @@ always_ff @(posedge clk_sys) begin
 	ldr_top_sync  <= ldr_top;
 end
 
+generate if (DEBUG) begin : g_diag
 m2_diag #(.NWORDS(24)) u_diag
 (
 	.clk(clk_sys),
@@ -3981,11 +4165,17 @@ m2_diag #(.NWORDS(24)) u_diag
 	// nothing to draw, so the test pattern stands in. After that the tilemap
 	// takes over. Seeing the pattern persist therefore means the copy never
 	// finished, which is a different failure from a tilemap that draws nothing.
-	.in_r(cp_done ? tile_r : pat_r),
-	.in_g(cp_done ? tile_g : pat_g),
-	.in_b(cp_done ? tile_b : pat_b),
+	.in_r(cp_done ? mix_r : pat_r),
+	.in_g(cp_done ? mix_g : pat_g),
+	.in_b(cp_done ? mix_b : pat_b),
 	.out_r(ov_r), .out_g(ov_g), .out_b(ov_b)
 );
+end else begin : g_nodiag
+	// m2_diag is a pass-through filter, so its absence is a wire.
+	assign ov_r = cp_done ? mix_r : pat_r;
+	assign ov_g = cp_done ? mix_g : pat_g;
+	assign ov_b = cp_done ? mix_b : pat_b;
+end endgenerate
 
 assign CLK_VIDEO = clk_sys;
 assign CE_PIXEL  = ce_pix;

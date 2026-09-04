@@ -261,6 +261,19 @@ synth_i960_ldst:
 
 # --------------------------------------------------------------------- tests
 
+# Source lists for the harness rules below. THESE MUST BE DEFINED BEFORE THE
+# RULES THAT NAME THEM: make expands a prerequisite list when it reads the
+# rule, so a list defined further down the file expands to nothing and the
+# target silently never rebuilds when its RTL changes. That is not a
+# hypothetical -- SDR_RTL, RLD_RTL and VID_RTL were all defined ~450 lines
+# after the rules using them, so test_m2_sdram, test_m2_sdram128,
+# test_m2_romload and test_m2_video_timing ran yesterday's binary against
+# today's RTL and reported a pass.
+VID_RTL := rtl/video/m2_video_timing.sv
+SDR_RTL := rtl/mem/m2_sdram.sv rtl/mem/bw_monitor.sv sim/mem/sdram_model.sv sim/mem/m2_sdram_harness.sv
+RLD_RTL := rtl/mem/m2_sdram.sv rtl/io/m2_rom_loader.sv sim/mem/sdram_model.sv sim/mem/m2_romload_harness.sv
+
+
 .PHONY: test test_m2_backup test_m2_sndboard test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram test_fx68k test_m2_ioboard
 test: test_m2_geo test_m2_backup test_m2_sndlink test_fx68k test_m2_sndboard test_m2_ioboard test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
 
@@ -598,6 +611,11 @@ obj_x2/Vm2_sdram_x2_harness: sim/mem/m2_sdram_x2_harness.sv rtl/mem/m2_sdram_x2.
 # seconds, against a 25-minute build.
 
 .PHONY: test_m2_boot
+# BUFFERRAM in the boot bench. Default 0 -- which is the configuration that
+# WORKS on hardware, and is why this bench has been green while the board spins.
+# BOOT_BUFFERRAM=1 builds the failing one.
+BOOT_BUFFERRAM ?= 0
+
 test_m2_boot: obj_boot/Vm2_boot_harness
 	@echo "== test m2_boot (the real boot through the real bridge)"
 	@./obj_boot/Vm2_boot_harness $(TEST_ARGS)
@@ -613,6 +631,7 @@ obj_boot/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cpp \
                            $(wildcard rtl/cpu/i960/*.sv)
 	$(VBUILD) --top-module m2_boot_harness -Wno-PINCONNECTEMPTY -Wno-UNUSEDPARAM \
 	  -Wno-WIDTHEXPAND -Wno-UNUSEDSIGNAL --Mdir obj_boot -o Vm2_boot_harness \
+	  -GBUFFERRAM_EN=$(BOOT_BUFFERRAM) \
 	  -CFLAGS "-O2" sim/io/m2_boot_harness.sv rtl/io/m2_cpu_bridge.sv \
 	  rtl/io/m2_ioboard.sv rtl/io/m2_backup.sv rtl/mem/m2_tdp_ram.sv rtl/io/m2_ioz80.sv $(wildcard rtl/tgp/*.sv) \
 	  $(wildcard rtl/cpu/tv80/*.v) rtl/mem/m2_char_cdc.sv \
@@ -839,11 +858,8 @@ SRCS_i960_fpsqrt := $(FPS_RTL)
 SRCS_i960_fpmisc := $(FPX_RTL)
 SRCS_i960_fpcvt  := $(FPC_RTL)
 SRCS_i960_top    := $(TOP_RTL)
-VID_RTL := rtl/video/m2_video_timing.sv
 SRCS_m2_video_timing := $(VID_RTL)
 SRCS_m2_testpattern  := rtl/video/m2_testpattern.sv
-SDR_RTL := rtl/mem/m2_sdram.sv rtl/mem/bw_monitor.sv sim/mem/sdram_model.sv sim/mem/m2_sdram_harness.sv
-RLD_RTL := rtl/mem/m2_sdram.sv rtl/io/m2_rom_loader.sv sim/mem/sdram_model.sv sim/mem/m2_romload_harness.sv
 SRCS_m2_sdram := rtl/mem/m2_sdram.sv
 
 # ---------------------------------------------------------------------------

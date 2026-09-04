@@ -42,7 +42,13 @@ module m2_boot_harness #(
   parameter int          STATUS_CYCLES   = 20_000,
   parameter int          SELFTEST_CYCLES = 200_000,
   // See the clk96 port comment: 1 swaps the C++ SDRAM for the real stack.
-  parameter bit          REAL_MEM        = 1'b0
+  parameter bit          REAL_MEM        = 1'b0,
+  // BUFFERRAM WAS NEVER SIMULATED. The bridge defaults it OFF and this harness
+  // never overrode it, so every boot-bench pass has been a pass for the
+  // configuration that WORKS on hardware -- while the board has been running
+  // the other one since a9ace86 and spinning. Exposed here so the failing
+  // configuration can be reproduced in seconds instead of a 25-minute fit.
+  parameter bit          BUFFERRAM_EN    = 1'b0
 ) (
   // REAL_MEM=1 replaces the C++ SDRAM with the genuine stack -- m2_sdram_x2 +
   // m2_sdram + sdram_model, lifted whole from sim/mem/m2_sdram_x2_harness.sv.
@@ -155,6 +161,14 @@ module m2_boot_harness #(
   // is normal traffic: study R34 established that the i960 holds bus_req across
   // a run of accesses and that m2_cpu_bridge LATCHES the address rather than
   // sampling it live, so movement after the latch is expected and harmless.
+  // DOES THE COPROCESSOR EVER ATTEMPT THE MAILBOX WRITE? R142: the game polls
+  // buffer-RAM dword 0x7FFC for zero and the TGP is what clears it. These
+  // writes were discarded here -- bufw_req() unconnected, bufw_ack tied high --
+  // so simulation could never say whether the TGP tries. Word address 0xFFF8 /
+  // 0xFFF9 are the two halves of dword 0x7FFC.
+  output logic [31:0] obs_bufw_count,
+  output logic [31:0] obs_bufw_last,
+  output logic [31:0] obs_bufw_7ffc,
   output logic [31:0] obs_addr_moved,
   output logic [31:0] dbg_rip,
   output logic [31:0] dbg_pfp,
@@ -328,6 +342,7 @@ module m2_boot_harness #(
     .vid_hs(), .vid_vs(), .vid_hb(vid_hb), .vid_vb(vid_vb),
     .vblank_irq(), .dbg_fetches(dbg_fetches_o), .dbg_overruns(dbg_overruns_o),
     .dbg_ovr_frame(), .dbg_hscr(obs_hscr), .dbg_vscr(obs_vscr),
+    .vid_x(), .vid_y(),
     .dbg_layer_px(), .dbg_ctrl(), .dbg_layer_have()
   );
 
@@ -442,7 +457,7 @@ module m2_boot_harness #(
   wire        sd2_ack_i  = REAL_MEM ? rm_p3_ack        : sd2_ack;
   wire [31:0] sd2_dout_i = REAL_MEM ? rm_p3_dout[31:0] : sd2_dout;
 
-  m2_cpu_bridge #(.AW(AW), .BOARD_2A(1'b0)) u_bridge (
+  m2_cpu_bridge #(.AW(AW), .BOARD_2A(1'b0), .BUFFERRAM(BUFFERRAM_EN)) u_bridge (
     .dbg_dc_hits(obs_dc_hits), .dbg_dc_miss(obs_dc_miss),
     .char_wr(), .char_wr_addr(),
     .clk_cpu(clk_cpu), .rst_n_cpu(rst_n),
@@ -524,6 +539,24 @@ module m2_boot_harness #(
   wire        copro_stall;
   assign obs_copro_stall = copro_stall;
 
+  wire        cop_bufw_req;
+  wire [18:0] cop_bufw_addr;
+  wire [15:0] cop_bufw_data;
+  logic       cop_bufw_req_d;
+  always_ff @(posedge clk_m or negedge rst_n) begin
+    if (!rst_n) begin
+      obs_bufw_count <= 32'd0; obs_bufw_last <= 32'hEEEEEEEE;
+      obs_bufw_7ffc  <= 32'd0; cop_bufw_req_d <= 1'b0;
+    end else begin
+      cop_bufw_req_d <= cop_bufw_req;
+      if (cop_bufw_req && !cop_bufw_req_d) begin   // rising edge: one write
+        obs_bufw_count <= obs_bufw_count + 32'd1;
+        obs_bufw_last  <= {13'd0, cop_bufw_addr};
+        if (cop_bufw_addr[18:1] == 18'h07FFC) obs_bufw_7ffc <= obs_bufw_7ffc + 32'd1;
+      end
+    end
+  end
+
   m2_copro u_copro (
     .clk(clk_m), .rst_n(rst_n),
     .sel_ctl(copro_ctl_sel), .sel_fifo(copro_fifo_sel),
@@ -540,9 +573,10 @@ module m2_boot_harness #(
     .dat_we(), .dat_wdata(), .dat_is_buf(), .dat_half(),
     // Buffer-RAM writes leave on their own port; this harness models neither
     // bufferram nor the shared write port, so the request is acked at once.
-    .bufw_req(), .bufw_addr(), .bufw_data(), .bufw_ack(1'b1),
+    .bufw_req(cop_bufw_req), .bufw_addr(cop_bufw_addr), .bufw_data(cop_bufw_data), .bufw_ack(1'b1),
     .dbg_tgp_bank(),
     .dat_rdata(tgp_dat_rdata), .dat_ack(tgp_dat_ack),
+    .dbg_ff_math(), .dbg_ff_rom(), .dbg_ff_buf(), .dbg_rd_total(),
     .dbg_ctl(obs_copro_ctl), .dbg_prog_words(obs_copro_prog),
     .dbg_in_pushed(obs_copro_in), .dbg_out_popped(obs_copro_out),
     .dbg_fctl_reads(obs_fctl_reads),

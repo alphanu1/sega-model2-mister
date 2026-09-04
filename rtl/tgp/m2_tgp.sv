@@ -116,7 +116,7 @@ module m2_tgp #(
   input  logic        tbl_ack,
 
   output logic        dat_req,
-  output logic [18:0] dat_addr,
+  output logic [19:0] dat_addr,
   output logic        dat_we,        // the window WRITES bufferram too
   output logic [15:0] dat_wdata,
   output logic        dat_is_buf,    // 1 = bufferram, 0 = copro data ROM
@@ -159,6 +159,7 @@ module m2_tgp #(
   output logic        dbg_io_rd,
   output logic        dbg_io_wr,
   output logic        dbg_io_ack,
+  output logic [15:0] dbg_ff_math, dbg_ff_rom, dbg_ff_buf, dbg_rd_total,
   output logic        dbg_fifo_rd,
   output logic        dbg_fifo_wr,
   // The bank register itself (R133). If the microcode never writes rf 3 the
@@ -319,8 +320,15 @@ module m2_tgp #(
   // read a duplicate for its next result and go wrong a command later.
   assign fifo_out_push = fifo_wr && !fifo_out_full && !pushed;
   assign fifo_out_data = fifo_wdata;
+  // AN EMPTY POP READS ZERO, NOT THE STALE HEAD. gen_fifo's pop() returns T()
+  // -- zero -- and EMPTY_FIFO_READS_ZERO only ever meant "do not stall". It was
+  // wired into the DATA mux as well, so with the parameter set an empty read
+  // completed and handed back whatever fifo_in_data still held. The latched
+  // path below already gets this right (`fifo_in_valid ? fifo_in_data : 0`);
+  // the combinational one did not, and the acknowledge is combinational, so
+  // the core could take the stale word in the same cycle.
   assign fifo_rdata    = popped ? pop_data
-                       : (fifo_in_valid || EMPTY_FIFO_READS_ZERO) ? fifo_in_data : 32'd0;
+                       : fifo_in_valid ? fifo_in_data : 32'd0;
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -385,8 +393,24 @@ module m2_tgp #(
   // The OUTBOUND fifo keeps its stall. That direction is the V60 reading results,
   // where acknowledging an empty read returned a stale word and hung the CPU at
   // fed5a4; MAME halts the maincpu there rather than letting it proceed.
+  // A PUSH INTO A FULL OUTPUT FIFO MUST NOT STALL THE COPROCESSOR. gen_fifo.h
+  // is explicit that its queue never blocks a push -- "there may be extra
+  // values stored ... may be bigger than the fifo size" -- so the reference
+  // TGP carries straight on and MAME cannot reach the state this created.
+  //
+  // MEASURED, and it is why the board sat at frame 1: the i960 parks on the
+  // mailbox poll at 0x1166C (R142), stops draining results, `fout` fills, and
+  // the coprocessor freezes here -- 10,815 retires in 40 SECONDS, about 270
+  // instructions per second against MAME's 4.6 million. Frozen, it never
+  // reaches the dispatch that would clear the mailbox and release the i960.
+  // Both ends then wait for each other, which is the deadlock Model 1 records
+  // in 520cf6a: "fout fills, the TGP halts, fin fills, the V60 halts".
+  //
+  // Dropping rather than growing: an M10K queue cannot grow, and `dropped` is
+  // already counted. The words lost here are the idle handler's zeros from
+  // 00b8, which no consumer wants. The INBOUND direction keeps its interlock.
   assign fifo_ack = fifo_rd ? (EMPTY_FIFO_READS_ZERO || fifo_in_valid || popped)
-                  : fifo_wr ? (!fifo_out_full || pushed)
+                  : fifo_wr ? 1'b1
                   : 1'b0;
 
   // ------------------------------------------------------------- IO space
@@ -596,8 +620,15 @@ module m2_tgp #(
   // index = (base & ~0x7fff) | offset, masked to the ROM's word count.
   // The reference masks each region to its own size: the data ROM by its
   // dword count, bufferram by 0x7fff. 19 bits carries either.
-  assign dat_addr = sel_buf ? 19'({4'd0, win_adr[14:0]})
-                            : 19'(win_adr[18:0]);
+  // TWENTY BITS FOR THE ROM, NOT NINETEEN. The reference masks the data-ROM
+  // index by the region's own dword count -- `adr &= (bytes >> 2) - 1` -- and
+  // Daytona's copro data ROM is 0x400000 bytes, which is 0x100000 dwords and
+  // needs 20 bits. At 19 the coprocessor could reach only the bottom HALF of
+  // its data ROM and the top half aliased onto it, so every lookup above
+  // 2 MB returned the wrong dword -- plausible values, never a fault, exactly
+  // the failure R133 describes: the right program reading the wrong memory.
+  assign dat_addr = sel_buf ? 20'({5'd0, win_adr[14:0]})
+                            : 20'(win_adr[19:0]);
 
   // The copro RAM window drives m1_copro_if. Held until its acknowledge.
   assign ram_req   = (io_rd || io_wr) && sel_rdat;
@@ -640,6 +671,24 @@ module m2_tgp #(
   assign dbg_io_rd   = io_rd;
   assign dbg_io_wr   = io_wr;
   assign dbg_io_ack  = io_ack;
+
+  // WHICH INPUT HANDS THE TGP ALL-ONES? R146: the mailbox word is a computed
+  // float result, and ours is 0xFFFFFFFF where MAME's is 0. A float pipeline
+  // emits all-ones when an operand is all-ones, and the standing rule is that
+  // unwritten memory reads 0xFFFF -- so count every completed io READ that
+  // returned 0xFFFFFFFF, by source. The source that is non-zero is the bug.
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      dbg_ff_math <= 16'd0; dbg_ff_rom <= 16'd0; dbg_ff_buf <= 16'd0; dbg_rd_total <= 16'd0;
+    end else if (io_rd && io_ack) begin
+      if (!(&dbg_rd_total)) dbg_rd_total <= dbg_rd_total + 16'd1;
+      if (io_rdata == 32'hFFFFFFFF) begin
+        if (sel_math && !(&dbg_ff_math)) dbg_ff_math <= dbg_ff_math + 16'd1;
+        if (sel_rom  && !(&dbg_ff_rom))  dbg_ff_rom  <= dbg_ff_rom  + 16'd1;
+        if (sel_buf  && !(&dbg_ff_buf))  dbg_ff_buf  <= dbg_ff_buf  + 16'd1;
+      end
+    end
+  end
   assign dbg_fifo_rd = fifo_rd;
   assign dbg_fifo_wr = fifo_wr;
 

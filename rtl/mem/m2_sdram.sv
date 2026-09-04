@@ -219,7 +219,7 @@ module m2_sdram #(
       // stream desynchronises and OTHER ports get corrupt data (R108). The walk
       // reads one dword at a time and discards the other pair, which is the
       // same bargain the TGP already makes.
-      8, 9, 10: blen = 4'd4;
+      8, 9: blen = 4'd4;
       default: blen = 4'd1;
     endcase
   endfunction
@@ -331,7 +331,7 @@ module m2_sdram #(
   assign sd_cke = 1'b1;
 
   typedef enum logic [3:0] {
-    S_INIT, S_IDLE, S_DISPATCH, S_PRE_XFER, S_ACT, S_RCD,
+    S_INIT, S_IDLE, S_DISPATCH, S_MISS, S_PRE_XFER, S_ACT, S_RCD,
     S_RD, S_WR, S_WRRC, S_PRE_REF, S_REFW
   } state_t;
   state_t state;
@@ -504,6 +504,18 @@ module m2_sdram #(
   // every read closed the row behind itself.
   logic        row_hit;
   assign row_hit = bank_open[tbank] && (bank_row[tbank] == trow);
+
+  // THE ROW COMPARATOR MUST NOT REACH cmd. S_DISPATCH was added to keep the
+  // port mux out of the command cone, and it does, but row_hit was still
+  // computed and acted on in the same cycle -- so xfer_addr's bank and row
+  // bits ran through four 4:1 muxes and a 13-bit compare into cmd, and that
+  // was the critical path of the whole design (xfer_addr[25]->cmd[0]).
+  //
+  // The hit leg is left alone: it writes state and never cmd, so it costs
+  // nothing to leave combinational, and a row hit is the case worth being
+  // fast. Only a MISS pays the extra cycle, and a miss is already buying
+  // tRP + tRCD, so one cycle is inside the noise.
+  logic [1:0]  dsp_bank;
 
   // Refresh needs every bank closed, so it must wait for the longest
   // outstanding tRAS rather than just the one it happens to look at.
@@ -774,30 +786,46 @@ module m2_sdram #(
           end
 
           S_DISPATCH: begin
-            if (row_hit) begin
-              state <= is_write ? S_WR : S_RD;
-            end else if (bank_open[tbank]) begin
-              // Precharge only the bank being reused: A10 low with the bank
-              // address, not the precharge-all the first version used. tRAS is
-              // owed from the ACTIVATE that opened this bank's row.
-              // rd_bank_cnt is defensive and, at this FSM's spacing, not
-              // currently reachable — deleting it changes no test result. The
-              // reason is structural, not a missing case: the earliest a
-              // precharge can follow that bank's last CAS is CAS -> S_IDLE ->
-              // S_DISPATCH, which lands exactly on the cycle the data is due,
-              // never before it. It is kept because that margin is one state
-              // wide, and any future shortening of the dispatch path would
-              // start truncating read bursts silently.
-              if (ras_cnt[tbank] == 0 && rd_bank_cnt[tbank] == 0) begin
-                cmd              <= C_PRE;
-                sd_ba            <= tbank;
-                sd_a             <= 13'h000;
-                bank_open[tbank] <= 1'b0;
-                wait_cnt         <= 4'(T_RP - 1);
-                state            <= S_PRE_XFER;
-              end
-            end else begin
-              state <= S_ACT;
+            // Writes NO cmd, by construction: that is the whole point. Both
+            // fast legs settle only `state`, which is a register boundary, so
+            // the row comparator reaches a flop and not the command pins.
+            dsp_bank <= tbank;
+            if (row_hit)                state <= is_write ? S_WR : S_RD;
+            else if (!bank_open[tbank]) state <= S_ACT;
+            else                        state <= S_MISS;
+          end
+
+          // Only a CONFLICT miss lands here -- bank open on the wrong row, the
+          // one case that must issue PRECHARGE. A bank-closed miss goes
+          // straight to S_ACT and pays nothing.
+          //
+          // MEASURED, tb_m2_sdram, transactions per cycle:
+          //   0.079689  before the split
+          //   0.077029  deferring every miss      -3.34%
+          //   0.077531  deferring conflicts only  -2.66%
+          // Splitting the bank-closed leg back out buys only half a point,
+          // because with ten ports over four banks most misses ARE conflict
+          // misses. The honest price of getting the row comparator off the
+          // command path is ~2.7% of SDRAM throughput.
+          S_MISS: begin
+            // Precharge only the bank being reused: A10 low with the bank
+            // address, not the precharge-all the first version used. tRAS is
+            // owed from the ACTIVATE that opened this bank's row.
+            // rd_bank_cnt is defensive and, at this FSM's spacing, not
+            // currently reachable — deleting it changes no test result. The
+            // reason is structural, not a missing case: the earliest a
+            // precharge can follow that bank's last CAS is CAS -> S_IDLE ->
+            // S_DISPATCH -> S_MISS, which now lands a cycle AFTER the data is
+            // due rather than exactly on it. It is kept because that margin
+            // used to be one state wide, and any future shortening of the
+            // dispatch path would start truncating read bursts silently.
+            if (ras_cnt[dsp_bank] == 0 && rd_bank_cnt[dsp_bank] == 0) begin
+              cmd                 <= C_PRE;
+              sd_ba               <= dsp_bank;
+              sd_a                <= 13'h000;
+              bank_open[dsp_bank] <= 1'b0;
+              wait_cnt            <= 4'(T_RP - 1);
+              state               <= S_PRE_XFER;
             end
           end
 

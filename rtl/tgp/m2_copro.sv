@@ -95,7 +95,7 @@ module m2_copro (
   input  logic [31:0] tbl_rdata,
   input  logic        tbl_ack,
   output logic        dat_req,
-  output logic [18:0] dat_addr,
+  output logic [19:0] dat_addr,
   output logic        dat_we,
   output logic [15:0] dat_wdata,
   output logic        dat_is_buf,
@@ -160,6 +160,7 @@ module m2_copro (
   output logic        dbg_tgp_io_rd,
   output logic        dbg_tgp_io_wr,
   output logic        dbg_tgp_io_ack,
+  output logic [15:0] dbg_ff_math, dbg_ff_rom, dbg_ff_buf, dbg_rd_total,
   output logic        dbg_tgp_fifo_rd,
   output logic        dbg_tgp_fifo_wr,
   output logic [31:0] dbg_tgp_bank
@@ -390,7 +391,7 @@ module m2_copro (
   // 484,947, the input FIFO filled and stayed full, and 429,350 of the i960's
   // commands were discarded against it. The parameter was written, the reason
   // was written down, and the instantiation never passed it.
-  m2_tgp #(.EMPTY_FIFO_READS_ZERO(1'b0)) u_tgp (
+  m2_tgp #(.EMPTY_FIFO_READS_ZERO(1'b1)) u_tgp (
     .clk(clk), .rst_n(rst_n & ~halted),
     .dbg_ucode_ram_csum(), .dbg_ucode_ram_ok(),
     .ucode_clk(clk), .ucode_we(uc_we), .ucode_addr(uc_addr), .ucode_data(uc_data),
@@ -417,6 +418,7 @@ module m2_copro (
     .dbg_unimplemented(dbg_tgp_unimpl),
     .dbg_io_addr(dbg_tgp_io_addr), .dbg_io_rd(dbg_tgp_io_rd),
     .dbg_io_wr(dbg_tgp_io_wr), .dbg_io_ack(dbg_tgp_io_ack),
+    .dbg_ff_math(dbg_ff_math), .dbg_ff_rom(dbg_ff_rom), .dbg_ff_buf(dbg_ff_buf), .dbg_rd_total(dbg_rd_total),
     .dbg_fifo_rd(dbg_tgp_fifo_rd), .dbg_fifo_wr(dbg_tgp_fifo_wr), .dbg_bank(dbg_tgp_bank)
   );
 
