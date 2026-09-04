@@ -26,6 +26,7 @@
 #include "mb86233_ref.h"
 #include "verilated.h"
 #include <cstdio>
+#include <cstring>
 #include <cstdint>
 #include <vector>
 #include <cstdlib>
@@ -385,6 +386,98 @@ int main(int argc, char** argv) {
   for (int i = 0; i < 200; i++) { step_cycle(); if (dut->unimplemented) saw_unimpl = true; }
   checks++;
   if (saw_unimpl) { printf("  FAIL unimplemented asserted on decoded stream\n"); fails++; }
+
+  // ------------------------------------- 7/1,7/2,7/4: the (e) transfers
+  //
+  // STUDY R155. An external read into a REGISTER returned zero on the assembled
+  // core while the same external read into DATA MEMORY worked. The consequence
+  // was that Daytona's TGP built its display-list base `$0x69` from a data-ROM
+  // read at 0x7CF, got 0 instead of 0x30, and every command afterwards indexed
+  // 0x30 low -- the loop count came back 0xFFFFFFFF and the coprocessor never
+  // reached the mailbox clear at 0x4C4.
+  //
+  // WHY IT SURVIVED: the lockstep section below draws its transfer forms from
+  // FORMS[] = {0, 3, 6}, all of which are DATA-space. Not one `(e)` form -- 1,
+  // 2, 4 or 5 -- was ever generated, so the whole external transfer path was
+  // untested while the suite reported green.
+  printf("test: 7/x external (e) transfers, register destinations\n");
+  {
+    // io_read maps 0x00/0x08/0x10/0x18 to io_ramadr[0..3], so these are the
+    // addresses the harness's IO model can be made to return a known value at.
+    static const struct { uint32_t addr, slot; } IOA[] = {
+      {0x00, 0}, {0x08, 1}, {0x10, 2}, {0x18, 3}
+    };
+    static const struct { uint32_t idx; const char *nm; } REGS[] = {
+      {0x10, "A"}, {0x13, "B"}, {0x19, "D"}, {0x1c, "P"}
+    };
+    for (auto &ia : IOA) {
+      for (auto &rg : REGS) {
+        const uint32_t val = 0x00000030u + ia.addr * 0x1111u + rg.idx;
+        for (auto &w : prog) w = enc_nop();
+        prog[0] = enc_ldmov7(4, ia.addr, rg.idx);   // reg <- io[addr]
+        reset();
+        io_ramadr[ia.slot] = val;
+        if (!run_instrs(1)) { printf("  FAIL timeout\n"); fails++; continue; }
+        const uint32_t got = rg.idx == 0x10 ? dut->dbg_a
+                           : rg.idx == 0x13 ? dut->dbg_b
+                           : rg.idx == 0x19 ? dut->dbg_d
+                                            : dut->dbg_p;
+        char nm[64];
+        std::snprintf(nm, sizeof nm, "7/4 io[%02x] -> %s", ia.addr, rg.nm);
+        ck(nm, got, val);
+      }
+    }
+
+    // 7/1 is the same path outbound: reg -> io[ea]. Checked through the IO
+    // model's own state so a dropped write cannot pass unnoticed.
+    for (auto &ia : IOA) {
+      const uint32_t val = 0xa5000000u | ia.addr;
+      for (auto &w : prog) w = enc_nop();
+      prog[0] = enc_ldi(0x10, val & 0xffffff);      // A <- val
+      prog[1] = enc_ldmov7(1, ia.addr, 0x10);       // io[addr] <- A
+      reset();
+      io_ramadr[ia.slot] = 0;
+      if (!run_instrs(2)) { printf("  FAIL timeout\n"); fails++; continue; }
+      char nm[64];
+      std::snprintf(nm, sizeof nm, "7/1 A -> io[%02x]", ia.addr);
+      ck(nm, io_ramadr[ia.slot], val & 0xffffff);
+    }
+  }
+
+  // ------------------- the EXACT instruction from Daytona's TGP init (R155)
+  //
+  // 0x1C1E3380 at microcode 0x7CF: `mov (bx1) (e), d`. The forms above use
+  // DIRECT addressing and pass; this one addresses through b1+x1, and on the
+  // real boot it delivered 0 into D where the reference delivers 0x30.
+  //
+  //   07CF  mov (bx1) (e), d     <- this instruction
+  //   07D0  addd                 d = d + 0xFF800000
+  //   07D1  mov d, $0x69         the base every display-list access uses
+  //
+  // Encoded literally rather than through enc_ldmov7 so the test cannot drift
+  // from the bytes the game actually executes.
+  printf("test: 7/4 through (bx1) -- the instruction Daytona's init runs\n");
+  {
+    for (auto &w : prog) w = enc_nop();
+    prog[0] = enc_ldi(0x01, 0x0010);   // b1 = 0x10
+    prog[1] = enc_ldi(0x03, 0x0000);   // x1 = 0
+    prog[2] = 0x1C1E3380u;             // mov (bx1) (e), d
+    reset();
+    io_ramadr[2] = 0x00000030;         // io_read(0x10)
+    if (!run_instrs(3)) { printf("  FAIL timeout\n"); fails++; }
+    ck("7/4 (bx1)(e) -> D", dut->dbg_d, 0x00000030);
+
+    // And the same shape with a non-zero x1, so a b1-only or x1-only address
+    // cannot pass by accident.
+    for (auto &w : prog) w = enc_nop();
+    prog[0] = enc_ldi(0x01, 0x0008);   // b1 = 0x08
+    prog[1] = enc_ldi(0x03, 0x0010);   // x1 = 0x10  -> ea 0x18
+    prog[2] = 0x1C1E3380u;
+    reset();
+    io_ramadr[3] = 0x0000a55a;         // io_read(0x18)
+    if (!run_instrs(3)) { printf("  FAIL timeout\n"); fails++; }
+    ck("7/4 (bx1)(e) -> D, b1+x1", dut->dbg_d, 0x0000a55a);
+  }
 
   // ------------------------------------------------- store/load round trip
   //

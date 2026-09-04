@@ -8993,3 +8993,93 @@ R150 through R154 were all instruments -- a shared MAME port, discarded writes,
 ROM-sourced reads, an unloaded ROM. With those cleared, the core's own command
 stream now matches the reference for 110 words and the mailbox handshake
 completes 37 times in a run.
+
+---
+
+**R156 - FIXED. THE BANKED VIEW LOST THE IO DECODE TO A MODEL 1 REGISTER
+WINDOW. THE COMMAND STREAM NOW MATCHES MAME FOR EVERY WORD CAPTURED, THE
+MAILBOX READS ZERO, AND THE CPU HAS LEFT THE POLL.**
+
+*R155's location was right and its attribution was wrong.* It put the fault in
+the mb86233 core, on the strength of "an external read into a register returns
+zero where the same read into data memory works". Building the test proved the
+core innocent:
+
+  * `sim/tgp/tb_mb86233_core.cpp` **had no run target at all.** The only rule
+    naming it was `lint_mb86233_core`, which lints `$(M1R)` -- the read-only
+    Model 1 clone -- not our `rtl/tgp`. The harness's own header says "what is
+    unproven here is the glue", and the glue had never been executed.
+  * Wired up as `test_mb86233_core` against our RTL and given directed cases
+    for every `(e)` form into A/B/D/P, including the literal opcode
+    `0x1C1E3380` with `(bx1)` addressing: **all pass.** The core does this
+    correctly.
+  * The lockstep section explains why nothing caught it earlier: its transfer
+    forms are `FORMS[] = {0, 3, 6}`, all data-space. **Not one external `(e)`
+    form -- 1, 2, 4 or 5 -- was ever generated.**
+
+*The real fault, in `m2_tgp.sv`.* The IO decode computed the Model 1 register
+window from the address alone and tested it FIRST in the read mux:
+
+    wire io_lo    = (io_addr[15:5] == 11'd0);          // 0x00-0x1f
+    wire sel_radr = io_lo && (io_addr[2:0] == 3'd0);
+    ...
+    if      (sel_radr) io_rdata = copro_adr[radr_i];
+    else if (sel_rom || sel_buf) io_rdata = dat_rdata;
+
+Daytona's TGP init reads the data ROM at offset 0x10 (`mov (bx1) (e), d` at
+0x7CF, b1 = 0x10). That hit `sel_radr`, returned `copro_adr[2]` -- a register
+nothing had written, so zero -- and **discarded the 0x30 the ROM had already
+returned**. `dat_req = io_rd && (sel_rom || sel_buf)` fired regardless, which is
+exactly why the read looked correct on the bus while the core got zero, and why
+the count read at 0x1087 worked: `io_addr[15:5] != 0` there, so it fell through
+to `dat_rdata`.
+
+*The reference.* model2.cpp installs the math units and then the view, over the
+whole space:
+
+    map(0x00020, 0x00023) sincos ... map(0x0002a, 0x0002b) isqrt
+    map(0x0000, 0xffff).view(m_copro_tgp_bank);
+    m_copro_tgp_bank[0](0x0000, 0xffff).rw(copro_tgp_memory_r, ...);
+
+**A selected view covers its whole range and hides what is under it.** With the
+bank on, io 0x0000-0xffff IS the banked memory -- including 0x00-0x1f and the
+math units. The microcode knows: `ldi #0x0, rf3` at 0x7C9 and 0x7D6 brackets the
+two windowed reads at 0x7CF and 0x7D3. The fix is two words, `!win_en &&` on
+`io_lo` and `io_mid`, so the window wins whenever it is selected.
+
+`sel_radr`/`sel_rdat` are a Model 1 inheritance in any case -- model1_m.cpp's
+copro RAM window. Model 2's io map has nothing at 0x00-0x1f but the view. They
+are left reachable with the bank off rather than deleted: removing them is a
+separate change with no consumer asking for it.
+
+*Measured, 20 M instructions, BUFFERRAM=1:*
+
+                                  before          after
+    d after the 0x7CF read        00000000        00000030   (MAME: 00000030)
+    d after 0x7D0 addd            ff800000        ff800030   (MAME: FF800030)
+    dword 0x7FFC hits             74              340
+    copro buffer-RAM writes       178             850
+    MAILBOX dword 0x7FFC          ffffffff        00000000   <- what the game waits for
+    CPU at the end                IP 00011674     IP 000012b0
+    time in the 0x11000 page      5.0%            0.7%
+    V-blanks                      271             286
+
+**The display-list pointers are MAME's, all thirty in order:**
+
+    1057 1180 1049 1172 103b 1164 102d 1156 101f 1148 1011 113a 1003 112c
+    ff5 1110 fd9 10ee f98 e5a e5a c42 c42 a1d ac2 8f3 999 6ea 6fc 494
+
+and the counts are 6,6,...,7,0x15,0xc,0xc,9,9 where they were 0xFFFFFFFF.
+**The command stream matches MAME for all 200 words captured** -- no divergence
+at any index, where before it broke at 110.
+
+*Regression state.* Every TGP target passes, `test_mb86233_core` included and
+now actually run. `mb86233_regs` is unchanged at its long-standing 46,966 on
+register 0x21 (rf1) and remains owed.
+
+*Method.* Five instruments in this session could not report what was asked of
+them (R150, R151, R153, R154, and the core bench that was never wired up), and
+R155 misattributed a fault because of the last one. **Writing the test that
+should have existed is what located this: it exonerated the core in one run and
+left only the wrapper.** The suite is stronger for it -- the assembled core is
+executed now, and the untested `(e)` transfer forms have directed coverage.

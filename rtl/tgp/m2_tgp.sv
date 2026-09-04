@@ -431,13 +431,6 @@ module m2_tgp #(
   integer za;
   initial for (za = 0; za < 4; za = za + 1) copro_adr[za] = 32'd0;
 
-  wire        io_lo    = (io_addr[15:5] == 11'd0);
-  wire        sel_radr = io_lo && (io_addr[2:0] == 3'd0);
-  wire        sel_rdat = io_lo && (io_addr[2:0] == 3'd1);
-  wire [1:0]  radr_i   = io_addr[4:3];
-
-  wire        io_mid   = (io_addr[15:5] == 11'd1);   // 0x20-0x3f
-  wire        sel_math = io_mid && (io_addr[4:0] <= 5'h0b);
   // ------------------------------------------------ THE BANKED WINDOW (R133)
   //
   // Everything in copro_tgp_io_map that is not a math unit sits behind a VIEW,
@@ -463,6 +456,45 @@ module m2_tgp #(
   wire        win_en   = |bank_reg[23:22];          // else the view is not there
   wire        sel_rom  = win_en && win_adr[23];     // copro data ROM
   wire        sel_buf  = win_en && !win_adr[23] && win_adr[22];   // bufferram
+
+  // THE VIEW OVERRIDES EVERYTHING WHILE IT IS SELECTED, AND THIS DECODE HAD IT
+  // THE OTHER WAY ROUND (R156).
+  //
+  // model2.cpp installs the math units and THEN the view, over the whole space:
+  //
+  //     map(0x00020, 0x00023) sincos ... map(0x0002a, 0x0002b) isqrt
+  //     map(0x0000, 0xffff).view(m_copro_tgp_bank);
+  //     m_copro_tgp_bank[0](0x0000, 0xffff).rw(copro_tgp_memory_r, ...);
+  //
+  // A selected view covers its whole range and hides what is underneath, so
+  // when the bank is on, io 0x0000-0xffff IS the banked memory -- including
+  // 0x00-0x1f and the math units at 0x20-0x2b. The microcode knows this and
+  // turns the bank off before it needs them: `ldi #0x0, rf3` at 0x7C9 and
+  // 0x7D6, either side of the two windowed reads at 0x7CF and 0x7D3.
+  //
+  // These selects used to be computed from the address ALONE and were tested
+  // FIRST in the io_rdata mux, so they beat the window. Daytona's TGP init
+  // reads the data ROM at offset 0x10 (`mov (bx1) (e), d` at 0x7CF, with b1 =
+  // 0x10): that hit `sel_radr`, returned copro_adr[2] -- a register nothing had
+  // written, so zero -- and threw away the 0x30 the ROM had actually returned.
+  // `dat_req` fired all the same, which is why the read was visible on the bus
+  // and correct there while the core got zero.
+  //
+  // The cost: $0x69, the base every display-list access is built from, came out
+  // 0x30 low, the loop count was fetched from the wrong dword and read
+  // 0xFFFFFFFF, and the coprocessor never reached its mailbox clear at 0x4C4.
+  //
+  // sel_radr/sel_rdat are a MODEL 1 inheritance in any case -- model1_m.cpp's
+  // copro RAM window. Model 2's io map has nothing at 0x00-0x1f but the view.
+  // They are left reachable with the bank off rather than deleted, because
+  // removing them is a separate change with no consumer asking for it.
+  wire        io_lo    = !win_en && (io_addr[15:5] == 11'd0);
+  wire        sel_radr = io_lo && (io_addr[2:0] == 3'd0);
+  wire        sel_rdat = io_lo && (io_addr[2:0] == 3'd1);
+  wire [1:0]  radr_i   = io_addr[4:3];
+
+  wire        io_mid   = !win_en && (io_addr[15:5] == 11'd1);   // 0x20-0x3f
+  wire        sel_math = io_mid && (io_addr[4:0] <= 5'h0b);
 
   // ---------------------------------------------------- the math units
   //

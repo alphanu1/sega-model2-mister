@@ -109,60 +109,58 @@ value. It does not: MAME writes the same 0xFFFFFFFF from the same instruction
 (0x46F, source `$2`). `{0}` in that disassembly is the transfer type, not "write
 zero" -- the zero at 0x4C4 is data-RAM `$0`.
 
-## THE COMMAND STREAM MATCHES FOR 110 WORDS, AND THE DIVERGENCE IS ONE
-## INSTRUCTION (R155)
+## FIXED: THE MAILBOX CLEARS, AND THE COMMAND STREAM MATCHES MAME (R156)
 
-Our i960's command stream, dumped in order and diffed against MAME's, is
-**identical for 110 words**, then:
+    MAILBOX dword 0x7FFC:  00000000   -- what the game waits for
+    command stream:        matches MAME for ALL 200 words captured
+    display-list pointers: MAME's exact sequence, all 30 in order
+    CPU:                   IP 000012b0, out of the poll entirely
 
-    idx 110   ours 00000000   MAME 00000146
-    idx 114   ours 00000000   MAME 00000146
-    idx 119   ours BDCCCCCD   MAME 80000000
+**The fault was in `m2_tgp.sv`'s IO decode, not the mb86233 core.** The Model 1
+register window was computed from the address alone and tested FIRST in the read
+mux, so it beat the banked view:
 
-`BDCCCCCD` names its own cause: 0x11688 is `cmpobe 0,g0,0x116b4` and 0x116B4 is
-`lda 0xbdcccccd,g0` -- the constant the CPU substitutes **when the copro's first
-result dword reads zero**. Confirmed: 0x91FFF4 held bdcccccd, not MAME's 2.
+    wire io_lo    = (io_addr[15:5] == 11'd0);      // 0x00-0x1f
+    wire sel_radr = io_lo && (io_addr[2:0] == 3'd0);
+    if      (sel_radr) io_rdata = copro_adr[radr_i];
+    else if (sel_rom || sel_buf) io_rdata = dat_rdata;
 
-**It traces to one instruction.** Every display-list access is 0x30 low, and
-that 0x30 is built once at boot:
+The TGP init reads the data ROM at offset 0x10 (`mov (bx1)(e), d` at 0x7CF,
+b1=0x10). That hit `sel_radr`, returned `copro_adr[2]` -- never written, so zero
+-- and threw away the 0x30 the ROM had returned. `dat_req` fired anyway, which
+is why the read looked right on the bus while the core got zero, and why the
+count read at 0x1087 worked (`io_addr[15:5] != 0` there).
 
-    07CF  mov (bx1) (e), d     READ THE DATA ROM -> d
-    07D0  addd                 d = d + 0xFF800000
-    07D1  mov d, $0x69         the base for every command
+MAME installs the view over the whole 0x0000-0xffff AFTER the math units, and a
+selected view hides what is under it. The microcode brackets its windowed reads
+with `ldi #0x0, rf3` at 0x7C9/0x7D6. **Fix: `!win_en &&` on `io_lo` and
+`io_mid`.**
 
-    pc=07cf  d=00000000     <<< should be 0x00000030
-    pc=07d0  d=ff800000         MAME: d=FF800030
+                                  before          after
+    d after the 0x7CF read        00000000        00000030
+    dword 0x7FFC hits             74              340
+    copro buffer-RAM writes       178             850
+    MAILBOX dword 0x7FFC          ffffffff        00000000
+    CPU at the end                IP 00011674     IP 000012b0
+    time in the 0x11000 page      5.0%            0.7%
 
-**The read itself is correct** -- the same run logs
-`dat_addr=00010 is_buf=0 -> 00000030`. The value is fetched and then not written
-to `d`. The same external read into DATA MEMORY (0x47C, `mov (x0+1)(e),$0x4a`)
-works, so it is the REGISTER destination that loses it.
+## R155 WAS WRONG ABOUT WHERE, AND THE TEST IS WHAT SETTLED IT
 
-The instruction is group 0x07, op 7, `r2>>6 = 4` -- MAME's "mov mem (e), reg",
-whose `write_reg(r2, v)` runs AFTER `alu_post_1(alu)` and wins.
+R155 blamed the mb86233 core. **`sim/tgp/tb_mb86233_core.cpp` had no run target
+at all** -- the only rule naming it was `lint_mb86233_core`, which lints
+`$(M1R)`, the read-only Model 1 clone, not our rtl/tgp. Wired up as
+`test_mb86233_core` with directed cases for every `(e)` form into A/B/D/P,
+including the literal opcode 0x1C1E3380 with `(bx1)` addressing: all pass. The
+core was innocent, and that left only the wrapper.
 
-**Already inspected and correct on paper** (do not re-read these):
-`mb86233_dec.sv:115` op7_sub=r2[8:6]=4; `mb86233_xfer.sv` 3'd4 decode;
-`core.sv:553-585` S_SRC_W latching io_rdata on io_ack; `core.sv:708-710` S_DST
-rf write to 0x19; `regs.sv:268` `6'h19: reg_d <= wr_data`; `core.sv:729`
-xfer_d_valid; `alu.sv:483-485` s2_xv priority.
+The lockstep's transfer forms are `FORMS[] = {0, 3, 6}` -- all data-space.
+**No external `(e)` form was ever generated**, which is why this survived.
 
-**First place to instrument:** `alu_active = d_lab | d_ldmov | d_repgrp`
-(core.sv:405) means the ALU pipeline RUNS for this instruction though its alu
-field is 0, and `regs.sv` lets `if (alu_d_we) reg_d <= alu_d;` override the
-write_reg path unconditionally. Both target reg_d in the same instruction.
+## TEST STATE
 
-**Build the test, do not read more code:** a directed case in the mb86233
-differential suite -- group 0x07, op 7, sub 4, external source, register
-destination. The suite is green, so it does not cover this shape, which is why a
-defect this central survived.
-
-## PERSPECTIVE
-
-This is the FIRST defect this session in our own RTL. R150-R154 were all
-instruments: a shared MAME port, discarded writes, ROM-sourced reads, an
-unloaded ROM. With those cleared the core matches the reference for 110 command
-words and completes 37 mailbox handshakes in a 20 M-instruction run.
+Every TGP target passes, `test_mb86233_core` now included and actually run.
+`mb86233_regs` unchanged at its long-standing 46,966 on register 0x21 (rf1),
+still owed.
 
 ## THE 2:1 HANDSHAKE AUDIT: SAFE, AND THE RATIO IS WHY (R152)
 
@@ -218,14 +216,15 @@ zero never comes back for the real result. Stalling prevents it.
 
 ## NEXT STEPS, IN ORDER
 
-1. **A directed differential test for group 0x07 / op 7 / sub 4** -- external
-   source, register destination -- against `mb86233_ref`. Reproduce the zero,
-   then fix it. Do not read more RTL first; R155 lists what is already known
-   good.
-2. **Re-diff the command stream** once it is fixed. It matches for 110 words
-   now; the next divergence is the next target.
-3. **Then fit.** The two RTL lines of R151 are still unflashed and one change
-   per build still stands (R147).
+1. **FIT AND FLASH.** There are now three unflashed RTL changes -- R151's two
+   stall lines and R156's two decode words -- and the board has not seen any of
+   them. One change per build still stands (R147), so decide the order
+   deliberately; R156 is the one with the measured behavioural result.
+2. **Run the boot sim longer than 20 M instructions.** The CPU is out of the
+   poll at IP 000012b0 and tilemap scroll is still zero; the next question is
+   what attract does with a working coprocessor.
+3. **Generate the `(e)` transfer forms in the lockstep**, not just directed
+   cases -- FORMS[] should be {0,1,2,3,4,5,6}.
 
 ## HOW TO REPRODUCE WITHOUT A FIT
 

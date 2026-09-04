@@ -741,10 +741,33 @@ $(eval $(call TGP_UNIT,mb86233_dec,$(TGP)/mb86233_dec.sv))
 $(eval $(call TGP_UNIT,mb86233_xfer,$(TGP_PKG) $(TGP)/mb86233_xfer.sv))
 $(eval $(call TGP_UNIT,mb86233_seq,$(TGP_PKG) $(TGP)/mb86233_seq.sv))
 
+# THE ASSEMBLED CORE, AND IT HAD NO RUN TARGET AT ALL.
+#
+# sim/tgp/tb_mb86233_core.cpp has existed since the TGP was ported and was never
+# executed: the only rule naming it was `lint_mb86233_core`, and that lints
+# $(M1R) -- the read-only Model 1 clone -- rather than our rtl/tgp. So every
+# per-unit bench was green while the ASSEMBLED core went untested, which is the
+# exact class of bug the harness's own header says it exists to catch: "what is
+# unproven here is the glue."
+#
+# Study R155 is what that cost: an external `(e)` transfer into a register
+# returned zero, Daytona's TGP built its display-list base 0x30 low, and the
+# coprocessor never reached its mailbox clear.
+#
+# It needs mb86233_ref.cpp beside the bench, which TGP_UNIT does not pass, so
+# this rule is written out rather than generated.
+obj_mb86233_core/Vmb86233_core: $(TGP_CORE) sim/tgp/tb_mb86233_core.cpp sim/tgp/mb86233_ref.cpp
+	$(VBUILD) --top-module mb86233_core -CFLAGS "-O2 -I../sim/tgp" $(TGPFLAGS) \
+	  --Mdir obj_mb86233_core -o Vmb86233_core $(TGP_CORE) \
+	  sim/tgp/tb_mb86233_core.cpp sim/tgp/mb86233_ref.cpp
+test_mb86233_core: obj_mb86233_core/Vmb86233_core
+	@echo "== test mb86233_core (the ASSEMBLED core: directed + lockstep)"
+	@./obj_mb86233_core/Vmb86233_core
+
 .PHONY: test_tgp
 test_tgp: test_fp_mul test_fp_add test_fp_div test_mb86233_alu test_mb86233_agu \
           test_mb86233_regs test_mb86233_mem test_mb86233_dec test_mb86233_xfer \
-          test_mb86233_seq
+          test_mb86233_seq test_mb86233_core
 
 test_m2_backup: obj_backup/Vm2_backup
 	@echo "== test m2_backup (byte lanes, the 0xFF power-up, the save path)"
