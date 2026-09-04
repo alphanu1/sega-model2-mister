@@ -45,25 +45,28 @@ module m2_tgp #(
   // AS_PROGRAM is 0x000-0x7ff. The microcode is exactly this size, so a smaller
   // parameter would silently alias rather than fail.
   parameter int unsigned PROG_WORDS = 2048,
-  // AN EMPTY COMMAND FIFO READS AS ZERO -- CORRECT, AND OFF BY DEFAULT.
+  // AN EMPTY COMMAND FIFO STALLS THE PROCESSOR. OFF IS THE REFERENCE.
   //
-  // gen_fifo.h: "the pop itself will then return zero", and the microcode needs
-  // that zero. 0052 `brul alw d` jumps to d = get_exp(b) + 0x53, so an empty
-  // FIFO gives 0x53 - the idle handler, which loops back to 0x9b and polls
-  // again. Stalling instead makes b = 0 unreachable and parks the core at 004C
-  // forever. All of that is measured and stands; see docs/findings.md.
+  // gen_fifo.cpp's pop() returns T() on an empty FIFO -- but only AFTER firing
+  // the on-empty callback, which for the Model 2 TGP is `m_copro_tgp->stall()`
+  // (model2.cpp:193-196). mb86233.cpp:1225-1227 then replays the instruction:
+  // `do_stall: m_pc = m_ppc`. The zero is returned to a cancelled read. MAME's
+  // TGP sits at 004c until a word arrives and never enters the idle handler
+  // on an empty FIFO.
   //
-  // BUT TURNING IT ON DEADLOCKS THE MACHINE, on the board and in simulation.
-  // Unparking the coprocessor means it starts PRODUCING results, and our V60
-  // never drains them: `fout` fills at ~400 M cycles, the TGP then stops taking
-  // commands, `fin` fills, and both halt permanently around frame 340. On
-  // hardware that is sky and sea with no glyphs and nothing moving - WORSE than
-  // the parked behaviour, which at least left the V60 running and drawing text.
+  // With this parameter set the core instead free-runs the idle loop, which
+  // reads the FIFO three times an iteration (004c, 00b5, 00b6). Only 004c is
+  // the dispatch, so a command that lands during the other two is eaten as an
+  // operand: measured on Model 2 as 109 commands popped and none dispatched
+  // (R148/R149). The Model 1 deadlock note that used to live here (fout fills,
+  // TGP halts, fin fills, V60 halts -- 520cf6a) describes a consumer that
+  // stopped draining results; it is not a reason to take the idle path on an
+  // empty FIFO, and Model 1 has since concluded it was "probably not the
+  // crash".
   //
-  // The interlocks are right and must not be relaxed. What is wrong is the
-  // V60's 1.63x speed deficit, which keeps it off the code that reads results.
-  // FLIP THIS TO 1 WHEN THAT IS FIXED - it is the correct behaviour, and the
-  // deadlock cannot arm once the V60 keeps up.
+  // Kept as a switch because a stalling TGP is invisible in a harness that
+  // never pushes a command: `dbg_retires` stops moving. That is the correct
+  // behaviour, not a hang. Set it only to make an unfed core visibly execute.
   parameter bit EMPTY_FIFO_READS_ZERO = 1'b0
 ) (
   input  logic        clk,

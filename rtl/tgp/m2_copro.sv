@@ -246,28 +246,38 @@ module m2_copro (
   wire [31:0] tgp_out_data;
   wire        tgp_out_push;
 
-  // THE FULL LINE. A program upload is never stalled -- it goes to program RAM
-  // at a counter, not into the FIFO -- so only a genuine FIFO push can block.
-  // NEVER STALL THE i960. THIS IS WHAT THE REFERENCE DOES, AND STALLING IT
-  // HALTED THE MACHINE ON HARDWARE.
+  // THE STALL LINE, AND WHICH DIRECTION IT RUNS IN. It is a READ of an empty
+  // output FIFO that holds the i960, never a write.
   //
-  // gen_fifo.cpp's push() ALWAYS completes -- a push into a full FIFO goes on
-  // an unbounded overflow queue and the source is only halted later, at a
-  // scheduler sync, by a mechanism that can release it. It never blocks the CPU
-  // inside a bus cycle.
+  // model2.cpp:202-205 sets up copro_fifo_out with `m_maincpu->i960_stall()`
+  // as its on-empty callback, and gen_fifo.cpp:109-115 fires that callback
+  // BEFORE returning T(): the zero is returned to an instruction that has
+  // already been cancelled. i960.h:71-75 is the whole of i960_stall() --
+  // `m_stalled = true; m_IP = m_PIP;` -- and i960.cpp:2053 refuses to write
+  // the destination register while stalled. The `ld` is replayed until a
+  // word is there. The program never sees the zero.
   //
-  // This held the bridge's acknowledge instead, with no timeout and no other
-  // way out: if the FIFO filled and the coprocessor did not drain it, the i960
-  // waited for ever. Simulation reported the hold at 0.0% of cycles and the
-  // board froze -- black tilemap, no text, attract stuck on its first screen --
-  // because the command volume in the harness is not the command volume of the
-  // real game.
+  // The game depends on that. 0x115a0, 0x115d0, 0x11558 and every routine
+  // like them push a command and READ THE RESULT IN THE NEXT INSTRUCTION --
+  // `st r6,(g11)[g12]; st r5,(g11)[g12]; ld (g11)[g12],g1` is push, push,
+  // pop. The protocol is synchronous and the FIFO read is the wait. Handing
+  // back a zero instead is not an approximation of the reference, it is a
+  // different machine: the i960 stores 0 as a height or a collision result
+  // and carries on, and the words that later arrive in `fout` are read as
+  // answers to questions asked long after.
   //
-  // The queue is 512 deep instead, which is the overflow MAME models as
-  // unbounded, and the i960 is never held. `dbg_in_dropped` stays as the
-  // assertion: if it ever moves, the queue was too small and commands were
-  // lost, which is a visible failure rather than a hung machine.
-  assign stall = 1'b0;
+  // WRITES ARE A DIFFERENT MATTER AND STAY UNSTALLED. gen_fifo's push() always
+  // completes; a full FIFO halts the source at a scheduler sync, not inside
+  // the bus cycle. The earlier `stall` on a full push (removed in 41199bf)
+  // froze the board because the coprocessor of that era could not drain the
+  // queue at all (R133, an invented memory map). The queue is 128 deep for
+  // that case and `dbg_in_dropped` says if it was ever too small.
+  //
+  // The bridge holds the access exactly as it would for a slow bus: io_sel
+  // stays asserted, no acknowledge, and the read completes on the first cycle
+  // `fout` has a word. `fout_pop` is gated on `fout_valid`, so a held read
+  // pops once, on that cycle, and never before.
+  assign stall = fifo_rd && !fout_valid;
 
   // A read of the FIFO port pops; a write pushes, or uploads.
   wire fifo_rd = sel_fifo && !we;
@@ -372,6 +382,8 @@ module m2_copro (
     rdata = 32'hFFFF_FFFF;                       // copro_prg_r's value
     if      (sel_ctl)     rdata = coproctl;
     else if (sel_fifoctl) rdata = {31'd0, fout_empty};
+    // The empty case is unreachable by the CPU: `stall` holds the read until
+    // fout_valid, so the 0 is only what the bus shows while nobody samples it.
     else if (sel_fifo)    rdata = fout_valid ? fout_q : 32'd0;
   end
 
@@ -379,19 +391,33 @@ module m2_copro (
 
   // ---- the processor itself
   wire        ram_req_w;
-  // EMPTY_FIFO_READS_ZERO MUST BE SET, AND LEAVING IT DEFAULT COST A WHOLE
-  // SESSION. m2_tgp defaults it to 0, which makes an empty FIFO read WITHHOLD
-  // ITS ACKNOWLEDGE and stall the processor. m2_tgp's own header explains at
-  // length why that is wrong -- gen_fifo.cpp's pop() returns T() on an empty
-  // FIFO, and Daytona's microcode needs that zero: 0x52 computes
-  // `d = get_exp(b) + 0x53`, so b = 0 selects 0x53, the IDLE handler. A TGP
-  // that stalls instead can never reach its own idle path.
+  // AN EMPTY COMMAND FIFO STALLS THE TGP. THAT IS THE REFERENCE, READ AS FAR
+  // AS THE CALLBACK RATHER THAN STOPPING AT THE RETURN VALUE.
   //
-  // The measured cost of the default: the TGP popped 29 words where MAME pops
-  // 484,947, the input FIFO filled and stayed full, and 429,350 of the i960's
-  // commands were discarded against it. The parameter was written, the reason
-  // was written down, and the instantiation never passed it.
-  m2_tgp #(.EMPTY_FIFO_READS_ZERO(1'b1)) u_tgp (
+  // model2.cpp:193-196 sets up copro_fifo_in with `m_copro_tgp->stall()` on
+  // empty, then HALT at the sync; gen_fifo.cpp:109-115 fires it before
+  // returning T(); mb86233.cpp:1225-1227 (`do_stall: m_pc = m_ppc`) replays
+  // the instruction. MAME's TGP parks at 004c with the FIFO empty -- it does
+  // NOT fall through `0053 brif !zrd` into the idle handler. It never reaches
+  // 00b5/00b6 unless a genuine zero word was pushed.
+  //
+  // R146 set this to 1 on the reading "pop() returns T() and never stalls",
+  // which is what the function's last line says and not what the function
+  // does. The cost of that was measured (R148/R149): the free-running loop
+  // reads rf1 THREE times an iteration, only the first is the dispatch, and
+  // at ~272,000 iterations a second every command the i960 sent was consumed
+  // as an idle-handler operand at 00b5/00b6 instead. 109 arrived, none
+  // dispatched. With the pop held, the only read that can consume a command
+  // is the dispatch at 004c, exactly as in MAME.
+  //
+  // The stale-head defect R146 found in the same place was real and its fix
+  // stays: `fifo_rdata` reads `fifo_in_valid ? fifo_in_data : 0`.
+  //
+  // The fin-full / fout-full deadlock Model 1 records (520cf6a) arms only if
+  // the consumer stops draining results. Ours drains synchronously -- see the
+  // `stall` line above -- so it cannot; and if it ever does, the signature is
+  // everything freezing at once, not the frame-1 hang this replaces.
+  m2_tgp #(.EMPTY_FIFO_READS_ZERO(1'b0)) u_tgp (
     .clk(clk), .rst_n(rst_n & ~halted),
     .dbg_ucode_ram_csum(), .dbg_ucode_ram_ok(),
     .ucode_clk(clk), .ucode_we(uc_we), .ucode_addr(uc_addr), .ucode_data(uc_data),

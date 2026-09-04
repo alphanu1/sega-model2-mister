@@ -1,6 +1,152 @@
 # Handoff
 
-**Updated:** 2026-09-02. `make test` green at 29.
+**Updated:** 2026-09-04. Study entries R150-R151 added; R148 and R149's central
+claims are RETRACTED by R150.
+
+## WHERE THE MACHINE IS
+
+On the card: `108fed3d` (seed 162). Boots, tilemaps and CREDIT draw, no flashing
+INSERT COIN, stuck at attract frame 1. Built and NOT yet flashed: seed 172,
++0.394, which adds the FIFO write-ack change.
+
+In the working tree, simulated but NOT yet fitted or flashed: the two-line stall
+fix of R151, below.
+
+## THE i960 IS NOT SLOW. IT NEVER WAS (R150)
+
+The whole "our i960 pushes four commands a second where MAME pushes 144,000"
+story was an artefact of MAME's port multiplexing. `copro_fifo_w` is both the
+command FIFO and the microcode loader, chosen by `coproctl` bit 31 rather than
+by address, so a watchpoint counts 2,024 program words as commands.
+
+    MAME, up to the first mailbox poll   0x884000: 2055   0x880000:   78  = 2133
+    ours, same point                     program:  2024   pushed:    109  = 2133
+
+31 payload pushes + 78 function-port writes = **109, our exact number.** The
+command stream is identical to the reference.
+
+Also retracted with it: "pc never reaches 00a1" as evidence of a missed
+dispatch. 00a1 is the `bl != bh` branch; for command 0x25 the reference does not
+take it either. Our TGP was dispatching correctly all along -- `pc=030b
+B=12802525 D=0000007d` was the CORRECT handler for command 0x25 (0x7d -> 0x30a
+-> 0x30b -> 004c), visible in the logs before any change was made.
+
+## THE ACTUAL FAULT, AND IT IS FIXED IN THE TREE (R151)
+
+**Both FIFO pops stall their reader in the reference. Ours stalled neither.**
+
+`gen_fifo.cpp:109-115` fires the on-empty callback BEFORE `return T()`;
+`model2.cpp:193-209` binds those to `m_copro_tgp->stall()` and
+`m_maincpu->i960_stall()`; and both replay the instruction (`m_IP = m_PIP`,
+`m_pc = m_ppc`). Neither processor ever sees the zero. R146 read pop()'s last
+line and missed the six above it.
+
+The i960 side is what mattered. The ROM's protocol is synchronous -- push, push,
+`ld (g11)[g12]` in the very next instruction, at 0x115a0, 0x115d0, 0x11558,
+0x67d4, 0xf110, 0xf1a4, 0xf3d4 -- so **the FIFO read IS the wait**, and we were
+answering it with 0.
+
+    m2_copro.sv   assign stall = fifo_rd && !fout_valid;    // was 1'b0
+    m2_copro.sv   m2_tgp #(.EMPTY_FIFO_READS_ZERO(1'b0))     // was 1'b1
+
+The rule is directional and was over-generalised by 41199bf:
+**writes never stall, reads always do.**
+
+Measured, boot harness, BUFFERRAM=1, 20 M instructions, one variable:
+
+                              before        after
+    TGP sits at               pc 0055       pc 048f    <- the display-list handler
+    distinct TGP pcs          150           456
+    copro buffer-RAM writes   0             2
+    dword 0x7FFC hits         0             2          <- THE MAILBOX, first time
+    i960 held by the copro    0 cycles      7,960
+
+0x480-0x4b0 is the vertex-copy handler (`rep #0xc`), and 0x48f is MAME's hottest
+TGP address after the poll.
+
+## IT IS NOT FIXED, AND THAT IS THE POINT
+
+**Both runs still end at IP 0001166c.** Two mailbox writes in 20 M instructions
+and the game still spins: either the value is not the zero the poll wants, or it
+lands after the poll begins. The harness counts 0x7FFC hits but does NOT record
+the value -- that probe is the next step, and it is a harness change, not a fit.
+
+Reporting a partial result as a fix is exactly how R141 and R143 went wrong.
+
+## NEXT STEPS, IN ORDER
+
+1. **Record the mailbox VALUE, not just the hit count.** `obs_bufw_7ffc` in
+   `sim/io/m2_boot_harness.sv` counts; add the data word. That answers whether
+   the copro is writing zero.
+2. **Then compare against MAME's own mailbox writes.** A watchpoint on
+   bufferram dword 0x7FFC, both halves, with the TGP pc at each write.
+3. **Only then fit.** The change is two lines and its risk is the named Model 1
+   deadlock, which needs a consumer that stops draining -- and a CPU that
+   stalls on every result read drains by construction.
+
+## HOW TO REPRODUCE WITHOUT A FIT
+
+    rm -rf obj_boot
+    make test_m2_boot BOOT_BUFFERRAM=1 TEST_ARGS="+insn=20000000"
+
+About 3.5 minutes. 20 M instructions is enough -- the i960 reaches the mailbox
+poll well before it.
+
+## TOOLING THAT NOW EXISTS
+
+* **Ghidra decompiles the i960 ROM, headless.** The `ghidra_i960-master` SLEIGH
+  module installed into the flatpak's user Extensions dir
+  (`~/.var/app/org.ghidra_sre.Ghidra/config/ghidra/ghidra_12.1.3_FLATPAK/Extensions/i960`),
+  with `Module.manifest` rewritten to `name=i960` -- the upstream file ships
+  `name=@riscv@`, a build-time token that Ghidra rejects. Two gotchas: the
+  project path **must not contain a dot-prefixed element** (headless refuses
+  `~/.var/...`; use `~/ghidra-m2work`), and the ROM must be interleaved first --
+  `epr-16530a.12` is the low word, `epr-16531a.13` the high, two bytes at a
+  time.
+* **MAME's `dasm` command** dumps either CPU's disassembly without a trace:
+  `dasm out.txt,0x11000,0x1000,1` for the i960, `,copro_tgp` for the TGP. The
+  TGP must be dumped AFTER the microcode upload or it is 2,048 zeros.
+* Both agree instruction for instruction, which is the check worth doing before
+  trusting either.
+
+## STILL UNPROVEN OR OWED
+
+* **`mb86233_regs` fails 46,966 checks** on register 0x21 (rf1, the FIFO read) --
+  byte-identical before and after this change, so pre-existing and untouched.
+  Part of the TGP suite is RED and will mask a real regression until settled.
+  Every other TGP target passes: `mb86233_mem/dec/xfer/seq/alu/agu`,
+  `fp_mul/add/div`, all fails=0.
+* **The black screen of 1a66f6ae is unexplained.**
+* **The shared SDRAM write port has five requesters and one unqualified ack**
+  (R144). It will corrupt display lists once geometry and copro results flow
+  together.
+* **The 20-bit copro data-ROM address and the FIFO write-ack change are built
+  (seed 172, +0.394) but NOT flashed.**
+* **Nothing downstream of the walker exists.** ~9,000 ALM free.
+
+## STANDING LESSONS, PAID AGAIN
+
+* **Read the function, not its return statement.** R146 quoted a true line of
+  `gen_fifo.h` and drew a conclusion the six lines above it forbid.
+* **Read the code behind the REFERENCE's instrument too.** R149 wrote "before
+  any number is used as evidence, read the code that produces it" -- and R150's
+  premise was then taken on trust from a MAME watchpoint whose port
+  multiplexes two unrelated things. The rule was written down and skipped on
+  the very next number.
+* **A grep for `FAIL` matches `fails=0`.** Nine passing TGP targets were read as
+  nine failures for a minute on exactly that.
+* **One change per build** (R147). Still binding.
+
+---
+
+---
+
+# EVERYTHING BELOW IS THE RECORD OF EARLIER SESSIONS
+
+Kept because the reasoning and the measurements are worth having, but read it
+against the sections above, which supersede it where they disagree. In
+particular R149 retracts five conclusions drawn on 3 September from misread
+instruments -- the coprocessor is NOT frozen, NOT deadlocked and NOT slow.
 
 ## THE COPROCESSOR WAS READING AN INVENTED MEMORY MAP (R133, R134)
 

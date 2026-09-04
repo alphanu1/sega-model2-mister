@@ -8445,3 +8445,168 @@ the disassembly. R143 read a probe that was never wired. R149 read a wrapping
 counter as a total. **Before any number is used as evidence, read the code that
 produces it.** Every one of these cost a build, a wrong conclusion recorded in
 this study, or both.
+
+---
+
+**R150 - THE i960'S COMMAND RATE IS THE REFERENCE'S, EXACTLY. R148 AND R149
+COUNTED MAME'S MICROCODE UPLOAD AS COMMANDS, AND THE "FOUR ORDERS OF MAGNITUDE"
+GAP WAS AN ARTEFACT OF THE PORT THE UPLOAD SHARES.**
+
+R148: *"it writes the FIFO port 173,552 times against 6,979 function-port writes.
+Ours writes the FIFO port essentially never."* R149 built its live hypothesis on
+that: *"our i960 sends four commands a second where the reference sends tens of
+thousands."* Both are wrong, and the measurement that settles it is one
+watchpoint.
+
+MAME, every write to 0x880000-0x887fff up to the first mailbox poll at 0x1166c,
+split by port:
+
+    0x884000  fifo + PROGRAM UPLOAD     2055
+    0x880000  function port               78
+                                        ----
+                                        2133
+
+Ours, same point in the boot, from the harness:
+
+    program uploaded                    2024 words
+    FIFO in pushed                       109
+                                        ----
+                                        2133
+
+2024 + 109 = 2133. MAME's 2055 is the same 2024 microcode words plus 31 payload
+pushes, and 31 + 78 = **109 -- the identical command count, word for word.**
+
+*Why the port hides it.* `copro_fifo_w` (model2.cpp:624-631) is BOTH the command
+FIFO and the microcode loader; which one a write means depends on
+`m_coproctl & 0x80000000`, not on the address. A watchpoint on the port counts
+2,024 program words as commands. Our harness separates them because our RTL
+does, so the two counters were never measuring the same thing. Comparing them
+produced a 20:1 gap where there is none.
+
+*What this retracts:*
+
+  1. R148's "the i960 is being asked the wrong question" -- it is not. It sends
+     the same 109 words at the same point.
+  2. R149's live hypothesis in full: the 004c-versus-00b5/00b6 race, the
+     ~272,000 iterations against ~4 commands, and the conclusion that "the
+     fault is not in the coprocessor at all". The premise was the rate gap.
+  3. "pc never reaches 00a1, the command path" as evidence of a missed
+     dispatch. 00a1 is the branch taken when `bl != bh`; for command 0x25,
+     `bl == bh == 0x25`, so the reference does not take it either. The
+     dispatch at 004c computes `d = bh + 0x58` and jumps -- MAME to 0x7d, then
+     0x30a, 0x30b, back to 004c. **Our TGP was already doing exactly that**
+     (`pc=030b B=12802525 D=0000007d` in the harness log, before any change).
+     It was dispatching correctly the whole time.
+
+*The method failure, and it is the same one three entries running.* R149 closed
+with "before any number is used as evidence, read the code that produces it",
+and then this entry's premise was a counter whose producing code
+(`copro_fifo_w`) multiplexes two unrelated things onto one address. The rule
+was written down and the next number was taken on trust anyway. **Reading the
+code behind OUR instrument is not enough; the reference's instrument needs the
+same treatment.**
+
+---
+
+**R151 - BOTH FIFO POPS STALL THEIR READER IN THE REFERENCE, AND OURS STALLED
+NEITHER. R146 READ pop()'s RETURN VALUE WITHOUT THE CALLBACK FIRED SIX LINES
+ABOVE IT.**
+
+R146 concluded: *"gen_fifo.h's pop() returns T() on an empty FIFO and never
+stalls."* The first half is true. The second is contradicted by the body of the
+function:
+
+    gen_fifo.cpp:109-115
+        if(is_empty()) {
+            m_sync_empty->adjust(attotime::zero);
+            m_on_fifo_empty_pre_sync();     // <-- fired FIRST
+            return T();                     // <-- to a cancelled instruction
+        }
+
+model2.cpp:193-209 binds both callbacks, and both replay the instruction that
+read:
+
+    copro_fifo_in  (i960 -> TGP)   on empty: m_copro_tgp->stall()
+    copro_fifo_out (TGP -> i960)   on empty: m_maincpu->i960_stall()
+
+    i960.h:71-75        m_stalled = true; m_IP = m_PIP;
+    i960.cpp:2053       `if(!m_stalled)` -- the destination register is not written
+    mb86233.cpp:1225-7  do_stall: m_pc = m_ppc; m_stall = false;
+
+**In the reference neither processor ever observes the zero.** The T() is
+returned into an access that has already been cancelled and will be re-executed.
+
+*Why the i960 side is the one that mattered.* The ROM's coprocessor protocol is
+synchronous. Ghidra (the i960 SLEIGH module, headless, `analyzeHeadless`) and
+MAME's `dasm` agree on 0x11548-0x115e0, with g11 = 0x880000 and g12 = 0x004000:
+
+    00011598  st  r5,(g11)[g12]     push
+    0001159C  st  r6,(g11)[g12]     push
+    000115A0  ld  (g11)[g12],g0     READ THE RESULT -- the next instruction
+    000115A8  chkbit 31,g0          and branch on it
+
+Push, push, read. **The FIFO read IS the wait**, and there are dozens of these:
+0x115a0, 0x115d0, 0x11558, 0x67d4, 0xf110, 0xf1a4, 0xf3d4. Our
+`rdata = fout_valid ? fout_q : 32'd0` answered every one of them with zero the
+moment the coprocessor had not yet finished, and left the real results queued
+in `fout` to be read as answers to questions asked later. A third DATA
+divergence of the shape R133 named, invisible to `tools/i960-diff.sh` because
+that compares program counters.
+
+*What 41199bf got right, and where it overreached.* `push()` genuinely never
+blocks -- a full FIFO queues to `m_extra_values` and halts the source at a
+scheduler sync, outside the bus cycle. Removing the stall on a full WRITE was
+correct. But the commit generalised "the reference never blocks the CPU inside
+a bus cycle" from `push()` to `pop()`, and `pop()` does exactly that. The rule
+is directional: **writes never stall, reads always do.**
+
+*The change, two lines, both back to the reference:*
+
+    m2_copro.sv   assign stall = fifo_rd && !fout_valid;    // was 1'b0
+    m2_copro.sv   m2_tgp #(.EMPTY_FIFO_READS_ZERO(1'b0))     // was 1'b1
+
+No new mechanism was needed. `m2_cpu_bridge.sv`'s S_IOW already holds an access
+while `io_stall` and samples `io_rdata` only when it falls; `fout_pop` was
+already gated on `fout_valid`, so a held read pops once, on the cycle the word
+lands. R146's other finding on the same path -- the combinational read handing
+back a stale head -- was a real defect and its fix stays.
+
+*Measured, boot harness, BUFFERRAM=1, 20 M instructions, one variable changed:*
+
+                              before        after
+    TGP sits at               pc 0055       pc 048f
+    distinct TGP pcs          150           456
+    copro buffer-RAM writes   0             2
+    dword 0x7FFC hits         0             2
+    i960 held by the copro    0 cycles      7,960
+    TGP retires               40,487        14,680
+
+pc 0x480-0x4b0 is the display-list handler -- `rep #0xc` then
+`mov (x0+1)(e),(bx1+1)`, the twelve-word vertex copy -- and 0x48f is MAME's
+hottest TGP address after the first poll (5,580 of 112,853 traced
+instructions). **The coprocessor writes buffer-RAM dword 0x7FFC, the mailbox
+the game polls, for the first time in this project's history.**
+
+*IT IS NOT FIXED. Both runs still end at IP 0001166c.* Two mailbox writes in
+20 M instructions, and the game still spins, so either the value written is not
+the zero the poll wants or it arrives after the poll begins. The harness counts
+0x7FFC hits and does not record the VALUE; that probe is the next step and it
+is a harness change, not a fit. Recorded here rather than left implicit,
+because a partial result reported as a fix is how R141 and R143 went wrong.
+
+*Regression state.* Every TGP target passes (`mb86233_mem/dec/xfer/seq/alu/agu`,
+`fp_mul/add/div`, all fails=0). `mb86233_regs` fails 46,966 checks on register
+0x21 -- byte-identical to the pre-existing count recorded before this change,
+so it is untouched by it, and it remains owed.
+
+*The deadlock this re-arms, named in advance.* Model 1's 520cf6a: `fout` full
+holds the TGP, `fin` full holds the CPU, nothing releases either. It requires a
+consumer that stops draining results, and a CPU that stalls on every result
+read drains by construction. If it ever appears the signature is everything
+stopping together -- TGP retires first, then the CPU -- not the frame-1 hang
+this replaces.
+
+*Method.* R146 quoted a line of `gen_fifo.h` that is true and drew from it a
+conclusion the six lines above it forbid. Same family as R149's wrapping
+counter and R150's shared port: the instrument was real, the reading was
+partial. **Read the function, not its return statement.**
