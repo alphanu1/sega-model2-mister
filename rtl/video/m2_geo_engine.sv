@@ -69,6 +69,20 @@ module m2_geo_engine (
   input  logic [31:0] mem_data,
   input  logic        mem_ack,
 
+  // ---- the projection. Model 2 has NO perspective divide: apply_focus is
+  //      x *= focus.x, y *= focus.y and the result IS the screen coordinate,
+  //      as a float. Study R172, and it is why m2_geo_project -- Model 1's
+  //      divide-by-z -- is not in this pipeline.
+  input  logic [31:0] foc_x, foc_y,
+
+  // ---- a SECOND pool client, for those two multiplies. The pool exists to be
+  //      shared (m2_fp_pool); muxing them onto the transform's port here would
+  //      rebuild a private arbiter next to a general one.
+  output logic        fmul_req,
+  output logic [31:0] fmul_a, fmul_b,
+  input  logic        fmul_gnt, fmul_rsp,
+  input  logic [31:0] fmul_res,
+
   // ---- the shared arithmetic, forwarded to m2_geo_xform
   output logic        mul_req,
   output logic [31:0] mul_a, mul_b,
@@ -127,7 +141,8 @@ module m2_geo_engine (
   logic [31:0] remain;
 
   typedef enum logic [3:0] {
-    E_IDLE, E_RD, E_XF, E_XFW, E_ATTR, E_NORM, E_SKIP, E_EMIT, E_LINK, E_DONE
+    E_IDLE, E_RD, E_XF, E_XFW, E_FOC, E_FOCW, E_STORE, E_ATTR, E_NORM, E_SKIP,
+    E_EMIT, E_LINK, E_DONE
   } estate_t;
   estate_t st, ret;
 
@@ -135,6 +150,8 @@ module m2_geo_engine (
   logic [31:0] xyz [3];
   logic [1:0] dst;                  // 0=p0prev 1=p1prev 2=p0cur 3=p1cur
   logic [1:0] skipn;
+  logic [31:0] fx, fy, fz;   // the point, between transform and focus
+  logic        fsel;         // 0 = scaling x, 1 = scaling y
 
   assign mem_addr = ptr;
   assign mem_req  = (st == E_RD) || (st == E_ATTR) || (st == E_NORM) || (st == E_SKIP);
@@ -150,6 +167,8 @@ module m2_geo_engine (
       st <= E_IDLE; ret <= E_IDLE; busy <= 1'b0; poly_valid <= 1'b0;
       ptr <= 24'd0; remain <= 32'd0; widx <= 2'd0; dst <= 2'd0; skipn <= 2'd0;
       attr <= 32'd0; xf_in_valid <= 1'b0;
+      fmul_req <= 1'b0; fmul_a <= 32'd0; fmul_b <= 32'd0;
+      fx <= 32'd0; fy <= 32'd0; fz <= 32'd0; fsel <= 1'b0;
       dbg_polys <= 16'd0; dbg_objects <= 16'd0;
       for (int k = 0; k < 3; k++) begin
         p0prev[k] <= 32'd0; p1prev[k] <= 32'd0;
@@ -196,25 +215,45 @@ module m2_geo_engine (
           end
         end
 
-        E_XFW: begin
-          if (xf_out_valid) begin
-            case (dst)
-              2'd0: begin p0prev[0] <= xf_out_x; p0prev[1] <= xf_out_y; p0prev[2] <= xf_out_z;
-                          dst <= 2'd1; st <= E_RD; end
-              2'd1: begin p1prev[0] <= xf_out_x; p1prev[1] <= xf_out_y; p1prev[2] <= xf_out_z;
-                          st <= E_ATTR; end
-              2'd2: begin p0cur[0] <= xf_out_x; p0cur[1] <= xf_out_y; p0cur[2] <= xf_out_z;
-                          if (attr[0]) begin dst <= 2'd3; st <= E_RD; end
-                          else begin
-                            // TRIANGLE: rope P1(n) = P0(n), and still CONSUME
-                            // the three words of the point we do not use.
-                            p1cur[0] <= xf_out_x; p1cur[1] <= xf_out_y; p1cur[2] <= xf_out_z;
-                            skipn <= 2'd3; st <= E_SKIP;
-                          end end
-              default: begin p1cur[0] <= xf_out_x; p1cur[1] <= xf_out_y; p1cur[2] <= xf_out_z;
-                             st <= E_EMIT; end
-            endcase
-          end
+        // The transform's result goes to the focus stage, not to a slot: a
+        // vertex is not a screen coordinate until focus has been applied.
+        E_XFW: if (xf_out_valid) begin
+          fx <= xf_out_x; fy <= xf_out_y; fz <= xf_out_z;
+          fsel <= 1'b0;
+          st <= E_FOC;
+        end
+
+        // x *= focus.x, then y *= focus.y. z is untouched -- apply_focus does
+        // not scale it, and the sort key downstream wants camera-space z.
+        E_FOC: begin
+          fmul_req <= 1'b1;
+          fmul_a   <= fsel ? fy : fx;
+          fmul_b   <= fsel ? foc_y : foc_x;
+          if (fmul_gnt) begin fmul_req <= 1'b0; st <= E_FOCW; end
+        end
+
+        E_FOCW: if (fmul_rsp) begin
+          if (!fsel) begin fx <= fmul_res; fsel <= 1'b1; st <= E_FOC; end
+          else       begin fy <= fmul_res; st <= E_STORE; end
+        end
+
+        E_STORE: begin
+          case (dst)
+            2'd0: begin p0prev[0] <= fx; p0prev[1] <= fy; p0prev[2] <= fz;
+                        dst <= 2'd1; widx <= 2'd0; st <= E_RD; end
+            2'd1: begin p1prev[0] <= fx; p1prev[1] <= fy; p1prev[2] <= fz;
+                        st <= E_ATTR; end
+            2'd2: begin p0cur[0] <= fx; p0cur[1] <= fy; p0cur[2] <= fz;
+                        if (attr[0]) begin dst <= 2'd3; widx <= 2'd0; st <= E_RD; end
+                        else begin
+                          // TRIANGLE: rope P1(n) = P0(n), and still CONSUME the
+                          // three words of the point we do not use.
+                          p1cur[0] <= fx; p1cur[1] <= fy; p1cur[2] <= fz;
+                          skipn <= 2'd3; st <= E_SKIP;
+                        end end
+            default: begin p1cur[0] <= fx; p1cur[1] <= fy; p1cur[2] <= fz;
+                           st <= E_EMIT; end
+          endcase
         end
 
         // ---- the attribute word terminates the object when (attr & 3) == 0

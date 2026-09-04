@@ -67,7 +67,11 @@ int main(int argc, char** argv) {
     static const float I[12] = {1,0,0, 0,1,0, 0,0,1, 0,0,0};
     d->mat_we = 1; d->mat_idx = i; d->mat_data = f2u(I[i]); tick();
   }
-  d->mat_we = 0; tick();
+  d->mat_we = 0;
+  // FOCUS OF 1.0 keeps every expected value an exact word, so the grammar
+  // checks below stay readable. A second pass re-runs with a real focus.
+  d->foc_x = f2u(1.0f); d->foc_y = f2u(1.0f);
+  tick();
 
   // ---- build one object: three polygons exercising all three link types
   size_t w = 0;
@@ -125,6 +129,32 @@ int main(int argc, char** argv) {
     ck("p3 v2 = P0(n)",        got[2].v2, f2u(1000.0f));
     ck("p3 v3 = P1(n)",        got[2].v3, f2u(1100.0f));
   }
+
+  // ---- second pass: focus is APPLIED, and to x and y only
+  //
+  // Model 2 has no perspective divide -- apply_focus IS the projection (study
+  // R172) -- so this is the whole of it, and z must come through untouched.
+  d->foc_x = f2u(2.0f); d->foc_y = f2u(4.0f);
+  d->rst_n = 0; for (int i = 0; i < 4; i++) tick(); d->rst_n = 1; tick();
+  for (int i = 0; i < 12; i++) {
+    static const float I[12] = {1,0,0, 0,1,0, 0,0,1, 0,0,0};
+    d->mat_we = 1; d->mat_idx = i; d->mat_data = f2u(I[i]); tick();
+  }
+  d->mat_we = 0; tick();
+  d->start = 1; tick(); d->start = 0;
+  std::vector<Poly> got2;
+  std::vector<uint32_t> zs;
+  for (int budget = 0; budget < 60000 && (d->busy || got2.empty()); budget++) {
+    tick();
+    if (d->poly_valid && d->poly_ready) { got2.push_back({d->v0x,d->v1x,d->v2x,d->v3x,d->poly_attr}); zs.push_back(d->v1z); }
+  }
+  std::printf("test: focus is the projection, applied to x and y only\n");
+  if (got2.size() >= 1) {
+    // P0(n-1) fed as x=100: focus.x = 2 -> 200
+    ck("focus scales x", got2[0].v1, f2u(200.0f));
+    // its z was fed as 102 and must be untouched
+    ck("focus leaves z alone", zs[0], f2u(102.0f));
+  } else { std::printf("  FAIL no polygons on the second pass\n"); fails++; }
 
   std::printf("m2_geo_engine: checks=%ld fails=%ld\n", checks, fails);
   delete d;
