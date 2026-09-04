@@ -277,7 +277,27 @@ module m2_copro (
   // stays asserted, no acknowledge, and the read completes on the first cycle
   // `fout` has a word. `fout_pop` is gated on `fout_valid`, so a held read
   // pops once, on that cycle, and never before.
-  assign stall = fifo_rd && !fout_valid;
+  // AND IT MUST NOT STALL ON A COPROCESSOR THAT CANNOT ANSWER (R158).
+  //
+  // MEASURED ON THE BOARD. With the bare `fifo_rd && !fout_valid` the core came
+  // up dead -- no tilemap at all, stuck on the first screen -- and the UART said
+  // why: 3,769 consecutive samples of `tgp_pc = 0000` with rd_total = 0 and
+  // out_pushed = 0. The TGP had never left reset.
+  //
+  // The loop is closed and cannot break itself. `m2_tgp` is instantiated with
+  // `.rst_n(rst_n & ~halted)`, and `halted` is 1 out of reset until the i960
+  // writes coproctl with bit 31 falling. So a read of the FIFO port BEFORE that
+  // write waits on `fout`, which only the TGP can fill, which only that write
+  // can start -- and the stall is what stops the CPU reaching it. The one thing
+  // that would release the stall is the one thing the stall prevents.
+  //
+  // The reference has no such state: MAME's TGP is a scheduled device that is
+  // always able to run, so `on_fifo_unempty` can always arrive. Gating here
+  // restores that PRECONDITION rather than departing from the behaviour -- while
+  // the coprocessor is halted or taking a microcode upload it cannot answer, so
+  // a read completes instead of hanging the machine. Once it is running, the
+  // synchronous protocol of R151 applies unchanged.
+  assign stall = fifo_rd && !fout_valid && !halted && !uploading;
 
   // A read of the FIFO port pops; a write pushes, or uploads.
   wire fifo_rd = sel_fifo && !we;

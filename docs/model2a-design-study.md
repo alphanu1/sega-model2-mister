@@ -9083,3 +9083,76 @@ R155 misattributed a fault because of the last one. **Writing the test that
 should have existed is what located this: it exonerated the core in one run and
 left only the wrapper.** The suite is stronger for it -- the assembled core is
 executed now, and the untested `(e)` transfer forms have directed coverage.
+
+---
+
+**R158 - R157 IS RETRACTED. THE BOARD DID NOT FAIL ON THE WRITE PORT; R151's
+STALL DEADLOCKED THE BOOT, AND THE UART SAID SO IN ONE LINE.**
+
+*What R157 claimed.* That `Model2.rbf.r156` lost its tilemap because the shared
+SDRAM write port's single unqualified acknowledge (R144) corrupted writes once
+the coprocessor started using it in earnest. It named a real defect, and it was
+the wrong answer to this question.
+
+*What the board actually says.* Read over the UART, `/dev/ttyS1` at 115200, with
+r156 loaded -- 3,769 consecutive records, every one identical:
+
+    C 0000xxxx 00000000      tgp_pc = 0000, rd_total = 0, out_pushed = 0
+
+**The coprocessor never left reset.** Not idling, not stalled mid-command --
+never started. `m2_tgp` is instantiated `.rst_n(rst_n & ~halted)`, and `halted`
+is 1 out of reset until the i960 writes `coproctl` with bit 31 falling. So the
+CPU never reached that write.
+
+*The loop, and it cannot break itself.*
+
+    assign stall = fifo_rd && !fout_valid;     // R151, as built
+    m2_tgp ... .rst_n(rst_n & ~halted)
+
+A read of the FIFO port while the coprocessor is halted waits on `fout`. Only
+the TGP can fill `fout`. Only the `coproctl` write can start the TGP. And the
+stall is what stops the CPU reaching that write. **The one event that would
+release the stall is the one event the stall prevents.**
+
+It is not confined to cold boot: `if (wdata[31]) halted <= 1'b1` re-asserts on
+every upload start, so any FIFO read during a microcode re-upload hangs the
+machine the same way -- and leaves exactly the `tgp_pc = 0000` the capture
+shows.
+
+*Why the missing tilemap pointed the wrong way.* Losing the background looked
+like corrupted memory, which is what R157 reasoned from. It was simpler than
+that: the CPU hung before it drew anything. The absence of a tilemap was the
+absence of a CPU, not the presence of a corrupt one.
+
+*The fix.*
+
+    assign stall = fifo_rd && !fout_valid && !halted && !uploading;
+
+MAME has no equivalent state -- its TGP is a scheduled device that can always
+run, so `on_fifo_unempty` can always arrive. Gating here restores that
+PRECONDITION rather than departing from the behaviour: while the coprocessor is
+halted or taking an upload it cannot answer, so the read completes instead of
+hanging the machine. Once it is running, R151's synchronous protocol applies
+unchanged.
+
+*AND SIMULATION CANNOT CONFIRM IT, WHICH IS WORTH STATING PLAINLY.* The boot
+harness produces byte-identical results with the gate and without it -- mailbox
+clearing to zero, the 30 display-list pointers matching MAME, counts 6/7/0x15,
+850 buffer writes, `IP 000012b0`. **The deadlock never occurs in simulation**,
+so the harness reports success on a build that is dead on the board and cannot
+tell the fix from the bug. That is a sixth instrument in this session unable to
+report the thing asked of it, and the only reason the fault was found at all is
+that the UART carries `tgp_pc`.
+
+*What survives from R157.* R144 is still real and still unfixed: five requesters,
+one broadcast `ldr_wr_ack`, and `m2_sdram_x2` passing `f_wr_addr`/`f_wr_din`
+through combinationally so a higher-priority requester can move the address of a
+write already in flight. Model 1's `b0c6785` is the worked precedent. It is a
+genuine defect awaiting a consumer, not the cause of this failure, and it should
+be fixed on its own evidence rather than on this.
+
+*Method.* R157 was written from a board symptom plus a known-defect list, and
+the known defect fit the symptom's shape. It took ten minutes of UART to falsify.
+**A plausible mechanism that matches a symptom is a hypothesis, not a diagnosis;
+the instrument that names the state is worth more than the one that fits the
+story.**

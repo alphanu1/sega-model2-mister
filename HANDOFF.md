@@ -11,68 +11,64 @@ regressed. Tilemaps and CREDIT draw, stuck at attract frame 1.
 Also on the card, not active: `Model2.rbf.r156` -- seed 204, +0.509, the best
 slack this project has had, carrying R151 + R156.
 
-## THE BOARD RESULT: WORSE, AND IT IS A RAM ISSUE (R157)
+## THE BOARD RESULT, AND R157 IS RETRACTED (R158)
 
-**`Model2.rbf.r156` on hardware: background tiles GONE, still stuck at frame 1.**
-Worse than the build it replaced, and it contradicts a simulation that says the
-mailbox clears and the command stream matches MAME for all 200 words captured.
+`Model2.rbf.r156` on hardware lost the tilemap entirely and stuck on the first
+screen. R157 blamed the shared write port (R144). **Wrong.** The UART named the
+state in one line -- 3,769 identical records:
 
-**"Revert R151" is not available -- measured, not argued.** With R151 reverted
-and R156 kept:
+    C 0000xxxx 00000000     tgp_pc = 0000, rd_total = 0, out_pushed = 0
 
-    copro buffer-RAM writes: 0    dword 0x7FFC hits: 0
-    MAILBOX: NEVER WRITTEN        pc 0x47e never reached
+**The coprocessor never left reset.** The CPU hung before releasing it, so it
+hung before drawing anything -- the missing tilemap was the absence of a CPU,
+not a corrupt one.
 
-Straight back to the original failure. The stall is what makes the TGP park at
-004c and dispatch; without it the idle loop eats commands. The two changes are a
-pair.
+    assign stall = fifo_rd && !fout_valid;     // R151, as built
+    m2_tgp ... .rst_n(rst_n & ~halted)         // halted=1 until coproctl is written
 
-**Model 1's CPU does not free-run either**, contrary to what was assumed here for
-a while. `m1_copro_if.sv` on the `incremental` branch withholds the ack:
+A FIFO read while halted waits on `fout`; only the TGP fills `fout`; only the
+coproctl write starts the TGP; and the stall stops the CPU reaching it. The one
+event that would release the stall is the one the stall prevents. It also
+re-arms on every upload (`if (wdata[31]) halted <= 1'b1`).
 
-    end else if (v60_acc && !(we && sel_fifo && a1 && fin_full)
-                         && !(!we && sel_fifo && !a1 && fout_empty)) begin
+**Fix, in the tree, lint-clean, simulated:**
 
-and its header records that returning zero instead was tried on 2026-08-30 and
-reverted the same day. Free-running is what THIS core had until R151, and it is
-the shortcut that made attract look healthy.
+    assign stall = fifo_rd && !fout_valid && !halted && !uploading;
 
-**So the fault is downstream, in memory -- and Ben identified the class from the
-Model 1 experience: their frame-1 sky-and-sea was a RAM issue too.**
+**Simulation cannot confirm it.** The harness gives byte-identical results with
+the gate and without -- mailbox clearing, 30 pointers matching MAME, IP
+000012b0. The deadlock never happens in sim, so the bench passes a build that is
+dead on the board. Only the UART's `tgp_pc` found it.
 
-## WHY SIMULATION COULD NOT SEE IT
+## WHAT THE UART SAYS ABOUT THE OLD BUILDS
 
-    sim/io/m2_boot_harness.sv:  .bufw_ack(1'b1)
+On `108fed3d`, TGP free-running `004C-0057` and `00B5-00B9` -- the dispatch and
+the idle handler, nothing else -- with 191 results pushed (all idle zeros) and
+**3 external reads in its lifetime**. R148/R149's pathology, confirmed on
+hardware. These builds are not working machines; they are coprocessors idling
+politely while the game waits.
 
-The harness acknowledges every coprocessor buffer write instantly, with no
-arbitration and no other requester. **The shared SDRAM write port is entirely
-unmodelled.** Five requesters -- loader, `bi_*`, `st_*`, the geo walker, the
-copro -- share ONE broadcast acknowledge, `ldr_wr_ack` (R144, known and unfixed
-since 3 September). And in `m2_sdram_x2`:
+## BOARD STATE
 
-    assign f_wr_addr = s_wr_addr;   // COMBINATIONAL passthrough
-    assign f_wr_din  = s_wr_din;
-    assign s_wr_ack  = f_wr_ack;    // broadcast to everyone
+`Model2.rbf.wronly` (2ae6f8fc) is loaded -- the one where attract CYCLES, by
+skipping the mailbox handshake. Backups on the card, md5s confirmed:
 
-so a higher-priority requester asserting mid-flight changes the address and data
-WHILE the write is in flight, and both requesters retire on the one ack.
+    .wronly    2ae6f8fc   attract cycles
+    .lastgood  a734d0d5   same shortcut
+    .good      a734d0d5   identical to .lastgood
+    .attract   3307dcc5
+    .r156      a80b7cfe   seed 204, +0.509, the deadlocking build
+    108fed3d              boots, tilemaps + CREDIT, stuck at frame 1
 
-This build is the first to drive that port hard: copro buffer writes went from
-178 to 850 per 20 M instructions, and the geo walker now has real display lists
-to walk. HANDOFF predicted exactly this: *"it will corrupt display lists once
-real geometry and copro results flow together."*
+**The OSD "Geometrizer walk" was left Off during testing and must go back On** --
+with it off these builds do not reach frame 1 at all.
 
-## THE 30-SECOND TEST, BEFORE ANY BUILD
+## R144 IS STILL REAL, AND STILL NOT THIS
 
-`Model2.sv:121` already carries `"O[20],Geometrizer walk,On,Off;"` and
-`Model2.sv:2131` gives the walker the RAW ack (`.sd_wr_ack(ldr_wr_ack)`).
-
-Flash `Model2.rbf.r156`, set **Geometrizer walk = Off**, and COLD BOOT (an OSD
-reset does not re-init buffer RAM -- `bi_*` is tied to `mem_rst_n`).
-
-  * tiles come back -> the walker's writes corrupt the shared port. R144
-    confirmed; fix it next.
-  * tiles still gone -> the copro's own bufw path is preempting mid-transaction.
+Five requesters, one broadcast `ldr_wr_ack`, and `m2_sdram_x2` passing
+`f_wr_addr`/`f_wr_din` combinationally so a higher-priority requester can move
+the address of a write already in flight. Model 1's `b0c6785` is the precedent.
+Fix it on its own evidence, not on this failure.
 
 ## THE FIX, AND MODEL 1 HAS ALREADY WRITTEN IT
 
