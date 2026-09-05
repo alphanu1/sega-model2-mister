@@ -331,7 +331,7 @@ module m2_sdram #(
   assign sd_cke = 1'b1;
 
   typedef enum logic [3:0] {
-    S_INIT, S_IDLE, S_DISPATCH, S_MISS, S_PRE_XFER, S_ACT, S_RCD,
+    S_INIT, S_IDLE, S_SEL, S_DISPATCH, S_MISS, S_PRE_XFER, S_ACT, S_RCD,
     S_RD, S_WR, S_WRRC, S_PRE_REF, S_REFW
   } state_t;
   state_t state;
@@ -751,22 +751,19 @@ module m2_sdram #(
               // A write drives DQ, so it may not be issued while read data is
               // still returning on the same wires. Reads have no such
               // restriction, which is what lets them overlap.
-              logic [AW:1] sel;
+              // THE ADDRESS MUX LEAVES THIS CYCLE. See S_SEL below: this
+              // cycle now settles only the GRANT INDEX, and the ten-way
+              // 25-bit mux that reads addr_p[grant] happens in a cycle of its
+              // own. Everything selected by the grant moves with it.
               if (wr_pend && !wr_inflight && !pipe_busy) begin
                 grant       <= ($clog2(NP+1))'(WIDX);
                 grant_is_wr <= 1'b1;
                 wr_inflight <= 1'b1;
-                sel         = wr_addr_p;
-                din_r       <= wr_din_p;
-                be_r        <= wr_be_p;
                 is_write    <= 1'b1;
                 rd_total    <= 4'd1;
               end else begin
                 grant       <= ($clog2(NP+1))'(rr_grant);
                 grant_is_wr <= 1'b0;
-                sel         = addr_p[rr_grant];
-                din_r       <= din_p[rr_grant];
-                be_r        <= be_p[rr_grant];
                 is_write    <= we_p[rr_grant];
                 rd_total    <= we_p[rr_grant] ? 4'd1 : blen(rr_grant);
                 // Writes take it too: a port writing is equally in flight and
@@ -775,14 +772,50 @@ module m2_sdram #(
                 rr_next     <= (rr_grant == ($clog2(NP))'(NP-1))
                                  ? '0 : rr_grant + 1'b1;
               end
-              xfer_addr   <= sel;
               rd_issued   <= '0;
               rd_captured <= '0;
               // A dedicated dispatch cycle keeps the port mux and the row
               // comparator out of the command-output timing cone. Requesters
               // wait for ack, so this costs latency, not semantics.
-              state <= S_DISPATCH;
+              state <= S_SEL;
             end
+          end
+
+          // THE ADDRESS SELECT, IN A CYCLE OF ITS OWN.
+          //
+          // Every one of the six worst setup paths in the design ran between
+          // two muxes inside this module -- Mux5~0 to Mux3~0, -1.353 ns -- and
+          // they are this: the arbitration cycle computed the round-robin
+          // priority encoder AND then read a ten-way 25-bit address mux with
+          // its result, into xfer_addr, in one clock. The Model 1 project met
+          // the identical failure and wrote down the remedy: "the state machine
+          // computing its address mux in the same cycle it drives the pins.
+          // Registering the address select one cycle earlier removes most of
+          // them", and recorded that the area lever is "a lottery ticket, not a
+          // fix" -- which is exactly what five seed sweeps here had been.
+          //
+          // grant is now a registered index, so this cycle does the mux alone
+          // and S_DISPATCH still sees a settled xfer_addr for its row
+          // comparator.
+          //
+          // IT COSTS ONE CYCLE PER TRANSACTION AND THAT IS AFFORDABLE. The
+          // 0.0797 transactions/cycle in tb_m2_sdram is the controller's
+          // CEILING under a saturated fuzz bench, not the demand: the core runs
+          // attract at ~95% speed and what throttles it is the i960's poll
+          // loop, not memory. Trading a few percent of a ceiling we do not
+          // approach for a timing violation on the clock everything depends on
+          // is the right way round; the reverse is not.
+          S_SEL: begin
+            if (grant_is_wr) begin
+              xfer_addr <= wr_addr_p;
+              din_r     <= wr_din_p;
+              be_r      <= wr_be_p;
+            end else begin
+              xfer_addr <= addr_p[grant[$clog2(NP)-1:0]];
+              din_r     <= din_p[grant[$clog2(NP)-1:0]];
+              be_r      <= be_p[grant[$clog2(NP)-1:0]];
+            end
+            state <= S_DISPATCH;
           end
 
           S_DISPATCH: begin
