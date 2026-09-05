@@ -3329,9 +3329,11 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	                                       // 'H' scroll h:v for layers 0,1 | layers 2,3 -- low bytes
 	                                       // '0' map0 min|max : sum
 	                                       // 'T' write count + trap/PA
-	                                       // 'H' NOW: geometry. addr = objects
-	                                       //     rom:pram0:pram1:capped,
-	                                       //     data = clip in:out:nonfinite:quads
+	                                       // 'H' NOW: geometry.
+	                                       //   addr = objects rom:pram0:pram1:
+	                                       //          capped (nibbles), then
+	                                       //          polygon_data cmds:words
+	                                       //   data = clip in:out:nonfinite:quads
 	.enable(1'b1),
 	.tx(UART_TXD), .dbg_dropped(uart_dropped)
 );

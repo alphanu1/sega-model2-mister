@@ -107,6 +107,12 @@ module m2_geo #(
   // reference does anyway -- geo_object_data does not return until geo_parse
   // has walked every polygon -- so the serialisation is not a concession.
   input  logic          eng_busy,
+  // The two polygon RAMs, in SDRAM. geo_object_data picks between them and the
+  // polygon ROM from oba's top bits; geo_polygon_data (0x05) writes into them.
+  input  logic [AW:1]   base_pram0,
+  input  logic [AW:1]   base_pram1,
+  output logic [15:0]   dbg_pd_words,    // dwords written into polygon RAM
+  output logic [15:0]   dbg_pd_cmds,     // geo_polygon_data commands executed
   output logic [31:0]   foc_x, foc_y,
   output logic [31:0]   obj_tpa, obj_tha, obj_oba, obj_obc,
   output logic          obj_valid,       // one pulse when an object_data is complete
@@ -192,19 +198,73 @@ module m2_geo #(
   // occupancy is covered by `dropped`, the walk only needs an opcode's top and
   // jump fields out of rd_data, and wr_ptr's high bits and bit 0 fall outside
   // bufferram's 128 KB.
+  // pd_addr's unused bits: bit 24 chooses the memory and [14:0] indexes inside
+  // it, exactly as geo_polygon_data's `address & 0x01000000` and `& 0x7fff` do.
+  // Everything between and above is address the reference never looks at.
   wire _unused_geo = &{1'b0, q_count, rd_data[30:28], rd_data[22:17],
-                       wr_ptr[19:17], wr_ptr[0], 1'b0};
+                       wr_ptr[19:17], wr_ptr[0],
+                       pd_addr[31:25], pd_addr[23:15], 1'b0};
+
+  // THE WRITE DMA NOW HAS TWO CLIENTS AND STILL ONE OWNER.
+  //
+  // geo_polygon_data has to write dwords into polygon RAM, and the front door's
+  // push DMA already writes dwords into buffer RAM through sd_wr_*. Adding a
+  // second driver of that port is the mistake that cost this project four days
+  // (R167) and is still live on the loader's write port (R144). So the port
+  // keeps exactly one owner -- this state machine -- and gains a second source
+  // feeding it. It handles one dword at a time, so the two cannot interleave.
+  //
+  // The walk has priority because it is synchronous: it is stopped waiting for
+  // pd_done, while the front door's queue is asynchronous and drops on
+  // backpressure by design ("overrun: 3205 dropped, counted, never stalled").
+  logic        pd_req;             // from the walk
+  logic [AW:1] pd_waddr;           // word address of the dword's low half
+  logic [31:0] pd_wdata;
+  logic        pd_ack;             // one pulse when the DMA TAKES the request
+  logic        pd_done;            // one pulse when both halves are written
+  logic        pd_active;          // this transfer belongs to the walk
+
+  // Word address of the dword's low half: base + (index << 1). The index wraps
+  // inside the 32K-dword window the reference masks reads to.
+  wire [14:0]  pd_widx  = pd_addr[14:0] + pd_i[14:0];
+  wire [AW:1]  pd_wbase = pd_addr[24] ? base_pram1 : base_pram0;
+  assign pd_waddr = pd_wbase + AW'({pd_widx, 1'b0});
 
   assign sd_busy = (dst != D_IDLE);
-  assign q_pop   = (dst == D_IDLE) && q_valid;
+  assign q_pop   = (dst == D_IDLE) && !pd_req && q_valid;
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       dst <= D_IDLE; sd_wr_req <= 1'b0; sd_wr_addr <= '0; sd_wr_din <= 16'd0;
       wr_ptr <= 20'd0; dw_hi <= 16'd0;
+      pd_done <= 1'b0; pd_active <= 1'b0; pd_ack <= 1'b0;
     end else begin
+      pd_done <= 1'b0;
+      pd_ack  <= 1'b0;
       case (dst)
-        D_IDLE: if (q_valid) begin
+        // ACKNOWLEDGE ON ACCEPTANCE, NOT ON COMPLETION, and this is not style.
+        //
+        // With the walk clearing pd_req only on pd_done, the request was still
+        // high for the cycle after D_NEXT returned here -- so the DMA started
+        // the SAME dword a second time, and by then the walk had advanced pd_i,
+        // so the second copy's high half landed one dword too far:
+        //
+        //     WR 0x80 <= 1111   WR 0x81 <= 1111    the correct pair
+        //     WR 0x80 <= 1111   WR 0x83 <= 1111    the spurious one
+        //
+        // The low half was harmlessly rewritten and the high half corrupted the
+        // NEXT dword's slot, so the copy looked almost right: the first dword
+        // and the last were correct and the middle ones were not.
+        D_IDLE: if (pd_req) begin
+          pd_ack     <= 1'b1;
+          pd_active  <= 1'b1;
+          dw_hi      <= pd_wdata[31:16];
+          sd_wr_addr <= pd_waddr;
+          sd_wr_din  <= pd_wdata[15:0];
+          sd_wr_req  <= 1'b1;
+          dst        <= D_LO;
+        end else if (q_valid) begin
+          pd_active  <= 1'b0;
           wr_ptr     <= q_data[51:32];
           dw_hi      <= q_data[31:16];
           sd_wr_addr <= base_buffer + AW'(q_data[48:33]);   // (ptr & 0x1ffff) >> 1
@@ -214,7 +274,8 @@ module m2_geo #(
         end
         D_LO: if (sd_wr_ack) begin
           sd_wr_req  <= 1'b0;
-          sd_wr_addr <= base_buffer + AW'(wr_ptr[16:1]) + AW'(1);
+          sd_wr_addr <= pd_active ? (pd_waddr + AW'(1))
+                                  : (base_buffer + AW'(wr_ptr[16:1]) + AW'(1));
           sd_wr_din  <= dw_hi;
           dst        <= D_HI;
         end
@@ -224,6 +285,8 @@ module m2_geo #(
         end
         D_NEXT: if (sd_wr_ack) begin
           sd_wr_req <= 1'b0;
+          if (pd_active) pd_done <= 1'b1;
+          pd_active <= 1'b0;
           dst       <= D_IDLE;
         end
         default: dst <= D_IDLE;
@@ -255,7 +318,8 @@ module m2_geo #(
   // next stage. Getting the walk right first means the opcode histogram on the
   // UART can be compared against the 101/60/33 above, which is a real oracle.
   typedef enum logic [3:0] { W_IDLE, W_FETCH, W_DECODE, W_SKIP, W_CNT,
-                             W_TFIFO, W_DDSKIP, W_DDATTR, W_OPRD, W_OBJW } wstate_t;
+                             W_TFIFO, W_DDSKIP, W_DDATTR, W_OPRD, W_OBJW,
+                             W_PDA, W_PDR, W_PDW } wstate_t;
   wstate_t wst;
   logic [18:0] w_ip;
   logic [15:0] w_ops, w_skip;
@@ -324,6 +388,7 @@ module m2_geo #(
   // count-driven forms
   wire is_cnt1 = (w_op == 5'h04) || (w_op == 5'h05) || (w_op == 5'h14)
               || (w_op == 5'h15) || (w_op == 5'h0d);       // 2 + count
+  wire is_pd   = (w_op == 5'h05) || (w_op == 5'h15);        // polygon_data
   wire is_cnt2 = (w_op == 5'h06);                          // 2 + 2*count
   wire is_cnt3 = (w_op == 5'h1d);                          // 1 + 3*count
   wire is_test = (w_op == 5'h0e);                          // 32 + 1 + 3*blocks
@@ -338,6 +403,8 @@ module m2_geo #(
   logic [1:0]  w_cap;                    // which opcode's operands are being read
   logic [3:0]  w_ci;                     // operand index
   logic        eng_seen;                 // the engine's busy has been observed high
+  logic [31:0] pd_addr;                  // geo_polygon_data's destination
+  logic [15:0] pd_n, pd_i;               // dwords to copy, and the one in hand
   localparam logic [1:0] CAP_MTX = 2'd1, CAP_FOC = 2'd2, CAP_OBJ = 2'd3;
 
   assign mtx0 = mtx[0]; assign mtx4 = mtx[4]; assign mtx8 = mtx[8]; assign mtx11 = mtx[11];
@@ -354,7 +421,7 @@ module m2_geo #(
                                            : 4'd3;
 
   assign rd_req  = (wst == W_FETCH) || (wst == W_CNT) || (wst == W_DDATTR)
-                || (wst == W_OPRD);
+                || (wst == W_OPRD) || (wst == W_PDA) || (wst == W_PDR);
   assign rd_addr = w_ip;
 
   always_ff @(posedge clk or negedge rst_n) begin
@@ -363,6 +430,9 @@ module m2_geo #(
       dbg_walk_ops <= 16'd0; dbg_walk_objs <= 16'd0;
       dbg_walk_frames <= 16'd0; dbg_walk_unknown <= 8'd0;
       w_cap <= 2'd0; w_ci <= 4'd0; obj_valid <= 1'b0; eng_seen <= 1'b0;
+      pd_addr <= 32'd0; pd_n <= 16'd0; pd_i <= 16'd0;
+      pd_req <= 1'b0; pd_wdata <= 32'd0;
+      dbg_pd_words <= 16'd0; dbg_pd_cmds <= 16'd0;
       dbg_mtx_n <= 16'd0; dbg_foc_n <= 16'd0;
       foc_x <= 32'd0; foc_y <= 32'd0;
       obj_tpa <= 32'd0; obj_tha <= 32'd0; obj_oba <= 32'd0; obj_obc <= 32'd0;
@@ -419,6 +489,15 @@ module m2_geo #(
             // Step the FIFO ramp first; W_CNT then lands on the block count.
             w_skip <= 16'd32;
             wst    <= W_TFIFO;
+          end else if (is_pd) begin
+            // GEO_POLYGON_DATA IS EXECUTED, NOT STEPPED OVER, and it is the
+            // command the whole 3D path was waiting on. The board says
+            // Daytona's object_data points at SLOW POLYGON RAM and never at the
+            // polygon ROM -- objects rom=0, pram0=1 -- so without this the
+            // objects read unwritten memory, which is NaN, and nothing can
+            // draw. Its first operand is the destination address, so it is READ
+            // rather than skipped; W_CNT then lands on the count.
+            wst <= W_PDA;
           end else if (is_var) begin
             // code_upload's count IS the first operand; the others have one
             // operand before it.
@@ -495,7 +574,46 @@ module m2_geo #(
                   :  is_cnt2              ? (rd_data[15:0] * 16'd2)
                                           :  rd_data[15:0];
           w_ip   <= w_ip + 19'd1;
-          wst    <= W_SKIP;
+          if (is_pd) begin
+            pd_n   <= rd_data[15:0];
+            pd_i   <= 16'd0;
+            dbg_pd_cmds <= dbg_pd_cmds + 16'd1;
+            wst    <= (rd_data[15:0] == 16'd0) ? W_FETCH : W_PDR;
+          end else begin
+            wst    <= W_SKIP;
+          end
+        end
+
+        // THE DESTINATION, DECODED AS geo_polygon_data DECODES IT: bit 24
+        // (0x01000000) selects fast polygon RAM, anything else slow. Note this
+        // is NOT geo_object_data's three-way decode -- polygon_data has no ROM
+        // case, because a ROM cannot be written.
+        W_PDA: if (rd_ack) begin
+          pd_addr <= rd_data;
+          w_ip    <= w_ip + 19'd1;
+          wst     <= W_CNT;
+        end
+
+        // Read one dword of payload...
+        W_PDR: if (rd_ack) begin
+          pd_wdata <= rd_data;
+          pd_req   <= 1'b1;
+          wst      <= W_PDW;
+        end
+
+        // ...and hand it to the write DMA. `pd_i` indexes from the destination
+        // and wraps inside the 32K-dword window, as MAME's `oba & 0x7fff` does
+        // for reads -- MAME's own pointer walks off the end of the array here,
+        // which is undefined behaviour we decline to reproduce.
+        W_PDW: begin
+          if (pd_ack) pd_req <= 1'b0;      // taken; do not offer it twice
+          if (pd_done) begin
+            pd_req <= 1'b0;
+            dbg_pd_words <= dbg_pd_words + 16'd1;
+            w_ip <= w_ip + 19'd1;
+            if (pd_i == pd_n - 16'd1) wst <= W_FETCH;
+            else begin pd_i <= pd_i + 16'd1; wst <= W_PDR; end
+          end
         end
         // The FIFO ramp: 32 words stepped without reading them. The ramp's
         // CONTENTS are a hardware self-test the board has already passed by the

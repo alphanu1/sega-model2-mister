@@ -30,14 +30,16 @@
 
 static Vm2_geo *d;
 static int fails = 0, checks = 0;
-static std::map<uint32_t,uint16_t> mem;      // SDRAM word address -> data
+static std::map<uint32_t,uint16_t> mem;
+static bool trace_wr = false;      // SDRAM word address -> data
 static const uint32_t BASE = 0x16f0000;
 
 static void tick() {
   // the shared write port: ack a request the cycle after it is seen
   static bool pend = false; static uint32_t pa; static uint16_t pd;
   d->sd_wr_ack = 0;
-  if (pend) { mem[pa] = pd; d->sd_wr_ack = 1; pend = false; }
+  if (pend) { mem[pa] = pd; d->sd_wr_ack = 1; pend = false;
+              if (trace_wr) std::printf("    WR %08x <= %04x\n", pa, pd); }
   else if (d->sd_wr_req) { pa = d->sd_wr_addr; pd = d->sd_wr_din; pend = true; }
   d->clk = 0; d->eval(); d->clk = 1; d->eval();
 }
@@ -57,6 +59,7 @@ int main(int argc,char**argv){
   d = new Vm2_geo;
   d->rst_n=0; d->base_buffer=BASE; d->sd_wr_ack=0;
   d->frame_start=0; d->rd_data=0; d->rd_ack=0; d->eng_busy=0;
+  d->base_pram0 = 0x1710000; d->base_pram1 = 0x1720000;
   d->wr_ctl=d->wr_setwp=d->wr_setrp=d->wr_push=0; d->wdata=0;
   for(int i=0;i<8;i++) tick();
   d->rst_n=1; idle(4);
@@ -318,6 +321,73 @@ int main(int argc,char**argv){
     ++checks;
     if (!quiet) { std::printf("  FAIL walk never stopped on unwritten memory\n"); ++fails; }
     else std::printf("  unwritten memory: walk bounded, stopped requesting\n");
+  }
+
+  // ---- geo_polygon_data ACTUALLY COPIES, and to the right polygon RAM
+  //
+  // This is the command the whole 3D path was waiting on. The board reported
+  // Daytona's object_data pointing at SLOW POLYGON RAM and never at the polygon
+  // ROM -- objects rom=0, pram0=1 -- and 0x05 is what fills that RAM. While it
+  // was a blind skip, every object read unwritten memory, which is NaN.
+  //
+  // Both destinations are exercised because the bit that chooses between them
+  // (0x01000000) is one bit, and a wrong polarity puts every polygon in the
+  // wrong memory while every count and every length still looks right.
+  {
+    const uint32_t PRAM0 = 0x1710000, PRAM1 = 0x1720000;
+    mem.clear();                                  // unwritten: see rdw() below
+    std::vector<uint32_t> list(0x8000, 0);
+    size_t w = 0;
+    // slow polygon RAM at dword 0x40, three words
+    list[w++] = 0x05u << 23;
+    list[w++] = 0x00000040u;
+    list[w++] = 3;
+    list[w++] = 0x11111111u; list[w++] = 0x22222222u; list[w++] = 0x33333333u;
+    // fast polygon RAM at dword 0x10, two words
+    list[w++] = 0x05u << 23;
+    list[w++] = 0x01000010u;
+    list[w++] = 2;
+    list[w++] = 0xAAAAAAAAu; list[w++] = 0xBBBBBBBBu;
+    list[w++] = 0x0fu << 23;                      // end
+
+    d->rst_n = 0; for (int i = 0; i < 4; i++) tick(); d->rst_n = 1; idle(2);
+    d->frame_start = 1; tick(); d->frame_start = 0;
+    int eng_cnt = 0;
+    trace_wr = true;
+    for (int i = 0; i < 200000; i++) {
+      if (d->obj_valid) eng_cnt = 8;
+      d->eng_busy = eng_cnt > 0;
+      if (eng_cnt) eng_cnt--;
+      d->rd_ack = 0;
+      if (d->rd_req) { d->rd_data = (d->rd_addr < list.size()) ? list[d->rd_addr] : 0; d->rd_ack = 1; }
+      tick();
+      if (d->dbg_walk_frames) break;
+    }
+    trace_wr = false;
+    std::printf("test: geo_polygon_data copies into polygon RAM\n");
+    std::printf("  %u commands, %u dwords written\n", d->dbg_pd_cmds, d->dbg_pd_words);
+    ck("polygon_data commands", d->dbg_pd_cmds,  2);
+    ck("polygon_data dwords",   d->dbg_pd_words, 5);
+    // A dword lands as two 16-bit halves at base + (index << 1) and +1.
+    // UNWRITTEN MEMORY READS 0xFFFF, NEVER ZERO -- the standing requirement in
+    // docs/mister-integration.md, and the one whose absence let a NaN wedge the
+    // whole geometry pipeline. mem is sparse, so absence is the unwritten case.
+    auto rdw = [&](uint32_t a) -> uint16_t {
+      auto it = mem.find(a);
+      return (it == mem.end()) ? uint16_t(0xFFFF) : it->second;
+    };
+    auto rd32 = [&](uint32_t base, uint32_t dwidx) -> uint32_t {
+      uint32_t a = base + (dwidx << 1);
+      return (uint32_t(rdw(a + 1)) << 16) | uint32_t(rdw(a));
+    };
+    ck("slow pram dword 0x40", rd32(PRAM0, 0x40), 0x11111111u);
+    ck("slow pram dword 0x41", rd32(PRAM0, 0x41), 0x22222222u);
+    ck("slow pram dword 0x42", rd32(PRAM0, 0x42), 0x33333333u);
+    ck("fast pram dword 0x10", rd32(PRAM1, 0x10), 0xAAAAAAAAu);
+    ck("fast pram dword 0x11", rd32(PRAM1, 0x11), 0xBBBBBBBBu);
+    // and it must not have written the OTHER memory at the same index
+    ck("slow pram untouched at 0x10", rd32(PRAM0, 0x10), 0xFFFFFFFFu);
+    ck("the walk still finished", d->dbg_walk_frames ? 1u : 0u, 1u);
   }
 
   std::printf("m2_geo: checks=%d fails=%d\n", checks, fails);
