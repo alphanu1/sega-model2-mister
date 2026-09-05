@@ -3501,7 +3501,7 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	//                                 upstream in the game's own progress
 	//   dropped climbing           -> the queue is too small and the list is
 	//                                 being corrupted by loss
-	.b_addr({geo_fn_pushes[15:0], geo_dropped[7:0], geo_mtx_n[7:0]}),
+	.b_addr({geo_mtx_push[11:0], geo_walk_frames[11:0], geo_mtx_n[7:0]}),
 	// clip_dropped read 0 on hardware and the refusal count is the number that
 	// now moves, so it takes that byte. Between them: accepted, emitted, refused
 	// before the arithmetic, and reaching the rasterizer.
@@ -3523,7 +3523,14 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// reconstruction is not working on hardware even though it works in
 	// simulation on the same RTL.
 	// matrix pushes : object pushes : what the walk decoded
-	.b_data({geo_mtx_push[11:0], geo_obj_push[11:0], geo_mtx_n[7:0]}),
+	// THE TWO POINTERS. The game pushes 110 matrix writes and 3,000+ objects
+	// into buffer RAM and the walk decodes NONE of them, so the words arrive
+	// and the walk reads somewhere else. rp is where the walk starts, wp is
+	// where the pushes land, and if they disagree the walk is reading a
+	// different buffer -- most likely one holding a geo_end, which would
+	// terminate it instantly every frame and is exactly what a climbing frame
+	// counter with nothing decoded looks like.
+	.b_data({geo_rd_rp[15:0], geo_rd_wp[15:0]}),
 	.a_tag(8'h43), .b_tag(8'h48),          // 'C' copro in_pushed:out_pushed | TGP retires:pc
 	                                       // 'H' out_popped:hscr2 | io_addr:flags
 	                                       // 'H' scroll h:v for layers 0,1 | layers 2,3 -- low bytes
