@@ -133,7 +133,30 @@ set_global_assignment -name FINAL_PLACEMENT_OPTIMIZATION ALWAYS
 # killer while a 30-million-instruction simulation ran alongside it. Long
 # simulations and fits should not share this machine, and some earlier "flaky
 # fitter" runs may have been that rather than a Quartus fault.
-set_global_assignment -name FITTER_AGGRESSIVE_ROUTABILITY_OPTIMIZATION ALWAYS
+# EVERY FITTER SETTING IS BACK TO WHAT IT WAS THIS MORNING, AND THE REASON IS
+# THE CRASH RATE.
+#
+# Five settings were changed today while chasing timing -- routability to
+# ALWAYS, mode to BALANCED, technique to AREA, combo-logic-for-area ON, packing
+# HIGH. Since then roughly half of all builds have died with "Fatal Error:
+# Segment Violation", including build 31 from a WIPED database with nothing else
+# running on the machine, at 3 minutes into the fit. Before today builds were
+# reliable.
+#
+# Occupancy is not the cause -- Model 1 fits at 97% and passes nearly every
+# build. Nor is it OOM (24 GB free), concurrent processes (clean run), a stale
+# database (wiped), or the nine physical-synthesis passes (removing them changed
+# nothing). What is left is the five things I changed, and the honest experiment
+# is to put all five back and see whether the crashes stop.
+#
+# THE TIMING THEY WERE CHASING MAY NOT NEED THEM ANY MORE. R176 moved the
+# arbiter's ten-way address mux into its own cycle -- an RTL fix for the actual
+# critical path -- and that is what closed both clocks. These settings were the
+# lottery ticket Model 1's findings warned about, bought before the real fix
+# existed. If timing holds on the original configuration, they were never
+# needed; if it does not, they come back one at a time with the crash rate
+# measured for each.
+set_global_assignment -name FITTER_AGGRESSIVE_ROUTABILITY_OPTIMIZATION AUTOMATICALLY
 set_global_assignment -name FITTER_EFFORT "STANDARD FIT"
 # BALANCED, NOT AGGRESSIVE AREA. Aggressive Area crashed this fitter twice in
 # succession -- "Fatal Error: Segment Violation at (nil)" after placement
@@ -215,7 +238,7 @@ set_global_assignment -name FITTER_EFFORT "STANDARD FIT"
 # that trade.
 #
 # The other four area settings stay. They cost no block memory.
-set_global_assignment -name OPTIMIZATION_MODE "BALANCED"
+set_global_assignment -name OPTIMIZATION_MODE "HIGH PERFORMANCE EFFORT"
 set_global_assignment -name ALLOW_POWER_UP_DONT_CARE ON
 set_global_assignment -name QII_AUTO_PACKED_REGISTERS NORMAL
 # BACK ON, AND NOT BY PREFERENCE. With this OFF the fitter dies with
@@ -249,7 +272,7 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_RETIMING ON
 # anyway -- attract mode, sound, tilemap -- so the miss is real but not fatal at
 # room temperature. Timing gets fixed by seed sweeping and by getting the
 # occupancy down, not by a technique that cannot produce a bitstream.
-set_global_assignment -name OPTIMIZATION_TECHNIQUE AREA
+set_global_assignment -name OPTIMIZATION_TECHNIQUE SPEED
 set_global_assignment -name MUX_RESTRUCTURE ON
 set_global_assignment -name REMOVE_REDUNDANT_LOGIC_CELLS ON
 set_global_assignment -name AUTO_DELAY_CHAINS_FOR_HIGH_FANOUT_INPUT_PINS ON
@@ -263,7 +286,7 @@ set_global_assignment -name AUTO_DELAY_CHAINS_FOR_HIGH_FANOUT_INPUT_PINS ON
 # EFFORT with OPTIMIZATION_TECHNIQUE SPEED and 8,940 ALM spare, so area-targeted
 # combinational restructuring is buying nothing". Both halves of that are now
 # false: the technique is AREA and the spare is 196 ALM.
-set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC_FOR_AREA ON
+set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC_FOR_AREA OFF
 set_global_assignment -name ADV_NETLIST_OPT_SYNTH_WYSIWYG_REMAP ON
 set_global_assignment -name SYNTH_GATED_CLOCK_CONVERSION ON
 set_global_assignment -name PRE_MAPPING_RESYNTHESIS ON
@@ -277,7 +300,7 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_ASYNCHRONOUS_SIGNAL_PIPELINING ON
 # two combinational functions and four registers; above ~90% the fitter stops
 # finding compatible pairs and spends a whole ALM on what should share one. The
 # gap is packing collapse, so raise the packing effort.
-set_global_assignment -name ALM_REGISTER_PACKING_EFFORT HIGH
+set_global_assignment -name ALM_REGISTER_PACKING_EFFORT MEDIUM
 # SEED 1702. Seed 162 has now crashed the fitter three times out of the last
 # five runs -- "FIT exited 2", no committed fit -- while 1702 completed in the
 # sweep and came closest to closing (-0.147 worst). The crash is placement
