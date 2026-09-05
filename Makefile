@@ -139,7 +139,7 @@ lint_top:
 	  | grep -E "port connection|IMPLICIT|UNDRIVEN|PINMISSING" \
 	  | grep -vE "For warning description|lint_off" \
 	  | grep -vE "sys/|rtl/pll/|sim/lint/|rtl/cpu/tv80/|rtl/sound/(jt12|fx68k)/|rtl/sound/m2_multipcm" \
-	  | grep -vE "Model2.sv:143:|missing pin: 'tx_empty" \
+	  | grep -vE "missing pin: '(direct_video|img_mounted|img_readonly|img_size|info|info_req|ioctl_file_ext|ioctl_rd|joystick_[0-5]_rumble|joystick_[1-5]|joystick_[lr]_analog_[0-5]|new_vmode|paddle_[1-5]|ps2_[a-z_]+|RTC|sd_ack|sd_blk_cnt|sd_buff_[a-z]+|sd_lba|sdram_sz|sd_rd|sd_wr|spinner_[0-5]|status_in|status_menumask|status_set|TIMESTAMP|uart_mode|uart_speed|video_rotated|tx_empty)'" \
 	  | grep -vE "missing pin: '(dbg_mstate|dbg_pfp|dbg_rcache_pos|dbg_rf_ack|dbg_rf_addr|dbg_rf_req|dbg_rf_wdata|dbg_rf_we|dbg_rip|dbg_to_memory|dbg_uc_addr|dbg_uc_data|dbg_uc_we|ucode_csum|ucode_words)'" > .lint_top.tmp || true
 	@if [ -s .lint_top.tmp ]; then \
 	  echo "TOP-LEVEL WIRING FAULT (port width, implicit wire, undriven signal, missing module):"; \

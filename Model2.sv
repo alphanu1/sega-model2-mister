@@ -119,6 +119,20 @@ localparam CONF_STR = {
 	"O[19],Debug overlay,Off,On;",
 	// Off at power-up: an OSD bit is 0 until the user sets it.
 	"O[20],Geometrizer walk,On,Off;",
+	// PROVE THE DRAWING HALF, INDEPENDENTLY OF THE GEOMETRY.
+	//
+	// Everything from the quad store to the video mixer has only ever been fed
+	// DEGENERATE quads -- all four vertices at the same point, because the
+	// transform matrix is all zeros -- which correctly rasterise to nothing. So
+	// "no 3D on screen" is the expected outcome of the data, and it says
+	// nothing about whether the rasterizer, the band buffers or the mixer work.
+	//
+	// With this on, one known-good quad is injected per frame in place of the
+	// geometry's. If a grey rectangle appears, the entire downstream half is
+	// proven on hardware and every remaining fault is upstream of it. If it
+	// does not, the fault is downstream and no amount of fixing the matrix
+	// would ever have shown a picture.
+	"O[21],3D test quad,Off,On;",
 	"R[0],Reset and close OSD;",
 	// The button-definition line lives at the END of the menu block. Placed
 	// between the two R items it silently broke everything after it -- the OSD
@@ -2358,6 +2372,25 @@ m2_geometry u_geometry (
 	.dbg_clip_state(geo_clip_state)
 );
 
+// ONE KNOWN-GOOD QUAD PER FRAME, behind status[21]. A green rectangle from
+// (160,120) to (340,260) at z=1.0 -- wound the same way the geometry winds its
+// quads, so it exercises the same path and not a special case. Issued once at
+// vblank, then q_end, which is exactly the sequence a real frame produces.
+wire tq_en = status[21];
+logic tq_valid, tq_end;
+logic [1:0] tq_st;
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+	if (!mem_rst_n) begin tq_valid <= 1'b0; tq_end <= 1'b0; tq_st <= 2'd0; end
+	else begin
+		tq_valid <= 1'b0; tq_end <= 1'b0;
+		case (tq_st)
+			2'd0: if (geo_walk_start) begin tq_valid <= 1'b1; tq_st <= 2'd1; end
+			2'd1: begin tq_end <= 1'b1; tq_st <= 2'd2; end
+			default: if (!geo_walk_start) tq_st <= 2'd0;
+		endcase
+	end
+end
+
 // THE FRAME ENDS WHEN THE WALK DOES, and the walk's completion counter is the
 // only signal that says so. q_end is what releases the rasterizer's producer
 // from P_COLLECT into the sort, so without it nothing ever draws no matter how
@@ -4199,10 +4232,13 @@ wire [31:0] r3d_pixels;
 m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(16), .NBUF(3)) u_raster3d (
 	.clk(clk_sys), .rst_n(mem_rst_n),
 	.frame_start(geo_walk_start),
-	.q_valid(q3d_valid), .q_ready(q3d_ready),
-	.q_x0(q3d_x0), .q_y0(q3d_y0), .q_x1(q3d_x1), .q_y1(q3d_y1),
-	.q_x2(q3d_x2), .q_y2(q3d_y2), .q_x3(q3d_x3), .q_y3(q3d_y3),
-	.q_col(q3d_col), .q_z(q3d_z), .q_moire(1'b0), .q_end(q3d_end),
+	.q_valid(tq_en ? tq_valid : q3d_valid), .q_ready(q3d_ready),
+	.q_x0(tq_en ? 16'sd160 : q3d_x0), .q_y0(tq_en ? 16'sd120 : q3d_y0),
+	.q_x1(tq_en ? 16'sd160 : q3d_x1), .q_y1(tq_en ? 16'sd260 : q3d_y1),
+	.q_x2(tq_en ? 16'sd340 : q3d_x2), .q_y2(tq_en ? 16'sd260 : q3d_y2),
+	.q_x3(tq_en ? 16'sd340 : q3d_x3), .q_y3(tq_en ? 16'sd120 : q3d_y3),
+	.q_col(tq_en ? 24'h20E020 : q3d_col), .q_z(tq_en ? 32'h3F800000 : q3d_z),
+	.q_moire(1'b0), .q_end(tq_en ? tq_end : q3d_end),
 	.scan_clk(clk_sys), .scan_x(vid_x), .scan_y(vid_y),
 	.scan_col(r3d_col), .scan_hit(r3d_hit),
 	.dbg_quads(r3d_quads), .dbg_dropped(r3d_dropped),
