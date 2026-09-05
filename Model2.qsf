@@ -92,6 +92,32 @@ set_global_assignment -name FINAL_PLACEMENT_OPTIMIZATION ALWAYS
 #    hurting us.
 #   The hdmi_out_vs flop-to-flop path was the argument against spreading logic.
 #   A design that does not route has no Fmax to protect.
+# THE FITTER CONFIGURATION NOW MATCHES THE ORACLE'S, AND THE REASON IS ITS
+# CRASH RATE, NOT ITS TIMING.
+#
+# Builds 18 and 21 both died with "Fatal Error: Segment Violation" and no
+# committed fit, on two different seeds, and 3 of the last 5 runs have failed
+# the same way. I attributed that to occupancy -- 89% -- and Ben's answer
+# settles it: the Model 1 core fits at 97% and passes nearly every build.
+# Occupancy is not the cause, so the difference has to be in what we ask the
+# fitter to do that they do not.
+#
+# Model 1's ENTIRE fitter configuration is two settings and one negative:
+#
+#     M1_QOPT  = "Aggressive Area"        OPTIMIZATION_MODE
+#     M1_QTECH = AREA                     OPTIMIZATION_TECHNIQUE
+#     M1_QDUP  = OFF                      PHYSICAL_SYNTHESIS_REGISTER_DUPLICATION
+#
+# They set nothing else and leave the rest at Quartus defaults. This project had
+# nine further physical-synthesis and netlist passes switched on -- combo logic,
+# register duplication ON, retiming, async pipelining, WYSIWYG remap,
+# pre-mapping resynthesis, ECO timing, periphery-to-core -- each added for a
+# timing problem, none ever removed, and collectively the most likely reason
+# this fitter falls over where theirs does not.
+#
+# They are commented rather than deleted: each has a paragraph below explaining
+# what it was added for, and if the crash rate does not improve those reasons
+# are still the record of why they were wanted.
 set_global_assignment -name FITTER_AGGRESSIVE_ROUTABILITY_OPTIMIZATION ALWAYS
 set_global_assignment -name FITTER_EFFORT "STANDARD FIT"
 # BALANCED, NOT AGGRESSIVE AREA. Aggressive Area crashed this fitter twice in
@@ -185,9 +211,9 @@ set_global_assignment -name QII_AUTO_PACKED_REGISTERS NORMAL
 # the committed database. It is a ROUTER option and the crash is in routing.
 # The physical-synthesis options stay off; they are where the area is.
 set_global_assignment -name ROUTER_LCELL_INSERTION_AND_LOGIC_DUPLICATION ON
-set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC ON
-set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_DUPLICATION ON
-set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_RETIMING ON
+#set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC ON
+set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_DUPLICATION OFF
+#set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_RETIMING ON
 # AREA, NOT SPEED. The whole of the block below was tuned when there were
 # 8,940 ALM spare. There are 196.
 # SPEED AGAIN, WITH AGGRESSIVE AREA KEPT. The two do different jobs and only
@@ -223,13 +249,13 @@ set_global_assignment -name AUTO_DELAY_CHAINS_FOR_HIGH_FANOUT_INPUT_PINS ON
 # combinational restructuring is buying nothing". Both halves of that are now
 # false: the technique is AREA and the spare is 196 ALM.
 set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC_FOR_AREA ON
-set_global_assignment -name ADV_NETLIST_OPT_SYNTH_WYSIWYG_REMAP ON
+#set_global_assignment -name ADV_NETLIST_OPT_SYNTH_WYSIWYG_REMAP ON
 set_global_assignment -name SYNTH_GATED_CLOCK_CONVERSION ON
-set_global_assignment -name PRE_MAPPING_RESYNTHESIS ON
+#set_global_assignment -name PRE_MAPPING_RESYNTHESIS ON
 set_global_assignment -name ROUTER_CLOCKING_TOPOLOGY_ANALYSIS ON
-set_global_assignment -name ECO_OPTIMIZE_TIMING ON
-set_global_assignment -name PERIPHERY_TO_CORE_PLACEMENT_AND_ROUTING_OPTIMIZATION ON
-set_global_assignment -name PHYSICAL_SYNTHESIS_ASYNCHRONOUS_SIGNAL_PIPELINING ON
+#set_global_assignment -name ECO_OPTIMIZE_TIMING ON
+#set_global_assignment -name PERIPHERY_TO_CORE_PLACEMENT_AND_ROUTING_OPTIMIZATION ON
+#set_global_assignment -name PHYSICAL_SYNTHESIS_ASYNCHRONOUS_SIGNAL_PIPELINING ON
 # HIGH, AND THIS IS THE ONE AIMED AT THE MEASURED PROBLEM. m2_geometry is
 # 5,428 combinational ALUTs and 6,607 REGISTERS, and the total went from 33,195
 # ALM to 41,714 -- about 4,000 ALM more than the parts account for. An ALM holds
