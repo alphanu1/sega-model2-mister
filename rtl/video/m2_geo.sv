@@ -424,6 +424,11 @@ module m2_geo #(
   logic [2:0]  w_cap;                    // which opcode's operands are being read
   logic [3:0]  w_ci;                     // operand index
   logic        eng_seen;                 // the engine's busy has been observed high
+  // A pending vblank, and how long we have waited for the push queue to drain.
+  logic        frame_pend;
+  logic [9:0]  drain_wait;
+  wire         q_idle   = !q_valid && (dst == D_IDLE);
+  wire         walk_go  = frame_pend && (q_idle || (&drain_wait));
   logic [31:0] pd_addr;                  // geo_polygon_data's destination
   logic [15:0] pd_n, pd_i;               // dwords to copy, and the one in hand
   logic  [4:0] tp_i;                     // texture_parameters index, wraps at 32
@@ -472,6 +477,7 @@ module m2_geo #(
       dbg_walk_ops <= 16'd0; dbg_walk_objs <= 16'd0;
       dbg_walk_frames <= 16'd0; dbg_walk_unknown <= 8'd0;
       w_cap <= 3'd0; w_ci <= 4'd0; obj_valid <= 1'b0; eng_seen <= 1'b0;
+      frame_pend <= 1'b0; drain_wait <= 10'd0;
       pd_addr <= 32'd0; pd_n <= 16'd0; pd_i <= 16'd0;
       pd_req <= 1'b0; pd_wdata <= 32'd0;
       dbg_pd_words <= 16'd0; dbg_pd_cmds <= 16'd0;
@@ -484,8 +490,35 @@ module m2_geo #(
       for (int k = 0; k < 12; k++) mtx[k] <= 32'd0;
     end else begin
       obj_valid <= 1'b0;
+      // Remember the vblank; clear it when the walk actually starts.
+      if (frame_start) begin frame_pend <= 1'b1; drain_wait <= 10'd0; end
+      else if (frame_pend && !(&drain_wait)) drain_wait <= drain_wait + 10'd1;
+      if (walk_go && (wst == W_IDLE)) frame_pend <= 1'b0;
       case (wst)
-        W_IDLE: if (frame_start) begin
+        // THE WALK MUST NOT READ A BUFFER THE FRONT DOOR IS STILL WRITING.
+        //
+        // frame_start used to launch the walk immediately. The push DMA writes
+        // buffer RAM through the SHARED SDRAM WRITE PORT, which has real
+        // latency and a queue in front of it, so at vblank there can be words
+        // the i960 has written that have not reached memory. The walk then
+        // reads the previous frame's contents -- and a stale geo_end in dword 0
+        // terminates it instantly, which is precisely what the board reports:
+        //
+        //     rp=0000  wp=0024  frames=2821  matrix pushes=110  decoded=0
+        //
+        // identical pointers to simulation, which decodes 399 matrix writes
+        // from them. Same RTL, same addresses, different content at read time.
+        //
+        // NO BENCH HERE COULD SHOW IT. In simulation the queue drains in the
+        // same cycle it is filled and the DMA acknowledges immediately, so the
+        // race does not exist; on hardware it is the difference between a
+        // display list and the tail of the last one.
+        //
+        // So a frame_start is REMEMBERED and the walk begins when the queue is
+        // empty and the DMA idle. The timeout is not optional: a game pushing
+        // continuously would otherwise never start a walk at all, and dropping
+        // a frame is far better than dropping every frame.
+        W_IDLE: if (walk_go) begin
           // MASKED TO 0x1ffff FIRST, THEN /4 -- geo_parse is
           // `(m_geo_read_start_address & 0x1ffff)/4`, and the mask is not
           // decoration: the register holds 20 bits, so an unmasked [19:2] can
