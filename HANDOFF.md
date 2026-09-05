@@ -1,9 +1,78 @@
 # Handoff
 
-**Updated:** 2026-09-04, later. Study entries R173 and R174 added; **R172 is
-WITHDRAWN** -- Model 2 does have a perspective divide, and the entry is kept
-with its wrong reasoning intact because that reasoning is what produced a module
-that had to be deleted.
+**Updated:** 2026-09-05. Study entries R176-R180 added. R172 remains WITHDRAWN.
+
+## WHERE THE MACHINE IS
+
+The core runs Daytona attract at ~95% of hardware speed with sound and tilemap.
+The 3D geometry pipeline is complete, wired, and **proven end to end in
+simulation**; on hardware it is one confirmed race away from drawing, and the
+build testing that fix was in the fitter when this was written.
+
+**The single most important thing on this page:** the reason nothing ever drew
+was that **the geometrizer's opcode is encoded in the WRITE ADDRESS, not in the
+data** (R177). Everything else chased for a day and a half -- zero matrices,
+degenerate quads, phantom object_data commands -- was downstream of that.
+
+### WHAT WAS FIXED, AND WHERE IT IS WRITTEN DOWN
+
+| finding | entry |
+|---|---|
+| Opcode is in the write address; found by RUNNING MAME and diffing bufferram | **R177** |
+| SDRAM arbiter's address mux was the worst path; both clocks closed | **R176** |
+| Walk read buffer RAM while the front door was still writing it | **R179** |
+| Texture must go to SDRAM; its cache must come out of the sound board | **R180** |
+| Sim and hardware diverged on identical bitstreams | **R178** |
+| Model 2 DOES have a perspective divide (R172 withdrawn) | **R174** |
+| Walk and engine share port 4 by taking turns | **R173** |
+
+### THE PIPELINE, STAGE BY STAGE
+
+    m2_geo           display-list walk, operand capture, geo_polygon_data (0x05),
+                     geo_translate_write (0x0c), light source (0x0a),
+                     texture parameters (0x06)
+    m2_geo_engine    stream grammar, vertex links, triangle rope, normal kept
+                     and ROTATED (transform_vector, not transform_point)
+    m2_geo_xform     3x4 transform            } all byte-identical to Model 1's
+    m2_geo_project   perspective divide       } and verified at 88,218 checks
+    m2_geo_clip      view-space frustum clip  }
+    m2_raster3d      quad store, sort, span fill, three band buffers
+
+Proven in simulation at 30M instructions: **399 matrix writes, 553 objects
+addressing the polygon ROM, 3,038 polygons, quads with four distinct vertices**,
+and a buffer-RAM opcode histogram matching MAME to within one word of 1,936.
+
+### WHAT IS STILL OPEN
+
+1. **Does the R179 race fix make geometry appear on the board?** That is the
+   live question and the next build answers it.
+2. **The fitter segfaults**, roughly every other run. Occupancy is NOT the cause
+   -- Model 1 fits at 97% and passes nearly every build. Matching their minimal
+   fitter configuration did NOT fix it either; that hypothesis is disproved and
+   the cause is unknown.
+3. **Lighting is half built.** The light vector and the rotated normal are
+   captured; the two dot products, the diffuse/ambient scale and the clamp are
+   not written. MAME's maths is in R174's neighbourhood and is small.
+4. **Texture is not started** and M10K is 553/553. R180 is the plan.
+5. **R144 is still live** and blocks R180: five requesters, one broadcast
+   acknowledge, on the loader's write port.
+6. **A -0.150 ns hold violation** on clk_sys, and HDMI setup varies by seed.
+7. The sound board does not reset on OSD reset.
+
+### THE LESSON THAT COST THE MOST TIME
+
+Three separate faults in one day existed ONLY in the gap between a bench that
+answers instantly and hardware that does not: the edge-latched SDRAM port, the
+multi-cycle acknowledge, and R179's read-while-writing race. **Every bench in
+this tree acknowledges whenever a request is high, with no latency, no edge
+semantics and no acknowledge width.** 88,218 checks pass against a memory model
+this design does not have. That is one structural gap, not three oversights, and
+it is the highest-value thing to fix in the test infrastructure.
+
+The second lesson, from R177: **a reference is worth far more RUN than READ.**
+Every earlier attempt compared our code with MAME's code and found agreement --
+because they do agree. What disagreed was what reached the front door, and only
+running MAME on the same ROMs and diffing the data could show it.
 
 ## THE 3D PIPELINE IS CONNECTED
 

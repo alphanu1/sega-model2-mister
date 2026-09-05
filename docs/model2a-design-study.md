@@ -9944,3 +9944,106 @@ The third is not hypothetical. `m2_geo`'s header records "overrun: 3205 dropped,
 counted, never stalled": the front door drops rather than backpressuring the
 i960, and R177 has just multiplied the traffic it must carry -- 3,038 polygons
 per frame in simulation against a queue sized when the list was nine dwords.
+
+---
+
+**R179 - THE WALK READ BUFFER RAM WHILE THE FRONT DOOR WAS STILL WRITING IT. THE
+POINTERS WERE IDENTICAL TO SIMULATION AND THE CONTENT WAS NOT.**
+
+*The measurement that isolated it.* With R177 fixed, the board and the boot bench
+report the SAME pointers:
+
+    board:  rp=0000  wp=0024  frames=2821  matrix pushes=110  decoded=0
+    bench:  rp=0000  wp=0024                                  decoded=399
+
+Same RTL, same addresses, opposite results. So this was never addressing -- it is
+what occupies those dwords at the instant the walk reads them.
+
+*The race.* `frame_start` launched the walk immediately. The push DMA writes
+buffer RAM through the SHARED SDRAM WRITE PORT, which has real latency and a
+queue in front of it, so at vblank there are words the i960 has written that have
+not reached memory. The walk reads the previous frame's contents instead, and a
+stale `geo_end` in dword 0 terminates it in one opcode. That is exactly the
+signature: a frame counter climbing every vblank with nothing decoded, while 110
+matrix writes and 3,000 `object_data` commands demonstrably pass the front door.
+
+*The fix.* A vblank is REMEMBERED; the walk begins when the push queue is empty
+and the write DMA idle. The timeout is not optional -- a game pushing
+continuously would otherwise never walk at all, and dropping one frame is far
+better than dropping every frame.
+
+*THE PATTERN, WHICH IS NOW THE DOMINANT FAILURE MODE.* This is the third fault in
+one day whose entire existence is the gap between a bench that answers instantly
+and hardware that does not:
+
+    - the edge-latched SDRAM port (m2_sdram.sv:377): benches acknowledge whenever
+      req is high, so no bench can see a held request
+    - the multi-cycle acknowledge: read as a level, one word is consumed twice
+    - this: the queue drains in the same cycle it is filled in simulation, so the
+      read-while-writing window does not exist there
+
+88,000 checks pass against a memory model with no latency, no edge semantics and
+no acknowledge width. `docs/mister-integration.md` already says a test proves
+only what it is asked; the amendment is that **every bench here asks the same
+wrong question about memory**, and that is a structural gap rather than three
+separate oversights.
+
+---
+
+**R180 - TEXTURE IS FORCED INTO SDRAM BY SIZE AND FORCED TO HAVE A CACHE BY
+BANDWIDTH. THE M10K TO PAY FOR THAT CACHE COMES FROM THE SOUND BOARD.**
+
+*The sizes, from model2.cpp's memory map:*
+
+    textureram0   0x12000000-0x121fffff    2 MB
+    textureram1   0x12400000-0x125fffff    2 MB
+    texture_ram   u16[0x10000]           128 KB   headers, read per POLYGON
+
+4 MB is 3,200 M10K blocks and this device has 553, so the sheets follow the
+polygon ROM and polygon RAM into SDRAM. That is arithmetic, not a design choice.
+There is 15.6 MB free between GAME_PRAM1 and ST_BASE, so space is not the
+constraint.
+
+*The bandwidth, which is:*
+
+    per-pixel texel demand, 496x384x60Hz      11.4 M fetches/s
+    SDRAM ceiling, measured (0.0702 xact/cyc)  7.0 M/s
+
+**SDRAM alone cannot serve texture.** A texel cache is not an optimisation, it is
+what makes texture possible at all. Texture access has strong locality -- adjacent
+pixels share texels -- so a cache should bring 11.4 M/s well under the ceiling,
+but it has to exist and it has to live in M10K.
+
+*Where the blocks come from.* M10K is 553/553. The Fitter RAM Summary, by module:
+
+    m2_char_cache   134   proven needed: 64 KB caused tile and glyph overruns
+    m2_raster3d     114   quad_store ~66 + band buffers 48
+    m2_sound_board   78   of which ram_lo 32 + ram_hi 32 = 64 in the 68000's RAM
+    m2_tdp_ram tram  64   tile RAM, read per pixel, must stay
+    m2_video lanes   32   5.3x waste, MLAB declined by Quartus
+    m2_backup        16   save RAM, rarely touched
+
+*The plan, ranked by blocks per unit of risk:*
+
+    68000 work RAM -> SDRAM      64 blocks   moderate: needs a stall path
+    quad_store 2048 -> 1024      ~33         low: MAME's limit is 32,768 and the
+                                             board emits ~216/frame; dbg_dropped
+                                             catches an underrun
+    band buffers NBUF 3 -> 2     ~16         low
+    m2_backup -> SDRAM            16         low
+                                 ----
+                                 ~129 blocks, 23% of the device
+
+129 blocks is 1.3 Mbit of cache, which is the right order for closing an 11.4
+against 7.0 M/s gap.
+
+*The dependency, and it is not optional.* **R144 is still live**: the loader's
+write port has five requesters sharing one broadcast acknowledge. Every move
+above adds another writer to that port. R144 is fixed first, or each move
+inherits a known-broken arbiter -- and R167 is the record of what one shared port
+with two owners costs when it is wrong.
+
+*Why the sound board is the right first move.* The 68000 runs at ~11 MHz, so
+SDRAM latency at 100 MHz costs it one or two of its own cycles and a stall
+absorbs it. The band buffers and tile RAM are read every pixel during scanout and
+cannot tolerate that at any price.
