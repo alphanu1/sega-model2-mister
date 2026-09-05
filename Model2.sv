@@ -2230,6 +2230,12 @@ m2_geo #(.AW(SDR_AW), .DEPTH(128)) u_geo (
 	.mtx0(), .mtx4(), .mtx8(), .mtx11(),
 	.mat_we(geo_mat_we), .mat_idx(geo_mat_idx), .mat_data(geo_mat_data),
 	.eng_busy(eng_busy),
+	// THESE FOUR WERE LEFT DANGLING AND IT REACHED HARDWARE. An unconnected
+	// input ties to zero, so geo_polygon_data would have written the game's
+	// polygon data at word 0 of SDRAM -- GAME_PROG, the i960's program ROM.
+	// lint_top passed it because PINMISSING was not in its filter.
+	.base_pram0(GAME_PRAM0), .base_pram1(GAME_PRAM1),
+	.dbg_pd_words(geo_pd_words), .dbg_pd_cmds(geo_pd_cmds),
 	.foc_x(geo_foc_x), .foc_y(geo_foc_y),
 	.obj_tpa(), .obj_tha(), .obj_oba(geo_obj_oba), .obj_obc(geo_obj_obc),
 	.obj_valid(geo_obj_valid),
@@ -2259,7 +2265,7 @@ wire        geo_mat_we;
 wire [3:0]  geo_mat_idx;
 wire [31:0] geo_mat_data, geo_foc_x, geo_foc_y, geo_obj_oba, geo_obj_obc;
 wire        geo_obj_valid, eng_busy;
-wire [15:0] geo_mtx_n, geo_foc_n;
+wire [15:0] geo_mtx_n, geo_foc_n, geo_pd_words, geo_pd_cmds;
 
 // THE GEOMETRY PIPELINE. object_data in, screen quads out; see m2_geometry.sv.
 //
@@ -3322,8 +3328,11 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// clip_dropped read 0 on hardware and the refusal count is the number that
 	// now moves, so it takes that byte. Between them: accepted, emitted, refused
 	// before the arithmetic, and reaching the rasterizer.
-	.b_data({geo_clip_in[7:0], geo_clip_out[7:0],
-	         geo_nonfinite[7:0], r3d_quads[7:0]}),
+	// polygon_data commands at full width -- the number that says whether the
+	// list ever fills polygon RAM at all -- against the walk's unknown-opcode
+	// register, which says whether the walk stopped on something it cannot
+	// measure, and the low byte of the refusal count.
+	.b_data({geo_pd_cmds, geo_walk_unknown, geo_nonfinite[7:0]}),
 	.a_tag(8'h43), .b_tag(8'h48),          // 'C' copro in_pushed:out_pushed | TGP retires:pc
 	                                       // 'H' out_popped:hscr2 | io_addr:flags
 	                                       // 'H' scroll h:v for layers 0,1 | layers 2,3 -- low bytes

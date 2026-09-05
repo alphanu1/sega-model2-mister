@@ -136,9 +136,11 @@ lint_top:
 	 fi
 	@rm -f .lint_top.syn
 	@cat .lint_top.raw \
-	  | grep -E "port connection|IMPLICIT|UNDRIVEN" \
+	  | grep -E "port connection|IMPLICIT|UNDRIVEN|PINMISSING" \
 	  | grep -vE "For warning description|lint_off" \
-	  | grep -vE "sys/|rtl/pll/|sim/lint/|rtl/cpu/tv80/|rtl/sound/(jt12|fx68k)/|rtl/sound/m2_multipcm" > .lint_top.tmp || true
+	  | grep -vE "sys/|rtl/pll/|sim/lint/|rtl/cpu/tv80/|rtl/sound/(jt12|fx68k)/|rtl/sound/m2_multipcm" \
+	  | grep -vE "Model2.sv:143:|missing pin: 'tx_empty" \
+	  | grep -vE "missing pin: '(dbg_mstate|dbg_pfp|dbg_rcache_pos|dbg_rf_ack|dbg_rf_addr|dbg_rf_req|dbg_rf_wdata|dbg_rf_we|dbg_rip|dbg_to_memory|dbg_uc_addr|dbg_uc_data|dbg_uc_we|ucode_csum|ucode_words)'" > .lint_top.tmp || true
 	@if [ -s .lint_top.tmp ]; then \
 	  echo "TOP-LEVEL WIRING FAULT (port width, implicit wire, undriven signal, missing module):"; \
 	  cat .lint_top.tmp; rm -f .lint_top.tmp .lint_top.raw; exit 1; \
