@@ -10147,3 +10147,60 @@ that it was racing the store clear, which is a fault in the instrument.
 half working. It is not. This project has now made the same class of error
 twice in one day -- R181's race fix and this -- adopting a conclusion from a
 signal that was weaker than the claim it was used to support.
+
+
+---
+
+**R183 - THE DRAWING HALF IS PROVEN ON HARDWARE. AND THE QUAD STORE WAS NEVER
+BEING CLEARED, WHICH WOULD HAVE BROKEN THE REAL RENDERER TOO.**
+
+*The result.* With four coloured test bars injected at `q_*` -- RED top, GREEN
+right, BLUE bottom, YELLOW left, each a filled rectangle, offset so none touch --
+all four appear on the board in the correct positions and the correct colours,
+composited over the tilemap. Photographed.
+
+That closes R182's doubt and proves, on hardware:
+
+    m2_quad_store          accepts and replays quads
+    the z-sort             does not lose them
+    m2_raster_fill         FILLS -- both horizontal and vertical bars, not edges
+    line_case              is NOT firing; these are true fills
+    the band buffers       hold and present them
+    the video mixer        composites over the tilemap correctly
+    q_col                  reaches the band buffer intact, four distinct colours
+
+Before this, every quad that path had ever seen had four vertices on one pixel,
+because the matrix was zero, and those correctly draw nothing. The entire
+downstream half was unverified and could not be distinguished from a geometry
+fault. It can now.
+
+*The fade, and it is not a test artefact.* The bars persisted for several
+seconds and decayed. The cause:
+
+    assign qs_clear = (pst == P_COLLECT) && frame_start;
+    P_COLLECT: if (q_end) pst <= P_SORT;
+
+The producer cycles P_COLLECT -> P_SORT -> P_SORTW -> P_READY -> P_COLLECT, the
+last step on `frame_start`. So at the instant `frame_start` arrives, `pst` is
+P_READY and the gate is FALSE. **The store is cleared only on frames that drew
+nothing.**
+
+Quads therefore accumulate without limit. Four bars per frame into a 2,048-entry
+store fills it in 512 frames -- about 8.5 seconds at 60 Hz, which is the observed
+decay -- after which every new quad is dropped.
+
+**This would have broken the real renderer identically.** The geometry path
+issues `q_end` every frame too, so a working geometry feed would have filled the
+store just as surely and then stopped accepting anything. It was hidden only
+because nothing had ever drawn.
+
+MAME has no such condition: `render_frame_start()` resets `poly_list_index` at
+the top of every `geo_parse`, unconditionally. Ours now clears on `frame_start`
+outright.
+
+*Method note.* The four-bar pattern was Ben's suggestion, and it is a better
+instrument than the single rectangle it replaced for a reason worth keeping: each
+bar is an independent test and the colour identifies which one drew, so a partial
+result is diagnostic instead of ambiguous. The single rectangle produced "one
+side visible", which was consistent with three unrelated faults and chose between
+none of them.

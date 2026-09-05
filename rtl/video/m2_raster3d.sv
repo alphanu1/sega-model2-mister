@@ -178,7 +178,29 @@ module m2_raster3d #(
   pstate_t pst;
   cstate_t cst;
 
-  assign qs_clear        = (pst == P_COLLECT) && frame_start;
+  // CLEAR UNCONDITIONALLY AT FRAME START, as the reference does.
+  //
+  // This was `(pst == P_COLLECT) && frame_start`, and in steady state that
+  // never fires. The producer cycles
+  //
+  //     P_COLLECT -(q_end)-> P_SORT -> P_SORTW -> P_READY -(frame_start)-> P_COLLECT
+  //
+  // so at the moment frame_start arrives pst is P_READY, not P_COLLECT, and the
+  // gate is false. The store is only ever cleared on frames where NO q_end
+  // came -- that is, frames that drew nothing.
+  //
+  // The consequence is that quads accumulate forever. With the four test bars
+  // that is 4 per frame into a 2,048-entry store: full after 512 frames, about
+  // 8.5 seconds, after which everything new is dropped and the picture decays.
+  // Ben saw exactly that -- four correct bars that "keep fading away".
+  //
+  // It is not a test-only fault. The geometry path issues q_end every frame
+  // too, so the real renderer would have filled the store just as surely and
+  // then stopped accepting geometry.
+  //
+  // MAME has no such condition: render_frame_start() resets poly_list_index at
+  // the top of every geo_parse, unconditionally.
+  assign qs_clear        = frame_start;
   assign qs_sort_start   = (pst == P_SORT);
   assign qs_replay_start = (cst == C_REPLAY);
   assign qs_out_ready    = (cst == C_FILL) && fl_in_ready;
