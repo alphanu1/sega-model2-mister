@@ -3389,8 +3389,16 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	//
 	// Between them: is the walk alive, is it finding objects, and if it is
 	// wedged, WHICH STAGE is not answering.
-	.b_addr({geo_walk_frames[15:0], geo_obj_rom[3:0], geo_obj_pram0[5:0],
-	         geo_eng_state, geo_qst}),
+	// THE MATRIX IS THE LIVE QUESTION AND IT WAS NOT ON THE WIRE.
+	//
+	// Every vertex collapses to the origin, which is what a zero matrix gives,
+	// and "matrix writes = 0" was measured in a 30-million-instruction
+	// SIMULATION -- never on the board. MAME has exactly two writers of
+	// geo->matrix, geo_matrix_write (0x0b, twelve words) and
+	// geo_translate_write (0x0c, matrix[9..11]), and this core implements both.
+	// So either the game does not send them in the lists we walk, or it does
+	// and we step over them, and only the board can say which.
+	.b_addr({geo_mtx_n[15:0], geo_foc_n[7:0], geo_obj_pram0[7:0]}),
 	// clip_dropped read 0 on hardware and the refusal count is the number that
 	// now moves, so it takes that byte. Between them: accepted, emitted, refused
 	// before the arithmetic, and reaching the rasterizer.
@@ -3407,8 +3415,8 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// pj_lost replaces nonfinite, which has read zero on every capture. It
 	// counts projections abandoned on timeout -- if the wedge was a lost
 	// projection, this is the number that proves it and says how often.
-	.b_data({geo_clip_in[7:0], geo_clip_out[7:0], geo_pj_lost[7:0],
-	         geo_clip_state, geo_walk_state}),
+	.b_data({geo_clip_in[7:0], geo_clip_out[7:0], geo_walk_frames[7:0],
+	         geo_eng_state, geo_walk_state}),
 	.a_tag(8'h43), .b_tag(8'h48),          // 'C' copro in_pushed:out_pushed | TGP retires:pc
 	                                       // 'H' out_popped:hscr2 | io_addr:flags
 	                                       // 'H' scroll h:v for layers 0,1 | layers 2,3 -- low bytes
