@@ -2237,6 +2237,10 @@ m2_geo #(.AW(SDR_AW), .DEPTH(128)) u_geo (
 	.base_pram0(GAME_PRAM0), .base_pram1(GAME_PRAM1),
 	.dbg_pd_words(geo_pd_words), .dbg_pd_cmds(geo_pd_cmds),
 	.foc_x(geo_foc_x), .foc_y(geo_foc_y),
+	// The light vector, for the luminance stage. Captured but not yet consumed:
+	// the dot products and the diffuse/ambient scale are still to come.
+	.lit_x(geo_lit_x), .lit_y(geo_lit_y), .lit_z(geo_lit_z),
+	.dbg_lit_n(geo_lit_n),
 	.obj_tpa(), .obj_tha(), .obj_oba(geo_obj_oba), .obj_obc(geo_obj_obc),
 	.obj_valid(geo_obj_valid),
 	.dbg_mtx_n(geo_mtx_n), .dbg_foc_n(geo_foc_n)
@@ -2265,7 +2269,8 @@ wire        geo_mat_we;
 wire [3:0]  geo_mat_idx;
 wire [31:0] geo_mat_data, geo_foc_x, geo_foc_y, geo_obj_oba, geo_obj_obc;
 wire        geo_obj_valid, eng_busy;
-wire [15:0] geo_mtx_n, geo_foc_n, geo_pd_words, geo_pd_cmds;
+wire [15:0] geo_mtx_n, geo_foc_n, geo_pd_words, geo_pd_cmds, geo_lit_n;
+wire [31:0] geo_lit_x, geo_lit_y, geo_lit_z;
 
 // THE GEOMETRY PIPELINE. object_data in, screen quads out; see m2_geometry.sv.
 //
