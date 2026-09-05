@@ -2469,13 +2469,28 @@ m2_geometry u_geometry (
 wire tq_en = status[21];
 logic tq_valid, tq_end;
 logic [1:0] tq_st;
+logic [3:0] tq_dly;
 always_ff @(posedge clk_sys or negedge mem_rst_n) begin
-	if (!mem_rst_n) begin tq_valid <= 1'b0; tq_end <= 1'b0; tq_st <= 2'd0; end
+	if (!mem_rst_n) begin
+		tq_valid <= 1'b0; tq_end <= 1'b0; tq_st <= 2'd0; tq_dly <= 4'd0;
+	end
 	else begin
 		tq_valid <= 1'b0; tq_end <= 1'b0;
+		// INJECT AFTER THE CLEAR, NOT ON IT. m2_raster3d clears the quad store
+		// with `qs_clear = (pst == P_COLLECT) && frame_start`, and
+		// geo_walk_start IS frame_start -- so issuing the quad on that edge
+		// raced the clear and the store sometimes swallowed it. On the board
+		// that reads as a rectangle that draws, flickers and fades out, which
+		// is exactly what Ben saw and is a fault in this test injector rather
+		// than in the rasterizer it is testing.
+		//
+		// A few cycles of delay puts the quad safely after the clear and well
+		// before the producer needs q_end.
 		case (tq_st)
-			2'd0: if (geo_walk_start) begin tq_valid <= 1'b1; tq_st <= 2'd1; end
-			2'd1: begin tq_end <= 1'b1; tq_st <= 2'd2; end
+			2'd0: if (geo_walk_start) begin tq_dly <= 4'd8; tq_st <= 2'd1; end
+			2'd1: if (tq_dly != 4'd0) tq_dly <= tq_dly - 4'd1;
+			      else begin tq_valid <= 1'b1; tq_st <= 2'd2; end
+			2'd2: begin tq_end <= 1'b1; tq_st <= 2'd3; end
 			default: if (!geo_walk_start) tq_st <= 2'd0;
 		endcase
 	end
