@@ -9782,3 +9782,165 @@ stopped answering -- are all things MAME cannot exhibit because MAME is not a
 pipeline. The Model 1 core in `tools/model1-ref/` is a working coprocessor,
 geometry engine, walker, texture unit and rasterizer on this same device, and
 it is the oracle. `CLAUDE.md` now says so.
+
+---
+
+**R176 - THE WORST SETUP PATH IN THE DESIGN WAS THE ARBITER'S ADDRESS MUX, AND
+MODEL 1 HAD ALREADY WRITTEN DOWN THE FIX. SEED SWEEPING WAS THE WRONG LEVER AND
+COST FIVE SWEEPS TO LEARN.**
+
+All six worst setup paths reported by `report_timing` had both endpoints inside
+`m2_sdram`:
+
+    From  emu:emu|m2_sdram:u_sdram|Mux5~0_OTERM7279
+    To    emu:emu|m2_sdram:u_sdram|Mux3~0_OTERM7275
+    Slack -1.353 (VIOLATED)
+
+*What they are.* The arbitration cycle computed the round-robin priority encoder
+AND THEN read a ten-way 25-bit address mux with its result, into `xfer_addr`, in
+one clock:
+
+    grant <= rr_grant;
+    sel    = addr_p[rr_grant];      // ten-way, 25-bit, combinational
+    xfer_addr <= sel;
+
+*The oracle had already met it.* `tools/model1-ref/docs/findings.md`, "Worst
+setup slack is -0.019 ns, and it is the SDRAM address path": both endpoints
+inside `m1_sdram`, nine combinational levels, 73% interconnect. Its conclusion,
+which this project needed and did not read:
+
+    "The deterministic fix is the 9 combinational levels feeding sd_a -- the
+     state machine computing its address mux in the same cycle it drives the
+     pins. Registering the address select one cycle earlier removes most of
+     them."
+
+and about the lever this project was pulling instead:
+
+    "So the area lever is not the remedy it looks like ... It is a lottery
+     ticket, not a fix."
+
+*What that cost.* Five seed sweeps and roughly twenty-five fits, chasing a 0.84
+ns seed-to-seed spread that was noise sitting on a structural path. Every one of
+those builds was a lottery ticket.
+
+*The fix.* `S_SEL` performs the mux in a cycle of its own; the arbitration cycle
+settles only the grant INDEX, and `S_DISPATCH` still sees a settled `xfer_addr`
+for its row comparator. Address, data and byte enables all move with the grant.
+
+*Result, build 16, first fully setup-clean build since the geometry work began:*
+
+    pll_hdmi   +0.217   was -0.928
+    SDRAM      +0.276   was -0.928, and -1.353 on build 14
+    worst hold -0.150   on clk_sys, still outstanding
+
+**Both clocks closed, and the HDMI path came with it** -- Ben predicted that,
+and it is the tell that these were one congestion problem rather than two.
+
+*The price, measured rather than waved through:* one cycle per transaction,
+0.079689 -> 0.070201 transactions per cycle, **-11.9%**. That figure is the
+controller's CEILING under a saturated fuzz bench, not the demand: the core runs
+attract at ~95% of hardware speed and what throttles it is the i960's poll loop.
+Trading a few percent of an unapproached ceiling for a timing violation on the
+clock every other block depends on is the right way round, and this study had it
+backwards -- 2.7% was being quoted as a reason not to fix -1.353 ns.
+
+*Standing note.* R108's warning still holds and now has a second instance:
+anything combinational from the port array to `cmd` or to `xfer_addr` becomes
+the critical path, and every added port widens it.
+
+---
+
+**R177 - THE GEOMETRIZER'S OPCODE IS IN THE WRITE ADDRESS, NOT IN THE DATA. THIS
+IS WHY NO 3D HAS EVER DRAWN, AND IT WAS FOUND BY RUNNING MAME RATHER THAN
+READING IT.**
+
+*How it was found.* MAME 0.289 -- the same version as `third_party/mame` -- run
+on the same ROMs with a Lua script dumping `bufferram` (mapped at 0x900000) at a
+chosen frame, diffed word for word against ours at the same point:
+
+    dword   MAME        ours
+      0     04000000    00000000     op 08  zsort_mode
+      1     40800000    40800000     ok
+      2     01800000    00000000     op 03  window_data
+     3-8    (six window operands)    all identical
+      9     02000000    00000000     op 04  texture_data
+     10     008050f8    008050f8     ok
+     11     00000118    00000000
+
+**Every operand matched. Every command word was zero.**
+
+*The rule, from `geo_w` (model2.cpp):*
+
+    if (data & 0x80000000) {
+        r = (data & 0x800fffff) | (((address >> 4) & 0x3f) << 23);
+        push_geo_data(r);
+    } else if ((address & 0xf) == 0) {
+        r = (data & 0x000fffff) | (((address >> 4) & 0x3f) << 23);
+        if (((address >> 4) & 0xc0) && function == 1)
+            r |= ((address >> 10) & 3) << 29;      // eye mode, Sega Rally
+        push_geo_data(r);
+    }
+    // bit31 clear and the address not 16-byte aligned: NOTHING is pushed
+
+The i960 selects a command by WHERE it writes -- `0x800000 + (function << 4)` --
+and the geometrizer folds that function number into bits 28:23, which is exactly
+the field the walk decodes as the opcode. This core pushed `cpu_io_wdata`
+verbatim, so operands landed perfectly and every command word arrived as its
+data half with no opcode: zero.
+
+`0x804000-0x807fff` is `geo_prg_w` and IS a verbatim push. That half was always
+correct, which is why the operands were flawless and made the fault look like
+dropped writes rather than missing opcodes.
+
+*What it explains, all of it at once.* Matrix writes read zero because no
+`matrix_write` survived the front door; focal distance likewise. The "252
+object_data commands" the board reported were opcode-0x01 bit patterns occurring
+by chance in operand data and unwritten memory -- which is why their `oba` and
+`obc` were both `0000ffff`, the same word. Every vertex collapsed to the
+projection centre because the matrix was never written, and every quad was
+degenerate in consequence.
+
+*Result in simulation, at 30M instructions:*
+
+    matrix writes=399   focal writes=32   objs=553
+    last object: oba=008a6daf obc=00001388  -> polygon ROM
+    ENGINE objects=552  polys=3038
+    QUADS OUT=2   quad 0: (458,171) (454,173) (462,173) (462,173)
+
+and the buffer-RAM opcode histogram now sits beside MAME's: 1,935 non-zero words
+against 1,936, with 07:4, 08:1, 09:2, 0a:2 and 0f:5 matching to the count.
+
+*THE METHOD IS THE FINDING.* Every previous attempt compared our CODE against
+MAME's CODE and found them to agree -- because they DO agree about what `geo_w`
+computes. What disagreed was what reached the front door. Reading the reference
+cannot show that; only running it and diffing the data can. `CLAUDE.md` already
+says Model 1 is the oracle and MAME a reference; the amendment this adds is that
+a reference is worth far more RUN than READ.
+
+---
+
+**R178 - SIMULATION AND HARDWARE DISAGREE ON THE SAME CORE, AND THAT IS THE NEXT
+THING TO RESOLVE.**
+
+With R177 fixed and the identical bitstream md5-verified on the card:
+
+    simulation, 30M insn:  mtx=399  foc=32  objs=553  polys=3038  quads out
+    board, 60s, 382 UART records:  mtx=0  foc=2  objs=0  clip 0 in 0 out
+
+The fix demonstrably reached the board -- focal writes went 0 to 2 and the 252
+phantom object decodes vanished, both of which are R177's signature -- and then
+nothing further. The board is not merely behind: it is static.
+
+Three causes remain and nothing on the wire separated them, so the push port's
+own counters go on the UART:
+
+    pushes climbing, mtx zero -> the decode or the walk is wrong
+    pushes flat               -> the i960 is not writing, and the fault is
+                                 upstream in the game's own progress
+    dropped climbing          -> the queue is too small and the list is being
+                                 corrupted by loss
+
+The third is not hypothetical. `m2_geo`'s header records "overrun: 3205 dropped,
+counted, never stalled": the front door drops rather than backpressuring the
+i960, and R177 has just multiplied the traffic it must carry -- 3,038 polygons
+per frame in simulation against a queue sized when the list was nine dwords.
