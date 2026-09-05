@@ -2267,13 +2267,34 @@ wire geo_wr_push  = cpu_io_sel && cpu_io_we &&
 // is wrong or the walk never reaches it, and only the word itself separates
 // those. Captured on the FUNCTION port alone: the 0x804000 path is a verbatim
 // push and was never in doubt.
+// The words themselves are now known good: the board pushes 01800000 (op 03
+// window_data, byte-identical to MAME's dword 2) and 07800000 (op 0f geo_end).
+// So the address reconstruction works on hardware, and the remaining question
+// is whether a MATRIX WRITE is ever pushed at all -- one sampled word per UART
+// record is far too sparse to say.
+//
+// Counting by opcode answers it outright:
+//   mtx_push > 0 and mtx_n = 0  -> the walk is not decoding what arrives
+//   mtx_push = 0                -> the game never sends a matrix, and the fault
+//                                  is upstream of the geometrizer entirely
 logic [31:0] geo_last_push;
 logic [15:0] geo_fn_pushes;
+logic [15:0] geo_mtx_push, geo_obj_push;
+wire  [4:0]  geo_push_op = geo_push_word[27:23];
 always_ff @(posedge clk_sys or negedge mem_rst_n) begin
-	if (!mem_rst_n) begin geo_last_push <= 32'd0; geo_fn_pushes <= 16'd0; end
-	else if (geo_wr_push && geo_fn_win) begin
-		geo_last_push <= geo_push_word;
-		if (!(&geo_fn_pushes)) geo_fn_pushes <= geo_fn_pushes + 16'd1;
+	if (!mem_rst_n) begin
+		geo_last_push <= 32'd0; geo_fn_pushes <= 16'd0;
+		geo_mtx_push <= 16'd0; geo_obj_push <= 16'd0;
+	end else if (geo_wr_push) begin
+		if (geo_fn_win) begin
+			geo_last_push <= geo_push_word;
+			if (!(&geo_fn_pushes)) geo_fn_pushes <= geo_fn_pushes + 16'd1;
+		end
+		// Both ports: geo_prg_w pushes verbatim and can carry commands too.
+		if ((geo_push_op[3:0] == 4'hb) && !(&geo_mtx_push))
+			geo_mtx_push <= geo_mtx_push + 16'd1;
+		if ((geo_push_op[3:0] == 4'h1) && !(&geo_obj_push))
+			geo_obj_push <= geo_obj_push + 16'd1;
 	end
 end
 wire [31:0] geo_rd_wp, geo_rd_rp, geo_pushes, geo_dropped, geo_ctl_dbg;
@@ -3501,7 +3522,8 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// the opcode the walk will decode: if bits 28:23 are zero here, the address
 	// reconstruction is not working on hardware even though it works in
 	// simulation on the same RTL.
-	.b_data(geo_last_push),
+	// matrix pushes : object pushes : what the walk decoded
+	.b_data({geo_mtx_push[11:0], geo_obj_push[11:0], geo_mtx_n[7:0]}),
 	.a_tag(8'h43), .b_tag(8'h48),          // 'C' copro in_pushed:out_pushed | TGP retires:pc
 	                                       // 'H' out_popped:hscr2 | io_addr:flags
 	                                       // 'H' scroll h:v for layers 0,1 | layers 2,3 -- low bytes
