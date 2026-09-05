@@ -10099,3 +10099,51 @@ halved despite its own rationale, and this. The pattern in all three is the same
 -- a plausible mechanism adopted before it was measured -- and the counters that
 eventually settled each of them cost one build apiece against the several spent
 guessing.
+
+
+---
+
+**R182 - THE TEST QUAD RENDERED ONE EDGE, NOT A FILLED RECTANGLE. THE DRAWING
+HALF IS PARTLY PROVEN, NOT PROVEN, AND THE PREVIOUS CLAIM IS CORRECTED HERE.**
+
+*What was claimed and what was seen.* A commit message states "THE RASTERIZER
+DRAWS" on the strength of a green rectangle appearing on the board. Ben's
+correction: **only one side of it was visible**. That is a materially different
+result and the overstatement is corrected rather than left standing.
+
+*What IS established.* Something reached the screen through the entire
+downstream path -- quad store, sort, span generation, band buffer, video mixer --
+from a quad injected at the `q_*` port. Before this, every quad that path had
+ever seen had four vertices on one pixel and correctly drew nothing, so the half
+was wholly unverified. Pixels arriving at all is real progress and is why the
+test exists.
+
+*What is NOT established.* That the fill path works. One visible edge is
+consistent with several distinct faults and the evidence does not choose between
+them:
+
+  - **The store-clear race.** `qs_clear = (pst == P_COLLECT) && frame_start`,
+    and the injector issued its quad on that same edge, so the clear sometimes
+    won. Partial survival of one quad's spans would show as partial geometry.
+    Fixed by delaying the injection eight cycles; that fix is untested at the
+    time of writing.
+  - **The wireframe path.** `m2_raster_fill` flags `line_case` for a quad with
+    only two distinct screen vertices and retires it WITHOUT EMITTING -- the
+    Bresenham line unit MAME uses is not implemented here. If the quad is
+    reaching the filler degenerate, one edge is what a partly-working span
+    generator would produce.
+  - **Vertex order.** The filler expects the quad traversed around its
+    perimeter. The injector uses (160,120) (160,260) (340,260) (340,120), which
+    is a proper cycle and matches the engine's own v0..v3 convention, so this is
+    the least likely of the three -- but it has not been ruled out.
+
+*Why this matters beyond the test.* The test quad exists precisely so that a
+black screen after the geometry is fixed can be attributed to one half or the
+other. A test that itself renders incorrectly cannot do that job, so it has to
+be made correct before it is trusted -- and the first thing it has told us is
+that it was racing the store clear, which is a fault in the instrument.
+
+*Standing correction.* "A green box appeared" was reported here as the drawing
+half working. It is not. This project has now made the same class of error
+twice in one day -- R181's race fix and this -- adopting a conclusion from a
+signal that was weaker than the claim it was used to support.
