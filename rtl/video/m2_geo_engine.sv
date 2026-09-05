@@ -120,6 +120,9 @@ module m2_geo_engine #(
   output logic [31:0] v2x, v2y, v2z,
   output logic [31:0] v3x, v3y, v3z,
   output logic [31:0] poly_attr,
+  // The polygon's normal, in OBJECT space -- it still needs rotating by the
+  // matrix, which is transform_vector (the 3x3 without the translation row).
+  output logic [31:0] nrm_x, nrm_y, nrm_z,
 
   output logic [15:0] dbg_polys,      // emitted this object
   output logic [15:0] dbg_objects,    // objects completed
@@ -136,7 +139,10 @@ module m2_geo_engine #(
     .mat_we(mat_we), .mat_idx(mat_idx), .mat_data(mat_data),
     .in_valid(xf_in_valid), .in_ready(xf_in_ready),
     .in_x(xf_in_x), .in_y(xf_in_y), .in_z(xf_in_z),
-    .in_translate(1'b1),                       // points; normals are not transformed here
+    // 1 for points (transform_point), 0 for the polygon normal
+    // (transform_vector -- the 3x3 without the translation row). MAME does
+    // both with the same matrix and distinguishes them exactly this way.
+    .in_translate(xf_translate),
     .mul_req(mul_req), .mul_a(mul_a), .mul_b(mul_b),
     .mul_gnt(mul_gnt), .mul_rsp(mul_rsp), .mul_res(mul_res),
     .add_req(add_req), .add_a(add_a), .add_b(add_b), .add_sub(add_sub),
@@ -158,9 +164,13 @@ module m2_geo_engine #(
   logic [31:0] attr;
   logic [23:0] ptr;
   logic [31:0] remain;
+  logic [31:0] nrm [3];
+  logic        xf_translate;
+  assign nrm_x = nrm[0]; assign nrm_y = nrm[1]; assign nrm_z = nrm[2];
 
   typedef enum logic [3:0] {
-    E_IDLE, E_RD, E_XF, E_XFW, E_FOC, E_FOCW, E_STORE, E_ATTR, E_NORM, E_SKIP,
+    E_IDLE, E_RD, E_XF, E_XFW, E_FOC, E_FOCW, E_STORE, E_ATTR, E_NORM,
+    E_NXF, E_NXFW, E_SKIP,
     E_EMIT, E_LINK, E_DONE
   } estate_t;
   estate_t st, ret;
@@ -185,6 +195,7 @@ module m2_geo_engine #(
     if (!rst_n) begin
       st <= E_IDLE; ret <= E_IDLE; busy <= 1'b0; poly_valid <= 1'b0;
       dbg_capped <= 16'd0;
+      nrm[0] <= 32'd0; nrm[1] <= 32'd0; nrm[2] <= 32'd0; xf_translate <= 1'b1;
       ptr <= 24'd0; remain <= 32'd0; widx <= 2'd0; dst <= 2'd0; skipn <= 2'd0;
       attr <= 32'd0; xf_in_valid <= 1'b0;
       fmul_req <= 1'b0; fmul_a <= 32'd0; fmul_b <= 32'd0;
@@ -290,12 +301,49 @@ module m2_geo_engine #(
           else begin skipn <= 2'd3; st <= E_NORM; end
         end
 
-        // ---- the normal: read, not transformed. Flat shading needs no
-        //      luminance, but the stream position depends on these words.
+        // ---- THE NORMAL IS KEPT NOW. It used to be read and thrown away,
+        //      because flat shading needs no luminance and only the stream
+        //      position mattered. Model 2's lighting is
+        //
+        //          dotl = dot(normal, light)   dotp = dot(normal, point)
+        //          luminance = (dotl*dotp < 0) ? 0 : |dotl|
+        //          luminance = luminance * diffuse + ambient, clamped 0..255
+        //
+        //      so these three words are half of every luminance the renderer
+        //      will compute. They arrive in stream order x, y, z; skipn counts
+        //      down from 3, so 3->x, 2->y, 1->z.
         E_NORM: if (mem_ack) begin
           ptr <= ptr + 24'd1;
-          if (skipn == 2'd1) begin widx <= 2'd0; dst <= 2'd2; st <= E_RD; end
+          case (skipn)
+            2'd3: nrm[0] <= mem_data;
+            2'd2: nrm[1] <= mem_data;
+            default: nrm[2] <= mem_data;
+          endcase
+          // With all three words in, ROTATE the normal before moving on. It is
+          // read in object space and every use of it -- both dot products --
+          // is in view space.
+          if (skipn == 2'd1) st <= E_NXF;
           else skipn <= skipn - 2'd1;
+        end
+
+        // transform_vector: the same matrix, the translation row suppressed.
+        // Issue and wait are separate states for the reason E_XF/E_XFW are.
+        E_NXF: begin
+          xf_in_x <= nrm[0]; xf_in_y <= nrm[1];
+          xf_in_z <= (skipn == 2'd1) ? mem_data : nrm[2];
+          xf_translate <= 1'b0;
+          if (xf_in_ready) begin
+            xf_in_valid <= 1'b1;
+            st <= E_NXFW;
+          end
+        end
+        E_NXFW: begin
+          xf_in_valid <= 1'b0;
+          if (xf_out_valid) begin
+            nrm[0] <= xf_out_x; nrm[1] <= xf_out_y; nrm[2] <= xf_out_z;
+            xf_translate <= 1'b1;          // back to points
+            widx <= 2'd0; dst <= 2'd2; st <= E_RD;
+          end
         end
 
         // ---- the unused triangle point, consumed

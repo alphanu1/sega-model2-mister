@@ -9747,12 +9747,31 @@ writing a display list.** There is no `geo_end` anywhere in the 128 KB of buffer
 RAM, so there is no list to walk, and every downstream count is zero for the
 only reason that can make them all zero at once.
 
-*Which points at the coprocessor.* On Model 2 the geometry is built by the TGP,
-not by the i960 directly -- the i960 pushes commands and the coprocessor
-produces the stream. The copro was only made to run at all in R167, hours
-before this, and "it completes commands and cycles its mailbox" is a much weaker
-statement than "it produces a correct display list". That is the next thing to
-establish, and the bench above is now the instrument for it.
+*CORRECTION, WITHIN THE HOUR: THE COPROCESSOR DOES NOT WRITE THE LIST. THE i960
+DOES.* The paragraph originally here said the TGP builds the display list and
+named it as the next suspect. `push_geo_data` (model2.cpp:777) says otherwise:
+
+    m_bufferram[m_geo_write_start_address/4] = data;
+    m_geo_write_start_address += 4;
+
+and its only caller is `geo_prg_w`, the i960's own function port at 0x800000 --
+which is precisely the front door this core already implements. The i960 writes
+buffer RAM directly; the coprocessor never touches it in the reference. Recorded
+rather than deleted because it was committed before it was checked, which is the
+habit this study exists to discourage.
+
+*Where that actually leaves the question.* The i960 IS pushing -- 10,272 words
+of it -- and what it pushes is a table, not a list. So the game has not yet
+decided to build geometry. It is the i960's own code that makes that decision,
+and on Model 2 that decision is downstream of the TGP: the game hands the
+coprocessor work and pushes a display list built from what comes back. A
+coprocessor that completes its mailbox handshake but returns wrong numbers gives
+exactly this -- a game that runs, cycles attract, and never emits geometry.
+
+So the coprocessor is still the thing to examine, but for a different and
+weaker reason than first written: not because it writes the list, but because
+the i960 will not write one until the TGP's answers are right. R167 established
+that it runs. Nothing yet establishes that it is correct.
 
 *What this cost, and the rule that came out of it.* Four builds were spent
 looking for a fault in the consumer. **MAME is a reference; it is not the

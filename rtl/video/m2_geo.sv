@@ -114,6 +114,11 @@ module m2_geo #(
   output logic [15:0]   dbg_pd_words,    // dwords written into polygon RAM
   output logic [15:0]   dbg_pd_cmds,     // geo_polygon_data commands executed
   output logic [31:0]   foc_x, foc_y,
+  // geo_light_source (0x0a): three words, the light vector. Lighting on Model 2
+  // is dot(normal, light) against dot(normal, point), so this is half of what
+  // the luminance needs and the polygon's own normal is the other half.
+  output logic [31:0]   lit_x, lit_y, lit_z,
+  output logic [15:0]   dbg_lit_n,
   output logic [31:0]   obj_tpa, obj_tha, obj_oba, obj_obc,
   output logic          obj_valid,       // one pulse when an object_data is complete
   output logic [15:0]   dbg_mtx_n,       // matrices captured
@@ -406,7 +411,7 @@ module m2_geo #(
   logic [31:0] pd_addr;                  // geo_polygon_data's destination
   logic [15:0] pd_n, pd_i;               // dwords to copy, and the one in hand
   localparam logic [2:0] CAP_MTX = 3'd1, CAP_FOC = 3'd2, CAP_OBJ = 3'd3,
-                         CAP_TRA = 3'd4;
+                         CAP_TRA = 3'd4, CAP_LIT = 3'd5;
 
   assign mtx0 = mtx[0]; assign mtx4 = mtx[4]; assign mtx8 = mtx[8]; assign mtx11 = mtx[11];
 
@@ -428,9 +433,11 @@ module m2_geo #(
   // happened to leave -- geometry that is the right shape in the wrong place,
   // which is far harder to recognise as a missing opcode than a blank screen.
   wire is_tra = (w_op == 5'h0c) || (w_op == 5'h1c);
+  wire is_lit = (w_op == 5'h0a) || (w_op == 5'h1a);
   wire [3:0] cap_last = (w_cap == CAP_MTX) ? 4'd11
                       : (w_cap == CAP_FOC) ? 4'd1
                       : (w_cap == CAP_TRA) ? 4'd2
+                      : (w_cap == CAP_LIT) ? 4'd2
                                            : 4'd3;
 
   assign rd_req  = (wst == W_FETCH) || (wst == W_CNT) || (wst == W_DDATTR)
@@ -448,6 +455,7 @@ module m2_geo #(
       dbg_pd_words <= 16'd0; dbg_pd_cmds <= 16'd0;
       dbg_mtx_n <= 16'd0; dbg_foc_n <= 16'd0;
       foc_x <= 32'd0; foc_y <= 32'd0;
+      lit_x <= 32'd0; lit_y <= 32'd0; lit_z <= 32'd0; dbg_lit_n <= 16'd0;
       obj_tpa <= 32'd0; obj_tha <= 32'd0; obj_oba <= 32'd0; obj_obc <= 32'd0;
       for (int k = 0; k < 12; k++) mtx[k] <= 32'd0;
     end else begin
@@ -516,14 +524,14 @@ module m2_geo #(
             // operand before it.
             if (!is_cnt3) w_ip <= w_ip + 19'd1;
             wst  <= W_CNT;
-          end else if (is_mtx || is_foc || is_obj || is_tra) begin
+          end else if (is_mtx || is_foc || is_obj || is_tra || is_lit) begin
             // READ THESE OPERANDS RATHER THAN STEPPING OVER THEM. They carry
             // the transform's state -- the matrix, its translation row, the
             // projection, and the object's address and count. Everything else
             // stays a blind skip, which is what kept the walk cheap while it
             // was only counting.
             w_cap <= is_mtx ? CAP_MTX : is_foc ? CAP_FOC
-                   : is_tra ? CAP_TRA : CAP_OBJ;
+                   : is_tra ? CAP_TRA : is_lit ? CAP_LIT : CAP_OBJ;
             w_ci  <= 4'd0;
             wst   <= W_OPRD;
           end else if (oplen(w_op) == 16'hffff) begin
@@ -543,6 +551,11 @@ module m2_geo #(
           case (w_cap)
             CAP_MTX: mtx[w_ci] <= rd_data;
             CAP_TRA: mtx[w_ci + 4'd9] <= rd_data;
+            CAP_LIT: case (w_ci)
+                       4'd0: lit_x <= rd_data;
+                       4'd1: lit_y <= rd_data;
+                       default: lit_z <= rd_data;
+                     endcase
             CAP_FOC: if (w_ci == 4'd0) foc_x <= rd_data; else foc_y <= rd_data;
             default: case (w_ci)
                        4'd0: obj_tpa <= rd_data;
@@ -555,6 +568,7 @@ module m2_geo #(
           if (w_ci == cap_last) begin
             if (w_cap == CAP_MTX) dbg_mtx_n <= dbg_mtx_n + 16'd1;
             if (w_cap == CAP_FOC) dbg_foc_n <= dbg_foc_n + 16'd1;
+            if (w_cap == CAP_LIT) dbg_lit_n <= dbg_lit_n + 16'd1;
             // The object is announced only once its four words are in, and
             // the walk then STOPS until the engine reports the object drawn.
             if (w_cap == CAP_OBJ) begin

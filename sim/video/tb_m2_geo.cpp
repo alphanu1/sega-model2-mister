@@ -366,6 +366,36 @@ int main(int argc,char**argv){
     ck("mtx11 mirrors it", d->mtx11, 0x40a00000u);
   }
 
+  // ---- geo_light_source is captured, not stepped over
+  //
+  // Model 2's lighting is dot(normal, light) against dot(normal, point), so the
+  // light vector is half of every luminance the renderer will ever compute.
+  // While 0x0a was a blind skip there was no light at all.
+  {
+    std::vector<uint32_t> list(0x800, 0);
+    size_t w = 0;
+    list[w++] = 0x0au << 23;
+    list[w++] = 0x3f800000u;      // 1.0
+    list[w++] = 0xbf800000u;      // -1.0
+    list[w++] = 0x40000000u;      // 2.0
+    list[w++] = 0x0fu << 23;
+
+    d->rst_n = 0; for (int i = 0; i < 4; i++) tick(); d->rst_n = 1; idle(2);
+    d->frame_start = 1; tick(); d->frame_start = 0;
+    for (int i = 0; i < 100000; i++) {
+      d->rd_ack = 0;
+      if (d->rd_req) { d->rd_data = (d->rd_addr < list.size()) ? list[d->rd_addr] : 0; d->rd_ack = 1; }
+      tick();
+      if (d->dbg_walk_frames) break;
+    }
+    std::printf("test: geo_light_source is captured\n");
+    ck("light captured once", d->dbg_lit_n, 1);
+    ck("light x", d->lit_x, 0x3f800000u);
+    ck("light y", d->lit_y, 0xbf800000u);
+    ck("light z", d->lit_z, 0x40000000u);
+    ck("the walk still finished", d->dbg_walk_frames ? 1u : 0u, 1u);
+  }
+
   // ---- geo_polygon_data ACTUALLY COPIES, and to the right polygon RAM
   //
   // This is the command the whole 3D path was waiting on. The board reported

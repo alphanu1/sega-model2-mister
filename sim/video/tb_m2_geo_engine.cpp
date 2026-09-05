@@ -97,12 +97,12 @@ int main(int argc, char** argv) {
   d->oba = 0; d->obc = 16;
   d->start = 1; tick(); d->start = 0;
 
-  struct Poly { uint32_t v0,v1,v2,v3,attr; };
+  struct Poly { uint32_t v0,v1,v2,v3,attr,nx; };
   std::vector<Poly> got;
   for (int budget = 0; budget < 60000 && (d->busy || got.empty()); budget++) {
     tick();
     if (d->poly_valid && d->poly_ready)
-      got.push_back({d->v0x, d->v1x, d->v2x, d->v3x, d->poly_attr});
+      got.push_back({d->v0x, d->v1x, d->v2x, d->v3x, d->poly_attr, d->nrm_x});
   }
 
   std::printf("test: an object_data becomes a stream of quads\n");
@@ -128,6 +128,15 @@ int main(int argc, char** argv) {
     ck("p3 v1 = P0(n-1) kept", got[2].v1, f2u(400.0f));
     ck("p3 v2 = P0(n)",        got[2].v2, f2u(1000.0f));
     ck("p3 v3 = P1(n)",        got[2].v3, f2u(1100.0f));
+
+    // THE NORMAL IS KEPT, NOT DISCARDED. It used to be read and thrown away.
+    // Model 2's luminance is dot(normal, light) against dot(normal, point), so
+    // these three words are half of every lit pixel. The bench writes each
+    // polygon's normal as a distinct base value, so a normal belonging to the
+    // wrong polygon is visible on sight.
+    ck("p1 normal x", got[0].nx, f2u(300.0f));
+    ck("p2 normal x", got[1].nx, f2u(600.0f));
+    ck("p3 normal x", got[2].nx, f2u(900.0f));
   }
 
   // ---- second pass: focus is APPLIED, and to x and y only
@@ -155,6 +164,39 @@ int main(int argc, char** argv) {
     // its z was fed as 102 and must be untouched
     ck("focus leaves z alone", zs[0], f2u(102.0f));
   } else { std::printf("  FAIL no polygons on the second pass\n"); fails++; }
+
+  // ---- transform_vector: the normal is ROTATED but NOT TRANSLATED
+  //
+  // MAME uses one matrix for both and distinguishes them by which function it
+  // calls: transform_point adds matrix[9..11], transform_vector does not. If
+  // the engine left in_translate at 1 for the normal, the normal would pick up
+  // the object's position -- and a normal that moves with the object gives
+  // luminance that changes as the object slides across the screen, which is
+  // wrong in a way that looks like flickering rather than like a bug.
+  //
+  // The matrix below scales by 2 and translates by 1000, so a point comes out
+  // as 2x+1000 and a normal as 2x exactly.
+  {
+    d->rst_n = 0; for (int i = 0; i < 4; i++) tick(); d->rst_n = 1; tick();
+    static const float M[12] = {2,0,0, 0,2,0, 0,0,2, 1000,1000,1000};
+    for (int i = 0; i < 12; i++) { d->mat_we = 1; d->mat_idx = i; d->mat_data = f2u(M[i]); tick(); }
+    d->mat_we = 0;
+    d->foc_x = f2u(1.0f); d->foc_y = f2u(1.0f);
+    tick();
+    d->start = 1; tick(); d->start = 0;
+    uint32_t got_nx = 0, got_v1 = 0; bool any = false;
+    for (int budget = 0; budget < 60000 && (d->busy || !any); budget++) {
+      tick();
+      if (d->poly_valid && d->poly_ready && !any) {
+        got_nx = d->nrm_x; got_v1 = d->v1x; any = true;
+      }
+    }
+    std::printf("test: the normal is rotated, not translated\n");
+    // P0(n-1) was fed x=100: transform_point -> 100*2 + 1000 = 1200
+    ck("point picks up the translation", got_v1, f2u(1200.0f));
+    // polygon 1's normal was fed x=300: transform_vector -> 300*2 = 600
+    ck("normal does NOT",                got_nx, f2u(600.0f));
+  }
 
   std::printf("m2_geo_engine: checks=%ld fails=%ld\n", checks, fails);
   delete d;
