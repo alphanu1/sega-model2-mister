@@ -657,6 +657,33 @@ module m2_video #(
         logic [1:0]  sel_q;
 
         for (gn = 0; gn < 4; gn++) begin : g_lane
+          // TRIED AS MLAB AND QUARTUS DECLINED IT. Recorded so it is not
+          // tried a third time without new information.
+          //
+          //
+          // 128 words of 15 bits is 1,920 bits. Untagged, Quartus puts each of
+          // these in an M10K, which holds 10,240 -- so the sixteen per bank,
+          // thirty-two in all, spend 32 blocks to store 61,440 bits. That is
+          // the worst efficiency of any memory in the design by a factor of
+          // four: 5.3x, against 1.2-1.4x everywhere else.
+          //
+          // A Cyclone V MLAB is 32 words by 20 bits, built out of the LUT
+          // storage that is already there, so 128x15 is four of them -- about
+          // 40 ALMs -- and thirty-two instances cost roughly 1,280 ALM.
+          //
+          // That trade only makes sense in one direction and this is it: M10K
+          // is 553 of 553 with texture still to come, ALM is 89% with ~4,600
+          // free.
+          //
+          // BUT (* ramstyle = "MLAB" *) AND "MLAB, no_rw_check" BOTH LEAVE IT
+          // AS `AUTO` in the synthesis RAM summary, and block memory bits do
+          // not move. The attribute is not being ignored generally -- 47
+          // memories in this design report "M10K block" and one reports "MLAB"
+          // -- so Quartus is declining it for THIS access pattern rather than
+          // for the syntax. Whatever the reason, it is not a one-line change,
+          // and the 32 blocks are not the biggest prize anyway: m2_quad_store
+          // holds 2,048 quads in ~66 blocks while the board is emitting ~216
+          // per frame.
           logic [14:0] mem [128];
 
           // Which incoming pixel belongs to this lane, and which group it
