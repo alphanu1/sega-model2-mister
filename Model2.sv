@@ -3451,7 +3451,20 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// geo_translate_write (0x0c, matrix[9..11]), and this core implements both.
 	// So either the game does not send them in the lists we walk, or it does
 	// and we step over them, and only the board can say which.
-	.b_addr({geo_mtx_n[15:0], geo_foc_n[7:0], geo_obj_pram0[7:0]}),
+	// IS THE FRONT DOOR EVEN RECEIVING WRITES? That is the question the board
+	// and the simulation now disagree about, and nothing on the wire answers
+	// it. Simulation at 30M instructions reaches 399 matrix writes, 553
+	// objects and 3,038 polygons; the board sits at 2 focal writes and nothing
+	// else, unchanged across 382 records in 60 seconds.
+	//
+	// geo_pushes counts words ACCEPTED by the push port, geo_dropped counts
+	// words refused for want of queue space. Between them and mtx_n:
+	//   pushes climbing, mtx zero -> we are decoding or walking wrongly
+	//   pushes flat                -> the i960 is not writing, and the fault is
+	//                                 upstream in the game's own progress
+	//   dropped climbing           -> the queue is too small and the list is
+	//                                 being corrupted by loss
+	.b_addr({geo_pushes[15:0], geo_dropped[7:0], geo_mtx_n[7:0]}),
 	// clip_dropped read 0 on hardware and the refusal count is the number that
 	// now moves, so it takes that byte. Between them: accepted, emitted, refused
 	// before the arithmetic, and reaching the rasterizer.

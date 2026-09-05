@@ -2255,6 +2255,22 @@ int main(int argc, char **argv) {
                   lo, hi);
     }
 
+    // THE SAME HISTOGRAM MAME'S LUA SCRIPT PRODUCES, so the two are directly
+    // comparable. MAME at frame 300 holds 01:138 object_data and 0b:29
+    // matrix_write in this memory; if ours holds none, the front door is still
+    // not delivering what the i960 wrote.
+    {
+      int hist[32] = {0}; int total = 0;
+      for (uint32_t dw = 0; dw < 2048; dw++) {
+        const uint32_t a2 = 0x16f0000u + (dw << 1);
+        const uint32_t w  = uint32_t(mem[a2]) | (uint32_t(mem[a2 + 1]) << 16);
+        if (w != 0 && w != 0xffffffffu) { hist[(w >> 23) & 0x1f]++; total++; }
+      }
+      std::printf("    OUROPS nonzero=%d  ", total);
+      for (int op = 0; op < 32; op++) if (hist[op]) std::printf("%02x:%d ", op, hist[op]);
+      std::printf("\n");
+    }
+
     // WHERE IS THE LIST, ACTUALLY? Scan buffer RAM for the opcode pattern a
     // display list must have -- a geo_end (0x0f/0x1f) with a plausible command
     // near it -- rather than trusting the pointer the walk was given.
