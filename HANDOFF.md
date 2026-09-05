@@ -5,9 +5,16 @@
 ## WHERE THE MACHINE IS
 
 The core runs Daytona attract at ~95% of hardware speed with sound and tilemap.
-The 3D geometry pipeline is complete, wired, and **proven end to end in
-simulation**; on hardware it is one confirmed race away from drawing, and the
-build testing that fix was in the fitter when this was written.
+The 3D geometry pipeline is **complete, wired, verified, and idle** -- every
+stage measured healthy on hardware, waiting for input the game is not sending.
+
+**THE CURRENT POSITION IN ONE LINE:** the board's geometry path works and the
+game does not use it. `mtx_push` is frozen at 110 -- matrices sent once during
+initialisation and never again -- and `wp` reaches 0x24 every frame, meaning a
+nine-dword list of `window_data` and `geo_end`. The same game in the boot bench
+emits 399 matrix writes, 553 objects and 3,038 polygons. Same core, same ROMs,
+same MRA, md5-verified. The divergence is in the i960's own execution (R178,
+R181), not in anything downstream of the front door.
 
 **The single most important thing on this page:** the reason nothing ever drew
 was that **the geometrizer's opcode is encoded in the WRITE ADDRESS, not in the
@@ -44,8 +51,13 @@ and a buffer-RAM opcode histogram matching MAME to within one word of 1,936.
 
 ### WHAT IS STILL OPEN
 
-1. **Does the R179 race fix make geometry appear on the board?** That is the
-   live question and the next build answers it.
+1. **Why does the game emit geometry in simulation and not on hardware?** This
+   is THE question (R178, R181). Everything else is downstream of it. The next
+   step is a measurement, not a hypothesis: the boot bench already traces the
+   CPU, so run it to the instruction where geometry first appears, record the PC
+   region doing the emitting, and compare against the board's `cpu_ip`
+   histogram -- currently ~35% of samples in a two-instruction poll at
+   0x12B0/0x12B8, the rest around 0x18E98/0x18EA4.
 2. **The fitter segfaults**, roughly every other run. Occupancy is NOT the cause
    -- Model 1 fits at 97% and passes nearly every build. Matching their minimal
    fitter configuration did NOT fix it either; that hypothesis is disproved and
@@ -58,6 +70,27 @@ and a buffer-RAM opcode histogram matching MAME to within one word of 1,936.
    acknowledge, on the loader's write port.
 6. **A -0.150 ns hold violation** on clk_sys, and HDMI setup varies by seed.
 7. The sound board does not reset on OSD reset.
+
+### THREE HYPOTHESES SPENT TODAY, ALL WRONG, ALL RECORDED
+
+Each looked sound, each was adopted before it was measured, and each cost builds:
+
+* **The fitter's crash rate is the physical-synthesis settings.** Matched Model
+  1's minimal configuration; builds 24 and 26 crashed anyway with the same
+  `Segment Violation at (nil)`. Settings restored. Cause still unknown -- and
+  Ben's point that Model 1 fits at 97% while we crash at 89% still stands and
+  still says it is not occupancy. (Build 25 was separately an OOM kill of my own
+  making, from running a 30M simulation beside the fitter; `Killed` and
+  `Segment Violation` are different failures and I had been conflating them.)
+* **The glyph cache can be halved to match its own rationale.** It cannot: 64 KB
+  produces tile and glyph overruns on the board. The 30.8 KB "actually touched"
+  figure was measured through the menu, and real scenes need more. Reverted.
+* **R179's read-while-writing race is what stops the walk.** It is a real race
+  and the fix is kept, but decoding did not return, so it was not the cause.
+
+The pattern is the same in all three, and worth more than the findings: a
+plausible mechanism believed before it was measured. The counter that settled
+each one cost a single build; the guessing cost several.
 
 ### THE LESSON THAT COST THE MOST TIME
 

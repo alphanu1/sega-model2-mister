@@ -10047,3 +10047,55 @@ with two owners costs when it is wrong.
 SDRAM latency at 100 MHz costs it one or two of its own cycles and a stall
 absorbs it. The band buffers and tile RAM are read every pixel during scanout and
 cannot tolerate that at any price.
+
+---
+
+**R181 - R179'S RACE FIX DID NOT RESTORE DECODING, AND THE REASON IS THAT THE
+GAME IS NOT SENDING GEOMETRY. THE PIPELINE IS WAITING FOR INPUT THAT NEVER
+COMES.**
+
+*The measurement, with the drain gate in place:*
+
+    mtx_push = 110   STATIC, not climbing
+    frames   = 2812  climbing normally
+    wp       = 0024  every frame
+    decoded  = 0
+
+R179 is still correct engineering -- reading a buffer while a DMA writes it is a
+race whatever else is true -- but it is **not** what was stopping the walk, and
+that hypothesis is recorded as unconfirmed rather than quietly folded into the
+fix that followed it.
+
+*What the numbers actually say.* `mtx_push` is FROZEN at 110. Those matrix writes
+happened once, during initialisation, and have never recurred. `wp` reaches 0x24
+every frame and no further: the game emits a **nine-dword list per frame**,
+forever, and the contents are known from the last-push capture -- `window_data`,
+an operand or two, `geo_end`.
+
+So the board is not failing to decode geometry. **The game is not producing
+any.** Every stage measured is healthy: pushes arrive, the reconstructed words
+are byte-correct against MAME, the pointers match simulation, the queue does not
+overflow, and the walk completes 2,812 frames. The geometry pipeline is finished
+and idle for want of input.
+
+*Which returns this to R178 and narrows it.* The boot bench reaches a state where
+the same game emits 399 matrix writes, 553 objects and 3,038 polygons. The board
+does not. Same core, same ROMs, same MRA, md5-verified. The divergence is in the
+i960's OWN EXECUTION -- what the game decides to do -- and not in anything
+downstream of the front door.
+
+*The next step, and it is a measurement rather than a hypothesis.* The boot bench
+already traces the CPU. Run it to the instruction at which geometry first
+appears, record the PC region doing the emitting, and compare that against the
+board's `cpu_ip` histogram, which currently shows ~35% of samples in a two-
+instruction poll at 0x12B0/0x12B8 and the remainder around 0x18E98/0x18EA4. If
+the board never enters the emitting region, the question becomes what the poll
+is waiting for; if it does, the question becomes why the writes do not follow.
+
+*Three hypotheses were spent today reaching this point, and all three are
+recorded as wrong rather than deleted:* the fitter's crash rate is not the
+physical-synthesis settings (R176's neighbourhood), the glyph cache cannot be
+halved despite its own rationale, and this. The pattern in all three is the same
+-- a plausible mechanism adopted before it was measured -- and the counters that
+eventually settled each of them cost one build apiece against the several spent
+guessing.
