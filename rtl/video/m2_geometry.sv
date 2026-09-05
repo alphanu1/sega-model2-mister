@@ -100,7 +100,14 @@ module m2_geometry (
 
   output logic [15:0] dbg_polys, dbg_objects, dbg_capped,
   output logic [15:0] dbg_clip_in, dbg_clip_out, dbg_clip_dropped,
-  output logic [15:0] dbg_nonfinite    // polygons refused before the arithmetic
+  output logic [15:0] dbg_nonfinite,   // polygons refused before the arithmetic
+  // WHERE THE PIPELINE IS SITTING. The board wedges with the walk in W_OBJW,
+  // which says only "the engine never finished". These say which stage.
+  // Guessing at it has cost two wrong hypotheses already -- a NaN (refused
+  // correctly, nonfinite counts it) and a z of zero (drains fine, tested).
+  output logic  [3:0] dbg_eng_state,
+  output logic  [1:0] dbg_qst,
+  output logic  [3:0] dbg_clip_state
 );
 
   // ------------------------------------------------------------- the pool
@@ -329,6 +336,10 @@ module m2_geometry (
   // m2_geo_clip's in_ready IS its idle flag (assign in_ready = (kst == K_IDLE)),
   // so these three terms cover every stage between object_data and q_*.
   assign busy = eng_busy || (qst != Q_IDLE) || !clip_in_ready;
+
+  assign dbg_eng_state  = 4'(u_engine.st);
+  assign dbg_qst        = 2'(qst);
+  assign dbg_clip_state = 4'(u_clip.kst);
 
   // ------------------------------------------------------------- the clipper
   m2_geo_clip u_clip (

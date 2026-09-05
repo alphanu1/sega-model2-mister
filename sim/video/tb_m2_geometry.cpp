@@ -316,6 +316,45 @@ int main(int argc, char** argv) {
     }
   }
 
+  // ---- test 7: z = 0. FINITE, SO THE NaN GATE PASSES IT, AND 1/z IS NOT.
+  //
+  // The board is wedged in W_OBJW with nonfinite=0: 67 objects seen, the
+  // geometry engine started and never finished, and nothing was refused. So
+  // whatever hangs it is NOT a NaN -- the gate would have caught that. A vertex
+  // at z = 0 is the obvious candidate: perfectly finite, passes every check the
+  // pipeline makes, and the projector's reciprocal divides by it.
+  //
+  // MAME cannot show this either. model2_3d_project adds
+  // std::numeric_limits<float>::min() to pz before dividing, precisely so the
+  // divide cannot blow up -- a guard that costs nothing in C and does not exist
+  // in our fp_div.
+  {
+    d->rst_n = 0; for (int i = 0; i < 4; i++) tick(); d->rst_n = 1; tick();
+    load_identity();
+    d->foc_x = f2u(1.0f); d->foc_y = f2u(1.0f);
+    size_t w = 0;
+    w = put_v(w, -50.0f,  50.0f, 0.0f);    // z = 0 on every vertex
+    w = put_v(w, -50.0f, -50.0f, 0.0f);
+    obj[w++] = 0x00000001u;
+    w = put_v(w, 0.0f, 0.0f, 1.0f);
+    w = put_v(w,  50.0f,  50.0f, 0.0f);
+    w = put_v(w,  50.0f, -50.0f, 0.0f);
+    obj[w++] = 0x00000000u;
+
+    auto got = run_object();
+    std::printf("test: a polygon at z=0 must not wedge the pipeline\n");
+    std::printf("  clip in=%u out=%u dropped=%u nonfinite=%u busy=%d\n",
+                d->dbg_clip_in, d->dbg_clip_out, d->dbg_clip_dropped,
+                d->dbg_nonfinite, (int)d->busy);
+    checks++;
+    if (d->busy) {
+      std::printf("  FAIL pipeline still busy -- this is the W_OBJW hang\n");
+      fails++;
+    } else {
+      std::printf("  pipeline drained and released busy\n");
+    }
+  }
+
   std::printf("m2_geometry: checks=%ld fails=%ld\n", checks, fails);
   std::printf("%s\n", fails ? "FAIL" : "PASS");
   delete d;
