@@ -147,6 +147,8 @@ module m2_boot_harness #(
   output logic        eng_q_valid,
   output logic signed [15:0] eng_q_x0, eng_q_y0, eng_q_x1, eng_q_y1,
   output logic signed [15:0] eng_q_x2, eng_q_y2, eng_q_x3, eng_q_y3,
+  output logic [15:0] geo_mtx_n, geo_foc_n,
+  output logic [31:0] geo_oba_last, geo_obc_last,
   output logic [15:0] geo_frames, geo_objs, geo_ops, geo_pdcmds, geo_pdwords,
   output logic  [7:0] geo_unknown,
   output logic  [3:0] geo_state,
@@ -728,12 +730,22 @@ module m2_boot_harness #(
     .tp_we(), .tp_idx(), .tp_diffuse(), .tp_ambient(), .dbg_tp_n(),
     .obj_tpa(), .obj_tha(), .obj_oba(geo_obj_oba), .obj_obc(geo_obj_obc),
     .obj_valid(geo_obj_valid),
-    .dbg_mtx_n(), .dbg_foc_n(),
+    .dbg_mtx_n(geo_mtx_n), .dbg_foc_n(geo_foc_n),
     .dbg_pd_words(geo_pdwords), .dbg_pd_cmds(geo_pdcmds),
     .dbg_walk_ops(geo_ops), .dbg_walk_objs(geo_objs),
-    .dbg_walk_frames(geo_frames), .dbg_walk_unknown(geo_unknown)
+    .dbg_walk_frames(geo_frames), .dbg_walk_unknown(geo_unknown),
+    .dbg_walk_state()
   );
   assign geo_state = u_geo.wst;
+  // The last object's address and count -- which memory it points at, and how
+  // many polygons it claims. A degenerate quad at the projection centre means
+  // every transformed point was (0,0), which is what a ZERO MATRIX gives.
+  always_ff @(posedge clk_mem or negedge rst_n) begin
+    if (!rst_n) begin geo_oba_last <= 32'd0; geo_obc_last <= 32'd0; end
+    else if (geo_obj_valid) begin
+      geo_oba_last <= geo_obj_oba; geo_obc_last <= geo_obj_obc;
+    end
+  end
 
   // ---- the geometry pipeline, so object_data is actually consumed
   wire        geo_mat_we, geo_obj_valid, geo_eng_busy;

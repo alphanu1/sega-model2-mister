@@ -138,7 +138,11 @@ module m2_geo #(
   output logic [15:0]   dbg_walk_ops,    // opcodes retired this frame
   output logic [15:0]   dbg_walk_objs,   // object_data commands seen
   output logic [15:0]   dbg_walk_frames, // walks completed
-  output logic [7:0]    dbg_walk_unknown // an opcode the table does not cover
+  output logic [7:0]    dbg_walk_unknown,
+  // WHICH STATE THE WALK IS SITTING IN. A frozen frame counter says only that
+  // it stopped; this says why. Exposed rather than inferred because every
+  // guess at it so far has cost a 40-minute build.
+  output logic [3:0]    dbg_walk_state // an opcode the table does not cover
 );
 
   // ---------------------------------------------------------------- registers
@@ -428,6 +432,8 @@ module m2_geo #(
                          CAP_TRA = 3'd4, CAP_LIT = 3'd5;
 
   assign mtx0 = mtx[0]; assign mtx4 = mtx[4]; assign mtx8 = mtx[8]; assign mtx11 = mtx[11];
+
+  assign dbg_walk_state = 4'(wst);
 
   assign mat_we   = (wst == W_OPRD) && rd_ack
                  && ((w_cap == CAP_MTX) || (w_cap == CAP_TRA));

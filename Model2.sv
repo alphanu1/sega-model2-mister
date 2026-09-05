@@ -468,6 +468,7 @@ wire        geo_rd_req;
 wire [18:0] geo_rd_addr;
 wire [15:0] geo_walk_ops, geo_walk_objs, geo_walk_frames;
 wire  [7:0] geo_walk_unknown;
+wire  [3:0] geo_walk_state;
 logic       geo_rd_req_r;
 logic [18:0] geo_rd_addr_r;
 logic       geo_rd_ack_r;
@@ -2227,6 +2228,7 @@ m2_geo #(.AW(SDR_AW), .DEPTH(128)) u_geo (
 	.rd_data(geo_rd_data_r), .rd_ack(geo_rd_ack_r),
 	.dbg_walk_ops(geo_walk_ops), .dbg_walk_objs(geo_walk_objs),
 	.dbg_walk_frames(geo_walk_frames), .dbg_walk_unknown(geo_walk_unknown),
+	.dbg_walk_state(geo_walk_state),
 	.mtx0(), .mtx4(), .mtx8(), .mtx11(),
 	.mat_we(geo_mat_we), .mat_idx(geo_mat_idx), .mat_data(geo_mat_data),
 	.eng_busy(eng_busy),
@@ -3346,7 +3348,14 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// list ever fills polygon RAM at all -- against the walk's unknown-opcode
 	// register, which says whether the walk stopped on something it cannot
 	// measure, and the low byte of the refusal count.
-	.b_data({geo_pd_cmds, geo_walk_unknown, geo_nonfinite[7:0]}),
+	// WHERE the walk is sitting, which is the one thing the previous packing
+	// could not say. frames climbed 1 -> 65 and then froze again: it is not
+	// stopping on an unknown opcode (unknown=0) and not refusing polygons
+	// (nonfinite=0), so it is stuck in a state, and the state names the cause.
+	// W_OBJW means the geometry engine never finished; W_PDW means the write DMA
+	// never took a polygon_data dword; W_FETCH means a read never returned.
+	.b_data({geo_pd_cmds[7:0], geo_walk_unknown, geo_nonfinite[7:0],
+	         geo_walk_state, 4'd0}),
 	.a_tag(8'h43), .b_tag(8'h48),          // 'C' copro in_pushed:out_pushed | TGP retires:pc
 	                                       // 'H' out_popped:hscr2 | io_addr:flags
 	                                       // 'H' scroll h:v for layers 0,1 | layers 2,3 -- low bytes

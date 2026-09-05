@@ -2233,6 +2233,11 @@ int main(int argc, char **argv) {
                 d->geo_frames, d->geo_ops, d->geo_objs, d->geo_unknown,
                 WST[d->geo_state & 15]);
     std::printf("    geo rp=%08x wp=%08x\n", d->geo_rp_o, d->geo_wp_o);
+    std::printf("    matrix writes=%u  focal writes=%u\n", d->geo_mtx_n, d->geo_foc_n);
+    std::printf("    last object: oba=%08x obc=%08x  -> %s\n",
+                d->geo_oba_last, d->geo_obc_last,
+                (d->geo_oba_last & 0x01000000u) ? "fast polygon RAM"
+                : (d->geo_oba_last & 0x00800000u) ? "polygon ROM" : "slow polygon RAM");
     std::printf("  GEOMETRY ENGINE:\n");
     std::printf("    objects=%u polys=%u capped=%u nonfinite=%u\n",
                 d->eng_objects, d->eng_polys, d->eng_capped, d->eng_nonfinite);
