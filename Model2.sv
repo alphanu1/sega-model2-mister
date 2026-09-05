@@ -4167,13 +4167,29 @@ wire [17:0] cache_m_addr;
 wire [63:0] cache_m_data;
 wire [31:0] char_hits, char_misses;
 
-m2_char_cache #(.IDX_BITS(14)) u_char_cache (
+// IDX_BITS 13, NOT 14 -- 64 KB, which is what the paragraph above specifies.
+//
+// The rationale says "64 KB of on-chip storage covers the 30.8 KB actually
+// touched with room for gameplay, at ~59 M10K of the 241 free". The code said
+// 14, which is 16,384 lines of 64 bits: 128 KB and 134 M10K. Twice the size
+// the reasoning called for, and the single largest block-memory consumer in
+// the design -- 24% of the device for a cache whose measured working set is
+// 30.8 KB.
+//
+// It matters now because M10K is the binding resource: 553 of 553 blocks, with
+// texture still to come and nowhere to put it. This is 67 blocks back for a
+// cache that is still twice its measured working set.
+m2_char_cache #(.IDX_BITS(13)) u_char_cache (
 	.clk(clk_sys), .rst_n(mem_rst_n & cp_done),
 	.v_req(char_req), .v_addr(char_addr),
 	.v_ack(char_ack), .v_data(char_data),
 	.m_req(cache_m_req), .m_addr(cache_m_addr),
 	.m_ack(cache_m_ack), .m_data(cache_m_data),
-	.inval(cpu_char_wr), .inval_idx(cpu_char_wr_addr[15:2]),
+	// The invalidate index is the cache's index field, so it narrows with
+	// IDX_BITS: [14:2] for 13 bits, not [15:2]. A stale width here invalidates
+	// the wrong line on a CPU character write, which shows up as glyphs that
+	// are correct until the game rewrites one and then stay stale.
+	.inval(cpu_char_wr), .inval_idx(cpu_char_wr_addr[14:2]),
 	.dbg_hits(char_hits), .dbg_misses(char_misses)
 );
 
