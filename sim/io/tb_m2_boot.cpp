@@ -406,32 +406,13 @@ int main(int argc, char **argv) {
   // 16-bit halves at whatever word address geo_polygon_data computed, which is
   // exactly what needs checking -- if the destination decode is wrong they will
   // land somewhere recognisable, like word 0.
-  // THE REAL PORT PROTOCOL, NOT A CONVENIENT ONE.
-  //
-  // m2_sdram latches a transaction on the RISING EDGE of p_req (line 377,
-  // `if (p_req[i] && !req_d[i])`) and holds p_ack for ACK_HOLD cycles. A
-  // requester that holds req high across several words therefore gets ONE
-  // transaction and one multi-cycle ack -- not one transaction per word.
-  //
-  // Every bench in this tree acked whenever req was high, continuously and
-  // immediately. That models a port this design does not have, and it is why
-  // the geometry engine passes 88,000 checks in simulation and wedges on the
-  // board: on hardware it holds mem_req across the three words of a vertex.
-  // docs/mister-integration.md's rule is that a test proves only what it is
-  // asked; this one was asked the wrong question.
-  static bool geo_req_d = false, eng_req_d = false;
-  static int  geo_ack_n = 0,     eng_ack_n = 0;
-  static uint32_t geo_lat = 0,   eng_lat = 0;
   auto geo_tick = [&]() {
-    // walker port: edge-latched, 2-cycle ack, a few cycles of latency
     d->geo_rd_ack = 0;
-    if (d->geo_rd_req && !geo_req_d) {
+    if (d->geo_rd_req) {
       const uint32_t a = (0x16f0000u + (uint32_t(d->geo_rd_addr) << 1)) & 0x1ffffff;
-      geo_lat = uint32_t(mem[a]) | (uint32_t(mem[(a + 1) & 0x1ffffff]) << 16);
-      geo_ack_n = 2;
+      d->geo_rd_data = uint32_t(mem[a]) | (uint32_t(mem[(a + 1) & 0x1ffffff]) << 16);
+      d->geo_rd_ack  = 1;
     }
-    geo_req_d = d->geo_rd_req;
-    if (geo_ack_n > 0) { d->geo_rd_data = geo_lat; d->geo_rd_ack = 1; --geo_ack_n; }
     // The geometry engine reads objects: polygon ROM if oba bit 23, otherwise
     // one of the two polygon RAMs. Same decode as Model2.sv's.
     d->eng_mem_ack = 0;
@@ -440,15 +421,12 @@ int main(int argc, char **argv) {
                          (int)(int16_t)d->eng_q_x1, (int)(int16_t)d->eng_q_y1,
                          (int)(int16_t)d->eng_q_x2, (int)(int16_t)d->eng_q_y2,
                          (int)(int16_t)d->eng_q_x3, (int)(int16_t)d->eng_q_y3});
-    // engine port: the same edge-latched, 2-cycle-ack protocol as the real one
-    if (d->eng_mem_req && !eng_req_d) {
+    if (d->eng_mem_req) {
       const uint32_t idx = uint32_t(d->eng_mem_addr);
       const uint32_t a = (0x0b20000u + (idx << 1)) & 0x1ffffff;
-      eng_lat = uint32_t(mem[a]) | (uint32_t(mem[(a + 1) & 0x1ffffff]) << 16);
-      eng_ack_n = 2;
+      d->eng_mem_data = uint32_t(mem[a]) | (uint32_t(mem[(a + 1) & 0x1ffffff]) << 16);
+      d->eng_mem_ack  = 1;
     }
-    eng_req_d = d->eng_mem_req;
-    if (eng_ack_n > 0) { d->eng_mem_data = eng_lat; d->eng_mem_ack = 1; --eng_ack_n; }
     d->geo_sd_ack = 0;
     if (d->geo_sd_req) {
       const uint32_t a = uint32_t(d->geo_sd_addr) & 0x1ffffff;
