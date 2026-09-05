@@ -237,7 +237,12 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_ASYNCHRONOUS_SIGNAL_PIPELINING ON
 # finding compatible pairs and spends a whole ALM on what should share one. The
 # gap is packing collapse, so raise the packing effort.
 set_global_assignment -name ALM_REGISTER_PACKING_EFFORT HIGH
-set_global_assignment -name SEED 162
+# SEED 1702. Seed 162 has now crashed the fitter three times out of the last
+# five runs -- "FIT exited 2", no committed fit -- while 1702 completed in the
+# sweep and came closest to closing (-0.147 worst). The crash is placement
+# dependent at this occupancy, so the seed is a workaround for a Quartus 17.0
+# fault rather than a timing choice.
+set_global_assignment -name SEED 1702
 
 #set_global_assignment -name VERILOG_MACRO "MISTER_FB=1"
 

@@ -2260,6 +2260,22 @@ wire [31:0] geo_push_word =
 wire geo_wr_push  = cpu_io_sel && cpu_io_we &&
                     (geo_prg_win ||
                      (geo_fn_win && (geo_hi || (geo_fa[3:0] == 4'd0))));
+
+// WHAT IS ACTUALLY BEING PUSHED. The counters say the i960 writes and the front
+// door accepts -- ~38,900 words and climbing, drops long since stopped -- and
+// the walk still decodes zero matrix writes. So either the reconstructed word
+// is wrong or the walk never reaches it, and only the word itself separates
+// those. Captured on the FUNCTION port alone: the 0x804000 path is a verbatim
+// push and was never in doubt.
+logic [31:0] geo_last_push;
+logic [15:0] geo_fn_pushes;
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+	if (!mem_rst_n) begin geo_last_push <= 32'd0; geo_fn_pushes <= 16'd0; end
+	else if (geo_wr_push && geo_fn_win) begin
+		geo_last_push <= geo_push_word;
+		if (!(&geo_fn_pushes)) geo_fn_pushes <= geo_fn_pushes + 16'd1;
+	end
+end
 wire [31:0] geo_rd_wp, geo_rd_rp, geo_pushes, geo_dropped, geo_ctl_dbg;
 wire [15:0] geo_cnt_dbg;
 wire        geo_sd_req, geo_sd_busy_raw;
@@ -3464,7 +3480,7 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	//                                 upstream in the game's own progress
 	//   dropped climbing           -> the queue is too small and the list is
 	//                                 being corrupted by loss
-	.b_addr({geo_pushes[15:0], geo_dropped[7:0], geo_mtx_n[7:0]}),
+	.b_addr({geo_fn_pushes[15:0], geo_dropped[7:0], geo_mtx_n[7:0]}),
 	// clip_dropped read 0 on hardware and the refusal count is the number that
 	// now moves, so it takes that byte. Between them: accepted, emitted, refused
 	// before the arithmetic, and reaching the rasterizer.
@@ -3481,8 +3497,11 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// pj_lost replaces nonfinite, which has read zero on every capture. It
 	// counts projections abandoned on timeout -- if the wedge was a lost
 	// projection, this is the number that proves it and says how often.
-	.b_data({geo_clip_in[7:0], geo_clip_out[7:0], geo_walk_frames[7:0],
-	         geo_eng_state, geo_walk_state}),
+	// The last word pushed through the FUNCTION port, whole. Its top bits are
+	// the opcode the walk will decode: if bits 28:23 are zero here, the address
+	// reconstruction is not working on hardware even though it works in
+	// simulation on the same RTL.
+	.b_data(geo_last_push),
 	.a_tag(8'h43), .b_tag(8'h48),          // 'C' copro in_pushed:out_pushed | TGP retires:pc
 	                                       // 'H' out_popped:hscr2 | io_addr:flags
 	                                       // 'H' scroll h:v for layers 0,1 | layers 2,3 -- low bytes
