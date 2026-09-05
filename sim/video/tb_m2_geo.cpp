@@ -366,6 +366,49 @@ int main(int argc,char**argv){
     ck("mtx11 mirrors it", d->mtx11, 0x40a00000u);
   }
 
+  // ---- geo_texture_parameters supplies diffuse and ambient
+  //
+  // luminance * texparam->diffuse + texparam->ambient, with the entry chosen
+  // per polygon by (attr >> 18) & 0x1f. Two words per entry -- the packed
+  // parameters then a coefficient only the specular parser reads -- and the
+  // index wraps at 32, which is why the test writes across the wrap.
+  {
+    std::vector<uint32_t> list(0x800, 0);
+    size_t w = 0;
+    list[w++] = 0x06u << 23;
+    list[w++] = 0x1e << 2;        // base index 30, so entry 3 wraps to 0
+    list[w++] = 4;                // four entries: 30, 31, 0, 1
+    list[w++] = 0x0000A011u; list[w++] = 0xdeadbeefu;   // diff 0x11 amb 0xA0
+    list[w++] = 0x0000B022u; list[w++] = 0xdeadbeefu;   // diff 0x22 amb 0xB0
+    list[w++] = 0x0000C033u; list[w++] = 0xdeadbeefu;   // diff 0x33 amb 0xC0
+    list[w++] = 0x0000D044u; list[w++] = 0xdeadbeefu;   // diff 0x44 amb 0xD0
+    list[w++] = 0x0fu << 23;
+
+    d->rst_n = 0; for (int i = 0; i < 4; i++) tick(); d->rst_n = 1; idle(2);
+    d->frame_start = 1; tick(); d->frame_start = 0;
+    struct TP { unsigned idx, diff, amb; };
+    std::vector<TP> tps;
+    for (int i = 0; i < 100000; i++) {
+      d->rd_ack = 0;
+      if (d->rd_req) { d->rd_data = (d->rd_addr < list.size()) ? list[d->rd_addr] : 0; d->rd_ack = 1; }
+      d->eval();
+      if (d->tp_we) tps.push_back({d->tp_idx, d->tp_diffuse, d->tp_ambient});
+      tick();
+      if (d->dbg_walk_frames) break;
+    }
+    std::printf("test: geo_texture_parameters fills the diffuse/ambient table\n");
+    ck("commands seen", d->dbg_tp_n, 1);
+    ck("four entries written", (uint32_t)tps.size(), 4);
+    if (tps.size() >= 4) {
+      ck("entry 0 index 30", tps[0].idx, 30);  ck("entry 0 diffuse", tps[0].diff, 0x11);
+      ck("entry 0 ambient",  tps[0].amb, 0xA0);
+      ck("entry 1 index 31", tps[1].idx, 31);  ck("entry 1 diffuse", tps[1].diff, 0x22);
+      ck("index WRAPS to 0",  tps[2].idx, 0);  ck("entry 2 diffuse", tps[2].diff, 0x33);
+      ck("entry 3 index 1",   tps[3].idx, 1);  ck("entry 3 ambient", tps[3].amb, 0xD0);
+    }
+    ck("the walk still finished", d->dbg_walk_frames ? 1u : 0u, 1u);
+  }
+
   // ---- geo_light_source is captured, not stepped over
   //
   // Model 2's lighting is dot(normal, light) against dot(normal, point), so the

@@ -43,6 +43,7 @@ static Vm2_boot_harness *d;
 // rule in docs/mister-integration.md — never zero.
 static std::vector<uint16_t> mem;
 static std::set<uint32_t> g_geo_writes;      // word addresses geo_polygon_data wrote
+static std::vector<std::array<int,8>> g_quads;   // screen quads the pipeline emitted
 // base_buffer, as passed to m2_cpu_bridge -- the SAME array the CPU reaches
 // buffer RAM through, so the coprocessor and the CPU finally share one memory.
 // File scope because mem_tick() is defined above the base constants it needs.
@@ -411,6 +412,20 @@ int main(int argc, char **argv) {
       const uint32_t a = (0x16f0000u + (uint32_t(d->geo_rd_addr) << 1)) & 0x1ffffff;
       d->geo_rd_data = uint32_t(mem[a]) | (uint32_t(mem[(a + 1) & 0x1ffffff]) << 16);
       d->geo_rd_ack  = 1;
+    }
+    // The geometry engine reads objects: polygon ROM if oba bit 23, otherwise
+    // one of the two polygon RAMs. Same decode as Model2.sv's.
+    d->eng_mem_ack = 0;
+    if (d->eng_q_valid && g_quads.size() < 4096)
+      g_quads.push_back({(int)(int16_t)d->eng_q_x0, (int)(int16_t)d->eng_q_y0,
+                         (int)(int16_t)d->eng_q_x1, (int)(int16_t)d->eng_q_y1,
+                         (int)(int16_t)d->eng_q_x2, (int)(int16_t)d->eng_q_y2,
+                         (int)(int16_t)d->eng_q_x3, (int)(int16_t)d->eng_q_y3});
+    if (d->eng_mem_req) {
+      const uint32_t idx = uint32_t(d->eng_mem_addr);
+      const uint32_t a = (0x0b20000u + (idx << 1)) & 0x1ffffff;
+      d->eng_mem_data = uint32_t(mem[a]) | (uint32_t(mem[(a + 1) & 0x1ffffff]) << 16);
+      d->eng_mem_ack  = 1;
     }
     d->geo_sd_ack = 0;
     if (d->geo_sd_req) {
@@ -2218,6 +2233,15 @@ int main(int argc, char **argv) {
                 d->geo_frames, d->geo_ops, d->geo_objs, d->geo_unknown,
                 WST[d->geo_state & 15]);
     std::printf("    geo rp=%08x wp=%08x\n", d->geo_rp_o, d->geo_wp_o);
+    std::printf("  GEOMETRY ENGINE:\n");
+    std::printf("    objects=%u polys=%u capped=%u nonfinite=%u\n",
+                d->eng_objects, d->eng_polys, d->eng_capped, d->eng_nonfinite);
+    std::printf("    clipper in=%u out=%u dropped=%u   QUADS OUT=%zu\n",
+                d->eng_clip_in, d->eng_clip_out, d->eng_clip_drop, g_quads.size());
+    for (size_t i = 0; i < g_quads.size() && i < 6; i++)
+      std::printf("      quad %zu: (%d,%d) (%d,%d) (%d,%d) (%d,%d)\n", i,
+                  g_quads[i][0], g_quads[i][1], g_quads[i][2], g_quads[i][3],
+                  g_quads[i][4], g_quads[i][5], g_quads[i][6], g_quads[i][7]);
     std::printf("    polygon_data: %u commands, %u dwords, %zu distinct words written\n",
                 d->geo_pdcmds, d->geo_pdwords, g_geo_writes.size());
     if (!g_geo_writes.empty()) {

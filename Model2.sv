@@ -2241,6 +2241,11 @@ m2_geo #(.AW(SDR_AW), .DEPTH(128)) u_geo (
 	// the dot products and the diffuse/ambient scale are still to come.
 	.lit_x(geo_lit_x), .lit_y(geo_lit_y), .lit_z(geo_lit_z),
 	.dbg_lit_n(geo_lit_n),
+	// The diffuse/ambient table, streamed. Captured but not yet consumed -- the
+	// luminance stage that reads it is the next piece.
+	.tp_we(geo_tp_we), .tp_idx(geo_tp_idx),
+	.tp_diffuse(geo_tp_diffuse), .tp_ambient(geo_tp_ambient),
+	.dbg_tp_n(geo_tp_n),
 	.obj_tpa(), .obj_tha(), .obj_oba(geo_obj_oba), .obj_obc(geo_obj_obc),
 	.obj_valid(geo_obj_valid),
 	.dbg_mtx_n(geo_mtx_n), .dbg_foc_n(geo_foc_n)
@@ -2271,6 +2276,10 @@ wire [31:0] geo_mat_data, geo_foc_x, geo_foc_y, geo_obj_oba, geo_obj_obc;
 wire        geo_obj_valid, eng_busy;
 wire [15:0] geo_mtx_n, geo_foc_n, geo_pd_words, geo_pd_cmds, geo_lit_n;
 wire [31:0] geo_lit_x, geo_lit_y, geo_lit_z;
+wire        geo_tp_we;
+wire  [4:0] geo_tp_idx;
+wire  [7:0] geo_tp_diffuse, geo_tp_ambient;
+wire [15:0] geo_tp_n;
 
 // THE GEOMETRY PIPELINE. object_data in, screen quads out; see m2_geometry.sv.
 //

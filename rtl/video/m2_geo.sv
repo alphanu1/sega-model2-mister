@@ -119,6 +119,17 @@ module m2_geo #(
   // the luminance needs and the polygon's own normal is the other half.
   output logic [31:0]   lit_x, lit_y, lit_z,
   output logic [15:0]   dbg_lit_n,
+  // geo_texture_parameters (0x06) as a WRITE STREAM, the same shape as the
+  // matrix's. Model 2's luminance is
+  //     luminance * texparam->diffuse + texparam->ambient
+  // with the entry chosen per polygon by (attr >> 18) & 0x1f, so the table has
+  // 32 entries and both fields are 8-bit. Streaming it keeps the table where it
+  // is used rather than routing 32 entries out of the walker.
+  output logic          tp_we,
+  output logic  [4:0]   tp_idx,
+  output logic  [7:0]   tp_diffuse,
+  output logic  [7:0]   tp_ambient,
+  output logic [15:0]   dbg_tp_n,
   output logic [31:0]   obj_tpa, obj_tha, obj_oba, obj_obc,
   output logic          obj_valid,       // one pulse when an object_data is complete
   output logic [15:0]   dbg_mtx_n,       // matrices captured
@@ -324,7 +335,8 @@ module m2_geo #(
   // UART can be compared against the 101/60/33 above, which is a real oracle.
   typedef enum logic [3:0] { W_IDLE, W_FETCH, W_DECODE, W_SKIP, W_CNT,
                              W_TFIFO, W_DDSKIP, W_DDATTR, W_OPRD, W_OBJW,
-                             W_PDA, W_PDR, W_PDW } wstate_t;
+                             W_PDA, W_PDR, W_PDW,
+                             W_TPI, W_TPP, W_TPC } wstate_t;
   wstate_t wst;
   logic [18:0] w_ip;
   logic [15:0] w_ops, w_skip;
@@ -410,6 +422,8 @@ module m2_geo #(
   logic        eng_seen;                 // the engine's busy has been observed high
   logic [31:0] pd_addr;                  // geo_polygon_data's destination
   logic [15:0] pd_n, pd_i;               // dwords to copy, and the one in hand
+  logic  [4:0] tp_i;                     // texture_parameters index, wraps at 32
+  logic [15:0] tp_n, tp_c;               // entries to read, and the one in hand
   localparam logic [2:0] CAP_MTX = 3'd1, CAP_FOC = 3'd2, CAP_OBJ = 3'd3,
                          CAP_TRA = 3'd4, CAP_LIT = 3'd5;
 
@@ -434,6 +448,7 @@ module m2_geo #(
   // which is far harder to recognise as a missing opcode than a blank screen.
   wire is_tra = (w_op == 5'h0c) || (w_op == 5'h1c);
   wire is_lit = (w_op == 5'h0a) || (w_op == 5'h1a);
+  wire is_tp  = (w_op == 5'h06);                     // texture_parameters
   wire [3:0] cap_last = (w_cap == CAP_MTX) ? 4'd11
                       : (w_cap == CAP_FOC) ? 4'd1
                       : (w_cap == CAP_TRA) ? 4'd2
@@ -441,7 +456,8 @@ module m2_geo #(
                                            : 4'd3;
 
   assign rd_req  = (wst == W_FETCH) || (wst == W_CNT) || (wst == W_DDATTR)
-                || (wst == W_OPRD) || (wst == W_PDA) || (wst == W_PDR);
+                || (wst == W_OPRD) || (wst == W_PDA) || (wst == W_PDR)
+                || (wst == W_TPI)  || (wst == W_TPP) || (wst == W_TPC);
   assign rd_addr = w_ip;
 
   always_ff @(posedge clk or negedge rst_n) begin
@@ -456,6 +472,8 @@ module m2_geo #(
       dbg_mtx_n <= 16'd0; dbg_foc_n <= 16'd0;
       foc_x <= 32'd0; foc_y <= 32'd0;
       lit_x <= 32'd0; lit_y <= 32'd0; lit_z <= 32'd0; dbg_lit_n <= 16'd0;
+      tp_i <= 5'd0; tp_n <= 16'd0; tp_c <= 16'd0; dbg_tp_n <= 16'd0;
+      tp_we <= 1'b0; tp_idx <= 5'd0; tp_diffuse <= 8'd0; tp_ambient <= 8'd0;
       obj_tpa <= 32'd0; obj_tha <= 32'd0; obj_oba <= 32'd0; obj_obc <= 32'd0;
       for (int k = 0; k < 12; k++) mtx[k] <= 32'd0;
     end else begin
@@ -510,6 +528,10 @@ module m2_geo #(
             // Step the FIFO ramp first; W_CNT then lands on the block count.
             w_skip <= 16'd32;
             wst    <= W_TFIFO;
+          end else if (is_tp) begin
+            // Its first operand is the base index, so it is READ; W_CNT then
+            // lands on the entry count, as it does for polygon_data.
+            wst <= W_TPI;
           end else if (is_pd) begin
             // GEO_POLYGON_DATA IS EXECUTED, NOT STEPPED OVER, and it is the
             // command the whole 3D path was waiting on. The board says
@@ -604,13 +626,52 @@ module m2_geo #(
                   :  is_cnt2              ? (rd_data[15:0] * 16'd2)
                                           :  rd_data[15:0];
           w_ip   <= w_ip + 19'd1;
-          if (is_pd) begin
+          if (is_tp) begin
+            tp_n <= rd_data[15:0];
+            tp_c <= 16'd0;
+            dbg_tp_n <= dbg_tp_n + 16'd1;
+            wst  <= (rd_data[15:0] == 16'd0) ? W_FETCH : W_TPP;
+          end else if (is_pd) begin
             pd_n   <= rd_data[15:0];
             pd_i   <= 16'd0;
             dbg_pd_cmds <= dbg_pd_cmds + 16'd1;
             wst    <= (rd_data[15:0] == 16'd0) ? W_FETCH : W_PDR;
           end else begin
             wst    <= W_SKIP;
+          end
+        end
+
+        // THE BASE INDEX. MAME reads it as `index = (*input++) >> 2` -- a byte
+        // offset into a table of dwords -- and wraps it to 32 entries after
+        // each write.
+        W_TPI: if (rd_ack) begin
+          tp_i <= rd_data[6:2];
+          w_ip <= w_ip + 19'd1;
+          wst  <= W_CNT;
+        end
+
+        // Each entry is TWO words: the packed parameters, then a coefficient
+        // this core does not use. diffuse and ambient are the low two bytes;
+        // specular_scale and specular_control are the high two and belong to
+        // the specular path, which does not exist yet.
+        W_TPP: if (rd_ack) begin
+          tp_we      <= 1'b1;
+          tp_idx     <= tp_i;
+          tp_diffuse <= rd_data[7:0];
+          tp_ambient <= rd_data[15:8];
+          w_ip       <= w_ip + 19'd1;
+          wst        <= W_TPC;
+        end
+
+        // The coefficient word, consumed and discarded -- it is only read by
+        // the specular parser.
+        W_TPC: begin
+          tp_we <= 1'b0;
+          if (rd_ack) begin
+            w_ip <= w_ip + 19'd1;
+            tp_i <= tp_i + 5'd1;            // wraps at 32, as `& 0x1f` does
+            if (tp_c == tp_n - 16'd1) wst <= W_FETCH;
+            else begin tp_c <= tp_c + 16'd1; wst <= W_TPP; end
           end
         end
 

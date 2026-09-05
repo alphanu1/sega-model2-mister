@@ -136,6 +136,17 @@ module m2_boot_harness #(
   output logic [AW:1] geo_sd_addr,
   output logic [15:0] geo_sd_din,
   input  logic        geo_sd_ack,
+  // and the geometry engine behind it, so the walk's object_data is actually
+  // consumed and the pipeline can be watched end to end against the real game.
+  output logic        eng_mem_req,
+  output logic [23:0] eng_mem_addr,
+  input  logic [31:0] eng_mem_data,
+  input  logic        eng_mem_ack,
+  output logic [15:0] eng_polys, eng_objects, eng_capped, eng_nonfinite,
+  output logic [15:0] eng_clip_in, eng_clip_out, eng_clip_drop,
+  output logic        eng_q_valid,
+  output logic signed [15:0] eng_q_x0, eng_q_y0, eng_q_x1, eng_q_y1,
+  output logic signed [15:0] eng_q_x2, eng_q_y2, eng_q_x3, eng_q_y3,
   output logic [15:0] geo_frames, geo_objs, geo_ops, geo_pdcmds, geo_pdwords,
   output logic  [7:0] geo_unknown,
   output logic  [3:0] geo_state,
@@ -710,16 +721,45 @@ module m2_boot_harness #(
     .rd_req(geo_rd_req), .rd_addr(geo_rd_addr),
     .rd_data(geo_rd_data), .rd_ack(geo_rd_ack),
     .mtx0(), .mtx4(), .mtx8(), .mtx11(),
-    .mat_we(), .mat_idx(), .mat_data(),
-    .eng_busy(1'b0),               // no geometry engine in this bench
-    .foc_x(), .foc_y(),
-    .obj_tpa(), .obj_tha(), .obj_oba(), .obj_obc(), .obj_valid(),
+    .mat_we(geo_mat_we), .mat_idx(geo_mat_idx), .mat_data(geo_mat_data),
+    .eng_busy(geo_eng_busy),
+    .foc_x(geo_foc_x), .foc_y(geo_foc_y),
+    .lit_x(), .lit_y(), .lit_z(), .dbg_lit_n(),
+    .tp_we(), .tp_idx(), .tp_diffuse(), .tp_ambient(), .dbg_tp_n(),
+    .obj_tpa(), .obj_tha(), .obj_oba(geo_obj_oba), .obj_obc(geo_obj_obc),
+    .obj_valid(geo_obj_valid),
     .dbg_mtx_n(), .dbg_foc_n(),
     .dbg_pd_words(geo_pdwords), .dbg_pd_cmds(geo_pdcmds),
     .dbg_walk_ops(geo_ops), .dbg_walk_objs(geo_objs),
     .dbg_walk_frames(geo_frames), .dbg_walk_unknown(geo_unknown)
   );
   assign geo_state = u_geo.wst;
+
+  // ---- the geometry pipeline, so object_data is actually consumed
+  wire        geo_mat_we, geo_obj_valid, geo_eng_busy;
+  wire [3:0]  geo_mat_idx;
+  wire [31:0] geo_mat_data, geo_foc_x, geo_foc_y, geo_obj_oba, geo_obj_obc;
+
+  m2_geometry u_geometry (
+    .clk(clk_mem), .rst_n(rst_n),
+    .start(geo_obj_valid), .oba(geo_obj_oba), .obc(geo_obj_obc),
+    .busy(geo_eng_busy),
+    .mat_we(geo_mat_we), .mat_idx(geo_mat_idx), .mat_data(geo_mat_data),
+    .foc_x(geo_foc_x), .foc_y(geo_foc_y),
+    .mem_req(eng_mem_req), .mem_addr(eng_mem_addr),
+    .mem_data(eng_mem_data), .mem_ack(eng_mem_ack),
+    .xc(32'h43780000), .yc(32'h43400000),          // 248.0, 192.0
+    .a_left(32'hC3780000), .a_right(32'h43780000), // -248, +248
+    .a_bottom(32'h43400000), .a_top(32'hC3400000), // +192, -192
+    .flat_col(24'hC0C0C0),
+    .q_valid(eng_q_valid), .q_ready(1'b1),
+    .q_x0(eng_q_x0), .q_y0(eng_q_y0), .q_x1(eng_q_x1), .q_y1(eng_q_y1),
+    .q_x2(eng_q_x2), .q_y2(eng_q_y2), .q_x3(eng_q_x3), .q_y3(eng_q_y3),
+    .q_col(), .q_z(),
+    .dbg_polys(eng_polys), .dbg_objects(eng_objects), .dbg_capped(eng_capped),
+    .dbg_clip_in(eng_clip_in), .dbg_clip_out(eng_clip_out),
+    .dbg_clip_dropped(eng_clip_drop), .dbg_nonfinite(eng_nonfinite)
+  );
 
   m2_backup u_backup (
     .clk(clk_m), .sel(bak_sel), .we(cpu_io_we),
