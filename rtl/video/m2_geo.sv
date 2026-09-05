@@ -435,7 +435,10 @@ module m2_geo #(
 
   assign dbg_walk_state = 4'(wst);
 
-  assign mat_we   = (wst == W_OPRD) && rd_ack
+  // The EDGE, not the level: a two-cycle acknowledge on the level writes every
+  // matrix row twice, which is harmless for the matrix itself and is not
+  // harmless for anything downstream that counts writes.
+  assign mat_we   = (wst == W_OPRD) && rd_ack_e
                  && ((w_cap == CAP_MTX) || (w_cap == CAP_TRA));
   assign mat_idx  = (w_cap == CAP_TRA) ? (w_ci + 4'd9) : w_ci;
   assign mat_data = rd_data;
@@ -461,9 +464,27 @@ module m2_geo #(
                       : (w_cap == CAP_LIT) ? 4'd2
                                            : 4'd3;
 
-  assign rd_req  = (wst == W_FETCH) || (wst == W_CNT) || (wst == W_DDATTR)
-                || (wst == W_OPRD) || (wst == W_PDA) || (wst == W_PDR)
-                || (wst == W_TPI)  || (wst == W_TPP) || (wst == W_TPC);
+  // ONE REQUEST PER WORD, ONE WORD PER ACKNOWLEDGE -- see m2_geo_engine's
+  // header for why. W_OPRD reads up to TWELVE matrix words without leaving the
+  // state, and W_TPP/W_TPC alternate while both assert rd_req, so a held
+  // request asks the edge-latched SDRAM port for one transaction and then waits
+  // for words it never asked for. A multi-cycle acknowledge read as a level
+  // additionally latches the same word into several operands, which is exactly
+  // what an object_data whose oba and obc are the SAME value looks like.
+  logic rd_ack_d, rq_gap;
+  wire  rd_ack_e = rd_ack && !rd_ack_d;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin rd_ack_d <= 1'b0; rq_gap <= 1'b0; end
+    else begin
+      rd_ack_d <= rd_ack;
+      rq_gap   <= rd_ack_e;
+    end
+  end
+
+  assign rd_req  = ((wst == W_FETCH) || (wst == W_CNT) || (wst == W_DDATTR)
+                 || (wst == W_OPRD) || (wst == W_PDA) || (wst == W_PDR)
+                 || (wst == W_TPI)  || (wst == W_TPP) || (wst == W_TPC))
+                 && !rq_gap;
   assign rd_addr = w_ip;
 
   always_ff @(posedge clk or negedge rst_n) begin
@@ -500,7 +521,7 @@ module m2_geo #(
         // FETCH AND WAIT ARE ONE STATE. Asserting the request and then moving on
         // unconditionally drops an acknowledge that arrives in the same cycle,
         // which a fast memory does -- the walk then never advances at all.
-        W_FETCH: if (rd_ack) begin
+        W_FETCH: if (rd_ack_e) begin
           // THE BOUND LIVES HERE, NOT ONLY IN W_SKIP. A jump re-enters W_FETCH
           // without passing through W_SKIP, so a list of nothing but jumps was
           // unbounded -- and unwritten memory is exactly that list: it reads
@@ -575,7 +596,7 @@ module m2_geo #(
         // reference reads each of these as a flat run of words in order
         // (geo_matrix_write, geo_focal_distance, geo_object_data), so there is
         // no reordering to get wrong here -- only the count.
-        W_OPRD: if (rd_ack) begin
+        W_OPRD: if (rd_ack_e) begin
           case (w_cap)
             CAP_MTX: mtx[w_ci] <= rd_data;
             CAP_TRA: mtx[w_ci + 4'd9] <= rd_data;
@@ -623,7 +644,7 @@ module m2_geo #(
           end
         end
 
-        W_CNT: if (rd_ack) begin
+        W_CNT: if (rd_ack_e) begin
           // JUST THE COUNT. This state has already stepped past the count word
           // itself, so adding one for it walks a word too far -- which lands on
           // the operand AFTER the next command and desynchronises the whole
@@ -650,7 +671,7 @@ module m2_geo #(
         // THE BASE INDEX. MAME reads it as `index = (*input++) >> 2` -- a byte
         // offset into a table of dwords -- and wraps it to 32 entries after
         // each write.
-        W_TPI: if (rd_ack) begin
+        W_TPI: if (rd_ack_e) begin
           tp_i <= rd_data[6:2];
           w_ip <= w_ip + 19'd1;
           wst  <= W_CNT;
@@ -660,7 +681,7 @@ module m2_geo #(
         // this core does not use. diffuse and ambient are the low two bytes;
         // specular_scale and specular_control are the high two and belong to
         // the specular path, which does not exist yet.
-        W_TPP: if (rd_ack) begin
+        W_TPP: if (rd_ack_e) begin
           tp_we      <= 1'b1;
           tp_idx     <= tp_i;
           tp_diffuse <= rd_data[7:0];
@@ -673,7 +694,7 @@ module m2_geo #(
         // the specular parser.
         W_TPC: begin
           tp_we <= 1'b0;
-          if (rd_ack) begin
+          if (rd_ack_e) begin
             w_ip <= w_ip + 19'd1;
             tp_i <= tp_i + 5'd1;            // wraps at 32, as `& 0x1f` does
             if (tp_c == tp_n - 16'd1) wst <= W_FETCH;
@@ -685,14 +706,14 @@ module m2_geo #(
         // (0x01000000) selects fast polygon RAM, anything else slow. Note this
         // is NOT geo_object_data's three-way decode -- polygon_data has no ROM
         // case, because a ROM cannot be written.
-        W_PDA: if (rd_ack) begin
+        W_PDA: if (rd_ack_e) begin
           pd_addr <= rd_data;
           w_ip    <= w_ip + 19'd1;
           wst     <= W_CNT;
         end
 
         // Read one dword of payload...
-        W_PDR: if (rd_ack) begin
+        W_PDR: if (rd_ack_e) begin
           pd_wdata <= rd_data;
           pd_req   <= 1'b1;
           wst      <= W_PDW;
@@ -739,7 +760,7 @@ module m2_geo #(
             wst <= W_IDLE;
           end
         end
-        W_DDATTR: if (rd_ack) begin
+        W_DDATTR: if (rd_ack_e) begin
           w_ip <= w_ip + 19'd1;               // the attribute is consumed either way
           if ((rd_data[1:0] == 2'b00) || (w_ip >= 19'h08000)) begin
             wst <= W_FETCH;                   // low two bits clear: list ends

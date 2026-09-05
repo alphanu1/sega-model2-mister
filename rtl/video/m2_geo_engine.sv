@@ -183,7 +183,32 @@ module m2_geo_engine #(
   logic        fsel;         // 0 = scaling x, 1 = scaling y
 
   assign mem_addr = ptr;
-  assign mem_req  = (st == E_RD) || (st == E_ATTR) || (st == E_NORM) || (st == E_SKIP);
+  // ONE REQUEST PER WORD, AND ONE WORD PER ACKNOWLEDGE.
+  //
+  // m2_sdram latches a transaction on the RISING EDGE of p_req
+  // (m2_sdram.sv:377, `if (p_req[i] && !req_d[i])`) and holds p_ack for
+  // ACK_HOLD cycles. This engine reads three words of a vertex without leaving
+  // E_RD, so a plainly-held mem_req asks for ONE transaction and then waits
+  // forever for a second word that was never requested -- and a multi-cycle
+  // acknowledge read as a level consumes the same word twice on top of that.
+  //
+  // Neither shows up in any bench here, because every bench acknowledges
+  // whenever req is high, immediately and continuously. That models a port this
+  // design does not have. So: the request drops for one cycle after each
+  // accepted word to make a fresh edge, and the acknowledge is edge-detected so
+  // one transaction delivers exactly one word.
+  logic mem_ack_d, rd_gap;
+  wire  mem_ack_e = mem_ack && !mem_ack_d;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin mem_ack_d <= 1'b0; rd_gap <= 1'b0; end
+    else begin
+      mem_ack_d <= mem_ack;
+      rd_gap    <= mem_ack_e;
+    end
+  end
+
+  assign mem_req  = ((st == E_RD) || (st == E_ATTR) || (st == E_NORM) || (st == E_SKIP))
+                 && !rd_gap;
 
   assign v0x = p1prev[0]; assign v0y = p1prev[1]; assign v0z = p1prev[2];
   assign v1x = p0prev[0]; assign v1y = p0prev[1]; assign v1z = p0prev[2];
@@ -224,7 +249,7 @@ module m2_geo_engine #(
         end
 
         // ---- read three words into xyz, then hand them to the transform
-        E_RD: if (mem_ack) begin
+        E_RD: if (mem_ack_e) begin
           xyz[widx] <= mem_data;
           ptr <= ptr + 24'd1;
           if (widx == 2'd2) begin widx <= 2'd0; st <= E_XF; end
@@ -289,7 +314,7 @@ module m2_geo_engine #(
         end
 
         // ---- the attribute word terminates the object when (attr & 3) == 0
-        E_ATTR: if (mem_ack) begin
+        E_ATTR: if (mem_ack_e) begin
           attr <= mem_data;
           ptr  <= ptr + 24'd1;
           if (remain == 32'd0) begin
@@ -312,7 +337,7 @@ module m2_geo_engine #(
         //      so these three words are half of every luminance the renderer
         //      will compute. They arrive in stream order x, y, z; skipn counts
         //      down from 3, so 3->x, 2->y, 1->z.
-        E_NORM: if (mem_ack) begin
+        E_NORM: if (mem_ack_e) begin
           ptr <= ptr + 24'd1;
           case (skipn)
             2'd3: nrm[0] <= mem_data;
@@ -347,7 +372,7 @@ module m2_geo_engine #(
         end
 
         // ---- the unused triangle point, consumed
-        E_SKIP: if (mem_ack) begin
+        E_SKIP: if (mem_ack_e) begin
           ptr <= ptr + 24'd1;
           if (skipn == 2'd1) st <= E_EMIT;
           else skipn <= skipn - 2'd1;
