@@ -9698,3 +9698,68 @@ reciprocal is 29 cycles and does not pipeline, four vertices per polygon is
 about 120 cycles, and that puts roughly 2,700 polygons in a 60 Hz frame before
 the projector is the limit. That is the number to watch when real display lists
 arrive.
+
+---
+
+**R175 - THE DISPLAY-LIST WALK IS CORRECT AND MATCHES THE REFERENCE EXACTLY.
+THE LIST IS NOT BEING PRODUCED. THAT IS THE BLOCKER, AND IT IS UPSTREAM OF
+EVERYTHING BUILT SO FAR.**
+
+Established in simulation, by putting `m2_geo` inside the boot bench so the real
+i960 running the real ROMs drives the real walker.
+
+*Why the bench was extended rather than the board questioned again.* On hardware
+the walk reported `frames=1, objs=0, unknown=0` and then froze, and every guess
+at why cost a 40-minute build. Three such guesses had already been spent. The
+boot bench already ran the game; it simply had no geometrizer in it.
+
+*What it reported on the first run:*
+
+    frames=0  ops=32767  objs=0  unknown=00  state=W_FETCH
+    geo rp=00000032  wp=0000403c
+    polygon_data: 0 commands
+    scanning buffer RAM for geo_end opcodes:  NONE FOUND
+
+*And the list at the read pointer is not a list:*
+
+    [  12] 00060006  op=00      [  15] 0000002d  op=00
+    [  13] 00070007  op=00      [  16] 0000002d  op=00
+
+Ascending small integers -- an index table -- every one of which decodes as
+opcode 0x00, `geo_nop`. The walk retires nops until it hits its bound.
+
+*THE BOUND IS MAME'S OWN, AND SO IS EVERYTHING ELSE.* `geo_parse`:
+
+    u32 address = (m_geo_read_start_address & 0x1ffff)/4;
+    while (end_code == false && (input - m_bufferram) < 0x20000/4
+                             && op_count++ < 0x8000)
+
+`op_count < 0x8000` is 32768, and the walk stopped at **32,767**. The register is
+written at `0x3008` as `data & 0xfffff` (model2.cpp:891) and ours decodes
+`0x803008`; MAME indexes `(addr & 0x1ffff)/4` = dword 12 and ours computes
+`geo_rp[16:2]` = dword 12. Every number agrees. **Given this data, MAME does
+exactly what our walk does.**
+
+*So the conclusion inverts.* The walk, the operand capture, `geo_polygon_data`,
+the engine's grammar, the transform, the projection and the clipper are all
+verified -- 88,196 checks -- and none of them is the problem. **Nothing is
+writing a display list.** There is no `geo_end` anywhere in the 128 KB of buffer
+RAM, so there is no list to walk, and every downstream count is zero for the
+only reason that can make them all zero at once.
+
+*Which points at the coprocessor.* On Model 2 the geometry is built by the TGP,
+not by the i960 directly -- the i960 pushes commands and the coprocessor
+produces the stream. The copro was only made to run at all in R167, hours
+before this, and "it completes commands and cycles its mailbox" is a much weaker
+statement than "it produces a correct display list". That is the next thing to
+establish, and the bench above is now the instrument for it.
+
+*What this cost, and the rule that came out of it.* Four builds were spent
+looking for a fault in the consumer. **MAME is a reference; it is not the
+oracle.** It is a C program with host floats, unbounded arrays and no
+handshakes, and three separate hardware faults tonight -- the NaN that wedged
+the walk, the pointer that would have run off polygon RAM, the stage that
+stopped answering -- are all things MAME cannot exhibit because MAME is not a
+pipeline. The Model 1 core in `tools/model1-ref/` is a working coprocessor,
+geometry engine, walker, texture unit and rasterizer on this same device, and
+it is the oracle. `CLAUDE.md` now says so.

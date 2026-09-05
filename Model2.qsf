@@ -157,7 +157,24 @@ set_global_assignment -name FITTER_EFFORT "STANDARD FIT"
 # checking whether it had left something usable. Do not do that again: after a
 # fitter crash, run quartus_asm BEFORE launching anything else. `make rbf_rescue`
 # exists for exactly this.
-set_global_assignment -name OPTIMIZATION_MODE "AGGRESSIVE AREA"
+# BALANCED, RETRIED ON A CLEAN DATABASE.
+#
+# The first BALANCED attempt crashed in 4:09 at I/O placement -- before any real
+# work -- and was dismissed too quickly. It was started immediately after a build
+# had been killed mid-fit, on a database in an unknown state, through
+# `--flow compile` rather than stage by stage. A design that is merely too big
+# fails AFTER placement, the way AGGRESSIVE AREA did at 34 minutes. So the
+# earlier result is not evidence about capacity.
+#
+# It is also the better setting to want. AGGRESSIVE AREA works -- 41,714 ->
+# 37,142 ALM -- but it buys those ALM by converting logic into M10K during
+# physical synthesis, ending at 553/553 RAM blocks with 76% of the bits used.
+# That is the resource the renderer will need most: texture is two sheets plus a
+# texel cache, and there is no block RAM left at all. BALANCED does not make
+# that trade.
+#
+# The other four area settings stay. They cost no block memory.
+set_global_assignment -name OPTIMIZATION_MODE "BALANCED"
 set_global_assignment -name ALLOW_POWER_UP_DONT_CARE ON
 set_global_assignment -name QII_AUTO_PACKED_REGISTERS NORMAL
 # BACK ON, AND NOT BY PREFERENCE. With this OFF the fitter dies with

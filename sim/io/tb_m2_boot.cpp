@@ -42,6 +42,7 @@ static Vm2_boot_harness *d;
 // 25-bit word address space, 64 MB. Unwritten reads 0xFFFF, per the standing
 // rule in docs/mister-integration.md — never zero.
 static std::vector<uint16_t> mem;
+static std::set<uint32_t> g_geo_writes;      // word addresses geo_polygon_data wrote
 // base_buffer, as passed to m2_cpu_bridge -- the SAME array the CPU reaches
 // buffer RAM through, so the coprocessor and the CPU finally share one memory.
 // File scope because mem_tick() is defined above the base constants it needs.
@@ -394,6 +395,29 @@ int main(int argc, char **argv) {
       d->sd2_dout = sd2_data;
       d->sd2_ack  = 1;
       sd2_left    = -1;
+    }
+  };
+
+  // THE DISPLAY-LIST WALK, served out of the same modelled memory.
+  //
+  // The walker reads DWORDS from buffer RAM by dword index; base_buffer is
+  // word 0x16f0000, so the word address is base + (index << 1). Writes are
+  // 16-bit halves at whatever word address geo_polygon_data computed, which is
+  // exactly what needs checking -- if the destination decode is wrong they will
+  // land somewhere recognisable, like word 0.
+  auto geo_tick = [&]() {
+    d->geo_rd_ack = 0;
+    if (d->geo_rd_req) {
+      const uint32_t a = (0x16f0000u + (uint32_t(d->geo_rd_addr) << 1)) & 0x1ffffff;
+      d->geo_rd_data = uint32_t(mem[a]) | (uint32_t(mem[(a + 1) & 0x1ffffff]) << 16);
+      d->geo_rd_ack  = 1;
+    }
+    d->geo_sd_ack = 0;
+    if (d->geo_sd_req) {
+      const uint32_t a = uint32_t(d->geo_sd_addr) & 0x1ffffff;
+      mem[a] = d->geo_sd_din;
+      g_geo_writes.insert(a);
+      d->geo_sd_ack = 1;
     }
   };
 
@@ -757,7 +781,7 @@ int main(int argc, char **argv) {
       d->eval();
       if (d->clk_slow_o && !slow_prev) ++mem_edges;   // the stack's own 48 MHz
       slow_prev = d->clk_slow_o;
-    } else if (m && !mem_prev) { mem_tick(); sd2_tick(); tgp_tick(); d->eval(); tgp_sample(); ++mem_edges; }
+    } else if (m && !mem_prev) { mem_tick(); sd2_tick(); tgp_tick(); geo_tick(); d->eval(); tgp_sample(); ++mem_edges; }
     if (d->sd2_req) { g_char_words.insert((uint32_t)d->sd2_addr); ++g_char_fetches; }
     mem_prev = m; vid_prev = v;
     ++base_t;
@@ -2180,6 +2204,62 @@ int main(int argc, char **argv) {
                   pchit_addr, (unsigned long long)pchit_n);
   }
   {
+    // THE DISPLAY-LIST WALK. On hardware this completes exactly one frame and
+    // then never runs again -- frames=1, objs=0, unknown=0 -- and the state it
+    // is sitting in is the whole question. W_IDLE means it is waiting for a
+    // vblank that is not arriving or a list it will not start; anything else
+    // means it is stuck mid-walk.
+    static const char* WST[16] = {
+      "W_IDLE","W_FETCH","W_DECODE","W_SKIP","W_CNT","W_TFIFO","W_DDSKIP",
+      "W_DDATTR","W_OPRD","W_OBJW","W_PDA","W_PDR","W_PDW","?13","?14","?15"
+    };
+    std::printf("  DISPLAY LIST WALK:\n");
+    std::printf("    frames=%u  ops=%u  objs=%u  unknown=%02x  state=%s\n",
+                d->geo_frames, d->geo_ops, d->geo_objs, d->geo_unknown,
+                WST[d->geo_state & 15]);
+    std::printf("    geo rp=%08x wp=%08x\n", d->geo_rp_o, d->geo_wp_o);
+    std::printf("    polygon_data: %u commands, %u dwords, %zu distinct words written\n",
+                d->geo_pdcmds, d->geo_pdwords, g_geo_writes.size());
+    if (!g_geo_writes.empty()) {
+      uint32_t lo = *g_geo_writes.begin(), hi = *g_geo_writes.rbegin();
+      std::printf("    front-door DMA wrote words %08x..%08x (buffer RAM is 016f0000+)\n",
+                  lo, hi);
+    }
+
+    // WHERE IS THE LIST, ACTUALLY? Scan buffer RAM for the opcode pattern a
+    // display list must have -- a geo_end (0x0f/0x1f) with a plausible command
+    // near it -- rather than trusting the pointer the walk was given.
+    {
+      int shown = 0;
+      std::printf("    scanning buffer RAM for geo_end opcodes:\n");
+      for (uint32_t dw = 0; dw < 0x4400 && shown < 8; dw++) {
+        const uint32_t a2 = 0x16f0000u + (dw << 1);
+        const uint32_t w  = uint32_t(mem[a2]) | (uint32_t(mem[a2 + 1]) << 16);
+        const uint32_t op = (w >> 23) & 0x1f;
+        if ((op == 0x0f || op == 0x1f) && w != 0xffffffffu) {
+          std::printf("      dword %5u : %08x  geo_end\n", dw, w);
+          shown++;
+        }
+      }
+      if (!shown) std::printf("      NONE FOUND -- no geo_end anywhere in buffer RAM\n");
+    }
+
+    // THE LIST ITSELF, FROM WHERE THE WALK STARTS. ops saturating with frames=0
+    // means the walk is desynchronised: one wrong opcode length and it reads an
+    // operand as a command and wanders. The only way to tell a wrong length
+    // from a list that genuinely has no end is to read the list.
+    {
+      const uint32_t rp_dw = (d->geo_rp_o & 0x1ffff) >> 2;
+      std::printf("    LIST from rp (dword %u):\n", rp_dw);
+      for (uint32_t i = 0; i < 24; i++) {
+        const uint32_t a = (0x16f0000u + ((rp_dw + i) << 1)) & 0x1ffffff;
+        const uint32_t w = uint32_t(mem[a]) | (uint32_t(mem[a + 1]) << 16);
+        const uint32_t op = (w >> 23) & 0x1f;
+        std::printf("      [%4u] %08x   op=%02x%s\n", rp_dw + i, w, op,
+                    (op == 0x0f || op == 0x1f) ? "  <-- geo_end" : "");
+      }
+    }
+
     std::printf("  TILEMAP SCROLL the renderer used, per layer:\n");
     for (int i = 0; i < 4; ++i)
       std::printf("    layer %d : hscr=%04x  vscr=%04x%s\n", i,

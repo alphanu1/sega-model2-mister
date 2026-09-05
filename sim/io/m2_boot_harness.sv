@@ -121,6 +121,26 @@ module m2_boot_harness #(
   input  logic        sd_ack,
 
   // ---- what the test asks about
+  // THE DISPLAY-LIST WALK, IN SIMULATION, DRIVEN BY THE REAL GAME.
+  //
+  // On hardware the walk completes exactly one frame and never runs again --
+  // walk_frames=1, objs=0, unknown=0 -- and each guess at why costs a
+  // 40-minute build. The i960 in this bench writes the same display list to
+  // the same registers, so the walker can be asked the question here in
+  // seconds instead.
+  output logic        geo_rd_req,
+  output logic [18:0] geo_rd_addr,
+  input  logic [31:0] geo_rd_data,
+  input  logic        geo_rd_ack,
+  output logic        geo_sd_req,
+  output logic [AW:1] geo_sd_addr,
+  output logic [15:0] geo_sd_din,
+  input  logic        geo_sd_ack,
+  output logic [15:0] geo_frames, geo_objs, geo_ops, geo_pdcmds, geo_pdwords,
+  output logic  [7:0] geo_unknown,
+  output logic  [3:0] geo_state,
+  output logic [31:0] geo_rp_o, geo_wp_o,
+
   output logic [31:0] dbg_pc,
   output logic [31:0] dbg_acc,
   output logic [15:0] iob_win_rd,     // reads of DPRAM 0x100-0x17f
@@ -662,6 +682,44 @@ module m2_boot_harness #(
 
   wire        bak_sel = cpu_io_sel && (cpu_io_addr[23:14] == 10'b11_0100_0000);
   wire [31:0] bak_rdata;
+
+  // ---- the geometrizer's front door and its walk, wired as Model2.sv wires it
+  wire geo_wr_ctl   = cpu_io_sel && cpu_io_we && (cpu_io_addr[23:0] == 24'h980008);
+  wire geo_wr_setwp = cpu_io_sel && cpu_io_we && (cpu_io_addr[23:0] == 24'h801008);
+  wire geo_wr_setrp = cpu_io_sel && cpu_io_we && (cpu_io_addr[23:0] == 24'h803008);
+  wire geo_wr_push  = cpu_io_sel && cpu_io_we &&
+                      ((cpu_io_addr[23:12] == 12'h800) ||
+                       (cpu_io_addr[23:14] == 10'h201));
+
+  // frame_start is the vblank edge, as geo_walk_start is on the board.
+  logic vb_d, vb_dd;
+  always_ff @(posedge clk_mem) begin vb_d <= vid_vb; vb_dd <= vb_d; end
+  wire geo_frame_start = vb_d && !vb_dd;
+
+  m2_geo #(.AW(AW), .DEPTH(128)) u_geo (
+    .clk(clk_mem), .rst_n(rst_n),
+    .wr_ctl(geo_wr_ctl), .wr_setwp(geo_wr_setwp), .wr_setrp(geo_wr_setrp),
+    .wr_push(geo_wr_push), .wdata(cpu_io_wdata),
+    .rd_wp(geo_wp_o), .rd_rp(geo_rp_o),
+    .base_buffer(AW'(32'h16f0000)),
+    .base_pram0(AW'(32'h1710000)), .base_pram1(AW'(32'h1720000)),
+    .sd_wr_req(geo_sd_req), .sd_wr_addr(geo_sd_addr), .sd_wr_din(geo_sd_din),
+    .sd_wr_ack(geo_sd_ack), .sd_busy(),
+    .dbg_pushes(), .dbg_dropped(), .dbg_geocnt(), .dbg_geoctl(),
+    .frame_start(geo_frame_start),
+    .rd_req(geo_rd_req), .rd_addr(geo_rd_addr),
+    .rd_data(geo_rd_data), .rd_ack(geo_rd_ack),
+    .mtx0(), .mtx4(), .mtx8(), .mtx11(),
+    .mat_we(), .mat_idx(), .mat_data(),
+    .eng_busy(1'b0),               // no geometry engine in this bench
+    .foc_x(), .foc_y(),
+    .obj_tpa(), .obj_tha(), .obj_oba(), .obj_obc(), .obj_valid(),
+    .dbg_mtx_n(), .dbg_foc_n(),
+    .dbg_pd_words(geo_pdwords), .dbg_pd_cmds(geo_pdcmds),
+    .dbg_walk_ops(geo_ops), .dbg_walk_objs(geo_objs),
+    .dbg_walk_frames(geo_frames), .dbg_walk_unknown(geo_unknown)
+  );
+  assign geo_state = u_geo.wst;
 
   m2_backup u_backup (
     .clk(clk_m), .sel(bak_sel), .we(cpu_io_we),
