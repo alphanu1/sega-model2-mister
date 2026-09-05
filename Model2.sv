@@ -132,7 +132,7 @@ localparam CONF_STR = {
 	// proven on hardware and every remaining fault is upstream of it. If it
 	// does not, the fault is downstream and no amount of fixing the matrix
 	// would ever have shown a picture.
-	"O[21],3D test quad,Off,On;",
+	"O[21],3D test bars,Off,On;",
 	"R[0],Reset and close OSD;",
 	// The button-definition line lives at the END of the menu block. Placed
 	// between the two R items it silently broke everything after it -- the OSD
@@ -2470,12 +2470,51 @@ wire tq_en = status[21];
 logic tq_valid, tq_end;
 logic [1:0] tq_st;
 logic [3:0] tq_dly;
+logic [1:0] tq_i;
+// side 0 RED top, 1 GREEN right, 2 BLUE bottom, 3 YELLOW left.
+// Vertices go around the perimeter, matching the engine's own v0..v3 order.
+wire signed [15:0] tqx0 = (tq_i==2'd0) ? 16'sd120 : (tq_i==2'd1) ? 16'sd380
+                        : (tq_i==2'd2) ? 16'sd120 :               16'sd80;
+wire signed [15:0] tqx2 = (tq_i==2'd0) ? 16'sd360 : (tq_i==2'd1) ? 16'sd400
+                        : (tq_i==2'd2) ? 16'sd360 :               16'sd100;
+wire signed [15:0] tqy0 = (tq_i==2'd0) ? 16'sd80  : (tq_i==2'd1) ? 16'sd120
+                        : (tq_i==2'd2) ? 16'sd280 :               16'sd120;
+wire signed [15:0] tqy2 = (tq_i==2'd0) ? 16'sd100 : (tq_i==2'd1) ? 16'sd260
+                        : (tq_i==2'd2) ? 16'sd300 :               16'sd260;
+wire [23:0] tq_col = (tq_i==2'd0) ? 24'hE00000 : (tq_i==2'd1) ? 24'h00E000
+                   : (tq_i==2'd2) ? 24'h0000E0 :                24'hE0E000;
 always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
 		tq_valid <= 1'b0; tq_end <= 1'b0; tq_st <= 2'd0; tq_dly <= 4'd0;
+		tq_i <= 2'd0;
 	end
 	else begin
 		tq_valid <= 1'b0; tq_end <= 1'b0;
+		// FOUR BARS, FOUR COLOURS, ONE PER SIDE, NONE TOUCHING.
+		//
+		// A single rectangle rendered as one visible edge, which is consistent
+		// with three different faults and distinguishes none of them (R182).
+		// Four separate filled quads do distinguish them, because each is an
+		// independent test and the colour says which one drew:
+		//
+		//   RED    top    horizontal bar, 240 x 20
+		//   GREEN  right  vertical   bar,  20 x 140
+		//   BLUE   bottom horizontal bar, 240 x 20
+		//   YELLOW left   vertical   bar,  20 x 140
+		//
+		// They are offset outward so no two touch: a bar that appears is a bar
+		// that filled, and nothing can be confused with its neighbour.
+		//
+		// What the outcomes mean:
+		//   all four solid          the fill path works and R182's doubt closes
+		//   horizontals only        the span generator walks x but not y
+		//   verticals only          the reverse
+		//   edges only, any colour  line_case is firing and the quads reach the
+		//                           filler degenerate
+		//   one bar only            the store-clear race is still swallowing
+		//                           quads, since only the last would survive
+		//   wrong colours           q_col is not reaching the band buffer
+		//
 		// INJECT AFTER THE CLEAR, NOT ON IT. m2_raster3d clears the quad store
 		// with `qs_clear = (pst == P_COLLECT) && frame_start`, and
 		// geo_walk_start IS frame_start -- so issuing the quad on that edge
@@ -2487,11 +2526,18 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		// A few cycles of delay puts the quad safely after the clear and well
 		// before the producer needs q_end.
 		case (tq_st)
-			2'd0: if (geo_walk_start) begin tq_dly <= 4'd8; tq_st <= 2'd1; end
+			2'd0: if (geo_walk_start) begin
+			        tq_dly <= 4'd8; tq_i <= 2'd0; tq_st <= 2'd1;
+			      end
+			// q_ready is tied high in m2_raster3d -- "the store absorbs or drops;
+			// it never backpressures" -- so one quad per cycle is accepted.
 			2'd1: if (tq_dly != 4'd0) tq_dly <= tq_dly - 4'd1;
 			      else begin tq_valid <= 1'b1; tq_st <= 2'd2; end
-			2'd2: begin tq_end <= 1'b1; tq_st <= 2'd3; end
-			default: if (!geo_walk_start) tq_st <= 2'd0;
+			2'd2: begin
+			        if (tq_i == 2'd3) begin tq_valid <= 1'b0; tq_st <= 2'd3; end
+			        else begin tq_valid <= 1'b1; tq_i <= tq_i + 2'd1; end
+			      end
+			default: begin tq_end <= 1'b1; if (!geo_walk_start) tq_st <= 2'd0; end
 		endcase
 	end
 end
@@ -4396,12 +4442,15 @@ wire [31:0] r3d_pixels;
 m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(16), .NBUF(3)) u_raster3d (
 	.clk(clk_sys), .rst_n(mem_rst_n),
 	.frame_start(geo_walk_start),
+	// Each bar is a proper filled rectangle traversed around its perimeter:
+	// (x0,y0) top-left, (x0,y2) bottom-left, (x2,y2) bottom-right,
+	// (x2,y0) top-right -- the same v0..v3 cycle the geometry engine emits.
 	.q_valid(tq_en ? tq_valid : q3d_valid), .q_ready(q3d_ready),
-	.q_x0(tq_en ? 16'sd160 : q3d_x0), .q_y0(tq_en ? 16'sd120 : q3d_y0),
-	.q_x1(tq_en ? 16'sd160 : q3d_x1), .q_y1(tq_en ? 16'sd260 : q3d_y1),
-	.q_x2(tq_en ? 16'sd340 : q3d_x2), .q_y2(tq_en ? 16'sd260 : q3d_y2),
-	.q_x3(tq_en ? 16'sd340 : q3d_x3), .q_y3(tq_en ? 16'sd120 : q3d_y3),
-	.q_col(tq_en ? 24'h20E020 : q3d_col), .q_z(tq_en ? 32'h3F800000 : q3d_z),
+	.q_x0(tq_en ? tqx0 : q3d_x0), .q_y0(tq_en ? tqy0 : q3d_y0),
+	.q_x1(tq_en ? tqx0 : q3d_x1), .q_y1(tq_en ? tqy2 : q3d_y1),
+	.q_x2(tq_en ? tqx2 : q3d_x2), .q_y2(tq_en ? tqy2 : q3d_y2),
+	.q_x3(tq_en ? tqx2 : q3d_x3), .q_y3(tq_en ? tqy0 : q3d_y3),
+	.q_col(tq_en ? tq_col : q3d_col), .q_z(tq_en ? 32'h3F800000 : q3d_z),
 	.q_moire(1'b0), .q_end(tq_en ? tq_end : q3d_end),
 	.scan_clk(clk_sys), .scan_x(vid_x), .scan_y(vid_y),
 	.scan_col(r3d_col), .scan_hit(r3d_hit),
