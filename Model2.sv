@@ -133,6 +133,10 @@ localparam CONF_STR = {
 	// does not, the fault is downstream and no amount of fixing the matrix
 	// would ever have shown a picture.
 	"O[21],3D test bars,Off,On;",
+	// A bar outside the visible area is indistinguishable from a bar that did
+	// not draw. This packs all four well inside any plausible crop, so a side
+	// missing in BOTH layouts is missing for a real reason.
+	"O[22],3D bars layout,Wide,Compact;",
 	"R[0],Reset and close OSD;",
 	// The button-definition line lives at the END of the menu block. Placed
 	// between the two R items it silently broke everything after it -- the OSD
@@ -2473,14 +2477,39 @@ logic [3:0] tq_dly;
 logic [1:0] tq_i;
 // side 0 RED top, 1 GREEN right, 2 BLUE bottom, 3 YELLOW left.
 // Vertices go around the perimeter, matching the engine's own v0..v3 order.
-wire signed [15:0] tqx0 = (tq_i==2'd0) ? 16'sd120 : (tq_i==2'd1) ? 16'sd380
-                        : (tq_i==2'd2) ? 16'sd120 :               16'sd80;
-wire signed [15:0] tqx2 = (tq_i==2'd0) ? 16'sd360 : (tq_i==2'd1) ? 16'sd400
-                        : (tq_i==2'd2) ? 16'sd360 :               16'sd100;
-wire signed [15:0] tqy0 = (tq_i==2'd0) ? 16'sd80  : (tq_i==2'd1) ? 16'sd120
-                        : (tq_i==2'd2) ? 16'sd280 :               16'sd120;
-wire signed [15:0] tqy2 = (tq_i==2'd0) ? 16'sd100 : (tq_i==2'd1) ? 16'sd260
-                        : (tq_i==2'd2) ? 16'sd300 :               16'sd260;
+// TWO LAYOUTS, BECAUSE A BAR THAT IS NOT VISIBLE PROVES NOTHING.
+//
+// The wide layout spans x 80..400 and y 80..300. That is inside 496x384 on
+// paper, but the visible area after overscan and scaling is smaller than the
+// framebuffer, so an edge bar can sit outside what actually reaches the screen
+// -- and a bar you cannot see is indistinguishable from a bar that did not
+// draw, which is exactly the ambiguity this test exists to remove.
+//
+// status[22] switches to a COMPACT layout well inside any plausible crop:
+// x 180..300, y 140..240. Toggling between the two confirms a side that was
+// merely out of view rather than missing, and if a bar is absent in BOTH it is
+// absent for a real reason.
+wire tq_small = status[22];
+wire signed [15:0] tqx0 = tq_small
+      ? ((tq_i==2'd0) ? 16'sd200 : (tq_i==2'd1) ? 16'sd280
+       : (tq_i==2'd2) ? 16'sd200 :               16'sd180)
+      : ((tq_i==2'd0) ? 16'sd120 : (tq_i==2'd1) ? 16'sd380
+       : (tq_i==2'd2) ? 16'sd120 :               16'sd80);
+wire signed [15:0] tqx2 = tq_small
+      ? ((tq_i==2'd0) ? 16'sd280 : (tq_i==2'd1) ? 16'sd300
+       : (tq_i==2'd2) ? 16'sd280 :               16'sd200)
+      : ((tq_i==2'd0) ? 16'sd360 : (tq_i==2'd1) ? 16'sd400
+       : (tq_i==2'd2) ? 16'sd360 :               16'sd100);
+wire signed [15:0] tqy0 = tq_small
+      ? ((tq_i==2'd0) ? 16'sd140 : (tq_i==2'd1) ? 16'sd160
+       : (tq_i==2'd2) ? 16'sd220 :               16'sd160)
+      : ((tq_i==2'd0) ? 16'sd80  : (tq_i==2'd1) ? 16'sd120
+       : (tq_i==2'd2) ? 16'sd280 :               16'sd120);
+wire signed [15:0] tqy2 = tq_small
+      ? ((tq_i==2'd0) ? 16'sd160 : (tq_i==2'd1) ? 16'sd220
+       : (tq_i==2'd2) ? 16'sd240 :               16'sd220)
+      : ((tq_i==2'd0) ? 16'sd100 : (tq_i==2'd1) ? 16'sd260
+       : (tq_i==2'd2) ? 16'sd300 :               16'sd260);
 wire [23:0] tq_col = (tq_i==2'd0) ? 24'hE00000 : (tq_i==2'd1) ? 24'h00E000
                    : (tq_i==2'd2) ? 24'h0000E0 :                24'hE0E000;
 always_ff @(posedge clk_sys or negedge mem_rst_n) begin
