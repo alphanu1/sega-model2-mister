@@ -323,6 +323,49 @@ int main(int argc,char**argv){
     else std::printf("  unwritten memory: walk bounded, stopped requesting\n");
   }
 
+  // ---- geo_translate_write updates the matrix's TRANSLATION ROW
+  //
+  // 0x0c writes matrix[9..11] and nothing else. It rides the same mat_we /
+  // mat_idx stream as 0x0b, offset by nine, so m2_geo_xform needs no knowledge
+  // of which opcode a row came from. While this was a blind skip a game that
+  // set rotation once and then moved objects with 0x0c would draw every one of
+  // them at a stale position -- right shape, wrong place.
+  {
+    std::vector<uint32_t> list(0x800, 0);
+    size_t w = 0;
+    list[w++] = 0x0cu << 23;
+    list[w++] = 0x40400000u;      // 3.0
+    list[w++] = 0x40800000u;      // 4.0
+    list[w++] = 0x40a00000u;      // 5.0
+    list[w++] = 0x0fu << 23;
+
+    d->rst_n = 0; for (int i = 0; i < 4; i++) tick(); d->rst_n = 1; idle(2);
+    d->frame_start = 1; tick(); d->frame_start = 0;
+    unsigned seen_idx[3] = {99,99,99}, seen_dat[3] = {0,0,0};
+    int n = 0;
+    for (int i = 0; i < 100000; i++) {
+      d->rd_ack = 0;
+      if (d->rd_req) { d->rd_data = (d->rd_addr < list.size()) ? list[d->rd_addr] : 0; d->rd_ack = 1; }
+      // mat_we is COMBINATIONAL on wst and rd_ack, so it has to be sampled
+      // during the cycle its inputs describe. Reading it after tick() reads the
+      // value belonging to the NEXT state and misses the first write entirely --
+      // which showed up as rows 10 and 11 arriving and row 9 never doing.
+      d->eval();
+      if (d->mat_we && n < 3) { seen_idx[n] = d->mat_idx; seen_dat[n] = d->mat_data; n++; }
+      tick();
+      if (d->dbg_walk_frames) break;
+    }
+    std::printf("test: geo_translate_write writes matrix rows 9,10,11\n");
+    ck("three matrix writes", (uint32_t)n, 3);
+    ck("row index 9",  seen_idx[0], 9);
+    ck("row index 10", seen_idx[1], 10);
+    ck("row index 11", seen_idx[2], 11);
+    ck("translate x",  seen_dat[0], 0x40400000u);
+    ck("translate y",  seen_dat[1], 0x40800000u);
+    ck("translate z",  seen_dat[2], 0x40a00000u);
+    ck("mtx11 mirrors it", d->mtx11, 0x40a00000u);
+  }
+
   // ---- geo_polygon_data ACTUALLY COPIES, and to the right polygon RAM
   //
   // This is the command the whole 3D path was waiting on. The board reported

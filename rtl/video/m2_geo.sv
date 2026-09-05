@@ -400,24 +400,37 @@ module m2_geo #(
   // use; only four of its words are brought out, which is enough to prove the
   // order is right without routing 384 wires to the top level.
   logic [31:0] mtx [12];
-  logic [1:0]  w_cap;                    // which opcode's operands are being read
+  logic [2:0]  w_cap;                    // which opcode's operands are being read
   logic [3:0]  w_ci;                     // operand index
   logic        eng_seen;                 // the engine's busy has been observed high
   logic [31:0] pd_addr;                  // geo_polygon_data's destination
   logic [15:0] pd_n, pd_i;               // dwords to copy, and the one in hand
-  localparam logic [1:0] CAP_MTX = 2'd1, CAP_FOC = 2'd2, CAP_OBJ = 2'd3;
+  localparam logic [2:0] CAP_MTX = 3'd1, CAP_FOC = 3'd2, CAP_OBJ = 3'd3,
+                         CAP_TRA = 3'd4;
 
   assign mtx0 = mtx[0]; assign mtx4 = mtx[4]; assign mtx8 = mtx[8]; assign mtx11 = mtx[11];
 
-  assign mat_we   = (wst == W_OPRD) && rd_ack && (w_cap == CAP_MTX);
-  assign mat_idx  = w_ci;
+  assign mat_we   = (wst == W_OPRD) && rd_ack
+                 && ((w_cap == CAP_MTX) || (w_cap == CAP_TRA));
+  assign mat_idx  = (w_cap == CAP_TRA) ? (w_ci + 4'd9) : w_ci;
   assign mat_data = rd_data;
 
   wire is_mtx = (w_op == 5'h0b) || (w_op == 5'h1b);
   wire is_foc = (w_op == 5'h09) || (w_op == 5'h19);
   wire is_obj = (w_op == 5'h01) || (w_op == 5'h11);
+  // GEO_TRANSLATE_WRITE IS A MATRIX WRITE OF THE LAST ROW ONLY.
+  //
+  //     for (i = 0; i < 3; i++) geo->matrix[i+9] = u2f(*input++);
+  //
+  // matrix[9..11] is the TRANSLATION. A game that sets the rotation once with
+  // 0x0b and then moves an object with 0x0c would, while this was a blind
+  // skip, draw every object at whichever position the last full matrix write
+  // happened to leave -- geometry that is the right shape in the wrong place,
+  // which is far harder to recognise as a missing opcode than a blank screen.
+  wire is_tra = (w_op == 5'h0c) || (w_op == 5'h1c);
   wire [3:0] cap_last = (w_cap == CAP_MTX) ? 4'd11
                       : (w_cap == CAP_FOC) ? 4'd1
+                      : (w_cap == CAP_TRA) ? 4'd2
                                            : 4'd3;
 
   assign rd_req  = (wst == W_FETCH) || (wst == W_CNT) || (wst == W_DDATTR)
@@ -429,7 +442,7 @@ module m2_geo #(
       wst <= W_IDLE; w_ip <= 19'd0; w_ops <= 16'd0; w_skip <= 16'd0; w_op <= 5'd0;
       dbg_walk_ops <= 16'd0; dbg_walk_objs <= 16'd0;
       dbg_walk_frames <= 16'd0; dbg_walk_unknown <= 8'd0;
-      w_cap <= 2'd0; w_ci <= 4'd0; obj_valid <= 1'b0; eng_seen <= 1'b0;
+      w_cap <= 3'd0; w_ci <= 4'd0; obj_valid <= 1'b0; eng_seen <= 1'b0;
       pd_addr <= 32'd0; pd_n <= 16'd0; pd_i <= 16'd0;
       pd_req <= 1'b0; pd_wdata <= 32'd0;
       dbg_pd_words <= 16'd0; dbg_pd_cmds <= 16'd0;
@@ -503,12 +516,14 @@ module m2_geo #(
             // operand before it.
             if (!is_cnt3) w_ip <= w_ip + 19'd1;
             wst  <= W_CNT;
-          end else if (is_mtx || is_foc || is_obj) begin
+          end else if (is_mtx || is_foc || is_obj || is_tra) begin
             // READ THESE OPERANDS RATHER THAN STEPPING OVER THEM. They carry
-            // the transform's state -- the matrix, the projection, and the
-            // object's address and count. Everything else stays a blind skip,
-            // which is what kept the walk cheap while it was only counting.
-            w_cap <= is_mtx ? CAP_MTX : is_foc ? CAP_FOC : CAP_OBJ;
+            // the transform's state -- the matrix, its translation row, the
+            // projection, and the object's address and count. Everything else
+            // stays a blind skip, which is what kept the walk cheap while it
+            // was only counting.
+            w_cap <= is_mtx ? CAP_MTX : is_foc ? CAP_FOC
+                   : is_tra ? CAP_TRA : CAP_OBJ;
             w_ci  <= 4'd0;
             wst   <= W_OPRD;
           end else if (oplen(w_op) == 16'hffff) begin
@@ -527,6 +542,7 @@ module m2_geo #(
         W_OPRD: if (rd_ack) begin
           case (w_cap)
             CAP_MTX: mtx[w_ci] <= rd_data;
+            CAP_TRA: mtx[w_ci + 4'd9] <= rd_data;
             CAP_FOC: if (w_ci == 4'd0) foc_x <= rd_data; else foc_y <= rd_data;
             default: case (w_ci)
                        4'd0: obj_tpa <= rd_data;
