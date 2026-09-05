@@ -2302,6 +2302,7 @@ wire [31:0] q3d_z;
 wire [15:0] geo_polys, geo_objs_done, geo_capped;
 wire [15:0] geo_clip_in, geo_clip_out, geo_clip_drop, geo_nonfinite;
 wire  [3:0] geo_eng_state, geo_clip_state;
+wire [15:0] geo_pj_lost;
 wire  [1:0] geo_qst;
 
 // WHICH MEMORY THE OBJECTS ACTUALLY POINT AT, counted per class.
@@ -2352,6 +2353,7 @@ m2_geometry u_geometry (
 	.dbg_polys(geo_polys), .dbg_objects(geo_objs_done), .dbg_capped(geo_capped),
 	.dbg_clip_in(geo_clip_in), .dbg_clip_out(geo_clip_out),
 	.dbg_clip_dropped(geo_clip_drop), .dbg_nonfinite(geo_nonfinite),
+	.dbg_pj_lost(geo_pj_lost),
 	.dbg_eng_state(geo_eng_state), .dbg_qst(geo_qst),
 	.dbg_clip_state(geo_clip_state)
 );
@@ -3369,7 +3371,10 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// (nonfinite=0), so it is stuck in a state, and the state names the cause.
 	// W_OBJW means the geometry engine never finished; W_PDW means the write DMA
 	// never took a polygon_data dword; W_FETCH means a read never returned.
-	.b_data({geo_clip_in[7:0], geo_clip_out[7:0], geo_nonfinite[7:0],
+	// pj_lost replaces nonfinite, which has read zero on every capture. It
+	// counts projections abandoned on timeout -- if the wedge was a lost
+	// projection, this is the number that proves it and says how often.
+	.b_data({geo_clip_in[7:0], geo_clip_out[7:0], geo_pj_lost[7:0],
 	         geo_clip_state, geo_walk_state}),
 	.a_tag(8'h43), .b_tag(8'h48),          // 'C' copro in_pushed:out_pushed | TGP retires:pc
 	                                       // 'H' out_popped:hscr2 | io_addr:flags

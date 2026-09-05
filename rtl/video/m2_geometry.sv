@@ -101,6 +101,7 @@ module m2_geometry (
   output logic [15:0] dbg_polys, dbg_objects, dbg_capped,
   output logic [15:0] dbg_clip_in, dbg_clip_out, dbg_clip_dropped,
   output logic [15:0] dbg_nonfinite,   // polygons refused before the arithmetic
+  output logic [15:0] dbg_pj_lost,     // projections abandoned on timeout
   // WHERE THE PIPELINE IS SITTING. The board wedges with the walk in W_OBJW,
   // which says only "the engine never finished". These say which stage.
   // Guessing at it has cost two wrong hypotheses already -- a NaN (refused
@@ -178,17 +179,45 @@ module m2_geometry (
   // is told separately whether IT was granted. Priority goes downstream
   // because draining the clipper is what frees the pipeline; the other way
   // round can wedge.
-  wire pj_valid   = w_pj_valid || k_pj_valid;
+  wire pj_valid   = (w_pj_valid || k_pj_valid) && !pj_busy;
   wire [31:0] pj_x = k_pj_valid ? k_pj_x : w_pj_x;
   wire [31:0] pj_y = k_pj_valid ? k_pj_y : w_pj_y;
   wire [31:0] pj_z = k_pj_valid ? k_pj_z : w_pj_z;
-  wire w_granted  = pj_ready && w_pj_valid && !k_pj_valid;
-  wire k_granted  = pj_ready && k_pj_valid;
+  wire w_granted  = pj_ready && w_pj_valid && !k_pj_valid && !pj_busy;
+  wire k_granted  = pj_ready && k_pj_valid && !pj_busy;
 
+  // ONE OPERATION IN FLIGHT AT A TIME, BECAUSE THERE IS ONLY ONE OWNER BIT.
+  //
+  // pj_owner is a single register latched at the grant. If a SECOND grant
+  // happens before the first result emerges, it is overwritten and the first
+  // requester's result is delivered to the wrong side -- so the first requester
+  // waits forever for an out_valid that was routed elsewhere.
+  //
+  // That is what the board reported. With the engine idle and the clipper idle,
+  // the quad projector sat in Q_WAIT and held m2_geometry.busy high, which held
+  // the display-list walk in W_OBJW:
+  //
+  //     eng_state=E_IDLE  clip_state=K_IDLE  qst=Q_WAIT  walk=W_OBJW
+  //     clip in=1 out=1 nonfinite=0
+  //
+  // The clipper had run, requested its own projections for the vertices it
+  // creates, and taken ownership out from under a projection already in flight.
+  //
+  // pj_busy serialises the port: no new request is presented until the previous
+  // result has been delivered. m2_geo_project's reciprocal is 29 cycles and does
+  // not pipeline anyway, so this costs nothing that was not already being paid.
   logic pj_owner;                          // 0 = quad projector, 1 = clipper
+  logic pj_busy;                           // a projection is in flight
   always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n)                    pj_owner <= 1'b0;
-    else if (pj_valid && pj_ready) pj_owner <= k_pj_valid;
+    if (!rst_n) begin
+      pj_owner <= 1'b0; pj_busy <= 1'b0;
+    end else begin
+      if (pj_valid && pj_ready && !pj_busy) begin
+        pj_owner <= k_pj_valid;
+        pj_busy  <= 1'b1;
+      end
+      if (pj_out_valid) pj_busy <= 1'b0;
+    end
   end
   wire w_pj_out_valid = pj_out_valid && !pj_owner;
   wire k_pj_out_valid = pj_out_valid &&  pj_owner;
@@ -229,6 +258,8 @@ module m2_geometry (
   logic        clip_in_valid;
   logic        clip_in_ready;
   logic [31:0] hzmin;
+  logic [9:0]  pj_wait;                    // cycles spent in Q_WAIT
+  wire         pj_timeout = &pj_wait;
 
   // ---------------------------------------------------- THE GARBAGE GATE
   //
@@ -284,12 +315,13 @@ module m2_geometry (
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       qst <= Q_IDLE; qi <= 2'd0; clip_in_valid <= 1'b0; hzmin <= 32'd0;
-      dbg_nonfinite <= 16'd0;
+      dbg_nonfinite <= 16'd0; pj_wait <= 10'd0; dbg_pj_lost <= 16'd0;
       for (int k = 0; k < 4; k++) begin
         hx[k] <= 32'd0; hy[k] <= 32'd0; hz[k] <= 32'd0;
         sx[k] <= 16'sd0; sy[k] <= 16'sd0;
       end
     end else begin
+      pj_wait <= (qst == Q_WAIT) ? (pj_wait + 10'd1) : 10'd0;
       case (qst)
         // A refused polygon is still ACCEPTED from the engine -- poly_ready is
         // high here -- it simply goes no further. Refusing to accept it would
@@ -311,7 +343,26 @@ module m2_geometry (
         // vertex is still standing when this one's in_valid goes up.
         Q_ISS: if (w_granted) qst <= Q_WAIT;
 
-        Q_WAIT: if (w_pj_out_valid) begin
+        // A PROJECTION THAT NEVER RETURNS MUST NOT STOP THE WORLD.
+        //
+        // The board wedges exactly here: engine idle, clipper idle, qst stuck
+        // in Q_WAIT, and m2_geometry.busy therefore high forever, which holds
+        // the display-list walk in W_OBJW and stops all 3D for the rest of the
+        // session. One vertex that the projector never answers costs every
+        // frame after it.
+        //
+        // m2_geo_project's reciprocal is 29 cycles and the pool can make it
+        // wait for a grant, so a legitimate projection is tens of cycles, not
+        // hundreds. 1023 is far past any honest latency and far short of a
+        // frame. On expiry the vertex keeps whatever screen position it already
+        // had and the pipeline moves on, counted rather than silent -- the same
+        // principle as the non-finite gate, which is that bad data degrades the
+        // picture and never stalls the machine.
+        Q_WAIT: if (pj_timeout) begin
+          dbg_pj_lost <= dbg_pj_lost + 16'd1;
+          if (qi == 2'd3) begin clip_in_valid <= 1'b1; qst <= Q_OUT; end
+          else begin qi <= qi + 2'd1; qst <= Q_ISS; end
+        end else if (w_pj_out_valid) begin
           sx[qi] <= pj_out_sx[15:0];
           sy[qi] <= pj_out_sy[15:0];
           if (qi == 2'd3) begin

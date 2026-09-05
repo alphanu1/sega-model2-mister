@@ -771,7 +771,7 @@ module m2_boot_harness #(
     .dbg_polys(eng_polys), .dbg_objects(eng_objects), .dbg_capped(eng_capped),
     .dbg_clip_in(eng_clip_in), .dbg_clip_out(eng_clip_out),
     .dbg_clip_dropped(eng_clip_drop), .dbg_nonfinite(eng_nonfinite),
-    .dbg_eng_state(), .dbg_qst(), .dbg_clip_state()
+    .dbg_pj_lost(), .dbg_eng_state(), .dbg_qst(), .dbg_clip_state()
   );
 
   m2_backup u_backup (

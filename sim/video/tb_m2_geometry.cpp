@@ -355,6 +355,63 @@ int main(int argc, char** argv) {
     }
   }
 
+  // ---- test 8: TWO REQUESTERS ON THE PROJECTOR AT THE SAME TIME
+  //
+  // This is the fault the board reported and no earlier test could reach.
+  // Every previous case gave the projector one requester at a time: a polygon
+  // wholly inside needs no cutting, and the straddling case in test 5 has the
+  // quad projector already parked in Q_OUT by the time the clipper asks.
+  //
+  // Overlapping them needs a STRADDLING polygon followed immediately by
+  // another: the clipper is still cutting polygon 1 and projecting the vertices
+  // it created while the quad projector has moved on to polygon 2. pj_owner is
+  // one register latched at the grant, so the second grant overwrote it and the
+  // first requester's result was delivered to the wrong side -- and it waited
+  // forever. On hardware:
+  //
+  //     eng_state=E_IDLE  clip_state=K_IDLE  qst=Q_WAIT  walk=W_OBJW
+  //
+  // everything drained except the quad projector, holding busy high and holding
+  // the whole display-list walk behind it.
+  {
+    d->rst_n = 0; for (int i = 0; i < 4; i++) tick(); d->rst_n = 1; tick();
+    load_identity();
+    d->foc_x = f2u(1.0f); d->foc_y = f2u(1.0f);
+    size_t w = 0;
+    w = put_v(w, -50.0f,  50.0f, 1.0f);    // P0(n-1)
+    w = put_v(w, -50.0f, -50.0f, 1.0f);    // P1(n-1)
+    // polygon 1 STRADDLES the right plane, so the clipper must cut and project
+    obj[w++] = 0x00000001u;
+    w = put_v(w, 0.0f, 0.0f, 1.0f);
+    w = put_v(w, 400.0f,  50.0f, 1.0f);
+    w = put_v(w, 400.0f, -50.0f, 1.0f);
+    // polygon 2 follows immediately and is wholly inside
+    obj[w++] = 0x00000001u;
+    w = put_v(w, 0.0f, 0.0f, 1.0f);
+    w = put_v(w,  60.0f,  40.0f, 1.0f);
+    w = put_v(w,  60.0f, -40.0f, 1.0f);
+    // polygon 3, so the pipeline must still be accepting work afterwards
+    obj[w++] = 0x00000001u;
+    w = put_v(w, 0.0f, 0.0f, 1.0f);
+    w = put_v(w,  70.0f,  30.0f, 1.0f);
+    w = put_v(w,  70.0f, -30.0f, 1.0f);
+    obj[w++] = 0x00000000u;
+
+    auto got = run_object();
+    std::printf("test: the clipper and the quad projector overlap on one projector\n");
+    std::printf("  clip in=%u out=%u dropped=%u  quads=%zu  busy=%d\n",
+                d->dbg_clip_in, d->dbg_clip_out, d->dbg_clip_dropped,
+                got.size(), (int)d->busy);
+    ck("all three polygons reached the clipper", (int32_t)d->dbg_clip_in, 3);
+    checks++;
+    if (d->busy) {
+      std::printf("  FAIL pipeline still busy -- the projector's owner was stolen\n");
+      fails++;
+    } else {
+      std::printf("  pipeline drained: no projection was misrouted\n");
+    }
+  }
+
   std::printf("m2_geometry: checks=%ld fails=%ld\n", checks, fails);
   std::printf("%s\n", fails ? "FAIL" : "PASS");
   delete d;
