@@ -700,9 +700,24 @@ module m2_boot_harness #(
   wire geo_wr_ctl   = cpu_io_sel && cpu_io_we && (cpu_io_addr[23:0] == 24'h980008);
   wire geo_wr_setwp = cpu_io_sel && cpu_io_we && (cpu_io_addr[23:0] == 24'h801008);
   wire geo_wr_setrp = cpu_io_sel && cpu_io_we && (cpu_io_addr[23:0] == 24'h803008);
+  // The command opcode is reconstructed from the WRITE ADDRESS, exactly as
+  // geo_w does it -- see Model2.sv for the full rule and the MAME comparison
+  // that found it.
+  wire        geo_fn_win  = (cpu_io_addr[23:12] == 12'h800);
+  wire        geo_prg_win = (cpu_io_addr[23:14] == 10'h201);
+  wire [11:0] geo_fa      = cpu_io_addr[11:0];
+  wire  [5:0] geo_func    = geo_fa[9:4];
+  wire        geo_hi      = cpu_io_wdata[31];
+  wire  [1:0] geo_eye     = geo_fa[11:10];
+  wire        geo_eye_en  = (|geo_eye) && (geo_func == 6'd1);
+  wire [31:0] geo_push_word =
+        geo_prg_win ? cpu_io_wdata
+      : geo_hi      ? ((cpu_io_wdata & 32'h800fffff) | ({26'd0, geo_func} << 23))
+                    : ((cpu_io_wdata & 32'h000fffff) | ({26'd0, geo_func} << 23)
+                       | (geo_eye_en ? ({30'd0, geo_eye} << 29) : 32'd0));
   wire geo_wr_push  = cpu_io_sel && cpu_io_we &&
-                      ((cpu_io_addr[23:12] == 12'h800) ||
-                       (cpu_io_addr[23:14] == 10'h201));
+                      (geo_prg_win ||
+                       (geo_fn_win && (geo_hi || (geo_fa[3:0] == 4'd0))));
 
   // frame_start is the vblank edge, as geo_walk_start is on the board.
   logic vb_d, vb_dd;
@@ -712,7 +727,7 @@ module m2_boot_harness #(
   m2_geo #(.AW(AW), .DEPTH(128)) u_geo (
     .clk(clk_mem), .rst_n(rst_n),
     .wr_ctl(geo_wr_ctl), .wr_setwp(geo_wr_setwp), .wr_setrp(geo_wr_setrp),
-    .wr_push(geo_wr_push), .wdata(cpu_io_wdata),
+    .wr_push(geo_wr_push), .wdata(geo_push_word),
     .rd_wp(geo_wp_o), .rd_rp(geo_rp_o),
     .base_buffer(AW'(32'h16f0000)),
     .base_pram0(AW'(32'h1710000)), .base_pram1(AW'(32'h1720000)),

@@ -2204,9 +2204,62 @@ wire        copro_fn_sel   = cpu_io_sel && (cpu_io_addr[23:14] == 10'h220);
 wire geo_wr_ctl   = cpu_io_sel && cpu_io_we && (cpu_io_addr[23:0]  == 24'h980008);
 wire geo_wr_setwp = cpu_io_sel && cpu_io_we && (cpu_io_addr[23:0]  == 24'h801008);
 wire geo_wr_setrp = cpu_io_sel && cpu_io_we && (cpu_io_addr[23:0]  == 24'h803008);
+// THE OPCODE IS IN THE ADDRESS, NOT IN THE DATA, and missing that is why no
+// geometry has ever drawn.
+//
+// Dumped MAME's buffer RAM at the same frame and compared it word for word
+// with ours. Every OPERAND matched. Every COMMAND word was zero in ours:
+//
+//     dword   MAME        ours
+//       0     04000000    00000000     op 08 zsort_mode
+//       1     40800000    40800000     ok
+//       2     01800000    00000000     op 03 window_data
+//      3-8    (six window operands)    all identical
+//       9     02000000    00000000     op 04 texture_data
+//      10     008050f8    008050f8     ok
+//
+// geo_w (model2.cpp) reconstructs the command word from the WRITE ADDRESS:
+//
+//     if (data & 0x80000000) {
+//         r = (data & 0x800fffff) | (((address >> 4) & 0x3f) << 23);
+//         push_geo_data(r);
+//     } else if ((address & 0xf) == 0) {
+//         r = (data & 0x000fffff) | (((address >> 4) & 0x3f) << 23);
+//         if (((address >> 4) & 0xc0) && function == 1)
+//             r |= ((address >> 10) & 3) << 29;    // eye mode, Sega Rally
+//         push_geo_data(r);
+//     }
+//     // bit31 clear and address not 16-byte aligned: NOTHING is pushed
+//
+// The i960 selects a command by WHERE it writes -- 0x800000 + (function << 4)
+// -- and the geometrizer folds that function number into bits 28:23, which is
+// exactly the field the walk decodes as the opcode. This core pushed cpu_io_wdata
+// verbatim, so every operand landed correctly and every command word arrived as
+// its data half with no opcode: zero.
+//
+// That is the whole reason matrix writes read zero, every vertex collapsed to
+// the projection centre, and 252 object_data commands were parsed out of what
+// was actually unwritten memory.
+//
+// 0x804000-0x807fff is geo_prg_w and IS a verbatim push -- that one was right.
+wire        geo_fn_win  = (cpu_io_addr[23:12] == 12'h800);   // 0x800000-0x800fff
+wire        geo_prg_win = (cpu_io_addr[23:14] == 10'h201);   // 0x804000-0x807fff
+wire [11:0] geo_fa      = cpu_io_addr[11:0];                 // byte address in the window
+wire  [5:0] geo_func    = geo_fa[9:4];
+wire        geo_hi      = cpu_io_wdata[31];
+// Eye mode rides bits 30:29 for function 1 when the address is above 0x400.
+wire  [1:0] geo_eye     = geo_fa[11:10];
+wire        geo_eye_en  = (|geo_eye) && (geo_func == 6'd1);
+
+wire [31:0] geo_push_word =
+      geo_prg_win ? cpu_io_wdata
+    : geo_hi      ? ((cpu_io_wdata & 32'h800fffff) | ({26'd0, geo_func} << 23))
+                  : ((cpu_io_wdata & 32'h000fffff) | ({26'd0, geo_func} << 23)
+                     | (geo_eye_en ? ({30'd0, geo_eye} << 29) : 32'd0));
+
 wire geo_wr_push  = cpu_io_sel && cpu_io_we &&
-                    ((cpu_io_addr[23:12] == 12'h800) ||          // 0x800000-0x800fff
-                     (cpu_io_addr[23:14] == 10'h201));           // 0x804000-0x807fff
+                    (geo_prg_win ||
+                     (geo_fn_win && (geo_hi || (geo_fa[3:0] == 4'd0))));
 wire [31:0] geo_rd_wp, geo_rd_rp, geo_pushes, geo_dropped, geo_ctl_dbg;
 wire [15:0] geo_cnt_dbg;
 wire        geo_sd_req, geo_sd_busy_raw;
@@ -2230,7 +2283,7 @@ wire [15:0] geo_sd_din;
 m2_geo #(.AW(SDR_AW), .DEPTH(128)) u_geo (
 	.clk(clk_sys), .rst_n(mem_rst_n),
 	.wr_ctl(geo_wr_ctl), .wr_setwp(geo_wr_setwp), .wr_setrp(geo_wr_setrp),
-	.wr_push(geo_wr_push), .wdata(cpu_io_wdata),
+	.wr_push(geo_wr_push), .wdata(geo_push_word),
 	.rd_wp(geo_rd_wp), .rd_rp(geo_rd_rp),
 	.base_buffer(GAME_BUFFER),
 	.sd_wr_req(geo_sd_req), .sd_wr_addr(geo_sd_addr), .sd_wr_din(geo_sd_din),
