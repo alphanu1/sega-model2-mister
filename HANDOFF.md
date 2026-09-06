@@ -1,6 +1,42 @@
 # Handoff
 
-**Updated:** 2026-09-05. Study entries R176-R180 added. R172 remains WITHDRAWN.
+**Updated:** 2026-09-06. Study entries R176-R187 added. R172 remains WITHDRAWN,
+R185 partly RETRACTED.
+
+## THE COPROCESSOR IS THE OPEN QUESTION, AND IT IS NOW MEASURABLE (R187)
+
+The remaining blocker is that the game emits exactly 110 matrix writes and then
+stops. Everything downstream of the front door has been eliminated by counters
+rather than argument. The suspect left is the coprocessor's arithmetic: R167
+proved it runs, and nothing has ever proved what it computes.
+
+Three things changed today that make that checkable:
+
+* **Daytona's TGP microcode is in the game ROM.** 2024 words, verbatim, at
+  offset `0x60020` of the interleaved `epr-16534a.6` + `epr-16535a.7` image.
+  `tools/extract_tgp_microcode.py` pulls it out; the result is byte-identical to
+  the reference's copro program RAM after boot. Nothing extra is needed on the
+  SD card -- the i960 uploads it through `0x00884000` while `copro_ctl1` bit 31
+  is set, which our core already implements. `mpr-16536`/`mpr-16537` are NOT the
+  program despite MAME's region label; they are the copro data ROMs.
+* **The real microcode now runs in the bench.** `MB86233_TGP_ROM=<image>` on
+  `test_mb86233_core`: 20,342 instructions retired, `unimplemented` never
+  asserted, and the disassembly has zero unknown opcodes. The loader used to
+  truncate the image to 512 words (`0x2000` bytes for a `0x2000`-WORD space) and
+  had never been given an image at all, so this had never shown.
+* **The i960/copro conversation is diffable against the reference.**
+  `M2_COPRO_TRACE=<file>` on the boot bench logs the four coprocessor windows in
+  the same format a MAME Lua memory tap produces (`F` function port, `W` FIFO
+  push or upload, `R` FIFO pop, `C` control). Same upload, same commands, same
+  pushes -- the first output word that differs is the arithmetic. Through the
+  first command after boot, `F 00880080 00000001`, the two already agree.
+
+**Next:** run the boot bench far enough to reach the reference's first real
+command burst (`F 00880250 00002525` at frame 53, repeating every other frame)
+and diff the FIFO-out values. If the inputs match and an output differs, the
+coprocessor is the fault. If our bench never issues those commands, the
+divergence is upstream in the i960 and the copro is cleared.
+
 
 ## WHERE THE MACHINE IS
 

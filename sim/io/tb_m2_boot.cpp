@@ -75,6 +75,11 @@ static const int FW = 496, FH = 384;
 static std::vector<uint8_t> g_frame(size_t(FW)*FH*3, 0);
 static int g_px = 0, g_py = 0, g_hb_p = 0, g_vb_p = 0;
 static uint64_t g_nonblack = 0, g_frames_done = 0;
+static FILE *g_copro_trace = nullptr;
+// The instruction-pointer histogram is sampled inside geo_tick, which is
+// defined above main's locals, so these live at file scope.
+static std::map<uint32_t,uint64_t> ip_hist;
+static uint64_t ip_samp = 0;
 static const char *g_seq_dir = nullptr;
 // CHARACTER WORKING SET. Glyph pixels are the one part of the 2D path still
 // fetched from SDRAM; everything else (tilemap, palette, colour table) is
@@ -473,8 +478,6 @@ int main(int argc, char **argv) {
   // comparable. The board shows 0x12B0 (the idle poll), 0x18E98/0x18EA4,
   // 0x11C74 and 0x1166C; if the bench's top regions differ, that names where
   // execution diverges, and the game stops emitting geometry at frame 140.
-  std::map<uint32_t,uint64_t> ip_hist;
-  uint64_t ip_samp = 0;
   std::map<uint32_t,uint64_t> tgp_pc_hist, tgp_io_hist;
   uint64_t tgp_ram_req_cyc = 0, tgp_fifo_rd_n = 0, tgp_fifo_wr_n = 0;
   uint64_t tgp_io_rd_n = 0, tgp_io_wr_n = 0, tgp_io_ack_n = 0;
@@ -748,6 +751,11 @@ int main(int argc, char **argv) {
     if (!g_seq_every) g_seq_every = 1;
   }
   const bool real_mem = std::getenv("M2_REALMEM") != nullptr;
+  if (const char *ct = std::getenv("M2_COPRO_TRACE")) {
+    g_copro_trace = std::fopen(ct, "w");
+    if (!g_copro_trace) std::printf("  COPRO TRACE: cannot open %s\n", ct);
+    else std::printf("  COPRO TRACE -> %s\n", ct);
+  }
   {
     unsigned c = 0xff;
     if (const char *cv = std::getenv("M2_IN0")) c = std::strtoul(cv, nullptr, 16);
@@ -755,6 +763,7 @@ int main(int argc, char **argv) {
     if (c != 0xff) std::printf("  CABINET in0 = %02x (bit2 clear = TEST held)\n", c);
   }
   int slow_prev = 0;
+  int cpu_prev = 0;
   auto base_step = [&]() {
     const int m = int((base_t / 2) & 1);
     const int v = int((base_t / 3) & 1);
@@ -812,6 +821,24 @@ int main(int argc, char **argv) {
       slow_prev = d->clk_slow_o;
     } else if (m && !mem_prev) { mem_tick(); sd2_tick(); tgp_tick(); geo_tick(); d->eval(); tgp_sample(); ++mem_edges; }
     if (d->sd2_req) { g_char_words.insert((uint32_t)d->sd2_addr); ++g_char_fetches; }
+    // M2_COPRO_TRACE: log the i960's coprocessor bus cycles in the same shape a
+    // Lua memory tap produces from the reference, so the two are diffable. The
+    // select is a one-cycle pulse in the CPU domain, so one log per rising CPU
+    // edge is one transaction -- counting cycles instead would double-count a
+    // write the bridge holds.
+    if (g_copro_trace && c && !cpu_prev && d->obs_io_sel) {
+      const uint32_t a = d->obs_io_addr;
+      char kind = 0;
+      uint32_t val = d->obs_io_wdata;
+      if (a >= 0x880000 && a <= 0x883fff && d->obs_io_we)      kind = 'F';
+      else if (a >= 0x884000 && a <= 0x887fff && d->obs_io_we) kind = 'W';
+      else if (a >= 0x884000 && a <= 0x887fff)               { kind = 'R'; val = d->obs_io_rdata; }
+      else if (a == 0x980000 && d->obs_io_we)                  kind = 'C';
+      if (kind)
+        std::fprintf(g_copro_trace, "%c %llu %08x %08x\n", kind,
+                     (unsigned long long)g_frames_done, a, val);
+    }
+    cpu_prev = c;
     mem_prev = m; vid_prev = v;
     ++base_t;
   };

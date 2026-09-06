@@ -10404,3 +10404,61 @@ was eliminated by a counter rather than an argument.
 on this question and all five were wrong. Every counter added answered its
 question in a single build. The counters that mattered here -- when the last
 matrix landed, and how many writes the gate refuses -- cost one build together.
+
+**R187 - THE COPROCESSOR'S MICROCODE IS IN THE GAME ROM, AT A KNOWN OFFSET, AND
+OURS IS UPLOADED CORRECTLY. THE i960/COPRO CONVERSATION IS NOW DIFFABLE AGAINST
+THE REFERENCE.**
+
+Believed before: the TGP microcode existed only as something the i960 assembled
+at boot, so the upload could be checked only by watching the words go past
+(`m2_copro.sv`'s `dbg_uc_*`), and the bench's microcode test could not be run at
+all -- it was skipped on every run for want of an image, and said so.
+
+Known now, and how it was established:
+
+1.  **The microcode is a verbatim block in the game program ROM**, at offset
+    `0x60020` of the interleaved `epr-16534a.6` + `epr-16535a.7` image
+    (`ROM_LOAD32_WORD`), 2024 words long. Established by dumping `:copro_tgp`'s
+    program space out of the reference after boot and searching the ROM image
+    for it: the whole 8096-byte block matches. `tools/extract_tgp_microcode.py`
+    pulls it out, and its output is byte-identical to the reference's program
+    RAM. It is NOT a BIOS and NOT a separate ROM file, so nothing is needed on
+    the SD card beyond the ROM the MRA already builds.
+
+2.  **It is not in the "tgp" ROM region.** MAME labels `mpr-16536`/`mpr-16537`
+    "TGP program? (COPRO socket)", which reads as the microcode and is not: that
+    region is mapped at `0x00800000` in the copro's *data* space
+    (`copro_tgp_map`), and the program space at `0x000-0x7ff` is RAM. Those two
+    ROMs are the copro data the MRA already loads at `0x0a40000`.
+
+3.  **The upload protocol is confirmed end to end.** `copro_ctl1` bit 31 set
+    starts it and zeroes the counter; every write to the FIFO window
+    `0x00884000` while it is set goes to program RAM instead of the FIFO;
+    clearing bit 31 releases the copro from halt. Captured from the reference:
+    one `C 00980000 80000000`, exactly 2024 pushes, one `C 00980000 00000000`.
+    Ours does the same, in the same order, with the same words -- the first
+    being `bf600010`, the reset vector.
+
+4.  **Every instruction in the real microcode decodes.** Disassembled with the
+    Model 1 project's `mb86233_disasm.py`: 2024 words, zero `unknown_group`,
+    zero unnamed ALU operations. Run on our RTL core it retires 20,342
+    instructions with `unimplemented` never asserted, reaching its input-wait
+    loop (PCs `000`, `010-049`, `7cb-7d8`) -- 73 distinct PCs, because a
+    standalone core is fed no FIFO input.
+
+5.  **The bench's microcode loader truncated to 512 words.** It sized its buffer
+    `0x2000` *bytes* while the program space is `0x2000` *words*. Daytona's
+    program is 2024 words, so three quarters of it was being dropped -- and
+    because the test had never been given an image, this had never shown.
+
+*What this does not prove.* That the coprocessor's arithmetic is right. Decoding
+every opcode is not computing every opcode correctly, and the microcode-driven
+lockstep is still owed.
+
+*The measurement this opens, which is the point of it.* The reference can be
+tapped at the four coprocessor windows with a Lua memory tap, and the bench now
+logs the same four windows in the same format (`M2_COPRO_TRACE`). The two traces
+are directly diffable: same upload, same function-port commands, same FIFO
+pushes -- and the first output word that differs is the coprocessor's
+arithmetic, which nothing has ever checked against the reference. Through the
+first command after boot -- `F 00880080 00000001` -- they already agree.

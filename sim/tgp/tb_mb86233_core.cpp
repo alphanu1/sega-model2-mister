@@ -823,7 +823,7 @@ int main(int argc, char** argv) {
     if (!f) {
       printf("test: microcode — cannot open %s, skipped\n", rom);
     } else {
-      std::vector<uint8_t> raw(0x2000, 0);
+      std::vector<uint8_t> raw(prog.size() * 4, 0);
       size_t got = fread(raw.data(), 1, raw.size(), f);
       fclose(f);
       printf("test: real microcode from %s (%zu bytes)\n", rom, got);

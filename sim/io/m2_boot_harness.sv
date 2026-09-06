@@ -313,6 +313,17 @@ module m2_boot_harness #(
   output logic [31:0] obs_out_data,
   output logic [31:0] obs_out_pushed,
   output logic        obs_copro_stall,
+  // THE COPROCESSOR CONVERSATION, event by event. The reference can be tapped
+  // at the same four windows with a Lua memory tap, so logging the i960's bus
+  // cycles here makes the two traces directly diffable: same microcode upload,
+  // same function-port commands, same FIFO pushes -- and then the first output
+  // word that differs is the coprocessor's arithmetic, which nothing has ever
+  // checked against the reference.
+  output logic        obs_io_sel,
+  output logic        obs_io_we,
+  output logic [23:0] obs_io_addr,
+  output logic [31:0] obs_io_wdata,
+  output logic [31:0] obs_io_rdata,
   output logic [31:0] obs_in_dropped,
   output logic [31:0] obs_out_dropped,
   output logic [15:0] obs_tgp_io_addr,
@@ -840,6 +851,12 @@ module m2_boot_harness #(
   logic [31:0] io_videoctl;
   logic [31:0] io_framenum;
   /* verilator lint_on UNUSEDSIGNAL */
+
+  assign obs_io_sel   = cpu_io_sel;
+  assign obs_io_we    = cpu_io_we;
+  assign obs_io_addr  = cpu_io_addr[23:0];
+  assign obs_io_wdata = cpu_io_wdata;
+  assign obs_io_rdata = cpu_io_rdata;
 
   assign cpu_io_rdata =
     iob_sel                           ? iob_rdata :

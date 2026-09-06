@@ -144,9 +144,12 @@ module m2_copro (
   output logic [31:0] dbg_tgp_a,
   output logic [31:0] dbg_tgp_b,
   output logic [31:0] dbg_tgp_d,
-  // THE UPLOAD STREAM, word by word. The program the i960 builds is not stored
-  // verbatim in any ROM, so the only way to know whether ours matches the
-  // reference is to watch the words go past.
+  // THE UPLOAD STREAM, word by word. The 2024-word program IS stored verbatim
+  // in the game ROM -- at offset 0x60020 of the interleaved i960 image, which
+  // tools/extract_tgp_microcode.py pulls out and which matches the reference's
+  // copro program RAM after boot byte for byte. So these are no longer the only
+  // way to check the upload; they are the way to check it on hardware, where
+  // the extracted image is the expected value rather than a guess.
   output logic        dbg_uc_we,
   output logic [11:0] dbg_uc_addr,
   output logic [31:0] dbg_uc_data,
