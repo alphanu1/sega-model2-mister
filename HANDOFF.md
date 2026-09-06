@@ -78,7 +78,7 @@ Each looked sound, each was adopted before it was measured, and each cost builds
 * **The fitter's crash rate is the physical-synthesis settings.** Matched Model
   1's minimal configuration; builds 24 and 26 crashed anyway with the same
   `Segment Violation at (nil)`. Settings restored. Cause still unknown -- and
-  Ben's point that Model 1 fits at 97% while we crash at 89% still stands and
+  The point that Model 1 fits at 97% while this core crashed at 89% still stands and
   still says it is not occupancy. (Build 25 was separately an OOM kill of my own
   making, from running a 30M simulation beside the fitter; `Killed` and
   `Segment Violation` are different failures and I had been conflating them.)
@@ -259,7 +259,7 @@ reference workload, 0.1 fps, and a lock with the i960 at 0x1166C.
 The bug did not exist until the coprocessor started working, which is why four
 days of hunting never found it.
 
-Ben's OSD toggle settled it without a build: geometrizer walk OFF cured it
+An OSD toggle settled it without a build: geometrizer walk OFF cured it
 outright. The fix is **separate ports, not arbitration** -- the controller
 already arbitrates between ports correctly.
 
@@ -473,7 +473,7 @@ still owed.
 
 ## THE 2:1 HANDSHAKE AUDIT: SAFE, AND THE RATIO IS WHY (R152)
 
-Ben's finding from Model 1: bringing its coprocessor to 2:1 broke the handshake
+A finding from Model 1: bringing its coprocessor to 2:1 broke the handshake
 because the action fired on every cycle the request was held. Its `incremental`
 branch states the rule -- **the action fires once, on the cycle the access
 completes, so a held request cannot double-pop a FIFO.**

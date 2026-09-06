@@ -100,7 +100,7 @@ set_global_assignment -name FINAL_PLACEMENT_OPTIMIZATION ALWAYS
 #
 # Builds 18 and 21 both died with "Fatal Error: Segment Violation" and no
 # committed fit, on two different seeds, and 3 of the last 5 runs have failed
-# the same way. I attributed that to occupancy -- 89% -- and Ben's answer
+# the same way. That was attributed to occupancy -- 89% -- and the answer
 # settles it: the Model 1 core fits at 97% and passes nearly every build.
 # Occupancy is not the cause, so the difference has to be in what we ask the
 # fitter to do that they do not.
@@ -125,7 +125,7 @@ set_global_assignment -name FINAL_PLACEMENT_OPTIMIZATION ALWAYS
 # what appears when these options are OFF -- "three builds out of three".
 #
 # So the settings are restored and the hypothesis is recorded as wrong rather
-# than quietly dropped. Ben's observation that Model 1 fits at 97% while we
+# than quietly dropped. The observation that Model 1 fits at 97% while we
 # crash at 89% still stands and still says occupancy is not the cause. What the
 # cause IS remains unknown, and guessing at it has now cost two builds.
 #

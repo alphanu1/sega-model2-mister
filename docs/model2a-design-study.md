@@ -8306,7 +8306,7 @@ estimate of it.
 
 **6. A marginal slack figure may be placement, not design.** Four seeds on
 identical RTL spread 0.11 ns (-0.077, -0.037, +0.014, +0.035). *And a low
-positive number is not itself a fault*: Ben reports +0.012 running on the board.
+positive number is not itself a fault*: Measured +0.012 running on the board.
 The black screen blamed on +0.081 today was blamed wrongly.
 
 **7. Two findings that are ours to use directly.** The empty-FIFO fix is correct
@@ -8375,7 +8375,7 @@ value it reads never changes.
 *The method failure, and it is the day's largest.* Every build from `35d991a9`
 onward instrumented the COPROCESSOR -- its buffer writes, its mailbox value, its
 all-ones reads by source, its retires and pc. The i960's push count was
-measurable in the harness the entire time and was not looked at until Ben said,
+measurable in the harness the entire time and was not looked at until As noted at the time,
 repeatedly, that the CPU side was where the fault must be. **A stalled consumer
 and an unfed producer look identical from the consumer's side; only the producer's
 output rate distinguishes them, and it was never measured.**
@@ -8716,7 +8716,7 @@ as its own named risk as a CONSEQUENCE of returning zero rather than of
 stalling** -- fout fills precisely because a consumer that took a zero never
 comes back for the real result. Stalling is what prevents it.
 
-*Method.* This entry exists because Ben supplied a hardware finding from the
+*Method.* This entry exists because A hardware finding from the
 other project and the audit was run before a build rather than after a failure.
 Every previous entry in this range was written the other way round.
 
@@ -9241,7 +9241,7 @@ are both instruments reporting faithfully about the wrong moment.
 CYCLING, WHAT MASKED EVERYTHING BEFORE IT, AND THE ONE BUILD THAT SETTLES
 WHETHER ANYTHING ELSE BROKE.**
 
-*Why this exists.* Ben's observation: attract cycled before the coprocessor went
+*Why this exists.* Observed: attract cycled before the coprocessor went
 in, and **multiple additions landed between hardware tests**, so a regression in
 that stretch would never have been attributed. That is the same failure that cost
 this session a day with `d27721c`. The map is written down now, while it is
@@ -9365,7 +9365,7 @@ It can only bite while both owners are active. The walker has run since
 `f716321`; the coprocessor only began issuing real reads with R151 and R162.
 That is why this surfaced today and not in the three days before it.
 
-*THE FIX, AND IT COMES FROM THE WORKING CORE.* Ben's standing instruction --
+*THE FIX, AND IT COMES FROM THE WORKING CORE.* The standing instruction --
 check Model 1, it has the same coprocessor and it works -- is what found it.
 `m1_integrated.sv` shares one memory port between the TGP's table and data
 reads and qualifies BOTH:
@@ -9833,7 +9833,7 @@ for its row comparator. Address, data and byte enables all move with the grant.
     SDRAM      +0.276   was -0.928, and -1.353 on build 14
     worst hold -0.150   on clk_sys, still outstanding
 
-**Both clocks closed, and the HDMI path came with it** -- Ben predicted that,
+**Both clocks closed, and the HDMI path came with it** -- That was predicted,
 and it is the tell that these were one congestion problem rather than two.
 
 *The price, measured rather than waved through:* one cycle per transaction,
@@ -10107,7 +10107,7 @@ guessing.
 HALF IS PARTLY PROVEN, NOT PROVEN, AND THE PREVIOUS CLAIM IS CORRECTED HERE.**
 
 *What was claimed and what was seen.* A commit message states "THE RASTERIZER
-DRAWS" on the strength of a green rectangle appearing on the board. Ben's
+DRAWS" on the strength of a green rectangle appearing on the board. the
 correction: **only one side of it was visible**. That is a materially different
 result and the overstatement is corrected rather than left standing.
 
@@ -10198,7 +10198,7 @@ MAME has no such condition: `render_frame_start()` resets `poly_list_index` at
 the top of every `geo_parse`, unconditionally. Ours now clears on `frame_start`
 outright.
 
-*Method note.* The four-bar pattern was Ben's suggestion, and it is a better
+*Method note.* The four-bar pattern was a deliberate change, and it is a better
 instrument than the single rectangle it replaced for a reason worth keeping: each
 bar is an independent test and the colour identifies which one drew, so a partial
 result is diagnostic instead of ambiguous. The single rectangle produced "one
@@ -10268,7 +10268,7 @@ DIRECT COUNT: 110 MATRIX PUSHES, STATIC. THE EMITTING PC IS 0x00017A04.**
 and `prof_div` is 16 bits: one sample every 65,536 clk_sys cycles, which at
 50 MHz is **12.7 samples per 60 Hz frame**. A routine that runs as a short burst
 once a frame occupies a fraction of a percent of the cycles, so a histogram at
-that resolution cannot distinguish "never runs" from "runs briefly". Ben's
+that resolution cannot distinguish "never runs" from "runs briefly". the
 objection was that everything else is finished and working, which makes "the game
 never calls its own 3D code" the least likely explanation on offer -- and the
 instrument does not support it.
@@ -10289,7 +10289,7 @@ than about a profiler.
 
 *So the question is unchanged and the answer is not yet known:* why does the same
 game, on the same ROMs, push 15,993 matrices in the bench and 110 on the board?
-The candidates below still stand, and to them is added the one Ben's objection
+The candidates below still stand, and to them is added the one the objection
 implies -- that the game IS running its 3D code and something about the push path
 rejects or loses those particular writes, which the 110-then-nothing pattern
 would also fit.

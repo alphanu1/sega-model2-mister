@@ -192,7 +192,7 @@ module m2_raster3d #(
   // The consequence is that quads accumulate forever. With the four test bars
   // that is 4 per frame into a 2,048-entry store: full after 512 frames, about
   // 8.5 seconds, after which everything new is dropped and the picture decays.
-  // Ben saw exactly that -- four correct bars that "keep fading away".
+  // which matches the observed behaviour -- four correct bars that fade away.
   //
   // It is not a test-only fault. The geometry path issues q_end every frame
   // too, so the real renderer would have filled the store just as surely and

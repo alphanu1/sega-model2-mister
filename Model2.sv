@@ -629,7 +629,7 @@ always_comb begin
 	// two owners on one.
 	//
 	// Port 4 was the SDRAM checksum sweeper, a debug facility whose only consumer
-	// is the overlay. It is the port Ben identified as free.
+	// is the overlay. It is the port identified as free.
 	//
 	// PORT 4 NOW CARRIES TWO READERS, AND THEY TAKE TURNS RATHER THAN SHARE.
 	// The walk stops at every object_data until the geometry engine reports
@@ -2549,7 +2549,7 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		// geo_walk_start IS frame_start -- so issuing the quad on that edge
 		// raced the clear and the store sometimes swallowed it. On the board
 		// that reads as a rectangle that draws, flickers and fades out, which
-		// is exactly what Ben saw and is a fault in this test injector rather
+		// is exactly what was observed on the board, and is a fault in this test injector rather
 		// than in the rasterizer it is testing.
 		//
 		// A few cycles of delay puts the quad safely after the clear and well
@@ -4378,7 +4378,7 @@ wire [31:0] char_hits, char_misses;
 // own rationale, and halving it gave back 51 M10K blocks -- 553/553 to 502/553,
 // the first block-memory headroom this design has had.
 //
-// THE BOARD SAYS OTHERWISE. At 64 KB, Ben reports tile and glyph overruns: the
+// THE BOARD SAYS OTHERWISE. At 64 KB, the board shows tile and glyph overruns: the
 // extra misses become SDRAM fetches that do not finish before the next
 // scanline starts, the bank does not flip, and the previous line is shown
 // again. That is exactly the failure the fetch engine's overrun counter exists
