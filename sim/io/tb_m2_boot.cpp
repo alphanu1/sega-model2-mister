@@ -76,6 +76,7 @@ static std::vector<uint8_t> g_frame(size_t(FW)*FH*3, 0);
 static int g_px = 0, g_py = 0, g_hb_p = 0, g_vb_p = 0;
 static uint64_t g_nonblack = 0, g_frames_done = 0;
 static FILE *g_copro_trace = nullptr;
+static FILE *g_state_trace = nullptr;
 // The instruction-pointer histogram is sampled inside geo_tick, which is
 // defined above main's locals, so these live at file scope.
 static std::map<uint32_t,uint64_t> ip_hist;
@@ -751,6 +752,11 @@ int main(int argc, char **argv) {
     if (!g_seq_every) g_seq_every = 1;
   }
   const bool real_mem = std::getenv("M2_REALMEM") != nullptr;
+  if (const char *st2 = std::getenv("M2_STATE_TRACE")) {
+    g_state_trace = std::fopen(st2, "w");
+    if (g_state_trace) { std::setvbuf(g_state_trace, nullptr, _IOLBF, 0);
+                         std::printf("  STATE TRACE -> %s\n", st2); }
+  }
   if (const char *ct = std::getenv("M2_COPRO_TRACE")) {
     g_copro_trace = std::fopen(ct, "w");
     if (!g_copro_trace) std::printf("  COPRO TRACE: cannot open %s\n", ct);
@@ -838,6 +844,18 @@ int main(int argc, char **argv) {
       if (kind)
         std::fprintf(g_copro_trace, "%c %llu %08x %08x\n", kind,
                      (unsigned long long)g_frames_done, a, val);
+    }
+    // THE STATE BYTE THE BOARD'S TOP-LEVEL LOOP TESTS. The loop at 0x1240 reads
+    // 0x0053e5f4 every frame and leaves for 0x228f00 when it changes; the board
+    // has never left it. The bench reaches the 3D, so it can say what writes
+    // that byte, with what, and when -- which the board cannot be asked without
+    // a build.
+    if (g_state_trace && d->obs_bus_ack && d->obs_bus_we &&
+        (d->obs_bus_addr & ~3u) == 0x0053e5f4u) {
+      std::fprintf(g_state_trace, "W frame=%llu insn=%llu ip=%08x data=%08x be=%x\n",
+                   (unsigned long long)g_frames_done,
+                   (unsigned long long)d->dbg_acc, (unsigned)d->dbg_ip,
+                   (unsigned)d->obs_bus_wdata, (unsigned)d->obs_bus_be);
     }
     cpu_prev = c;
     mem_prev = m; vid_prev = v;

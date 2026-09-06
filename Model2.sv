@@ -3623,8 +3623,11 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	//   b_data  function writes REFUSED by the gate : function writes accepted
 	// THE FRAME FLAG AT 0x00500000, because mtx_push has read a static 110 since
 	// frame 134 and the geometry counters have nothing further to say.
-	//   b_addr: writes to 0x500000 : last written : last read : write enables
-	.b_addr({w500_n[11:0], w500_last, r500_last, w500_be}),
+	//   b_addr: one bit per 4 KB page of the low program ROM, set the first
+	//   time the CPU executes there. Bit 0x11 and bit 0x13 are the question:
+	//   the reference spends 8-12% of its time in those pages and every matrix
+	//   write past the first 110 comes from them.
+	.b_addr(ip_pages),
 	// clip_dropped read 0 on hardware and the refusal count is the number that
 	// now moves, so it takes that byte. Between them: accepted, emitted, refused
 	// before the arithmetic, and reaching the rasterizer.
@@ -4252,6 +4255,19 @@ logic [15:0] w500_n, r500_n, vbl_n;
 logic  [7:0] w500_last, r500_last;
 logic  [3:0] w500_be;
 logic        irq0_d;
+
+// WHICH 4 KB PAGES THE CPU HAS EVER EXECUTED IN. One bit per page of the low
+// program ROM, bit i set the first time an instruction retires with
+// ip[16:12] == i, and never cleared.
+//
+// This is not a sample. The profiler's 1-in-65536 tick has put 5,656 board
+// samples in 0x12xx, 0x18xx, 0x1cxx and 0x22xxxx and NONE in 0x11xxx, 0x13xxx,
+// 0x14xxx or 0x15xxx-0x16xxx -- which is where the reference spends 8-12% of
+// its time and where every matrix write after the first 110 comes from. Zero
+// out of 5,656 is strong but it is still an absence in a sample, and this
+// question has now cost enough that it deserves a measurement that cannot be
+// wrong: a page either has been entered or it has not.
+logic [31:0] ip_pages;
 always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
 		lc_cnt <= 32'hEEEE_EEEE; lc_base <= 32'hEEEE_EEEE;
@@ -4262,6 +4278,7 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		cwd_d <= 32'd0; cbe_d <= 4'd0;
 		w500_n <= 16'd0; r500_n <= 16'd0; vbl_n <= 16'd0;
 		w500_last <= 8'd0; r500_last <= 8'd0; w500_be <= 4'd0; irq0_d <= 1'b0;
+		ip_pages <= 32'd0;
 	end else begin
 		cack_d  <= cpu_ack;
 		cwe_d   <= cpu_we;
@@ -4319,6 +4336,12 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 				r500_last <= crd_d[7:0];
 			end
 		end
+		// The page the CPU is executing in, latched for ever.
+		// Every cycle, not on the profiler's tick: the IP register is valid
+		// continuously, so ORing the bit in costs one decoder and cannot miss a
+		// page the way a 1-in-65536 sample can.
+		if (cpu_dbg_ip[31:17] == 15'd0)
+			ip_pages[cpu_dbg_ip[16:12]] <= 1'b1;
 		// AND WHETHER THE INTERRUPT THAT SHOULD MOVE IT ARRIVES AT ALL.
 		irq0_d <= cpu_irq[0];
 		if (cpu_irq[0] && !irq0_d && !(&vbl_n)) vbl_n <= vbl_n + 16'd1;
