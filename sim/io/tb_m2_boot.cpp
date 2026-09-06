@@ -80,6 +80,9 @@ static FILE *g_state_trace = nullptr;
 enum { IPRING = 40 };
 static uint32_t g_ipring[IPRING], g_ipring_last = 0xffffffffu;
 static unsigned g_ipring_w = 0; static uint32_t g_trap_addr = 0; static bool g_trapped = false;
+// M2_FINDVAL: log every bus transaction carrying this value, which is how a
+// pointer written into a table in RAM gets located.
+static uint32_t g_findval = 0;
 // M2_STATE_ADDR picks the word to watch; the game dispatches through function
 // pointers in work RAM, so which one matters changes as the chain is followed.
 static uint32_t g_state_addr = 0x0053e5f4u;
@@ -758,6 +761,8 @@ int main(int argc, char **argv) {
     if (!g_seq_every) g_seq_every = 1;
   }
   const bool real_mem = std::getenv("M2_REALMEM") != nullptr;
+  if (const char *fv = std::getenv("M2_FINDVAL"))
+    g_findval = uint32_t(std::strtoul(fv, nullptr, 0));
   if (const char *tp = std::getenv("M2_TRAP"))
     g_trap_addr = uint32_t(std::strtoul(tp, nullptr, 0));
   if (const char *sa = std::getenv("M2_STATE_ADDR"))
@@ -892,15 +897,17 @@ int main(int argc, char **argv) {
     // the game reaches it through a pointer and no call-graph walk can find the
     // gate. A read that RETURNS 0x44a8 names the table entry it was loaded
     // from, which is a thing the board can then be asked about.
-    if (g_state_trace && d->obs_bus_ack && !d->obs_bus_we &&
-        (d->obs_bus_rdata == 0x000044a8u || d->obs_bus_rdata == 0x0001786cu)) {
+    if (g_state_trace && d->obs_bus_ack && g_findval &&
+        ((!d->obs_bus_we && d->obs_bus_rdata == g_findval) ||
+         ( d->obs_bus_we && d->obs_bus_wdata == g_findval))) {
       static uint32_t last_seen = 0xffffffffu;
       if (d->obs_bus_addr != last_seen) {
         last_seen = d->obs_bus_addr;
-        std::fprintf(g_state_trace, "PTR frame=%llu insn=%llu ip=%08x  [%08x] -> %08x\n",
+        std::fprintf(g_state_trace, "PTR frame=%llu insn=%llu ip=%08x %s [%08x] = %08x\n",
                      (unsigned long long)g_frames_done,
                      (unsigned long long)d->dbg_acc, (unsigned)d->dbg_ip,
-                     (unsigned)d->obs_bus_addr, (unsigned)d->obs_bus_rdata);
+                     d->obs_bus_we ? "WR" : "RD", (unsigned)d->obs_bus_addr,
+                     (unsigned)(d->obs_bus_we ? d->obs_bus_wdata : d->obs_bus_rdata));
       }
     }
     cpu_prev = c;

@@ -3623,11 +3623,9 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	//   b_data  function writes REFUSED by the gate : function writes accepted
 	// THE FRAME FLAG AT 0x00500000, because mtx_push has read a static 110 since
 	// frame 134 and the geometry counters have nothing further to say.
-	//   b_addr: the task-list flag word at 0x00504000 as the walker READS it.
-	//   Bit 31 set means the 3D task is enabled and gets called every frame;
-	//   clear means the walker skips it, which is what the board is doing.
-	//   0xEEEEEEEE means the word was never touched at all.
-	.b_addr(r504_last),
+	//   b_addr: the pointer at 0x00501284 -- the 3D task's entry in the list.
+	//   0xEEEEEEEE means the registration code never even read it.
+	.b_addr(ptr_501284),
 	// clip_dropped read 0 on hardware and the refusal count is the number that
 	// now moves, so it takes that byte. Between them: accepted, emitted, refused
 	// before the arithmetic, and reaching the rasterizer.
@@ -3656,10 +3654,9 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// different buffer -- most likely one holding a geo_end, which would
 	// terminate it instantly every frame and is exactly what a climbing frame
 	// counter with nothing decoded looks like.
-	//   b_data: walker iterations : handler calls taken : geometry task entered :
-	//   writes to the first flag word. 1854 saturated with 1860 at zero is "the
-	//   list is walked and nothing in it is enabled".
-	.b_data({tw_1854, tw_1860, tw_5890, w504_n}),
+	//   b_data: walker iterations : calls taken : 3D handler entered : the
+	//   one-shot that registers it. 1c14 at zero is the whole answer.
+	.b_data({tw_1854, tw_1860, tw_5890, tw_1c14}),
 	.a_tag(8'h43), .b_tag(8'h48),          // 'C' copro in_pushed:out_pushed | TGP retires:pc
 	                                       // 'H' out_popped:hscr2 | io_addr:flags
 	                                       // 'H' scroll h:v for layers 0,1 | layers 2,3 -- low bytes
@@ -4274,28 +4271,32 @@ logic        irq0_d;
 // lost timing outright at -0.428. Four comparators and four counters cost a
 // fraction of it and answer the same question.
 
-// THE PER-FRAME TASK LIST, AND WHETHER THE 3D TASK IS ENABLED IN IT.
+// IS THE 3D TASK EVER REGISTERED, AND IS IT EVER DISPATCHED.
 //
-// Function 0x1838 -- one of the five calls the main loop makes every frame --
-// walks a linked list of tasks based at 0x00504000:
+// Function 0x1838, one of the five the main loop calls every frame, walks a
+// list of per-frame tasks:
 //
 //     0x1854  ld    r4, 0x000(g13)      ; this entry's flag word
-//     0x1858  bbc   31, r4, 0x1864      ; bit 31 CLEAR -> skip the handler
+//     0x1858  bbc   31, r4, 0x1864      ; bit 31 CLEAR -> skip
 //     0x185c  ld    r5, 0x00c(g13)      ; the handler pointer
 //     0x1860  callx r0, (r5)            ; -> 0x5890 -> 0x16e58 -> 0x17a04
-//     0x1880  ld    r7, 0x008(g13)      ; next entry
-//     0x1888  b     0x1854
 //
-// The board walks it -- 0x1854-0x1880 are among its hottest samples -- and
-// never takes the call, so bit 31 is clear on hardware. In the boot bench the
-// word is cleared at 0x16b0 and then set to 0x80000000 at 0x172c during init,
-// after which the bench reaches the 3D and pushes 31,667 matrices.
+// 45,260 board samples put 256 in 0x1854 and 32 in 0x1860, so the walker runs
+// AND dispatches: other tasks are enabled and called every frame. What it never
+// reaches is 0x5890 -- zero samples there and zero in every function below it.
 //
-// So: what does the walker READ there, was the enabling write ever made, and
-// what did it write. Those three separate "the write never happened" from "it
-// happened and did not stick", which are different faults with the same screen.
-logic [31:0] r504_last, w504_last;
-logic  [7:0] w504_n, tw_1854, tw_1860, tw_5890;
+// The 3D task is registered at 0x1bf8-0x1c14, which runs ONCE:
+//
+//     0x1bf8  ld   r3, [0x00501284]     ; pointer to the entry
+//     0x1c08  st   r5, 0x000(r3)        ; flag word, enable bit set
+//     0x1c14  st   r5, 0x00c(r3)        ; handler = 0x5890
+//
+// A one-shot cannot be seen by a 1-in-65536 sample -- that mistake was made
+// twice today, on 0x172c and again on 0x1c0c -- so it is COUNTED. tw_1c14 at
+// zero means the board never registers the task and the fault is upstream of
+// the list; non-zero with tw_5890 at zero means it registers and never runs.
+logic [31:0] ptr_501284;
+logic  [7:0] tw_1854, tw_1860, tw_5890, tw_1c14;
 always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
 		lc_cnt <= 32'hEEEE_EEEE; lc_base <= 32'hEEEE_EEEE;
@@ -4306,8 +4307,8 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		cwd_d <= 32'd0; cbe_d <= 4'd0;
 		w500_n <= 16'd0; r500_n <= 16'd0; vbl_n <= 16'd0;
 		w500_last <= 8'd0; r500_last <= 8'd0; w500_be <= 4'd0; irq0_d <= 1'b0;
-		r504_last <= 32'hEEEE_EEEE; w504_last <= 32'hEEEE_EEEE;
-		w504_n <= 8'd0; tw_1854 <= 8'd0; tw_1860 <= 8'd0; tw_5890 <= 8'd0;
+		ptr_501284 <= 32'hEEEE_EEEE;
+		tw_1854 <= 8'd0; tw_1860 <= 8'd0; tw_5890 <= 8'd0; tw_1c14 <= 8'd0;
 	end else begin
 		cack_d  <= cpu_ack;
 		cwe_d   <= cpu_we;
@@ -4369,29 +4370,11 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		// The IP register is valid continuously, so an equality test cannot miss
 		// an entry the way a 1-in-65536 sample can. Saturating, because "did it
 		// ever" is the question and a wrap would answer it wrongly.
-		// THE WALKER'S OWN DECISION, which is the thing worth counting.
-		//
-		//   0x1854  the loop head        -- saturates if the walker runs at all
-		//   0x1860  the callx            -- ZERO means no task in the list has
-		//                                   bit 31 set, so the list itself is wrong
-		//   0x5890  the geometry handler -- zero WITH 0x1860 saturated means
-		//                                   other tasks dispatch and this one does not
-		//
-		// Counting 0x172c was tried and is worthless: it runs 140 times during
-		// init, so a 1-in-65536 profiler sample would never see it either way.
+		// The walker's decision, and the one-shot that registers the 3D task.
 		if (cpu_dbg_ip == 32'h0000_1854 && !(&tw_1854)) tw_1854 <= tw_1854 + 8'd1;
 		if (cpu_dbg_ip == 32'h0000_1860 && !(&tw_1860)) tw_1860 <= tw_1860 + 8'd1;
 		if (cpu_dbg_ip == 32'h0000_5890 && !(&tw_5890)) tw_5890 <= tw_5890 + 8'd1;
-		// 0xEEEEEEEE is "never touched", which is a different fact from "read as
-		// zero" and the two would otherwise be indistinguishable.
-		if (cack_d && caddr_d == 32'h0050_4000) begin
-			if (cwe_d) begin
-				w504_last <= cwd_d;
-				if (!(&w504_n)) w504_n <= w504_n + 8'd1;
-			end else begin
-				r504_last <= crd_d;
-			end
-		end
+		if (cpu_dbg_ip == 32'h0000_1c14 && !(&tw_1c14)) tw_1c14 <= tw_1c14 + 8'd1;
 		// AND WHETHER THE INTERRUPT THAT SHOULD MOVE IT ARRIVES AT ALL.
 		irq0_d <= cpu_irq[0];
 		if (cpu_irq[0] && !irq0_d && !(&vbl_n)) vbl_n <= vbl_n + 16'd1;
