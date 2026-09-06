@@ -4965,8 +4965,14 @@ m2_diag #(.NWORDS(24)) u_diag
 	         {8'd0, sw_val},                            // 12 SWEEP fold of that region
 	         cpu_dbg_ldout,                             // 11 last data off the port
 	         cpu_dbg_laddr,                             // 10 last address asked for
-	         cpu_dbg_palwr,                             // 9  CPU writes to the PALETTE
-	         cpu_dbg_tramwr,                            // 8  CPU writes to TILE RAM
+	         // 9 THE PER-FRAME TASK WALKER, so this is readable from the screen
+	         // and not only over the UART -- a freshly loaded core has its UART
+	         // mode off, and the screen is the channel that always works.
+	         // Iterations of the loop head at 0x1854 : calls taken at 0x1860 :
+	         // entries into the 3D handler at 0x5890 : writes to the first flag
+	         // word. FF-00-00 is "the list is walked and nothing is enabled".
+	         {tw_1854, tw_1860, tw_5890, w504_n},       // 9  task walker
+	         r504_last,                                 // 8  task flag word as READ
 	         // 7 PRCB. 000000C0 IS ONLY THE BOOT VALUE. Daytona reinitializes
 	         // the PRCB through an IAC (i960_top line 1641, prcb_reg <= iac2),
 	         // after which this legitimately reads 0053F400 -- confirmed against
