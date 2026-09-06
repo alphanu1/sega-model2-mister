@@ -10204,3 +10204,55 @@ bar is an independent test and the colour identifies which one drew, so a partia
 result is diagnostic instead of ambiguous. The single rectangle produced "one
 side visible", which was consistent with three unrelated faults and chose between
 none of them.
+
+
+---
+
+**R184 - THE WHOLE PATH FROM DISPLAY LIST TO PIXELS RUNS ON HARDWARE. IT IS
+DRAWING GARBAGE BECAUSE A ZERO MATRIX PROJECTS TO NaN, AND THE SCATTER PATTERN
+IS THE PROOF.**
+
+*What the board shows.* Small grey rectangles, 1-2 pixels tall and up to ~40
+wide, scattered across sky and grass, appearing and accumulating. Photographed
+in three views.
+
+*They are ours.* Grey is `flat_col = 0xC0C0C0`; nothing else in this design
+draws it. Through the fill path that is
+`{col[23:19], col[15:10], col[7:3]}` = 0xC618 in RGB565 and 0xC6C6C6 back out at
+the mixer -- lighter than the blue sky, darker than the bright yellow-green
+grass, which is how it reads in both photographs.
+
+*Why they are scattered and tiny, exactly.* The UART says `mtx_DECODED = 0`, so
+m2_geo_xform's matrix is still all zeros. Then:
+
+    transform_point   -> (0, 0, 0)
+    apply_focus       -> (0, 0)
+    m2_geo_project    -> x / z = 0 / 0 = NaN
+    fp_to_int(NaN)    -> an arbitrary integer
+
+So every vertex lands at an arbitrary screen position with near-zero extent
+between the four of them. Small marks at random positions is not a symptom to be
+explained away -- it is the precise signature of a zero matrix reaching a
+projector that divides.
+
+*WHAT THIS ESTABLISHES, AND IT IS THE LARGEST RESULT SO FAR.* The complete chain
+runs on hardware: the walk, the engine, the transform, the focus, the
+projection, the clipper, the quad store, the z-sort, m2_raster_fill, the band
+buffers and the video mixer. Quads reach pixels, in the right colour,
+composited over the tilemap, every frame. **Nothing between the front door and
+the screen is unproven any more.** It is drawing garbage because its input is
+garbage, which is a different and much smaller problem than a renderer that does
+not run.
+
+*The blocker, now located to one statement.* `mtx_push` is STATIC at 110: the
+game issued 110 matrix writes during initialisation and none since. Per frame it
+emits a TEN-DWORD list -- `wp` reaches 0x28 -- containing window_data, an operand
+or two, and geo_end. MAME's buffer at the equivalent moment holds 1,936 non-zero
+words including 29 matrix writes and 138 object_data.
+
+That is R178 and R181 unchanged, and every measurement since has narrowed rather
+than moved it: the i960 writes, the front door accepts, the words are
+byte-correct against MAME, the pointers match simulation, the queue does not
+overflow, the walk runs thousands of frames, and the renderer draws whatever it
+is given. The one thing that differs between the bench and the board is what the
+GAME chooses to emit.
