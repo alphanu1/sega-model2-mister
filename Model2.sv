@@ -3623,11 +3623,10 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	//   b_data  function writes REFUSED by the gate : function writes accepted
 	// THE FRAME FLAG AT 0x00500000, because mtx_push has read a static 110 since
 	// frame 134 and the geometry counters have nothing further to say.
-	//   b_addr: one bit per 4 KB page of the low program ROM, set the first
-	//   time the CPU executes there. Bit 0x11 and bit 0x13 are the question:
-	//   the reference spends 8-12% of its time in those pages and every matrix
-	//   write past the first 110 comes from them.
-	.b_addr(ip_pages),
+	//   b_addr: the pointer the dispatcher at 0x0e70 fetched from 0x0053f688.
+	//   The bench reaches the 3D when this reads 0x0001786c. 0xEEEEEEEE means
+	//   the word was never read at all.
+	.b_addr(ptr_688),
 	// clip_dropped read 0 on hardware and the refusal count is the number that
 	// now moves, so it takes that byte. Between them: accepted, emitted, refused
 	// before the arithmetic, and reaching the rasterizer.
@@ -3656,9 +3655,10 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// different buffer -- most likely one holding a geo_end, which would
 	// terminate it instantly every frame and is exactly what a climbing frame
 	// counter with nothing decoded looks like.
-	//   b_data: vblank interrupts : mtx_push, which stays because it is the
-	//   headline number and this build must not give it up.
-	.b_data({vbl_n[15:0], geo_mtx_push[11:0], 4'd0}),
+	//   b_data: entries into the matrix builder : entries into 0x44a8 : how many
+	//   times the pointer word was read. Entries at zero with reads climbing is
+	//   "the dispatcher runs and chooses something else".
+	.b_data({tw_1786c, tw_44a8, r688_n}),
 	.a_tag(8'h43), .b_tag(8'h48),          // 'C' copro in_pushed:out_pushed | TGP retires:pc
 	                                       // 'H' out_popped:hscr2 | io_addr:flags
 	                                       // 'H' scroll h:v for layers 0,1 | layers 2,3 -- low bytes
@@ -4256,18 +4256,34 @@ logic  [7:0] w500_last, r500_last;
 logic  [3:0] w500_be;
 logic        irq0_d;
 
-// WHICH 4 KB PAGES THE CPU HAS EVER EXECUTED IN. One bit per page of the low
-// program ROM, bit i set the first time an instruction retires with
-// ip[16:12] == i, and never cleared.
+// DOES THE BOARD EVER ENTER THE CODE THAT BUILDS GEOMETRY.
 //
-// This is not a sample. The profiler's 1-in-65536 tick has put 5,656 board
-// samples in 0x12xx, 0x18xx, 0x1cxx and 0x22xxxx and NONE in 0x11xxx, 0x13xxx,
-// 0x14xxx or 0x15xxx-0x16xxx -- which is where the reference spends 8-12% of
-// its time and where every matrix write after the first 110 comes from. Zero
-// out of 5,656 is strong but it is still an absence in a sample, and this
-// question has now cost enough that it deserves a measurement that cannot be
-// wrong: a page either has been entered or it has not.
-logic [31:0] ip_pages;
+// Four entry points, each counted rather than sampled. The boot bench reaching
+// the 3D pushes 31,667 matrices from 0x17a04; the board's 5,656 profiler
+// samples contain NOTHING in 0x44a8-0x4c00, 0x1786c-0x17a00, 0x179b8 or
+// 0x1780c, which is that whole call chain. Zero out of 5,656 is strong, but it
+// is an absence in a sample and this question has cost enough to deserve an
+// answer that cannot be wrong.
+//
+// EQUALITY ON THE IP, NOT AN INDEXED ARRAY. The first version of this set one
+// bit of a 32-bit register per 4 KB page, indexed by ip[16:12]. That is the
+// same shape as the ipring read this file already refuses to wire up, and it
+// failed the same way: quartus_fit took a Segment Violation AT THE START of the
+// fit on three seeds out of four (1720, 1721, 1723), and the one that survived
+// lost timing outright at -0.428. Four comparators and four counters cost a
+// fraction of it and answer the same question.
+logic [7:0] tw_44a8, tw_1786c, tw_179b8, tw_1780c;
+
+// THE FUNCTION POINTER THE DISPATCHER FETCHES, AND WHAT IT FETCHES IT WITH.
+//
+// 0x44a8 and 0x1786c have no direct callers in the ROM: the game reaches the
+// geometry code through a pointer, which is why no call-graph walk finds the
+// gate. Watching the boot bench for a bus read that RETURNS one of those
+// addresses named the table entry -- at frame 271 the code at 0x0e70 loads
+// 0x1786c from work RAM at 0x0053f688 and calls it. The board executes 0x0e70,
+// so its dispatcher runs; the question is only what it reads there.
+logic [31:0] ptr_688;
+logic [15:0] r688_n;
 always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
 		lc_cnt <= 32'hEEEE_EEEE; lc_base <= 32'hEEEE_EEEE;
@@ -4278,7 +4294,8 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		cwd_d <= 32'd0; cbe_d <= 4'd0;
 		w500_n <= 16'd0; r500_n <= 16'd0; vbl_n <= 16'd0;
 		w500_last <= 8'd0; r500_last <= 8'd0; w500_be <= 4'd0; irq0_d <= 1'b0;
-		ip_pages <= 32'd0;
+		tw_44a8 <= 8'd0; tw_1786c <= 8'd0; tw_179b8 <= 8'd0; tw_1780c <= 8'd0;
+		ptr_688 <= 32'hEEEE_EEEE; r688_n <= 16'd0;
 	end else begin
 		cack_d  <= cpu_ack;
 		cwe_d   <= cpu_we;
@@ -4337,11 +4354,19 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 			end
 		end
 		// The page the CPU is executing in, latched for ever.
-		// Every cycle, not on the profiler's tick: the IP register is valid
-		// continuously, so ORing the bit in costs one decoder and cannot miss a
-		// page the way a 1-in-65536 sample can.
-		if (cpu_dbg_ip[31:17] == 15'd0)
-			ip_pages[cpu_dbg_ip[16:12]] <= 1'b1;
+		// The IP register is valid continuously, so an equality test cannot miss
+		// an entry the way a 1-in-65536 sample can. Saturating, because "did it
+		// ever" is the question and a wrap would answer it wrongly.
+		if (cpu_dbg_ip == 32'h0000_44a8  && !(&tw_44a8))  tw_44a8  <= tw_44a8  + 8'd1;
+		if (cpu_dbg_ip == 32'h0001_786c && !(&tw_1786c)) tw_1786c <= tw_1786c + 8'd1;
+		if (cpu_dbg_ip == 32'h0001_79b8 && !(&tw_179b8)) tw_179b8 <= tw_179b8 + 8'd1;
+		if (cpu_dbg_ip == 32'h0001_780c && !(&tw_1780c)) tw_1780c <= tw_1780c + 8'd1;
+		// 0xEEEEEEEE is "never read", which is a different fact from "read as
+		// zero" and the two would otherwise be indistinguishable.
+		if (cack_d && !cwe_d && caddr_d == 32'h0053_f688) begin
+			ptr_688 <= crd_d;
+			if (!(&r688_n)) r688_n <= r688_n + 16'd1;
+		end
 		// AND WHETHER THE INTERRUPT THAT SHOULD MOVE IT ARRIVES AT ALL.
 		irq0_d <= cpu_irq[0];
 		if (cpu_irq[0] && !irq0_d && !(&vbl_n)) vbl_n <= vbl_n + 16'd1;

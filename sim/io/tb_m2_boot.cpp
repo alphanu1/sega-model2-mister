@@ -77,6 +77,9 @@ static int g_px = 0, g_py = 0, g_hb_p = 0, g_vb_p = 0;
 static uint64_t g_nonblack = 0, g_frames_done = 0;
 static FILE *g_copro_trace = nullptr;
 static FILE *g_state_trace = nullptr;
+// M2_STATE_ADDR picks the word to watch; the game dispatches through function
+// pointers in work RAM, so which one matters changes as the chain is followed.
+static uint32_t g_state_addr = 0x0053e5f4u;
 // The instruction-pointer histogram is sampled inside geo_tick, which is
 // defined above main's locals, so these live at file scope.
 static std::map<uint32_t,uint64_t> ip_hist;
@@ -752,6 +755,8 @@ int main(int argc, char **argv) {
     if (!g_seq_every) g_seq_every = 1;
   }
   const bool real_mem = std::getenv("M2_REALMEM") != nullptr;
+  if (const char *sa = std::getenv("M2_STATE_ADDR"))
+    g_state_addr = uint32_t(std::strtoul(sa, nullptr, 0)) & ~3u;
   if (const char *st2 = std::getenv("M2_STATE_TRACE")) {
     g_state_trace = std::fopen(st2, "w");
     if (g_state_trace) { std::setvbuf(g_state_trace, nullptr, _IOLBF, 0);
@@ -851,11 +856,27 @@ int main(int argc, char **argv) {
     // that byte, with what, and when -- which the board cannot be asked without
     // a build.
     if (g_state_trace && d->obs_bus_ack && d->obs_bus_we &&
-        (d->obs_bus_addr & ~3u) == 0x0053e5f4u) {
+        (d->obs_bus_addr & ~3u) == g_state_addr) {
       std::fprintf(g_state_trace, "W frame=%llu insn=%llu ip=%08x data=%08x be=%x\n",
                    (unsigned long long)g_frames_done,
                    (unsigned long long)d->dbg_acc, (unsigned)d->dbg_ip,
                    (unsigned)d->obs_bus_wdata, (unsigned)d->obs_bus_be);
+    }
+    // WHERE THE DISPATCH POINTER COMES FROM. 0x44a8 -- the function that calls
+    // the matrix builder eight times -- has no direct callers in the ROM, so
+    // the game reaches it through a pointer and no call-graph walk can find the
+    // gate. A read that RETURNS 0x44a8 names the table entry it was loaded
+    // from, which is a thing the board can then be asked about.
+    if (g_state_trace && d->obs_bus_ack && !d->obs_bus_we &&
+        (d->obs_bus_rdata == 0x000044a8u || d->obs_bus_rdata == 0x0001786cu)) {
+      static uint32_t last_seen = 0xffffffffu;
+      if (d->obs_bus_addr != last_seen) {
+        last_seen = d->obs_bus_addr;
+        std::fprintf(g_state_trace, "PTR frame=%llu insn=%llu ip=%08x  [%08x] -> %08x\n",
+                     (unsigned long long)g_frames_done,
+                     (unsigned long long)d->dbg_acc, (unsigned)d->dbg_ip,
+                     (unsigned)d->obs_bus_addr, (unsigned)d->obs_bus_rdata);
+      }
     }
     cpu_prev = c;
     mem_prev = m; vid_prev = v;
