@@ -2234,6 +2234,8 @@ int main(int argc, char **argv) {
                 WST[d->geo_state & 15]);
     std::printf("    geo rp=%08x wp=%08x\n", d->geo_rp_o, d->geo_wp_o);
     std::printf("    matrix writes=%u  focal writes=%u\n", d->geo_mtx_n, d->geo_foc_n);
+    std::printf("    PUSHED: %u matrix, %u object   last matrix pushed from PC %08x\n",
+                d->geo_mtx_pushes, d->geo_obj_pushes, d->geo_mtx_pc);
     std::printf("    last object: oba=%08x obc=%08x  -> %s\n",
                 d->geo_oba_last, d->geo_obc_last,
                 (d->geo_oba_last & 0x01000000u) ? "fast polygon RAM"

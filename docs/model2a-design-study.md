@@ -10256,3 +10256,61 @@ byte-correct against MAME, the pointers match simulation, the queue does not
 overflow, the walk runs thousands of frames, and the renderer draws whatever it
 is given. The one thing that differs between the bench and the board is what the
 GAME chooses to emit.
+
+
+---
+
+**R185 - THE BOARD NEVER EXECUTES THE CODE THAT EMITS GEOMETRY. THE FAULT IS
+UPSTREAM OF THE GEOMETRIZER ENTIRELY, AND THE PC THAT DOES THE EMITTING IS
+0x00017A04.**
+
+*The measurement.* The boot bench now captures `dbg_ip` at the instant a matrix
+write is pushed through the front door. In simulation at 30M instructions:
+
+    PUSHED: 15,993 matrix, 30,898 object
+    last matrix pushed from PC 00017a04
+    matrix writes decoded = 407, focal = 32
+    polygon_data: 33 commands, 10,770 dwords written
+
+*Against the board, over 88,598 captured cpu_ip samples:*
+
+    samples at 0x17900-0x17b00 (the emitting PC):    0
+    samples anywhere in 0x17000-0x18000:            65   (0.07%)
+    pushed on the board:                           110 matrix, STATIC
+
+**Zero.** The board does not reach the code at all. This is not "it executes and
+the writes fail" -- every stage downstream of that had already been eliminated by
+measurement (R177 the words, R178 the counters, R179 the pointers, R184 the
+renderer). It is that the game never calls the routine.
+
+*What the idle poll is, and what it is not.* The board's largest single PC is the
+two-instruction loop this study documented long ago:
+
+    000012B0: ldob    0x500000,r3
+    000012B8: cmpibe  r3,g0,0x12b0
+
+0x500000 is `map(0x00500000, 0x005fffff).ram().share("workram")` -- plain work
+RAM, not a register. It is the game's own idle flag, set by an interrupt handler,
+and the loop is the frame-wait. It was 69.2% of the frame when first measured and
+is now **6.8%**, so the machine is doing more work than it was, not less. The
+poll is not the blocker and should not be chased again.
+
+*Where this leaves it.* Everything from the front door to the pixels is proven on
+hardware (R184), and the game emits nothing to put through it. The two sides
+differ in what the i960 CHOOSES to execute, so the candidates are the things that
+differ between bench and board before that choice is made:
+
+  - **Backup RAM.** The bench starts with a fresh array; the board has persistent
+    saved settings from previous runs. Different settings, different attract
+    path. This is the first thing to test because it is cheap: clear the board's
+    backup RAM and see whether the PC distribution moves.
+  - **The I/O board and DIP switches**, which the bench models and the board has
+    for real.
+  - **Self-test outcome.** A failed check taking a different branch would look
+    exactly like this.
+
+*Method note, and it is the lesson of the whole day.* Three hypotheses were spent
+guessing at this before the PC was captured, and all three were wrong. The
+capture cost one build and answered it outright. Every question today that was
+settled by adding a counter was settled in one build; every question approached
+by hypothesis cost several and was still wrong at the end.

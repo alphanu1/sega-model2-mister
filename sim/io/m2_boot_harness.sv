@@ -147,6 +147,15 @@ module m2_boot_harness #(
   output logic        eng_q_valid,
   output logic signed [15:0] eng_q_x0, eng_q_y0, eng_q_x1, eng_q_y1,
   output logic signed [15:0] eng_q_x2, eng_q_y2, eng_q_x3, eng_q_y3,
+  // WHICH INSTRUCTION EMITS THE GEOMETRY. The board and the bench disagree about
+  // whether the game sends matrices at all (R178, R181, R184), and every
+  // measurement downstream of the front door has been eliminated. What is left
+  // is the i960's own execution, so capture the PC at the moment a matrix write
+  // is pushed -- that names the code that does it, and the board's cpu_ip
+  // histogram says whether it ever gets there.
+  output logic [31:0] geo_mtx_pc,
+  output logic [15:0] geo_mtx_pushes,
+  output logic [15:0] geo_obj_pushes,
   output logic [15:0] geo_mtx_n, geo_foc_n,
   output logic [31:0] geo_oba_last, geo_obc_last,
   output logic [15:0] geo_frames, geo_objs, geo_ops, geo_pdcmds, geo_pdwords,
@@ -723,6 +732,21 @@ module m2_boot_harness #(
   logic vb_d, vb_dd;
   always_ff @(posedge clk_mem) begin vb_d <= vid_vb; vb_dd <= vb_d; end
   wire geo_frame_start = vb_d && !vb_dd;
+
+  // The reconstructed opcode of whatever is being pushed this cycle.
+  wire [4:0] geo_push_op = geo_push_word[27:23];
+  always_ff @(posedge clk_mem or negedge rst_n) begin
+    if (!rst_n) begin
+      geo_mtx_pc <= 32'd0; geo_mtx_pushes <= 16'd0; geo_obj_pushes <= 16'd0;
+    end else if (geo_wr_push) begin
+      if (geo_push_op[3:0] == 4'hb) begin
+        geo_mtx_pc     <= dbg_ip;          // the instruction that wrote it
+        if (!(&geo_mtx_pushes)) geo_mtx_pushes <= geo_mtx_pushes + 16'd1;
+      end
+      if ((geo_push_op[3:0] == 4'h1) && !(&geo_obj_pushes))
+        geo_obj_pushes <= geo_obj_pushes + 16'd1;
+    end
+  end
 
   m2_geo #(.AW(AW), .DEPTH(128)) u_geo (
     .clk(clk_mem), .rst_n(rst_n),
