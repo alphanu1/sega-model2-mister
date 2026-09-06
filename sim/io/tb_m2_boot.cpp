@@ -754,7 +754,8 @@ int main(int argc, char **argv) {
   if (const char *ct = std::getenv("M2_COPRO_TRACE")) {
     g_copro_trace = std::fopen(ct, "w");
     if (!g_copro_trace) std::printf("  COPRO TRACE: cannot open %s\n", ct);
-    else std::printf("  COPRO TRACE -> %s\n", ct);
+    else { std::setvbuf(g_copro_trace, nullptr, _IOLBF, 0);
+           std::printf("  COPRO TRACE -> %s\n", ct); }
   }
   {
     unsigned c = 0xff;

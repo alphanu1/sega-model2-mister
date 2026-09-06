@@ -10416,9 +10416,12 @@ all -- it was skipped on every run for want of an image, and said so.
 
 Known now, and how it was established:
 
-1.  **The microcode is a verbatim block in the game program ROM**, at offset
+1.  **The microcode is a verbatim block in the game's i960 DATA ROM**, at offset
     `0x60020` of the interleaved `epr-16534a.6` + `epr-16535a.7` image
-    (`ROM_LOAD32_WORD`), 2024 words long. Established by dumping `:copro_tgp`'s
+    (`ROM_LOAD32_WORD`), 2024 words long. Not the i960 *program* ROM, which is
+    `epr-16530a.12` + `epr-16531a.13` at `0x0000000` -- an error made once here
+    and caught by disassembling `0x12b0` out of the wrong image and getting
+    floating-point constants instead of instructions. Established by dumping `:copro_tgp`'s
     program space out of the reference after boot and searching the ROM image
     for it: the whole 8096-byte block matches. `tools/extract_tgp_microcode.py`
     pulls it out, and its output is byte-identical to the reference's program
@@ -10462,3 +10465,65 @@ are directly diffable: same upload, same function-port commands, same FIFO
 pushes -- and the first output word that differs is the coprocessor's
 arithmetic, which nothing has ever checked against the reference. Through the
 first command after boot -- `F 00880080 00000001` -- they already agree.
+
+**R188 - THE COPROCESSOR IS CLEARED. SIMULATION REACHES THE 3D AND THE BOARD
+DOES NOT, SO THE FAULT IS HARDWARE-ONLY AND THE BOARD IS WAITING ON A FRAME FLAG
+THAT DOES NOT MOVE.**
+
+Believed before: the coprocessor's arithmetic was the last untested stage and the
+likeliest cause of the game emitting 110 matrix writes and stopping. R167 proved
+it runs; nothing had ever proved what it computes.
+
+*The coprocessor computes correctly.* Its outputs were captured from the
+reference with a Lua tap on the four copro windows and from the boot bench with
+`M2_COPRO_TRACE`, and compared. The command mix matches by rank -- `0x27`,
+`0x28`/`0x02`, `0x25`, `0x24`, `0x01` lead both -- and the distinctive output
+constants are the reference's own: `3ea8f5c3`, `43148d8e`, `430f4545`,
+`43021a1a`, `41ae0e0f`, `3fac38e4` all appear in ours. Both coprocessors also
+park in the same place when idle, the microcode's FIFO wait: the reference at pc
+`004c` for 194 of 250 samples, ours at `030b`, which is `goto L_04c` -- our
+debug PC reports the previously retired instruction, and `L_04c` is `b = rf1`.
+
+*Simulation reaches the 3D.* Run to 40M instructions the boot bench emits **755
+matrix writes and 1,084 objects** and produces 56.6M coprocessor events out to
+frame 898. Nothing in the RTL prevents the 3D from running.
+
+*The board does not, and it is not hung.* Its UART counters have read a static
+`mtx_push=110, last frame=134, fn_reject=1008` across every sample, while the
+profiler puts 90% of its samples in a two-instruction spin at `0x12b0`:
+
+        0x12a8  ldob   r16, [0x00500000]     ; snapshot the frame flag
+        0x12b0  ldob   r3,  [0x00500000]
+        0x12b8  cmpibe r3, r16, 0x12b0       ; loop WHILE it is unchanged
+
+That routine has exactly one caller, `0x128c`, and the caller is the main game
+loop: `0x1240` .. `call 0x17c38, 0x1758, 0x1838, 0x17c50, 0x1abbc, 0x12a8` ..
+`b 0x1240`. So the machine is alive and looping; it is waiting for the byte at
+`0x00500000` to change. In the reference that byte counts `00,01,02,...,2b`.
+
+*A difference in which wait, not merely how long.* The reference never sits at
+`0x12b0` in either phase. Pre-3D (frames 1-159) it spends 65% at `0x12f0`, a
+second frame-wait that tests a BIT of the same byte and has seven callers; in the
+3D phase it spreads across `0x11450-0x11538` with no dominant spin. The 3D
+itself starts at frame 162 -- before that the reference emits **two** matrix
+writes in total, so no conclusion drawn from board behaviour before frame 162
+means anything, and "matrix writes stop at frame 134" describes a window in
+which the reference emits nothing either.
+
+*What is measured next, and why it is one build.* Three causes remain and a
+counter separates them, so none of them is worth arguing about:
+
+  * nothing writes the flag -- the interrupt path is the fault
+  * it is written and reads back different -- the memory path is the fault
+  * it is written and reads back the same -- the flag moves and the main loop is
+    waiting on something else
+
+The build carries writes to `0x00500000`, the last value written, the last value
+read, the write's byte enables, and the vblank interrupt count, in place of the
+geometry counters that have had nothing to say since frame 134. `mtx_push` stays
+in the record because it is the headline number.
+
+*Recorded as wrong.* `epr-16534a.6`/`16535a.7` were called the i960 *program*
+ROM in R187. They are the i960 *data* ROM; the program is
+`epr-16530a.12`/`16531a.13`. Caught by disassembling `0x12b0` from the wrong
+image and getting floating-point constants where instructions had to be.

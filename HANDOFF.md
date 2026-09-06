@@ -31,11 +31,37 @@ Three things changed today that make that checkable:
   pushes -- the first output word that differs is the arithmetic. Through the
   first command after boot, `F 00880080 00000001`, the two already agree.
 
-**Next:** run the boot bench far enough to reach the reference's first real
-command burst (`F 00880250 00002525` at frame 53, repeating every other frame)
-and diff the FIFO-out values. If the inputs match and an output differs, the
-coprocessor is the fault. If our bench never issues those commands, the
-divergence is upstream in the i960 and the copro is cleared.
+## THE COPROCESSOR IS CLEARED; THE FAULT IS HARDWARE-ONLY (R188)
+
+That measurement was made and it clears the coprocessor:
+
+* **The arithmetic matches the reference.** Same command mix by rank, and the
+  distinctive output constants are the reference's own -- `3ea8f5c3`,
+  `43148d8e`, `430f4545`, `43021a1a`, `41ae0e0f`, `3fac38e4` appear in both.
+  Both coprocessors idle in the same microcode FIFO wait.
+* **Simulation reaches the 3D.** 40M instructions in the boot bench: **755
+  matrix writes, 1,084 objects**, 56.6M coprocessor events, out to frame 898.
+* **The board does not, and is not hung.** `mtx_push=110, last frame=134` on
+  every UART sample, while 90% of profiler samples sit in the main loop's frame
+  wait at `0x12b0` -- `ldob r3,[0x500000]` / `cmpibe r3,r16,-8`, which spins
+  while that byte is UNCHANGED. The main loop is `0x1240..0x1290` and it is
+  running normally; it is waiting for the flag to move.
+* **Frame 162 is when the 3D starts** in the reference. Before it the reference
+  emits two matrix writes in total, so nothing concluded from board behaviour
+  before frame 162 means anything.
+
+**Next:** the build now on the board carries, in place of the geometry counters,
+writes to `0x00500000`, the last value written, the last value read, the write's
+byte enables and the vblank interrupt count. Those separate the three remaining
+causes outright: nothing writes the flag (interrupt path), it reads back
+different (memory path), or it reads back the same (the loop is waiting on
+something else). Read it with:
+
+    ssh root@<board> 'timeout 15 cat /dev/ttyS1'
+
+`H` records are `{w500_n[11:0], w500_last, r500_last, w500_be}` and
+`{vbl_n[15:0], mtx_push[11:0], 0}`; `C` records stay the i960 IP and the copro
+state.
 
 
 ## WHERE THE MACHINE IS

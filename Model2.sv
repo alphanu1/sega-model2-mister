@@ -3621,7 +3621,10 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	//                                 being corrupted by loss
 	//   b_addr  matrix pushes : the frame the LAST one landed on : decoded
 	//   b_data  function writes REFUSED by the gate : function writes accepted
-	.b_addr({geo_mtx_push[11:0], geo_mtx_frame[11:0], geo_mtx_n[7:0]}),
+	// THE FRAME FLAG AT 0x00500000, because mtx_push has read a static 110 since
+	// frame 134 and the geometry counters have nothing further to say.
+	//   b_addr: writes to 0x500000 : last written : last read : write enables
+	.b_addr({w500_n[11:0], w500_last, r500_last, w500_be}),
 	// clip_dropped read 0 on hardware and the refusal count is the number that
 	// now moves, so it takes that byte. Between them: accepted, emitted, refused
 	// before the arithmetic, and reaching the rasterizer.
@@ -3650,7 +3653,9 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// different buffer -- most likely one holding a geo_end, which would
 	// terminate it instantly every frame and is exactly what a climbing frame
 	// counter with nothing decoded looks like.
-	.b_data({geo_fn_reject[15:0], geo_fn_pushes[15:0]}),
+	//   b_data: vblank interrupts : mtx_push, which stays because it is the
+	//   headline number and this build must not give it up.
+	.b_data({vbl_n[15:0], geo_mtx_push[11:0], 4'd0}),
 	.a_tag(8'h43), .b_tag(8'h48),          // 'C' copro in_pushed:out_pushed | TGP retires:pc
 	                                       // 'H' out_popped:hscr2 | io_addr:flags
 	                                       // 'H' scroll h:v for layers 0,1 | layers 2,3 -- low bytes
@@ -4228,6 +4233,25 @@ logic  [1:0] sdwb_d;
 logic        cack_d, cwe_d;
 logic [31:0] caddr_d, crd_d, cwd_d;
 logic  [3:0] cbe_d;
+
+// THE MAIN LOOP'S FRAME FLAG, AT 0x00500000.
+//
+// The board spends 90% of its profiler samples in a two-instruction spin at
+// 0x12b0 -- `ldob r3,[0x500000]` then `cmpibe r3,g0,-8`, which loops WHILE the
+// byte is unchanged. It is the frame wait of the main loop at 0x1240-0x1290,
+// so the machine is not hung; it is waiting for that byte to move. In the
+// reference the byte counts 00,01,02,...,2b. If ours never moves, the main loop
+// never advances a frame and mtx_push stays at 110 for ever, which is exactly
+// what the board reports.
+//
+// Three facts separate the three possible causes, and no argument does:
+//   writes = 0            -- nothing updates it; the interrupt path is the fault
+//   writes climb, r != w  -- it is written and read back wrong; the memory is
+//   writes climb, r == w  -- the flag moves and the game is waiting on something else
+logic [15:0] w500_n, r500_n, vbl_n;
+logic  [7:0] w500_last, r500_last;
+logic  [3:0] w500_be;
+logic        irq0_d;
 always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
 		lc_cnt <= 32'hEEEE_EEEE; lc_base <= 32'hEEEE_EEEE;
@@ -4236,6 +4260,8 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		sdwd_d <= 16'd0; sdwb_d <= 2'd0;
 		cack_d <= 1'b0; cwe_d <= 1'b0; caddr_d <= 32'd0; crd_d <= 32'd0;
 		cwd_d <= 32'd0; cbe_d <= 4'd0;
+		w500_n <= 16'd0; r500_n <= 16'd0; vbl_n <= 16'd0;
+		w500_last <= 8'd0; r500_last <= 8'd0; w500_be <= 4'd0; irq0_d <= 1'b0;
 	end else begin
 		cack_d  <= cpu_ack;
 		cwe_d   <= cpu_we;
@@ -4279,6 +4305,23 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		if (sdw_d && sdwa_d == SDR_AW'(GAME_WORK + (32'h0010_84 >> 1))) begin
 			sd_seen <= {sdwb_d, 6'd0, sdwd_d[7:0], sdwd_d[15:8]};
 		end
+
+		// The frame flag itself. Counted rather than sampled: the spin reads it
+		// thousands of times a second and a sample would show the read whatever
+		// the write did.
+		if (cack_d && caddr_d == 32'h0050_0000) begin
+			if (cwe_d) begin
+				if (!(&w500_n)) w500_n <= w500_n + 16'd1;
+				w500_last <= cwd_d[7:0];
+				w500_be   <= cbe_d;
+			end else begin
+				if (!(&r500_n)) r500_n <= r500_n + 16'd1;
+				r500_last <= crd_d[7:0];
+			end
+		end
+		// AND WHETHER THE INTERRUPT THAT SHOULD MOVE IT ARRIVES AT ALL.
+		irq0_d <= cpu_irq[0];
+		if (cpu_irq[0] && !irq0_d && !(&vbl_n)) vbl_n <= vbl_n + 16'd1;
 	end
 end
 logic [14:0] tra_d1;

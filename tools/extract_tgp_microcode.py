@@ -2,9 +2,11 @@
 """Pull Daytona's TGP microcode out of the game program ROM.
 
 The coprocessor has no program ROM of its own. Its 2024-word microcode is
-carried inside the i960 program (epr-16534a.6 + epr-16535a.7, interleaved as
-ROM_LOAD32_WORD) and pushed to the copro at boot through the FIFO port at
-0x00884000 while copro_ctl1 bit 31 is set. So the core needs nothing on the SD
+carried inside the i960 DATA ROM -- epr-16534a.6 + epr-16535a.7, interleaved as
+ROM_LOAD32_WORD, which the MRA maps at 0x0040000 as "i960 data" and NOT the i960
+program (that is epr-16530a.12 + epr-16531a.13 at 0x0000000) -- and pushed to
+the copro at boot through the FIFO port at 0x00884000 while copro_ctl1 bit 31 is
+set. So the core needs nothing on the SD
 card beyond the ROM the MRA already builds -- this script exists only to give
 the simulation bench a copy to run against.
 
@@ -15,7 +17,7 @@ the repository.
 """
 import sys, zipfile
 
-# Offset of the microcode inside the interleaved i960 image, and its length.
+# Offset of the microcode inside the interleaved data image, and its length.
 # Established by dumping :copro_tgp's program space out of MAME after boot and
 # searching the ROM for it -- the whole 2024-word block matches verbatim.
 MICROCODE_OFF   = 0x60020
@@ -33,7 +35,7 @@ def main(zip_path, out_path):
         img += lo[i:i+2] + hi[i:i+2]
     blob = bytes(img[MICROCODE_OFF:MICROCODE_OFF + MICROCODE_WORDS * 4])
     if len(blob) != MICROCODE_WORDS * 4:
-        raise SystemExit('program image too short for the microcode')
+        raise SystemExit('data image too short for the microcode')
     # The first word is the reset vector, an unconditional branch. If this
     # fails the offset is wrong for this ROM revision rather than silently
     # producing garbage.
