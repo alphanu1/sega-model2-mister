@@ -3656,10 +3656,10 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// different buffer -- most likely one holding a geo_end, which would
 	// terminate it instantly every frame and is exactly what a climbing frame
 	// counter with nothing decoded looks like.
-	//   b_data: did 0x172c run (it makes the enabling write) : did the handler
-	//   at 0x5890 ever run : how many writes landed on the flag word : the top
-	//   byte of the last value written, which is where bit 31 lives.
-	.b_data({tw_172c, tw_5890, w504_n, w504_last[31:24]}),
+	//   b_data: walker iterations : handler calls taken : geometry task entered :
+	//   writes to the first flag word. 1854 saturated with 1860 at zero is "the
+	//   list is walked and nothing in it is enabled".
+	.b_data({tw_1854, tw_1860, tw_5890, w504_n}),
 	.a_tag(8'h43), .b_tag(8'h48),          // 'C' copro in_pushed:out_pushed | TGP retires:pc
 	                                       // 'H' out_popped:hscr2 | io_addr:flags
 	                                       // 'H' scroll h:v for layers 0,1 | layers 2,3 -- low bytes
@@ -4295,7 +4295,7 @@ logic        irq0_d;
 // what did it write. Those three separate "the write never happened" from "it
 // happened and did not stick", which are different faults with the same screen.
 logic [31:0] r504_last, w504_last;
-logic  [7:0] w504_n, tw_172c, tw_5890;
+logic  [7:0] w504_n, tw_1854, tw_1860, tw_5890;
 always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
 		lc_cnt <= 32'hEEEE_EEEE; lc_base <= 32'hEEEE_EEEE;
@@ -4307,7 +4307,7 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		w500_n <= 16'd0; r500_n <= 16'd0; vbl_n <= 16'd0;
 		w500_last <= 8'd0; r500_last <= 8'd0; w500_be <= 4'd0; irq0_d <= 1'b0;
 		r504_last <= 32'hEEEE_EEEE; w504_last <= 32'hEEEE_EEEE;
-		w504_n <= 8'd0; tw_172c <= 8'd0; tw_5890 <= 8'd0;
+		w504_n <= 8'd0; tw_1854 <= 8'd0; tw_1860 <= 8'd0; tw_5890 <= 8'd0;
 	end else begin
 		cack_d  <= cpu_ack;
 		cwe_d   <= cpu_we;
@@ -4369,10 +4369,18 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		// The IP register is valid continuously, so an equality test cannot miss
 		// an entry the way a 1-in-65536 sample can. Saturating, because "did it
 		// ever" is the question and a wrap would answer it wrongly.
-		// 0x172c makes the enabling write; 0x5890 is the handler it enables.
-		// 0x44a8 was tried here and is dead code -- the boot bench reaching the
-		// 3D executes it exactly zero times.
-		if (cpu_dbg_ip == 32'h0000_172c && !(&tw_172c)) tw_172c <= tw_172c + 8'd1;
+		// THE WALKER'S OWN DECISION, which is the thing worth counting.
+		//
+		//   0x1854  the loop head        -- saturates if the walker runs at all
+		//   0x1860  the callx            -- ZERO means no task in the list has
+		//                                   bit 31 set, so the list itself is wrong
+		//   0x5890  the geometry handler -- zero WITH 0x1860 saturated means
+		//                                   other tasks dispatch and this one does not
+		//
+		// Counting 0x172c was tried and is worthless: it runs 140 times during
+		// init, so a 1-in-65536 profiler sample would never see it either way.
+		if (cpu_dbg_ip == 32'h0000_1854 && !(&tw_1854)) tw_1854 <= tw_1854 + 8'd1;
+		if (cpu_dbg_ip == 32'h0000_1860 && !(&tw_1860)) tw_1860 <= tw_1860 + 8'd1;
 		if (cpu_dbg_ip == 32'h0000_5890 && !(&tw_5890)) tw_5890 <= tw_5890 + 8'd1;
 		// 0xEEEEEEEE is "never touched", which is a different fact from "read as
 		// zero" and the two would otherwise be indistinguishable.
