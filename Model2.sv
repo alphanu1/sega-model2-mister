@@ -2281,24 +2281,52 @@ wire geo_wr_push  = cpu_io_sel && cpu_io_we &&
 //   mtx_push > 0 and mtx_n = 0  -> the walk is not decoding what arrives
 //   mtx_push = 0                -> the game never sends a matrix, and the fault
 //                                  is upstream of the geometrizer entirely
+// TWO DIRECT COUNTS, BECAUSE SAMPLING CANNOT ANSWER THIS.
+//
+// The board pushes 110 matrix writes and stops; the bench pushes 15,993 from
+// the same ROMs. Either the game stops running its 3D code, or it keeps running
+// it and the push path discards those writes. A profiler cannot separate those
+// -- prof_div is 16 bits, 12.7 samples per frame, which is what invalidated the
+// previous attempt (R185 retraction).
+//
+// geo_mtx_frame answers WHEN it stopped: the walk's frame counter latched at the
+// moment the last matrix write was pushed. Frame 3 means initialisation only;
+// frame 900 means something changed mid-attract.
+//
+// geo_fn_reject answers WHETHER WE ARE THROWING THEM AWAY. The function port is
+// the one place in this design that deliberately discards a CPU write:
+// geo_wr_push requires bit 31 set OR a 16-byte-aligned address, mirroring
+// geo_w. Nothing has ever counted what falls in that bin, and a game writing
+// matrices through a path we reject would look exactly like a game that stopped
+// sending them.
 logic [31:0] geo_last_push;
 logic [15:0] geo_fn_pushes;
 logic [15:0] geo_mtx_push, geo_obj_push;
+logic [15:0] geo_mtx_frame, geo_fn_reject;
 wire  [4:0]  geo_push_op = geo_push_word[27:23];
+// A write to the function window that the push gate refuses.
+wire geo_fn_dropped = cpu_io_sel && cpu_io_we && geo_fn_win
+                   && !(geo_hi || (geo_fa[3:0] == 4'd0));
 always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
 		geo_last_push <= 32'd0; geo_fn_pushes <= 16'd0;
 		geo_mtx_push <= 16'd0; geo_obj_push <= 16'd0;
-	end else if (geo_wr_push) begin
+		geo_mtx_frame <= 16'd0; geo_fn_reject <= 16'd0;
+	end else begin
+	  if (geo_fn_dropped && !(&geo_fn_reject)) geo_fn_reject <= geo_fn_reject + 16'd1;
+	  if (geo_wr_push) begin
 		if (geo_fn_win) begin
 			geo_last_push <= geo_push_word;
 			if (!(&geo_fn_pushes)) geo_fn_pushes <= geo_fn_pushes + 16'd1;
 		end
 		// Both ports: geo_prg_w pushes verbatim and can carry commands too.
-		if ((geo_push_op[3:0] == 4'hb) && !(&geo_mtx_push))
-			geo_mtx_push <= geo_mtx_push + 16'd1;
+		if (geo_push_op[3:0] == 4'hb) begin
+			if (!(&geo_mtx_push)) geo_mtx_push <= geo_mtx_push + 16'd1;
+			geo_mtx_frame <= geo_walk_frames;   // when the last one went through
+		end
 		if ((geo_push_op[3:0] == 4'h1) && !(&geo_obj_push))
 			geo_obj_push <= geo_obj_push + 16'd1;
+	  end
 	end
 end
 wire [31:0] geo_rd_wp, geo_rd_rp, geo_pushes, geo_dropped, geo_ctl_dbg;
@@ -3591,7 +3619,9 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	//                                 upstream in the game's own progress
 	//   dropped climbing           -> the queue is too small and the list is
 	//                                 being corrupted by loss
-	.b_addr({geo_mtx_push[11:0], geo_walk_frames[11:0], geo_mtx_n[7:0]}),
+	//   b_addr  matrix pushes : the frame the LAST one landed on : decoded
+	//   b_data  function writes REFUSED by the gate : function writes accepted
+	.b_addr({geo_mtx_push[11:0], geo_mtx_frame[11:0], geo_mtx_n[7:0]}),
 	// clip_dropped read 0 on hardware and the refusal count is the number that
 	// now moves, so it takes that byte. Between them: accepted, emitted, refused
 	// before the arithmetic, and reaching the rasterizer.
@@ -3620,7 +3650,7 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// different buffer -- most likely one holding a geo_end, which would
 	// terminate it instantly every frame and is exactly what a climbing frame
 	// counter with nothing decoded looks like.
-	.b_data({geo_rd_rp[15:0], geo_rd_wp[15:0]}),
+	.b_data({geo_fn_reject[15:0], geo_fn_pushes[15:0]}),
 	.a_tag(8'h43), .b_tag(8'h48),          // 'C' copro in_pushed:out_pushed | TGP retires:pc
 	                                       // 'H' out_popped:hscr2 | io_addr:flags
 	                                       // 'H' scroll h:v for layers 0,1 | layers 2,3 -- low bytes
