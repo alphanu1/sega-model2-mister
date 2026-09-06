@@ -10260,6 +10260,42 @@ GAME chooses to emit.
 
 ---
 
+**R185 - PARTLY RETRACTED. THE CLAIM "THE BOARD NEVER EXECUTES THE EMITTING
+CODE" IS NOT SUPPORTED BY THE INSTRUMENT THAT PRODUCED IT. WHAT SURVIVES IS THE
+DIRECT COUNT: 110 MATRIX PUSHES, STATIC. THE EMITTING PC IS 0x00017A04.**
+
+*The retraction, first.* The zero-samples argument rests on the UART profiler,
+and `prof_div` is 16 bits: one sample every 65,536 clk_sys cycles, which at
+50 MHz is **12.7 samples per 60 Hz frame**. A routine that runs as a short burst
+once a frame occupies a fraction of a percent of the cycles, so a histogram at
+that resolution cannot distinguish "never runs" from "runs briefly". Ben's
+objection was that everything else is finished and working, which makes "the game
+never calls its own 3D code" the least likely explanation on offer -- and the
+instrument does not support it.
+
+**Absence of samples is not evidence of absence here.** The sampling rate has to
+be raised, or the question asked a different way, before anything is concluded
+from that histogram.
+
+*What DOES survive, because it is a direct count and not a sample:*
+
+    board:  110 matrix pushes, STATIC over minutes
+    bench:  15,993 matrix pushes at 30M instructions
+
+`geo_mtx_push` increments on every push whose reconstructed opcode is 0x0b or
+0x1b, on BOTH ports, exactly. It is not sampled. The board pushed 110 matrix
+writes and has pushed none since, and that is a fact about the machine rather
+than about a profiler.
+
+*So the question is unchanged and the answer is not yet known:* why does the same
+game, on the same ROMs, push 15,993 matrices in the bench and 110 on the board?
+The candidates below still stand, and to them is added the one Ben's objection
+implies -- that the game IS running its 3D code and something about the push path
+rejects or loses those particular writes, which the 110-then-nothing pattern
+would also fit.
+
+--- the original entry follows, with its overstated headline ---
+
 **R185 - THE BOARD NEVER EXECUTES THE CODE THAT EMITS GEOMETRY. THE FAULT IS
 UPSTREAM OF THE GEOMETRIZER ENTIRELY, AND THE PC THAT DOES THE EMITTING IS
 0x00017A04.**
