@@ -225,7 +225,13 @@ int main(int argc, char **argv) {
     }
     std::printf("  copro data ROM: %d/2 files at word 0x520000", cd_ok);
     if (cd_ok == 2)
-      std::printf("   dword 0x10 = %04x%04x (MAME: ff000030)",
+      // VERIFIED AGAINST MAME ITSELF, not against memory: reading :copro_data
+      // out of MAME 0.289 on the same ROMs gives dword 0x10 = 00000030, which
+      // is what this loads. The expectation here previously read "ff000030",
+      // which is wrong, and it sat in the output implying a ROM fault for a
+      // long time. MAME's first words are 3f800000 00000000 00000000 00000000
+      // 00000000 3f800000 -- an identity matrix -- and ours match.
+      std::printf("   dword 0x10 = %04x%04x (MAME: 00000030, verified)",
                   mem[0x520000 + 0x21], mem[0x520000 + 0x20]);
     std::printf("\n");
   }
@@ -416,6 +422,7 @@ int main(int argc, char **argv) {
     // The geometry engine reads objects: polygon ROM if oba bit 23, otherwise
     // one of the two polygon RAMs. Same decode as Model2.sv's.
     d->eng_mem_ack = 0;
+    if ((++ip_samp & 0xffff) == 0) ++ip_hist[uint32_t(d->dbg_ip)];
     if (d->eng_q_valid && g_quads.size() < 4096)
       g_quads.push_back({(int)(int16_t)d->eng_q_x0, (int)(int16_t)d->eng_q_y0,
                          (int)(int16_t)d->eng_q_x1, (int)(int16_t)d->eng_q_y1,
@@ -461,6 +468,13 @@ int main(int argc, char **argv) {
   // "It retires instructions" and "it does useful work" are different claims,
   // and the first was all the previous run could support. A processor looping
   // on a status read it never sees change retires as fast as one doing work.
+  // WHERE THE i960 SPENDS ITS TIME, sampled the same way the board's UART
+  // profiler samples it -- one in 65,536 -- so the two histograms are directly
+  // comparable. The board shows 0x12B0 (the idle poll), 0x18E98/0x18EA4,
+  // 0x11C74 and 0x1166C; if the bench's top regions differ, that names where
+  // execution diverges, and the game stops emitting geometry at frame 140.
+  std::map<uint32_t,uint64_t> ip_hist;
+  uint64_t ip_samp = 0;
   std::map<uint32_t,uint64_t> tgp_pc_hist, tgp_io_hist;
   uint64_t tgp_ram_req_cyc = 0, tgp_fifo_rd_n = 0, tgp_fifo_wr_n = 0;
   uint64_t tgp_io_rd_n = 0, tgp_io_wr_n = 0, tgp_io_ack_n = 0;
@@ -2234,6 +2248,18 @@ int main(int argc, char **argv) {
                 WST[d->geo_state & 15]);
     std::printf("    geo rp=%08x wp=%08x\n", d->geo_rp_o, d->geo_wp_o);
     std::printf("    matrix writes=%u  focal writes=%u\n", d->geo_mtx_n, d->geo_foc_n);
+    {
+      std::vector<std::pair<uint64_t,uint32_t>> v;
+      uint64_t tot = 0;
+      for (auto &e : ip_hist) { v.push_back({e.second, e.first}); tot += e.second; }
+      std::sort(v.rbegin(), v.rend());
+      std::printf("    i960 PC histogram, same 1-in-65536 sampling as the board's UART:\n");
+      for (size_t i = 0; i < v.size() && i < 8; i++)
+        std::printf("      %08x  %5.1f%%\n", v[i].second,
+                    100.0 * double(v[i].first) / double(tot ? tot : 1));
+      std::printf("      (%zu distinct, %llu samples)\n", v.size(),
+                  (unsigned long long)tot);
+    }
     std::printf("    PUSHED: %u matrix, %u object   last matrix pushed from PC %08x\n",
                 d->geo_mtx_pushes, d->geo_obj_pushes, d->geo_mtx_pc);
     std::printf("    last object: oba=%08x obc=%08x  -> %s\n",
