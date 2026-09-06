@@ -162,6 +162,48 @@ int main(int argc, char **argv) {
     }
   }
 
+  // AND THAT A BYTE STORE LEAVES THE OTHER THREE BYTES ALONE.
+  //
+  // The block above zeroes the word before every store, so it catches a store
+  // that smears across all four lanes -- but NOT one that writes its own lane
+  // correctly and zeroes the rest. Those are different faults with the same
+  // reading when the word started at zero, and the second one is the more
+  // dangerous: 0x00500000 holds four separate byte variables, one of them the
+  // main loop's frame flag, and a neighbour's store that clears it leaves the
+  // flag permanently 0. The loop at 0x12b0 waits for that byte to CHANGE, so
+  // "cleared by the neighbour" and "never written" look identical from the
+  // board -- an infinite spin either way.
+  //
+  // Filled with a pattern whose every lane is distinct and non-zero, so which
+  // lanes moved is readable from the result rather than inferred.
+  {
+    const uint32_t A = 0x00501084u;
+    struct { uint32_t be, wdat, want; } BP[] = {
+      { 0x1, 0x27272727u, 0xAABBCC27u },
+      { 0x2, 0x27272727u, 0xAABB27DDu },
+      { 0x4, 0x27272727u, 0xAA27CCDDu },
+      { 0x8, 0x27272727u, 0x27BBCCDDu },
+    };
+    for (auto &b : BP) {
+      dut->bus_req = 1; dut->bus_we = 1; dut->bus_addr = A;
+      dut->bus_wdata = 0xAABBCCDDu; dut->bus_be = 0xf;
+      for (int g = 0; g < 200000; ++g) { step(); if (dut->bus_ack) break; }
+      dut->bus_req = 0;
+      for (int k = 0; k < CPU_DIV * 4; ++k) step();
+      dut->bus_req = 1; dut->bus_we = 1; dut->bus_addr = A;
+      dut->bus_wdata = b.wdat; dut->bus_be = b.be;
+      for (int g = 0; g < 200000; ++g) { step(); if (dut->bus_ack) break; }
+      dut->bus_req = 0;
+      for (int k = 0; k < CPU_DIV * 4; ++k) step();
+      uint32_t back = 0;
+      cpu_read(A, &back);
+      const bool ok = (back == b.want);
+      std::printf("  byte store preserves neighbours be=%x: got=%08x want=%08x  %s\n",
+                  b.be, back, b.want, ok ? "ok" : "FAIL");
+      if (!ok) ++fails_byte;
+    }
+  }
+
   struct { uint32_t addr, want; const char *name; } T[] = {
     { 0,  0x00000000u, "SAT  mem[0]"  },
     { 4,  0x000000c0u, "PRCB mem[4]"  },
