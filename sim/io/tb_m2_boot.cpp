@@ -77,6 +77,9 @@ static int g_px = 0, g_py = 0, g_hb_p = 0, g_vb_p = 0;
 static uint64_t g_nonblack = 0, g_frames_done = 0;
 static FILE *g_copro_trace = nullptr;
 static FILE *g_state_trace = nullptr;
+enum { IPRING = 40 };
+static uint32_t g_ipring[IPRING], g_ipring_last = 0xffffffffu;
+static unsigned g_ipring_w = 0; static uint32_t g_trap_addr = 0; static bool g_trapped = false;
 // M2_STATE_ADDR picks the word to watch; the game dispatches through function
 // pointers in work RAM, so which one matters changes as the chain is followed.
 static uint32_t g_state_addr = 0x0053e5f4u;
@@ -755,6 +758,8 @@ int main(int argc, char **argv) {
     if (!g_seq_every) g_seq_every = 1;
   }
   const bool real_mem = std::getenv("M2_REALMEM") != nullptr;
+  if (const char *tp = std::getenv("M2_TRAP"))
+    g_trap_addr = uint32_t(std::strtoul(tp, nullptr, 0));
   if (const char *sa = std::getenv("M2_STATE_ADDR"))
     g_state_addr = uint32_t(std::strtoul(sa, nullptr, 0)) & ~3u;
   if (const char *st2 = std::getenv("M2_STATE_TRACE")) {
@@ -861,6 +866,26 @@ int main(int argc, char **argv) {
                    (unsigned long long)g_frames_done,
                    (unsigned long long)d->dbg_acc, (unsigned)d->dbg_ip,
                    (unsigned)d->obs_bus_wdata, (unsigned)d->obs_bus_be);
+    }
+    // THE PATH INTO THE GEOMETRY CODE. M2_TRAP=<addr> keeps a ring of the IPs
+    // the CPU passed through and dumps it the first time it reaches that
+    // address. 0x44a8 has no direct callers in the ROM -- the game gets there
+    // through an indirect jump -- so the call site cannot be found by reading
+    // the ROM and has to be caught in flight.
+    if (g_trap_addr && c && !cpu_prev) {
+      const uint32_t ip = d->dbg_ip;
+      if (ip != g_ipring_last) {
+        g_ipring_last = ip;
+        g_ipring[g_ipring_w++ & (IPRING - 1)] = ip;
+        if (ip == g_trap_addr && !g_trapped) {
+          g_trapped = true;
+          std::printf("  TRAP %08x reached at frame %llu, insn %llu. The %d IPs before it:\n",
+                      g_trap_addr, (unsigned long long)g_frames_done,
+                      (unsigned long long)d->dbg_acc, IPRING - 1);
+          for (int k = IPRING - 1; k >= 1; --k)
+            std::printf("     -%2d  %08x\n", k, g_ipring[(g_ipring_w - 1 - k) & (IPRING - 1)]);
+        }
+      }
     }
     // WHERE THE DISPATCH POINTER COMES FROM. 0x44a8 -- the function that calls
     // the matrix builder eight times -- has no direct callers in the ROM, so

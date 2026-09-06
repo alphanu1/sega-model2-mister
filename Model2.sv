@@ -3623,10 +3623,11 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	//   b_data  function writes REFUSED by the gate : function writes accepted
 	// THE FRAME FLAG AT 0x00500000, because mtx_push has read a static 110 since
 	// frame 134 and the geometry counters have nothing further to say.
-	//   b_addr: the pointer the dispatcher at 0x0e70 fetched from 0x0053f688.
-	//   The bench reaches the 3D when this reads 0x0001786c. 0xEEEEEEEE means
-	//   the word was never read at all.
-	.b_addr(ptr_688),
+	//   b_addr: the task-list flag word at 0x00504000 as the walker READS it.
+	//   Bit 31 set means the 3D task is enabled and gets called every frame;
+	//   clear means the walker skips it, which is what the board is doing.
+	//   0xEEEEEEEE means the word was never touched at all.
+	.b_addr(r504_last),
 	// clip_dropped read 0 on hardware and the refusal count is the number that
 	// now moves, so it takes that byte. Between them: accepted, emitted, refused
 	// before the arithmetic, and reaching the rasterizer.
@@ -3655,10 +3656,10 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// different buffer -- most likely one holding a geo_end, which would
 	// terminate it instantly every frame and is exactly what a climbing frame
 	// counter with nothing decoded looks like.
-	//   b_data: entries into the matrix builder : entries into 0x44a8 : how many
-	//   times the pointer word was read. Entries at zero with reads climbing is
-	//   "the dispatcher runs and chooses something else".
-	.b_data({tw_1786c, tw_44a8, r688_n}),
+	//   b_data: did 0x172c run (it makes the enabling write) : did the handler
+	//   at 0x5890 ever run : how many writes landed on the flag word : the top
+	//   byte of the last value written, which is where bit 31 lives.
+	.b_data({tw_172c, tw_5890, w504_n, w504_last[31:24]}),
 	.a_tag(8'h43), .b_tag(8'h48),          // 'C' copro in_pushed:out_pushed | TGP retires:pc
 	                                       // 'H' out_popped:hscr2 | io_addr:flags
 	                                       // 'H' scroll h:v for layers 0,1 | layers 2,3 -- low bytes
@@ -4272,18 +4273,29 @@ logic        irq0_d;
 // fit on three seeds out of four (1720, 1721, 1723), and the one that survived
 // lost timing outright at -0.428. Four comparators and four counters cost a
 // fraction of it and answer the same question.
-logic [7:0] tw_44a8, tw_1786c, tw_179b8, tw_1780c;
 
-// THE FUNCTION POINTER THE DISPATCHER FETCHES, AND WHAT IT FETCHES IT WITH.
+// THE PER-FRAME TASK LIST, AND WHETHER THE 3D TASK IS ENABLED IN IT.
 //
-// 0x44a8 and 0x1786c have no direct callers in the ROM: the game reaches the
-// geometry code through a pointer, which is why no call-graph walk finds the
-// gate. Watching the boot bench for a bus read that RETURNS one of those
-// addresses named the table entry -- at frame 271 the code at 0x0e70 loads
-// 0x1786c from work RAM at 0x0053f688 and calls it. The board executes 0x0e70,
-// so its dispatcher runs; the question is only what it reads there.
-logic [31:0] ptr_688;
-logic [15:0] r688_n;
+// Function 0x1838 -- one of the five calls the main loop makes every frame --
+// walks a linked list of tasks based at 0x00504000:
+//
+//     0x1854  ld    r4, 0x000(g13)      ; this entry's flag word
+//     0x1858  bbc   31, r4, 0x1864      ; bit 31 CLEAR -> skip the handler
+//     0x185c  ld    r5, 0x00c(g13)      ; the handler pointer
+//     0x1860  callx r0, (r5)            ; -> 0x5890 -> 0x16e58 -> 0x17a04
+//     0x1880  ld    r7, 0x008(g13)      ; next entry
+//     0x1888  b     0x1854
+//
+// The board walks it -- 0x1854-0x1880 are among its hottest samples -- and
+// never takes the call, so bit 31 is clear on hardware. In the boot bench the
+// word is cleared at 0x16b0 and then set to 0x80000000 at 0x172c during init,
+// after which the bench reaches the 3D and pushes 31,667 matrices.
+//
+// So: what does the walker READ there, was the enabling write ever made, and
+// what did it write. Those three separate "the write never happened" from "it
+// happened and did not stick", which are different faults with the same screen.
+logic [31:0] r504_last, w504_last;
+logic  [7:0] w504_n, tw_172c, tw_5890;
 always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
 		lc_cnt <= 32'hEEEE_EEEE; lc_base <= 32'hEEEE_EEEE;
@@ -4294,8 +4306,8 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		cwd_d <= 32'd0; cbe_d <= 4'd0;
 		w500_n <= 16'd0; r500_n <= 16'd0; vbl_n <= 16'd0;
 		w500_last <= 8'd0; r500_last <= 8'd0; w500_be <= 4'd0; irq0_d <= 1'b0;
-		tw_44a8 <= 8'd0; tw_1786c <= 8'd0; tw_179b8 <= 8'd0; tw_1780c <= 8'd0;
-		ptr_688 <= 32'hEEEE_EEEE; r688_n <= 16'd0;
+		r504_last <= 32'hEEEE_EEEE; w504_last <= 32'hEEEE_EEEE;
+		w504_n <= 8'd0; tw_172c <= 8'd0; tw_5890 <= 8'd0;
 	end else begin
 		cack_d  <= cpu_ack;
 		cwe_d   <= cpu_we;
@@ -4357,15 +4369,20 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		// The IP register is valid continuously, so an equality test cannot miss
 		// an entry the way a 1-in-65536 sample can. Saturating, because "did it
 		// ever" is the question and a wrap would answer it wrongly.
-		if (cpu_dbg_ip == 32'h0000_44a8  && !(&tw_44a8))  tw_44a8  <= tw_44a8  + 8'd1;
-		if (cpu_dbg_ip == 32'h0001_786c && !(&tw_1786c)) tw_1786c <= tw_1786c + 8'd1;
-		if (cpu_dbg_ip == 32'h0001_79b8 && !(&tw_179b8)) tw_179b8 <= tw_179b8 + 8'd1;
-		if (cpu_dbg_ip == 32'h0001_780c && !(&tw_1780c)) tw_1780c <= tw_1780c + 8'd1;
-		// 0xEEEEEEEE is "never read", which is a different fact from "read as
+		// 0x172c makes the enabling write; 0x5890 is the handler it enables.
+		// 0x44a8 was tried here and is dead code -- the boot bench reaching the
+		// 3D executes it exactly zero times.
+		if (cpu_dbg_ip == 32'h0000_172c && !(&tw_172c)) tw_172c <= tw_172c + 8'd1;
+		if (cpu_dbg_ip == 32'h0000_5890 && !(&tw_5890)) tw_5890 <= tw_5890 + 8'd1;
+		// 0xEEEEEEEE is "never touched", which is a different fact from "read as
 		// zero" and the two would otherwise be indistinguishable.
-		if (cack_d && !cwe_d && caddr_d == 32'h0053_f688) begin
-			ptr_688 <= crd_d;
-			if (!(&r688_n)) r688_n <= r688_n + 16'd1;
+		if (cack_d && caddr_d == 32'h0050_4000) begin
+			if (cwe_d) begin
+				w504_last <= cwd_d;
+				if (!(&w504_n)) w504_n <= w504_n + 8'd1;
+			end else begin
+				r504_last <= crd_d;
+			end
 		end
 		// AND WHETHER THE INTERRUPT THAT SHOULD MOVE IT ARRIVES AT ALL.
 		irq0_d <= cpu_irq[0];
