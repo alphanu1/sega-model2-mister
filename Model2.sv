@@ -3623,9 +3623,10 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	//   b_data  function writes REFUSED by the gate : function writes accepted
 	// THE FRAME FLAG AT 0x00500000, because mtx_push has read a static 110 since
 	// frame 134 and the geometry counters have nothing further to say.
-	//   b_addr: the pointer at 0x00501284 -- the 3D task's entry in the list.
-	//   0xEEEEEEEE means the registration code never even read it.
-	.b_addr(ptr_501284),
+	//   b_addr: the attract state -- last value written : times it was 2, the
+	//   state whose handler enables the 3D task : total writes : entries into
+	//   the 3D handler. 0xEE in the top byte is "never written".
+	.b_addr({state_last, n_state2, n_state_wr, tw_5890}),
 	// clip_dropped read 0 on hardware and the refusal count is the number that
 	// now moves, so it takes that byte. Between them: accepted, emitted, refused
 	// before the arithmetic, and reaching the rasterizer.
@@ -3656,7 +3657,7 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// counter with nothing decoded looks like.
 	//   b_data: walker iterations : calls taken : 3D handler entered : the
 	//   one-shot that registers it. 1c14 at zero is the whole answer.
-	.b_data({tw_1854, tw_1860, tw_5890, tw_1c14}),
+	.b_data({tw_1854, tw_1860, tw_1c14, 8'd0}),
 	.a_tag(8'h43), .b_tag(8'h48),          // 'C' copro in_pushed:out_pushed | TGP retires:pc
 	                                       // 'H' out_popped:hscr2 | io_addr:flags
 	                                       // 'H' scroll h:v for layers 0,1 | layers 2,3 -- low bytes
@@ -4249,9 +4250,7 @@ logic  [3:0] cbe_d;
 //   writes = 0            -- nothing updates it; the interrupt path is the fault
 //   writes climb, r != w  -- it is written and read back wrong; the memory is
 //   writes climb, r == w  -- the flag moves and the game is waiting on something else
-logic [15:0] w500_n, r500_n, vbl_n;
-logic  [7:0] w500_last, r500_last;
-logic  [3:0] w500_be;
+logic [15:0] vbl_n;
 logic        irq0_d;
 
 // DOES THE BOARD EVER ENTER THE CODE THAT BUILDS GEOMETRY.
@@ -4295,7 +4294,7 @@ logic        irq0_d;
 // twice today, on 0x172c and again on 0x1c0c -- so it is COUNTED. tw_1c14 at
 // zero means the board never registers the task and the fault is upstream of
 // the list; non-zero with tw_5890 at zero means it registers and never runs.
-logic [31:0] ptr_501284;
+logic  [7:0] state_last, n_state2, n_state_wr;
 logic  [7:0] tw_1854, tw_1860, tw_5890, tw_1c14;
 always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
@@ -4305,9 +4304,8 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		sdwd_d <= 16'd0; sdwb_d <= 2'd0;
 		cack_d <= 1'b0; cwe_d <= 1'b0; caddr_d <= 32'd0; crd_d <= 32'd0;
 		cwd_d <= 32'd0; cbe_d <= 4'd0;
-		w500_n <= 16'd0; r500_n <= 16'd0; vbl_n <= 16'd0;
-		w500_last <= 8'd0; r500_last <= 8'd0; w500_be <= 4'd0; irq0_d <= 1'b0;
-		ptr_501284 <= 32'hEEEE_EEEE;
+		vbl_n <= 16'd0; irq0_d <= 1'b0;
+		state_last <= 8'hEE; n_state2 <= 8'd0; n_state_wr <= 8'd0;
 		tw_1854 <= 8'd0; tw_1860 <= 8'd0; tw_5890 <= 8'd0; tw_1c14 <= 8'd0;
 	end else begin
 		cack_d  <= cpu_ack;
@@ -4353,24 +4351,21 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 			sd_seen <= {sdwb_d, 6'd0, sdwd_d[7:0], sdwd_d[15:8]};
 		end
 
-		// The frame flag itself. Counted rather than sampled: the spin reads it
-		// thousands of times a second and a sample would show the read whatever
-		// the write did.
-		if (cack_d && caddr_d == 32'h0050_0000) begin
-			if (cwe_d) begin
-				if (!(&w500_n)) w500_n <= w500_n + 16'd1;
-				w500_last <= cwd_d[7:0];
-				w500_be   <= cbe_d;
-			end else begin
-				if (!(&r500_n)) r500_n <= r500_n + 16'd1;
-				r500_last <= crd_d[7:0];
-			end
+		// THE ATTRACT STATE, as the dispatcher at 0x18a0 writes it. 0xEE is
+		// "never written". Counted by equality against 2 -- the state whose
+		// handler enables the 3D task -- never by an indexed array write: that
+		// shape took a Segment Violation at the START of the fit on three seeds
+		// out of four when it was tried as a page mask, exactly as the ipring
+		// read in this file does.
+		if (cack_d && cwe_d && caddr_d == 32'h0050_10a0) begin
+			state_last <= cwd_d[7:0];
+			if (!(&n_state_wr)) n_state_wr <= n_state_wr + 8'd1;
+			if (cwd_d[7:0] == 8'd2 && !(&n_state2)) n_state2 <= n_state2 + 8'd1;
 		end
-		// The page the CPU is executing in, latched for ever.
 		// The IP register is valid continuously, so an equality test cannot miss
-		// an entry the way a 1-in-65536 sample can. Saturating, because "did it
-		// ever" is the question and a wrap would answer it wrongly.
-		// The walker's decision, and the one-shot that registers the 3D task.
+		// an entry the way a 1-in-65536 sample can, and 0x1c14 is a ONE-SHOT --
+		// sampling it was tried twice today and is worthless. Saturating,
+		// because "did it ever" is the question and a wrap would answer wrongly.
 		if (cpu_dbg_ip == 32'h0000_1854 && !(&tw_1854)) tw_1854 <= tw_1854 + 8'd1;
 		if (cpu_dbg_ip == 32'h0000_1860 && !(&tw_1860)) tw_1860 <= tw_1860 + 8'd1;
 		if (cpu_dbg_ip == 32'h0000_5890 && !(&tw_5890)) tw_5890 <= tw_5890 + 8'd1;
