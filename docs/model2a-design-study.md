@@ -10350,3 +10350,57 @@ guessing at this before the PC was captured, and all three were wrong. The
 capture cost one build and answered it outright. Every question today that was
 settled by adding a counter was settled in one build; every question approached
 by hypothesis cost several and was still wrong at the end.
+
+
+---
+
+**R186 - THE GAME EMITS GEOMETRY UNTIL FRAME 140 AND THEN STOPS. THE PUSH PATH IS
+EXONERATED BY DIRECT COUNT, AND THE QUESTION IS NOW WHAT HAPPENS AT FRAME 140.**
+
+*The measurement, all exact counts rather than samples:*
+
+    mtx_push = 110      last matrix pushed at walk frame 140
+    decoded  = 0
+    REFUSED  = 1008     STATIC
+    accepted = 2475     CLIMBING
+
+*What each eliminates.*
+
+**REFUSED is static.** The function port's gate -- `bit31 set, or a 16-byte
+aligned address`, mirroring `geo_w` -- is the only place this design deliberately
+discards a CPU write. 1,008 were refused early and none since. We are not eating
+the game's matrix writes, and that hypothesis is closed. (1,008 refusals is not
+itself a fault: MAME discards the same writes.)
+
+**accepted is climbing.** The game is writing to the function port continuously,
+right now, thousands of writes in. It is not stalled, not waiting, and not
+finished with the geometrizer -- it is actively using it, for `window_data` and
+`geo_end` and nothing else.
+
+**last@frame = 140.** This is the finding. The game pushed matrix writes up to
+walk frame 140 -- about 2.3 seconds -- and has pushed none in the thousands of
+frames since. Combined with the two above, the game did not fail, block, or lose
+its writes. **It stopped.**
+
+*So the question narrows to one event.* Something at or before frame 140 changes
+what the game decides to draw, and the same code in the boot bench goes on to
+push 15,993 matrices. Frame 140 is roughly where a boot sequence hands over to
+attract, which makes the candidates:
+
+  - the attract path taken on hardware differs from the bench's, because of
+    persistent backup RAM, DIP switches, or the I/O board's state
+  - a check performed once around that point fails on hardware and disables 3D
+  - the coprocessor: R167 established that it RUNS, and nothing since has
+    established that its RESULTS are right. A game that asks the TGP to transform
+    its first scene, gets wrong answers back, and stops drawing would look
+    exactly like this -- and would explain why it emitted geometry at all before
+    the first results came back.
+
+*What is no longer a candidate.* The walk, the front door, the opcode
+reconstruction, the queue, the pointers, the renderer, and the push gate. Each
+was eliminated by a counter rather than an argument.
+
+*Method, stated once more because it held all day.* Five hypotheses were spent
+on this question and all five were wrong. Every counter added answered its
+question in a single build. The counters that mattered here -- when the last
+matrix landed, and how many writes the gate refuses -- cost one build together.
