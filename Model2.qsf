@@ -257,7 +257,7 @@ set_global_assignment -name FITTER_EFFORT "STANDARD FIT"
 # physical-synthesis passes to see whether the CRASH rate improved; it did not,
 # and it is recorded as wrong. It never tested area, and area -- not crashes --
 # is what is failing now.
-set_global_assignment -name OPTIMIZATION_MODE "AGGRESSIVE AREA"
+set_global_assignment -name OPTIMIZATION_MODE "HIGH PERFORMANCE EFFORT"
 set_global_assignment -name ALLOW_POWER_UP_DONT_CARE ON
 set_global_assignment -name QII_AUTO_PACKED_REGISTERS NORMAL
 # BACK ON, AND NOT BY PREFERENCE. With this OFF the fitter dies with
@@ -291,7 +291,7 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_RETIMING ON
 # anyway -- attract mode, sound, tilemap -- so the miss is real but not fatal at
 # room temperature. Timing gets fixed by seed sweeping and by getting the
 # occupancy down, not by a technique that cannot produce a bitstream.
-set_global_assignment -name OPTIMIZATION_TECHNIQUE AREA
+set_global_assignment -name OPTIMIZATION_TECHNIQUE SPEED
 # RESOURCE SHARING, WHICH HAS NEVER BEEN ON. Its Quartus default is OFF and it
 # is set nowhere in this file, so every mutually exclusive arithmetic operator
 # in the design has been getting its own adder. With OPTIMIZATION_TECHNIQUE
@@ -303,7 +303,9 @@ set_global_assignment -name OPTIMIZATION_TECHNIQUE AREA
 # and four seeds in a row have missed timing because the fitter has nowhere left
 # to place. Sharing costs a mux on the shared operands, so it can lengthen a
 # path; the A/B is whether the ALM saved buys back more than the mux costs.
-set_global_assignment -name AUTO_RESOURCE_SHARING ON
+# CONTROL EXPERIMENT: OFF, the Quartus default, which is what every build
+# before 09-07 used. See the block below.
+set_global_assignment -name AUTO_RESOURCE_SHARING OFF
 
 # ASCAL IS EXEMPT, AND IT IS THE ONLY THING THE AREA SETTINGS BROKE.
 #
@@ -323,8 +325,6 @@ set_global_assignment -name AUTO_RESOURCE_SHARING ON
 # technique it was closing under while the core we are actually short of area in
 # gets AREA. If this does not recover it, the next lever is leaving ascal at the
 # global default rather than forcing SPEED on it.
-set_instance_assignment -name OPTIMIZATION_TECHNIQUE SPEED -to "ascal:ascal"
-set_instance_assignment -name AUTO_RESOURCE_SHARING OFF -to "ascal:ascal"
 set_global_assignment -name MUX_RESTRUCTURE ON
 set_global_assignment -name REMOVE_REDUNDANT_LOGIC_CELLS ON
 set_global_assignment -name AUTO_DELAY_CHAINS_FOR_HIGH_FANOUT_INPUT_PINS ON
