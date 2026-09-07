@@ -54,6 +54,45 @@ kill -9 will not clear. Open with O_NONBLOCK and set termios from python; the
 script is in the scratchpad and on the board. A core reload resets the port's
 baud, so re-set it after one.
 
+## THE FITTER SETTINGS WERE THE TIMING PROBLEM (R189, R190)
+
+`AUTO_RESOURCE_SHARING` had been **OFF for every build this project ever made**
+-- it is absent from the qsf and its Quartus default is Off -- and
+`OPTIMIZATION_TECHNIQUE SPEED` refuses the logic-for-mux trade that sharing
+exists to make, while `OPTIMIZATION_MODE` asked for performance on top. The
+three only mean anything together. Set together, against the build on the board:
+
+| | SPEED + HIGH PERFORMANCE EFFORT | AREA + AGGRESSIVE AREA + sharing |
+|---|---|---|
+| ALM | 41,144 / 41,910 (98%) | **37,554 (89.6%)** |
+| M10K, device | 553 / 553 | 553 / 553 |
+| quad_store M10K | 75 | 66 |
+| worst slack | -0.202 | -3.344 |
+
+Two seeds agree, so it is the settings and not seed luck. **3,590 ALM and 8.4
+points of occupancy.** Build after build has been spent seed-sweeping a fitter
+that had nowhere to place; this is the remedy for that, not another seed.
+
+**The whole timing cost is in `ascal`, the framework scaler, and none of it is
+ours.** Every failing path is `ascal|o_hcpt -> ascal|o_vcpt_pre3`, and
+`m2_sdram|dq_r -> p_dout` -- the worst path at -0.202 and the subject of R176 --
+drops off the list entirely. The scaler was already second-worst at -0.106
+before the change. `OPTIMIZATION_TECHNIQUE` and `AUTO_RESOURCE_SHARING` are
+entity-level, so ascal is exempted and keeps what it was closing under.
+
+Remaining area levers, both pulling the right way and neither tried:
+`PHYSICAL_SYNTHESIS_COMBO_LOGIC_FOR_AREA ON` (its OFF justification cited SPEED
+and "8,940 ALM spare" and is dead) and `PHYSICAL_SYNTHESIS_REGISTER_DUPLICATION
+OFF` (Model 1 runs it off, we run it on).
+
+**None of this touches M10K.** 553/553 before and after: these settings act on
+logic, not memory inference. 92 of the 583 claimed blocks are packing waste --
+char_cache +26, quad_store +24, tdp_ram +15, sound_board +13. The four
+quad_store vertex arrays are identical 2048x32 simple-dual-port memories costing
+14/13/13/12 blocks against `key`'s 7 for the same shape; 9 came back from the
+settings alone. The sound board's 78 blocks of 68000 work RAM are the biggest
+movable single item.
+
 ## TIMING HAS NO HEADROOM (R189)
 
 41,144 / 41,910 ALM (98%) with 553/553 M10K. Four seeds in a row missed --
