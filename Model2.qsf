@@ -304,6 +304,27 @@ set_global_assignment -name OPTIMIZATION_TECHNIQUE AREA
 # to place. Sharing costs a mux on the shared operands, so it can lengthen a
 # path; the A/B is whether the ALM saved buys back more than the mux costs.
 set_global_assignment -name AUTO_RESOURCE_SHARING ON
+
+# ASCAL IS EXEMPT, AND IT IS THE ONLY THING THE AREA SETTINGS BROKE.
+#
+# AGGRESSIVE AREA + AREA took the design from 41,144 ALM to 37,554 -- 98% to
+# 89.6%, which is the headroom this project needed -- and took worst-case slack
+# from -0.202 to -3.147. Every failing path in that build is inside the
+# framework's scaler:
+#
+#     SLACK -3.147  FROM ascal:ascal|o_hcpt[1]  TO ascal:ascal|o_vcpt_pre3[6]
+#
+# Not one of our own paths appears; m2_sdram|dq_r -> p_dout, which was the worst
+# path at -0.202 under SPEED, drops off the list entirely. ascal was already the
+# second-worst at -0.106 before the change, so area-restructuring its arithmetic
+# is what blew it out, and ascal is sys/ code we do not otherwise touch.
+#
+# OPTIMIZATION_TECHNIQUE is an entity-level assignment, so the scaler keeps the
+# technique it was closing under while the core we are actually short of area in
+# gets AREA. If this does not recover it, the next lever is leaving ascal at the
+# global default rather than forcing SPEED on it.
+set_instance_assignment -name OPTIMIZATION_TECHNIQUE SPEED -to "ascal:ascal"
+set_instance_assignment -name AUTO_RESOURCE_SHARING OFF -to "ascal:ascal"
 set_global_assignment -name MUX_RESTRUCTURE ON
 set_global_assignment -name REMOVE_REDUNDANT_LOGIC_CELLS ON
 set_global_assignment -name AUTO_DELAY_CHAINS_FOR_HIGH_FANOUT_INPUT_PINS ON

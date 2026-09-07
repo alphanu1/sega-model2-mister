@@ -10564,3 +10564,49 @@ reverted wholesale. This is ONE setting, changed alone, and `quartus_map` is
 re-run rather than `quartus_fit` alone -- it is a synthesis assignment, so a
 fit-only rerun would reuse the previous netlist and report a result for a
 setting that never took effect.
+
+**R190 - AGGRESSIVE AREA + AREA + RESOURCE SHARING FREES 3,590 ALM, AND THE ONLY
+THING IT BREAKS IS THE FRAMEWORK'S SCALER.**
+
+Measured, two seeds, against the build on the board:
+
+| | SPEED + HIGH PERFORMANCE EFFORT | AREA + AGGRESSIVE AREA + sharing |
+|---|---|---|
+| ALM | 41,144 / 41,910 (98%) | **37,554 (89.6%)** |
+| M10K, device | 553 / 553 | 553 / 553 |
+| M10K, claimed by memories | 583 | 574 |
+| worst-case slack | -0.202 | -3.344 |
+
+*The area is real and it is large.* 3,590 ALM, and 8.4 points of occupancy. This
+project has spent build after build seed-sweeping a fitter that had nowhere to
+place; that is the actual remedy for it, and `AUTO_RESOURCE_SHARING` had been
+OFF for every build ever made because it is absent from the qsf and defaults Off
+(R189). SPEED refuses the logic-for-mux trade that sharing exists to make, so
+the three settings only mean anything together.
+
+*It also packed the quad store better with no RTL change.* 75 M10K to 66. The
+four vertex arrays are identical 2048x32 simple-dual-port memories and were
+costing 14/13/13/12 blocks against `key`'s 7 for the same shape -- 24 blocks of
+pure packing waste, of which 9 came back. `m2_quad_store.sv` already records an
+earlier round of this, where reading `vtx0[q][15:0]` and `vtx0[q][31:16]`
+separately duplicated the array outright; that was fixed and the cost never
+came back down, which is why the remaining waste was not a second read.
+
+*The whole timing cost is in `ascal`, which is not ours.* Every failing path:
+
+    SLACK -3.147  FROM ascal:ascal|o_hcpt[1]  TO ascal:ascal|o_vcpt_pre3[6]
+
+Not one of our own paths appears, and `m2_sdram|dq_r -> p_dout` -- the worst
+path at -0.202 under SPEED, and the subject of R176 -- drops off the list
+entirely. The scaler was already second-worst at -0.106 before the change, so
+area-restructuring its arithmetic is what blew it out.
+
+*So the fix is an exemption, not a retreat.* `OPTIMIZATION_TECHNIQUE` and
+`AUTO_RESOURCE_SHARING` are entity-level assignments; `ascal` keeps what it was
+closing under and the core keeps AREA.
+
+*Still to measure.* Whether the exemption recovers the slack without giving back
+the ALM, and whether `PHYSICAL_SYNTHESIS_COMBO_LOGIC_FOR_AREA ON` and
+`PHYSICAL_SYNTHESIS_REGISTER_DUPLICATION OFF` -- Model 1 runs the latter off,
+we run it on -- buy more. M10K is untouched by any of this: 553/553 before and
+after, because these settings act on logic, not on memory inference.
