@@ -292,21 +292,28 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_RETIMING ON
 # room temperature. Timing gets fixed by seed sweeping and by getting the
 # occupancy down, not by a technique that cannot produce a bitstream.
 set_global_assignment -name OPTIMIZATION_TECHNIQUE AREA
-# KEEP THE AREA SETTINGS, STOP THEM TRADING M10K FOR MLAB.
+# KEEP THE AREA SETTINGS, STOP THEM TURNING SHIFT REGISTERS INTO RAM.
 #
-# Three area configurations black-screened the board while closing timing, and
-# the difference measured between a working build and a failing one is where the
-# small RAMs land: 288 RAMs in MLAB working, 295 failing, with seven moving out
-# of M10K. Quartus warns about this itself on every build -- "RAMs using MLAB
-# locations, which can behave differently during read-during-write" -- and an
-# i960 that traps at IP 0 is one that read the wrong thing before it executed
-# anything.
+# Three area configurations black-screened the board while closing timing. The
+# difference between a working build and a failing one is NOT that any memory
+# moved out of M10K -- none did. It is that AREA switches on shift-register
+# recognition, and nine logic shift registers became RAM-backed ones:
 #
-# BLOCK_RAM_TO_MLAB_CELL_CONVERSION is the assignment that governs exactly that
-# conversion. OFF keeps the area optimisation and takes away the RAM-type change
-# it was making as a side effect.
-set_global_assignment -name BLOCK_RAM_TO_MLAB_CELL_CONVERSION OFF
-set_global_assignment -name AUTO_RAM_BLOCK_BALANCING OFF
+#     +53 MLAB  altshift_taps:dv_hs1_rtl_0
+#     +26 MLAB  m2_copro|m2_tgp|mb86233_core|mb86233_alu|altshift_taps:pop_rtl_0
+#     +44 MLAB  m2_sound_board|jt12|jt12_mmr|jt12_reg|jt12_csr
+#     +20 MLAB  m2_sound_board|jt12|jt12_eg
+#     ... and five more, all jt12
+#
+# A RAM-backed shift register does not reset like a chain of flops and has
+# different read-during-write behaviour -- which is what Quartus warns about on
+# every build. It lands on the TGP's ALU and the whole FM sound chip.
+#
+# BLOCK_RAM_TO_MLAB_CELL_CONVERSION OFF was tried first and is WRONG: it forces
+# those RAMs into M10K, and at 553/553 the design then does not fit at all --
+# "Error (170048): device has 553 RAM locations of type M10K, the design needs
+# more". The MLAB usage is not waste, it is load-bearing.
+set_global_assignment -name AUTO_SHIFT_REGISTER_RECOGNITION OFF
 # ascal exempted again: it was measured to take worst-case slack from -3.147
 # to +0.220 under a global AREA, and it is framework code we do not touch.
 set_instance_assignment -name OPTIMIZATION_TECHNIQUE SPEED -to "ascal:ascal"
