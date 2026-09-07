@@ -238,7 +238,26 @@ set_global_assignment -name FITTER_EFFORT "STANDARD FIT"
 # that trade.
 #
 # The other four area settings stay. They cost no block memory.
-set_global_assignment -name OPTIMIZATION_MODE "HIGH PERFORMANCE EFFORT"
+# AGGRESSIVE AREA, WITH OPTIMIZATION_TECHNIQUE AREA BELOW. These two feed the
+# same area/speed trade and were pulling against each other: the mode asked for
+# performance while AUTO_RESOURCE_SHARING asked the synthesiser to trade logic
+# for muxes, which SPEED refuses to do. Setting one without the others buys
+# nothing, so all three move together.
+#
+# This is Model 1's configuration, and Model 1 is the oracle: it closes timing at
+# 97-99% occupancy on this same part with "Aggressive Area", AREA and register
+# duplication off, and nothing else set at all. We are at 98% with 553/553 M10K
+# and four consecutive seeds missed -- -0.311, -0.974, -0.423 and an Internal
+# Error -- against -0.021 on the build on the board.
+#
+# WAS: "HIGH PERFORMANCE EFFORT". Not "Aggressive Performance"; the same
+# performance-biased family, but the record should say what was actually here.
+#
+# NOT a re-run of the experiment above. That one stripped the nine
+# physical-synthesis passes to see whether the CRASH rate improved; it did not,
+# and it is recorded as wrong. It never tested area, and area -- not crashes --
+# is what is failing now.
+set_global_assignment -name OPTIMIZATION_MODE "AGGRESSIVE AREA"
 set_global_assignment -name ALLOW_POWER_UP_DONT_CARE ON
 set_global_assignment -name QII_AUTO_PACKED_REGISTERS NORMAL
 # BACK ON, AND NOT BY PREFERENCE. With this OFF the fitter dies with
@@ -272,7 +291,7 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_RETIMING ON
 # anyway -- attract mode, sound, tilemap -- so the miss is real but not fatal at
 # room temperature. Timing gets fixed by seed sweeping and by getting the
 # occupancy down, not by a technique that cannot produce a bitstream.
-set_global_assignment -name OPTIMIZATION_TECHNIQUE SPEED
+set_global_assignment -name OPTIMIZATION_TECHNIQUE AREA
 # RESOURCE SHARING, WHICH HAS NEVER BEEN ON. Its Quartus default is OFF and it
 # is set nowhere in this file, so every mutually exclusive arithmetic operator
 # in the design has been getting its own adder. With OPTIMIZATION_TECHNIQUE
@@ -288,16 +307,19 @@ set_global_assignment -name AUTO_RESOURCE_SHARING ON
 set_global_assignment -name MUX_RESTRUCTURE ON
 set_global_assignment -name REMOVE_REDUNDANT_LOGIC_CELLS ON
 set_global_assignment -name AUTO_DELAY_CHAINS_FOR_HIGH_FANOUT_INPUT_PINS ON
-# OFF: a leftover from the area experiment this file says was ABANDONED.
-# The design is in HIGH PERFORMANCE EFFORT with OPTIMIZATION_TECHNIQUE SPEED
-# and 8,940 ALM spare, so area-targeted combinational restructuring is buying
-# nothing and costing path depth. Turned off ALONE -- it is not one of the
-# four whose removal segfaults this fitter, and the A/B is seed 19, which
-# missed at -0.124 with it on.
-# ON. The paragraph above justifies OFF with "the design is in HIGH PERFORMANCE
-# EFFORT with OPTIMIZATION_TECHNIQUE SPEED and 8,940 ALM spare, so area-targeted
-# combinational restructuring is buying nothing". Both halves of that are now
-# false: the technique is AREA and the spare is 196 ALM.
+# LEFT OFF, BUT ITS JUSTIFICATION IS NOW DEAD AND SHOULD NOT BE READ AS ONE.
+#
+# The original reason for OFF was "the design is in HIGH PERFORMANCE EFFORT with
+# OPTIMIZATION_TECHNIQUE SPEED and 8,940 ALM spare, so area-targeted
+# combinational restructuring is buying nothing and costing path depth". Every
+# clause of that is now false: the mode is AGGRESSIVE AREA, the technique is
+# AREA, and the spare is 766 ALM of 41,910. The A/B quoted for it -- seed 19
+# missing at -0.124 with it on -- was measured under the old mode and technique
+# and says nothing about this configuration.
+#
+# It stays OFF only because the mode, the technique and AUTO_RESOURCE_SHARING
+# all moved in one change and a fourth variable would make the result
+# unattributable. It is the obvious next thing to try if area is still short.
 set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC_FOR_AREA OFF
 set_global_assignment -name ADV_NETLIST_OPT_SYNTH_WYSIWYG_REMAP ON
 set_global_assignment -name SYNTH_GATED_CLOCK_CONVERSION ON
