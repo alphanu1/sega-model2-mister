@@ -1,68 +1,76 @@
 # Handoff
 
-**Updated:** 2026-09-06. Study entries R176-R187 added. R172 remains WITHDRAWN,
-R185 partly RETRACTED.
+**Updated:** 2026-09-06. Study entries R176-R189. R172 WITHDRAWN, R185 partly
+RETRACTED.
 
-## THE COPROCESSOR IS THE OPEN QUESTION, AND IT IS NOW MEASURABLE (R187)
+## THE 3D PATH IS FINISHED. THE GAME NEVER ASKS FOR IT (R188)
 
-The remaining blocker is that the game emits exactly 110 matrix writes and then
-stops. Everything downstream of the front door has been eliminated by counters
-rather than argument. The suspect left is the coprocessor's arithmetic: R167
-proved it runs, and nothing has ever proved what it computes.
+The renderer, the display-list walker, the geometry engine and the coprocessor
+are all correct and all idle. The fault is above them, in the game's own attract
+sequencer, and it is one value.
 
-Three things changed today that make that checkable:
+**The chain, every link measured rather than argued:**
 
-* **Daytona's TGP microcode is in the game ROM.** 2024 words, verbatim, at
-  offset `0x60020` of the interleaved `epr-16534a.6` + `epr-16535a.7` image.
-  `tools/extract_tgp_microcode.py` pulls it out; the result is byte-identical to
-  the reference's copro program RAM after boot. Nothing extra is needed on the
-  SD card -- the i960 uploads it through `0x00884000` while `copro_ctl1` bit 31
-  is set, which our core already implements. `mpr-16536`/`mpr-16537` are NOT the
-  program despite MAME's region label; they are the copro data ROMs.
-* **The real microcode now runs in the bench.** `MB86233_TGP_ROM=<image>` on
-  `test_mb86233_core`: 20,342 instructions retired, `unimplemented` never
-  asserted, and the disassembly has zero unknown opcodes. The loader used to
-  truncate the image to 512 words (`0x2000` bytes for a `0x2000`-WORD space) and
-  had never been given an image at all, so this had never shown.
-* **The i960/copro conversation is diffable against the reference.**
-  `M2_COPRO_TRACE=<file>` on the boot bench logs the four coprocessor windows in
-  the same format a MAME Lua memory tap produces (`F` function port, `W` FIFO
-  push or upload, `R` FIFO pop, `C` control). Same upload, same commands, same
-  pushes -- the first output word that differs is the arithmetic. Through the
-  first command after boot, `F 00880080 00000001`, the two already agree.
+    attract dispatcher 0x18a0 -> jump table at 0x18cc
+        {0x1948, 0x1948, 0x197c, 0x1d24, 0x1dfc, 0x2028, 0x2338, ...}
+                         ^^^^^^ entry 2 enables the 3D task, unconditionally
+    board dispatches entries 3, 5, 7, 9 and NEVER 2
+        -> the 3D task is never registered in the per-frame task list
+        -> the walker at 0x1854-0x1860 never calls handler 0x5890
+        -> 0x179b8 never runs, no matrices are pushed from 0x17a04
 
-## THE COPROCESSOR IS CLEARED; THE FAULT IS HARDWARE-ONLY (R188)
+45,260 profiler samples over two minutes: zero in 0x197c, zero in 0x5890,
+0x16e58, 0x1780c, 0x179b8 and 0x1786c. The same capture puts 256 samples in the
+walker's loop head and 32 in its callx, so the list works and dispatches OTHER
+tasks every frame.
 
-That measurement was made and it clears the coprocessor:
+**The boot bench does reach the 3D** -- 31,667 matrices pushed from 0x17a04 --
+through the same RTL, which is what proves the path rather than the theory.
 
-* **The arithmetic matches the reference.** Same command mix by rank, and the
-  distinctive output constants are the reference's own -- `3ea8f5c3`,
-  `43148d8e`, `430f4545`, `43021a1a`, `41ae0e0f`, `3fac38e4` appear in both.
-  Both coprocessors idle in the same microcode FIFO wait.
-* **Simulation reaches the 3D.** 40M instructions in the boot bench: **755
-  matrix writes, 1,084 objects**, 56.6M coprocessor events, out to frame 898.
-* **The board does not, and is not hung.** `mtx_push=110, last frame=134` on
-  every UART sample, while 90% of profiler samples sit in the main loop's frame
-  wait at `0x12b0` -- `ldob r3,[0x500000]` / `cmpibe r3,r16,-8`, which spins
-  while that byte is UNCHANGED. The main loop is `0x1240..0x1290` and it is
-  running normally; it is waiting for the flag to move.
-* **Frame 162 is when the 3D starts** in the reference. Before it the reference
-  emits two matrix writes in total, so nothing concluded from board behaviour
-  before frame 162 means anything.
+**What is NOT wrong, each having been believed and disproved today:**
 
-**Next:** the build now on the board carries, in place of the geometry counters,
-writes to `0x00500000`, the last value written, the last value read, the write's
-byte enables and the vblank interrupt count. Those separate the three remaining
-causes outright: nothing writes the flag (interrupt path), it reads back
-different (memory path), or it reads back the same (the loop is waiting on
-something else). Read it with:
+| believed | actually |
+|---|---|
+| 110 matrix writes is a board fault | the bench pushes exactly 110 at the same point from the same PC (0x1678) before going on to 31,667 |
+| the board is stuck spinning at 0x12b0 | that is the main loop's ordinary frame wait; the bench sits there 14.3% while reaching the 3D |
+| the board is trapped in the wrong loop | the reference never executes 0x228f00, that loop's exit; being there is correct |
+| the copro's arithmetic is suspect | it returns the reference's own constants -- 3ea8f5c3, 43148d8e, 430f4545, 43021a1a, 41ae0e0f, 3fac38e4 |
+| 0x44a8 gates the geometry | the bench reaching the 3D executes it ZERO times |
+| 0x0053f688 holds a dispatch pointer | it is an interrupt epilogue restoring saved registers |
 
-    ssh root@<board> 'timeout 15 cat /dev/ttyS1'
+**A ONE-SHOT CANNOT BE SAMPLED.** This was got wrong twice, on 0x172c (runs 140
+times at init) and again on 0x1c0c (runs once). "Absent from the board's
+samples" is not evidence for anything that runs a bounded number of times; those
+must be COUNTED in RTL.
 
-`H` records are `{w500_n[11:0], w500_last, r500_last, w500_be}` and
-`{vbl_n[15:0], mtx_push[11:0], 0}`; `C` records stay the i960 IP and the copro
-state.
+## READING THE BOARD
 
+    ssh root@<board>   # then, on the board:
+    python3 /tmp/uartcap.py <seconds> /tmp/uart.txt
+
+`stty` BLOCKS opening /dev/ttyS1 on this board -- it opens read-write and stalls
+with no carrier, which wedges processes in uninterruptible sleep that even
+kill -9 will not clear. Open with O_NONBLOCK and set termios from python; the
+script is in the scratchpad and on the board. A core reload resets the port's
+baud, so re-set it after one.
+
+## TIMING HAS NO HEADROOM (R189)
+
+41,144 / 41,910 ALM (98%) with 553/553 M10K. Four seeds in a row missed --
+-0.311, -0.974, -0.423 and an Internal Error -- against -0.021 on the build on
+the board. Instruments were cut to two latches for this reason.
+
+`AUTO_RESOURCE_SHARING` was OFF for every build this project has ever made (it
+is absent from the qsf and defaults Off), and `OPTIMIZATION_TECHNIQUE SPEED`
+biases the synthesiser against sharing anyway. It is now ON, changed ALONE.
+`OPTIMIZATION_TECHNIQUE AREA` is the next arm -- Model 1 closes at 97-99% with
+AREA plus "Aggressive Area" and nothing else. Note the qsf records an earlier
+experiment stripping the nine physical-synthesis passes: it tested the CRASH
+rate, which did not improve. It never tested area, so AREA is untested here, not
+disproven.
+
+Model 1 core builds share this machine and run concurrent fits; seed-sweep.sh
+subtracts foreign load, and a foreign fit is what seed 1783's Internal Error was.
 
 ## WHERE THE MACHINE IS
 
