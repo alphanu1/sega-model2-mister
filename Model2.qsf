@@ -257,7 +257,7 @@ set_global_assignment -name FITTER_EFFORT "STANDARD FIT"
 # physical-synthesis passes to see whether the CRASH rate improved; it did not,
 # and it is recorded as wrong. It never tested area, and area -- not crashes --
 # is what is failing now.
-set_global_assignment -name OPTIMIZATION_MODE "BALANCED"
+set_global_assignment -name OPTIMIZATION_MODE "AGGRESSIVE AREA"
 set_global_assignment -name ALLOW_POWER_UP_DONT_CARE ON
 set_global_assignment -name QII_AUTO_PACKED_REGISTERS NORMAL
 # BACK ON, AND NOT BY PREFERENCE. With this OFF the fitter dies with
@@ -291,7 +291,22 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_RETIMING ON
 # anyway -- attract mode, sound, tilemap -- so the miss is real but not fatal at
 # room temperature. Timing gets fixed by seed sweeping and by getting the
 # occupancy down, not by a technique that cannot produce a bitstream.
-set_global_assignment -name OPTIMIZATION_TECHNIQUE BALANCED
+set_global_assignment -name OPTIMIZATION_TECHNIQUE AREA
+# KEEP THE AREA SETTINGS, STOP THEM TRADING M10K FOR MLAB.
+#
+# Three area configurations black-screened the board while closing timing, and
+# the difference measured between a working build and a failing one is where the
+# small RAMs land: 288 RAMs in MLAB working, 295 failing, with seven moving out
+# of M10K. Quartus warns about this itself on every build -- "RAMs using MLAB
+# locations, which can behave differently during read-during-write" -- and an
+# i960 that traps at IP 0 is one that read the wrong thing before it executed
+# anything.
+#
+# BLOCK_RAM_TO_MLAB_CELL_CONVERSION is the assignment that governs exactly that
+# conversion. OFF keeps the area optimisation and takes away the RAM-type change
+# it was making as a side effect.
+set_global_assignment -name BLOCK_RAM_TO_MLAB_CELL_CONVERSION OFF
+set_global_assignment -name AUTO_RAM_BLOCK_BALANCING OFF
 # ascal exempted again: it was measured to take worst-case slack from -3.147
 # to +0.220 under a global AREA, and it is framework code we do not touch.
 set_instance_assignment -name OPTIMIZATION_TECHNIQUE SPEED -to "ascal:ascal"
