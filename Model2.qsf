@@ -257,7 +257,7 @@ set_global_assignment -name FITTER_EFFORT "STANDARD FIT"
 # physical-synthesis passes to see whether the CRASH rate improved; it did not,
 # and it is recorded as wrong. It never tested area, and area -- not crashes --
 # is what is failing now.
-set_global_assignment -name OPTIMIZATION_MODE "AGGRESSIVE AREA"
+set_global_assignment -name OPTIMIZATION_MODE "BALANCED"
 set_global_assignment -name ALLOW_POWER_UP_DONT_CARE ON
 set_global_assignment -name QII_AUTO_PACKED_REGISTERS NORMAL
 # BACK ON, AND NOT BY PREFERENCE. With this OFF the fitter dies with
@@ -291,7 +291,10 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_RETIMING ON
 # anyway -- attract mode, sound, tilemap -- so the miss is real but not fatal at
 # room temperature. Timing gets fixed by seed sweeping and by getting the
 # occupancy down, not by a technique that cannot produce a bitstream.
-set_global_assignment -name OPTIMIZATION_TECHNIQUE AREA
+set_global_assignment -name OPTIMIZATION_TECHNIQUE BALANCED
+# ascal exempted again: it was measured to take worst-case slack from -3.147
+# to +0.220 under a global AREA, and it is framework code we do not touch.
+set_instance_assignment -name OPTIMIZATION_TECHNIQUE SPEED -to "ascal:ascal"
 # RESOURCE SHARING, WHICH HAS NEVER BEEN ON. Its Quartus default is OFF and it
 # is set nowhere in this file, so every mutually exclusive arithmetic operator
 # in the design has been getting its own adder. With OPTIMIZATION_TECHNIQUE
