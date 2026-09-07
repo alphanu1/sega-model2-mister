@@ -10610,3 +10610,50 @@ the ALM, and whether `PHYSICAL_SYNTHESIS_COMBO_LOGIC_FOR_AREA ON` and
 `PHYSICAL_SYNTHESIS_REGISTER_DUPLICATION OFF` -- Model 1 runs the latter off,
 we run it on -- buy more. M10K is untouched by any of this: 553/553 before and
 after, because these settings act on logic, not on memory inference.
+
+**R191 - CORRECTS R189. THE AREA CAME FROM THE MODE AND THE TECHNIQUE.
+`AUTO_RESOURCE_SHARING` CONTRIBUTED NOTHING AND MUST COME OUT.**
+
+R189 framed `AUTO_RESOURCE_SHARING` as a lever that had been off for every build
+this project ever made, and R190 credited 3,590 ALM to the three settings
+together while noting the combination made the individual contributions
+unattributable. Model 1 has since isolated it on the same part, and the answer is
+that the sharing flag does nothing.
+
+From `sega-model1-mister/docs/findings.md`, 2026-09-07:
+
+  * Adding `AUTO_RESOURCE_SHARING`, `MUX_RESTRUCTURE`,
+    `REMOVE_REDUNDANT_LOGIC_CELLS` and
+    `AUTO_DELAY_CHAINS_FOR_HIGH_FANOUT_INPUT_PINS` on top of Aggressive Area +
+    AREA produced a **byte-identical bitstream** -- same md5, same 41,124 ALM,
+    same +0.896 ns. Two instruments agree: the V60 module is 16,007 ALM with and
+    without it.
+  * **"Aggressive Area + AREA already enable the sharing it asks for."**
+  * It is NOT inert everywhere. Against `OPTIMIZATION_MODE "Aggressive
+    Performance"` the flag alone makes the V60 **worse**, 17,759 to 18,125,
+    because it fights the performance bias. Model 1 therefore guards it inside
+    the same branch as the mode and technique so a speed-biased build never
+    gets it.
+  * Their verdict: **"Do not add it."**
+
+*What this changes here.* The 41,144 -> 37,554 ALM measured in R190 is real, and
+it is the work of `OPTIMIZATION_MODE "AGGRESSIVE AREA"` and
+`OPTIMIZATION_TECHNIQUE AREA`. The sharing flag rides along contributing zero,
+and in any configuration that keeps a performance-biased mode it is a
+pessimisation. It is not to be restored when the area settings go back.
+
+*What it does not change.* The `ascal` exemption stands on its own measurement:
+every failing path under AREA was `ascal|o_hcpt -> ascal|o_vcpt_pre3`, and
+exempting the scaler took worst-case slack from -3.147 to +0.220 while keeping
+38,136 ALM of the 3,590 saved.
+
+*And it weakens the black-screen hypothesis.* Model 1 ships Aggressive Area +
+AREA and runs. That is not proof for this design -- the memories differ, and
+inference is the one thing a fitter setting can genuinely change, which
+`quad_store` 75 -> 66 M10K shows it did -- but it makes the loading method the
+better suspect. `/dev/MiSTer_cmd` has twice left the core up with no ROMs, which
+black-screens with the 3D test bars still rendering, exactly as observed.
+
+*Method note.* Read from the live `sega-model1-mister` working copy rather than
+`tools/model1-ref`, which tracks commits only; this finding was recorded today
+and the mirror's known limitation is that uncommitted work there is invisible.
