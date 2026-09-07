@@ -273,6 +273,18 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_RETIMING ON
 # room temperature. Timing gets fixed by seed sweeping and by getting the
 # occupancy down, not by a technique that cannot produce a bitstream.
 set_global_assignment -name OPTIMIZATION_TECHNIQUE SPEED
+# RESOURCE SHARING, WHICH HAS NEVER BEEN ON. Its Quartus default is OFF and it
+# is set nowhere in this file, so every mutually exclusive arithmetic operator
+# in the design has been getting its own adder. With OPTIMIZATION_TECHNIQUE
+# SPEED the synthesiser will not share on its own either -- SPEED biases against
+# exactly this trade -- so the two together mean the design has been paying full
+# area for operators that can never be active at once.
+#
+# That matters now and did not before: the fit is at 98% ALM with 553/553 M10K,
+# and four seeds in a row have missed timing because the fitter has nowhere left
+# to place. Sharing costs a mux on the shared operands, so it can lengthen a
+# path; the A/B is whether the ALM saved buys back more than the mux costs.
+set_global_assignment -name AUTO_RESOURCE_SHARING ON
 set_global_assignment -name MUX_RESTRUCTURE ON
 set_global_assignment -name REMOVE_REDUNDANT_LOGIC_CELLS ON
 set_global_assignment -name AUTO_DELAY_CHAINS_FOR_HIGH_FANOUT_INPUT_PINS ON

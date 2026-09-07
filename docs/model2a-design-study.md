@@ -10527,3 +10527,40 @@ in the record because it is the headline number.
 ROM in R187. They are the i960 *data* ROM; the program is
 `epr-16530a.12`/`16531a.13`. Caught by disassembling `0x12b0` from the wrong
 image and getting floating-point constants where instructions had to be.
+
+**R189 - AUTO_RESOURCE_SHARING HAS BEEN OFF FOR EVERY BUILD THIS PROJECT HAS
+EVER MADE, AND OPTIMIZATION_TECHNIQUE SPEED GUARANTEES NOTHING SHARES.**
+
+Believed before: nothing, which is the point. The setting is absent from
+`Model2.qsf` and was never considered, so no entry here records a decision about
+it either way.
+
+Known now: `AUTO_RESOURCE_SHARING` defaults to **Off** in Quartus, and this file
+sets `OPTIMIZATION_TECHNIQUE SPEED`. Those compound. Sharing lets one adder or
+comparator serve several operations the design can never run at the same time;
+with it off, every such operator is built separately, and SPEED biases the
+synthesiser away from making that trade on its own. So the design has been
+paying full area for operators that are mutually exclusive by construction.
+
+*Why it did not matter and now does.* The area was there. The comment beside
+`PHYSICAL_SYNTHESIS_COMBO_LOGIC_FOR_AREA` still says the design has "8,940 ALM
+spare" and is the reason that option was turned off; a later note beneath it
+already records that both halves of that sentence are false. The fit is now
+41,144 / 41,910 ALM (98%) with 553/553 M10K, and four consecutive seeds have
+missed timing -- -0.311, -0.974, -0.423 and one Internal Error -- against
+-0.021 on the build on the board. A fitter at 98% occupancy misses timing
+because it has nowhere to place, not because a path is inherently slow, and the
+seed sweeps that have been the standing remedy are treating the symptom.
+
+*What is expected, and what would falsify it.* Sharing trades logic for muxes on
+the shared operands, so it reduces ALM and can lengthen a path. The measurement
+is ALM and worst-case slack together: fewer ALM with slack no worse is the win;
+fewer ALM with slack materially worse means the muxes landed on a critical path
+and the setting is wrong for this design. ALM alone is not the result.
+
+*Recorded because this file has been burned by it.* Fitter settings changed in a
+batch correlated with a run of crashes earlier in this project and had to be
+reverted wholesale. This is ONE setting, changed alone, and `quartus_map` is
+re-run rather than `quartus_fit` alone -- it is a synthesis assignment, so a
+fit-only rerun would reuse the previous netlist and report a result for a
+setting that never took effect.
