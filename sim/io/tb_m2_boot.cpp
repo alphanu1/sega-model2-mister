@@ -499,6 +499,18 @@ int main(int argc, char **argv) {
       mem[a] = d->geo_sd_din;
       g_geo_writes.insert(a);
       d->geo_sd_ack = 1;
+      // The front door's writes, in the same log as the walker's reads, so a
+      // read of 0xFFFFFFFF can be checked against whether anything ever wrote
+      // that word. 74,272 distinct words land in a 131,072-word region, so the
+      // coverage is sparse and the walker is reading holes.
+      // ONLY THE WIPES, and only into the display list. A word written 0x002e
+      // early reads back 0xFFFF later, so something clears buffer RAM under the
+      // walker; logging every write exhausted the cap before reaching it.
+      static uint32_t wn = 0;
+      if (g_pdlog && wn < 200000 && d->geo_sd_din == 0xffff &&
+          a >= 0x16f0000u && a < 0x1700000u) {
+        std::fprintf(g_pdlog, "WIPE     word %07x = ffff\n", a); ++wn;
+      }
     }
   };
 

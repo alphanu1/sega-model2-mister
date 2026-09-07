@@ -424,11 +424,41 @@ module m2_geo #(
   logic [2:0]  w_cap;                    // which opcode's operands are being read
   logic [3:0]  w_ci;                     // operand index
   logic        eng_seen;                 // the engine's busy has been observed high
-  // A pending vblank, and how long we have waited for the push queue to drain.
+  // WALK ON THE GAME'S FLIP, NOT ON VBLANK.
+  //
+  // A vblank-triggered walk reads a display list the i960 is still writing. The
+  // boot bench shows it directly: a word reads 0x0000002e correctly for ninety
+  // frames and then 0xffffffff, because the CPU cleared that region mid-walk --
+  // 120,317 such clears go through the front door in one run. The walker then
+  // copies all-ones into polygon RAM, every vertex has exponent 0xFF, and
+  // m2_geometry's non-finite gate refuses 17,315 polygons. What survives is a
+  // handful of degenerate quads.
+  //
+  // Model 1 hit this and solved it, and its m1_raster3d.sv says what it looks
+  // like on a screen: "a pass beginning the moment its bank was free walks a
+  // list the V60 is halfway through writing, and showed on the board as
+  // geometry in the wrong place with vertices collapsed toward the origin. The
+  // flip is precisely the moment at which that cannot happen." Its trigger is
+  //
+  //     prod_trig = (list_flipped && ...) || (frame_start && no_flips)
+  //
+  // Model 2's flip is the game writing the READ POINTER at 0x00803008. Measured
+  // on the reference: Daytona writes it 492 times in 600 frames -- every second
+  // frame, right after it sets the write pointer -- and the address is always 0,
+  // so the game single-buffers and uses the WRITE ITSELF as "the list is ready".
+  //
+  // frame_pend stays as the fallback for a list that has not flipped, which is
+  // what a bench or a game that never writes rp needs, and it is held off while
+  // flips are arriving so it cannot pre-empt one and walk the stale list -- the
+  // same guard Model 1 uses.
   logic        frame_pend;
+  logic        flip_pend;
+  logic [2:0]  fs_since_flip;            // frame pulses since the last flip, saturating
   logic [9:0]  drain_wait;
   wire         q_idle   = !q_valid && (dst == D_IDLE);
-  wire         walk_go  = frame_pend && (q_idle || (&drain_wait));
+  wire         no_flips = fs_since_flip[2];
+  wire         walk_go  = (flip_pend || (frame_pend && no_flips))
+                       && (q_idle || (&drain_wait));
   logic [31:0] pd_addr;                  // geo_polygon_data's destination
   logic [15:0] pd_n, pd_i;               // dwords to copy, and the one in hand
   logic  [4:0] tp_i;                     // texture_parameters index, wraps at 32
@@ -478,6 +508,7 @@ module m2_geo #(
       dbg_walk_frames <= 16'd0; dbg_walk_unknown <= 8'd0;
       w_cap <= 3'd0; w_ci <= 4'd0; obj_valid <= 1'b0; eng_seen <= 1'b0;
       frame_pend <= 1'b0; drain_wait <= 10'd0;
+      flip_pend <= 1'b0; fs_since_flip <= 3'd7;
       pd_addr <= 32'd0; pd_n <= 16'd0; pd_i <= 16'd0;
       pd_req <= 1'b0; pd_wdata <= 32'd0;
       dbg_pd_words <= 16'd0; dbg_pd_cmds <= 16'd0;
@@ -492,8 +523,12 @@ module m2_geo #(
       obj_valid <= 1'b0;
       // Remember the vblank; clear it when the walk actually starts.
       if (frame_start) begin frame_pend <= 1'b1; drain_wait <= 10'd0; end
-      else if (frame_pend && !(&drain_wait)) drain_wait <= drain_wait + 10'd1;
-      if (walk_go && (wst == W_IDLE)) frame_pend <= 1'b0;
+      else if ((frame_pend || flip_pend) && !(&drain_wait)) drain_wait <= drain_wait + 10'd1;
+      // The flip. Counted like Model 1's fs_since_flip so the vblank fallback
+      // only applies to a list that has not flipped in four frames.
+      if (wr_setrp) begin flip_pend <= 1'b1; drain_wait <= 10'd0; fs_since_flip <= 3'd0; end
+      else if (frame_start && !no_flips) fs_since_flip <= fs_since_flip + 3'd1;
+      if (walk_go && (wst == W_IDLE)) begin frame_pend <= 1'b0; flip_pend <= 1'b0; end
       case (wst)
         // THE WALK MUST NOT READ A BUFFER THE FRONT DOOR IS STILL WRITING.
         //
