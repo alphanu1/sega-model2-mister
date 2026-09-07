@@ -10657,3 +10657,44 @@ black-screens with the 3D test bars still rendering, exactly as observed.
 *Method note.* Read from the live `sega-model1-mister` working copy rather than
 `tools/model1-ref`, which tracks commits only; this finding was recorded today
 and the mirror's known limitation is that uncommitted work there is invisible.
+
+**R192 - 7ff4217 DOES NOT BOOT. DO NOT REINTRODUCE IT. THE MECHANISM IS NOT
+KNOWN AND IS NOT WORTH CHASING.**
+
+Commit `7ff4217` ("Trim the instrument to two latches") produces a bitstream in
+which the i960 traps and halts at IP 0 and the screen stays black. Confirmed on
+hardware, on two different fitter configurations and two different seeds.
+
+Bisected against builds tested on the board:
+
+| commit | RTL | flags | result |
+|---|---|---|---|
+| `6523ee3` | pre-instrument | original | **boots** |
+| `87b11e2` (13) | instrument, four counters | original | **boots** |
+| `7ff4217` (14) .. HEAD | instrument, trimmed | original | traps at IP 0 |
+| `7ff4217` (14) .. HEAD | instrument, trimmed | AREA | traps at IP 0 |
+
+The UART reports `C 00000000 C0000000` -- IP 0 with `cpu_trap` and `cpu_halted`
+both set -- and `H EEEEEEEE EE000000`, the reset values, so nothing ever ran.
+Commits 15-21 touch only `Model2.qsf`, and the control build that reverted every
+flag to the known-good configuration still failed, which rules the flags out.
+
+**Timing does not explain it.** The two failing bitstreams had BETTER worst-case
+setup slack than the two that work: +0.199 and +0.220 against -0.209 and -0.062.
+
+**The diff does not explain it either**, which is why this entry does not try.
+It removes four `cpu_dbg_ip` comparators and a counter and adds one 32-bit latch
+on writes to `0x005010a8`. All of it is debug that dead-ends in the UART record;
+none of it touches the CPU, the bus, reset, or any memory.
+
+*The rule, which is the only part that matters.* `Model2.sv` at `87b11e2` is a
+known-good instrumented baseline. Build instruments forward from it. Do not
+reapply `7ff4217`, and do not spend builds trying to find out why it fails --
+that was offered and declined, deliberately.
+
+*One habit that made it expensive to find.* Several of the `Model2.sv` edits in
+commits 6-14 were made by splicing the file at string indices rather than by
+matching exact text. One of them silently dropped a snoop and left a stale block
+behind, which was only noticed later by reading the file. Lint does not catch
+this: Verilator checks that signals are driven, not that the logic is what was
+intended.
