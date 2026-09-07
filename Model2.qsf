@@ -238,26 +238,7 @@ set_global_assignment -name FITTER_EFFORT "STANDARD FIT"
 # that trade.
 #
 # The other four area settings stay. They cost no block memory.
-# AGGRESSIVE AREA, WITH OPTIMIZATION_TECHNIQUE AREA BELOW. These two feed the
-# same area/speed trade and were pulling against each other: the mode asked for
-# performance while AUTO_RESOURCE_SHARING asked the synthesiser to trade logic
-# for muxes, which SPEED refuses to do. Setting one without the others buys
-# nothing, so all three move together.
-#
-# This is Model 1's configuration, and Model 1 is the oracle: it closes timing at
-# 97-99% occupancy on this same part with "Aggressive Area", AREA and register
-# duplication off, and nothing else set at all. We are at 98% with 553/553 M10K
-# and four consecutive seeds missed -- -0.311, -0.974, -0.423 and an Internal
-# Error -- against -0.021 on the build on the board.
-#
-# WAS: "HIGH PERFORMANCE EFFORT". Not "Aggressive Performance"; the same
-# performance-biased family, but the record should say what was actually here.
-#
-# NOT a re-run of the experiment above. That one stripped the nine
-# physical-synthesis passes to see whether the CRASH rate improved; it did not,
-# and it is recorded as wrong. It never tested area, and area -- not crashes --
-# is what is failing now.
-set_global_assignment -name OPTIMIZATION_MODE "AGGRESSIVE AREA"
+set_global_assignment -name OPTIMIZATION_MODE "HIGH PERFORMANCE EFFORT"
 set_global_assignment -name ALLOW_POWER_UP_DONT_CARE ON
 set_global_assignment -name QII_AUTO_PACKED_REGISTERS NORMAL
 # BACK ON, AND NOT BY PREFERENCE. With this OFF the fitter dies with
@@ -291,78 +272,20 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_RETIMING ON
 # anyway -- attract mode, sound, tilemap -- so the miss is real but not fatal at
 # room temperature. Timing gets fixed by seed sweeping and by getting the
 # occupancy down, not by a technique that cannot produce a bitstream.
-set_global_assignment -name OPTIMIZATION_TECHNIQUE AREA
-# KEEP THE AREA SETTINGS, STOP THEM TURNING SHIFT REGISTERS INTO RAM.
-#
-# Three area configurations black-screened the board while closing timing. The
-# difference between a working build and a failing one is NOT that any memory
-# moved out of M10K -- none did. It is that AREA switches on shift-register
-# recognition, and nine logic shift registers became RAM-backed ones:
-#
-#     +53 MLAB  altshift_taps:dv_hs1_rtl_0
-#     +26 MLAB  m2_copro|m2_tgp|mb86233_core|mb86233_alu|altshift_taps:pop_rtl_0
-#     +44 MLAB  m2_sound_board|jt12|jt12_mmr|jt12_reg|jt12_csr
-#     +20 MLAB  m2_sound_board|jt12|jt12_eg
-#     ... and five more, all jt12
-#
-# A RAM-backed shift register does not reset like a chain of flops and has
-# different read-during-write behaviour -- which is what Quartus warns about on
-# every build. It lands on the TGP's ALU and the whole FM sound chip.
-#
-# BLOCK_RAM_TO_MLAB_CELL_CONVERSION OFF was tried first and is WRONG: it forces
-# those RAMs into M10K, and at 553/553 the design then does not fit at all --
-# "Error (170048): device has 553 RAM locations of type M10K, the design needs
-# more". The MLAB usage is not waste, it is load-bearing.
-set_global_assignment -name AUTO_SHIFT_REGISTER_RECOGNITION OFF
-# ascal exempted again: it was measured to take worst-case slack from -3.147
-# to +0.220 under a global AREA, and it is framework code we do not touch.
-set_instance_assignment -name OPTIMIZATION_TECHNIQUE SPEED -to "ascal:ascal"
-# RESOURCE SHARING, WHICH HAS NEVER BEEN ON. Its Quartus default is OFF and it
-# is set nowhere in this file, so every mutually exclusive arithmetic operator
-# in the design has been getting its own adder. With OPTIMIZATION_TECHNIQUE
-# SPEED the synthesiser will not share on its own either -- SPEED biases against
-# exactly this trade -- so the two together mean the design has been paying full
-# area for operators that can never be active at once.
-#
-# That matters now and did not before: the fit is at 98% ALM with 553/553 M10K,
-# and four seeds in a row have missed timing because the fitter has nowhere left
-# to place. Sharing costs a mux on the shared operands, so it can lengthen a
-# path; the A/B is whether the ALM saved buys back more than the mux costs.
-
-# ASCAL IS EXEMPT, AND IT IS THE ONLY THING THE AREA SETTINGS BROKE.
-#
-# AGGRESSIVE AREA + AREA took the design from 41,144 ALM to 37,554 -- 98% to
-# 89.6%, which is the headroom this project needed -- and took worst-case slack
-# from -0.202 to -3.147. Every failing path in that build is inside the
-# framework's scaler:
-#
-#     SLACK -3.147  FROM ascal:ascal|o_hcpt[1]  TO ascal:ascal|o_vcpt_pre3[6]
-#
-# Not one of our own paths appears; m2_sdram|dq_r -> p_dout, which was the worst
-# path at -0.202 under SPEED, drops off the list entirely. ascal was already the
-# second-worst at -0.106 before the change, so area-restructuring its arithmetic
-# is what blew it out, and ascal is sys/ code we do not otherwise touch.
-#
-# OPTIMIZATION_TECHNIQUE is an entity-level assignment, so the scaler keeps the
-# technique it was closing under while the core we are actually short of area in
-# gets AREA. If this does not recover it, the next lever is leaving ascal at the
-# global default rather than forcing SPEED on it.
+set_global_assignment -name OPTIMIZATION_TECHNIQUE SPEED
 set_global_assignment -name MUX_RESTRUCTURE ON
 set_global_assignment -name REMOVE_REDUNDANT_LOGIC_CELLS ON
 set_global_assignment -name AUTO_DELAY_CHAINS_FOR_HIGH_FANOUT_INPUT_PINS ON
-# LEFT OFF, BUT ITS JUSTIFICATION IS NOW DEAD AND SHOULD NOT BE READ AS ONE.
-#
-# The original reason for OFF was "the design is in HIGH PERFORMANCE EFFORT with
-# OPTIMIZATION_TECHNIQUE SPEED and 8,940 ALM spare, so area-targeted
-# combinational restructuring is buying nothing and costing path depth". Every
-# clause of that is now false: the mode is AGGRESSIVE AREA, the technique is
-# AREA, and the spare is 766 ALM of 41,910. The A/B quoted for it -- seed 19
-# missing at -0.124 with it on -- was measured under the old mode and technique
-# and says nothing about this configuration.
-#
-# It stays OFF only because the mode, the technique and AUTO_RESOURCE_SHARING
-# all moved in one change and a fourth variable would make the result
-# unattributable. It is the obvious next thing to try if area is still short.
+# OFF: a leftover from the area experiment this file says was ABANDONED.
+# The design is in HIGH PERFORMANCE EFFORT with OPTIMIZATION_TECHNIQUE SPEED
+# and 8,940 ALM spare, so area-targeted combinational restructuring is buying
+# nothing and costing path depth. Turned off ALONE -- it is not one of the
+# four whose removal segfaults this fitter, and the A/B is seed 19, which
+# missed at -0.124 with it on.
+# ON. The paragraph above justifies OFF with "the design is in HIGH PERFORMANCE
+# EFFORT with OPTIMIZATION_TECHNIQUE SPEED and 8,940 ALM spare, so area-targeted
+# combinational restructuring is buying nothing". Both halves of that are now
+# false: the technique is AREA and the spare is 196 ALM.
 set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC_FOR_AREA OFF
 set_global_assignment -name ADV_NETLIST_OPT_SYNTH_WYSIWYG_REMAP ON
 set_global_assignment -name SYNTH_GATED_CLOCK_CONVERSION ON
