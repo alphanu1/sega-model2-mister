@@ -86,6 +86,9 @@ static uint32_t g_findval = 0;
 // M2_STATE_ADDR picks the word to watch; the game dispatches through function
 // pointers in work RAM, so which one matters changes as the chain is followed.
 static uint32_t g_state_addr = 0x0053e5f4u;
+static unsigned g_engrd_n = 0;   // first few engine object reads, dumped
+static unsigned g_pdrd_n = 0;    // first few polygon_data reads, dumped
+static FILE *g_pdlog = nullptr;  // M2_PDLOG: the walker's reads, state by state
 // The instruction-pointer histogram is sampled inside geo_tick, which is
 // defined above main's locals, so these live at file scope.
 static std::map<uint32_t,uint64_t> ip_hist;
@@ -430,6 +433,27 @@ int main(int argc, char **argv) {
   auto geo_tick = [&]() {
     d->geo_rd_ack = 0;
     if (d->geo_rd_req) {
+      // WHAT THE WALKER READS FOR A polygon_data COMMAND. MAME's format is
+      // address, then a full-dword count, then that many payload words. Ours
+      // reports 32 commands and 0 dwords, so every count word is reading zero
+      // and the payload is skipped -- which leaves polygon RAM unwritten, and
+      // an unwritten read is 0xFFFFFFFF, exponent 0xFF, refused by the
+      // non-finite gate. States: 4=W_CNT, 10=W_PDA, 11=W_PDR.
+      const unsigned st = d->geo_state & 15;
+      static unsigned last_st = 99; static uint32_t last_a = 0xffffffff;
+      const bool newrd = (st != last_st) || (uint32_t(d->geo_rd_addr) != last_a);
+      if (newrd) { last_st = st; last_a = uint32_t(d->geo_rd_addr); }
+      if (newrd && g_pdlog && g_pdrd_n < 400000 && st <= 12) {
+        static const char *WN[13] = {"W_IDLE","W_FETCH","W_DECODE","W_SKIP","W_CNT",
+                                     "W_TFIFO","W_DDSKIP","W_DDATTR","W_OPRD","W_OBJW",
+                                     "W_PDA","W_PDR","W_PDW"};
+        const char *nm = WN[st];
+        const uint32_t aa = (0x16f0000u + (uint32_t(d->geo_rd_addr) << 1)) & 0x1ffffff;
+        std::fprintf(g_pdlog, "%-8s ip=%05x word %07x = %08x\n",
+                    nm, (unsigned)d->geo_rd_addr, aa,
+                    (unsigned)(uint32_t(mem[aa]) | (uint32_t(mem[(aa+1)&0x1ffffff]) << 16)));
+        ++g_pdrd_n;
+      }
       const uint32_t a = (0x16f0000u + (uint32_t(d->geo_rd_addr) << 1)) & 0x1ffffff;
       d->geo_rd_data = uint32_t(mem[a]) | (uint32_t(mem[(a + 1) & 0x1ffffff]) << 16);
       d->geo_rd_ack  = 1;
@@ -444,10 +468,30 @@ int main(int argc, char **argv) {
                          (int)(int16_t)d->eng_q_x2, (int)(int16_t)d->eng_q_y2,
                          (int)(int16_t)d->eng_q_x3, (int)(int16_t)d->eng_q_y3});
     if (d->eng_mem_req) {
+      // THE SAME DECODE AS Model2.sv's, WHICH THIS PREVIOUSLY CLAIMED AND WAS
+      // NOT. It always used the polygon-ROM base and never masked the selector
+      // bit, so for oba=0x95e0c6 it indexed 0x800000 dwords past where the core
+      // reads and then wrapped on the 25-bit mask. Every vertex came back
+      // 0xFFFFFFFF -- exponent 0xFF -- and m2_geometry's nonfinite gate refused
+      // the lot: 20,112 rejections against 3,728 polygons, and zero quads.
+      // That was a fault in this model, not in the core.
+      //
+      //   Model2.sv: base = oba[24] ? GAME_PRAM1 : oba[23] ? GAME_POLY : GAME_PRAM0
+      //              idx  = ROM ? addr[21:0] : addr[14:0]
+      const uint32_t oba = uint32_t(d->geo_oba_last);
       const uint32_t idx = uint32_t(d->eng_mem_addr);
-      const uint32_t a = (0x0b20000u + (idx << 1)) & 0x1ffffff;
+      uint32_t base, off;
+      if      (oba & (1u << 24)) { base = 0x1720000u; off = idx & 0x7fffu;   }
+      else if (oba & (1u << 23)) { base = 0x0b20000u; off = idx & 0x3fffffu; }
+      else                       { base = 0x1710000u; off = idx & 0x7fffu;   }
+      const uint32_t a = (base + (off << 1)) & 0x1ffffff;
       d->eng_mem_data = uint32_t(mem[a]) | (uint32_t(mem[(a + 1) & 0x1ffffff]) << 16);
       d->eng_mem_ack  = 1;
+      if (g_engrd_n < 12) {
+        std::printf("      engrd %2u: oba=%08x addr=%06x -> word %07x = %08x\n",
+                    g_engrd_n, oba, idx, a, (unsigned)d->eng_mem_data);
+        ++g_engrd_n;
+      }
     }
     d->geo_sd_ack = 0;
     if (d->geo_sd_req) {
@@ -763,6 +807,10 @@ int main(int argc, char **argv) {
   const bool real_mem = std::getenv("M2_REALMEM") != nullptr;
   if (const char *fv = std::getenv("M2_FINDVAL"))
     g_findval = uint32_t(std::strtoul(fv, nullptr, 0));
+  if (const char *pl = std::getenv("M2_PDLOG")) {
+    g_pdlog = std::fopen(pl, "w");
+    if (g_pdlog) std::setvbuf(g_pdlog, nullptr, _IOLBF, 0);
+  }
   if (const char *tp = std::getenv("M2_TRAP"))
     g_trap_addr = uint32_t(std::strtoul(tp, nullptr, 0));
   if (const char *sa = std::getenv("M2_STATE_ADDR"))
