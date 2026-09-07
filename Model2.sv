@@ -3623,9 +3623,10 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	//   b_data  function writes REFUSED by the gate : function writes accepted
 	// THE FRAME FLAG AT 0x00500000, because mtx_push has read a static 110 since
 	// frame 134 and the geometry counters have nothing further to say.
-	//   b_addr: the attract dwell timer at 0x005010a8, which state 11 tests
-	//   before setting the state back to 2. 0xEEEEEEEE is "never written".
-	.b_addr(timer_last),
+	//   b_addr: the attract state -- last value written : times it was 2, the
+	//   state whose handler enables the 3D task : total writes : entries into
+	//   the 3D handler. 0xEE in the top byte is "never written".
+	.b_addr({state_last, n_state2, n_state_wr, tw_5890}),
 	// clip_dropped read 0 on hardware and the refusal count is the number that
 	// now moves, so it takes that byte. Between them: accepted, emitted, refused
 	// before the arithmetic, and reaching the rasterizer.
@@ -3656,10 +3657,7 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// counter with nothing decoded looks like.
 	//   b_data: walker iterations : calls taken : 3D handler entered : the
 	//   one-shot that registers it. 1c14 at zero is the whole answer.
-	//   b_data: the attract state last written : how many times it was 2. Zero
-	//   in the second byte is "the demo state is never entered", which 45,260
-	//   profiler samples already say and this makes certain.
-	.b_data({state_last, n_state2, 16'd0}),
+	.b_data({tw_1854, tw_1860, tw_1c14, 8'd0}),
 	.a_tag(8'h43), .b_tag(8'h48),          // 'C' copro in_pushed:out_pushed | TGP retires:pc
 	                                       // 'H' out_popped:hscr2 | io_addr:flags
 	                                       // 'H' scroll h:v for layers 0,1 | layers 2,3 -- low bytes
@@ -4296,8 +4294,8 @@ logic        irq0_d;
 // twice today, on 0x172c and again on 0x1c0c -- so it is COUNTED. tw_1c14 at
 // zero means the board never registers the task and the fault is upstream of
 // the list; non-zero with tw_5890 at zero means it registers and never runs.
-logic  [7:0] state_last, n_state2;
-logic [31:0] timer_last;
+logic  [7:0] state_last, n_state2, n_state_wr;
+logic  [7:0] tw_1854, tw_1860, tw_5890, tw_1c14;
 always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
 		lc_cnt <= 32'hEEEE_EEEE; lc_base <= 32'hEEEE_EEEE;
@@ -4307,7 +4305,8 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		cack_d <= 1'b0; cwe_d <= 1'b0; caddr_d <= 32'd0; crd_d <= 32'd0;
 		cwd_d <= 32'd0; cbe_d <= 4'd0;
 		vbl_n <= 16'd0; irq0_d <= 1'b0;
-		state_last <= 8'hEE; n_state2 <= 8'd0; timer_last <= 32'hEEEE_EEEE;
+		state_last <= 8'hEE; n_state2 <= 8'd0; n_state_wr <= 8'd0;
+		tw_1854 <= 8'd0; tw_1860 <= 8'd0; tw_5890 <= 8'd0; tw_1c14 <= 8'd0;
 	end else begin
 		cack_d  <= cpu_ack;
 		cwe_d   <= cpu_we;
@@ -4352,22 +4351,25 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 			sd_seen <= {sdwb_d, 6'd0, sdwd_d[7:0], sdwd_d[15:8]};
 		end
 
-		// THE ATTRACT STATE AND ITS DWELL TIMER. Both written by the state
-		// machine, so a latch catches them; neither is a one-shot.
-		//
-		// 0x005010a0 is the state the dispatcher at 0x18a0 selects a handler with.
-		// The board cycles handlers 0x1d24/0x1dfc/0x2028/0x2338 and never 0x197c,
-		// which is state 2 and the only thing that enables the 3D task. 0x005010a8
-		// is the dwell counter that state 11's handler tests at 0x2594 before
-		// branching to 0x2630, where the state is set back to 2.
-		//
-		// Kept deliberately small: this design fits at 98% ALM and four seeds in a
-		// row missed timing with a larger instrument in place.
+		// THE ATTRACT STATE, as the dispatcher at 0x18a0 writes it. 0xEE is
+		// "never written". Counted by equality against 2 -- the state whose
+		// handler enables the 3D task -- never by an indexed array write: that
+		// shape took a Segment Violation at the START of the fit on three seeds
+		// out of four when it was tried as a page mask, exactly as the ipring
+		// read in this file does.
 		if (cack_d && cwe_d && caddr_d == 32'h0050_10a0) begin
 			state_last <= cwd_d[7:0];
+			if (!(&n_state_wr)) n_state_wr <= n_state_wr + 8'd1;
 			if (cwd_d[7:0] == 8'd2 && !(&n_state2)) n_state2 <= n_state2 + 8'd1;
 		end
-		if (cack_d && cwe_d && caddr_d == 32'h0050_10a8) timer_last <= cwd_d;
+		// The IP register is valid continuously, so an equality test cannot miss
+		// an entry the way a 1-in-65536 sample can, and 0x1c14 is a ONE-SHOT --
+		// sampling it was tried twice today and is worthless. Saturating,
+		// because "did it ever" is the question and a wrap would answer wrongly.
+		if (cpu_dbg_ip == 32'h0000_1854 && !(&tw_1854)) tw_1854 <= tw_1854 + 8'd1;
+		if (cpu_dbg_ip == 32'h0000_1860 && !(&tw_1860)) tw_1860 <= tw_1860 + 8'd1;
+		if (cpu_dbg_ip == 32'h0000_5890 && !(&tw_5890)) tw_5890 <= tw_5890 + 8'd1;
+		if (cpu_dbg_ip == 32'h0000_1c14 && !(&tw_1c14)) tw_1c14 <= tw_1c14 + 8'd1;
 		// AND WHETHER THE INTERRUPT THAT SHOULD MOVE IT ARRIVES AT ALL.
 		irq0_d <= cpu_irq[0];
 		if (cpu_irq[0] && !irq0_d && !(&vbl_n)) vbl_n <= vbl_n + 16'd1;
