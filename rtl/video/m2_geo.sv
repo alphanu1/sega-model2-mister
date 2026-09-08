@@ -454,6 +454,13 @@ module m2_geo #(
   logic        frame_pend;
   logic        flip_pend;
   logic [2:0]  fs_since_flip;            // frame pulses since the last flip, saturating
+  // wr_setrp is formed in the CPU's clock domain from cpu_io_sel; using it
+  // directly here put a cross-domain path into this block and cost 0.34 ns of
+  // HOLD -- +0.169 before the change, -0.231 after, on the same seed 1604, and
+  // negative on all five seeds tried. Registering it locally breaks that path.
+  // The pulse is several clk cycles wide at the CPU's 24 MHz against this
+  // domain, so a single flop cannot miss it.
+  logic        setrp_q;
   logic [9:0]  drain_wait;
   wire         q_idle   = !q_valid && (dst == D_IDLE);
   wire         no_flips = fs_since_flip[2];
@@ -508,7 +515,7 @@ module m2_geo #(
       dbg_walk_frames <= 16'd0; dbg_walk_unknown <= 8'd0;
       w_cap <= 3'd0; w_ci <= 4'd0; obj_valid <= 1'b0; eng_seen <= 1'b0;
       frame_pend <= 1'b0; drain_wait <= 10'd0;
-      flip_pend <= 1'b0; fs_since_flip <= 3'd7;
+      flip_pend <= 1'b0; fs_since_flip <= 3'd7; setrp_q <= 1'b0;
       pd_addr <= 32'd0; pd_n <= 16'd0; pd_i <= 16'd0;
       pd_req <= 1'b0; pd_wdata <= 32'd0;
       dbg_pd_words <= 16'd0; dbg_pd_cmds <= 16'd0;
@@ -526,7 +533,8 @@ module m2_geo #(
       else if ((frame_pend || flip_pend) && !(&drain_wait)) drain_wait <= drain_wait + 10'd1;
       // The flip. Counted like Model 1's fs_since_flip so the vblank fallback
       // only applies to a list that has not flipped in four frames.
-      if (wr_setrp) begin flip_pend <= 1'b1; drain_wait <= 10'd0; fs_since_flip <= 3'd0; end
+      setrp_q <= wr_setrp;
+      if (setrp_q) begin flip_pend <= 1'b1; drain_wait <= 10'd0; fs_since_flip <= 3'd0; end
       else if (frame_start && !no_flips) fs_since_flip <= fs_since_flip + 3'd1;
       if (walk_go && (wst == W_IDLE)) begin frame_pend <= 1'b0; flip_pend <= 1'b0; end
       case (wst)

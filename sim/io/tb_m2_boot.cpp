@@ -487,7 +487,9 @@ int main(int argc, char **argv) {
       const uint32_t a = (base + (off << 1)) & 0x1ffffff;
       d->eng_mem_data = uint32_t(mem[a]) | (uint32_t(mem[(a + 1) & 0x1ffffff]) << 16);
       d->eng_mem_ack  = 1;
-      if (g_engrd_n < 12) {
+      // Only the reads that return something other than unwritten memory: the
+      // first dozen reads happen before polygon RAM is filled and say nothing.
+      if (g_engrd_n < 12 && d->eng_mem_data != 0xffffffffu) {
         std::printf("      engrd %2u: oba=%08x addr=%06x -> word %07x = %08x\n",
                     g_engrd_n, oba, idx, a, (unsigned)d->eng_mem_data);
         ++g_engrd_n;
