@@ -3626,7 +3626,20 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	//   b_addr: the attract state -- last value written : times it was 2, the
 	//   state whose handler enables the 3D task : total writes : entries into
 	//   the 3D handler. 0xEE in the top byte is "never written".
-	.b_addr({state_last, n_state2, n_state_wr, tw_5890}),
+	// THE CPU'S RESET CHAIN. The board reports IP 0 with trap=0 and halted=0 --
+	// a CPU that never started, not one that crashed:
+	//
+	//   cpu_rst_n = game_rst_n & rom_loaded & game_image & cal_done & bi_done
+	//
+	// Every build since 87b11e2 does this, whatever was added and whatever the
+	// timing: commit 14's debug registers, and the flip-triggered walk on two
+	// seeds with OPPOSITE setup/hold trades (-0.063/-0.038 and -0.769/+0.246).
+	// Stepping the OSD's SDRAM phase CL+1..CL+5 changed nothing, so the
+	// calibration phase is not it. Which of the five terms never asserts has
+	// never been measured, and guessing has cost several builds.
+	//
+	// Existing signals routed to the streamer; no new logic.
+	.b_addr({27'd0, game_rst_n, rom_loaded, game_image, cal_done, bi_done}),
 	// clip_dropped read 0 on hardware and the refusal count is the number that
 	// now moves, so it takes that byte. Between them: accepted, emitted, refused
 	// before the arithmetic, and reaching the rasterizer.
@@ -3657,7 +3670,7 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// counter with nothing decoded looks like.
 	//   b_data: walker iterations : calls taken : 3D handler entered : the
 	//   one-shot that registers it. 1c14 at zero is the whole answer.
-	.b_data({tw_1854, tw_1860, tw_1c14, 8'd0}),
+	.b_data({28'd0, st_state}),
 	.a_tag(8'h43), .b_tag(8'h48),          // 'C' copro in_pushed:out_pushed | TGP retires:pc
 	                                       // 'H' out_popped:hscr2 | io_addr:flags
 	                                       // 'H' scroll h:v for layers 0,1 | layers 2,3 -- low bytes
