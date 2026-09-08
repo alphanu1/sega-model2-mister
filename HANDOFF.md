@@ -1,6 +1,6 @@
 # Handoff
 
-**Updated:** 2026-09-08. Study entries R176-R196. R172 WITHDRAWN, R185 partly
+**Updated:** 2026-09-08. Study entries R176-R197. R172 WITHDRAWN, R185 partly
 RETRACTED, R189 corrected by R191, R196's central claim WITHDRAWN the same day.
 
 ## WHERE 2026-09-08 LEFT IT
@@ -45,11 +45,45 @@ the other buffer.
 `base_buffer + (ptr & 0x1ffff)>>1` (`m2_geo.sv:298`), and `base_buffer` IS
 `GAME_BUFFER`. Made from one file without following `rd_data` to its source.
 
-**Next measurement, already instrumented and never read on hardware:**
-`dbg_p4_clash`. Port 4 is shared between the walker and the engine
-(`Model2.sv:642`), defended by an `eng_busy` interlock, and R167 records that
-this same sharing was fatal when the two were independent. Read that counter,
-with `geo_walk_state` and `geo_walk_unknown`, before theorising further.
+**4. Timing does not predict booting, and the best-timed builds fail (R197).**
+One RTL, four seeds, each flashed and read over the UART:
+
+    1604   -0.278  -0.269   broken video, blue/white stripes
+    1605   +0.159  +0.186   trap=1 halted=1, IP 0
+    1606   +0.178  +0.166   trap=1 halted=1, IP 0x00200020
+    1607   +0.052  -0.055   BOOTS, 2024/2024 microcode, TGP running
+
+Both fully-closed builds fail; the one that boots has negative hold. Seed
+sweeping for slack is not a route to a bootable core. `SEED 1604` was never a
+good seed, only a lucky one.
+
+**Do not infer a code fault from a run of seed failures.** When three seeds
+failed on new RTL while three earlier builds had booted at 1604, this was
+written up as "three for three is not luck, the change broke it". The fourth
+seed then booted the same RTL. The failure rate is around three in four and
+three in a row is unremarkable at that rate.
+
+**5. Port sharing is exonerated, measured on a build that renders.**
+`dbg_p4_clash` reads ZERO on hardware -- the first reading of that counter on
+silicon -- so the `eng_busy` interlock on shared port 4 (`Model2.sv:642`) holds
+and R167's fault is not recurring. `geo_walk_unknown` is 0, `geo_walk_state`
+returns to `W_IDLE`, and `ops` is exactly 3 on every walk. The walk is not
+starved, crashing or misreading: it is handed a list of three valid opcodes and
+a proper terminator.
+
+**THE OPEN QUESTION, and it is better shaped than this morning's:** `wp` says
+16 kB of list is written per frame and the walk finds three opcodes. Either the
+pushes are not landing where the walk reads despite both naming `GAME_BUFFER`,
+or the game is not emitting 3D geometry and three opcodes is all it sends.
+
+**Next measurement:** the first word the walk fetches. It separates those two
+outright. Instrument cost is real -- every debug addition today cost timing --
+so add it and remove something else.
+
+**Delivered for that work:** `O[24:23]` selects the walk trigger at runtime --
+Flip, Vblank, After flip, Write ptr -- so the remaining candidates cost an OSD
+change rather than a build and a seed gamble. Selecting Vblank brings the grey
+pixels back, which is a useful diagnostic signal rather than a regression.
 
 **Area is finished at the flag level (R194).** The two duplication settings cost
 ZERO ALM at both seeds. The four framework `MISTER_*` macros were already set and

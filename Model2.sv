@@ -119,6 +119,11 @@ localparam CONF_STR = {
 	"O[19],Debug overlay,Off,On;",
 	// Off at power-up: an OSD bit is 0 until the user sets it.
 	"O[20],Geometrizer walk,On,Off;",
+	// WHICH MOMENT THE WALK STARTS ON. The reference says the 0x803008 write
+	// is the game saying "the list is ready", so Flip should be right -- but
+	// on hardware it walks a list that decodes one to three opcodes, and the
+	// alternatives are worth a switch rather than four builds.
+	"O[24:23],Walk trigger,Flip,Vblank,After flip,Write ptr;",
 	// PROVE THE DRAWING HALF, INDEPENDENTLY OF THE GEOMETRY.
 	//
 	// Everything from the quad store to the video mixer has only ever been fed
@@ -2354,6 +2359,7 @@ wire [19:0] geo_dbg_rp, geo_dbg_wp;
 m2_geo #(.AW(SDR_AW), .DEPTH(128)) u_geo (
 	.clk(clk_sys), .rst_n(mem_rst_n),
 	.wr_ctl(geo_wr_ctl), .wr_setwp(geo_wr_setwp), .wr_setrp(geo_wr_setrp),
+	.trig_mode(status[24:23]),
 	.wr_push(geo_wr_push), .wdata(geo_push_word),
 	.rd_wp(geo_rd_wp), .rd_rp(geo_rd_rp),
 	.base_buffer(GAME_BUFFER),
@@ -3635,7 +3641,11 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// it is not running too rarely -- it is starting on a list that is empty at
 	// the pointer the flip handed it. rp against wp says whether that is an empty
 	// buffer or the wrong buffer, and no amount of reading the walk can say which.
-	.b_addr({12'd0, geo_dbg_rp}),
+	// dbg_p4_clash is the counter Model2.sv:642 added against exactly this and it
+	// has never been read on hardware; R167 records the same port sharing as
+	// fatal when the walker and the engine were independent. With it, the state
+	// the walk sits in and any opcode the table does not cover.
+	.b_addr({dbg_p4_clash, geo_walk_unknown, 4'd0, geo_walk_state}),
 	// clip_dropped read 0 on hardware and the refusal count is the number that
 	// now moves, so it takes that byte. Between them: accepted, emitted, refused
 	// before the arithmetic, and reaching the rasterizer.
@@ -3666,7 +3676,7 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// counter with nothing decoded looks like.
 	//   b_data: walker iterations : calls taken : 3D handler entered : the
 	//   one-shot that registers it. 1c14 at zero is the whole answer.
-	.b_data({12'd0, geo_dbg_wp}),
+	.b_data({geo_walk_frames, geo_walk_ops}),
 	.a_tag(8'h43), .b_tag(8'h48),          // 'C' copro in_pushed:out_pushed | TGP retires:pc
 	                                       // 'H' out_popped:hscr2 | io_addr:flags
 	                                       // 'H' scroll h:v for layers 0,1 | layers 2,3 -- low bytes

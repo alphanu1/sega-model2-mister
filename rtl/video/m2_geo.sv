@@ -54,6 +54,11 @@ module m2_geo #(
   input  logic          wr_ctl,          // 0x00980008  geo_ctl1
   input  logic          wr_setwp,        // 0x00801008  set write pointer
   input  logic          wr_setrp,        // 0x00803008  set read pointer
+  // WHICH MOMENT THE WALK STARTS ON, selectable at runtime because each
+  // candidate otherwise costs a 25-minute build AND a boot that is seed
+  // fragile. 0 flip (the 0x803008 write), 1 vblank (what this was before),
+  // 2 the vblank AFTER a flip, 3 the write-pointer write at 0x801008.
+  input  logic [1:0]    trig_mode,
   input  logic          wr_push,         // 0x00800000-0fff and 0x00804000-7fff
   input  logic [31:0]   wdata,
 
@@ -472,8 +477,21 @@ module m2_geo #(
   logic [9:0]  drain_wait;
   wire         q_idle   = !q_valid && (dst == D_IDLE);
   wire         no_flips = fs_since_flip[2];
-  wire         walk_go  = (flip_pend || (frame_pend && no_flips))
-                       && (q_idle || (&drain_wait));
+  // The reference says the 0x803008 write IS "the list is ready" -- Daytona
+  // writes it every second frame right after the write pointer, always to
+  // address 0, single-buffered. So mode 0 should be the correct one and the
+  // others exist to prove that rather than to be believed.
+  logic        setwp_q;
+  logic        wp_pend;
+  logic        flip_seen;                // a flip has happened since the last walk
+  wire         trig_flip   = flip_pend || (frame_pend && no_flips);
+  wire         trig_vblank = frame_pend;
+  wire         trig_after  = frame_pend && flip_seen;
+  wire         trig_setwp  = wp_pend || (frame_pend && no_flips);
+  wire         trig_sel    = (trig_mode == 2'd0) ? trig_flip   :
+                             (trig_mode == 2'd1) ? trig_vblank :
+                             (trig_mode == 2'd2) ? trig_after  : trig_setwp;
+  wire         walk_go  = trig_sel && (q_idle || (&drain_wait));
   logic [31:0] pd_addr;                  // geo_polygon_data's destination
   logic [15:0] pd_n, pd_i;               // dwords to copy, and the one in hand
   logic  [4:0] tp_i;                     // texture_parameters index, wraps at 32
@@ -524,6 +542,7 @@ module m2_geo #(
       w_cap <= 3'd0; w_ci <= 4'd0; obj_valid <= 1'b0; eng_seen <= 1'b0;
       frame_pend <= 1'b0; drain_wait <= 10'd0;
       flip_pend <= 1'b0; fs_since_flip <= 3'd7; setrp_q <= 1'b0;
+      setwp_q <= 1'b0; wp_pend <= 1'b0; flip_seen <= 1'b0;
       pd_addr <= 32'd0; pd_n <= 16'd0; pd_i <= 16'd0;
       pd_req <= 1'b0; pd_wdata <= 32'd0;
       dbg_pd_words <= 16'd0; dbg_pd_cmds <= 16'd0;
@@ -542,9 +561,16 @@ module m2_geo #(
       // The flip. Counted like Model 1's fs_since_flip so the vblank fallback
       // only applies to a list that has not flipped in four frames.
       setrp_q <= wr_setrp;
-      if (setrp_q) begin flip_pend <= 1'b1; drain_wait <= 10'd0; fs_since_flip <= 3'd0; end
+      setwp_q <= wr_setwp;
+      if (setrp_q) begin
+        flip_pend <= 1'b1; flip_seen <= 1'b1;
+        drain_wait <= 10'd0; fs_since_flip <= 3'd0;
+      end
       else if (frame_start && !no_flips) fs_since_flip <= fs_since_flip + 3'd1;
-      if (walk_go && (wst == W_IDLE)) begin frame_pend <= 1'b0; flip_pend <= 1'b0; end
+      if (setwp_q) begin wp_pend <= 1'b1; drain_wait <= 10'd0; end
+      if (walk_go && (wst == W_IDLE)) begin
+        frame_pend <= 1'b0; flip_pend <= 1'b0; wp_pend <= 1'b0; flip_seen <= 1'b0;
+      end
       case (wst)
         // THE WALK MUST NOT READ A BUFFER THE FRONT DOOR IS STILL WRITING.
         //

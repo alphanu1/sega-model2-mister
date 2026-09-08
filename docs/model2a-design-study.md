@@ -10893,3 +10893,40 @@ adds `dbg_p4_clash` to count the cycles where both request anyway -- "if the
 interlock is ever wrong, that counter is non-zero rather than the picture being
 subtly incorrect". The picture is currently absent and that counter has never
 been read on hardware. Read it before theorising further.
+
+**R197 — timing does not predict booting, and the best-timed builds are the ones
+that fail.** One RTL (the selectable walk trigger), four seeds, built in one
+session and each flashed and read over the UART:
+
+```
+SEED   SETUP     HOLD      RESULT
+1604   -0.278   -0.269     broken video, horizontal blue/white stripes
+1605   +0.159   +0.186     trap=1 halted=1, IP 0 on all 7,544 samples
+1606   +0.178   +0.166     trap=1 halted=1, IP 0x00200020
+1607   +0.052   -0.055     BOOTS -- 2024/2024 microcode, TGP running
+```
+
+Both fully-closed builds fail. The one that boots has NEGATIVE hold. This closes
+the question R193 opened: the startup race is invisible to static timing
+analysis, and closing timing neither avoids it nor predicts it. Seed sweeping for
+slack is therefore not a route to a bootable core, and `SEED 1604` was never a
+good seed -- it was the one that happened to boot.
+
+*A wrong turn worth recording.* When 1604/1605/1606 all failed on this RTL while
+three earlier builds booted at 1604, the conclusion drawn was "three for three is
+not luck, the RTL change broke it". Seed 1607 then booted the same RTL. The
+sample was three, the failure rate is around three in four, and three failures in
+a row is unremarkable at that rate. **Do not infer a code fault from a run of
+seed failures on this design.**
+
+*What the working build measures.* `dbg_p4_clash` is ZERO on hardware, so the
+walker/engine interlock on shared port 4 holds and R167's fault is not recurring
+-- the first time that counter has been read on silicon. `walk_unknown` is 0 and
+`walk_state` returns to `W_IDLE`, with `ops` at exactly 3 every walk. The walk is
+not starved, crashing or misreading: it is handed a list containing three valid
+opcodes and a proper terminator, while `wp` says 16 kB per frame is being
+written somewhere.
+
+*Also delivered.* `O[24:23]` selects the walk trigger at runtime -- Flip, Vblank,
+After flip, Write ptr -- so the remaining candidates cost an OSD change rather
+than a 25-minute build and a seed gamble.
