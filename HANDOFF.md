@@ -1,7 +1,71 @@
 # Handoff
 
-**Updated:** 2026-09-06. Study entries R176-R189. R172 WITHDRAWN, R185 partly
-RETRACTED.
+**Updated:** 2026-09-08. Study entries R176-R196. R172 WITHDRAWN, R185 partly
+RETRACTED, R189 corrected by R191, R196's central claim WITHDRAWN the same day.
+
+## WHERE 2026-09-08 LEFT IT
+
+Three things moved, and one claim made during the day had to be taken back.
+
+**1. The black screen is a startup race, not seed luck (R193).** Seeds 1604 and
+1953 were rebuilt from one tree and reproduced BYTE FOR BYTE against bitstreams
+built a day apart, so the seed really is the only variable. On 1953 the i960
+traps and halts having executed nothing -- IP 0 on all 9,426 samples, 0 of 2024
+microcode words -- while 1604 runs normally. A placement that merely lost margin
+would spoil the picture, not stop the CPU before its first instruction, and the
+FAILING build scores better on both setup and hold. Static timing analysis is
+not measuring the path that breaks. `SEED 1604` is a lottery ticket and the
+fault travels with every future change.
+
+Pinning the SDRAM capture depth moved the failure from IP 0 to IP 0x40910 --
+further, not fixed. CL+2 is the right depth (confirmed at the OSD on hardware);
+the tree's comments disagree with each other about this and `Model2.sv:795-798`
+still documents a retired selector encoding. `st_got` is latched at
+`Model2.sv:1189` and never read: the calibration compares live `p_dout[2]` a
+cycle later instead.
+
+**2. The grey pixels were a display list read mid-rewrite (R195), and removing
+them is NOT yet a gain.** The flip trigger boots clean at 1604 and the grey
+pixels go away, which confirms what they were -- Model 1's "vertices collapsed
+toward the origin". But nothing replaced them: the walk runs 901 times in twenty
+seconds, retires ONE TO THREE opcodes each time, and produces zero polys and
+zero quads. Before the fix it produced polygons, wrong ones. By the only output
+that matters this is a step backwards, and it was briefly written up here as a
+fix, which it is not.
+
+`rp` sits at 0 while `wp` climbs to 0x403C, so 16 kB of list is written per
+frame and the walk starts at the buffer start. The likely reading is that the
+game publishes `0x00803008` BEFORE filling, so the flip trigger walks an empty
+buffer -- the vblank trigger was wrong, and this is wrong in the other
+direction. Untested alternatives: walk on the next vblank AFTER a flip, or walk
+the other buffer.
+
+**3. R196 claimed the walk reads the wrong memory. It does not.** Read is
+`GAME_BUFFER + {geo_rd_addr_r,1'b0}` (`Model2.sv:644`), write is
+`base_buffer + (ptr & 0x1ffff)>>1` (`m2_geo.sv:298`), and `base_buffer` IS
+`GAME_BUFFER`. Made from one file without following `rd_data` to its source.
+
+**Next measurement, already instrumented and never read on hardware:**
+`dbg_p4_clash`. Port 4 is shared between the walker and the engine
+(`Model2.sv:642`), defended by an `eng_busy` interlock, and R167 records that
+this same sharing was fatal when the two were independent. Read that counter,
+with `geo_walk_state` and `geo_walk_unknown`, before theorising further.
+
+**Area is finished at the flag level (R194).** The two duplication settings cost
+ZERO ALM at both seeds. The four framework `MISTER_*` macros were already set and
+their logic is absent from the fit report. `MISTER_SMALL_VBUF` is DDR3 only.
+Aggressive Area black-screened the board three times. Area now has to come out of
+the design.
+
+**Housekeeping.** Three Quartus STA internal errors in one day
+(`sta_assignment_db.h:468` twice, `sta_scc.cpp:1041`), on a design that reports
+`Design is not fully constrained for hold requirements` -- possibly the same root
+as the seed race. `tools/seed-pair.sh` builds one tree at two arbitrary seeds in
+parallel; the pair MUST be built in one session because comparing across days
+was what invalidated the first attempt at the seed measurement.
+
+---
+
 
 ## THE 3D PATH IS FINISHED. THE GAME NEVER ASKS FOR IT (R188)
 

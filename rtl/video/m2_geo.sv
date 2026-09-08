@@ -142,7 +142,13 @@ module m2_geo #(
   // WHICH STATE THE WALK IS SITTING IN. A frozen frame counter says only that
   // it stopped; this says why. Exposed rather than inferred because every
   // guess at it so far has cost a 40-minute build.
-  output logic [3:0]    dbg_walk_state // an opcode the table does not cover
+  output logic [3:0]    dbg_walk_state, // an opcode the table does not cover
+  // THE TWO POINTERS, because the walk now runs 900 times in twenty seconds
+  // and retires one to three opcodes each time. That is a walk starting on an
+  // empty list, and the only way to tell an empty list from a walk aimed at
+  // the wrong buffer is to see where it starts against where the pushes land.
+  output logic [19:0]   dbg_rp,          // where the walk starts (0x00803008)
+  output logic [19:0]   dbg_wp           // where the pushes land (0x00801008)
 );
 
   // ---------------------------------------------------------------- registers
@@ -154,6 +160,8 @@ module m2_geo #(
 
   assign rd_wp      = {12'd0, geo_wp};
   assign rd_rp      = {12'd0, geo_rp};
+  assign dbg_rp     = geo_rp;
+  assign dbg_wp     = geo_wp;
   assign dbg_geocnt = geocnt;
   assign dbg_geoctl = geoctl;
 

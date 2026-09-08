@@ -2349,6 +2349,8 @@ wire geo_sd_busy = geo_sd_busy_raw & GEO_BUFW;
 wire [SDR_AW:1] geo_sd_addr;
 wire [15:0] geo_sd_din;
 
+wire [19:0] geo_dbg_rp, geo_dbg_wp;
+
 m2_geo #(.AW(SDR_AW), .DEPTH(128)) u_geo (
 	.clk(clk_sys), .rst_n(mem_rst_n),
 	.wr_ctl(geo_wr_ctl), .wr_setwp(geo_wr_setwp), .wr_setrp(geo_wr_setrp),
@@ -2365,6 +2367,7 @@ m2_geo #(.AW(SDR_AW), .DEPTH(128)) u_geo (
 	.dbg_walk_ops(geo_walk_ops), .dbg_walk_objs(geo_walk_objs),
 	.dbg_walk_frames(geo_walk_frames), .dbg_walk_unknown(geo_walk_unknown),
 	.dbg_walk_state(geo_walk_state),
+	.dbg_rp(geo_dbg_rp), .dbg_wp(geo_dbg_wp),
 	.mtx0(), .mtx4(), .mtx8(), .mtx11(),
 	.mat_we(geo_mat_we), .mat_idx(geo_mat_idx), .mat_data(geo_mat_data),
 	.eng_busy(eng_busy),
@@ -3626,7 +3629,13 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	//   b_addr: the attract state -- last value written : times it was 2, the
 	//   state whose handler enables the 3D task : total writes : entries into
 	//   the 3D handler. 0xEE in the top byte is "never written".
-	.b_addr({state_last, n_state2, n_state_wr, tw_5890}),
+	// WHERE THE WALK STARTS AGAINST WHERE THE PUSHES LAND. Measured 2026-09-08:
+	// with the flip trigger the walk runs 901 times in twenty seconds and retires
+	// one to three opcodes each time, with polys and quads at zero throughout. So
+	// it is not running too rarely -- it is starting on a list that is empty at
+	// the pointer the flip handed it. rp against wp says whether that is an empty
+	// buffer or the wrong buffer, and no amount of reading the walk can say which.
+	.b_addr({12'd0, geo_dbg_rp}),
 	// clip_dropped read 0 on hardware and the refusal count is the number that
 	// now moves, so it takes that byte. Between them: accepted, emitted, refused
 	// before the arithmetic, and reaching the rasterizer.
@@ -3657,7 +3666,7 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// counter with nothing decoded looks like.
 	//   b_data: walker iterations : calls taken : 3D handler entered : the
 	//   one-shot that registers it. 1c14 at zero is the whole answer.
-	.b_data({tw_1854, tw_1860, tw_1c14, 8'd0}),
+	.b_data({12'd0, geo_dbg_wp}),
 	.a_tag(8'h43), .b_tag(8'h48),          // 'C' copro in_pushed:out_pushed | TGP retires:pc
 	                                       // 'H' out_popped:hscr2 | io_addr:flags
 	                                       // 'H' scroll h:v for layers 0,1 | layers 2,3 -- low bytes

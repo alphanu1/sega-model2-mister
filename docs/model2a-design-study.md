@@ -10698,3 +10698,198 @@ matching exact text. One of them silently dropped a snoop and left a stale block
 behind, which was only noticed later by reading the file. Lint does not catch
 this: Verilator checks that signals are driven, not that the logic is what was
 intended.
+
+**R193 — the seed does not cause the black screen; it exposes a startup race.**
+Two bitstreams, identical source and identical fitter flags, differing only in
+`SEED`, were rebuilt from one tree on 2026-09-08 and reproduced **byte for byte**
+against the originals built a day apart:
+
+```
+SEED   SETUP     HOLD      ALM       MD5
+1604   -0.209    0.169     41,138    3cc7a41d…   boots
+1953   -0.198    0.240     41,223    3c3d213f…   black screen
+```
+
+*What was believed.* That the two earlier bitstreams differed by more than the
+seed, because `build_id.tcl` stamps a build date and they were built on
+different days. **Wrong.** `build_id.tcl` is a `PRE_FLOW` script and this
+project invokes `quartus_map`/`quartus_fit` directly, never `quartus_sh
+--flow`, so it never runs. `build_id.v` read `260906` in the root and in both
+staged builds. Quartus is bit-reproducible here, and the earlier comparison was
+valid after all. Reproducing an md5 is how that was established -- not by
+re-reading the assignment files.
+
+*What is now known.* The failure is not video and not a marginal net. The
+debug UART is alive on the black screen and emits the same line count as the
+working build (9,587 against 9,588). What differs is the payload:
+
+```
+a_data = {cpu_trap, cpu_halted, copro_stall, uploading, copro_prog_words[11:0], tgp_pc[15:0]}
+a_addr = cpu_dbg_ip
+
+1604   07E8030B / IP 12F0, 12B0, 1166C, 1C488, 228434   trap=0 halted=0, 2024 words, TGP running
+1953   C0000000 / IP 00000000 on all 9,426 samples      trap=1 halted=1,    0 words, TGP at 0
+```
+
+The i960 traps and halts having executed **nothing** -- IP never leaves zero and
+the microcode upload never starts. Its first fetches return data it cannot
+execute.
+
+*Why this changes the conclusion.* A placement that merely lost margin on a
+constrained path would degrade the picture, not stop the CPU before its first
+instruction. A clean, repeatable trap at IP 0 that follows the seed is a race on
+a path nothing constrains -- which is consistent with the standing
+`Design is not fully constrained for hold requirements` warning, and with the
+failing build scoring BETTER on both setup and hold than the working one. Static
+timing analysis is not measuring the path that breaks.
+
+*Consequence for the build.* Pinning `SEED 1604` is a lottery ticket, in the
+exact sense Model 1's notes use the phrase: it buys a working bitstream without
+removing the fault, and the fault travels with every future change. `SEED 1604`
+stays only as a way to get a testable core while the race is found.
+
+*Where to look first.* `cpu_rst_n = game_rst_n & rom_loaded & game_image &
+cal_done & bi_done`, and the read-latency mux at `Model2.sv:807`, where
+`rd_lat_sel` follows `cal_sel` while `!cal_done` and switches to the scan's
+answer `cal_best` at `st_state == 4'd12`. A calibration that picks a marginal
+latency, or a reset released before the memory path is genuinely settled, both
+produce this signature. `O[7:5]` overrides the scan at runtime and is the
+cheapest test available -- but it needs the OSD, and MiSTer exposes no way to
+set a status bit remotely.
+
+**R194 — the duplication settings cost this design nothing. Do not spend a build
+on them again.** Model 1's `mister_project.sh` names
+`PHYSICAL_SYNTHESIS_REGISTER_DUPLICATION` and
+`ROUTER_LCELL_INSERTION_AND_LOGIC_DUPLICATION` as the two template settings that
+"spend ALM most directly", and defaults both OFF. Both were ON here. Measured
+2026-09-08, identical RTL and identical flags otherwise, at two seeds:
+
+```
+                    SETUP     HOLD     ALM       MD5
+1604  dup ON       -0.209    0.169   41,138     3cc7a41d
+1604  dup OFF      -0.205    0.192   41,138     1b2ba6a6
+1953  dup ON       -0.198    0.240   41,223     3c3d213f
+1953  dup OFF      -0.614    0.013   41,223     98a43366
+```
+
+**Zero ALM, at both seeds, to the digit.** The bitstreams differ, so the
+assignments reached the fitter and moved the placement; they simply do not cost
+this netlist any logic. At 1953 the OFF build is 0.416 ns worse on setup. The
+finding transfers in the direction of the measurement and no further: it is real
+on Model 1's netlist and absent on ours.
+
+The wider result is that the flag-level area reclaim is spent. The four framework
+`MISTER_*` macros Model 1 defaults were already set here and their logic is
+absent from the fit report (`alsa:alsa` and `yc_out:yc_out` appear zero times);
+`MISTER_SMALL_VBUF` changes only ascal's DDR3 `RAMSIZE` and touches neither ALM
+nor M10K (Model 1 corrected its own note on this, 2026-09-09); and the
+mode/technique axis black-screened the board three times. Area now has to come
+out of the design, not the fitter.
+
+**R195 — the grey pixels were the display list being read mid-rewrite, and the
+flip trigger removes them. It does not yet put geometry in their place.**
+Built 2026-09-08 at seed 1604 (`46c0fef4`, 41,049 ALM, setup -0.303, hold
++0.119): commit 13 plus the `0x00803008` write trigger in `m2_geo.sv`. On
+hardware the core boots normally --
+
+```
+C 000012F0 07E8030B    trap=0 halted=0, 2024/2024 microcode words, TGP running
+```
+
+-- and **the grey pixels are gone**. They had been read as "3D without its
+vertices". That reading is now supported: walking on the game's flip instead of
+on vblank stops the walk reading a list the i960 is still rewriting, and the
+degenerate polygons disappear with it. This is the failure Model 1 documented as
+"vertices collapsed toward the origin", and it is the same fix.
+
+*What is NOT established.* Nothing replaced them. The screen has no 3D at all, so
+the walk is now reading something empty rather than something wrong, and two
+explanations remain open:
+
+1. the walk runs far less often, because it now waits for a flip the game
+   issues rarely; or
+2. the walk runs at the same rate and finds an empty list at the pointer the
+   flip handed it.
+
+The instrument on this build carries the task-walker bytes
+(`tw_1854`/`tw_1860`/`tw_1c14`) and cannot separate those -- they are CPU-side
+counters. `tw_1c14` moved 0x26 -> 0x2A against the same core without the fix,
+which says only that walker behaviour changed.
+
+*The trigger itself checks out.* `geo_rp` is loaded on `wr_setrp`
+(`m2_geo.sv:193`), `flip_pend` is set from the registered `setrp_q` the cycle
+after (`:536-537`), and `W_IDLE` loads `w_ip <= geo_rp[16:2]` (`:572`). The walk
+starts from the pointer the game just wrote, not a stale one.
+
+*Next measurement, not next guess.* `b_addr` -> `{geo_walk_frames, geo_walk_ops}`
+and `b_data` -> `{geo_polys, geo_clip_out}`. Frames says whether the walk runs,
+ops whether it decodes anything, and the pair of polys against quads whether
+anything survives to the rasterizer. All four are already ports on `m2_geo`; the
+change is two expressions on the debug instance.
+
+**R196 — the walk is aimed correctly and reads the wrong memory.** Built at seed
+1604 with `dbg_rp`/`dbg_wp` exposed from `m2_geo` (`2baa36ef`, 41,116 ALM). The
+core boots (2024/2024 microcode, TGP running). Measured on hardware:
+
+```
+H = rp | wp
+ 90x   rp 00000000   wp 00000024
+ 12x   rp 00000000   wp 00002010
+  9x   rp 00000032   wp 0000403C
+```
+
+`rp` sits at zero while `wp` climbs to `0x403C` -- 16 kB of display list written
+per frame. Read pointer at the buffer start with writes growing forward from it
+is what correct double-buffering looks like, so **the walk is aimed at the right
+address and the data is being written.** With the flip trigger it nonetheless
+runs 901 times in twenty seconds, retires one to three opcodes each time, and
+produces zero polys and zero quads (R195).
+
+Aimed right, data present, nothing decoded: the walk is not reading the memory
+the pushes land in. `w_ip <= 19'(geo_rp[16:2])` converts a byte address to a word
+index correctly; what is unproven is the BASE that index is applied to.
+
+*This exact fault was found in the bench first and should have been suspected
+here sooner.* `sim/io/tb_m2_boot.cpp` read object data from a fixed
+`0x0b20000` instead of selecting between `0x1710000`, `0x0b20000` and `0x1720000`
+on the `oba` bits; correcting it took quads from 0 to 2,382. The bench and the
+board disagree in the same place and in the same direction.
+
+*And the bench is still wrong here, which is the standing warning made concrete.*
+The same RTL that gives zero polys on hardware gives 478 in simulation. Where the
+two disagree the board wins -- `docs/` has said so since the NaN that wedged the
+display-list walk, and this is a second instance. Do not close this from a bench
+run.
+
+*Cost note.* Exposing the two pointers cost timing: setup -0.950 and hold -0.280
+against -0.303/+0.119 for the same core without them. The instrumented build is
+for measurement only and must not be a baseline.
+
+**R196 is WRONG on its central claim, corrected the same day.** It concluded the
+walk "is not reading the memory the pushes land in". It is. Read at
+`Model2.sv:644` is `GAME_BUFFER + {geo_rd_addr_r, 1'b0}`; the push at
+`m2_geo.sv:298` is `base_buffer + (ptr & 0x1ffff) >> 1`, and `base_buffer` is
+wired to that same `GAME_BUFFER` (`0x16f0000`). The indexing agrees too:
+`w_ip = geo_rp[16:2]` is a dword index, doubled to a 16-bit word index on the
+read, against a byte pointer halved on the write. Same memory, same address.
+The claim was made from `m2_geo.sv` alone without following `rd_data` to its
+source, and the bench's old base-selection bug made a matching fault feel likely.
+**Everything else in R196 stands** -- rp at zero, wp climbing to `0x403C`, 901
+walks retiring one to three opcodes, zero polys and zero quads.
+
+So the walk is aimed at the right address, in the right memory, with data
+present, and stops anyway. What that leaves is the read PORT, and it is already
+instrumented. `Model2.sv:642` shares port 4 between the walker and the engine:
+
+```
+p_req[4]  = geo_rd_req_r | eng_mem_req_r;
+p_addr[4] = eng_mem_req_r ? (engine) : (GAME_BUFFER + ...);
+geo_rd_ack_r <= p_ack[4] & geo_rd_req_r & ~eng_mem_req_r;
+```
+
+The comment defends this by an `eng_busy` interlock making the two mutually
+exclusive, notes R167 made the same sharing fatal when they were independent, and
+adds `dbg_p4_clash` to count the cycles where both request anyway -- "if the
+interlock is ever wrong, that counter is non-zero rather than the picture being
+subtly incorrect". The picture is currently absent and that counter has never
+been read on hardware. Read it before theorising further.
