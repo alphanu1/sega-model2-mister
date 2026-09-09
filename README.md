@@ -7,9 +7,11 @@ An FPGA implementation of Sega's Model 2A-CRX arcade board for the
 [MiSTer](https://mister-devel.github.io/MkDocs_MiSTer/) platform, targeting the
 DE10-Nano's Cyclone V `5CSEBA6U23I7`.
 
-**This is a work in progress and does not play games yet.** Daytona USA boots,
-runs its attract mode and makes sound. What it does not do is draw 3D. What
-follows is what is built and measured, not a plan.
+**This is a work in progress and does not play games yet.** **Daytona USA
+(Deluxe '93)** boots, runs its attract mode and makes sound. What it does not do
+is draw 3D. It is the only game here — `mra/` holds its MRA and a 2D tilemap
+test pattern, nothing else. What follows is what is built and measured, not a
+plan.
 
 ## State
 
@@ -17,8 +19,8 @@ follows is what is built and measured, not a plan.
 |---|---|
 | **i960KB CPU** | Complete. Runs Daytona's real boot ROM with a program-counter stream identical to MAME's for 803,355 instructions. On hardware it executes, services interrupts and does not trap. |
 | **2D tilemap (S24TILE)** | Pixel-exact against MAME — ten frames, 190,464/190,464 pixels each. |
-| **SDRAM controller** | Ten ports, 64 MB geometry, verified against the packed ROM image on hardware region by region. Read capture depth is calibrated on boot and overridable from the OSD. |
-| **I/O board** | Working. The board answers, the exchange completes and the game runs. It needs `epr-14869c.25`, which the MRA takes from either `model1io.zip` or `daytona93.zip`. |
+| **SDRAM controller** | Ten ports (`NPORTS = 10`; the module's own default is 5, which the top level overrides), 64 MB geometry, verified against the packed ROM image on hardware region by region. Read capture depth is calibrated on boot and overridable from the OSD. |
+| **I/O board** | Working. The board answers, the exchange completes and the game runs. It needs the I/O board's Z80 ROM, taken from either `model1io.zip` or `daytona93.zip` — both sets carry all three revisions (`epr-14869.25`, `epr-14869b.25`, `epr-14869c.25`) and this core uses **revision C**. The Model 1 core is the same physical board and selects the base revision; both work, and the difference is a revision, not a disagreement. |
 | **Sound board** | Working on hardware — the board's own 68000 (fx68k), its FM (jt12) and its MultiPCM samples. |
 | **TGP coprocessor** | Implemented. The MB86233 runs, and Daytona's 2,024-word microcode uploads and executes — verified on hardware, not only in simulation. The microcode is **not a separate download**: it lives inside the game's own data ROM and `tools/extract_tgp_microcode.py` locates it. |
 | **3D renderer** | Every stage is written and simulated — display-list walker, matrix transform, projection, clipping, quad store and rasteriser. **Nothing reaches the screen yet.** |
@@ -32,6 +34,26 @@ the right address in the right memory, the read port is not contended
 rather than an unknown opcode. Either the pushes are not landing where the walk
 reads, or the game is not emitting geometry. That is the whole remaining
 question, and `HANDOFF.md` carries the measurements.
+
+## Milestones
+
+`docs/milestones.md` sets the order of work and holds the detail — the pass and
+fail criteria each phase was accepted against. Status as of this commit:
+
+| | Phase | State |
+|---|---|---|
+| **P0** | Measure before building | **Done.** The costing that decided the approach, taken from instrumented MAME and from other cores on this part rather than estimated. |
+| **P1** | i960KB CPU | **Done.** Exit criteria met, including the third — lockstep against MAME on the real boot ROM. |
+| **P1.5** | 2D on hardware | **Done.** Renders correctly on hardware, pixel-exact against MAME. |
+| **P4** | TGP coprocessor | **Done.** The MB86233 runs on hardware and the game's own microcode uploads and executes. |
+| **P5** | Sound | **Done.** Audible on hardware — the sound board's 68000, FM and MultiPCM. |
+| **P2** | 3D renderer | **Written, not visible.** Every stage simulates; nothing reaches the screen. |
+| **P3** | The fit verdict | **Answered, and it is tight.** Everything fits the device together, with essentially no headroom — which is why debug instruments now have to replace each other rather than accumulate. |
+| **P6** | Integration | **In progress.** The game boots, runs attract and plays sound. 3D is the gap. |
+
+The phases are listed here in the order they were completed, not numerically:
+P4 and P5 were finished before P2, because the coprocessor and the sound board
+each had a working reference to follow and the renderer did not.
 
 ### Building this core is not deterministic
 
