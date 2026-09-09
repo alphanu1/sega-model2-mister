@@ -7,29 +7,48 @@ An FPGA implementation of Sega's Model 2A-CRX arcade board for the
 [MiSTer](https://mister-devel.github.io/MkDocs_MiSTer/) platform, targeting the
 DE10-Nano's Cyclone V `5CSEBA6U23I7`.
 
-**This is a work in progress and does not play games yet.** What follows is what
-is actually built and measured, not a plan.
+**This is a work in progress and does not play games yet.** Daytona USA boots,
+runs its attract mode and makes sound. What it does not do is draw 3D. What
+follows is what is built and measured, not a plan.
 
 ## State
 
 | | |
 |---|---|
-| **i960KB CPU** | Complete. Runs Daytona's real boot ROM with a program-counter stream identical to MAME's for 803,355 instructions. |
+| **i960KB CPU** | Complete. Runs Daytona's real boot ROM with a program-counter stream identical to MAME's for 803,355 instructions. On hardware it executes, services interrupts and does not trap. |
 | **2D tilemap (S24TILE)** | Pixel-exact against MAME — ten frames, 190,464/190,464 pixels each. |
-| **SDRAM controller** | Five ports, 64 MB geometry, verified against the packed ROM image on hardware region by region. |
-| **I/O board** | Handshake answered on hardware. The boot does not yet clear the exchange that follows. |
-| **Sound board** | Not started. The 68000 (fx68k) builds, simulates and executes; the audio devices are not written. |
-| **3D renderer** | Not started. |
-| **TGP / copro** | Stubbed, not implemented. `fifo_control` answers "finished" and the board identifies itself with the real `tgpid` string; the FIFO at `0x00884000`, `copro_ctl1` and `geo_ctl1` are not modelled. Measured as not gating the current boot — MAME's boot trace touches the region once. |
+| **SDRAM controller** | Ten ports, 64 MB geometry, verified against the packed ROM image on hardware region by region. Read capture depth is calibrated on boot and overridable from the OSD. |
+| **I/O board** | Working. The board answers, the exchange completes and the game runs. It needs `epr-14869c.25`, which the MRA takes from either `model1io.zip` or `daytona93.zip`. |
+| **Sound board** | Working on hardware — the board's own 68000 (fx68k), its FM (jt12) and its MultiPCM samples. |
+| **TGP coprocessor** | Implemented. The MB86233 runs, and Daytona's 2,024-word microcode uploads and executes — verified on hardware, not only in simulation. The microcode is **not a separate download**: it lives inside the game's own data ROM and `tools/extract_tgp_microcode.py` locates it. |
+| **3D renderer** | Every stage is written and simulated — display-list walker, matrix transform, projection, clipping, quad store and rasteriser. **Nothing reaches the screen yet.** |
 
-On hardware the i960 executes, services interrupts and does not trap. It stops
-in the I/O board exchange; `docs/io-board.md` records exactly what has been
-eliminated and what has not.
+### The open problem
 
-**Resources**, Quartus 17.0, `5CSEBA6U23I7`: 17,719 ALM (42%), 255 M10K (46%),
-43 DSP (38%), timing closed with no negative slack. The design question this
-project is organised around is whether the i960 and a 3D renderer together fit
-under roughly 25,000 ALM — see `docs/model2a-design-study.md` §5.
+The display-list walker runs at frame rate and retires **three opcodes** per
+walk, while the game writes **16 kB of list per frame**. The walk is aimed at
+the right address in the right memory, the read port is not contended
+(`dbg_p4_clash` reads zero on hardware) and it stops on a valid terminator
+rather than an unknown opcode. Either the pushes are not landing where the walk
+reads, or the game is not emitting geometry. That is the whole remaining
+question, and `HANDOFF.md` carries the measurements.
+
+### Building this core is not deterministic
+
+On identical source, **three of four fitter seeds produce a bitstream that does
+not boot** — the i960 traps at reset and the screen stays black — and static
+timing analysis does not predict which. The two best-timed builds of a recent
+four-seed set both failed; the one that boots has negative hold slack. This is a
+startup race on a path nothing constrains, not lost margin, and it is unsolved.
+
+If you build this yourself and the screen stays black, the build is the first
+suspect, not your setup — try another `SEED` in `Model2.qsf`, and see
+`tools/seed-pair.sh` below.
+
+**There is no release yet.** No bitstream is published, because a core that
+boots, plays sound and draws no 3D is not something to hand anybody as a
+release. When there is one it will be a dated `.rbf` and the MRAs, in the layout
+MiSTer expects.
 
 ## Building
 
@@ -39,10 +58,16 @@ versions infer memory differently and the MiSTer framework targets 17.0.x.
 ```
 quartus_sh --flow compile Model2      # the bitstream, ~25 minutes
 make release                          # package .rbf and .mra, refusing a stale build
+tools/seed-pair.sh 1604 1607          # one tree at several seeds, in parallel
 ```
 
 `make release` checks source timestamps against the bitstream and the reported
 flow status, because a stale `.rbf` has shipped twice.
+
+`tools/seed-pair.sh` exists because seeds must be compared **within one
+session**: `build_id.v` is stamped per build, so two bitstreams built on
+different days differ by more than the seed, and that mistake invalidated a
+whole measurement once.
 
 ## Testing
 
@@ -57,7 +82,8 @@ make test      # the whole suite
 The suite covers each i960 unit, the FPU, whole-CPU lockstep against a
 transcription of MAME, real ROM execution, the SDRAM controller across three
 module geometries, the ROM loader, the CPU bridge, the video timing and a
-whole-frame render, the 68000, and the I/O board.
+whole-frame render, the MB86233 and its arithmetic, the geometry pipeline stage
+by stage, the 68000, the sound board and the I/O board.
 
 **Differential testing against MAME** is the instrument this project leans on
 hardest, and `docs/differential-testing.md` explains why and what it cannot do:
@@ -69,9 +95,11 @@ tools/m2-framediff.sh                # a rendered frame against MAME's, demandin
 tools/rom_csum.py <mra> <dir> --scan # what each 2 MB of the ROM image should fold to
 ```
 
-Simulation cannot see memory inference. Only a Quartus build can tell you
-whether an array landed in M10K or in flip-flops, and it reports success either
-way — check the register count, not the `ramstyle` tag.
+**Simulation is not the last word, and has been wrong about hardware.** The
+same RTL that renders 478 polygons in the bench renders none on the board. Where
+the bench and the board disagree, the board wins. Simulation also cannot see
+memory inference: only a Quartus build can tell you whether an array landed in
+M10K or in flip-flops, and it reports success either way.
 
 ## ROMs
 
@@ -85,7 +113,9 @@ test images from MAME.
 ```
 Model2.sv               top level
 rtl/cpu/i960/           the i960KB
-rtl/video/              tilemap, palette, timing
+rtl/tgp/                the MB86233 coprocessor
+rtl/video/              tilemap, palette, timing, geometry, rasteriser
+rtl/sound/              sound board, 68000, FM, MultiPCM
 rtl/mem/                SDRAM controller
 rtl/io/                 ROM loader, CPU bridge, I/O board, backup SRAM
 sim/                    testbenches, one directory per area
@@ -115,13 +145,17 @@ time.
 Recorded in `THIRD_PARTY.md` with upstream, commit, licence, and what was
 changed:
 
+- **[sega-model1-mister](https://github.com/alphanu1/sega-model1-mister)** —
+  sibling project, and **the oracle for this one**: a working Sega renderer on
+  the same part. The MB86233 came from it with its verification, and the I/O
+  board is the same physical device.
 - **[fx68k](https://github.com/ijor/fx68k)** — cycle-exact 68000, GPL-3.0, for
   the sound CPU.
-- **[MAME](https://www.mamedev.org/)** — the oracle. Not linked or distributed;
-  used as a reference implementation to compare against.
-- **[sega-model1-mister](https://github.com/alphanu1/sega-model1-mister)** —
-  sibling project. The I/O board is the same physical device, and several
-  measurements were taken from its findings rather than repeated.
+- **[jt12](https://github.com/jotego/jt12)** — the FM chip, GPL-3.0, by Jose
+  Tejada.
+- **[meathax/s32](https://github.com/meathax/s32)** — the MultiPCM, GPL-3.0.
+- **[MAME](https://www.mamedev.org/)** — a reference for what the silicon
+  computes. Not linked or distributed.
 
 ## Licence
 
