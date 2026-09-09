@@ -22,7 +22,6 @@ third_party/
 *.epr
 roms/
 rom/
-releases/*.rbf
 
 # ---- Quartus build output ----
 db/
@@ -118,3 +117,21 @@ cr_ie_info.json
 # tools/fit-numbers.sh archives (it now defaults under build/, this is the net)
 fit-*.blocks
 fit-*.summary
+
+# ---- releases/ IS NOT PUBLISHED YET ----
+#
+# The folder is staged locally in the layout MiSTer expects -- one dated .rbf,
+# the MRAs, and a README -- but nothing in it is committed, because the core is
+# not ready to be released: Daytona boots and has sound, and draws no 3D.
+#
+# WHEN IT IS READY, the way to publish it is to replace this block with
+# negations that MUST COME LAST in this file, because gitignore takes the last
+# matching rule and there is a blanket `*.rbf` above for Quartus output:
+#
+#     !/releases/
+#     !/releases/*.rbf
+#
+# Without them `git add releases/` succeeds, stages NOTHING, and the push lands
+# upstream with a README promising a core that is not there. The Kaneko16
+# project shipped exactly that and recorded it.
+/releases/
