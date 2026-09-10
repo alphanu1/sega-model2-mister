@@ -1,7 +1,93 @@
 # Handoff
 
-**Updated:** 2026-09-08. Study entries R176-R197. R172 WITHDRAWN, R185 partly
+**Updated:** 2026-09-10. Study entries R176-R201. R172 WITHDRAWN, R185 partly
 RETRACTED, R189 corrected by R191, R196's central claim WITHDRAWN the same day.
+
+---
+
+## THE COPROCESSOR IS PARKED AT PC 0x030B, AND THAT IS THE 3D FAULT
+
+Measured on hardware over `/dev/ttyS1`, 2026-09-10, seed 11 of `build/area2`
+(branch `area-pre-cdc`, all of the day's work in). Two captures 25 seconds each,
+one with the geometrizer walk off and one with it on, and the numbers are the
+same in both:
+
+```
+tgp_pc distribution, 9,426 samples, 2,024 words of microcode loaded:
+
+    0x030B    9422    99.96%
+    0x007D       2
+    0x0052       1
+    0x004D       1
+
+copro_stall = 0 on 9,423 of 9,426 samples
+cpu_trap = 0, cpu_halted = 0
+```
+
+**IT IS NOT STALLED, NOT TRAPPED, AND NOT UNLOADED.** The microcode is there --
+2,024 words, `copro_prog_words` has read 0x7E8 on every sample ever taken. It is
+not blocked on the i960, on SDRAM, or on a handshake: if it were, `copro_stall`
+would be high, and it is zero. It is EXECUTING at 0x030B and branching back to
+itself. That makes this a microcode-flow fault -- a condition that never becomes
+true, or a jump target computed wrong -- rather than a bus, arbitration or
+download problem. Those are all excluded by the measurement.
+
+**ONE FAULT, FOUR SYMPTOMS.** Everything chased on 2026-09-10 is this seen from
+a different angle:
+
+```
+  TGP parked at 0x030B
+    -> no geometry produced
+      -> nothing queued in buffer RAM
+        -> the walk retires 3 opcodes a frame (it fires at 56.9 Hz, completes,
+           state idle, no unknown opcode, no port-4 clash -- the walk is HEALTHY
+           and faithfully reporting an empty list)
+          -> no SDRAM contention
+            -> the CPU runs at 100% speed
+```
+
+**THE CPU RUNNING AT FULL SPEED IS THE SYMPTOM, NOT THE GOOD NEWS,** and Model 1
+is why. On that core, 3D working SLOWED THE CPU DOWN -- geometry reads, polygon
+writes and texture fetches all contending for SDRAM -- and raising the clock is
+what bought it back. A Model 2 running at 100% is a Model 2 doing no 3D work.
+This was reported by the project owner from the Model 1 experience and it
+inverted the reading of an observation that had been taken as healthy.
+
+**WHAT WAS RULED OUT ALONG THE WAY, so it is not re-chased.**
+
+- *Not the walk trigger.* All four settings of `O[24:23]` -- Flip, Vblank, After
+  flip, Write ptr -- give 3 opcodes. The flip fix was neither wrong nor the
+  cause.
+- *Not the display-list address.* `m2_cpu_bridge` maps 0x00900000-0x00980000 to
+  `base_buffer + r_addr[16:1]` with `BUFFERRAM=1` and reads enabled, and the
+  walk reads `GAME_BUFFER` with a matching dword-to-word shift. The walk reaches
+  a terminator rather than stalling, so the buffer genuinely holds a 3-opcode
+  list.
+- *Not the rasteriser or the video path.* The 3D test bars draw. See R200.
+- *Not the CPU.* 381 distinct IPs across 0x00000E08-0x0022F180, no trap, no halt,
+  and the 2D layer renders perfectly -- clouds, AM2 logo, INSERT COIN(S), SEGA,
+  CREDIT 0/3.
+
+**THE NEXT MOVE IS TO READ WHAT IS AT 0x030B** in Daytona's TGP microcode and
+what condition it waits on. That is a single specific address in a ROM, readable
+without hardware, and it is the first time this problem has had a target that
+small.
+
+**A SECOND, INDEPENDENT 3D FAULT IS OPEN** and must not be forgotten when the
+first is fixed: the renderer loses bands 0-11 of every frame. See R200 -- it is
+proven with hand-fed quads, so no CPU, no walk and no display list are involved,
+and fixing the coprocessor would still leave the top half of the picture
+missing.
+
+**INSTRUMENTATION READY BUT NOT BUILT.** `25b3045` adds `dbg_ready_cyc`
+(frame_start to P_READY) and `dbg_bands_done` (bands completed, against
+NBANDS=24) to say WHY bands 0-11 are lost, and puts `geo_dbg_wp` on the stream
+to say whether anything is queued. An uncommitted change also wires
+`cpu_dbg_acc[27:16]` into `a_data` so the CPU RATE can be measured at all -- it
+never reached the UART, and the comment claiming it "rides along with the IP"
+is stale. None of it is built; the board carries `build/area2/s11`.
+
+---
 
 ## WHERE 2026-09-08 LEFT IT
 
