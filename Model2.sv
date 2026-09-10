@@ -3643,8 +3643,16 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// objects dispatched : objects finished | the last polygon-ROM word the
 	// engine read, with capped (MAX_POLYS hit -- an object reading 0xFFFF)
 	// and the walk state here.
+	// build/tbl s13 MEASURED (tables fixed): objects dispatched == finished,
+	// up to 253 a frame, none capped, real floats read from the polygon ROM.
+	// So the polygon path after the object: produced, refused nonfinite,
+	// clipped out, dropped, reaching the rasteriser.
+	// THE VERTICAL SCROLL THE RENDERER USED, layers 0 and 1, low six bits
+	// each, ~7 samples a frame: the background jumps vertically at frame rate
+	// on the board, and alternating values here say the game writes two
+	// values, while a steady value says the picture moves for another reason.
 	.a_data({cpu_trap, cpu_halted, copro_stall, copro_dbg_ctl[31],
-	         geo_capped[7:0], geo_walk_state, tgp_pc[15:0]}),
+	         vid_vscr[0][5:0], vid_vscr[1][5:0], tgp_pc[15:0]}),
 	// THE i960's OWN INSTRUCTION COUNT, so the first three minutes can be
 	// diagnosed rather than described. Two readings a known time apart give the
 	// rate directly; a machine that is slow for three minutes and then is not
@@ -3780,7 +3788,7 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// how many times the walker has loaded it.
 	// ENTRY 13's SIZE FIELD (0x504E08) AS THE WALKER'S `ld 8(g13)` AT 0x1880
 	// RETURNS IT. The reference holds 768 (0x300).
-	.b_addr({geo_walk_objs, geo_objs_done}),
+	.b_addr({geo_polys, geo_nonfinite}),
 	// clip_dropped read 0 on hardware and the refusal count is the number that
 	// now moves, so it takes that byte. Between them: accepted, emitted, refused
 	// before the arithmetic, and reaching the rasterizer.
@@ -3840,7 +3848,7 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// loaded from 0x501260 (the reference holds 0x00510F00, entry 139).
 	// AND WHO LAST WROTE THAT WORD: the writer's IP (low 16) and the data
 	// (low 16), any byte of 0x504E08-0x504E0B. Only init should ever write it.
-	.b_data(eng_mem_data_r),
+	.b_data({geo_clip_out, r3d_quads}),
 	.a_tag(8'h43), .b_tag(8'h48),          // 'C' copro in_pushed:out_pushed | TGP retires:pc
 	                                       // 'H' out_popped:hscr2 | io_addr:flags
 	                                       // 'H' scroll h:v for layers 0,1 | layers 2,3 -- low bytes

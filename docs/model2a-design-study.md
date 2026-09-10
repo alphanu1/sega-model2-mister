@@ -11423,3 +11423,42 @@ RTL reads them.
 image is only as good as the tool that built the image. When the MRA's
 arithmetic and the built image disagree by exactly one ROM's size, suspect the
 builder before recording a gap.
+
+*`build/tbl` s13 (both fixes; setup -0.171, hold +0.240), 23:16 and 23:20, two
+captures:* objects dispatched == objects finished, 147 then 264 a frame, none
+capped, the engine's last polygon-ROM words real floats (BF22E53A, BE649C34,
+BF63AC92 ...). The object stage consumes every object it is handed. On screen:
+still no polygon; the background now pans slowly left and right (the title
+camera's orbit, which needs correct trig -- the table fix is real) and jumps
+vertically fast (the vertical scroll being taken at the wrong moment; R199
+moved the vblank the tile layers latch from). `build/poly` carries polygons
+produced : refused nonfinite | clipped out : quads to the rasteriser, and
+clip drops; the scroll values the renderer used are the build after.
+
+*`build/poly` s13 (both fixes; setup +0.275, hold +0.241 -- the first fully
+closed build of the day), 23:50:* objects finished 264 a frame, and
+**polygons 0, nonfinite 0, clipped out 0, quads to the rasteriser 0, clip
+drops 0.** The engine walks every object to its end and emits nothing. Its
+own rule for that: an attribute word with bits [1:0] clear ends the object
+(`m2_geo_engine.sv`, E_ATTR).
+
+*And the plain bench, with both fixes, does not do much better in the same
+phase* (20M instructions, frames 246-293, the first 47 frames of the 3D task):
+
+    matrix writes decoded 1,277   focal 51   objects 1,853
+    polys 18   capped 36   nonfinite 16,384 (saturated)
+    clipper in 65,535 (saturated)  out 1,410  dropped 65,535
+    QUADS OUT 1,410, all degenerate at the right screen edge:
+      (496,78) (493,80) (496,79) (496,79) ... (495,38) (495,38) (495,37) (496,37)
+
+So the geometry below the walk is now the open question, and it is open AT
+THE DESK: the bench produces quads and they are wrong -- vertices collapsed to
+one edge, which is what a projection with z near zero or a matrix whose
+translation row never applies looks like (Model 1's "vertices collapsed toward
+the origin"). The "3,038 polygons per frame" this study quoted for the bench
+came from a phase and a build that no longer exist, and was never a picture.
+The board's zero, against the bench's 1,410 degenerate quads, is the same
+pipeline one step further down: with the timing the board has, the objects
+end at their attribute word. Next: the plain bench, `M2_TRAP` at the first
+E_EMIT, and the matrix and focal values the walker captured against MAME's
+for the same object -- no fitter needed for any of it.

@@ -127,6 +127,23 @@ the bridge fix and the object-stage probes. Expect this to be why the geometry
 engine emits zero polygons from thousands of walked opcodes, and why the
 camera jumps.
 
+**`build/tbl` s13 (both fixes) on the board, 23:16:** objects dispatched ==
+finished, 264 a frame, none capped, real floats read from the polygon ROM.
+Background pans slowly (camera orbit: trig now right) and jumps vertically
+fast (scroll latch timing, R199). No polygon yet. `build/poly` (four seeds)
+carries polys : nonfinite | clip out : quads, and clip drops. Then the scroll
+values the renderer used, to settle the jump.
+
+**`build/poly` s13 (both fixes, TIMING CLOSED +0.275/+0.241) is ON THE BOARD,
+23:50:** polygons 0, nonfinite 0, clipped 0, quads 0 -- the engine walks
+every object to its end and emits nothing. The plain bench with both fixes
+in the same phase: 1,853 objects, 18 polys, nonfinite saturated, 1,410 quads
+ALL degenerate at the right screen edge (x 493-496). **The rest of the 3D
+fault is now reproducible at the desk.** Start there: `M2_TRAP` at the first
+E_EMIT, the walker's captured matrix/focal against MAME's for the same
+object, and why the objects end at their attribute word on the board.
+`build/scr` (four seeds) adds the vertical-scroll probe for the fast jump.
+
 **Tools fixed on the way:** `mame_i960_frame_trace.lua` never read `M2_FRAME`;
 `rom_csum.py`'s `build_image` prepended the index-3 I/O ROM (64 KB) to the
 image, so `M2_BOOT_IMAGE` trapped the real-memory bench on instruction 1; the
