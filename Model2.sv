@@ -1808,7 +1808,17 @@ always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
 		uart_irq_d <= 1'b0;
 		io_framenum <= 32'd0; vbl_d <= 1'b0; vbl_dd <= 1'b0;
 	end else begin
-		vbl_d  <= vblank;
+		// FROM THE PICTURE'S OWN VBLANK, not the duplicate timing generator.
+		//
+		// u_timing is a SECOND m2_video_timing instance whose only real consumer
+		// was this interrupt, so the CPU was timing off a generator that draws
+		// nothing while m2_video ran its own. Two sources of truth for when a
+		// frame ends, and the frame counter followed the wrong one.
+		//
+		// tile_vb is m2_video's vid_vb: the blanking the picture is actually
+		// built from. Correct on any clock arrangement -- this is not a
+		// domain-crossing fix, it is the frame counter counting the right thing.
+		vbl_d  <= tile_vb;
 		vbl_dd <= vbl_d;
 		if (vbl_d && !vbl_dd) begin
 			io_framenum <= io_framenum + 32'd1;
@@ -4538,7 +4548,7 @@ wire [31:0] char_hits, char_misses;
 // unlike this one it can be reasoned about from the buffer count rather than
 // from a hit-rate guess.
 m2_char_cache #(.IDX_BITS(14)) u_char_cache (
-	.clk(clk_sys), .rst_n(mem_rst_n & cp_done),
+	.clk(clk_sys), .rst_n(cc_rst_n_s),
 	.v_req(char_req), .v_addr(char_addr),
 	.v_ack(char_ack), .v_data(char_data),
 	.m_req(cache_m_req), .m_addr(cache_m_addr),
@@ -4642,13 +4652,38 @@ wire [7:0] mix_g  = r3d_hit ? r3d_g8 : tile_g;
 wire [7:0] mix_b  = r3d_hit ? r3d_b8 : tile_b;
 wire       tile_hs, tile_vs, tile_hb, tile_vb;
 
+// THE VIDEO DOMAIN'S RESET, ASYNC ASSERT AND SYNCHRONOUS RELEASE.
+//
+// m2_video and the character cache take a reset built from mem_rst_n, cp_done
+// and cal_done. Asserting late is harmless. RELEASING on an edge that is not
+// synchronous to the clock the module runs on lets its registers leave reset on
+// different cycles, which is a real fault and not a timing number.
+//
+// Those signals are in this same domain today, so this is dormant here -- it is
+// correct by construction for when the video moves to the memory clock, which is
+// planned. The cost is two cycles of release latency on a reset that already
+// waits for a ROM load.
+logic [1:0] vid_rst_sync, cc_rst_sync;
+wire vid_rst_src = mem_rst_n & cp_done & cal_done;
+wire cc_rst_src  = mem_rst_n & cp_done;
+always_ff @(posedge clk_sys or negedge vid_rst_src) begin
+	if (!vid_rst_src) vid_rst_sync <= 2'b00;
+	else              vid_rst_sync <= {vid_rst_sync[0], 1'b1};
+end
+always_ff @(posedge clk_sys or negedge cc_rst_src) begin
+	if (!cc_rst_src) cc_rst_sync <= 2'b00;
+	else             cc_rst_sync <= {cc_rst_sync[0], 1'b1};
+end
+wire vid_rst_n_s = vid_rst_sync[1];
+wire cc_rst_n_s  = cc_rst_sync[1];
+
 m2_video u_tilemap (
 		// cal_done too: on a GAME image game_image short-circuits cp_done without
 	// reading anything, so the character fetch on port 3 would otherwise issue
 	// at CL+0 until the calibration caught up. Those are live re-reads rather
 	// than a latched copy, so it corrected itself -- but it is the last reader
 	// that was not waiting, and "it fixes itself" is not a reason to leave one.
-	.clk(clk_sys), .ce_pix(ce_pix), .rst_n(mem_rst_n & cp_done & cal_done),
+	.clk(clk_sys), .ce_pix(ce_pix), .rst_n(vid_rst_n_s),
 	.tile_mask(14'h3FFF),
 	// Colour translation table not loaded yet: it powers up holding pal5bit,
 	// which is exactly what this rendered before the table existed, so the

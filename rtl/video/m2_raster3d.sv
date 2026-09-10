@@ -154,13 +154,77 @@ module m2_raster3d #(
   logic [BUFW-1:0] fill_buf;
   wire [BW-1:0] scan_band = BW'(scan_y / 10'(BAND_H));
 
+  // SCAN_BAND BACK IN THE FILL DOMAIN, GRAY-CODED.
+  //
+  // The buffer release below reads a value derived from scan_y, which is the
+  // scan domain's, in a block that runs on clk. That is a COUNTER crossing, and
+  // a plain synchroniser is not enough for one: sample a binary counter
+  // mid-transition and 7 -> 8 reads as anything from 0 to 15, which would
+  // release a band the beam has not reached and drop its geometry. That is a
+  // fault that looks like missing scenery, not like a clock-domain bug.
+  //
+  // Gray coding makes every increment a single-bit change, so a mid-transition
+  // sample yields the old value or the new one and never a third. The band
+  // counter only increments and resets between frames, which is the condition
+  // Gray coding needs.
+  //
+  // Dormant at one clock, like the pair above, and correct at two.
+  logic [BW-1:0] sb_gray_s1, sb_gray_s2;
+  wire  [BW-1:0] sb_gray = scan_band ^ (scan_band >> 1);
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin sb_gray_s1 <= '0; sb_gray_s2 <= '0; end
+    else        begin sb_gray_s1 <= sb_gray; sb_gray_s2 <= sb_gray_s1; end
+  end
+
+  logic [BW-1:0] scan_band_f;
+  always_comb begin
+    scan_band_f = '0;
+    for (int b = BW-1; b >= 0; b--)
+      scan_band_f[b] = (b == BW-1) ? sb_gray_s2[b]
+                                   : (scan_band_f[b+1] ^ sb_gray_s2[b]);
+  end
+
+  // SYNCHRONISED INTO THE SCAN DOMAIN.
+  //
+  // bd_ready and bd_band are registered in the `clk` domain and this block runs
+  // in scan_clk's. Reading them combinationally is safe only while the two are
+  // the same clock -- which they are today, so this is not fixing a live fault.
+  // It is here so the module is correct by construction when they diverge, and
+  // because that divergence is planned: the fetch budget wants the video on the
+  // memory clock.
+  //
+  // THE FLAG AND THE INDEX CROSS TOGETHER. Synchronising the flag alone makes
+  // the SAMPLING safe and leaves the index a cross-domain path in its own right,
+  // which is a mistake this project has already made twice.
+  //
+  // Two flops on both, and safe for the same reason: an index is written before
+  // its flag is raised and does not change until the buffer is released, so it
+  // is static for the whole window it is read in.
+  //
+  // COSTS TWO CYCLES of band-presentation latency at one clock, where it removes
+  // a metastability hazard at two.
+  logic [NBUF-1:0] rdy_s1, rdy_s2;
+  logic [BW-1:0]   band_s1 [NBUF];
+  logic [BW-1:0]   band_s2 [NBUF];
+  always_ff @(posedge scan_clk or negedge rst_n) begin
+    if (!rst_n) begin
+      rdy_s1 <= '0; rdy_s2 <= '0;
+      for (int i = 0; i < NBUF; i++) begin band_s1[i] <= '0; band_s2[i] <= '0; end
+    end else begin
+      rdy_s1 <= bd_ready; rdy_s2 <= rdy_s1;
+      for (int i = 0; i < NBUF; i++) begin
+        band_s1[i] <= bd_band[i]; band_s2[i] <= band_s1[i];
+      end
+    end
+  end
+
   // Scan-out picks whichever buffer currently holds the beam's band. Combinational
   // over NBUF, which is three: cheaper than a register that has to track the beam.
   always_comb begin
     scan_col = 16'd0;
     scan_hit = 1'b0;
     for (int i = 0; i < NBUF; i++)
-      if (bd_ready[i] && (bd_band[i] == scan_band)) begin
+      if (rdy_s2[i] && (band_s2[i] == scan_band)) begin
         scan_col = bd_rd_col[i];
         scan_hit = bd_rd_hit[i];
       end
@@ -252,7 +316,7 @@ module m2_raster3d #(
 
       // A buffer is free again once the beam has passed its band.
       for (int i = 0; i < NBUF; i++)
-        if (bd_ready[i] && (scan_band > bd_band[i])) bd_ready[i] <= 1'b0;
+        if (bd_ready[i] && (scan_band_f > bd_band[i])) bd_ready[i] <= 1'b0;
 
       if (frame_start) begin fill_band <= '0; bd_ready <= '0; end
     end
