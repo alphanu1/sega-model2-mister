@@ -11023,3 +11023,90 @@ this. Every one came from `get_timing_paths` on a finished build, fixing the
 named path, and rebuilding: -10.13 -> -5.32 -> -4.79 -> -3.88 -> -3.43 -> -2.80
 -> -2.55 -> -2.47 -> -2.09 -> -1.57. Report DISTINCT endpoints -- ten copies of
 one path reads like ten problems and is one.
+
+**R200 -- the 3D test bars draw from band 13 down and not above it, and the
+walk trigger has nothing to do with it.** Measured on hardware, seed 11 of
+`build/area2`, with `3D test bars` on. Recorded so this test does not have to be
+run again to remember what it said.
+
+WHAT THE TEST IS. `status[21]` injects four known-good quads straight into
+`m2_raster3d`, bypassing the geometry engine, the display-list walk and the
+CPU entirely: `q_valid(tq_en ? tq_valid : q3d_valid)`. A bar that draws proves
+the fill path, the band buffers, the scan-out and the whole video chain behind
+them. `status[22]` picks between two layouts, and the layouts are the
+measurement -- they put the same four quads at different heights.
+
+```
+                     size      y range   bands (/16)   drew?
+  Wide    RED      240 x 20     80-100      5-6         NO
+          GREEN     20 x 140   120-260      7-16        yes
+          BLUE     240 x 20    280-300     17-18        yes
+          YELLOW    20 x 140   120-260      7-16        yes
+  Compact RED       80 x 20    140-160      8-10        NO
+          GREEN     20 x 60    160-220     10-13        NO
+          BLUE      80 x 20    220-240     13-15        yes
+          YELLOW    20 x 60    160-220     10-13        NO
+```
+
+**EVERY QUAD THAT DREW REACHES BAND 13 OR LOWER. EVERY QUAD THAT DID NOT LIES
+ENTIRELY ABOVE IT.** The cut falls in the same place in both layouts, at y=208
+of 384. Size does not predict it -- Wide BLUE and Wide RED are the same 240x20
+rectangle and only the lower one draws. Emission order does not predict it --
+RED is first in both layouts, BLUE is third, YELLOW last, and in Compact only
+the third survives. Shape does not predict it: horizontals and verticals both
+appear in the drew and did-not columns.
+
+*What that means, and it is not a display-list problem.* No CPU, no walk, no
+SDRAM and no display list are involved in this path. The renderer is losing the
+top half of the frame on its own. If that is the fill engine failing to stay
+ahead of the beam over bands 0-12, then no amount of fixing the display list
+would have produced a picture, because most of it would be dropped on the way
+out. THE OPEN QUESTION that decides it: are Wide's GREEN and YELLOW bars full
+height, or only their lower halves? They span bands 7-16, so a half-height bar
+says the cut is real and positional; a full-height one says this reasoning is
+wrong and the quad store is the place to look.
+
+**THE WALK TRIGGER DOES NOT CHANGE THE BARS.** All four settings of `O[24:23]`
+give the identical picture, and that is correct by construction rather than a
+null result: the injector's state machine keys off `geo_walk_start`, which is
+`vbl_d && !vbl_dd && !status[20]` -- the vblank edge -- and NOT off `trig_sel`,
+which is the mux `O[24:23]` drives inside `m2_geo`. The two are different
+signals. Do not re-run this combination expecting it to say something.
+
+**THE BARS USED TO SHOW BEFORE THE FLIP FIX.** Recorded as reported rather than
+as measured here, and it is a real regression clue, because `geo_walk_start`
+shares its registers with the frame interrupt: R199 fault 4 moved `vbl_d` from
+the duplicate `m2_video_timing`'s vblank to `tile_vb`, and `geo_walk_start` reads
+`vbl_d`/`vbl_dd`. So the four-faults commit changed WHEN the injector fires as a
+side effect of fixing what the CPU times off. That is the first thing to bisect
+if the bars are worse now than they were: `build/four/s11` and `build/slack1/s5`
+are on disk and one of them predates it.
+
+*And a caution about this afternoon.* `m2_raster3d` was given `TWO_CLOCKS(0)` the
+same day, which removes two cycles from band presentation and two from buffer
+release. That is exactly the timing this test is sensitive to and there is no
+before/after on it. Any conclusion drawn from a single build here is drawing on
+two uncontrolled changes at once.
+
+**R201 -- the HDMI slack cannot be reached by any setting available in Quartus
+Lite, and two of them were spent finding that out.**
+
+`MUX_RESTRUCTURE OFF` does not fit: **44,485 ALM, 106% of the device.** The flag
+is worth ~6,800 ALM here. Model 1's `findings.md` (2026-09-07) measured the same
+four flags as byte-identical no-ops on that core UNDER Aggressive Area, and that
+finding does not transfer -- this design's mux structures are where its area is.
+It stays on, and it is not available as a timing lever.
+
+A LogicLock region on `osd:hdmi_osd` returned ALM, HDMI slack and clk_mem slack
+IDENTICAL to the baseline to three decimals, because it was never applied:
+
+```
+Critical Warning (140003): Current license file does not support LogicLock
+regions. The Quartus Prime software removes all the LogicLock regions in your
+design automatically.
+```
+
+**LogicLock is a subscription feature and this project is licence-locked to
+Quartus Prime Lite 17.0.** Check the feature against the edition before spending
+a build on it. An experiment that silently degrades to the control looks exactly
+like an experiment that ran and found nothing.
