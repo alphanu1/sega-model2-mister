@@ -111,6 +111,22 @@ game emits geometry every frame now; the fault has moved downstream to the
 geometrizer/rasteriser path (never fed real data on hardware before tonight)
 and R200's band-13 cut. Next build: fix + geometry counters, four seeds.
 
+**`build/geo` s11 (fix in), 22:40:** matrix pushes saturate, walk opcodes
+286-2,050 a frame, **polygons 0, clipper in 0, clipper out 0.** The list is
+decoded; the geometry engine produces nothing. `build/obj` (four seeds)
+carries objects dispatched : finished, MAX_POLYS caps, walk state, and the
+last polygon-ROM word the engine read.
+
+**R203, found 22:50: the TGP's math tables are read 64 KB late on hardware,
+and have been since 2026-08-30.** `GAME_TGPTBL` was set from an image that
+`build_image` had prepended the 64 KB index-3 I/O ROM to. The board never had
+that gap. Every trig lookup the coprocessor has made on silicon returned a
+word 64 KB into the table; the bench loads the tables at the RTL's base and
+never saw it. Fixed (`0x15D0000`); `build/tbl` (four seeds) carries it with
+the bridge fix and the object-stage probes. Expect this to be why the geometry
+engine emits zero polygons from thousands of walked opcodes, and why the
+camera jumps.
+
 **Tools fixed on the way:** `mame_i960_frame_trace.lua` never read `M2_FRAME`;
 `rom_csum.py`'s `build_image` prepended the index-3 I/O ROM (64 KB) to the
 image, so `M2_BOOT_IMAGE` trapped the real-memory bench on instruction 1; the

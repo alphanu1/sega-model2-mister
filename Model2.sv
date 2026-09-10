@@ -416,7 +416,14 @@ localparam logic [SDR_AW:1] PCM_OFFS = SDR_AW'(32'h0020000);
 //   copro_data  byte 0x0A40000, 4 MB -- mpr-16537 + mpr-16536, interleaved
 //   tables      byte 0x2BB0000, 256 KB -- opr-14742a + opr-14743a, MEASURED
 localparam logic [SDR_AW:1] GAME_COPRO  = SDR_AW'(32'h0520000);
-localparam logic [SDR_AW:1] GAME_TGPTBL = SDR_AW'(32'h15d8000);
+// 0x15D0000, NOT 0x15D8000. The "measured 64 KB gap" before the tables was the
+// I/O board's 64 KB ROM sitting in the index-0 stream ahead of them. c1c9fd6
+// (2026-09-08) moved that ROM to its own ioctl index, the tables moved down
+// 64 KB, and this base did not: since then the TGP has read every sine,
+// cosine, inverse and inverse-square-root 64 KB into the table. Found by
+// searching the index-0 image built by tools/rom_csum.py for the tables'
+// first words (00000000 38c90fdb 39490fdb): byte 0x2BA0000, word 0x15D0000.
+localparam logic [SDR_AW:1] GAME_TGPTBL = SDR_AW'(32'h15d0000);
 // THE POLYGON ROM, WHERE THE GEOMETRY'S VERTICES LIVE (R169).
 //
 // geo_object_data's `oba` selects the source -- bit 24 fast polygon RAM, bit 23
@@ -719,9 +726,10 @@ always_comb begin
 	// is used; the address is a 32-bit word index shifted left to reach this
 	// 16-bit memory.
 	//
-	// The table base is MEASURED rather than counted: arithmetic over the MRA's
-	// section list gives 0x2BA0000 and the built image has them at 0x2BB0000,
-	// the same 64 KB discrepancy R88/R89 found for the 68000 sound ROM.
+	// The table base is the arithmetic's 0x2BA0000 (study R203). This comment
+	// used to record a "measured" 0x2BB0000 from an image the builder had
+	// prepended the 64 KB index-3 I/O ROM to -- the same invented gap R89
+	// had already reversed for the 68000 sound ROM.
 	p_req[8]  = tgp_tbl_req_r;
 	p_addr[8] = GAME_TGPTBL + SDR_AW'({tgp_tbl_addr_r, 1'b0});
 	// PORT 9 REACHES TWO REGIONS NOW, chosen by the coprocessor's bank register
@@ -3625,8 +3633,18 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// times a frame. e13_hdl_n counts the walker's loads of entry 13's handler
 	// word (0x504E0C at IP 0x185c): once a frame if the walk advances, ~127 if
 	// it spins. Wrapping.
+	// AFTER THE FIX (build/fix s13: size 0x300 in every sample, render chain
+	// 5,048 samples where it had 0), the game emits geometry every frame and
+	// nothing is on screen. So the geometry counters take the channel:
+	// matrix pushes here, then walk opcodes : polygons | clipper in : out.
+	// build/geo s11 MEASURED: matrix pushes saturate, walk ops 286-2050 a
+	// frame, and polys = clip in = clip out = 0. The walk decodes the list;
+	// the geometry engine produces nothing from it. So the object stage:
+	// objects dispatched : objects finished | the last polygon-ROM word the
+	// engine read, with capped (MAX_POLYS hit -- an object reading 0xFFFF)
+	// and the walk state here.
 	.a_data({cpu_trap, cpu_halted, copro_stall, copro_dbg_ctl[31],
-	         e13_hdl_n, tgp_pc[15:0]}),
+	         geo_capped[7:0], geo_walk_state, tgp_pc[15:0]}),
 	// THE i960's OWN INSTRUCTION COUNT, so the first three minutes can be
 	// diagnosed rather than described. Two readings a known time apart give the
 	// rate directly; a machine that is slow for three minutes and then is not
@@ -3762,7 +3780,7 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// how many times the walker has loaded it.
 	// ENTRY 13's SIZE FIELD (0x504E08) AS THE WALKER'S `ld 8(g13)` AT 0x1880
 	// RETURNS IT. The reference holds 768 (0x300).
-	.b_addr(e13_size),
+	.b_addr({geo_walk_objs, geo_objs_done}),
 	// clip_dropped read 0 on hardware and the refusal count is the number that
 	// now moves, so it takes that byte. Between them: accepted, emitted, refused
 	// before the arithmetic, and reaching the rasterizer.
@@ -3822,7 +3840,7 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// loaded from 0x501260 (the reference holds 0x00510F00, entry 139).
 	// AND WHO LAST WROTE THAT WORD: the writer's IP (low 16) and the data
 	// (low 16), any byte of 0x504E08-0x504E0B. Only init should ever write it.
-	.b_data({e13_wr_ip[15:0], e13_wr_dat[15:0]}),
+	.b_data(eng_mem_data_r),
 	.a_tag(8'h43), .b_tag(8'h48),          // 'C' copro in_pushed:out_pushed | TGP retires:pc
 	                                       // 'H' out_popped:hscr2 | io_addr:flags
 	                                       // 'H' scroll h:v for layers 0,1 | layers 2,3 -- low bytes

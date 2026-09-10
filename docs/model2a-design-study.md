@@ -11379,3 +11379,47 @@ question has moved downstream to the geometrizer and rasteriser, which had
 never been fed real data on hardware, and to R200's band-13 cut. Next build:
 the fix plus the geometry counters (matrix pushes, walk opcodes, polygons,
 clipper output, quads to the rasteriser) on the wire, at four seeds.
+
+*`build/geo` s11 (fix in; setup -0.399, hold +0.208), 22:40, the geometry
+counters:* matrix pushes saturate their 12 bits within seconds; walk opcodes
+per walk 286 typical, up to 2,050 (was 3 all day); **polygons 0, clipper in
+0, clipper out 0, in every sample.** The front door and the walk are fed and
+working; the geometry engine emits nothing from the objects it is handed.
+Next: objects dispatched against objects finished, MAX_POLYS caps (an object
+whose polygon data reads 0xFFFF), the walk state, and the last polygon-ROM
+word the engine read -- which separates "the engine never starts", "it
+starts and never finishes", and "it reads the wrong memory".
+
+**R203 -- THE TGP'S MATH TABLES HAVE BEEN READ 64 KB LATE ON HARDWARE SINCE
+THE DAY THEY WERE ADDED. THE "MEASURED GAP" WAS THE IMAGE BUILDER PREPENDING
+THE I/O BOARD'S ROM.**
+
+The index-0 image built tonight (`tools/rom_csum.py`, index 0 only) holds the
+tables' first words -- `00000000 38c90fdb 39490fdb`, sin of 0, of 2pi/65536,
+of twice that -- at byte **0x2BA0000**, directly after the comms program, where
+the MRA's own arithmetic puts them. `GAME_TGPTBL` is word 0x15D8000 = byte
+0x2BB0000. The entry of 2026-08-30 that set it ("the offset is measured, not
+counted ... a 64 KB gap, in the same direction as R88/R89") measured an image
+built by `build_image` walking every `<rom>` in file order, two days after
+d339a3a put the 64 KB I/O firmware in `<rom index="3">` AHEAD of index 0 in
+the file. The gap was that ROM. The board's loader sends each index as its own
+stream; it never had the gap. R89 had already reversed R88's identical gap for
+the sound ROM for the same reason, and the lesson was not carried across.
+
+So on the board, every sincos, atan, inverse and inverse-square-root lookup the
+coprocessor has made since 2026-08-30 returned a word 64 KB into the table. The
+bench never saw it: it loads the table files at the RTL's base. That is the
+strongest available explanation for tonight's `build/geo` numbers -- matrices
+pushed, thousands of opcodes walked, zero polygons -- since garbage trig gives
+garbage matrices and the geometry's nonfinite gate refuses what results; and
+for the camera that jumps rather than scrolls once the cars are placed.
+
+Fix: `GAME_TGPTBL = 0x15D0000`. `build/tbl` (four seeds) carries it with the
+bridge fix and the object-stage probes. Polygon ROM (0x1640000), copro data
+ROM (0xA40000) and the program were checked the same way and are where the
+RTL reads them.
+
+*Rule, and it is R149 again from the other side:* a base "measured" from an
+image is only as good as the tool that built the image. When the MRA's
+arithmetic and the built image disagree by exactly one ROM's size, suspect the
+builder before recording a gap.

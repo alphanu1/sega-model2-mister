@@ -107,7 +107,16 @@
         <!-- 0x2b80000  comms program, 0x20000 -->
         <part name="epr-16726.bin" crc="c179b8c7"/>
 
-        <!-- 0x2bb0000  TGP math tables, 0x40000  (MEASURED, see below)
+        <!-- 0x2ba0000  TGP math tables, 0x40000
+
+             THE OFFSET IS 0x2BA0000, THE ARITHMETIC'S ANSWER. This comment
+             used to say 0x2bb0000, "measured" from an image that
+             tools/rom_csum.py had built by walking every <rom> in file order,
+             which put the 64 KB index-3 I/O firmware ahead of index 0. The
+             loader sends each index as its own stream, so the board never had
+             that 64 KB and the coprocessor read its tables 64 KB late from
+             2026-08-30 to 2026-09-10 (study R203). The paragraph below is kept
+             as the record of how a gap was invented.
 
              The sincos, atan, inv and isqrt lookup tables the geometry
              processor reads through its IO space: four 16K-word quadrants,
