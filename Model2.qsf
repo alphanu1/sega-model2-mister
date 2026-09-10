@@ -238,18 +238,22 @@ set_global_assignment -name FITTER_EFFORT "STANDARD FIT"
 # that trade.
 #
 # The other four area settings stay. They cost no block memory.
-# BALANCED, AND AGGRESSIVE AREA IS GONE. Measured across every build still on
-# disk, grouped by fitter settings, at the occupancy each actually produces:
+# AGGRESSIVE AREA, KEPT. It was swapped for BALANCED for one build and put back,
+# and the reason it went back is the measurement rather than the setting.
 #
-#   AGGRESSIVE AREA / AREA     38,270 ALM   mean HDMI -0.374   77% failing
-#   HIGH PERF EFFORT / SPEED   41,169 ALM   mean HDMI -0.036   53% failing
-#   BALANCED / BALANCED        41,178 ALM   mean HDMI +0.207    0% failing
+# BALANCED closed every clock -- setup, hold, recovery, removal, minimum pulse
+# width, all positive, which Aggressive Area has never done here. But it closes
+# them by not compressing: 40,658 ALM against Aggressive Area's 37,241 on the
+# same tree. THE POINT OF THE AREA WORK IS THE AREA. Removing the duplicate
+# timing generator, the self-crossing character CDC, the raster3d synchronisers
+# and the per-port capture array were all done to reclaim ALM, and a build that
+# does not compress cannot show whether any of it worked.
 #
-# It was compressing ALM, of which there are 4,600 spare, and cannot touch M10K
-# at 553/553 -- which is what actually returns "Can't fit design in device".
-# Aggressive Area was adopted to make the design fit; the thing that stops it
-# fitting is not the resource it compresses.
-set_global_assignment -name OPTIMIZATION_MODE "BALANCED"
+# So the mode stays where the baseline is, and the settings A/B happens on its
+# own, against a fixed tree -- not folded into the change it is meant to measure.
+# That is the "two variables in one change" mistake this file has recorded
+# before, made again and undone.
+set_global_assignment -name OPTIMIZATION_MODE "AGGRESSIVE AREA"
 set_global_assignment -name ALLOW_POWER_UP_DONT_CARE ON
 set_global_assignment -name QII_AUTO_PACKED_REGISTERS NORMAL
 # BACK ON, AND NOT BY PREFERENCE. With this OFF the fitter dies with
@@ -283,7 +287,7 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_RETIMING ON
 # anyway -- attract mode, sound, tilemap -- so the miss is real but not fatal at
 # room temperature. Timing gets fixed by seed sweeping and by getting the
 # occupancy down, not by a technique that cannot produce a bitstream.
-set_global_assignment -name OPTIMIZATION_TECHNIQUE BALANCED
+set_global_assignment -name OPTIMIZATION_TECHNIQUE AREA
 set_global_assignment -name MUX_RESTRUCTURE ON
 set_global_assignment -name REMOVE_REDUNDANT_LOGIC_CELLS ON
 set_global_assignment -name AUTO_DELAY_CHAINS_FOR_HIGH_FANOUT_INPUT_PINS ON
