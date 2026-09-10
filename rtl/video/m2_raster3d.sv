@@ -28,7 +28,21 @@ module m2_raster3d #(
   parameter int unsigned SCR_W  = 496,
   parameter int unsigned SCR_H  = 384,
   parameter int unsigned BAND_H = 16,
-  parameter int unsigned NBUF   = 3
+  parameter int unsigned NBUF   = 3,
+
+  // ARE clk AND scan_clk ACTUALLY DIFFERENT CLOCKS?
+  //
+  // 0 means they are the same net, and then every synchroniser below is a
+  // crossing this module invents against itself: two flops each on the band
+  // flag, the band index and the scan counter, for a hazard that cannot occur
+  // when there is one clock edge. That is not free -- it is two cycles of
+  // band-presentation latency and two of buffer release, in the renderer whose
+  // whole problem is finishing a band before the beam arrives.
+  //
+  // 1 restores all of it, and it must be 1 the moment the video moves to the
+  // memory clock. The logic is kept rather than deleted precisely because that
+  // move is planned and R199 records what it costs to rediscover.
+  parameter bit TWO_CLOCKS = 1'b1
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -169,20 +183,27 @@ module m2_raster3d #(
   // Gray coding needs.
   //
   // Dormant at one clock, like the pair above, and correct at two.
-  logic [BW-1:0] sb_gray_s1, sb_gray_s2;
-  wire  [BW-1:0] sb_gray = scan_band ^ (scan_band >> 1);
-  always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) begin sb_gray_s1 <= '0; sb_gray_s2 <= '0; end
-    else        begin sb_gray_s1 <= sb_gray; sb_gray_s2 <= sb_gray_s1; end
-  end
-
   logic [BW-1:0] scan_band_f;
-  always_comb begin
-    scan_band_f = '0;
-    for (int b = BW-1; b >= 0; b--)
-      scan_band_f[b] = (b == BW-1) ? sb_gray_s2[b]
-                                   : (scan_band_f[b+1] ^ sb_gray_s2[b]);
-  end
+  generate
+    if (TWO_CLOCKS) begin : g_sb_sync
+      logic [BW-1:0] sb_gray_s1, sb_gray_s2;
+      wire  [BW-1:0] sb_gray = scan_band ^ (scan_band >> 1);
+      always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin sb_gray_s1 <= '0; sb_gray_s2 <= '0; end
+        else        begin sb_gray_s1 <= sb_gray; sb_gray_s2 <= sb_gray_s1; end
+      end
+      always_comb begin
+        scan_band_f = '0;
+        for (int b = BW-1; b >= 0; b--)
+          scan_band_f[b] = (b == BW-1) ? sb_gray_s2[b]
+                                       : (scan_band_f[b+1] ^ sb_gray_s2[b]);
+      end
+    end else begin : g_sb_direct
+      // One clock: the counter is read on the edge that changes it, which is
+      // what every other read of scan_y in this module already does.
+      always_comb scan_band_f = scan_band;
+    end
+  endgenerate
 
   // SYNCHRONISED INTO THE SCAN DOMAIN.
   //
@@ -203,20 +224,32 @@ module m2_raster3d #(
   //
   // COSTS TWO CYCLES of band-presentation latency at one clock, where it removes
   // a metastability hazard at two.
-  logic [NBUF-1:0] rdy_s1, rdy_s2;
-  logic [BW-1:0]   band_s1 [NBUF];
+  logic [NBUF-1:0] rdy_s2;
   logic [BW-1:0]   band_s2 [NBUF];
-  always_ff @(posedge scan_clk or negedge rst_n) begin
-    if (!rst_n) begin
-      rdy_s1 <= '0; rdy_s2 <= '0;
-      for (int i = 0; i < NBUF; i++) begin band_s1[i] <= '0; band_s2[i] <= '0; end
-    end else begin
-      rdy_s1 <= bd_ready; rdy_s2 <= rdy_s1;
-      for (int i = 0; i < NBUF; i++) begin
-        band_s1[i] <= bd_band[i]; band_s2[i] <= band_s1[i];
+  generate
+    if (TWO_CLOCKS) begin : g_rdy_sync
+      logic [NBUF-1:0] rdy_s1;
+      logic [BW-1:0]   band_s1 [NBUF];
+      always_ff @(posedge scan_clk or negedge rst_n) begin
+        if (!rst_n) begin
+          rdy_s1 <= '0; rdy_s2 <= '0;
+          for (int i = 0; i < NBUF; i++) begin band_s1[i] <= '0; band_s2[i] <= '0; end
+        end else begin
+          rdy_s1 <= bd_ready; rdy_s2 <= rdy_s1;
+          for (int i = 0; i < NBUF; i++) begin
+            band_s1[i] <= bd_band[i]; band_s2[i] <= band_s1[i];
+          end
+        end
+      end
+    end else begin : g_rdy_direct
+      // One clock: read them where they are written. A band is presented on the
+      // cycle it becomes ready rather than two cycles later.
+      always_comb begin
+        rdy_s2 = bd_ready;
+        for (int i = 0; i < NBUF; i++) band_s2[i] = bd_band[i];
       end
     end
-  end
+  endgenerate
 
   // Scan-out picks whichever buffer currently holds the beam's band. Combinational
   // over NBUF, which is three: cheaper than a register that has to track the beam.

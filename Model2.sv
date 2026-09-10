@@ -753,8 +753,10 @@ always_comb begin
 	// problem by listening, and two builds were spent on the rate.
 	p_addr[7] = snd_base + PCM_OFFS + SDR_AW'(23'h200000)
 	                     + SDR_AW'({pcm2_addr, 2'b00});
-	p_req[3]  = cc_req;
-	p_addr[3] = char_base + SDR_AW'(cc_addr);
+	// STRAIGHT FROM THE CACHE. cc_req/cc_addr used to come out of m2_char_cdc;
+	// see the note at u_char_cache for why that translator was removed.
+	p_req[3]  = cache_m_req;
+	p_addr[3] = char_base + SDR_AW'(cache_m_addr);
 	// PORT 0 IS THE CPU'S, and it is the single-word port on purpose: the
 	// bridge issues one 16-bit access at a time, and ports 1-3 burst four.
 	p_req[1]  = cpu_sd_req;
@@ -3107,7 +3109,7 @@ end
 logic [24:0] cf_addr;
 always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	if (!mem_rst_n)   cf_addr <= 25'd0;
-	else if (cc_req)  cf_addr <= 25'(char_base + SDR_AW'(cc_addr));
+	else if (cache_m_req) cf_addr <= 25'(char_base + SDR_AW'(cache_m_addr));
 end
 
 // THE SERIAL CHANNEL. docs/mister-integration.md said this was available and
@@ -4502,8 +4504,6 @@ wire [17:0] cpu_char_wr_addr;   // and this is which one
 wire        char_req, char_ack;
 wire [17:0] char_addr;
 wire [31:0] char_data;
-wire        cc_req;
-wire [17:0] cc_addr;
 
 // IS THE CHARACTER FETCH RETURNING DATA AT ALL?
 //
@@ -4554,6 +4554,12 @@ end
 wire        cache_m_req, cache_m_ack;
 wire [17:0] cache_m_addr;
 wire [63:0] cache_m_data;
+
+// The answer side of port 3, straight back to the cache. m2_sdram_x2 holds the
+// acknowledge while the request stands and bypasses s_dout on the acknowledge
+// cycle, so both are valid on the edge m2_char_cache captures them.
+assign cache_m_ack  = p_ack[3];
+assign cache_m_data = p_dout[3];
 wire [31:0] char_hits, char_misses;
 
 // IDX_BITS 14 -- 128 KB. REDUCED TO 13 AND REVERTED, ON HARDWARE EVIDENCE.
@@ -4593,19 +4599,32 @@ m2_char_cache #(.IDX_BITS(14)) u_char_cache (
 	.dbg_hits(char_hits), .dbg_misses(char_misses)
 );
 
-// The crossing stays. Both sides now run on clk_sys, so it is a handshake
-// across one clock rather than two -- harmless, proven, and the cache means it
-// is exercised a few thousand times a frame instead of millions.
-m2_char_cdc u_char_cdc (
-	.clk_vid(clk_sys), .vid_rst_n(mem_rst_n & cp_done),
-	.v_req(cache_m_req), .v_addr(cache_m_addr),
-	.v_ack(cache_m_ack), .v_data(cache_m_data),
-	.clk_sys(clk_sys), .sys_rst_n(mem_rst_n),
-	.s_req(cc_req), .s_addr(cc_addr),
-	// THE WHOLE BURST, not half of it: four 16-bit words fill p_dout and the
-	// cache line now holds all four.
-	.s_ack(p_ack[3]), .s_data(p_dout[3])
-);
+// THE CROSSING IS GONE, and it was not harmless.
+//
+// It was `m2_char_cdc` with clk_vid and clk_sys BOTH tied to clk_sys -- a
+// clock-domain crossing this file invented against itself. The comment that
+// stood here called it "harmless, proven". It was proven; it was not harmless.
+//
+// WHAT IT COST, per character fetch: req_sync is two clk_sys edges before the
+// memory side even sees the request, done_sync plus done_q is two more before
+// the cache sees the answer, and S_ACK cannot retire until v_req drops and
+// re-synchronises. Six cycles, every miss, for a metastability hazard that
+// cannot exist on one clock edge. Immediately below this is the line-overrun
+// counter and m2_video's own note that an overrun redisplays the previous line
+// -- six cycles a fetch is how a scanline runs out of time.
+//
+// AND THE STATE MACHINE WAS DUPLICATING m2_sdram_x2. The adapter already turns
+// a held request into exactly one transaction (`f_req = s_req & ~done &
+// ~f_ack`), already holds the acknowledge while the request stands (R162's
+// sticky ack), and already bypasses s_dout on the acknowledge cycle so the data
+// is valid beside it. m2_char_cache holds m_req until m_ack and drops it on the
+// same edge it captures m_data, which is precisely the requester that contract
+// is written for. So the two ends speak the same protocol and the translator
+// between them was translating nothing.
+//
+// Direct-wired below at the port-3 assignment. If the video ever moves to
+// clk_mem this must come back -- rtl/mem/m2_char_cdc.sv is kept for that, and
+// R199 records why.
 
 // TILE WORDS ACCUMULATED PER LAYER, straight out of the renderer. The frame
 // simulation that reproduces MAME's picture ends with layer 0 holding 0x310 and
@@ -4653,7 +4672,12 @@ wire        r3d_hit;
 wire [15:0] r3d_quads, r3d_dropped, r3d_bands;
 wire [31:0] r3d_pixels;
 
-m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(16), .NBUF(3)) u_raster3d (
+// TWO_CLOCKS(0): clk and scan_clk below are BOTH clk_sys, so every synchroniser
+// in this module would be a crossing it invents against itself -- six cycles of
+// added latency in the renderer whose entire problem is finishing a band before
+// the beam reaches it. Set it to 1 the moment the video moves to clk_mem.
+m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(16), .NBUF(3),
+              .TWO_CLOCKS(1'b0)) u_raster3d (
 	.clk(clk_sys), .rst_n(mem_rst_n),
 	.frame_start(geo_walk_start),
 	// Each bar is a proper filled rectangle traversed around its perimeter:
@@ -4745,33 +4769,19 @@ m2_video u_tilemap (
 
 ///////////////////////   VIDEO   ////////////////////////////////
 
-wire        hs, vs, hblank, vblank, visible;
-wire  [9:0] hcnt, vcnt;
-
-m2_video_timing u_timing
-(
-	.clk(clk_sys),
-	.ce_pix(ce_pix),
-	.rst_n(mem_rst_n),
-	.hcnt(hcnt),
-	.vcnt(vcnt),
-	.hblank(hblank),
-	.vblank(vblank),
-	.hsync(hs),
-	.vsync(vs),
-	.visible(visible),
-	.line_start(),
-	.line_number(),
-	.vblank_start()
-);
-
-// The pattern is on the GAME reset, not the memory reset, so pressing reset in
-// the OSD visibly restarts the marching block. That is the cheapest possible
-// confirmation on a bench that reset reaches the core at all.
-wire vbs;
-assign vbs = vblank & ~vblank_d;
-reg vblank_d;
-always @(posedge clk_sys) if (ce_pix) vblank_d <= vblank;
+// THE SECOND m2_video_timing INSTANCE IS GONE, and with it every wire that
+// existed only to feed it.
+//
+// m2_video has always run its own generator -- the one the picture is actually
+// built from -- so this was a duplicate free-running counter whose hs, vs,
+// hblank and vcnt outputs had exactly two references each in this file: the
+// declaration and the port map. Nothing read them. `vbs` had none at all.
+//
+// Its last real consumer was the frame interrupt, and R199 fault 4 moved that
+// to tile_vb; rewiring the interrupt left the generator itself behind. What
+// remains of it is frame_ctr, which the overlay reads, and that now counts the
+// same vblank the interrupt does rather than a second opinion about when a
+// frame ends.
 
 
 ///////////////////////   OVERLAY   //////////////////////////////
@@ -4788,43 +4798,27 @@ always @(posedge clk_sys) if (ce_pix) vblank_d <= vblank;
 // assert the same two). Simulation proving them and silicon proving them are
 // different claims, and until now only the first had been made.
 
+// FRAME COUNTER, off the picture's own vblank.
+//
+// The line and visible-pixel counters that used to live here are gone with the
+// duplicate generator. They existed to prove m2_video_timing produced MAME's
+// 424 lines and 496 visible pixels, they proved it on hardware, and
+// sim/video/tb_m2_video_timing.cpp asserts both every run. A measurement that
+// has been made and is re-made by the bench does not need to stay in the
+// silicon.
+//
+// frame_ctr stays because the overlay reads it as a liveness digit, and it now
+// increments on tile_vb -- m2_video's vid_vb, the same edge the frame interrupt
+// uses. One source of truth for when a frame ends.
 reg [31:0] frame_ctr;
-reg  [9:0] line_ctr,  line_ctr_l;
-reg [10:0] vispix_ctr, vispix_ctr_l;
-reg        vblank_dd;
+reg        vbl_ov_d;
 
 always @(posedge clk_sys) begin
   if (!mem_rst_n) begin
-    frame_ctr <= 0; line_ctr <= 0; vispix_ctr <= 0;
-    line_ctr_l <= 0; vispix_ctr_l <= 0;
-  end else if (ce_pix) begin
-    vblank_dd <= vblank;
-    // Count visible pixels on ONE line only, so the figure is per-line and not
-    // per-frame: it is latched at the end of a line and reset immediately.
-    // BOTH COUNTERS WERE OFF BY ONE ON HARDWARE, and the board is what found it:
-    // 1A7 and 1EF where MAME's set_raw says 1A8 and 1F0.
-    //
-    // The cause is the same in both. The reset and the increment fired on the
-    // SAME edge -- hcnt==0 is a visible pixel, and the frame boundary lands on a
-    // line boundary -- so the later non-blocking assignment won and the pixel or
-    // line being closed was never counted. The timing module is not implicated;
-    // sim/video/tb_m2_video_timing.cpp asserts 424 and 496 against MAME and
-    // passes. This was the instrument, for the third time this session.
-    //
-    // Fix: the closing edge counts the item it is closing, rather than dropping
-    // it in favour of the reset.
-    if (hcnt == 10'd0) begin
-      if (|vispix_ctr) vispix_ctr_l <= vispix_ctr;
-      vispix_ctr <= visible ? 11'd1 : 11'd0;   // hcnt==0 is itself visible
-      line_ctr   <= line_ctr + 1'd1;
-    end else if (visible) begin
-      vispix_ctr <= vispix_ctr + 1'd1;
-    end
-    if (vblank & ~vblank_dd) begin       // frame boundary, on a line boundary
-      frame_ctr  <= frame_ctr + 1'd1;
-      line_ctr_l <= line_ctr + 1'd1;     // count the line the reset consumes
-      line_ctr   <= 0;
-    end
+    frame_ctr <= 0; vbl_ov_d <= 1'b0;
+  end else begin
+    vbl_ov_d <= tile_vb;
+    if (tile_vb && !vbl_ov_d) frame_ctr <= frame_ctr + 1'd1;
   end
 end
 
