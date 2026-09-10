@@ -23,6 +23,7 @@
 `timescale 1ns/1ps
 
 module m2_sdram_x2_harness #(
+  parameter logic [2:0]  RD_LAT_SEL = 3'd3,   // read-capture selector, see m2_sdram; the board calibrates it
   parameter int unsigned COL_BITS = 10
 ) (
   input  logic        clk,          // FAST, 96 MHz
@@ -129,7 +130,7 @@ module m2_sdram_x2_harness #(
     .clk(clk), .rst_n(rst_n), .ready(ready),
     // CL+3, which is what the device MODEL needs -- selector 3 after the range
     // moved earlier for the board. Not the board's value.
-    .rd_lat_sel(3'd3),
+    .rd_lat_sel(RD_LAT_SEL),
     .sd_cke(cke), .sd_cs_n(cs_n), .sd_ras_n(ras_n), .sd_cas_n(cas_n),
     .sd_we_n(we_n), .sd_ba(ba), .sd_a(a), .sd_dqm(dqm),
     .sd_dq_o(dq_o), .sd_dq_oe(dq_oe), .sd_dq_i(dq_i),

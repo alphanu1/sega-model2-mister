@@ -47,7 +47,16 @@ import xml.etree.ElementTree as ET
 def build_image(mra_path, zip_dir, extra=()):
     root = ET.parse(mra_path).getroot()
     out = bytearray()
+    # ONLY <rom index="0"> IS THE GAME IMAGE. The MRA has carried an
+    # index="3" element (the I/O board ROM, 64 KB, its own ioctl stream) since
+    # 2026-09-08, and it precedes index 0 in the file. Walking every <rom> put
+    # those 64 KB in front of the program, so the boot bench fed M2_BOOT_IMAGE
+    # fetched its reset vector from the I/O board's Z80 code and trapped on
+    # instruction 1. The board never saw this: MiSTer sends each index as its
+    # own stream and the core maps only index 0 at GAME_PROG.
     for rom in root.iter('rom'):
+        if (rom.get('index') or '0') != '0':
+            continue
         names = (rom.get('zip') or '').split('|') + list(extra)
         zips = []
         for n in names:

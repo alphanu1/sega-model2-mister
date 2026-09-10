@@ -48,7 +48,8 @@ module m2_boot_harness #(
   // configuration that WORKS on hardware -- while the board has been running
   // the other one since a9ace86 and spinning. Exposed here so the failing
   // configuration can be reproduced in seconds instead of a 25-minute fit.
-  parameter bit          BUFFERRAM_EN    = 1'b0
+  parameter bit          BUFFERRAM_EN    = 1'b0,
+  parameter int unsigned RD_LAT_SEL      = 3      // REAL_MEM only: the controller's read-capture selector (-G friendly)
 ) (
   // REAL_MEM=1 replaces the C++ SDRAM with the genuine stack -- m2_sdram_x2 +
   // m2_sdram + sdram_model, lifted whole from sim/mem/m2_sdram_x2_harness.sv.
@@ -499,7 +500,7 @@ module m2_boot_harness #(
   logic [63:0] rm_p1_dout, rm_p3_dout;
 
   generate if (REAL_MEM) begin : g_realmem
-    m2_sdram_x2_harness #(.COL_BITS(10)) u_mem (
+    m2_sdram_x2_harness #(.COL_BITS(10), .RD_LAT_SEL(3'(RD_LAT_SEL))) u_mem (
       .clk(clk96), .rst_n(rst_n), .clk_slow(clk_slow_int), .ready(rm_ready),
       .wr_req(rl_req), .wr_addr(rl_addr), .wr_din(rl_din),
       .wr_be(2'b11), .wr_ack(rl_ack),

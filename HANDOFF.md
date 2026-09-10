@@ -5,87 +5,119 @@ RETRACTED, R189 corrected by R191, R196's central claim WITHDRAWN the same day.
 
 ---
 
-## THE COPROCESSOR IS PARKED AT PC 0x030B, AND THAT IS THE 3D FAULT
+## 0x030B IS THE TGP'S IDLE LOOP. THE 3D TASK IS THE LAST OF 140 AND THE BOARD'S WALKER NEVER CALLS IT (R202)
 
-Measured on hardware over `/dev/ttyS1`, 2026-09-10, seed 11 of `build/area2`
-(branch `area-pre-cdc`, all of the day's work in). Two captures 25 seconds each,
-one with the geometrizer walk off and one with it on, and the numbers are the
-same in both:
+**The 2026-09-10 headline is withdrawn.** `copro_stall` (`m2_copro.sv:303`) is
+the i960 held on an empty OUTPUT FIFO; it cannot say whether the TGP waits on its
+INPUT FIFO. The microcode says it does: `L_04c` is `b = rf1`, the FIFO read
+that replays until a word arrives, and 0x30B is the `goto L_04c` that retired
+before it. R188 had this right. The TGP is idle because the game sends nothing,
+and "CPU at 100% is the symptom" fell with it. **Read the code behind the number
+before using it (R149).** It cost the whole of 2026-09-10.
 
-```
-tgp_pc distribution, 9,426 samples, 2,024 words of microcode loaded:
+**Where the game's 3D lives, from the reference (MAME 0.289, Lua taps):**
 
-    0x030B    9422    99.96%
-    0x007D       2
-    0x0052       1
-    0x004D       1
+    attract state 0x5010a4:  0 -> 2 at frame 171 -> 3 at frame 172
+    state 3 = the 3D title, 1600 frames; the 3D task 0x5890 is registered
+    by state 2's handler as ENTRY 140 OF 140 in the per-frame task list
+    (0x504000.., count from ROM 0x22f1f0, walker at 0x1838)
+    entry 111 (0x510100, handler 0x2200e4) skips 28 disabled entries:
+    jumps the walk to *0x501260 = 0x510F00 and stores count-28 (= 2)
+    reference walk: 112 iterations, 67 calls, last call 0x5890, every frame
+    render chain 0x16e58-0x17b00 = 2.7% of every frame
 
-copro_stall = 0 on 9,423 of 9,426 samples
-cpu_trap = 0, cpu_halted = 0
-```
+**The board in state 3 (captures c/d of 09-10, walk frames 284-2012):** TGP
+busy, i960 40% in the mailbox poll 0x1166c (the car/track code's TGP query --
+game logic, which the reference does without spinning), 0x11450-0x11538
+executed, and **zero of 7,537 samples in the render chain** across 590 frames.
+Not a sampling artefact at 2.7% of a frame. And the direct count from the 09-08
+captures, decoded with build 2868625's layout: state 3, state 2 entered twice,
+0x1c14 executed, walker head and callx saturated, **tw_5890 = 0**. Registered,
+walked, never dispatched.
 
-**IT IS NOT STALLED, NOT TRAPPED, AND NOT UNLOADED.** The microcode is there --
-2,024 words, `copro_prog_words` has read 0x7E8 on every sample ever taken. It is
-not blocked on the i960, on SDRAM, or on a handshake: if it were, `copro_stall`
-would be high, and it is zero. It is EXECUTING at 0x030B and branching back to
-itself. That makes this a microcode-flow fault -- a condition that never becomes
-true, or a jump target computed wrong -- rather than a bus, arbitration or
-download problem. Those are all excluded by the measurement.
+The plain boot bench (same RTL, instant memory) reaches 0x5890 at frame 248
+straight after the skip handler. The i960 is in-order and blocks on `divo`. So
+the divergence is in the four work-RAM words the walk depends on -- the
+descriptor at 0x510F80, the pointer at 0x501260, the count at 0x5011fc -- as the
+board's memory path serves them. `build/walk` (seeds 11, 12) instruments exactly
+that: H = last descriptor the walker loaded | {count stored at 0x220104, pointer
+read from 0x501260}; C carries tw_5890 and the attract state in place of the
+retired-instruction rate. Decode with the layout in `Model2.sv` (search
+`wk_last_desc`). Reference values in state 3: 0x00510F80 / 0x0002 / 0x0F00.
 
-**ONE FAULT, FOUR SYMPTOMS.** Everything chased on 2026-09-10 is this seen from
-a different angle:
+**RESULTS, two instrumented builds later (2026-09-10 evening):**
 
-```
-  TGP parked at 0x030B
-    -> no geometry produced
-      -> nothing queued in buffer RAM
-        -> the walk retires 3 opcodes a frame (it fires at 56.9 Hz, completes,
-           state idle, no unknown opcode, no port-4 clash -- the walk is HEALTHY
-           and faithfully reporting an empty list)
-          -> no SDRAM contention
-            -> the CPU runs at 100% speed
-```
+`build/walk` s11 (setup -0.461): attract state 3, `tw_5890` = 0, skip handler
+never ran, **the walker's last descriptor load is entry 13 (0x504E00)**; the
+board then froze on one frame with the i960 in the mailbox poll (98% at
+0x1166c) and the TGP at 0x4C9, which is the `goto L_04c` after the clear at
+L_4c4. The clear was issued and never seen.
 
-**THE CPU RUNNING AT FULL SPEED IS THE SYMPTOM, NOT THE GOOD NEWS,** and Model 1
-is why. On that core, 3D working SLOWED THE CPU DOWN -- geometry reads, polygon
-writes and texture fetches all contending for SDRAM -- and raising the clock is
-what bought it back. A Model 2 running at 100% is a Model 2 doing no 3D work.
-This was reported by the project owner from the Model 1 experience and it
-inverted the reading of an observation that had been taken as healthy.
+`build/walk2` s11 (setup -0.242 on the HDMI PLL only, hold +0.186): the count
+from ROM is 140; the walker's last stored count reaches 0, so **on this build
+the walk runs the whole list**, slowly -- most of every frame inside 0xC9C4,
+the car handlers' INIT state, which the reference leaves after one frame. IP
+samples in state 3, by handler: entries 1, 6, 11, 12 execute; 13-32 sit in
+0xC9C4 (4,854 samples, the mailbox query inside it); **entries 57, 59, 61, 63,
+67, 75-111 (the 0x22xxxx tasks) and 140 execute ZERO instructions.** Every
+task state 2 registers at a descriptor above 0x50D000 is dead on the board;
+every one below 0x508800 works. The cars stay in init because the task that
+places them (entry 63, 0x226360 -> 0x2264E4 installs 0xCF74) is one of the
+dead ones.
 
-**WHAT WAS RULED OUT ALONG THE WAY, so it is not re-chased.**
+So the fault is one of: the enable stores to those descriptors (state 2's
+`setbit 31; st` at 0x1c08 and its siblings) not landing, or the walker's
+`ld 0(g13)` for those addresses reading stale/wrong data (the bridge's
+write-through-invalidate data cache is the one thing between them), or
+something clearing them afterwards. `build/e140` (seeds 11, 13, fitting)
+captures entry 140's word 0 and handler exactly as the walker reads them,
+and how often it is loaded. `build/mbox` (fitting) captures the TGP's mailbox
+writes against the CPU's readback, for the hang.
 
-- *Not the walk trigger.* All four settings of `O[24:23]` -- Flip, Vblank, After
-  flip, Write ptr -- give 3 opcodes. The flip fix was neither wrong nor the
-  cause.
-- *Not the display-list address.* `m2_cpu_bridge` maps 0x00900000-0x00980000 to
-  `base_buffer + r_addr[16:1]` with `BUFFERRAM=1` and reads enabled, and the
-  walk reads `GAME_BUFFER` with a matching dword-to-word shift. The walk reaches
-  a terminator rather than stalling, so the buffer genuinely holds a 3-opcode
-  list.
-- *Not the rasteriser or the video path.* The 3D test bars draw. See R200.
-- *Not the CPU.* 381 distinct IPs across 0x00000E08-0x0022F180, no trap, no halt,
-  and the 2D layer renders perfectly -- clouds, AM2 logo, INSERT COIN(S), SEGA,
-  CREDIT 0/3.
 
-**THE NEXT MOVE IS TO READ WHAT IS AT 0x030B** in Daytona's TGP microcode and
-what condition it waits on. That is a single specific address in a ROM, readable
-without hardware, and it is the first time this problem has had a target that
-small.
+**THE MECHANISM, FOUND 2026-09-10 LATE EVENING (R202, last two parts).**
+`build/e140`: entry 140's word 0 reads 0x00000000 in every state-3 sample and
+the walker loaded it twice in 9,000 frames, while the count still reaches 0
+each frame. The walk is not advancing: entry 13's SIZE field reads 0, so
+`addi r7,g13,g13` adds nothing and the walker spins on entry 13 for the rest
+of its count, calling 0xC9C4 each time (the ~127 mailbox queries a frame).
 
-**A SECOND, INDEPENDENT 3D FAULT IS OPEN** and must not be forgotten when the
-first is fixed: the renderer loses bands 0-11 of every frame. See R200 -- it is
-proven with hand-fed quads, so no CPU, no walk and no display list are involved,
-and fixing the coprocessor would still leave the top half of the picture
-missing.
+Why the size is 0: the game does `stos g2, 6(g9)` at 0x6FA0 into the player
+car's descriptor every frame, an UPPER-HALF halfword store. The bridge follows
+that with a dummy write to the next word -- `sd_be = 00`, data 0 -- trusting
+DQM to mask it. R82 measured that byte enables are lost in silicon. The dummy
+lands 0x0000 on 0x504E08, the size field. Simulations honour the mask, so the
+bench always reached the 3D task and the board never did.
 
-**INSTRUMENTATION READY BUT NOT BUILT.** `25b3045` adds `dbg_ready_cyc`
-(frame_start to P_READY) and `dbg_bands_done` (bands completed, against
-NBANDS=24) to say WHY bands 0-11 are lost, and puts `geo_dbg_wp` on the stream
-to say whether anything is queued. An uncommitted change also wires
-`cpu_dbg_acc[27:16]` into `a_data` so the CPU RATE can be measured at all -- it
-never reached the UART, and the comment claiming it "rides along with the IP"
-is stale. None of it is built; the board carries `build/area2/s11`.
+Fix (in the tree, `m2_cpu_bridge.sv` S_LO_W): an upper-half write completes
+after its one real word; nothing relies on the mask. `build/fix` (seeds 11,
+13) carries it plus entry-13 probes; `build/e13` is the same probes without
+the fix, the control. Expected on the fix: size 0x300, one handler load per
+frame, `tw_5890` climbing, tiles scrolling, cars placed. If the walk reaches
+entry 140 and the 3D still does not draw, the next things in line are R200's
+band-13 cut and the TGP's mailbox clear on the shared write port
+(`build/mbox2`, seeds 14/15, the probe pair for it).
+
+Then the throughput work, both measured today: the TGP blocks on SDRAM for
+every data access (a query costs half a frame), and the CPU's write-through
+stores are unposted (race mode: 77% of the i960 in a `stq` fill loop).
+
+**CONFIRMED ON THE BOARD, `build/fix` s13, 22:09:** size field 0x300 in every
+sample, written only by init; render chain 5,048 samples (was 0); 0x5890 every
+frame; the 0x22xxxx tasks run; cars leave init; mailbox samples 239 (was
+~10,000); the CPU idles 31% in the frame wait. The attract runs at speed and
+the background moves for the first time. **Still no polygon on screen.** The
+game emits geometry every frame now; the fault has moved downstream to the
+geometrizer/rasteriser path (never fed real data on hardware before tonight)
+and R200's band-13 cut. Next build: fix + geometry counters, four seeds.
+
+**Tools fixed on the way:** `mame_i960_frame_trace.lua` never read `M2_FRAME`;
+`rom_csum.py`'s `build_image` prepended the index-3 I/O ROM (64 KB) to the
+image, so `M2_BOOT_IMAGE` trapped the real-memory bench on instruction 1; the
+`obj_boot_rm` Makefile rule's source list predated the `fp_*` units and `make`
+reported an August binary as current.
+
+**Still open and independent:** R200's band-13 cut in the rasteriser.
 
 ---
 

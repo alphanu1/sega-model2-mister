@@ -654,7 +654,7 @@ obj_boot/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cpp \
                            rtl/mem/m2_char_cdc.sv $(wildcard rtl/video/*.sv) \
                            $(wildcard rtl/cpu/i960/*.sv)
 	$(VBUILD) --top-module m2_boot_harness -Wno-PINCONNECTEMPTY -Wno-UNUSEDPARAM \
-	  -Wno-WIDTHEXPAND -Wno-UNUSEDSIGNAL --Mdir obj_boot -o Vm2_boot_harness \
+	  -Wno-WIDTHEXPAND -Wno-UNUSEDSIGNAL -Wno-PINMISSING --Mdir obj_boot -o Vm2_boot_harness \
 	  -GBUFFERRAM_EN=$(BOOT_BUFFERRAM) \
 	  -CFLAGS "-O2" sim/io/m2_boot_harness.sv rtl/io/m2_cpu_bridge.sv \
 	  rtl/io/m2_ioboard.sv rtl/io/m2_backup.sv rtl/mem/m2_tdp_ram.sv rtl/io/m2_ioz80.sv $(wildcard rtl/tgp/*.sv) \
@@ -683,18 +683,22 @@ obj_boot/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cpp \
 # THE REAL-MEMORY COMPOSITION (R63): the boot harness with m2_sdram + the x2
 # adapter + the device model in place of the C++ array, so the game side runs
 # at true latency and the digit race becomes reproducible at the desk.
+# Same source set as obj_boot (the video path pulls rtl/tgp's fp_* units, and
+# this list once lacked them -- Verilator then failed on MODMISSING fp_mul
+# and the rule looked "up to date" against a binary from August), plus the
+# real memory stack.
 BOOTSRC := sim/io/m2_boot_harness.sv rtl/io/m2_cpu_bridge.sv \
            rtl/io/m2_ioboard.sv rtl/io/m2_backup.sv rtl/io/m2_ioz80.sv \
-           rtl/mem/m2_tdp_ram.sv \
+           rtl/mem/m2_tdp_ram.sv $(wildcard rtl/tgp/*.sv) \
            $(wildcard rtl/cpu/tv80/*.v) rtl/mem/m2_char_cdc.sv \
            rtl/mem/m2_sdram_x2.sv rtl/mem/m2_sdram.sv \
            sim/mem/m2_sdram_x2_harness.sv sim/mem/sdram_model.sv \
            $(wildcard rtl/video/*.sv) $(wildcard rtl/cpu/i960/*.sv)
 
 obj_boot_rm/Vm2_boot_harness: $(BOOTSRC) sim/io/tb_m2_boot.cpp
-	$(VBUILD) --top-module m2_boot_harness -GREAL_MEM=1 \
+	$(VBUILD) --top-module m2_boot_harness -GREAL_MEM=1 -GBUFFERRAM_EN=1 \
 	  -Wno-PINCONNECTEMPTY -Wno-UNUSEDPARAM -Wno-WIDTHEXPAND -Wno-UNUSEDSIGNAL \
-	  -Wno-SYNCASYNCNET \
+	  -Wno-SYNCASYNCNET -Wno-PINMISSING \
 	  -Wno-DECLFILENAME --Mdir obj_boot_rm -o Vm2_boot_harness \
 	  -CFLAGS "-O2" $(BOOTSRC) sim/io/tb_m2_boot.cpp
 

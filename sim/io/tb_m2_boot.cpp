@@ -79,6 +79,7 @@ static FILE *g_copro_trace = nullptr;
 static FILE *g_state_trace = nullptr;
 enum { IPRING = 40 };
 static uint32_t g_ipring[IPRING], g_ipring_last = 0xffffffffu;
+static uint64_t g_shadow_ok = 0, g_shadow_bad = 0, g_shadow_rom_ok = 0, g_shadow_rom_bad = 0;
 static unsigned g_ipring_w = 0; static uint32_t g_trap_addr = 0; static bool g_trapped = false;
 // M2_FINDVAL: log every bus transaction carrying this value, which is how a
 // pointer written into a table in RAM gets located.
@@ -1667,7 +1668,59 @@ int main(int argc, char **argv) {
         || (a >= 0x00220000u && a <  0x00240000u);       // ROM mirror
       if (!backed) g_rd_unbacked[a & 0xffff0000u]++;
     }
+    // A SHADOW OF WORK RAM, CHECKED ON EVERY CPU READ. The real-memory
+    // composition trapped at insn 17.5M with a register frame filled from ROM
+    // address 0x140: the frame pointer had been corrupted, which means a frame
+    // read back from work RAM through the real controller was wrong. This names
+    // the FIRST wrong read rather than the crash it eventually causes. Bytes
+    // never written by the CPU are not compared (ROM-initialised state, the
+    // TGP's and the loader's writes are not on this bus).
     if (d->obs_bus_ack && !ack_prev) {
+      static std::vector<uint32_t> shadow(1u << 18, 0);
+      static std::vector<uint8_t>  shadow_ok(1u << 18, 0);
+      const uint32_t a = d->obs_bus_addr;
+      // ROM READS AGAINST THE IMAGE. 0x000000-0x1fffff is program ROM at
+      // word 0; 0x220000-0x23ffff is model2o's mirror of its second 128 KB
+      // (the bridge maps it so); 0x200000-0x21ffff is board RAM, skipped.
+      // Full-word reads only: the plain bench shows halfword (be=c) reads
+      // presented in the other lane, so partial reads are the checker's blind
+      // spot, not the memory's.
+      if (!d->obs_bus_we && (d->obs_bus_be & 15) == 15 && (a < 0x00200000u || (a >= 0x00220000u && a < 0x00240000u))) {
+        const uint32_t byte = (a < 0x00200000u) ? a : (0x20000u + (a - 0x00220000u));
+        const uint32_t w = byte >> 1;
+        const uint32_t exp = uint32_t(mem[w]) | (uint32_t(mem[w + 1]) << 16);
+        const unsigned be = d->obs_bus_be & 15;
+        uint32_t mask = 0;
+        for (int b = 0; b < 4; ++b) if (be & (1u << b)) mask |= 0xffu << (8*b);
+        if ((d->obs_bus_rdata & mask) != (exp & mask)) {
+          ++g_shadow_rom_bad;
+          if (g_shadow_rom_bad <= 16)
+            std::printf("    ROM MISMATCH %08x be=%x read %08x, image %08x  (insn %llu ip %08x)\n",
+                        a, be, (unsigned)d->obs_bus_rdata, exp,
+                        (unsigned long long)d->dbg_acc, (unsigned)d->dbg_ip);
+        } else ++g_shadow_rom_ok;
+      }
+      if (a >= 0x00500000u && a < 0x00600000u) {
+        const uint32_t i = (a - 0x00500000u) >> 2;
+        const unsigned be = d->obs_bus_be & 15;
+        if (d->obs_bus_we) {
+          uint32_t v = shadow[i], w = d->obs_bus_wdata;
+          for (int b = 0; b < 4; ++b) if (be & (1u << b)) {
+            v = (v & ~(0xffu << (8*b))) | (w & (0xffu << (8*b)));
+          }
+          shadow[i] = v; shadow_ok[i] |= be;
+        } else if ((shadow_ok[i] & be) == be) {
+          uint32_t mask = 0;
+          for (int b = 0; b < 4; ++b) if (be & (1u << b)) mask |= 0xffu << (8*b);
+          if ((d->obs_bus_rdata & mask) != (shadow[i] & mask)) {
+            ++g_shadow_bad;
+            if (g_shadow_bad <= 16)
+              std::printf("    SHADOW MISMATCH %08x be=%x read %08x, last written %08x  (insn %llu ip %08x)\n",
+                          a, be, (unsigned)d->obs_bus_rdata, shadow[i],
+                          (unsigned long long)d->dbg_acc, (unsigned)d->dbg_ip);
+          } else ++g_shadow_ok;
+        }
+      }
       BusEv &e = g_ring[g_ring_n++ & 63];
       e.addr = d->obs_bus_addr;
       e.we   = d->obs_bus_we; e.be = d->obs_bus_be;
@@ -1979,6 +2032,10 @@ int main(int argc, char **argv) {
       std::printf("    %08x  %llu writes\n", v[i].second,
                   (unsigned long long)v[i].first);
   }
+  std::printf("  ROM reads vs image: %llu checked, %llu WRONG\n",
+              (unsigned long long)g_shadow_rom_ok, (unsigned long long)g_shadow_rom_bad);
+  std::printf("  work-RAM shadow: %llu reads checked, %llu WRONG\n",
+              (unsigned long long)g_shadow_ok, (unsigned long long)g_shadow_bad);
   std::printf("  frame fills: %llu correct, %llu wrong, %llu from never-spilled addresses\n",
               (unsigned long long)fill_ok, (unsigned long long)fill_wrong,
               (unsigned long long)fill_unwritten);

@@ -11110,3 +11110,272 @@ design automatically.
 Quartus Prime Lite 17.0.** Check the feature against the edition before spending
 a build on it. An experiment that silently degrades to the control looks exactly
 like an experiment that ran and found nothing.
+
+**R202 -- 0x030B IS THE MICROCODE'S FIFO WAIT, NOT A FLOW FAULT. THE 3D TASK IS
+THE LAST OF 140 PER-FRAME TASKS AND THE BOARD'S WALKER NEVER DISPATCHES IT.**
+
+*What the handoff of 2026-09-10 claimed, and why it was wrong.* "The
+coprocessor is parked at PC 0x030B ... IT IS NOT STALLED ... if it were,
+`copro_stall` would be high, and it is zero ... a microcode-flow fault."
+`copro_stall` is `m2_copro.sv:303`:
+
+    assign stall = fifo_rd && !fout_valid && !halted && !uploading;
+
+That is the **i960** held on an empty *output* FIFO. It says nothing about the
+TGP's *input* FIFO. The microcode, disassembled from the ROM
+(`tools/extract_tgp_microcode.py`, then the Model 1 project's
+`mb86233_disasm.py`):
+
+    L_04c: b = rf1          ; the FIFO read -- replays until a word arrives
+    ...
+    L_055: a = 0x58 ; add_d ; goto_indirect   ; dispatch = 0x58 + command
+    L_07d: goto L_30a       ; command 0x25
+    L_30a: rf2 = load(0x68)
+    L_30b: goto L_04c
+
+`dbg_pc` reports the last *retired* instruction. A TGP stalled at `L_04c` on an
+empty FIFO reports 0x30B, the `goto` that retired before it. R188 had already
+recorded this ("ours at 030b, which is goto L_04c"); the handoff re-derived the
+opposite from an instrument it had not read. **Read the code behind the number
+-- R149's rule, broken again.** The four samples at 0x7D/0x52/0x4D are the
+occasional command 0x25 the game still sends while idle.
+
+*The reference's attract sequencer, measured with a Lua write tap on 0x5010a4.*
+The dispatcher at 0x18a0 indexes the jump table at 0x18cc by the byte at
+0x5010a4:
+
+    frame 171  0x5010a4 <= 02   pc=00001978   (entries 0/1 -> 2, unconditional)
+    frame 172  0x5010a4 <= 03   pc=00001CFC   (state 2's handler, one shot)
+    then state 3 for 1600 frames (0x5010a8 = 25<<6), the 3D title
+
+State 2's handler (0x197c-0x1d20) disables seven tasks, enables twelve with
+their handler addresses, and among them registers the 3D task:
+
+    0x1bf8  ld   r3, [0x501284]   ; -> 0x00510F80
+    0x1c08  st   r5, 0(r3)        ; bit 31 set
+    0x1c14  st   r5, 0xc(r3)      ; handler 0x5890
+
+*The per-frame task list, dumped from the reference at frame 400.* The walker
+at 0x1838 starts at 0x504000, takes its count from ROM 0x22f1f0 (= 140), and
+for each entry calls +0xc if bit 31 of +0 is set, then advances by +8. **The 3D
+task is entry 140 of 140, at 0x00510F80, the last one.** Entries 112-139 are 28
+disabled 128-byte placeholders (handler 0x1894, a `ret`). Entry 111's handler
+is 0x2200e4 (the model2o mirror of program ROM 0x200e4, which the bridge maps):
+
+    0x2200e4  ld   r3, [0x501260]      ; -> 0x00510F00, entry 139
+    0x2200ec  ld   r4, 8(g13)          ; this entry's size, 128
+    0x2200f0  ld   r5, [0x5011fc]      ; the walker's remaining count
+    0x2200f8  subo g13, r3, r3         ; bytes to skip
+    0x2200fc  divo r4, r3, r3          ; entries to skip = 28
+    0x220100  subo r3, r5, r3
+    0x220104  st   r3, [0x5011fc]      ; count -= 28   (30 -> 2)
+    0x22010c  ld   g13, [0x501260]     ; walk resumes at entry 139
+    0x220114  ret
+
+So the reference's walk is 112 iterations, 67 calls, the last call 0x5890, every
+frame (three traced frames: 112/67, 111/66, 113/68). The render chain
+0x16e58-0x17b00 is 2,948 instructions of ~108,000 per frame -- **2.7% of the
+frame**, not a one-shot, and the mailbox routine 0x11620/0x1166c is not executed
+at all in state 3 by the reference (0 of 108k in each traced frame).
+
+*The board in the same phase.* The captures `c.txt`/`d.txt` of 2026-09-10 were
+taken at walk frames 284-2012, i.e. inside state 3:
+
+    tgp_pc     04C9/01D1/066A/048F ... -- the TGP is BUSY
+    cpu ip     0x1166C 40%, 0x11674 9%     -- the i960 in the mailbox poll
+    ip pages   0x11400-0x11600 executed (the reference's hot region)
+               0x16E10-0x16E54 executed (a helper the car code calls)
+               0x16E58-0x17B00: ZERO samples in 7,537 (590 frames)
+    walk ops   3, every frame
+
+A routine that is 2.7% of every frame gets ~200 samples in 590 frames at
+1-in-65536. Zero is not a sampling artefact: **the board does not run the
+render chain in state 3.** The TGP is busy because the car/track code
+(0x116d0 -> 0x11620, called from 0xD2B8/0xD39C/0xD8E8/0xD9EC/0xDB30) queries it
+through the buffer-RAM mailbox at 0x91fff0; that is game logic, not rendering,
+and the reference does it without ever spinning at 0x1166c.
+
+*And the direct count, decoded from the 2026-09-08 captures.* Build `2868625`
+carried `b_addr = {state_last, n_state2, n_state_wr, tw_5890}` and
+`b_data = {tw_1854, tw_1860, tw_1c14, 8'd0}`. `u1604.txt` and `uflip.txt`:
+
+    03028000 FFFF2600     state 3, state 2 entered twice, 0x1c14 executed,
+    03027600 FFFF2A00     walker head and callx saturated, tw_5890 = 0x00
+
+**The task is registered, the walker runs, and the 3D handler is entered zero
+times.** R195 attributed the 0x26/0x2A to `tw_1c14`; by the layout it is
+`tw_1c14` in `b_data`'s third byte and `tw_5890` is `b_addr`'s low byte, which
+is zero in both captures.
+
+*What this leaves.* Everything between registration and dispatch is i960 plus
+work RAM: the descriptor at 0x510F80 (bit 31, handler at +0xc), the pointer at
+0x501260, the count at 0x5011fc, and the skip arithmetic. The plain boot bench
+runs the identical RTL and reaches 0x5890 at frame 248, straight after the skip
+handler (`M2_TRAP=0x5890`, IP ring: 0x2200fc 0x220100 0x220104 0x22010c
+0x220114 0x1864 0x186c 0x1870 ... 0x5890). The i960 core is in-order and
+blocks in `T_MULDIV` until `md_done`, so the `divo` feeding the next `subo` is
+not a hazard. **The fault is in what the board's memory path returns or keeps
+for those four words, and only there.** Instrumented in `build/walk`:
+`wk_last_desc` (the address of the walker's `ld 0(g13)` at 0x1854 -- the last
+descriptor walked), `sk_cnt` (the word stored at 0x220104) and `sk_ptr` (the
+word read from 0x501260), with `tw_5890` and the attract state in the C record.
+Reference values in state 3: last descriptor 0x00510F80, pointer 0x00510F00,
+count 2.
+
+*Three tools were broken on the way and are fixed in the same change.*
+`tools/mame_i960_frame_trace.lua` never read `M2_FRAME` (compared `n == nil`
+every frame, produced no trace); `tools/rom_csum.py`'s `build_image` walked
+every `<rom>` in file order, and the I/O board's index-3 stream added on
+2026-09-08 precedes index 0, so `M2_BOOT_IMAGE` put 64 KB of Z80 code where the
+i960's boot record should be and the real-memory bench trapped on instruction
+1; and the Makefile's `obj_boot_rm` source list predated the `fp_*` units the
+video path now needs, so `make` reported a binary from August as up to date.
+
+*Recorded because it cost the day before this one.* The "CPU at 100% speed is
+the symptom" reading and the "microcode-flow fault" reading were both built on
+0x030B; both are withdrawn. The observation that stands from 2026-09-10 is
+R200's band-13 cut in the rasteriser, which is independent of all of this and
+still open.
+
+*MEASURED ON HARDWARE, `build/walk` seed 11 (setup -0.461, hold +0.214,
+37,601 ALM), 2026-09-10 evening, 170 s from core load through the 3D title:*
+
+    C samples 64,121   state 3 in 54,816 of them   tw_5890 = 0 in ALL
+    H last descriptor the walker loaded:  0x00504E00 x920   0x00505D00 x3
+    H skip count stored / pointer loaded: never written (0xEEEE) -- entry
+                                          111's handler never ran
+
+**The board's walk ends at entry 13 of 140.** Entry 13 is 0x504E00, whose
+handler in state 3 is 0xD230 (the reference's list at frames 180-2400). The
+same capture puts 45% of state-3 samples in the mailbox poll at 0x1166c, which
+the reference never executes in state 3. Minutes later the board was frozen on
+one frame: 98% at 0x1166c/0x11674, TGP at 0x04C9 in 100% of samples, state
+still 3, walker still at entry 13. Microcode 0x4c2-0x4c9:
+
+    L_4c3: x1 = load(0x6e)        ; the mailbox address
+    L_4c4: move_mode0(0, (x1))    ; THE CLEAR -- data-RAM word 0 (= 0) to it
+    L_4c9: goto L_04c             ; back to the FIFO wait
+
+so a TGP reporting 0x4C9 has issued its clear and gone idle, and the i960 is
+still reading the armed value at 0x91fff0. The clear never became visible to
+the CPU. The same signature -- TGP 0x04C9 at 100%, IP 0x1166C -- is in eight
+of the 2026-09-10 morning captures (g16, vb, ns, t1, t2, a, b, p) from other
+builds of the day; `build/area2` s11 is the build where the poll eventually
+completes, and even there it takes half of every frame. The walk never
+reaching entries 14-140 -- the car handlers, the 0x22xxxx tasks and the 3D
+task -- is the consequence: entry 13's handler chain is the one that queries
+the TGP through the mailbox, and it does not return until the clear lands.
+
+*What that excludes and what it leaves.* The bridge never retains a buffer-RAM
+line (`BUFFER_NOCACHE`, fill suppression), so the poll is a real SDRAM read
+each time. The TGP's write is two 16-bit halves through the shared write port
+(`s_wr_*` in Model2.sv:813, one broadcast `ldr_wr_ack`, the request dropped
+between halves as m2_tgp.sv:630 documents), the controller starts a write on
+the request's rising edge, and `ACK_HOLD` is two fast cycles -- shorter than
+the TGP's turnaround, so a held acknowledge retiring the second half early does
+not fit the numbers on paper. What does fit is the path itself: "every failing
+path in build 56 was exactly that" (Model2.sv:512, the write-port mux into
+m2_sdram's wr_addr_p), the walk build missed setup by 0.461 ns, and the hang is
+build-dependent. The instrument that settles it is `tgp_mbox` (what the TGP
+wrote to 0xFFF8/0xFFF9) against the CPU's readback of 0x91fff0
+(`cpu_dbg_ldout` at that address) and a count of completed port writes to word
+0xFFF9, on a build that closes timing.
+
+*The real-memory bench cannot see any of this yet.* `REAL_MEM` wires the CPU
+and character ports only; the TGP's port 9 and the shared write port are still
+served from C++ (study R163's standing debt). It did reproduce something of its
+own: with the harness's read-capture selector pinned at 3 the CPU runs 17.5M
+instructions and then fills a register frame from ROM 0x140 (frame pointer
+0x100) two instructions into state 2's handler, deterministically, with every
+work-RAM read shadow-checked correct (2.66M reads) and every full-word ROM read
+matching the image; selectors 0, 1, 2 and 4 do not boot at all. Left open as a
+harness question, not a board finding.
+
+*`build/walk2` s11, same evening (setup -0.242, HDMI PLL path only; hold
++0.186).* Count from ROM 0x22f1f0 = 0x8C = 140 in every sample. The walker's
+last stored count is 0 in 54 state-3 samples and 0x70, 0x6C, 0x24, 0x17, 0x10
+in others: on this build the walk runs to the end of the list every frame,
+and it is slow enough to be sampled mid-walk. The last handler it loaded is
+0xC9C4 in 920 of 923 samples -- the car handlers' init state, which the
+reference passes through in one frame (C940 -> C9C4 at frame 161, CF74 at
+162, D230 at 164; the CF74 install is task 0x226360's placement routine at
+0x2264E4). By handler range, state-3 IP samples on the board:
+
+    entry 1 (17B94) 14   entry 6 (BA18) 3   entry 11 (4DF8) 15   entry 12 (120A4) 3
+    entries 13-32 in C9C4: 4,854            entries 57/59/61/63/67: 0
+    entries 75-111 (0x220010-0x2231C0): 0   entry 140 (5890): 0   render chain: 0
+
+**Every task whose descriptor lies above 0x50D000 is never executed on the
+board; every one below 0x508800 runs.** The same registration code enables
+both groups (state 2's handler, 0x1a44-0x1c60, all `ld; setbit 31; st` through
+pointers at 0x5012xx), and the disable loop it runs first covers entries
+76-139 in the reference and is undone by the tasks that follow. This is not
+the mailbox: the mailbox is why the walk is slow, not why those tasks are
+dead. The candidates are the enable stores not landing, the walker's
+descriptor reads being served stale (the bridge's write-through-invalidate
+data cache, 2048 lines of 8 bytes indexed by address[13:3], sits between
+them), or a later clear. `build/e140` measures entry 140's word 0 and handler
+as the walker reads them.
+
+*`build/e140` s13, later the same evening (setup -0.400, hold +0.242).* Entry
+140's word 0, as the walker's `ld 0(g13)` returns it: 0x00000000 in all 923
+state-3 samples; the walker loaded it TWICE in 9,000 frames; the handler word
+was never loaded. The stored count still reaches 0 every frame. So the walk is
+not advancing at all: a size field that reads 0 makes `addi r7,g13,g13` a
+no-op and the walker spins on ONE entry for the rest of its count, calling its
+handler each time. That is entry 13 -- the player car, 0x504E00, handler
+0xC9C4 -- and it explains every number at once: 0xC9C4 dominating, the mailbox
+queried ~127 times a frame (0xC9C4 calls 0x11620 at 0xCA50), entries 14-140
+never called, the count reaching 0, entry 140 loaded twice (before the
+corruption), and `build/walk`'s last descriptor 0x504E00 in 920 of 923.
+
+*Why the size field is zero, and it is R82 again.* The reference writes entry
+13's header every frame: `stos g2, 6(g9)` at 0x6FA0, a halfword into the UPPER
+half of dword +4 (Lua tap: `write 00504E04 mask FFFF0000 pc=6FA4`, every
+frame; +8 is written only at init and holds 768). In `m2_cpu_bridge` an
+upper-half store is one real 16-bit write followed, in `S_LO_W`, by a SECOND
+write to the next word -- `sd_din = 0, sd_be = 2'b00` -- that trusts DQM to
+mask it. R82 measured that the byte enables do not survive to the silicon (a
+byte store landed in all four lanes). So that dummy write lands 0x0000 on the
+low half of the following dword, which for 0x504E06 is the size field at
+0x504E08. 768 is 0x0300, all in the low half; the field becomes 0. Both
+simulations honour the mask, which is why neither ever showed it, and why
+the plain bench reaches the 3D task while the board does not.
+
+*The fix, and it is one branch:* an upper-half write completes after its one
+real word; no write is ever issued whose correctness depends on the mask
+(`m2_cpu_bridge.sv`, `S_LO_W`). `build/fix` carries it together with the
+entry-13 probes (size as read, last writer, handler loads per frame), so the
+same capture that proves the mechanism proves the repair: size back to 768,
+one handler load a frame, `tw_5890` climbing, the walk reaching entry 140.
+`build/e13` (the probes without the fix) is the control.
+
+*What is still owed after that.* The DQM path itself (R82's open item: the
+mask is right in source and lost in silicon, so every remaining partial-word
+write is suspect until the controller's DQM timing is measured); the shared
+write port for the TGP's mailbox clear (the frozen `build/walk` symptom);
+and the two throughput problems now visible -- the TGP blocking on SDRAM for
+every data access, and the CPU's unposted write-through stores (race mode:
+77% of the i960's time in a `stq` fill loop at 0xE414).
+
+*`build/fix` s13 (setup -0.433, hold -0.197), on the board 22:09, 170 s:*
+
+    entry 13 size as the walker reads it     0x00000300 in all 923 samples
+    last writer of 0x504E08                  ip 0x1734 (init), data 0x0300
+    handler loads of entry 13 per C sample   median 0, max 2  (was ~127/frame)
+    render chain 0x16e58-0x17b00             5,048 samples   (was 0)
+    0x5890                                   118             (was 0)
+    0x22xxxx tasks                           3,720           (was 0)
+    0xD290 (cars running)                    245   0xC9C4 (cars in init) 52
+    mailbox poll 0x1166c/74                  239             (was ~10,000)
+    frame wait 0x12b0/b8                     31% of samples  (CPU has slack)
+    TGP                                      0x030B idle 38%, working the rest
+
+**The mechanism is confirmed and the repair holds.** The board's attract now
+runs at speed and the background moves for the first time (reported from the
+screen: it jumps rather than scrolls, twice, on this build with hold -0.197).
+No polygon is on screen yet: the game emits geometry every frame now, so the
+question has moved downstream to the geometrizer and rasteriser, which had
+never been fed real data on hardware, and to R200's band-13 cut. Next build:
+the fix plus the geometry counters (matrix pushes, walk opcodes, polygons,
+clipper output, quads to the rasteriser) on the wire, at four seeds.

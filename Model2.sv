@@ -3585,8 +3585,48 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// zero means the upload never started, 2024 means it finished. With the IP
 	// beside it, one capture separates "the CPU never got there" from "it got
 	// there and hung" from "it trapped".
+	// THE RETIRED-INSTRUCTION COUNT TAKES copro_prog_words' TWELVE BITS.
+	//
+	// prog_words has read 0x7E8 on every sample ever taken -- 2,024 words, the
+	// microcode is loaded, and that question is answered permanently. What is
+	// NOT measurable today is the CPU's rate: cpu_dbg_acc exists and feeds the
+	// IP ring, but nothing put it on the wire, and prof_tick is a fixed divider
+	// so the record rate says nothing about the machine.
+	//
+	// IT MATTERS BECAUSE MODEL 1 SAYS SO. On that core, 3D working SLOWED THE
+	// CPU -- geometry reads, polygon writes and texture fetches contending for
+	// SDRAM -- and raising the clock is what bought it back. So the rate is not
+	// a health metric here, it is the 3D traffic seen from the other end, and
+	// "still at 100%" is how we will know the coprocessor is still parked.
+	//
+	// BITS 27:16, not the bottom twelve. The low bits wrap in under a
+	// millisecond at any plausible rate and two readings of them mean nothing.
+	// [27:16] steps once per 65,536 retired instructions -- about 76 Hz at 5
+	// MIPS -- which is visible between captures and does not wrap inside one.
+	// THE 3D HANDLER'S ENTRY COUNT AND THE ATTRACT STATE take those twelve
+	// bits instead. tgp_pc at 0x030B is the microcode's FIFO wait (L_04c is
+	// `b = rf1`, 0x30b the `goto L_04c` that retired before it), so the
+	// coprocessor is idle for want of commands and the rate is not the
+	// question. tw_5890 is: the reference dispatches 0x5890 once a frame from
+	// attract state 3 on, and the 09-08 captures read it ZERO with state 3.
+	// THE MAILBOX CLEAR, COUNTED AT BOTH ENDS. Measured on build/walk s11: the
+	// walk ends at entry 13 because its handler chain polls 0x91fff0 until the
+	// TGP's clear (L_4c4, two 16-bit halves through the shared write port)
+	// becomes visible, and on that build it never does while the TGP sits at
+	// 0x4C9 having issued it. mb_req counts the TGP's requests for the HIGH
+	// half (word 0xFFF9), mb_ack the port acknowledges that retired one.
+	// Wrapping, six bits each: if they drift apart the port loses writes.
+	// build/e140 s13 MEASURED: entry 140's word 0 reads 0x00000000 in all 923
+	// state-3 samples and the walker loaded it TWICE in 9,000 frames, while
+	// the stored count still reaches 0 every frame. The walk is not advancing:
+	// a size field read as zero makes `addi r7,g13,g13` a no-op and the walker
+	// spins on one entry for the rest of the count, calling its handler each
+	// time -- which is why 0xC9C4 dominates and the mailbox is queried ~127
+	// times a frame. e13_hdl_n counts the walker's loads of entry 13's handler
+	// word (0x504E0C at IP 0x185c): once a frame if the walk advances, ~127 if
+	// it spins. Wrapping.
 	.a_data({cpu_trap, cpu_halted, copro_stall, copro_dbg_ctl[31],
-	         copro_prog_words[11:0], tgp_pc[15:0]}),
+	         e13_hdl_n, tgp_pc[15:0]}),
 	// THE i960's OWN INSTRUCTION COUNT, so the first three minutes can be
 	// diagnosed rather than described. Two readings a known time apart give the
 	// rate directly; a machine that is slow for three minutes and then is not
@@ -3697,7 +3737,32 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// stopping on an opcode it cannot decode. What is not known is why the fill
 	// misses bands 0-11, and these say it: cycles from frame_start to P_READY,
 	// and bands completed last frame against NBANDS=24.
-	.b_addr({r3d_bands_done, r3d_ready_cyc, 4'd0, geo_walk_state}),
+	// THE LAST DESCRIPTOR THE TASK WALKER LOADED. The reference's list has 140
+	// entries and the 3D task is the LAST one, at 0x00510F80; entry 111's
+	// handler (0x2200e4) jumps the walk to the entry stored at 0x501260 and
+	// subtracts the skipped count with a divo. A walk that ends anywhere below
+	// 0x00510F80 never reaches the 3D task, and this says where it ended.
+	// MEASURED 2026-09-10 on build/walk s11: wk_last_desc = 0x00504E00 in 920
+	// of 923 state-3 samples (0x00505D00 in 3), sk_cnt/sk_ptr never written,
+	// tw_5890 = 0. THE WALK ENDS AT ENTRY 13 OF 140. Either the count starts
+	// short, a handler in 1..13 rewrites it, or entry 13's handler never comes
+	// back to 0x1864. So: the handler address the walker loads at 0x185c (the
+	// last one called), the count it loads from ROM at 0x1844, and the last
+	// count it stores at 0x1870.
+	// WHAT THE TGP SAYS IT WROTE to dword 0x7FFC (low half first, then high;
+	// EEEEEEEE = never), against WHAT THE CPU READS BACK from 0x91fff0 below.
+	// MEASURED ON build/walk2 s11 (setup -0.242 on the HDMI PLL only, hold
+	// +0.186): count from ROM = 0x8C = 140; the walker's last stored count is
+	// 0 in 54 state-3 samples and 0x70/0x6C/0x24/0x17/0x10 in others, so the
+	// walk DOES run to the end of the list on this build, slowly, most of the
+	// frame inside handler 0xC9C4 (the car handlers' init state, which the
+	// reference has left for 0xD290 by frame 400) -- and tw_5890 is STILL 0.
+	// So entry 140 is walked and not called. This is its descriptor as the
+	// walker reads it: word 0 (bit 31 = enabled) and the handler at +0xc, and
+	// how many times the walker has loaded it.
+	// ENTRY 13's SIZE FIELD (0x504E08) AS THE WALKER'S `ld 8(g13)` AT 0x1880
+	// RETURNS IT. The reference holds 768 (0x300).
+	.b_addr(e13_size),
 	// clip_dropped read 0 on hardware and the refusal count is the number that
 	// now moves, so it takes that byte. Between them: accepted, emitted, refused
 	// before the arithmetic, and reaching the rasterizer.
@@ -3728,7 +3793,36 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// counter with nothing decoded looks like.
 	//   b_data: walker iterations : calls taken : 3D handler entered : the
 	//   one-shot that registers it. 1c14 at zero is the whole answer.
-	.b_data({geo_walk_frames, geo_walk_ops}),
+	// THE WRITE POINTER AGAINST THE OPCODES WALKED, which is the pair that says
+	// WHICH END of the 3D path is empty.
+	//
+	// Model 1 is the oracle and it says that when 3D works the CPU SLOWS DOWN --
+	// geometry reads, polygon writes and texture fetches all contend for SDRAM,
+	// and raising the clock is what bought that back there. This board runs at
+	// full speed. That is not health, it is the ABSENCE of 3D traffic, and it is
+	// the same fact as the walk retiring 3 opcodes seen from the other end.
+	//
+	// So the question is no longer WHERE the walk reads. The bridge maps
+	// 0x00900000-0x00980000 to base_buffer + r_addr[16:1] with BUFFERRAM on and
+	// reads enabled, and the walk reads GAME_BUFFER with a matching dword-to-word
+	// shift, so the address is right and the walk reaches a terminator rather
+	// than stalling -- state idle, no unknown opcode, no port-4 clash.
+	//
+	// The question is whether anything is QUEUED. geo_wp is where the game's
+	// pushes land. If it sits at 3 then the game is producing three opcodes and
+	// our walk is faithfully reporting them, and the fault is upstream in the
+	// geometry engine. If it climbs into the hundreds while ops stays at 3, the
+	// list IS being written and the walk stops early -- the opposite fault, and a
+	// different fix. Nothing else distinguishes those two.
+	//
+	// geo_walk_frames gives up its half of the channel: the H-record cadence
+	// already gives liveness, and R200's counters now carry the per-frame story.
+	// THE SKIP HANDLER'S ARITHMETIC: the count it stores at 0x220104 (the
+	// reference stores 2, leaving exactly the 3D entry) and the pointer it
+	// loaded from 0x501260 (the reference holds 0x00510F00, entry 139).
+	// AND WHO LAST WROTE THAT WORD: the writer's IP (low 16) and the data
+	// (low 16), any byte of 0x504E08-0x504E0B. Only init should ever write it.
+	.b_data({e13_wr_ip[15:0], e13_wr_dat[15:0]}),
 	.a_tag(8'h43), .b_tag(8'h48),          // 'C' copro in_pushed:out_pushed | TGP retires:pc
 	                                       // 'H' out_popped:hscr2 | io_addr:flags
 	                                       // 'H' scroll h:v for layers 0,1 | layers 2,3 -- low bytes
@@ -4306,6 +4400,14 @@ logic  [1:0] sdwb_d;
 logic        cack_d, cwe_d;
 logic [31:0] caddr_d, crd_d, cwd_d;
 logic  [3:0] cbe_d;
+logic [31:0] cip_d, wk_last_desc, sk_cnt, sk_ptr, wk_last_hdl, wk_cnt_init, wk_cnt_last;
+logic [31:0] mb_rdback;
+logic [31:0] e140_w0, e140_hdl;
+logic [31:0] e13_size, e13_wr_ip, e13_wr_dat;
+logic [11:0] e13_hdl_n;
+logic [15:0] e140_cnt;
+logic  [5:0] mb_req_cnt, mb_ack_cnt;
+logic        mb_ack_d;
 
 // THE MAIN LOOP'S FRAME FLAG, AT 0x00500000.
 //
@@ -4375,6 +4477,11 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		sdwd_d <= 16'd0; sdwb_d <= 2'd0;
 		cack_d <= 1'b0; cwe_d <= 1'b0; caddr_d <= 32'd0; crd_d <= 32'd0;
 		cwd_d <= 32'd0; cbe_d <= 4'd0;
+		cip_d <= 32'd0; wk_last_desc <= 32'hEEEE_EEEE; sk_cnt <= 32'hEEEE_EEEE; sk_ptr <= 32'hEEEE_EEEE;
+		wk_last_hdl <= 32'hEEEE_EEEE; wk_cnt_init <= 32'hEEEE_EEEE; wk_cnt_last <= 32'hEEEE_EEEE;
+		mb_rdback <= 32'hEEEE_EEEE; mb_req_cnt <= 6'd0; mb_ack_cnt <= 6'd0; mb_ack_d <= 1'b0;
+		e140_w0 <= 32'hEEEE_EEEE; e140_hdl <= 32'hEEEE_EEEE; e140_cnt <= 16'd0;
+		e13_size <= 32'hEEEE_EEEE; e13_wr_ip <= 32'hEEEE_EEEE; e13_wr_dat <= 32'hEEEE_EEEE; e13_hdl_n <= 12'd0;
 		vbl_n <= 16'd0; irq0_d <= 1'b0;
 		state_last <= 8'hEE; n_state2 <= 8'd0; n_state_wr <= 8'd0;
 		tw_1854 <= 8'd0; tw_1860 <= 8'd0; tw_5890 <= 8'd0; tw_1c14 <= 8'd0;
@@ -4385,6 +4492,49 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		crd_d   <= cpu_rdata;
 		cwd_d   <= cpu_wdata;
 		cbe_d   <= cpu_be;
+		cip_d   <= cpu_dbg_ip;
+		// The walker's `ld r4, 0(g13)` at 0x1854 has g13 as its address, so the
+		// address of that load IS the descriptor. IP-keyed, one cycle behind the
+		// bus like everything else here; the core sits in T_MEM_W at that IP
+		// until the ack, so the pairing holds.
+		if (cack_d && !cwe_d && cip_d == 32'h0000_1854 && caddr_d[31:20] == 12'h005)
+			wk_last_desc <= caddr_d;
+		// The skip handler runs in the 0x220000 mirror: `st r3, 0x5011fc` at
+		// 0x220104 and `ld 0x501260` at 0x2200e4.
+		if (cack_d && cwe_d && caddr_d == 32'h0050_11fc && cip_d == 32'h0022_0104)
+			sk_cnt <= cwd_d;
+		if (cack_d && !cwe_d && caddr_d == 32'h0050_1260)
+			sk_ptr <= crd_d;
+		if (cack_d && !cwe_d && cip_d == 32'h0000_185c && caddr_d[31:20] == 12'h005)
+			wk_last_hdl <= crd_d;
+		if (cack_d && !cwe_d && cip_d == 32'h0000_1844)
+			wk_cnt_init <= crd_d;
+		if (cack_d && cwe_d && cip_d == 32'h0000_1870 && caddr_d == 32'h0050_11fc)
+			wk_cnt_last <= cwd_d;
+		// The CPU's read of the mailbox dword, as the bus delivered it.
+		if (cack_d && !cwe_d && caddr_d == 32'h0091_fff0)
+			mb_rdback <= crd_d;
+		if (cack_d && !cwe_d && cip_d == 32'h0000_1854 && caddr_d == 32'h0051_0F80) begin
+			e140_w0 <= crd_d;
+			if (!(&e140_cnt)) e140_cnt <= e140_cnt + 16'd1;
+		end
+		if (cack_d && !cwe_d && cip_d == 32'h0000_185c && caddr_d == 32'h0051_0F8C)
+			e140_hdl <= crd_d;
+		if (cack_d && !cwe_d && cip_d == 32'h0000_1880 && caddr_d == 32'h0050_4E08)
+			e13_size <= crd_d;
+		if (cack_d && cwe_d && caddr_d[31:2] == 30'(32'h0050_4E08 >> 2)) begin
+			e13_wr_ip <= cip_d; e13_wr_dat <= cwd_d;
+		end
+		if (cack_d && !cwe_d && cip_d == 32'h0000_185c && caddr_d == 32'h0050_4E0C)
+			e13_hdl_n <= e13_hdl_n + 12'd1;
+		// The TGP's request for the high half (rising edge, like tgp_bufw_count)
+		// and the port acknowledge that retires it (rising edge of the held ack
+		// while that request is the one on the mux).
+		if (tgp_bufw_req && !tgp_bufw_d && tgp_bufw_addr == 19'h0FFF9)
+			mb_req_cnt <= mb_req_cnt + 6'd1;
+		mb_ack_d <= ldr_wr_ack;
+		if (ldr_wr_ack && !mb_ack_d && tgp_bufw_req_r && tgp_bufw_addr_r == 19'h0FFF9)
+			mb_ack_cnt <= mb_ack_cnt + 6'd1;
 		if (cack_d && !cwe_d) begin
 			if (caddr_d == 32'h0050_1084) lc_cnt  <= crd_d;
 			if (caddr_d == 32'h0050_1224) lc_base <= crd_d;

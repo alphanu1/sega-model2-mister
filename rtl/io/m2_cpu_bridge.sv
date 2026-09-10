@@ -813,17 +813,40 @@ module m2_cpu_bridge #(
 
         // Ack has fallen: the high half is safe to issue.
         S_LO_W: if (!sd_ack) begin
-          half    <= 1'b1;
-          sd_addr <= sd_word + AW'(1);
+          // NEVER ISSUE A WRITE THAT RELIES ON THE BYTE MASK TO DO NOTHING.
+          //
           // The second word holds bytes r_addr+2 and r_addr+3. When r_addr[1]
           // is set those belong to the NEXT dword and are not part of this
-          // transaction at all, so nothing is enabled -- the i960 will issue
-          // them separately.
-          sd_din  <= r_addr[1] ? 16'd0
-                     : (rmw_done ? rmw_dat[31:16] : r_wdata[31:16]);
-          sd_be   <= r_addr[1] ? 2'b00 : (rmw_done ? 2'b11 : r_be[3:2]);
-          sd_req  <= 1'b1;
-          st      <= S_HI;
+          // transaction at all. This used to send them anyway as a write with
+          // sd_be = 2'b00 and zero data, trusting DQM to mask it. R82 measured
+          // on the board that the byte enables are LOST between source and
+          // silicon -- a byte store landed in all four lanes -- and this dummy
+          // write is the same fault with worse consequences: it lands 0x0000
+          // on the low half of the dword after every upper-half halfword
+          // store. Daytona's per-frame `stos g2, 6(g9)` at 0x6FA0 into the
+          // player car's task descriptor put that zero on the descriptor's
+          // SIZE field at +8, the task walker's `addi r7,g13,g13` then added
+          // nothing, and the walk spun on entry 13 of 140 for the rest of its
+          // count: every task above it -- car placement, the 0x22xxxx tasks,
+          // the 3D task at entry 140 -- was never called. Measured on
+          // build/e140 (entry 140 read 0x00000000, loaded twice in 9,000
+          // frames) and build/walk (last descriptor 0x504E00 in 920 of 923
+          // samples). Both simulations honour the mask and never showed it.
+          //
+          // So an upper-half write is complete after its one real word. Reads
+          // are unchanged: the cache-bypass read path still fetches both.
+          if (r_we && r_addr[1]) begin
+            ack_mem <= 1'b1;
+            st      <= S_DONE;
+          end else begin
+            half    <= 1'b1;
+            sd_addr <= sd_word + AW'(1);
+            sd_din  <= r_addr[1] ? 16'd0
+                       : (rmw_done ? rmw_dat[31:16] : r_wdata[31:16]);
+            sd_be   <= r_addr[1] ? 2'b00 : (rmw_done ? 2'b11 : r_be[3:2]);
+            sd_req  <= 1'b1;
+            st      <= S_HI;
+          end
         end
 
         S_HI: begin

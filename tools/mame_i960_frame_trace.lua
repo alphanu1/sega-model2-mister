@@ -21,6 +21,10 @@
 --
 -- `tracelog M2FRAME` writes a marker into the trace at each frame boundary, so
 -- one run yields per-frame counts instead of one undifferentiated blob.
+-- M2_FRAME was never read: every committed invocation compared `n == at`
+-- against nil and MAME logged "attempt to compare nil with number" once per
+-- frame, producing no trace. The header's usage line was always right.
+local at  = tonumber(os.getenv("M2_FRAME") or "400")
 local cnt = tonumber(os.getenv("M2_FRAMES") or "12")
 local out = os.getenv("M2_TR") or "/tmp/frames.tr"
 local n = 0
