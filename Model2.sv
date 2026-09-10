@@ -663,7 +663,20 @@ always_comb begin
 	// what a 68000 does almost all the time.
 	// PORT 5 IS THE SCANNER'S UNTIL IT FINISHES, then the 68000's. They never
 	// overlap: the CPU is held in reset until snd_found.
-	p_req[5]  = snd_found ? snd_rom_req : sc_req;
+	//
+	// SO THE REQUEST IS AN OR, NOT A MUX, AND snd_found IS NOT IN IT. The two
+	// sources are already mutually exclusive by construction and the select was
+	// costing real time -- see the note on ports 6 and 7 below, which is the
+	// same fault and where it was measured. `snd_rom_req` comes out of
+	// m2_sound_board, whose reset is `... & snd_found`, so it is held low for
+	// the whole scan; and `sc_req <= 1'b0` is assigned on the VERY EDGE that
+	// sets snd_found, so the scanner's request is gone from the cycle the flag
+	// appears. Before that edge the OR is 0|sc_req, after it is snd_rom_req|0.
+	// Bit-identical to the mux, on every cycle, with one fewer input.
+	p_req[5]  = snd_rom_req | sc_req;
+	// The ADDRESS mux stays. snd_base and sc_addr really are different values
+	// and the select really is needed -- it is only the REQUEST that was
+	// already decided elsewhere. p_addr is not on a failing path.
 	p_addr[5] = snd_found ? (snd_base + SDR_AW'({snd_rom_addr[17:3], 2'b00}))
 	                      : sc_addr;
 	// PORTS 6 AND 7, THE TWO MULTIPCMS' SAMPLE FETCHES.
@@ -678,7 +691,26 @@ always_comb begin
 	// The chips address bytes; SDRAM stores words. The word is fetched and the
 	// byte selected, four words at a time, so a voice reading consecutive
 	// samples gets seven of every eight bytes without a second request.
-	p_req[6]  = snd_found & pcm1_req;
+	// AND THE snd_found GATE IS GONE FROM BOTH, because it could never change
+	// the answer and it was the design's worst timing path.
+	//
+	// pcm1_req and pcm2_req are m_req_r inside m2_pcm_fetch -- a REGISTER, and
+	// one that `m_req_r <= 1'b0` clears in reset. PCM_CACHE is 1 so BYPASS is
+	// 0 and m_req is that register, not the combinational passthrough. The
+	// reset is m2_sound_board's, which is `cpu_rst_n & mem_rst_n & cp_done &
+	// snd_found`. So the request is PHYSICALLY ZERO whenever snd_found is
+	// zero, and ANDing the two is redundant logic.
+	//
+	// IT COST -0.196 ns, THE WORST PATH ON clk_mem. snd_found is a clk_sys
+	// register and pend[] is a clk_mem one, so the gate turned a boot-time
+	// flag into a 50->100 MHz crossing: -1.035 ns of skew before any logic,
+	// then 9.061 ns of data of which 6.261 was ROUTING -- FF_X59_Y21 to
+	// X57_Y22 to X70_Y25 to X73_Y26, thirteen LAB columns of it, because a
+	// fanout-17 signal that also drives the sound reset and the port-5 address
+	// mux cannot be placed near any one of its consumers. Sourcing f_req from
+	// pcm1_req/pcm2_req instead lets the fitter put each one beside the
+	// arbiter port it feeds.
+	p_req[6]  = pcm1_req;
 	p_addr[6] = snd_base + PCM_OFFS + SDR_AW'({pcm1_addr, 2'b00});
 	// PORTS 8 AND 9, THE TGP's TABLES AND DATA. Both read-only. The TGP asks
 	// for one 32-bit word and blocks on it, so only the low pair of each burst
@@ -710,7 +742,7 @@ always_comb begin
 	          + SDR_AW'({tgp_dat_addr_r, tgp_dat_half_r});
 	// port 9 is READ ONLY. Buffer-RAM writes go out on the shared write port,
 	// which keeps p_we/p_din out of the arbiter's command decode.
-	p_req[7]  = snd_found & pcm2_req;
+	p_req[7]  = pcm2_req;   // gate removed, see port 6
 	// FOUR MEGABYTES ON, AND THESE ARE WORD ADDRESSES. This was 0x400000,
 	// which as a WORD offset is eight megabytes, so the second sample chip read
 	// four megabytes past the end of the samples and played whatever was there.
