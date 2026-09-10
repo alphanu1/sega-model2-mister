@@ -146,6 +146,24 @@ module m2_boot_harness #(
   output logic [15:0] eng_polys, eng_objects, eng_capped, eng_nonfinite,
   output logic [15:0] eng_clip_in, eng_clip_out, eng_clip_drop,
   output logic        eng_q_valid,
+  // THE ENGINE'S POLYGON IN VIEW SPACE, before focus, clip and divide, with
+  // the focus and the matrix corners in force: the bench's quads land on the
+  // right screen edge and this says whether the collapse is in the input.
+  output logic        obs_poly_valid,
+  output logic [31:0] obs_v0x, obs_v0y, obs_v0z, obs_v1x, obs_v1y, obs_v1z,
+  output logic [31:0] obs_v2x, obs_v2y, obs_v2z, obs_v3x, obs_v3y, obs_v3z,
+  output logic [31:0] obs_poly_attr,
+  output logic [31:0] obs_foc_x, obs_foc_y, obs_mtx0, obs_mtx4, obs_mtx8, obs_mtx11,
+  // The raw object-space point entering the transform, and the whole matrix,
+  // so the transform can be checked by hand against the reference's formula.
+  // INSIDE THE COPROCESSOR: a, d, data-RAM 0x69/0x6a and the retire strobe,
+  // to watch the record-base arithmetic of the track lookup (study R204).
+  output logic        obs_tgp_retire,
+  output logic [15:0] obs_tgp_rpc,
+  output logic [31:0] obs_tgp_a, obs_tgp_d, obs_tgp_ram69, obs_tgp_ram6a,
+  output logic        obs_xf_valid,
+  output logic [31:0] obs_xf_x, obs_xf_y, obs_xf_z,
+  output logic [31:0] obs_mtx [12],
   output logic signed [15:0] eng_q_x0, eng_q_y0, eng_q_x1, eng_q_y1,
   output logic signed [15:0] eng_q_x2, eng_q_y2, eng_q_x3, eng_q_y3,
   // WHICH INSTRUCTION EMITS THE GEOMETRY. The board and the bench disagree about
@@ -773,7 +791,7 @@ module m2_boot_harness #(
     .frame_start(geo_frame_start),
     .rd_req(geo_rd_req), .rd_addr(geo_rd_addr),
     .rd_data(geo_rd_data), .rd_ack(geo_rd_ack),
-    .mtx0(), .mtx4(), .mtx8(), .mtx11(),
+    .mtx0(obs_mtx0), .mtx4(obs_mtx4), .mtx8(obs_mtx8), .mtx11(obs_mtx11),
     .mat_we(geo_mat_we), .mat_idx(geo_mat_idx), .mat_data(geo_mat_data),
     .eng_busy(geo_eng_busy),
     .foc_x(geo_foc_x), .foc_y(geo_foc_y),
@@ -824,6 +842,23 @@ module m2_boot_harness #(
     .dbg_clip_dropped(eng_clip_drop), .dbg_nonfinite(eng_nonfinite),
     .dbg_pj_lost(), .dbg_eng_state(), .dbg_qst(), .dbg_clip_state()
   );
+  assign obs_poly_valid = u_geometry.poly_valid & u_geometry.poly_ready;
+  assign obs_v0x = u_geometry.u_engine.v0x; assign obs_v0y = u_geometry.u_engine.v0y; assign obs_v0z = u_geometry.u_engine.v0z;
+  assign obs_v1x = u_geometry.u_engine.v1x; assign obs_v1y = u_geometry.u_engine.v1y; assign obs_v1z = u_geometry.u_engine.v1z;
+  assign obs_v2x = u_geometry.u_engine.v2x; assign obs_v2y = u_geometry.u_engine.v2y; assign obs_v2z = u_geometry.u_engine.v2z;
+  assign obs_v3x = u_geometry.u_engine.v3x; assign obs_v3y = u_geometry.u_engine.v3y; assign obs_v3z = u_geometry.u_engine.v3z;
+  assign obs_poly_attr = u_geometry.u_engine.poly_attr;
+  assign obs_foc_x = geo_foc_x; assign obs_foc_y = geo_foc_y;
+  assign obs_tgp_retire = u_copro.u_tgp.core.retire;
+  assign obs_tgp_rpc    = u_copro.u_tgp.core.retire_pc;
+  assign obs_tgp_a      = u_copro.u_tgp.core.u_regs.reg_a;
+  assign obs_tgp_d      = u_copro.u_tgp.core.u_regs.reg_d;
+  assign obs_tgp_ram69  = u_copro.u_tgp.core.u_mem.ram0[8'h69];
+  assign obs_tgp_ram6a  = u_copro.u_tgp.core.u_mem.ram0[8'h6a];
+  assign obs_xf_valid = u_geometry.u_engine.xf_in_valid & u_geometry.u_engine.xf_translate;
+  assign obs_xf_x = u_geometry.u_engine.xf_in_x; assign obs_xf_y = u_geometry.u_engine.xf_in_y; assign obs_xf_z = u_geometry.u_engine.xf_in_z;
+  assign obs_mtx = u_geo.mtx;
+
 
   m2_backup u_backup (
     .clk(clk_m), .sel(bak_sel), .we(cpu_io_we),

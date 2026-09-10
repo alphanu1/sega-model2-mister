@@ -635,10 +635,15 @@ obj_x2/Vm2_sdram_x2_harness: sim/mem/m2_sdram_x2_harness.sv rtl/mem/m2_sdram_x2.
 # seconds, against a 25-minute build.
 
 .PHONY: test_m2_boot
-# BUFFERRAM in the boot bench. Default 0 -- which is the configuration that
-# WORKS on hardware, and is why this bench has been green while the board spins.
-# BOOT_BUFFERRAM=1 builds the failing one.
-BOOT_BUFFERRAM ?= 0
+# BUFFERRAM in the boot bench. Default 1, BECAUSE THE BOARD IS 1
+# (Model2.sv instantiates the bridge with BUFFERRAM=1, reads enabled). The old
+# default of 0 made every CPU read of buffer RAM return zero by construction,
+# so the mailbox poll at 0x1166c exited at once and the placement queries'
+# answers read as zero: the bench "reached the 3D task" with the cars placed
+# from zeros, and its geometry was off-scene for a reason the board did not
+# share. Found 2026-09-11 (study R204). BOOT_BUFFERRAM=0 is the bench that
+# proves nothing about the mailbox.
+BOOT_BUFFERRAM ?= 1
 
 test_m2_boot: obj_boot/Vm2_boot_harness
 	@echo "== test m2_boot (the real boot through the real bridge)"

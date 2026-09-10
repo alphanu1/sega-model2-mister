@@ -302,7 +302,7 @@ int main(int argc, char **argv) {
   // itself. That is what the .mra's interleave already produced, and checking
   // it against the reference cost one script and settles a byte order that
   // cost four builds the last time it was assumed (R94).
-  const uint32_t TBL_BASE = 0x15d8000;      // GAME_TGPTBL, word address
+  const uint32_t TBL_BASE = 0x15d0000;      // GAME_TGPTBL, word address (R203: 0x2BA0000 bytes, not 0x2BB0000)
   {
     std::vector<uint8_t> ta, tb;
     if (load_file(dir + "opr-14742a.45", ta) && load_file(dir + "opr-14743a.46", tb)) {
@@ -463,7 +463,8 @@ int main(int argc, char **argv) {
     // one of the two polygon RAMs. Same decode as Model2.sv's.
     d->eng_mem_ack = 0;
     if ((++ip_samp & 0xffff) == 0) ++ip_hist[uint32_t(d->dbg_ip)];
-    if (d->eng_q_valid && g_quads.size() < 4096)
+    static const uint64_t quads_from = std::getenv("M2_POLY_FROM") ? std::strtoull(std::getenv("M2_POLY_FROM"), nullptr, 10) : 0;
+    if (d->eng_q_valid && g_quads.size() < 4096 && d->dbg_acc >= quads_from)
       g_quads.push_back({(int)(int16_t)d->eng_q_x0, (int)(int16_t)d->eng_q_y0,
                          (int)(int16_t)d->eng_q_x1, (int)(int16_t)d->eng_q_y1,
                          (int)(int16_t)d->eng_q_x2, (int)(int16_t)d->eng_q_y2,
@@ -656,8 +657,12 @@ int main(int argc, char **argv) {
       // branches at 0x11688 to 0x116B4 and substitutes the constant 0xBDCCCCCD,
       // which is exactly what our command stream pushes where MAME pushes a
       // real value.
-      if ((uint32_t(d->obs_bufw_waddr) >> 1) >= 0x07FFCu
-          && (uint32_t(d->obs_bufw_waddr) >> 1) <= 0x07FFEu && mboxlog.size() < 40)
+      // WIDENED to the whole last 64 dwords of buffer RAM and 200 entries: the
+      // CPU reads the query answers at dwords 0x7FFD/0x7FFE as ZERO while the
+      // reference gets a flag and a segment index; where our TGP puts them
+      // is the question (the handler writes through a running pointer).
+      if ((uint32_t(d->obs_bufw_waddr) >> 1) >= 0x07FC0u
+          && (uint32_t(d->obs_bufw_waddr) >> 1) <= 0x07FFFu && mboxlog.size() < 200)
         mboxlog.push_back({mem_cyc, uint32_t(d->obs_bufw_waddr),
                            uint16_t(d->obs_bufw_wdata), uint32_t(d->obs_tgp_pc)});
     }
@@ -759,6 +764,32 @@ int main(int argc, char **argv) {
     }
     ++tgp_pc_hist[uint32_t(d->obs_tgp_pc)];
     if (d->obs_tgp_io_rd) { ++tgp_io_rd_n; ++tgp_io_hist[uint32_t(d->obs_tgp_io_addr)]; }
+    // THE RECORD-BASE ARITHMETIC, instruction by instruction: sub_7cb (0x7cb-
+    // 0x7d5) computes $0x69/$0x6a, the lookup at 0x487-0x48c adds $0x6a.
+    {
+      static const uint64_t tr_from = std::getenv("M2_TGPRD_FROM") ? std::strtoull(std::getenv("M2_TGPRD_FROM"), nullptr, 10) : ~0ull;
+      static int ntr = 0; static int rt_p = 0;
+      const unsigned rpc = d->obs_tgp_rpc;
+      if (d->obs_tgp_retire && !rt_p && d->dbg_acc >= tr_from && ntr < 80 &&
+          ((rpc >= 0x7cb && rpc <= 0x7d8) || (rpc >= 0x484 && rpc <= 0x48f))) {
+        ++ntr;
+        std::printf("    TGPX pc=%03x a=%08x d=%08x $69=%08x $6a=%08x\n", rpc,
+                    (unsigned)d->obs_tgp_a, (unsigned)d->obs_tgp_d, (unsigned)d->obs_tgp_ram69, (unsigned)d->obs_tgp_ram6a);
+      }
+      rt_p = d->obs_tgp_retire;
+    }
+    // THE TGP's EXTERNAL DATA READS (port 9: data ROM and buffer RAM), address
+    // and data, from M2_TGPRD_FROM on, first 5000: diffable against a Lua tap
+    // on the reference's :copro_tgp io space.
+    {
+      static const uint64_t rd_from = std::getenv("M2_TGPRD_FROM") ? std::strtoull(std::getenv("M2_TGPRD_FROM"), nullptr, 10) : ~0ull;
+      static int nrd = 0; static int ack_p = 0;
+      if (d->tgp_dat_ack && !ack_p && d->dbg_acc >= rd_from && nrd < 5000) {
+        ++nrd;
+        std::printf("    TGPRD %s %05x %08x\n", d->tgp_dat_is_buf ? "B" : "D", (unsigned)d->tgp_dat_addr, (unsigned)d->tgp_dat_rdata);
+      }
+      ack_p = d->tgp_dat_ack;
+    }
     if (d->obs_tgp_io_wr)   ++tgp_io_wr_n;
     if (d->obs_tgp_io_ack)  ++tgp_io_ack_n;
     if (d->obs_tgp_ram_req) ++tgp_ram_req_cyc;
@@ -1675,6 +1706,45 @@ int main(int argc, char **argv) {
     // the FIRST wrong read rather than the crash it eventually causes. Bytes
     // never written by the CPU are not compared (ROM-initialised state, the
     // TGP's and the loader's writes are not on this bus).
+    // THE FIRST POLYGONS THE ENGINE EMITS, in view space, with the focus and
+    // the matrix corners in force. Printed as floats.
+    {
+      static int npoly = 0; static int pv_prev = 0;
+      auto F = [](uint32_t u) { float f; std::memcpy(&f, &u, 4); return double(f); };
+      // Gated past the boot: the first 16 the engine emits are read out of
+      // unwritten polygon RAM at instruction ~48,900 -- attr 0xFFFFFFFF, every
+      // vertex NaN -- and they are what saturates dbg_nonfinite and dbg_capped.
+      static const uint64_t poly_from = std::getenv("M2_POLY_FROM") ? std::strtoull(std::getenv("M2_POLY_FROM"), nullptr, 10) : 0;
+      if (d->obs_poly_valid && !pv_prev && npoly < 24 && d->dbg_acc >= poly_from) {
+        ++npoly;
+        std::printf("    POLY %2d i%-9llu attr %08x foc (%g,%g) mtx0 %g mtx4 %g mtx8 %g mtx11 %g\n"
+                    "         v0 (%g,%g,%g) v1 (%g,%g,%g) v2 (%g,%g,%g) v3 (%g,%g,%g)\n",
+                    npoly, (unsigned long long)d->dbg_acc, (unsigned)d->obs_poly_attr,
+                    F(d->obs_foc_x), F(d->obs_foc_y), F(d->obs_mtx0), F(d->obs_mtx4), F(d->obs_mtx8), F(d->obs_mtx11),
+                    F(d->obs_v0x), F(d->obs_v0y), F(d->obs_v0z), F(d->obs_v1x), F(d->obs_v1y), F(d->obs_v1z),
+                    F(d->obs_v2x), F(d->obs_v2y), F(d->obs_v2z), F(d->obs_v3x), F(d->obs_v3y), F(d->obs_v3z));
+      }
+      pv_prev = d->obs_poly_valid;
+      // The points entering the transform, with the matrix in force, for the
+      // first polygons: enough to redo v' = M v + T in Python.
+      static int nxf = 0; static int xv_prev = 0;
+      if (d->obs_xf_valid && !xv_prev && nxf < 8 && d->dbg_acc >= poly_from) {
+        ++nxf;
+        std::printf("    XFIN %d i%llu p (%g,%g,%g) M [", nxf, (unsigned long long)d->dbg_acc, F(d->obs_xf_x), F(d->obs_xf_y), F(d->obs_xf_z));
+        for (int k = 0; k < 12; k++) std::printf("%g%s", F(d->obs_mtx[k]), k < 11 ? " " : "]\n");
+      }
+      xv_prev = d->obs_xf_valid;
+    }
+    // THE MAILBOX QUERY, as the CPU sees it: the arm (write to 0x91fff0) and
+    // the answers (reads of 0x91fff4/0x91fff8), to compare with the reference.
+    if (d->obs_bus_ack && !ack_prev) {
+      const uint32_t ma = d->obs_bus_addr;
+      static int nmb = 0;
+      if (ma >= 0x0091fff0u && ma < 0x0091fffcu && nmb < 400) {
+        if (d->obs_bus_we && ma == 0x0091fff0u) { ++nmb; std::printf("    MBOX A f%llu %08x i%llu pc=%08x\n", (unsigned long long)g_frames_done, (unsigned)d->obs_bus_wdata, (unsigned long long)d->dbg_acc, (unsigned)d->dbg_ip); }
+        else if (!d->obs_bus_we && ma != 0x0091fff0u) { ++nmb; std::printf("    MBOX R %08x %08x f%llu pc=%08x\n", ma, (unsigned)d->obs_bus_rdata, (unsigned long long)g_frames_done, (unsigned)d->dbg_ip); }
+      }
+    }
     if (d->obs_bus_ack && !ack_prev) {
       static std::vector<uint32_t> shadow(1u << 18, 0);
       static std::vector<uint8_t>  shadow_ok(1u << 18, 0);
@@ -2489,7 +2559,7 @@ int main(int argc, char **argv) {
                 d->eng_objects, d->eng_polys, d->eng_capped, d->eng_nonfinite);
     std::printf("    clipper in=%u out=%u dropped=%u   QUADS OUT=%zu\n",
                 d->eng_clip_in, d->eng_clip_out, d->eng_clip_drop, g_quads.size());
-    for (size_t i = 0; i < g_quads.size() && i < 6; i++)
+    for (size_t i = 0; i < g_quads.size() && i < 24; i++)
       std::printf("      quad %zu: (%d,%d) (%d,%d) (%d,%d) (%d,%d)\n", i,
                   g_quads[i][0], g_quads[i][1], g_quads[i][2], g_quads[i][3],
                   g_quads[i][4], g_quads[i][5], g_quads[i][6], g_quads[i][7]);

@@ -11462,3 +11462,50 @@ pipeline one step further down: with the timing the board has, the objects
 end at their attribute word. Next: the plain bench, `M2_TRAP` at the first
 E_EMIT, and the matrix and focal values the walker captured against MAME's
 for the same object -- no fitter needed for any of it.
+
+*`build/scr` s13, 00:40: the vertical scroll of layers 0 and 1 as the
+renderer reads them is 0 in all 56,579 samples.* The fast vertical jump is
+not those registers changing. Left open (layers 2/3, horizontal, or the
+band/frame presentation are the remaining candidates); the 3D comes first.
+
+*The engine's inputs, from the bench with both fixes (first 3D frame):* raw
+object point (0, 0.11, 2.47), matrix rows (-0.707,-0.5,-0.5) (0,0.707,-0.707)
+(0.707,-0.5,-0.5) -- orthonormal, so the twelve words are captured in order
+-- translation (-67.5, 48.5, 60.0), focus (280, 280). The transformed point is
+the translation, 1.1 rad off-axis, outside a 280-focus view; every emitted
+quad is a sliver clipped on the right plane at x 493-496. The reference's
+first matrix of ITS first 3D frame (frame 173, front-door tap, opcode 0xB
+followed by twelve data words) is a near-identity rotation with translation
+(0.48, 0.47, 140.5): centred. The game computes these matrices through the
+coprocessor, so the next comparison is the coprocessor's answer stream, word
+by word, bench against reference, from the start of state 3.
+
+**R204 -- THE PLAIN BOOT BENCH HAD BUFFER-RAM READS DISABLED, SO EVERY MAILBOX
+ANSWER IT EVER GAVE THE GAME WAS ZERO. WITH READS ON, THE TGP'S ANSWERS ARE
+REAL AND DIFFERENT FROM THE REFERENCE'S.**
+
+`Makefile`'s `BOOT_BUFFERRAM ?= 0` ("the configuration that WORKS on
+hardware") built the bridge with `BUFFERRAM=0`; the board's Model2.sv
+instantiates it with `BUFFERRAM=1`. With 0 the CPU's reads of 0x900000-
+0x97ffff return zero by construction: the mailbox poll at 0x1166c exits at
+once and the placement answers at 0x91fff4/0x91fff8 read as zero, while the
+TGP's writes of them land unread (logged tonight at words 0xFFFA-0xFFFD from
+microcode 0x511/0x515, then the clear from 0x4c3). So the bench "reached the
+3D task" with every car placed from zeros, the camera followed them off the
+scene, and its 1,410 degenerate quads were the consequence of the bench, not
+of the board. The default is now 1.
+
+With `BOOT_BUFFERRAM=1`, same inputs as the reference (verified word for
+word: 0x17ffc, 0, 0x1057, 112.0, 0x430A7E7E ...), the answers the CPU reads:
+
+    bench      bdcccccd 000003df   bdcccccd 000003de   bdcccccd 000003e5 ...
+    reference  80000000 00000146   80000000 0000014a   80000000 0000014a ...
+
+The first word is the microcode's "not found" default (-0.1, the same
+constant the i960 substitutes at 0x116b4 when it gets zero) and the segment
+index is wrong. The track lookup (0x481-0x4b5, copying 12-word records from
+the TGP's data space and comparing in float) is not finding what the
+reference finds. Microcode, tables and inputs are identical; what remains is
+the data it reads -- the copro data ROM through port 9 and buffer RAM -- or
+the arithmetic of the loop. MAME exposes the TGP's data space to Lua, so the
+reads themselves are comparable, and that is the next diff.
