@@ -10968,3 +10968,58 @@ plusarg for real-rate pacing. No such plusarg exists or ever did -- it is an
 elaboration parameter. And `test_m2_ioz80` is not in the default `test` target
 and fails on its own today, before and after this change alike; it needs a
 firmware image, which is a ROM and cannot live here.
+
+**R199 — moving the video into the memory domain costs twelve crossings, and
+four of them are real faults rather than timing numbers.** Recorded here because
+they live on a branch that may not survive, and every one of them becomes
+necessary again the moment `clk_mem` stops being an integer multiple of
+`clk_sys`.
+
+The move itself is one line -- `m2_video` and the character cache to `clk_mem`,
+tile RAM and palette dual-clock. What follows is everything that was left behind:
+
+```
+control signals that stayed on clk_sys while their consumer moved
+  character-cache invalidate      strobe AND payload
+  colour translation table write  strobe AND payload
+  cp_done, feeding the pixel mux
+  rd_lat_sel, feeding cap_depth
+  char_base, feeding port 3's address
+  the character CDC, both its clocks
+  ce_pix, which gates the framework's whole video chain
+```
+
+*Crossing a strobe does not cross what the strobe qualifies.* This cost two
+rounds: `m2_cdc_pulse` on a write enable with the address still latched in the
+source domain leaves the address crossing on its own, and it became the worst
+path in the design both times.
+
+**THE FOUR THAT ARE FAULTS, not slow paths.** Each would misbehave on silicon at
+any clock speed once the domains differ:
+
+1. `bd_ready` and `bd_band` read COMBINATIONALLY in the scan domain from
+   registers in the fill domain (`m2_raster3d`). Two flops on the flag, and the
+   index with it.
+2. The video domain's reset RELEASED unsynchronised. Asserting late is harmless;
+   releasing on an unsynchronised edge lets registers in one domain leave reset
+   on different cycles. Async assert, sync release.
+3. `scan_band` crossing back into the fill domain is a COUNTER, so a
+   synchroniser is not enough -- sample a binary counter mid-transition and
+   7 -> 8 reads as anything from 0 to 15, releasing a band the beam has not
+   reached. Gray-coded.
+4. The frame interrupt came from a SECOND `m2_video_timing` instance -- a
+   duplicate generator whose only consumer was that interrupt, timing off
+   something that draws nothing. It comes from `tile_vb` now, the blanking the
+   picture is actually built from.
+
+*Also learned, and cheap to lose.* The design's critical path was a
+combinational divide by 62 in the boot-time test pattern -- about 22 ns from
+`hcnt` through the colour mux to the pin, in an image the game never shows. That
+fits a 20 ns period at 50 MHz by a whisker, which is the likeliest reason this
+core has sat near -0.2 ns setup for weeks. Removing it is worth 4.8 ns.
+
+*And the method, which is the transferable part.* Reading the RTL found none of
+this. Every one came from `get_timing_paths` on a finished build, fixing the
+named path, and rebuilding: -10.13 -> -5.32 -> -4.79 -> -3.88 -> -3.43 -> -2.80
+-> -2.55 -> -2.47 -> -2.09 -> -1.57. Report DISTINCT endpoints -- ten copies of
+one path reads like ten problems and is one.
