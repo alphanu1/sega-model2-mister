@@ -68,7 +68,22 @@ module m2_raster3d #(
   output logic [15:0] dbg_quads,
   output logic [15:0] dbg_dropped,
   output logic [15:0] dbg_bands,
-  output logic [31:0] dbg_pixels
+  output logic [31:0] dbg_pixels,
+
+  // WHY THE TOP OF THE FRAME IS MISSING, INSTRUMENTED. R200 measured that
+  // bands 0-11 never render and 12+ render perfectly, on a fill that is
+  // BEAM-PACED -- C_IDLE only fills a buffer the beam has already released, so
+  // it can run at most NBUF bands ahead and cannot simply "fall behind". A slow
+  // fill loses the BOTTOM of the screen; this loses the TOP, which means the
+  // fill starts late rather than running slow.
+  //
+  // These two say which. dbg_ready_cyc is clk cycles from frame_start to
+  // pst==P_READY -- the collect-plus-sort cost, which is the only thing that
+  // can delay the first fill. dbg_bands_done is how many bands completed in the
+  // last frame, against NBANDS=24: if it reads 12 the fill never starts on the
+  // first twelve, and if it reads 24 they are being filled and lost elsewhere.
+  output logic [15:0] dbg_ready_cyc,
+  output logic [7:0]  dbg_bands_done
 );
 
   localparam int unsigned NBANDS = (SCR_H + BAND_H - 1) / BAND_H;
@@ -275,6 +290,11 @@ module m2_raster3d #(
   pstate_t pst;
   cstate_t cst;
 
+  // R200 instrumentation: see the port comments.
+  logic [15:0] rdy_cyc;
+  logic        rdy_run;
+  logic  [7:0] bands_this;
+
   // CLEAR UNCONDITIONALLY AT FRAME START, as the reference does.
   //
   // This was `(pst == P_COLLECT) && frame_start`, and in steady state that
@@ -308,9 +328,24 @@ module m2_raster3d #(
       pst <= P_COLLECT; cst <= C_IDLE;
       fill_band <= '0; fill_buf <= '0; bd_ready <= '0;
       bd_clear_req <= '0; dbg_bands <= 16'd0; dbg_pixels <= 32'd0;
+      dbg_ready_cyc <= 16'd0; dbg_bands_done <= 8'd0;
+      rdy_cyc <= 16'd0; rdy_run <= 1'b0; bands_this <= 8'd0;
       for (int i = 0; i < NBUF; i++) begin bd_y0[i] <= 16'sd0; bd_band[i] <= '0; end
     end else begin
       bd_clear_req <= '0;
+
+      // ---- R200's two numbers.
+      //
+      // rdy_run is high from frame_start until pst reaches P_READY, and rdy_cyc
+      // counts while it is. That interval is collect-plus-sort, and it is the
+      // ONLY thing that can stop the first band being filled during vblank --
+      // the fill itself is beam-paced and cannot start early. Saturating rather
+      // than wrapping: a wrapped count of a long stall reads like a short one.
+      if (rdy_run && !(&rdy_cyc)) rdy_cyc <= rdy_cyc + 16'd1;
+      if (rdy_run && (pst == P_READY)) begin
+        rdy_run       <= 1'b0;
+        dbg_ready_cyc <= rdy_cyc;
+      end
 
       // ---- producer: collect quads for the frame, then sort once
       case (pst)
@@ -339,6 +374,7 @@ module m2_raster3d #(
         C_DONE: begin
           bd_ready[fill_buf] <= 1'b1;
           dbg_bands  <= dbg_bands + 16'd1;
+          if (!(&bands_this)) bands_this <= bands_this + 8'd1;
           dbg_pixels <= dbg_pixels + bd_pixels[fill_buf];
           fill_buf   <= (BUFW'(fill_buf) == BUFW'(NBUF-1)) ? '0 : fill_buf + BUFW'(1);
           fill_band  <= (fill_band == BW'(NBANDS-1)) ? '0 : fill_band + BW'(1);
@@ -351,7 +387,13 @@ module m2_raster3d #(
       for (int i = 0; i < NBUF; i++)
         if (bd_ready[i] && (scan_band_f > bd_band[i])) bd_ready[i] <= 1'b0;
 
-      if (frame_start) begin fill_band <= '0; bd_ready <= '0; end
+      // Latched and restarted together, so the reported pair always describes
+      // the SAME frame rather than one number from each side of a boundary.
+      if (frame_start) begin
+        fill_band <= '0; bd_ready <= '0;
+        dbg_bands_done <= bands_this; bands_this <= 8'd0;
+        rdy_cyc <= 16'd0; rdy_run <= 1'b1;
+      end
     end
   end
 

@@ -490,6 +490,8 @@ wire        geo_walk_start = vbl_d && !vbl_dd && !status[20];
 wire        geo_rd_req;
 wire [18:0] geo_rd_addr;
 wire [15:0] geo_walk_ops, geo_walk_objs, geo_walk_frames;
+wire [15:0] r3d_ready_cyc;   // R200: frame_start -> P_READY, in clk_sys cycles
+wire  [7:0] r3d_bands_done; // R200: bands completed last frame, against NBANDS=24
 wire  [7:0] geo_walk_unknown;
 wire  [3:0] geo_walk_state;
 logic       geo_rd_req_r;
@@ -3689,7 +3691,13 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// has never been read on hardware; R167 records the same port sharing as
 	// fatal when the walker and the engine were independent. With it, the state
 	// the walk sits in and any opcode the table does not cover.
-	.b_addr({dbg_p4_clash, geo_walk_unknown, 4'd0, geo_walk_state}),
+	// R200'S TWO NUMBERS take this channel, because the two they replace have
+	// read ZERO on every capture ever taken: dbg_p4_clash never fired and
+	// geo_walk_unknown never fired, so the walk is neither clashing on port 4 nor
+	// stopping on an opcode it cannot decode. What is not known is why the fill
+	// misses bands 0-11, and these say it: cycles from frame_start to P_READY,
+	// and bands completed last frame against NBANDS=24.
+	.b_addr({r3d_bands_done, r3d_ready_cyc, 4'd0, geo_walk_state}),
 	// clip_dropped read 0 on hardware and the refusal count is the number that
 	// now moves, so it takes that byte. Between them: accepted, emitted, refused
 	// before the arithmetic, and reaching the rasterizer.
@@ -4693,7 +4701,8 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(16), .NBUF(3),
 	.scan_clk(clk_sys), .scan_x(vid_x), .scan_y(vid_y),
 	.scan_col(r3d_col), .scan_hit(r3d_hit),
 	.dbg_quads(r3d_quads), .dbg_dropped(r3d_dropped),
-	.dbg_bands(r3d_bands), .dbg_pixels(r3d_pixels)
+	.dbg_bands(r3d_bands), .dbg_pixels(r3d_pixels),
+	.dbg_ready_cyc(r3d_ready_cyc), .dbg_bands_done(r3d_bands_done)
 );
 
 // The 3D layer sits OVER the tilemap where it painted, and shows the tilemap
