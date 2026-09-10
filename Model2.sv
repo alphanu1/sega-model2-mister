@@ -2987,7 +2987,7 @@ wire  [7:0] zio_wdata, zio_rdata;
 wire [31:0] dc_hits, dc_miss;
 wire  [7:0] iob_pa;       // PA latch; bit 0 selects the DIP banks
 wire [15:0] iob_seccnt;   // times the firmware has selected them
-m2_ioz80 #(.CEN_DIV(12)) u_ioz80 (
+m2_ioz80 #(.TICK_NUM(4), .TICK_DEN(50)) u_ioz80 (   // 4 MHz exactly, on 50 MHz clk_sys
 	.clk(clk_sys), .rst_n(cpu_rst_n & fw_ready),
 	// First 16 KB only: the EPROM is 64 KB, the Z80 maps 0x0000-0x3fff, and a
 	// wrapping fw_addr[13:0] would leave the LAST quarter in the ROM.
