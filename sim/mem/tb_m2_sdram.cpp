@@ -506,8 +506,19 @@ int main(int argc, char** argv) {
     h.fails++;
   }
 
-  printf("m2_sdram: checks=%ld fails=%ld violations=%u reads=%u writes=%u\n",
-         h.checks, h.fails, h.d->violations, h.d->reads_served,
-         h.d->writes_served);
+  // The shared capture slots in m2_sdram are sound only while a burst's words
+  // reach slot 0 consecutively. The harness watches for a foreign port index
+  // arriving mid-burst; nothing else in this test would say so out loud,
+  // because the symptom is one port quietly holding another's data.
+  h.checks++;
+  if (h.d->tag_faults != 0) {
+    printf("  FAIL %u interleaved tags -- a burst was cut by another port\n",
+           h.d->tag_faults);
+    h.fails++;
+  }
+
+  printf("m2_sdram: checks=%ld fails=%ld violations=%u tag_faults=%u reads=%u writes=%u\n",
+         h.checks, h.fails, h.d->violations, h.d->tag_faults,
+         h.d->reads_served, h.d->writes_served);
   return h.fails ? 1 : 0;
 }

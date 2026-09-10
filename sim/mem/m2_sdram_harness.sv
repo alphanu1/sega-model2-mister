@@ -65,6 +65,16 @@ module m2_sdram_harness #(
   output int unsigned reads_served,
   output int unsigned writes_served,
 
+  // BURSTS MUST NOT INTERLEAVE IN THE TAG PIPELINE. m2_sdram keeps ONE set of
+  // capture slots rather than one per port, and that is only sound because the
+  // FSM is single-threaded: S_RD issues every READ of a burst on consecutive
+  // cycles and does not return to S_IDLE until the last of them. If that ever
+  // stops being true -- a second issue path, a burst-terminate, an out-of-order
+  // completion -- the shared slots silently hand one port another port's words.
+  // Silent is the reason this is counted rather than left to the readback
+  // checks to notice.
+  output int unsigned tag_faults,
+
   // Telemetry readback
   input  logic [2:0]  mon_sel,
   input  logic        mon_snap,
@@ -176,6 +186,34 @@ module m2_sdram_harness #(
     .violations(violations), .v_flags(v_flags),
     .reads_served(reads_served), .writes_served(writes_served)
   );
+
+  // THE SHARED-CAPTURE INVARIANT, WATCHED AT SLOT 0. A burst is "open" from the
+  // first word that is not the last, and it must close on a word carrying the
+  // SAME port index. Reaching slot 0 with a different port while one is open is
+  // exactly the interleave the single set of capture slots cannot survive.
+  //
+  // Read hierarchically rather than through a debug port: this is the harness
+  // proving a property of the DUT's internals, and widening m2_sdram's port
+  // list to say so would put simulation scaffolding in the synthesised design.
+  logic                     tg_open;
+  logic [$clog2(NP)-1:0]    tg_port;
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      tg_open <= 1'b0; tg_port <= '0; tag_faults <= 0;
+    end else if (dut.tag_v[0]) begin
+      if (!tg_open) begin
+        // First word of a burst. A single-word burst opens and closes here.
+        if (!dut.tag_last[0]) begin
+          tg_open <= 1'b1;
+          tg_port <= dut.tag_p[0];
+        end
+      end else begin
+        if (dut.tag_p[0] != tg_port) tag_faults <= tag_faults + 1;
+        if (dut.tag_last[0])         tg_open    <= 1'b0;
+      end
+    end
+  end
 
   bw_monitor #(.MASTERS(NP), .CW(24), .BW(8)) mon (
     .clk(clk), .rst_n(rst_n),

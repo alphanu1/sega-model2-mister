@@ -557,7 +557,24 @@ module m2_sdram #(
   logic [RD_LAT-1:0][PW-1:0] tag_p;      // port index
   logic [RD_LAT-1:0][1:0]   tag_w;      // word index within the burst
   logic [RD_LAT-1:0]        tag_last;
-  logic [NP-1:0][3:0][15:0] cap;
+  // ONE SET OF CAPTURE SLOTS, NOT ONE PER PORT, because two ports' words can
+  // never interleave in this pipeline and the per-port index was costing both
+  // area and the third-worst path on clk_mem.
+  //
+  // THE FSM IS SINGLE-THREADED AND S_RD ISSUES ONE READ PER CYCLE for the
+  // whole burst, injecting every tag at the same cap_depth and only returning
+  // to S_IDLE after the last of them. So a burst's tags occupy CONSECUTIVE
+  // slots and reach slot 0 on consecutive cycles, and the state machine cannot
+  // be in S_RD for two ports at once. The next burst's first tag is at least
+  // S_IDLE -> S_SEL -> S_DISPATCH -> S_RD behind the previous burst's last --
+  // three cycles, and one would have been enough.
+  //
+  // WHAT IT COST AS AN ARRAY: tag_p[0] selected a 48-bit NP-way read mux AND
+  // the p_dout write decode in the same cycle as the final burst word, four
+  // logic levels and 9.910 ns of a 10 ns period at -0.148. The write decode
+  // stays -- it has to, p_dout really is per port -- but a decode is far
+  // cheaper than a data mux. The registers go from NP*64 to 64.
+  logic [3:0][15:0] cap;
 
   // Acks are per port now. A single shared hold counter was fine when only one
   // transfer existed at a time; with two ports in flight it would clear the
@@ -700,7 +717,7 @@ module m2_sdram #(
         tag_w    <= {2'd0, tag_w[RD_LAT-1:1]};
         tag_last <= {1'b0, tag_last[RD_LAT-1:1]};
         if (tag_v[0]) begin
-          cap[tag_p[0]][tag_w[0]] <= dq_r;
+          cap[tag_w[0]] <= dq_r;
           if (tag_last[0]) begin
             // The final word and its buffer write share an edge, so deliver
             // the staged word directly rather than reading back a stale slot.
@@ -718,9 +735,8 @@ module m2_sdram #(
             // consumer reading past what it asked for sees zero, not history.
             case (tag_w[0])
               2'd0:    p_dout[tag_p[0]] <= {48'd0, dq_r};
-              2'd1:    p_dout[tag_p[0]] <= {32'd0, dq_r, cap[tag_p[0]][0]};
-              default: p_dout[tag_p[0]] <= {dq_r, cap[tag_p[0]][2],
-                                            cap[tag_p[0]][1], cap[tag_p[0]][0]};
+              2'd1:    p_dout[tag_p[0]] <= {32'd0, dq_r, cap[0]};
+              default: p_dout[tag_p[0]] <= {dq_r, cap[2], cap[1], cap[0]};
             endcase
             p_ack[tag_p[0]]    <= 1'b1;
             ack_cnt[tag_p[0]]  <= 2'(ACK_HOLD - 1);
