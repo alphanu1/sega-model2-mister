@@ -42,16 +42,30 @@
 //   PF (5)                    -> output latch (lamps etc.; latched, unused)
 //   PG (6)                    <- button board / EEPROM DO (absent: 0xff)
 //
-// CEN_DIV pacing: the real Z80 runs at 32 MHz / 8 = 4 MHz, which is clk_sys /
-// 12. The firmware's power-on delays (R40 measured them as ~0.12 s and ~3.0 s)
-// are Z80 delay loops, so they now come from the program itself rather than
-// from two magic constants. Simulation may pace CEN faster; the semantics are
-// unchanged, only the seconds compress.
+// Z80 pacing: the real Z80 runs at 32 MHz / 8 = 4 MHz. The firmware's power-on
+// delays (R40 measured them as ~0.12 s and ~3.0 s) are Z80 delay loops, so they
+// come from the program itself rather than from two magic constants -- which
+// makes the enable RATE a real quantity and not a convenience.
+//
+// FRACTIONAL, because an integer divider cannot express it. This was CEN_DIV=12
+// and exact while clk_sys was 48 MHz. clk_sys is 50 MHz now, and 50/12 is
+// 4.167 MHz -- the Z80 ran 4.2% fast and every firmware delay loop came out 4%
+// short. 50/4 = 12.5 has no integer form, so it is paced the way the sound
+// board paces its 68000: add TICK_NUM each cycle and pulse when the accumulator
+// crosses TICK_DEN, which averages one enable per 12.5 cycles exactly.
+//
+// The video CE and the sound board were both corrected when clk_sys moved from
+// 48 to 50 (see "SIXTEEN OF FIFTY, NOT ONE OF THREE" in Model2.sv). This was
+// missed.
+//
+// Simulation may pace faster -- tb_m2_ioz80 runs TICK_NUM=25 for a 24 MHz Z80
+// so the firmware's seconds compress. The semantics are unchanged.
 
 `timescale 1ns/1ps
 
 module m2_ioz80 #(
-  parameter int unsigned CEN_DIV = 12
+  parameter int unsigned TICK_NUM = 4,      // 4 MHz
+  parameter int unsigned TICK_DEN = 50      // clk_sys
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -116,13 +130,24 @@ module m2_ioz80 #(
 );
 
   // ------------------------------------------------------------ Z80 pacing
-  logic [$clog2(CEN_DIV)-1:0] cen_ctr;
+  // One accumulator, one comparison. ACCW is one bit wider than TICK_DEN needs,
+  // which is exactly enough: acc stays below TICK_DEN, so acc + TICK_NUM stays
+  // below 2*TICK_DEN and the add cannot wrap before the compare sees it.
+  //
+  // Widths are explicit. m2_sound_board writes this same accumulator with bare
+  // parameters and its bench does not run -Wall; this one does, and unsized
+  // parameters in the arithmetic are a WIDTHTRUNC there.
+  localparam int unsigned ACCW = $clog2(TICK_DEN) + 1;
+  logic [ACCW-1:0] acc;
   logic cen;
   always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) begin cen_ctr <= '0; cen <= 1'b0; end
-    else begin
-      cen     <= (cen_ctr == '0);
-      cen_ctr <= (cen_ctr == ($clog2(CEN_DIV))'(CEN_DIV - 1)) ? '0 : cen_ctr + 1'b1;
+    if (!rst_n) begin acc <= '0; cen <= 1'b0; end
+    else if (acc + ACCW'(TICK_NUM) >= ACCW'(TICK_DEN)) begin
+      acc <= acc + ACCW'(TICK_NUM) - ACCW'(TICK_DEN);
+      cen <= 1'b1;
+    end else begin
+      acc <= acc + ACCW'(TICK_NUM);
+      cen <= 1'b0;
     end
   end
 
@@ -208,7 +233,7 @@ module m2_ioz80 #(
   //
   // Moving the write to the falling edge makes the array single-clock, which
   // gives it DEFINED read-during-write, and costs nothing else: aw_l and dw_l
-  // are already latched and stable, and the Z80 is paced at CEN_DIV=12 so half
+  // are already latched and stable, and the Z80 is paced at ~12.5:1 so half
   // a cycle of write delay is invisible to it. The read keeps the async-ROM
   // shape tv80 needs -- data half a cycle after the address.
   always_ff @(negedge clk) begin

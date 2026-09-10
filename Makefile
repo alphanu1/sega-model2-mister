@@ -507,7 +507,7 @@ obj_m2_vt/Vm2_video_timing: $(VID_RTL) sim/video/tb_m2_video_timing.cpp
 	$(VBUILD) --top-module m2_video_timing -CFLAGS "-O2" \
 	  --Mdir obj_m2_vt -o Vm2_video_timing $(VID_RTL) sim/video/tb_m2_video_timing.cpp
 
-lint_m2_video_timing lint_m2_testpattern:
+lint_m2_video_timing:
 	@verilator --lint-only -Wall -Wno-DECLFILENAME $(SRCS_$(@:lint_%=%))
 
 test_i960_top: obj_i960_top/Vi960_top
@@ -976,7 +976,6 @@ SRCS_i960_fpmisc := $(FPX_RTL)
 SRCS_i960_fpcvt  := $(FPC_RTL)
 SRCS_i960_top    := $(TOP_RTL)
 SRCS_m2_video_timing := $(VID_RTL)
-SRCS_m2_testpattern  := rtl/video/m2_testpattern.sv
 SRCS_m2_sdram := rtl/mem/m2_sdram.sv
 
 # ---------------------------------------------------------------------------

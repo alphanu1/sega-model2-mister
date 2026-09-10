@@ -12,7 +12,10 @@
 `timescale 1ns/1ps
 
 module m2_ioz80_harness #(
-  parameter int unsigned CEN_DIV = 12
+  // 25/50 = a 25 MHz Z80, the fast pacing tb_m2_ioz80 wants so the firmware's
+  // multi-second delay loops finish inside a simulation.
+  parameter int unsigned TICK_NUM = 25,
+  parameter int unsigned TICK_DEN = 50
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -67,7 +70,7 @@ module m2_ioz80_harness #(
   assign spy_addr = z_addr;
   assign spy_data = z_wdata;
 
-  m2_ioz80 #(.CEN_DIV(CEN_DIV)) u_board (
+  m2_ioz80 #(.TICK_NUM(TICK_NUM), .TICK_DEN(TICK_DEN)) u_board (
     .clk(clk), .rst_n(rst_n),
     .fw_we(fw_we), .fw_addr(fw_addr), .fw_data(fw_data),
     .in0(in0), .in1(in1), .in2(in2), .dp_busy(1'b0),

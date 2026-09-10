@@ -588,7 +588,7 @@ module m2_boot_harness #(
   logic [10:0] zio_addr;
   logic  [7:0] zio_wdata, zio_rdata;
 
-  m2_ioz80 #(.CEN_DIV(12)) u_ioz80 (
+  m2_ioz80 #(.TICK_NUM(4), .TICK_DEN(50)) u_ioz80 (
     .clk(clk_m), .rst_n(rst_n & fw_ready),
     .fw_we(fw_we), .fw_addr(fw_addr), .fw_data(fw_data),
     .in0(cab_in0), .in1(8'h8f), .in2(8'hff), .dp_busy(dp_busy_s),

@@ -10930,3 +10930,41 @@ written somewhere.
 *Also delivered.* `O[24:23]` selects the walk trigger at runtime -- Flip, Vblank,
 After flip, Write ptr -- so the remaining candidates cost an OSD change rather
 than a 25-minute build and a seed gamble.
+
+**R198 — the I/O board's Z80 ran 4.2% fast, and the clock ratios were checked
+because someone asked rather than because anything failed.** `clk_sys` moved
+from 48 MHz to 50 MHz to make the i960's 25 MHz an exact halving. Two of the
+three dependent dividers were corrected at the time -- the video CE became
+"SIXTEEN OF FIFTY, NOT ONE OF THREE" and the sound board takes `TICK_DEN(50)`
+at instantiation. The Z80's did not:
+
+```
+                real board            ours before        ours now
+i960KB          25 MHz                clk_i960 25 MHz    unchanged
+TGP             50 MHz                clk_sys 50 MHz     unchanged
+sound 68000     10 MHz (20 xtal/2)    TICK 20/50 = 10    unchanged
+I/O board Z80   4 MHz (32/8)          CEN_DIV 12 = 4.167 TICK 4/50 = 4.000
+```
+
+`CEN_DIV=12` was exact on 48 MHz and is 4.167 MHz on 50. It matters more than a
+4% error usually would, because that module's own comment records the firmware's
+power-on delays (~0.12 s and ~3.0 s, R40) as **Z80 delay loops** -- they come
+from the program's own timing, so a fast enable makes every one of them 4%
+short.
+
+50/4 = 12.5 has no integer form, so the enable is now fractional, the way
+`m2_sound_board` paces its 68000: add `TICK_NUM` each cycle, pulse when the
+accumulator crosses `TICK_DEN`. Widths are explicit here because this module's
+bench runs `-Wall` and the sound board's does not.
+
+*What this says about the class of fault.* Nothing failed. The board boots, the
+I/O exchange completes and the game runs, and it would have gone on doing so.
+A derived constant stopped being derived when the thing it was derived from
+moved, and only an explicit audit of all four ratios found it. **Whenever
+`clk_sys` changes, every divider hanging off it is a change too.**
+
+*Also found and corrected:* `sim/io/tb_m2_ioz80.cpp` documented a `+cendiv=12`
+plusarg for real-rate pacing. No such plusarg exists or ever did -- it is an
+elaboration parameter. And `test_m2_ioz80` is not in the default `test` target
+and fails on its own today, before and after this change alike; it needs a
+firmware image, which is a ROM and cannot live here.

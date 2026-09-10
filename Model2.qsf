@@ -156,7 +156,7 @@ set_global_assignment -name FINAL_PLACEMENT_OPTIMIZATION ALWAYS
 # existed. If timing holds on the original configuration, they were never
 # needed; if it does not, they come back one at a time with the crash rate
 # measured for each.
-set_global_assignment -name FITTER_AGGRESSIVE_ROUTABILITY_OPTIMIZATION AUTOMATICALLY
+set_global_assignment -name FITTER_AGGRESSIVE_ROUTABILITY_OPTIMIZATION ALWAYS
 set_global_assignment -name FITTER_EFFORT "STANDARD FIT"
 # BALANCED, NOT AGGRESSIVE AREA. Aggressive Area crashed this fitter twice in
 # succession -- "Fatal Error: Segment Violation at (nil)" after placement
@@ -238,7 +238,7 @@ set_global_assignment -name FITTER_EFFORT "STANDARD FIT"
 # that trade.
 #
 # The other four area settings stay. They cost no block memory.
-set_global_assignment -name OPTIMIZATION_MODE "HIGH PERFORMANCE EFFORT"
+set_global_assignment -name OPTIMIZATION_MODE "AGGRESSIVE AREA"
 set_global_assignment -name ALLOW_POWER_UP_DONT_CARE ON
 set_global_assignment -name QII_AUTO_PACKED_REGISTERS NORMAL
 # BACK ON, AND NOT BY PREFERENCE. With this OFF the fitter dies with
@@ -248,9 +248,9 @@ set_global_assignment -name QII_AUTO_PACKED_REGISTERS NORMAL
 # the survivable failure -- quartus_sta and quartus_asm then finish the job on
 # the committed database. It is a ROUTER option and the crash is in routing.
 # The physical-synthesis options stay off; they are where the area is.
-set_global_assignment -name ROUTER_LCELL_INSERTION_AND_LOGIC_DUPLICATION ON
+set_global_assignment -name ROUTER_LCELL_INSERTION_AND_LOGIC_DUPLICATION OFF
 set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC ON
-set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_DUPLICATION ON
+set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_DUPLICATION OFF
 set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_RETIMING ON
 # AREA, NOT SPEED. The whole of the block below was tuned when there were
 # 8,940 ALM spare. There are 196.
@@ -272,7 +272,7 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_RETIMING ON
 # anyway -- attract mode, sound, tilemap -- so the miss is real but not fatal at
 # room temperature. Timing gets fixed by seed sweeping and by getting the
 # occupancy down, not by a technique that cannot produce a bitstream.
-set_global_assignment -name OPTIMIZATION_TECHNIQUE SPEED
+set_global_assignment -name OPTIMIZATION_TECHNIQUE AREA
 set_global_assignment -name MUX_RESTRUCTURE ON
 set_global_assignment -name REMOVE_REDUNDANT_LOGIC_CELLS ON
 set_global_assignment -name AUTO_DELAY_CHAINS_FOR_HIGH_FANOUT_INPUT_PINS ON
@@ -533,7 +533,6 @@ set_global_assignment -name FAMILY "Cyclone V"
 set_global_assignment -name CDF_FILE jtag.cdf
 set_global_assignment -name QIP_FILE sys/sys.qip
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_video_timing.sv
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_testpattern.sv
 set_global_assignment -name QIP_FILE rtl/pll/pll.qip
 set_global_assignment -name SDC_FILE Model2.sdc
 set_global_assignment -name SYSTEMVERILOG_FILE Model2.sv
@@ -754,3 +753,17 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_quad_store.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_raster_fill.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_raster_div.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_raster_band.sv
+
+# ---- AREA FOR THE CORE, SPEED FOR THE FRAMEWORK'S VIDEO OUTPUT ----
+# Model 1's configuration and its default. Measured here across two seeds:
+# 41,144 -> 37,554 ALM. The exemptions are the half that was missing when area
+# was tried here before -- area shrinks and slows everything, and the framework's
+# video output is the one place that cannot afford it.
+set_global_assignment -name AUTO_RESOURCE_SHARING ON
+set_instance_assignment -name OPTIMIZATION_TECHNIQUE SPEED -to "ascal:ascal"
+set_instance_assignment -name AUTO_RESOURCE_SHARING OFF -to "ascal:ascal"
+set_instance_assignment -name OPTIMIZATION_TECHNIQUE SPEED -to "osd:hdmi_osd"
+set_instance_assignment -name AUTO_RESOURCE_SHARING OFF -to "osd:hdmi_osd"
+set_instance_assignment -name OPTIMIZATION_TECHNIQUE SPEED -to "osd:vga_osd"
+set_instance_assignment -name AUTO_RESOURCE_SHARING OFF -to "osd:vga_osd"
+set_instance_assignment -name OPTIMIZATION_TECHNIQUE SPEED -to "pll_hdmi:pll_hdmi"

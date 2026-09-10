@@ -4680,7 +4680,6 @@ m2_video u_tilemap (
 
 wire        hs, vs, hblank, vblank, visible;
 wire  [9:0] hcnt, vcnt;
-wire  [7:0] pat_r, pat_g, pat_b;
 
 m2_video_timing u_timing
 (
@@ -4707,19 +4706,6 @@ assign vbs = vblank & ~vblank_d;
 reg vblank_d;
 always @(posedge clk_sys) if (ce_pix) vblank_d <= vblank;
 
-m2_testpattern u_pattern
-(
-	.clk(clk_sys),
-	.ce_pix(ce_pix),
-	.rst_n(game_rst_n),
-	.hcnt(hcnt),
-	.vcnt(vcnt),
-	.visible(visible),
-	.vblank_start(vbs),
-	.r(pat_r),
-	.g(pat_g),
-	.b(pat_b)
-);
 
 ///////////////////////   OVERLAY   //////////////////////////////
 //
@@ -4994,16 +4980,23 @@ m2_diag #(.NWORDS(24)) u_diag
 	// nothing to draw, so the test pattern stands in. After that the tilemap
 	// takes over. Seeing the pattern persist therefore means the copy never
 	// finished, which is a different failure from a tilemap that draws nothing.
-	.in_r(cp_done ? mix_r : pat_r),
-	.in_g(cp_done ? mix_g : pat_g),
-	.in_b(cp_done ? mix_b : pat_b),
+	.in_r(mix_r),
+	.in_g(mix_g),
+	.in_b(mix_b),
 	.out_r(ov_r), .out_g(ov_g), .out_b(ov_b)
 );
 end else begin : g_nodiag
 	// m2_diag is a pass-through filter, so its absence is a wire.
-	assign ov_r = cp_done ? mix_r : pat_r;
-	assign ov_g = cp_done ? mix_g : pat_g;
-	assign ov_b = cp_done ? mix_b : pat_b;
+	// THE TEST PATTERN IS GONE. A boot-time image the game never shows, and the
+	// critical path of the whole design: a combinational divide by 62 off hcnt,
+	// through the colour mux and straight out to the pin, about 22 ns of it.
+	// That fits a 20 ns period at 50 MHz by a whisker, which is why this design
+	// has sat near -0.2 ns setup for weeks. The 3D test bars on O[21] do the same
+	// job, and if the boot copy stalls the screen is black, which is its own
+	// diagnosis.
+	assign ov_r = mix_r;
+	assign ov_g = mix_g;
+	assign ov_b = mix_b;
 end endgenerate
 
 assign CLK_VIDEO = clk_sys;

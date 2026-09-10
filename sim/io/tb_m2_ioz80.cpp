@@ -7,9 +7,12 @@
 // and flag bytes R40 measured from the outside; and whether the board writes
 // the identity/settings region R41 concluded it must not.
 //
-// CEN_DIV=2 by default: a 24 MHz Z80 instead of 4 MHz. The firmware's delay
-// loops compress 6x and its behaviour is unchanged -- the same program runs
-// the same instructions in the same order. +cendiv=12 gives real pacing.
+// TICK_NUM=25 / TICK_DEN=50 by default: a 25 MHz Z80 instead of the board's
+// 4 MHz. The firmware's delay loops compress ~6x and its behaviour is unchanged
+// -- the same program runs the same instructions in the same order. Real pacing
+// is TICK_NUM=4, and it is an elaboration parameter on the harness, not a
+// plusarg: an earlier version of this note offered `+cendiv=12`, which was
+// never implemented and could not have worked.
 //
 // PASS here is deliberately weak -- the firmware ran and wrote SOMETHING --
 // because this harness is a discovery instrument first. The strong assertions
