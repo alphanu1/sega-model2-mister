@@ -13355,3 +13355,18 @@ flag under -Wall. The rule now reports it, and a sweep of the whole top
 with the class enabled finds no other. The flag is one driver: the stream
 block raises a one-cycle `sw_take`, the sweep block clears its own flag on
 it. Build restarted 00:48.
+
+*R237 on `build/fix3d5` (00:55, 09-12): projections abandoned on timeout =
+ZERO over 240 s on the board -- the late-result path is excluded. 304
+wedges streamed; the clean pairs repeat the signature: stray (167,188) or
+(168,189) against a cluster at (297-299, 187-190).* And the cluster's y is
+the point: 188 is four rows off the projection centre (192), so the
+vertex's VIEW y is near zero. A wrong RECIPROCAL -- a wrong z, or the
+quotient of someone else's divide -- moves sx by the whole error and sy by
+almost nothing there. "Right y, wrong x" does not single out the x
+multiply after all; it is exactly what a wrong 1/z looks like at the
+horizon. The divider is one unit shared by the projector (client 3) and
+the clipper (client 2); the clipper divides only when a plane cuts, so the
+interleaving is rare and timing-dependent -- the board's, not the desk's.
+Next at the desk: the pool's divide path under two clients issuing
+back-to-back, checking each quotient reaches the client that asked.
