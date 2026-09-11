@@ -12537,3 +12537,48 @@ with a 240 s capture: the build with every change of the day including
 the store's ready gate. `build/dbuf15` = dbuf14b + the block-RAM PCM
 lines (R221 step 1) + the MLAB clipper stack (R221 step 3) is in the
 fitter behind it: the first build that should come DOWN in ALM.
+
+*R221, dbuf15 (21:05): THE M10K BLOCKS ARE THE WALL, NOT THE BITS.* All
+four seeds refused at the fitter's RAM placement: 556 M10K blocks needed of
+553, bits only 77%. dbuf14b sat at 553/553 exactly. The two 32 x 64-bit
+PCM lines are 2 blocks each (a 64-bit word spans two 256 x 40 blocks, and
+the depth is wasted), so the move that saved ~4,100 registers cost 4 blocks
+the chip does not have. ALM before the refusal: 40,153 (96%), the first
+build to come down. Corrected rule for the rest of the register moves: a
+small, wide array goes to MLABs, not M10K -- an MLAB is 32 deep x 20 wide,
+one LAB, and a 32 x 64 array is four of them for ~40 ALMs against 2,048
+registers. M10K is for the deep arrays only, and there are none left to
+give. PCM lines re-tagged MLAB; the write and the same-slot read coincide
+on the miss (F_FETCH), whose output is not consumed -- F_ARM re-reads and
+F_ACK uses that. WAV byte-identical again.
+
+*R221, step 2 done at the desk (21:30): THE MULTIPCM STEPPING STATE IN
+MLABs.* The plan above said the per-voice state needs the tick schedule
+re-cut because five slot indices touch it in a cycle. Looking at who reads
+what: the stepper alone reads and writes s_pos, and s_start/loop/end are
+written only when a descriptor fetch completes and read only by the
+stepper. Two single-writer, single-reader arrays, no schedule change:
+`desc_ram` 32 x 55 {end, loop, start} and `pos_ram` 32 x 38, MLAB, read
+registered at `slot`, and at the slot that comes next on the tick that
+advances it (needed only if the sample CE were every clock; it is 1 in 5,
+kept anyway). Two things the flip-flop version did in place are beside the
+RAMs: key-on wrote position 0 -- now `pos_zero[slot]` reads as 0 until the
+stepper's first write clears it; and a descriptor completing on the cycle
+before the stepper takes that same slot would read the RAM stale -- the
+completed word is forwarded for one cycle (`desc_fwd`). The stepper cannot
+write while a fetch is in flight, so the two writers never meet; the
+key-on write and same-address read can meet on an MLAB (read output
+undefined) and that read is the one forwarded over. s_active, s_fmt12 and
+s_release stay registers (reset values). sreg (the CPU's 28 x 8 bytes) is
+read at play_slot, slot and picked in one cycle: still registers, next.
+PROOF: `make test_m2_sndboard` PASS and the WAV byte-identical -- but that
+run keys few voices; the real proof is a lockstep differential bench (the
+flip-flop module renamed beside the new one, same register writes, each
+with its own ROM model of identical per-request latency, every cycle
+comparing rom_req/addr/slot, sample_stb, out_l/out_r): 3 seeds x 4 CE
+patterns x 3-4 M cycles, 0 mismatches; and it CATCHES each mechanism
+removed -- no forwarding: 1,528 mismatches (only with sparse writes: dense
+writes never leave a voice stepping), no position-zero: 2.99 M, no
+prefetch: 1.97 M with CE every clock and 0 with CE 1 in 5. Removes 2 x
+2,604 registers and their 28:1 read muxes. `build/dbuf16` = dbuf14b + MLAB
+PCM lines + MLAB clipper stack + this.

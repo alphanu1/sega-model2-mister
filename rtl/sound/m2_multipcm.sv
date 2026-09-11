@@ -51,12 +51,45 @@ reg [4:0] cur_slot;
 reg       cur_slot_valid;
 reg [2:0] cur_reg;
 
-reg [21:0] s_start [0:27];
-reg [15:0] s_loop  [0:27];
-reg [16:0] s_end   [0:27];
+// THE PER-SLOT STEPPING STATE IS TWO MLAB RAMs, NOT 2,600 FLIP-FLOPS (R221).
+// Each has one writer and one reader, so each is a simple dual-port memory
+// and the two never need a true dual-port block:
+//   desc_ram {end, loop, start}: written when a descriptor fetch completes
+//            (key-on or sample change), read by the stepper.
+//   pos_ram  the 38-bit position: written and read by the stepper alone.
+// The stepper reads slot `slot`, and the read address moves to the next
+// slot on the tick that advances it, so the word is on the RAM output by
+// tick 0. Two things the flip-flop version did in place are done beside
+// the RAMs: key-on zeroed the position -- now it sets pos_zero[slot], which
+// reads as position 0 until the stepper's first write clears it; and a
+// descriptor completing the cycle before the stepper uses that same slot
+// would be read stale from the RAM -- the completed word is held one cycle
+// in desc_fwd and used instead. s_active, s_fmt12 and s_release stay
+// registers: the first two gate every use and must clear at reset, the
+// last has a reset value.
+(* ramstyle = "MLAB" *) reg [54:0] desc_ram [0:31];   // {end[16:0], loop[15:0], start[21:0]}
+(* ramstyle = "MLAB" *) reg [37:0] pos_ram  [0:31];
+reg [54:0] desc_rd;
+reg [37:0] pos_rd;
+reg [27:0] pos_zero;
+reg        desc_fwd;
+reg [54:0] desc_fwd_d;
+wire [4:0]  slot_next  = (slot == 5'd27) ? 5'd0 : slot + 5'd1;
+wire [4:0]  st_rd_addr = (!rom_req && tick == 3'd7) ? slot_next : slot;
+wire [54:0] desc_cur   = desc_fwd ? desc_fwd_d : desc_rd;
+wire [37:0] s_pos_cur   = pos_zero[slot] ? 38'd0 : pos_rd;
+wire [21:0] s_start_cur = desc_cur[21:0];
+wire [15:0] s_loop_cur  = desc_cur[37:22];
+wire [16:0] s_end_cur   = desc_cur[54:38];
+wire [54:0] desc_word   = {17'h10000 - {1'b0, df_buf[5], df_buf[6]},
+                           {df_buf[3], df_buf[4]},
+                           {df_buf[0][5:0], df_buf[1], df_buf[2]}};
+always @(posedge clk) begin
+    desc_rd <= desc_ram[st_rd_addr];
+    pos_rd  <= pos_ram[st_rd_addr];
+end
 reg        s_fmt12 [0:27];
 reg        s_active[0:27];
-reg [37:0] s_pos   [0:27];
 reg  [3:0] s_release [0:27];
 
 // Descriptor work is queued by sample writes and key-on.  key_wait records
@@ -163,6 +196,8 @@ always @(posedge clk) begin
         rom_is_desc <= 0;
         desc_pending <= 0;
         key_wait <= 0;
+        pos_zero <= 0;
+        desc_fwd <= 0;
         df_slot <= 0;
         df_sample <= 0;
         df_idx <= 0;
@@ -175,12 +210,8 @@ always @(posedge clk) begin
         out_l <= 0;
         out_r <= 0;
         for (ri = 0; ri < 28; ri = ri + 1) begin
-            s_start[ri] <= 0;
-            s_loop[ri] <= 0;
-            s_end[ri] <= 0;
             s_fmt12[ri] <= 0;
             s_active[ri] <= 0;
-            s_pos[ri] <= 0;
             s_release[ri] <= 4'hf;
             for (rj = 0; rj < 8; rj = rj + 1)
                 sreg[ri][rj] <= 0;
@@ -189,6 +220,7 @@ always @(posedge clk) begin
             df_buf[ri] <= 0;
     end
     else begin
+        desc_fwd <= 1'b0;                 // R221: the forwarded word lives one cycle
         // Register writes are on the Z80 clock domain represented by clk and
         // must not be dropped merely because the audio sample CE is low.
         if (cs && we) begin
@@ -238,17 +270,17 @@ always @(posedge clk) begin
                 df_buf[df_idx] <= rom_data;
                 if (df_idx == 4'd11) begin
                     df_busy <= 1'b0;
-                    s_start[df_slot] <= {df_buf[0][5:0], df_buf[1], df_buf[2]};
+                    desc_ram[df_slot] <= desc_word;                 // R221
+                    desc_fwd   <= (df_slot == st_rd_addr);
+                    desc_fwd_d <= desc_word;
                     s_fmt12[df_slot] <= df_buf[0][6];
-                    s_loop[df_slot] <= {df_buf[3], df_buf[4]};
-                    s_end[df_slot] <= 17'h10000 - {1'b0, df_buf[5], df_buf[6]};
                     s_release[df_slot] <= df_buf[10][3:0];
                     // Hardware copies descriptor defaults into LFO registers.
                     sreg[df_slot][6] <= df_buf[7];
                     sreg[df_slot][7] <= {4'b0000, rom_data[3:0]};
                     if (key_wait[df_slot]) begin
                         s_active[df_slot] <= 1'b1;
-                        s_pos[df_slot] <= 0;
+                        pos_zero[df_slot] <= 1'b1;                  // R221: position 0 until stepped
                         key_wait[df_slot] <= 1'b0;
                     end
                 end
@@ -322,17 +354,18 @@ always @(posedge clk) begin
                     reg [33:0] loop_span;
                     pitch = {sreg[slot][3][3:0], sreg[slot][2][7:2]};
                     step = pitch_step(sreg[slot][3][7:4], pitch);
-                    next_pos = s_pos[slot] + {13'd0, step};
-                    loop_span = ({17'd0, s_end[slot]} - {18'd0, s_loop[slot]}) << 16;
-                    if (next_pos >= ({21'd0, s_end[slot]} << 16) && loop_span != 0)
+                    next_pos = s_pos_cur + {13'd0, step};
+                    loop_span = ({17'd0, s_end_cur} - {18'd0, s_loop_cur}) << 16;
+                    if (next_pos >= ({21'd0, s_end_cur} << 16) && loop_span != 0)
                         next_pos = next_pos - {4'd0, loop_span};
-                    s_pos[slot] <= next_pos;
+                    pos_ram[slot]  <= next_pos;                     // R221
+                    pos_zero[slot] <= 1'b0;
                     play_slot <= slot;
                     rom_req <= 1'b1;
                     rom_is_desc <= 1'b0;
                     // 12-bit packed samples are identified and retained in
                     // state, but the bounded v1 datapath still fetches 8-bit.
-                    rom_addr <= banked(s_start[slot] + s_pos[slot][37:16]);
+                    rom_addr <= banked(s_start_cur + s_pos_cur[37:16]);
                 end
             end
         end

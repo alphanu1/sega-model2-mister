@@ -60,14 +60,15 @@ module m2_pcm_fetch #(
   wire [7:0] by_data = m_data[{3'd0, c_addr[2:0]} * 8 +: 8];
 
   // ---------------------------------------------------------------- cached
-  // THE LINE DATA IS A BLOCK RAM, NOT 2,048 FLIP-FLOPS (R221). One M10K per
-  // unit, read registered: the word for the requesting slot is fetched on
+  // THE LINE DATA IS A MEMORY, NOT 2,048 FLIP-FLOPS (R221). MLABs, because
+  // the M10K blocks are all spoken for (553 of 553; two of these in M10K
+  // took 4 and the fitter refused the design). Read registered: the word for the requesting slot is fetched on
   // the request's first cycle (F_LOOK) and held on the RAM's output while
   // the slot address stands, which it does for the whole request. A miss
   // writes the line and the same held address reads it back by F_ACK. One
   // cycle more per hit than the flip-flop version. Tags and valid bits stay
   // in registers: 32 x 20 bits, and the valid bits must clear at reset.
-  (* ramstyle = "M10K" *) logic [63:0] buf_q [32];
+  (* ramstyle = "MLAB" *) logic [63:0] buf_q [32];
   logic [63:0] buf_rd;
   logic [21:3] tag_q [32];
   logic [31:0] val_q;

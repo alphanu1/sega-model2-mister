@@ -1,6 +1,6 @@
 # Handoff
 
-**Updated:** 2026-09-11 20:40. Study entries R176-R221.
+**Updated:** 2026-09-11 21:35. Study entries R176-R221.
 
 ## WHERE 2026-09-11 LEFT IT
 
@@ -9,8 +9,11 @@ s15 (97% ALM, hold positive on all clocks, setup miss on the HDMI PLL only).
 White, flat-shaded cars (the colour is a constant by design: lighting is not
 built), behind the UI text, over a steadily scrolling background, at the
 game's own 30 Hz list rate, with the store dropping nothing. `build/dbuf15`
-(the first register-to-block-RAM moves) is in the fitter; expect it to come
-DOWN in ALM.
+(PCM lines to M10K + MLAB clipper stack) REFUSED TO FIT: 556 M10K blocks of
+553 -- the chip has no blocks left, only bits (77%). Small wide arrays go
+to MLABs. `build/dbuf16` (PCM lines and the MultiPCM stepping state in
+MLABs, clipper stack MLAB) is in the fitter; ALM was 96% before dbuf15's
+refusal, the first build to come down.
 
 **Fixed today, each with a study entry and a board or bench proof:**
 - R208 walker/engine took one held acknowledge many times (stream one word ahead)
@@ -23,10 +26,10 @@ DOWN in ALM.
 - R217/R218 projector: strip-shared vertices and uncut clipper vertices keep their pixels (467 -> 177 cycles/polygon)
 - R219 the reference's culling: back faces of single-sided polygons and link type 0 (45% of the title's polygons)
 - R220 the sorted list was overwritten by the next walk before the swap (store takes quads only while collecting)
-- R221 PCM fetch lines to M10K (WAV-identical), clipper stack to MLAB (2,003 checks) -- in dbuf15
+- R221 PCM fetch lines to MLAB (WAV-identical), clipper stack to MLAB (2,003 checks), MultiPCM per-voice position/descriptor state to MLABs (lockstep differential bench vs the flip-flop module, 0 mismatches, catches each mechanism removed) -- in dbuf16
 
 **Open, in order:**
-1. ALM: 97% fitted; the fitter charges an ALM per register above ~92% and crashes on half its seeds. dbuf15 measures the first two moves. Next: the MultiPCMs' per-voice state (~4,500 bits each; touched by three slot indices per tick, so the schedule is re-cut first), then the spent probes. Target < 85% before lighting.
+1. ALM: 97% fitted; the fitter charges an ALM per register above ~92% and crashes on half its seeds. dbuf16 measures three moves (~10,000 registers). Next: the MultiPCMs' sreg (28 x 8 bytes, read at three slot indices a cycle -- per-register MLABs or a re-cut), then the spent probes in Model2.sv. M10K: 553/553, nothing more goes there. Target < 85% before lighting.
 2. Lighting: light vector (cmd 0x0a) and texture-parameter table (cmd 0x0d) captured by the walker; dot(normal, light) in the engine; luma -> colour-translation lookup at q_col. Small; needs the ALM room.
 3. Throughput: quad projector still ~14% of geometry time; the transform ~14%; `dbg_hold` reaches 3 frames in stretches, partly the game's own list timing (separate the two).
 4. Vertical scroll: fixed by R212. R200's band-13 cut: superseded by 8-row bands? -- re-test the 3D test bars.
