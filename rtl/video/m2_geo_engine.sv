@@ -125,6 +125,14 @@ module m2_geo_engine #(
   output logic [31:0] v2x, v2y, v2z,
   output logic [31:0] v3x, v3y, v3z,
   output logic [31:0] poly_attr,
+  // R217 (slimmed): the strip's carry, stated rather than searched for.
+  // prev_link is the link mode of the last EMITTED polygon of this object,
+  // chain_ok says that polygon was emitted (not culled, not the first) so
+  // its projected pixels are the ones vertices 0 and 1 of this polygon
+  // carry: default carry -> v0 = last v3, v1 = last v2; link 1 -> v0 =
+  // last v2, v1 = last v1; link 3 -> v0 = last v0, v1 = last v3.
+  output logic [1:0]  poly_prev_link,
+  output logic        poly_chain_ok,
   // The polygon's normal, in OBJECT space -- it still needs rotating by the
   // matrix, which is transform_vector (the 3x3 without the translation row).
   output logic [31:0] nrm_x, nrm_y, nrm_z,
@@ -200,6 +208,7 @@ module m2_geo_engine #(
   logic [31:0] dprod [3];
   logic [1:0]  dstep, dgot;
   logic        dot_neg;
+  logic        emitted_last;     // the polygon just emitted went out (R217)
   logic        fsel;         // 0 = scaling x, 1 = scaling y
 
   assign mem_addr = ptr;
@@ -227,6 +236,7 @@ module m2_geo_engine #(
       dbg_capped <= 16'd0; dbg_culled <= 16'd0;
       fadd_req <= 1'b0; fadd_a <= 32'd0; fadd_b <= 32'd0; dpx <= 32'd0; dpy <= 32'd0; dpz <= 32'd0;
       dprod[0] <= 32'd0; dprod[1] <= 32'd0; dprod[2] <= 32'd0; dstep <= 2'd0; dgot <= 2'd0; dot_neg <= 1'b0;
+      poly_prev_link <= 2'd0; poly_chain_ok <= 1'b0; emitted_last <= 1'b0;
       nrm[0] <= 32'd0; nrm[1] <= 32'd0; nrm[2] <= 32'd0; xf_translate <= 1'b1;
       ptr <= 24'd0; remain <= 32'd0; widx <= 2'd0; dst <= 2'd0; skipn <= 2'd0;
       attr <= 32'd0; xf_in_valid <= 1'b0;
@@ -242,6 +252,7 @@ module m2_geo_engine #(
 
       case (st)
         E_IDLE: if (start) begin
+          poly_chain_ok <= 1'b0; emitted_last <= 1'b0;   // R217: a new object, no carry
           // oba's low bits are the offset; which memory it selects is decoded
           // by the top level, which owns the bases.
           ptr    <= oba[23:0];
@@ -418,6 +429,7 @@ module m2_geo_engine #(
           // back of a single-sided polygon. The strip carry still runs.
           remain <= remain - 32'd1;
           dbg_culled <= dbg_culled + 16'd1;
+          emitted_last <= 1'b0;
           st <= E_LINK;
         end else begin
           poly_valid <= 1'b1;
@@ -425,12 +437,15 @@ module m2_geo_engine #(
             poly_valid <= 1'b0;
             dbg_polys  <= dbg_polys + 16'd1;
             remain     <= remain - 32'd1;
+            emitted_last <= 1'b1;
             st         <= E_LINK;
           end
         end
 
         // ---- the carry, chosen by (attr >> 8) & 3. Study R171.
         E_LINK: begin
+          poly_prev_link <= attr[9:8];
+          poly_chain_ok  <= emitted_last;
           case (attr[9:8])
             2'd1: begin                     // reuse P0(n-1) and P0(n)
               p1prev[0] <= p0cur[0]; p1prev[1] <= p0cur[1]; p1prev[2] <= p0cur[2];

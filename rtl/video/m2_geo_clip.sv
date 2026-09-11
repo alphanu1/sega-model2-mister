@@ -190,9 +190,14 @@ module m2_geo_clip (
   // flag per vertex; only a vertex made by a cut is projected at emission.
   // The projection is the same hardware either way, so the pixel is
   // bit-identical to what a reprojection would have produced.
-  logic signed [15:0] sk_sx [NSTK][4], sk_sy [NSTK][4];
-  logic               sk_px [NSTK][4];          // 1 = has its pixel already
+  // SLIMMED: the stack carries a 2-bit id of the input vertex and a flag,
+  // not the pixel; the four input pixels are held once (ipx/ipy). The
+  // 32-bit-per-vertex stack was +664 registers on a device at 98%.
+  logic [1:0]         sk_id [NSTK][4];
+  logic               sk_px [NSTK][4];          // 1 = an input vertex, pixel known
+  logic [1:0]         qid [4];
   logic               qpx [4];
+  logic signed [15:0] ipx [4], ipy [4];
   logic [2:0]         sp;
 
   // ------------------------------------------------------------ the plane
@@ -359,14 +364,15 @@ module m2_geo_clip (
       a_col <= '0; a_z <= '0; a_moire <= 1'b0;
       dbg_in <= '0; dbg_out <= '0; dbg_dropped <= '0;
       for (si = 0; si < 4; si = si + 1) begin
-        qx[si] <= '0; qy[si] <= '0; qz[si] <= '0; qsx[si] <= '0; qsy[si] <= '0; qpx[si] <= 1'b0;
+        qx[si] <= '0; qy[si] <= '0; qz[si] <= '0; qsx[si] <= '0; qsy[si] <= '0; qpx[si] <= 1'b0; qid[si] <= 2'd0;
+        ipx[si] <= '0; ipy[si] <= '0;
         tx[si] <= '0; ty[si] <= '0; tz[si] <= '0;
       end
       for (si = 0; si < NSTK; si = si + 1) begin
         sk_lvl[si] <= '0;
         for (sv = 0; sv < 4; sv = sv + 1) begin
           sk_x[si][sv] <= '0; sk_y[si][sv] <= '0; sk_z[si][sv] <= '0;
-          sk_sx[si][sv] <= '0; sk_sy[si][sv] <= '0; sk_px[si][sv] <= 1'b0;
+          sk_id[si][sv] <= 2'd0; sk_px[si][sv] <= 1'b0;
         end
       end
     end else begin
@@ -376,9 +382,10 @@ module m2_geo_clip (
           qx[1] <= in_x1; qy[1] <= in_y1; qz[1] <= in_z1;
           qx[2] <= in_x2; qy[2] <= in_y2; qz[2] <= in_z2;
           qx[3] <= in_x3; qy[3] <= in_y3; qz[3] <= in_z3;
-          qsx[0] <= in_sx0; qsy[0] <= in_sy0; qsx[1] <= in_sx1; qsy[1] <= in_sy1;
-          qsx[2] <= in_sx2; qsy[2] <= in_sy2; qsx[3] <= in_sx3; qsy[3] <= in_sy3;
+          ipx[0] <= in_sx0; ipy[0] <= in_sy0; ipx[1] <= in_sx1; ipy[1] <= in_sy1;
+          ipx[2] <= in_sx2; ipy[2] <= in_sy2; ipx[3] <= in_sx3; ipy[3] <= in_sy3;
           qpx[0] <= 1'b1; qpx[1] <= 1'b1; qpx[2] <= 1'b1; qpx[3] <= 1'b1;   // R218
+          qid[0] <= 2'd0; qid[1] <= 2'd1; qid[2] <= 2'd2; qid[3] <= 2'd3;
           a_col <= in_col; a_z <= in_z; a_moire <= in_moire;
           lvl <= 3'd0; sp <= '0; ti <= '0;
           if (dbg_in != 16'hffff) dbg_in <= dbg_in + 16'd1;
@@ -391,15 +398,14 @@ module m2_geo_clip (
           lvl <= sk_lvl[0];
           for (sv = 0; sv < 4; sv = sv + 1) begin
             qx[sv] <= sk_x[0][sv]; qy[sv] <= sk_y[0][sv]; qz[sv] <= sk_z[0][sv];
-            qsx[sv] <= sk_sx[0][sv]; qsy[sv] <= sk_sy[0][sv]; qpx[sv] <= sk_px[0][sv];
+            qid[sv] <= sk_id[0][sv]; qpx[sv] <= sk_px[0][sv];
           end
           for (si = 0; si < NSTK-1; si = si + 1) begin
             sk_lvl[si] <= sk_lvl[si+1];
             for (sv = 0; sv < 4; sv = sv + 1) begin
               sk_x[si][sv] <= sk_x[si+1][sv]; sk_y[si][sv] <= sk_y[si+1][sv];
               sk_z[si][sv] <= sk_z[si+1][sv];
-              sk_sx[si][sv] <= sk_sx[si+1][sv]; sk_sy[si][sv] <= sk_sy[si+1][sv];
-              sk_px[si][sv] <= sk_px[si+1][sv];
+              sk_id[si][sv] <= sk_id[si+1][sv]; sk_px[si][sv] <= sk_px[si+1][sv];
             end
           end
           sp  <= sp - 3'd1;
@@ -487,6 +493,7 @@ module m2_geo_clip (
         // A reciprocal for each vertex the clipper CREATED; the others keep
         // the pixel they arrived with (R218).
         K_EPROJ:  if (qpx[ti]) begin
+          qsx[ti] <= ipx[qid[ti]]; qsy[ti] <= ipy[qid[ti]];
           if (ti == 2'd3) kst <= K_EMIT;
           else ti <= ti + 2'd1;
         end else if (pj_ready) kst <= K_EPROJW;
@@ -508,8 +515,7 @@ module m2_geo_clip (
             for (sv = 0; sv < 4; sv = sv + 1) begin
               sk_x[si][sv] <= sk_x[si-1][sv]; sk_y[si][sv] <= sk_y[si-1][sv];
               sk_z[si][sv] <= sk_z[si-1][sv];
-              sk_sx[si][sv] <= sk_sx[si-1][sv]; sk_sy[si][sv] <= sk_sy[si-1][sv];
-              sk_px[si][sv] <= sk_px[si-1][sv];
+              sk_id[si][sv] <= sk_id[si-1][sv]; sk_px[si][sv] <= sk_px[si-1][sv];
             end
           end
           sk_lvl[0] <= lvl + 3'd1;
@@ -524,9 +530,8 @@ module m2_geo_clip (
             sk_z[0][sv]  <= k[2] ? tz[k[1:0]]  : qz[k[1:0]];
             // R218: a temporary is a cut vertex and has no pixel yet; an
             // original carries the pixel it came with.
-            sk_sx[0][sv] <= k[2] ? 16'sd0 : qsx[k[1:0]];
-            sk_sy[0][sv] <= k[2] ? 16'sd0 : qsy[k[1:0]];
-            sk_px[0][sv] <= k[2] ? 1'b0   : qpx[k[1:0]];
+            sk_id[0][sv] <= k[2] ? 2'd0 : qid[k[1:0]];
+            sk_px[0][sv] <= k[2] ? 1'b0 : qpx[k[1:0]];
           end
           sp <= sp + 3'd1;
           if ((ccase == 2'd2 || ccase == 2'd3) && !second_child)

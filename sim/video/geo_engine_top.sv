@@ -46,7 +46,7 @@ module m2_geo_engine_top (
     .poly_valid(poly_valid), .poly_ready(poly_ready),
     .v0x(v0x), .v0y(v0y), .v0z(v0z), .v1x(v1x), .v1y(v1y), .v1z(v1z),
     .v2x(v2x), .v2y(v2y), .v2z(v2z), .v3x(v3x), .v3y(v3y), .v3z(v3z),
-    .poly_attr(poly_attr), .nrm_x(nrm_x), .nrm_y(nrm_y), .nrm_z(nrm_z), .dbg_polys(dbg_polys), .dbg_objects(dbg_objects), .dbg_capped(dbg_capped), .dbg_culled(dbg_culled)
+    .poly_attr(poly_attr), .nrm_x(nrm_x), .nrm_y(nrm_y), .nrm_z(nrm_z), .dbg_polys(dbg_polys), .dbg_objects(dbg_objects), .dbg_capped(dbg_capped), .dbg_culled(dbg_culled), .poly_prev_link(), .poly_chain_ok()
   );
 
   logic [1:0] p_mul_req, p_mul_gnt, p_mul_rsp;

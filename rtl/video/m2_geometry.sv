@@ -158,6 +158,7 @@ module m2_geometry (
     .v0x(v0x), .v0y(v0y), .v0z(v0z), .v1x(v1x), .v1y(v1y), .v1z(v1z),
     .v2x(v2x), .v2y(v2y), .v2z(v2z), .v3x(v3x), .v3y(v3y), .v3z(v3z),
     .poly_attr(poly_attr), .nrm_x(nrm_x), .nrm_y(nrm_y), .nrm_z(nrm_z),
+    .poly_prev_link(poly_prev_link), .poly_chain_ok(poly_chain_ok),
     .dbg_polys(dbg_polys), .dbg_objects(dbg_objects), .dbg_capped(dbg_capped),
     .dbg_culled(dbg_culled)
   );
@@ -276,19 +277,24 @@ module m2_geometry (
   // carried points are copies of registers, not recomputed. A miss costs
   // what it did before; the cache is cleared with the rest at reset only,
   // because a stale hit needs the same three floats to recur by chance.
-  logic [31:0] cx [4], cy [4], cz [4];
+  // SLIMMED: no comparators. The engine says which of the last polygon's
+  // vertices this one carries (poly_prev_link) and whether that polygon was
+  // emitted (poly_chain_ok); the eight 96-bit comparators were +465 ALUTs
+  // on a device at 98% and hit two times in three, this hits every time.
   logic signed [15:0] csx [4], csy [4];
-  logic        cvalid;
+  logic        cvalid;                 // the last polygon's pixels are good
+  logic [1:0]  poly_prev_link;
+  logic        poly_chain_ok;
   logic [1:0]  hit_i [2];
   logic [1:0]  hit;
   always_comb begin
-    for (int k = 0; k < 2; k++) begin
-      hit[k] = 1'b0; hit_i[k] = 2'd0;
-      for (int j = 0; j < 4; j++)
-        if (cvalid && hx[k] == cx[j] && hy[k] == cy[j] && hz[k] == cz[j]) begin
-          hit[k] = 1'b1; hit_i[k] = 2'(j);
-        end
-    end
+    case (poly_prev_link)
+      2'd1:    begin hit_i[0] = 2'd2; hit_i[1] = 2'd1; end   // v0 = last v2, v1 = last v1
+      2'd3:    begin hit_i[0] = 2'd0; hit_i[1] = 2'd3; end   // v0 = last v0, v1 = last v3
+      default: begin hit_i[0] = 2'd3; hit_i[1] = 2'd2; end   // v0 = last v3, v1 = last v2
+    endcase
+    hit[0] = cvalid && poly_chain_ok;
+    hit[1] = cvalid && poly_chain_ok;
   end
   wire skip_here = (qi < 2'd2) && hit[qi[0]];
 
@@ -348,7 +354,7 @@ module m2_geometry (
       qst <= Q_IDLE; qi <= 2'd0; clip_in_valid <= 1'b0; hzmin <= 32'd0;
       dbg_nonfinite <= 16'd0; pj_wait <= 10'd0; dbg_pj_lost <= 16'd0;
       cvalid <= 1'b0;
-      for (int k = 0; k < 4; k++) begin cx[k] <= 32'd0; cy[k] <= 32'd0; cz[k] <= 32'd0; csx[k] <= 16'sd0; csy[k] <= 16'sd0; end
+      for (int k = 0; k < 4; k++) begin csx[k] <= 16'sd0; csy[k] <= 16'sd0; end
       for (int k = 0; k < 4; k++) begin
         hx[k] <= 32'd0; hy[k] <= 32'd0; hz[k] <= 32'd0;
         sx[k] <= 16'sd0; sy[k] <= 16'sd0;
@@ -361,6 +367,7 @@ module m2_geometry (
         // stall the engine instead of the clipper and fix nothing.
         Q_IDLE: if (poly_valid && poly_bad) begin
           dbg_nonfinite <= dbg_nonfinite + 16'd1;
+          cvalid <= 1'b0;                        // R217: a refused polygon breaks the chain
         end else if (poly_valid) begin
           hx[0] <= v0x; hy[0] <= v0y; hz[0] <= v0z;
           hx[1] <= v1x; hy[1] <= v1y; hz[1] <= v1z;
@@ -416,10 +423,7 @@ module m2_geometry (
           clip_in_valid <= 1'b0;
           qst <= Q_IDLE;
           // R217: remember this polygon's vertices and their pixels.
-          for (int k = 0; k < 4; k++) begin
-            cx[k] <= hx[k]; cy[k] <= hy[k]; cz[k] <= hz[k];
-            csx[k] <= sx[k]; csy[k] <= sy[k];
-          end
+          for (int k = 0; k < 4; k++) begin csx[k] <= sx[k]; csy[k] <= sy[k]; end
           cvalid <= 1'b1;
         end
 
