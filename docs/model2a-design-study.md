@@ -12180,3 +12180,42 @@ data arrays are per bank again with the bank selecting the result
 (`vtx0_0/vtx0_1` ... `att_0/att_1`), key and `idx_b` shared. Rule for
 this device, now written down: NEVER deepen an M10K array past 2048 to
 merge two of them; the 4096 x 2 mode is the least dense. `build/dbuf9`.
+
+**R215 -- THE BUSIEST TITLE FRAMES CARRY ~4,200 QUADS AND THE STORE HOLDS
+2,048: HALF THE SCENE IS DROPPED, WHICH IS THE "3D MOSTLY MISSING". THE PAIR
+CACHES DID NOT SHORTEN THE COLLECT: THE ENGINE'S ARITHMETIC IS THE LIMIT.**
+2026-09-11, 13:20. `build/dbuf9` s14 (everything to R214; 91% ALM, 77%
+block memory, hold positive on all clocks, setup -0.324 on the HDMI PLL
+only), 240 s from the core load, the drop counters on the record:
+
+    store dropped per frame (max per slice)   2036, 2148, 1321, 1992, 1252
+    quads held (x16)                          at the 2,048 ceiling in every slice
+    push DMA dropped                          0
+    frame_start -> P_READY, ms (med / max)    5.3-13.6 / 17.4   (dbuf6: 4.3-14.4 / 17.4)
+    hold (frames-1 per list)                  1 mostly, 2 for a whole slice, as dbuf6
+    CPU: frame wait 33.8%, mailbox 4.1%, render 12.0%
+
+So 2,048 + 2,148 = ~4,200 quads in the heaviest frames, against MAME's own
+measurement of a 4,798-record peak frame (m2_quad_store's header). The
+store keeps the first 2,048 in submission order and drops the rest, and
+what the game submits last is what is missing on the screen. The user's
+"still the same" on dbuf9 is this. And the collect did not move with the
+walker's and engine's port trips halved, so R214's premise was wrong:
+memory latency was not the collect's cost; the engine's per-polygon
+transform/clip/project is.
+
+Two roads, in order of cost:
+  1. Reject at the store's door what cannot draw: a quad whose screen
+     bounding box is under a pixel. The bench's quad dump counts how much
+     of the title's 4,200 that is. Free if it is a lot; nothing if it is
+     not.
+  2. Vertex words to SDRAM. Per entry the store keeps the 24-bit key, the
+     29-bit attribute and the index on chip and writes the 96-bit vertex
+     word out through the arbiter (R209); the replay fetches vertices only
+     on a band hit. Two 4,096-entry banks then cost about what two 2,048
+     banks with vertices cost now (4096 x 2 blocks: key 12, att 15, index
+     2 x 6 -- ~39 a bank), and the SDRAM traffic is ~4 MB/s of writes and
+     ~5 MB/s of reads. The port is the question: the sweeper's port 0 is
+     the free one.
+The collect time is a third item: the engine's cycles per polygon, which
+the bench can measure directly.

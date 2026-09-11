@@ -1,6 +1,6 @@
 # Handoff
 
-**Updated:** 2026-09-11 12:50. Study entries R176-R214. R172 WITHDRAWN, R185
+**Updated:** 2026-09-11 13:25. Study entries R176-R215. R172 WITHDRAWN, R185
 partly RETRACTED, R189 corrected by R191, R196's central claim WITHDRAWN the
 same day, R206 WITHDRAWN, R207 closed by R208.
 
@@ -35,6 +35,14 @@ completes, 4 minutes clean -- render chain 10.6%, mailbox poll 3.7%, no
 parking, no drops. Ten-minute soak from a fresh load also clean: mailbox
 poll 3.9%, render chain 12.5%, never parked. R209 CONFIRMED.** The board is
 on it. Study R209.
+
+**dbuf9 s14 ON THE BOARD (13:20), everything to R214, fits at 91%:** the
+store DROPS up to 2,148 quads a frame on top of 2,048 held -- the busiest
+frames carry ~4,200 (MAME's peak is 4,798) and the last-submitted half is
+what is missing on screen. Push DMA drops 0. The pair caches did not shorten
+the collect (5-14 ms as before): the engine's arithmetic is the limit, not
+memory. Next: count sub-pixel quads in the bench (free rejection if many);
+else vertex words to SDRAM with 4,096-entry banks. Study R215.**
 
 **dbuf7 did not fit (74,800 ALUTs): the two-bank store's final-order array
 lost a read port to registers, and every vertex array had been duplicated
