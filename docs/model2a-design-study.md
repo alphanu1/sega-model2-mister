@@ -12354,3 +12354,15 @@ cache hits 191,042 of ~294,000 grants, so a strip's shared vertices are
 found about two times in three -- the misses are the polygons after a
 refused non-finite one or a skip, which break the chain) and the vertex
 transform's 14.3%. `build/dbuf11` = dbuf10 + R217 + R218.
+
+*dbuf10 s15 on the board (15:25), R216's rejection measured:* tiny quads
+refused up to 1,440 a frame, and the store STILL drops 646-2,110 a frame
+with quads held at the 2,048 ceiling in every slice. The heaviest frames
+on the board carry ~5,000 quads before the rejection, more than the
+bench's 4,200, and the reference's own 4,798 "records, of which not all
+emit" says the same. R216 was worth what the histogram promised and it
+is not enough: the store needs ~4,096 a bank, and on this device that is
+the vertex words in SDRAM (R215's road 2) unless the reference emits
+fewer polygons than we do -- which is the next thing to check before
+building it. Hold: 1 mostly, 2 for a slice, as dbuf6/9 (no R217/R218 in
+this build). CPU budget unchanged.
