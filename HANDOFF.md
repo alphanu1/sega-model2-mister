@@ -1,8 +1,39 @@
 # Handoff
 
-**Updated:** 2026-09-11 20:25. Study entries R176-R221. R172 WITHDRAWN, R185
-partly RETRACTED, R189 corrected by R191, R196's central claim WITHDRAWN the
-same day, R206 WITHDRAWN, R207 closed by R208.
+**Updated:** 2026-09-11 20:40. Study entries R176-R221.
+
+## WHERE 2026-09-11 LEFT IT
+
+**The whole 3D path runs on hardware for the first time.** Board: `build/dbuf14b`
+s15 (97% ALM, hold positive on all clocks, setup miss on the HDMI PLL only).
+White, flat-shaded cars (the colour is a constant by design: lighting is not
+built), behind the UI text, over a steadily scrolling background, at the
+game's own 30 Hz list rate, with the store dropping nothing. `build/dbuf15`
+(the first register-to-block-RAM moves) is in the fitter; expect it to come
+DOWN in ALM.
+
+**Fixed today, each with a study entry and a board or bench proof:**
+- R208 walker/engine took one held acknowledge many times (stream one word ahead)
+- R209 shared write port wedged when the TGP and the push DMA collided (arbiter, four-phase)
+- R211 flashing: a list every second frame drawn from a single quad store (double-buffered, 191-bit entries)
+- R212 background jumping: the TGP's atan/inv units were Model 1's; gpio0 was tied low
+- R213 3D drew over the UI (reference order); 8-row bands; buffer-release settle
+- R214 pair caches on port 4 (halve trips; not the collect's cost -- kept)
+- R215/R216 frames of ~5,000 quads vs 2,048 held; sub-2-px quads refused (46%)
+- R217/R218 projector: strip-shared vertices and uncut clipper vertices keep their pixels (467 -> 177 cycles/polygon)
+- R219 the reference's culling: back faces of single-sided polygons and link type 0 (45% of the title's polygons)
+- R220 the sorted list was overwritten by the next walk before the swap (store takes quads only while collecting)
+- R221 PCM fetch lines to M10K (WAV-identical), clipper stack to MLAB (2,003 checks) -- in dbuf15
+
+**Open, in order:**
+1. ALM: 97% fitted; the fitter charges an ALM per register above ~92% and crashes on half its seeds. dbuf15 measures the first two moves. Next: the MultiPCMs' per-voice state (~4,500 bits each; touched by three slot indices per tick, so the schedule is re-cut first), then the spent probes. Target < 85% before lighting.
+2. Lighting: light vector (cmd 0x0a) and texture-parameter table (cmd 0x0d) captured by the walker; dot(normal, light) in the engine; luma -> colour-translation lookup at q_col. Small; needs the ALM room.
+3. Throughput: quad projector still ~14% of geometry time; the transform ~14%; `dbg_hold` reaches 3 frames in stretches, partly the game's own list timing (separate the two).
+4. Vertical scroll: fixed by R212. R200's band-13 cut: superseded by 8-row bands? -- re-test the 3D test bars.
+5. Textures: the largest block left; see R215 road 2 for vertex words in SDRAM if capacity returns as an issue.
+6. `make test_mb86233_regs` fails on the committed tree (pre-existing, not investigated).
+
+**Rules learned today, written into the study:** an M10K deeper than 2048 is the least dense shape (R211 fit); model the OWNER's timing in a port test, not the port's (R209); above 92% fitted, registers cost an ALM each (R221).
 
 ---
 
