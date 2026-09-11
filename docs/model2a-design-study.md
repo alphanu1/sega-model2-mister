@@ -12530,3 +12530,10 @@ issuing vertex pcnt). The shift-register version moved 1,920 registers on
 every push and pop. Pushes and pops happen only for polygons a plane
 cuts, so the cycles are nothing. `tb_m2_geo_clip` 2,003 checks,
 `tb_m2_geometry` 30, boot bench pass. In the build after dbuf15.
+
+*dbuf14b (20:20): fits at 40,555-40,758 ALM (97%), as dbuf13 -- R220 adds
+no logic. s15 (setup -0.568 on the HDMI PLL only, hold +0.226) deployed
+with a 240 s capture: the build with every change of the day including
+the store's ready gate. `build/dbuf15` = dbuf14b + the block-RAM PCM
+lines (R221 step 1) + the MLAB clipper stack (R221 step 3) is in the
+fitter behind it: the first build that should come DOWN in ALM.

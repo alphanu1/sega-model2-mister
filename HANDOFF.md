@@ -1,6 +1,6 @@
 # Handoff
 
-**Updated:** 2026-09-11 19:45. Study entries R176-R221. R172 WITHDRAWN, R185
+**Updated:** 2026-09-11 20:25. Study entries R176-R221. R172 WITHDRAWN, R185
 partly RETRACTED, R189 corrected by R191, R196's central claim WITHDRAWN the
 same day, R206 WITHDRAWN, R207 closed by R208.
 
@@ -35,6 +35,10 @@ completes, 4 minutes clean -- render chain 10.6%, mailbox poll 3.7%, no
 parking, no drops. Ten-minute soak from a fresh load also clean: mailbox
 poll 3.9%, render chain 12.5%, never parked. R209 CONFIRMED.** The board is
 on it. Study R209.
+
+**dbuf14b s15 ON THE BOARD (20:20): everything to R220; 97% ALM. Capture
+running. `build/dbuf15` (+ block-RAM PCM lines + MLAB clipper stack) in the
+fitter -- the first build expected to come down in ALM.**
 
 **R221 step 1 (19:40): the PCM fetch units' line data is block RAM, sound
 output byte-identical (WAV compared). ~4,100 registers freed; in the build
