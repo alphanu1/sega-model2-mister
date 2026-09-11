@@ -2689,126 +2689,14 @@ m2_geometry u_geometry (
 	.dbg_clip_state(geo_clip_state)
 );
 
-// ONE KNOWN-GOOD QUAD PER FRAME, behind status[21]. A green rectangle from
-// (160,120) to (340,260) at z=1.0 -- wound the same way the geometry winds its
-// quads, so it exercises the same path and not a special case. Issued once at
-// vblank, then q_end, which is exactly the sequence a real frame produces.
-// THE OSD's STATUS BITS ARE REGISTERED BEFORE THEY REACH THE RENDERER (R229).
-//
-// `status` comes out of hps_io on its own clock and Quartus treats it as a
-// real launch. Used raw, status[21] -- the test-quad enable -- fanned out
-// through the quad source mux, the store's write path and its counters, and
-// at 60 MHz that was THE core clock's critical path: 30 of the 30 worst,
-// hps_io -> m2_quad_store, -1.735 ns, holding the whole design to 54.3 MHz.
-// A user setting changes at human speed and nothing downstream cares about
-// the cycle it lands on, so two flops cost nothing and hand the fitter a
-// local register to place beside the logic it feeds.
-logic [2:0] tq_en_s, tq_small_s;
-always_ff @(posedge clk_sys) begin
-	tq_en_s    <= {tq_en_s[1:0],    status[21]};
-	tq_small_s <= {tq_small_s[1:0], status[22]};
-end
-wire tq_en = tq_en_s[2];
-logic tq_valid, tq_end;
-logic [1:0] tq_st;
-logic [3:0] tq_dly;
-logic [1:0] tq_i;
-// side 0 RED top, 1 GREEN right, 2 BLUE bottom, 3 YELLOW left.
-// Vertices go around the perimeter, matching the engine's own v0..v3 order.
-// TWO LAYOUTS, BECAUSE A BAR THAT IS NOT VISIBLE PROVES NOTHING.
-//
-// The wide layout spans x 80..400 and y 80..300. That is inside 496x384 on
-// paper, but the visible area after overscan and scaling is smaller than the
-// framebuffer, so an edge bar can sit outside what actually reaches the screen
-// -- and a bar you cannot see is indistinguishable from a bar that did not
-// draw, which is exactly the ambiguity this test exists to remove.
-//
-// status[22] switches to a COMPACT layout well inside any plausible crop:
-// x 180..300, y 140..240. Toggling between the two confirms a side that was
-// merely out of view rather than missing, and if a bar is absent in BOTH it is
-// absent for a real reason.
-wire tq_small = tq_small_s[2];
-wire signed [15:0] tqx0 = tq_small
-      ? ((tq_i==2'd0) ? 16'sd200 : (tq_i==2'd1) ? 16'sd280
-       : (tq_i==2'd2) ? 16'sd200 :               16'sd180)
-      : ((tq_i==2'd0) ? 16'sd120 : (tq_i==2'd1) ? 16'sd380
-       : (tq_i==2'd2) ? 16'sd120 :               16'sd80);
-wire signed [15:0] tqx2 = tq_small
-      ? ((tq_i==2'd0) ? 16'sd280 : (tq_i==2'd1) ? 16'sd300
-       : (tq_i==2'd2) ? 16'sd280 :               16'sd200)
-      : ((tq_i==2'd0) ? 16'sd360 : (tq_i==2'd1) ? 16'sd400
-       : (tq_i==2'd2) ? 16'sd360 :               16'sd100);
-wire signed [15:0] tqy0 = tq_small
-      ? ((tq_i==2'd0) ? 16'sd140 : (tq_i==2'd1) ? 16'sd160
-       : (tq_i==2'd2) ? 16'sd220 :               16'sd160)
-      : ((tq_i==2'd0) ? 16'sd80  : (tq_i==2'd1) ? 16'sd120
-       : (tq_i==2'd2) ? 16'sd280 :               16'sd120);
-wire signed [15:0] tqy2 = tq_small
-      ? ((tq_i==2'd0) ? 16'sd160 : (tq_i==2'd1) ? 16'sd220
-       : (tq_i==2'd2) ? 16'sd240 :               16'sd220)
-      : ((tq_i==2'd0) ? 16'sd100 : (tq_i==2'd1) ? 16'sd260
-       : (tq_i==2'd2) ? 16'sd300 :               16'sd260);
-wire [23:0] tq_col = (tq_i==2'd0) ? 24'hE00000 : (tq_i==2'd1) ? 24'h00E000
-                   : (tq_i==2'd2) ? 24'h0000E0 :                24'hE0E000;
-always_ff @(posedge clk_sys or negedge mem_rst_n) begin
-	if (!mem_rst_n) begin
-		tq_valid <= 1'b0; tq_end <= 1'b0; tq_st <= 2'd0; tq_dly <= 4'd0;
-		tq_i <= 2'd0;
-	end
-	else begin
-		tq_valid <= 1'b0; tq_end <= 1'b0;
-		// FOUR BARS, FOUR COLOURS, ONE PER SIDE, NONE TOUCHING.
-		//
-		// A single rectangle rendered as one visible edge, which is consistent
-		// with three different faults and distinguishes none of them (R182).
-		// Four separate filled quads do distinguish them, because each is an
-		// independent test and the colour says which one drew:
-		//
-		//   RED    top    horizontal bar, 240 x 20
-		//   GREEN  right  vertical   bar,  20 x 140
-		//   BLUE   bottom horizontal bar, 240 x 20
-		//   YELLOW left   vertical   bar,  20 x 140
-		//
-		// They are offset outward so no two touch: a bar that appears is a bar
-		// that filled, and nothing can be confused with its neighbour.
-		//
-		// What the outcomes mean:
-		//   all four solid          the fill path works and R182's doubt closes
-		//   horizontals only        the span generator walks x but not y
-		//   verticals only          the reverse
-		//   edges only, any colour  line_case is firing and the quads reach the
-		//                           filler degenerate
-		//   one bar only            the store-clear race is still swallowing
-		//                           quads, since only the last would survive
-		//   wrong colours           q_col is not reaching the band buffer
-		//
-		// INJECT AFTER THE CLEAR, NOT ON IT. m2_raster3d clears the quad store
-		// with `qs_clear = (pst == P_COLLECT) && frame_start`, and
-		// geo_walk_start IS frame_start -- so issuing the quad on that edge
-		// raced the clear and the store sometimes swallowed it. On the board
-		// that reads as a rectangle that draws, flickers and fades out, which
-		// is exactly what was observed on the board, and is a fault in this test injector rather
-		// than in the rasterizer it is testing.
-		//
-		// A few cycles of delay puts the quad safely after the clear and well
-		// before the producer needs q_end.
-		case (tq_st)
-			2'd0: if (geo_walk_start) begin
-			        tq_dly <= 4'd8; tq_i <= 2'd0; tq_st <= 2'd1;
-			      end
-			// q_ready is tied high in m2_raster3d -- "the store absorbs or drops;
-			// it never backpressures" -- so one quad per cycle is accepted.
-			2'd1: if (tq_dly != 4'd0) tq_dly <= tq_dly - 4'd1;
-			      else begin tq_valid <= 1'b1; tq_st <= 2'd2; end
-			2'd2: begin
-			        if (tq_i == 2'd3) begin tq_valid <= 1'b0; tq_st <= 2'd3; end
-			        else begin tq_valid <= 1'b1; tq_i <= tq_i + 2'd1; end
-			      end
-			default: begin tq_end <= 1'b1; if (!geo_walk_start) tq_st <= 2'd0; end
-		endcase
-	end
-end
-
+// THE TEST-QUAD GENERATOR IS GONE (R229). It drew one known-good rectangle a
+// frame behind status[21] and it did its job: it proved the store, the sort,
+// the band fill and the mixer before the geometry could feed them. What it
+// cost, once the geometry was real, was the core clock -- its enable came
+// straight off the framework's status word and fanned out through the quad
+// source mux into the store's write path, and at 60 MHz that was thirty of
+// the thirty worst paths in the design. A test injector that limits the
+// product's clock has outlived itself; git holds it.
 // THE FRAME ENDS WHEN THE WALK DOES, and the walk's completion counter is the
 // only signal that says so. q_end is what releases the rasterizer's producer
 // from P_COLLECT into the sort, so without it nothing ever draws no matter how
@@ -5081,13 +4969,13 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(4),
 	// Each bar is a proper filled rectangle traversed around its perimeter:
 	// (x0,y0) top-left, (x0,y2) bottom-left, (x2,y2) bottom-right,
 	// (x2,y0) top-right -- the same v0..v3 cycle the geometry engine emits.
-	.q_valid(tq_en ? tq_valid : q3d_valid), .q_ready(q3d_ready),
-	.q_x0(tq_en ? tqx0 : q3d_x0), .q_y0(tq_en ? tqy0 : q3d_y0),
-	.q_x1(tq_en ? tqx0 : q3d_x1), .q_y1(tq_en ? tqy2 : q3d_y1),
-	.q_x2(tq_en ? tqx2 : q3d_x2), .q_y2(tq_en ? tqy2 : q3d_y2),
-	.q_x3(tq_en ? tqx2 : q3d_x3), .q_y3(tq_en ? tqy0 : q3d_y3),
-	.q_col(tq_en ? tq_col : q3d_col), .q_z(tq_en ? 32'h3F800000 : q3d_z),
-	.q_moire(1'b0), .q_end(tq_en ? tq_end : q3d_end),
+	.q_valid(q3d_valid), .q_ready(q3d_ready),
+	.q_x0(q3d_x0), .q_y0(q3d_y0),
+	.q_x1(q3d_x1), .q_y1(q3d_y1),
+	.q_x2(q3d_x2), .q_y2(q3d_y2),
+	.q_x3(q3d_x3), .q_y3(q3d_y3),
+	.q_col(q3d_col), .q_z(q3d_z),
+	.q_moire(1'b0), .q_end(q3d_end),
 	.scan_clk(clk_sys), .scan_x(vid_x), .scan_y(vid_y),
 	.scan_col(r3d_col), .scan_hit(r3d_hit),
 	.dbg_quads(r3d_quads), .dbg_dropped(r3d_dropped), .dbg_tiny(r3d_tiny),

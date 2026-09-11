@@ -13002,7 +13002,13 @@ quad source mux, the store's write path and its counters, and it held the
 whole design to 54.3 MHz. `status[20]`, which gates the frame pulse that
 starts the walk and the renderer's band schedule, is the same shape.
 
-Both are now taken through three flops on clk_sys. A setting a person
+**The test-quad generator is deleted outright, not registered.** It drew one
+known-good rectangle a frame and it had done its job -- it proved the store,
+the sort, the band fill and the mixer before the geometry could feed them --
+but once the geometry was real its only remaining effect was to cap the core
+clock. A test injector that limits the product's clock has outlived itself,
+and git holds it. `status[20]`, which is a real runtime control, is taken
+through three flops on clk_sys instead. A setting a person
 changes from a menu has no cycle-accurate relationship with anything, so
 the registers cost nothing and give the fitter a local source to place
 beside the logic it drives. The rule this is an instance of: **nothing off
