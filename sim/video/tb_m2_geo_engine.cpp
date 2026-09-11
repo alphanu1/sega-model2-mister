@@ -26,20 +26,58 @@
 #include <cstdint>
 #include <cstring>
 #include <vector>
+#include <cmath>
 
 static Vm2_geo_engine_top* d;
 static std::vector<uint32_t> obj(4096, 0);
 static long checks = 0, fails = 0;
 
+// R222: the other three memory spaces the engine reads, as 16-bit words --
+// the texture header (space 1), the palette mirror (2), the translation table
+// mirror (3) -- served as the dword pair at the requested dword address.
+static std::vector<uint16_t> thdr(0x1000, 0xffff), pal3d(1024, 0xffff), xlat(3 * 0x2000, 0xffff);
+static uint32_t rd16pair(const std::vector<uint16_t>& m, uint32_t dw) {
+  const uint32_t w = dw * 2;
+  const uint16_t lo = w < m.size() ? m[w] : 0xffff, hi = (w + 1) < m.size() ? m[w + 1] : 0xffff;
+  return uint32_t(lo) | (uint32_t(hi) << 16);
+}
 static void tick() {
   // the vertex stream: one dword per acknowledge, no wait states
   d->mem_ack = d->mem_req;
-  if (d->mem_req) d->mem_data = obj[d->mem_addr & 0xfff];
+  if (d->mem_req) {
+    switch (d->mem_space) {
+      case 1:  d->mem_data = rd16pair(thdr,  d->mem_addr & 0x7fffff); break;
+      case 2:  d->mem_data = rd16pair(pal3d, d->mem_addr); break;
+      case 3:  d->mem_data = rd16pair(xlat,  d->mem_addr); break;
+      default: d->mem_data = obj[d->mem_addr & 0xfff]; break;
+    }
+  }
   d->clk = 0; d->eval();
   d->clk = 1; d->eval();
 }
 
 static uint32_t f2u(float f){ uint32_t u; std::memcpy(&u,&f,4); return u; }
+
+// R222: the reference's flat colour, transcribed (model2_v.cpp geo_parse_np_ns,
+// model2rd.ipp flat case, m2_palette's gamma).
+static uint8_t gam(uint8_t v) { double r = ((double)v - 64.0) * 255.0 / 191.0; return r < 0 ? 0 : (uint8_t)r; }
+static int ref_luma(const float n[3], const float pt[3], const float lit[3], float diffuse, float ambient) {
+  float dotl = n[0]*lit[0] + n[1]*lit[1] + n[2]*lit[2];
+  float dotp = n[0]*pt[0] + n[1]*pt[1] + n[2]*pt[2];
+  float lum = (dotl * dotp < 0) ? 0.0f : std::fabs(dotl);
+  lum = lum * diffuse + ambient;
+  if (lum < 0) lum = 0;
+  if (lum > 255) lum = 255;
+  return (int)lum;
+}
+static uint32_t ref_colour(uint16_t c555, int luma) {
+  uint8_t c[3];
+  for (int i = 0; i < 3; i++) {
+    const uint32_t c5 = (c555 >> (5 * i)) & 0x1f;
+    c[i] = gam(xlat[i * 0x2000 + ((c5 << 8) | (luma >> 2))] & 0xff);
+  }
+  return (uint32_t(c[0]) << 16) | (uint32_t(c[1]) << 8) | c[2];
+}
 
 static void ck(const char* w, uint32_t got, uint32_t want) {
   checks++;
@@ -73,6 +111,20 @@ int main(int argc, char** argv) {
   d->foc_x = f2u(1.0f); d->foc_y = f2u(1.0f);
   tick();
 
+  // R222: the light, texture parameter 0 (diffuse 200, ambient 20), a flat
+  // texture header at ROM word 0x100 with colorbase 0x155, that palette entry,
+  // and a translation table whose entries are a known function of their index.
+  const float LIT[3] = {0.001f, 0.0005f, -0.0002f};
+  d->lit_x = f2u(LIT[0]); d->lit_y = f2u(LIT[1]); d->lit_z = f2u(LIT[2]);
+  d->tp_we = 1; d->tp_idx = 0; d->tp_diffuse = 200; d->tp_ambient = 20; tick(); d->tp_we = 0;
+  d->tha = 0x100;
+  thdr[0x100 + 0] = 0x0000; thdr[0x100 + 1] = 0; thdr[0x100 + 2] = 0; thdr[0x100 + 3] = uint16_t(0x155 << 6);
+  const uint16_t C555 = 0x2AAC;
+  pal3d[0x155] = C555;
+  for (int c = 0; c < 3; c++) for (int i = 0; i < 0x2000; i++)
+    xlat[c * 0x2000 + i] = uint16_t(0xA500 | ((((i >> 8) & 0x1f) * 7 + (i & 0x3f) * 3 + c * 11) & 0xff));
+  d->col_inval = 0;
+
   // ---- build one object: three polygons exercising all three link types
   size_t w = 0;
   w = put_xyz(w, 100.0f);          // P0(n-1)
@@ -100,12 +152,12 @@ int main(int argc, char** argv) {
   d->oba = 0; d->obc = 16;
   d->start = 1; tick(); d->start = 0;
 
-  struct Poly { uint32_t v0,v1,v2,v3,attr,nx; };
+  struct Poly { uint32_t v0,v1,v2,v3,attr,nx; uint32_t luma = 0, col = 0; };
   std::vector<Poly> got;
   for (int budget = 0; budget < 60000 && (d->busy || got.empty()); budget++) {
     tick();
     if (d->poly_valid && d->poly_ready)
-      got.push_back({d->v0x, d->v1x, d->v2x, d->v3x, d->poly_attr, d->nrm_x});
+      got.push_back({d->v0x, d->v1x, d->v2x, d->v3x, d->poly_attr, d->nrm_x, d->poly_luma, d->poly_col});
   }
 
   std::printf("test: an object_data becomes a stream of quads\n");
@@ -140,6 +192,71 @@ int main(int argc, char** argv) {
     ck("p1 normal x", got[0].nx, f2u(300.0f));
     ck("p2 normal x", got[1].nx, f2u(600.0f));
     ck("p3 normal x", got[2].nx, f2u(900.0f));
+
+    // R222: THE LUMINANCE AND THE COLOUR, against the reference's arithmetic.
+    // The normal is (b, b+1, b+2), the first new point P0(n) likewise; identity
+    // matrix, so both are as fed. The luminance may land one either side of
+    // the float model at an integer boundary; the colour must follow the luma.
+    std::printf("test: luminance and colour (R222)\n");
+    const float NB[3] = {300.0f, 600.0f, 900.0f}, PB[3] = {400.0f, 700.0f, 1000.0f};
+    for (int i = 0; i < 3; i++) {
+      const float n[3] = {NB[i], NB[i] + 1, NB[i] + 2}, pt[3] = {PB[i], PB[i] + 1, PB[i] + 2};
+      const int want = ref_luma(n, pt, LIT, 200.0f, 20.0f);
+      const int lu = int(got[i].luma);
+      checks++;
+      if (std::abs(lu - want) > 1) { std::printf("  FAIL p%d luma got=%d want=%d\n", i + 1, lu, want); fails++; }
+      std::printf("  p%d luma %d (model %d) colour %06x\n", i + 1, lu, want, got[i].col);
+      ck("colour follows the luma", got[i].col, ref_colour(C555, lu));
+    }
+    ck("three colour cache misses", d->dbg_col_miss, 3);
+  }
+
+  // ---- R222: a light from behind gives the ambient alone; the cache then hits
+  {
+    d->lit_x = f2u(-0.002f); d->lit_y = f2u(0.0005f); d->lit_z = f2u(0.0002f);
+    d->rst_n = 0; for (int i = 0; i < 4; i++) tick(); d->rst_n = 1; tick();
+    for (int i = 0; i < 12; i++) {
+      static const float I[12] = {1,0,0, 0,1,0, 0,0,1, 0,0,0};
+      d->mat_we = 1; d->mat_idx = i; d->mat_data = f2u(I[i]); tick();
+    }
+    d->mat_we = 0;
+    d->tp_we = 1; d->tp_idx = 0; d->tp_diffuse = 200; d->tp_ambient = 20; tick(); d->tp_we = 0;
+    d->start = 1; tick(); d->start = 0;
+    std::vector<Poly> gd;
+    for (int budget = 0; budget < 60000 && (d->busy || gd.empty()); budget++) {
+      tick();
+      if (d->poly_valid && d->poly_ready) gd.push_back({d->v0x, d->v1x, d->v2x, d->v3x, d->poly_attr, d->nrm_x, d->poly_luma, d->poly_col});
+    }
+    std::printf("test: dotl and dotp of opposite sign -> luminance is the ambient alone\n");
+    ck("three polygons", uint32_t(gd.size()), 3);
+    for (size_t i = 0; i < gd.size(); i++) ck("luma = ambient", gd[i].luma, 20);
+    if (!gd.empty()) ck("colour at luma 20", gd[0].col, ref_colour(C555, 20));
+    // Reset cleared the cache: one miss for the first polygon, hits for the rest.
+    ck("one miss then hits", d->dbg_col_miss, 1);
+    // The CPU rewriting the palette invalidates the cache.
+    d->col_inval = 1; tick(); d->col_inval = 0;
+    d->start = 1; tick(); d->start = 0;
+    for (int budget = 0; budget < 60000 && (d->busy || budget < 10); budget++) tick();
+    ck("invalidate forces one more miss", d->dbg_col_miss, 2);
+  }
+
+  // ---- R222: a translucent flat header (word 0 bit 13) draws nothing
+  {
+    thdr[0x100 + 0] = 0x2000;
+    d->rst_n = 0; for (int i = 0; i < 4; i++) tick(); d->rst_n = 1; tick();
+    for (int i = 0; i < 12; i++) {
+      static const float I[12] = {1,0,0, 0,1,0, 0,0,1, 0,0,0};
+      d->mat_we = 1; d->mat_idx = i; d->mat_data = f2u(I[i]); tick();
+    }
+    d->mat_we = 0;
+    d->tp_we = 1; d->tp_idx = 0; d->tp_diffuse = 200; d->tp_ambient = 20; tick(); d->tp_we = 0;
+    d->start = 1; tick(); d->start = 0;
+    uint32_t n = 0;
+    for (int budget = 0; budget < 60000 && (d->busy || budget < 10); budget++) { tick(); if (d->poly_valid && d->poly_ready) n++; }
+    std::printf("test: translucent flat polygons are culled\n");
+    ck("no polygons emitted", n, 0);
+    ck("three culled", d->dbg_culled, 3);
+    thdr[0x100 + 0] = 0x0000;
   }
 
   // ---- second pass: focus is APPLIED, and to x and y only

@@ -88,7 +88,18 @@ module m2_geometry (
   //      four frustum planes as SLOPES, per m2_geo_clip's header.
   input  logic [31:0] xc, yc,
   input  logic [31:0] a_left, a_right, a_bottom, a_top,
-  input  logic [23:0] flat_col,
+  // ---- R222: what the polygon's colour needs, and the memory space select
+  //      the engine's reads carry (0 polygon memory, 1 texture, 2 palette
+  //      mirror, 3 translation mirror). The colour travels with the polygon
+  //      from the engine to the clipper's in_col, where a constant used to be.
+  input  logic [31:0] tha,
+  input  logic [31:0] lit_x, lit_y, lit_z,
+  input  logic        tp_we,
+  input  logic [4:0]  tp_idx,
+  input  logic [7:0]  tp_diffuse, tp_ambient,
+  input  logic        col_inval,
+  output logic [1:0]  mem_space,
+  output logic [15:0] dbg_col_miss,
 
   // ---- screen quads out
   output logic        q_valid,
@@ -139,8 +150,13 @@ module m2_geometry (
   logic        poly_valid, poly_ready;
   logic [31:0] v0x,v0y,v0z, v1x,v1y,v1z, v2x,v2y,v2z, v3x,v3y,v3z, poly_attr;
   logic [31:0] nrm_x, nrm_y, nrm_z;
+  logic [23:0] poly_col, pcol;      // R222: the engine's colour, and the one in flight
 
   m2_geo_engine u_engine (
+    .tha(tha), .lit_x(lit_x), .lit_y(lit_y), .lit_z(lit_z),
+    .tp_we(tp_we), .tp_idx(tp_idx), .tp_diffuse(tp_diffuse), .tp_ambient(tp_ambient),
+    .col_inval(col_inval), .mem_space(mem_space),
+    .poly_col(poly_col), .poly_luma(), .dbg_col_miss(dbg_col_miss),
     .clk(clk), .rst_n(rst_n),
     .start(start), .oba(oba), .obc(obc), .busy(eng_busy),
     .mat_we(mat_we), .mat_idx(mat_idx), .mat_data(mat_data),
@@ -373,6 +389,7 @@ module m2_geometry (
           hx[1] <= v1x; hy[1] <= v1y; hz[1] <= v1z;
           hx[2] <= v2x; hy[2] <= v2y; hz[2] <= v2z;
           hx[3] <= v3x; hy[3] <= v3y; hz[3] <= v3z;
+          pcol  <= poly_col;                       // R222
           hzmin <= fmin(fmin(v0z, v1z), fmin(v2z, v3z));
           qi    <= 2'd0;
           qst   <= Q_ISS;
@@ -451,7 +468,7 @@ module m2_geometry (
     .in_x3(hx[3]), .in_y3(hy[3]), .in_z3(hz[3]),
     .in_sx0(sx[0]), .in_sy0(sy[0]), .in_sx1(sx[1]), .in_sy1(sy[1]),
     .in_sx2(sx[2]), .in_sy2(sy[2]), .in_sx3(sx[3]), .in_sy3(sy[3]),
-    .in_col(flat_col), .in_z(hzmin), .in_moire(1'b0),
+    .in_col(pcol), .in_z(hzmin), .in_moire(1'b0),
     .mul_req(mul_req[2]), .mul_a(mul_a[2]), .mul_b(mul_b[2]),
     .mul_gnt(mul_gnt[2]), .mul_rsp(mul_rsp[2]), .mul_res(mul_res),
     .add_req(add_req[2]), .add_a(add_a[2]), .add_b(add_b[2]), .add_sub(add_sub[2]),

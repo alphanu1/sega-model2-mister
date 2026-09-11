@@ -46,7 +46,12 @@ static long checks = 0, fails = 0;
 
 static void tick() {
   d->mem_ack = d->mem_req;
-  if (d->mem_req) d->mem_data = obj[d->mem_addr & 0xfff];
+  // R222: the colour spaces answer with a flat header, a white palette entry
+  // (five ones per component) and a translation table of 0xff -> gamma 255.
+  if (d->mem_req) d->mem_data = (d->mem_space == 1) ? 0u
+                              : (d->mem_space == 2) ? 0x7fff7fffu
+                              : (d->mem_space == 3) ? 0x00ff00ffu
+                              : obj[d->mem_addr & 0xfff];
   d->clk = 0; d->eval();
   d->clk = 1; d->eval();
 }
@@ -101,7 +106,8 @@ int main(int argc, char** argv) {
   d->xc = 0x43780000u; d->yc = 0x43400000u;               // 248.0, 192.0
   d->a_left = 0xC3780000u; d->a_right  = 0x43780000u;     // -248.0, 248.0
   d->a_bottom = 0x43400000u; d->a_top  = 0xC3400000u;     //  192.0, -192.0
-  d->flat_col = 0xC0C0C0u;
+  d->tha = 0; d->lit_x = 0; d->lit_y = 0; d->lit_z = 0; d->col_inval = 0;
+  d->tp_we = 1; d->tp_idx = 0; d->tp_diffuse = 0; d->tp_ambient = 255; tick(); d->tp_we = 0;
   d->foc_x = f2u(1.0f); d->foc_y = f2u(1.0f);
   d->oba = 0; d->obc = 32;
   for (int i = 0; i < 8; i++) tick();
@@ -137,7 +143,7 @@ int main(int argc, char** argv) {
       ck("v1 = P0(n-1) x", got[0].x1, 198);  ck("v1 = P0(n-1) y", got[0].y1, 142);
       ck("v2 = P0(n) x",   got[0].x2, 298);  ck("v2 = P0(n) y",   got[0].y2, 142);
       ck("v3 = P1(n) x",   got[0].x3, 298);  ck("v3 = P1(n) y",   got[0].y3, 242);
-      ck("flat colour carried", (int32_t)got[0].col, 0xC0C0C0);
+      ck("lit colour carried", (int32_t)got[0].col, 0xFFFFFF);   // R222: white entry, table 0xff
     }
     ck("clipper saw one polygon", (int32_t)d->dbg_clip_in, 1);
   }

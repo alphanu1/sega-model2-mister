@@ -93,6 +93,26 @@ module m2_geo_engine #(
   //      divide-by-z -- is not in this pipeline.
   input  logic [31:0] foc_x, foc_y,
 
+  // ---- R222: WHAT THE POLYGON'S COLOUR NEEDS. The reference's flat colour is
+  //      palette entry 0x1000 + colorbase (texture header word 3 >> 6, 10
+  //      bits), each 5-bit component run through the colour translation table
+  //      at (component << 8 | luma >> 2), then the gamma curve. The luminance
+  //      is |normal . light| (0 if that and normal . point differ in sign)
+  //      times the texture parameter's diffuse plus its ambient, 0..255.
+  input  logic [31:0] tha,                 // geo_object_data's texture header address
+  input  logic [31:0] lit_x, lit_y, lit_z, // the light vector (cmd 0x0a)
+  input  logic        tp_we,               // texture parameters (cmd 0x06), streamed
+  input  logic [4:0]  tp_idx,
+  input  logic [7:0]  tp_diffuse, tp_ambient,
+  input  logic        col_inval,           // the CPU wrote the palette or the table
+  // Which memory the read is for: 0 polygon memory (as ever), 1 texture
+  // (mem_addr[23]: texture RAM rather than ROM), 2 the palette mirror, 3 the
+  // translation table mirror. All dword-addressed; the top level owns the bases.
+  output logic [1:0]  mem_space,
+  output logic [23:0] poly_col,            // the polygon's colour, lit, gamma applied
+  output logic [7:0]  poly_luma,           // its luminance, for the bench
+  output logic [15:0] dbg_col_miss,        // colour cache misses
+
   // ---- a SECOND pool client, for those two multiplies. The pool exists to be
   //      shared (m2_fp_pool); muxing them onto the transform's port here would
   //      rebuild a private arbiter next to a general one.
@@ -185,7 +205,9 @@ module m2_geo_engine #(
   typedef enum logic [4:0] {
     E_IDLE, E_RD, E_XF, E_XFW, E_FOC, E_FOCW, E_STORE, E_ATTR, E_NORM,
     E_NXF, E_NXFW, E_SKIP,
-    E_EMIT, E_LINK, E_DONE, E_DOT, E_DOTA
+    E_EMIT, E_LINK, E_DONE, E_DOT, E_DOTA,
+    // R222: the luminance, the texture header, the colour
+    E_LUMM, E_LUMMW, E_LUMA, E_LUMAW, E_TH0, E_TH3, E_CC, E_PAL, E_XL, E_CW
   } estate_t;
   estate_t st, ret;
 
@@ -211,7 +233,89 @@ module m2_geo_engine #(
   logic        emitted_last;     // the polygon just emitted went out (R217)
   logic        fsel;         // 0 = scaling x, 1 = scaling y
 
-  assign mem_addr = ptr;
+  // ---- R222 state
+  logic [21:0] th_w;         // texture header address, in 16-bit words
+  logic        th_ram;       // ...in texture RAM (tha bit 23), else the ROM
+  logic        dsel;         // E_DOT: 0 = with the point, 1 = with the light
+  logic        dotp_zero;
+  logic [31:0] dotl;
+  logic [31:0] lum;
+  logic [7:0]  luma8;
+  logic [15:0] hdr0;         // texture header word 0: renderer bits 13-14
+  logic [9:0]  cbase;        // header word 3 >> 6
+  logic [14:0] c555;         // the palette entry
+  logic [1:0]  xi;           // which component's translation is being read
+  logic [7:0]  rgb [3];
+  logic [23:0] xaddr;        // the extra reads: dword address, which half, which space
+  logic        xhalf;
+  logic [1:0]  xspace;
+  logic        cc_wait;
+  logic [7:0]  cc_idx;
+  logic [255:0] cc_valid;
+  // The texture parameters as floats, converted once when the walker streams
+  // them; the colour cache: 256 entries direct-mapped on {colorbase, luma6}.
+  (* ramstyle = "MLAB" *) logic [63:0] tp_tab [32];    // {ambient, diffuse}
+  logic [63:0] tp_rd;
+  (* ramstyle = "MLAB" *) logic [39:0] cc_mem [256];   // {key, r, g, b}
+  logic [39:0] cc_rd;
+  wire  [15:0] cc_key = {cbase, luma8[7:2]};
+  wire         cc_we  = (st == E_CW);
+
+  // An 8-bit integer as an IEEE single.
+  function automatic logic [31:0] i8f(input logic [7:0] v);
+    logic [2:0] p;
+    logic [31:0] m;
+    begin
+      p = v[7] ? 3'd7 : v[6] ? 3'd6 : v[5] ? 3'd5 : v[4] ? 3'd4
+        : v[3] ? 3'd3 : v[2] ? 3'd2 : v[1] ? 3'd1 : 3'd0;
+      m = {24'd0, v} << (5'd23 - {2'd0, p});
+      i8f = (v == 8'd0) ? 32'd0 : {1'b0, 8'd127 + {5'd0, p}, m[22:0]};
+    end
+  endfunction
+  // (int) of a single clamped to 0..255, as the reference's clamp then cast.
+  function automatic logic [7:0] f2i8(input logic [31:0] f);
+    logic [7:0] e;
+    logic [31:0] m;
+    begin
+      e = f[30:23];
+      m = {8'd0, 1'b1, f[22:0]} >> (5'd23 - 5'(e - 8'd127));
+      f2i8 = f[31] ? 8'd0 : (e < 8'd127) ? 8'd0 : (e >= 8'd135) ? 8'd255 : m[7:0];
+    end
+  endfunction
+  // The gamma curve, m2_palette's: max((v - 64) * 255 / 191, 0), truncated.
+  function automatic logic [7:0] gam(input logic [7:0] v);
+    logic [24:0] p;
+    begin
+      p = ({17'd0, (v - 8'd64)} * 25'd87496);
+      gam = (v <= 8'd64) ? 8'd0 : (p[24:16] > 9'd255) ? 8'd255 : p[23:16];
+    end
+  endfunction
+  // A header word's dword address in the texture space: RAM indexes 64 K
+  // words, the ROM 4 M; mem_addr[23] says which.
+  function automatic logic [23:0] th_dw(input logic [21:0] w, input logic ram);
+    th_dw = ram ? {1'b1, 8'd0, w[15:1]} : {3'd0, w[21:1]};
+  endfunction
+  // The translation table word for component c of the palette entry at this
+  // luminance: c * 0x2000 + (component5 << 8 | luma >> 2); its dword.
+  function automatic logic [23:0] xl_dw(input logic [1:0] c, input logic [14:0] p, input logic [7:0] l);
+    logic [4:0] c5;
+    begin
+      c5 = (c == 2'd0) ? p[4:0] : (c == 2'd1) ? p[9:5] : p[14:10];
+      xl_dw = {10'd0, c, c5, 2'b00, l[7:3]};
+    end
+  endfunction
+
+  wire xrd = (st == E_TH0) || (st == E_TH3) || (st == E_PAL) || (st == E_XL);
+  assign mem_addr  = xrd ? xaddr  : ptr;
+  assign mem_space = xrd ? xspace : 2'd0;
+  assign poly_luma = luma8;
+
+  always_ff @(posedge clk) begin
+    if (tp_we) tp_tab[tp_idx] <= {i8f(tp_ambient), i8f(tp_diffuse)};
+    tp_rd <= tp_tab[attr[22:18]];
+    if (cc_we) cc_mem[cc_idx] <= {cc_key, rgb[0], rgb[1], rgb[2]};
+    cc_rd <= cc_mem[cc_idx];
+  end
   // Rising-edge acknowledge and a one-cycle request gap per word: see the
   // same note in m2_geo.sv (R207). This engine advances ptr on every
   // acknowledge and held its request across words the same way.
@@ -222,7 +326,7 @@ module m2_geo_engine #(
     if (!rst_n) begin mem_ack_d <= 1'b0; mem_go_d <= 1'b0; end
     else begin mem_ack_d <= mem_ack; mem_go_d <= mem_go; end
   end
-  assign mem_req  = ~mem_go_d & ((st == E_RD) || (st == E_ATTR) || (st == E_NORM) || (st == E_SKIP));
+  assign mem_req  = ~mem_go_d & ((st == E_RD) || (st == E_ATTR) || (st == E_NORM) || (st == E_SKIP) || xrd);
 
   assign v0x = p1prev[0]; assign v0y = p1prev[1]; assign v0z = p1prev[2];
   assign v1x = p0prev[0]; assign v1y = p0prev[1]; assign v1z = p0prev[2];
@@ -243,6 +347,11 @@ module m2_geo_engine #(
       fmul_req <= 1'b0; fmul_a <= 32'd0; fmul_b <= 32'd0;
       fx <= 32'd0; fy <= 32'd0; fz <= 32'd0; fsel <= 1'b0;
       dbg_polys <= 16'd0; dbg_objects <= 16'd0;
+      th_w <= 22'd0; th_ram <= 1'b0; dsel <= 1'b0; dotp_zero <= 1'b0; dotl <= 32'd0;
+      lum <= 32'd0; luma8 <= 8'd0; hdr0 <= 16'd0; cbase <= 10'd0; c555 <= 15'd0; xi <= 2'd0;
+      rgb[0] <= 8'd0; rgb[1] <= 8'd0; rgb[2] <= 8'd0;
+      xaddr <= 24'd0; xhalf <= 1'b0; xspace <= 2'd0; cc_wait <= 1'b0; cc_idx <= 8'd0;
+      cc_valid <= '0; poly_col <= 24'd0; dbg_col_miss <= 16'd0;
       for (int k = 0; k < 3; k++) begin
         p0prev[k] <= 32'd0; p1prev[k] <= 32'd0;
         p0cur[k]  <= 32'd0; p1cur[k]  <= 32'd0; xyz[k] <= 32'd0;
@@ -263,6 +372,7 @@ module m2_geo_engine #(
           dbg_polys <= 16'd0;
           busy   <= 1'b1;
           widx   <= 2'd0; dst <= 2'd0;
+          th_w   <= tha[21:0]; th_ram <= tha[23]; dsel <= 1'b0;   // R222
           st     <= E_RD; ret <= E_RD;
         end
 
@@ -396,12 +506,14 @@ module m2_geo_engine #(
           if (skipn == 2'd1) begin dstep <= 2'd0; dgot <= 2'd0; st <= E_DOT; end
           else skipn <= skipn - 2'd1;
         end
-        // ---- R219: normal . point, three multiplies then two adds
+        // ---- R219: normal . point, three multiplies then two adds; R222 runs
+        //      it a second time against the light (dsel).
         E_DOT: begin
           if (dstep < 2'd3) begin
             fmul_req <= 1'b1;
             fmul_a   <= (dstep == 2'd0) ? nrm[0] : (dstep == 2'd1) ? nrm[1] : nrm[2];
-            fmul_b   <= (dstep == 2'd0) ? dpx    : (dstep == 2'd1) ? dpy    : dpz;
+            fmul_b   <= dsel ? ((dstep == 2'd0) ? lit_x : (dstep == 2'd1) ? lit_y : lit_z)
+                             : ((dstep == 2'd0) ? dpx   : (dstep == 2'd1) ? dpy   : dpz);
             if (fmul_gnt) begin fmul_req <= 1'b0; dstep <= dstep + 2'd1; end
           end
           if (fmul_rsp) begin
@@ -420,8 +532,84 @@ module m2_geo_engine #(
           end
           if (fadd_rsp) begin
             if (dstep == 2'd1) begin dprod[0] <= fadd_res; dstep <= 2'd2; end
-            else begin dot_neg <= fadd_res[31] && (fadd_res[30:0] != 31'd0); st <= E_EMIT; end
+            else if (!dsel) begin
+              dot_neg   <= fadd_res[31] && (fadd_res[30:0] != 31'd0);
+              dotp_zero <= (fadd_res[30:0] == 31'd0);
+              dsel <= 1'b1; dstep <= 2'd0; dgot <= 2'd0; st <= E_DOT;   // R222: now the light
+            end else begin
+              dotl <= fadd_res; dsel <= 1'b0; st <= E_LUMM;
+            end
           end
+        end
+
+        // ---- R222: luminance = (dotl*dotp < 0 ? 0 : |dotl|) * diffuse + ambient
+        E_LUMM: begin
+          fmul_req <= 1'b1;
+          fmul_a   <= ((dotl[30:0] != 31'd0) && !dotp_zero && (dotl[31] != dot_neg))
+                      ? 32'd0 : {1'b0, dotl[30:0]};
+          fmul_b   <= tp_rd[31:0];                       // diffuse, as a float
+          if (fmul_gnt) begin fmul_req <= 1'b0; st <= E_LUMMW; end
+        end
+        E_LUMMW: if (fmul_rsp) begin lum <= fmul_res; st <= E_LUMA; end
+        E_LUMA: begin
+          fadd_req <= 1'b1; fadd_a <= lum; fadd_b <= tp_rd[63:32];   // + ambient
+          if (fadd_gnt) begin fadd_req <= 1'b0; st <= E_LUMAW; end
+        end
+        E_LUMAW: if (fadd_rsp) begin
+          luma8  <= f2i8(fadd_res);
+          xaddr  <= th_dw(th_w, th_ram); xhalf <= th_w[0]; xspace <= 2'd1;
+          st     <= E_TH0;
+        end
+
+        // ---- R222: the texture header, words 0 (renderer) and 3 (colorbase);
+        //      then the address steps by tho * 4, tho the signed attr[16:12].
+        E_TH0: if (mem_go) begin
+          hdr0  <= xhalf ? mem_data[31:16] : mem_data[15:0];
+          xaddr <= th_dw(th_w + 22'd3, th_ram); xhalf <= ~th_w[0];
+          st    <= E_TH3;
+        end
+        E_TH3: if (mem_go) begin
+          cbase   <= xhalf ? mem_data[31:22] : mem_data[15:6];
+          cc_idx  <= (xhalf ? mem_data[29:22] : mem_data[13:6])
+                   ^ {(xhalf ? mem_data[31:30] : mem_data[15:14]), luma8[7:2]};
+          cc_wait <= 1'b0;
+          th_w    <= th_w + {{15{attr[16]}}, attr[16:12], 2'b00};
+          if (hdr0[14:13] == 2'b01) begin
+            // A translucent flat polygon: the reference draws nothing for it.
+            remain <= remain - 32'd1;
+            dbg_culled <= dbg_culled + 16'd1;
+            emitted_last <= 1'b0;
+            st <= E_LINK;
+          end else st <= E_CC;
+        end
+
+        // ---- R222: the colour cache, then the palette and the three
+        //      translation reads on a miss.
+        E_CC: if (!cc_wait) cc_wait <= 1'b1;         // cc_rd is one cycle behind cc_idx
+        else if (cc_valid[cc_idx] && (cc_rd[39:24] == cc_key)) begin
+          poly_col <= cc_rd[23:0];
+          st <= E_EMIT;
+        end else begin
+          dbg_col_miss <= dbg_col_miss + 16'd1;
+          xaddr <= {15'd0, cbase[9:1]}; xhalf <= cbase[0]; xspace <= 2'd2;
+          st <= E_PAL;
+        end
+        E_PAL: if (mem_go) begin
+          c555  <= xhalf ? mem_data[30:16] : mem_data[14:0];
+          xi    <= 2'd0;
+          xaddr <= xl_dw(2'd0, xhalf ? mem_data[30:16] : mem_data[14:0], luma8);
+          xhalf <= luma8[2]; xspace <= 2'd3;
+          st    <= E_XL;
+        end
+        E_XL: if (mem_go) begin
+          rgb[xi] <= gam(xhalf ? mem_data[23:16] : mem_data[7:0]);
+          if (xi == 2'd2) st <= E_CW;
+          else begin xi <= xi + 2'd1; xaddr <= xl_dw(xi + 2'd1, c555, luma8); end
+        end
+        E_CW: begin
+          cc_valid[cc_idx] <= 1'b1;                   // cc_we writes the entry this cycle
+          poly_col <= {rgb[0], rgb[1], rgb[2]};
+          st <= E_EMIT;
         end
 
         E_EMIT: if ((attr[9:8] == 2'd0) || (dot_neg && !attr[17])) begin
@@ -469,6 +657,7 @@ module m2_geo_engine #(
 
         default: st <= E_IDLE;
       endcase
+      if (col_inval) cc_valid <= '0;                 // R222: the CPU rewrote the colours
     end
   end
 

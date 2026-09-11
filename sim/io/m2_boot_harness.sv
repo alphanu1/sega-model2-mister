@@ -141,6 +141,7 @@ module m2_boot_harness #(
   // consumed and the pipeline can be watched end to end against the real game.
   output logic        eng_mem_req,
   output logic [23:0] eng_mem_addr,
+  output logic [1:0]  eng_mem_space,          // R222
   input  logic [31:0] eng_mem_data,
   input  logic        eng_mem_ack,
   output logic [15:0] eng_polys, eng_objects, eng_capped, eng_nonfinite,
@@ -170,6 +171,7 @@ module m2_boot_harness #(
   output logic        obs_xf_valid,
   output logic [31:0] obs_xf_x, obs_xf_y, obs_xf_z,
   output logic [31:0] obs_mtx [12],
+  output logic [23:0] eng_q_col,               // R222: the quad's colour
   output logic signed [15:0] eng_q_x0, eng_q_y0, eng_q_x1, eng_q_y1,
   output logic signed [15:0] eng_q_x2, eng_q_y2, eng_q_x3, eng_q_y3,
   // WHICH INSTRUCTION EMITS THE GEOMETRY. The board and the bench disagree about
@@ -451,7 +453,7 @@ module m2_boot_harness #(
   assign dump_tram = tram[dump_addr];
   assign dump_pal  = pal[dump_addr[12:0]];
 
-  logic        oc_tram_we, oc_pal_we, oc_xlat_we;
+  logic        oc_tram_we, oc_pal_we, oc_xlat_we, oc_col_inval;
   logic [14:0] oc_addr;
   logic [15:0] oc_din;
   logic  [6:0] oc_xlat_addr;
@@ -572,7 +574,7 @@ module m2_boot_harness #(
     .base_prog (AW'(32'h0000000)), .base_data (AW'(32'h0020000)),
     .base_work (AW'(32'h1600000)), .base_board(AW'(32'h1680000)),
     .base_char (AW'(32'h1690000)), .base_buffer(AW'(32'h16d0000)),
-    .base_pal3d(AW'(32'h1730000)), .base_xlat3d(AW'(32'h1731000)),
+    .base_pal3d(AW'(32'h1730000)), .base_xlat3d(AW'(32'h1731000)), .col_inval(oc_col_inval),
     .sd_req(sd_req), .sd_we(sd_we), .sd_addr(sd_addr), .sd_din(sd_din),
     .sd_be(sd_be), .sd_dout(sd_dout_i), .sd_ack(sd_ack_i),
     .oc_tram_we(oc_tram_we), .oc_pal_we(oc_pal_we), .oc_addr(oc_addr),
@@ -804,8 +806,8 @@ module m2_boot_harness #(
     .mat_we(geo_mat_we), .mat_idx(geo_mat_idx), .mat_data(geo_mat_data),
     .eng_busy(geo_eng_busy),
     .foc_x(geo_foc_x), .foc_y(geo_foc_y),
-    .lit_x(), .lit_y(), .lit_z(), .dbg_lit_n(),
-    .tp_we(), .tp_idx(), .tp_diffuse(), .tp_ambient(), .dbg_tp_n(),
+    .lit_x(geo_lit_x), .lit_y(geo_lit_y), .lit_z(geo_lit_z), .dbg_lit_n(),
+    .tp_we(geo_tp_we), .tp_idx(geo_tp_idx), .tp_diffuse(geo_tp_diffuse), .tp_ambient(geo_tp_ambient), .dbg_tp_n(),
     .obj_tpa(geo_obj_tpa), .obj_tha(geo_obj_tha), .obj_oba(geo_obj_oba), .obj_obc(geo_obj_obc),
     .obj_valid(geo_obj_valid),
     .dbg_mtx_n(geo_mtx_n), .dbg_foc_n(geo_foc_n),
@@ -831,6 +833,10 @@ module m2_boot_harness #(
   wire [3:0]  geo_mat_idx;
   wire [31:0] geo_mat_data, geo_foc_x, geo_foc_y, geo_obj_oba, geo_obj_obc;
   wire [31:0] geo_obj_tha, geo_obj_tpa;
+  wire [31:0] geo_lit_x, geo_lit_y, geo_lit_z;   // R222
+  wire        geo_tp_we;
+  wire  [4:0] geo_tp_idx;
+  wire  [7:0] geo_tp_diffuse, geo_tp_ambient;
 
   m2_geometry u_geometry (
     .clk(clk_mem), .rst_n(rst_n),
@@ -843,11 +849,13 @@ module m2_boot_harness #(
     .xc(32'h43780000), .yc(32'h43400000),          // 248.0, 192.0
     .a_left(32'hC3780000), .a_right(32'h43780000), // -248, +248
     .a_bottom(32'h43400000), .a_top(32'hC3400000), // +192, -192
-    .flat_col(24'hC0C0C0),
+    .tha(geo_obj_tha), .lit_x(geo_lit_x), .lit_y(geo_lit_y), .lit_z(geo_lit_z),
+    .tp_we(geo_tp_we), .tp_idx(geo_tp_idx), .tp_diffuse(geo_tp_diffuse), .tp_ambient(geo_tp_ambient),
+    .col_inval(oc_col_inval), .mem_space(eng_mem_space), .dbg_col_miss(),
     .q_valid(eng_q_valid), .q_ready(1'b1),
     .q_x0(eng_q_x0), .q_y0(eng_q_y0), .q_x1(eng_q_x1), .q_y1(eng_q_y1),
     .q_x2(eng_q_x2), .q_y2(eng_q_y2), .q_x3(eng_q_x3), .q_y3(eng_q_y3),
-    .q_col(), .q_z(),
+    .q_col(eng_q_col), .q_z(),
     .dbg_polys(eng_polys), .dbg_objects(eng_objects), .dbg_capped(eng_capped),
     .dbg_clip_in(eng_clip_in), .dbg_clip_out(eng_clip_out),
     .dbg_clip_dropped(eng_clip_drop), .dbg_nonfinite(eng_nonfinite),

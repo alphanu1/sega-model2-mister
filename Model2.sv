@@ -1382,6 +1382,7 @@ localparam logic [SDR_AW:1] GAME_PRAM1  = SDR_AW'(32'h1720000);   // 128 KB, fas
 localparam logic [SDR_AW:1] GAME_PAL3D  = SDR_AW'(32'h1730000);   // 2 KB, palette 0x1000-0x13ff
 localparam logic [SDR_AW:1] GAME_XLAT3D = SDR_AW'(32'h1731000);   // 48 KB, colorxlat
 localparam logic [SDR_AW:1] GAME_TEXRAM = SDR_AW'(32'h1740000);   // 128 KB, texture RAM
+localparam logic [SDR_AW:1] GAME_TEX    = SDR_AW'(32'h0720000);   // texture ROM, byte 0x0e40000 in the MRA, 8 MB
 
 // WHERE CHARACTER RAM LIVES, AS ONE SIGNAL, because two things that must agree
 // should not be two constants (study R51).
@@ -1865,7 +1866,7 @@ m2_cpu_bridge #(.BUFFERRAM(1'b1), .BUFFERRAM_WRONLY(1'b0)
 	.clk_mem(clk_sys), .rst_n_mem(cpu_rst_n),
 	.base_prog(GAME_PROG), .base_data(GAME_DATA), .base_work(GAME_WORK),
 	.base_board(GAME_BOARD), .base_char(char_base), .base_buffer(GAME_BUFFER),
-	.base_pal3d(GAME_PAL3D), .base_xlat3d(GAME_XLAT3D),
+	.base_pal3d(GAME_PAL3D), .base_xlat3d(GAME_XLAT3D), .col_inval(cpu_col_inval),
 
 	.sd_req(cpu_sd_req), .sd_we(cpu_sd_we), .sd_addr(cpu_sd_addr),
 	.sd_din(cpu_sd_din), .sd_be(cpu_sd_be),
@@ -2504,7 +2505,7 @@ m2_geo #(.AW(SDR_AW), .DEPTH(128)) u_geo (
 	.tp_we(geo_tp_we), .tp_idx(geo_tp_idx),
 	.tp_diffuse(geo_tp_diffuse), .tp_ambient(geo_tp_ambient),
 	.dbg_tp_n(geo_tp_n),
-	.obj_tpa(), .obj_tha(), .obj_oba(geo_obj_oba), .obj_obc(geo_obj_obc),
+	.obj_tpa(), .obj_tha(geo_obj_tha), .obj_oba(geo_obj_oba), .obj_obc(geo_obj_obc),
 	.obj_valid(geo_obj_valid),
 	.dbg_mtx_n(geo_mtx_n), .dbg_foc_n(geo_foc_n)
 );
@@ -2519,10 +2520,20 @@ m2_geo #(.AW(SDR_AW), .DEPTH(128)) u_geo (
 // ROM is masked to its own size. Ours is 12 MB, 3M dwords, so 22 bits covers it
 // and addresses past the end read whatever is there rather than wrapping into
 // something meaningful. MAME's polygon_rom_mask is not a power of two either.
-wire [SDR_AW:1] eng_base = geo_obj_oba_r[24] ? GAME_PRAM1
+// R222: THE ENGINE READS FOUR MEMORIES, and says which with mem_space: 1 is
+// the texture header, in texture RAM (addr[23]) or the texture ROM, 16-bit
+// words read as dword pairs; 2 the palette mirror; 3 the translation mirror.
+wire [SDR_AW:1] eng_base = (eng_mem_space == 2'd1) ? (eng_mem_addr[23] ? GAME_TEXRAM : GAME_TEX)
+                         : (eng_mem_space == 2'd2) ? GAME_PAL3D
+                         : (eng_mem_space == 2'd3) ? GAME_XLAT3D
+                         : geo_obj_oba_r[24] ? GAME_PRAM1
                          : geo_obj_oba_r[23] ? GAME_POLY
                                              : GAME_PRAM0;
-wire [23:0] eng_mem_idx  = (geo_obj_oba_r[24] || !geo_obj_oba_r[23])
+wire [23:0] eng_mem_idx  = (eng_mem_space == 2'd1) ? (eng_mem_addr[23] ? {9'd0, eng_mem_addr[14:0]}   // 64 K words
+                                                                       : {3'd0, eng_mem_addr[20:0]})  // 4 M words
+                         : (eng_mem_space == 2'd2) ? {15'd0, eng_mem_addr[8:0]}
+                         : (eng_mem_space == 2'd3) ? {10'd0, eng_mem_addr[13:0]}
+                         : (geo_obj_oba_r[24] || !geo_obj_oba_r[23])
                          ? {9'd0, eng_mem_addr[14:0]}      // 32K-dword window
                          : {2'd0, eng_mem_addr[21:0]};
 
@@ -2547,6 +2558,9 @@ always_ff @(posedge clk_sys) if (geo_obj_valid) geo_obj_oba_r <= geo_obj_oba;
 wire        geo_mat_we;
 wire [3:0]  geo_mat_idx;
 wire [31:0] geo_mat_data, geo_foc_x, geo_foc_y, geo_obj_oba, geo_obj_obc;
+wire [31:0] geo_obj_tha;          // R222
+wire        cpu_col_inval;
+wire  [1:0] eng_mem_space;
 wire        geo_obj_valid, eng_busy;
 wire [15:0] geo_mtx_n, geo_foc_n, geo_pd_words, geo_pd_cmds, geo_lit_n;
 wire [31:0] geo_lit_x, geo_lit_y, geo_lit_z;
@@ -2617,7 +2631,11 @@ m2_geometry u_geometry (
 	.xc(32'h43780000), .yc(32'h43400000),               // 248.0, 192.0
 	.a_left(32'hC3780000), .a_right(32'h43780000),      // -248.0, +248.0
 	.a_bottom(32'h43400000), .a_top(32'hC3400000),      // +192.0, -192.0
-	.flat_col(24'hC0C0C0),
+	// R222: the light, the texture parameters and the header address from the
+	// walker; the colour data through the engine's own port, by space.
+	.tha(geo_obj_tha), .lit_x(geo_lit_x), .lit_y(geo_lit_y), .lit_z(geo_lit_z),
+	.tp_we(geo_tp_we), .tp_idx(geo_tp_idx), .tp_diffuse(geo_tp_diffuse), .tp_ambient(geo_tp_ambient),
+	.col_inval(cpu_col_inval), .mem_space(eng_mem_space), .dbg_col_miss(),
 	.q_valid(q3d_valid), .q_ready(q3d_ready),
 	.q_x0(q3d_x0), .q_y0(q3d_y0), .q_x1(q3d_x1), .q_y1(q3d_y1),
 	.q_x2(q3d_x2), .q_y2(q3d_y2), .q_x3(q3d_x3), .q_y3(q3d_y3),

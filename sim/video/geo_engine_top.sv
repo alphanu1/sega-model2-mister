@@ -18,7 +18,13 @@ module m2_geo_engine_top (
   output logic [31:0] poly_attr,
   output logic [31:0] nrm_x, nrm_y, nrm_z,
   output logic [15:0] dbg_polys, dbg_objects, dbg_capped,
-  output logic [15:0] dbg_culled
+  output logic [15:0] dbg_culled,
+  // R222
+  input  logic [31:0] tha, lit_x, lit_y, lit_z,
+  input  logic tp_we, input logic [4:0] tp_idx, input logic [7:0] tp_diffuse, tp_ambient,
+  input  logic col_inval,
+  output logic [1:0] mem_space,
+  output logic [23:0] poly_col, output logic [7:0] poly_luma, output logic [15:0] dbg_col_miss
 );
   logic        mul_req, add_req, add_sub, mul_gnt, mul_rsp, add_gnt, add_rsp;
   logic [31:0] mul_a, mul_b, mul_res, add_a, add_b, add_res;
@@ -46,7 +52,11 @@ module m2_geo_engine_top (
     .poly_valid(poly_valid), .poly_ready(poly_ready),
     .v0x(v0x), .v0y(v0y), .v0z(v0z), .v1x(v1x), .v1y(v1y), .v1z(v1z),
     .v2x(v2x), .v2y(v2y), .v2z(v2z), .v3x(v3x), .v3y(v3y), .v3z(v3z),
-    .poly_attr(poly_attr), .nrm_x(nrm_x), .nrm_y(nrm_y), .nrm_z(nrm_z), .dbg_polys(dbg_polys), .dbg_objects(dbg_objects), .dbg_capped(dbg_capped), .dbg_culled(dbg_culled), .poly_prev_link(), .poly_chain_ok()
+    .poly_attr(poly_attr), .nrm_x(nrm_x), .nrm_y(nrm_y), .nrm_z(nrm_z), .dbg_polys(dbg_polys), .dbg_objects(dbg_objects), .dbg_capped(dbg_capped), .dbg_culled(dbg_culled), .poly_prev_link(), .poly_chain_ok(),
+    .tha(tha), .lit_x(lit_x), .lit_y(lit_y), .lit_z(lit_z),
+    .tp_we(tp_we), .tp_idx(tp_idx), .tp_diffuse(tp_diffuse), .tp_ambient(tp_ambient),
+    .col_inval(col_inval), .mem_space(mem_space),
+    .poly_col(poly_col), .poly_luma(poly_luma), .dbg_col_miss(dbg_col_miss)
   );
 
   logic [1:0] p_mul_req, p_mul_gnt, p_mul_rsp;

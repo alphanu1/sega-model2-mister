@@ -12712,3 +12712,54 @@ luma against the engine's, over random normals, lights and texture
 parameters, and the header address walk against the tho rule; (b) the
 colour stage against a synthetic palette and xlat with the gamma function;
 (c) the board: cars that are shaded, not white.
+
+*R222, steps 1-3 at the desk (17:40).* Built as designed above:
+1. `m2_cpu_bridge`: T_PAL bytes 0x2000-0x27ff and all of T_XLAT decode as
+   T_SDRAM writes at base_pal3d (word 0x1730000) and base_xlat3d (word
+   0x1731000) through the ordinary write-through path, the on-chip palette
+   write and the tile layer's 96-entry tap taken beside them on the first
+   pass; a `col_inval` pulse per mirrored write. Reads of both ranges come
+   from the mirror. `make test_m2_cpu_bridge` 119 checks (the on-chip
+   half-word data is the LOW half of the bus because the i960's LSU drives
+   a halfword on both halves -- the test's first version drove only the
+   upper half and "failed" the palette RAM that was right).
+2. `m2_geo`: op 0x04 with address bit 23 goes down the polygon-data road
+   into TEXRAM (word 0x1740000, 64 K x 16, wrapping), one 16-bit word per
+   payload dword, low half only (`pd_tex` skips the DMA's high half); bit
+   23 clear (log RAM) is stepped over by its count as before. `make
+   test_m2_geo` 75 checks including the wrap at 0xffff.
+3. `m2_geo_engine`: after R219's dotp, the same three multiplies and two
+   adds against the light (dsel); |dotl| or 0 times the texture parameter's
+   diffuse plus its ambient, both held as floats in a 32-entry MLAB filled
+   at tp_we; f2i8 clamps and truncates as the reference's clamp-then-cast;
+   header words 0 and 3 read through the port with `mem_space` = 1 (addr[23]
+   = texture RAM), the address stepping by tho*4 after the read; a
+   translucent flat header culls; the colour from a 256-entry direct-mapped
+   MLAB cache on {colorbase, luma6} (valid bits cleared by col_inval), a miss
+   costing one palette read (space 2) and three translation reads (space 3)
+   with the gamma curve applied; `poly_col` beside the polygon, latched by
+   m2_geometry with the vertices and handed to the clipper's in_col where
+   the constant 0xC0C0C0 was. Model2.sv picks the base by space; the pair
+   cache in front is indexed by the absolute dword so spaces cannot alias.
+   `make test_m2_geo_engine` 36 checks: the three polygons' luma 98, 176,
+   254 EXACTLY as the float transcription of geo_parse_np_ns gives, the
+   colour equal to the transcription's palette -> table -> gamma for each,
+   three misses; a light from behind gives the ambient alone (20) with one
+   miss then hits, an invalidate one more miss; a translucent header culls
+   all three. `test_m2_geometry` 30 (the lit colour reaches the clipper).
+
+*R222 on the boot bench through the title (17:50):* PASS, and THE QUADS
+CARRY 294 DISTINCT COLOURS over the 4,096 recorded (ffffff x385, 869a9a
+x242, 000000 x220, 5c5c5c x200, 009475 x135, bd2100 x90 ...) where every
+quad was 0xC0C0C0 before: real headers, real palette entries, real table
+entries, on the game's own data. Cost: 9,436 -> 11,042 engine ticks per
+object (+17%), 560 -> 647 per quad; 1,622 objects in the budget that held
+1,880 -- the header reads, the second dot product and the colour misses are
+all serial in the engine's one state machine. To be overlapped later (the
+header read can be issued at E_ATTR, when attr is known, and consumed at the
+colour step). One thing the bench also says: the walker wrote 0 texture RAM
+words in the whole run while 55 objects (3%) point their header at texture
+RAM -- so whatever fills texture RAM for those is not op 0x04 in the display
+list within this window; those 55 read 0xFFFF headers (renderer 3, colorbase
+0x3ff) and draw in whatever colour that maps to. Open: find the writer.
+Building `build/lit1`.

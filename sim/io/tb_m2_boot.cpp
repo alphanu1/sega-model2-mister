@@ -77,7 +77,7 @@ static void th_report() {
   for (auto &kv : g_th_colorbase_n) { if (n++ < 24) std::printf("      colorbase %03x x%u\n", kv.first, kv.second); }
 }
 static std::set<uint32_t> g_geo_writes;      // word addresses geo_polygon_data wrote
-static std::vector<std::array<int,8>> g_quads;   // screen quads the pipeline emitted
+static std::vector<std::array<int,9>> g_quads;   // screen quads the pipeline emitted, and their colour (R222)
 // base_buffer, as passed to m2_cpu_bridge -- the SAME array the CPU reaches
 // buffer RAM through, so the coprocessor and the CPU finally share one memory.
 // File scope because mem_tick() is defined above the base constants it needs.
@@ -606,7 +606,7 @@ int main(int argc, char **argv) {
       g_quads.push_back({(int)(int16_t)d->eng_q_x0, (int)(int16_t)d->eng_q_y0,
                          (int)(int16_t)d->eng_q_x1, (int)(int16_t)d->eng_q_y1,
                          (int)(int16_t)d->eng_q_x2, (int)(int16_t)d->eng_q_y2,
-                         (int)(int16_t)d->eng_q_x3, (int)(int16_t)d->eng_q_y3});
+                         (int)(int16_t)d->eng_q_x3, (int)(int16_t)d->eng_q_y3, (int)d->eng_q_col});
     // The engine, same board handshake when M2_GEO_LAT is set (R207).
     {
       static const int eng_lat = std::getenv("M2_GEO_LAT") ? std::atoi(std::getenv("M2_GEO_LAT")) : 0;
@@ -646,8 +646,13 @@ int main(int argc, char **argv) {
       if (uint32_t(d->geo_objs) != g_th_last_objs) { g_th_last_objs = uint32_t(d->geo_objs); th_probe(uint32_t(d->geo_tha_last)); }
       const uint32_t oba = uint32_t(d->geo_oba_last);
       const uint32_t idx = uint32_t(d->eng_mem_addr);
+      const unsigned space = d->eng_mem_space;          // R222
       uint32_t base, off;
-      if      (oba & (1u << 24)) { base = 0x1720000u; off = idx & 0x7fffu;   }
+      if      (space == 1)       { if (idx & 0x800000u) { base = 0x1740000u; off = idx & 0x7fffu; }
+                                   else                 { base = 0x0720000u; off = idx & 0x1fffffu; } }
+      else if (space == 2)       { base = 0x1730000u; off = idx & 0x1ffu;    }
+      else if (space == 3)       { base = 0x1731000u; off = idx & 0x3fffu;   }
+      else if (oba & (1u << 24)) { base = 0x1720000u; off = idx & 0x7fffu;   }
       else if (oba & (1u << 23)) { base = 0x0b20000u; off = idx & 0x3fffffu; }
       else                       { base = 0x1710000u; off = idx & 0x7fffu;   }
       const uint32_t a = (base + (off << 1)) & 0x1ffffff;
@@ -2808,14 +2813,24 @@ int main(int argc, char **argv) {
     }
     if (const char *qo = std::getenv("M2_QUADS_OUT")) {
       if (FILE *qf = std::fopen(qo, "w")) {
-        for (auto &q : g_quads) std::fprintf(qf, "%d %d %d %d %d %d %d %d\n", q[0], q[1], q[2], q[3], q[4], q[5], q[6], q[7]);
+        for (auto &q : g_quads) std::fprintf(qf, "%d %d %d %d %d %d %d %d %06x\n", q[0], q[1], q[2], q[3], q[4], q[5], q[6], q[7], q[8]);
         std::fclose(qf);
       }
     }
     for (size_t i = 0; i < g_quads.size() && i < 24; i++)
-      std::printf("      quad %zu: (%d,%d) (%d,%d) (%d,%d) (%d,%d)\n", i,
+      std::printf("      quad %zu: (%d,%d) (%d,%d) (%d,%d) (%d,%d) col %06x\n", i,
                   g_quads[i][0], g_quads[i][1], g_quads[i][2], g_quads[i][3],
-                  g_quads[i][4], g_quads[i][5], g_quads[i][6], g_quads[i][7]);
+                  g_quads[i][4], g_quads[i][5], g_quads[i][6], g_quads[i][7], g_quads[i][8]);
+    {
+      // R222: the colours the title's quads carry -- how many distinct, and the
+      // commonest. A single colour here would mean the lookup is not landing.
+      std::map<int,int> cols; for (auto &q : g_quads) cols[q[8]]++;
+      std::vector<std::pair<int,int>> top(cols.begin(), cols.end());
+      std::sort(top.begin(), top.end(), [](auto &a, auto &b){ return a.second > b.second; });
+      std::printf("    QUAD COLOURS: %zu distinct over %zu quads;", cols.size(), g_quads.size());
+      for (size_t i = 0; i < top.size() && i < 10; i++) std::printf(" %06x x%d", top[i].first, top[i].second);
+      std::printf("\n");
+    }
     std::printf("    polygon_data: %u commands, %u dwords, %zu distinct words written\n",
                 d->geo_pdcmds, d->geo_pdwords, g_geo_writes.size());
     if (!g_geo_writes.empty()) {

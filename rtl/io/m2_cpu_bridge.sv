@@ -153,6 +153,7 @@ module m2_cpu_bridge #(
   output logic        oc_xlat_we,
   output logic  [6:0] oc_xlat_addr,
   output logic  [7:0] oc_xlat_din,
+  output logic        col_inval,        // R222: a mirrored colour write happened (one pulse)
 
   // I/O the core answers itself.
   input  logic [31:0] io_rdata,
@@ -622,7 +623,7 @@ module m2_cpu_bridge #(
     if (!rst_n_mem) begin
       st <= S_IDLE; ack_mem <= 1'b0; half <= 1'b0;
       sd_req <= 1'b0; sd_we <= 1'b0; sd_addr <= '0; sd_din <= 16'd0; sd_be <= 2'b11;
-      oc_tram_we <= 1'b0; oc_pal_we <= 1'b0; oc_xlat_we <= 1'b0;
+      oc_tram_we <= 1'b0; oc_pal_we <= 1'b0; oc_xlat_we <= 1'b0; col_inval <= 1'b0;
       io_sel <= 1'b0; io_we <= 1'b0;
       r_rdata <= 32'd0;
       dbg_cpu_reads <= 32'd0; dbg_cpu_writes <= 32'd0; dbg_unmapped <= 32'd0;
@@ -634,7 +635,7 @@ module m2_cpu_bridge #(
       dbg_probe6 <= 32'hEEEE_EEEE; dbg_probe2 <= 32'hEEEE_EEEE;
       dbg_tram_wr <= 32'd0; dbg_pal_wr <= 32'd0;
     end else begin
-      oc_tram_we <= 1'b0; oc_pal_we <= 1'b0; oc_xlat_we <= 1'b0;
+      oc_tram_we <= 1'b0; oc_pal_we <= 1'b0; oc_xlat_we <= 1'b0; col_inval <= 1'b0;
       io_sel     <= 1'b0;
 
       // The cache's own housekeeping, before any state runs.
@@ -672,6 +673,7 @@ module m2_cpu_bridge #(
               end else if (needs_rmw && !rmw_done) begin
                 // R222: the on-chip half of a mirrored write, once, here.
                 oc_pal_we   <= pal_mirror && half_be;
+                col_inval   <= pal_mirror || xlat_mirror;
                 oc_xlat_din <= r_wdata[7:0];
                 oc_xlat_we  <= xlat_mirror && (r_addr[8:0] == 9'h080);
                 dc_inval <= 1'b1;
@@ -693,6 +695,7 @@ module m2_cpu_bridge #(
                 // RAM's low word, or the tile layer's 96-entry tap -- unless
                 // the read-modify-write pass already did it.
                 oc_pal_we   <= r_we && !rmw_done && pal_mirror && half_be;
+                col_inval   <= r_we && !rmw_done && (pal_mirror || xlat_mirror);
                 oc_xlat_din <= r_wdata[7:0];
                 oc_xlat_we  <= r_we && !rmw_done && xlat_mirror && (r_addr[8:0] == 9'h080);
                 sd_addr <= sd_word;
