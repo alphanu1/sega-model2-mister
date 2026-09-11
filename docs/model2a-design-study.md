@@ -12445,3 +12445,17 @@ synthesis: 52,288 ALUTs / 50,789 registers against dbuf10's 51,892 /
 50,082 (dbuf11, which crashed: 52,728 / 51,373); the clipper 1,899 / 3,301
 against the unslimmed 2,086 / 3,765. Predicted fit 91-93% ALM, block
 memory unchanged at 77%.
+
+*dbuf13 fit (18:00): 40,690 ALM (97%), block memory 77% -- the prediction of
+91-93% was wrong by the same mechanism that crashed dbuf11.* +396 ALUTs
+and +707 registers of synthesis over dbuf10 became +2,900 fitted ALMs:
+at this density the fitter stops packing registers beside LUTs, so a
+register costs an ALM of its own, and two of four seeds crashed as the
+halves did. s11 fit with setup -0.525 on clk_mem, s15 with -0.543 on
+clk_sys, hold positive on all clocks for both. s15 deployed as the
+functional test. THE LESSON, FOR THE FIT MODEL: above ~92% fitted, add
+registers at one ALM each, not four to the ALM, and expect the fitter to
+crash on half the seeds. The relief is the coprocessor's 128 x 32
+flip-flop input queue -- ~2,000 ALM as one M10K block, recorded in the
+qsf since the area experiment -- and it is the next change, before
+lighting or anything else that adds logic.
