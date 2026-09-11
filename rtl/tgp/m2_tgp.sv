@@ -514,7 +514,18 @@ module m2_tgp #(
   wire [1:0]  radr_i   = io_addr[4:3];
 
   wire        io_mid   = (io_addr[15:5] == 11'd1);   // 0x20-0x3f
-  wire        sel_math = io_mid && (io_addr[4:0] <= 5'h0b);
+  // GATED BY THE WINDOW, AS THE FULL R156 HAD IT AND AS MAME'S VIEW SEMANTICS
+  // SAY. The narrow R156 left the math units reachable with the bank on, and
+  // the read mux ranks them above the banked memory, so a windowed load from
+  // io 0x20 was answered by the sincos unit. The microcode's init (sub_7cb,
+  // 0x7d3) reads copro data ROM dword 0x20 exactly that way to form $0x6a,
+  // the base of the track-lookup records: it got 0 instead of 0x19C90, every
+  // record fetch landed on zeros, every placement query returned the "not
+  // found" default, and the cars were placed off the scene (study R205).
+  // Measured in the boot bench: d = 0 after 0x7d3 while the bus returned
+  // 0x19C90. The tilemap cost the full R156 was blamed for was the masked
+  // dummy write (R202) and the shared write port, not this gate.
+  wire        sel_math = !win_en && io_mid && (io_addr[4:0] <= 5'h0b);
 
   // ---------------------------------------------------- the math units
   //

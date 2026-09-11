@@ -11509,3 +11509,47 @@ reference finds. Microcode, tables and inputs are identical; what remains is
 the data it reads -- the copro data ROM through port 9 and buffer RAM -- or
 the arithmetic of the loop. MAME exposes the TGP's data space to Lua, so the
 reads themselves are comparable, and that is the next diff.
+
+**R205 -- THE TGP WRAPPER ANSWERED A WINDOWED READ OF ROM WORD 0x20 WITH THE
+SINCOS UNIT, SO THE TRACK-LOOKUP RECORD BASE WAS ZERO AND EVERY PLACEMENT
+QUERY RETURNED "NOT FOUND".**
+
+The mechanism, instruction by instruction from the boot bench with buffer-RAM
+reads on (`obs_tgpx_*` taps on `core.u_regs` and `core.u_mem.ram0`):
+
+    sub_7cb  a = 0x800000 (0xFF800000 sign-extended), rf3 = a   bank ON
+    0x7cf    d = load_even((bx1)), b1 = 0x10   -> d = 0x00000030      right
+    0x7d1    $0x69 = 0xFF800030                                       right
+    0x7d3    d = load_even((bx1)), b1 = 0x20   -> d = 0x00000000      WRONG
+             (the bus returned 0x00019C90 for ROM dword 0x20: logged)
+    0x7d5    $0x6a = 0xFF800000                 should be 0xFF819C90
+    lookup   0x486 d = idx<<4 = 0x1440, 0x488 d += $0x6a = 0xFF801440,
+             0x48b d &= 0xffff, x0 = 0x1440: the record is fetched at ROM
+             dword 0x1440 (zeros) instead of 0x1B0D0 (the records live at
+             0x19C90 + idx<<4; the candidate list itself, at $0x69 + r5, was
+             read correctly: count 6, indices 0x144 0x145 0x146 ...)
+
+`m2_tgp.sv`: `io_mid = (io_addr[15:5] == 1)` and `sel_math = io_mid && ...`
+were not gated by `win_en`, and the read mux ranks `sel_math` above
+`sel_rom`. With the bank on, io 0x20 is the sincos unit's read port, not the
+banked ROM. R156's full form gated `io_mid` too; the narrow form kept the
+math units reachable through the window because "on the board it cost the
+tilemap -- the TGP hung, the i960 stalled on its next FIFO read". Tonight's
+R202 (the masked dummy write) and the shared write port are the likelier
+owners of that hang; the gate was innocent and its removal was the fault.
+MAME's model is the arbiter: the view is installed over the whole io space
+after the math units and hides them while selected.
+
+Fix: `sel_math = !win_en && io_mid && ...`. Unit tests: fp_mul, fp_add,
+fp_div, mb86233_alu, mb86233_agu clean; mb86233_regs' 46,966 failures on
+register 0x21 are the ones the handoff already records.
+
+*How it was found, for the record.* Not by reading. By a chain of
+measurements each of which named the next: polygons 0 on the board -> the
+bench's quads all on one screen edge -> the transform's inputs (matrix
+translation 1.1 rad off-axis) -> the reference's matrix for the same frame
+(centred) -> the coprocessor answer streams -> the placement query answers
+(bench zero, then bench -0.1/0x3DF against reference -0.0/0x146) -> the TGP's
+external reads (candidates right, records fetched with no base) -> the
+init routine's register trace (d = 0 after one specific windowed load) -> the
+decode. Eleven bench runs of four minutes each, no fitter.

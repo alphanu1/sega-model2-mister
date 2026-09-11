@@ -144,6 +144,19 @@ E_EMIT, the walker's captured matrix/focal against MAME's for the same
 object, and why the objects end at their attribute word on the board.
 `build/scr` (four seeds) adds the vertical-scroll probe for the fast jump.
 
+**R204/R205, 2026-09-11 00:00-01:30, found and fixed at the desk.** The boot
+bench had buffer-RAM reads OFF (`BOOT_BUFFERRAM ?= 0`; the board is 1), so
+every mailbox answer it ever handed the game was zero; with reads on, the
+TGP's placement answers were real and wrong (-0.1 / 0x3DF where the
+reference gives -0.0 / 0x146). Traced through the TGP's external reads and a
+register trace of its init routine: `m2_tgp.sv` answered a windowed read of
+copro ROM dword 0x20 with the sincos unit (`sel_math` not gated by the bank
+window), so the track-lookup record base $0x6a was 0x800000 with no offset
+and every record fetch hit zeros. Fix: `sel_math = !win_en && ...`. With it
+the bench's answers match the reference's exactly, word for word. `build/tgp`
+(seeds 11, 13, 14, 15) carries all three fixes: the bridge's masked dummy
+write (R202), the table base (R203), the math-unit gate (R205).
+
 **Tools fixed on the way:** `mame_i960_frame_trace.lua` never read `M2_FRAME`;
 `rom_csum.py`'s `build_image` prepended the index-3 I/O ROM (64 KB) to the
 image, so `M2_BOOT_IMAGE` trapped the real-memory bench on instruction 1; the
