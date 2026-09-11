@@ -172,6 +172,8 @@ module m2_boot_harness #(
   output logic [31:0] obs_xf_x, obs_xf_y, obs_xf_z,
   output logic [31:0] obs_mtx [12],
   output logic [23:0] eng_q_col,               // R222: the quad's colour
+  output logic [31:0] eng_q_z,                 // its sort z, the minimum of the four
+  output logic [15:0] eng_pj_lost,             // projections abandoned on timeout (R226)
   output logic signed [15:0] eng_q_x0, eng_q_y0, eng_q_x1, eng_q_y1,
   output logic signed [15:0] eng_q_x2, eng_q_y2, eng_q_x3, eng_q_y3,
   // WHICH INSTRUCTION EMITS THE GEOMETRY. The board and the bench disagree about
@@ -857,11 +859,11 @@ module m2_boot_harness #(
     .q_valid(eng_q_valid), .q_ready(1'b1),
     .q_x0(eng_q_x0), .q_y0(eng_q_y0), .q_x1(eng_q_x1), .q_y1(eng_q_y1),
     .q_x2(eng_q_x2), .q_y2(eng_q_y2), .q_x3(eng_q_x3), .q_y3(eng_q_y3),
-    .q_col(eng_q_col), .q_z(),
+    .q_col(eng_q_col), .q_z(eng_q_z),
     .dbg_polys(eng_polys), .dbg_objects(eng_objects), .dbg_capped(eng_capped),
     .dbg_clip_in(eng_clip_in), .dbg_clip_out(eng_clip_out),
     .dbg_clip_dropped(eng_clip_drop), .dbg_nonfinite(eng_nonfinite),
-    .dbg_pj_lost(), .dbg_eng_state(), .dbg_qst(), .dbg_clip_state()
+    .dbg_pj_lost(eng_pj_lost), .dbg_eng_state(), .dbg_qst(), .dbg_clip_state()
   );
   assign obs_poly_valid = u_geometry.poly_valid & u_geometry.poly_ready;
   assign obs_v0x = u_geometry.u_engine.v0x; assign obs_v0y = u_geometry.u_engine.v0y; assign obs_v0z = u_geometry.u_engine.v0z;

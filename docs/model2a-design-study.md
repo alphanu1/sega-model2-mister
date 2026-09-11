@@ -12885,3 +12885,49 @@ a third of the picture gone. Fixed: 4 bands held, top band painted, 9,922.
 two clock-crossing branches and the revert hit the unused one, so "fixed"
 and "broken" measured identically and nearly had me record that the fix did
 nothing. A control that shows no difference is a claim about the control.
+
+**R227 -- 100/60/30 FROM A 1200 MHz VCO, AND EVERY RATE THAT HANGS OFF THE
+CORE CLOCK.**
+
+The geometry stage takes 13-16 ms of a 17 ms frame (R222's capture), so the
+core clock is the throughput. Model 1 runs its 3D layer at 58.947 MHz and
+its CPU at 29.47 and records the same fight -- "the shared FP pool measures
+53.25 MHz" -- so 60/30 is a proven target on this part, not a hope.
+
+A 1200 MHz VCO divides exactly into all four rates this core wants: 100
+(/12), 60 (/20), 48 (/25) and 30 (/40). 800 could not: it gave 100, 50, 32
+and 25, and 60 is not a divisor of it. The 32 MHz output existed for a 16
+MHz dot clock at ce_pix = /2 and HAS NO USERS -- `ce_pix` is a 16/50
+fractional accumulator on clk_sys, so the video already runs on the core
+clock -- which is why moving that output to 48 costs nothing.
+
+EVERY RATE DERIVED FROM clk_sys HAD TO MOVE WITH IT, and each one is a
+chip that plays at the wrong speed if it does not:
+
+    ce_pix            16/50  -> 16/60      the 16 MHz dot clock
+    sound board       TICK_DEN 50 -> 60    the 68000's two 10 MHz phases
+    YM3438            /6     -> 25/(3*TICK_DEN)   8.333 MHz at any core clock
+    MultiPCM rate     CE_DEN 50 -> 60, OUT_DEN 50M -> 60M
+    I/O board Z80     TICK_DEN 50 -> 60    4 MHz
+    sound link        BYTE_CYCLES 16,000 -> 19,200   31,250 baud
+    debug UART        DIVISOR 417 -> 521   115,200 baud
+
+The YM3438 was the one that could not simply be rescaled: a divide-by-six
+is 8.333 MHz only while the core clock is 50, and at 60 it is 10 MHz -- the
+music a fifth sharp. It is now the same accumulator idiom as the 68000's
+phases, 25/(3 x TICK_DEN), which is 1/6 at 50 and 25/180 at 60.
+
+*Proof at the desk:* `make test_m2_sndboard` still matches MAME instruction
+for instruction, and the measured sample period moves 1,120 -> 1,344 cycles
+-- 60 MHz / 1,344 = 44,643 Hz, the same rate in absolute terms. The WAV is
+NO LONGER byte-identical to the 50 MHz baseline and cannot be: the enables
+land on different cycles. That oracle is for changes that must not move the
+timing, and a clock change is not one.
+
+*What this build is for.* The design's Fmax today is 51.9 MHz on the core
+clock and 28.19 on the i960, so this WILL miss timing; the point is to
+learn by how much and where. The two paths already known, from the 50 MHz
+build ranked by slack: an OSD status bit (`status[21]`, the test-quad
+enable) reaching the quad store's dropped counter, 0.733 ns of slack at 50
+and -2.6 at 60; and the i960's float-convert unit reaching the writeback
+mux, 4.53 ns at 25 and -2.14 at 30.

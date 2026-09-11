@@ -50,7 +50,7 @@ module m2_sound_board #(
   parameter bit PCM_CACHE = 1'b1,          // per-voice sample line
   parameter bit PCM_RATE  = 1'b1,          // headroom + fixed-rate drain
   parameter int unsigned TICK_NUM = 20,     // 2 x 10 MHz: one enable per phase
-  parameter int unsigned TICK_DEN = 50      // clk_sys
+  parameter int unsigned TICK_DEN = 60      // clk_sys (R227)
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -248,8 +248,15 @@ module m2_sound_board #(
   // for exactly one enable. The payload is latched with the edge that raises
   // the strobe -- gating a capture by the same condition that raises it is a
   // rule this project has already paid for twice.
-  logic [2:0] ym_div;
-  wire        ym_cen = (ym_div == 3'd0);
+  // THE YM3438's 8.333 MHz AS A RATIO OF clk_sys, NOT A DIVIDE BY SIX (R227).
+  // A /6 counter is 8.333 MHz only while clk_sys is 50; at 60 it is 10 MHz and
+  // the music plays a fifth sharp. 25/(3 x TICK_DEN) is the same rate at any
+  // core clock -- 25/150 = 1/6 at 50, 25/180 at 60 -- and the accumulator is
+  // the idiom this file already uses for the 68000's phases.
+  localparam int unsigned YM_NUM = 25;
+  localparam int unsigned YM_DEN = 3 * TICK_DEN;
+  logic [$clog2(YM_DEN):0] ym_acc;
+  logic       ym_cen;
   logic       ym_wr_pend, ym_bus_d;
   logic [1:0] ym_a_r;
   logic [7:0] ym_d_r;
@@ -257,10 +264,16 @@ module m2_sound_board #(
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      ym_div <= 3'd0; ym_wr_pend <= 1'b0; ym_bus_d <= 1'b0;
+      ym_acc <= '0; ym_cen <= 1'b0; ym_wr_pend <= 1'b0; ym_bus_d <= 1'b0;
       ym_a_r <= 2'd0; ym_d_r <= 8'd0;
     end else begin
-      ym_div   <= (ym_div == 3'd5) ? 3'd0 : ym_div + 3'd1;
+      if (ym_acc + YM_NUM >= YM_DEN) begin
+        ym_acc <= ym_acc + ($clog2(YM_DEN)+1)'(YM_NUM) - ($clog2(YM_DEN)+1)'(YM_DEN);
+        ym_cen <= 1'b1;
+      end else begin
+        ym_acc <= ym_acc + ($clog2(YM_DEN)+1)'(YM_NUM);
+        ym_cen <= 1'b0;
+      end
       ym_bus_d <= ym_bus;
       if (ym_bus && !ym_bus_d) begin
         ym_a_r     <= addr[2:1];

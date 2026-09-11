@@ -255,9 +255,9 @@ pll pll
 	.refclk(CLK_50M),
 	.rst(0),
 	.outclk_0(clk_mem),      // 100 MHz, the SDRAM controller alone
-	.outclk_1(clk_sys),      // 50 MHz, everything else. Exact /2 of outclk_0.
-	.outclk_2(clk_vid),      // 32 MHz
-	.outclk_3(clk_i960),     // 25 MHz, exact /2 of clk_sys. See rtl/pll/pll.v.
+	.outclk_1(clk_sys),      // 60 MHz, everything else (R227). VCO 1200 / 20.
+	.outclk_2(clk_vid),      // 48 MHz (unused; VCO 1200 / 25)
+	.outclk_3(clk_i960),     // 30 MHz (R227). VCO 1200 / 40.
 	.outclk_4(clk_sdram_pin),// 100 MHz at 180 deg, straight to the device pin
 	.locked(pll_locked)
 );
@@ -304,7 +304,7 @@ pll pll
 // enable into a line buffer and drives its output from its own clock, so what
 // varies is when a pixel is handed over, never which pixel or how many.
 localparam int unsigned CE_NUM = 16;      // 16 MHz
-localparam int unsigned CE_DEN = 50;      // clk_sys
+localparam int unsigned CE_DEN = 60;      // clk_sys (R227: 60 MHz)
 reg [5:0] ce_acc;
 reg       ce_pix;
 always @(posedge clk_sys) begin
@@ -2184,7 +2184,7 @@ wire signed [15:0] snd_l, snd_r;
 // cache the chip cannot produce samples that fast, so the buffer runs dry.
 // The cache alone leaves the rate short and the period uneven. Together they
 // hold 100% with no underruns at every latency from 40 to 600 cycles.
-m2_sound_board #(.PCM_CACHE(1'b1), .PCM_RATE(1'b1), .TICK_DEN(50)) u_sndboard (
+m2_sound_board #(.PCM_CACHE(1'b1), .PCM_RATE(1'b1), .TICK_DEN(60)) u_sndboard (
 	.clk(clk_sys), .rst_n(cpu_rst_n & mem_rst_n & cp_done & snd_found),
 	.rx_data(b_rx_d), .rx_valid(b_rx_v), .rx_ack(b_rx_a),
 	.tx_data(b_tx_d), .tx_valid(b_tx_v), .tx_ack(b_tx_a),
@@ -3203,7 +3203,7 @@ wire  [7:0] zio_wdata, zio_rdata;
 wire [31:0] dc_hits, dc_miss;
 wire  [7:0] iob_pa;       // PA latch; bit 0 selects the DIP banks
 wire [15:0] iob_seccnt;   // times the firmware has selected them
-m2_ioz80 #(.TICK_NUM(4), .TICK_DEN(50)) u_ioz80 (   // 4 MHz exactly, on 50 MHz clk_sys
+m2_ioz80 #(.TICK_NUM(4), .TICK_DEN(60)) u_ioz80 (   // 4 MHz exactly, on 60 MHz clk_sys
 	.clk(clk_sys), .rst_n(cpu_rst_n & fw_ready),
 	// First 16 KB only: the EPROM is 64 KB, the Z80 maps 0x0000-0x3fff, and a
 	// wrapping fw_addr[13:0] would leave the LAST quarter in the ROM.
@@ -3651,7 +3651,7 @@ wire        uart_b_valid = char_ack;
 wire [31:0] uart_dropped;
 
 generate if (DEBUG) begin : g_dbg
-m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
+m2_dbg_stream #(.DIVISOR(521), .BUDGET_CYC(240_000)) u_dbg_stream (
 	.clk(clk_sys), .rst_n(mem_rst_n),
 	// THE IP RING: 512 consecutive retired instructions, recorded at full
 	// speed and read out slowly. Sampling cannot show a BRANCH, and a branch

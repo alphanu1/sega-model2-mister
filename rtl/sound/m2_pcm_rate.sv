@@ -61,12 +61,12 @@ module m2_pcm_rate #(
   // not run dry at all. The chip idles half the time as a result, which is the
   // point -- idle is what absorbs a stall.
   parameter int unsigned CE_NUM  = 20,
-  parameter int unsigned CE_DEN  = 50,
+  parameter int unsigned CE_DEN  = 60,
   // 48 MHz / 44,643 Hz = 1075.2 cycles a sample. Accumulator, not a counter,
   // because 1075 flat is 0.02% sharp and this is the one rate that must not
   // drift.
   parameter int unsigned OUT_NUM = 44643,
-  parameter int unsigned OUT_DEN = 50_000_000,
+  parameter int unsigned OUT_DEN = 60_000_000,
   parameter int unsigned DEPTH   = 16
 ) (
   input  logic        clk,

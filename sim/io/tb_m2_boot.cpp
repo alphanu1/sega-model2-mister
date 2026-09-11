@@ -56,6 +56,7 @@ static std::set<uint32_t> g_th_colorbase;
 static std::map<uint32_t,uint32_t> g_th_colorbase_n;
 static uint32_t g_th_last_objs = 0;
 static uint32_t g_tdwords = 0;
+static unsigned g_pj_lost = 0;
 static uint32_t g_op_hist[32] = {0};   // display-list opcodes decoded from M2_POLY_FROM
 static void th_probe(uint32_t tha) {
   ++g_th_objs;
@@ -71,6 +72,7 @@ static void th_probe(uint32_t tha) {
   g_th_colorbase.insert(cb); ++g_th_colorbase_n[cb];
 }
 static void th_report() {
+  std::printf("    PROJECTIONS ABANDONED ON TIMEOUT: %u  (R226: an abandoned vertex keeps the screen position it already had)\n", g_pj_lost);
   std::printf("    TEXHDR texture RAM words written by the walker (op 0x04, bit 23): %u\n", (unsigned)g_tdwords);
   std::printf("    WALKER OPCODES from M2_POLY_FROM:");
   for (int i = 0; i < 32; i++) if (g_op_hist[i]) std::printf(" %02x:%u", i, g_op_hist[i]);
@@ -81,7 +83,7 @@ static void th_report() {
   for (auto &kv : g_th_colorbase_n) { if (n++ < 24) std::printf("      colorbase %03x x%u\n", kv.first, kv.second); }
 }
 static std::set<uint32_t> g_geo_writes;      // word addresses geo_polygon_data wrote
-static std::vector<std::array<int,9>> g_quads;   // screen quads the pipeline emitted, and their colour (R222)
+static std::vector<std::array<int,10>> g_quads;  // screen quads, colour (R222), sort z (R226)
 // base_buffer, as passed to m2_cpu_bridge -- the SAME array the CPU reaches
 // buffer RAM through, so the coprocessor and the CPU finally share one memory.
 // File scope because mem_tick() is defined above the base constants it needs.
@@ -617,18 +619,28 @@ int main(int argc, char **argv) {
       g_quads.push_back({(int)(int16_t)d->eng_q_x0, (int)(int16_t)d->eng_q_y0,
                          (int)(int16_t)d->eng_q_x1, (int)(int16_t)d->eng_q_y1,
                          (int)(int16_t)d->eng_q_x2, (int)(int16_t)d->eng_q_y2,
-                         (int)(int16_t)d->eng_q_x3, (int)(int16_t)d->eng_q_y3, (int)d->eng_q_col});
+                         (int)(int16_t)d->eng_q_x3, (int)(int16_t)d->eng_q_y3, (int)d->eng_q_col,
+                         (int)d->eng_q_z});
     // The engine, same board handshake when M2_GEO_LAT is set (R207).
     {
       static const int eng_lat = std::getenv("M2_GEO_LAT") ? std::atoi(std::getenv("M2_GEO_LAT")) : 0;
       static int el_req_r = 0, el_done = 0, el_cnt = -1, el_ack_r = 0;
       static uint32_t el_addr = 0, el_addr_r = 0, el_oba = 0, el_oba_r = 0, el_data = 0;
+      static unsigned el_space = 0, el_space_r = 0;
       if (eng_lat > 0) {
         d->eng_mem_ack = el_ack_r; d->eng_mem_data = el_data;
         int f_ack = 0;
         if (el_cnt > 0 && --el_cnt == 0) {
           uint32_t base, off;
-          if      (el_oba & (1u << 24)) { base = 0x1720000u; off = el_addr & 0x7fffu;   }
+          // R222: the same four spaces the instant-ack path decodes. Without
+          // this the latency model answered every texture-header, palette and
+          // colour-table read out of polygon memory, so the one model that
+          // represents the BOARD was the one giving the wrong colours.
+          if      (el_space == 1)       { if (el_addr & 0x800000u) { base = 0x1740000u; off = el_addr & 0x7fffu; }
+                                          else                    { base = 0x0720000u; off = el_addr & 0x1fffffu; } }
+          else if (el_space == 2)       { base = 0x1730000u; off = el_addr & 0x1ffu;    }
+          else if (el_space == 3)       { base = 0x1731000u; off = el_addr & 0x3fffu;   }
+          else if (el_oba & (1u << 24)) { base = 0x1720000u; off = el_addr & 0x7fffu;   }
           else if (el_oba & (1u << 23)) { base = 0x0b20000u; off = el_addr & 0x3fffffu; }
           else                          { base = 0x1710000u; off = el_addr & 0x7fffu;   }
           const uint32_t a = (base + off * 2u) & 0x1ffffff;
@@ -636,9 +648,10 @@ int main(int argc, char **argv) {
           f_ack = 1; el_cnt = -1;
         }
         if (!el_req_r) el_done = 0; else if (f_ack) el_done = 1;
-        if (el_req_r && !el_done && !f_ack && el_cnt < 0) { el_cnt = eng_lat; el_addr = el_addr_r; el_oba = el_oba_r; }
+        if (el_req_r && !el_done && !f_ack && el_cnt < 0) { el_cnt = eng_lat; el_addr = el_addr_r; el_oba = el_oba_r; el_space = el_space_r; }
         el_ack_r = f_ack | el_done;
         el_req_r = d->eng_mem_req; el_addr_r = uint32_t(d->eng_mem_addr); el_oba_r = uint32_t(d->geo_oba_last);
+        el_space_r = d->eng_mem_space;
       }
       if (eng_lat > 0) goto eng_served;
     }
@@ -654,6 +667,7 @@ int main(int argc, char **argv) {
       //   Model2.sv: base = oba[24] ? GAME_PRAM1 : oba[23] ? GAME_POLY : GAME_PRAM0
       //              idx  = ROM ? addr[21:0] : addr[14:0]
       g_tdwords = uint32_t(d->geo_tdwords);
+      g_pj_lost = unsigned(d->eng_pj_lost);
       if (uint32_t(d->geo_objs) != g_th_last_objs) { g_th_last_objs = uint32_t(d->geo_objs); th_probe(uint32_t(d->geo_tha_last)); }
       const uint32_t oba = uint32_t(d->geo_oba_last);
       const uint32_t idx = uint32_t(d->eng_mem_addr);
@@ -2824,7 +2838,7 @@ int main(int argc, char **argv) {
     }
     if (const char *qo = std::getenv("M2_QUADS_OUT")) {
       if (FILE *qf = std::fopen(qo, "w")) {
-        for (auto &q : g_quads) std::fprintf(qf, "%d %d %d %d %d %d %d %d %06x\n", q[0], q[1], q[2], q[3], q[4], q[5], q[6], q[7], q[8]);
+        for (auto &q : g_quads) std::fprintf(qf, "%d %d %d %d %d %d %d %d %06x %08x\n", q[0], q[1], q[2], q[3], q[4], q[5], q[6], q[7], q[8], q[9]);
         std::fclose(qf);
       }
     }
