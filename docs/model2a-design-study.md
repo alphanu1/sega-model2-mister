@@ -12480,3 +12480,30 @@ walk waits for the swap, which is the list's own two-frame cadence. The
 hold on dbuf13 still reaches 3 frames in stretches, but its "ready" time
 includes waiting for the game to deliver the list, which is the game's
 timing, not the engine's -- to be separated later. `build/dbuf14`.
+
+**R221 -- WHERE THE LOGIC IS, AND WHAT MOVES TO BLOCK RAM BEFORE LIGHTING.**
+2026-09-11, 18:50. From dbuf13's synthesis, own logic by entity (ALUTs /
+registers): i960 top 3,980 / 1,339; framework scaler 2,555 / 4,029;
+MultiPCM x2 at 2,176 / 3,724 each; clipper 1,899 / 3,301; i960 regs 1,856
+/ 1,368; quad store 1,480 / 1,628; PCM fetch x2 at 896 / 2,694 each. Above
+~92% fitted the fitter charges an ALM per register (dbuf13: +707 registers
+of synthesis became +2,900 ALMs), so REGISTERS are what to move, and the
+sound board holds ~12,800 of them.
+  1. `m2_pcm_fetch` x2: `buf_q [32]` of 64 bits, `tag_q`, `val_q` -- a
+     per-voice prefetch line indexed by ONE slot -- ~2,700 registers each.
+     As one M10K per unit (2 Kbit) with a registered read: the hit test
+     `val_q[c_slot] && tag_q[c_slot] == addr` becomes a cycle later, so the
+     fetch state machine takes one more cycle per lookup. Cheapest and
+     largest single win; the sound bench is the oracle.
+  2. `m2_multipcm` x2: sreg 28x8x8, s_pos 28x38, s_start/loop/end, ~4,500
+     bits each in registers -- but indexed by five different slots in one
+     cycle (play_slot, picked, slot, df_slot, cur_slot), so a RAM needs the
+     per-tick schedule re-cut. Second.
+  3. `m2_geo_clip`'s shift-register stack, NSTK=5 x 4 x 96 bits = 1,920
+     registers moved on every push and pop: a pointer-based stack in an
+     MLAB removes the registers and the shift muxes. Third.
+  4. Debug probes in Model2.sv that have done their job (wk_*, e13_*,
+     e140_*, mb_*, eo_*): a few hundred ALMs, at no risk.
+Target: fitted ALM under ~85% before lighting, which is a few hundred
+ALMs of arithmetic plus a table read port, and well under before
+textures, which are the largest block left in the project.

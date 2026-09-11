@@ -1,6 +1,6 @@
 # Handoff
 
-**Updated:** 2026-09-11 18:35. Study entries R176-R220. R172 WITHDRAWN, R185
+**Updated:** 2026-09-11 18:55. Study entries R176-R221. R172 WITHDRAWN, R185
 partly RETRACTED, R189 corrected by R191, R196's central claim WITHDRAWN the
 same day, R206 WITHDRAWN, R207 closed by R208.
 
@@ -35,6 +35,13 @@ completes, 4 minutes clean -- render chain 10.6%, mailbox poll 3.7%, no
 parking, no drops. Ten-minute soak from a fresh load also clean: mailbox
 poll 3.9%, render chain 12.5%, never parked. R209 CONFIRMED.** The board is
 on it. Study R209.
+
+**NEXT (R221): free ALMs before lighting/textures -- the fitter charges an
+ALM per register above ~92% (dbuf13 at 97%). In order: the two PCM fetch
+units' 64-bit x 32 prefetch buffers to M10K (~2,700 registers each), the
+MultiPCMs' per-voice state (needs the tick schedule re-cut), the clipper's
+shift-register stack to an MLAB, and the spent debug probes. Target under
+85% fitted. Study R221.**
 
 **R220 (18:30): dbuf13 on the board drops NOTHING (capacity closed) but the
 3D is still on-off with wrong wedges: the next walk, started by a mid-frame
