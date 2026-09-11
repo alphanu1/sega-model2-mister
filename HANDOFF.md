@@ -19,7 +19,9 @@ with the MultiPCM state in MLABs. R221 closed. The user reports the 3D still
 has issues on this build (details being gathered). R222 IS BUILT AT THE DESK: bridge mirrors, texture RAM, the engine's second dot product, luminance, header read and colour cache; the boot bench emits 294 distinct quad colours where every quad was 0xC0C0C0. `build/lit1` fitted at 83% but MISSED SETUP on clk_sys (R224: the tiny-quad
 comparator was on the vertex RAM's write enable; fixed). `build/lit2` = lighting
 + R223 (any translucent polygon is culled, as the reference culls it -- 16% of
-the title's objects were being drawn opaque) + R224.
+the title's objects were being drawn opaque) + R224 fits all four seeds at 82%, and **s14 closes timing on every clock**
+(setup +0.019 worst, hold +0.174). Deployed. `build/lit3` adds the texture-RAM
+zero sweep (R223).
 
 **Fixed today, each with a study entry and a board or bench proof:**
 - R208 walker/engine took one held acknowledge many times (stream one word ahead)

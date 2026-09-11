@@ -192,6 +192,12 @@ int main(int argc, char **argv) {
   }
 
   mem.assign(size_t(1) << 25, 0xffff);
+  // R223: TEXTURE RAM IS ZERO AT BOOT, because Model2.sv sweeps it once after
+  // the capture calibration -- the reference's raster_state is value-
+  // initialised and nothing in a whole run of this title ever writes it, so
+  // 0xFFFF here would say "translucent" for the 3% of objects that read their
+  // texture header from it and cull every one.
+  for (size_t i = 0; i < 0x10000; i++) mem[0x1740000 + i] = 0;
 
   // BUFFER RAM IS INITIALISED ON HARDWARE AND WAS NOT HERE. Model2.sv's bi_*
   // writer fills 65,536 words with 0x07800f0f before the i960 leaves reset

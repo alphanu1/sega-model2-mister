@@ -1113,10 +1113,14 @@ wire [2:0] cal_scan =
                                                 // a measured value from a
                                                 // working design, not a guess
 wire   [2:0]     cal_best = cal_scan;
-assign cal_done = (st_state == 4'd12);
+// TWELVE AND ABOVE, not twelve exactly: the states after it fill texture RAM
+// (R223) and everything that waits on calibration must stay released through
+// them.
+assign cal_done = (st_state >= 4'd12);
 logic [SDR_AW:1] st_addr, st_rd_addr;
 logic [15:0]     st_din;
 logic [3:0]      st_state;
+logic [16:0]     tf_i;            // R223: the texture-RAM zero sweep
 logic [63:0]     st_got;
 
 // The self-test collapses to a single bit rather than consuming two display
@@ -1231,7 +1235,7 @@ assign st_run = rom_loaded && (st_state >= 4'd1) && (st_state <= 4'd8);
 
 always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
-		st_state <= 4'd0; st_req <= 1'b0; st_rd_req <= 1'b0;
+		st_state <= 4'd0; st_req <= 1'b0; st_rd_req <= 1'b0; tf_i <= 17'd0;
 		st_addr <= '0; st_rd_addr <= '0; st_din <= 16'd0; st_got <= 64'd0;
 		cal_sel <= 3'd0; cal_mask <= 6'd0; cal_wait <= 6'd0;
 	end else begin
@@ -1300,7 +1304,33 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 			end
 			4'd11: if (cal_wait == 6'd0) st_state <= 4'd8;
 			       else                  cal_wait <= cal_wait - 6'd1;
-			4'd12: st_state <= 4'd12;      // done; cal_mask holds
+			// TEXTURE RAM STARTS AT ZERO, BECAUSE THAT IS WHAT THE REFERENCE
+			// READS (R223). Nothing writes the raster's 64 K-word texture RAM
+			// in a whole run of this title -- all 47 of its geo_texture_data
+			// commands address log RAM -- yet 3% of its objects, the first six
+			// of every list, take their texture header from it. MAME's
+			// raster_state is value-initialised, so those headers read ZERO
+			// there: renderer 0, flat and opaque, colour base 0, and they are
+			// drawn. Unwritten SDRAM reads 0xFFFF, which is renderer 3 --
+			// translucent -- and would cull every one of them. So the region is
+			// swept once here, after the capture calibration and before the
+			// CPU can ask for a frame; it is 65,536 words through the same
+			// arbitrated write port the pattern above used, about 3 ms, and it
+			// cannot stall anything because nothing waits on it.
+			4'd12: begin
+				tf_i <= 17'd0; st_addr <= GAME_TEXRAM; st_din <= 16'd0;
+				st_req <= 1'b1; st_state <= 4'd13;
+			end
+			4'd13: if (wr_ack_st) begin
+				st_req <= 1'b0;
+				if (tf_i == 17'd65535) st_state <= 4'd14;
+				else begin tf_i <= tf_i + 17'd1; st_state <= 4'd15; end
+			end
+			4'd15: begin
+				st_addr <= GAME_TEXRAM + SDR_AW'(tf_i); st_din <= 16'd0;
+				st_req <= 1'b1; st_state <= 4'd13;
+			end
+			4'd14: st_state <= 4'd14;      // done; cal_mask holds
 			default: st_state <= 4'd0;
 		endcase
 	end

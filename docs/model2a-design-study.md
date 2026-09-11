@@ -12818,3 +12818,27 @@ the comparator tree ends at a small counter. `make test_m2_raster3d`
 unchanged (9,881 pixels a frame, six frames). Rule for the rest of the
 renderer: a wide comparison may end at a register, never at a RAM's address
 or enable.
+
+*R223's second half, measured and then fixed (18:05).* The walker's opcode
+histogram over a whole run: 0x00 nop 19,226, 0x01 object_data 1,627, 0x0b
+matrix 1,342, 0x0a light 35, 0x09 focal 35, 0x08 zsort 24, 0x03 window 23,
+**0x04 texture/log data 22 -- and every one of them addressed LOG RAM**, so
+the 64 K-word texture RAM is written exactly never while 55 objects a list
+read their header from it. Model2.sv now sweeps GAME_TEXRAM with zeros once,
+in the boot writer's states 12-15 after the capture calibration (65,536
+words through the arbitrated write port, ~3 ms, nothing waits on it), and
+`cal_done` became `st_state >= 12` so the release it gates is not withdrawn
+during the sweep. The boot bench's memory model zeroes the same region for
+the same reason. Now those objects read header 0 -- renderer 0, flat,
+opaque, colour base 0 -- and are drawn, as the reference draws them.
+
+*R223/R224 on the bench (18:00):* the title's clipper input falls from
+55,209 to 29,372 and its quads from 31,648 to 18,611 -- a third fewer
+polygons reach the renderer, all of them ones the reference never draws --
+and the 4,096 sampled quads still carry 280 distinct colours. PASS.
+
+*R222/R223/R224 in the fitter (18:03): `build/lit2` fits all four seeds at
+82% (34,482-34,548 ALM), M10K 553/553, and **s14 CLOSES TIMING OUTRIGHT --
+every clock positive on both setup and hold** (clk_sys +0.611 setup where
+lit1 was -0.210, HDMI PLL +0.094, hold +0.174 worst). Lighting, the colour
+lookup and its cache cost about 50 ALM against dbuf16. Deployed s14.*
