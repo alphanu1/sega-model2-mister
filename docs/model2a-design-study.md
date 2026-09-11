@@ -12512,3 +12512,12 @@ textures, which are the largest block left in the project.
 the gate -- 82 walk frames, 1,916 objects, 31,648 quads, engine cost
 unchanged, PASS. The walk waits at the gate and never wedges.
 `build/dbuf14b` in the fitter.
+
+*R221, step 1 done at the desk (19:40).* `m2_pcm_fetch`'s 32 x 64-bit line
+data is an M10K with a registered read (F_LOOK, one cycle more per hit);
+tags and valid bits stay in registers. `make test_m2_sndboard` passes as
+before, the only log difference the sample-period jitter statistic (sd
+11.6 -> 9.4 cycles, mean 1,120 unchanged), and the mixed output written
+with M2_SND_WAV is BYTE-IDENTICAL to the flip-flop version's, 110,292
+bytes, sample for sample. Two units: ~4,100 registers out of logic for
+two blocks. Into the build after dbuf14b.

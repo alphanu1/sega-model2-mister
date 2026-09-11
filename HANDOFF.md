@@ -1,6 +1,6 @@
 # Handoff
 
-**Updated:** 2026-09-11 18:55. Study entries R176-R221. R172 WITHDRAWN, R185
+**Updated:** 2026-09-11 19:45. Study entries R176-R221. R172 WITHDRAWN, R185
 partly RETRACTED, R189 corrected by R191, R196's central claim WITHDRAWN the
 same day, R206 WITHDRAWN, R207 closed by R208.
 
@@ -35,6 +35,10 @@ completes, 4 minutes clean -- render chain 10.6%, mailbox poll 3.7%, no
 parking, no drops. Ten-minute soak from a fresh load also clean: mailbox
 poll 3.9%, render chain 12.5%, never parked. R209 CONFIRMED.** The board is
 on it. Study R209.
+
+**R221 step 1 (19:40): the PCM fetch units' line data is block RAM, sound
+output byte-identical (WAV compared). ~4,100 registers freed; in the build
+after dbuf14b.**
 
 **NEXT (R221): free ALMs before lighting/textures -- the fitter charges an
 ALM per register above ~92% (dbuf13 at 97%). In order: the two PCM fetch

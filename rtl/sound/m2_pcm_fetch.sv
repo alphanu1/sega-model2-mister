@@ -60,14 +60,22 @@ module m2_pcm_fetch #(
   wire [7:0] by_data = m_data[{3'd0, c_addr[2:0]} * 8 +: 8];
 
   // ---------------------------------------------------------------- cached
-  logic [63:0] buf_q [32];
+  // THE LINE DATA IS A BLOCK RAM, NOT 2,048 FLIP-FLOPS (R221). One M10K per
+  // unit, read registered: the word for the requesting slot is fetched on
+  // the request's first cycle (F_LOOK) and held on the RAM's output while
+  // the slot address stands, which it does for the whole request. A miss
+  // writes the line and the same held address reads it back by F_ACK. One
+  // cycle more per hit than the flip-flop version. Tags and valid bits stay
+  // in registers: 32 x 20 bits, and the valid bits must clear at reset.
+  (* ramstyle = "M10K" *) logic [63:0] buf_q [32];
+  logic [63:0] buf_rd;
   logic [21:3] tag_q [32];
   logic [31:0] val_q;
   logic        m_req_r, c_ack_r;
 
   wire hit = val_q[c_slot] && (tag_q[c_slot] == c_addr[21:3]);
 
-  typedef enum logic [1:0] { F_IDLE, F_FETCH, F_ARM, F_ACK } fst_t;
+  typedef enum logic [2:0] { F_IDLE, F_LOOK, F_FETCH, F_ARM, F_ACK } fst_t;
   fst_t st;
 
   logic [25:0] lat_acc;
@@ -79,7 +87,9 @@ module m2_pcm_fetch #(
   assign m_req  = BYPASS ? c_req : m_req_r;
   assign c_ack  = BYPASS ? m_ack : c_ack_r;
   assign c_data = BYPASS ? by_data
-                         : buf_q[c_slot][{3'd0, c_addr[2:0]} * 8 +: 8];
+                         : buf_rd[{3'd0, c_addr[2:0]} * 8 +: 8];
+  // The registered read, every cycle at the requesting slot.
+  always_ff @(posedge clk) buf_rd <= buf_q[c_slot];
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -92,7 +102,8 @@ module m2_pcm_fetch #(
     end else begin
       c_ack_r <= 1'b0;
       case (st)
-        F_IDLE: if (c_req) begin
+        F_IDLE: if (c_req) st <= F_LOOK;     // R221: the line word is being read
+        F_LOOK: begin
           fetch_n <= fetch_n + 10'd1;
           if (fetch_n == 10'd1023) begin
             dbg_mean_lat <= lat_acc[25:10];   // /1024, as a shift
