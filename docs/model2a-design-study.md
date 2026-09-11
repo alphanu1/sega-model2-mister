@@ -12459,3 +12459,24 @@ crash on half the seeds. The relief is the coprocessor's 128 x 32
 flip-flop input queue -- ~2,000 ALM as one M10K block, recorded in the
 qsf since the area experiment -- and it is the next change, before
 lighting or anything else that adds logic.
+
+**R220 -- THE SORTED LIST WAS OVERWRITTEN BY THE NEXT WALK BEFORE THE SWAP.
+THE STORE NOW TAKES QUADS ONLY WHILE COLLECTING.** 2026-09-11, 18:30.
+dbuf13 s15 on the board: the store DROPS NOTHING in any slice (quads held
+peak 2,000 of 2,048: R216 + R219 closed the capacity question), yet the
+user sees the 3D on and off, not steady, with wrong wedge shapes (the
+car-select car photographed: body right, a large wedge and pieces
+missing). The title's quads that looked collapsed this afternoon were a
+far camera -- the car-select car is full size, so the projection's scale
+is right. The hazard is R211's: between a list's q_end and the frame_start
+that swaps the banks, the SORTED list sits in the collect bank waiting.
+The walker starts a walk on the game's flip (trig_flip), which can land
+mid-frame, and its quads were written straight into that bank -- the
+store never pushed back (`q_ready = 1`). Two lists mixed and the sorted
+order part-overwritten: wedges, and a frame that draws a corrupt list
+then a good one. `q_ready` is now `pst == P_COLLECT`; the geometry
+pipeline already holds its output on it (the clipper's out_valid), so the
+walk waits for the swap, which is the list's own two-frame cadence. The
+hold on dbuf13 still reaches 3 frames in stretches, but its "ready" time
+includes waiting for the game to deliver the list, which is the game's
+timing, not the engine's -- to be separated later. `build/dbuf14`.

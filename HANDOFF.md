@@ -1,6 +1,6 @@
 # Handoff
 
-**Updated:** 2026-09-11 18:05. Study entries R176-R219. R172 WITHDRAWN, R185
+**Updated:** 2026-09-11 18:35. Study entries R176-R220. R172 WITHDRAWN, R185
 partly RETRACTED, R189 corrected by R191, R196's central claim WITHDRAWN the
 same day, R206 WITHDRAWN, R207 closed by R208.
 
@@ -35,6 +35,12 @@ completes, 4 minutes clean -- render chain 10.6%, mailbox poll 3.7%, no
 parking, no drops. Ten-minute soak from a fresh load also clean: mailbox
 poll 3.9%, render chain 12.5%, never parked. R209 CONFIRMED.** The board is
 on it. Study R209.
+
+**R220 (18:30): dbuf13 on the board drops NOTHING (capacity closed) but the
+3D is still on-off with wrong wedges: the next walk, started by a mid-frame
+flip, overwrote the sorted list waiting for the swap because the store never
+pushed back. `q_ready = (pst == P_COLLECT)` now; the geometry waits.
+`build/dbuf14`. Study R220.**
 
 **dbuf13 (18:00): fits at 97% ALM (40,690), block memory 77%; two seeds
 crashed, s11/s15 fit with setup misses of -0.5 ns (clk_mem / clk_sys), hold
