@@ -12053,6 +12053,24 @@ buffers ~39 -> ~21 blocks, attribute arrays ~9 -> ~6 a bank. Finer beam
 pacing comes free. `make test_m2_raster3d` at BAND_H 8: every frame
 paints. `build/dbuf4` = R212 + R213 + narrowed 2,048 banks.
 
+*The band ahead.* Model 1's 48-band change came with one more buffer of
+lead over the beam. With 8-row bands a fourth buffer is ~7 blocks (four at
+8 rows, ~28, still under three at 16, ~39), so NBUF is 4. The Model 1
+reference (pulled to a7abcbf; ours was copied at 085a00e) has since fixed
+three hardware-only band-presentation faults -- a multi-bit beam-band
+crossing (a1d9192), presenting each band one line early (9ec7e9e), and
+confining that lead to the horizontal blank (43118c5) -- on a
+presentation design that differs from ours (one display pointer on a
+toggle handshake, decided a band ahead). Ours crosses each buffer's ready
+flag and band index separately, which is safe because the index is
+written long before the flag rises, except at RELEASE: the beam clears
+the flag and the fill could retarget the buffer while the scan side's
+two-flop copy still reads ready, a mixed index sample then presenting a
+buffer being cleared. A released buffer now settles eight cycles before
+reuse. If `dbg_missed` says bands are still late, the next step is
+Model 1's present-a-line-early logic, ported as a whole. `build/dbuf5` =
+dbuf4 + four buffers + the settle.
+
 *Probes for what the user reports on dbuf2* ("still flickering", "slower,
 holding the frame for two frames"): `dbg_hold` latches at each swap how
 many video frames the previous list stayed on display (2 is the game's
