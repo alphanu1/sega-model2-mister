@@ -74,6 +74,12 @@ module m2_quad_store #(
   // buffer ever takes of it), and the sort key as its top KW bits. 2048 x
   // (4*26 + 24+1+16 + 24 + 2*11) = 191 bits against 231: 40 blocks a bank
   // against 47, and the radix sort runs KW/RADIX passes instead of 32/RADIX.
+  // TWO BANKS IN ONE STORE (R213). The rasteriser collects into one bank
+  // while replaying the other every video frame (R211). Only the collecting
+  // bank is ever sorted, so the sort KEY and the SCRATCH index array are
+  // shared; the quad data and the FINAL index order are per bank. Two
+  // separate instances cost ~8 M10K blocks more than this.
+  parameter int unsigned NBANK  = 2,
   parameter int unsigned XW     = 13,
   parameter int unsigned CW     = 16,
   parameter int unsigned KW     = 24,
@@ -83,7 +89,9 @@ module m2_quad_store #(
   input  logic        rst_n,
 
   // ---- write side, from the geometry stage
-  input  logic        clear,                 // start a new frame
+  input  logic        clear,                 // start a new frame (in wbank)
+  input  logic        wbank,                 // the bank collected into and sorted
+  input  logic        rbank,                 // the bank replayed
   input  logic        in_valid,
   input  logic signed [15:0] in_x0, in_y0, in_x1, in_y1,
   input  logic signed [15:0] in_x2, in_y2, in_x3, in_y3,
@@ -138,15 +146,15 @@ module m2_quad_store #(
   // One vertex per memory gives each a single write port and a single read port,
   // which is a Simple Dual Port M10K and infers cleanly. the project rules' warning that
   // "block RAM inference is silent when it fails" cost 28,816 ALM once before.
-  (* ramstyle = "M10K" *) logic [2*XW-1:0] vtx0 [NQ];
-  (* ramstyle = "M10K" *) logic [2*XW-1:0] vtx1 [NQ];
-  (* ramstyle = "M10K" *) logic [2*XW-1:0] vtx2 [NQ];
-  (* ramstyle = "M10K" *) logic [2*XW-1:0] vtx3 [NQ];
+  (* ramstyle = "M10K" *) logic [2*XW-1:0] vtx0 [NBANK*NQ];
+  (* ramstyle = "M10K" *) logic [2*XW-1:0] vtx1 [NBANK*NQ];
+  (* ramstyle = "M10K" *) logic [2*XW-1:0] vtx2 [NBANK*NQ];
+  (* ramstyle = "M10K" *) logic [2*XW-1:0] vtx3 [NBANK*NQ];
   // A BAND RANGE, NOT A MASK (R213): {hi, lo} in BW bits each. With 48 bands
   // a mask was 48 bits an entry; a range is 12, and the replay test is two
   // compares. A quad off the screen is stored as lo > hi and never hits.
   localparam int unsigned AT_W = 2*BW + 1 + CW;   // {hi, lo, moire, col565}
-  (* ramstyle = "M10K" *) logic [AT_W-1:0] att [NQ];
+  (* ramstyle = "M10K" *) logic [AT_W-1:0] att [NBANK*NQ];
   (* ramstyle = "M10K" *) logic [KW-1:0] key [NQ];
 
   // Saturate a screen coordinate to XW bits; sign-extend it back on the way out.
@@ -171,15 +179,17 @@ module m2_quad_store #(
   endfunction
 
   // Two index arrays, ping-ponged by the radix passes.
-  (* ramstyle = "M10K" *) logic [IW-1:0] idx_a [NQ];
+  (* ramstyle = "M10K" *) logic [IW-1:0] idx_a [NBANK*NQ];   // the final order, per bank
   (* ramstyle = "M10K" *) logic [IW-1:0] idx_b [NQ];
 
-  logic [IW:0]  count;
-  assign dbg_count = {{(16-IW-1){1'b0}}, count};
+  logic [IW:0]  count [NBANK];
+  wire  [IW:0]  wcount = count[wbank];
+  wire  [IW:0]  rcount = count[rbank];
+  assign dbg_count = {{(16-IW-1){1'b0}}, wcount};
 
   // The capacity test, written once. count is one bit wider than an index so it
   // can hold NQ itself without wrapping.
-  wire has_room = (count < {1'b0, IW'(NQ-1)} + 1'b1);
+  wire has_room = (wcount < {1'b0, IW'(NQ-1)} + 1'b1);
 
   // Which of the six 64-row bands this quad's rows touch. Computed from the
   // vertex extremes, clamped: a quad above the screen or below it lands in no
@@ -216,19 +226,20 @@ module m2_quad_store #(
   logic [IW-1:0] wi;
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      count <= '0; wi <= '0; dbg_dropped <= '0;
+      for (int b = 0; b < int'(NBANK); b++) count[b] <= '0;
+      wi <= '0; dbg_dropped <= '0;
     end else if (clear) begin
-      count <= '0; wi <= '0; dbg_dropped <= '0;
+      count[wbank] <= '0; wi <= '0; dbg_dropped <= '0;
     end else if (in_valid) begin
       if (has_room) begin
-        vtx0[count[IW-1:0]] <= {sat(in_y0), sat(in_x0)};
-        vtx1[count[IW-1:0]] <= {sat(in_y1), sat(in_x1)};
-        vtx2[count[IW-1:0]] <= {sat(in_y2), sat(in_x2)};
-        vtx3[count[IW-1:0]] <= {sat(in_y3), sat(in_x3)};
-        att[count[IW-1:0]] <= {band_range(in_y0, in_y1, in_y2, in_y3),
+        vtx0[{wbank, wcount[IW-1:0]}] <= {sat(in_y0), sat(in_x0)};
+        vtx1[{wbank, wcount[IW-1:0]}] <= {sat(in_y1), sat(in_x1)};
+        vtx2[{wbank, wcount[IW-1:0]}] <= {sat(in_y2), sat(in_x2)};
+        vtx3[{wbank, wcount[IW-1:0]}] <= {sat(in_y3), sat(in_x3)};
+        att[{wbank, wcount[IW-1:0]}] <= {band_range(in_y0, in_y1, in_y2, in_y3),
                                in_moire, c565(in_col)};
-        key[count[IW-1:0]] <= sort_key(in_z) >> (32 - KW);
-        count <= count + 1'b1;
+        key[wcount[IW-1:0]] <= sort_key(in_z) >> (32 - KW);
+        count[wbank] <= wcount + 1'b1;
       end else if (dbg_dropped != 16'hffff) begin
         dbg_dropped <= dbg_dropped + 16'd1;
       end
@@ -280,7 +291,7 @@ module m2_quad_store #(
   logic [IW-1:0] idx_rd;
   logic [KW-1:0] key_rd;
   always_ff @(posedge clk) begin
-    idx_rd <= which ? idx_b[ri[IW-1:0]] : idx_a[ri[IW-1:0]];
+    idx_rd <= which ? idx_b[ri[IW-1:0]] : idx_a[{wbank, ri[IW-1:0]}];
     key_rd <= key[cur_idx];
   end
 
@@ -298,7 +309,7 @@ module m2_quad_store #(
   // this same module was already built this way; the sort was not, and the two
   // sat forty lines apart.
   wire pipe_busy = s0 || s1 || s2;
-  wire more      = (ri < count);
+  wire more      = (ri < wcount);
 
   // The RADIX-bit field selected by `pass`, taken with a shift so the width is a
   // parameter rather than four hand-written slices that stop matching it.
@@ -327,8 +338,8 @@ module m2_quad_store #(
         // Submission order to start with: a stable sort then keeps it as the
         // tie-break, exactly as quad_t::compare does with the address.
         R_INIT: begin
-          idx_a[ri[IW-1:0]] <= ri[IW-1:0];
-          if (ri + 1 >= count) begin ri <= '0; hi <= '0; rst_st <= R_CNT; end
+          idx_a[{wbank, ri[IW-1:0]}] <= ri[IW-1:0];
+          if (ri + 1 >= wcount) begin ri <= '0; hi <= '0; rst_st <= R_CNT; end
           else                       ri <= ri + 1'b1;
         end
 
@@ -380,7 +391,7 @@ module m2_quad_store #(
           cur_idx <= idx_rd;
           cidx_d  <= cur_idx;
           if (s2) begin
-            if (which) idx_a[base[digit][IW-1:0]] <= cidx_d;
+            if (which) idx_a[{wbank, base[digit][IW-1:0]}] <= cidx_d;
             else       idx_b[base[digit][IW-1:0]] <= cidx_d;
             base[digit] <= base[digit] + 1'b1;
           end
@@ -434,7 +445,7 @@ module m2_quad_store #(
   logic [IW-1:0] ord_idx;
   logic [AT_W-1:0] att_rd;
 
-  wire v0 = (pi < count);
+  wire v0 = (pi < rcount);
 
   // Frozen while a quad is being emitted: the vertex reads and the output
   // register are shared, and those are the quads the band exists to draw.
@@ -456,8 +467,8 @@ module m2_quad_store #(
       out_col <= '0; out_moire <= 1'b0;
     end else begin
       if (adv) begin
-        ord_idx <= idx_a[pi[IW-1:0]];
-        att_rd  <= att[ord_idx];
+        ord_idx <= idx_a[{rbank, pi[IW-1:0]}];
+        att_rd  <= att[{rbank, ord_idx}];
         q2      <= ord_idx;
         v1      <= v0;
         v2      <= v1;
@@ -467,7 +478,7 @@ module m2_quad_store #(
       case (p_st)
         P_IDLE: begin
           out_valid <= 1'b0;
-          if (replay_start && count != 0) begin
+          if (replay_start && rcount != 0) begin
             pi <= '0; v1 <= 1'b0; v2 <= 1'b0;
             p_st <= P_RUN;
           end
@@ -498,10 +509,10 @@ module m2_quad_store #(
         // A concatenation on the left is one read, split on the way out, and it
         // is bit-identical: the store writes {in_y, in_x}.
         P_OUT: begin
-          out_y0 <= sx(vtx0[q][2*XW-1:XW]); out_x0 <= sx(vtx0[q][XW-1:0]);
-          out_y1 <= sx(vtx1[q][2*XW-1:XW]); out_x1 <= sx(vtx1[q][XW-1:0]);
-          out_y2 <= sx(vtx2[q][2*XW-1:XW]); out_x2 <= sx(vtx2[q][XW-1:0]);
-          out_y3 <= sx(vtx3[q][2*XW-1:XW]); out_x3 <= sx(vtx3[q][XW-1:0]);
+          out_y0 <= sx(vtx0[{rbank, q}][2*XW-1:XW]); out_x0 <= sx(vtx0[{rbank, q}][XW-1:0]);
+          out_y1 <= sx(vtx1[{rbank, q}][2*XW-1:XW]); out_x1 <= sx(vtx1[{rbank, q}][XW-1:0]);
+          out_y2 <= sx(vtx2[{rbank, q}][2*XW-1:XW]); out_x2 <= sx(vtx2[{rbank, q}][XW-1:0]);
+          out_y3 <= sx(vtx3[{rbank, q}][2*XW-1:XW]); out_x3 <= sx(vtx3[{rbank, q}][XW-1:0]);
           out_valid <= 1'b1;
           if (out_valid && out_ready) begin
             out_valid <= 1'b0;

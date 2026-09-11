@@ -28,7 +28,7 @@ module m2_raster3d #(
   parameter int unsigned SCR_W  = 496,
   parameter int unsigned SCR_H  = 384,
   parameter int unsigned BAND_H = 8,
-  parameter int unsigned NBUF   = 3,
+  parameter int unsigned NBUF   = 4,
 
   // ARE clk AND scan_clk ACTUALLY DIFFERENT CLOCKS?
   //
@@ -134,58 +134,25 @@ module m2_raster3d #(
 
   assign q_ready = 1'b1;      // the store absorbs or drops; it never backpressures
 
-  logic [1:0]  st_sort_busy, st_replay_busy, st_out_valid;
-  logic signed [15:0] st_x0 [2], st_y0 [2], st_x1 [2], st_y1 [2];
-  logic signed [15:0] st_x2 [2], st_y2 [2], st_x3 [2], st_y3 [2];
-  logic [23:0] st_col [2];
-  logic [1:0]  st_moire;
-  logic [15:0] st_count [2], st_dropped [2];
-
-  genvar sb;
-  generate
-    for (sb = 0; sb < 2; sb++) begin : g_store
-      wire mine = (bank == sb[0]);        // this bank is the collect bank
-      // TWO BANKS OF 2,048, PAID FOR IN WIDTH. Two stores of the old 231-bit
-      // entry needed ~47 M10K blocks more than the device has (build/dbuf:
-      // "needs more than 553", four seeds). The entry is now 191 bits
-      // (13-bit coordinates, 565 colour, 24-bit key: m2_quad_store XW/CW/KW)
-      // and the scaler's input line buffers were halved (sys_top.v IHRES),
-      // which together are meant to cover the second bank. build/dbuf2 was
-      // the 1,024-a-bank stop-gap that proved the mechanism on the board.
-      m2_quad_store #(.BAND_H(BAND_H), .NBANDS(NBANDS), .BW(BW), .SCR_H(SCR_H)) u_store (
-        .clk(clk), .rst_n(rst_n),
-        // Cleared at the swap: the bank coming OFF display becomes the new
-        // collect bank. `bank` has not flipped yet on that cycle, so it is
-        // the one that is not `mine`.
-        .clear(qs_clear & ~mine),
-        .in_valid(q_valid & mine),
-        .in_x0(q_x0), .in_y0(q_y0), .in_x1(q_x1), .in_y1(q_y1),
-        .in_x2(q_x2), .in_y2(q_y2), .in_x3(q_x3), .in_y3(q_y3),
-        .in_col(q_col), .in_z(q_z), .in_moire(q_moire),
-        .sort_start(qs_sort_start & mine), .sort_busy(st_sort_busy[sb]),
-        .replay_band(qs_band),
-        .replay_start(qs_replay_start & ~mine), .replay_busy(st_replay_busy[sb]),
-        .out_ready(qs_out_ready & ~mine), .out_valid(st_out_valid[sb]),
-        .out_x0(st_x0[sb]), .out_y0(st_y0[sb]), .out_x1(st_x1[sb]), .out_y1(st_y1[sb]),
-        .out_x2(st_x2[sb]), .out_y2(st_y2[sb]), .out_x3(st_x3[sb]), .out_y3(st_y3[sb]),
-        .out_col(st_col[sb]), .out_moire(st_moire[sb]),
-        .dbg_count(st_count[sb]), .dbg_dropped(st_dropped[sb])
-      );
-    end
-  endgenerate
-
-  // The producer sees the collect bank, the consumer the display bank.
-  wire dbk = ~bank;
-  assign qs_sort_busy   = st_sort_busy[bank];
-  assign qs_replay_busy = st_replay_busy[dbk];
-  assign qs_out_valid   = st_out_valid[dbk];
-  assign qo_x0 = st_x0[dbk]; assign qo_y0 = st_y0[dbk];
-  assign qo_x1 = st_x1[dbk]; assign qo_y1 = st_y1[dbk];
-  assign qo_x2 = st_x2[dbk]; assign qo_y2 = st_y2[dbk];
-  assign qo_x3 = st_x3[dbk]; assign qo_y3 = st_y3[dbk];
-  assign qo_col = st_col[dbk]; assign qo_moire = st_moire[dbk];
-  assign dbg_quads   = st_count[bank];
-  assign dbg_dropped = st_dropped[bank];
+  // One two-bank store: collect into `bank`, replay `~bank` (R213 shares the
+  // key and scratch index between the banks, ~8 M10K blocks over two
+  // instances).
+  m2_quad_store #(.BAND_H(BAND_H), .NBANDS(NBANDS), .BW(BW), .SCR_H(SCR_H)) u_store (
+    .clk(clk), .rst_n(rst_n),
+    .clear(qs_clear), .wbank(bank), .rbank(~bank),
+    .in_valid(q_valid),
+    .in_x0(q_x0), .in_y0(q_y0), .in_x1(q_x1), .in_y1(q_y1),
+    .in_x2(q_x2), .in_y2(q_y2), .in_x3(q_x3), .in_y3(q_y3),
+    .in_col(q_col), .in_z(q_z), .in_moire(q_moire),
+    .sort_start(qs_sort_start), .sort_busy(qs_sort_busy),
+    .replay_band(qs_band),
+    .replay_start(qs_replay_start), .replay_busy(qs_replay_busy),
+    .out_ready(qs_out_ready), .out_valid(qs_out_valid),
+    .out_x0(qo_x0), .out_y0(qo_y0), .out_x1(qo_x1), .out_y1(qo_y1),
+    .out_x2(qo_x2), .out_y2(qo_y2), .out_x3(qo_x3), .out_y3(qo_y3),
+    .out_col(qo_col), .out_moire(qo_moire),
+    .dbg_count(dbg_quads), .dbg_dropped(dbg_dropped)
+  );
 
   // ------------------------------------------------------------- the filler
   logic        fl_in_valid, fl_in_ready, fl_quad_done, fl_line_case;
@@ -423,7 +390,14 @@ module m2_raster3d #(
   // R211: cleared only when the banks swap -- the new collect bank is the
   // one that was on display, and it is emptied before the walk's first quad.
   wire swap = frame_start && (pst == P_READY);
-  assign qs_clear        = swap;
+  // The store clears count[wbank]. On the swap cycle `bank` has not flipped
+  // yet, so the clear is delayed one cycle to land on the new collect bank
+  // (the one coming off display). The walk's first quad is many cycles away.
+  logic swap_d;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) swap_d <= 1'b0; else swap_d <= swap;
+  end
+  assign qs_clear        = swap_d;
   assign qs_sort_start   = (pst == P_SORT);
   assign qs_replay_start = (cst == C_REPLAY);
   assign qs_out_ready    = (cst == C_FILL) && fl_in_ready;

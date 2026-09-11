@@ -4955,11 +4955,10 @@ wire [31:0] r3d_pixels;
 // 8-ROW BANDS, 48 OF THEM (R213): what Model 1 settled on. Halves the three
 // band buffers (the M10K that the second quad-store bank needs) and paces
 // the fill twice as finely against the beam.
-// THREE BUFFERS, NOT FOUR, FOR NOW. Model 1's "band ahead" with its 48 bands
-// was a fourth; build/dbuf5 with four ran the device out of M10K blocks
-// where build/dbuf4 with three fit. The fourth comes back once the quad
-// store's key and scratch index arrays are shared between the banks.
-m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(3),
+// FOUR BUFFERS: Model 1's "band ahead" with its 48 bands. build/dbuf5 with
+// four ran out of M10K blocks where three fit; the quad store now shares its
+// sort key and scratch index between the banks (~8 blocks), which pays for it.
+m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(4),
               .TWO_CLOCKS(1'b0)) u_raster3d (
 	.clk(clk_sys), .rst_n(mem_rst_n),
 	.frame_start(geo_walk_start),
