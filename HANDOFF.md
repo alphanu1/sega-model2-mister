@@ -166,6 +166,13 @@ is the build to look at. Open in the bench: command 0x2A's six output words
 read back as three in the trace (FIFO drop or trace sampling; the
 `WORDS DROPPED` counters now print).
 
+**R206, 01:50:** `build/tgp` s11 on the board: objects finish, polys 0,
+quads 0 -- the engine's first read of every object was retired by the
+WALKER's held port-4 acknowledge with the walker's data (no ownership on
+`eng_mem_ack_r`; ACK_HOLD; the engine starts the cycle the walker's read
+completes). Fixed: edge-qualified acks, no request presented while an ack is
+up. `build/p4` (four seeds) is the build with all four fixes.
+
 **Tools fixed on the way:** `mame_i960_frame_trace.lua` never read `M2_FRAME`;
 `rom_csum.py`'s `build_image` prepended the index-3 I/O ROM (64 KB) to the
 image, so `M2_BOOT_IMAGE` trapped the real-memory bench on instruction 1; the

@@ -11573,3 +11573,27 @@ under load, or the trace's completion sampling misses them.
 three-of-six was the trace sampling io_sel on the 24 MHz CPU clock while the
 bridge pulses it for one 50 MHz cycle; completed reads fall between samples.
 Nothing is lost between the coprocessor and the CPU.
+
+**R206 -- ON THE BOARD THE ENGINE'S FIRST READ OF EVERY OBJECT WAS RETIRED BY
+THE WALKER'S HELD ACKNOWLEDGE, WITH THE WALKER'S DATA. R167 ONE LEVEL DOWN.**
+
+`build/tgp` s11 (R202+R203+R205, setup -0.263, hold +0.175), 01:45: objects
+dispatched == finished; polygons 0, nonfinite 0, clipped 0, quads 0. The
+bench with the same RTL draws 3,342 quads. What the bench does not have is
+port 4. `Model2.sv`: `eng_mem_ack_r <= p_ack[4] & eng_mem_req_r`, no
+ownership; `m2_sdram` holds every acknowledge ACK_HOLD cycles; `m2_geo` lets
+the engine start the cycle the walker's last read completes. So the walker's
+held ack retires the engine's first read, and `eng_mem_data_r` -- latched
+from p_dout[4] every cycle -- hands the engine the walker's display-list word
+as the object's attribute word. Bits [1:0] clear is "object done"
+(`m2_geo_engine.sv` E_ATTR). Every object, every frame. The "last
+polygon-ROM word read" the `build/tbl` probe showed as floats were the
+walker's matrix words for the same reason.
+
+The interlock of R173 makes the two requests never overlap; it says nothing
+about the acknowledge outliving the request that earned it, which is exactly
+R167's mechanism. Fix: an acknowledge counts only on its rising edge for the
+request that is up, and neither owner presents a request while an
+acknowledge is still up (`p4_ack_d`). Not simulable here -- the boot harness
+serves the engine from C++ with its own acknowledge -- so it goes straight to
+the board with the polygon-path probes still on the wire.

@@ -511,6 +511,7 @@ logic [31:0] geo_rd_data_r;
 wire         eng_mem_req;
 wire [23:0]  eng_mem_addr;
 logic        eng_mem_req_r, eng_mem_ack_r;
+logic        p4_ack_d;          // R206: acknowledge edge, for ownership
 logic [23:0] eng_mem_idx_r;
 logic [31:0] eng_mem_data_r;
 logic [SDR_AW:1] eng_base_r;
@@ -2809,7 +2810,7 @@ always_ff @(posedge clk_sys) begin
 	tgp_dat_wdata_r <= tgp_dat_wdata;
 	tgp_dat_is_buf_r<= tgp_dat_is_buf;
 	tgp_dat_half_r  <= tgp_dat_half;
-	geo_rd_req_r    <= geo_rd_req;
+	geo_rd_req_r    <= geo_rd_req & ~(p_ack[4] & ~geo_rd_req_r);   // R206: not while an ack is still up
 	geo_rd_addr_r   <= geo_rd_addr;
 	// the walk only sees an acknowledge when the port was serving IT
 	// COPRO_BUFW: the coprocessor's writes into SHARED buffer RAM.
@@ -2832,12 +2833,24 @@ always_ff @(posedge clk_sys) begin
 	// Qualifying the ack is the fix R166 applied to the coprocessor's port and
 	// it is the same shape of bug: an unqualified p_ack retires a request that
 	// was never issued.
-	geo_rd_ack_r    <= p_ack[4] & geo_rd_req_r & ~eng_mem_req_r;
+	// THE HANDOVER HAZARD (R206), the R167 shape one level down. The
+	// controller HOLDS each acknowledge (ACK_HOLD), and the engine raises its
+	// first request the cycle the walker's last read completes. With the
+	// acknowledge unqualified by ownership, the walker's held ack retired the
+	// engine's first read with the walker's display-list word as the object's
+	// attribute word; low bits clear is "object done", so every object on the
+	// board finished with zero polygons while the bench, serving the engine
+	// from C++, drew the scene. Measured on build/tgp s11: objects dispatched
+	// == finished, polys 0, quads 0. Two rules now: an owner's request is not
+	// presented while an acknowledge is still up, and an acknowledge counts
+	// only on its rising edge, for the request that is up.
+	p4_ack_d        <= p_ack[4];
+	geo_rd_ack_r    <= p_ack[4] & ~p4_ack_d & geo_rd_req_r & ~eng_mem_req_r;
 	geo_rd_data_r   <= p_dout[4][31:0];
-	eng_mem_req_r   <= eng_mem_req;
+	eng_mem_req_r   <= eng_mem_req & ~geo_rd_req_r & ~(p_ack[4] & ~eng_mem_req_r);
 	eng_mem_idx_r   <= eng_mem_idx;
 	eng_base_r      <= eng_base;
-	eng_mem_ack_r   <= p_ack[4] & eng_mem_req_r;
+	eng_mem_ack_r   <= p_ack[4] & ~p4_ack_d & eng_mem_req_r;
 	eng_mem_data_r  <= p_dout[4][31:0];
 	if (geo_rd_req_r & eng_mem_req_r) dbg_p4_clash <= dbg_p4_clash + 16'd1;
 end
