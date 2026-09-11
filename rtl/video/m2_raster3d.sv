@@ -83,7 +83,15 @@ module m2_raster3d #(
   // last frame, against NBANDS=24: if it reads 12 the fill never starts on the
   // first twelve, and if it reads 24 they are being filled and lost elsewhere.
   output logic [15:0] dbg_ready_cyc,
-  output logic [7:0]  dbg_bands_done
+  output logic [7:0]  dbg_bands_done,
+  // THE FLASHING, INSTRUMENTED. The store is cleared on every frame_start.
+  // A frame whose q_end has not arrived by then is still in P_COLLECT: what
+  // it collected is wiped, nothing is P_READY for the beam, and the frame
+  // draws nothing. dbg_late_frames counts those; dbg_qend_frames counts
+  // the frames the geometry stage finished. Equal rates mean every frame
+  // is late and the picture is whatever the previous frame's list left.
+  output logic [7:0]  dbg_late_frames,
+  output logic [7:0]  dbg_qend_frames
 );
 
   localparam int unsigned NBANDS = (SCR_H + BAND_H - 1) / BAND_H;
@@ -329,6 +337,7 @@ module m2_raster3d #(
       fill_band <= '0; fill_buf <= '0; bd_ready <= '0;
       bd_clear_req <= '0; dbg_bands <= 16'd0; dbg_pixels <= 32'd0;
       dbg_ready_cyc <= 16'd0; dbg_bands_done <= 8'd0;
+      dbg_late_frames <= 8'd0; dbg_qend_frames <= 8'd0;
       rdy_cyc <= 16'd0; rdy_run <= 1'b0; bands_this <= 8'd0;
       for (int i = 0; i < NBUF; i++) begin bd_y0[i] <= 16'sd0; bd_band[i] <= '0; end
     end else begin
@@ -346,6 +355,9 @@ module m2_raster3d #(
         rdy_run       <= 1'b0;
         dbg_ready_cyc <= rdy_cyc;
       end
+
+      if (frame_start && (pst == P_COLLECT)) dbg_late_frames <= dbg_late_frames + 8'd1;
+      if (q_end) dbg_qend_frames <= dbg_qend_frames + 8'd1;
 
       // ---- producer: collect quads for the frame, then sort once
       case (pst)
