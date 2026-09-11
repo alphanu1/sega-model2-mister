@@ -13173,3 +13173,14 @@ the geometry is a serial chain, one object at a time through walker, engine,
 projector and clipper, and its own Fmax caps the core at 60.3 (R227). The
 throughput is in overlapping that chain and in the fill's per-band cost,
 not in the coprocessor's clock.
+
+*R230, the remainder (23:50):* with the strip cache off, 17,853 clipped
+quads from a later stretch and 14,477 more under the board's own port
+timing (`M2_GEO_LAT=12`) carry NO vertex at the corner, nothing at the
+saturation limit and no interior wedge. The 36 three-clustered-one-far
+shapes the wider net caught are slivers ON the screen edge -- x = 0 or 496,
+y = 384 -- which is a large road polygon fan-triangulated after the clip,
+correct and the reference's own shape. The few wedges the board still shows
+off the cars are therefore not reproducible at the desk with what the bench
+models; the cars are in the crash animation continuously (R232), and a car
+mid-roll is odd geometry in its own right. Left open, attached to R232.
