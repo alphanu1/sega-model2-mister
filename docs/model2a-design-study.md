@@ -13184,3 +13184,8 @@ correct and the reference's own shape. The few wedges the board still shows
 off the cars are therefore not reproducible at the desk with what the bench
 models; the cars are in the crash animation continuously (R232), and a car
 mid-roll is odd geometry in its own right. Left open, attached to R232.
+
+*R231 in the fitter (23:55): `build/fix3d2` fits all four seeds at 83%
+(34,645-34,684 ALM); s15 meets EVERY clock, setup +0.165, hold +0.212, the
+third build of the day to close outright. Deployed. `build/fix3d3` = fix3d2
++ TINY = 4 (R233), in the fitter behind it.*

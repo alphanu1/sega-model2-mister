@@ -4,7 +4,7 @@
 
 ## WHERE 2026-09-11 LEFT IT (evening)
 
-**Board:** `build/fix3d` s13 (100/50/25, 82%, EVERY clock meets setup and hold).
+**Board:** `build/fix3d2` s15 (100/50/25, 83%, EVERY clock meets setup and hold; textured polygons as lit grey). `build/fix3d3` (+ TINY = 4 against the store overflow, R233) was in the fitter at close.
 Lit and coloured 3D, the top of the screen drawn, the wedges gone, translucent
 polygons culled as the reference culls them, texture RAM zeroed; `build/fix3d2`
 adds textured polygons as lit grey (R231). Still wrong on the board: the cars
