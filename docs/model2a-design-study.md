@@ -13339,3 +13339,9 @@ on clk_sys as every status bit that reaches the datapath must be, and a
 change empties the colour cache so nothing stale is served. The grey-for-
 black case stays at half regardless. `tb_m2_geo_engine` 41 checks at mode
 0 unchanged. In `build/fix3d6` with R238.
+
+*R237's build (00:46, 09-12): `build/fix3d5` fits all four seeds at 84%
+(34,970-35,036 ALM) and THREE meet every clock -- s14 setup +0.250, hold
++0.204, the cleanest of the day -- picked by the rule and deployed.
+`build/fix3d6` (R238 sweep + R239 brightness option) confirmed to carry both
+in its copied tree; in the fitter.*
