@@ -25,7 +25,10 @@ frame ~2,600-3,450). A 420 M-instruction run was started at 23:35 with
 `<scratchpad>/long/copro_trace.txt` (F/W/R exchange, frame-stamped); MAME's
 `coprotap.lua` over frames 2800-3200 gives the reference side -- DONE, 757,930
 lines (F 179,775 / W 299,757 / R 278,398), copied to `build/long/mame_copro.txt`
-with the script beside it (git-ignored build dir, survives the session). Diff them for
+with the script beside it (git-ignored build dir, survives the session). That
+window turned out to END before the race (busy to frame ~2,940, then a flat 508
+lines a frame): a second capture, frames 3200-3800, is `build/long/mame_copro_b.txt`.
+The bench run traces from frame 2,800 onward, so it covers both. Diff them for
 the first FIFO result that differs -- the method that found R212. The
 scratchpad is session-local: copy `long/` out before it is lost.
 
