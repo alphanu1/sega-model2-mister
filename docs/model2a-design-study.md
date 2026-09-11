@@ -12293,3 +12293,12 @@ own reprojections of cut vertices are unchanged. Tests: m2_geometry 30
 checks, m2_geo_engine 20, boot bench PASS; the engine's cost is being
 remeasured. Expected: the projector's share roughly halved, so ~120 fewer
 cycles a polygon of the 467.
+
+*R217 measured (14:30):* quad-to-quad gap 467 -> 409 cycles (median and
+p90 alike), projection busy 50.5% -> 47.8% of all ticks, E_EMIT 34.2% ->
+30.7%. Real but a fraction of the halving expected, so the quad
+projector's four projections were not the bulk of the projection stage:
+what remains is the clipper's reprojection of cut vertices (it has
+priority at the projector) and the engine's idle share, 39% of all ticks,
+which is the walker between objects. Both are being split out by the
+bench before the next step.
