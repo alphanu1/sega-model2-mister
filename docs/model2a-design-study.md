@@ -12436,3 +12436,12 @@ clipper's stack carries a 2-bit input-vertex id and a flag; the four input
 pixels are held once and looked up at emission. Engine 20, geometry 30,
 clip 2,003 checks pass; boot bench passes. `build/dbuf13` = everything to
 R219, slimmed. The bench is remeasuring the projector's hit rate.
+
+*Slimmed, remeasured (17:40):* identical output -- 31,648 quads emitted,
+projection busy 14.4% -- and the stated carry hits 88,123 vertices against
+the comparators' 68,594 on the same window: four polygons in five take
+both shared pixels, the fifth following a cull or an object start. dbuf13
+synthesis: 52,288 ALUTs / 50,789 registers against dbuf10's 51,892 /
+50,082 (dbuf11, which crashed: 52,728 / 51,373); the clipper 1,899 / 3,301
+against the unslimmed 2,086 / 3,765. Predicted fit 91-93% ALM, block
+memory unchanged at 77%.
