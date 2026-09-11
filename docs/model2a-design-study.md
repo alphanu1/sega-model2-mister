@@ -12407,3 +12407,21 @@ those two netlist shapes trips Quartus 17.0's fitter. Bisected in
 parallel from two worktrees, each with one commit reverted, two seeds
 each: `build/bis_noR218` and `build/bis_noR217`. dbuf12 was stopped; it
 shared the netlist.
+
+*The bisect (16:50): it is not a shape, it is the density.* With R217
+reverted, s14 crashed and s15 fit at 41,291 ALM (98.5%, setup -0.456,
+hold -0.296); with R218 reverted, s15 crashed and s14 fit at 41,203 ALM
+(98.3%). Each half alone puts the device at 98% and Quartus 17.0's fitter
+falls over at that density on about half its seeds -- the same behaviour
+the project file records from the area-mode experiment. Synthesis logic:
+the geometry stage 5,096 -> 5,841 ALUTs from dbuf10 to dbuf11 (R217's
+eight 96-bit comparators +465 in m2_geometry itself, R218's pixel stack
++274 and +664 registers in the clipper), the engine +190 for R219's dot
+product. dbuf10 fit at 37.8k with these absent. So both changes stay and
+both slim down: R217's comparators go -- the engine knows which two
+vertices it carried (the link mode of the polygon before) and can say so,
+which is also a 100% hit rate against the comparators' two in three; and
+R218's stack carries a 2-bit vertex id and a flag instead of a 32-bit
+pixel, the four input pixels held once. The coprocessor's flip-flop
+input queue (~2,000 ALM as one M10K, per the qsf) remains the lever for
+real room.
