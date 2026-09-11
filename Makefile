@@ -136,7 +136,7 @@ lint_top:
 	 fi
 	@rm -f .lint_top.syn
 	@cat .lint_top.raw \
-	  | grep -E "port connection|IMPLICIT|UNDRIVEN|PINMISSING" \
+	  | grep -E "port connection|IMPLICIT|UNDRIVEN|PINMISSING|MULTIDRIVEN" \
 	  | grep -vE "For warning description|lint_off" \
 	  | grep -vE "sys/|rtl/pll/|sim/lint/|rtl/cpu/tv80/|rtl/sound/(jt12|fx68k)/|rtl/sound/m2_multipcm" \
 	  | grep -vE "missing pin: '(direct_video|img_mounted|img_readonly|img_size|info|info_req|ioctl_file_ext|ioctl_rd|joystick_[0-5]_rumble|joystick_[1-5]|joystick_[lr]_analog_[0-5]|new_vmode|paddle_[1-5]|ps2_[a-z_]+|RTC|sd_ack|sd_blk_cnt|sd_buff_[a-z]+|sd_lba|sdram_sz|sd_rd|sd_wr|spinner_[0-5]|status_in|status_menumask|status_set|TIMESTAMP|uart_mode|uart_speed|video_rotated|tx_empty)'" \

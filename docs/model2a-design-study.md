@@ -13345,3 +13345,13 @@ black case stays at half regardless. `tb_m2_geo_engine` 41 checks at mode
 +0.204, the cleanest of the day -- picked by the rule and deployed.
 `build/fix3d6` (R238 sweep + R239 brightness option) confirmed to carry both
 in its copied tree; in the fitter.*
+
+*R238, what the desk lint missed (00:50):* `build/fix3d6` failed synthesis
+in under a minute -- "Can't resolve multiple constant drivers for net
+sw_pend": the fold-pending flag was set in the sweep's always block and
+cleared in the stream's. `make lint_top` reports port, implicit, undriven
+and missing-pin classes and was silent on MULTIDRIVEN, which Verilator does
+flag under -Wall. The rule now reports it, and a sweep of the whole top
+with the class enabled finds no other. The flag is one driver: the stream
+block raises a one-cycle `sw_take`, the sweep block clears its own flag on
+it. Build restarted 00:48.
