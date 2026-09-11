@@ -23,7 +23,11 @@ for sta in sorted(glob.glob(os.path.join(d, 's*', 'output_files', 'Model2.sta.rp
         i = txt.find('; ' + name)
         rows = []
         if i < 0: return rows
-        for line in txt[i:].splitlines()[3:40]:
+        # The table is: header row, a '+---' rule, the column names, another
+        # rule, then the rows, then a rule. Skip the rules; stop at the first
+        # line that is neither a rule nor a row.
+        for line in txt[i:].splitlines()[1:60]:
+            if line.startswith('+'): continue
             if not line.startswith(';'): break
             f = [x.strip() for x in line.split(';')]
             if len(f) > 3 and re.match(r'^-?\d+\.\d+$', f[2]): rows.append((f[1], float(f[2])))
