@@ -1,6 +1,6 @@
 # Handoff
 
-**Updated:** 2026-09-11 08:00. Study entries R176-R209. R172 WITHDRAWN, R185
+**Updated:** 2026-09-11 09:50. Study entries R176-R210. R172 WITHDRAWN, R185
 partly RETRACTED, R189 corrected by R191, R196's central claim WITHDRAWN the
 same day, R206 WITHDRAWN, R207 closed by R208.
 
@@ -30,8 +30,18 @@ Now four-phase: a served owner is not granted again until its line has
 fallen. The test drives garbage from idle owners and idles the coprocessor
 slot for tens of cycles at a time; the two earlier arbiters fail it, this
 one passes. `build/wrarb3` (11, 13, 14, 15) carries it plus the flashing
-probe. Board restored to `build/ack` s14 (white flashing cars) meanwhile.
-Study R209.
+probe. **`build/wrarb3` s15 WORKS (09:45): ROM loads, first TGP job
+completes, 4 minutes clean -- render chain 10.6%, mailbox poll 3.7%, no
+parking, no drops.** Ten-minute soak running. The board is on it. Study R209.
+
+**R210: THE FLASHING IS THROUGHPUT.** `dbg_late_frames` and `dbg_qend_frames`
+advance at the same rate: the geometry stage takes ~2 video frames per game
+frame, every frame that starts mid-collect clears the store and draws
+nothing, and when a frame is ready it is late enough that mostly one band
+completes. Ready-cycle counter saturates at 65535; next probe widens it
+(units of 16) and splits walk+engine from sort. Candidate levers, in order
+of size: use both dwords of port 4's 64-bit return (halves walker and
+engine reads), prefetch the object stream, cut the per-word handshake cost.
 
 **SEEN ON THE SCREEN (build/ack s14, 08:05): white, transparent car models,
 flashing on and off.** The first 3D drawn on hardware. White is by design

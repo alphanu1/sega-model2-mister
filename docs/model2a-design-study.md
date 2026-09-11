@@ -11841,3 +11841,44 @@ bus -- not the port's.
 
 Unconfirmed until the board says so: `build/wrarb3` (seeds 11, 13, 14, 15),
 R202+R203+R205+R208+R209 four-phase, flashing probe on the H record.
+
+*Confirmed on the board, 09:45.* `build/wrarb3` s15 (four-phase arbiter,
+setup -0.255, hold +0.053; seeds 11, 13, 14 died in the fitter's
+segmentation fault), 240 s capture from the core load: ROM loaded, the
+first coprocessor job completed, the game ran the whole capture -- frame
+wait 31%, render chain 10.6%, mailbox poll 3.7%, TGP mostly at its idle
+0x30B, never parked at 0x46E or 0x4C9, quads dropped 0. Against `build/ack`
+s14 (mailbox poll 77%, TGP parked, counters frozen). A ten-minute soak
+follows; the race that hung s14 took three minutes once and did not show
+in seven, so a clean soak is evidence, not proof.
+
+**R210 -- THE FLASHING IS THROUGHPUT: THE GEOMETRY STAGE TAKES ABOUT TWO
+VIDEO FRAMES PER GAME FRAME, AND EVERY FRAME THAT STARTS BEFORE IT FINISHES
+DRAWS NOTHING.** Same capture, the H record (`dbg_late_frames` = frame_start
+while still collecting; `dbg_qend_frames` = geometry finished):
+
+    per slice of ~152 samples (~24 s):  late 631-909   qend 455-758
+    ready cycles (frame_start -> P_READY)  saturated at 65535 (> 1.3 ms) in
+                                            every sample after the first slice
+    bands completed last frame             1 (most common), 26, 0, 50
+    quads held                             up to 1,532, dropped 0
+
+Late and finished advance at the same rate: nearly every game frame's
+geometry is still being collected when the next video frame starts, so
+the store is cleared, that frame draws nothing (R200's clearing note), and
+the frame after draws the list -- on and off at half rate, which is what
+the screen shows. "Bands completed = 1" says that when P_READY does come
+it is late in the frame and the beam has passed most bands: the parts
+that do draw are the bottom of the screen, R200's cut from the other
+side. (26 and 50 are more than NBANDS=24 and need explaining --
+`bands_this` may count across the frame boundary.)
+
+Where the time goes is not measured yet: the ready counter saturates at
+16 bits. Known costs: the walker and the engine each pay ~10 clk_sys
+cycles per dword on port 4 (R208's handshake through the registered glue
+and the adapter; the port returns 64 bits and only 32 are used), the TGP
+runs its job at one SDRAM access per external read, and the CPU pushes
+the list through the front-door DMA at two writes per dword on the shared
+write port now costing two dead cycles each (R209). Next probe: the ready
+count in units of 16 cycles (1 M cycles = 21 ms full scale), and the cycles
+from frame_start to q_end separately, to split walk+engine from sort.
