@@ -13243,3 +13243,12 @@ takes the grey, and only that one at half luminance, because grey at 255 is
 white on this game's table. `tb_m2_geo_engine` 41 checks. `build/fix3d3`
 (which had the halving) was stopped in the fitter; `build/fix3d4` = fix3d2
 + TINY 4 (R233) + this + the wedge catcher (R235).
+
+*R234, the last two inputs measured (23:50):* the light vector the walker
+holds is (0.438068, -0.912499, -0.415382), length 1.09412 -- the reference's
+own display list gives (0.437936, -0.914406, -0.411307), length 1.09412,
+the same to five figures (the components turn with the camera between the
+two capture moments); and the rotated normals are unit, mean 0.998, 28,344
+of 28,464 within 0.9-1.1. With R222's arithmetic proved to the integer,
+every input to the luminance is now verified. The saturation was the
+placeholder alone.
