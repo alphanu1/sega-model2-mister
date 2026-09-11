@@ -13290,3 +13290,11 @@ latency in the bench to search the interleavings.
 *And R233 on the board:* store drops 35 at worst in the boot stretch against
 1,242 and 1,898 before; quads pegged at 2,048 only at the very start. The
 silhouette frames should be gone.
+
+*R237, the next measurement (00:06, 09-12):* the C record's twelve
+scroll-probe bits (R212, closed) now carry `geo_pj_lost[11:0]`, the
+projections the geometry abandoned on timeout. On expiry it moves on WITHOUT
+resetting the projector, so the late result is taken by the next vertex --
+the one path found by inspection that hands a vertex someone else's screen
+position. Zero over every desk run; captures before `build/fix3d5` show
+scroll values in those bits, not this. In the fitter.
