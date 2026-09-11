@@ -3576,6 +3576,12 @@ wire        uart_b2_valid = hb_tick_b || trap_edge;
 wire        uart_b_valid = char_ack;
 wire [31:0] uart_dropped;
 
+// R238: declared at module scope because it is DRIVEN inside g_dbg (the
+// stream's block, under DEBUG) and CONSUMED by the sweep's block outside it.
+// Declared inside the generate, Quartus could not see it from the sweep --
+// "object sw_take is not declared" -- where Verilator's lint had let the
+// cross-scope reference pass.
+logic         sw_take;
 generate if (DEBUG) begin : g_dbg
 // A WEDGE CATCHER ON THE BOARD (R235). The board draws a few wedges off the
 // cars that no bench configuration reproduces -- 32,000 clipped quads at the
@@ -3611,7 +3617,6 @@ wire wedge_s0  = near3(q3d_x1, q3d_x2, q3d_x3) && near3(q3d_y1, q3d_y2, q3d_y3)
 wire wedge_hit = q3d_valid && q3d_ready && wedge_in && (wedge_s1 || wedge_s0);
 logic [127:0] wedge_q;
 logic         wedge_have, wedge_slot;
-logic         sw_take;           // R238: the stream took the pending fold (driven here, consumed in the sweep block)
 logic  [1:0]  wedge_ph;          // 0: nothing to send, 1: send W, 2: send X
 logic [14:0]  wedge_n;
 always_ff @(posedge clk_sys or negedge mem_rst_n) begin
