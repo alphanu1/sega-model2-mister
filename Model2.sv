@@ -3781,8 +3781,12 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// each, ~7 samples a frame: the background jumps vertically at frame rate
 	// on the board, and alternating values here say the game writes two
 	// values, while a steady value says the picture moves for another reason.
+	// R237: the scroll probes (R212, closed) give their twelve bits to the
+	// projections abandoned on timeout -- the one path that hands a late x/y
+	// to the NEXT vertex, which is the shape of the board's wedges. Zero at
+	// the desk; the board has to say.
 	.a_data({cpu_trap, cpu_halted, copro_stall, copro_dbg_ctl[31],
-	         vid_vscr[0][5:0], vid_vscr[1][5:0], tgp_pc[15:0]}),
+	         geo_pj_lost[11:0], tgp_pc[15:0]}),
 	// THE i960's OWN INSTRUCTION COUNT, so the first three minutes can be
 	// diagnosed rather than described. Two readings a known time apart give the
 	// rate directly; a machine that is slow for three minutes and then is not

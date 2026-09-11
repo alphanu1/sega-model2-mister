@@ -5,7 +5,7 @@
 # Decode a debug UART capture (tools/board-capture.sh) for the stream layout of
 # 2026-09-11 (Model2.sv, m2_dbg_stream):
 #   C records: a_data = {cpu_trap, cpu_halted, copro_stall, copro_dbg_ctl[31],
-#              vid_vscr[0][5:0], vid_vscr[1][5:0], tgp_pc[15:0]}
+#              geo_pj_lost[11:0] (R237), tgp_pc[15:0]}
 #   H records: b_addr = {r3d_ready_cyc[15:0] (x16 clk), r3d_bands_done[7:0], r3d_hold[7:0]}
 #              b_data = {r3d_dropped[15:0], wedge_slot, wedge_n[6:0], r3d_quads[11:4]}   (R235)
 #   W records: {x0,y0} {x1,y1} and X records: {x2,y2} {x3,y3} of a quad the board's
@@ -37,6 +37,8 @@ live=sum(v for k,v in ip.items() if k!=0)
 def rng(a,b): return sum(v for k,v in ip.items() if a<=k<b)
 print('C',len(C),'H',len(H),' framewait %.1f%%'%(100*(ip[0x12b0]+ip[0x12b8])/max(1,live)),' mailbox %.1f%%'%(100*(ip[0x1166c]+ip[0x11674])/max(1,live)),' render %.1f%%'%(100*rng(0x16e58,0x17b00)/max(1,live)))
 print('tgp  :',', '.join(f'{k:04X}:{v}' for k,v in pc.most_common(4)))
+pj=[(d>>16)&0xfff for _,d in C]
+print('projections abandoned on timeout (R237): first %d, last %d, max %d' % (pj[0] if pj else 0, pj[-1] if pj else 0, max(pj) if pj else 0))
 # b_addr = {ready_cyc16 (x16), bands_done8, hold8}; b_data = {qs_dropped16, geo_dropped8, quads[11:4]}
 n=len(H); k=max(1,n//5)
 if W:
