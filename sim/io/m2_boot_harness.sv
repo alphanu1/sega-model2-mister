@@ -179,6 +179,10 @@ module m2_boot_harness #(
   output logic  [7:0] tpw_diffuse, tpw_ambient,
   output logic  [4:0] tpw_idx,
   output logic        tpw_we,
+  output logic [31:0] lit_x_o, lit_y_o, lit_z_o,   // R234: the light vector as the walker holds it
+  output logic [31:0] nrm_x_o, nrm_y_o, nrm_z_o,   // ...and the rotated normal beside each polygon
+  output logic        tgp_rom_rd,                  // R232: a coprocessor data-ROM read is issued
+  output logic [23:0] tgp_rom_adr,                 // ...at this dword (win_adr)
   output logic signed [15:0] eng_q_x0, eng_q_y0, eng_q_x1, eng_q_y1,
   output logic signed [15:0] eng_q_x2, eng_q_y2, eng_q_x3, eng_q_y3,
   // WHICH INSTRUCTION EMITS THE GEOMETRY. The board and the bench disagree about
@@ -877,6 +881,10 @@ module m2_boot_harness #(
   assign tpw_idx     = geo_tp_idx;
   assign tpw_diffuse = geo_tp_diffuse;
   assign tpw_ambient = geo_tp_ambient;
+  assign tgp_rom_rd  = u_copro.u_tgp.dat_req & u_copro.u_tgp.sel_rom & ~u_copro.u_tgp.dat_we;
+  assign lit_x_o = geo_lit_x; assign lit_y_o = geo_lit_y; assign lit_z_o = geo_lit_z;
+  assign nrm_x_o = u_geometry.nrm_x; assign nrm_y_o = u_geometry.nrm_y; assign nrm_z_o = u_geometry.nrm_z;
+  assign tgp_rom_adr = u_copro.u_tgp.win_adr;
   assign obs_v0x = u_geometry.u_engine.v0x; assign obs_v0y = u_geometry.u_engine.v0y; assign obs_v0z = u_geometry.u_engine.v0z;
   assign obs_v1x = u_geometry.u_engine.v1x; assign obs_v1y = u_geometry.u_engine.v1y; assign obs_v1z = u_geometry.u_engine.v1z;
   assign obs_v2x = u_geometry.u_engine.v2x; assign obs_v2y = u_geometry.u_engine.v2y; assign obs_v2z = u_geometry.u_engine.v2z;

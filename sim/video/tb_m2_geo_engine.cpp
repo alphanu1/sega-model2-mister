@@ -275,9 +275,27 @@ int main(int argc, char** argv) {
     for (int budget = 0; budget < 60000 && (d->busy || budget < 10); budget++) { tick(); if (d->poly_valid && d->poly_ready) { if (!n) { col0 = d->poly_col; luma0 = d->poly_luma; } n++; } }
     std::printf("test: textured opaque polygons still draw, as lit grey (R231)\n");
     // grey 16/16/16 through the same table and gamma as a flat polygon would be
-    ck("textured polygon takes the grey placeholder", col0, ref_colour(0x4210, (int)luma0));
+    // R234: its palette entry is not black, so it keeps it, at HALF the luma
+    ck("textured polygon keeps its palette colour at half luma", col0, ref_colour(C555, (int)luma0 >> 1));
     ck("three polygons emitted", n, 3);
     thdr[0x100 + 0] = 0x0000;
+  }
+  // ---- R234: a textured polygon whose palette entry is BLACK takes the grey
+  {
+    thdr[0x100 + 0] = 0x4000; pal3d[0x155] = 0x0000;
+    d->rst_n = 0; for (int i = 0; i < 4; i++) tick(); d->rst_n = 1; tick();
+    for (int i = 0; i < 12; i++) {
+      static const float I[12] = {1,0,0, 0,1,0, 0,0,1, 0,0,0};
+      d->mat_we = 1; d->mat_idx = i; d->mat_data = f2u(I[i]); tick();
+    }
+    d->mat_we = 0;
+    d->tp_we = 1; d->tp_idx = 0; d->tp_diffuse = 200; d->tp_ambient = 20; tick(); d->tp_we = 0;
+    d->start = 1; tick(); d->start = 0;
+    uint32_t n = 0, col0 = 0, luma0 = 0;
+    for (int budget = 0; budget < 60000 && (d->busy || budget < 10); budget++) { tick(); if (d->poly_valid && d->poly_ready) { if (!n) { col0 = d->poly_col; luma0 = d->poly_luma; } n++; } }
+    std::printf("test: a textured polygon with a black palette entry takes the grey\n");
+    ck("grey at half luma", col0, ref_colour(0x4210, (int)luma0 >> 1));
+    thdr[0x100 + 0] = 0x0000; pal3d[0x155] = C555;
   }
 
   // ---- second pass: focus is APPLIED, and to x and y only

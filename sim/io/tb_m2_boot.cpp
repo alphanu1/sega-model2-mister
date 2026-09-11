@@ -61,6 +61,15 @@ static unsigned g_pj_lost = 0;
 static unsigned g_luma_hist[16] = {0};
 static unsigned g_luma_n = 0, g_luma_zero = 0;
 static unsigned g_tp_dif[32], g_tp_amb[32]; static bool g_tp_seen[32];
+// R232: coprocessor data-ROM reads by dword address range. The loaded ROM is
+// 4 MB = 0x100000 dwords; the reference's region is 8 MB and reads above the
+// loaded part return zero; this core's address is 20 bits and would alias.
+static unsigned long g_rom_rd = 0, g_rom_rd_hi = 0, g_rom_rd_max = 0; static bool g_rom_rd_d = false;
+// R234: every distinct light vector the walker held, with its length.
+#include <cmath>
+static std::map<uint64_t, unsigned> g_lights; static uint32_t g_lit_last[3] = {0,0,0};
+// the rotated normal's length per emitted polygon, binned
+static unsigned g_nlen_hist[8] = {0}; static unsigned g_nlen_n = 0; static double g_nlen_sum = 0;
 static uint32_t g_op_hist[32] = {0};   // display-list opcodes decoded from M2_POLY_FROM
 static void th_probe(uint32_t tha) {
   ++g_th_objs;
@@ -80,6 +89,8 @@ static void th_report() {
     std::printf("    LUMINANCE over %u polygons, zero on %u (%.1f%%); histogram by 16s:",
                 g_luma_n, g_luma_zero, g_luma_n ? 100.0 * g_luma_zero / g_luma_n : 0.0);
     for (int i = 0; i < 16; i++) std::printf(" %u", g_luma_hist[i]);
+    std::printf("\n    ROTATED NORMAL LENGTH over %u polygons: mean %.3f; bins <0.5 %u, 0.5-0.9 %u, 0.9-1.1 %u, 1.1-2 %u, 2-10 %u, 10-100 %u, 100-1000 %u, >1000 %u",
+                g_nlen_n, g_nlen_n ? g_nlen_sum / g_nlen_n : 0.0, g_nlen_hist[0], g_nlen_hist[1], g_nlen_hist[2], g_nlen_hist[3], g_nlen_hist[4], g_nlen_hist[5], g_nlen_hist[6], g_nlen_hist[7]);
     std::printf("\n    TEXTURE PARAMETERS the walker captured (index: diffuse/ambient):");
     for (int i = 0; i < 32; i++) if (g_tp_seen[i]) std::printf(" %d:%u/%u", i, g_tp_dif[i], g_tp_amb[i]);
     std::printf("\n");
@@ -113,6 +124,13 @@ static void th_report() {
                   cb, e, r5, g5, b5, xr, xg, xb, gam(xr), gam(xg), gam(xb));
     }
   }
+  {
+    auto u2f = [](uint32_t u){ float f; std::memcpy(&f, &u, 4); return f; };
+    std::printf("    LIGHT VECTORS the walker captured: %zu distinct; last (%g, %g, %g) length %g\n", g_lights.size(),
+                u2f(g_lit_last[0]), u2f(g_lit_last[1]), u2f(g_lit_last[2]),
+                std::sqrt((double)u2f(g_lit_last[0])*u2f(g_lit_last[0]) + (double)u2f(g_lit_last[1])*u2f(g_lit_last[1]) + (double)u2f(g_lit_last[2])*u2f(g_lit_last[2])));
+  }
+  std::printf("    COPRO DATA-ROM READS: %lu, of which %lu at or above dword 0x100000 (past the 4 MB loaded; the reference reads ZERO there, this core ALIASES); highest dword 0x%06lx\n", g_rom_rd, g_rom_rd_hi, g_rom_rd_max);
   std::printf("    PROJECTIONS ABANDONED ON TIMEOUT: %u  (R226: an abandoned vertex keeps the screen position it already had)\n", g_pj_lost);
   std::printf("    TEXHDR texture RAM words written by the walker (op 0x04, bit 23): %u\n", (unsigned)g_tdwords);
   std::printf("    WALKER OPCODES from M2_POLY_FROM:");
@@ -661,9 +679,17 @@ int main(int argc, char **argv) {
     // engine happened to be fetching: it reported ZERO polygons and ZERO
     // texture parameters, which would have read as "the game sets none" when
     // the walker's own opcode histogram counts 38 of them.
-    if (d->eng_poly_go) { unsigned l = d->eng_luma; ++g_luma_n; ++g_luma_hist[l >> 4]; if (l == 0) ++g_luma_zero; }
+    if (d->eng_poly_go) { unsigned l = d->eng_luma; ++g_luma_n; ++g_luma_hist[l >> 4]; if (l == 0) ++g_luma_zero;
+      auto u2f = [](uint32_t u){ float f; std::memcpy(&f, &u, 4); return f; };
+      double nx = u2f(d->nrm_x_o), ny = u2f(d->nrm_y_o), nz = u2f(d->nrm_z_o), ln = std::sqrt(nx*nx + ny*ny + nz*nz);
+      if (std::isfinite(ln)) { ++g_nlen_n; g_nlen_sum += ln; int b = ln < 0.5 ? 0 : ln < 0.9 ? 1 : ln < 1.1 ? 2 : ln < 2 ? 3 : ln < 10 ? 4 : ln < 100 ? 5 : ln < 1000 ? 6 : 7; ++g_nlen_hist[b]; } }
     if (d->tpw_we) { g_tp_dif[d->tpw_idx] = d->tpw_diffuse; g_tp_amb[d->tpw_idx] = d->tpw_ambient; g_tp_seen[d->tpw_idx] = true; }
-    if (d->eng_q_valid && g_quads.size() < 4096 && d->dbg_acc >= quads_from)
+    if (d->lit_x_o != g_lit_last[0] || d->lit_y_o != g_lit_last[1] || d->lit_z_o != g_lit_last[2]) {
+      g_lit_last[0] = d->lit_x_o; g_lit_last[1] = d->lit_y_o; g_lit_last[2] = d->lit_z_o;
+      ++g_lights[(uint64_t(d->lit_x_o) << 32) ^ (uint64_t(d->lit_y_o) << 11) ^ d->lit_z_o];
+    }
+    { bool r = d->tgp_rom_rd; if (r && !g_rom_rd_d) { unsigned a = d->tgp_rom_adr & 0x7fffffu; ++g_rom_rd; if (a >= 0x100000u) ++g_rom_rd_hi; if (a > g_rom_rd_max) g_rom_rd_max = a; } g_rom_rd_d = r; }
+    if (d->eng_q_valid && g_quads.size() < 65536 && d->dbg_acc >= quads_from)
       g_quads.push_back({(int)(int16_t)d->eng_q_x0, (int)(int16_t)d->eng_q_y0,
                          (int)(int16_t)d->eng_q_x1, (int)(int16_t)d->eng_q_y1,
                          (int)(int16_t)d->eng_q_x2, (int)(int16_t)d->eng_q_y2,

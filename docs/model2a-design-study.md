@@ -13189,3 +13189,36 @@ mid-roll is odd geometry in its own right. Left open, attached to R232.
 (34,645-34,684 ALM); s15 meets EVERY clock, setup +0.165, hold +0.212, the
 third build of the day to close outright. Deployed. `build/fix3d3` = fix3d2
 + TINY = 4 (R233), in the fitter behind it.*
+
+**R234 -- THE PLACEHOLDER TURNED BLUE CARS WHITE. THE CARS ARE TEXTURED, AND
+THE REFERENCE READS THE PALETTE FOR THEM ALL THE SAME.**
+
+`build/fix3d2` on the board: "too much light, the car colours are
+saturated -- blue is now white". R231's placeholder gave EVERY textured
+polygon a grey and sent it through the table at the polygon's luminance,
+which is 255 for nearly all of them (the game's texture parameters are
+255/255 on those indices, R231's measurement), and the game's own table
+maps index 63 to full on every channel: grey at 255 is white. The cars'
+liveries are texture sheets, so the panels that had been blue -- drawn
+from their colour-base palette entry before R231 -- went white.
+
+What the reference does for a textured polygon (model2rd.ipp, textured
+case): reads `palram[colorbase + 0x1000]` exactly as for a flat one, and
+per texel takes `lumaram[...] * object.luma / 256` as the luma index -- the
+TEXEL's brightness scaled by the polygon's. So the polygon luma of 255 is a
+multiplier, not a brightness, and texels sit mid-range.
+
+The placeholder now: the palette entry when it is not black (the liveries),
+grey only where it is black (most scenery, whose colour base is 0), and
+HALF the polygon's luminance, which is what a 128-of-256 texel gives --
+index ~31 rather than 63. The cache key carries the textured flag beside
+the colour base and the halved luma, so a textured and a flat polygon on
+the same entry never share a line. `tb_m2_geo_engine` 41 checks: a
+textured header keeps its palette entry at half luma; a textured header on
+a black entry takes the grey.
+
+*The light vector itself is not the fault.* Read out of the reference's
+own display list (Lua over bufferram): (0.437936, -0.914406, -0.411307),
+length 1.094, the same every frame; and R222's engine test proved the
+luminance arithmetic to the integer. The bench is measuring what the walker
+holds and the rotated normals' lengths to close the last two inputs.
