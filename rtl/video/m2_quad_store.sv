@@ -179,7 +179,12 @@ module m2_quad_store #(
   endfunction
 
   // Two index arrays, ping-ponged by the radix passes.
-  (* ramstyle = "M10K" *) logic [IW-1:0] idx_a [NBANK*NQ];   // the final order, per bank
+  // THE FINAL ORDER, ONE ARRAY PER BANK. As a single {bank, index} array
+  // Quartus inferred only the replay's read port and built the sort's read
+  // (45,613 registers, build/dbuf7); two arrays with the bank selecting the
+  // result infer as the single-bank store did, one write and two reads each.
+  (* ramstyle = "M10K" *) logic [IW-1:0] idx_a0 [NQ];
+  (* ramstyle = "M10K" *) logic [IW-1:0] idx_a1 [NQ];
   (* ramstyle = "M10K" *) logic [IW-1:0] idx_b [NQ];
 
   logic [IW:0]  count [NBANK];
@@ -291,7 +296,7 @@ module m2_quad_store #(
   logic [IW-1:0] idx_rd;
   logic [KW-1:0] key_rd;
   always_ff @(posedge clk) begin
-    idx_rd <= which ? idx_b[ri[IW-1:0]] : idx_a[{wbank, ri[IW-1:0]}];
+    idx_rd <= which ? idx_b[ri[IW-1:0]] : (wbank ? idx_a1[ri[IW-1:0]] : idx_a0[ri[IW-1:0]]);
     key_rd <= key[cur_idx];
   end
 
@@ -338,7 +343,7 @@ module m2_quad_store #(
         // Submission order to start with: a stable sort then keeps it as the
         // tie-break, exactly as quad_t::compare does with the address.
         R_INIT: begin
-          idx_a[{wbank, ri[IW-1:0]}] <= ri[IW-1:0];
+          if (wbank) idx_a1[ri[IW-1:0]] <= ri[IW-1:0]; else idx_a0[ri[IW-1:0]] <= ri[IW-1:0];
           if (ri + 1 >= wcount) begin ri <= '0; hi <= '0; rst_st <= R_CNT; end
           else                       ri <= ri + 1'b1;
         end
@@ -391,7 +396,9 @@ module m2_quad_store #(
           cur_idx <= idx_rd;
           cidx_d  <= cur_idx;
           if (s2) begin
-            if (which) idx_a[{wbank, base[digit][IW-1:0]}] <= cidx_d;
+            if (which) begin
+              if (wbank) idx_a1[base[digit][IW-1:0]] <= cidx_d; else idx_a0[base[digit][IW-1:0]] <= cidx_d;
+            end
             else       idx_b[base[digit][IW-1:0]] <= cidx_d;
             base[digit] <= base[digit] + 1'b1;
           end
@@ -444,6 +451,11 @@ module m2_quad_store #(
 
   logic [IW-1:0] ord_idx;
   logic [AT_W-1:0] att_rd;
+  logic [2*XW-1:0] v0_r, v1_r, v2_r, v3_r;    // the four vertex words, one read each
+  assign out_y0 = sx(v0_r[2*XW-1:XW]); assign out_x0 = sx(v0_r[XW-1:0]);
+  assign out_y1 = sx(v1_r[2*XW-1:XW]); assign out_x1 = sx(v1_r[XW-1:0]);
+  assign out_y2 = sx(v2_r[2*XW-1:XW]); assign out_x2 = sx(v2_r[XW-1:0]);
+  assign out_y3 = sx(v3_r[2*XW-1:XW]); assign out_x3 = sx(v3_r[XW-1:0]);
 
   wire v0 = (pi < rcount);
 
@@ -462,12 +474,11 @@ module m2_quad_store #(
       v1 <= 1'b0; v2 <= 1'b0; q2 <= '0;
       ord_idx <= '0; att_rd <= '0;
       out_valid <= 1'b0;
-      out_x0 <= '0; out_y0 <= '0; out_x1 <= '0; out_y1 <= '0;
-      out_x2 <= '0; out_y2 <= '0; out_x3 <= '0; out_y3 <= '0;
+      v0_r <= '0; v1_r <= '0; v2_r <= '0; v3_r <= '0;
       out_col <= '0; out_moire <= 1'b0;
     end else begin
       if (adv) begin
-        ord_idx <= idx_a[{rbank, pi[IW-1:0]}];
+        ord_idx <= rbank ? idx_a1[pi[IW-1:0]] : idx_a0[pi[IW-1:0]];
         att_rd  <= att[{rbank, ord_idx}];
         q2      <= ord_idx;
         v1      <= v0;
@@ -509,10 +520,12 @@ module m2_quad_store #(
         // A concatenation on the left is one read, split on the way out, and it
         // is bit-identical: the store writes {in_y, in_x}.
         P_OUT: begin
-          out_y0 <= sx(vtx0[{rbank, q}][2*XW-1:XW]); out_x0 <= sx(vtx0[{rbank, q}][XW-1:0]);
-          out_y1 <= sx(vtx1[{rbank, q}][2*XW-1:XW]); out_x1 <= sx(vtx1[{rbank, q}][XW-1:0]);
-          out_y2 <= sx(vtx2[{rbank, q}][2*XW-1:XW]); out_x2 <= sx(vtx2[{rbank, q}][XW-1:0]);
-          out_y3 <= sx(vtx3[{rbank, q}][2*XW-1:XW]); out_x3 <= sx(vtx3[{rbank, q}][XW-1:0]);
+          // ONE READ PER ARRAY (see the note above): the slices are taken
+          // from the registered word, not from two reads of the array.
+          v0_r <= vtx0[{rbank, q}];
+          v1_r <= vtx1[{rbank, q}];
+          v2_r <= vtx2[{rbank, q}];
+          v3_r <= vtx3[{rbank, q}];
           out_valid <= 1'b1;
           if (out_valid && out_ready) begin
             out_valid <= 1'b0;
