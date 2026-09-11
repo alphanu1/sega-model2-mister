@@ -12219,3 +12219,16 @@ Two roads, in order of cost:
      the free one.
 The collect time is a third item: the engine's cycles per polygon, which
 the bench can measure directly.
+
+*The engine's cost, measured (13:40).* Boot bench from the title
+(`M2_POLY_FROM=17000000`): engine-busy 30,376,300 ticks over 1,677 objects
+and 50,666 emitted quads -- 600 busy ticks per quad, and the gap from one
+emitted quad to the next is 467 ticks at the median AND at the 90th
+percentile. A fixed per-polygon sequence, then, not memory waiting: 4,200
+polygons x 467 = 39 ms of engine time at 50 MHz, more than two video
+frames, which is why halving the port trips (R214) moved nothing. The
+engine reads a polygon, transforms it, clips it and projects it strictly
+one after the other. The next measurement is the split of those 467
+across the stages; the fix is overlap -- fetching polygon N+1 while N is
+in the arithmetic, and the projection's divides in parallel -- or the
+clock, which is the lever the user pulled on Model 1 after its 48 bands.
