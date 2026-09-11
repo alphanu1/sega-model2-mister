@@ -12314,3 +12314,24 @@ being counted. The walker: W_OBJW 62.4% (waiting for the engine), W_IDLE
 the cost, and the engine's 39% idle is the same 37%: the title's geometry
 has that much slack between lists. The levers, in order: the clipper's
 reprojection policy, the cache's misses, then the transform (E_XFW 14%).
+
+**R218 -- THE CLIPPER REPROJECTED EVERY VERTEX OF EVERY EMITTED QUAD, CUT OR
+NOT. ONLY THE VERTICES IT CREATES ARE PROJECTED NOW.** 2026-09-11, 15:00.
+`m2_geo_clip`'s emit path ("Four vertices, one reciprocal each, at the
+point of emission") sent all four vertices of every quad it emitted
+through the 29-cycle projector, including quads no plane had touched --
+219,860 projections against ~55,000 emitted quads over the title, 26% of
+all the geometry's time (R217's split). The clipper already received the
+quad projector's pixels (in_sx*) and did nothing with them. They now ride
+through the stack beside the camera coordinates with a flag per vertex:
+an input vertex has its pixel, a vertex made by a cut does not, and only
+the latter is projected at emission. The pixel of an uncut vertex is
+bit-identical to what a reprojection would give -- same projector, same
+inputs -- so the reference's rate of one projection per emitted vertex is
+matched in result, not in work. One fault on the way, caught by
+`tb_m2_geo_clip`: the projection request was a level tied to the emit
+state, so on the cycle a vertex was skipped the projector was still
+granted a projection of it and the next vertex's result landed one slot
+late; the request is gated on the vertex needing one. 2,003 checks pass.
+The engine's cost is being remeasured; the expectation is the clipper's
+26% falling to the share of cut vertices, a few percent.
