@@ -12274,3 +12274,22 @@ y/w for four vertices -- with the clipper's planes on top. R217 is the
 projection: one reciprocal per vertex and two multiplies instead of two
 divides, or a pipelined divider; then overlap the engine's transform of
 polygon N+1 with the projection of N.
+
+**R217 -- THE QUAD PROJECTOR PROJECTED ALL FOUR VERTICES OF EVERY POLYGON;
+TWO OF THEM ARE THE PREVIOUS POLYGON'S. A VERTEX ALREADY PROJECTED TAKES
+ITS PIXEL.** 2026-09-11, 14:15. `m2_geometry`'s quad projector comment
+budgets 120 cycles a polygon for four reciprocals at 29 and "2,700
+polygons in a 60 Hz frame before this stage is the limit"; the title
+carries ~4,200 (R215) and the measured cost was ~230 with the clipper's
+reprojections and the pool's arbitration on top. Model 2's polygon
+streams are strips: the engine carries two of each polygon's view-space
+points into the next (E_LINK per attr[9:8], R171), so vertices 0 and 1 of
+polygon n are, bit for bit, two of the four of polygon n-1. The projector
+now keeps the last polygon's four vertices and their pixels and a vertex
+bit-equal to one of them takes its pixel without a projection. Bit
+equality is the right test because the carried points are register
+copies, not recomputed; a miss costs what it did before. The clipper's
+own reprojections of cut vertices are unchanged. Tests: m2_geometry 30
+checks, m2_geo_engine 20, boot bench PASS; the engine's cost is being
+remeasured. Expected: the projector's share roughly halved, so ~120 fewer
+cycles a polygon of the 467.
