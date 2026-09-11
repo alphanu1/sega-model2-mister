@@ -12842,3 +12842,46 @@ and the 4,096 sampled quads still carry 280 distinct colours. PASS.
 every clock positive on both setup and hold** (clk_sys +0.611 setup where
 lit1 was -0.210, HDMI PLL +0.094, hold +0.174 worst). Lighting, the colour
 lookup and its cache cost about 50 ALM against dbuf16. Deployed s14.*
+
+**R225 -- THE TOP OF THE SCREEN WAS BEING BUILT AND THROWN AWAY DURING
+VERTICAL BLANK. A THIRD OF THE PICTURE.**
+
+The board draws the 3D layer only from a band a little way down the screen --
+a dead-straight full-width cut with the tile layer showing above it, at a
+band index that does not depend on the scene. Photographs of the title put
+it near line 92 of 384, band 12 with 8-row bands; R200 saw the same thing as
+"the bars draw from band 13 down" and it was never explained.
+
+`m2_raster3d` frees a band buffer when the beam has passed it:
+
+    if (bd_ready[i] && (scan_band_f > bd_band[i])) bd_ready[i] <= 1'b0;
+
+`scan_y` is the RAW line counter, 0..V_TOTAL-1 = 0..423 against 384 visible,
+so through the 40 blanking lines its band index reads 48..52 -- past every
+band in the picture. `frame_start` is the rising edge of vblank, so the fill
+starts there, and every band it completed in those 40 lines was freed the
+cycle after it was finished while `fill_band` advanced regardless. The frame
+then opened with the first dozen bands already spent and nothing in any
+buffer: the picture began wherever the fill had got to. The four band
+buffers existed to give the fill a head start over the beam and it was
+being destroyed every frame. `dbg_bands_done` reading 51 against NBANDS=48
+had been saying so all along.
+
+Fixed by clamping the crossed value to zero outside the visible area -- the
+beam has passed nothing yet -- so the fill enters the frame with NBUF bands
+standing and stalls, correctly, until the beam releases the first.
+
+*And the bench could not see it, twice over.* `tb_m2_raster3d` pulsed
+frame_start and swept the VISIBLE lines immediately, then idled 600 ticks
+with `scan_y` parked on the last visible line: neither the head start nor
+the out-of-range line numbers existed in it. It now sweeps blanking FIRST,
+as the board does, at a clocks-per-scanline ratio that matches the board's
+(the fill about as fast as the beam; `M2_R3D_TPL`, default 400), counts the
+bands completed during blanking, and checks the top band paints. Reverted,
+the RTL now FAILS it exactly as the board behaves: 15 bands built and
+discarded in blanking, the top band empty, 6,724 pixels of 9,922 painted --
+a third of the picture gone. Fixed: 4 bands held, top band painted, 9,922.
+*And the first attempt at that control was itself wrong* -- the module has
+two clock-crossing branches and the revert hit the unused one, so "fixed"
+and "broken" measured identically and nearly had me record that the fix did
+nothing. A control that shows no difference is a claim about the control.

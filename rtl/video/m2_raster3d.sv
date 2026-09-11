@@ -242,6 +242,27 @@ module m2_raster3d #(
   end
   wire [BW-1:0] scan_band = BW'(scan_y / 10'(BAND_H));
 
+  // THE BAND THE BEAM HAS PASSED -- AND DURING VERTICAL BLANK IT HAS PASSED
+  // NOTHING (R225).
+  //
+  // `scan_y` is the raw line counter, 0..V_TOTAL-1, so through the 40 blanking
+  // lines of a 424-line frame it reads 384..423 and its band index is 48..52 --
+  // past EVERY band in the picture. The release below then freed each band the
+  // fill finished during blanking the instant it was finished, and the fill
+  // advanced regardless. The frame therefore opened with the first several
+  // bands already spent: the beam reached line 0 with nothing in any buffer and
+  // the picture began only where the fill had got to, as a dead-straight
+  // full-width cut at a band index that does not depend on the scene at all.
+  // That is what the board showed -- the tile layer visible above line ~92 with
+  // the 3D starting abruptly beneath it -- and it is what `dbg_bands_done`
+  // reading 51 against NBANDS=48 was saying all along: three to eight bands a
+  // frame were being built and thrown away.
+  //
+  // Clamped to zero outside the visible area, the fill instead enters the frame
+  // with NBUF bands already standing, which is the head start the design wanted
+  // from having four buffers in the first place.
+  wire [BW-1:0] scan_band_rel = (scan_y >= 10'(SCR_H)) ? '0 : scan_band;
+
   // SCAN_BAND BACK IN THE FILL DOMAIN, GRAY-CODED.
   //
   // The buffer release below reads a value derived from scan_y, which is the
@@ -261,7 +282,7 @@ module m2_raster3d #(
   generate
     if (TWO_CLOCKS) begin : g_sb_sync
       logic [BW-1:0] sb_gray_s1, sb_gray_s2;
-      wire  [BW-1:0] sb_gray = scan_band ^ (scan_band >> 1);
+      wire  [BW-1:0] sb_gray = scan_band_rel ^ (scan_band_rel >> 1);
       always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin sb_gray_s1 <= '0; sb_gray_s2 <= '0; end
         else        begin sb_gray_s1 <= sb_gray; sb_gray_s2 <= sb_gray_s1; end
@@ -275,7 +296,7 @@ module m2_raster3d #(
     end else begin : g_sb_direct
       // One clock: the counter is read on the edge that changes it, which is
       // what every other read of scan_y in this module already does.
-      always_comb scan_band_f = scan_band;
+      always_comb scan_band_f = scan_band_rel;
     end
   endgenerate
 

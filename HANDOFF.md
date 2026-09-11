@@ -20,8 +20,10 @@ has issues on this build (details being gathered). R222 IS BUILT AT THE DESK: br
 comparator was on the vertex RAM's write enable; fixed). `build/lit2` = lighting
 + R223 (any translucent polygon is culled, as the reference culls it -- 16% of
 the title's objects were being drawn opaque) + R224 fits all four seeds at 82%, and **s14 closes timing on every clock**
-(setup +0.019 worst, hold +0.174). Deployed. `build/lit3` adds the texture-RAM
-zero sweep (R223).
+(setup +0.019 worst, hold +0.174). Deployed. `build/lit4` adds the texture-RAM zero
+sweep (R223) and **R225, the top-of-screen fix**: the band buffers were being
+freed during vertical blank, which threw away the first dozen bands of every
+frame and is the straight-edged cut the board has shown since R200.
 
 **Fixed today, each with a study entry and a board or bench proof:**
 - R208 walker/engine took one held acknowledge many times (stream one word ahead)
