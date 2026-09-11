@@ -1,10 +1,28 @@
 # Handoff
 
-**Updated:** 2026-09-11 03:45. Study entries R176-R208. R172 WITHDRAWN, R185
+**Updated:** 2026-09-11 08:00. Study entries R176-R209. R172 WITHDRAWN, R185
 partly RETRACTED, R189 corrected by R191, R196's central claim WITHDRAWN the
 same day, R206 WITHDRAWN, R207 closed by R208.
 
 ---
+
+## R209: THE BOARD HANGS IN THE 3D TITLE -- THE SHARED WRITE PORT WEDGES WHEN THE TGP AND THE PUSH DMA COLLIDE. ARBITER IN, BUILDING
+
+`build/ack` s14 froze after ~3 minutes of 3D title: i960 in the mailbox poll,
+TGP parked at 0x46E (0x46F = its mailbox write, waiting on `wr_done` from the
+SHARED WRITE PORT), every counter frozen. A second boot ran 7 minutes clean:
+a race. The port was a fixed-priority combinational mux of five owners with
+the push DMA's ack unqualified; two owners alternating keep `s_wr_req` high
+across the change, the adapter's `w_done` never clears, no write is ever
+issued again, and both wait forever. Same family as the 09-10 "clear at
+0x4C4 issued and never seen" freeze. `rtl/mem/m2_wr_arb.sv` now grants the
+port per transaction, round-robin, dead cycle on release, per-owner acks;
+`make test_m2_wr_arb` models the adapter's write side and also caught the
+fixed-priority starvation of the DMA. `build/wrarb` (11, 13, 14, 15) is the
+first bitstream with it. Study R209.
+
+Also seen: the background jumps up and down on `build/ack` as before
+(vertical scroll fault, still open, not this).
 
 ## R208: THE 3D STREAM WAS ONE WORD AHEAD BECAUSE THE WALKER AND THE ENGINE TOOK ONE HELD ACKNOWLEDGE EVERY CYCLE. FIXED IN THE REQUESTERS, BENCH-PROVEN, ON THE BOARD NEXT
 

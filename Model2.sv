@@ -820,17 +820,48 @@ logic [SDR_AW:1]             f_wr_addr;
 logic [15:0]                 f_wr_din;
 logic [1:0]                  f_wr_be;
 
+// The shared write port's owners, in slot order: buffer initialiser, store
+// engine, coprocessor buffer-RAM writes, geometrizer push DMA, ROM loader.
+// Each sees only the acknowledge of its own transaction.
+logic              wa_req;
+logic [SDR_AW:1]   wa_addr;
+logic [15:0]       wa_din;
+logic [4:0]        wa_own_req, wa_own_ack;
+logic [SDR_AW:1]   wa_own_addr [5];
+logic [15:0]       wa_own_din  [5];
+assign wa_own_req     = {ldr_wr_req, geo_sd_busy & geo_sd_req, tgp_bufw_req_r, st_run & st_req, bi_run & bi_req};
+assign wa_own_addr[0] = bi_addr;
+assign wa_own_addr[1] = st_addr;
+assign wa_own_addr[2] = GAME_BUFFER + SDR_AW'(tgp_bufw_addr_r);
+assign wa_own_addr[3] = geo_sd_addr;
+assign wa_own_addr[4] = ldr_wr_addr;
+assign wa_own_din[0]  = bi_din;
+assign wa_own_din[1]  = st_din;
+assign wa_own_din[2]  = tgp_bufw_data_r;
+assign wa_own_din[3]  = geo_sd_din;
+assign wa_own_din[4]  = ldr_wr_din;
+wire wr_ack_bi  = wa_own_ack[0];
+wire wr_ack_st  = wa_own_ack[1];
+wire wr_ack_tgp = wa_own_ack[2];
+wire wr_ack_geo = wa_own_ack[3];
+wire wr_ack_ldr = wa_own_ack[4];
+
+m2_wr_arb #(.N(5), .AW(SDR_AW)) u_wr_arb (
+	.clk(clk_sys), .rst_n(mem_rst_n),
+	.req(wa_own_req), .addr(wa_own_addr), .din(wa_own_din), .ack(wa_own_ack),
+	.s_req(wa_req), .s_addr(wa_addr), .s_din(wa_din), .s_ack(ldr_wr_ack)
+);
+
 m2_sdram_x2 #(.NP(NPORTS), .AW(SDR_AW)) u_sdram_x2 (
 	.clk_fast(clk_mem),
 	.s_req(p_req), .s_addr(p_addr), .s_ack(p_ack), .s_dout(p_dout),
 	.s_we(p_we),   .s_din(p_din),   .s_be(p_be),
-	.s_wr_req(bi_run ? bi_req : st_run ? st_req : tgp_bufw_req_r ? 1'b1
-	          : geo_sd_busy ? geo_sd_req : ldr_wr_req),
-	.s_wr_addr(bi_run ? bi_addr : st_run ? st_addr
-	          : tgp_bufw_req_r ? (GAME_BUFFER + SDR_AW'(tgp_bufw_addr_r))
-	          : geo_sd_busy ? geo_sd_addr : ldr_wr_addr),
-	.s_wr_din(bi_run ? bi_din : st_run ? st_din : tgp_bufw_req_r ? tgp_bufw_data_r
-	          : geo_sd_busy ? geo_sd_din : ldr_wr_din),
+	// ONE OWNER AT A TIME (R209): m2_wr_arb grants the port for a whole
+	// transaction and releases it with a dead cycle. The fixed-priority mux
+	// that stood here let the coprocessor and the push DMA alternate without
+	// the request line ever falling, so the adapter's `w_done` never cleared
+	// and both owners waited forever (TGP at 0x46E, build/ack s14).
+	.s_wr_req(wa_req), .s_wr_addr(wa_addr), .s_wr_din(wa_din),
 	.s_wr_be(2'b11), .s_wr_ack(ldr_wr_ack),
 	.f_req(f_req), .f_addr(f_addr), .f_ack(f_ack), .f_dout(f_dout),
 	.f_we(f_we),   .f_din(f_din),   .f_be(f_be),
@@ -889,7 +920,7 @@ m2_rom_loader #(.SDR_AW(SDR_AW)) u_loader (
 	.ioctl_wr(ioctl_wr), .ioctl_addr(ioctl_addr), .ioctl_dout(ioctl_dout),
 	.ioctl_wait(ioctl_wait),
 	.sdr_wr_req(ldr_wr_req), .sdr_wr_addr(ldr_wr_addr),
-	.sdr_wr_din(ldr_wr_din), .sdr_wr_be(ldr_wr_be), .sdr_wr_ack(ldr_wr_ack),
+	.sdr_wr_din(ldr_wr_din), .sdr_wr_be(ldr_wr_be), .sdr_wr_ack(wr_ack_ldr),
 	.tgp_wr(), .tgp_addr(), .tgp_din(),
 	.rom_loaded(rom_loaded), .overflow(ldr_overflow)
 );
@@ -1175,7 +1206,7 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 			bi_addr <= GAME_BUFFER + SDR_AW'(bi_idx);
 			bi_din  <= bi_idx[0] ? 16'h0780 : 16'h0f0f;
 			bi_req  <= 1'b1;
-		end else if (ldr_wr_ack) begin
+		end else if (wr_ack_bi) begin
 			bi_req <= 1'b0;
 			if (bi_idx == 17'(BUF_WORDS - 1)) bi_done <= 1'b1;
 			else                              bi_idx  <= bi_idx + 17'd1;
@@ -1213,16 +1244,16 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 			4'd0: if (rom_loaded) begin
 				st_addr <= ST_BASE; st_din <= STP0; st_req <= 1'b1; st_state <= 4'd1;
 			end
-			4'd1: if (ldr_wr_ack) begin st_req <= 1'b0; st_state <= 4'd2; end
+			4'd1: if (wr_ack_st) begin st_req <= 1'b0; st_state <= 4'd2; end
 			4'd2: begin st_addr <= ST_BASE + SDR_AW'(1); st_din <= STP1;
 			            st_req <= 1'b1; st_state <= 4'd3; end
-			4'd3: if (ldr_wr_ack) begin st_req <= 1'b0; st_state <= 4'd4; end
+			4'd3: if (wr_ack_st) begin st_req <= 1'b0; st_state <= 4'd4; end
 			4'd4: begin st_addr <= ST_BASE + SDR_AW'(2); st_din <= STP2;
 			            st_req <= 1'b1; st_state <= 4'd5; end
-			4'd5: if (ldr_wr_ack) begin st_req <= 1'b0; st_state <= 4'd6; end
+			4'd5: if (wr_ack_st) begin st_req <= 1'b0; st_state <= 4'd6; end
 			4'd6: begin st_addr <= ST_BASE + SDR_AW'(3); st_din <= STP3;
 			            st_req <= 1'b1; st_state <= 4'd7; end
-			4'd7: if (ldr_wr_ack) begin st_req <= 1'b0; st_state <= 4'd8; end
+			4'd7: if (wr_ack_st) begin st_req <= 1'b0; st_state <= 4'd8; end
 			// CALIBRATE THE READ CAPTURE INSTEAD OF ASKING SOMEONE TO GUESS IT.
 			//
 			// The four words above are written at a known address; reading them
@@ -2424,7 +2455,7 @@ m2_geo #(.AW(SDR_AW), .DEPTH(128)) u_geo (
 	.rd_wp(geo_rd_wp), .rd_rp(geo_rd_rp),
 	.base_buffer(GAME_BUFFER),
 	.sd_wr_req(geo_sd_req), .sd_wr_addr(geo_sd_addr), .sd_wr_din(geo_sd_din),
-	.sd_wr_ack(ldr_wr_ack), .sd_busy(geo_sd_busy_raw),
+	.sd_wr_ack(wr_ack_geo), .sd_busy(geo_sd_busy_raw),
 	.dbg_pushes(geo_pushes), .dbg_dropped(geo_dropped),
 	.dbg_geocnt(geo_cnt_dbg), .dbg_geoctl(geo_ctl_dbg),
 	.frame_start(geo_walk_start),
@@ -2833,7 +2864,7 @@ always_ff @(posedge clk_sys) begin
 	tgp_bufw_req_r  <= tgp_bufw_req & COPRO_BUFW;
 	tgp_bufw_addr_r <= tgp_bufw_addr;
 	tgp_bufw_data_r <= tgp_bufw_data;
-	tgp_bufw_ack_r  <= ldr_wr_ack & tgp_bufw_req_r;
+	tgp_bufw_ack_r  <= wr_ack_tgp;
 	// Each reader retires on the acknowledge ONLY when it was the one asking.
 	// Qualifying the ack is the fix R166 applied to the coprocessor's port and
 	// it is the same shape of bug: an unqualified p_ack retires a request that
@@ -4605,8 +4636,8 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		// while that request is the one on the mux).
 		if (tgp_bufw_req && !tgp_bufw_d && tgp_bufw_addr == 19'h0FFF9)
 			mb_req_cnt <= mb_req_cnt + 6'd1;
-		mb_ack_d <= ldr_wr_ack;
-		if (ldr_wr_ack && !mb_ack_d && tgp_bufw_req_r && tgp_bufw_addr_r == 19'h0FFF9)
+		mb_ack_d <= wr_ack_tgp;
+		if (wr_ack_tgp && !mb_ack_d && tgp_bufw_addr_r == 19'h0FFF9)
 			mb_ack_cnt <= mb_ack_cnt + 6'd1;
 		if (cack_d && !cwe_d) begin
 			if (caddr_d == 32'h0050_1084) lc_cnt  <= crd_d;

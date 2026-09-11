@@ -299,7 +299,7 @@ RLD_RTL := rtl/mem/m2_sdram.sv rtl/io/m2_rom_loader.sv sim/mem/sdram_model.sv si
 
 
 .PHONY: test test_m2_backup test_m2_sndboard test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram test_fx68k test_m2_ioboard
-test: test_m2_geo test_m2_backup test_m2_sndlink test_fx68k test_m2_sndboard test_m2_ioboard test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
+test: test_m2_geo test_m2_wr_arb test_m2_backup test_m2_sndlink test_fx68k test_m2_sndboard test_m2_ioboard test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
 
 test_i960_dec: obj_i960_dec/Vi960_dec
 	@echo "== test i960_dec"
@@ -609,6 +609,14 @@ obj_ccdc/Vm2_char_cdc: rtl/mem/m2_char_cdc.sv sim/mem/tb_m2_char_cdc.cpp
 	$(VBUILD) --top-module m2_char_cdc -Wno-UNUSEDSIGNAL \
 	  --Mdir obj_ccdc -o Vm2_char_cdc -CFLAGS "-O2" \
 	  rtl/mem/m2_char_cdc.sv sim/mem/tb_m2_char_cdc.cpp
+
+test_m2_wr_arb: obj_wr_arb/Vm2_wr_arb
+	@echo "== test m2_wr_arb (one owner at a time on the shared write port)"
+	@./obj_wr_arb/Vm2_wr_arb $(TEST_ARGS)
+
+obj_wr_arb/Vm2_wr_arb: rtl/mem/m2_wr_arb.sv sim/mem/tb_m2_wr_arb.cpp
+	$(VBUILD) --top-module m2_wr_arb -Wno-UNUSEDSIGNAL --Mdir obj_wr_arb -o Vm2_wr_arb -CFLAGS "-O2" \
+	  rtl/mem/m2_wr_arb.sv sim/mem/tb_m2_wr_arb.cpp
 
 test_m2_sdram_x2: obj_x2/Vm2_sdram_x2_harness
 	@echo "== test m2_sdram_x2 (controller at 2x the core clock)"

@@ -11735,3 +11735,73 @@ hardware. Whether it draws correctly is the next question (R200's band-13
 cut is still open); nonfinite stays high (37749 at mid-capture) as it does
 in the bench (32768, capped), which is the unwritten-memory 0xFFFFFFFF
 objects, 39 of them in the first-read data here.
+
+**R209 -- THE SHARED WRITE PORT WAS A COMBINATIONAL MUX OF FIVE OWNERS, AND
+TWO OF THEM ALTERNATING WEDGED IT: THE COPROCESSOR'S MAILBOX WRITE AND THE
+PUSH DMA BOTH WAITED FOREVER. GRANTED PER TRANSACTION NOW, ROUND-ROBIN.**
+2026-09-11, 06:40-08:00.
+
+*What the board showed.* `build/ack` s14 after ~3 minutes in the 3D title:
+every sample with the i960 in the mailbox poll (0x1166C/0x11674, 77%; the
+rest in the car handlers), the TGP at 0x046E in all 15,087 samples, every
+geometry counter frozen at one value (polys 50,060, quads 6,655), the
+engine probe frozen on one object. A second boot ran seven minutes with no
+hang -- a race, not a deterministic fault. 0x46E retires with 0x46F in
+flight, and 0x46F is `mov {0} $2, (x1)(e)`: the TGP's write of 0xFFFFFFFF
+into the mailbox dword 0x7FFC at the start of a job. A buffer-RAM write in
+`m2_tgp` waits on `wr_done`, and that comes from the SHARED WRITE PORT, not
+port 9. The earlier freeze "TGP at 0x4C9, the clear at 0x4C4 issued and
+never seen" (09-10, `build/walk` s11) is the same family: a TGP buffer
+write that never landed.
+
+*The mechanism, from the RTL.* `m2_sdram_x2`'s write side: `f_wr_req =
+s_wr_req & ~w_done & ~f_wr_ack`, `w_done` set on the fast acknowledge and
+cleared ONLY on a cycle `s_wr_req` is low, `s_wr_ack = f_wr_ack` (one
+pulse). `m2_sdram` takes a write on the RISING EDGE of `wr_req` and latches
+address and data then. `Model2.sv` drove `s_wr_req` from a fixed-priority
+mux: initialiser, store engine, `tgp_bufw_req_r`, push DMA (`geo_sd_busy ?
+geo_sd_req`), loader; the TGP's acknowledge qualified by its own request,
+the push DMA's NOT qualified at all (`.sd_wr_ack(ldr_wr_ack)`).
+
+So: the push DMA's low half is in flight; the TGP raises `tgp_bufw_req_r`;
+the mux switches address and data under the transaction and the composite
+request stays high. The DMA's acknowledge arrives: the DMA retires (its
+ack is unqualified) AND the TGP retires (`ldr_wr_ack & tgp_bufw_req_r`)
+though nothing of its was written; `w_done` is now set with `s_wr_req`
+still high. The TGP drops its request for one cycle, the mux falls through
+to the DMA's high-half request, already up: `s_wr_req` never falls,
+`w_done` never clears, `f_wr_req` never rises again. The DMA waits in
+D_NEXT, the TGP waits at 0x46F for a `wr_done` that needs an acknowledge
+the port will never make, the i960 waits for a clear the TGP will never
+reach. It needs the two to collide within a few cycles, which the 3D title
+makes likely: the walker and engine now run (R208) and the game pushes a
+full display list while the TGP writes results.
+
+*The fix: `rtl/mem/m2_wr_arb.sv`.* One owner at a time. The port is
+GRANTED to a requester, held from its request to its acknowledge, released
+with a dead cycle so `s_wr_req` is low for two fast cycles and `w_done`
+clears, and each owner sees only the acknowledge of its own transaction.
+Model 1's `t_owner_change` (m1_integrated.sv: suppress the request on the
+cycle the owner changes, qualify acks by owner) is the same idea for two
+owners that never preempt each other mid-transaction; here they can, so the
+owner is held. Every owner holds its request until acknowledged (checked:
+bi, st, m2_tgp's `wr_pend`, m2_geo's D_LO/D_NEXT, m2_rom_loader's
+`wr_pend`).
+
+The unit test (`sim/mem/tb_m2_wr_arb.cpp`, `make test_m2_wr_arb`) models
+the adapter's write side exactly -- edge-taken request, latched address and
+data, one-pulse acknowledge, `w_done` cleared only on a low-request cycle
+-- with the TGP's slot asking every cycle and the DMA's slot asking in
+halves, and checks every write lands once, with its owner's address and
+data, and that the port never idles with a requester waiting. It found
+the second fault before the board could: under the mux's FIXED PRIORITY
+with the TGP's slot busy, the push DMA and the loader were never served at
+all (0 of 2,500 writes). The TGP's vertex loop writes buffer RAM
+continuously, so the display-list DMA would have starved behind it. The
+grant is round-robin from the owner last served. Latencies 1, 5, 12, 30:
+all owners served, no write lost, longest idle 3 cycles. Cost: two dead
+slow cycles per write on the shared port; the push DMA's queue (128) is
+the buffer against it, and `geo_dropped` is the counter to watch.
+
+Unconfirmed until the board says so: `build/wrarb` (seeds 11, 13, 14, 15),
+R202+R203+R205+R208+R209.
