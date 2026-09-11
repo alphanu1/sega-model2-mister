@@ -3600,7 +3600,7 @@ end
 // So this is now a ~100 ms tick carrying the running totals. The counts are
 // cumulative, so sampling them cannot lose an event, and the wire is left for
 // the payload that actually needs every line.
-localparam int unsigned HB_CYC = 4_800_000;    // 100 ms at 48 MHz
+localparam int unsigned HB_CYC = 6_000_000;    // 100 ms at 60 MHz (R227)
 logic [22:0] hb_ctr;
 logic        hb_tick, hb_tick_b;
 always_ff @(posedge clk_sys or negedge mem_rst_n) begin
@@ -4282,8 +4282,12 @@ m2_ioboard #(
 	// the board's self-test at 174 of a 57.5 Hz refresh -- so moving the module
 	// to a 40 MHz clock moves the constants with it. At 25 MHz they were
 	// 3,043,478 and 75,652,174; here they are 0.1217 s and 3.026 s of 40 MHz.
-	.STATUS_CYCLES  (5_072_464),
-	.SELFTEST_CYCLES(126_086_957)
+	// R227: these encode a DURATION, not a count -- status at 0.101 s and the
+	// self-test at 2.52 s -- so the 60 MHz core clock scales both by 6/5. The
+	// game spins waiting for the status byte, so being early is harmless and
+	// being late is not; keeping the real duration keeps the boot as measured.
+	.STATUS_CYCLES  (6_086_957),
+	.SELFTEST_CYCLES(151_304_348)
 ) u_ioboard (
 	.clk(clk_sys),
 	.rst_n(cpu_rst_n),

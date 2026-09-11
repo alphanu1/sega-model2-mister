@@ -12911,11 +12911,22 @@ chip that plays at the wrong speed if it does not:
     I/O board Z80     TICK_DEN 50 -> 60    4 MHz
     sound link        BYTE_CYCLES 16,000 -> 19,200   31,250 baud
     debug UART        DIVISOR 417 -> 521   115,200 baud
+    I/O board         STATUS_CYCLES  5,072,464 -> 6,086,957     0.101 s
+                      SELFTEST_CYCLES 126,086,957 -> 151,304,348  2.52 s
+    debug heartbeat   HB_CYC 4,800,000 -> 6,000,000             100 ms
 
 The YM3438 was the one that could not simply be rescaled: a divide-by-six
 is 8.333 MHz only while the core clock is 50, and at 60 it is 10 MHz -- the
 music a fifth sharp. It is now the same accumulator idiom as the 68000's
 phases, 25/(3 x TICK_DEN), which is 1/6 at 50 and 25/180 at 60.
+
+The last three are CYCLE COUNTS THAT ENCODE A DURATION rather than a ratio,
+and they are the ones a clock change breaks silently: the I/O board's
+self-test and status byte are a measured wall-clock delay the boot waits
+on, not a number of operations. The projector's own timeout (1,023 cycles
+in Q_WAIT) is left alone deliberately -- it is a runaway guard at 35 times
+the expected latency, and it gets tighter in wall-clock terms, which is the
+safe direction.
 
 *Proof at the desk:* `make test_m2_sndboard` still matches MAME instruction
 for instruction, and the measured sample period moves 1,120 -> 1,344 cycles
