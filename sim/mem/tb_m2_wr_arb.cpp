@@ -33,9 +33,9 @@ int main(int argc, char **argv) {
   d->rst_n = 1;
 
   // Owners.
-  struct Owner { int state; int pause; uint32_t seq; std::deque<std::pair<uint32_t,uint16_t>> expect; int done; };
+  struct Owner { int state; int pause; uint32_t seq; std::deque<std::pair<uint32_t,uint16_t>> expect; int done; int pulsed; };
   std::vector<Owner> ow(N);
-  for (int i = 0; i < N; i++) { ow[i] = {0, i * 3, 0, {}, 0}; }
+  for (int i = 0; i < N; i++) { ow[i] = {0, i * 3, 0, {}, 0, 0}; }
   // Owner 2 (the coprocessor's slot) asks continuously; owner 3 (the push
   // DMA) asks in pairs with one idle cycle between, like the halves of a
   // dword. The others are sparse.
@@ -53,7 +53,10 @@ int main(int argc, char **argv) {
     for (int i = 0; i < N; i++) {
       Owner &o = ow[i];
       if (o.state == 0) { if (o.pause > 0) --o.pause; else { o.state = 1; o.seq++; d->addr[i] = (i << 20) | (o.seq & 0xfffff); d->din[i] = (i << 12) | (o.seq & 0xfff); o.expect.push_back({d->addr[i], d->din[i]}); } }
-      if (o.state == 1) req |= 1u << i;
+      // Owner 4 is the ROM loader's slot: it PULSES its request for one cycle
+      // and then waits for the acknowledge with the line low.
+      if (o.state == 1 && (i != 4 || o.pulsed == 0)) req |= 1u << i;
+      if (o.state == 1 && i == 4) o.pulsed = 1;
     }
     d->req = req;
     d->s_ack = ack;
@@ -66,7 +69,7 @@ int main(int argc, char **argv) {
     for (int i = 0; i < N; i++) if ((d->ack >> i) & 1) {
       Owner &o = ow[i];
       CHECK(o.state == 1, "owner %d acknowledged while not asking (cycle %d)", i, cyc);
-      o.state = 0; o.pause = next_pause(i); ++o.done;
+      o.state = 0; o.pause = next_pause(i); ++o.done; o.pulsed = 0;
     }
     if (ack && !d->ack) ++ack_no_owner;
     // Clock.

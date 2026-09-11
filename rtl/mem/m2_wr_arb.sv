@@ -17,8 +17,18 @@
 // Here they can, so the owner is GRANTED, held from its request to its
 // acknowledge, and released with a dead cycle so the request line is low
 // long enough for the adapter's mask to clear. Each owner sees only the
-// acknowledge of its own transaction. Every owner must hold its request until
-// it is acknowledged; all five do.
+// acknowledge of its own transaction.
+//
+// A PULSED REQUEST IS REMEMBERED. Four owners hold their request until it is
+// acknowledged; the ROM loader PULSES its for one cycle and waits (its note:
+// "req pulsed so the controller sees a rising edge"). The first version
+// granted on the pulse, found the request gone the next cycle, released
+// without issuing the write, and the loader waited forever -- the ROM load
+// hung on the board and ioctl_wait held the HPS with it. So a request is
+// latched per owner until that owner's acknowledge, the port is held from
+// grant to acknowledge whatever the owner's line does meanwhile, and the
+// owner's address and data are what it presents at the time of the write,
+// which every owner holds stable while it waits.
 //
 // ROUND-ROBIN, NOT FIXED PRIORITY. The unit test with the coprocessor's slot
 // asking on every cycle showed the push DMA and the loader never served at
@@ -49,6 +59,8 @@ module m2_wr_arb #(
   logic          held;     // an owner holds the port
   logic [OW-1:0] own;
   logic          gap;      // the dead cycle after a release
+  logic [N-1:0]  pend;     // a request seen and not yet acknowledged
+  wire  [N-1:0]  want = req | pend;
 
   // The first requester after the one last served; the last assignment in
   // the loop (the smallest k) wins.
@@ -59,7 +71,18 @@ module m2_wr_arb #(
     any  = 1'b0;
     pick = '0;
     for (int k = N; k >= 1; k--) begin
-      if (req[(int'(last) + k) % N]) begin any = 1'b1; pick = OW'((int'(last) + k) % N); end
+      if (want[(int'(last) + k) % N]) begin any = 1'b1; pick = OW'((int'(last) + k) % N); end
+    end
+  end
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      pend <= '0;
+    end else begin
+      for (int i = 0; i < N; i++) begin
+        if (ack[i])      pend[i] <= 1'b0;
+        else if (req[i]) pend[i] <= 1'b1;
+      end
     end
   end
 
@@ -67,16 +90,16 @@ module m2_wr_arb #(
     if (!rst_n) begin
       held <= 1'b0; own <= '0; gap <= 1'b0; last <= OW'(N - 1);
     end else if (held) begin
-      // Released on the acknowledge, or if the owner withdrew (it must not,
-      // but a withdrawn request must not wedge the port for everyone else).
-      if (s_ack || !req[own]) begin held <= 1'b0; gap <= 1'b1; last <= own; end
+      // Released on the acknowledge only: the write is in flight from the
+      // moment the port is held, and its acknowledge must reach its owner.
+      if (s_ack) begin held <= 1'b0; gap <= 1'b1; last <= own; end
     end else begin
       gap <= 1'b0;
       if (!gap && any) begin held <= 1'b1; own <= pick; end
     end
   end
 
-  assign s_req  = held & req[own];
+  assign s_req  = held;
   assign s_addr = addr[own];
   assign s_din  = din[own];
 

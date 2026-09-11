@@ -18,8 +18,19 @@ issued again, and both wait forever. Same family as the 09-10 "clear at
 0x4C4 issued and never seen" freeze. `rtl/mem/m2_wr_arb.sv` now grants the
 port per transaction, round-robin, dead cycle on release, per-owner acks;
 `make test_m2_wr_arb` models the adapter's write side and also caught the
-fixed-priority starvation of the DMA. `build/wrarb` (11, 13, 14, 15) is the
-first bitstream with it. Study R209.
+fixed-priority starvation of the DMA. **`build/wrarb` s11 BROKE THE ROM LOAD:**
+the loader pulses its request for one cycle, the arbiter released on the
+gone request without writing, the loader waited forever and ioctl_wait held
+the HPS. Fixed: the arbiter latches a request per owner until its
+acknowledge; the test's loader slot pulses. `build/wrarb2` (11, 13, 14, 15)
+carries the fix and the flashing probe. Study R209.
+
+**SEEN ON THE SCREEN (build/ack s14, 08:05): white, transparent car models,
+flashing on and off.** The first 3D drawn on hardware. White is by design
+(`m2_geometry.sv`: q_col is a constant; lighting and texture not built).
+The flashing is the next fault: candidate is frames whose geometry is not
+finished at frame_start, which clears the quad store and draws nothing --
+`dbg_late_frames`/`dbg_qend_frames` in `m2_raster3d` now measure it.
 
 Also seen: the background jumps up and down on `build/ack` as before
 (vertical scroll fault, still open, not this).

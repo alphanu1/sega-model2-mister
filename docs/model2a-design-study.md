@@ -11784,9 +11784,19 @@ clears, and each owner sees only the acknowledge of its own transaction.
 Model 1's `t_owner_change` (m1_integrated.sv: suppress the request on the
 cycle the owner changes, qualify acks by owner) is the same idea for two
 owners that never preempt each other mid-transaction; here they can, so the
-owner is held. Every owner holds its request until acknowledged (checked:
-bi, st, m2_tgp's `wr_pend`, m2_geo's D_LO/D_NEXT, m2_rom_loader's
-`wr_pend`).
+owner is held. Four owners hold their request until acknowledged (bi, st,
+m2_tgp's `wr_pend`, m2_geo's D_LO/D_NEXT). *The ROM loader does not, and
+the first arbiter broke the ROM load on the board (`build/wrarb` s11,
+08:10): `m2_rom_loader` PULSES `sdr_wr_req` for one cycle ("req pulsed so
+the controller sees a rising edge") and waits for the acknowledge with the
+line low. The arbiter granted on the pulse, found the request gone the next
+cycle, released without issuing the write, and the loader waited forever;
+ioctl_wait then held the HPS. The claim above that all five hold was made
+from the loader's HARNESS (`sim/mem/m2_romload_harness.sv`, which has a
+`wr_pend`), not the loader. Fixed the same hour: the arbiter latches a
+request per owner until that owner's acknowledge (`pend`), holds the port
+from grant to acknowledge whatever the owner's line does, and the test's
+loader slot now pulses. Board restored to `build/ack` s14 meanwhile.*
 
 The unit test (`sim/mem/tb_m2_wr_arb.cpp`, `make test_m2_wr_arb`) models
 the adapter's write side exactly -- edge-taken request, latched address and
@@ -11803,5 +11813,7 @@ all owners served, no write lost, longest idle 3 cycles. Cost: two dead
 slow cycles per write on the shared port; the push DMA's queue (128) is
 the buffer against it, and `geo_dropped` is the counter to watch.
 
-Unconfirmed until the board says so: `build/wrarb` (seeds 11, 13, 14, 15),
-R202+R203+R205+R208+R209.
+Unconfirmed until the board says so: `build/wrarb2` (seeds 11, 13, 14, 15),
+R202+R203+R205+R208+R209 with the pulse latch, and the flashing probe on
+the H record (rasteriser frame timing: ready cycles, bands done, frames
+still collecting at frame_start, quads held/dropped, frames finished).
