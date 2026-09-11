@@ -1,6 +1,6 @@
 # Handoff
 
-**Updated:** 2026-09-11 11:45. Study entries R176-R213. R172 WITHDRAWN, R185
+**Updated:** 2026-09-11 12:05. Study entries R176-R213. R172 WITHDRAWN, R185
 partly RETRACTED, R189 corrected by R191, R196's central claim WITHDRAWN the
 same day, R206 WITHDRAWN, R207 closed by R208.
 
@@ -35,6 +35,14 @@ completes, 4 minutes clean -- render chain 10.6%, mailbox poll 3.7%, no
 parking, no drops. Ten-minute soak from a fresh load also clean: mailbox
 poll 3.9%, render chain 12.5%, never parked. R209 CONFIRMED.** The board is
 on it. Study R209.
+
+**dbuf6 s14 ON THE BOARD (12:00): background scrolls normally (R212 confirmed),
+3D behind the UI (R213 confirmed), bands never late (dbg_missed 0), lists
+held 2 frames mostly but 3 for long stretches (collect 7-14 ms -- the
+"slower"; R210's throughput is real), quads held at the 2,048 ceiling in
+heavy frames (overrun -- the "3D mostly missing"; drop counters go on the
+record next, R214). Board is on dbuf6 s14. `build/dbuf7` (four buffers,
+shared-key store) in the fitter.**
 
 **R213 (11:20): the 3D drew OVER the UI -- the reference puts it between the
 two tile categories; fixed via `vid_cat1`. `build/dbuf3` (191-bit entries)

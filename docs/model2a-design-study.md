@@ -12097,3 +12097,23 @@ buffer's ~7 blocks were more than the margin dbuf4 left. Back to three
 all-paths hold fix. The fourth buffer returns when the quad store shares
 its sort key and one scratch index array between the two banks (~8
 blocks), which only the collecting bank ever uses.
+
+*dbuf6 s14 on the board, 12:00 (R211 + R212 + R213 together; three 8-row
+buffers, hold fix, all clocks' hold positive, setup -0.202 on the HDMI PLL
+only).* Photographed and captured for 240 s:
+  - The tile background scrolls normally: R212 confirmed on hardware.
+  - The 3D sits behind the UI text layer: R213's order confirmed.
+  - `dbg_missed` (scanlines the beam started with no band ready) is 0
+    through the whole title after boot: bands are never late. Late bands
+    are NOT the flicker.
+  - `dbg_hold` (video frames a list stayed on display, minus one): mostly 1
+    (the game's two-frame cadence), but 2 for most of one 24-second slice
+    and 3 at times -- the collect (frame_start -> q_end) ran 7-14 ms in
+    those stretches and spilled a frame. That is the "slower" the user
+    reports, and R210's throughput question measured: the walker and the
+    engine at ~10 clk_sys cycles a dword on port 4.
+  - Quads held reached the 2,048 ceiling in every slice, median 1,536 in
+    the busiest: the banks OVERRUN in heavy frames and the last-submitted
+    quads are dropped, which is the likely "3D mostly missing". The drop
+    counters (store and push DMA) go on the record as R214.
+  - CPU budget unchanged: frame wait 33.6%, mailbox 4.1%, render 12.2%.
