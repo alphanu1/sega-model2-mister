@@ -1,6 +1,6 @@
 # Handoff
 
-**Updated:** 2026-09-11 10:35. Study entries R176-R211. R172 WITHDRAWN, R185
+**Updated:** 2026-09-11 10:45. Study entries R176-R212. R172 WITHDRAWN, R185
 partly RETRACTED, R189 corrected by R191, R196's central claim WITHDRAWN the
 same day, R206 WITHDRAWN, R207 closed by R208.
 
@@ -35,6 +35,32 @@ completes, 4 minutes clean -- render chain 10.6%, mailbox poll 3.7%, no
 parking, no drops. Ten-minute soak from a fresh load also clean: mailbox
 poll 3.9%, render chain 12.5%, never parked. R209 CONFIRMED.** The board is
 on it. Study R209.
+
+**R212: THE JUMPING BACKGROUND IS THE TGP's ARCTANGENT -- MODEL 1's UNIT ON A
+MODEL 2 BOARD. FIXED AT THE DESK, BUILDING.** The horizon row of the title's
+tile background is a coprocessor atan2 result (function 0x0a) that the game
+converts to the layer-2/3 vertical scroll word (0x50130A -> tile RAM
+0x5006). `m2_tgp.sv`'s atan and inv units were transcribed from Model 1;
+Model 2's differ (float-exponent table index, |a|<=|b| selector, no table
+fixup, inv sign on the odd word only) and Model 2 also feeds that
+comparison to the microcode as the gpio0 condition, which we tied low.
+Rewritten from model2.cpp; `tb_m2_boot` now scores every atan job against
+C atan2 (`ATAN jobs checked`): 89 of 89, and the latched scroll creeps
+0x2FDE, 0x2FDD, 0x2FDC like the reference. Study R212.
+
+**R211's fit:** two 2,048-entry stores at the old 231-bit entry need more
+M10K BLOCKS than the device has (553; bits were only at 84%). Entries are
+now 191 bits (13-bit saturated coordinates, 565 colour, 24-bit key; six
+sort passes instead of eight) and the framework scaler's input line
+buffers are halved (`sys_top.v` IHRES 1024). `build/dbuf2` is a
+1,024-a-bank stop-gap to prove the flashing fix on the board; `build/dbuf3`
+= R212 + narrowed 2,048 banks + IHRES is queued behind it. If dbuf3 still
+misses: share key + one scratch index between banks (~8 blocks), loader
+FIFO 512->256, character cache, i960 data cache; the coprocessor's
+flip-flop input queue (~2,000 ALM) is the logic lever.
+
+`make test_mb86233_regs` fails on the committed tree (46,966 of 3 M
+checks), in a module untouched today. Not investigated.
 
 **R211: THE FLASHING IS PRESENTATION -- Daytona flips every second frame
 (the reference measurement in m2_geo.sv), and the single quad store could not
