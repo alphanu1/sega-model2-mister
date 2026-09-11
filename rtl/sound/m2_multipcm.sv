@@ -47,9 +47,32 @@ assign rdata = 8'h00;
 assign rom_slot = rom_is_desc ? df_slot : play_slot;
 
 reg [7:0] sreg [0:27][0:7];
+// THE FIVE REGISTER FIELDS THE CHIP READS ARE MLABs TOO (R221). The mixer
+// reads pan (reg 0[7:4]) and level (reg 5[7:1]) at play_slot; the stepper
+// reads pitch (reg 2[7:2]) and octave/pitch (reg 3) at `slot`; the
+// descriptor pick reads sample (reg 1, reg 2[0]) at `picked`, an address
+// that exists only in the cycle it is used, so those two stay in `sreg`
+// -- as does anything never read, which synthesis drops. Each MLAB is
+// written beside `sreg` by the CPU and read registered at its consumer's
+// slot; a write to the slot being read is forwarded for the one cycle the
+// registered read is behind it. 700 registers a chip and their 28:1 muxes.
+(* ramstyle = "MLAB" *) reg [3:0] pan_ram [0:31];    // reg 0[7:4]
+(* ramstyle = "MLAB" *) reg [6:0] lvl_ram [0:31];    // reg 5[7:1]
+(* ramstyle = "MLAB" *) reg [5:0] pit_ram [0:31];    // reg 2[7:2]
+(* ramstyle = "MLAB" *) reg [7:0] oct_ram [0:31];    // reg 3
+reg [3:0] pan_rd, pan_fwd_d;
+reg [6:0] lvl_rd, lvl_fwd_d;
+reg [5:0] pit_rd, pit_fwd_d;
+reg [7:0] oct_rd, oct_fwd_d;
+reg       pan_fwd, lvl_fwd, pit_fwd, oct_fwd;
+wire [3:0] pan_cur = pan_fwd ? pan_fwd_d : pan_rd;
+wire [6:0] lvl_cur = lvl_fwd ? lvl_fwd_d : lvl_rd;
+wire [5:0] pit_cur = pit_fwd ? pit_fwd_d : pit_rd;
+wire [7:0] oct_cur = oct_fwd ? oct_fwd_d : oct_rd;
 reg [4:0] cur_slot;
 reg       cur_slot_valid;
 reg [2:0] cur_reg;
+wire       sreg_we = cs && we && (addr == 2'd0) && cur_slot_valid;
 
 // THE PER-SLOT STEPPING STATE IS TWO MLAB RAMs, NOT 2,600 FLIP-FLOPS (R221).
 // Each has one writer and one reader, so each is a simple dual-port memory
@@ -87,6 +110,26 @@ wire [54:0] desc_word   = {17'h10000 - {1'b0, df_buf[5], df_buf[6]},
 always @(posedge clk) begin
     desc_rd <= desc_ram[st_rd_addr];
     pos_rd  <= pos_ram[st_rd_addr];
+    pan_rd  <= pan_ram[play_slot];
+    lvl_rd  <= lvl_ram[play_slot];
+    pit_rd  <= pit_ram[st_rd_addr];
+    oct_rd  <= oct_ram[st_rd_addr];
+    // The forwards: a CPU write this edge to the slot a read is taking.
+    pan_fwd <= sreg_we && (cur_reg == 3'd0) && (cur_slot == play_slot);
+    lvl_fwd <= sreg_we && (cur_reg == 3'd5) && (cur_slot == play_slot);
+    pit_fwd <= sreg_we && (cur_reg == 3'd2) && (cur_slot == st_rd_addr);
+    oct_fwd <= sreg_we && (cur_reg == 3'd3) && (cur_slot == st_rd_addr);
+    pan_fwd_d <= wdata[7:4];
+    lvl_fwd_d <= wdata[7:1];
+    pit_fwd_d <= wdata[7:2];
+    oct_fwd_d <= wdata;
+    if (sreg_we) case (cur_reg)
+        3'd0: pan_ram[cur_slot] <= wdata[7:4];
+        3'd5: lvl_ram[cur_slot] <= wdata[7:1];
+        3'd2: pit_ram[cur_slot] <= wdata[7:2];
+        3'd3: oct_ram[cur_slot] <= wdata;
+        default: ;
+    endcase
 end
 reg        s_fmt12 [0:27];
 reg        s_active[0:27];
@@ -297,10 +340,10 @@ always @(posedge clk) begin
                 // MultiPCM 8-bit samples are signed two's-complement, not
                 // unsigned/offset-binary.  Byte 80h therefore means -32768.
                 sample = {rom_data, 8'h00};
-                tl = sreg[play_slot][5][7:1];
+                tl = lvl_cur;
                 attenuated = sample >>> (tl >> 4);
-                panned_l = pan_sample(attenuated, sreg[play_slot][0][7:4], 1'b1);
-                panned_r = pan_sample(attenuated, sreg[play_slot][0][7:4], 1'b0);
+                panned_l = pan_sample(attenuated, pan_cur, 1'b1);
+                panned_r = pan_sample(attenuated, pan_cur, 1'b0);
                 acc_l <= acc_l + {{6{panned_l[15]}}, panned_l};
                 acc_r <= acc_r + {{6{panned_r[15]}}, panned_r};
             end
@@ -352,8 +395,8 @@ always @(posedge clk) begin
                     reg [24:0] step;
                     reg [37:0] next_pos;
                     reg [33:0] loop_span;
-                    pitch = {sreg[slot][3][3:0], sreg[slot][2][7:2]};
-                    step = pitch_step(sreg[slot][3][7:4], pitch);
+                    pitch = {oct_cur[3:0], pit_cur};
+                    step = pitch_step(oct_cur[7:4], pitch);
                     next_pos = s_pos_cur + {13'd0, step};
                     loop_span = ({17'd0, s_end_cur} - {18'd0, s_loop_cur}) << 16;
                     if (next_pos >= ({21'd0, s_end_cur} << 16) && loop_span != 0)

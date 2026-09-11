@@ -12582,3 +12582,20 @@ writes never leave a voice stepping), no position-zero: 2.99 M, no
 prefetch: 1.97 M with CE every clock and 0 with CE 1 in 5. Removes 2 x
 2,604 registers and their 28:1 read muxes. `build/dbuf16` = dbuf14b + MLAB
 PCM lines + MLAB clipper stack + this.
+
+*R221, step 2b at the desk (22:00): THE READ REGISTER FIELDS TOO.* Of the
+CPU's 28 x 8 bytes the chip reads five fields: pan (reg 0[7:4]) and level
+(reg 5[7:1]) at play_slot in the mixer, pitch (reg 2[7:2]) and octave (reg
+3) at `slot` in the stepper, and sample (reg 1, reg 2[0]) at `picked` --
+an address that exists only in the cycle the pick uses it. The first four
+are now four MLABs, written beside `sreg` by the CPU, read registered at
+their consumer's slot, with the same one-cycle forward for a write to the
+slot being read. Sample stays in `sreg`; the bytes nothing reads (reg 4,
+the LFO defaults 6 and 7) synthesis already dropped. Same lockstep bench:
+3 seeds x 5 CE patterns (1-in-5, random, 1-in-2, sparse writes, every
+clock) x 2 M cycles, 0 mismatches; with each forward removed in turn the
+bench fails (pan 4,390, level 10,455, octave 37,967 at 1-in-5; pitch 1,007
+at CE every clock, where the stepper's slot is the one just written).
+Another ~700 registers and 25 bits of 28:1 mux a chip. What is left in
+registers per chip: s_active/s_fmt12/s_release/key_wait/desc_pending/
+pos_zero (6 x 28), sample (9 x 28), and the descriptor buffer.
