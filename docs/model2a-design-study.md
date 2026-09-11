@@ -13053,3 +13053,54 @@ from the reference's buffer rules for all three link types and matches the
 engine's; `cvalid` is only set where all four pixels have just been written;
 `poly_chain_ok` is cleared on a new object and on every cull including
 R223's new one. 2.6% is worth recovering once that is understood.
+
+**R231 -- THE BLACK SCENERY IS TEXTURED POLYGONS DRAWN IN THE COLOUR OF A
+TEXTURE WE DO NOT HAVE. THE LUMINANCE SATURATES; IT DOES NOT COLLAPSE.**
+
+The board draws most scenery black or wrong while the cars are nearly
+right (a photograph of the V.R. screen: the tile layer visible at the top,
+the rest of the picture a dark mass where the reference shows road, car
+and trees). Black means a lookup returned zero, and the obvious suspect
+was the luminance. Measured on the boot bench over 180,017 polygons: ZERO
+at luma 0, and 155,972 (87%) in the top sixteenth -- the luminance
+SATURATES at 255, because the game's texture parameters are mostly
+255/255 (indices 3 and 8-21) and ambient 255 alone clamps the sum. (The
+first attempt at this probe sampled only on cycles the engine was fetching
+and reported zero polygons and zero texture parameters, which would have
+read as "the game sets none" against a histogram counting 38 of them --
+moved to run every tick.)
+
+So the black is downstream. Read back out of the bridge's SDRAM mirrors
+exactly as the game wrote them: the translation table is WRITTEN (1,739 of
+the 2,048 words per channel the flat path can read) and ramps as it should
+-- component 16 runs 00, 48, 4b ... ff over luma 0..63, component 31
+reaches ff by index 32 -- and the 3D palette has 1,004 of 1,024 entries.
+Colour bases 0x155, 0x02c, 0x130, 0x127 give white, white, ff4500 and
+ffff45 at luma 255, which are the colours the quads carry. Colour bases 0
+and 1 are palette entry 0x0000: BLACK. They are 182 of the title's 1,859
+objects, and they are the TEXTURED ones -- a textured polygon's colour base
+is not a colour, because the reference paints its texture sheet through
+the luma RAM there and never reads the palette for it. We painted the
+colour base. That is the black.
+
+Until textures exist a textured polygon takes a mid grey, 16 of 31 on every
+channel, through the same translation table and gamma as a flat one: lit,
+with shape, and honestly a placeholder. One flag in the colour cache key
+keeps it apart from real colour bases, and it skips the palette read.
+`tb_m2_geo_engine` 40 checks: the textured-opaque header emits grey at its
+luma through the reference's own table arithmetic.
+
+**R232 -- THE CARS "CRASH" ALL THE TIME, AND THAT IS A COPROCESSOR
+QUESTION, NOT A GEOMETRY ONE.**
+
+The user's description: the cars jump and flip exactly like the crash
+animation when they hit a wall, but continuously. The transform's matrix
+order was checked against the reference and matches, and the walker loads
+the twelve words in stream order, so the geometry is drawing what it is
+told. What tells it is the game, and the game decides a crash from the
+coprocessor's collision and height-map arithmetic on its own data ROM.
+R212 found two of the four maths units (atan, reciprocal) were still Model
+1's and that gave the jumping background; sine/cosine and inverse square
+root have not been compared the same way. Next: `M2_COPRO_TRACE` against
+MAME's mb86233 for those two ops, and a look at what the collision code
+reads from the copro data ROM.

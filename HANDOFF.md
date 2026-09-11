@@ -40,6 +40,18 @@ frame and is the straight-edged cut the board has shown since R200.
 
 **Open, in order:**
 1. ALM: 83% fitted (dbuf16). The probes that reach no output cost nothing (synthesis sweeps them). Next by dbuf16's own table: the quad store's 1,669 registers, then the i960 (8,049 total). M10K: 553/553, nothing more goes there. Lighting (R222 design in the study) can start.
+2. THE 3D AS SEEN ON THE BOARD (end of 09-11): colour, lighting, the top of the
+   screen and the wedges are fixed (R222-R230); textured polygons draw as lit
+   grey until textures exist (R231); the cars play the crash animation all the
+   time, which is the coprocessor's collision maths, not geometry (R232 --
+   sincos and isqrt unverified against MAME); band overruns show as missing
+   8-row stripes through the cars because the fill is only a few percent faster
+   than the beam (R225 measured 51 bands a frame). Speed work, measured and in
+   order: overlap the walker and engine (38% of the walker is waiting), the
+   float-pool waits (18%), the serial header/colour reads (+17%). Clocks: the
+   coprocessor's own logic caps the core at 60.3 MHz and the SDRAM controller
+   at ~107 (R227/R228), and both crossings need an exact 2:1, so 100/50/25 stays
+   until the controller is pipelined or the 3D gets its own domain like Model 1.
 2. Lighting: R222 built (steps 1-3 in the study, tests: bridge 119, walker 75, engine 36, geometry 30, boot bench PASS with 294 colours). Open: +17% engine cost (overlap the header read with E_ATTR), the 55 objects whose header is in texture RAM that nothing writes (find the writer), the board. R222 in the study is the design, with the reference's arithmetic and the measured inputs (title: 1,917 objects, 3% headers in texture RAM, 352 flat / 1,507 textured, 32 colour bases). Steps: bridge mirrors (palette 0x1000-0x13ff and the whole colorxlat into free SDRAM at words 0x1730000/0x1731000), engine memory-space select, walker op 0x04 into TEXRAM (word 0x1740000), engine dotl + luminance + header read + colour cache, poly_col through m2_geometry to the clipper. Oracles listed there.
 3. Throughput: quad projector still ~14% of geometry time; the transform ~14%; `dbg_hold` reaches 3 frames in stretches, partly the game's own list timing (separate the two).
 4. Vertical scroll: fixed by R212. R200's band-13 cut: superseded by 8-row bands? -- re-test the 3D test bars.

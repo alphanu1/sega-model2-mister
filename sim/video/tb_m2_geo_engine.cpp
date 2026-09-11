@@ -271,9 +271,11 @@ int main(int argc, char** argv) {
     d->mat_we = 0;
     d->tp_we = 1; d->tp_idx = 0; d->tp_diffuse = 200; d->tp_ambient = 20; tick(); d->tp_we = 0;
     d->start = 1; tick(); d->start = 0;
-    uint32_t n = 0;
-    for (int budget = 0; budget < 60000 && (d->busy || budget < 10); budget++) { tick(); if (d->poly_valid && d->poly_ready) n++; }
-    std::printf("test: textured opaque polygons still draw\n");
+    uint32_t n = 0, col0 = 0, luma0 = 0;
+    for (int budget = 0; budget < 60000 && (d->busy || budget < 10); budget++) { tick(); if (d->poly_valid && d->poly_ready) { if (!n) { col0 = d->poly_col; luma0 = d->poly_luma; } n++; } }
+    std::printf("test: textured opaque polygons still draw, as lit grey (R231)\n");
+    // grey 16/16/16 through the same table and gamma as a flat polygon would be
+    ck("textured polygon takes the grey placeholder", col0, ref_colour(0x4210, (int)luma0));
     ck("three polygons emitted", n, 3);
     thdr[0x100 + 0] = 0x0000;
   }

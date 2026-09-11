@@ -57,6 +57,10 @@ static std::map<uint32_t,uint32_t> g_th_colorbase_n;
 static uint32_t g_th_last_objs = 0;
 static uint32_t g_tdwords = 0;
 static unsigned g_pj_lost = 0;
+// R231: where the luminance lands, and the table it comes from.
+static unsigned g_luma_hist[16] = {0};
+static unsigned g_luma_n = 0, g_luma_zero = 0;
+static unsigned g_tp_dif[32], g_tp_amb[32]; static bool g_tp_seen[32];
 static uint32_t g_op_hist[32] = {0};   // display-list opcodes decoded from M2_POLY_FROM
 static void th_probe(uint32_t tha) {
   ++g_th_objs;
@@ -72,6 +76,43 @@ static void th_probe(uint32_t tha) {
   g_th_colorbase.insert(cb); ++g_th_colorbase_n[cb];
 }
 static void th_report() {
+  {
+    std::printf("    LUMINANCE over %u polygons, zero on %u (%.1f%%); histogram by 16s:",
+                g_luma_n, g_luma_zero, g_luma_n ? 100.0 * g_luma_zero / g_luma_n : 0.0);
+    for (int i = 0; i < 16; i++) std::printf(" %u", g_luma_hist[i]);
+    std::printf("\n    TEXTURE PARAMETERS the walker captured (index: diffuse/ambient):");
+    for (int i = 0; i < 32; i++) if (g_tp_seen[i]) std::printf(" %d:%u/%u", i, g_tp_dif[i], g_tp_amb[i]);
+    std::printf("\n");
+  }
+  {
+    // R231: THE COLOUR TABLES AS THE GAME WROTE THEM, read back out of the
+    // bridge's SDRAM mirrors. The 3D palette (entries 0x1000+) at word
+    // 0x1730000, colorxlat at 0x1731000 as three 0x2000-word channels, each
+    // 32 blocks of 256 by component value, of which the flat path reads
+    // words 0..63 (luma >> 2). Unwritten SDRAM is 0xFFFF.
+    auto gam = [](unsigned v){ double r = ((double)v - 64.0) * 255.0 / 191.0; return r < 0 ? 0u : (unsigned)r; };
+    unsigned written[3] = {0,0,0}, total = 32 * 64;
+    for (int c = 0; c < 3; c++) for (int c5 = 0; c5 < 32; c5++) for (int l = 0; l < 64; l++)
+      if (mem[0x1731000u + c * 0x2000u + c5 * 0x100u + l] != 0xffff) ++written[c];
+    std::printf("    COLORXLAT mirror: of the 2,048 words per channel the flat path can read, written R %u G %u B %u\n", written[0], written[1], written[2]);
+    std::printf("      red channel, component 16, luma index 0..63:");
+    for (int l = 0; l < 64; l++) std::printf(" %02x", mem[0x1731000u + 16 * 0x100u + l] & 0xff);
+    std::printf("\n      red channel, component 31, luma index 0..63:");
+    for (int l = 0; l < 64; l++) std::printf(" %02x", mem[0x1731000u + 31 * 0x100u + l] & 0xff);
+    std::printf("\n      and the tile row (word 64) for components 0..31:");
+    for (int c5 = 0; c5 < 32; c5++) std::printf(" %02x", mem[0x1731000u + c5 * 0x100u + 64] & 0xff);
+    unsigned pw = 0; for (int i = 0; i < 1024; i++) if (mem[0x1730000u + i] != 0xffff) ++pw;
+    std::printf("\n    3D PALETTE mirror: %u of 1024 entries written\n", pw);
+    for (unsigned cb : {0x155u, 0x02cu, 0x130u, 0x127u, 0x000u, 0x001u, 0x3ffu}) {
+      unsigned e = mem[0x1730000u + cb] & 0x7fff;
+      unsigned r5 = e & 31, g5 = (e >> 5) & 31, b5 = (e >> 10) & 31;
+      unsigned xr = mem[0x1731000u + 0x0000u + r5 * 0x100u + 63] & 0xff;
+      unsigned xg = mem[0x1731000u + 0x2000u + g5 * 0x100u + 63] & 0xff;
+      unsigned xb = mem[0x1731000u + 0x4000u + b5 * 0x100u + 63] & 0xff;
+      std::printf("      colorbase %03x: entry %04x (r%2u g%2u b%2u) -> xlat@63 %02x %02x %02x -> gamma %02x%02x%02x\n",
+                  cb, e, r5, g5, b5, xr, xg, xb, gam(xr), gam(xg), gam(xb));
+    }
+  }
   std::printf("    PROJECTIONS ABANDONED ON TIMEOUT: %u  (R226: an abandoned vertex keeps the screen position it already had)\n", g_pj_lost);
   std::printf("    TEXHDR texture RAM words written by the walker (op 0x04, bit 23): %u\n", (unsigned)g_tdwords);
   std::printf("    WALKER OPCODES from M2_POLY_FROM:");
@@ -615,6 +656,13 @@ int main(int argc, char **argv) {
         { static unsigned last_st = 0; if ((d->geo_state & 15) == 2 && last_st != 2) ++g_op_hist[d->geo_w_op & 31]; last_st = d->geo_state & 15; }
       }
     }
+    // R231: EVERY TICK, not inside the memory-serve block. The first version of
+    // this sat under `if (d->eng_mem_req)` and so sampled only on cycles the
+    // engine happened to be fetching: it reported ZERO polygons and ZERO
+    // texture parameters, which would have read as "the game sets none" when
+    // the walker's own opcode histogram counts 38 of them.
+    if (d->eng_poly_go) { unsigned l = d->eng_luma; ++g_luma_n; ++g_luma_hist[l >> 4]; if (l == 0) ++g_luma_zero; }
+    if (d->tpw_we) { g_tp_dif[d->tpw_idx] = d->tpw_diffuse; g_tp_amb[d->tpw_idx] = d->tpw_ambient; g_tp_seen[d->tpw_idx] = true; }
     if (d->eng_q_valid && g_quads.size() < 4096 && d->dbg_acc >= quads_from)
       g_quads.push_back({(int)(int16_t)d->eng_q_x0, (int)(int16_t)d->eng_q_y0,
                          (int)(int16_t)d->eng_q_x1, (int)(int16_t)d->eng_q_y1,

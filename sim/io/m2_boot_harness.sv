@@ -174,6 +174,11 @@ module m2_boot_harness #(
   output logic [23:0] eng_q_col,               // R222: the quad's colour
   output logic [31:0] eng_q_z,                 // its sort z, the minimum of the four
   output logic [15:0] eng_pj_lost,             // projections abandoned on timeout (R226)
+  output logic  [7:0] eng_luma,                // R231: the polygon's luminance
+  output logic        eng_poly_go,             // ...valid on this edge
+  output logic  [7:0] tpw_diffuse, tpw_ambient,
+  output logic  [4:0] tpw_idx,
+  output logic        tpw_we,
   output logic signed [15:0] eng_q_x0, eng_q_y0, eng_q_x1, eng_q_y1,
   output logic signed [15:0] eng_q_x2, eng_q_y2, eng_q_x3, eng_q_y3,
   // WHICH INSTRUCTION EMITS THE GEOMETRY. The board and the bench disagree about
@@ -866,6 +871,12 @@ module m2_boot_harness #(
     .dbg_pj_lost(eng_pj_lost), .dbg_eng_state(), .dbg_qst(), .dbg_clip_state()
   );
   assign obs_poly_valid = u_geometry.poly_valid & u_geometry.poly_ready;
+  assign eng_luma    = u_geometry.u_engine.poly_luma;
+  assign eng_poly_go = u_geometry.poly_valid & u_geometry.poly_ready;
+  assign tpw_we      = geo_tp_we;
+  assign tpw_idx     = geo_tp_idx;
+  assign tpw_diffuse = geo_tp_diffuse;
+  assign tpw_ambient = geo_tp_ambient;
   assign obs_v0x = u_geometry.u_engine.v0x; assign obs_v0y = u_geometry.u_engine.v0y; assign obs_v0z = u_geometry.u_engine.v0z;
   assign obs_v1x = u_geometry.u_engine.v1x; assign obs_v1y = u_geometry.u_engine.v1y; assign obs_v1z = u_geometry.u_engine.v1z;
   assign obs_v2x = u_geometry.u_engine.v2x; assign obs_v2y = u_geometry.u_engine.v2y; assign obs_v2z = u_geometry.u_engine.v2z;

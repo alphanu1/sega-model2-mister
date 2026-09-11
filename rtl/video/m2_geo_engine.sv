@@ -243,6 +243,7 @@ module m2_geo_engine #(
   logic [7:0]  luma8;
   logic [15:0] hdr0;         // texture header word 0: renderer bits 13-14
   logic [9:0]  cbase;        // header word 3 >> 6
+  logic        tex_flat;     // R231: a textured polygon, drawn as lit grey until textures exist
   logic [14:0] c555;         // the palette entry
   logic [1:0]  xi;           // which component's translation is being read
   logic [7:0]  rgb [3];
@@ -256,9 +257,17 @@ module m2_geo_engine #(
   // them; the colour cache: 256 entries direct-mapped on {colorbase, luma6}.
   (* ramstyle = "MLAB" *) logic [63:0] tp_tab [32];    // {ambient, diffuse}
   logic [63:0] tp_rd;
-  (* ramstyle = "MLAB" *) logic [39:0] cc_mem [256];   // {key, r, g, b}
-  logic [39:0] cc_rd;
-  wire  [15:0] cc_key = {cbase, luma8[7:2]};
+  (* ramstyle = "MLAB" *) logic [40:0] cc_mem [256];   // {textured, key, r, g, b}
+  logic [40:0] cc_rd;
+  wire  [16:0] cc_key = {tex_flat, cbase, luma8[7:2]};
+  // R231: THE PLACEHOLDER FOR A TEXTURE. The reference paints a textured
+  // polygon from its texture sheet and the luma RAM; its colour base is not a
+  // colour and in this title is usually entry 0, black. Until textures exist
+  // the polygon takes a mid grey (16 of 31 on every channel) through the same
+  // translation table and gamma as a flat one, so the scenery is lit and has
+  // shape rather than being a black mass over the tile layer. One flag in the
+  // cache key keeps these apart from real colour bases.
+  localparam logic [14:0] TEX_GREY = 15'h4210;
   wire         cc_we  = (st == E_CW);
 
   // An 8-bit integer as an IEEE single.
@@ -351,7 +360,7 @@ module m2_geo_engine #(
       lum <= 32'd0; luma8 <= 8'd0; hdr0 <= 16'd0; cbase <= 10'd0; c555 <= 15'd0; xi <= 2'd0;
       rgb[0] <= 8'd0; rgb[1] <= 8'd0; rgb[2] <= 8'd0;
       xaddr <= 24'd0; xhalf <= 1'b0; xspace <= 2'd0; cc_wait <= 1'b0; cc_idx <= 8'd0;
-      cc_valid <= '0; poly_col <= 24'd0; dbg_col_miss <= 16'd0;
+      cc_valid <= '0; poly_col <= 24'd0; dbg_col_miss <= 16'd0; tex_flat <= 1'b0;
       for (int k = 0; k < 3; k++) begin
         p0prev[k] <= 32'd0; p1prev[k] <= 32'd0;
         p0cur[k]  <= 32'd0; p1cur[k]  <= 32'd0; xyz[k] <= 32'd0;
@@ -570,6 +579,7 @@ module m2_geo_engine #(
         end
         E_TH3: if (mem_go) begin
           cbase   <= xhalf ? mem_data[31:22] : mem_data[15:6];
+          tex_flat <= hdr0[14];
           cc_idx  <= (xhalf ? mem_data[29:22] : mem_data[13:6])
                    ^ {(xhalf ? mem_data[31:30] : mem_data[15:14]), luma8[7:2]};
           cc_wait <= 1'b0;
@@ -595,9 +605,15 @@ module m2_geo_engine #(
         // ---- R222: the colour cache, then the palette and the three
         //      translation reads on a miss.
         E_CC: if (!cc_wait) cc_wait <= 1'b1;         // cc_rd is one cycle behind cc_idx
-        else if (cc_valid[cc_idx] && (cc_rd[39:24] == cc_key)) begin
+        else if (cc_valid[cc_idx] && (cc_rd[40:24] == cc_key)) begin
           poly_col <= cc_rd[23:0];
           st <= E_EMIT;
+        end else if (tex_flat) begin
+          // R231: no palette read; the grey goes straight to the table.
+          dbg_col_miss <= dbg_col_miss + 16'd1;
+          c555  <= TEX_GREY; xi <= 2'd0;
+          xaddr <= xl_dw(2'd0, TEX_GREY, luma8); xhalf <= luma8[2]; xspace <= 2'd3;
+          st <= E_XL;
         end else begin
           dbg_col_miss <= dbg_col_miss + 16'd1;
           xaddr <= {15'd0, cbase[9:1]}; xhalf <= cbase[0]; xspace <= 2'd2;
