@@ -11553,3 +11553,23 @@ translation 1.1 rad off-axis) -> the reference's matrix for the same frame
 external reads (candidates right, records fetched with no base) -> the
 init routine's register trace (d = 0 after one specific windowed load) -> the
 decode. Eleven bench runs of four minutes each, no fitter.
+
+*With R205 in, the bench's scene is in view for the first time.* Placement
+answers identical to the reference's sequence; 3,342 quads over frames
+246-275 spanning x 0-496 and y 0-384, 2,303 of them wider or taller than ten
+pixels, chains of adjacent quads tracing lines (curbs, road edges):
+
+    x bins (62 px): 1131 246 210 119 119 266 389 862
+    y bins (48 px):  763 460 525 1382  87  48  60  17
+
+The harness has no rasteriser (`q_ready` tied high), so its captured frames
+show the tilemap only; the quads' screen coordinates are the bench's whole
+picture of the 3D. One coprocessor divergence remains under investigation:
+for command 0x2A (six pushes, unconditional) the bench's trace shows three
+reads where the reference shows six -- either the output FIFO drops words
+under load, or the trace's completion sampling misses them.
+
+*Closed the same hour:* `WORDS DROPPED in=0 out=0` over the whole run. The
+three-of-six was the trace sampling io_sel on the 24 MHz CPU clock while the
+bridge pulses it for one 50 MHz cycle; completed reads fall between samples.
+Nothing is lost between the coprocessor and the CPU.

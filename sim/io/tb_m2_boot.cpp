@@ -774,7 +774,7 @@ int main(int argc, char **argv) {
           ((rpc >= 0x7cb && rpc <= 0x7d8) || (rpc >= 0x484 && rpc <= 0x48f))) {
         ++ntr;
         std::printf("    TGPX pc=%03x a=%08x d=%08x $69=%08x $6a=%08x\n", rpc,
-                    (unsigned)d->obs_tgp_a, (unsigned)d->obs_tgp_d, (unsigned)d->obs_tgp_ram69, (unsigned)d->obs_tgp_ram6a);
+                    (unsigned)d->obs_tgpx_a, (unsigned)d->obs_tgpx_d, (unsigned)d->obs_tgp_ram69, (unsigned)d->obs_tgp_ram6a);
       }
       rt_p = d->obs_tgp_retire;
     }
@@ -948,7 +948,10 @@ int main(int argc, char **argv) {
       uint32_t val = d->obs_io_wdata;
       if (a >= 0x880000 && a <= 0x883fff && d->obs_io_we)      kind = 'F';
       else if (a >= 0x884000 && a <= 0x887fff && d->obs_io_we) kind = 'W';
-      else if (a >= 0x884000 && a <= 0x887fff)               { kind = 'R'; val = d->obs_io_rdata; }
+      // A FIFO read holds io_sel for every cycle it is stalled; log it once,
+      // when it completes, or the trace is one line per stall cycle (2.3M
+      // 'R 00000000' lines in a 19M-instruction run).
+      else if (a >= 0x884000 && a <= 0x887fff)               { if (d->obs_copro_stall) kind = 0; else { kind = 'R'; val = d->obs_io_rdata; } }
       else if (a == 0x980000 && d->obs_io_we)                  kind = 'C';
       if (kind)
         std::fprintf(g_copro_trace, "%c %llu %08x %08x\n", kind,
@@ -2376,6 +2379,8 @@ int main(int argc, char **argv) {
     if (g_st1578) for (auto &e : *g_st1578) { std::printf("    STORE @%05x -> bus addr:", e.first);
       for (auto &a : e.second) std::printf(" %08x(x%u)", a.first, a.second); std::printf("\n"); }
     std::printf("    FIFO out popped   %u\n", (unsigned)d->obs_copro_out);
+    std::printf("    WORDS DROPPED     in=%u  out=%u%s\n", (unsigned)d->obs_in_dropped, (unsigned)d->obs_out_dropped,
+                (d->obs_in_dropped || d->obs_out_dropped) ? "   <<< DATA LOSS" : "");
     std::printf("    TGP retires       %u   pc=%04x%s\n",
                 (unsigned)d->obs_tgp_retires, (unsigned)d->obs_tgp_pc,
                 d->obs_tgp_unimpl ? "   *** UNIMPLEMENTED OPCODE ***" : "");
@@ -2559,6 +2564,14 @@ int main(int argc, char **argv) {
                 d->eng_objects, d->eng_polys, d->eng_capped, d->eng_nonfinite);
     std::printf("    clipper in=%u out=%u dropped=%u   QUADS OUT=%zu\n",
                 d->eng_clip_in, d->eng_clip_out, d->eng_clip_drop, g_quads.size());
+    // EVERY QUAD, to a file, when asked: the harness has no rasteriser, so the
+    // screen coordinates here are the only picture of the 3D the bench has.
+    if (const char *qo = std::getenv("M2_QUADS_OUT")) {
+      if (FILE *qf = std::fopen(qo, "w")) {
+        for (auto &q : g_quads) std::fprintf(qf, "%d %d %d %d %d %d %d %d\n", q[0], q[1], q[2], q[3], q[4], q[5], q[6], q[7]);
+        std::fclose(qf);
+      }
+    }
     for (size_t i = 0; i < g_quads.size() && i < 24; i++)
       std::printf("      quad %zu: (%d,%d) (%d,%d) (%d,%d) (%d,%d)\n", i,
                   g_quads[i][0], g_quads[i][1], g_quads[i][2], g_quads[i][3],

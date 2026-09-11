@@ -160,7 +160,7 @@ module m2_boot_harness #(
   // to watch the record-base arithmetic of the track lookup (study R204).
   output logic        obs_tgp_retire,
   output logic [15:0] obs_tgp_rpc,
-  output logic [31:0] obs_tgp_a, obs_tgp_d, obs_tgp_ram69, obs_tgp_ram6a,
+  output logic [31:0] obs_tgpx_a, obs_tgpx_d, obs_tgp_ram69, obs_tgp_ram6a,
   output logic        obs_xf_valid,
   output logic [31:0] obs_xf_x, obs_xf_y, obs_xf_z,
   output logic [31:0] obs_mtx [12],
@@ -851,8 +851,8 @@ module m2_boot_harness #(
   assign obs_foc_x = geo_foc_x; assign obs_foc_y = geo_foc_y;
   assign obs_tgp_retire = u_copro.u_tgp.core.retire;
   assign obs_tgp_rpc    = u_copro.u_tgp.core.retire_pc;
-  assign obs_tgp_a      = u_copro.u_tgp.core.u_regs.reg_a;
-  assign obs_tgp_d      = u_copro.u_tgp.core.u_regs.reg_d;
+  assign obs_tgpx_a     = u_copro.u_tgp.core.u_regs.reg_a;
+  assign obs_tgpx_d     = u_copro.u_tgp.core.u_regs.reg_d;
   assign obs_tgp_ram69  = u_copro.u_tgp.core.u_mem.ram0[8'h69];
   assign obs_tgp_ram6a  = u_copro.u_tgp.core.u_mem.ram0[8'h6a];
   assign obs_xf_valid = u_geometry.u_engine.xf_in_valid & u_geometry.u_engine.xf_translate;

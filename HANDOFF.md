@@ -157,6 +157,15 @@ the bench's answers match the reference's exactly, word for word. `build/tgp`
 (seeds 11, 13, 14, 15) carries all three fixes: the bridge's masked dummy
 write (R202), the table base (R203), the math-unit gate (R205).
 
+**Bench with all three fixes, 01:40:** placement answers identical to the
+reference; 3,342 quads spread across the whole screen, most larger than ten
+pixels, chains tracing curbs and edges. The scene is in view. The bench
+harness has no rasteriser, so this is the quads' coordinates, not pixels.
+`build/tgp` (four seeds, all three fixes, polygon-path probes on the wire)
+is the build to look at. Open in the bench: command 0x2A's six output words
+read back as three in the trace (FIFO drop or trace sampling; the
+`WORDS DROPPED` counters now print).
+
 **Tools fixed on the way:** `mame_i960_frame_trace.lua` never read `M2_FRAME`;
 `rom_csum.py`'s `build_image` prepended the index-3 I/O ROM (64 KB) to the
 image, so `M2_BOOT_IMAGE` trapped the real-memory bench on instruction 1; the
