@@ -299,7 +299,7 @@ RLD_RTL := rtl/mem/m2_sdram.sv rtl/io/m2_rom_loader.sv sim/mem/sdram_model.sv si
 
 
 .PHONY: test test_m2_backup test_m2_sndboard test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram test_fx68k test_m2_ioboard
-test: test_m2_geo test_m2_wr_arb test_m2_raster3d test_m2_backup test_m2_sndlink test_fx68k test_m2_sndboard test_m2_ioboard test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
+test: test_m2_geo test_m2_wr_arb test_m2_pair_cache test_m2_raster3d test_m2_backup test_m2_sndlink test_fx68k test_m2_sndboard test_m2_ioboard test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
 
 test_i960_dec: obj_i960_dec/Vi960_dec
 	@echo "== test i960_dec"
@@ -620,6 +620,14 @@ obj_raster3d/Vm2_raster3d: rtl/video/m2_raster3d.sv rtl/video/m2_quad_store.sv r
 	  --Mdir obj_raster3d -o Vm2_raster3d -CFLAGS "-O2" \
 	  rtl/video/m2_raster3d.sv rtl/video/m2_quad_store.sv rtl/video/m2_raster_fill.sv \
 	  rtl/video/m2_raster_div.sv rtl/video/m2_raster_band.sv sim/video/tb_m2_raster3d.cpp
+
+test_m2_pair_cache: obj_pair_cache/Vm2_pair_cache
+	@echo "== test m2_pair_cache (the port's second dword serves the next read)"
+	@./obj_pair_cache/Vm2_pair_cache $(TEST_ARGS)
+
+obj_pair_cache/Vm2_pair_cache: rtl/mem/m2_pair_cache.sv sim/mem/tb_m2_pair_cache.cpp
+	$(VBUILD) --top-module m2_pair_cache -Wno-UNUSEDSIGNAL --Mdir obj_pair_cache -o Vm2_pair_cache -CFLAGS "-O2" \
+	  rtl/mem/m2_pair_cache.sv sim/mem/tb_m2_pair_cache.cpp
 
 test_m2_wr_arb: obj_wr_arb/Vm2_wr_arb
 	@echo "== test m2_wr_arb (one owner at a time on the shared write port)"

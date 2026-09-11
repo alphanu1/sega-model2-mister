@@ -627,6 +627,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_diag.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/mem/m2_sdram.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/mem/m2_sdram_x2.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/mem/m2_wr_arb.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/mem/m2_pair_cache.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/mem/m2_char_cdc.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_char_cache.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/m2_i8251.sv

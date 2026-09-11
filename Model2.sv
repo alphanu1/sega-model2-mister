@@ -510,6 +510,15 @@ logic       geo_rd_req_r;
 logic [18:0] geo_rd_addr_r;
 logic       geo_rd_ack_r;
 logic [31:0] geo_rd_data_r;
+// R214: THE PORT'S SECOND DWORD SERVES THE NEXT READ. Both port-4 readers go
+// through m2_pair_cache, indexed by the full dword address; a sequential
+// stream then makes half the port trips. p4_dout_r keeps all 64 bits.
+logic [63:0]       p4_dout_r;
+wire               gc_req, ec_req;
+wire [SDR_AW-2:0]  gc_idx, ec_idx;
+logic [SDR_AW-2:0] gc_idx_r, ec_idx_r;
+wire               geo_rd_ack_c, eng_mem_ack_c;
+wire [31:0]        geo_rd_data_c, eng_mem_data_c;
 // The geometry engine's side of port 4. eng_base is decoded once per object
 // from oba and held, so the increment inside the engine never has to know
 // which memory it is walking.
@@ -665,8 +674,7 @@ always_comb begin
 	// cycles where both ask anyway -- if the interlock is ever wrong, that
 	// counter is non-zero rather than the picture being subtly incorrect.
 	p_req[4]  = geo_rd_req_r | eng_mem_req_r;
-	p_addr[4] = eng_mem_req_r ? (eng_base_r + SDR_AW'({eng_mem_idx_r, 1'b0}))
-	                          : (GAME_BUFFER + SDR_AW'({geo_rd_addr_r, 1'b0}));
+	p_addr[4] = eng_mem_req_r ? {ec_idx_r, 1'b0} : {gc_idx_r, 1'b0};   // R214: dword addresses from the pair caches
 	// PORT 2 FOR THE COPY, which is the one port known to work.
 	//
 	// Port 0 failed (single word) and port 1 failed (four-word burst), while the
@@ -2465,7 +2473,7 @@ m2_geo #(.AW(SDR_AW), .DEPTH(128)) u_geo (
 	.dbg_geocnt(geo_cnt_dbg), .dbg_geoctl(geo_ctl_dbg),
 	.frame_start(geo_walk_start),
 	.rd_req(geo_rd_req), .rd_addr(geo_rd_addr),
-	.rd_data(geo_rd_data_r), .rd_ack(geo_rd_ack_r),
+	.rd_data(geo_rd_data_c), .rd_ack(geo_rd_ack_c),      // R214: through the pair cache
 	.dbg_walk_ops(geo_walk_ops), .dbg_walk_objs(geo_walk_objs),
 	.dbg_walk_frames(geo_walk_frames), .dbg_walk_unknown(geo_walk_unknown),
 	.dbg_walk_state(geo_walk_state),
@@ -2509,7 +2517,23 @@ wire [SDR_AW:1] eng_base = geo_obj_oba_r[24] ? GAME_PRAM1
                                              : GAME_PRAM0;
 wire [23:0] eng_mem_idx  = (geo_obj_oba_r[24] || !geo_obj_oba_r[23])
                          ? {9'd0, eng_mem_addr[14:0]}      // 32K-dword window
-                         : {2'd0, eng_mem_addr[21:0]};     // 4M-dword ROM window
+                         : {2'd0, eng_mem_addr[21:0]};
+
+// R214: one pair cache per port-4 reader. Indexed by the dword address so a
+// new object's stream that happens to begin one past the last cannot hit a
+// stale copy. The port side is the registered glue exactly as before.
+wire [SDR_AW:1] geo_wa = GAME_BUFFER + SDR_AW'({geo_rd_addr, 1'b0});
+wire [SDR_AW:1] eng_wa = eng_base + SDR_AW'({eng_mem_idx, 1'b0});
+m2_pair_cache #(.AW(SDR_AW-1)) u_geo_pc (
+	.clk(clk_sys), .rst_n(mem_rst_n),
+	.req(geo_rd_req), .idx(geo_wa[SDR_AW:2]), .ack(geo_rd_ack_c), .data(geo_rd_data_c),
+	.p_req(gc_req), .p_idx(gc_idx), .p_ack(geo_rd_ack_r), .p_dout(p4_dout_r)
+);
+m2_pair_cache #(.AW(SDR_AW-1)) u_eng_pc (
+	.clk(clk_sys), .rst_n(mem_rst_n),
+	.req(eng_mem_req), .idx(eng_wa[SDR_AW:2]), .ack(eng_mem_ack_c), .data(eng_mem_data_c),
+	.p_req(ec_req), .p_idx(ec_idx), .p_ack(eng_mem_ack_r), .p_dout(p4_dout_r)
+);     // 4M-dword ROM window
 logic [31:0] geo_obj_oba_r;
 always_ff @(posedge clk_sys) if (geo_obj_valid) geo_obj_oba_r <= geo_obj_oba;
 
@@ -2572,7 +2596,7 @@ m2_geometry u_geometry (
 	.mat_we(geo_mat_we), .mat_idx(geo_mat_idx), .mat_data(geo_mat_data),
 	.foc_x(geo_foc_x), .foc_y(geo_foc_y),
 	.mem_req(eng_mem_req), .mem_addr(eng_mem_addr),
-	.mem_data(eng_mem_data_r), .mem_ack(eng_mem_ack_r),
+	.mem_data(eng_mem_data_c), .mem_ack(eng_mem_ack_c),  // R214: through the pair cache
 	// THE VIEWPORT, AND THESE ARE NOT PIXELS. a_* are the four frustum planes
 	// as SLOPES, tested as p.x < p.z * a_left and so on -- the clip happens in
 	// view space, before the divide. MAME builds them from the rasterizer's
@@ -2851,8 +2875,9 @@ always_ff @(posedge clk_sys) begin
 	tgp_dat_wdata_r <= tgp_dat_wdata;
 	tgp_dat_is_buf_r<= tgp_dat_is_buf;
 	tgp_dat_half_r  <= tgp_dat_half;
-	geo_rd_req_r    <= geo_rd_req;
+	geo_rd_req_r    <= gc_req;          // R214: the walker's misses only
 	geo_rd_addr_r   <= geo_rd_addr;
+	gc_idx_r        <= gc_idx;
 	// the walk only sees an acknowledge when the port was serving IT
 	// COPRO_BUFW: the coprocessor's writes into SHARED buffer RAM.
 	//
@@ -2904,7 +2929,9 @@ always_ff @(posedge clk_sys) begin
 	p4_ack_d        <= p_ack[4];
 	geo_rd_ack_r    <= p_ack[4] & geo_rd_req_r & ~eng_mem_req_r;
 	geo_rd_data_r   <= p_dout[4][31:0];
-	eng_mem_req_r   <= eng_mem_req;
+	p4_dout_r       <= p_dout[4];
+	eng_mem_req_r   <= ec_req;          // R214: the engine's misses only
+	ec_idx_r        <= ec_idx;
 	eng_mem_idx_r   <= eng_mem_idx;
 	eng_base_r      <= eng_base;
 	eng_mem_ack_r   <= p_ack[4] & eng_mem_req_r;
