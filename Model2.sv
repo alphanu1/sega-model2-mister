@@ -493,7 +493,11 @@ wire        tgp_dat_we, tgp_dat_is_buf, tgp_dat_half;
 // black-screened the board; with BUFFERRAM off the game runs and the walker is
 // the thing we actually want exercised, so the sense is inverted: status[20]
 // TURNS IT OFF. An OSD bit is 0 at power-up, so the default is ON.
-wire        geo_walk_start = vbl_d && !vbl_dd && !status[20];
+// R229: same reason as tq_en below -- this one gates the frame pulse that
+// starts the walk, the geometry and the renderer's whole band schedule.
+logic [2:0] nowalk_s;
+always_ff @(posedge clk_sys) nowalk_s <= {nowalk_s[1:0], status[20]};
+wire        geo_walk_start = vbl_d && !vbl_dd && !nowalk_s[2];
 wire        geo_rd_req;
 wire [18:0] geo_rd_addr;
 wire [15:0] geo_walk_ops, geo_walk_objs, geo_walk_frames;
@@ -2689,7 +2693,22 @@ m2_geometry u_geometry (
 // (160,120) to (340,260) at z=1.0 -- wound the same way the geometry winds its
 // quads, so it exercises the same path and not a special case. Issued once at
 // vblank, then q_end, which is exactly the sequence a real frame produces.
-wire tq_en = status[21];
+// THE OSD's STATUS BITS ARE REGISTERED BEFORE THEY REACH THE RENDERER (R229).
+//
+// `status` comes out of hps_io on its own clock and Quartus treats it as a
+// real launch. Used raw, status[21] -- the test-quad enable -- fanned out
+// through the quad source mux, the store's write path and its counters, and
+// at 60 MHz that was THE core clock's critical path: 30 of the 30 worst,
+// hps_io -> m2_quad_store, -1.735 ns, holding the whole design to 54.3 MHz.
+// A user setting changes at human speed and nothing downstream cares about
+// the cycle it lands on, so two flops cost nothing and hand the fitter a
+// local register to place beside the logic it feeds.
+logic [2:0] tq_en_s, tq_small_s;
+always_ff @(posedge clk_sys) begin
+	tq_en_s    <= {tq_en_s[1:0],    status[21]};
+	tq_small_s <= {tq_small_s[1:0], status[22]};
+end
+wire tq_en = tq_en_s[2];
 logic tq_valid, tq_end;
 logic [1:0] tq_st;
 logic [3:0] tq_dly;
@@ -2708,7 +2727,7 @@ logic [1:0] tq_i;
 // x 180..300, y 140..240. Toggling between the two confirms a side that was
 // merely out of view rather than missing, and if a bar is absent in BOTH it is
 // absent for a real reason.
-wire tq_small = status[22];
+wire tq_small = tq_small_s[2];
 wire signed [15:0] tqx0 = tq_small
       ? ((tq_i==2'd0) ? 16'sd200 : (tq_i==2'd1) ? 16'sd280
        : (tq_i==2'd2) ? 16'sd200 :               16'sd180)

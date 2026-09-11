@@ -12984,3 +12984,27 @@ the core logic reached 55.8 MHz (it was 51.9 at the 50 MHz target) and the
 i960 reached 29.1 of the 30 asked, short by a single path from
 `i960_fpcvt` into the writeback mux. So the logic is close; it was the
 crossing that was hopeless.
+
+*R228's build (20:50): `build/clk120` at 120/60/30 fits all four seeds at
+84% and the crossing problem is GONE -- the failing paths are now honest
+logic, each in one place:*
+
+    memory 120 MHz   -2.112 ns   20 paths, ALL INSIDE m2_sdram      Fmax 95.74
+    core    60 MHz   -1.735 ns   30 paths, hps_io -> m2_quad_store  Fmax 54.34
+    i960    30 MHz   -1.010 ns   20 paths, i960_fpcvt -> writeback  Fmax 29.12
+
+**R229 -- A USER SETTING WAS THE CORE CLOCK'S CRITICAL PATH.**
+
+Every one of the core clock's thirty worst paths ran from `hps_io` into
+`m2_quad_store`, and the signal was `status[21]`: the OSD's TEST-QUAD
+ENABLE. Used raw off the framework's status word it fans out through the
+quad source mux, the store's write path and its counters, and it held the
+whole design to 54.3 MHz. `status[20]`, which gates the frame pulse that
+starts the walk and the renderer's band schedule, is the same shape.
+
+Both are now taken through three flops on clk_sys. A setting a person
+changes from a menu has no cycle-accurate relationship with anything, so
+the registers cost nothing and give the fitter a local source to place
+beside the logic it drives. The rule this is an instance of: **nothing off
+`status` may be used combinationally in a datapath** -- it is a slow
+control from another clock, and the fitter has no idea it is slow.
