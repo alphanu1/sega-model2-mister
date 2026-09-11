@@ -3970,7 +3970,8 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// R214: OVERRUNS. Quads the store dropped for a full bank, words the
 	// front-door push DMA dropped for a full queue (low 8 bits), quads held.
 	// (dbg_missed read 0 through the title on dbuf6 s14: bands are never late.)
-	.b_data({r3d_dropped[15:0], geo_dropped[7:0], r3d_quads[11:4]}),
+	// R216: store dropped (full), tiny quads refused (units of 16), quads held (units of 16).
+	.b_data({r3d_dropped[15:0], r3d_tiny[11:4], r3d_quads[11:4]}),
 	.a_tag(8'h43), .b_tag(8'h48),          // 'C' copro in_pushed:out_pushed | TGP retires:pc
 	                                       // 'H' out_popped:hscr2 | io_addr:flags
 	                                       // 'H' scroll h:v for layers 0,1 | layers 2,3 -- low bytes
@@ -4975,7 +4976,7 @@ wire [9:0] vid_x, vid_y;
 // Flat colour, no texture, no lighting: shape first.
 wire [15:0] r3d_col;
 wire        r3d_hit;
-wire [15:0] r3d_quads, r3d_dropped, r3d_bands;
+wire [15:0] r3d_quads, r3d_dropped, r3d_bands, r3d_tiny;
 wire [31:0] r3d_pixels;
 
 // TWO_CLOCKS(0): clk and scan_clk below are BOTH clk_sys, so every synchroniser
@@ -5004,7 +5005,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(4),
 	.q_moire(1'b0), .q_end(tq_en ? tq_end : q3d_end),
 	.scan_clk(clk_sys), .scan_x(vid_x), .scan_y(vid_y),
 	.scan_col(r3d_col), .scan_hit(r3d_hit),
-	.dbg_quads(r3d_quads), .dbg_dropped(r3d_dropped),
+	.dbg_quads(r3d_quads), .dbg_dropped(r3d_dropped), .dbg_tiny(r3d_tiny),
 	.dbg_bands(r3d_bands), .dbg_pixels(r3d_pixels),
 	.dbg_ready_cyc(r3d_ready_cyc), .dbg_bands_done(r3d_bands_done),
 	.dbg_late_frames(r3d_late_frames), .dbg_qend_frames(r3d_qend_frames),

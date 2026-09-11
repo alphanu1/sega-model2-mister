@@ -83,6 +83,13 @@ module m2_quad_store #(
   parameter int unsigned XW     = 13,
   parameter int unsigned CW     = 16,
   parameter int unsigned KW     = 24,
+  // R216: A QUAD UNDER TINY PIXELS IN BOTH DIMENSIONS IS NOT STORED. The
+  // title's busiest frames carry ~4,200 quads against 2,048 held and the
+  // bench's histogram says 46% of them are under 2x2 pixels (14% under
+  // 1x1, none off-screen). The reference draws every one of them as a dot
+  // or two; here they cost half the store and half of every band's replay.
+  // Counted, so the deviation is measured, not assumed. 0 disables it.
+  parameter int unsigned TINY   = 2,
   parameter int unsigned SCR_H  = 384
 ) (
   input  logic        clk,
@@ -123,7 +130,8 @@ module m2_quad_store #(
   output logic        out_moire,
 
   output logic [15:0] dbg_count,
-  output logic [15:0] dbg_dropped
+  output logic [15:0] dbg_dropped,
+  output logic [15:0] dbg_tiny        // R216: quads refused for being under TINY px both ways
 );
 
 
@@ -233,15 +241,29 @@ module m2_quad_store #(
   endfunction
 
   // ---------------------------------------------------------------- write
+  function automatic logic tiny_quad(input logic signed [15:0] x0, y0, x1, y1, x2, y2, x3, y3);
+    logic signed [15:0] xl, xh, yl, yh;
+    begin
+      xl = x0; if (x1 < xl) xl = x1; if (x2 < xl) xl = x2; if (x3 < xl) xl = x3;
+      xh = x0; if (x1 > xh) xh = x1; if (x2 > xh) xh = x2; if (x3 > xh) xh = x3;
+      yl = y0; if (y1 < yl) yl = y1; if (y2 < yl) yl = y2; if (y3 < yl) yl = y3;
+      yh = y0; if (y1 > yh) yh = y1; if (y2 > yh) yh = y2; if (y3 > yh) yh = y3;
+      tiny_quad = (TINY != 0) && ((xh - xl) < $signed(16'(TINY))) && ((yh - yl) < $signed(16'(TINY)));
+    end
+  endfunction
+  wire is_tiny = tiny_quad(in_x0, in_y0, in_x1, in_y1, in_x2, in_y2, in_x3, in_y3);
+
   logic [IW-1:0] wi;
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       for (int b = 0; b < int'(NBANK); b++) count[b] <= '0;
-      wi <= '0; dbg_dropped <= '0;
+      wi <= '0; dbg_dropped <= '0; dbg_tiny <= '0;
     end else if (clear) begin
-      count[wbank] <= '0; wi <= '0; dbg_dropped <= '0;
+      count[wbank] <= '0; wi <= '0; dbg_dropped <= '0; dbg_tiny <= '0;
     end else if (in_valid) begin
-      if (has_room) begin
+      if (is_tiny) begin
+        if (dbg_tiny != 16'hffff) dbg_tiny <= dbg_tiny + 16'd1;
+      end else if (has_room) begin
         if (wbank) begin
           vtx0_1[wcount[IW-1:0]] <= {sat(in_y0), sat(in_x0)};
           vtx1_1[wcount[IW-1:0]] <= {sat(in_y1), sat(in_x1)};

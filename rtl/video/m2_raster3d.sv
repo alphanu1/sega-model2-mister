@@ -67,6 +67,7 @@ module m2_raster3d #(
 
   output logic [15:0] dbg_quads,
   output logic [15:0] dbg_dropped,
+  output logic [15:0] dbg_tiny,            // R216
   output logic [15:0] dbg_bands,
   output logic [31:0] dbg_pixels,
 
@@ -151,7 +152,7 @@ module m2_raster3d #(
     .out_x0(qo_x0), .out_y0(qo_y0), .out_x1(qo_x1), .out_y1(qo_y1),
     .out_x2(qo_x2), .out_y2(qo_y2), .out_x3(qo_x3), .out_y3(qo_y3),
     .out_col(qo_col), .out_moire(qo_moire),
-    .dbg_count(dbg_quads), .dbg_dropped(dbg_dropped)
+    .dbg_count(dbg_quads), .dbg_dropped(dbg_dropped), .dbg_tiny(dbg_tiny)
   );
 
   // ------------------------------------------------------------- the filler
