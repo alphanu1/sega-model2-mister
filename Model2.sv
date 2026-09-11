@@ -225,7 +225,7 @@ wire [26:0] ioctl_addr;
 // name, and a rename makes the constraints match nothing while still passing.
 // See rtl/pll/pll.v.
 
-wire clk_mem;        // 100 MHz, m2_sdram ONLY
+wire clk_mem;        // 120 MHz, m2_sdram ONLY (R228)
 wire clk_sdram_pin;  // 100 MHz at 180 deg, drives SDRAM_CLK
 wire clk_sys;   // 50 MHz, the core domain, and the COPROCESSOR's clock.
                 // Exactly the real MB86234's 50 MHz, and an exact 2x clk_i960 --
@@ -254,11 +254,11 @@ pll pll
 (
 	.refclk(CLK_50M),
 	.rst(0),
-	.outclk_0(clk_mem),      // 100 MHz, the SDRAM controller alone
-	.outclk_1(clk_sys),      // 60 MHz, everything else (R227). VCO 1200 / 20.
+	.outclk_0(clk_mem),      // 120 MHz, the SDRAM controller alone (R228). VCO 1200 / 10.
+	.outclk_1(clk_sys),      // 60 MHz, everything else (R227). VCO 1200 / 20, an exact half of clk_mem.
 	.outclk_2(clk_vid),      // 48 MHz (unused; VCO 1200 / 25)
 	.outclk_3(clk_i960),     // 30 MHz (R227). VCO 1200 / 40.
-	.outclk_4(clk_sdram_pin),// 100 MHz at 180 deg, straight to the device pin
+	.outclk_4(clk_sdram_pin),// 120 MHz at 180 deg (4,167 ps), straight to the device pin
 	.locked(pll_locked)
 );
 
@@ -889,7 +889,13 @@ m2_sdram_x2 #(.NP(NPORTS), .AW(SDR_AW)) u_sdram_x2 (
 // CL2 and a capture of CL+4, so the device is not the limit and the latency did
 // not need raising. Reverted rather than left in as a harmless-looking change
 // that was aimed at the wrong thing.
-m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(781)) u_sdram (
+// R228: THE DEVICE TIMES ARE NANOSECONDS, AND THE CLOCK IS NOW 120 MHz.
+// Every one of these is a minimum time expressed in cycles, so a faster clock
+// needs MORE of them: scaled by 6/5 from the 100 MHz values and rounded up,
+// which is the safe direction. Refresh is 8,192 rows in 64 ms, one per 7.8125
+// us, which is 937 cycles at 120 MHz against 781 at 100.
+m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(937),
+           .T_RCD(3), .T_RP(3), .T_RC(9), .T_RAS(6), .T_WR(3)) u_sdram (
 	.clk(clk_mem), .rst_n(mem_rst_n), .ready(mem_ready),
 	// OSD order is CL+2..CL+5 and the selector's own encoding puts CL+3 at zero,
 	// so the two are mapped rather than passed through.

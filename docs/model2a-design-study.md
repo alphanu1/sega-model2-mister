@@ -12942,3 +12942,45 @@ build ranked by slack: an OSD status bit (`status[21]`, the test-quad
 enable) reaching the quad store's dropped counter, 0.733 ns of slack at 50
 and -2.6 at 60; and the i960's float-convert unit reaching the writeback
 mux, 4.53 ns at 25 and -2.14 at 30.
+
+**R228 -- 100 AND 60 IS NOT A SLOW BUILD, IT IS A WRONG ONE. THE MEMORY
+CLOCK MUST STAY AN EXACT 2:1 OVER THE CORE.**
+
+`build/clk60` (100/60/30) fitted all four seeds at 84% and missed setup by
+3.364 ns, and EVERY ONE of the thirty worst core-clock paths was
+`m2_sdram -> emu` while every failing memory-clock path was the reverse.
+That is not logic, it is arithmetic: 100 and 60 line up as five to three, so
+the tightest launch-to-latch window between the domains is 3.33 ns where
+100 and 50 give 10.00. The reported shortfall IS that window.
+
+    memory / core     tightest window
+    100 / 50   (2:1)      10.00 ns
+    100 / 60   (5:3)       3.33 ns
+    120 / 60   (2:1)       8.33 ns
+
+And the ratio is not merely a timing convenience. `m2_sdram_x2`'s own header
+says it: "THIS IS NOT A CLOCK-DOMAIN CROSSING, AND THE DISTINCTION MATTERS
+-- both clocks come from one PLL at an exact 2:1 ratio, so their edges are
+aligned and every slow-domain signal is stable across two fast cycles. There
+is no metastability to synchronise away and no synchroniser here." Its
+acknowledge is held for ACK_HOLD = 2 fast cycles BECAUSE that is exactly one
+slow cycle. At 5:3 that is false, and the Kaneko core this was ported from
+had already been bitten by an acknowledge one cycle too wide: it retired one
+transaction twice and read the second time into the next one's data. So
+100/60 would have been wrong on the board even had it closed timing.
+
+120/60/30 comes from the same 1200 MHz VCO (/10, /20, /40) and restores
+1:2:4 throughout. The cost is asking the SDRAM for 120 MHz where it measured
+106.69 at a 100 MHz target, which is the open question this build answers.
+Its device times are nanoseconds expressed in cycles, so they scale UP with
+the clock: T_RCD and T_RP 2 -> 3, T_RAS 5 -> 6, T_WR 2 -> 3, T_RC 7 -> 9,
+T_REFI 781 -> 937 (8,192 rows in 64 ms is one per 7.8125 us). The SDRAM_CLK
+pin's phase moves with it too -- 180 degrees is 5,000 ps at 100 MHz and
+4,167 at 120 -- and the read-capture depth is swept at boot against a known
+pattern, so that part needs no hand-tuning.
+
+*What clk60 also measured, and it is worth keeping.* With the fitter pushed,
+the core logic reached 55.8 MHz (it was 51.9 at the 50 MHz target) and the
+i960 reached 29.1 of the 30 asked, short by a single path from
+`i960_fpcvt` into the writeback mux. So the logic is close; it was the
+crossing that was hopeless.

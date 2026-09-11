@@ -164,7 +164,7 @@ module pll_core (
     .reference_clock_frequency("50.0 MHz"),
     .operation_mode("direct"),
     .number_of_clocks(5),
-    .output_clock_frequency0("100.000000 MHz"),
+    .output_clock_frequency0("120.000000 MHz"),
     .phase_shift0("0 ps"),
     .duty_cycle0(50),
     .output_clock_frequency1("60.000000 MHz"),
@@ -178,8 +178,8 @@ module pll_core (
     .duty_cycle3(50),
     // 180 degrees at 100 MHz is half a 10 ns period: 5000 ps exactly. It was
     // 5208 for 96 MHz. Stated in ps because that is the unit the IP takes.
-    .output_clock_frequency4("100.000000 MHz"),
-    .phase_shift4("5000 ps"),
+    .output_clock_frequency4("120.000000 MHz"),
+    .phase_shift4("4167 ps"),
     .duty_cycle4(50),
     .pll_type("General"),
     .pll_subtype("General")
