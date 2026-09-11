@@ -158,6 +158,13 @@ set_global_assignment -name FINAL_PLACEMENT_OPTIMIZATION ALWAYS
 # measured for each.
 set_global_assignment -name FITTER_AGGRESSIVE_ROUTABILITY_OPTIMIZATION ALWAYS
 set_global_assignment -name FITTER_EFFORT "STANDARD FIT"
+# INTERNAL HOLD PATHS ARE FIXED BY THE FITTER ONLY WHEN ASKED (R213). The
+# default, "IO Paths and Minimum TPD Paths", leaves a register-to-register
+# hold miss alone: build/dbuf4 s14 and s15 both failed hold by ~-0.3 ns on ONE
+# path, m2_cpu_bridge r_rdata[15] (50 MHz) -> bus_rdata[15] (25 MHz), with
+# every other path on the CPU clock at +0.27 or better. "All Paths" lets the
+# fitter pad it.
+set_global_assignment -name OPTIMIZE_HOLD_TIMING "ALL PATHS"
 # BALANCED, NOT AGGRESSIVE AREA. Aggressive Area crashed this fitter twice in
 # succession -- "Fatal Error: Segment Violation at (nil)" after placement
 # succeeded, with no resource numbers written either time. The speed-tuned
