@@ -12425,3 +12425,14 @@ R218's stack carries a 2-bit vertex id and a flag instead of a 32-bit
 pixel, the four input pixels held once. The coprocessor's flip-flop
 input queue (~2,000 ALM as one M10K, per the qsf) remains the lever for
 real room.
+
+*Slimmed (17:15), 0f47d1b.* R217: `m2_geo_engine` exports the link mode of
+the last emitted polygon and a chain flag (cleared at object start and by
+a cull); the projector maps vertices 0 and 1 to the last polygon's pixels
+by that mode -- default carry v0 = last v3, v1 = last v2; link 1 v0 =
+last v2, v1 = last v1; link 3 v0 = last v0, v1 = last v3 -- and a refused
+(non-finite) polygon clears the chain. No comparators. R218: the
+clipper's stack carries a 2-bit input-vertex id and a flag; the four input
+pixels are held once and looked up at emission. Engine 20, geometry 30,
+clip 2,003 checks pass; boot bench passes. `build/dbuf13` = everything to
+R219, slimmed. The bench is remeasuring the projector's hit rate.

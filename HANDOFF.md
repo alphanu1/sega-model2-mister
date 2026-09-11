@@ -1,6 +1,6 @@
 # Handoff
 
-**Updated:** 2026-09-11 16:15. Study entries R176-R219. R172 WITHDRAWN, R185
+**Updated:** 2026-09-11 17:20. Study entries R176-R219. R172 WITHDRAWN, R185
 partly RETRACTED, R189 corrected by R191, R196's central claim WITHDRAWN the
 same day, R206 WITHDRAWN, R207 closed by R208.
 
@@ -35,6 +35,13 @@ completes, 4 minutes clean -- render chain 10.6%, mailbox poll 3.7%, no
 parking, no drops. Ten-minute soak from a fresh load also clean: mailbox
 poll 3.9%, render chain 12.5%, never parked. R209 CONFIRMED.** The board is
 on it. Study R209.
+
+**dbuf11 CRASHED THE FITTER on all four seeds (density: each of R217/R218
+alone puts the device at 98% ALM, and Quartus 17 falls over there on half
+its seeds -- bisected from two worktrees). Both slimmed (0f47d1b): the
+engine states the strip's carry instead of the projector comparing floats,
+and the clipper's stack carries vertex ids instead of pixels. `build/dbuf13`
+= everything to R219, slimmed, in the fitter. Board still on dbuf10 s15.**
 
 **R219 (16:10): the reference culls back faces of single-sided polygons and
 link-type-0 polygons; the engine emitted everything. Now it culls as the
