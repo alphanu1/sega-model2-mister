@@ -11713,3 +11713,25 @@ consecutive words repeats R207; the bench's `M2_GEO_LAT` model is the test
 for it and must be run on any new requester. Unconfirmed until the board
 says so: `build/ack` (seeds 11, 13, 14, 15) is the first bitstream with the
 requester-side fix and no glue gating, probe still on the wire.
+
+*Confirmed on the board, 04:05.* `build/ack` s14 (R202+R203+R205+R208, setup
+-0.149, hold +0.242; s11 died in the fitter's TDC module, s13 -0.783/-0.311,
+s15 -0.282/+0.242), 170 s capture through the 3D title, same probe layout as
+`build/eo2`:
+
+                              build/eo2 s15 (before)    build/ack s14 (after)
+    engine first-read index   0x001388 x766 (= obc)     0x15FF9D, 0x5AE5, 0xAA7C ...
+    first-read data           0x07800000 x766           0x00000000, 0x3F800000, floats
+    base select [24:23]       0 x892                    1 (ROM) x909, 0 x168
+    reads per object          12 x952                   255 (saturated) x709, 51, 231 ...
+    polys / clip out / quads  0 / 0 / 0                 50048 / 17001 / 22271 (16-bit, wrapping)
+    render chain samples      running                   6459 of 64121; task 0x5890 93
+
+0x15FF9D is the bench's first object (`oba=0095ff9d`, 22 index bits kept)
+with the same base select; the board's stream now begins where the bench's
+does. The engine reads whole objects, the clipper passes polygons and quads
+are handed to the rasteriser -- the first 3D geometry to reach it on
+hardware. Whether it draws correctly is the next question (R200's band-13
+cut is still open); nonfinite stays high (37749 at mid-capture) as it does
+in the bench (32768, capped), which is the unwritten-memory 0xFFFFFFFF
+objects, 39 of them in the first-read data here.

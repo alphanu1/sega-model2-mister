@@ -34,11 +34,18 @@ identical to instant service. `M2_GEOTRACE=<file>` dumps the handshake.
 
     M2_GEO_LAT=6 M2_POLY_FROM=17000000 ./obj_boot/Vm2_boot_harness +insn=19500000
 
-**On the board:** `build/ack` (seeds 11, 13, 14, 15) is building at 03:40 --
-R202+R203+R205+R208, probe on the wire (decode with `decode_eo.py` /
-`decode_poly.py`, layout unchanged from `build/eo2`). Expect the first-read
-index to become the object's `oba` and polys > 0. If the first read is
-right and polys stay 0 the next fault is downstream of the engine's fetch.
+**On the board, 04:05 -- CONFIRMED.** `build/ack` s14 (setup -0.149, hold
++0.242; deployed, capture `ack_s14.txt`): the engine's first read per object
+is now the object's own address (0x15FF9D = the bench's first object, same
+ROM base select), reads per object saturate at 255 instead of 12, the polygon
+counter runs to 50,048, the clipper passes 17,001 and 22,271 quads reach the
+rasteriser (16-bit counters, wrapping). Before, on `build/eo2`: 0x1388 (obc),
+12 reads, all three counters 0. The board's stream now starts where the
+bench's does. This is the first 3D geometry to reach the rasteriser on
+hardware. NOT yet seen on a screen -- the capture cannot say what was drawn;
+look. If the picture is wrong or empty the fault is now downstream of the
+engine's fetch: the rasteriser (R200's band-13 cut is open) or presentation.
+The board is running `build/ack` s14; the previous core is `Model2.rbf.prev`.
 
 **Rule for any new requester on a shared port:** both rules above, and run
 it under `M2_GEO_LAT` before a build.
