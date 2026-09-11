@@ -55,6 +55,7 @@ static uint32_t g_th_objs = 0, g_th_ram = 0, g_th_rend[4] = {0,0,0,0}, g_th_chec
 static std::set<uint32_t> g_th_colorbase;
 static std::map<uint32_t,uint32_t> g_th_colorbase_n;
 static uint32_t g_th_last_objs = 0;
+static uint32_t g_tdwords = 0;
 static void th_probe(uint32_t tha) {
   ++g_th_objs;
   if (g_th_objs <= 6 || (g_th_objs % 400) == 0) std::printf("    TEXHDR sample: object %u tha %08x\n", g_th_objs, tha);
@@ -69,6 +70,7 @@ static void th_probe(uint32_t tha) {
   g_th_colorbase.insert(cb); ++g_th_colorbase_n[cb];
 }
 static void th_report() {
+  std::printf("    TEXHDR texture RAM words written by the walker (op 0x04, bit 23): %u\n", (unsigned)g_tdwords);
   std::printf("    TEXHDR objects %u: RAM-resident %u, renderer flat %u translucent %u textured %u tex+trans %u, checker %u, distinct colorbase %zu\n",
               g_th_objs, g_th_ram, g_th_rend[0], g_th_rend[1], g_th_rend[2], g_th_rend[3], g_th_checker, g_th_colorbase.size());
   int n = 0;
@@ -640,6 +642,7 @@ int main(int argc, char **argv) {
       //
       //   Model2.sv: base = oba[24] ? GAME_PRAM1 : oba[23] ? GAME_POLY : GAME_PRAM0
       //              idx  = ROM ? addr[21:0] : addr[14:0]
+      g_tdwords = uint32_t(d->geo_tdwords);
       if (uint32_t(d->geo_objs) != g_th_last_objs) { g_th_last_objs = uint32_t(d->geo_objs); th_probe(uint32_t(d->geo_tha_last)); }
       const uint32_t oba = uint32_t(d->geo_oba_last);
       const uint32_t idx = uint32_t(d->eng_mem_addr);

@@ -116,6 +116,13 @@ module m2_geo #(
   // polygon ROM from oba's top bits; geo_polygon_data (0x05) writes into them.
   input  logic [AW:1]   base_pram0,
   input  logic [AW:1]   base_pram1,
+  // R222: TEXTURE RAM, 64 K x 16 in SDRAM. geo_texture_data (0x04) writes
+  // it when its address has bit 23 set (clear is log RAM, for the texture
+  // LOD, still stepped over); the reference stores the LOW 16 BITS of each
+  // payload dword at texture_ram[(addr + i) & 0xffff]. 3% of the title's
+  // objects take their texture header from here.
+  input  logic [AW:1]   base_texram,
+  output logic [15:0]   dbg_td_words,    // words written into texture RAM
   output logic [15:0]   dbg_pd_words,    // dwords written into polygon RAM
   output logic [15:0]   dbg_pd_cmds,     // geo_polygon_data commands executed
   output logic [31:0]   foc_x, foc_y,
@@ -261,7 +268,10 @@ module m2_geo #(
   // inside the 32K-dword window the reference masks reads to.
   wire [14:0]  pd_widx  = pd_addr[14:0] + pd_i[14:0];
   wire [AW:1]  pd_wbase = pd_addr[24] ? base_pram1 : base_pram0;
-  assign pd_waddr = pd_wbase + AW'({pd_widx, 1'b0});
+  // R222: texture RAM is 16-bit words, one per payload dword, and wraps in 64 K.
+  wire [15:0]  td_widx  = pd_addr[15:0] + pd_i;
+  assign pd_waddr = pd_tex ? (base_texram + AW'(td_widx))
+                           : (pd_wbase + AW'({pd_widx, 1'b0}));
 
   assign sd_busy = (dst != D_IDLE);
   assign q_pop   = (dst == D_IDLE) && !pd_req && q_valid;
@@ -307,10 +317,17 @@ module m2_geo #(
         end
         D_LO: if (sd_wr_ack) begin
           sd_wr_req  <= 1'b0;
-          sd_wr_addr <= pd_active ? (pd_waddr + AW'(1))
-                                  : (base_buffer + AW'(wr_ptr[16:1]) + AW'(1));
-          sd_wr_din  <= dw_hi;
-          dst        <= D_HI;
+          if (pd_active && pd_tex) begin
+            // R222: texture RAM takes the low half only; done after one word.
+            pd_done   <= 1'b1;
+            pd_active <= 1'b0;
+            dst       <= D_IDLE;
+          end else begin
+            sd_wr_addr <= pd_active ? (pd_waddr + AW'(1))
+                                    : (base_buffer + AW'(wr_ptr[16:1]) + AW'(1));
+            sd_wr_din  <= dw_hi;
+            dst        <= D_HI;
+          end
         end
         D_HI: begin
           sd_wr_req <= 1'b1;
@@ -423,6 +440,7 @@ module m2_geo #(
   wire is_cnt1 = (w_op == 5'h04) || (w_op == 5'h05) || (w_op == 5'h14)
               || (w_op == 5'h15) || (w_op == 5'h0d);       // 2 + count
   wire is_pd   = (w_op == 5'h05) || (w_op == 5'h15);        // polygon_data
+  wire is_td   = (w_op == 5'h04);                           // texture_data (R222)
   wire is_cnt2 = (w_op == 5'h06);                          // 2 + 2*count
   wire is_cnt3 = (w_op == 5'h1d);                          // 1 + 3*count
   wire is_test = (w_op == 5'h0e);                          // 32 + 1 + 3*blocks
@@ -493,6 +511,7 @@ module m2_geo #(
                              (trig_mode == 2'd2) ? trig_after  : trig_setwp;
   wire         walk_go  = trig_sel && (q_idle || (&drain_wait));
   logic [31:0] pd_addr;                  // geo_polygon_data's destination
+  logic        pd_tex;                   // R222: this transfer is texture data
   logic [15:0] pd_n, pd_i;               // dwords to copy, and the one in hand
   logic  [4:0] tp_i;                     // texture_parameters index, wraps at 32
   logic [15:0] tp_n, tp_c;               // entries to read, and the one in hand
@@ -560,7 +579,7 @@ module m2_geo #(
       setwp_q <= 1'b0; wp_pend <= 1'b0; flip_seen <= 1'b0;
       pd_addr <= 32'd0; pd_n <= 16'd0; pd_i <= 16'd0;
       pd_req <= 1'b0; pd_wdata <= 32'd0;
-      dbg_pd_words <= 16'd0; dbg_pd_cmds <= 16'd0;
+      dbg_pd_words <= 16'd0; dbg_pd_cmds <= 16'd0; dbg_td_words <= 16'd0; pd_tex <= 1'b0;
       dbg_mtx_n <= 16'd0; dbg_foc_n <= 16'd0;
       foc_x <= 32'd0; foc_y <= 32'd0;
       lit_x <= 32'd0; lit_y <= 32'd0; lit_z <= 32'd0; dbg_lit_n <= 16'd0;
@@ -663,7 +682,7 @@ module m2_geo #(
             // Its first operand is the base index, so it is READ; W_CNT then
             // lands on the entry count, as it does for polygon_data.
             wst <= W_TPI;
-          end else if (is_pd) begin
+          end else if (is_pd || is_td) begin
             // GEO_POLYGON_DATA IS EXECUTED, NOT STEPPED OVER, and it is the
             // command the whole 3D path was waiting on. The board says
             // Daytona's object_data points at SLOW POLYGON RAM and never at the
@@ -671,6 +690,8 @@ module m2_geo #(
             // objects read unwritten memory, which is NaN, and nothing can
             // draw. Its first operand is the destination address, so it is READ
             // rather than skipped; W_CNT then lands on the count.
+            // R222: geo_texture_data takes the same road into texture RAM.
+            pd_tex <= is_td;
             wst <= W_PDA;
           end else if (is_var) begin
             // code_upload's count IS the first operand; the others have one
@@ -762,11 +783,14 @@ module m2_geo #(
             tp_c <= 16'd0;
             dbg_tp_n <= dbg_tp_n + 16'd1;
             wst  <= (rd_data[15:0] == 16'd0) ? W_FETCH : W_TPP;
-          end else if (is_pd) begin
+          end else if (is_pd || is_td) begin
             pd_n   <= rd_data[15:0];
             pd_i   <= 16'd0;
-            dbg_pd_cmds <= dbg_pd_cmds + 16'd1;
-            wst    <= (rd_data[15:0] == 16'd0) ? W_FETCH : W_PDR;
+            if (is_pd) dbg_pd_cmds <= dbg_pd_cmds + 16'd1;
+            // R222: texture data bound for LOG RAM (bit 23 clear) is stepped
+            // over by its count, as every 0x04 was before; w_skip is the count.
+            wst    <= (rd_data[15:0] == 16'd0) ? W_FETCH
+                    : (is_td && !pd_addr[23])  ? W_SKIP : W_PDR;
           end else begin
             wst    <= W_SKIP;
           end
@@ -831,7 +855,8 @@ module m2_geo #(
           if (pd_ack) pd_req <= 1'b0;      // taken; do not offer it twice
           if (pd_done) begin
             pd_req <= 1'b0;
-            dbg_pd_words <= dbg_pd_words + 16'd1;
+            if (pd_tex) dbg_td_words <= dbg_td_words + 16'd1;
+            else        dbg_pd_words <= dbg_pd_words + 16'd1;
             w_ip <= w_ip + 19'd1;
             if (pd_i == pd_n - 16'd1) wst <= W_FETCH;
             else begin pd_i <= pd_i + 16'd1; wst <= W_PDR; end

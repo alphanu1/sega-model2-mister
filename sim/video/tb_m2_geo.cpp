@@ -59,7 +59,7 @@ int main(int argc,char**argv){
   d = new Vm2_geo;
   d->rst_n=0; d->base_buffer=BASE; d->sd_wr_ack=0;
   d->frame_start=0; d->rd_data=0; d->rd_ack=0; d->eng_busy=0;
-  d->base_pram0 = 0x1710000; d->base_pram1 = 0x1720000;
+  d->base_pram0 = 0x1710000; d->base_pram1 = 0x1720000; d->base_texram = 0x1740000;
   d->wr_ctl=d->wr_setwp=d->wr_setrp=d->wr_push=0; d->wdata=0;
   for(int i=0;i<8;i++) tick();
   d->rst_n=1; idle(4);
@@ -437,6 +437,50 @@ int main(int argc,char**argv){
     ck("light y", d->lit_y, 0xbf800000u);
     ck("light z", d->lit_z, 0x40000000u);
     ck("the walk still finished", d->dbg_walk_frames ? 1u : 0u, 1u);
+  }
+
+  // ---- R222: geo_texture_data with bit 23 set lands in TEXTURE RAM, low
+  //      16 bits of each payload dword at base_texram + ((addr + i) & 0xffff);
+  //      with bit 23 clear (log RAM) it is stepped over by its count, as before.
+  {
+    const uint32_t TEXRAM = 0x1740000;
+    mem.clear();
+    std::vector<uint32_t> list(0x8000, 0);
+    size_t w = 0;
+    list[w++] = 0x04u << 23;                      // texture RAM at word 0xfffe: wraps
+    list[w++] = 0x0080fffeu;
+    list[w++] = 4;
+    list[w++] = 0xAAAA1111u; list[w++] = 0xBBBB2222u; list[w++] = 0xCCCC3333u; list[w++] = 0xDDDD4444u;
+    list[w++] = 0x04u << 23;                      // log RAM: skipped
+    list[w++] = 0x00001000u;
+    list[w++] = 3;
+    list[w++] = 0x55555555u; list[w++] = 0x66666666u; list[w++] = 0x77777777u;
+    list[w++] = 0x05u << 23;                      // and polygon RAM still works after it
+    list[w++] = 0x00000040u;
+    list[w++] = 1;
+    list[w++] = 0x12345678u;
+    list[w++] = 0x0fu << 23;                      // end
+
+    d->rst_n = 0; for (int i = 0; i < 4; i++) tick(); d->rst_n = 1; idle(2);
+    d->frame_start = 1; tick(); d->frame_start = 0;
+    for (int i = 0; i < 200000; i++) {
+      d->eng_busy = 0;
+      d->rd_ack = 0;
+      if (d->rd_req) { d->rd_data = (d->rd_addr < list.size()) ? list[d->rd_addr] : 0; d->rd_ack = 1; }
+      tick();
+      if (d->dbg_walk_frames) break;
+    }
+    auto rd = [&](uint32_t a) -> uint32_t { auto it = mem.find(a); return it == mem.end() ? 0xffffu : it->second; };
+    std::printf("test: geo_texture_data writes texture RAM (R222)\n");
+    ck("texture words written",        d->dbg_td_words, 4);
+    ck("polygon dwords still counted", d->dbg_pd_words, 1);
+    ck("texram[0xfffe]", rd(TEXRAM + 0xfffe), 0x1111);
+    ck("texram[0xffff]", rd(TEXRAM + 0xffff), 0x2222);
+    ck("texram[0x0000] (wrapped)", rd(TEXRAM + 0x0000), 0x3333);
+    ck("texram[0x0001] (wrapped)", rd(TEXRAM + 0x0001), 0x4444);
+    ck("no high half written", rd(TEXRAM + 0x0002), 0xffff);
+    ck("log RAM data went nowhere", rd(TEXRAM + 0x1000), 0xffff);
+    ck("polygon RAM dword after it", rd(0x1710000 + 0x80) | (rd(0x1710000 + 0x81) << 16), 0x12345678u);
   }
 
   // ---- geo_polygon_data ACTUALLY COPIES, and to the right polygon RAM

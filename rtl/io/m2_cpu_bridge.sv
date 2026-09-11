@@ -102,6 +102,18 @@ module m2_cpu_bridge #(
   // could see it. 128 KB will not fit in M10K here (~103 blocks against 40
   // free after the band buffers), so it lives in SDRAM.
   input  logic [AW:1] base_buffer,       // bufferram,     0x00900000
+  // THE 3D COLOUR DATA, MIRRORED INTO SDRAM (R222). The polygon's colour is
+  // palette entry 0x1000 + colorbase (10 bits) run through the 48 KB colour
+  // translation table, and the geometry engine can reach neither: the
+  // palette's second port is the tile pipeline's every pixel, and the
+  // translation table was kept only as the 96 entries the tiles read. So
+  // palette entries 0x1000-0x13ff (bytes 0x2000-0x27ff of T_PAL) are ALSO
+  // written to base_pal3d, and every T_XLAT write goes to base_xlat3d, both
+  // through the ordinary SDRAM write path (write-through, invalidate) -- the
+  // on-chip palette write and the 96-entry tap still happen beside them.
+  // Reads of both ranges come back from the mirror.
+  input  logic [AW:1] base_pal3d,        // 1 K words
+  input  logic [AW:1] base_xlat3d,       // 24 K words
 
   // SDRAM port. Sixteen bits wide, so a 32-bit access is TWO transactions --
   // the sequencer below issues the low half then the high half.
@@ -354,12 +366,15 @@ module m2_cpu_bridge #(
   // misses and refetches. Slower, coherent, and one variable against the
   // livelocked build.
   logic nocache;
+  logic pal_mirror, xlat_mirror;   // R222: an SDRAM write that also lands on chip
 
   always_comb begin
     tgt     = T_NONE;
     sd_word = '0;
     is_rom  = 1'b0;
     nocache = 1'b0;
+    pal_mirror  = 1'b0;
+    xlat_mirror = 1'b0;
     if (r_addr < 32'h0020_0000) begin                       // program ROM
       tgt = T_SDRAM; is_rom = 1'b1;
       sd_word = base_prog + AW'(r_addr[20:1]);
@@ -398,10 +413,14 @@ module m2_cpu_bridge #(
       sd_word = base_data + AW'(24'h800000) + AW'(r_addr[23:1]);
     end else if (r_addr >= 32'h0100_0000 && r_addr < 32'h0102_0000) begin
       tgt = T_TRAM;                                         // tile RAM
+    end else if (r_addr >= 32'h0180_2000 && r_addr < 32'h0180_2800) begin
+      tgt = T_SDRAM; pal_mirror = 1'b1;                     // R222: 3D palette, mirrored
+      sd_word = base_pal3d + AW'(r_addr[10:1]);
     end else if (r_addr >= 32'h0180_0000 && r_addr < 32'h0180_4000) begin
       tgt = T_PAL;
     end else if (r_addr >= 32'h0181_0000 && r_addr < 32'h0181_c000) begin
-      tgt = T_XLAT;
+      tgt = T_SDRAM; xlat_mirror = 1'b1;                    // R222: colorxlat, mirrored
+      sd_word = base_xlat3d + AW'(r_addr[15:1]);
     end else if (r_addr >= 32'h0080_0000 && r_addr < 32'h0100_0000) begin
       tgt = T_IO;                                           // geo, copro, video, irq
     end else if (r_addr >= 32'h0102_0000 && r_addr < 32'h0108_0000) begin
@@ -651,6 +670,10 @@ module m2_cpu_bridge #(
                 sd_req  <= 1'b1;
                 st      <= S_RDB;
               end else if (needs_rmw && !rmw_done) begin
+                // R222: the on-chip half of a mirrored write, once, here.
+                oc_pal_we   <= pal_mirror && half_be;
+                oc_xlat_din <= r_wdata[7:0];
+                oc_xlat_we  <= xlat_mirror && (r_addr[8:0] == 9'h080);
                 dc_inval <= 1'b1;
                 sd_addr  <= {sd_word[AW:3], 2'b00};
                 sd_we    <= 1'b0;
@@ -666,6 +689,12 @@ module m2_cpu_bridge #(
                 // starts. The DPRAM is T_IO and is never cached, which is what
                 // keeps the I/O board's side correct.
                 dc_inval <= 1'b1;
+                // R222: the on-chip half of a mirrored write -- the palette
+                // RAM's low word, or the tile layer's 96-entry tap -- unless
+                // the read-modify-write pass already did it.
+                oc_pal_we   <= r_we && !rmw_done && pal_mirror && half_be;
+                oc_xlat_din <= r_wdata[7:0];
+                oc_xlat_we  <= r_we && !rmw_done && xlat_mirror && (r_addr[8:0] == 9'h080);
                 sd_addr <= sd_word;
                 sd_we   <= r_we;
                 // THE HALF THAT BELONGS AT THIS WORD, NOT ALWAYS THE LOW ONE.
@@ -714,18 +743,10 @@ module m2_cpu_bridge #(
               if (r_we && (tgt == T_PAL))  dbg_pal_wr  <= dbg_pal_wr  + 32'd1;
               st         <= S_LO;
             end
-            T_XLAT: begin
-              oc_xlat_din <= r_wdata[7:0];
-              // ONLY THE 96 ENTRIES THAT ARE EVER READ. Every entry in this
-              // 48 KB region shares the low nine bits 0x080 exactly when it is
-              // one of them; the other 24,480 writes are real and go nowhere,
-              // which is the whole point of keeping 96 bytes instead of 48 KB.
-              // Without this gate the last write to any address in a 512-byte
-              // span overwrites the entry that span belongs to.
-              oc_xlat_we  <= r_we && (r_addr[8:0] == 9'h080);
-              ack_mem     <= 1'b1;
-              st          <= S_DONE;
-            end
+            // T_XLAT is decoded as a mirrored T_SDRAM write since R222; the
+            // tile layer's 96-entry tap (r_addr[8:0] == 0x080: every entry in
+            // the 48 KB region shares those bits exactly when it is one of the
+            // 96 the tiles read) is taken beside the SDRAM write above.
             // ONE CYCLE BETWEEN ASSERTING io_sel AND SAMPLING io_rdata.
             //
             // This used to do both on the same edge, which captures whatever
@@ -840,6 +861,7 @@ module m2_cpu_bridge #(
             st      <= S_DONE;
           end else begin
             half    <= 1'b1;
+            oc_pal_we <= r_we && pal_mirror && hi_be;      // R222: the palette RAM's high word
             sd_addr <= sd_word + AW'(1);
             sd_din  <= r_addr[1] ? 16'd0
                        : (rmw_done ? rmw_dat[31:16] : r_wdata[31:16]);

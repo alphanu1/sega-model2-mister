@@ -109,6 +109,7 @@ module m2_cpu_sdram_harness #(
     .base_prog(AW'(32'h0000000)), .base_data(AW'(32'h0020000)),
     .base_work(AW'(32'h1600000)), .base_board(AW'(32'h1680000)),
     .base_char(AW'(32'h1690000)),
+    .base_pal3d(AW'(32'h1730000)), .base_xlat3d(AW'(32'h1731000)),
 
     .sd_req(b_req), .sd_we(b_we), .sd_addr(b_addr), .sd_din(b_din), .sd_be(b_be),
     .sd_dout(p_dout[0]), .sd_ack(p_ack[0]),

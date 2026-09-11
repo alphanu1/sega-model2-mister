@@ -35,7 +35,7 @@ static Vm2_cpu_bridge *dut;
 // The far side: SDRAM as a sparse map of 16-bit words, plus tile RAM, palette
 // and the translation table as arrays.
 static std::map<uint32_t, uint16_t> sdram;
-static std::vector<uint16_t> tram(32768, 0), pal(4096, 0);
+static std::vector<uint16_t> tram(32768, 0), pal(8192, 0);   // the palette is 8K entries, u_pal AW=13
 static std::vector<uint8_t>  xlat(96, 0);
 static std::map<uint32_t, uint32_t> io_regs;
 static uint32_t io_rdata_q = 0;   // the registered peripheral read, see tick()
@@ -93,9 +93,9 @@ static void step() {
     }
     // On-chip arrays: REGISTERED reads, as M10K is.
     dut->oc_tram_q = tram[dut->oc_addr & 0x7fff];
-    dut->oc_pal_q  = pal[dut->oc_addr & 0xfff];
+    dut->oc_pal_q  = pal[dut->oc_addr & 0x1fff];
     if (dut->oc_tram_we) tram[dut->oc_addr & 0x7fff] = dut->oc_din;
-    if (dut->oc_pal_we)  pal[dut->oc_addr & 0xfff]   = dut->oc_din;
+    if (dut->oc_pal_we)  pal[dut->oc_addr & 0x1fff]  = dut->oc_din;
     if (dut->oc_xlat_we) xlat[dut->oc_xlat_addr % 96] = dut->oc_xlat_din;
     if (dut->io_sel) {
       if (dut->io_we) io_regs[dut->io_addr] = dut->io_wdata;
@@ -157,6 +157,7 @@ int main(int argc, char **argv) {
   dut->bus_req = 0; dut->sd_ack = 0; dut->io_rdata = 0;
   dut->base_prog = 0x00000; dut->base_data = 0x40000;
   dut->base_work = 0x20000; dut->base_board = 0x30000; dut->base_char = 0x38000; dut->base_buffer = 0x40000;
+  dut->base_pal3d = 0x50000; dut->base_xlat3d = 0x51000;
   for (int i = 0; i < 200; ++i) step();
   dut->rst_n_cpu = 1; dut->rst_n_mem = 1;
   // LONG ENOUGH FOR THE CACHE'S RESET SWEEP, WHICH IS NOT A FIXED NUMBER.
@@ -340,6 +341,40 @@ int main(int argc, char **argv) {
     const uint8_t before = xlat[2];
     access(true, XL + 0x0080u + 2u * 512u + 4u, 0x00000011u, 0xf, nullptr);
     expect("xlat ignores a non-entry write", xlat[2], before);
+
+    // R222: EVERY xlat write also lands in the SDRAM mirror at base_xlat3d +
+    // word offset, entries and non-entries alike, and reads come back from it.
+    expect("xlat mirror holds entry 2's word", sdram[0x51000u + ((0x0080u + 2u * 512u) >> 1)], 0x00c3u);
+    expect("xlat mirror holds the non-entry", sdram[0x51000u + ((0x0080u + 2u * 512u + 4u) >> 1)], 0x0011u);
+    uint32_t v = 0;
+    access(false, XL + 0x0080u + 2u * 512u, 0, 0xf, &v);
+    expect("xlat reads back through the mirror", v & 0xffffu, 0x00c3u);
+    // A 16-bit write into the upper half of a dword lands at the odd word.
+    access(true, XL + 0x1002u, 0x12340000u, 0xc, nullptr);
+    expect("xlat mirror, upper-half halfword store", sdram[0x51000u + (0x1002u >> 1)], 0x1234u);
+  }
+
+  // ---- R222: palette entries 0x1000-0x13ff land on chip AND in the mirror ----
+  {
+    const uint32_t PB = 0x01800000u;
+    access(true, PB + 0x2000u, 0x7fff03e0u, 0xf, nullptr);     // entries 0x1000, 0x1001
+    expect("3D palette entry 0x1000 on chip", pal[0x1000], 0x03e0u);
+    expect("3D palette entry 0x1001 on chip", pal[0x1001], 0x7fffu);
+    expect("3D palette entry 0x1000 mirrored", sdram[0x50000u + 0x000u], 0x03e0u);
+    expect("3D palette entry 0x1001 mirrored", sdram[0x50000u + 0x001u], 0x7fffu);
+    // A halfword store: the i960's LSU drives the halfword on BOTH halves of
+    // the bus ({2{st_word[15:0]}}) with be = c, and the on-chip write takes the
+    // low half, the SDRAM path the high. Drive it as the CPU does.
+    access(true, PB + 0x27feu, 0x001f001fu, 0xc, nullptr);     // halfword, last entry 0x13ff
+    expect("3D palette entry 0x13ff on chip", pal[0x13ff], 0x001fu);
+    expect("3D palette entry 0x13ff mirrored", sdram[0x50000u + 0x3ffu], 0x001fu);
+    uint32_t v = 0;
+    access(false, PB + 0x2000u, 0, 0xf, &v);
+    expect("3D palette reads back", v, 0x7fff03e0u);
+    // Below the range the palette is on chip only, as before.
+    access(true, PB + 0x1ffcu, 0x11112222u, 0xf, nullptr);
+    expect("entry 0xffe on chip", pal[0xffe], 0x2222u);
+    expect("entry 0xffe NOT mirrored", sdram.count(0x50000u + 0x3ffu + 1u) ? 1u : 0u, 0u);
   }
 
   // ---- I/O reaches the register file and comes back ----

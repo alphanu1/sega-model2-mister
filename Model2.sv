@@ -1377,6 +1377,11 @@ localparam logic [SDR_AW:1] GAME_BUFFER = SDR_AW'(32'h16f0000);   // 128 KB, 0x0
 // itself, opcode 0x05 geo_polygon_data, not by the i960.
 localparam logic [SDR_AW:1] GAME_PRAM0  = SDR_AW'(32'h1710000);   // 128 KB, slow
 localparam logic [SDR_AW:1] GAME_PRAM1  = SDR_AW'(32'h1720000);   // 128 KB, fast
+// R222: the 3D colour data the bridge mirrors and the walker's texture RAM.
+// Free space: PRAM1 ends at word 0x1730000 and ST_BASE is 0x1F00000.
+localparam logic [SDR_AW:1] GAME_PAL3D  = SDR_AW'(32'h1730000);   // 2 KB, palette 0x1000-0x13ff
+localparam logic [SDR_AW:1] GAME_XLAT3D = SDR_AW'(32'h1731000);   // 48 KB, colorxlat
+localparam logic [SDR_AW:1] GAME_TEXRAM = SDR_AW'(32'h1740000);   // 128 KB, texture RAM
 
 // WHERE CHARACTER RAM LIVES, AS ONE SIGNAL, because two things that must agree
 // should not be two constants (study R51).
@@ -1860,6 +1865,7 @@ m2_cpu_bridge #(.BUFFERRAM(1'b1), .BUFFERRAM_WRONLY(1'b0)
 	.clk_mem(clk_sys), .rst_n_mem(cpu_rst_n),
 	.base_prog(GAME_PROG), .base_data(GAME_DATA), .base_work(GAME_WORK),
 	.base_board(GAME_BOARD), .base_char(char_base), .base_buffer(GAME_BUFFER),
+	.base_pal3d(GAME_PAL3D), .base_xlat3d(GAME_XLAT3D),
 
 	.sd_req(cpu_sd_req), .sd_we(cpu_sd_we), .sd_addr(cpu_sd_addr),
 	.sd_din(cpu_sd_din), .sd_be(cpu_sd_be),
@@ -2486,6 +2492,7 @@ m2_geo #(.AW(SDR_AW), .DEPTH(128)) u_geo (
 	// polygon data at word 0 of SDRAM -- GAME_PROG, the i960's program ROM.
 	// lint_top passed it because PINMISSING was not in its filter.
 	.base_pram0(GAME_PRAM0), .base_pram1(GAME_PRAM1),
+	.base_texram(GAME_TEXRAM), .dbg_td_words(),
 	.dbg_pd_words(geo_pd_words), .dbg_pd_cmds(geo_pd_cmds),
 	.foc_x(geo_foc_x), .foc_y(geo_foc_y),
 	// The light vector, for the luminance stage. Captured but not yet consumed:
