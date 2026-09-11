@@ -146,15 +146,20 @@ module m2_quad_store #(
   // One vertex per memory gives each a single write port and a single read port,
   // which is a Simple Dual Port M10K and infers cleanly. the project rules' warning that
   // "block RAM inference is silent when it fails" cost 28,816 ALM once before.
-  (* ramstyle = "M10K" *) logic [2*XW-1:0] vtx0 [NBANK*NQ];
-  (* ramstyle = "M10K" *) logic [2*XW-1:0] vtx1 [NBANK*NQ];
-  (* ramstyle = "M10K" *) logic [2*XW-1:0] vtx2 [NBANK*NQ];
-  (* ramstyle = "M10K" *) logic [2*XW-1:0] vtx3 [NBANK*NQ];
+  // PER-BANK ARRAYS, NOT ONE ARRAY OF DOUBLE DEPTH. An M10K holds 2048x5 or
+  // 4096x2: a 4096-deep array of W bits costs ceil(W/2) blocks against
+  // 2 x ceil(W/5) for two 2048-deep ones -- 13 against 12 for a vertex
+  // word, 15 against 12 for the attribute word. build/dbuf8 ran out of
+  // blocks with the merged arrays; the bank selects between two.
+  (* ramstyle = "M10K" *) logic [2*XW-1:0] vtx0_0 [NQ], vtx0_1 [NQ];
+  (* ramstyle = "M10K" *) logic [2*XW-1:0] vtx1_0 [NQ], vtx1_1 [NQ];
+  (* ramstyle = "M10K" *) logic [2*XW-1:0] vtx2_0 [NQ], vtx2_1 [NQ];
+  (* ramstyle = "M10K" *) logic [2*XW-1:0] vtx3_0 [NQ], vtx3_1 [NQ];
   // A BAND RANGE, NOT A MASK (R213): {hi, lo} in BW bits each. With 48 bands
   // a mask was 48 bits an entry; a range is 12, and the replay test is two
   // compares. A quad off the screen is stored as lo > hi and never hits.
   localparam int unsigned AT_W = 2*BW + 1 + CW;   // {hi, lo, moire, col565}
-  (* ramstyle = "M10K" *) logic [AT_W-1:0] att [NBANK*NQ];
+  (* ramstyle = "M10K" *) logic [AT_W-1:0] att_0 [NQ], att_1 [NQ];
   (* ramstyle = "M10K" *) logic [KW-1:0] key [NQ];
 
   // Saturate a screen coordinate to XW bits; sign-extend it back on the way out.
@@ -237,12 +242,19 @@ module m2_quad_store #(
       count[wbank] <= '0; wi <= '0; dbg_dropped <= '0;
     end else if (in_valid) begin
       if (has_room) begin
-        vtx0[{wbank, wcount[IW-1:0]}] <= {sat(in_y0), sat(in_x0)};
-        vtx1[{wbank, wcount[IW-1:0]}] <= {sat(in_y1), sat(in_x1)};
-        vtx2[{wbank, wcount[IW-1:0]}] <= {sat(in_y2), sat(in_x2)};
-        vtx3[{wbank, wcount[IW-1:0]}] <= {sat(in_y3), sat(in_x3)};
-        att[{wbank, wcount[IW-1:0]}] <= {band_range(in_y0, in_y1, in_y2, in_y3),
-                               in_moire, c565(in_col)};
+        if (wbank) begin
+          vtx0_1[wcount[IW-1:0]] <= {sat(in_y0), sat(in_x0)};
+          vtx1_1[wcount[IW-1:0]] <= {sat(in_y1), sat(in_x1)};
+          vtx2_1[wcount[IW-1:0]] <= {sat(in_y2), sat(in_x2)};
+          vtx3_1[wcount[IW-1:0]] <= {sat(in_y3), sat(in_x3)};
+          att_1[wcount[IW-1:0]]  <= {band_range(in_y0, in_y1, in_y2, in_y3), in_moire, c565(in_col)};
+        end else begin
+          vtx0_0[wcount[IW-1:0]] <= {sat(in_y0), sat(in_x0)};
+          vtx1_0[wcount[IW-1:0]] <= {sat(in_y1), sat(in_x1)};
+          vtx2_0[wcount[IW-1:0]] <= {sat(in_y2), sat(in_x2)};
+          vtx3_0[wcount[IW-1:0]] <= {sat(in_y3), sat(in_x3)};
+          att_0[wcount[IW-1:0]]  <= {band_range(in_y0, in_y1, in_y2, in_y3), in_moire, c565(in_col)};
+        end
         key[wcount[IW-1:0]] <= sort_key(in_z) >> (32 - KW);
         count[wbank] <= wcount + 1'b1;
       end else if (dbg_dropped != 16'hffff) begin
@@ -479,7 +491,7 @@ module m2_quad_store #(
     end else begin
       if (adv) begin
         ord_idx <= rbank ? idx_a1[pi[IW-1:0]] : idx_a0[pi[IW-1:0]];
-        att_rd  <= att[{rbank, ord_idx}];
+        att_rd  <= rbank ? att_1[ord_idx] : att_0[ord_idx];
         q2      <= ord_idx;
         v1      <= v0;
         v2      <= v1;
@@ -522,10 +534,10 @@ module m2_quad_store #(
         P_OUT: begin
           // ONE READ PER ARRAY (see the note above): the slices are taken
           // from the registered word, not from two reads of the array.
-          v0_r <= vtx0[{rbank, q}];
-          v1_r <= vtx1[{rbank, q}];
-          v2_r <= vtx2[{rbank, q}];
-          v3_r <= vtx3[{rbank, q}];
+          v0_r <= rbank ? vtx0_1[q] : vtx0_0[q];
+          v1_r <= rbank ? vtx1_1[q] : vtx1_0[q];
+          v2_r <= rbank ? vtx2_1[q] : vtx2_0[q];
+          v3_r <= rbank ? vtx3_1[q] : vtx3_0[q];
           out_valid <= 1'b1;
           if (out_valid && out_ready) begin
             out_valid <= 1'b0;
