@@ -12394,3 +12394,16 @@ culled polygon still costs its transform; what halves is everything
 downstream -- the store, the sort, every band's replay. With R216's
 rejection on top, the board's ~5,000-quad frames should land under the
 2,048 the store holds. `build/dbuf12` = dbuf11 + R219.
+
+*dbuf11 (16:20): the FITTER CRASHED on all four seeds* -- synthesis fine,
+then "Fatal Error: Segment Violation at (nil)" (s13, s15) or a stack
+trace ending "End-trace" (s11, s14) at the fitter's preparation step,
+right after the I/O packing warnings. The same signature the project
+file records for the area-mode experiment. dbuf10 fit; dbuf11 adds only
+R217 (m2_geometry's projected-vertex cache: eight 96-bit comparators in
+an always_comb with nested loops) and R218 (m2_geo_clip's pixel and flag
+arrays through its stack, 2-D unpacked arrays of signed 16-bit). One of
+those two netlist shapes trips Quartus 17.0's fitter. Bisected in
+parallel from two worktrees, each with one commit reverted, two seeds
+each: `build/bis_noR218` and `build/bis_noR217`. dbuf12 was stopped; it
+shared the netlist.
