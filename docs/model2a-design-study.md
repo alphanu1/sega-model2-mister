@@ -13125,3 +13125,19 @@ bits and a read above 0x100000 dwords aliases onto the loaded half -- the
 same shape as the 19-bit fault the comment on that line records. The bench
 now counts data-ROM reads by range over a whole run to say whether the game
 ever goes there.
+
+*R232, the third suspect cleared (23:20):* over a whole run the coprocessor
+issued 11,813 data-ROM reads and NONE at or above dword 0x100000; the
+highest was 0x01e23b, inside the loaded 4 MB by a wide margin. The 20-bit
+address does not alias anything the game touches. So sincos, isqrt, the
+banked data window and the ROM range all match the reference, and the
+continuous crash animation is not explained by anything in the
+coprocessor's memory path that the bench can see. What remains is what it
+COMPUTES: the next measurement is the coprocessor's FIFO exchange
+(`M2_COPRO_TRACE`) against MAME's over the same frames, looking for the
+first result that differs -- the method that found R212.
+
+*R230, not all of them (23:15):* the board still shows a few wedges coming
+off the CARS with the strip cache off. The desk sample that read zero was
+4,096 quads at one moment; a 65,536-quad capture over a later stretch is
+running to find them at the desk before anything is changed.
