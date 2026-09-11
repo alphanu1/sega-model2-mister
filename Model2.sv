@@ -512,6 +512,11 @@ wire         eng_mem_req;
 wire [23:0]  eng_mem_addr;
 logic        eng_mem_req_r, eng_mem_ack_r;
 logic        p4_ack_d;          // R206: acknowledge edge, for ownership
+logic [31:0] eo_first_data;     // the engine's first read of the current object
+logic [23:0] eo_first_idx;
+logic  [7:0] eo_reads;          // reads the previous object took
+logic  [7:0] eo_cnt;
+logic        eo_armed, eo_busy_d;
 logic [23:0] eng_mem_idx_r;
 logic [31:0] eng_mem_data_r;
 logic [SDR_AW:1] eng_base_r;
@@ -2852,6 +2857,15 @@ always_ff @(posedge clk_sys) begin
 	eng_base_r      <= eng_base;
 	eng_mem_ack_r   <= p_ack[4] & ~p4_ack_d & eng_mem_req_r;
 	eng_mem_data_r  <= p_dout[4][31:0];
+	// Per object: arm on the engine going busy, latch the first ack's data and
+	// index, count acks, publish the count when the object finishes.
+	eo_busy_d <= eng_busy;
+	if (eng_busy && !eo_busy_d) begin eo_armed <= 1'b1; eo_cnt <= 8'd0; end
+	if (eng_mem_ack_r) begin
+		if (eo_armed) begin eo_first_data <= eng_mem_data_r; eo_first_idx <= eng_mem_idx_r; eo_armed <= 1'b0; end
+		if (!(&eo_cnt)) eo_cnt <= eo_cnt + 8'd1;
+	end
+	if (!eng_busy && eo_busy_d) eo_reads <= eo_cnt;
 	if (geo_rd_req_r & eng_mem_req_r) dbg_p4_clash <= dbg_p4_clash + 16'd1;
 end
 
@@ -3801,7 +3815,11 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// how many times the walker has loaded it.
 	// ENTRY 13's SIZE FIELD (0x504E08) AS THE WALKER'S `ld 8(g13)` AT 0x1880
 	// RETURNS IT. The reference holds 768 (0x300).
-	.b_addr({geo_polys, geo_nonfinite}),
+	// build/p4b s17 (R202+R203+R205+R206): objects still finish with polys 0,
+	// quads 0. So THE ENGINE'S FIRST READ OF EACH OBJECT, as the board's port
+	// 4 delivers it: its data (the attribute word; bits [1:0] clear ends the
+	// object) and, below, its index with the object's base select.
+	.b_addr(eo_first_data),
 	// clip_dropped read 0 on hardware and the refusal count is the number that
 	// now moves, so it takes that byte. Between them: accepted, emitted, refused
 	// before the arithmetic, and reaching the rasterizer.
@@ -3861,7 +3879,7 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// loaded from 0x501260 (the reference holds 0x00510F00, entry 139).
 	// AND WHO LAST WROTE THAT WORD: the writer's IP (low 16) and the data
 	// (low 16), any byte of 0x504E08-0x504E0B. Only init should ever write it.
-	.b_data({geo_clip_out, r3d_quads}),
+	.b_data({geo_obj_oba_r[24:23], eo_first_idx[21:0], eo_reads}),
 	.a_tag(8'h43), .b_tag(8'h48),          // 'C' copro in_pushed:out_pushed | TGP retires:pc
 	                                       // 'H' out_popped:hscr2 | io_addr:flags
 	                                       // 'H' scroll h:v for layers 0,1 | layers 2,3 -- low bytes

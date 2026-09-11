@@ -11597,3 +11597,17 @@ request that is up, and neither owner presents a request while an
 acknowledge is still up (`p4_ack_d`). Not simulable here -- the boot harness
 serves the engine from C++ with its own acknowledge -- so it goes straight to
 the board with the polygon-path probes still on the wire.
+
+*R206 did not change the board's numbers.* `build/p4b` s17 (all four fixes,
+setup -0.176, hold -0.045), 02:03: objects finish, polygons 0, nonfinite 0,
+clipped 0, quads 0 -- identical to `build/tgp` s11 before it. The fix stays
+(the hazard it closes is real by construction) but it was not what stops the
+engine, so the mechanism described above is not confirmed on the board and
+is recorded as unconfirmed. What has still never been measured is the
+engine's own read stream on the board. The bench shows an object's stream
+begins with two points, six words, before its first attribute word
+(`engrd 0..6`: 00000000 3de147ae 401e147b bf266666 3de147ae 4017ae14 then
+attr 989c1501), so an object that ends at its first attribute check has
+taken seven reads. `build/eo` (four seeds) latches the engine's first read
+per object -- data and index, with the object's base select -- and the read
+count of the previous object.

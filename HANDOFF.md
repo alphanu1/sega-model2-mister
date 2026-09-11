@@ -173,6 +173,12 @@ WALKER's held port-4 acknowledge with the walker's data (no ownership on
 completes). Fixed: edge-qualified acks, no request presented while an ack is
 up. `build/p4` (four seeds) is the build with all four fixes.
 
+**02:05: R206's fix did not move the board** -- `build/p4b` s17 with all
+four fixes: polys 0, quads 0, same as before. The fix stays (the hazard is
+real) but is unconfirmed as the cause. `build/eo` (four seeds) probes the
+engine's first read per object (data, index, base select) and reads per
+object; seven reads means it ends at its first attribute word.
+
 **Tools fixed on the way:** `mame_i960_frame_trace.lua` never read `M2_FRAME`;
 `rom_csum.py`'s `build_image` prepended the index-3 I/O ROM (64 KB) to the
 image, so `M2_BOOT_IMAGE` trapped the real-memory bench on instruction 1; the
