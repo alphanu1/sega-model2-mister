@@ -12089,3 +12089,11 @@ at -0.224. Quartus's default OPTIMIZE_HOLD_TIMING covers I/O paths only;
 set to "All Paths" so the fitter pads internal hold misses. Not deployed:
 a hold miss on the CPU's read data is a corrupted bit at some temperature,
 not a margin. `build/dbuf5` carries the setting.
+
+*dbuf5, 11:40.* Four 8-row buffers ran the device out of M10K blocks again
+("needs more than 553", all seeds) where dbuf4's three had fit: the fourth
+buffer's ~7 blocks were more than the margin dbuf4 left. Back to three
+(the settle delay stays); `build/dbuf6` = dbuf4 + the settle + the
+all-paths hold fix. The fourth buffer returns when the quad store shares
+its sort key and one scratch index array between the two banks (~8
+blocks), which only the collecting bank ever uses.

@@ -1,6 +1,6 @@
 # Handoff
 
-**Updated:** 2026-09-11 11:25. Study entries R176-R213. R172 WITHDRAWN, R185
+**Updated:** 2026-09-11 11:45. Study entries R176-R213. R172 WITHDRAWN, R185
 partly RETRACTED, R189 corrected by R191, R196's central claim WITHDRAWN the
 same day, R206 WITHDRAWN, R207 closed by R208.
 
@@ -43,7 +43,12 @@ its burst buffers). Now 8-row bands as Model 1 settled on (band buffers
 halved) with a band RANGE in the store instead of a 48-bit mask, plus
 `dbg_hold` (frames per list on display) and `dbg_missed` (scanlines with no
 band ready) for the user's "still flickering / slower" on dbuf2.
-`build/dbuf4` = R212 + R213 + narrowed 2,048 banks. Study R213.**
+`build/dbuf4` = R212 + R213 + narrowed 2,048 banks: FITS (2,048 banks, 8-row
+bands, 77% block memory) but both bitstreams miss hold by -0.3 ns on one path,
+bridge r_rdata[15] -> bus_rdata[15] into the CPU clock; not deployed. Quartus
+pads internal hold only with OPTIMIZE_HOLD_TIMING "ALL PATHS", now set.
+`build/dbuf5` (a fourth band buffer) ran out of M10K blocks; back to three.
+`build/dbuf6` = dbuf4 + buffer-release settle + hold fix, building. Study R213.**
 
 **R212: THE JUMPING BACKGROUND IS THE TGP's ARCTANGENT -- MODEL 1's UNIT ON A
 MODEL 2 BOARD. FIXED AT THE DESK, BUILDING.** The horizon row of the title's
