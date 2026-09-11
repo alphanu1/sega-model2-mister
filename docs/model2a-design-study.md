@@ -12599,3 +12599,17 @@ at CE every clock, where the stepper's slot is the one just written).
 Another ~700 registers and 25 bits of 28:1 mux a chip. What is left in
 registers per chip: s_active/s_fmt12/s_release/key_wait/desc_pending/
 pos_zero (6 x 28), sample (9 x 28), and the descriptor buffer.
+
+*R221, dbuf16 (16:25): 97% -> 83%.* dbuf14b + the three MLAB moves (PCM
+lines, MultiPCM stepping state and register fields, clipper stack):
+34,614-34,645 ALM (83%) against 40,555 (97%), M10K 553/553 as before,
+three of four seeds fitted (s13 died in the fitter's own DYN sub-system,
+the crash the density note predicted). s14: setup +0.556 ON EVERY CLOCK
+INCLUDING THE HDMI PLL, hold +0.186 -- the first build of the project to
+meet timing outright. Per module, dbuf14b -> dbuf16 (self ALM): clipper
+2,310 -> 1,049; each MultiPCM 2,208 -> 826; each PCM fetch 1,368 -> under
+280. Where the logic is now: i960 8,049 (2,819 own; regs 1,603; fpmisc
+864; fpadd 664; alu 473), the framework's ascal 1,814, the quad store
+1,338 (1,669 registers -- next), fx68k's excUnit 1,117, clipper 1,049,
+MultiPCMs 1,640, raster fill 732, tilemap 662, sdram 652, fp_pool 651,
+TGP alu 624. Deployed s14 for a 240 s capture.

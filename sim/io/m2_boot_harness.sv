@@ -183,6 +183,7 @@ module m2_boot_harness #(
   output logic [15:0] geo_obj_pushes,
   output logic [15:0] geo_mtx_n, geo_foc_n,
   output logic [31:0] geo_oba_last, geo_obc_last,
+  output logic [31:0] geo_tha_last, geo_tpa_last,   // the last object's texture addresses
   output logic [15:0] geo_frames, geo_objs, geo_ops, geo_pdcmds, geo_pdwords,
   output logic  [7:0] geo_unknown,
   output logic  [3:0] geo_state,
@@ -803,7 +804,7 @@ module m2_boot_harness #(
     .foc_x(geo_foc_x), .foc_y(geo_foc_y),
     .lit_x(), .lit_y(), .lit_z(), .dbg_lit_n(),
     .tp_we(), .tp_idx(), .tp_diffuse(), .tp_ambient(), .dbg_tp_n(),
-    .obj_tpa(), .obj_tha(), .obj_oba(geo_obj_oba), .obj_obc(geo_obj_obc),
+    .obj_tpa(geo_obj_tpa), .obj_tha(geo_obj_tha), .obj_oba(geo_obj_oba), .obj_obc(geo_obj_obc),
     .obj_valid(geo_obj_valid),
     .dbg_mtx_n(geo_mtx_n), .dbg_foc_n(geo_foc_n),
     .dbg_pd_words(geo_pdwords), .dbg_pd_cmds(geo_pdcmds),
@@ -816,9 +817,10 @@ module m2_boot_harness #(
   // many polygons it claims. A degenerate quad at the projection centre means
   // every transformed point was (0,0), which is what a ZERO MATRIX gives.
   always_ff @(posedge clk_mem or negedge rst_n) begin
-    if (!rst_n) begin geo_oba_last <= 32'd0; geo_obc_last <= 32'd0; end
+    if (!rst_n) begin geo_oba_last <= 32'd0; geo_obc_last <= 32'd0; geo_tha_last <= 32'd0; geo_tpa_last <= 32'd0; end
     else if (geo_obj_valid) begin
       geo_oba_last <= geo_obj_oba; geo_obc_last <= geo_obj_obc;
+      geo_tha_last <= geo_obj_tha; geo_tpa_last <= geo_obj_tpa;
     end
   end
 
@@ -826,6 +828,7 @@ module m2_boot_harness #(
   wire        geo_mat_we, geo_obj_valid, geo_eng_busy;
   wire [3:0]  geo_mat_idx;
   wire [31:0] geo_mat_data, geo_foc_x, geo_foc_y, geo_obj_oba, geo_obj_obc;
+  wire [31:0] geo_obj_tha, geo_obj_tpa;
 
   m2_geometry u_geometry (
     .clk(clk_mem), .rst_n(rst_n),

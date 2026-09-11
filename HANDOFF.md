@@ -1,6 +1,6 @@
 # Handoff
 
-**Updated:** 2026-09-11 21:35. Study entries R176-R221.
+**Updated:** 2026-09-11 16:30 (machine clock). Study entries R176-R221.
 
 ## WHERE 2026-09-11 LEFT IT
 
@@ -11,9 +11,9 @@ built), behind the UI text, over a steadily scrolling background, at the
 game's own 30 Hz list rate, with the store dropping nothing. `build/dbuf15`
 (PCM lines to M10K + MLAB clipper stack) REFUSED TO FIT: 556 M10K blocks of
 553 -- the chip has no blocks left, only bits (77%). Small wide arrays go
-to MLABs. `build/dbuf16` (PCM lines and the MultiPCM stepping state in
-MLABs, clipper stack MLAB) is in the fitter; ALM was 96% before dbuf15's
-refusal, the first build to come down.
+to MLABs. **`build/dbuf16` (PCM lines, MultiPCM state and register fields,
+clipper stack all in MLABs) FITS AT 83% -- 34,614 ALM against 40,555 -- and
+s14 MEETS TIMING ON EVERY CLOCK (setup +0.556, hold +0.186).** Deployed s14.
 
 **Fixed today, each with a study entry and a board or bench proof:**
 - R208 walker/engine took one held acknowledge many times (stream one word ahead)
@@ -29,7 +29,7 @@ refusal, the first build to come down.
 - R221 PCM fetch lines to MLAB (WAV-identical), clipper stack to MLAB (2,003 checks), MultiPCM per-voice position, descriptor and read register fields to MLABs (lockstep differential bench vs the flip-flop module, 0 mismatches, catches each mechanism removed) -- in dbuf16
 
 **Open, in order:**
-1. ALM: 97% fitted; the fitter charges an ALM per register above ~92% and crashes on half its seeds. dbuf16 measures three moves (~10,000 registers). Next: the spent probes in Model2.sv, then whatever dbuf16's per-module table says is next largest. M10K: 553/553, nothing more goes there. Target < 85% before lighting.
+1. ALM: 83% fitted (dbuf16). The probes that reach no output cost nothing (synthesis sweeps them). Next by dbuf16's own table: the quad store's 1,669 registers, then the i960 (8,049 total). M10K: 553/553, nothing more goes there. Lighting (R222 design in the study) can start.
 2. Lighting: light vector (cmd 0x0a) and texture-parameter table (cmd 0x0d) captured by the walker; dot(normal, light) in the engine; luma -> colour-translation lookup at q_col. Small; needs the ALM room.
 3. Throughput: quad projector still ~14% of geometry time; the transform ~14%; `dbg_hold` reaches 3 frames in stretches, partly the game's own list timing (separate the two).
 4. Vertical scroll: fixed by R212. R200's band-13 cut: superseded by 8-row bands? -- re-test the 3D test bars.

@@ -43,6 +43,37 @@ static Vm2_boot_harness *d;
 // 25-bit word address space, 64 MB. Unwritten reads 0xFFFF, per the standing
 // rule in docs/mister-integration.md — never zero.
 static std::vector<uint16_t> mem;
+// R222 PROBE: where the texture headers live and what they say. On every new
+// object the walker starts, read its header from the texture ROM image (word
+// 0x0720000 = byte 0x0e40000 in the MRA stream; tha is a 16-bit-word index
+// masked to 4M words) and count: RAM-resident headers (bit 23, which this
+// bench cannot read), the renderer bits (texheader[0] >> 13), and the
+// distinct colorbase values (texheader[3] >> 6 & 0x3ff).
+#include <map>
+#include <set>
+static uint32_t g_th_objs = 0, g_th_ram = 0, g_th_rend[4] = {0,0,0,0}, g_th_checker = 0;
+static std::set<uint32_t> g_th_colorbase;
+static std::map<uint32_t,uint32_t> g_th_colorbase_n;
+static uint32_t g_th_last_objs = 0;
+static void th_probe(uint32_t tha) {
+  ++g_th_objs;
+  if (g_th_objs <= 6 || (g_th_objs % 400) == 0) std::printf("    TEXHDR sample: object %u tha %08x\n", g_th_objs, tha);
+  if (tha & 0x800000u) { ++g_th_ram; return; }
+  const uint32_t a = 0x0720000u + (tha & 0x3fffffu);
+  if (a + 3 >= mem.size()) return;
+  const uint16_t h0 = mem[a], h3 = mem[a + 3];
+  if (g_th_objs <= 6 || (g_th_objs % 400) == 0) std::printf("      header %04x %04x %04x %04x\n", mem[a], mem[a+1], mem[a+2], mem[a+3]);
+  ++g_th_rend[(h0 >> 13) & 3];
+  if (h0 & 0x8000) ++g_th_checker;
+  const uint32_t cb = (h3 >> 6) & 0x3ff;
+  g_th_colorbase.insert(cb); ++g_th_colorbase_n[cb];
+}
+static void th_report() {
+  std::printf("    TEXHDR objects %u: RAM-resident %u, renderer flat %u translucent %u textured %u tex+trans %u, checker %u, distinct colorbase %zu\n",
+              g_th_objs, g_th_ram, g_th_rend[0], g_th_rend[1], g_th_rend[2], g_th_rend[3], g_th_checker, g_th_colorbase.size());
+  int n = 0;
+  for (auto &kv : g_th_colorbase_n) { if (n++ < 24) std::printf("      colorbase %03x x%u\n", kv.first, kv.second); }
+}
 static std::set<uint32_t> g_geo_writes;      // word addresses geo_polygon_data wrote
 static std::vector<std::array<int,8>> g_quads;   // screen quads the pipeline emitted
 // base_buffer, as passed to m2_cpu_bridge -- the SAME array the CPU reaches
@@ -287,6 +318,29 @@ int main(int argc, char **argv) {
       }
     }
     std::printf("  polygon ROM: %d/6 files at GAME_POLY word 0xb20000", pg_ok);
+    // THE TEXTURE ROM (R222): 8 MB at MRA byte 0x0e40000, word 0x0720000, the
+    // same 32-bit interleave of two 16-bit ROMs (ROM_LOAD32_WORD). Read for the
+    // texture headers -- four 16-bit words per polygon -- and for nothing else
+    // yet. Loaded here because the header probe read 0xFFFF everywhere and
+    // reported every object as translucent, textured and colorbase 0x3ff.
+    {
+      struct { const char *n; uint32_t off, len; } tx[] = {
+        {"mpr-16522.25", 0x000000, 0x200000}, {"mpr-16521.24", 0x000002, 0x200000},
+        {"mpr-16517.27", 0x400000, 0x200000}, {"mpr-16516.26", 0x400002, 0x200000},
+      };
+      int tx_ok = 0;
+      for (auto &e : tx) {
+        std::vector<uint8_t> f;
+        if (!load_file(dir + e.n, f)) continue;
+        ++tx_ok;
+        for (uint32_t w = 0; w * 2 < e.len && w * 2 < f.size(); ++w) {
+          const uint32_t byte = (e.off & ~3u) + w * 4 + (e.off & 2u);
+          const size_t   word = 0x720000 + (byte >> 1);
+          if (word < mem.size()) mem[word] = uint16_t(f[w * 2] | (f[w * 2 + 1] << 8));
+        }
+      }
+      std::printf("\n  texture ROM: %d/4 files at word 0x720000, dword 0 = %04x%04x", tx_ok, mem[0x720001], mem[0x720000]);
+    }
     if (pg_ok == 6) {
       // The first dword, interleaved as the region is: low word from ic16,
       // high word from ic20. Non-zero is the whole point -- an unloaded region
@@ -586,6 +640,7 @@ int main(int argc, char **argv) {
       //
       //   Model2.sv: base = oba[24] ? GAME_PRAM1 : oba[23] ? GAME_POLY : GAME_PRAM0
       //              idx  = ROM ? addr[21:0] : addr[14:0]
+      if (uint32_t(d->geo_objs) != g_th_last_objs) { g_th_last_objs = uint32_t(d->geo_objs); th_probe(uint32_t(d->geo_tha_last)); }
       const uint32_t oba = uint32_t(d->geo_oba_last);
       const uint32_t idx = uint32_t(d->eng_mem_addr);
       uint32_t base, off;
@@ -2729,6 +2784,7 @@ int main(int argc, char **argv) {
     // screen coordinates here are the only picture of the 3D the bench has.
     if (g_eng_gaps && !g_eng_gaps->empty()) {
       std::vector<int> g = *g_eng_gaps; std::sort(g.begin(), g.end());
+    th_report();
       std::printf("    ENGINE COST from M2_POLY_FROM: busy ticks %ld over %ld objects (%.0f/object), %ld quads (%.1f busy ticks/quad); quad-to-quad gap median %d, p90 %d ticks\n",
                   g_eng_busy_ticks, g_eng_objs, g_eng_objs ? (double)g_eng_busy_ticks / g_eng_objs : 0.0, g_eng_quads,
                   g_eng_quads ? (double)g_eng_busy_ticks / g_eng_quads : 0.0, g[g.size()/2], g[g.size()*9/10]);
