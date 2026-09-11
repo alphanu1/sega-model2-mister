@@ -12232,3 +12232,26 @@ one after the other. The next measurement is the split of those 467
 across the stages; the fix is overlap -- fetching polygon N+1 while N is
 in the arithmetic, and the projection's divides in parallel -- or the
 clock, which is the lever the user pulled on Model 1 after its 48 bands.
+
+**R216 -- 46% OF THE TITLE'S QUADS ARE UNDER 2x2 PIXELS. THE STORE REFUSES
+THEM.** 2026-09-11, 13:50. The bench's dump of 4,096 projected quads from
+the title (`M2_QUADS_OUT`, from instruction 17 M):
+
+    bounding box under 1x1 px    13.6%
+    under 2x2 px                 45.9%
+    zero width or zero height    48.1%
+    under 4x4 px                 59.5%
+    entirely off-screen           0.0%
+
+The reference draws each as a dot; here they cost half of a 2,048 store
+and half of every band's replay, and the busiest frames were dropping
+their LAST-SUBMITTED half (R215). `m2_quad_store` now refuses a quad whose
+bounding box is under TINY (= 2) pixels in both dimensions, counted as
+`dbg_tiny` and on the record beside the drop count. Expected on the
+board: quads held ~2,300 in the heaviest frames against 2,048, so a small
+residual drop, and the missing scene back. A deliberate deviation from
+the reference, measured; 0 disables it. The rejection is at the store, so
+it does not shorten the collect -- the engine still spends 467 cycles on
+each of them before they are refused. Zero-extent quads (48%) are NOT
+refused: the fill's line case draws them, and thin distant edges are
+theirs. `build/dbuf10`.

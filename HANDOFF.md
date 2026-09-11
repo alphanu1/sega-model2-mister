@@ -1,6 +1,6 @@
 # Handoff
 
-**Updated:** 2026-09-11 13:25. Study entries R176-R215. R172 WITHDRAWN, R185
+**Updated:** 2026-09-11 13:55. Study entries R176-R216. R172 WITHDRAWN, R185
 partly RETRACTED, R189 corrected by R191, R196's central claim WITHDRAWN the
 same day, R206 WITHDRAWN, R207 closed by R208.
 
@@ -35,6 +35,12 @@ completes, 4 minutes clean -- render chain 10.6%, mailbox poll 3.7%, no
 parking, no drops. Ten-minute soak from a fresh load also clean: mailbox
 poll 3.9%, render chain 12.5%, never parked. R209 CONFIRMED.** The board is
 on it. Study R209.
+
+**R216 (13:50): 46% of the title's quads are under 2x2 px (bench histogram);
+the store now refuses them, counted on the record. Expected to bring the
+heaviest frames from ~4,200 to ~2,300 against 2,048 held. `build/dbuf10`
+building. The engine's cost is 467 cycles a polygon, fixed (study R215);
+its per-stage split is being measured -- that is the "slower".**
 
 **dbuf9 s14 ON THE BOARD (13:20), everything to R214, fits at 91%:** the
 store DROPS up to 2,148 quads a frame on top of 2,048 held -- the busiest
