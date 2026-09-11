@@ -12507,3 +12507,8 @@ sound board holds ~12,800 of them.
 Target: fitted ALM under ~85% before lighting, which is a few hundred
 ALMs of arithmetic plus a table read port, and well under before
 textures, which are the largest block left in the project.
+
+*R220 at the desk (19:10):* boot bench through the title identical to before
+the gate -- 82 walk frames, 1,916 objects, 31,648 quads, engine cost
+unchanged, PASS. The walk waits at the gate and never wedges.
+`build/dbuf14b` in the fitter.
