@@ -12366,3 +12366,21 @@ the vertex words in SDRAM (R215's road 2) unless the reference emits
 fewer polygons than we do -- which is the next thing to check before
 building it. Hold: 1 mostly, 2 for a slice, as dbuf6/9 (no R217/R218 in
 this build). CPU budget unchanged.
+
+**R219 -- THE REFERENCE CULLS BACK FACES AND LINK-TYPE-0 POLYGONS; THIS
+ENGINE EMITTED EVERY POLYGON IT READ.** 2026-09-11, 15:45. dbuf10's
+capture: with 1,440 sub-2-pixel quads a frame refused, the store still
+dropped up to 2,110 with 2,048 held -- ~5,000 quads a frame on the board.
+model2_v.cpp `check_culling`: a polygon is not rendered when (a) attr bit
+17 is clear (single-sided) and its face is the back -- `dotp = normal .
+point < 0`, the normal after the matrix, the point the polygon's first new
+vertex after the matrix and BEFORE the focus; (b) its link type, attr bits
+9:8, is 0; (c) its z range is behind the camera or past the master clip
+(the clipper covers the first here). `m2_geo_engine` had none of them, so
+it emitted the back of every car and every building: that is why the
+board's frames carry ~2x the reference's peak. The engine now computes
+the dot product (three multiplies on the focus multiplier's port, two
+adds on the pool's spare adder slot) between the second point and E_EMIT,
+and skips the emit for a culled polygon while the strip carry still runs;
+`dbg_culled` counts them. Unconfirmed until the bench and the board say
+so: the bench's emitted-quad count against MAME's is the check.
