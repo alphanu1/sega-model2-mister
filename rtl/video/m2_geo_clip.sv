@@ -181,7 +181,19 @@ module m2_geo_clip (
   // A shift register: the top is always entry 0, so a push shifts down and a
   // pop shifts up, and neither needs an addressed read.
   logic [2:0]         sk_lvl [NSTK];
-  logic [31:0]        sk_x [NSTK][4], sk_y [NSTK][4], sk_z [NSTK][4];
+  // THE STACK IS A SMALL RAM, NOT A SHIFT REGISTER (R221). Five levels of
+  // four vertices were 1,920 registers moved on every push and pop, plus
+  // the muxes to move them; as an MLAB indexed by {level, vertex} a push
+  // writes four entries over four cycles and a pop reads four, and the
+  // clipper pushes and pops only for polygons a plane actually cuts.
+  (* ramstyle = "MLAB" *) logic [98:0] sk_mem [NSTK*4];   // {px, id, z, y, x}
+  logic [98:0]        sk_rd;
+  logic [2:0]         pcnt;                     // the pop's vertex counter, 0..4
+  // The read address: vertex 0 of the top level in K_POP, vertex pcnt after.
+  wire  [1:0]         pop_va     = (kst == K_POP) ? 2'd0 : pcnt[1:0];
+  wire  [4:0]         sk_rd_addr = {sp[2:0] - 3'd1, pop_va};
+  always_ff @(posedge clk) sk_rd <= sk_mem[sk_rd_addr];
+  logic [1:0]         sv_i;                     // the vertex being pushed or popped
   // R218: A VERTEX THE CLIPPER DID NOT CREATE KEEPS THE PIXEL IT CAME WITH.
   // Every emitted quad was reprojected here, four reciprocals at 29 cycles,
   // whether or not a plane had touched it -- the larger half of all the
@@ -193,8 +205,7 @@ module m2_geo_clip (
   // SLIMMED: the stack carries a 2-bit id of the input vertex and a flag,
   // not the pixel; the four input pixels are held once (ipx/ipy). The
   // 32-bit-per-vertex stack was +664 registers on a device at 98%.
-  logic [1:0]         sk_id [NSTK][4];
-  logic               sk_px [NSTK][4];          // 1 = an input vertex, pixel known
+  // sk_id / sk_px live in sk_mem beside the coordinates.
   logic [1:0]         qid [4];
   logic               qpx [4];
   logic signed [15:0] ipx [4], ipy [4];
@@ -220,7 +231,7 @@ module m2_geo_clip (
   // ---------------------------------------------------------------- states
   typedef enum logic [3:0] {
     K_IDLE, K_POP, K_TEST, K_TESTW, K_ROT, K_SET,
-    K_CLIP, K_CLIPW, K_CHILD, K_EPROJ, K_EPROJW, K_EMIT
+    K_CLIP, K_CLIPW, K_CHILD, K_EPROJ, K_EPROJW, K_EMIT, K_POPR
   } kstate_t;
   kstate_t kst;
 
@@ -356,7 +367,7 @@ module m2_geo_clip (
   integer si, sv;
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      kst <= K_IDLE; sp <= '0; lvl <= '0; is_out <= '0; ti <= '0;
+      kst <= K_IDLE; sp <= '0; lvl <= '0; is_out <= '0; ti <= '0; sv_i <= 2'd0; pcnt <= 3'd0;
       rot <= '0; ccase <= '0; cn <= '0; cn_last <= '0;
       cp_a <= '0; cp_b <= '0; cp_dst <= '0; second_child <= 1'b0;
       cs <= '0; c_axis <= '0;
@@ -370,10 +381,6 @@ module m2_geo_clip (
       end
       for (si = 0; si < NSTK; si = si + 1) begin
         sk_lvl[si] <= '0;
-        for (sv = 0; sv < 4; sv = sv + 1) begin
-          sk_x[si][sv] <= '0; sk_y[si][sv] <= '0; sk_z[si][sv] <= '0;
-          sk_id[si][sv] <= 2'd0; sk_px[si][sv] <= 1'b0;
-        end
       end
     end else begin
       case (kst)
@@ -393,26 +400,28 @@ module m2_geo_clip (
         end
 
         // Pop: the top of the stack is entry 0, so this is a shift up.
+        // POP: the top level's four vertices, one a cycle from the RAM. In
+        // K_POP the read of vertex 0 is issued; in K_POPR the word that
+        // landed is vertex pcnt-1 and the read of vertex pcnt goes out.
         K_POP: if (sp == 3'd0) kst <= K_IDLE;
         else begin
-          lvl <= sk_lvl[0];
-          for (sv = 0; sv < 4; sv = sv + 1) begin
-            qx[sv] <= sk_x[0][sv]; qy[sv] <= sk_y[0][sv]; qz[sv] <= sk_z[0][sv];
-            qid[sv] <= sk_id[0][sv]; qpx[sv] <= sk_px[0][sv];
-          end
-          for (si = 0; si < NSTK-1; si = si + 1) begin
-            sk_lvl[si] <= sk_lvl[si+1];
-            for (sv = 0; sv < 4; sv = sv + 1) begin
-              sk_x[si][sv] <= sk_x[si+1][sv]; sk_y[si][sv] <= sk_y[si+1][sv];
-              sk_z[si][sv] <= sk_z[si+1][sv];
-              sk_id[si][sv] <= sk_id[si+1][sv]; sk_px[si][sv] <= sk_px[si+1][sv];
-            end
-          end
-          sp  <= sp - 3'd1;
-          ti  <= '0;
-          kst <= (sk_lvl[0] == 3'd4) ? K_EPROJ : K_TEST;
+          pcnt <= 3'd1;
+          kst  <= K_POPR;
         end
-
+        K_POPR: begin
+          qx[pcnt[1:0] - 2'd1]  <= sk_rd[31:0];
+          qy[pcnt[1:0] - 2'd1]  <= sk_rd[63:32];
+          qz[pcnt[1:0] - 2'd1]  <= sk_rd[95:64];
+          qid[pcnt[1:0] - 2'd1] <= sk_rd[97:96];
+          qpx[pcnt[1:0] - 2'd1] <= sk_rd[98];
+          if (pcnt == 3'd4) begin
+            lvl <= sk_lvl[sp - 3'd1];
+            sp  <= sp - 3'd1;
+            ti  <= '0;
+            pcnt <= 3'd0;
+            kst <= (sk_lvl[sp - 3'd1] == 3'd4) ? K_EPROJ : K_TEST;
+          end else pcnt <= pcnt + 3'd1;
+        end
         K_TEST:  if (mul_gnt) kst <= K_TESTW;
         K_TESTW: if (mul_rsp) begin
           is_out[ti] <= plane_gt ? fgt(test_v, mul_res) : fgt(mul_res, test_v);
@@ -509,36 +518,28 @@ module m2_geo_clip (
         // Push a child, naming each vertex as coming from the current quad or
         // from a temporary. The SECOND child is pushed first, so it sits deeper
         // and is popped last - which is MAME's recursion order.
+        // PUSH: a child, one vertex a cycle into level sp. The SECOND child
+        // is pushed first, so it sits deeper and is popped last -- MAME's
+        // recursion order.
         K_CHILD: begin
-          for (si = NSTK-1; si > 0; si = si - 1) begin
-            sk_lvl[si] <= sk_lvl[si-1];
-            for (sv = 0; sv < 4; sv = sv + 1) begin
-              sk_x[si][sv] <= sk_x[si-1][sv]; sk_y[si][sv] <= sk_y[si-1][sv];
-              sk_z[si][sv] <= sk_z[si-1][sv];
-              sk_id[si][sv] <= sk_id[si-1][sv]; sk_px[si][sv] <= sk_px[si-1][sv];
-            end
-          end
-          sk_lvl[0] <= lvl + 3'd1;
-          for (sv = 0; sv < 4; sv = sv + 1) begin
-            automatic logic [2:0] k;
-            // second_child, NOT its inverse: on the first pass this selects
-            // MAME's SECOND child, so it sits deeper in the stack and is popped
-            // last - which is the order MAME's recursion emits in.
-            k = kid(ccase, second_child, 2'(sv));
-            sk_x[0][sv]  <= k[2] ? tx[k[1:0]]  : qx[k[1:0]];
-            sk_y[0][sv]  <= k[2] ? ty[k[1:0]]  : qy[k[1:0]];
-            sk_z[0][sv]  <= k[2] ? tz[k[1:0]]  : qz[k[1:0]];
-            // R218: a temporary is a cut vertex and has no pixel yet; an
-            // original carries the pixel it came with.
-            sk_id[0][sv] <= k[2] ? 2'd0 : qid[k[1:0]];
-            sk_px[0][sv] <= k[2] ? 1'b0 : qpx[k[1:0]];
-          end
-          sp <= sp + 3'd1;
-          if ((ccase == 2'd2 || ccase == 2'd3) && !second_child)
-            second_child <= 1'b1;
-          else kst <= K_POP;
+          automatic logic [2:0] k;
+          // second_child, NOT its inverse: on the first pass this selects
+          // MAME's SECOND child.
+          k = kid(ccase, second_child, sv_i);
+          sk_mem[{sp[2:0], sv_i}] <= {k[2] ? 1'b0 : qpx[k[1:0]],
+                                      k[2] ? 2'd0 : qid[k[1:0]],
+                                      k[2] ? tz[k[1:0]] : qz[k[1:0]],
+                                      k[2] ? ty[k[1:0]] : qy[k[1:0]],
+                                      k[2] ? tx[k[1:0]] : qx[k[1:0]]};
+          if (sv_i == 2'd3) begin
+            sk_lvl[sp] <= lvl + 3'd1;
+            sp   <= sp + 3'd1;
+            sv_i <= 2'd0;
+            if ((ccase == 2'd2 || ccase == 2'd3) && !second_child)
+              second_child <= 1'b1;
+            else kst <= K_POP;
+          end else sv_i <= sv_i + 2'd1;
         end
-
         K_EMIT: if (out_ready) begin
           if (dbg_out != 16'hffff) dbg_out <= dbg_out + 16'd1;
           kst <= K_POP;

@@ -12521,3 +12521,12 @@ before, the only log difference the sample-period jitter statistic (sd
 with M2_SND_WAV is BYTE-IDENTICAL to the flip-flop version's, 110,292
 bytes, sample for sample. Two units: ~4,100 registers out of logic for
 two blocks. Into the build after dbuf14b.
+
+*R221, step 3 done at the desk (20:05).* `m2_geo_clip`'s stack is one
+99-bit MLAB of NSTK x 4 entries indexed by {level, vertex}, with a
+four-cycle push (K_CHILD writes one vertex a cycle) and a five-cycle pop
+(K_POP issues vertex 0's read, K_POPR consumes vertex pcnt-1 while
+issuing vertex pcnt). The shift-register version moved 1,920 registers on
+every push and pop. Pushes and pops happen only for polygons a plane
+cuts, so the cycles are nothing. `tb_m2_geo_clip` 2,003 checks,
+`tb_m2_geometry` 30, boot bench pass. In the build after dbuf15.
