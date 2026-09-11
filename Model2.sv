@@ -3611,11 +3611,12 @@ wire wedge_s0  = near3(q3d_x1, q3d_x2, q3d_x3) && near3(q3d_y1, q3d_y2, q3d_y3)
 wire wedge_hit = q3d_valid && q3d_ready && wedge_in && (wedge_s1 || wedge_s0);
 logic [127:0] wedge_q;
 logic         wedge_have, wedge_slot;
+logic         sw_take;           // R238: the stream took the pending fold (driven here, consumed in the sweep block)
 logic  [1:0]  wedge_ph;          // 0: nothing to send, 1: send W, 2: send X
 logic [14:0]  wedge_n;
 always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
-		wedge_q <= '0; wedge_have <= 1'b0; wedge_slot <= 1'b0; wedge_ph <= 2'd0; wedge_n <= 15'd0;
+		wedge_q <= '0; wedge_have <= 1'b0; wedge_slot <= 1'b0; wedge_ph <= 2'd0; wedge_n <= 15'd0; sw_take <= 1'b0;
 	end else begin
 		if (wedge_hit) begin
 			if (!(&wedge_n)) wedge_n <= wedge_n + 15'd1;
@@ -3627,7 +3628,7 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		end
 		// Each B event that finds a wedge pending sends one half of it; one that
 		// finds a fold pending (and no wedge) sends the fold.
-		if (uart_b2_valid && !wedge_have && sw_pend) sw_pend <= 1'b0;
+		sw_take <= uart_b2_valid && !wedge_have && sw_pend;   // one pulse; the sweep's block clears its own flag
 		if (uart_b2_valid && wedge_have) begin
 			if (wedge_ph == 2'd1) wedge_ph <= 2'd2;
 			else begin wedge_ph <= 2'd0; wedge_have <= 1'b0; end
@@ -4398,6 +4399,9 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		if (sw_done && !sw_done_d) begin
 			sw_emit  <= 1'b1;          // one pulse per completed fold
 			sw_pend  <= 1'b1; sw_out <= sw_acc; sw_out_sel <= sw_sel;   // R238: hand it to the stream
+		end
+		if (sw_take) begin
+			sw_pend <= 1'b0;                                          // ...and the stream has taken it
 			sw_runs  <= sw_runs + 8'd1;
 			sw_state <= 3'd0;          // and immediately go round again
 			sw_done  <= 1'b0;
