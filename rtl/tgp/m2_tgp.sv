@@ -277,7 +277,7 @@ module m2_tgp #(
     .dbg_fifo_hold(dbg_fifo_hold), .dbg_wr_n(dbg_wr_n), .dbg_wr_addr(dbg_wr_addr), .dbg_wr_data(dbg_wr_data),
     .fifo_rd(fifo_rd), .fifo_wr(fifo_wr), .fifo_wdata(fifo_wdata),
     .fifo_rdata(fifo_rdata), .fifo_ack(fifo_ack),
-    .gpio(4'd0),
+    .gpio({3'b000, at_s2}),          // gpio0 = the atan unit's |a| <= |b| (R212)
     .retire(retire), .retire_pc(retire_pc), .unimplemented(dbg_unimplemented),
     // The lockstep bridge's view: unused in the design, driven from sim/tgp for
     // M0 exit criterion 2. Named rather than left empty so the connection is
@@ -573,9 +573,26 @@ module m2_tgp #(
   wire [13:0] isqrt_index = 14'h2000 ^ ({isqrt_base[23:11], 1'b0}
                                         | {13'd0, io_addr[0]});
 
+  // ATAN, PER MODEL 2 (model2.cpp copro_atan_r), NOT MODEL 1 (R212). Base 3
+  // is a FLOAT, the ratio of the smaller operand to the larger, and the
+  // table index is its mantissa shifted by ie = 0x88 - exponent field:
+  //   ie = 0x88 - (base3 >> 23);  index = ie <= 0x17 ? (mant | 0x800000) >> ie : 0
+  //   index == 0x4000 -> 0x3fff
+  // Model 1 indexed the table with an INTEGER in base 3, and that is what
+  // stood here: the game's horizon angle came back as 0 or exactly -45
+  // degrees and the background jumped with it.
+  // `ie` IS AN 8-BIT SUBTRACTION (u8 in the reference): for a NEGATIVE ratio
+  // base3 >> 23 carries the sign bit, 0x88 - 0x1xx wraps, and the result is
+  // the same shift as for the positive ratio. Done in 9 bits it went past
+  // 0x17 and the index collapsed to 0 -- every job with a negative operand
+  // came back as exactly 0 or exactly 0x4000 in the bench's ATAN check.
+  wire [7:0]  at_ie  = 8'h88 - atan_base[3][30:23];
+  wire [23:0] at_m   = {1'b1, atan_base[3][22:0]};
+  wire [23:0] at_sh  = (at_ie <= 8'h17) ? (at_m >> at_ie[4:0]) : 24'd0;
+  wire [13:0] at_index = (at_sh >= 24'h4000) ? 14'h3fff : at_sh[13:0];
+
   wire [13:0] math_index = (math_unit == 2'd0) ? sc_index
-                         : (math_unit == 2'd1) ? (|atan_base[3][15:14] ? 14'h3fff
-                                                 : atan_base[3][13:0])
+                         : (math_unit == 2'd1) ? at_index
                          : (math_unit == 2'd2) ? inv_index
                          :                       isqrt_index;
 
@@ -584,10 +601,12 @@ module m2_tgp #(
 
   // ---- the fixups, applied to the word the table returned
 
+  // INV, PER MODEL 2: the sign is the OPERAND's, and only on the odd word --
+  //   result = (table & 0x007fffff) | (exp << 23); if (base < 0 && offset) result |= sign
+  // Model 1 kept the table's sign and flipped it for a negative operand on
+  // both words; that is what stood here (R212).
   wire [7:0] inv_exp = tbl_rdata[30:23] + (8'h7f - inv_base[30:23]);
-  wire [31:0] inv_val_raw = {tbl_rdata[31], inv_exp, tbl_rdata[22:0]};
-  wire [31:0] inv_val = inv_base[31] ? {~inv_val_raw[31], inv_val_raw[30:0]}
-                                     : inv_val_raw;
+  wire [31:0] inv_val = {inv_base[31] & io_addr[0], inv_exp, tbl_rdata[22:0]};
 
   wire [7:0] isq_exp = tbl_rdata[30:23] + (8'h3f - {1'b0, isqrt_base[30:24]});
   wire [31:0] isq_raw = {tbl_rdata[31], isq_exp, tbl_rdata[22:0]};
@@ -596,30 +615,19 @@ module m2_tgp #(
   wire [31:0] sincos_val = sc_ang[15] ? {~tbl_rdata[31], tbl_rdata[30:0]}
                                       : tbl_rdata;
 
-  // atan's table is WRONG IN THE ROM and MAME corrects it on the way out, with
-  // the note that "the hardware does something equivalent somehow". Reproduced
-  // rather than cleaned up, per the project's rule about hardware quirks: the
-  // microcode's results depend on these exact values.
-  wire [15:0] at_dt = tbl_rdata[31:16] + tbl_rdata[15:0];
-  logic [31:0] at_fix;
-  always_comb begin
-    at_fix = tbl_rdata;
-    if (at_dt[0])
-      at_fix = (at_fix[3:0] == 4'he) ? at_fix - 32'h00000001
-                                     : at_fix - 32'h00010000;
-    if (at_dt[4])
-      at_fix = (at_fix[7:4] == 4'he) ? at_fix - 32'h00000010
-                                     : at_fix - 32'h00100000;
-    if (at_dt[8])
-      at_fix = (at_fix[11:8] == 4'he) ? at_fix - 32'h00000100
-                                      : at_fix - 32'h01000000;
-  end
-
+  // The table-word fixup that stood here was Model 1's (model1_m.cpp corrects
+  // a ROM table on the way out); Model 2's handler reads its table as it is.
+  //
+  // s2 IS A COMPARISON, NOT A STORED SIGN: |base0| <= |base1|, which Model 2
+  // also presents to the microcode as the gpio0 CONDITION (copro_atan_w
+  // calls gpio0_w with it on every base write). sub_797 branches on gpio0 to
+  // pick the octant before it forms the ratio; with gpio0 tied low, as it
+  // was, the swap was never taken.
   wire at_s0 = atan_base[0][31];
   wire at_s1 = atan_base[1][31];
-  wire at_s2 = atan_base[2][31];
-  wire [31:0] at_shifted = (at_s0 ^ at_s1 ^ at_s2) ? {16'd0, at_fix[31:16]}
-                                                   : at_fix;
+  wire at_s2 = (atan_base[0][30:0] <= atan_base[1][30:0]);
+  wire [31:0] at_shifted = (at_s0 ^ at_s1 ^ at_s2) ? {16'd0, tbl_rdata[31:16]}
+                                                   : tbl_rdata;
   wire [31:0] at_signed  = at_shifted
                          + (at_s2 ? 32'h4000 : 32'd0)
                          + (((at_s0 && !at_s2) || (at_s1 && at_s2)) ? 32'h8000

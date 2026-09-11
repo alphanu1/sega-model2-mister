@@ -11933,3 +11933,71 @@ Also seen in the test and unexplained: `dbg_bands_done` reads 26 for a
 counter, possibly two wasted band fills per frame -- to look at.
 Unconfirmed until the board says so: `build/dbuf` (R202+R203+R205+R208+
 R209+R211, R210's widened timers on the H record).
+
+*R211, the fit.* `build/dbuf` (two 2,048-entry stores at the 231-bit entry)
+failed all four seeds: "Selected device has 553 RAM location(s) of type
+M10K block. However, the current design needs more than 553". Block memory
+BITS were at 84%; BLOCKS ran out, because a 2048 x 32 array takes seven
+2048x5 blocks with the odd bits wasted. Synthesis logic was unchanged
+(52,564 -> 52,329 ALUTs); the 43,769 "ALM" the seed table printed is the
+aborted fit's pre-packing estimate, not a result. The one store is ~47 of
+the 553 blocks. Two answers, both taken: the entry is 191 bits (13-bit
+saturated screen coordinates, 565 colour, top 24 bits of the sort key,
+which also cuts the radix sort from eight passes to six -- `m2_quad_store`
+XW/CW/KW, ports unchanged) for ~40 blocks a bank; and the framework
+scaler's input line buffers, sized for 2,048-pixel lines against this
+core's 496, are halved (`sys_top.v` IHRES 1024). `build/dbuf2` is a
+1,024-a-bank stop-gap to prove the mechanism on the board while that
+fits. Further levers if needed, in order of safety: share the key and one
+scratch index array between banks (~8 blocks), loader FIFO 512 -> 256,
+character cache, i960 data cache; and for logic, the coprocessor's
+flip-flop input queue (~2,000 ALM as one M10K FIFO, recorded in the qsf).
+
+**R212 -- THE BACKGROUND JUMPED BECAUSE THE COPROCESSOR'S ARCTANGENT UNIT
+WAS MODEL 1's. THE HORIZON ROW IS A TGP ATAN RESULT.** 2026-09-11, 10:30.
+
+*The chain, end to end.* The vertical jump the user saw on every build
+since R202 (and read as a vertical-sync fault) is layer pair 2/3's vertical
+scroll word. The reference (MAME, write taps on 0x0100A000-0F and
+0x501300-1F) writes it once per frame from work RAM 0x50130A, creeping
+0x2FDE -> 0x2FE1 over forty frames; mode bits 0x2000 = the vertical split
+window at row (-vscr)&0x1ff ~ 34, the horizon. Our bench (`M2_SCRLOG`)
+latched 0x2FFC, 0x20FA, 0x2ECF, 0x2F66, 0x20A7 ... a new value every few
+frames. 0x50130A is written at 0x67F0 from g0 = cvtri(TGP result) & 0xFFF
+| 0x2000, where the result is the 0x2525 job of the routine at 0x6738 that
+feeds it sin/cos of an angle g0 = -(R + w28 - w52), and R is the result of
+coprocessor function 0x0a with two float inputs. Function 0x0a IS atan2:
+the reference returns 38 for (2048, 7.52) and -609 for (120.07, -7.02),
+which are atan2(b, a) in 1/65536 turns. Ours returned 0 for (2048, 8.0)
+and exactly -0x2000 for (97.3, -7.5).
+
+*Why.* `m2_tgp.sv`'s four math units were transcribed from model1_m.cpp,
+and Model 2's (model2.cpp copro_*_r/w) differ in the atan and inv units:
+  - atan's table index is `(mant|0x800000) >> (0x88 - exp)` from the FLOAT
+    in base 3 (Model 1: an integer index); the selector s2 is the
+    comparison |base0| <= |base1| (Model 1: base2's sign bit); there is no
+    table-word fixup (Model 1 corrects a bad ROM table); and s2 is also
+    presented to the microcode as the gpio0 CONDITION -- copro_atan_w
+    calls gpio0_w with it on every base write. sub_797 branches on gpio0
+    to pick the octant. We tied all four gpio inputs to zero.
+  - inv's sign is the operand's, on the odd word only (Model 1 flipped the
+    table's sign for a negative operand on both words).
+  - sincos and isqrt are identical in both.
+The bench's copro trace hid the decisive read because it logged a FIFO read
+only on the cycle it started and dropped it when the CPU stalled there;
+fixed, the 0x0a result was visible (`R 00000000`).
+
+*The fix and its proof.* The units rewritten from model2.cpp, gpio0 =
+s2, and `tb_m2_boot.cpp` scores every completed function-0x0a exchange
+against a C-model atan2 (`ATAN jobs checked`). First pass: 69 of 89, the
+misses all with a negative operand returning exactly 0 or 0x4000 -- `ie`
+is a u8 subtraction that wraps for a negative ratio, and a 9-bit version
+sent the index to 0. Second pass: 89 of 89 within 2/65536 turn, and the
+latched layer-2 scroll creeps 0x2FDE, 0x2FDD, 0x2FDC through the title like
+the reference. Side effect worth noting: the same run passed 50,666
+polygons out of the clipper against 49,655 before and 3,132 two days ago
+-- a wrong camera pitch was also discarding geometry. Unconfirmed on the
+board until `build/dbuf3`.
+
+Also recorded: `make test_mb86233_regs` fails 46,966 of 3,000,000 checks
+on the committed tree, in a module untouched today; not investigated.

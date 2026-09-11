@@ -29,6 +29,7 @@
 #include "Vm2_boot_harness.h"
 #include "verilated.h"
 #include <cstdio>
+#include <cmath>
 #include <cstring>
 #include <cstdlib>
 #include <string>
@@ -84,6 +85,8 @@ static unsigned g_ipring_w = 0; static uint32_t g_trap_addr = 0; static bool g_t
 // M2_FINDVAL: log every bus transaction carrying this value, which is how a
 // pointer written into a table in RAM gets located.
 static uint32_t g_findval = 0;
+static bool g_rd_pend = false;   // a coprocessor FIFO read that stalled at its start
+static int g_at_st = 0; static uint32_t g_at_in[2] = {0, 0}; static long g_at_n = 0, g_at_bad = 0;
 // M2_STATE_ADDR picks the word to watch; the game dispatches through function
 // pointers in work RAM, so which one matters changes as the chain is followed.
 static uint32_t g_state_addr = 0x0053e5f4u;
@@ -504,6 +507,20 @@ int main(int argc, char **argv) {
     // one of the two polygon RAMs. Same decode as Model2.sv's.
     d->eng_mem_ack = 0;
     if ((++ip_samp & 0xffff) == 0) ++ip_hist[uint32_t(d->dbg_ip)];
+    // THE SCROLL THE RENDERER LATCHED, LOGGED ON CHANGE (M2_SCRLOG=<file>):
+    // the background jumps vertically on the board; a value that alternates
+    // frame to frame here is the game (or the write path) doing it.
+    {
+      static FILE *sf = std::getenv("M2_SCRLOG") ? std::fopen(std::getenv("M2_SCRLOG"), "w") : nullptr;
+      static uint16_t pv[4] = {0xffff,0xffff,0xffff,0xffff}, ph[4] = {0xffff,0xffff,0xffff,0xffff};
+      static long sn = 0;
+      if (sf && sn < 200000) for (int i = 0; i < 4; i++) {
+        if (d->obs_vscr[i] != pv[i] || d->obs_hscr[i] != ph[i]) {
+          std::fprintf(sf, "%llu L%d hscr=%04x vscr=%04x\n", (unsigned long long)d->dbg_acc, i, (unsigned)d->obs_hscr[i], (unsigned)d->obs_vscr[i]);
+          pv[i] = d->obs_vscr[i]; ph[i] = d->obs_hscr[i]; ++sn;
+        }
+      }
+    }
     static const uint64_t quads_from = std::getenv("M2_POLY_FROM") ? std::strtoull(std::getenv("M2_POLY_FROM"), nullptr, 10) : 0;
     if (d->eng_q_valid && g_quads.size() < 4096 && d->dbg_acc >= quads_from)
       g_quads.push_back({(int)(int16_t)d->eng_q_x0, (int)(int16_t)d->eng_q_y0,
@@ -993,7 +1010,8 @@ int main(int argc, char **argv) {
         // watched as a sequence instead of judged from one still. Two of this
         // session's wrong conclusions came from reading a single frame that
         // happened to be captured mid-draw.
-        if (g_seq_dir && (g_frames_done % g_seq_every) == 0) {
+        static const uint64_t seq_from = std::getenv("M2_FRAME_FROM") ? std::strtoull(std::getenv("M2_FRAME_FROM"), nullptr, 10) : 0;
+        if (g_seq_dir && (g_frames_done % g_seq_every) == 0 && d->dbg_acc >= seq_from) {
           char path[512];
           std::snprintf(path, sizeof path, "%s/f%05llu.ppm", g_seq_dir,
                         (unsigned long long)g_frames_done);
@@ -1037,11 +1055,43 @@ int main(int argc, char **argv) {
       // A FIFO read holds io_sel for every cycle it is stalled; log it once,
       // when it completes, or the trace is one line per stall cycle (2.3M
       // 'R 00000000' lines in a 19M-instruction run).
-      else if (a >= 0x884000 && a <= 0x887fff)               { if (d->obs_copro_stall) kind = 0; else { kind = 'R'; val = d->obs_io_rdata; } }
+      // A READ THAT STALLS FROM ITS FIRST CYCLE WAS DROPPED HERE: it was
+      // logged only on the cycle it started, and skipped when the FIFO was
+      // empty then. The horizon routine's 0x0a result (R211/R212) went
+      // missing that way. A stalled read is remembered and logged when it
+      // completes.
+      else if (a >= 0x884000 && a <= 0x887fff)               { if (d->obs_copro_stall) { kind = 0; g_rd_pend = true; } else { kind = 'R'; val = d->obs_io_rdata; } }
       else if (a == 0x980000 && d->obs_io_we)                  kind = 'C';
       if (kind)
         std::fprintf(g_copro_trace, "%c %llu %08x %08x\n", kind,
                      (unsigned long long)g_frames_done, a, val);
+    }
+    // THE ATAN JOB, SCORED (R212). Function 0x0a takes two floats and returns
+    // atan2(b, a) in 1/65536 turns. Every completed 0x0a exchange is checked
+    // against a C model; the count is reported at the end.
+    if (c && !cpu_prev && d->obs_io_sel) {
+      const uint32_t a = d->obs_io_addr;
+      if (a == 0x8800a0 && d->obs_io_we) { g_at_st = 1; }
+      else if (g_at_st >= 1 && g_at_st <= 2 && a == 0x884000 && d->obs_io_we) { g_at_in[g_at_st - 1] = d->obs_io_wdata; ++g_at_st; }
+      else if (g_at_st == 3 && a == 0x884000 && !d->obs_io_we) { g_at_st = 4; }
+      else if (a >= 0x880000 && a <= 0x883fff && d->obs_io_we) g_at_st = 0;
+    }
+    if (c && g_at_st == 4 && d->obs_io_sel && !d->obs_copro_stall && !d->obs_io_we && d->obs_io_addr == 0x884000) {
+      float fa, fb; std::memcpy(&fa, &g_at_in[0], 4); std::memcpy(&fb, &g_at_in[1], 4);
+      const double turns = std::atan2((double)fb, (double)fa) / (2.0 * 3.14159265358979323846);
+      const int exp16 = (int)std::lrint(turns * 65536.0);
+      const int got = (int16_t)(d->obs_io_rdata & 0xffff);
+      int diff = got - exp16; if (diff > 32768) diff -= 65536; if (diff < -32768) diff += 65536;
+      ++g_at_n; if (diff < -2 || diff > 2) { ++g_at_bad; if (g_at_bad <= 12) std::printf("    ATAN MISMATCH a=%g b=%g expect %d got %d (insn %llu)\n", fa, fb, exp16, got, (unsigned long long)d->dbg_acc); }
+      g_at_st = 0;
+    }
+    if (g_copro_trace && g_rd_pend && c) {
+      if (!d->obs_io_sel) g_rd_pend = false;
+      else if (!d->obs_copro_stall) {
+        std::fprintf(g_copro_trace, "R %llu %08x %08x\n", (unsigned long long)g_frames_done,
+                     (unsigned)d->obs_io_addr, (unsigned)d->obs_io_rdata);
+        g_rd_pend = false;
+      }
     }
     // THE STATE BYTE THE BOARD'S TOP-LEVEL LOOP TESTS. The loop at 0x1240 reads
     // 0x0053e5f4 every frame and leaves for 0x228f00 when it changes; the board
@@ -2646,6 +2696,7 @@ int main(int argc, char **argv) {
                 (d->geo_oba_last & 0x01000000u) ? "fast polygon RAM"
                 : (d->geo_oba_last & 0x00800000u) ? "polygon ROM" : "slow polygon RAM");
     std::printf("  GEOMETRY ENGINE:\n");
+    std::printf("    ATAN jobs checked %ld, off by more than 2/65536 turn: %ld\n", g_at_n, g_at_bad);
     std::printf("    objects=%u polys=%u capped=%u nonfinite=%u\n",
                 d->eng_objects, d->eng_polys, d->eng_capped, d->eng_nonfinite);
     std::printf("    clipper in=%u out=%u dropped=%u   QUADS OUT=%zu\n",

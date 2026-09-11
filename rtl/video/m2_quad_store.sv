@@ -67,6 +67,16 @@ module m2_quad_store #(
   // The cost is eight passes over the key instead of four, so the sort doubles
   // from 21% of a frame to about 42%. That is affordable and not fitting is not.
   parameter int unsigned RADIX  = 4,
+  // NARROW ENTRIES (R211): the device ran out of M10K BLOCKS, not bits, when
+  // the store was doubled. Screen coordinates are held in XW bits with
+  // saturation on the way in (the clipper keeps them near the 496x384
+  // screen; 13 bits is +-4095), the colour as 565 (which is all the band
+  // buffer ever takes of it), and the sort key as its top KW bits. 2048 x
+  // (4*26 + 24+1+16 + 24 + 2*11) = 191 bits against 231: 40 blocks a bank
+  // against 47, and the radix sort runs KW/RADIX passes instead of 32/RADIX.
+  parameter int unsigned XW     = 13,
+  parameter int unsigned CW     = 16,
+  parameter int unsigned KW     = 24,
   parameter int unsigned SCR_H  = 384
 ) (
   input  logic        clk,
@@ -128,13 +138,34 @@ module m2_quad_store #(
   // One vertex per memory gives each a single write port and a single read port,
   // which is a Simple Dual Port M10K and infers cleanly. the project rules' warning that
   // "block RAM inference is silent when it fails" cost 28,816 ALM once before.
-  (* ramstyle = "M10K" *) logic [31:0] vtx0 [NQ];
-  (* ramstyle = "M10K" *) logic [31:0] vtx1 [NQ];
-  (* ramstyle = "M10K" *) logic [31:0] vtx2 [NQ];
-  (* ramstyle = "M10K" *) logic [31:0] vtx3 [NQ];
-  localparam int unsigned AT_W = NBANDS + 25;   // {band_mask, moire, col}
+  (* ramstyle = "M10K" *) logic [2*XW-1:0] vtx0 [NQ];
+  (* ramstyle = "M10K" *) logic [2*XW-1:0] vtx1 [NQ];
+  (* ramstyle = "M10K" *) logic [2*XW-1:0] vtx2 [NQ];
+  (* ramstyle = "M10K" *) logic [2*XW-1:0] vtx3 [NQ];
+  localparam int unsigned AT_W = NBANDS + 1 + CW;   // {band_mask, moire, col565}
   (* ramstyle = "M10K" *) logic [AT_W-1:0] att [NQ];
-  (* ramstyle = "M10K" *) logic [31:0] key [NQ];
+  (* ramstyle = "M10K" *) logic [KW-1:0] key [NQ];
+
+  // Saturate a screen coordinate to XW bits; sign-extend it back on the way out.
+  function automatic [XW-1:0] sat(input logic signed [15:0] v);
+    logic signed [15:0] hi, lo;
+    begin
+      hi = 16'sd1 <<< (XW - 1); hi = hi - 16'sd1;   // +4095
+      lo = -hi - 16'sd1;                            // -4096
+      sat = (v > hi) ? hi[XW-1:0] : (v < lo) ? lo[XW-1:0] : v[XW-1:0];
+    end
+  endfunction
+  function automatic [15:0] sx(input logic [XW-1:0] v);
+    sx = {{(16-XW){v[XW-1]}}, v};
+  endfunction
+  // 888 -> 565 and back: m2_raster3d takes [23:19], [15:10], [7:3] of out_col,
+  // so an entry expanded this way yields the same 565 it was stored from.
+  function automatic [CW-1:0] c565(input logic [23:0] c);
+    c565 = {c[23:19], c[15:10], c[7:3]};
+  endfunction
+  function automatic [23:0] c888(input logic [CW-1:0] c);
+    c888 = {c[15:11], 3'b000, c[10:5], 2'b00, c[4:0], 3'b000};
+  endfunction
 
   // Two index arrays, ping-ponged by the radix passes.
   (* ramstyle = "M10K" *) logic [IW-1:0] idx_a [NQ];
@@ -194,13 +225,13 @@ module m2_quad_store #(
       count <= '0; wi <= '0; dbg_dropped <= '0;
     end else if (in_valid) begin
       if (has_room) begin
-        vtx0[count[IW-1:0]] <= {in_y0, in_x0};
-        vtx1[count[IW-1:0]] <= {in_y1, in_x1};
-        vtx2[count[IW-1:0]] <= {in_y2, in_x2};
-        vtx3[count[IW-1:0]] <= {in_y3, in_x3};
+        vtx0[count[IW-1:0]] <= {sat(in_y0), sat(in_x0)};
+        vtx1[count[IW-1:0]] <= {sat(in_y1), sat(in_x1)};
+        vtx2[count[IW-1:0]] <= {sat(in_y2), sat(in_x2)};
+        vtx3[count[IW-1:0]] <= {sat(in_y3), sat(in_x3)};
         att[count[IW-1:0]] <= {band_mask(in_y0, in_y1, in_y2, in_y3),
-                               in_moire, in_col};
-        key[count[IW-1:0]] <= sort_key(in_z);
+                               in_moire, c565(in_col)};
+        key[count[IW-1:0]] <= sort_key(in_z) >> (32 - KW);
         count <= count + 1'b1;
       end else if (dbg_dropped != 16'hffff) begin
         dbg_dropped <= dbg_dropped + 16'd1;
@@ -216,7 +247,7 @@ module m2_quad_store #(
   } rstate_t;
   rstate_t rst_st;
 
-  localparam int unsigned NPASS = 32 / RADIX;
+  localparam int unsigned NPASS = KW / RADIX;
   localparam int unsigned NBUCK = 1 << RADIX;
   localparam int unsigned PW    = $clog2(NPASS);
 
@@ -251,7 +282,7 @@ module m2_quad_store #(
   //
   // The cost is a cycle per access, which this sequencer already had states for.
   logic [IW-1:0] idx_rd;
-  logic [31:0]   key_rd;
+  logic [KW-1:0] key_rd;
   always_ff @(posedge clk) begin
     idx_rd <= which ? idx_b[ri[IW-1:0]] : idx_a[ri[IW-1:0]];
     key_rd <= key[cur_idx];
@@ -275,7 +306,7 @@ module m2_quad_store #(
 
   // The RADIX-bit field selected by `pass`, taken with a shift so the width is a
   // parameter rather than four hand-written slices that stop matching it.
-  wire [31:0] key_shifted = key_rd >> (RADIX * pass);
+  wire [KW-1:0] key_shifted = key_rd >> (RADIX * pass);
   wire [RADIX-1:0] digit = key_shifted[RADIX-1:0];
 
   always_ff @(posedge clk or negedge rst_n) begin
@@ -411,7 +442,7 @@ module m2_quad_store #(
 
   // Frozen while a quad is being emitted: the vertex reads and the output
   // register are shared, and those are the quads the band exists to draw.
-  wire [NBANDS-1:0] q_band_mask = att_rd[AT_W-1:25];
+  wire [NBANDS-1:0] q_band_mask = att_rd[AT_W-1:CW+1];
   wire              hit = v2 && q_band_mask[replay_band];
   wire              adv = (p_st == P_RUN) && !hit;
 
@@ -448,8 +479,8 @@ module m2_quad_store #(
         P_RUN: begin
           if (hit) begin
             q         <= q2;
-            out_col   <= att_rd[23:0];
-            out_moire <= att_rd[24];
+            out_col   <= c888(att_rd[CW-1:0]);
+            out_moire <= att_rd[CW];
             p_st      <= P_OUT;
           end else if (!v0 && !v1 && !v2) begin
             p_st <= P_IDLE;              // drained
@@ -470,10 +501,10 @@ module m2_quad_store #(
         // A concatenation on the left is one read, split on the way out, and it
         // is bit-identical: the store writes {in_y, in_x}.
         P_OUT: begin
-          {out_y0, out_x0} <= vtx0[q];
-          {out_y1, out_x1} <= vtx1[q];
-          {out_y2, out_x2} <= vtx2[q];
-          {out_y3, out_x3} <= vtx3[q];
+          out_y0 <= sx(vtx0[q][2*XW-1:XW]); out_x0 <= sx(vtx0[q][XW-1:0]);
+          out_y1 <= sx(vtx1[q][2*XW-1:XW]); out_x1 <= sx(vtx1[q][XW-1:0]);
+          out_y2 <= sx(vtx2[q][2*XW-1:XW]); out_x2 <= sx(vtx2[q][XW-1:0]);
+          out_y3 <= sx(vtx3[q][2*XW-1:XW]); out_x3 <= sx(vtx3[q][XW-1:0]);
           out_valid <= 1'b1;
           if (out_valid && out_ready) begin
             out_valid <= 1'b0;

@@ -736,6 +736,10 @@ wire         bob_deint;
 `ifdef MENU_CORE
 		.N_BURST(2048),
 `endif
+		// This core's picture is 496 pixels wide; the scaler's input line
+		// buffers are sized by IHRES and default to 2048. Halving them
+		// frees M10K blocks, which are the binding resource here (study R211).
+		.IHRES(1024),
 		.N_DW(128),
 		.N_AW(28)
 	)

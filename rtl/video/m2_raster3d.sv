@@ -141,6 +141,13 @@ module m2_raster3d #(
   generate
     for (sb = 0; sb < 2; sb++) begin : g_store
       wire mine = (bank == sb[0]);        // this bank is the collect bank
+      // TWO BANKS OF 2,048, PAID FOR IN WIDTH. Two stores of the old 231-bit
+      // entry needed ~47 M10K blocks more than the device has (build/dbuf:
+      // "needs more than 553", four seeds). The entry is now 191 bits
+      // (13-bit coordinates, 565 colour, 24-bit key: m2_quad_store XW/CW/KW)
+      // and the scaler's input line buffers were halved (sys_top.v IHRES),
+      // which together are meant to cover the second bank. build/dbuf2 was
+      // the 1,024-a-bank stop-gap that proved the mechanism on the board.
       m2_quad_store #(.BAND_H(BAND_H), .NBANDS(NBANDS), .BW(BW), .SCR_H(SCR_H)) u_store (
         .clk(clk), .rst_n(rst_n),
         // Cleared at the swap: the bank coming OFF display becomes the new
