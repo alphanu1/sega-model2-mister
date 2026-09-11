@@ -12613,3 +12613,102 @@ meet timing outright. Per module, dbuf14b -> dbuf16 (self ALM): clipper
 1,338 (1,669 registers -- next), fx68k's excUnit 1,117, clipper 1,049,
 MultiPCMs 1,640, raster fill 732, tilemap 662, sdram 652, fp_pool 651,
 TGP alu 624. Deployed s14 for a 240 s capture.
+
+*R221 on the board (16:20): dbuf16 s14, 240 s capture identical to dbuf14b
+-- store dropped 0 in every slice, ready 3.7-10 ms median, hold 1-2 frames
+in the same pattern, quads x16 median 0-752 -- and THE SOUND IS RIGHT BY
+EAR with every MultiPCM voice stepping out of MLABs. R221 closed.*
+
+**R222 -- LIGHTING AND THE POLYGON'S COLOUR: WHAT THE REFERENCE COMPUTES, WHERE THE DATA IS, AND THE DESIGN.**
+
+*What MAME computes for a flat polygon* (`model2_v.cpp` `geo_parse_np_ns`, `model2_3d_render`, `model2rd.ipp` flat case):
+
+    dotl  = normal . light            (light: cmd 0x0a, three floats; the walker
+                                       already captures it as lit_x/y/z, R168)
+    dotp  = normal . point            (the engine already has it: R219's cull)
+    lum   = (dotl*dotp < 0) ? 0 : |dotl|
+    lum   = lum * tp[attr>>18 & 31].diffuse + tp[..].ambient   (8-bit ints, cmd 0x06;
+                                       the walker streams them as tp_we/tp_idx/
+                                       tp_diffuse/tp_ambient, R168)
+    luma  = clamp(int(lum), 0, 255)   (the face bit 0x100 is masked off again by
+                                       `& 0xff` before any use: irrelevant)
+    colorbase = texheader[3] >> 6 & 0x3ff
+    c555      = palram[0x1000 + colorbase]
+    r = gamma(colorxlat[0x0000/2 + (c555>>0 &31)<<8 | luma>>2])
+    g = gamma(colorxlat[0x4000/2 + (c555>>5 &31)<<8 | luma>>2])
+    b = gamma(colorxlat[0x8000/2 + (c555>>10&31)<<8 | luma>>2])
+    texheader[0] bit 13 set and bit 14 clear: a translucent flat polygon, which
+    the reference does not draw at all (`if (Translucent) return`).
+
+The texture header is FOUR 16-BIT WORDS (texture_rom is u16*, texture_ram is
+u16[0x10000]) at word address `tha & 0x3fffff` of the texture ROM (bit 23
+clear) or `tha & 0xffff` of texture RAM (bit 23 set). Per polygon the header
+address advances by `tho * 4` words AFTER the header is read, tho the signed
+5-bit field attr[16:12]. gamma is `max((v-64)*255/191, 0)` -- the function
+`m2_palette.sv` already implements for the tile layer.
+
+*Where the data is in this core today:*
+- Light and texture parameters: captured by the walker, consumed by nothing.
+- Texture ROM: in SDRAM at byte 0x0e40000 (MRA), word 0x0720000, 8 MB; no
+  reader.
+- Texture RAM: the walker skips op 0x04 (texture/log data) by its count.
+- Palette 0x1000-0x13ff: in `u_pal` (M10K, 8K x 16), port A the CPU, port B
+  the tile pipeline EVERY PIXEL (`pal_addr = mixed`). No third port.
+- colorxlat: the CPU's 48 KB at 0x01810000 are DROPPED except the 96 entries
+  the tile layer reads (`r_addr[8:0] == 0x080`, the luma-64 row). There is no
+  copy of the table anywhere.
+- M10K: 553 of 553. Nothing more goes there (R221).
+
+*Design.* Everything the polygon's colour needs that is not already in the
+engine is put where the engine can read it through the port it already owns:
+1. The bridge mirrors two CPU write regions into SDRAM: palette entries
+   0x1000-0x13ff (byte offsets 0x2000-0x27ff of T_PAL) to PAL3D_BASE (word
+   0x1730000, 1 K words) and the whole of T_XLAT to XLAT3D_BASE (word
+   0x1731000, 24 K words), using the T_SDRAM write path (write-through,
+   invalidate). The 96-entry tile tap stays. T_XLAT reads return the mirror.
+   Both regions are free: PRAM1 ends at word 0x1730000, ST_BASE is 0x1F00000.
+   A pulse from the bridge on either write invalidates the colour cache.
+2. The engine's memory port grows a 2-bit space select beside the address:
+   polygon memory (as now), texture ROM (word 0x0720000 + addr, 16-bit words
+   read as the dword pair), the palette mirror, the xlat mirror. Model2.sv
+   picks the base; the pair cache in front is unchanged (indexed by dword).
+3. The engine, per polygon after R219's dotp: dotl (three multiplies, two
+   adds, the same pool slots), the luminance (one multiply and one add
+   against the texture parameters held as floats -- the walker's 8-bit
+   values converted once at tp_we -- then a clamp and float-to-int), the
+   header words 0 and 3 (two reads through the pair cache; translucent flat
+   polygons culled like the reference), and the colour: a 256-entry direct-
+   mapped cache keyed {colorbase, luma6} in MLABs (key 16 + rgb 24 bits) --
+   a miss costs one palette and three xlat reads and the gamma function.
+   Emits poly_col beside poly_attr; m2_geometry carries it to the clipper's
+   in_col in place of the constant.
+4. Texture RAM: the walker writes op 0x04's data (address bit 23 set;
+   bit 23 clear is log RAM, for the texture LOD, skipped for now) into a
+   128 KB region TEXRAM_BASE (word 0x1740000, 64 K x 16), the way it writes
+   op 0x05 into polygon RAM; the engine's texture space selects RAM or ROM
+   by tha bit 23.
+
+*MEASURED on the boot bench through the title (16:30), the texture ROM now
+loaded there (it never was: the first probe read 0xFFFF for every header
+and said "every object translucent, textured, colorbase 0x3ff" -- an
+unloaded region again, R154's lesson):* 1,917 objects; 58 (3%) have their
+header in TEXTURE RAM (tha 0x018c000c -- the first six objects of every
+list), 1,859 in ROM. Of those: 352 flat, 1,211 textured, 296 textured AND
+translucent, 0 flat translucent, 21 checkered; 32 distinct colorbase
+values (0x155 x241, 0x02c x208, 0x130 x180, 0x127 x108, 0x000 x94 ...).
+So the title is mostly TEXTURED polygons, which this design still draws
+flat in their palette colour, lit; that is the right intermediate picture
+(shape, then shade, then texture), and the colour cache's 32 x 64 key
+space says a 256-entry cache will hit almost always.
+
+*Cost (with the texture RAM: +a walker write state and one SDRAM region).* ~+50 engine cycles per polygon on R217's 177 (header 2 reads, dotl
+9, luminance ~15, colour 3 on a hit); ALM: the cache 16 MLABs (~160), the
+float conversions and clamp ~150, the bridge mirror ~60, texparam floats 32
+x 2 x 32 bits as MLABs. The M10K count does not move. Not done until the ALM
+room from R221 is measured (dbuf16).
+
+*Oracles.* (a) `tb_m2_geo_engine`: a float transcription of the reference's
+luma against the engine's, over random normals, lights and texture
+parameters, and the header address walk against the tho rule; (b) the
+colour stage against a synthetic palette and xlat with the gamma function;
+(c) the board: cars that are shaded, not white.
