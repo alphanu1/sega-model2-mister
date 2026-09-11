@@ -20,7 +20,7 @@
 `timescale 1ns/1ps
 
 module m2_sound_link #(
-  parameter int unsigned BYTE_CYCLES = 19_200    // 31,250 baud 8N1 at 60 MHz (R227)
+  parameter int unsigned BYTE_CYCLES = 16_000    // 31,250 baud 8N1 at 50 MHz
 ) (
   input  logic       clk,
   input  logic       rst_n,

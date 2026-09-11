@@ -13014,3 +13014,42 @@ the registers cost nothing and give the fitter a local source to place
 beside the logic it drives. The rule this is an instance of: **nothing off
 `status` may be used combinationally in a datapath** -- it is a slow
 control from another clock, and the fitter has no idea it is slow.
+
+**R230 -- THE WEDGES: THE TWO VERTEX-REUSE OPTIMISATIONS ARE WRONG
+TOGETHER, AND THE CACHE IS THE CHEAPER ONE TO DROP.**
+
+The board draws long thin coloured wedges across the horizon. Reproduced at
+the desk by rendering the boot bench's own emitted quads: the same wedges,
+converging on the TOP-LEFT CORNER. Twelve of the 4,096 sampled quads have a
+vertex at exactly (0,0), every one of them in slot 1 (v1, the carried
+P0(n-1)), the other three vertices within a pixel or two of each other. A
+tiny distant quad with one corner nailed to the corner of the screen.
+
+*Two theories, both killed by measurement.* (a) A point behind the eye --
+m2_geo_project answers a literal (0,0) for z <= 0, which is Model 1's rule
+and not Model 2's (model2_v.cpp:661 divides unconditionally with FLT_MIN).
+But every one of the twelve has a POSITIVE minimum z, 147 to 265, and not
+one quad in 4,096 has z <= 0. (b) A projection abandoned on timeout, which
+leaves the vertex at whatever position it already held: the counter reads
+ZERO over a whole run. Both wrong, and both were plausible enough to have
+been "fixed" without either being the cause.
+
+*The control that worked.* Disable R218's clipper reuse: 12 -> 0 wedges.
+Disable R217's strip cache: 12 -> 0 wedges. EITHER alone removes all of
+them, so the fault is the pair -- the cache supplies a pixel and the clipper
+then trusts it rather than re-projecting -- and neither is wrong by itself.
+
+*Which to drop, measured rather than assumed:*
+
+    both on            10,787 engine ticks/object, 12 wedges,  8.4% projecting
+    strip cache off    11,067                       0 wedges
+    clipper reuse off  12,088                       0 wedges, 17.2% projecting
+
+The cache is worth 2.6% and the clipper's reuse 12%, so the cache goes.
+
+*What is still not known, and it matters.* WHY the cached pixel is wrong
+when the 3D coordinate beside it is right. The carry mapping was re-derived
+from the reference's buffer rules for all three link types and matches the
+engine's; `cvalid` is only set where all four pixels have just been written;
+`poly_chain_ok` is cleared on a new object and on every cull including
+R223's new one. 2.6% is worth recovering once that is understood.

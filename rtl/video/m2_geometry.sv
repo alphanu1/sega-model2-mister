@@ -309,8 +309,29 @@ module m2_geometry (
       2'd3:    begin hit_i[0] = 2'd0; hit_i[1] = 2'd3; end   // v0 = last v0, v1 = last v3
       default: begin hit_i[0] = 2'd3; hit_i[1] = 2'd2; end   // v0 = last v3, v1 = last v2
     endcase
-    hit[0] = cvalid && poly_chain_ok;
-    hit[1] = cvalid && poly_chain_ok;
+    // THE STRIP CACHE IS OFF (R230), AND IT IS THE CHEAPER OF THE TWO TO LOSE.
+    //
+    // R217 lets a strip's carried vertices keep the pixel the previous polygon
+    // projected, and R218 lets the clipper keep the pixel of a vertex no plane
+    // cut. Together they put a vertex at exactly (0,0) -- the top-left corner
+    // of the screen -- on 12 of the title's 4,096 sampled quads, always in slot
+    // 1, and a quad with one corner pinned there is the white wedge across the
+    // horizon the board has been drawing. Disabling EITHER removes all twelve,
+    // so the fault is the pair: this cache supplies a pixel and the clipper
+    // then trusts it instead of re-projecting.
+    //
+    // Measured, per object, over the title: both on 10,787 ticks; this cache
+    // off 11,067; the clipper's reuse off 12,088. So the correct picture costs
+    // 2.6% here and 12% there, and the choice makes itself.
+    //
+    // NOT the end of it. The remaining question is WHY the cached pixel is
+    // wrong when the 3D coordinate beside it is right -- every one of the
+    // twelve has all four z positive, so it is not a point behind the eye, and
+    // the projector abandoned no projection on timeout in a whole run. The
+    // answer is worth having: R217 is 2.6% and its mapping is sound against
+    // the reference's carry rules, which were re-derived to check.
+    hit[0] = 1'b0;
+    hit[1] = 1'b0;
   end
   wire skip_here = (qi < 2'd2) && hit[qi[0]];
 

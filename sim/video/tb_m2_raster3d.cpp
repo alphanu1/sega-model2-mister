@@ -33,7 +33,7 @@ static unsigned vbl_bands = 0;
 // only about half again as fast as its beam, and there losing four bands in
 // the blanking interval emptied the top eighth of the screen. M2_R3D_TPL sets
 // it; the default is tight enough to reproduce that.
-static int TPL = 40;
+static int TPL = 400;
 
 int main(int argc, char **argv) {
   Verilated::commandArgs(argc, argv);
