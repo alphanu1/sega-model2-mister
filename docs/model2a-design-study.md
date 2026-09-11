@@ -11645,3 +11645,71 @@ pixels of R195 were, and why nothing ever matched the bench. The bench's
 is an edge-triggered request with a held acknowledge and a registered
 address. The next step is to give the bench the board's handshake latency
 on port 4 and watch the stream shift at the desk.
+
+**R208 -- R207 CLOSED: THE STREAM ARRIVED ONE WORD AHEAD BECAUSE THE WALKER
+AND THE ENGINE TOOK THE ADAPTER'S HELD ACKNOWLEDGE AS A NEW ONE, EVERY CYCLE.
+THE FIX IS IN THE REQUESTERS, NOT THE GLUE.** 2026-09-11, 03:40.
+
+*The mechanism, from the RTL.* `m2_sdram_x2` (R162) answers a port with
+`s_ack = f_ack | done`, and `done` clears only when the slow side lowers its
+request. `m2_geo` asked for its display-list words as a LEVEL -- `rd_req` was
+true for the whole of every reading state and `w_ip` advanced on each
+`rd_ack` -- and `m2_geo_engine` did the same with `mem_req`/`ptr`. So one
+acknowledge, held by `done` for as long as the request stood, was consumed
+on every cycle it was up: the walker stepped its index once per cycle with
+the SAME data word, the port never issued the next read (`f_req` is masked
+by `done`), and the words the walker actually captured were whichever the
+held data happened to be when a state changed. The engine's stream was
+skewed the same way. R206 saw the acknowledge outlive its request and put
+the fix in `Model2.sv`'s port-4 glue, where it deadlocked; the glue cannot
+drop a request that the module behind it holds, and it cannot know which
+cycle the module meant to take.
+
+*Reproduced at the desk, then cured.* The boot bench served the walker and
+the engine in the same tick from C++, which is why 3,132 quads were drawn
+there while the board drew none: an instant answer never outlives its
+request. `M2_GEO_LAT=N` now makes the bench serve both port-4 requesters as
+the adapter and the glue do it -- the request registered (`geo_rd_req_r`),
+a read issued when it stands with no `done`, `done` set on the fast
+acknowledge and cleared only on a cycle the registered request is low, the
+acknowledge `f_ack | done` reaching the requester a tick late, the data
+held. The model must run on EVERY tick, not only on request ticks; the first
+version ran only while the request was up, never saw the gap, and hung the
+walker on its own stuck acknowledge (frames 0). Same RTL, same phase
+(`+insn=19500000`, `M2_POLY_FROM=17000000`), instant service vs latency 6:
+
+                                      instant   held ack, N=6   held ack, N=6
+                                                 (RTL before)    (RTL fixed)
+    walk frames / objects           80 / 1250      43 / 38        80 / 1240
+    walk ops at the end                  404        32767 (bound)      404
+    quads out of the clipper            3132            0            3132
+    engine first read, object 1     0x95FF9D            -         0x95FF9D
+    polygon_data dwords delivered      32768        49152           32768
+
+The held-ack trace (`M2_GEOTRACE`) shows the old walker taking the
+acknowledge on 30 consecutive ticks with `w_ip` already moved on, exactly
+the board's "first read at 0x1388 = obc" of R207. The fixed walker takes
+one word per acknowledge edge, drops its request for one cycle, `done`
+clears, and the next read issues: ten ticks a word at N=6.
+
+*The fix (`m2_geo.sv`, `m2_geo_engine.sv`).* Two rules, in the requester:
+an acknowledge counts only on its rising edge (`rd_go = rd_ack & ~rd_ack_d`,
+at all eleven consume sites including `mat_we`; `mem_go` at the engine's
+five), and the request is lowered for the cycle after each accepted word
+(`rd_req = ~rd_go_d & (reading states)`). Through the glue's register stage
+that gap reaches the adapter two cycles later, `done` clears the cycle
+after, and the acknowledge falls before the next word's rises. m2_sdram's
+ACK_HOLD is 2 fast cycles = 1 slow, and the request returns five slow cycles
+after the edge, so the held fast acknowledge cannot re-arm `done` for the
+next word (the R167 shape) either. The per-object read count in the bench
+triples under the model (3597 -> 10791) because it counts acknowledge
+ticks, not words; the first-read index and data are identical.
+
+*Why every port-4 requester has to obey both rules, and what else does not.*
+The CPU bridge and the TGP data port drop their requests on the acknowledge
+(state machines that leave the requesting state), so they were never
+exposed. Anything added to a shared port that holds a level request across
+consecutive words repeats R207; the bench's `M2_GEO_LAT` model is the test
+for it and must be run on any new requester. Unconfirmed until the board
+says so: `build/ack` (seeds 11, 13, 14, 15) is the first bitstream with the
+requester-side fix and no glue gating, probe still on the wire.

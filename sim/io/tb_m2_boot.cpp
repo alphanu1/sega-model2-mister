@@ -433,7 +433,10 @@ int main(int argc, char **argv) {
   // land somewhere recognisable, like word 0.
   auto geo_tick = [&]() {
     d->geo_rd_ack = 0;
-    if (d->geo_rd_req) {
+    // With the board's handshake modelled the service runs EVERY tick: `done`
+    // clears on the tick the request is low, and that tick must be seen.
+    static const int geo_lat_on = std::getenv("M2_GEO_LAT") ? std::atoi(std::getenv("M2_GEO_LAT")) : 0;
+    if (d->geo_rd_req || geo_lat_on > 0) {
       // WHAT THE WALKER READS FOR A polygon_data COMMAND. MAME's format is
       // address, then a full-dword count, then that many payload words. Ours
       // reports 32 commands and 0 dwords, so every count word is reading zero
@@ -444,7 +447,7 @@ int main(int argc, char **argv) {
       static unsigned last_st = 99; static uint32_t last_a = 0xffffffff;
       const bool newrd = (st != last_st) || (uint32_t(d->geo_rd_addr) != last_a);
       if (newrd) { last_st = st; last_a = uint32_t(d->geo_rd_addr); }
-      if (newrd && g_pdlog && g_pdrd_n < 400000 && st <= 12) {
+      if (newrd && d->geo_rd_req && g_pdlog && g_pdrd_n < 400000 && st <= 12) {
         static const char *WN[13] = {"W_IDLE","W_FETCH","W_DECODE","W_SKIP","W_CNT",
                                      "W_TFIFO","W_DDSKIP","W_DDATTR","W_OPRD","W_OBJW",
                                      "W_PDA","W_PDR","W_PDW"};
@@ -462,21 +465,38 @@ int main(int argc, char **argv) {
       // address it presents -- which cannot show a stream that arrives one
       // word ahead (study R207).
       static const int geo_lat = std::getenv("M2_GEO_LAT") ? std::atoi(std::getenv("M2_GEO_LAT")) : 0;
-      static int gl_req_p = 0, gl_cnt = -1, gl_hold = 0; static uint32_t gl_addr = 0;
+      // Modelled as m2_sdram_x2 does it (R162): the request is registered
+      // (Model2.sv's geo_rd_req_r), a fast read is issued when it stands with
+      // no `done`, `done` latches on the fast acknowledge and clears ONLY
+      // when the registered request is low, the acknowledge is f_ack | done
+      // and reaches the walker a tick late (geo_rd_ack_r), data held.
+      static int gl_req_r = 0, gl_done = 0, gl_cnt = -1, gl_ack_r = 0;
+      static uint32_t gl_addr = 0, gl_addr_r = 0, gl_data = 0;
       if (geo_lat > 0) {
-        if (d->geo_rd_req && !gl_req_p && gl_cnt < 0 && gl_hold == 0) { gl_cnt = geo_lat; gl_addr = uint32_t(d->geo_rd_addr); }
-        if (gl_cnt > 0) --gl_cnt;
-        if (gl_cnt == 0) {
+        d->geo_rd_ack = gl_ack_r; d->geo_rd_data = gl_data;
+        int f_ack = 0;
+        if (gl_cnt > 0 && --gl_cnt == 0) {
           const uint32_t a = (0x16f0000u + (gl_addr << 1)) & 0x1ffffff;
-          d->geo_rd_data = uint32_t(mem[a]) | (uint32_t(mem[(a + 1) & 0x1ffffff]) << 16);
-          d->geo_rd_ack  = 1; gl_hold = 2; gl_cnt = -1;
-        } else if (gl_hold > 0) { d->geo_rd_ack = 1; if (--gl_hold == 0) {} }
+          gl_data = uint32_t(mem[a]) | (uint32_t(mem[(a + 1) & 0x1ffffff]) << 16);
+          f_ack = 1; gl_cnt = -1;
+        }
+        if (!gl_req_r) gl_done = 0; else if (f_ack) gl_done = 1;
+        if (gl_req_r && !gl_done && !f_ack && gl_cnt < 0) { gl_cnt = geo_lat; gl_addr = gl_addr_r; }
+        gl_ack_r = f_ack | gl_done;
+        gl_req_r = d->geo_rd_req; gl_addr_r = uint32_t(d->geo_rd_addr);
+        static FILE *gt = std::getenv("M2_GEOTRACE") ? std::fopen(std::getenv("M2_GEOTRACE"), "w") : nullptr;
+        static int gt_n = 0;
+        if (gt && (st != 0 || gt_n) && gt_n < 6000) {
+          std::fprintf(gt, "%llu st=%u req=%d addr=%05x ack=%d data=%08x cnt=%d done=%d ebusy=%d\n",
+                       (unsigned long long)d->dbg_acc, st, (int)d->geo_rd_req, (unsigned)d->geo_rd_addr,
+                       (int)d->geo_rd_ack, (unsigned)d->geo_rd_data, gl_cnt, gl_done, (int)d->obs_eng_busy);
+          ++gt_n;
+        }
       } else {
         const uint32_t a = (0x16f0000u + (uint32_t(d->geo_rd_addr) << 1)) & 0x1ffffff;
         d->geo_rd_data = uint32_t(mem[a]) | (uint32_t(mem[(a + 1) & 0x1ffffff]) << 16);
         d->geo_rd_ack  = 1;
       }
-      gl_req_p = d->geo_rd_req;
     } else {
       static int *dummy = nullptr; (void)dummy;
     }
@@ -490,6 +510,30 @@ int main(int argc, char **argv) {
                          (int)(int16_t)d->eng_q_x1, (int)(int16_t)d->eng_q_y1,
                          (int)(int16_t)d->eng_q_x2, (int)(int16_t)d->eng_q_y2,
                          (int)(int16_t)d->eng_q_x3, (int)(int16_t)d->eng_q_y3});
+    // The engine, same board handshake when M2_GEO_LAT is set (R207).
+    {
+      static const int eng_lat = std::getenv("M2_GEO_LAT") ? std::atoi(std::getenv("M2_GEO_LAT")) : 0;
+      static int el_req_r = 0, el_done = 0, el_cnt = -1, el_ack_r = 0;
+      static uint32_t el_addr = 0, el_addr_r = 0, el_oba = 0, el_oba_r = 0, el_data = 0;
+      if (eng_lat > 0) {
+        d->eng_mem_ack = el_ack_r; d->eng_mem_data = el_data;
+        int f_ack = 0;
+        if (el_cnt > 0 && --el_cnt == 0) {
+          uint32_t base, off;
+          if      (el_oba & (1u << 24)) { base = 0x1720000u; off = el_addr & 0x7fffu;   }
+          else if (el_oba & (1u << 23)) { base = 0x0b20000u; off = el_addr & 0x3fffffu; }
+          else                          { base = 0x1710000u; off = el_addr & 0x7fffu;   }
+          const uint32_t a = (base + off * 2u) & 0x1ffffff;
+          el_data = uint32_t(mem[a]) | (uint32_t(mem[(a + 1) & 0x1ffffff]) << 16);
+          f_ack = 1; el_cnt = -1;
+        }
+        if (!el_req_r) el_done = 0; else if (f_ack) el_done = 1;
+        if (el_req_r && !el_done && !f_ack && el_cnt < 0) { el_cnt = eng_lat; el_addr = el_addr_r; el_oba = el_oba_r; }
+        el_ack_r = f_ack | el_done;
+        el_req_r = d->eng_mem_req; el_addr_r = uint32_t(d->eng_mem_addr); el_oba_r = uint32_t(d->geo_oba_last);
+      }
+      if (eng_lat > 0) goto eng_served;
+    }
     if (d->eng_mem_req) {
       // THE SAME DECODE AS Model2.sv's, WHICH THIS PREVIOUSLY CLAIMED AND WAS
       // NOT. It always used the polygon-ROM base and never masked the selector
@@ -519,6 +563,7 @@ int main(int argc, char **argv) {
       }
     }
     d->geo_sd_ack = 0;
+    eng_served:
     // PER-OBJECT READ ACCOUNTING, the bench's side of the board's build/eo
     // probe: first read (index, data) and read count for the first objects
     // after M2_POLY_FROM.

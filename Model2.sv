@@ -2856,6 +2856,15 @@ always_ff @(posedge clk_sys) begin
 	// engine finishes 264 objects a frame. The hazard argument was on paper;
 	// the board says the gating deadlocks the handover. Back to the R173 form,
 	// with the probe left in to see what the engine's first read returns.
+	// R208: the fault R206 chased lives in the REQUESTERS. m2_sdram_x2 holds
+	// its acknowledge for as long as the request stands (R162), and both
+	// m2_geo and m2_geo_engine held their request as a level across
+	// consecutive words while stepping their index on every acknowledge
+	// cycle -- so they took one held acknowledge many times with stale data,
+	// the port never issued the next read, and the stream arrived a word
+	// ahead (R207). They now take the acknowledge on its rising edge and drop
+	// the request for a cycle after each word; this glue stays as R173 left
+	// it. Reproduced and cured in the boot bench under M2_GEO_LAT.
 	p4_ack_d        <= p_ack[4];
 	geo_rd_ack_r    <= p_ack[4] & geo_rd_req_r & ~eng_mem_req_r;
 	geo_rd_data_r   <= p_dout[4][31:0];

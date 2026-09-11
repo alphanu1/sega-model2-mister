@@ -183,7 +183,17 @@ module m2_geo_engine #(
   logic        fsel;         // 0 = scaling x, 1 = scaling y
 
   assign mem_addr = ptr;
-  assign mem_req  = (st == E_RD) || (st == E_ATTR) || (st == E_NORM) || (st == E_SKIP);
+  // Rising-edge acknowledge and a one-cycle request gap per word: see the
+  // same note in m2_geo.sv (R207). This engine advances ptr on every
+  // acknowledge and held its request across words the same way.
+  logic mem_ack_d, mem_go_d;
+  wire  mem_go;
+  assign mem_go = mem_ack & ~mem_ack_d;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin mem_ack_d <= 1'b0; mem_go_d <= 1'b0; end
+    else begin mem_ack_d <= mem_ack; mem_go_d <= mem_go; end
+  end
+  assign mem_req  = ~mem_go_d & ((st == E_RD) || (st == E_ATTR) || (st == E_NORM) || (st == E_SKIP));
 
   assign v0x = p1prev[0]; assign v0y = p1prev[1]; assign v0z = p1prev[2];
   assign v1x = p0prev[0]; assign v1y = p0prev[1]; assign v1z = p0prev[2];
@@ -224,7 +234,7 @@ module m2_geo_engine #(
         end
 
         // ---- read three words into xyz, then hand them to the transform
-        E_RD: if (mem_ack) begin
+        E_RD: if (mem_go) begin
           xyz[widx] <= mem_data;
           ptr <= ptr + 24'd1;
           if (widx == 2'd2) begin widx <= 2'd0; st <= E_XF; end
@@ -289,7 +299,7 @@ module m2_geo_engine #(
         end
 
         // ---- the attribute word terminates the object when (attr & 3) == 0
-        E_ATTR: if (mem_ack) begin
+        E_ATTR: if (mem_go) begin
           attr <= mem_data;
           ptr  <= ptr + 24'd1;
           if (remain == 32'd0) begin
@@ -312,7 +322,7 @@ module m2_geo_engine #(
         //      so these three words are half of every luminance the renderer
         //      will compute. They arrive in stream order x, y, z; skipn counts
         //      down from 3, so 3->x, 2->y, 1->z.
-        E_NORM: if (mem_ack) begin
+        E_NORM: if (mem_go) begin
           ptr <= ptr + 24'd1;
           case (skipn)
             2'd3: nrm[0] <= mem_data;
@@ -347,7 +357,7 @@ module m2_geo_engine #(
         end
 
         // ---- the unused triangle point, consumed
-        E_SKIP: if (mem_ack) begin
+        E_SKIP: if (mem_go) begin
           ptr <= ptr + 24'd1;
           if (skipn == 2'd1) st <= E_EMIT;
           else skipn <= skipn - 2'd1;

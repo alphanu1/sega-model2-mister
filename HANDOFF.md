@@ -1,7 +1,47 @@
 # Handoff
 
-**Updated:** 2026-09-10. Study entries R176-R201. R172 WITHDRAWN, R185 partly
-RETRACTED, R189 corrected by R191, R196's central claim WITHDRAWN the same day.
+**Updated:** 2026-09-11 03:45. Study entries R176-R208. R172 WITHDRAWN, R185
+partly RETRACTED, R189 corrected by R191, R196's central claim WITHDRAWN the
+same day, R206 WITHDRAWN, R207 closed by R208.
+
+---
+
+## R208: THE 3D STREAM WAS ONE WORD AHEAD BECAUSE THE WALKER AND THE ENGINE TOOK ONE HELD ACKNOWLEDGE EVERY CYCLE. FIXED IN THE REQUESTERS, BENCH-PROVEN, ON THE BOARD NEXT
+
+`m2_sdram_x2` holds a port's acknowledge for as long as the request stands
+(R162). `m2_geo` held `rd_req` as a level through every reading state and
+stepped `w_ip` on every `rd_ack` cycle; `m2_geo_engine` did the same with
+`mem_req`. One acknowledge, many words: the index moved on with stale data
+and the port never issued the next read. That is R207's "engine's first read
+at 0x1388 = obc" and every shifted matrix and focal before it. The boot
+bench never showed it because C++ answered in the same tick.
+
+**Fix, in `rtl/video/m2_geo.sv` and `rtl/video/m2_geo_engine.sv`:** take the
+acknowledge on its rising edge only (`rd_go`/`mem_go`, at every consume
+site) and lower the request for one cycle after each accepted word. The
+port-4 glue in `Model2.sv` stays as R173 left it (R206's glue-side gating
+deadlocked, and could not have worked: the glue cannot drop a request the
+module holds).
+
+**Bench proof:** `M2_GEO_LAT=6` now serves both port-4 requesters exactly as
+the adapter and glue do (registered request, `done` set on the fast ack and
+cleared only on a low-request cycle, ack `f_ack | done` a tick late, data
+held; the model runs every tick or it hangs on its own stuck ack). Old RTL
+under it: 43 walk frames, 38 objects, 0 quads, walk at its 32767-op bound,
+trace shows 30 consecutive ack ticks consumed. Fixed RTL: 80 frames, 1240
+objects, 3,132 quads, first read per object at the object's own address --
+identical to instant service. `M2_GEOTRACE=<file>` dumps the handshake.
+
+    M2_GEO_LAT=6 M2_POLY_FROM=17000000 ./obj_boot/Vm2_boot_harness +insn=19500000
+
+**On the board:** `build/ack` (seeds 11, 13, 14, 15) is building at 03:40 --
+R202+R203+R205+R208, probe on the wire (decode with `decode_eo.py` /
+`decode_poly.py`, layout unchanged from `build/eo2`). Expect the first-read
+index to become the object's `oba` and polys > 0. If the first read is
+right and polys stay 0 the next fault is downstream of the engine's fetch.
+
+**Rule for any new requester on a shared port:** both rules above, and run
+it under `M2_GEO_LAT` before a build.
 
 ---
 
@@ -183,7 +223,7 @@ object; seven reads means it ends at its first attribute word.
 (`build/eo` s11: zero engine reads, busy never toggling). Reverted to the R173
 handover; the engine-first-read probe stays in for `build/eo2`.
 
-**R207, 02:55, the board-side fault located:** on the board the engine's
+**R207, 02:55, the board-side fault located (closed by R208 above):** on the board the engine's
 first read per object is at index 0x1388 = the object's polygon COUNT, base
 select 0, twelve reads per object; in the bench it is the object's address,
 base ROM, hundreds of reads. The walker's buffer-RAM stream through port 4
