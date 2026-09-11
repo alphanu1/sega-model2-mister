@@ -13,7 +13,11 @@ game's own 30 Hz list rate, with the store dropping nothing. `build/dbuf15`
 553 -- the chip has no blocks left, only bits (77%). Small wide arrays go
 to MLABs. **`build/dbuf16` (PCM lines, MultiPCM state and register fields,
 clipper stack all in MLABs) FITS AT 83% -- 34,614 ALM against 40,555 -- and
-s14 MEETS TIMING ON EVERY CLOCK (setup +0.556, hold +0.186).** Deployed s14.
+s14 MEETS TIMING ON EVERY CLOCK (setup +0.556, hold +0.186).** Deployed s14:
+capture identical to dbuf14b (drops 0), SOUND CONFIRMED BY EAR on the board
+with the MultiPCM state in MLABs. R221 closed. The user reports the 3D still
+has issues on this build (details being gathered). R222 (lighting design,
+measured inputs) is written; implementation next.
 
 **Fixed today, each with a study entry and a board or bench proof:**
 - R208 walker/engine took one held acknowledge many times (stream one word ahead)
@@ -30,7 +34,7 @@ s14 MEETS TIMING ON EVERY CLOCK (setup +0.556, hold +0.186).** Deployed s14.
 
 **Open, in order:**
 1. ALM: 83% fitted (dbuf16). The probes that reach no output cost nothing (synthesis sweeps them). Next by dbuf16's own table: the quad store's 1,669 registers, then the i960 (8,049 total). M10K: 553/553, nothing more goes there. Lighting (R222 design in the study) can start.
-2. Lighting: light vector (cmd 0x0a) and texture-parameter table (cmd 0x0d) captured by the walker; dot(normal, light) in the engine; luma -> colour-translation lookup at q_col. Small; needs the ALM room.
+2. Lighting: R222 in the study is the design, with the reference's arithmetic and the measured inputs (title: 1,917 objects, 3% headers in texture RAM, 352 flat / 1,507 textured, 32 colour bases). Steps: bridge mirrors (palette 0x1000-0x13ff and the whole colorxlat into free SDRAM at words 0x1730000/0x1731000), engine memory-space select, walker op 0x04 into TEXRAM (word 0x1740000), engine dotl + luminance + header read + colour cache, poly_col through m2_geometry to the clipper. Oracles listed there.
 3. Throughput: quad projector still ~14% of geometry time; the transform ~14%; `dbg_hold` reaches 3 frames in stretches, partly the game's own list timing (separate the two).
 4. Vertical scroll: fixed by R212. R200's band-13 cut: superseded by 8-row bands? -- re-test the 3D test bars.
 5. Textures: the largest block left; see R215 road 2 for vertex words in SDRAM if capacity returns as an issue.
