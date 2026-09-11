@@ -8,9 +8,11 @@
 Lit and coloured 3D, the top of the screen drawn, the wedges gone, translucent
 polygons culled as the reference culls them, texture RAM zeroed; `build/fix3d2`
 adds textured polygons as lit grey (R231). Still wrong on the board: the cars
-play the crash animation continuously (R232, coprocessor data, not geometry),
-and 8-row stripes drop out through busy bands (the fill is only ~6% faster than
-the beam, R225). Clocks: 120/60/30 was built and measured -- the core closes at
+play the crash animation continuously (R232, coprocessor data, not geometry);
+stray quads off the cars, now CAUGHT ON THE BOARD (R237: a carried vertex with
+the right y and the wrong x -- 165 in 92 frames, none reproducible at the desk;
+suspect the projector's x/y multiplies through the shared pool under the
+board's memory timing); and 8-row stripes through busy bands (R225). Clocks: 120/60/30 was built and measured -- the core closes at
 60.07 and the i960 at 29.85, but the SDRAM controller tops out at ~98-107 and
 both port adapters REQUIRE an exact 2:1 (R227/R228); parked at 100/50/25 until
 the controller's port mux/read return is pipelined or the 3D gets its own domain.

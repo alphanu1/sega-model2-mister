@@ -13271,3 +13271,22 @@ polygons, grey at half only on a black entry. What the board still shows:
 stray quads off the cars (the catcher in this build is streaming them) and
 the cars barrel-rolling in the crash animation continuously (R232, the
 overnight trace).*
+
+**R237 -- THE BOARD'S OWN WEDGES: A CARRIED VERTEX WITH THE RIGHT y AND THE
+WRONG x.** `build/fix3d4` s14, 92 frames of the title: 165 quads caught by
+R235's catcher, every one with the stray vertex in slot 0 or 1 -- the two
+vertices a strip carries from the previous polygon -- its y within a pixel
+or two of the other three and its x displaced 70-180 px; over consecutive
+frames the stray x sits near 150-170 while the true cluster moves with the
+car (297 -> 312 -> 335). So the vertex's y was projected correctly and its
+x was not: the projector forms sx and sy as two separate multiplies through
+the shared float pool, and an x product taken from the wrong transaction
+gives precisely this shape. No desk run reproduces it -- 32,000 quads with
+the strip cache off, with and without a FIXED port latency -- and the board
+differs from every one of those in the TIMING of its memory acknowledges,
+which sets the interleaving of the pool's clients. Next: a randomised port
+latency in the bench to search the interleavings.
+
+*And R233 on the board:* store drops 35 at worst in the boot stretch against
+1,242 and 1,898 before; quads pegged at 2,048 only at the very start. The
+silhouette frames should be gone.
