@@ -118,7 +118,10 @@ int main(int argc, char** argv) {
     size_t w = 0;
     w = put_v(w, -50.0f,  50.0f, 1.0f);    // P0(n-1) -> (198, 142)
     w = put_v(w, -50.0f, -50.0f, 1.0f);    // P1(n-1) -> (198, 242)
-    obj[w++] = 0x00000001u;                // quad, link 0, (attr&3) != 0
+    // Link 2 and double-sided (bit 17): link 0 and a single-sided back face
+    // are CULLED as the reference culls them (R219), and these polygons are
+    // meant to be drawn.
+    obj[w++] = 0x00020201u;                // quad, link 2, double-sided, (attr&3) != 0
     w = put_v(w, 0.0f, 0.0f, 1.0f);        // normal, read and discarded
     w = put_v(w,  50.0f,  50.0f, 1.0f);    // P0(n)   -> (298, 142)
     w = put_v(w,  50.0f, -50.0f, 1.0f);    // P1(n)   -> (298, 242)
@@ -149,7 +152,7 @@ int main(int argc, char** argv) {
     size_t w = 0;
     w = put_v(w, 2000.0f,  50.0f, 1.0f);   // x = 2000 > a_right(248)*z: outside
     w = put_v(w, 2000.0f, -50.0f, 1.0f);
-    obj[w++] = 0x00000001u;
+    obj[w++] = 0x00020201u;
     w = put_v(w, 0.0f, 0.0f, 1.0f);
     w = put_v(w, 2100.0f,  50.0f, 1.0f);
     w = put_v(w, 2100.0f, -50.0f, 1.0f);
@@ -177,7 +180,7 @@ int main(int argc, char** argv) {
     size_t w = 0;
     w = put_v(w, -50.0f,  10.0f, 1.0f);    // P0(n-1) -> (148, 152)
     w = put_v(w, -50.0f, -10.0f, 1.0f);    // P1(n-1) -> (148, 232)
-    obj[w++] = 0x00000001u;
+    obj[w++] = 0x00020201u;
     w = put_v(w, 0.0f, 0.0f, 1.0f);
     w = put_v(w,  50.0f,  10.0f, 1.0f);    // P0(n)   -> (348, 152)
     w = put_v(w,  50.0f, -10.0f, 1.0f);    // P1(n)   -> (348, 232)
@@ -227,7 +230,7 @@ int main(int argc, char** argv) {
     size_t w = 0;
     w = put_v(w, -50.0f,  50.0f, 1.0f);   // P0(n-1) inside
     w = put_v(w, -50.0f, -50.0f, 1.0f);   // P1(n-1) inside
-    obj[w++] = 0x00000001u;
+    obj[w++] = 0x00020201u;
     w = put_v(w, 0.0f, 0.0f, 1.0f);
     w = put_v(w, 400.0f,  50.0f, 1.0f);   // P0(n)   outside: 400 > 248
     w = put_v(w, 400.0f, -50.0f, 1.0f);   // P1(n)   outside
@@ -335,7 +338,7 @@ int main(int argc, char** argv) {
     size_t w = 0;
     w = put_v(w, -50.0f,  50.0f, 0.0f);    // z = 0 on every vertex
     w = put_v(w, -50.0f, -50.0f, 0.0f);
-    obj[w++] = 0x00000001u;
+    obj[w++] = 0x00020201u;
     w = put_v(w, 0.0f, 0.0f, 1.0f);
     w = put_v(w,  50.0f,  50.0f, 0.0f);
     w = put_v(w,  50.0f, -50.0f, 0.0f);
@@ -381,17 +384,17 @@ int main(int argc, char** argv) {
     w = put_v(w, -50.0f,  50.0f, 1.0f);    // P0(n-1)
     w = put_v(w, -50.0f, -50.0f, 1.0f);    // P1(n-1)
     // polygon 1 STRADDLES the right plane, so the clipper must cut and project
-    obj[w++] = 0x00000001u;
+    obj[w++] = 0x00020201u;
     w = put_v(w, 0.0f, 0.0f, 1.0f);
     w = put_v(w, 400.0f,  50.0f, 1.0f);
     w = put_v(w, 400.0f, -50.0f, 1.0f);
     // polygon 2 follows immediately and is wholly inside
-    obj[w++] = 0x00000001u;
+    obj[w++] = 0x00020201u;
     w = put_v(w, 0.0f, 0.0f, 1.0f);
     w = put_v(w,  60.0f,  40.0f, 1.0f);
     w = put_v(w,  60.0f, -40.0f, 1.0f);
     // polygon 3, so the pipeline must still be accepting work afterwards
-    obj[w++] = 0x00000001u;
+    obj[w++] = 0x00020201u;
     w = put_v(w, 0.0f, 0.0f, 1.0f);
     w = put_v(w,  70.0f,  30.0f, 1.0f);
     w = put_v(w,  70.0f, -30.0f, 1.0f);

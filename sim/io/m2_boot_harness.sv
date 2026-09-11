@@ -159,6 +159,11 @@ module m2_boot_harness #(
   // INSIDE THE COPROCESSOR: a, d, data-RAM 0x69/0x6a and the retire strobe,
   // to watch the record-base arithmetic of the track lookup (study R204).
   output logic        obs_eng_busy,
+  output logic [4:0]  obs_eng_state,       // m2_geo_engine.st, for the per-stage cost (R215)
+  output logic        obs_pj_busy,
+  output logic        obs_pj_owner,        // 1 = the clipper's projection
+  output logic        obs_w_granted, obs_k_granted,
+  output logic        obs_pj_hit,          // R217: a vertex served from the last polygon's pixels
   output logic        obs_tgp_retire,
   output logic [15:0] obs_tgp_rpc,
   output logic [31:0] obs_tgpx_a, obs_tgpx_d, obs_tgp_ram69, obs_tgp_ram6a,
@@ -851,6 +856,12 @@ module m2_boot_harness #(
   assign obs_poly_attr = u_geometry.u_engine.poly_attr;
   assign obs_foc_x = geo_foc_x; assign obs_foc_y = geo_foc_y;
   assign obs_eng_busy = geo_eng_busy;
+  assign obs_eng_state = u_geometry.u_engine.st;
+  assign obs_pj_busy = u_geometry.pj_busy;
+  assign obs_pj_owner = u_geometry.pj_owner;
+  assign obs_w_granted = u_geometry.w_granted;
+  assign obs_pj_hit = (u_geometry.qst == 2'd1) && u_geometry.skip_here;
+  assign obs_k_granted = u_geometry.k_granted;
   assign obs_tgp_retire = u_copro.u_tgp.core.retire;
   assign obs_tgp_rpc    = u_copro.u_tgp.core.retire_pc;
   assign obs_tgpx_a     = u_copro.u_tgp.core.u_regs.reg_a;

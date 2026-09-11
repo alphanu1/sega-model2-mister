@@ -100,6 +100,11 @@ module m2_geo_engine #(
   output logic [31:0] fmul_a, fmul_b,
   input  logic        fmul_gnt, fmul_rsp,
   input  logic [31:0] fmul_res,
+  // R219: the face test's adder, the pool's slot the geometry had tied off.
+  output logic        fadd_req,
+  output logic [31:0] fadd_a, fadd_b,
+  input  logic        fadd_gnt, fadd_rsp,
+  input  logic [31:0] fadd_res,
 
   // ---- the shared arithmetic, forwarded to m2_geo_xform
   output logic        mul_req,
@@ -126,7 +131,8 @@ module m2_geo_engine #(
 
   output logic [15:0] dbg_polys,      // emitted this object
   output logic [15:0] dbg_objects,    // objects completed
-  output logic [15:0] dbg_capped      // objects that ran into MAX_POLYS
+  output logic [15:0] dbg_capped,     // objects that ran into MAX_POLYS
+  output logic [15:0] dbg_culled      // R219: polygons the reference would not render
 );
 
   // ---------------------------------------------------------------- transform
@@ -168,10 +174,10 @@ module m2_geo_engine #(
   logic        xf_translate;
   assign nrm_x = nrm[0]; assign nrm_y = nrm[1]; assign nrm_z = nrm[2];
 
-  typedef enum logic [3:0] {
+  typedef enum logic [4:0] {
     E_IDLE, E_RD, E_XF, E_XFW, E_FOC, E_FOCW, E_STORE, E_ATTR, E_NORM,
     E_NXF, E_NXFW, E_SKIP,
-    E_EMIT, E_LINK, E_DONE
+    E_EMIT, E_LINK, E_DONE, E_DOT, E_DOTA
   } estate_t;
   estate_t st, ret;
 
@@ -180,6 +186,20 @@ module m2_geo_engine #(
   logic [1:0] dst;                  // 0=p0prev 1=p1prev 2=p0cur 3=p1cur
   logic [1:0] skipn;
   logic [31:0] fx, fy, fz;   // the point, between transform and focus
+  // R219: THE REFERENCE CULLS WHAT WE EMITTED. model2_v.cpp check_culling:
+  // a single-sided polygon (attr bit 17 clear) whose face is the back
+  // (normal . point < 0, the point being the polygon's first new vertex
+  // AFTER the matrix and BEFORE the focus) is not rendered, and neither is
+  // a polygon of link type 0 (attr bits 9:8). This engine emitted every
+  // polygon: the back of every car and building, and the title's frames
+  // carried ~5,000 quads where the reference's own peak is 4,798 records
+  // "of which not all emit" (study R215/R216). The dot product is three
+  // multiplies on the focus multiplier's port and two adds on the pool's
+  // spare adder slot, in sequence, before E_EMIT.
+  logic [31:0] dpx, dpy, dpz;      // the first new point, pre-focus
+  logic [31:0] dprod [3];
+  logic [1:0]  dstep, dgot;
+  logic        dot_neg;
   logic        fsel;         // 0 = scaling x, 1 = scaling y
 
   assign mem_addr = ptr;
@@ -204,7 +224,9 @@ module m2_geo_engine #(
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       st <= E_IDLE; ret <= E_IDLE; busy <= 1'b0; poly_valid <= 1'b0;
-      dbg_capped <= 16'd0;
+      dbg_capped <= 16'd0; dbg_culled <= 16'd0;
+      fadd_req <= 1'b0; fadd_a <= 32'd0; fadd_b <= 32'd0; dpx <= 32'd0; dpy <= 32'd0; dpz <= 32'd0;
+      dprod[0] <= 32'd0; dprod[1] <= 32'd0; dprod[2] <= 32'd0; dstep <= 2'd0; dgot <= 2'd0; dot_neg <= 1'b0;
       nrm[0] <= 32'd0; nrm[1] <= 32'd0; nrm[2] <= 32'd0; xf_translate <= 1'b1;
       ptr <= 24'd0; remain <= 32'd0; widx <= 2'd0; dst <= 2'd0; skipn <= 2'd0;
       attr <= 32'd0; xf_in_valid <= 1'b0;
@@ -261,6 +283,7 @@ module m2_geo_engine #(
         // vertex is not a screen coordinate until focus has been applied.
         E_XFW: if (xf_out_valid) begin
           fx <= xf_out_x; fy <= xf_out_y; fz <= xf_out_z;
+          if (dst == 2'd2) begin dpx <= xf_out_x; dpy <= xf_out_y; dpz <= xf_out_z; end   // R219
           fsel <= 1'b0;
           st <= E_FOC;
         end
@@ -294,7 +317,7 @@ module m2_geo_engine #(
                           skipn <= 2'd3; st <= E_SKIP;
                         end end
             default: begin p1cur[0] <= fx; p1cur[1] <= fy; p1cur[2] <= fz;
-                           st <= E_EMIT; end
+                           dstep <= 2'd0; dgot <= 2'd0; st <= E_DOT; end
           endcase
         end
 
@@ -359,11 +382,44 @@ module m2_geo_engine #(
         // ---- the unused triangle point, consumed
         E_SKIP: if (mem_go) begin
           ptr <= ptr + 24'd1;
-          if (skipn == 2'd1) st <= E_EMIT;
+          if (skipn == 2'd1) begin dstep <= 2'd0; dgot <= 2'd0; st <= E_DOT; end
           else skipn <= skipn - 2'd1;
         end
+        // ---- R219: normal . point, three multiplies then two adds
+        E_DOT: begin
+          if (dstep < 2'd3) begin
+            fmul_req <= 1'b1;
+            fmul_a   <= (dstep == 2'd0) ? nrm[0] : (dstep == 2'd1) ? nrm[1] : nrm[2];
+            fmul_b   <= (dstep == 2'd0) ? dpx    : (dstep == 2'd1) ? dpy    : dpz;
+            if (fmul_gnt) begin fmul_req <= 1'b0; dstep <= dstep + 2'd1; end
+          end
+          if (fmul_rsp) begin
+            dprod[dgot] <= fmul_res;
+            dgot <= dgot + 2'd1;
+            if (dgot == 2'd2) begin dstep <= 2'd0; dgot <= 2'd0; st <= E_DOTA; end
+          end
+        end
+        E_DOTA: begin
+          if (dstep == 2'd0) begin
+            fadd_req <= 1'b1; fadd_a <= dprod[0]; fadd_b <= dprod[1];
+            if (fadd_gnt) begin fadd_req <= 1'b0; dstep <= 2'd1; end
+          end else if (dstep == 2'd2) begin
+            fadd_req <= 1'b1; fadd_a <= dprod[0]; fadd_b <= dprod[2];
+            if (fadd_gnt) begin fadd_req <= 1'b0; dstep <= 2'd3; end
+          end
+          if (fadd_rsp) begin
+            if (dstep == 2'd1) begin dprod[0] <= fadd_res; dstep <= 2'd2; end
+            else begin dot_neg <= fadd_res[31] && (fadd_res[30:0] != 31'd0); st <= E_EMIT; end
+          end
+        end
 
-        E_EMIT: begin
+        E_EMIT: if ((attr[9:8] == 2'd0) || (dot_neg && !attr[17])) begin
+          // R219: culled as the reference culls it -- link type 0, or the
+          // back of a single-sided polygon. The strip carry still runs.
+          remain <= remain - 32'd1;
+          dbg_culled <= dbg_culled + 16'd1;
+          st <= E_LINK;
+        end else begin
           poly_valid <= 1'b1;
           if (poly_valid && poly_ready) begin
             poly_valid <= 1'b0;

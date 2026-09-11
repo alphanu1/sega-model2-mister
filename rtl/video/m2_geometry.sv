@@ -99,6 +99,7 @@ module m2_geometry (
   output logic [31:0] q_z,
 
   output logic [15:0] dbg_polys, dbg_objects, dbg_capped,
+  output logic [15:0] dbg_culled,          // R219
   output logic [15:0] dbg_clip_in, dbg_clip_out, dbg_clip_dropped,
   output logic [15:0] dbg_nonfinite,   // polygons refused before the arithmetic
   output logic [15:0] dbg_pj_lost,     // projections abandoned on timeout
@@ -146,6 +147,8 @@ module m2_geometry (
     .foc_x(foc_x), .foc_y(foc_y),
     .mem_req(mem_req), .mem_addr(mem_addr), .mem_data(mem_data), .mem_ack(mem_ack),
     .fmul_req(mul_req[1]), .fmul_a(mul_a[1]), .fmul_b(mul_b[1]),
+    .fadd_req(add_req[1]), .fadd_a(add_a[1]), .fadd_b(add_b[1]),
+    .fadd_gnt(add_gnt[1]), .fadd_rsp(add_rsp[1]), .fadd_res(add_res),
     .fmul_gnt(mul_gnt[1]), .fmul_rsp(mul_rsp[1]), .fmul_res(mul_res),
     .mul_req(mul_req[0]), .mul_a(mul_a[0]), .mul_b(mul_b[0]),
     .mul_gnt(mul_gnt[0]), .mul_rsp(mul_rsp[0]), .mul_res(mul_res),
@@ -155,9 +158,10 @@ module m2_geometry (
     .v0x(v0x), .v0y(v0y), .v0z(v0z), .v1x(v1x), .v1y(v1y), .v1z(v1z),
     .v2x(v2x), .v2y(v2y), .v2z(v2z), .v3x(v3x), .v3y(v3y), .v3z(v3z),
     .poly_attr(poly_attr), .nrm_x(nrm_x), .nrm_y(nrm_y), .nrm_z(nrm_z),
-    .dbg_polys(dbg_polys), .dbg_objects(dbg_objects), .dbg_capped(dbg_capped)
+    .dbg_polys(dbg_polys), .dbg_objects(dbg_objects), .dbg_capped(dbg_capped),
+    .dbg_culled(dbg_culled)
   );
-  assign add_req[1] = 1'b0; assign add_a[1] = 32'd0; assign add_b[1] = 32'd0;
+  // add slot 1 is the engine's face test (R219), below.
   assign add_sub[1] = 1'b0;
   assign div_req[0] = 1'b0; assign div_a[0] = 32'd0; assign div_b[0] = 32'd0;
   assign div_req[1] = 1'b0; assign div_a[1] = 32'd0; assign div_b[1] = 32'd0;

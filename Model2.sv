@@ -2564,7 +2564,7 @@ wire        q3d_valid, q3d_ready;
 wire signed [15:0] q3d_x0, q3d_y0, q3d_x1, q3d_y1, q3d_x2, q3d_y2, q3d_x3, q3d_y3;
 wire [23:0] q3d_col;
 wire [31:0] q3d_z;
-wire [15:0] geo_polys, geo_objs_done, geo_capped;
+wire [15:0] geo_polys, geo_objs_done, geo_capped, geo_culled;
 wire [15:0] geo_clip_in, geo_clip_out, geo_clip_drop, geo_nonfinite;
 wire  [3:0] geo_eng_state, geo_clip_state;
 wire [15:0] geo_pj_lost;
@@ -2616,6 +2616,7 @@ m2_geometry u_geometry (
 	.q_x2(q3d_x2), .q_y2(q3d_y2), .q_x3(q3d_x3), .q_y3(q3d_y3),
 	.q_col(q3d_col), .q_z(q3d_z),
 	.dbg_polys(geo_polys), .dbg_objects(geo_objs_done), .dbg_capped(geo_capped),
+	.dbg_culled(geo_culled),
 	.dbg_clip_in(geo_clip_in), .dbg_clip_out(geo_clip_out),
 	.dbg_clip_dropped(geo_clip_drop), .dbg_nonfinite(geo_nonfinite),
 	.dbg_pj_lost(geo_pj_lost),

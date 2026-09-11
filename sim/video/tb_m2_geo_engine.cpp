@@ -77,18 +77,21 @@ int main(int argc, char** argv) {
   size_t w = 0;
   w = put_xyz(w, 100.0f);          // P0(n-1)
   w = put_xyz(w, 200.0f);          // P1(n-1)
-  // polygon 1: QUAD, link type 0 -> reuse P0(n) and P1(n)
-  obj[w++] = 0x00000001u;          // attr: bit0 quad, bits1:0 != 0, link 0
+  // polygon 1: QUAD, link type 2 -> reuse P0(n) and P1(n), the same carry
+  // as link 0. Link 0 itself is CULLED, as the reference culls it (R219),
+  // so it cannot be the emitted case here; bit 17 makes each polygon
+  // double-sided so the face test cannot cull the check either.
+  obj[w++] = 0x00020201u;          // attr: bit0 quad, bits1:0 != 0, link 2, double-sided
   w = put_xyz(w, 300.0f);          // normal, read and discarded
   w = put_xyz(w, 400.0f);          // P0(n)
   w = put_xyz(w, 500.0f);          // P1(n)
   // polygon 2: TRIANGLE, link type 1 -> reuse P0(n-1) and P0(n)
-  obj[w++] = 0x00000102u;          // attr: bit0 clear = triangle, link 1
+  obj[w++] = 0x00020102u;          // attr: bit0 clear = triangle, link 1, double-sided
   w = put_xyz(w, 600.0f);          // normal
   w = put_xyz(w, 700.0f);          // P0(n)
   w = put_xyz(w, 800.0f);          // the point a triangle CONSUMES and discards
   // polygon 3: QUAD, link type 3 -> reuse P1(n-1) and P1(n)
-  obj[w++] = 0x00000301u;
+  obj[w++] = 0x00020301u;          // link 3, double-sided
   w = put_xyz(w, 900.0f);
   w = put_xyz(w, 1000.0f);         // P0(n)
   w = put_xyz(w, 1100.0f);         // P1(n)
@@ -116,7 +119,7 @@ int main(int argc, char** argv) {
     ck("p1 v2 = P0(n)",   got[0].v2, f2u(400.0f));
     ck("p1 v3 = P1(n)",   got[0].v3, f2u(500.0f));
 
-    // link 0 carried BOTH: P0(n-1)=400, P1(n-1)=500
+    // link 2 carried BOTH (as link 0 does): P0(n-1)=400, P1(n-1)=500
     // polygon 2 is a TRIANGLE, so P1(n) is roped to P0(n)=700
     ck("p2 v0 = P1(n-1)<-500", got[1].v0, f2u(500.0f));
     ck("p2 v1 = P0(n-1)<-400", got[1].v1, f2u(400.0f));

@@ -85,6 +85,9 @@ static unsigned g_ipring_w = 0; static uint32_t g_trap_addr = 0; static bool g_t
 // M2_FINDVAL: log every bus transaction carrying this value, which is how a
 // pointer written into a table in RAM gets located.
 static uint32_t g_findval = 0;
+static long g_eng_st_hist[32] = {0}; static long g_pj_busy_ticks = 0;
+static long g_pj_k_ticks = 0, g_pj_w_ticks = 0, g_w_grants = 0, g_k_grants = 0, g_pj_hits = 0; static long g_walk_hist[16] = {0};
+static long g_eng_busy_ticks = 0, g_eng_objs = 0, g_eng_quads = 0; static std::vector<int> *g_eng_gaps = nullptr;
 static bool g_rd_pend = false;   // a coprocessor FIFO read that stalled at its start
 static int g_at_st = 0; static uint32_t g_at_in[2] = {0, 0}; static long g_at_n = 0, g_at_bad = 0;
 // M2_STATE_ADDR picks the word to watch; the game dispatches through function
@@ -522,6 +525,27 @@ int main(int argc, char **argv) {
       }
     }
     static const uint64_t quads_from = std::getenv("M2_POLY_FROM") ? std::strtoull(std::getenv("M2_POLY_FROM"), nullptr, 10) : 0;
+    // R215: WHERE THE COLLECT'S TIME GOES. Ticks of engine-busy per object
+    // and per emitted quad, and ticks between consecutive quads, from
+    // M2_POLY_FROM on. Reported at the end.
+    {
+      static long busy_ticks = 0, objs = 0, quads = 0; static int busy_p = 0;
+      static std::vector<int> gaps; static long last_q = -1; static long tick_n = 0;
+      ++tick_n;
+      if (d->dbg_acc >= quads_from) {
+        if (d->obs_eng_busy) ++busy_ticks;
+        if (d->obs_eng_busy && !busy_p) ++objs;
+        if (d->eng_q_valid) { ++quads; if (last_q >= 0 && gaps.size() < 200000) gaps.push_back((int)(tick_n - last_q)); last_q = tick_n; }
+      }
+      busy_p = d->obs_eng_busy;
+      g_eng_busy_ticks = busy_ticks; g_eng_objs = objs; g_eng_quads = quads; g_eng_gaps = &gaps;
+      if (d->dbg_acc >= quads_from) {
+        ++g_eng_st_hist[d->obs_eng_state & 31]; if (d->obs_pj_busy) ++g_pj_busy_ticks;
+        if (d->obs_pj_busy) { if (d->obs_pj_owner) ++g_pj_k_ticks; else ++g_pj_w_ticks; }
+        if (d->obs_w_granted) ++g_w_grants; if (d->obs_k_granted) ++g_k_grants; if (d->obs_pj_hit) ++g_pj_hits;
+        ++g_walk_hist[d->geo_state & 15];
+      }
+    }
     if (d->eng_q_valid && g_quads.size() < 4096 && d->dbg_acc >= quads_from)
       g_quads.push_back({(int)(int16_t)d->eng_q_x0, (int)(int16_t)d->eng_q_y0,
                          (int)(int16_t)d->eng_q_x1, (int)(int16_t)d->eng_q_y1,
@@ -2703,6 +2727,26 @@ int main(int argc, char **argv) {
                 d->eng_clip_in, d->eng_clip_out, d->eng_clip_drop, g_quads.size());
     // EVERY QUAD, to a file, when asked: the harness has no rasteriser, so the
     // screen coordinates here are the only picture of the 3D the bench has.
+    if (g_eng_gaps && !g_eng_gaps->empty()) {
+      std::vector<int> g = *g_eng_gaps; std::sort(g.begin(), g.end());
+      std::printf("    ENGINE COST from M2_POLY_FROM: busy ticks %ld over %ld objects (%.0f/object), %ld quads (%.1f busy ticks/quad); quad-to-quad gap median %d, p90 %d ticks\n",
+                  g_eng_busy_ticks, g_eng_objs, g_eng_objs ? (double)g_eng_busy_ticks / g_eng_objs : 0.0, g_eng_quads,
+                  g_eng_quads ? (double)g_eng_busy_ticks / g_eng_quads : 0.0, g[g.size()/2], g[g.size()*9/10]);
+    }
+    {
+      static const char *EN[32] = {"E_IDLE","E_RD","E_XF","E_XFW","E_FOC","E_FOCW","E_STORE","E_ATTR","E_NORM","E_NXF","E_NXFW","E_SKIP","E_EMIT","E_LINK","E_DONE","E_DOT","E_DOTA","?","?","?","?","?","?","?","?","?","?","?","?","?","?","?"};
+      long tot = 0; for (int i = 0; i < 32; i++) tot += g_eng_st_hist[i];
+      if (tot) {
+        std::printf("    ENGINE STATES from M2_POLY_FROM (ticks, %% of all):");
+        for (int i = 0; i < 32; i++) if (g_eng_st_hist[i]) std::printf(" %s %ld (%.1f%%)", EN[i], g_eng_st_hist[i], 100.0 * g_eng_st_hist[i] / tot);
+        std::printf("\n    projection busy %ld ticks (%.1f%%): quad projector %ld (%.1f%%), clipper %ld (%.1f%%); projections granted: quad %ld, clipper %ld; R217 cache hits %ld\n",
+                    g_pj_busy_ticks, 100.0 * g_pj_busy_ticks / tot, g_pj_w_ticks, 100.0 * g_pj_w_ticks / tot, g_pj_k_ticks, 100.0 * g_pj_k_ticks / tot, g_w_grants, g_k_grants, g_pj_hits);
+        static const char *WN[16] = {"W_IDLE","W_FETCH","W_DECODE","W_SKIP","W_CNT","W_TFIFO","W_DDSKIP","W_DDATTR","W_OPRD","W_OBJW","W_PDA","W_PDR","W_PDW","W_TPI","W_TPP","W_TPC"};
+        std::printf("    WALKER STATES from M2_POLY_FROM:");
+        for (int i = 0; i < 16; i++) if (g_walk_hist[i]) std::printf(" %s %.1f%%", WN[i], 100.0 * g_walk_hist[i] / tot);
+        std::printf("\n");
+      }
+    }
     if (const char *qo = std::getenv("M2_QUADS_OUT")) {
       if (FILE *qf = std::fopen(qo, "w")) {
         for (auto &q : g_quads) std::fprintf(qf, "%d %d %d %d %d %d %d %d\n", q[0], q[1], q[2], q[3], q[4], q[5], q[6], q[7]);
