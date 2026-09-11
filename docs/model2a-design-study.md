@@ -13298,3 +13298,16 @@ resetting the projector, so the late result is taken by the next vertex --
 the one path found by inspection that hands a vertex someone else's screen
 position. Zero over every desk run; captures before `build/fix3d5` show
 scroll values in those bits, not this. In the fitter.
+
+*R237, the desk search (00:20):* with each port latency drawn at random
+from 1..24 cycles -- the interleavings of the pool's clients as the board's
+varying memory timing would produce them -- 14,240 clipped quads carry no
+interior wedge. Fixed latency, random latency, instant: none. Whatever
+makes the board's carried vertex take a wrong x is not the RTL's response
+to memory TIMING. The next candidate is memory DATA: a vertex is three
+floats read through port 4 and the pair cache, and one wrong 16-bit half of
+the x float -- a bus or capture fault of the R82 kind -- gives exactly a
+wrong x beside a right y, carried into the next polygon as v0/v1. The
+core's port-4 sweep (tools/rom_csum.py's fold) was built to test that
+path's data integrity on the board; putting its fold on the UART is the
+test.
