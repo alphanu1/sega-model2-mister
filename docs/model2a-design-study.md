@@ -13311,3 +13311,17 @@ wrong x beside a right y, carried into the next polygon as v0/v1. The
 core's port-4 sweep (tools/rom_csum.py's fold) was built to test that
 path's data integrity on the board; putting its fold on the UART is the
 test.
+
+**R238 -- THE DATA-INTEGRITY SWEEP, REVIVED ON PORT 2 AND PUT ON THE UART.**
+The port-4 sweep (tools/rom_csum.py's fold, an OSD-selected 2 MB region read
+back through the SDRAM and folded to 24 bits) was dead: its request was
+wired to no port, it waited on port 4's acknowledge -- the walker's and
+engine's port since R167/R214, and a one-word port where the sweep expects
+the four-word burst -- so it sat in its read state taking the engine's
+acknowledges as its own. It now runs on port 2 behind the copy engine and
+the calibration reads, both idle once the game runs, and each completed
+fold goes out as an 'S' record {region, runs | fold}. Expected folds of the
+image, from the MRA and the ROMs: region 11 = 82B1E2, 12 = A76A16, 13 =
+1B298F (the polygon ROM spans regions 11-17). Region 0 is the control the
+sweep was proved on. If a polygon-ROM region MISMATCHES, R237's wedges are
+a data fault on the read path, not the geometry.

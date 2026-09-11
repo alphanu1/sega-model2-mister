@@ -18,7 +18,7 @@
 # file together.
 #   python3 tools/decode_uart.py capture.txt
 import sys,collections
-C=[];H=[];W=[]
+C=[];H=[];W=[];SW=[]
 pend=None
 for line in open(sys.argv[1],errors='replace'):
     p=line.split()
@@ -27,6 +27,7 @@ for line in open(sys.argv[1],errors='replace'):
     except: continue
     if p[0]=='C': C.append((a,d))
     elif p[0]=='H': H.append((a,d))
+    elif p[0]=='S': SW.append(((a>>8)&0x1f, a&0xff, d&0xffffff))   # R238: region, runs, fold
     elif p[0]=='W': pend=(a,d)
     elif p[0]=='X' and pend is not None:
         s16=lambda v: v-65536 if v>=32768 else v
@@ -41,6 +42,12 @@ pj=[(d>>16)&0xfff for _,d in C]
 print('projections abandoned on timeout (R237): first %d, last %d, max %d' % (pj[0] if pj else 0, pj[-1] if pj else 0, max(pj) if pj else 0))
 # b_addr = {ready_cyc16 (x16), bands_done8, hold8}; b_data = {qs_dropped16, geo_dropped8, quads[11:4]}
 n=len(H); k=max(1,n//5)
+if SW:
+    # tools/rom_csum.py <mra> <zipdir> --region N gives the expected fold of the image
+    EXPECT={0:None,11:0x82B1E2,12:0xA76A16,13:0x1B298F}
+    r,n,v=SW[-1]
+    e=EXPECT.get(r)
+    print(f'SWEEP (R238): region {r} folded {n} times, last fold {v:06X}' + (f'  expected {e:06X}  {"MATCH" if e==v else "MISMATCH"}' if e else '  (no expectation on file; run tools/rom_csum.py --region %d)' % r))
 if W:
     print(f'WEDGES caught on the board: {len(W)} streamed; last count {(H[-1][1]>>4)&0x7f if H else 0} (slot {"1" if H and (H[-1][1]>>11)&1 else "0"})')
     for q in W[:12]: print('   (%d,%d) (%d,%d) (%d,%d) (%d,%d)' % q)

@@ -623,8 +623,15 @@ always_comb begin
 	// permanently zero upper half -- which reads like a broken controller and
 	// is a port-selection mistake. The CPU takes port 0 precisely because it
 	// wants single words; 1-3 are the streaming ports.
-	p_req[2]  = cp_req ? cp_req  : st_rd_req;
-	p_addr[2] = cp_req ? cp_addr : st_rd_addr;
+	// R238: the sweep lives on port 2 now, behind the copy engine and the
+	// calibration reads, both idle once the game runs. Port 4 became the
+	// walker's and engine's (R167/R214) and is a one-word port; the sweep was
+	// written for the four-word burst port 2 gives, and its request was wired
+	// to nothing at all -- it sat in its read state taking the engine's acks
+	// as its own. It is the instrument for the question R237 leaves: does the
+	// polygon ROM read back through the SDRAM as the image the MRA loaded?
+	p_req[2]  = cp_req ? cp_req  : st_rd_req ? st_rd_req  : sw_req;
+	p_addr[2] = cp_req ? cp_addr : st_rd_req ? st_rd_addr : sw_addr;
 	// PORT 1, NOT PORT 0. m2_sdram's blen() gives ports 1-3 a four-word burst and
 	// ports 0 and 4 a single word, and the copy engine was the ONLY consumer of a
 	// single-word read -- and the only reader that fails. The self-test on port 2
@@ -3611,7 +3618,9 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 				wedge_have <= 1'b1; wedge_ph <= 2'd1;
 			end
 		end
-		// Each B event that finds a wedge pending sends one half of it.
+		// Each B event that finds a wedge pending sends one half of it; one that
+		// finds a fold pending (and no wedge) sends the fold.
+		if (uart_b2_valid && !wedge_have && sw_pend) sw_pend <= 1'b0;
 		if (uart_b2_valid && wedge_have) begin
 			if (wedge_ph == 2'd1) wedge_ph <= 2'd2;
 			else begin wedge_ph <= 2'd0; wedge_have <= 1'b0; end
@@ -3935,6 +3944,7 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// scanlines the beam drew with no band ready (free-running).
 	.b_addr((wedge_have && wedge_ph == 2'd1) ? wedge_q[127:96]
 	      : (wedge_have && wedge_ph == 2'd2) ? wedge_q[63:32]
+	      : sw_pend                         ? {19'd0, sw_out_sel, sw_runs}     // R238: 'S' region, runs
 	      : {r3d_ready_cyc[15:0], r3d_bands_done[7:0], r3d_hold[7:0]}),
 	// clip_dropped read 0 on hardware and the refusal count is the number that
 	// now moves, so it takes that byte. Between them: accepted, emitted, refused
@@ -4003,9 +4013,11 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// R216: store dropped (full), tiny quads refused (units of 16), quads held (units of 16).
 	.b_data((wedge_have && wedge_ph == 2'd1) ? wedge_q[95:64]
 	      : (wedge_have && wedge_ph == 2'd2) ? wedge_q[31:0]
+	      : sw_pend                         ? {8'd0, sw_out}                    // R238: the fold
 	      : {r3d_dropped[15:0], wedge_slot, wedge_n[6:0], r3d_quads[11:4]}),   // R235: wedge count where tiny was
 	.a_tag(8'h43),
-	.b_tag((wedge_have && wedge_ph == 2'd1) ? 8'h57 : (wedge_have && wedge_ph == 2'd2) ? 8'h58 : 8'h48),   // 'W', 'X', 'H'          // 'C' copro in_pushed:out_pushed | TGP retires:pc
+	.b_tag((wedge_have && wedge_ph == 2'd1) ? 8'h57 : (wedge_have && wedge_ph == 2'd2) ? 8'h58
+	     : sw_pend ? 8'h53 : 8'h48),   // 'W', 'X', 'S', 'H'          // 'C' copro in_pushed:out_pushed | TGP retires:pc
 	                                       // 'H' out_popped:hscr2 | io_addr:flags
 	                                       // 'H' scroll h:v for layers 0,1 | layers 2,3 -- low bytes
 	                                       // '0' map0 min|max : sum
@@ -4329,6 +4341,10 @@ logic  [1:0]     sw_wsel;
 logic  [4:0]     sw_sel;
 logic            sw_done;
 logic            sw_done_d, sw_emit;
+wire             sw_ack = p_ack[2] && sw_req && !cp_req && !st_rd_req;   // R238: port 2, ours only when the others are idle
+logic            sw_pend;         // a completed fold waiting for the stream
+logic [23:0]     sw_out;
+logic  [4:0]     sw_out_sel;
 logic  [7:0]     sw_runs;
 
 // status[] is written by the HPS and changes only when the user moves in the
@@ -4350,7 +4366,7 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		sw_req <= 1'b0; sw_addr <= '0; sw_acc <= 24'd0;
 		sw_val <= 24'd0; sw_burst <= 20'd0;
 		sw_state <= 3'd0; sw_sel <= 5'd0; sw_done <= 1'b0;
-		sw_done_d <= 1'b0; sw_emit <= 1'b0; sw_runs <= 8'd0;
+		sw_done_d <= 1'b0; sw_emit <= 1'b0; sw_runs <= 8'd0; sw_pend <= 1'b0; sw_out <= 24'd0; sw_out_sel <= 5'd0;
 	end else begin
 		// RESTART ON A NEW SELECTION -- but never out of state 1, which is the
 		// one state with a request outstanding on port 4. Dropping sw_req there
@@ -4374,6 +4390,7 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		sw_emit <= 1'b0;
 		if (sw_done && !sw_done_d) begin
 			sw_emit  <= 1'b1;          // one pulse per completed fold
+			sw_pend  <= 1'b1; sw_out <= sw_acc; sw_out_sel <= sw_sel;   // R238: hand it to the stream
 			sw_runs  <= sw_runs + 8'd1;
 			sw_state <= 3'd0;          // and immediately go round again
 			sw_done  <= 1'b0;
@@ -4414,10 +4431,10 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 			//   sw_acc <= sw_fold(sw_fold(sw_fold(sw_fold(sw_acc, w0), w1), w2), w3)
 			//
 			// which is four chained 24-bit add-and-rotates, launched from
-			// m2_sdram's p_ack[4] in the 96 MHz domain and latched in the 48 MHz
+			// m2_sdram's sw_ack in the 96 MHz domain and latched in the 48 MHz
 			// one. At 40 MHz that fitted. At 48 it does not:
 			//
-			//   From  m2_sdram|p_ack[4]   To  sw_acc[23]
+			//   From  m2_sdram|sw_ack   To  sw_acc[23]
 			//   Data Delay 10.125 ns against a 10.417 ns relationship
 			//   Setup slack -0.623  (VIOLATED)
 			//
@@ -4426,9 +4443,9 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 			// instrumentation, not the machine. Folding one word per cycle cuts
 			// the chain to a quarter and costs three extra cycles per burst on
 			// something that runs once and has no deadline.
-			3'd1: if (p_ack[4]) begin
+			3'd1: if (sw_ack) begin
 				sw_req  <= 1'b0;
-				sw_word <= p_dout[4];
+				sw_word <= p_dout[2];
 				sw_wsel <= 2'd0;
 				sw_state <= 3'd3;
 			end
