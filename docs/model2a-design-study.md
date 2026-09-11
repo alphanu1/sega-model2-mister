@@ -13222,3 +13222,14 @@ own display list (Lua over bufferram): (0.437936, -0.914406, -0.411307),
 length 1.094, the same every frame; and R222's engine test proved the
 luminance arithmetic to the integer. The bench is measuring what the walker
 holds and the rotated normals' lengths to close the last two inputs.
+
+**R235 -- THE BOARD CATCHES ITS OWN WEDGES.** "That's why you check over
+UART. Sim never matches." The remaining wedges off the cars do not
+reproduce at the desk under any modelled condition, so the board now
+latches the first quad per stretch that leaves the clipper with three
+vertices within 8 px and the fourth more than 60 px away, all four strictly
+inside the screen (an edge sliver is the clip's own correct shape), and
+streams it as two records -- 'W' {x0,y0,x1,y1} then 'X' {x2,y2,x3,y3} --
+in place of two 'H' records; a running count and the slot (1 = the carried
+v1, 0 = the carried v0) ride in every 'H' where the tiny-refused count was.
+`tools/decode_uart.py` prints them. In `build/fix3d4`.

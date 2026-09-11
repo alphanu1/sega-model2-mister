@@ -3563,6 +3563,62 @@ wire        uart_b_valid = char_ack;
 wire [31:0] uart_dropped;
 
 generate if (DEBUG) begin : g_dbg
+// A WEDGE CATCHER ON THE BOARD (R235). The board draws a few wedges off the
+// cars that no bench configuration reproduces -- 32,000 clipped quads at the
+// desk, with and without the board's port timing modelled, carry none. So the
+// board catches its own: a quad leaving the clipper with three vertices within
+// 8 px of each other and the fourth more than 60 px away, all four strictly
+// inside the screen (a sliver on the edge is the clip's own correct shape), is
+// latched whole and streamed as two records, 'W' {x0,y0,x1,y1} then 'X'
+// {x2,y2,x3,y3}, in place of the next two 'H' records; the running count
+// rides in every 'H' where the tiny-refused count was. Slot 1 is the carried
+// vertex v1 and slot 0 the carried v0, the only two slots a strip can bring
+// in from elsewhere -- each is tested, and the slot is in the count's top bit.
+function automatic logic near3(input logic signed [15:0] a, b, c);
+	logic signed [15:0] lo, hi;
+	begin
+		lo = a; if (b < lo) lo = b; if (c < lo) lo = c;
+		hi = a; if (b > hi) hi = b; if (c > hi) hi = c;
+		near3 = (hi - lo) <= 16'sd8;
+	end
+endfunction
+function automatic logic far2(input logic signed [15:0] a, b);
+	far2 = ((a - b) > 16'sd60) || ((b - a) > 16'sd60);
+endfunction
+function automatic logic onscreen(input logic signed [15:0] x, y);
+	onscreen = (x > 16'sd0) && (x < 16'sd495) && (y > 16'sd0) && (y < 16'sd383);
+endfunction
+wire wedge_in  = onscreen(q3d_x0, q3d_y0) && onscreen(q3d_x1, q3d_y1)
+              && onscreen(q3d_x2, q3d_y2) && onscreen(q3d_x3, q3d_y3);
+wire wedge_s1  = near3(q3d_x0, q3d_x2, q3d_x3) && near3(q3d_y0, q3d_y2, q3d_y3)
+              && (far2(q3d_x1, q3d_x2) || far2(q3d_y1, q3d_y2));
+wire wedge_s0  = near3(q3d_x1, q3d_x2, q3d_x3) && near3(q3d_y1, q3d_y2, q3d_y3)
+              && (far2(q3d_x0, q3d_x2) || far2(q3d_y0, q3d_y2));
+wire wedge_hit = q3d_valid && q3d_ready && wedge_in && (wedge_s1 || wedge_s0);
+logic [127:0] wedge_q;
+logic         wedge_have, wedge_slot;
+logic  [1:0]  wedge_ph;          // 0: nothing to send, 1: send W, 2: send X
+logic [14:0]  wedge_n;
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+	if (!mem_rst_n) begin
+		wedge_q <= '0; wedge_have <= 1'b0; wedge_slot <= 1'b0; wedge_ph <= 2'd0; wedge_n <= 15'd0;
+	end else begin
+		if (wedge_hit) begin
+			if (!(&wedge_n)) wedge_n <= wedge_n + 15'd1;
+			if (!wedge_have) begin
+				wedge_q    <= {q3d_x0, q3d_y0, q3d_x1, q3d_y1, q3d_x2, q3d_y2, q3d_x3, q3d_y3};
+				wedge_slot <= wedge_s1;
+				wedge_have <= 1'b1; wedge_ph <= 2'd1;
+			end
+		end
+		// Each B event that finds a wedge pending sends one half of it.
+		if (uart_b2_valid && wedge_have) begin
+			if (wedge_ph == 2'd1) wedge_ph <= 2'd2;
+			else begin wedge_ph <= 2'd0; wedge_have <= 1'b0; end
+		end
+	end
+end
+
 m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	.clk(clk_sys), .rst_n(mem_rst_n),
 	// THE IP RING: 512 consecutive retired instructions, recorded at full
@@ -3873,7 +3929,9 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// quads dropped for a full store, and frames the geometry stage finished.
 	// R213: hold = video frames the last list stayed on display; missed =
 	// scanlines the beam drew with no band ready (free-running).
-	.b_addr({r3d_ready_cyc[15:0], r3d_bands_done[7:0], r3d_hold[7:0]}),
+	.b_addr((wedge_have && wedge_ph == 2'd1) ? wedge_q[127:96]
+	      : (wedge_have && wedge_ph == 2'd2) ? wedge_q[63:32]
+	      : {r3d_ready_cyc[15:0], r3d_bands_done[7:0], r3d_hold[7:0]}),
 	// clip_dropped read 0 on hardware and the refusal count is the number that
 	// now moves, so it takes that byte. Between them: accepted, emitted, refused
 	// before the arithmetic, and reaching the rasterizer.
@@ -3939,8 +3997,11 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// front-door push DMA dropped for a full queue (low 8 bits), quads held.
 	// (dbg_missed read 0 through the title on dbuf6 s14: bands are never late.)
 	// R216: store dropped (full), tiny quads refused (units of 16), quads held (units of 16).
-	.b_data({r3d_dropped[15:0], r3d_tiny[11:4], r3d_quads[11:4]}),
-	.a_tag(8'h43), .b_tag(8'h48),          // 'C' copro in_pushed:out_pushed | TGP retires:pc
+	.b_data((wedge_have && wedge_ph == 2'd1) ? wedge_q[95:64]
+	      : (wedge_have && wedge_ph == 2'd2) ? wedge_q[31:0]
+	      : {r3d_dropped[15:0], wedge_slot, wedge_n[6:0], r3d_quads[11:4]}),   // R235: wedge count where tiny was
+	.a_tag(8'h43),
+	.b_tag((wedge_have && wedge_ph == 2'd1) ? 8'h57 : (wedge_have && wedge_ph == 2'd2) ? 8'h58 : 8'h48),   // 'W', 'X', 'H'          // 'C' copro in_pushed:out_pushed | TGP retires:pc
 	                                       // 'H' out_popped:hscr2 | io_addr:flags
 	                                       // 'H' scroll h:v for layers 0,1 | layers 2,3 -- low bytes
 	                                       // '0' map0 min|max : sum

@@ -7,7 +7,10 @@
 #   C records: a_data = {cpu_trap, cpu_halted, copro_stall, copro_dbg_ctl[31],
 #              vid_vscr[0][5:0], vid_vscr[1][5:0], tgp_pc[15:0]}
 #   H records: b_addr = {r3d_ready_cyc[15:0] (x16 clk), r3d_bands_done[7:0], r3d_hold[7:0]}
-#              b_data = {r3d_dropped[15:0], r3d_tiny[11:4], r3d_quads[11:4]}
+#              b_data = {r3d_dropped[15:0], wedge_slot, wedge_n[6:0], r3d_quads[11:4]}   (R235)
+#   W records: {x0,y0} {x1,y1} and X records: {x2,y2} {x3,y3} of a quad the board's
+#              wedge catcher latched (R235): three vertices within 8 px, the fourth
+#              more than 60 px away, all four inside the screen.
 # Prints where the i960 spends its time (frame wait, mailbox poll, render), the
 # TGP's commonest PCs, and per fifth of the capture the renderer's ready time,
 # bands completed per video frame, frames a list was held, store drops, tiny
@@ -15,13 +18,20 @@
 # file together.
 #   python3 tools/decode_uart.py capture.txt
 import sys,collections
-C=[];H=[]
+C=[];H=[];W=[]
+pend=None
 for line in open(sys.argv[1],errors='replace'):
     p=line.split()
     if len(p)!=3 or len(p[1])!=8 or len(p[2])!=8: continue
     try: a=int(p[1],16); d=int(p[2],16)
     except: continue
-    (C if p[0]=='C' else H).append((a,d))
+    if p[0]=='C': C.append((a,d))
+    elif p[0]=='H': H.append((a,d))
+    elif p[0]=='W': pend=(a,d)
+    elif p[0]=='X' and pend is not None:
+        s16=lambda v: v-65536 if v>=32768 else v
+        a0,d0=pend; pend=None
+        W.append(tuple(s16(v) for v in ((a0>>16)&0xffff,a0&0xffff,(d0>>16)&0xffff,d0&0xffff,(a>>16)&0xffff,a&0xffff,(d>>16)&0xffff,d&0xffff)))
 ip=collections.Counter(a for a,_ in C); pc=collections.Counter(d&0xffff for _,d in C)
 live=sum(v for k,v in ip.items() if k!=0)
 def rng(a,b): return sum(v for k,v in ip.items() if a<=k<b)
@@ -29,11 +39,14 @@ print('C',len(C),'H',len(H),' framewait %.1f%%'%(100*(ip[0x12b0]+ip[0x12b8])/max
 print('tgp  :',', '.join(f'{k:04X}:{v}' for k,v in pc.most_common(4)))
 # b_addr = {ready_cyc16 (x16), bands_done8, hold8}; b_data = {qs_dropped16, geo_dropped8, quads[11:4]}
 n=len(H); k=max(1,n//5)
-print(' slice  ready ms(med,max)  bands_done         hold(frames-1 per list)      store dropped(max)  tiny refused x16(max)  quads x16 (med,max)')
+if W:
+    print(f'WEDGES caught on the board: {len(W)} streamed; last count {(H[-1][1]>>4)&0x7f if H else 0} (slot {"1" if H and (H[-1][1]>>11)&1 else "0"})')
+    for q in W[:12]: print('   (%d,%d) (%d,%d) (%d,%d) (%d,%d)' % q)
+print(' slice  ready ms(med,max)  bands_done         hold(frames-1 per list)      store dropped(max)  wedges(max)  quads x16 (med,max)')
 for i in range(0,n,k):
     sl=H[i:i+k]
     if len(sl)<2: continue
     rc=sorted(((a>>16)&0xffff)*16/50000 for a,_ in sl); bd=collections.Counter((a>>8)&0xff for a,_ in sl); hd=collections.Counter(a&0xff for a,_ in sl)
-    qd=max((d>>16)&0xffff for _,d in sl); gd=max(((d>>8)&0xff)*16 for _,d in sl)
+    qd=max((d>>16)&0xffff for _,d in sl); gd=max((d>>4)&0x7f for _,d in sl)   # R235: wedge count, not tiny
     q=sorted((d&0xff)*16 for _,d in sl)
     print(f'{i:6d}  {rc[len(rc)//2]:6.2f} {rc[-1]:6.2f}   {bd.most_common(3)}   {hd.most_common(4)}   {qd:6d}   {gd:4d}   {q[len(q)//2]:5d} {q[-1]:5d}')
