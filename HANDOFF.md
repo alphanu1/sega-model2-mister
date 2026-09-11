@@ -1,6 +1,6 @@
 # Handoff
 
-**Updated:** 2026-09-11 14:20. Study entries R176-R217. R172 WITHDRAWN, R185
+**Updated:** 2026-09-11 15:20. Study entries R176-R218. R172 WITHDRAWN, R185
 partly RETRACTED, R189 corrected by R191, R196's central claim WITHDRAWN the
 same day, R206 WITHDRAWN, R207 closed by R208.
 
@@ -35,6 +35,11 @@ completes, 4 minutes clean -- render chain 10.6%, mailbox poll 3.7%, no
 parking, no drops. Ten-minute soak from a fresh load also clean: mailbox
 poll 3.9%, render chain 12.5%, never parked. R209 CONFIRMED.** The board is
 on it. Study R209.
+
+**R218 (15:15): the clipper reprojected every vertex of every quad it emitted;
+now only the ones it cuts. Engine cost per polygon 467 -> 409 (R217) -> 177
+(R218), clipper projections 219,860 -> 4,972, engine idle 39% -> 64%.
+`build/dbuf11` = dbuf10 + R217 + R218, building. Study R218.**
 
 **R217 (14:15): the projector projected all four vertices of every polygon;
 strips share two with the previous one, which now keep their pixels

@@ -12335,3 +12335,22 @@ granted a projection of it and the next vertex's result landed one slot
 late; the request is gated on the vertex needing one. 2,003 checks pass.
 The engine's cost is being remeasured; the expectation is the clipper's
 26% falling to the share of cut vertices, a few percent.
+
+*R218 measured (15:15), same bench, same window:*
+
+                                 before (R215)   R217      R217+R218
+    quad-to-quad gap, cycles         467          409          177
+    busy ticks per emitted quad      600          546          308
+    projection busy, % of all       50.5         47.8         23.5
+      of which the clipper          26.0         26.0          0.6
+    clipper projections granted   219,860      219,860        4,972
+    engine waiting to emit (E_EMIT) 34.2         30.7          6.0
+    engine idle, no object (E_IDLE) 38.7         39.4         63.8
+
+The clipper now projects only what it cuts. The engine spends most of its
+time with nothing to do, which is the title's geometry fitting in its
+frame with room; the remaining cost is the quad projector's 22.9% (its
+cache hits 191,042 of ~294,000 grants, so a strip's shared vertices are
+found about two times in three -- the misses are the polygons after a
+refused non-finite one or a skip, which break the chain) and the vertex
+transform's 14.3%. `build/dbuf11` = dbuf10 + R217 + R218.
