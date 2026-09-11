@@ -158,6 +158,7 @@ module m2_boot_harness #(
   // so the transform can be checked by hand against the reference's formula.
   // INSIDE THE COPROCESSOR: a, d, data-RAM 0x69/0x6a and the retire strobe,
   // to watch the record-base arithmetic of the track lookup (study R204).
+  output logic        obs_eng_busy,
   output logic        obs_tgp_retire,
   output logic [15:0] obs_tgp_rpc,
   output logic [31:0] obs_tgpx_a, obs_tgpx_d, obs_tgp_ram69, obs_tgp_ram6a,
@@ -849,6 +850,7 @@ module m2_boot_harness #(
   assign obs_v3x = u_geometry.u_engine.v3x; assign obs_v3y = u_geometry.u_engine.v3y; assign obs_v3z = u_geometry.u_engine.v3z;
   assign obs_poly_attr = u_geometry.u_engine.poly_attr;
   assign obs_foc_x = geo_foc_x; assign obs_foc_y = geo_foc_y;
+  assign obs_eng_busy = geo_eng_busy;
   assign obs_tgp_retire = u_copro.u_tgp.core.retire;
   assign obs_tgp_rpc    = u_copro.u_tgp.core.retire_pc;
   assign obs_tgpx_a     = u_copro.u_tgp.core.u_regs.reg_a;

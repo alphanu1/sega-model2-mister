@@ -498,6 +498,26 @@ int main(int argc, char **argv) {
       }
     }
     d->geo_sd_ack = 0;
+    // PER-OBJECT READ ACCOUNTING, the bench's side of the board's build/eo
+    // probe: first read (index, data) and read count for the first objects
+    // after M2_POLY_FROM.
+    {
+      static const uint64_t eo_from = std::getenv("M2_POLY_FROM") ? std::strtoull(std::getenv("M2_POLY_FROM"), nullptr, 10) : ~0ull;
+      static int req_p = 0, nobj = 0, reads = 0; static uint32_t fidx = 0, fdat = 0; static bool armed = false, inobj = false;
+      // an object starts with its first request after an idle gap; count acks
+      if (d->eng_mem_req && !req_p) {
+        if (!inobj) { inobj = true; armed = true; reads = 0; }
+      }
+      if (d->eng_mem_ack) {
+        if (armed) { fidx = uint32_t(d->eng_mem_addr); fdat = uint32_t(d->eng_mem_data); armed = false; }
+        ++reads;
+      }
+      if (inobj && !d->eng_mem_req && !req_p && !d->obs_eng_busy) {
+        inobj = false;
+        if (d->dbg_acc >= eo_from && nobj < 20) { ++nobj; std::printf("    EOBJ %2d oba=%08x first idx %06x data %08x reads %d\n", nobj, (unsigned)d->geo_oba_last, fidx, fdat, reads); }
+      }
+      req_p = d->eng_mem_req;
+    }
     if (d->geo_sd_req) {
       const uint32_t a = uint32_t(d->geo_sd_addr) & 0x1ffffff;
       mem[a] = d->geo_sd_din;
