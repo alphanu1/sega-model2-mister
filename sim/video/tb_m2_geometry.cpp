@@ -106,7 +106,7 @@ int main(int argc, char** argv) {
   d->xc = 0x43780000u; d->yc = 0x43400000u;               // 248.0, 192.0
   d->a_left = 0xC3780000u; d->a_right  = 0x43780000u;     // -248.0, 248.0
   d->a_bottom = 0x43400000u; d->a_top  = 0xC3400000u;     //  192.0, -192.0
-  d->tha = 0; d->lit_x = 0; d->lit_y = 0; d->lit_z = 0; d->col_inval = 0;
+  d->tha = 0; d->lit_x = 0; d->lit_y = 0; d->lit_z = 0; d->col_inval = 0; d->tex_lum = 0;
   d->tp_we = 1; d->tp_idx = 0; d->tp_diffuse = 0; d->tp_ambient = 255; tick(); d->tp_we = 0;
   d->foc_x = f2u(1.0f); d->foc_y = f2u(1.0f);
   d->oba = 0; d->obc = 32;

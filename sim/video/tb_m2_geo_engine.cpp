@@ -123,7 +123,7 @@ int main(int argc, char** argv) {
   pal3d[0x155] = C555;
   for (int c = 0; c < 3; c++) for (int i = 0; i < 0x2000; i++)
     xlat[c * 0x2000 + i] = uint16_t(0xA500 | ((((i >> 8) & 0x1f) * 7 + (i & 0x3f) * 3 + c * 11) & 0xff));
-  d->col_inval = 0;
+  d->col_inval = 0; d->tex_lum = 0;
 
   // ---- build one object: three polygons exercising all three link types
   size_t w = 0;

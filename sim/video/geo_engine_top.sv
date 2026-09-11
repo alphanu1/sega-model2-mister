@@ -23,6 +23,7 @@ module m2_geo_engine_top (
   input  logic [31:0] tha, lit_x, lit_y, lit_z,
   input  logic tp_we, input logic [4:0] tp_idx, input logic [7:0] tp_diffuse, tp_ambient,
   input  logic col_inval,
+  input  logic [1:0] tex_lum,
   output logic [1:0] mem_space,
   output logic [23:0] poly_col, output logic [7:0] poly_luma, output logic [15:0] dbg_col_miss
 );
@@ -55,7 +56,7 @@ module m2_geo_engine_top (
     .poly_attr(poly_attr), .nrm_x(nrm_x), .nrm_y(nrm_y), .nrm_z(nrm_z), .dbg_polys(dbg_polys), .dbg_objects(dbg_objects), .dbg_capped(dbg_capped), .dbg_culled(dbg_culled), .poly_prev_link(), .poly_chain_ok(),
     .tha(tha), .lit_x(lit_x), .lit_y(lit_y), .lit_z(lit_z),
     .tp_we(tp_we), .tp_idx(tp_idx), .tp_diffuse(tp_diffuse), .tp_ambient(tp_ambient),
-    .col_inval(col_inval), .mem_space(mem_space),
+    .col_inval(col_inval), .tex_lum(tex_lum), .mem_space(mem_space),
     .poly_col(poly_col), .poly_luma(poly_luma), .dbg_col_miss(dbg_col_miss)
   );
 

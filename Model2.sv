@@ -137,11 +137,10 @@ localparam CONF_STR = {
 	// proven on hardware and every remaining fault is upstream of it. If it
 	// does not, the fault is downstream and no amount of fixing the matrix
 	// would ever have shown a picture.
-	"O[21],3D test bars,Off,On;",
+	"O[22:21],Texture brightness,100%,75%,50%,25%;",
 	// A bar outside the visible area is indistinguishable from a bar that did
 	// not draw. This packs all four well inside any plausible crop, so a side
 	// missing in BOTH layouts is missing for a real reason.
-	"O[22],3D bars layout,Wide,Compact;",
 	"R[0],Reset and close OSD;",
 	// The button-definition line lives at the END of the menu block. Placed
 	// between the two R items it silently broke everything after it -- the OSD
@@ -496,6 +495,14 @@ wire        tgp_dat_we, tgp_dat_is_buf, tgp_dat_half;
 // R229: same reason as tq_en below -- this one gates the frame pulse that
 // starts the walk, the geometry and the renderer's whole band schedule.
 logic [2:0] nowalk_s;
+// R239: the texture-placeholder brightness, an OSD option, through three flops
+// like every other status bit that reaches the datapath (R229).
+logic [2:0] tl0_s, tl1_s;
+always_ff @(posedge clk_sys) begin
+	tl0_s <= {tl0_s[1:0], status[21]};
+	tl1_s <= {tl1_s[1:0], status[22]};
+end
+wire [1:0] tex_lum_s2 = {tl1_s[2], tl0_s[2]};
 always_ff @(posedge clk_sys) nowalk_s <= {nowalk_s[1:0], status[20]};
 wire        geo_walk_start = vbl_d && !vbl_dd && !nowalk_s[2];
 wire        geo_rd_req;
@@ -2681,7 +2688,7 @@ m2_geometry u_geometry (
 	// walker; the colour data through the engine's own port, by space.
 	.tha(geo_obj_tha), .lit_x(geo_lit_x), .lit_y(geo_lit_y), .lit_z(geo_lit_z),
 	.tp_we(geo_tp_we), .tp_idx(geo_tp_idx), .tp_diffuse(geo_tp_diffuse), .tp_ambient(geo_tp_ambient),
-	.col_inval(cpu_col_inval), .mem_space(eng_mem_space), .dbg_col_miss(),
+	.col_inval(cpu_col_inval), .tex_lum(tex_lum_s2), .mem_space(eng_mem_space), .dbg_col_miss(),
 	.q_valid(q3d_valid), .q_ready(q3d_ready),
 	.q_x0(q3d_x0), .q_y0(q3d_y0), .q_x1(q3d_x1), .q_y1(q3d_y1),
 	.q_x2(q3d_x2), .q_y2(q3d_y2), .q_x3(q3d_x3), .q_y3(q3d_y3),

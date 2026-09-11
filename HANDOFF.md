@@ -22,7 +22,9 @@ The test-quad generator is deleted (R229). Tools: `tools/board-capture.sh`,
 **THE TWO BUILDS QUEUED AT CLOSE (00:30, 09-12):** `build/fix3d5` = fix3d4 +
 the projection-timeout counter on the UART (R237: if the board abandons
 projections, the late result reaches the next vertex); `build/fix3d6` = + the
-data-integrity sweep on port 2 streamed as 'S' records (R238). Each is picked
+data-integrity sweep on port 2 streamed as 'S' records (R238) + the OSD option
+"Texture brightness" 100/75/50/25% for the placeholder (R239; the user judged
+full "still too bright"). Each is picked
 by `tools/pick-seed.py`, deployed and captured by a waiter. For the sweep: the
 OSD option "Sweep region (2MB)" selects the region; 0 is the control (expected
 25E723), 11-17 the polygon ROM; the decoder prints MATCH/MISMATCH against the

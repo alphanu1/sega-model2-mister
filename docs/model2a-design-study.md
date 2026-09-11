@@ -13325,3 +13325,17 @@ image, from the MRA and the ROMs: region 11 = 82B1E2, 12 = A76A16, 13 =
 1B298F (the polygon ROM spans regions 11-17). Region 0 is the control the
 sweep was proved on. If a polygon-ROM region MISMATCHES, R237's wedges are
 a data fault on the read path, not the geometry.
+
+**R239 -- THE TEXTURE PLACEHOLDER'S BRIGHTNESS IS AN OSD OPTION, BECAUSE THE
+BOARD IS THE ONLY JUDGE OF IT.** "Still too bright." The reference scales a
+textured polygon's luminance by each texel's own, and texels average well
+under full; with no texels, the palette colour at the polygon's full
+luminance over-estimates. Full was judged right, then too bright; half was
+built and never judged; a build per guess is the wrong instrument. So
+"Texture brightness" -- 100%, 75%, 50%, 25% of the polygon's luminance for
+textured polygons with a palette colour -- is OSD option O[22:21], in the
+bits the deleted test-bar options held (R229), taken through three flops
+on clk_sys as every status bit that reaches the datapath must be, and a
+change empties the colour cache so nothing stale is served. The grey-for-
+black case stays at half regardless. `tb_m2_geo_engine` 41 checks at mode
+0 unchanged. In `build/fix3d6` with R238.

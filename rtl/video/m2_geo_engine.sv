@@ -105,6 +105,12 @@ module m2_geo_engine #(
   input  logic [4:0]  tp_idx,
   input  logic [7:0]  tp_diffuse, tp_ambient,
   input  logic        col_inval,           // the CPU wrote the palette or the table
+  // R239: how bright a textured polygon's placeholder is, 0..3 = the polygon's
+  // full luminance, three quarters, half, a quarter. An OSD option, because the
+  // reference scales the polygon's luminance by each TEXEL's own and we have no
+  // texels: full was judged too bright on the board, half was never judged, and
+  // a build per guess is the wrong instrument. The board decides.
+  input  logic [1:0]  tex_lum,
   // Which memory the read is for: 0 polygon memory (as ever), 1 texture
   // (mem_addr[23]: texture RAM rather than ROM), 2 the palette mirror, 3 the
   // translation table mirror. All dword-addressed; the top level owns the bases.
@@ -275,6 +281,15 @@ module m2_geo_engine #(
   // always resolves to the same grey and the cache stays consistent.
   localparam logic [14:0] TEX_GREY = 15'h4210;
   logic [7:0] lum_x;         // the luminance the table is read at, chosen at E_PAL
+  logic [1:0] tex_lum_d;     // R239: the mode last used; a change empties the cache
+  function automatic logic [7:0] scale_lum(input logic [7:0] l, input logic [1:0] m);
+    case (m)
+      2'd0:    scale_lum = l;
+      2'd1:    scale_lum = l - {2'b00, l[7:2]};   // three quarters
+      2'd2:    scale_lum = {1'b0, l[7:1]};
+      default: scale_lum = {2'b00, l[7:2]};
+    endcase
+  endfunction
   wire         cc_we  = (st == E_CW);
 
   // An 8-bit integer as an IEEE single.
@@ -367,7 +382,7 @@ module m2_geo_engine #(
       lum <= 32'd0; luma8 <= 8'd0; hdr0 <= 16'd0; cbase <= 10'd0; c555 <= 15'd0; xi <= 2'd0;
       rgb[0] <= 8'd0; rgb[1] <= 8'd0; rgb[2] <= 8'd0;
       xaddr <= 24'd0; xhalf <= 1'b0; xspace <= 2'd0; cc_wait <= 1'b0; cc_idx <= 8'd0;
-      cc_valid <= '0; poly_col <= 24'd0; dbg_col_miss <= 16'd0; tex_flat <= 1'b0; lum_x <= 8'd0;
+      cc_valid <= '0; poly_col <= 24'd0; dbg_col_miss <= 16'd0; tex_flat <= 1'b0; lum_x <= 8'd0; tex_lum_d <= 2'd0;
       for (int k = 0; k < 3; k++) begin
         p0prev[k] <= 32'd0; p1prev[k] <= 32'd0;
         p0cur[k]  <= 32'd0; p1cur[k]  <= 32'd0; xyz[k] <= 32'd0;
@@ -627,7 +642,7 @@ module m2_geo_engine #(
           pe   = xhalf ? mem_data[30:16] : mem_data[14:0];
           grey = tex_flat && (pe == 15'd0);                   // R234: no colour at all
           if (grey) pe = TEX_GREY;
-          lu   = grey ? {1'b0, luma8[7:1]} : luma8;
+          lu   = grey ? {1'b0, luma8[7:1]} : (tex_flat ? scale_lum(luma8, tex_lum) : luma8);   // R239
           c555  <= pe; lum_x <= lu;
           xi    <= 2'd0;
           xaddr <= xl_dw(2'd0, pe, lu);
@@ -691,6 +706,8 @@ module m2_geo_engine #(
         default: st <= E_IDLE;
       endcase
       if (col_inval) cc_valid <= '0;                 // R222: the CPU rewrote the colours
+      tex_lum_d <= tex_lum;
+      if (tex_lum != tex_lum_d) cc_valid <= '0;      // R239: the placeholder changed; the cached colours are stale
     end
   end
 

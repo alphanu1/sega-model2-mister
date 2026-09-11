@@ -722,7 +722,15 @@ int main(int argc, char **argv) {
           f_ack = 1; el_cnt = -1;
         }
         if (!el_req_r) el_done = 0; else if (f_ack) el_done = 1;
-        if (el_req_r && !el_done && !f_ack && el_cnt < 0) { el_cnt = eng_lat; el_addr = el_addr_r; el_oba = el_oba_r; el_space = el_space_r; }
+        // R237: M2_GEO_LAT_RAND=1 draws each latency uniformly from 1..eng_lat
+        // instead of holding it fixed, to search the interleavings of the pool's
+        // clients that the board's varying memory timing produces.
+        static const bool lat_rand = std::getenv("M2_GEO_LAT_RAND") != nullptr;
+        static uint32_t lat_rng = 0x9E3779B9u;
+        if (el_req_r && !el_done && !f_ack && el_cnt < 0) {
+          el_cnt = eng_lat;
+          if (lat_rand) { lat_rng ^= lat_rng << 13; lat_rng ^= lat_rng >> 17; lat_rng ^= lat_rng << 5; el_cnt = 1 + int(lat_rng % unsigned(eng_lat)); }
+          el_addr = el_addr_r; el_oba = el_oba_r; el_space = el_space_r; }
         el_ack_r = f_ack | el_done;
         el_req_r = d->eng_mem_req; el_addr_r = uint32_t(d->eng_mem_addr); el_oba_r = uint32_t(d->geo_oba_last);
         el_space_r = d->eng_mem_space;

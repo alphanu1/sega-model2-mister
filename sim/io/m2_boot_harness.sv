@@ -864,7 +864,7 @@ module m2_boot_harness #(
     .a_bottom(32'h43400000), .a_top(32'hC3400000), // +192, -192
     .tha(geo_obj_tha), .lit_x(geo_lit_x), .lit_y(geo_lit_y), .lit_z(geo_lit_z),
     .tp_we(geo_tp_we), .tp_idx(geo_tp_idx), .tp_diffuse(geo_tp_diffuse), .tp_ambient(geo_tp_ambient),
-    .col_inval(oc_col_inval), .mem_space(eng_mem_space), .dbg_col_miss(),
+    .col_inval(oc_col_inval), .tex_lum(2'd0), .mem_space(eng_mem_space), .dbg_col_miss(),
     .q_valid(eng_q_valid), .q_ready(1'b1),
     .q_x0(eng_q_x0), .q_y0(eng_q_y0), .q_x1(eng_q_x1), .q_y1(eng_q_y1),
     .q_x2(eng_q_x2), .q_y2(eng_q_y2), .q_x3(eng_q_x3), .q_y3(eng_q_y3),

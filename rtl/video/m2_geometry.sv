@@ -98,6 +98,7 @@ module m2_geometry (
   input  logic [4:0]  tp_idx,
   input  logic [7:0]  tp_diffuse, tp_ambient,
   input  logic        col_inval,
+  input  logic [1:0]  tex_lum,           // R239
   output logic [1:0]  mem_space,
   output logic [15:0] dbg_col_miss,
 
@@ -155,7 +156,7 @@ module m2_geometry (
   m2_geo_engine u_engine (
     .tha(tha), .lit_x(lit_x), .lit_y(lit_y), .lit_z(lit_z),
     .tp_we(tp_we), .tp_idx(tp_idx), .tp_diffuse(tp_diffuse), .tp_ambient(tp_ambient),
-    .col_inval(col_inval), .mem_space(mem_space),
+    .col_inval(col_inval), .tex_lum(tex_lum), .mem_space(mem_space),
     .poly_col(poly_col), .poly_luma(), .dbg_col_miss(dbg_col_miss),
     .clk(clk), .rst_n(rst_n),
     .start(start), .oba(oba), .obc(obc), .busy(eng_busy),
