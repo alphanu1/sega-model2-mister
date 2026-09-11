@@ -12153,3 +12153,16 @@ Expected: the engine's stream (points, attribute, normals) and the walker's
 port trips and the collect well under a frame. The TGP's own reads (one
 SDRAM access per external read, port 9) are the next throughput item after
 this, and the clock lever the user used on Model 1 after that.
+
+*dbuf7, 12:40: no fit -- 74,800 ALUTs.* The two-bank store's final-order
+array, as one {bank, index} array, inferred only the replay's read port;
+the sort's read was built from 45,613 registers. Two arrays with the bank
+selecting the result (`idx_a0`/`idx_a1`) infer as the single-bank store
+did, one write and two reads each. Found beside it: since the narrowing
+(dbuf3 on) each vertex word was read with TWO slices on one line, which
+Quartus takes as two read ports and duplicates the array -- the file's
+own "ONE READ PER ARRAY" rule, broken by me. One registered read each
+now. That duplication was in dbuf4 and dbuf6 as well and is part of why
+the fourth buffer did not fit in dbuf5; the true block count of the
+narrowed store is lower than R213 measured. `build/dbuf8` = the corrected
+two-bank store + four buffers + R214 pair caches + the drop counters.
