@@ -1232,7 +1232,10 @@ int main(int argc, char **argv) {
     // select is a one-cycle pulse in the CPU domain, so one log per rising CPU
     // edge is one transaction -- counting cycles instead would double-count a
     // write the bridge holds.
-    if (g_copro_trace && c && !cpu_prev && d->obs_io_sel) {
+    // M2_COPRO_FROM=<video frame>: trace only from that frame, so a run long
+    // enough to reach the racing attract does not carry hours of boot (R232).
+    static const unsigned long long copro_from = std::getenv("M2_COPRO_FROM") ? std::strtoull(std::getenv("M2_COPRO_FROM"), nullptr, 10) : 0;
+    if (g_copro_trace && g_frames_done >= copro_from && c && !cpu_prev && d->obs_io_sel) {
       const uint32_t a = d->obs_io_addr;
       char kind = 0;
       uint32_t val = d->obs_io_wdata;
@@ -1271,7 +1274,7 @@ int main(int argc, char **argv) {
       ++g_at_n; if (diff < -2 || diff > 2) { ++g_at_bad; if (g_at_bad <= 12) std::printf("    ATAN MISMATCH a=%g b=%g expect %d got %d (insn %llu)\n", fa, fb, exp16, got, (unsigned long long)d->dbg_acc); }
       g_at_st = 0;
     }
-    if (g_copro_trace && g_rd_pend && c) {
+    if (g_copro_trace && g_frames_done >= copro_from && g_rd_pend && c) {
       if (!d->obs_io_sel) g_rd_pend = false;
       else if (!d->obs_copro_stall) {
         std::fprintf(g_copro_trace, "R %llu %08x %08x\n", (unsigned long long)g_frames_done,

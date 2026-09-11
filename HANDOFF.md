@@ -15,7 +15,17 @@ the beam, R225). Clocks: 120/60/30 was built and measured -- the core closes at
 both port adapters REQUIRE an exact 2:1 (R227/R228); parked at 100/50/25 until
 the controller's port mux/read return is pipelined or the 3D gets its own domain.
 The test-quad generator is deleted (R229). Tools: `tools/board-capture.sh`,
-`tools/decode_uart.py`.
+`tools/decode_uart.py` (now prints 'W'/'X' wedge records, R235).
+
+**OVERNIGHT RUN FOR R232 (the cars' continuous crash animation):** the boot
+bench cannot reach the racing attract in a normal run (80 walk frames at 19.5 M
+instructions; the race demo starts between 45 and 60 s of game time, video
+frame ~2,600-3,450). A 420 M-instruction run was started at 23:35 with
+`M2_COPRO_TRACE` gated by the new `M2_COPRO_FROM=2800`, writing
+`<scratchpad>/long/copro_trace.txt` (F/W/R exchange, frame-stamped); MAME's
+`coprotap.lua` over frames 2800-3200 gives the reference side. Diff them for
+the first FIFO result that differs -- the method that found R212. The
+scratchpad is session-local: copy `long/` out before it is lost.
 
 ## WHERE 2026-09-11 LEFT IT (morning)
 
