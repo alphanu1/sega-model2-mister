@@ -1,6 +1,6 @@
 # Handoff
 
-**Updated:** 2026-09-11 09:50. Study entries R176-R210. R172 WITHDRAWN, R185
+**Updated:** 2026-09-11 10:35. Study entries R176-R211. R172 WITHDRAWN, R185
 partly RETRACTED, R189 corrected by R191, R196's central claim WITHDRAWN the
 same day, R206 WITHDRAWN, R207 closed by R208.
 
@@ -34,7 +34,16 @@ probe. **`build/wrarb3` s15 WORKS (09:45): ROM loads, first TGP job
 completes, 4 minutes clean -- render chain 10.6%, mailbox poll 3.7%, no
 parking, no drops.** Ten-minute soak running. The board is on it. Study R209.
 
-**R210: THE FLASHING IS THROUGHPUT.** `dbg_late_frames` and `dbg_qend_frames`
+**R211: THE FLASHING IS PRESENTATION -- Daytona flips every second frame
+(the reference measurement in m2_geo.sv), and the single quad store could not
+draw while collecting. `m2_raster3d` now has two stores: collect into one,
+replay the other every video frame until the next is ready. `make
+test_m2_raster3d` shows the committed RTL painting 0,0,0,9717,0,0 pixels
+over six frames and the fix painting every frame. Building as `build/dbuf`.
+R210's throughput reading is withdrawn as unproven; its timers stay on the
+wire to answer it.**
+
+**R210 (superseded by R211): THE FLASHING IS THROUGHPUT.** `dbg_late_frames` and `dbg_qend_frames`
 advance at the same rate: the geometry stage takes ~2 video frames per game
 frame, every frame that starts mid-collect clears the store and draws
 nothing, and when a frame is ready it is late enough that mostly one band

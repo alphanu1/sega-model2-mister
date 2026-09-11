@@ -104,6 +104,23 @@ module m2_raster3d #(
   localparam int unsigned BUFW   = (NBUF > 1) ? $clog2(NBUF) : 1;
 
   // ------------------------------------------------------------ quad store
+  //
+  // TWO STORES, ONE COLLECTING AND ONE ON DISPLAY (R211). Daytona hands over
+  // a display list every SECOND video frame (the 0x803008 flip, measured in
+  // the reference), so the walk delivers a frame's quads at 30 Hz while the
+  // bands are drawn just ahead of the beam at 60 Hz. With one store the
+  // frames spent collecting could not draw, and the picture was on for one
+  // frame and off for the next -- the white cars flashing on build/ack s14.
+  // Real hardware and MAME keep the last rendered frame until the next one;
+  // there is no frame buffer here, so the equivalent is to keep the last
+  // SORTED LIST and replay it every video frame until the next one is ready.
+  //
+  // `bank` is the store being collected into and sorted; ~bank is replayed.
+  // They swap at the frame_start that finds the collected frame P_READY. A
+  // frame_start that arrives while the collection is still running does not
+  // swap and does not clear anything: the display bank keeps drawing and
+  // the collection completes. `dvalid` says the display bank holds a frame.
+  logic        bank, dvalid;
   logic        qs_clear, qs_sort_start, qs_sort_busy;
   logic        qs_replay_start, qs_replay_busy, qs_out_ready, qs_out_valid;
   logic [BW-1:0] qs_band;
@@ -113,22 +130,51 @@ module m2_raster3d #(
 
   assign q_ready = 1'b1;      // the store absorbs or drops; it never backpressures
 
-  m2_quad_store #(.BAND_H(BAND_H), .NBANDS(NBANDS), .BW(BW), .SCR_H(SCR_H)) u_store (
-    .clk(clk), .rst_n(rst_n),
-    .clear(qs_clear),
-    .in_valid(q_valid),
-    .in_x0(q_x0), .in_y0(q_y0), .in_x1(q_x1), .in_y1(q_y1),
-    .in_x2(q_x2), .in_y2(q_y2), .in_x3(q_x3), .in_y3(q_y3),
-    .in_col(q_col), .in_z(q_z), .in_moire(q_moire),
-    .sort_start(qs_sort_start), .sort_busy(qs_sort_busy),
-    .replay_band(qs_band),
-    .replay_start(qs_replay_start), .replay_busy(qs_replay_busy),
-    .out_ready(qs_out_ready), .out_valid(qs_out_valid),
-    .out_x0(qo_x0), .out_y0(qo_y0), .out_x1(qo_x1), .out_y1(qo_y1),
-    .out_x2(qo_x2), .out_y2(qo_y2), .out_x3(qo_x3), .out_y3(qo_y3),
-    .out_col(qo_col), .out_moire(qo_moire),
-    .dbg_count(dbg_quads), .dbg_dropped(dbg_dropped)
-  );
+  logic [1:0]  st_sort_busy, st_replay_busy, st_out_valid;
+  logic signed [15:0] st_x0 [2], st_y0 [2], st_x1 [2], st_y1 [2];
+  logic signed [15:0] st_x2 [2], st_y2 [2], st_x3 [2], st_y3 [2];
+  logic [23:0] st_col [2];
+  logic [1:0]  st_moire;
+  logic [15:0] st_count [2], st_dropped [2];
+
+  genvar sb;
+  generate
+    for (sb = 0; sb < 2; sb++) begin : g_store
+      wire mine = (bank == sb[0]);        // this bank is the collect bank
+      m2_quad_store #(.BAND_H(BAND_H), .NBANDS(NBANDS), .BW(BW), .SCR_H(SCR_H)) u_store (
+        .clk(clk), .rst_n(rst_n),
+        // Cleared at the swap: the bank coming OFF display becomes the new
+        // collect bank. `bank` has not flipped yet on that cycle, so it is
+        // the one that is not `mine`.
+        .clear(qs_clear & ~mine),
+        .in_valid(q_valid & mine),
+        .in_x0(q_x0), .in_y0(q_y0), .in_x1(q_x1), .in_y1(q_y1),
+        .in_x2(q_x2), .in_y2(q_y2), .in_x3(q_x3), .in_y3(q_y3),
+        .in_col(q_col), .in_z(q_z), .in_moire(q_moire),
+        .sort_start(qs_sort_start & mine), .sort_busy(st_sort_busy[sb]),
+        .replay_band(qs_band),
+        .replay_start(qs_replay_start & ~mine), .replay_busy(st_replay_busy[sb]),
+        .out_ready(qs_out_ready & ~mine), .out_valid(st_out_valid[sb]),
+        .out_x0(st_x0[sb]), .out_y0(st_y0[sb]), .out_x1(st_x1[sb]), .out_y1(st_y1[sb]),
+        .out_x2(st_x2[sb]), .out_y2(st_y2[sb]), .out_x3(st_x3[sb]), .out_y3(st_y3[sb]),
+        .out_col(st_col[sb]), .out_moire(st_moire[sb]),
+        .dbg_count(st_count[sb]), .dbg_dropped(st_dropped[sb])
+      );
+    end
+  endgenerate
+
+  // The producer sees the collect bank, the consumer the display bank.
+  wire dbk = ~bank;
+  assign qs_sort_busy   = st_sort_busy[bank];
+  assign qs_replay_busy = st_replay_busy[dbk];
+  assign qs_out_valid   = st_out_valid[dbk];
+  assign qo_x0 = st_x0[dbk]; assign qo_y0 = st_y0[dbk];
+  assign qo_x1 = st_x1[dbk]; assign qo_y1 = st_y1[dbk];
+  assign qo_x2 = st_x2[dbk]; assign qo_y2 = st_y2[dbk];
+  assign qo_x3 = st_x3[dbk]; assign qo_y3 = st_y3[dbk];
+  assign qo_col = st_col[dbk]; assign qo_moire = st_moire[dbk];
+  assign dbg_quads   = st_count[bank];
+  assign dbg_dropped = st_dropped[bank];
 
   // ------------------------------------------------------------- the filler
   logic        fl_in_valid, fl_in_ready, fl_quad_done, fl_line_case;
@@ -332,7 +378,10 @@ module m2_raster3d #(
   //
   // MAME has no such condition: render_frame_start() resets poly_list_index at
   // the top of every geo_parse, unconditionally.
-  assign qs_clear        = frame_start;
+  // R211: cleared only when the banks swap -- the new collect bank is the
+  // one that was on display, and it is emptied before the walk's first quad.
+  wire swap = frame_start && (pst == P_READY);
+  assign qs_clear        = swap;
   assign qs_sort_start   = (pst == P_SORT);
   assign qs_replay_start = (cst == C_REPLAY);
   assign qs_out_ready    = (cst == C_FILL) && fl_in_ready;
@@ -341,6 +390,7 @@ module m2_raster3d #(
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       pst <= P_COLLECT; cst <= C_IDLE;
+      bank <= 1'b0; dvalid <= 1'b0;
       fill_band <= '0; fill_buf <= '0; bd_ready <= '0;
       bd_clear_req <= '0; dbg_bands <= 16'd0; dbg_pixels <= 32'd0;
       dbg_ready_cyc <= 16'd0; dbg_bands_done <= 8'd0;
@@ -377,12 +427,12 @@ module m2_raster3d #(
         P_COLLECT: if (q_end) pst <= P_SORT;
         P_SORT:    pst <= P_SORTW;
         P_SORTW:   if (!qs_sort_busy) pst <= P_READY;
-        P_READY:   if (frame_start) begin pst <= P_COLLECT; end
+        P_READY:   if (frame_start) begin pst <= P_COLLECT; bank <= ~bank; dvalid <= 1'b1; end
       endcase
 
       // ---- consumer: one band at a time into the rotating buffers
       case (cst)
-        C_IDLE: if (pst == P_READY && !bd_ready[fill_buf]) begin
+        C_IDLE: if (dvalid && !bd_ready[fill_buf]) begin
           bd_y0[fill_buf]   <= 16'sd0 + 16'(fill_band) * 16'(BAND_H);
           bd_band[fill_buf] <= fill_band;
           bd_clear_req[fill_buf] <= 1'b1;

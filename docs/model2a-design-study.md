@@ -11882,3 +11882,50 @@ the list through the front-door DMA at two writes per dword on the shared
 write port now costing two dead cycles each (R209). Next probe: the ready
 count in units of 16 cycles (1 M cycles = 21 ms full scale), and the cycles
 from frame_start to q_end separately, to split walk+engine from sort.
+
+**R211 -- THE FLASHING IS PRESENTATION, NOT THROUGHPUT: DAYTONA HANDS OVER A
+LIST EVERY SECOND VIDEO FRAME, AND A SINGLE QUAD STORE CANNOT DRAW WHILE IT
+COLLECTS. THE STORE IS DOUBLE-BUFFERED.** 2026-09-11, 10:30.
+
+R210 read "late" and "finished" advancing at the same rate as the geometry
+being slow. The user pointed out that Model 1 games refresh every second
+frame, and the reference measurement already in `m2_geo.sv` says the same
+of Daytona: the 0x803008 "list ready" write comes every SECOND frame,
+right after the write pointer, single-buffered at address 0. So the walk
+delivers a frame's quads at 30 Hz by the game's design, and `dbg_late_frames`
+counts the frames in between as well as slow ones -- it cannot separate
+the two, and R210's conclusion is withdrawn as unproven (the throughput
+question stays open and the widened timers will answer it).
+
+What flashes is this rasteriser's own structure. It has no frame buffer: it
+draws bands just ahead of the beam every video frame out of ONE quad store,
+and that store was cleared at every frame_start and refilled during the
+collecting frame, so the collecting frames drew nothing -- on for one
+frame, off for the next, at 30 Hz. Real hardware and MAME show the last
+rendered frame until the next; the equivalent here is to keep the last
+SORTED LIST and replay it every video frame until the next is ready.
+
+*The fix (`m2_raster3d.sv`).* Two `m2_quad_store`s. `bank` is collected
+into and sorted; `~bank` is replayed per band by the consumer on every
+video frame once it holds a frame (`dvalid`), regardless of the producer's
+state. They swap at the frame_start that finds the collected frame
+P_READY; a frame_start that arrives mid-collection swaps nothing and
+clears nothing. The clear goes to the bank coming OFF display at the swap
+(the first version cleared the freshly sorted bank and drew nothing; the
+test caught it at once). Cost: one more store, ~0.5 Mbit of the 1.37 Mbit
+of block memory free at 76%, and a 200-bit output mux; ALM at 90% before.
+
+*Test (`sim/video/tb_m2_raster3d.cpp`, `make test_m2_raster3d`).* A list
+delivered during frame 0, nothing during frames 1-2, the next list during
+frame 3, nothing during 4-5; the beam sweeps each frame. Committed RTL:
+pixels 0, 0, 0, 9717, 0, 0 -- the flash. Double-buffered: 0, 9717, 9758,
+9767, 9778, 9758 -- every frame after the first draws, including the one
+in which the next list is collected. (The one-frame delay from list to
+picture is inherent to collect-sort-then-draw and is what the old design
+had too.)
+
+Also seen in the test and unexplained: `dbg_bands_done` reads 26 for a
+24-band frame; `fill_band` seems to run two past NBANDS. Cosmetic in the
+counter, possibly two wasted band fills per frame -- to look at.
+Unconfirmed until the board says so: `build/dbuf` (R202+R203+R205+R208+
+R209+R211, R210's widened timers on the H record).
