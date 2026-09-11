@@ -260,6 +260,33 @@ module m2_geometry (
   logic [31:0] hzmin;
   logic [9:0]  pj_wait;                    // cycles spent in Q_WAIT
   wire         pj_timeout = &pj_wait;
+  // A VERTEX THE PREVIOUS POLYGON ALREADY PROJECTED IS NOT PROJECTED AGAIN
+  // (R217). Model 2's polygon streams are strips: the engine carries two of
+  // the last polygon's view-space points into the next (E_LINK, study R171),
+  // so vertices 0 and 1 here are, bit for bit, two of the previous four. The
+  // projector's reciprocal is 29 cycles and does not pipeline; projecting
+  // four vertices a polygon was half of all the geometry's time on the
+  // title (study R215). The last polygon's four vertices and their pixels
+  // are kept, and a vertex equal to one of them takes its pixel instead of
+  // a projection. Bit-exact equality on the floats is the right test: the
+  // carried points are copies of registers, not recomputed. A miss costs
+  // what it did before; the cache is cleared with the rest at reset only,
+  // because a stale hit needs the same three floats to recur by chance.
+  logic [31:0] cx [4], cy [4], cz [4];
+  logic signed [15:0] csx [4], csy [4];
+  logic        cvalid;
+  logic [1:0]  hit_i [2];
+  logic [1:0]  hit;
+  always_comb begin
+    for (int k = 0; k < 2; k++) begin
+      hit[k] = 1'b0; hit_i[k] = 2'd0;
+      for (int j = 0; j < 4; j++)
+        if (cvalid && hx[k] == cx[j] && hy[k] == cy[j] && hz[k] == cz[j]) begin
+          hit[k] = 1'b1; hit_i[k] = 2'(j);
+        end
+    end
+  end
+  wire skip_here = (qi < 2'd2) && hit[qi[0]];
 
   // ---------------------------------------------------- THE GARBAGE GATE
   //
@@ -316,6 +343,8 @@ module m2_geometry (
     if (!rst_n) begin
       qst <= Q_IDLE; qi <= 2'd0; clip_in_valid <= 1'b0; hzmin <= 32'd0;
       dbg_nonfinite <= 16'd0; pj_wait <= 10'd0; dbg_pj_lost <= 16'd0;
+      cvalid <= 1'b0;
+      for (int k = 0; k < 4; k++) begin cx[k] <= 32'd0; cy[k] <= 32'd0; cz[k] <= 32'd0; csx[k] <= 16'sd0; csy[k] <= 16'sd0; end
       for (int k = 0; k < 4; k++) begin
         hx[k] <= 32'd0; hy[k] <= 32'd0; hz[k] <= 32'd0;
         sx[k] <= 16'sd0; sy[k] <= 16'sd0;
@@ -341,7 +370,12 @@ module m2_geometry (
         // ISSUE AND WAIT ARE SEPARATE STATES for the same reason the engine's
         // transform splits them: the projector's out_valid from the PREVIOUS
         // vertex is still standing when this one's in_valid goes up.
-        Q_ISS: if (w_granted) qst <= Q_WAIT;
+        Q_ISS: if (skip_here) begin
+          // R217: this vertex was projected by the previous polygon.
+          sx[qi] <= csx[hit_i[qi[0]]];
+          sy[qi] <= csy[hit_i[qi[0]]];
+          qi <= qi + 2'd1;                       // qi < 2 here, so never the last
+        end else if (w_granted) qst <= Q_WAIT;
 
         // A PROJECTION THAT NEVER RETURNS MUST NOT STOP THE WORLD.
         //
@@ -377,6 +411,12 @@ module m2_geometry (
         Q_OUT: if (clip_in_ready) begin
           clip_in_valid <= 1'b0;
           qst <= Q_IDLE;
+          // R217: remember this polygon's vertices and their pixels.
+          for (int k = 0; k < 4; k++) begin
+            cx[k] <= hx[k]; cy[k] <= hy[k]; cz[k] <= hz[k];
+            csx[k] <= sx[k]; csy[k] <= sy[k];
+          end
+          cvalid <= 1'b1;
         end
 
         default: qst <= Q_IDLE;
