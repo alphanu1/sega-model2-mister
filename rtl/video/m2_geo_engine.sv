@@ -259,21 +259,22 @@ module m2_geo_engine #(
   logic [63:0] tp_rd;
   (* ramstyle = "MLAB" *) logic [40:0] cc_mem [256];   // {textured, key, r, g, b}
   logic [40:0] cc_rd;
-  wire  [16:0] cc_key = {tex_flat, cbase, luma_eff[7:2]};
+  wire  [16:0] cc_key = {tex_flat, cbase, luma8[7:2]};
   // R231/R234: THE PLACEHOLDER FOR A TEXTURE. The reference paints a textured
   // polygon from its texture sheet, each texel's own luma scaled by the
-  // polygon's; it reads the palette for the colour base all the same. So the
-  // placeholder keeps the palette entry when there is one -- the car liveries'
-  // base colours, which is why a blue car was blue before any of this -- and
-  // takes a mid grey only where the entry is black, which is most of the
-  // scenery. And it uses HALF the polygon's luminance: the polygon luma is
-  // 255 for nearly every textured polygon (the game's parameters are 255/255
-  // there) and the table maps index 63 to full on every channel, so the
-  // first placeholder turned blue cars WHITE; a mid-range texel, 128 of 256,
-  // is index ~31, which is what half gives. One flag in the cache key keeps
-  // these apart from flat colour bases at the same luminance.
+  // polygon's; it reads the palette for the colour base all the same. So a
+  // textured polygon keeps its palette entry at the polygon's FULL luminance
+  // -- the car liveries' base colours, which the board showed as right
+  // before any placeholder existed -- and only where that entry is BLACK,
+  // which is most of the scenery and carries no colour information at all,
+  // does it take a mid grey at HALF the luminance, a mid-range texel's
+  // brightness, because grey at the polygon's 255 is white on this game's
+  // table. The first version greyed and halved everything and turned blue
+  // cars white; the board is the oracle on this. The cache key is the same
+  // as a flat polygon's plus the textured flag, so an entry that is black
+  // always resolves to the same grey and the cache stays consistent.
   localparam logic [14:0] TEX_GREY = 15'h4210;
-  wire [7:0] luma_eff = tex_flat ? {1'b0, luma8[7:1]} : luma8;
+  logic [7:0] lum_x;         // the luminance the table is read at, chosen at E_PAL
   wire         cc_we  = (st == E_CW);
 
   // An 8-bit integer as an IEEE single.
@@ -366,7 +367,7 @@ module m2_geo_engine #(
       lum <= 32'd0; luma8 <= 8'd0; hdr0 <= 16'd0; cbase <= 10'd0; c555 <= 15'd0; xi <= 2'd0;
       rgb[0] <= 8'd0; rgb[1] <= 8'd0; rgb[2] <= 8'd0;
       xaddr <= 24'd0; xhalf <= 1'b0; xspace <= 2'd0; cc_wait <= 1'b0; cc_idx <= 8'd0;
-      cc_valid <= '0; poly_col <= 24'd0; dbg_col_miss <= 16'd0; tex_flat <= 1'b0;
+      cc_valid <= '0; poly_col <= 24'd0; dbg_col_miss <= 16'd0; tex_flat <= 1'b0; lum_x <= 8'd0;
       for (int k = 0; k < 3; k++) begin
         p0prev[k] <= 32'd0; p1prev[k] <= 32'd0;
         p0cur[k]  <= 32'd0; p1cur[k]  <= 32'd0; xyz[k] <= 32'd0;
@@ -587,8 +588,7 @@ module m2_geo_engine #(
           cbase   <= xhalf ? mem_data[31:22] : mem_data[15:6];
           tex_flat <= hdr0[14];
           cc_idx  <= (xhalf ? mem_data[29:22] : mem_data[13:6])
-                   ^ {(xhalf ? mem_data[31:30] : mem_data[15:14]),
-                      hdr0[14] ? {1'b0, luma8[7:3]} : luma8[7:2]};
+                   ^ {(xhalf ? mem_data[31:30] : mem_data[15:14]), luma8[7:2]};
           cc_wait <= 1'b0;
           th_w    <= th_w + {{15{attr[16]}}, attr[16:12], 2'b00};
           if (hdr0[13]) begin
@@ -622,18 +622,22 @@ module m2_geo_engine #(
         end
         E_PAL: if (mem_go) begin
           automatic logic [14:0] pe;
-          pe = xhalf ? mem_data[30:16] : mem_data[14:0];
-          if (tex_flat && (pe == 15'd0)) pe = TEX_GREY;       // R234: black base -> grey
-          c555  <= pe;
+          automatic logic        grey;
+          automatic logic [7:0]  lu;
+          pe   = xhalf ? mem_data[30:16] : mem_data[14:0];
+          grey = tex_flat && (pe == 15'd0);                   // R234: no colour at all
+          if (grey) pe = TEX_GREY;
+          lu   = grey ? {1'b0, luma8[7:1]} : luma8;
+          c555  <= pe; lum_x <= lu;
           xi    <= 2'd0;
-          xaddr <= xl_dw(2'd0, pe, luma_eff);
-          xhalf <= luma_eff[2]; xspace <= 2'd3;
+          xaddr <= xl_dw(2'd0, pe, lu);
+          xhalf <= lu[2]; xspace <= 2'd3;
           st    <= E_XL;
         end
         E_XL: if (mem_go) begin
           rgb[xi] <= gam(xhalf ? mem_data[23:16] : mem_data[7:0]);
           if (xi == 2'd2) st <= E_CW;
-          else begin xi <= xi + 2'd1; xaddr <= xl_dw(xi + 2'd1, c555, luma_eff); end
+          else begin xi <= xi + 2'd1; xaddr <= xl_dw(xi + 2'd1, c555, lum_x); end
         end
         E_CW: begin
           cc_valid[cc_idx] <= 1'b1;                   // cc_we writes the entry this cycle

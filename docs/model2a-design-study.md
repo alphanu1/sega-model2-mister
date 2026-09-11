@@ -13233,3 +13233,13 @@ streams it as two records -- 'W' {x0,y0,x1,y1} then 'X' {x2,y2,x3,y3} --
 in place of two 'H' records; a running count and the slot (1 = the carried
 v1, 0 = the carried v0) ride in every 'H' where the tiny-refused count was.
 `tools/decode_uart.py` prints them. In `build/fix3d4`.
+
+*R234, corrected by the board (23:45):* "the build before had the right
+lighting" -- fix3d, which drew a textured polygon in its palette entry at
+the polygon's full luminance. So that is what it does again; halving was a
+guess about texel brightness and the board says no. Only a textured polygon
+whose palette entry is BLACK, which carries no colour information at all,
+takes the grey, and only that one at half luminance, because grey at 255 is
+white on this game's table. `tb_m2_geo_engine` 41 checks. `build/fix3d3`
+(which had the halving) was stopped in the fitter; `build/fix3d4` = fix3d2
++ TINY 4 (R233) + this + the wedge catcher (R235).

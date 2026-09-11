@@ -276,7 +276,7 @@ int main(int argc, char** argv) {
     std::printf("test: textured opaque polygons still draw, as lit grey (R231)\n");
     // grey 16/16/16 through the same table and gamma as a flat polygon would be
     // R234: its palette entry is not black, so it keeps it, at HALF the luma
-    ck("textured polygon keeps its palette colour at half luma", col0, ref_colour(C555, (int)luma0 >> 1));
+    ck("textured polygon keeps its palette colour at full luma", col0, ref_colour(C555, (int)luma0));
     ck("three polygons emitted", n, 3);
     thdr[0x100 + 0] = 0x0000;
   }
