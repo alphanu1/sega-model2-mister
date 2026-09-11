@@ -12763,3 +12763,58 @@ RAM -- so whatever fills texture RAM for those is not op 0x04 in the display
 list within this window; those 55 read 0xFFFF headers (renderer 3, colorbase
 0x3ff) and draw in whatever colour that maps to. Open: find the writer.
 Building `build/lit1`.
+
+**R223 -- THE REFERENCE DRAWS NO TRANSLUCENT POLYGON, AND WE WERE DRAWING
+THEM OPAQUE. 16% OF THE TITLE'S OBJECTS.**
+
+`model2_3d_render` picks `m_render_callbacks[(texheader[0] >> 13) & 3]` and
+the table is {solid<false>, solid<true>, tex<false>, tex<true>} -- bit 13 is
+the translucent flag, bit 14 textured. BOTH translucent entries return on
+their first line (`if (Translucent) return;`, model2rd.ipp:63 and :184), so
+the reference renders nothing at all for a polygon whose header has bit 13.
+R222's first cut culled only the code-1 case (flat translucent) and drew
+code 3 (textured translucent) as an opaque flat polygon in its palette
+colour. The boot bench's header census says code 3 is 261 of the title's
+1,659 objects -- SIXTEEN PER CENT -- and those are the shadows, glass and
+smoke: solid grey wedges over the cars is exactly what drawing them opaque
+looks like, and wedges over the cars is what the board has been showing.
+Now any header with bit 13 culls. Blending is not built and is not the next
+thing; not drawing them is what the reference does and is nearer right than
+drawing them solid. `tb_m2_geo_engine`: headers 0x2000 and 0x6000 both emit
+nothing and cull three, 0x4000 (textured opaque) still emits three.
+
+*And what fills texture RAM, because nothing in the display list does.* The
+walker decoded 47 `geo_texture_data` (0x04) commands in a whole run and
+EVERY ONE had address bit 23 clear -- log RAM, the texture LOD table -- so
+the 64 K-word texture RAM is never written, while 55 objects a list (3%)
+point `tha` at it. MAME has no other writer either: `raster->texture_ram` is
+touched only by raster command 0x04 (model2_v.cpp:921), which only
+`geo_texture_data` pushes, and the i960's own texture RAM at 0x12000000 is a
+DIFFERENT array (`m_textureram0/1`, the texel sheets). So in MAME those 55
+objects read a texture_ram that `std::make_unique<raster_state>()` VALUE-
+INITIALISED TO ZERO: header 0 means renderer 0, flat and opaque, colorbase
+0, and they draw. Ours reads unwritten SDRAM -- 0xFFFF -- which means
+renderer 3, and with R223 above they are now culled instead. Open: either
+zero the TEXRAM region at boot to match the reference, or find the writer
+the window we sample does not contain (the title may upload texture RAM
+once, before M2_POLY_FROM). Not guessed at: measured next by running the
+bench from instruction 0 with a texture-RAM write counter.
+
+**R224 -- THE TINY-QUAD TEST WAS ON A BLOCK RAM'S WRITE-ENABLE PIN, AND
+THAT BECAME THE WORST PATH IN THE DESIGN.**
+
+`build/lit1` (R222's lighting) fitted at 83% but missed setup on clk_sys by
+0.210 ns on s13 and 0.616 on s14, where `build/dbuf16` had made +0.556 on
+every clock. The path was not the new arithmetic: it ran from
+`m2_geo_clip.qsy[0][7]` to `m2_quad_store`'s vertex RAM `porta_we_reg`.
+`is_tiny` is a min/max tree over eight 16-bit coordinates and it gated the
+write enable, so a coordinate leaving the clipper had to cross that tree and
+reach a block RAM's control pin inside one 20 ns cycle; lighting only made
+the placement tight enough to expose it. Now the write enable is
+`in_valid && has_room` alone -- every accepted quad is written at slot
+`wcount` and only the COUNT is withheld when the quad is tiny, so a tiny
+quad's slot is reused by the next one and the stored list is identical while
+the comparator tree ends at a small counter. `make test_m2_raster3d`
+unchanged (9,881 pixels a frame, six frames). Rule for the rest of the
+renderer: a wide comparison may end at a register, never at a RAM's address
+or enable.

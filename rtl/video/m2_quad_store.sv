@@ -261,9 +261,17 @@ module m2_quad_store #(
     end else if (clear) begin
       count[wbank] <= '0; wi <= '0; dbg_dropped <= '0; dbg_tiny <= '0;
     end else if (in_valid) begin
-      if (is_tiny) begin
-        if (dbg_tiny != 16'hffff) dbg_tiny <= dbg_tiny + 16'd1;
-      end else if (has_room) begin
+      // THE VERTEX RAMs' WRITE ENABLE DOES NOT WAIT FOR THE TINY TEST (R222).
+      // It used to be `in_valid && !is_tiny && has_room`, and is_tiny is a
+      // min/max tree over eight 16-bit coordinates -- so the clipper's output
+      // y fed a comparator chain and then a block RAM's write-enable pin, and
+      // that was the worst path in the design at 50 MHz once lighting made the
+      // placement tighter (build/lit1 s13: -0.210 ns, qsy[0][7] -> the vertex
+      // RAM's porta_we). Now every accepted quad is WRITTEN at slot wcount and
+      // only the COUNT is withheld when it is tiny: the slot is simply reused
+      // by the next quad, so the stored list is identical, and the comparator
+      // tree ends at a small counter instead of a RAM control pin.
+      if (has_room) begin
         if (wbank) begin
           vtx0_1[wcount[IW-1:0]] <= {sat(in_y0), sat(in_x0)};
           vtx1_1[wcount[IW-1:0]] <= {sat(in_y1), sat(in_x1)};
@@ -278,6 +286,10 @@ module m2_quad_store #(
           att_0[wcount[IW-1:0]]  <= {band_range(in_y0, in_y1, in_y2, in_y3), in_moire, c565(in_col)};
         end
         key[wcount[IW-1:0]] <= sort_key(in_z) >> (32 - KW);
+      end
+      if (is_tiny) begin
+        if (dbg_tiny != 16'hffff) dbg_tiny <= dbg_tiny + 16'd1;
+      end else if (has_room) begin
         count[wbank] <= wcount + 1'b1;
       end else if (dbg_dropped != 16'hffff) begin
         dbg_dropped <= dbg_dropped + 16'd1;

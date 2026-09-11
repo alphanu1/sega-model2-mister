@@ -574,8 +574,17 @@ module m2_geo_engine #(
                    ^ {(xhalf ? mem_data[31:30] : mem_data[15:14]), luma8[7:2]};
           cc_wait <= 1'b0;
           th_w    <= th_w + {{15{attr[16]}}, attr[16:12], 2'b00};
-          if (hdr0[14:13] == 2'b01) begin
-            // A translucent flat polygon: the reference draws nothing for it.
+          if (hdr0[13]) begin
+            // TRANSLUCENT, AND THE REFERENCE DRAWS NOTHING FOR IT. The texture
+            // header's bit 13 is the translucent flag and bit 14 selects
+            // textured; model2_3d_render picks m_render_callbacks[(h0>>13)&3]
+            // and BOTH translucent entries -- draw_scanline_solid<true> and
+            // draw_scanline_tex<true> -- return on their first line. This used
+            // to cull only the flat one, so 16% of the title's objects (261 of
+            // 1,659, textured AND translucent) were drawn here as opaque flat
+            // polygons that the reference discards. Blending is not built; not
+            // drawing them is what the reference does and is nearer right than
+            // drawing them solid.
             remain <= remain - 32'd1;
             dbg_culled <= dbg_culled + 16'd1;
             emitted_last <= 1'b0;

@@ -189,6 +189,7 @@ module m2_boot_harness #(
   output logic [15:0] geo_frames, geo_objs, geo_ops, geo_pdcmds, geo_pdwords, geo_tdwords,
   output logic  [7:0] geo_unknown,
   output logic  [3:0] geo_state,
+  output logic  [4:0] geo_w_op,               // the opcode the walker decoded (R222 probe)
   output logic [31:0] geo_rp_o, geo_wp_o,
 
   output logic [31:0] dbg_pc,
@@ -817,6 +818,7 @@ module m2_boot_harness #(
     .dbg_walk_state()
   );
   assign geo_state = u_geo.wst;
+  assign geo_w_op  = u_geo.w_op;
   // The last object's address and count -- which memory it points at, and how
   // many polygons it claims. A degenerate quad at the projection centre means
   // every transformed point was (0,0), which is what a ZERO MATRIX gives.

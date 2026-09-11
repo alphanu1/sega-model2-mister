@@ -56,6 +56,7 @@ static std::set<uint32_t> g_th_colorbase;
 static std::map<uint32_t,uint32_t> g_th_colorbase_n;
 static uint32_t g_th_last_objs = 0;
 static uint32_t g_tdwords = 0;
+static uint32_t g_op_hist[32] = {0};   // display-list opcodes decoded from M2_POLY_FROM
 static void th_probe(uint32_t tha) {
   ++g_th_objs;
   if (g_th_objs <= 6 || (g_th_objs % 400) == 0) std::printf("    TEXHDR sample: object %u tha %08x\n", g_th_objs, tha);
@@ -71,6 +72,9 @@ static void th_probe(uint32_t tha) {
 }
 static void th_report() {
   std::printf("    TEXHDR texture RAM words written by the walker (op 0x04, bit 23): %u\n", (unsigned)g_tdwords);
+  std::printf("    WALKER OPCODES from M2_POLY_FROM:");
+  for (int i = 0; i < 32; i++) if (g_op_hist[i]) std::printf(" %02x:%u", i, g_op_hist[i]);
+  std::printf("\n");
   std::printf("    TEXHDR objects %u: RAM-resident %u, renderer flat %u translucent %u textured %u tex+trans %u, checker %u, distinct colorbase %zu\n",
               g_th_objs, g_th_ram, g_th_rend[0], g_th_rend[1], g_th_rend[2], g_th_rend[3], g_th_checker, g_th_colorbase.size());
   int n = 0;
@@ -600,6 +604,7 @@ int main(int argc, char **argv) {
         if (d->obs_pj_busy) { if (d->obs_pj_owner) ++g_pj_k_ticks; else ++g_pj_w_ticks; }
         if (d->obs_w_granted) ++g_w_grants; if (d->obs_k_granted) ++g_k_grants; if (d->obs_pj_hit) ++g_pj_hits;
         ++g_walk_hist[d->geo_state & 15];
+        { static unsigned last_st = 0; if ((d->geo_state & 15) == 2 && last_st != 2) ++g_op_hist[d->geo_w_op & 31]; last_st = d->geo_state & 15; }
       }
     }
     if (d->eng_q_valid && g_quads.size() < 4096 && d->dbg_acc >= quads_from)

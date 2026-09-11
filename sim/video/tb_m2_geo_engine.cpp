@@ -240,9 +240,11 @@ int main(int argc, char** argv) {
     ck("invalidate forces one more miss", d->dbg_col_miss, 2);
   }
 
-  // ---- R222: a translucent flat header (word 0 bit 13) draws nothing
+  // ---- R222: ANY translucent header (word 0 bit 13) draws nothing, textured
+  //      or not -- the reference's two translucent callbacks both return.
+  for (uint16_t h0 : {uint16_t(0x2000), uint16_t(0x6000)})
   {
-    thdr[0x100 + 0] = 0x2000;
+    thdr[0x100 + 0] = h0;
     d->rst_n = 0; for (int i = 0; i < 4; i++) tick(); d->rst_n = 1; tick();
     for (int i = 0; i < 12; i++) {
       static const float I[12] = {1,0,0, 0,1,0, 0,0,1, 0,0,0};
@@ -253,9 +255,26 @@ int main(int argc, char** argv) {
     d->start = 1; tick(); d->start = 0;
     uint32_t n = 0;
     for (int budget = 0; budget < 60000 && (d->busy || budget < 10); budget++) { tick(); if (d->poly_valid && d->poly_ready) n++; }
-    std::printf("test: translucent flat polygons are culled\n");
+    std::printf("test: translucent polygons are culled (header %04x)\n", h0);
     ck("no polygons emitted", n, 0);
     ck("three culled", d->dbg_culled, 3);
+    thdr[0x100 + 0] = 0x0000;
+  }
+  // ---- and a TEXTURED OPAQUE header still draws, flat, in its palette colour
+  {
+    thdr[0x100 + 0] = 0x4000;
+    d->rst_n = 0; for (int i = 0; i < 4; i++) tick(); d->rst_n = 1; tick();
+    for (int i = 0; i < 12; i++) {
+      static const float I[12] = {1,0,0, 0,1,0, 0,0,1, 0,0,0};
+      d->mat_we = 1; d->mat_idx = i; d->mat_data = f2u(I[i]); tick();
+    }
+    d->mat_we = 0;
+    d->tp_we = 1; d->tp_idx = 0; d->tp_diffuse = 200; d->tp_ambient = 20; tick(); d->tp_we = 0;
+    d->start = 1; tick(); d->start = 0;
+    uint32_t n = 0;
+    for (int budget = 0; budget < 60000 && (d->busy || budget < 10); budget++) { tick(); if (d->poly_valid && d->poly_ready) n++; }
+    std::printf("test: textured opaque polygons still draw\n");
+    ck("three polygons emitted", n, 3);
     thdr[0x100 + 0] = 0x0000;
   }
 
