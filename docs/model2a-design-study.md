@@ -13104,3 +13104,24 @@ R212 found two of the four maths units (atan, reciprocal) were still Model
 root have not been compared the same way. Next: `M2_COPRO_TRACE` against
 MAME's mb86233 for those two ops, and a look at what the collision code
 reads from the copro data ROM.
+
+*R231 on the boot bench (22:50):* the title's sampled quads carry 130
+distinct colours where they carried 320, and the commonest are now greys --
+727272 x590, 323232 x380, 626262 x288, a6a6a6, e6e6e6 -- in place of the
+black; 267 black remain, flat polygons whose colour base is genuinely entry
+0. Textured scenery is lit grey with shape. PASS; `build/fix3d2`.
+
+*R232, two suspects cleared by inspection and one left to measure:* the
+sincos and isqrt units match model2.cpp's copro_sincos_r and copro_isqrt_r
+line for line -- angle mirror and sign, index from the operand's mantissa,
+exponent adjusted by 0x3f minus the operand's, the cosine read's sign
+cleared -- and the table quadrants are the reference's (0x0000 sincos,
+0x4000 atan, 0x8000 inv, 0xc000 isqrt). The data window matches
+copro_tgp_memory_r: bank register bits 23:16 over the offset, bit 23 the
+data ROM, else bit 22 the buffer RAM masked to 0x7fff. What does NOT match
+is the ROM's address width: the reference masks to its region, 8 MB, and
+returns ZERO above the 4 MB that is loaded; this core's `dat_addr` is 20
+bits and a read above 0x100000 dwords aliases onto the loaded half -- the
+same shape as the 19-bit fault the comment on that line records. The bench
+now counts data-ROM reads by range over a whole run to say whether the game
+ever goes there.

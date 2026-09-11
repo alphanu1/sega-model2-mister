@@ -1,8 +1,23 @@
 # Handoff
 
-**Updated:** 2026-09-11 16:30 (machine clock). Study entries R176-R221.
+**Updated:** 2026-09-11 23:00 (machine clock). Study entries R176-R232.
 
-## WHERE 2026-09-11 LEFT IT
+## WHERE 2026-09-11 LEFT IT (evening)
+
+**Board:** `build/fix3d` s13 (100/50/25, 82%, EVERY clock meets setup and hold).
+Lit and coloured 3D, the top of the screen drawn, the wedges gone, translucent
+polygons culled as the reference culls them, texture RAM zeroed; `build/fix3d2`
+adds textured polygons as lit grey (R231). Still wrong on the board: the cars
+play the crash animation continuously (R232, coprocessor data, not geometry),
+and 8-row stripes drop out through busy bands (the fill is only ~6% faster than
+the beam, R225). Clocks: 120/60/30 was built and measured -- the core closes at
+60.07 and the i960 at 29.85, but the SDRAM controller tops out at ~98-107 and
+both port adapters REQUIRE an exact 2:1 (R227/R228); parked at 100/50/25 until
+the controller's port mux/read return is pipelined or the 3D gets its own domain.
+The test-quad generator is deleted (R229). Tools: `tools/board-capture.sh`,
+`tools/decode_uart.py`.
+
+## WHERE 2026-09-11 LEFT IT (morning)
 
 **The whole 3D path runs on hardware for the first time.** Board: `build/dbuf14b`
 s15 (97% ALM, hold positive on all clocks, setup miss on the HDMI PLL only).
