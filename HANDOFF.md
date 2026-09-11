@@ -4,7 +4,7 @@
 
 ## WHERE 2026-09-11 LEFT IT (evening)
 
-**Board:** `build/fix3d2` s15 (100/50/25, 83%, EVERY clock meets setup and hold; textured polygons as lit grey). `build/fix3d3` (+ TINY = 4 against the store overflow, R233) was in the fitter at close.
+**Board:** `build/fix3d4` s14 (100/50/25, 83%; HDMI-PLL setup -0.172 only, hold positive): fix3d2 + the 4-pixel store threshold (R233) + textured polygons in their palette colour at full luminance with grey at half only where the entry is black (R234) + the board-side wedge catcher (R235). Pick seeds with `tools/pick-seed.py` (R236).
 Lit and coloured 3D, the top of the screen drawn, the wedges gone, translucent
 polygons culled as the reference culls them, texture RAM zeroed; `build/fix3d2`
 adds textured polygons as lit grey (R231). Still wrong on the board: the cars

@@ -13252,3 +13252,15 @@ two capture moments); and the rotated normals are unit, mean 0.998, 28,344
 of 28,464 within 0.9-1.1. With R222's arithmetic proved to the integer,
 every input to the luminance is now verified. The saturation was the
 placeholder alone.
+
+**R236 -- THE SEED RULE, WRITTEN DOWN BECAUSE A NUMBER CHOSE WRONG.**
+`build/fix3d4` (fix3d2 + TINY 4 + R234 + the wedge catcher) fits three
+seeds at 83% (34,891-34,940 ALM). Seed 11 has the best setup figure of the
+batch, -0.022 ns -- and it is on the MEMORY clock. Seed 14's -0.172 is on
+the framework's HDMI PLL alone, the miss every working build of this
+project has carried. An automated "positive hold, best setup" picker chose
+11 and was stopped before it copied. The rule is now `tools/pick-seed.py`:
+eligible only with positive hold everywhere and NO setup miss on any emu
+PLL clock; HDMI-only tolerated; then best worst-setup. Deploying s14. The
+integration bench on this tree: PASS, 451 colours over 17,853 quads, the
+luminance histogram unchanged.
