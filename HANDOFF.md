@@ -183,6 +183,14 @@ object; seven reads means it ends at its first attribute word.
 (`build/eo` s11: zero engine reads, busy never toggling). Reverted to the R173
 handover; the engine-first-read probe stays in for `build/eo2`.
 
+**R207, 02:55, the board-side fault located:** on the board the engine's
+first read per object is at index 0x1388 = the object's polygon COUNT, base
+select 0, twelve reads per object; in the bench it is the object's address,
+base ROM, hundreds of reads. The walker's buffer-RAM stream through port 4
+arrives one dword AHEAD on the board (oba gets obc's word). Every matrix
+and focal the walker captured on hardware was shifted the same way. Next:
+give the bench's walker service the board's port-4 latency and reproduce.
+
 **Tools fixed on the way:** `mame_i960_frame_trace.lua` never read `M2_FRAME`;
 `rom_csum.py`'s `build_image` prepended the index-3 I/O ROM (64 KB) to the
 image, so `M2_BOOT_IMAGE` trapped the real-memory bench on instruction 1; the

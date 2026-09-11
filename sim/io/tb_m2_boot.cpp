@@ -455,9 +455,30 @@ int main(int argc, char **argv) {
                     (unsigned)(uint32_t(mem[aa]) | (uint32_t(mem[(aa+1)&0x1ffffff]) << 16)));
         ++g_pdrd_n;
       }
-      const uint32_t a = (0x16f0000u + (uint32_t(d->geo_rd_addr) << 1)) & 0x1ffffff;
-      d->geo_rd_data = uint32_t(mem[a]) | (uint32_t(mem[(a + 1) & 0x1ffffff]) << 16);
-      d->geo_rd_ack  = 1;
+      // THE BOARD'S HANDSHAKE, WHEN ASKED (M2_GEO_LAT=N): the controller
+      // latches the address on the request's RISING edge, answers N ticks
+      // later, holds the acknowledge two ticks, and ignores the request level
+      // in between. Unset, the walker is answered in the same tick from the
+      // address it presents -- which cannot show a stream that arrives one
+      // word ahead (study R207).
+      static const int geo_lat = std::getenv("M2_GEO_LAT") ? std::atoi(std::getenv("M2_GEO_LAT")) : 0;
+      static int gl_req_p = 0, gl_cnt = -1, gl_hold = 0; static uint32_t gl_addr = 0;
+      if (geo_lat > 0) {
+        if (d->geo_rd_req && !gl_req_p && gl_cnt < 0 && gl_hold == 0) { gl_cnt = geo_lat; gl_addr = uint32_t(d->geo_rd_addr); }
+        if (gl_cnt > 0) --gl_cnt;
+        if (gl_cnt == 0) {
+          const uint32_t a = (0x16f0000u + (gl_addr << 1)) & 0x1ffffff;
+          d->geo_rd_data = uint32_t(mem[a]) | (uint32_t(mem[(a + 1) & 0x1ffffff]) << 16);
+          d->geo_rd_ack  = 1; gl_hold = 2; gl_cnt = -1;
+        } else if (gl_hold > 0) { d->geo_rd_ack = 1; if (--gl_hold == 0) {} }
+      } else {
+        const uint32_t a = (0x16f0000u + (uint32_t(d->geo_rd_addr) << 1)) & 0x1ffffff;
+        d->geo_rd_data = uint32_t(mem[a]) | (uint32_t(mem[(a + 1) & 0x1ffffff]) << 16);
+        d->geo_rd_ack  = 1;
+      }
+      gl_req_p = d->geo_rd_req;
+    } else {
+      static int *dummy = nullptr; (void)dummy;
     }
     // The geometry engine reads objects: polygon ROM if oba bit 23, otherwise
     // one of the two polygon RAMs. Same decode as Model2.sv's.

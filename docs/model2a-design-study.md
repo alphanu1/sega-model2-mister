@@ -11619,3 +11619,29 @@ engine never completed a read: the gating deadlocks the handover on the
 board, where the ungated form lets the engine finish 264 objects a frame.
 The mechanism R206 described remains a paper argument; the board contradicts
 its fix. Reverted to the R173 form; the probe stays in for `build/eo2`.
+
+**R207 -- ON THE BOARD THE WALKER HANDS THE ENGINE THE OBJECT'S COUNT AS ITS
+ADDRESS: THE DISPLAY-LIST STREAM ARRIVES ONE DWORD AHEAD.** `build/eo2` s15
+(R202+R203+R205, R206 withdrawn; setup +0.008, hold +0.239), 02:55:
+
+    engine first-read index   0x001388 x766, 0x00002F x168, 0x000000 x126
+    first-read data           0x07800000 x766, 0x00000000 x312
+    base select [24:23]       0 (slow polygon RAM) x892, 3 x168, 2 (ROM) x18
+    reads per object          12 x952
+
+The bench, same RTL, same phase (`EOBJ`): first index = the object's own
+address (0x95FF9D, 0x13B, 0x961BBF ...), base ROM, 137 to 3,597 reads per
+object. 0x1388 is `obc`, the polygon count every Daytona object carries
+("last object: oba=0095e0c6 obc=00001388"). So on the board `oba` receives
+the word that follows it: the walker's reads of buffer RAM through port 4
+return the NEXT dword. The engine then reads twelve words of slow polygon
+RAM at 0x1388 (0x07800000 ...), hits an attribute word with clear low bits,
+and ends. Twelve reads, every object, every frame; polygons 0.
+
+A stream one word ahead also shifts every matrix, focal and light the walker
+captures, which is what the "vertices collapsed toward the origin" grey
+pixels of R195 were, and why nothing ever matched the bench. The bench's
+`geo_tick` answers the walker in the same cycle from C++; the board's port 4
+is an edge-triggered request with a held acknowledge and a registered
+address. The next step is to give the bench the board's handshake latency
+on port 4 and watch the stream shift at the desk.
