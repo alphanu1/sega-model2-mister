@@ -91,7 +91,12 @@ module m2_raster3d #(
   // the frames the geometry stage finished. Equal rates mean every frame
   // is late and the picture is whatever the previous frame's list left.
   output logic [7:0]  dbg_late_frames,
-  output logic [7:0]  dbg_qend_frames
+  output logic [7:0]  dbg_qend_frames,
+  // R210: the ready count saturated at 16 bits on the board. Both timers are
+  // 20 bits now and reported in units of 16 cycles (1 M cycles full scale,
+  // 21 ms at 50 MHz); dbg_collect_cyc is frame_start to q_end, so the sort
+  // is the difference between the two.
+  output logic [15:0] dbg_collect_cyc
 );
 
   localparam int unsigned NBANDS = (SCR_H + BAND_H - 1) / BAND_H;
@@ -299,8 +304,10 @@ module m2_raster3d #(
   cstate_t cst;
 
   // R200 instrumentation: see the port comments.
-  logic [15:0] rdy_cyc;
+  logic [19:0] rdy_cyc;
   logic        rdy_run;
+  logic [19:0] col_cyc;
+  logic        col_run;
   logic  [7:0] bands_this;
 
   // CLEAR UNCONDITIONALLY AT FRAME START, as the reference does.
@@ -338,7 +345,8 @@ module m2_raster3d #(
       bd_clear_req <= '0; dbg_bands <= 16'd0; dbg_pixels <= 32'd0;
       dbg_ready_cyc <= 16'd0; dbg_bands_done <= 8'd0;
       dbg_late_frames <= 8'd0; dbg_qend_frames <= 8'd0;
-      rdy_cyc <= 16'd0; rdy_run <= 1'b0; bands_this <= 8'd0;
+      dbg_collect_cyc <= 16'd0; col_cyc <= 20'd0; col_run <= 1'b0;
+      rdy_cyc <= 20'd0; rdy_run <= 1'b0; bands_this <= 8'd0;
       for (int i = 0; i < NBUF; i++) begin bd_y0[i] <= 16'sd0; bd_band[i] <= '0; end
     end else begin
       bd_clear_req <= '0;
@@ -350,10 +358,15 @@ module m2_raster3d #(
       // ONLY thing that can stop the first band being filled during vblank --
       // the fill itself is beam-paced and cannot start early. Saturating rather
       // than wrapping: a wrapped count of a long stall reads like a short one.
-      if (rdy_run && !(&rdy_cyc)) rdy_cyc <= rdy_cyc + 16'd1;
+      if (rdy_run && !(&rdy_cyc)) rdy_cyc <= rdy_cyc + 20'd1;
       if (rdy_run && (pst == P_READY)) begin
         rdy_run       <= 1'b0;
-        dbg_ready_cyc <= rdy_cyc;
+        dbg_ready_cyc <= rdy_cyc[19:4];
+      end
+      if (col_run && !(&col_cyc)) col_cyc <= col_cyc + 20'd1;
+      if (col_run && q_end) begin
+        col_run         <= 1'b0;
+        dbg_collect_cyc <= col_cyc[19:4];
       end
 
       if (frame_start && (pst == P_COLLECT)) dbg_late_frames <= dbg_late_frames + 8'd1;
@@ -404,7 +417,8 @@ module m2_raster3d #(
       if (frame_start) begin
         fill_band <= '0; bd_ready <= '0;
         dbg_bands_done <= bands_this; bands_this <= 8'd0;
-        rdy_cyc <= 16'd0; rdy_run <= 1'b1;
+        rdy_cyc <= 20'd0; rdy_run <= 1'b1;
+        col_cyc <= 20'd0; col_run <= 1'b1;
       end
     end
   end

@@ -501,6 +501,7 @@ wire [15:0] r3d_ready_cyc;   // R200: frame_start -> P_READY, in clk_sys cycles
 wire  [7:0] r3d_bands_done; // R200: bands completed last frame, against NBANDS=24
 wire  [7:0] r3d_late_frames; // frame_start while still collecting: the frame drew nothing
 wire  [7:0] r3d_qend_frames; // frames the geometry stage finished
+wire [15:0] r3d_collect_cyc; // R210: frame_start -> q_end, units of 16 clk_sys cycles
 wire  [7:0] geo_walk_unknown;
 wire  [3:0] geo_walk_state;
 logic       geo_rd_req_r;
@@ -3933,7 +3934,9 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// loaded from 0x501260 (the reference holds 0x00510F00, entry 139).
 	// AND WHO LAST WROTE THAT WORD: the writer's IP (low 16) and the data
 	// (low 16), any byte of 0x504E08-0x504E0B. Only init should ever write it.
-	.b_data({r3d_quads[15:0], r3d_dropped[7:0], r3d_qend_frames[7:0]}),
+	// R210: ready and collect times in units of 16 cycles (the 16-bit ready
+	// count saturated on the board), quads held in units of 16.
+	.b_data({r3d_collect_cyc[15:0], r3d_qend_frames[7:0], r3d_quads[11:4]}),
 	.a_tag(8'h43), .b_tag(8'h48),          // 'C' copro in_pushed:out_pushed | TGP retires:pc
 	                                       // 'H' out_popped:hscr2 | io_addr:flags
 	                                       // 'H' scroll h:v for layers 0,1 | layers 2,3 -- low bytes
@@ -4964,7 +4967,8 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(16), .NBUF(3),
 	.dbg_quads(r3d_quads), .dbg_dropped(r3d_dropped),
 	.dbg_bands(r3d_bands), .dbg_pixels(r3d_pixels),
 	.dbg_ready_cyc(r3d_ready_cyc), .dbg_bands_done(r3d_bands_done),
-	.dbg_late_frames(r3d_late_frames), .dbg_qend_frames(r3d_qend_frames)
+	.dbg_late_frames(r3d_late_frames), .dbg_qend_frames(r3d_qend_frames),
+	.dbg_collect_cyc(r3d_collect_cyc)
 );
 
 // The 3D layer sits OVER the tilemap where it painted, and shows the tilemap
