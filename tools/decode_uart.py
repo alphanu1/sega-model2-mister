@@ -44,7 +44,7 @@ print('projections abandoned on timeout (R237): first %d, last %d, max %d' % (pj
 n=len(H); k=max(1,n//5)
 if SW:
     # tools/rom_csum.py <mra> <zipdir> --region N gives the expected fold of the image
-    EXPECT={0:None,11:0x82B1E2,12:0xA76A16,13:0x1B298F}
+    EXPECT={0:0x25E723,11:0x82B1E2,12:0xA76A16,13:0x1B298F,14:0xFD6ADB,15:0x06D6CC,16:0x06D6CC,17:0x7D7E94}   # tools/rom_csum.py, 2026-09-12
     r,n,v=SW[-1]
     e=EXPECT.get(r)
     print(f'SWEEP (R238): region {r} folded {n} times, last fold {v:06X}' + (f'  expected {e:06X}  {"MATCH" if e==v else "MISMATCH"}' if e else '  (no expectation on file; run tools/rom_csum.py --region %d)' % r))
