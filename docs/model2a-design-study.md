@@ -13141,3 +13141,35 @@ first result that differs -- the method that found R212.
 off the CARS with the strip cache off. The desk sample that read zero was
 4,096 quads at one moment; a 65,536-quad capture over a later stretch is
 running to find them at the desk before anything is changed.
+
+**R233 -- THE STORE OVERFLOWS ON THE BUSIEST FRAMES, AND THE TINY THRESHOLD
+IS THE LEVER THAT IS FREE TONIGHT.**
+
+The board occasionally shows a car in silhouette over bare tiles with every
+piece of scenery gone. The capture's first stretch has the store DROPPING
+1,242 and 1,898 quads in single frames with the count pegged at 2,048: the
+list runs over, the car at its head survives, the scenery behind it is
+lost. Zeroing texture RAM (R223) brought back the objects at the head of
+every list and tipped those frames over. The user had said "but we will
+lose quads" when halving the banks was floated to fit; this is that.
+
+Measured on 17,853 clipped quads from the boot bench: the 2 px test refuses
+39%; 3 refuses 49% and 4 refuses 56%, the extra covering at most 0.13% and
+0.24% of painted pixels. TINY = 4: a 3,900-quad frame stores ~1,700.
+
+*The other two levers, for when this is not enough:* (1) the tile character
+cache is 134 of the chip's 553 M10K blocks -- a quarter of all memory -- and
+the quad store's two banks ~90; halving the cache doubles the store, after a
+hit-rate measurement. (2) The HPS DDR3 is untouched (Model2.sv ties every
+DDRAM_* pin to zero): the character data, or the sorted list itself, could
+live there behind a small cache, which is how the memory would stop being
+the binding resource at all. Both are proper jobs.
+
+*And the coprocessor is not the speed lever.* R202 established that 0x030B
+is the microcode's FIFO WAIT; this evening's capture has the coprocessor
+there 37% of the time, the i960 waiting for the frame 34%, the walker
+waiting for the engine 38% and the engine idle 62%. Nothing is saturated:
+the geometry is a serial chain, one object at a time through walker, engine,
+projector and clipper, and its own Fmax caps the core at 60.3 (R227). The
+throughput is in overlapping that chain and in the fill's per-band cost,
+not in the coprocessor's clock.

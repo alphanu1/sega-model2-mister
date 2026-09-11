@@ -146,7 +146,16 @@ module m2_raster3d #(
   // One two-bank store: collect into `bank`, replay `~bank` (R213 shares the
   // key and scratch index between the banks, ~8 M10K blocks over two
   // instances).
-  m2_quad_store #(.BAND_H(BAND_H), .NBANDS(NBANDS), .BW(BW), .SCR_H(SCR_H)) u_store (
+  // THE TINY THRESHOLD IS 4, MEASURED (R233). The store holds 2,048 quads a
+  // bank and the busiest title frames produce ~3,900 after clipping: the
+  // capture dropped 1,242 and 1,898 in single frames, and a frame that loses
+  // its tail loses its scenery -- a car in silhouette against bare tiles. Of
+  // 17,853 clipped quads sampled, the 2-pixel test refused 39%; 4 refuses
+  // 56% and the extra 17% together cover at most 0.24% of the painted pixels,
+  // every one of them distant detail under four pixels across. Small is far,
+  // so this drops the right things first, and it is a parameter so the number
+  // can move when the store can grow.
+  m2_quad_store #(.BAND_H(BAND_H), .NBANDS(NBANDS), .BW(BW), .SCR_H(SCR_H), .TINY(4)) u_store (
     .clk(clk), .rst_n(rst_n),
     .clear(qs_clear), .wbank(bank), .rbank(~bank),
     .in_valid(q_take),
