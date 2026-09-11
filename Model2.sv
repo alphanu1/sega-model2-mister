@@ -2815,7 +2815,7 @@ always_ff @(posedge clk_sys) begin
 	tgp_dat_wdata_r <= tgp_dat_wdata;
 	tgp_dat_is_buf_r<= tgp_dat_is_buf;
 	tgp_dat_half_r  <= tgp_dat_half;
-	geo_rd_req_r    <= geo_rd_req & ~(p_ack[4] & ~geo_rd_req_r);   // R206: not while an ack is still up
+	geo_rd_req_r    <= geo_rd_req;
 	geo_rd_addr_r   <= geo_rd_addr;
 	// the walk only sees an acknowledge when the port was serving IT
 	// COPRO_BUFW: the coprocessor's writes into SHARED buffer RAM.
@@ -2849,13 +2849,20 @@ always_ff @(posedge clk_sys) begin
 	// == finished, polys 0, quads 0. Two rules now: an owner's request is not
 	// presented while an acknowledge is still up, and an acknowledge counts
 	// only on its rising edge, for the request that is up.
+	// R206 WITHDRAWN 02:30: with the gating below (edge-qualified acks and
+	// "no request while an ack is up") the board's engine never completed a
+	// single read -- build/eo s11: first-read data 0, index 0, reads per
+	// object 0, busy never toggling, in every sample -- where without it the
+	// engine finishes 264 objects a frame. The hazard argument was on paper;
+	// the board says the gating deadlocks the handover. Back to the R173 form,
+	// with the probe left in to see what the engine's first read returns.
 	p4_ack_d        <= p_ack[4];
-	geo_rd_ack_r    <= p_ack[4] & ~p4_ack_d & geo_rd_req_r & ~eng_mem_req_r;
+	geo_rd_ack_r    <= p_ack[4] & geo_rd_req_r & ~eng_mem_req_r;
 	geo_rd_data_r   <= p_dout[4][31:0];
-	eng_mem_req_r   <= eng_mem_req & ~geo_rd_req_r & ~(p_ack[4] & ~eng_mem_req_r);
+	eng_mem_req_r   <= eng_mem_req;
 	eng_mem_idx_r   <= eng_mem_idx;
 	eng_base_r      <= eng_base;
-	eng_mem_ack_r   <= p_ack[4] & ~p4_ack_d & eng_mem_req_r;
+	eng_mem_ack_r   <= p_ack[4] & eng_mem_req_r;
 	eng_mem_data_r  <= p_dout[4][31:0];
 	// Per object: arm on the engine going busy, latch the first ack's data and
 	// index, count acks, publish the count when the object finishes.

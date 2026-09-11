@@ -179,6 +179,10 @@ real) but is unconfirmed as the cause. `build/eo` (four seeds) probes the
 engine's first read per object (data, index, base select) and reads per
 object; seven reads means it ends at its first attribute word.
 
+**02:30: R206 WITHDRAWN.** Its gating deadlocked the engine on the board
+(`build/eo` s11: zero engine reads, busy never toggling). Reverted to the R173
+handover; the engine-first-read probe stays in for `build/eo2`.
+
 **Tools fixed on the way:** `mame_i960_frame_trace.lua` never read `M2_FRAME`;
 `rom_csum.py`'s `build_image` prepended the index-3 I/O ROM (64 KB) to the
 image, so `M2_BOOT_IMAGE` trapped the real-memory bench on instruction 1; the

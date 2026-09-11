@@ -11611,3 +11611,11 @@ attr 989c1501), so an object that ends at its first attribute check has
 taken seven reads. `build/eo` (four seeds) latches the engine's first read
 per object -- data and index, with the object's base select -- and the read
 count of the previous object.
+
+**R206 WITHDRAWN, 02:30.** `build/eo` s11 (R206 in, plus the engine-first-read
+probe): first-read data 0x00000000, index 0, base select 0, reads per object
+0, in all 1,078 samples, with the CPU's render chain running as before. The
+engine never completed a read: the gating deadlocks the handover on the
+board, where the ungated form lets the engine finish 264 objects a frame.
+The mechanism R206 described remains a paper argument; the board contradicts
+its fix. Reverted to the R173 form; the probe stays in for `build/eo2`.
