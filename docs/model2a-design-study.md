@@ -12166,3 +12166,17 @@ now. That duplication was in dbuf4 and dbuf6 as well and is part of why
 the fourth buffer did not fit in dbuf5; the true block count of the
 narrowed store is lower than R213 measured. `build/dbuf8` = the corrected
 two-bank store + four buffers + R214 pair caches + the drop counters.
+
+*dbuf8, 12:55: no fit, M10K again -- and the reason is the block's shape.*
+With the inference faults fixed the store synthesised at 1,052 ALUTs, 763
+registers, 674 Kbit, ~200 memory cells against 388 for two instances,
+and the device still needed more than 553 blocks. An M10K is 2048 x 5 or
+4096 x 2: a 4096-deep array of W bits costs ceil(W/2) blocks against
+2 x ceil(W/5) for two 2048-deep ones -- a 26-bit vertex word 13 against
+12, the 29-bit attribute word 15 against 12, the 11-bit index 6 against
+6. Merging the banks into double-depth arrays cost blocks; only the KEY
+and the scratch index, which are single-bank by nature, save any. The
+data arrays are per bank again with the bank selecting the result
+(`vtx0_0/vtx0_1` ... `att_0/att_1`), key and `idx_b` shared. Rule for
+this device, now written down: NEVER deepen an M10K array past 2048 to
+merge two of them; the 4096 x 2 mode is the least dense. `build/dbuf9`.
