@@ -12001,3 +12001,22 @@ board until `build/dbuf3`.
 
 Also recorded: `make test_mb86233_regs` fails 46,966 of 3,000,000 checks
 on the committed tree, in a module untouched today; not investigated.
+
+*R211 confirmed on the board, 10:50.* `build/dbuf2` s13 (two 1,024-entry
+banks at the old width, setup -0.693 on the system clock, hold +0.210; s15
+had hold -0.309, s11 no bitstream; fits at 97% ALM because the second
+bank's small arrays spilled into MLABs with the M10K blocks full), 120 s
+capture with R210's timers on the H record:
+
+    bands completed per frame     26 in 148-189 of 190 samples (was 1 on build/ack)
+    frame_start -> q_end          4.3-7.4 ms median, 17.4 ms max
+    frame_start -> P_READY        within 0.4 ms of q_end (the sort is nothing)
+    quads held (x16)              at the 1,024 ceiling in most samples after slice 2
+
+Every band is filled every video frame now: the list is drawn on the
+frames it used to miss. Two things the same record says: the 1,024 banks
+SATURATE in the title, so this stop-gap drops the last quads of most
+frames and `build/dbuf3`'s 2,048 banks are needed, not optional; and the
+collect occasionally takes a whole frame, so R210's throughput question
+stands as a separate item (the walker and engine at ~10 cycles a word on
+port 4, the TGP at one SDRAM access per read).

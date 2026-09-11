@@ -62,6 +62,11 @@ flip-flop input queue (~2,000 ALM) is the logic lever.
 `make test_mb86233_regs` fails on the committed tree (46,966 of 3 M
 checks), in a module untouched today. Not investigated.
 
+**R211 CONFIRMED on the board (build/dbuf2 s13, 10:50):** bands completed per
+frame 26 on nearly every sample where build/ack read 1 -- every band drawn
+every video frame. Collect 4-7 ms median, 17 ms max; the 1,024 banks sit at
+their ceiling in the title, so dbuf3's 2,048 banks are needed.
+
 **R211: THE FLASHING IS PRESENTATION -- Daytona flips every second frame
 (the reference measurement in m2_geo.sv), and the single quad store could not
 draw while collecting. `m2_raster3d` now has two stores: collect into one,
