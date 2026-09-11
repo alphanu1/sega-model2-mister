@@ -19,6 +19,18 @@ the controller's port mux/read return is pipelined or the 3D gets its own domain
 The test-quad generator is deleted (R229). Tools: `tools/board-capture.sh`,
 `tools/decode_uart.py` (now prints 'W'/'X' wedge records, R235).
 
+**THE TWO BUILDS QUEUED AT CLOSE (00:30, 09-12):** `build/fix3d5` = fix3d4 +
+the projection-timeout counter on the UART (R237: if the board abandons
+projections, the late result reaches the next vertex); `build/fix3d6` = + the
+data-integrity sweep on port 2 streamed as 'S' records (R238). Each is picked
+by `tools/pick-seed.py`, deployed and captured by a waiter. For the sweep: the
+OSD option "Sweep region (2MB)" selects the region; 0 is the control (expected
+25E723), 11-17 the polygon ROM; the decoder prints MATCH/MISMATCH against the
+image's folds. A MISMATCH on a polygon-ROM region means R237's wedges are a
+read-path data fault, not geometry. The wedges themselves are characterised on
+the board (R237): carried vertex, right y, wrong x, 165 in 92 frames; no desk
+model reproduces them (fixed, random or instant latency).
+
 **OVERNIGHT RUN FOR R232 (the cars' continuous crash animation):** the boot
 bench cannot reach the racing attract in a normal run (80 walk frames at 19.5 M
 instructions; the race demo starts between 45 and 60 s of game time, video
