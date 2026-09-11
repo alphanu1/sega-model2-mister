@@ -12117,3 +12117,39 @@ only).* Photographed and captured for 240 s:
     quads are dropped, which is the likely "3D mostly missing". The drop
     counters (store and push DMA) go on the record as R214.
   - CPU budget unchanged: frame wait 33.6%, mailbox 4.1%, render 12.2%.
+
+**R214 -- THE WALKER AND THE ENGINE USED HALF OF EVERY PORT READ. A PAIR
+CACHE IN FRONT OF EACH HALVES THEIR PORT TRIPS.** 2026-09-11, 12:30.
+
+dbuf6 s14 measured the collect (frame_start -> q_end) at 7-14 ms in the
+title with lists held three video frames for long stretches (R213). Both
+port-4 readers pay the whole registered-glue-plus-adapter round trip,
+~10 clk_sys cycles, per dword. `m2_sdram` answers every read with FOUR
+consecutive 16-bit words -- it issues the four columns one by one at
+burst length 1 (mode register A[2:0] = 000, `xfer_addr[COL_BITS:1] + 1`
+per S_RD), so there is no SDRAM burst wrap and p_dout[63:32] is always
+the dword after the one asked for. Both readers took p_dout[4][31:0] and
+threw the rest away.
+
+`rtl/mem/m2_pair_cache.sv` sits between each reader and the glue: a miss
+goes to the port and its answer's upper half is kept as index+1; a request
+for that index is answered in one cycle without the port; the copy is used
+once and dropped on any other request, so a dword the CPU or TGP rewrites
+is never served stale beyond the gap between two consecutive reads. The
+index is the full dword address, so an object stream that begins one past
+the last cannot hit a stale copy. The requester's handshake is R208's; two
+faults the unit test caught before the fitter did: (1) the pass-through
+acknowledge was combinational while the data was registered, so a miss
+read the previous word -- both acknowledges are registered now; (2) a hit
+one cycle after a miss raised its pulse while the adapter's held
+acknowledge was still up and the requester never saw an edge -- a hit now
+pends until the line has fallen. `make test_m2_pair_cache`: sequential
+500 words = 250 trips, random 500 = 500, mixed correct, at latencies 1, 3,
+6, 12. Not simulable in the boot bench (the glue is not in it); lint and
+the unit test are the evidence until `build/dbuf8` (dbuf7 + R214).
+
+Expected: the engine's stream (points, attribute, normals) and the walker's
+(matrix, object, polygon-data words) both sequential, so roughly half the
+port trips and the collect well under a frame. The TGP's own reads (one
+SDRAM access per external read, port 9) are the next throughput item after
+this, and the clock lever the user used on Model 1 after that.

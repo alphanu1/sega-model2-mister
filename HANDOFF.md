@@ -1,6 +1,6 @@
 # Handoff
 
-**Updated:** 2026-09-11 12:05. Study entries R176-R213. R172 WITHDRAWN, R185
+**Updated:** 2026-09-11 12:35. Study entries R176-R214. R172 WITHDRAWN, R185
 partly RETRACTED, R189 corrected by R191, R196's central claim WITHDRAWN the
 same day, R206 WITHDRAWN, R207 closed by R208.
 
@@ -35,6 +35,11 @@ completes, 4 minutes clean -- render chain 10.6%, mailbox poll 3.7%, no
 parking, no drops. Ten-minute soak from a fresh load also clean: mailbox
 poll 3.9%, render chain 12.5%, never parked. R209 CONFIRMED.** The board is
 on it. Study R209.
+
+**R214 (12:30): a pair cache in front of the walker and the engine -- the
+controller returns four words per read and both used two. Halves their port
+trips; unit-tested at four latencies. `build/dbuf8` = dbuf7 + R214, queued.
+Study R214.**
 
 **dbuf6 s14 ON THE BOARD (12:00): background scrolls normally (R212 confirmed),
 3D behind the UI (R213 confirmed), bands never late (dbg_missed 0), lists
