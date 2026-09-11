@@ -1,6 +1,6 @@
 # Handoff
 
-**Updated:** 2026-09-11 10:45. Study entries R176-R212. R172 WITHDRAWN, R185
+**Updated:** 2026-09-11 11:25. Study entries R176-R213. R172 WITHDRAWN, R185
 partly RETRACTED, R189 corrected by R191, R196's central claim WITHDRAWN the
 same day, R206 WITHDRAWN, R207 closed by R208.
 
@@ -35,6 +35,15 @@ completes, 4 minutes clean -- render chain 10.6%, mailbox poll 3.7%, no
 parking, no drops. Ten-minute soak from a fresh load also clean: mailbox
 poll 3.9%, render chain 12.5%, never parked. R209 CONFIRMED.** The board is
 on it. Study R209.
+
+**R213 (11:20): the 3D drew OVER the UI -- the reference puts it between the
+two tile categories; fixed via `vid_cat1`. `build/dbuf3` (191-bit entries)
+still ran out of M10K: the IHRES override did nothing (the scaler's cells are
+its burst buffers). Now 8-row bands as Model 1 settled on (band buffers
+halved) with a band RANGE in the store instead of a 48-bit mask, plus
+`dbg_hold` (frames per list on display) and `dbg_missed` (scanlines with no
+band ready) for the user's "still flickering / slower" on dbuf2.
+`build/dbuf4` = R212 + R213 + narrowed 2,048 banks. Study R213.**
 
 **R212: THE JUMPING BACKGROUND IS THE TGP's ARCTANGENT -- MODEL 1's UNIT ON A
 MODEL 2 BOARD. FIXED AT THE DESK, BUILDING.** The horizon row of the title's

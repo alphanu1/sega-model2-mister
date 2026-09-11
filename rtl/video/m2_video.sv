@@ -81,6 +81,12 @@ module m2_video #(
   input  logic [15:0] pal_data,
 
   // Video out
+  // THE 3D SITS BETWEEN THE TWO TILE CATEGORIES (R213). The reference draws
+  // every layer's plain tiles, then the polygons, then every layer's
+  // priority-bit tiles (model2_v.cpp screen_update: layer<<1 before
+  // render_polygons, (layer<<1)|1 after). vid_cat1 says the pixel came from
+  // a priority-bit tile, so the top level keeps it over a 3D pixel.
+  output logic        vid_cat1,
   output logic [7:0]  vid_r,
   output logic [7:0]  vid_g,
   output logic [7:0]  vid_b,
@@ -812,9 +818,10 @@ module m2_video #(
   // left the rest correct: a single black column down the left edge.
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      vid_r <= '0; vid_g <= '0; vid_b <= '0;
+      vid_r <= '0; vid_g <= '0; vid_b <= '0; vid_cat1 <= 1'b0;
       vid_hb <= 1'b1; vid_vb <= 1'b1; vid_hs <= 1'b0; vid_vs <= 1'b0;
     end else if (ce_pix) begin
+      vid_cat1 <= visible && !mix_src[3] && !mix_src[2];   // sources 0-3
       // Every sync and blank is delayed with the data, not just `visible`.
       // Exposing undelayed blanking beside delayed colour puts the picture one
       // column out of its own window, which a scaler renders as a stray column

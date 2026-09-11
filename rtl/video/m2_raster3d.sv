@@ -27,7 +27,7 @@
 module m2_raster3d #(
   parameter int unsigned SCR_W  = 496,
   parameter int unsigned SCR_H  = 384,
-  parameter int unsigned BAND_H = 16,
+  parameter int unsigned BAND_H = 8,
   parameter int unsigned NBUF   = 3,
 
   // ARE clk AND scan_clk ACTUALLY DIFFERENT CLOCKS?
@@ -96,7 +96,11 @@ module m2_raster3d #(
   // 20 bits now and reported in units of 16 cycles (1 M cycles full scale,
   // 21 ms at 50 MHz); dbg_collect_cyc is frame_start to q_end, so the sort
   // is the difference between the two.
-  output logic [15:0] dbg_collect_cyc
+  output logic [15:0] dbg_collect_cyc,
+  // R213: how many video frames the last list stayed on display (latched at
+  // the swap), and scanlines the beam drew with no band buffer ready.
+  output logic [7:0]  dbg_hold,
+  output logic [15:0] dbg_missed
 );
 
   localparam int unsigned NBANDS = (SCR_H + BAND_H - 1) / BAND_H;
@@ -334,6 +338,23 @@ module m2_raster3d #(
 
   // Scan-out picks whichever buffer currently holds the beam's band. Combinational
   // over NBUF, which is three: cheaper than a register that has to track the beam.
+  // A scanline the beam starts with no buffer holding its band draws nothing
+  // there this frame. Counted in the scan domain, free-running; the debug
+  // stream takes deltas.
+  logic [9:0] scan_x_d;
+  always_ff @(posedge scan_clk or negedge rst_n) begin
+    if (!rst_n) begin dbg_missed <= 16'd0; scan_x_d <= 10'd0; end
+    else begin
+      scan_x_d <= scan_x;
+      if (scan_x == 10'd0 && scan_x_d != 10'd0 && scan_y < 10'(SCR_H)) begin
+        automatic logic any_rdy = 1'b0;
+        for (int i = 0; i < NBUF; i++)
+          if (rdy_s2[i] && (band_s2[i] == scan_band)) any_rdy = 1'b1;
+        if (!any_rdy && !(&dbg_missed)) dbg_missed <= dbg_missed + 16'd1;
+      end
+    end
+  end
+
   always_comb begin
     scan_col = 16'd0;
     scan_hit = 1'b0;
@@ -361,6 +382,7 @@ module m2_raster3d #(
   logic        rdy_run;
   logic [19:0] col_cyc;
   logic        col_run;
+  logic [7:0]  hold_cnt;
   logic  [7:0] bands_this;
 
   // CLEAR UNCONDITIONALLY AT FRAME START, as the reference does.
@@ -403,6 +425,7 @@ module m2_raster3d #(
       dbg_ready_cyc <= 16'd0; dbg_bands_done <= 8'd0;
       dbg_late_frames <= 8'd0; dbg_qend_frames <= 8'd0;
       dbg_collect_cyc <= 16'd0; col_cyc <= 20'd0; col_run <= 1'b0;
+      dbg_hold <= 8'd0; hold_cnt <= 8'd0;
       rdy_cyc <= 20'd0; rdy_run <= 1'b0; bands_this <= 8'd0;
       for (int i = 0; i < NBUF; i++) begin bd_y0[i] <= 16'sd0; bd_band[i] <= '0; end
     end else begin
@@ -427,6 +450,7 @@ module m2_raster3d #(
       end
 
       if (frame_start && (pst == P_COLLECT)) dbg_late_frames <= dbg_late_frames + 8'd1;
+      if (frame_start && !(&hold_cnt)) hold_cnt <= hold_cnt + 8'd1;
       if (q_end) dbg_qend_frames <= dbg_qend_frames + 8'd1;
 
       // ---- producer: collect quads for the frame, then sort once
@@ -434,7 +458,8 @@ module m2_raster3d #(
         P_COLLECT: if (q_end) pst <= P_SORT;
         P_SORT:    pst <= P_SORTW;
         P_SORTW:   if (!qs_sort_busy) pst <= P_READY;
-        P_READY:   if (frame_start) begin pst <= P_COLLECT; bank <= ~bank; dvalid <= 1'b1; end
+        P_READY:   if (frame_start) begin pst <= P_COLLECT; bank <= ~bank; dvalid <= 1'b1;
+                                          dbg_hold <= hold_cnt; hold_cnt <= 8'd0; end
       endcase
 
       // ---- consumer: one band at a time into the rotating buffers

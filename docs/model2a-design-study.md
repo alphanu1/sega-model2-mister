@@ -12020,3 +12020,44 @@ frames and `build/dbuf3`'s 2,048 banks are needed, not optional; and the
 collect occasionally takes a whole frame, so R210's throughput question
 stands as a separate item (the walker and engine at ~10 cycles a word on
 port 4, the TGP at one SDRAM access per read).
+
+**R213 -- THE 3D DREW OVER THE UI TILES; 8-ROW BANDS, AS MODEL 1 SETTLED ON,
+TO PAY FOR THE SECOND QUAD-STORE BANK; THE NARROWED 2,048 BANKS STILL DID
+NOT FIT.** 2026-09-11, 11:20.
+
+*Layer order.* On `build/dbuf2` the cars drew over the UI text. The
+reference (model2_v.cpp screen_update) draws every layer's plain tiles
+(`layer<<1`), then the polygons, then every layer's priority-bit tiles
+(`(layer<<1)|1`): the 3D sits BETWEEN the two tile categories, not on top.
+Our mixer already resolves category 1 over category 0 (m2_tile_mixer
+hit_cat1/hit_cat0) and Model2.sv put a 3D pixel over everything. Now
+`vid_cat1` leaves m2_video beside the RGB (registered on the same ce_pix,
+the palette read landing within the period) and the top level keeps a
+category-1 tile over a 3D pixel.
+
+*The fit, second attempt.* `build/dbuf3` (191-bit entries, IHRES 1024)
+failed all four seeds on M10K blocks as before. The stores went 226 -> 194
+cells each; the scaler stayed at 600, so the IHRES override changed
+nothing -- its big arrays are the two N_BURST burst buffers (128 cells
+each), the polyphase tables and the palette, and `i_mem` (the only IHRES
+array) is small. Left in the source as harmless. The tile renderer's 480
+cells are its double-banked per-layer, per-lane line buffers.
+
+*8-row bands.* The user's Model 1 experience: 48 bands, then clock the TGP
+and CPU up. Here BAND_H 16 -> 8 halves the three band buffers (3 x 496 x 8
+x 16 bits) -- the largest saving available without touching the scaler or
+the tile buffers -- and the store's per-quad band MASK, which would have
+doubled to 48 bits, became a band RANGE (hi, lo: 12 bits), so the entry
+SHRANK to 2*6+1+16 = 29 bits of attribute against 41. Expected: band
+buffers ~39 -> ~21 blocks, attribute arrays ~9 -> ~6 a bank. Finer beam
+pacing comes free. `make test_m2_raster3d` at BAND_H 8: every frame
+paints. `build/dbuf4` = R212 + R213 + narrowed 2,048 banks.
+
+*Probes for what the user reports on dbuf2* ("still flickering", "slower,
+holding the frame for two frames"): `dbg_hold` latches at each swap how
+many video frames the previous list stayed on display (2 is the game's
+own rate; more means the collect spilled a frame), and `dbg_missed`
+counts scanlines the beam started with no band buffer holding that band
+(a band filled but not in time). The CPU's time budget on dbuf2 is within
+a few percent of wrarb3 (frame wait 26% vs 33% on a shorter capture,
+render chain 12.4% vs 12.9%), so the game itself did not slow down.

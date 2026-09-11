@@ -502,6 +502,8 @@ wire  [7:0] r3d_bands_done; // R200: bands completed last frame, against NBANDS=
 wire  [7:0] r3d_late_frames; // frame_start while still collecting: the frame drew nothing
 wire  [7:0] r3d_qend_frames; // frames the geometry stage finished
 wire [15:0] r3d_collect_cyc; // R210: frame_start -> q_end, units of 16 clk_sys cycles
+wire  [7:0] r3d_hold;        // R213: frames the last list stayed on display
+wire [15:0] r3d_missed;      // R213: scanlines drawn with no band ready
 wire  [7:0] geo_walk_unknown;
 wire  [3:0] geo_walk_state;
 logic       geo_rd_req_r;
@@ -3874,7 +3876,9 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// completed last frame (of 24), frames whose geometry was still being
 	// collected at frame_start (drew nothing), and below the quads held,
 	// quads dropped for a full store, and frames the geometry stage finished.
-	.b_addr({r3d_ready_cyc[15:0], r3d_bands_done[7:0], r3d_late_frames[7:0]}),
+	// R213: hold = video frames the last list stayed on display; missed =
+	// scanlines the beam drew with no band ready (free-running).
+	.b_addr({r3d_ready_cyc[15:0], r3d_bands_done[7:0], r3d_hold[7:0]}),
 	// clip_dropped read 0 on hardware and the refusal count is the number that
 	// now moves, so it takes that byte. Between them: accepted, emitted, refused
 	// before the arithmetic, and reaching the rasterizer.
@@ -3936,7 +3940,7 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// (low 16), any byte of 0x504E08-0x504E0B. Only init should ever write it.
 	// R210: ready and collect times in units of 16 cycles (the 16-bit ready
 	// count saturated on the board), quads held in units of 16.
-	.b_data({r3d_collect_cyc[15:0], r3d_qend_frames[7:0], r3d_quads[11:4]}),
+	.b_data({r3d_missed[15:0], r3d_qend_frames[7:0], r3d_quads[11:4]}),
 	.a_tag(8'h43), .b_tag(8'h48),          // 'C' copro in_pushed:out_pushed | TGP retires:pc
 	                                       // 'H' out_popped:hscr2 | io_addr:flags
 	                                       // 'H' scroll h:v for layers 0,1 | layers 2,3 -- low bytes
@@ -4948,7 +4952,10 @@ wire [31:0] r3d_pixels;
 // in this module would be a crossing it invents against itself -- six cycles of
 // added latency in the renderer whose entire problem is finishing a band before
 // the beam reaches it. Set it to 1 the moment the video moves to clk_mem.
-m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(16), .NBUF(3),
+// 8-ROW BANDS, 48 OF THEM (R213): what Model 1 settled on. Halves the three
+// band buffers (the M10K that the second quad-store bank needs) and paces
+// the fill twice as finely against the beam.
+m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(3),
               .TWO_CLOCKS(1'b0)) u_raster3d (
 	.clk(clk_sys), .rst_n(mem_rst_n),
 	.frame_start(geo_walk_start),
@@ -4968,7 +4975,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(16), .NBUF(3),
 	.dbg_bands(r3d_bands), .dbg_pixels(r3d_pixels),
 	.dbg_ready_cyc(r3d_ready_cyc), .dbg_bands_done(r3d_bands_done),
 	.dbg_late_frames(r3d_late_frames), .dbg_qend_frames(r3d_qend_frames),
-	.dbg_collect_cyc(r3d_collect_cyc)
+	.dbg_collect_cyc(r3d_collect_cyc), .dbg_hold(r3d_hold), .dbg_missed(r3d_missed)
 );
 
 // The 3D layer sits OVER the tilemap where it painted, and shows the tilemap
@@ -4978,9 +4985,11 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(16), .NBUF(3),
 wire [7:0] r3d_r8 = {r3d_col[15:11], r3d_col[15:13]};
 wire [7:0] r3d_g8 = {r3d_col[10:5],  r3d_col[10:9]};
 wire [7:0] r3d_b8 = {r3d_col[4:0],   r3d_col[4:2]};
-wire [7:0] mix_r  = r3d_hit ? r3d_r8 : tile_r;
-wire [7:0] mix_g  = r3d_hit ? r3d_g8 : tile_g;
-wire [7:0] mix_b  = r3d_hit ? r3d_b8 : tile_b;
+// Priority-bit tiles (the UI) stay over the 3D; everything else goes under it (R213).
+wire       tile_cat1;
+wire [7:0] mix_r  = (r3d_hit && !tile_cat1) ? r3d_r8 : tile_r;
+wire [7:0] mix_g  = (r3d_hit && !tile_cat1) ? r3d_g8 : tile_g;
+wire [7:0] mix_b  = (r3d_hit && !tile_cat1) ? r3d_b8 : tile_b;
 wire       tile_hs, tile_vs, tile_hb, tile_vb;
 
 // THE VIDEO DOMAIN'S RESET, ASYNC ASSERT AND SYNCHRONOUS RELEASE.
@@ -5032,7 +5041,7 @@ m2_video u_tilemap (
 	.char_req(char_req), .char_addr(char_addr),
 	.char_data(char_data), .char_ack(char_ack),
 	.pal_addr(pal_addr), .pal_data(pal_data),
-	.vid_r(tile_r), .vid_g(tile_g), .vid_b(tile_b),
+	.vid_cat1(tile_cat1), .vid_r(tile_r), .vid_g(tile_g), .vid_b(tile_b),
 	.vid_hs(tile_hs), .vid_vs(tile_vs), .vid_hb(tile_hb), .vid_vb(tile_vb),
 	.vblank_irq(), .dbg_fetches(vid_fetches), .dbg_overruns(vid_overruns),
 	.dbg_hscr(vid_hscr), .dbg_vscr(vid_vscr),

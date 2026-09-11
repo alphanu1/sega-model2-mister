@@ -142,7 +142,10 @@ module m2_quad_store #(
   (* ramstyle = "M10K" *) logic [2*XW-1:0] vtx1 [NQ];
   (* ramstyle = "M10K" *) logic [2*XW-1:0] vtx2 [NQ];
   (* ramstyle = "M10K" *) logic [2*XW-1:0] vtx3 [NQ];
-  localparam int unsigned AT_W = NBANDS + 1 + CW;   // {band_mask, moire, col565}
+  // A BAND RANGE, NOT A MASK (R213): {hi, lo} in BW bits each. With 48 bands
+  // a mask was 48 bits an entry; a range is 12, and the replay test is two
+  // compares. A quad off the screen is stored as lo > hi and never hits.
+  localparam int unsigned AT_W = 2*BW + 1 + CW;   // {hi, lo, moire, col565}
   (* ramstyle = "M10K" *) logic [AT_W-1:0] att [NQ];
   (* ramstyle = "M10K" *) logic [KW-1:0] key [NQ];
 
@@ -181,23 +184,16 @@ module m2_quad_store #(
   // Which of the six 64-row bands this quad's rows touch. Computed from the
   // vertex extremes, clamped: a quad above the screen or below it lands in no
   // band and is never replayed.
-  function automatic [NBANDS-1:0] band_mask(input logic signed [15:0] a, b, c, d);
+  function automatic [2*BW-1:0] band_range(input logic signed [15:0] a, b, c, d);
     logic signed [15:0] lo, hi2;
-    int b0, b1;
     begin
       lo  = a;  if (b < lo)  lo  = b;  if (c < lo)  lo  = c;  if (d < lo)  lo  = d;
       hi2 = a;  if (b > hi2) hi2 = b;  if (c > hi2) hi2 = c;  if (d > hi2) hi2 = d;
-      if (hi2 < 0 || lo > $signed(16'(SCR_H - 1))) band_mask = '0;
+      if (hi2 < 0 || lo > $signed(16'(SCR_H - 1))) band_range = {BW'(0), BW'(NBANDS-1)};   // lo > hi: never
       else begin
         if (lo  < 0)                        lo  = 16'sd0;
         if (hi2 > $signed(16'(SCR_H - 1)))  hi2 = $signed(16'(SCR_H - 1));
-        // Divide rather than a fixed bit slice: y[8:6] is a division by 64 and
-        // says nothing about it, so it survives a change of band height silently.
-        b0 = int'(lo)  / int'(BAND_H);
-        b1 = int'(hi2) / int'(BAND_H);
-        band_mask = '0;
-        for (int k = 0; k < int'(NBANDS); k++)
-          if (k >= b0 && k <= b1) band_mask[k] = 1'b1;
+        band_range = {BW'(int'(hi2) / int'(BAND_H)), BW'(int'(lo) / int'(BAND_H))};
       end
     end
   endfunction
@@ -229,7 +225,7 @@ module m2_quad_store #(
         vtx1[count[IW-1:0]] <= {sat(in_y1), sat(in_x1)};
         vtx2[count[IW-1:0]] <= {sat(in_y2), sat(in_x2)};
         vtx3[count[IW-1:0]] <= {sat(in_y3), sat(in_x3)};
-        att[count[IW-1:0]] <= {band_mask(in_y0, in_y1, in_y2, in_y3),
+        att[count[IW-1:0]] <= {band_range(in_y0, in_y1, in_y2, in_y3),
                                in_moire, c565(in_col)};
         key[count[IW-1:0]] <= sort_key(in_z) >> (32 - KW);
         count <= count + 1'b1;
@@ -442,8 +438,9 @@ module m2_quad_store #(
 
   // Frozen while a quad is being emitted: the vertex reads and the output
   // register are shared, and those are the quads the band exists to draw.
-  wire [NBANDS-1:0] q_band_mask = att_rd[AT_W-1:CW+1];
-  wire              hit = v2 && q_band_mask[replay_band];
+  wire [BW-1:0] q_band_hi = att_rd[AT_W-1:AT_W-BW];
+  wire [BW-1:0] q_band_lo = att_rd[AT_W-BW-1:CW+1];
+  wire          hit = v2 && (replay_band >= q_band_lo) && (replay_band <= q_band_hi);
   wire              adv = (p_st == P_RUN) && !hit;
 
   assign replay_busy = (p_st != P_IDLE);
