@@ -28,7 +28,7 @@ module m2_raster3d #(
   parameter int unsigned SCR_W  = 496,
   parameter int unsigned SCR_H  = 384,
   parameter int unsigned BAND_H = 8,
-  parameter int unsigned NBUF   = 4,
+  parameter int unsigned NBUF   = 3,
 
   // ARE clk AND scan_clk ACTUALLY DIFFERENT CLOCKS?
   //
