@@ -12302,3 +12302,15 @@ what remains is the clipper's reprojection of cut vertices (it has
 priority at the projector) and the engine's idle share, 39% of all ticks,
 which is the walker between objects. Both are being split out by the
 bench before the next step.
+
+*The split (14:40).* Projection busy 47.8% of all ticks = quad projector
+21.8% + clipper 26.0%; projections granted over the title: quad projector
+283,080, clipper 219,860, against ~55,000 emitted quads. The clipper
+reprojects about four vertices for every emitted polygon -- it is the
+larger half -- and the quad projector still issues ~5 per emitted quad,
+so R217's cache is missing far more than a strip should; its hit rate is
+being counted. The walker: W_OBJW 62.4% (waiting for the engine), W_IDLE
+37.2% (no walk in progress), the rest under 0.5% -- the walker is never
+the cost, and the engine's 39% idle is the same 37%: the title's geometry
+has that much slack between lists. The levers, in order: the clipper's
+reprojection policy, the cache's misses, then the transform (E_XFW 14%).
