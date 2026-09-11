@@ -32,7 +32,9 @@ slot for tens of cycles at a time; the two earlier arbiters fail it, this
 one passes. `build/wrarb3` (11, 13, 14, 15) carries it plus the flashing
 probe. **`build/wrarb3` s15 WORKS (09:45): ROM loads, first TGP job
 completes, 4 minutes clean -- render chain 10.6%, mailbox poll 3.7%, no
-parking, no drops.** Ten-minute soak running. The board is on it. Study R209.
+parking, no drops. Ten-minute soak from a fresh load also clean: mailbox
+poll 3.9%, render chain 12.5%, never parked. R209 CONFIRMED.** The board is
+on it. Study R209.
 
 **R211: THE FLASHING IS PRESENTATION -- Daytona flips every second frame
 (the reference measurement in m2_geo.sv), and the single quad store could not

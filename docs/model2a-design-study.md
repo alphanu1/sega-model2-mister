@@ -11850,7 +11850,11 @@ wait 31%, render chain 10.6%, mailbox poll 3.7%, TGP mostly at its idle
 0x30B, never parked at 0x46E or 0x4C9, quads dropped 0. Against `build/ack`
 s14 (mailbox poll 77%, TGP parked, counters frozen). A ten-minute soak
 follows; the race that hung s14 took three minutes once and did not show
-in seven, so a clean soak is evidence, not proof.
+in seven, so a clean soak is evidence, not proof. *Soak, 10:40: ten more
+minutes from a fresh core load, 153k samples, no parking at any point,
+mailbox poll 3.9%, render chain 12.5%, frame wait 32%, TGP at its idle loop
+in every slice. Fourteen minutes clean in two loads against a hang inside
+three. R209 is taken as confirmed.*
 
 **R210 -- THE FLASHING IS THROUGHPUT: THE GEOMETRY STAGE TAKES ABOUT TWO
 VIDEO FRAMES PER GAME FRAME, AND EVERY FRAME THAT STARTS BEFORE IT FINISHES
