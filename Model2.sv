@@ -3940,7 +3940,10 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// (low 16), any byte of 0x504E08-0x504E0B. Only init should ever write it.
 	// R210: ready and collect times in units of 16 cycles (the 16-bit ready
 	// count saturated on the board), quads held in units of 16.
-	.b_data({r3d_missed[15:0], r3d_qend_frames[7:0], r3d_quads[11:4]}),
+	// R214: OVERRUNS. Quads the store dropped for a full bank, words the
+	// front-door push DMA dropped for a full queue (low 8 bits), quads held.
+	// (dbg_missed read 0 through the title on dbuf6 s14: bands are never late.)
+	.b_data({r3d_dropped[15:0], geo_dropped[7:0], r3d_quads[11:4]}),
 	.a_tag(8'h43), .b_tag(8'h48),          // 'C' copro in_pushed:out_pushed | TGP retires:pc
 	                                       // 'H' out_popped:hscr2 | io_addr:flags
 	                                       // 'H' scroll h:v for layers 0,1 | layers 2,3 -- low bytes
