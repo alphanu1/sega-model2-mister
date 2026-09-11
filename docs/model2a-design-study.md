@@ -13264,3 +13264,10 @@ eligible only with positive hold everywhere and NO setup miss on any emu
 PLL clock; HDMI-only tolerated; then best worst-setup. Deploying s14. The
 integration bench on this tree: PASS, 451 colours over 17,853 quads, the
 luminance histogram unchanged.
+
+*R234 confirmed on the board (00:05, 09-12): "colours look good" on
+`build/fix3d4` s14 -- the palette colour at full luminance for textured
+polygons, grey at half only on a black entry. What the board still shows:
+stray quads off the cars (the catcher in this build is streaming them) and
+the cars barrel-rolling in the crash animation continuously (R232, the
+overnight trace).*
