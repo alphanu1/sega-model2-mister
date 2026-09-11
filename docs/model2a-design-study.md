@@ -12384,3 +12384,13 @@ adds on the pool's spare adder slot) between the second point and E_EMIT,
 and skips the emit for a culled polygon while the strip carry still runs;
 `dbg_culled` counts them. Unconfirmed until the bench and the board say
 so: the bench's emitted-quad count against MAME's is the check.
+
+*R219 measured (16:10), same bench window:* emitted quads 57,840 -> 31,648
+(45% culled -- the backs of single-sided polygons and link type 0), clipper
+input 65,535+ -> 55,209, clipper output 57,840 -> 31,648, projection busy
+23.5% -> 14.4% of all ticks (this morning: 50.5%), quad-projector grants
+293,987 -> 187,462. The engine's busy ticks are unchanged, as expected: a
+culled polygon still costs its transform; what halves is everything
+downstream -- the store, the sort, every band's replay. With R216's
+rejection on top, the board's ~5,000-quad frames should land under the
+2,048 the store holds. `build/dbuf12` = dbuf11 + R219.
