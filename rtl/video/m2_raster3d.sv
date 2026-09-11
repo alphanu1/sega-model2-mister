@@ -28,7 +28,7 @@ module m2_raster3d #(
   parameter int unsigned SCR_W  = 496,
   parameter int unsigned SCR_H  = 384,
   parameter int unsigned BAND_H = 8,
-  parameter int unsigned NBUF   = 3,
+  parameter int unsigned NBUF   = 4,
 
   // ARE clk AND scan_clk ACTUALLY DIFFERENT CLOCKS?
   //
@@ -251,6 +251,19 @@ module m2_raster3d #(
 
   // The buffer being filled, and the one the beam is reading.
   logic [BUFW-1:0] fill_buf;
+  logic [NBUF-1:0] bd_settled;
+  logic [3:0]      bd_settle_cnt [NBUF];
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      for (int i = 0; i < NBUF; i++) begin bd_settle_cnt[i] <= 4'd0; bd_settled[i] <= 1'b1; end
+    end else begin
+      for (int i = 0; i < NBUF; i++) begin
+        if (bd_ready[i]) begin bd_settle_cnt[i] <= 4'd0; bd_settled[i] <= 1'b0; end
+        else if (bd_settle_cnt[i] != 4'd8) bd_settle_cnt[i] <= bd_settle_cnt[i] + 4'd1;
+        else bd_settled[i] <= 1'b1;
+      end
+    end
+  end
   wire [BW-1:0] scan_band = BW'(scan_y / 10'(BAND_H));
 
   // SCAN_BAND BACK IN THE FILL DOMAIN, GRAY-CODED.
@@ -464,7 +477,15 @@ module m2_raster3d #(
 
       // ---- consumer: one band at a time into the rotating buffers
       case (cst)
-        C_IDLE: if (dvalid && !bd_ready[fill_buf]) begin
+        // A RELEASED BUFFER SETTLES BEFORE IT IS REUSED (R213). bd_band[i]
+        // crosses to the scan domain on plain flops; it is safe because it is
+        // written long before bd_ready[i] rises -- EXCEPT at release, when the
+        // beam clears bd_ready and the fill could retarget the buffer within a
+        // cycle while rdy_s2 still reads 1 for two scan clocks: a mixed band
+        // sample equal to the beam's own band would present a buffer being
+        // cleared. Model 1 found the same class on its beam-band index
+        // (a1d9192). Eight cycles of settle covers the two-flop crossing.
+        C_IDLE: if (dvalid && !bd_ready[fill_buf] && bd_settled[fill_buf]) begin
           bd_y0[fill_buf]   <= 16'sd0 + 16'(fill_band) * 16'(BAND_H);
           bd_band[fill_buf] <= fill_band;
           bd_clear_req[fill_buf] <= 1'b1;
