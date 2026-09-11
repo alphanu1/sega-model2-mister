@@ -133,7 +133,15 @@ module m2_raster3d #(
   logic [23:0] qo_col;
   logic        qo_moire;
 
-  assign q_ready = 1'b1;      // the store absorbs or drops; it never backpressures
+  // THE STORE TAKES QUADS ONLY WHILE COLLECTING (R220). Between a list's
+  // q_end and the frame_start that swaps the banks, the sorted list sits in
+  // the collect bank; a walk the game's mid-frame flip starts in that gap
+  // wrote its quads straight over it -- lists mixed and part-overwritten,
+  // seen as wrong wedges and an on-off flicker (dbuf13 s15). The geometry
+  // pipeline honours this line (the clipper holds out_valid), so the walk
+  // waits for the swap, which is the frame's own cadence.
+  assign q_ready = (pst == P_COLLECT);
+  wire   q_take  = q_valid && q_ready;
 
   // One two-bank store: collect into `bank`, replay `~bank` (R213 shares the
   // key and scratch index between the banks, ~8 M10K blocks over two
@@ -141,7 +149,7 @@ module m2_raster3d #(
   m2_quad_store #(.BAND_H(BAND_H), .NBANDS(NBANDS), .BW(BW), .SCR_H(SCR_H)) u_store (
     .clk(clk), .rst_n(rst_n),
     .clear(qs_clear), .wbank(bank), .rbank(~bank),
-    .in_valid(q_valid),
+    .in_valid(q_take),
     .in_x0(q_x0), .in_y0(q_y0), .in_x1(q_x1), .in_y1(q_y1),
     .in_x2(q_x2), .in_y2(q_y2), .in_x3(q_x3), .in_y3(q_y3),
     .in_col(q_col), .in_z(q_z), .in_moire(q_moire),

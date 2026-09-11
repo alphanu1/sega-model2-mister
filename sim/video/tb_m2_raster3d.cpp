@@ -36,6 +36,8 @@ int main(int argc, char **argv) {
   auto push_list = [&](int frame_no) {
     d->frame_start = 0;
     for (int b = 0; b < SCR_H / 16; b++) {
+      // R220: the store may be holding a finished list; wait for it.
+      { int g = 0; d->q_valid = 0; d->eval(); while (!d->q_ready && g++ < 100000) tick(); }
       d->q_valid = 1;
       d->q_x0 = 100 + frame_no; d->q_y0 = b * 16 + 2;
       d->q_x1 = 140 + frame_no; d->q_y1 = b * 16 + 2;
