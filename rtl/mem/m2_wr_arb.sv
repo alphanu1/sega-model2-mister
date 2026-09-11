@@ -30,6 +30,15 @@
 // owner's address and data are what it presents at the time of the write,
 // which every owner holds stable while it waits.
 //
+// AND A SERVED OWNER IS NOT GRANTED AGAIN UNTIL ITS LINE HAS FALLEN. The
+// coprocessor's request and acknowledge are each registered once in
+// Model2.sv, so its line stays up for three cycles after the acknowledge;
+// the version with only the latch above re-granted that stale level after
+// the dead cycle, wrote the low half twice, and the TGP took the duplicate's
+// acknowledge as its high half's -- the mailbox clear never landed and the
+// board froze on its first job (build/wrarb2 s15, TGP at 0x4C9). Four-phase,
+// then: request up, acknowledge, request down, and only then a new grant.
+//
 // ROUND-ROBIN, NOT FIXED PRIORITY. The unit test with the coprocessor's slot
 // asking on every cycle showed the push DMA and the loader never served at
 // all under the mux's fixed order; the TGP's vertex loop writes buffer RAM
@@ -60,7 +69,8 @@ module m2_wr_arb #(
   logic [OW-1:0] own;
   logic          gap;      // the dead cycle after a release
   logic [N-1:0]  pend;     // a request seen and not yet acknowledged
-  wire  [N-1:0]  want = req | pend;
+  logic [N-1:0]  served;   // acknowledged, and the line has not fallen since
+  wire  [N-1:0]  want = (req & ~served) | pend;
 
   // The first requester after the one last served; the last assignment in
   // the loop (the smallest k) wins.
@@ -77,11 +87,15 @@ module m2_wr_arb #(
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      pend <= '0;
+      pend <= '0; served <= '0;
     end else begin
       for (int i = 0; i < N; i++) begin
-        if (ack[i])      pend[i] <= 1'b0;
-        else if (req[i]) pend[i] <= 1'b1;
+        if (ack[i]) begin
+          pend[i] <= 1'b0; served[i] <= 1'b1;
+        end else begin
+          if (!req[i])                served[i] <= 1'b0;
+          if (req[i] && !served[i])   pend[i]   <= 1'b1;
+        end
       end
     end
   end

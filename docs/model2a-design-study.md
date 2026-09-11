@@ -11813,7 +11813,31 @@ all owners served, no write lost, longest idle 3 cycles. Cost: two dead
 slow cycles per write on the shared port; the push DMA's queue (128) is
 the buffer against it, and `geo_dropped` is the counter to watch.
 
-Unconfirmed until the board says so: `build/wrarb2` (seeds 11, 13, 14, 15),
-R202+R203+R205+R208+R209 with the pulse latch, and the flashing probe on
-the H record (rasteriser frame timing: ready cycles, bands done, frames
-still collecting at frame_start, quads held/dropped, frames finished).
+*`build/wrarb2` s15 froze on the FIRST job (08:35): TGP at 0x4C9 in 96% of
+samples, i960 in the mailbox poll 73%, render chain 0 -- the mailbox clear
+at 0x4C4 acknowledged and never seen, deterministic this time.* The latch
+was the cause. The TGP's request and acknowledge are each registered once
+in Model2.sv and `wr_pend` falls a cycle after m2_tgp sees the acknowledge,
+so its request line stays up for three cycles after it was served; the
+latch took that stale level as a new request and kept it (`pend`) until
+slot 2's next turn. By then the TGP had finished the instruction and
+`bufw_addr`/`bufw_data` follow its bus (`win_adr`, `wr_hi`, `io_wdata`,
+combinationally), so the grant wrote whatever was there -- over the
+mailbox's low half. The unit test passed because its owners kept their
+lines stable while idle and always had a fresh request by the time their
+slot came round; with an idle owner driving garbage and the coprocessor's
+slot going quiet for tens of cycles now and then, the latch-only arbiter
+fails at once ("a write landed that nobody asked for", "owner 2
+acknowledged while not asking") at every line lag from 1 to 3.
+
+*The rule is four-phase:* request up, acknowledge, request DOWN, and only
+then can that owner be granted again (`served`, cleared when the line
+falls; `want = (req & ~served) | pend`). The pulse latch stays for the
+loader. Test: latencies 1, 5, 12, 30, line lags 1-3, all pass; the
+previous two arbiters fail it. Cost of the day's three arbiters: two
+fitter runs and a stalled HPS. What was missing each time was the OWNER's
+timing in the test -- the pulse, then the registered line, then the idle
+bus -- not the port's.
+
+Unconfirmed until the board says so: `build/wrarb3` (seeds 11, 13, 14, 15),
+R202+R203+R205+R208+R209 four-phase, flashing probe on the H record.

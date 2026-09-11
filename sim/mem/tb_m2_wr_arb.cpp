@@ -36,28 +36,50 @@ int main(int argc, char **argv) {
   struct Owner { int state; int pause; uint32_t seq; std::deque<std::pair<uint32_t,uint16_t>> expect; int done; int pulsed; };
   std::vector<Owner> ow(N);
   for (int i = 0; i < N; i++) { ow[i] = {0, i * 3, 0, {}, 0, 0}; }
-  // Owner 2 (the coprocessor's slot) asks continuously; owner 3 (the push
+  // Owner 2 (the coprocessor's slot) asks with 0-3 idle cycles between, as
+  // the TGP does between the halves and instructions, and now and then goes
+  // quiet for tens of cycles, as it does after a mailbox write; owner 3 (the push
   // DMA) asks in pairs with one idle cycle between, like the halves of a
   // dword. The others are sparse.
   auto next_pause = [&](int i) {
-    switch (i) { case 2: return 0; case 3: return (std::rand() % 2) ? 1 : 3; default: return 5 + std::rand() % 40; }
+    switch (i) { case 2: return (std::rand() % 8 == 0) ? 40 + std::rand() % 40 : std::rand() % 4; case 3: return (std::rand() % 2) ? 1 : 3; default: return 5 + std::rand() % 40; }
   };
   // The port model.
   int w_done = 0, inflight = -1, cnt = 0; uint32_t l_addr = 0; uint16_t l_din = 0; int ack = 0;
   long issued = 0, landed = 0, idle_run = 0, max_idle_run = 0, ack_no_owner = 0;
   std::vector<long> per_owner(N, 0);
 
+  // Owner 2 (the coprocessor's slot) is REGISTERED both ways in Model2.sv:
+  // its request reaches the arbiter a cycle late and the acknowledge reaches
+  // it a cycle late, so its line stays up for cycles after it was served.
+  // On the board that is one register on the request (tgp_bufw_req_r), one
+  // on the acknowledge (tgp_bufw_ack_r) and one inside m2_tgp before wr_pend
+  // falls: the line is up for THREE cycles after the acknowledge. O2D sets
+  // how many cycles the request line lags the owner's state (default 2, plus
+  // the acknowledge register makes three).
+  const int O2D = std::getenv("O2D") ? std::atoi(std::getenv("O2D")) : 2;
+  std::deque<int> o2_req_q(O2D, 0); int o2_ack_d = 0;
   for (int cyc = 0; cyc < ROUNDS; cyc++) {
     // Owners drive their requests (registered on the previous ack).
     uint32_t req = 0;
+    // Owner 2 consumes last cycle's acknowledge now.
+    if (o2_ack_d) { Owner &o = ow[2]; CHECK(o.state == 1, "owner 2 acknowledged while not asking (cycle %d)", cyc); o.state = 0; o.pause = next_pause(2); ++o.done; }
     for (int i = 0; i < N; i++) {
       Owner &o = ow[i];
+      // AN IDLE OWNER'S LINES ARE GARBAGE. m2_tgp's address and data follow
+      // its bus the moment the instruction completes, so a grant earned by a
+      // stale request line writes whatever is there -- on the board, over
+      // the mailbox's low half (build/wrarb2 s15). A write that lands from an
+      // idle owner is the fault this test exists to catch.
+      if (o.state == 0) { d->addr[i] = 0xBAD000 | (cyc & 0xfff); d->din[i] = 0xBAD; }
       if (o.state == 0) { if (o.pause > 0) --o.pause; else { o.state = 1; o.seq++; d->addr[i] = (i << 20) | (o.seq & 0xfffff); d->din[i] = (i << 12) | (o.seq & 0xfff); o.expect.push_back({d->addr[i], d->din[i]}); } }
       // Owner 4 is the ROM loader's slot: it PULSES its request for one cycle
       // and then waits for the acknowledge with the line low.
-      if (o.state == 1 && (i != 4 || o.pulsed == 0)) req |= 1u << i;
+      if (o.state == 1 && (i != 4 || o.pulsed == 0) && i != 2) req |= 1u << i;
       if (o.state == 1 && i == 4) o.pulsed = 1;
     }
+    if (o2_req_q.front()) req |= 1u << 2;  // the registered line
+    o2_req_q.pop_front(); o2_req_q.push_back(ow[2].state == 1);
     d->req = req;
     d->s_ack = ack;
     d->eval();
@@ -66,7 +88,8 @@ int main(int argc, char **argv) {
     int f_req = s_req && !w_done && !ack;
     if (f_req && inflight < 0) { inflight = 0; l_addr = d->s_addr; l_din = d->s_din; cnt = LAT; ++issued; }
     // Owners consume their acknowledge this cycle.
-    for (int i = 0; i < N; i++) if ((d->ack >> i) & 1) {
+    o2_ack_d = (d->ack >> 2) & 1;
+    for (int i = 0; i < N; i++) if (((d->ack >> i) & 1) && i != 2) {
       Owner &o = ow[i];
       CHECK(o.state == 1, "owner %d acknowledged while not asking (cycle %d)", i, cyc);
       o.state = 0; o.pause = next_pause(i); ++o.done; o.pulsed = 0;

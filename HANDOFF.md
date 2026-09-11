@@ -22,8 +22,16 @@ fixed-priority starvation of the DMA. **`build/wrarb` s11 BROKE THE ROM LOAD:**
 the loader pulses its request for one cycle, the arbiter released on the
 gone request without writing, the loader waited forever and ioctl_wait held
 the HPS. Fixed: the arbiter latches a request per owner until its
-acknowledge; the test's loader slot pulses. `build/wrarb2` (11, 13, 14, 15)
-carries the fix and the flashing probe. Study R209.
+acknowledge; the test's loader slot pulses. **`build/wrarb2` s15 FROZE ON THE
+FIRST JOB** (TGP at 0x4C9, mailbox clear never seen): the latch kept the
+TGP's stale request line (registered twice, three cycles up after its ack)
+and the next grant to that slot wrote the TGP's idle bus over the mailbox.
+Now four-phase: a served owner is not granted again until its line has
+fallen. The test drives garbage from idle owners and idles the coprocessor
+slot for tens of cycles at a time; the two earlier arbiters fail it, this
+one passes. `build/wrarb3` (11, 13, 14, 15) carries it plus the flashing
+probe. Board restored to `build/ack` s14 (white flashing cars) meanwhile.
+Study R209.
 
 **SEEN ON THE SCREEN (build/ack s14, 08:05): white, transparent car models,
 flashing on and off.** The first 3D drawn on hardware. White is by design
