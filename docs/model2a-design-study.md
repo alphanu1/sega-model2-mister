@@ -12079,3 +12079,13 @@ counts scanlines the beam started with no band buffer holding that band
 (a band filled but not in time). The CPU's time budget on dbuf2 is within
 a few percent of wrarb3 (frame wait 26% vs 33% on a shorter capture,
 render chain 12.4% vs 12.9%), so the game itself did not slow down.
+
+*dbuf4, 11:10.* The 2,048-entry banks FIT with 8-row bands: s14 and s15
+placed at 96% ALM, block memory 77% by bits and within the 553 blocks.
+Both failed HOLD by ~-0.3 ns on ONE path -- `m2_cpu_bridge` r_rdata[15]
+(50 MHz) -> bus_rdata[15] (the CPU's 25 MHz), every other path on that
+clock at +0.27 or better; a morning seed (wrarb2 s11) had the same clock
+at -0.224. Quartus's default OPTIMIZE_HOLD_TIMING covers I/O paths only;
+set to "All Paths" so the fitter pads internal hold misses. Not deployed:
+a hold miss on the CPU's read data is a corrupted bit at some temperature,
+not a margin. `build/dbuf5` carries the setting.
