@@ -12255,3 +12255,22 @@ it does not shorten the collect -- the engine still spends 467 cycles on
 each of them before they are refused. Zero-extent quads (48%) are NOT
 refused: the fill's line case draws them, and thin distant edges are
 theirs. `build/dbuf10`.
+
+*Where the 467 go (14:00).* The engine's state histogram over the title,
+as a share of ALL ticks from instruction 17 M:
+
+    E_IDLE   38.7%   no object in hand (the walker between objects)
+    E_EMIT   34.2%   polygon ready, WAITING for the projection stage to take it
+    E_XFW    12.9%   waiting on the vertex transform
+    E_NXFW    5.6%   waiting on the normal transform
+    E_FOCW    2.9%   waiting on the focus
+    E_RD      1.8%   memory reads  (R214's target: never the cost)
+    projection stage busy: 50.5% of all ticks
+
+The projection (clip and perspective divide) is the bottleneck: half of
+all time, and the engine idles in E_EMIT behind it for a third. At ~230
+cycles a polygon that is eight sequential fp_div at ~29 cycles -- x/w and
+y/w for four vertices -- with the clipper's planes on top. R217 is the
+projection: one reciprocal per vertex and two multiplies instead of two
+divides, or a pipelined divider; then overlap the engine's transform of
+polygon N+1 with the projection of N.
