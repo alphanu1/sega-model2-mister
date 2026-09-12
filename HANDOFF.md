@@ -1,6 +1,46 @@
 # Handoff
 
-**Updated:** 2026-09-13 00:35 (machine clock). Study entries R176-R270.
+**Updated:** 2026-09-13 03:10 (machine clock). Study entries R176-R277.
+
+## 03:10, 09-13: THE TEXTURES ARE BUILT -- `build/tex1` IS THE TEST
+
+The whole path is in: display list -> per-vertex {u,v} -> clipper -> quad store
+-> plane fit -> span walk -> texel fetch -> pixel. What to do with it:
+
+**Turn it on and off.** `O[27] Textures On/Off` in the OSD. Off restores the
+flat placeholder exactly -- the plane fit is skipped and every span passes
+straight through -- so the A/B is the texture path and nothing else.
+
+**Texture brightness still applies.** The colour a textured pixel takes is the
+polygon's own colour scaled by the texel, and most scenery's polygon colour is
+the mid grey at the brightness `O[22:21]` selects, which is 50% by default. If
+the picture looks dark, try 100% first: that is the placeholder's brightness,
+not the texture's.
+
+**What the UART says.** `tools/decode_uart.py` now decodes a 'Y' record:
+textured pixels per frame, the texel cache's hit rate, and fetches abandoned on
+a memory that did not answer (which should be zero). Pixels at zero means
+nothing textured reached the span walk at all -- a different fault from a
+texture that looks wrong. The 'V' record beside it says what the glyph cache is
+doing now that it is half the size (see below).
+
+**What is knowingly approximate**, in the order it will show:
+* AFFINE, not perspective. The reference divides u and v by z per pixel; this
+  fits one plane per quad. Polygons whose corners are at very different depths
+  -- the road to the horizon -- will swim. Perspective needs 1/z per vertex
+  through the quad store, 26 M10K blocks this part does not have yet.
+* THE COLOUR IS THE POLYGON'S, SCALED BY THE TEXEL. The reference maps the
+  texel through the luma table and then the colour table -- the same ramp the
+  flat path uses, read at an index the texture supplies. Scaling the finished
+  colour is that ramp approximated as linear. Detail and shape will be right;
+  the curve of the ramp and any non-identity luma table will not.
+* No bilinear, no mipmaps, no microtexture, no translucency.
+
+**If it is slow.** A textured span emits one pixel per handshake where a flat
+span writes four a cycle. The bands are beam-paced, so if the 3D starts
+arriving late the symptom is bands missing from the top of the frame, and the
+'Y' record's pixel count against the 'V' record's overruns says which half is
+at fault.
 
 ## 00:35, 09-13: PAYING FOR THE TEXTURES IN M10K (R269), AND THE CLIPPER (R270)
 
@@ -22,6 +62,14 @@ cache since the invalidate was added: `inval` diverts the array address, so a
 lookup in the same cycle reads a DIFFERENT line, and with a two-bit tag a
 wrong line matches one time in four -- another glyph's pixels returned as a
 hit.
+
+**MEASURED, `build/fix3d25` on the board:** glyph cache hits 20,103 a frame
+against 694 misses -- 95.7%, not the 82.6% the file had claimed from a bench --
+with exactly one sibling fill per miss (the mechanism working) and 12 scanline
+overruns a frame of 384x4. On that evidence the cache is now HALVED to 64 KB
+(R276) and the 53 blocks pay for the quad store's texture coordinates. The 'V'
+record is the check: if the overruns climb, the cache is the first thing to put
+back.
 
 **The numbers that decide the halving are now on the wire.** The cache's hit
 and miss counters have existed since it was written and have NEVER been read
