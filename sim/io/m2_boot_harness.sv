@@ -612,7 +612,15 @@ module m2_boot_harness #(
     // address arithmetic under test is the arithmetic that runs on the board.
     .base_prog (AW'(32'h0000000)), .base_data (AW'(32'h0020000)),
     .base_work (AW'(32'h1600000)), .base_board(AW'(32'h1680000)),
-    .base_char (AW'(32'h1690000)), .base_buffer(AW'(32'h16d0000)),
+    // R257: THE SAME BUFFER BASE THE WALKER USES. This said 0x16d0000 while
+    // the geometrizer below says 0x16f0000, so at the desk the CPU wrote the
+    // display list 128 KB away from where the walker read it. Everything the
+    // game PUSHES goes through the geometrizer's own write path and landed
+    // correctly; everything it STORES -- and the texture_data count is a
+    // store, patched in after the payload (R254) -- landed where nothing
+    // looked. Model2.sv passes GAME_BUFFER to both, so this was the bench
+    // alone, and it is why the desk's list always held a zero count.
+    .base_char (AW'(32'h1690000)), .base_buffer(AW'(32'h16f0000)),
     .base_pal3d(AW'(32'h1730000)), .base_xlat3d(AW'(32'h1731000)), .col_inval(oc_col_inval),
     .sd_req(sd_req), .sd_we(sd_we), .sd_addr(sd_addr), .sd_din(sd_din),
     .sd_be(sd_be), .sd_dout(sd_dout_i), .sd_ack(sd_ack_i),
@@ -810,7 +818,10 @@ module m2_boot_harness #(
   // frame_start is the vblank edge, as geo_walk_start is on the board.
   logic vb_d, vb_dd;
   always_ff @(posedge clk_mem) begin vb_d <= vid_vb; vb_dd <= vb_d; end
-  wire geo_frame_start = vb_d && !vb_dd;
+  // R256: THE SAME GATE AS THE BOARD'S. The reference walks the list only on
+  // even frames when the game is in 30 Hz mode, and Daytona is; walking every
+  // vblank reads a list that is still being built.
+  wire geo_frame_start = vb_d && !vb_dd && (!io_videoctl[0] || !io_framenum[0]);
 
   // The reconstructed opcode of whatever is being pushed this cycle.
   wire [4:0] geo_push_op = geo_push_word[27:23];

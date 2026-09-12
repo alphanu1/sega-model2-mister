@@ -13780,3 +13780,57 @@ fallback -- "if the picked seed has no .rbf, take any other seed that has
 one" -- ignored the seed rule that had just rejected all three. The board
 came up not running, and the user said so before any capture could. The
 fallback now only considers seeds the rule accepted.
+
+**R254-R257 -- THREE BENCH FAULTS IN A ROW, AND THE ONE QUESTION THAT ONLY
+THE BOARD CAN ANSWER.** The user's remaining faults were the scenery
+vanishing and whole scenes rendering black. Both have the same shape: the
+walker decoding commands the game never wrote. The desk said it decodes 417
+nops a frame against the reference's NONE, and eighteen dumps of the
+reference's own display list contain no texture_parameters command at all
+while our walker executes 39 of them. Chasing that found the mechanism and
+then found that the desk could not be trusted about any of it.
+
+*The mechanism (R254), which is real and worth keeping.* Daytona does not
+write a count into its list. It pushes a ZERO PLACEHOLDER, reads the push
+port's write pointer at 0x802008 to remember where the placeholder went,
+pushes the payload, reads the pointer again and patches the count in with a
+STORE into buffer RAM:
+
+    00019F04: ld   0x2008(g10),r10    ; where the placeholder will go
+    00019F0C: st   r3,(g10)[g12]      ; push 0
+      ...                              ; push the payload
+    00019F8C: ld   0x2008(g10),r3     ; where we ended up
+    00019F94: subo r10,r3,r3
+    00019F98: shro 2,r3,r3
+    00019F9C: subo 1,r3,r3
+    00019FA0: st   r3,0x900000(r10)   ; patch the count
+
+So the count arrives by a different road from every other word of the list,
+and a walk that reads it as zero steps into the payload and decodes 280
+words of vertex data as commands. That is where the light table's 0/0 and
+255/255 entries come from -- the black scenes and the blown-out ones -- and
+objects are skipped, which is the scenery that vanishes.
+
+*Three bench faults, none of them in the core.* (1) `m2_boot_harness`'s
+`cpu_io_rdata` had no case for 0x802008 or 0x803008 and returned zero, so
+the game computed -1 and patched it to offset 0. Model2.sv answers both
+correctly. (2) The harness gave the CPU bridge `base_buffer = 0x16d0000`
+and the geometrizer `0x16f0000`, so every STORE the game made into its
+display list -- the count among them -- landed 128 KB from where the walker
+reads. Model2.sv passes GAME_BUFFER to both. (3) The walker trace was
+capped at 6,000 lines from the first walk, which is entirely inside the
+boot, so it reported that the walk ends immediately. Every desk conclusion
+about the display list before this was measured on a list the bench had
+malformed, which is the honest reason the desk and the board have disagreed
+all day. The user said it plainly: check on the device.
+
+*R256, the one candidate that is in the core.* `screen_vblank` in
+model2.cpp walks the list only on even frames when the game is in 30 Hz
+mode -- "if 60 Hz mode or frame number is even" -- and this core has always
+walked every vblank. If Daytona sets that bit, every other walk reads a
+half-built list. That is a one-line gate, but the desk cannot test it now,
+so it goes to the board behind `O[26],Walk rate,Every frame,Reference` and
+the board decides. Beside it, R255 streams what the walk actually did --
+nops decoded, commands, objects, unknown opcode, push drops -- as 'U'
+records, because the reference's list contains no nops at all and any run of
+them is the walk reading data as commands.

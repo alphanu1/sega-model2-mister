@@ -146,6 +146,15 @@ localparam CONF_STR = {
 	// is behind the scenery and the flashing is a question the board can
 	// answer in seconds with this off, and only in 25 minutes without it.
 	"O[25],Pair cache,On,Off;",
+	// R256: HOW OFTEN THE WALK RUNS. model2.cpp's screen_vblank walks the list
+	// only on even frames when the game is in 30 Hz mode -- "if 60 Hz mode or
+	// frame number is even" -- and this core has always walked every vblank. If
+	// Daytona sets that bit and builds its list across two frames, every other
+	// walk reads a list that is still being written. Which of those is true on
+	// hardware is a question the board can answer in seconds with this switch,
+	// and the desk cannot answer at all: its own display list is built by a
+	// bench that has been wrong about it three times in one afternoon.
+	"O[26],Walk rate,Every frame,Reference;",
 	// A bar outside the visible area is indistinguishable from a bar that did
 	// not draw. This packs all four well inside any plausible crop, so a side
 	// missing in BOTH layouts is missing for a real reason.
@@ -512,7 +521,12 @@ always_ff @(posedge clk_sys) begin
 end
 wire [1:0] tex_lum_s2 = {tl1_s[2], tl0_s[2]};
 always_ff @(posedge clk_sys) nowalk_s <= {nowalk_s[1:0], status[20]};
-wire        geo_walk_start = vbl_d && !vbl_dd && !nowalk_s[2];
+reg [2:0] wrate_s;   // R256/R229: the OSD bit reaches the datapath through three flops
+always_ff @(posedge clk_sys) wrate_s <= {wrate_s[1:0], status[26]};
+// R256: declared here, assigned below where the video control register and the
+// frame counter are declared -- Quartus 17.0 rejects a reference to a name it
+// has not seen, and that cost build/fix3d13 outright.
+wire        geo_walk_start;
 wire        geo_rd_req;
 wire [18:0] geo_rd_addr;
 wire [15:0] geo_walk_ops, geo_walk_objs, geo_walk_frames;
@@ -2354,6 +2368,31 @@ assign cpu_irq = { |(io_intreq & 12'hc00), |(io_intreq & 12'h3fc),
 // zero -- two bytes of one dword, moving at different times for different
 // reasons. A constant satisfies whichever of them it was tuned for and deadlocks
 // the other.
+// R256: THE WALK RUNS ON ALTERNATE FRAMES IN 30 Hz MODE, AS THE REFERENCE DOES.
+//
+//   // if 60 Hz mode or frame number is even, trigger geometrizer to start new frame
+//   if ((m_videocontrol & 1) == 0 || (m_framenum & 1) == 0)
+//       geo_parse();
+//                                   -- model2.cpp, screen_vblank
+//
+// This core walked EVERY vblank. Daytona sets bit 0 of the video control and
+// builds its display list across two frames, so every other walk read a list
+// that was still being written: the game pushes a ZERO PLACEHOLDER for a
+// texture_data count, pushes the payload, then patches the count in (R254), and
+// a walk that arrives in between takes the count as zero and reads 280 payload
+// words as commands. Measured at the desk once the bench could return the write
+// pointer: alternate frames decode 280 nops and 47 objects against the next
+// frame's 0 and 7. The junk lands in the light table -- entries written with
+// whatever the payload happened to hold, which is where the 0/0 entries that
+// render a whole scene black come from -- and objects are skipped, which is the
+// scenery that vanishes.
+//
+// io_framenum counts the same vblanks the reference's frame_number does, and
+// the game reads its parity back through 0x98000c, so the parity here is the
+// parity the game sees.
+assign geo_walk_start = vbl_d && !vbl_dd && !nowalk_s[2]
+                          && (!wrate_s[2] || !io_videoctl[0] || !io_framenum[0]);
+
 assign cpu_io_rdata =
 	// geo_r: the game sets these and READS THEM BACK to find where it is.
 	// Returning 0 is the suspected cause of the R129 livelock.
