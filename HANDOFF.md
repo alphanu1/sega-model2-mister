@@ -1,6 +1,18 @@
 # Handoff
 
-**Updated:** 2026-09-12 01:50 (machine clock). Study entries R176-R241.
+**Updated:** 2026-09-12 01:50 (machine clock). Study entries R176-R242.
+
+## 01:50, 09-12: R242 -- THE i960's bno WAS NEVER TAKEN (READ FIRST)
+
+`i960_top.sv` executed b<cc> as "taken if ac & cond", so bno (cond 000) never
+branched. Found by aligning a from-boot coprocessor trace against MAME's tap
+(identical through the first 0x11 readback, then the game takes the other side
+of a `chkbit; bno` at 0x854c: 39/39 taken in MAME, 0/39 here). The lockstep's
+transcription had the same fault and never generated a conditional CTRL branch;
+all three fixed, `test_i960_top` passes with bno in the mix. This is the R232
+candidate (the cars' continuous crash roll); it goes to the board in
+`build/fix3d8` with R241. The desk check is `$S/long/trace2.txt` aligning past
+frame 248; `python3 $S/copro_align2.py $S/long/trace2.txt`.
 
 ## 01:50, 09-12: TWO BUILDS QUEUED, ONE TRACE RUNNING
 
