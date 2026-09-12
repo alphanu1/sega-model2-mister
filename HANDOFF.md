@@ -1,8 +1,41 @@
 # Handoff
 
-**Updated:** 2026-09-12 11:10 (machine clock). Study entries R176-R248.
+**Updated:** 2026-09-12 19:10 (machine clock). Study entries R176-R259.
 
-## 11:10, 09-12: THE TEXTURE-RAM CLEAR NEVER RAN (R248) -- READ FIRST
+## 19:10, 09-12: WHAT THE BOARD CONFIRMED TODAY -- READ FIRST
+
+Confirmed on hardware, in order, each by the user's eye:
+* **R242** the i960's `bno` was never taken -- the cars' continuous crash roll.
+* **R246** the polygon's sort depth is chosen per polygon and quantised as
+  model2_v.cpp does -- the cars stopped flashing and the track stopped drawing
+  over them.
+* **R250** the vertex depths were compared as unsigned integers, so one corner
+  behind the camera culled the whole polygon -- the floor stopped vanishing
+  from under the car.
+* **R256** the reference walks the display list only on alternate frames in
+  30 Hz mode; this core walked every vblank and so read half-built lists. The
+  user: "changed it to reference and it's great, only 1 or 2 scenery drop outs
+  every 5 or so seconds". Now the DEFAULT; `O[26]` selects the old behaviour.
+* **R259** the textured placeholder defaults to half brightness, judged on the
+  board. The other three steps remain.
+
+WITHDRAWN: **R258**'s push-queue backpressure. Right idea, wrong
+implementation -- `io_stall` makes the bridge re-assert its select, so the
+write strobe became a level and the same dword was pushed repeatedly; the
+board's nop count went 4 -> 280. A correct version needs a one-shot per
+access. Not needed for the scenery any more.
+
+STILL OPEN: occasional scenery dropouts (1-2 every 5 s) and an odd missing
+floor; whole scenes still rendering black, with the light table reading 0/0
+in most entries on the board. The push queue still drops (the counter climbs)
+and that remains the leading suspect for the light table.
+
+THE BENCH LIED THREE TIMES TODAY (R254-R257) and cost hours: it returned zero
+for the geometry write pointer the game reads back to patch its list counts,
+it gave the CPU bridge a different buffer base from the walker, and its walker
+trace was capped inside the boot. Check the board first.
+
+## 11:10, 09-12: THE TEXTURE-RAM CLEAR NEVER RAN (R248)
 
 `st_run`, which gates the boot writer into the write arbiter, covered states 1
 to 8 only; R223's texture-RAM zero sweep runs in states 12 to 15. The arbiter
