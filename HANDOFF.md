@@ -1,6 +1,53 @@
 # Handoff
 
-**Updated:** 2026-09-12 21:55 (machine clock). Study entries R176-R266.
+**Updated:** 2026-09-13 00:35 (machine clock). Study entries R176-R270.
+
+## 00:35, 09-13: PAYING FOR THE TEXTURES IN M10K (R269), AND THE CLIPPER (R270)
+
+**The part is FULL of block memory: 553 of 553 M10K, 100%.** ALM is at 88%
+(36,895 of 41,910) and DSP has room, so the binding resource for texture
+mapping is blocks, and the glyph cache is the biggest single consumer at
+1,072 Kb -- 128 KB of data plus its tags. Halving it gives back 51 blocks,
+which is most of what the texture path needs; it was halved once before and
+REVERTED on hardware evidence, because at 64 KB the board showed tile and
+glyph overruns.
+
+**R269 makes each miss cheaper before making the cache smaller.** A miss now
+fetches the sibling line behind its acknowledge, so four glyph rows are
+resident per miss instead of two -- the bench's tile walk goes from 4.00
+misses per tile to 2.00 at the same transaction count and the same storage --
+and a hit is served straight through an outstanding fill (2 cycles against a
+44-cycle miss on a 40-cycle memory). It also fixes a bug that has been in the
+cache since the invalidate was added: `inval` diverts the array address, so a
+lookup in the same cycle reads a DIFFERENT line, and with a two-bit tag a
+wrong line matches one time in four -- another glyph's pixels returned as a
+hit.
+
+**The numbers that decide the halving are now on the wire.** The cache's hit
+and miss counters have existed since it was written and have NEVER been read
+on hardware; the 82.6% in its header is a bench figure. `build/fix3d25`
+streams hits, misses, sibling fills and scanline overruns per frame as a 'V'
+record, decoded by `tools/decode_uart.py`. If the overruns stay near zero, the
+cache halves and the blocks go to textures.
+
+**R270: the clipper cuts the texture as well as the shape.** A created vertex
+interpolates u and v on the same t as its position, which is what MAME's
+`clip_polygon` does beside the three position terms; a triangle's fourth
+vertex takes the third's pair, because this pipeline carries every polygon as
+a quad and a duplicated position with a stale texture coordinate fits a
+different parameter plane. 20,044 vertices compared against the transcription,
+zero wrong.
+
+**What the texture path still needs, and what it costs in blocks.** Four
+vertices of {u, v} is 128 bits a quad; at NQ=2048 and two banks that is 51
+blocks -- exactly the glyph cache's halving -- and gives AFFINE mapping. Adding
+1/z per vertex for the perspective divide costs about 26 more, which needs
+either a quarter-size glyph cache or NQ reduced (the board's own 'H' record
+says the busiest attract frame holds 1,424 quads of the 2,048 the store can
+take). Then: the span walk carrying the three parameters, a per-pixel or
+per-segment reciprocal, the texel fetch, and the texel -> luma -> colour table
+path -- for which the cheap form is sixteen colours resolved per polygon at the
+geometry stage, since a point-sampled 4-bit texel can only take sixteen values.
 
 ## 21:55, 09-12: THE PAIR CACHE WAS THE LIGHTING (R266)
 
