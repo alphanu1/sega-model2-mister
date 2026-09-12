@@ -193,6 +193,13 @@ module m2_boot_harness #(
   output logic [15:0] eng_pj_lost,             // projections abandoned on timeout (R226)
   output logic  [7:0] eng_luma,                // R231: the polygon's luminance
   output logic        eng_poly_go,             // ...valid on this edge
+  // R245: WHICH LIGHT PARAMETER THE POLYGON ASKED FOR, and the diffuse and
+  // ambient the engine used for it. The user reports whole scenes rendering
+  // blown out or completely black, and an entry the list never wrote reads
+  // zero -- which is black -- so the question is whether the polygons ask for
+  // entries the walker never filled.
+  output logic  [4:0] eng_lp,
+  output logic [31:0] eng_lp_dif, eng_lp_amb,
   output logic  [7:0] tpw_diffuse, tpw_ambient,
   output logic  [4:0] tpw_idx,
   output logic        tpw_we,
@@ -929,6 +936,9 @@ module m2_boot_harness #(
   );
   assign obs_poly_valid = u_geometry.poly_valid & u_geometry.poly_ready;
   assign eng_luma    = u_geometry.u_engine.poly_luma;
+  assign eng_lp      = u_geometry.u_engine.attr[22:18];
+  assign eng_lp_dif  = u_geometry.u_engine.tp_rd[31:0];
+  assign eng_lp_amb  = u_geometry.u_engine.tp_rd[63:32];
   assign eng_poly_go = u_geometry.poly_valid & u_geometry.poly_ready;
   assign tpw_we      = geo_tp_we;
   assign tpw_idx     = geo_tp_idx;

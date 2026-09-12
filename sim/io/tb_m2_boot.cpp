@@ -61,6 +61,9 @@ static unsigned g_pj_lost = 0;
 static unsigned g_luma_hist[16] = {0};
 static unsigned g_luma_n = 0, g_luma_zero = 0;
 static unsigned g_tp_dif[32], g_tp_amb[32]; static bool g_tp_seen[32];
+// R245: which light-parameter entry each polygon asked for, how many read an
+// all-zero entry (which renders black), and how often the walker wrote each.
+static long g_lp_used[32] = {0}, g_lp_zero = 0, g_tp_w[32] = {0};
 // R232: coprocessor data-ROM reads by dword address range. The loaded ROM is
 // 4 MB = 0x100000 dwords; the reference's region is 8 MB and reads above the
 // loaded part return zero; this core's address is 20 bits and would alias.
@@ -126,6 +129,13 @@ static void th_report() {
   }
   {
     auto u2f = [](uint32_t u){ float f; std::memcpy(&f, &u, 4); return f; };
+    {
+      long tot = 0; for (int i = 0; i < 32; i++) tot += g_lp_used[i];
+      std::printf("    LIGHT PARAMETERS (R245): polygons %ld, of which %ld read an entry of {diffuse 0, ambient 0} -- black\n", tot, g_lp_zero);
+      std::printf("      walker wrote / polygons asked, per entry:");
+      for (int i = 0; i < 32; i++) if (g_tp_w[i] || g_lp_used[i]) std::printf(" %d:%ld/%ld", i, g_tp_w[i], g_lp_used[i]);
+      std::printf("\n");
+    }
     std::printf("    LIGHT VECTORS the walker captured: %zu distinct; last (%g, %g, %g) length %g\n", g_lights.size(),
                 u2f(g_lit_last[0]), u2f(g_lit_last[1]), u2f(g_lit_last[2]),
                 std::sqrt((double)u2f(g_lit_last[0])*u2f(g_lit_last[0]) + (double)u2f(g_lit_last[1])*u2f(g_lit_last[1]) + (double)u2f(g_lit_last[2])*u2f(g_lit_last[2])));
@@ -707,11 +717,14 @@ int main(int argc, char **argv) {
     // engine happened to be fetching: it reported ZERO polygons and ZERO
     // texture parameters, which would have read as "the game sets none" when
     // the walker's own opcode histogram counts 38 of them.
+    // R245: the light parameter each polygon asked for, beside the entry the
+    // engine read for it.
+    if (d->eng_poly_go) { g_lp_used[d->eng_lp]++; if (!d->eng_lp_dif && !d->eng_lp_amb) ++g_lp_zero; }
     if (d->eng_poly_go) { unsigned l = d->eng_luma; ++g_luma_n; ++g_luma_hist[l >> 4]; if (l == 0) ++g_luma_zero;
       auto u2f = [](uint32_t u){ float f; std::memcpy(&f, &u, 4); return f; };
       double nx = u2f(d->nrm_x_o), ny = u2f(d->nrm_y_o), nz = u2f(d->nrm_z_o), ln = std::sqrt(nx*nx + ny*ny + nz*nz);
       if (std::isfinite(ln)) { ++g_nlen_n; g_nlen_sum += ln; int b = ln < 0.5 ? 0 : ln < 0.9 ? 1 : ln < 1.1 ? 2 : ln < 2 ? 3 : ln < 10 ? 4 : ln < 100 ? 5 : ln < 1000 ? 6 : 7; ++g_nlen_hist[b]; } }
-    if (d->tpw_we) { g_tp_dif[d->tpw_idx] = d->tpw_diffuse; g_tp_amb[d->tpw_idx] = d->tpw_ambient; g_tp_seen[d->tpw_idx] = true; }
+    if (d->tpw_we) { g_tp_dif[d->tpw_idx] = d->tpw_diffuse; g_tp_amb[d->tpw_idx] = d->tpw_ambient; g_tp_seen[d->tpw_idx] = true; ++g_tp_w[d->tpw_idx]; }
     if (d->lit_x_o != g_lit_last[0] || d->lit_y_o != g_lit_last[1] || d->lit_z_o != g_lit_last[2]) {
       g_lit_last[0] = d->lit_x_o; g_lit_last[1] = d->lit_y_o; g_lit_last[2] = d->lit_z_o;
       ++g_lights[(uint64_t(d->lit_x_o) << 32) ^ (uint64_t(d->lit_y_o) << 11) ^ d->lit_z_o];
