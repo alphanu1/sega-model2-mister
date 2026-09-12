@@ -108,6 +108,9 @@ module m2_geometry (
   input  logic        q_ready,
   output logic signed [15:0] q_x0, q_y0, q_x1, q_y1,
   output logic signed [15:0] q_x2, q_y2, q_x3, q_y3,
+  // R270: the quad's texture coordinates, clipped with it, as floats.
+  output logic [31:0] q_u0, q_v0, q_u1, q_v1,
+  output logic [31:0] q_u2, q_v2, q_u3, q_v3,
   output logic [23:0] q_col,
   output logic [31:0] q_z,
 
@@ -470,9 +473,31 @@ module m2_geometry (
     end
   endfunction
 
+  // R270: THE PAIRS ARE 16-BIT INTEGERS AND THE CLIPPER IS FLOAT. MAME reads
+  // them straight into a float field -- `object.v[0].pu = *tp++` with tp a
+  // u16* -- so the conversion is unsigned, and it is a normalise rather than
+  // arithmetic: the top set bit gives the exponent and what follows it is the
+  // mantissa.
+  function automatic logic [31:0] u2f(input logic [15:0] n);
+    logic [3:0] e;
+    logic [15:0] m;
+    begin
+      if (n == 16'd0) u2f = 32'd0;
+      else begin
+        e = 4'd0;
+        for (int b = 15; b >= 0; b--) if (n[b] && e == 4'd0) e = 4'(b);
+        m = n << (4'd15 - e);                       // top bit at 15
+        u2f = {1'b0, 8'(8'd127 + {4'd0, e}), m[14:0], 8'd0};
+      end
+    end
+  endfunction
+
+  logic [31:0] hu [4], hv [4];
+
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       qst <= Q_IDLE; qi <= 2'd0; clip_in_valid <= 1'b0; hzmin <= 32'd0; hzmax <= 32'd0;
+      for (int k = 0; k < 4; k++) begin hu[k] <= 32'd0; hv[k] <= 32'd0; end
       zprev <= 32'h5011B5EA; hzkey <= 16'd0;   // 1e10, as render_frame_start sets it
       dbg_nonfinite <= 16'd0; dbg_behind <= 16'd0; pj_wait <= 10'd0; dbg_pj_lost <= 16'd0;
       cvalid <= 1'b0;
@@ -499,6 +524,11 @@ module m2_geometry (
           hx[1] <= v1x; hy[1] <= v1y; hz[1] <= v1z;
           hx[2] <= v2x; hy[2] <= v2y; hz[2] <= v2z;
           hx[3] <= v3x; hy[3] <= v3y; hz[3] <= v3z;
+          // R268 hands them over as {v, u}, v in the high half.
+          hu[0] <= u2f(poly_uv0[15:0]); hv[0] <= u2f(poly_uv0[31:16]);
+          hu[1] <= u2f(poly_uv1[15:0]); hv[1] <= u2f(poly_uv1[31:16]);
+          hu[2] <= u2f(poly_uv2[15:0]); hv[2] <= u2f(poly_uv2[31:16]);
+          hu[3] <= u2f(poly_uv3[15:0]); hv[3] <= u2f(poly_uv3[31:16]);
           pcol  <= poly_col;                       // R222
           hzmin <= zmin_c;
           hzmax <= zmax_c;
@@ -581,6 +611,8 @@ module m2_geometry (
     .in_x3(hx[3]), .in_y3(hy[3]), .in_z3(hz[3]),
     .in_sx0(sx[0]), .in_sy0(sy[0]), .in_sx1(sx[1]), .in_sy1(sy[1]),
     .in_sx2(sx[2]), .in_sy2(sy[2]), .in_sx3(sx[3]), .in_sy3(sy[3]),
+    .in_u0(hu[0]), .in_v0(hv[0]), .in_u1(hu[1]), .in_v1(hv[1]),
+    .in_u2(hu[2]), .in_v2(hv[2]), .in_u3(hu[3]), .in_v3(hv[3]),
     .in_col(pcol), .in_z({16'd0, hzkey}), .in_moire(1'b0),   // R246: the reference's 16-bit z value
     .mul_req(mul_req[2]), .mul_a(mul_a[2]), .mul_b(mul_b[2]),
     .mul_gnt(mul_gnt[2]), .mul_rsp(mul_rsp[2]), .mul_res(mul_res),
@@ -594,6 +626,8 @@ module m2_geometry (
     .out_valid(q_valid), .out_ready(q_ready),
     .out_sx0(q_x0), .out_sy0(q_y0), .out_sx1(q_x1), .out_sy1(q_y1),
     .out_sx2(q_x2), .out_sy2(q_y2), .out_sx3(q_x3), .out_sy3(q_y3),
+    .out_u0(q_u0), .out_v0(q_v0), .out_u1(q_u1), .out_v1(q_v1),
+    .out_u2(q_u2), .out_v2(q_v2), .out_u3(q_u3), .out_v3(q_v3),
     .out_col(q_col), .out_z(q_z), .out_moire(),
     .dbg_in(dbg_clip_in), .dbg_out(dbg_clip_out), .dbg_dropped(dbg_clip_dropped)
   );

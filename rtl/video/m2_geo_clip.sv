@@ -112,6 +112,13 @@ module m2_geo_clip (
   input  logic [31:0] in_x3, in_y3, in_z3,
   input  logic signed [15:0] in_sx0, in_sy0, in_sx1, in_sy1,
   input  logic signed [15:0] in_sx2, in_sy2, in_sx3, in_sy3,
+  // R270: THE TEXTURE COORDINATES, AS FLOATS, ONE PAIR A VERTEX. A created
+  // vertex interpolates them on the same t the position uses -- MAME's
+  // clip_polygon does exactly that, `out.pu = cur->pu + (next->pu - cur->pu) *
+  // scale`, beside the three position terms. A clipper that cuts the shape and
+  // not the texture slides the picture across every polygon it touches.
+  input  logic [31:0] in_u0, in_v0, in_u1, in_v1,
+  input  logic [31:0] in_u2, in_v2, in_u3, in_v3,
   // THE ATTRIBUTES RIDE WITH THE QUAD, and they have to be latched here.
   // The walker moves on as soon as this module accepts, so by the time a
   // clipped quad is emitted - hundreds of cycles later - the walker's colour
@@ -156,6 +163,8 @@ module m2_geo_clip (
   output logic [23:0] out_col,
   output logic [31:0] out_z,
   output logic        out_moire,
+  output logic [31:0] out_u0, out_v0, out_u1, out_v1,
+  output logic [31:0] out_u2, out_v2, out_u3, out_v3,
 
   // Counted: quads in, quads out, and how many were dropped entirely. A clipper
   // that silently drops everything and one that passes everything through look
@@ -170,12 +179,14 @@ module m2_geo_clip (
   // Four points in registers. Every read of these is a 4-to-1 mux, which is the
   // whole point of not having a pool.
   logic [31:0]        qx [4], qy [4], qz [4];
+  logic [31:0]        qu [4], qv [4];             // R270
   logic signed [15:0] qsx [4], qsy [4];   // filled at emit, not carried
   logic [2:0]         lvl;
   logic [3:0]         is_out;
 
   // The points this level creates. At most four, in the "0,2 out" case.
   logic [31:0]        tx [4], ty [4], tz [4];
+  logic [31:0]        tu [4], tv [4];             // R270
 
   // ------------------------------------------------------------- the stack
   // A shift register: the top is always entry 0, so a push shifts down and a
@@ -186,8 +197,11 @@ module m2_geo_clip (
   // the muxes to move them; as an MLAB indexed by {level, vertex} a push
   // writes four entries over four cycles and a pop reads four, and the
   // clipper pushes and pops only for polygons a plane actually cuts.
-  (* ramstyle = "MLAB" *) logic [98:0] sk_mem [NSTK*4];   // {px, id, z, y, x}
-  logic [98:0]        sk_rd;
+  // R270: {px, id, v, u, z, y, x}. The texture coordinates have to ride with
+  // the position: a child quad is popped levels later and its vertices are
+  // whatever the stack kept.
+  (* ramstyle = "MLAB" *) logic [162:0] sk_mem [NSTK*4];
+  logic [162:0]       sk_rd;
   logic [2:0]         pcnt;                     // the pop's vertex counter, 0..4
   // The read address: vertex 0 of the top level in K_POP, vertex pcnt after.
   wire  [1:0]         pop_va     = (kst == K_POP) ? 2'd0 : pcnt[1:0];
@@ -243,7 +257,7 @@ module m2_geo_clip (
   logic [1:0] cp_dst;                        // which temporary
   logic       second_child;
   logic [3:0] cs;
-  logic [1:0] c_axis;
+  logic [2:0] c_axis;          // R270: 0=x 1=y 2=z 3=u 4=v
   logic [31:0] c_num, c_den, c_t, c_u, c_m1, c_m2;
   logic [23:0] a_col;
   logic [31:0] a_z;
@@ -277,6 +291,8 @@ module m2_geo_clip (
   // ------------------------------------------------------------ operands
   wire [31:0] ax = qx[cp_a], ay = qy[cp_a], az = qz[cp_a];
   wire [31:0] bx = qx[cp_b], by = qy[cp_b], bz = qz[cp_b];
+  wire [31:0] au = qu[cp_a], bu = qu[cp_b];
+  wire [31:0] av = qv[cp_a], bv = qv[cp_b];
   wire [31:0] a_v = plane_x ? ax : ay;
   wire [31:0] b_v = plane_x ? bx : by;
   wire [31:0] test_v = plane_x ? qx[ti] : qy[ti];
@@ -338,10 +354,12 @@ module m2_geo_clip (
         4'd6: begin div_req = 1'b1; div_a = c_num; div_b = c_den; end
         4'd7: begin add_req = 1'b1; add_a = F_ONE; add_b = c_t;   add_sub = 1'b1; end
         4'd8: begin mul_req = 1'b1;
-                    mul_a = (c_axis == 2'd0) ? ax : (c_axis == 2'd1) ? ay : az;
+                    mul_a = (c_axis == 3'd0) ? ax : (c_axis == 3'd1) ? ay
+                          : (c_axis == 3'd2) ? az : (c_axis == 3'd3) ? au : av;
                     mul_b = c_t; end
         4'd9: begin mul_req = 1'b1;
-                    mul_a = (c_axis == 2'd0) ? bx : (c_axis == 2'd1) ? by : bz;
+                    mul_a = (c_axis == 3'd0) ? bx : (c_axis == 3'd1) ? by
+                          : (c_axis == 3'd2) ? bz : (c_axis == 3'd3) ? bu : bv;
                     mul_b = c_u; end
         default: begin add_req = 1'b1; add_a = c_m1; add_b = c_m2; end
       endcase
@@ -362,6 +380,10 @@ module m2_geo_clip (
   assign out_sx2 = qsx[2]; assign out_sy2 = qsy[2];
   assign out_sx3 = qsx[3]; assign out_sy3 = qsy[3];
   assign out_col = a_col; assign out_z = a_z; assign out_moire = a_moire;
+  assign out_u0 = qu[0]; assign out_v0 = qv[0];
+  assign out_u1 = qu[1]; assign out_v1 = qv[1];
+  assign out_u2 = qu[2]; assign out_v2 = qv[2];
+  assign out_u3 = qu[3]; assign out_v3 = qv[3];
 
   // ---------------------------------------------------------------- sequencer
   integer si, sv;
@@ -378,6 +400,7 @@ module m2_geo_clip (
         qx[si] <= '0; qy[si] <= '0; qz[si] <= '0; qsx[si] <= '0; qsy[si] <= '0; qpx[si] <= 1'b0; qid[si] <= 2'd0;
         ipx[si] <= '0; ipy[si] <= '0;
         tx[si] <= '0; ty[si] <= '0; tz[si] <= '0;
+        qu[si] <= '0; qv[si] <= '0; tu[si] <= '0; tv[si] <= '0;
       end
       for (si = 0; si < NSTK; si = si + 1) begin
         sk_lvl[si] <= '0;
@@ -389,6 +412,8 @@ module m2_geo_clip (
           qx[1] <= in_x1; qy[1] <= in_y1; qz[1] <= in_z1;
           qx[2] <= in_x2; qy[2] <= in_y2; qz[2] <= in_z2;
           qx[3] <= in_x3; qy[3] <= in_y3; qz[3] <= in_z3;
+          qu[0] <= in_u0; qv[0] <= in_v0; qu[1] <= in_u1; qv[1] <= in_v1;
+          qu[2] <= in_u2; qv[2] <= in_v2; qu[3] <= in_u3; qv[3] <= in_v3;
           ipx[0] <= in_sx0; ipy[0] <= in_sy0; ipx[1] <= in_sx1; ipy[1] <= in_sy1;
           ipx[2] <= in_sx2; ipy[2] <= in_sy2; ipx[3] <= in_sx3; ipy[3] <= in_sy3;
           qpx[0] <= 1'b1; qpx[1] <= 1'b1; qpx[2] <= 1'b1; qpx[3] <= 1'b1;   // R218
@@ -412,8 +437,10 @@ module m2_geo_clip (
           qx[pcnt[1:0] - 2'd1]  <= sk_rd[31:0];
           qy[pcnt[1:0] - 2'd1]  <= sk_rd[63:32];
           qz[pcnt[1:0] - 2'd1]  <= sk_rd[95:64];
-          qid[pcnt[1:0] - 2'd1] <= sk_rd[97:96];
-          qpx[pcnt[1:0] - 2'd1] <= sk_rd[98];
+          qu[pcnt[1:0] - 2'd1]  <= sk_rd[127:96];
+          qv[pcnt[1:0] - 2'd1]  <= sk_rd[159:128];
+          qid[pcnt[1:0] - 2'd1] <= sk_rd[161:160];
+          qpx[pcnt[1:0] - 2'd1] <= sk_rd[162];
           if (pcnt == 3'd4) begin
             lvl <= sk_lvl[sp - 3'd1];
             sp  <= sp - 3'd1;
@@ -463,7 +490,7 @@ module m2_geo_clip (
           cp_b   <= edge_b(ccase, cn);
           cp_dst <= cn;
           cs     <= '0;
-          c_axis <= '0;
+          c_axis <= 3'd0;
           kst    <= K_CLIP;
         end
 
@@ -486,16 +513,18 @@ module m2_geo_clip (
           4'd9: if (mul_rsp) begin c_m2  <= mul_res; cs <= 4'd10; kst <= K_CLIP; end
           default: if (add_rsp) begin
             case (c_axis)
-              2'd0:    tx[cp_dst] <= add_res;
-              2'd1:    ty[cp_dst] <= add_res;
-              default: tz[cp_dst] <= add_res;
+              3'd0:    tx[cp_dst] <= add_res;
+              3'd1:    ty[cp_dst] <= add_res;
+              3'd2:    tz[cp_dst] <= add_res;
+              3'd3:    tu[cp_dst] <= add_res;
+              default: tv[cp_dst] <= add_res;
             endcase
-            if (c_axis == 2'd2) begin
+            if (c_axis == 3'd4) begin
               // No projection here any more: a created vertex carries only its
               // camera coordinates and is projected when its quad is emitted.
               if (cn == cn_last) kst <= K_CHILD;
               else begin cn <= cn + 2'd1; kst <= K_SET; end
-            end else begin c_axis <= c_axis + 2'd1; cs <= 4'd8; kst <= K_CLIP; end
+            end else begin c_axis <= c_axis + 3'd1; cs <= 4'd8; kst <= K_CLIP; end
           end
         endcase
 
@@ -528,6 +557,8 @@ module m2_geo_clip (
           k = kid(ccase, second_child, sv_i);
           sk_mem[{sp[2:0], sv_i}] <= {k[2] ? 1'b0 : qpx[k[1:0]],
                                       k[2] ? 2'd0 : qid[k[1:0]],
+                                      k[2] ? tv[k[1:0]] : qv[k[1:0]],
+                                      k[2] ? tu[k[1:0]] : qu[k[1:0]],
                                       k[2] ? tz[k[1:0]] : qz[k[1:0]],
                                       k[2] ? ty[k[1:0]] : qy[k[1:0]],
                                       k[2] ? tx[k[1:0]] : qx[k[1:0]]};

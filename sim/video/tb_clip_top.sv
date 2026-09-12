@@ -24,8 +24,12 @@ module tb_clip_top (
   input  logic [31:0] in_x2, in_y2, in_z2, in_x3, in_y3, in_z3,
   input  logic signed [15:0] in_sx0, in_sy0, in_sx1, in_sy1,
   input  logic signed [15:0] in_sx2, in_sy2, in_sx3, in_sy3,
+  input  logic [31:0] in_u0, in_v0, in_u1, in_v1,
+  input  logic [31:0] in_u2, in_v2, in_u3, in_v3,
 
   output logic        out_valid,
+  output logic [31:0] out_u0, out_v0, out_u1, out_v1,
+  output logic [31:0] out_u2, out_v2, out_u3, out_v3,
   output logic signed [15:0] out_sx0, out_sy0, out_sx1, out_sy1,
   output logic signed [15:0] out_sx2, out_sy2, out_sx3, out_sy3,
   output logic [15:0] dbg_in, dbg_out, dbg_dropped
@@ -84,6 +88,8 @@ module tb_clip_top (
     .in_x3(in_x3), .in_y3(in_y3), .in_z3(in_z3),
     .in_sx0(in_sx0), .in_sy0(in_sy0), .in_sx1(in_sx1), .in_sy1(in_sy1),
     .in_sx2(in_sx2), .in_sy2(in_sy2), .in_sx3(in_sx3), .in_sy3(in_sy3),
+    .in_u0(in_u0), .in_v0(in_v0), .in_u1(in_u1), .in_v1(in_v1),
+    .in_u2(in_u2), .in_v2(in_v2), .in_u3(in_u3), .in_v3(in_v3),
     .in_col(24'h334455), .in_z(32'h40000000), .in_moire(1'b0),
     .mul_req(mul_req[1]), .mul_a(mul_a[1]), .mul_b(mul_b[1]),
     .mul_gnt(mul_gnt[1]), .mul_rsp(mul_rsp[1]), .mul_res(mul_res),
@@ -99,6 +105,8 @@ module tb_clip_top (
     .out_valid(out_valid), .out_ready(1'b1),
     .out_sx0(out_sx0), .out_sy0(out_sy0), .out_sx1(out_sx1), .out_sy1(out_sy1),
     .out_sx2(out_sx2), .out_sy2(out_sy2), .out_sx3(out_sx3), .out_sy3(out_sy3),
+    .out_u0(out_u0), .out_v0(out_v0), .out_u1(out_u1), .out_v1(out_v1),
+    .out_u2(out_u2), .out_v2(out_v2), .out_u3(out_u3), .out_v3(out_v3),
     .out_col(), .out_z(), .out_moire(),
     .dbg_in(dbg_in), .dbg_out(dbg_out), .dbg_dropped(dbg_dropped)
   );

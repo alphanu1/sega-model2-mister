@@ -18,6 +18,7 @@
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
+#include <cmath>
 #include <vector>
 #include <random>
 
@@ -25,6 +26,7 @@ static uint32_t f2u(float f) { uint32_t u; memcpy(&u, &f, 4); return u; }
 static float    u2f(uint32_t u) { float f; memcpy(&f, &u, 4); return f; }
 
 static long checks = 0, fails = 0;
+static long uvchecks = 0, uvfails = 0;
 static void check(bool ok, const char* what) {
     checks++;
     if (!ok) { fails++; printf("  FAIL %s\n", what); }
@@ -34,7 +36,7 @@ static void check(bool ok, const char* what) {
 // model1_v.cpp fclip_push_quad. The same code as tb_m1_geometry's, here so the
 // two clippers can be diffed on one quad at a time instead of across a whole
 // object where the first disagreement is buried.
-struct CP { float x, y, z; int sx, sy; };
+struct CP { float x, y, z; int sx, sy; float u, v; };
 static float G_L, G_R, G_B, G_T, G_XC, G_YC, G_ZX, G_ZY, G_VX, G_VY;
 
 static void cproject(CP& p) {
@@ -61,14 +63,21 @@ static CP cclip(int level, const CP& p1, const CP& p2) {
     r.x = p1.x * t + p2.x * (1 - t);
     r.y = p1.y * t + p2.y * (1 - t);
     r.z = p1.z * t + p2.z * (1 - t);
+    // R270: the texture coordinates take the same t. MAME's model2 clipper
+    // does this beside the position (`out.pu = cur->pu + (next->pu - cur->pu)
+    // * scale`); a clipper that cuts the shape and not the texture slides the
+    // picture across every polygon it touches.
+    r.u = p1.u * t + p2.u * (1 - t);
+    r.v = p1.v * t + p2.v * (1 - t);
     cproject(r);
     return r;
 }
-struct OutQ { int sx[4], sy[4]; };
+struct OutQ { int sx[4], sy[4]; float u[4], v[4]; };
 static void cfclip(int level, const CP q[4], std::vector<OutQ>& out) {
     if (level == 4) {
         OutQ o;
-        for (int i = 0; i < 4; i++) { o.sx[i] = q[i].sx; o.sy[i] = q[i].sy; }
+        for (int i = 0; i < 4; i++) { o.sx[i] = q[i].sx; o.sy[i] = q[i].sy;
+                                     o.u[i] = q[i].u;  o.v[i] = q[i].v; }
         out.push_back(o); return;
     }
     bool io[4];
@@ -151,6 +160,10 @@ int main(int argc, char** argv) {
             float m = (q[i].z > 0.1f) ? q[i].z : 1.0f;
             q[i].x = frand(-1.4f, 1.4f) * m;
             q[i].y = frand(-1.2f, 1.2f) * m;
+            // R270: texture coordinates as the game supplies them -- 16-bit
+            // integers, scaled by 8 in the reference's own units.
+            q[i].u = (float)(rng() % 16384);
+            q[i].v = (float)(rng() % 16384);
             cproject(q[i]);
         }
         // And degenerate quads: a repeated vertex is how every triangle in this
@@ -168,6 +181,10 @@ int main(int argc, char** argv) {
         d->in_sx1 = q[1].sx; d->in_sy1 = q[1].sy;
         d->in_sx2 = q[2].sx; d->in_sy2 = q[2].sy;
         d->in_sx3 = q[3].sx; d->in_sy3 = q[3].sy;
+        d->in_u0 = f2u(q[0].u); d->in_v0 = f2u(q[0].v);
+        d->in_u1 = f2u(q[1].u); d->in_v1 = f2u(q[1].v);
+        d->in_u2 = f2u(q[2].u); d->in_v2 = f2u(q[2].v);
+        d->in_u3 = f2u(q[3].u); d->in_v3 = f2u(q[3].v);
         d->in_valid = 1;
 
         std::vector<OutQ> got;
@@ -180,6 +197,10 @@ int main(int argc, char** argv) {
                 o.sx[1] = (int16_t)d->out_sx1; o.sy[1] = (int16_t)d->out_sy1;
                 o.sx[2] = (int16_t)d->out_sx2; o.sy[2] = (int16_t)d->out_sy2;
                 o.sx[3] = (int16_t)d->out_sx3; o.sy[3] = (int16_t)d->out_sy3;
+                o.u[0] = u2f(d->out_u0); o.v[0] = u2f(d->out_v0);
+                o.u[1] = u2f(d->out_u1); o.v[1] = u2f(d->out_v1);
+                o.u[2] = u2f(d->out_u2); o.v[2] = u2f(d->out_v2);
+                o.u[3] = u2f(d->out_u3); o.v[3] = u2f(d->out_v3);
                 got.push_back(o);
             }
             if (!d->in_valid && d->in_ready && c > 4) break;
@@ -192,6 +213,22 @@ int main(int argc, char** argv) {
                 for (int v = 0; v < 4; v++)
                     if (labs((long)got[k].sx[v] - exp[k].sx[v]) > 1 ||
                         labs((long)got[k].sy[v] - exp[k].sy[v]) > 1) { bad = true; break; }
+        // R270: and the texture coordinates, to a tolerance that is a texel
+        // rather than a bit -- the hardware's divide is not the host's.
+        if (!bad)
+            for (size_t k = 0; k < exp.size(); k++)
+                for (int v = 0; v < 4; v++) {
+                    uvchecks++;
+                    const float du = fabsf(got[k].u[v] - exp[k].u[v]);
+                    const float dv = fabsf(got[k].v[v] - exp[k].v[v]);
+                    const float tol = 8.0f + 0.002f * fabsf(exp[k].u[v]);
+                    if (du > tol || dv > 8.0f + 0.002f * fabsf(exp[k].v[v])) {
+                        if (uvfails++ < 5)
+                            printf("  UV MISMATCH iter %d quad %zu v%d: got (%.1f,%.1f) "
+                                   "want (%.1f,%.1f)\n", iter, k, v,
+                                   got[k].u[v], got[k].v[v], exp[k].u[v], exp[k].v[v]);
+                    }
+                }
         if (bad) {
             fails++;
             if (printed++ < 3) {
@@ -213,6 +250,8 @@ int main(int argc, char** argv) {
         }
     }
     printf("  fuzzed %ld quads, %ld disagreed\n", checks, fails);
+    printf("  texture coordinates: %ld vertices checked, %ld wrong\n", uvchecks, uvfails);
+    fails += uvfails;
 
     // ------------------------------------------------------------------
     // The three quads m1_geometry hands over on the iteration where the

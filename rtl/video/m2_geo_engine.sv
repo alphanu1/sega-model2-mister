@@ -663,7 +663,18 @@ module m2_geo_engine #(
             3'd2: poly_uv1[31:16] <= w;
             3'd3: poly_uv1[15:0]  <= w;
             3'd4: poly_uv2[31:16] <= w;
-            3'd5: poly_uv2[15:0]  <= w;
+            // R270: A TRIANGLE'S FOURTH VERTEX TAKES THE THIRD'S PAIR. The
+            // reference ropes P1(n) = P0(n) for a triangle and never touches
+            // v[3]'s pu/pv, because render_triangle does not read them -- but
+            // this pipeline carries every polygon as a four-vertex quad, and a
+            // duplicated POSITION with a stale texture coordinate is not a
+            // duplicated vertex: it fits a different parameter plane and slews
+            // the texture across the triangle. poly_uv2[31:16] landed last
+            // cycle, so the pair is complete here.
+            3'd5: begin
+              poly_uv2[15:0] <= w;
+              if (!attr[0]) poly_uv3 <= {poly_uv2[31:16], w};
+            end
             3'd6: poly_uv3[31:16] <= w;
             default: poly_uv3[15:0] <= w;
           endcase

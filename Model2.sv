@@ -2808,6 +2808,9 @@ wire        cpu_buf_inval;   // R266: the CPU wrote the display list
 // with no texture input at all, so shape comes first and shading second.
 wire        q3d_valid, q3d_ready;
 wire signed [15:0] q3d_x0, q3d_y0, q3d_x1, q3d_y1, q3d_x2, q3d_y2, q3d_x3, q3d_y3;
+/* verilator lint_off UNUSEDSIGNAL */
+wire [31:0] q3d_u0, q3d_v0, q3d_u1, q3d_v1, q3d_u2, q3d_v2, q3d_u3, q3d_v3;   // R270
+/* verilator lint_on UNUSEDSIGNAL */
 wire [23:0] q3d_col;
 wire [31:0] q3d_z;
 wire [15:0] geo_polys, geo_objs_done, geo_capped, geo_culled;
@@ -2864,6 +2867,11 @@ m2_geometry u_geometry (
 	.q_valid(q3d_valid), .q_ready(q3d_ready),
 	.q_x0(q3d_x0), .q_y0(q3d_y0), .q_x1(q3d_x1), .q_y1(q3d_y1),
 	.q_x2(q3d_x2), .q_y2(q3d_y2), .q_x3(q3d_x3), .q_y3(q3d_y3),
+	// R270: the clipped texture coordinates. The rasteriser side lands next --
+	// they are named here rather than left empty so the width is checked and
+	// the connection is one edit when the quad store carries them.
+	.q_u0(q3d_u0), .q_v0(q3d_v0), .q_u1(q3d_u1), .q_v1(q3d_v1),
+	.q_u2(q3d_u2), .q_v2(q3d_v2), .q_u3(q3d_u3), .q_v3(q3d_v3),
 	.q_col(q3d_col), .q_z(q3d_z),
 	.dbg_polys(geo_polys), .dbg_objects(geo_objs_done), .dbg_capped(geo_capped),
 	.dbg_culled(geo_culled),

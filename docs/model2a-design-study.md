@@ -14263,3 +14263,48 @@ and scanline overruns, PER FRAME rather than cumulative -- because the decision
 that follows (halve the cache, take the 51 blocks, spend them on textures) has
 to be made against what a real frame costs, and a total that has been climbing
 since boot cannot say whether anything helped.
+
+**R270 -- THE CLIPPER CUTS THE TEXTURE AS WELL AS THE SHAPE.** R268 read the
+per-vertex pairs; they now survive the clip. A created vertex takes its `u` and
+`v` on the same `t` the position takes, which is what the reference does:
+
+    out[outcount].pu = cur->pu + ((v[nextvert].pu - cur->pu) * scale);
+    out[outcount].pv = cur->pv + ((v[nextvert].pv - cur->pv) * scale);
+
+sitting directly beside the three position terms in `clip_polygon`. A clipper
+that cuts the shape and not the texture does not lose the texture -- it SLIDES
+it, across every polygon a plane touches, which on a road that runs off both
+sides of the screen is every polygon that matters.
+
+`m2_geo_clip` is Model 1's `fclip_push_quad` rather than Model 2's
+Sutherland-Hodgman, but the created point is the same lerp, so the change is
+two more axes on the loop that already computes x, y and z: `c_axis` runs 0..4,
+`qu/qv` and `tu/tv` join the quad and the temporaries, and the stack entry goes
+from 99 bits to 163. Six more pool operations per created vertex, on polygons a
+plane actually cuts.
+
+THE PAIRS ARE 16-BIT INTEGERS AND THE CLIPPER IS FLOAT, so `m2_geometry`
+converts on the way in -- unsigned, because the reference reads them through a
+`u16*` into a float field. The conversion is a normalise, not arithmetic: the
+top set bit is the exponent and what follows it is the mantissa.
+
+AND A TRIANGLE'S FOURTH VERTEX TAKES THE THIRD'S PAIR. The reference ropes
+P1(n) = P0(n) for a triangle and never writes `v[3]`'s `pu`/`pv` at all,
+because `render_triangle` never reads them. This pipeline carries every polygon
+as a four-vertex quad, so leaving that pair stale is not the same thing: a
+duplicated POSITION with a different texture coordinate fits a different
+parameter plane and slews the texture across the whole triangle. Six words are
+consumed, not eight, and the fourth pair is copied.
+
+`tb_m2_geo_clip` grew the pairs into its transcription of the reference and
+compares them per emitted vertex to a tolerance of a texel: 2,000 fuzzed quads,
+20,044 vertices, zero wrong. Swapping u and v in the operand mux fails 19,688 of
+them; dropping them from the stack pop fails the same number. `tb_m2_geo_engine`
+checks the triangle rope (54 checks), and inverting its condition fails it.
+
+The quad store does not carry them yet -- `q_u*`/`q_v*` are named at the top
+level and go no further -- because that is an M10K decision and the board has
+not yet reported R269's numbers. Four vertices of {u, v} is 128 bits a quad,
+2,048 quads, two banks: 51 blocks, which is exactly what halving the glyph
+cache gives back. Adding 1/z per vertex for the perspective divide is another
+26 on top.

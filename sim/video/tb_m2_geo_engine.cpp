@@ -409,6 +409,37 @@ int main(int argc, char** argv) {
     d->tpa = 0;
   }
 
+  // ---- R270: a TRIANGLE's fourth vertex takes the third's pair ----
+  //
+  // The reference ropes P1(n) = P0(n) for a triangle and never writes v[3]'s
+  // pu/pv, because render_triangle never reads them. This pipeline carries
+  // every polygon as a four-vertex quad, so the duplicated vertex must carry
+  // the duplicated texture coordinate too -- a stale pair at the same position
+  // fits a different parameter plane and slews the texture across the whole
+  // triangle. Six words are consumed, not eight.
+  {
+    const uint32_t TP = 0x60;
+    for (int i = 0; i < 8; i++) thdr[TP + i] = uint16_t(0x2000 + i);
+    d->tpa = TP;
+    size_t w = 0;
+    w = put_xyz(w, 100.0f);                 // P0(n-1)
+    w = put_xyz(w, 200.0f);                 // P1(n-1)
+    obj[w++] = 0x00020202u;                 // TRIANGLE: (attr&3)==2, link 2
+    w = put_xyz(w, 0.0f);                   // normal
+    w = put_xyz(w, 300.0f);                 // P0(n)
+    w = put_xyz(w, 400.0f);                 // the word a triangle still consumes
+    obj[w++] = 0x00000000u;
+    d->oba = 0; d->obc = 16;
+    d->start = 1; tick(); d->start = 0;
+    for (int budget = 0; budget < 60000 && (d->busy || budget < 10); budget++) tick();
+    std::printf("test: R270, a triangle's fourth pair is its third\n");
+    ck("vertex 2 v", (d->poly_uv2 >> 16) & 0xffff, 0x2004);
+    ck("vertex 2 u",  d->poly_uv2        & 0xffff, 0x2005);
+    ck("vertex 3 v", (d->poly_uv3 >> 16) & 0xffff, 0x2004);
+    ck("vertex 3 u",  d->poly_uv3        & 0xffff, 0x2005);
+    d->tpa = 0;
+  }
+
 
   std::printf("m2_geo_engine: checks=%ld fails=%ld\n", checks, fails);
   delete d;
