@@ -4236,7 +4236,7 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	      : (tps_ph == 3'd1)                  ? {3'd0, tps_sel, tps_dif[tps_sel], tps_amb[tps_sel], geo_tp_n[7:0]}   // R251
 	      : (tps_ph == 3'd3)                  ? {geo_walk_flip[7:0], geo_walk_fb[7:0], geo_walk_unknown[7:0], geo_dropped[7:0]}   // R255/R263
 	      : (tps_ph == 3'd2)                  ? {cc_f_f, vid_ovr_frame}         // R269: sibling fills : scanlines that overran, last frame
-	      : (tps_ph == 3'd4)                  ? {tx_h_f, tex_lost}              // R275: texel hits : fetches abandoned on a dead memory
+	      : (tps_ph == 3'd4)                  ? {tx_h_f, tx_n_f}                // R275: texel hits : texels that were not 0xF
 	      : {lum_mean_f, lum_zpc_f, wedge_slot, wedge_n[6:0], r3d_quads[11:4]}),   // R249: the frame's mean luminance and its black-polygon percentage, where the always-zero drop count and the free-running miss count were
 	.a_tag(8'h43),
 	.b_tag((wedge_have && wedge_ph == 2'd1) ? 8'h57 : (wedge_have && wedge_ph == 2'd2) ? 8'h58
@@ -5223,8 +5223,8 @@ logic [31:0] cc_h_p, cc_m_p, cc_f_p;
 logic [15:0] cc_h_f, cc_m_f, cc_f_f;
 // R275: the same, for the texture path. Pixels textured, and how the texel
 // cache behaved -- the pair that says whether the walk is affordable.
-logic [31:0] tx_p_p, tx_h_p, tx_m_p;
-logic [15:0] tx_p_f, tx_h_f, tx_m_f;
+logic [31:0] tx_p_p, tx_h_p, tx_m_p, tx_n_p;
+logic [15:0] tx_p_f, tx_h_f, tx_m_f, tx_n_f;
 function automatic logic [15:0] sat16d(input logic [31:0] now, input logic [31:0] prev);
 	logic [31:0] d;
 	begin
@@ -5237,8 +5237,8 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		cvb_d <= 1'b0; cvb_dd <= 1'b0;
 		cc_h_p <= 32'd0; cc_m_p <= 32'd0; cc_f_p <= 32'd0;
 		cc_h_f <= 16'd0; cc_m_f <= 16'd0; cc_f_f <= 16'd0;
-		tx_p_p <= 32'd0; tx_h_p <= 32'd0; tx_m_p <= 32'd0;
-		tx_p_f <= 16'd0; tx_h_f <= 16'd0; tx_m_f <= 16'd0;
+		tx_p_p <= 32'd0; tx_h_p <= 32'd0; tx_m_p <= 32'd0; tx_n_p <= 32'd0;
+		tx_p_f <= 16'd0; tx_h_f <= 16'd0; tx_m_f <= 16'd0; tx_n_f <= 16'd0;
 	end else begin
 		cvb_d  <= tile_vb;
 		cvb_dd <= cvb_d;
@@ -5252,9 +5252,11 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 			tx_p_f <= sat16d(tex_pixels, tx_p_p);
 			tx_h_f <= sat16d(tex_hits,   tx_h_p);
 			tx_m_f <= sat16d(tex_misses, tx_m_p);
+			tx_n_f <= sat16d(tex_nz, tx_n_p);
 			tx_p_p <= tex_pixels;
 			tx_h_p <= tex_hits;
 			tx_m_p <= tex_misses;
+			tx_n_p <= tex_nz;
 		end
 	end
 end
@@ -5349,7 +5351,7 @@ wire [31:0] r3d_pixels;
 wire        tex_m_req, tex_m_ack;
 wire [SDR_AW:1] tex_m_addr;
 wire [63:0] tex_m_data;
-wire [31:0] tex_pixels, tex_hits, tex_misses;
+wire [31:0] tex_pixels, tex_hits, tex_misses, tex_nz;
 wire [15:0] tex_lost;
 
 m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(4),
@@ -5376,7 +5378,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(4),
 	.tex_m_req(tex_m_req), .tex_m_addr(tex_m_addr),
 	.tex_m_ack(tex_m_ack), .tex_m_data(tex_m_data),
 	.dbg_texpix(tex_pixels), .dbg_texhit(tex_hits), .dbg_texmiss(tex_misses),
-	.dbg_texlost(tex_lost),
+	.dbg_texlost(tex_lost), .dbg_texnz(tex_nz),
 	.q_moire(1'b0), .q_end(q3d_end),
 	.scan_clk(clk_sys), .scan_x(vid_x), .scan_y(vid_y),
 	.scan_col(r3d_col), .scan_hit(r3d_hit),

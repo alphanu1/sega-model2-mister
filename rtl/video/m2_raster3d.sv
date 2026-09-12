@@ -80,7 +80,7 @@ module m2_raster3d #(
   output logic [TEX_AW:1] tex_m_addr,
   input  logic            tex_m_ack,
   input  logic [63:0]     tex_m_data,
-  output logic [31:0]     dbg_texpix, dbg_texhit, dbg_texmiss,
+  output logic [31:0]     dbg_texpix, dbg_texhit, dbg_texmiss, dbg_texnz,
   output logic [15:0]     dbg_texlost,
 
   output logic [15:0] dbg_quads,
@@ -261,7 +261,7 @@ module m2_raster3d #(
     .out_col(tx_span_col), .out_moire(tx_span_moire),
     .tx_req(tex_req), .tx_ack(tex_ack), .tx_tex(tex_state),
     .tx_u(tex_u), .tx_v(tex_v), .tx_texel(tex_texel),
-    .dbg_texpix(dbg_texpix)
+    .dbg_texpix(dbg_texpix), .dbg_texnz(dbg_texnz)
   );
 
   m2_texel #(.AW(TEX_AW)) u_texel (

@@ -73,7 +73,14 @@ module m2_span_tex (
   output logic [19:0]        tx_u, tx_v,
   input  logic [3:0]         tx_texel,
 
-  output logic [31:0]        dbg_texpix       // textured pixels emitted
+  output logic [31:0]        dbg_texpix,      // textured pixels emitted
+  // TEXELS THAT ARE NOT 0xF, which is the question "did the game upload its
+  // textures at all". Unwritten memory reads 0xFFFF by this project's standing
+  // rule, so an empty sheet returns 0xF for every texel and a textured polygon
+  // comes out FLAT AND FULL BRIGHTNESS -- indistinguishable, by eye, from a
+  // texture path that does nothing. tb_m2_boot sees no CPU write to either
+  // sheet in 20 M instructions, so this is not a hypothetical.
+  output logic [31:0]        dbg_texnz
 );
 
   typedef enum logic [1:0] { T_IDLE, T_FETCH, T_EMIT, T_DRAIN } st_t;
@@ -144,7 +151,7 @@ module m2_span_tex (
       y_r <= '0; x_r <= '0; x1_r <= '0; col_r <= '0; moire_r <= 1'b0;
       u_r <= '0; v_r <= '0; du_r <= '0; dv_r <= '0; tex_r <= '0; texel_r <= '0;
       e_valid <= 1'b0; e_col <= '0; e_x <= '0;
-      dbg_texpix <= '0;
+      dbg_texpix <= '0; dbg_texnz <= '0;
     end else begin
       if (e_valid && out_ready) e_valid <= 1'b0;
 
@@ -165,6 +172,7 @@ module m2_span_tex (
 
         T_FETCH: if (tx_ack) begin
           texel_r <= tx_texel;
+          if (tx_texel != 4'hf && !(&dbg_texnz)) dbg_texnz <= dbg_texnz + 1'd1;
           st      <= T_EMIT;
         end
 

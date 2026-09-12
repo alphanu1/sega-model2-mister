@@ -56,6 +56,8 @@ static std::set<uint32_t> g_th_colorbase;
 static std::map<uint32_t,uint32_t> g_th_colorbase_n;
 static uint32_t g_th_last_objs = 0;
 static uint32_t g_tdwords = 0;
+static uint32_t tex_writes = 0, tex_nonff = 0;
+static uint32_t tex_lo = 0xffffffff, tex_hi = 0;
 static unsigned g_pj_lost = 0;
 // R231: where the luminance lands, and the table it comes from.
 static unsigned g_luma_hist[16] = {0};
@@ -145,6 +147,7 @@ static void th_report() {
   std::printf("    COPRO DATA-ROM READS: %lu, of which %lu at or above dword 0x100000 (past the 4 MB loaded; the reference reads ZERO there, this core ALIASES); highest dword 0x%06lx\n", g_rom_rd, g_rom_rd_hi, g_rom_rd_max);
   std::printf("    PROJECTIONS ABANDONED ON TIMEOUT: %u  (R226: an abandoned vertex keeps the screen position it already had)\n", g_pj_lost);
   std::printf("    TEXHDR texture RAM words written by the walker (op 0x04, bit 23): %u\n", (unsigned)g_tdwords);
+
   std::printf("    WALKER OPCODES from M2_POLY_FROM:");
   for (int i = 0; i < 32; i++) if (g_op_hist[i]) std::printf(" %02x:%u", i, g_op_hist[i]);
   std::printf("\n");
@@ -522,6 +525,19 @@ int main(int argc, char **argv) {
       // buffer RAM at 0x47C and gets 0xFFFFFFFF, which is this project's
       // signature for memory nobody has written. This says whether the CPU
       // wrote the window at all, and where.
+      // R275: DOES THE GAME UPLOAD ITS TEXTURE SHEETS AT ALL? Everything
+      // downstream of the texel fetch is pointless if the sheets are never
+      // written -- every texel would read 0xF out of unwritten memory and a
+      // textured polygon would come out a flat full-brightness colour, which
+      // looks exactly like the placeholder and would be diagnosed as "the
+      // texture path does nothing". Counted here, where the write is, so the
+      // question is answered without a bitstream.
+      if (d->sd_we && pend_addr >= 0x1760000 && pend_addr < 0x1860000) {
+        ++tex_writes;
+        if (pend_addr < tex_lo) tex_lo = pend_addr;
+        if (pend_addr > tex_hi) tex_hi = pend_addr;
+        if (d->sd_din != 0xffff) ++tex_nonff;
+      }
       if (d->sd_we && pend_addr >= BUF_BASE && pend_addr < BUF_BASE + 0x10000) {
         ++cpu_buf_writes;
         const uint32_t off = pend_addr - BUF_BASE;
@@ -3197,6 +3213,15 @@ int main(int argc, char **argv) {
   if (dtr) { std::fclose(dtr); std::printf("  data address trace written\n"); }
   if (out) { std::fclose(out); std::printf("  PC stream written to %s\n", outfile); }
   if (charstream) { std::fclose(charstream); std::printf("  char write stream written\n"); }
+  // R275: DOES THE GAME UPLOAD ITS TEXTURE SHEETS AT ALL? Printed
+  // unconditionally, at the end, because th_report() only runs in one mode and
+  // this question has to be answerable from any run.
+  if (tex_writes)
+    std::printf("TEXTURE SHEETS (R275): %u words uploaded by the CPU, %u of them not 0xFFFF, "
+                "words %07x..%07x\n", tex_writes, tex_nonff, tex_lo, tex_hi);
+  else
+    std::printf("TEXTURE SHEETS (R275): NOTHING UPLOADED in this run -- every texel would read 0xF "
+                "and a textured polygon would come out flat\n");
   std::printf("%s\n", fail ? "FAIL" : "PASS");
   delete d;
   return fail;

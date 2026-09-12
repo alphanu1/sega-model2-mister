@@ -100,14 +100,15 @@ if Y:
     # reached the span walk with its textured bit set -- the path is not running
     # at all, which is a different fault from a texture that looks wrong.
     px=[(a>>16)&0xffff for a,_ in Y]; tm=[a&0xffff for a,_ in Y]
-    th=[(d>>16)&0xffff for _,d in Y]; lo=[d&0xffff for _,d in Y]
+    th=[(d>>16)&0xffff for _,d in Y]; nz=[d&0xffff for _,d in Y]
     def med2(v): w=sorted(v); return w[len(w)//2]
     tot=[h+m for h,m in zip(th,tm)]
     rate=100.0*sum(th)/max(1,sum(tot))
     print('TEXTURES (R275): per frame -- textured pixels med %d max %d; texel cache %.1f%% of %d fetches'
           % (med2(px), max(px), rate, med2(tot)))
-    print('    (pixels 0 = nothing textured reached the span walk; abandoned fetches %d -- should be 0)'
-          % max(lo))
+    print('    texels that were NOT 0xF: med %d of %d fetches -- zero means the sheets are EMPTY'
+          % (med2(nz), med2(tot)))
+    print('    (pixels 0 = nothing textured reached the span walk at all, which is a different fault)')
 
 if T:
     # The walker's 32-entry light table, as the board holds it. Luminance is
