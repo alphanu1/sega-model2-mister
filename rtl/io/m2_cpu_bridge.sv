@@ -163,6 +163,10 @@ module m2_cpu_bridge #(
   output logic  [6:0] oc_xlat_addr,
   output logic  [7:0] oc_xlat_din,
   output logic        col_inval,        // R222: a mirrored colour write happened (one pulse)
+  // R266: this write landed in the display list, so anything caching a word of
+  // it must drop the copy. The walker reads the list through a one-entry pair
+  // cache and the game patches a command's count in after pushing its payload.
+  output logic        buf_inval,
 
   // I/O the core answers itself.
   input  logic [31:0] io_rdata,
@@ -382,6 +386,7 @@ module m2_cpu_bridge #(
   // byte; writing a second word would land the store's upper half on the next
   // texel, which is what the reference discards.
   logic half_only;
+  logic buf_region;      // R266: this access names the display list
 
   always_comb begin
     tgt     = T_NONE;
@@ -391,6 +396,7 @@ module m2_cpu_bridge #(
     pal_mirror  = 1'b0;
     xlat_mirror = 1'b0;
     half_only   = 1'b0;
+    buf_region  = 1'b0;
     if (r_addr < 32'h0020_0000) begin                       // program ROM
       tgt = T_SDRAM; is_rom = 1'b1;
       sd_word = base_prog + AW'(r_addr[20:1]);
@@ -418,7 +424,7 @@ module m2_cpu_bridge #(
     end else if (BUFFERRAM && (r_we || !BUFFERRAM_WRONLY)
                  && r_addr >= 32'h0090_0000 && r_addr < 32'h0098_0000) begin
       // 128 KB, and the mirror is free: [16:1] simply ignores the repeat.
-      tgt = T_SDRAM;
+      tgt = T_SDRAM; buf_region = 1'b1;   // R266
       nocache = BUFFER_NOCACHE;
       sd_word = base_buffer + AW'(r_addr[16:1]);
     end else if (r_addr >= 32'h0200_0000 && r_addr < 32'h0400_0000) begin
@@ -656,7 +662,7 @@ module m2_cpu_bridge #(
     if (!rst_n_mem) begin
       st <= S_IDLE; ack_mem <= 1'b0; half <= 1'b0;
       sd_req <= 1'b0; sd_we <= 1'b0; sd_addr <= '0; sd_din <= 16'd0; sd_be <= 2'b11;
-      oc_tram_we <= 1'b0; oc_pal_we <= 1'b0; oc_xlat_we <= 1'b0; col_inval <= 1'b0;
+      oc_tram_we <= 1'b0; oc_pal_we <= 1'b0; oc_xlat_we <= 1'b0; col_inval <= 1'b0; buf_inval <= 1'b0;
       io_sel <= 1'b0; io_we <= 1'b0;
       r_rdata <= 32'd0;
       dbg_cpu_reads <= 32'd0; dbg_cpu_writes <= 32'd0; dbg_unmapped <= 32'd0;
@@ -668,7 +674,7 @@ module m2_cpu_bridge #(
       dbg_probe6 <= 32'hEEEE_EEEE; dbg_probe2 <= 32'hEEEE_EEEE;
       dbg_tram_wr <= 32'd0; dbg_pal_wr <= 32'd0;
     end else begin
-      oc_tram_we <= 1'b0; oc_pal_we <= 1'b0; oc_xlat_we <= 1'b0; col_inval <= 1'b0;
+      oc_tram_we <= 1'b0; oc_pal_we <= 1'b0; oc_xlat_we <= 1'b0; col_inval <= 1'b0; buf_inval <= 1'b0;
       io_sel     <= 1'b0;
 
       // The cache's own housekeeping, before any state runs.
@@ -724,6 +730,7 @@ module m2_cpu_bridge #(
                 // starts. The DPRAM is T_IO and is never cached, which is what
                 // keeps the I/O board's side correct.
                 dc_inval <= 1'b1;
+                buf_inval <= buf_region;   // R266
                 // R222: the on-chip half of a mirrored write -- the palette
                 // RAM's low word, or the tile layer's 96-entry tap -- unless
                 // the read-modify-write pass already did it.

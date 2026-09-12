@@ -14090,3 +14090,34 @@ here goes through three flops (R229). It is now synchronised like the rest.
 Until this is on the board the four trigger modes have never actually been
 selectable, which also means every earlier conclusion drawn from switching
 them is void.
+
+**R266 -- THE PAIR CACHE WAS SERVING THE WALKER STALE LIST WORDS, AND THE
+BOARD SAID SO BEFORE THE CAPTURE DID.** With `O[25]` set to Off -- the switch
+R244 added to answer exactly this -- the user reported the lighting correct
+for the first time. The capture agrees: luminance median 149, minimum 101,
+maximum 169, black polygons ZERO in that slice, against every earlier capture
+pegged at 255 or collapsed to 0.
+
+The mechanism is R254's. Daytona does not write a command's count with the
+command: it pushes a ZERO PLACEHOLDER, pushes the payload, then patches the
+count in with a separate store. The walker reads the list through a one-entry
+cache that keeps the dword AFTER the one it fetched (R214, which halves the
+port trips on a sequential stream). A copy taken before the patch therefore
+hands the walker the placeholder, the walk reads 280 payload words as
+commands, and a phantom texture_parameters among them rewrites the light
+table with junk -- permanently, because the reference writes that table twice
+at boot and never again.
+
+So the cache is right to exist and wrong to hold across a write. It now takes
+an `inval` input: the bridge raises `buf_inval` on any write into the display
+list region, and the geometrizer's own polygon-RAM DMA invalidates the
+engine's cache for the same reason. R214's throughput is kept.
+
+The bench check for this was wrong twice before it was right, which is worth
+recording. A sequential run of EVEN length ends on a cache HIT, and a hit
+clears the copy without taking a new one -- so there was nothing to
+invalidate and the check passed with the invalidate deleted. It now reads an
+ODD number of words so the run ends on a miss with a copy held, proves the
+copy is there by reading the next word with no invalidate (0 port trips),
+then repeats it with one (1 port trip). Deleting the invalidate fails it
+(4,513 checks).

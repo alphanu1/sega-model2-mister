@@ -2044,6 +2044,7 @@ m2_cpu_bridge #(.BUFFERRAM(1'b1), .BUFFERRAM_WRONLY(1'b0)
 	.base_board(GAME_BOARD), .base_char(char_base), .base_buffer(GAME_BUFFER),
 	.base_pal3d(GAME_PAL3D), .base_xlat3d(GAME_XLAT3D),
 	.base_texs0(GAME_TEXS0), .base_texs1(GAME_TEXS1), .base_luma(GAME_LUMA), .col_inval(cpu_col_inval),
+	.buf_inval(cpu_buf_inval),   // R266
 
 	.sd_req(cpu_sd_req), .sd_we(cpu_sd_we), .sd_addr(cpu_sd_addr),
 	.sd_din(cpu_sd_din), .sd_be(cpu_sd_be),
@@ -2754,13 +2755,20 @@ end
 // stale copy. The port side is the registered glue exactly as before.
 wire [SDR_AW:1] geo_wa = GAME_BUFFER + SDR_AW'({geo_rd_addr, 1'b0});
 wire [SDR_AW:1] eng_wa = eng_base + SDR_AW'({eng_mem_idx, 1'b0});
+// R266: THE WALKER'S COPY IS DROPPED WHEN THE CPU WRITES THE LIST. Daytona
+// patches a command's count in after pushing its payload, so a copy taken
+// before the patch hands the walker the placeholder. Measured on the board:
+// with the cache switched off entirely the luminance went from pegged at 255
+// to a median of 149 with no black polygons.
 m2_pair_cache #(.AW(SDR_AW-1), .COL_BITS(SDR_COL)) u_geo_pc (
-	.clk(clk_sys), .rst_n(mem_rst_n), .bypass(pair_off_s2),
+	.clk(clk_sys), .rst_n(mem_rst_n), .bypass(pair_off_s2), .inval(cpu_buf_inval),
 	.req(geo_rd_req), .idx(geo_wa[SDR_AW:2]), .ack(geo_rd_ack_c), .data(geo_rd_data_c),
 	.p_req(gc_req), .p_idx(gc_idx), .p_ack(geo_rd_ack_r), .p_dout(p4_dout_r)
 );
+// The engine reads polygon RAM, which the geometrizer's own DMA writes, so its
+// copy is dropped on those writes for the same reason.
 m2_pair_cache #(.AW(SDR_AW-1), .COL_BITS(SDR_COL)) u_eng_pc (
-	.clk(clk_sys), .rst_n(mem_rst_n), .bypass(pair_off_s2),
+	.clk(clk_sys), .rst_n(mem_rst_n), .bypass(pair_off_s2), .inval(geo_sd_req & wr_ack_geo),
 	.req(eng_mem_req), .idx(eng_wa[SDR_AW:2]), .ack(eng_mem_ack_c), .data(eng_mem_data_c),
 	.p_req(ec_req), .p_idx(ec_idx), .p_ack(eng_mem_ack_r), .p_dout(p4_dout_r)
 );     // 4M-dword ROM window
@@ -2783,6 +2791,7 @@ wire [15:0] geo_tp_n;
 wire [15:0] geo_nops;        // R255: nop commands the walker decoded last frame
 wire [15:0] geo_walk_flip, geo_walk_fb;   // R263: walks started by the list-ready write, and by the fallback
 wire        geo_push_stall;  // R260: the push queue is full and the CPU waits
+wire        cpu_buf_inval;   // R266: the CPU wrote the display list
 
 // THE GEOMETRY PIPELINE. object_data in, screen quads out; see m2_geometry.sv.
 //

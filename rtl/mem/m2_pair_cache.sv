@@ -42,6 +42,16 @@ module m2_pair_cache #(
   input  logic          rst_n,
   // the requester
   input  logic          bypass,   // R244: keep no copy at all, so every read is a port read
+  // R266: THE COPY IS DROPPED WHEN ANOTHER MASTER WRITES THE MEMORY BEHIND IT.
+  // The copy is only safe while nothing else changes the dword it holds, and
+  // the display list is written by the CPU while the walker reads it: Daytona
+  // patches a command's count in AFTER pushing the payload (R254), so a copy
+  // taken before the patch serves the placeholder. On the board, turning the
+  // cache off outright moved the luminance from pegged-at-255 to a healthy
+  // median of 149 with no black polygons -- the user saw it before the capture
+  // confirmed it. This keeps R214's halving of port trips and drops the copy
+  // the moment the memory under it moves.
+  input  logic          inval,
   input  logic          req,
   input  logic [AW-1:0] idx,
   output logic          ack,
@@ -84,6 +94,7 @@ module m2_pair_cache #(
       hit_ack  <= fire;
       if (fire) hit_pend <= 1'b0;
       if (!req) pass <= 1'b0;
+      if (inval) have <= 1'b0;                 // R266: another master wrote the memory
       if (new_req) begin
         have <= 1'b0;                          // the copy serves one request, or none
         if (match) begin hit_pend <= 1'b1; data <= have_data; end
@@ -93,7 +104,7 @@ module m2_pair_cache #(
       // half for the requester, the high half kept as the next index.
       if (p_ack && !p_ack_d) begin
         data      <= p_dout[31:0];
-        have      <= ~&idx[COL_BITS-2:0] && !bypass;   // the last dword of a row: its pair wrapped
+        have      <= ~&idx[COL_BITS-2:0] && !bypass && !inval;   // the last dword of a row: its pair wrapped
 
         have_idx  <= idx + 1'b1;
         have_data <= p_dout[63:32];

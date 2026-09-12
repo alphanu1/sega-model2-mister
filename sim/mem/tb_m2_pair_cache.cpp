@@ -21,7 +21,7 @@ int main(int argc, char **argv) {
   std::vector<uint32_t> mem(1 << 16);
   for (size_t i = 0; i < mem.size(); i++) mem[i] = 0xA5000000u ^ (uint32_t(i) * 0x9E3779B1u);
   auto tick = [&]() { d->clk = 1; d->eval(); d->clk = 0; d->eval(); };
-  d->clk = 0; d->rst_n = 0; d->req = 0; d->idx = 0; d->p_ack = 0; d->p_dout = 0; d->bypass = 0;
+  d->clk = 0; d->rst_n = 0; d->req = 0; d->idx = 0; d->p_ack = 0; d->p_dout = 0; d->bypass = 0; d->inval = 0;
   tick(); tick(); d->rst_n = 1; tick();
 
   // The port model: rising-edge request, LAT cycles, then ack held while the
@@ -95,6 +95,33 @@ int main(int argc, char **argv) {
   long t_byp = read_stream(byp, "sequential, bypassed");
   CHECK(t_byp == (long)byp.size(), "bypassed stream cost %ld trips for %zu words", t_byp, byp.size());
   d->bypass = 0;
+
+  // R266: AN INVALIDATE DROPS THE COPY, so the word after it comes from the
+  // port and not from a copy taken before another master wrote the memory.
+  // This is what the display list needs: the game patches a command's count in
+  // after pushing its payload, and a copy taken in between holds the
+  // placeholder.
+  {
+    // AN ODD NUMBER OF WORDS, so the run ENDS ON A MISS and the cache is
+    // holding the copy of the next one. A hit clears the copy and does not take
+    // a new one, so a run of even length leaves nothing to invalidate -- the
+    // first version of this check ended that way and passed with the
+    // invalidate removed.
+    std::vector<uint32_t> pre; for (uint32_t i = 7000; i < 7009; i++) pre.push_back(i);
+    read_stream(pre, "sequential, ending on a miss");
+    long t1 = trips;
+    std::vector<uint32_t> nxt; nxt.push_back(7009);
+    read_stream(nxt, "the word after an invalidate");
+    CHECK(trips - t1 == 0, "the copy was not there to begin with, so this proves nothing");
+    // now the same again WITH an invalidate between
+    std::vector<uint32_t> pre2; for (uint32_t i = 7100; i < 7109; i++) pre2.push_back(i);
+    read_stream(pre2, "sequential, ending on a miss");
+    d->inval = 1; d->eval(); tick(); d->inval = 0; tick();
+    long t2 = trips;
+    std::vector<uint32_t> nxt2; nxt2.push_back(7109);
+    read_stream(nxt2, "the word after an invalidate");
+    CHECK(trips - t2 == 1, "the word after an invalidate was still served from the copy");
+  }
 
   std::printf("m2_pair_cache: checks=%d fails=%d\n", checks, fails);
   std::printf(fails ? "FAIL\n" : "PASS\n");
