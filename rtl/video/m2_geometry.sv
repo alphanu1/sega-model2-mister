@@ -93,6 +93,7 @@ module m2_geometry (
   //      mirror, 3 translation mirror). The colour travels with the polygon
   //      from the engine to the clipper's in_col, where a constant used to be.
   input  logic [31:0] tha,
+  input  logic [31:0] tpa,        // R268: the texture-point address, for the UVs
   input  logic [31:0] lit_x, lit_y, lit_z,
   input  logic        tp_we,
   input  logic [4:0]  tp_idx,
@@ -161,12 +162,16 @@ module m2_geometry (
   logic [31:0] nrm_x, nrm_y, nrm_z;
   logic [23:0] poly_col, pcol;      // R222: the engine's colour, and the one in flight
   logic  [1:0] poly_zmode;          // R246: the engine's per-polygon z mode
+  logic [31:0] poly_uv0, poly_uv1, poly_uv2, poly_uv3;   // R268
 
   m2_geo_engine u_engine (
     .tha(tha), .lit_x(lit_x), .lit_y(lit_y), .lit_z(lit_z),
     .tp_we(tp_we), .tp_idx(tp_idx), .tp_diffuse(tp_diffuse), .tp_ambient(tp_ambient),
     .col_inval(col_inval), .tex_lum(tex_lum), .mem_space(mem_space),
     .poly_col(poly_col), .poly_zmode(poly_zmode), .poly_luma(dbg_lum), .dbg_col_miss(dbg_col_miss),
+    // R268: the per-vertex texture coordinates, read beside the header
+    .tpa(tpa), .poly_uv0(poly_uv0), .poly_uv1(poly_uv1),
+    .poly_uv2(poly_uv2), .poly_uv3(poly_uv3),
     .clk(clk), .rst_n(rst_n),
     .start(start), .oba(oba), .obc(obc), .busy(eng_busy),
     .mat_we(mat_we), .mat_idx(mat_idx), .mat_data(mat_data),

@@ -14151,3 +14151,37 @@ mixed low.
 
 `tb_m2_sndboard` now fails if the output peak ever falls below the loudest
 single source, which is what any return to attenuation looks like.
+
+**R268 -- THE PER-VERTEX TEXTURE COORDINATES, READ.** The second step of the
+texture path, and the one everything downstream needs. They are not in the
+display list beside the vertices, which is why nothing here had them: the
+reference reads them from texture RAM or the texture ROM through the object's
+TEXTURE POINT address, as 16-bit pairs, v THEN u, two words a vertex:
+
+    if (cb[0] & 0x800000) tp = &texture_ram[cb[0] & 0xffff];
+    else                  tp = &texture_rom[cb[0] & mask];
+    object.v[0].pv = *tp++;  object.v[0].pu = *tp++;   // and so on
+    raster->command_buffer[0] += NumVerts * 2;
+
+`m2_geo_engine` now takes `tpa` beside `tha`, holds a word pointer `tp_w` with
+its RAM/ROM select, and reads the run in a new `E_UV` state through the same
+port and address space as the texture header. Six words for a triangle, eight
+for a quad, `attr[0]` selecting; the pointer then advances by what it
+consumed. The polygon's four `{v,u}` pairs come out as `poly_uv0..3`.
+
+TWO THINGS THAT MATTER AND ARE EASY TO GET WRONG, both taken from the
+reference rather than assumed. The pairs are read for EVERY polygon, culled or
+not -- the reference reads them and advances the pointer at the top of
+`model2_3d_process_polygon`, before `check_culling` -- so the translucent cull
+now waits for the run to finish and is held in `uv_cull` until it does. And v
+comes BEFORE u.
+
+`E_UV` had to join the `xrd` list that selects the header address and space,
+and did not at first: its reads went out on the polygon pointer instead, the
+engine stopped emitting, and `tb_m2_geo_engine` reported 13 of 14 checks
+failing. It now checks the eight words land in the right halves of the right
+vertices (50 checks); swapping v and u fails it.
+
+Still to build: carrying the pairs through the clipper, which must interpolate
+them as it interpolates position; the per-vertex perspective divide (the
+reference computes `pu * (1/z) / 8`); and the span walk.

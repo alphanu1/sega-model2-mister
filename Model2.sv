@@ -2710,7 +2710,7 @@ m2_geo #(.AW(SDR_AW), .DEPTH(128)) u_geo (
 	.tp_we(geo_tp_we), .tp_idx(geo_tp_idx),
 	.tp_diffuse(geo_tp_diffuse), .tp_ambient(geo_tp_ambient),
 	.dbg_tp_n(geo_tp_n),
-	.obj_tpa(), .obj_tha(geo_obj_tha), .obj_oba(geo_obj_oba), .obj_obc(geo_obj_obc),
+	.obj_tpa(geo_obj_tpa), .obj_tha(geo_obj_tha), .obj_oba(geo_obj_oba), .obj_obc(geo_obj_obc),
 	.obj_valid(geo_obj_valid),
 	.dbg_mtx_n(geo_mtx_n), .dbg_foc_n(geo_foc_n)
 );
@@ -2778,7 +2778,8 @@ always_ff @(posedge clk_sys) if (geo_obj_valid) geo_obj_oba_r <= geo_obj_oba;
 wire        geo_mat_we;
 wire [3:0]  geo_mat_idx;
 wire [31:0] geo_mat_data, geo_foc_x, geo_foc_y, geo_obj_oba, geo_obj_obc;
-wire [31:0] geo_obj_tha;          // R222
+wire [31:0] geo_obj_tha;
+wire [31:0] geo_obj_tpa;   // R268: where the per-vertex texture coordinates live          // R222
 wire        cpu_col_inval;
 wire  [1:0] eng_mem_space;
 wire        geo_obj_valid, eng_busy;
@@ -2857,7 +2858,7 @@ m2_geometry u_geometry (
 	.a_bottom(32'h43400000), .a_top(32'hC3400000),      // +192.0, -192.0
 	// R222: the light, the texture parameters and the header address from the
 	// walker; the colour data through the engine's own port, by space.
-	.tha(geo_obj_tha), .lit_x(geo_lit_x), .lit_y(geo_lit_y), .lit_z(geo_lit_z),
+	.tha(geo_obj_tha), .tpa(geo_obj_tpa), .lit_x(geo_lit_x), .lit_y(geo_lit_y), .lit_z(geo_lit_z),
 	.tp_we(geo_tp_we), .tp_idx(geo_tp_idx), .tp_diffuse(geo_tp_diffuse), .tp_ambient(geo_tp_ambient),
 	.col_inval(cpu_col_inval), .tex_lum(tex_lum_s2), .mem_space(eng_mem_space), .dbg_col_miss(),
 	.q_valid(q3d_valid), .q_ready(q3d_ready),

@@ -100,6 +100,14 @@ module m2_geo_engine #(
   //      is |normal . light| (0 if that and normal . point differ in sign)
   //      times the texture parameter's diffuse plus its ambient, 0..255.
   input  logic [31:0] tha,                 // geo_object_data's texture header address
+  // R268: geo_object_data's TEXTURE POINT address. The per-vertex texture
+  // coordinates are not in the display list beside the vertices: the reference
+  // reads them from texture RAM or the texture ROM as 16-bit pairs, v then u,
+  // two words a vertex, and advances the pointer by NumVerts*2 per polygon --
+  // FOR EVERY POLYGON, including the ones it then culls, so the pointer stays
+  // in step with the list.
+  input  logic [31:0] tpa,
+  output logic [31:0] poly_uv0, poly_uv1, poly_uv2, poly_uv3,   // {v, u} per vertex
   input  logic [31:0] lit_x, lit_y, lit_z, // the light vector (cmd 0x0a)
   input  logic        tp_we,               // texture parameters (cmd 0x06), streamed
   input  logic [4:0]  tp_idx,
@@ -218,7 +226,8 @@ module m2_geo_engine #(
     E_NXF, E_NXFW, E_SKIP,
     E_EMIT, E_LINK, E_DONE, E_DOT, E_DOTA,
     // R222: the luminance, the texture header, the colour
-    E_LUMM, E_LUMMW, E_LUMA, E_LUMAW, E_TH0, E_TH3, E_CC, E_PAL, E_XL, E_CW
+    E_LUMM, E_LUMMW, E_LUMA, E_LUMAW, E_TH0, E_TH3, E_CC, E_PAL, E_XL, E_CW,
+    E_UV                                        // R268: the per-vertex texture coordinates
   } estate_t;
   estate_t st, ret;
 
@@ -245,6 +254,10 @@ module m2_geo_engine #(
   logic        fsel;         // 0 = scaling x, 1 = scaling y
 
   // ---- R222 state
+  logic [21:0] tp_w;         // R268: texture point address, in 16-bit words
+  logic        tp_ram;       // ...in texture RAM (tpa bit 23), else the ROM
+  logic  [2:0] uv_i;         // which 16-bit word of the run is in hand
+  logic        uv_cull;      // the cull decision, held while the run finishes
   logic [21:0] th_w;         // texture header address, in 16-bit words
   logic        th_ram;       // ...in texture RAM (tha bit 23), else the ROM
   logic        dsel;         // E_DOT: 0 = with the point, 1 = with the light
@@ -345,7 +358,12 @@ module m2_geo_engine #(
     end
   endfunction
 
-  wire xrd = (st == E_TH0) || (st == E_TH3) || (st == E_PAL) || (st == E_XL);
+  // R268: E_UV reads through the same port and space as the header, so it
+  // belongs in this list -- without it the coordinate reads went out on the
+  // polygon pointer instead and the engine stopped emitting anything, which is
+  // how tb_m2_geo_engine reported 13 of 14 checks failing.
+  wire xrd = (st == E_TH0) || (st == E_TH3) || (st == E_PAL) || (st == E_XL)
+          || (st == E_UV);
   assign mem_addr  = xrd ? xaddr  : ptr;
   assign mem_space = xrd ? xspace : 2'd0;
   assign poly_luma = luma8;
@@ -389,6 +407,8 @@ module m2_geo_engine #(
       fx <= 32'd0; fy <= 32'd0; fz <= 32'd0; fsel <= 1'b0;
       dbg_polys <= 16'd0; dbg_objects <= 16'd0;
       th_w <= 22'd0; th_ram <= 1'b0; dsel <= 1'b0; dotp_zero <= 1'b0; dotl <= 32'd0;
+      tp_w <= 22'd0; tp_ram <= 1'b0; uv_i <= 3'd0; uv_cull <= 1'b0;
+      poly_uv0 <= 32'd0; poly_uv1 <= 32'd0; poly_uv2 <= 32'd0; poly_uv3 <= 32'd0;
       lum <= 32'd0; luma8 <= 8'd0; hdr0 <= 16'd0; cbase <= 10'd0; c555 <= 15'd0; xi <= 2'd0;
       rgb[0] <= 8'd0; rgb[1] <= 8'd0; rgb[2] <= 8'd0;
       xaddr <= 24'd0; xhalf <= 1'b0; xspace <= 2'd0; cc_wait <= 1'b0; cc_idx <= 8'd0;
@@ -414,6 +434,7 @@ module m2_geo_engine #(
           busy   <= 1'b1;
           widx   <= 2'd0; dst <= 2'd0;
           th_w   <= tha[21:0]; th_ram <= tha[23]; dsel <= 1'b0;   // R222
+          tp_w   <= tpa[21:0]; tp_ram <= tpa[23];                 // R268
           st     <= E_RD; ret <= E_RD;
         end
 
@@ -616,22 +637,53 @@ module m2_geo_engine #(
                    ^ {(xhalf ? mem_data[31:30] : mem_data[15:14]), luma8[7:2]};
           cc_wait <= 1'b0;
           th_w    <= th_w + {{15{attr[16]}}, attr[16:12], 2'b00};
-          if (hdr0[13]) begin
-            // TRANSLUCENT, AND THE REFERENCE DRAWS NOTHING FOR IT. The texture
-            // header's bit 13 is the translucent flag and bit 14 selects
-            // textured; model2_3d_render picks m_render_callbacks[(h0>>13)&3]
-            // and BOTH translucent entries -- draw_scanline_solid<true> and
-            // draw_scanline_tex<true> -- return on their first line. This used
-            // to cull only the flat one, so 16% of the title's objects (261 of
-            // 1,659, textured AND translucent) were drawn here as opaque flat
-            // polygons that the reference discards. Blending is not built; not
-            // drawing them is what the reference does and is nearer right than
-            // drawing them solid.
-            remain <= remain - 32'd1;
-            dbg_culled <= dbg_culled + 16'd1;
-            emitted_last <= 1'b0;
-            st <= E_LINK;
-          end else st <= E_CC;
+          // R268: THE TEXTURE COORDINATES ARE READ FOR EVERY POLYGON, CULLED OR
+          // NOT. The reference reads its pairs and advances the pointer at the
+          // top of model2_3d_process_polygon, before it decides to cull, so a
+          // culled polygon still consumes its pairs and the pointer stays in
+          // step with the list. The translucent cull below is therefore held in
+          // uv_cull and acted on when the run finishes.
+          uv_cull <= hdr0[13];
+          uv_i    <= 3'd0;
+          xaddr   <= th_dw(tp_w, tp_ram); xhalf <= tp_w[0]; xspace <= 2'd1;
+          st      <= E_UV;
+        end
+
+        // ---- R268: two 16-bit words a vertex, v THEN u, three vertices or
+        //      four, from texture RAM or the texture ROM exactly as the header
+        //      is read. The pointer then advances by the words consumed.
+        E_UV: if (mem_go) begin
+          logic [15:0] w;
+          logic [21:0] nxt;
+          w   = xhalf ? mem_data[31:16] : mem_data[15:0];
+          nxt = tp_w + 22'(uv_i) + 22'd1;
+          case (uv_i)
+            3'd0: poly_uv0[31:16] <= w;
+            3'd1: poly_uv0[15:0]  <= w;
+            3'd2: poly_uv1[31:16] <= w;
+            3'd3: poly_uv1[15:0]  <= w;
+            3'd4: poly_uv2[31:16] <= w;
+            3'd5: poly_uv2[15:0]  <= w;
+            3'd6: poly_uv3[31:16] <= w;
+            default: poly_uv3[15:0] <= w;
+          endcase
+          if (uv_i == (attr[0] ? 3'd7 : 3'd5)) begin
+            tp_w <= tp_w + (attr[0] ? 22'd8 : 22'd6);
+            if (uv_cull) begin
+              // TRANSLUCENT, AND THE REFERENCE DRAWS NOTHING FOR IT (R231). The
+              // header's bit 13 is the translucent flag and bit 14 selects
+              // textured; model2_3d_render picks m_render_callbacks[(h0>>13)&3]
+              // and BOTH translucent entries return on their first line.
+              remain <= remain - 32'd1;
+              dbg_culled <= dbg_culled + 16'd1;
+              emitted_last <= 1'b0;
+              st <= E_LINK;
+            end else st <= E_CC;
+          end else begin
+            uv_i  <= uv_i + 3'd1;
+            xaddr <= th_dw(nxt, tp_ram);
+            xhalf <= nxt[0];
+          end
         end
 
         // ---- R222: the colour cache, then the palette and the three
