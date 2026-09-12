@@ -61,10 +61,19 @@ if U:
     # a count-driven command's payload as commands, and a run of zero words
     # comes out as a run of nops.
     nops=[(a>>16)&0xffff for a,_ in U]; ops=[a&0xffff for a,_ in U]
-    objs=[(d>>16)&0xffff for _,d in U]; unk=[(d>>8)&0xff for _,d in U]; drp=[d&0xff for _,d in U]
-    nops.sort(); ops.sort(); objs.sort()
-    print('WALK (R255): per frame -- nops decoded med %d max %d | commands med %d | objects med %d | unknown op %02X | push drops %d'
-          % (nops[len(nops)//2], nops[-1], ops[len(ops)//2], objs[len(objs)//2], max(unk), max(drp)))
+    fl=[(d>>24)&0xff for _,d in U]; fb=[(d>>16)&0xff for _,d in U]
+    unk=[(d>>8)&0xff for _,d in U]; drp=[d&0xff for _,d in U]
+    nops.sort(); ops.sort()
+    print('WALK (R255): per frame -- nops decoded med %d max %d | commands med %d | unknown op %02X | push drops %d'
+          % (nops[len(nops)//2], nops[-1], ops[len(ops)//2], max(unk), max(drp)))
+    # R263: the counters are free-running bytes, so what matters is how fast each
+    # moves. A fallback walk has no promise the list is finished.
+    def rate(v):
+        d=0
+        for i in range(1,len(v)): d+=(v[i]-v[i-1]) & 0xff
+        return d
+    print('    walks started by the game\'s list-ready write: %d, by the vblank fallback: %d'
+          % (rate(fl), rate(fb)))
     print('    (nops should be ZERO: the reference list holds none, so any run of them is the walk reading data as commands)')
 if T:
     # The walker's 32-entry light table, as the board holds it. Luminance is

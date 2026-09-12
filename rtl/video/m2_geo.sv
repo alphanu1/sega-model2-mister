@@ -138,6 +138,16 @@ module m2_geo #(
   // frame against the reference's none, but that turned out to be the bench's
   // own malformed list (R254), so the board has to be asked directly.
   output logic [15:0]   dbg_nops,
+  // R263: WHICH TRIGGER STARTED EACH WALK. The board reports a nop count that
+  // is zero on most frames and 280 on a few, and 280 is the length of the
+  // texture_data payload -- so a minority of walks still read the list while
+  // the count the game patches in afterwards is still a placeholder. Mode 0
+  // walks on the game's own "list ready" write to 0x803008, with a FALLBACK
+  // that walks at vblank when no such write has been seen for four frames.
+  // A fallback walk has no promise that the list is finished, so if the bad
+  // walks are fallback walks this says so outright.
+  output logic [15:0]   dbg_walk_flip,
+  output logic [15:0]   dbg_walk_fallback,
   // R260: BACKPRESSURE, DONE PROPERLY. The queue between the i960 and SDRAM
   // drops when full, and a drop is a HOLE: the write pointer deliberately does
   // not advance, so the next dword takes the missing one's slot. The reference
@@ -623,6 +633,7 @@ module m2_geo #(
       w_cap <= 3'd0; w_ci <= 4'd0; obj_valid <= 1'b0; eng_seen <= 1'b0;
       frame_pend <= 1'b0; drain_wait <= 10'd0;
       flip_pend <= 1'b0; fs_since_flip <= 3'd7; setrp_q <= 1'b0;
+      dbg_walk_flip <= 16'd0; dbg_walk_fallback <= 16'd0;
       setwp_q <= 1'b0; wp_pend <= 1'b0; flip_seen <= 1'b0;
       pd_addr <= 32'd0; pd_n <= 16'd0; pd_i <= 16'd0;
       pd_req <= 1'b0; pd_wdata <= 32'd0;
@@ -654,6 +665,12 @@ module m2_geo #(
       if (setwp_q) begin wp_pend <= 1'b1; drain_wait <= 10'd0; end
       if (walk_go && (wst == W_IDLE)) begin
         frame_pend <= 1'b0; flip_pend <= 1'b0; wp_pend <= 1'b0; flip_seen <= 1'b0;
+        // R263: the game's own list-ready write, or the vblank fallback.
+        if (flip_pend) begin
+          if (!(&dbg_walk_flip)) dbg_walk_flip <= dbg_walk_flip + 16'd1;
+        end else begin
+          if (!(&dbg_walk_fallback)) dbg_walk_fallback <= dbg_walk_fallback + 16'd1;
+        end
       end
       case (wst)
         // THE WALK MUST NOT READ A BUFFER THE FRONT DOOR IS STILL WRITING.

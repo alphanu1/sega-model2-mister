@@ -13985,3 +13985,29 @@ Texture data itself does NOT need blocks: it is already in SDRAM at word
 0x720000 and the engine already reads texture headers from there, exactly as
 the reference reads its texture ROM. What needs on-chip memory is a cache to
 turn per-pixel reads into bursts, which is a handful of blocks.
+
+**R263 -- WHICH TRIGGER STARTS EACH WALK, BECAUSE A MINORITY OF THEM STILL
+READ A HALF-BUILT LIST.** `build/fix3d19` cleared the push-queue drops to
+ZERO (R260 confirmed) and the light table improved -- most entries now read
+255/255, which is what the reference holds in its unused slots -- but nine
+still read 0/0 and the reference NEVER writes a zero. Measured against it:
+over 3,200 frames the reference issues the texture_parameters command TWICE,
+both at boot, writing 64 entries with no zero among them; this core issues
+sixteen in four minutes and its table keeps changing. So a walk is still
+decoding commands the game never wrote, and the board says how often: nops
+per frame are median 0 and maximum 280, which is exactly the length of the
+texture_data payload whose count the game patches in afterwards (R254).
+
+One bad walk is permanent damage, because the reference's table is written
+at boot and never again -- so a single phantom 0x06 corrupts the lighting
+for the rest of the session. That is the black scenes.
+
+Mode 0, the default, walks on the game's own "list is ready" write to
+0x803008, with a FALLBACK that walks at vblank when no such write has been
+seen for four frames. A fallback walk carries no promise that the list is
+finished. `m2_geo` now counts both and Model2.sv streams them in the 'U'
+record where the always-zero unknown-opcode byte and the walk-object count
+were. If the bad walks are fallback walks the board will say so in one
+capture; if they are not, the remaining suspect is ordering -- the CPU's
+patch store and the walker's read reach memory through different ports with
+nothing sequencing them.
