@@ -159,10 +159,21 @@ module m2_quad_store #(
   // 2 x ceil(W/5) for two 2048-deep ones -- 13 against 12 for a vertex
   // word, 15 against 12 for the attribute word. build/dbuf8 ran out of
   // blocks with the merged arrays; the bank selects between two.
-  (* ramstyle = "M10K" *) logic [2*XW-1:0] vtx0_0 [NQ], vtx0_1 [NQ];
-  (* ramstyle = "M10K" *) logic [2*XW-1:0] vtx1_0 [NQ], vtx1_1 [NQ];
-  (* ramstyle = "M10K" *) logic [2*XW-1:0] vtx2_0 [NQ], vtx2_1 [NQ];
-  (* ramstyle = "M10K" *) logic [2*XW-1:0] vtx3_0 [NQ], vtx3_1 [NQ];
+  // R262: ONE WIDE ARRAY PER BANK, NOT FOUR NARROW ONES.
+  //
+  // These were eight arrays of NQ x 26 bits, and 26 maps badly onto an M10K:
+  // the block's native widths are 8, 16, 20 and 40, so a 26-bit word takes a
+  // 20-bit slice plus an 8-bit slice and wastes the rest. The fitter's own
+  // report priced it -- 88 blocks holding 426 K bits inside 900 K, 43% full --
+  // and M10K is the binding resource at 553 of 553 with texture still to come.
+  //
+  // All four vertices are written in the same cycle and read in the same
+  // cycle, so they were never independent memories: one array of 4 x 26 bits
+  // per bank is the same storage with one address and one port, and its 104-bit
+  // word fills three 40-bit slices instead of eight mismatched ones. It also
+  // turns four reads into one in the replay path.
+  localparam int unsigned VW = 4 * 2 * XW;      // four vertices, {y,x} each
+  (* ramstyle = "M10K" *) logic [VW-1:0] vtx_0 [NQ], vtx_1 [NQ];
   // A BAND RANGE, NOT A MASK (R213): {hi, lo} in BW bits each. With 48 bands
   // a mask was 48 bits an entry; a range is 12, and the replay test is two
   // compares. A quad off the screen is stored as lo > hi and never hits.
@@ -265,16 +276,12 @@ module m2_quad_store #(
       // tree ends at a small counter instead of a RAM control pin.
       if (has_room) begin
         if (wbank) begin
-          vtx0_1[wcount[IW-1:0]] <= {sat(in_y0), sat(in_x0)};
-          vtx1_1[wcount[IW-1:0]] <= {sat(in_y1), sat(in_x1)};
-          vtx2_1[wcount[IW-1:0]] <= {sat(in_y2), sat(in_x2)};
-          vtx3_1[wcount[IW-1:0]] <= {sat(in_y3), sat(in_x3)};
+          vtx_1[wcount[IW-1:0]] <= {sat(in_y3), sat(in_x3), sat(in_y2), sat(in_x2),
+                                    sat(in_y1), sat(in_x1), sat(in_y0), sat(in_x0)};
           att_1[wcount[IW-1:0]]  <= {band_range(in_y0, in_y1, in_y2, in_y3), in_moire, c565(in_col)};
         end else begin
-          vtx0_0[wcount[IW-1:0]] <= {sat(in_y0), sat(in_x0)};
-          vtx1_0[wcount[IW-1:0]] <= {sat(in_y1), sat(in_x1)};
-          vtx2_0[wcount[IW-1:0]] <= {sat(in_y2), sat(in_x2)};
-          vtx3_0[wcount[IW-1:0]] <= {sat(in_y3), sat(in_x3)};
+          vtx_0[wcount[IW-1:0]] <= {sat(in_y3), sat(in_x3), sat(in_y2), sat(in_x2),
+                                    sat(in_y1), sat(in_x1), sat(in_y0), sat(in_x0)};
           att_0[wcount[IW-1:0]]  <= {band_range(in_y0, in_y1, in_y2, in_y3), in_moire, c565(in_col)};
         end
         // R246: in_z CARRIES THE REFERENCE'S 16-BIT z VALUE in its low half
@@ -493,7 +500,13 @@ module m2_quad_store #(
 
   logic [IW-1:0] ord_idx;
   logic [AT_W-1:0] att_rd;
-  logic [2*XW-1:0] v0_r, v1_r, v2_r, v3_r;    // the four vertex words, one read each
+  // R262: one 104-bit word holds all four, packed {v3,v2,v1,v0} with {y,x} in
+  // each. The slices below are the same four words the four arrays used to be.
+  logic [VW-1:0] vtx_r;
+  wire [2*XW-1:0] v0_r = vtx_r[0*2*XW +: 2*XW];
+  wire [2*XW-1:0] v1_r = vtx_r[1*2*XW +: 2*XW];
+  wire [2*XW-1:0] v2_r = vtx_r[2*2*XW +: 2*XW];
+  wire [2*XW-1:0] v3_r = vtx_r[3*2*XW +: 2*XW];
   assign out_y0 = sx(v0_r[2*XW-1:XW]); assign out_x0 = sx(v0_r[XW-1:0]);
   assign out_y1 = sx(v1_r[2*XW-1:XW]); assign out_x1 = sx(v1_r[XW-1:0]);
   assign out_y2 = sx(v2_r[2*XW-1:XW]); assign out_x2 = sx(v2_r[XW-1:0]);
@@ -516,7 +529,7 @@ module m2_quad_store #(
       v1 <= 1'b0; v2 <= 1'b0; q2 <= '0;
       ord_idx <= '0; att_rd <= '0;
       out_valid <= 1'b0;
-      v0_r <= '0; v1_r <= '0; v2_r <= '0; v3_r <= '0;
+      vtx_r <= '0;
       out_col <= '0; out_moire <= 1'b0;
     end else begin
       if (adv) begin
@@ -564,10 +577,7 @@ module m2_quad_store #(
         P_OUT: begin
           // ONE READ PER ARRAY (see the note above): the slices are taken
           // from the registered word, not from two reads of the array.
-          v0_r <= rbank ? vtx0_1[q] : vtx0_0[q];
-          v1_r <= rbank ? vtx1_1[q] : vtx1_0[q];
-          v2_r <= rbank ? vtx2_1[q] : vtx2_0[q];
-          v3_r <= rbank ? vtx3_1[q] : vtx3_0[q];
+          vtx_r <= rbank ? vtx_1[q] : vtx_0[q];   // R262: one read, all four vertices
           out_valid <= 1'b1;
           if (out_valid && out_ready) begin
             out_valid <= 1'b0;

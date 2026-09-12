@@ -13955,3 +13955,33 @@ placeholder now takes `scale_lum` like any other textured polygon.
 `tb_m2_geo_engine` gains the check that says so: the same polygon at
 selector 2 must come back at FULL luminance, which fails with the old pinned
 half (42 checks).
+
+**R262 -- THE QUAD STORE'S VERTEX MEMORY WAS 43% FULL, AND TEXTURE NEEDS THE
+BLOCKS.** M10K is 553 of 553 and texture mapping has not started. The
+fitter's RAM summary prices every array, and the quad store is the worst
+offender by efficiency: eight arrays of 2,048 x 26 bits holding 426 K bits
+inside 900 K of block memory, 88 blocks. 26 is the reason -- an M10K's
+native widths are 8, 16, 20 and 40, so a 26-bit word takes a 20-bit slice
+plus an 8-bit slice and wastes the rest of both.
+
+The four vertices of a quad were never independent memories: they are
+written in the same cycle and read in the same cycle. One array per bank of
+4 x 26 = 104 bits is the same storage under one address, and 104 fills three
+40-bit slices. Eight blocks per slice at 2,048 deep gives 24 blocks a bank,
+48 against 88 -- about 40 blocks back, with no quad lost and no change to
+NQ. It also turns the replay's four reads into one.
+
+For the record, since it was measured today and is not a one-line change:
+`m2_video`'s 32 tilemap line stores are 128 x 15 and would be four MLABs
+each, 1,280 ALM for 32 blocks -- but Quartus DECLINES `ramstyle = "MLAB"` on
+them and leaves them AUTO, as an earlier session recorded in that file. The
+cheap MLAB tier that Quartus does accept is about 46 blocks for ~2,000 ALM
+(four 16 x 16 sound arrays, the 96 x 8 translation stage, 128 x 32 in the
+i960 and coprocessor, 512 x 8 in the loader, 128 x 48 in the geometrizer).
+The character cache is the biggest single consumer at 128 blocks and would
+need 2,048 MLABs -- half the chip -- so it shrinks or it stays.
+
+Texture data itself does NOT need blocks: it is already in SDRAM at word
+0x720000 and the engine already reads texture headers from there, exactly as
+the reference reads its texture ROM. What needs on-chip memory is a cache to
+turn per-pixel reads into bursts, which is a handful of blocks.
