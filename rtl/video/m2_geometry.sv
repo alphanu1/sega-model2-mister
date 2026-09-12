@@ -115,6 +115,12 @@ module m2_geometry (
   output logic [15:0] dbg_clip_in, dbg_clip_out, dbg_clip_dropped,
   output logic [15:0] dbg_nonfinite,   // polygons refused before the arithmetic
   output logic [15:0] dbg_behind,      // R246: polygons entirely behind the eye (max_z < 0)
+  // R249: the frame's lighting, for the UART. The board is the only place the
+  // "whole scene black" and "whole scene white" reports can be measured, and
+  // neither has an instrument on it. `dbg_lum_go` is one pulse per polygon the
+  // engine hands over, with its luminance.
+  output logic        dbg_lum_go,
+  output logic  [7:0] dbg_lum,
   input  logic  [7:0] zadj_e,          // R246: geo op 0x08's exponent byte, the z-sort bias
   output logic [15:0] dbg_pj_lost,     // projections abandoned on timeout
   // WHERE THE PIPELINE IS SITTING. The board wedges with the walk in W_OBJW,
@@ -160,7 +166,7 @@ module m2_geometry (
     .tha(tha), .lit_x(lit_x), .lit_y(lit_y), .lit_z(lit_z),
     .tp_we(tp_we), .tp_idx(tp_idx), .tp_diffuse(tp_diffuse), .tp_ambient(tp_ambient),
     .col_inval(col_inval), .tex_lum(tex_lum), .mem_space(mem_space),
-    .poly_col(poly_col), .poly_zmode(poly_zmode), .poly_luma(), .dbg_col_miss(dbg_col_miss),
+    .poly_col(poly_col), .poly_zmode(poly_zmode), .poly_luma(dbg_lum), .dbg_col_miss(dbg_col_miss),
     .clk(clk), .rst_n(rst_n),
     .start(start), .oba(oba), .obc(obc), .busy(eng_busy),
     .mat_we(mat_we), .mat_idx(mat_idx), .mat_data(mat_data),
@@ -390,6 +396,7 @@ module m2_geometry (
   wire        zc_behind = zmax_c[31] && (zmax_c[30:0] != 31'd0);
 
   assign poly_ready = (qst == Q_IDLE);
+  assign dbg_lum_go = poly_valid && poly_ready;   // R249
   assign w_pj_valid = (qst == Q_ISS);
   assign w_pj_x = hx[qi]; assign w_pj_y = hy[qi]; assign w_pj_z = hz[qi];
 

@@ -524,6 +524,39 @@ wire [15:0] r3d_collect_cyc; // R210: frame_start -> q_end, units of 16 clk_sys 
 wire  [7:0] r3d_hold;        // R213: frames the last list stayed on display
 wire [15:0] r3d_missed;      // R213: scanlines drawn with no band ready
 wire [15:0] geo_behind;      // R246: polygons entirely behind the eye, culled as the reference culls them
+wire        geo_lum_go;      // R249: one pulse per polygon handed to the clipper
+wire  [7:0] geo_lum;         // ...with its luminance
+
+// R249: THE FRAME'S LIGHTING, ON THE WIRE. "Some scenes too lit, others all
+// black" has been reported from the board three times and measured nowhere:
+// the bench's own light table turned out to be a bench artefact (R247). These
+// are per FRAME -- mean luminance, and how many polygons came out at zero,
+// which is the black one -- latched at frame_start so a slice of the stream is
+// a slice of time and not a running total.
+logic [21:0] lum_sum;
+logic [13:0] lum_n, lum_z;
+logic  [7:0] lum_mean_f, lum_zpc_f;
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+	if (!mem_rst_n) begin
+		lum_sum <= 22'd0; lum_n <= 14'd0; lum_z <= 14'd0;
+		lum_mean_f <= 8'd0; lum_zpc_f <= 8'd0;
+	end else begin
+		if (geo_lum_go && !(&lum_n)) begin
+			lum_sum <= lum_sum + 22'(geo_lum);
+			lum_n   <= lum_n + 14'd1;
+			if (geo_lum == 8'd0) lum_z <= lum_z + 14'd1;
+		end
+		if (geo_frame_start) begin
+			// The mean needs a divide; a shift by the count's magnitude is not
+			// the mean and would read as a lighting change when the polygon
+			// count moved. This is one divider, off the critical path, and it
+			// only has to be right once a frame.
+			lum_mean_f <= (lum_n == 14'd0) ? 8'd0 : 8'(lum_sum / 22'(lum_n));
+			lum_zpc_f  <= (lum_n == 14'd0) ? 8'd0 : 8'((22'(lum_z) * 22'd100) / 22'(lum_n));
+			lum_sum <= 22'd0; lum_n <= 14'd0; lum_z <= 14'd0;
+		end
+	end
+end
 wire  [7:0] geo_zadj_e;      // R246: the z-sort bias's exponent byte, from geo op 0x08
 wire  [7:0] geo_walk_unknown;
 wire  [3:0] geo_walk_state;
@@ -2725,6 +2758,7 @@ m2_geometry u_geometry (
 	.dbg_culled(geo_culled),
 	.dbg_clip_in(geo_clip_in), .dbg_clip_out(geo_clip_out),
 	.dbg_clip_dropped(geo_clip_drop), .dbg_nonfinite(geo_nonfinite), .dbg_behind(geo_behind), .zadj_e(geo_zadj_e),
+	.dbg_lum_go(geo_lum_go), .dbg_lum(geo_lum),
 	.dbg_pj_lost(geo_pj_lost),
 	.dbg_eng_state(geo_eng_state), .dbg_qst(geo_qst),
 	.dbg_clip_state(geo_clip_state)
@@ -4055,7 +4089,7 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	.b_data((wedge_have && wedge_ph == 2'd1) ? wedge_q[95:64]
 	      : (wedge_have && wedge_ph == 2'd2) ? wedge_q[31:0]
 	      : sw_pend                         ? {8'd0, sw_out}                    // R238: the fold
-	      : {r3d_missed[7:0], r3d_dropped[7:0], wedge_slot, wedge_n[6:0], r3d_quads[11:4]}),   // R244: missed bands where the always-zero half of dropped was
+	      : {lum_mean_f, lum_zpc_f, wedge_slot, wedge_n[6:0], r3d_quads[11:4]}),   // R249: the frame's mean luminance and its black-polygon percentage, where the always-zero drop count and the free-running miss count were
 	.a_tag(8'h43),
 	.b_tag((wedge_have && wedge_ph == 2'd1) ? 8'h57 : (wedge_have && wedge_ph == 2'd2) ? 8'h58
 	     : sw_pend ? 8'h53 : 8'h48),   // 'W', 'X', 'S', 'H'          // 'C' copro in_pushed:out_pushed | TGP retires:pc
