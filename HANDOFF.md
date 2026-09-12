@@ -1,6 +1,25 @@
 # Handoff
 
-**Updated:** 2026-09-12 03:35 (machine clock). Study entries R176-R246.
+**Updated:** 2026-09-12 11:10 (machine clock). Study entries R176-R248.
+
+## 11:10, 09-12: THE TEXTURE-RAM CLEAR NEVER RAN (R248) -- READ FIRST
+
+`st_run`, which gates the boot writer into the write arbiter, covered states 1
+to 8 only; R223's texture-RAM zero sweep runs in states 12 to 15. The arbiter
+acknowledges only a port it picked and picks only one that is requesting, so
+the sweep waited forever and wrote nothing. Daytona never writes texture RAM,
+so the reference reads zeros for a header held there and the board reads
+0xFFFF -- bit 13 is the translucent flag and a translucent polygon is culled,
+so every object with a RAM-resident header (7,908 of 114,986, 6.9%) has been
+discarded on the board and drawn at the desk, because `tb_m2_boot` zeroes that
+region in its own image. `build/fix3d12` carries the one-line fix.
+
+Confirmed on hardware since the last handoff: R242's `bno` fixed the cars'
+crash-roll, and R246's per-polygon sort depth stopped them flashing and put
+the track back under them. R247 was CORRECTED: the display-list RAM was
+already filled with 0x07800F0F by `bi_*`, so the 255/255 light table the
+bench measured was a bench artefact; the bench fill stays, the duplicate RTL
+sweep is gone.
 
 ## 03:35, 09-12: WHERE THE PICTURE STANDS
 
