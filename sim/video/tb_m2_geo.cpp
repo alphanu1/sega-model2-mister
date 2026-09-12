@@ -48,7 +48,14 @@ static void w(int which, uint32_t v){
   d->wr_ctl=d->wr_setwp=d->wr_setrp=d->wr_push=0;
   if(which==0) d->wr_ctl=1; else if(which==1) d->wr_setwp=1;
   else if(which==2) d->wr_setrp=1; else d->wr_push=1;
-  d->wdata=v; tick(); idle();
+  d->wdata=v;
+  // R260: THE PUSH IS HELD WHILE `push_stall` IS HIGH, exactly as the bridge
+  // holds an I/O access while `io_stall` is high -- select asserted, same data,
+  // until it is taken. A pusher that ignores the stall loses the word silently,
+  // which is worse than the drop this replaces.
+  d->eval();
+  for(int guard=0; which==3 && d->push_stall && guard<4096; ++guard) tick();
+  tick(); idle();
 }
 static void ck(const char*w_,uint32_t got,uint32_t want){
   ++checks; if(got!=want){ std::printf("  FAIL %-38s got=%08x want=%08x\n",w_,got,want); ++fails; }
@@ -125,21 +132,31 @@ int main(int argc,char**argv){
     ck("post-change dword at 0x C00",  mem[c]|(uint32_t(mem[c+1])<<16), 0xB0000002);
   }
 
-  // ---- 6. the i960 is never held: overrun drops and counts
+  // ---- 6. R260: THE I960 IS HELD, AND NOTHING IS LOST.
+  //
+  // This used to assert the opposite -- that an overrun DROPS and counts, and
+  // never stalls. The board says what that costs: the queue drops continuously,
+  // and a drop is a hole in the display list because the write pointer
+  // deliberately does not advance, so the next dword takes the missing one's
+  // slot. The reference has no queue and cannot drop; it writes bufferram and
+  // returns. Measured against it, the light table the game writes in one
+  // 64-word command has no zero entry anywhere, and the board's copy had
+  // nineteen. So the contract is now backpressure: hold the pusher, drop
+  // nothing.
   mem.clear();
   w(1, 0x00001000); idle();
   uint32_t drop0 = d->dbg_dropped;
-  d->wr_push=1;
-  for(int i=0;i<4000;i++){ d->wdata=0xC0000000u+i; tick(); }   // no drain time
-  d->wr_push=0;
-  for(int i=0;i<200;i++) tick();
+  for(int i=0;i<4000;i++) w(3, 0xC0000000u+i);
+  for(int i=0;i<400;i++) tick();
   ++checks;
-  if(d->dbg_dropped == drop0){
-    std::printf("  FAIL 4000 pushes into a %d-deep queue dropped nothing\n", 128);
+  if(d->dbg_dropped != drop0){
+    std::printf("  FAIL 4000 held pushes still dropped %u\n", d->dbg_dropped-drop0);
     ++fails;
   } else {
-    std::printf("  overrun: %u dropped, counted, never stalled\n", d->dbg_dropped-drop0);
+    std::printf("  overrun: 4000 pushes, none dropped -- the pusher was held\n");
   }
+  // and the write pointer advanced once per dword, so the list has no hole
+  ck("write pointer after 4000 held pushes", d->dbg_wp, 0x00001000u + 4000u*4u);
 
   // ---- 7. THE DISPLAY-LIST WALK
   //

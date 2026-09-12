@@ -2681,7 +2681,7 @@ m2_geo #(.AW(SDR_AW), .DEPTH(128)) u_geo (
 	// the dot products and the diffuse/ambient scale are still to come.
 	.zadj_e(geo_zadj_e),
 	.lit_x(geo_lit_x), .lit_y(geo_lit_y), .lit_z(geo_lit_z),
-	.dbg_lit_n(geo_lit_n), .dbg_nops(geo_nops),
+	.dbg_lit_n(geo_lit_n), .dbg_nops(geo_nops), .push_stall(geo_push_stall),
 	// The diffuse/ambient table, streamed. Captured but not yet consumed -- the
 	// luminance stage that reads it is the next piece.
 	.tp_we(geo_tp_we), .tp_idx(geo_tp_idx),
@@ -2759,6 +2759,7 @@ wire  [4:0] geo_tp_idx;
 wire  [7:0] geo_tp_diffuse, geo_tp_ambient;
 wire [15:0] geo_tp_n;
 wire [15:0] geo_nops;        // R255: nop commands the walker decoded last frame
+wire        geo_push_stall;  // R260: the push queue is full and the CPU waits
 
 // THE GEOMETRY PIPELINE. object_data in, screen quads out; see m2_geometry.sv.
 //
@@ -2869,7 +2870,9 @@ wire        copro_sel      = copro_fifo_sel | copro_ctl_sel | copro_fctl_sel;
 // The function port is write-only; it never contributes to the read mux.
 // Only the coprocessor can hold the bus today; the wire is named for the bus,
 // not for the coprocessor, so a second such peripheral ORs into it.
-wire        cpu_io_stall   = copro_stall;
+// R260: the geometry push port holds the CPU while its queue is full, rather
+// than dropping the dword and leaving a hole in the display list.
+wire        cpu_io_stall   = copro_stall | geo_push_stall;
 wire [31:0] copro_rdata;
 wire        copro_stall;
 wire [31:0] copro_dbg_ctl;

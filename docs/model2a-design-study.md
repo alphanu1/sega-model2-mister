@@ -13895,3 +13895,41 @@ the board: make it 50%. An OSD bit reads zero until it is moved, so the menu
 is reordered to 50/75/100/25 and `scale_lum`'s cases reordered to match --
 selector 0 is now half. `tb_m2_geo_engine`'s expectation scales with the
 selector instead of assuming full (41 checks).
+
+**R260 -- THE REFERENCE'S LIGHT TABLE HAS NO ZERO IN IT, AND THE PUSH QUEUE
+IS WHY OURS DOES.** The reference's texture_parameters command is rare --
+about one frame in four hundred -- so twenty-two sampled dumps of its
+display list contained none, and sampling was the wrong instrument. Walking
+the list IN LUA on every frame catches it (`tools`-side script in the
+scratchpad, frames 63 and 64 of the attract):
+
+    TP index 0 count 32: 0:127/63 1:127/47 2:127/111 3:255/255 4:127/127
+                         5:79/95 6:127/127 7:127/47 8..31: 255/255
+
+One command writes the WHOLE table, 64 payload words, and not one entry is
+zero -- 255/255 is simply what the unused upper half holds. The board's copy
+of the same table had NINETEEN of thirty-two entries at 0/0, and a polygon
+indexing one of those renders black however well lit the scene should be.
+That is the user's "whole scenes where everything is black", and it is a
+corrupted payload, not a lighting model.
+
+The corruption is the push queue. It drops when full, and a drop is a HOLE:
+`geo_wp` deliberately does not advance on a drop, so the next dword takes
+the missing one's slot and every word after it shifts by one. In a 64-word
+payload that turns real values into whatever the neighbouring words hold.
+The board's drop counter climbs continuously.
+
+So the queue now holds the CPU off instead, which is what the reference's
+absence of a queue amounts to and what `io_stall` already does for the
+coprocessor. The implementation detail that cost a board build: `wr_push` is
+a one-cycle pulse under the bridge's ordinary handshake and a LEVEL while
+`io_stall` is held, so a naive stall pushes the same dword every cycle after
+the queue makes room -- the board reported that as the walk's nop count
+going from 4 to 280. The push is now one-shot per access, with a new access
+marked by the strobe rising OR the dword changing, because a pusher may hold
+the strobe across two words and `tb_m2_geo` models one that does.
+
+`tb_m2_geo` asserted the OLD contract -- "the i960 is never held: overrun
+drops and counts" -- and now asserts the new one: 4,000 pushes into a
+128-deep queue, none dropped, the pusher held, and the write pointer exactly
+4,000 dwords on, so the list has no hole (76 checks).

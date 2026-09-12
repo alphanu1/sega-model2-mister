@@ -138,6 +138,16 @@ module m2_geo #(
   // frame against the reference's none, but that turned out to be the bench's
   // own malformed list (R254), so the board has to be asked directly.
   output logic [15:0]   dbg_nops,
+  // R260: BACKPRESSURE, DONE PROPERLY. The queue between the i960 and SDRAM
+  // drops when full, and a drop is a HOLE: the write pointer deliberately does
+  // not advance, so the next dword takes the missing one's slot. The reference
+  // writes its whole 32-entry light table in ONE command of 64 payload words
+  // and every entry it writes is non-zero (measured: 127/63, 127/47, 127/111,
+  // 255/255, ... with 255/255 for the unused upper half). The board's table
+  // holds nineteen entries at 0/0, so that payload is being disturbed, and the
+  // drop counter climbs continuously. The reference cannot drop -- it has no
+  // queue -- and real hardware holds the CPU off instead.
+  output logic          push_stall,
   // geo_texture_parameters (0x06) as a WRITE STREAM, the same shape as the
   // matrix's. Model 2's luminance is
   //     luminance * texparam->diffuse + texparam->ambient
@@ -187,6 +197,30 @@ module m2_geo #(
   // A push only queues when the reference would have queued it: in upload mode
   // the data is counted and discarded, exactly as geo_prg_w does.
   wire push_now = wr_push && !uploading;
+  // ONE PUSH PER ACCESS. `wr_push` is a single-cycle pulse under the bridge's
+  // ordinary handshake, but while `io_stall` is held the bridge RE-ASSERTS its
+  // select every cycle, so it becomes a LEVEL -- and the first version of this
+  // pushed the same dword again on every cycle after the queue made room. The
+  // board showed that as the walk's nop count going from 4 to 280.
+  // A NEW ACCESS IS THE STROBE RISING **OR** THE DATA CHANGING. The bridge
+  // pulses `wr_push` once per access, so the falling edge alone would do -- but
+  // a pusher that holds the strobe across two words is a legal thing to model
+  // and `tb_m2_geo` does exactly that, so the dword itself marks the boundary
+  // too. The only case the two cannot separate is the same value pushed twice
+  // under one continuous strobe, which no access pattern here produces.
+  logic push_done;
+  logic [31:0] wdata_d;
+  wire  push_fire = push_now && !q_full && !push_done;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      push_done <= 1'b0; wdata_d <= 32'd0;
+    end else begin
+      wdata_d <= wdata;
+      if (!wr_push || (wdata != wdata_d)) push_done <= 1'b0;
+      else if (push_fire)                 push_done <= 1'b1;
+    end
+  end
+  assign push_stall = push_now && q_full && !push_done;
 
   // THE DESTINATION TRAVELS WITH THE DWORD. The queue decouples the push from
   // the drain, so a drain-side counter would be wrong the moment the game sets
@@ -200,7 +234,7 @@ module m2_geo #(
 
   m2_fifo_m10k #(.DW(52), .DEPTH(DEPTH)) u_pushq (
     .clk(clk), .rst_n(rst_n),
-    .push(push_now), .din({geo_wp, wdata}),
+    .push(push_fire), .din({geo_wp, wdata}),
     .pop(q_pop), .q(q_data), .q_valid(q_valid),
     .full(q_full), .count(q_count), .dropped(dbg_dropped)
   );
@@ -226,7 +260,7 @@ module m2_geo #(
       // the game reads it back to find where it is, and it is four ahead of the
       // last word it wrote. A drop must not advance it, or the list gains a hole
       // AND a wrong pointer.
-      if (push_now && !q_full) begin
+      if (push_fire) begin
         geo_wp <= geo_wp + 20'd4;
         if (!(&dbg_pushes)) dbg_pushes <= dbg_pushes + 32'd1;
       end
