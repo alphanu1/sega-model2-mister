@@ -13616,3 +13616,53 @@ reaches the clipper and emits nothing (39 checks). With the mode forced back
 to "always minimum" the zmode-2 check fails, so the bench sees the bug it was
 blind to. `test_m2_geo_engine` 41, `test_m2_geo` 75, `test_m2_raster3d` 8,
 `lint_top` clean.
+
+**R247 -- THE DISPLAY-LIST RAM HAS A RESET PATTERN, AND WE CAME UP WITH
+UNWRITTEN MEMORY INSTEAD.** The user, on `build/fix3d10`: the cars are
+right and no longer flash (R246 confirmed on hardware), but "the scenery
+vanishes, not always there" and there are "scenes where all models are
+black, as if there is no light". The lighting half is measured, not
+guessed. `R245`'s probe, over 3,038,460 polygons of a 150 M-instruction
+run:
+
+    LIGHT PARAMETERS: polygons 3,038,460, of which 4,096 read an entry of
+    {diffuse 0, ambient 0} -- black
+    walker wrote / polygons asked, per entry: 0:30/302690 2:29/1139268
+    3:29/362694 5:29/567596 7:28/548330 ...
+    TEXTURE PARAMETERS (index: diffuse/ambient): 0:255/255 1:255/255
+    2:255/255 3:255/255 4:255/255 5:255/255 6:52/0 7:54/0 8:57/0 9:59/0
+    10:255/255 ... 15:255/255
+    LUMINANCE over 3,038,460 polygons, zero on 155,431 (5.1%); the top bin
+    holds 2,165,799 -- 71%
+
+So the light table is not starved: every entry a polygon asks for was
+written about thirty times. It is written with the WRONG THING. Entries
+6-9 hold plausible values (52/0, 54/0, 57/0, 59/0); the rest hold exactly
+255/255, which is `luminance = |dot| * 255 + 255` clamped to 255 -- white,
+always, and 71% of all polygons land in the top luminance bin.
+
+255 and 255 are the two bytes of 0xFFFF, which is what unwritten SDRAM
+reads on this board. `model2.cpp`'s reset says where they should have come
+from:
+
+    // initialize bufferram to a sane default
+    // TODO: HW can probably parse this at will somehow ...
+    for (int i = 0; i < 0x20000/4; i++)
+        m_bufferram[i] = 0x07800f0f;
+
+All 128 KB of the display-list RAM. A texture-parameter command whose
+count runs past what the game actually wrote therefore reads diffuse 0x0f
+and ambient 0x0f in the reference -- dim, and the same every time -- and
+255/255 here. The same pattern is also opcode 0x0f, END, so an unwalked
+region stops the walk in the reference rather than being interpreted.
+
+Model2.sv now sweeps word 0x16f0000 for 65,536 words at boot with
+0x0F0F/0x0780 by word parity, in three new states beside R223's texture-RAM
+sweep (`st_state` widened to five bits; `cal_done` is unchanged at >= 12,
+so nothing waits longer). `tb_m2_boot` fills the same region the same way
+before the run, because the bench had no boot sweep and would otherwise
+keep measuring 0xFFFF. Verified by re-running the R245 probe.
+
+Not established: whether this also explains the black scenes. It cannot be
+the 4,096 polygons that read {0,0} -- that is 0.13% -- so the black scenes
+are still open, and the scenery that vanishes is open too.

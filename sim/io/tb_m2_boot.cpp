@@ -263,6 +263,13 @@ int main(int argc, char **argv) {
   }
 
   mem.assign(size_t(1) << 25, 0xffff);
+  // R247: THE DISPLAY-LIST RAM COMES UP WITH THE REFERENCE'S PATTERN, as
+  // model2.cpp's reset sets it -- 0x07800F0F in every dword of the 128 KB.
+  // Model2.sv now sweeps it at boot; the bench has no boot sweep, so it starts
+  // there. Unwritten, it read 0xFFFF, and a texture-parameter command that runs
+  // past what the game wrote then read diffuse 255 and ambient 255, which
+  // saturates every polygon that uses the entry.
+  for (uint32_t i = 0; i < 0x10000u; i++) mem[0x16f0000u + i] = (i & 1) ? 0x0780 : 0x0f0f;
   // R223: TEXTURE RAM IS ZERO AT BOOT, because Model2.sv sweeps it once after
   // the capture calibration -- the reference's raster_state is value-
   // initialised and nothing in a whole run of this title ever writes it, so
