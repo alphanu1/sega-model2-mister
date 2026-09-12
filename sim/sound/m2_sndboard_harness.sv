@@ -69,7 +69,12 @@ module m2_sndboard_harness #(
 
   output logic        obs_as,
   output logic [23:0] obs_addr,
-  output logic        obs_we
+  output logic        obs_we,
+  // R267: THE THREE SOURCES SEPARATELY. The user reports the music quiet
+  // against the samples. The reference mixes the FM at 0.30 and each sample
+  // chip at 0.5 (segam1audio.cpp), so the ratio is not the question -- what
+  // each chip actually produces is, and the mixer only exposes their sum.
+  output logic signed [15:0] obs_ym_l, obs_p1_l, obs_p2_l
 );
 
   m2_sound_board #(.PCM_CACHE(PCM_CACHE), .PCM_RATE(PCM_RATE)) u_board (
@@ -88,6 +93,11 @@ module m2_sndboard_harness #(
     .dbg_pcm_samples(), .dbg_pcm_lat(), .dbg_pcm_miss(),
     .dbg_pcm_under(obs_under), .dbg_pcm_level()
   );
+
+  // R267: the three sources before the mix
+  assign obs_ym_l = u_board.ym_l;
+  assign obs_p1_l = u_board.p1_l;
+  assign obs_p2_l = u_board.p2_l;
 
   assign obs_pcm_slot = u_board.u_pcm1.slot;
   assign obs_p1_req   = u_board.p1_creq;

@@ -276,6 +276,9 @@ int main(int argc, char **argv) {
   uint32_t first_pc = 0xffffffff;
   size_t ri = 0, resyncs = 0, skipped = 0;
   long pcm_samples = 0, cache_reads = 0, cache_bad = 0;
+  // R267: what each source actually produces, separately
+  bool level_fail = false;
+  long ym_pk = 0, p1_pk = 0, p2_pk = 0, out_pk = 0; double ym_sq = 0, p1_sq = 0, p2_sq = 0; long lvl_n = 0;
   // Sampled at the OUTPUT rate the rate stage drains at, not per clock.
   std::vector<int16_t> wav;
   const char *wavpath = std::getenv("M2_SND_WAV");
@@ -389,6 +392,14 @@ int main(int argc, char **argv) {
         wav_acc -= 48000000;
         wav.push_back(int16_t(d->snd_l));
         wav.push_back(int16_t(d->snd_r));
+        // R267: sample the three sources at the same rate as the mix, so peak
+        // and RMS are comparable between them.
+        long y = (int16_t)d->obs_ym_l, a = (int16_t)d->obs_p1_l, b = (int16_t)d->obs_p2_l;
+        long o = (int16_t)d->snd_l; if (labs(o) > out_pk) out_pk = labs(o);
+        if (labs(y) > ym_pk) ym_pk = labs(y);
+        if (labs(a) > p1_pk) p1_pk = labs(a);
+        if (labs(b) > p2_pk) p2_pk = labs(b);
+        ym_sq += double(y)*y; p1_sq += double(a)*a; p2_sq += double(b)*b; ++lvl_n;
       }
     }
     if (prev_slot == 27 && d->obs_pcm_slot == 0) {
@@ -540,6 +551,25 @@ int main(int argc, char **argv) {
   }
 
   std::printf("m2_sndboard: fails=%d\n", fails);
+  if (lvl_n) {
+    // R267: the FM against the samples, measured rather than assumed. The
+    // reference mixes the FM at 0.30 and each sample chip at 0.5, so if our
+    // chips produce comparable levels the music should sit only a little under
+    // the effects. The user reports it far quieter than that.
+    std::printf("  LEVELS over %ld samples: ym peak %ld rms %.0f | pcm1 peak %ld rms %.0f | pcm2 peak %ld rms %.0f | OUT peak %ld\n",
+                lvl_n, ym_pk, std::sqrt(ym_sq/lvl_n), p1_pk, std::sqrt(p1_sq/lvl_n), p2_pk, std::sqrt(p2_sq/lvl_n), out_pk);
+    // R267: THE MIX MUST NOT ATTENUATE. It used to sum the three sources and
+    // shift right by two, which put this fixture's output at 2,312 of 32,767
+    // -- 7% of full scale, against the reference's own rendering at 52%. The
+    // sum saturates now instead, and on this fixture the output peak equals the
+    // loudest source. A return to any attenuation shows up here at once.
+    const long loudest = std::max(ym_pk, std::max(p1_pk, p2_pk));
+    if (out_pk < loudest) {
+      std::printf("  FAIL the mix attenuates: output peak %ld against loudest source %ld\n", out_pk, loudest);
+      level_fail = true;
+    }
+  }
+
   std::printf("%s\n", fails ? "FAIL" : "PASS");
   delete d;
   return fails ? 1 : 0;

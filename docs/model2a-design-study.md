@@ -14121,3 +14121,33 @@ ODD number of words so the run ends on a miss with a copy held, proves the
 copy is there by reading the next word with no invalidate (0 port trips),
 then repeats it with one (1 port trip). Deleting the invalidate fails it
 (4,513 checks).
+
+**R267 -- THE SOUND WAS SEVEN TIMES TOO QUIET, AND THE MIXER SAID SO IN ITS
+OWN COMMENT.** The user: the music is too quiet and the sample effects are
+much louder. The first half of that is measurable against the reference and
+the second half turns out not to be a balance problem at all.
+
+`m2_sound_board` summed its three sources into 18 bits and shifted back down
+by two, with a comment that called the result "quieter than the real board
+and honest about it". Measured: MAME's own rendering of this game peaks at
+17,140 of 32,767 -- 52% of full scale -- and ours peaked at 2,312, which is
+7%. A factor of seven, and the shift is four of it.
+
+The shift was guarding against a clip the sources cannot reach. Over the
+attract the FM peaks at 5,120 and a sample chip at 9,248 (new `LEVELS` line
+in `tb_m2_sndboard`, which taps the three before the mix), so all three
+together land near 23,600 with headroom. The sum now SATURATES instead, and
+is doubled: MAME's devices produce values well past 16 bits and its route
+gains -- 0.30 for the YM3438 and 0.5 for each MultiPCM, from
+`src/mame/shared/segam1audio.cpp` -- bring them back down, while ours arrive
+already scaled. Doubling puts the peak at 18,496 against the reference's
+17,140.
+
+The BALANCE was already right and is left alone, which the same measurement
+shows: the reference's gain ratio is 0.30 to 0.5, which is 0.6, and our raw
+peaks are 5,120 to 9,248, which is 0.55. The music sounded quiet against the
+effects because everything was at 7% of full scale, not because the FM was
+mixed low.
+
+`tb_m2_sndboard` now fails if the output peak ever falls below the loudest
+single source, which is what any return to attenuation looks like.

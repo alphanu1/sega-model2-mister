@@ -465,20 +465,44 @@ module m2_sound_board #(
     end
   end
 
-  // THE MIX, WITH HEADROOM. Three signed 16-bit sources summed into 18 bits and
-  // shifted back down by two rather than clipped: the FM alone reached about
-  // 5,000 of 32,767 and the sample chips carry most of the level, so summing at
-  // full scale and saturating would clip on the loud passages that matter. A
-  // fixed 2-bit attenuation is quieter than the real board and is honest about
-  // it; the alternative is a limiter nobody has measured against hardware.
-  wire signed [17:0] mix_l = {{2{ym_l[15]}}, ym_l}
+  // THE MIX, SUMMED AND SATURATED (R267). This used to sum the three sources
+  // into 18 bits and shift back down by two, with a comment saying that was
+  // "quieter than the real board and honest about it". Measured against the
+  // reference rather than reasoned about: MAME's own rendering of this game
+  // peaks at 17,140 of 32,767, 52% of full scale, and ours peaked at 2,312 --
+  // 7%, about seven times quieter, and the shift is a factor of four of that.
+  //
+  // The shift was protecting against a clip that the sources cannot reach. Over
+  // the attract the FM peaks at 5,120 and a sample chip at 9,248, so all three
+  // together land near 23,600 of 32,767 with headroom to spare. Summing at full
+  // scale and SATURATING is what the board does -- its DAC clips -- and it
+  // costs nothing on material that never gets there.
+  //
+  // The balance between them is left alone, and the same measurement says it
+  // is right: the reference mixes the FM at 0.30 against 0.5 for each sample
+  // chip (segam1audio.cpp), a ratio of 0.6, and our raw peaks give 5,120 to
+  // 9,248, which is 0.55.
+  // AND THE SUM IS DOUBLED, TO MATCH THE REFERENCE RATHER THAN APPROACH IT.
+  // MAME's rendering of this game peaks at 17,140 of 32,767 and the plain sum
+  // put us at 9,248 -- a factor of 1.85 short, because MAME's devices produce
+  // values well past 16 bits and its 0.30/0.5 route gains bring them back
+  // down, while ours arrive already scaled. Doubling lands at 18,496 against
+  // its 17,140, and the saturation below is what keeps that safe.
+  wire signed [17:0] sum_l = {{2{ym_l[15]}}, ym_l}
                            + {{2{p1_l[15]}}, p1_l}
                            + {{2{p2_l[15]}}, p2_l};
-  wire signed [17:0] mix_r = {{2{ym_r[15]}}, ym_r}
+  wire signed [17:0] sum_r = {{2{ym_r[15]}}, ym_r}
                            + {{2{p1_r[15]}}, p1_r}
                            + {{2{p2_r[15]}}, p2_r};
-  assign snd_l = mix_l[17:2];
-  assign snd_r = mix_r[17:2];
+  wire signed [18:0] mix_l = {sum_l[17], sum_l} <<< 1;
+  wire signed [18:0] mix_r = {sum_r[17], sum_r} <<< 1;
+  function automatic logic signed [15:0] sat16(input logic signed [18:0] v);
+    sat16 = (v > 19'sd32767)  ? 16'sh7FFF
+          : (v < -19'sd32768) ? 16'sh8000
+                              : v[15:0];
+  endfunction
+  assign snd_l = sat16(mix_l);
+  assign snd_r = sat16(mix_r);
 
   m2_pcm_rate #(.BYPASS(!PCM_RATE)) u_rate1 (
     .clk(clk), .rst_n(rst_n), .ce(ce_pcm1),
