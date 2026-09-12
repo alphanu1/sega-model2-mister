@@ -13834,3 +13834,34 @@ the board decides. Beside it, R255 streams what the walk actually did --
 nops decoded, commands, objects, unknown opcode, push drops -- as 'U'
 records, because the reference's list contains no nops at all and any run of
 them is the walk reading data as commands.
+
+**R258 -- THE BOARD ANSWERED: THE WALK IS SOUND AND THE PUSH QUEUE DROPS.**
+R255's 'U' records, first capture (`build/fix3d15`):
+
+    WALK: per frame -- nops decoded med 0 max 4 | commands med 67 |
+          unknown op 00 | push drops 252
+
+So the walk does NOT lose sync on hardware: no nop runs, no unknown opcode,
+67 commands a frame against the reference's 57-91. Every desk symptom that
+pointed that way was the bench's own malformed list (R254-R257). What the
+board does report is 252 DROPS from the queue between the i960 and SDRAM,
+and in the same capture a light table with NINETEEN of its thirty-two
+entries reading 0/0 -- up from twelve. Every polygon indexing one of those
+renders black, which is the user's "whole scenes where everything is black".
+
+A drop is not a lost word, it is a HOLE. `m2_geo` deliberately does not
+advance the write pointer on a drop -- "a drop must not advance it, or the
+list gains a hole AND a wrong pointer" -- so the next dword takes the
+missing one's slot and every word after it shifts by one. A shifted list
+still walks (the opcodes are still opcodes) but its operands belong to the
+command before, which is exactly how a texture_parameters command comes to
+write real-looking values at scattered indices and zeros everywhere else.
+
+The reference has no queue and cannot drop: `push_geo_data` writes bufferram
+and returns. Real hardware holds the CPU off instead. The bridge already has
+that path -- `io_stall` holds an I/O access with `io_sel` asserted, which is
+how the coprocessor stalls the i960 -- so `m2_geo` now raises `push_stall`
+while a push meets a full queue, and Model2.sv ORs it into `cpu_io_stall`.
+No combinational loop: the bridge's `io_sel` is registered and the stall is
+sampled in S_IOW. The measure is the board's own drop count, which must read
+zero, and the light table, which must stop holding 0/0.
