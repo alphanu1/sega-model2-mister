@@ -1,6 +1,23 @@
 # Handoff
 
-**Updated:** 2026-09-12 21:15 (machine clock). Study entries R176-R263.
+**Updated:** 2026-09-12 21:55 (machine clock). Study entries R176-R266.
+
+## 21:55, 09-12: THE PAIR CACHE WAS THE LIGHTING (R266)
+
+The user set `O[25]` Pair cache to Off and reported the lighting correct for
+the first time; the capture agreed -- luminance median 149, minimum 101, no
+black polygons, against every earlier capture pegged at 255 or collapsed to 0.
+The cache keeps the dword AFTER the one it fetched, and Daytona patches a
+command's count in AFTER pushing its payload, so a copy taken between the two
+hands the walker the placeholder. It now drops its copy whenever the CPU
+writes the list (and the engine's cache does the same on the geometrizer's
+polygon DMA), so R214's throughput is kept. `build/fix3d23` carries it: the
+test is whether the lighting stays correct with the cache back ON.
+
+Also fixed and in the same build: R265, the walk-trigger OSD bits were taken
+raw while every other option goes through three flops, so those four modes
+have never been selectable and any earlier conclusion from switching them is
+void.
 
 ## OPEN FAULTS, PARKED DELIBERATELY TO START TEXTURE MAPPING
 
