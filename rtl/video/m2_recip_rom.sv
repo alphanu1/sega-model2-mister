@@ -41,8 +41,14 @@ module m2_recip_rom #(
   // Model 1 needed 1,024 for its unclipped -104..495 vertices; a bigger table
   // here costs M10K this design does not have, and |den| >= TN still takes the
   // exact restoring path, so the unit is correct for every input either way.
-  (* ramstyle = "MLAB" *) logic [31:0] recip_a [TN];
-  (* ramstyle = "MLAB" *) logic [31:0] recip_b [TN];
+  // `romstyle`, NOT `ramstyle` (R243, second attempt). An array with an
+  // initial block and no write port is a ROM, and Quartus steers ROMs with
+  // `romstyle`; `ramstyle = "MLAB"` was accepted and ignored, and the fitter
+  // failed again at 556 M10K of 553 with the table as two altsyncrams.
+  // "logic" builds it out of LUTs (and the fitter's own RAM-to-MLAB pass may
+  // take it from there), which is what this design has spare.
+  (* romstyle = "logic" *) logic [31:0] recip_a [TN];
+  (* romstyle = "logic" *) logic [31:0] recip_b [TN];
   // ceil(2^32/d). Entry 0 is never read - a zero denominator is trapped by the
   // divider - and entry 1 would be 2^32, which the divider special-cases.
   initial begin

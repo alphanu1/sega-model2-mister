@@ -546,7 +546,7 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 			lum_n   <= lum_n + 14'd1;
 			if (geo_lum == 8'd0) lum_z <= lum_z + 14'd1;
 		end
-		if (geo_frame_start) begin
+		if (geo_walk_start) begin
 			// The mean needs a divide; a shift by the count's magnitude is not
 			// the mean and would read as a lighting change when the polygon
 			// count moved. This is one divider, off the critical path, and it

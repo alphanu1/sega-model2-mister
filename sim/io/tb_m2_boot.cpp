@@ -64,6 +64,8 @@ static unsigned g_tp_dif[32], g_tp_amb[32]; static bool g_tp_seen[32];
 // R245: which light-parameter entry each polygon asked for, how many read an
 // all-zero entry (which renders black), and how often the walker wrote each.
 static long g_lp_used[32] = {0}, g_lp_zero = 0, g_tp_w[32] = {0};
+static long g_fr_poly = 0, g_fr_lsum = 0, g_fr_zero = 0; static uint32_t g_fr_lp = 0;   // R248, per frame
+static FILE *g_fr_log = nullptr;
 // R232: coprocessor data-ROM reads by dword address range. The loaded ROM is
 // 4 MB = 0x100000 dwords; the reference's region is 8 MB and reads above the
 // loaded part return zero; this core's address is 20 bits and would alias.
@@ -726,7 +728,13 @@ int main(int argc, char **argv) {
     // the walker's own opcode histogram counts 38 of them.
     // R245: the light parameter each polygon asked for, beside the entry the
     // engine read for it.
-    if (d->eng_poly_go) { g_lp_used[d->eng_lp]++; if (!d->eng_lp_dif && !d->eng_lp_amb) ++g_lp_zero; }
+    if (d->eng_poly_go) { g_lp_used[d->eng_lp]++; if (!d->eng_lp_dif && !d->eng_lp_amb) ++g_lp_zero;
+      // R248: the frame's own lighting, so a scene that renders black can be
+      // SEEN happening instead of inferred from a total. Per frame: polygons,
+      // mean luminance, how many came out zero, and which light entry they
+      // asked for.
+      ++g_fr_poly; g_fr_lsum += d->eng_luma; if (!d->eng_luma) ++g_fr_zero;
+      g_fr_lp |= (1u << d->eng_lp); }
     if (d->eng_poly_go) { unsigned l = d->eng_luma; ++g_luma_n; ++g_luma_hist[l >> 4]; if (l == 0) ++g_luma_zero;
       auto u2f = [](uint32_t u){ float f; std::memcpy(&f, &u, 4); return f; };
       double nx = u2f(d->nrm_x_o), ny = u2f(d->nrm_y_o), nz = u2f(d->nrm_z_o), ln = std::sqrt(nx*nx + ny*ny + nz*nz);
@@ -1211,6 +1219,10 @@ int main(int argc, char **argv) {
     if (g_state_trace) { std::setvbuf(g_state_trace, nullptr, _IOLBF, 0);
                          std::printf("  STATE TRACE -> %s\n", st2); }
   }
+  if (const char *fl = std::getenv("M2_FRAME_LIGHT")) {
+    g_fr_log = std::fopen(fl, "w");
+    if (g_fr_log) std::setvbuf(g_fr_log, nullptr, _IOLBF, 0);
+  }
   if (const char *ct = std::getenv("M2_COPRO_TRACE")) {
     g_copro_trace = std::fopen(ct, "w");
     if (!g_copro_trace) std::printf("  COPRO TRACE: cannot open %s\n", ct);
@@ -1245,6 +1257,15 @@ int main(int argc, char **argv) {
       if (d->vid_hb && !g_hb_p) { g_px = 0; if (!d->vid_vb) ++g_py; }
       if (d->vid_vb && !g_vb_p) {
         ++g_frames_done;
+        // R248: one line per frame that drew anything, with its lighting.
+        if (g_fr_log && g_fr_poly) {
+          std::fprintf(g_fr_log, "f%llu polys=%ld luma_mean=%.1f zero=%ld (%.0f%%) lp=%04x light=(%08x,%08x,%08x)\n",
+                       (unsigned long long)g_frames_done, g_fr_poly,
+                       (double)g_fr_lsum / g_fr_poly, g_fr_zero,
+                       100.0 * g_fr_zero / g_fr_poly, g_fr_lp,
+                       (unsigned)d->lit_x_o, (unsigned)d->lit_y_o, (unsigned)d->lit_z_o);
+        }
+        g_fr_poly = 0; g_fr_lsum = 0; g_fr_zero = 0; g_fr_lp = 0;
         // TILEMAP CONTENT CENSUS, to put beside the board's UART capture. The
       // board fetches only tiles 0, 1, 24576 and 24577 -- blank tiles with two
       // attributes -- so the question is what the SAME code writes here.
