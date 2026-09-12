@@ -622,6 +622,9 @@ module m2_boot_harness #(
     // alone, and it is why the desk's list always held a zero count.
     .base_char (AW'(32'h1690000)), .base_buffer(AW'(32'h16f0000)),
     .base_pal3d(AW'(32'h1730000)), .base_xlat3d(AW'(32'h1731000)), .col_inval(oc_col_inval),
+    // R264: the texture sheets and the luma table, at the same words Model2.sv
+    // gives them, so the bench can count what the game uploads.
+    .base_texs0(AW'(32'h1760000)), .base_texs1(AW'(32'h17E0000)), .base_luma(AW'(32'h1860000)),
     .sd_req(sd_req), .sd_we(sd_we), .sd_addr(sd_addr), .sd_din(sd_din),
     .sd_be(sd_be), .sd_dout(sd_dout_i), .sd_ack(sd_ack_i),
     .oc_tram_we(oc_tram_we), .oc_pal_we(oc_pal_we), .oc_addr(oc_addr),

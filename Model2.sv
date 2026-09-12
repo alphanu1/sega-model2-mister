@@ -1537,7 +1537,15 @@ localparam logic [SDR_AW:1] GAME_PRAM1  = SDR_AW'(32'h1720000);   // 128 KB, fas
 // Free space: PRAM1 ends at word 0x1730000 and ST_BASE is 0x1F00000.
 localparam logic [SDR_AW:1] GAME_PAL3D  = SDR_AW'(32'h1730000);   // 2 KB, palette 0x1000-0x13ff
 localparam logic [SDR_AW:1] GAME_XLAT3D = SDR_AW'(32'h1731000);   // 48 KB, colorxlat
-localparam logic [SDR_AW:1] GAME_TEXRAM = SDR_AW'(32'h1740000);   // 128 KB, texture RAM
+localparam logic [SDR_AW:1] GAME_TEXRAM = SDR_AW'(32'h1740000);   // 128 KB
+// R264: THE TEXTURE SHEETS AND THE LUMA TABLE. Daytona uploads textures by
+// ordinary CPU stores to 0x12000000 and 0x12400000 -- two sheets of 2048x1024
+// four-bit texels, stored as 1024x2048, four texels per 16-bit word -- and a
+// 32 K-byte luma table at 0x12800000. None of the three was decoded before, so
+// all of it went to the bridge's unmapped default.
+localparam logic [SDR_AW:1] GAME_TEXS0  = SDR_AW'(32'h1760000);   // 1 MB
+localparam logic [SDR_AW:1] GAME_TEXS1  = SDR_AW'(32'h17E0000);   // 1 MB
+localparam logic [SDR_AW:1] GAME_LUMA   = SDR_AW'(32'h1860000);   // 32 K words, texture RAM
 localparam logic [SDR_AW:1] GAME_TEX    = SDR_AW'(32'h0720000);   // texture ROM, byte 0x0e40000 in the MRA, 8 MB
 
 // WHERE CHARACTER RAM LIVES, AS ONE SIGNAL, because two things that must agree
@@ -2022,7 +2030,8 @@ m2_cpu_bridge #(.BUFFERRAM(1'b1), .BUFFERRAM_WRONLY(1'b0)
 	.clk_mem(clk_sys), .rst_n_mem(cpu_rst_n),
 	.base_prog(GAME_PROG), .base_data(GAME_DATA), .base_work(GAME_WORK),
 	.base_board(GAME_BOARD), .base_char(char_base), .base_buffer(GAME_BUFFER),
-	.base_pal3d(GAME_PAL3D), .base_xlat3d(GAME_XLAT3D), .col_inval(cpu_col_inval),
+	.base_pal3d(GAME_PAL3D), .base_xlat3d(GAME_XLAT3D),
+	.base_texs0(GAME_TEXS0), .base_texs1(GAME_TEXS1), .base_luma(GAME_LUMA), .col_inval(cpu_col_inval),
 
 	.sd_req(cpu_sd_req), .sd_we(cpu_sd_we), .sd_addr(cpu_sd_addr),
 	.sd_din(cpu_sd_din), .sd_be(cpu_sd_be),

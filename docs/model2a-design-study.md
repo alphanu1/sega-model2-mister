@@ -14011,3 +14011,59 @@ were. If the bad walks are fallback walks the board will say so in one
 capture; if they are not, the remaining suspect is ordering -- the CPU's
 patch store and the walker's read reach memory through different ports with
 nothing sequencing them.
+
+## Texture mapping: what the reference does, and the first step taken
+
+**R264 -- THE GAME UPLOADS ITS TEXTURES BY CPU STORES, AND WE WERE NOT
+DECODING THE ADDRESSES.** Read from `model2.cpp`'s map for `model2o_state`,
+which is what daytona93 runs:
+
+    map(0x12000000, 0x121fffff) ... .w(tex0_w).mirror(0x200000) share textureram0
+    map(0x12400000, 0x125fffff) ... .w(tex1_w).mirror(0x200000) share textureram1
+    map(0x12800000, 0x1281ffff) ... lumaram_r/w .umask32(0x000000ff)
+
+`tex0_w` keeps only `data & 0xffff` of each 32-bit store and packs two stores
+per dword, so as 16-BIT WORDS the CPU's dword index IS the word index. None
+of those three ranges was decoded by `m2_cpu_bridge`: they fell through to
+its unmapped default, were counted, and were thrown away. Every texture the
+game has uploaded since this core booted went nowhere.
+
+Now decoded into SDRAM at GAME_TEXS0 (word 0x1760000, 1 MB), GAME_TEXS1
+(0x17E0000, 1 MB) and GAME_LUMA (0x1860000, 32 K words). The store owns ONE
+16-bit word -- `half_only` in the decode reuses the path R82 built for
+upper-half stores -- because writing the dword's second half would land it on
+the next texel. The luma table takes one byte per 16-bit word rather than two
+packed, because R82 also measured that byte enables are lost between this
+bridge and the silicon, and a packed table would depend on exactly that.
+`tb_m2_cpu_bridge` checks all of it including the sheet mirror at +0x200000
+(125 checks; three fail with the decode removed).
+
+*The rest of the texture path, from `model2rd.ipp`, recorded before building
+any of it.* A texel is FOUR BITS. A sheet is 2048x1024 texels stored as
+1024x2048, and `get_texel` reads
+
+    x2 = base_x + x; y2 = base_y + y;
+    if (x2 >= 1024) { x2 -= 1024; y2 ^= 1024; }
+    offset = (y2/2)*512 + (x2/2);          // in 16-bit words, as we store them
+    texel = word >> ((y&1) ? 0 : 8) >> ((x&1) ? 0 : 4) & 0x0f;
+
+so one 16-bit word holds a 2x2 block of texels. The header gives the rest:
+width = 32 << (th0 & 7), height = 32 << ((th0>>3) & 7), x = 32 * (th2 & 0x3f),
+y = 32 * ((th2>>6) & 0x1f), sheet = th2 & 0x1000, wrap/mirror in th0[7:4],
+colorbase = (th3>>6) & 0x3ff, lumabase = (th1 & 0xff) << 7.
+
+Texture coordinates are NOT in the display list beside the vertices: they come
+from the object's `tpa` word, read as 16-bit pairs (v then u) from texture RAM
+or the texture ROM, the pointer advancing by NumVerts*2 per polygon. The
+engine already carries `tpa`; it reads `tha` the same way.
+
+Per vertex the reference then computes `pz = 1/z`, `pu = pu * pz / 8`,
+`pv = pv * pz / 8` and interpolates u/z, v/z and 1/z across the span,
+recovering u and v per pixel with one divide. Colour is
+`luma = lumaram[lumabase + (texel>>1)] * poly_luma / 256`, clamped to 0x3f,
+then the same colorxlat and gamma the flat path already uses.
+
+DEFERRED, deliberately: bilinear filtering, mipmap level selection and the
+microtexture blend. Point sampling first, and the per-pixel divide is the
+throughput question to measure rather than guess -- the reciprocal table
+R241 brought in from Model 1 is the obvious instrument.

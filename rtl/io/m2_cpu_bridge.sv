@@ -114,6 +114,15 @@ module m2_cpu_bridge #(
   // Reads of both ranges come back from the mirror.
   input  logic [AW:1] base_pal3d,        // 1 K words
   input  logic [AW:1] base_xlat3d,       // 24 K words
+  // R264: the two texture sheets and the polygon luma table. Daytona uploads
+  // its textures by ORDINARY CPU STORES to 0x12000000 and 0x12400000, and the
+  // reference keeps only the low 16 bits of each 32-bit store -- tex0_w packs
+  // two of them per dword. This core did not decode those addresses at all, so
+  // every texture the game has ever uploaded went to the unmapped default and
+  // was counted and discarded.
+  input  logic [AW:1] base_texs0,        // 1 MB, 16-bit words
+  input  logic [AW:1] base_texs1,        // 1 MB
+  input  logic [AW:1] base_luma,         // 32 K bytes, one per 16-bit word
 
   // SDRAM port. Sixteen bits wide, so a 32-bit access is TWO transactions --
   // the sequencer below issues the low half then the high half.
@@ -368,6 +377,11 @@ module m2_cpu_bridge #(
   // livelocked build.
   logic nocache;
   logic pal_mirror, xlat_mirror;   // R222: an SDRAM write that also lands on chip
+  // R264: this store owns ONE 16-bit word, not a dword's two. The texture
+  // sheets take the low half of each store and the luma table takes the low
+  // byte; writing a second word would land the store's upper half on the next
+  // texel, which is what the reference discards.
+  logic half_only;
 
   always_comb begin
     tgt     = T_NONE;
@@ -376,6 +390,7 @@ module m2_cpu_bridge #(
     nocache = 1'b0;
     pal_mirror  = 1'b0;
     xlat_mirror = 1'b0;
+    half_only   = 1'b0;
     if (r_addr < 32'h0020_0000) begin                       // program ROM
       tgt = T_SDRAM; is_rom = 1'b1;
       sd_word = base_prog + AW'(r_addr[20:1]);
@@ -419,6 +434,24 @@ module m2_cpu_bridge #(
       sd_word = base_pal3d + AW'(r_addr[10:1]);
     end else if (r_addr >= 32'h0180_0000 && r_addr < 32'h0180_4000) begin
       tgt = T_PAL;
+    end else if (r_addr >= 32'h1200_0000 && r_addr < 32'h1240_0000) begin
+      // R264: texture sheet 0, and its mirror at +0x200000. The reference's
+      // tex0_w takes `offset` as a DWORD index and stores data[15:0] at
+      // textureram[offset>>1], half offset&1 -- which as 16-bit words is
+      // simply word `offset`. So the CPU's dword index IS our word index.
+      tgt = T_SDRAM; half_only = 1'b1;
+      sd_word = base_texs0 + AW'(r_addr[21:2]);
+    end else if (r_addr >= 32'h1240_0000 && r_addr < 32'h1280_0000) begin
+      tgt = T_SDRAM; half_only = 1'b1;
+      sd_word = base_texs1 + AW'(r_addr[21:2]);
+    end else if (r_addr >= 32'h1280_0000 && r_addr < 32'h1282_0000) begin
+      // R264: the polygon luma table, 32 K BYTES -- the reference maps it
+      // umask32 0x000000ff, so one byte per dword. ONE BYTE PER 16-BIT WORD
+      // here rather than two packed: R82 measured that byte enables are lost
+      // between this bridge and the silicon, so a packed table would need the
+      // one mechanism this design knows it cannot trust.
+      tgt = T_SDRAM; half_only = 1'b1;
+      sd_word = base_luma + AW'(r_addr[16:2]);
     end else if (r_addr >= 32'h0181_0000 && r_addr < 32'h0181_c000) begin
       tgt = T_SDRAM; xlat_mirror = 1'b1;                    // R222: colorxlat, mirrored
       sd_word = base_xlat3d + AW'(r_addr[15:1]);
@@ -859,7 +892,7 @@ module m2_cpu_bridge #(
           //
           // So an upper-half write is complete after its one real word. Reads
           // are unchanged: the cache-bypass read path still fetches both.
-          if (r_we && r_addr[1]) begin
+          if (r_we && (r_addr[1] || half_only)) begin
             ack_mem <= 1'b1;
             st      <= S_DONE;
           end else begin

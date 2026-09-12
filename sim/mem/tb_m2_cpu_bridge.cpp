@@ -158,6 +158,8 @@ int main(int argc, char **argv) {
   dut->base_prog = 0x00000; dut->base_data = 0x40000;
   dut->base_work = 0x20000; dut->base_board = 0x30000; dut->base_char = 0x38000; dut->base_buffer = 0x40000;
   dut->base_pal3d = 0x50000; dut->base_xlat3d = 0x51000;
+  // R264: the texture sheets and the luma table
+  dut->base_texs0 = 0x60000; dut->base_texs1 = 0x70000; dut->base_luma = 0x80000;
   for (int i = 0; i < 200; ++i) step();
   dut->rst_n_cpu = 1; dut->rst_n_mem = 1;
   // LONG ENOUGH FOR THE CACHE'S RESET SWEEP, WHICH IS NOT A FIXED NUMBER.
@@ -478,6 +480,28 @@ int main(int argc, char **argv) {
     if (idx < 3) { std::printf("  boot walk did not complete (%d of 3)\n", idx); ++fails; }
     dut->bus_req = 0;
     for (int k = 0; k < CPU_DIV * 4; ++k) step();
+  }
+
+  // ---- R264: the texture sheets and the luma table ----
+  //
+  // Daytona uploads textures by ordinary CPU stores, and the reference's
+  // tex0_w keeps only data[15:0] of each 32-bit store, packing two per dword.
+  // As 16-bit words that means the CPU's DWORD index is the word index, and
+  // the store owns ONE word: writing a second would land its upper half on
+  // the next texel. None of these addresses was decoded before this, so every
+  // texture the game uploaded hit the bridge's unmapped default.
+  {
+    access(true, 0x12000000u, 0x11112222u, 0xf, nullptr);
+    expect("texture sheet 0 word 0", sdram[0x60000], 0x2222);
+    expect("sheet 0 takes one word only", sdram.count(0x60001) ? 1u : 0u, 0u);
+    access(true, 0x12000004u, 0x33334444u, 0xf, nullptr);
+    expect("texture sheet 0 word 1", sdram[0x60001], 0x4444);
+    access(true, 0x12400000u, 0x55556666u, 0xf, nullptr);
+    expect("texture sheet 1 word 0", sdram[0x70000], 0x6666);
+    access(true, 0x12800000u, 0x000000abu, 0xf, nullptr);
+    expect("luma table byte 0", sdram[0x80000] & 0xff, 0xab);
+    access(true, 0x12200000u, 0x0000789au, 0xf, nullptr);
+    expect("sheet 0 mirror", sdram[0x60000 + 0x80000], 0x789a);
   }
 
   std::printf("  probe6=%08x probe2=%08x (EEEEEEEE = never read)\n",
