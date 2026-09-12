@@ -13495,3 +13495,9 @@ scratch copy of `rtl/cpu/i960` and the same corrected transcription and
 generator, `test_i960_top` FAILS at retire 14 -- "IP got 00000144 want
 00000150", a bno the reference took and the mutant fell through. So the
 bench now sees the class of bug it had been standing in front of.*
+
+*R242 at the desk (01:58, 09-12): with the fix, the from-boot coprocessor
+trace agrees with the reference's tap for ALL 1,024,289 records through
+bench frame 656 (MAME frame 417), well past the frame-248 divergence -- the
+i960 now follows the game's path the reference follows. `build/fix3d8`
+carries it to the board with R240 and R241.*
