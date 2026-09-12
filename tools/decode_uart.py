@@ -22,6 +22,7 @@ import sys,collections
 C=[];H=[];W=[];SW=[]
 T=[]     # R251: light-table records
 U=[]     # R255: walk records
+V=[]     # R269: glyph cache records
 pend=None
 for line in open(sys.argv[1],errors='replace'):
     p=line.split()
@@ -32,6 +33,7 @@ for line in open(sys.argv[1],errors='replace'):
     elif p[0]=='H': H.append((a,d))
     elif p[0]=='T': T.append((a,d))     # R251: the light table
     elif p[0]=='U': U.append((a,d))     # R255: the walk's own numbers
+    elif p[0]=='V': V.append((a,d))     # R269: the glyph cache, per frame
     elif p[0]=='S': SW.append(((a>>8)&0x1f, a&0xff, d&0xffffff))   # R238: region, runs, fold
     elif p[0]=='W': pend=(a,d)
     elif p[0]=='X' and pend is not None:
@@ -75,6 +77,21 @@ if U:
     print('    walks started by the game\'s list-ready write: %d, by the vblank fallback: %d'
           % (rate(fl), rate(fb)))
     print('    (nops should be ZERO: the reference list holds none, so any run of them is the walk reading data as commands)')
+if V:
+    # R269: b_addr = {hits16, misses16}, b_data = {sibling fills16, overruns16},
+    # all PER FRAME. An overrun is a scanline whose fetches did not finish before
+    # the next one started: the bank does not flip and the previous line is drawn
+    # again, which is visible flicker. The fills say the sibling prefetch is
+    # running -- one per miss when it is.
+    hit=[(a>>16)&0xffff for a,_ in V]; mis=[a&0xffff for a,_ in V]
+    fil=[(d>>16)&0xffff for _,d in V]; ovr=[d&0xffff for _,d in V]
+    def med(v): w=sorted(v); return w[len(w)//2]
+    tot=[h+m for h,m in zip(hit,mis)]
+    rate=100.0*sum(hit)/max(1,sum(tot))
+    print('GLYPH CACHE (R269): per frame -- hits med %d, misses med %d max %d, hit rate %.1f%%'
+          % (med(hit), med(mis), max(mis), rate))
+    print('    sibling fills med %d (expect ~1 per miss), scanline overruns med %d max %d'
+          % (med(fil), med(ovr), max(ovr)))
 if T:
     # The walker's 32-entry light table, as the board holds it. Luminance is
     # |dot| * diffuse + ambient, so an entry of 0/0 renders every polygon that

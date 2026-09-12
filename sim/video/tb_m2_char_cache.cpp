@@ -55,33 +55,49 @@ static uint32_t ref(uint32_t a) {
 static int  fails = 0, checks = 0;
 static uint64_t mem_reqs = 0;
 
+// THE MEMORY IS A SERVER, NOT A SUBROUTINE OF THE READ.
+//
+// It used to be answered inside read_word, which could only ever see the ONE
+// transaction that read was waiting for. The cache now fetches the sibling line
+// behind the acknowledge, so a request can be outstanding when no read is in
+// progress at all -- and a bench that only answers during a read would hang the
+// fill, or worse, quietly never exercise it and report a pass.
+static int mem_lat  = 3;
+static int mem_wait = -1;
+
 static void tick() {
+  if (d->m_req && mem_wait < 0) { mem_wait = mem_lat; ++mem_reqs; }
+  if (mem_wait == 0) {
+    d->m_ack  = 1;
+    // A line is four words: both 32-bit rows it holds.
+    d->m_data = ((uint64_t)ref(d->m_addr + 2) << 32) | ref(d->m_addr);
+  }
+  d->eval();
   d->clk = 0; d->eval();
   d->clk = 1; d->eval();
   ++cyc;
+  if (d->m_ack) { d->m_ack = 0; mem_wait = -1; }
+  else if (mem_wait > 0) --mem_wait;
 }
 
-// One read through the cache, with the memory side answered after a delay that
-// stands in for SDRAM latency.
-static uint32_t read_word(uint32_t addr, int mem_latency) {
+// Let any fill running behind the last acknowledge finish.
+static void settle(int n = 200) { for (int i = 0; i < n; ++i) tick(); }
+
+// One read through the cache. Returns the word; `cycles` gets how long the
+// acknowledge took, which is how the overlap is measured.
+static uint32_t read_word(uint32_t addr, int latency, int *cycles = nullptr) {
   addr = EVEN(addr);
+  mem_lat = latency;
   d->v_req = 1; d->v_addr = addr;
-  int wait = -1;
   uint32_t got = 0;
+  int n = 0;
   for (int i = 0; i < 2000; ++i) {
-    if (d->m_req && wait < 0) { wait = mem_latency; ++mem_reqs; }
-    if (wait == 0) {
-      d->m_ack = 1;
-      // A line is four words: both 32-bit rows it holds.
-      d->m_data = ((uint64_t)ref(d->m_addr + 2) << 32) | ref(d->m_addr);
-    }
-    tick();
-    if (d->m_ack) { d->m_ack = 0; wait = -1; }
-    else if (wait > 0) --wait;
+    tick(); ++n;
     if (d->v_ack) { got = d->v_data; break; }
   }
   d->v_req = 0;
   tick();                      // let the cache see the request drop
+  if (cycles) *cycles = n;
   return got;
 }
 
@@ -176,6 +192,129 @@ int main(int argc, char **argv) {
     } else {
       std::printf("  invalidate: line refetched after the data changed\n");
     }
+  }
+
+  // 6. THE SIBLING FILL, which is what halves the misses.
+  //
+  // A tile is 16 words -- four lines -- walked two glyph rows at a time by
+  // consecutive scanlines. A miss on line I must leave line I^1 resident too,
+  // fetched behind the acknowledge, so the scanline two below hits.
+  {
+    settle();
+    const uint32_t base = 0x3000;                 // line index even
+    const uint32_t h0 = d->dbg_hits, m0 = d->dbg_misses, f0 = d->dbg_fills;
+    const uint64_t r0 = mem_reqs;
+
+    if (read_word(base, 6) != ref(base)) { std::printf("  FAIL: sibling test cold read\n"); ++fails; }
+    settle();                                      // the sibling fetch lands here
+    ++checks;
+    if (d->dbg_fills - f0 != 1) {
+      std::printf("  FAIL: a miss must fetch its sibling -- fills %u\n", d->dbg_fills - f0);
+      ++fails;
+    }
+    // The next TWO glyph rows are in the sibling line: both must hit, and no
+    // new memory transaction may be issued for them.
+    const uint64_t r1 = mem_reqs;
+    ++checks;
+    if (read_word(base + 4, 6) != ref(base + 4)) { std::printf("  FAIL: sibling data wrong\n"); ++fails; }
+    ++checks;
+    if (read_word(base + 6, 6) != ref(base + 6)) { std::printf("  FAIL: sibling data wrong (odd row)\n"); ++fails; }
+    ++checks;
+    if (mem_reqs != r1) {
+      std::printf("  FAIL: the sibling line was refetched -- %llu extra transactions\n",
+                  (unsigned long long)(mem_reqs - r1));
+      ++fails;
+    }
+    std::printf("  sibling fill: %u hits, %u misses, %u fills, %llu transactions\n",
+                d->dbg_hits - h0, d->dbg_misses - m0, d->dbg_fills - f0,
+                (unsigned long long)(mem_reqs - r0));
+  }
+
+  // 7. THE OVERLAP. A HIT MUST NOT WAIT FOR AN OUTSTANDING FILL.
+  //
+  // This is the half that buys the scanline budget back: the fetch engine is
+  // decoding its next tile word while the sibling is still in the SDRAM, and if
+  // a hit had to queue behind that fill the prefetch would cost more than it
+  // saves. Latency is measured against a deliberately slow memory so the two
+  // cases cannot be confused.
+  {
+    settle();
+    const uint32_t a = 0x5000;
+    int c_miss = 0, c_hit = 0;
+    read_word(a, 40, &c_miss);           // miss: pays the 40-cycle memory
+    // No settle: the sibling fetch is now outstanding. Re-read the SAME line.
+    read_word(a + 2, 40, &c_hit);
+    ++checks;
+    if (c_hit >= 20) {
+      std::printf("  FAIL: a hit waited %d cycles for the sibling fill (miss was %d)\n",
+                  c_hit, c_miss);
+      ++fails;
+    } else {
+      std::printf("  overlap: miss %d cycles, hit during the fill %d cycles\n",
+                  c_miss, c_hit);
+    }
+    settle();
+  }
+
+  // 8. MISSES ON THE REAL SHAPE. Eight scanlines walk a tile's four lines in
+  //    order; with the sibling fill that must cost TWO transactions, not four.
+  {
+    settle();
+    const uint32_t m0 = d->dbg_misses;
+    const uint64_t r0 = mem_reqs;
+    for (uint32_t g = 0; g < 32; ++g)
+      for (uint32_t row = 0; row < 8; ++row) {
+        const uint32_t a = 0x8000 + g * 16 + row * 2;
+        ++checks;
+        if (read_word(a, 4) != ref(a)) {
+          if (fails < 10) std::printf("  MISMATCH walk addr %05x\n", a);
+          ++fails;
+        }
+        settle(40);            // the scanline's other work, in which the fill lands
+      }
+    const uint32_t mm = d->dbg_misses - m0;
+    std::printf("  tile walk: %u misses over 32 tiles x 8 rows (%.2f per tile), "
+                "%llu transactions\n", mm, mm / 32.0,
+                (unsigned long long)(mem_reqs - r0));
+    ++checks;
+    if (mm > 32 * 2) {
+      std::printf("  FAIL: %u misses -- the sibling fill is not covering the walk\n", mm);
+      ++fails;
+    }
+  }
+
+  // 9. THE LOOKUP THAT GOT SOMEBODY ELSE'S LINE.
+  //
+  // `inval` diverts the array address, so a lookup issued in the same cycle
+  // reads a DIFFERENT line -- and the tag is three bits here, so a wrong line
+  // whose tag happens to match is a hit on another glyph's pixels. This is
+  // arranged deterministically rather than hoped for: X and A carry the same
+  // tag at different indices, X is resident, A is not, and the invalidate is
+  // asserted on X's index in the exact cycle A is looked up.
+  {
+    settle();
+    const uint32_t X = 0x0040;          // resident, tag 0
+    const uint32_t A = 0x6000;          // same tag, different index, never touched
+    if (read_word(X, 3) != ref(X)) { std::printf("  FAIL: priming read\n"); ++fails; }
+    settle();
+
+    d->v_req = 1; d->v_addr = A;
+    d->inval_idx = (LINE(X) >> 2) & ((1u << 13) - 1);
+    d->inval = 1;
+    tick();                              // the lookup cycle, stolen
+    d->inval = 0;
+    uint32_t got = 0;
+    for (int i = 0; i < 2000; ++i) { tick(); if (d->v_ack) { got = d->v_data; break; } }
+    d->v_req = 0; tick();
+    ++checks;
+    if (got != ref(A)) {
+      std::printf("  FAIL: a stolen lookup returned %08x, want %08x -- the cache "
+                  "matched another line's tag\n", got, ref(A));
+      ++fails;
+    } else {
+      std::printf("  stolen lookup: asked again and returned the right word\n");
+    }
+    settle();
   }
 
   std::printf("  memory transactions issued: %llu\n",

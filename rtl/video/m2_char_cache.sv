@@ -26,11 +26,12 @@
 // and DBG_HITS/DBG_MISSES report the hit rate so the size can be revisited
 // against evidence instead of opinion.
 //
-// DIRECT-MAPPED, ONE WORD PER LINE. No line fill: a miss fetches exactly the
-// word asked for. Glyph reads walk consecutive words within a character, so a
-// wider line would help, but it would also multiply the miss cost and this
-// device returns four words a transaction already. Start simple, measure, then
-// widen if the counters say to.
+// DIRECT-MAPPED, FOUR WORDS A LINE, AND A MISS FILLS TWO OF THEM (R269). The
+// line is what one transaction returns -- 64 bits, two glyph rows -- and the
+// miss that fetches it also fetches the line beside it behind the acknowledge,
+// so four rows are resident per miss. A tile is four lines walked in order by
+// consecutive scanlines, so the second fetch is a prediction that cannot be
+// wrong about WHAT is wanted, only about whether the tile stays on screen.
 //
 // THE TAG ARRAY CARRIES ITS OWN VALID BIT and is swept clear at reset. 16,384
 // valid bits as flip-flops would be 16,384 registers; in the tag RAM they are
@@ -111,7 +112,12 @@ module m2_char_cache #(
   // to avoid that would add a read port to save nothing.
   input  logic [IDX_BITS-1:0]    inval_idx,
   output logic [31:0]            dbg_hits,
-  output logic [31:0]            dbg_misses
+  output logic [31:0]            dbg_misses,
+  // Sibling fills completed. Against dbg_misses it says whether the prefetch
+  // is running at all -- one per miss when it is -- and the pair of counters is
+  // the only way to tell a cache that is hitting because the fills land in time
+  // from one that is hitting because the screen has nothing on it.
+  output logic [31:0]            dbg_fills
 );
 
   localparam int unsigned LINES    = 1 << IDX_BITS;
@@ -141,11 +147,62 @@ module m2_char_cache #(
   typedef enum logic [2:0] { S_INIT, S_IDLE, S_LOOK, S_MISS, S_FILL, S_ACK } st_t;
   st_t st;
 
+  // ------------------------------------------------------------------------
+  // THE SIBLING FILL: HALF THE MISSES, AND THEY OVERLAP.
+  //
+  // A tile is 16 words -- FOUR lines -- and consecutive scanlines walk them in
+  // order: rows 0,1 are line I, rows 2,3 are I+1, and so on. A miss on line I
+  // therefore predicts, with certainty rather than hope, that the line beside
+  // it is wanted two scanlines later.
+  //
+  // So a demand miss fetches its own line, ACKNOWLEDGES, and then fetches the
+  // sibling behind the acknowledge. Four glyph rows are resident per miss
+  // instead of two: two misses per tile per eight scanlines where there were
+  // four, at exactly the same storage.
+  //
+  // The overlap is the other half. A HIT NEEDS NO MEMORY PORT, so the 82.6% of
+  // lookups that hit are served straight through an outstanding sibling fill --
+  // the fetch engine decodes its tile word and emits its pixels while the fill
+  // is still in the SDRAM. Only a second MISS has to wait for the port, and
+  // there are now half as many of those. Measured cause for both halves: each
+  // miss costs ~14 cycles against a 24-cycle per-column budget, which is why 27
+  // lines of every 384 overrun and repeat the previous one.
+  //
+  // I^1, NOT I+1. The two differ only in the index's low bit, so the sibling's
+  // tag is the demand tag, always. I+1 carries into the tag at the end of an
+  // index span and would install a line under a tag that does not describe it
+  // -- wrong pixels rather than a wasted fetch.
+  //
+  // THE PORT MUST GO IDLE BETWEEN THE TWO. m2_sdram_x2 clears its `done` latch
+  // only on seeing the request LOW, so handing the port straight from the
+  // demand fetch to the sibling -- dropping one and raising the other on the
+  // same edge -- would leave `s_req` continuously high and the sibling would
+  // never be issued at all. BG_GAP is that idle cycle, and it is two fast-side
+  // cycles, which is what the adapter needs.
+  // ------------------------------------------------------------------------
+  typedef enum logic [1:0] { BG_IDLE, BG_GAP, BG_REQ, BG_WR } bgst_t;
+  bgst_t bgst;
+  logic [IDX_BITS-1:0] bg_idx;
+  logic [TAG_BITS-1:0] bg_tag;
+  logic [63:0]         bg_data;
+  logic                bg_arm, bg_kill, d_kill;
+  logic                d_req, bg_req;
+
+  wire bg_busy = (bgst != BG_IDLE);
+  wire bg_wr   = (bgst == BG_WR) && !bg_kill;
+
   logic [IDX_BITS-1:0] sweep;
   logic [IDX_BITS-1:0] idx_r;
   logic [TAG_BITS-1:0] tag_r;
   logic [63:0]         hold;
   logic                sel_r;
+
+  // ONE REQUEST ON THE PORT AT A TIME, and the two sides are interlocked so
+  // that stays true: the demand side issues only when the sibling fill is not
+  // outstanding, and the sibling is armed only after the demand fetch has been
+  // acknowledged and its request dropped.
+  assign m_req  = d_req | bg_req;
+  assign m_addr = d_req ? {tag_r, idx_r, 2'b00} : {bg_tag, bg_idx, 2'b00};
 
   // One read port, one write port, one clock: this infers a normal single-clock
   // block RAM with defined read-during-write, which is the whole point of the
@@ -175,9 +232,19 @@ module m2_char_cache #(
     case (st)
       S_INIT: begin mem_addr = sweep; ct_we = 1'b1; ct_din = '0; end
       S_LOOK: mem_addr = idx_r;
-      S_FILL: begin mem_addr = idx_r; cd_we = 1'b1; ct_we = 1'b1; end
+      S_FILL: begin mem_addr = idx_r; cd_we = !d_kill; ct_we = !d_kill; end
       default: ;
     endcase
+    // The sibling's fill takes the port from whatever lookup wanted it. It
+    // cannot collide with S_FILL -- one transaction is outstanding at a time,
+    // so only one of the two can be answering an acknowledge.
+    if (bg_wr && st != S_INIT) begin
+      mem_addr = bg_idx;
+      cd_din   = bg_data;
+      ct_din   = {1'b1, bg_tag};
+      cd_we    = 1'b1;
+      ct_we    = 1'b1;
+    end
     // A write to the glyph memory beats anything else wanting the tag port
     // this cycle. Never during the reset sweep, which is clearing them anyway.
     if (inval && st != S_INIT) begin
@@ -188,15 +255,45 @@ module m2_char_cache #(
     end
   end
 
+  // THE LOOKUP THAT WAS ANSWERED BY SOMEBODY ELSE'S ADDRESS.
+  //
+  // `inval` and the sibling fill both divert mem_addr, so the read issued that
+  // cycle comes back from a DIFFERENT LINE -- and the tag is only
+  // ADDR_BITS-IDX_BITS-2 bits wide, two of them in the shipped configuration.
+  // A wrong line's tag therefore matches one time in four, which is a HIT ON
+  // ANOTHER GLYPH'S PIXELS. It has been in this cache since the invalidate was
+  // added; it needs a CPU glyph write in the same cycle as a lookup, so it is
+  // rare, wrong, and invisible to every counter here.
+  //
+  // The fix is to notice and ask again. One cycle, and it also does the
+  // coherency work for free: a line the invalidate just cleared comes back a
+  // miss on the second look, which is exactly what it should be.
+  logic steal_d;
+  wire  steal = (st != S_INIT) && (inval || bg_wr);
+
   wire hit = ct_q[TAG_BITS] && (ct_q[TAG_BITS-1:0] == tag_r);
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       st <= S_INIT; sweep <= '0; idx_r <= '0; tag_r <= '0; sel_r <= 1'b0;
-      m_req <= 1'b0; m_addr <= '0; v_ack <= 1'b0; hold <= '0;
-      dbg_hits <= '0; dbg_misses <= '0;
+      d_req <= 1'b0; v_ack <= 1'b0; hold <= '0;
+      bgst <= BG_IDLE; bg_req <= 1'b0; bg_idx <= '0; bg_tag <= '0;
+      bg_data <= '0; bg_arm <= 1'b0; bg_kill <= 1'b0; d_kill <= 1'b0;
+      steal_d <= 1'b0;
+      dbg_hits <= '0; dbg_misses <= '0; dbg_fills <= '0;
     end else begin
-      v_ack <= 1'b0;
+      v_ack   <= 1'b0;
+      steal_d <= steal;
+
+      // A glyph write that lands on a line already in flight would otherwise be
+      // undone by the fill that follows it: the fetch carries the data from
+      // BEFORE the write, and installing it marks stale bytes valid. Both sides
+      // abandon their fill instead. The requester still gets the word it asked
+      // for -- its read raced the write and either answer is legitimate -- but
+      // nothing stale is cached.
+      if (inval && (inval_idx == idx_r)) d_kill  <= 1'b1;
+      if (inval && (inval_idx == bg_idx)) bg_kill <= 1'b1;
+
       case (st)
         // Clear every valid bit before serving anything. Reset has time.
         S_INIT: begin
@@ -205,37 +302,50 @@ module m2_char_cache #(
         end
 
         S_IDLE: if (v_req) begin
-          idx_r <= req_idx;
-          tag_r <= req_tag;
-          sel_r <= req_sel;
-          st    <= S_LOOK;
+          idx_r  <= req_idx;
+          tag_r  <= req_tag;
+          sel_r  <= req_sel;
+          d_kill <= 1'b0;
+          st     <= S_LOOK;
         end
 
         // The arrays were addressed with req_idx last cycle, so cd_q/ct_q
-        // answer this one.
+        // answer this one -- unless somebody took the port, in which case they
+        // answer a different line and must be asked again.
         S_LOOK: begin
-          if (hit) begin
+          if (steal_d) begin
+            // Look again. mem_addr is already idx_r in this state.
+          end else if (hit) begin
             hold     <= cd_q;
             v_ack    <= 1'b1;
             dbg_hits <= dbg_hits + 1'd1;
             st       <= S_ACK;
+          end else if (bg_busy) begin
+            // The port is finishing the sibling fill. Looking again costs
+            // nothing, and the fill may be this very line -- which is the
+            // sibling's whole purpose.
           end else begin
-            m_req      <= 1'b1;
-            m_addr     <= {tag_r, idx_r, 2'b00};  // the line's first word
+            d_req      <= 1'b1;
             dbg_misses <= dbg_misses + 1'd1;
             st         <= S_MISS;
           end
         end
 
         S_MISS: if (m_ack) begin
-          m_req <= 1'b0;
+          d_req <= 1'b0;
           hold  <= m_data;
           st    <= S_FILL;        // one cycle with cd_we/ct_we asserted
         end
 
         S_FILL: begin
-          v_ack <= 1'b1;
-          st    <= S_ACK;
+          v_ack  <= 1'b1;
+          // Arm the sibling. The port is idle this cycle and stays idle for
+          // BG_GAP as well, which is what the adapter needs to retire the
+          // transaction just finished.
+          bg_arm <= 1'b1;
+          bg_idx <= idx_r ^ IDX_BITS'(1);
+          bg_tag <= tag_r;
+          st     <= S_ACK;
         end
 
         // v_ack was a single cycle; wait for the requester to drop v_req so the
@@ -243,6 +353,26 @@ module m2_char_cache #(
         S_ACK: if (!v_req) st <= S_IDLE;
 
         default: st <= S_IDLE;
+      endcase
+
+      // ---- the sibling fill, behind the acknowledge
+      case (bgst)
+        BG_IDLE: if (bg_arm) begin
+          bg_arm  <= 1'b0;
+          bg_kill <= 1'b0;
+          bgst    <= BG_GAP;
+        end
+        BG_GAP:  begin bg_req <= 1'b1; bgst <= BG_REQ; end
+        BG_REQ:  if (m_ack) begin
+          bg_req  <= 1'b0;
+          bg_data <= m_data;
+          dbg_fills <= dbg_fills + 1'd1;
+          bgst    <= bg_kill ? BG_IDLE : BG_WR;
+        end
+        // One cycle of writing, unless an invalidate took the array port -- in
+        // which case try again next cycle, the write having been suppressed.
+        BG_WR:   if (!inval || bg_kill) bgst <= BG_IDLE;
+        default: bgst <= BG_IDLE;
       endcase
     end
   end

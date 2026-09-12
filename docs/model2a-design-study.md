@@ -14185,3 +14185,81 @@ vertices (50 checks); swapping v and u fails it.
 Still to build: carrying the pairs through the clipper, which must interpolate
 them as it interpolates position; the per-vertex perspective divide (the
 reference computes `pu * (1/z) / 8`); and the span walk.
+
+**R269 -- THE GLYPH CACHE MISSES HALVE AND OVERLAP, WHICH IS WHAT PAYS FOR THE
+TEXTURES.** The blocking question for textures is M10K: the texture path needs
+about 90 blocks and only 46 came back from R262, so roughly 45 are short. The
+glyph cache is the largest single consumer -- `IDX_BITS 14`, 128 KB, and
+halving it gives back 51 blocks. It was halved once before and REVERTED on
+hardware evidence: at 64 KB the board showed tile and glyph overruns, because
+the extra misses do not finish before the next scanline starts, the fetch
+bank does not flip and the previous line is drawn again.
+
+So the cache has to get cheaper per miss before it can get smaller, and the
+cache's own header says how expensive a miss is: ~14 cycles against a 24-cycle
+per-column budget, which is why 27 lines of every 384 overrun. Two changes,
+both inside `m2_char_cache`:
+
+REDUCE. A tile is 16 words -- FOUR lines of four words -- and consecutive
+scanlines walk them in order, rows 0,1 from line I, rows 2,3 from I+1. A miss
+on I therefore predicts the line beside it with certainty. The miss now fetches
+its own line, ACKNOWLEDGES, and fetches the sibling behind the acknowledge, so
+four glyph rows are resident per miss instead of two. Measured on the bench's
+tile walk: 2.00 misses per tile over 32 tiles x 8 rows where it was 4.00, at
+the same transaction count and the same storage.
+
+`I^1`, NOT `I+1`, and the difference is a correctness one: the two indices
+differ only in the low bit, so the sibling's tag IS the demand tag. `I+1`
+carries into the tag at the end of an index span and would install a line under
+a tag that does not describe it.
+
+OVERLAP. A HIT NEEDS NO MEMORY PORT, so a lookup that hits is served straight
+through an outstanding sibling fill; only a second miss waits for the port, and
+there are now half as many of those. Measured: a miss against a 40-cycle memory
+takes 44 cycles, a hit taken while that fill is still outstanding takes 2.
+
+THE PORT MUST GO IDLE BETWEEN THE TWO FETCHES. `m2_sdram_x2` clears its `done`
+latch only on seeing the request LOW, so handing the port straight from the
+demand fetch to the sibling -- dropping one and raising the other on the same
+edge -- would leave `s_req` continuously high and the sibling would never be
+issued at all. `BG_GAP` is that idle cycle; it is two fast-side cycles, which
+is what the adapter needs. This is the R162 hazard seen from the requester's
+side and it would have been a silent no-op, not a hang.
+
+AND A BUG THAT HAS BEEN IN THIS CACHE SINCE THE INVALIDATE WAS ADDED. `inval`
+diverts the array address, so a lookup issued in the SAME cycle reads a
+DIFFERENT line -- and the tag is `ADDR_BITS-IDX_BITS-2` bits, three in the
+bench and two as shipped. A wrong line's tag therefore matches one time in four
+or eight, and the cache returns ANOTHER GLYPH'S PIXELS as a hit. It needs a CPU
+glyph write in the same cycle as a glyph fetch, so it is rare, wrong, and
+invisible to every counter in the file. The same hazard existed for a fill in
+flight: an invalidate landing on a line already being fetched was undone by the
+fill that followed it, which marked pre-write bytes valid forever.
+
+Both are fixed by noticing rather than by locking: `steal` marks any cycle in
+which the array answered somebody else, and the lookup asks again one cycle
+later. That also does the coherency work for free -- a line the invalidate just
+cleared comes back a MISS on the second look, which is what it should always
+have been. `d_kill`/`bg_kill` abandon a fill whose line was invalidated while
+it was in the SDRAM.
+
+`tb_m2_char_cache` grew a free-running memory server (a fill can now be
+outstanding when no read is in progress, which the old answer-inside-the-read
+model could not represent) and four properties: the sibling is fetched, the
+next two glyph rows hit without a transaction, a hit during a fill does not
+wait, and a lookup stolen by an invalidate returns the right word. The stolen
+lookup is arranged deterministically -- two addresses with the same tag at
+different indices, the resident one invalidated in the exact lookup cycle --
+rather than left to chance. 10,392 checks. Each property was mutated and each
+mutation fails it: removing the arm gives 4.00 misses per tile, blocking hits
+behind the fill gives a 45-cycle hit, removing the re-look returns the other
+glyph's word.
+
+NOT YET MEASURED ON THE BOARD, and the numbers above are bench numbers. The
+cache's hit and miss counters have existed since it was written and NOTHING HAS
+EVER READ THEM on hardware, so the 82.6% in its header is a bench figure too.
+This build puts them on the UART as a 'V' record -- hits, misses, sibling fills
+and scanline overruns, PER FRAME rather than cumulative -- because the decision
+that follows (halve the cache, take the 51 blocks, spend them on textures) has
+to be made against what a real frame costs, and a total that has been climbing
+since boot cannot say whether anything helped.

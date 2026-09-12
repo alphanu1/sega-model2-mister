@@ -4135,6 +4135,7 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	      : sw_pend                         ? {19'd0, sw_out_sel, sw_runs}     // R238: 'S' region, runs
 	      : (tps_ph == 2'd1)                  ? tps_seen                        // R251: 'T' which light entries the list has written
 	      : (tps_ph == 2'd3)                  ? {geo_nops, geo_walk_ops}        // R255: 'U' nops decoded : commands walked, last frame
+	      : (tps_ph == 2'd2)                  ? {cc_h_f, cc_m_f}                // R269: 'V' glyph cache hits : misses, last frame
 	      : {r3d_ready_cyc[15:0], r3d_bands_done[7:0], r3d_hold[7:0]}),
 	// clip_dropped read 0 on hardware and the refusal count is the number that
 	// now moves, so it takes that byte. Between them: accepted, emitted, refused
@@ -4206,10 +4207,12 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	      : sw_pend                         ? {8'd0, sw_out}                    // R238: the fold
 	      : (tps_ph == 2'd1)                  ? {3'd0, tps_sel, tps_dif[tps_sel], tps_amb[tps_sel], geo_tp_n[7:0]}   // R251
 	      : (tps_ph == 2'd3)                  ? {geo_walk_flip[7:0], geo_walk_fb[7:0], geo_walk_unknown[7:0], geo_dropped[7:0]}   // R255/R263
+	      : (tps_ph == 2'd2)                  ? {cc_f_f, vid_ovr_frame}         // R269: sibling fills : scanlines that overran, last frame
 	      : {lum_mean_f, lum_zpc_f, wedge_slot, wedge_n[6:0], r3d_quads[11:4]}),   // R249: the frame's mean luminance and its black-polygon percentage, where the always-zero drop count and the free-running miss count were
 	.a_tag(8'h43),
 	.b_tag((wedge_have && wedge_ph == 2'd1) ? 8'h57 : (wedge_have && wedge_ph == 2'd2) ? 8'h58
-	     : sw_pend ? 8'h53 : (tps_ph == 2'd1) ? 8'h54 : (tps_ph == 2'd3) ? 8'h55 : 8'h48),   // 'W', 'X', 'S', 'T' (R251), 'U' (R255), 'H'          // 'C' copro in_pushed:out_pushed | TGP retires:pc
+	     : sw_pend ? 8'h53 : (tps_ph == 2'd1) ? 8'h54 : (tps_ph == 2'd3) ? 8'h55
+	     : (tps_ph == 2'd2) ? 8'h56 : 8'h48),   // 'W', 'X', 'S', 'T' (R251), 'U' (R255), 'V' (R269), 'H'          // 'C' copro in_pushed:out_pushed | TGP retires:pc
 	                                       // 'H' out_popped:hscr2 | io_addr:flags
 	                                       // 'H' scroll h:v for layers 0,1 | layers 2,3 -- low bytes
 	                                       // '0' map0 min|max : sum
@@ -5116,7 +5119,7 @@ wire [63:0] cache_m_data;
 // cycle, so both are valid on the edge m2_char_cache captures them.
 assign cache_m_ack  = p_ack[3];
 assign cache_m_data = p_dout[3];
-wire [31:0] char_hits, char_misses;
+wire [31:0] char_hits, char_misses, char_fills;
 
 // IDX_BITS 14 -- 128 KB. REDUCED TO 13 AND REVERTED, ON HARDWARE EVIDENCE.
 //
@@ -5152,8 +5155,48 @@ m2_char_cache #(.IDX_BITS(14)) u_char_cache (
 	// the wrong line on a CPU character write, which shows up as glyphs that
 	// are correct until the game rewrites one and then stay stale.
 	.inval(cpu_char_wr), .inval_idx(cpu_char_wr_addr[15:2]),
-	.dbg_hits(char_hits), .dbg_misses(char_misses)
+	.dbg_hits(char_hits), .dbg_misses(char_misses), .dbg_fills(char_fills)
 );
+
+// R269: THE GLYPH CACHE ON THE WIRE, PER FRAME.
+//
+// The cache has carried hit and miss counters since it was written and NOTHING
+// HAS EVER READ THEM on hardware -- the 82.6% in its own header is a bench
+// number, and the bench does not play the game. The one number that decides
+// whether this cache can be halved to pay for textures is how many misses a
+// real frame takes and how many lines overrun because of them, so put both on
+// the UART beside the sibling-fill count that says the prefetch is working.
+//
+// Per FRAME, not cumulative: a running total that has been climbing since boot
+// cannot say whether the last change helped.
+logic cvb_d, cvb_dd;
+logic [31:0] cc_h_p, cc_m_p, cc_f_p;
+logic [15:0] cc_h_f, cc_m_f, cc_f_f;
+function automatic logic [15:0] sat16d(input logic [31:0] now, input logic [31:0] prev);
+	logic [31:0] d;
+	begin
+		d = now - prev;
+		sat16d = (|d[31:16]) ? 16'hffff : d[15:0];
+	end
+endfunction
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+	if (!mem_rst_n) begin
+		cvb_d <= 1'b0; cvb_dd <= 1'b0;
+		cc_h_p <= 32'd0; cc_m_p <= 32'd0; cc_f_p <= 32'd0;
+		cc_h_f <= 16'd0; cc_m_f <= 16'd0; cc_f_f <= 16'd0;
+	end else begin
+		cvb_d  <= tile_vb;
+		cvb_dd <= cvb_d;
+		if (cvb_d && !cvb_dd) begin
+			cc_h_f <= sat16d(char_hits,   cc_h_p);
+			cc_m_f <= sat16d(char_misses, cc_m_p);
+			cc_f_f <= sat16d(char_fills,  cc_f_p);
+			cc_h_p <= char_hits;
+			cc_m_p <= char_misses;
+			cc_f_p <= char_fills;
+		end
+	end
+end
 
 // THE CROSSING IS GONE, and it was not harmless.
 //
