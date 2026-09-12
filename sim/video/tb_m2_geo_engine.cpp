@@ -298,7 +298,22 @@ int main(int argc, char** argv) {
     uint32_t n = 0, col0 = 0, luma0 = 0;
     for (int budget = 0; budget < 60000 && (d->busy || budget < 10); budget++) { tick(); if (d->poly_valid && d->poly_ready) { if (!n) { col0 = d->poly_col; luma0 = d->poly_luma; } n++; } }
     std::printf("test: a textured polygon with a black palette entry takes the grey\n");
-    ck("grey at half luma", col0, ref_colour(0x4210, (int)luma0 >> 1));
+    // R261: the placeholder follows the brightness selector like any other
+    // textured polygon. Selector 0 is half, which is what this expects; the
+    // check below proves the control reaches it at all by moving the selector.
+    ck("grey at the selected brightness", col0, ref_colour(0x4210, (int)luma0 >> 1));
+    // R261: move the selector to FULL (2) and the same polygon must come back
+    // at full luminance. Before R261 the placeholder was pinned at half and
+    // this check would fail whatever the selector said.
+    d->tex_lum = 2; tick();
+    d->start = 1; tick(); d->start = 0;
+    uint32_t col2 = 0, luma2 = 0;
+    for (int budget = 0; budget < 60000 && (d->busy || budget < 10); budget++) {
+      tick();
+      if (d->poly_valid && d->poly_ready) { col2 = d->poly_col; luma2 = d->poly_luma; }
+    }
+    ck("grey follows the selector to full", col2, ref_colour(0x4210, (int)luma2));
+    d->tex_lum = 0; tick();
     thdr[0x100 + 0] = 0x0000; pal3d[0x155] = C555;
   }
 

@@ -652,7 +652,16 @@ module m2_geo_engine #(
           pe   = xhalf ? mem_data[30:16] : mem_data[14:0];
           grey = tex_flat && (pe == 15'd0);                   // R234: no colour at all
           if (grey) pe = TEX_GREY;
-          lu   = grey ? {1'b0, luma8[7:1]} : (tex_flat ? scale_lum(luma8, tex_lum) : luma8);   // R239
+          // R261: THE BRIGHTNESS CONTROL REACHES THE PLACEHOLDER TOO. It used
+          // to scale only a textured polygon that HAS a palette colour, while
+          // one whose entry is black -- drawn as the grey placeholder -- was
+          // pinned at half whatever the control said. The user judged the
+          // control on the board and reported that its range felt compressed
+          // and that the default "50%" looked unchanged: the placeholders are
+          // most of what they were looking at, and they never moved. Flat
+          // polygons are still untouched -- that path is the reference's own
+          // colour and is not a preference.
+          lu   = tex_flat ? scale_lum(luma8, tex_lum) : luma8;
           c555  <= pe; lum_x <= lu;
           xi    <= 2'd0;
           xaddr <= xl_dw(2'd0, pe, lu);

@@ -13933,3 +13933,25 @@ the strobe across two words and `tb_m2_geo` models one that does.
 drops and counts" -- and now asserts the new one: 4,000 pushes into a
 128-deep queue, none dropped, the pusher held, and the write pointer exactly
 4,000 dwords on, so the list has no hole (76 checks).
+
+**R261 -- THE BRIGHTNESS CONTROL DID NOT REACH THE PLACEHOLDER, WHICH IS
+MOST OF WHAT IT WAS BEING JUDGED ON.** The user, on `build/fix3d18`: "menu
+says 50% but it's still 100 as it was before, so you can only go much
+brighter or down to 25% which looks like 50%". The menu and `scale_lum` are
+consistent -- both were reordered by R259 and the reordering is in the build
+-- so the control does what its label says. It simply did not apply to
+enough of the picture. Three paths, and only one of them scaled:
+
+  * flat (untextured) polygons: never scaled, and should not be -- that is
+    the reference's own colour path, not a preference;
+  * textured with a palette colour: scaled by the selector;
+  * textured with a BLACK palette entry, drawn as the grey placeholder
+    (R234): pinned at half, whatever the selector said.
+
+The placeholders are most of what is on screen -- the board's own census
+puts textured at 58,537 objects against 39,766 flat -- so moving the control
+changed little and the default "50%" looked like the 100% before it. The
+placeholder now takes `scale_lum` like any other textured polygon.
+`tb_m2_geo_engine` gains the check that says so: the same polygon at
+selector 2 must come back at FULL luminance, which fails with the old pinned
+half (42 checks).
