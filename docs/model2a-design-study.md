@@ -13666,3 +13666,50 @@ keep measuring 0xFFFF. Verified by re-running the R245 probe.
 Not established: whether this also explains the black scenes. It cannot be
 the 4,096 polygons that read {0,0} -- that is 0.13% -- so the black scenes
 are still open, and the scenery that vanishes is open too.
+
+*R247 CORRECTED, SAME MORNING.* The display-list RAM was ALREADY filled with
+0x07800F0F at boot: `bi_*` in Model2.sv writes all 65,536 words with
+`bi_idx[0] ? 16'h0780 : 16'h0f0f` once `rom_loaded && cal_done`, and it holds
+arbiter port 0. So the 255/255 light table R245 measured was a BENCH artefact
+-- `tb_m2_boot` had no such fill and served 0xFFFF -- and the board never had
+it. The bench fill stays (it makes the desk match the board); the duplicate
+sweep added to Model2.sv is removed. One board capture of `build/fix3d11`
+read the sweep's control region as 455519 against the expected 25E723, which
+looked like memory corruption; a second capture of the same bitstream read
+25E723 and so did `build/fix3d10`. Not reproducible, recorded, not explained.
+
+**R248 -- THE TEXTURE-RAM CLEAR HAS NEVER RUN ON HARDWARE, AND THAT CULLS
+EVERY OBJECT WHOSE TEXTURE HEADER LIVES IN TEXTURE RAM.** Found while
+chasing the above. `st_run` gates the boot writer's request into the write
+arbiter:
+
+    assign st_run = rom_loaded && (st_state >= 4'd1) && (st_state <= 4'd8);
+
+States 1 to 8 are the read-latency calibration's own writes. R223's
+texture-RAM zero sweep runs in states 12 to 15. `m2_wr_arb` acknowledges
+only a port it has picked and picks only a port that is requesting, so
+`wr_ack_st` never arrived, state 13 waited for it forever, and not one of
+the 65,536 words was written. Nothing noticed: `cal_done` is `st_state >=
+4'd12`, which state 13 satisfies, so every consumer was released on time.
+The study recorded the sweep as deployed. It was built, not run.
+
+What it costs the picture. Daytona never writes texture RAM (R222), so the
+reference reads ZEROS for a header held there; we read unwritten SDRAM,
+which is 0xFFFF. Bit 13 of header word 0 is the translucent flag, and the
+engine culls a translucent polygon because the reference draws nothing for
+one (R231) -- so on the board EVERY polygon of EVERY object with a
+RAM-resident header is discarded. The bench counts those objects:
+`RAM-resident 7908` of `114986`, 6.9%. They are missing from the board's
+picture and present in the reference's, which is what "the scenery
+vanishes, and is not always there" looks like. The desk could not see it:
+`tb_m2_boot` zeroes the texture-RAM region in its own memory image (R222),
+so the bench has been rendering those objects all along.
+
+Fixed by extending the gate to the sweep's states:
+
+    assign st_run = rom_loaded && (st_state >= 4'd1)
+                               && ((st_state <= 4'd8) || (st_state >= 4'd12));
+
+`lint_top` clean; there is no desk test for this, because the boot machine
+lives in Model2.sv and `tb_m2_boot` drives `m2_boot_harness` instead. The
+measure is the board: objects that were absent should appear.

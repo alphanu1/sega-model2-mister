@@ -1152,7 +1152,7 @@ wire   [2:0]     cal_best = cal_scan;
 assign cal_done = (st_state >= 4'd12);
 logic [SDR_AW:1] st_addr, st_rd_addr;
 logic [15:0]     st_din;
-logic [4:0]      st_state;   // R247: five bits -- the buffer-RAM fill needs three more states
+logic [3:0]      st_state;
 logic [16:0]     tf_i;            // R223: the texture-RAM zero sweep
 logic [63:0]     st_got;
 
@@ -1264,7 +1264,16 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	end
 end
 
-assign st_run = rom_loaded && (st_state >= 4'd1) && (st_state <= 4'd8);
+// R248: THE TEXTURE-RAM SWEEP NEEDS THE WRITE PORT, AND NEVER HAD IT. This
+// gates the boot writer's request into the arbiter, and it covered only the
+// read-latency calibration's own states, 1 to 8. R223's texture-RAM zero sweep
+// runs in states 12 to 15 and so requested a port it was never granted: the
+// arbiter only acknowledges a port it has picked, and it only picks one that is
+// requesting, so `wr_ack_st` never arrived, state 13 waited for it forever, and
+// not one word of texture RAM was ever written on hardware. Nothing noticed,
+// because `cal_done` is `st_state >= 12` and was already satisfied.
+assign st_run = rom_loaded && (st_state >= 4'd1)
+                           && ((st_state <= 4'd8) || (st_state >= 4'd12));
 
 always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
@@ -1363,35 +1372,7 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 				st_addr <= GAME_TEXRAM + SDR_AW'(tf_i); st_din <= 16'd0;
 				st_req <= 1'b1; st_state <= 4'd13;
 			end
-			// R247: THE DISPLAY-LIST RAM COMES UP WITH THE REFERENCE'S PATTERN.
-			// model2.cpp's reset fills all 128 KB of bufferram with 0x07800F0F
-			// -- "initialize bufferram to a sane default" -- and the list is
-			// walked from wherever the game points it, so anything the game has
-			// not written is read as that. Two places it shows: the walk stops
-			// on it (opcode 0x0f is END) and, where a texture-parameter command
-			// runs past what the game wrote, the diffuse and ambient bytes read
-			// 0x0f each. Unwritten SDRAM here reads 0xFFFF, which is 255 diffuse
-			// and 255 ambient -- luminance saturates and the whole object is
-			// white. The bench measured exactly that: entries 0-5 and 10-15 of
-			// the light table at 255/255, and 71% of three million polygons in
-			// the top luminance bin.
-			4'd14: begin
-				tf_i <= 17'd0; st_addr <= GAME_BUFFER; st_din <= 16'h0F0F;
-				st_req <= 1'b1; st_state <= 5'd16;
-			end
-			5'd16: if (wr_ack_st) begin
-				st_req <= 1'b0;
-				if (tf_i == 17'd65535) st_state <= 5'd18;
-				else begin tf_i <= tf_i + 17'd1; st_state <= 5'd17; end
-			end
-			5'd17: begin
-				// The dword is 0x07800F0F, so the low word is 0x0F0F and the
-				// high word 0x0780; the sweep alternates by the word's bit 0.
-				st_addr <= GAME_BUFFER + SDR_AW'(tf_i);
-				st_din  <= tf_i[0] ? 16'h0780 : 16'h0F0F;
-				st_req <= 1'b1; st_state <= 5'd16;
-			end
-			5'd18: st_state <= 5'd18;      // done; cal_mask holds
+			4'd14: begin st_req <= 1'b0; st_state <= 4'd14; end   // done; cal_mask holds
 			default: st_state <= 4'd0;
 		endcase
 	end
