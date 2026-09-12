@@ -13370,3 +13370,45 @@ the clipper (client 2); the clipper divides only when a plane cuts, so the
 interleaving is rare and timing-dependent -- the board's, not the desk's.
 Next at the desk: the pool's divide path under two clients issuing
 back-to-back, checking each quotient reaches the client that asked.
+
+*R237, the divider (01:10, 09-12): NO WINDOW. fp_div leaves S_DONE and
+raises out_valid in the same cycle, so `busy` falls one cycle before the
+result is seen -- but the pool's issue is also gated on `div_outstanding`,
+which clears only on d_valid, so a second client cannot take the unit
+until the first quotient has been routed by `dtag`. The shared divider is
+not the mechanism. What is, is below.*
+
+**R240 -- THE SDRAM BURST WRAPS INSIDE THE ROW, AND THE PAIR CACHE KEPT THE
+WRAPPED WORD AS "THE NEXT DWORD".** m2_sdram issues its four columns by
+incrementing the COLUMN FIELD alone (S_RD: "bursts wrap inside the open
+row"), which is correct for the device -- the next row was never
+activated -- and is why every burst port "must be burst-aligned". The two
+pair caches on port 4 (R214) are not: a dword index N is word 2N, aligned
+to two words, and the port's upper half is trusted as dword N+1. When N is
+the LAST dword of a row (its nine column bits all ones with COL_BITS=10),
+words 2N+2 and 2N+3 come from the row's FIRST columns, and the cache
+serves the row's first dword as N+1. Whether a stream is hit depends on
+its parity: a run that reaches the row edge with the odd index on the
+port (miss at N, hit at N+1) takes the wrong dword; the other parity has
+N+1 on the port and is right. One vertex coordinate wrong, its neighbours
+right -- a wrong x with the right y is what the wedge catcher streamed
+(R237), and a wrong matrix or normal word read the same way is a
+candidate for the rest.
+
+Why the desk never showed it: `tb_m2_boot` serves the walker and the
+engine 32 bits at a time from a flat array, with no pair cache in the
+path; the pair-cache bench's port model returned mem[N+1] with no row.
+The other burst consumers are aligned and safe: the i960 bridge's line
+is {sd_word[AW:3],2'b00}, the character cache's {tag,idx,2'b00}, the
+68000's {addr[17:3],2'b00}, the sweep steps by four; ports 8/9 and 2 take
+[31:0] or [15:0] only.
+
+The fix is at the consumer: `m2_pair_cache` takes COL_BITS and keeps no
+copy when the answered index's column bits are all ones (`have <=
+~&idx[COL_BITS-2:0]`), so the dword after a row edge goes to the port.
+One extra port trip per 512 dwords. The bench's port model now wraps as
+the controller does; two streams across the edge, one of each parity,
+1536 read as the row's first dword with the fix removed and right with
+it (4,270 checks). Both instances in Model2.sv pass SDR_COL. To carry to
+the board in `build/fix3d7` after `fix3d6`'s fitter finishes; the wedge
+count over 240 s is the measure (304 on fix3d5).

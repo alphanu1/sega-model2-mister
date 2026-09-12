@@ -2595,12 +2595,12 @@ wire [23:0] eng_mem_idx  = (eng_mem_space == 2'd1) ? (eng_mem_addr[23] ? {9'd0, 
 // stale copy. The port side is the registered glue exactly as before.
 wire [SDR_AW:1] geo_wa = GAME_BUFFER + SDR_AW'({geo_rd_addr, 1'b0});
 wire [SDR_AW:1] eng_wa = eng_base + SDR_AW'({eng_mem_idx, 1'b0});
-m2_pair_cache #(.AW(SDR_AW-1)) u_geo_pc (
+m2_pair_cache #(.AW(SDR_AW-1), .COL_BITS(SDR_COL)) u_geo_pc (
 	.clk(clk_sys), .rst_n(mem_rst_n),
 	.req(geo_rd_req), .idx(geo_wa[SDR_AW:2]), .ack(geo_rd_ack_c), .data(geo_rd_data_c),
 	.p_req(gc_req), .p_idx(gc_idx), .p_ack(geo_rd_ack_r), .p_dout(p4_dout_r)
 );
-m2_pair_cache #(.AW(SDR_AW-1)) u_eng_pc (
+m2_pair_cache #(.AW(SDR_AW-1), .COL_BITS(SDR_COL)) u_eng_pc (
 	.clk(clk_sys), .rst_n(mem_rst_n),
 	.req(eng_mem_req), .idx(eng_wa[SDR_AW:2]), .ack(eng_mem_ack_c), .data(eng_mem_data_c),
 	.p_req(ec_req), .p_idx(ec_idx), .p_ack(eng_mem_ack_r), .p_dout(p4_dout_r)

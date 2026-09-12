@@ -51,7 +51,7 @@ int main(int argc, char **argv) {
         go_d = go;
         tick();
         // registered port state
-        if (cnt > 0) { if (--cnt == 0) { done = 1; d->p_dout = (uint64_t(mem[(p_idx_l + 1) & 0xffff]) << 32) | mem[p_idx_l & 0xffff]; cnt = -1; } }
+        if (cnt > 0) { if (--cnt == 0) { done = 1; d->p_dout = (uint64_t(mem[((p_idx_l & ~511u) | ((p_idx_l + 1) & 511u)) & 0xffff]) << 32) | mem[p_idx_l & 0xffff]; cnt = -1; } }  // the pair wraps inside the 512-dword row, as m2_sdram's burst does
         if (!d->p_req) done = 0;
         d->p_ack = done;
         d->eval();
@@ -79,6 +79,14 @@ int main(int argc, char **argv) {
   // stream after a random jump instead, which must miss.
   std::vector<uint32_t> mix; for (uint32_t i = 0; i < 300; i++) { mix.push_back(2000 + i); if (i % 7 == 6) mix.push_back(std::rand() & 0xffff); }
   read_stream(mix, "mixed");
+
+  // R240: a sequential run that crosses a row edge with the odd index on the
+  // port. 1535 is the row's last dword; its pair is the row's FIRST dword,
+  // and 1536 must not be served from it.
+  std::vector<uint32_t> edge; for (uint32_t i = 1529; i < 1580; i++) edge.push_back(i);
+  read_stream(edge, "row edge, odd start");
+  std::vector<uint32_t> edge2; for (uint32_t i = 3070; i < 3100; i++) edge2.push_back(i);
+  read_stream(edge2, "row edge, even start");
 
   std::printf("m2_pair_cache: checks=%d fails=%d\n", checks, fails);
   std::printf(fails ? "FAIL\n" : "PASS\n");

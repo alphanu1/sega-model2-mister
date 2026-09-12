@@ -26,9 +26,17 @@
 // taken on its rising edge, the request lowered for a cycle after. A hit is
 // a one-cycle acknowledge pulse; a miss passes the port's acknowledge
 // through, held as the adapter holds it.
+//
+// THE COPY IS NOT KEPT ACROSS A ROW EDGE (R240). m2_sdram issues its four
+// columns by incrementing the column field alone, so a burst that starts on
+// the last dword of a row wraps to the row's FIRST words: the port's upper
+// half is then dword N+1-ROW, not N+1. A dword index whose column bits are
+// all ones therefore keeps nothing, and the next read goes to the port. The
+// desk could not show this: the benches serve N+1 from a flat array.
 `timescale 1ns/1ps
 module m2_pair_cache #(
-  parameter int unsigned AW = 24
+  parameter int unsigned AW       = 24,
+  parameter int unsigned COL_BITS = 10     // m2_sdram's, in 16-bit words: a row is 2^(COL_BITS-1) dwords
 )(
   input  logic          clk,
   input  logic          rst_n,
@@ -84,7 +92,8 @@ module m2_pair_cache #(
       // half for the requester, the high half kept as the next index.
       if (p_ack && !p_ack_d) begin
         data      <= p_dout[31:0];
-        have      <= 1'b1;
+        have      <= ~&idx[COL_BITS-2:0];      // the last dword of a row: its pair wrapped
+
         have_idx  <= idx + 1'b1;
         have_data <= p_dout[63:32];
       end
