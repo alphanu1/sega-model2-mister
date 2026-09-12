@@ -14524,3 +14524,48 @@ not silently idle.
 
 THE RULE THIS LEAVES: a `default:` arm in a per-port multiplexer is a bug
 waiting for the next port. Name every port, in the RTL and in the bench.
+
+**R278 -- EVERY TEXTURE THE GAME HAS EVER UPLOADED WENT INTO THE LUMA TABLE.**
+Found by asking the boot bench a question it had never been asked: *where do
+the CPU's writes actually land?* A histogram of SDRAM writes by 64 K word
+region, with the i960's own bus watched beside it:
+
+    TEXTURE REGION on the i960's bus: 71,297 writes, addresses 12600000..128083fc
+    SDRAM WRITES busiest first: ... 01860000:71297 ...
+
+71,297 writes into the region, and all 71,297 arriving at `base_luma`. Not one
+at either sheet.
+
+R264's decode was `sd_word = base_texs0 + AW'(r_addr[21:2])`. The reference's
+map is
+
+    map(0x12000000, 0x121fffff).ram().w(tex0_w).mirror(0x200000)
+    map(0x12400000, 0x125fffff).ram().w(tex1_w).mirror(0x200000)
+
+-- a 2 MB region, which is 512 K dwords, which is bits **[20:2]**. Bit 21 is
+the MIRROR: an address line the chip select does not decode. Taking it as part
+of the index puts every mirrored write half a megaword past the base, so
+sheet 0's mirror landed on sheet 1 and SHEET 1'S MIRROR LANDED ON THE LUMA
+TABLE. And Daytona uploads its textures THROUGH THE MIRROR, at 0x126xxxxx, so
+every texture went there.
+
+With `[20:2]`: 62,721 words arrive in sheet 1, 43,211 of them not 0xFFFF --
+actual texture data, in the memory the texel fetch reads.
+
+**THE BENCH AGREED WITH THE BUG, AND THAT IS THE PART TO KEEP.**
+`tb_m2_cpu_bridge` had a mirror test:
+
+    expect("sheet 0 mirror", sdram[0x60000 + 0x80000], 0x789a);
+
+It asserted that the mirrored write lands half a megaword past the base --
+which is what the code did, not what the map says. The test was written from
+the implementation. A mirror is the SAME memory; the test now writes through
+the mirror and requires it to overwrite word 0, and requires that nothing
+appears past the sheet at all. It also writes sheet 1 through 0x126xxxxx,
+because that is the address the game actually uses.
+
+**AND THE STANDING RULE THIS CONFIRMS AGAIN:** unwritten memory reads 0xFFFF.
+A texture sheet nobody wrote returns 0xF for every texel, and 0xF is FULL
+BRIGHTNESS -- so a textured polygon comes out flat and bright, which by eye is
+indistinguishable from a texture path that does nothing at all. The board's 'Y'
+record counts texels that are not 0xF for exactly this reason.

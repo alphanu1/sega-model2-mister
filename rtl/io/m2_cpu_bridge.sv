@@ -452,11 +452,21 @@ module m2_cpu_bridge #(
       // tex0_w takes `offset` as a DWORD index and stores data[15:0] at
       // textureram[offset>>1], half offset&1 -- which as 16-bit words is
       // simply word `offset`. So the CPU's dword index IS our word index.
+      // R278: [20:2], NOT [21:2]. The reference's map is
+      //     map(0x12000000, 0x121fffff) ... .mirror(0x200000)
+      // so the region is 2 MB -- 512 K dwords, which is bits [20:2] -- and bit
+      // 21 is the MIRROR, an address line the chip select ignores. Taking it
+      // as part of the index put every mirrored write half a megaword past the
+      // base: sheet 0's mirror landed on sheet 1, and sheet 1's mirror landed
+      // on the LUMA TABLE. Daytona uploads its textures THROUGH THE MIRROR --
+      // tb_m2_boot's histogram shows all 71,297 of its writes to 0x12xxxxxx
+      // arriving at the luma base and none at either sheet -- so every texture
+      // this core has ever been given went into the wrong memory.
       tgt = T_SDRAM; half_only = 1'b1; tex_region = 1'b1;
-      sd_word = base_texs0 + AW'(r_addr[21:2]);
+      sd_word = base_texs0 + AW'(r_addr[20:2]);
     end else if (r_addr >= 32'h1240_0000 && r_addr < 32'h1280_0000) begin
       tgt = T_SDRAM; half_only = 1'b1; tex_region = 1'b1;
-      sd_word = base_texs1 + AW'(r_addr[21:2]);
+      sd_word = base_texs1 + AW'(r_addr[20:2]);   // R278: the mirror is bit 21
     end else if (r_addr >= 32'h1280_0000 && r_addr < 32'h1282_0000) begin
       // R264: the polygon luma table, 32 K BYTES -- the reference maps it
       // umask32 0x000000ff, so one byte per dword. ONE BYTE PER 16-BIT WORD

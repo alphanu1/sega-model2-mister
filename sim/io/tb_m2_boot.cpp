@@ -57,6 +57,8 @@ static std::map<uint32_t,uint32_t> g_th_colorbase_n;
 static uint32_t g_th_last_objs = 0;
 static uint32_t g_tdwords = 0;
 static uint32_t tex_writes = 0, tex_nonff = 0;
+#include <map>
+static std::map<uint32_t,uint32_t> wr_hist;   // R275: where CPU writes actually land
 static uint32_t tex_lo = 0xffffffff, tex_hi = 0;
 static unsigned g_pj_lost = 0;
 // R231: where the luminance lands, and the table it comes from.
@@ -532,6 +534,7 @@ int main(int argc, char **argv) {
       // looks exactly like the placeholder and would be diagnosed as "the
       // texture path does nothing". Counted here, where the write is, so the
       // question is answered without a bitstream.
+      if (d->sd_we) ++wr_hist[pend_addr >> 16];
       if (d->sd_we && pend_addr >= 0x1760000 && pend_addr < 0x1860000) {
         ++tex_writes;
         if (pend_addr < tex_lo) tex_lo = pend_addr;
@@ -3216,6 +3219,18 @@ int main(int argc, char **argv) {
   // R275: DOES THE GAME UPLOAD ITS TEXTURE SHEETS AT ALL? Printed
   // unconditionally, at the end, because th_report() only runs in one mode and
   // this question has to be answerable from any run.
+  {
+    std::vector<std::pair<uint32_t,uint32_t>> h(wr_hist.begin(), wr_hist.end());
+    std::sort(h.begin(), h.end(), [](auto&a, auto&b){ return a.second > b.second; });
+    std::printf("SDRAM WRITES by 64K word region, busiest first:");
+    for (size_t i = 0; i < h.size() && i < 8; ++i)
+      std::printf("  %04x0000:%u", h[i].first, h[i].second);
+    std::printf("\n");
+  }
+  std::printf("TEXTURE REGION on the i960's own bus: %u writes, %u reads to 0x12xxxxxx, "
+              "addresses %08x..%08x\n",
+              (unsigned)d->obs_cpu_texwr, (unsigned)d->obs_cpu_texrd,
+              (unsigned)d->obs_cpu_texlo, (unsigned)d->obs_cpu_texhi);
   if (tex_writes)
     std::printf("TEXTURE SHEETS (R275): %u words uploaded by the CPU, %u of them not 0xFFFF, "
                 "words %07x..%07x\n", tex_writes, tex_nonff, tex_lo, tex_hi);

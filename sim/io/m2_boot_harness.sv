@@ -359,6 +359,11 @@ module m2_boot_harness #(
   output logic [31:0] obs_tgp_op,
   output logic [31:0] obs_tgp_hold,
   output logic [31:0] obs_tgp_wr_n,
+  // R275: THE CPU'S OWN ATTEMPTS TO UPLOAD A TEXTURE, counted on its bus
+  // rather than after the bridge, so "the game never wrote one" and "the bridge
+  // threw it away" are different numbers.
+  output logic [31:0] obs_cpu_texwr, obs_cpu_texrd,
+  output logic [31:0] obs_cpu_texlo, obs_cpu_texhi,
   output logic [16:0] obs_tgp_wr_addr,
   output logic [31:0] obs_tgp_wr_data,
   output logic [31:0] obs_tgp_st,
@@ -599,6 +604,24 @@ module m2_boot_harness #(
   wire [63:0] sd_dout_i = REAL_MEM ? rm_p1_dout : sd_dout;
   wire        sd2_ack_i  = REAL_MEM ? rm_p3_ack        : sd2_ack;
   wire [31:0] sd2_dout_i = REAL_MEM ? rm_p3_dout[31:0] : sd2_dout;
+
+  // The i960's bus, watched where it leaves the CPU.
+  logic bus_req_d;
+  always_ff @(posedge clk_cpu or negedge rst_n) begin
+    if (!rst_n) begin
+      obs_cpu_texwr <= 32'd0; obs_cpu_texrd <= 32'd0; bus_req_d <= 1'b0;
+      obs_cpu_texlo <= 32'hffffffff; obs_cpu_texhi <= 32'd0;
+    end else begin
+      bus_req_d <= bus_req;
+      if (bus_req && !bus_req_d && bus_addr[31:24] == 8'h12) begin
+        if (bus_we) begin
+          obs_cpu_texwr <= obs_cpu_texwr + 32'd1;
+          if (bus_addr < obs_cpu_texlo) obs_cpu_texlo <= bus_addr;
+          if (bus_addr > obs_cpu_texhi) obs_cpu_texhi <= bus_addr;
+        end else obs_cpu_texrd <= obs_cpu_texrd + 32'd1;
+      end
+    end
+  end
 
   m2_cpu_bridge #(.AW(AW), .BOARD_2A(1'b0), .BUFFERRAM(BUFFERRAM_EN)) u_bridge (
     .dbg_dc_hits(obs_dc_hits), .dbg_dc_miss(obs_dc_miss),

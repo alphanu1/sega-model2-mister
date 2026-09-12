@@ -500,8 +500,21 @@ int main(int argc, char **argv) {
     expect("texture sheet 1 word 0", sdram[0x70000], 0x6666);
     access(true, 0x12800000u, 0x000000abu, 0xf, nullptr);
     expect("luma table byte 0", sdram[0x80000] & 0xff, 0xab);
+    // R278: A MIRROR IS THE SAME MEMORY, and this test said otherwise. It
+    // expected the mirrored write half a megaword past the base -- which is
+    // where the implementation put it, on top of the NEXT region -- so the
+    // bench was written against the code instead of against the map. The
+    // reference's `.mirror(0x200000)` means address bit 21 is not decoded at
+    // all, so this write must land on word 0 of sheet 0 and overwrite what the
+    // first write put there.
     access(true, 0x12200000u, 0x0000789au, 0xf, nullptr);
-    expect("sheet 0 mirror", sdram[0x60000 + 0x80000], 0x789a);
+    expect("sheet 0 mirror aliases the base", sdram[0x60000], 0x789a);
+    expect("and nothing lands past the sheet", sdram.count(0x60000 + 0x80000) ? 1u : 0u, 0u);
+    // Sheet 1 through ITS mirror, which is how Daytona uploads: tb_m2_boot's
+    // write histogram shows every one of its texture writes arriving through
+    // 0x126xxxxx.
+    access(true, 0x12600004u, 0x0000bcdeu, 0xf, nullptr);
+    expect("sheet 1 mirror aliases the base", sdram[0x70001], 0xbcde);
   }
 
   std::printf("  probe6=%08x probe2=%08x (EEEEEEEE = never read)\n",
