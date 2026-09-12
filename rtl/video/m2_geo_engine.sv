@@ -108,6 +108,19 @@ module m2_geo_engine #(
   // in step with the list.
   input  logic [31:0] tpa,
   output logic [31:0] poly_uv0, poly_uv1, poly_uv2, poly_uv3,   // {v, u} per vertex
+  // R271: the polygon's texture state, packed. Named rather than passed as ten
+  // ports because every stage below carries it whole and none of them looks
+  // inside it except the texel fetch.
+  //   [0]     textured            texheader[0] bit 14
+  //   [3:1]   width  code         32 << code
+  //   [6:4]   height code
+  //   [7]     wrap x              [8] wrap y
+  //   [9]     mirror x            [10] mirror y
+  //   [11]    checker             [12] sheet select
+  //   [18:13] texx / 32           [23:19] texy / 32
+  //   [31:24] luma table base >> 7
+  output logic [31:0] poly_tex,
+  output logic  [7:0] poly_lum,        // the polygon's own luma scale
   input  logic [31:0] lit_x, lit_y, lit_z, // the light vector (cmd 0x0a)
   input  logic        tp_we,               // texture parameters (cmd 0x06), streamed
   input  logic [4:0]  tp_idx,
@@ -226,7 +239,7 @@ module m2_geo_engine #(
     E_NXF, E_NXFW, E_SKIP,
     E_EMIT, E_LINK, E_DONE, E_DOT, E_DOTA,
     // R222: the luminance, the texture header, the colour
-    E_LUMM, E_LUMMW, E_LUMA, E_LUMAW, E_TH0, E_TH3, E_CC, E_PAL, E_XL, E_CW,
+    E_LUMM, E_LUMMW, E_LUMA, E_LUMAW, E_TH0, E_TH1, E_TH2, E_TH3, E_CC, E_PAL, E_XL, E_CW,
     E_UV                                        // R268: the per-vertex texture coordinates
   } estate_t;
   estate_t st, ret;
@@ -266,6 +279,12 @@ module m2_geo_engine #(
   logic [31:0] lum;
   logic [7:0]  luma8;
   logic [15:0] hdr0;         // texture header word 0: renderer bits 13-14
+  // R271: THE REST OF THE TEXTURE HEADER. Word 1's low byte is the luma
+  // table's base, word 2 holds the sheet, the texture's origin on it, and
+  // which of the two sheets it is on. Two more reads a polygon, which is what
+  // it costs to know WHICH texture a polygon wears.
+  logic [15:0] hdr1, hdr2;
+  logic  [7:0] plum;         // the polygon's own luma, packed in the normal
   logic [9:0]  cbase;        // header word 3 >> 6
   logic        tex_flat;     // R231: a textured polygon, drawn as lit grey until textures exist
   logic [14:0] c555;         // the palette entry
@@ -362,7 +381,8 @@ module m2_geo_engine #(
   // belongs in this list -- without it the coordinate reads went out on the
   // polygon pointer instead and the engine stopped emitting anything, which is
   // how tb_m2_geo_engine reported 13 of 14 checks failing.
-  wire xrd = (st == E_TH0) || (st == E_TH3) || (st == E_PAL) || (st == E_XL)
+  wire xrd = (st == E_TH0) || (st == E_TH1) || (st == E_TH2) || (st == E_TH3)
+           || (st == E_PAL) || (st == E_XL)
           || (st == E_UV);
   assign mem_addr  = xrd ? xaddr  : ptr;
   assign mem_space = xrd ? xspace : 2'd0;
@@ -392,6 +412,7 @@ module m2_geo_engine #(
   assign v2x = p0cur[0];  assign v2y = p0cur[1];  assign v2z = p0cur[2];
   assign v3x = p1cur[0];  assign v3y = p1cur[1];  assign v3z = p1cur[2];
   assign poly_attr = attr;
+  assign poly_lum  = plum;                     // R271
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -410,6 +431,7 @@ module m2_geo_engine #(
       tp_w <= 22'd0; tp_ram <= 1'b0; uv_i <= 3'd0; uv_cull <= 1'b0;
       poly_uv0 <= 32'd0; poly_uv1 <= 32'd0; poly_uv2 <= 32'd0; poly_uv3 <= 32'd0;
       lum <= 32'd0; luma8 <= 8'd0; hdr0 <= 16'd0; cbase <= 10'd0; c555 <= 15'd0; xi <= 2'd0;
+      hdr1 <= 16'd0; hdr2 <= 16'd0; plum <= 8'd0; poly_tex <= 32'd0;
       rgb[0] <= 8'd0; rgb[1] <= 8'd0; rgb[2] <= 8'd0;
       xaddr <= 24'd0; xhalf <= 1'b0; xspace <= 2'd0; cc_wait <= 1'b0; cc_idx <= 8'd0;
       cc_valid <= '0; poly_col <= 24'd0; dbg_col_miss <= 16'd0; tex_flat <= 1'b0; lum_x <= 8'd0; tex_lum_d <= 2'd0;
@@ -531,7 +553,11 @@ module m2_geo_engine #(
         E_NORM: if (mem_go) begin
           ptr <= ptr + 24'd1;
           case (skipn)
-            2'd3: nrm[0] <= mem_data;
+            // R271: THE POLYGON'S LUMA IS PACKED INTO THE NORMAL'S FIRST WORD.
+            // `object.luma = (raster->command_buffer[9] >> 15) & 0xff` -- the
+            // same word whose bit 23 is the backface flag. It scales every
+            // texel's brightness, so a texture without it is uniformly lit.
+            2'd3: begin nrm[0] <= mem_data; plum <= mem_data[22:15]; end
             2'd2: nrm[1] <= mem_data;
             default: nrm[2] <= mem_data;
           endcase
@@ -627,6 +653,19 @@ module m2_geo_engine #(
         //      then the address steps by tho * 4, tho the signed attr[16:12].
         E_TH0: if (mem_go) begin
           hdr0  <= xhalf ? mem_data[31:16] : mem_data[15:0];
+          xaddr <= th_dw(th_w + 22'd1, th_ram); xhalf <= ~th_w[0];
+          st    <= E_TH1;
+        end
+        // R271: word 1's low byte is the luma base, word 2 the sheet and the
+        // texture's place on it. The address alternates halves as it steps, so
+        // each is the previous one's complement.
+        E_TH1: if (mem_go) begin
+          hdr1  <= xhalf ? mem_data[31:16] : mem_data[15:0];
+          xaddr <= th_dw(th_w + 22'd2, th_ram); xhalf <= th_w[0];
+          st    <= E_TH2;
+        end
+        E_TH2: if (mem_go) begin
+          hdr2  <= xhalf ? mem_data[31:16] : mem_data[15:0];
           xaddr <= th_dw(th_w + 22'd3, th_ram); xhalf <= ~th_w[0];
           st    <= E_TH3;
         end
@@ -644,6 +683,10 @@ module m2_geo_engine #(
           // step with the list. The translucent cull below is therefore held in
           // uv_cull and acted on when the run finishes.
           uv_cull <= hdr0[13];
+          // R271: the whole texture state, assembled where its last word lands.
+          poly_tex <= {hdr1[7:0], hdr2[10:6], hdr2[5:0], hdr2[12], hdr0[15],
+                       hdr0[9], hdr0[8], hdr0[7], hdr0[6],
+                       hdr0[5:3], hdr0[2:0], hdr0[14]};
           uv_i    <= 3'd0;
           xaddr   <= th_dw(tp_w, tp_ram); xhalf <= tp_w[0]; xspace <= 2'd1;
           st      <= E_UV;

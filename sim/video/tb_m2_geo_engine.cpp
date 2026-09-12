@@ -441,6 +441,48 @@ int main(int argc, char** argv) {
   }
 
 
+  // ---- R271: the rest of the texture header, and the polygon's own luma ----
+  //
+  // Word 0 carries the size, wrap, mirror and checker bits; word 1's low byte
+  // is the luma table's base; word 2 the sheet and the texture's origin on it.
+  // The luma SCALE is not in the header at all -- it is packed into the top of
+  // the normal's first word, the same word whose bit 23 is the backface flag.
+  {
+    thdr[0x100 + 0] = 0x8000 | (1u << 14) | (1u << 9) | (1u << 7) | (3u << 3) | 5u;
+    thdr[0x100 + 1] = 0x0042;
+    thdr[0x100 + 2] = (1u << 12) | (0x15u << 6) | 0x29u;
+    thdr[0x100 + 3] = uint16_t(0x155 << 6);
+    size_t w = 0;
+    w = put_xyz(w, 100.0f);
+    w = put_xyz(w, 200.0f);
+    obj[w++] = 0x00020201u;                 // quad, link 2, double-sided
+    // The normal's first word carries the luma in bits 22:15.
+    obj[w++] = (0x7bu << 15) | 0x0000u;     // normal x, luma 0x7b
+    obj[w++] = 0; obj[w++] = 0;             // normal y, z
+    w = put_xyz(w, 300.0f);
+    w = put_xyz(w, 400.0f);
+    obj[w++] = 0x00000000u;
+    d->oba = 0; d->obc = 16;
+    d->start = 1; tick(); d->start = 0;
+    for (int budget = 0; budget < 60000 && (d->busy || budget < 10); budget++) tick();
+    const uint32_t t = d->poly_tex;
+    std::printf("test: R271, the texture header and the polygon's luma\n");
+    ck("textured",   t & 1, 1);
+    ck("width code", (t >> 1) & 7, 5);
+    ck("height code",(t >> 4) & 7, 3);
+    ck("wrap x",     (t >> 7) & 1, 0);
+    ck("wrap y",     (t >> 8) & 1, 1);
+    ck("mirror x",   (t >> 9) & 1, 0);
+    ck("mirror y",   (t >> 10) & 1, 1);
+    ck("checker",    (t >> 11) & 1, 1);
+    ck("sheet",      (t >> 12) & 1, 1);
+    ck("texx",       (t >> 13) & 0x3f, 0x29);
+    ck("texy",       (t >> 19) & 0x1f, 0x15);
+    ck("luma base",  (t >> 24) & 0xff, 0x42);
+    ck("luma scale", d->poly_lum, 0x7b);
+    thdr[0x100 + 0] = 0x0000; thdr[0x100 + 1] = 0; thdr[0x100 + 2] = 0;
+  }
+
   std::printf("m2_geo_engine: checks=%ld fails=%ld\n", checks, fails);
   delete d;
   return fails ? 1 : 0;

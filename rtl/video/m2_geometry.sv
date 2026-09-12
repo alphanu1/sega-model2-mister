@@ -111,6 +111,8 @@ module m2_geometry (
   // R270: the quad's texture coordinates, clipped with it, as floats.
   output logic [31:0] q_u0, q_v0, q_u1, q_v1,
   output logic [31:0] q_u2, q_v2, q_u3, q_v3,
+  output logic [31:0] q_tex,           // R271: the polygon's texture state
+  output logic  [7:0] q_lum,
   output logic [23:0] q_col,
   output logic [31:0] q_z,
 
@@ -166,6 +168,7 @@ module m2_geometry (
   logic [23:0] poly_col, pcol;      // R222: the engine's colour, and the one in flight
   logic  [1:0] poly_zmode;          // R246: the engine's per-polygon z mode
   logic [31:0] poly_uv0, poly_uv1, poly_uv2, poly_uv3;   // R268
+  logic [31:0] poly_tex;  logic [7:0] poly_lum;        // R271
 
   m2_geo_engine u_engine (
     .tha(tha), .lit_x(lit_x), .lit_y(lit_y), .lit_z(lit_z),
@@ -175,6 +178,7 @@ module m2_geometry (
     // R268: the per-vertex texture coordinates, read beside the header
     .tpa(tpa), .poly_uv0(poly_uv0), .poly_uv1(poly_uv1),
     .poly_uv2(poly_uv2), .poly_uv3(poly_uv3),
+    .poly_tex(poly_tex), .poly_lum(poly_lum),
     .clk(clk), .rst_n(rst_n),
     .start(start), .oba(oba), .obc(obc), .busy(eng_busy),
     .mat_we(mat_we), .mat_idx(mat_idx), .mat_data(mat_data),
@@ -493,11 +497,13 @@ module m2_geometry (
   endfunction
 
   logic [31:0] hu [4], hv [4];
+  logic [31:0] ptex;  logic [7:0] plum;
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       qst <= Q_IDLE; qi <= 2'd0; clip_in_valid <= 1'b0; hzmin <= 32'd0; hzmax <= 32'd0;
       for (int k = 0; k < 4; k++) begin hu[k] <= 32'd0; hv[k] <= 32'd0; end
+      ptex <= 32'd0; plum <= 8'd0;
       zprev <= 32'h5011B5EA; hzkey <= 16'd0;   // 1e10, as render_frame_start sets it
       dbg_nonfinite <= 16'd0; dbg_behind <= 16'd0; pj_wait <= 10'd0; dbg_pj_lost <= 16'd0;
       cvalid <= 1'b0;
@@ -530,6 +536,7 @@ module m2_geometry (
           hu[2] <= u2f(poly_uv2[15:0]); hv[2] <= u2f(poly_uv2[31:16]);
           hu[3] <= u2f(poly_uv3[15:0]); hv[3] <= u2f(poly_uv3[31:16]);
           pcol  <= poly_col;                       // R222
+          ptex  <= poly_tex; plum <= poly_lum;     // R271
           hzmin <= zmin_c;
           hzmax <= zmax_c;
           zprev <= zsel_c;                       // R246: carried, as raster->polygon_z is
@@ -614,6 +621,7 @@ module m2_geometry (
     .in_u0(hu[0]), .in_v0(hv[0]), .in_u1(hu[1]), .in_v1(hv[1]),
     .in_u2(hu[2]), .in_v2(hv[2]), .in_u3(hu[3]), .in_v3(hv[3]),
     .in_col(pcol), .in_z({16'd0, hzkey}), .in_moire(1'b0),   // R246: the reference's 16-bit z value
+    .in_tex(ptex), .in_lum(plum),                            // R271
     .mul_req(mul_req[2]), .mul_a(mul_a[2]), .mul_b(mul_b[2]),
     .mul_gnt(mul_gnt[2]), .mul_rsp(mul_rsp[2]), .mul_res(mul_res),
     .add_req(add_req[2]), .add_a(add_a[2]), .add_b(add_b[2]), .add_sub(add_sub[2]),
@@ -628,6 +636,7 @@ module m2_geometry (
     .out_sx2(q_x2), .out_sy2(q_y2), .out_sx3(q_x3), .out_sy3(q_y3),
     .out_u0(q_u0), .out_v0(q_v0), .out_u1(q_u1), .out_v1(q_v1),
     .out_u2(q_u2), .out_v2(q_v2), .out_u3(q_u3), .out_v3(q_v3),
+    .out_tex(q_tex), .out_lum(q_lum),
     .out_col(q_col), .out_z(q_z), .out_moire(),
     .dbg_in(dbg_clip_in), .dbg_out(dbg_clip_out), .dbg_dropped(dbg_clip_dropped)
   );

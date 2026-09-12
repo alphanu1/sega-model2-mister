@@ -91,6 +91,7 @@ module tb_clip_top (
     .in_u0(in_u0), .in_v0(in_v0), .in_u1(in_u1), .in_v1(in_v1),
     .in_u2(in_u2), .in_v2(in_v2), .in_u3(in_u3), .in_v3(in_v3),
     .in_col(24'h334455), .in_z(32'h40000000), .in_moire(1'b0),
+    .in_tex(32'd0), .in_lum(8'd0),
     .mul_req(mul_req[1]), .mul_a(mul_a[1]), .mul_b(mul_b[1]),
     .mul_gnt(mul_gnt[1]), .mul_rsp(mul_rsp[1]), .mul_res(mul_res),
     .add_req(add_req[1]), .add_a(add_a[1]), .add_b(add_b[1]),
@@ -107,7 +108,7 @@ module tb_clip_top (
     .out_sx2(out_sx2), .out_sy2(out_sy2), .out_sx3(out_sx3), .out_sy3(out_sy3),
     .out_u0(out_u0), .out_v0(out_v0), .out_u1(out_u1), .out_v1(out_v1),
     .out_u2(out_u2), .out_v2(out_v2), .out_u3(out_u3), .out_v3(out_v3),
-    .out_col(), .out_z(), .out_moire(),
+    .out_col(), .out_z(), .out_moire(), .out_tex(), .out_lum(),
     .dbg_in(dbg_in), .dbg_out(dbg_out), .dbg_dropped(dbg_dropped)
   );
 

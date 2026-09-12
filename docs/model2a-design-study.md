@@ -14308,3 +14308,32 @@ not yet reported R269's numbers. Four vertices of {u, v} is 128 bits a quad,
 2,048 quads, two banks: 51 blocks, which is exactly what halving the glyph
 cache gives back. Adding 1/z per vertex for the perspective divide is another
 26 on top.
+
+**R271 -- WHICH TEXTURE A POLYGON WEARS, AND HOW BRIGHT.** R268 read the
+per-vertex pairs and R270 clipped them; neither says which sheet they index or
+where on it. The reference takes that from the rest of the texture header and
+from a place that is easy to miss:
+
+    extra.checker  = (poly->texheader[0] >> 15) & 1;
+    extra.lumabase = (poly->texheader[1] & 0xff) << 7;
+    extra.texwidth = 32 << ((poly->texheader[0] >> 0) & 0x7);
+    extra.texx     = 32 * ((poly->texheader[2] >> 0) & 0x3f);
+    extra.texy     = 32 * ((poly->texheader[2] >> 6) & 0x1f);
+    extra.texsheet[0] = (poly->texheader[2] & 0x1000) ? ram1 : ram0;
+    object.luma    = (raster->command_buffer[9] >> 15) & 0xff;
+
+The engine read words 0 and 3 already (R222, for the renderer bits and the
+colour base); it now reads 1 and 2 as well -- two more 16-bit reads per polygon,
+about 30 cycles, against a geometry stage that spends 6 to 9 ms a frame.
+
+THE LUMA SCALE IS NOT IN THE HEADER. `command_buffer[9]` is the NORMAL's first
+word, the same word whose bit 23 is the backface flag, and the polygon's 8-bit
+luma is packed into bits 22:15 of it. It multiplies every texel's brightness
+before the colour table, so a texture drawn without it is uniformly lit and
+flat -- and nothing about the header would ever have led here.
+
+Everything the texel fetch needs is packed into one 32-bit `poly_tex` word and
+carried through the clipper the way the colour is -- latched with the quad,
+because the walker is polygons ahead by the time a clipped child is emitted.
+`tb_m2_geo_engine` checks all thirteen fields (67 checks); swapping texx and
+texy fails it, and so does taking the luma from bits 23:16.

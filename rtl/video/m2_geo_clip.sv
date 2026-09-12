@@ -128,6 +128,11 @@ module m2_geo_clip (
   input  logic [23:0] in_col,
   input  logic [31:0] in_z,
   input  logic        in_moire,
+  // R271: the texture state rides with the quad exactly as the colour does,
+  // and for the same reason -- the walker has moved on to the next polygon
+  // long before a clipped child is emitted.
+  input  logic [31:0] in_tex,
+  input  logic  [7:0] in_lum,
 
   // Shared arithmetic - see rtl/video/m2_fp_pool.sv.
   output logic        mul_req,
@@ -165,6 +170,8 @@ module m2_geo_clip (
   output logic        out_moire,
   output logic [31:0] out_u0, out_v0, out_u1, out_v1,
   output logic [31:0] out_u2, out_v2, out_u3, out_v3,
+  output logic [31:0] out_tex,
+  output logic  [7:0] out_lum,
 
   // Counted: quads in, quads out, and how many were dropped entirely. A clipper
   // that silently drops everything and one that passes everything through look
@@ -262,6 +269,8 @@ module m2_geo_clip (
   logic [23:0] a_col;
   logic [31:0] a_z;
   logic        a_moire;
+  logic [31:0] a_tex;
+  logic  [7:0] a_lum;
 
   // Rotated index: pt[j] is quad vertex (rot + j) mod 4.
   function automatic [1:0] rt(input logic [1:0] j);
@@ -380,6 +389,7 @@ module m2_geo_clip (
   assign out_sx2 = qsx[2]; assign out_sy2 = qsy[2];
   assign out_sx3 = qsx[3]; assign out_sy3 = qsy[3];
   assign out_col = a_col; assign out_z = a_z; assign out_moire = a_moire;
+  assign out_tex = a_tex; assign out_lum = a_lum;
   assign out_u0 = qu[0]; assign out_v0 = qv[0];
   assign out_u1 = qu[1]; assign out_v1 = qv[1];
   assign out_u2 = qu[2]; assign out_v2 = qv[2];
@@ -394,7 +404,7 @@ module m2_geo_clip (
       cp_a <= '0; cp_b <= '0; cp_dst <= '0; second_child <= 1'b0;
       cs <= '0; c_axis <= '0;
       c_num <= '0; c_den <= '0; c_t <= '0; c_u <= '0; c_m1 <= '0; c_m2 <= '0;
-      a_col <= '0; a_z <= '0; a_moire <= 1'b0;
+      a_col <= '0; a_z <= '0; a_moire <= 1'b0; a_tex <= '0; a_lum <= '0;
       dbg_in <= '0; dbg_out <= '0; dbg_dropped <= '0;
       for (si = 0; si < 4; si = si + 1) begin
         qx[si] <= '0; qy[si] <= '0; qz[si] <= '0; qsx[si] <= '0; qsy[si] <= '0; qpx[si] <= 1'b0; qid[si] <= 2'd0;
@@ -419,6 +429,7 @@ module m2_geo_clip (
           qpx[0] <= 1'b1; qpx[1] <= 1'b1; qpx[2] <= 1'b1; qpx[3] <= 1'b1;   // R218
           qid[0] <= 2'd0; qid[1] <= 2'd1; qid[2] <= 2'd2; qid[3] <= 2'd3;
           a_col <= in_col; a_z <= in_z; a_moire <= in_moire;
+          a_tex <= in_tex; a_lum <= in_lum;
           lvl <= 3'd0; sp <= '0; ti <= '0;
           if (dbg_in != 16'hffff) dbg_in <= dbg_in + 16'd1;
           kst <= K_TEST;
