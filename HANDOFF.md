@@ -1,6 +1,24 @@
 # Handoff
 
-**Updated:** 2026-09-11 23:00 (machine clock). Study entries R176-R232.
+**Updated:** 2026-09-12 01:20 (machine clock). Study entries R176-R240.
+
+## THE FINDING OF 01:10, 09-12 (R240) -- READ FIRST
+
+The SDRAM controller's four-word burst wraps INSIDE the open row (it
+increments the column field only, which is right for the device). The two
+pair caches on port 4 (walker and engine, R214) are two-word aligned and
+trusted the burst's upper half as "dword N+1"; on the last dword of a row that
+half is the row's FIRST dword. A stream reaching a row edge with the odd index
+on the port reads one wrong dword -- one wrong vertex coordinate with its
+neighbours right, which is R237's board signature (right y, wrong x). No desk
+bench had the pair cache in the path, which is why "sim never matches". Fixed
+at the consumer (`m2_pair_cache` takes COL_BITS, keeps no copy on an all-ones
+column); the pair-cache bench's port model now wraps and its edge streams fail
+without the fix. `build/fix3d7` carries it, queued behind `fix3d6` (never two
+batches at once). The measure on the board: the 'W'/'X' wedge count over 240 s
+(304 on fix3d5). If it is not zero, the remaining wedges are a different fault.
+The divider-sharing theory (R237) is closed: no window (the pool gates on
+`div_outstanding`).
 
 ## WHERE 2026-09-11 LEFT IT (evening)
 
