@@ -1,8 +1,41 @@
 # Handoff
 
-**Updated:** 2026-09-12 19:10 (machine clock). Study entries R176-R259.
+**Updated:** 2026-09-12 21:15 (machine clock). Study entries R176-R263.
 
-## 19:10, 09-12: WHAT THE BOARD CONFIRMED TODAY -- READ FIRST
+## OPEN FAULTS, PARKED DELIBERATELY TO START TEXTURE MAPPING
+
+These are understood and measured. They are parked, not forgotten, and the
+instruments to finish them are already on the wire.
+
+**1. A minority of walks read a half-built display list.** The board's 'U'
+records report nops decoded per frame as median 0 and maximum 280. 280 is
+exactly the payload length of the texture_data command whose count the game
+does not write with the command: it pushes a ZERO PLACEHOLDER, remembers the
+push pointer, pushes the payload, then patches the count in with a separate
+store (R254, the i960 code is quoted there). A walk that arrives in between
+reads the count as zero and decodes 280 payload words as commands.
+
+**2. That corrupts the light table permanently, and that is the black
+scenes.** The reference writes the 32-entry diffuse/ambient table TWICE, both
+at boot, with no zero entry anywhere -- measured by walking its list every
+frame for 3,200 frames. This core issues sixteen writes in four minutes
+because phantom commands from (1) write junk, and an entry left at 0/0
+renders every polygon that indexes it black however well lit the scene is.
+Because the reference never rewrites the table, one bad walk sticks for the
+session.
+
+**Next measurement, already built (R263):** the walk triggers on the game's
+own "list ready" write to 0x803008, with a fallback that walks at vblank
+after four frames with no such write. A fallback walk carries no promise the
+list is finished. Both are now counted and streamed in the 'U' record, so one
+board capture says whether the bad walks are fallback walks. If they are not,
+the remaining suspect is ordering: the CPU's patch store and the walker's
+read reach SDRAM through different ports with nothing sequencing them.
+
+**3. Occasional scenery dropouts and an odd missing floor**, roughly one or
+two every five seconds, reported after R256. Likely the same root as (1).
+
+## 19:10, 09-12: WHAT THE BOARD CONFIRMED TODAY
 
 Confirmed on hardware, in order, each by the user's eye:
 * **R242** the i960's `bno` was never taken -- the cars' continuous crash roll.
