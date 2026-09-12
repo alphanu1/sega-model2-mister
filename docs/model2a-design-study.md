@@ -13489,3 +13489,9 @@ sends every object down the "transform and score" path; the same
 that plays continuously (R232) is the expected face of it. The desk check
 is the same trace alignment past frame 248 (`$S/long/trace2.txt`, running);
 the board check is the cars.
+
+*R242, the test's own check (01:50): with the RTL's bno arm disabled in a
+scratch copy of `rtl/cpu/i960` and the same corrected transcription and
+generator, `test_i960_top` FAILS at retire 14 -- "IP got 00000144 want
+00000150", a bno the reference took and the mutant fell through. So the
+bench now sees the class of bug it had been standing in front of.*
