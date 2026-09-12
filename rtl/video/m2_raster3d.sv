@@ -42,7 +42,9 @@ module m2_raster3d #(
   // 1 restores all of it, and it must be 1 the moment the video moves to the
   // memory clock. The logic is kept rather than deleted precisely because that
   // move is planned and R199 records what it costs to rediscover.
-  parameter bit TWO_CLOCKS = 1'b1
+  parameter bit TWO_CLOCKS = 1'b1,
+  // R275: the SDRAM address width the texel fetch drives.
+  parameter int unsigned TEX_AW = 25
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -56,6 +58,12 @@ module m2_raster3d #(
   input  logic [23:0] q_col,
   input  logic [31:0] q_z,
   input  logic        q_moire,
+  // R273: the quad's texture -- four {u, v} in 11.2 texels and the texel
+  // fetch's share of the header. Arrives already converted from the floats the
+  // clipper interpolates; see m2_geometry's f2uv.
+  input  logic [12:0] q_u0, q_v0, q_u1, q_v1,
+  input  logic [12:0] q_u2, q_v2, q_u3, q_v3,
+  input  logic [23:0] q_tex,
   input  logic        q_end,                // last quad of the frame
 
   // ---- scan-out, on the video clock
@@ -64,6 +72,15 @@ module m2_raster3d #(
   input  logic [9:0]  scan_y,
   output logic [15:0] scan_col,
   output logic        scan_hit,             // 0 = nothing painted, show the 2D
+
+  // ---- R275: the texture sheets, in SDRAM
+  input  logic [TEX_AW:1] tex_base0, tex_base1,
+  input  logic            tex_inval,
+  output logic            tex_m_req,
+  output logic [TEX_AW:1] tex_m_addr,
+  input  logic            tex_m_ack,
+  input  logic [63:0]     tex_m_data,
+  output logic [31:0]     dbg_texpix, dbg_texhit, dbg_texmiss,
 
   output logic [15:0] dbg_quads,
   output logic [15:0] dbg_dropped,
@@ -131,6 +148,13 @@ module m2_raster3d #(
   logic [BW-1:0] qs_band;
   logic signed [15:0] qo_x0, qo_y0, qo_x1, qo_y1, qo_x2, qo_y2, qo_x3, qo_y3;
   logic [23:0] qo_col;
+  logic [12:0] qo_u0, qo_v0, qo_u1, qo_v1, qo_u2, qo_v2, qo_u3, qo_v3;   // R273
+  logic [23:0] qo_tex;
+  // R275: the texel fetch's wires, declared here because two modules share them.
+  logic        tex_req, tex_ack;
+  logic [31:0] tex_state;
+  logic [19:0] tex_u, tex_v;
+  logic [3:0]  tex_texel;
   logic        qo_moire;
 
   // THE STORE TAKES QUADS ONLY WHILE COLLECTING (R220). Between a list's
@@ -162,6 +186,9 @@ module m2_raster3d #(
     .in_x0(q_x0), .in_y0(q_y0), .in_x1(q_x1), .in_y1(q_y1),
     .in_x2(q_x2), .in_y2(q_y2), .in_x3(q_x3), .in_y3(q_y3),
     .in_col(q_col), .in_z(q_z), .in_moire(q_moire),
+    .in_u0(q_u0), .in_v0(q_v0), .in_u1(q_u1), .in_v1(q_v1),
+    .in_u2(q_u2), .in_v2(q_v2), .in_u3(q_u3), .in_v3(q_v3),
+    .in_tex(q_tex),
     .sort_start(qs_sort_start), .sort_busy(qs_sort_busy),
     .replay_band(qs_band),
     .replay_start(qs_replay_start), .replay_busy(qs_replay_busy),
@@ -169,6 +196,9 @@ module m2_raster3d #(
     .out_x0(qo_x0), .out_y0(qo_y0), .out_x1(qo_x1), .out_y1(qo_y1),
     .out_x2(qo_x2), .out_y2(qo_y2), .out_x3(qo_x3), .out_y3(qo_y3),
     .out_col(qo_col), .out_moire(qo_moire),
+    .out_u0(qo_u0), .out_v0(qo_v0), .out_u1(qo_u1), .out_v1(qo_v1),
+    .out_u2(qo_u2), .out_v2(qo_v2), .out_u3(qo_u3), .out_v3(qo_v3),
+    .out_tex(qo_tex),
     .dbg_count(dbg_quads), .dbg_dropped(dbg_dropped), .dbg_tiny(dbg_tiny)
   );
 
@@ -177,6 +207,15 @@ module m2_raster3d #(
   logic        fl_span_valid, fl_span_ready, fl_span_moire;
   logic signed [31:0] fl_span_y, fl_span_x0, fl_span_x1;
   logic [23:0] fl_span_col;
+  logic signed [31:0] fl_span_u, fl_span_v, fl_span_dudx, fl_span_dvdx;
+  logic [23:0] fl_span_tex;
+  logic        fl_span_tex_en;
+  // R275: the textured span, expanded a pixel at a time. tx_* is the span as
+  // the band buffers see it -- identical in shape, one pixel wide when the
+  // polygon wears a texture.
+  logic        tx_span_valid, tx_span_ready, tx_span_moire;
+  logic signed [31:0] tx_span_y, tx_span_x0, tx_span_x1;
+  logic [23:0] tx_span_col;
 
   // The band being filled IS the band the store replays. One register, two
   // consumers -- leaving qs_band undriven is a silent "always band 0".
@@ -193,17 +232,50 @@ module m2_raster3d #(
     .in_x2({{16{qo_x2[15]}}, qo_x2}), .in_y2({{16{qo_y2[15]}}, qo_y2}),
     .in_x3({{16{qo_x3[15]}}, qo_x3}), .in_y3({{16{qo_y3[15]}}, qo_y3}),
     .in_col(qo_col), .in_moire(qo_moire),
+    .in_u0(qo_u0), .in_v0(qo_v0), .in_u1(qo_u1), .in_v1(qo_v1),
+    .in_u2(qo_u2), .in_v2(qo_v2), .in_u3(qo_u3), .in_v3(qo_v3),
+    .in_tex(qo_tex),
     .view_x1(32'sd0), .view_x2(32'(SCR_W) - 32'sd1),
     .view_y1(band_y1), .view_y2(band_y2),
     .span_valid(fl_span_valid), .span_ready(fl_span_ready),
     .span_y(fl_span_y), .span_x0(fl_span_x0), .span_x1(fl_span_x1),
     .span_col(fl_span_col), .span_moire(fl_span_moire),
+    .span_u(fl_span_u), .span_v(fl_span_v),
+    .span_dudx(fl_span_dudx), .span_dvdx(fl_span_dvdx),
+    .span_tex(fl_span_tex), .span_tex_en(fl_span_tex_en),
     .quad_done(fl_quad_done), .line_case(fl_line_case)
+  );
+
+  // ------------------------------------------------- R275: the texture walk
+  m2_span_tex u_spantex (
+    .clk(clk), .rst_n(rst_n),
+    .in_valid(fl_span_valid), .in_ready(fl_span_ready),
+    .in_y(fl_span_y), .in_x0(fl_span_x0), .in_x1(fl_span_x1),
+    .in_col(fl_span_col), .in_moire(fl_span_moire),
+    .in_u(fl_span_u), .in_v(fl_span_v),
+    .in_dudx(fl_span_dudx), .in_dvdx(fl_span_dvdx),
+    .in_tex(fl_span_tex), .in_tex_en(fl_span_tex_en),
+    .out_valid(tx_span_valid), .out_ready(tx_span_ready),
+    .out_y(tx_span_y), .out_x0(tx_span_x0), .out_x1(tx_span_x1),
+    .out_col(tx_span_col), .out_moire(tx_span_moire),
+    .tx_req(tex_req), .tx_ack(tex_ack), .tx_tex(tex_state),
+    .tx_u(tex_u), .tx_v(tex_v), .tx_texel(tex_texel),
+    .dbg_texpix(dbg_texpix)
+  );
+
+  m2_texel #(.AW(TEX_AW)) u_texel (
+    .clk(clk), .rst_n(rst_n),
+    .base_s0(tex_base0), .base_s1(tex_base1),
+    .req(tex_req), .ack(tex_ack), .tex(tex_state),
+    .u(tex_u), .v(tex_v), .texel(tex_texel),
+    .m_req(tex_m_req), .m_addr(tex_m_addr), .m_ack(tex_m_ack), .m_data(tex_m_data),
+    .inval(tex_inval),
+    .dbg_hits(dbg_texhit), .dbg_misses(dbg_texmiss)
   );
 
   // RGB888 to RGB565 on the way in, as the reference does: the colour is
   // already quantised upstream, so this costs less than it looks.
-  wire [15:0] span_565 = {fl_span_col[23:19], fl_span_col[15:10], fl_span_col[7:3]};
+  wire [15:0] span_565 = {tx_span_col[23:19], tx_span_col[15:10], tx_span_col[7:3]};
 
   // --------------------------------------------------------- band buffers
   logic [NBUF-1:0]       bd_clear_req, bd_clear_busy;
@@ -223,9 +295,9 @@ module m2_raster3d #(
         .band_y0(bd_y0[b]),
         .clear_req(bd_clear_req[b]), .clear_busy(bd_clear_busy[b]),
         .span_valid(bd_span_valid[b]), .span_ready(bd_span_ready[b]),
-        .span_y(fl_span_y[15:0]),
-        .span_x0(fl_span_x0[15:0]), .span_x1(fl_span_x1[15:0]),
-        .span_col(span_565), .span_moire(fl_span_moire),
+        .span_y(tx_span_y[15:0]),
+        .span_x0(tx_span_x0[15:0]), .span_x1(tx_span_x1[15:0]),
+        .span_col(span_565), .span_moire(tx_span_moire),
         .rd_x(scan_x[$clog2(SCR_W)-1:0]),
         .rd_row(scan_y[$clog2(BAND_H)-1:0]),
         .rd_col(bd_rd_col[b]), .rd_hit(bd_rd_hit[b]),
@@ -384,10 +456,10 @@ module m2_raster3d #(
       end
   end
 
-  assign fl_span_ready = bd_span_ready[fill_buf];
+  assign tx_span_ready = bd_span_ready[fill_buf];
   always_comb begin
     bd_span_valid = '0;
-    bd_span_valid[fill_buf] = fl_span_valid;
+    bd_span_valid[fill_buf] = tx_span_valid;
   end
 
   // ------------------------------------------------------------ sequencing

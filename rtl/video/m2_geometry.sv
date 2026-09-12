@@ -108,10 +108,13 @@ module m2_geometry (
   input  logic        q_ready,
   output logic signed [15:0] q_x0, q_y0, q_x1, q_y1,
   output logic signed [15:0] q_x2, q_y2, q_x3, q_y3,
-  // R270: the quad's texture coordinates, clipped with it, as floats.
-  output logic [31:0] q_u0, q_v0, q_u1, q_v1,
-  output logic [31:0] q_u2, q_v2, q_u3, q_v3,
-  output logic [31:0] q_tex,           // R271: the polygon's texture state
+  // R270/R273: the quad's texture coordinates, clipped with it. FLOATS INSIDE
+  // THE CLIPPER, TEXELS ON THE WAY OUT: the store keeps 11.2 texels a
+  // component, so the conversion happens here, once, where the float still
+  // exists.
+  output logic [12:0] q_u0, q_v0, q_u1, q_v1,
+  output logic [12:0] q_u2, q_v2, q_u3, q_v3,
+  output logic [23:0] q_tex,           // R271: the polygon's texture state
   output logic  [7:0] q_lum,
   output logic [23:0] q_col,
   output logic [31:0] q_z,
@@ -607,6 +610,36 @@ module m2_geometry (
   assign dbg_qst        = 2'(qst);
   assign dbg_clip_state = 4'(u_clip.kst);
 
+  // R273: THE CLIPPER'S FLOAT, AS THE STORE'S 11.2 TEXELS.
+  //
+  // The reference's texel coordinate is `pu * (1/z) / 8`; without the
+  // perspective divide that is pu/8, and eight times a quarter is a half -- so
+  // the stored value is simply pu/2, which is a float-to-integer conversion
+  // with the exponent biased by one. Thirteen bits holds 0..8191, and pu is a
+  // 16-bit unsigned whose largest useful value is 16,383 (2,047.875 texels).
+  logic [31:0] cu [4], cv [4];
+  logic [31:0] ctex;
+  function automatic logic [12:0] f2uv(input logic [31:0] f);
+    logic [7:0]  e;
+    logic [23:0] m;
+    logic [4:0]  sh;
+    begin
+      e = f[30:23];
+      m = {1'b1, f[22:0]};
+      if (f[31] || e < 8'd127)      f2uv = 13'd0;       // negative or under 1.0
+      else if (e >= 8'd127 + 8'd13) f2uv = 13'h1fff;    // 8,192 or more: clamp
+      else begin
+        sh   = 5'(8'd24 - (e - 8'd127));                // >> 23-e, then one more for /2
+        f2uv = 13'(m >> sh);
+      end
+    end
+  endfunction
+  assign q_u0 = f2uv(cu[0]); assign q_v0 = f2uv(cv[0]);
+  assign q_u1 = f2uv(cu[1]); assign q_v1 = f2uv(cv[1]);
+  assign q_u2 = f2uv(cu[2]); assign q_v2 = f2uv(cv[2]);
+  assign q_u3 = f2uv(cu[3]); assign q_v3 = f2uv(cv[3]);
+  assign q_tex = ctex[23:0];
+
   // ------------------------------------------------------------- the clipper
   m2_geo_clip u_clip (
     .clk(clk), .rst_n(rst_n),
@@ -634,9 +667,9 @@ module m2_geometry (
     .out_valid(q_valid), .out_ready(q_ready),
     .out_sx0(q_x0), .out_sy0(q_y0), .out_sx1(q_x1), .out_sy1(q_y1),
     .out_sx2(q_x2), .out_sy2(q_y2), .out_sx3(q_x3), .out_sy3(q_y3),
-    .out_u0(q_u0), .out_v0(q_v0), .out_u1(q_u1), .out_v1(q_v1),
-    .out_u2(q_u2), .out_v2(q_v2), .out_u3(q_u3), .out_v3(q_v3),
-    .out_tex(q_tex), .out_lum(q_lum),
+    .out_u0(cu[0]), .out_v0(cv[0]), .out_u1(cu[1]), .out_v1(cv[1]),
+    .out_u2(cu[2]), .out_v2(cv[2]), .out_u3(cu[3]), .out_v3(cv[3]),
+    .out_tex(ctex), .out_lum(q_lum),
     .out_col(q_col), .out_z(q_z), .out_moire(),
     .dbg_in(dbg_clip_in), .dbg_out(dbg_clip_out), .dbg_dropped(dbg_clip_dropped)
   );

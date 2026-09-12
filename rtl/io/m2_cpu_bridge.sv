@@ -167,6 +167,11 @@ module m2_cpu_bridge #(
   // it must drop the copy. The walker reads the list through a one-entry pair
   // cache and the game patches a command's count in after pushing its payload.
   output logic        buf_inval,
+  // R275: the CPU wrote a texture sheet. The texel cache holds lines of sheet
+  // data and the game UPLOADS its textures, so a line filled before an upload
+  // is stale for the rest of the session -- the glyph cache's blank screen in
+  // a different memory (R266).
+  output logic        tex_inval,
 
   // I/O the core answers itself.
   input  logic [31:0] io_rdata,
@@ -387,6 +392,7 @@ module m2_cpu_bridge #(
   // texel, which is what the reference discards.
   logic half_only;
   logic buf_region;      // R266: this access names the display list
+  logic tex_region;      // R275: this access names a texture sheet
 
   always_comb begin
     tgt     = T_NONE;
@@ -397,6 +403,7 @@ module m2_cpu_bridge #(
     xlat_mirror = 1'b0;
     half_only   = 1'b0;
     buf_region  = 1'b0;
+    tex_region  = 1'b0;
     if (r_addr < 32'h0020_0000) begin                       // program ROM
       tgt = T_SDRAM; is_rom = 1'b1;
       sd_word = base_prog + AW'(r_addr[20:1]);
@@ -445,10 +452,10 @@ module m2_cpu_bridge #(
       // tex0_w takes `offset` as a DWORD index and stores data[15:0] at
       // textureram[offset>>1], half offset&1 -- which as 16-bit words is
       // simply word `offset`. So the CPU's dword index IS our word index.
-      tgt = T_SDRAM; half_only = 1'b1;
+      tgt = T_SDRAM; half_only = 1'b1; tex_region = 1'b1;
       sd_word = base_texs0 + AW'(r_addr[21:2]);
     end else if (r_addr >= 32'h1240_0000 && r_addr < 32'h1280_0000) begin
-      tgt = T_SDRAM; half_only = 1'b1;
+      tgt = T_SDRAM; half_only = 1'b1; tex_region = 1'b1;
       sd_word = base_texs1 + AW'(r_addr[21:2]);
     end else if (r_addr >= 32'h1280_0000 && r_addr < 32'h1282_0000) begin
       // R264: the polygon luma table, 32 K BYTES -- the reference maps it
@@ -662,7 +669,7 @@ module m2_cpu_bridge #(
     if (!rst_n_mem) begin
       st <= S_IDLE; ack_mem <= 1'b0; half <= 1'b0;
       sd_req <= 1'b0; sd_we <= 1'b0; sd_addr <= '0; sd_din <= 16'd0; sd_be <= 2'b11;
-      oc_tram_we <= 1'b0; oc_pal_we <= 1'b0; oc_xlat_we <= 1'b0; col_inval <= 1'b0; buf_inval <= 1'b0;
+      oc_tram_we <= 1'b0; oc_pal_we <= 1'b0; oc_xlat_we <= 1'b0; col_inval <= 1'b0; buf_inval <= 1'b0; tex_inval <= 1'b0;
       io_sel <= 1'b0; io_we <= 1'b0;
       r_rdata <= 32'd0;
       dbg_cpu_reads <= 32'd0; dbg_cpu_writes <= 32'd0; dbg_unmapped <= 32'd0;
@@ -674,7 +681,7 @@ module m2_cpu_bridge #(
       dbg_probe6 <= 32'hEEEE_EEEE; dbg_probe2 <= 32'hEEEE_EEEE;
       dbg_tram_wr <= 32'd0; dbg_pal_wr <= 32'd0;
     end else begin
-      oc_tram_we <= 1'b0; oc_pal_we <= 1'b0; oc_xlat_we <= 1'b0; col_inval <= 1'b0; buf_inval <= 1'b0;
+      oc_tram_we <= 1'b0; oc_pal_we <= 1'b0; oc_xlat_we <= 1'b0; col_inval <= 1'b0; buf_inval <= 1'b0; tex_inval <= 1'b0;
       io_sel     <= 1'b0;
 
       // The cache's own housekeeping, before any state runs.
@@ -731,6 +738,7 @@ module m2_cpu_bridge #(
                 // keeps the I/O board's side correct.
                 dc_inval <= 1'b1;
                 buf_inval <= buf_region;   // R266
+                tex_inval <= tex_region;   // R275
                 // R222: the on-chip half of a mirrored write -- the palette
                 // RAM's low word, or the tile layer's 96-entry tap -- unless
                 // the read-modify-write pass already did it.

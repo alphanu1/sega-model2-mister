@@ -778,6 +778,8 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_raster_fill.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_raster_div.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_recip_rom.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_raster_band.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_span_tex.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_texel.sv
 
 # ---- AREA FOR THE CORE, SPEED FOR THE FRAMEWORK'S VIDEO OUTPUT ----
 # Model 1's configuration and its default. Measured here across two seeds:

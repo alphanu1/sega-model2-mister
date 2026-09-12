@@ -62,6 +62,11 @@ module m2_raster_fill (
   input  logic signed [31:0] in_x3, in_y3,
   input  logic [23:0]        in_col,
   input  logic               in_moire,
+  // R274: THE TEXTURE. Four corners of {u, v} in 11.2 texels and the texel
+  // fetch's state; bit 0 of in_tex says the polygon is textured at all.
+  input  logic [12:0]        in_u0, in_v0, in_u1, in_v1,
+  input  logic [12:0]        in_u2, in_v2, in_u3, in_v3,
+  input  logic [23:0]        in_tex,
 
   // Viewport, inclusive on all four edges.
   input  logic signed [31:0] view_x1, view_x2, view_y1, view_y2,
@@ -76,6 +81,12 @@ module m2_raster_fill (
   output logic signed [31:0] span_x1,
   output logic [23:0]        span_col,
   output logic               span_moire,
+  // R274: the span's texture, as a starting coordinate and a per-pixel step,
+  // both 16.16 in texels. The consumer walks u += span_dudx a pixel.
+  output logic signed [31:0] span_u, span_v,
+  output logic signed [31:0] span_dudx, span_dvdx,
+  output logic [23:0]        span_tex,
+  output logic               span_tex_en,
 
   // One cycle. Note quad_done can land in the same cycle as the quad's last
   // span, and in_ready can rise with that span still in flight — the next quad
@@ -105,6 +116,14 @@ module m2_raster_fill (
   localparam logic [4:0] S_FS_END   = 5'd16;
   localparam logic [4:0] S_FINAL    = 5'd17;
   localparam logic [4:0] S_DONE     = 5'd18;
+  // R274: the texture plane fit, ahead of the classification.
+  localparam logic [4:0] S_PF_D     = 5'd19;   // the deltas and the determinant
+  localparam logic [4:0] S_PF_N     = 5'd20;   // the four numerators
+  localparam logic [4:0] S_PF_Q1    = 5'd21;   // du/dx and du/dy
+  localparam logic [4:0] S_PF_Q1W   = 5'd22;
+  localparam logic [4:0] S_PF_Q2    = 5'd23;   // dv/dx and dv/dy
+  localparam logic [4:0] S_PF_Q2W   = 5'd24;
+  localparam logic [4:0] S_PF_B     = 5'd25;   // the plane's value at (0,0)
 
   localparam logic [1:0] EM_WALK = 2'd0;   // swapf-ordered edge pair
   localparam logic [1:0] EM_RAW  = 2'd1;   // xa, xb in chain order (fill_line tail)
@@ -144,6 +163,126 @@ module m2_raster_fill (
   logic [1:0]         emit_mode;
   logic signed [31:0] flat_lo, flat_hi;
 
+  // ------------------------------------------------------- R274: the texture
+  //
+  // AFFINE, AND SAID SO PLAINLY. The reference divides u and v by z per PIXEL
+  // and this does not: it fits ONE plane to the quad and steps along it. On a
+  // polygon whose corners are at very different depths -- the road running to
+  // the horizon is the case -- the texture will swim, exactly as it does on a
+  // console of the same generation. The perspective divide needs 1/z per
+  // vertex carried through the quad store, which is 26 more M10K blocks than
+  // this part has, and getting the textures ON is worth more than getting them
+  // flat-correct. The shape of this code does not change when they arrive: the
+  // same plane fit runs on u/z, v/z and 1/z instead of on u and v.
+  //
+  // ONE PLANE PER QUAD, NOT A DIVIDE PER SPAN. Interpolating along the edges
+  // the way the reference's scanline converter does needs two divides a SPAN;
+  // a plane fit needs four a QUAD, and the fill already owns two dividers that
+  // are idle until the first edge slope.
+  logic [12:0]        qu [0:3], qv [0:3];
+  logic [23:0]        tex_r;
+  logic               tex_ok;            // the fit succeeded and the poly is textured
+  logic signed [31:0] dudx, dudy, dvdx, dvdy;
+  logic signed [31:0] det_r;
+  logic signed [31:0] nxu, nyu, nxv, nyv;
+  logic               pf_second;         // the fit is retrying on vertices 0,2,3
+  logic               pf_x;              // this divide round is the x gradient
+  logic signed [31:0] q_num_a, q_num_b;
+
+  // The three vertices the plane is fitted through: 0,1,2 normally, 0,2,3 when
+  // those three are collinear on screen -- which every triangle is, because a
+  // triangle reaches here as a quad with a repeated vertex.
+  wire [1:0] fa = 2'd0;
+  wire [1:0] fb = pf_second ? 2'd2 : 2'd1;
+  wire [1:0] fc = pf_second ? 2'd3 : 2'd2;
+
+  wire signed [15:0] pf_ax = 16'(sx[fb][15:0]) - 16'(sx[fa][15:0]);
+  wire signed [15:0] pf_ay = 16'(sy[fb][15:0]) - 16'(sy[fa][15:0]);
+  wire signed [15:0] pf_bx = 16'(sx[fc][15:0]) - 16'(sx[fa][15:0]);
+  wire signed [15:0] pf_by = 16'(sy[fc][15:0]) - 16'(sy[fa][15:0]);
+  wire signed [15:0] pf_u1 = 16'({3'd0, qu[fb]}) - 16'({3'd0, qu[fa]});
+  wire signed [15:0] pf_u2 = 16'({3'd0, qu[fc]}) - 16'({3'd0, qu[fa]});
+  wire signed [15:0] pf_v1 = 16'({3'd0, qv[fb]}) - 16'({3'd0, qv[fa]});
+  wire signed [15:0] pf_v2 = 16'({3'd0, qv[fc]}) - 16'({3'd0, qv[fa]});
+
+  // A DIVIDE THAT KEEPS ITS BITS. The gradient is a fraction -- texels per
+  // pixel, usually between 1/16 and 16 -- and an integer divider returns zero
+  // for all of it. So the numerator is normalised UP until its top bit is at
+  // 30 and the denominator DOWN until it fits in sixteen bits, the quotient is
+  // taken, and the shift is undone afterwards. That leaves at least fifteen
+  // significant bits in every quotient, where scaling only the numerator by a
+  // fixed amount would overflow on a large polygon and lose everything on a
+  // small one.
+  function automatic [5:0] clz32(input logic [31:0] x);
+    logic [5:0] n;
+    begin
+      n = 6'd32;
+      for (int i = 31; i >= 0; i--) if (x[i] && n == 6'd32) n = 6'(31 - i);
+      clz32 = n;
+    end
+  endfunction
+
+  wire [31:0] det_abs = det_r[31] ? (~det_r + 32'd1) : det_r;
+  wire [5:0]  det_clz = clz32(det_abs);
+  // Bits the denominator must lose to fit in sixteen.
+  wire [5:0]  den_sh  = (det_clz >= 6'd16) ? 6'd0 : (6'd16 - det_clz);
+  wire signed [31:0] den_n = det_r >>> den_sh;
+
+  // Normalise the numerator so its top bit sits at 30, which is what leaves
+  // the quotient its significant bits.
+  function automatic logic signed [31:0] pf_norm(input logic signed [31:0] n);
+    logic [31:0] a;
+    logic [5:0]  z;
+    begin
+      a = n[31] ? (~n + 32'd1) : n;
+      z = clz32(a);
+      if (z >= 6'd32 || z == 6'd0) pf_norm = n;      // zero, or already at the top
+      else                         pf_norm = n <<< (z - 6'd1);
+    end
+  endfunction
+
+  // Undo both shifts: the quotient is (num << (z-1)) / (det >> den_sh), so the
+  // 16.16 answer is that times 2^(16 - (z-1) - den_sh).
+  function automatic logic signed [31:0] pf_scale(input logic signed [31:0] q,
+                                                  input logic signed [31:0] n);
+    logic [31:0]        a;
+    logic [5:0]         z;
+    logic signed [8:0]  net;
+    logic signed [63:0] r;
+    begin
+      a = n[31] ? (~n + 32'd1) : n;
+      z = clz32(a);
+      if (z >= 6'd32) pf_scale = 32'sd0;
+      else begin
+        net = 9'sd17 - 9'(z) - 9'(den_sh);
+        r   = (net >= 9'sd0) ? (64'(q) <<< net[5:0]) : (64'(q) >>> (-net));
+        // A gradient of 2,048 texels a pixel is already nonsense; clamping
+        // keeps a degenerate quad from wrapping the accumulator instead.
+        if      (r >  64'sd134217727) pf_scale =  32'sd134217727;
+        else if (r < -64'sd134217727) pf_scale = -32'sd134217727;
+        else                          pf_scale =  32'(r);
+      end
+    end
+  endfunction
+
+  logic signed [31:0] base_u, base_v;   // u,v at screen (0,0) on the fitted plane
+  logic               pf_a, pf_b;        // the two plane-fit divides, back
+
+  // u (or v) at a pixel, on the fitted plane. The units are the stored ones --
+  // quarter-texels -- with sixteen fractional bits, and the texel fetch takes
+  // its own eight by shifting this right by ten.
+  function automatic logic signed [31:0] uv_at(input logic signed [31:0] base,
+                                               input logic signed [31:0] gx,
+                                               input logic signed [31:0] gy,
+                                               input logic signed [31:0] x,
+                                               input logic signed [31:0] y);
+    logic signed [47:0] t;
+    begin
+      t = 48'(base) + 48'(gx) * 48'($signed(x[15:0]))
+                    + 48'(gy) * 48'($signed(y[15:0]));
+      uv_at = t[31:0];
+    end
+  endfunction
   logic [2:0]         ps1m1, ps2p1;
   logic signed [31:0] ya_next, yb_next;
   always_comb begin
@@ -313,6 +452,13 @@ module m2_raster_fill (
       divb_den   <= 32'sd0;
       got_a      <= 1'b0;
       got_b      <= 1'b0;
+      span_u <= '0; span_v <= '0; base_u <= '0; base_v <= '0;
+      pf_a <= 1'b0; pf_b <= 1'b0;
+      tex_ok <= 1'b0; pf_second <= 1'b0; tex_r <= '0;
+      det_r <= '0; nxu <= '0; nyu <= '0; nxv <= '0; nyv <= '0;
+      q_num_a <= '0; q_num_b <= '0;
+      dudx <= '0; dudy <= '0; dvdx <= '0; dvdy <= '0;
+      for (int k = 0; k < 4; k++) begin qu[k] <= '0; qv[k] <= '0; end
       span_valid <= 1'b0;
       span_y     <= 32'sd0;
       span_x0    <= 32'sd0;
@@ -341,8 +487,96 @@ module m2_raster_fill (
             sx[3] <= in_x3; sy[3] <= in_y3;
             col   <= in_col;
             moire <= in_moire;
-            state <= S_CLASSIFY;
+            qu[0] <= in_u0; qv[0] <= in_v0; qu[1] <= in_u1; qv[1] <= in_v1;
+            qu[2] <= in_u2; qv[2] <= in_v2; qu[3] <= in_u3; qv[3] <= in_v3;
+            tex_r     <= in_tex;
+            tex_ok    <= 1'b0;
+            pf_second <= 1'b0;
+            dudx <= '0; dudy <= '0; dvdx <= '0; dvdy <= '0;
+            // An untextured quad pays nothing for any of this.
+            state <= in_tex[0] ? S_PF_D : S_CLASSIFY;
           end
+        end
+
+        // ---- R274: the plane fit, four states and two divide rounds.
+        //
+        // det is the cross product of the two edges out of vertex 0 in SCREEN
+        // space. Zero means the three vertices are collinear as drawn, which
+        // every triangle-as-quad is on one of its two choices -- hence the
+        // retry on 0,2,3 before giving up.
+        S_PF_D: begin
+          det_r <= 32'(pf_ax) * 32'(pf_by) - 32'(pf_bx) * 32'(pf_ay);
+          state <= S_PF_N;
+        end
+
+        S_PF_N: begin
+          if (det_r == 32'sd0) begin
+            if (!pf_second) begin
+              pf_second <= 1'b1;
+              state     <= S_PF_D;
+            end else begin
+              // No plane through these three points: draw it flat.
+              tex_ok <= 1'b0;
+              state  <= S_CLASSIFY;
+            end
+          end else begin
+            nxu <= 32'(pf_u1) * 32'(pf_by) - 32'(pf_u2) * 32'(pf_ay);
+            nyu <= 32'(pf_ax) * 32'(pf_u2) - 32'(pf_bx) * 32'(pf_u1);
+            nxv <= 32'(pf_v1) * 32'(pf_by) - 32'(pf_v2) * 32'(pf_ay);
+            nyv <= 32'(pf_ax) * 32'(pf_v2) - 32'(pf_bx) * 32'(pf_v1);
+            state <= S_PF_Q1;
+          end
+        end
+
+        S_PF_Q1: if (div_ready && !div_start && divb_ready && !divb_start) begin
+          div_num   <= pf_norm(nxu);
+          div_den   <= den_n;
+          div_start <= 1'b1;
+          divb_num   <= pf_norm(nyu);
+          divb_den   <= den_n;
+          divb_start <= 1'b1;
+          q_num_a <= nxu;
+          q_num_b <= nyu;
+          pf_a <= 1'b0; pf_b <= 1'b0;
+          state   <= S_PF_Q1W;
+        end
+
+        S_PF_Q1W: begin
+          if (div_valid)  begin dudx <= pf_scale(div_quo,  q_num_a); pf_a <= 1'b1; end
+          if (divb_valid) begin dudy <= pf_scale(divb_quo, q_num_b); pf_b <= 1'b1; end
+          if ((pf_a || div_valid) && (pf_b || divb_valid)) state <= S_PF_Q2;
+        end
+
+        S_PF_Q2: if (div_ready && !div_start && divb_ready && !divb_start) begin
+          div_num   <= pf_norm(nxv);
+          div_den   <= den_n;
+          div_start <= 1'b1;
+          divb_num   <= pf_norm(nyv);
+          divb_den   <= den_n;
+          divb_start <= 1'b1;
+          q_num_a <= nxv;
+          q_num_b <= nyv;
+          pf_a <= 1'b0; pf_b <= 1'b0;
+          state   <= S_PF_Q2W;
+        end
+
+        S_PF_Q2W: begin
+          if (div_valid)  begin dvdx <= pf_scale(div_quo,  q_num_a); pf_a <= 1'b1; end
+          if (divb_valid) begin dvdy <= pf_scale(divb_quo, q_num_b); pf_b <= 1'b1; end
+          if ((pf_a || div_valid) && (pf_b || divb_valid)) state <= S_PF_B;
+        end
+
+        // The plane is held as its value at screen (0,0) plus two gradients,
+        // so a span costs two multiplies and no state.
+        S_PF_B: begin
+          base_u <= 32'({19'd0, qu[fa]} <<< 16)
+                  - 32'(dudx * 32'($signed(sx[fa][15:0])))
+                  - 32'(dudy * 32'($signed(sy[fa][15:0])));
+          base_v <= 32'({19'd0, qv[fa]} <<< 16)
+                  - 32'(dvdx * 32'($signed(sx[fa][15:0])))
+                  - 32'(dvdy * 32'($signed(sy[fa][15:0])));
+          tex_ok <= 1'b1;
+          state  <= S_CLASSIFY;
         end
 
         // One cycle of pure comparison: wireframe, top and bottom vertices, and
@@ -382,6 +616,8 @@ module m2_raster_fill (
               span_x1    <= emit_cr;
               span_col   <= col;
               span_moire <= moire;
+              span_u     <= uv_at(base_u, dudx, dudy, emit_cl, cury);
+              span_v     <= uv_at(base_v, dvdx, dvdy, emit_cl, cury);
             end
             quad_done <= 1'b1;
             state     <= S_IDLE;
@@ -509,6 +745,8 @@ module m2_raster_fill (
               span_x1    <= emit_cr;
               span_col   <= col;
               span_moire <= moire;
+              span_u     <= uv_at(base_u, dudx, dudy, emit_cl, walk_y);
+              span_v     <= uv_at(base_v, dvdx, dvdy, emit_cl, walk_y);
             end
             xa     <= xa + sla;
             xb     <= xb + slb;
@@ -540,6 +778,8 @@ module m2_raster_fill (
               span_x1    <= emit_cr;
               span_col   <= col;
               span_moire <= moire;
+              span_u     <= uv_at(base_u, dudx, dudy, emit_cl, cury);
+              span_v     <= uv_at(base_v, dvdx, dvdy, emit_cl, cury);
             end
             state <= S_DONE;
           end
@@ -553,6 +793,14 @@ module m2_raster_fill (
       endcase
     end
   end
+
+  // The per-pixel step and the texture state do not change within a quad, so
+  // they ride out continuously beside the span rather than being latched again
+  // at every emit.
+  assign span_dudx   = dudx;
+  assign span_dvdx   = dvdx;
+  assign span_tex    = tex_r;
+  assign span_tex_en = tex_ok;
 
   always_comb in_ready = (state == S_IDLE);
 

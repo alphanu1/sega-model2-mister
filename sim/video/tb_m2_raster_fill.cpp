@@ -34,6 +34,7 @@
 #include "Vm2_raster_fill.h"
 #include "verilated.h"
 #include <cstdio>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <random>
@@ -358,6 +359,133 @@ static void one(Dut& dut, const int32_t* vx, const int32_t* vy, const char* what
   }
 }
 
+
+// ---------------------------------------------------------------- R274
+// THE TEXTURE PLANE. A SKEWED quad with a different u and v at every corner:
+// every span the filler emits must carry the value of the plane through
+// vertices 0, 1 and 2 at its own (x0, y), and the per-pixel step must be that
+// plane's x gradient.
+//
+// SKEWED ON PURPOSE. The first version of this test used an axis-aligned
+// rectangle with u along x and v along y, which zeroes half of every cross
+// product in the fit -- and then a sign flip in a numerator and a
+// mis-scaled base BOTH passed it. A test whose inputs are symmetric cannot
+// see an asymmetric fault.
+static long tex_checks = 0, tex_fails = 0;
+
+static void test_plane(Vm2_raster_fill* d) {
+  auto tickf = [&]() { d->clk = 0; d->eval(); d->clk = 1; d->eval(); };
+  const int32_t VX[4] = {10, 130, 118,   4};
+  const int32_t VY[4] = { 5,  19,  71,  58};
+  const int32_t U[4]  = {37, 501, 640, 122};     // quarter-texels, all different
+  const int32_t V[4]  = {91, 160, 612, 540};
+
+  // The same plane, in double precision, through vertices 0,1,2.
+  const double ax = VX[1] - VX[0], ay = VY[1] - VY[0];
+  const double bx = VX[2] - VX[0], by = VY[2] - VY[0];
+  const double det = ax * by - bx * ay;
+  const double u1 = U[1] - U[0], u2 = U[2] - U[0];
+  const double v1 = V[1] - V[0], v2 = V[2] - V[0];
+  const double dudx = (u1 * by - u2 * ay) / det, dudy = (ax * u2 - bx * u1) / det;
+  const double dvdx = (v1 * by - v2 * ay) / det, dvdy = (ax * v2 - bx * v1) / det;
+
+  d->view_x1 = 0; d->view_x2 = 495; d->view_y1 = 0; d->view_y2 = 383;
+  d->in_x0 = VX[0]; d->in_y0 = VY[0];
+  d->in_x1 = VX[1]; d->in_y1 = VY[1];
+  d->in_x2 = VX[2]; d->in_y2 = VY[2];
+  d->in_x3 = VX[3]; d->in_y3 = VY[3];
+  d->in_u0 = U[0]; d->in_v0 = V[0];
+  d->in_u1 = U[1]; d->in_v1 = V[1];
+  d->in_u2 = U[2]; d->in_v2 = V[2];
+  d->in_u3 = U[3]; d->in_v3 = V[3];
+  d->in_col = 0xffffff; d->in_moire = 0;
+  d->in_tex = 1;                                // bit 0: textured
+  d->in_valid = 1; d->span_ready = 1;
+  d->eval();
+
+  bool accepted = false, retired = false;
+  long guard = 0, spans_seen = 0;
+  for (;;) {
+    d->eval();
+    if (d->span_valid && d->span_ready) {
+      const int32_t y  = (int32_t)d->span_y;
+      const int32_t x0 = (int32_t)d->span_x0;
+      const double u  = (double)(int32_t)d->span_u / 65536.0;
+      const double v  = (double)(int32_t)d->span_v / 65536.0;
+      const double du = (double)(int32_t)d->span_dudx / 65536.0;
+      const double dv = (double)(int32_t)d->span_dvdx / 65536.0;
+      const double wu = U[0] + dudx * (x0 - VX[0]) + dudy * (y - VY[0]);
+      const double wv = V[0] + dvdx * (x0 - VX[0]) + dvdy * (y - VY[0]);
+      ++spans_seen; tex_checks += 4;
+      // A quarter of a texel of slack: the gradients are a fixed-point divide
+      // and the span is up to 130 pixels from the vertex the plane is anchored
+      // at, so a bit of the quotient is a fraction of a texel by the far end.
+      if (fabs(u - wu) > 0.5) {
+        if (tex_fails < 6) printf("  FAIL plane u at (%d,%d): %.3f want %.3f\n", x0, y, u, wu);
+        ++tex_fails;
+      }
+      if (fabs(v - wv) > 0.5) {
+        if (tex_fails < 6) printf("  FAIL plane v at (%d,%d): %.3f want %.3f\n", x0, y, v, wv);
+        ++tex_fails;
+      }
+      if (fabs(du - dudx) > 0.01) {
+        if (tex_fails < 6) printf("  FAIL du/dx %.5f want %.5f\n", du, dudx);
+        ++tex_fails;
+      }
+      if (fabs(dv - dvdx) > 0.01) {
+        if (tex_fails < 6) printf("  FAIL dv/dx %.5f want %.5f\n", dv, dvdx);
+        ++tex_fails;
+      }
+    }
+    if (d->quad_done && accepted) retired = true;
+    if (d->in_ready && d->in_valid) accepted = true;
+    const bool drained = retired && !d->span_valid;
+    tickf();
+    if (accepted) { d->in_valid = 0; d->eval(); }
+    if (drained) break;
+    if (++guard > 40000) { printf("  FAIL plane test timeout\n"); ++tex_fails; break; }
+  }
+  ++tex_checks;
+  if (!d->span_tex_en) { printf("  FAIL the fit did not take\n"); ++tex_fails; }
+  printf("  texture plane: %ld spans, %ld checks, %ld wrong (du/dx %.4f du/dy %.4f)\n",
+         spans_seen, tex_checks, tex_fails, dudx, dudy);
+
+  // A TRIANGLE. It reaches here as a quad with a repeated vertex, so vertices
+  // 0,1,2 can be collinear and the fit has to retry on 0,2,3 -- or the texture
+  // is dropped on every triangle in the game.
+  {
+    const int32_t TX[4] = {20, 20, 90, 60};
+    const int32_t TY[4] = {10, 10, 30, 80};
+    d->in_x0 = TX[0]; d->in_y0 = TY[0]; d->in_x1 = TX[1]; d->in_y1 = TY[1];
+    d->in_x2 = TX[2]; d->in_y2 = TY[2]; d->in_x3 = TX[3]; d->in_y3 = TY[3];
+    d->in_u0 = 100; d->in_v0 = 200; d->in_u1 = 100; d->in_v1 = 200;
+    d->in_u2 = 400; d->in_v2 = 220; d->in_u3 = 180; d->in_v3 = 700;
+    d->in_valid = 1; d->eval();
+    accepted = false; retired = false; guard = 0;
+    long tri_spans = 0;
+    for (;;) {
+      d->eval();
+      if (d->span_valid && d->span_ready) ++tri_spans;
+      if (d->quad_done && accepted) retired = true;
+      if (d->in_ready && d->in_valid) accepted = true;
+      const bool drained = retired && !d->span_valid;
+      tickf();
+      if (accepted) { d->in_valid = 0; d->eval(); }
+      if (drained) break;
+      if (++guard > 40000) break;
+    }
+    ++tex_checks;
+    if (!d->span_tex_en) {
+      printf("  FAIL a triangle's first three vertices are collinear and the "
+             "retry did not take -- every triangle would draw untextured\n");
+      ++tex_fails;
+    } else {
+      printf("  triangle: the fit retried on 0,2,3 and took (%ld spans)\n", tri_spans);
+    }
+  }
+  d->in_tex = 0;
+}
+
 int main(int argc, char** argv) {
   Verilated::commandArgs(argc, argv);
   std::mt19937 rng(20260815u);
@@ -485,6 +613,9 @@ int main(int argc, char** argv) {
     }
     printf("  %ld quads\n", N);
   }
+
+  test_plane(dut.d);
+  checks += tex_checks; fails += tex_fails;
 
   printf("m2_raster_fill: checks=%ld fails=%ld spans=%ld lines=%ld empty=%ld\n",
          checks, fails, total_spans, line_cases, empty_quads);

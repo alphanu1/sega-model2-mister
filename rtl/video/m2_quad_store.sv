@@ -89,6 +89,8 @@ module m2_quad_store #(
   // 1x1, none off-screen). The reference draws every one of them as a dot
   // or two; here they cost half the store and half of every band's replay.
   // Counted, so the deviation is measured, not assumed. 0 disables it.
+  parameter int unsigned UVW    = 13,      // R273: texture coordinate, 11.2
+  parameter int unsigned TXW    = 24,      // R273: the texel fetch's state
   parameter int unsigned TINY   = 2,
   parameter int unsigned SCR_H  = 384
 ) (
@@ -105,6 +107,14 @@ module m2_quad_store #(
   input  logic [23:0] in_col,
   input  logic [31:0] in_z,
   input  logic        in_moire,
+  // R273: THE TEXTURE, PER QUAD. Four {u, v} in 11.2 texels -- eleven integer
+  // bits because a sheet is 2,048 texels across and two fractional ones
+  // because the span walk interpolates between these corners and a whole-texel
+  // corner slides the picture by half a texel at the edges. `in_tex` is the
+  // texel fetch's share of R271's state: sheet, origin, size, mirror.
+  input  logic [UVW-1:0] in_u0, in_v0, in_u1, in_v1,
+  input  logic [UVW-1:0] in_u2, in_v2, in_u3, in_v3,
+  input  logic [TXW-1:0] in_tex,
 
   // ---- sort
   input  logic        sort_start,
@@ -128,6 +138,9 @@ module m2_quad_store #(
   output logic signed [15:0] out_x2, out_y2, out_x3, out_y3,
   output logic [23:0] out_col,
   output logic        out_moire,
+  output logic [UVW-1:0] out_u0, out_v0, out_u1, out_v1,
+  output logic [UVW-1:0] out_u2, out_v2, out_u3, out_v3,
+  output logic [TXW-1:0] out_tex,
 
   output logic [15:0] dbg_count,
   output logic [15:0] dbg_dropped,
@@ -180,6 +193,12 @@ module m2_quad_store #(
   localparam int unsigned AT_W = 2*BW + 1 + CW;   // {hi, lo, moire, col565}
   (* ramstyle = "M10K" *) logic [AT_W-1:0] att_0 [NQ], att_1 [NQ];
   (* ramstyle = "M10K" *) logic [KW-1:0] key [NQ];
+  // R273: the texture, in its own array for the same reason the vertices are in
+  // theirs -- written once with the quad, read once on replay, never touched by
+  // the sort. 8 x 13 + 21 = 125 bits, which fills three 40-bit M10K slices and
+  // a 5-bit remainder rather than straddling the vertex word.
+  localparam int unsigned UW = 4 * 2 * UVW + TXW;
+  (* ramstyle = "M10K" *) logic [UW-1:0] uvt_0 [NQ], uvt_1 [NQ];
 
   // Saturate a screen coordinate to XW bits; sign-extend it back on the way out.
   function automatic [XW-1:0] sat(input logic signed [15:0] v);
@@ -279,10 +298,14 @@ module m2_quad_store #(
           vtx_1[wcount[IW-1:0]] <= {sat(in_y3), sat(in_x3), sat(in_y2), sat(in_x2),
                                     sat(in_y1), sat(in_x1), sat(in_y0), sat(in_x0)};
           att_1[wcount[IW-1:0]]  <= {band_range(in_y0, in_y1, in_y2, in_y3), in_moire, c565(in_col)};
+          uvt_1[wcount[IW-1:0]]  <= {in_tex, in_v3, in_u3, in_v2, in_u2,
+                                     in_v1, in_u1, in_v0, in_u0};
         end else begin
           vtx_0[wcount[IW-1:0]] <= {sat(in_y3), sat(in_x3), sat(in_y2), sat(in_x2),
                                     sat(in_y1), sat(in_x1), sat(in_y0), sat(in_x0)};
           att_0[wcount[IW-1:0]]  <= {band_range(in_y0, in_y1, in_y2, in_y3), in_moire, c565(in_col)};
+          uvt_0[wcount[IW-1:0]]  <= {in_tex, in_v3, in_u3, in_v2, in_u2,
+                                     in_v1, in_u1, in_v0, in_u0};
         end
         // R246: in_z CARRIES THE REFERENCE'S 16-BIT z VALUE in its low half
         // (m2_geometry's zval, model2_v.cpp's float_to_zval), not a float.
@@ -503,6 +526,7 @@ module m2_quad_store #(
   // R262: one 104-bit word holds all four, packed {v3,v2,v1,v0} with {y,x} in
   // each. The slices below are the same four words the four arrays used to be.
   logic [VW-1:0] vtx_r;
+  logic [UW-1:0] uvt_r;
   wire [2*XW-1:0] v0_r = vtx_r[0*2*XW +: 2*XW];
   wire [2*XW-1:0] v1_r = vtx_r[1*2*XW +: 2*XW];
   wire [2*XW-1:0] v2_r = vtx_r[2*2*XW +: 2*XW];
@@ -511,6 +535,11 @@ module m2_quad_store #(
   assign out_y1 = sx(v1_r[2*XW-1:XW]); assign out_x1 = sx(v1_r[XW-1:0]);
   assign out_y2 = sx(v2_r[2*XW-1:XW]); assign out_x2 = sx(v2_r[XW-1:0]);
   assign out_y3 = sx(v3_r[2*XW-1:XW]); assign out_x3 = sx(v3_r[XW-1:0]);
+  assign out_u0 = uvt_r[0*UVW +: UVW]; assign out_v0 = uvt_r[1*UVW +: UVW];
+  assign out_u1 = uvt_r[2*UVW +: UVW]; assign out_v1 = uvt_r[3*UVW +: UVW];
+  assign out_u2 = uvt_r[4*UVW +: UVW]; assign out_v2 = uvt_r[5*UVW +: UVW];
+  assign out_u3 = uvt_r[6*UVW +: UVW]; assign out_v3 = uvt_r[7*UVW +: UVW];
+  assign out_tex = uvt_r[8*UVW +: TXW];
 
   wire v0 = (pi < rcount);
 
@@ -529,7 +558,7 @@ module m2_quad_store #(
       v1 <= 1'b0; v2 <= 1'b0; q2 <= '0;
       ord_idx <= '0; att_rd <= '0;
       out_valid <= 1'b0;
-      vtx_r <= '0;
+      vtx_r <= '0; uvt_r <= '0;
       out_col <= '0; out_moire <= 1'b0;
     end else begin
       if (adv) begin
@@ -578,6 +607,7 @@ module m2_quad_store #(
           // ONE READ PER ARRAY (see the note above): the slices are taken
           // from the registered word, not from two reads of the array.
           vtx_r <= rbank ? vtx_1[q] : vtx_0[q];   // R262: one read, all four vertices
+          uvt_r <= rbank ? uvt_1[q] : uvt_0[q];   // R273: and its texture
           out_valid <= 1'b1;
           if (out_valid && out_ready) begin
             out_valid <= 1'b0;

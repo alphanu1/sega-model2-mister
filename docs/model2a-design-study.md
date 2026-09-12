@@ -14391,3 +14391,88 @@ addresses -- `SDR_AW` counts 16-bit words -- so the two sheets ended up a
 quarter of a sheet apart and every fetch past the first 256 K words read the
 other sheet. It looked exactly like a fold bug, which is what it was mistaken
 for first.
+
+**R273/R274/R275/R276 -- THE TEXTURES ARE ON THE SCREEN PATH.** Four changes
+that together carry a texture from the display list to a pixel, and one that
+pays for them.
+
+**R273, the quad store carries the texture.** Four {u, v} pairs and the texel
+fetch's share of the header, in their own array beside the vertices -- written
+once with the quad, read once on replay, never touched by the sort. The
+coordinates are 11.2 TEXELS: eleven integer bits because a sheet is 2,048
+texels across, two fractional because the span walk interpolates between these
+corners and a whole-texel corner slides the picture half a texel at the edges.
+125 bits a quad at NQ = 2,048 and two banks is 50 M10K blocks, which is what
+R276 frees.
+
+The conversion from the clipper's float happens in `m2_geometry`, once, where
+the float still exists: the reference's coordinate is `pu * (1/z) / 8`, so
+without the perspective divide it is pu/8, and eight times a quarter is a half
+-- the stored value is simply pu/2.
+
+**R274, the span filler fits a plane.** AFFINE, and said plainly: the reference
+divides u and v by z per PIXEL and this does not. On a polygon whose corners
+are at very different depths -- the road to the horizon -- the texture will
+swim, as it does on a console of the same generation. Perspective needs 1/z per
+vertex through the store, 26 more blocks than this part has, and getting the
+textures ON is worth more than getting them flat-correct. The shape of the code
+does not change when they arrive: the same fit runs on u/z, v/z and 1/z.
+
+ONE PLANE PER QUAD, NOT A DIVIDE PER SPAN. Interpolating along the edges the
+way a scanline converter does needs two divides a SPAN; the plane fit needs
+four a QUAD, on the two dividers the fill already owns and which are idle until
+the first edge slope. det is the screen-space cross product of the two edges
+out of vertex 0; zero means the three vertices are collinear as drawn, which
+EVERY TRIANGLE IS -- a triangle reaches the filler as a quad with a repeated
+vertex -- so the fit retries on vertices 0, 2, 3 before giving up and drawing
+flat.
+
+A DIVIDE THAT KEEPS ITS BITS. The gradient is a fraction, texels per pixel, and
+an integer divider returns zero for all of it. The numerator is normalised up
+until its top bit is at 30 and the denominator down until it fits in sixteen,
+the quotient is taken, and both shifts are undone afterwards -- at least fifteen
+significant bits in every quotient, where scaling the numerator by a fixed
+amount would overflow on a large polygon and lose everything on a small one.
+
+**R275, a textured span is a run of one-pixel spans.** A band buffer writes
+FOUR pixels a cycle because a flat span is one colour repeated, and that is
+most of what makes the 3D fit its beam slot. A textured span cannot use that
+path -- but it does not have to CHANGE it either: a one-pixel span is a
+perfectly good span. `m2_span_tex` expands a textured span into a run of them
+and the band is untouched, stipple and clipping included.
+
+AND A FLAT SPAN PASSES THROUGH COMBINATIONALLY, which is a correctness property
+and not an optimisation. Registering it instead costs one cycle a span, and
+`tb_m2_raster3d` caught exactly that: the reference's own frame painted 6,396
+pixels where the frame before it painted 5,945, because the fill no longer
+finished inside its beam slot. The bands are beam-paced. Latency here is not
+free.
+
+THE COLOUR IS THE POLYGON'S, SCALED BY THE TEXEL, and that is an approximation
+recorded as one. The reference maps the texel through the luma table and then
+through the colour table -- the SAME ramp the flat path uses, read at an index
+the texture supplies instead of one the lighting supplies. Scaling the
+polygon's finished colour by the texel is that ramp approximated as linear. It
+puts the texture's detail and shape on the screen with the polygon's own hue
+and lighting; what it does not reproduce is the curve of the ramp or a luma
+table that is not the identity. The exact path needs sixteen colours resolved
+per polygon -- a four-bit texel can only take sixteen values -- which is a table
+and an allocator, not a change to this walk.
+
+**R276, the glyph cache is halved to pay for it.** 64 KB, not 128, and this was
+tried once before and reverted on hardware evidence. What has changed is the
+cost of a miss, not the size of the working set: R269's sibling fill halves the
+miss count and the overlap hides what is left. The 'V' record is the test --
+hits, misses, sibling fills and scanline overruns per frame, against
+build/fix3d25's numbers taken at 128 KB with the same sibling fill. If the
+overruns climb, this is the first thing to put back.
+
+WHAT THE BENCHES PROVE, and what they did not until they were fixed. The plane
+test first used an axis-aligned rectangle with u along x and v along y, which
+zeroes half of every cross product in the fit: a sign flip in a numerator AND a
+mis-scaled base both passed it. Skewed, with a different u and v at every
+corner, it catches both (269 checks) and it catches a triangle whose first three
+vertices are collinear failing to retry. The span walk's first test stepped u by
+1/256th of a texel a pixel, so every pixel fetched the SAME texel and a mutation
+that stopped the walk entirely passed; stepping by a whole texel catches it.
+`m2_texel` compares 8,064 fetches against the transcription of get_texel.

@@ -411,7 +411,7 @@ wire  [63:0] rb_dout;
 // the four unused ports are tied off instead -- synthesis removes what they
 // drive, and the alternative is forking from the reference over an arbiter
 // detail. Port 0 is the readback; 1-4 become the CPU, tilemap and renderer.
-localparam int unsigned NPORTS = 10;  // 5 = sound ROM, 6/7 = samples, 8/9 = TGP
+localparam int unsigned NPORTS = 11;  // 5 = sound ROM, 6/7 = samples, 8/9 = TGP, 10 = texels (R275)
                                       // (9 is SHARED with the display-list walk)
 
 // THE 68000 SOUND PROGRAM, 256 KB, at MRA byte offset 0x2350000 -- and the MRA's
@@ -909,6 +909,8 @@ always_comb begin
 	// STRAIGHT FROM THE CACHE. cc_req/cc_addr used to come out of m2_char_cdc;
 	// see the note at u_char_cache for why that translator was removed.
 	p_req[3]  = cache_m_req;
+	p_req[10] = tex_m_req;
+	p_addr[10] = tex_m_addr;
 	p_addr[3] = char_base + SDR_AW'(cache_m_addr);
 	// PORT 0 IS THE CPU'S, and it is the single-word port on purpose: the
 	// bridge issues one 16-bit access at a time, and ports 1-3 burst four.
@@ -2044,7 +2046,7 @@ m2_cpu_bridge #(.BUFFERRAM(1'b1), .BUFFERRAM_WRONLY(1'b0)
 	.base_board(GAME_BOARD), .base_char(char_base), .base_buffer(GAME_BUFFER),
 	.base_pal3d(GAME_PAL3D), .base_xlat3d(GAME_XLAT3D),
 	.base_texs0(GAME_TEXS0), .base_texs1(GAME_TEXS1), .base_luma(GAME_LUMA), .col_inval(cpu_col_inval),
-	.buf_inval(cpu_buf_inval),   // R266
+	.buf_inval(cpu_buf_inval), .tex_inval(cpu_tex_inval),   // R266
 
 	.sd_req(cpu_sd_req), .sd_we(cpu_sd_we), .sd_addr(cpu_sd_addr),
 	.sd_din(cpu_sd_din), .sd_be(cpu_sd_be),
@@ -2793,6 +2795,7 @@ wire [15:0] geo_nops;        // R255: nop commands the walker decoded last frame
 wire [15:0] geo_walk_flip, geo_walk_fb;   // R263: walks started by the list-ready write, and by the fallback
 wire        geo_push_stall;  // R260: the push queue is full and the CPU waits
 wire        cpu_buf_inval;   // R266: the CPU wrote the display list
+wire        cpu_tex_inval;   // R275: the CPU wrote a texture sheet
 
 // THE GEOMETRY PIPELINE. object_data in, screen quads out; see m2_geometry.sv.
 //
@@ -2809,8 +2812,11 @@ wire        cpu_buf_inval;   // R266: the CPU wrote the display list
 wire        q3d_valid, q3d_ready;
 wire signed [15:0] q3d_x0, q3d_y0, q3d_x1, q3d_y1, q3d_x2, q3d_y2, q3d_x3, q3d_y3;
 /* verilator lint_off UNUSEDSIGNAL */
-wire [31:0] q3d_u0, q3d_v0, q3d_u1, q3d_v1, q3d_u2, q3d_v2, q3d_u3, q3d_v3;   // R270
-wire [31:0] q3d_tex; wire [7:0] q3d_lum;                                      // R271
+wire [12:0] q3d_u0, q3d_v0, q3d_u1, q3d_v1, q3d_u2, q3d_v2, q3d_u3, q3d_v3;   // R273
+/* verilator lint_off UNUSEDSIGNAL */
+wire [7:0] q3d_lum;                       // R271: for the exact colour path, not yet built
+/* verilator lint_on UNUSEDSIGNAL */
+wire [23:0] q3d_tex;
 /* verilator lint_on UNUSEDSIGNAL */
 wire [23:0] q3d_col;
 wire [31:0] q3d_z;
@@ -5127,6 +5133,8 @@ wire [63:0] cache_m_data;
 // The answer side of port 3, straight back to the cache. m2_sdram_x2 holds the
 // acknowledge while the request stands and bypasses s_dout on the acknowledge
 // cycle, so both are valid on the edge m2_char_cache captures them.
+assign tex_m_ack    = p_ack[10];          // R275
+assign tex_m_data   = p_dout[10];
 assign cache_m_ack  = p_ack[3];
 assign cache_m_data = p_dout[3];
 wire [31:0] char_hits, char_misses, char_fills;
@@ -5154,7 +5162,25 @@ wire [31:0] char_hits, char_misses, char_fills;
 // blocks -- three band buffers where two may do -- is the next candidate, and
 // unlike this one it can be reasoned about from the buffer count rather than
 // from a hit-rate guess.
-m2_char_cache #(.IDX_BITS(14)) u_char_cache (
+// R276: HALVED TO PAY FOR THE TEXTURES, ON THE STRENGTH OF R269.
+//
+// 64 KB, not 128. The paragraph above records that this was halved once before
+// and REVERTED because the board showed tile and glyph overruns -- the extra
+// misses did not finish before the next scanline started, the fetch bank did
+// not flip, and the previous line was drawn again.
+//
+// What has changed is the cost of a miss, not the size of the working set. A
+// miss now fetches its sibling line behind the acknowledge, so four glyph rows
+// are resident per miss instead of two (2.00 misses per tile on the bench's
+// tile walk where it was 4.00), and a hit is served straight through an
+// outstanding fill. The 53 M10K blocks that buys are exactly what the quad
+// store needs to carry four {u, v} pairs a quad.
+//
+// THE 'V' RECORD IS THE TEST. It streams hits, misses, sibling fills and
+// scanline overruns per frame. If the overruns climb here, this is the first
+// thing to put back -- and the numbers to compare against are build/fix3d25's,
+// taken at 128 KB with the same sibling fill.
+m2_char_cache #(.IDX_BITS(13)) u_char_cache (
 	.clk(clk_sys), .rst_n(cc_rst_n_s),
 	.v_req(char_req), .v_addr(char_addr),
 	.v_ack(char_ack), .v_data(char_data),
@@ -5164,7 +5190,7 @@ m2_char_cache #(.IDX_BITS(14)) u_char_cache (
 	// IDX_BITS: [14:2] for 13 bits, not [15:2]. A stale width here invalidates
 	// the wrong line on a CPU character write, which shows up as glyphs that
 	// are correct until the game rewrites one and then stay stale.
-	.inval(cpu_char_wr), .inval_idx(cpu_char_wr_addr[15:2]),
+	.inval(cpu_char_wr), .inval_idx(cpu_char_wr_addr[14:2]),
 	.dbg_hits(char_hits), .dbg_misses(char_misses), .dbg_fills(char_fills)
 );
 
@@ -5291,8 +5317,17 @@ wire [31:0] r3d_pixels;
 // FOUR BUFFERS: Model 1's "band ahead" with its 48 bands. build/dbuf5 with
 // four ran out of M10K blocks where three fit; the quad store now shares its
 // sort key and scratch index between the banks (~8 blocks), which pays for it.
+// R275: THE TEXEL FETCH'S OWN SDRAM PORT. Port 10, added rather than shared:
+// the tile fetch (3) and the geometry (4) are both busy in exactly the window
+// the rasteriser is, and a shared port would serialise the two halves of the
+// same frame against each other.
+wire        tex_m_req, tex_m_ack;
+wire [SDR_AW:1] tex_m_addr;
+wire [63:0] tex_m_data;
+wire [31:0] tex_pixels, tex_hits, tex_misses;
+
 m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(4),
-              .TWO_CLOCKS(1'b0)) u_raster3d (
+              .TWO_CLOCKS(1'b0), .TEX_AW(SDR_AW)) u_raster3d (
 	.clk(clk_sys), .rst_n(mem_rst_n),
 	.frame_start(geo_walk_start),
 	// Each bar is a proper filled rectangle traversed around its perimeter:
@@ -5304,6 +5339,14 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(4),
 	.q_x2(q3d_x2), .q_y2(q3d_y2),
 	.q_x3(q3d_x3), .q_y3(q3d_y3),
 	.q_col(q3d_col), .q_z(q3d_z),
+	// R273/R275: the texture, through the store and out to the texel fetch.
+	.q_u0(q3d_u0), .q_v0(q3d_v0), .q_u1(q3d_u1), .q_v1(q3d_v1),
+	.q_u2(q3d_u2), .q_v2(q3d_v2), .q_u3(q3d_u3), .q_v3(q3d_v3),
+	.q_tex(q3d_tex),
+	.tex_base0(GAME_TEXS0), .tex_base1(GAME_TEXS1), .tex_inval(cpu_tex_inval),
+	.tex_m_req(tex_m_req), .tex_m_addr(tex_m_addr),
+	.tex_m_ack(tex_m_ack), .tex_m_data(tex_m_data),
+	.dbg_texpix(tex_pixels), .dbg_texhit(tex_hits), .dbg_texmiss(tex_misses),
 	.q_moire(1'b0), .q_end(q3d_end),
 	.scan_clk(clk_sys), .scan_x(vid_x), .scan_y(vid_y),
 	.scan_col(r3d_col), .scan_hit(r3d_hit),
