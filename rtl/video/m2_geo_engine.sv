@@ -120,7 +120,6 @@ module m2_geo_engine #(
   //   [18:13] texx / 32           [23:19] texy / 32
   //   [31:24] luma table base >> 7
   output logic [31:0] poly_tex,
-  output logic  [7:0] poly_lum,        // the polygon's own luma scale
   input  logic [31:0] lit_x, lit_y, lit_z, // the light vector (cmd 0x0a)
   input  logic        tp_we,               // texture parameters (cmd 0x06), streamed
   input  logic [4:0]  tp_idx,
@@ -142,7 +141,9 @@ module m2_geo_engine #(
   // vertex z, 2 the maximum, 3 a literal 1e10 -- and this core used the
   // minimum for every polygon.
   output logic  [1:0] poly_zmode,
-  output logic [7:0]  poly_luma,           // its luminance, for the bench
+  // ITS LUMINANCE. Not only for the bench any more (R271): the textured path
+  // scales every texel's brightness by this same number.
+  output logic [7:0]  poly_luma,
   output logic [15:0] dbg_col_miss,        // colour cache misses
 
   // ---- a SECOND pool client, for those two multiplies. The pool exists to be
@@ -284,7 +285,6 @@ module m2_geo_engine #(
   // which of the two sheets it is on. Two more reads a polygon, which is what
   // it costs to know WHICH texture a polygon wears.
   logic [15:0] hdr1, hdr2;
-  logic  [7:0] plum;         // the polygon's own luma, packed in the normal
   logic [9:0]  cbase;        // header word 3 >> 6
   logic        tex_flat;     // R231: a textured polygon, drawn as lit grey until textures exist
   logic [14:0] c555;         // the palette entry
@@ -386,6 +386,21 @@ module m2_geo_engine #(
           || (st == E_UV);
   assign mem_addr  = xrd ? xaddr  : ptr;
   assign mem_space = xrd ? xspace : 2'd0;
+  // R271, CORRECTED: THE TEXTURE'S LUMA IS THE LIGHTING LUMINANCE THIS ENGINE
+  // ALREADY COMPUTES, and it took reading the geometrizer's own output to see
+  // it. The renderer takes `object.luma = (command_buffer[9] >> 15) & 0xff`,
+  // and command_buffer[9] is not a word of the display list -- it is what the
+  // GEOMETRIZER pushed:
+  //
+  //     luminance = (|dotl| * texparam->diffuse) + texparam->ambient;
+  //     luma = (int32_t)clamp(luminance, 0, 255) + face;
+  //     model2_3d_push(raster, luma << 15);
+  //
+  // We ARE the geometrizer, so that word is never read: it is luma8, which
+  // R222 already computes, and bit 23 of it is the face bit the cull uses. The
+  // flat path takes `object.luma >> 2` as its colour index; the textured path
+  // scales the texel's own brightness by the same number. Reading it back out
+  // of the input list takes the NORMAL's x instead, which is a float.
   assign poly_luma = luma8;
   assign poly_zmode = attr[11:10];             // R246: (attr >> 10) & 3
 
@@ -412,7 +427,6 @@ module m2_geo_engine #(
   assign v2x = p0cur[0];  assign v2y = p0cur[1];  assign v2z = p0cur[2];
   assign v3x = p1cur[0];  assign v3y = p1cur[1];  assign v3z = p1cur[2];
   assign poly_attr = attr;
-  assign poly_lum  = plum;                     // R271
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -431,7 +445,7 @@ module m2_geo_engine #(
       tp_w <= 22'd0; tp_ram <= 1'b0; uv_i <= 3'd0; uv_cull <= 1'b0;
       poly_uv0 <= 32'd0; poly_uv1 <= 32'd0; poly_uv2 <= 32'd0; poly_uv3 <= 32'd0;
       lum <= 32'd0; luma8 <= 8'd0; hdr0 <= 16'd0; cbase <= 10'd0; c555 <= 15'd0; xi <= 2'd0;
-      hdr1 <= 16'd0; hdr2 <= 16'd0; plum <= 8'd0; poly_tex <= 32'd0;
+      hdr1 <= 16'd0; hdr2 <= 16'd0; poly_tex <= 32'd0;
       rgb[0] <= 8'd0; rgb[1] <= 8'd0; rgb[2] <= 8'd0;
       xaddr <= 24'd0; xhalf <= 1'b0; xspace <= 2'd0; cc_wait <= 1'b0; cc_idx <= 8'd0;
       cc_valid <= '0; poly_col <= 24'd0; dbg_col_miss <= 16'd0; tex_flat <= 1'b0; lum_x <= 8'd0; tex_lum_d <= 2'd0;
@@ -553,11 +567,7 @@ module m2_geo_engine #(
         E_NORM: if (mem_go) begin
           ptr <= ptr + 24'd1;
           case (skipn)
-            // R271: THE POLYGON'S LUMA IS PACKED INTO THE NORMAL'S FIRST WORD.
-            // `object.luma = (raster->command_buffer[9] >> 15) & 0xff` -- the
-            // same word whose bit 23 is the backface flag. It scales every
-            // texel's brightness, so a texture without it is uniformly lit.
-            2'd3: begin nrm[0] <= mem_data; plum <= mem_data[22:15]; end
+            2'd3: nrm[0] <= mem_data;
             2'd2: nrm[1] <= mem_data;
             default: nrm[2] <= mem_data;
           endcase

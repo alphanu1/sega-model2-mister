@@ -27,7 +27,7 @@ module m2_geo_engine_top (
   output logic [1:0] mem_space,
   output logic [23:0] poly_col, output logic [1:0] poly_zmode, output logic [7:0] poly_luma, output logic [15:0] dbg_col_miss,
   input  logic [31:0] tpa, output logic [31:0] poly_uv0, poly_uv1, poly_uv2, poly_uv3,
-  output logic [31:0] poly_tex, output logic [7:0] poly_lum
+  output logic [31:0] poly_tex
 );
   logic        mul_req, add_req, add_sub, mul_gnt, mul_rsp, add_gnt, add_rsp;
   logic [31:0] mul_a, mul_b, mul_res, add_a, add_b, add_res;
@@ -61,7 +61,7 @@ module m2_geo_engine_top (
     .col_inval(col_inval), .tex_lum(tex_lum), .mem_space(mem_space),
     .poly_col(poly_col), .poly_zmode(poly_zmode), .poly_luma(poly_luma), .dbg_col_miss(dbg_col_miss),
     .tpa(tpa), .poly_uv0(poly_uv0), .poly_uv1(poly_uv1), .poly_uv2(poly_uv2), .poly_uv3(poly_uv3),
-    .poly_tex(poly_tex), .poly_lum(poly_lum)
+    .poly_tex(poly_tex)
   );
 
   logic [1:0] p_mul_req, p_mul_gnt, p_mul_rsp;

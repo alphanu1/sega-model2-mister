@@ -456,9 +456,7 @@ int main(int argc, char** argv) {
     w = put_xyz(w, 100.0f);
     w = put_xyz(w, 200.0f);
     obj[w++] = 0x00020201u;                 // quad, link 2, double-sided
-    // The normal's first word carries the luma in bits 22:15.
-    obj[w++] = (0x7bu << 15) | 0x0000u;     // normal x, luma 0x7b
-    obj[w++] = 0; obj[w++] = 0;             // normal y, z
+    w = put_xyz(w, 0.0f);                   // normal
     w = put_xyz(w, 300.0f);
     w = put_xyz(w, 400.0f);
     obj[w++] = 0x00000000u;
@@ -479,7 +477,10 @@ int main(int argc, char** argv) {
     ck("texx",       (t >> 13) & 0x3f, 0x29);
     ck("texy",       (t >> 19) & 0x1f, 0x15);
     ck("luma base",  (t >> 24) & 0xff, 0x42);
-    ck("luma scale", d->poly_lum, 0x7b);
+    // R271, CORRECTED: the texture's luma scale is the LIGHTING luminance this
+    // engine computes, not a field of the list -- the renderer reads it from
+    // what the geometrizer pushed (`luma << 15`), and we are the geometrizer.
+
     thdr[0x100 + 0] = 0x0000; thdr[0x100 + 1] = 0; thdr[0x100 + 2] = 0;
   }
 

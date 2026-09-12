@@ -168,7 +168,7 @@ module m2_geometry (
   logic [23:0] poly_col, pcol;      // R222: the engine's colour, and the one in flight
   logic  [1:0] poly_zmode;          // R246: the engine's per-polygon z mode
   logic [31:0] poly_uv0, poly_uv1, poly_uv2, poly_uv3;   // R268
-  logic [31:0] poly_tex;  logic [7:0] poly_lum;        // R271
+  logic [31:0] poly_tex;                                 // R271
 
   m2_geo_engine u_engine (
     .tha(tha), .lit_x(lit_x), .lit_y(lit_y), .lit_z(lit_z),
@@ -178,7 +178,7 @@ module m2_geometry (
     // R268: the per-vertex texture coordinates, read beside the header
     .tpa(tpa), .poly_uv0(poly_uv0), .poly_uv1(poly_uv1),
     .poly_uv2(poly_uv2), .poly_uv3(poly_uv3),
-    .poly_tex(poly_tex), .poly_lum(poly_lum),
+    .poly_tex(poly_tex),
     .clk(clk), .rst_n(rst_n),
     .start(start), .oba(oba), .obc(obc), .busy(eng_busy),
     .mat_we(mat_we), .mat_idx(mat_idx), .mat_data(mat_data),
@@ -536,7 +536,7 @@ module m2_geometry (
           hu[2] <= u2f(poly_uv2[15:0]); hv[2] <= u2f(poly_uv2[31:16]);
           hu[3] <= u2f(poly_uv3[15:0]); hv[3] <= u2f(poly_uv3[31:16]);
           pcol  <= poly_col;                       // R222
-          ptex  <= poly_tex; plum <= poly_lum;     // R271
+          ptex  <= poly_tex; plum <= dbg_lum;      // R271: the lighting luminance
           hzmin <= zmin_c;
           hzmax <= zmax_c;
           zprev <= zsel_c;                       // R246: carried, as raster->polygon_z is

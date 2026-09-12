@@ -14326,11 +14326,23 @@ The engine read words 0 and 3 already (R222, for the renderer bits and the
 colour base); it now reads 1 and 2 as well -- two more 16-bit reads per polygon,
 about 30 cycles, against a geometry stage that spends 6 to 9 ms a frame.
 
-THE LUMA SCALE IS NOT IN THE HEADER. `command_buffer[9]` is the NORMAL's first
-word, the same word whose bit 23 is the backface flag, and the polygon's 8-bit
-luma is packed into bits 22:15 of it. It multiplies every texel's brightness
-before the colour table, so a texture drawn without it is uniformly lit and
-flat -- and nothing about the header would ever have led here.
+THE LUMA SCALE IS NOT IN THE HEADER, AND IT IS NOT IN THE LIST EITHER. The
+renderer takes `object.luma = (command_buffer[9] >> 15) & 0xff`, and the first
+version here read bits 22:15 of the word in that position -- which in the
+GEOMETRIZER'S INPUT is the normal's x, a float. `command_buffer` is not the
+display list: it is what the geometrizer PUSHED to the rasteriser, and the word
+in question is
+
+    luminance = (|dotl| * texparam->diffuse) + texparam->ambient;
+    luma = (int32_t)clamp(luminance, 0, 255) + face;   // face = 0x100 for rear
+    model2_3d_push(raster, luma << 15);
+
+We ARE the geometrizer. So the texture's luma scale is the LIGHTING LUMINANCE
+this engine already computes for the flat path -- `luma8`, R222 -- and bit 23
+of that same pushed word is the face bit the cull reads. The flat path uses
+`object.luma >> 2` as its colour index and the textured path scales the texel's
+own brightness by the same number, so the two paths share one luminance and
+always did. Reading it back out of the list instead gives a float's mantissa.
 
 Everything the texel fetch needs is packed into one 32-bit `poly_tex` word and
 carried through the clipper the way the colour is -- latched with the quad,
