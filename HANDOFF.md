@@ -1,6 +1,36 @@
 # Handoff
 
-**Updated:** 2026-09-12 01:20 (machine clock). Study entries R176-R240.
+**Updated:** 2026-09-12 01:50 (machine clock). Study entries R176-R241.
+
+## 01:50, 09-12: TWO BUILDS QUEUED, ONE TRACE RUNNING
+
+`build/fix3d7` = fix3d6 + R240 (the pair cache's row-edge fix; the stray
+vertices and possibly the vanishing scenery, since the walker reads through the
+same cache). `build/fix3d8` = + R241 (Model 1's reciprocal divider and dual
+divide issue, ported at `a7abcbf`: the band stripes through the cars are the
+filler's per-quad setup, 55-117 cycles a quad, now 20-53; bit-identical on the
+filler's 152,025-quad corpus, which is now `make test_m2_raster_fill`). Each is
+picked by `tools/pick-seed.py`, deployed and captured by a waiter in the
+scratchpad (chain8.sh, chain9.sh). For fix3d7 the measure is the 'W'/'X' wedge
+count over 240 s (318 on fix3d6); for fix3d8 it is the stripes by eye.
+
+R232 (the cars' continuous crash roll): the coprocessor is EXONERATED as far
+as its arithmetic goes -- every stateless command, and 0x1a keyed by 0x12 and
+0x41 keyed by 0x40, gives the reference's output for the same inputs across
+~50,000 transactions (scratchpad copro_stateless.py / copro_state.py). A
+from-boot trace (`M2_COPRO_TRACE` from frame 0, aligned against a MAME tap of
+frames 0-3800, clean NVRAM too) agrees record for record through the first
+matrix readback (0x11, bench frame 248 = MAME frame 162/173) and then the i960
+TAKES A DIFFERENT PATH on identical data: MAME's loop at 0x84e0 (per object:
+`ldos 0x2e(r6)`, `chkbit` in the table at 0x501520, `bno 0x85f8`) never enters
+the transform branch (0x8550: 0x1a on the object's position, a frustum score in
+r9); ours does, for every frame after. So the divergence is i960-side state --
+RAM the i960 wrote from something other than the coprocessor: inputs, timer,
+or its own arithmetic. A run with `M2_BOOT_PCFRAME=246` (new: PC trace gated
+by video frame) is in flight to read our path back as instructions
+(`$S/long/pc1.txt`); MAME's frame-162 trace is `$S/long/f162.tr`, the
+disassembly `$S/long/dasm_84e0.txt`. Note the bench runs two video frames per
+game frame, so bench frame N ~ MAME frame N/2 + 40 (boot is slower here).
 
 ## THE FINDING OF 01:10, 09-12 (R240) -- READ FIRST
 
