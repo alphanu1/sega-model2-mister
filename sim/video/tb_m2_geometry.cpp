@@ -469,6 +469,31 @@ int main(int argc, char** argv) {
       ck("no polygon was culled as behind", (int32_t)((uint16_t)d->dbg_behind - before), 0);
     }
 
+    // R250: ONE corner behind the eye is NOT the whole polygon behind the eye.
+    // The reference culls on max_z < 0, and the maximum of {-2, 3, 4, 5} is 5,
+    // so this must be drawn. Comparing the float bit patterns as unsigned makes
+    // the negative the maximum and culls it -- the floor vanishing while still
+    // on screen.
+    {
+      size_t w = 0;
+      w = put_v(w, -50.0f,  50.0f, -2.0f);
+      w = put_v(w, -50.0f, -50.0f,  3.0f);
+      obj[w++] = 0x00020201u | (1u << 10);
+      w = put_v(w, 0.0f, 0.0f, 1.0f);
+      w = put_v(w,  50.0f,  50.0f,  4.0f);
+      w = put_v(w,  50.0f, -50.0f,  5.0f);
+      obj[w++] = 0x00000000u;
+      const uint16_t before = (uint16_t)d->dbg_behind;
+      const uint32_t cin = d->dbg_clip_in;
+      run_object();
+      std::printf("  one corner behind the eye: behind %u, clipper saw %u\n",
+                  (unsigned)((uint16_t)d->dbg_behind - before), d->dbg_clip_in - cin);
+      ck("not culled as behind", (int32_t)((uint16_t)d->dbg_behind - before), 0);
+      ck("reached the clipper", (int32_t)(d->dbg_clip_in - cin), 1);
+      // and its sort depth is the MINIMUM of the four, which is the negative one
+      ck("zmode 1 took the negative minimum", (int32_t)(d->q_z & 0xffff), (int32_t)zval(-2.0f, ZADJ));
+    }
+
     // every vertex behind the eye: the reference culls the polygon
     {
       size_t w = 0;

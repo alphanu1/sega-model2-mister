@@ -13713,3 +13713,36 @@ Fixed by extending the gate to the sweep's states:
 `lint_top` clean; there is no desk test for this, because the boot machine
 lives in Model2.sv and `tb_m2_boot` drives `m2_boot_harness` instead. The
 measure is the board: objects that were absent should appear.
+
+**R250 -- THE DEPTH MIN AND MAX COMPARED FLOATS AS UNSIGNED INTEGERS, SO ONE
+CORNER BEHIND THE EYE CULLED THE WHOLE POLYGON.** From the board, by eye:
+"it seems the behind-eye culling is happening too early on the scenery --
+the floor disappears before it's off screen." Correct, and R246 introduced
+it. `m2_geometry` reduced the four vertex depths with
+
+    function automatic logic [31:0] fmin(a, b);  fmin = (a < b) ? a : b;
+    function automatic logic [31:0] fmax(a, b);  fmax = (a > b) ? a : b;
+
+and the comment beside them said the depths "are positive for anything in
+front of the eye, and IEEE-754 orders positive floats exactly as the
+unsigned integers of their bit patterns do". Both statements are true. The
+conclusion does not follow: a vertex BEHIND the eye is negative, its sign
+bit is set, and as an unsigned integer it is larger than every positive
+float. So the moment one corner of a polygon crossed behind the camera it
+became the MAXIMUM, `max_z` read negative, and R246's `max_z < 0` cull --
+which is the reference's, and correct -- discarded a polygon that was still
+mostly on screen. The floor is the worst case because it is the surface the
+camera is closest to.
+
+Both functions now compare through the standard monotone key, `f[31] ? ~f :
+(f | 0x80000000)`, which is the same transform the quad store used to apply
+to its sort key before R246 moved the key upstream. It also corrects the
+sort depth itself for any polygon with a vertex behind the eye, which was
+reading 0xffff -- the furthest bucket -- when it should read the negative
+minimum.
+
+`tb_m2_geometry` gains the case that was missing: a quad at z = {-2, 3, 4,
+5}, whose maximum is 5, must NOT be culled, must reach the clipper, and must
+sort on -2. With the unsigned comparison restored all three fail (42 checks,
+3 fails), so the bench now sees it. The desk never had it because every
+directed quad in that file sat wholly in front of the eye.

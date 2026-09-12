@@ -405,11 +405,31 @@ module m2_geometry (
   // front of the eye, and IEEE-754 orders positive floats exactly as the
   // unsigned integers of their bit patterns do -- so this is an integer
   // comparison, not a float unit.
+  // R250: THESE ARE FLOATS, AND A NEGATIVE ONE IS NOT A SMALL UNSIGNED NUMBER.
+  //
+  // The comment these replace said the vertices "are positive for anything in
+  // front of the eye, and IEEE-754 orders positive floats exactly as the
+  // unsigned integers of their bit patterns do". Both halves are true and the
+  // conclusion is not: a vertex BEHIND the eye is negative, its sign bit is
+  // set, and as an unsigned integer it is therefore larger than every positive
+  // float there is. So fmax returned the most-negative vertex the moment one
+  // corner of a polygon crossed behind the camera, R246's max_z < 0 cull then
+  // fired on the whole polygon, and the floor vanished while it was still on
+  // screen -- reported from the board, which is where it was visible and where
+  // the desk's own on-screen quad tests never put a vertex behind the eye.
+  //
+  // The monotone transform is the standard one: flip everything for a negative,
+  // set the top bit for a positive, then compare as unsigned. +0.0 and -0.0 map
+  // one apart, which cannot pick a different NUMBER, only which of the two zero
+  // bit patterns is returned.
+  function automatic logic [31:0] fkey(input logic [31:0] f);
+    fkey = f[31] ? ~f : (f | 32'h8000_0000);
+  endfunction
   function automatic logic [31:0] fmin(input logic [31:0] a, input logic [31:0] b);
-    fmin = (a < b) ? a : b;
+    fmin = (fkey(a) < fkey(b)) ? a : b;
   endfunction
   function automatic logic [31:0] fmax(input logic [31:0] a, input logic [31:0] b);
-    fmax = (a > b) ? a : b;
+    fmax = (fkey(a) > fkey(b)) ? a : b;
   endfunction
 
   // R246: THE SORT KEY IS THE REFERENCE'S 16-BIT z VALUE, NOT THE FLOAT.
