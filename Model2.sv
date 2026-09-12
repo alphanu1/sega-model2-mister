@@ -137,7 +137,7 @@ localparam CONF_STR = {
 	// proven on hardware and every remaining fault is upstream of it. If it
 	// does not, the fault is downstream and no amount of fixing the matrix
 	// would ever have shown a picture.
-	"O[22:21],Texture brightness,100%,75%,50%,25%;",
+	"O[22:21],Texture brightness,50%,75%,100%,25%;",
 	// THE PAIR CACHE, ON THE BOARD, WITHOUT A BUILD (R244). R214 put a
 	// one-entry cache in front of the walker's and the engine's port so a
 	// sequential stream costs half the port trips; R240 found it served the
@@ -154,7 +154,12 @@ localparam CONF_STR = {
 	// hardware is a question the board can answer in seconds with this switch,
 	// and the desk cannot answer at all: its own display list is built by a
 	// bench that has been wrong about it three times in one afternoon.
-	"O[26],Walk rate,Every frame,Reference;",
+	// CONFIRMED ON THE BOARD (R256). With the walk on alternate frames the
+	// scenery stops dropping out -- the user's words, "I have changed it to
+	// reference and it's great, only 1 or 2 scenery drop outs every 5 or so
+	// seconds" -- so this is the DEFAULT now and the switch selects the old
+	// behaviour, which is what an OSD bit reads as when nobody has touched it.
+	"O[26],Walk rate,Reference,Every frame;",
 	// A bar outside the visible area is indistinguishable from a bar that did
 	// not draw. This packs all four well inside any plausible crop, so a side
 	// missing in BOTH layouts is missing for a real reason.
@@ -2391,7 +2396,7 @@ assign cpu_irq = { |(io_intreq & 12'hc00), |(io_intreq & 12'h3fc),
 // the game reads its parity back through 0x98000c, so the parity here is the
 // parity the game sees.
 assign geo_walk_start = vbl_d && !vbl_dd && !nowalk_s[2]
-                          && (!wrate_s[2] || !io_videoctl[0] || !io_framenum[0]);
+                          && (wrate_s[2] || !io_videoctl[0] || !io_framenum[0]);
 
 assign cpu_io_rdata =
 	// geo_r: the game sets these and READS THEM BACK to find where it is.
@@ -2676,7 +2681,7 @@ m2_geo #(.AW(SDR_AW), .DEPTH(128)) u_geo (
 	// the dot products and the diffuse/ambient scale are still to come.
 	.zadj_e(geo_zadj_e),
 	.lit_x(geo_lit_x), .lit_y(geo_lit_y), .lit_z(geo_lit_z),
-	.dbg_lit_n(geo_lit_n), .dbg_nops(geo_nops), .push_stall(geo_push_stall),
+	.dbg_lit_n(geo_lit_n), .dbg_nops(geo_nops),
 	// The diffuse/ambient table, streamed. Captured but not yet consumed -- the
 	// luminance stage that reads it is the next piece.
 	.tp_we(geo_tp_we), .tp_idx(geo_tp_idx),
@@ -2754,7 +2759,6 @@ wire  [4:0] geo_tp_idx;
 wire  [7:0] geo_tp_diffuse, geo_tp_ambient;
 wire [15:0] geo_tp_n;
 wire [15:0] geo_nops;        // R255: nop commands the walker decoded last frame
-wire        geo_push_stall;  // R258: the push queue is full and the CPU must wait
 
 // THE GEOMETRY PIPELINE. object_data in, screen quads out; see m2_geometry.sv.
 //
@@ -2865,9 +2869,7 @@ wire        copro_sel      = copro_fifo_sel | copro_ctl_sel | copro_fctl_sel;
 // The function port is write-only; it never contributes to the read mux.
 // Only the coprocessor can hold the bus today; the wire is named for the bus,
 // not for the coprocessor, so a second such peripheral ORs into it.
-// R258: the geometry push port holds the CPU when its queue is full, instead
-// of dropping the dword and leaving a hole in the display list.
-wire        cpu_io_stall   = copro_stall | geo_push_stall;
+wire        cpu_io_stall   = copro_stall;
 wire [31:0] copro_rdata;
 wire        copro_stall;
 wire [31:0] copro_dbg_ctl;

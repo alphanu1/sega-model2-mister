@@ -287,12 +287,16 @@ module m2_geo_engine #(
   localparam logic [14:0] TEX_GREY = 15'h4210;
   logic [7:0] lum_x;         // the luminance the table is read at, chosen at E_PAL
   logic [1:0] tex_lum_d;     // R239: the mode last used; a change empties the cache
+  // R259: HALF IS THE DEFAULT, so it is selector 0. An OSD bit reads as zero
+  // until someone moves it, and the user judged the textured placeholder's
+  // brightness by eye on the board and asked for half; ordering the cases to
+  // match the menu keeps the two from drifting apart.
   function automatic logic [7:0] scale_lum(input logic [7:0] l, input logic [1:0] m);
     case (m)
-      2'd0:    scale_lum = l;
+      2'd0:    scale_lum = {1'b0, l[7:1]};        // half -- the default
       2'd1:    scale_lum = l - {2'b00, l[7:2]};   // three quarters
-      2'd2:    scale_lum = {1'b0, l[7:1]};
-      default: scale_lum = {2'b00, l[7:2]};
+      2'd2:    scale_lum = l;                     // full
+      default: scale_lum = {2'b00, l[7:2]};       // a quarter
     endcase
   endfunction
   wire         cc_we  = (st == E_CW);

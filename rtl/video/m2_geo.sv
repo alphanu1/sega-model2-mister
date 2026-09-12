@@ -138,14 +138,6 @@ module m2_geo #(
   // frame against the reference's none, but that turned out to be the bench's
   // own malformed list (R254), so the board has to be asked directly.
   output logic [15:0]   dbg_nops,
-  // R258: THE PUSH PORT'S BACKPRESSURE. The queue between the i960 and SDRAM
-  // drops when it is full, and a drop is a HOLE IN THE DISPLAY LIST: the write
-  // pointer deliberately does not advance, so the next dword takes the missing
-  // one's place and every word after it shifts. The board streamed 252 drops
-  // and a light table with nineteen of its thirty-two entries reading 0/0.
-  // The reference has no queue and cannot drop; real hardware would hold the
-  // CPU off. This asks the bridge to hold the access instead.
-  output logic          push_stall,
   // geo_texture_parameters (0x06) as a WRITE STREAM, the same shape as the
   // matrix's. Model 2's luminance is
   //     luminance * texparam->diffuse + texparam->ambient
@@ -195,10 +187,6 @@ module m2_geo #(
   // A push only queues when the reference would have queued it: in upload mode
   // the data is counted and discarded, exactly as geo_prg_w does.
   wire push_now = wr_push && !uploading;
-  // Held only while the queue cannot take the dword. The bridge keeps io_sel
-  // asserted and re-presents the same write, so this is a stall and not a lost
-  // access; `push_now` then lands it on the first cycle there is room.
-  assign push_stall = push_now && q_full;
 
   // THE DESTINATION TRAVELS WITH THE DWORD. The queue decouples the push from
   // the drain, so a drain-side counter would be wrong the moment the game sets

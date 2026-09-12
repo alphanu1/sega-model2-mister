@@ -13865,3 +13865,33 @@ while a push meets a full queue, and Model2.sv ORs it into `cpu_io_stall`.
 No combinational loop: the bridge's `io_sel` is registered and the stall is
 sampled in S_IOW. The measure is the board's own drop count, which must read
 zero, and the light table, which must stop holding 0/0.
+
+*R256 CONFIRMED ON THE BOARD, R258 WITHDRAWN, R259 (19:20).* The user set
+`O[26]` to Reference and reported it at once: "I have changed it to
+reference and it's great, only 1 or 2 scenery drop outs every 5 or so
+seconds", and later "odd occasion missing floor, but not many". So walking
+the display list on ALTERNATE frames in 30 Hz mode, as model2.cpp's
+screen_vblank does, is what the scenery needed -- this core had walked every
+vblank since the walker was written, and every other walk was reading a list
+the game was still building. It is now the DEFAULT and the switch selects
+the old behaviour.
+
+R258's backpressure is WITHDRAWN. Holding the CPU when the push queue is
+full is the right idea and the implementation was wrong: the bridge
+re-asserts `io_sel` every cycle while `io_stall` is held, so `wr_push` is a
+LEVEL for the whole stall and the same dword was pushed again on every cycle
+after the queue made room. The board showed it -- drops unchanged and the
+walk's nop count up from 4 to 280, a list with duplicated words in it -- and
+`test_m2_geo` failed two checks at the desk. A correct version needs a
+one-shot per access; it is not needed for the scenery any more, and the
+drop counter stays on the wire as a measurement. What the episode is worth
+recording for is the shape of the mistake: an output that is a pulse under
+one handshake becomes a level under another, and `io_stall` changes the
+handshake.
+
+**R259 -- HALF BRIGHTNESS IS THE DEFAULT.** The textured placeholder's
+brightness was an OSD option (R239) defaulting to full. The user, judging on
+the board: make it 50%. An OSD bit reads zero until it is moved, so the menu
+is reordered to 50/75/100/25 and `scale_lum`'s cases reordered to match --
+selector 0 is now half. `tb_m2_geo_engine`'s expectation scales with the
+selector instead of assuming full (41 checks).

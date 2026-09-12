@@ -275,8 +275,12 @@ int main(int argc, char** argv) {
     for (int budget = 0; budget < 60000 && (d->busy || budget < 10); budget++) { tick(); if (d->poly_valid && d->poly_ready) { if (!n) { col0 = d->poly_col; luma0 = d->poly_luma; } n++; } }
     std::printf("test: textured opaque polygons still draw, as lit grey (R231)\n");
     // grey 16/16/16 through the same table and gamma as a flat polygon would be
-    // R234: its palette entry is not black, so it keeps it, at HALF the luma
-    ck("textured polygon keeps its palette colour at full luma", col0, ref_colour(C555, (int)luma0));
+    // R234: its palette entry is not black, so it keeps it, scaled by the
+    // brightness selector. R259 made HALF the default -- selector 0 -- because
+    // that is what the user judged right on the board, so the expectation here
+    // scales with it rather than assuming full.
+    ck("textured polygon keeps its palette colour, at the selected brightness",
+       col0, ref_colour(C555, (int)luma0 >> 1));
     ck("three polygons emitted", n, 3);
     thdr[0x100 + 0] = 0x0000;
   }
