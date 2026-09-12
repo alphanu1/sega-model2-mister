@@ -160,6 +160,12 @@ localparam CONF_STR = {
 	// seconds" -- so this is the DEFAULT now and the switch selects the old
 	// behaviour, which is what an OSD bit reads as when nobody has touched it.
 	"O[26],Walk rate,Reference,Every frame;",
+	// R275: TEXTURES, WITH AN OFF SWITCH, because the first build that has them
+	// needs an A/B a person can make by eye in one second. Off restores the
+	// flat placeholder exactly: the plane fit is skipped and the span walk
+	// passes every span through, so the comparison is the texture path and
+	// nothing else.
+	"O[27],Textures,On,Off;",
 	// A bar outside the visible area is indistinguishable from a bar that did
 	// not draw. This packs all four well inside any plausible crop, so a side
 	// missing in BOTH layouts is missing for a real reason.
@@ -528,6 +534,8 @@ wire [1:0] tex_lum_s2 = {tl1_s[2], tl0_s[2]};
 always_ff @(posedge clk_sys) nowalk_s <= {nowalk_s[1:0], status[20]};
 reg [2:0] wrate_s;   // R256/R229: the OSD bit reaches the datapath through three flops
 always_ff @(posedge clk_sys) wrate_s <= {wrate_s[1:0], status[26]};
+reg [2:0] texoff_s;  // R275: the same, for the texture switch
+always_ff @(posedge clk_sys) texoff_s <= {texoff_s[1:0], status[27]};
 // R265: THE WALK TRIGGER WAS THE ONE OSD BIT TAKEN RAW. Every other option in
 // this core reaches the datapath through three flops (R229) and this one went
 // straight from `status` into the geometrizer's mode select. The board showed
@@ -2879,7 +2887,10 @@ m2_geometry u_geometry (
 	// the connection is one edit when the quad store carries them.
 	.q_u0(q3d_u0), .q_v0(q3d_v0), .q_u1(q3d_u1), .q_v1(q3d_v1),
 	.q_u2(q3d_u2), .q_v2(q3d_v2), .q_u3(q3d_u3), .q_v3(q3d_v3),
-	.q_tex(q3d_tex), .q_lum(q3d_lum),                                 // R271
+	// The OSD's Off clears the textured bit, which is the one thing every
+	// stage below tests -- the plane fit, the span walk and the texel fetch all
+	// fall back to what they did before in one place.
+	.q_tex({q3d_tex[23:1], q3d_tex[0] && !texoff_s[2]}), .q_lum(q3d_lum),                                 // R271
 	.q_col(q3d_col), .q_z(q3d_z),
 	.dbg_polys(geo_polys), .dbg_objects(geo_objs_done), .dbg_capped(geo_capped),
 	.dbg_culled(geo_culled),
@@ -5357,7 +5368,10 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(4),
 	// R273/R275: the texture, through the store and out to the texel fetch.
 	.q_u0(q3d_u0), .q_v0(q3d_v0), .q_u1(q3d_u1), .q_v1(q3d_v1),
 	.q_u2(q3d_u2), .q_v2(q3d_v2), .q_u3(q3d_u3), .q_v3(q3d_v3),
-	.q_tex(q3d_tex),
+	// The OSD's Off clears the textured bit, which is the one thing every
+	// stage below tests -- the plane fit, the span walk and the texel fetch all
+	// fall back to what they did before in one place.
+	.q_tex({q3d_tex[23:1], q3d_tex[0] && !texoff_s[2]}),
 	.tex_base0(GAME_TEXS0), .tex_base1(GAME_TEXS1), .tex_inval(cpu_tex_inval),
 	.tex_m_req(tex_m_req), .tex_m_addr(tex_m_addr),
 	.tex_m_ack(tex_m_ack), .tex_m_data(tex_m_data),
