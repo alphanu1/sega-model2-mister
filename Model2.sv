@@ -572,10 +572,10 @@ wire  [7:0] geo_lum;         // ...with its luminance
 logic  [7:0] tps_dif [32], tps_amb [32];
 logic [31:0] tps_seen;
 logic  [4:0] tps_sel;
-logic  [1:0] tps_ph;
+logic  [2:0] tps_ph;   // R275: three bits, so the texture record has a slot
 always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
-		tps_seen <= 32'd0; tps_sel <= 5'd0; tps_ph <= 2'd0;
+		tps_seen <= 32'd0; tps_sel <= 5'd0; tps_ph <= 3'd0;
 	end else begin
 		if (geo_tp_we) begin
 			tps_dif[geo_tp_idx]  <= geo_tp_diffuse;
@@ -583,8 +583,8 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 			tps_seen[geo_tp_idx] <= 1'b1;
 		end
 		if (geo_walk_start) begin
-			tps_ph <= tps_ph + 2'd1;
-			if (tps_ph == 2'd1) tps_sel <= tps_sel + 5'd1;
+			tps_ph <= tps_ph + 3'd1;
+			if (tps_ph == 3'd1) tps_sel <= tps_sel + 5'd1;
 		end
 	end
 end
@@ -4149,9 +4149,10 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	.b_addr((wedge_have && wedge_ph == 2'd1) ? wedge_q[127:96]
 	      : (wedge_have && wedge_ph == 2'd2) ? wedge_q[63:32]
 	      : sw_pend                         ? {19'd0, sw_out_sel, sw_runs}     // R238: 'S' region, runs
-	      : (tps_ph == 2'd1)                  ? tps_seen                        // R251: 'T' which light entries the list has written
-	      : (tps_ph == 2'd3)                  ? {geo_nops, geo_walk_ops}        // R255: 'U' nops decoded : commands walked, last frame
-	      : (tps_ph == 2'd2)                  ? {cc_h_f, cc_m_f}                // R269: 'V' glyph cache hits : misses, last frame
+	      : (tps_ph == 3'd1)                  ? tps_seen                        // R251: 'T' which light entries the list has written
+	      : (tps_ph == 3'd3)                  ? {geo_nops, geo_walk_ops}        // R255: 'U' nops decoded : commands walked, last frame
+	      : (tps_ph == 3'd2)                  ? {cc_h_f, cc_m_f}                // R269: 'V' glyph cache hits : misses, last frame
+	      : (tps_ph == 3'd4)                  ? {tx_p_f, tx_m_f}                // R275: 'Y' textured pixels : texel misses, last frame
 	      : {r3d_ready_cyc[15:0], r3d_bands_done[7:0], r3d_hold[7:0]}),
 	// clip_dropped read 0 on hardware and the refusal count is the number that
 	// now moves, so it takes that byte. Between them: accepted, emitted, refused
@@ -4221,14 +4222,15 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	.b_data((wedge_have && wedge_ph == 2'd1) ? wedge_q[95:64]
 	      : (wedge_have && wedge_ph == 2'd2) ? wedge_q[31:0]
 	      : sw_pend                         ? {8'd0, sw_out}                    // R238: the fold
-	      : (tps_ph == 2'd1)                  ? {3'd0, tps_sel, tps_dif[tps_sel], tps_amb[tps_sel], geo_tp_n[7:0]}   // R251
-	      : (tps_ph == 2'd3)                  ? {geo_walk_flip[7:0], geo_walk_fb[7:0], geo_walk_unknown[7:0], geo_dropped[7:0]}   // R255/R263
-	      : (tps_ph == 2'd2)                  ? {cc_f_f, vid_ovr_frame}         // R269: sibling fills : scanlines that overran, last frame
+	      : (tps_ph == 3'd1)                  ? {3'd0, tps_sel, tps_dif[tps_sel], tps_amb[tps_sel], geo_tp_n[7:0]}   // R251
+	      : (tps_ph == 3'd3)                  ? {geo_walk_flip[7:0], geo_walk_fb[7:0], geo_walk_unknown[7:0], geo_dropped[7:0]}   // R255/R263
+	      : (tps_ph == 3'd2)                  ? {cc_f_f, vid_ovr_frame}         // R269: sibling fills : scanlines that overran, last frame
+	      : (tps_ph == 3'd4)                  ? {tx_h_f, tex_lost}              // R275: texel hits : fetches abandoned on a dead memory
 	      : {lum_mean_f, lum_zpc_f, wedge_slot, wedge_n[6:0], r3d_quads[11:4]}),   // R249: the frame's mean luminance and its black-polygon percentage, where the always-zero drop count and the free-running miss count were
 	.a_tag(8'h43),
 	.b_tag((wedge_have && wedge_ph == 2'd1) ? 8'h57 : (wedge_have && wedge_ph == 2'd2) ? 8'h58
-	     : sw_pend ? 8'h53 : (tps_ph == 2'd1) ? 8'h54 : (tps_ph == 2'd3) ? 8'h55
-	     : (tps_ph == 2'd2) ? 8'h56 : 8'h48),   // 'W', 'X', 'S', 'T' (R251), 'U' (R255), 'V' (R269), 'H'          // 'C' copro in_pushed:out_pushed | TGP retires:pc
+	     : sw_pend ? 8'h53 : (tps_ph == 3'd1) ? 8'h54 : (tps_ph == 3'd3) ? 8'h55
+	     : (tps_ph == 3'd2) ? 8'h56 : (tps_ph == 3'd4) ? 8'h59 : 8'h48),   // 'W','X','S','T','U','V','Y' (R275),'H'          // 'C' copro in_pushed:out_pushed | TGP retires:pc
 	                                       // 'H' out_popped:hscr2 | io_addr:flags
 	                                       // 'H' scroll h:v for layers 0,1 | layers 2,3 -- low bytes
 	                                       // '0' map0 min|max : sum
@@ -5208,6 +5210,10 @@ m2_char_cache #(.IDX_BITS(13)) u_char_cache (
 logic cvb_d, cvb_dd;
 logic [31:0] cc_h_p, cc_m_p, cc_f_p;
 logic [15:0] cc_h_f, cc_m_f, cc_f_f;
+// R275: the same, for the texture path. Pixels textured, and how the texel
+// cache behaved -- the pair that says whether the walk is affordable.
+logic [31:0] tx_p_p, tx_h_p, tx_m_p;
+logic [15:0] tx_p_f, tx_h_f, tx_m_f;
 function automatic logic [15:0] sat16d(input logic [31:0] now, input logic [31:0] prev);
 	logic [31:0] d;
 	begin
@@ -5220,6 +5226,8 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		cvb_d <= 1'b0; cvb_dd <= 1'b0;
 		cc_h_p <= 32'd0; cc_m_p <= 32'd0; cc_f_p <= 32'd0;
 		cc_h_f <= 16'd0; cc_m_f <= 16'd0; cc_f_f <= 16'd0;
+		tx_p_p <= 32'd0; tx_h_p <= 32'd0; tx_m_p <= 32'd0;
+		tx_p_f <= 16'd0; tx_h_f <= 16'd0; tx_m_f <= 16'd0;
 	end else begin
 		cvb_d  <= tile_vb;
 		cvb_dd <= cvb_d;
@@ -5230,6 +5238,12 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 			cc_h_p <= char_hits;
 			cc_m_p <= char_misses;
 			cc_f_p <= char_fills;
+			tx_p_f <= sat16d(tex_pixels, tx_p_p);
+			tx_h_f <= sat16d(tex_hits,   tx_h_p);
+			tx_m_f <= sat16d(tex_misses, tx_m_p);
+			tx_p_p <= tex_pixels;
+			tx_h_p <= tex_hits;
+			tx_m_p <= tex_misses;
 		end
 	end
 end
@@ -5325,6 +5339,7 @@ wire        tex_m_req, tex_m_ack;
 wire [SDR_AW:1] tex_m_addr;
 wire [63:0] tex_m_data;
 wire [31:0] tex_pixels, tex_hits, tex_misses;
+wire [15:0] tex_lost;
 
 m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(4),
               .TWO_CLOCKS(1'b0), .TEX_AW(SDR_AW)) u_raster3d (
@@ -5347,6 +5362,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(4),
 	.tex_m_req(tex_m_req), .tex_m_addr(tex_m_addr),
 	.tex_m_ack(tex_m_ack), .tex_m_data(tex_m_data),
 	.dbg_texpix(tex_pixels), .dbg_texhit(tex_hits), .dbg_texmiss(tex_misses),
+	.dbg_texlost(tex_lost),
 	.q_moire(1'b0), .q_end(q3d_end),
 	.scan_clk(clk_sys), .scan_x(vid_x), .scan_y(vid_y),
 	.scan_col(r3d_col), .scan_hit(r3d_hit),

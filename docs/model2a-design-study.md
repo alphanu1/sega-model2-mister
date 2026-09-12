@@ -14491,3 +14491,36 @@ vertices are collinear failing to retry. The span walk's first test stepped u by
 1/256th of a texel a pixel, so every pixel fetched the SAME texel and a mutation
 that stopped the walk entirely passed; stepping by a whole texel catches it.
 `m2_texel` compares 8,064 fetches against the transcription of get_texel.
+
+**R277 -- THE ELEVENTH PORT WOULD HAVE CORRUPTED THE OTHER TEN, AND THE BENCH
+COULD NOT SEE IT.** The texel fetch needs an SDRAM port of its own -- the tile
+fetch (3) and the geometry (4) are busy in exactly the window the rasteriser
+is, so sharing would serialise the two halves of the same frame. `NPORTS` went
+from 10 to 11, and that is where two separate defects were waiting.
+
+`m2_sdram`'s `blen()` ends its case list at 9 with `default: blen = 4'd1`. A
+new port therefore gets a ONE-WORD burst, and the comment three lines above it
+says exactly what that does (R108): `rd_total` is a single global register, a
+transaction granted while another is issuing overwrites it, `tag_last` is then
+computed against the wrong count, and THE EARLIER TRANSACTION completes early
+with zeros above the words that arrived. Not on the new port -- on whichever
+port was mid-transaction. Silent cross-port corruption from a line nobody would
+have looked at, in a build whose symptom would have been "the textures broke
+the game".
+
+AND THE BENCH AGREED WITH IT, because the bench could not address the port.
+`tb_m2_sdram` fixed `NP = 10`, and its four port multiplexers ended in
+`default: d->p9_req = v` -- so a request for port 10 was driven onto port 9,
+acknowledged as port 9, and checked against port 9's shadow. Raising NP to 11
+without touching those arms produced 5,428 failures that looked like DUT
+corruption and were the bench aliasing two ports together. The harness only
+had pins for ten, too.
+
+Both fixed: port 10 joins the burst-four list, the harness has an eleventh set
+of pins, and every port is named in the multiplexers rather than falling
+through a default. 117,890 checks, zero failures, zero tag faults, and port 10
+takes 27,655 grants of the aggregate run -- so it is genuinely being served and
+not silently idle.
+
+THE RULE THIS LEAVES: a `default:` arm in a per-port multiplexer is a bug
+waiting for the next port. Name every port, in the RTL and in the bench.

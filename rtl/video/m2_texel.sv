@@ -85,7 +85,10 @@ module m2_texel #(
   input  logic             inval,
 
   output logic [31:0]      dbg_hits,
-  output logic [31:0]      dbg_misses
+  output logic [31:0]      dbg_misses,
+  // Fetches abandoned on a memory that never answered. It should read zero;
+  // if it does not, the port is the fault and not the picture.
+  output logic [15:0]      dbg_lost
 );
 
   localparam int unsigned LINES    = 1 << IDX_BITS;
@@ -167,6 +170,12 @@ module m2_texel #(
   /* verilator lint_on UNUSEDSIGNAL */
   logic                sheet_r;
   logic [63:0]         hold;
+  // A MEMORY THAT NEVER ANSWERS MUST NOT STOP THE PICTURE. This unit sits
+  // inside the band fill, so a request that is never acknowledged holds the
+  // span walk, which holds the band, which holds every band after it -- the
+  // R162 failure mode, one missed pulse costing the rest of the session. On
+  // expiry the line is taken as whatever is in hand and the fetch is counted.
+  logic [9:0]          to_cnt;
   /* verilator lint_off UNUSEDSIGNAL */
   logic [11:0]         x2_r, y2_r;       // only the parity survives the latch
   /* verilator lint_on UNUSEDSIGNAL */
@@ -200,7 +209,7 @@ module m2_texel #(
     if (!rst_n) begin
       st <= S_INIT; sweep <= '0; idx_r <= '0; tag_r <= '0; sel_r <= '0;
       wa_r <= '0; sheet_r <= 1'b0; hold <= '0; x2_r <= '0; y2_r <= '0;
-      m_req <= 1'b0; m_addr <= '0; ack <= 1'b0;
+      m_req <= 1'b0; m_addr <= '0; ack <= 1'b0; to_cnt <= '0; dbg_lost <= '0;
       inval_d <= 1'b0; inval_pend <= 1'b0;
       dbg_hits <= '0; dbg_misses <= '0;
     end else begin
@@ -238,16 +247,27 @@ module m2_texel #(
           st       <= S_ACK;
         end else begin
           m_req      <= 1'b1;
+          to_cnt     <= '0;
           m_addr     <= (sheet_r ? base_s1 : base_s0)
                       + AW'({wa_r[WA_BITS-1:2], 2'b00});
           dbg_misses <= dbg_misses + 1'd1;
           st         <= S_MISS;
         end
 
-        S_MISS: if (m_ack) begin
-          m_req <= 1'b0;
-          hold  <= m_data;
-          st    <= S_FILL;
+        S_MISS: begin
+          to_cnt <= to_cnt + 1'd1;
+          if (m_ack) begin
+            m_req  <= 1'b0;
+            hold   <= m_data;
+            to_cnt <= '0;
+            st     <= S_FILL;
+          end else if (&to_cnt) begin
+            m_req  <= 1'b0;
+            to_cnt <= '0;
+            if (!(&dbg_lost)) dbg_lost <= dbg_lost + 1'd1;
+            ack    <= 1'b1;             // answer with what is in hand, never hang
+            st     <= S_ACK;
+          end
         end
 
         S_FILL: begin

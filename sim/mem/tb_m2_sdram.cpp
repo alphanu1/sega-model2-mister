@@ -34,7 +34,7 @@
 #include <random>
 #include <vector>
 
-static const int NP = 10;
+static const int NP = 11;   // R275: the texel fetch made eleven
 
 // Burst length per port, mirroring blen() in m2_sdram.sv.
 // MIRRORS blen() IN m2_sdram.sv, and it did not: it said ports 1 and 2 burst
@@ -119,8 +119,8 @@ struct Harness {
       case 2: d->p2_req = v; break; case 3: d->p3_req = v; break;
       case 4: d->p4_req = v; break; case 5: d->p5_req = v; break;
       case 6: d->p6_req = v; break; case 7: d->p7_req = v; break;
-      case 8: d->p8_req = v; break;
-      default: d->p9_req = v; break;
+      case 8: d->p8_req = v; break; case 9: d->p9_req = v; break;
+      default: d->p10_req = v; break;
     }
   }
   void setAddr(int p, uint32_t a) {
@@ -129,8 +129,8 @@ struct Harness {
       case 2: d->p2_addr = a; break; case 3: d->p3_addr = a; break;
       case 4: d->p4_addr = a; break; case 5: d->p5_addr = a; break;
       case 6: d->p6_addr = a; break; case 7: d->p7_addr = a; break;
-      case 8: d->p8_addr = a; break;
-      default: d->p9_addr = a; break;
+      case 8: d->p8_addr = a; break; case 9: d->p9_addr = a; break;
+      default: d->p10_addr = a; break;
     }
   }
   bool getAck(int p) {
@@ -139,8 +139,8 @@ struct Harness {
       case 2: return d->p2_ack; case 3: return d->p3_ack;
       case 4: return d->p4_ack; case 5: return d->p5_ack;
       case 6: return d->p6_ack; case 7: return d->p7_ack;
-      case 8: return d->p8_ack;
-      default: return d->p9_ack;
+      case 8: return d->p8_ack; case 9: return d->p9_ack;
+      default: return d->p10_ack;
     }
   }
   uint64_t getDout(int p) {
@@ -149,8 +149,8 @@ struct Harness {
       case 2: return d->p2_dout; case 3: return d->p3_dout;
       case 4: return d->p4_dout; case 5: return d->p5_dout;
       case 6: return d->p6_dout; case 7: return d->p7_dout;
-      case 8: return d->p8_dout;
-      default: return d->p9_dout;
+      case 8: return d->p8_dout; case 9: return d->p9_dout;
+      default: return d->p10_dout;
     }
   }
 

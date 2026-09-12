@@ -253,6 +253,30 @@ int main(int argc, char **argv) {
     }
   }
 
+  // 7. A MEMORY THAT NEVER ANSWERS. The unit sits inside the band fill, so a
+  //    request that is never acknowledged holds the span walk, the band, and
+  //    every band after it -- R162's failure mode. It must give up and answer.
+  {
+    d->inval = 1; tick(); d->inval = 0;
+    for (int i = 0; i < 600; ++i) tick();      // sweep, so the next fetch misses
+    const uint32_t lost0 = d->dbg_lost;
+    mem_lat = 1000000;                          // the memory is gone
+    TexState t{2, 2, 0, 0, 0, 4, 2};
+    d->tex = t.packed(); d->u = 33 << 8; d->v = 44 << 8; d->req = 1;
+    bool acked = false;
+    for (int i = 0; i < 4000; ++i) { tick(); if (d->ack) { acked = true; break; } }
+    d->req = 0; tick();
+    ++checks;
+    if (!acked) { std::printf("  FAIL: a dead memory hung the texel fetch\n"); ++fails; }
+    ++checks;
+    if (d->dbg_lost == lost0) {
+      std::printf("  FAIL: the abandoned fetch was not counted\n"); ++fails;
+    } else {
+      std::printf("  dead memory: answered anyway, %u abandoned\n", d->dbg_lost - lost0);
+    }
+    mem_lat = 3; mem_wait = -1;
+  }
+
   std::printf("m2_texel: checks=%ld fails=%ld\n", checks, fails);
   std::printf("%s\n", fails ? "FAIL" : "PASS");
   delete d;

@@ -23,6 +23,7 @@ C=[];H=[];W=[];SW=[]
 T=[]     # R251: light-table records
 U=[]     # R255: walk records
 V=[]     # R269: glyph cache records
+Y=[]     # R275: texture records
 pend=None
 for line in open(sys.argv[1],errors='replace'):
     p=line.split()
@@ -34,6 +35,7 @@ for line in open(sys.argv[1],errors='replace'):
     elif p[0]=='T': T.append((a,d))     # R251: the light table
     elif p[0]=='U': U.append((a,d))     # R255: the walk's own numbers
     elif p[0]=='V': V.append((a,d))     # R269: the glyph cache, per frame
+    elif p[0]=='Y': Y.append((a,d))     # R275: the texture path, per frame
     elif p[0]=='S': SW.append(((a>>8)&0x1f, a&0xff, d&0xffffff))   # R238: region, runs, fold
     elif p[0]=='W': pend=(a,d)
     elif p[0]=='X' and pend is not None:
@@ -92,6 +94,21 @@ if V:
           % (med(hit), med(mis), max(mis), rate))
     print('    sibling fills med %d (expect ~1 per miss), scanline overruns med %d max %d'
           % (med(fil), med(ovr), max(ovr)))
+if Y:
+    # R275: b_addr = {textured pixels16, texel misses16}, b_data = {texel hits16,
+    # fetches abandoned16}, all PER FRAME. Pixels at zero means no polygon
+    # reached the span walk with its textured bit set -- the path is not running
+    # at all, which is a different fault from a texture that looks wrong.
+    px=[(a>>16)&0xffff for a,_ in Y]; tm=[a&0xffff for a,_ in Y]
+    th=[(d>>16)&0xffff for _,d in Y]; lo=[d&0xffff for _,d in Y]
+    def med2(v): w=sorted(v); return w[len(w)//2]
+    tot=[h+m for h,m in zip(th,tm)]
+    rate=100.0*sum(th)/max(1,sum(tot))
+    print('TEXTURES (R275): per frame -- textured pixels med %d max %d; texel cache %.1f%% of %d fetches'
+          % (med2(px), max(px), rate, med2(tot)))
+    print('    (pixels 0 = nothing textured reached the span walk; abandoned fetches %d -- should be 0)'
+          % max(lo))
+
 if T:
     # The walker's 32-entry light table, as the board holds it. Luminance is
     # |dot| * diffuse + ambient, so an entry of 0/0 renders every polygon that

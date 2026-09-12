@@ -81,6 +81,7 @@ module m2_raster3d #(
   input  logic            tex_m_ack,
   input  logic [63:0]     tex_m_data,
   output logic [31:0]     dbg_texpix, dbg_texhit, dbg_texmiss,
+  output logic [15:0]     dbg_texlost,
 
   output logic [15:0] dbg_quads,
   output logic [15:0] dbg_dropped,
@@ -270,7 +271,7 @@ module m2_raster3d #(
     .u(tex_u), .v(tex_v), .texel(tex_texel),
     .m_req(tex_m_req), .m_addr(tex_m_addr), .m_ack(tex_m_ack), .m_data(tex_m_data),
     .inval(tex_inval),
-    .dbg_hits(dbg_texhit), .dbg_misses(dbg_texmiss)
+    .dbg_hits(dbg_texhit), .dbg_misses(dbg_texmiss), .dbg_lost(dbg_texlost)
   );
 
   // RGB888 to RGB565 on the way in, as the reference does: the colour is

@@ -219,7 +219,15 @@ module m2_sdram #(
       // stream desynchronises and OTHER ports get corrupt data (R108). The walk
       // reads one dword at a time and discards the other pair, which is the
       // same bargain the TGP already makes.
-      8, 9: blen = 4'd4;
+      // 10 IS THE TEXEL FETCH (R275), and it bursts four because EVERY PORT
+      // MUST. This case list ended at 9 with `default: blen = 1`, so adding a
+      // port would have given it a one-word burst -- and the paragraph above
+      // says exactly what that does: `rd_total` is one global register, a
+      // transaction granted while another is issuing overwrites it, and the
+      // EARLIER one completes early with zeros above the words that arrived.
+      // Not on the new port: on whichever port was mid-transaction. Silent
+      // cross-port corruption, from a line nobody would have looked at.
+      8, 9, 10: blen = 4'd4;
       default: blen = 4'd1;
     endcase
   endfunction

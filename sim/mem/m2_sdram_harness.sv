@@ -48,16 +48,17 @@ module m2_sdram_harness #(
   // so a pair silently took half its result from the previous transfer. A test
   // that drives 0..4 cannot see that no matter how long it runs.
   input  logic        p0_req, p1_req, p2_req, p3_req, p4_req,
-                      p5_req, p6_req, p7_req, p8_req, p9_req,
+                      p5_req, p6_req, p7_req, p8_req, p9_req, p10_req,
   input  logic        p0_we,
   input  logic [COL_BITS+15:1] p0_addr, p1_addr, p2_addr, p3_addr, p4_addr,
                                p5_addr, p6_addr, p7_addr, p8_addr, p9_addr,
+                               p10_addr,
   input  logic [15:0] p0_din,
   input  logic [1:0]  p0_be,
   output logic [63:0] p0_dout, p1_dout, p2_dout, p3_dout, p4_dout,
-                      p5_dout, p6_dout, p7_dout, p8_dout, p9_dout,
+                      p5_dout, p6_dout, p7_dout, p8_dout, p9_dout, p10_dout,
   output logic        p0_ack, p1_ack, p2_ack, p3_ack, p4_ack,
-                      p5_ack, p6_ack, p7_ack, p8_ack, p9_ack,
+                      p5_ack, p6_ack, p7_ack, p8_ack, p9_ack, p10_ack,
 
   // Device model observability
   output int unsigned violations,
@@ -85,7 +86,7 @@ module m2_sdram_harness #(
   output logic [23:0] mon_total
 );
 
-  localparam int unsigned NP    = 10;   // all ten the core uses: 8 and 9 burst two
+  localparam int unsigned NP    = 11;   // eleven, since R275 gave the texel fetch its own
   localparam int unsigned T_RCD = 2;
   localparam int unsigned T_RP  = 2;
   localparam int unsigned T_RC  = 7;
@@ -111,11 +112,11 @@ module m2_sdram_harness #(
     p_req  = '0;  p_we = '0;  p_addr = '0;  p_din = '0;  p_be = '1;
     p_req[0] = p0_req; p_req[1] = p1_req; p_req[2] = p2_req; p_req[3] = p3_req;
     p_req[4] = p4_req; p_req[5] = p5_req; p_req[6] = p6_req; p_req[7] = p7_req;
-    p_req[8] = p8_req; p_req[9] = p9_req;
+    p_req[8] = p8_req; p_req[9] = p9_req; p_req[10] = p10_req;
     p_addr[0] = p0_addr; p_addr[1] = p1_addr; p_addr[2] = p2_addr;
     p_addr[3] = p3_addr; p_addr[4] = p4_addr; p_addr[5] = p5_addr;
     p_addr[6] = p6_addr; p_addr[7] = p7_addr; p_addr[8] = p8_addr;
-    p_addr[9] = p9_addr;
+    p_addr[9] = p9_addr; p_addr[10] = p10_addr;
     p_we[0]  = p0_we;
     p_din[0] = p0_din;
     p_be[0]  = p0_be;
@@ -125,6 +126,7 @@ module m2_sdram_harness #(
   assign p3_ack = p_ack[3]; assign p4_ack = p_ack[4]; assign p5_ack = p_ack[5];
   assign p6_ack = p_ack[6]; assign p7_ack = p_ack[7]; assign p8_ack = p_ack[8];
   assign p9_ack = p_ack[9];
+  assign p10_ack = p_ack[10];
   assign p0_dout = p_dout[0];
   assign p1_dout = p_dout[1];
   assign p2_dout = p_dout[2];
@@ -135,6 +137,7 @@ module m2_sdram_harness #(
   assign p7_dout = p_dout[7];
   assign p8_dout = p_dout[8];
   assign p9_dout = p_dout[9];
+  assign p10_dout = p_dout[10];
 
   logic        cke, cs_n, ras_n, cas_n, we_n;
   logic [1:0]  ba, dqm;
