@@ -49,6 +49,12 @@ module m2_boot_harness #(
   // the other one since a9ace86 and spinning. Exposed here so the failing
   // configuration can be reproduced in seconds instead of a 25-minute fit.
   parameter bit          BUFFERRAM_EN    = 1'b0,
+  // R240: the two pair caches between the walker/engine and their port, as
+  // Model2.sv has them, with the port served by the bench as m2_sdram serves
+  // it -- a 64-bit pair whose upper half wraps inside the SDRAM row. Without
+  // this the desk served every "next dword" from a flat array and could not
+  // show the row-edge fault.
+  parameter bit          PAIR_EN         = 1'b0,
   parameter int unsigned RD_LAT_SEL      = 3      // REAL_MEM only: the controller's read-capture selector (-G friendly)
 ) (
   // REAL_MEM=1 replaces the C++ SDRAM with the genuine stack -- m2_sdram_x2 +
@@ -144,6 +150,17 @@ module m2_boot_harness #(
   output logic [1:0]  eng_mem_space,          // R222
   input  logic [31:0] eng_mem_data,
   input  logic        eng_mem_ack,
+  // PAIR_EN: the port side of the two pair caches (absolute dword index, as
+  // Model2.sv indexes them, so spaces cannot alias); pair_en tells the bench.
+  output logic        pair_en,
+  output logic        geo_p_req,
+  output logic [23:0] geo_p_idx,
+  input  logic        geo_p_ack,
+  input  logic [63:0] geo_p_dout,
+  output logic        eng_p_req,
+  output logic [23:0] eng_p_idx,
+  input  logic        eng_p_ack,
+  input  logic [63:0] eng_p_dout,
   output logic [15:0] eng_polys, eng_objects, eng_capped, eng_nonfinite,
   output logic [15:0] eng_clip_in, eng_clip_out, eng_clip_drop,
   output logic        eng_q_valid,
@@ -813,7 +830,7 @@ module m2_boot_harness #(
     .dbg_pushes(), .dbg_dropped(), .dbg_geocnt(), .dbg_geoctl(),
     .frame_start(geo_frame_start),
     .rd_req(geo_rd_req), .rd_addr(geo_rd_addr),
-    .rd_data(geo_rd_data), .rd_ack(geo_rd_ack),
+    .rd_data(geo_rd_data_i), .rd_ack(geo_rd_ack_i),
     .mtx0(obs_mtx0), .mtx4(obs_mtx4), .mtx8(obs_mtx8), .mtx11(obs_mtx11),
     .mat_we(geo_mat_we), .mat_idx(geo_mat_idx), .mat_data(geo_mat_data),
     .eng_busy(geo_eng_busy),
@@ -851,6 +868,42 @@ module m2_boot_harness #(
   wire  [4:0] geo_tp_idx;
   wire  [7:0] geo_tp_diffuse, geo_tp_ambient;
 
+  // ---- R240: the pair caches, or the direct connection (see PAIR_EN)
+  logic [31:0] geo_rd_data_i, eng_mem_data_i;
+  logic        geo_rd_ack_i,  eng_mem_ack_i;
+  assign pair_en = PAIR_EN;
+  // The same absolute dword decode as Model2.sv's geo_wa / eng_wa (R222).
+  wire [24:0] eng_base_w = (eng_mem_space == 2'd1) ? (eng_mem_addr[23] ? 25'h1740000 : 25'h0720000)
+                         : (eng_mem_space == 2'd2) ? 25'h1730000
+                         : (eng_mem_space == 2'd3) ? 25'h1731000
+                         : geo_oba_last[24] ? 25'h1720000
+                         : geo_oba_last[23] ? 25'h0b20000
+                                            : 25'h1710000;
+  wire [23:0] eng_mem_idx_w = (eng_mem_space == 2'd1) ? (eng_mem_addr[23] ? {9'd0, eng_mem_addr[14:0]} : {3'd0, eng_mem_addr[20:0]})
+                            : (eng_mem_space == 2'd2) ? {15'd0, eng_mem_addr[8:0]}
+                            : (eng_mem_space == 2'd3) ? {10'd0, eng_mem_addr[13:0]}
+                            : (geo_oba_last[24] || !geo_oba_last[23]) ? {9'd0, eng_mem_addr[14:0]}
+                                                                       : {2'd0, eng_mem_addr[21:0]};
+  wire [23:0] geo_dw = 24'h0b78000 + {5'd0, geo_rd_addr};           // word 0x16f0000 >> 1
+  wire [23:0] eng_dw = eng_base_w[24:1] + eng_mem_idx_w;   // word address >> 1
+  generate
+    if (PAIR_EN) begin : g_pair
+      m2_pair_cache #(.AW(24), .COL_BITS(10)) u_geo_pc (
+        .clk(clk_mem), .rst_n(rst_n),
+        .req(geo_rd_req), .idx(geo_dw), .ack(geo_rd_ack_i), .data(geo_rd_data_i),
+        .p_req(geo_p_req), .p_idx(geo_p_idx), .p_ack(geo_p_ack), .p_dout(geo_p_dout));
+      m2_pair_cache #(.AW(24), .COL_BITS(10)) u_eng_pc (
+        .clk(clk_mem), .rst_n(rst_n),
+        .req(eng_mem_req), .idx(eng_dw), .ack(eng_mem_ack_i), .data(eng_mem_data_i),
+        .p_req(eng_p_req), .p_idx(eng_p_idx), .p_ack(eng_p_ack), .p_dout(eng_p_dout));
+    end else begin : g_direct
+      assign geo_rd_data_i = geo_rd_data;  assign geo_rd_ack_i = geo_rd_ack;
+      assign eng_mem_data_i = eng_mem_data; assign eng_mem_ack_i = eng_mem_ack;
+      assign geo_p_req = 1'b0; assign geo_p_idx = '0;
+      assign eng_p_req = 1'b0; assign eng_p_idx = '0;
+    end
+  endgenerate
+
   m2_geometry u_geometry (
     .clk(clk_mem), .rst_n(rst_n),
     .start(geo_obj_valid), .oba(geo_obj_oba), .obc(geo_obj_obc),
@@ -858,7 +911,7 @@ module m2_boot_harness #(
     .mat_we(geo_mat_we), .mat_idx(geo_mat_idx), .mat_data(geo_mat_data),
     .foc_x(geo_foc_x), .foc_y(geo_foc_y),
     .mem_req(eng_mem_req), .mem_addr(eng_mem_addr),
-    .mem_data(eng_mem_data), .mem_ack(eng_mem_ack),
+    .mem_data(eng_mem_data_i), .mem_ack(eng_mem_ack_i),
     .xc(32'h43780000), .yc(32'h43400000),          // 248.0, 192.0
     .a_left(32'hC3780000), .a_right(32'h43780000), // -248, +248
     .a_bottom(32'h43400000), .a_top(32'hC3400000), // +192, -192

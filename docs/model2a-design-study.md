@@ -13501,3 +13501,27 @@ trace agrees with the reference's tap for ALL 1,024,289 records through
 bench frame 656 (MAME frame 417), well past the frame-248 divergence -- the
 i960 now follows the game's path the reference follows. `build/fix3d8`
 carries it to the board with R240 and R241.*
+
+**R243 -- THE RECIPROCAL TABLE HAS TO BE MLAB, AND `ramstyle` ALONE DOES NOT
+DO IT ON A DUAL-PORT ARRAY.** `build/fix3d8` (R240+R241+R242) failed the
+fitter on all four seeds: "Can't place all RAM cells -- the design requires
+556 memory locations of type M10K block", 553 on the device. Nothing but
+R241 had touched memory. The map report names the cell:
+`m2_raster_fill:u_fill|m2_recip_rom:u_recip|altsyncram:recip_rtl_0`, 16,384
+bits. The array carried `(* ramstyle = "MLAB" *)` and Quartus inferred an
+altsyncram in M10K anyway, because it has TWO READ PORTS and an MLAB has
+one. Model 1 can afford that form; this design was at 553 of 553 before
+R241 (R221).
+
+Fixed by giving each divider its own copy -- two single-read-port arrays,
+which the attribute is then honoured on -- and by dropping the table to 256
+entries, so a copy is 8,192 bits, 13 MLABs. A denominator is an edge's
+height in scanlines; |den| >= TN still takes the exact restoring path, so
+the unit is correct for every input and only the fast-path hit rate moves.
+The filler's corpus is unchanged and passes (152,025 checks, 0 fails).
+
+Also at the desk, for R240: the boot harness can now instantiate the two
+pair caches (`-GPAIR_EN=1`), with the bench serving their port the way
+m2_sdram does -- the pair taken by incrementing the column INSIDE the row,
+so a row's last dword pairs with the row's first. That is the configuration
+no desk model had, and it is what the board runs.

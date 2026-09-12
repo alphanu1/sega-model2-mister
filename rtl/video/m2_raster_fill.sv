@@ -169,7 +169,7 @@ module m2_raster_fill (
   logic               got_a, got_b;   // which slopes have come back this segment
 
   // ONE TABLE FOR BOTH. See m2_recip_rom.
-  logic [8:0]  rom_a_addr, rom_b_addr;
+  logic [7:0]  rom_a_addr, rom_b_addr;
   wire [31:0]  rom_a_data, rom_b_data;
 
   m2_recip_rom u_recip (

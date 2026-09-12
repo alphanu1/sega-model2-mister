@@ -15,7 +15,7 @@
 `timescale 1ns/1ps
 
 module m2_recip_rom #(
-  parameter int unsigned TN = 512
+  parameter int unsigned TN = 256
 ) (
   input  logic        clk,
   input  logic [$clog2(TN)-1:0] a_addr,
@@ -29,18 +29,30 @@ module m2_recip_rom #(
   // so a scanline difference is under 384 -- the 1,024 the reference needed
   // for its unclipped -104..495 range is not needed here. |den| >= 512 still
   // takes the restoring path, so the unit is exact for every input.
-  (* ramstyle = "MLAB" *) logic [31:0] recip [TN];
-
+  // TWO SINGLE-PORT MLAB COPIES, NOT ONE DUAL-PORT M10K (R243). The Model 1
+  // form is one true-dual-port array, which Quartus infers as an altsyncram in
+  // M10K -- and this design has all 553 M10K in use (R221), so build/fix3d8
+  // failed the fitter at 556 of 553 with nothing else changed. An MLAB has one
+  // read port, so each divider gets its own copy; 256 x 32 bits is 13 MLABs a
+  // copy. The `ramstyle` attribute alone was not enough on the dual-port form:
+  // it was honoured only once the array had a single read port.
+  //
+  // 256 ENTRIES, NOT 1,024. A denominator is an edge's height in scanlines.
+  // Model 1 needed 1,024 for its unclipped -104..495 vertices; a bigger table
+  // here costs M10K this design does not have, and |den| >= TN still takes the
+  // exact restoring path, so the unit is correct for every input either way.
+  (* ramstyle = "MLAB" *) logic [31:0] recip_a [TN];
+  (* ramstyle = "MLAB" *) logic [31:0] recip_b [TN];
   // ceil(2^32/d). Entry 0 is never read - a zero denominator is trapped by the
   // divider - and entry 1 would be 2^32, which the divider special-cases.
   initial begin
-    for (int d = 1; d < int'(TN); d++)
-      recip[d] = 32'((({32'd0, 32'h8000_0000} << 1) + longint'(d) - 1) / longint'(d));
+    for (int d = 1; d < int'(TN); d++) begin
+      recip_a[d] = 32'((({32'd0, 32'h8000_0000} << 1) + longint'(d) - 1) / longint'(d));
+      recip_b[d] = recip_a[d];
+    end
   end
-
   always_ff @(posedge clk) begin
-    a_data <= recip[a_addr];
-    b_data <= recip[b_addr];
+    a_data <= recip_a[a_addr];
+    b_data <= recip_b[b_addr];
   end
-
 endmodule

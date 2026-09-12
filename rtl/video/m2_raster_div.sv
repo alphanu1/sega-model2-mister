@@ -82,7 +82,7 @@ module m2_raster_div #(
   // dividers share one copy through its second read port - 4 M10K instead of
   // 8. The address is combinational off `den` and the data is expected one
   // cycle later, which is what a registered ROM read gives.
-  output logic [8:0]         rom_addr,
+  output logic [7:0]         rom_addr,
   input  logic [31:0]        rom_data,
 
   input  logic               in_valid,
@@ -111,7 +111,7 @@ module m2_raster_div #(
   // 512-entry table sent most divides down the slow path. Measured: with 512
   // the worst band's divide wait was 12,932 cycles for 806 divides, still 16
   // each. In M10K rather than logic: 32,768 bits is 4 blocks against ~700 ALM.
-  localparam int unsigned TN = 512;      // Model 2: MLAB table, clipped vertices (m2_recip_rom)
+  localparam int unsigned TN = 256;      // Model 2: two MLAB copies, R243 (m2_recip_rom)
 
   wire [31:0] n_abs = num[31] ? (~num + 32'd1) : num;
   wire [31:0] d_abs = den[31] ? (~den + 32'd1) : den;
@@ -123,7 +123,7 @@ module m2_raster_div #(
   // 1,024 x 32 table out of logic, 3,733 ALM for the fill unit against 2,4xx.
   // The divider's operands are held by m2_raster_fill until it takes them,
   // so a free-running read is the same value one cycle later.
-  assign rom_addr = d_abs[8:0];
+  assign rom_addr = d_abs[7:0];
   wire [31:0] recip_q = rom_data;
 
   logic [31:0] rq;          // the reciprocal, or the quotient under correction

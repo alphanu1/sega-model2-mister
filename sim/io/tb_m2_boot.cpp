@@ -564,7 +564,35 @@ int main(int argc, char **argv) {
   // 16-bit halves at whatever word address geo_polygon_data computed, which is
   // exactly what needs checking -- if the destination decode is wrong they will
   // land somewhere recognisable, like word 0.
+  // R240: THE PORT BEHIND THE PAIR CACHES, when the harness was built with
+  // PAIR_EN. A request is taken on its rising edge, answered M2_PAIR_LAT ticks
+  // later (default 6, about the board's port round trip) with the dword at the
+  // index in the low half and the NEXT dword in the high half -- taken as
+  // m2_sdram takes it, by incrementing the column inside the 1,024-word row,
+  // so the pair at a row's last dword is the row's FIRST dword. The
+  // acknowledge is held while the request stands (m2_sdram_x2).
+  struct PairPort { int req_d = 0, cnt = -1, done = 0; uint32_t idx = 0; uint64_t dout = 0; };
+  static PairPort pp_geo, pp_eng;
+  static const int pair_lat = std::getenv("M2_PAIR_LAT") ? std::atoi(std::getenv("M2_PAIR_LAT")) : 6;
+  auto pair_serve = [&](PairPort& p, int req, uint32_t pidx) {
+    if (req && !p.req_d && p.cnt < 0 && !p.done) { p.cnt = pair_lat; p.idx = pidx; }
+    p.req_d = req;
+    if (p.cnt > 0 && --p.cnt == 0) {
+      const uint32_t w  = (p.idx * 2u) & 0x1ffffffu;
+      const uint32_t w2 = (w & ~1023u) | ((w + 2u) & 1023u);
+      const uint64_t lo = uint32_t(mem[w]) | (uint32_t(mem[(w + 1u) & 0x1ffffffu]) << 16);
+      const uint64_t hi = uint32_t(mem[w2]) | (uint32_t(mem[(w2 + 1u) & 0x1ffffffu]) << 16);
+      p.dout = lo | (hi << 32); p.done = 1; p.cnt = -1;
+    }
+    if (!req) p.done = 0;
+  };
   auto geo_tick = [&]() {
+    if (d->pair_en) {
+      pair_serve(pp_geo, d->geo_p_req, uint32_t(d->geo_p_idx));
+      pair_serve(pp_eng, d->eng_p_req, uint32_t(d->eng_p_idx));
+      d->geo_p_ack = pp_geo.done; d->geo_p_dout = pp_geo.dout;
+      d->eng_p_ack = pp_eng.done; d->eng_p_dout = pp_eng.dout;
+    }
     d->geo_rd_ack = 0;
     // With the board's handshake modelled the service runs EVERY tick: `done`
     // clears on the tick the request is low, and that tick must be seen.
