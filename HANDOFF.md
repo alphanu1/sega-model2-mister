@@ -1,6 +1,29 @@
 # Handoff
 
-**Updated:** 2026-09-12 01:50 (machine clock). Study entries R176-R242.
+**Updated:** 2026-09-12 03:35 (machine clock). Study entries R176-R246.
+
+## 03:35, 09-12: WHERE THE PICTURE STANDS
+
+`build/fix3d8` (R240 pair-cache row edge + R241 faster filler + R242 bno) is on
+the board and THE CARS DRIVE CORRECTLY -- R232 is closed, it was `bno`. What the
+user still sees: scenery wrong or missing, cars flashing on and off, the track
+appearing to draw over the car, and whole scenes either blown out or completely
+black.
+
+Queued, in order: `build/fix3d9` = R244 (the pair cache as OSD bit O[25], and
+the beam's missed-band count on the UART where the always-zero drop half was).
+`build/fix3d10` should be R246 = the polygon's sort depth taken per polygon from
+attr[11:10] and quantised exactly as model2_v.cpp's float_to_zval does, plus the
+reference's cull of a polygon whose max z is negative. R246 is the direct answer
+to "the track is drawn over the car" and is the one to watch.
+
+R245 put a light-parameter probe in the boot bench for the lighting swing: the
+table is 32 entries of diffuse/ambient written by geo op 0x06, an entry the list
+never wrote reads zero, and zero is black. `$S/run_lp.log` has the counts.
+
+A Model 1 compile of the user's runs on this machine from time to time; a
+Model 2 batch must wait for it (31 GB, and three Verilator runs beside five
+fitters were OOM-killed once).
 
 ## 01:50, 09-12: R242 -- THE i960's bno WAS NEVER TAKEN (READ FIRST)
 
