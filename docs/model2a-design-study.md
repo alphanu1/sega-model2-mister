@@ -14337,3 +14337,45 @@ carried through the clipper the way the colour is -- latched with the quad,
 because the walker is polygons ahead by the time a clipped child is emitted.
 `tb_m2_geo_engine` checks all thirteen fields (67 checks); swapping texx and
 texy fails it, and so does taking the luma from bits 23:16.
+
+**R272 -- THE TEXEL FETCH, AND THE CARRY THAT IS NOT OPTIONAL.** `m2_texel`
+takes a (u, v) with eight fractional bits and the R271 texture state and
+returns a 4-bit texel out of the sheets in SDRAM, transcribing `get_texel` and
+the point-sampled half of `fetch_bilinear_texel`.
+
+Three things in it are worth recording because each was found by a failing
+comparison rather than by reading:
+
+THE OFFSET CARRIES. `offset = ((y2 / 2) * 512) + (x2 / 2)` is an ADDITION, not
+a concatenation of two bit fields. One fold of the 1024 column leaves `x2`
+anywhere up to 3,039, so `x2 / 2` can exceed 511 and spill into the row above --
+which is what the sheet's layout MEANS. Writing it as `{y2[10:1], x2[9:1]}`
+drops that carry and paints a band of the wrong rows across every wide texture:
+272 of 400 in the fold test and 305 of 4,000 in the fuzz.
+
+THE -2048 AND -1024 ARE NO-OPS AT LEVEL 0. `tex_x = ((texx - 2048) >> mip) &
+2047` with mip = 0 reduces to `texx mod 2048`, and texx is 32 times a six-bit
+field -- at most 2,016. The subtraction only bites once mipmaps shift first.
+Said here so the next reader does not re-derive it or, worse, implement the
+subtraction as a signed one.
+
+WRAP IS THE MASK, NOT A FLAG. `& (tex_width - 1)` is the wrap; the texwrapx and
+texwrapy header bits only choose how a BILINEAR fetch treats the seam between
+the last texel and the first, and there is no bilinear fetch yet. Mirroring IS
+real at point sampling and is implemented.
+
+The cache in front is direct-mapped with 64-bit lines -- one SDRAM transaction,
+eight texels across by two down -- and 128 lines is 1 KB. On the access pattern
+that matters, a walk along a scanline, it hits 93.8%. `tb_m2_texel` compares
+8,064 fetches against the transcription: the four nibbles of a 2x2 block, 400
+coordinates across the 1024-column fold, both mirror axes, 4,000 fuzzed states
+over every texture size and both sheets, a scanline walk, and an upload that
+must invalidate. Dropping the carry, swapping the nibble parities and removing
+the mirror each fail it.
+
+AND THE BENCH'S OWN FIRST FAULT IS WORTH KEEPING: it shifted `GAME_TEXS0` right
+by one to "convert to a word address". Those constants ALREADY are word
+addresses -- `SDR_AW` counts 16-bit words -- so the two sheets ended up a
+quarter of a sheet apart and every fetch past the first 256 K words read the
+other sheet. It looked exactly like a fold bug, which is what it was mistaken
+for first.
