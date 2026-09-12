@@ -132,6 +132,12 @@ module m2_geo #(
   output logic  [7:0]   zadj_e,      // R246: op 0x08's operand, exponent byte -- the z-sort bias
   output logic [31:0]   lit_x, lit_y, lit_z,
   output logic [15:0]   dbg_lit_n,
+  // R255: NOPS DECODED THIS FRAME. A well-formed list holds none; a walk that
+  // has lost sync reads the payload of a count-driven command as commands, and
+  // a run of zero words decodes as a run of nops. The desk measured 417 a
+  // frame against the reference's none, but that turned out to be the bench's
+  // own malformed list (R254), so the board has to be asked directly.
+  output logic [15:0]   dbg_nops,
   // geo_texture_parameters (0x06) as a WRITE STREAM, the same shape as the
   // matrix's. Model 2's luminance is
   //     luminance * texparam->diffuse + texparam->ambient
@@ -515,7 +521,8 @@ module m2_geo #(
   logic        pd_tex;                   // R222: this transfer is texture data
   logic [15:0] pd_n, pd_i;               // dwords to copy, and the one in hand
   logic  [4:0] tp_i;                     // texture_parameters index, wraps at 32
-  logic [15:0] tp_n, tp_c;               // entries to read, and the one in hand
+  logic [15:0] tp_n, tp_c;
+  logic [15:0] nops_f;                   // R255: nops decoded in the frame being walked
   localparam logic [2:0] CAP_MTX = 3'd1, CAP_FOC = 3'd2, CAP_OBJ = 3'd3,
                          CAP_TRA = 3'd4, CAP_LIT = 3'd5, CAP_ZAD = 3'd6;   // R246
 
@@ -589,6 +596,7 @@ module m2_geo #(
       dbg_mtx_n <= 16'd0; dbg_foc_n <= 16'd0;
       foc_x <= 32'd0; foc_y <= 32'd0;
       lit_x <= 32'd0; lit_y <= 32'd0; lit_z <= 32'd0; dbg_lit_n <= 16'd0;
+      dbg_nops <= 16'd0; nops_f <= 16'd0;
       zadj_e <= 8'd0;   // raster->z_adjust starts at zero in the reference
       tp_i <= 5'd0; tp_n <= 16'd0; tp_c <= 16'd0; dbg_tp_n <= 16'd0;
       tp_we <= 1'b0; tp_idx <= 5'd0; tp_diffuse <= 8'd0; tp_ambient <= 8'd0;
@@ -597,7 +605,8 @@ module m2_geo #(
     end else begin
       obj_valid <= 1'b0;
       // Remember the vblank; clear it when the walk actually starts.
-      if (frame_start) begin frame_pend <= 1'b1; drain_wait <= 10'd0; end
+      if (frame_start) begin frame_pend <= 1'b1; drain_wait <= 10'd0;
+                             dbg_nops <= nops_f; nops_f <= 16'd0; end   // R255: latch per frame
       else if ((frame_pend || flip_pend) && !(&drain_wait)) drain_wait <= drain_wait + 10'd1;
       // The flip. Counted like Model 1's fs_since_flip so the vblank fallback
       // only applies to a list that has not flipped in four frames.
@@ -673,6 +682,7 @@ module m2_geo #(
         end
         W_DECODE: begin
           if (w_op[3:0] == 4'h1) dbg_walk_objs <= dbg_walk_objs + 16'd1;
+          if (w_op == 5'h00 && !(&nops_f)) nops_f <= nops_f + 16'd1;   // R255
           if (is_end) begin
             dbg_walk_ops    <= w_ops;
             dbg_walk_frames <= dbg_walk_frames + 16'd1;

@@ -541,10 +541,10 @@ wire  [7:0] geo_lum;         // ...with its luminance
 logic  [7:0] tps_dif [32], tps_amb [32];
 logic [31:0] tps_seen;
 logic  [4:0] tps_sel;
-logic        tps_ph;
+logic  [1:0] tps_ph;
 always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
-		tps_seen <= 32'd0; tps_sel <= 5'd0; tps_ph <= 1'b0;
+		tps_seen <= 32'd0; tps_sel <= 5'd0; tps_ph <= 2'd0;
 	end else begin
 		if (geo_tp_we) begin
 			tps_dif[geo_tp_idx]  <= geo_tp_diffuse;
@@ -552,8 +552,8 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 			tps_seen[geo_tp_idx] <= 1'b1;
 		end
 		if (geo_walk_start) begin
-			tps_ph <= ~tps_ph;
-			if (tps_ph) tps_sel <= tps_sel + 5'd1;
+			tps_ph <= tps_ph + 2'd1;
+			if (tps_ph == 2'd1) tps_sel <= tps_sel + 5'd1;
 		end
 	end
 end
@@ -2637,7 +2637,7 @@ m2_geo #(.AW(SDR_AW), .DEPTH(128)) u_geo (
 	// the dot products and the diffuse/ambient scale are still to come.
 	.zadj_e(geo_zadj_e),
 	.lit_x(geo_lit_x), .lit_y(geo_lit_y), .lit_z(geo_lit_z),
-	.dbg_lit_n(geo_lit_n),
+	.dbg_lit_n(geo_lit_n), .dbg_nops(geo_nops),
 	// The diffuse/ambient table, streamed. Captured but not yet consumed -- the
 	// luminance stage that reads it is the next piece.
 	.tp_we(geo_tp_we), .tp_idx(geo_tp_idx),
@@ -2714,6 +2714,7 @@ wire        geo_tp_we;
 wire  [4:0] geo_tp_idx;
 wire  [7:0] geo_tp_diffuse, geo_tp_ambient;
 wire [15:0] geo_tp_n;
+wire [15:0] geo_nops;        // R255: nop commands the walker decoded last frame
 
 // THE GEOMETRY PIPELINE. object_data in, screen quads out; see m2_geometry.sv.
 //
@@ -4052,7 +4053,8 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	.b_addr((wedge_have && wedge_ph == 2'd1) ? wedge_q[127:96]
 	      : (wedge_have && wedge_ph == 2'd2) ? wedge_q[63:32]
 	      : sw_pend                         ? {19'd0, sw_out_sel, sw_runs}     // R238: 'S' region, runs
-	      : tps_ph                          ? tps_seen                        // R251: 'T' which light entries the list has written
+	      : (tps_ph == 2'd1)                  ? tps_seen                        // R251: 'T' which light entries the list has written
+	      : (tps_ph == 2'd3)                  ? {geo_nops, geo_walk_ops}        // R255: 'U' nops decoded : commands walked, last frame
 	      : {r3d_ready_cyc[15:0], r3d_bands_done[7:0], r3d_hold[7:0]}),
 	// clip_dropped read 0 on hardware and the refusal count is the number that
 	// now moves, so it takes that byte. Between them: accepted, emitted, refused
@@ -4122,11 +4124,12 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	.b_data((wedge_have && wedge_ph == 2'd1) ? wedge_q[95:64]
 	      : (wedge_have && wedge_ph == 2'd2) ? wedge_q[31:0]
 	      : sw_pend                         ? {8'd0, sw_out}                    // R238: the fold
-	      : tps_ph                          ? {3'd0, tps_sel, tps_dif[tps_sel], tps_amb[tps_sel], geo_tp_n[7:0]}   // R251
+	      : (tps_ph == 2'd1)                  ? {3'd0, tps_sel, tps_dif[tps_sel], tps_amb[tps_sel], geo_tp_n[7:0]}   // R251
+	      : (tps_ph == 2'd3)                  ? {geo_walk_objs, geo_walk_unknown[7:0], geo_dropped[7:0]}            // R255
 	      : {lum_mean_f, lum_zpc_f, wedge_slot, wedge_n[6:0], r3d_quads[11:4]}),   // R249: the frame's mean luminance and its black-polygon percentage, where the always-zero drop count and the free-running miss count were
 	.a_tag(8'h43),
 	.b_tag((wedge_have && wedge_ph == 2'd1) ? 8'h57 : (wedge_have && wedge_ph == 2'd2) ? 8'h58
-	     : sw_pend ? 8'h53 : tps_ph ? 8'h54 : 8'h48),   // 'W', 'X', 'S', 'T' (R251), 'H'          // 'C' copro in_pushed:out_pushed | TGP retires:pc
+	     : sw_pend ? 8'h53 : (tps_ph == 2'd1) ? 8'h54 : (tps_ph == 2'd3) ? 8'h55 : 8'h48),   // 'W', 'X', 'S', 'T' (R251), 'U' (R255), 'H'          // 'C' copro in_pushed:out_pushed | TGP retires:pc
 	                                       // 'H' out_popped:hscr2 | io_addr:flags
 	                                       // 'H' scroll h:v for layers 0,1 | layers 2,3 -- low bytes
 	                                       // '0' map0 min|max : sum

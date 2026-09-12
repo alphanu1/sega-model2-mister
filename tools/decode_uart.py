@@ -21,6 +21,7 @@
 import sys,collections
 C=[];H=[];W=[];SW=[]
 T=[]     # R251: light-table records
+U=[]     # R255: walk records
 pend=None
 for line in open(sys.argv[1],errors='replace'):
     p=line.split()
@@ -30,6 +31,7 @@ for line in open(sys.argv[1],errors='replace'):
     if p[0]=='C': C.append((a,d))
     elif p[0]=='H': H.append((a,d))
     elif p[0]=='T': T.append((a,d))     # R251: the light table
+    elif p[0]=='U': U.append((a,d))     # R255: the walk's own numbers
     elif p[0]=='S': SW.append(((a>>8)&0x1f, a&0xff, d&0xffffff))   # R238: region, runs, fold
     elif p[0]=='W': pend=(a,d)
     elif p[0]=='X' and pend is not None:
@@ -54,6 +56,16 @@ if SW:
 if W:
     print(f'WEDGES caught on the board: {len(W)} streamed; last count {(H[-1][1]>>4)&0x7f if H else 0} (slot {"1" if H and (H[-1][1]>>11)&1 else "0"})')
     for q in W[:12]: print('   (%d,%d) (%d,%d) (%d,%d) (%d,%d)' % q)
+if U:
+    # R255: a well-formed list decodes no nops. A walk that has lost sync reads
+    # a count-driven command's payload as commands, and a run of zero words
+    # comes out as a run of nops.
+    nops=[(a>>16)&0xffff for a,_ in U]; ops=[a&0xffff for a,_ in U]
+    objs=[(d>>16)&0xffff for _,d in U]; unk=[(d>>8)&0xff for _,d in U]; drp=[d&0xff for _,d in U]
+    nops.sort(); ops.sort(); objs.sort()
+    print('WALK (R255): per frame -- nops decoded med %d max %d | commands med %d | objects med %d | unknown op %02X | push drops %d'
+          % (nops[len(nops)//2], nops[-1], ops[len(ops)//2], objs[len(objs)//2], max(unk), max(drp)))
+    print('    (nops should be ZERO: the reference list holds none, so any run of them is the walk reading data as commands)')
 if T:
     # The walker's 32-entry light table, as the board holds it. Luminance is
     # |dot| * diffuse + ambient, so an entry of 0/0 renders every polygon that

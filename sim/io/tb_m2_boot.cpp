@@ -666,7 +666,13 @@ int main(int argc, char **argv) {
         gl_req_r = d->geo_rd_req; gl_addr_r = uint32_t(d->geo_rd_addr);
         static FILE *gt = std::getenv("M2_GEOTRACE") ? std::fopen(std::getenv("M2_GEOTRACE"), "w") : nullptr;
         static int gt_n = 0;
-        if (gt && (st != 0 || gt_n) && gt_n < 6000) {
+        // R253: GATED BY VIDEO FRAME, and long enough to hold a whole walk. The
+        // first version started at the first walk and stopped after 6,000
+        // lines, which is entirely inside the boot -- before the game has
+        // written a display list at all, so every read returned the buffer's
+        // fill pattern and the trace said the walk ends immediately.
+        static const uint64_t gt_from = std::getenv("M2_GEOTRACE_FROM") ? std::strtoull(std::getenv("M2_GEOTRACE_FROM"), nullptr, 10) : 0;
+        if (gt && g_frames_done >= gt_from && (st != 0 || gt_n) && gt_n < 4000000) {
           std::fprintf(gt, "%llu st=%u req=%d addr=%05x ack=%d data=%08x cnt=%d done=%d ebusy=%d\n",
                        (unsigned long long)d->dbg_acc, st, (int)d->geo_rd_req, (unsigned)d->geo_rd_addr,
                        (int)d->geo_rd_ack, (unsigned)d->geo_rd_data, gl_cnt, gl_done, (int)d->obs_eng_busy);
@@ -719,6 +725,98 @@ int main(int argc, char **argv) {
         if (d->obs_w_granted) ++g_w_grants; if (d->obs_k_granted) ++g_k_grants; if (d->obs_pj_hit) ++g_pj_hits;
         ++g_walk_hist[d->geo_state & 15];
         { static unsigned last_st = 0; if ((d->geo_state & 15) == 2 && last_st != 2) ++g_op_hist[d->geo_w_op & 31]; last_st = d->geo_state & 15; }
+        // R253: THE COMMAND STREAM, with the address each command was decoded
+        // at. The walker's opcode histogram says it decodes 417 nops a frame
+        // that the reference's list does not contain, and a histogram cannot
+        // say where the walk left the rails. M2_WALKLOG=<file> writes one line
+        // per decode from M2_WALKLOG_FROM (a video frame).
+        {
+          static FILE *wl = std::getenv("M2_WALKLOG") ? std::fopen(std::getenv("M2_WALKLOG"), "w") : nullptr;
+          static const uint64_t wl_from = std::getenv("M2_WALKLOG_FROM") ? std::strtoull(std::getenv("M2_WALKLOG_FROM"), nullptr, 10) : 0;
+          static unsigned wl_st = 0; static long wl_n = 0;
+          if (wl && g_frames_done >= wl_from && (d->geo_state & 15) == 2 && wl_st != 2 && wl_n < 200000) {
+            std::fprintf(wl, "f%llu ip=%05x op=%02x\n", (unsigned long long)g_frames_done,
+                         (unsigned)d->geo_w_ip, (unsigned)d->geo_w_op);
+            ++wl_n;
+          }
+          wl_st = d->geo_state & 15;
+          // R254: EVERY CPU WRITE INTO THE HEAD OF THE DISPLAY LIST, with its
+          // byte enables and the instruction that made it. The list our walker
+          // reads has a texture_data count of ZERO where the reference's list
+          // has 0x118, and everything else in it matches -- so one word is
+          // being lost between the i960 and SDRAM, and this says whether the
+          // CPU ever writes it.
+          // R254: THE WRITE-POINTER READ. The game pushes a zero placeholder
+          // for a count, reads 0x802008 to remember where it landed, pushes the
+          // payload, reads it again and patches the count in. Our CPU stored
+          // 0xFFFFFFFF at offset 0, which means both reads returned the same
+          // value and that value was zero.
+          if (wl && g_frames_done >= wl_from && d->obs_io_sel && !d->obs_io_we
+              && (uint32_t(d->obs_io_addr) & 0xffffffu) == 0x802008u) {
+            static long rn = 0;
+            if (rn < 60) { ++rn;
+              std::fprintf(wl, "WPRD 802008 -> %08x (geo_wp=%05x) ip=%08x f%llu\n",
+                           (unsigned)d->obs_io_rdata, (unsigned)d->geo_wp_o,
+                           (unsigned)d->obs_ip, (unsigned long long)g_frames_done);
+            }
+          }
+          // R254: THE CPU'S OWN WRITES INTO THE GEOMETRY WINDOWS, with the
+          // instruction that made each one. The push port lands zero in the
+          // texture_data count slot where the reference's list holds 0x118,
+          // and the word is pushed verbatim from that window, so the question
+          // is what the i960 wrote and where it got it.
+          if (wl && g_frames_done >= wl_from && d->obs_io_sel && d->obs_io_we
+              && (uint32_t(d->obs_io_addr) & 0xff8000u) == 0x800000u) {
+            static long gn = 0; static uint32_t lga = 0, lgd = 0;
+            if (uint32_t(d->obs_io_addr) == lga && uint32_t(d->obs_io_wdata) == lgd) gn = gn;
+            else { lga = uint32_t(d->obs_io_addr); lgd = uint32_t(d->obs_io_wdata);
+            if (gn < 400) { ++gn;
+              std::fprintf(wl, "GEOWR %06x = %08x ip=%08x f%llu\n",
+                           (unsigned)d->obs_io_addr, (unsigned)d->obs_io_wdata,
+                           (unsigned)d->obs_ip, (unsigned long long)g_frames_done);
+            } }
+          }
+          // R254: and what the PUSH PORT's drain lands in the list head. The
+          // list arrives through the geometry push port, not through CPU
+          // stores, and its queue drops when full without advancing the write
+          // pointer -- so a dropped dword is a hole in the list.
+          if (wl && g_frames_done >= wl_from && d->geo_sd_req
+              && uint32_t(d->geo_sd_addr) >= 0x16f0000u && uint32_t(d->geo_sd_addr) < 0x16f0040u) {
+            static uint32_t la = 0; static uint16_t ld = 0;
+            if (uint32_t(d->geo_sd_addr) != la || uint16_t(d->geo_sd_din) != ld) {
+              std::fprintf(wl, "PUSHWR word %07x = %04x (dword %x half %d) f%llu\n",
+                           (unsigned)d->geo_sd_addr, (unsigned)d->geo_sd_din,
+                           (unsigned)((uint32_t(d->geo_sd_addr) - 0x16f0000u) >> 1),
+                           (int)(uint32_t(d->geo_sd_addr) & 1),
+                           (unsigned long long)g_frames_done);
+              la = uint32_t(d->geo_sd_addr); ld = uint16_t(d->geo_sd_din);
+            }
+          }
+          if (wl && g_frames_done >= wl_from && d->obs_bus_req && d->obs_bus_ack && d->obs_bus_we
+              && (uint32_t(d->obs_bus_addr) & 0xfffff000u) == 0x00900000u
+              && (uint32_t(d->obs_bus_addr) & 0xfffu) < 0x80u) {
+            std::fprintf(wl, "CPUWR %08x be=%x data=%08x ip=%08x f%llu\n",
+                         (unsigned)d->obs_bus_addr, (unsigned)d->obs_bus_be,
+                         (unsigned)d->obs_bus_wdata, (unsigned)d->obs_ip,
+                         (unsigned long long)g_frames_done);
+          }
+          // R253: and the LIST ITSELF, once, at the frame the log starts. The
+          // walk log says where the walker went; only the words it walked over
+          // say whether it misread them or the list is malformed.
+          static bool bd_done = false;
+          if (wl && !bd_done && g_frames_done >= wl_from) {
+            bd_done = true;
+            if (const char *bd = std::getenv("M2_BUFDUMP")) {
+              if (FILE *bf = std::fopen(bd, "wb")) {
+                for (uint32_t i = 0; i < 0x10000u; i++) {
+                  uint16_t v = mem[0x16f0000u + i];
+                  std::fwrite(&v, 2, 1, bf);
+                }
+                std::fclose(bf);
+              }
+            }
+          }
+        }
       }
     }
     // R231: EVERY TICK, not inside the memory-serve block. The first version of
@@ -2956,6 +3054,8 @@ int main(int argc, char **argv) {
       "W_IDLE","W_FETCH","W_DECODE","W_SKIP","W_CNT","W_TFIFO","W_DDSKIP",
       "W_DDATTR","W_OPRD","W_OBJW","W_PDA","W_PDR","W_PDW","?13","?14","?15"
     };
+    std::printf("  DISPLAY LIST PUSH PORT (R254): accepted %u dwords, queue DROPPED %u\n",
+                (unsigned)d->geo_pushes_o, (unsigned)d->geo_dropped_o);
     std::printf("  DISPLAY LIST WALK:\n");
     std::printf("    frames=%u  ops=%u  objs=%u  unknown=%02x  state=%s\n",
                 d->geo_frames, d->geo_ops, d->geo_objs, d->geo_unknown,

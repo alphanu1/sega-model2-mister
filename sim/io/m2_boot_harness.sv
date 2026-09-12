@@ -225,6 +225,9 @@ module m2_boot_harness #(
   output logic  [7:0] geo_unknown,
   output logic  [3:0] geo_state,
   output logic  [4:0] geo_w_op,               // the opcode the walker decoded (R222 probe)
+  output logic [18:0] geo_w_ip,               // R253: and WHERE it decoded it
+  output logic [31:0] geo_pushes_o,           // R254: dwords the push port accepted
+  output logic [15:0] geo_dropped_o,          // ...and dwords its queue dropped
   output logic [31:0] geo_rp_o, geo_wp_o,
 
   output logic [31:0] dbg_pc,
@@ -834,7 +837,7 @@ module m2_boot_harness #(
     .base_texram(AW'(32'h1740000)), .dbg_td_words(geo_tdwords),
     .sd_wr_req(geo_sd_req), .sd_wr_addr(geo_sd_addr), .sd_wr_din(geo_sd_din),
     .sd_wr_ack(geo_sd_ack), .sd_busy(),
-    .dbg_pushes(), .dbg_dropped(), .dbg_geocnt(), .dbg_geoctl(),
+    .dbg_pushes(geo_pushes_o), .dbg_dropped(geo_dropped_o), .dbg_geocnt(), .dbg_geoctl(),
     .frame_start(geo_frame_start),
     .rd_req(geo_rd_req), .rd_addr(geo_rd_addr),
     .rd_data(geo_rd_data_i), .rd_ack(geo_rd_ack_i),
@@ -854,6 +857,7 @@ module m2_boot_harness #(
   );
   assign geo_state = u_geo.wst;
   assign geo_w_op  = u_geo.w_op;
+  assign geo_w_ip  = u_geo.w_ip;
   // The last object's address and count -- which memory it points at, and how
   // many polygons it claims. A degenerate quad at the projection centre means
   // every transformed point was (0,0), which is what a ZERO MATRIX gives.
@@ -1007,6 +1011,17 @@ module m2_boot_harness #(
   assign obs_io_rdata = cpu_io_rdata;
 
   assign cpu_io_rdata =
+    // R254: THE GEOMETRY POINTERS, WHICH THIS BENCH NEVER RETURNED. Model2.sv
+    // answers 0x802008 with the push port's write pointer and 0x803008 with
+    // the read pointer; this mux fell through to zero for both. Daytona pushes
+    // a ZERO PLACEHOLDER for a texture_data count, reads 0x802008 to remember
+    // where it landed, pushes the payload, reads it again and patches the
+    // count in -- so with the read returning zero the count stayed zero, the
+    // walk read 280 payload words as commands, and the light table filled with
+    // junk. Every desk measurement of the display list before this was taken
+    // on a list the bench itself had malformed.
+    (cpu_io_addr[23:0] == 24'h802008) ? geo_wp_o :
+    (cpu_io_addr[23:0] == 24'h803008) ? geo_rp_o :
     iob_sel                           ? iob_rdata :
     bak_sel                           ? bak_rdata :
     (cpu_io_addr[23:4] == 20'h98003)  ? {4{tgpid_b}} :
