@@ -523,6 +523,8 @@ wire  [7:0] r3d_qend_frames; // frames the geometry stage finished
 wire [15:0] r3d_collect_cyc; // R210: frame_start -> q_end, units of 16 clk_sys cycles
 wire  [7:0] r3d_hold;        // R213: frames the last list stayed on display
 wire [15:0] r3d_missed;      // R213: scanlines drawn with no band ready
+wire [15:0] geo_behind;      // R246: polygons entirely behind the eye, culled as the reference culls them
+wire  [7:0] geo_zadj_e;      // R246: the z-sort bias's exponent byte, from geo op 0x08
 wire  [7:0] geo_walk_unknown;
 wire  [3:0] geo_walk_state;
 logic       geo_rd_req_r;
@@ -2559,6 +2561,7 @@ m2_geo #(.AW(SDR_AW), .DEPTH(128)) u_geo (
 	.foc_x(geo_foc_x), .foc_y(geo_foc_y),
 	// The light vector, for the luminance stage. Captured but not yet consumed:
 	// the dot products and the diffuse/ambient scale are still to come.
+	.zadj_e(geo_zadj_e),
 	.lit_x(geo_lit_x), .lit_y(geo_lit_y), .lit_z(geo_lit_z),
 	.dbg_lit_n(geo_lit_n),
 	// The diffuse/ambient table, streamed. Captured but not yet consumed -- the
@@ -2712,7 +2715,7 @@ m2_geometry u_geometry (
 	.dbg_polys(geo_polys), .dbg_objects(geo_objs_done), .dbg_capped(geo_capped),
 	.dbg_culled(geo_culled),
 	.dbg_clip_in(geo_clip_in), .dbg_clip_out(geo_clip_out),
-	.dbg_clip_dropped(geo_clip_drop), .dbg_nonfinite(geo_nonfinite),
+	.dbg_clip_dropped(geo_clip_drop), .dbg_nonfinite(geo_nonfinite), .dbg_behind(geo_behind), .zadj_e(geo_zadj_e),
 	.dbg_pj_lost(geo_pj_lost),
 	.dbg_eng_state(geo_eng_state), .dbg_qst(geo_qst),
 	.dbg_clip_state(geo_clip_state)

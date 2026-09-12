@@ -129,6 +129,7 @@ module m2_geo #(
   // geo_light_source (0x0a): three words, the light vector. Lighting on Model 2
   // is dot(normal, light) against dot(normal, point), so this is half of what
   // the luminance needs and the polygon's own normal is the other half.
+  output logic  [7:0]   zadj_e,      // R246: op 0x08's operand, exponent byte -- the z-sort bias
   output logic [31:0]   lit_x, lit_y, lit_z,
   output logic [15:0]   dbg_lit_n,
   // geo_texture_parameters (0x06) as a WRITE STREAM, the same shape as the
@@ -516,7 +517,7 @@ module m2_geo #(
   logic  [4:0] tp_i;                     // texture_parameters index, wraps at 32
   logic [15:0] tp_n, tp_c;               // entries to read, and the one in hand
   localparam logic [2:0] CAP_MTX = 3'd1, CAP_FOC = 3'd2, CAP_OBJ = 3'd3,
-                         CAP_TRA = 3'd4, CAP_LIT = 3'd5;
+                         CAP_TRA = 3'd4, CAP_LIT = 3'd5, CAP_ZAD = 3'd6;   // R246
 
   assign mtx0 = mtx[0]; assign mtx4 = mtx[4]; assign mtx8 = mtx[8]; assign mtx11 = mtx[11];
 
@@ -541,11 +542,16 @@ module m2_geo #(
   // which is far harder to recognise as a missing opcode than a blank screen.
   wire is_tra = (w_op == 5'h0c) || (w_op == 5'h1c);
   wire is_lit = (w_op == 5'h0a) || (w_op == 5'h1a);
+  // R246: zsort_mode. Its one operand is the z-sort bias -- the reference
+  // stores (operand >> 8) << 8 and then uses only bits 30:23 of it -- and this
+  // walker used to step over it.
+  wire is_zad = (w_op == 5'h08) || (w_op == 5'h18);
   wire is_tp  = (w_op == 5'h06);                     // texture_parameters
   wire [3:0] cap_last = (w_cap == CAP_MTX) ? 4'd11
                       : (w_cap == CAP_FOC) ? 4'd1
                       : (w_cap == CAP_TRA) ? 4'd2
                       : (w_cap == CAP_LIT) ? 4'd2
+                      : (w_cap == CAP_ZAD) ? 4'd0
                                            : 4'd3;
 
   // THE ACKNOWLEDGE IS TAKEN ON ITS RISING EDGE, AND THE REQUEST DROPS FOR
@@ -583,6 +589,7 @@ module m2_geo #(
       dbg_mtx_n <= 16'd0; dbg_foc_n <= 16'd0;
       foc_x <= 32'd0; foc_y <= 32'd0;
       lit_x <= 32'd0; lit_y <= 32'd0; lit_z <= 32'd0; dbg_lit_n <= 16'd0;
+      zadj_e <= 8'd0;   // raster->z_adjust starts at zero in the reference
       tp_i <= 5'd0; tp_n <= 16'd0; tp_c <= 16'd0; dbg_tp_n <= 16'd0;
       tp_we <= 1'b0; tp_idx <= 5'd0; tp_diffuse <= 8'd0; tp_ambient <= 8'd0;
       obj_tpa <= 32'd0; obj_tha <= 32'd0; obj_oba <= 32'd0; obj_obc <= 32'd0;
@@ -698,14 +705,15 @@ module m2_geo #(
             // operand before it.
             if (!is_cnt3) w_ip <= w_ip + 19'd1;
             wst  <= W_CNT;
-          end else if (is_mtx || is_foc || is_obj || is_tra || is_lit) begin
+          end else if (is_mtx || is_foc || is_obj || is_tra || is_lit || is_zad) begin
             // READ THESE OPERANDS RATHER THAN STEPPING OVER THEM. They carry
             // the transform's state -- the matrix, its translation row, the
             // projection, and the object's address and count. Everything else
             // stays a blind skip, which is what kept the walk cheap while it
             // was only counting.
             w_cap <= is_mtx ? CAP_MTX : is_foc ? CAP_FOC
-                   : is_tra ? CAP_TRA : is_lit ? CAP_LIT : CAP_OBJ;
+                   : is_tra ? CAP_TRA : is_lit ? CAP_LIT
+                   : is_zad ? CAP_ZAD : CAP_OBJ;
             w_ci  <= 4'd0;
             wst   <= W_OPRD;
           end else if (oplen(w_op) == 16'hffff) begin
@@ -731,6 +739,7 @@ module m2_geo #(
                        default: lit_z <= rd_data;
                      endcase
             CAP_FOC: if (w_ci == 4'd0) foc_x <= rd_data; else foc_y <= rd_data;
+            CAP_ZAD: zadj_e <= rd_data[30:23];        // R246
             default: case (w_ci)
                        4'd0: obj_tpa <= rd_data;
                        4'd1: obj_tha <= rd_data;

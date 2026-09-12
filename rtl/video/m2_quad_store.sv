@@ -82,7 +82,7 @@ module m2_quad_store #(
   parameter int unsigned NBANK  = 2,
   parameter int unsigned XW     = 13,
   parameter int unsigned CW     = 16,
-  parameter int unsigned KW     = 24,
+  parameter int unsigned KW     = 16,      // R246: the reference's 16-bit z value, not a float
   // R216: A QUAD UNDER TINY PIXELS IN BOTH DIMENSIONS IS NOT STORED. The
   // title's busiest frames carry ~4,200 quads against 2,048 held and the
   // bench's histogram says 46% of them are under 2x2 pixels (14% under
@@ -226,19 +226,11 @@ module m2_quad_store #(
     end
   endfunction
 
-  // Monotonic key, then complemented so that ASCENDING on this key is DESCENDING
-  // on z - which is the order the painter wants.
-  function automatic [31:0] sort_key(input logic [31:0] f);
-    logic [31:0] v;
-    // NEGATIVE ZERO IS EQUAL TO POSITIVE ZERO as a float, and MAME compares
-    // floats - so the two must produce the SAME key and fall to the submission
-    // order tie-break. The monotonic transform alone maps them to 0x7fffffff and
-    // 0x80000000, one apart, which silently orders -0.0 ahead of +0.0. zmode 3
-    // writes a literal zero and zmode 0 reuses whatever came before, so both
-    // signs really do arrive here.
-    v = (f[30:0] == 31'd0) ? 32'd0 : f;
-    sort_key = ~(v[31] ? ~v : (v | 32'h80000000));
-  endfunction
+  // R246: THE KEY IS NO LONGER MADE HERE. It used to be a monotone transform
+  // of the float z, complemented; m2_geometry now hands over the reference's
+  // own 16-bit z value (model2_v.cpp's float_to_zval), which is coarse on
+  // purpose -- polygons within one part in 4,096 tie and fall to the list's
+  // order, which is the game's choice and not this core's.
 
   // ---------------------------------------------------------------- write
   function automatic logic tiny_quad(input logic signed [15:0] x0, y0, x1, y1, x2, y2, x3, y3);
@@ -285,7 +277,11 @@ module m2_quad_store #(
           vtx3_0[wcount[IW-1:0]] <= {sat(in_y3), sat(in_x3)};
           att_0[wcount[IW-1:0]]  <= {band_range(in_y0, in_y1, in_y2, in_y3), in_moire, c565(in_col)};
         end
-        key[wcount[IW-1:0]] <= sort_key(in_z) >> (32 - KW);
+        // R246: in_z CARRIES THE REFERENCE'S 16-BIT z VALUE in its low half
+        // (m2_geometry's zval, model2_v.cpp's float_to_zval), not a float.
+        // Complemented because the sort is ascending and the painter wants the
+        // largest z -- the furthest -- first.
+        key[wcount[IW-1:0]] <= ~in_z[KW-1:0];
       end
       if (is_tiny) begin
         if (dbg_tiny != 16'hffff) dbg_tiny <= dbg_tiny + 16'd1;

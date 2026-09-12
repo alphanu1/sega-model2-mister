@@ -116,6 +116,11 @@ module m2_geo_engine #(
   // translation table mirror. All dword-addressed; the top level owns the bases.
   output logic [1:0]  mem_space,
   output logic [23:0] poly_col,            // the polygon's colour, lit, gamma applied
+  // R246: WHICH DEPTH THIS POLYGON SORTS BY. model2_v.cpp picks it per polygon
+  // from the attribute word -- 0 reuses the previous polygon's, 1 the minimum
+  // vertex z, 2 the maximum, 3 a literal 1e10 -- and this core used the
+  // minimum for every polygon.
+  output logic  [1:0] poly_zmode,
   output logic [7:0]  poly_luma,           // its luminance, for the bench
   output logic [15:0] dbg_col_miss,        // colour cache misses
 
@@ -340,6 +345,7 @@ module m2_geo_engine #(
   assign mem_addr  = xrd ? xaddr  : ptr;
   assign mem_space = xrd ? xspace : 2'd0;
   assign poly_luma = luma8;
+  assign poly_zmode = attr[11:10];             // R246: (attr >> 10) & 3
 
   always_ff @(posedge clk) begin
     if (tp_we) tp_tab[tp_idx] <= {i8f(tp_ambient), i8f(tp_diffuse)};

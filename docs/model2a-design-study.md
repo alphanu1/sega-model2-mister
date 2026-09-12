@@ -13556,3 +13556,63 @@ Two instruments for the next board run:
    half now carries `r3d_missed[7:0]`, the count of scanlines whose band
    had no ready buffer when the beam arrived. That is the direct measure
    of the stripes, and it has never been on the wire.
+
+**R246 -- THE POLYGON'S SORT DEPTH IS CHOSEN PER POLYGON, QUANTISED, AND A
+POLYGON WHOLLY BEHIND THE EYE IS CULLED. WE DID NONE OF THE THREE.** The
+user, on `build/fix3d8`: "it almost seems like the track/scenery is being
+drawn over the top of the car". That is painter's order, so the question
+is what the reference sorts by. `src/mame/sega/model2_v.cpp`, read
+directly (fetched to the scratchpad rather than recalled):
+
+    switch ((attr >> 10) & 3) {
+      case 0: zvalue = raster->polygon_z; break;   // the PREVIOUS polygon's
+      case 1: zvalue = min_z;             break;
+      case 2: zvalue = max_z;             break;
+      case 3: zvalue = 1e10;              break;
+    }
+    raster->polygon_z = zvalue;                    // carried, culled or not
+    ...
+    object.z = float_to_zval(zvalue, raster->z_adjust);
+    zpoly = raster->poly_sorted_list[object.z];    // a 16-bit bucket
+
+This core took the MINIMUM for every polygon and sorted on the full 32-bit
+float. Three separate departures:
+
+1. **The mode.** `attr[11:10]` now reaches `m2_geometry` from the engine as
+   `poly_zmode`, and the depth is the previous polygon's, the minimum, the
+   maximum or 1e10 accordingly. `raster->polygon_z` is carried in `zprev`,
+   updated for culled polygons too, and reset to 1e10 as `render_frame_start`
+   does. A car drawn at its minimum z while the road it sits on is drawn at
+   its maximum is exactly one object swapping in front of another.
+2. **The quantisation.** `float_to_zval` rounds the mantissa to twelve bits
+   under a biased exponent, so the reference's sort is COARSE and everything
+   within one part in 4,096 ties and keeps the list's order -- the game's own
+   choice for coplanar work like road markings. Sorting on the full float
+   reorders exactly those against each other. `zval()` in `m2_geometry` is the
+   transcription, `m2_quad_store`'s key is now that 16-bit value complemented,
+   and KW drops from 24 to 16 (which also returns an M10K). The bias comes
+   from geo op 0x08, whose operand the walker used to step over and now
+   captures as `zadj_e` -- `(z_adjust >> 23) & 0xff`, Daytona writes
+   0x40800000.
+3. **The cull.** `check_culling` refuses a polygon whose `max_z < 0` -- every
+   vertex behind the eye. The four clip planes all pass through the origin, so
+   such a polygon survives them and projects to nonsense; this is a candidate
+   for the wedges that remain after R240. Counted as `dbg_behind`.
+
+The fourth test in `check_culling`, `master_z_clip`, is NOT implemented and
+does not need to be: a Lua tap on 0x0181c000 over 900 frames of Daytona
+shows one write, of 0xff, which is the value that disables it.
+
+Direction is unchanged and worth recording, because MAME's loop runs
+`for (z = min_z; z <= max_z; z++)` -- near to far. That is not a painter; the
+Model 2 hardware has a Z-BUFFER (study §2.1) and MAME tests it per pixel, so
+near-first is the early-out order and equal z means the first drawn wins.
+Our painter draws far-first, and a stable sort leaves ties in list order, so
+the last-submitted of a tie is drawn last and wins the pixel -- the same
+outcome. `tb_m2_geometry` checks all of it against a C transcription of
+`float_to_zval`: zmode 1 gives 0x0800, zmode 2 gives 0x1400 on the same quad,
+zmode 3 gives 0xffff, and a polygon at z = -2..-5 is counted behind, never
+reaches the clipper and emits nothing (39 checks). With the mode forced back
+to "always minimum" the zmode-2 check fails, so the bench sees the bug it was
+blind to. `test_m2_geo_engine` 41, `test_m2_geo` 75, `test_m2_raster3d` 8,
+`lint_top` clean.

@@ -421,6 +421,75 @@ int main(int argc, char** argv) {
     }
   }
 
+  // ---- R246: the polygon's sort depth, and the behind-the-eye cull
+  //
+  // model2_v.cpp picks the depth per polygon from (attr >> 10) & 3 -- 0 the
+  // previous polygon's, 1 the minimum vertex z, 2 the maximum, 3 a literal
+  // 1e10 -- quantises it with float_to_zval against the z-sort bias, and culls
+  // the polygon outright when every vertex is behind the eye (max_z < 0).
+  {
+    // the reference's float_to_zval, transcribed
+    auto zval = [](float f, uint32_t zadj)->uint16_t {
+      int32_t fp; std::memcpy(&fp, &f, 4);
+      int32_t ex = ((fp >> 23) & 0xff) - ((int32_t)(zadj >> 23) & 0xff);
+      uint32_t ma = (uint32_t)fp & 0x7fffffu;
+      ma += 0x400; if (ma > 0x7fffffu) { ex++; ma = (ma & 0x7fffffu) >> 1; }
+      ma >>= 11;
+      if (fp < 0) return 0;
+      if (ex < -12) return 0;
+      if (ex < 0)   return (uint16_t)((ma | 0x1000u) >> -ex);
+      if (ex < 15)  return (uint16_t)(((ex + 1) << 12) | ma);
+      return 0xffff;
+    };
+    const uint32_t ZADJ = 0x40800000u;          // what Daytona's list writes
+    d->zadj_e = (ZADJ >> 23) & 0xff;
+    std::printf("test: R246, the polygon's sort depth and the behind-the-eye cull\n");
+
+    // one quad at z = 2..5, zmode 1 (min) then zmode 2 (max)
+    struct Case { uint32_t zmode; float want; const char* what; };
+    const Case cases[] = {
+      {1u << 10, 2.0f, "zmode 1 takes the minimum vertex z"},
+      {2u << 10, 5.0f, "zmode 2 takes the maximum vertex z"},
+      {3u << 10, 1e10f, "zmode 3 is the reference's 1e10"},
+    };
+    for (const auto& c : cases) {
+      size_t w = 0;
+      w = put_v(w, -50.0f,  50.0f, 2.0f);
+      w = put_v(w, -50.0f, -50.0f, 3.0f);
+      obj[w++] = 0x00020201u | c.zmode;
+      w = put_v(w, 0.0f, 0.0f, 1.0f);
+      w = put_v(w,  50.0f,  50.0f, 4.0f);
+      w = put_v(w,  50.0f, -50.0f, 5.0f);
+      obj[w++] = 0x00000000u;
+      const uint16_t before = (uint16_t)d->dbg_behind;
+      auto got = run_object();
+      std::printf("  %s: %zu quads, key %04x, want %04x\n", c.what, got.size(),
+                  (unsigned)(d->q_z & 0xffff), zval(c.want, ZADJ));
+      ck(c.what, (int32_t)(d->q_z & 0xffff), (int32_t)zval(c.want, ZADJ));
+      ck("no polygon was culled as behind", (int32_t)((uint16_t)d->dbg_behind - before), 0);
+    }
+
+    // every vertex behind the eye: the reference culls the polygon
+    {
+      size_t w = 0;
+      w = put_v(w, -50.0f,  50.0f, -2.0f);
+      w = put_v(w, -50.0f, -50.0f, -3.0f);
+      obj[w++] = 0x00020201u | (1u << 10);
+      w = put_v(w, 0.0f, 0.0f, 1.0f);
+      w = put_v(w,  50.0f,  50.0f, -4.0f);
+      w = put_v(w,  50.0f, -50.0f, -5.0f);
+      obj[w++] = 0x00000000u;
+      const uint16_t before = (uint16_t)d->dbg_behind;
+      const uint32_t cin = d->dbg_clip_in;
+      auto got = run_object();
+      std::printf("  a polygon wholly behind the eye: %zu quads, behind %u, clipper saw %u\n",
+                  got.size(), (unsigned)((uint16_t)d->dbg_behind - before), d->dbg_clip_in - cin);
+      ck("counted as behind", (int32_t)((uint16_t)d->dbg_behind - before), 1);
+      ck("never reached the clipper", (int32_t)(d->dbg_clip_in - cin), 0);
+      ck("no quad came out", (int32_t)got.size(), 0);
+    }
+  }
+
   std::printf("m2_geometry: checks=%ld fails=%ld\n", checks, fails);
   std::printf("%s\n", fails ? "FAIL" : "PASS");
   delete d;

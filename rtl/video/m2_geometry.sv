@@ -114,6 +114,8 @@ module m2_geometry (
   output logic [15:0] dbg_culled,          // R219
   output logic [15:0] dbg_clip_in, dbg_clip_out, dbg_clip_dropped,
   output logic [15:0] dbg_nonfinite,   // polygons refused before the arithmetic
+  output logic [15:0] dbg_behind,      // R246: polygons entirely behind the eye (max_z < 0)
+  input  logic  [7:0] zadj_e,          // R246: geo op 0x08's exponent byte, the z-sort bias
   output logic [15:0] dbg_pj_lost,     // projections abandoned on timeout
   // WHERE THE PIPELINE IS SITTING. The board wedges with the walk in W_OBJW,
   // which says only "the engine never finished". These say which stage.
@@ -152,12 +154,13 @@ module m2_geometry (
   logic [31:0] v0x,v0y,v0z, v1x,v1y,v1z, v2x,v2y,v2z, v3x,v3y,v3z, poly_attr;
   logic [31:0] nrm_x, nrm_y, nrm_z;
   logic [23:0] poly_col, pcol;      // R222: the engine's colour, and the one in flight
+  logic  [1:0] poly_zmode;          // R246: the engine's per-polygon z mode
 
   m2_geo_engine u_engine (
     .tha(tha), .lit_x(lit_x), .lit_y(lit_y), .lit_z(lit_z),
     .tp_we(tp_we), .tp_idx(tp_idx), .tp_diffuse(tp_diffuse), .tp_ambient(tp_ambient),
     .col_inval(col_inval), .tex_lum(tex_lum), .mem_space(mem_space),
-    .poly_col(poly_col), .poly_luma(), .dbg_col_miss(dbg_col_miss),
+    .poly_col(poly_col), .poly_zmode(poly_zmode), .poly_luma(), .dbg_col_miss(dbg_col_miss),
     .clk(clk), .rst_n(rst_n),
     .start(start), .oba(oba), .obc(obc), .busy(eng_busy),
     .mat_we(mat_we), .mat_idx(mat_idx), .mat_data(mat_data),
@@ -279,7 +282,9 @@ module m2_geometry (
   logic signed [15:0] sx [4], sy [4];
   logic        clip_in_valid;
   logic        clip_in_ready;
-  logic [31:0] hzmin;
+  logic [31:0] hzmin, hzmax;
+  logic [31:0] zprev;               // R246: raster->polygon_z, carried between polygons
+  logic [15:0] hzkey;               // the quantised key handed to the store
   logic [9:0]  pj_wait;                    // cycles spent in Q_WAIT
   wire         pj_timeout = &pj_wait;
   // A VERTEX THE PREVIOUS POLYGON ALREADY PROJECTED IS NOT PROJECTED AGAIN
@@ -374,6 +379,16 @@ module m2_geometry (
                 | nonfinite(v2x) | nonfinite(v2y) | nonfinite(v2z)
                 | nonfinite(v3x) | nonfinite(v3y) | nonfinite(v3z);
 
+  // R246: the four vertices' view depths, the mode's pick, and the reference's
+  // "the whole polygon is behind the eye" cull (check_culling: max_z < 0).
+  wire [31:0] zmin_c = fmin(fmin(v0z, v1z), fmin(v2z, v3z));
+  wire [31:0] zmax_c = fmax(fmax(v0z, v1z), fmax(v2z, v3z));
+  wire [31:0] zsel_c = (poly_zmode == 2'd0) ? zprev
+                     : (poly_zmode == 2'd1) ? zmin_c
+                     : (poly_zmode == 2'd2) ? zmax_c
+                                            : 32'h5011B5EA;   // 1e10
+  wire        zc_behind = zmax_c[31] && (zmax_c[30:0] != 31'd0);
+
   assign poly_ready = (qst == Q_IDLE);
   assign w_pj_valid = (qst == Q_ISS);
   assign w_pj_x = hx[qi]; assign w_pj_y = hy[qi]; assign w_pj_z = hz[qi];
@@ -386,11 +401,48 @@ module m2_geometry (
   function automatic logic [31:0] fmin(input logic [31:0] a, input logic [31:0] b);
     fmin = (a < b) ? a : b;
   endfunction
+  function automatic logic [31:0] fmax(input logic [31:0] a, input logic [31:0] b);
+    fmax = (a > b) ? a : b;
+  endfunction
+
+  // R246: THE SORT KEY IS THE REFERENCE'S 16-BIT z VALUE, NOT THE FLOAT.
+  //
+  // model2_v.cpp's float_to_zval rounds the mantissa to twelve bits and packs
+  // it under a biased exponent, so the reference's sort is COARSE: polygons
+  // within one part in 4,096 of each other land in the same bucket and are
+  // then ordered by the list, which is the game's own choice. Sorting on the
+  // full float instead -- what this core did -- reorders exactly those
+  // polygons against each other, and that is a decal or a road marking
+  // swapping with the surface it sits on.
+  //
+  //   exponent = ((f >> 23) & 0xff) - ((z_adjust >> 23) & 0xff)
+  //   mantissa = (f & 0x7fffff) + 0x400, carrying into the exponent, >> 11
+  //   f < 0            -> 0x0000        (behind the eye sorts furthest away)
+  //   exponent < -12   -> 0x0000
+  //   exponent < 0     -> (mantissa | 0x1000) >> -exponent
+  //   exponent < 15    -> ((exponent + 1) << 12) | mantissa
+  //   else             -> 0xffff
+  function automatic logic [15:0] zval(input logic [31:0] f, input logic [7:0] zbias);
+    logic signed [9:0]  ex;
+    logic        [23:0] ma;
+    begin
+      ex = $signed({2'b00, f[30:23]}) - $signed({2'b00, zbias});
+      ma = {1'b0, f[22:0]} + 24'h400;
+      if (ma > 24'h7fffff) begin ex = ex + 10'sd1; ma = {1'b0, ma[22:0]} >> 1; end
+      ma = ma >> 11;
+      if (f[31])                zval = 16'h0000;
+      else if (ex < -10'sd12)   zval = 16'h0000;
+      else if (ex < 10'sd0)     zval = 16'({4'd1, ma[11:0]} >> (-ex));
+      else if (ex < 10'sd15)    zval = {4'(ex + 10'sd1), ma[11:0]};
+      else                      zval = 16'hffff;
+    end
+  endfunction
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      qst <= Q_IDLE; qi <= 2'd0; clip_in_valid <= 1'b0; hzmin <= 32'd0;
-      dbg_nonfinite <= 16'd0; pj_wait <= 10'd0; dbg_pj_lost <= 16'd0;
+      qst <= Q_IDLE; qi <= 2'd0; clip_in_valid <= 1'b0; hzmin <= 32'd0; hzmax <= 32'd0;
+      zprev <= 32'h5011B5EA; hzkey <= 16'd0;   // 1e10, as render_frame_start sets it
+      dbg_nonfinite <= 16'd0; dbg_behind <= 16'd0; pj_wait <= 10'd0; dbg_pj_lost <= 16'd0;
       cvalid <= 1'b0;
       for (int k = 0; k < 4; k++) begin csx[k] <= 16'sd0; csy[k] <= 16'sd0; end
       for (int k = 0; k < 4; k++) begin
@@ -403,8 +455,12 @@ module m2_geometry (
         // A refused polygon is still ACCEPTED from the engine -- poly_ready is
         // high here -- it simply goes no further. Refusing to accept it would
         // stall the engine instead of the clipper and fix nothing.
-        Q_IDLE: if (poly_valid && poly_bad) begin
-          dbg_nonfinite <= dbg_nonfinite + 16'd1;
+        Q_IDLE: if (poly_valid && (poly_bad || zc_behind)) begin
+          // R246: the reference sets raster->polygon_z BEFORE it culls, so a
+          // culled polygon still decides what a later "old value" reads.
+          zprev <= zsel_c;
+          if (poly_bad) dbg_nonfinite <= dbg_nonfinite + 16'd1;
+          else          dbg_behind    <= dbg_behind + 16'd1;
           cvalid <= 1'b0;                        // R217: a refused polygon breaks the chain
         end else if (poly_valid) begin
           hx[0] <= v0x; hy[0] <= v0y; hz[0] <= v0z;
@@ -412,7 +468,10 @@ module m2_geometry (
           hx[2] <= v2x; hy[2] <= v2y; hz[2] <= v2z;
           hx[3] <= v3x; hy[3] <= v3y; hz[3] <= v3z;
           pcol  <= poly_col;                       // R222
-          hzmin <= fmin(fmin(v0z, v1z), fmin(v2z, v3z));
+          hzmin <= zmin_c;
+          hzmax <= zmax_c;
+          zprev <= zsel_c;                       // R246: carried, as raster->polygon_z is
+          hzkey <= zval(zsel_c, zadj_e);
           qi    <= 2'd0;
           qst   <= Q_ISS;
         end
@@ -490,7 +549,7 @@ module m2_geometry (
     .in_x3(hx[3]), .in_y3(hy[3]), .in_z3(hz[3]),
     .in_sx0(sx[0]), .in_sy0(sy[0]), .in_sx1(sx[1]), .in_sy1(sy[1]),
     .in_sx2(sx[2]), .in_sy2(sy[2]), .in_sx3(sx[3]), .in_sy3(sy[3]),
-    .in_col(pcol), .in_z(hzmin), .in_moire(1'b0),
+    .in_col(pcol), .in_z({16'd0, hzkey}), .in_moire(1'b0),   // R246: the reference's 16-bit z value
     .mul_req(mul_req[2]), .mul_a(mul_a[2]), .mul_b(mul_b[2]),
     .mul_gnt(mul_gnt[2]), .mul_rsp(mul_rsp[2]), .mul_res(mul_res),
     .add_req(add_req[2]), .add_a(add_a[2]), .add_b(add_b[2]), .add_sub(add_sub[2]),
