@@ -14255,6 +14255,21 @@ mutation fails it: removing the arm gives 4.00 misses per tile, blocking hits
 behind the fill gives a 45-cycle hit, removing the re-look returns the other
 glyph's word.
 
+**MEASURED ON THE BOARD, `build/fix3d25` s18, 240 s of attract:**
+
+    glyph cache, per frame:  hits 20,103   misses 694 (max 1,930)   95.7%
+                             sibling fills 694 -- exactly one per miss
+                             scanline overruns 12 (max 55) of 384 x 4
+
+Three things follow. The sibling fill RUNS: one fill per miss is the mechanism
+working exactly as designed, not a number that could have come from anywhere
+else. The hit rate on real content is 95.7%, not the 82.6% this file has
+claimed since the cache was written -- that was a bench figure and the bench
+does not play the game. And the overruns are 12 a frame, not the 27 of 384 the
+header assumed; they are real but they are three percent of scanlines.
+
+The original text follows, and the numbers in it are bench numbers.
+
 NOT YET MEASURED ON THE BOARD, and the numbers above are bench numbers. The
 cache's hit and miss counters have existed since it was written and NOTHING HAS
 EVER READ THEM on hardware, so the 82.6% in its header is a bench figure too.
