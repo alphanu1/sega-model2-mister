@@ -13525,3 +13525,34 @@ pair caches (`-GPAIR_EN=1`), with the bench serving their port the way
 m2_sdram does -- the pair taken by incrementing the column INSIDE the row,
 so a row's last dword pairs with the row's first. That is the configuration
 no desk model had, and it is what the board runs.
+
+**R244 -- THE PAIR CACHE BECOMES AN OSD SWITCH, AND THE BEAM'S MISSED BANDS
+REACH THE UART.** `build/fix3d8` (R240+R241+R242) on the board: the cars
+drive correctly for the first time -- the user's words, "cars are driving
+like they are meant to, no more flipping" -- which confirms R242's `bno`
+on hardware. What remains, reported by eye: scenery still wrong or
+missing, cars flashing on and off between frames, and the lighting
+swinging between blown-out and completely black from scene to scene.
+
+The board's own numbers for that capture: every list completes its 48
+bands (bands_done 51 in every steady slice), the store drops NOTHING,
+quads per frame run 272-1,584 against the store's 2,048, and the collect
+holds the list ONE extra frame almost always (hold 1 in 91-105 of every
+112 frames). So the renderer is not losing quads and not running out of
+bands; the list is simply taking two frames to build, and what is drawn
+alternates.
+
+Two instruments for the next board run:
+1. `O[25],Pair cache,On,Off` -- `m2_pair_cache` gains a `bypass` input that
+   keeps no copy at all, so every read is a port read. R214 put the cache
+   there for throughput and R240 found it serving the wrong dword at a row
+   edge; what remains is a copy that can go STALE when the CPU or the TGP
+   rewrites a dword between two consecutive reads of a stream, which is
+   exactly the shape of "an object is there one frame and gone the next".
+   The switch answers in seconds what another build would answer in 25
+   minutes. The bench checks the bypassed stream costs one trip per word
+   and reads correctly (4,451 checks).
+2. The H record's `dropped` field was 16 bits and always zero; its high
+   half now carries `r3d_missed[7:0]`, the count of scanlines whose band
+   had no ready buffer when the beam arrived. That is the direct measure
+   of the stripes, and it has never been on the wire.

@@ -138,6 +138,14 @@ localparam CONF_STR = {
 	// does not, the fault is downstream and no amount of fixing the matrix
 	// would ever have shown a picture.
 	"O[22:21],Texture brightness,100%,75%,50%,25%;",
+	// THE PAIR CACHE, ON THE BOARD, WITHOUT A BUILD (R244). R214 put a
+	// one-entry cache in front of the walker's and the engine's port so a
+	// sequential stream costs half the port trips; R240 found it served the
+	// wrong dword at a row edge. Whether what remains -- a copy that can go
+	// stale when the CPU or the TGP rewrites the dword between two reads --
+	// is behind the scenery and the flashing is a question the board can
+	// answer in seconds with this off, and only in 25 minutes without it.
+	"O[25],Pair cache,On,Off;",
 	// A bar outside the visible area is indistinguishable from a bar that did
 	// not draw. This packs all four well inside any plausible crop, so a side
 	// missing in BOTH layouts is missing for a real reason.
@@ -2590,18 +2598,26 @@ wire [23:0] eng_mem_idx  = (eng_mem_space == 2'd1) ? (eng_mem_addr[23] ? {9'd0, 
                          ? {9'd0, eng_mem_addr[14:0]}      // 32K-dword window
                          : {2'd0, eng_mem_addr[21:0]};
 
+// R229: an OSD bit reaches the datapath through three flops, never raw.
+reg pair_off_s0, pair_off_s1, pair_off_s2;
+always @(posedge clk_sys) begin
+	pair_off_s0 <= status[25];
+	pair_off_s1 <= pair_off_s0;
+	pair_off_s2 <= pair_off_s1;
+end
+
 // R214: one pair cache per port-4 reader. Indexed by the dword address so a
 // new object's stream that happens to begin one past the last cannot hit a
 // stale copy. The port side is the registered glue exactly as before.
 wire [SDR_AW:1] geo_wa = GAME_BUFFER + SDR_AW'({geo_rd_addr, 1'b0});
 wire [SDR_AW:1] eng_wa = eng_base + SDR_AW'({eng_mem_idx, 1'b0});
 m2_pair_cache #(.AW(SDR_AW-1), .COL_BITS(SDR_COL)) u_geo_pc (
-	.clk(clk_sys), .rst_n(mem_rst_n),
+	.clk(clk_sys), .rst_n(mem_rst_n), .bypass(pair_off_s2),
 	.req(geo_rd_req), .idx(geo_wa[SDR_AW:2]), .ack(geo_rd_ack_c), .data(geo_rd_data_c),
 	.p_req(gc_req), .p_idx(gc_idx), .p_ack(geo_rd_ack_r), .p_dout(p4_dout_r)
 );
 m2_pair_cache #(.AW(SDR_AW-1), .COL_BITS(SDR_COL)) u_eng_pc (
-	.clk(clk_sys), .rst_n(mem_rst_n),
+	.clk(clk_sys), .rst_n(mem_rst_n), .bypass(pair_off_s2),
 	.req(eng_mem_req), .idx(eng_wa[SDR_AW:2]), .ack(eng_mem_ack_c), .data(eng_mem_data_c),
 	.p_req(ec_req), .p_idx(ec_idx), .p_ack(eng_mem_ack_r), .p_dout(p4_dout_r)
 );     // 4M-dword ROM window
@@ -4027,7 +4043,7 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	.b_data((wedge_have && wedge_ph == 2'd1) ? wedge_q[95:64]
 	      : (wedge_have && wedge_ph == 2'd2) ? wedge_q[31:0]
 	      : sw_pend                         ? {8'd0, sw_out}                    // R238: the fold
-	      : {r3d_dropped[15:0], wedge_slot, wedge_n[6:0], r3d_quads[11:4]}),   // R235: wedge count where tiny was
+	      : {r3d_missed[7:0], r3d_dropped[7:0], wedge_slot, wedge_n[6:0], r3d_quads[11:4]}),   // R244: missed bands where the always-zero half of dropped was
 	.a_tag(8'h43),
 	.b_tag((wedge_have && wedge_ph == 2'd1) ? 8'h57 : (wedge_have && wedge_ph == 2'd2) ? 8'h58
 	     : sw_pend ? 8'h53 : 8'h48),   // 'W', 'X', 'S', 'H'          // 'C' copro in_pushed:out_pushed | TGP retires:pc

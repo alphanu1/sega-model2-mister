@@ -21,7 +21,7 @@ int main(int argc, char **argv) {
   std::vector<uint32_t> mem(1 << 16);
   for (size_t i = 0; i < mem.size(); i++) mem[i] = 0xA5000000u ^ (uint32_t(i) * 0x9E3779B1u);
   auto tick = [&]() { d->clk = 1; d->eval(); d->clk = 0; d->eval(); };
-  d->clk = 0; d->rst_n = 0; d->req = 0; d->idx = 0; d->p_ack = 0; d->p_dout = 0;
+  d->clk = 0; d->rst_n = 0; d->req = 0; d->idx = 0; d->p_ack = 0; d->p_dout = 0; d->bypass = 0;
   tick(); tick(); d->rst_n = 1; tick();
 
   // The port model: rising-edge request, LAT cycles, then ack held while the
@@ -87,6 +87,14 @@ int main(int argc, char **argv) {
   read_stream(edge, "row edge, odd start");
   std::vector<uint32_t> edge2; for (uint32_t i = 3070; i < 3100; i++) edge2.push_back(i);
   read_stream(edge2, "row edge, even start");
+
+  // R244: with `bypass` raised the cache keeps nothing, so a sequential run
+  // costs one port trip per word and every word is still the memory's.
+  d->bypass = 1;
+  std::vector<uint32_t> byp; for (uint32_t i = 5000; i < 5060; i++) byp.push_back(i);
+  long t_byp = read_stream(byp, "sequential, bypassed");
+  CHECK(t_byp == (long)byp.size(), "bypassed stream cost %ld trips for %zu words", t_byp, byp.size());
+  d->bypass = 0;
 
   std::printf("m2_pair_cache: checks=%d fails=%d\n", checks, fails);
   std::printf(fails ? "FAIL\n" : "PASS\n");

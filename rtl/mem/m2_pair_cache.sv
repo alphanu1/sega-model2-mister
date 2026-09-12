@@ -41,6 +41,7 @@ module m2_pair_cache #(
   input  logic          clk,
   input  logic          rst_n,
   // the requester
+  input  logic          bypass,   // R244: keep no copy at all, so every read is a port read
   input  logic          req,
   input  logic [AW-1:0] idx,
   output logic          ack,
@@ -92,7 +93,7 @@ module m2_pair_cache #(
       // half for the requester, the high half kept as the next index.
       if (p_ack && !p_ack_d) begin
         data      <= p_dout[31:0];
-        have      <= ~&idx[COL_BITS-2:0];      // the last dword of a row: its pair wrapped
+        have      <= ~&idx[COL_BITS-2:0] && !bypass;   // the last dword of a row: its pair wrapped
 
         have_idx  <= idx + 1'b1;
         have_data <= p_dout[63:32];
