@@ -20,6 +20,7 @@
 #   python3 tools/decode_uart.py capture.txt
 import sys,collections
 C=[];H=[];W=[];SW=[]
+T=[]     # R251: light-table records
 pend=None
 for line in open(sys.argv[1],errors='replace'):
     p=line.split()
@@ -28,6 +29,7 @@ for line in open(sys.argv[1],errors='replace'):
     except: continue
     if p[0]=='C': C.append((a,d))
     elif p[0]=='H': H.append((a,d))
+    elif p[0]=='T': T.append((a,d))     # R251: the light table
     elif p[0]=='S': SW.append(((a>>8)&0x1f, a&0xff, d&0xffffff))   # R238: region, runs, fold
     elif p[0]=='W': pend=(a,d)
     elif p[0]=='X' and pend is not None:
@@ -52,6 +54,20 @@ if SW:
 if W:
     print(f'WEDGES caught on the board: {len(W)} streamed; last count {(H[-1][1]>>4)&0x7f if H else 0} (slot {"1" if H and (H[-1][1]>>11)&1 else "0"})')
     for q in W[:12]: print('   (%d,%d) (%d,%d) (%d,%d) (%d,%d)' % q)
+if T:
+    # The walker's 32-entry light table, as the board holds it. Luminance is
+    # |dot| * diffuse + ambient, so an entry of 0/0 renders every polygon that
+    # asks for it black.
+    seen = T[-1][0]
+    ent = {}
+    for a, d in T:
+        ent[(d >> 24) & 0x1f] = ((d >> 16) & 0xff, (d >> 8) & 0xff)
+    cmds = T[-1][1] & 0xff
+    print('LIGHT TABLE (R251): geo op 0x06 seen %d times; entries written mask %08X (%d of 32)'
+          % (cmds, seen, bin(seen).count('1')))
+    print('   ', ' '.join('%d:%d/%d%s' % (k, v[0], v[1], '' if (seen >> k) & 1 else '!')
+                          for k, v in sorted(ent.items())))
+    print('    (! = the list never wrote it, so it reads 0/0 and every polygon using it is black)')
 print(' slice  ready ms(med,max)  bands_done         hold(frames-1 per list)      luma med/min/max  black%  wedges(max)  quads x16 (med,max)')
 for i in range(0,n,k):
     sl=H[i:i+k]

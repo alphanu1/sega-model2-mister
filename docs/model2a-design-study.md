@@ -13746,3 +13746,37 @@ minimum.
 sort on -2. With the unsigned comparison restored all three fail (42 checks,
 3 fails), so the bench now sees it. The desk never had it because every
 directed quad in that file sat wholly in front of the eye.
+
+**R251/R252 -- THE LIGHT TABLE GOES ON THE WIRE, AND THE MEAN IS A ROLLING
+AVERAGE BECAUSE A DIVIDE COSTS THIRTY-ONE NANOSECONDS.** R249 put the
+frame's mean luminance and its black-polygon share on the UART, and
+`build/fix3d13` answered the question the user had asked three times:
+there are frames on the board where the black share reads 100 -- every
+polygon at luminance zero. That is the "all models black, as if there is
+no light" scene, measured at last. Luminance is |dot(normal,light)| *
+diffuse + ambient, so all-zero means the entry those polygons ask for
+holds diffuse 0 AND ambient 0, and an entry the display list never wrote
+reads exactly that: the engine's 32-entry MLAB comes up zero and has no
+reset. R251 streams the table itself as 'T' records -- a bit per entry the
+walker has written, the raw diffuse and ambient of one entry per frame
+rotating through all 32, and the walker's count of geo op 0x06 -- so the
+board can say whether the entries in use were ever written.
+
+R249's arithmetic was wrong in a way that cost a build. It summed the
+luminance and divided by the polygon count at frame_start: two variable
+divides, 22 bits by 14, combinational into a register. Quartus built them
+faithfully -- +876 ALM, and EVERY seed of `build/fix3d13` missed setup on
+the i960's clock by 31 to 33 ns against a 40 ns period. The comment beside
+it read "this is one divider, off the critical path, and it only has to be
+right once a frame"; a divide that feeds a flop IS the path, and "once a
+frame" describes when the result is USED, not when the logic is evaluated.
+Replaced by a single-pole IIR, `acc <= acc - (acc >> 6) + sample`, which
+settles at 64 times the mean of the last ~64 polygons so the mean is
+`acc[13:6]`: one subtract, one shift, one add. The black share is the same
+filter fed 255 for a zero-luminance polygon.
+
+And the deploy chain pushed that unusable bitstream to the board. Its
+fallback -- "if the picked seed has no .rbf, take any other seed that has
+one" -- ignored the seed rule that had just rejected all three. The board
+came up not running, and the user said so before any capture could. The
+fallback now only considers seeds the rule accepted.
