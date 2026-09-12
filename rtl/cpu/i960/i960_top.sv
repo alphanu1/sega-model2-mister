@@ -1302,7 +1302,18 @@ module i960_top (
                   ip <= ip_next + d_disp; ts <= T_FETCH;
                 end
                 default: begin
-                  if (d_op[7:3] == 5'b00010) begin                        // b<cc>
+                  if (d_op == 8'h10) begin                                // bno
+                    // BRANCH IF NO CONDITION BIT IS SET (R242). The b<cc> form
+                    // below ANDs the condition code with the opcode's low three
+                    // bits, which for bno (cond 000) is never true, so bno was
+                    // NEVER TAKEN. The reference tests `!(m_AC & 7)` for 0x10,
+                    // as faultno and testno do here. Daytona's object loop at
+                    // 0x84e0 is `chkbit; bno`, and every object took the fall-
+                    // through; that is the divergence from the reference after
+                    // the first matrix readback. Like faultno, no IP mask.
+                    ip <= (~|ac[2:0]) ? (ip_next + d_disp) : ip_next;
+                    ts <= T_FETCH;
+                  end else if (d_op[7:3] == 5'b00010) begin                // b<cc>
                     // bxx masks the IP after a taken branch; plain b does not.
                     ip <= (|(ac[2:0] & d_op[2:0]))
                             ? ((ip_next + d_disp) & 32'hffff_fffc) : ip_next;

@@ -565,11 +565,18 @@ int main(int argc, char **argv) {
              | (o2 << 7) | (rng() % 32);
         if (rng() & 1) insn |= 0x0800;                 // src1 literal
         if (rng() & 1) insn |= 0x1000;                 // src2 literal
-      } else if (cls == 1) {                           // b / bal
+      } else if (cls == 1) {                           // b / bal / b<cc>
         // Short forward displacements only, so the target stays inside the
         // program rather than landing in unwritten memory every time.
+        // HALF OF THEM ARE b<cc> (0x10-0x17), bno INCLUDED. The conditional
+        // forms were never generated, and bno (cond 000, taken when NO
+        // condition bit is set) was "never taken" in both the RTL and this
+        // bench's transcription until R242 -- the class of bug a lockstep
+        // against a transcription cannot see until the instruction is in the
+        // mix. The condition code is whatever the preceding compares left.
         const uint32_t d = 4u + 4u * (rng() % 6);
-        insn = (((rng() & 1) ? 0x0bu : 0x08u) << 24) | ((d + 4u) & 0x00ffffffu);
+        const uint32_t op = (rng() & 1) ? (0x10u + (rng() % 8)) : ((rng() & 1) ? 0x0bu : 0x08u);
+        insn = (op << 24) | ((d + 4u) & 0x00ffffffu);
       } else if (cls == 16) {                          // bx / balx
         // MEMA ABSOLUTE, with the target inside the program. These reach their
         // destination through the MEM-format address generator, so an ordinary

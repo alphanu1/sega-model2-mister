@@ -13451,3 +13451,41 @@ Makefile; `test_m2_raster_fill` and `test_m2_raster_band` now exist.
 (~260 in MLAB or logic) and a second divider. To carry to the board as
 `build/fix3d8`; the measure is the user's stripes, and the H record's
 bands_done stays as the frame-level check.
+
+**R242 -- THE i960's `bno` WAS NEVER TAKEN, AND THAT IS WHERE THE GAME
+LEAVES THE REFERENCE (R232).** Established from the reference outward, not
+from a theory: the coprocessor's arithmetic is exonerated first (every
+stateless command, and 0x1a keyed by its 0x12 and 0x41 by its 0x40, gives
+the reference's output for the same inputs across ~50,000 transactions,
+`$S/copro_stateless.py`), then a from-boot coprocessor trace aligned
+against a MAME tap of frames 0-3800 -- clean NVRAM as well, to exclude the
+settings -- agrees RECORD FOR RECORD through the first 0x11 matrix
+readback (bench frame 248, MAME frame 162) and diverges on the very next
+command: the reference issues 0x05/0x00/0x12 (the next object's set-up),
+ours issues 0x1a (a point transform) 39 times. MAME's frame-162 instruction
+trace (`tools/mame_i960_frame_trace.lua`) and its disassembly put both
+sides in the same routine at 0x84e0: per object, `ldos 0x2e(r6)` (type),
+`ld 0x501520[r3*4]`, `chkbit r4,r3`, `bno 0x85f8`. Our PC trace of the
+same call (new: `M2_BOOT_PCFRAME=<video frame>` gates the bench's PC
+trace by frame): 39 iterations both sides, bno TAKEN 39/39 in MAME, 0/39
+here. Not the data -- the branch.
+
+`i960_top.sv` executed every b<cc> (0x10-0x17) as "taken if `ac & cond`
+is non-zero". For bno the condition field is 000, so it could never be
+taken. The i960 defines bno as taken when NO condition bit is set --
+MAME's `if(!(m_AC & 7))` for 0x10, the same special case this core already
+made for faultno (0x18) and testno (0x20). The lockstep could not see it:
+`sim/i960/i960_cpu_ref.h`, the transcription the RTL is checked against,
+carried the identical `bxx(insn, d.op & 7)` for 0x10, and the generator
+never emitted a conditional CTRL branch at all (class 1 was `b`/`bal`
+only). Fixed in the RTL (0x10 branches on `~|ac[2:0]`, no IP mask, as
+faultno), in the transcription, and in the generator (half of class 1 is
+now 0x10-0x17); `test_i960_top` passes, 0 mismatches, with bno in the mix.
+`lint_top` clean. Reaches the board with `build/fix3d8`.
+
+What it explains: every `bno` in the game fell through. In this loop that
+sends every object down the "transform and score" path; the same
+`chkbit; bno` idiom is how the program tests flag bits, so the crash state
+that plays continuously (R232) is the expected face of it. The desk check
+is the same trace alignment past frame 248 (`$S/long/trace2.txt`, running);
+the board check is the cars.

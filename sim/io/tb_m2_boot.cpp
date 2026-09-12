@@ -1260,8 +1260,8 @@ int main(int argc, char **argv) {
       else if (a >= 0x884000 && a <= 0x887fff)               { if (d->obs_copro_stall) { kind = 0; g_rd_pend = true; } else { kind = 'R'; val = d->obs_io_rdata; } }
       else if (a == 0x980000 && d->obs_io_we)                  kind = 'C';
       if (kind)
-        std::fprintf(g_copro_trace, "%c %llu %08x %08x\n", kind,
-                     (unsigned long long)g_frames_done, a, val);
+        std::fprintf(g_copro_trace, "%c %llu %08x %08x %08x\n", kind,
+                     (unsigned long long)g_frames_done, a, val, (unsigned)d->obs_ip);   // the fifth field: the i960's IP (R232)
     }
     // THE ATAN JOB, SCORED (R212). Function 0x0a takes two floats and returns
     // atan2(b, a) in 1/65536 turns. Every completed 0x0a exchange is checked
@@ -1285,9 +1285,23 @@ int main(int argc, char **argv) {
     if (g_copro_trace && g_frames_done >= copro_from && g_rd_pend && c) {
       if (!d->obs_io_sel) g_rd_pend = false;
       else if (!d->obs_copro_stall) {
-        std::fprintf(g_copro_trace, "R %llu %08x %08x\n", (unsigned long long)g_frames_done,
-                     (unsigned)d->obs_io_addr, (unsigned)d->obs_io_rdata);
+        std::fprintf(g_copro_trace, "R %llu %08x %08x %08x\n", (unsigned long long)g_frames_done,
+                     (unsigned)d->obs_io_addr, (unsigned)d->obs_io_rdata, (unsigned)d->obs_ip);
         g_rd_pend = false;
+      }
+    }
+    // 'P' RECORDS: one per POP of the coprocessor's output FIFO, counted from
+    // m2_copro's dbg_out_popped, so the result stream is logged where the data
+    // leaves the queue and not where the CPU-domain sampling sees it. R232:
+    // the 'R' records were one short on 0x0a/0x0f/0x1a and carried duplicates
+    // against the reference, which is either the trace or the hardware.
+    if (g_copro_trace && g_frames_done >= copro_from) {
+      static uint16_t pop_prev = 0;
+      const uint16_t pn = (uint16_t)d->obs_copro_out;
+      if (pn != pop_prev) {
+        std::fprintf(g_copro_trace, "P %llu %08x %08x %08x %u\n", (unsigned long long)g_frames_done,
+                     (unsigned)d->obs_io_addr, (unsigned)d->obs_io_rdata, (unsigned)d->obs_ip, (unsigned)(uint16_t)(pn - pop_prev));
+        pop_prev = pn;
       }
     }
     // THE STATE BYTE THE BOARD'S TOP-LEVEL LOOP TESTS. The loop at 0x1240 reads
@@ -1481,6 +1495,10 @@ int main(int argc, char **argv) {
     if (const char *pfr = std::getenv("M2_BOOT_PCFROM"))
       pcfrom = std::strtoull(pfr, nullptr, 10);
   }
+  // M2_BOOT_PCFRAME=<video frame>: trace the PCs of that frame and the two
+  // after it, so a divergence found in the coprocessor trace at a frame can be
+  // read back as instructions without knowing the instruction count (R232).
+  const uint64_t pcframe = std::getenv("M2_BOOT_PCFRAME") ? std::strtoull(std::getenv("M2_BOOT_PCFRAME"), nullptr, 10) : ~0ull;
   uint32_t pc_acc_prev = 0;
 
   // WHERE THE CPU ACTUALLY IS, over the whole run.
@@ -1670,7 +1688,8 @@ int main(int argc, char **argv) {
     }
     if (d->dbg_acc != pc_acc_prev) {
       const uint32_t ip = uint32_t(d->dbg_ip);
-      if (pctr && d->dbg_acc >= pcfrom) std::fprintf(pctr, "%08x\n", (unsigned)ip);
+      if (pctr && d->dbg_acc >= pcfrom && (pcframe == ~0ull || (g_frames_done >= pcframe && g_frames_done < pcframe + 3)))
+        std::fprintf(pctr, "%08x\n", (unsigned)ip);
       if (pchit_addr && ip == pchit_addr) ++pchit_n;
       ++pc_hist[ip >> 12];
       ++retired;

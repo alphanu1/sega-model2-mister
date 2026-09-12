@@ -344,7 +344,15 @@ struct Cpu {
           }
           case 0x0b: rf.r[0x1e] = ip_next; IP = ip_next + disp24(insn); break; // bal
           default:
-            if (d.op >= 0x10 && d.op <= 0x17) { IP = ip_next; bxx(insn, d.op & 7); }
+            if (d.op == 0x10) {
+              // bno: BRANCH IF NO CONDITION BIT IS SET. MAME tests `!(m_AC & 7)`
+              // for 0x10 and does not mask the IP; the bxx form below, with a
+              // mask of 0, would never branch -- which is what this transcription
+              // and the RTL both did until R242 (Daytona's `chkbit; bno` loop).
+              IP = ip_next;
+              if (!(AC & 7)) IP += disp24(insn);
+            }
+            else if (d.op >= 0x11 && d.op <= 0x17) { IP = ip_next; bxx(insn, d.op & 7); }
             else if (d.op == 0x18) {
               // faultno is a conditional branch in the reference, and does not
               // mask the IP the way bxx does.
