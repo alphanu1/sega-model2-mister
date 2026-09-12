@@ -153,15 +153,36 @@ module m2_raster_fill (
     yb_next = sy[ps2p1[1:0]];
   end
 
-  // ---------------------------------------------------------------- divider
-  logic               div_start;
-  logic signed [31:0] div_num, div_den;
+  // ---------------------------------------------------------------- dividers
+  // TWO, because the two edge slopes are independent and the fill needs both
+  // before it can decide anything. Issued one after the other through a single
+  // divider they were 49% of the fill unit's time on the reference's peak frame
+  // (tb_m2_raster3d, frame 1020: DIVAW+DIVBW 49%, the span walk 31%), and on
+  // the board the slowest band each second ran 1.3-1.7 beam slots and went up
+  // late - a bar with no 3D across the screen. Issuing both at once halves
+  // that wait for a divider's worth of ALM.
+  logic               div_start, divb_start;
+  logic signed [31:0] div_num, div_den, divb_num, divb_den;
   logic               div_ready, div_valid, div0_unused;
-  logic signed [31:0] div_quo;
+  logic               divb_ready, divb_valid, div0b_unused;
+  logic signed [31:0] div_quo, divb_quo;
+  logic               got_a, got_b;   // which slopes have come back this segment
+
+  // ONE TABLE FOR BOTH. See m2_recip_rom.
+  logic [8:0]  rom_a_addr, rom_b_addr;
+  wire [31:0]  rom_a_data, rom_b_data;
+
+  m2_recip_rom u_recip (
+    .clk(clk),
+    .a_addr(rom_a_addr), .a_data(rom_a_data),
+    .b_addr(rom_b_addr), .b_data(rom_b_data)
+  );
 
   m2_raster_div u_div (
     .clk       (clk),
     .rst_n     (rst_n),
+    .rom_addr  (rom_a_addr),
+    .rom_data  (rom_a_data),
     .in_valid  (div_start),
     .num       (div_num),
     .den       (div_den),
@@ -169,6 +190,20 @@ module m2_raster_fill (
     .out_valid (div_valid),
     .quo       (div_quo),
     .div0      (div0_unused)
+  );
+
+  m2_raster_div u_divb (
+    .clk       (clk),
+    .rst_n     (rst_n),
+    .rom_addr  (rom_b_addr),
+    .rom_data  (rom_b_data),
+    .in_valid  (divb_start),
+    .num       (divb_num),
+    .den       (divb_den),
+    .ready     (divb_ready),
+    .out_valid (divb_valid),
+    .quo       (divb_quo),
+    .div0      (div0b_unused)
   );
 
   // ------------------------------------------------------------- multiplier
@@ -273,6 +308,11 @@ module m2_raster_fill (
       div_start  <= 1'b0;
       div_num    <= 32'sd0;
       div_den    <= 32'sd0;
+      divb_start <= 1'b0;
+      divb_num   <= 32'sd0;
+      divb_den   <= 32'sd0;
+      got_a      <= 1'b0;
+      got_b      <= 1'b0;
       span_valid <= 1'b0;
       span_y     <= 32'sd0;
       span_x0    <= 32'sd0;
@@ -286,8 +326,9 @@ module m2_raster_fill (
         sy[i] <= 32'sd0;
       end
     end else begin
-      div_start <= 1'b0;
-      quad_done <= 1'b0;
+      div_start  <= 1'b0;
+      divb_start <= 1'b0;
+      quad_done  <= 1'b0;
       line_case <= 1'b0;
       if (span_valid && span_ready) span_valid <= 1'b0;
 
@@ -367,44 +408,31 @@ module m2_raster_fill (
           state <= S_DIVA;
         end
 
+        // Both slopes at once. A side that does not need a new slope is
+        // marked collected up front; both dividers are idle here because the
+        // previous segment waited for both.
         S_DIVA: begin
-          if (need_a) begin
-            if (div_ready && !div_start) begin
+          if (div_ready && !div_start && divb_ready && !divb_start) begin
+            if (need_a) begin
               div_num   <= xa - px[ps1m1[1:0]];
               div_den   <= cury - ya_next;
               div_start <= 1'b1;
-              state     <= S_DIVAW;
             end
-          end else begin
-            state <= S_DIVB;
+            if (need_b) begin
+              divb_num   <= xb - px[ps2p1[1:0]];
+              divb_den   <= cury - yb_next;
+              divb_start <= 1'b1;
+            end
+            got_a <= !need_a;
+            got_b <= !need_b;
+            state <= S_DIVAW;
           end
         end
 
         S_DIVAW: begin
-          if (div_valid) begin
-            sla   <= div_quo;
-            state <= S_DIVB;
-          end
-        end
-
-        S_DIVB: begin
-          if (need_b) begin
-            if (div_ready && !div_start) begin
-              div_num   <= xb - px[ps2p1[1:0]];
-              div_den   <= cury - yb_next;
-              div_start <= 1'b1;
-              state     <= S_DIVBW;
-            end
-          end else begin
-            state <= S_DECIDE;
-          end
-        end
-
-        S_DIVBW: begin
-          if (div_valid) begin
-            slb   <= div_quo;
-            state <= S_DECIDE;
-          end
+          if (div_valid)  begin sla <= div_quo;  got_a <= 1'b1; end
+          if (divb_valid) begin slb <= divb_quo; got_b <= 1'b1; end
+          if ((got_a || div_valid) && (got_b || divb_valid)) state <= S_DECIDE;
         end
 
         // Which chain reaches its next vertex first decides how far this

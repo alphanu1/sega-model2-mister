@@ -610,16 +610,35 @@ obj_ccdc/Vm2_char_cdc: rtl/mem/m2_char_cdc.sv sim/mem/tb_m2_char_cdc.cpp
 	  --Mdir obj_ccdc -o Vm2_char_cdc -CFLAGS "-O2" \
 	  rtl/mem/m2_char_cdc.sv sim/mem/tb_m2_char_cdc.cpp
 
+# The filler against its C reference (152,025 quads, 31.6 M spans -- Model 1's
+# corpus, taken with the module). Never wired here before R241; the port of
+# the reciprocal divider is the first change that needed it.
+test_m2_raster_fill: obj_raster_fill/Vm2_raster_fill
+	@echo "== test m2_raster_fill (the quad filler against its C reference)"
+	@./obj_raster_fill/Vm2_raster_fill $(TEST_ARGS)
+
+obj_raster_fill/Vm2_raster_fill: rtl/video/m2_raster_fill.sv rtl/video/m2_raster_div.sv rtl/video/m2_recip_rom.sv sim/video/tb_m2_raster_fill.cpp
+	$(VBUILD) --top-module m2_raster_fill -Wno-UNUSEDSIGNAL -Wno-WIDTHTRUNC -Wno-TIMESCALEMOD -Wno-UNUSEDPARAM --Mdir obj_raster_fill -o Vm2_raster_fill -CFLAGS "-O2" \
+	  rtl/video/m2_raster_fill.sv rtl/video/m2_raster_div.sv rtl/video/m2_recip_rom.sv sim/video/tb_m2_raster_fill.cpp
+
+test_m2_raster_band: obj_raster_band/Vm2_raster_band
+	@echo "== test m2_raster_band (the band buffer)"
+	@./obj_raster_band/Vm2_raster_band $(TEST_ARGS)
+
+obj_raster_band/Vm2_raster_band: rtl/video/m2_raster_band.sv sim/video/tb_m2_raster_band.cpp
+	$(VBUILD) --top-module m2_raster_band -Wno-UNUSEDSIGNAL -Wno-TIMESCALEMOD -Wno-UNUSEDPARAM --Mdir obj_raster_band -o Vm2_raster_band -CFLAGS "-O2" \
+	  rtl/video/m2_raster_band.sv sim/video/tb_m2_raster_band.cpp
+
 test_m2_raster3d: obj_raster3d/Vm2_raster3d
 	@echo "== test m2_raster3d (a list every second frame is drawn every frame)"
 	@./obj_raster3d/Vm2_raster3d $(TEST_ARGS)
 
 obj_raster3d/Vm2_raster3d: rtl/video/m2_raster3d.sv rtl/video/m2_quad_store.sv rtl/video/m2_raster_fill.sv \
-                           rtl/video/m2_raster_div.sv rtl/video/m2_raster_band.sv sim/video/tb_m2_raster3d.cpp
+                           rtl/video/m2_raster_div.sv rtl/video/m2_recip_rom.sv rtl/video/m2_raster_band.sv sim/video/tb_m2_raster3d.cpp
 	$(VBUILD) --top-module m2_raster3d -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-WIDTHEXPAND -Wno-PINCONNECTEMPTY -Wno-VARHIDDEN -Wno-WIDTHTRUNC \
 	  --Mdir obj_raster3d -o Vm2_raster3d -CFLAGS "-O2" \
 	  rtl/video/m2_raster3d.sv rtl/video/m2_quad_store.sv rtl/video/m2_raster_fill.sv \
-	  rtl/video/m2_raster_div.sv rtl/video/m2_raster_band.sv sim/video/tb_m2_raster3d.cpp
+	  rtl/video/m2_raster_div.sv rtl/video/m2_recip_rom.sv rtl/video/m2_raster_band.sv sim/video/tb_m2_raster3d.cpp
 
 test_m2_pair_cache: obj_pair_cache/Vm2_pair_cache
 	@echo "== test m2_pair_cache (the port's second dword serves the next read)"

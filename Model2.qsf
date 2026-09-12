@@ -776,6 +776,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_raster3d.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_quad_store.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_raster_fill.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_raster_div.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_recip_rom.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_raster_band.sv
 
 # ---- AREA FOR THE CORE, SPEED FOR THE FRAMEWORK'S VIDEO OUTPUT ----

@@ -13412,3 +13412,42 @@ the controller does; two streams across the edge, one of each parity,
 it (4,270 checks). Both instances in Model2.sv pass SDR_COL. To carry to
 the board in `build/fix3d7` after `fix3d6`'s fitter finishes; the wedge
 count over 240 s is the measure (304 on fix3d5).
+
+**R241 -- THE BAND STRIPES ARE THE FILL'S PER-QUAD SETUP, AND MODEL 1 HAD
+ALREADY HALVED IT.** The board's H records (fix3d5/6) say every list's 48
+bands complete within the frame (bands_done 51) and nothing is dropped, so
+the stripes the user sees through a car -- rows of 2D where the 3D should
+be -- are not a frame-level shortfall but a BAND-level one: a band buffer
+is released to the beam whether or not its fill has finished, and with
+NBUF=4 the fill can lead the beam by at most four bands. The beam gives a
+band 8 lines = 315 us = 15,700 core cycles. Measured at the desk
+(`$S/fillcyc`, the filler alone with span_ready high, one band as the
+replay presents it): a 2x2 quad cost 55 cycles, a 6x4 rectangle 57, a
+small skewed quad 117, a quad reaching the band from above 92. The store's
+replay scan (one quad a cycle, ~1,000-2,000 a band) runs in parallel and
+is not the limit; the filler is, at 130-280 quads a band. A car is a few
+hundred quads in two or three bands. The cost is setup, not pixels: the
+band buffer already paints four pixels a cycle; the edge-slope divides --
+sixteen cycles each, two or more a quad, serial -- are.
+
+Model 1 measured the same ("the divider IS the fill", then "47% of the
+worst band's fill") and fixed it twice since our copy at `085a00e`: a
+reciprocal table (`m1_recip_rom`, recip[d] = ceil(2^32/d)) gives the
+quotient as (n * recip) >> 32 with one multiply-compare correction, exact
+for any 32-bit numerator, four cycles instead of nineteen; and the fill
+issues both edge divides at once (`u_div`, `u_divb`). Both ported here as
+`m2_raster_div`, `m2_raster_fill` and the new `m2_recip_rom` at Model 1
+`a7abcbf`, renamed only, with ONE change: the table is 512 entries in
+MLAB, not 1,024 in M10K -- this design's 553 M10K are all in use (R221),
+and its vertices reach the store clipped to the viewport, so a scanline
+difference is under 384; |den| >= 512 still takes the restoring path.
+
+Measured after the port, same cases: 2x2 20 cycles (was 55), 6x4 23 (57),
+skewed 53 (117), from-above 43 (92). Bit-identical: the filler's own
+corpus, 152,025 quads and 31.68 M spans against the C reference, 0 fails
+-- the bench had been carried since the copy but never wired into the
+Makefile; `test_m2_raster_fill` and `test_m2_raster_band` now exist.
+`test_m2_raster3d` 8/8, `lint_top` clean. The ALM cost is the table
+(~260 in MLAB or logic) and a second divider. To carry to the board as
+`build/fix3d8`; the measure is the user's stripes, and the H record's
+bands_done stays as the frame-level check.
