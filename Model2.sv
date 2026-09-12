@@ -528,6 +528,18 @@ wire [1:0] tex_lum_s2 = {tl1_s[2], tl0_s[2]};
 always_ff @(posedge clk_sys) nowalk_s <= {nowalk_s[1:0], status[20]};
 reg [2:0] wrate_s;   // R256/R229: the OSD bit reaches the datapath through three flops
 always_ff @(posedge clk_sys) wrate_s <= {wrate_s[1:0], status[26]};
+// R265: THE WALK TRIGGER WAS THE ONE OSD BIT TAKEN RAW. Every other option in
+// this core reaches the datapath through three flops (R229) and this one went
+// straight from `status` into the geometrizer's mode select. The board showed
+// what that costs: selecting "After flip" -- which should make EVERY walk a
+// flip walk -- left the trigger mix unchanged at 754 flip against 13,146
+// fallback, the same ratio as the mode it was switched from.
+reg [2:0] wtrig0_s, wtrig1_s;
+always_ff @(posedge clk_sys) begin
+	wtrig0_s <= {wtrig0_s[1:0], status[23]};
+	wtrig1_s <= {wtrig1_s[1:0], status[24]};
+end
+wire [1:0] wtrig_s2 = {wtrig1_s[2], wtrig0_s[2]};
 // R256: declared here, assigned below where the video control register and the
 // frame counter are declared -- Quartus 17.0 rejects a reference to a name it
 // has not seen, and that cost build/fix3d13 outright.
@@ -2660,7 +2672,7 @@ wire [19:0] geo_dbg_rp, geo_dbg_wp;
 m2_geo #(.AW(SDR_AW), .DEPTH(128)) u_geo (
 	.clk(clk_sys), .rst_n(mem_rst_n),
 	.wr_ctl(geo_wr_ctl), .wr_setwp(geo_wr_setwp), .wr_setrp(geo_wr_setrp),
-	.trig_mode(status[24:23]),
+	.trig_mode(wtrig_s2),
 	.wr_push(geo_wr_push), .wdata(geo_push_word),
 	.rd_wp(geo_rd_wp), .rd_rp(geo_rd_rp),
 	.base_buffer(GAME_BUFFER),

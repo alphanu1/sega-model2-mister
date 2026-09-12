@@ -14067,3 +14067,26 @@ DEFERRED, deliberately: bilinear filtering, mipmap level selection and the
 microtexture blend. Point sampling first, and the per-pixel divide is the
 throughput question to measure rather than guess -- the reciprocal table
 R241 brought in from Model 1 is the obvious instrument.
+
+**R265 -- THE WALK TRIGGER WAS THE ONE OSD BIT TAKEN RAW, AND 94% OF WALKS
+ARE THE FALLBACK.** R263's counters, first capture (`build/fix3d21`):
+
+    walks started by the game's list-ready write: 1,009
+    walks started by the vblank fallback:        14,821
+
+So the walk almost never runs on the game saying "the list is ready". It runs
+on the fallback -- vblank with no such write for four frames -- which carries
+no promise that the list is finished, and that is where the 280-nop walks and
+the corrupted light table come from. Worth noting what the fallback IS: the
+reference walks at vblank unconditionally, so the fallback is the reference's
+own behaviour, and it works there because MAME's i960 finishes building the
+list well inside a frame. Ours does not always.
+
+Asked to try `O[24:23]` = "After flip" -- vblank, but only when a list-ready
+write has been seen since the last walk -- the board came back with the mix
+UNCHANGED: 754 against 13,146, the same ratio. The reason is in Model2.sv:
+`.trig_mode(status[24:23])` takes the OSD bits raw, while every other option
+here goes through three flops (R229). It is now synchronised like the rest.
+Until this is on the board the four trigger modes have never actually been
+selectable, which also means every earlier conclusion drawn from switching
+them is void.
