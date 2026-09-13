@@ -130,6 +130,7 @@ module m2_raster_fill (
   localparam logic [4:0] S_PF_Q2    = 5'd23;   // dv/dx and dv/dy
   localparam logic [4:0] S_PF_Q2W   = 5'd24;
   localparam logic [4:0] S_PF_B     = 5'd25;   // the plane's value at (0,0)
+  localparam logic [4:0] S_MINMAX   = 5'd26;   // R301: the vertex tournament, registered
 
   localparam logic [1:0] EM_WALK = 2'd0;   // swapf-ordered edge pair
   localparam logic [1:0] EM_RAW  = 2'd1;   // xa, xb in chain order (fill_line tail)
@@ -421,6 +422,22 @@ module m2_raster_fill (
     pmax_c = (sy[pmax23] > sy[pmax01]) ? pmax23 : pmax01;
   end
 
+  // R301: THE TOURNAMENT'S ANSWER, LATCHED. Measured on build/perf2/s12, the
+  // fill's critical path was 18.019 ns of an 18.577 ns budget and every one of
+  // the twenty worst clk_sys paths was in this module. The path is `sy` ->
+  // LessThan3 (a ripple compare on THIRTY-TWO bits) -> Mux387 -> Equal227 ->
+  // emit_mode: the two-level min/max tournament below, whose second level's
+  // operands are muxed by the first level's comparators, then `sy[pmin_c] ==
+  // sy[pmax_c]` on top of that, all feeding the FSM's next state in one cycle.
+  //
+  // It was recomputed EVERY cycle for values that are constant for the whole
+  // quad -- sy[] is written once at S_IDLE and never again -- so S_MINMAX
+  // spends one cycle latching the answer and S_CLASSIFY reads registers. The
+  // fill spends hundreds of cycles per quad; one more is nothing.
+  logic signed [31:0] symin, symax, xlo_r, xhi_r;
+  logic [1:0]         pmin_r;
+  logic               td_r;
+
   logic signed [31:0] xlo01, xlo23, xlo_c, xhi01, xhi23, xhi_c;
   always_comb begin
     xlo01 = (px[1] < px[0]) ? px[1] : px[0];
@@ -520,6 +537,9 @@ module m2_raster_fill (
       span_moire <= 1'b0;
       quad_done  <= 1'b0;
       line_case  <= 1'b0;
+      symin <= 32'sd0; symax <= 32'sd0;
+      xlo_r <= 32'sd0; xhi_r <= 32'sd0;
+      pmin_r <= 2'd0;  td_r  <= 1'b0;
       for (int i = 0; i < 4; i++) begin
         sx[i] <= 32'sd0;
         sy[i] <= 32'sd0;
@@ -547,7 +567,7 @@ module m2_raster_fill (
             pf_second <= 1'b0;
             dudx <= 16'sd0; dudy <= 16'sd0; dvdx <= 16'sd0; dvdy <= 16'sd0;
             // An untextured quad pays nothing for any of this.
-            state <= in_tex[0] ? S_PF_D : S_CLASSIFY;
+            state <= in_tex[0] ? S_PF_D : S_MINMAX;
           end
         end
 
@@ -570,7 +590,7 @@ module m2_raster_fill (
             end else begin
               // No plane through these three points: draw it flat.
               tex_ok <= 1'b0;
-              state  <= S_CLASSIFY;
+              state  <= S_MINMAX;
             end
           end else begin
             den_sh <= den_sh_c;          // R289: encode the determinant once
@@ -630,31 +650,42 @@ module m2_raster_fill (
                   - ((32'(dvdx * $signed(sx[fa][15:0]))) <<< 8)
                   - ((32'(dvdy * $signed(sy[fa][15:0]))) <<< 8);
           tex_ok <= 1'b1;
-          state  <= S_CLASSIFY;
+          state  <= S_MINMAX;
         end
 
         // One cycle of pure comparison: wireframe, top and bottom vertices, and
         // the three whole-quad rejects. Order matters — the flat case is taken
         // before the viewport rejects, because fill_line does its own y test.
+        S_MINMAX: begin
+          // One cycle of pure comparison, and now the ONLY cycle that does it.
+          td_r   <= two_distinct;
+          pmin_r <= pmin_c;
+          symin  <= sy[pmin_c];
+          symax  <= sy[pmax_c];
+          xlo_r  <= xlo_c;
+          xhi_r  <= xhi_c;
+          state  <= S_CLASSIFY;
+        end
+
         S_CLASSIFY: begin
-          if (two_distinct) begin
+          if (td_r) begin
             line_case <= 1'b1;
             quad_done <= 1'b1;
             state     <= S_IDLE;
-          end else if (sy[pmin_c] == sy[pmax_c]) begin
-            flat_lo   <= xlo_c;
-            flat_hi   <= xhi_c;
-            cury      <= sy[pmin_c];
+          end else if (symin == symax) begin
+            flat_lo   <= xlo_r;
+            flat_hi   <= xhi_r;
+            cury      <= symin;
             emit_mode <= EM_FLAT;
             state     <= S_FLAT;
-          end else if ((sy[pmin_c] > view_y2) || (sy[pmax_c] <= view_y1)) begin
+          end else if ((symin > view_y2) || (symax <= view_y1)) begin
             quad_done <= 1'b1;
             state     <= S_IDLE;
           end else begin
-            cury   <= sy[pmin_c];
-            limy   <= (sy[pmax_c] > view_y2) ? view_y2 : sy[pmax_c];
-            ps1    <= {1'b1, pmin_c};      // pmin + 4
-            ps2    <= {1'b0, pmin_c};
+            cury   <= symin;
+            limy   <= (symax > view_y2) ? view_y2 : symax;
+            ps1    <= {1'b1, pmin_r};      // pmin + 4
+            ps2    <= {1'b0, pmin_r};
             need_a <= 1'b1;
             need_b <= 1'b1;
             state  <= S_START1;

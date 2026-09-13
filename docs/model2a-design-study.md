@@ -15354,3 +15354,38 @@ different route. `pf_wait` has to be self-healing: while it is set and no
 prefetch is in flight, either serve from the held pair if it now covers the
 index, or clear it and fall back to a demand. Whichever form it takes, R295 does
 not go back in on a bench pass -- it earns its place on the board.
+
+**R301 -- THE FILL'S 18 ns IS A 32-BIT VERTEX TOURNAMENT FEEDING A STATE
+DECISION, AND IT IS RECOMPUTED EVERY CYCLE FOR A CONSTANT.**
+
+Measured on build/perf2/s12 with quartus_sta against the placed netlist: all
+twenty of the worst clk_sys-internal paths are in m2_raster_fill, the worst at
++1.423 ns of a 20 ns period -- 18.019 ns of data path, a ceiling of about 54 MHz,
+and the reason clk_sys cannot be raised for anybody. The full path report names
+it exactly:
+
+    sy[2][1] -> LessThan3~4 ~0 ~37 ~33 ~29 ~25 ~21 ~17 ~13 ~9 ~5
+             -> Mux387 -> Equal227 -> ... -> emit_mode.EM_WALK
+
+Twelve levels of ripple compare, then a mux, then another compare, into the
+FSM's next state. The source is the min/max tournament at m2_raster_fill.sv:416,
+`pmin_c = (sy[pmin23] < sy[pmin01]) ? pmin23 : pmin01` -- two levels over four
+THIRTY-TWO-BIT signed values whose second level's operands are muxed by the first
+level's comparators -- and then S_CLASSIFY tests `sy[pmin_c] == sy[pmax_c]` on
+top of it. `two_distinct` is a second such network over sx and sy feeding the
+same decision.
+
+All of it was combinational and recomputed every cycle, for values that CANNOT
+CHANGE: sx[] and sy[] are written once when the quad is latched at S_IDLE and
+never touched again for the life of that quad.
+
+S_MINMAX is one cycle that latches the answer -- td_r, pmin_r, symin, symax,
+xlo_r, xhi_r -- and S_CLASSIFY now reads registers only. The three entries into
+S_CLASSIFY route through it. The fill spends hundreds of cycles per quad, so one
+more is noise, and tb_m2_raster_fill's 152,295 checks pass with 0 fails: the
+spans are identical, which is the point -- this is a timing change and must not
+be anything else.
+
+The next binding path is not predicted here. It is measured after the build,
+with the same ten-second report against the new netlist, because the whole value
+of that technique is not having to guess which path is next.
