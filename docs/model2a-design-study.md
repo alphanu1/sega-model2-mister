@@ -15599,3 +15599,42 @@ M10K work and the texel cache do not depend on it. It went in because it was
 asked for, on the same day as five other changes, and it cost a board cycle that
 the 80 MHz work needed. Multi-game support is a clean, self-contained project
 for a day when the renderer is not mid-surgery.
+
+**R308 -- R305 IS REVERTED. Black screen, and the all-zero telemetry is a
+CONSEQUENCE of it rather than a second fault.**
+
+spd2/s31 met the seed rule -- hold +0.214, clk_mem +0.247, clk_sys +0.761, only
+the HDMI PLL negative -- and the board showed nothing. The capture reads:
+
+    tgp  : 0000:75437        never left PC 0
+    SDRAM: bus busy 0.0%     nothing served, all ports
+    WALK: walks started 0    LIGHT TABLE: 0 of 32
+    GLYPH: hits 1696, misses 0, "hit rate 100%"
+
+That pattern is ONE chain, not four faults: a stalled char cache produces no
+pixels, no pixels means no video and no vblank, the game waits on a vblank that
+never comes, the TGP sits at PC 0 with nothing pushed to it, no master asks the
+memory for anything, and every R294 counter -- which latches on a video frame
+pulse -- holds its reset value. Reading "bus busy 0.0%" as a memory fault would
+send the search to the controller, and it nearly did.
+
+R305 split the char cache's lookup into S_LOOK (capture) and S_DECIDE (act on
+registers). tb_m2_char_cache passed 10,393 checks with the memory transaction
+count unchanged at 288, and the board stopped. The specific defect is NOT
+identified -- the state renumbering is safe (only S_INIT is ever compared and
+the state is not exported), the steal/re-look pairing still lines up cycle for
+cycle, and v_ack's lifecycle is unchanged. What IS true is that a lookup now
+takes one cycle longer, and m2_tile_fetch is the consumer.
+
+*The pattern, for the third time today.* R295 passed 4,516 bench checks and
+deadlocked the geometry. R297 passed 105,598 and corrupted every port. R305
+passed 10,393 and stopped the video. Three changes, three clean benches, three
+boards that did not run. These benches drive a module with the traffic their
+author imagined; the board drives it from four other units whose timing nobody
+designed. A bench pass is necessary here and it is not evidence.
+
+*And a scoping error of mine.* R305 went in while r303 -- the build that was
+meant to confirm the R297 revert -- was still fitting, so it rode into spd2
+beside R301 and R304 without its own board test. That is the same stacking that
+turned R295 into a two-cycle bisect, made on the same day, after saying it would
+not be.
