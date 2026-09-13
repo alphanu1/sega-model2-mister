@@ -14596,3 +14596,28 @@ The alternative, kept for when the picture is right and the cost is what is
 left: make `m2_texel` a two-stage pipeline that accepts an address every cycle
 instead of taking two cycles a lookup and a third to see the request drop.
 That is the change that would make one texel per pixel affordable.
+
+**R280 -- THE TEXEL CACHE'S SWEEP WOULD HAVE FROZEN THE PICTURE DURING EVERY
+UPLOAD.** `m2_texel` answers no request while it clears its tags, and the game
+uploads its textures in bursts of TENS OF THOUSANDS of words -- 62,721 of them
+in the boot bench's window -- every one raising `inval`. Re-entering the sweep
+per write means the cache never serves, the span walk waits in T_FETCH, the
+band never finishes, and the picture stops for the length of the upload. That
+is R266's mistake in a different memory: invalidate-everything is the correct
+answer to the wrong question.
+
+A write now marks the cache DIRTY and the sweep runs at the next FRAME START.
+The cost is at most one frame of stale texels; the alternative is a frozen
+picture whenever a texture loads.
+
+AND THE SPAN WALK HAS ITS OWN TIMEOUT, because the reasoning above is exactly
+the kind that is right until it is not. 511 cycles without an acknowledge and
+the texel is taken as 0xF -- which is what unwritten memory reads anyway -- and
+the walk continues. `m2_texel` already gives up on a memory that never answers
+(R275); this covers the case where the unit is alive but deaf.
+
+Also here: the texel scales the polygon's colour as `(c * i + c) >> 8`, not
+`(c * i) >> 8`, so a full texel returns the colour EXACTLY. Without the `+ c`,
+turning textures on darkens every pixel by a step even where the texture is
+solid -- 0xff becomes 0xfe -- which is the kind of difference that gets
+attributed to the texture rather than to the arithmetic.

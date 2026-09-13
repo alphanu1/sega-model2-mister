@@ -108,7 +108,7 @@ int main(int argc, char **argv) {
       const uint32_t u = uint32_t((U0 + DU * int32_t(i) * STEP) >> 10);
       const uint32_t v = uint32_t((V0 + DV * int32_t(i) * STEP) >> 10);
       const int t = texel_of(u, v);
-      const uint32_t want = uint32_t((0xff * ((t << 4) | t)) >> 8) * 0x010101u;
+      const uint32_t want = uint32_t((0xff * ((t << 4) | t) + 0xff) >> 8) * 0x010101u;
       ck("group colour is the texel at its first pixel", got[i].col, want);
     }
     ck("textured pixels counted", d->dbg_texpix, groups * STEP);
@@ -149,6 +149,28 @@ int main(int argc, char **argv) {
     bool ordered = true;
     for (size_t i = 0; i < got.size(); ++i) if (got[i].x0 != X0 + int(i) * STEP2) ordered = false;
     ck("stalled: in order, none repeated", ordered, 1);
+  }
+
+  // 4. A TEXEL FETCH THAT NEVER ANSWERS. m2_texel goes deaf while it sweeps
+  //    its tags, and this walk is inside the band fill: a wait here is a band
+  //    that never completes and a picture that stops.
+  {
+    got.clear();
+    d->in_valid = 1; d->in_y = 40; d->in_x0 = 2; d->in_x1 = 3;
+    d->in_col = 0xffffff; d->in_u = 0; d->in_v = 0;
+    d->in_dudx = 0; d->in_dvdx = 0;
+    d->in_tex = 0x000001; d->in_tex_en = 1;
+    tick();
+    d->in_valid = 0;
+    // The memory is gone: answer nothing at all.
+    for (int i = 0; i < 4000 && got.empty(); ++i) {
+      d->out_ready = 1;
+      if (d->out_valid) got.push_back({int(d->out_y), int(d->out_x0), int(d->out_x1), d->out_col});
+      d->eval();
+      d->clk = 0; d->eval(); d->clk = 1; d->eval();
+    }
+    ck("a dead texel fetch does not stop the band", long(got.size()) > 0, 1);
+    if (!got.empty()) ck("and the pixel takes 0xF", got[0].col, 0xffffffu);
   }
 
   std::printf("m2_span_tex: checks=%ld fails=%ld\n", checks, fails);

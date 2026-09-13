@@ -100,6 +100,12 @@ module m2_span_tex #(
   logic signed [31:0] u_r, v_r, du_r, dv_r;
   logic [23:0]        tex_r;
   logic [3:0]         texel_r;
+  // A FETCH THAT NEVER ANSWERS MUST NOT STOP THE BAND. m2_texel has its own
+  // timeout on the memory, but it also goes deaf while it sweeps its tags, and
+  // this walk is inside the band fill -- a wait here is a band that never
+  // completes and a picture that stops. On expiry the texel is taken as 0xF,
+  // which is what unwritten memory reads anyway.
+  logic [8:0]         to_cnt;
 
   // The stored coordinate is quarter-texels with sixteen fractional bits; the
   // fetch wants texels with eight, which is ten bits to the right. Negative
@@ -122,8 +128,11 @@ module m2_span_tex #(
   function automatic logic [7:0] scale(input logic [7:0] c, input logic [7:0] i);
     logic [15:0] p;
     begin
-      p = 16'(c) * 16'(i);
-      scale = p[15:8];                     // the low half is the rounding we skip
+      // (c * i + c) >> 8, so a full texel -- i = 255 -- returns c EXACTLY
+      // rather than c * 255/256. Without the +c, turning textures on darkens
+      // every pixel by a step even where the texture is solid.
+      p = 16'(c) * 16'(i) + 16'(c);
+      scale = p[15:8];
     end
   endfunction
   /* verilator lint_on UNUSEDSIGNAL */
@@ -161,7 +170,7 @@ module m2_span_tex #(
       st <= T_IDLE;
       y_r <= '0; x_r <= '0; x1_r <= '0; col_r <= '0; moire_r <= 1'b0;
       u_r <= '0; v_r <= '0; du_r <= '0; dv_r <= '0; tex_r <= '0; texel_r <= '0;
-      e_valid <= 1'b0; e_col <= '0; e_x <= '0;
+      e_valid <= 1'b0; e_col <= '0; e_x <= '0; to_cnt <= '0;
       dbg_texpix <= '0; dbg_texnz <= '0;
     end else begin
       if (e_valid && out_ready) e_valid <= 1'b0;
@@ -181,10 +190,18 @@ module m2_span_tex #(
           st      <= T_FETCH;
         end
 
-        T_FETCH: if (tx_ack) begin
-          texel_r <= tx_texel;
-          if (tx_texel != 4'hf && !(&dbg_texnz)) dbg_texnz <= dbg_texnz + 1'd1;
-          st      <= T_EMIT;
+        T_FETCH: begin
+          to_cnt <= to_cnt + 1'd1;
+          if (tx_ack) begin
+            texel_r <= tx_texel;
+            if (tx_texel != 4'hf && !(&dbg_texnz)) dbg_texnz <= dbg_texnz + 1'd1;
+            to_cnt  <= '0;
+            st      <= T_EMIT;
+          end else if (&to_cnt) begin
+            texel_r <= 4'hf;
+            to_cnt  <= '0;
+            st      <= T_EMIT;
+          end
         end
 
         T_EMIT: if (!e_valid || out_ready) begin

@@ -264,13 +264,34 @@ module m2_raster3d #(
     .dbg_texpix(dbg_texpix), .dbg_texnz(dbg_texnz)
   );
 
+  // R280: THE SWEEP HAPPENS ONCE A FRAME, NOT ONCE A WRITE.
+  //
+  // m2_texel answers no request while it is clearing its tags, and the game
+  // uploads its textures in bursts of tens of thousands of words -- every one
+  // of them raising `inval`. Re-entering the sweep per write means the cache
+  // never serves, the span walk waits in T_FETCH, the band never finishes, and
+  // the picture stops for the length of the upload. That is R266's mistake
+  // exactly: invalidate-everything is the correct answer to the wrong
+  // question.
+  //
+  // So a write marks the cache DIRTY and the sweep runs at the next frame
+  // start. The cost is at most one frame of stale texels; the alternative is a
+  // frozen picture whenever a texture is loaded.
+  logic tex_dirty;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n)          tex_dirty <= 1'b0;
+    else if (frame_start) tex_dirty <= 1'b0;
+    else if (tex_inval)   tex_dirty <= 1'b1;
+  end
+  wire tex_sweep = tex_dirty && frame_start;
+
   m2_texel #(.AW(TEX_AW)) u_texel (
     .clk(clk), .rst_n(rst_n),
     .base_s0(tex_base0), .base_s1(tex_base1),
     .req(tex_req), .ack(tex_ack), .tex(tex_state),
     .u(tex_u), .v(tex_v), .texel(tex_texel),
     .m_req(tex_m_req), .m_addr(tex_m_addr), .m_ack(tex_m_ack), .m_data(tex_m_data),
-    .inval(tex_inval),
+    .inval(tex_sweep),
     .dbg_hits(dbg_texhit), .dbg_misses(dbg_texmiss), .dbg_lost(dbg_texlost)
   );
 
