@@ -82,6 +82,7 @@ module m2_raster3d #(
   input  logic [63:0]     tex_m_data,
   output logic [31:0]     dbg_texpix, dbg_texhit, dbg_texmiss, dbg_texnz,
   output logic [15:0]     dbg_texlost,
+  output logic [15:0] dbg_texsweep,
 
   output logic [15:0] dbg_quads,
   output logic [15:0] dbg_dropped,
@@ -212,6 +213,68 @@ module m2_raster3d #(
   logic signed [15:0] fl_span_dudx, fl_span_dvdx;   // R286: 8.8
   logic [23:0] fl_span_tex;
   logic        fl_span_tex_en;
+
+  // R310: A SPAN FIFO, BECAUSE THE TEXEL FETCH BLOCKS EVERY SPAN BEHIND IT.
+  //
+  // m2_span_tex asserts `in_ready` only in T_IDLE, so while a TEXTURED span
+  // waits in T_FETCH the fill cannot hand over ANY span -- and a flat span,
+  // which needs nothing from the texel cache and passes through
+  // combinationally once it gets in, queues behind a texture fetch it has no
+  // relationship with. That is why enabling textures takes the 3D away rather
+  // than merely making the textures flicker: the fetch is serialised into the
+  // one path all geometry crosses (R309). About 14,600 misses a frame at
+  // ~280 ns each is ~4.1 ms of a 17.38 ms frame spent blocked.
+  //
+  // The FIFO lets the fill keep walking while a fetch is outstanding. Storage
+  // is M10K via m2_fifo_m10k, which the coprocessor's input queue already
+  // uses: 242 bits of payload needs seven blocks and 256 entries of depth come
+  // free with them, where a register FIFO of any useful depth costs ALM this
+  // design does not have (40,971 of 41,910 used).
+  //
+  // TWO THINGS m2_fifo_m10k DOES THAT HAVE TO BE HANDLED HERE, not discovered.
+  // Its `full` is a DROP signal for the TGP, because the i960 must never be
+  // held; spans must never be dropped, so it becomes backpressure --
+  // `fl_span_ready = !sq_full` -- which m2_raster_fill already honours. And it
+  // has a deliberate two-cycle bubble after a pop, harmless only because the
+  // fill walks edges over several cycles per scanline and cannot produce one
+  // span per cycle anyway.
+  logic spantex_busy;
+
+  localparam int unsigned SQ_DW = 242;
+  logic [SQ_DW-1:0] sq_din, sq_q;
+  logic             sq_full, sq_qv, sq_rdy;
+  logic [15:0]      sq_count;
+  logic [31:0]      sq_dropped;   // must stay zero: a dropped span is a hole
+
+  // Backpressure, NOT a drop: m2_fifo_m10k's `full` retires the TGP's pushes
+  // silently, and a silently dropped span is a hole in the picture.
+  assign fl_span_ready = !sq_full;
+
+  assign sq_din = { fl_span_y, fl_span_x0, fl_span_x1,
+                    fl_span_u, fl_span_v,
+                    fl_span_dudx, fl_span_dvdx,
+                    fl_span_col, fl_span_tex,
+                    fl_span_moire, fl_span_tex_en };
+
+  m2_fifo_m10k #(.DW(SQ_DW), .DEPTH(256)) u_span_q (
+    .clk(clk), .rst_n(rst_n),
+    .push(fl_span_valid && !sq_full), .din(sq_din),
+    .pop(sq_qv && sq_rdy), .q(sq_q), .q_valid(sq_qv),
+    .full(sq_full), .count(sq_count), .dropped(sq_dropped)
+  );
+
+  // Unpacked, in the same order.
+  wire signed [31:0] sq_y    = sq_q[241:210];
+  wire signed [31:0] sq_x0   = sq_q[209:178];
+  wire signed [31:0] sq_x1   = sq_q[177:146];
+  wire signed [31:0] sq_u    = sq_q[145:114];
+  wire signed [31:0] sq_v    = sq_q[113:82];
+  wire signed [15:0] sq_dudx = sq_q[81:66];
+  wire signed [15:0] sq_dvdx = sq_q[65:50];
+  wire        [23:0] sq_col  = sq_q[49:26];
+  wire        [23:0] sq_tex  = sq_q[25:2];
+  wire               sq_moire  = sq_q[1];
+  wire               sq_tex_en = sq_q[0];
   // R275: the textured span, expanded a pixel at a time. tx_* is the span as
   // the band buffers see it -- identical in shape, one pixel wide when the
   // polygon wears a texture.
@@ -251,12 +314,12 @@ module m2_raster3d #(
   // ------------------------------------------------- R275: the texture walk
   m2_span_tex u_spantex (
     .clk(clk), .rst_n(rst_n),
-    .in_valid(fl_span_valid), .in_ready(fl_span_ready),
-    .in_y(fl_span_y), .in_x0(fl_span_x0), .in_x1(fl_span_x1),
-    .in_col(fl_span_col), .in_moire(fl_span_moire),
-    .in_u(fl_span_u), .in_v(fl_span_v),
-    .in_dudx(fl_span_dudx), .in_dvdx(fl_span_dvdx),
-    .in_tex(fl_span_tex), .in_tex_en(fl_span_tex_en),
+    .in_valid(sq_qv), .in_ready(sq_rdy), .busy(spantex_busy),
+    .in_y(sq_y), .in_x0(sq_x0), .in_x1(sq_x1),
+    .in_col(sq_col), .in_moire(sq_moire),
+    .in_u(sq_u), .in_v(sq_v),
+    .in_dudx(sq_dudx), .in_dvdx(sq_dvdx),
+    .in_tex(sq_tex), .in_tex_en(sq_tex_en),
     .out_valid(tx_span_valid), .out_ready(tx_span_ready),
     .out_y(tx_span_y), .out_x0(tx_span_x0), .out_x1(tx_span_x1),
     .out_col(tx_span_col), .out_moire(tx_span_moire),
@@ -293,7 +356,8 @@ module m2_raster3d #(
     .u(tex_u), .v(tex_v), .texel(tex_texel),
     .m_req(tex_m_req), .m_addr(tex_m_addr), .m_ack(tex_m_ack), .m_data(tex_m_data),
     .inval(tex_sweep),
-    .dbg_hits(dbg_texhit), .dbg_misses(dbg_texmiss), .dbg_lost(dbg_texlost)
+    .dbg_hits(dbg_texhit), .dbg_misses(dbg_texmiss), .dbg_lost(dbg_texlost),
+    .dbg_sweeps(dbg_texsweep)
   );
 
   // RGB888 to RGB565 on the way in, as the reference does: the colour is
@@ -604,7 +668,14 @@ module m2_raster3d #(
         C_REPLAY: cst <= C_FILL;
         C_FILL: begin
           if (fl_in_valid && fl_in_ready) cst <= C_FILLW;
-          else if (!qs_out_valid && !qs_replay_busy) cst <= C_DONE;
+          // R310: AND THE SPAN PATH MUST BE EMPTY. The FIFO decouples the fill
+          // from the texel fetch, so the quad store running dry says nothing
+          // about whether the spans it produced have been painted. Leaving
+          // early paints them into the next band, which tb_m2_raster3d caught
+          // as "a frame with no new list painted 2214, the previous 2009".
+          else if (!qs_out_valid && !qs_replay_busy
+                   && !sq_qv && sq_count == 16'd0 && !spantex_busy
+                   && tx_span_ready) cst <= C_DONE;   // and the band has painted the last one
         end
         C_FILLW: if (fl_quad_done) cst <= C_FILL;
         C_DONE: begin

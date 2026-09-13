@@ -4333,7 +4333,7 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	      : (tps_ph == 3'd3)                  ? {geo_walk_flip[7:0], geo_walk_fb[7:0], geo_walk_unknown[7:0], geo_dropped[7:0]}   // R255/R263
 	      : (tps_ph == 3'd2)                  ? {cc_f_f, vid_ovr_frame}         // R269: sibling fills : scanlines that overran, last frame
 	      : (tps_ph == 3'd4)                  ? {tx_h_f, tx_n_f}                // R275: texel hits : texels that were not 0xF
-	      : (tps_ph == 3'd5)                  ? {tx_m_f, 16'd0}                 // R294: texel misses beside the bus figures
+	      : (tps_ph == 3'd5)                  ? {tx_m_f, tex_sweep}             // R294 texel misses; R310 whole-cache sweeps
 	      : (tps_ph == 3'd6)                  ? {bwl_tex[20:5], 16'd0}          // R294: texel fetch waiting
 	      : {lum_mean_f, lum_zpc_f, wedge_slot, wedge_n[6:0], r3d_quads[11:4]}),   // R249: the frame's mean luminance and its black-polygon percentage, where the always-zero drop count and the free-running miss count were
 	.a_tag(8'h43),
@@ -5516,6 +5516,7 @@ wire [31:0] tex_pixels, tex_hits, tex_misses, tex_nz;
 // R292: port 3 is the glyph cache's alone again; the ownership lock that
 // shared it is in git, one commit back.
 wire [15:0] tex_lost;
+wire [15:0] tex_sweep;   // R310: whole-cache clears, to separate cold starts from thrash
 
 // R293: THREE BAND BUFFERS, NOT FOUR, AND THE TEXEL CACHE GETS THE BLOCKS.
 //
@@ -5549,7 +5550,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(3),
 	.tex_m_req(tex_m_req), .tex_m_addr(tex_m_addr),
 	.tex_m_ack(tex_m_ack), .tex_m_data(tex_m_data),
 	.dbg_texpix(tex_pixels), .dbg_texhit(tex_hits), .dbg_texmiss(tex_misses),
-	.dbg_texlost(tex_lost), .dbg_texnz(tex_nz),
+	.dbg_texlost(tex_lost), .dbg_texsweep(tex_sweep), .dbg_texnz(tex_nz),
 	.q_moire(1'b0), .q_end(q3d_end),
 	.scan_clk(clk_sys), .scan_x(vid_x), .scan_y(vid_y),
 	.scan_col(r3d_col), .scan_hit(r3d_hit),

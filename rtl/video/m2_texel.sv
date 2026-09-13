@@ -45,7 +45,11 @@
 
 module m2_texel #(
   parameter int unsigned AW       = 25,
-  // R304: 2048 LINES x 64 BITS = 16 KB, UP FROM 512 LINES / 4 KB.
+  // R310: BACK TO 512 LINES / 4 KB, and the reason is R309 rather than area.
+  // The cache was grown (R304) and regrown (R307) as though the texture problem
+  // were hit RATE. It is not: one miss BLOCKS every span behind it, so rate
+  // changes only how often the stall happens. The span FIFO absorbs the stall
+  // instead, and the 30 M10K this releases pay for it with 23 to spare.
   //
   // R307: 4096 WAS TRIED FIRST AND DID NOT FIT -- "device has 553 M10K blocks,
   // design needs more than 553". IHRES/OHRES frees BLOCKS, not bits: a shallow
@@ -64,7 +68,7 @@ module m2_texel #(
   // M10K of the 553 that were all in use; this takes about 22 of them.
   // Doubling the GLYPH cache instead was considered and rejected: it costs ~51
   // blocks, which do not exist, and Ben measured that 128 KB still overran.
-  parameter int unsigned IDX_BITS = 11
+  parameter int unsigned IDX_BITS = 9
 ) (
   input  logic             clk,
   input  logic             rst_n,
@@ -107,7 +111,14 @@ module m2_texel #(
   output logic [31:0]      dbg_misses,
   // Fetches abandoned on a memory that never answered. It should read zero;
   // if it does not, the port is the fault and not the picture.
-  output logic [15:0]      dbg_lost
+  output logic [15:0]      dbg_lost,
+  // R310: HOW OFTEN THE CACHE IS CLEARED, which nothing has ever measured.
+  // The sweep walks one line per cycle on any CPU write to a texture sheet, so
+  // a per-frame upload starts the cache COLD every frame -- and a cold cache
+  // and a thrashing cache produce the SAME hit-rate counter. Without this the
+  // cache-size question cannot be answered in either direction, which is why
+  // it was answered wrongly twice (R304, R307).
+  output logic [15:0]      dbg_sweeps
 );
 
   localparam int unsigned LINES    = 1 << IDX_BITS;
@@ -247,7 +258,7 @@ module m2_texel #(
       m_req <= 1'b0; m_addr <= '0; ack <= 1'b0; to_cnt <= '0; dbg_lost <= '0;
       last_v <= 1'b0; last_idx <= '0; last_tag <= '0;
       inval_d <= 1'b0; inval_pend <= 1'b0;
-      dbg_hits <= '0; dbg_misses <= '0;
+      dbg_hits <= '0; dbg_misses <= '0; dbg_sweeps <= '0;
     end else begin
       ack     <= 1'b0;
       inval_d <= inval;
@@ -263,6 +274,7 @@ module m2_texel #(
         end
 
         S_IDLE: if (inval_pend) begin
+          if (!(&dbg_sweeps)) dbg_sweeps <= dbg_sweeps + 1'd1;
           sweep  <= '0;
           last_v <= 1'b0;                 // the sweep drops the held line too
           st     <= S_INIT;

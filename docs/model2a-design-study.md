@@ -15686,3 +15686,49 @@ so a per-frame upload would start it cold every frame -- and R304/R307 made that
 sweep 4x longer. Thrashing and repeated sweeps produce the same hit-rate
 counter, and until one register separates them, the cache-size question cannot
 be answered in either direction.
+
+**R310 -- A SPAN FIFO DECOUPLES THE FILL FROM THE TEXEL FETCH. The texel cache
+goes back to 512 lines, and the sweep count is finally measured.**
+
+R309 established the fault: m2_span_tex asserts `in_ready` only in T_IDLE, so a
+textured span waiting in T_FETCH blocks EVERY span behind it, flat ones
+included. Three changes, one build:
+
+*The FIFO.* 242 bits of span payload through m2_fifo_m10k, the show-ahead M10K
+queue the coprocessor's input already uses -- seven blocks, and 256 entries of
+depth arrive free with the width. A register FIFO of useful depth was priced and
+refused: 16 entries is ~970 ALM against 939 free.
+
+Two properties of that module had to be handled rather than discovered. Its
+`full` is a DROP for the TGP, because the i960 must never be held; a dropped
+span is a hole in the picture, so here it becomes backpressure,
+`fl_span_ready = !sq_full`, which m2_raster_fill already honours. And it has a
+deliberate two-cycle bubble after a pop, harmless only because the fill walks
+edges over several cycles per scanline and cannot produce a span per cycle.
+
+*What the bench caught, and it is the whole value of it.* The first version
+failed with "a frame with no new list painted 2214, the previous 2009 -- the
+picture flashes". Decoupling means the QUAD STORE RUNNING DRY NO LONGER MEANS
+THE SPANS ARE PAINTED: they can still be queued, mid-fetch, or inside the band.
+A span that outlives its band is painted into the next one. C_DONE now waits for
+four things instead of one -- the store empty, the FIFO empty, m2_span_tex idle
+(a new `busy` output), and the band ready. Fixing only the first two took the
+error from 2214/2009 to 9272/9266, which is the useful shape of a partial fix:
+smaller, not gone.
+
+    pixels painted per frame, before:  0 8897 9266 9266 9272 9266   flashing
+                              after:   0 10824 10824 10824 10824    steady
+
+Steady AND higher: the fill now runs ahead instead of standing in the texel
+fetch's queue.
+
+*The texel cache returns to 512 lines.* It was grown to 4096 (R304) and cut to
+2048 (R307) as though the problem were hit RATE. Rate only changes how OFTEN the
+stall happens; it never addressed one miss halting everything behind it. That
+releases 30 M10K, the FIFO takes 7, and 23 are left over.
+
+*And the sweep counter, which should have existed before any of the sizing.*
+m2_texel clears one line per cycle on any CPU write to a texture sheet. A cache
+cleared every frame and a cache that thrashes produce THE SAME HIT RATE, so the
+size question was unanswerable in either direction -- and was answered wrongly
+twice. The count rides in the low half of the Z record, where 16'd0 was.

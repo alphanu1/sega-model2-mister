@@ -123,9 +123,19 @@ if Z or Z2:
     if Z:
         busy=[(a>>16)&0xffff for a,_ in Z]; cpu=[a&0xffff for a,_ in Z]
         txm=[(d>>16)&0xffff for _,d in Z]
+        # R310: the low half was 16'd0 and now carries m2_texel's whole-cache
+        # sweep count. A cache cleared every frame and a cache that thrashes
+        # give the SAME hit rate, and nothing separated them until this.
+        tsw=[d&0xffff for _,d in Z]
         print('SDRAM (R294): bus busy %.1f%% of the frame; the CPU port waits %.1f%%'
               % (100*med3(busy)/FR, 100*med3(cpu)/FR))
         print('    texel misses med %d a frame' % med3(txm))
+        if len(tsw) > 1:
+            d_sw = [b-a for a, b in zip(tsw, tsw[1:]) if b >= a]
+            print('    TEXEL CACHE SWEEPS (R310): %d total, med %d per sample'
+                  % (max(tsw)-min(tsw) if tsw else 0, med3(d_sw)))
+            print('    (a sweep clears every line, one per cycle, and answers nothing while it runs.')
+            print('     Frequent sweeps mean the cache is COLD, not thrashing, and size will not help.)')
     if Z2:
         geo=[(a>>16)&0xffff for a,_ in Z2]; chr_=[a&0xffff for a,_ in Z2]
         tex=[(d>>16)&0xffff for _,d in Z2]

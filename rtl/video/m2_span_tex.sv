@@ -69,6 +69,11 @@ module m2_span_tex #(
   input  logic               in_tex_en,
 
   // ---- span out, to the band buffers
+  // R310: A SPAN IS STILL INSIDE THIS UNIT. With a FIFO in front, the quad
+  // store running dry no longer means the spans have been painted -- they can
+  // still be queued or mid-fetch, and a span that outlives its band is painted
+  // into the NEXT one. The band sequencer waits on this.
+  output logic               busy,
   output logic               out_valid,
   input  logic               out_ready,
   output logic signed [31:0] out_y, out_x0, out_x1,
@@ -140,6 +145,7 @@ module m2_span_tex #(
 
   wire tex_now = in_tex_en && in_tex[0];
   wire idle    = (st == T_IDLE);
+  assign busy  = !idle || e_valid;
 
   // The registered half, used only while a textured span is being walked.
   logic               e_valid;
