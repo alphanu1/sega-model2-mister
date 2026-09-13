@@ -15142,3 +15142,67 @@ before the video path is moved. Note also that `m2_sdram_x2` is not a true CDC
 -- `clk_sys` is an exact /2 of `clk_mem` from the same PLL and the adapter is
 combinational with one registered `done` -- so moving the tile path to 100 MHz
 removes that adapter for the port rather than adding crossing cost.
+
+**R297 -- EVERY BINDING PATH IS IN m2_sdram, AND THE WORST IS THE ONE MODEL 1
+ALREADY FIXED. The arbiter's decision is now registered a cycle ahead.**
+
+Measured on build/perf2/s12 with quartus_sta against the placed netlist -- no
+rebuild, which is why this was worth doing before touching anything:
+
+    clk_mem  general[0]   -0.532   12 of 12 reported paths violated
+    clk_sys  general[1]   -0.065    1 of 12 violated
+
+All fifteen of the worst clk_mem paths are inside m2_sdram; nothing else in the
+design is close. Two families:
+
+    -0.532  rr_next[0]  -> port mux            skew -0.107
+    -0.500  dq_r[8]     -> p_dout[1][8]        skew -1.582
+    -0.484  dq_r[8]     -> p_dout[4][8]        skew -1.591
+    -0.477  tag_v[2]    -> mux                 skew -0.476
+
+The worst is `rr_next -> rotate -> priority encode -> rr_grant` and then
+rr_grant fanning out to an eleven-way mux on we_p and blen() before anything is
+registered: arbitration and the whole port mux in one cycle. Model 1 measured
+the same path on the same controller, called it "the worst path in the whole
+design, and the binding one", and split it by registering the decision one cycle
+ahead of dispatch with a re-check for staleness (m1_sdram.sv, a7abcbf). Ported
+here as arb_grant/arb_valid/arb_ok.
+
+The split is free in latency because the decision is only consumed at DISPATCH
+and a transfer occupies the controller for ten cycles or more. It is NOT free in
+throughput: tb_m2_sdram measures p0 sequential 0.302 -> 0.280 words/cyc. This is
+a TIMING change that buys the ability to clock up, not a throughput change --
+recorded because the obvious expectation is the opposite. 105,598 checks, 0
+fails, 0 violations, 0 tag_faults.
+
+*What the same measurement says about clocking the core up.* Per-module worst
+clk_sys-internal slack at the 20 ns period, and the ceiling each implies:
+
+    m2_raster3d (m2_raster_fill)   +1.423   ~53.8 MHz
+    m2_geometry                    +1.789   ~54.9 MHz
+    m2_copro                       +1.918   ~55.3 MHz
+    m2_video                       +4.561   ~64.8 MHz
+    m2_char_cache                  +8.676   ~88.3 MHz
+
+The tile path has the headroom the overruns need and cannot use it, because
+everything shares clk_sys and the fill pins the domain at ~54 MHz. And clk_sys
+must remain an exact /2 of clk_mem -- m2_sdram_x2 is combinational with one
+registered `done` and only works because of that ratio -- so the pair moves
+together: (100,50) -> (120,60) -> (140,70). 75 or 80 MHz for the tile path alone
+is not available without replacing the adapter with a true toggle-handshake CDC
+(Model 1's m1_cdc_port), which gives the latency back.
+
+*Where the fill's 18 ns goes,* from the full path report: the data path is
+18.019 ns, and it is the vertex min/max tournament at m2_raster_fill.sv:416-421
+-- `pmin_c = (sy[pmin23] < sy[pmin01]) ? ...` -- a two-level tournament on four
+THIRTY-TWO-BIT signed values whose second level's operands are muxed by the first
+level's comparators, then `sy[pmin_c] == sy[pmax_c]` in S_CLASSIFY, feeding
+emit_mode's next state. Five levels of 32-bit compare-and-mux into a state
+decision, recomputed every cycle although sy[] is written once at S_IDLE and is
+constant for the whole quad. Two independent repairs: register the tournament in
+a one-cycle S_MINMAX state before S_CLASSIFY, and narrow it -- the plane fit only
+ever uses sy[][15:0] and screen Y needs about twelve bits.
+
+*Correction:* an earlier ranking in this session put a 3D clock boost above a
+tile clock boost. The measurement reverses it. The tile path is the one with
+headroom; the 3D fill is the one that blocks the clock for everybody.
