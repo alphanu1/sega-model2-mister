@@ -2,6 +2,34 @@
 
 **Updated:** 2026-09-13 01:45 (machine clock). Study entries R176-R283.
 
+## 05:30, 09-13: READ THIS FIRST
+
+**`build/tex6` is the build to test** (or whatever the newest `build/tex*` with
+a `.rbf` is -- the chain deploys and captures itself). `build/tex1` is on the
+board as a fallback and RUNS, but its textures are dead: that build is the one
+where the OSD mask left the textured bit undriven.
+
+**The OSD has `O[27] Textures On/Off`** -- that is the A/B. And if the picture
+looks dark, set `Texture brightness` to 100% first: most scenery's base colour
+is the 50% placeholder grey and the texel now multiplies it.
+
+**What the UART says, in one line each:**
+* `TEXTURES (R275)`: textured pixels per frame. **Zero means nothing textured
+  reached the span walk** -- a different fault from a texture that looks wrong.
+  Beside it: the texel cache's hit rate, and how many texels were NOT 0xF
+  (zero there means the sheets are empty).
+* `GLYPH CACHE (R269)`: hits, misses, sibling fills and scanline overruns per
+  frame. At 64 KB with the whole-tile fill this should be near the 128 KB
+  numbers (694 misses, 12 overruns); if it is at 2,146 and 51, R283 is not
+  working.
+* `WALK (R255)`: nops per frame should be 0 and commands ~70. **8,200 nops and
+  8,257 commands means the display list is zeros and the game is not running.**
+
+**The one that got away:** R288, the SDRAM arbiter rewrite, passed 117,890
+bench checks and hung the board. It is reverted and disabled in place. If
+anyone wants to retry it, the instrument needed is a bench that can reproduce a
+HANG -- not a harder look at the same one.
+
 ## 03:10, 09-13: WHERE THE TEXTURE BUILD STANDS, AND WHY IT TOOK FOUR TRIES
 
 **The texture path is complete and proven at the bench; what is being fought is
