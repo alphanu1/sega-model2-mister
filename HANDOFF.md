@@ -27,9 +27,21 @@ the device.** In order, and each is recorded as a study entry:
 after seven seconds. `make syn_check` now runs Quartus's own parser over the
 whole `rtl/` tree in about a minute; run it before a build.
 
-**If the current build still misses timing**, the next cut is the fill's SECOND
-divider (~700 ALUTs): the two exist because one made the edge-slope wait 49% of
-the fill (R-entry in the file), so it is a throughput trade and not a free one.
+5. That left the core clock at **-0.004 ns** -- four picoseconds, below the
+   timing model's own resolution, but the seed rule rejects any negative slack
+   on an `emu|pll` clock and it is right to. `build/tex3` is four fresh seeds
+   (21, 23, 25, 27) of the same netlist; the spread between seeds on this
+   design is about half a nanosecond, so one of them should land positive.
+
+**If none of them does**, the next cut is the fill's SECOND divider (~700
+ALUTs): the two exist because one made the edge-slope wait 49% of the fill, so
+it is a throughput trade and not a free one. After that, `NBUF` 4 -> 3 band
+buffers.
+
+**Reading a pick line:** on seed 17 the reported worst slack was -0.446 and
+that is the HDMI PLL, which the rule tolerates; the CORE clock was the -0.004.
+The two live in different columns of the same report and confusing them sends
+an hour into the wrong paths.
 
 ## 01:45, 09-13: `build/tex2` IS THE ONE TO TEST
 
