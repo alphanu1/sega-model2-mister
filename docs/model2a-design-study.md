@@ -14827,3 +14827,33 @@ Worth knowing for the next time: on seed 17 the reported worst slack of -0.446
 is the HDMI PLL, which the rule tolerates, and the CORE clock is the -0.004.
 Reading the pick line alone would have sent the next hour into the wrong
 clock's paths.
+
+**R288 -- THE ELEVENTH PORT'S REAL COST WAS THE ARBITER'S DEPTH, AND
+report_timing SAID SO.** After R285 and R286 took the texture path's own long
+path away, the design still missed by -0.371 ns on the 100 MHz memory clock.
+`report_timing -setup -detail summary` named it in one run:
+
+    Slack     : -0.371 (VIOLATED)
+    From Node : emu:emu|m2_sdram:u_sdram|pend[5]
+    To Node   : emu:emu|m2_sdram:u_sdram|grant[2]
+
+Not the texture path at all: the SDRAM ARBITER, widened from ten ports to
+eleven by R275's texel fetch.
+
+Round-robin from `rr_next` means "the lowest pending port at or above rr_next,
+wrapping to the lowest overall". It was written as a barrel ROTATE of the
+pending mask, a priority ENCODE of the rotated mask, and an ADD with a
+conditional SUBTRACT to undo the rotation -- one chain, five stages deep, and
+every stage grows with NP.
+
+Two priority encoders in parallel give the same answer at half the depth: mask
+off the ports below `rr_next` (a decode of a 4-bit register, which computes
+beside `pend` rather than after it), encode that, encode the whole mask, and
+pick the first if it is non-empty. `tb_m2_sdram` serves the same 29,881
+transactions with the same per-port counts and 117,890 checks pass, which is
+the check that matters -- the ORDER is the behaviour.
+
+THE POINT ABOUT METHOD: three timing hypotheses were available (the texture
+arithmetic, congestion at 99%, the arbiter) and one command distinguished them.
+`quartus_sta -t` with `report_timing` on an existing build directory takes two
+minutes and needs no rebuild.

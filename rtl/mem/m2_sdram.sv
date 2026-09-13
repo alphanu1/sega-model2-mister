@@ -461,16 +461,30 @@ module m2_sdram #(
   endfunction
 
   wire [NP-1:0]  arb_ready = pend & ~inflight;
-  wire [NP-1:0]  arb_rot   = rot_r(arb_ready, rr_next);
-  wire [PW-1:0]  arb_idx   = low_idx(arb_rot);
-  // Rotate the index back. arb_idx < NP and rr_next < NP, so the sum never
-  // reaches 2*NP and one conditional subtract is exact.
-  wire [PW:0]    arb_sum   = {1'b0, arb_idx} + {1'b0, rr_next};
+
+  // TWO PRIORITY ENCODERS IN PARALLEL, NOT A ROTATE THEN AN ENCODER THEN A
+  // MODULAR ADD (R288).
+  //
+  // Round-robin from `rr_next` is "the lowest pending port at or above
+  // rr_next, wrapping to the lowest overall". Written as a rotate of the mask,
+  // an encode of the rotated mask and an add-with-conditional-subtract to undo
+  // the rotation, the whole thing is ONE chain: barrel rotate -> priority scan
+  // -> adder -> comparator -> subtract. Adding the eleventh port (R275's texel
+  // fetch) made that chain the worst path in the design -- `pend[5]` to
+  // `grant[*]`, -0.371 ns on the 100 MHz memory clock, measured with
+  // report_timing rather than guessed.
+  //
+  // Written as two encoders it is the same answer with half the depth: the
+  // "at or above" mask is a decode of rr_next that computes in parallel with
+  // pend, and the two scans run side by side. Nothing about the ORDER changes,
+  // which is what tb_m2_sdram's per-port transaction counts check.
+  wire [NP-1:0]  arb_hi_m  = arb_ready & ~((~{NP{1'b0}}) >> (NP - rr_next));
+  wire [PW-1:0]  arb_hi_i  = low_idx(arb_hi_m);
+  wire [PW-1:0]  arb_lo_i  = low_idx(arb_ready);
 
   always_comb begin
-    rr_valid = |arb_rot;
-    rr_grant = (arb_sum >= (PW+1)'(NP)) ? PW'(arb_sum - (PW+1)'(NP))
-                                        : PW'(arb_sum);
+    rr_valid = |arb_ready;
+    rr_grant = (|arb_hi_m) ? arb_hi_i : arb_lo_i;
   end
 
   // ------------------------------------------------------------- transfer
