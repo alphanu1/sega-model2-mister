@@ -14800,3 +14800,30 @@ THE SHAPE OF THIS DECISION IS THE POINT. The texture path's arithmetic was
 sized from the format it interpolates rather than from what the screen can
 resolve, twice: 48 bits for a 32-bit answer (R285) and 32 bits of gradient for
 a 496-pixel span. Both were free to write and neither was free to build.
+
+**R287 -- THE TEXTURE BUILD'S TIMING, IN THREE STEPS AND WHAT EACH WAS WORTH.**
+Recorded because "the design is at 99% and misses timing" is not a diagnosis
+and the three causes were different in kind:
+
+    build              worst core-clock setup     what changed
+    tex2 run B                   -5.696 ns        the texture path, first honest build
+    tex2 run C/D (R285)          (not measured)   uv_at 48 -> 32 bits, multiplies to DSP
+    tex2 run E (R286)            -0.004 ns        gradients 16.16 -> 8.8
+
+**-5.7 ns was ONE PATH, not congestion.** `uv_at` written in a 48-bit context
+and built out of logic is a 48x48 multiply chain between two registers -- about
+25 ns on this part at this utilisation. Narrowing it to the width of its own
+answer and letting the DSP blocks have it took the whole miss away. The lesson
+is that a miss of that SIZE is never "the design is too full"; it is one
+expression.
+
+**-0.004 ns is congestion**, and it is four picoseconds -- a thousandth of the
+20 ns clock, below the model's own resolution. The seed rule rejects it anyway,
+correctly: the rule is "no negative slack on any emu|pll clock", not "no
+meaningful negative slack", because the previous time this was argued about the
+board came up dead.
+
+Worth knowing for the next time: on seed 17 the reported worst slack of -0.446
+is the HDMI PLL, which the rule tolerates, and the CORE clock is the -0.004.
+Reading the pick line alone would have sent the next hour into the wrong
+clock's paths.
