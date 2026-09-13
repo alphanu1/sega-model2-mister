@@ -15795,3 +15795,32 @@ CAS cycles, not the eleven wasted ones.
 *Open, and Ben's to decide:* the i960 at 30 MHz against a real 25 is a 20%
 overclock of the game logic, which is a behaviour change rather than a
 fidelity-neutral one.
+
+*R311 addendum -- two corrections from Ben, both of which change the target.*
+
+*The overclock caution was wrong.* This entry left "the i960 at 30 against a
+real 25 is a 20% overclock" as an open decision. It is not one. The frame rate
+is fixed by the video timing at 57.52 Hz and the game is vblank-locked, so a
+faster i960 cannot make the game run FAST -- it only lets it finish work inside
+a frame it is currently missing. The core is at roughly a THIRD of hardware
+speed (`hold` of 1-2 frames means a new picture every second or third frame), so
++20% reaches about 40% of real. Fidelity only becomes a question if the core
+ever EXCEEDS real hardware, and nothing here is close.
+
+*And the target is too low.* If the core runs at ~33% of real, closing `hold` to
+zero needs roughly 3x, which reframes every option in the table above:
+
+    120/60/30   1.2x clock  x ~1.3x (R310) = ~1.55x   i960 to 30
+    75/75/25    1.5x        x ~1.3x        = ~1.95x   i960 stays 25, latency +25%
+    100/100/25  2.0x        x ~1.3x        = ~2.6x    i960 stays 25, latency flat
+
+100/100/25 asks NOTHING of the i960 -- 100/25 is a clean 4:1, so the bridge's
+ratio holds and the CPU keeps its real rate -- and it leaves memory latency
+unchanged rather than paying 25% for it. It is simply the hardest: every module
+to 10 ns. Given the 3x requirement, the cheaper targets do not arrive anywhere
+useful, so 100/100/25 is the destination and 120/60/30 is a detour.
+
+The per-module pipelining is required for ALL of these, and each module that
+clears 10 ns is banked whichever frequency is finally set. So the order does not
+change: fix modules hardest-first, re-measure with the same ten-second query,
+and let the achieved paths choose the clock rather than choosing it in advance.
