@@ -42,7 +42,13 @@ whole `rtl/` tree in about a minute; run it before a build.
    serves the same 29,881 transactions with identical per-port counts.
    `build/tex4` is that, on seeds 12, 17, 21 and 25.
 
-**If tex4 still misses**, the next cut is the fill's SECOND divider (~700
+7. With the arbiter fixed the worst path moved AGAIN, to the plane fit's own
+   leading-zero count: `den_sh` was a wire, so every `pf_scale` recomputed a
+   32-bit priority encode of the determinant and fed it into a 40-bit barrel
+   shifter in the cycle the quotient came back. The determinant is known a
+   state earlier, so it is encoded once into a register (R289). `build/tex5`.
+
+**If tex5 still misses**, the next cut is the fill's SECOND divider (~700
 ALUTs): the two exist because one made the edge-slope wait 49% of the fill, so
 it is a throughput trade and not a free one. After that, `NBUF` 4 -> 3 band
 buffers.
