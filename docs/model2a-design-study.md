@@ -14945,3 +14945,32 @@ misses per frame.
 `WHOLE_TILE` stays as a parameter, at 0. It is worth revisiting on a
 set-associative cache, where what a prefetch evicts is the question that
 changes.
+
+
+**R292 -- SHARING THE PORT TORE THE TILEMAP APART, AND THE AVERAGE DID NOT SAY
+SO.** R290 put the texel fetch on port 3 beside the glyph cache, reasoning that
+the cache's port is idle 89% of the time. The board, on `build/tex7`:
+
+    scanline overruns a frame:  median 33, MAXIMUM 277 of 384
+
+and the picture came apart into horizontal tearing across every layer -- the
+photograph shows the title artwork, the text and the ground band all shredded,
+with only the sky gradient (which fetches nothing) clean.
+
+The median was FINE. The bursts were not, and the tile fetch is the one
+consumer in this design with a hard per-scanline deadline: a line that does not
+finish is not slow, it is the previous line shown again. An idle-time argument
+is an argument about averages, and a deadline is not an average.
+
+The sharing was only ever a workaround for a hang that turned out to be R283's
+glyph prefetch (R291). Eleven ports close timing -- `build/tex1` did it at
++0.131 ns -- so the texel fetch has its own again.
+
+WHAT IS STILL OWED: the glyph cache is at 64 KB because the texture
+coordinates took its blocks (R276), and 64 KB costs 51 overruns a frame against
+12 at 128 KB. That is a real picture cost and it is not paid for yet. The
+options, none free: NQ 2048 -> 1536 in the quad store (~42 blocks, and the
+busiest attract frame measured 1,424 quads); a set-associative glyph cache,
+which trades tag blocks for conflict misses; or the per-quad texture
+coordinates in SDRAM instead of M10K, which is a new DMA path and trades blocks
+for bandwidth on a memory that is already the binding resource.
