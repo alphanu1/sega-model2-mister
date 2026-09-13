@@ -187,6 +187,18 @@ module m2_char_cache #(
   logic [63:0]         bg_data;
   logic                bg_arm, bg_kill, d_kill;
   logic                d_req, bg_req;
+  // R283: WHICH SIBLING IS IN FLIGHT. A tile is 16 words -- FOUR lines, sharing
+  // one tag because the four differ only in the index's low two bits -- and the
+  // eight scanlines that cross it read all four in order. Fetching ONE sibling
+  // halved the misses; fetching the other three behind the same acknowledge
+  // leaves the WHOLE TILE resident for one demand miss instead of four.
+  //
+  // Measured, and this is why: at 128 KB the board took 694 misses a frame and
+  // 12 scanline overruns; halved to 64 KB to pay for the texture coordinates it
+  // took 2,146 and 51. The traffic is the same either way -- these are lines
+  // the next two scanlines would have fetched anyway -- but only the first one
+  // is paid for in the fetch engine's critical path.
+  logic [1:0]          bg_n;
 
   wire bg_busy = (bgst != BG_IDLE);
   wire bg_wr   = (bgst == BG_WR) && !bg_kill;
@@ -278,7 +290,7 @@ module m2_char_cache #(
       st <= S_INIT; sweep <= '0; idx_r <= '0; tag_r <= '0; sel_r <= 1'b0;
       d_req <= 1'b0; v_ack <= 1'b0; hold <= '0;
       bgst <= BG_IDLE; bg_req <= 1'b0; bg_idx <= '0; bg_tag <= '0;
-      bg_data <= '0; bg_arm <= 1'b0; bg_kill <= 1'b0; d_kill <= 1'b0;
+      bg_data <= '0; bg_arm <= 1'b0; bg_kill <= 1'b0; d_kill <= 1'b0; bg_n <= 2'd0;
       steal_d <= 1'b0;
       dbg_hits <= '0; dbg_misses <= '0; dbg_fills <= '0;
     end else begin
@@ -343,7 +355,7 @@ module m2_char_cache #(
           // BG_GAP as well, which is what the adapter needs to retire the
           // transaction just finished.
           bg_arm <= 1'b1;
-          bg_idx <= idx_r ^ IDX_BITS'(1);
+          bg_idx <= idx_r ^ IDX_BITS'(1);   // the sibling; BG_WR walks to the rest
           bg_tag <= tag_r;
           st     <= S_ACK;
         end
@@ -360,6 +372,7 @@ module m2_char_cache #(
         BG_IDLE: if (bg_arm) begin
           bg_arm  <= 1'b0;
           bg_kill <= 1'b0;
+          bg_n    <= 2'd1;                 // the first of three siblings
           bgst    <= BG_GAP;
         end
         BG_GAP:  begin bg_req <= 1'b1; bgst <= BG_REQ; end
@@ -369,9 +382,18 @@ module m2_char_cache #(
           dbg_fills <= dbg_fills + 1'd1;
           bgst    <= bg_kill ? BG_IDLE : BG_WR;
         end
-        // One cycle of writing, unless an invalidate took the array port -- in
-        // which case try again next cycle, the write having been suppressed.
-        BG_WR:   if (!inval || bg_kill) bgst <= BG_IDLE;
+        // One cycle of writing, then on to the next line of the tile. The
+        // fourth time round there is nothing left to fetch.
+        BG_WR:   if (!inval || bg_kill) begin
+          if (bg_n == 2'd3 || bg_kill) begin
+            bgst <= BG_IDLE;
+          end else begin
+            bg_n   <= bg_n + 2'd1;
+            bg_idx <= (bg_idx & ~IDX_BITS'(3))
+                    | IDX_BITS'(2'(idx_r[1:0] ^ 2'(bg_n + 2'd1)));
+            bgst   <= BG_GAP;              // the port must go idle between fetches
+          end
+        end
         default: bgst <= BG_IDLE;
       endcase
     end

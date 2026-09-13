@@ -14687,3 +14687,29 @@ capture -- `textured pixels 0` separates "nothing arrived" from "it arrived and
 looks wrong", which is exactly why that counter exists (R275). Without it the
 next hours would have gone into the texel fetch, the plane fit and the sheet
 addressing, all of which were correct.
+
+**R283 -- THE WHOLE TILE ON ONE MISS, BECAUSE HALVING THE CACHE COST WHAT R269
+SAVED.** Measured on the board, the same 'V' record either side of R276:
+
+    glyph cache          128 KB (fix3d25)    64 KB (tex1)
+    misses a frame              694             2,146
+    hit rate                   95.7%             89.3%
+    scanline overruns            12                51
+
+Halving the cache to pay for the texture coordinates tripled the misses and
+QUADRUPLED the overruns -- and an overrun is a scanline drawn twice, which is
+visible. R269's sibling fill was what made the halving defensible; it is not
+enough on its own.
+
+A tile is 16 words -- FOUR lines, which differ only in the index's low two bits
+and therefore share one tag -- and the eight scanlines that cross it read all
+four in order. So a miss now fetches the other THREE behind its acknowledge
+instead of one: the whole tile is resident for one demand miss. The bench's
+tile walk goes from 2.00 misses per tile to **1.00**, at the same 128
+transactions, because these are lines the next scanlines would have fetched
+anyway -- what changes is that only the first is paid for in the fetch engine's
+critical path.
+
+The traffic argument is the same one R269 made and it holds for the same
+reason: port 3 spends about 558 cycles of a 3,280-cycle scanline, and the
+prefetches are moved in time rather than added.

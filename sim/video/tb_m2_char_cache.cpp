@@ -208,17 +208,23 @@ int main(int argc, char **argv) {
     if (read_word(base, 6) != ref(base)) { std::printf("  FAIL: sibling test cold read\n"); ++fails; }
     settle();                                      // the sibling fetch lands here
     ++checks;
-    if (d->dbg_fills - f0 != 1) {
-      std::printf("  FAIL: a miss must fetch its sibling -- fills %u\n", d->dbg_fills - f0);
+    // R283: THREE siblings, not one -- the whole tile. A tile is four lines
+    // sharing one tag, and the eight scanlines that cross it read all four.
+    if (d->dbg_fills - f0 != 3) {
+      std::printf("  FAIL: a miss must fetch the rest of its tile -- fills %u\n",
+                  d->dbg_fills - f0);
       ++fails;
     }
     // The next TWO glyph rows are in the sibling line: both must hit, and no
     // new memory transaction may be issued for them.
     const uint64_t r1 = mem_reqs;
-    ++checks;
-    if (read_word(base + 4, 6) != ref(base + 4)) { std::printf("  FAIL: sibling data wrong\n"); ++fails; }
-    ++checks;
-    if (read_word(base + 6, 6) != ref(base + 6)) { std::printf("  FAIL: sibling data wrong (odd row)\n"); ++fails; }
+    // Every one of the tile's eight glyph rows must now be resident.
+    for (uint32_t w = 2; w < 16; w += 2) {
+      ++checks;
+      if (read_word(base + w, 6) != ref(base + w)) {
+        std::printf("  FAIL: word %u of the tile was not filled\n", w); ++fails;
+      }
+    }
     ++checks;
     if (mem_reqs != r1) {
       std::printf("  FAIL: the sibling line was refetched -- %llu extra transactions\n",
