@@ -15206,3 +15206,50 @@ ever uses sy[][15:0] and screen Y needs about twelve bits.
 *Correction:* an earlier ranking in this session put a 3D clock boost above a
 tile clock boost. The measurement reverses it. The tile path is the one with
 headroom; the 3D fill is the one that blocks the clock for everybody.
+
+**R298 -- R295's PREFETCH IS REVERTED. It killed the geometry on hardware while
+passing 4,516 bench checks, and it was found by bisect, not by reasoning.**
+
+Symptom on the board: no 3D at all, with textures on OR off -- which is the
+distinguishing detail, because the texture fault of R275-R282 always left the 3D
+intact when textures were switched off. From the capture:
+
+    tgp  : 030B:37015          the coprocessor parked at PC 0x030B
+    TEXTURES: textured pixels med 0 max 0, 0 fetches   (tex10: 55,432 / 27,716)
+    SDRAM: bus busy 11.0%                              (tex10: 46.2%)
+    GLYPH CACHE: hit rate 90.2%, 2,076 misses a frame served normally
+
+The glyph fetch being healthy is what rules out a general memory failure: the
+controller serves port 3 all frame. What is dead is the geometry, and the texel
+count is a CONSEQUENCE of that -- no polygons are produced, so nothing asks for
+texels. Reading the texel zero as the texture path's fault would have sent the
+search to the wrong module, and nearly did.
+
+Bisect, by build date against commit time, not by argument:
+
+    tex10 built 12:29   last commit 6a7930a 11:56   WORKING (textures drew)
+    R295                          5c5e8d9 14:50
+    perf2/s12, perf4/s37  built after                BROKEN, identically
+
+tex10 already contained R293 and R294, so the ONLY change between the working
+build and the broken ones is R295. perf2/s12 carries R293+R294+R295 and NOT
+R296 and fails the same way, which exonerates R296 independently.
+
+R295 touched one file, m2_pair_cache.sv, and the pair caches sit on PORT 4 --
+`u_geo_pc` and `u_eng_pc`, the geometry engine's reads. Corrupt those and the
+display-list walk gets bad data, the coprocessor stalls waiting on a record that
+never becomes correct, and it parks. Every symptom follows in order.
+
+*What the bench could not see.* tb_m2_pair_cache passed 4,516 checks including
+the cycles-waiting-per-word counts. R295 had four faults found DURING
+development -- the ack gating the hit pulse, the deadlock on holding pf_req, a
+demand taking the prefetch's ack, and a discarded in-flight guess -- and a fifth
+survived all of them. A prefetch is speculative state machinery whose failure
+mode is a WRONG ANSWER rather than a hang, and the bench drives it with
+sequential patterns that the prefetch is built to predict. The board runs a
+display-list walk that does not.
+
+*The process failure, and it is the real finding.* R293, R294, R295 and R296
+were built as a stack and flashed once, at the end. Four changes, one symptom,
+and the bisect cost two board cycles that testing each would have cost nothing.
+Every change gets a build and a board test before the next one goes in.
