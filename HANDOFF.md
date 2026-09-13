@@ -35,6 +35,16 @@ four cycles a pixel does not fit the beam) and R280 (the texel cache sweeps
 once a frame, not once a write, or an upload freezes the picture). It deploys
 and captures itself.
 
+**And it cost two instruments to fit (R284).** The first attempt failed the
+fitter at 4,222 LABs of 4,191 -- tex1 was already LAB-limited at 95%, so a
+hundred ALM went over a packing cliff. The SDRAM checksum sweep and the wedge
+catcher are gated off by `SWEEP_EN`/`WEDGE_EN` at the top of `Model2.sv`; both
+had answered their questions (region 0 folds to 25E723 and has matched the MRA
+every time; R235 records what the wedge quads were). The visible consequence is
+that captures no longer carry 'S', 'W' or 'X' records. Set either parameter
+back to 1 to get it, if something needs it and something else gives up its
+LABs.
+
 ## THE TEXTURES, AS BUILT
 
 The whole path is in: display list -> per-vertex {u,v} -> clipper -> quad store
