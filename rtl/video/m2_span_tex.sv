@@ -63,7 +63,8 @@ module m2_span_tex #(
   input  logic [23:0]        in_col,
   input  logic               in_moire,
   input  logic signed [31:0] in_u, in_v,          // quarter-texels, 16 fractional bits
-  input  logic signed [31:0] in_dudx, in_dvdx,
+  // 8.8 texels a pixel (R286), shifted up to this unit's 16.16 on the way in.
+  input  logic signed [15:0] in_dudx, in_dvdx,
   input  logic [23:0]        in_tex,
   input  logic               in_tex_en,
 
@@ -189,8 +190,8 @@ module m2_span_tex #(
           moire_r <= in_moire;
           u_r     <= in_u;
           v_r     <= in_v;
-          du_r    <= in_dudx;
-          dv_r    <= in_dvdx;
+          du_r    <= 32'(in_dudx) <<< 8;
+          dv_r    <= 32'(in_dvdx) <<< 8;
           tex_r   <= in_tex;
           st      <= T_FETCH;
         end

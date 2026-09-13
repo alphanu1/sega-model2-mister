@@ -88,7 +88,8 @@ int main(int argc, char **argv) {
     // mutation that stopped the walk entirely passed it.
     const int32_t TEXEL = 4 << 16;
     const int32_t U0 = 4 * TEXEL, V0 = 8 * TEXEL;
-    const int32_t DU = TEXEL, DV = 2 * TEXEL;
+    // R286: the fill hands over 8.8 texels a pixel; one texel is 0x100.
+    const int32_t DU = 0x100, DV = 0x200;
     d->in_valid = 1; d->in_y = 5; d->in_x0 = X0; d->in_x1 = X1;
     d->in_col = 0xffffff; d->in_moire = 0;
     d->in_u = U0; d->in_v = V0; d->in_dudx = DU; d->in_dvdx = DV;
@@ -105,8 +106,8 @@ int main(int argc, char **argv) {
       ck("group is PIXSTEP wide, clipped", got[i].x1, (x + STEP - 1 > X1) ? X1 : x + STEP - 1);
       // The texel unit sees the coordinate shifted from quarter-texels.16 to
       // texels.8, which is ten bits right.
-      const uint32_t u = uint32_t((U0 + DU * int32_t(i) * STEP) >> 10);
-      const uint32_t v = uint32_t((V0 + DV * int32_t(i) * STEP) >> 10);
+      const uint32_t u = uint32_t((U0 + (DU << 8) * int32_t(i) * STEP) >> 10);
+      const uint32_t v = uint32_t((V0 + (DV << 8) * int32_t(i) * STEP) >> 10);
       const int t = texel_of(u, v);
       const uint32_t want = uint32_t((0xff * ((t << 4) | t) + 0xff) >> 8) * 0x010101u;
       ck("group colour is the texel at its first pixel", got[i].col, want);
@@ -137,7 +138,7 @@ int main(int argc, char **argv) {
     const int X0 = 0, X1 = 5;
     d->in_valid = 1; d->in_y = 9; d->in_x0 = X0; d->in_x1 = X1;
     d->in_col = 0x808080;
-    d->in_u = 0; d->in_v = 0; d->in_dudx = 4 << 16; d->in_dvdx = 0;
+    d->in_u = 0; d->in_v = 0; d->in_dudx = 0x400; d->in_dvdx = 0;   // 4 texels a pixel, 8.8
     d->in_tex = 0x000001; d->in_tex_en = 1;
     tick();
     d->in_valid = 0;

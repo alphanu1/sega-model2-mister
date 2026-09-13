@@ -89,7 +89,8 @@ module m2_raster_fill (
   // R274: the span's texture, as a starting coordinate and a per-pixel step,
   // both 16.16 in texels. The consumer walks u += span_dudx a pixel.
   output logic signed [31:0] span_u, span_v,
-  output logic signed [31:0] span_dudx, span_dvdx,
+  // 8.8 texels a pixel; the span walk shifts it up to its own 16.16.
+  output logic signed [15:0] span_dudx, span_dvdx,
   output logic [23:0]        span_tex,
   output logic               span_tex_en,
 
@@ -187,7 +188,13 @@ module m2_raster_fill (
   logic [12:0]        qu [0:3], qv [0:3];
   logic [23:0]        tex_r;
   logic               tex_ok;            // the fit succeeded and the poly is textured
-  logic signed [31:0] dudx, dudy, dvdx, dvdy;
+  // SIXTEEN-BIT GRADIENTS, 8.8 TEXELS PER PIXEL (R286). Thirty-two bits of
+  // gradient buys nothing a picture can show: the steepest useful slope is a
+  // few texels a pixel and 1/256 of a texel of error accumulates to under half
+  // a texel across the widest span this screen has. What it costs is every
+  // multiplier and every barrel shifter in the fit at double width, on a part
+  // with 550 ALMs free.
+  logic signed [15:0] dudx, dudy, dvdx, dvdy;
   logic signed [31:0] det_r;
   logic signed [31:0] nxu, nyu, nxv, nyv;
   logic               pf_second;         // the fit is retrying on vertices 0,2,3
@@ -267,7 +274,7 @@ module m2_raster_fill (
     begin
       if (z >= 6'd32) pf_scale = 32'sd0;
       else begin
-        net = 9'sd17 - 9'(z) - 9'(den_sh);
+        net = 9'sd9 - 9'(z) - 9'(den_sh);   // 8.8, not 16.16
         // FORTY BITS, NOT SIXTY-FOUR. The answer is clamped to +/-2^27 two
         // lines below, so everything above bit 39 is thrown away -- and a
         // 64-bit bidirectional barrel shifter is twice the logic of a 40-bit
@@ -275,9 +282,9 @@ module m2_raster_fill (
         r   = (net >= 9'sd0) ? (40'(q) <<< net[5:0]) : (40'(q) >>> (-net));
         // A gradient of 2,048 texels a pixel is already nonsense; clamping
         // keeps a degenerate quad from wrapping the accumulator instead.
-        if      (r >  40'sd134217727) pf_scale =  32'sd134217727;
-        else if (r < -40'sd134217727) pf_scale = -32'sd134217727;
-        else                          pf_scale =  32'(r);
+        if      (r >  40'sd32767) pf_scale =  32'sd32767;
+        else if (r < -40'sd32767) pf_scale = -32'sd32767;
+        else                      pf_scale =  32'(r);
       end
     end
   endfunction
@@ -303,16 +310,18 @@ module m2_raster_fill (
   // multipliers to produce bits that are then thrown away. `m2_raster_fill`
   // went from 3,854 ALUTs to 5,460 on the build where the texture path first
   // survived constant-propagation, and this expression was most of it.
+  // The gradient is 8.8 and the answer is 16.16, so each product -- 16 x 16,
+  // one DSP -- is shifted up by eight on its way in.
   function automatic logic signed [31:0] uv_at(input logic signed [31:0] base,
-                                               input logic signed [31:0] gx,
-                                               input logic signed [31:0] gy,
+                                               input logic signed [15:0] gx,
+                                               input logic signed [15:0] gy,
                                                input logic signed [31:0] x,
                                                input logic signed [31:0] y);
-    logic signed [31:0] t;
+    logic signed [31:0] gxp, gyp;
     begin
-      t = base + gx * $signed({{16{x[15]}}, x[15:0]})
-               + gy * $signed({{16{y[15]}}, y[15:0]});
-      uv_at = t;
+      gxp = gx * $signed(x[15:0]);
+      gyp = gy * $signed(y[15:0]);
+      uv_at = base + (gxp <<< 8) + (gyp <<< 8);
     end
   endfunction
   logic [2:0]         ps1m1, ps2p1;
@@ -489,7 +498,7 @@ module m2_raster_fill (
       tex_ok <= 1'b0; pf_second <= 1'b0; tex_r <= '0;
       det_r <= '0; nxu <= '0; nyu <= '0; nxv <= '0; nyv <= '0;
       q_num_a <= '0; q_num_b <= '0; q_z_a <= '0; q_z_b <= '0;
-      dudx <= '0; dudy <= '0; dvdx <= '0; dvdy <= '0;
+      dudx <= 16'sd0; dudy <= 16'sd0; dvdx <= 16'sd0; dvdy <= 16'sd0;
       for (int k = 0; k < 4; k++) begin qu[k] <= '0; qv[k] <= '0; end
       span_valid <= 1'b0;
       span_y     <= 32'sd0;
@@ -524,7 +533,7 @@ module m2_raster_fill (
             tex_r     <= in_tex;
             tex_ok    <= 1'b0;
             pf_second <= 1'b0;
-            dudx <= '0; dudy <= '0; dvdx <= '0; dvdy <= '0;
+            dudx <= 16'sd0; dudy <= 16'sd0; dvdx <= 16'sd0; dvdy <= 16'sd0;
             // An untextured quad pays nothing for any of this.
             state <= in_tex[0] ? S_PF_D : S_CLASSIFY;
           end
@@ -574,8 +583,8 @@ module m2_raster_fill (
         end
 
         S_PF_Q1W: begin
-          if (div_valid)  begin dudx <= pf_scale(div_quo,  q_z_a); pf_a <= 1'b1; end
-          if (divb_valid) begin dudy <= pf_scale(divb_quo, q_z_b); pf_b <= 1'b1; end
+          if (div_valid)  begin dudx <= pf_scale(div_quo,  q_z_a)[15:0]; pf_a <= 1'b1; end
+          if (divb_valid) begin dudy <= pf_scale(divb_quo, q_z_b)[15:0]; pf_b <= 1'b1; end
           if ((pf_a || div_valid) && (pf_b || divb_valid)) state <= S_PF_Q2;
         end
 
@@ -593,8 +602,8 @@ module m2_raster_fill (
         end
 
         S_PF_Q2W: begin
-          if (div_valid)  begin dvdx <= pf_scale(div_quo,  q_z_a); pf_a <= 1'b1; end
-          if (divb_valid) begin dvdy <= pf_scale(divb_quo, q_z_b); pf_b <= 1'b1; end
+          if (div_valid)  begin dvdx <= pf_scale(div_quo,  q_z_a)[15:0]; pf_a <= 1'b1; end
+          if (divb_valid) begin dvdy <= pf_scale(divb_quo, q_z_b)[15:0]; pf_b <= 1'b1; end
           if ((pf_a || div_valid) && (pf_b || divb_valid)) state <= S_PF_B;
         end
 
@@ -602,11 +611,11 @@ module m2_raster_fill (
         // so a span costs two multiplies and no state.
         S_PF_B: begin
           base_u <= 32'({19'd0, qu[fa]} <<< 16)
-                  - 32'(dudx * 32'($signed(sx[fa][15:0])))
-                  - 32'(dudy * 32'($signed(sy[fa][15:0])));
+                  - ((32'(dudx * $signed(sx[fa][15:0]))) <<< 8)
+                  - ((32'(dudy * $signed(sy[fa][15:0]))) <<< 8);
           base_v <= 32'({19'd0, qv[fa]} <<< 16)
-                  - 32'(dvdx * 32'($signed(sx[fa][15:0])))
-                  - 32'(dvdy * 32'($signed(sy[fa][15:0])));
+                  - ((32'(dvdx * $signed(sx[fa][15:0]))) <<< 8)
+                  - ((32'(dvdy * $signed(sy[fa][15:0]))) <<< 8);
           tex_ok <= 1'b1;
           state  <= S_CLASSIFY;
         end

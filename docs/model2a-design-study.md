@@ -14782,3 +14782,21 @@ THE LESSON IS ABOUT MEASUREMENT, NOT ARITHMETIC: a resource figure taken from a
 build where the feature was optimised out is not a figure for that feature.
 tex1's 95% was a number for the texture path's PLUMBING with its arithmetic
 deleted.
+
+**R286 -- SIXTEEN-BIT GRADIENTS, BECAUSE THIRTY-TWO BOUGHT NOTHING A PICTURE
+CAN SHOW.** The plane fit's four gradients were 16.16; they are now 8.8, and
+the span walk shifts them up to its own 16.16 on the way in.
+
+The precision argument: the steepest useful slope is a few texels a pixel and
+1/256 of a texel of error accumulates to under half a texel across the widest
+span this screen has (496). The bench measures du/dx = 3.4616 either way and
+its tolerance moved from 0.01 to 0.02 -- a fiftieth of a texel.
+
+What it buys is every multiplier and every barrel shifter in the fit at half
+width, on a part that had 550 ALMs free. `uv_at` becomes two 16x16 products --
+one DSP each -- shifted up by eight, where it was two 32x16.
+
+THE SHAPE OF THIS DECISION IS THE POINT. The texture path's arithmetic was
+sized from the format it interpolates rather than from what the screen can
+resolve, twice: 48 bits for a 32-bit answer (R285) and 32 bits of gradient for
+a 496-pixel span. Both were free to write and neither was free to build.

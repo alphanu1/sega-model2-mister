@@ -208,7 +208,8 @@ module m2_raster3d #(
   logic        fl_span_valid, fl_span_ready, fl_span_moire;
   logic signed [31:0] fl_span_y, fl_span_x0, fl_span_x1;
   logic [23:0] fl_span_col;
-  logic signed [31:0] fl_span_u, fl_span_v, fl_span_dudx, fl_span_dvdx;
+  logic signed [31:0] fl_span_u, fl_span_v;
+  logic signed [15:0] fl_span_dudx, fl_span_dvdx;   // R286: 8.8
   logic [23:0] fl_span_tex;
   logic        fl_span_tex_en;
   // R275: the textured span, expanded a pixel at a time. tx_* is the span as
