@@ -251,6 +251,21 @@ module m2_texel #(
   // forever, because the sweep is entered once per upload burst, not per write.
   logic inval_d, inval_pend;
 
+  // R315: THE HIT/MISS COUNTERS ARE A CYCLE BEHIND THE DECISION.
+  //
+  // Measured: this module's worst path is 10.66 ns -- a 93.8 MHz ceiling -- and
+  // it runs from the tag RAM's output through the hit compare into
+  // `dbg_misses[1]`. INSTRUMENTATION was on the critical path: a 32-bit
+  // increment gated by a comparison of a value that had just come out of block
+  // memory. These pulses move the counting one cycle later, where nothing is
+  // waiting for it, and cost two flip-flops.
+  //
+  // That is what stands between this module and 100 MHz, which matters because
+  // the span queue (R310) decoupled the texel fetch from the fill -- so this
+  // unit can now be clocked on clk_mem independently of clk_sys, across a clean
+  // 2:1 with a narrow interface, without touching the renderer.
+  logic h_pulse, m_pulse;
+
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       st <= S_INIT; sweep <= '0; idx_r <= '0; tag_r <= '0; sel_r <= '0;
@@ -259,8 +274,13 @@ module m2_texel #(
       last_v <= 1'b0; last_idx <= '0; last_tag <= '0;
       inval_d <= 1'b0; inval_pend <= 1'b0;
       dbg_hits <= '0; dbg_misses <= '0; dbg_sweeps <= '0;
+      h_pulse <= 1'b0; m_pulse <= 1'b0;
     end else begin
       ack     <= 1'b0;
+      h_pulse <= 1'b0;
+      m_pulse <= 1'b0;
+      if (h_pulse) dbg_hits   <= dbg_hits   + 1'd1;
+      if (m_pulse) dbg_misses <= dbg_misses + 1'd1;
       inval_d <= inval;
       if (inval && !inval_d) inval_pend <= 1'b1;
 
@@ -284,7 +304,7 @@ module m2_texel #(
           x2_r     <= x2;
           y2_r     <= y2;
           ack      <= 1'b1;
-          dbg_hits <= dbg_hits + 1'd1;
+          h_pulse  <= 1'b1;
           st       <= S_ACK;
         end else if (req) begin
           idx_r   <= req_idx;
@@ -303,14 +323,14 @@ module m2_texel #(
           last_idx <= idx_r;
           last_tag <= tag_r;
           ack      <= 1'b1;
-          dbg_hits <= dbg_hits + 1'd1;
+          h_pulse  <= 1'b1;
           st       <= S_ACK;
         end else begin
           m_req      <= 1'b1;
           to_cnt     <= '0;
           m_addr     <= (sheet_r ? base_s1 : base_s0)
                       + AW'({wa_r[WA_BITS-1:2], 2'b00});
-          dbg_misses <= dbg_misses + 1'd1;
+          m_pulse    <= 1'b1;
           st         <= S_MISS;
         end
 
