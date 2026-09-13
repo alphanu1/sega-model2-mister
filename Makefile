@@ -91,6 +91,22 @@ all: lint synth test
 # is how this one got through.
 LINTTOP_RTL := $(shell grep -oiE "rtl/[a-z0-9_/]+\\.(sv|v)" Model2.qsf | tr "\\n" " ")
 
+.PHONY: syn_check
+# QUARTUS'S OWN PARSER, IN SECONDS. Verilator and Quartus 17.0 do not accept the
+# same SystemVerilog, and the difference has cost two builds in one night:
+# `~IDX_BITS'(3)` and `pf_scale(...)[15:0]` both lint clean and both stop
+# quartus_map dead after seven seconds. --analyze_file parses ONE file with no
+# project, no netlist and no fitter, so the whole rtl/ tree checks in about a
+# minute -- run it before a build, not after.
+syn_check:
+	@echo "== quartus parse check (the dialect Verilator does not enforce)"
+	@mkdir -p /tmp/m2-syn && cd /tmp/m2-syn && \
+	  for f in $(PWD)/rtl/*/*.sv; do \
+	    n=$$(/home/ben/intelFPGA_lite/17.0/quartus/bin/quartus_map \
+	          --analyze_file=$$f --family="Cyclone V" syn 2>&1 | grep -cE "^Error"); \
+	    [ "$$n" = "0" ] || echo "  PARSE ERRORS in $$(basename $$f): $$n"; \
+	  done; echo "  done"
+
 .PHONY: lint_top
 # VERILATOR STOPS AT THE FIRST MISSING MODULE, AND STOPPING HID REAL FAULTS.
 #
