@@ -15876,3 +15876,40 @@ m2_sound_board 82, m2_char_cache 68, m2_tdp_ram 64, ascal ~50. An earlier claim
 here that the char cache used 204 blocks and was "badly packed" was a
 triple-count of parent and child rows; 68 against a ~55 minimum is normal, and
 there was never anything to reclaim.
+
+**R314 -- THE AREA BUDGET IS ITS OWN DOCUMENT: `docs/area-budget.md`.**
+
+Four builds in a row lost seeds to Quartus internal errors rather than to
+anything in the RTL, at 41,132 of 41,910 ALM. That is a resource problem, not a
+design one, and it now has a document of its own because it gates everything
+else.
+
+What is in it and not repeated here: the per-module ALM, M10K and DSP tables
+read from the fit report; the awk queries that read them correctly, since three
+separate decisions went wrong from summing parent and child rows; the list of
+things that do NOT work so they are not retried (MLAB for a big cache costs
+~8,700 ALM, the framework macros are exhausted and verified against upstream AND
+the MkDocs pages, `MISTER_SMALL_VBUF` is DDR3 only, unused framework modules are
+already pruned); and the one rule worth carrying -- **pipelining is cheap and
+sizing is expensive**, R301's stage cost ~50 ALM where a 4x texel cache and a
+256-entry FIFO cost 30 M10K each.
+
+Two findings that change how this file should be read:
+
+*M10K is not full; ALM is.* 553/553 appears in every build, including ones where
+30 blocks had just been freed, because Quartus relieves ALM pressure by pushing
+logic into spare block memory. R304, R307 and the 4096-line attempt were all
+argued from "M10K is the binding resource", and that premise was wrong.
+
+*DSP is exhausted, not idle.* 63 of 112 blocks are used and the other 49 have
+nothing to take: `m2_raster_fill` carries a module-level `multstyle = "dsp"`
+covering all thirteen of its multiplies, the three `fp_mul`s go through the
+shared pool, and `m2_geo_engine` and `m2_geo_clip` -- 3,553 ALM between them --
+contain no multiplications at all.
+
+*And R313 is explicitly reversible.* The char cache went to 4096 lines and the
+span queue to block memory to buy ALM for a build that would fit. If headroom
+appears, or if the doubled glyph misses cost more than the ALM was worth, the
+register queue is `m2_span_q` in commit 5cac8f9 -- bubble-free -- and the cache
+is one parameter. The trade was made under fitter pressure, not because it is
+the right shape.
