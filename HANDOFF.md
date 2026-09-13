@@ -2,6 +2,47 @@
 
 **Updated:** 2026-09-13 01:45 (machine clock). Study entries R176-R283.
 
+## 12:00, 09-13: THE TEXTURES DRAW; THE BAND FILL CANNOT KEEP UP
+
+Confirmed on the board, by eye and by the user's own A/B: **textures are on the
+screen and correct**, and turning them off with `O[27]` restores the 3D exactly
+as it was. What is broken is throughput -- the band fill finishes 14 to 27 of
+its 48 bands, so most of the screen shows whatever was in the buffer.
+
+    bands finished of 48   textured pixels/frame   texel fetches   hit rate
+    14 - 27 (one slice 51)         53,982              26,990        39.1%
+
+27,000 fetches at about twelve cycles each is 340,000 cycles of a 790,000-cycle
+frame, in the one place with a beam deadline. Most of that is NOT memory: a
+cache HIT costs four cycles of handshake for a line fetched moments ago.
+
+`build/tex9`/`tex10` carries the fix (R293): the unit holds the line the span
+walk is inside and answers a matching request in one cycle with no array read,
+and the cache grows 1 KB -> 4 KB on the fourth band buffer's blocks (NBUF 4->3
+-- the fill is not running ahead of the beam, so that buffer sat empty).
+
+**The OSD defaults are now the settings the board looks best on**: walk trigger
+After flip, brightness 50%, walk rate Reference. Pedals are analogue on the
+right stick's Y (Model 1's arrangement) and `Steering` sets stick sensitivity.
+
+**AND THE MEMORY IS NOW MEASURABLE (R294).** `dbg_req`/`dbg_grant` have been
+brought out of `m2_sdram` since it was written and connected to nothing, so
+"the bus is full" and "the bus is blocked" have never been distinguishable.
+The 'Z' and 'z' records give, per frame: bus busy, and cycles spent wanting the
+bus and not getting it, for the CPU, geometry, glyph and texel ports.
+
+What the desk already says about the CPU, for when that lands:
+
+    CPI 14.97, of which 7.51 is waiting on memory (50.2% of all cycles)
+      T_MEM_W   3.00 CPI   -- and the D-cache HITS 92.8% of the time
+      T_FETCH_W 2.23 CPI   -- prefetch 62.6%, and 1,117,759 of its 1,118,247
+                              misses are MISPREDICTED BRANCHES
+
+Two fixes follow from that and neither is bandwidth: predict the branch (the
+i960's displacement is in the instruction, so the target is known at decode),
+and make a D-cache hit cost one cycle instead of the S_IDLE -> S_DCK -> ack
+walk. Together they are worth roughly 20% of CPI.
+
 ## 06:20, 09-13: WHAT HAPPENED OVERNIGHT, IN ONE PARAGRAPH
 
 The texture path is written, benched and fits. Two builds that enabled it did
