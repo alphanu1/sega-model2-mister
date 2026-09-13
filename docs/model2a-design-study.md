@@ -14661,3 +14661,29 @@ it.
 What it costs instead is a second colour-resolution state machine in the raster
 stage and a memory port for it (or a share of the texel fetch's). That is ALM
 and sequencing, which this design has more of than it has blocks.
+
+**R282 -- THE BOARD DREW ZERO TEXTURED PIXELS, AND THE REASON WAS A MASK ON AN
+OUTPUT PORT.** `build/tex1` shipped the whole texture path and its 'Y' record
+read `textured pixels med 0 max 0` -- nothing textured reached the span walk at
+all. Everything downstream was innocent.
+
+The OSD's texture switch was written as
+
+    .q_tex({q3d_tex[23:1], q3d_tex[0] && !texoff_s[2]})
+
+on **`m2_geometry`'s instantiation**, where `q_tex` is an OUTPUT. A
+concatenation containing an expression is not an lvalue, so bit 0 has nothing
+to connect to and `q3d_tex[0]` -- the one bit every stage below tests -- is
+never driven. The edit was meant for the RASTERISER's instantiation twenty-five
+hundred lines further down, and a bulk replace put it on both.
+
+`make lint_top` reported "no undriven signals", so the guard that exists for
+exactly this did not see it: Verilator accepted the connection. The mask now
+lives only where the signal is CONSUMED, and the line carries a note saying
+why.
+
+THE LESSON IS ABOUT THE INSTRUMENT, NOT THE TYPO. The board answered in one
+capture -- `textured pixels 0` separates "nothing arrived" from "it arrived and
+looks wrong", which is exactly why that counter exists (R275). Without it the
+next hours would have gone into the texel fetch, the plane fit and the sheet
+addressing, all of which were correct.

@@ -2887,10 +2887,12 @@ m2_geometry u_geometry (
 	// the connection is one edit when the quad store carries them.
 	.q_u0(q3d_u0), .q_v0(q3d_v0), .q_u1(q3d_u1), .q_v1(q3d_v1),
 	.q_u2(q3d_u2), .q_v2(q3d_v2), .q_u3(q3d_u3), .q_v3(q3d_v3),
-	// The OSD's Off clears the textured bit, which is the one thing every
-	// stage below tests -- the plane fit, the span walk and the texel fetch all
-	// fall back to what they did before in one place.
-	.q_tex({q3d_tex[23:1], q3d_tex[0] && !texoff_s[2]}), .q_lum(q3d_lum),                                 // R271
+	// R271: the geometry DRIVES this. The OSD's Off is applied where it is
+	// CONSUMED, at the rasteriser below -- a mask written on an output port
+	// connects bit 0 to an expression that is not an lvalue, so the bit is
+	// simply never driven. That is what this line said for one build, and the
+	// board drew ZERO textured pixels because of it.
+	.q_tex(q3d_tex), .q_lum(q3d_lum),                                 // R271
 	.q_col(q3d_col), .q_z(q3d_z),
 	.dbg_polys(geo_polys), .dbg_objects(geo_objs_done), .dbg_capped(geo_capped),
 	.dbg_culled(geo_culled),
