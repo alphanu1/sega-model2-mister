@@ -14626,3 +14626,38 @@ Also here: the texel scales the polygon's colour as `(c * i + c) >> 8`, not
 turning textures on darkens every pixel by a step even where the texture is
 solid -- 0xff becomes 0xfe -- which is the kind of difference that gets
 attributed to the texture rather than to the arithmetic.
+
+**R281 -- THE PLAN FOR THE EXACT TEXTURE COLOUR, COSTED BEFORE IT IS BUILT.**
+R275 scales the polygon's finished colour by the texel, which is the reference's
+colour ramp approximated as linear. The exact path is:
+
+    luma8 = lumaram[lumabase + (texel << 3)] * poly_luma / 256   -> clamp 0x3f
+    rgb   = gamma(colortable_{r,g,b}[(colorbase_ch << 8) | luma6])
+
+Two lookups, and they have very different costs.
+
+THE LUMA TABLE is 16 bytes per polygon at a stride of 8 -- `lumabase + 0, 8,
+16, ... 120` -- so a 64-bit burst fetches one useful entry and three wasted
+ones. Sixteen reads is about 224 cycles a polygon, which is why it wants a
+small cache keyed on `lumabase`: eight entries of 128 bits is 1 K bit, and
+consecutive polygons of one object share a lumabase.
+
+THE COLOUR TABLE is the expensive one -- a palette read and three translation
+reads per distinct `{colorbase, luma6}` -- but it is ALREADY SOLVED once, in
+`m2_geo_engine`'s 256-entry colour cache (R222). The mistake to avoid is
+resolving sixteen colours per polygon in the ENGINE and carrying them to the
+rasteriser: that is 384 bits a quad, 154 M10K blocks at NQ = 2,048, or a slot
+table and an allocator to avoid it.
+
+THE CHEAP SHAPE IS THE OTHER WAY ROUND. Carry `colorbase` (10 bits) and
+`lumabase` (8) per quad -- 18 bits, under 2 blocks -- and resolve the colour IN
+THE SPAN WALK, with its own 256-entry cache keyed on `{colorbase, luma6}`,
+exactly as the engine's. A four-bit texel takes sixteen values, so a polygon
+can miss at most sixteen times and consecutive polygons of one object hit. The
+cache is 256 x 16 bits of RGB565 -- ONE M10K block -- against fourteen for the
+slot table, and it gives the reference's colour rather than an approximation of
+it.
+
+What it costs instead is a second colour-resolution state machine in the raster
+stage and a memory port for it (or a share of the texel fetch's). That is ALM
+and sequencing, which this design has more of than it has blocks.
