@@ -171,6 +171,11 @@ module m2_boot_harness #(
   output logic [31:0] obs_v0x, obs_v0y, obs_v0z, obs_v1x, obs_v1y, obs_v1z,
   output logic [31:0] obs_v2x, obs_v2y, obs_v2z, obs_v3x, obs_v3y, obs_v3z,
   output logic [31:0] obs_poly_attr,
+  // R275/R278: the texture the engine chose for this polygon, and the four
+  // {v,u} pairs it read. Enough for the bench to work out which texels the
+  // rasteriser will fetch -- without a rasteriser.
+  output logic [31:0] obs_poly_tex,
+  output logic [31:0] obs_poly_uv0, obs_poly_uv1, obs_poly_uv2, obs_poly_uv3,
   output logic [31:0] obs_foc_x, obs_foc_y, obs_mtx0, obs_mtx4, obs_mtx8, obs_mtx11,
   // The raw object-space point entering the transform, and the whole matrix,
   // so the transform can be checked by hand against the reference's formula.
@@ -976,6 +981,11 @@ module m2_boot_harness #(
     .dbg_pj_lost(eng_pj_lost), .dbg_eng_state(), .dbg_qst(), .dbg_clip_state()
   );
   assign obs_poly_valid = u_geometry.poly_valid & u_geometry.poly_ready;
+  assign obs_poly_tex   = u_geometry.poly_tex;
+  assign obs_poly_uv0   = u_geometry.poly_uv0;
+  assign obs_poly_uv1   = u_geometry.poly_uv1;
+  assign obs_poly_uv2   = u_geometry.poly_uv2;
+  assign obs_poly_uv3   = u_geometry.poly_uv3;
   assign eng_luma    = u_geometry.u_engine.poly_luma;
   assign eng_lp      = u_geometry.u_engine.attr[22:18];
   assign eng_lp_dif  = u_geometry.u_engine.tp_rd[31:0];

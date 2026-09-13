@@ -57,6 +57,10 @@ static std::map<uint32_t,uint32_t> g_th_colorbase_n;
 static uint32_t g_th_last_objs = 0;
 static uint32_t g_tdwords = 0;
 static uint32_t tex_writes = 0, tex_nonff = 0;
+#include <set>
+static long g_tex_polys = 0, g_tex_fetch = 0, g_tex_real = 0; static int g_tex_show = 0;
+static std::set<uint32_t> g_tex_states, g_tex_seen;
+static long g_poly_all = 0;
 #include <map>
 static std::map<uint32_t,uint32_t> wr_hist;   // R275: where CPU writes actually land
 static uint32_t tex_lo = 0xffffffff, tex_hi = 0;
@@ -856,6 +860,41 @@ int main(int argc, char **argv) {
       auto u2f = [](uint32_t u){ float f; std::memcpy(&f, &u, 4); return f; };
       double nx = u2f(d->nrm_x_o), ny = u2f(d->nrm_y_o), nz = u2f(d->nrm_z_o), ln = std::sqrt(nx*nx + ny*ny + nz*nz);
       if (std::isfinite(ln)) { ++g_nlen_n; g_nlen_sum += ln; int b = ln < 0.5 ? 0 : ln < 0.9 ? 1 : ln < 1.1 ? 2 : ln < 2 ? 3 : ln < 10 ? 4 : ln < 100 ? 5 : ln < 1000 ? 6 : 7; ++g_nlen_hist[b]; } }
+    // R278: WHICH TEXELS WILL THE RASTERISER FETCH? The harness has no
+    // rasteriser, but it has the texture state and the four {v,u} pairs the
+    // engine produced and it has the memory the CPU uploaded into -- which is
+    // everything get_texel needs. Working the address out here says whether
+    // the texture path will read DATA or read unwritten memory, before a
+    // bitstream exists to ask the question on.
+    if (d->eng_poly_go) { ++g_poly_all; g_tex_seen.insert(d->obs_poly_tex); }
+    if (d->eng_poly_go && (d->obs_poly_tex & 1)) {
+      ++g_tex_polys;
+      const uint32_t t = d->obs_poly_tex;
+      const int wcode = (t >> 1) & 7, hcode = (t >> 4) & 7;
+      const int sheet = (t >> 12) & 1;
+      const int texx = (t >> 13) & 0x3f, texy = (t >> 19) & 0x1f;
+      const uint32_t uv[4] = {d->obs_poly_uv0, d->obs_poly_uv1,
+                              d->obs_poly_uv2, d->obs_poly_uv3};
+      g_tex_states.insert(t);
+      for (int i = 0; i < 4; ++i) {
+        // The stored coordinate is pu/8 texels; the pairs are {v, u}.
+        const int u0 = int((uv[i] & 0xffff) / 8) & ((32 << wcode) - 1);
+        const int v0 = int(((uv[i] >> 16) & 0xffff) / 8) & ((32 << hcode) - 1);
+        int x2 = texx * 32 + u0, y2 = texy * 32 + v0;
+        if (x2 >= 1024) { x2 -= 1024; y2 ^= 1024; }
+        const uint32_t off = (uint32_t)((y2 / 2) * 512 + (x2 / 2));
+        const uint32_t addr = (sheet ? 0x17e0000u : 0x1760000u) + off;
+        ++g_tex_fetch;
+        const uint16_t w = mem[addr & 0x1ffffff];
+        if (w != 0xffff) ++g_tex_real;
+        if (g_tex_show < 8 && i == 0) {
+          std::printf("    TEXEL probe: sheet %d  %dx%d at (%d,%d)  uv(%d,%d) -> word %07x = %04x%s\n",
+                      sheet, 32 << wcode, 32 << hcode, texx * 32, texy * 32,
+                      u0, v0, addr, w, (w == 0xffff) ? "  (unwritten)" : "");
+          ++g_tex_show;
+        }
+      }
+    }
     if (d->tpw_we) { g_tp_dif[d->tpw_idx] = d->tpw_diffuse; g_tp_amb[d->tpw_idx] = d->tpw_ambient; g_tp_seen[d->tpw_idx] = true; ++g_tp_w[d->tpw_idx]; }
     if (d->lit_x_o != g_lit_last[0] || d->lit_y_o != g_lit_last[1] || d->lit_z_o != g_lit_last[2]) {
       g_lit_last[0] = d->lit_x_o; g_lit_last[1] = d->lit_y_o; g_lit_last[2] = d->lit_z_o;
@@ -3227,6 +3266,16 @@ int main(int argc, char **argv) {
       std::printf("  %04x0000:%u", h[i].first, h[i].second);
     std::printf("\n");
   }
+  {
+    std::printf("POLY_TEX values seen (%zu distinct) over %ld polygons:", g_tex_seen.size(), g_poly_all);
+    int n = 0;
+    for (uint32_t v : g_tex_seen) { if (n++ < 8) std::printf(" %08x", v); }
+    std::printf("\n");
+  }
+  std::printf("TEXTURED POLYGONS (R278): %ld of them, %zu distinct texture states; "
+              "of %ld corner texels %ld came from written memory (%.1f%%)\n",
+              g_tex_polys, g_tex_states.size(), g_tex_fetch, g_tex_real,
+              g_tex_fetch ? 100.0 * double(g_tex_real) / double(g_tex_fetch) : 0.0);
   std::printf("TEXTURE REGION on the i960's own bus: %u writes, %u reads to 0x12xxxxxx, "
               "addresses %08x..%08x\n",
               (unsigned)d->obs_cpu_texwr, (unsigned)d->obs_cpu_texrd,
