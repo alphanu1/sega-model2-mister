@@ -2,6 +2,24 @@
 
 **Updated:** 2026-09-13 01:45 (machine clock). Study entries R176-R283.
 
+## 06:20, 09-13: WHAT HAPPENED OVERNIGHT, IN ONE PARAGRAPH
+
+The texture path is written, benched and fits. Two builds that enabled it did
+not boot, and the cause was NOT the texture path: it was R283, a glyph-cache
+"improvement" from the same night that fetched all four of a tile's lines on
+one miss. The bench's tile walk halved; the BOARD's misses went from 1,820-3,442
+a frame to 13,282, because the cache is direct-mapped and four tilemap layers
+interleave -- the extra lines evict each other's glyphs. Four times the misses
+at four transactions each saturates the SDRAM, which starves the i960: the CPU
+was not hung, it was running about a hundred times too slowly, which is why it
+sat in one load/store loop with the display list never written. Reverted in
+R291. `build/tex7` is the texture path with that undone.
+
+Also reverted: R288's SDRAM arbiter rewrite (R290), suspected on the same
+evidence and cleared by tex6 hanging identically without it. It is disabled in
+place rather than deleted, because its reasoning stands and only a
+hang-reproducing bench can settle it.
+
 ## 05:30, 09-13: READ THIS FIRST
 
 **`build/tex6` is the build to test** (or whatever the newest `build/tex*` with
