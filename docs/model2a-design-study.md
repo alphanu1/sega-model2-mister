@@ -14914,3 +14914,34 @@ configuration that boots.
 though the core now uses ten: a bench that stops at the number the core happens
 to use cannot catch the next port's burst length, which is exactly what R277
 was.
+
+**R291 -- THE WHOLE-TILE FILL QUADRUPLED THE MISSES ON THE BOARD, AND THAT IS
+WHAT STOPPED IT BOOTING.** R283 fetched all four of a tile's lines on one miss.
+The bench's tile walk went from 2.00 misses per tile to 1.00 at the same
+transaction count; the board went the other way:
+
+    glyph cache misses a frame     tex1 (one sibling)   tex6 (whole tile)
+                                      1,820 - 3,442            13,282
+
+and the machine did not boot. Four times the misses, each now costing four
+transactions, is a SATURATED SDRAM -- and a saturated SDRAM starves the i960,
+which is why the CPU sat in one load/store loop for four minutes with the
+display list never written. It was never hung; it was running perhaps a
+hundred times too slowly.
+
+THE CACHE IS DIRECT-MAPPED, AND THAT IS THE WHOLE STORY. Filling lines
+`idx^1`, `idx^2` and `idx^3` EVICTS whatever is in them, and with FOUR TILEMAP
+LAYERS interleaving their fetches, what is in them is the other layers'
+glyphs. R269's single sibling is exactly the line the next scanline wants; the
+other two are somebody else's.
+
+**THE BENCH COULD NOT SEE IT AND STILL CANNOT.** `tb_m2_char_cache` walks one
+layer's tiles in order, which is the access pattern the prefetch is designed
+for. The board runs four layers at once and does nothing else. This is the same
+shape as R276's halving -- a cache decision that is right in isolation and
+wrong in traffic -- and the same instrument settled both: the 'V' record's
+misses per frame.
+
+`WHOLE_TILE` stays as a parameter, at 0. It is worth revisiting on a
+set-associative cache, where what a prefetch evicts is the question that
+changes.

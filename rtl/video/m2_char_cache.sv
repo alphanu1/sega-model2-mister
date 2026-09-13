@@ -187,6 +187,24 @@ module m2_char_cache #(
   logic [63:0]         bg_data;
   logic                bg_arm, bg_kill, d_kill;
   logic                d_req, bg_req;
+  // R291: ONE SIBLING, NOT THREE, AND THE BOARD IS WHY.
+  //
+  // R283 fetched the whole tile -- all four lines -- on one miss, and the
+  // bench's tile walk went from 2.00 misses per tile to 1.00 at the same
+  // transaction count. On the board it did the OPPOSITE: 13,282 misses a
+  // frame against 1,820-3,442 with one sibling, and the machine did not boot,
+  // because a saturated SDRAM starves the CPU.
+  //
+  // THE CACHE IS DIRECT-MAPPED. Filling lines idx^1, idx^2 and idx^3 EVICTS
+  // whatever is in them -- and with four tilemap layers interleaving their
+  // fetches, what is in them is the other layers' glyphs. The bench walks one
+  // layer's tiles in order and cannot see that; the board runs four at once
+  // and does nothing else.
+  //
+  // Set WHOLE_TILE back to 1 if this is ever tried again on a set-associative
+  // cache, where the eviction is what changes.
+  parameter bit WHOLE_TILE = 1'b0;
+
   // R283: WHICH SIBLING IS IN FLIGHT. A tile is 16 words -- FOUR lines, sharing
   // one tag because the four differ only in the index's low two bits -- and the
   // eight scanlines that cross it read all four in order. Fetching ONE sibling
@@ -372,7 +390,7 @@ module m2_char_cache #(
         BG_IDLE: if (bg_arm) begin
           bg_arm  <= 1'b0;
           bg_kill <= 1'b0;
-          bg_n    <= 2'd1;                 // the first of three siblings
+          bg_n    <= WHOLE_TILE ? 2'd1 : 2'd3;   // R291: one sibling, or three
           bgst    <= BG_GAP;
         end
         BG_GAP:  begin bg_req <= 1'b1; bgst <= BG_REQ; end

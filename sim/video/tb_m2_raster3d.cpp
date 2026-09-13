@@ -37,12 +37,31 @@ static int TPL = 400;
 
 int main(int argc, char **argv) {
   Verilated::commandArgs(argc, argv);
+  const bool g_textured = std::getenv("M2_R3D_TEX") != nullptr;
   if (const char *e = std::getenv("M2_R3D_TPL")) TPL = std::atoi(e);
+  if (g_textured) std::printf("  TEXTURED quads (M2_R3D_TEX)\n");
   std::printf("  %d core clocks per scanline\n", TPL);
   auto d = new Vm2_raster3d;
   d->clk = 0; d->scan_clk = 0; d->rst_n = 0; d->frame_start = 0; d->q_valid = 0; d->q_end = 0;
   d->scan_x = 0; d->scan_y = 0;
-  auto tick = [&]() { d->clk = 1; d->scan_clk = 1; d->eval(); d->clk = 0; d->scan_clk = 0; d->eval(); };
+  d->tex_m_ack = 0; d->tex_m_data = 0; d->tex_inval = 0;
+  d->tex_base0 = 0x1760000; d->tex_base1 = 0x17E0000;
+  // R291: A MEMORY FOR THE TEXEL FETCH. Without one the unit times out on
+  // every fetch -- 1,023 cycles a texel -- and the fill grinds to a halt,
+  // which is a bench artefact and not the fault being chased. With one, this
+  // bench runs the whole texture path for the first time.
+  int tex_wait = -1;
+  auto tick = [&]() {
+    if (d->tex_m_req && tex_wait < 0) tex_wait = 8;
+    if (tex_wait == 0) {
+      d->tex_m_ack = 1;
+      d->tex_m_data = 0x0123456789abcdefULL ^ (uint64_t)d->tex_m_addr;
+    }
+    d->eval();
+    d->clk = 1; d->scan_clk = 1; d->eval(); d->clk = 0; d->scan_clk = 0; d->eval();
+    if (d->tex_m_ack) { d->tex_m_ack = 0; tex_wait = -1; }
+    else if (tex_wait > 0) --tex_wait;
+  };
   for (int i = 0; i < 4; i++) tick();
   d->rst_n = 1; tick();
 
@@ -58,6 +77,18 @@ int main(int argc, char **argv) {
       d->q_x2 = 140 + frame_no; d->q_y2 = b * 16 + 12;
       d->q_x3 = 100 + frame_no; d->q_y3 = b * 16 + 12;
       d->q_col = 0xFFFFFF; d->q_z = 0x3F800000; d->q_moire = 0;
+      // R291: THE TEXTURED BIT, which no test has ever set. Two builds with
+      // the texture path live hung the board before the game started, and the
+      // only thing they have that the working build does not is this bit.
+      if (g_textured) {
+        d->q_tex = 0x000001 | (2u << 1) | (2u << 4);   // 128x128, sheet 0
+        d->q_u0 = 0;   d->q_v0 = 0;
+        d->q_u1 = 400; d->q_v1 = 0;
+        d->q_u2 = 400; d->q_v2 = 200;
+        d->q_u3 = 0;   d->q_v3 = 200;
+      } else {
+        d->q_tex = 0;
+      }
       d->q_end = (b == SCR_H / 16 - 1);
       tick();
     }

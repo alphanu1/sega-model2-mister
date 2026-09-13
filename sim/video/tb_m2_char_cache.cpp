@@ -208,18 +208,22 @@ int main(int argc, char **argv) {
     if (read_word(base, 6) != ref(base)) { std::printf("  FAIL: sibling test cold read\n"); ++fails; }
     settle();                                      // the sibling fetch lands here
     ++checks;
-    // R283: THREE siblings, not one -- the whole tile. A tile is four lines
-    // sharing one tag, and the eight scanlines that cross it read all four.
-    if (d->dbg_fills - f0 != 3) {
-      std::printf("  FAIL: a miss must fetch the rest of its tile -- fills %u\n",
+    // R291: ONE sibling. R283 fetched all three and the BOARD said no -- the
+    // cache is direct-mapped and the other layers' lines are what gets
+    // evicted, so the misses went UP by four times and the machine stopped
+    // booting on a saturated SDRAM. This bench walks one layer and cannot see
+    // that; the number it can check is that the sibling is fetched at all.
+    if (d->dbg_fills - f0 != 1) {
+      std::printf("  FAIL: a miss must fetch its sibling -- fills %u\n",
                   d->dbg_fills - f0);
       ++fails;
     }
     // The next TWO glyph rows are in the sibling line: both must hit, and no
     // new memory transaction may be issued for them.
     const uint64_t r1 = mem_reqs;
-    // Every one of the tile's eight glyph rows must now be resident.
-    for (uint32_t w = 2; w < 16; w += 2) {
+    // The sibling line's two glyph rows must be resident; the rest of the
+    // tile is NOT fetched (R291).
+    for (uint32_t w = 2; w < 8; w += 2) {
       ++checks;
       if (read_word(base + w, 6) != ref(base + w)) {
         std::printf("  FAIL: word %u of the tile was not filled\n", w); ++fails;
