@@ -166,6 +166,9 @@ localparam CONF_STR = {
 	// passes every span through, so the comparison is the texture path and
 	// nothing else.
 	"O[27],Textures,On,Off;",
+	// Which half of the right stick's Y is the throttle. Axis polarity is not
+	// standardised across pads, so this is a setting rather than a rebuild.
+	"O[28],Pedals,Normal,Swapped;",
 	// A bar outside the visible area is indistinguishable from a bar that did
 	// not draw. This packs all four well inside any plausible crop, so a side
 	// missing in BOTH layouts is missing for a real reason.
@@ -223,6 +226,7 @@ hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
 	.ioctl_dout(ioctl_dout),
 	.joystick_0(joystick_0),
 	.joystick_l_analog_0(joy_analog),
+	.joystick_r_analog_0(joy_ranalog),
 	.paddle_0(paddle),
 	.ioctl_wait(ioctl_wait),
 	// NVRAM save: the framework reads backup SRAM back through ioctl_din when
@@ -240,6 +244,7 @@ hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
 
 wire [31:0] joystick_0;
 wire [15:0] joy_analog;
+wire [15:0] joy_ranalog;
 wire  [7:0] paddle;
 wire        ioctl_download, ioctl_wr, ioctl_wait, ioctl_upload;
 wire [15:0] ioctl_din;
@@ -4421,9 +4426,35 @@ wire [7:0] steer = |paddle ? paddle
                  : use_stick ? 8'(9'sh080 + ax34)
                  : steer_dig;
 
-// PEDALS: buttons, full travel. 0x20 idle to 0xe0 pressed, MAME's own limits.
-wire [7:0] accel = joystick_0[10] ? 8'he0 : 8'h20;
-wire [7:0] brake = joystick_0[11] ? 8'he0 : 8'h20;
+// PEDALS ARE ANALOGUE, ON THE RIGHT STICK'S Y AXIS -- Model 1's arrangement,
+// tools/model1-ref/Model1.sv, and its reasoning transfers whole.
+//
+// MiSTer has no dedicated trigger signal: hps_io offers the two sticks, the
+// paddles and the spinners, and a pad's triggers arrive as an analog axis. One
+// axis per pedal was tried there and put the accelerator on the LEFT stick,
+// which moves while steering. BOTH PEDALS ON ONE AXIS, SPLIT BY SIGN, leaves
+// the left stick to steering alone.
+//
+// WHICH HALF IS WHICH DEPENDS ON THE PAD, and axis polarity is not
+// standardised, so `Pedals` swaps them rather than making it a rebuild.
+//
+// THE RANGE IS MODEL 2'S, NOT MODEL 1'S. This board's ADC idles at 0x20 and
+// tops at 0xe0 -- MAME's PORT_MINMAX(0x20,0xe0) on all three channels -- where
+// Model 1 runs 0x01..0xff. The magnitude is seven bits, so three halves of it
+// spans 0..190 and lands on 0x20..0xde; full travel saturates to 0xe0 so the
+// rail is reachable. The buttons stay live and give full travel.
+wire signed [7:0] pedal_ax  = joy_ranalog[15:8];        // right stick Y
+// -128 HAS NO SEVEN-BIT MAGNITUDE: negating it gives zero, so a pad at full
+// deflection would read as a pedal at rest. Clamped to 127.
+wire        [6:0] pedal_mag = (pedal_ax == -8'sd128) ? 7'd127
+                            : pedal_ax[7] ? (~pedal_ax[6:0] + 7'd1) : pedal_ax[6:0];
+wire        [8:0] pedal_scl = {2'd0, pedal_mag} + {3'd0, pedal_mag[6:1]};   // mag * 3/2
+wire        [7:0] pedal_an  = (pedal_scl >= 9'd192) ? 8'he0 : (8'h20 + pedal_scl[7:0]);
+wire              pedal_up  = status[28] ? ~pedal_ax[7] : pedal_ax[7];
+wire        [7:0] accel_an  = pedal_up ? pedal_an : 8'h20;
+wire        [7:0] brake_an  = pedal_up ? 8'h20    : pedal_an;
+wire [7:0] accel = joystick_0[10] ? 8'he0 : accel_an;
+wire [7:0] brake = joystick_0[11] ? 8'he0 : brake_an;
 
 // COIN PATH INSTRUMENT. The board hears a coin -- it plays the sound -- and does
 // not credit it, and there are three different places that can be true in: the
