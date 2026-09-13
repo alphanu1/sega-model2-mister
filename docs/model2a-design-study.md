@@ -15430,3 +15430,46 @@ to meet the seed rule, and with clean slack the renderer finished EVERY band --
 `bands_done [(50, 82)]` against s31's [(15,7), (16,7), (48,5)] on identical RTL.
 The fill was never short of work; it was short of time. That is the strongest
 evidence yet that the clock, not the algorithm, is what the 3D is waiting on.
+
+**R303 -- R297 IS REVERTED. The title screen was clean on tex10 and is speckled
+with wrong glyph pixels now, and R297 is the only change that can reach the tile
+port.**
+
+Ben's photograph of the attract screen decides it. The logo, flags, colour bars
+and text all render correctly -- and scattered across the white field are
+isolated wrong-pixel marks, a few pixels each. That screen was CLEAN on tex10.
+
+The deduction is short. The title screen is the 2D tilemap, which is PORT 3.
+R296 changed the burst length of ports 8 and 9 only -- the TGP's table and data
+fetches -- so it cannot reach port 3 by any path. The only other delta between
+tex10 and the build showing the fault is R297, and R297 is in the ARBITER, which
+every port goes through.
+
+One fault then explains the whole picture, which the three separate theories in
+this session did not:
+
+    scattered wrong glyph pixels    port 3 served someone else's data
+    light table 0 -> 17 dead        the geometry's reads, same mechanism
+    scenery disappearing            wrong transform words, same mechanism
+    car placed off-screen           same
+
+The tag is only three bits wide in the char cache, so a line delivered from the
+wrong transaction matches one time in eight and returns another glyph's pixels
+-- rare, scattered, and exactly what the photograph shows.
+
+*What this costs.* R297 is what took clk_mem from -0.532 to +0.124 and it is the
+reason fix295b/s17 met the seed rule at all. Losing it means the memory
+controller's worst path is back to `rr_next -> rotate -> encode -> eleven-way
+port mux` in one cycle. tex10 closed that path at +0.099 without R297, so it is
+not hopeless -- but the headroom for anything else on clk_mem is gone until the
+registered arbiter is made correct.
+
+*What is NOT withdrawn.* The clean-timing build finished every band --
+`bands_done [(50,82)]` against 15-22 -- and that measurement stands on its own:
+the fill is short of time, not of work.
+
+*The lesson, again, and it is the same one as R295.* R297 passed 105,598 bench
+checks. Both changes that broke this board passed their benches and were caught
+only by the picture. A memory controller's bench drives it with traffic the
+bench author imagined; the board drives it with eleven masters whose timing
+nobody designed.

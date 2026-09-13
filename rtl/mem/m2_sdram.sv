@@ -507,39 +507,6 @@ module m2_sdram #(
                                         : PW'(arb_sum);
   end
 
-  // R297: THE ARBITER'S DECISION IS REGISTERED, ONE CYCLE AHEAD OF DISPATCH.
-  //
-  // MEASURED on build/perf2/s12: every one of the fifteen worst setup paths on
-  // clk_mem is inside this module, and the worst of them -- -0.532 ns against a
-  // 10 ns period -- is `rr_next[0]` to the port mux. The chain was rr_next ->
-  // rotate -> priority encode -> rr_grant and then rr_grant fanning out to an
-  // eleven-way mux on we_p and blen() before anything was registered:
-  // arbitration AND the whole port mux in one cycle.
-  //
-  // Model 1 measured the same path on the same controller, called it "the worst
-  // path in the whole design, and the binding one", and split it exactly this
-  // way (m1_sdram.sv, a7abcbf). The split is free because the decision is only
-  // consumed at DISPATCH and a transfer occupies the controller for ten cycles
-  // or more, so the next grant is computed while the current one is still
-  // running. Nothing waits for it.
-  //
-  // The re-check below is what makes a decision taken a cycle early safe: the
-  // port may have gone in flight, or dropped its request, in the meantime.
-  // Round-robin fairness is unaffected -- a stale choice defers that port by one
-  // transfer and the rotation corrects it on the next pass.
-  logic [PW-1:0] arb_grant;
-  logic          arb_valid;
-  always_ff @(posedge clk) begin
-    if (!rst_n) begin
-      arb_grant <= '0;
-      arb_valid <= 1'b0;
-    end else begin
-      arb_grant <= rr_grant;
-      arb_valid <= rr_valid;
-    end
-  end
-  wire arb_ok = arb_valid && pend[arb_grant] && !inflight[arb_grant];
-
   // ------------------------------------------------------------- transfer
   logic [$clog2(NP+1)-1:0] grant;
   logic                    grant_is_wr;
@@ -828,7 +795,7 @@ module m2_sdram #(
               state    <= S_PRE_REF;
             end else if (!ref_pend &&
                          ((wr_pend && !wr_inflight && !pipe_busy) ||
-                          (arb_ok && !(we_p[arb_grant] && pipe_busy)))) begin
+                          (rr_valid && !(we_p[rr_grant] && pipe_busy)))) begin
               // No new transfer once a refresh is due. Refresh needs every
               // bank precharged and the read pipeline empty, and under
               // continuous traffic the pipeline is never empty — so without
@@ -853,15 +820,15 @@ module m2_sdram #(
                 is_write    <= 1'b1;
                 rd_total    <= 4'd1;
               end else begin
-                grant       <= ($clog2(NP+1))'(arb_grant);
+                grant       <= ($clog2(NP+1))'(rr_grant);
                 grant_is_wr <= 1'b0;
-                is_write    <= we_p[arb_grant];
-                rd_total    <= we_p[arb_grant] ? 4'd1 : blen(arb_grant);
+                is_write    <= we_p[rr_grant];
+                rd_total    <= we_p[rr_grant] ? 4'd1 : blen(rr_grant);
                 // Writes take it too: a port writing is equally in flight and
                 // equally must not be re-selected before it completes.
-                inflight[arb_grant] <= 1'b1;
-                rr_next     <= (arb_grant == ($clog2(NP))'(NP-1))
-                                 ? '0 : arb_grant + 1'b1;
+                inflight[rr_grant] <= 1'b1;
+                rr_next     <= (rr_grant == ($clog2(NP))'(NP-1))
+                                 ? '0 : rr_grant + 1'b1;
               end
               rd_issued   <= '0;
               rd_captured <= '0;
