@@ -175,6 +175,9 @@ localparam CONF_STR = {
 	// Which half of the right stick's Y is the throttle. Axis polarity is not
 	// standardised across pads, so this is a setting rather than a rebuild.
 	"O[28],Pedals,Normal,Swapped;",
+	// 3/4 is entry zero because it is the one where full stick equals full
+	// lock; the others are taste.
+	"O[30:29],Steering,3/4,Full,5/4,Half;",
 	// A bar outside the visible area is indistinguishable from a bar that did
 	// not draw. This packs all four well inside any plausible crop, so a side
 	// missing in BOTH layouts is missing for a real reason.
@@ -4414,7 +4417,37 @@ wire [7:0] iob_in1 = {1'b1, gearval, 3'b111, ~joystick_0[9]};
 // and it is a RAMP rather than a jump to the rail so the wheel sweeps as a real
 // one would.
 wire signed [7:0] ax = joy_analog[7:0];
-wire signed [8:0] ax34 = {ax[7], ax} - {{3{ax[7]}}, ax[7:2]};   // x - x/4
+
+// STEERING SENSITIVITY, because three quarters is a choice and not a law.
+//
+// The 3/4 above exists because the stick is +-127 and the ADC's range is +-96
+// about 0x80, so three quarters lands exactly on the rails: full stick equals
+// full lock. That is the RIGHT default and it stays entry zero -- but a wheel
+// is not a stick, and how much lock a player wants for a given thumb movement
+// is taste, not arithmetic. More sensitive than 3/4 reaches full lock before
+// the stick's edge and CLAMPS there; less sensitive never reaches it.
+//
+// Written as shifts and adds: 1/2, 3/4, 1, and 5/4 of the axis.
+reg [2:0] ssens0_s, ssens1_s;    // three flops, like every other OSD bit here
+always_ff @(posedge clk_sys) begin
+	ssens0_s <= {ssens0_s[1:0], status[29]};
+	ssens1_s <= {ssens1_s[1:0], status[30]};
+end
+wire [1:0] ssens = {ssens1_s[2], ssens0_s[2]};
+wire signed [9:0] ax_x  = {{2{ax[7]}}, ax};                 // sign-extended
+wire signed [9:0] ax_h  = {{3{ax[7]}}, ax[7:1]};            // x/2
+wire signed [9:0] ax_q  = {{4{ax[7]}}, ax[7:2]};            // x/4
+wire signed [9:0] ax_sc = (ssens == 2'd0) ? (ax_x - ax_q)   // 3/4, the default
+                        : (ssens == 2'd1) ? ax_x            // 1
+                        : (ssens == 2'd2) ? (ax_x + ax_q)   // 5/4
+                        :                   ax_h;           // 1/2
+// The ADC's own rails: past them the wheel is already at full lock.
+wire signed [10:0] ax_sum = 11'sh080 + {ax_sc[9], ax_sc};
+// NAMED FOR WHAT IT IS NOW. It was `ax34`, an OFFSET from centre that the
+// consumer added 0x80 to; it is now the finished ADC value, centre and clamp
+// included, and calling it the old name is how the offset gets added twice.
+wire        [7:0]  steer_an = (ax_sum > 11'sh0e0) ? 8'he0
+                            : (ax_sum < 11'sh020) ? 8'h20 : ax_sum[7:0];
 logic [7:0] steer_dig;
 logic [9:0] steer_div;
 always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
@@ -4434,7 +4467,7 @@ always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
 end
 wire use_stick = (ax > 8'sd12) || (ax < -8'sd12);
 wire [7:0] steer = |paddle ? paddle
-                 : use_stick ? 8'(9'sh080 + ax34)
+                 : use_stick ? steer_an
                  : steer_dig;
 
 // PEDALS ARE ANALOGUE, ON THE RIGHT STICK'S Y AXIS -- Model 1's arrangement,
