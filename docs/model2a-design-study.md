@@ -15062,3 +15062,83 @@ trips for 500 random words and 13.0 cycles a word against 9.0. The test is the
 previous DEMAND's index: a walk asks for consecutive dwords. The geometry's
 reads are a walk, punctuated by jumps to headers and pointers, and this
 declines to guess at those.
+
+**R296 -- THE BURST IS NOT WHERE THE BUS TIME GOES; THE ROW IS. Mixed burst
+lengths are safe again, and worth much less than expected.**
+
+Believed: every port had to burst four words or the shared `rd_total` would
+corrupt other ports' data (R108), and that the wasted words were a meaningful
+part of why masters wait.
+
+Now known, in two parts.
+
+*The constraint is gone.* R108 was real: `rd_total` is one global register, and
+a transaction granted while another was still issuing overwrote its burst
+length, so the EARLIER transaction's `tag_last` was computed against the wrong
+count and completed early with zeros above the words that had arrived -- on
+whichever port was mid-transaction, not the port that changed. The pipeline
+rework closed the window. Both writes to `rd_total` are in S_IDLE's grant
+branch; S_RD does not return to S_IDLE until it has issued its last read; the
+FSM is single-threaded, so it cannot write `rd_total` mid-burst. `tag_last` is
+latched into the tag pipeline at issue, so injected tags cannot be reached back
+into. The capture assembly was already indexed on the last word's own tag, so a
+length-2 burst assembles `{32'd0, dq_r, cap[0]}` = {word1, word0} correctly --
+Model 1 made that same fix and its ports 1 and 3 have bursted two ever since
+(m1_sdram.sv, a7abcbf). Our comment was inherited from theirs BEFORE the fix and
+kept the conclusion after the reason had gone.
+
+Established by `tb_m2_sdram` with ports 8 and 9 at two: 106,898 checks, 0 fails,
+0 violations, 0 tag_faults. The proof is not that 8 and 9 pass -- it is that the
+OTHER NINE PORTS pass, because failures on other ports are the entire signature
+of R108 and are what the ten-port run found last time.
+
+*And it buys little.* Like-for-like against the same bench with all ports at
+four:
+
+    p8 burst_max (peak bus occupancy)   20 -> 18 cycles
+    p8 cycles per transaction        15.06 -> 15.04
+    p9 cycles per transaction        15.05 -> 14.99
+    p3 (glyph) wait                171,474 -> 171,749
+
+Peak occupancy falls 10% on the two ports; average cost per transaction does
+not move, and no other port's wait improves. The prediction that halving the
+burst would halve the wait was wrong.
+
+*Why, and where the time actually is.* A transaction that changes row costs
+about fifteen cycles and only four of them move data:
+
+    S_IDLE grant + S_SEL + S_DISPATCH   3   arbitration
+    S_MISS + S_PRE_XFER (T_RP=2)        2   precharge the old row
+    S_ACT                               1   activate
+    S_RCD (T_RCD=2)                     2   wait
+    S_RD                                4   THE ONLY USEFUL CYCLES
+    CL2 + capture to the last word     ~4
+
+That is 27% efficiency. Against R294's measured 46.2% bus busy, actual data
+transfer is about 12% of the bus. With eleven masters in a round-robin,
+consecutive transactions almost never share a row, so the full
+precharge-activate-tRCD is paid on nearly every one.
+
+So the bottleneck is the ROW OVERHEAD, not the burst length, not the glyph cache
+size (128 KB still overran -- 694 misses and 12 overruns a frame), and not the
+arbiter's ORDER. The controller already carries the per-bank state needed to
+overlap (`ras_cnt[4]`, `rd_bank_cnt[4]`, `bank_open[4]`) and its own comment
+says "other banks are free -- which is the entire point of overlapping", but the
+single-threaded FSM serialises what the device can do across four banks.
+Overlapping the next transaction's precharge and activate with the current
+burst is worth roughly 15 cycles -> 7-8, for every master at once.
+
+The burst change is kept: it is free, it is proven safe, and it removes two
+cycles of latency per TGP lookup. It is not the fix.
+
+*Correction carried forward:* an earlier claim in this session that raising the
+tile/glyph clock "buys exactly nothing" was wrong. The 480 ns per-column budget
+is fixed by the beam, but a ~280 ns miss is not all fixed latency -- roughly
+160 ns is memory and roughly 120 ns is the fetch engine's own slow-domain
+cycles, which do scale. At 100 MHz a miss falls to ~220 ns and two misses in a
+column (~440 ns) fit inside the budget where 560 ns did not. The split is
+derived from the controller's cycle counts, not measured, and wants confirming
+before the video path is moved. Note also that `m2_sdram_x2` is not a true CDC
+-- `clk_sys` is an exact /2 of `clk_mem` from the same PLL and the adapter is
+combinational with one registered `done` -- so moving the tile path to 100 MHz
+removes that adapter for the port rather than adding crossing cost.

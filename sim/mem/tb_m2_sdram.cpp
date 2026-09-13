@@ -45,11 +45,30 @@ static const int NP = 11;   // R275: the texel fetch made eleven
 // at all -- its capture composed any non-single transfer from four slots, so a
 // pair took two of its lanes from the previous transfer. A burst length that
 // exists in blen() and is never driven by a test is not covered by it.
-// EVERY PORT BURSTS FOUR, and that is load-bearing rather than incidental --
-// see the blen() comment in m2_sdram.sv. A port with a different length
-// corrupts other ports' data through the shared rd_total, which is exactly
-// what ten active ports found the moment 8 and 9 asked for pairs.
-static int burst_of(int p) { (void)p; return 4; }
+// R296: 8 AND 9 BURST TWO AGAIN, AND THIS TIME THE CONTROLLER DELIVERS IT.
+//
+// What stood here said "EVERY PORT BURSTS FOUR, and that is load-bearing --
+// a port with a different length corrupts other ports' data through the shared
+// rd_total, which is exactly what ten active ports found the moment 8 and 9
+// asked for pairs." That was true when it was written. The corruption was
+// R108: `rd_total` is one global register, and a transaction granted while
+// another was still issuing overwrote its burst length, so the EARLIER
+// transaction's `tag_last` was computed against the wrong count and it
+// completed early with zeros above the words that had arrived -- on whichever
+// port happened to be mid-transaction, not on the port that changed.
+//
+// The window is closed by the pipeline rework: both writes to `rd_total` are
+// in S_IDLE's grant branch, and S_RD does not return to S_IDLE until it has
+// issued its last read, so a single-threaded FSM cannot write `rd_total` while
+// a burst is part-way through issuing. `tag_last` is latched into the tag
+// pipeline at issue, so tags already injected cannot be reached back into.
+//
+// THIS TEST IS THE PROOF. If the window were still open, shortening 8 and 9
+// would show as failures on the OTHER ports -- that is the whole signature of
+// R108, and it is what the ten-port run found last time. Fails confined to
+// ports 8 and 9 would mean only that this mirror is wrong; fails anywhere else
+// mean the defect is live and the burst change must come out.
+static int burst_of(int p) { return (p == 8 || p == 9) ? 2 : 4; }
 
 struct Harness {
   Vm2_sdram_harness* d;
