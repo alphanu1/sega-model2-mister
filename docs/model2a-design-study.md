@@ -15638,3 +15638,51 @@ meant to confirm the R297 revert -- was still fitting, so it rode into spd2
 beside R301 and R304 without its own board test. That is the same stacking that
 turned R295 into a two-cycle bisect, made on the same day, after saying it would
 not be.
+
+**R309 -- THE TEXEL FETCH IS IN-LINE WITH THE SPAN WALK, SO ONE TEXTURE MISS
+STOPS ALL GEOMETRY. This is why enabling textures removes the 3D.**
+
+Ben's question is the one that found it: if 3D bands are held for two frames and
+textures are not, the 3D should still be VISIBLE and only the textures should
+flicker. Turning textures on should not be able to take the 3D away. So what
+links them?
+
+m2_span_tex:
+
+    wire idle       = (st == T_IDLE);
+    assign in_ready = idle && (tex_now || out_ready);
+
+`in_ready` is asserted ONLY in T_IDLE. While a textured span sits in T_FETCH
+waiting for texels, the fill cannot hand over ANY span -- and a flat span, which
+needs nothing from the texel cache and passes through combinationally when it
+gets in, queues behind a texture fetch it has no relationship with. The texel
+fetch is serialised into the single path every piece of geometry must cross.
+
+    textures off   flat spans pass straight through, the fill runs at full rate,
+                   the 3D is visible -- which is exactly what Ben reported
+    textures on    every textured span halts the shared path
+
+Scale, from the s31 capture: 24,553 texel fetches a frame at a 40.6% hit rate is
+about 14,600 misses, and a miss is a full SDRAM round trip of roughly 280 ns.
+That is ~4.1 ms of pure blocking in a 17.38 ms frame -- before the fill does any
+work of its own -- and it is why `hold` runs at 1-2 frames.
+
+*What this corrects.* The texel cache was sized (R293), re-sized (R304) and
+re-sized again (R307) as though the problem were hit RATE. Hit rate only changes
+how OFTEN the stall happens; it does nothing about one miss halting everything
+behind it. The same applies to the clock: 50 -> 80 MHz makes the fill 1.6x
+faster at the work it does, and does not shorten a 280 ns memory round trip the
+pipeline is sitting in.
+
+*The fix is to decouple, not to speed up.* A span FIFO between m2_raster_fill
+and m2_span_tex lets the fill keep producing while a textured span fetches; even
+8-16 entries absorbs most fetches. Deeper, the walk could issue span N+1's texel
+requests while emitting span N, which removes the latency instead of hiding it.
+Either is worth more for this symptom than anything currently queued.
+
+*And a measurement still missing.* Nothing counts how often the texel cache
+sweeps. m2_texel clears one line per cycle on any CPU write to a texture sheet,
+so a per-frame upload would start it cold every frame -- and R304/R307 made that
+sweep 4x longer. Thrashing and repeated sweeps produce the same hit-rate
+counter, and until one register separates them, the cache-size question cannot
+be answered in either direction.
