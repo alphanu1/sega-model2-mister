@@ -45,7 +45,13 @@
 
 module m2_texel #(
   parameter int unsigned AW       = 25,
-  // R304: 4096 LINES x 64 BITS = 32 KB, UP FROM 512 LINES / 4 KB.
+  // R304: 2048 LINES x 64 BITS = 16 KB, UP FROM 512 LINES / 4 KB.
+  //
+  // R307: 4096 WAS TRIED FIRST AND DID NOT FIT -- "device has 553 M10K blocks,
+  // design needs more than 553". IHRES/OHRES frees BLOCKS, not bits: a shallow
+  // buffer still occupies a whole M10K, so the depth reduction did not release
+  // as many as its bit count suggested. 2048 is half the growth and the largest
+  // that fits beside everything else.
   //
   // R293 set 512 and reasoned that "a big cache would buy nothing that a small
   // one does not already hold". The board disagrees: 24,553 texel fetches a
@@ -58,7 +64,7 @@ module m2_texel #(
   // M10K of the 553 that were all in use; this takes about 22 of them.
   // Doubling the GLYPH cache instead was considered and rejected: it costs ~51
   // blocks, which do not exist, and Ben measured that 128 KB still overran.
-  parameter int unsigned IDX_BITS = 12
+  parameter int unsigned IDX_BITS = 11
 ) (
   input  logic             clk,
   input  logic             rst_n,
