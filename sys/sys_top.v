@@ -736,10 +736,21 @@ wire         bob_deint;
 `ifdef MENU_CORE
 		.N_BURST(2048),
 `endif
-		// This core's picture is 496 pixels wide; the scaler's input line
-		// buffers are sized by IHRES and default to 2048. Halving them
-		// frees M10K blocks, which are the binding resource here (study R211).
-		.IHRES(1024),
+		// R304: THE PICTURE IS 496 WIDE, SO 512 IS THE SMALLEST POWER OF TWO
+		// THAT HOLDS IT, AND OHRES IS SET RATHER THAN LEFT AT ITS DEFAULT.
+		//
+		// IHRES sizes ascal's input line buffer (`i_mem : arr_pix(0 TO
+		// IHRES-1)`) and defaults to 2048; R211 halved it to 1024 and stopped
+		// there. 496 needs 512. OHRES sizes the OUTPUT line buffers (`o_line0..3
+		// : arr_pix(0 TO OHRESL-1)`) and defaults to 2304 -- it was never set at
+		// all. 2048 is a legal value (the VHDL asserts 1024/2048/2304/2560/4096)
+		// and still covers 1920, so 1080p output is unaffected.
+		//
+		// M10K is the binding resource: 553 of 553 blocks used. Both of these
+		// are pure buffer-depth reductions with no logic change, and Model 1
+		// applies the same pair on every staged build.
+		.IHRES(512),
+		.OHRES(2048),
 		.N_DW(128),
 		.N_AW(28)
 	)

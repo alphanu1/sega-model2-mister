@@ -26,6 +26,15 @@ static Vm2_texel *d;
 static uint64_t cyc = 0;
 static long checks = 0, fails = 0;
 
+// R304: THE SWEEP IS AS LONG AS THE CACHE HAS LINES, AND THE CACHE GREW.
+// m2_texel clears one tag per cycle at S_INIT, so the warm-up is LINES cycles
+// plus entry and exit. This was three bare `600`s, which was ample at 512 lines
+// (IDX_BITS 9) and far short at 4096 (IDX_BITS 12): the fetch under test had not
+// started yet, so "a dead memory hung the texel fetch" and "the abandoned fetch
+// was not counted" both fired against a DUT that was still sweeping. A mirror of
+// an RTL parameter has to track it.
+static const int SWEEP_TICKS = (1 << 12) + 128;
+
 // Two sheets of 512 K 16-bit words, as words -- the same shape the SDRAM holds.
 static const uint32_t SHEET_WORDS = 1u << 19;
 static uint32_t epoch = 0;
@@ -156,7 +165,7 @@ int main(int argc, char **argv) {
   d->base_s0 = BASE0; d->base_s1 = BASE1;
   for (int i = 0; i < 4; ++i) tick();
   d->rst_n = 1;
-  for (int i = 0; i < 600; ++i) tick();      // the tag sweep
+  for (int i = 0; i < SWEEP_TICKS; ++i) tick();      // the tag sweep
 
   // 1. THE FOUR NIBBLES OF A BLOCK. Walk a 2x2 with everything else fixed, so
   //    a swapped pair is unambiguous rather than lost in a fuzz total.
@@ -241,7 +250,7 @@ int main(int argc, char **argv) {
       std::printf("  FAIL: the cache should still be holding this line\n"); ++fails;
     }
     d->inval = 1; tick(); d->inval = 0;
-    for (int i = 0; i < 600; ++i) tick();     // the sweep
+    for (int i = 0; i < SWEEP_TICKS; ++i) tick();     // the sweep
     ++checks;
     const int after = fetch(t, 20 << 8, 12 << 8);
     if (after != ref_texel(t, 20 << 8, 12 << 8)) {
@@ -258,7 +267,7 @@ int main(int argc, char **argv) {
   //    every band after it -- R162's failure mode. It must give up and answer.
   {
     d->inval = 1; tick(); d->inval = 0;
-    for (int i = 0; i < 600; ++i) tick();      // sweep, so the next fetch misses
+    for (int i = 0; i < SWEEP_TICKS; ++i) tick();      // sweep, so the next fetch misses
     const uint32_t lost0 = d->dbg_lost;
     mem_lat = 1000000;                          // the memory is gone
     TexState t{2, 2, 0, 0, 0, 4, 2};

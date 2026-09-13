@@ -15473,3 +15473,48 @@ checks. Both changes that broke this board passed their benches and were caught
 only by the picture. A memory controller's bench drives it with traffic the
 bench author imagined; the board drives it with eleven masters whose timing
 nobody designed.
+
+**R304 -- FREE 35 M10K IN THE SCALER AND SPEND 22 OF THEM ON THE TEXEL CACHE,
+WHICH IS THE WORST-PERFORMING CACHE IN THE DESIGN.**
+
+M10K is at 553 of 553 blocks. Two scaler parameters give blocks back for no
+logic change at all:
+
+    IHRES  1024 -> 512     input line buffer, `i_mem : arr_pix(0 TO IHRES-1)`
+    OHRES  2304 -> 2048    output line buffers, `o_line0..3`
+
+The picture is 496 pixels wide, so 512 is the smallest power of two that holds
+it; R211 halved IHRES to 1024 and stopped short. OHRES was never set at all and
+defaulted to 2304; ascal asserts 1024/2048/2304/2560/4096, and 2048 still covers
+1920, so 1080p output is unaffected. Model 1 applies both on every staged build.
+
+*Where the blocks go, and why not the glyph cache.* The obvious move is to undo
+the 64 KB glyph cache and put 128 KB back. It is the wrong move twice over.
+Doubling the glyph cache costs about 51 blocks against the 35 freed -- it does
+not fit -- and Ben measured that 128 KB STILL OVERRAN (694 misses and 12
+overruns a frame, against 2,146 and 51 at 64 KB). Its remaining misses are a
+latency tail, not a capacity problem, and the tile clock is what fixes them.
+
+The texel cache is the opposite case:
+
+    glyph cache    8192 lines x 64b   ~51 M10K   hit rate 89-90%
+    texel cache     512 lines x 64b    ~3 M10K   hit rate 40.6%
+
+512 lines is 4 KB, the smallest cache in the design, serving 24,553 fetches a
+frame at 40.6% -- roughly 14,600 misses, each a full SDRAM round trip that
+stalls the span walk MID-SPAN, in the one unit that cannot finish its bands.
+4096 lines is 32 KB for about 22 blocks.
+
+R293 set 512 and reasoned "a big cache would buy nothing that a small one does
+not already hold". That was a claim about the working set, and the board's hit
+rate refutes it: several textures are in play at once across a span.
+
+*A mirror that had to move with it.* tb_m2_texel ticked a bare 600 cycles three
+times for "the tag sweep". m2_texel clears one tag per cycle at S_INIT, so the
+warm-up is LINES cycles -- ample at 512, far short at 4096. Both failures ("a
+dead memory hung the texel fetch", "the abandoned fetch was not counted") were
+firing against a DUT that had not finished sweeping. Replaced with a size-aware
+constant. 8,066 checks, 0 fails.
+
+Whether 35 blocks are really freed and 22 really spent is a FIT question, and
+the fit report is the only thing that can answer it. Not yet built.

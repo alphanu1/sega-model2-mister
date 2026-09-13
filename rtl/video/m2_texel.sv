@@ -45,10 +45,20 @@
 
 module m2_texel #(
   parameter int unsigned AW       = 25,
-  // R293: 512 lines x 64 bits = 4 KB. At 128 the board hit 39%; the working
-  // set is a few rows of several textures at once, and the blocks come from
-  // narrowing the stored texture coordinates (R293).
-  parameter int unsigned IDX_BITS = 9
+  // R304: 4096 LINES x 64 BITS = 32 KB, UP FROM 512 LINES / 4 KB.
+  //
+  // R293 set 512 and reasoned that "a big cache would buy nothing that a small
+  // one does not already hold". The board disagrees: 24,553 texel fetches a
+  // frame at a 40.6% hit rate is roughly 14,600 misses, each a full SDRAM round
+  // trip that stalls the span walk MID-SPAN. It is the worst hit rate of any
+  // cache in this design -- the glyph cache runs at 89-90% -- and the one that
+  // stalls the unit that cannot finish its bands.
+  //
+  // The blocks come from R304's IHRES 512 / OHRES 2048, which frees about 35
+  // M10K of the 553 that were all in use; this takes about 22 of them.
+  // Doubling the GLYPH cache instead was considered and rejected: it costs ~51
+  // blocks, which do not exist, and Ben measured that 128 KB still overran.
+  parameter int unsigned IDX_BITS = 12
 ) (
   input  logic             clk,
   input  logic             rst_n,
