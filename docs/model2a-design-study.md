@@ -15005,3 +15005,60 @@ Seven blocks doing nothing, against a texel cache that is the bottleneck.
 
 THE MEASUREMENT TO REPEAT: `bands_done` in the 'H' record. 51 is every band;
 14-27 is what a textured frame manages today.
+
+**R295 -- THE GEOMETRY WAITS FOR THE BUS 43.5% OF THE FRAME WHILE THE BUS IS
+IDLE 54% OF IT, AND THE FIX IS TO ASK EARLIER.** R294's first capture:
+
+    SDRAM bus busy            46.2% of the frame
+      CPU port waiting        10.8%
+      GEOMETRY waiting        43.5%
+      glyph fetch waiting     10.8%
+      texel fetch waiting     11.6%
+
+That is not bandwidth. A port that waits while the bus is idle is waiting for
+LATENCY: the engine reads a dword, stands still for the round trip (about ten
+clk_sys cycles, R208), uses it, and reads the next -- and nothing else fills
+the gap.
+
+**A CORRECTION FIRST, because it was in this file's own plan:** the pair cache
+was NOT throwing half the burst away. m2_sdram answers with four 16-bit words,
+which IS the requested dword plus the next one, and R214 already keeps the
+second. There is no wasted half to reclaim; there is only the waiting.
+
+So the trip moves earlier. When the port answers a demand read at N it has
+given us N and N+1, the stream's next want is N+2, and the engine is about to
+spend cycles transforming N. The prefetch goes out THEN, on a bus that is idle,
+and N+2 is in hand before it is asked for. Measured on the bench, per word of a
+sequential stream, with a reader that has no think time at all:
+
+    no cache          9.1 cycles waiting
+    pair alone        6.0
+    pair + prefetch   4.0            at the SAME 251 port trips
+
+FOUR THINGS THIS COST, EACH FOUND BY THE BENCH AND NONE OBVIOUS:
+
+1. **A prefetch's acknowledge is not the requester's.** The hit pulse is gated
+   on `!p_ack` so it cannot be raised while the port's held acknowledge of a
+   DEMAND is up. A prefetch's acknowledge never reaches the requester, so
+   gating on it merely delayed the hit until the next request had arrived --
+   and the requester took that stale pulse as the answer to the NEW index.
+   Every even word of a sequential stream read the word before it.
+2. **The request must fall on the acknowledge's RISING edge**, as R208's
+   requester does. Holding it until the acknowledge fell deadlocked: the port
+   holds its acknowledge until the request drops. `pf_own` -- a separate flag
+   that outlives `pf_req` by the length of the held acknowledge -- is what the
+   hit gate actually needs.
+3. **A demand that arrives mid-prefetch must wait for a CLEAN EDGE.** Without
+   masking it, `p_req` never falls between the two, the port sees no new
+   request, and the demand takes the prefetch's answer.
+4. **A guess in flight that is already right must not be thrown away.**
+   Discarding it and issuing a demand for the same index cost a second trip for
+   a word already on its way: 375 trips for 500 sequential words, where the
+   plain pair cache took 250.
+
+AND ONLY A STREAM EARNS A PREFETCH. Started on every miss, the guesses are
+wrong on random access and a demand queues behind a useless transaction -- 750
+trips for 500 random words and 13.0 cycles a word against 9.0. The test is the
+previous DEMAND's index: a walk asks for consecutive dwords. The geometry's
+reads are a walk, punctuated by jumps to headers and pointers, and this
+declines to guess at those.

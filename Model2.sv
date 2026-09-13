@@ -4333,7 +4333,9 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	      : (tps_ph == 3'd3)                  ? {geo_walk_flip[7:0], geo_walk_fb[7:0], geo_walk_unknown[7:0], geo_dropped[7:0]}   // R255/R263
 	      : (tps_ph == 3'd2)                  ? {cc_f_f, vid_ovr_frame}         // R269: sibling fills : scanlines that overran, last frame
 	      : (tps_ph == 3'd4)                  ? {tx_h_f, tx_n_f}                // R275: texel hits : texels that were not 0xF
-	      : (tps_ph == 3'd5)                  ? {tx_m_f, 16'd0}                 // R294: texel misses beside the bus figures
+	      : (tps_ph == 3'd5)                  ? {tx_m_f, tex_lost}              // R295: texel misses : fetches ABANDONED on a dead memory. A
+	                                                                           // nonzero abandon count is 1,023 cycles apiece and explains
+	                                                                           // any amount of missing picture on its own.
 	      : (tps_ph == 3'd6)                  ? {bwl_tex[20:5], 16'd0}          // R294: texel fetch waiting
 	      : {lum_mean_f, lum_zpc_f, wedge_slot, wedge_n[6:0], r3d_quads[11:4]}),   // R249: the frame's mean luminance and its black-polygon percentage, where the always-zero drop count and the free-running miss count were
 	.a_tag(8'h43),

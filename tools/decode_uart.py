@@ -122,10 +122,11 @@ if Z or Z2:
     def med3(v): w=sorted(v); return w[len(w)//2] if w else 0
     if Z:
         busy=[(a>>16)&0xffff for a,_ in Z]; cpu=[a&0xffff for a,_ in Z]
-        txm=[(d>>16)&0xffff for _,d in Z]
+        txm=[(d>>16)&0xffff for _,d in Z]; lost=[d&0xffff for _,d in Z]
         print('SDRAM (R294): bus busy %.1f%% of the frame; the CPU port waits %.1f%%'
               % (100*med3(busy)/FR, 100*med3(cpu)/FR))
-        print('    texel misses med %d a frame' % med3(txm))
+        print('    texel misses med %d a frame; fetches ABANDONED on a dead memory: %d (must be 0)'
+              % (med3(txm), max(lost) if lost else 0))
     if Z2:
         geo=[(a>>16)&0xffff for a,_ in Z2]; chr_=[a&0xffff for a,_ in Z2]
         tex=[(d>>16)&0xffff for _,d in Z2]
