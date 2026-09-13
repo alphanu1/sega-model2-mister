@@ -2,6 +2,35 @@
 
 **Updated:** 2026-09-13 01:45 (machine clock). Study entries R176-R283.
 
+## 03:10, 09-13: WHERE THE TEXTURE BUILD STANDS, AND WHY IT TOOK FOUR TRIES
+
+**The texture path is complete and proven at the bench; what is being fought is
+the device.** In order, and each is recorded as a study entry:
+
+1. `tex1` fitted at 95% and closed timing -- and drew ZERO textured pixels,
+   because the OSD switch was written as a mask on an OUTPUT port and the
+   textured bit was never driven (R282). **That also means tex1's 95% was not a
+   measurement of the texture path**: with the bit tied to zero, Quartus
+   constant-propagated the whole plane fit away.
+2. With the bit driven, the design needed 4,222 LABs of 4,191. The SDRAM
+   checksum sweep and the wedge catcher -- both instruments whose questions are
+   answered -- are gated off by `SWEEP_EN`/`WEDGE_EN` (R284).
+3. It then fitted at 99% and missed timing by 5.5 ns on every seed. The long
+   path was `uv_at` written in a 48-bit context for a 32-bit answer, built out
+   of logic because nothing told the synthesiser to use the 56 free DSP blocks
+   (R285).
+4. And the gradients are now 8.8 rather than 16.16 (R286), which halves every
+   multiplier and shifter in the fit for a fiftieth of a texel of error.
+
+**Two Quartus-dialect traps cost a build each** -- `~IDX_BITS'(3)` and
+`pf_scale(...)[15:0]`, both of which Verilator accepts and quartus_map rejects
+after seven seconds. `make syn_check` now runs Quartus's own parser over the
+whole `rtl/` tree in about a minute; run it before a build.
+
+**If the current build still misses timing**, the next cut is the fill's SECOND
+divider (~700 ALUTs): the two exist because one made the edge-slope wait 49% of
+the fill (R-entry in the file), so it is a throughput trade and not a free one.
+
 ## 01:45, 09-13: `build/tex2` IS THE ONE TO TEST
 
 **`build/tex1` went to the board and drew ZERO textured pixels.** Not a texture
