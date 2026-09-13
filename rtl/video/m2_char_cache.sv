@@ -54,7 +54,17 @@ module m2_char_cache #(
   // row and hit on the odd one. Measured cause: the hit rate is 82.6% and each
   // miss costs ~14 cycles against a 24-cycle per-column budget, which is why
   // 27 lines of every 384 overrun and repeat.
-  parameter int unsigned IDX_BITS = 13,
+  // R313: 4096 LINES / 32 KB, DOWN FROM 8192 / 64 KB, and this is an AREA trade
+  // rather than a cache decision. ALM is the binding resource (41,132 of 41,910,
+  // 1.9% free) and the fitter is crashing two seeds in three at that density;
+  // M10K only LOOKS full because Quartus pushes logic into spare blocks to
+  // relieve ALM. Halving this releases ~34 M10K, which buys back the ~484 ALM
+  // the register span queue costs by returning that queue to block memory.
+  //
+  // IT COSTS MISSES, and R283 says how many: 128 KB gave 694 a frame, 64 KB gave
+  // 2,146. Expect 32 KB to roughly double again, and the scanline overruns with
+  // it. That is the price of a build that fits at all.
+  parameter int unsigned IDX_BITS = 12,
   parameter int unsigned ADDR_BITS = 18
 ) (
   input  logic                   clk,

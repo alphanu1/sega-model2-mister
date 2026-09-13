@@ -15824,3 +15824,55 @@ The per-module pipelining is required for ALL of these, and each module that
 clears 10 ns is banked whichever frequency is finally set. So the order does not
 change: fix modules hardest-first, re-measure with the same ten-second query,
 and let the achieved paths choose the clock rather than choosing it in advance.
+
+**R313 -- TRADE ALM FOR M10K: the char cache halves and the span queue returns
+to block memory. ALM is the binding resource, not M10K, and the fitter is the
+thing running out.**
+
+Four builds in a row have failed on the FITTER rather than on anything in the
+RTL:
+
+    perf1   4 of 4 seeds   STA sta_scc internal error
+    r303    2 of 3         DYN and STA internal errors
+    fifo1   1 of 3 lost    plus clk_mem -0.398 / -1.167
+    fifo2   2 of 3         DYN error and a Segment Violation; survivor hold -0.062
+
+At 41,132 of 41,910 ALM -- 1.9% free -- Quartus has no room to place, and the
+crashes are a symptom of that rather than of any one change.
+
+*M10K only LOOKS full.* It reads 553/553 in every build, including ones where
+30 blocks had just been released. With ALM tight, Quartus pushes logic into
+spare block memory to relieve it, so the M10K figure stays pinned whatever we
+do. Reading it as "M10K is exhausted" is what sent three separate sizing
+decisions the wrong way today (R304, R307, and the 4096-line attempt that would
+not fit).
+
+So the trade runs the other way from the one this file has been making:
+
+    char cache 8192 -> 4096 lines     releases ~34 M10K, costs misses
+    span queue registers -> m2_fifo_m10k   releases ~484 ALM, costs ~30 M10K
+
+*What the char cache reduction costs, stated plainly.* R283 measured 128 KB at
+694 misses a frame and 64 KB at 2,146. 32 KB should roughly double again, and
+the scanline overruns with it. This is not a cache decision, it is the price of
+a build that fits.
+
+*And the bubble comes back.* m2_fifo_m10k's own comment: "after a pop the next
+word takes two cycles to reach the head". R312 replaced it precisely to avoid
+that. The fill emits a span every four to eight cycles, so back-to-back pops
+only happen while the queue DRAINS -- which is when it is doing its job, and
+where a flat span's throughput halves. Accepted deliberately, recorded so it is
+not rediscovered.
+
+*A parameter override that nearly made the whole change a no-op.* Model2.sv
+instantiates `m2_char_cache #(.IDX_BITS(13))`, so editing the module's DEFAULT
+changed nothing. Caught by lint only because `inval_idx` then mismatched by a
+bit. A default is not a setting when the instantiation overrides it.
+
+*Measured properly this time.* Per-hierarchy figures, read from the fit report
+rather than derived: i960 7,717 ALM, m2_geometry 6,388, m2_raster3d 5,912
+(fill 3,648), m2_sound_board 5,029, m2_copro 2,612. M10K: m2_quad_store 123,
+m2_sound_board 82, m2_char_cache 68, m2_tdp_ram 64, ascal ~50. An earlier claim
+here that the char cache used 204 blocks and was "badly packed" was a
+triple-count of parent and child rows; 68 against a ~55 minimum is normal, and
+there was never anything to reclaim.

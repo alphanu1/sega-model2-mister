@@ -242,8 +242,9 @@ module m2_raster3d #(
 
   localparam int unsigned SQ_DW = 242;
   logic [SQ_DW-1:0] sq_din, sq_q;
-  logic             sq_in_rdy, sq_qv, sq_rdy, sq_busy;
-  logic [7:0]       sq_count;
+  logic             sq_in_rdy, sq_qv, sq_rdy, sq_busy, sq_full;
+  logic [15:0]      sq_cnt16;
+  logic [31:0]      sq_dropped;   // must stay zero: a dropped span is a hole
 
   // Backpressure, NOT a drop: m2_fifo_m10k's `full` retires the TGP's pushes
   // silently, and a silently dropped span is a hole in the picture.
@@ -255,12 +256,24 @@ module m2_raster3d #(
                     fl_span_col, fl_span_tex,
                     fl_span_moire, fl_span_tex_en };
 
-  m2_span_q #(.DW(SQ_DW), .DEPTH(8)) u_span_q (
+  // R313: BACK TO BLOCK MEMORY, to trade ALM for M10K. The register queue
+  // (R312) is the better part -- no bubble -- but it costs ~484 ALM, and ALM is
+  // what the fitter is running out of. m2_fifo_m10k costs ~30 M10K instead,
+  // which the halved char cache has just released.
+  //
+  // ITS BUBBLE IS ACCEPTED, NOT OVERLOOKED: "after a pop the next word takes two
+  // cycles to reach the head". The fill emits a span every four to eight cycles,
+  // so back-to-back pops only occur while the queue DRAINS -- which is when it
+  // is doing its job, and where a flat span's throughput halves. Watch it; do
+  // not assume it is free.
+  m2_fifo_m10k #(.DW(SQ_DW), .DEPTH(32)) u_span_q (
     .clk(clk), .rst_n(rst_n),
-    .in_valid(fl_span_valid), .in_ready(sq_in_rdy), .in_data(sq_din),
-    .out_valid(sq_qv), .out_ready(sq_rdy), .out_data(sq_q),
-    .busy(sq_busy), .count(sq_count)
+    .push(fl_span_valid && sq_in_rdy), .din(sq_din),
+    .pop(sq_qv && sq_rdy), .q(sq_q), .q_valid(sq_qv),
+    .full(sq_full), .count(sq_cnt16), .dropped(sq_dropped)
   );
+  assign sq_in_rdy = !sq_full;
+  assign sq_busy   = sq_qv || (sq_cnt16 != 16'd0);
 
   // Unpacked, in the same order.
   wire signed [31:0] sq_y    = sq_q[241:210];

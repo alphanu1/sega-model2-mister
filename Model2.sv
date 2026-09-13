@@ -5353,7 +5353,7 @@ wire [31:0] char_hits, char_misses, char_fills;
 // scanline overruns per frame. If the overruns climb here, this is the first
 // thing to put back -- and the numbers to compare against are build/fix3d25's,
 // taken at 128 KB with the same sibling fill.
-m2_char_cache #(.IDX_BITS(13)) u_char_cache (
+m2_char_cache #(.IDX_BITS(12)) u_char_cache (   // R313: 32 KB, an ALM/M10K trade -- see the module
 	.clk(clk_sys), .rst_n(cc_rst_n_s),
 	.v_req(char_req), .v_addr(char_addr),
 	.v_ack(char_ack), .v_data(char_data),
@@ -5363,7 +5363,7 @@ m2_char_cache #(.IDX_BITS(13)) u_char_cache (
 	// IDX_BITS: [14:2] for 13 bits, not [15:2]. A stale width here invalidates
 	// the wrong line on a CPU character write, which shows up as glyphs that
 	// are correct until the game rewrites one and then stay stale.
-	.inval(cpu_char_wr), .inval_idx(cpu_char_wr_addr[14:2]),
+	.inval(cpu_char_wr), .inval_idx(cpu_char_wr_addr[13:2]),   // R313: IDX_BITS 13 -> 12
 	.dbg_hits(char_hits), .dbg_misses(char_misses), .dbg_fills(char_fills)
 );
 
