@@ -389,8 +389,12 @@ module m2_char_cache #(
             bgst <= BG_IDLE;
           end else begin
             bg_n   <= bg_n + 2'd1;
-            bg_idx <= (bg_idx & ~IDX_BITS'(3))
-                    | IDX_BITS'(2'(idx_r[1:0] ^ 2'(bg_n + 2'd1)));
+            // The four lines of a tile differ only in the index's low two
+            // bits, so this is a slice replacement and not arithmetic. Written
+            // without casts: QUARTUS 17.0 REJECTS `~IDX_BITS'(3)` outright
+            // ("syntax error near '", expecting ')'), where Verilator takes it
+            // -- and a lint that passes is not a build that passes.
+            bg_idx <= {bg_idx[IDX_BITS-1:2], idx_r[1:0] ^ (bg_n + 2'd1)};
             bgst   <= BG_GAP;              // the port must go idle between fetches
           end
         end
