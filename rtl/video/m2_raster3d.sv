@@ -242,13 +242,12 @@ module m2_raster3d #(
 
   localparam int unsigned SQ_DW = 242;
   logic [SQ_DW-1:0] sq_din, sq_q;
-  logic             sq_full, sq_qv, sq_rdy;
-  logic [15:0]      sq_count;
-  logic [31:0]      sq_dropped;   // must stay zero: a dropped span is a hole
+  logic             sq_in_rdy, sq_qv, sq_rdy, sq_busy;
+  logic [7:0]       sq_count;
 
   // Backpressure, NOT a drop: m2_fifo_m10k's `full` retires the TGP's pushes
   // silently, and a silently dropped span is a hole in the picture.
-  assign fl_span_ready = !sq_full;
+  assign fl_span_ready = sq_in_rdy;
 
   assign sq_din = { fl_span_y, fl_span_x0, fl_span_x1,
                     fl_span_u, fl_span_v,
@@ -256,11 +255,11 @@ module m2_raster3d #(
                     fl_span_col, fl_span_tex,
                     fl_span_moire, fl_span_tex_en };
 
-  m2_fifo_m10k #(.DW(SQ_DW), .DEPTH(256)) u_span_q (
+  m2_span_q #(.DW(SQ_DW), .DEPTH(8)) u_span_q (
     .clk(clk), .rst_n(rst_n),
-    .push(fl_span_valid && !sq_full), .din(sq_din),
-    .pop(sq_qv && sq_rdy), .q(sq_q), .q_valid(sq_qv),
-    .full(sq_full), .count(sq_count), .dropped(sq_dropped)
+    .in_valid(fl_span_valid), .in_ready(sq_in_rdy), .in_data(sq_din),
+    .out_valid(sq_qv), .out_ready(sq_rdy), .out_data(sq_q),
+    .busy(sq_busy), .count(sq_count)
   );
 
   // Unpacked, in the same order.
@@ -674,7 +673,7 @@ module m2_raster3d #(
           // early paints them into the next band, which tb_m2_raster3d caught
           // as "a frame with no new list painted 2214, the previous 2009".
           else if (!qs_out_valid && !qs_replay_busy
-                   && !sq_qv && sq_count == 16'd0 && !spantex_busy
+                   && !sq_busy && !spantex_busy
                    && tx_span_ready) cst <= C_DONE;   // and the band has painted the last one
         end
         C_FILLW: if (fl_quad_done) cst <= C_FILL;
