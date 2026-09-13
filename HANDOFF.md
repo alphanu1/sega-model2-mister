@@ -24,6 +24,16 @@ nothing textured reached the span walk at all -- a different fault from a
 texture that looks wrong. The 'V' record beside it says what the glyph cache is
 doing now that it is half the size (see below).
 
+**The texture data is real, and that was the last bug.** R278: the sheets are
+mapped with `.mirror(0x200000)`, so bit 21 is an address line the chip select
+does not decode -- and the decode was using it as part of the index. Every
+mirrored write landed half a megaword past the base: sheet 0's mirror on sheet
+1, sheet 1's mirror ON THE LUMA TABLE. Daytona uploads THROUGH the mirror, so
+all 71,297 of its texture writes in the first three million instructions went
+to the luma base and none to either sheet. Fixed, the boot bench sees the game
+fill BOTH SHEETS COMPLETELY by twenty million instructions -- 1,048,576 words,
+618,405 of them not 0xFFFF.
+
 **What is knowingly approximate**, in the order it will show:
 * AFFINE, not perspective. The reference divides u and v by z per pixel; this
   fits one plane per quad. Polygons whose corners are at very different depths
