@@ -14549,8 +14549,13 @@ sheet 0's mirror landed on sheet 1 and SHEET 1'S MIRROR LANDED ON THE LUMA
 TABLE. And Daytona uploads its textures THROUGH THE MIRROR, at 0x126xxxxx, so
 every texture went there.
 
-With `[20:2]`: 62,721 words arrive in sheet 1, 43,211 of them not 0xFFFF --
-actual texture data, in the memory the texel fetch reads.
+With `[20:2]`: 62,721 words arrive in sheet 1 in the first three million
+instructions, 43,211 of them not 0xFFFF. Run to TWENTY MILLION and the game
+fills BOTH SHEETS COMPLETELY -- 1,048,576 words, words 0x1760000..0x185ffff,
+618,405 of them not 0xFFFF. It writes sheet 0 through its mirror as well
+(0x12200000), so both mirrors were broken and both are fixed. That is a
+megabyte of real texture data that has been going into the luma table since
+R264 was written.
 
 **THE BENCH AGREED WITH THE BUG, AND THAT IS THE PART TO KEEP.**
 `tb_m2_cpu_bridge` had a mirror test:
