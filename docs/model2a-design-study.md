@@ -14974,3 +14974,34 @@ busiest attract frame measured 1,424 quads); a set-associative glyph cache,
 which trades tag blocks for conflict misses; or the per-quad texture
 coordinates in SDRAM instead of M10K, which is a new DMA path and trades blocks
 for bandwidth on a memory that is already the binding resource.
+
+**R293 -- THE TEXTURE PATH'S COST IS THE HANDSHAKE, NOT THE MEMORY.** With the
+texel fetch on its own port (R292) the board draws the textures correctly --
+the user's A/B is decisive: OSD textures OFF and the 3D is exactly as it was.
+What it cannot do is finish its bands:
+
+    bands finished of 48:   14 - 27, one slice of the capture managed 51
+    textured pixels a frame: 53,982
+    texel fetches a frame:   26,990 at a 39.1% hit rate
+
+27,000 fetches at roughly twelve cycles each is 340,000 cycles of a 790,000
+cycle frame, spent in the one place that has a beam deadline. And most of that
+is not memory: a HIT costs four cycles -- the requester raises a level, the
+unit registers the index, reads the arrays, compares, acknowledges, and waits
+to see the request drop -- for a line it fetched moments ago.
+
+A 64-BIT LINE IS EIGHT TEXELS ACROSS, and the span walk steps u by about half a
+texel a pixel. At two pixels a fetch that is EIGHT CONSECUTIVE REQUESTS INSIDE
+ONE LINE. So the line just fetched is held with its index and tag, and a
+request that matches is answered from that register in one cycle with no array
+read and no state change. It is not a second cache; it is the line the walk is
+already inside.
+
+And the cache grows from 1 KB to 4 KB, which is where the 39% goes. The blocks
+come from the band buffers: NBUF 4 -> 3. A band buffer exists so the fill can
+run AHEAD of the beam, and the board says the fill is not running ahead of
+anything -- the fourth buffer sits empty while the third is still being filled.
+Seven blocks doing nothing, against a texel cache that is the bottleneck.
+
+THE MEASUREMENT TO REPEAT: `bands_done` in the 'H' record. 51 is every band;
+14-27 is what a textured frame manages today.

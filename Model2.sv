@@ -5392,7 +5392,15 @@ wire [31:0] tex_pixels, tex_hits, tex_misses, tex_nz;
 // shared it is in git, one commit back.
 wire [15:0] tex_lost;
 
-m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(4),
+// R293: THREE BAND BUFFERS, NOT FOUR, AND THE TEXEL CACHE GETS THE BLOCKS.
+//
+// A band buffer is 496 x 8 x 17 bits -- seven M10K -- and it exists so the
+// fill can run AHEAD of the beam. The board says the fill is not running
+// ahead of anything: 14 to 27 bands of 48 finish, so the fourth buffer sits
+// empty while the third is still being filled. The same seven blocks in the
+// texel cache take it from 1 KB to 4 KB, and the texel cache is where the
+// fill's time is going -- 27,000 fetches a frame at a 39% hit rate.
+m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(3),
               .TWO_CLOCKS(1'b0), .TEX_AW(SDR_AW)) u_raster3d (
 	.clk(clk_sys), .rst_n(mem_rst_n),
 	.frame_start(geo_walk_start),

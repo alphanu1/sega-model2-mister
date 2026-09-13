@@ -45,7 +45,10 @@
 
 module m2_texel #(
   parameter int unsigned AW       = 25,
-  parameter int unsigned IDX_BITS = 7        // 128 lines x 64 bits = 1 KB
+  // R293: 512 lines x 64 bits = 4 KB. At 128 the board hit 39%; the working
+  // set is a few rows of several textures at once, and the blocks come from
+  // narrowing the stored texture coordinates (R293).
+  parameter int unsigned IDX_BITS = 9
 ) (
   input  logic             clk,
   input  logic             rst_n,
@@ -159,6 +162,22 @@ module m2_texel #(
     if (ct_we) ctag [mem_addr] <= ct_din;
   end
 
+  // THE LINE JUST FETCHED, ANSWERED IN ONE CYCLE (R293).
+  //
+  // A 64-bit line is eight texels across, and the span walk steps u by about
+  // half a texel a pixel -- so consecutive requests land in the SAME LINE far
+  // more often than not. Going round the arrays for them costs three cycles
+  // each and 27,000 fetches a frame, which is most of why the band fill does
+  // not finish: measured on the board, 14 to 27 bands of 48.
+  //
+  // So the last line is held with its index and tag, and a request that
+  // matches is answered from the register with no array read and no state
+  // change. It is not a second cache -- it is the one line the walk is
+  // already inside.
+  logic                last_v;
+  logic [IDX_BITS-1:0] last_idx;
+  logic [TAG_BITS-1:0] last_tag;
+
   typedef enum logic [2:0] { S_INIT, S_IDLE, S_LOOK, S_MISS, S_FILL, S_ACK } st_t;
   st_t st;
 
@@ -210,6 +229,7 @@ module m2_texel #(
       st <= S_INIT; sweep <= '0; idx_r <= '0; tag_r <= '0; sel_r <= '0;
       wa_r <= '0; sheet_r <= 1'b0; hold <= '0; x2_r <= '0; y2_r <= '0;
       m_req <= 1'b0; m_addr <= '0; ack <= 1'b0; to_cnt <= '0; dbg_lost <= '0;
+      last_v <= 1'b0; last_idx <= '0; last_tag <= '0;
       inval_d <= 1'b0; inval_pend <= 1'b0;
       dbg_hits <= '0; dbg_misses <= '0;
     end else begin
@@ -227,8 +247,17 @@ module m2_texel #(
         end
 
         S_IDLE: if (inval_pend) begin
-          sweep <= '0;
-          st    <= S_INIT;
+          sweep  <= '0;
+          last_v <= 1'b0;                 // the sweep drops the held line too
+          st     <= S_INIT;
+        end else if (req && last_v && (req_idx == last_idx) && (req_tag == last_tag)) begin
+          // Already in hand: answer now, and count it as the hit it is.
+          sel_r    <= req_sel;
+          x2_r     <= x2;
+          y2_r     <= y2;
+          ack      <= 1'b1;
+          dbg_hits <= dbg_hits + 1'd1;
+          st       <= S_ACK;
         end else if (req) begin
           idx_r   <= req_idx;
           tag_r   <= req_tag;
@@ -242,6 +271,9 @@ module m2_texel #(
 
         S_LOOK: if (hit) begin
           hold     <= cd_q;
+          last_v   <= 1'b1;
+          last_idx <= idx_r;
+          last_tag <= tag_r;
           ack      <= 1'b1;
           dbg_hits <= dbg_hits + 1'd1;
           st       <= S_ACK;
@@ -271,8 +303,11 @@ module m2_texel #(
         end
 
         S_FILL: begin
-          ack <= 1'b1;
-          st  <= S_ACK;
+          ack      <= 1'b1;
+          last_v   <= 1'b1;
+          last_idx <= idx_r;
+          last_tag <= tag_r;
+          st       <= S_ACK;
         end
 
         S_ACK: if (!req) st <= S_IDLE;
