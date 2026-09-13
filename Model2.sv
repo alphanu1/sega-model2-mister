@@ -123,7 +123,13 @@ localparam CONF_STR = {
 	// is the game saying "the list is ready", so Flip should be right -- but
 	// on hardware it walks a list that decodes one to three opcodes, and the
 	// alternatives are worth a switch rather than four builds.
-	"O[24:23],Walk trigger,Flip,Vblank,After flip,Write ptr;",
+	// R294: "AFTER FLIP" FIRST, BECAUSE IT IS THE ONE THAT WORKS. The board was
+	// run through all four and this is the setting the picture is best on; an
+	// OSD bit reads zero until someone moves it, so the best setting has to be
+	// entry zero. The RTL's own codes are unchanged -- the swap is one mux at
+	// the synchroniser, below -- so every study entry that names a trig_mode
+	// number still means what it says.
+	"O[24:23],Walk trigger,After flip,Vblank,Flip,Write ptr;",
 	// PROVE THE DRAWING HALF, INDEPENDENTLY OF THE GEOMETRY.
 	//
 	// Everything from the quad store to the video mixer has only ever been fed
@@ -552,7 +558,12 @@ always_ff @(posedge clk_sys) begin
 	wtrig0_s <= {wtrig0_s[1:0], status[23]};
 	wtrig1_s <= {wtrig1_s[1:0], status[24]};
 end
-wire [1:0] wtrig_s2 = {wtrig1_s[2], wtrig0_s[2]};
+// R294: the menu's order is not the RTL's encoding -- 0 and 2 are swapped so
+// that the default lands on "After flip". Vblank (1) and Write ptr (3) keep
+// their codes.
+wire [1:0] wtrig_menu = {wtrig1_s[2], wtrig0_s[2]};
+wire [1:0] wtrig_s2   = (wtrig_menu == 2'd0) ? 2'd2 :
+                        (wtrig_menu == 2'd2) ? 2'd0 : wtrig_menu;
 // R256: declared here, assigned below where the video control register and the
 // frame counter are declared -- Quartus 17.0 rejects a reference to a name it
 // has not seen, and that cost build/fix3d13 outright.
