@@ -14857,3 +14857,27 @@ THE POINT ABOUT METHOD: three timing hypotheses were available (the texture
 arithmetic, congestion at 99%, the arbiter) and one command distinguished them.
 `quartus_sta -t` with `report_timing` on an existing build directory takes two
 minutes and needs no rebuild.
+
+**R289 -- AND WITH THE ARBITER FIXED, THE WORST PATH WAS THE PLANE FIT'S OWN
+LEADING-ZERO COUNT.** `report_timing` again, on the build with R288 in it:
+
+    Slack     : -0.365 (VIOLATED)
+    From Node : m2_raster_fill|clz32~6_OTERM13282
+    To Node   : m2_raster_fill|dvdx[8]
+
+`den_sh` -- how far the determinant was shifted down to fit sixteen bits -- was
+a WIRE, so every `pf_scale` recomputed a 32-bit priority encode of the
+determinant and then fed it into a 40-bit barrel shifter and a clamp, all in
+the cycle the quotient comes back:
+
+    det_r -> abs -> clz32 -> den_sh -> net -> shift -> clamp -> dvdx
+
+The determinant is known a full STATE before the quotient arrives, so the
+encode is now done once, into a register, at the point the numerators are
+computed. The remaining path is register + register -> adder -> shifter ->
+clamp.
+
+THREE WORST PATHS IN ONE NIGHT, AND EACH WAS A DIFFERENT MODULE: the texture
+interpolation (R285), the SDRAM arbiter (R288), and this. Every one was found
+with `report_timing` in two minutes on an already-built directory, and not one
+of them would have been the first guess.

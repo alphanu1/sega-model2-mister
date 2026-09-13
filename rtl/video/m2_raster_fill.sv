@@ -241,7 +241,16 @@ module m2_raster_fill (
   wire [31:0] det_abs = det_r[31] ? (~det_r + 32'd1) : det_r;
   wire [5:0]  det_clz = clz32(det_abs);
   // Bits the denominator must lose to fit in sixteen.
-  wire [5:0]  den_sh  = (det_clz >= 6'd16) ? 6'd0 : (6'd16 - det_clz);
+  wire [5:0]  den_sh_c = (det_clz >= 6'd16) ? 6'd0 : (6'd16 - det_clz);
+  // REGISTERED, AND THAT IS THE WORST PATH IN THE DESIGN (R289). `den_sh` is a
+  // 32-bit priority encode of the determinant, and `pf_scale` uses it to work
+  // out how far to shift the quotient back. Left combinational, the path runs
+  //   det_r -> abs -> clz32 -> den_sh -> net -> 40-bit barrel shift -> clamp
+  //   -> dvdx
+  // in ONE cycle, and report_timing named exactly that: `clz32~6 ->
+  // dvdx[8]`, -0.365 ns. The determinant is known a full state before the
+  // quotient comes back, so the encode costs nothing where it is done once.
+  logic [5:0] den_sh;
   wire signed [31:0] den_n = det_r >>> den_sh;
 
   function automatic logic [5:0] pf_clz(input logic signed [31:0] n);
@@ -499,7 +508,7 @@ module m2_raster_fill (
       span_u <= '0; span_v <= '0; base_u <= '0; base_v <= '0;
       pf_a <= 1'b0; pf_b <= 1'b0;
       tex_ok <= 1'b0; pf_second <= 1'b0; tex_r <= '0;
-      det_r <= '0; nxu <= '0; nyu <= '0; nxv <= '0; nyv <= '0;
+      det_r <= '0; den_sh <= 6'd0; nxu <= '0; nyu <= '0; nxv <= '0; nyv <= '0;
       q_num_a <= '0; q_num_b <= '0; q_z_a <= '0; q_z_b <= '0;
       dudx <= 16'sd0; dudy <= 16'sd0; dvdx <= 16'sd0; dvdy <= 16'sd0;
       for (int k = 0; k < 4; k++) begin qu[k] <= '0; qv[k] <= '0; end
@@ -564,6 +573,7 @@ module m2_raster_fill (
               state  <= S_CLASSIFY;
             end
           end else begin
+            den_sh <= den_sh_c;          // R289: encode the determinant once
             nxu <= 32'(pf_u1) * 32'(pf_by) - 32'(pf_u2) * 32'(pf_ay);
             nyu <= 32'(pf_ax) * 32'(pf_u2) - 32'(pf_bx) * 32'(pf_u1);
             nxv <= 32'(pf_v1) * 32'(pf_by) - 32'(pf_v2) * 32'(pf_ay);
