@@ -15913,3 +15913,52 @@ appears, or if the doubled glyph misses cost more than the ALM was worth, the
 register queue is `m2_span_q` in commit 5cac8f9 -- bubble-free -- and the cache
 is one parameter. The trade was made under fitter pressure, not because it is
 the right shape.
+
+**R317 -- THE BOTTLENECK IS THE GEOMETRY, NOT THE FILL. `ready ms` measures
+collect-plus-sort, and this file has been reading it as the renderer.**
+
+Ben's question -- "the fill is already close, the 3D is mostly there, right?" --
+is correct, and finding out why corrects a premise several entries here rest on.
+
+m2_raster3d.sv:101 says what the counter is:
+
+    // pst==P_READY -- the COLLECT-PLUS-SORT cost
+
+`dbg_ready_cyc` runs from frame_start until the QUAD STORE reaches P_READY. That
+is the geometry delivering quads and the store z-sorting them. It is NOT the
+fill. The fill's own metric is `bands_done`, and that reads **50 of 50 in every
+good build** -- the fill finishes its work.
+
+So the 6.76-11.78 ms median `ready` is the geometry phase consuming most of a
+17.38 ms frame before the fill has drawn anything, and `hold` of 1-2 frames
+follows from that.
+
+Two independent measurements agree on the same unit:
+
+    m2_geometry                    53.6 MHz   the SLOWEST module in the design
+    geometry waiting for the bus   37-53%     of the frame
+    m2_raster_fill                 finishes all 50 bands
+
+And its waits are the kind nothing already built can hide. The geometry's reads
+are DEPENDENT -- read a word, decide the next address -- and every master is
+limited to one outstanding transaction, so the span queue (R310) does not touch
+them and neither would a faster fill.
+
+*What this withdraws.* R301 latched the fill's vertex tournament to lift it off
+a 57.5 MHz ceiling, and R311 ranked the clock targets by what they did for the
+renderer as a whole. Both are still correct as timing work -- the fill must clear
+10 ns for any shared-clock target -- but the premise that the FILL was what the
+3D waited on is wrong. It was argued from `bands_done` reaching 50 only after
+timing closed, which showed the fill recovering from a timing fault, not the
+fill being the constraint.
+
+*The order this implies:*
+
+    1. the geometry's BUS WAIT      37-53% of the frame, on a bus idle over half
+                                    the time: transaction overhead (11 of 15
+                                    cycles wasted) and the one-outstanding limit
+    2. the geometry's CLOCK         53.6 MHz; -29% for 75, -11% for 60
+    3. the fill                     not the problem
+
+The tile/texel/char-cache clock-up still stands on its own -- it fixes the
+scanline overruns, which are a different fault -- but it will not move `hold`.
