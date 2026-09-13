@@ -113,6 +113,33 @@ is state machines and control, which DSP cannot absorb. Adders do not benefit
 So a change that adds a REGISTER STAGE is affordable and a change that adds a
 BUFFER is not, and the two feel identical when proposed.
 
+## The span queue is WIDTH-bound, not depth-bound
+
+Already reduced: the texel cache is back to 512 lines and the span queue to
+`DEPTH(32)` from 256. But **halving the depth may buy nothing**, because at 242
+bits Quartus maps this queue narrow-and-deep -- roughly 1024x10 -- so each block
+holds 1024 entries whether 32 or 256 are asked for. It cost 30 M10K at
+DEPTH(256); the figure at DEPTH(32) needs reading from the next fit report
+rather than assuming.
+
+**The lever that does apply is the payload width**, because blocks here are
+width-driven:
+
+```
+y, x0, x1   3 x 32 = 96 bits    screen coords fit in ~12: 3 x 13 = 39
+u, v        2 x 32 = 64         quarter-texels, 16 fractional bits
+dudx, dvdx  2 x 16 = 32
+col, tex    2 x 24 = 48
+moire, tex_en        2
+                    242   ->   ~185 with narrowed coordinates
+```
+
+About a quarter off the width, which should come off the block count. The
+coordinates are the obvious candidates -- `m2_raster_fill` carries them as
+`logic signed [31:0]` throughout while the screen is 496x384 -- but narrowing
+them is a change to the FILL's arithmetic, not just to the queue, so it is not
+free of risk and wants its own bench run.
+
 ## R313 is reversible, and may need reversing
 
 R313 traded area in the direction ALM needed at the time:
