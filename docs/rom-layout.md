@@ -125,3 +125,122 @@ black screen.
 
 **`m2tiles.bin` is ROM-derived and never enters this repository.** The `.mra` and
 the extractor do; the bytes do not.
+
+---
+
+# Adding the other Model 2 games
+
+**Status: attempted once (R299), withdrawn (R306). Read this before trying
+again — the work is done and the reason it failed is a tooling gap, not a
+design problem.**
+
+The layout, both new MRAs and the constant shift are preserved in commit
+**`6aa5de8`**. Nothing below needs re-deriving.
+
+## Fix this first, or do not start
+
+`tools/rom_csum.py` **cannot see padding.** Its element walk is:
+
+```python
+elif ch.tag == 'part' and ch.get('name'):
+```
+
+so `<part repeat="N">FF</part>` is skipped silently. Every game but Daytona
+needs padding, so the project's only MRA verifier — the one built *because* of
+R203's 64 KB gap — is blind to the exact construct multi-game depends on. R299
+went to the board verified by a throwaway script written in the same session,
+which is not verification. Teach `rom_csum.py` to fold `repeat` first, then
+re-land `6aa5de8` and let the tool check it.
+
+## What Model 1 does, and it is less than you would expect
+
+`tools/model1-ref/mra/` ships **ten MRAs for six games on one bitstream**. The
+mechanism is only two things:
+
+* **Fixed stream offsets for every game, gaps padded** — `<part
+  repeat="262144">FF</part>`. `FF`, because unwritten memory reads `0xFFFF` on
+  this board.
+* **A game ID ahead of index 0** — `<rom index="4"><part>00 00</part></rom>`,
+  and its comment says why: *"six titles share one bitstream and they do not
+  agree about the input map, so the core has to be told."* **That is the only
+  per-game datum.** Nothing else in that core is game-aware.
+
+So multi-game here is an MRA-and-constants job, not a core redesign.
+
+## Region sizes, measured from MAME 0.289 `model2.cpp`
+
+| region | daytona93 | desert | vcopa | slot needed |
+|---|---|---|---|---|
+| **i960 program** | **0x040000** | **0x080000** | **0x080000** | **0x080000** |
+| i960 data | 0xa00000 | 0x900000 | 0x900000 | 0xa00000 |
+| copro data | 0x400000 | 0x100000 | none | 0x400000 |
+| polygons | 0xd00000 | 0x800000 | 0x400000 | 0xd00000 |
+| textures | 0x800000 | 0x400000 | 0x400000 | 0x800000 |
+| 68000 sound | 0x040000 | 0x020000 | 0x040000 | 0x040000 |
+| MPCM samples | 0x800000 | 0x600000 | 0x600000 | 0x800000 |
+
+**Daytona is the largest in every region except the i960 program**, where it
+loads two ROMs and the other two load four. So only the program slot grows,
+0x40000 → 0x80000, Daytona pads the difference, and every later region shifts up
+0x40000 bytes. Total 43.62 MB → 46.1 MB.
+
+Five word constants move (`Model2.sv`), and nothing else:
+
+```
+GAME_DATA    0x0020000 -> 0x0040000     byte 0x40000   -> 0x80000
+GAME_COPRO   0x0520000 -> 0x0540000     byte 0xa40000  -> 0xa80000
+GAME_TEX     0x0720000 -> 0x0740000     byte 0xe40000  -> 0xe80000
+GAME_POLY    0x0b20000 -> 0x0b40000     byte 0x1640000 -> 0x1680000
+GAME_TGPTBL  0x15d0000 -> 0x15f0000     byte 0x2ba0000 -> 0x2be0000
+```
+
+`snd_base` needs **no** change and that is not luck: it is discovered by scanning
+`SND_SCAN_LO..HI` for the sound ROM's signature, so it follows the layout by
+itself. `GAME_WORK` and everything above it is RAM beyond the stream; the
+shifted stream ends at word 0x1610000 against `GAME_WORK` at 0x1620000, leaving
+128 KB. `sim/io/tb_m2_boot.cpp` hardcodes the texture and TGP-table bases and
+must move with them.
+
+## Two traps in the ROM sets
+
+* **Desert Tank's socket suffixes are swapped against MAME.** The available set
+  names `mpr-16964.21` / `mpr-16965.20` where MAME says `.20` / `.21`. Match by
+  **CRC** — that is the ROM's identity; the suffix is only which socket it sat
+  in. All 22 CRCs verify against MAME 0.289.
+* **Pad `ROMREGION_ERASE00` regions with `00`, not `FF`.** Virtua Cop's copro
+  data and both games' comms regions are declared `ERASE00` in MAME, so the
+  hardware model says they read zero. `FF` is right for an unpopulated socket,
+  wrong for these.
+
+## Assets
+
+ROMs are **never** committed. `vcopa.zip` and `desert.zip` live in
+`~/roms/Model2/` and were copied to `/media/fat/games/mame/` on the board.
+`model1io.zip` is absent but harmless — the MRAs declare
+`zip="model1io.zip|daytona93.zip"` and fall back.
+
+## What actually happened on the board
+
+Deployed with its matched MRA (MD5-checked both sides), R299 gave garbage:
+
+```
+tgp  : 00A9:48671        parked at 0x00A9, not the 0x030B idle loop
+SDRAM: bus busy 84.1%    geometry waiting 84.1% -- hammering, not starved
+WALK: walks started 1    the display list ran once
+LIGHT TABLE: 0 of 32     the CPU never got going
+```
+
+A TGP stuck at an abnormal microcode address while the geometry spins the bus is
+what reading nonsense as a display list looks like. Every constant above was
+re-checked against the MRA and agrees, and `m2_rom_loader` writes the stream
+linearly ("deliberately no per-region base-address arithmetic here"), so the
+mapping *should* hold. **It does not, and nobody knows why yet** — which is
+exactly why `rom_csum.py` has to be able to check the image before this is tried
+again.
+
+## Do it on its own
+
+R299 was not needed by anything — not the clock work, not the M10K work, not the
+texel cache. It landed on a day with five other changes and cost a board cycle
+the speed work needed. Multi-game is a clean, self-contained project for a day
+when the renderer is not mid-surgery.
