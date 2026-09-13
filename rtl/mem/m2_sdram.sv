@@ -219,6 +219,10 @@ module m2_sdram #(
       // stream desynchronises and OTHER ports get corrupt data (R108). The walk
       // reads one dword at a time and discards the other pair, which is the
       // same bargain the TGP already makes.
+      // R290: TEN AGAIN -- the texel fetch shares port 3 rather than adding an
+      // eleventh. The case arm stays because the cost of listing a port that
+      // does not exist is nothing and the cost of forgetting one is silent
+      // cross-port corruption.
       // 10 IS THE TEXEL FETCH (R275), and it bursts four because EVERY PORT
       // MUST. This case list ended at 9 with `default: blen = 1`, so adding a
       // port would have given it a one-word burst -- and the paragraph above
@@ -462,6 +466,19 @@ module m2_sdram #(
 
   wire [NP-1:0]  arb_ready = pend & ~inflight;
 
+  // REVERTED TO THE ROTATE (R290). R288 replaced this with two priority
+  // encoders to shorten the path, `tb_m2_sdram` agreed to the transaction, and
+  // THE BOARD DID NOT BOOT: the i960 sat in one load/store loop for four
+  // minutes, the display list stayed zeros and the coprocessor never left
+  // reset. The bench cannot see whatever that is, so the rewrite goes back and
+  // the path is shortened by REMOVING the eleventh port instead -- the texel
+  // fetch shares port 3 with the glyph cache, which is idle 89% of the time.
+  //
+  // Kept in the file, disabled, because the reasoning was right even if
+  // something about it is not: the rotate-encode-add chain IS the depth that
+  // made the eleventh port cost 0.37 ns.
+  //
+  // ORIGINAL COMMENT, for when this is tried again with a way to test it:
   // TWO PRIORITY ENCODERS IN PARALLEL, NOT A ROTATE THEN AN ENCODER THEN A
   // MODULAR ADD (R288).
   //
@@ -478,13 +495,16 @@ module m2_sdram #(
   // "at or above" mask is a decode of rr_next that computes in parallel with
   // pend, and the two scans run side by side. Nothing about the ORDER changes,
   // which is what tb_m2_sdram's per-port transaction counts check.
-  wire [NP-1:0]  arb_hi_m  = arb_ready & ~((~{NP{1'b0}}) >> (NP - rr_next));
-  wire [PW-1:0]  arb_hi_i  = low_idx(arb_hi_m);
-  wire [PW-1:0]  arb_lo_i  = low_idx(arb_ready);
+  wire [NP-1:0]  arb_rot   = rot_r(arb_ready, rr_next);
+  wire [PW-1:0]  arb_idx   = low_idx(arb_rot);
+  // Rotate the index back. arb_idx < NP and rr_next < NP, so the sum never
+  // reaches 2*NP and one conditional subtract is exact.
+  wire [PW:0]    arb_sum   = {1'b0, arb_idx} + {1'b0, rr_next};
 
   always_comb begin
-    rr_valid = |arb_ready;
-    rr_grant = (|arb_hi_m) ? arb_hi_i : arb_lo_i;
+    rr_valid = |arb_rot;
+    rr_grant = (arb_sum >= (PW+1)'(NP)) ? PW'(arb_sum - (PW+1)'(NP))
+                                        : PW'(arb_sum);
   end
 
   // ------------------------------------------------------------- transfer

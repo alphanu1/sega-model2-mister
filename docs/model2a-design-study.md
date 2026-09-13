@@ -14881,3 +14881,36 @@ THREE WORST PATHS IN ONE NIGHT, AND EACH WAS A DIFFERENT MODULE: the texture
 interpolation (R285), the SDRAM arbiter (R288), and this. Every one was found
 with `report_timing` in two minutes on an already-built directory, and not one
 of them would have been the first guess.
+
+**R290 -- THE ARBITER REWRITE PASSED 117,890 CHECKS AND STOPPED THE BOARD
+BOOTING.** `build/tex5` closed timing on both core clocks (+0.283 memory,
++0.570 core) and on the board the i960 sat in ONE load/store loop at 0x1c478
+for four minutes: display list all zeros, light table 0 of 32 entries written,
+coprocessor PC 0, tilemap blank. The IP histogram taken in fifths of the
+capture shows the same three addresses in every fifth -- not slow progress, a
+hang.
+
+`build/tex1` on the same board runs the game. The difference is R283, R284 and
+R288, and only R288 touches memory every master uses.
+
+So it goes back. The rewrite is kept in the file, disabled, with this note,
+because its reasoning was right: the rotate-encode-add chain IS the depth that
+made an eleventh port cost 0.37 ns, and `tb_m2_sdram` really does serve the
+same 29,881 transactions with the same per-port counts either way. Something
+about it is wrong in a way 117,890 checks cannot see, and finding that needs a
+bench that can reproduce a hang -- which is a different instrument, not a
+harder look.
+
+**THE PORT GOES AWAY INSTEAD.** The texel fetch shares port 3 with the glyph
+cache: one owner at a time, latched until the acknowledge because `m2_sdram`
+samples on the request's EDGE and the address must be stable for the whole
+transaction (R34). The glyph cache wins a tie, because it is the one with a
+scanline deadline; it misses on 11% of its lookups and its port is idle the
+rest of the time. Both are read-only 64-bit burst consumers, so nothing about
+the port's shape changes -- and `NPORTS` is back to 10, which is the
+configuration that boots.
+
+**AND THE BENCH KEEPS ELEVEN PORTS.** `tb_m2_sdram` stays at NP = 11 even
+though the core now uses ten: a bench that stops at the number the core happens
+to use cannot catch the next port's burst length, which is exactly what R277
+was.

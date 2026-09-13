@@ -86,7 +86,10 @@ module m2_sdram_harness #(
   output logic [23:0] mon_total
 );
 
-  localparam int unsigned NP    = 11;   // eleven, since R275 gave the texel fetch its own
+  localparam int unsigned NP    = 11;   // ELEVEN STILL: the core shares port 3 now
+                                      // (R290), but a bench that stops at the
+                                      // number the core uses cannot catch the
+                                      // next port's burst length (R277).
   localparam int unsigned T_RCD = 2;
   localparam int unsigned T_RP  = 2;
   localparam int unsigned T_RC  = 7;

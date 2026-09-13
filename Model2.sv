@@ -417,7 +417,7 @@ wire  [63:0] rb_dout;
 // the four unused ports are tied off instead -- synthesis removes what they
 // drive, and the alternative is forking from the reference over an arbiter
 // detail. Port 0 is the readback; 1-4 become the CPU, tilemap and renderer.
-localparam int unsigned NPORTS = 11;  // 5 = sound ROM, 6/7 = samples, 8/9 = TGP, 10 = texels (R275)
+localparam int unsigned NPORTS = 10;  // 5 = sound ROM, 6/7 = samples, 8/9 = TGP
                                       // (9 is SHARED with the display-list walk)
 
 // THE 68000 SOUND PROGRAM, 256 KB, at MRA byte offset 0x2350000 -- and the MRA's
@@ -916,10 +916,22 @@ always_comb begin
 	                     + SDR_AW'({pcm2_addr, 2'b00});
 	// STRAIGHT FROM THE CACHE. cc_req/cc_addr used to come out of m2_char_cdc;
 	// see the note at u_char_cache for why that translator was removed.
-	p_req[3]  = cache_m_req;
-	p_req[10] = tex_m_req;
-	p_addr[10] = tex_m_addr;
-	p_addr[3] = char_base + SDR_AW'(cache_m_addr);
+	// R290: PORT 3 SERVES BOTH THE GLYPH CACHE AND THE TEXEL FETCH.
+	//
+	// The texel fetch had port 10 of its own (R275) and the eleventh port cost
+	// 0.37 ns on the memory clock in the arbiter's rotate-encode-add chain --
+	// and the rewrite that shortened that chain stopped the board booting
+	// (R290). So the port goes away instead. The glyph cache misses on 11% of
+	// its lookups and its port is idle the rest of the time, which is where
+	// the texels go; both are read-only 64-bit burst consumers, so nothing
+	// about the port's shape changes.
+	//
+	// ONE OWNER AT A TIME, HELD UNTIL THE ACKNOWLEDGE, because m2_sdram
+	// latches on the request's EDGE and the address must be stable for the
+	// whole transaction (study R34). The glyph cache wins a tie: it is the
+	// one with a scanline deadline.
+	p_req[3]  = p3_tex ? tex_m_req : cache_m_req;
+	p_addr[3] = p3_tex ? tex_m_addr : (char_base + SDR_AW'(cache_m_addr));
 	// PORT 0 IS THE CPU'S, and it is the single-word port on purpose: the
 	// bridge issues one 16-bit access at a time, and ports 1-3 burst four.
 	p_req[1]  = cpu_sd_req;
@@ -5169,9 +5181,10 @@ wire [63:0] cache_m_data;
 // The answer side of port 3, straight back to the cache. m2_sdram_x2 holds the
 // acknowledge while the request stands and bypasses s_dout on the acknowledge
 // cycle, so both are valid on the edge m2_char_cache captures them.
-assign tex_m_ack    = p_ack[10];          // R275
-assign tex_m_data   = p_dout[10];
-assign cache_m_ack  = p_ack[3];
+// R290: the acknowledge belongs to whichever of the two owns the port.
+assign tex_m_ack    = p_ack[3] &&  p3_tex;
+assign tex_m_data   = p_dout[3];
+assign cache_m_ack  = p_ack[3] && !p3_tex;
 assign cache_m_data = p_dout[3];
 wire [31:0] char_hits, char_misses, char_fills;
 
@@ -5375,6 +5388,24 @@ wire        tex_m_req, tex_m_ack;
 wire [SDR_AW:1] tex_m_addr;
 wire [63:0] tex_m_data;
 wire [31:0] tex_pixels, tex_hits, tex_misses, tex_nz;
+
+// R290: who owns port 3. The choice is combinational on the first cycle of a
+// transaction and LATCHED for the rest of it, so the address the adapter
+// samples on the request edge is the address it keeps.
+logic p3_lock, p3_own;
+wire  p3_tex = p3_lock ? p3_own : (!cache_m_req && tex_m_req);
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+	if (!mem_rst_n) begin
+		p3_lock <= 1'b0; p3_own <= 1'b0;
+	end else if (!p3_lock) begin
+		if (cache_m_req || tex_m_req) begin
+			p3_lock <= 1'b1;
+			p3_own  <= !cache_m_req;      // the glyph cache wins a tie
+		end
+	end else if (p_ack[3]) begin
+		p3_lock <= 1'b0;
+	end
+end
 wire [15:0] tex_lost;
 
 m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(4),
