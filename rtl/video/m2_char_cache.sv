@@ -144,7 +144,7 @@ module m2_char_cache #(
   // always zero -- a row is a PAIR of 16-bit words -- so bit 1 selects the row.
   wire                 req_sel = v_addr[1];
 
-  typedef enum logic [2:0] { S_INIT, S_IDLE, S_LOOK, S_MISS, S_FILL, S_ACK } st_t;
+  typedef enum logic [2:0] { S_INIT, S_IDLE, S_LOOK, S_DECIDE, S_MISS, S_FILL, S_ACK } st_t;
   st_t st;
 
   // ------------------------------------------------------------------------
@@ -261,7 +261,7 @@ module m2_char_cache #(
     ct_din   = {1'b1, tag_r};
     case (st)
       S_INIT: begin mem_addr = sweep; ct_we = 1'b1; ct_din = '0; end
-      S_LOOK: mem_addr = idx_r;
+      S_LOOK, S_DECIDE: mem_addr = idx_r;
       S_FILL: begin mem_addr = idx_r; cd_we = !d_kill; ct_we = !d_kill; end
       default: ;
     endcase
@@ -303,9 +303,30 @@ module m2_char_cache #(
 
   wire hit = ct_q[TAG_BITS] && (ct_q[TAG_BITS-1:0] == tag_r);
 
+  // R305: THE HIT DECISION IS LATCHED, AND THE ACKNOWLEDGE IS A CYCLE BEHIND IT.
+  //
+  // Measured on build/fix295b/s17: this module's worst path is 12.64 ns, a
+  // ceiling of 79.1 MHz, and it runs from the TAG RAM'S OUTPUT REGISTER to
+  // `v_ack` -- the M10K's clock-to-out, the tag compare, the S_LOOK if-chain and
+  // a 64-bit `hold <= cd_q` load, all in one cycle. At 100 MHz that is 2.64 ns
+  // over budget and it is the reason the 2D path cannot join clk_mem.
+  //
+  // Split in two: S_LOOK captures (RAM -> compare -> flop, and `hold` loads
+  // UNCONDITIONALLY so the 64-bit mux leaves the decision path entirely), and
+  // S_DECIDE acts on registers. Two cycles at 100 MHz is the same wall time as
+  // the one cycle at 50 MHz it replaces, so the fetch budget is unchanged while
+  // each cycle's logic is roughly halved.
+  //
+  // THE RE-LOOK STILL WORKS, and it has to: S_DECIDE keeps mem_addr pointed at
+  // idx_r, so the read it issues lands as S_LOOK is re-entered, exactly as the
+  // old S_LOOK-to-S_LOOK loop did. `steal` is sampled into stl_q beside the hit
+  // so the two always describe the same read.
+  logic hit_q, stl_q, bgb_q;
+
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       st <= S_INIT; sweep <= '0; idx_r <= '0; tag_r <= '0; sel_r <= 1'b0;
+      hit_q <= 1'b0; stl_q <= 1'b0; bgb_q <= 1'b0;
       d_req <= 1'b0; v_ack <= 1'b0; hold <= '0;
       bgst <= BG_IDLE; bg_req <= 1'b0; bg_idx <= '0; bg_tag <= '0;
       bg_data <= '0; bg_arm <= 1'b0; bg_kill <= 1'b0; d_kill <= 1'b0; bg_n <= 2'd0;
@@ -343,17 +364,28 @@ module m2_char_cache #(
         // answer this one -- unless somebody took the port, in which case they
         // answer a different line and must be asked again.
         S_LOOK: begin
-          if (steal_d) begin
-            // Look again. mem_addr is already idx_r in this state.
-          end else if (hit) begin
-            hold     <= cd_q;
+          // Capture only. `hold` loads every time -- it is meaningless without
+          // v_ack, and loading it unconditionally keeps 64 bits of mux off the
+          // decision path.
+          hold  <= cd_q;
+          hit_q <= hit;
+          stl_q <= steal_d;
+          bgb_q <= bg_busy;
+          st    <= S_DECIDE;
+        end
+
+        // Registers only: no RAM output reaches this decision.
+        S_DECIDE: begin
+          if (stl_q) begin
+            // Somebody took the port for that read. mem_addr is idx_r here, so
+            // the answer to the re-issued read arrives as S_LOOK is re-entered.
+            st <= S_LOOK;
+          end else if (hit_q) begin
             v_ack    <= 1'b1;
             dbg_hits <= dbg_hits + 1'd1;
             st       <= S_ACK;
-          end else if (bg_busy) begin
-            // The port is finishing the sibling fill. Looking again costs
-            // nothing, and the fill may be this very line -- which is the
-            // sibling's whole purpose.
+          end else if (bgb_q) begin
+            st <= S_LOOK;
           end else begin
             d_req      <= 1'b1;
             dbg_misses <= dbg_misses + 1'd1;

@@ -15518,3 +15518,43 @@ constant. 8,066 checks, 0 fails.
 
 Whether 35 blocks are really freed and 22 really spent is a FIT question, and
 the fit report is the only thing that can answer it. Not yet built.
+
+**R305 -- THE CHAR CACHE'S HIT DECISION IS LATCHED. First of the five modules
+that have to clear 10 ns before the 2D and 3D paths can join clk_mem.**
+
+Measured per module on build/fix295b/s17 with quartus_sta against the placed
+netlist -- no rebuilds, ten seconds each:
+
+    module           delay      ceiling    critical path
+    m2_char_cache    12.64 ns   79.1 MHz   ctag RAM -> hit -> v_ack
+    m2_video         14.91 ns   67.1 MHz   tw_f -> tile decode -> cc_data
+    m2_copro         17.33 ns   57.7 MHz   mb86233_core
+    m2_raster_fill   17.38 ns   57.5 MHz   (pre-R301)
+    m2_geometry      18.66 ns   53.6 MHz   m2_geo_engine
+
+The char cache needs the least, 21%, and its path is one cycle carrying the
+M10K's clock-to-out, the tag compare, the S_LOOK if-chain AND a 64-bit
+`hold <= cd_q` load. S_LOOK now captures (`hit_q`, `stl_q`, `bgb_q`, and `hold`
+UNCONDITIONALLY, which takes 64 bits of mux off the decision path) and S_DECIDE
+acts on registers alone. Two cycles at 100 MHz is the same wall time as the one
+cycle at 50 MHz it replaces, so the per-column fetch budget does not move.
+
+The re-look survives, and it had to: S_DECIDE holds mem_addr at idx_r, so the
+read it issues lands as S_LOOK is re-entered -- the same loop the old
+S_LOOK-to-S_LOOK form ran -- and `steal` is sampled into stl_q beside the hit so
+the pair always describe the same read. tb_m2_char_cache: 10,393 checks, 0
+fails, and 288 memory transactions, unchanged to the number.
+
+*Why 100 and not 75, since the 2D path would have its own clock.* Both clocks
+come from one PLL, so a 75 MHz domain beside a 100 MHz one is phase-locked and
+needs no synchroniser -- that part of an earlier claim in this session was
+wrong. What it needs is worse. Related-clock analysis gives every crossing path
+the tightest edge pair in the repeating window:
+
+    100/50  (2:1)  edges align every 20 ns   crossing budget 10.00 ns
+    100/100 (1:1)                            crossing budget 10.00 ns
+    100/75  (4:3)  LCM 40 ns                 crossing budget  3.33 ns
+
+3.33 ns for the port's address, write data, byte enables and 64-bit read data.
+100 keeps the full 10 ns AND makes m2_sdram_x2 redundant for any port that
+moves. 75 is the expensive option, not the cheap one.
