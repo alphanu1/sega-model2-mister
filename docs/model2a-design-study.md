@@ -15304,3 +15304,53 @@ days.
 
 Not yet on hardware. The layout is the contract, so it is a board test of its
 own and gets one.
+
+**R300 -- WHY R295 KILLED THE GEOMETRY: `pf_wait` waits for an acknowledge that
+has already happened. A DEADLOCK, not corruption.**
+
+R298 established by bisect that R295 was the sole cause and reverted it. This is
+the mechanism, found by reading the reverted code rather than by another build.
+
+The prefetch had an arm meant to avoid a wasted trip when the guess in flight is
+the one being asked for:
+
+    end else if (pf_own && !pf_v && (pf_want == idx)) begin
+      pf_wait <= 1'b1;
+
+It tests `pf_own`, and `pf_own` is not "a prefetch is in flight". It is cleared
+only when the port's acknowledge FALLS:
+
+    if (pf_own && !pf_req && !p_ack) pf_own <= 1'b0;
+
+so it stays high after the prefetch has completed. Meanwhile the completion
+clears `pf_v` whenever the fetched pair is worthless:
+
+    pf_v <= ~pf_wait && ~pf_kill && ~inval && ~&pf_want[COL_BITS-2:0];
+
+That leaves a window with `pf_own = 1`, `pf_v = 0`, `pf_req = 0`: the prefetch is
+FINISHED and its data was thrown away -- by an invalidate, by `pf_kill`, or by
+the pair wrapping the end of a row. A demand arriving in that window whose index
+equals `pf_want` takes the `pf_wait` arm and waits for an acknowledge that
+already came and will never come again. `pf_req` is low so nothing is issued;
+`pass` was never set so no demand is issued either. The port falls silent and the
+requester waits forever.
+
+The hung port is 4 -- `u_geo_pc` and `u_eng_pc`, the geometry engine's reads --
+which is why the board showed the coprocessor parked at 0x030B, no polygons, and
+the bus at 11% falling to 0%, with textures off making no difference because the
+geometry was dead UPSTREAM of the texture path.
+
+*Why 4,516 bench checks missed it.* The window needs an invalidate or a row wrap
+to land on a prefetch AND the very next demand to ask for that exact index. The
+display-list walk invalidates constantly as the geometry writes; the bench drives
+sequential streams, which is the pattern the prefetch predicts correctly and
+therefore never leaves in this state. A speculative unit's failure mode is not
+the one a bench built from its happy path will find.
+
+*The fix is not `pf_req` instead of `pf_own`.* A demand landing on the
+acknowledge edge itself sets `pf_wait` in the same cycle the completion block
+reads the OLD `pf_wait` and takes its other branch -- the same hang by a
+different route. `pf_wait` has to be self-healing: while it is set and no
+prefetch is in flight, either serve from the held pair if it now covers the
+index, or clear it and fall back to a demand. Whichever form it takes, R295 does
+not go back in on a bench pass -- it earns its place on the board.
