@@ -15732,3 +15732,66 @@ m2_texel clears one line per cycle on any CPU write to a texture sheet. A cache
 cleared every frame and a cache that thrashes produce THE SAME HIT RATE, so the
 size question was unanswerable in either direction -- and was answered wrongly
 twice. The count rides in the low half of the Z record, where 16'd0 was.
+
+**R311 -- THE CLOCK TREE IS PINNED BY THE i960, NOT BY THE RENDERER, AND
+120/60/30 IS THE CHEAPEST STEP UP. Measured, after three wrong targets.**
+
+Every figure below is from quartus_sta against build/fix295b/s17's placed
+netlist -- ten seconds per query, no rebuilds.
+
+    module          path      ceiling     where
+    i960            34.81 ns  28.7 MHz    clk_i960, general[3]
+    m2_char_cache   12.64 ns  79.1 MHz    ctag RAM -> hit -> v_ack
+    m2_video        14.91 ns  67.1 MHz    tw_f -> tile decode -> cc_data
+    m2_copro        17.33 ns  57.7 MHz    mb86233_core ir[3] -> agu_r[0]
+    m2_raster_fill  17.38 ns  57.5 MHz    (pre-R301)
+    m2_geometry     18.66 ns  53.6 MHz    m2_geo_xform lpm -> m2_fp_pool fp_add
+    m2_sdram        ~10.0 ns  ~100 MHz    rr_next -> rotate -> encode -> port mux
+
+*The binding constraint is the CPU bridge's ratio.* Model2.sv:329 records that
+clk_sys is 50 "because the CPU bridge's crossing depends on an exact 2:1" with
+clk_i960, and that giving the i960 its own PLL cost SIX EXTRA CYCLES PER
+TRANSACTION. So clk_sys must be an integer multiple of the i960's clock, and
+clk_mem an integer multiple of clk_sys (m2_sdram_x2 is combinational with one
+registered bit -- it works because of the ratio, not despite it).
+
+*Three targets, and why the first two were wrong.*
+
+    100/100/25   renderer 2.0x   latency same    every module to 10 ns
+    80/80/40     renderer 1.6x   latency +25%    i960 to 40 MHz: -28%  IMPOSSIBLE
+    75/75/25     renderer 1.5x   latency +25%    geometry -29%, copro -23%
+    120/60/30    renderer 1.2x   latency -17%    i960 -4.2%, geometry -11%, copro -4%
+
+80/80/40 was endorsed here before the i960 was measured. It cannot reach 40 MHz:
+34.81 ns against a 25 ns period is a 28% cut, the same class of work as
+pipelining the coprocessor. Ben asked whether the CPU had been checked; it had
+not.
+
+75/75/25 keeps the i960 at its real 25 MHz on a clean 3:1 and needs nothing of
+the memory controller, but costs 25% on memory LATENCY -- and the geometry's
+reads are dependent and one-outstanding, so that cost is not hidden by R310's
+FIFO the way the fill's is.
+
+120/60/30 asks a little of everything and IMPROVES latency. At 60 MHz the
+renderer budget is 16.67 ns, which m2_char_cache and m2_video already meet and
+the fill and copro miss by 4%. Its one new piece of work is the controller at
+-17%, which is the path R297 targeted and mis-implemented.
+
+*Why the latency direction matters more than the MHz.* An SDRAM transaction
+splits into a part governed by NANOSECONDS (tRCD, tRP -- unchanged by the clock)
+and a part governed by CYCLES (arbitration 3, CAS 4, capture ~4). Only the
+second scales, so a slower memory clock makes latency worse and a faster one
+makes it better:
+
+    100 MHz   40 ns (ns-bound) + 110 ns (cycle-bound) = 150 ns
+     75 MHz   40              + 147                   = 187 ns   +25%
+    120 MHz   40              +  92                   = 132 ns   -12%
+
+It also means cutting the transaction's CYCLE COUNT is worth as much as raising
+the clock: 11 cycles at 75 MHz is 147 ns, level with today. That is the same
+overhead R296 failed to reach by shortening bursts -- it cut the four useful
+CAS cycles, not the eleven wasted ones.
+
+*Open, and Ben's to decide:* the i960 at 30 MHz against a real 25 is a 20%
+overclock of the game logic, which is a behaviour change rather than a
+fidelity-neutral one.
