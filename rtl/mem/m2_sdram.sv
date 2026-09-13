@@ -192,60 +192,46 @@ module m2_sdram #(
       // consecutive bytes, so four words at a time gives it seven of
       // every eight without a second request.
       0, 1, 2, 3, 4, 5, 6, 7: blen = 4'd4;
-      // R296: 8 AND 9 BURST **TWO**, WHICH IS WHAT THE TGP CONSUMES.
+      // 8 AND 9 BURST FOUR BECAUSE EVERY PORT MUST BURST THE SAME, AND THAT IS
+      // A CONSTRAINT OF THIS CONTROLLER, NOT A PREFERENCE.
       //
-      // The TGP's word is 32 bits and this memory's is 16, so one lookup is two
-      // SDRAM words. It reads exactly that -- `tgp_tbl_rdata_r <= p_dout[8]
-      // [31:0]` and `tgp_dat_rdata_r <= p_dout[9][31:0]` -- and the other two
-      // words of a four-word burst were fetched, occupied the bus, and were
-      // thrown away. Both addresses are `{addr, 1'b0}`, so they are already
-      // two-word aligned and a length-2 burst returns the pair the port wants.
+      // The TGP wants a PAIR -- its word is 32 bits and this memory's is 16, so
+      // one lookup is two SDRAM words and the other two are thrown away. Two
+      // was tried, and it corrupted OTHER PORTS' data.
       //
-      // WHAT USED TO STAND HERE, AND WHY IT NO LONGER DOES. This arm read "8
-      // AND 9 BURST FOUR BECAUSE EVERY PORT MUST BURST THE SAME, AND THAT IS A
-      // CONSTRAINT OF THIS CONTROLLER", resting on R108: `rd_total` is ONE
-      // global register, so a transaction granted while another was still
-      // issuing would overwrite its burst length, and `tag_last` would then be
-      // computed against the wrong count -- the earlier transaction completing
-      // early, composed from however many words had arrived, on whichever port
-      // happened to be mid-transaction. Silent cross-port corruption.
+      // `rd_total` is a single global register (see the read-issue block). A
+      // transaction that is granted while another is still issuing overwrites
+      // its burst length, and `tag_last` is then computed against the wrong
+      // count: the earlier transaction completes early and is composed from
+      // however many words had arrived. Port 0 -- the i960 -- came back with
+      // two of its four words and zeros above them. Nothing in this controller
+      // detects it and nothing bounds which port is hit.
       //
-      // That defect was real when it was written and the pipeline rework has
-      // since removed it. Both writes to `rd_total` are in S_IDLE's grant
-      // branch (the `wr_pend` / `rr_grant` arms), and S_RD does not leave for
-      // S_IDLE until it has issued its LAST read -- `if (rd_issued + 1 ==
-      // rd_total) state <= S_IDLE`. The FSM is single-threaded, so it cannot be
-      // in S_IDLE writing `rd_total` while S_RD is part-way through a burst.
-      // `tag_last` is captured INTO the tag pipeline at issue time, so tags
-      // already injected carry their own answer and a later `rd_total` cannot
-      // reach back and change them. The window the warning describes is closed.
-      //
-      // The capture assembly was the other half of the old objection and it was
-      // already fixed: the non-single case is indexed on the LAST WORD'S OWN
-      // TAG (`case (tag_w[0])`), so a length-2 burst lands on `2'd1` and
-      // assembles `{32'd0, dq_r, cap[0]}` = {word1, word0}. Model 1 made this
-      // same change and recorded it -- "the assembly is indexed on the last
-      // word's own tag now, so 2 and 3 are as correct as 1 and 4"
-      // (m1_sdram.sv, a7abcbf) -- and its port 1 and port 3 have bursted two
-      // ever since. Our comment was inherited from theirs BEFORE that fix and
-      // kept the conclusion after the reason for it had gone.
-      //
-      // SAFE AGAINST tRAS: reads leave A10 low, so the row stays open and the
-      // precharge is the explicit one at S_MISS, gated on `ras_cnt[bank] == 0
-      // && rd_bank_cnt[bank] == 0`. A shorter burst reaches that gate sooner
-      // and waits there; it does not close a row early. Auto-precharge would
-      // have made this unsafe, and the comment above S_RD still claims the last
-      // READ carries A10 -- the code does not, and has not since the row-open
-      // optimisation.
-      //
-      // Worth, per TGP lookup: two fewer CAS commands on the bus and two fewer
-      // cycles to the last word. The geometry was measured waiting 43.5% of the
-      // frame (R294) on a bus that is only 46.2% busy, which is a queueing
-      // problem, and this shortens the queue rather than reordering it.
-      8, 9: blen = 4'd2;
-      // 10 IS THE TEXEL FETCH (R275) and it keeps four: `tex_m_data` is
-      // `p_dout[10]`, all 64 bits of it, filling a cache line.
-      10: blen = 4'd4;
+      // Every port bursting four makes rd_total invariant, so the defect cannot
+      // fire. It is a real defect and it is recorded (R108) rather than fixed
+      // here, because fixing it means reworking the issue sequencing and this
+      // change is on the path to first light for the coprocessor. **Adding a
+      // port with a different burst length reintroduces silent cross-port
+      // corruption.** The cost of uniformity is two wasted words per TGP
+      // lookup on a port that blocks on every one of them anyway.
+      // 10 IS THE GEOMETRIZER'S DISPLAY-LIST WALK, and it bursts four for the
+      // same reason 8 and 9 do: every port must burst the same or the read tag
+      // stream desynchronises and OTHER ports get corrupt data (R108). The walk
+      // reads one dword at a time and discards the other pair, which is the
+      // same bargain the TGP already makes.
+      // R290: TEN AGAIN -- the texel fetch shares port 3 rather than adding an
+      // eleventh. The case arm stays because the cost of listing a port that
+      // does not exist is nothing and the cost of forgetting one is silent
+      // cross-port corruption.
+      // 10 IS THE TEXEL FETCH (R275), and it bursts four because EVERY PORT
+      // MUST. This case list ended at 9 with `default: blen = 1`, so adding a
+      // port would have given it a one-word burst -- and the paragraph above
+      // says exactly what that does: `rd_total` is one global register, a
+      // transaction granted while another is issuing overwrites it, and the
+      // EARLIER one completes early with zeros above the words that arrived.
+      // Not on the new port: on whichever port was mid-transaction. Silent
+      // cross-port corruption, from a line nobody would have looked at.
+      8, 9, 10: blen = 4'd4;
       default: blen = 4'd1;
     endcase
   endfunction

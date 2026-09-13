@@ -15389,3 +15389,44 @@ be anything else.
 The next binding path is not predicted here. It is measured after the build,
 with the same ten-second report against the new netlist, because the whole value
 of that technique is not having to guess which path is next.
+
+**R302 -- R296 IS REVERTED. The light table corrupts in proportion to how often
+it is written, and R296 is the only change that touches the TGP's own fetches.**
+
+Measured across every capture this session, counting light-table entries that
+read 0/0 -- which the decoder already flags as "every polygon using it is
+black":
+
+    capture        dead of 32   geo op 0x06 seen
+    tex10_s37           0            4          <- the last good build
+    perf2_s12           0            1          <- R295 deadlock: barely ran
+    perf4_s37           0            1          <- same
+    fix295_s31         23            3
+    fix295b_s17        17            6
+
+tex10 wrote the table four times and corrupted nothing. The perf2 and perf4
+readings prove nothing: R295's deadlock meant the game wrote the table once. The
+fix295 builds are the FIRST to run a working geometry with R296 and R297 in, and
+they corrupt it -- more writes, more dead entries.
+
+That is what the board showed: the player's car drawn as a black box (polygons
+whose light-table entry reads 0/0), the car sitting ten feet off the ground
+(wrong transform data), tiles in the wrong places, and no 3D on the first
+screen. One fault -- memory returning wrong data -- with four faces.
+
+R296 goes first because it is the cheap half of the pair. It was measured worth
+almost nothing on the bench (peak occupancy 20 -> 18 cycles on two ports, no
+change to cost per transaction, no other port's wait improved), and it changes
+what ports 8 and 9 return -- the TGP's own table and data fetches, and the TGP is
+what executes op 0x06. Reverting costs nothing measurable and removes a change
+that has never run on hardware beside a working geometry.
+
+If the corruption survives without it, R297 is next and the same reasoning
+applies in reverse: R297 is worth keeping if it is innocent, because it is what
+took clk_mem from -0.532 to +0.124.
+
+*The finding that is NOT in doubt.* fix295b/s17 is the first build of the session
+to meet the seed rule, and with clean slack the renderer finished EVERY band --
+`bands_done [(50, 82)]` against s31's [(15,7), (16,7), (48,5)] on identical RTL.
+The fill was never short of work; it was short of time. That is the strongest
+evidence yet that the clock, not the algorithm, is what the 3D is waiting on.
