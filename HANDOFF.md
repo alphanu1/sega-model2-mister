@@ -1,8 +1,41 @@
 # Handoff
 
-**Updated:** 2026-09-13 03:10 (machine clock). Study entries R176-R277.
+**Updated:** 2026-09-13 01:45 (machine clock). Study entries R176-R283.
 
-## 03:10, 09-13: THE TEXTURES ARE BUILT -- `build/tex1` IS THE TEST
+## 01:45, 09-13: `build/tex2` IS THE ONE TO TEST
+
+**`build/tex1` went to the board and drew ZERO textured pixels.** Not a texture
+that looked wrong -- none at all, which the 'Y' record says in one number and
+which is why that counter exists. The cause (R282) was the OSD texture switch
+written as a mask on `m2_geometry`'s `q_tex` port, which is an OUTPUT: a
+concatenation containing an expression is not an lvalue, so the textured bit
+was never driven. `make lint_top` reported no undriven signals; Verilator
+accepted it. The mask now lives only where the signal is consumed.
+
+**What tex1 DID prove:** the design fits (552 of 553 M10K, one block spare),
+ALM 39,667 of 41,910, and it closes timing at +0.131 setup / +0.197 hold. The
+texture path costs about 2,900 ALM and 52 blocks.
+
+**And it measured the cost of halving the glyph cache**, which is the other
+thing to know:
+
+    glyph cache          128 KB (fix3d25)    64 KB (tex1)
+    misses a frame              694             2,146
+    hit rate                   95.7%             89.3%
+    scanline overruns            12                51
+
+An overrun is a scanline drawn twice. R283 answers it: a tile is four cache
+lines sharing one tag, so a miss now fetches the other three behind its
+acknowledge and the whole tile is resident for ONE demand miss -- 1.00 misses
+per tile on the bench where R269 got 2.00 and the original got 4.00, at the
+same transaction count.
+
+`build/tex2` carries R282, R283, R279 (one texel covers two pixels, because
+four cycles a pixel does not fit the beam) and R280 (the texel cache sweeps
+once a frame, not once a write, or an upload freezes the picture). It deploys
+and captures itself.
+
+## THE TEXTURES, AS BUILT
 
 The whole path is in: display list -> per-vertex {u,v} -> clipper -> quad store
 -> plane fit -> span walk -> texel fetch -> pixel. What to do with it:
