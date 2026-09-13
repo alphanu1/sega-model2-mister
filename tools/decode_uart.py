@@ -24,6 +24,8 @@ T=[]     # R251: light-table records
 U=[]     # R255: walk records
 V=[]     # R269: glyph cache records
 Y=[]     # R275: texture records
+Z=[]     # R294: SDRAM occupancy, phase 5
+Z2=[]    # R294: SDRAM occupancy, phase 6
 pend=None
 for line in open(sys.argv[1],errors='replace'):
     p=line.split()
@@ -36,6 +38,8 @@ for line in open(sys.argv[1],errors='replace'):
     elif p[0]=='U': U.append((a,d))     # R255: the walk's own numbers
     elif p[0]=='V': V.append((a,d))     # R269: the glyph cache, per frame
     elif p[0]=='Y': Y.append((a,d))     # R275: the texture path, per frame
+    elif p[0]=='Z': Z.append((a,d))     # R294: bus busy / CPU wait
+    elif p[0]=='z': Z2.append((a,d))    # R294: geometry / glyph / texel wait
     elif p[0]=='S': SW.append(((a>>8)&0x1f, a&0xff, d&0xffffff))   # R238: region, runs, fold
     elif p[0]=='W': pend=(a,d)
     elif p[0]=='X' and pend is not None:
@@ -109,6 +113,26 @@ if Y:
     print('    texels that were NOT 0xF: med %d of %d fetches -- zero means the sheets are EMPTY'
           % (med2(nz), med2(tot)))
     print('    (pixels 0 = nothing textured reached the span walk at all, which is a different fault)')
+
+if Z or Z2:
+    # R294: IS THE MEMORY FULL OR IS IT BLOCKED? All figures are per frame in
+    # units of 32 memory-clock cycles; a frame is 1.67 M of them, so 52,000
+    # units is 100% of the frame.
+    FR = 1670000.0/32.0
+    def med3(v): w=sorted(v); return w[len(w)//2] if w else 0
+    if Z:
+        busy=[(a>>16)&0xffff for a,_ in Z]; cpu=[a&0xffff for a,_ in Z]
+        txm=[(d>>16)&0xffff for _,d in Z]
+        print('SDRAM (R294): bus busy %.1f%% of the frame; the CPU port waits %.1f%%'
+              % (100*med3(busy)/FR, 100*med3(cpu)/FR))
+        print('    texel misses med %d a frame' % med3(txm))
+    if Z2:
+        geo=[(a>>16)&0xffff for a,_ in Z2]; chr_=[a&0xffff for a,_ in Z2]
+        tex=[(d>>16)&0xffff for _,d in Z2]
+        print('    waiting for the bus: geometry %.1f%%  glyph fetch %.1f%%  texels %.1f%%'
+              % (100*med3(geo)/FR, 100*med3(chr_)/FR, 100*med3(tex)/FR))
+    print('    (bus busy near 100%% with everyone waiting = BANDWIDTH; idle bus with a'
+          ' queue = BLOCKED, and the fixes are opposites)')
 
 if T:
     # The walker's 32-entry light table, as the board holds it. Luminance is
