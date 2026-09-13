@@ -15253,3 +15253,54 @@ display-list walk that does not.
 were built as a stack and flashed once, at the end. Four changes, one symptom,
 and the bisect cost two board cycles that testing each would have cost nothing.
 Every change gets a build and a board test before the next one goes in.
+
+**R299 -- ONE ROM LAYOUT SERVES EVERY GAME. Only the i960 program slot had to
+grow, and no per-game core logic was needed.**
+
+Believed, and stated wrongly in this session: that Desert Tank and Virtua Cop
+would need per-game base addresses and would black-screen without core changes.
+Ben's correction -- Model 1 runs six titles on one bitstream -- is the evidence,
+and reading `tools/model1-ref/mra/Virtua Racing.mra` settles it. Model 1 keeps
+FIXED stream offsets for every game by padding the gaps (`<part
+repeat="262144">FF</part>`), and the only per-game datum it sends is a game ID
+ahead of index 0, for ONE reason: "six titles share one bitstream and they do not
+agree about the input map". Nothing else in that core is game-aware.
+
+Measured region usage, from MAME 0.289 model2.cpp:
+
+    region          daytona93    desert      vcopa       slot
+    i960 program    0x040000     0x080000    0x080000    0x080000   <- grew
+    i960 data       0xa00000     0x900000    0x900000    0xa00000
+    copro data      0x400000     0x100000    none        0x400000
+    polygons        0xd00000     0x800000    0x400000    0xd00000
+    textures        0x800000     0x400000    0x400000    0x800000
+    68000 sound     0x040000     0x020000    0x040000    0x040000
+    MPCM samples    0x800000     0x600000    0x600000    0x800000
+
+Daytona is the largest in every region except the program, where it loads TWO
+ROMs and the other two load FOUR. So the program slot becomes 0x80000, Daytona
+pads 0x40000, and every later region shifts up by 0x40000 bytes. Five word
+constants move: GAME_DATA, GAME_COPRO, GAME_TEX, GAME_POLY, GAME_TGPTBL. The
+total stream goes 43.62 MB -> 46.1 MB.
+
+`snd_base` needed no change and that is not luck: it is DISCOVERED by scanning
+SND_SCAN_LO..HI for the sound ROM's signature rather than being a constant, so
+it follows the layout on its own. GAME_WORK and everything above it are RAM
+beyond the stream; the shifted stream ends at word 0x1610000 against GAME_WORK
+at 0x1620000, leaving 128 KB.
+
+*Two traps, both caught before building.* Desert Tank's set names mpr-16964 and
+mpr-16965 with socket suffixes .21/.20 where MAME names them .20/.21 -- matched
+by CRC, which is the ROM's identity, and all 22 CRCs verify against MAME. And
+the regions MAME declares ROMREGION_ERASE00 (Virtua Cop's copro data, both
+games' comms) are padded with 00, not FF: FF is right for an unpopulated socket,
+but these are regions the hardware model says read zero.
+
+*Verified before any build:* a checker walks each MRA in element order against
+the zip's real file sizes. All three produce a 0x2c20000-byte stream and all
+nine region boundaries land exactly where their comments claim. That check is
+the thing R203 lacked when the coprocessor read its tables 64 KB late for eleven
+days.
+
+Not yet on hardware. The layout is the contract, so it is a board test of its
+own and gets one.
