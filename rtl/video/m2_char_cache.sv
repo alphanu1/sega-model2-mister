@@ -308,6 +308,12 @@ module m2_char_cache #(
   // The fix is to notice and ask again. One cycle, and it also does the
   // coherency work for free: a line the invalidate just cleared comes back a
   // miss on the second look, which is exactly what it should be.
+  // R316: the hit/miss counters a cycle behind the decision, as R315 did for
+  // m2_texel. There the counter WAS the critical path (RAM -> hit ->
+  // dbg_misses, 10.66 ns). Here the reported path ends at `v_ack` instead, so
+  // this is not the limiter -- it only takes a 32-bit carry chain off `hit`'s
+  // fan-out. Cheap, safe, and worth having before the harder split is retried.
+  logic h_pulse, m_pulse;
   logic steal_d;
   wire  steal = (st != S_INIT) && (inval || bg_wr);
 
@@ -321,9 +327,14 @@ module m2_char_cache #(
       bg_data <= '0; bg_arm <= 1'b0; bg_kill <= 1'b0; d_kill <= 1'b0; bg_n <= 2'd0;
       steal_d <= 1'b0;
       dbg_hits <= '0; dbg_misses <= '0; dbg_fills <= '0;
+      h_pulse <= 1'b0; m_pulse <= 1'b0;
     end else begin
       v_ack   <= 1'b0;
       steal_d <= steal;
+      h_pulse <= 1'b0;
+      m_pulse <= 1'b0;
+      if (h_pulse) dbg_hits   <= dbg_hits   + 1'd1;
+      if (m_pulse) dbg_misses <= dbg_misses + 1'd1;
 
       // A glyph write that lands on a line already in flight would otherwise be
       // undone by the fill that follows it: the fetch carries the data from
@@ -358,7 +369,7 @@ module m2_char_cache #(
           end else if (hit) begin
             hold     <= cd_q;
             v_ack    <= 1'b1;
-            dbg_hits <= dbg_hits + 1'd1;
+            h_pulse  <= 1'b1;
             st       <= S_ACK;
           end else if (bg_busy) begin
             // The port is finishing the sibling fill. Looking again costs
@@ -366,7 +377,7 @@ module m2_char_cache #(
             // sibling's whole purpose.
           end else begin
             d_req      <= 1'b1;
-            dbg_misses <= dbg_misses + 1'd1;
+            m_pulse    <= 1'b1;
             st         <= S_MISS;
           end
         end
