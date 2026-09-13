@@ -267,12 +267,15 @@ module m2_raster_fill (
 
   // Undo both shifts: the quotient is (num << (z-1)) / (det >> den_sh), so the
   // 16.16 answer is that times 2^(16 - (z-1) - den_sh).
-  function automatic logic signed [31:0] pf_scale(input logic signed [31:0] q,
+  // RETURNS SIXTEEN BITS, because the answer is an 8.8 gradient clamped to
+  // +/-32767 and because Quartus 17.0 will not index a function call's result
+  // -- `pf_scale(...)[15:0]` is a syntax error there where Verilator takes it.
+  function automatic logic signed [15:0] pf_scale(input logic signed [31:0] q,
                                                   input logic [5:0] z);
     logic signed [8:0]  net;
     logic signed [39:0] r;
     begin
-      if (z >= 6'd32) pf_scale = 32'sd0;
+      if (z >= 6'd32) pf_scale = 16'sd0;
       else begin
         net = 9'sd9 - 9'(z) - 9'(den_sh);   // 8.8, not 16.16
         // FORTY BITS, NOT SIXTY-FOUR. The answer is clamped to +/-2^27 two
@@ -282,9 +285,9 @@ module m2_raster_fill (
         r   = (net >= 9'sd0) ? (40'(q) <<< net[5:0]) : (40'(q) >>> (-net));
         // A gradient of 2,048 texels a pixel is already nonsense; clamping
         // keeps a degenerate quad from wrapping the accumulator instead.
-        if      (r >  40'sd32767) pf_scale =  32'sd32767;
-        else if (r < -40'sd32767) pf_scale = -32'sd32767;
-        else                      pf_scale =  32'(r);
+        if      (r >  40'sd32767) pf_scale =  16'sd32767;
+        else if (r < -40'sd32767) pf_scale = -16'sd32767;
+        else                      pf_scale =  16'(r);
       end
     end
   endfunction
@@ -583,8 +586,8 @@ module m2_raster_fill (
         end
 
         S_PF_Q1W: begin
-          if (div_valid)  begin dudx <= pf_scale(div_quo,  q_z_a)[15:0]; pf_a <= 1'b1; end
-          if (divb_valid) begin dudy <= pf_scale(divb_quo, q_z_b)[15:0]; pf_b <= 1'b1; end
+          if (div_valid)  begin dudx <= pf_scale(div_quo,  q_z_a); pf_a <= 1'b1; end
+          if (divb_valid) begin dudy <= pf_scale(divb_quo, q_z_b); pf_b <= 1'b1; end
           if ((pf_a || div_valid) && (pf_b || divb_valid)) state <= S_PF_Q2;
         end
 
@@ -602,8 +605,8 @@ module m2_raster_fill (
         end
 
         S_PF_Q2W: begin
-          if (div_valid)  begin dvdx <= pf_scale(div_quo,  q_z_a)[15:0]; pf_a <= 1'b1; end
-          if (divb_valid) begin dvdy <= pf_scale(divb_quo, q_z_b)[15:0]; pf_b <= 1'b1; end
+          if (div_valid)  begin dvdx <= pf_scale(div_quo,  q_z_a); pf_a <= 1'b1; end
+          if (divb_valid) begin dvdy <= pf_scale(divb_quo, q_z_b); pf_b <= 1'b1; end
           if ((pf_a || div_valid) && (pf_b || divb_valid)) state <= S_PF_B;
         end
 
