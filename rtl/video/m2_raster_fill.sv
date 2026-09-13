@@ -193,6 +193,10 @@ module m2_raster_fill (
   logic               pf_second;         // the fit is retrying on vertices 0,2,3
   logic               pf_x;              // this divide round is the x gradient
   logic signed [31:0] q_num_a, q_num_b;
+  // The numerator's leading-zero count, kept from the normalise. Recomputing it
+  // when the quotient comes back is a second 32-bit priority encoder for a
+  // number that has not changed.
+  logic [5:0]         q_z_a, q_z_b;
 
   // The three vertices the plane is fitted through: 0,1,2 normally, 0,2,3 when
   // those three are collinear on screen -- which every triangle is, because a
@@ -233,6 +237,14 @@ module m2_raster_fill (
   wire [5:0]  den_sh  = (det_clz >= 6'd16) ? 6'd0 : (6'd16 - det_clz);
   wire signed [31:0] den_n = det_r >>> den_sh;
 
+  function automatic logic [5:0] pf_clz(input logic signed [31:0] n);
+    logic [31:0] a;
+    begin
+      a = n[31] ? (~n + 32'd1) : n;
+      pf_clz = clz32(a);
+    end
+  endfunction
+
   // Normalise the numerator so its top bit sits at 30, which is what leaves
   // the quotient its significant bits.
   function automatic logic signed [31:0] pf_norm(input logic signed [31:0] n);
@@ -249,28 +261,37 @@ module m2_raster_fill (
   // Undo both shifts: the quotient is (num << (z-1)) / (det >> den_sh), so the
   // 16.16 answer is that times 2^(16 - (z-1) - den_sh).
   function automatic logic signed [31:0] pf_scale(input logic signed [31:0] q,
-                                                  input logic signed [31:0] n);
-    logic [31:0]        a;
-    logic [5:0]         z;
+                                                  input logic [5:0] z);
     logic signed [8:0]  net;
-    logic signed [63:0] r;
+    logic signed [39:0] r;
     begin
-      a = n[31] ? (~n + 32'd1) : n;
-      z = clz32(a);
       if (z >= 6'd32) pf_scale = 32'sd0;
       else begin
         net = 9'sd17 - 9'(z) - 9'(den_sh);
-        r   = (net >= 9'sd0) ? (64'(q) <<< net[5:0]) : (64'(q) >>> (-net));
+        // FORTY BITS, NOT SIXTY-FOUR. The answer is clamped to +/-2^27 two
+        // lines below, so everything above bit 39 is thrown away -- and a
+        // 64-bit bidirectional barrel shifter is twice the logic of a 40-bit
+        // one on a path that is already the widest thing in this module.
+        r   = (net >= 9'sd0) ? (40'(q) <<< net[5:0]) : (40'(q) >>> (-net));
         // A gradient of 2,048 texels a pixel is already nonsense; clamping
         // keeps a degenerate quad from wrapping the accumulator instead.
-        if      (r >  64'sd134217727) pf_scale =  32'sd134217727;
-        else if (r < -64'sd134217727) pf_scale = -32'sd134217727;
+        if      (r >  40'sd134217727) pf_scale =  32'sd134217727;
+        else if (r < -40'sd134217727) pf_scale = -32'sd134217727;
         else                          pf_scale =  32'(r);
       end
     end
   endfunction
 
   logic signed [31:0] base_u, base_v;   // u,v at screen (0,0) on the fitted plane
+  // ONE EVALUATION OF THE PLANE, NOT THREE. The three emit sites -- the flat
+  // quad, the segment walk and the fill_line tail -- all emit at `emit_cl` and
+  // at a y that is either cury or walk_y, so one expression serves them all.
+  // Written out at each site it was six multiply-add pairs instead of two, and
+  // this module is what put the design over the device.
+  wire signed [31:0] emit_y  = (state == S_FS_WALK) ? walk_y : cury;
+  wire signed [31:0] emit_u  = uv_at(base_u, dudx, dudy, emit_cl, emit_y);
+  wire signed [31:0] emit_v  = uv_at(base_v, dvdx, dvdy, emit_cl, emit_y);
+
   logic               pf_a, pf_b;        // the two plane-fit divides, back
 
   // u (or v) at a pixel, on the fitted plane. The units are the stored ones --
@@ -467,7 +488,7 @@ module m2_raster_fill (
       pf_a <= 1'b0; pf_b <= 1'b0;
       tex_ok <= 1'b0; pf_second <= 1'b0; tex_r <= '0;
       det_r <= '0; nxu <= '0; nyu <= '0; nxv <= '0; nyv <= '0;
-      q_num_a <= '0; q_num_b <= '0;
+      q_num_a <= '0; q_num_b <= '0; q_z_a <= '0; q_z_b <= '0;
       dudx <= '0; dudy <= '0; dvdx <= '0; dvdy <= '0;
       for (int k = 0; k < 4; k++) begin qu[k] <= '0; qv[k] <= '0; end
       span_valid <= 1'b0;
@@ -546,15 +567,15 @@ module m2_raster_fill (
           divb_num   <= pf_norm(nyu);
           divb_den   <= den_n;
           divb_start <= 1'b1;
-          q_num_a <= nxu;
-          q_num_b <= nyu;
+          q_num_a <= nxu; q_z_a <= pf_clz(nxu);
+          q_num_b <= nyu; q_z_b <= pf_clz(nyu);
           pf_a <= 1'b0; pf_b <= 1'b0;
           state   <= S_PF_Q1W;
         end
 
         S_PF_Q1W: begin
-          if (div_valid)  begin dudx <= pf_scale(div_quo,  q_num_a); pf_a <= 1'b1; end
-          if (divb_valid) begin dudy <= pf_scale(divb_quo, q_num_b); pf_b <= 1'b1; end
+          if (div_valid)  begin dudx <= pf_scale(div_quo,  q_z_a); pf_a <= 1'b1; end
+          if (divb_valid) begin dudy <= pf_scale(divb_quo, q_z_b); pf_b <= 1'b1; end
           if ((pf_a || div_valid) && (pf_b || divb_valid)) state <= S_PF_Q2;
         end
 
@@ -565,15 +586,15 @@ module m2_raster_fill (
           divb_num   <= pf_norm(nyv);
           divb_den   <= den_n;
           divb_start <= 1'b1;
-          q_num_a <= nxv;
-          q_num_b <= nyv;
+          q_num_a <= nxv; q_z_a <= pf_clz(nxv);
+          q_num_b <= nyv; q_z_b <= pf_clz(nyv);
           pf_a <= 1'b0; pf_b <= 1'b0;
           state   <= S_PF_Q2W;
         end
 
         S_PF_Q2W: begin
-          if (div_valid)  begin dvdx <= pf_scale(div_quo,  q_num_a); pf_a <= 1'b1; end
-          if (divb_valid) begin dvdy <= pf_scale(divb_quo, q_num_b); pf_b <= 1'b1; end
+          if (div_valid)  begin dvdx <= pf_scale(div_quo,  q_z_a); pf_a <= 1'b1; end
+          if (divb_valid) begin dvdy <= pf_scale(divb_quo, q_z_b); pf_b <= 1'b1; end
           if ((pf_a || div_valid) && (pf_b || divb_valid)) state <= S_PF_B;
         end
 
@@ -627,8 +648,8 @@ module m2_raster_fill (
               span_x1    <= emit_cr;
               span_col   <= col;
               span_moire <= moire;
-              span_u     <= uv_at(base_u, dudx, dudy, emit_cl, cury);
-              span_v     <= uv_at(base_v, dvdx, dvdy, emit_cl, cury);
+              span_u     <= emit_u;
+              span_v     <= emit_v;
             end
             quad_done <= 1'b1;
             state     <= S_IDLE;
@@ -756,8 +777,8 @@ module m2_raster_fill (
               span_x1    <= emit_cr;
               span_col   <= col;
               span_moire <= moire;
-              span_u     <= uv_at(base_u, dudx, dudy, emit_cl, walk_y);
-              span_v     <= uv_at(base_v, dvdx, dvdy, emit_cl, walk_y);
+              span_u     <= emit_u;
+              span_v     <= emit_v;
             end
             xa     <= xa + sla;
             xb     <= xb + slb;
@@ -789,8 +810,8 @@ module m2_raster_fill (
               span_x1    <= emit_cr;
               span_col   <= col;
               span_moire <= moire;
-              span_u     <= uv_at(base_u, dudx, dudy, emit_cl, cury);
-              span_v     <= uv_at(base_v, dvdx, dvdy, emit_cl, cury);
+              span_u     <= emit_u;
+              span_v     <= emit_v;
             end
             state <= S_DONE;
           end
