@@ -45,7 +45,7 @@ static Vm2_boot_harness *d;
 static std::vector<uint16_t> mem;
 // R222 PROBE: where the texture headers live and what they say. On every new
 // object the walker starts, read its header from the texture ROM image (word
-// 0x0740000 = byte 0x0e80000 in the MRA stream; tha is a 16-bit-word index
+// 0x0720000 = byte 0x0e40000 in the MRA stream; tha is a 16-bit-word index
 // masked to 4M words) and count: RAM-resident headers (bit 23, which this
 // bench cannot read), the renderer bits (texheader[0] >> 13), and the
 // distinct colorbase values (texheader[3] >> 6 & 0x3ff).
@@ -88,7 +88,7 @@ static void th_probe(uint32_t tha) {
   ++g_th_objs;
   if (g_th_objs <= 6 || (g_th_objs % 400) == 0) std::printf("    TEXHDR sample: object %u tha %08x\n", g_th_objs, tha);
   if (tha & 0x800000u) { ++g_th_ram; return; }
-  const uint32_t a = 0x0740000u + (tha & 0x3fffffu);
+  const uint32_t a = 0x0720000u + (tha & 0x3fffffu);
   if (a + 3 >= mem.size()) return;
   const uint16_t h0 = mem[a], h3 = mem[a + 3];
   if (g_th_objs <= 6 || (g_th_objs % 400) == 0) std::printf("      header %04x %04x %04x %04x\n", mem[a], mem[a+1], mem[a+2], mem[a+3]);
@@ -419,7 +419,7 @@ int main(int argc, char **argv) {
       }
     }
     std::printf("  polygon ROM: %d/6 files at GAME_POLY word 0xb20000", pg_ok);
-    // THE TEXTURE ROM (R222): 8 MB at MRA byte 0x0e80000, word 0x0740000, the
+    // THE TEXTURE ROM (R222): 8 MB at MRA byte 0x0e40000, word 0x0720000, the
     // same 32-bit interleave of two 16-bit ROMs (ROM_LOAD32_WORD). Read for the
     // texture headers -- four 16-bit words per polygon -- and for nothing else
     // yet. Loaded here because the header probe read 0xFFFF everywhere and
@@ -463,7 +463,7 @@ int main(int argc, char **argv) {
   // itself. That is what the .mra's interleave already produced, and checking
   // it against the reference cost one script and settles a byte order that
   // cost four builds the last time it was assumed (R94).
-  const uint32_t TBL_BASE = 0x15f0000;      // GAME_TGPTBL, word address (R203: 0x2BE0000 bytes after R299's shift)
+  const uint32_t TBL_BASE = 0x15d0000;      // GAME_TGPTBL, word address (R203: 0x2BA0000 bytes, not 0x2BB0000)
   {
     std::vector<uint8_t> ta, tb;
     if (load_file(dir + "opr-14742a.45", ta) && load_file(dir + "opr-14743a.46", tb)) {
@@ -923,7 +923,7 @@ int main(int argc, char **argv) {
           // colour-table read out of polygon memory, so the one model that
           // represents the BOARD was the one giving the wrong colours.
           if      (el_space == 1)       { if (el_addr & 0x800000u) { base = 0x1740000u; off = el_addr & 0x7fffu; }
-                                          else                    { base = 0x0740000u; off = el_addr & 0x1fffffu; } }
+                                          else                    { base = 0x0720000u; off = el_addr & 0x1fffffu; } }
           else if (el_space == 2)       { base = 0x1730000u; off = el_addr & 0x1ffu;    }
           else if (el_space == 3)       { base = 0x1731000u; off = el_addr & 0x3fffu;   }
           else if (el_oba & (1u << 24)) { base = 0x1720000u; off = el_addr & 0x7fffu;   }
@@ -968,7 +968,7 @@ int main(int argc, char **argv) {
       const unsigned space = d->eng_mem_space;          // R222
       uint32_t base, off;
       if      (space == 1)       { if (idx & 0x800000u) { base = 0x1740000u; off = idx & 0x7fffu; }
-                                   else                 { base = 0x0740000u; off = idx & 0x1fffffu; } }
+                                   else                 { base = 0x0720000u; off = idx & 0x1fffffu; } }
       else if (space == 2)       { base = 0x1730000u; off = idx & 0x1ffu;    }
       else if (space == 3)       { base = 0x1731000u; off = idx & 0x3fffu;   }
       else if (oba & (1u << 24)) { base = 0x1720000u; off = idx & 0x7fffu;   }

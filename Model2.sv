@@ -456,7 +456,7 @@ localparam logic [SDR_AW:1] PCM_OFFS = SDR_AW'(32'h0020000);
 // The TGP's two read-only ROM windows, as WORD addresses.
 //   copro_data  byte 0x0A40000, 4 MB -- mpr-16537 + mpr-16536, interleaved
 //   tables      byte 0x2BB0000, 256 KB -- opr-14742a + opr-14743a, MEASURED
-localparam logic [SDR_AW:1] GAME_COPRO  = SDR_AW'(32'h0540000);
+localparam logic [SDR_AW:1] GAME_COPRO  = SDR_AW'(32'h0520000);
 // 0x15D0000, NOT 0x15D8000. The "measured 64 KB gap" before the tables was the
 // I/O board's 64 KB ROM sitting in the index-0 stream ahead of them. c1c9fd6
 // (2026-09-08) moved that ROM to its own ioctl index, the tables moved down
@@ -464,7 +464,7 @@ localparam logic [SDR_AW:1] GAME_COPRO  = SDR_AW'(32'h0540000);
 // cosine, inverse and inverse-square-root 64 KB into the table. Found by
 // searching the index-0 image built by tools/rom_csum.py for the tables'
 // first words (00000000 38c90fdb 39490fdb): byte 0x2BA0000, word 0x15D0000.
-localparam logic [SDR_AW:1] GAME_TGPTBL = SDR_AW'(32'h15f0000);
+localparam logic [SDR_AW:1] GAME_TGPTBL = SDR_AW'(32'h15d0000);
 // THE POLYGON ROM, WHERE THE GEOMETRY'S VERTICES LIVE (R169).
 //
 // geo_object_data's `oba` selects the source -- bit 24 fast polygon RAM, bit 23
@@ -507,7 +507,7 @@ localparam logic [SDR_AW:1] GAME_TGPTBL = SDR_AW'(32'h15f0000);
 // wrapping the way MAME's non-power-of-two mask would. Left as is: it can only
 // happen for an object address the game never issues, and a wrong picture is
 // preferable to a mask that quietly disagrees with the reference.
-localparam logic [SDR_AW:1] GAME_POLY   = SDR_AW'(32'h0b40000);   // byte 0x1680000, 13 MB
+localparam logic [SDR_AW:1] GAME_POLY   = SDR_AW'(32'h0b20000);   // byte 0x1640000, 13 MB
 
 wire        snd_rom_req;
 wire [17:1] snd_rom_addr;
@@ -1610,7 +1610,7 @@ localparam logic [SDR_AW:1] XLAT_BASE = SDR_AW'(32'h4A000);
 //   0x00000000  program ROM   (epr-16530a + epr-16531a, interleaved to 32 bits)
 //   0x00040000  main_data     (mpr-16528 onwards)
 localparam logic [SDR_AW:1] GAME_PROG  = SDR_AW'(32'h0000000);   // byte 0
-localparam logic [SDR_AW:1] GAME_DATA  = SDR_AW'(32'h0040000);   // byte 0x80000
+localparam logic [SDR_AW:1] GAME_DATA  = SDR_AW'(32'h0020000);   // byte 0x40000
 // MOVED UP 256 KB WHEN THE TGP TABLES WENT INTO THE MRA. R19 recorded the
 // margin above the last ROM word as deliberate rather than incidental -- 0x30000
 // words, 384 KB -- and adding the 256 KB of copro_tgp_tables took the image from
@@ -1646,7 +1646,7 @@ localparam logic [SDR_AW:1] GAME_TEXRAM = SDR_AW'(32'h1740000);   // 128 KB
 localparam logic [SDR_AW:1] GAME_TEXS0  = SDR_AW'(32'h1760000);   // 1 MB
 localparam logic [SDR_AW:1] GAME_TEXS1  = SDR_AW'(32'h17E0000);   // 1 MB
 localparam logic [SDR_AW:1] GAME_LUMA   = SDR_AW'(32'h1860000);   // 32 K words, texture RAM
-localparam logic [SDR_AW:1] GAME_TEX    = SDR_AW'(32'h0740000);   // texture ROM, byte 0x0e80000 in the MRA, 8 MB
+localparam logic [SDR_AW:1] GAME_TEX    = SDR_AW'(32'h0720000);   // texture ROM, byte 0x0e40000 in the MRA, 8 MB
 
 // WHERE CHARACTER RAM LIVES, AS ONE SIGNAL, because two things that must agree
 // should not be two constants (study R51).

@@ -15558,3 +15558,44 @@ the tightest edge pair in the repeating window:
 3.33 ns for the port's address, write data, byte enables and 64-bit read data.
 100 keeps the full 10 ns AND makes m2_sdram_x2 redundant for any port that
 moves. 75 is the expensive option, not the cheap one.
+
+**R306 -- R299 IS REVERTED, AND THE REASON IS THAT NOTHING COULD VERIFY IT.**
+
+The shared ROM layout went to the board with its matched MRA (both MD5-checked
+in place, `b30c5af9f3bb` on each side) and produced garbage, with a signature
+unlike any other failure this session:
+
+    tgp  : 00A9:48671         parked at 0x00A9, not the 0x030B idle loop
+    SDRAM: bus busy 84.1%     geometry waiting 84.1% -- hammering, not starved
+    WALK: walks started 1     the display list ran once
+    LIGHT TABLE: 0 of 32      the CPU never got going
+
+A TGP stuck at an abnormal microcode address while the geometry spins the bus is
+what reading nonsense as a display list looks like. Every constant was
+re-checked against the MRA's offsets and they agree -- GAME_DATA 0x0040000 =
+byte 0x80000, GAME_TEX 0x0740000 = byte 0xe80000, GAME_POLY 0x0b40000 = byte
+0x1680000, GAME_TGPTBL 0x15f0000 = byte 0x2be0000 -- and m2_rom_loader writes
+the stream linearly ("deliberately no per-region base-address arithmetic here"),
+so the mapping should hold. It does not, and the reason it was not caught is the
+finding:
+
+*`tools/rom_csum.py` CANNOT SEE PADDING.* Its element walk is `elif ch.tag ==
+'part' and ch.get('name')`, so `<part repeat="N">FF</part>` is silently skipped.
+The project's own MRA verifier -- the tool the Daytona MRA's comments cite as the
+authority, and the one built after R203's 64 KB gap -- is blind to the exact
+construct the shared layout depends on. The only thing that checked R299 was a
+throwaway script written in the same session as the change it was checking,
+which is no check at all.
+
+So the layout is withdrawn until rom_csum.py understands `repeat` and can fold
+the padded image. The work is not lost: commit 6aa5de8 holds the layout, both
+new MRAs and the constant shift, and the ROM analysis behind it stands --
+Daytona is the largest game in every region except the i960 program, where it
+loads two ROMs against Desert Tank's and Virtua Cop's four, and all 22 of Desert
+Tank's CRCs verify against MAME 0.289.
+
+*And the ordering lesson.* R299 was not needed by anything. The clock work, the
+M10K work and the texel cache do not depend on it. It went in because it was
+asked for, on the same day as five other changes, and it cost a board cycle that
+the 80 MHz work needed. Multi-game support is a clean, self-contained project
+for a day when the renderer is not mid-surgery.
