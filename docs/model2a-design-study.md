@@ -14744,3 +14744,41 @@ AND THE PARAMETERS ARE DECLARED BEFORE THEY ARE USED, because Quartus requires
 it where Verilator does not -- the same class as R283's cast: a lint that
 passes is not a build that passes, and this file has now been bitten by both in
 one night.
+
+**R285 -- THE TEXTURE PATH'S REAL COST WAS HIDDEN BY ITS OWN BUG, AND IT IS
+MULTIPLIERS.** `build/tex1` fitted at 39,667 ALM and closed timing at +0.131.
+`build/tex2` -- the same design with R282's one-bit fix -- needed 4,222 LABs of
+4,191, and once cut to fit, missed by FIVE AND A HALF NANOSECONDS on every
+seed.
+
+The reason is not that R279/R280/R283 are expensive. It is that in tex1 the
+textured bit was tied to zero, so **Quartus constant-propagated the entire
+plane fit away**. tex1 measured a texture path that was not there. The first
+honest measurement is tex2's:
+
+    entity                     tex1 ALUTs    tex2 ALUTs
+    m2_raster_fill                  3,854         5,460
+    m2_span_tex                       132           391
+    m2_texel                           90           179
+
+TWO FIXES, AND THE FIRST IS THE ONE TO REMEMBER. `uv_at` -- the per-span
+interpolation, `base + gx*x + gy*y` -- was written in a 48-bit context because
+the products can reach 48 bits. The RESULT is truncated to 32 either way, since
+it is a 16.16 coordinate; writing it wide makes the synthesiser build 48x48
+multipliers to compute bits that are then discarded. In 32 bits it is the same
+answer.
+
+And the multiplies now go to DSP BLOCKS: `(* multstyle = "dsp" *)` on the
+module. This part has 56 of 112 DSPs free and had 550 ALMs free; left to
+itself the synthesiser had built ten signed products out of logic.
+
+Also: the span walk's `min(x + PIXSTEP - 1, x1)` moved from the OUTPUT to a
+register. A flat span passes through `m2_span_tex` as wires -- that is R275's
+correctness property -- so an expression on `out_x1` puts a 32-bit add, a
+compare and a mux between a register and the band buffer's write decode, on a
+path that is already long.
+
+THE LESSON IS ABOUT MEASUREMENT, NOT ARITHMETIC: a resource figure taken from a
+build where the feature was optimised out is not a figure for that feature.
+tex1's 95% was a number for the texture path's PLUMBING with its arithmetic
+deleted.

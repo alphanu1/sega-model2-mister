@@ -47,6 +47,11 @@
 // filling. That is a separate unit; this block flags the case on `line_case`
 // and retires the quad without emitting. See the spec for why that path is
 // MAME improving on the filler rather than known silicon behaviour.
+// MULTIPLIES GO TO DSP BLOCKS. The plane fit is eight signed products and the
+// per-span interpolation two more, and this part has 56 of its 112 DSP blocks
+// free while it has 550 ALMs free. Left to itself the synthesiser built them
+// out of logic.
+(* multstyle = "dsp" *)
 module m2_raster_fill (
   input  logic               clk,
   input  logic               rst_n,
@@ -271,16 +276,22 @@ module m2_raster_fill (
   // u (or v) at a pixel, on the fitted plane. The units are the stored ones --
   // quarter-texels -- with sixteen fractional bits, and the texel fetch takes
   // its own eight by shifting this right by ten.
+  // THIRTY-TWO BITS, NOT FORTY-EIGHT, AND THAT IS 1,600 ALUTs. The answer is
+  // truncated to 32 either way -- it is a 16.16 coordinate -- but writing the
+  // arithmetic in a 48-bit context makes the synthesiser build 48x48
+  // multipliers to produce bits that are then thrown away. `m2_raster_fill`
+  // went from 3,854 ALUTs to 5,460 on the build where the texture path first
+  // survived constant-propagation, and this expression was most of it.
   function automatic logic signed [31:0] uv_at(input logic signed [31:0] base,
                                                input logic signed [31:0] gx,
                                                input logic signed [31:0] gy,
                                                input logic signed [31:0] x,
                                                input logic signed [31:0] y);
-    logic signed [47:0] t;
+    logic signed [31:0] t;
     begin
-      t = 48'(base) + 48'(gx) * 48'($signed(x[15:0]))
-                    + 48'(gy) * 48'($signed(y[15:0]));
-      uv_at = t[31:0];
+      t = base + gx * $signed({{16{x[15]}}, x[15:0]})
+               + gy * $signed({{16{y[15]}}, y[15:0]});
+      uv_at = t;
     end
   endfunction
   logic [2:0]         ps1m1, ps2p1;

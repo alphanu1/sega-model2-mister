@@ -148,15 +148,20 @@ module m2_span_tex #(
   // from: the walk advances in the same cycle the pixel is offered, so the
   // combinational read sees the NEXT x.
   logic signed [31:0] e_x;
+  // AND THE GROUP'S LAST PIXEL, REGISTERED WITH IT. Computing `min(x + PIXSTEP
+  // - 1, x1)` on the way OUT puts a 32-bit add, a compare and a mux between a
+  // register and the band buffer's write decode -- combinational the whole
+  // way, because a flat span passes through this unit as wires. It is latched
+  // here instead.
+  logic signed [31:0] e_x1;
 
   // Flat spans go through as wires; textured pixels come from the registers.
   assign out_valid = idle ? (in_valid && !tex_now) : e_valid;
   assign out_y     = idle ? in_y     : y_r;
   assign out_x0    = idle ? in_x0    : e_x;
-  // PIXSTEP wide, clipped at the span's end.
-  assign out_x1    = idle ? in_x1
-                          : ((e_x + 32'(PIXSTEP) - 32'sd1) > x1_r
-                               ? x1_r : e_x + 32'(PIXSTEP) - 32'sd1);
+  // PIXSTEP wide, clipped at the span's end -- computed when the pixel is
+  // formed, not when it is offered.
+  assign out_x1    = idle ? in_x1 : e_x1;
   assign out_col   = idle ? in_col   : e_col;
   assign out_moire = idle ? in_moire : moire_r;
 
@@ -170,7 +175,7 @@ module m2_span_tex #(
       st <= T_IDLE;
       y_r <= '0; x_r <= '0; x1_r <= '0; col_r <= '0; moire_r <= 1'b0;
       u_r <= '0; v_r <= '0; du_r <= '0; dv_r <= '0; tex_r <= '0; texel_r <= '0;
-      e_valid <= 1'b0; e_col <= '0; e_x <= '0; to_cnt <= '0;
+      e_valid <= 1'b0; e_col <= '0; e_x <= '0; e_x1 <= '0; to_cnt <= '0;
       dbg_texpix <= '0; dbg_texnz <= '0;
     end else begin
       if (e_valid && out_ready) e_valid <= 1'b0;
@@ -207,6 +212,8 @@ module m2_span_tex #(
         T_EMIT: if (!e_valid || out_ready) begin
           e_valid <= 1'b1;
           e_x     <= x_r;
+          e_x1    <= ((x_r + 32'(PIXSTEP) - 32'sd1) > x1_r)
+                       ? x1_r : (x_r + 32'(PIXSTEP) - 32'sd1);
           e_col   <= {scale(col_r[23:16], inten),
                       scale(col_r[15:8],  inten),
                       scale(col_r[7:0],   inten)};
