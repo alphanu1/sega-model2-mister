@@ -42,7 +42,7 @@ int main(int argc, char **argv) {
   if (g_textured) std::printf("  TEXTURED quads (M2_R3D_TEX)\n");
   std::printf("  %d core clocks per scanline\n", TPL);
   auto d = new Vm2_raster3d;
-  d->clk = 0; d->scan_clk = 0; d->rst_n = 0; d->frame_start = 0; d->q_valid = 0; d->q_end = 0;
+  d->clk = 0; d->clk_mem = 0; d->scan_clk = 0; d->rst_n = 0; d->frame_start = 0; d->q_valid = 0; d->q_end = 0;
   d->scan_x = 0; d->scan_y = 0;
   d->tex_m_ack = 0; d->tex_m_data = 0; d->tex_inval = 0;
   d->tex_base0 = 0x1760000; d->tex_base1 = 0x17E0000;
@@ -58,7 +58,13 @@ int main(int argc, char **argv) {
       d->tex_m_data = 0x0123456789abcdefULL ^ (uint64_t)d->tex_m_addr;
     }
     d->eval();
+    // R318: clk_mem runs at 2x clk, as it does on hardware -- m2_texel lives on
+    // it now and m2_texel_x2 carries the request across the 2:1. Leaving it at
+    // zero (as this bench did) means the texel unit never clocks, the crossing
+    // is never exercised, and a PASS here says nothing about the change.
+    d->clk_mem = 1; d->eval(); d->clk_mem = 0; d->eval();
     d->clk = 1; d->scan_clk = 1; d->eval(); d->clk = 0; d->scan_clk = 0; d->eval();
+    d->clk_mem = 1; d->eval(); d->clk_mem = 0; d->eval();
     if (d->tex_m_ack) { d->tex_m_ack = 0; tex_wait = -1; }
     else if (tex_wait > 0) --tex_wait;
   };

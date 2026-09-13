@@ -15962,3 +15962,48 @@ fill being the constraint.
 
 The tile/texel/char-cache clock-up still stands on its own -- it fixes the
 scanline overruns, which are a different fault -- but it will not move `hold`.
+
+**R318 -- m2_texel MOVES TO clk_mem. The span queue could not fix the texture
+stall, because a queue absorbs bursts and this is a sustained rate mismatch.**
+
+R310 put a queue between the fill and m2_span_tex so a texel fetch would stop
+blocking the geometry behind it. On the board, textures still took the 3D with
+them. The arithmetic says why, and it was available before the build:
+
+    14,600 texel misses a frame x ~280 ns = ~4.1 ms of span_tex time fetching
+    queue depth                            = 32 spans
+
+The fill fills 32 entries in well under a millisecond and then stalls exactly as
+before. **A queue absorbs a BURST. It cannot fix a sustained mismatch in rate.**
+R309 identified the blocking correctly and R310 treated it as a burst problem;
+it is not one.
+
+So the fetch itself has to get faster. A miss is ~280 ns, of which ~160 ns is
+the SDRAM round trip and ~120 ns is m2_texel's own state machine -- and only the
+second half scales with a clock. At 100 MHz a miss becomes ~220 ns, so
+m2_span_tex completes about 27% more textured spans a frame, and the port
+occupies the bus for less time, which takes a little off the geometry's 40.6%
+wait as well.
+
+*The acknowledge is the whole difficulty.* m2_texel raises `ack` for ONE cycle.
+At 100 MHz that is 10 ns and a 50 MHz sampler sees it half the time, and a
+missed acknowledge hangs the span walk in T_FETCH until its 511-cycle timeout.
+m2_texel_x2 latches `done` on the acknowledge and holds the slow side's ack up
+until the requester drops its request -- the same answer, for the same reason, as
+m2_sdram_x2. No synchronisers: clk_sys is an exact /2 of clk_mem off one PLL, so
+this is a ratio and not a domain crossing.
+
+*And what the board measured while proving it.* The R310 sweep counter finally
+answers a question that had been guessed at twice: **202 sweeps across the whole
+capture, roughly one per 57 frames.** The texel cache is NOT being cleared every
+frame. Its 43.3% hit rate is genuine THRASHING, which means cache size would
+help after all -- the opposite of what R309 concluded when it argued that hit
+rate only changes how often the stall happens.
+
+*A bench that proved nothing, caught before it mattered.* tb_m2_raster3d never
+drove `clk_mem`; it sat at zero, so m2_texel never clocked and the crossing was
+never exercised. Worse, the texture path is gated behind an M2_R3D_TEX
+environment variable, so the default run does not touch textures at all. Both
+are fixed: the bench now clocks clk_mem at 2x as the hardware does, and the
+textured run is the one that matters. 8 checks, 0 fails, 10,824 pixels a frame,
+steady.

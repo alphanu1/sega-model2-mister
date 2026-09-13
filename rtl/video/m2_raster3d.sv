@@ -47,6 +47,10 @@ module m2_raster3d #(
   parameter int unsigned TEX_AW = 25
 ) (
   input  logic        clk,
+  // R318: m2_texel runs on this, not on `clk`. A texel miss is ~280 ns of which
+  // ~120 ns is that unit's own state machine, and only that half scales. See
+  // m2_texel_x2 for why the acknowledge has to be held across the 2:1.
+  input  logic        clk_mem,
   input  logic        rst_n,
   input  logic        frame_start,          // one pulse at the start of vblank
 
@@ -361,11 +365,29 @@ module m2_raster3d #(
   end
   wire tex_sweep = tex_dirty && frame_start;
 
+  // R318: the request crosses to clk_mem here. m2_texel's `ack` is one cycle,
+  // which at 100 MHz is 10 ns and invisible to a 50 MHz sampler half the time --
+  // and a missed acknowledge hangs the span walk in T_FETCH until its 511-cycle
+  // timeout. m2_texel_x2 holds it up until the request drops, exactly as
+  // m2_sdram_x2 does for the memory ports.
+  logic        txf_req, txf_ack;
+  logic [31:0] txf_tex;
+  logic [19:0] txf_u, txf_v;
+  logic [3:0]  txf_texel;
+
+  m2_texel_x2 u_texel_x2 (
+    .clk_fast(clk_mem), .rst_n(rst_n),
+    .s_req(tex_req), .s_ack(tex_ack), .s_tex(tex_state),
+    .s_u(tex_u), .s_v(tex_v), .s_texel(tex_texel),
+    .f_req(txf_req), .f_ack(txf_ack), .f_tex(txf_tex),
+    .f_u(txf_u), .f_v(txf_v), .f_texel(txf_texel)
+  );
+
   m2_texel #(.AW(TEX_AW)) u_texel (
-    .clk(clk), .rst_n(rst_n),
+    .clk(clk_mem), .rst_n(rst_n),
     .base_s0(tex_base0), .base_s1(tex_base1),
-    .req(tex_req), .ack(tex_ack), .tex(tex_state),
-    .u(tex_u), .v(tex_v), .texel(tex_texel),
+    .req(txf_req), .ack(txf_ack), .tex(txf_tex),
+    .u(txf_u), .v(txf_v), .texel(txf_texel),
     .m_req(tex_m_req), .m_addr(tex_m_addr), .m_ack(tex_m_ack), .m_data(tex_m_data),
     .inval(tex_sweep),
     .dbg_hits(dbg_texhit), .dbg_misses(dbg_texmiss), .dbg_lost(dbg_texlost),

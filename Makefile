@@ -650,11 +650,11 @@ test_m2_raster3d: obj_raster3d/Vm2_raster3d
 	@./obj_raster3d/Vm2_raster3d $(TEST_ARGS)
 
 obj_raster3d/Vm2_raster3d: rtl/video/m2_raster3d.sv rtl/video/m2_quad_store.sv rtl/video/m2_raster_fill.sv \
-                           rtl/video/m2_raster_div.sv rtl/video/m2_recip_rom.sv rtl/video/m2_raster_band.sv rtl/video/m2_span_tex.sv rtl/video/m2_texel.sv rtl/tgp/m2_fifo_m10k.sv sim/video/tb_m2_raster3d.cpp
+                           rtl/video/m2_raster_div.sv rtl/video/m2_recip_rom.sv rtl/video/m2_raster_band.sv rtl/video/m2_span_tex.sv rtl/video/m2_texel.sv rtl/video/m2_texel_x2.sv rtl/tgp/m2_fifo_m10k.sv sim/video/tb_m2_raster3d.cpp
 	$(VBUILD) --top-module m2_raster3d -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-WIDTHEXPAND -Wno-PINCONNECTEMPTY -Wno-VARHIDDEN -Wno-WIDTHTRUNC \
 	  --Mdir obj_raster3d -o Vm2_raster3d -CFLAGS "-O2" \
 	  rtl/video/m2_raster3d.sv rtl/video/m2_quad_store.sv rtl/video/m2_raster_fill.sv \
-	  rtl/video/m2_raster_div.sv rtl/video/m2_recip_rom.sv rtl/video/m2_raster_band.sv rtl/video/m2_span_tex.sv rtl/video/m2_texel.sv rtl/tgp/m2_fifo_m10k.sv sim/video/tb_m2_raster3d.cpp
+	  rtl/video/m2_raster_div.sv rtl/video/m2_recip_rom.sv rtl/video/m2_raster_band.sv rtl/video/m2_span_tex.sv rtl/video/m2_texel.sv rtl/video/m2_texel_x2.sv rtl/tgp/m2_fifo_m10k.sv sim/video/tb_m2_raster3d.cpp
 
 test_m2_pair_cache: obj_pair_cache/Vm2_pair_cache
 	@echo "== test m2_pair_cache (the port's second dword serves the next read)"

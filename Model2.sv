@@ -5528,7 +5528,8 @@ wire [15:0] tex_sweep;   // R310: whole-cache clears, to separate cold starts fr
 // fill's time is going -- 27,000 fetches a frame at a 39% hit rate.
 m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(3),
               .TWO_CLOCKS(1'b0), .TEX_AW(SDR_AW)) u_raster3d (
-	.clk(clk_sys), .rst_n(mem_rst_n),
+	// R318: clk_mem carries m2_texel, which runs at 100 MHz inside this module.
+	.clk(clk_sys), .clk_mem(clk_mem), .rst_n(mem_rst_n),
 	.frame_start(geo_walk_start),
 	// Each bar is a proper filled rectangle traversed around its perimeter:
 	// (x0,y0) top-left, (x0,y2) bottom-left, (x2,y2) bottom-right,
