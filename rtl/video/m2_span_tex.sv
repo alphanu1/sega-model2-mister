@@ -44,7 +44,15 @@
 
 `timescale 1ns/1ps
 
-module m2_span_tex (
+module m2_span_tex #(
+  // TWO PIXELS PER TEXEL FETCH (R279). A textured span costs a fetch and a
+  // handshake per pixel, and the bands are beam-paced: at four cycles a pixel
+  // a busy frame does not finish. One texel covering two pixels halves both
+  // costs, and on this screen it is barely visible -- Daytona's textures are
+  // magnified far more often than minified, so adjacent pixels usually share a
+  // texel anyway. Set to 1 to fetch per pixel.
+  parameter int unsigned PIXSTEP = 2
+) (
   input  logic               clk,
   input  logic               rst_n,
 
@@ -136,7 +144,10 @@ module m2_span_tex (
   assign out_valid = idle ? (in_valid && !tex_now) : e_valid;
   assign out_y     = idle ? in_y     : y_r;
   assign out_x0    = idle ? in_x0    : e_x;
-  assign out_x1    = idle ? in_x1    : e_x;       // ONE pixel, when textured
+  // PIXSTEP wide, clipped at the span's end.
+  assign out_x1    = idle ? in_x1
+                          : ((e_x + 32'(PIXSTEP) - 32'sd1) > x1_r
+                               ? x1_r : e_x + 32'(PIXSTEP) - 32'sd1);
   assign out_col   = idle ? in_col   : e_col;
   assign out_moire = idle ? in_moire : moire_r;
 
@@ -182,13 +193,13 @@ module m2_span_tex (
           e_col   <= {scale(col_r[23:16], inten),
                       scale(col_r[15:8],  inten),
                       scale(col_r[7:0],   inten)};
-          if (!(&dbg_texpix)) dbg_texpix <= dbg_texpix + 1'd1;
-          if (x_r >= x1_r) begin
+          if (!(&dbg_texpix)) dbg_texpix <= dbg_texpix + 32'(PIXSTEP);
+          if (x_r + 32'(PIXSTEP) - 32'sd1 >= x1_r) begin
             st <= T_DRAIN;
           end else begin
-            x_r <= x_r + 32'sd1;
-            u_r <= u_r + du_r;
-            v_r <= v_r + dv_r;
+            x_r <= x_r + 32'(PIXSTEP);
+            u_r <= u_r + (du_r <<< (PIXSTEP == 2 ? 1 : 0));
+            v_r <= v_r + (dv_r <<< (PIXSTEP == 2 ? 1 : 0));
             st  <= T_FETCH;
           end
         end

@@ -72,10 +72,16 @@ int main(int argc, char **argv) {
     }
   }
 
-  // 2. A TEXTURED SPAN: one pixel each, stepping.
+  // 2. A TEXTURED SPAN: one GROUP of PIXSTEP pixels per fetch, stepping.
+  //
+  // PIXSTEP is 2 (R279): a fetch and a handshake per pixel is four cycles a
+  // pixel and the bands are beam-paced, so one texel covers a pair. The last
+  // group of a span is clipped to its end.
   {
     got.clear();
-    const int X0 = 10, X1 = 17;
+    // AN ODD NUMBER OF PIXELS, so the last group is CLIPPED to one. With an
+    // even span the clip never fires and a mutation that removed it passed.
+    const int X0 = 10, X1 = 16;
     // ONE TEXEL IS 4 * 65536 IN THIS FORMAT -- quarter-texels with sixteen
     // fractional bits. The first version of this test stepped by 1<<10, which
     // is 1/256th of a texel a pixel: every pixel fetched the SAME texel, and a
@@ -89,21 +95,23 @@ int main(int argc, char **argv) {
     d->in_tex = 0x000001; d->in_tex_en = 1;        // bit 0 = textured
     tick();                                        // accepted
     d->in_valid = 0;
-    for (int i = 0; i < 200 && int(got.size()) < (X1 - X0 + 1); ++i) tick();
-    ck("one span per pixel", long(got.size()), X1 - X0 + 1);
+    const int STEP = 2;
+    const int groups = ((X1 - X0) / STEP) + 1;
+    for (int i = 0; i < 400 && int(got.size()) < groups; ++i) tick();
+    ck("one span per pixel group", long(got.size()), groups);
     for (size_t i = 0; i < got.size(); ++i) {
-      const int x = X0 + int(i);
-      ck("pixel x0", got[i].x0, x);
-      ck("pixel is one wide", got[i].x1, x);
+      const int x = X0 + int(i) * STEP;
+      ck("group x0", got[i].x0, x);
+      ck("group is PIXSTEP wide, clipped", got[i].x1, (x + STEP - 1 > X1) ? X1 : x + STEP - 1);
       // The texel unit sees the coordinate shifted from quarter-texels.16 to
       // texels.8, which is ten bits right.
-      const uint32_t u = uint32_t((U0 + DU * int32_t(i)) >> 10);
-      const uint32_t v = uint32_t((V0 + DV * int32_t(i)) >> 10);
+      const uint32_t u = uint32_t((U0 + DU * int32_t(i) * STEP) >> 10);
+      const uint32_t v = uint32_t((V0 + DV * int32_t(i) * STEP) >> 10);
       const int t = texel_of(u, v);
       const uint32_t want = uint32_t((0xff * ((t << 4) | t)) >> 8) * 0x010101u;
-      ck("pixel colour is the texel", got[i].col, want);
+      ck("group colour is the texel at its first pixel", got[i].col, want);
     }
-    ck("textured pixels counted", d->dbg_texpix, X1 - X0 + 1);
+    ck("textured pixels counted", d->dbg_texpix, groups * STEP);
   }
 
   // 2b. A FLAT SPAN WHEN THE CONSUMER IS NOT READY. It must be HELD, not
@@ -133,11 +141,13 @@ int main(int argc, char **argv) {
     d->in_tex = 0x000001; d->in_tex_en = 1;
     tick();
     d->in_valid = 0;
-    for (int i = 0; i < 400 && int(got.size()) < (X1 - X0 + 1); ++i)
+    const int STEP2 = 2;
+    const int grp2 = ((X1 - X0) / STEP2) + 1;
+    for (int i = 0; i < 800 && int(got.size()) < grp2; ++i)
       tick((i % 3) != 0);                          // ready only one cycle in three
-    ck("stalled: one span per pixel", long(got.size()), X1 - X0 + 1);
+    ck("stalled: one span per pixel group", long(got.size()), grp2);
     bool ordered = true;
-    for (size_t i = 0; i < got.size(); ++i) if (got[i].x0 != X0 + int(i)) ordered = false;
+    for (size_t i = 0; i < got.size(); ++i) if (got[i].x0 != X0 + int(i) * STEP2) ordered = false;
     ck("stalled: in order, none repeated", ordered, 1);
   }
 

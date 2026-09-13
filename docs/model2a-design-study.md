@@ -14569,3 +14569,30 @@ A texture sheet nobody wrote returns 0xF for every texel, and 0xF is FULL
 BRIGHTNESS -- so a textured polygon comes out flat and bright, which by eye is
 indistinguishable from a texture path that does nothing at all. The board's 'Y'
 record counts texels that are not 0xF for exactly this reason.
+
+**R279 -- ONE TEXEL COVERS TWO PIXELS, BECAUSE A PIXEL COSTS FOUR CYCLES.**
+Counted through `m2_span_tex` and `m2_texel` as built: a textured pixel is a
+fetch request, two cycles of lookup, an acknowledge and a band handshake --
+about four cycles when the texel cache hits, and fourteen more when it does
+not. A busy Daytona frame covers on the order of 280,000 pixels across its
+bands, and the frame budget at 50 MHz is 833,000 cycles. One pixel per fetch
+does not fit, and the bands are BEAM-PACED: what does not finish is not slow,
+it is missing from the screen.
+
+So a fetch covers a pair of pixels: the span walk emits two-pixel spans, steps
+u and v by twice the gradient, and clips the last group at the span's end. It
+halves the fetches AND the band handshakes, which are the two costs. The
+quality argument is that Daytona's textures are magnified far more often than
+minified -- adjacent pixels usually land on the same texel anyway -- so what
+this loses is a horizontal doubling on the minified cases, where there are no
+mipmaps to lose anyway.
+
+`PIXSTEP` is a parameter, so the comparison is one edit. The bench checks the
+group width, the clip at the end, and that u steps by the GROUP -- and the span
+it tests is an ODD number of pixels wide, because with an even one the clip
+never fires and a mutation that removed it passed.
+
+The alternative, kept for when the picture is right and the cost is what is
+left: make `m2_texel` a two-stage pipeline that accepts an address every cycle
+instead of taking two cycles a lookup and a third to see the request drop.
+That is the change that would make one texel per pixel affordable.
