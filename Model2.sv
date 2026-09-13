@@ -3780,6 +3780,17 @@ wire        uart_b2_valid = hb_tick_b || trap_edge;
 wire        uart_b_valid = char_ack;
 wire [31:0] uart_dropped;
 
+// R284: THE TWO DEBUG INSTRUMENTS WHOSE QUESTIONS ARE ANSWERED, GATED OFF SO
+// THE TEXTURE PATH FITS. The design needs 4,222 LABs of 4,191 with the texture
+// path in, and these two are the cheapest honest cut: the sweep's region 0
+// folds to 25E723 and has MATCHED the MRA on every capture since R238, and the
+// wedge catcher found what it was built to find (R235). Set either back to 1
+// to get it; nothing else changes. Declared here because Quartus wants a
+// parameter declared before it is used, wherever Verilator does not.
+localparam bit WEDGE_EN = 1'b0;
+localparam bit SWEEP_EN = 1'b0;
+
+
 // R238: declared at module scope because it is DRIVEN inside g_dbg (the
 // stream's block, under DEBUG) and CONSUMED by the sweep's block outside it.
 // Declared inside the generate, Quartus could not see it from the sweep --
@@ -3818,7 +3829,12 @@ wire wedge_s1  = near3(q3d_x0, q3d_x2, q3d_x3) && near3(q3d_y0, q3d_y2, q3d_y3)
               && (far2(q3d_x1, q3d_x2) || far2(q3d_y1, q3d_y2));
 wire wedge_s0  = near3(q3d_x1, q3d_x2, q3d_x3) && near3(q3d_y1, q3d_y2, q3d_y3)
               && (far2(q3d_x0, q3d_x2) || far2(q3d_y0, q3d_y2));
-wire wedge_hit = q3d_valid && q3d_ready && wedge_in && (wedge_s1 || wedge_s0);
+// R284: OFF, for the LABs. The wedge catcher answered its question -- the
+// board does produce quads with three vertices within 8 px and the fourth 60
+// away, and R235 records what they turned out to be. Holding a 128-bit quad
+// and comparing four coordinate pairs against two thresholds is a few hundred
+// ALM that the texture path needs more.
+wire wedge_hit = WEDGE_EN && q3d_valid && q3d_ready && wedge_in && (wedge_s1 || wedge_s0);
 logic [127:0] wedge_q;
 logic         wedge_have, wedge_slot;
 logic  [1:0]  wedge_ph;          // 0: nothing to send, 1: send W, 2: send X
@@ -4644,7 +4660,12 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 			// executing 106 million instructions out of that very region. The
 			// memory was right and the instrument was wrong -- which is worse
 			// than no instrument, because this one is what R38 says to trust.
-			3'd0: if (rom_loaded && cal_done) begin
+			// R284: OFF. The design needs 4,222 LABs of 4,191 with the texture
+			// path in, and this instrument's question is ANSWERED -- region 0
+			// folds to 25E723, which is what tools/rom_csum.py says the MRA
+			// holds, MATCH on every capture since R238. The code stays; the
+			// gate is one parameter, and `git log` has the readings.
+			3'd0: if (SWEEP_EN && rom_loaded && cal_done) begin
 				sw_addr  <= SDR_AW'({sw_sel_i, 20'd0});
 				sw_sel   <= sw_sel_i;
 				sw_acc   <= 24'd0;

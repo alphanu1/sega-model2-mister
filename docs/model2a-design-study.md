@@ -14713,3 +14713,34 @@ critical path.
 The traffic argument is the same one R269 made and it holds for the same
 reason: port 3 spends about 558 cycles of a 3,280-cycle scanline, and the
 prefetches are moved in time rather than added.
+
+**R284 -- THE TEXTURE PATH DID NOT FIT, AND THE CUT WAS TWO ANSWERED
+INSTRUMENTS.** `build/tex2` failed the fitter:
+
+    Error (170012): Fitter requires 4222 LABs to implement the design,
+                    but the device contains only 4191 LABs
+
+`tex1` fitted at 39,667 ALM -- 95%, and LAB-limited rather than ALM-limited, so
+the hundred-odd ALM that R279, R280 and R283 added went over a packing cliff
+rather than over a count.
+
+The cut is the two debug instruments whose questions are ANSWERED, gated by a
+parameter each rather than deleted:
+
+* **The SDRAM checksum sweep (R238).** Region 0 folds to 25E723, which is what
+  `tools/rom_csum.py` says the MRA holds, and it has MATCHED on every capture
+  since. A 64-bit burst register, a 24-bit accumulator, an address counter and
+  a five-state machine.
+* **The wedge catcher (R235).** It found what it was built to find -- quads
+  with three vertices within 8 px and the fourth 60 away -- and R235 records
+  what they were. A 128-bit quad register and four coordinate comparisons
+  against two thresholds.
+
+`WEDGE_EN` and `SWEEP_EN` are `1'b0` at the top of the file; setting either
+back to 1 restores it and nothing else changes. The 'S', 'W' and 'X' records
+stop appearing, which is the visible consequence.
+
+AND THE PARAMETERS ARE DECLARED BEFORE THEY ARE USED, because Quartus requires
+it where Verilator does not -- the same class as R283's cast: a lint that
+passes is not a build that passes, and this file has now been bitten by both in
+one night.
