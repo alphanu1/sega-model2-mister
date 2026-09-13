@@ -33,10 +33,24 @@ whole `rtl/` tree in about a minute; run it before a build.
    (21, 23, 25, 27) of the same netlist; the spread between seeds on this
    design is about half a nanosecond, so one of them should land positive.
 
-**If none of them does**, the next cut is the fill's SECOND divider (~700
+6. None of them did, and the reason was not the texture path OR congestion:
+   `report_timing` on the built directory named `m2_sdram|pend[5] ->
+   grant[2]`, the SDRAM ARBITER, widened from ten ports to eleven by the texel
+   fetch. Round-robin was a barrel rotate, then a priority encode, then an add
+   with a conditional subtract -- one chain five deep. Two priority encoders in
+   parallel give the same answer at half the depth (R288), and `tb_m2_sdram`
+   serves the same 29,881 transactions with identical per-port counts.
+   `build/tex4` is that, on seeds 12, 17, 21 and 25.
+
+**If tex4 still misses**, the next cut is the fill's SECOND divider (~700
 ALUTs): the two exist because one made the edge-slope wait 49% of the fill, so
 it is a throughput trade and not a free one. After that, `NBUF` 4 -> 3 band
 buffers.
+
+**The method worth keeping:** three hypotheses were live -- the texture
+arithmetic, congestion at 99%, the arbiter -- and `quartus_sta -t` with
+`report_timing` on an ALREADY BUILT directory distinguished them in two minutes
+with no rebuild. Guessing at any one of them would have cost forty.
 
 **Reading a pick line:** on seed 17 the reported worst slack was -0.446 and
 that is the HDMI PLL, which the rule tolerates; the CORE clock was the -0.004.
