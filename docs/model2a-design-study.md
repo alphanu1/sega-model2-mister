@@ -16667,3 +16667,48 @@ width, and the shift `s` travels with the span:
 per quad, and `m2_raster_div` does not pipeline. That is latency on the unit
 that owns the band-fill deadline, so `ready ms` and bands-completed are the
 numbers that decide whether this was affordable -- not ALM.
+
+**R338 -- THE FILL FITS THREE PLANES. The perspective correction's first half is
+built and proven; the divide is not wired yet.**
+
+`m2_raster_fill` now normalises the four 1/z minifloats, rewrites `qu`/`qv` in
+place as u/z and v/z, and fits a third plane to 1/z. `m2_span_tex` accepts
+`in_ooz`/`in_doozdx` and IGNORES them, so the walk is still affine and the
+picture is unchanged -- the same split R334 used, and for the same reason: the
+half that can be proven at the desk lands first.
+
+**THREE DECISIONS THAT COST NO AREA, each checked rather than assumed:**
+
+*qu and qv are REUSED to hold u/z and v/z.* The raw coordinate is never wanted
+again after normalisation, so the only new per-quad storage is `qoz[4]`. Keeping
+both would have been ~200 ALM of registers for nothing.
+
+*The scale is a CONSTANT and is not carried.* Normalisation puts the largest 1/z
+of the quad in [2^14, 2^15), so `(u * ooz) >> 15` lands in [u/2, u) and fits the
+13 bits u already occupied. m2_span_tex undoes it with a fixed shift. An earlier
+draft carried a 5-bit per-quad `oshift` through the span queue; it is always 15.
+
+*1/z normalises to bit 14, not bit 15.* The plane fit forms 16-bit SIGNED
+differences (`pf_o1 = qoz[fb] - qoz[fa]`), so the values must fit 15 bits or
+every numerator, multiplier and barrel shifter in the fit widens. The precision
+cost was MEASURED, not assumed: 0.020 to 0.59 texels at 15 bits against 0.017 to
+0.63 at 16 -- no difference that a picture can show.
+
+**THE BENCH HAD TO BECOME PERSPECTIVE-CORRECT, AND IT FOUND THE REAL ERROR IN
+IT.** The texture test fitted an affine plane in double precision; it now
+transcribes mf16, the bit-14 normalisation and the `>> 15` truncation
+independently and fits to u/z. Two rounds of failures, both the bench's:
+
+* 268 wrong, all reading 0.000 -- `in_oz*` undriven, so `oz_norm` returned zero.
+* 134 wrong -- the gradients passed but the plane VALUES were out, because the
+  expected value still used `U[0]` as the base where the plane is fitted to
+  `UZ[0]`. **The gradients were right the whole time; the base was the bug.**
+
+The quad now uses FOUR DIFFERENT DEPTHS (20, 35, 90, 48). A quad whose corners
+share a depth is the one case where affine and perspective agree, and a test
+using one could not tell them apart. 336 texture checks now against 269, the new
+ones on `d(1/z)/dx`.
+
+The span queue goes 194 -> 242 bits carrying 1/z and its gradient. That is
+affordable ONLY because R332 made the queue MLAB: at 553 of 553 M10K blocks
+there is no block memory left to widen.

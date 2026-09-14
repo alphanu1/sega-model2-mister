@@ -65,6 +65,15 @@ module m2_span_tex #(
   input  logic signed [31:0] in_u, in_v,          // quarter-texels, 16 fractional bits
   // 8.8 texels a pixel (R286), shifted up to this unit's 16.16 on the way in.
   input  logic signed [15:0] in_dudx, in_dvdx,
+  // R337: 1/z at the span's start and its gradient along x. u and v above are
+  // u/z and v/z now. THE DIVIDE IS NOT WIRED YET -- these are accepted and
+  // ignored, so the walk is still affine and the picture is unchanged. The
+  // fill's half of the perspective correction is proven (152,362 bench checks);
+  // this is the half that still has to be built.
+  /* verilator lint_off UNUSEDSIGNAL */
+  input  logic signed [31:0] in_ooz,
+  input  logic signed [15:0] in_doozdx,
+  /* verilator lint_on UNUSEDSIGNAL */
   input  logic [23:0]        in_tex,
   input  logic               in_tex_en,
 
