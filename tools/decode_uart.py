@@ -21,6 +21,7 @@
 import sys,collections
 C=[];H=[];W=[];SW=[]
 T=[]     # R251: light-table records
+Z=[]     # R334: 1/z per vertex, as 16-bit minifloats (phase 6)
 U=[]     # R255: walk records
 V=[]     # R269: glyph cache records
 Y=[]     # R275: texture records
@@ -35,6 +36,7 @@ for line in open(sys.argv[1],errors='replace'):
     if p[0]=='C': C.append((a,d))
     elif p[0]=='H': H.append((a,d))
     elif p[0]=='T': T.append((a,d))     # R251: the light table
+    elif p[0]=='Z': Z.append((a,d))     # R334: {oz0,oz1} and {oz2,oz3}
     elif p[0]=='U': U.append((a,d))     # R255: the walk's own numbers
     elif p[0]=='V': V.append((a,d))     # R269: the glyph cache, per frame
     elif p[0]=='Y': Y.append((a,d))     # R275: the texture path, per frame
@@ -147,6 +149,30 @@ if Z or Z2:
               % (100*med3(geo)/FR, 100*med3(chr_)/FR, 100*med3(tex)/FR))
     print('    (bus busy near 100%% with everyone waiting = BANDWIDTH; idle bus with a'
           ' queue = BLOCKED, and the fixes are opposites)')
+
+def mf16(v):
+    # R334: 8-bit IEEE exponent + top 8 mantissa bits, sign dropped.
+    e = (v >> 8) & 0xff
+    if e == 0: return 0.0
+    m = 1.0 + ((v & 0xff) / 256.0)
+    return m * (2.0 ** (e - 127))
+
+if Z:
+    # R334: 1/z per vertex. Sanity, not accuracy -- these should be small
+    # positive numbers (z is a view-space depth), and a run of zeros means the
+    # reciprocal is not reaching the store.
+    vals = []
+    for a, d in Z:
+        for v in ((a >> 16) & 0xffff, a & 0xffff, (d >> 16) & 0xffff, d & 0xffff):
+            vals.append(mf16(v))
+    nz = [v for v in vals if v > 0]
+    print('1/z (R334): %d samples, %d nonzero (%.1f%%)' % (len(vals), len(nz), 100.0*len(nz)/max(1,len(vals))))
+    if nz:
+        nz.sort()
+        print('    min %.6g  median %.6g  max %.6g   -> z from %.4g to %.4g'
+              % (nz[0], nz[len(nz)//2], nz[-1], 1.0/nz[-1], 1.0/nz[0]))
+    print('    (all zero = the reciprocal is not arriving; a huge spread inside one')
+    print('     quad is what the perspective divide exists to correct)')
 
 if T:
     # The walker's 32-entry light table, as the board holds it. Luminance is
