@@ -630,6 +630,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/mem/m2_wr_arb.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/mem/m2_pair_cache.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/mem/m2_char_cdc.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_char_cache.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_char_x2.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/m2_i8251.sv
 # fx68k's microcode and nanocode are $readmemb'd by BARE FILENAME. Quartus
 # resolves those against the project directory and its search paths, so without

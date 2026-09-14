@@ -5369,10 +5369,25 @@ wire [31:0] char_hits, char_misses, char_fills;
 // scanline overruns per frame. If the overruns climb here, this is the first
 // thing to put back -- and the numbers to compare against are build/fix3d25's,
 // taken at 128 KB with the same sibling fill.
+// R320: THE GLYPH LOOKUP CROSSES TO clk_mem HERE. The cache's own walk is five
+// cycles -- S_IDLE, S_LOOK, S_MISS, S_FILL, S_ACK -- which is ~100 ns of a
+// 280 ns miss at 50 MHz and ~50 ns at 100. Two misses in a column then cost
+// 440 ns against the 480 ns budget instead of 560, which is what the overruns
+// are. See m2_char_x2 for why the acknowledge has to be held across the 2:1.
+logic        ccf_req, ccf_ack;
+logic [17:0] ccf_addr;
+logic [31:0] ccf_data;
+
+m2_char_x2 #(.ADDR_BITS(18)) u_char_x2 (
+	.clk_fast(clk_mem), .rst_n(cc_rst_n_s),
+	.s_req(char_req), .s_addr(char_addr), .s_ack(char_ack), .s_data(char_data),
+	.f_req(ccf_req), .f_addr(ccf_addr), .f_ack(ccf_ack), .f_data(ccf_data)
+);
+
 m2_char_cache #(.IDX_BITS(12)) u_char_cache (   // R313: 32 KB, an ALM/M10K trade -- see the module
-	.clk(clk_sys), .rst_n(cc_rst_n_s),
-	.v_req(char_req), .v_addr(char_addr),
-	.v_ack(char_ack), .v_data(char_data),
+	.clk(clk_mem), .rst_n(cc_rst_n_s),
+	.v_req(ccf_req), .v_addr(ccf_addr),
+	.v_ack(ccf_ack), .v_data(ccf_data),
 	.m_req(cache_m_req), .m_addr(cache_m_addr),
 	.m_ack(cache_m_ack), .m_data(cache_m_data),
 	// The invalidate index is the cache's index field, so it narrows with

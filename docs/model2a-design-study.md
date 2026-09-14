@@ -16037,3 +16037,35 @@ path does this correctly -- `s_dout = f_ack ? f_dout : dout_r` -- and the glue i
 Model2.sv did not.
 
 tb_m2_pair_cache 4,513 checks and tb_m2_boot pass unchanged.
+
+**R320 -- m2_char_cache MOVES TO clk_mem, to pay back the overruns R313 caused.**
+
+A glyph miss costs ~280 ns against a 480 ns per-column budget, so two in one
+column overrun and the line repeats. The cache's own walk -- S_IDLE, S_LOOK,
+S_MISS, S_FILL, S_ACK -- is five cycles, ~100 ns of that 280 at 50 MHz, and it
+is the only half that scales:
+
+     50 MHz   ~120 + ~160 = 280 ns    two misses = 560 ns   OVERRUN
+    100 MHz    ~60 + ~160 = 220 ns    two misses = 440 ns   fits
+
+R313 halved this cache to 32 KB to buy ALM and the board showed the cost: glyph
+hit rate 90.1% -> 83.0%, overruns 14 a frame -> 53. This pays that back without
+giving the ALM up again.
+
+m2_char_x2 holds the acknowledge across the 2:1 exactly as m2_texel_x2 does
+(R318): `v_ack` is one cycle, 10 ns at 100 MHz, and a 50 MHz sampler would see
+half of them -- a missed acknowledge leaves the fetch engine waiting forever on
+a glyph already delivered. The data is BYPASSED on the ack cycle rather than
+merely registered, which is R319's lesson: a slow-clock register sampling a
+fast-clock one on aligned edges is a hold race, and `p4_dout_r` survived on
+placement luck until R318 moved the placement.
+
+*Checked rather than assumed this time:* m2_tile_fetch already captures
+`char_data` under `else if (char_ack)`, so there is no free-running sample on
+the consumer side and R319's fault cannot repeat here.
+
+*What this does NOT do.* It does not touch the 3D. The bands drop out only with
+textures on, and that is the texel miss RATE -- 42.4%, roughly 29 misses per
+textured span, ~6.4 us against a 362 us band budget. R318 made each fetch 10%
+faster and the picture did not change, because the gap is ~3x. That is the next
+problem and it is a different one.
