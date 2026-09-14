@@ -16414,3 +16414,64 @@ says where the array landed. Check it in the fit report before believing the 5
 blocks exist. (The waiver comment also had to be reworded: a comment beginning
 with that tool's name is parsed as a pragma, which this project has already paid
 for once.)
+
+**R333 -- THE LIGHTING GOES BLACK AND STAYS BLACK, AND THE CAUSE IS THE WALK
+READING DATA AS COMMANDS.** Ben: "Lighting works for about 3-5 minutes. then it
+all goes black... it must loose synd or timming!" That instinct is right.
+
+**What is observed.** Every 3D polygon renders black -- the scenery is a
+silhouette, so geometry, clipping and rasterisation are all working and only the
+COLOUR is wrong. It never comes back until reset. Turning the pair caches off
+with OSD `O[25]` changes nothing, which rules them out.
+
+**What the telemetry shows.** A 400 s capture, the R251 light-table shadow read
+per entry rather than in aggregate:
+
+```
+  e0   ##...##..      last=0/0        '#' = nonzero, '.' = 0/0
+  e5   ####...##.     last=0/0        (t=0 on the left, t=400 on the right)
+  e18  ####...##.     last=0/0
+  ...  all 32 entries last=0/0
+```
+
+Healthy at first, then flickers, then ALL THIRTY-TWO ENTRIES PERMANENTLY ZERO.
+Luminance is `|dot(n,l)| * diffuse + ambient`, so a 0/0 entry renders every
+polygon that asks for it black -- which is the silhouette.
+
+**THE CAUSE, and the instrumentation for it was already there and being read
+past all day:**
+
+```
+WALK (R255): nops decoded med 0  max 280
+    (nops should be ZERO: the reference list holds none, so any run of them
+     is the walk reading data as commands)
+```
+
+**280 NOPs in one frame.** The walk has lost its place in the display list and
+is decoding payload bytes as opcodes. While desynced it eventually decodes a
+byte pattern as op 0x06 with a garbage count, and `tp_i` -- which wraps `& 0x1f`
+exactly as MAME's `index = (index + 1) & 0x1f` does -- walks the index right
+around the table, overwriting all 32 entries with the zeros that follow.
+
+**THE LIGHT TABLE CODE IS NOT AT FAULT.** It was checked against MAME's
+`geo_texture_parameters` line by line: the index is `(*input++) >> 2`, the count
+is the next word, diffuse is `param & 0xff` and ambient `(param >> 8) & 0xff`,
+and the index wraps to 32 after each write. All four match. It faithfully wrote
+what the desynced walk handed it.
+
+**WHY IT LOOKS LIKE A THREE-MINUTE TIMER AND IS NOT.** op 0x06 occurs only ~7
+times in 400 s, so a desync is only VISIBLE when it happens to corrupt one of
+those rare writes. The walk may be desyncing far more often than the lighting
+reveals. Do not go looking for a counter that wraps at 3 minutes; 2^33 at 50 MHz
+is 171.8 s and it is a coincidence.
+
+**A CORRECTION MADE IN THE SAME HOUR.** The first read of this capture bucketed
+the entries in aggregate and reported "it DOES recover at t=260-280". It does
+not. The rotating sample had caught the few entries briefly repopulated while
+the rest stayed zero, and Ben refuted it from the screen at once. **Aggregate a
+rotating sample and you will invent a recovery that is not there.**
+
+**NEXT:** find what makes `w_ip` drift -- a command whose payload length is
+mis-stepped will land the pointer mid-payload and everything after it is
+garbage. The existing captures can name the opcode that precedes the NOP runs;
+that is a decoder change, not RTL, and costs no build.
