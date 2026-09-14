@@ -16712,3 +16712,54 @@ ones on `d(1/z)/dx`.
 The span queue goes 194 -> 242 bits carrying 1/z and its gradient. That is
 affordable ONLY because R332 made the queue MLAB: at 553 of 553 M10K blocks
 there is no block memory left to widen.
+
+**R339 -- THE PERSPECTIVE DIVIDE. The orientation fault is fixed in RTL.**
+
+`m2_span_tex` now divides once per PIXSTEP group: 1/z walks the span beside u/z
+and v/z, and the texel coordinate is `u = (uoz << 15) / ooz`. R274's affine
+approximation -- 36 texels of error at a 4:1 depth ratio, 688 at 40:1 -- is
+gone.
+
+**THE DIVIDE IS A SEED PLUS ONE NEWTON STEP, and the table is 5 MLABs.** A plain
+reciprocal table accurate to half a texel needs ~12 index bits: 4,096 entries,
+~1,000 ALM in MLAB, and there is no M10K left at 553/553. Measured instead:
+
+```
+  128-entry seed on the top 8 bits   7.8e-3  ->  2.0    texels on a 256-texel coord
+  + one Newton step                  6.1e-5  ->  0.016  texels
+```
+
+which is an order of magnitude under the plane fit's own quantisation (0.02 to
+0.59, R338). The Newton step is two multiplies -- DSP, where 49 blocks are idle
+-- so it buys four index bits in the resource we have rather than the one we do
+not.
+
+**THE OVERFLOW THAT MADE IT RETURN ZERO.** Written as `r0*(2S - m*r0)/S` with
+S = 2^47, r0 is ~2^24 and the bracket ~2^47, so the product is **2^71** and
+64 bits truncate it silently to zero. Folding 24 of the 47 shifts inside --
+`nd = (2^48 - m*r0) >> 24` then `r1 = (r0*nd) >> 23` -- keeps every intermediate
+under 2^48 and is algebraically identical. It was found by hand-computing the
+bench's own case, not by inspection.
+
+**THE OUTPUT SHIFT IS BOUNDED ON PURPOSE.** A general 64-bit barrel shifter over
+32 positions is ~200 ALM. `oz_norm` caps 1/z at bit 14 (R338), so the leading
+bit is 23..31 in every case that draws and the shift needs nine positions;
+anything below saturates, which is a vertex far enough away that the coordinate
+was going to clamp regardless.
+
+**THE TEST THAT PROVED PERSPECTIVE PASSED WHILE TESTING NOTHING.** The
+varying-depth case first used `DOZ = -(1<<21)`, which drove 1/z to zero on the
+SECOND group. The loop broke immediately, the curvature check never reached the
+three samples it needs, and **the whole test reported PASS having verified one
+group and no curvature.** Checks went 33 -> 35, which is the only thing that
+gave it away.
+
+It now falls ~20% across the span, checks all sixteen groups against an exact
+division, asserts the coordinate is NON-LINEAR -- which an affine walk cannot
+produce, so it is the check that fails if the divide is ever removed -- and
+carries a guard that every group was actually reached. 52 checks against 33.
+
+**WHAT TO WATCH ON THE BOARD:** two more divides per quad in the fill and two
+more cycles per group in the walk. `m2_raster_div` does not pipeline and the
+walk owns the beam deadline, so `ready ms`, bands-completed and the overrun
+count are what say whether this was affordable. ALM is the cheap part.

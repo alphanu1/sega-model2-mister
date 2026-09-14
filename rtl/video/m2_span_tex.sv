@@ -65,15 +65,11 @@ module m2_span_tex #(
   input  logic signed [31:0] in_u, in_v,          // quarter-texels, 16 fractional bits
   // 8.8 texels a pixel (R286), shifted up to this unit's 16.16 on the way in.
   input  logic signed [15:0] in_dudx, in_dvdx,
-  // R337: 1/z at the span's start and its gradient along x. u and v above are
-  // u/z and v/z now. THE DIVIDE IS NOT WIRED YET -- these are accepted and
-  // ignored, so the walk is still affine and the picture is unchanged. The
-  // fill's half of the perspective correction is proven (152,362 bench checks);
-  // this is the half that still has to be built.
-  /* verilator lint_off UNUSEDSIGNAL */
+  // R339: 1/z at the span's start and its gradient along x. u and v above are
+  // u/z and v/z, and the texel coordinate is u = (uoz << 15) / ooz -- the
+  // perspective divide, done once per PIXSTEP group.
   input  logic signed [31:0] in_ooz,
   input  logic signed [15:0] in_doozdx,
-  /* verilator lint_on UNUSEDSIGNAL */
   input  logic [23:0]        in_tex,
   input  logic               in_tex_en,
 
@@ -106,13 +102,55 @@ module m2_span_tex #(
   output logic [31:0]        dbg_texnz
 );
 
-  typedef enum logic [1:0] { T_IDLE, T_FETCH, T_EMIT, T_DRAIN } st_t;
+  typedef enum logic [2:0] { T_IDLE, T_RCP1, T_RCP2, T_FETCH, T_EMIT, T_DRAIN } st_t;
   st_t st;
 
   logic signed [31:0] y_r, x_r, x1_r;
   logic [23:0]        col_r;
   logic               moire_r;
   logic signed [31:0] u_r, v_r, du_r, dv_r;
+  // R339: 1/z walks the span exactly as u and v do.
+  logic signed [31:0] ooz_r, doz_r;
+  // The divided coordinates, in the same quarter-texel.16 the affine path used,
+  // so to_tx() and everything downstream are unchanged.
+  logic signed [31:0] uq_r, vq_r;
+  logic [24:0]        rcp_r;             // 2^47 / normalised(ooz)
+  logic [5:0]         rcp_e;             // how far ooz was normalised
+  logic [31:0]        m_r;               // ooz normalised to [2^23, 2^24)
+
+  // Clamp to a positive 32-bit value: a vertex far enough away makes the
+  // coordinate enormous, and to_tx would read a wrapped one as a small texel.
+  function automatic logic signed [31:0] sat32(input logic [63:0] v);
+    sat32 = (v[63:31] != 33'd0) ? 32'sh7FFFFFFF : 32'(v);
+  endfunction
+
+  // R339: THE RECIPROCAL SEED, 128 ENTRIES ON THE TOP 8 BITS.
+  //
+  // A plain table accurate enough for half a texel needs ~12 index bits --
+  // 4,096 entries, about 1,000 ALM in MLAB, and there is no M10K left at
+  // 553/553. ONE NEWTON STEP buys those bits in DSP instead, which is the
+  // resource with 49 blocks idle:
+  //
+  //     seed alone       7.8e-3   ->  2.0     texels on a 256-texel coordinate
+  //     + one Newton     6.1e-5   ->  0.016   texels
+  //
+  // which is an order of magnitude under what the plane fit's own quantisation
+  // contributes (0.02 to 0.59 texels, R338), so the divide is not the limit.
+  (* ramstyle = "MLAB" *) logic [24:0] rcp_tab [128];
+  initial begin
+    for (int i = 0; i < 128; i++)
+      rcp_tab[i] = 25'((64'd1 <<< 47) / (64'(128 + i) <<< 16));
+  end
+
+  // Where the leading one of ooz sits, so it can be normalised to [2^23, 2^24).
+  function automatic logic [5:0] top_bit(input logic [31:0] v);
+    logic [5:0] n;
+    begin
+      n = 6'd0;
+      for (int i = 31; i >= 0; i--) if (v[i] && n == 6'd0) n = 6'(i);
+      top_bit = n;
+    end
+  endfunction
   logic [23:0]        tex_r;
   logic [3:0]         texel_r;
   // A FETCH THAT NEVER ANSWERS MUST NOT STOP THE BAND. m2_texel has its own
@@ -133,8 +171,9 @@ module m2_span_tex #(
   /* verilator lint_on UNUSEDSIGNAL */
 
   assign tx_tex = {8'd0, tex_r};
-  assign tx_u   = to_tx(u_r);
-  assign tx_v   = to_tx(v_r);
+  // R339: the DIVIDED coordinates, not u/z and v/z themselves.
+  assign tx_u   = to_tx(uq_r);
+  assign tx_v   = to_tx(vq_r);
   assign tx_req = (st == T_FETCH);
 
   // The texel as an intensity: 0x0 -> 0, 0xF -> 0xFF, evenly spaced.
@@ -208,6 +247,8 @@ module m2_span_tex #(
       st <= T_IDLE;
       y_r <= '0; x_r <= '0; x1_r <= '0; col_r <= '0; moire_r <= 1'b0;
       u_r <= '0; v_r <= '0; du_r <= '0; dv_r <= '0; tex_r <= '0; texel_r <= '0;
+      ooz_r <= '0; doz_r <= '0; uq_r <= '0; vq_r <= '0;
+      rcp_r <= '0; rcp_e <= '0; m_r <= '0;
       e_valid <= 1'b0; e_col <= '0; e_x <= '0; e_x1 <= '0; to_cnt <= '0;
       dbg_texpix <= '0; dbg_texnz <= '0;
     end else begin
@@ -225,7 +266,51 @@ module m2_span_tex #(
           du_r    <= 32'(in_dudx) <<< 8;
           dv_r    <= 32'(in_dvdx) <<< 8;
           tex_r   <= in_tex;
-          st      <= T_FETCH;
+          ooz_r   <= in_ooz;                                  // R339
+          doz_r   <= 32'(in_doozdx) <<< 8;
+          st      <= T_RCP1;
+        end
+
+        // R339: normalise 1/z and take the seed. m lands in [2^23, 2^24) so the
+        // top seven mantissa bits index the table; the implicit leading one is
+        // not stored, which is what makes 128 entries enough.
+        T_RCP1: begin
+          automatic logic [5:0]  t = top_bit(ooz_r);
+          automatic logic [31:0] m = (t >= 6'd23) ? (ooz_r >> (t - 6'd23))
+                                                  : (ooz_r << (6'd23 - t));
+          rcp_e  <= t;
+          m_r    <= m;
+          rcp_r  <= rcp_tab[m[22:16]];
+          st     <= T_RCP2;
+        end
+
+        // One Newton step, then the divide itself as a multiply.
+        //   r1 = r0 * (2S - m*r0) / S          S = 2^47
+        //   u  = (uoz * r1) >> (t - 7)
+        // THE OUTPUT SHIFT IS BOUNDED, not general. A 64-bit barrel shifter
+        // over all 32 positions is ~200 ALM; 1/z reaching here is a 16.16 of a
+        // value that oz_norm capped at bit 14, so t is 23..31 in every case
+        // that draws, and anything below that is a vertex so far away the
+        // coordinate saturates regardless.
+        T_RCP2: begin
+          // The Newton result is 25 bits by construction: r1 ~ 2^47/m with m in
+          // [2^23, 2^24), so r1 lands in [2^23, 2^24]. The wide intermediate is
+          // the product, not the answer.
+          // THE SHIFT GOES INSIDE THE PRODUCT. Written as r0*(2S - m*r0)/S with
+          // S = 2^47 it overflows: r0 is ~2^24 and the bracket ~2^47, so the
+          // product is ~2^71 and 64 bits silently truncate it to zero. Folding
+          // 24 of the 47 in first keeps every intermediate under 2^48.
+          /* verilator lint_off UNUSEDSIGNAL */
+          automatic logic [63:0] nd   = ((64'd1 <<< 48) - (64'(m_r) * 64'(rcp_r))) >> 24;
+          automatic logic [63:0] nr   = (64'(rcp_r) * nd) >> 23;
+          /* verilator lint_on UNUSEDSIGNAL */
+          automatic logic [24:0] r1   = 25'(nr);
+          automatic logic [4:0]  sh   = (rcp_e < 6'd23) ? 5'd16 : 5'(rcp_e - 6'd7);
+          automatic logic [63:0] pu   = 64'(u_r) * 64'(r1);
+          automatic logic [63:0] pv   = 64'(v_r) * 64'(r1);
+          uq_r <= sat32(pu >> sh);
+          vq_r <= sat32(pv >> sh);
+          st   <= T_FETCH;
         end
 
         T_FETCH: begin
@@ -271,9 +356,10 @@ module m2_span_tex #(
             // $clog2 is correct for any POWER OF TWO. A non-power-of-two step
             // (6) would need a real multiply on this path, for nothing that 8
             // does not already give.
-            u_r <= u_r + (du_r <<< $clog2(PIXSTEP));
-            v_r <= v_r + (dv_r <<< $clog2(PIXSTEP));
-            st  <= T_FETCH;
+            u_r   <= u_r + (du_r <<< $clog2(PIXSTEP));
+            v_r   <= v_r + (dv_r <<< $clog2(PIXSTEP));
+            ooz_r <= ooz_r + (doz_r <<< $clog2(PIXSTEP));   // R339
+            st    <= T_RCP1;                                // divide again
           end
         end
 
