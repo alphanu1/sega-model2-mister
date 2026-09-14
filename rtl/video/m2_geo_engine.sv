@@ -692,10 +692,32 @@ module m2_geo_engine #(
           // culled polygon still consumes its pairs and the pointer stays in
           // step with the list. The translucent cull below is therefore held in
           // uv_cull and acted on when the run finishes.
-          uv_cull <= hdr0[13];
+          // R326: ONLY AN UNTEXTURED TRANSLUCENT POLYGON DRAWS NOTHING.
+          // R231 culled on bit 13 alone and the note below claimed both
+          // translucent callbacks return on their first line. Only ONE does.
+          // model2.h's table is m_render_callbacks[(h0>>13)&3] =
+          //   0 solid<false>  1 solid<true>  2 tex<false>  3 tex<true>
+          // and model2rd.ipp's draw_scanline_solid<true> is the only one with
+          // "if it's translucent, there's nothing to render; return".
+          // draw_scanline_tex<true> DRAWS: it sets an alpha bit on every texel
+          // except 0xF and discards only the ones without it. So every
+          // TEXTURED translucent polygon in the game was being thrown away
+          // here -- which is the "some textures are just missing" the board has
+          // shown since R231. The discard itself lives in m2_span_tex.
+          uv_cull <= hdr0[13] && !hdr0[14];
           // R271: the whole texture state, assembled where its last word lands.
+          // R326: BIT 8 CARRIES TRANSLUCENT, NOT texwrapy. The packed word is
+          // exactly 32 bits with nothing spare, and widening it widens the
+          // quad store and the span queue -- M10K this part does not have to
+          // spend. hdr0[7] (texwrapy) rode all the way to m2_texel and was
+          // read by NOBODY: grep finds no reader of bits 7 or 8 anywhere, and
+          // m2_texel says why -- the wrap bits only choose how a BILINEAR
+          // fetch treats the seam, and there is no bilinear fetch here.
+          // So wrapy's slot carries the flag that is actually used.
+          // IF BILINEAR IS EVER ADDED, texwrapx/texwrapy must come back and
+          // this word has to grow; do not quietly drop them a second time.
           poly_tex <= {hdr1[7:0], hdr2[10:6], hdr2[5:0], hdr2[12], hdr0[15],
-                       hdr0[9], hdr0[8], hdr0[7], hdr0[6],
+                       hdr0[9], hdr0[8], hdr0[13], hdr0[6],
                        hdr0[5:3], hdr0[2:0], hdr0[14]};
           uv_i    <= 3'd0;
           xaddr   <= th_dw(tp_w, tp_ram); xhalf <= tp_w[0]; xspace <= 2'd1;
@@ -734,10 +756,10 @@ module m2_geo_engine #(
           if (uv_i == (attr[0] ? 3'd7 : 3'd5)) begin
             tp_w <= tp_w + (attr[0] ? 22'd8 : 22'd6);
             if (uv_cull) begin
-              // TRANSLUCENT, AND THE REFERENCE DRAWS NOTHING FOR IT (R231). The
-              // header's bit 13 is the translucent flag and bit 14 selects
-              // textured; model2_3d_render picks m_render_callbacks[(h0>>13)&3]
-              // and BOTH translucent entries return on their first line.
+              // UNTEXTURED AND TRANSLUCENT, WHICH IS THE ONE CASE THE
+              // REFERENCE DRAWS NOTHING FOR (R231, corrected by R326). The
+              // claim here used to be that BOTH translucent entries return on
+              // their first line. They do not -- see the uv_cull assignment.
               remain <= remain - 32'd1;
               dbg_culled <= dbg_culled + 16'd1;
               emitted_last <= 1'b0;

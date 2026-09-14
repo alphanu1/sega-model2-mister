@@ -240,9 +240,16 @@ int main(int argc, char** argv) {
     ck("invalidate forces one more miss", d->dbg_col_miss, 2);
   }
 
-  // ---- R222: ANY translucent header (word 0 bit 13) draws nothing, textured
-  //      or not -- the reference's two translucent callbacks both return.
-  for (uint16_t h0 : {uint16_t(0x2000), uint16_t(0x6000)})
+  // ---- R326: ONLY AN UNTEXTURED TRANSLUCENT HEADER DRAWS NOTHING.
+  //
+  // This test used to assert that BOTH 0x2000 and 0x6000 were culled, which is
+  // what R222 believed. model2.h's callback table is
+  //   [(h0>>13)&3] = 0 solid<false>  1 solid<true>  2 tex<false>  3 tex<true>
+  // and only draw_scanline_solid<true> -- index 1, bit 13 set and bit 14 clear
+  // -- returns without drawing. draw_scanline_tex<true> draws every texel that
+  // is not 0xF. So 0x6000 MUST reach the rasteriser, and the bench asserting
+  // otherwise is what kept the fault invisible.
+  for (uint16_t h0 : {uint16_t(0x2000)})
   {
     thdr[0x100 + 0] = h0;
     d->rst_n = 0; for (int i = 0; i < 4; i++) tick(); d->rst_n = 1; tick();
@@ -258,6 +265,31 @@ int main(int argc, char** argv) {
     std::printf("test: translucent polygons are culled (header %04x)\n", h0);
     ck("no polygons emitted", n, 0);
     ck("three culled", d->dbg_culled, 3);
+    thdr[0x100 + 0] = 0x0000;
+  }
+  // ---- R326: and a TEXTURED translucent header DRAWS, carrying the flag
+  {
+    thdr[0x100 + 0] = 0x6000;               // bit 14 textured + bit 13 translucent
+    d->rst_n = 0; for (int i = 0; i < 4; i++) tick(); d->rst_n = 1; tick();
+    for (int i = 0; i < 12; i++) {
+      static const float I[12] = {1,0,0, 0,1,0, 0,0,1, 0,0,0};
+      d->mat_we = 1; d->mat_idx = i; d->mat_data = f2u(I[i]); tick();
+    }
+    d->mat_we = 0;
+    d->tp_we = 1; d->tp_idx = 0; d->tp_diffuse = 200; d->tp_ambient = 20; tick(); d->tp_we = 0;
+    d->start = 1; tick(); d->start = 0;
+    uint32_t n = 0; uint32_t seen_tex = 0;
+    for (int budget = 0; budget < 60000 && (d->busy || budget < 10); budget++) {
+      tick();
+      if (d->poly_valid && d->poly_ready) { n++; seen_tex = d->poly_tex; }
+    }
+    std::printf("test: R326, a textured translucent polygon is NOT culled\n");
+    ck("polygons emitted", n, 3);
+    ck("none culled",      d->dbg_culled, 0);
+    ck("textured bit",     seen_tex & 1, 1);
+    // bit 8 of the packed word is the translucent flag (was texwrapy), and it
+    // is what m2_span_tex tests the texel against.
+    ck("translucent bit",  (seen_tex >> 8) & 1, 1);
     thdr[0x100 + 0] = 0x0000;
   }
   // ---- and a TEXTURED OPAQUE header still draws, flat, in its palette colour
@@ -469,7 +501,10 @@ int main(int argc, char** argv) {
     ck("width code", (t >> 1) & 7, 5);
     ck("height code",(t >> 4) & 7, 3);
     ck("wrap x",     (t >> 7) & 1, 0);
-    ck("wrap y",     (t >> 8) & 1, 1);
+    // R326: bit 8 is TRANSLUCENT now, not texwrapy. This header has bit 13
+    // clear, so it reads 0 -- and the header sets bit 7 (texwrapy) which no
+    // longer reaches the packed word at all. See the packing in m2_geo_engine.
+    ck("translucent", (t >> 8) & 1, 0);
     ck("mirror x",   (t >> 9) & 1, 0);
     ck("mirror y",   (t >> 10) & 1, 1);
     ck("checker",    (t >> 11) & 1, 1);

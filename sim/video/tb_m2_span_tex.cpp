@@ -33,7 +33,11 @@ static std::vector<Out> got;
 
 // The texel the fetch returns: a function of the coordinate, so a wrong step
 // shows up as a wrong colour.
-static int texel_of(uint32_t u, uint32_t v) { return int(((u >> 8) + (v >> 8)) & 0xf); }
+static int force_texel = -1;   // R326: >= 0 pins what the fetch returns
+static int texel_of(uint32_t u, uint32_t v) {
+  if (force_texel >= 0) return force_texel;
+  return int(((u >> 8) + (v >> 8)) & 0xf);
+}
 
 static void tick(bool stall = false) {
   d->out_ready = stall ? 0 : 1;
@@ -113,6 +117,50 @@ int main(int argc, char **argv) {
       ck("group colour is the texel at its first pixel", got[i].col, want);
     }
     ck("textured pixels counted", d->dbg_texpix, groups * STEP);
+  }
+
+  // 2c. R326: ON A TRANSLUCENT POLYGON, TEXEL 0xF IS TRANSPARENT.
+  //
+  // model2rd.ipp's draw_scanline_tex<true> sets an alpha bit on every texel
+  // except 0xF and skips the ones without it. Bit 8 of the texture word is the
+  // translucent flag. The three cases below are the whole contract, and the
+  // third is the one that matters most: on an OPAQUE polygon 0xF is a
+  // legitimate full-brightness texel and must still paint.
+  {
+    const int X0 = 10, X1 = 16, STEP = 2;
+    const int groups = ((X1 - X0) / STEP) + 1;
+    const int32_t TEXEL = 4 << 16;
+    const int32_t U0 = 4 * TEXEL, V0 = 8 * TEXEL;
+    const int32_t DU = 0x100, DV = 0x200;
+
+    // walk one span and return how many groups came out
+    auto run = [&](uint32_t tex, int forced) {
+      got.clear();
+      force_texel = forced;
+      d->in_valid = 1; d->in_y = 7; d->in_x0 = X0; d->in_x1 = X1;
+      d->in_col = 0xffffff; d->in_moire = 0;
+      d->in_u = U0; d->in_v = V0; d->in_dudx = DU; d->in_dvdx = DV;
+      d->in_tex = tex; d->in_tex_en = 1;
+      tick();
+      d->in_valid = 0;
+      for (int i = 0; i < 400 && d->busy; ++i) tick();
+      for (int i = 0; i < 8; ++i) tick();
+      return long(got.size());
+    };
+
+    const uint32_t OPAQUE = 0x000001;   // bit 0 textured
+    const uint32_t TRANS  = 0x000101;   // bit 0 textured + bit 8 translucent
+
+    const uint32_t px_before = d->dbg_texpix;
+    std::printf("test: R326, the translucent texel test\n");
+    ck("a translucent span of 0xF paints nothing",      run(TRANS,  0xf), 0);
+    ck("and counts no textured pixels",  long(d->dbg_texpix - px_before), 0);
+    // The walk must still have FINISHED -- a transparent span that never
+    // terminates holds the band, which is the R162 failure mode.
+    ck("and the walk still finished",    d->busy, 0);
+    ck("a translucent span of 0xE paints every group",  run(TRANS,  0xe), groups);
+    ck("0xF on an OPAQUE polygon still paints",         run(OPAQUE, 0xf), groups);
+    force_texel = -1;
   }
 
   // 2b. A FLAT SPAN WHEN THE CONSUMER IS NOT READY. It must be HELD, not

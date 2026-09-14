@@ -144,6 +144,23 @@ module m2_span_tex #(
   /* verilator lint_on UNUSEDSIGNAL */
 
   wire tex_now = in_tex_en && in_tex[0];
+
+  // R326: THE TRANSLUCENT TEXEL TEST, WHICH IS THE WHOLE OF MAME'S ALPHA.
+  //
+  // model2rd.ipp's fetch_bilinear_texel<Translucent> sets 0x00800000 on every
+  // texel EXCEPT 0xf0, and draw_scanline_tex<Translucent> then does
+  // `if (t < 0x00400000) continue;`. With point sampling that reduces exactly
+  // to: on a translucent polygon a texel of 0xF is transparent and every other
+  // value draws normally. On a NON-translucent polygon 0xF is a legitimate
+  // full-brightness texel and must not be skipped -- which is why this is
+  // gated on the header bit rather than applied to every span.
+  //
+  // Bit 8 of the packed texture word is the translucent flag (see the packing
+  // in m2_geo_engine); it used to be texwrapy, which nothing read.
+  //
+  // Skipping costs nothing but the pixel: the walk advances identically, so a
+  // fully transparent span still terminates on its own x1.
+  wire tx_skip = tex_r[8] && (texel_r == 4'hf);
   wire idle    = (st == T_IDLE);
   assign busy  = !idle || e_valid;
 
@@ -217,14 +234,14 @@ module m2_span_tex #(
         end
 
         T_EMIT: if (!e_valid || out_ready) begin
-          e_valid <= 1'b1;
+          e_valid <= !tx_skip;                  // R326: transparent texel
           e_x     <= x_r;
           e_x1    <= ((x_r + 32'(PIXSTEP) - 32'sd1) > x1_r)
                        ? x1_r : (x_r + 32'(PIXSTEP) - 32'sd1);
           e_col   <= {scale(col_r[23:16], inten),
                       scale(col_r[15:8],  inten),
                       scale(col_r[7:0],   inten)};
-          if (!(&dbg_texpix)) dbg_texpix <= dbg_texpix + 32'(PIXSTEP);
+          if (!tx_skip && !(&dbg_texpix)) dbg_texpix <= dbg_texpix + 32'(PIXSTEP);
           if (x_r + 32'(PIXSTEP) - 32'sd1 >= x1_r) begin
             st <= T_DRAIN;
           end else begin

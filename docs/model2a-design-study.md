@@ -16147,3 +16147,65 @@ the most. If 8 looks wrong it will look wrong in the distance first. `du_r` is
 the per-step gradient and instrumenting its magnitude would give the actual
 magnification distribution, which would settle 4-vs-8 with a number instead of
 an opinion.
+
+**R326 -- TEXTURED TRANSLUCENT POLYGONS WERE BEING THROWN AWAY, AND R222/R231
+SAID SO IN WRITING.** Ben, on the board: "Some textures are just missing too",
+and on being asked whether it was new in the PIXSTEP 8 build, "not new its teh
+same in teh other builds". It predates every change of this session.
+
+What was believed: that a translucent polygon draws nothing whether it is
+textured or not. `m2_geo_engine` culled the whole polygon on header word 0
+bit 13, and the comment beside it read "model2_3d_render picks
+`m_render_callbacks[(h0>>13)&3]` and BOTH translucent entries return on their
+first line." `tb_m2_geo_engine` asserted the same thing for both 0x2000 and
+0x6000, so the bench could only ever confirm it.
+
+What is now known, from `model2.h` and `model2rd.ipp` rather than from memory:
+
+```
+renderer = (texheader[0] >> 13) & 3      bit 14 = textured, bit 13 = translucent
+  0  draw_scanline_solid<false>   draws
+  1  draw_scanline_solid<true>    "if it's translucent, there's nothing to
+                                   render; return"   <-- the ONLY early return
+  2  draw_scanline_tex<false>     draws
+  3  draw_scanline_tex<true>      DRAWS
+```
+
+`draw_scanline_tex<true>` has no such return. `fetch_bilinear_texel<true>` sets
+`0x00800000` on every texel except `0xf0`, and the pixel loop does
+`if (t < 0x00400000) continue;`. At point sampling that reduces exactly to: on a
+translucent polygon a texel of 0xF is transparent and every other value draws
+normally. So index 3 is an ordinary textured polygon with one texel value
+knocked out -- and the core was discarding all of them.
+
+How it was established: reading the callback table in `model2.h` against
+`model2rd.ipp`, after the affine finding (R274, below) accounted for the
+ORIENTATION complaint but not the MISSING one. Two distinct faults with one
+symptom each; chasing them as one is what kept both hidden.
+
+The fix is in two places and costs no memory:
+
+* `m2_geo_engine`: `uv_cull <= hdr0[13] && !hdr0[14]`.
+* `m2_span_tex`: `tx_skip = tex_r[8] && (texel_r == 4'hf)` gates `e_valid`, and
+  the walk advances exactly as before -- so a fully transparent span still
+  terminates on its own x1 and cannot hold a band (the R162 failure mode).
+
+**BIT 8 OF THE PACKED TEXTURE WORD IS TRANSLUCENT NOW, NOT texwrapy.** The word
+is exactly 32 bits with nothing spare, and widening it widens `m2_quad_store`'s
+`uvt` arrays and the span queue -- M10K that the perspective divide needs
+instead. `hdr0[7]` (texwrapy) rode the whole pipeline and was read by NOBODY:
+grep finds no reader of bits 7 or 8 anywhere, and `m2_texel` records why -- the
+wrap bits only decide how a BILINEAR fetch treats the seam, and there is no
+bilinear fetch here. **If bilinear is ever added, texwrapx/texwrapy must come
+back and this word has to grow; do not quietly drop them a second time.**
+
+The bench now asserts the behaviour instead of the belief: `tb_m2_geo_engine`
+checks that 0x6000 emits three polygons, culls none, and carries the flag in
+bit 8; `tb_m2_span_tex` checks that a translucent span of 0xF paints nothing and
+still finishes, that 0xE paints every group, and -- the one that matters most --
+that **0xF on an OPAQUE polygon still paints**, because there it is a
+legitimate full-brightness texel.
+
+**RISK THIS CARRIES:** these polygons are extra work that the renderer has not
+had to do before. Overruns and `ready ms` may both rise. `dbg_culled` says how
+many were being dropped; the board says whether the picture is worth it.
