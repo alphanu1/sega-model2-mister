@@ -328,7 +328,23 @@ module m2_raster3d #(
   );
 
   // ------------------------------------------------- R275: the texture walk
-  m2_span_tex u_spantex (
+  // R322: FOUR PIXELS PER TEXEL FETCH, up from two.
+  //
+  // This is the largest single lever on texture throughput and it is one
+  // parameter. A textured span costs a fetch per group, and at 42.4% hit a
+  // 100-pixel span is ~29 misses and ~6.4 us against a 362 us band budget --
+  // which is why a handful of textured spans consume a whole band and the rest
+  // of the frame's bands never appear. Halving the group count halves that.
+  //
+  // R279 chose two and its reasoning extends, with less force, to four:
+  // "Daytona's textures are magnified far more often than minified, so adjacent
+  // pixels usually share a texel anyway." At four the approximation is real and
+  // visible on minified surfaces. Set back to 2 if it looks wrong -- this is a
+  // quality judgement to make by eye, not by counter.
+  //
+  // SET HERE, NOT ON THE MODULE'S DEFAULT. R313 changed m2_char_cache's default
+  // while the instantiation overrode it, and the change did nothing at all.
+  m2_span_tex #(.PIXSTEP(4)) u_spantex (
     .clk(clk), .rst_n(rst_n),
     .in_valid(sq_qv), .in_ready(sq_rdy), .busy(spantex_busy),
     .in_y(sq_y), .in_x0(sq_x0), .in_x1(sq_x1),

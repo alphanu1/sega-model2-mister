@@ -68,7 +68,18 @@ module m2_texel #(
   // M10K of the 553 that were all in use; this takes about 22 of them.
   // Doubling the GLYPH cache instead was considered and rejected: it costs ~51
   // blocks, which do not exist, and Ben measured that 128 KB still overran.
-  parameter int unsigned IDX_BITS = 9
+  // R322: 1024 LINES / 8 KB, up from 512 / 4 KB. Deliberately ONE doubling and
+  // not four: this is a MEASUREMENT as much as a change. Every hit-rate figure
+  // on record is at 512 lines, so "a bigger cache would help" is a guess -- the
+  // board has read 27.9%, 40.6%, 42.4%, 43.3% and 48.4%, all at the same size.
+  // One doubling says whether the curve moves at all, for ~15 M10K of the 30
+  // free, and leaves headroom rather than spending it on an estimate.
+  //
+  // The R310 sweep counter is what makes this worth trying: 205 sweeps across a
+  // whole capture, about one per 57 frames, so the cache is NOT being cleared
+  // out from under itself. The miss rate is genuine thrashing, which size can
+  // address.
+  parameter int unsigned IDX_BITS = 10
 ) (
   input  logic             clk,
   input  logic             rst_n,

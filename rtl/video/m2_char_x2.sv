@@ -64,7 +64,23 @@ module m2_char_x2 #(
     end
   end
 
-  assign f_req  = s_req & ~done & ~f_ack;
+  // R321: NO `& ~f_ack` TERM HERE, unlike m2_sdram_x2 and m2_texel_x2.
+  //
+  // That term drops the request on the acknowledge edge, and it exists in the
+  // memory adapter because m2_sdram takes a transaction per request EDGE, so a
+  // held request can look like a second one. m2_char_cache does not: S_ACK waits
+  // for `v_req` to fall before returning to S_IDLE, so one extra cycle of a held
+  // request is harmless.
+  //
+  // And it is not free. `f_ack -> f_req -> v_req -> ... -> v_ack -> f_ack` is a
+  // cycle in the netlist even though every path through m2_char_cache is
+  // registered, and Quartus 17.0's STA cannot analyse it: all three seeds of
+  // build/char100 died with "Internal Error: sta_scc.cpp, Line 1041" -- its
+  // strongly-connected-component handler, the same failure build/perf1 hit.
+  // A lint pass over all 141 files finds no combinational loop, so the RTL is
+  // sound and the tool is not; dropping a term we do not need is cheaper than
+  // arguing with it.
+  assign f_req  = s_req & ~done;
   assign f_addr = s_addr;
 
   assign s_ack  = f_ack | done;
