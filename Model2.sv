@@ -3192,8 +3192,24 @@ always_ff @(posedge clk_sys) begin
 	// it. Reproduced and cured in the boot bench under M2_GEO_LAT.
 	p4_ack_d        <= p_ack[4];
 	geo_rd_ack_r    <= p_ack[4] & geo_rd_req_r & ~eng_mem_req_r;
-	geo_rd_data_r   <= p_dout[4][31:0];
-	p4_dout_r       <= p_dout[4];
+	// R319: CAPTURED ON THE ACKNOWLEDGE, NOT EVERY CYCLE.
+	//
+	// These sampled m2_sdram_x2's port-4 output unconditionally, on every
+	// clk_sys edge. The adapter's `dout_r` is registered on clk_mem, and
+	// clk_sys is its exact /2 -- so the source updates on the SAME EDGE the
+	// consumer samples, and the only thing standing between that and a hold
+	// violation is placement luck. tex100 ran out of luck: -0.246 ns on
+	// `g_port[4].dout_r -> p4_dout_r[16]`, on all three seeds, while every
+	// other path in the design held positive. trade1 had +0.169 on the same
+	// structure; adding m2_texel to clk_mem moved the placement, not the logic.
+	//
+	// Gating on the acknowledge is also what the data MEANS: p_dout is only
+	// valid with p_ack, and the pair caches read it only after seeing one. A
+	// free-running capture was sampling the bus mid-transition for no reason.
+	if (p_ack[4]) begin
+	  geo_rd_data_r <= p_dout[4][31:0];
+	  p4_dout_r     <= p_dout[4];
+	end
 	eng_mem_req_r   <= ec_req;          // R214: the engine's misses only
 	ec_idx_r        <= ec_idx;
 	eng_mem_idx_r   <= eng_mem_idx;

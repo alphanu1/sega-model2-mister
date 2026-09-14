@@ -16007,3 +16007,33 @@ environment variable, so the default run does not touch textures at all. Both
 are fixed: the bench now clocks clk_mem at 2x as the hardware does, and the
 textured run is the one that matters. 8 checks, 0 fails, 10,824 pixels a frame,
 steady.
+
+**R319 -- THE PORT-4 CAPTURE IS GATED ON ITS ACKNOWLEDGE. A free-running sample
+of a clk_mem register from clk_sys is a hold race waiting for bad placement.**
+
+tex100 fitted on all three seeds and every one failed HOLD, which fails at any
+clock speed. One path, and the rest of the design was healthy:
+
+    -0.246   m2_sdram_x2|g_port[4].dout_r -> p4_dout_r[16]
+    +0.225   next worst path in the entire design
+
+`p4_dout_r <= p_dout[4]` and `geo_rd_data_r <= p_dout[4][31:0]` sampled the
+adapter's port-4 output on EVERY clk_sys edge. The adapter's `dout_r` is
+registered on clk_mem and clk_sys is its exact /2, so source and sampler share
+an edge and nothing but placement stands between that and a hold violation.
+trade1 measured +0.169 on the same structure; R318 added m2_texel to clk_mem,
+the placement moved, and the luck ran out -- on all three seeds, so it is
+systematic rather than seed noise.
+
+Gating on `p_ack[4]` is also what the data means. `p_dout` is only valid with
+`p_ack`, and the pair caches read it only after seeing one, so the free-running
+capture was sampling the bus mid-transition for no reason at all.
+
+*The general shape, which applies to every port:* a 2:1 ratio is not a free
+crossing just because it needs no synchroniser. Aligned edges make HOLD the
+tight constraint rather than setup, and an unconditional capture of a fast-clock
+register by a slow-clock one is the worst case of it. m2_sdram_x2's own data
+path does this correctly -- `s_dout = f_ack ? f_dout : dout_r` -- and the glue in
+Model2.sv did not.
+
+tb_m2_pair_cache 4,513 checks and tb_m2_boot pass unchanged.
