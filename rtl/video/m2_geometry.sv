@@ -112,6 +112,7 @@ module m2_geometry (
   // THE CLIPPER, TEXELS ON THE WAY OUT: the store keeps 11.2 texels a
   // component, so the conversion happens here, once, where the float still
   // exists.
+  output logic [15:0] q_oz0, q_oz1, q_oz2, q_oz3,   // R334: 1/z, minifloat
   output logic [12:0] q_u0, q_v0, q_u1, q_v1,
   output logic [12:0] q_u2, q_v2, q_u3, q_v3,
   output logic [23:0] q_tex,           // R271: the polygon's texture state
@@ -303,6 +304,7 @@ module m2_geometry (
   logic [1:0]  qi;
   logic [31:0] hx [4], hy [4], hz [4];
   logic signed [15:0] sx [4], sy [4];
+  logic [15:0] soz [4];                              // R334: 1/z per vertex
   logic        clip_in_valid;
   logic        clip_in_ready;
   logic [31:0] hzmin, hzmax;
@@ -515,7 +517,7 @@ module m2_geometry (
       for (int k = 0; k < 4; k++) begin csx[k] <= 16'sd0; csy[k] <= 16'sd0; end
       for (int k = 0; k < 4; k++) begin
         hx[k] <= 32'd0; hy[k] <= 32'd0; hz[k] <= 32'd0;
-        sx[k] <= 16'sd0; sy[k] <= 16'sd0;
+        sx[k] <= 16'sd0; sy[k] <= 16'sd0; soz[k] <= 16'd0;
       end
     end else begin
       pj_wait <= (qst == Q_WAIT) ? (pj_wait + 10'd1) : 10'd0;
@@ -582,6 +584,13 @@ module m2_geometry (
         end else if (w_pj_out_valid) begin
           sx[qi] <= pj_out_sx[15:0];
           sy[qi] <= pj_out_sy[15:0];
+          // R334: THE RECIPROCAL, KEPT. m2_geo_project computes 1/z for every
+          // vertex it projects and used to discard it. As a 16-bit minifloat
+          // -- the 8-bit IEEE exponent and the top 8 mantissa bits, the sign
+          // dropped because a vertex in front of the eye has positive 1/z --
+          // it is within 0.67 texels of the float answer (measured, R331),
+          // where 7 mantissa bits is 3.85 and would show.
+          soz[qi] <= mf16(pj_out_invz);
           if (qi == 2'd3) begin
             clip_in_valid <= 1'b1;
             qst <= Q_OUT;
@@ -620,6 +629,12 @@ module m2_geometry (
   // with the exponent biased by one. Thirteen bits holds 0..8191, and pu is a
   // 16-bit unsigned whose largest useful value is 16,383 (2,047.875 texels).
   logic [31:0] cu [4], cv [4];
+  logic [15:0] coz [4];                               // R334, from the clipper
+  // R334: an IEEE single to the stored 16-bit minifloat. No rounding: the
+  // mantissa is truncated, which is what the error model measured.
+  function automatic logic [15:0] mf16(input logic [31:0] f);
+    mf16 = {f[30:23], f[22:15]};
+  endfunction
   logic [31:0] ctex;
   function automatic logic [12:0] f2uv(input logic [31:0] f);
     logic [7:0]  e;
@@ -641,6 +656,8 @@ module m2_geometry (
   assign q_u2 = f2uv(cu[2]); assign q_v2 = f2uv(cv[2]);
   assign q_u3 = f2uv(cu[3]); assign q_v3 = f2uv(cv[3]);
   assign q_tex = ctex[23:0];
+  assign q_oz0 = coz[0]; assign q_oz1 = coz[1];      // R334
+  assign q_oz2 = coz[2]; assign q_oz3 = coz[3];
 
   // ------------------------------------------------------------- the clipper
   m2_geo_clip u_clip (
@@ -651,6 +668,8 @@ module m2_geometry (
     .in_x1(hx[1]), .in_y1(hy[1]), .in_z1(hz[1]),
     .in_x2(hx[2]), .in_y2(hy[2]), .in_z2(hz[2]),
     .in_x3(hx[3]), .in_y3(hy[3]), .in_z3(hz[3]),
+    .in_oz0(soz[0]), .in_oz1(soz[1]), .in_oz2(soz[2]), .in_oz3(soz[3]),
+    .out_oz0(coz[0]), .out_oz1(coz[1]), .out_oz2(coz[2]), .out_oz3(coz[3]),
     .in_sx0(sx[0]), .in_sy0(sy[0]), .in_sx1(sx[1]), .in_sy1(sy[1]),
     .in_sx2(sx[2]), .in_sy2(sy[2]), .in_sx3(sx[3]), .in_sy3(sy[3]),
     .in_u0(hu[0]), .in_v0(hv[0]), .in_u1(hu[1]), .in_v1(hv[1]),
@@ -666,6 +685,7 @@ module m2_geometry (
     .pj_valid(k_pj_valid), .pj_ready(k_granted),
     .pj_x(k_pj_x), .pj_y(k_pj_y), .pj_z(k_pj_z),
     .pj_out_valid(k_pj_out_valid), .pj_out_sx(pj_out_sx), .pj_out_sy(pj_out_sy),
+    .pj_out_invz(pj_out_invz),                       // R334
     .out_valid(q_valid), .out_ready(q_ready),
     .out_sx0(q_x0), .out_sy0(q_y0), .out_sx1(q_x1), .out_sy1(q_y1),
     .out_sx2(q_x2), .out_sy2(q_y2), .out_sx3(q_x3), .out_sy3(q_y3),

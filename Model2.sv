@@ -2899,6 +2899,7 @@ wire        q3d_valid, q3d_ready;
 wire signed [15:0] q3d_x0, q3d_y0, q3d_x1, q3d_y1, q3d_x2, q3d_y2, q3d_x3, q3d_y3;
 /* verilator lint_off UNUSEDSIGNAL */
 wire [12:0] q3d_u0, q3d_v0, q3d_u1, q3d_v1, q3d_u2, q3d_v2, q3d_u3, q3d_v3;   // R273
+wire [15:0] q3d_oz0, q3d_oz1, q3d_oz2, q3d_oz3;   // R334: 1/z per vertex
 /* verilator lint_off UNUSEDSIGNAL */
 wire [7:0] q3d_lum;                       // R271: for the exact colour path, not yet built
 /* verilator lint_on UNUSEDSIGNAL */
@@ -2963,6 +2964,7 @@ m2_geometry u_geometry (
 	// R270: the clipped texture coordinates. The rasteriser side lands next --
 	// they are named here rather than left empty so the width is checked and
 	// the connection is one edit when the quad store carries them.
+	.q_oz0(q3d_oz0), .q_oz1(q3d_oz1), .q_oz2(q3d_oz2), .q_oz3(q3d_oz3),   // R334
 	.q_u0(q3d_u0), .q_v0(q3d_v0), .q_u1(q3d_u1), .q_v1(q3d_v1),
 	.q_u2(q3d_u2), .q_v2(q3d_v2), .q_u3(q3d_u3), .q_v3(q3d_v3),
 	// R271: the geometry DRIVES this. The OSD's Off is applied where it is
@@ -4276,6 +4278,7 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	      : (tps_ph == 3'd3)                  ? {geo_nops, geo_walk_ops}        // R255: 'U' nops decoded : commands walked, last frame
 	      : (tps_ph == 3'd2)                  ? {cc_h_f, cc_m_f}                // R269: 'V' glyph cache hits : misses, last frame
 	      : (tps_ph == 3'd4)                  ? {tx_p_f, tx_m_f}                // R275: 'Y' textured pixels : texel misses, last frame
+	      : (tps_ph == 3'd6)                  ? {oz_d0, oz_d1}                 // R334: 1/z of vertices 0 and 1
 	      : {r3d_ready_cyc[15:0], r3d_bands_done[7:0], r3d_hold[7:0]}),
 	// clip_dropped read 0 on hardware and the refusal count is the number that
 	// now moves, so it takes that byte. Between them: accepted, emitted, refused
@@ -4350,6 +4353,7 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	      : (tps_ph == 3'd2)                  ? {cc_f_f, vid_ovr_frame}         // R269: sibling fills : scanlines that overran, last frame
 	      : (tps_ph == 3'd4)                  ? {tx_h_f, tx_n_f}                // R275: texel hits : texels that were not 0xF
 	      : (tps_ph == 3'd5)                  ? {tx_m_f, tex_sweep}             // R294 texel misses; R310 whole-cache sweeps
+	      : (tps_ph == 3'd6)                  ? {oz_d2, oz_d3}                 // R334: 1/z of vertices 2 and 3
 	      : (tps_ph == 3'd6)                  ? {bwl_tex[20:5], 16'd0}          // R294: texel fetch waiting
 	      : {lum_mean_f, lum_zpc_f, wedge_slot, wedge_n[6:0], r3d_quads[11:4]}),   // R249: the frame's mean luminance and its black-polygon percentage, where the always-zero drop count and the free-running miss count were
 	.a_tag(8'h43),
@@ -5553,7 +5557,8 @@ wire [31:0] tex_pixels, tex_hits, tex_misses, tex_nz;
 // R292: port 3 is the glyph cache's alone again; the ownership lock that
 // shared it is in git, one commit back.
 wire [15:0] tex_lost;
-wire [15:0] tex_sweep;   // R310: whole-cache clears, to separate cold starts from thrash
+wire [15:0] tex_sweep;
+wire [15:0] oz_d0, oz_d1, oz_d2, oz_d3;   // R334: 1/z off the quad store   // R310: whole-cache clears, to separate cold starts from thrash
 
 // R293: THREE BAND BUFFERS, NOT FOUR, AND THE TEXEL CACHE GETS THE BLOCKS.
 //
@@ -5578,6 +5583,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(3),
 	.q_x3(q3d_x3), .q_y3(q3d_y3),
 	.q_col(q3d_col), .q_z(q3d_z),
 	// R273/R275: the texture, through the store and out to the texel fetch.
+	.q_oz0(q3d_oz0), .q_oz1(q3d_oz1), .q_oz2(q3d_oz2), .q_oz3(q3d_oz3),   // R334
 	.q_u0(q3d_u0), .q_v0(q3d_v0), .q_u1(q3d_u1), .q_v1(q3d_v1),
 	.q_u2(q3d_u2), .q_v2(q3d_v2), .q_u3(q3d_u3), .q_v3(q3d_v3),
 	// The OSD's Off clears the textured bit, which is the one thing every
@@ -5588,7 +5594,8 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(3),
 	.tex_m_req(tex_m_req), .tex_m_addr(tex_m_addr),
 	.tex_m_ack(tex_m_ack), .tex_m_data(tex_m_data),
 	.dbg_texpix(tex_pixels), .dbg_texhit(tex_hits), .dbg_texmiss(tex_misses),
-	.dbg_texlost(tex_lost), .dbg_texsweep(tex_sweep), .dbg_texnz(tex_nz),
+	.dbg_texlost(tex_lost), .dbg_oz0(oz_d0), .dbg_oz1(oz_d1), .dbg_oz2(oz_d2), .dbg_oz3(oz_d3),
+	.dbg_texsweep(tex_sweep), .dbg_texnz(tex_nz),
 	.q_moire(1'b0), .q_end(q3d_end),
 	.scan_clk(clk_sys), .scan_x(vid_x), .scan_y(vid_y),
 	.scan_col(r3d_col), .scan_hit(r3d_hit),

@@ -65,6 +65,7 @@ module m2_raster3d #(
   // R273: the quad's texture -- four {u, v} in 11.2 texels and the texel
   // fetch's share of the header. Arrives already converted from the floats the
   // clipper interpolates; see m2_geometry's f2uv.
+  input  logic [15:0] q_oz0, q_oz1, q_oz2, q_oz3,   // R334: 1/z, minifloat
   input  logic [12:0] q_u0, q_v0, q_u1, q_v1,
   input  logic [12:0] q_u2, q_v2, q_u3, q_v3,
   input  logic [23:0] q_tex,
@@ -86,6 +87,7 @@ module m2_raster3d #(
   input  logic [63:0]     tex_m_data,
   output logic [31:0]     dbg_texpix, dbg_texhit, dbg_texmiss, dbg_texnz,
   output logic [15:0]     dbg_texlost,
+  output logic [15:0] dbg_oz0, dbg_oz1, dbg_oz2, dbg_oz3,   // R334
   output logic [15:0] dbg_texsweep,
 
   output logic [15:0] dbg_quads,
@@ -155,6 +157,12 @@ module m2_raster3d #(
   logic signed [15:0] qo_x0, qo_y0, qo_x1, qo_y1, qo_x2, qo_y2, qo_x3, qo_y3;
   logic [23:0] qo_col;
   logic [12:0] qo_u0, qo_v0, qo_u1, qo_v1, qo_u2, qo_v2, qo_u3, qo_v3;   // R273
+  // R334: 1/z off the store. STREAMED, and that is not only telemetry -- with
+  // nothing reading these the fitter would drop the top 64 bits of uvt_* and
+  // the build would prove nothing about the 26 M10K the perspective divide
+  // costs. It also lets the values be checked on the board before the fill is
+  // made to depend on them.
+  logic [15:0] qo_oz0, qo_oz1, qo_oz2, qo_oz3;
   logic [23:0] qo_tex;
   // R275: the texel fetch's wires, declared here because two modules share them.
   logic        tex_req, tex_ack;
@@ -192,6 +200,7 @@ module m2_raster3d #(
     .in_x0(q_x0), .in_y0(q_y0), .in_x1(q_x1), .in_y1(q_y1),
     .in_x2(q_x2), .in_y2(q_y2), .in_x3(q_x3), .in_y3(q_y3),
     .in_col(q_col), .in_z(q_z), .in_moire(q_moire),
+    .in_oz0(q_oz0), .in_oz1(q_oz1), .in_oz2(q_oz2), .in_oz3(q_oz3),   // R334
     .in_u0(q_u0), .in_v0(q_v0), .in_u1(q_u1), .in_v1(q_v1),
     .in_u2(q_u2), .in_v2(q_v2), .in_u3(q_u3), .in_v3(q_v3),
     .in_tex(q_tex),
@@ -202,6 +211,7 @@ module m2_raster3d #(
     .out_x0(qo_x0), .out_y0(qo_y0), .out_x1(qo_x1), .out_y1(qo_y1),
     .out_x2(qo_x2), .out_y2(qo_y2), .out_x3(qo_x3), .out_y3(qo_y3),
     .out_col(qo_col), .out_moire(qo_moire),
+    .out_oz0(qo_oz0), .out_oz1(qo_oz1), .out_oz2(qo_oz2), .out_oz3(qo_oz3),   // R334
     .out_u0(qo_u0), .out_v0(qo_v0), .out_u1(qo_u1), .out_v1(qo_v1),
     .out_u2(qo_u2), .out_v2(qo_v2), .out_u3(qo_u3), .out_v3(qo_v3),
     .out_tex(qo_tex),
@@ -784,5 +794,8 @@ module m2_raster3d #(
   end
 
   wire _unused = &{1'b0, fl_line_case, 1'b0};
+
+  assign dbg_oz0 = qo_oz0; assign dbg_oz1 = qo_oz1;   // R334
+  assign dbg_oz2 = qo_oz2; assign dbg_oz3 = qo_oz3;
 
 endmodule

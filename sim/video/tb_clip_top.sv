@@ -79,6 +79,11 @@ module tb_clip_top (
   );
 
   m2_geo_clip u_clip (
+    // R334: 1/z per vertex. The bench does not exercise the perspective
+    // path, so the inputs are zero and the outputs are not observed.
+    .in_oz0(16'd0), .in_oz1(16'd0), .in_oz2(16'd0), .in_oz3(16'd0),
+    .out_oz0(), .out_oz1(), .out_oz2(), .out_oz3(),
+    .pj_out_invz(32'd0),
     .clk(clk), .rst_n(rst_n),
     .a_left(a_left), .a_right(a_right), .a_bottom(a_bottom), .a_top(a_top),
     .in_valid(in_valid), .in_ready(in_ready),

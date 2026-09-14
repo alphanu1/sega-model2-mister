@@ -91,6 +91,18 @@ module m2_quad_store #(
   // Counted, so the deviation is measured, not assumed. 0 disables it.
   parameter int unsigned UVW    = 13,      // R273: texture coordinate, 11.2
   parameter int unsigned TXW    = 24,      // R273: the texel fetch's state
+  // R334: 1/z per vertex, as a 16-bit minifloat -- 8-bit IEEE exponent and the
+  // top 8 mantissa bits, the sign dropped because 1/z of a vertex in front of
+  // the eye is positive. The fill normalises the four to a common fixed point
+  // when it fits the plane, which is why no scale has to be stored.
+  //
+  // SIXTEEN BITS IS MEASURED, NOT CHOSEN. A C model of MAME's uoz/voz/ooz
+  // against ground quads gives 0.018 to 0.67 texels of error with an 8-bit
+  // mantissa and 1.27 to 3.85 with a 7-bit one, so 8 is the knee. Twelve bits
+  // total was proposed first, from a screen-size argument, and would have been
+  // 16 texels out -- the error scales with the DEPTH RATIO ACROSS THE QUAD,
+  // not with screen size.
+  parameter int unsigned OZW    = 16,
   parameter int unsigned TINY   = 2,
   parameter int unsigned SCR_H  = 384
 ) (
@@ -114,6 +126,7 @@ module m2_quad_store #(
   // texel fetch's share of R271's state: sheet, origin, size, mirror.
   input  logic [UVW-1:0] in_u0, in_v0, in_u1, in_v1,
   input  logic [UVW-1:0] in_u2, in_v2, in_u3, in_v3,
+  input  logic [OZW-1:0] in_oz0, in_oz1, in_oz2, in_oz3,   // R334
   input  logic [TXW-1:0] in_tex,
 
   // ---- sort
@@ -140,6 +153,7 @@ module m2_quad_store #(
   output logic        out_moire,
   output logic [UVW-1:0] out_u0, out_v0, out_u1, out_v1,
   output logic [UVW-1:0] out_u2, out_v2, out_u3, out_v3,
+  output logic [OZW-1:0] out_oz0, out_oz1, out_oz2, out_oz3,   // R334
   output logic [TXW-1:0] out_tex,
 
   output logic [15:0] dbg_count,
@@ -197,7 +211,10 @@ module m2_quad_store #(
   // theirs -- written once with the quad, read once on replay, never touched by
   // the sort. 8 x 13 + 21 = 125 bits, which fills three 40-bit M10K slices and
   // a 5-bit remainder rather than straddling the vertex word.
-  localparam int unsigned UW = 4 * 2 * UVW + TXW;
+  // R334: + four 1/z. 104 + 24 + 64 = 192 bits, which is 39 M10K per bank in
+  // the 2048x5 mode against 26 at 128 -- the +26 blocks R331 costs.
+  localparam int unsigned UW  = 4 * 2 * UVW + TXW + 4 * OZW;
+  localparam int unsigned OZ0 = 4 * 2 * UVW + TXW;   // where the 1/z block starts
   (* ramstyle = "M10K" *) logic [UW-1:0] uvt_0 [NQ], uvt_1 [NQ];
 
   // Saturate a screen coordinate to XW bits; sign-extend it back on the way out.
@@ -298,13 +315,15 @@ module m2_quad_store #(
           vtx_1[wcount[IW-1:0]] <= {sat(in_y3), sat(in_x3), sat(in_y2), sat(in_x2),
                                     sat(in_y1), sat(in_x1), sat(in_y0), sat(in_x0)};
           att_1[wcount[IW-1:0]]  <= {band_range(in_y0, in_y1, in_y2, in_y3), in_moire, c565(in_col)};
-          uvt_1[wcount[IW-1:0]]  <= {in_tex, in_v3, in_u3, in_v2, in_u2,
+          uvt_1[wcount[IW-1:0]]  <= {in_oz3, in_oz2, in_oz1, in_oz0,
+                                     in_tex, in_v3, in_u3, in_v2, in_u2,
                                      in_v1, in_u1, in_v0, in_u0};
         end else begin
           vtx_0[wcount[IW-1:0]] <= {sat(in_y3), sat(in_x3), sat(in_y2), sat(in_x2),
                                     sat(in_y1), sat(in_x1), sat(in_y0), sat(in_x0)};
           att_0[wcount[IW-1:0]]  <= {band_range(in_y0, in_y1, in_y2, in_y3), in_moire, c565(in_col)};
-          uvt_0[wcount[IW-1:0]]  <= {in_tex, in_v3, in_u3, in_v2, in_u2,
+          uvt_0[wcount[IW-1:0]]  <= {in_oz3, in_oz2, in_oz1, in_oz0,
+                                     in_tex, in_v3, in_u3, in_v2, in_u2,
                                      in_v1, in_u1, in_v0, in_u0};
         end
         // R246: in_z CARRIES THE REFERENCE'S 16-BIT z VALUE in its low half
@@ -540,6 +559,10 @@ module m2_quad_store #(
   assign out_u2 = uvt_r[4*UVW +: UVW]; assign out_v2 = uvt_r[5*UVW +: UVW];
   assign out_u3 = uvt_r[6*UVW +: UVW]; assign out_v3 = uvt_r[7*UVW +: UVW];
   assign out_tex = uvt_r[8*UVW +: TXW];
+  assign out_oz0 = uvt_r[OZ0 + 0*OZW +: OZW];   // R334
+  assign out_oz1 = uvt_r[OZ0 + 1*OZW +: OZW];
+  assign out_oz2 = uvt_r[OZ0 + 2*OZW +: OZW];
+  assign out_oz3 = uvt_r[OZ0 + 3*OZW +: OZW];
 
   wire v0 = (pi < rcount);
 

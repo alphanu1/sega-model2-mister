@@ -110,6 +110,8 @@ module m2_geo_clip (
   input  logic [31:0] in_x1, in_y1, in_z1,
   input  logic [31:0] in_x2, in_y2, in_z2,
   input  logic [31:0] in_x3, in_y3, in_z3,
+  // R334: 1/z per input vertex, already a minifloat (see m2_geometry's mf16).
+  input  logic [15:0] in_oz0, in_oz1, in_oz2, in_oz3,
   input  logic signed [15:0] in_sx0, in_sy0, in_sx1, in_sy1,
   input  logic signed [15:0] in_sx2, in_sy2, in_sx3, in_sy3,
   // R270: THE TEXTURE COORDINATES, AS FLOATS, ONE PAIR A VERTEX. A created
@@ -159,10 +161,12 @@ module m2_geo_clip (
   output logic [31:0] pj_x, pj_y, pj_z,
   input  logic        pj_out_valid,
   input  logic signed [31:0] pj_out_sx, pj_out_sy,
+  input  logic [31:0] pj_out_invz,          // R334
 
   // Zero or more quads out, screen space.
   output logic        out_valid,
   input  logic        out_ready,
+  output logic [15:0] out_oz0, out_oz1, out_oz2, out_oz3,   // R334
   output logic signed [15:0] out_sx0, out_sy0, out_sx1, out_sy1,
   output logic signed [15:0] out_sx2, out_sy2, out_sx3, out_sy3,
   output logic [23:0] out_col,
@@ -230,6 +234,10 @@ module m2_geo_clip (
   logic [1:0]         qid [4];
   logic               qpx [4];
   logic signed [15:0] ipx [4], ipy [4];
+  // R334: 1/z travels exactly as the pixel does -- a vertex the clipper did
+  // NOT create keeps the one it arrived with (R218), and one it DID create
+  // takes the reciprocal from the projection it just ran.
+  logic [15:0] ioz [4], qoz [4];
   logic [2:0]         sp;
 
   // ------------------------------------------------------------ the plane
@@ -384,6 +392,8 @@ module m2_geo_clip (
   assign pj_valid  = (kst == K_EPROJ) && !qpx[ti];
   assign pj_x = qx[ti]; assign pj_y = qy[ti]; assign pj_z = qz[ti];
   assign out_valid = (kst == K_EMIT);
+  assign out_oz0 = qoz[0]; assign out_oz1 = qoz[1];   // R334
+  assign out_oz2 = qoz[2]; assign out_oz3 = qoz[3];
   assign out_sx0 = qsx[0]; assign out_sy0 = qsy[0];
   assign out_sx1 = qsx[1]; assign out_sy1 = qsy[1];
   assign out_sx2 = qsx[2]; assign out_sy2 = qsy[2];
@@ -408,7 +418,8 @@ module m2_geo_clip (
       dbg_in <= '0; dbg_out <= '0; dbg_dropped <= '0;
       for (si = 0; si < 4; si = si + 1) begin
         qx[si] <= '0; qy[si] <= '0; qz[si] <= '0; qsx[si] <= '0; qsy[si] <= '0; qpx[si] <= 1'b0; qid[si] <= 2'd0;
-        ipx[si] <= '0; ipy[si] <= '0;
+        qoz[si] <= 16'd0;
+        ipx[si] <= '0; ipy[si] <= '0; ioz[si] <= 16'd0;
         tx[si] <= '0; ty[si] <= '0; tz[si] <= '0;
         qu[si] <= '0; qv[si] <= '0; tu[si] <= '0; tv[si] <= '0;
       end
@@ -426,6 +437,7 @@ module m2_geo_clip (
           qu[2] <= in_u2; qv[2] <= in_v2; qu[3] <= in_u3; qv[3] <= in_v3;
           ipx[0] <= in_sx0; ipy[0] <= in_sy0; ipx[1] <= in_sx1; ipy[1] <= in_sy1;
           ipx[2] <= in_sx2; ipy[2] <= in_sy2; ipx[3] <= in_sx3; ipy[3] <= in_sy3;
+          ioz[0] <= in_oz0; ioz[1] <= in_oz1; ioz[2] <= in_oz2; ioz[3] <= in_oz3;
           qpx[0] <= 1'b1; qpx[1] <= 1'b1; qpx[2] <= 1'b1; qpx[3] <= 1'b1;   // R218
           qid[0] <= 2'd0; qid[1] <= 2'd1; qid[2] <= 2'd2; qid[3] <= 2'd3;
           a_col <= in_col; a_z <= in_z; a_moire <= in_moire;
@@ -543,6 +555,7 @@ module m2_geo_clip (
         // the pixel they arrived with (R218).
         K_EPROJ:  if (qpx[ti]) begin
           qsx[ti] <= ipx[qid[ti]]; qsy[ti] <= ipy[qid[ti]];
+          qoz[ti] <= ioz[qid[ti]];               // R334
           if (ti == 2'd3) kst <= K_EMIT;
           else ti <= ti + 2'd1;
         end else if (pj_ready) kst <= K_EPROJW;
@@ -551,6 +564,8 @@ module m2_geo_clip (
           // construction, which is why the quad store can keep 16.
           qsx[ti] <= pj_out_sx[15:0];
           qsy[ti] <= pj_out_sy[15:0];
+          // R334: the minifloat, formed here rather than carried as 32 bits.
+          qoz[ti] <= {pj_out_invz[30:23], pj_out_invz[22:15]};
           if (ti == 2'd3) kst <= K_EMIT;
           else begin ti <= ti + 2'd1; kst <= K_EPROJ; end
         end

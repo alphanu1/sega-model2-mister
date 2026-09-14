@@ -16495,3 +16495,43 @@ what follows.** An episodic fault needs a capture longer than its period.
 mis-stepped will land the pointer mid-payload and everything after it is
 garbage. The existing captures can name the opcode that precedes the NOP runs;
 that is a decoder change, not RTL, and costs no build.
+
+**R334 -- 1/z REACHES THE QUAD STORE. The memory cost is paid here, before any
+arithmetic depends on it.**
+
+R331 settled the format by measurement; this carries it. Deliberately split so
+the expensive, irreversible half -- the M10K -- is proven before the fill is
+changed:
+
+```
+  A2 (this)  quad store 128 -> 192 bits, carrying u, v AND 1/z.
+             The fill still fits an affine plane to u and v.  PICTURE UNCHANGED.
+  B  (next)  geometry emits u/z and v/z in the SAME 13-bit fields, the fill
+             fits three planes, m2_span_tex divides.          PICTURE FIXED.
+```
+
+The width is identical in both, so A2 pays the whole memory bill while changing
+nothing visible. If it does not fit, that is known having written the easy half.
+
+**THE PATH 1/z TAKES, AND THE TRAP IN IT.** m2_geo_project computes the
+reciprocal and now exports it (R331). But **a vertex the clipper did not create
+is never re-projected** -- R218 keeps the pixel it arrived with -- so
+`pj_out_invz` exists only for CREATED vertices. 1/z therefore travels exactly as
+the pixel does: `ioz[]` holds the four that arrived, `qoz[ti] <= ioz[qid[ti]]`
+for a vertex that was kept, and `qoz[ti] <= {invz[30:23], invz[22:15]}` for one
+the clipper made. Wiring it only at the projector would have left every
+unclipped vertex with a zero reciprocal -- every ordinary polygon wrong, only
+clipped ones right, which is a symptom that would have been read as anything but
+its cause.
+
+**THE VALUES ARE STREAMED, AND NOT ONLY AS TELEMETRY.** With nothing reading the
+new field the fitter drops the top 64 bits of `uvt_*` and the build proves
+nothing about the 26 blocks. Phases 6 of the R251 debug stream carries all four,
+which keeps the storage alive AND lets the reciprocals be checked on the board
+before the fill is made to depend on them.
+
+**M10K AFTER THIS IS 553 OF 553 IF THE ARITHMETIC IS RIGHT.** 527 + 26 = 553,
+exactly the device. There is no margin at all, and two area estimates today were
+already wrong (12-bit 1/z, and R332's MLAB cost, which was ~380 ALM against
+~100 predicted). If it does not fit, the candidates are NQ -- 1,792 quads
+observed against 2,048, with `qs_dropped` never once read -- or 15-bit 1/z.
