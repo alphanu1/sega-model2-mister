@@ -45,8 +45,8 @@ wire [31:0] ddr_reads;
 
 m2_ddr3 u_ddr3 (
 	.clk(clk_mem), .rst_n(mem_rst_n),
-	.req(ddr_req), .we(ddr_we), .addr(ddr_addr), .din(ddr_din), .be(8'hFF),
-	.ack(ddr_ack), .dout(ddr_dout),
+	.req(ddr_req), .we(ddr_we), .addr(ddr_addr), .blen(8'd1), .din(ddr_din), .be(8'hFF),
+	.wnext(), .rvalid(), .ack(ddr_ack), .dout(ddr_dout),
 	.DDRAM_CLK(DDRAM_CLK), .DDRAM_BUSY(DDRAM_BUSY),
 	.DDRAM_BURSTCNT(DDRAM_BURSTCNT), .DDRAM_ADDR(DDRAM_ADDR),
 	.DDRAM_DIN(DDRAM_DIN), .DDRAM_BE(DDRAM_BE),

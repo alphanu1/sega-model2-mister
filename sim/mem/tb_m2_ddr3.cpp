@@ -53,16 +53,24 @@ static void tick() {
   }
   d->eval();
 
-  // accept a request only when we are NOT saying busy
+  // accept a request only when we are NOT saying busy.
+  // R347: a burst is ONE accepted read command returning BURSTCNT words, and
+  // for a write, BURSTCNT consecutive accepted beats at ascending addresses.
+  static uint32_t wr_addr = 0; static int wr_left = 0;
   if (!d->DDRAM_BUSY) {
     if (d->DDRAM_WE) {
-      uint64_t prev = mem.count(d->DDRAM_ADDR) ? mem[d->DDRAM_ADDR] : 0ull;
+      if (wr_left == 0) { wr_addr = d->DDRAM_ADDR; wr_left = d->DDRAM_BURSTCNT; }
+      uint64_t prev = mem.count(wr_addr) ? mem[wr_addr] : 0ull;
       uint64_t msk = 0;
       for (int b = 0; b < 8; b++) if (d->DDRAM_BE & (1 << b)) msk |= 0xffull << (b * 8);
-      mem[d->DDRAM_ADDR] = (prev & ~msk) | (d->DDRAM_DIN & msk);
+      mem[wr_addr] = (prev & ~msk) | (d->DDRAM_DIN & msk);
+      wr_addr++; wr_left--;
       accepted_writes++; busy_ctr = 0;
     } else if (d->DDRAM_RD) {
-      pending.push_back({read_lat, mem.count(d->DDRAM_ADDR) ? mem[d->DDRAM_ADDR] : 0ull});
+      for (int k = 0; k < d->DDRAM_BURSTCNT; k++) {
+        uint32_t a = d->DDRAM_ADDR + k;
+        pending.push_back({read_lat + k, mem.count(a) ? mem[a] : 0ull});
+      }
       accepted_reads++; busy_ctr = 0;
     }
   }
@@ -71,7 +79,7 @@ static void tick() {
 }
 
 static bool do_req(bool we, uint32_t a, uint64_t v, uint8_t be, uint64_t *out, int budget = 400) {
-  d->req = 1; d->we = we; d->addr = a; d->din = v; d->be = be;
+  d->req = 1; d->we = we; d->addr = a; d->din = v; d->be = be; d->blen = 1;
   tick();
   d->req = 0;
   for (int i = 0; i < budget; i++) {
@@ -157,6 +165,45 @@ int main(int argc, char **argv) {
     }
     ck("all 64 read back correctly", wrong, 0);
     ck("and the read counter agrees", (long)d->dbg_reads >= 64, 1);
+  }
+
+  // ---- 6. R347: BURSTS. MiSTer's guidance is that DDR3 here is ~200 ns
+  //      typical and unbounded in the worst case, and that a core must use
+  //      high burst counts rather than rapid single-word access. A burst of 8
+  //      must cost ONE command and return EIGHT words.
+  {
+    std::printf("test: a burst is one command and N words\n");
+    busy_for = 4; read_lat = 20;          // ~200 ns at 100 MHz
+    long r0 = accepted_reads, w0 = accepted_writes;
+    // write eight ascending words as one burst
+    d->req = 1; d->we = 1; d->addr = 0x2000; d->be = 0xFF; d->blen = 8;
+    d->din = 0x7000000000000000ull;
+    tick(); d->req = 0;
+    int beat = 1;
+    for (int i = 0; i < 400 && !d->ack; i++) {
+      if (d->wnext) { d->din = 0x7000000000000000ull + beat; beat++; }
+      tick();
+    }
+    ck("the write burst finished",      (long)(beat >= 8), 1);
+    ck("ONE command, eight beats",      accepted_writes - w0, 8);
+    // read them back as one burst
+    d->req = 1; d->we = 0; d->addr = 0x2000; d->be = 0xFF; d->blen = 8;
+    tick(); d->req = 0;
+    long words = 0, wrong = 0;
+    for (int i = 0; i < 600 && !d->ack; i++) {
+      if (d->rvalid) {
+        if (d->dout != 0x7000000000000000ull + (uint64_t)words) wrong++;
+        words++;
+      }
+      tick();
+    }
+    if (d->rvalid) { if (d->dout != 0x7000000000000000ull + (uint64_t)words) wrong++; words++; }
+    ck("ONE read command for the burst", accepted_reads - r0, 1);
+    ck("eight words returned",           words, 8);
+    ck("all correct",                    wrong, 0);
+    // and the latency reported is for the WHOLE burst, which is what a
+    // consumer waits for -- not the first word.
+    ck("latency covers the whole burst", (long)(d->dbg_lat_last >= 20), 1);
   }
 
   std::printf("m2_ddr3: checks=%ld fails=%ld\n", checks, fails);

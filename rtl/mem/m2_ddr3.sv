@@ -52,9 +52,20 @@ module m2_ddr3 #(
   input  logic        req,
   input  logic        we,
   input  logic [24:0] addr,        // 64-bit words, relative to BASE
+  // R347: WORDS IN THIS TRANSACTION. MiSTer's own guidance is that DDR3 here
+  // is ~200 ns typical and UNBOUNDED in the worst case, because the bridge is
+  // shared with the HPS, and that a core must use high burst counts or heavy
+  // caching rather than rapid single-word access. One word a request -- what
+  // this module did first -- is the access pattern that guidance warns against.
+  input  logic [7:0]  blen,
   input  logic [63:0] din,
   input  logic [7:0]  be,
-  output logic        ack,         // one pulse: write accepted, or read data valid
+  // A write burst takes one word per `wnext`; the consumer presents the next on
+  // `din`. A read burst returns one word per `rvalid`. `ack` is the whole
+  // transaction finishing, so a single-word caller can ignore the other two.
+  output logic        wnext,
+  output logic        rvalid,
+  output logic        ack,
   output logic [63:0] dout,
 
   // ---- the framework's DDRAM port
@@ -76,7 +87,7 @@ module m2_ddr3 #(
 );
 
   assign DDRAM_CLK      = clk;
-  assign DDRAM_BURSTCNT = 8'd1;                 // one word a request, for now
+  assign DDRAM_BURSTCNT = blen_r;
   assign DDRAM_ADDR     = BASE + 29'(addr);
   assign DDRAM_DIN      = din;
   assign DDRAM_BE       = be;
@@ -85,6 +96,7 @@ module m2_ddr3 #(
   st_t st;
 
   logic        is_wr;
+  logic [7:0]  blen_r, beats;
   logic [15:0] lat;
 
   assign DDRAM_WE = (st == D_ISSUE) &&  is_wr;
@@ -93,14 +105,17 @@ module m2_ddr3 #(
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       st <= D_IDLE; is_wr <= 1'b0; ack <= 1'b0; dout <= '0;
+      blen_r <= 8'd1; beats <= 8'd1; wnext <= 1'b0; rvalid <= 1'b0;
       lat <= '0; dbg_lat_last <= '0; dbg_lat_max <= '0; dbg_reads <= '0;
     end else begin
-      ack <= 1'b0;
+      ack <= 1'b0; wnext <= 1'b0; rvalid <= 1'b0;
       case (st)
         D_IDLE: if (req) begin
-          is_wr <= we;
-          lat   <= '0;
-          st    <= D_ISSUE;
+          is_wr  <= we;
+          blen_r <= (blen == 8'd0) ? 8'd1 : blen;
+          beats  <= (blen == 8'd0) ? 8'd1 : blen;
+          lat    <= '0;
+          st     <= D_ISSUE;
         end
 
         // HELD UNTIL TAKEN. BUSY means the bridge has not accepted this
@@ -110,8 +125,13 @@ module m2_ddr3 #(
           lat <= lat + 16'd1;
           if (!DDRAM_BUSY) begin
             if (is_wr) begin
-              ack <= 1'b1;            // a write is done when it is accepted
-              st  <= D_IDLE;
+              // One beat taken. ADDR and BURSTCNT matter on the first only;
+              // the rest are consecutive words, so the consumer just advances.
+              wnext <= 1'b1;
+              if (beats == 8'd1) begin
+                ack <= 1'b1;
+                st  <= D_IDLE;
+              end else beats <= beats - 8'd1;
             end else st <= D_WAIT;
           end
         end
@@ -119,12 +139,17 @@ module m2_ddr3 #(
         D_WAIT: begin
           lat <= lat + 16'd1;
           if (DDRAM_DOUT_READY) begin
-            dout         <= DDRAM_DOUT;
-            ack          <= 1'b1;
-            dbg_lat_last <= lat;
-            if (lat > dbg_lat_max) dbg_lat_max <= lat;
+            dout   <= DDRAM_DOUT;
+            rvalid <= 1'b1;
             if (!(&dbg_reads)) dbg_reads <= dbg_reads + 32'd1;
-            st <= D_IDLE;
+            if (beats == 8'd1) begin
+              ack <= 1'b1;
+              // THE WHOLE BURST, not the first word. What matters for a
+              // consumer is when the last word lands.
+              dbg_lat_last <= lat;
+              if (lat > dbg_lat_max) dbg_lat_max <= lat;
+              st <= D_IDLE;
+            end else beats <= beats - 8'd1;
           end
         end
 
