@@ -1,6 +1,110 @@
 # Handoff
 
-**Updated:** 2026-09-14. Study entries R176-R332.
+**Updated:** 2026-09-14 evening. Study entries R176-R344.
+
+## STABLE HEAD, CONFIRMED ON THE BOARD
+
+`build/h2/s15` -- R334 + R335. Ben: "its all good".
+
+    hold +0.212  clk_mem -0.378  clk_sys +0.250  ALM 41,287  M10K 553/553
+    tgp 030B, 2,039 walks, glyph 82.6%, texel cache 62.9%, bus busy 59.7%
+    1/z: 476 of 556 samples nonzero, median 0.0176 -> z ~ 57   <- R334 VERIFIED
+
+## WHAT WAS FIXED TODAY, ALL CONFIRMED ON THE BOARD
+
+    R326  MISSING TEXTURES. m2_geo_engine culled every polygon with texture
+          header bit 13. Only MAME's index 1 (untextured translucent) draws
+          nothing; draw_scanline_tex<true> DRAWS, discarding texel 0xF alone.
+          Board: +50% quads, +16% textured pixels.
+    R327  fill coordinates 32 -> 16 bits, -317 ALM, no visual change
+    R328  texel cache 1024 -> 2048: hit 54.3% -> 64.9%, misses -24%
+    R329  ports 8/9 burst 2, not 4: SDRAM bus busy 44.7% -> 32.6%
+    R332  span queue -> MLAB, -5 M10K (verified in the RAM Summary)
+    R334  1/z carried to the quad store, streamed on debug phase 7
+
+## PARKED ON BRANCHES
+
+    perspective-wip   R338 + R339, THE ORIENTATION FIX. Bench-green:
+                      raster_fill 152,362/0, span_tex 52/0 including a
+                      curvature check that fails if the divide is removed.
+                      Needs ~451 ALM the device has not got.
+    tilefetch-wip     R336, the m2_tile_fetch F_LOOK register stage.
+                      UNTESTED, not broken -- see R344.
+
+## OPEN FAULTS
+
+    R333  THE LIGHTING GOES BLACK for minutes at a time. The walk reads data
+          as opcodes (`nops decoded max 280` in a list that holds none), which
+          zeroes all 32 light-table entries, and every 3D polygon renders
+          black -- scenery as a silhouette. Episodic; it does recover.
+          DIAGNOSED, NOT FIXED. Most serious known defect.
+    R274  the renderer is AFFINE. 36 texels of error at a 4:1 depth ratio
+          across a quad, 688 at 40:1. Fixed on perspective-wip, not merged.
+
+## THE PLAN, IN BEN'S ORDER
+
+    1. DDR3. The framework already does the SCANOUT (screen_rotate + FB_EN,
+       sys/arcade_video.v); the write master is ours. Start with the LOW-RISK
+       traffic -- the I/O firmware ROM (16 M10K) and the sound ROMs/samples
+       (frees SDRAM ports 5,6,7, narrowing the arbiter 11 -> 8) -- which proves
+       the master and measures real DDR3 latency before the picture depends
+       on it. Then the framebuffer.
+       Measured: the fill renders 1.98 frames per list and each is a pixel-for-
+       pixel repeat, so a framebuffer HALVES its work AND removes the beam
+       deadline. Frees 223 ALM + 24 M10K, which lets R332 reverse for ~380 more.
+    2. R333, the walk desync.
+    3. The arbiter -- 3 of every 13 cycles of a row-hit read are
+       S_IDLE -> S_SEL -> S_DISPATCH. Only thing that reaches the geometry's
+       31.7% bus wait. This is R297, which corrupted every port; build the
+       cross-port integrity bench FIRST (tb_m2_sdram passed 105,598 checks
+       while R297 was corrupting the board).
+
+## THE THING THAT COST THE MOST TIME TODAY
+
+**The seed failure rate, and it is not a footnote.** Seven seeds crashed the
+fitter (DYN, CUT, STA internal errors), three fitted with healthy slack and did
+not run, three builds were killed mid-placement while another project fitted on
+the same machine. Roughly half of everything attempted.
+
+A dud seed is INDISTINGUISHABLE from a broken design. Three in a row convicted
+R336, which was then reverted on a false explanation and had to be withdrawn
+(R344). Two rules fell out:
+
+* **Flash a second seed before suspecting the RTL** (R330), and
+* **a seed only reproduces a placement for IDENTICAL source** -- "seed 14
+  worked before" is not a controlled comparison across an RTL change.
+
+Ben's instruction: three seeds a batch, maximum, and never alongside another
+project's build.
+
+## FOUR AREA ESTIMATES, ALL WRONG, ALL THE SAME WAY
+
+    MLAB move        predicted ~100 ALM   actual ~380
+    12-bit 1/z       predicted adequate   actual 16 texels of error
+    R338+R339        predicted ~390 ALM   actual 849
+    R341 "narrowing" predicted -450 ALM   actual +257 and three DSP blocks lost
+
+The pattern: **area was reasoned from the ALGORITHM, and the cost lives in how
+Quartus MAPS it.** R341 is the clearest -- narrowing multiply operands to their
+true widths pushed them out of the 27x27 DSP shape into logic, so "more correct"
+was "more expensive". Use fit reports, not arithmetic.
+
+## BENCHES THAT PASS AND PROVE NOTHING
+
+Two this session, and they fail in opposite ways:
+
+* `tb_m2_geo_engine` asserted the WRONG BEHAVIOUR -- that textured translucent
+  polygons are culled -- so R326's fault survived from R231 with a green bench.
+* `tb_m2_tile_fetch` asserts CORRECT behaviour in a situation that never
+  arises: one line in isolation, where the real path runs lines back-to-back
+  with the emit side consuming. It scores 12/12 against the working module AND
+  the suspect one, so it cannot clear a change to that module.
+* `tb_m2_span_tex`'s varying-depth test PASSED WHILE TESTING NOTHING -- the
+  depth step drove 1/z to zero on the second group, the loop broke, and the
+  curvature check never got its three samples. Only the check count moving
+  33 -> 35 instead of 33 -> 51 gave it away.
+
+---
 
 ## 09-14: TWO FAULTS WITH ONE SYMPTOM EACH, AND THE AREA TO FIX THE SECOND
 
