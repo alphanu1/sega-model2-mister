@@ -200,7 +200,7 @@ module m2_tile_fetch #(
   // ------------------------------------------------------------------------
 
   typedef enum logic [2:0] {
-    F_IDLE, F_CHECK, F_TILE, F_LOOK, F_CHAR, F_FULL
+    F_IDLE, F_CHECK, F_TILE, F_CHAR, F_FULL
   } fstate_t;
   typedef enum logic [1:0] {
     E_IDLE, E_WAIT, E_EMIT, E_DONE
@@ -244,7 +244,7 @@ module m2_tile_fetch #(
     cc_hit      = 1'b0;
     cc_hit_data = 32'd0;
     for (int i = 0; i < CC_N; i++)
-      if (cc_val[i] && (cc_addr[i] == char_addr_r)) begin
+      if (cc_val[i] && (cc_addr[i] == f_char_addr)) begin
         cc_hit      = 1'b1;
         cc_hit_data = cc_data[i];
       end
@@ -274,20 +274,6 @@ module m2_tile_fetch #(
   // first place.
   logic [14:0] f_tile_addr;
   logic [17:0] f_char_addr;
-  // R336: THE GLYPH ADDRESS, REGISTERED BEFORE THE SIXTEEN-WAY COMPARE.
-  //
-  // Measured at 13.57 ns -- a 73.7 MHz ceiling -- and the path is this module's
-  // whole critical path: the tile word out of a register, through
-  // m2_tile_decode, into `f_char_addr`, then a SIXTEEN-WAY 18-bit compare and
-  // a 16:1 32-bit mux for the hit data, all in one cycle. m2_char_cache and
-  // m2_texel both reached clk_mem by pipelining exactly this shape (R315,
-  // R316); the area budget's rule is that a register stage is cheap and sizing
-  // is not.
-  //
-  // It costs ONE CYCLE PER GLYPH -- about 19,500 a frame against 860,000
-  // cycles, so ~2.3% -- which is the price of the path, and is repaid several
-  // times over if it lets the fetch run on clk_mem.
-  logic [17:0] char_addr_r;
 
   // The fetch decode only supplies addresses and the emit decode only supplies
   // pixels, so each leaves the other half of m2_tile_decode unused. Named
@@ -340,7 +326,7 @@ module m2_tile_fetch #(
   endgenerate
 
   assign tram_addr = f_tile_addr;
-  assign char_addr = char_addr_r;                        // R336: registered
+  assign char_addr = f_char_addr;
   assign busy      = (est != E_IDLE) || (fst != F_IDLE);
 
   // Where the emit side is inside its tile, and where the fetch side is inside
@@ -370,7 +356,6 @@ module m2_tile_fetch #(
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       fst <= F_IDLE; fx <= '0; tw_f <= '0; ch_f <= '0; f_have <= 1'b0;
-      char_addr_r <= 18'd0;
       cc_val <= '0; cc_rr <= '0;
       tw_nonblank <= 1'b0;
       last_tile <= '0;
@@ -398,7 +383,7 @@ module m2_tile_fetch #(
         F_CHECK: begin
           // f_tile_addr is combinational off fx. Refetch only when the tile
           // actually changed.
-          if (tile_valid && (f_tile_addr == last_tile)) fst <= F_LOOK;
+          if (tile_valid && (f_tile_addr == last_tile)) fst <= F_CHAR;
           else                                          fst <= F_TILE;
         end
 
@@ -406,19 +391,11 @@ module m2_tile_fetch #(
           tw_f       <= tram_data;
           last_tile  <= f_tile_addr;
           tile_valid <= 1'b1;
-          fst        <= F_LOOK;                          // R336
+          fst        <= F_CHAR;
           // Same rule the MAME script and the frame testbench use: non-zero, and
           // not tile 0x20, which is the space character.
           tw_nonblank <= (tram_data != 16'h0000)
                       && ((tram_data & 16'h3fff) != 16'h0020);
-        end
-
-        // R336: the register stage. f_char_addr settled when the tile word was
-        // latched; this is the cycle that captures it, so the compare below
-        // starts from a flop instead of from m2_tile_decode's output.
-        F_LOOK: begin
-          char_addr_r <= f_char_addr;
-          fst         <= F_CHAR;
         end
 
         F_CHAR: begin
@@ -433,7 +410,7 @@ module m2_tile_fetch #(
           end else if (char_ack) begin
             char_req   <= 1'b0;
             ch_f       <= char_data;
-            cc_addr[cc_rr] <= char_addr_r;              // R336
+            cc_addr[cc_rr] <= f_char_addr;
             cc_data[cc_rr] <= char_data;
             cc_val[cc_rr]  <= 1'b1;
             cc_rr <= (cc_rr == CC_W'(CC_N-1)) ? '0 : cc_rr + CC_W'(1);

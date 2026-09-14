@@ -16908,3 +16908,53 @@ of perhaps 200-400, the net is plausibly +280 to +480 ALM and +19 M10K -- around
 what the parked perspective work needs. **Every figure there is an estimate, and
 four estimates today were wrong in the same direction, so the fit report decides
 it and not this paragraph.**
+
+**R344 -- R336 STALLS THE VIDEO, THE BENCH CANNOT SEE IT, AND `bus busy 0.0%`
+DOES NOT MEAN WHAT IT LOOKS LIKE.**
+
+R336's `F_LOOK` register stage in `m2_tile_fetch` kills the core. TWO seeds of
+the same RTL agree, which is R330's threshold for suspecting the design rather
+than the placement:
+
+```
+  build/oz/s14      R334 alone       RAN  -- tgp 030B, 3,110 walks, luma 168, 50 bands
+  build/stable/s14  R334+R335+R336   DEAD -- every frame counter zero
+  build/stable2/s11 same RTL         DEAD -- identical signature
+```
+
+**THE TELEMETRY TRAP.** The capture reads `SDRAM bus busy 0.0%`, which looks
+like "no memory traffic" and sent the first reading of it toward the SDRAM
+controller. It is not. `bwl_busy` latches on a vblank toggle:
+
+```systemverilog
+  if (bw_tog_m3 != bw_tog_m2) begin bwl_busy <= bw_busy; ... end   // one a frame
+```
+
+**If the video produces no vblank, the latch never fires and EVERY frame-based
+counter reads zero** -- bus busy, glyph misses, textured pixels, walks. The one
+number that is still live is the C record's TGP PC, and the glyph cache's 1,696
+"hits" with zero misses, which is the L1 answering from its reset state. So the
+correct reading is THE VIDEO PATH IS STALLED, and `m2_tile_fetch` is in it: a
+hung fetch FSM holds `busy`, the line never completes, and video timing stops.
+Every zero follows from that one fact.
+
+**THE BENCH PASSES ON BOTH VERSIONS.** `tb_m2_tile_fetch`, written in R336 to
+cover this exact change, reports 12 checks and 0 failures against the module
+that hangs AND against the reverted one. It cannot distinguish them, so it
+cleared a build it had no power to clear.
+
+Why: it drives **one line at a time, in isolation**, with `start`, then waits for
+`busy` to fall. The real path runs lines BACK TO BACK with the emit side (`est`)
+consuming concurrently, with scrolling and the split window active. A new state
+in the fetch FSM perturbs precisely that interaction, and the bench never
+creates it. **A bench that exercises a module alone cannot clear a change to how
+that module is paced by another.**
+
+What it must do before R336 is retried: drive consecutive lines without waiting
+for idle between them, run the emit side against a consumer that applies
+backpressure, and assert that `done` arrives for every line rather than that
+`busy` eventually falls.
+
+R336 is reverted on the mainline and parked on branch `tilefetch-wip`. The
+finding it rests on stands -- 13.57 ns through a sixteen-way compare is this
+module's critical path -- but the fix needs a bench that can fail.
