@@ -328,7 +328,13 @@ module m2_raster3d #(
   );
 
   // ------------------------------------------------- R275: the texture walk
-  // R322: FOUR PIXELS PER TEXEL FETCH, up from two.
+  // R322/R324: EIGHT PIXELS PER TEXEL FETCH, up from two.
+  //
+  // A cache line is EIGHT texels across, so at PIXSTEP=8 one line covers 64
+  // pixels of span and a 100-pixel span costs ~13 fetches where PIXSTEP=2 cost
+  // 50. Four times fewer than the original. The blockiness compounds with it --
+  // one texel across eight pixels is a real approximation, not a subtle one --
+  // so this is a judgement to make on the screen, and it is one parameter back.
   //
   // This is the largest single lever on texture throughput and it is one
   // parameter. A textured span costs a fetch per group, and at 42.4% hit a
@@ -344,7 +350,7 @@ module m2_raster3d #(
   //
   // SET HERE, NOT ON THE MODULE'S DEFAULT. R313 changed m2_char_cache's default
   // while the instantiation overrode it, and the change did nothing at all.
-  m2_span_tex #(.PIXSTEP(4)) u_spantex (
+  m2_span_tex #(.PIXSTEP(8)) u_spantex (
     .clk(clk), .rst_n(rst_n),
     .in_valid(sq_qv), .in_ready(sq_rdy), .busy(spantex_busy),
     .in_y(sq_y), .in_x0(sq_x0), .in_x1(sq_x1),

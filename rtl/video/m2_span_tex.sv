@@ -229,8 +229,24 @@ module m2_span_tex #(
             st <= T_DRAIN;
           end else begin
             x_r <= x_r + 32'(PIXSTEP);
-            u_r <= u_r + (du_r <<< (PIXSTEP == 2 ? 1 : 0));
-            v_r <= v_r + (dv_r <<< (PIXSTEP == 2 ? 1 : 0));
+            // R323: THE TEXTURE STEP MUST MATCH PIXSTEP, and this only ever
+            // handled 1 and 2. It read `<<< (PIXSTEP == 2 ? 1 : 0)`, so at any
+            // PIXSTEP above two `x` advanced by PIXSTEP while u and v advanced
+            // by ONE texel -- the texture magnified by PIXSTEP/2 along every
+            // span, which on the board looks like texels at the wrong scale and
+            // orientation. R322 set PIXSTEP to 4 and shipped that before this
+            // was noticed.
+            //
+            // NEITHER BENCH COULD CATCH IT. tb_m2_raster3d counts pixels
+            // painted, which is unchanged by a wrong texture coordinate, and
+            // tb_m2_span_tex has 28 checks and no assertion on u or v at all.
+            // A span walk needs a test that says WHICH TEXEL each pixel took.
+            //
+            // $clog2 is correct for any POWER OF TWO. A non-power-of-two step
+            // (6) would need a real multiply on this path, for nothing that 8
+            // does not already give.
+            u_r <= u_r + (du_r <<< $clog2(PIXSTEP));
+            v_r <= v_r + (dv_r <<< $clog2(PIXSTEP));
             st  <= T_FETCH;
           end
         end

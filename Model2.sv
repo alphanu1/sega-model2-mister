@@ -5440,7 +5440,13 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 			cc_h_p <= char_hits;
 			cc_m_p <= char_misses;
 			cc_f_p <= char_fills;
-			tx_p_f <= sat16d(tex_pixels, tx_p_p);
+			// R324: COUNTED IN FOURS, because it saturated. The frame delta
+			// is a 16-bit field and build/char100b read 65535 of 65535 -- "at
+			// least this many", which cannot show whether a change helped.
+			// Shifting by two gives a range of 262,140 pixels against a
+			// 190,464-pixel screen, so it can no longer saturate. The decoder
+			// multiplies it back.
+			tx_p_f <= sat16d(tex_pixels >> 2, tx_p_p >> 2);
 			tx_h_f <= sat16d(tex_hits,   tx_h_p);
 			tx_m_f <= sat16d(tex_misses, tx_m_p);
 			tx_n_f <= sat16d(tex_nz, tx_n_p);

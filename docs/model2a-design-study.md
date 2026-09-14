@@ -16069,3 +16069,39 @@ textures on, and that is the texel miss RATE -- 42.4%, roughly 29 misses per
 textured span, ~6.4 us against a 362 us band budget. R318 made each fetch 10%
 faster and the picture did not change, because the gap is ~3x. That is the next
 problem and it is a different one.
+
+**R323/R324 -- PIXSTEP ONLY EVER WORKED AT 1 AND 2, AND THE BENCHES COULD NOT
+SEE IT. Now any power of two, and the pixel counter no longer saturates.**
+
+R322 set PIXSTEP to 4 to halve the texel fetches per span. The span walk's
+coordinate advance was:
+
+    u_r <= u_r + (du_r <<< (PIXSTEP == 2 ? 1 : 0));
+
+so above two, `x` advanced by PIXSTEP while u and v advanced by ONE texel: the
+texture magnified by PIXSTEP/2 along every span. It went to the board that way,
+and Ben saw it immediately -- "some texels are the wrong rotation". Now
+`<<< $clog2(PIXSTEP)`, correct for any power of two. A non-power-of-two step
+needs a real multiply on that path for nothing 8 does not already give, so 6 is
+not available and is not worth building.
+
+*Neither bench could have caught this, and that is the finding.*
+tb_m2_raster3d counts PIXELS PAINTED, which a wrong texture coordinate does not
+change -- it reported a steady 10,824 through the whole fault. tb_m2_span_tex
+has 28 checks and NO ASSERTION ON u OR v AT ALL. A span walk needs a test that
+says which TEXEL each pixel took; counting pixels proves the walk ran, not that
+it was right. That gap is why a coordinate bug reached hardware with two green
+benches behind it.
+
+*And a counter that had stopped measuring.* `textured pixels` is a 16-bit frame
+delta and build/char100b read 65535 of 65535 -- saturated, meaning "at least
+this many", which cannot show whether a change helped. It now counts in fours
+(range 262,140 against a 190,464-pixel screen) with the decoder scaling it back.
+
+*What char100b measured that still stands.* The char cache at 100 MHz (R320)
+took scanline overruns from 53 a frame to 34, and texel bus wait from 14.8% to
+6.8%. The texel hit rate reading of 79.4%, up from 42.4%, is NOT trustworthy:
+it was measured with the coordinate bug in place, so u and v advanced at half
+the correct rate and consecutive fetches landed closer together in texture space
+than they should. Some of that jump is the 1024-line cache and some is the bug,
+and the split is unknown until a corrected build runs.

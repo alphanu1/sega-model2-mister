@@ -108,6 +108,10 @@ if Y:
     def med2(v): w=sorted(v); return w[len(w)//2]
     tot=[h+m for h,m in zip(th,tm)]
     rate=100.0*sum(th)/max(1,sum(tot))
+    # R324: the textured-pixel field counts in FOURS. It saturated at 65535 in
+    # build/char100b, which reads "at least this many" and cannot show whether a
+    # change helped; Model2.sv now shifts it by two before the 16-bit delta.
+    px = [v*4 for v in px]
     print('TEXTURES (R275): per frame -- textured pixels med %d max %d; texel cache %.1f%% of %d fetches'
           % (med2(px), max(px), rate, med2(tot)))
     print('    texels that were NOT 0xF: med %d of %d fetches -- zero means the sheets are EMPTY'
