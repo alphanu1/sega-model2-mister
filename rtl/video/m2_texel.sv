@@ -79,6 +79,8 @@ module m2_texel #(
   // whole capture, about one per 57 frames, so the cache is NOT being cleared
   // out from under itself. The miss rate is genuine thrashing, which size can
   // address.
+  // THIS DEFAULT IS NOT WHAT THE CORE BUILDS. m2_raster3d overrides it (R328,
+  // 2048 lines). Changing the number here moves only the benches.
   parameter int unsigned IDX_BITS = 10
 ) (
   input  logic             clk,

@@ -412,7 +412,19 @@ module m2_raster3d #(
     .f_u(txf_u), .f_v(txf_v), .f_texel(txf_texel)
   );
 
-  m2_texel #(.AW(TEX_AW)) u_texel (
+  // R328: IDX_BITS 11 -- 2048 lines / 16 KB, SET HERE AND NOT IN THE MODULE.
+  // m2_char_cache's size lives at its instantiation for the reason the area
+  // budget records: editing a module DEFAULT that an instantiation overrides is
+  // a silent no-op, and this one was not overridden at all, which is just as
+  // easy to miss from the other direction.
+  //
+  // WHY NOW: R326 put the textured translucent polygons back and the texel
+  // cache took the weight -- misses 8,556 -> 16,772 a frame and the hit rate
+  // 60.3% -> 54.3%, measured on the board. This is 8 M10K of the 28 free.
+  // 4096 lines would be 24 and was NOT taken: R322's doubling is a measurement
+  // as much as a change, and spending the whole headroom before reading the
+  // curve is how R304 and R307 both went wrong.
+  m2_texel #(.AW(TEX_AW), .IDX_BITS(11)) u_texel (
     .clk(clk_mem), .rst_n(rst_n),
     .base_s0(tex_base0), .base_s1(tex_base1),
     .req(txf_req), .ack(txf_ack), .tex(txf_tex),

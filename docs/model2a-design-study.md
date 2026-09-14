@@ -16259,3 +16259,22 @@ coordinates are 16 bits and only m2_quad_store's 13-bit saturation makes that
 safe. If XW grows past 16, or a caller is added that does not go through the
 quad store, this module truncates without a word. It is written at the top of
 `m2_raster_fill.sv` as well as here.
+
+**R328 -- THE TEXEL CACHE DOUBLES AGAIN, 1024 -> 2048 LINES, BECAUSE R326 MADE
+IT EARN IT.** Putting the textured translucent polygons back cost the texel
+cache, measured on the board across the same 180 s capture:
+
+```
+                 px8 (R325)   trans (R326)
+  texel fetches      25,988        36,407   +40%
+  misses              8,556        16,772   +96%
+  hit rate            60.3%         54.3%
+  quads a frame   720..1,056   1,184..1,664 +50%
+```
+
+8 M10K of the 28 free. **4096 lines would be 24 and was deliberately NOT taken:**
+R322's doubling was a measurement as much as a change, and spending the whole
+headroom on an estimate before reading the curve is precisely how R304 and R307
+both went the wrong way. The size is set at the INSTANTIATION in m2_raster3d,
+not in the module -- m2_texel's default was never overridden, which is the char
+cache's trap seen from the other side and just as easy to miss.
