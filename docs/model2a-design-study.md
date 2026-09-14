@@ -17070,3 +17070,49 @@ and lint still could not find the module: `LINTTOP_RTL` greps **Model2.qsf**,
 which also `source`s files.qip. A file listed only in the qip is compiled by
 Quartus but invisible to the lint, so **lint_top would have passed a file the
 fitter never saw, or vice versa.** New RTL goes in Model2.qsf.
+
+**R347 -- DDR3 LATENCY IS ~200 ns TYPICAL AND UNBOUNDED IN THE WORST CASE. THAT
+INVERTS THE ORDER THE DDR3 WORK SHOULD BE DONE IN.**
+
+Ben, with the MiSTer developer documentation and forum sources:
+
+```
+  typical      ~200 ns  (20 cycles at 100 MHz, against SDRAM's 13)
+  worst case   much longer, and HIGHLY UNPREDICTABLE -- the bridge is shared
+               with the ARM/HPS
+  mitigation   high DDRAM_BURSTCNT, or heavy caching (ao486, PSX do this).
+               DO NOT rely on rapid single-word access.
+```
+
+**TWO THINGS THIS CORRECTS.**
+
+*R345's master uses `DDRAM_BURSTCNT = 1`* -- single-word access, which is
+precisely what the guidance says not to build on. It needs bursts before any
+consumer depends on it.
+
+*R343's ordering was backwards.* The plan was sound ROMs and the I/O firmware
+first, on the reasoning that a fault there is AUDIBLE rather than visible. But
+those are the **single-word, latency-sensitive** consumers, and the framebuffer
+-- the one deferred as "the big architectural change" -- is the only one whose
+access pattern matches what DDR3 wants:
+
+```
+  Z80 I/O firmware   one word per instruction fetch, no cache.  A 750 ns memory
+                     cycle absorbs the TYPICAL 200 ns and nothing absorbs an
+                     unbounded worst case.
+  MultiPCM samples   one 64-bit line per voice miss, 28 voices round-robin.
+                     The per-voice cache helps; each miss is still one word.
+  68000 sound ROM    sequential -- burstable, the best of the three.
+  FRAMEBUFFER        sequential spans written in runs; BURSTS NATURALLY, and
+                     latency cannot reach the beam because the framework owns
+                     the scanout. Unbounded tolerance.
+```
+
+**So the framebuffer goes FIRST.** It is the only move whose worst case is
+"a frame is late", which the hardware already does (R340), rather than "the
+picture tears" or "the sound breaks up".
+
+Whether the low-latency consumers move at all is now an open question rather
+than a plan. It depends on what R346's self-test reports for `dbg_lat_max`
+under real HPS load -- and the fact that the worst case is UNPREDICTABLE means a
+good median tells us nothing. **The number that matters is the tail.**
