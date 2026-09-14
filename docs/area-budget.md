@@ -5,6 +5,21 @@ FITTER is what keeps failing -- four builds in a row lost seeds to Quartus
 internal errors rather than to anything in the RTL. Read this before adding
 anything.
 
+> **CORRECTION (R330): the fitter crashes are BATCH SIZE, not density.** A
+> four-seed batch on this 31 GB machine is ~9 GB of fits plus whatever else is
+> building, and one seed died with `Internal Error: dyn_enum.cpp, Line 186`
+> while three finished -- at 40,861 ALM, LOWER than when this was written. Ben
+> called it before the build finished: **three seeds at a time, maximum, and
+> never two batches at once.** Attributing these crashes to density has been
+> steering area decisions for nothing.
+
+> **CORRECTION (R327/R328): two M10K figures below are wrong, both measured.**
+> The span queue costs **5** blocks at `DEPTH(32)`, not the ~30 this document
+> assumes -- which it flagged as unverified and which is now read from a fit
+> report. R313 therefore halved the char cache (overruns 14 -> 53) to pay for
+> something that costs five blocks. And the texel cache is **8** blocks at 1024
+> lines, so doubling it costs 7, not the ~15 estimated.
+
 Measured on `build/fifo2/s37` unless stated. Every figure here was READ from the
 fit report, not derived -- three separate area decisions went wrong on the same
 day from estimating instead.

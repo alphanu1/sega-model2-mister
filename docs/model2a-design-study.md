@@ -16304,3 +16304,39 @@ Alignment is not a constraint: S_RD issues one C_READ per cycle and walks the
 column itself, so the device is in BL=1 and there is no burst boundary. Port 9's
 odd `tgp_dat_half_r` start gets {addr, addr+1}, which is what it asked for.
 Port 10 keeps four -- `tex_m_data = p_dout[10]` uses all 64 bits.
+
+**R330 -- THE SEED LOTTERY IS REAL, AND THE SLACK SUMMARY DOES NOT PREDICT IT.
+RE-TEST A SECOND SEED BEFORE BISECTING THE RTL.**
+
+One fit of R327+R328+R329 produced four seeds:
+
+```
+  s15   crashed the fitter        Internal Error: dyn_enum.cpp, Line 186
+  s13   hold +0.241  clk_mem -0.878   GAME DOES NOT RUN
+  s31   hold -0.070  clk_mem -0.879   boots in ~40 s, runs well
+  s11   hold -0.178  clk_mem -0.025   untested
+```
+
+**s13 has the best hold of the entire session and is the one that does not
+work.** The rule in use -- positive hold everywhere, then best setup -- picked
+it, and picked the only broken RBF of the three.
+
+What s13 did on the board: the boot screen held for ~144 s where s31 takes ~40.
+The UART, which does not go through the video path, shows the core was genuinely
+not executing rather than merely not displaying: **2 walks in 180 s against
+2,108 in 110 s, the TGP parked at PC 0000 for the entire capture against
+030B/066A/01DC, and 0 of 32 light table entries written against 32 of 32.**
+Identical RTL to s31.
+
+**The cost of not knowing this:** a 35-minute bisect build of R328 against R329
+was about to be started, on a fault that was neither of them. It was avoided
+only because the same fit had left three RBFs, so flashing a second seed cost
+one minute instead of one build.
+
+**THE RULE: when a build misbehaves, flash another seed of the SAME RTL before
+suspecting the RTL.** A fit leaves several; testing one is nearly free and rules
+out the whole class. Only bisect once two seeds agree.
+
+Corollary for seed selection: positive hold is necessary and NOT sufficient.
+s31 runs correctly at hold -0.070 while s13 fails at +0.241, so the summary
+numbers rank placements they cannot actually judge. The board decides.
