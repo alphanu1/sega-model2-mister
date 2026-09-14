@@ -16985,3 +16985,45 @@ run, and three builds were killed mid-placement while another project was
 fitting on the same machine. Roughly half of everything attempted. A single dead
 seed is indistinguishable from a broken design, and three in a row will convict
 an innocent change -- which is exactly what happened here.
+
+**R345 -- THE DDR3 MASTER, AND A BENCH PROVEN TO FAIL BEFORE IT IS TRUSTED.**
+
+`rtl/mem/m2_ddr3.sv`: one read/write port onto the framework's DDRAM interface,
+shaped like an m2_sdram port so a consumer moves by rewiring. The protocol is
+taken from `sys/arcade_video.v`'s `screen_rotate`, the one proven example of
+driving this port on this board:
+
+```
+  DDRAM_ADDR      a 64-BIT WORD address, not a byte address
+  DDRAM_BURSTCNT  words per request
+  DDRAM_BE        byte enables within the word
+  DDRAM_WE/RD     request, HELD until accepted
+  DDRAM_BUSY      the request has NOT been taken
+  DDRAM_DOUT/_READY   read data, one word per pulse
+```
+
+**screen_rotate DOES NOT CHECK DDRAM_BUSY**, and gets away with it because a
+video writer produces one word per pixel clock and never backs up. A memory
+master cannot: a request dropped while BUSY is a read that never returns and a
+write that never lands, and neither is visible until something downstream is
+inexplicably wrong. Copying the example verbatim would have shipped that.
+
+**THE BENCH WAS MUTATION-TESTED, WHICH THE REST OF THIS PROJECT'S BENCHES HAVE
+NOT BEEN.** Making the BUSY check inert -- `if (!DDRAM_BUSY || 1'b1)` -- fails 9
+of 14 checks, including "the write reached the memory ONCE". The model is
+deliberately hostile: BUSY held for a settable number of cycles before
+acceptance, read data returned a settable number after. A bench whose memory
+answers immediately proves nothing about a master that has to wait.
+
+This matters because of what happened hours earlier. `tb_m2_tile_fetch` scored
+12/12 against the module suspected of hanging the video AND against the reverted
+one, and was treated as clearance for a build. **A bench that has never been
+seen to fail is not evidence.** Verilator also caught the first mutation attempt
+on its own -- deleting the BUSY term entirely left `DDRAM_BUSY` unused -- which
+is a second net worth keeping in mind.
+
+**LATENCY IS MEASURED, NOT ASSUMED.** `dbg_lat_last`/`dbg_lat_max` count clk
+cycles from request to data. Nothing about which consumers can move to DDR3
+should be decided until the board reports those under HPS load: SDRAM's round
+trip is 13 cycles at 100 MHz, and if DDR3 is far worse then only the framebuffer
+moves and the low-latency consumers stay where they are.

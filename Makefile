@@ -637,6 +637,14 @@ obj_raster_fill/Vm2_raster_fill: rtl/video/m2_raster_fill.sv rtl/video/m2_raster
 	$(VBUILD) --top-module m2_raster_fill -Wno-UNUSEDSIGNAL -Wno-WIDTHTRUNC -Wno-TIMESCALEMOD -Wno-UNUSEDPARAM --Mdir obj_raster_fill -o Vm2_raster_fill -CFLAGS "-O2" \
 	  rtl/video/m2_raster_fill.sv rtl/video/m2_raster_div.sv rtl/video/m2_recip_rom.sv sim/video/tb_m2_raster_fill.cpp
 
+test_m2_ddr3: obj_ddr3/Vm2_ddr3
+	@echo "== test m2_ddr3 (the DDR3 master, and that it honours BUSY)"
+	@./obj_ddr3/Vm2_ddr3 $(TEST_ARGS)
+
+obj_ddr3/Vm2_ddr3: rtl/mem/m2_ddr3.sv sim/mem/tb_m2_ddr3.cpp
+	$(VBUILD) --top-module m2_ddr3 -Wno-TIMESCALEMOD --Mdir obj_ddr3 -o Vm2_ddr3 -CFLAGS "-O2" \
+	  rtl/mem/m2_ddr3.sv sim/mem/tb_m2_ddr3.cpp
+
 test_m2_tile_fetch: obj_tile_fetch/Vm2_tile_fetch
 	@echo "== test m2_tile_fetch (the 2D tile word and glyph fetch)"
 	@./obj_tile_fetch/Vm2_tile_fetch $(TEST_ARGS)
