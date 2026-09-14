@@ -16535,3 +16535,40 @@ exactly the device. There is no margin at all, and two area estimates today were
 already wrong (12-bit 1/z, and R332's MLAB cost, which was ~380 ALM against
 ~100 predicted). If it does not fit, the candidates are NQ -- 1,792 quads
 observed against 2,048, with `qs_dropped` never once read -- or 15-bit 1/z.
+
+
+**R335 -- THE DEBUG STREAM HAD ONE FREE PHASE, NOT TWO, AND CLAIMING OTHERWISE
+CORRUPTED A RECORD THAT WAS ALREADY THERE.**
+
+R334 needed somewhere to stream 1/z. `tps_ph` is three bits, the `b_addr` chain
+visibly used phases 1-4, and the conclusion drawn was "6 and 7 are free". The
+`b_data` chain was not read to the end. It uses 0, 2, 3, 4, 5 **and 6**, and
+phase 6 appears a third time as its tag:
+
+```
+  0  R251   1  R251/'T'   2  R269/'V'   3  R255/'U'
+  4  R275/'Y'   5  R294 texel misses/'Z'   6  R294 texel WAIT/'z'
+  7  -- the only free one, and it falls through to the 'H' default tag
+```
+
+The new records were inserted at phase 6 and sat EARLIER in the ternary chain,
+so they silently replaced R294's texel-wait record. On the board this read as
+**all three bus-wait figures identical at 60.5%** -- geometry, glyph fetch and
+texels, which have never agreed -- and as 1/z values decoding to depths between
+5.8e-25 and 6.4e+37, because the decoder was reading `'Z'` records that are
+phase 5's texel-miss counts.
+
+Neither number described the design. Both were the instrumentation describing
+its own corruption.
+
+**WHAT TO DO INSTEAD:** grep `tps_ph == 3'd` across the WHOLE file and read the
+tag chain, which is where the collision is visible. Both b_addr and b_data are
+long ternaries and a new arm placed above an existing one wins silently. Phase 7
+now carries 1/z with its own tag `'Q'` (0x51); there are no free phases left, so
+the next telemetry needs a wider `tps_ph` or an eviction.
+
+**AND THE GENERAL POINT, which has now cost time twice today:** an
+instrumentation change can produce a convincing wrong measurement. The identical
+60.5% figures were the tell -- three independent counters do not agree to one
+decimal place. When a number changes shape rather than value, suspect the
+measurement before the design.

@@ -36,7 +36,7 @@ for line in open(sys.argv[1],errors='replace'):
     if p[0]=='C': C.append((a,d))
     elif p[0]=='H': H.append((a,d))
     elif p[0]=='T': T.append((a,d))     # R251: the light table
-    elif p[0]=='Z': Z.append((a,d))     # R334: {oz0,oz1} and {oz2,oz3}
+    elif p[0]=='Q': Z.append((a,d))     # R334: {oz0,oz1} and {oz2,oz3}, phase 7
     elif p[0]=='U': U.append((a,d))     # R255: the walk's own numbers
     elif p[0]=='V': V.append((a,d))     # R269: the glyph cache, per frame
     elif p[0]=='Y': Y.append((a,d))     # R275: the texture path, per frame

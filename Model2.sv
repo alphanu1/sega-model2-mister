@@ -4278,7 +4278,7 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	      : (tps_ph == 3'd3)                  ? {geo_nops, geo_walk_ops}        // R255: 'U' nops decoded : commands walked, last frame
 	      : (tps_ph == 3'd2)                  ? {cc_h_f, cc_m_f}                // R269: 'V' glyph cache hits : misses, last frame
 	      : (tps_ph == 3'd4)                  ? {tx_p_f, tx_m_f}                // R275: 'Y' textured pixels : texel misses, last frame
-	      : (tps_ph == 3'd6)                  ? {oz_d0, oz_d1}                 // R334: 1/z of vertices 0 and 1
+	      : (tps_ph == 3'd7)                  ? {oz_d0, oz_d1}                 // R334: 1/z of vertices 0 and 1 ('Q')
 	      : {r3d_ready_cyc[15:0], r3d_bands_done[7:0], r3d_hold[7:0]}),
 	// clip_dropped read 0 on hardware and the refusal count is the number that
 	// now moves, so it takes that byte. Between them: accepted, emitted, refused
@@ -4353,14 +4353,15 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	      : (tps_ph == 3'd2)                  ? {cc_f_f, vid_ovr_frame}         // R269: sibling fills : scanlines that overran, last frame
 	      : (tps_ph == 3'd4)                  ? {tx_h_f, tx_n_f}                // R275: texel hits : texels that were not 0xF
 	      : (tps_ph == 3'd5)                  ? {tx_m_f, tex_sweep}             // R294 texel misses; R310 whole-cache sweeps
-	      : (tps_ph == 3'd6)                  ? {oz_d2, oz_d3}                 // R334: 1/z of vertices 2 and 3
+	      : (tps_ph == 3'd7)                  ? {oz_d2, oz_d3}                 // R334: 1/z of vertices 2 and 3 ('Q')
 	      : (tps_ph == 3'd6)                  ? {bwl_tex[20:5], 16'd0}          // R294: texel fetch waiting
 	      : {lum_mean_f, lum_zpc_f, wedge_slot, wedge_n[6:0], r3d_quads[11:4]}),   // R249: the frame's mean luminance and its black-polygon percentage, where the always-zero drop count and the free-running miss count were
 	.a_tag(8'h43),
 	.b_tag((wedge_have && wedge_ph == 2'd1) ? 8'h57 : (wedge_have && wedge_ph == 2'd2) ? 8'h58
 	     : sw_pend ? 8'h53 : (tps_ph == 3'd1) ? 8'h54 : (tps_ph == 3'd3) ? 8'h55
 	     : (tps_ph == 3'd2) ? 8'h56 : (tps_ph == 3'd4) ? 8'h59
-	     : (tps_ph == 3'd5) ? 8'h5A : (tps_ph == 3'd6) ? 8'h7A : 8'h48),   // 'W','X','S','T','U','V','Y','Z','z' (R294),'H'          // 'C' copro in_pushed:out_pushed | TGP retires:pc
+	     : (tps_ph == 3'd5) ? 8'h5A : (tps_ph == 3'd6) ? 8'h7A
+	     : (tps_ph == 3'd7) ? 8'h51 : 8'h48),   // R334: 'Q' is 1/z, phase 7 -- the ONLY free phase   // 'W','X','S','T','U','V','Y','Z','z' (R294),'H'          // 'C' copro in_pushed:out_pushed | TGP retires:pc
 	                                       // 'H' out_popped:hscr2 | io_addr:flags
 	                                       // 'H' scroll h:v for layers 0,1 | layers 2,3 -- low bytes
 	                                       // '0' map0 min|max : sum
