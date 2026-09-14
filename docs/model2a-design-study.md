@@ -16763,3 +16763,60 @@ carries a guard that every group was actually reached. 52 checks against 33.
 more cycles per group in the walk. `m2_raster_div` does not pipeline and the
 walk owns the beam deadline, so `ready ms`, bands-completed and the overrun
 count are what say whether this was affordable. ALM is the cheap part.
+
+**R340 -- THE HARDWARE HOLDS THE LAST RENDERED FRAME, AND THIS CORE CANNOT.
+A DDR3 FRAMEBUFFER IS THE ACCURATE SHAPE, AND IT IS NOT RULED OUT.**
+
+Ben: "if thats what teh original hardware does it teh correct mode as we are
+tyring to be cycle accurate". Correct, and the objection raised against it --
+that MAME's structure is not the hardware's -- was over-applied.
+
+`model2_v.cpp`, `render_polygons`:
+
+```c
+  // if the geometrizer hasn't presented a new frame, just copy the previous
+  // frame and bail
+  if (m_render_done) { copybitmap_trans(bitmap, m_renderer->destmap(), ...); return; }
+```
+
+The reference keeps a PERSISTENT rendered bitmap and redisplays it when nothing
+new has arrived. **That is observable behaviour, not pipeline structure**, and
+observable behaviour is the half MAME models faithfully -- the study's rule
+about MAME not being an RTL pipeline is about cycle counts and handshakes, and
+citing it here was wrong.
+
+This core instead RE-RENDERS IDENTICAL PIXELS on a held frame, because the band
+buffers are a rolling window of NBUF bands and there is nowhere to keep a
+result. The `hold` telemetry reads 0, 1 and 2 extra frames per list, so it
+happens constantly.
+
+**WHY BANDS WERE CHOSEN, AND WHY IT DOES NOT RULE OUT DDR3.** Model 1's D3, in
+`m1_raster_band.sv`: "A full framebuffer at 16bpp is 3,047,424 bits, which is
+372 M10K of a 553-block device with 181 free -- **it does not fit and never
+did**." That is an ON-CHIP CAPACITY decision, explicitly, and not an accuracy
+one. **DDR3 is untouched by it**: a gigabyte, and this core uses none of it.
+`MISTER_FB` is present and commented out in `Model2.qsf`.
+
+**A FRAMEBUFFER NEED NOT ADD LATENCY, which was also got wrong here first.** Ben
+objected that it costs a frame of input lag, and that is true only if the
+previous frame is shown UNCONDITIONALLY. Scanning out the current frame when the
+render finished in time, and holding the previous when it did not, costs nothing
+in the good case and degrades to a held frame -- which is what the reference
+does -- instead of the torn picture a missed deadline gives today.
+
+```
+  band buffers freed     24 M10K, at 553/553 the resource blocking everything
+  the beam deadline      removed; overruns and dropouts stop being POSSIBLE
+  latency                unchanged when the frame is ready in time
+```
+
+**IT DOES NOT MAKE THE CURRENT WORK REDUNDANT.** The correctness fixes (R326,
+R339, R333) are independent of buffering, and ~1,600 textured quads still have
+to be rendered in 16.7 ms, so the texel cache, burst lengths and clocks keep
+their value. What changes is the FAILURE MODE, which is what has been costing
+the picture all day.
+
+**NOT YET VERIFIED:** the silicon's buffering from a primary source. The flip
+exists -- the display list's ready write, and this core's own "Walk trigger:
+After flip" option depend on it -- but that is inference plus MAME, not a
+datasheet.
