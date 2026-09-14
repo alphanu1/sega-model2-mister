@@ -16105,3 +16105,45 @@ it was measured with the coordinate bug in place, so u and v advanced at half
 the correct rate and consecutive fetches landed closer together in texture space
 than they should. Some of that jump is the 1024-line cache and some is the bug,
 and the split is unknown until a corrected build runs.
+
+**R325 -- MOST BANDS AND TEXTURES NOW DRAW TOGETHER. The texture stall was the
+texel FETCH COST, and it took four changes compounding to break it.**
+
+Ben on build/char100b: "most bands and texture were there, only a few dropouts."
+Against "only 1 or 2 [bands], and flash on and off" two builds earlier, that is
+the first real movement on the fault R309 identified.
+
+What was in it, and what each contributed:
+
+    texel cache 512 -> 1024 lines (R322)   hit rate 42.4% -> 79.4%   the big one
+    PIXSTEP 2 -> 4 (R322)                  half the fetches per span
+    m2_texel -> clk_mem (R318)             ~10% faster per fetch, measured
+    m2_char_cache -> clk_mem (R320)        overruns 53 -> 34, less bus contention
+
+No single one of these moved the picture. R318 alone was ~1.1x against a gap of
+roughly 3x and Ben reported no visible change at all, correctly. Four together
+cleared it.
+
+*What this settles.* R309 said the texel fetch blocks every span behind it and
+R310 tried to absorb that with a queue, which failed because a queue takes
+BURSTS and this was a sustained rate mismatch. The answer was never buffering --
+it was making the fetches cheaper, by all of: fewer of them (PIXSTEP), more hits
+(cache size), and less time each (clock). R309's conclusion that "hit rate only
+changes how often the stall happens" was wrong on its own terms once the cost
+per fetch was the thing being attacked.
+
+*And a caveat on the headline number.* The 79.4% hit rate was measured WITH
+R323's coordinate bug in place, so u and v advanced at half the correct rate and
+consecutive fetches landed closer together in texture space than they should.
+Some of that jump is the larger cache and some is the bug. The corrected build
+will read lower, and the fetch-cost win shrinks with it.
+
+*On PIXSTEP and how far it can go.* The cost is not uniform "blockiness". One
+texel is written across N pixels, so the loss is zero wherever the texture is
+already magnified by N or more, and severe where it is minified. In a driving
+game that splits by DISTANCE: the road under the camera is magnified far beyond
+8 and loses nothing, while the far road and horizon detail are minified and lose
+the most. If 8 looks wrong it will look wrong in the distance first. `du_r` is
+the per-step gradient and instrumenting its magnitude would give the actual
+magnification distribution, which would settle 4-vs-8 with a number instead of
+an opinion.
