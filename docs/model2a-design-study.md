@@ -16854,3 +16854,57 @@ come back when there is area for them.
 and 24 M10K; those blocks let R332 reverse for ~380 ALM more; and the framebuffer
 is what the hardware does anyway (R340). Shaving for 451 ALM is scraps against
 that, and the one attempt at it went backwards.
+
+**R343 -- THE FRAMEWORK ALREADY DOES THE HARD HALF OF THE DDR3 FRAMEBUFFER.**
+
+The scanout was named as the risky part of R340 -- a DDR3 stall mid-scanline is
+a torn line, worse than a dropped band. Ben: "when you rotate teh screen fot
+tate games it uses DDR3 as a buffer and teher esi no stalls. so thi smust have
+been accounted for in teh framewoirk". It has been.
+
+`sys/arcade_video.v` holds `screen_rotate`: it takes a video stream, WRITES it
+into DDR3 over `DDRAM_CLK/BUSY/BURSTCNT/ADDR/DIN/BE/WE`, and raises `FB_EN` with
+`FB_BASE/WIDTH/HEIGHT/FORMAT/STRIDE`. **The framework then scans out of DDR3
+itself**, through `vbuf_*` in `sys_top.v`. So the beam-starvation problem is
+solved by code that ships on every rotated arcade core, and this project does
+not have to solve it.
+
+`Model2.sv` line 34 currently ties the whole port off:
+
+```systemverilog
+assign {DDRAM_CLK, DDRAM_BURSTCNT, DDRAM_ADDR, DDRAM_DIN, DDRAM_BE, DDRAM_RD, DDRAM_WE} = '0;
+```
+
+**BUT screen_rotate CANNOT BE DROPPED IN, and the reason is the whole point of
+the change.** It buffers the VIDEO OUTPUT -- an already-rasterised scan-order
+stream. Using it with `no_rotate` would still require the core to generate that
+stream every video frame, so the band buffers, the beam pacing and the
+re-rendering of held frames all remain, and the only result is a frame of added
+latency. The saving comes from the FILL writing pixels into DDR3 directly, once
+per list, in span order rather than scan order.
+
+```
+  screen_rotate : fill -> bands -> mixer -> video -> DDR3 -> scanout   (no saving)
+  what is wanted: fill -> DDR3 -> scanout                              (no bands, no deadline)
+```
+
+So the split is: **the scanout is the framework's, the write master is ours**,
+with `screen_rotate` as the worked example of bursting into DDR3 beside the HPS
+on this port. A consequence worth knowing early: the framework's FB path fixes
+the buffer layout, so the pixel format, stride and base are decided for us.
+
+**WHAT COMES OUT, MEASURED from build/mlab/s14 rather than estimated:**
+
+```
+  3 x m2_raster_band            223 ALM   24 M10K   removed outright
+  m2_raster3d's own glue        119 ALM             the band sequencer and rotation;
+                                                    most of it goes, span plumbing stays
+  m2_quad_store               1,385 ALM  123 M10K   the BINNING is in here and is not
+                                                    isolable without doing the work
+```
+
+with the 24 M10K letting R332 reverse for ~380 ALM more. Against a write master
+of perhaps 200-400, the net is plausibly +280 to +480 ALM and +19 M10K -- around
+what the parked perspective work needs. **Every figure there is an estimate, and
+four estimates today were wrong in the same direction, so the fit report decides
+it and not this paragraph.**
