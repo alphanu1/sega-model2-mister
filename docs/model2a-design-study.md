@@ -17232,3 +17232,43 @@ pixels wrong.
 
 Mutation-tested: making the line address use the burst length instead of the
 stride fails 4 checks; never handing the filled buffer to the mixer fails 5.
+
+**R351 -- THE FIRST DDR3 TRANSACTION ON REAL HARDWARE: THE PROTOCOL WORKS, THE
+ADDRESS WAS IN THE WRONG UNITS, AND ONLY THE BOARD COULD SAY SO.**
+
+R346's self-test, on the board:
+
+```
+  self-test COMPLETE, 256 mismatches of 256
+  round trip: last 13 cycles, worst 50     (SDRAM is 13; the docs say ~20)
+  the core itself alive: tgp 030B, 1,315 walks, framewait 37.4%
+```
+
+**Every word wrong, and the timing entirely plausible.** The transactions were
+real -- issued, accepted, and answered in 130 ns typical and 500 ns worst, which
+brackets the ~200 ns R347 quotes. They simply went nowhere.
+
+`DDRAM_ADDR` indexes 64-BIT WORDS; the byte address is `ADDR * 8`. `BASE` was
+set to `29'h0800_0000` meaning "0x08000000", which as a word address is **byte
+0x40000000 -- one gigabyte, past the end of the memory.** It is now
+`29'h0600_0000`, byte 0x30000000, above the three 8 MB framebuffers
+screen_rotate places at 0x24000000.
+
+**THE MODULE HEADER SAID "a 64-BIT WORD address, not a byte address" AND THE
+PARAMETER TWELVE LINES BELOW IT WAS IN BYTES.** Writing the warning down is not
+the same as heeding it.
+
+**WHY NO BENCH COULD HAVE CAUGHT THIS.** Four modules, 66 checks, four real
+bugs found -- every one of them against a DDRAM model written from reading
+`screen_rotate`. A model has no notion of which addresses exist, so it answered
+0x40000000 as readily as any other. This is the same shape as the affine
+texture fault, where `tb_m2_raster_fill` passed 150,000 quads while the picture
+was 688 texels wrong, because the C reference and the RTL shared one
+misunderstanding. **A bench cannot check an assumption it inherits.**
+
+**WHAT THE MEASUREMENT IS WORTH ANYWAY.** The round trip is REAL even though the
+data was not -- the bridge accepted, delayed and answered. 13 cycles typical and
+50 worst at 100 MHz is 130 ns and 500 ns, against SDRAM's 13. That is the first
+figure for this board rather than from documentation, and it says the
+framebuffer is comfortable: a 248-beat line burst is ~2.6 us against ~30 us of
+slack, so even the 500 ns tail is under 2% of the budget.

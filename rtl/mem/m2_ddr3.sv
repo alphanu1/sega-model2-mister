@@ -40,10 +40,22 @@
 `timescale 1ns/1ps
 
 module m2_ddr3 #(
-  // Where this core's region starts, as a 64-bit word address. The framework's
-  // own buffers live low; screen_rotate uses 0x24000000 upward for three 8 MB
-  // framebuffers, so this sits clear of it.
-  parameter logic [28:0] BASE = 29'h0800_0000
+  // R351: A 64-BIT WORD ADDRESS, AND THE FIRST VALUE HERE WAS IN BYTES.
+  //
+  // DDRAM_ADDR indexes 64-BIT WORDS: the byte address is ADDR * 8. This was set
+  // to 29'h0800_0000 meaning "0x08000000", which as a word address is BYTE
+  // 0x40000000 -- one gigabyte, past the end of the memory. The board reported
+  // it exactly: the self-test completed, the round trip measured a plausible
+  // 13 cycles typical and 50 worst, and ALL 256 WORDS CAME BACK WRONG. The
+  // transactions were real; they just went nowhere.
+  //
+  // screen_rotate puts three 8 MB framebuffers at byte 0x24000000 upward, so
+  // this sits above them at byte 0x30000000 = word 0x0600_0000.
+  //
+  // The module header said "a 64-BIT WORD address, not a byte address" while
+  // this parameter was set in bytes, which is worth remembering: writing the
+  // warning down is not the same as heeding it.
+  parameter logic [28:0] BASE = 29'h0600_0000
 ) (
   input  logic        clk,
   input  logic        rst_n,
