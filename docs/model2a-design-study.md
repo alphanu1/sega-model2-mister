@@ -16278,3 +16278,29 @@ headroom on an estimate before reading the curve is precisely how R304 and R307
 both went the wrong way. The size is set at the INSTANTIATION in m2_raster3d,
 not in the module -- m2_texel's default was never overridden, which is the char
 cache's trap seen from the other side and just as easy to miss.
+**R329 -- PORTS 8 AND 9 BURST TWO. THE UNIFORMITY RULE WAS STALE.** Both
+consume 32 bits (`tgp_tbl_rdata_r <= p_dout[8][31:0]`, `tgp_dat_rdata_r <=
+p_dout[9][31:0]`), so words 2 and 3 were fetched and discarded on every lookup.
+
+A row-hit read is 13 cycles: S_IDLE + S_SEL + S_DISPATCH = 3, one CAS per word,
+then cap_depth = 6 from the last CAS to the acknowledge. At blen 2 it is 11.
+**15% off a read the coprocessor BLOCKS the TGP on**, and two CAS slots per
+lookup returned to every other master.
+
+What R108 forbade and why it no longer applies: a transaction granted while
+another is issuing overwrites the single global `rd_total`, and `tag_last` is
+then computed against the wrong count -- silent cross-port corruption. `rd_total`
+is written at exactly two places, **both inside S_IDLE**, and the FSM does not
+return to S_IDLE until `rd_issued + 1 == rd_total`. It cannot be in S_IDLE and
+S_RD at once. The window is structurally closed.
+
+R296 made this change and was reverted with it. Its 3,407 bench failures were
+**all on words 2 and 3 of ports 8 and 9, with no other port affected** -- which
+is the bench's own `burst_of()` mirror still returning 4, not cross-port
+corruption. The mirror is fixed here in the same change: `tb_m2_sdram` now reads
+106,898 checks, 0 fails, 0 violations, 0 tag faults.
+
+Alignment is not a constraint: S_RD issues one C_READ per cycle and walks the
+column itself, so the device is in BL=1 and there is no burst boundary. Port 9's
+odd `tgp_dat_half_r` start gets {addr, addr+1}, which is what it asked for.
+Port 10 keeps four -- `tex_m_data = p_dout[10]` uses all 64 bits.

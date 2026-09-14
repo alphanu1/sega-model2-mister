@@ -231,7 +231,35 @@ module m2_sdram #(
       // EARLIER one completes early with zeros above the words that arrived.
       // Not on the new port: on whichever port was mid-transaction. Silent
       // cross-port corruption, from a line nobody would have looked at.
-      8, 9, 10: blen = 4'd4;
+      // R329: 8 AND 9 BURST TWO, WHICH IS WHAT THEY ACTUALLY CONSUME.
+      //
+      // Both take 32 bits -- Model2.sv's `tgp_tbl_rdata_r <= p_dout[8][31:0]`
+      // and `tgp_dat_rdata_r <= p_dout[9][31:0]` -- so words 2 and 3 were
+      // fetched and thrown away on every lookup. A row-hit read costs
+      // S_IDLE + S_SEL + S_DISPATCH (3) + one CAS per word + cap_depth (6), so
+      // this takes 13 cycles to 11: 15% off a read the COPROCESSOR BLOCKS ON,
+      // and two CAS slots per lookup handed back to every other master.
+      //
+      // THE UNIFORMITY RULE ABOVE IS STALE, and this is the evidence. The
+      // defect it guards against is `rd_total` being overwritten by a
+      // transaction granted while another is still issuing. `rd_total` is
+      // written at exactly two places, BOTH INSIDE S_IDLE, and the FSM does not
+      // return to S_IDLE until `rd_issued + 1 == rd_total`. It cannot be in
+      // S_IDLE and S_RD at once, so nothing can be granted mid-burst and the
+      // window is structurally closed. R296 tried this and the 3,407 bench
+      // failures were all on words 2 and 3 OF PORTS 8 AND 9 -- the bench's own
+      // burst_of() mirror still saying four -- with NO OTHER PORT AFFECTED,
+      // which is the cross-port corruption the rule exists to prevent.
+      //
+      // Alignment is not a constraint here: S_RD issues one C_READ per cycle
+      // and walks the column itself, so the device is in BL=1 and there is no
+      // burst boundary to align to. Port 9's odd `tgp_dat_half_r` start is
+      // fine -- it gets {addr, addr+1}, which is what it asked for.
+      //
+      // 10 IS THE TEXEL FETCH AND KEEPS FOUR: `tex_m_data = p_dout[10]` uses
+      // all 64 bits, one cache line, eight texels.
+      8, 9:  blen = 4'd2;
+      10:    blen = 4'd4;
       default: blen = 4'd1;
     endcase
   endfunction

@@ -49,7 +49,12 @@ static const int NP = 11;   // R275: the texel fetch made eleven
 // see the blen() comment in m2_sdram.sv. A port with a different length
 // corrupts other ports' data through the shared rd_total, which is exactly
 // what ten active ports found the moment 8 and 9 asked for pairs.
-static int burst_of(int p) { (void)p; return 4; }
+// R329: PORTS 8 AND 9 BURST TWO. This mirror said 4 for every port, and when
+// R296 first made this change its 3,407 "failures" were all this line being
+// stale -- every one on word 2 or 3 of port 8 or 9, and no other port touched.
+// A mirror that does not track blen() reports the bench as broken instead of
+// the RTL, which is how a correct change got reverted once already.
+static int burst_of(int p) { return (p == 8 || p == 9) ? 2 : 4; }
 
 struct Harness {
   Vm2_sdram_harness* d;
