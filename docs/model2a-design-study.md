@@ -17159,3 +17159,35 @@ Mutation-tested: making the head write use BE 0xFF instead of 0xF0 -- clobbering
 its neighbour -- fails three checks. Reverting the address latch does not build
 at all, because `addr_r` goes unused; the linter is a second net and caught the
 same class of thing on m2_ddr3's first mutation.
+
+**R349 -- DO NOT FIT TWO PROJECTS AT ONCE ON THIS MACHINE. FIVE BUILDS LOST TO
+IT IN ONE DAY.**
+
+Every mid-fit termination today happened while the Model 1 project was fitting
+on the same machine. Five separate builds, all `Terminated` (SIGTERM, not a
+Quartus internal error), all at the placement or routing peak, none with an
+error in the log:
+
+```
+  build/oz     3 seeds   killed  } Model 1 fitting alongside, four seeds each time
+  build/persp  2 seeds   killed  }
+  build/ddr1   3 seeds   killed  }
+  build/ddr1   2 seeds   killed  } six concurrent fits, 10 GB left of 31
+```
+
+A Model 2 fit peaks around 2.5-4.6 GB and this design is at 41,300 of 41,910
+ALM, so four Model 1 fits plus two or three of ours exhausts a 31 GB machine at
+the moment both hit placement. Nothing in the logs says so -- the process is
+simply gone -- which is why it took five occurrences to see the pattern.
+
+**THIS IS SEPARATE FROM THE SEED CRASHES.** Seven seeds today died with genuine
+Quartus internal errors (DYN, CUT, STA subsystems) and three more fitted with
+healthy slack and did not run on the board (R330, R344). Those are the fitter
+and the placement being unreliable. The terminations are the MACHINE, and the
+remedy is scheduling rather than seeds:
+
+* **never fit both projects concurrently**; wait for the other to finish,
+* **three seeds a batch, maximum** (Ben's instruction, and it holds),
+* and a build guard that waits for a clear machine is worth the wall-clock it
+  appears to cost -- one was written today and abandoned as over-cautious, and
+  four builds died afterwards.
