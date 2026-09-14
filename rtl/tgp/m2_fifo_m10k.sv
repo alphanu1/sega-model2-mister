@@ -33,7 +33,28 @@
 
 module m2_fifo_m10k #(
   parameter int unsigned DW    = 32,
-  parameter int unsigned DEPTH = 128           // must be a power of two
+  parameter int unsigned DEPTH = 128,          // must be a power of two
+  // R332: WHICH MEMORY THIS LANDS IN, PER INSTANCE.
+  //
+  // Four instances share this module and only one wants MLAB: an MLAB is 32
+  // words x 20 bits (~10 ALM), so DEPTH is what decides, not DW. The span
+  // queue is DEPTH 32 -- exactly one MLAB row -- and costs 5 M10K as block
+  // memory; at 186 bits it is ceil(186/20) = 10 MLABs, about 100 ALM, and the
+  // 5 blocks are what the perspective divide (R331) is short by.
+  //
+  // The other three are DEPTH 128 and must stay M10K: 128 deep is four MLAB
+  // rows, so the copro's two 32-bit FIFOs would cost ~80 ALM each to save one
+  // block apiece, and m2_geo's 52-bit pushq ~120 ALM for one. Editing the
+  // attribute directly instead of parameterising it would have made all four
+  // move -- which is the direction that costs ALM and saves nothing.
+  // The linter does not read the attribute below, so this looks unused to it
+  // -- a comment must not START with that tool's name or it is taken as a
+  // pragma, which has cost this project a build already.
+  // It also means ONLY THE QUARTUS RAM SUMMARY can confirm the style took;
+  // no local test can.
+  /* verilator lint_off UNUSEDPARAM */
+  parameter RAMSTYLE = "M10K"
+  /* verilator lint_on UNUSEDPARAM */ 
 ) (
   input  logic          clk,
   input  logic          rst_n,
@@ -52,7 +73,7 @@ module m2_fifo_m10k #(
 
   localparam int unsigned AW = $clog2(DEPTH);
 
-  (* ramstyle = "M10K" *) logic [DW-1:0] mem [DEPTH];
+  (* ramstyle = RAMSTYLE *) logic [DW-1:0] mem [DEPTH];
 
   logic [AW-1:0] wp, rp;
   logic [AW:0]   mem_cnt;                      // words in the ARRAY, not the head

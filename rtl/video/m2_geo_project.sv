@@ -89,6 +89,17 @@ module m2_geo_project (
   output logic        out_valid,
   output logic signed [31:0] out_sx, out_sy,   // pixels
   output logic [31:0] out_z,                   // passed through, for the sort
+  // R331: THE RECIPROCAL, KEPT INSTEAD OF THROWN AWAY.
+  //
+  // This module already computes 1/z per vertex -- a 29-cycle fp_div, the
+  // throughput limit of the whole projector -- and uses it for x*(1/z) and
+  // y*(1/z). It then discarded it, and R274 costed the perspective divide as
+  // though it would have to be built. It does not: the expensive part is paid
+  // here already and the texture path only has to be handed the answer.
+  //
+  // Zero when the vertex is behind the eye, because the float chain was never
+  // run for it (see r_behind); such a quad is culled before the fill sees it.
+  output logic [31:0] out_invz,
   output logic        out_behind                // z <= 0: the (0,0) case
 );
 
@@ -184,7 +195,7 @@ module m2_geo_project (
       sx_in <= '0; sy_in <= '0; sr <= '0; sxx <= '0; syy <= '0;
       sx_f <= '0; sy_f <= '0; s_behind <= 1'b0; s_z <= '0;
       step <= '0; n_got <= '0;
-      out_valid <= 1'b0; out_sx <= '0; out_sy <= '0; out_z <= '0;
+      out_valid <= 1'b0; out_sx <= '0; out_sy <= '0; out_z <= '0; out_invz <= '0;
       out_behind <= 1'b0;
     end else begin
       out_valid <= 1'b0;
@@ -269,6 +280,7 @@ module m2_geo_project (
           out_sx     <= s_behind ? 32'sd0 : sx_i;
           out_sy     <= s_behind ? 32'sd0 : sy_i;
           out_z      <= s_z;
+          out_invz   <= sr;                  // R331: 1/z, alongside z
           out_behind <= s_behind;
           out_valid  <= 1'b1;
           sst        <= S_IDLE;

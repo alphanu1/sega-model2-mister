@@ -212,6 +212,8 @@ module m2_geometry (
   logic        pj_ready, pj_out_valid, pj_behind;
   logic [31:0] pj_out_z;
   logic signed [31:0] pj_out_sx, pj_out_sy;
+  // R331: 1/z for this vertex, which the projector already computed.
+  logic [31:0]        pj_out_invz;
 
   logic        w_pj_valid;                 // the quad projector below
   logic [31:0] w_pj_x, w_pj_y, w_pj_z;
@@ -282,7 +284,7 @@ module m2_geometry (
     .div_req(div_req[3]), .div_a(div_a[3]), .div_b(div_b[3]),
     .div_gnt(div_gnt[3]), .div_rsp(div_rsp[3]), .div_res(div_res),
     .out_valid(pj_out_valid), .out_sx(pj_out_sx), .out_sy(pj_out_sy),
-    .out_z(pj_out_z), .out_behind(pj_behind)
+    .out_z(pj_out_z), .out_invz(pj_out_invz), .out_behind(pj_behind)
   );
 
   // --------------------------------------------------- the quad projector

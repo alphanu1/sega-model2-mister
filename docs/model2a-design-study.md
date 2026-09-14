@@ -16340,3 +16340,77 @@ out the whole class. Only bisect once two seeds agree.
 Corollary for seed selection: positive hold is necessary and NOT sufficient.
 s31 runs correctly at hold -0.070 while s13 fails at +0.241, so the summary
 numbers rank placements they cannot actually judge. The board decides.
+
+**R331 -- THE PERSPECTIVE DIVIDE, MEASURED BEFORE IT IS BUILT. 1/z NEEDS
+SIXTEEN BITS, NOT TWELVE.**
+
+Two findings, both from a C model of MAME's uoz/voz/ooz formulation against
+ground quads running to the horizon (the Daytona road case), before any RTL.
+
+**THE AFFINE ERROR, QUANTIFIED.** R274 said the texture "will swim". It does
+rather more than that -- on a texture 256 texels across:
+
+```
+  depth ratio across the quad     affine error
+        4:1                          36 texels
+       10:1                         130 texels
+       40:1                         688 texels
+      100:1                       1,408 texels
+```
+
+688 texels of error on a 256-texel sheet is the texture wrapping several times
+across one polygon, which is exactly Ben's "wrong orientation, at least on the
+scenery" and exactly why the car looks right and the ground does not: the error
+scales with foreshortening.
+
+**THE FIELD WIDTH, AND A WRONG ESTIMATE CAUGHT AT THE DESK.** Holding u/z at
+today's 13 bits and sweeping the new 1/z field:
+
+```
+  18 bits   0.39 texels      14 bits    1.24 texels
+  16 bits   0.35 texels      12 bits   16.1  texels   <- what was proposed
+                             10 bits   78    texels
+```
+
+**12 bits was argued for on a screen-size hand-wave and would have shipped a
+visibly wrong picture.** The reason the hand-wave fails: the error scales with
+the DEPTH RATIO WITHIN A QUAD, not with screen size, because a per-quad
+normalisation is what makes the fixed point work at all and the smallest 1/z in
+a quad is `ratio` times below the largest. u/z stays at 13 (0.017 to 0.63).
+
+So the cost is R274's original figure exactly, and the attempt to talk it down
+was wrong:
+
+```
+  UW 128 -> 192 bits  = 4 x (13 u/z + 13 v/z + 16 ooz) + 24 tex
+  2048 x 192 = 39 M10K per bank, x2 banks = 78 against 52   ->  +26 M10K
+```
+
+**THE EXPENSIVE PART IS ALREADY PAID.** m2_geo_project computes 1/z per vertex
+-- a 29-cycle fp_div, the projector's throughput limit -- for x*(1/z) and
+y*(1/z), then discarded it. It is exported as `out_invz` now. R274 costed this
+as though the reciprocal had to be built; it did not.
+
+MAME converts AFTER clipping (model2_v.cpp, in model2_3d_render, per final
+vertex), because the clipper interpolates raw pu/pv in view space while u/z is
+linear in SCREEN space. Converting earlier would make the clipper wrong.
+
+**R332 -- THE SPAN QUEUE MOVES TO MLAB, WHICH R331 MAKES A PREREQUISITE.**
+21 M10K are free and R331 needs 26. An MLAB is 32 words x 20 bits (~10 ALM), so
+DEPTH decides, not width: the span queue is DEPTH 32 -- one MLAB row -- and
+186 bits wide after R327's narrowing, so ceil(186/20) = 10 MLABs, about 100 ALM,
+releasing the 5 blocks that close the gap. It is cheap only BECAUSE of R327; at
+242 bits it would have been 13 MLABs.
+
+The style is a per-instance PARAMETER, not an edit to the shared attribute.
+Four instances use m2_fifo_m10k and the other three are DEPTH 128, where MLAB
+costs ~80-120 ALM each to save one block apiece -- editing the attribute
+directly would have moved all four, the direction that spends ALM and saves
+nothing.
+
+**NO LOCAL TEST CAN CONFIRM THIS.** The linter does not read the attribute, so
+the parameter reads as unused and had to be waived; only the Quartus RAM Summary
+says where the array landed. Check it in the fit report before believing the 5
+blocks exist. (The waiver comment also had to be reworded: a comment beginning
+with that tool's name is parsed as a pragma, which this project has already paid
+for once.)

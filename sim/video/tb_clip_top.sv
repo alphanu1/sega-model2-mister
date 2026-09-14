@@ -75,7 +75,7 @@ module tb_clip_top (
     .div_req(div_req[0]), .div_a(div_a[0]), .div_b(div_b[0]),
     .div_gnt(div_gnt[0]), .div_rsp(div_rsp[0]), .div_res(div_res),
     .out_valid(pj_out_valid), .out_sx(pj_out_sx), .out_sy(pj_out_sy),
-    .out_z(pj_out_z), .out_behind(pj_behind)
+    .out_z(pj_out_z), .out_invz(), .out_behind(pj_behind)   // R331
   );
 
   m2_geo_clip u_clip (

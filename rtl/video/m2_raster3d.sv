@@ -272,7 +272,10 @@ module m2_raster3d #(
   // so back-to-back pops only occur while the queue DRAINS -- which is when it
   // is doing its job, and where a flat span's throughput halves. Watch it; do
   // not assume it is free.
-  m2_fifo_m10k #(.DW(SQ_DW), .DEPTH(32)) u_span_q (
+  // R332: MLAB, not M10K. DEPTH 32 is exactly an MLAB's native depth, and the
+  // 5 block-RAM tiles this releases are what R331's quad store is short by.
+  // Verify it took: the fit report's RAM Summary must say MLAB for this array.
+  m2_fifo_m10k #(.DW(SQ_DW), .DEPTH(32), .RAMSTYLE("MLAB")) u_span_q (
     .clk(clk), .rst_n(rst_n),
     .push(fl_span_valid && sq_in_rdy), .din(sq_din),
     .pop(sq_qv && sq_rdy), .q(sq_q), .q_valid(sq_qv),
