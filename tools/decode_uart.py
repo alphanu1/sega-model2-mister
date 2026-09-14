@@ -22,6 +22,7 @@ import sys,collections
 C=[];H=[];W=[];SW=[]
 T=[]     # R251: light-table records
 Z=[]     # R334: 1/z per vertex, as 16-bit minifloats (phase 6)
+D=[]     # R346: DDR3 self-test -- latency and mismatches
 U=[]     # R255: walk records
 V=[]     # R269: glyph cache records
 Y=[]     # R275: texture records
@@ -37,6 +38,7 @@ for line in open(sys.argv[1],errors='replace'):
     elif p[0]=='H': H.append((a,d))
     elif p[0]=='T': T.append((a,d))     # R251: the light table
     elif p[0]=='Q': Z.append((a,d))     # R334: {oz0,oz1} and {oz2,oz3}, phase 7
+    elif p[0]=='D': D.append((a,d))     # R346: DDR3, phase 8
     elif p[0]=='U': U.append((a,d))     # R255: the walk's own numbers
     elif p[0]=='V': V.append((a,d))     # R269: the glyph cache, per frame
     elif p[0]=='Y': Y.append((a,d))     # R275: the texture path, per frame
@@ -156,6 +158,19 @@ def mf16(v):
     if e == 0: return 0.0
     m = 1.0 + ((v & 0xff) / 256.0)
     return m * (2.0 ** (e - 127))
+
+if D:
+    # R346: the question every DDR3 decision rests on -- what does a round trip
+    # actually cost here, with the HPS competing? SDRAM's is 13 cycles.
+    a, d = D[-1]
+    last, mx = (a >> 16) & 0xffff, a & 0xffff
+    err, done, reads = (d >> 16) & 0xffff, (d >> 8) & 1, d & 0xff
+    print('DDR3 (R346): self-test %s, %d mismatches of 256'
+          % ('COMPLETE' if done else 'still running', err))
+    print('    round trip: last %d cycles, worst %d   (SDRAM is 13 at 100 MHz)' % (last, mx))
+    print('    reads acknowledged: %d (low byte)' % reads)
+    if mx == 0:
+        print('    (zero = no read ever completed: the master is not talking to DDR3)')
 
 if Z:
     # R334: 1/z per vertex. Sanity, not accuracy -- these should be small

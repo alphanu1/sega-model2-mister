@@ -17027,3 +17027,46 @@ cycles from request to data. Nothing about which consumers can move to DDR3
 should be decided until the board reports those under HPS load: SDRAM's round
 trip is 13 cycles at 100 MHz, and if DDR3 is far worse then only the framebuffer
 moves and the low-latency consumers stay where they are.
+
+**R346 -- THE DDR3 SELF-TEST. Ask the board what a round trip costs before
+anything depends on the answer.**
+
+`Model2.sv` line 34 used to read:
+
+```systemverilog
+assign {DDRAM_CLK, DDRAM_BURSTCNT, DDRAM_ADDR, DDRAM_DIN, DDRAM_BE, DDRAM_RD, DDRAM_WE} = '0;
+```
+
+-- a gigabyte, handed over by the framework and thrown away. R345's master now
+drives it, and a self-test writes 256 words, reads them back and reports
+mismatches and LATENCY on the debug stream. **Nothing depends on DDR3 yet**, so
+a fault here costs a counter reading rather than a picture.
+
+**THE PATTERN IS A FUNCTION OF THE ADDRESS** -- `{A5000000|i, 5A000000|i}` --
+because a fixed pattern cannot tell a wrong ADDRESS from a right one. Every word
+would match while the master read the same location 256 times.
+
+**WHY THIS COMES FIRST.** The plan for DDR3 -- moving the I/O firmware ROM
+(16 M10K), the sound ROMs and samples (freeing SDRAM ports 5, 6, 7 and
+narrowing the arbiter from eleven ports to eight), then the framebuffer -- rests
+entirely on DDR3 latency being tolerable for those consumers. That number has
+been quoted here as "~200-300 ns" and **it was inferred from how other cores
+behave, not measured.** SDRAM's round trip is 13 cycles at 100 MHz.
+
+```
+  comparable    -> the I/O ROM and sound move; 16 M10K and three ports freed
+  much worse    -> only the framebuffer moves, where the framework scans out
+                   and latency does not reach the beam
+```
+
+**tps_ph WIDENED TO FOUR BITS (R335 saw this coming).** All eight phases were
+taken -- 0-6 by R251/R255/R269/R275/R294 and 7 by R334's 1/z -- so there was
+nowhere to report. Sixteen phases means each is visited half as often, halving
+every record's sample rate; they are per-frame counters read as medians across a
+capture, so that is affordable where no slot at all is not. Phase 8 is `'D'`.
+
+**A BUILD TRAP WORTH RECORDING.** `m2_ddr3.sv` was first added to `files.qip`
+and lint still could not find the module: `LINTTOP_RTL` greps **Model2.qsf**,
+which also `source`s files.qip. A file listed only in the qip is compiled by
+Quartus but invisible to the lint, so **lint_top would have passed a file the
+fitter never saw, or vice versa.** New RTL goes in Model2.qsf.

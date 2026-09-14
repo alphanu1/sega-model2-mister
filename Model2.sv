@@ -31,7 +31,72 @@ assign {UART_RTS, UART_DTR} = 0;
 // UART_TXD is driven by the debug streamer at the bottom of this file. The
 // core's own printf -- see rtl/dbg/m2_dbg_stream.sv for why it exists.
 assign {SD_SCK, SD_MOSI, SD_CS} = 'Z;
-assign {DDRAM_CLK, DDRAM_BURSTCNT, DDRAM_ADDR, DDRAM_DIN, DDRAM_BE, DDRAM_RD, DDRAM_WE} = '0;
+// R346: THE DDR3 SELF-TEST. The framework hands this core a gigabyte and the
+// line that used to be here threw it away. Nothing depends on DDR3 yet: this
+// writes a pattern, reads it back and reports mismatches and LATENCY, so the
+// question every later decision rests on -- what does a DDR3 round trip
+// actually cost on this board, with the HPS competing -- is answered by the
+// board rather than assumed. SDRAM's is 13 cycles at 100 MHz.
+wire        ddr_req, ddr_we, ddr_ack;
+wire [24:0] ddr_addr;
+wire [63:0] ddr_din, ddr_dout;
+wire [15:0] ddr_lat_last, ddr_lat_max;
+wire [31:0] ddr_reads;
+
+m2_ddr3 u_ddr3 (
+	.clk(clk_mem), .rst_n(mem_rst_n),
+	.req(ddr_req), .we(ddr_we), .addr(ddr_addr), .din(ddr_din), .be(8'hFF),
+	.ack(ddr_ack), .dout(ddr_dout),
+	.DDRAM_CLK(DDRAM_CLK), .DDRAM_BUSY(DDRAM_BUSY),
+	.DDRAM_BURSTCNT(DDRAM_BURSTCNT), .DDRAM_ADDR(DDRAM_ADDR),
+	.DDRAM_DIN(DDRAM_DIN), .DDRAM_BE(DDRAM_BE),
+	.DDRAM_WE(DDRAM_WE), .DDRAM_RD(DDRAM_RD),
+	.DDRAM_DOUT(DDRAM_DOUT), .DDRAM_DOUT_READY(DDRAM_DOUT_READY),
+	.dbg_lat_last(ddr_lat_last), .dbg_lat_max(ddr_lat_max), .dbg_reads(ddr_reads)
+);
+
+// Write 256 words, read them back, count what does not match. The pattern is a
+// function of the address so a wrong ADDRESS shows as a mismatch and not just
+// wrong data -- the failure a fixed pattern cannot see.
+localparam int unsigned DT_N = 256;
+logic [8:0]  dt_i;
+logic [1:0]  dt_st;
+logic [15:0] dt_err;
+logic        dt_done, dt_req_r, dt_we_r;
+wire [63:0]  dt_expect = {32'hA5000000 | 32'(dt_i), 32'h5A000000 | 32'(dt_i)};
+
+assign ddr_req  = dt_req_r;
+assign ddr_we   = dt_we_r;
+assign ddr_addr = 25'(dt_i);
+assign ddr_din  = dt_expect;
+
+always_ff @(posedge clk_mem or negedge mem_rst_n) begin
+	if (!mem_rst_n) begin
+		dt_i <= 9'd0; dt_st <= 2'd0; dt_err <= 16'd0;
+		dt_done <= 1'b0; dt_req_r <= 1'b0; dt_we_r <= 1'b0;
+	end else begin
+		dt_req_r <= 1'b0;
+		case (dt_st)
+			// fill
+			2'd0: if (!dt_req_r && !ddr_ack) begin
+				dt_we_r <= 1'b1; dt_req_r <= 1'b1; dt_st <= 2'd1;
+			end
+			2'd1: if (ddr_ack) begin
+				if (dt_i == 9'(DT_N - 1)) begin dt_i <= 9'd0; dt_st <= 2'd2; end
+				else begin dt_i <= dt_i + 9'd1; dt_st <= 2'd0; end
+			end
+			// read back and compare
+			2'd2: if (!dt_req_r && !ddr_ack) begin
+				dt_we_r <= 1'b0; dt_req_r <= 1'b1; dt_st <= 2'd3;
+			end
+			default: if (ddr_ack) begin
+				if (ddr_dout != dt_expect) dt_err <= dt_err + 16'd1;
+				if (dt_i == 9'(DT_N - 1)) begin dt_done <= 1'b1; dt_st <= 2'd3; end
+				else begin dt_i <= dt_i + 9'd1; dt_st <= 2'd2; end
+			end
+		endcase
+	end
+end
 
 assign VGA_SL  = 0;
 assign VGA_F1  = 0;
@@ -599,7 +664,12 @@ wire  [7:0] geo_lum;         // ...with its luminance
 logic  [7:0] tps_dif [32], tps_amb [32];
 logic [31:0] tps_seen;
 logic  [4:0] tps_sel;
-logic  [2:0] tps_ph;   // R275: three bits, so the texture record has a slot
+// R346: FOUR BITS. All eight phases were taken -- 0-6 by R251/R255/R269/R275/
+// R294 and 7 by R334's 1/z -- so the DDR3 self-test had nowhere to report. The
+// cost is that each phase is visited half as often, halving the sample rate of
+// every existing record; they are all per-frame counters read as medians over a
+// capture, so that is affordable where having no slot at all is not.
+logic  [3:0] tps_ph;
 always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
 		tps_seen <= 32'd0; tps_sel <= 5'd0; tps_ph <= 3'd0;
@@ -610,8 +680,8 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 			tps_seen[geo_tp_idx] <= 1'b1;
 		end
 		if (geo_walk_start) begin
-			tps_ph <= tps_ph + 3'd1;
-			if (tps_ph == 3'd1) tps_sel <= tps_sel + 5'd1;
+			tps_ph <= tps_ph + 4'd1;
+			if (tps_ph == 4'd1) tps_sel <= tps_sel + 5'd1;
 		end
 	end
 end
@@ -4274,11 +4344,12 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	.b_addr((wedge_have && wedge_ph == 2'd1) ? wedge_q[127:96]
 	      : (wedge_have && wedge_ph == 2'd2) ? wedge_q[63:32]
 	      : sw_pend                         ? {19'd0, sw_out_sel, sw_runs}     // R238: 'S' region, runs
-	      : (tps_ph == 3'd1)                  ? tps_seen                        // R251: 'T' which light entries the list has written
-	      : (tps_ph == 3'd3)                  ? {geo_nops, geo_walk_ops}        // R255: 'U' nops decoded : commands walked, last frame
-	      : (tps_ph == 3'd2)                  ? {cc_h_f, cc_m_f}                // R269: 'V' glyph cache hits : misses, last frame
-	      : (tps_ph == 3'd4)                  ? {tx_p_f, tx_m_f}                // R275: 'Y' textured pixels : texel misses, last frame
-	      : (tps_ph == 3'd7)                  ? {oz_d0, oz_d1}                 // R334: 1/z of vertices 0 and 1 ('Q')
+	      : (tps_ph == 4'd1)                  ? tps_seen                        // R251: 'T' which light entries the list has written
+	      : (tps_ph == 4'd3)                  ? {geo_nops, geo_walk_ops}        // R255: 'U' nops decoded : commands walked, last frame
+	      : (tps_ph == 4'd2)                  ? {cc_h_f, cc_m_f}                // R269: 'V' glyph cache hits : misses, last frame
+	      : (tps_ph == 4'd4)                  ? {tx_p_f, tx_m_f}                // R275: 'Y' textured pixels : texel misses, last frame
+	      : (tps_ph == 4'd7)                  ? {oz_d0, oz_d1}                 // R334: 1/z of vertices 0 and 1 ('Q')
+	      : (tps_ph == 4'd8)                  ? {ddr_lat_last, ddr_lat_max}     // R346: DDR3 round trip, cycles
 	      : {r3d_ready_cyc[15:0], r3d_bands_done[7:0], r3d_hold[7:0]}),
 	// clip_dropped read 0 on hardware and the refusal count is the number that
 	// now moves, so it takes that byte. Between them: accepted, emitted, refused
@@ -4348,20 +4419,21 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	.b_data((wedge_have && wedge_ph == 2'd1) ? wedge_q[95:64]
 	      : (wedge_have && wedge_ph == 2'd2) ? wedge_q[31:0]
 	      : sw_pend                         ? {8'd0, sw_out}                    // R238: the fold
-	      : (tps_ph == 3'd1)                  ? {3'd0, tps_sel, tps_dif[tps_sel], tps_amb[tps_sel], geo_tp_n[7:0]}   // R251
-	      : (tps_ph == 3'd3)                  ? {geo_walk_flip[7:0], geo_walk_fb[7:0], geo_walk_unknown[7:0], geo_dropped[7:0]}   // R255/R263
-	      : (tps_ph == 3'd2)                  ? {cc_f_f, vid_ovr_frame}         // R269: sibling fills : scanlines that overran, last frame
-	      : (tps_ph == 3'd4)                  ? {tx_h_f, tx_n_f}                // R275: texel hits : texels that were not 0xF
-	      : (tps_ph == 3'd5)                  ? {tx_m_f, tex_sweep}             // R294 texel misses; R310 whole-cache sweeps
-	      : (tps_ph == 3'd7)                  ? {oz_d2, oz_d3}                 // R334: 1/z of vertices 2 and 3 ('Q')
-	      : (tps_ph == 3'd6)                  ? {bwl_tex[20:5], 16'd0}          // R294: texel fetch waiting
+	      : (tps_ph == 4'd1)                  ? {3'd0, tps_sel, tps_dif[tps_sel], tps_amb[tps_sel], geo_tp_n[7:0]}   // R251
+	      : (tps_ph == 4'd3)                  ? {geo_walk_flip[7:0], geo_walk_fb[7:0], geo_walk_unknown[7:0], geo_dropped[7:0]}   // R255/R263
+	      : (tps_ph == 4'd2)                  ? {cc_f_f, vid_ovr_frame}         // R269: sibling fills : scanlines that overran, last frame
+	      : (tps_ph == 4'd4)                  ? {tx_h_f, tx_n_f}                // R275: texel hits : texels that were not 0xF
+	      : (tps_ph == 4'd5)                  ? {tx_m_f, tex_sweep}             // R294 texel misses; R310 whole-cache sweeps
+	      : (tps_ph == 4'd7)                  ? {oz_d2, oz_d3}                 // R334: 1/z of vertices 2 and 3 ('Q')
+	      : (tps_ph == 4'd8)                  ? {dt_err, 7'd0, dt_done, ddr_reads[7:0]}   // R346
+	      : (tps_ph == 4'd6)                  ? {bwl_tex[20:5], 16'd0}          // R294: texel fetch waiting
 	      : {lum_mean_f, lum_zpc_f, wedge_slot, wedge_n[6:0], r3d_quads[11:4]}),   // R249: the frame's mean luminance and its black-polygon percentage, where the always-zero drop count and the free-running miss count were
 	.a_tag(8'h43),
 	.b_tag((wedge_have && wedge_ph == 2'd1) ? 8'h57 : (wedge_have && wedge_ph == 2'd2) ? 8'h58
-	     : sw_pend ? 8'h53 : (tps_ph == 3'd1) ? 8'h54 : (tps_ph == 3'd3) ? 8'h55
-	     : (tps_ph == 3'd2) ? 8'h56 : (tps_ph == 3'd4) ? 8'h59
-	     : (tps_ph == 3'd5) ? 8'h5A : (tps_ph == 3'd6) ? 8'h7A
-	     : (tps_ph == 3'd7) ? 8'h51 : 8'h48),   // R334: 'Q' is 1/z, phase 7 -- the ONLY free phase   // 'W','X','S','T','U','V','Y','Z','z' (R294),'H'          // 'C' copro in_pushed:out_pushed | TGP retires:pc
+	     : sw_pend ? 8'h53 : (tps_ph == 4'd1) ? 8'h54 : (tps_ph == 4'd3) ? 8'h55
+	     : (tps_ph == 4'd2) ? 8'h56 : (tps_ph == 4'd4) ? 8'h59
+	     : (tps_ph == 4'd5) ? 8'h5A : (tps_ph == 4'd6) ? 8'h7A
+	     : (tps_ph == 4'd7) ? 8'h51 : (tps_ph == 4'd8) ? 8'h44 : 8'h48),   // R346: 'D' is DDR3   // R334: 'Q' is 1/z, phase 7 -- the ONLY free phase   // 'W','X','S','T','U','V','Y','Z','z' (R294),'H'          // 'C' copro in_pushed:out_pushed | TGP retires:pc
 	                                       // 'H' out_popped:hscr2 | io_addr:flags
 	                                       // 'H' scroll h:v for layers 0,1 | layers 2,3 -- low bytes
 	                                       // '0' map0 min|max : sum
