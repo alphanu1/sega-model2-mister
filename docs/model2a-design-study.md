@@ -16465,11 +16465,31 @@ those rare writes. The walk may be desyncing far more often than the lighting
 reveals. Do not go looking for a counter that wraps at 3 minutes; 2^33 at 50 MHz
 is 171.8 s and it is a coincidence.
 
-**A CORRECTION MADE IN THE SAME HOUR.** The first read of this capture bucketed
-the entries in aggregate and reported "it DOES recover at t=260-280". It does
-not. The rotating sample had caught the few entries briefly repopulated while
-the rest stayed zero, and Ben refuted it from the screen at once. **Aggregate a
-rotating sample and you will invent a recovery that is not there.**
+**THE RECOVERY QUESTION, CALLED WRONG TWICE, AND WHAT IS ACTUALLY KNOWN.**
+The first read bucketed the rotating per-entry sample in aggregate and said "it
+DOES recover at t=260-280"; Ben said it stays black, so that was withdrawn and
+this entry asserted it never recovers; Ben then watched to ten minutes and it
+HAD come back. Both assertions were made on too little evidence.
+
+What is MEASURED, and stands:
+
+* all 32 entries read 0/0 across the end of a 400 s capture
+* the walk decodes up to 280 NOPs in a frame, where the list holds none
+* geometry, clipping and rasterisation are unaffected -- silhouettes draw
+* the pair caches are not involved (OSD `O[25]` bypass changes nothing)
+
+What is NOT established, and must not be asserted again without a capture that
+spans it:
+
+* **when** it recovers. It is black for minutes and back by ten; the 400 s
+  capture simply ends inside a black period. Whether recovery is spontaneous,
+  or needs a particular scene to issue a good op 0x06, is unknown.
+* whether the walk desyncs far more often than the lighting reveals -- likely,
+  since op 0x06 occurs only ~7 times in 400 s.
+
+**The lesson is about the sample, not the bug: aggregating a rotating sample
+invents recoveries, and a capture that ends mid-episode proves nothing about
+what follows.** An episodic fault needs a capture longer than its period.
 
 **NEXT:** find what makes `w_ip` drift -- a command whose payload length is
 mis-stepped will land the pointer mid-payload and everything after it is
