@@ -16572,3 +16572,56 @@ instrumentation change can produce a convincing wrong measurement. The identical
 60.5% figures were the tell -- three independent counters do not agree to one
 decimal place. When a number changes shape rather than value, suspect the
 measurement before the design.
+
+**R336 -- m2_tile_fetch's CRITICAL PATH IS THE SIXTEEN-WAY L1 COMPARE, AND THE
+MODULE HAD NO BENCH AT ALL.**
+
+Measured at 13.57 ns, a 73.7 MHz ceiling, which is what keeps the 2D fetch on
+clk_sys while m2_char_cache (R320) and m2_texel (R318) have both reached
+clk_mem. The path is one cycle from a register to a register:
+
+```
+  tile word -> m2_tile_decode -> f_char_addr
+            -> SIXTEEN 18-bit compares against cc_addr[]
+            -> 16:1 mux for cc_hit_data
+```
+
+`F_LOOK` registers `f_char_addr` between the decode and the compare, the same
+shape as R315 and R316. It costs ONE CYCLE PER GLYPH -- ~19,500 a frame against
+~860,000 -- which is 2.3%, repaid several times over if it lets the fetch run at
+100 MHz.
+
+**THE MODULE HAD NO TEST. NOTHING IN sim/ INSTANTIATED IT.** Its only coverage
+was `test_m2_video_frame`, which needs MAME dumps that do not exist on this
+machine and therefore SKIPs -- silently. An FSM state was added to the path that
+fetches every glyph of every 2D layer, and it was about to go to a Quartus build
+with no local test whatsoever. `tb_m2_tile_fetch` now exists: it computes the
+expected `tile_addr` and `char_addr` from m2_tile_decode's own arithmetic rather
+than from the fetcher's behaviour, and checks that a tile repeating within a
+line is fetched ONCE (the 16-entry L1), that a different scanline reads a
+different row of the glyph, and that a slow fetch changes timing and not
+content.
+
+**TWO THINGS THE BENCH ESTABLISHED IMMEDIATELY.**
+
+*`layer_off` does not stop the fetch.* It ORs into `lb_masked` only, so a
+disabled layer reads all of its glyphs and throws the pixels away at the line
+buffer. The bench first asserted the opposite and the RTL was right -- the wrong
+expectation nearly became a "fix" to working code. **It is also real waste:** a
+disabled layer costs full glyph bandwidth on the memory that is the binding
+resource. Not changed here, because a layer re-enabled mid-frame would face a
+cold L1, and that is a picture risk for a bandwidth gain that has not been
+measured.
+
+*Tiles and glyphs are ONE fetch engine, not two.* `F_CHECK -> F_TILE -> F_LOOK
+-> F_CHAR -> F_FULL` does both per position, so there is no separate "tile
+clock" and "glyph clock" to raise. The tile word is on-chip (m2_tdp_ram) and
+`F_CHECK` skips it entirely for consecutive pixels in the same tile; the glyph
+is the one that reaches SDRAM.
+
+**WHAT THIS DOES NOT DO.** The register stage makes 100 MHz reachable; it does
+not move the clock. Running this module on clk_mem additionally needs the line
+buffer (~70 bits of lb_*) and the tile RAM port to straddle the domains. Both
+are dual-port RAMs so it is tractable, but it is a separate change with its own
+CDC risk, and it should be done only once a fit confirms the path is actually
+short enough.

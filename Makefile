@@ -637,6 +637,14 @@ obj_raster_fill/Vm2_raster_fill: rtl/video/m2_raster_fill.sv rtl/video/m2_raster
 	$(VBUILD) --top-module m2_raster_fill -Wno-UNUSEDSIGNAL -Wno-WIDTHTRUNC -Wno-TIMESCALEMOD -Wno-UNUSEDPARAM --Mdir obj_raster_fill -o Vm2_raster_fill -CFLAGS "-O2" \
 	  rtl/video/m2_raster_fill.sv rtl/video/m2_raster_div.sv rtl/video/m2_recip_rom.sv sim/video/tb_m2_raster_fill.cpp
 
+test_m2_tile_fetch: obj_tile_fetch/Vm2_tile_fetch
+	@echo "== test m2_tile_fetch (the 2D tile word and glyph fetch)"
+	@./obj_tile_fetch/Vm2_tile_fetch $(TEST_ARGS)
+
+obj_tile_fetch/Vm2_tile_fetch: rtl/video/m2_tile_fetch.sv rtl/video/m2_tile_decode.sv sim/video/tb_m2_tile_fetch.cpp
+	$(VBUILD) --top-module m2_tile_fetch -Wno-UNUSEDSIGNAL -Wno-WIDTHTRUNC -Wno-TIMESCALEMOD -Wno-UNUSEDPARAM --Mdir obj_tile_fetch -o Vm2_tile_fetch -CFLAGS "-O2" \
+	  rtl/video/m2_tile_fetch.sv rtl/video/m2_tile_decode.sv sim/video/tb_m2_tile_fetch.cpp
+
 test_m2_raster_band: obj_raster_band/Vm2_raster_band
 	@echo "== test m2_raster_band (the band buffer)"
 	@./obj_raster_band/Vm2_raster_band $(TEST_ARGS)
