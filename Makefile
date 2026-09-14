@@ -653,6 +653,14 @@ obj_fbw/Vm2_fb_write: rtl/video/m2_fb_write.sv sim/video/tb_m2_fb_write.cpp
 	$(VBUILD) --top-module m2_fb_write -Wno-TIMESCALEMOD --Mdir obj_fbw -o Vm2_fb_write -CFLAGS "-O2" \
 	  rtl/video/m2_fb_write.sv sim/video/tb_m2_fb_write.cpp
 
+test_m2_ddr3_arb: obj_ddr3arb/Vm2_ddr3_arb
+	@echo "== test m2_ddr3_arb (two framebuffer masters, one DDRAM port)"
+	@./obj_ddr3arb/Vm2_ddr3_arb $(TEST_ARGS)
+
+obj_ddr3arb/Vm2_ddr3_arb: rtl/mem/m2_ddr3_arb.sv sim/mem/tb_m2_ddr3_arb.cpp
+	$(VBUILD) --top-module m2_ddr3_arb -Wno-TIMESCALEMOD --Mdir obj_ddr3arb -o Vm2_ddr3_arb -CFLAGS "-O2" \
+	  rtl/mem/m2_ddr3_arb.sv sim/mem/tb_m2_ddr3_arb.cpp
+
 test_m2_ddr3: obj_ddr3/Vm2_ddr3
 	@echo "== test m2_ddr3 (the DDR3 master, and that it honours BUSY)"
 	@./obj_ddr3/Vm2_ddr3 $(TEST_ARGS)

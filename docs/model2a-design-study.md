@@ -17299,3 +17299,35 @@ containing module: 'm2_ddr3'" -- nothing about the edit itself complained.
 
 Recovered with `git show <prev>:<path> > <path>`, which is the reason the
 frequent small commits in this session were worth their noise.
+
+**R353 -- TWO FRAMEBUFFER MASTERS, ONE DDRAM PORT, AND THE READER ALWAYS WINS.**
+
+The framebuffer has a writer (spans, from the fill) and a reader (a line at a
+time, for the scanout), and the framework gives the core exactly ONE DDRAM
+interface. `m2_ddr3_arb` sits between them.
+
+**PRIORITY, NOT ROUND ROBIN, AND IT IS NOT A CLOSE CALL.** The scanout has a
+beam deadline -- a line not in the buffer when the beam arrives is a torn line.
+The writer has none: the fill runs a frame ahead and a late span is merely late.
+This is the OPPOSITE of `m2_sdram`'s arbiter, where every master is equally
+entitled, and the difference is worth stating because the two files look alike.
+
+**STARVATION IS BOUNDED BY ARITHMETIC RATHER THAN BY A FAIRNESS RULE.** The
+reader takes one 248-beat burst a scanline -- ~2.6 us of a ~30 us line, under
+9% -- so the writer cannot be locked out. **That holds only while the reader is
+one burst a line**; anything that makes it greedier has to revisit this.
+
+**THE BUG THE BENCH FOUND: A MASTER'S REQUEST IS STILL HIGH THE CYCLE AFTER ITS
+ACKNOWLEDGE.** `req` is cleared *on* the ack, which is a registered assignment,
+so for one cycle afterwards it still reads high -- and the arbiter granted the
+same transaction a second time. The bench saw three grants for two requests,
+with the second master's beats delivered against the first master's burst. One
+dead cycle after `m_ack` fixes it.
+
+**AND A NEAR-MISS IN THE MUTATION TEST ITSELF, WHICH IS THE MORE USEFUL
+FINDING.** The dead cycle was first enforced in TWO places -- the grant
+condition and the `m_req` gate. Mutating the grant condition PASSED, because the
+other mechanism silently carried it, and "mutation-tested" would have been
+written down on the strength of a mutation that tested nothing. It is now
+enforced in one place, where removing it fails three checks. **Two guards for
+one rule means a mutation test cannot tell you which guard works.**
