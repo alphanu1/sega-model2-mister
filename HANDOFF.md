@@ -1,6 +1,94 @@
 # Handoff
 
-**Updated:** 2026-09-13 01:45 (machine clock). Study entries R176-R283.
+**Updated:** 2026-09-14. Study entries R176-R332.
+
+## 09-14: TWO FAULTS WITH ONE SYMPTOM EACH, AND THE AREA TO FIX THE SECOND
+
+Ben, on the board: textures were **missing** on some polygons and in the **wrong
+orientation** on the scenery. These are two unrelated faults and chasing them as
+one is what hid both.
+
+**MISSING (R326, fixed, on the board).** `m2_geo_engine` culled every polygon
+with texture-header bit 13. MAME's callback table is
+`m_render_callbacks[(h0>>13)&3]` and only index 1 -- `draw_scanline_solid<true>`
+-- returns without drawing. `draw_scanline_tex<true>` DRAWS, discarding only
+texels equal to 0xF. So every TEXTURED TRANSLUCENT polygon was being thrown
+away. Cull is now `hdr0[13] && !hdr0[14]`, and m2_span_tex discards texel 0xF
+when the polygon is translucent. Bit 8 of the packed texture word carries the
+flag (it was texwrapy, which nothing read). Board: +50% quads, +16% textured
+pixels. **The benches asserted the wrong behaviour**, which is why it survived
+since R231; both now assert the right one.
+
+**ORIENTATION (R331, groundwork only, NOT fixed).** The renderer is affine.
+A C model of MAME's uoz/voz/ooz formulation says the error on a 256-texel
+texture is 36 texels at a 4:1 depth ratio across the quad and 688 at 40:1 --
+the texture wrapping several times, which is what Ben sees. See R331 for the
+plan and the measured field widths; **1/z needs 16 bits, not the 12 first
+proposed, which would have shipped a visibly wrong picture.**
+
+## Where the area came from
+
+    R327  fill coordinates 32 -> 16 bits      -317 ALM   (no visual change:
+          m2_quad_store already saturates to 13 and every arithmetic consumer
+          in the fill already sliced to 16)
+    R328  texel cache 1024 -> 2048 lines        +7 M10K
+    R329  ports 8/9 blen 4 -> 2                          (R108's uniformity
+          rule was stale: rd_total is written only in S_IDLE)
+    R332  span queue -> MLAB                    -5 M10K  UNVERIFIED, see below
+
+    on the board now (build/tex2kb/s14, confirmed good by Ben):
+      ALM 40,894/41,910    M10K 532/553    hold +0.025  clk_mem -0.046
+      texel hit 64.9% (was 54.3%)   misses 12,800 (was 16,772)
+      SDRAM bus busy 32.6% (was 44.7%)
+
+## What is left, in Ben's order
+
+1. **The orientation.** Quad store UW 128 -> 192, three plane fits in
+   m2_raster_fill, the divide in m2_span_tex. Needs +26 M10K against 21 free,
+   which is why R332 exists. **R332 IS UNVERIFIED: the linter does not read
+   `ramstyle`, so only the Quartus RAM Summary says whether `u_span_q` landed
+   in MLAB. Check that before believing the 5 blocks exist.**
+2. **Tile/glyph fetch clocks.** m2_tile_fetch is still on clk_sys at 50 MHz and
+   measures 13.57 ns (73.7 MHz), so it needs -26% to reach clk_mem. Fix is
+   identified: register `f_char_addr` before the 16-way `cc_addr[]` compare.
+   It also lets m2_char_x2 disappear. Overruns are med 38 and the glyph fetch
+   waits 24.5% of the frame on the bus, unchanged by everything done today.
+3. **SDRAM latency / the arbiter.** The bus is idle two thirds of the frame
+   while the geometry waits 37.5% of it -- BLOCKED, not bandwidth. 3 of every
+   13 cycles of a row-hit read are `S_IDLE -> S_SEL -> S_DISPATCH`, and the
+   worst setup path in the design is already the arbiter's own mux chain.
+   This is R297, which corrupted every port and whose bug was never found;
+   **build the cross-port integrity bench first** -- tb_m2_sdram passed 105,598
+   checks while R297 was corrupting the board.
+
+## Two process findings that cost real time today
+
+**R330 -- FLASH ANOTHER SEED BEFORE SUSPECTING THE RTL.** One fit gave four
+seeds; s13 had the BEST HOLD OF THE SESSION (+0.241) and the game did not run
+(2 walks in 180 s against 2,108, TGP parked at PC 0000, 0 of 32 light table
+entries). s31, at hold -0.070, ran correctly on identical RTL. A 35-minute
+bisect of R328 against R329 was about to start on a fault that was neither.
+**Positive hold is necessary and not sufficient; the summary numbers rank
+placements they cannot judge.**
+
+**The fitter crash rate is ~25-30% per seed, cause undetermined.** A 4-seed
+batch lost one and a 3-seed batch lost another, in different Quartus
+subsystems, both at LOWER density than when `docs/area-budget.md` blamed these
+on the design being full. Budget seeds accordingly. Ben's instruction: three
+seeds at a time, maximum -- which is right for memory headroom regardless.
+
+## Measurement gaps to close
+
+* **`textured pixels` is saturated** at 262,140 and tells us nothing. R324
+  scaled it by 4 for PIXSTEP 4; at PIXSTEP 8 with R326's extra polygons it has
+  pegged again. One shift, with the next change.
+* **`quads x16` may also be at its ceiling** -- 1,792 observed against NQ=2048,
+  and the counter is `quads[11:4]`. Whether the store ever drops quads is a
+  question `qs_dropped` can answer and nobody has asked.
+* `tb_m2_raster3d` has **8 checks** and covers the span-queue wiring R327
+  changed. `tb_m2_raster_fill` has 152,295 but tests the fill standalone.
+
+---
 
 ## 12:00, 09-13: THE TEXTURES DRAW; THE BAND FILL CANNOT KEEP UP
 

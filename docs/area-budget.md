@@ -5,13 +5,23 @@ FITTER is what keeps failing -- four builds in a row lost seeds to Quartus
 internal errors rather than to anything in the RTL. Read this before adding
 anything.
 
-> **CORRECTION (R330): the fitter crashes are BATCH SIZE, not density.** A
-> four-seed batch on this 31 GB machine is ~9 GB of fits plus whatever else is
-> building, and one seed died with `Internal Error: dyn_enum.cpp, Line 186`
-> while three finished -- at 40,861 ALM, LOWER than when this was written. Ben
-> called it before the build finished: **three seeds at a time, maximum, and
-> never two batches at once.** Attributing these crashes to density has been
-> steering area decisions for nothing.
+> **CORRECTION (R330, amended): the fitter crashes are NOT density, and NOT
+> clearly batch size either.** This document blames them on the design being
+> full. Two batches the same afternoon, at 40,861-40,894 ALM -- LOWER than when
+> that was written -- each lost one seed, in different subsystems:
+>
+> ```
+>   4-seed batch   s15   Internal Error: dyn_enum.cpp, Line 186
+>   3-seed batch   s23   Internal Error: cut_parameter_util.cpp, Line 1249
+> ```
+>
+> One in four, then one in three, at reduced density. **Treat it as a per-seed
+> failure rate of roughly 25-30% with an undetermined cause, and budget seeds
+> accordingly** -- a batch of three may yield two. The first version of this
+> correction said "batch size", on the strength of the four-seed case alone,
+> and the three-seed case refuted it within the hour. Three seats is still the
+> right batch for MEMORY headroom (~9 GB of fits on a 31 GB machine), which is
+> a separate argument that stands on its own.
 
 > **CORRECTION (R327/R328): two M10K figures below are wrong, both measured.**
 > The span queue costs **5** blocks at `DEPTH(32)`, not the ~30 this document
