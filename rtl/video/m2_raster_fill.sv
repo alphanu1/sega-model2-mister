@@ -684,8 +684,11 @@ module m2_raster_fill (
         S_OZ: begin
           automatic logic [15:0] n = oz_norm(qoz[oz_i], oz_emax);
           qoz[oz_i] <= n;
-          qu[oz_i]  <= 13'((29'(qu[oz_i]) * 29'(n)) >> 15);
-          qv[oz_i]  <= 13'((29'(qv[oz_i]) * 29'(n)) >> 15);
+          // R341: 13 x 16, not 29 x 29. qu is 13 bits and the normalised 1/z is
+          // 16, so the product is 29 -- declaring both operands 29 wide built a
+          // multiplier for bits that are always zero.
+          qu[oz_i]  <= 13'((29'(13'(qu[oz_i])) * 29'(16'(n))) >> 15);
+          qv[oz_i]  <= 13'((29'(13'(qv[oz_i])) * 29'(16'(n))) >> 15);
           if (oz_i == 2'd3) state <= S_PF_D;
           else              oz_i  <= oz_i + 2'd1;
         end

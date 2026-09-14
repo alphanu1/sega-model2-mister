@@ -116,12 +116,12 @@ module m2_span_tex #(
   logic signed [31:0] uq_r, vq_r;
   logic [24:0]        rcp_r;             // 2^47 / normalised(ooz)
   logic [5:0]         rcp_e;             // how far ooz was normalised
-  logic [31:0]        m_r;               // ooz normalised to [2^23, 2^24)
+  logic [23:0]        m_r;               // ooz normalised to [2^23, 2^24)
 
   // Clamp to a positive 32-bit value: a vertex far enough away makes the
   // coordinate enormous, and to_tx would read a wrapped one as a small texel.
-  function automatic logic signed [31:0] sat32(input logic [63:0] v);
-    sat32 = (v[63:31] != 33'd0) ? 32'sh7FFFFFFF : 32'(v);
+  function automatic logic signed [31:0] sat32(input logic [54:0] v);
+    sat32 = (v[54:31] != 24'd0) ? 32'sh7FFFFFFF : 32'(v);
   endfunction
 
   // R339: THE RECIPROCAL SEED, 128 ENTRIES ON THE TOP 8 BITS.
@@ -143,11 +143,15 @@ module m2_span_tex #(
   end
 
   // Where the leading one of ooz sits, so it can be normalised to [2^23, 2^24).
+  // R341: NINE POSITIONS, NOT THIRTY-TWO. oz_norm caps 1/z at bit 14 (R338) and
+  // the span carries it as 16.16, so the leading bit is 23..31 in every case
+  // that draws. Encoding the whole word cost a 32-position priority chain for
+  // twenty-three outcomes that cannot happen.
   function automatic logic [5:0] top_bit(input logic [31:0] v);
     logic [5:0] n;
     begin
-      n = 6'd0;
-      for (int i = 31; i >= 0; i--) if (v[i] && n == 6'd0) n = 6'(i);
+      n = 6'd23;
+      for (int i = 31; i >= 24; i--) if (v[i] && n == 6'd23) n = 6'(i);
       top_bit = n;
     end
   endfunction
@@ -276,8 +280,10 @@ module m2_span_tex #(
         // not stored, which is what makes 128 entries enough.
         T_RCP1: begin
           automatic logic [5:0]  t = top_bit(ooz_r);
-          automatic logic [31:0] m = (t >= 6'd23) ? (ooz_r >> (t - 6'd23))
-                                                  : (ooz_r << (6'd23 - t));
+          // R341: RIGHT ONLY, and eight positions. top_bit floors at 23, so the
+          // left-shift arm was unreachable and cost a bidirectional 32-bit
+          // shifter to express.
+          automatic logic [23:0] m = 24'(ooz_r >> (t - 6'd23));
           rcp_e  <= t;
           m_r    <= m;
           rcp_r  <= rcp_tab[m[22:16]];
@@ -300,16 +306,25 @@ module m2_span_tex #(
           // S = 2^47 it overflows: r0 is ~2^24 and the bracket ~2^47, so the
           // product is ~2^71 and 64 bits silently truncate it to zero. Folding
           // 24 of the 47 in first keeps every intermediate under 2^48.
-          /* verilator lint_off UNUSEDSIGNAL */
-          automatic logic [63:0] nd   = ((64'd1 <<< 48) - (64'(m_r) * 64'(rcp_r))) >> 24;
-          automatic logic [63:0] nr   = (64'(rcp_r) * nd) >> 23;
-          /* verilator lint_on UNUSEDSIGNAL */
-          automatic logic [24:0] r1   = 25'(nr);
-          automatic logic [4:0]  sh   = (rcp_e < 6'd23) ? 5'd16 : 5'(rcp_e - 6'd7);
-          automatic logic [63:0] pu   = 64'(u_r) * 64'(r1);
-          automatic logic [63:0] pv   = 64'(v_r) * 64'(r1);
-          uq_r <= sat32(pu >> sh);
-          vq_r <= sat32(pv >> sh);
+          // R341: THE WIDTHS THE VALUES ACTUALLY HAVE. m is 24 bits by
+          // construction and rcp 25, so the products are 49 and 50 -- declaring
+          // them 64 x 64 built multipliers and shifters for bits that are
+          // always zero.
+          automatic logic [48:0] mp   = 49'(m_r) * 49'(rcp_r);
+          automatic logic [24:0] nd   = 25'(((49'd1 <<< 48) - mp) >> 24);
+          automatic logic [49:0] nrp  = 50'(rcp_r) * 50'(nd);
+          automatic logic [24:0] r1   = 25'(nrp >> 23);
+          // u_r is a 16.16 of a 13-bit value, so 30 bits carries it; with a
+          // 25-bit reciprocal the product is 55.
+          automatic logic [54:0] pu   = 55'(u_r[29:0]) * 55'(r1);
+          automatic logic [54:0] pv   = 55'(v_r[29:0]) * 55'(r1);
+          // AND THE OUTPUT SHIFT IS EIGHT POSITIONS, NOT THIRTY-TWO. sh is
+          // 16..24, and only 32 bits of the product survive, so the window is
+          // fixed and the variable part is what is left. Two 64-bit barrel
+          // shifters were the single largest cost in this module.
+          automatic logic [2:0]  shn  = 3'((rcp_e < 6'd23) ? 6'd0 : (rcp_e - 6'd23));
+          uq_r <= sat32(55'(pu >> 16) >> shn);
+          vq_r <= sat32(55'(pv >> 16) >> shn);
           st   <= T_FETCH;
         end
 
