@@ -211,7 +211,7 @@ module m2_raster3d #(
   // ------------------------------------------------------------- the filler
   logic        fl_in_valid, fl_in_ready, fl_quad_done, fl_line_case;
   logic        fl_span_valid, fl_span_ready, fl_span_moire;
-  logic signed [31:0] fl_span_y, fl_span_x0, fl_span_x1;
+  logic signed [15:0] fl_span_y, fl_span_x0, fl_span_x1;
   logic [23:0] fl_span_col;
   logic signed [31:0] fl_span_u, fl_span_v;
   logic signed [15:0] fl_span_dudx, fl_span_dvdx;   // R286: 8.8
@@ -244,7 +244,9 @@ module m2_raster3d #(
   // span per cycle anyway.
   logic spantex_busy;
 
-  localparam int unsigned SQ_DW = 242;
+  // R327: 242 -> 194. y, x0 and x1 were 32 bits each for a 496x384 screen;
+  // they are 16 now, which is 48 bits off every entry in this queue.
+  localparam int unsigned SQ_DW = 194;
   logic [SQ_DW-1:0] sq_din, sq_q;
   logic             sq_in_rdy, sq_qv, sq_rdy, sq_busy, sq_full;
   logic [15:0]      sq_cnt16;
@@ -280,9 +282,10 @@ module m2_raster3d #(
   assign sq_busy   = sq_qv || (sq_cnt16 != 16'd0);
 
   // Unpacked, in the same order.
-  wire signed [31:0] sq_y    = sq_q[241:210];
-  wire signed [31:0] sq_x0   = sq_q[209:178];
-  wire signed [31:0] sq_x1   = sq_q[177:146];
+  // Only the top three fields moved: everything from u down keeps its slice.
+  wire signed [15:0] sq_y    = sq_q[193:178];
+  wire signed [15:0] sq_x0   = sq_q[177:162];
+  wire signed [15:0] sq_x1   = sq_q[161:146];
   wire signed [31:0] sq_u    = sq_q[145:114];
   wire signed [31:0] sq_v    = sq_q[113:82];
   wire signed [15:0] sq_dudx = sq_q[81:66];
@@ -302,21 +305,23 @@ module m2_raster3d #(
   // consumers -- leaving qs_band undriven is a silent "always band 0".
   logic [BW-1:0] fill_band;
   assign qs_band = fill_band;
-  wire signed [31:0] band_y1 = 32'(fill_band) * 32'(BAND_H);
-  wire signed [31:0] band_y2 = band_y1 + 32'(BAND_H) - 32'sd1;
+  wire signed [15:0] band_y1 = 16'(fill_band) * 16'(BAND_H);
+  wire signed [15:0] band_y2 = band_y1 + 16'(BAND_H) - 16'sd1;
 
   m2_raster_fill u_fill (
     .clk(clk), .rst_n(rst_n),
     .in_valid(fl_in_valid), .in_ready(fl_in_ready),
-    .in_x0({{16{qo_x0[15]}}, qo_x0}), .in_y0({{16{qo_y0[15]}}, qo_y0}),
-    .in_x1({{16{qo_x1[15]}}, qo_x1}), .in_y1({{16{qo_y1[15]}}, qo_y1}),
-    .in_x2({{16{qo_x2[15]}}, qo_x2}), .in_y2({{16{qo_y2[15]}}, qo_y2}),
-    .in_x3({{16{qo_x3[15]}}, qo_x3}), .in_y3({{16{qo_y3[15]}}, qo_y3}),
+    // R327: no sign extension. m2_quad_store already saturates these to 13
+    // bits and hands them over as 16, and the fill now takes them as 16.
+    .in_x0(qo_x0), .in_y0(qo_y0),
+    .in_x1(qo_x1), .in_y1(qo_y1),
+    .in_x2(qo_x2), .in_y2(qo_y2),
+    .in_x3(qo_x3), .in_y3(qo_y3),
     .in_col(qo_col), .in_moire(qo_moire),
     .in_u0(qo_u0), .in_v0(qo_v0), .in_u1(qo_u1), .in_v1(qo_v1),
     .in_u2(qo_u2), .in_v2(qo_v2), .in_u3(qo_u3), .in_v3(qo_v3),
     .in_tex(qo_tex),
-    .view_x1(32'sd0), .view_x2(32'(SCR_W) - 32'sd1),
+    .view_x1(16'sd0), .view_x2(16'(SCR_W) - 16'sd1),
     .view_y1(band_y1), .view_y2(band_y2),
     .span_valid(fl_span_valid), .span_ready(fl_span_ready),
     .span_y(fl_span_y), .span_x0(fl_span_x0), .span_x1(fl_span_x1),
@@ -353,7 +358,9 @@ module m2_raster3d #(
   m2_span_tex #(.PIXSTEP(8)) u_spantex (
     .clk(clk), .rst_n(rst_n),
     .in_valid(sq_qv), .in_ready(sq_rdy), .busy(spantex_busy),
-    .in_y(sq_y), .in_x0(sq_x0), .in_x1(sq_x1),
+    // m2_span_tex still carries these as 32; the fill and the queue are what
+    // this change narrows.
+    .in_y(32'(sq_y)), .in_x0(32'(sq_x0)), .in_x1(32'(sq_x1)),
     .in_col(sq_col), .in_moire(sq_moire),
     .in_u(sq_u), .in_v(sq_v),
     .in_dudx(sq_dudx), .in_dvdx(sq_dvdx),

@@ -47,6 +47,32 @@
 // filling. That is a separate unit; this block flags the case on `line_case`
 // and retires the quad without emitting. See the spec for why that path is
 // MAME improving on the filler rather than known silicon behaviour.
+// SCREEN COORDINATES ARE SIXTEEN BITS, AND THAT IS A CONTRACT (R327).
+//
+// Every x and y in this module -- the vertices in, the viewport bounds, the
+// scanline walk, the span out -- is a plain screen coordinate held in 16 bits.
+// They were 32, for a 496x384 screen, and the top sixteen were sign extension
+// that this module ALREADY refused to look at: `px[i]` seeds the 16.16
+// accumulator from `{sx[i], 16'h0000}`, the plane fit's edge deltas took
+// `sx[..][15:0]`, and `uv_at` sliced its own argument to sixteen. So the bits
+// being dropped were carried by every register, mux and comparator here and
+// then thrown away at every consumer.
+//
+// WHAT GUARANTEES IT: m2_quad_store saturates every screen coordinate to XW =
+// 13 bits (+/-4,095) on the way in -- see its `sat()` -- so nothing that can
+// reach this module comes near the 16-bit limit. **If XW ever grows past 16,
+// or if a caller is added that does not go through the quad store, this module
+// silently truncates.** The fill bench's directed `y-huge` case used to pass
+// +/-100,000 and had to be brought inside the range; the fuzz now runs y to
+// +/-20,000, five times what the hardware can produce, so the top of the range
+// is actually visited.
+//
+// NOT narrowed, because they are 16.16 fixed point and not coordinates:
+// `xa`, `xb`, `sla`, `slb`, `px[]`, `xlo*`, `xhi*`, `flat_lo/hi`, `emit_l/r`,
+// and everything in the plane fit. Confusing the two is the mistake this note
+// exists to stop: the first attempt narrowed `xlo01` and lost sixteen
+// fractional bits of the edge accumulator.
+//
 // MULTIPLIES GO TO DSP BLOCKS. The plane fit is eight signed products and the
 // per-span interpolation two more, and this part has 56 of its 112 DSP blocks
 // free while it has 550 ALMs free. Left to itself the synthesiser built them
@@ -61,10 +87,10 @@ module m2_raster_fill (
   // moire stipple flag.
   input  logic               in_valid,
   output logic               in_ready,
-  input  logic signed [31:0] in_x0, in_y0,
-  input  logic signed [31:0] in_x1, in_y1,
-  input  logic signed [31:0] in_x2, in_y2,
-  input  logic signed [31:0] in_x3, in_y3,
+  input  logic signed [15:0] in_x0, in_y0,
+  input  logic signed [15:0] in_x1, in_y1,
+  input  logic signed [15:0] in_x2, in_y2,
+  input  logic signed [15:0] in_x3, in_y3,
   input  logic [23:0]        in_col,
   input  logic               in_moire,
   // R274: THE TEXTURE. Four corners of {u, v} in 11.2 texels and the texel
@@ -74,16 +100,16 @@ module m2_raster_fill (
   input  logic [23:0]        in_tex,
 
   // Viewport, inclusive on all four edges.
-  input  logic signed [31:0] view_x1, view_x2, view_y1, view_y2,
+  input  logic signed [15:0] view_x1, view_x2, view_y1, view_y2,
 
   // Span out, inclusive and already clamped. Empty spans are never emitted.
   // Backpressure is real here and not decoration: the band buffer writer runs a
   // pixel loop, so it stalls the walk.
   output logic               span_valid,
   input  logic               span_ready,
-  output logic signed [31:0] span_y,
-  output logic signed [31:0] span_x0,
-  output logic signed [31:0] span_x1,
+  output logic signed [15:0] span_y,
+  output logic signed [15:0] span_x0,
+  output logic signed [15:0] span_x1,
   output logic [23:0]        span_col,
   output logic               span_moire,
   // R274: the span's texture, as a starting coordinate and a per-pixel step,
@@ -140,8 +166,8 @@ module m2_raster_fill (
 
   // Latched quad. sx/sy are the raw screen coordinates: the wireframe test
   // compares them whole, so the pre-shift value has to survive.
-  logic signed [31:0] sx [0:3];
-  logic signed [31:0] sy [0:3];
+  logic signed [15:0] sx [0:3];
+  logic signed [15:0] sy [0:3];
   logic [23:0]        col;
   logic               moire;
 
@@ -149,7 +175,7 @@ module m2_raster_fill (
   // everything above bit 15.
   logic signed [31:0] px [0:3];
   always_comb begin
-    for (int i = 0; i < 4; i++) px[i] = $signed({sx[i][15:0], 16'h0000});
+    for (int i = 0; i < 4; i++) px[i] = $signed({sx[i], 16'h0000});
   end
 
   // Chain state. Edge A walks ps1 downward, edge B walks ps2 upward, both from
@@ -159,16 +185,16 @@ module m2_raster_fill (
   logic [2:0]         ps1, ps2;
   logic signed [31:0] xa, xb;     // 16.16 accumulators
   logic signed [31:0] sla, slb;   // 16.16 per scanline
-  logic signed [31:0] cury, limy;
+  logic signed [15:0] cury, limy;
   logic               need_a, need_b;
 
   // Segment state.
-  logic signed [31:0] seg_y1;     // exclusive bottom of this segment
-  logic signed [31:0] walk_y, walk_end;
+  logic signed [15:0] seg_y1;     // exclusive bottom of this segment
+  logic signed [15:0] walk_y, walk_end;
   logic               swapf;
   logic               skip_only;  // segment is entirely above the viewport
   logic [1:0]         emit_mode;
-  logic signed [31:0] flat_lo, flat_hi;
+  logic signed [31:0] flat_lo, flat_hi;   // 16.16: they feed emit_l/emit_r
 
   // ------------------------------------------------------- R274: the texture
   //
@@ -213,10 +239,10 @@ module m2_raster_fill (
   wire [1:0] fb = pf_second ? 2'd2 : 2'd1;
   wire [1:0] fc = pf_second ? 2'd3 : 2'd2;
 
-  wire signed [15:0] pf_ax = 16'(sx[fb][15:0]) - 16'(sx[fa][15:0]);
-  wire signed [15:0] pf_ay = 16'(sy[fb][15:0]) - 16'(sy[fa][15:0]);
-  wire signed [15:0] pf_bx = 16'(sx[fc][15:0]) - 16'(sx[fa][15:0]);
-  wire signed [15:0] pf_by = 16'(sy[fc][15:0]) - 16'(sy[fa][15:0]);
+  wire signed [15:0] pf_ax = sx[fb] - sx[fa];
+  wire signed [15:0] pf_ay = sy[fb] - sy[fa];
+  wire signed [15:0] pf_bx = sx[fc] - sx[fa];
+  wire signed [15:0] pf_by = sy[fc] - sy[fa];
   wire signed [15:0] pf_u1 = 16'({3'd0, qu[fb]}) - 16'({3'd0, qu[fa]});
   wire signed [15:0] pf_u2 = 16'({3'd0, qu[fc]}) - 16'({3'd0, qu[fa]});
   wire signed [15:0] pf_v1 = 16'({3'd0, qv[fb]}) - 16'({3'd0, qv[fa]});
@@ -308,7 +334,7 @@ module m2_raster_fill (
   // at a y that is either cury or walk_y, so one expression serves them all.
   // Written out at each site it was six multiply-add pairs instead of two, and
   // this module is what put the design over the device.
-  wire signed [31:0] emit_y  = (state == S_FS_WALK) ? walk_y : cury;
+  wire signed [15:0] emit_y  = (state == S_FS_WALK) ? walk_y : cury;
   wire signed [31:0] emit_u  = uv_at(base_u, dudx, dudy, emit_cl, emit_y);
   wire signed [31:0] emit_v  = uv_at(base_v, dvdx, dvdy, emit_cl, emit_y);
 
@@ -328,17 +354,17 @@ module m2_raster_fill (
   function automatic logic signed [31:0] uv_at(input logic signed [31:0] base,
                                                input logic signed [15:0] gx,
                                                input logic signed [15:0] gy,
-                                               input logic signed [31:0] x,
-                                               input logic signed [31:0] y);
+                                               input logic signed [15:0] x,
+                                               input logic signed [15:0] y);
     logic signed [31:0] gxp, gyp;
     begin
-      gxp = gx * $signed(x[15:0]);
-      gyp = gy * $signed(y[15:0]);
+      gxp = gx * x;
+      gyp = gy * y;
       uv_at = base + (gxp <<< 8) + (gyp <<< 8);
     end
   endfunction
   logic [2:0]         ps1m1, ps2p1;
-  logic signed [31:0] ya_next, yb_next;
+  logic signed [15:0] ya_next, yb_next;
   always_comb begin
     ps1m1   = ps1 - 3'd1;
     ps2p1   = ps2 + 3'd1;
@@ -434,11 +460,14 @@ module m2_raster_fill (
   // quad -- sy[] is written once at S_IDLE and never again -- so S_MINMAX
   // spends one cycle latching the answer and S_CLASSIFY reads registers. The
   // fill spends hundreds of cycles per quad; one more is nothing.
-  logic signed [31:0] symin, symax, xlo_r, xhi_r;
+  // R327: symin/symax are plain scanline coordinates; xlo_r/xhi_r are 16.16,
+  // because they come from px[] which is `{sx[i], 16'h0000}`.
+  logic signed [15:0] symin, symax;
+  logic signed [31:0] xlo_r, xhi_r;
   logic [1:0]         pmin_r;
   logic               td_r;
 
-  logic signed [31:0] xlo01, xlo23, xlo_c, xhi01, xhi23, xhi_c;
+  logic signed [31:0] xlo01, xlo23, xlo_c, xhi01, xhi23, xhi_c;   // 16.16, from px[]
   always_comb begin
     xlo01 = (px[1] < px[0]) ? px[1] : px[0];
     xlo23 = (px[3] < px[2]) ? px[3] : px[2];
@@ -472,7 +501,10 @@ module m2_raster_fill (
   end
 
   // ------------------------------------------------------------- span clamp
-  logic signed [31:0] emit_l, emit_r, emit_xl, emit_xr, emit_cl, emit_cr;
+  // emit_l/emit_r are 16.16 (xa, xb or flat_lo/hi); the `>>> 16` results and
+  // everything clipped to the viewport are plain screen coordinates.
+  logic signed [31:0] emit_l, emit_r;
+  logic signed [15:0] emit_xl, emit_xr, emit_cl, emit_cr;
   logic               emit_ok;
   always_comb begin
     case (emit_mode)
@@ -481,8 +513,8 @@ module m2_raster_fill (
       default: begin emit_l = swapf ? xb : xa;      emit_r = swapf ? xa : xb;      end
     endcase
 
-    emit_xl = emit_l >>> 16;
-    emit_xr = emit_r >>> 16;
+    emit_xl = 16'(emit_l >>> 16);
+    emit_xr = 16'(emit_r >>> 16);
     emit_cl = (emit_xl < view_x1) ? view_x1 : emit_xl;
     emit_cr = (emit_xr > view_x2) ? view_x2 : emit_xr;
     emit_ok = (emit_cl <= emit_cr);
@@ -498,11 +530,11 @@ module m2_raster_fill (
       xb         <= 32'sd0;
       sla        <= 32'sd0;
       slb        <= 32'sd0;
-      cury       <= 32'sd0;
-      limy       <= 32'sd0;
-      seg_y1     <= 32'sd0;
-      walk_y     <= 32'sd0;
-      walk_end   <= 32'sd0;
+      cury       <= 16'sd0;
+      limy       <= 16'sd0;
+      seg_y1     <= 16'sd0;
+      walk_y     <= 16'sd0;
+      walk_end   <= 16'sd0;
       swapf      <= 1'b0;
       skip_only  <= 1'b0;
       need_a     <= 1'b0;
@@ -530,19 +562,19 @@ module m2_raster_fill (
       dudx <= 16'sd0; dudy <= 16'sd0; dvdx <= 16'sd0; dvdy <= 16'sd0;
       for (int k = 0; k < 4; k++) begin qu[k] <= '0; qv[k] <= '0; end
       span_valid <= 1'b0;
-      span_y     <= 32'sd0;
-      span_x0    <= 32'sd0;
-      span_x1    <= 32'sd0;
+      span_y     <= 16'sd0;
+      span_x0    <= 16'sd0;
+      span_x1    <= 16'sd0;
       span_col   <= 24'd0;
       span_moire <= 1'b0;
       quad_done  <= 1'b0;
       line_case  <= 1'b0;
-      symin <= 32'sd0; symax <= 32'sd0;
+      symin <= 16'sd0; symax <= 16'sd0;
       xlo_r <= 32'sd0; xhi_r <= 32'sd0;
       pmin_r <= 2'd0;  td_r  <= 1'b0;
       for (int i = 0; i < 4; i++) begin
-        sx[i] <= 32'sd0;
-        sy[i] <= 32'sd0;
+        sx[i] <= 16'sd0;
+        sy[i] <= 16'sd0;
       end
     end else begin
       div_start  <= 1'b0;
@@ -644,11 +676,11 @@ module m2_raster_fill (
         // so a span costs two multiplies and no state.
         S_PF_B: begin
           base_u <= 32'({19'd0, qu[fa]} <<< 16)
-                  - ((32'(dudx * $signed(sx[fa][15:0]))) <<< 8)
-                  - ((32'(dudy * $signed(sy[fa][15:0]))) <<< 8);
+                  - ((32'(dudx * sx[fa])) <<< 8)
+                  - ((32'(dudy * sy[fa])) <<< 8);
           base_v <= 32'({19'd0, qv[fa]} <<< 16)
-                  - ((32'(dvdx * $signed(sx[fa][15:0]))) <<< 8)
-                  - ((32'(dvdy * $signed(sy[fa][15:0]))) <<< 8);
+                  - ((32'(dvdx * sx[fa])) <<< 8)
+                  - ((32'(dvdy * sy[fa])) <<< 8);
           tex_ok <= 1'b1;
           state  <= S_MINMAX;
         end
@@ -736,12 +768,12 @@ module m2_raster_fill (
           if (div_ready && !div_start && divb_ready && !divb_start) begin
             if (need_a) begin
               div_num   <= xa - px[ps1m1[1:0]];
-              div_den   <= cury - ya_next;
+              div_den   <= 32'(cury - ya_next);
               div_start <= 1'b1;
             end
             if (need_b) begin
               divb_num   <= xb - px[ps2p1[1:0]];
-              divb_den   <= cury - yb_next;
+              divb_den   <= 32'(cury - yb_next);
               divb_start <= 1'b1;
             end
             got_a <= !need_a;
@@ -782,14 +814,14 @@ module m2_raster_fill (
           if (cury > view_y2) begin
             state <= S_FS_END;
           end else if (seg_y1 <= view_y1) begin
-            mul_delta <= seg_y1 - cury;
+            mul_delta <= 32'(seg_y1 - cury);
             mul_sl    <= sla;
             skip_only <= 1'b1;
             state     <= S_FS_MULA;
           end else begin
-            walk_end <= (seg_y1 > view_y2) ? (view_y2 + 32'sd1) : seg_y1;
+            walk_end <= (seg_y1 > view_y2) ? (view_y2 + 16'sd1) : seg_y1;
             if (cury < view_y1) begin
-              mul_delta <= view_y1 - cury;
+              mul_delta <= 32'(view_y1 - cury);
               mul_sl    <= sla;
               skip_only <= 1'b0;
               walk_y    <= view_y1;
@@ -835,7 +867,7 @@ module m2_raster_fill (
             end
             xa     <= xa + sla;
             xb     <= xb + slb;
-            walk_y <= walk_y + 32'sd1;
+            walk_y <= walk_y + 16'sd1;
           end
         end
 

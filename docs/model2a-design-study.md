@@ -16209,3 +16209,53 @@ legitimate full-brightness texel.
 **RISK THIS CARRIES:** these polygons are extra work that the renderer has not
 had to do before. Overruns and `ready ms` may both rise. `dbg_culled` says how
 many were being dropped; the board says whether the picture is worth it.
+
+**R327 -- THE FILL DID 13-BIT ARITHMETIC IN 32-BIT REGISTERS.** Looking for ALM
+to pay for the perspective divide (R274), with the framework macros exhausted
+and the OSD worth only 20-60 ALM: `m2_raster_fill` is 3,637 ALM of which only
+1,630 are registers, so ~2,000 is combinational -- and every screen coordinate
+in it was `logic signed [31:0]` for a 496x384 screen.
+
+`m2_quad_store` saturates every coordinate to XW = 13 bits (+/-4,095) in its
+`sat()`, outputs it sign-extended to 16, and `m2_raster3d` then sign-extended it
+AGAIN to 32: `.in_x0({{16{qo_x0[15]}}, qo_x0})`. Nineteen bits of sign extension
+through every register, mux and comparator in the module.
+
+The module already refused to look at them. `px[i]` seeds the 16.16 accumulator
+from `{sx[i][15:0], 16'h0000}`; `pf_ax` took `sx[fb][15:0]`; `uv_at` computed
+`gx * $signed(x[15:0])`; `base_u` took `sx[fa][15:0]`. **Every arithmetic
+consumer sliced to 16 already**, so the bits deleted are bits nothing read.
+
+WHAT THIS IS NOT: an approximation. No value changes. The visual effect is nil
+by construction, and the risk is the edit, not the arithmetic.
+
+**THE MISTAKE THE FIRST ATTEMPT MADE, recorded because it is the whole trap.**
+`xlo01`, `xlo23`, `xlo_c`, `xhi*`, `flat_lo/hi`, `emit_l`, `emit_r` and `xlo_r`,
+`xhi_r` are **16.16 fixed point** -- they come from `px[]`, `xa`, `xb` -- not
+plain coordinates. Narrowing them threw away sixteen FRACTIONAL bits of the edge
+accumulator. Only the `>>> 16` results (`emit_xl/xr`) and what is clipped to the
+viewport (`emit_cl/cr`) are coordinates. Verilator's WIDTHTRUNC caught it
+immediately; the bench would have caught it too, but the width checker was
+free. **Run the module through `verilator --lint-only -Wall` for a change like
+this rather than reading 900 lines** -- the bench Makefile passes
+`-Wno-WIDTHTRUNC`, so the default build would have hidden it.
+
+**THE BENCH FOUND ONE REAL FAILURE, AND IT WAS A CONTRACT QUESTION.** 1 of
+152,295: the directed `y-huge` case drives y to +/-100,000, which a 16-bit port
+cannot carry -- so it had become a test of C-to-Verilog truncation rather than
+of the fill. Its PURPOSE is the viewport skip-multiply path, which +/-30,000
+exercises identically. Note that the fuzz already drove **x** to +/-100,000 and
+always passed, because x was effectively 16-bit all along. The fuzz's y range
+went from +/-2,000 -- which is INSIDE what the hardware can produce, so it never
+tested the limit at all -- to +/-20,000.
+
+The span queue narrows with it: `SQ_DW` 242 -> 194, because y, x0 and x1 were 32
+bits each. Only those three slices move; everything from u down keeps its
+offsets. `m2_span_tex` still carries 32-bit coordinates and is sign-extended
+into, deliberately, to keep the blast radius to one module plus the queue.
+
+**THE CONTRACT, WHICH IS NEW AND CAN BE BROKEN SILENTLY:** the fill's
+coordinates are 16 bits and only m2_quad_store's 13-bit saturation makes that
+safe. If XW grows past 16, or a caller is added that does not go through the
+quad store, this module truncates without a word. It is written at the top of
+`m2_raster_fill.sv` as well as here.

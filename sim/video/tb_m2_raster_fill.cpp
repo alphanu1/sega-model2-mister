@@ -534,7 +534,14 @@ int main(int argc, char** argv) {
       {{40000, 40100, 33000, 32800}, {50, 60, 300, 280}, "x-overflow"},
       {{-40000, -33000, -32800, -40100}, {50, 60, 300, 280}, "x-underflow"},
       // Huge y span, so the viewport skip path with the multiply runs.
-      {{100, 300, 320,  80}, {-100000, -99000, 100000, 99000}, "y-huge"},
+      //
+      // R327: WITHIN THE PORT'S RANGE, WHICH IS NOW SIXTEEN BITS. This case
+      // used +/-100,000, which a 16-bit port cannot carry -- so it was testing
+      // C-to-Verilog truncation, not the fill. m2_quad_store saturates every
+      // screen coordinate to 13 bits (+/-4,095) before the fill can see it, so
+      // 30,000 is already seven times anything the hardware can produce and
+      // still runs the same skip-multiply path: the viewport is 0..383.
+      {{100, 300, 320,  80}, {-30000, -29000, 30000, 29000}, "y-huge"},
       // Degenerate: two pairs, but three distinct points.
       {{100, 100, 300, 300}, {50,  50,  200, 201}, "two-pairs"},
     };
@@ -595,8 +602,15 @@ int main(int argc, char** argv) {
           vx[k] = (int32_t)(rng() % 1000) - 250;
           vy[k] = (int32_t)(rng() % 800) - 200;
         } else {                                // wild
+          // x has always been effectively 16-bit -- px[i] is {sx[i], 16'h0} --
+          // so this range tests the documented wrap and always has.
           vx[k] = (int32_t)(rng() % 200000) - 100000;
-          vy[k] = (int32_t)(rng() % 4000) - 2000;
+          // R327: y WIDENED FROM +/-2,000 TO +/-20,000, deliberately. Narrowing
+          // the coordinate path is only safe if the fuzz actually visits the
+          // top of the range, and +/-2,000 is INSIDE what the hardware can
+          // produce (+/-4,095). This is five times past it and still inside the
+          // 16-bit port, which is where a narrowing bug would show.
+          vy[k] = (int32_t)(rng() % 40000) - 20000;
         }
       }
       // Every fifth quad gets a duplicated vertex, which is how the frustum
