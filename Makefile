@@ -637,6 +637,14 @@ obj_raster_fill/Vm2_raster_fill: rtl/video/m2_raster_fill.sv rtl/video/m2_raster
 	$(VBUILD) --top-module m2_raster_fill -Wno-UNUSEDSIGNAL -Wno-WIDTHTRUNC -Wno-TIMESCALEMOD -Wno-UNUSEDPARAM --Mdir obj_raster_fill -o Vm2_raster_fill -CFLAGS "-O2" \
 	  rtl/video/m2_raster_fill.sv rtl/video/m2_raster_div.sv rtl/video/m2_recip_rom.sv sim/video/tb_m2_raster_fill.cpp
 
+test_m2_fb_write: obj_fbw/Vm2_fb_write
+	@echo "== test m2_fb_write (spans into the DDR3 framebuffer)"
+	@./obj_fbw/Vm2_fb_write $(TEST_ARGS)
+
+obj_fbw/Vm2_fb_write: rtl/video/m2_fb_write.sv sim/video/tb_m2_fb_write.cpp
+	$(VBUILD) --top-module m2_fb_write -Wno-TIMESCALEMOD --Mdir obj_fbw -o Vm2_fb_write -CFLAGS "-O2" \
+	  rtl/video/m2_fb_write.sv sim/video/tb_m2_fb_write.cpp
+
 test_m2_ddr3: obj_ddr3/Vm2_ddr3
 	@echo "== test m2_ddr3 (the DDR3 master, and that it honours BUSY)"
 	@./obj_ddr3/Vm2_ddr3 $(TEST_ARGS)

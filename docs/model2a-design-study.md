@@ -17116,3 +17116,46 @@ Whether the low-latency consumers move at all is now an open question rather
 than a plan. It depends on what R346's self-test reports for `dbg_lat_max`
 under real HPS load -- and the fact that the worst case is UNPREDICTABLE means a
 good median tells us nothing. **The number that matters is the tail.**
+
+**R348 -- SPANS INTO THE DDR3 FRAMEBUFFER, AND TWO BUGS THE BENCH FOUND THAT
+INSPECTION WOULD NOT HAVE.**
+
+`m2_fb_write` turns the fill's (y, x0, x1, col) runs into DDR3 writes. Thirty-two
+bits a pixel: Model 1's D3 records that the band buffer is SEVENTEEN because the
+3D composites over the tilemap and "this pixel was painted" cannot be carried by
+a colour (0x0000 is one the game uses); seventeen packs badly into a 64-bit word
+and thirty-two gives exactly TWO PIXELS A BEAT, which is the shape
+screen_rotate's byte enables already assume. 496 x 384 x 4 = 762 KB a buffer.
+
+A span is a run of one colour, so the aligned middle goes out as **one burst**
+and only the odd pixel at each end needs a byte-enabled single write -- which is
+what R347 says this memory wants.
+
+**THE BENCH RECONSTRUCTS THE FRAMEBUFFER** from the writes and compares it pixel
+by pixel, including the pixels either side of the span. That is stronger than
+counting transactions: it catches a wrong address, a wrong byte enable, a burst
+one word long, and a pixel written twice, none of which a transaction count
+shows. It found two real faults in the first draft:
+
+*The request was PULSED, not held.* `m_req` was asserted for one cycle, so a
+memory that was busy that cycle never saw it. This is the same fault `m2_ddr3`
+exists to prevent on the DDRAM side, reproduced one level up -- **writing the
+guard in one module does not stop you making the mistake in the next.**
+
+*The address was combinational off `x_r`, which `W_HEAD` advanced in the same
+cycle it raised the request.* The head write therefore landed one word late, on
+the pixel BESIDE the span -- corrupting something else's picture. The smallest
+case that shows it is a ONE-PIXEL span at an odd x, which is exactly why the
+bench enumerates the four alignments plus both single-pixel cases rather than
+testing a convenient span.
+
+**AND ONE BENCH ARTIFACT THAT LOOKED LIKE A THIRD BUG.** The model first tracked
+validity PER WORD, so a byte-enabled write created the word and the untouched
+half then read as zero rather than as never-written -- indistinguishable from the
+module corrupting the neighbouring pixel. Per-BYTE validity fixed it. A model
+that cannot represent "this half was not written" cannot test byte enables.
+
+Mutation-tested: making the head write use BE 0xFF instead of 0xF0 -- clobbering
+its neighbour -- fails three checks. Reverting the address latch does not build
+at all, because `addr_r` goes unused; the linter is a second net and caught the
+same class of thing on m2_ddr3's first mutation.
