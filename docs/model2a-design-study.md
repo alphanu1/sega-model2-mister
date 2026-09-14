@@ -16625,3 +16625,45 @@ buffer (~70 bits of lb_*) and the tile RAM port to straddle the domains. Both
 are dual-port RAMs so it is tractable, but it is a separate change with its own
 CDC risk, and it should be done only once a fit confirms the path is actually
 short enough.
+
+**R337 -- BUILD THE PERSPECTIVE ARITHMETIC SEQUENTIALLY. THE FILL HAS CYCLES
+AND HAS NOT GOT AREA.**
+
+The estimate for R331's arithmetic was first given as "300-800 ALM", and Ben
+pushed back on the top of that range: why would passing a value that is already
+computed cost 700? It would not. The range was parallel-versus-sequential and
+was presented as though it were uncertainty about the work.
+
+```
+                                        parallel   sequential
+  normalise four 1/z to a common scale     ~160         ~40   (one shifter, 4 cycles)
+  u_i * ooz_i, v_i * ooz_i                    0           0   (DSP either way, 8 -> 2 blocks)
+  third plane's coefficients                ~130        ~130   (must persist per quad)
+  m2_span_tex reciprocal + rescale          ~150        ~150   (per PIXSTEP group)
+  span queue +37 bits                        ~20         ~20   (MLAB, so ALM)
+                                          -------     -------
+                                             ~460        ~340
+```
+
+**SEQUENTIAL, AND IT IS NOT CLOSE.** `m2_raster_fill` is a twenty-state machine
+that already spends six or more cycles idle in `S_PF_Q1W` and `S_PF_Q2W` waiting
+on `m2_raster_div`, which is multi-cycle and does not pipeline. Four more cycles
+to normalise, reusing ONE shifter and ONE multiplier pair, is 6,400 cycles of an
+860,000-cycle frame at ~1,600 quads: **0.7%**. It buys 120 ALM and two DSP
+blocks out of a budget with 655 ALM left.
+
+**THE FIELD WIDTHS STAY NARROW, which is the other half of not spending area.**
+`uoz_i = u_i * ooz_i` is 13 x 16 = 29 bits, and feeding that to the plane fit
+would widen every numerator, multiplier and barrel shifter in it. Instead uoz is
+shifted back down to 13 bits per quad, so the existing fit is unchanged in
+width, and the shift `s` travels with the span:
+
+```
+  stored:  uoz_s = (u * ooz) >> s        s chosen per quad so the largest fits 13 bits
+  walk:    u = (uoz_s << s) / ooz        the shift cancels exactly, as the scale does
+```
+
+**WHAT TO WATCH INSTEAD OF AREA:** the third plane fit costs TWO MORE DIVIDES
+per quad, and `m2_raster_div` does not pipeline. That is latency on the unit
+that owns the band-fill deadline, so `ready ms` and bands-completed are the
+numbers that decide whether this was affordable -- not ALM.
