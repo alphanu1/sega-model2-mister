@@ -16820,3 +16820,37 @@ the picture all day.
 exists -- the display list's ready write, and this core's own "Walk trigger:
 After flip" option depend on it -- but that is inference plus MAME, not a
 datasheet.
+
+**R342 -- THE PERSPECTIVE WORK DOES NOT FIT, AND R341 MADE IT WORSE. PARKED ON
+A BRANCH; THE MAINLINE GOES BACK TO A STATE THAT BUILDS.**
+
+```
+  R338 + R339   42,104 ALM against 41,910    Fitter requires 4,248 LABs of 4,191
+  R341 "narrowing"  42,361 ALM, 79 DSP       +257 ALM and THREE DSP BLOCKS LOST
+```
+
+**R341 IS A REGRESSION AND THE REASON IS WORTH KEEPING.** It narrowed the
+multiply operands to the widths the data actually has -- 24x25 instead of 64x64,
+13x16 instead of 29x29 -- and that pushed three multiplies OUT OF DSP. A Cyclone
+V DSP block is 27x27; the wide declarations decomposed onto it cleanly and the
+"correct" narrow ones stitched badly in logic. **Narrowing an operand is not
+free when the resource it targets has a fixed shape.** The shifter and
+priority-encoder narrowings in the same commit were probably wins and are lost
+with it; they were not worth separating.
+
+That is four area misjudgements in one day -- MLAB at ~100 against 380, 12-bit
+1/z, R338+R339 at ~390 against 849, and this. The pattern in all four: **the
+area was reasoned from the ALGORITHM and the cost lives in how the tool MAPS
+it.** Estimating ALM from a description is not a skill this project has; the fit
+report is.
+
+**WHAT IS KEPT AND WHAT IS PARKED.** R334 stays -- the quad store carries 1/z
+and streams it on debug phase 7 -- because it fits (553/553) and the plumbing is
+proven. R338 (the three plane fits) and R339 (the divide) are on branch
+`perspective-wip`, bench-green at raster_fill 152,362/0 and span_tex 52/0, and
+come back when there is area for them.
+
+**WHAT MAKES THE AREA: DDR3.** Not more shaving. The band buffers are 223 ALM
+and 24 M10K; those blocks let R332 reverse for ~380 ALM more; and the framebuffer
+is what the hardware does anyway (R340). Shaving for 451 ALM is scraps against
+that, and the one attempt at it went backwards.
