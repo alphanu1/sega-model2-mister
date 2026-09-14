@@ -16909,8 +16909,26 @@ what the parked perspective work needs. **Every figure there is an estimate, and
 four estimates today were wrong in the same direction, so the fit report decides
 it and not this paragraph.**
 
-**R344 -- R336 STALLS THE VIDEO, THE BENCH CANNOT SEE IT, AND `bus busy 0.0%`
-DOES NOT MEAN WHAT IT LOOKS LIKE.**
+**R344 -- WITHDRAWN IN PART. R336 WAS NEVER SHOWN TO STALL ANYTHING; THREE DEAD
+SEEDS WERE. The telemetry trap and the bench gap below both stand.**
+
+**THE CLAIM THIS ENTRY ORIGINALLY MADE IS WRONG.** It said R336's `F_LOOK` stage
+kills the core, on the strength of two dead boards. R336 was reverted, a third
+build was dead, the board was tested with a known-good RBF and ran, and current
+HEAD -- R334+R335, R336 still reverted -- then ran on seed 15. So every dead
+build was a DUD SEED and R336 was never tested on a working placement at all.
+
+It is parked on `tilefetch-wip` because it is UNTESTED, not because it is
+broken. That is a different status and the distinction matters to whoever picks
+it up.
+
+**AND THE REASONING THAT CONVICTED IT WAS FLAWED TWICE OVER.** "Seed 14 worked
+before and seed 14 is dead now" was treated as a controlled comparison. It is
+not: **a seed only reproduces a placement for IDENTICAL source.** `oz/s14` and
+`stable/s14` are unrelated placements that share a number. There was never a
+controlled variable.
+
+**THE TELEMETRY TRAP, WHICH STANDS AND IS THE USEFUL PART.**
 
 R336's `F_LOOK` register stage in `m2_tile_fetch` kills the core. TWO seeds of
 the same RTL agree, which is R330's threshold for suspecting the design rather
@@ -16955,6 +16973,15 @@ for idle between them, run the emit side against a consumer that applies
 backpressure, and assert that `done` arrives for every line rather than that
 `busy` eventually falls.
 
-R336 is reverted on the mainline and parked on branch `tilefetch-wip`. The
-finding it rests on stands -- 13.57 ns through a sixteen-way compare is this
-module's critical path -- but the fix needs a bench that can fail.
+**WHAT IS ACTUALLY ESTABLISHED.** The bench gap is real and was found by
+running `tb_m2_tile_fetch` against both versions: 12/12 either way, so it cannot
+clear a change to this module and should not have been treated as if it could.
+The 13.57 ns critical path is real. Whether `F_LOOK` works is UNKNOWN.
+
+**THE SEED FAILURE RATE IS NOW THE DOMINANT PROJECT COST**, and it is what made
+this whole episode possible. In one day: seven seeds crashed the fitter outright
+(DYN, CUT and STA internal errors), three fitted with healthy slack and did not
+run, and three builds were killed mid-placement while another project was
+fitting on the same machine. Roughly half of everything attempted. A single dead
+seed is indistinguishable from a broken design, and three in a row will convict
+an innocent change -- which is exactly what happened here.
