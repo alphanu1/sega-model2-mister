@@ -637,6 +637,14 @@ obj_raster_fill/Vm2_raster_fill: rtl/video/m2_raster_fill.sv rtl/video/m2_raster
 	$(VBUILD) --top-module m2_raster_fill -Wno-UNUSEDSIGNAL -Wno-WIDTHTRUNC -Wno-TIMESCALEMOD -Wno-UNUSEDPARAM --Mdir obj_raster_fill -o Vm2_raster_fill -CFLAGS "-O2" \
 	  rtl/video/m2_raster_fill.sv rtl/video/m2_raster_div.sv rtl/video/m2_recip_rom.sv sim/video/tb_m2_raster_fill.cpp
 
+test_m2_fb_read: obj_fbr/Vm2_fb_read
+	@echo "== test m2_fb_read (the framebuffer, a line at a time)"
+	@./obj_fbr/Vm2_fb_read $(TEST_ARGS)
+
+obj_fbr/Vm2_fb_read: rtl/video/m2_fb_read.sv sim/video/tb_m2_fb_read.cpp
+	$(VBUILD) --top-module m2_fb_read -Wno-TIMESCALEMOD --Mdir obj_fbr -o Vm2_fb_read -CFLAGS "-O2" \
+	  rtl/video/m2_fb_read.sv sim/video/tb_m2_fb_read.cpp
+
 test_m2_fb_write: obj_fbw/Vm2_fb_write
 	@echo "== test m2_fb_write (spans into the DDR3 framebuffer)"
 	@./obj_fbw/Vm2_fb_write $(TEST_ARGS)

@@ -17191,3 +17191,44 @@ remedy is scheduling rather than seeds:
 * and a build guard that waits for a clear machine is worth the wall-clock it
   appears to cost -- one was written today and abandoned as over-cautious, and
   four builds died afterwards.
+
+**R350 -- THE FRAMEBUFFER READ BACK A LINE AT A TIME, AND AN EIGHT-BIT FIELD
+THAT OVERFLOWED TO ZERO.**
+
+`m2_fb_read` replaces the read side of `m2_raster_band`. The interface is
+deliberately identical -- `rd_x` -> `rd_col`, `rd_hit` -- so `m2_tile_mixer`
+composites the 3D over the tilemap exactly as it does now and never learns the
+pixels come from DDR3.
+
+**ONE BURST A LINE, ISSUED A LINE EARLY, IS THE WHOLE SAFETY ARGUMENT:**
+
+```
+  a scanline is ~30 us of slack
+  the burst is 248 beats, ~2.6 us at 100 MHz
+  the latency it amortises is ~200 ns -- under 8% of the transfer
+```
+
+An order of magnitude of room before anything is late, where a per-pixel read
+would have none. This is the same arithmetic that makes the Z80 and the sample
+fetchers a HARDER problem than the framebuffer rather than an easier one (R347).
+
+**THE BUG THE BENCH FOUND: `8'(256)` IS ZERO.** `DDRAM_BURSTCNT` is eight bits,
+so 255 is the maximum, and a 512-pixel stride at two pixels a beat is exactly
+256. The burst length overflowed to zero, no burst ever ran, and every line came
+back empty -- 18 of 19 checks failed. Only 496 pixels are visible, which is 248
+beats, so the TRANSFER is trimmed to what is shown while the line ADDRESS keeps
+the power-of-two stride that makes it a shift.
+
+**A 512-PIXEL LINE CANNOT BE ONE BURST ON THIS INTERFACE.** Worth stating plainly
+for whoever sizes the next transfer: anything above 255 beats needs splitting,
+and the field will not warn you -- it wraps.
+
+**AND ONE FOUND WHILE WRITING IT.** The state that holds the request until the
+bridge takes it can also receive the FIRST beat, and an earlier draft wrote only
+that beat's low half and did not advance the write pointer -- silently dropping
+pixel 1 of every line. Caught by reading the code back before running it, which
+is not a method that can be relied on; the bench would have caught it as 248
+pixels wrong.
+
+Mutation-tested: making the line address use the burst length instead of the
+stride fails 4 checks; never handing the filled buffer to the mixer fails 5.
