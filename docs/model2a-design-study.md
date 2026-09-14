@@ -17272,3 +17272,30 @@ data was not -- the bridge accepted, delayed and answered. 13 cycles typical and
 figure for this board rather than from documentation, and it says the
 framebuffer is comfortable: a 248-beat line burst is ~2.6 us against ~30 us of
 slack, so even the 500 ns tail is under 2% of the budget.
+
+**R352 -- `open(path,'w').write(f(x))` TRUNCATES BEFORE IT COMPUTES. A SOURCE
+FILE WAS DESTROYED BY AN EDIT THAT FAILED HALFWAY.**
+
+Every edit in this session uses the same idiom:
+
+```python
+    io.open(p, 'w', encoding='utf-8').write(s.replace(a, b))
+```
+
+Python evaluates `io.open(p,'w')` FIRST -- which truncates the file to zero --
+and only then evaluates the argument. So any error while computing the new text
+leaves an EMPTY FILE and no traceback line pointing at the damage. A `NameError`
+did exactly that to `rtl/mem/m2_ddr3.sv`, and it was committed empty before
+anyone looked. It surfaced only because lint then said "Cannot find file
+containing module: 'm2_ddr3'" -- nothing about the edit itself complained.
+
+**THE FORM THAT CANNOT DO THIS:**
+
+```python
+    out = s.replace(a, b)          # compute first; a failure here changes nothing
+    with io.open(p, 'w', encoding='utf-8') as f:
+        f.write(out)               # open only when there is something to write
+```
+
+Recovered with `git show <prev>:<path> > <path>`, which is the reason the
+frequent small commits in this session were worth their noise.

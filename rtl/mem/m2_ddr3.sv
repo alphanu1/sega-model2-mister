@@ -49,13 +49,18 @@ module m2_ddr3 #(
   // 13 cycles typical and 50 worst, and ALL 256 WORDS CAME BACK WRONG. The
   // transactions were real; they just went nowhere.
   //
-  // screen_rotate puts three 8 MB framebuffers at byte 0x24000000 upward, so
-  // this sits above them at byte 0x30000000 = word 0x0600_0000.
+  // ANCHORED TO THE ONE REGION KNOWN TO BE FPGA TERRITORY, not chosen. The
+  // memory is 1 GB and shared with Linux on the HPS, so "somewhere high" is a
+  // guess about whose RAM it is -- and 0x40000000 being exactly 1 GB is what
+  // made the first value silently wrong. screen_rotate places three 8 MB
+  // framebuffers at byte 0x24000000, running to 0x25800000; that region is
+  // demonstrably the FPGA's, so ours sits immediately above it at byte
+  // 0x26000000 = word 0x04C0_0000. Two 762 KB buffers need 1.5 MB.
   //
   // The module header said "a 64-BIT WORD address, not a byte address" while
   // this parameter was set in bytes, which is worth remembering: writing the
   // warning down is not the same as heeding it.
-  parameter logic [28:0] BASE = 29'h0600_0000
+  parameter logic [28:0] BASE = 29'h04C0_0000
 ) (
   input  logic        clk,
   input  logic        rst_n,
