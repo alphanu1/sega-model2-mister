@@ -101,7 +101,27 @@ module m2_ddr3_arb (
 
   assign dout   = m_dout;
 
-  wire sel_b = busy ? owner : (a_req ? 1'b0 : 1'b1);
+  // R374: RESPONSES ARE ROUTED BY THE REGISTERED OWNER, NEVER BY `req`.
+  //
+  // This was `busy ? owner : (a_req ? 1'b0 : 1'b1)`, so whenever `busy` was
+  // clear the routing followed a_req LIVE -- and m2_fb_read drops a_req on its
+  // FIRST returned beat, which it is entitled to do. The acknowledge for a read
+  // in flight then went to the writer, the reader waited in R_FILL for ever,
+  // and the arbiter held a grant nobody would release.
+  //
+  // MEASURED, not deduced. s121 on the board:
+  //     acks ISSUED 3  ->  SEEN by the reader 2  ->  lines COMPLETED 2
+  // seen == completed, so the reader FSM is correct after R368; the missing one
+  // never reached it. R370's three-way counter was built to tell those apart and
+  // this is the answer it gave.
+  //
+  // `owner` is registered at the grant and is valid for the whole transaction,
+  // including any cycle where `busy` happens to be clear. A response cannot
+  // arrive in the grant cycle itself -- m2_ddr3 spends a cycle in D_IDLE before
+  // D_ISSUE -- so the old value of `owner` is never consulted for a live
+  // transfer. The REQUEST-side muxes below still need the combinational choice,
+  // because they must present the new master's address in that grant cycle.
+  wire sel_b = owner;
 
   assign a_wnext  = m_wnext  && !sel_b;
   assign a_rvalid = m_rvalid && !sel_b;

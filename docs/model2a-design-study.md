@@ -18005,3 +18005,44 @@ arbiter changes -- six entries, three board failures, two guards added and
 removed on reasoning rather than evidence. **The arbiter was never required by
 the hardware; it was required by a choice to put both masters on one port**, made
 without checking whether a second was free.
+
+**R374 -- THE ARBITER ROUTED RESPONSES BY `req`, AND A MASTER IS ENTITLED TO DROP
+`req`.**
+
+s121 on the board, and the three-way counter built in R370 gave the answer in one
+line:
+
+    acks ISSUED by m2_ddr3  3  ->  SEEN by the reader  2  ->  lines COMPLETED  2
+
+`seen == completed`, so **R368's reader FSM is correct** -- nothing is dropped
+once it arrives. The missing acknowledge never reached it. The cause:
+
+```systemverilog
+  wire sel_b = busy ? owner : (a_req ? 1'b0 : 1'b1);
+```
+
+Whenever `busy` is clear the routing follows `a_req` **live**, and `m2_fb_read`
+drops `a_req` on its FIRST returned beat -- which it is entitled to do, and which
+R348 specifically requires so a held request is not re-taken. The acknowledge for
+a read in flight then goes to the writer; the reader waits in `R_FILL` for ever;
+the arbiter holds a grant nobody releases; the writer never clears; nothing is
+painted or published.
+
+**`sel_b = owner`.** The owner is registered at the grant and valid for the whole
+transaction, including any cycle where `busy` happens to be clear. A response
+cannot arrive in the grant cycle -- `m2_ddr3` spends a cycle in `D_IDLE` before
+`D_ISSUE` -- so the stale owner is never consulted for a live transfer. The
+request-side muxes keep the combinational choice, because they must present the
+new master's address in that grant cycle.
+
+**A HANDSHAKE'S RESPONSE MUST BE ROUTED BY WHO WAS GRANTED, NEVER BY WHO IS
+ASKING.** Those are different questions, and they differ exactly when a master
+has stopped asking because it is already being served.
+
+**AND A TEST THAT COULD NOT FAIL, CAUGHT BY MUTATION.** The first version of the
+regression test dropped `req` one cycle after the acknowledge, so the arbiter
+re-granted and `busy` stayed SET -- and with `busy` set both the old and new
+routing consult `owner`, so the test passed against the bug. Dropping `req` in the
+same cycle as the acknowledge removes the cover. **Mutation testing earned its
+place again: the test was written to catch a fault that had already been measured
+on hardware, and still could not catch it.**

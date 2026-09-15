@@ -167,6 +167,48 @@ int main(int argc, char **argv) {
   //      request the way the real bridge does at boot. A test that passes
   //      against a model the hardware does not match is how the guard got in.
 
+  // ---- R374: ROUTING MUST NOT FOLLOW req.
+  //
+  //         sel_b was `busy ? owner : (a_req ? 0 : 1)`, so with busy clear the
+  //         routing followed a_req live -- and a master is entitled to drop req
+  //         once its transfer is under way. m2_fb_read drops it on the first
+  //         beat. The board measured the consequence directly: acks ISSUED 3,
+  //         SEEN by the reader 2.
+  //
+  //         The earlier "drops req mid-burst" test could not catch it, because
+  //         there busy stays SET for the whole burst and the owner is consulted
+  //         anyway. This one removes that cover: with NO transaction in flight
+  //         and neither master asking, a stray response must not be claimed by
+  //         port B merely because a_req happens to be low.
+  {
+    std::printf("test: routing does not follow req when nothing is asking\n");
+    // Establish the precondition rather than assume it: give the READER a
+    // transfer so the registered owner is A, then let it finish.
+    d->a_req = 1; d->b_req = 0; d->a_blen = 8; d->eval();
+    int aq = 0;
+    // DROP req IN THE SAME CYCLE AS THE ACK, or the next tick re-grants port A
+    // and leaves `busy` SET -- and with busy set both the old and new routing
+    // consult `owner`, so the test cannot fail. A test that cannot fail is the
+    // thing this project keeps relearning (R336, R339).
+    for (int i = 0; i < 2000 && !aq; i++) {
+      if (a_ack_edge) { aq = 1; d->a_req = 0; d->eval(); }
+      tick();
+    }
+    ck("the reader owned the last transfer", aq, 1);
+    d->a_req = 0; d->b_req = 0; d->eval();
+    for (int i = 0; i < 20; i++) tick();
+    ck("and the arbiter records it as the owner", (long)d->dbg_owner, 0);
+    ck("with no transfer in flight",              (long)d->dbg_busy, 0);
+
+    // With a_req now low, the old routing flipped sel_b to B and would hand
+    // port B anything the memory returned.
+    d->m_rvalid = 1; d->m_dout = 0xDEAD; d->eval();
+    long a_now = d->a_rvalid, b_now = d->b_rvalid;
+    d->m_rvalid = 0; d->eval();
+    ck("a stray response is not handed to the non-owner", b_now, 0);
+    ck("it goes to the registered owner",                 a_now, 1);
+  }
+
   std::printf("m2_ddr3_arb: checks=%ld fails=%ld\n", checks, fails);
   std::printf("%s\n", fails ? "FAIL" : "PASS");
   delete d;
