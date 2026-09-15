@@ -87,6 +87,13 @@ reverted rather than patched.
 2. `fb_shown_ok` rises when the fill COMPLETES A PASS, not when it PAINTED
    anything, so an empty frame is publishable. Small, real, unfixed.
 3. why does taking `ram2` kill the copro? Unexplained.
+4. **R379: `tps_ph` advances on `geo_walk_start`.** The debug stream's phase
+   counter is driven by the display-list walk, so when the renderer stalls the
+   whole stream goes quiet -- the s171 capture had 56,576 'C' records and NOT ONE
+   'P' (CPU pace), which is the number that would have distinguished a slow CPU
+   from an idle one. A diagnostic must not depend on the subsystem it diagnoses.
+   Move it to the vblank edge, which is free-running -- but note that doing so
+   changes every capture layout, so it is a deliberate break, not a tidy-up.
 
 ---
 

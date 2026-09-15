@@ -18220,3 +18220,26 @@ a corrupted handshake made every reading of it look like a routing failure.
 itself can be trusted** -- a plain wire reading 3 in and 2 out should have been
 recognised as impossible, and therefore as evidence about the measurement rather
 than the component, far earlier than it was.
+
+**R379 -- THE DEBUG STREAM'S PHASE ADVANCES ON THE THING BEING DEBUGGED, SO IT
+GOES QUIET EXACTLY WHEN IT IS NEEDED.**
+
+`tps_ph` is incremented by `geo_walk_start` -- the display-list walk. Every phase
+of the stream, including the ones that have nothing to do with the renderer,
+therefore only appears when the game is walking lists.
+
+The s171 capture is the worked example. The board was crawling, one walk in
+150 seconds, and **the CPU-pace record ('P', phase 10) never appeared at all** --
+so the one number that would have said whether the i960 was slow or merely idle
+was missing, precisely because the machine was in the state it was built to
+diagnose. The tag histogram shows it plainly: 56,576 'C' records and no 'P'.
+
+**A DIAGNOSTIC MUST NOT DEPEND ON THE SUBSYSTEM IT DIAGNOSES.** The phase counter
+wants a free-running source -- the vblank edge would do, and is already used for
+the per-frame latches -- so the stream keeps cycling when the walk stops. As it
+stands, "no records" and "nothing to report" are indistinguishable, and a stalled
+renderer silences the instruments aimed at the CPU, the SDRAM and the
+framebuffer alike.
+
+Recorded rather than fixed: the branch is being banked, and changing the phase
+source now would invalidate every capture layout in this history.
