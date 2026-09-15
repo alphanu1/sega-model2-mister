@@ -17506,3 +17506,56 @@ that depends on when the sort finishes and a test that pins it is testing the
 bench. The two lists are drawn in different places on the screen, which is the
 only way a bench can see whether two buffers are two: with them collapsed,
 list B appears while list A is cleared away, and that check is what caught (1).
+
+**R361 -- 6,495 ALUTS IN ONE MODULE, BECAUSE A MEMORY HAD THREE PORTS AND M10K
+HAS TWO.**
+
+The first fit of the framebuffer came back at **49,267 ALM of 41,910 -- 118% of
+the device -- on all three seeds**, against 41,287 at the last good head. The
+overrun was one module: `m2_fb_read`, 6,495 ALUTs on its own, more than the i960
+core.
+
+A DDR3 beat carries two pixels and both were written to the same array in the
+same cycle:
+
+```systemverilog
+  lb1[{wp[7:0], 1'b0}] <= m_dout[24:0];
+  lb1[{wp[7:0], 1'b1}] <= m_dout[56:32];
+```
+
+while the mixer read that array on `rd_clk`. **Two writes and a read is three
+ports; M10K has two.** Quartus cannot map it, so it built 512 x 25 x 2 bits of
+flip-flops -- 25,600 registers, about **40% of every register in the design**,
+in a module whose entire job is to hold one scanline.
+
+**AND IT SAID NOTHING.** No error, no warning, no note. `(* ramstyle = "M10K" *)`
+is a request, not a constraint: an unsatisfiable one is ignored silently. The
+module simply does not appear in the Analysis & Synthesis RAM Summary, and the
+only way to know is to go and look for it there.
+
+The fix is the pattern already in the tree: split by the low address bit, so
+each array has one write port and one read port -- a simple dual port, which is
+what M10K is. Four arrays of 256 x 25 cover both line buffers. `m2_raster_band`
+solved the identical problem with four banks and this module did not copy it.
+
+The even/odd select must be **delayed with the data**: the memory output is a
+cycle behind `rd_x`, so choosing the half with the current `rd_x[0]` picks the
+wrong one on every pixel. `rd_parity` needs no such delay -- it is the line
+parity and changes once a line.
+
+**THREE THINGS THIS SETTLES.**
+
+1. **The M10K ledger was never the problem.** 109 memories inferred normally in
+   the failed build -- texel cache, glyph cache, i960 icache, quad store,
+   tilemap, PCM. Only `m2_fb_read` was absent, and `m2_raster_band` (correctly,
+   R358 deleted it). The fit summary's `Total RAM Blocks : 0 / 553` is the
+   FAILED FITTER reporting nothing placed, not memory lost -- reading it as a
+   resource figure sends you after the wrong fault entirely.
+2. **A wide array written more than once per cycle is a fit-level decision**, and
+   it is invisible to every bench: `tb_m2_fb_read` scored 19/19 against the
+   version that cost 6,495 ALUTs and 19/19 against the version that costs four
+   M10K. Simulation cannot see inference. This is the standing rule from
+   `docs/mister-integration.md` and it has now cost a build.
+3. **Check the RAM Summary after any change to a memory's write path**, before
+   spending a fit. `quartus_map` alone answers it in five minutes; the fit takes
+   twenty and fails at the end.

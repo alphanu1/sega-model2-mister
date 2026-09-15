@@ -86,9 +86,24 @@ module m2_fb_read #(
   assign m_we = 1'b0;
 
   // Ping-pong: the mixer reads one while the other fills.
-  (* ramstyle = "M10K" *) logic [24:0] lb0 [STRIDE];
-  (* ramstyle = "M10K" *) logic [24:0] lb1 [STRIDE];
-  logic [24:0] rd_q0, rd_q1;
+  //
+  // R361: EVEN AND ODD PIXELS ARE SEPARATE MEMORIES, AND THAT IS NOT A
+  // MICRO-OPTIMISATION -- IT IS THE DIFFERENCE BETWEEN M10K AND 6,495 ALUTS.
+  //
+  // A beat carries two pixels and they were written to one array in one cycle,
+  // while the mixer read the same array on rd_clk. That is THREE ports on a
+  // memory that has two, so Quartus inferred none of it and built 512 x 25 x 2
+  // bits of flip-flops: the fit came back at 118% of the device with this
+  // module alone accounting for the whole overrun. Splitting by the low address
+  // bit gives each array one write port and one read port -- a simple dual
+  // port, which is what M10K is -- and four of them cover both buffers.
+  // m2_raster_band solved the identical problem with four banks; the pattern
+  // was already in the tree and this module did not use it.
+  (* ramstyle = "M10K" *) logic [24:0] lb0e [STRIDE/2];
+  (* ramstyle = "M10K" *) logic [24:0] lb0o [STRIDE/2];
+  (* ramstyle = "M10K" *) logic [24:0] lb1e [STRIDE/2];
+  (* ramstyle = "M10K" *) logic [24:0] lb1o [STRIDE/2];
+  logic [24:0] rd_q0e, rd_q0o, rd_q1e, rd_q1o;
   wire         fill_buf = y_r[0];         // line N fills buffer N[0]
 
   logic [8:0]  wp;                        // pixel being written
@@ -96,12 +111,22 @@ module m2_fb_read #(
   logic        busy, have;
 
   // The video side reads in ITS OWN clock domain, as m2_raster_band does.
+  // R361: THE EVEN/ODD SELECT IS DELAYED WITH THE DATA. The memory output is a
+  // cycle behind rd_x, so choosing the half with the CURRENT rd_x[0] would pick
+  // the wrong one on every pixel. rd_parity needs no such delay: it is the line
+  // parity and changes once a line, not once a pixel.
+  logic rd_x0_q;
   always_ff @(posedge rd_clk) begin
-    rd_q0 <= lb0[rd_x];
-    rd_q1 <= lb1[rd_x];
+    rd_q0e <= lb0e[rd_x[$clog2(WIDTH)-1:1]];
+    rd_q0o <= lb0o[rd_x[$clog2(WIDTH)-1:1]];
+    rd_q1e <= lb1e[rd_x[$clog2(WIDTH)-1:1]];
+    rd_q1o <= lb1o[rd_x[$clog2(WIDTH)-1:1]];
+    rd_x0_q <= rd_x[0];
   end
 
-  wire [24:0] rd_w = rd_parity ? rd_q1 : rd_q0;
+  wire [24:0] rd_q0 = rd_x0_q ? rd_q0o : rd_q0e;
+  wire [24:0] rd_q1 = rd_x0_q ? rd_q1o : rd_q1e;
+  wire [24:0] rd_w  = rd_parity ? rd_q1 : rd_q0;
   assign rd_col = rd_w[23:0];
   assign rd_hit = rd_w[24];
 
@@ -145,11 +170,11 @@ module m2_fb_read #(
         R_REQ: if (m_rvalid) begin
           m_req <= 1'b0;
           if (fill_buf) begin
-            lb1[{wp[7:0], 1'b0}] <= m_dout[24:0];
-            lb1[{wp[7:0], 1'b1}] <= m_dout[56:32];
+            lb1e[wp[7:0]] <= m_dout[24:0];      // R361: one write port each
+            lb1o[wp[7:0]] <= m_dout[56:32];
           end else begin
-            lb0[{wp[7:0], 1'b0}] <= m_dout[24:0];
-            lb0[{wp[7:0], 1'b1}] <= m_dout[56:32];
+            lb0e[wp[7:0]] <= m_dout[24:0];
+            lb0o[wp[7:0]] <= m_dout[56:32];
           end
           wp <= wp + 9'd1;
           st <= R_FILL;
@@ -159,11 +184,11 @@ module m2_fb_read #(
           if (m_rvalid) begin
             // Two pixels a beat, low half first.
             if (fill_buf) begin
-              lb1[{wp[7:0], 1'b0}] <= m_dout[24:0];
-              lb1[{wp[7:0], 1'b1}] <= m_dout[56:32];
+              lb1e[wp[7:0]] <= m_dout[24:0];    // R361: one write port each
+              lb1o[wp[7:0]] <= m_dout[56:32];
             end else begin
-              lb0[{wp[7:0], 1'b0}] <= m_dout[24:0];
-              lb0[{wp[7:0], 1'b1}] <= m_dout[56:32];
+              lb0e[wp[7:0]] <= m_dout[24:0];
+              lb0o[wp[7:0]] <= m_dout[56:32];
             end
             wp <= wp + 9'd1;
           end
