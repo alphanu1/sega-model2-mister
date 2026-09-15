@@ -79,7 +79,15 @@ module m2_fb_read #(
   // need opposite fixes. R_REQ means the request was issued and the first beat
   // never came back; R_FILL means beats came and the acknowledge did not.
   output logic [1:0]  dbg_st,
-  output logic        dbg_busy
+  output logic        dbg_busy,
+  // R370: EVERY ACKNOWLEDGE THIS MODULE SEES, in whatever state it is in.
+  // The board says m2_ddr3 issued 4 and this module completed 3 lines, so one
+  // was lost -- and one is enough to wedge the port for ever. Counting them
+  // where they ARRIVE, rather than only where they are acted on, splits the two
+  // remaining possibilities: fewer here than m2_ddr3 issued means the arbiter
+  // is not routing them; the same here but fewer lines means they arrive in a
+  // state that ignores them.
+  output logic [15:0] dbg_acks_seen
 );
 
   // TWO PIXELS A BEAT, AND ONLY THE VISIBLE ONES. A 512-pixel stride is 256
@@ -156,8 +164,10 @@ module m2_fb_read #(
     if (!rst_n) begin
       st <= R_IDLE; m_req <= 1'b0; wp <= 9'd0; y_r <= 9'd0;
       busy <= 1'b0; have <= 1'b0;
-      dbg_lines <= '0; dbg_late <= '0;
+      dbg_lines <= '0; dbg_late <= '0; dbg_acks_seen <= 16'd0;
     end else begin
+      if (m_ack && !(&dbg_acks_seen)) dbg_acks_seen <= dbg_acks_seen + 16'd1;   // R370
+
       // R362: A LATE REQUEST IS DROPPED, NOT APPLIED. y_r was taken on every
       // line_req whether or not a burst was in flight, and m_addr is derived
       // from it -- so a late request moved the address of a transfer the bridge

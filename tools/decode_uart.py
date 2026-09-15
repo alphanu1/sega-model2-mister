@@ -226,7 +226,7 @@ if N:
         ca[((a >> 8) & 1, (a >> 7) & 1)] += 1
         stalls = (a >> 9) & 0x7f
         clears = (a >> 16) & 0xffff
-    spans = N[-1][1] & 0xffff
+    seen  = N[-1][1] & 0xffff
     acks  = (N[-1][1] >> 16) & 0xffff
     print('FRAMEBUFFER STATE (R364): %d clear passes COMPLETED' % clears)
     print('    writer state:  ' + ', '.join('%s x%d' % (WST.get(k, k), v)
@@ -235,7 +235,22 @@ if N:
                                             for k, v in cr.most_common(3)))
     for (own, bsy), v in ca.most_common(3):
         print('    arbiter: busy=%d owner=%s  x%d' % (bsy, 'writer' if own else 'reader', v))
-    print('    spans accepted by the writer: %d' % spans)
+    # R370: the three counts that localise a lost acknowledge exactly.
+    lines_seen = (D[-1][1] & 0xffff) if D else 0
+    print('    acks ISSUED by m2_ddr3 %d  ->  SEEN by the reader %d  ->  lines COMPLETED %d'
+          % (acks, seen, lines_seen))
+    if acks > seen:
+        print('    *** THE ARBITER IS NOT ROUTING %d acknowledge(s) to the reader.'
+              % (acks - seen))
+        print('        m2_ddr3 finished a transfer and a_ack never asserted --')
+        print('        look at sel_b and the grant, not at the reader FSM.')
+    elif seen > lines_seen:
+        print('    *** %d acknowledge(s) ARRIVED IN A STATE THAT IGNORED THEM.'
+              % (seen - lines_seen))
+        print('        The routing is right; the reader FSM drops them. R368 fixed')
+        print('        R_REQ; this is a second state with the same fault.')
+    elif acks and acks == seen == lines_seen:
+        print('    (every acknowledge issued was seen and acted on -- the handshake is clean)')
     # R369: the watchdog should NEVER fire. Any count is a master that stalled
     # long enough to have starved the other one, which is the failure Ben named:
     # the scanout must not be able to stop the fill.
@@ -248,17 +263,6 @@ if N:
         print('    arbiter watchdog: never fired (no master stalled the port)')
     # R366: the two ends of the same handshake. m2_ddr3 counts every ack it
     # issues; m2_fb_read counts every line it completes, which needs one.
-    lines_seen = (D[-1][1] & 0xffff) if D else 0
-    print('    acknowledges ISSUED by m2_ddr3: %d   lines COMPLETED by the reader: %d'
-          % (acks, lines_seen))
-    if acks and not lines_seen:
-        print('    *** ACKNOWLEDGES ARE BEING LOST BETWEEN THE MASTER AND THE READER.')
-        print('        m2_ddr3 finished transfers that m2_fb_read never saw finish,')
-        print('        so the fault is in the arbiter routing or the reader FSM,')
-        print('        NOT in DDR3 and not in the burst.')
-    elif not acks:
-        print('    (no acknowledge was ever issued: the master never completed a')
-        print('     transfer, so look at the request path, not the routing)')
     if clears == 0:
         print('    *** NO CLEAR EVER COMPLETED. in_ready stays low and clear_busy')
         print('        stays high, so the span path is jammed AND the fill is held')

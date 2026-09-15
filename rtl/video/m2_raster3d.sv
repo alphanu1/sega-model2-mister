@@ -164,7 +164,8 @@ module m2_raster3d #(
   //  [7]     arbiter busy      [8]     arbiter owner (1 = writer)
   //  [15:9]  spare             [31:16] clear passes COMPLETED
   output logic [31:0] dbg_fb_state,
-  output logic [31:0] dbg_fb_spans
+  output logic [31:0] dbg_fb_spans,
+  output logic [15:0] dbg_fbr_acks   // R370
 );
 
   localparam int unsigned NBANDS = (SCR_H + BAND_H - 1) / BAND_H;
@@ -571,6 +572,7 @@ module m2_raster3d #(
   logic [1:0]  fbr_st;
   logic        fbr_busy, arb_busy, arb_owner;
   logic [15:0] arb_stalls;   // R369: grants the watchdog had to release
+  logic [15:0] fbr_acks;     // R370: acknowledges the reader actually saw
   logic        fb_clear_req, fb_clear_busy;
 
   // R359: raised when a NEW LIST arrives, not every frame_start. Clearing on
@@ -651,7 +653,7 @@ module m2_raster3d #(
         .rd_parity(scan_y[0]), .rd_x(scan_x[$clog2(SCR_W)-1:0]),
         .rd_col(fb_rd_col), .rd_hit(fbr_hit),
         .dbg_lines(dbg_fb_lines), .dbg_late(dbg_fb_late),
-        .dbg_st(fbr_st), .dbg_busy(fbr_busy)
+        .dbg_st(fbr_st), .dbg_busy(fbr_busy), .dbg_acks_seen(fbr_acks)   // R370
       );
 
       // R359: NOTHING IS SHOWN UNTIL A FRAME HAS BEEN DRAWN. Both buffers hold
@@ -693,6 +695,7 @@ module m2_raster3d #(
       assign fbw_clears = 16'd0; assign fbw_st = 4'd0;
       assign fbr_st = 2'd0; assign fbr_busy = 1'b0;
       assign arb_busy = 1'b0; assign arb_owner = 1'b0; assign arb_stalls = 16'd0;
+      assign fbr_acks = 16'd0;
       assign dbg_fb_spans = 32'd0;
     end
   endgenerate
@@ -914,6 +917,7 @@ module m2_raster3d #(
   // R364: the whole framebuffer's state in one word.
   // R369: the spare bits carry the watchdog's release count, saturating at
   // 127 -- it should be ZERO, and any nonzero value is a master that stalled.
+  assign dbg_fbr_acks = fbr_acks;
   assign dbg_fb_state = {fbw_clears,
                          (arb_stalls > 16'd127) ? 7'd127 : 7'(arb_stalls),
                          arb_owner, arb_busy, fbr_busy, fbr_st, fbw_st};

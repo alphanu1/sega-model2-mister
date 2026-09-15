@@ -17856,3 +17856,33 @@ hiding**.
 
 **This is a recovery, not a fix.** It turns a permanent deadlock into a dropped
 line, which is why R368 matters and this is only the backstop.
+
+**R370 -- R368 WORKED, AND THERE IS A SECOND LOST ACKNOWLEDGE. ONE IS ENOUGH.**
+
+s93 (R367 + R368) on the board:
+
+    acks ISSUED by m2_ddr3   4
+    lines COMPLETED           3
+    late 19,684   clears 0   spans 0   published 0
+    longest in flight 273 cycles -- the master is IDLE, not stuck
+
+**R368 is confirmed**: the reader completes lines at all, where every previous
+build read a flat zero. Then it wedges again after three. **Exactly one
+acknowledge of four went missing, and one is enough to hold the port for ever** --
+the reader waits in `R_FILL`, the arbiter keeps `busy = 1, owner = reader`, and
+the writer never gets the bus, so nothing is cleared, painted or published.
+
+The two remaining explanations need opposite fixes and no counter could separate
+them, so the reader now counts **every acknowledge it sees, in whatever state**.
+Three numbers localise it exactly:
+
+    issued > seen            the arbiter is not routing them -- look at sel_b
+    seen > lines completed   the routing is right, a second state drops them
+    issued == seen == lines  the handshake is clean
+
+**AND A READING TRAP WORTH RECORDING.** The same capture printed "arbiter
+watchdog: never fired" and it meant nothing: s93 was built before R369, so those
+bits are zeros, and the decoder cannot tell an absent counter from a zero one.
+This is the second time a decoder ahead of the gateware has produced a confident
+false line -- **a decoder change and an RTL change are one change**, and a
+capture must be read against the commit it came from.
