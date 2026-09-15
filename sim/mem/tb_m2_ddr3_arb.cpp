@@ -209,6 +209,36 @@ int main(int argc, char **argv) {
     ck("it goes to the registered owner",                 a_now, 1);
   }
 
+  // ---- R375: OWNER MUST NOT MOVE WHILE A TRANSFER IS LIVE.
+  //
+  //         R374 routed responses by `owner`, which is right -- but R367's
+  //         `busy <= !m_ack` left a window where a grant does NOT set busy, and
+  //         the arbiter could then grant again the next cycle and move `owner`
+  //         under a transfer already in flight. The board went from
+  //         acks 3 -> seen 2 -> lines 2 to 1 -> 0 -> 0.
+  //
+  //         Both masters ask continuously here, which is the case that used to
+  //         re-grant: every beat of A's burst must reach A, and `owner` must be
+  //         stable from grant to acknowledge.
+  {
+    std::printf("test: owner is stable from grant to ack with both masters asking\n");
+    a_beats = b_beats = 0;
+    d->a_blen = 8; d->a_req = 1; d->b_req = 1; d->eval();
+    int aq = 0; long owner_changes = 0; int own_prev = -1;
+    for (int i = 0; i < 4000 && !aq; i++) {
+      if (a_ack_edge) { aq = 1; d->a_req = 0; d->eval(); }
+      if (own_prev >= 0 && d->dbg_busy && (int)d->dbg_owner != own_prev) owner_changes++;
+      if (d->dbg_busy) own_prev = d->dbg_owner; else own_prev = -1;
+      tick();
+    }
+    ck("the reader's transfer acknowledged",        aq, 1);
+    ck("owner never moved while busy",              owner_changes, 0);
+    ck("and every beat reached the reader",         a_beats, 8);
+    ck("with none leaking to the writer",           b_beats, 0);
+    d->a_req = 0; d->b_req = 0;
+    for (int i = 0; i < 50; i++) tick();
+  }
+
   std::printf("m2_ddr3_arb: checks=%ld fails=%ld\n", checks, fails);
   std::printf("%s\n", fails ? "FAIL" : "PASS");
   delete d;

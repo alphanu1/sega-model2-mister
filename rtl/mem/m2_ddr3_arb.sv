@@ -136,27 +136,38 @@ module m2_ddr3_arb (
       dbg_a_waits <= '0; dbg_b_waits <= '0;
     end else begin
       cool <= 1'b0;
-      // R367: `busy <= !m_ack` RESTORED, BECAUSE THE BOARD SAYS IT IS
-      // LOAD-BEARING. R360 added it; R364 removed it on the argument that a
-      // transaction acknowledged in its grant cycle "cannot happen with the
-      // real master", since D_IDLE spends a cycle before D_ISSUE. That was a
-      // reading of m2_ddr3, NOT a measurement, and three builds disagree:
+      // HOW THE GRANT RULE GOT HERE, because the history is the argument.
       //
-      //   busy <= !m_ack   s46 RAN    s49 RAN
-      //   busy <= 1'b1     s51 BLACK  s52 BLACK  s61 BLACK
+      //   R360  busy <= !m_ack   guard against an ack in the grant cycle
+      //   R364  busy <= 1'b1     guard removed as "impossible" -- s51/s52/s61 BLACK
+      //   R367  busy <= !m_ack   guard restored on that board evidence
+      //   R374  sel_b = owner    responses stop following `req`  -- WORSE: 1->0->0
+      //   R375  busy <= 1'b1     paired with R374, which is the point
       //
-      // s61 had the best timing of the day (clk_mem -0.237) and the lowest area,
-      // so neither slack nor utilisation explains it. Three of three is not a
-      // seed either. The guard stays until something measures why it is needed.
-      //
-      // WHAT THIS COSTS TO BE WRONG ABOUT: with `busy <= 1'b1` an acknowledge
-      // that arrives in a grant cycle is lost, and the arbiter then holds the
-      // grant for ever -- the phase-11 capture caught exactly that, busy=1 with
-      // owner=reader and the master idle. Whatever produces such an acknowledge
-      // on hardware, it happens.
+      // R364 and R374 each changed ONE half of a pair and each made things
+      // worse, which is why the evidence looked contradictory: with responses
+      // routed by `req`, an unconditional grant loses acknowledges; with an
+      // ack-conditional grant, routing by `owner` lets owner move under a live
+      // transfer. Neither half is wrong. Neither half works alone.
       if (!busy) begin
-        if (a_req)      begin owner <= 1'b0; busy <= !m_ack; cool <= m_ack; end
-        else if (b_req) begin owner <= 1'b1; busy <= !m_ack; cool <= m_ack; end
+        // R375: A GRANT ALWAYS BECOMES BUSY -- and this is only safe now that
+        // R374 routes responses by `owner` rather than by `req`.
+        //
+        // R367 kept `busy <= !m_ack` to survive an acknowledge in the grant
+        // cycle. The cost was a window where the arbiter GRANTS WITHOUT BECOMING
+        // BUSY, and while busy is clear it can grant again the next cycle --
+        // changing `owner` while a transfer is still live. With the old routing
+        // the `a_req` fallback masked that by accident; with R374's
+        // `sel_b = owner` a changed owner misroutes every response, and the
+        // board showed it: acks 3 -> seen 2 -> lines 2 became 1 -> 0 -> 0.
+        //
+        // The two halves only work together. Busy set unconditionally means
+        // owner cannot move mid-transaction; routing by owner means a master
+        // that has stopped asking still receives its acknowledge. R364 tried
+        // the first with the old routing and black-screened; R374 tried the
+        // second with the old busy rule and wedged sooner. This is the pair.
+        if (a_req)      begin owner <= 1'b0; busy <= 1'b1; end
+        else if (b_req) begin owner <= 1'b1; busy <= 1'b1; end
       end else if (busy && m_ack) begin
         busy <= 1'b0;
         cool <= 1'b1;

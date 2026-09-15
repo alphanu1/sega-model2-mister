@@ -18046,3 +18046,38 @@ routing consult `owner`, so the test passed against the bug. Dropping `req` in t
 same cycle as the acknowledge removes the cover. **Mutation testing earned its
 place again: the test was written to catch a fault that had already been measured
 on hardware, and still could not catch it.**
+
+**R375 -- THE GRANT RULE AND THE ROUTING RULE ARE ONE CHANGE, AND CHANGING EITHER
+ALONE MADE THINGS WORSE.**
+
+    R360  busy <= !m_ack   guard against an ack in the grant cycle
+    R364  busy <= 1'b1     guard removed as "impossible"   -> s51/s52/s61 BLACK
+    R367  busy <= !m_ack   guard restored on that evidence
+    R374  sel_b = owner    responses stop following `req`  -> 1 -> 0 -> 0, WORSE
+    R375  busy <= 1'b1     paired with R374
+
+The board numbers across the pair:
+
+    before R374   acks 3  ->  seen 2  ->  lines 2
+    R374 alone    acks 1  ->  seen 0  ->  lines 0
+
+**Each of R364 and R374 changed one half and each made things worse**, which is
+why the evidence looked contradictory for most of a day. With responses routed by
+`req`, an unconditional grant loses acknowledges -- a master drops `req` the
+moment it is served. With an ack-conditional grant, routing by `owner` lets
+`owner` move under a live transfer, because the arbiter can grant without
+becoming busy and then grant again. **Neither half is wrong; neither works
+alone.**
+
+**AND THE BENCH CANNOT PROVE THIS ONE.** Mutation B -- restoring `req` routing --
+fails two checks. Mutation A -- R374's exact configuration, the one measured
+worse on hardware -- **still passes**, because the model never produces an
+acknowledge in a grant cycle and the window therefore never opens at the desk.
+The `owner never moved while busy` check cannot fire. So R375 rests on the board
+measurement and the argument, not on a green test, and that is worth stating
+rather than letting 26/26 imply otherwise.
+
+**THE GENERAL SHAPE, THREE TIMES TODAY.** R362 (a model a cycle too optimistic),
+R364/R372 (models faster and slower than the hardware can be), and now this: **a
+bench can only falsify what its model can express.** When a fix is justified by
+the board and the bench agrees, that is agreement, not proof.
