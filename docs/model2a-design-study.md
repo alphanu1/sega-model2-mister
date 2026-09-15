@@ -17417,3 +17417,38 @@ mutation back to one-per-beat fails it.
 
 **A measurement that survives a change must be checked as carefully as the change
 -- an instrument that quietly changes units is worse than no instrument.**
+
+**R359 -- THE SWAP IS A COMPLETION, NOT A CLOCK TICK, AND A HELD LIST IS DRAWN
+ONCE.**
+
+Two things follow from R358 taking the beam pacing out, and neither is optional
+once it is gone.
+
+**The display holds the last COMPLETE frame.** `fb_draw` was flipped at every
+`frame_start`, which publishes whatever the fill happened to have finished --
+all anyone could do with band buffers, since the beam was going to show the
+bands regardless. `fb_complete` is now raised when the fill has walked every
+band; `fb_show` takes `fb_draw` at the next `frame_start`, a video-frame
+boundary so the reader never changes buffer part way down a line; and `fb_draw`
+moves to the other buffer only when a new list arrives AND the old one
+published. A new list arriving mid-draw abandons the partial frame in place --
+same buffer, cleared again, never shown. **A draw that runs long now costs a
+repeated frame instead of a torn one**, which is what R200's missing top of the
+screen becomes when there is no deadline.
+
+**And a held list is drawn once.** `fill_band` restarted at every `frame_start`,
+so the same list was re-rendered pixel for pixel -- 1.98 renders per list,
+measured on the board -- because the beam needed the bands again. It now
+restarts on `swap`, and `fb_complete` holds the fill off until a new list
+arrives. **That is the measured saving, and it is the reason the framebuffer is
+worth its bandwidth**; everything else it buys is correctness.
+
+**NOTHING IS SHOWN UNTIL SOMETHING HAS BEEN DRAWN.** Both buffers hold whatever
+DDR3 powered up with, and bit 24 of that garbage is the painted flag, so the
+first frames would scatter random 3D pixels over the tilemap. `fb_shown_ok`
+rises once, synchronised into the scan domain, and gates `rd_hit`.
+
+Phase 9 of the debug stream ('F') reports frames published and lists dropped. A
+frozen picture is drop climbing with pub flat -- **a failure mode the band path
+could not even express**, because it showed partial frames rather than holding
+complete ones, and one worth being able to name from the board.

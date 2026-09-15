@@ -153,7 +153,12 @@ module m2_raster3d #(
   input  logic        fb_ack,
   input  logic [63:0] fb_dout,
   output logic [31:0] dbg_fb_lines,
-  output logic [31:0] dbg_fb_late
+  output logic [31:0] dbg_fb_late,
+  // R359: frames PUBLISHED, and lists that arrived before the last one drew.
+  // If drop climbs with pub flat the fill is not keeping up and the picture is
+  // frozen rather than torn -- a failure the band path could not even express.
+  output logic [15:0] dbg_fb_pub,
+  output logic [15:0] dbg_fb_drop
 );
 
   localparam int unsigned NBANDS = (SCR_H + BAND_H - 1) / BAND_H;
@@ -487,14 +492,56 @@ module m2_raster3d #(
   // WHICH BUFFER IS WHICH. The fill writes the one the scanout is not showing,
   // swapped at frame_start -- the same discipline the quad store already uses
   // for its two banks (R213). `fb_draw` is the one being drawn into.
-  logic fb_draw;
+  // A new list is ready the moment a frame starts with the collect bank sorted.
+  // Declared here because the framebuffer swap below is driven by it too.
+  wire swap = frame_start && (pst == P_READY);
+
+  // R359: THE SWAP IS A COMPLETION, NOT A CLOCK TICK.
+  //
+  // Flipping `fb_draw` every frame_start publishes whatever the fill happened
+  // to have finished, which with a band-paced fill was all anyone could do --
+  // the beam was going to show the bands regardless. A framebuffer removes that
+  // constraint and the deadline with it: the display holds the last COMPLETE
+  // frame, and a draw that runs long gets the next frame to finish rather than
+  // being shown half done. This is the second half of what the framebuffer buys
+  // and the reason R200's missing top of the frame stops being a deadline
+  // problem at all.
+  //
+  // `fb_complete` is raised when the fill has walked every band. `fb_show`
+  // takes `fb_draw` at the next frame_start -- a video-frame boundary, so the
+  // reader never changes buffer part way down a line -- and `fb_draw` moves to
+  // the other buffer only when a new list arrives AND the old one published.
+  // If a new list arrives while the fill is still going, the partial frame is
+  // abandoned in place: same buffer, cleared again, nothing shown from it.
+  logic fb_draw, fb_show, fb_shown_ok, fb_complete, fb_busy;
   always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n)          fb_draw <= 1'b0;
-    else if (frame_start) fb_draw <= ~fb_draw;
+    if (!rst_n) begin
+      fb_draw <= 1'b0; fb_show <= 1'b1; fb_shown_ok <= 1'b0; fb_busy <= 1'b0;
+      dbg_fb_pub <= 16'd0; dbg_fb_drop <= 16'd0;
+    end else begin
+      if (frame_start && fb_complete) begin
+        fb_show     <= fb_draw;
+        fb_shown_ok <= 1'b1;       // until the first complete frame, show nothing
+      end
+      // R360: AND THE FIRST SWAP IS NEITHER. At reset nothing has been drawn
+      // and nothing is in flight, so the first list to arrive is not a frame
+      // published and not a list dropped. `fb_busy` is the difference: a list
+      // is being drawn. Without it the very first swap counted as a drop, and
+      // a counter that is wrong by one at startup is a counter nobody trusts.
+      if (swap) begin
+        fb_busy <= 1'b1;
+        if (fb_busy) begin
+          if (!(&dbg_fb_drop)) dbg_fb_drop <= dbg_fb_drop + 16'd1;
+        end else if (fb_complete) begin
+          fb_draw <= ~fb_draw;
+          if (!(&dbg_fb_pub)) dbg_fb_pub <= dbg_fb_pub + 16'd1;
+        end
+      end else if (fb_complete) fb_busy <= 1'b0;
+    end
   end
 
   logic [23:0] fb_rd_col;
-  logic        fb_rd_hit;
+  logic        fb_rd_hit, fbr_hit;
   // R356: THE WRITER'S OWN READY, not the shared span net. Connecting
   // m2_fb_write's in_ready straight to tx_span_ready gave that net two drivers
   // -- the band buffers and the writer -- which lint could not see while
@@ -504,10 +551,12 @@ module m2_raster3d #(
   logic [31:0] fbw_pixels;   // R358: pixels the writer painted, to compare with the bands'
   logic        fb_clear_req, fb_clear_busy;
 
-  // Raised at frame_start, dropped when the writer says it is done.
+  // R359: raised when a NEW LIST arrives, not every frame_start. Clearing on
+  // every frame would wipe a drawing that is still going, and there is no point
+  // clearing a buffer that is about to be redrawn with the same list.
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n)                 fb_clear_req <= 1'b0;
-    else if (frame_start)       fb_clear_req <= 1'b1;
+    else if (swap)              fb_clear_req <= 1'b1;
     else if (fb_clear_busy)     fb_clear_req <= 1'b0;
   end
 
@@ -563,14 +612,26 @@ module m2_raster3d #(
 
       m2_fb_read #(.WIDTH(SCR_W), .STRIDE(512)) u_fbr (
         .clk(clk), .rd_clk(scan_clk), .rst_n(rst_n),
-        .fb_sel(~fb_draw),                       // read the one not being drawn
+        .fb_sel(fb_show),                        // R359: the last COMPLETE frame
         .line_req(line_pulse), .line_y(scan_y[8:0] + 9'd1), .line_ready(),
         .m_req(r_req), .m_we(r_we), .m_addr(r_addr), .m_blen(r_blen),
         .m_rvalid(r_rvalid), .m_dout(fb_dout), .m_ack(r_ack),
         .rd_parity(scan_y[0]), .rd_x(scan_x[$clog2(SCR_W)-1:0]),
-        .rd_col(fb_rd_col), .rd_hit(fb_rd_hit),
+        .rd_col(fb_rd_col), .rd_hit(fbr_hit),
         .dbg_lines(dbg_fb_lines), .dbg_late(dbg_fb_late)
       );
+
+      // R359: NOTHING IS SHOWN UNTIL A FRAME HAS BEEN DRAWN. Both buffers hold
+      // whatever DDR3 powered up with, and bit 24 of that garbage is the
+      // painted flag -- so without this the first frames scatter random 3D
+      // pixels over the tilemap. Two flops because fb_shown_ok is in the fill
+      // domain; it rises once and never falls.
+      logic sok_s1, sok_s2;
+      always_ff @(posedge scan_clk or negedge rst_n) begin
+        if (!rst_n) begin sok_s1 <= 1'b0; sok_s2 <= 1'b0; end
+        else begin sok_s1 <= fb_shown_ok; sok_s2 <= sok_s1; end
+      end
+      assign fb_rd_hit = fbr_hit && sok_s2;
 
       // The reader wins: it has the beam deadline and the writer has not.
       m2_ddr3_arb u_arb (
@@ -590,7 +651,7 @@ module m2_raster3d #(
     end else begin : g_nofb
       assign fb_req = 1'b0; assign fb_we = 1'b0; assign fb_addr = 25'd0;
       assign fb_blen = 8'd0; assign fb_din = 64'd0; assign fb_be = 8'd0;
-      assign fb_rd_col = 24'd0; assign fb_rd_hit = 1'b0;
+      assign fb_rd_col = 24'd0; assign fb_rd_hit = 1'b0; assign fbr_hit = 1'b0;
       assign fbw_ready = 1'b0;   // the bands own the span handshake at FB_DDR3=0
       assign fb_clear_busy = 1'b0;
       assign dbg_fb_lines = 32'd0; assign dbg_fb_late = 32'd0;
@@ -854,7 +915,6 @@ module m2_raster3d #(
   // the top of every geo_parse, unconditionally.
   // R211: cleared only when the banks swap -- the new collect bank is the
   // one that was on display, and it is emptied before the walk's first quad.
-  wire swap = frame_start && (pst == P_READY);
   // The store clears count[wbank]. On the swap cycle `bank` has not flipped
   // yet, so the clear is delayed one cycle to land on the new collect bank
   // (the one coming off display). The walk's first quad is many cycles away.
@@ -872,7 +932,7 @@ module m2_raster3d #(
     if (!rst_n) begin
       pst <= P_COLLECT; cst <= C_IDLE;
       bank <= 1'b0; dvalid <= 1'b0;
-      fill_band <= '0; fill_buf <= '0; bd_ready <= '0;
+      fill_band <= '0; fill_buf <= '0; bd_ready <= '0; fb_complete <= 1'b0;
       bd_clear_req <= '0; dbg_bands <= 16'd0; bd_dbg_pixels <= 32'd0;
       dbg_ready_cyc <= 16'd0; dbg_bands_done <= 8'd0;
       dbg_late_frames <= 8'd0; dbg_qend_frames <= 8'd0;
@@ -933,7 +993,12 @@ module m2_raster3d #(
         // somewhere to put the result, so the only thing worth waiting for is
         // the once-a-frame clear finishing (R357) -- drawing into a buffer
         // being wiped would lose whatever landed first.
-        C_IDLE: if (FB_DDR3 ? (dvalid && !fb_clear_req && !fb_clear_busy)
+        // R359: AND STOP WHEN THE LIST IS DRAWN. The band path had to keep
+        // going: fill_band restarted at every frame_start and the same list was
+        // re-rendered, pixel for pixel, 1.98 times per list on the board --
+        // because the beam needed the bands again. A framebuffer keeps the
+        // result, so `fb_complete` holds the fill off until a new list arrives.
+        C_IDLE: if (FB_DDR3 ? (dvalid && !fb_complete && !fb_clear_req && !fb_clear_busy)
                             : (dvalid && !bd_ready[fill_buf] && bd_settled[fill_buf])) begin
           bd_y0[fill_buf]   <= 16'sd0 + 16'(fill_band) * 16'(BAND_H);
           bd_band[fill_buf] <= fill_band;
@@ -964,6 +1029,7 @@ module m2_raster3d #(
           bd_dbg_pixels <= bd_dbg_pixels + bd_pixels[fill_buf];
           fill_buf   <= (BUFW'(fill_buf) == BUFW'(NBUF-1)) ? '0 : fill_buf + BUFW'(1);
           fill_band  <= (fill_band == BW'(NBANDS-1)) ? '0 : fill_band + BW'(1);
+          if (fill_band == BW'(NBANDS-1)) fb_complete <= 1'b1;   // R359: the frame is whole
           cst <= C_IDLE;
         end
         default: cst <= C_IDLE;   // 3 bits, 7 states: the eighth must not latch
@@ -975,8 +1041,12 @@ module m2_raster3d #(
 
       // Latched and restarted together, so the reported pair always describes
       // the SAME frame rather than one number from each side of a boundary.
+      // R359: the band walk restarts when a new list arrives. Restarting it at
+      // every frame_start is what made the fill redraw a held list.
+      if (swap) fb_complete <= 1'b0;
+      if (FB_DDR3 ? swap : frame_start) fill_band <= '0;
       if (frame_start) begin
-        fill_band <= '0; bd_ready <= '0;
+        bd_ready <= '0;
         dbg_bands_done <= bands_this; bands_this <= 8'd0;
         rdy_cyc <= 20'd0; rdy_run <= 1'b1;
         col_cyc <= 20'd0; col_run <= 1'b1;

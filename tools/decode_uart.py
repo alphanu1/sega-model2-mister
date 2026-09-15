@@ -28,6 +28,7 @@ V=[]     # R269: glyph cache records
 Y=[]     # R275: texture records
 Z=[]     # R294: SDRAM occupancy, phase 5
 Z2=[]    # R294: SDRAM occupancy, phase 6
+F=[]     # R359: framebuffer frames published / dropped, phase 9
 pend=None
 for line in open(sys.argv[1],errors='replace'):
     p=line.split()
@@ -39,6 +40,7 @@ for line in open(sys.argv[1],errors='replace'):
     elif p[0]=='T': T.append((a,d))     # R251: the light table
     elif p[0]=='Q': Z.append((a,d))     # R334: {oz0,oz1} and {oz2,oz3}, phase 7
     elif p[0]=='D': D.append((a,d))     # R346: DDR3, phase 8
+    elif p[0]=='F': F.append((a,d))     # R359: framebuffer frames, phase 9
     elif p[0]=='U': U.append((a,d))     # R255: the walk's own numbers
     elif p[0]=='V': V.append((a,d))     # R269: the glyph cache, per frame
     elif p[0]=='Y': Y.append((a,d))     # R275: the texture path, per frame
@@ -172,6 +174,26 @@ if D:
     if late:
         print('    (asked-early means a line was requested before the last one landed:')
         print('     a line of warning is not enough, and the picture will tear)')
+
+if F:
+    # R359: the framebuffer publishes on COMPLETION. pub counts whole frames
+    # handed to the display; drop counts lists that arrived while the last one
+    # was still drawing and were abandoned in place. A frozen picture is drop
+    # climbing with pub flat -- which is the failure the band path could not
+    # express, because it showed partial frames instead of holding complete ones.
+    a, d = F[-1]
+    pub, drop = a & 0xffff, (a >> 16) & 0xffff
+    print('framebuffer (R359): %d frames published, %d lists dropped  (16-bit, wraps)'
+          % (pub, drop))
+    if len(F) > 1:
+        a0, d0 = F[0]
+        dp = (pub - (a0 & 0xffff)) & 0xffff
+        dd = (drop - ((a0 >> 16) & 0xffff)) & 0xffff
+        print('    over the capture: +%d published, +%d dropped' % (dp, dd))
+        if dp == 0 and dd:
+            print('    (nothing published: the fill never finishes a whole list --')
+            print('     the picture is frozen on the last complete frame)')
+    print('    pixels painted, last sample: %d' % d)
 
 if Z:
     # R334: 1/z per vertex. Sanity, not accuracy -- these should be small
