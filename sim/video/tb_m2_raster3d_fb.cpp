@@ -50,6 +50,8 @@ static std::map<uint32_t, uint64_t> mem;
 static const int LAT = 20;
 static int cd = 0, left = 0, is_wr = 0; static uint32_t caddr = 0;
 static long wbeats = 0, rbeats = 0, cyc = 0;
+static uint32_t burst_addr0 = 0; static unsigned burst_blen0 = 0;
+static long proto_err = 0;
 static int dbg_cmds = 0;
 
 int main(int argc, char **argv) {
@@ -80,6 +82,7 @@ int main(int argc, char **argv) {
                                 d->fb_we ? "WR" : "RD", (unsigned)d->fb_addr,
                                 (unsigned)d->fb_blen, (unsigned)d->fb_be, cyc);
       caddr = d->fb_addr; left = d->fb_blen ? d->fb_blen : 256; is_wr = d->fb_we;
+      burst_addr0 = d->fb_addr; burst_blen0 = d->fb_blen;
       // NOT SERVED IN THE COMMAND CYCLE, because m2_ddr3 does not: D_IDLE spends
       // a cycle latching before D_ISSUE, so the earliest acknowledge is two
       // cycles out. A model that acknowledged a one-beat write in the cycle it
@@ -89,6 +92,17 @@ int main(int argc, char **argv) {
       // for ever. An OPTIMISTIC memory model is not a conservative one.
       cd = is_wr ? 1 : LAT;
     } else if (left > 0) {
+      // R362: AVALON HOLDS THE MASTER TO A CONSTANT ADDRESS AND BURSTCNT FOR
+      // EVERY BEAT. The first version of this model latched the address at the
+      // command and never looked again -- so the board wedged on a violation
+      // the bench could not express. Check it on every beat instead.
+      if (d->fb_addr != burst_addr0 || d->fb_blen != burst_blen0) {
+        if (!proto_err) std::printf("  FAIL: DDRAM_ADDR/BURSTCNT MOVED mid-burst "
+                                    "(addr %u -> %u, blen %u -> %u) -- Avalon forbids it\n",
+                                    burst_addr0, (unsigned)d->fb_addr,
+                                    burst_blen0, (unsigned)d->fb_blen);
+        proto_err++;
+      }
       if (is_wr) {
         if (cd > 0) cd--;
         else {
@@ -227,6 +241,7 @@ int main(int argc, char **argv) {
   CHECK(d->dbg_fb_late == 0, "%u lines were asked for before the last had landed",
         (unsigned)d->dbg_fb_late);
   CHECK(d->dbg_dropped == 0, "quads dropped: %d", (int)d->dbg_dropped);
+  CHECK(proto_err == 0, "the address moved under the bridge %ld times mid-burst", proto_err);
 
   std::printf("  seen per frame:  %ld %ld %ld %ld | %ld %ld %ld %ld\n",
               seen[0], seen[1], seen[2], seen[3], seen[4], seen[5], seen[6], seen[7]);

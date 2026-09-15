@@ -100,14 +100,46 @@ module m2_ddr3 #(
   // ---- what the round trip actually costs, in clk cycles
   output logic [15:0] dbg_lat_last,
   output logic [15:0] dbg_lat_max,
-  output logic [31:0] dbg_reads
+  output logic [31:0] dbg_reads,
+  // R362: CYCLES IN FLIGHT, WHETHER OR NOT THE TRANSACTION EVER FINISHES.
+  // dbg_lat_max is written on COMPLETION, so a transfer that hangs never
+  // updates it -- the board reported a frozen 262 while the bridge had been
+  // stuck for four minutes. This one is updated while waiting, so a hang reads
+  // as a huge number instead of as silence, and bit 15 says whether the stuck
+  // transaction was a write.
+  output logic [15:0] dbg_inflight_max,
+  output logic        dbg_stuck_wr
 );
 
   assign DDRAM_CLK      = clk;
   assign DDRAM_BURSTCNT = blen_r;
-  assign DDRAM_ADDR     = BASE + 29'(addr);
+
+  // R362: THE ADDRESS IS LATCHED FOR THE WHOLE BURST, AND IT HAS TO BE.
+  //
+  // This was `BASE + 29'(addr)` straight off the consumer input. Avalon holds
+  // the master to a constant address and burstcount for every beat of a burst
+  // -- the slave samples them once and counts -- and a consumer that moves its
+  // address mid-burst therefore corrupts a transfer already in flight. That is
+  // not a hypothetical: m2_fb_read updates y_r on EVERY line_req, in flight or
+  // not, so a line request arriving during a 248-beat read walked the address
+  // under the bridge. On the board the first burst completed (262 cycles, and
+  // dbg_lat_last never moved again) and the next collision wedged the bridge
+  // for the rest of the capture: 0 lines fetched, 0 pixels painted, 0 frames
+  // published, with 52,695 line requests landing on a busy reader.
+  //
+  // Latched HERE rather than fixed only in the consumer, because protocol
+  // compliance is this module's job: it is the one thing on the port, and a
+  // future consumer must not be able to break the bridge by being careless.
+  // BE is latched with it -- our writers vary it per TRANSACTION (the head and
+  // tail of a span), never per beat.
+  //
+  // DIN IS NOT LATCHED, and must not be: a write burst takes a new word every
+  // `wnext` and that is exactly what the consumer is being asked for.
+  logic [24:0] addr_r;
+  logic [7:0]  be_r;
+  assign DDRAM_ADDR     = BASE + 29'(addr_r);
   assign DDRAM_DIN      = din;
-  assign DDRAM_BE       = be;
+  assign DDRAM_BE       = be_r;
 
   typedef enum logic [1:0] { D_IDLE, D_ISSUE, D_WAIT } st_t;
   st_t st;
@@ -122,15 +154,25 @@ module m2_ddr3 #(
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       st <= D_IDLE; is_wr <= 1'b0; ack <= 1'b0; dout <= '0;
+      addr_r <= '0; be_r <= 8'hFF;
       blen_r <= 8'd1; beats <= 8'd1; wnext <= 1'b0; rvalid <= 1'b0;
       lat <= '0; dbg_lat_last <= '0; dbg_lat_max <= '0; dbg_reads <= '0;
+      dbg_inflight_max <= '0; dbg_stuck_wr <= 1'b0;
     end else begin
       ack <= 1'b0; wnext <= 1'b0; rvalid <= 1'b0;
+
+      // R362: watch the transfer WHILE it is in flight, not when it lands.
+      if ((st != D_IDLE) && (lat > dbg_inflight_max)) begin
+        dbg_inflight_max <= lat;
+        dbg_stuck_wr     <= is_wr;
+      end
       case (st)
         D_IDLE: if (req) begin
           is_wr  <= we;
           blen_r <= (blen == 8'd0) ? 8'd1 : blen;
           beats  <= (blen == 8'd0) ? 8'd1 : blen;
+          addr_r <= addr;                 // R362: held for the whole burst
+          be_r   <= be;
           lat    <= '0;
           st     <= D_ISSUE;
         end
@@ -139,7 +181,7 @@ module m2_ddr3 #(
         // request, and dropping it here is the whole class of bug this module
         // exists to avoid.
         D_ISSUE: begin
-          lat <= lat + 16'd1;
+          if (!(&lat)) lat <= lat + 16'd1;   // R362: saturate, a wrapped hang reads as short
           if (!DDRAM_BUSY) begin
             if (is_wr) begin
               // One beat taken. ADDR and BURSTCNT matter on the first only;
@@ -154,7 +196,7 @@ module m2_ddr3 #(
         end
 
         D_WAIT: begin
-          lat <= lat + 16'd1;
+          if (!(&lat)) lat <= lat + 16'd1;   // R362: saturate, a wrapped hang reads as short
           if (DDRAM_DOUT_READY) begin
             dout   <= DDRAM_DOUT;
             rvalid <= 1'b1;

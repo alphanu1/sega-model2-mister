@@ -36,7 +36,8 @@ static std::map<uint32_t, uint64_t> mem;
 // corrupting the neighbouring pixel. That artifact cost a debugging round.
 static std::map<uint32_t, uint8_t> valid;
 static int busy_for = 0, busy_ctr = 0;
-static long beats = 0, commands = 0;
+static long beats = 0, commands = 0, max_blen = 0;
+static const int WBURST = 16;   // must match m2_fb_write's parameter
 static uint32_t burst_addr = 0; static int burst_left = 0;
 
 static void tick() {
@@ -48,6 +49,7 @@ static void tick() {
   if (!busy) {
     if (burst_left == 0 && d->m_req) {
       burst_addr = d->m_addr; burst_left = d->m_blen ? d->m_blen : 1;
+      if (burst_left > max_blen) max_blen = burst_left;
       commands++;
     }
     if (burst_left > 0) {
@@ -145,14 +147,18 @@ int main(int argc, char **argv) {
 
   // ---- a long span must BURST, not dribble out a word at a time (R347)
   {
-    mem.clear(); valid.clear(); commands = 0; beats = 0; busy_for = 3;
+    mem.clear(); valid.clear(); commands = 0; beats = 0; max_blen = 0; busy_for = 3;
     std::printf("test: a long span bursts\n");
     long px0 = d->dbg_pixels;
     span(7, 0, 399, 0x445566, 1);        // 400 px = 200 words
     ck("all 400 pixels correct", verify(7, 0, 399, 0x445566, 1, 0, 399), 0);
     ck("200 words written",      beats, 200);
-    // one burst, not 200 commands. Allow a couple for any head/tail.
-    ck("issued as a burst, not word by word", (long)(commands <= 3), 1);
+    // R362: BURSTS, NOT WORD BY WORD -- and the threshold moves with WBURST.
+    // The rule this guards (R347) is that 200 words must not cost 200 commands;
+    // it is not that they must cost one. With writes capped at 16 beats, 200
+    // words is 13 commands plus at most a head and a tail.
+    ck("issued as bursts, not word by word", (long)(commands <= 200 / WBURST + 3), 1);
+    ck("and the cap is respected",           (long)(max_blen <= WBURST), 1);
     // R358: the counter reports PIXELS, and this is the case that tells the
     // two apart -- 400 pixels in 200 beats. A counter that counted beats, as
     // this one did, reads 200 and is not comparable with the band path's.

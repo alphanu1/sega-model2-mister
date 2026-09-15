@@ -17559,3 +17559,64 @@ parity and changes once a line.
 3. **Check the RAM Summary after any change to a memory's write path**, before
    spending a fit. `quartus_map` alone answers it in five minutes; the fit takes
    twenty and fails at the end.
+
+**R362 -- THE FIRST BOARD TEST OF THE FRAMEBUFFER: ONE STUCK WRITE STARVES
+EVERYTHING, AND THE INSTRUMENT THAT SHOULD HAVE SAID SO WAS SILENT.**
+
+s46 fitted at 40,973 ALM with 531/553 M10K, every core clock POSITIVE for the
+first time (`clk_mem` +0.041 against −0.378 on the working head, TNS 0.000 on
+both). On the board: 2D tiles, glyphs and attract mode all correct, and **no 3D
+at all**. The counters:
+
+    pixels painted            0        the writer never painted ONE pixel
+    lines fetched             0        with last == max == 262, never moving
+    frames published          0        lists dropped 6,290
+    SDRAM bus busy          0.0%       geometry waiting for it 55.4%
+
+**"IDLE BUS WITH A QUEUE" IS THE WHOLE DIAGNOSIS.** Geometry stalled against a
+bus doing nothing is blocked, not starved, and `m2_fb_write` names the mechanism:
+
+```systemverilog
+  assign in_ready   = (st == W_IDLE) && !clear_req;
+  assign clear_busy = (st == W_CLR) || (st == W_CLRW);
+```
+
+A clear pass that never finishes holds `in_ready` low for ever -- so the span
+path jams and geometry waits -- AND holds `clear_busy` high for ever, which pins
+the fill in `C_IDLE` (R359). One stuck write burst produces every number above.
+
+**262 CYCLES, LAST AND MAX, FOR FOUR MINUTES.** `dbg_lat_max` is written *on
+completion*. A transfer that never completes never updates it, so the one
+instrument aimed at DDR3 reported a healthy 262 while the bridge had been hung
+since the first second. **A latency counter that only records successes cannot
+report a hang** -- it reports the last thing that worked, for ever, which is
+worse than reporting nothing. `dbg_inflight_max` is updated *while waiting* and
+saturates, with a bit saying whether the stuck transaction was a write.
+
+**AND THE SUSPECT IS THE WRITE BURST.** `screen_rotate`, the framework's own
+DDR3 writer (`sys/arcade_video.v`), uses `DDRAM_BURSTCNT = 1` and never bursts a
+write at all. A 248-beat write burst is ground nothing in this framework stands
+on, while a 248-beat READ is proven -- one completed in 262 cycles. Writes are
+now capped at `WBURST = 16` and the clear walks each line in chunks; reads keep
+their line burst.
+
+**A SECOND FAULT, FOUND WHILE LOOKING, REAL BUT NOT THE CAUSE.** `DDRAM_ADDR` was
+combinational off the consumer input, and `m2_fb_read` updated `y_r` on *every*
+`line_req` whether or not a burst was in flight. Avalon holds the master to a
+constant address for every beat of a burst. The master latches address and byte
+enable at `D_IDLE` now (DIN must NOT be latched -- a write burst wants a new word
+per `wnext`), and the reader drops a late request instead of applying it.
+**Protocol compliance belongs in the master**, which is the one thing on the
+port, not in every consumer that might be careless.
+
+Timing note, because it was the first thing suspected from the board: the only
+negative slack was `pll_hdmi` (−0.515), and it cannot be responsible. That PLL is
+downstream video output; the counters above are registers in `clk_sys` read over
+the UART, and the 2D layer reaching the screen correctly goes through the same
+HDMI path.
+
+**AND THE GAME RAN AT FULL SPEED WITH 3D DEAD.** CPU port waits went 24.5% -> 0.0%
+and bus busy 59.7% -> 0.0%, with texel fetches 36,276 -> 0 a frame. **The
+renderer's texel traffic is what has been holding the i960 below full speed**,
+measured for the first time here, and it means the arbiter work is not optional
+once the picture returns.

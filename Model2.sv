@@ -45,6 +45,8 @@ wire [63:0] ddr_din, ddr_dout;
 wire [31:0] fb_lines, fb_late;
 wire [15:0] fb_pub, fb_drop;   // R359
 wire [15:0] ddr_lat_last, ddr_lat_max;
+wire [15:0] ddr_inflight_max;   // R362
+wire        ddr_stuck_wr;
 wire [31:0] ddr_reads;
 
 m2_ddr3 u_ddr3 (
@@ -56,7 +58,8 @@ m2_ddr3 u_ddr3 (
 	.DDRAM_DIN(DDRAM_DIN), .DDRAM_BE(DDRAM_BE),
 	.DDRAM_WE(DDRAM_WE), .DDRAM_RD(DDRAM_RD),
 	.DDRAM_DOUT(DDRAM_DOUT), .DDRAM_DOUT_READY(DDRAM_DOUT_READY),
-	.dbg_lat_last(ddr_lat_last), .dbg_lat_max(ddr_lat_max), .dbg_reads(ddr_reads)
+	.dbg_lat_last(ddr_lat_last), .dbg_lat_max(ddr_lat_max), .dbg_reads(ddr_reads),
+	.dbg_inflight_max(ddr_inflight_max), .dbg_stuck_wr(ddr_stuck_wr)   // R362
 );
 
 assign VGA_SL  = 0;
@@ -4310,7 +4313,7 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	      : (tps_ph == 4'd2)                  ? {cc_h_f, cc_m_f}                // R269: 'V' glyph cache hits : misses, last frame
 	      : (tps_ph == 4'd4)                  ? {tx_p_f, tx_m_f}                // R275: 'Y' textured pixels : texel misses, last frame
 	      : (tps_ph == 4'd7)                  ? {oz_d0, oz_d1}                 // R334: 1/z of vertices 0 and 1 ('Q')
-	      : (tps_ph == 4'd8)                  ? {ddr_lat_last, ddr_lat_max}     // R346: DDR3 round trip, cycles
+	      : (tps_ph == 4'd8)                  ? {ddr_lat_last, ddr_stuck_wr, ddr_inflight_max[14:0]}   // R362: last completed; longest IN FLIGHT, and whether it was a write
 	      : (tps_ph == 4'd9)                  ? {fb_drop, fb_pub}               // R359: 'F' frames published : lists dropped
 	      : {r3d_ready_cyc[15:0], r3d_bands_done[7:0], r3d_hold[7:0]}),
 	// clip_dropped read 0 on hardware and the refusal count is the number that

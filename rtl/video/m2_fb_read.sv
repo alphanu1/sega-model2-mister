@@ -150,12 +150,23 @@ module m2_fb_read #(
       busy <= 1'b0; have <= 1'b0;
       dbg_lines <= '0; dbg_late <= '0;
     end else begin
+      // R362: A LATE REQUEST IS DROPPED, NOT APPLIED. y_r was taken on every
+      // line_req whether or not a burst was in flight, and m_addr is derived
+      // from it -- so a late request moved the address of a transfer the bridge
+      // was still counting beats for. Avalon requires it constant for the whole
+      // burst. The master latches it now as well (R362), so this is belt and
+      // braces; but taking a new line while the last has not landed was wrong
+      // on its own terms too -- it abandons a fetch that is nearly done in
+      // favour of one that cannot possibly arrive sooner.
       if (line_req) begin
-        y_r  <= line_y;
-        have <= 1'b0;
-        // ASKED BEFORE THE LAST ONE LANDED. Counted rather than silent: it is
-        // the number that says whether a line ahead is enough warning.
-        if (busy && !(&dbg_late)) dbg_late <= dbg_late + 32'd1;
+        if (!busy) begin
+          y_r  <= line_y;
+          have <= 1'b0;
+        end else if (!(&dbg_late)) begin
+          // ASKED BEFORE THE LAST ONE LANDED. Counted rather than silent: it is
+          // the number that says whether a line ahead is enough warning.
+          dbg_late <= dbg_late + 32'd1;
+        end
       end
 
       case (st)

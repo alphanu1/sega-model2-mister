@@ -165,12 +165,23 @@ if D:
     # R346: the question every DDR3 decision rests on -- what does a round trip
     # actually cost here, with the HPS competing? SDRAM's is 13 cycles.
     a, d = D[-1]
-    last, mx = (a >> 16) & 0xffff, a & 0xffff
+    last  = (a >> 16) & 0xffff
+    stuck_wr = (a >> 15) & 1
+    mx    = a & 0x7fff
     late, lines = (d >> 16) & 0xffff, d & 0xffff
     print('DDR3 (R358): framebuffer -- %d lines fetched, %d asked for early' % (lines, late))
-    print('    round trip: last %d cycles, worst %d   (SDRAM is 13 at 100 MHz)' % (last, mx))
+    print('    round trip: last COMPLETED %d cycles   (SDRAM is 13 at 100 MHz)' % last)
+    print('    longest IN FLIGHT: %d cycles, on a %s' % (mx, 'WRITE' if stuck_wr else 'read'))
     if mx == 0:
-        print('    (zero = no read ever completed: the master is not talking to DDR3)')
+        print('    (zero = no transfer ever started: the master is not talking to DDR3)')
+    elif mx >= 0x7fff:
+        print('    *** SATURATED: a transfer has been in flight for 32,767+ cycles.')
+        print('        The bridge has taken a request and never finished it, which')
+        print('        wedges the arbiter and starves every other master. The %s'
+              % ('WRITE' if stuck_wr else 'read'))
+        print('        path is the one that hung.')
+    elif mx > 4 * 262:
+        print('    (a burst is ~262 cycles; anything far above that is the bridge stalling)')
     if late:
         print('    (asked-early means a line was requested before the last one landed:')
         print('     a line of warning is not enough, and the picture will tear)')

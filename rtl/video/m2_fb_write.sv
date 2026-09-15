@@ -31,6 +31,9 @@
 `timescale 1ns/1ps
 
 module m2_fb_write #(
+  // R362: the longest write burst this module will ask for. Reads are a
+  // separate path and keep their 248-beat line burst.
+  parameter int unsigned WBURST = 16,
   parameter int unsigned SCR_W  = 496,     // visible pixels a line
   parameter int unsigned SCR_H  = 384,     // lines to clear
   parameter int unsigned STRIDE = 512      // pixels per line, a power of two so
@@ -90,7 +93,8 @@ module m2_fb_write #(
 
   logic signed [15:0] x_r, x1_r;
   logic [24:0]        row_r, addr_r;
-  logic [8:0]         clr_y;
+  logic [8:0]         clr_y, clr_x;   // R362: chunk offset within the line
+  localparam int unsigned BEATS = (SCR_W + 1) / 2;
   logic [31:0]        px_r;
 
   typedef enum logic [3:0] { W_IDLE, W_HEAD, W_BODY, W_TAIL, W_WAIT, W_DONE,
@@ -103,7 +107,13 @@ module m2_fb_write #(
   wire signed [16:0] left   = 17'(x1_r) - 17'(x_r) + 17'sd1;
   // A burst is capped at 255 by DDRAM_BURSTCNT, and at what is left.
   wire [8:0]         pairs  = (left <= 0) ? 9'd0 : 9'((left) >> 1);
-  wire [7:0]         bcap   = (pairs > 9'd255) ? 8'd255 : 8'(pairs);
+  // R362: AND CAPPED AT WBURST. The framework's own DDR3 writer
+  // (screen_rotate, sys/arcade_video.v) uses DDRAM_BURSTCNT = 1 and never
+  // bursts a write at all, so a 248-beat write burst is ground nothing here
+  // has stood on. Reads at 248 are PROVEN on the board -- one completed in
+  // 262 cycles -- but no write transaction ever finished, and one that never
+  // finishes holds the arbiter and starves the reader for ever.
+  wire [7:0]         bcap   = (pairs > 9'(WBURST)) ? 8'(WBURST) : 8'(pairs);
 
   assign in_ready  = (st == W_IDLE) && !clear_req;
   assign clear_busy = (st == W_CLR) || (st == W_CLRW);
@@ -123,14 +133,14 @@ module m2_fb_write #(
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       st <= W_IDLE; x_r <= '0; x1_r <= '0; row_r <= '0; addr_r <= '0; px_r <= '0;
-      clr_y <= 9'd0; m_req <= 1'b0; m_blen <= 8'd1; m_be <= 8'hFF;
+      clr_y <= 9'd0; clr_x <= 9'd0; m_req <= 1'b0; m_blen <= 8'd1; m_be <= 8'hFF;
       dbg_spans <= '0; dbg_pixels <= '0;
     end else begin
       case (st)
         // The clear runs a line at a time, so it interleaves with the scanout's
         // reads through the arbiter instead of holding the bus for a whole frame.
         W_IDLE: if (clear_req) begin
-          clr_y  <= 9'd0;
+          clr_y  <= 9'd0; clr_x <= 9'd0;
           px_r   <= 32'd0;              // zero: not painted
           st     <= W_CLR;
         end else if (in_valid) begin
@@ -206,9 +216,11 @@ module m2_fb_write #(
           // of every line uncleared -- the same 8-bit ceiling R350 hit from the
           // other side. 496 visible pixels are 248 beats, and the words beyond
           // them are never read.
-          m_blen  <= 8'((SCR_W + 1) / 2);
+          // R362: A CHUNK AT A TIME, not the whole line in one burst.
+          m_blen  <= 8'(((9'(BEATS) - clr_x) > 9'(WBURST)) ? 9'(WBURST)
+                                                          : (9'(BEATS) - clr_x));
           m_be    <= 8'hFF;
-          addr_r  <= ({fb_sel, 9'(clr_y)} * 25'(STRIDE / 2));   // R360
+          addr_r  <= ({fb_sel, 9'(clr_y)} * 25'(STRIDE / 2)) + 25'(clr_x);   // R360/R362
           st      <= W_CLRW;
         end
 
@@ -216,8 +228,14 @@ module m2_fb_write #(
           if (m_wnext) m_req <= 1'b0;
           if (m_ack) begin
             m_req <= 1'b0;
-            if (clr_y == 9'(SCR_H - 1)) st <= W_IDLE;
-            else begin clr_y <= clr_y + 9'd1; st <= W_CLR; end
+            if ((clr_x + 9'(WBURST)) >= 9'(BEATS)) begin
+              clr_x <= 9'd0;
+              if (clr_y == 9'(SCR_H - 1)) st <= W_IDLE;
+              else begin clr_y <= clr_y + 9'd1; st <= W_CLR; end
+            end else begin
+              clr_x <= clr_x + 9'(WBURST);
+              st    <= W_CLR;
+            end
           end
         end
 
