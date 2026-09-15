@@ -107,7 +107,7 @@ module m2_raster3d #(
   output logic [15:0] dbg_dropped,
   output logic [15:0] dbg_tiny,            // R216
   output logic [15:0] dbg_bands,
-  output logic [31:0] dbg_pixels,
+  output logic [31:0] dbg_pixels,       // R358: from the bands, or from the writer
 
   // WHY THE TOP OF THE FRAME IS MISSING, INSTRUMENTED. R200 measured that
   // bands 0-11 never render and 12+ render perfectly, on a fill that is
@@ -501,6 +501,7 @@ module m2_raster3d #(
   // FB_DDR3 was 0, because the generate built nothing. It would have appeared
   // only in the build that turned the framebuffer on.
   logic        fbw_ready;
+  logic [31:0] fbw_pixels;   // R358: pixels the writer painted, to compare with the bands'
   logic        fb_clear_req, fb_clear_busy;
 
   // Raised at frame_start, dropped when the writer says it is done.
@@ -534,7 +535,7 @@ module m2_raster3d #(
         .in_col(tx_span_col), .in_painted(1'b1),
         .m_req(w_req), .m_we(w_we), .m_addr(w_addr), .m_blen(w_blen),
         .m_din(w_din), .m_be(w_be), .m_wnext(w_wnext), .m_ack(w_ack),
-        .dbg_spans(), .dbg_words()
+        .dbg_spans(), .dbg_pixels(fbw_pixels)
       );
 
       // A line ahead of the beam, one burst. The line the mixer is about to
@@ -593,6 +594,7 @@ module m2_raster3d #(
       assign fbw_ready = 1'b0;   // the bands own the span handshake at FB_DDR3=0
       assign fb_clear_busy = 1'b0;
       assign dbg_fb_lines = 32'd0; assign dbg_fb_late = 32'd0;
+      assign fbw_pixels = 32'd0;
     end
   endgenerate
 
@@ -608,7 +610,17 @@ module m2_raster3d #(
 
   genvar b;
   generate
-    for (b = 0; b < NBUF; b++) begin : g_band
+    // R358: not built when the framebuffer is on -- this is the 24 M10K and
+    // 223 ALM the change hands back. Their outputs still need driving, because
+    // the sequencer and the mixer reference them at either setting.
+    if (FB_DDR3) begin : g_noband
+      assign bd_rd_col    = '0;
+      assign bd_rd_hit    = '0;
+      assign bd_pixels    = '0;
+      assign bd_span_ready = '0;
+      assign bd_clear_busy = '0;
+    end
+    for (b = 0; b < (FB_DDR3 ? 0 : NBUF); b++) begin : g_band
       m2_raster_band #(.WIDTH(SCR_W), .HEIGHT(BAND_H)) u_band (
         .clk(clk), .rd_clk(scan_clk), .rst_n(rst_n),
         .band_y0(bd_y0[b]),
@@ -793,6 +805,12 @@ module m2_raster3d #(
 
   // R356: the span walk feeds the framebuffer or the bands, never both.
   assign tx_span_ready = FB_DDR3 ? fbw_ready : bd_span_ready[fill_buf];
+
+  // R358: the pixel count has to keep meaning the same thing across the
+  // change, or the before/after comparison says nothing. The bands add each
+  // band's total at C_DONE; the writer counts as it paints.
+  logic [31:0] bd_dbg_pixels;
+  assign dbg_pixels = FB_DDR3 ? fbw_pixels : bd_dbg_pixels;
   always_comb begin
     bd_span_valid = '0;
     if (!FB_DDR3) bd_span_valid[fill_buf] = tx_span_valid;
@@ -855,7 +873,7 @@ module m2_raster3d #(
       pst <= P_COLLECT; cst <= C_IDLE;
       bank <= 1'b0; dvalid <= 1'b0;
       fill_band <= '0; fill_buf <= '0; bd_ready <= '0;
-      bd_clear_req <= '0; dbg_bands <= 16'd0; dbg_pixels <= 32'd0;
+      bd_clear_req <= '0; dbg_bands <= 16'd0; bd_dbg_pixels <= 32'd0;
       dbg_ready_cyc <= 16'd0; dbg_bands_done <= 8'd0;
       dbg_late_frames <= 8'd0; dbg_qend_frames <= 8'd0;
       dbg_collect_cyc <= 16'd0; col_cyc <= 20'd0; col_run <= 1'b0;
@@ -906,11 +924,21 @@ module m2_raster3d #(
         // sample equal to the beam's own band would present a buffer being
         // cleared. Model 1 found the same class on its beam-band index
         // (a1d9192). Eight cycles of settle covers the two-flop crossing.
-        C_IDLE: if (dvalid && !bd_ready[fill_buf] && bd_settled[fill_buf]) begin
+        // R358: WITH A FRAMEBUFFER THERE IS NOTHING TO WAIT FOR.
+        //
+        // `!bd_ready[fill_buf] && bd_settled[fill_buf]` is the beam pacing: it
+        // holds the fill until the beam has passed a band and released its
+        // buffer, which is why the fill can run at most NBUF bands ahead and
+        // why a slow frame loses the bottom of the screen. A framebuffer has
+        // somewhere to put the result, so the only thing worth waiting for is
+        // the once-a-frame clear finishing (R357) -- drawing into a buffer
+        // being wiped would lose whatever landed first.
+        C_IDLE: if (FB_DDR3 ? (dvalid && !fb_clear_req && !fb_clear_busy)
+                            : (dvalid && !bd_ready[fill_buf] && bd_settled[fill_buf])) begin
           bd_y0[fill_buf]   <= 16'sd0 + 16'(fill_band) * 16'(BAND_H);
           bd_band[fill_buf] <= fill_band;
-          bd_clear_req[fill_buf] <= 1'b1;
-          cst <= C_CLR;
+          if (!FB_DDR3) bd_clear_req[fill_buf] <= 1'b1;
+          cst <= FB_DDR3 ? C_REPLAY : C_CLR;
         end
         C_CLR:  cst <= C_CLRW;
         C_CLRW: if (!bd_clear_busy[fill_buf]) cst <= C_REPLAY;
@@ -928,10 +956,12 @@ module m2_raster3d #(
         end
         C_FILLW: if (fl_quad_done) cst <= C_FILL;
         C_DONE: begin
-          bd_ready[fill_buf] <= 1'b1;
+          // Marking a buffer ready is how the beam is told it may show this
+          // band. There is no such handshake with a framebuffer.
+          if (!FB_DDR3) bd_ready[fill_buf] <= 1'b1;
           dbg_bands  <= dbg_bands + 16'd1;
           if (!(&bands_this)) bands_this <= bands_this + 8'd1;
-          dbg_pixels <= dbg_pixels + bd_pixels[fill_buf];
+          bd_dbg_pixels <= bd_dbg_pixels + bd_pixels[fill_buf];
           fill_buf   <= (BUFW'(fill_buf) == BUFW'(NBUF-1)) ? '0 : fill_buf + BUFW'(1);
           fill_band  <= (fill_band == BW'(NBANDS-1)) ? '0 : fill_band + BW'(1);
           cst <= C_IDLE;

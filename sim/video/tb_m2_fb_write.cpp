@@ -147,11 +147,16 @@ int main(int argc, char **argv) {
   {
     mem.clear(); valid.clear(); commands = 0; beats = 0; busy_for = 3;
     std::printf("test: a long span bursts\n");
+    long px0 = d->dbg_pixels;
     span(7, 0, 399, 0x445566, 1);        // 400 px = 200 words
     ck("all 400 pixels correct", verify(7, 0, 399, 0x445566, 1, 0, 399), 0);
     ck("200 words written",      beats, 200);
     // one burst, not 200 commands. Allow a couple for any head/tail.
     ck("issued as a burst, not word by word", (long)(commands <= 3), 1);
+    // R358: the counter reports PIXELS, and this is the case that tells the
+    // two apart -- 400 pixels in 200 beats. A counter that counted beats, as
+    // this one did, reads 200 and is not comparable with the band path's.
+    ck("dbg_pixels counts pixels, not beats", (long)d->dbg_pixels - px0, 400);
   }
 
   // ---- the painted flag is what lets the mixer tell black from nothing
@@ -173,6 +178,7 @@ int main(int argc, char **argv) {
     std::printf("test: the clear pass zeroes the buffer\n");
     span(5, 10, 20, 0x334455, 1);              // something to be cleared
     beats = 0;                                 // count the CLEAR's beats only
+    long pxc = d->dbg_pixels;
     d->clear_req = 1;
     int i = 0; for (; i < 400000 && !d->clear_busy; i++) tick();
     ck("the clear started", (long)(i < 400000), 1);
@@ -185,6 +191,8 @@ int main(int argc, char **argv) {
     // a cleared pixel is NOT painted, so the mixer shows the tilemap through it
     ck("cleared means not painted", (long)(pix(0, 5, 15) >> 24), 0);
     ck("it wrote every visible line", beats, 384L * 248);
+    // the clear paints nothing the mixer will show, so it must not be counted
+    ck("the clear did not touch the pixel count", (long)d->dbg_pixels - pxc, 0);
     tick();
     ck("and takes spans again", (long)d->in_ready, 1);
   }

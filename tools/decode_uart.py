@@ -164,13 +164,14 @@ if D:
     # actually cost here, with the HPS competing? SDRAM's is 13 cycles.
     a, d = D[-1]
     last, mx = (a >> 16) & 0xffff, a & 0xffff
-    err, done, reads = (d >> 16) & 0xffff, (d >> 8) & 1, d & 0xff
-    print('DDR3 (R346): self-test %s, %d mismatches of 256'
-          % ('COMPLETE' if done else 'still running', err))
+    late, lines = (d >> 16) & 0xffff, d & 0xffff
+    print('DDR3 (R358): framebuffer -- %d lines fetched, %d asked for early' % (lines, late))
     print('    round trip: last %d cycles, worst %d   (SDRAM is 13 at 100 MHz)' % (last, mx))
-    print('    reads acknowledged: %d (low byte)' % reads)
     if mx == 0:
         print('    (zero = no read ever completed: the master is not talking to DDR3)')
+    if late:
+        print('    (asked-early means a line was requested before the last one landed:')
+        print('     a line of warning is not enough, and the picture will tear)')
 
 if Z:
     # R334: 1/z per vertex. Sanity, not accuracy -- these should be small

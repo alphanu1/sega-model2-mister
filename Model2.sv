@@ -31,22 +31,25 @@ assign {UART_RTS, UART_DTR} = 0;
 // UART_TXD is driven by the debug streamer at the bottom of this file. The
 // core's own printf -- see rtl/dbg/m2_dbg_stream.sv for why it exists.
 assign {SD_SCK, SD_MOSI, SD_CS} = 'Z;
-// R346: THE DDR3 SELF-TEST. The framework hands this core a gigabyte and the
-// line that used to be here threw it away. Nothing depends on DDR3 yet: this
-// writes a pattern, reads it back and reports mismatches and LATENCY, so the
-// question every later decision rests on -- what does a DDR3 round trip
-// actually cost on this board, with the HPS competing -- is answered by the
-// board rather than assumed. SDRAM's is 13 cycles at 100 MHz.
-wire        ddr_req, ddr_we, ddr_ack;
+// R358: THE DDR3 MASTER, DRIVING THE FRAMEBUFFER.
+//
+// R346's self-test lived here and has been removed: it answered the question it
+// existed for -- a round trip on this board is 13 cycles typical and 50 worst
+// (R351), against ~30 us of slack per scanline -- and the framebuffer is what
+// uses the memory now. The latency counters stay, because the same numbers say
+// whether the HPS is interfering once real traffic is on the bus.
+wire        ddr_req, ddr_we, ddr_ack, ddr_wnext, ddr_rvalid;
 wire [24:0] ddr_addr;
+wire [7:0]  ddr_blen, ddr_be;
 wire [63:0] ddr_din, ddr_dout;
+wire [31:0] fb_lines, fb_late;
 wire [15:0] ddr_lat_last, ddr_lat_max;
 wire [31:0] ddr_reads;
 
 m2_ddr3 u_ddr3 (
 	.clk(clk_mem), .rst_n(mem_rst_n),
-	.req(ddr_req), .we(ddr_we), .addr(ddr_addr), .blen(8'd1), .din(ddr_din), .be(8'hFF),
-	.wnext(), .rvalid(), .ack(ddr_ack), .dout(ddr_dout),
+	.req(ddr_req), .we(ddr_we), .addr(ddr_addr), .blen(ddr_blen), .din(ddr_din), .be(ddr_be),
+	.wnext(ddr_wnext), .rvalid(ddr_rvalid), .ack(ddr_ack), .dout(ddr_dout),
 	.DDRAM_CLK(DDRAM_CLK), .DDRAM_BUSY(DDRAM_BUSY),
 	.DDRAM_BURSTCNT(DDRAM_BURSTCNT), .DDRAM_ADDR(DDRAM_ADDR),
 	.DDRAM_DIN(DDRAM_DIN), .DDRAM_BE(DDRAM_BE),
@@ -54,49 +57,6 @@ m2_ddr3 u_ddr3 (
 	.DDRAM_DOUT(DDRAM_DOUT), .DDRAM_DOUT_READY(DDRAM_DOUT_READY),
 	.dbg_lat_last(ddr_lat_last), .dbg_lat_max(ddr_lat_max), .dbg_reads(ddr_reads)
 );
-
-// Write 256 words, read them back, count what does not match. The pattern is a
-// function of the address so a wrong ADDRESS shows as a mismatch and not just
-// wrong data -- the failure a fixed pattern cannot see.
-localparam int unsigned DT_N = 256;
-logic [8:0]  dt_i;
-logic [1:0]  dt_st;
-logic [15:0] dt_err;
-logic        dt_done, dt_req_r, dt_we_r;
-wire [63:0]  dt_expect = {32'hA5000000 | 32'(dt_i), 32'h5A000000 | 32'(dt_i)};
-
-assign ddr_req  = dt_req_r;
-assign ddr_we   = dt_we_r;
-assign ddr_addr = 25'(dt_i);
-assign ddr_din  = dt_expect;
-
-always_ff @(posedge clk_mem or negedge mem_rst_n) begin
-	if (!mem_rst_n) begin
-		dt_i <= 9'd0; dt_st <= 2'd0; dt_err <= 16'd0;
-		dt_done <= 1'b0; dt_req_r <= 1'b0; dt_we_r <= 1'b0;
-	end else begin
-		dt_req_r <= 1'b0;
-		case (dt_st)
-			// fill
-			2'd0: if (!dt_req_r && !ddr_ack) begin
-				dt_we_r <= 1'b1; dt_req_r <= 1'b1; dt_st <= 2'd1;
-			end
-			2'd1: if (ddr_ack) begin
-				if (dt_i == 9'(DT_N - 1)) begin dt_i <= 9'd0; dt_st <= 2'd2; end
-				else begin dt_i <= dt_i + 9'd1; dt_st <= 2'd0; end
-			end
-			// read back and compare
-			2'd2: if (!dt_req_r && !ddr_ack) begin
-				dt_we_r <= 1'b0; dt_req_r <= 1'b1; dt_st <= 2'd3;
-			end
-			default: if (ddr_ack) begin
-				if (ddr_dout != dt_expect) dt_err <= dt_err + 16'd1;
-				if (dt_i == 9'(DT_N - 1)) begin dt_done <= 1'b1; dt_st <= 2'd3; end
-				else begin dt_i <= dt_i + 9'd1; dt_st <= 2'd2; end
-			end
-		endcase
-	end
-end
 
 assign VGA_SL  = 0;
 assign VGA_F1  = 0;
@@ -4425,7 +4385,7 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	      : (tps_ph == 4'd4)                  ? {tx_h_f, tx_n_f}                // R275: texel hits : texels that were not 0xF
 	      : (tps_ph == 4'd5)                  ? {tx_m_f, tex_sweep}             // R294 texel misses; R310 whole-cache sweeps
 	      : (tps_ph == 4'd7)                  ? {oz_d2, oz_d3}                 // R334: 1/z of vertices 2 and 3 ('Q')
-	      : (tps_ph == 4'd8)                  ? {dt_err, 7'd0, dt_done, ddr_reads[7:0]}   // R346
+	      : (tps_ph == 4'd8)                  ? {fb_late[15:0], fb_lines[15:0]}   // R358: lines fetched, and how often the fetch was asked for early
 	      : (tps_ph == 4'd6)                  ? {bwl_tex[20:5], 16'd0}          // R294: texel fetch waiting
 	      : {lum_mean_f, lum_zpc_f, wedge_slot, wedge_n[6:0], r3d_quads[11:4]}),   // R249: the frame's mean luminance and its black-polygon percentage, where the always-zero drop count and the free-running miss count were
 	.a_tag(8'h43),
@@ -5641,7 +5601,10 @@ wire [15:0] oz_d0, oz_d1, oz_d2, oz_d3;   // R334: 1/z off the quad store   // R
 // empty while the third is still being filled. The same seven blocks in the
 // texel cache take it from 1 KB to 4 KB, and the texel cache is where the
 // fill's time is going -- 27,000 fetches a frame at a 39% hit rate.
-m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(3),
+// R358: THE DDR3 FRAMEBUFFER IS ON. The band buffers are not built, the fill is
+// no longer beam-paced, and the 3D layer lives in DDR3 where the scanout reads
+// it a line at a time.
+m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(3), .FB_DDR3(1'b1),
               .TWO_CLOCKS(1'b0), .TEX_AW(SDR_AW)) u_raster3d (
 	// R318: clk_mem carries m2_texel, which runs at 100 MHz inside this module.
 	.clk(clk_sys), .clk_mem(clk_mem), .rst_n(mem_rst_n),
@@ -5651,9 +5614,10 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(3),
 	// no behaviour change. The commit that turns it on is where these meet the
 	// master, and having the plumbing land separately is what gives a bisect
 	// somewhere to stand between "the path exists" and "the picture uses it".
-	.fb_req(), .fb_we(), .fb_addr(), .fb_blen(), .fb_din(), .fb_be(),
-	.fb_wnext(1'b0), .fb_rvalid(1'b0), .fb_ack(1'b0), .fb_dout(64'd0),
-	.dbg_fb_lines(), .dbg_fb_late(),
+	.fb_req(ddr_req), .fb_we(ddr_we), .fb_addr(ddr_addr), .fb_blen(ddr_blen),
+	.fb_din(ddr_din), .fb_be(ddr_be),
+	.fb_wnext(ddr_wnext), .fb_rvalid(ddr_rvalid), .fb_ack(ddr_ack), .fb_dout(ddr_dout),
+	.dbg_fb_lines(fb_lines), .dbg_fb_late(fb_late),
 	// Each bar is a proper filled rectangle traversed around its perimeter:
 	// (x0,y0) top-left, (x0,y2) bottom-left, (x2,y2) bottom-right,
 	// (x2,y0) top-right -- the same v0..v3 cycle the geometry engine emits.

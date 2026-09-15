@@ -75,7 +75,7 @@ module m2_fb_write #(
   input  logic        m_ack,
 
   output logic [31:0] dbg_spans,
-  output logic [31:0] dbg_words
+  output logic [31:0] dbg_pixels
 );
 
   // One pixel: painted in bit 24, colour below it.
@@ -117,7 +117,7 @@ module m2_fb_write #(
     if (!rst_n) begin
       st <= W_IDLE; x_r <= '0; x1_r <= '0; row_r <= '0; addr_r <= '0; px_r <= '0;
       clr_y <= 9'd0; m_req <= 1'b0; m_blen <= 8'd1; m_be <= 8'hFF;
-      dbg_spans <= '0; dbg_words <= '0;
+      dbg_spans <= '0; dbg_pixels <= '0;
     end else begin
       case (st)
         // The clear runs a line at a time, so it interleaves with the scanout's
@@ -170,10 +170,14 @@ module m2_fb_write #(
           // one, so they only clear the request.
           if (m_wnext) begin
             m_req <= 1'b0;
+            // R358: COUNT PIXELS, NOT BEATS. A whole-word beat paints two
+            // pixels and a byte-enabled end paints one, so beats are not
+            // comparable with the band path's pixel count -- and the whole
+            // point of this counter is to compare the two.
             if (m_be == 8'hFF) begin
               x_r <= x_r + 16'sd2;
-              if (!(&dbg_words)) dbg_words <= dbg_words + 32'd1;
-            end else if (!(&dbg_words)) dbg_words <= dbg_words + 32'd1;
+              if (!(&dbg_pixels)) dbg_pixels <= dbg_pixels + 32'd2;
+            end else if (!(&dbg_pixels)) dbg_pixels <= dbg_pixels + 32'd1;
           end
           if (m_ack) begin
             m_req <= 1'b0;

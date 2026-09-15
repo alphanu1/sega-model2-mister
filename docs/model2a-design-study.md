@@ -17359,3 +17359,61 @@ testing `rdy_s2[i] && band_s2[i] == scan_band` -- "has the fill reached this ban
 yet". With a framebuffer there is no band and no readiness: the line was fetched
 while the beam drew the previous one. **That question IS the beam deadline**, and
 removing it is the point of the whole change rather than a side effect of it.
+
+**R357 -- A FRAMEBUFFER THAT IS NEVER CLEARED ACCUMULATES. THE PLAN HAD MISSED
+IT.**
+
+The band buffers cleared per band (`C_CLR`), and the reference clears too --
+`destmap().fill(0)` before each render. Neither fact appeared in the plan for the
+framebuffer, because clearing had always been someone else's job: a band buffer
+is small enough that wiping it is free, so nobody had ever had to decide *when*
+it happened. A 496x384 buffer forces the decision, and the answer is once a
+frame, on the buffer about to be drawn into.
+
+`m2_fb_write` gains a clear pass raised at `frame_start`. With the painted flag
+in bit 24 a cleared word is simply zero -- not painted -- so the mixer shows the
+tilemap through it, which is what an unpainted pixel has always meant. It runs a
+line at a time so it interleaves with the scanout's reads through the arbiter
+instead of holding the bus for a whole frame, and the writes are posted: they
+never wait for a round trip.
+
+**`8'(256)` WRAPS TO ZERO, FOR THE SECOND TIME.** `STRIDE/2` is 256 and
+`DDRAM_BURSTCNT` is eight bits. Clamping to 255 left the last word of every line
+uncleared -- a two-pixel column of the previous frame down the right-hand edge,
+which is exactly the kind of fault that survives a board test. The clear is
+trimmed to the **visible** line, 496 pixels in 248 beats, and the words beyond it
+are never read. R350 hit the same ceiling from the other side. **Every burst
+length in this design is one bit from wrapping; write the visible count, never
+the stride.**
+
+**R358 -- THE BEAM PACING COMES OUT, AND WITH IT THE DEADLINE THE CORE HAS BEEN
+LOSING TO SINCE R200.**
+
+With `FB_DDR3` the sequencer no longer waits on `!bd_ready[fill_buf] &&
+bd_settled[fill_buf]`. That condition **is** the beam pacing: it holds the fill
+until the beam has passed a band and released its buffer, which is why the fill
+can run at most `NBUF` bands ahead, why R200 measured bands 0-11 never rendering,
+and why a slow frame loses the top of the screen rather than tearing. A
+framebuffer has somewhere to put the result, so the only thing left worth waiting
+for is the once-a-frame clear (R357) finishing -- drawing into a buffer being
+wiped would lose whatever landed first. `C_DONE` no longer marks a buffer ready,
+because there is no beam to tell.
+
+The three `m2_raster_band` instances are not built: `for (b = 0; b < (FB_DDR3 ?
+0 : NBUF); b++)`. Their outputs are still referenced by the sequencer and the
+mixer at either setting, so a `g_noband` branch ties them off. **This is where
+the 24 M10K and the ~223 ALM come back**, and it is the first step of the
+framebuffer work that is not free -- everything before it was additive.
+
+**AND A COUNTER THAT STOPPED MEANING WHAT IT SAID.** `dbg_pixels` came from the
+bands; with the bands gone it reads zero, and the one number that could show
+whether the framebuffer draws as much as the band path did would have been dead
+in the build that mattered. `m2_fb_write` now produces it -- but it was counting
+**beats**, and a whole-word beat paints two pixels while a byte-enabled end
+paints one. Beats and pixels differ by almost exactly the factor of two you would
+least notice in a before/after table. The bench pins it on the 400-pixel span
+that takes 200 beats, which is the smallest case that tells them apart, and a
+mutation back to one-per-beat fails it.
+
+**A measurement that survives a change must be checked as carefully as the change
+-- an instrument that quietly changes units is worse than no instrument.**
