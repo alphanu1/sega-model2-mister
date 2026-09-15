@@ -17959,3 +17959,49 @@ signal would reach `quartus_map` and cost a build to discover. The gate now
 matches any `%Error`, excluding framework paths and the summary line that carries
 no path. Verified both ways: clean on a good tree, and it fails on an undeclared
 signal.
+
+**R373 -- THERE IS A SPARE 64-BIT DDR3 PORT, AND THE ARBITER NEED NOT EXIST.**
+
+Ben's question: why arbitrate at all when other ports exist? Checked, and `ram2`
+is **completely idle in this project**. `sysmem` exposes three DDR3 interfaces:
+
+    ram1_*   64-bit   the core's DDRAM_*                    OURS, contended
+    ram2_*   64-bit   ddr_svc: ALSA ch0, palette ch1        IDLE -- see below
+    vbuf_*  128-bit   ascal, HDMI frame buffer              framework
+
+`ram2`'s two consumers are both dead here:
+
+* **ch0, ALSA** -- `MISTER_DISABLE_ALSA=1` in `Model2.qsf`, so the channel is not
+  even instantiated.
+* **ch1, palette** -- `pal_req` toggles only on
+  `~FB_FMT[2] & FB_FMT[1] & FB_FMT[0] & FB_EN`, i.e. 8bpp palette mode with the
+  framework framebuffer ON. `MISTER_FB` is commented out in the QSF, so `FB_EN`
+  is never asserted and the channel never fires.
+
+`sysmem` takes `ram2_clk` as an INPUT, so the port can run on our clock rather
+than `clk_audio`.
+
+**THIS IS THE BEST OF THE THREE ARCHITECTURES ON THE TABLE**, because it is the
+only one that keeps both things that matter:
+
+                          today    FB_EN path   TWO PORTS
+    arbiter needed          yes        no          NO
+    scanout can starve fill YES        no          NO
+    three-way mixer kept    yes        NO          YES
+    framework files edited  none      some        emu_ports.vh, sys_top.v
+
+The three-way mixer -- 2D-under / 3D / 2D-over resolved per pixel against
+`tile_cat1` -- is why the current approach is right, and the `FB_EN` route would
+force it to be rebuilt as a pre-composited framebuffer. Two ports keeps it AND
+removes the shared-port contention that produced every fault of R364-R372.
+
+**THE COST IS MAINTENANCE, NOT DIFFICULTY.** `sys/` would gain a second
+`DDRAM2_*` interface on `emu` and `ram2_*` would be routed there instead of to
+`ddr_svc`, so every future framework update becomes a merge. That is a real
+price and it is the only argument against.
+
+**AND IT REFRAMES THE WHOLE DAY.** R353, R360, R364, R367, R369 and R372 are all
+arbiter changes -- six entries, three board failures, two guards added and
+removed on reasoning rather than evidence. **The arbiter was never required by
+the hardware; it was required by a choice to put both masters on one port**, made
+without checking whether a second was free.
