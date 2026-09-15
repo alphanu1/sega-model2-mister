@@ -139,7 +139,21 @@ syn_check:
 # its own. This is R94's lesson for the third time -- a guard that cannot see
 # the class of bug it is standing in front of is worse than no guard, because
 # it is believed.
-lint_top:
+# R377: THE DDR3 MASTERS MUST SHARE A CLOCK WITH THEIR CONSUMERS.
+# m2_ddr3 hands out single-cycle ack/rvalid/wnext. On clk_mem (100 MHz) with
+# m2_raster3d on clk_sys (50 MHz), half of them fall between edges and vanish --
+# which is the whole of R353..R376, and which no bench can catch because every
+# bench serves the memory on the design's own clock. So it is checked HERE, by
+# reading the instantiation, where a regression cannot hide.
+check_ddr3_clock:
+	@if grep -A1 -E "^m2_ddr3 u_ddr3" Model2.sv | grep -q "clk(clk_mem)"; then \
+	  echo "DDR3 MASTER ON clk_mem WHILE ITS CONSUMERS ARE ON clk_sys (R377):"; \
+	  echo "  single-cycle ack/rvalid/wnext will be dropped across the crossing."; \
+	  exit 1; \
+	fi
+	@echo "  DDR3 masters share clk_sys with m2_fb_read/m2_fb_write"
+
+lint_top: check_ddr3_clock
 	@echo "== lint Model2.sv and everything it instantiates"
 	@verilator --lint-only -Wall -Wno-DECLFILENAME -Wno-fatal --top-module emu \
 	  +define+MISTER_DDRAM2=1 \

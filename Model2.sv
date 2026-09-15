@@ -51,8 +51,26 @@ wire [15:0] ddr_inflight_max;   // R362
 wire [15:0] ddr_acks;           // R366
 wire        ddr_stuck_wr;
 
+// R377: THE DDR3 MASTERS RUN ON clk_sys, THE CLOCK THEIR CONSUMERS RUN ON.
+//
+// They were on clk_mem (100 MHz) while m2_raster3d -- and so m2_fb_read and
+// m2_fb_write -- runs on clk_sys (50 MHz). Every handshake m2_ddr3 produces is a
+// SINGLE-CYCLE pulse: ack, rvalid, wnext. A one-cycle pulse at 100 MHz sampled
+// by a 50 MHz clock is seen only when it happens to straddle an edge, so ROUGHLY
+// HALF ARE LOST.
+//
+// That is the whole of R353-R376. A lost `ack` leaves m2_fb_read in R_FILL for
+// ever; a lost `rvalid` short-changes a line; a lost `wnext` stalls the clear.
+// The board reported it as "the arbiter is not routing acknowledges", and with
+// the arbiter DELETED it still read 3 issued against 2 seen -- across a plain
+// wire, which is impossible in one clock domain and is the measurement that
+// finally named it.
+//
+// DDRAM_CLK is ours to drive, so the bridge simply runs at 50 MHz. That halves
+// the peak burst rate to ~400 MB/s against the ~80 MB/s this framebuffer needs:
+// five times the headroom, for a handshake that cannot drop a pulse.
 m2_ddr3 u_ddr3 (
-	.clk(clk_mem), .rst_n(mem_rst_n),
+	.clk(clk_sys), .rst_n(mem_rst_n),
 	.req(ddr_req), .we(ddr_we), .addr(ddr_addr), .blen(ddr_blen), .din(ddr_din), .be(ddr_be),
 	.wnext(ddr_wnext), .rvalid(ddr_rvalid), .ack(ddr_ack), .dout(ddr_dout),
 	.DDRAM_CLK(DDRAM_CLK), .DDRAM_BUSY(DDRAM_BUSY),
@@ -82,7 +100,7 @@ wire  [7:0] ddr2_blen, ddr2_be;
 wire [63:0] ddr2_din, ddr2_dout;
 
 m2_ddr3 u_ddr3_rd (
-	.clk(clk_mem), .rst_n(mem_rst_n),
+	.clk(clk_sys), .rst_n(mem_rst_n),   // R377: same domain as its consumer
 	.req(ddr2_req), .we(ddr2_we), .addr(ddr2_addr), .blen(ddr2_blen),
 	.din(ddr2_din), .be(ddr2_be),
 	.wnext(ddr2_wnext), .rvalid(ddr2_rvalid), .ack(ddr2_ack), .dout(ddr2_dout),

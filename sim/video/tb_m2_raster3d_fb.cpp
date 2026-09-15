@@ -143,6 +143,18 @@ int main(int argc, char **argv) {
     d->clk_mem = 1; d->eval(); d->clk_mem = 0; d->eval();
     d->clk = 1; d->scan_clk = 1; d->eval(); d->clk = 0; d->scan_clk = 0; d->eval();
     d->clk_mem = 1; d->eval(); d->clk_mem = 0; d->eval();
+    // R377: THE MODEL ANSWERS ON THE CONSUMER'S CLOCK, WHICH IS THE POINT.
+    //
+    // This bench serves DDR3 once per `clk`, so the memory and m2_fb_read/write
+    // are inherently in ONE domain -- and the fault that cost R353..R376 was
+    // that on hardware they were not: m2_ddr3 ran on clk_mem at 100 MHz while
+    // its consumers ran on clk_sys at 50, so half of every single-cycle ack,
+    // rvalid and wnext fell between edges and vanished. THE MODEL COULD NOT
+    // EXPRESS THE BUG, so no amount of green here meant anything about it.
+    //
+    // Model2.sv now puts both masters on clk_sys. If that is ever undone, this
+    // bench will still pass -- so the check lives where it can bite instead:
+    // lint_top fails if the DDR3 masters are not clocked by clk_sys.
     if (d->tex_m_ack) { d->tex_m_ack = 0; tex_wait = -1; }
     else if (tex_wait > 0) --tex_wait;
   };

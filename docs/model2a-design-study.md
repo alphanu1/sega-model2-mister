@@ -18130,3 +18130,42 @@ port behave. The check that would have avoided all of them -- *is there another
 port?* -- takes one grep of `sys_top.v`, and was never run because the single
 `DDRAM_*` interface in `emu_ports.vh` looked like the whole of what a core is
 given.
+
+**R377 -- THE DDR3 MASTERS WERE IN THE WRONG CLOCK DOMAIN. THAT IS THE WHOLE OF
+R353 TO R376.**
+
+    m2_ddr3 u_ddr3      .clk(clk_mem)   100 MHz
+    m2_ddr3 u_ddr3_rd   .clk(clk_mem)   100 MHz
+    m2_raster3d         .clk(clk_sys)    50 MHz   <- m2_fb_read, m2_fb_write
+
+`m2_ddr3` hands out **single-cycle** `ack`, `rvalid` and `wnext`. A one-cycle
+pulse at 100 MHz, sampled by a 50 MHz clock, is seen only when it straddles an
+edge: **roughly half are lost.** A lost `ack` leaves `m2_fb_read` in `R_FILL` for
+ever, a lost `rvalid` short-changes a line, a lost `wnext` stalls the clear -- and
+one loss is fatal, because nothing retries.
+
+**THE MEASUREMENT THAT NAMED IT** came only after the arbiter was deleted. With
+`r_ack = fb2_ack` a PLAIN WIRE, the board still read **3 acknowledges issued
+against 2 seen** -- impossible within one clock domain, and therefore proof of a
+crossing rather than a routing fault. Every earlier capture had the same evidence
+in it and the arbiter standing between the two counts to blame.
+
+**EIGHT ENTRIES ON THE WRONG BLOCK.** R353, R360, R364, R367, R369, R372, R374,
+R375 all changed the arbiter. The arbiter was never at fault. Deleting it (R376)
+did not fix the picture, but it removed the only plausible alternative
+explanation, which is what made the clock domain visible.
+
+**AND NO BENCH COULD HAVE CAUGHT IT.** Every bench here serves the memory model
+on the design's own `clk`, so master and consumer are one domain by construction
+and the crossing cannot exist at the desk. `tb_m2_raster3d_fb` scored 14/14
+against a design that could not work. **A model that cannot express a fault is
+not evidence about that fault**, and this is the fourth shape of that error in one
+day (R362 too optimistic, R364 too fast, R372 unable to be slow, this one unable
+to be asynchronous).
+
+So the check lives where it can bite: `lint_top` now reads the instantiation and
+fails if a DDR3 master is clocked by `clk_mem`. Mutation-tested.
+
+Both masters move to `clk_sys`. `DDRAM_CLK` is ours to drive, so the bridge runs
+at 50 MHz: ~400 MB/s peak against the ~80 MB/s the framebuffer needs, **five
+times the headroom, in exchange for a handshake that cannot drop a pulse.**
