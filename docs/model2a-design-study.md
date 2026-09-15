@@ -17331,3 +17331,31 @@ other mechanism silently carried it, and "mutation-tested" would have been
 written down on the strength of a mutation that tested nothing. It is now
 enforced in one place, where removing it fails three checks. **Two guards for
 one rule means a mutation test cannot tell you which guard works.**
+
+**R356 -- THE SPAN PATH AND THE MIXER SOURCE MADE EXCLUSIVE, AND A DOUBLE DRIVER
+THAT LINT COULD NOT SEE.**
+
+With `FB_DDR3` the span walk feeds `m2_fb_write`; without it, the band buffers.
+Both were connected to the same net:
+
+```systemverilog
+  assign tx_span_ready = bd_span_ready[fill_buf];   // the bands
+  .in_ready(tx_span_ready)                          // and the writer
+```
+
+**Invisible at FB_DDR3 = 0**, because the generate instantiated nothing, so
+`lint_top` passed on a file that had two drivers on one net the moment the
+parameter flipped -- and the first symptom would have been in the build that
+turned the framebuffer on, mixed in with everything else that changed. The
+writer now has its own `fbw_ready` and one `assign` picks between them.
+
+**A dormant branch is not a tested branch.** The value of committing the path
+switched off is that the change which enables it is small; the cost is that
+nothing checks the enabled path until that change. Every connection made inside
+that generate wants reading as though it were already live.
+
+**AND THE MIXER LOSES ITS QUESTION ENTIRELY.** The band path selects a buffer by
+testing `rdy_s2[i] && band_s2[i] == scan_band` -- "has the fill reached this band
+yet". With a framebuffer there is no band and no readiness: the line was fetched
+while the beam drew the previous one. **That question IS the beam deadline**, and
+removing it is the point of the whole change rather than a side effect of it.

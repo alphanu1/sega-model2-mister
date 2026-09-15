@@ -493,10 +493,14 @@ module m2_raster3d #(
     else if (frame_start) fb_draw <= ~fb_draw;
   end
 
-  logic [15:0] fbr_col_dummy;
-  logic        fbr_hit_dummy;
   logic [23:0] fb_rd_col;
   logic        fb_rd_hit;
+  // R356: THE WRITER'S OWN READY, not the shared span net. Connecting
+  // m2_fb_write's in_ready straight to tx_span_ready gave that net two drivers
+  // -- the band buffers and the writer -- which lint could not see while
+  // FB_DDR3 was 0, because the generate built nothing. It would have appeared
+  // only in the build that turned the framebuffer on.
+  logic        fbw_ready;
 
   generate
     if (FB_DDR3) begin : g_fb
@@ -513,7 +517,7 @@ module m2_raster3d #(
       m2_fb_write #(.STRIDE(512)) u_fbw (
         .clk(clk), .rst_n(rst_n),
         .fb_sel(fb_draw),
-        .in_valid(tx_span_valid), .in_ready(tx_span_ready),
+        .in_valid(tx_span_valid && FB_DDR3), .in_ready(fbw_ready),
         .in_y(tx_span_y[15:0]), .in_x0(tx_span_x0[15:0]), .in_x1(tx_span_x1[15:0]),
         .in_col(tx_span_col), .in_painted(1'b1),
         .m_req(w_req), .m_we(w_we), .m_addr(w_addr), .m_blen(w_blen),
@@ -574,6 +578,7 @@ module m2_raster3d #(
       assign fb_req = 1'b0; assign fb_we = 1'b0; assign fb_addr = 25'd0;
       assign fb_blen = 8'd0; assign fb_din = 64'd0; assign fb_be = 8'd0;
       assign fb_rd_col = 24'd0; assign fb_rd_hit = 1'b0;
+      assign fbw_ready = 1'b0;   // the bands own the span handshake at FB_DDR3=0
       assign dbg_fb_lines = 32'd0; assign dbg_fb_late = 32'd0;
     end
   endgenerate
@@ -747,20 +752,37 @@ module m2_raster3d #(
     end
   end
 
+  // R356: WHERE THE MIXER'S PIXEL COMES FROM.
+  //
+  // With the framebuffer there is no band to choose and no readiness to test:
+  // the line is already in the line buffer, fetched while the beam drew the
+  // line before. All of `rdy_s2`, `band_s2` and `scan_band` exist to answer
+  // "has the fill got here yet", which a framebuffer makes meaningless -- and
+  // that question IS the beam deadline the whole change is removing.
+  //
+  // RGB888 to RGB565 on the way out, as the band buffers store it.
+  wire [15:0] fb_565 = {fb_rd_col[23:19], fb_rd_col[15:10], fb_rd_col[7:3]};
+
   always_comb begin
-    scan_col = 16'd0;
-    scan_hit = 1'b0;
-    for (int i = 0; i < NBUF; i++)
-      if (rdy_s2[i] && (band_s2[i] == scan_band)) begin
-        scan_col = bd_rd_col[i];
-        scan_hit = bd_rd_hit[i];
-      end
+    if (FB_DDR3) begin
+      scan_col = fb_565;
+      scan_hit = fb_rd_hit;
+    end else begin
+      scan_col = 16'd0;
+      scan_hit = 1'b0;
+      for (int i = 0; i < NBUF; i++)
+        if (rdy_s2[i] && (band_s2[i] == scan_band)) begin
+          scan_col = bd_rd_col[i];
+          scan_hit = bd_rd_hit[i];
+        end
+    end
   end
 
-  assign tx_span_ready = bd_span_ready[fill_buf];
+  // R356: the span walk feeds the framebuffer or the bands, never both.
+  assign tx_span_ready = FB_DDR3 ? fbw_ready : bd_span_ready[fill_buf];
   always_comb begin
     bd_span_valid = '0;
-    bd_span_valid[fill_buf] = tx_span_valid;
+    if (!FB_DDR3) bd_span_valid[fill_buf] = tx_span_valid;
   end
 
   // ------------------------------------------------------------ sequencing
