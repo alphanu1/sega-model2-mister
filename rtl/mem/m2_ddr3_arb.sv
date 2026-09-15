@@ -67,6 +67,7 @@ module m2_ddr3_arb (
 
   output logic [31:0] dbg_a_waits,     // cycles the READER spent waiting
   output logic [31:0] dbg_b_waits,
+  output logic [15:0] dbg_stalls,      // R369: grants released by the watchdog
   // R364: THE ARBITER'S STATE, OBSERVABLE. A block that can wedge the whole
   // core by holding a grant must not be a black box -- the board reported
   // "0 lines fetched" with nothing in flight, and busy/owner were the two bits
@@ -90,6 +91,8 @@ module m2_ddr3_arb (
   // removed, because the other mechanism was silently carrying it. Two guards
   // for one rule means a mutation test cannot tell you which one works.
   logic       cool;
+  // R369: cycles this grant has seen no beat and no acknowledge.
+  logic [12:0] stall;   // 8,192 -- trips at 4,096 by the &stall test on 12 bits
 
   assign m_req  = cool ? 1'b0
                 : busy ? (owner ? b_req  : a_req)  : (a_req | b_req);
@@ -112,7 +115,7 @@ module m2_ddr3_arb (
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      busy <= 1'b0; owner <= 1'b0; cool <= 1'b0;
+      busy <= 1'b0; owner <= 1'b0; cool <= 1'b0; stall <= '0; dbg_stalls <= 16'd0;
       dbg_a_waits <= '0; dbg_b_waits <= '0;
     end else begin
       cool <= 1'b0;
@@ -140,6 +143,41 @@ module m2_ddr3_arb (
       end else if (busy && m_ack) begin
         busy <= 1'b0;
         cool <= 1'b1;
+        stall <= '0;
+      end
+
+      // R369: NO MASTER HOLDS THE PORT FOR EVER.
+      //
+      // Ben's point, and it is the right one: the scanout should not be able to
+      // stop the fill. They share one DDRAM port, so a grant that is never
+      // released starves the other master completely -- `m_req` only ever shows
+      // the owner's request. That is exactly what the board did: the reader lost
+      // an acknowledge (R368), sat in R_FILL, and the writer waited in W_CLRW
+      // with its request high and unheard, so not one pixel reached DDR3.
+      //
+      // R368 removes THIS cause. The structure stays fragile without a floor:
+      // any future stall in either master repeats it. So a grant is released if
+      // nothing has happened on it for a long time -- no beat, no acknowledge.
+      //
+      // SAFE BECAUSE IT CANNOT INTERRUPT A LIVE TRANSFER. The counter is reset
+      // by every beat, so a burst that is merely slow never trips it; only a
+      // transfer with NO activity at all for 4,096 cycles does, which is
+      // sixteen times the 262 a full line burst takes, and by then the master
+      // has long since returned to idle. m2_ddr3 latches its address for the
+      // whole burst (R362), so a later grant cannot disturb one in flight.
+      //
+      // It converts a permanent deadlock into a dropped line. That is a
+      // recovery, not a fix, and dbg_stalls counts it so the board can say
+      // whether it ever fires -- a guard that trips silently is a fault hiding.
+      if (!busy) stall <= '0;
+      else if (m_rvalid || m_wnext || m_ack) stall <= '0;
+      else if (!(&stall)) stall <= stall + 13'd1;
+
+      if (busy && (&stall)) begin
+        busy  <= 1'b0;
+        cool  <= 1'b1;
+        stall <= '0;
+        if (!(&dbg_stalls)) dbg_stalls <= dbg_stalls + 16'd1;
       end
 
       // What the priority actually costs the loser, and what it saves the

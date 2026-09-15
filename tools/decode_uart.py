@@ -219,11 +219,12 @@ if N:
            2:'FILL (beats came, no ack)', 3:'?'}
     import collections
     cw = collections.Counter(); cr = collections.Counter(); ca = collections.Counter()
-    clears = 0
+    clears = 0; stalls = 0
     for a, d in N:
         cw[a & 0xf] += 1
         cr[(a >> 4) & 3] += 1
         ca[((a >> 8) & 1, (a >> 7) & 1)] += 1
+        stalls = (a >> 9) & 0x7f
         clears = (a >> 16) & 0xffff
     spans = N[-1][1] & 0xffff
     acks  = (N[-1][1] >> 16) & 0xffff
@@ -235,6 +236,16 @@ if N:
     for (own, bsy), v in ca.most_common(3):
         print('    arbiter: busy=%d owner=%s  x%d' % (bsy, 'writer' if own else 'reader', v))
     print('    spans accepted by the writer: %d' % spans)
+    # R369: the watchdog should NEVER fire. Any count is a master that stalled
+    # long enough to have starved the other one, which is the failure Ben named:
+    # the scanout must not be able to stop the fill.
+    if stalls:
+        print('    *** the arbiter watchdog released %d stuck grant(s)%s' %
+              (stalls, ' (SATURATED)' if stalls == 127 else ''))
+        print('        A master held the port with no beat and no ack for 4,096')
+        print('        cycles. The picture survived; something upstream stalled.')
+    else:
+        print('    arbiter watchdog: never fired (no master stalled the port)')
     # R366: the two ends of the same handshake. m2_ddr3 counts every ack it
     # issues; m2_fb_read counts every line it completes, which needs one.
     lines_seen = (D[-1][1] & 0xffff) if D else 0

@@ -17810,3 +17810,49 @@ project: R348's pulsed request lost to a busy bridge, R353's arbiter re-granting
 on a request still held after its acknowledge, and this. **The cheap check is to
 ask, for each handshake input, which states ignore it -- and whether the other
 end can assert it there.**
+
+**R369 -- ONE MASTER MUST NOT BE ABLE TO HOLD THE PORT FOR EVER, AND THE
+FRAMEWORK NEVER HAS THIS PROBLEM BECAUSE IT DOES NOT SHARE A PORT.**
+
+Ben's question was the right one: *the scanout should not be able to stop the
+fill.* It can, because they share one DDRAM port --
+
+```systemverilog
+  assign m_req = busy ? (owner ? b_req : a_req) : (a_req | b_req);
+```
+
+-- so a grant that is never released means the master only ever sees the owner's
+request. On the board the reader lost an acknowledge (R368), sat in `R_FILL`, and
+**the writer waited in `W_CLRW` with its request high and unheard**: 0 clears, 0
+spans, no pixel ever reaching DDR3. The fill was not failing. It could not get to
+memory.
+
+**WHY `screen_rotate` NEVER HITS THIS.** It is write-only -- `DDRAM_RD = 0`,
+`BURSTCNT = 1` -- and the rotated image is read back by `ascal` on a DIFFERENT
+port. `sysmem` exposes three:
+
+    ram1_*   64-bit   the core's DDRAM_*          (ours)
+    ram2_*   64-bit   ddr_svc: ALSA, palette      (framework)
+    vbuf_*  128-bit   ascal, HDMI frame buffer    (read AND write)
+
+The read certainly happens -- Ben was right to insist on it -- but on a dedicated
+**128-bit** port, so the framework's writer never contends with the framework's
+reader. **We invented the contention by putting both ends of our framebuffer on
+the one port the core is given.**
+
+That points at a better architecture: write-only into the framework's FB path and
+let `ascal` scan it out on the wide port, exactly as rotation does. The obstacle
+is that the FB path REPLACES the core's video output, so the tilemap would have
+to be composited into the framebuffer instead of mixed at scanout in
+`m2_tile_mixer`. Worth costing properly once the current path draws.
+
+Meanwhile the arbiter gets a floor: a grant is released after 4,096 cycles with
+no beat and no acknowledge. Every beat resets the counter, so a slow burst never
+trips it; 4,096 is sixteen times the 262 a full line burst takes. It cannot
+interrupt a live transfer, and m2_ddr3 latches its address for the whole burst
+(R362) so a later grant cannot disturb one in flight. `dbg_stalls` counts every
+release and phase 11 reports it -- **a guard that trips silently is a fault
+hiding**.
+
+**This is a recovery, not a fix.** It turns a permanent deadlock into a dropped
+line, which is why R368 matters and this is only the backstop.
