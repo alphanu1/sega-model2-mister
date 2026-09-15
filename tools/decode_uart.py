@@ -225,8 +225,7 @@ if N:
         cr[(a >> 4) & 3] += 1
         ca[((a >> 8) & 1, (a >> 7) & 1)] += 1
         clears = (a >> 16) & 0xffff
-    spans = (N[-1][1] >> 16) & 0xffff
-    await_ = N[-1][1] & 0xffff
+    spans = N[-1][1] & 0xffff
     print('FRAMEBUFFER STATE (R364): %d clear passes COMPLETED' % clears)
     print('    writer state:  ' + ', '.join('%s x%d' % (WST.get(k, k), v)
                                             for k, v in cw.most_common(3)))
@@ -234,8 +233,7 @@ if N:
                                             for k, v in cr.most_common(3)))
     for (own, bsy), v in ca.most_common(3):
         print('    arbiter: busy=%d owner=%s  x%d' % (bsy, 'writer' if own else 'reader', v))
-    print('    spans accepted by the writer: %d   reader starved for %d cycles'
-          % (spans, await_))
+    print('    spans accepted by the writer: %d' % spans)
     if clears == 0:
         print('    *** NO CLEAR EVER COMPLETED. in_ready stays low and clear_busy')
         print('        stays high, so the span path is jammed AND the fill is held')

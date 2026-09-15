@@ -17697,3 +17697,34 @@ everything else follows from that alone.
 
 **Three builds were spent on hypotheses because the design could not say where it
 was stuck.** The instrument was cheaper than any one of them.
+
+**R365 -- 99% DOES NOT WORK ON THIS DEVICE, AND THE SCARCE RESOURCE HAS SWAPPED
+OVER.**
+
+Five board tests in one afternoon, two commits, and the split is clean:
+
+    ALM 98%   s46 41,0k   RAN          s49 41,1k   RAN
+    ALM 99%   s47 41,3k   locked up    s51 41,3k   BLACK    s52 41,4k   BLACK
+
+It holds ACROSS commits -- s47 was R363 and failed at 99% while s49 was the same
+RTL at 98% and ran -- and it is **not timing**: s49 ran with `clk_mem` at -0.654
+while s52 came up black at -0.520. The boundary is near 41,280 ALM.
+
+**This is why the last three builds were unreadable.** A design at the edge gives
+a different answer per seed, so every board result carried a confound the RTL
+could not explain, and two of six seeds died in the fitter outright (DYN, CUT).
+**R330 says flash a second seed before suspecting the RTL; R365 says that is not
+enough when the design has no headroom -- the seed IS the variable.**
+
+R332 put the span queue in MLAB to release 5 block-RAM tiles, when M10K was
+binding at 553 of 553. The framebuffer inverted that: the band buffers are gone
+(R358) and the fit sits at **531 of 553 with 22 tiles spare and ALM short**. At
+186 bits the queue is ceil(186/20) = 10 MLABs, about 100 ALM, so putting it back
+in block memory spends a resource we now have on the one we have not. The
+32-bit arbiter-wait counter goes too: `busy`/`owner` in the phase-11 state word
+says more and costs nothing.
+
+**A RESOURCE DECISION HAS A SHELF LIFE.** R332 was right when it was made and
+wrong four days later, because the thing it optimised for stopped being scarce.
+Every `ramstyle` choice in this design is a bet on which resource binds, and the
+framebuffer changed the answer -- so they all want re-reading, not just this one.

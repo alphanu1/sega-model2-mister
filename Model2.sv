@@ -44,7 +44,7 @@ wire [7:0]  ddr_blen, ddr_be;
 wire [63:0] ddr_din, ddr_dout;
 wire [31:0] fb_lines, fb_late;
 wire [15:0] fb_pub, fb_drop;   // R359
-wire [31:0] fb_state, fb_spans, arb_wait;   // R364
+wire [31:0] fb_state, fb_spans;   // R364
 wire [15:0] ddr_lat_last, ddr_lat_max;
 wire [15:0] ddr_inflight_max;   // R362
 wire        ddr_stuck_wr;
@@ -4396,7 +4396,7 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	      : (tps_ph == 4'd8)                  ? {fb_late[15:0], fb_lines[15:0]}   // R358: lines fetched, and how often the fetch was asked for early
 	      : (tps_ph == 4'd9)                  ? r3d_pixels                      // R359: pixels painted, into the framebuffer
 	      : (tps_ph == 4'd10)                 ? {11'd0, bwl_cpu}                // R363: cycles the CPU port spent waiting, last frame
-	      : (tps_ph == 4'd11)                 ? {fb_spans[15:0], arb_wait[15:0]}   // R364: spans accepted : reader starvation
+	      : (tps_ph == 4'd11)                 ? {16'd0, fb_spans[15:0]}            // R364: spans accepted by the writer
 	      : (tps_ph == 4'd6)                  ? {bwl_tex[20:5], 16'd0}          // R294: texel fetch waiting
 	      : {lum_mean_f, lum_zpc_f, wedge_slot, wedge_n[6:0], r3d_quads[11:4]}),   // R249: the frame's mean luminance and its black-polygon percentage, where the always-zero drop count and the free-running miss count were
 	.a_tag(8'h43),
@@ -5663,7 +5663,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(3), .FB_DDR3(1'b1),
 	.fb_wnext(ddr_wnext), .fb_rvalid(ddr_rvalid), .fb_ack(ddr_ack), .fb_dout(ddr_dout),
 	.dbg_fb_lines(fb_lines), .dbg_fb_late(fb_late),
 	.dbg_fb_pub(fb_pub), .dbg_fb_drop(fb_drop),
-	.dbg_fb_state(fb_state), .dbg_fb_spans(fb_spans), .dbg_arb_wait(arb_wait),   // R364
+	.dbg_fb_state(fb_state), .dbg_fb_spans(fb_spans),   // R364
 	// Each bar is a proper filled rectangle traversed around its perimeter:
 	// (x0,y0) top-left, (x0,y2) bottom-left, (x2,y2) bottom-right,
 	// (x2,y0) top-right -- the same v0..v3 cycle the geometry engine emits.

@@ -164,8 +164,7 @@ module m2_raster3d #(
   //  [7]     arbiter busy      [8]     arbiter owner (1 = writer)
   //  [15:9]  spare             [31:16] clear passes COMPLETED
   output logic [31:0] dbg_fb_state,
-  output logic [31:0] dbg_fb_spans,
-  output logic [31:0] dbg_arb_wait
+  output logic [31:0] dbg_fb_spans
 );
 
   localparam int unsigned NBANDS = (SCR_H + BAND_H - 1) / BAND_H;
@@ -321,10 +320,21 @@ module m2_raster3d #(
   // so back-to-back pops only occur while the queue DRAINS -- which is when it
   // is doing its job, and where a flat span's throughput halves. Watch it; do
   // not assume it is free.
-  // R332: MLAB, not M10K. DEPTH 32 is exactly an MLAB's native depth, and the
-  // 5 block-RAM tiles this releases are what R331's quad store is short by.
-  // Verify it took: the fit report's RAM Summary must say MLAB for this array.
-  m2_fifo_m10k #(.DW(SQ_DW), .DEPTH(32), .RAMSTYLE("MLAB")) u_span_q (
+  // R365: BACK TO M10K, BECAUSE THE SCARCE RESOURCE HAS SWAPPED OVER.
+  //
+  // R332 put this in MLAB to release 5 block-RAM tiles when M10K was the
+  // binding resource at 553 of 553. The framebuffer changed that: the three
+  // band buffers are gone (R358) and the fit now sits at 531 of 553, with 22
+  // tiles spare and ALM the thing that is short. At 186 bits this array is
+  // ceil(186/20) = 10 MLABs, about 100 ALM, and paying that in block memory
+  // instead is exactly the trade the freed tiles were for.
+  //
+  // IT MATTERS BECAUSE 99% DOES NOT WORK. Every build today at 99% utilisation
+  // failed on the board -- s47 locked up, s51 and s52 came up black -- and both
+  // at 98% ran, across two different commits and with the WORSE timing slack
+  // among them running fine. The boundary is near 41,280 ALM. This is not a
+  // timing fix; it is headroom, and without it a seed is a coin toss.
+  m2_fifo_m10k #(.DW(SQ_DW), .DEPTH(32)) u_span_q (
     .clk(clk), .rst_n(rst_n),
     .push(fl_span_valid && sq_in_rdy), .din(sq_din),
     .pop(sq_qv && sq_rdy), .q(sq_q), .q_valid(sq_qv),
@@ -668,7 +678,7 @@ module m2_raster3d #(
         .m_din(fb_din), .m_be(fb_be),
         .m_wnext(fb_wnext), .m_rvalid(fb_rvalid), .m_ack(fb_ack),
         .m_dout(fb_dout), .dout(),
-        .dbg_a_waits(dbg_arb_wait), .dbg_b_waits(),
+        .dbg_a_waits(), .dbg_b_waits(),   // R365: busy/owner says more, and costs nothing
         .dbg_busy(arb_busy), .dbg_owner(arb_owner)
       );
     end else begin : g_nofb
@@ -682,7 +692,7 @@ module m2_raster3d #(
       assign fbw_clears = 16'd0; assign fbw_st = 4'd0;
       assign fbr_st = 2'd0; assign fbr_busy = 1'b0;
       assign arb_busy = 1'b0; assign arb_owner = 1'b0;
-      assign dbg_fb_spans = 32'd0; assign dbg_arb_wait = 32'd0;
+      assign dbg_fb_spans = 32'd0;
     end
   endgenerate
 
