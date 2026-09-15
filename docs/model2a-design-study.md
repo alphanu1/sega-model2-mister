@@ -18194,18 +18194,25 @@ minimal configuration the evidence supports, and it is the one that measured a
 clean handshake -- 65,535 acknowledges issued, 65,535 seen, 65,535 lines
 completed, zero late.
 
-**WHAT THE STRIPED SCREEN WAS.** Blue with horizontal white bands, and it is
-diagnostic: the uninitialised DDR3 framebuffer being scanned out. One list
-arrived, the fill walked all 48 bands drawing nothing, `fb_complete` rose,
-`fb_shown_ok` rose with it, and the mixer began showing a buffer that had never
-been cleared. **Proof the read path works end to end** -- real DDR3 contents
-reached the screen.
+**WHAT THE STRIPED SCREEN WAS -- AND MY FIRST READING OF IT WAS WRONG.** I recorded
+blue-with-white-bands as the uninitialised DDR3 framebuffer reaching the display,
+and cited it as proof the read path worked. **Ben: it is the game's own first
+screen, the one shown before test mode.** So the core boots and renders 2D
+correctly and then stops there -- which fits the copro being dead -- and the
+picture says nothing about DDR3 either way.
 
-**AND A REAL BUG IT EXPOSED, INDEPENDENT OF ALL THE ABOVE.** `fb_shown_ok` rises
-when the fill COMPLETES A PASS, not when anything was PAINTED. A frame that drew
-zero pixels is publishable, and publishing it puts uninitialised memory on
-screen. The gate wants to be "a frame was completed AND something was painted in
-it".
+**The read path evidence is the counters alone**: 65,535 acknowledges issued,
+65,535 seen, 65,535 lines completed, zero late. That is sufficient on its own,
+and dressing it up with a screenshot I had misread added nothing but a wrong
+claim in this document. **A symptom that fits a theory is not evidence for it
+until something rules out the ordinary explanation** -- here, that the game draws
+that screen every time it boots.
+
+**A REAL BUG NOTED WHILE MISREADING IT, WHICH STANDS ANYWAY.** `fb_shown_ok`
+rises when the fill COMPLETES A PASS, not when anything was PAINTED. A frame that
+drew zero pixels is publishable, and publishing one would put uninitialised
+memory on screen. The gate wants to be "a frame was completed AND something was
+painted in it".
 
 **THE LESSON.** Eight entries went into a block that was never at fault, because
 a corrupted handshake made every reading of it look like a routing failure.
