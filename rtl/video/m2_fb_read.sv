@@ -35,7 +35,8 @@ module m2_fb_read #(
   parameter int unsigned WIDTH  = 496,
   parameter int unsigned STRIDE = 512      // pixels a line in DDR3, a power of two
 ) (
-  input  logic        clk,
+  input  logic        clk,        // DDR3 side
+  input  logic        rd_clk,     // video side -- the mixer reads here
   input  logic        rst_n,
 
   // Which buffer the scanout is showing. The fill writes the other.
@@ -59,6 +60,14 @@ module m2_fb_read #(
   input  logic        m_ack,
 
   // ---- the mixer side, shaped exactly like m2_raster_band's
+  // R354: WHICH LINE BUFFER, BY PARITY, so nothing crosses the clock boundary.
+  // The obvious design has the DDR3 side toggle a "filling" flag and the video
+  // side synchronise it -- but that flag must not change mid-line, and a
+  // synchroniser gives no such guarantee. Line parity is derived independently
+  // in each domain from a counter each already has: the fill puts line N in
+  // buffer N[0], and the mixer drawing line N reads buffer N[0]. No CDC, and no
+  // way for the two to disagree about which buffer is which.
+  input  logic        rd_parity,
   input  logic [$clog2(WIDTH)-1:0] rd_x,
   output logic [23:0] rd_col,
   output logic        rd_hit,
@@ -79,20 +88,20 @@ module m2_fb_read #(
   // Ping-pong: the mixer reads one while the other fills.
   (* ramstyle = "M10K" *) logic [24:0] lb0 [STRIDE];
   (* ramstyle = "M10K" *) logic [24:0] lb1 [STRIDE];
-  logic        fill_buf;                  // which one is being filled
   logic [24:0] rd_q0, rd_q1;
+  wire         fill_buf = y_r[0];         // line N fills buffer N[0]
 
   logic [8:0]  wp;                        // pixel being written
   logic [8:0]  y_r;
   logic        busy, have;
 
-  always_ff @(posedge clk) begin
+  // The video side reads in ITS OWN clock domain, as m2_raster_band does.
+  always_ff @(posedge rd_clk) begin
     rd_q0 <= lb0[rd_x];
     rd_q1 <= lb1[rd_x];
   end
 
-  // The mixer reads the buffer that is NOT filling.
-  wire [24:0] rd_w = fill_buf ? rd_q0 : rd_q1;
+  wire [24:0] rd_w = rd_parity ? rd_q1 : rd_q0;
   assign rd_col = rd_w[23:0];
   assign rd_hit = rd_w[24];
 
@@ -106,7 +115,7 @@ module m2_fb_read #(
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       st <= R_IDLE; m_req <= 1'b0; wp <= 9'd0; y_r <= 9'd0;
-      fill_buf <= 1'b0; busy <= 1'b0; have <= 1'b0;
+      busy <= 1'b0; have <= 1'b0;
       dbg_lines <= '0; dbg_late <= '0;
     end else begin
       if (line_req) begin
@@ -152,9 +161,8 @@ module m2_fb_read #(
             wp <= wp + 9'd1;
           end
           if (m_ack) begin
-            busy     <= 1'b0;
-            have     <= 1'b1;
-            fill_buf <= ~fill_buf;          // hand it to the mixer
+            busy <= 1'b0;
+            have <= 1'b1;
             if (!(&dbg_lines)) dbg_lines <= dbg_lines + 32'd1;
             st       <= R_IDLE;
           end

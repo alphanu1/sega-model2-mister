@@ -47,14 +47,15 @@ static void tick() {
     }
   }
   d->eval();
-  d->clk = 0; d->eval();
-  d->clk = 1; d->eval();
+  d->clk = 0; d->rd_clk = 0; d->eval();
+  d->clk = 1; d->rd_clk = 1; d->eval();
 }
 
 int main(int argc, char **argv) {
   Verilated::commandArgs(argc, argv);
   d = new Vm2_fb_read;
-  d->clk = 0; d->rst_n = 0; d->line_req = 0; d->fb_sel = 0; d->rd_x = 0;
+  d->clk = 0; d->rd_clk = 0; d->rst_n = 0; d->line_req = 0; d->fb_sel = 0;
+  d->rd_x = 0; d->rd_parity = 0;
   d->m_rvalid = 0; d->m_ack = 0; d->m_dout = 0;
   for (int i = 0; i < 4; i++) tick();
   d->rst_n = 1; tick();
@@ -77,6 +78,7 @@ int main(int argc, char **argv) {
     ck("248 beats served (the visible line)", beats_served, BEATS);
 
     long wrong = 0;
+    d->rd_parity = y & 1;              // R354: buffer chosen by line parity
     for (int x = 0; x < 496; x++) {
       d->rd_x = x; tick(); tick();
       uint32_t got = ((uint32_t)d->rd_hit << 24) | (d->rd_col & 0xffffff);
@@ -90,6 +92,7 @@ int main(int argc, char **argv) {
   {
     std::printf("test: the ping-pong does not hand back the wrong buffer\n");
     long wrong = 0;
+    d->rd_parity = 3 & 1;
     for (int x = 0; x < 496; x++) {
       d->rd_x = x; tick(); tick();
       uint32_t got = ((uint32_t)d->rd_hit << 24) | (d->rd_col & 0xffffff);
