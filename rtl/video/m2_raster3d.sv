@@ -524,6 +524,16 @@ module m2_raster3d #(
       // A line ahead of the beam, one burst. The line the mixer is about to
       // need is scan_y + 1; asking on the line BEFORE is the whole reason the
       // ~500 ns worst case (R351) never reaches the picture.
+      //
+      // **THIS SAMPLES scan_y ON clk AND IS ONLY SAFE WHILE TWO_CLOCKS = 0.**
+      // Today they are the same net -- Model2.sv passes clk_sys to both -- so
+      // there is no crossing and no synchroniser is wanted; adding one would be
+      // the invented-hazard this module's header warns about at length. But the
+      // header also says TWO_CLOCKS "must be 1 the moment the video moves to the
+      // memory clock", and on that day this becomes a genuine unsynchronised
+      // crossing of a free-running counter. It then needs what the band logic
+      // already does below: gray-code scan_y in the video domain, two flops into
+      // clk, and derive the pulse from the synchronised value.
       logic [9:0] scan_y_q;
       logic       line_pulse;
       always_ff @(posedge clk or negedge rst_n) begin
