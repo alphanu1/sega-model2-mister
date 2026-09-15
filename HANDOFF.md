@@ -1,6 +1,57 @@
 # Handoff
 
-**Updated:** 2026-09-14 evening. Study entries R176-R344.
+**Updated:** 2026-09-15. Study entries R176-R360.
+
+## WHERE THE WORK IS NOW: branch `ddr3`, DESK-COMPLETE, NOT YET ON THE BOARD
+
+`main` is the stable head below and has not moved. Everything since is on
+`ddr3`, and it is ONE change that has to go in on one build: the 3D renderer
+draws into a DDR3 framebuffer instead of three band buffers.
+
+    R345-R351  m2_ddr3, the master. Honours DDRAM_BUSY (screen_rotate does
+               not), burst interface, BASE 29'h04C0_0000 in 64-BIT WORDS.
+               Measured on this board: 13 cycles typical (130 ns), 50 worst.
+    R348/R357  m2_fb_write -- spans into DDR3 at 32bpp {7'd0, painted, col24},
+               two pixels a beat, plus a once-a-frame clear pass.
+    R350/R354  m2_fb_read -- one 248-beat burst a line, issued a line early,
+               line buffer picked by PARITY so nothing crosses the clock.
+    R353       m2_ddr3_arb -- reader priority, dead cycle in ONE place.
+    R355-R358  wired into m2_raster3d behind `FB_DDR3`, then switched on: the
+               beam pacing and the three band buffers come out.
+    R359       the swap is a COMPLETION, not a clock tick, and a held list is
+               drawn ONCE -- the 1.98 renders per list measured on the board.
+    R360       tb_m2_raster3d_fb, the first bench to run the module at
+               FB_DDR3=1, and the three faults it found in an afternoon.
+
+**WHAT IS EXPECTED BACK:** ~223 ALM and 24 M10K from the band buffers, the beam
+deadline gone (R200's missing top of the frame stops being a deadline problem),
+and roughly half the fill's work.
+
+**WHAT HAS NOT HAPPENED:** none of it has run on the board. One build, one test.
+
+## THE LESSON OF R360, AND IT IS THE GENERAL ONE
+
+Every line of the framebuffer path had been LINTED AND NEVER SIMULATED, because
+`tb_m2_raster3d` drives the module at `FB_DDR3 = 0`. A bench at the parameter
+the board actually runs found three faults immediately:
+
+* the double buffer was not double -- `{fb_sel, 24'(y)} * 256` puts the select
+  at bit 32 of a 25-bit address, so both buffers were the same memory;
+* the line ahead never wrapped, so line 0 was never fetched and showed 496
+  painted pixels of uninitialised DDR3 every frame;
+* `m2_ddr3_arb` deadlocked for ever on a transaction acknowledged in its grant
+  cycle -- which `m2_ddr3` cannot produce, so it would have been latent.
+
+**A DORMANT BRANCH IS NOT A TESTED BRANCH, AND A PARAMETER IS A CONFIGURATION
+THAT NEEDS ITS OWN BENCH.** R356 said this and it was still true a day later.
+
+And: the deadlock was visible only because the new bench's DDR3 model answered a
+cycle faster than the real master. **An optimistic memory model finds latent
+faults and invents symptoms in equal measure**; the only way to tell them apart
+is to go and read the master.
+
+---
+
 
 ## STABLE HEAD, CONFIRMED ON THE BOARD
 
