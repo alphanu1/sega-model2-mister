@@ -315,7 +315,7 @@ RLD_RTL := rtl/mem/m2_sdram.sv rtl/io/m2_rom_loader.sv sim/mem/sdram_model.sv si
 
 
 .PHONY: test test_m2_backup test_m2_sndboard test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram test_fx68k test_m2_ioboard
-test: test_m2_texel test_m2_span_tex test_m2_geo test_m2_wr_arb test_m2_pair_cache test_m2_raster3d test_m2_backup test_m2_sndlink test_fx68k test_m2_sndboard test_m2_ioboard test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
+test: test_m2_texel test_m2_span_tex test_m2_geo test_m2_wr_arb test_m2_pair_cache test_m2_raster3d test_m2_raster3d_fb test_m2_backup test_m2_sndlink test_fx68k test_m2_sndboard test_m2_ioboard test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
 
 test_i960_dec: obj_i960_dec/Vi960_dec
 	@echo "== test i960_dec"
@@ -695,6 +695,21 @@ obj_raster3d/Vm2_raster3d: rtl/video/m2_raster3d.sv rtl/video/m2_quad_store.sv r
 	  --Mdir obj_raster3d -o Vm2_raster3d -CFLAGS "-O2" \
 	  rtl/video/m2_raster3d.sv rtl/video/m2_quad_store.sv rtl/video/m2_raster_fill.sv \
 	  rtl/video/m2_raster_div.sv rtl/video/m2_recip_rom.sv rtl/video/m2_raster_band.sv rtl/video/m2_span_tex.sv rtl/video/m2_texel.sv rtl/video/m2_texel_x2.sv rtl/video/m2_char_x2.sv rtl/tgp/m2_fifo_m10k.sv sim/video/tb_m2_raster3d.cpp
+
+# R359: THE SAME MODULE WITH THE FRAMEBUFFER ON. The bench above runs it at
+# FB_DDR3=0, which is not the path the board takes -- R356 is what that costs.
+test_m2_raster3d_fb: obj_raster3d_fb/Vm2_raster3d
+	@echo "== test m2_raster3d FB_DDR3 (a held list is drawn once, and only whole frames are shown)"
+	@./obj_raster3d_fb/Vm2_raster3d $(TEST_ARGS)
+
+obj_raster3d_fb/Vm2_raster3d: rtl/video/m2_raster3d.sv rtl/video/m2_quad_store.sv rtl/video/m2_raster_fill.sv \
+                           rtl/video/m2_raster_div.sv rtl/video/m2_recip_rom.sv rtl/video/m2_raster_band.sv rtl/video/m2_span_tex.sv rtl/video/m2_texel.sv rtl/video/m2_texel_x2.sv rtl/video/m2_char_x2.sv rtl/tgp/m2_fifo_m10k.sv \
+                           rtl/video/m2_fb_write.sv rtl/video/m2_fb_read.sv rtl/mem/m2_ddr3_arb.sv sim/video/tb_m2_raster3d_fb.cpp
+	$(VBUILD) --top-module m2_raster3d -GFB_DDR3=1 -GTWO_CLOCKS=0 -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-WIDTHEXPAND -Wno-PINCONNECTEMPTY -Wno-VARHIDDEN -Wno-WIDTHTRUNC \
+	  --Mdir obj_raster3d_fb -o Vm2_raster3d -CFLAGS "-O2" \
+	  rtl/video/m2_raster3d.sv rtl/video/m2_quad_store.sv rtl/video/m2_raster_fill.sv \
+	  rtl/video/m2_raster_div.sv rtl/video/m2_recip_rom.sv rtl/video/m2_raster_band.sv rtl/video/m2_span_tex.sv rtl/video/m2_texel.sv rtl/video/m2_texel_x2.sv rtl/video/m2_char_x2.sv rtl/tgp/m2_fifo_m10k.sv \
+	  rtl/video/m2_fb_write.sv rtl/video/m2_fb_read.sv rtl/mem/m2_ddr3_arb.sv sim/video/tb_m2_raster3d_fb.cpp
 
 test_m2_pair_cache: obj_pair_cache/Vm2_pair_cache
 	@echo "== test m2_pair_cache (the port's second dword serves the next read)"

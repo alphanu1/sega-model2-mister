@@ -105,7 +105,14 @@ module m2_fb_read #(
   assign rd_col = rd_w[23:0];
   assign rd_hit = rd_w[24];
 
-  assign m_addr = {fb_sel, 24'(y_r)} * 25'(STRIDE / 2);
+  // R360: THE BUFFER SELECT HAS TO SURVIVE THE MULTIPLY. This was
+  // `{fb_sel, 24'(y_r)} * 25'(STRIDE/2)`, which places fb_sel at bit 24 and
+  // then multiplies by 256 -- so it lands at bit 32 of a TWENTY-FIVE bit
+  // address and is gone. Both buffers were the same memory, the double buffer
+  // was not double, and the scanout read the frame being drawn. The line
+  // number is nine bits because a buffer is 512 lines, so the select belongs
+  // at bit 9 before the shift and bit 17 after it.
+  assign m_addr = {fb_sel, 9'(y_r)} * 25'(STRIDE / 2);
   assign m_blen = 8'(BEATS);
   assign line_ready = have;
 

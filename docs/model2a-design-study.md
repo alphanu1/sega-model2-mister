@@ -17452,3 +17452,57 @@ Phase 9 of the debug stream ('F') reports frames published and lists dropped. A
 frozen picture is drop climbing with pub flat -- **a failure mode the band path
 could not even express**, because it showed partial frames rather than holding
 complete ones, and one worth being able to name from the board.
+
+**R360 -- A BENCH FOR THE PARAMETER THE BOARD ACTUALLY RUNS, AND THE THREE
+DEFECTS IT FOUND IN AN AFTERNOON.**
+
+`tb_m2_raster3d` drives `m2_raster3d` at `FB_DDR3 = 0`. Every line of the
+framebuffer path had therefore been linted and never simulated -- R356 already
+records what that costs. `tb_m2_raster3d_fb` builds the same module with
+`-GFB_DDR3=1`, a DDR3 model and the writer, reader and arbiter attached, and
+drives it the way the walker and the beam do. It found three defects, none of
+which any existing bench could have seen.
+
+**1. THE DOUBLE BUFFER WAS NOT DOUBLE.** All three address calculations were
+`{fb_sel, 24'(y)} * 25'(STRIDE/2)`. That places `fb_sel` at bit 24 and then
+multiplies by 256, so it lands at bit 32 of a TWENTY-FIVE bit address and is
+gone. Both buffers were the same memory: the scanout read the frame being drawn
+into, and the once-a-frame clear wiped the picture on screen. `{fb_sel, 9'(y)}`
+puts the select at bit 9 before the shift and bit 17 after it. **A concatenation
+into a multiply is a width calculation, and this one silently discarded its most
+significant input.**
+
+**2. THE LINE AHEAD NEVER WRAPPED.** `line_y` was `scan_y + 1`, which runs on
+through the forty blanking lines: the reader fetched lines 385..424, which are
+outside the picture and which the clear never touches, and **never fetched line
+0 at all**. Line 0 showed whatever the last blanking fetch had left in the line
+buffer -- 496 painted pixels of uninitialised DDR3, on every frame. Clamping to
+0 also stops forty wasted bursts a frame, and re-fetches line 0 through the
+blanking so it is fresh when the beam arrives.
+
+**3. THE ARBITER COULD BE DEADLOCKED BY A FAST ACKNOWLEDGE.** `m2_ddr3_arb`
+registered `busy <= 1'b1` on a grant, and the clause that clears `busy` is
+guarded on `busy` already being set. A transaction acknowledged in the cycle it
+was granted therefore fell down the gap and **the arbiter stayed busy for ever**
+-- every master locked out, no error, a frozen picture. `m2_ddr3` cannot do it
+(`D_IDLE` spends a cycle before `D_ISSUE`, so its earliest acknowledge is two
+cycles out), which is why it never showed on hardware and why the arbiter's own
+bench could not reproduce it either: that bench sets a request and ticks, so its
+model always answers a cycle late. `busy <= !m_ack` costs nothing and removes
+the class; the bench now settles the combinational grant with an `eval()` before
+the first tick, and the mutation fails.
+
+**AND THE MEMORY MODEL WAS THE INSTRUMENT.** The deadlock appeared only because
+the new bench's DDR3 model served a one-beat write in its command cycle -- a
+cycle faster than the real master. Correcting the model to match `m2_ddr3` made
+the symptom vanish; the fault was real and stayed fixed. **An optimistic memory
+model is not a conservative one: it exercises timing the hardware cannot
+produce, which finds latent faults and invents symptoms in equal measure, and
+the only way to tell which is to go and read the master.**
+
+The bench states the saving as a sum -- four video frames of one list must cost
+exactly one render -- rather than pinning which frame the draw lands on, because
+that depends on when the sort finishes and a test that pins it is testing the
+bench. The two lists are drawn in different places on the screen, which is the
+only way a bench can see whether two buffers are two: with them collapsed,
+list B appears while list A is cleared away, and that check is what caught (1).

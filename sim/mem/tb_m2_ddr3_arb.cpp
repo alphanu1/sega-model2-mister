@@ -27,12 +27,21 @@ static void ck(const char *w, long got, long want) {
 
 static int left = 0, cd = 0; static uint32_t raddr = 0; static bool is_wr = false;
 static long a_beats = 0, b_beats = 0, grants = 0;
+static int zero_latency = 0;
 
 static void tick() {
   d->m_rvalid = 0; d->m_ack = 0; d->m_wnext = 0;
   if (left == 0 && d->m_req) {
     left = d->m_blen ? d->m_blen : 1; is_wr = d->m_we; raddr = d->m_addr;
     cd = is_wr ? 0 : 6; grants++;
+    if (zero_latency) {
+      // served in the command cycle, acknowledge and all
+      while (left > 0) {
+        if (is_wr) d->m_wnext = 1; else { d->m_rvalid = 1; d->m_dout = 0xAA00u + raddr; }
+        raddr++; left--;
+      }
+      d->m_ack = 1;
+    }
   } else if (left > 0) {
     if (cd > 0) cd--;
     else {
@@ -102,6 +111,43 @@ int main(int argc, char **argv) {
     for (int i = 0; i < 2000 && !aq; i++) { if (d->a_ack) { aq = 1; d->a_req = 0; } tick(); }
     ck("the reader's beats went to the reader", a_beats, 8);
     ck("and none to the writer",                b_beats, 0);
+  }
+
+  // ---- 4. R360: A TRANSACTION THAT FINISHES IN THE CYCLE IT IS GRANTED.
+  //
+  //         m2_ddr3 cannot do this -- D_IDLE spends a cycle latching before
+  //         D_ISSUE, so its earliest acknowledge is two cycles out -- and that
+  //         is exactly why this went unnoticed. The arbiter registered
+  //         `busy <= 1'b1` on the grant, and the clause that clears busy is
+  //         guarded on busy already being set, so the acknowledge fell down the
+  //         gap and the arbiter stayed busy FOR EVER: every master locked out,
+  //         no error, a frozen picture. A framebuffer bench with a memory model
+  //         one cycle quicker than the real master found it in an afternoon.
+  //
+  //         Modelled here by serving a one-beat burst in the command cycle.
+  {
+    std::printf("test: a transaction that acknowledges in its grant cycle\n");
+    zero_latency = 1;
+    a_beats = b_beats = 0;
+    d->a_blen = 1;
+    int aq = 0;
+    d->a_req = 1;
+    // SETTLE THE COMBINATIONAL GRANT BEFORE THE FIRST TICK, or the memory model
+    // reads a stale m_req and answers a cycle late -- which is precisely the
+    // cycle the fault lives in, and the reason the first draft of this test
+    // passed against the broken arbiter.
+    d->eval();
+    for (int i = 0; i < 200 && !aq; i++) { if (d->a_ack) { aq = 1; d->a_req = 0; } tick(); }
+    ck("the one-beat read completed", aq, 1);
+    // and the arbiter must still be usable afterwards -- the deadlock's
+    // signature is that the NEXT transaction never starts.
+    zero_latency = 0;               // back to a normal burst, so beats are countable
+    d->b_req = 1; b_beats = 0;
+    int bq = 0;
+    for (int i = 0; i < 200 && !bq; i++) { if (d->b_ack) { bq = 1; d->b_req = 0; } tick(); }
+    ck("and the arbiter is not wedged afterwards", bq, 1);
+    ck("the next master got its beats", b_beats, 4);
+    d->a_blen = 8;
   }
 
   std::printf("m2_ddr3_arb: checks=%ld fails=%ld\n", checks, fails);

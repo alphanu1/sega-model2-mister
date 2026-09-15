@@ -613,7 +613,16 @@ module m2_raster3d #(
       m2_fb_read #(.WIDTH(SCR_W), .STRIDE(512)) u_fbr (
         .clk(clk), .rd_clk(scan_clk), .rst_n(rst_n),
         .fb_sel(fb_show),                        // R359: the last COMPLETE frame
-        .line_req(line_pulse), .line_y(scan_y[8:0] + 9'd1), .line_ready(),
+        // R360: THE LINE AHEAD WRAPS. `scan_y + 1` runs on through the forty
+        // blanking lines, so the reader fetched lines 385..424 -- outside the
+        // picture, from DDR3 the clear never touches -- and NEVER FETCHED LINE
+        // 0. Line 0 therefore showed whatever the last blanking fetch left in
+        // the buffer: 496 painted pixels of uninitialised memory, every frame.
+        // Clamping instead re-fetches line 0 through the blanking, so it is
+        // fresh and paid for when the beam arrives.
+        .line_req(line_pulse),
+        .line_y((scan_y >= 10'(SCR_H - 1)) ? 9'd0 : 9'(scan_y + 10'd1)),
+        .line_ready(),
         .m_req(r_req), .m_we(r_we), .m_addr(r_addr), .m_blen(r_blen),
         .m_rvalid(r_rvalid), .m_dout(fb_dout), .m_ack(r_ack),
         .rd_parity(scan_y[0]), .rd_x(scan_x[$clog2(SCR_W)-1:0]),

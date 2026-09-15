@@ -60,7 +60,14 @@ module m2_fb_write #(
   // ---- spans in, from m2_span_tex
   input  logic        in_valid,
   output logic        in_ready,
-  input  logic signed [15:0] in_y, in_x0, in_x1,
+  // R360: in_y is 16 bits because the span interface is shared with the band
+  // path, but a buffer is 512 lines and only nine of them reach the address.
+  // The fill clips every span to view_y1..view_y2, which with a framebuffer
+  // is 0..SCR_H-1, so the upper bits are known zero rather than discarded.
+  /* verilator lint_off UNUSEDSIGNAL */
+  input  logic signed [15:0] in_y,
+  /* verilator lint_on UNUSEDSIGNAL */
+  input  logic signed [15:0] in_x0, in_x1,
   input  logic [23:0] in_col,
   input  logic        in_painted,     // 0 clears the pixel instead of painting it
 
@@ -129,7 +136,10 @@ module m2_fb_write #(
         end else if (in_valid) begin
           // Rows are STRIDE pixels and two pixels a word, so the row address is
           // a shift and not a multiply.
-          row_r <= {fb_sel, 24'(in_y)} * 25'(STRIDE / 2);
+          // R360: nine bits of line, so the buffer select survives the shift.
+          // At 24 it was multiplied past the top of a 25-bit address and both
+          // buffers were one.
+          row_r <= {fb_sel, 9'(in_y)} * 25'(STRIDE / 2);
           x_r   <= in_x0;
           x1_r  <= in_x1;
           px_r  <= px;
@@ -198,7 +208,7 @@ module m2_fb_write #(
           // them are never read.
           m_blen  <= 8'((SCR_W + 1) / 2);
           m_be    <= 8'hFF;
-          addr_r  <= ({fb_sel, 24'(clr_y)} * 25'(STRIDE / 2));
+          addr_r  <= ({fb_sel, 9'(clr_y)} * 25'(STRIDE / 2));   // R360
           st      <= W_CLRW;
         end
 

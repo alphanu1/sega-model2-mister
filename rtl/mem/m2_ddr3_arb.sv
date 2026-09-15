@@ -108,9 +108,17 @@ module m2_ddr3_arb (
       dbg_a_waits <= '0; dbg_b_waits <= '0;
     end else begin
       cool <= 1'b0;
+      // R360: AN ACKNOWLEDGE IN THE GRANT CYCLE MUST NOT BE MISSED. This was
+      // `busy <= 1'b1`, and the clause below that clears busy is guarded on
+      // busy -- so a transaction that finished in the cycle it was granted left
+      // the arbiter busy for ever and every other master locked out. m2_ddr3
+      // cannot do it (D_IDLE spends a cycle before D_ISSUE, so the earliest ack
+      // is two cycles out) which is why this never showed on hardware, but a
+      // memory model one cycle quicker deadlocked the whole framebuffer.
+      // `busy <= !m_ack` costs nothing and removes the class.
       if (!busy) begin
-        if (a_req)      begin owner <= 1'b0; busy <= 1'b1; end
-        else if (b_req) begin owner <= 1'b1; busy <= 1'b1; end
+        if (a_req)      begin owner <= 1'b0; busy <= !m_ack; cool <= m_ack; end
+        else if (b_req) begin owner <= 1'b1; busy <= !m_ack; cool <= m_ack; end
       end else if (busy && m_ack) begin
         busy <= 1'b0;
         cool <= 1'b1;
