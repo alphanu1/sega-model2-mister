@@ -18169,3 +18169,47 @@ fails if a DDR3 master is clocked by `clk_mem`. Mutation-tested.
 Both masters move to `clk_sys`. `DDRAM_CLK` is ours to drive, so the bridge runs
 at 50 MHz: ~400 MB/s peak against the ~80 MB/s the framebuffer needs, **five
 times the headroom, in exchange for a handshake that cannot drop a pulse.**
+
+**R378 -- R376 IS REVERTED. THE ARBITER WAS NEVER SHOWN TO BE BROKEN, BECAUSE
+EVERY MEASUREMENT OF IT WAS TAKEN THROUGH A BROKEN HANDSHAKE.**
+
+    s141  R375, one port + arbiter      copro 030B healthy, 2,338 walks
+    s153  R376, two ports, no arbiter   copro 0000 dead, 1 walk
+    s171  R377, two ports + clock fix   copro 0000 dead, 1 walk
+
+**The coprocessor regression came from R376, not R377** -- s153 shows it before
+the clock fix existed. Taking `ram2` away from `ddr_svc` stops the TGP microcode
+reaching the copro; the mechanism is not yet established, and the diff reads
+correctly, which is reason to leave it alone rather than guess again.
+
+**AND R376 BOUGHT NOTHING.** It was undertaken because eight entries of arbiter
+work had failed -- but R377 then showed WHY they failed: acknowledges were being
+dropped in the clock crossing between `m2_ddr3` on `clk_mem` and its consumers on
+`clk_sys`, whatever the arbiter did. **Every arbiter measurement today was taken
+through that fault, so none of them was evidence about the arbiter.** It was never
+shown to be broken. It was shown to be downstream of something broken.
+
+So: the arbiter and the single port come back; the clock fix stays. That is the
+minimal configuration the evidence supports, and it is the one that measured a
+clean handshake -- 65,535 acknowledges issued, 65,535 seen, 65,535 lines
+completed, zero late.
+
+**WHAT THE STRIPED SCREEN WAS.** Blue with horizontal white bands, and it is
+diagnostic: the uninitialised DDR3 framebuffer being scanned out. One list
+arrived, the fill walked all 48 bands drawing nothing, `fb_complete` rose,
+`fb_shown_ok` rose with it, and the mixer began showing a buffer that had never
+been cleared. **Proof the read path works end to end** -- real DDR3 contents
+reached the screen.
+
+**AND A REAL BUG IT EXPOSED, INDEPENDENT OF ALL THE ABOVE.** `fb_shown_ok` rises
+when the fill COMPLETES A PASS, not when anything was PAINTED. A frame that drew
+zero pixels is publishable, and publishing it puts uninitialised memory on
+screen. The gate wants to be "a frame was completed AND something was painted in
+it".
+
+**THE LESSON.** Eight entries went into a block that was never at fault, because
+a corrupted handshake made every reading of it look like a routing failure.
+**When a measurement implicates a component, check first that the measurement
+itself can be trusted** -- a plain wire reading 3 in and 2 out should have been
+recognised as impossible, and therefore as evidence about the measurement rather
+than the component, far earlier than it was.

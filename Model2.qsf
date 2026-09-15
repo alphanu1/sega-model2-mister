@@ -371,9 +371,6 @@ set_global_assignment -name VERILOG_MACRO "M2_NO_OVERLAY=1"
 # set) rather than by this. HDMI, the 3.5mm jack and S/PDIF all keep working.
 # Model 2 has no CD or HPS-streamed audio, so nothing here ever fed it.
 set_global_assignment -name VERILOG_MACRO "MISTER_DISABLE_ALSA=1"
-# R376: give the core sysmem's second 64-bit DDR3 port (ram2). Free here because
-# ALSA is disabled above and the palette fetch needs MISTER_FB, which is off.
-set_global_assignment -name VERILOG_MACRO "MISTER_DDRAM2=1"
 
 # EXPERIMENT, NOT A FIX -- remove once it has answered.
 # Keeps BUFFERRAM on and takes away ONLY the coprocessor's writes into shared
@@ -628,6 +625,7 @@ set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to USER_IO[*]
 set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to VGA_EN
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_diag.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/mem/m2_ddr3.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/mem/m2_ddr3_arb.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_fb_write.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_fb_read.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/mem/m2_sdram.sv

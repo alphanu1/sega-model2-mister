@@ -139,24 +139,22 @@ syn_check:
 # its own. This is R94's lesson for the third time -- a guard that cannot see
 # the class of bug it is standing in front of is worse than no guard, because
 # it is believed.
-# R377: THE DDR3 MASTERS MUST SHARE A CLOCK WITH THEIR CONSUMERS.
+# R377: THE DDR3 MASTER MUST SHARE A CLOCK WITH ITS CONSUMERS.
 # m2_ddr3 hands out single-cycle ack/rvalid/wnext. On clk_mem (100 MHz) with
-# m2_raster3d on clk_sys (50 MHz), half of them fall between edges and vanish --
-# which is the whole of R353..R376, and which no bench can catch because every
-# bench serves the memory on the design's own clock. So it is checked HERE, by
-# reading the instantiation, where a regression cannot hide.
+# m2_raster3d on clk_sys (50 MHz), half of them fall between edges and vanish.
+# No bench can catch it -- every bench serves the memory on the design's own
+# clock, so the crossing cannot exist at the desk -- so it is checked HERE.
 check_ddr3_clock:
 	@if grep -A1 -E "^m2_ddr3 u_ddr3" Model2.sv | grep -q "clk(clk_mem)"; then \
 	  echo "DDR3 MASTER ON clk_mem WHILE ITS CONSUMERS ARE ON clk_sys (R377):"; \
 	  echo "  single-cycle ack/rvalid/wnext will be dropped across the crossing."; \
 	  exit 1; \
 	fi
-	@echo "  DDR3 masters share clk_sys with m2_fb_read/m2_fb_write"
+	@echo "  DDR3 master shares clk_sys with m2_fb_read/m2_fb_write"
 
 lint_top: check_ddr3_clock
 	@echo "== lint Model2.sv and everything it instantiates"
 	@verilator --lint-only -Wall -Wno-DECLFILENAME -Wno-fatal --top-module emu \
-	  +define+MISTER_DDRAM2=1 \
 	  -Irtl/sound/jt12 -Isys $(LINTTOP_RTL) \
 	  sys/hps_io.sv rtl/pll/pll.v sim/lint/altera_pll_stub.v Model2.sv > .lint_top.raw 2>&1 || true
 	@grep -E "^%Error|syntax error|Cannot find file containing module" .lint_top.raw \
@@ -669,6 +667,14 @@ obj_fbw/Vm2_fb_write: rtl/video/m2_fb_write.sv sim/video/tb_m2_fb_write.cpp
 	$(VBUILD) --top-module m2_fb_write -Wno-TIMESCALEMOD --Mdir obj_fbw -o Vm2_fb_write -CFLAGS "-O2" \
 	  rtl/video/m2_fb_write.sv sim/video/tb_m2_fb_write.cpp
 
+test_m2_ddr3_arb: obj_ddr3arb/Vm2_ddr3_arb
+	@echo "== test m2_ddr3_arb (two framebuffer masters, one DDRAM port)"
+	@./obj_ddr3arb/Vm2_ddr3_arb $(TEST_ARGS)
+
+obj_ddr3arb/Vm2_ddr3_arb: rtl/mem/m2_ddr3_arb.sv sim/mem/tb_m2_ddr3_arb.cpp
+	$(VBUILD) --top-module m2_ddr3_arb -Wno-TIMESCALEMOD --Mdir obj_ddr3arb -o Vm2_ddr3_arb -CFLAGS "-O2" \
+	  rtl/mem/m2_ddr3_arb.sv sim/mem/tb_m2_ddr3_arb.cpp
+
 test_m2_ddr3: obj_ddr3/Vm2_ddr3
 	@echo "== test m2_ddr3 (the DDR3 master, and that it honours BUSY)"
 	@./obj_ddr3/Vm2_ddr3 $(TEST_ARGS)
@@ -712,12 +718,12 @@ test_m2_raster3d_fb: obj_raster3d_fb/Vm2_raster3d
 
 obj_raster3d_fb/Vm2_raster3d: rtl/video/m2_raster3d.sv rtl/video/m2_quad_store.sv rtl/video/m2_raster_fill.sv \
                            rtl/video/m2_raster_div.sv rtl/video/m2_recip_rom.sv rtl/video/m2_raster_band.sv rtl/video/m2_span_tex.sv rtl/video/m2_texel.sv rtl/video/m2_texel_x2.sv rtl/video/m2_char_x2.sv rtl/tgp/m2_fifo_m10k.sv \
-                           rtl/video/m2_fb_write.sv rtl/video/m2_fb_read.sv sim/video/tb_m2_raster3d_fb.cpp
+                           rtl/video/m2_fb_write.sv rtl/video/m2_fb_read.sv rtl/mem/m2_ddr3_arb.sv sim/video/tb_m2_raster3d_fb.cpp
 	$(VBUILD) --top-module m2_raster3d -GFB_DDR3=1 -GTWO_CLOCKS=0 -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-WIDTHEXPAND -Wno-PINCONNECTEMPTY -Wno-VARHIDDEN -Wno-WIDTHTRUNC \
 	  --Mdir obj_raster3d_fb -o Vm2_raster3d -CFLAGS "-O2" \
 	  rtl/video/m2_raster3d.sv rtl/video/m2_quad_store.sv rtl/video/m2_raster_fill.sv \
 	  rtl/video/m2_raster_div.sv rtl/video/m2_recip_rom.sv rtl/video/m2_raster_band.sv rtl/video/m2_span_tex.sv rtl/video/m2_texel.sv rtl/video/m2_texel_x2.sv rtl/video/m2_char_x2.sv rtl/tgp/m2_fifo_m10k.sv \
-	  rtl/video/m2_fb_write.sv rtl/video/m2_fb_read.sv sim/video/tb_m2_raster3d_fb.cpp
+	  rtl/video/m2_fb_write.sv rtl/video/m2_fb_read.sv rtl/mem/m2_ddr3_arb.sv sim/video/tb_m2_raster3d_fb.cpp
 
 test_m2_pair_cache: obj_pair_cache/Vm2_pair_cache
 	@echo "== test m2_pair_cache (the port's second dword serves the next read)"

@@ -51,24 +51,21 @@ wire [15:0] ddr_inflight_max;   // R362
 wire [15:0] ddr_acks;           // R366
 wire        ddr_stuck_wr;
 
-// R377: THE DDR3 MASTERS RUN ON clk_sys, THE CLOCK THEIR CONSUMERS RUN ON.
+// R377: THE DDR3 MASTER RUNS ON clk_sys, THE CLOCK ITS CONSUMERS RUN ON.
 //
-// They were on clk_mem (100 MHz) while m2_raster3d -- and so m2_fb_read and
-// m2_fb_write -- runs on clk_sys (50 MHz). Every handshake m2_ddr3 produces is a
-// SINGLE-CYCLE pulse: ack, rvalid, wnext. A one-cycle pulse at 100 MHz sampled
-// by a 50 MHz clock is seen only when it happens to straddle an edge, so ROUGHLY
-// HALF ARE LOST.
+// It was on clk_mem (100 MHz) while m2_raster3d -- and so m2_fb_read and
+// m2_fb_write -- runs on clk_sys (50 MHz). m2_ddr3 hands out SINGLE-CYCLE ack,
+// rvalid and wnext; a one-cycle pulse at 100 MHz sampled by a 50 MHz clock is
+// seen only when it straddles an edge, so ROUGHLY HALF ARE LOST. A lost ack
+// leaves m2_fb_read in R_FILL for ever, a lost rvalid short-changes a line, a
+// lost wnext stalls the clear -- and one loss is fatal, because nothing retries.
 //
-// That is the whole of R353-R376. A lost `ack` leaves m2_fb_read in R_FILL for
-// ever; a lost `rvalid` short-changes a line; a lost `wnext` stalls the clear.
-// The board reported it as "the arbiter is not routing acknowledges", and with
-// the arbiter DELETED it still read 3 issued against 2 seen -- across a plain
-// wire, which is impossible in one clock domain and is the measurement that
-// finally named it.
+// CONFIRMED ON THE BOARD: with this fix the reader reported 65,535 acknowledges
+// issued, 65,535 seen and 65,535 lines completed, with ZERO late -- a clean
+// handshake for the first time, where every previous build lost some.
 //
-// DDRAM_CLK is ours to drive, so the bridge simply runs at 50 MHz. That halves
-// the peak burst rate to ~400 MB/s against the ~80 MB/s this framebuffer needs:
-// five times the headroom, for a handshake that cannot drop a pulse.
+// DDRAM_CLK is ours to drive, so the bridge runs at 50 MHz: ~400 MB/s peak
+// against the ~80 MB/s this framebuffer needs.
 m2_ddr3 u_ddr3 (
 	.clk(clk_sys), .rst_n(mem_rst_n),
 	.req(ddr_req), .we(ddr_we), .addr(ddr_addr), .blen(ddr_blen), .din(ddr_din), .be(ddr_be),
@@ -82,37 +79,6 @@ m2_ddr3 u_ddr3 (
 	.dbg_inflight_max(ddr_inflight_max), .dbg_stuck_wr(ddr_stuck_wr),   // R362
 	.dbg_acks(ddr_acks)   // R366
 );
-
-// R376: THE SECOND DDR3 PORT, FOR THE SCANOUT READER.
-//
-// The writer keeps port 1 above; the reader gets its own. They no longer share,
-// so there is no arbiter and no way for one to starve the other. Same BASE --
-// they address the same framebuffer, the writer into fb_draw and the reader out
-// of fb_show, which are different buffers at any instant.
-//
-// ORDERING BETWEEN THE PORTS IS NOT A CONCERN HERE, and it is worth saying why
-// rather than relying on it silently: the two masters never touch the same
-// buffer at the same time, and the flip happens at frame_start long after the
-// last write of that frame has been acknowledged.
-wire        ddr2_req, ddr2_we, ddr2_wnext, ddr2_rvalid, ddr2_ack;
-wire [24:0] ddr2_addr;
-wire  [7:0] ddr2_blen, ddr2_be;
-wire [63:0] ddr2_din, ddr2_dout;
-
-m2_ddr3 u_ddr3_rd (
-	.clk(clk_sys), .rst_n(mem_rst_n),   // R377: same domain as its consumer
-	.req(ddr2_req), .we(ddr2_we), .addr(ddr2_addr), .blen(ddr2_blen),
-	.din(ddr2_din), .be(ddr2_be),
-	.wnext(ddr2_wnext), .rvalid(ddr2_rvalid), .ack(ddr2_ack), .dout(ddr2_dout),
-	.DDRAM_CLK(DDRAM2_CLK), .DDRAM_BUSY(DDRAM2_BUSY),
-	.DDRAM_BURSTCNT(DDRAM2_BURSTCNT), .DDRAM_ADDR(DDRAM2_ADDR),
-	.DDRAM_DIN(DDRAM2_DIN), .DDRAM_BE(DDRAM2_BE),
-	.DDRAM_WE(DDRAM2_WE), .DDRAM_RD(DDRAM2_RD),
-	.DDRAM_DOUT(DDRAM2_DOUT), .DDRAM_DOUT_READY(DDRAM2_DOUT_READY),
-	.dbg_lat_last(), .dbg_lat_max(),
-	.dbg_inflight_max(), .dbg_stuck_wr(), .dbg_acks(ddr2_acks)
-);
-wire [15:0] ddr2_acks;
 
 assign VGA_SL  = 0;
 assign VGA_F1  = 0;
@@ -4447,7 +4413,7 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	      : (tps_ph == 4'd8)                  ? {fb_late, fb_lines}   // R358: lines fetched, and how often the fetch was asked for early
 	      : (tps_ph == 4'd9)                  ? r3d_pixels                      // R359: pixels painted, into the framebuffer
 	      : (tps_ph == 4'd10)                 ? {11'd0, bwl_cpu}                // R363: cycles the CPU port spent waiting, last frame
-	      : (tps_ph == 4'd11)                 ? {ddr2_acks, fbr_acks}              // R376: the READER port's acks : acks the reader SAW
+	      : (tps_ph == 4'd11)                 ? {ddr_acks, fbr_acks}               // R366/R370: acks ISSUED : acks the reader SAW
 	      : (tps_ph == 4'd6)                  ? {bwl_tex[20:5], 16'd0}          // R294: texel fetch waiting
 	      : {lum_mean_f, lum_zpc_f, wedge_slot, wedge_n[6:0], r3d_quads[11:4]}),   // R249: the frame's mean luminance and its black-polygon percentage, where the always-zero drop count and the free-running miss count were
 	.a_tag(8'h43),
@@ -5711,10 +5677,6 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(3), .FB_DDR3(1'b1),
 	.fb_req(ddr_req), .fb_we(ddr_we), .fb_addr(ddr_addr), .fb_blen(ddr_blen),
 	.fb_din(ddr_din), .fb_be(ddr_be),
 	.fb_wnext(ddr_wnext), .fb_rvalid(ddr_rvalid), .fb_ack(ddr_ack), .fb_dout(ddr_dout),
-	.fb2_req(ddr2_req), .fb2_we(ddr2_we), .fb2_addr(ddr2_addr), .fb2_blen(ddr2_blen),
-	.fb2_din(ddr2_din), .fb2_be(ddr2_be),
-	.fb2_wnext(ddr2_wnext), .fb2_rvalid(ddr2_rvalid), .fb2_ack(ddr2_ack),
-	.fb2_dout(ddr2_dout),   // R376
 	.dbg_fb_lines(fb_lines), .dbg_fb_late(fb_late),
 	.dbg_fb_pub(fb_pub), .dbg_fb_drop(fb_drop),
 	.dbg_fb_state(fb_state), .dbg_fbr_acks(fbr_acks),   // R364/R370

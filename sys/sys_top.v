@@ -624,11 +624,7 @@ sysmem_lite sysmem
 	.ram1_write(ram_write),
 
 	//64-bit DDR3 RAM access
-`ifdef MISTER_DDRAM2
-	.ram2_clk(ddram2_clk),      // R376: the core's clock, not clk_audio
-`else
 	.ram2_clk(clk_audio),
-`endif
 	.ram2_address(ram2_address),
 	.ram2_burstcount(ram2_burstcount),
 	.ram2_waitrequest(ram2_waitrequest),
@@ -664,31 +660,6 @@ wire        ram2_read;
 wire        ram2_write;
 wire  [7:0] ram2_bcnt;
 
-`ifdef MISTER_DDRAM2
-// R376: ram2 goes to the core instead of ddr_svc. Its two channels are idle in
-// this configuration -- ALSA is disabled and the palette fetch only fires with
-// MISTER_FB in 8bpp mode -- so the port is free for a second core master.
-// pal_wr/pal_d/pal_a are the nets ddr_svc would have driven; they must be tied
-// off explicitly rather than left floating.
-wire        ddram2_clk, ddram2_rd, ddram2_we;
-wire  [7:0] ddram2_burstcnt, ddram2_be;
-wire [28:0] ddram2_addr;
-wire [63:0] ddram2_din;
-
-assign ram2_burstcount = ddram2_burstcnt;
-assign ram2_address    = ddram2_addr;
-assign ram2_writedata  = ddram2_din;
-assign ram2_byteenable = ddram2_be;
-assign ram2_read       = ddram2_rd;
-assign ram2_write      = ddram2_we;
-
-// The nets ddr_svc would have driven. Tied off HERE rather than left to float:
-// an undriven wire in this file reads as X in simulation and as whatever the
-// fitter leaves in silicon, and pal1_wr feeds the video palette.
-assign ram2_bcnt = 8'd0;
-assign pal_data  = 64'd0;
-assign pal_wr    = 1'b0;
-`else
 ddr_svc ddr_svc
 (
 	.clk(clk_audio),
@@ -718,7 +689,6 @@ ddr_svc ddr_svc
 	.ch1_req(pal_req),
 	.ch1_ready(pal_wr)
 );
-`endif
 
 wire clk_pal = clk_audio;
 
@@ -1875,19 +1845,6 @@ emu emu
 	.DDRAM_DIN(ram_writedata),
 	.DDRAM_BE(ram_byteenable),
 	.DDRAM_WE(ram_write),
-
-`ifdef MISTER_DDRAM2
-	.DDRAM2_CLK(ddram2_clk),
-	.DDRAM2_ADDR(ddram2_addr),
-	.DDRAM2_BURSTCNT(ddram2_burstcnt),
-	.DDRAM2_BUSY(ram2_waitrequest),
-	.DDRAM2_DOUT(ram2_readdata),
-	.DDRAM2_DOUT_READY(ram2_readdatavalid),
-	.DDRAM2_RD(ddram2_rd),
-	.DDRAM2_DIN(ddram2_din),
-	.DDRAM2_BE(ddram2_be),
-	.DDRAM2_WE(ddram2_we),
-`endif
 
 	.SDRAM_DQ(SDRAM_DQ),
 	.SDRAM_A(SDRAM_A),
