@@ -108,7 +108,13 @@ module m2_ddr3 #(
   // as a huge number instead of as silence, and bit 15 says whether the stuck
   // transaction was a write.
   output logic [15:0] dbg_inflight_max,
-  output logic        dbg_stuck_wr
+  output logic        dbg_stuck_wr,
+  // R366: ACKNOWLEDGE ACCOUNTING. The reader sits in R_FILL waiting for an
+  // acknowledge while this module is idle with nothing in flight, which means
+  // either it never issued one or the one it issued did not arrive. Counting
+  // both ends turns that into a fact: if this climbs and m2_fb_read's line
+  // count does not, the pulses are being lost between the two.
+  output logic [15:0] dbg_acks
 );
 
   assign DDRAM_CLK      = clk;
@@ -157,9 +163,10 @@ module m2_ddr3 #(
       addr_r <= '0; be_r <= 8'hFF;
       blen_r <= 8'd1; beats <= 8'd1; wnext <= 1'b0; rvalid <= 1'b0;
       lat <= '0; dbg_lat_last <= '0; dbg_lat_max <= '0; dbg_reads <= '0;
-      dbg_inflight_max <= '0; dbg_stuck_wr <= 1'b0;
+      dbg_inflight_max <= '0; dbg_stuck_wr <= 1'b0; dbg_acks <= 16'd0;
     end else begin
       ack <= 1'b0; wnext <= 1'b0; rvalid <= 1'b0;
+      if (ack && !(&dbg_acks)) dbg_acks <= dbg_acks + 16'd1;   // R366
 
       // R362: watch the transfer WHILE it is in flight, not when it lands.
       if ((st != D_IDLE) && (lat > dbg_inflight_max)) begin

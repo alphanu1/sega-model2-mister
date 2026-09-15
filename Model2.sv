@@ -47,6 +47,7 @@ wire [15:0] fb_pub, fb_drop;   // R359
 wire [31:0] fb_state, fb_spans;   // R364
 wire [15:0] ddr_lat_last, ddr_lat_max;
 wire [15:0] ddr_inflight_max;   // R362
+wire [15:0] ddr_acks;           // R366
 wire        ddr_stuck_wr;
 wire [31:0] ddr_reads;
 
@@ -60,7 +61,8 @@ m2_ddr3 u_ddr3 (
 	.DDRAM_WE(DDRAM_WE), .DDRAM_RD(DDRAM_RD),
 	.DDRAM_DOUT(DDRAM_DOUT), .DDRAM_DOUT_READY(DDRAM_DOUT_READY),
 	.dbg_lat_last(ddr_lat_last), .dbg_lat_max(ddr_lat_max), .dbg_reads(ddr_reads),
-	.dbg_inflight_max(ddr_inflight_max), .dbg_stuck_wr(ddr_stuck_wr)   // R362
+	.dbg_inflight_max(ddr_inflight_max), .dbg_stuck_wr(ddr_stuck_wr),   // R362
+	.dbg_acks(ddr_acks)   // R366
 );
 
 assign VGA_SL  = 0;
@@ -4396,7 +4398,7 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	      : (tps_ph == 4'd8)                  ? {fb_late[15:0], fb_lines[15:0]}   // R358: lines fetched, and how often the fetch was asked for early
 	      : (tps_ph == 4'd9)                  ? r3d_pixels                      // R359: pixels painted, into the framebuffer
 	      : (tps_ph == 4'd10)                 ? {11'd0, bwl_cpu}                // R363: cycles the CPU port spent waiting, last frame
-	      : (tps_ph == 4'd11)                 ? {16'd0, fb_spans[15:0]}            // R364: spans accepted by the writer
+	      : (tps_ph == 4'd11)                 ? {ddr_acks, fb_spans[15:0]}         // R366: acks ISSUED : spans accepted
 	      : (tps_ph == 4'd6)                  ? {bwl_tex[20:5], 16'd0}          // R294: texel fetch waiting
 	      : {lum_mean_f, lum_zpc_f, wedge_slot, wedge_n[6:0], r3d_quads[11:4]}),   // R249: the frame's mean luminance and its black-polygon percentage, where the always-zero drop count and the free-running miss count were
 	.a_tag(8'h43),

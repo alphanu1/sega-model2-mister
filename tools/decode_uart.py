@@ -226,6 +226,7 @@ if N:
         ca[((a >> 8) & 1, (a >> 7) & 1)] += 1
         clears = (a >> 16) & 0xffff
     spans = N[-1][1] & 0xffff
+    acks  = (N[-1][1] >> 16) & 0xffff
     print('FRAMEBUFFER STATE (R364): %d clear passes COMPLETED' % clears)
     print('    writer state:  ' + ', '.join('%s x%d' % (WST.get(k, k), v)
                                             for k, v in cw.most_common(3)))
@@ -234,6 +235,19 @@ if N:
     for (own, bsy), v in ca.most_common(3):
         print('    arbiter: busy=%d owner=%s  x%d' % (bsy, 'writer' if own else 'reader', v))
     print('    spans accepted by the writer: %d' % spans)
+    # R366: the two ends of the same handshake. m2_ddr3 counts every ack it
+    # issues; m2_fb_read counts every line it completes, which needs one.
+    lines_seen = (D[-1][1] & 0xffff) if D else 0
+    print('    acknowledges ISSUED by m2_ddr3: %d   lines COMPLETED by the reader: %d'
+          % (acks, lines_seen))
+    if acks and not lines_seen:
+        print('    *** ACKNOWLEDGES ARE BEING LOST BETWEEN THE MASTER AND THE READER.')
+        print('        m2_ddr3 finished transfers that m2_fb_read never saw finish,')
+        print('        so the fault is in the arbiter routing or the reader FSM,')
+        print('        NOT in DDR3 and not in the burst.')
+    elif not acks:
+        print('    (no acknowledge was ever issued: the master never completed a')
+        print('     transfer, so look at the request path, not the routing)')
     if clears == 0:
         print('    *** NO CLEAR EVER COMPLETED. in_ready stays low and clear_busy')
         print('        stays high, so the span path is jammed AND the fill is held')

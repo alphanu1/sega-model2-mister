@@ -17698,33 +17698,52 @@ everything else follows from that alone.
 **Three builds were spent on hypotheses because the design could not say where it
 was stuck.** The instrument was cheaper than any one of them.
 
-**R365 -- 99% DOES NOT WORK ON THIS DEVICE, AND THE SCARCE RESOURCE HAS SWAPPED
-OVER.**
+**R365 -- A WRONG FINDING, WITHDRAWN THE SAME DAY, AND WHAT THE DATA ACTUALLY
+SUPPORTS.**
 
-Five board tests in one afternoon, two commits, and the split is clean:
+**THE CLAIM WAS: "99% utilisation does not work on this device."** It was wrong,
+and Ben said so immediately: the part is designed to be filled, and a fit that
+closes timing works at 100%. **Utilisation is not a correctness criterion.** The
+number that decides whether a build runs is slack, and area only matters because
+of what the fitter must do to reach it.
 
-    ALM 98%   s46 41,0k   RAN          s49 41,1k   RAN
-    ALM 99%   s47 41,3k   locked up    s51 41,3k   BLACK    s52 41,4k   BLACK
+It was a story fitted to five points, and it does not survive its own evidence:
 
-It holds ACROSS commits -- s47 was R363 and failed at 99% while s49 was the same
-RTL at 98% and ran -- and it is **not timing**: s49 ran with `clk_mem` at -0.654
-while s52 came up black at -0.520. The boundary is near 41,280 ALM.
+    s49  RAN    clk_mem -0.654  clk_sys -0.671   ALM 98%
+    s52  BLACK  clk_mem -0.520  clk_sys +0.687   ALM 99%
 
-**This is why the last three builds were unreadable.** A design at the edge gives
-a different answer per seed, so every board result carried a confound the RTL
-could not explain, and two of six seeds died in the fitter outright (DYN, CUT).
-**R330 says flash a second seed before suspecting the RTL; R365 says that is not
-enough when the design has no headroom -- the seed IS the variable.**
+**s49 ran with worse slack on both core clocks than the build that came up
+black.** Neither utilisation nor slack separates these builds, so the afternoon's
+board results remain unexplained by anything measured so far -- which is the
+honest position, and the one that should have been recorded instead of a rule.
 
-R332 put the span queue in MLAB to release 5 block-RAM tiles, when M10K was
-binding at 553 of 553. The framebuffer inverted that: the band buffers are gone
-(R358) and the fit sits at **531 of 553 with 22 tiles spare and ALM short**. At
-186 bits the queue is ceil(186/20) = 10 MLABs, about 100 ALM, so putting it back
-in block memory spends a resource we now have on the one we have not. The
-32-bit arbiter-wait counter goes too: `busy`/`owner` in the phase-11 state word
-says more and costs nothing.
+**WHAT THIS COST AND WHY IT HAPPENED.** Three board tests in a row were
+unreadable, and reaching for the first variable that lined up across them is
+exactly the failure this document exists to prevent. The study has now been
+wrong six times. The pattern in five of those six is the same: **a correlation
+over a handful of runs, promoted to a mechanism without a mechanism.** Two seeds
+of six also died in the fitter outright (DYN, CUT), so the sample was noisier
+than the conclusion assumed.
 
-**A RESOURCE DECISION HAS A SHELF LIFE.** R332 was right when it was made and
-wrong four days later, because the thing it optimised for stopped being scarce.
-Every `ramstyle` choice in this design is a bet on which resource binds, and the
-framebuffer changed the answer -- so they all want re-reading, not just this one.
+**THE CHANGE ITSELF STANDS, ON DIFFERENT GROUNDS.** The span queue goes back to
+M10K -- not because 99% fails, but because R332's premise expired: it moved the
+queue to MLAB to release 5 block-RAM tiles when M10K was binding at 553 of 553,
+and the framebuffer left us at 531 of 553 with 22 tiles spare and ALM the tighter
+of the two. Spending a resource we have on one we have not is right regardless of
+any threshold. The 32-bit arbiter-wait counter goes too: `busy`/`owner` in the
+phase-11 state word says more for free.
+
+**A RESOURCE DECISION HAS A SHELF LIFE.** That part was sound. R332 was correct
+when made and stale four days later, because the thing it optimised for stopped
+being scarce. Every `ramstyle` bet in this design is a bet on which resource
+binds, and the framebuffer changed the answer.
+
+**WHAT IS ACTUALLY KNOWN ABOUT THE 3D FAULT**, from the phase-11 capture and
+nothing else: the reader sits in `R_FILL` (beats returned, acknowledge did not),
+the arbiter holds `busy = 1, owner = reader`, the writer is `IDLE` having never
+been asked to clear, and m2_ddr3 is idle with nothing in flight. **Both arbiter
+variants deadlock the same way** -- R360's `busy <= !m_ack` and R364's
+`busy <= 1'b1` -- so the arbiter is not the discriminator either. The next
+measurement is acknowledge accounting: count the pulses m2_ddr3 issues against
+the ones the reader receives. If they differ, they are being lost between them,
+and that is a fact rather than a theory.
