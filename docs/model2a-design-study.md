@@ -16985,3 +16985,64 @@ run, and three builds were killed mid-placement while another project was
 fitting on the same machine. Roughly half of everything attempted. A single dead
 seed is indistinguishable from a broken design, and three in a row will convict
 an innocent change -- which is exactly what happened here.
+
+**R381 -- THE "SEED LOTTERY" IS THE SDRAM READ-CAPTURE REGISTERS FAILING TO PACK
+INTO THE I/O CELLS, AND IT IS NOT A LOTTERY.**
+
+Ben, twice: *"it can just be seed lottery. its code somewhere"* and *"seeds should
+not change the behaviour like this"*. Both right, and the fit reports say why.
+
+    build   dq_r bits that failed to pack into I/O   result
+    s201                    10 of 16                 BLACK
+    s202                    10 of 16                 BLACK
+    s203                     0                       WORKS
+
+Three of three, on RTL that is byte-identical (`git diff ce01d29 main -- rtl/
+Model2.sv sys/ Model2.qsf` is EMPTY, so there was nothing to bisect). The failing
+builds report, at "Starting register packing":
+
+    Warning (176225): Can't pack node m2_sdram|dq_r[0] to I/O pin
+    Warning (176229): Can't pack node m2_sdram|dq_r[0] and I/O node SDRAM_DQ[0]
+                      -- nodes have conflicting location assignments
+
+on bits 0,1,2,3,5,7,10,13,14,15 -- and NOT on 4,6,8,9,11,12. **The read bus ends
+up non-uniform: ten bits captured in fabric with routing delay, six in the pin.**
+
+**WHY THAT IS FATAL, IN THIS DESIGN SPECIFICALLY.** Model2.sdc's multicycle
+exception on the read path is justified in its own comment: *"What the constraint
+pair must actually guarantee is that the arrival is CONSISTENT -- the data eye
+plus routing variation fits inside one period."* The boot calibration then sweeps
+CL+1..CL+5 and picks one depth **for the whole bus**. That is sound when all
+sixteen bits share the I/O cell's fixed, minimal pin-to-flop delay. It cannot
+work when ten bits arrive a different number of cycles later than the other six:
+**no single capture depth is correct, so there is nothing for the calibration to
+find.**
+
+That is confirmed from the board rather than argued: sweeping every OSD "SDRAM
+phase" setting on s201 changed nothing, and a power cycle changed nothing. A
+depth control cannot fix a bus that is no longer uniform.
+
+**AND IT EXPLAINS THE SHAPE OF THE FAILURE.** The CPU is alive (`trap=0
+halted=0`) and makes no SDRAM accesses, the copro never leaves its reset vector,
+no display lists are walked, and every vblank-latched counter therefore reads
+zero. Model 1 hit the same class and described the same end state: *"The CPU gets
+a corrupt jump operand out of its reset vector... executes opcode 0x00 and halts
+-- generating no further SDRAM fetches."*
+
+**WHAT IS NOT YET ESTABLISHED:** why the fitter refuses those particular bits on
+some seeds. `FAST_INPUT_REGISTER ON -to SDRAM_DQ[*]` and `FAST_OUTPUT_REGISTER ON
+-to SDRAM_*` are both present, and the second wildcard matches `SDRAM_DQ` too;
+`sd_dq_o` fails to pack on exactly the same bits as `dq_r`, so input and output
+registers appear to be contending for the same cells. No explicit location
+assignment exists on `dq_r`. That wants an experiment, not another theory.
+
+**THE MEASUREMENT THAT SHOULD GATE EVERY BUILD FROM NOW ON**, and it costs
+nothing because the fit already reports it:
+
+    grep -c 176229 <build>/fit.log     ->  0 = usable, non-zero = do not flash
+
+**Three board-derived conclusions on the ddr3 branch rest on black screens and
+dead-copro captures (R367, R372, R376, R380) and must be treated as unproven**:
+every one of them could be this, since each was a different seed. R377 (the clock
+domain) and R368 (the dropped acknowledge) survive, because their evidence is a
+counter identity and a mutation test rather than an appearance.
