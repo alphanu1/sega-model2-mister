@@ -43,6 +43,19 @@ module m2_raster3d #(
   // memory clock. The logic is kept rather than deleted precisely because that
   // move is planned and R199 records what it costs to rediscover.
   parameter bit TWO_CLOCKS = 1'b1,
+  // R355: THE DDR3 FRAMEBUFFER, OFF BY DEFAULT.
+  //
+  // At 0 nothing below is instantiated and this file behaves exactly as it
+  // always has -- band buffers, beam-paced fill, the lot. The DDR3 path is
+  // committed dormant so the change that TURNS IT ON is a small diff against a
+  // known-good tree, and so a bisect has somewhere to stand between "the
+  // plumbing exists" and "the picture comes from it".
+  //
+  // What it buys when it is 1 (R340): the fill stops re-rendering a held list --
+  // measured at 1.98 video frames per list, so very nearly half its work -- and
+  // stops being beam-paced, because a framebuffer has somewhere to keep the
+  // result. The band buffers' 24 M10K come back with it.
+  parameter bit FB_DDR3 = 1'b0,
   // R275: the SDRAM address width the texel fetch drives.
   parameter int unsigned TEX_AW = 25
 ) (
@@ -126,7 +139,21 @@ module m2_raster3d #(
   // R213: how many video frames the last list stayed on display (latched at
   // the swap), and scanlines the beam drew with no band buffer ready.
   output logic [7:0]  dbg_hold,
-  output logic [15:0] dbg_missed
+  output logic [15:0] dbg_missed,
+
+  // ---- R355: the DDR3 side, arbitrated here and driven at the top level
+  output logic        fb_req,
+  output logic        fb_we,
+  output logic [24:0] fb_addr,
+  output logic [7:0]  fb_blen,
+  output logic [63:0] fb_din,
+  output logic [7:0]  fb_be,
+  input  logic        fb_wnext,
+  input  logic        fb_rvalid,
+  input  logic        fb_ack,
+  input  logic [63:0] fb_dout,
+  output logic [31:0] dbg_fb_lines,
+  output logic [31:0] dbg_fb_late
 );
 
   localparam int unsigned NBANDS = (SCR_H + BAND_H - 1) / BAND_H;
@@ -451,6 +478,95 @@ module m2_raster3d #(
   // RGB888 to RGB565 on the way in, as the reference does: the colour is
   // already quantised upstream, so this costs less than it looks.
   wire [15:0] span_565 = {tx_span_col[23:19], tx_span_col[15:10], tx_span_col[7:3]};
+
+  // ------------------------------------------------ R355: the DDR3 path
+  //
+  // Dormant at FB_DDR3 = 0: the generate below instantiates nothing, so this
+  // costs no ALM and no M10K until the change that turns it on.
+  //
+  // WHICH BUFFER IS WHICH. The fill writes the one the scanout is not showing,
+  // swapped at frame_start -- the same discipline the quad store already uses
+  // for its two banks (R213). `fb_draw` is the one being drawn into.
+  logic fb_draw;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n)          fb_draw <= 1'b0;
+    else if (frame_start) fb_draw <= ~fb_draw;
+  end
+
+  logic [15:0] fbr_col_dummy;
+  logic        fbr_hit_dummy;
+  logic [23:0] fb_rd_col;
+  logic        fb_rd_hit;
+
+  generate
+    if (FB_DDR3) begin : g_fb
+      logic        w_req, w_we, w_wnext, w_ack;
+      logic [24:0] w_addr;
+      logic [7:0]  w_blen, w_be;
+      logic [63:0] w_din;
+      logic        r_req, r_we, r_rvalid, r_ack;
+      logic [24:0] r_addr;
+      logic [7:0]  r_blen;
+
+      // Spans in, pixels to DDR3. The span walk hands over exactly what it
+      // handed the band buffers; only the destination changes.
+      m2_fb_write #(.STRIDE(512)) u_fbw (
+        .clk(clk), .rst_n(rst_n),
+        .fb_sel(fb_draw),
+        .in_valid(tx_span_valid), .in_ready(tx_span_ready),
+        .in_y(tx_span_y[15:0]), .in_x0(tx_span_x0[15:0]), .in_x1(tx_span_x1[15:0]),
+        .in_col(tx_span_col), .in_painted(1'b1),
+        .m_req(w_req), .m_we(w_we), .m_addr(w_addr), .m_blen(w_blen),
+        .m_din(w_din), .m_be(w_be), .m_wnext(w_wnext), .m_ack(w_ack),
+        .dbg_spans(), .dbg_words()
+      );
+
+      // A line ahead of the beam, one burst. The line the mixer is about to
+      // need is scan_y + 1; asking on the line BEFORE is the whole reason the
+      // ~500 ns worst case (R351) never reaches the picture.
+      logic [9:0] scan_y_q;
+      logic       line_pulse;
+      always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin scan_y_q <= 10'd0; line_pulse <= 1'b0; end
+        else begin
+          scan_y_q   <= scan_y;
+          line_pulse <= (scan_y != scan_y_q);
+        end
+      end
+
+      m2_fb_read #(.WIDTH(SCR_W), .STRIDE(512)) u_fbr (
+        .clk(clk), .rd_clk(scan_clk), .rst_n(rst_n),
+        .fb_sel(~fb_draw),                       // read the one not being drawn
+        .line_req(line_pulse), .line_y(scan_y[8:0] + 9'd1), .line_ready(),
+        .m_req(r_req), .m_we(r_we), .m_addr(r_addr), .m_blen(r_blen),
+        .m_rvalid(r_rvalid), .m_dout(fb_dout), .m_ack(r_ack),
+        .rd_parity(scan_y[0]), .rd_x(scan_x[$clog2(SCR_W)-1:0]),
+        .rd_col(fb_rd_col), .rd_hit(fb_rd_hit),
+        .dbg_lines(dbg_fb_lines), .dbg_late(dbg_fb_late)
+      );
+
+      // The reader wins: it has the beam deadline and the writer has not.
+      m2_ddr3_arb u_arb (
+        .clk(clk), .rst_n(rst_n),
+        .a_req(r_req), .a_we(r_we), .a_addr(r_addr), .a_blen(r_blen),
+        .a_din(64'd0), .a_be(8'hFF),
+        .a_wnext(), .a_rvalid(r_rvalid), .a_ack(r_ack),
+        .b_req(w_req), .b_we(w_we), .b_addr(w_addr), .b_blen(w_blen),
+        .b_din(w_din), .b_be(w_be),
+        .b_wnext(w_wnext), .b_rvalid(), .b_ack(w_ack),
+        .m_req(fb_req), .m_we(fb_we), .m_addr(fb_addr), .m_blen(fb_blen),
+        .m_din(fb_din), .m_be(fb_be),
+        .m_wnext(fb_wnext), .m_rvalid(fb_rvalid), .m_ack(fb_ack),
+        .m_dout(fb_dout), .dout(),
+        .dbg_a_waits(), .dbg_b_waits()
+      );
+    end else begin : g_nofb
+      assign fb_req = 1'b0; assign fb_we = 1'b0; assign fb_addr = 25'd0;
+      assign fb_blen = 8'd0; assign fb_din = 64'd0; assign fb_be = 8'd0;
+      assign fb_rd_col = 24'd0; assign fb_rd_hit = 1'b0;
+      assign dbg_fb_lines = 32'd0; assign dbg_fb_late = 32'd0;
+    end
+  endgenerate
 
   // --------------------------------------------------------- band buffers
   logic [NBUF-1:0]       bd_clear_req, bd_clear_busy;

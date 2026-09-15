@@ -5646,6 +5646,14 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(3),
 	// R318: clk_mem carries m2_texel, which runs at 100 MHz inside this module.
 	.clk(clk_sys), .clk_mem(clk_mem), .rst_n(mem_rst_n),
 	.frame_start(geo_walk_start),
+	// R355: the DDR3 framebuffer, DORMANT. FB_DDR3 defaults to 0, so the
+	// generate inside instantiates nothing and these tie off -- no ALM, no M10K,
+	// no behaviour change. The commit that turns it on is where these meet the
+	// master, and having the plumbing land separately is what gives a bisect
+	// somewhere to stand between "the path exists" and "the picture uses it".
+	.fb_req(), .fb_we(), .fb_addr(), .fb_blen(), .fb_din(), .fb_be(),
+	.fb_wnext(1'b0), .fb_rvalid(1'b0), .fb_ack(1'b0), .fb_dout(64'd0),
+	.dbg_fb_lines(), .dbg_fb_late(),
 	// Each bar is a proper filled rectangle traversed around its perimeter:
 	// (x0,y0) top-left, (x0,y2) bottom-left, (x2,y2) bottom-right,
 	// (x2,y0) top-right -- the same v0..v3 cycle the geometry engine emits.
