@@ -570,7 +570,6 @@ module m2_raster3d #(
   logic [3:0]  fbw_st;
   logic [1:0]  fbr_st;
   logic        fbr_busy, arb_busy, arb_owner;
-  logic [15:0] arb_stalls;   // R369: grants the watchdog had to release
   logic [15:0] fbr_acks;     // R370: acknowledges the reader actually saw
   logic        fb_clear_req, fb_clear_busy;
 
@@ -680,7 +679,7 @@ module m2_raster3d #(
         .m_din(fb_din), .m_be(fb_be),
         .m_wnext(fb_wnext), .m_rvalid(fb_rvalid), .m_ack(fb_ack),
         .m_dout(fb_dout), .dout(),
-        .dbg_a_waits(), .dbg_b_waits(), .dbg_stalls(arb_stalls),   // R369
+        .dbg_a_waits(), .dbg_b_waits(),   // R372: watchdog gone
         .dbg_busy(arb_busy), .dbg_owner(arb_owner)
       );
     end else begin : g_nofb
@@ -693,7 +692,7 @@ module m2_raster3d #(
       assign fbw_pixels = 32'd0;
       assign fbw_clears = 16'd0; assign fbw_st = 4'd0;
       assign fbr_st = 2'd0; assign fbr_busy = 1'b0;
-      assign arb_busy = 1'b0; assign arb_owner = 1'b0; assign arb_stalls = 16'd0;
+      assign arb_busy = 1'b0; assign arb_owner = 1'b0;
       assign fbr_acks = 16'd0;
     end
   endgenerate
@@ -913,12 +912,9 @@ module m2_raster3d #(
   assign dbg_pixels = FB_DDR3 ? fbw_pixels : bd_dbg_pixels;
 
   // R364: the whole framebuffer's state in one word.
-  // R369: the spare bits carry the watchdog's release count, saturating at
-  // 127 -- it should be ZERO, and any nonzero value is a master that stalled.
   assign dbg_fbr_acks = fbr_acks;
-  assign dbg_fb_state = {fbw_clears,
-                         (arb_stalls > 16'd127) ? 7'd127 : 7'(arb_stalls),
-                         arb_owner, arb_busy, fbr_busy, fbr_st, fbw_st};
+  assign dbg_fb_state = {fbw_clears, 7'd0, arb_owner, arb_busy,
+                         fbr_busy, fbr_st, fbw_st};
   always_comb begin
     bd_span_valid = '0;
     if (!FB_DDR3) bd_span_valid[fill_buf] = tx_span_valid;

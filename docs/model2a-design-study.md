@@ -17918,3 +17918,44 @@ all 64 words byte for byte.
 Trimmed to what the wire carries. The rule is cheap to apply and should be
 applied when a counter is ADDED, not when the fitter refuses: **decide the report
 field first, then size the counter to it.**
+
+**R372 -- THE R369 WATCHDOG IS REMOVED. IT RELEASED THE ARBITER WITHOUT TELLING
+THE MASTER.**
+
+    s93   R367 + R368, no watchdog    2D ran, reader completed 3 lines
+    s113  + R369 watchdog             BLACK, on the best timing of the day
+                                      (every core clock POSITIVE: +0.428, +0.539)
+
+R370 and R371 were counter widths and deletions, so the watchdog is the only
+behavioural difference. The mechanism is concrete: it releases the arbiter's
+grant, but **m2_ddr3 keeps driving `DDRAM_RD`/`WE` from `D_ISSUE` until the
+bridge answers**, and nothing resets it. At boot, before DDR3 calibration
+completes, a legitimate first read sits in `D_ISSUE` far longer than 8,191
+cycles -- so the guard fires on a healthy transaction, re-grants, and the two go
+out of step with the bridge left mid-transfer. A wedged bridge at boot means the
+ROM download never finishes and the i960 never starts.
+
+**A SAFE VERSION IS A DESIGN, NOT A TIMEOUT.** It would have to reset the master
+as well, or fire only when the master reports itself idle -- which means m2_ddr3
+exposing its state to the arbiter. That belongs after the handshake it backstops
+actually works, not during the diagnosis of that handshake.
+
+**AND THE BENCH TEST WENT WITH IT.** It proved the timeout fired and the starved
+master then ran -- both true, both beside the point, because the model cannot
+hold a request the way the real bridge does at boot. **That is how the guard got
+in.** R362 recorded a model one cycle too optimistic; R364 a model faster than the
+hardware can be; this is a model that cannot be slow enough. Three shapes of the
+same error in one day.
+
+**TWICE TODAY A GUARD CHANGED ON REASONING RATHER THAN MEASUREMENT MADE THINGS
+WORSE** -- R364 removed one that was load-bearing, R369 added one that was
+harmful. The rule earned: **while a system is under diagnosis, change what the
+evidence names and nothing else.**
+
+**AND A HOLE IN THE LINT GATE, FOUND ON THE WAY OUT.** `lint_top` grepped only
+for `syntax error` and `Cannot find file containing module`, so
+`%Error: Can't find definition of variable` passed as CLEAN -- an undeclared
+signal would reach `quartus_map` and cost a build to discover. The gate now
+matches any `%Error`, excluding framework paths and the summary line that carries
+no path. Verified both ways: clean on a good tree, and it fails on an undeclared
+signal.

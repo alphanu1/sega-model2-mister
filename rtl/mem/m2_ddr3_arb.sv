@@ -67,7 +67,6 @@ module m2_ddr3_arb (
 
   output logic [31:0] dbg_a_waits,     // cycles the READER spent waiting
   output logic [31:0] dbg_b_waits,
-  output logic [15:0] dbg_stalls,      // R369: grants released by the watchdog
   // R364: THE ARBITER'S STATE, OBSERVABLE. A block that can wedge the whole
   // core by holding a grant must not be a black box -- the board reported
   // "0 lines fetched" with nothing in flight, and busy/owner were the two bits
@@ -91,8 +90,6 @@ module m2_ddr3_arb (
   // removed, because the other mechanism was silently carrying it. Two guards
   // for one rule means a mutation test cannot tell you which one works.
   logic       cool;
-  // R369: cycles this grant has seen no beat and no acknowledge.
-  logic [12:0] stall;   // 8,192 -- trips at 4,096 by the &stall test on 12 bits
 
   assign m_req  = cool ? 1'b0
                 : busy ? (owner ? b_req  : a_req)  : (a_req | b_req);
@@ -115,7 +112,7 @@ module m2_ddr3_arb (
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      busy <= 1'b0; owner <= 1'b0; cool <= 1'b0; stall <= '0; dbg_stalls <= 16'd0;
+      busy <= 1'b0; owner <= 1'b0; cool <= 1'b0;
       dbg_a_waits <= '0; dbg_b_waits <= '0;
     end else begin
       cool <= 1'b0;
@@ -143,42 +140,36 @@ module m2_ddr3_arb (
       end else if (busy && m_ack) begin
         busy <= 1'b0;
         cool <= 1'b1;
-        stall <= '0;
       end
 
-      // R369: NO MASTER HOLDS THE PORT FOR EVER.
+      // R372: THE R369 WATCHDOG IS REMOVED. IT RELEASED THE ARBITER WITHOUT
+      // TELLING THE MASTER, AND THAT IS NOT A SAFE THING TO DO.
       //
-      // Ben's point, and it is the right one: the scanout should not be able to
-      // stop the fill. They share one DDRAM port, so a grant that is never
-      // released starves the other master completely -- `m_req` only ever shows
-      // the owner's request. That is exactly what the board did: the reader lost
-      // an acknowledge (R368), sat in R_FILL, and the writer waited in W_CLRW
-      // with its request high and unheard, so not one pixel reached DDR3.
+      // It fired after 8,191 cycles with no beat and no acknowledge, on the
+      // reasoning that the scanout must not be able to starve the fill -- which
+      // is a real requirement and Ben's own point. But m2_ddr3 keeps driving
+      // DDRAM_RD/WE from D_ISSUE until the bridge answers, and releasing the
+      // grant does not reset it. At boot, before DDR3 calibration completes,
+      // the first read can sit in D_ISSUE far longer than the timeout: the
+      // watchdog then re-grants, beats and acknowledges route to whoever owns
+      // the port now, and the bridge is left mid-transaction. A wedged bridge
+      // at boot means the ROM download never finishes and the i960 never
+      // starts -- black screen, which is what the board showed.
       //
-      // R368 removes THIS cause. The structure stays fragile without a floor:
-      // any future stall in either master repeats it. So a grant is released if
-      // nothing has happened on it for a long time -- no beat, no acknowledge.
+      // s93, without it, ran 2D and completed lines. s113, with it, came up
+      // black on the best timing of the day (every core clock POSITIVE). The
+      // bracketing is not proof, but the mechanism is concrete and the guard
+      // was never justified by a measurement in the first place.
       //
-      // SAFE BECAUSE IT CANNOT INTERRUPT A LIVE TRANSFER. The counter is reset
-      // by every beat, so a burst that is merely slow never trips it; only a
-      // transfer with NO activity at all for 4,096 cycles does, which is
-      // sixteen times the 262 a full line burst takes, and by then the master
-      // has long since returned to idle. m2_ddr3 latches its address for the
-      // whole burst (R362), so a later grant cannot disturb one in flight.
+      // A SAFE VERSION WOULD HAVE TO RESET THE MASTER TOO, or only fire when
+      // the master is known idle -- which means m2_ddr3 must report its state
+      // to the arbiter. That is a design, not a timeout, and it belongs after
+      // the handshake it is meant to backstop actually works.
       //
-      // It converts a permanent deadlock into a dropped line. That is a
-      // recovery, not a fix, and dbg_stalls counts it so the board can say
-      // whether it ever fires -- a guard that trips silently is a fault hiding.
-      if (!busy) stall <= '0;
-      else if (m_rvalid || m_wnext || m_ack) stall <= '0;
-      else if (!(&stall)) stall <= stall + 13'd1;
-
-      if (busy && (&stall)) begin
-        busy  <= 1'b0;
-        cool  <= 1'b1;
-        stall <= '0;
-        if (!(&dbg_stalls)) dbg_stalls <= dbg_stalls + 16'd1;
-      end
+      // TWICE TODAY A GUARD ADDED ON REASONING RATHER THAN MEASUREMENT MADE
+      // THINGS WORSE (R364 removed one that was load-bearing; R369 added one
+      // that was harmful). The rule earned: while a system is under diagnosis,
+      // change what the evidence names and nothing else.
 
       // What the priority actually costs the loser, and what it saves the
       // winner. If the reader ever waits at all, the burst-per-line argument

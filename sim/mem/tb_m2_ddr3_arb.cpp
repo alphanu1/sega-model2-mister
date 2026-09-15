@@ -161,36 +161,11 @@ int main(int argc, char **argv) {
     for (int i = 0; i < 50; i++) tick();
   }
 
-  // ---- 5. R369: NO MASTER HOLDS THE PORT FOR EVER.
-  //
-  //         Ben's point: the scanout must not be able to stop the fill. They
-  //         share one DDRAM port, so a grant that is never released starves the
-  //         other master completely -- which is exactly what the board did, with
-  //         the reader stuck in R_FILL and the writer waiting in W_CLRW with its
-  //         request high and unheard. R368 removes that cause; this is the floor
-  //         under it, because the next stall anywhere would repeat it.
-  {
-    std::printf("test: a grant that goes dead is released, and the other master runs\n");
-    // grant the reader, then have the memory go silent -- no beat, no ack
-    left = 0; cd = 0; dead_memory = 1;
-    d->a_req = 1; d->b_req = 0; d->eval();
-    for (int i = 0; i < 20; i++) tick();
-    ck("the reader was granted", (long)d->dbg_busy, 1);
-    d->a_req = 0;                       // the reader is wedged and asks no more
-    long before = d->dbg_stalls;
-    int i = 0;
-    for (; i < 20000 && d->dbg_busy; i++) tick();
-    ck("the dead grant was released", (long)(d->dbg_busy == 0), 1);
-    ck("and it was counted",          (long)(d->dbg_stalls > before), 1);
-    // and now the writer, which had been locked out, must be served
-    dead_memory = 0; b_beats = 0;
-    d->b_req = 1; d->eval();
-    int bq = 0;
-    for (i = 0; i < 2000 && !bq; i++) { if (b_ack_edge) bq = 1; tick(); }
-    ck("the starved master is served afterwards", bq, 1);
-    ck("and got its beats",                       b_beats, 4);
-    d->b_req = 0;
-  }
+  // ---- R372: the R369 watchdog test is removed with the watchdog. It proved
+  //      the timeout fired and the starved master then ran -- both true, and
+  //      both beside the point, because the bench's memory model cannot hold a
+  //      request the way the real bridge does at boot. A test that passes
+  //      against a model the hardware does not match is how the guard got in.
 
   std::printf("m2_ddr3_arb: checks=%ld fails=%ld\n", checks, fails);
   std::printf("%s\n", fails ? "FAIL" : "PASS");

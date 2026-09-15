@@ -144,11 +144,12 @@ lint_top:
 	@verilator --lint-only -Wall -Wno-DECLFILENAME -Wno-fatal --top-module emu \
 	  -Irtl/sound/jt12 -Isys $(LINTTOP_RTL) \
 	  sys/hps_io.sv rtl/pll/pll.v sim/lint/altera_pll_stub.v Model2.sv > .lint_top.raw 2>&1 || true
-	@grep -E "syntax error|Cannot find file containing module" .lint_top.raw \
-	  | grep -vE "sys/|rtl/pll/|sim/lint/" > .lint_top.syn || true
+	@grep -E "^%Error|syntax error|Cannot find file containing module" .lint_top.raw \
+	  | grep -vE "sys/|rtl/pll/|sim/lint/" \
+	  | grep -vE "Exiting due to" > .lint_top.syn || true
 	@if [ -s .lint_top.syn ]; then \
 	  echo "SYNTAX ERROR OR MISSING MODULE -- quartus_map would fail on this:"; \
-	  cat .lint_top.syn; rm -f .lint_top.syn .lint_top.raw; exit 1; \
+	  cat .lint_top.syn; rm -f .lint_top.syn; exit 1; \
 	 fi
 	@rm -f .lint_top.syn
 	@cat .lint_top.raw \
