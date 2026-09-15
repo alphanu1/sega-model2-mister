@@ -18243,3 +18243,41 @@ framebuffer alike.
 
 Recorded rather than fixed: the branch is being banked, and changing the phase
 source now would invalidate every capture layout in this history.
+
+**R380 -- THE COPROCESSOR DIES EXACTLY WHEN THE DDR3 READER STARTS WORKING. THE
+LEADING HYPOTHESIS IS THAT THE FRAMEBUFFER STARVES THE BOOT DOWNLOAD.**
+
+Four builds, and the correlation is not with any arbiter or port change:
+
+    build        reader                        copro          screen
+    s141 R375    WEDGED, acks 1->0->0, 0 lines  alive, 2,338 walks   2D runs
+    s153 R376    wedged                         dead,  1 walk        boot screen
+    s171 R377    WORKING, 65,535 lines, 0 late  dead,  1 walk        boot screen
+    s183 R378    WORKING, 65,535 lines, 0 late  dead,  0 walks       BLACK
+
+**While the reader was broken it pulled almost nothing from DDR3 and the machine
+booted. The moment it fetches properly the coprocessor never starts.** R376 and
+R377 are both incidental; what changed in each case is how much DDR3 traffic the
+framebuffer generates.
+
+**THE MECHANISM THAT FITS.** `m2_fb_read` begins fetching as soon as the video
+beam runs -- which is DURING BOOT, while the HPS is still downloading the ROMs
+and the 2,024-word TGP microcode across the same DDR3 bridge. One 248-beat burst
+per scanline, 424 lines a frame, from the first frame onwards. The transfer is
+starved, the microcode never lands, and the copro sits at its reset vector for
+ever (`tgp 0000` in every sample).
+
+**THE FIX THIS IMPLIES IS SMALL**, and is the one thing this branch did not try:
+hold the reader off until the download completes. `cp_done` and `ioctl_download`
+already exist and already gate everything else in the core -- the framebuffer
+reader is the only master that starts before them.
+
+**AND IT EXPLAINS WHY THE PROBLEM ARRIVED SO LATE.** For two days the reader was
+broken, so it never generated the traffic that breaks the boot. Fixing the clock
+domain (R377) made the reader work, and that is what exposed this. **A subsystem
+that has never functioned cannot interfere with anything** -- so the order in
+which faults surface is the order in which they are fixed, and the last one to
+appear was always going to be the one that needed everything else working first.
+
+Untested. Recorded as the leading hypothesis with the evidence above, not as a
+finding.

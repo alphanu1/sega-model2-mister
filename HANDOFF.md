@@ -81,7 +81,18 @@ answers, and inching forward between timeouts. Reverted in R378; **the mechanism
 is still not understood** and the diff reads correctly, which is why it was
 reverted rather than patched.
 
-### OPEN, IF THIS IS PICKED UP AGAIN
+### START HERE IF THIS IS PICKED UP AGAIN
+
+**R380: gate the framebuffer reader on the boot download.** Four builds show the
+copro dies exactly when the DDR3 reader starts working -- while the reader was
+broken the machine booted, and the moment it fetched properly (65,535 lines,
+zero late) the copro never left its reset vector. `m2_fb_read` starts fetching
+with the video beam, DURING BOOT, while the HPS is still moving the ROMs and the
+2,024-word TGP microcode over the same bridge. `cp_done` / `ioctl_download`
+already gate everything else in the core; the reader is the only master that does
+not wait for them. **This is a few lines and was never tried.**
+
+### THEN
 
 1. does the write path work? -- the only way to know is to run it
 2. `fb_shown_ok` rises when the fill COMPLETES A PASS, not when it PAINTED
