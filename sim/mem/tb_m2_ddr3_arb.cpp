@@ -28,6 +28,7 @@ static void ck(const char *w, long got, long want) {
 static int left = 0, cd = 0; static uint32_t raddr = 0; static bool is_wr = false;
 static long a_beats = 0, b_beats = 0, grants = 0;
 static int zero_latency = 0;
+static int a_ack_edge = 0, b_ack_edge = 0;
 
 static void tick() {
   d->m_rvalid = 0; d->m_ack = 0; d->m_wnext = 0;
@@ -51,6 +52,11 @@ static void tick() {
     }
   }
   d->eval();
+  // SAMPLED AT THE EDGE, WHICH IS WHERE A FLIP-FLOP SAMPLES. Reading a_ack
+  // after the clock has moved sees `busy` already updated and the routing
+  // recomputed -- a glitch no real consumer can observe. Getting this wrong
+  // made a correct arbiter look broken and cost an hour (R364).
+  a_ack_edge = d->a_ack; b_ack_edge = d->b_ack;
   if (d->a_rvalid || d->a_wnext) a_beats++;
   if (d->b_rvalid || d->b_wnext) b_beats++;
   d->clk = 0; d->eval();
@@ -113,41 +119,45 @@ int main(int argc, char **argv) {
     ck("and none to the writer",                b_beats, 0);
   }
 
-  // ---- 4. R360: A TRANSACTION THAT FINISHES IN THE CYCLE IT IS GRANTED.
+  // ---- 4. R364: THE OWNER MUST NOT FOLLOW req ONCE GRANTED.
   //
-  //         m2_ddr3 cannot do this -- D_IDLE spends a cycle latching before
-  //         D_ISSUE, so its earliest acknowledge is two cycles out -- and that
-  //         is exactly why this went unnoticed. The arbiter registered
-  //         `busy <= 1'b1` on the grant, and the clause that clears busy is
-  //         guarded on busy already being set, so the acknowledge fell down the
-  //         gap and the arbiter stayed busy FOR EVER: every master locked out,
-  //         no error, a frozen picture. A framebuffer bench with a memory model
-  //         one cycle quicker than the real master found it in an afternoon.
+  //         THIS IS THE ONE THAT MATTERED, and the test it replaces was worse
+  //         than useless. R360 tested a memory that acknowledged in the cycle it
+  //         was granted -- FASTER THAN m2_ddr3 CAN, since D_IDLE spends a cycle
+  //         before D_ISSUE -- and to satisfy it the arbiter took `busy <= !m_ack`
+  //         on a grant. That left a real hole: when m_ack is high in a grant
+  //         cycle from the PREVIOUS transaction, the new grant runs with busy = 0,
+  //         `sel_b` follows a_req live, and a master that drops req mid-burst (as
+  //         both of ours do, on the first beat) has its acknowledge routed to the
+  //         other port. It waits for ever.
   //
-  //         Modelled here by serving a one-beat burst in the command cycle.
+  //         So test the invariant instead of the timing: grant the reader, drop
+  //         a_req the way m2_fb_read does, and require the acknowledge to still
+  //         arrive at the reader.
   {
-    std::printf("test: a transaction that acknowledges in its grant cycle\n");
-    zero_latency = 1;
+    std::printf("test: a master that drops req mid-burst still gets its ack\n");
     a_beats = b_beats = 0;
-    d->a_blen = 1;
-    int aq = 0;
-    d->a_req = 1;
-    // SETTLE THE COMBINATIONAL GRANT BEFORE THE FIRST TICK, or the memory model
-    // reads a stale m_req and answers a cycle late -- which is precisely the
-    // cycle the fault lives in, and the reason the first draft of this test
-    // passed against the broken arbiter.
+    d->a_blen = 8; d->a_req = 1; d->b_req = 1;   // both asking: reader wins
     d->eval();
-    for (int i = 0; i < 200 && !aq; i++) { if (d->a_ack) { aq = 1; d->a_req = 0; } tick(); }
-    ck("the one-beat read completed", aq, 1);
-    // and the arbiter must still be usable afterwards -- the deadlock's
-    // signature is that the NEXT transaction never starts.
-    zero_latency = 0;               // back to a normal burst, so beats are countable
-    d->b_req = 1; b_beats = 0;
-    int bq = 0;
-    for (int i = 0; i < 200 && !bq; i++) { if (d->b_ack) { bq = 1; d->b_req = 0; } tick(); }
-    ck("and the arbiter is not wedged afterwards", bq, 1);
-    ck("the next master got its beats", b_beats, 4);
-    d->a_blen = 8;
+    int aq = 0, dropped = 0; long stray_back = 0;
+    for (int i = 0; i < 2000 && !aq; i++) {
+      // m2_fb_read drops m_req on the FIRST returned beat
+      if (!dropped && d->a_rvalid) { d->a_req = 0; dropped = 1; }
+      if (b_ack_edge) stray_back++;
+      if (a_ack_edge) aq = 1;
+      if (getenv("ARB_DBG") && i < 40)
+        std::printf("      t%-3d areq=%d breq=%d m_req=%d busy=%d own=%d arv=%d brv=%d aack=%d back=%d mack=%d\n",
+                    i, d->a_req, d->b_req, d->m_req, d->dbg_busy, d->dbg_owner,
+                    d->a_rvalid, d->b_rvalid, d->a_ack, d->b_ack, d->m_ack);
+      tick();
+    }
+    ck("the reader's request was dropped mid-burst", dropped, 1);
+    ck("and the reader still received its ack",      aq, 1);
+    ck("all eight beats went to the reader",         a_beats, 8);
+    ck("and none to the writer",                     b_beats, 0);
+    ck("no ack was delivered to the wrong master",   stray_back, 0);
+    d->a_req = 0; d->b_req = 0;
+    for (int i = 0; i < 50; i++) tick();
   }
 
   std::printf("m2_ddr3_arb: checks=%ld fails=%ld\n", checks, fails);

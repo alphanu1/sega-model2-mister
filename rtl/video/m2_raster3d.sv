@@ -158,7 +158,14 @@ module m2_raster3d #(
   // If drop climbs with pub flat the fill is not keeping up and the picture is
   // frozen rather than torn -- a failure the band path could not even express.
   output logic [15:0] dbg_fb_pub,
-  output logic [15:0] dbg_fb_drop
+  output logic [15:0] dbg_fb_drop,
+  // R364: ONE WORD THAT SAYS WHERE THE FRAMEBUFFER IS STUCK.
+  //  [3:0]   writer state      [5:4]   reader state    [6] reader busy
+  //  [7]     arbiter busy      [8]     arbiter owner (1 = writer)
+  //  [15:9]  spare             [31:16] clear passes COMPLETED
+  output logic [31:0] dbg_fb_state,
+  output logic [31:0] dbg_fb_spans,
+  output logic [31:0] dbg_arb_wait
 );
 
   localparam int unsigned NBANDS = (SCR_H + BAND_H - 1) / BAND_H;
@@ -549,6 +556,10 @@ module m2_raster3d #(
   // only in the build that turned the framebuffer on.
   logic        fbw_ready;
   logic [31:0] fbw_pixels;   // R358: pixels the writer painted, to compare with the bands'
+  logic [15:0] fbw_clears;   // R364
+  logic [3:0]  fbw_st;
+  logic [1:0]  fbr_st;
+  logic        fbr_busy, arb_busy, arb_owner;
   logic        fb_clear_req, fb_clear_busy;
 
   // R359: raised when a NEW LIST arrives, not every frame_start. Clearing on
@@ -584,7 +595,8 @@ module m2_raster3d #(
         .in_col(tx_span_col), .in_painted(1'b1),
         .m_req(w_req), .m_we(w_we), .m_addr(w_addr), .m_blen(w_blen),
         .m_din(w_din), .m_be(w_be), .m_wnext(w_wnext), .m_ack(w_ack),
-        .dbg_spans(), .dbg_pixels(fbw_pixels)
+        .dbg_spans(dbg_fb_spans), .dbg_pixels(fbw_pixels),
+        .dbg_clears(fbw_clears), .dbg_st(fbw_st)
       );
 
       // A line ahead of the beam, one burst. The line the mixer is about to
@@ -627,7 +639,8 @@ module m2_raster3d #(
         .m_rvalid(r_rvalid), .m_dout(fb_dout), .m_ack(r_ack),
         .rd_parity(scan_y[0]), .rd_x(scan_x[$clog2(SCR_W)-1:0]),
         .rd_col(fb_rd_col), .rd_hit(fbr_hit),
-        .dbg_lines(dbg_fb_lines), .dbg_late(dbg_fb_late)
+        .dbg_lines(dbg_fb_lines), .dbg_late(dbg_fb_late),
+        .dbg_st(fbr_st), .dbg_busy(fbr_busy)
       );
 
       // R359: NOTHING IS SHOWN UNTIL A FRAME HAS BEEN DRAWN. Both buffers hold
@@ -655,7 +668,8 @@ module m2_raster3d #(
         .m_din(fb_din), .m_be(fb_be),
         .m_wnext(fb_wnext), .m_rvalid(fb_rvalid), .m_ack(fb_ack),
         .m_dout(fb_dout), .dout(),
-        .dbg_a_waits(), .dbg_b_waits()
+        .dbg_a_waits(dbg_arb_wait), .dbg_b_waits(),
+        .dbg_busy(arb_busy), .dbg_owner(arb_owner)
       );
     end else begin : g_nofb
       assign fb_req = 1'b0; assign fb_we = 1'b0; assign fb_addr = 25'd0;
@@ -665,6 +679,10 @@ module m2_raster3d #(
       assign fb_clear_busy = 1'b0;
       assign dbg_fb_lines = 32'd0; assign dbg_fb_late = 32'd0;
       assign fbw_pixels = 32'd0;
+      assign fbw_clears = 16'd0; assign fbw_st = 4'd0;
+      assign fbr_st = 2'd0; assign fbr_busy = 1'b0;
+      assign arb_busy = 1'b0; assign arb_owner = 1'b0;
+      assign dbg_fb_spans = 32'd0; assign dbg_arb_wait = 32'd0;
     end
   endgenerate
 
@@ -881,6 +899,10 @@ module m2_raster3d #(
   // band's total at C_DONE; the writer counts as it paints.
   logic [31:0] bd_dbg_pixels;
   assign dbg_pixels = FB_DDR3 ? fbw_pixels : bd_dbg_pixels;
+
+  // R364: the whole framebuffer's state in one word.
+  assign dbg_fb_state = {fbw_clears, 7'd0, arb_owner, arb_busy,
+                         fbr_busy, fbr_st, fbw_st};
   always_comb begin
     bd_span_valid = '0;
     if (!FB_DDR3) bd_span_valid[fill_buf] = tx_span_valid;

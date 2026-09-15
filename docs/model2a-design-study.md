@@ -17647,3 +17647,53 @@ because a wrapped rate reads as a plausible small one.
 slow" from "the CPU is halted"; retires beside the port wait separates a machine
 starved of bus from a machine that has stopped, and zero retires is called out
 as the second.
+
+**R364 -- THREE THEORIES, NONE CONFIRMED, AND THE INSTRUMENT THAT SHOULD HAVE
+COME FIRST.**
+
+The framebuffer does not draw. Across two board tests the numbers never moved:
+0 lines fetched, 0 pixels painted, 0 frames published, and -- once R362 could
+measure it -- **nothing hung**: longest in flight 262 cycles, on a read. Three
+hypotheses were advanced and spent:
+
+1. **The 248-beat write burst.** Argued from `screen_rotate` using
+   `DDRAM_BURSTCNT = 1`. **Refuted by ascal in the same tree**, instantiated at
+   `N_BURST(2048)` on a 128-bit bus: 128-beat, 2048-byte bursts, writes
+   included, and it works. Ours is 1,984 bytes. *Checking the second example in
+   the tree before theorising would have cost five minutes.*
+2. **The address moving mid-burst.** Real -- `m2_fb_read` updated `y_r` on every
+   `line_req` and `DDRAM_ADDR` was combinational off it, which Avalon forbids --
+   and correctly fixed. But a 262-cycle burst is 7% of a 3,940-cycle line, so
+   the collision cannot occur unless the reader is ALREADY stuck. **`late` is a
+   consequence of the fault, not its cause**, and reading it as the cause
+   inverted the causality.
+3. **The arbiter's grant.** R360 had made it `busy <= !m_ack` so a transaction
+   acknowledged in its grant cycle could not be missed. `m2_ddr3` cannot do that
+   -- `D_IDLE` costs a cycle before `D_ISSUE` -- so the guard bought nothing,
+   and it is reverted to an unconditional `busy <= 1'b1`. But the mutation test
+   passes either way, so **there is no evidence it was the fault**; it is
+   reverted because it was never justified, not because it is the fix.
+
+**AND THE BENCH THAT DEMANDED R360 WAS MODELLING AN IMPOSSIBLE MASTER.** Its
+memory answered in the cycle it was granted, faster than the hardware can be.
+R362 records the mirror: a model one cycle too OPTIMISTIC invented a deadlock
+that did not exist. **Both directions cost a build. A memory model must match
+the master, not bracket it** -- and when a bench demands an RTL change, the first
+question is whether the scenario it models can physically occur.
+
+**A SAMPLING ERROR THAT MADE A CORRECT ARBITER LOOK BROKEN.** The replacement
+test read `a_ack` after the clock edge, where `busy` has already updated and the
+routing recomputed. No flip-flop can observe that. Acks are sampled at the edge
+now, as the beat counters always were.
+
+**WHAT SHOULD HAVE HAPPENED FIRST.** `0 lines, 0 pixels, nothing in flight` is
+consistent with at least four faults that need opposite fixes, and no counter in
+the design could separate them. Phase 11 ('N') now carries the writer's state,
+the reader's state, the arbiter's busy and owner, clear passes COMPLETED, spans
+accepted, and the reader's starvation count -- in one word. `R_REQ` means the
+request was issued and no beat returned; `R_FILL` means beats returned and the
+acknowledge did not; a clear count of zero means `in_ready` never rises and
+everything else follows from that alone.
+
+**Three builds were spent on hypotheses because the design could not say where it
+was stuck.** The instrument was cheaper than any one of them.

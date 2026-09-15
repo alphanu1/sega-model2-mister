@@ -30,6 +30,7 @@ Z=[]     # R294: SDRAM occupancy, phase 5
 Z2=[]    # R294: SDRAM occupancy, phase 6
 F=[]     # R359: framebuffer frames published / dropped, phase 9
 P=[]     # R363: i960 rate, phase 10
+N=[]     # R364: where the framebuffer is stuck, phase 11
 pend=None
 for line in open(sys.argv[1],errors='replace'):
     p=line.split()
@@ -43,6 +44,7 @@ for line in open(sys.argv[1],errors='replace'):
     elif p[0]=='D': D.append((a,d))     # R346: DDR3, phase 8
     elif p[0]=='F': F.append((a,d))     # R359: framebuffer frames, phase 9
     elif p[0]=='P': P.append((a,d))     # R363: the CPU's pace, phase 10
+    elif p[0]=='N': N.append((a,d))     # R364: framebuffer state, phase 11
     elif p[0]=='U': U.append((a,d))     # R255: the walk's own numbers
     elif p[0]=='V': V.append((a,d))     # R269: the glyph cache, per frame
     elif p[0]=='Y': Y.append((a,d))     # R275: the texture path, per frame
@@ -207,6 +209,40 @@ if F:
             print('    (nothing published: the fill never finishes a whole list --')
             print('     the picture is frozen on the last complete frame)')
     print('    pixels painted, last sample: %d' % d)
+
+if N:
+    # R364: WHERE IS IT STUCK? "0 lines, 0 pixels, nothing in flight" fits
+    # several faults that need opposite fixes, so this names the state directly.
+    WST = {0:'IDLE', 1:'HEAD', 2:'BODY', 3:'TAIL', 4:'WAIT', 5:'DONE',
+           6:'CLR', 7:'CLRW'}
+    RST = {0:'IDLE', 1:'REQ (asked, no beat came back)',
+           2:'FILL (beats came, no ack)', 3:'?'}
+    import collections
+    cw = collections.Counter(); cr = collections.Counter(); ca = collections.Counter()
+    clears = 0
+    for a, d in N:
+        cw[a & 0xf] += 1
+        cr[(a >> 4) & 3] += 1
+        ca[((a >> 8) & 1, (a >> 7) & 1)] += 1
+        clears = (a >> 16) & 0xffff
+    spans = (N[-1][1] >> 16) & 0xffff
+    await_ = N[-1][1] & 0xffff
+    print('FRAMEBUFFER STATE (R364): %d clear passes COMPLETED' % clears)
+    print('    writer state:  ' + ', '.join('%s x%d' % (WST.get(k, k), v)
+                                            for k, v in cw.most_common(3)))
+    print('    reader state:  ' + ', '.join('%s x%d' % (RST.get(k, k), v)
+                                            for k, v in cr.most_common(3)))
+    for (own, bsy), v in ca.most_common(3):
+        print('    arbiter: busy=%d owner=%s  x%d' % (bsy, 'writer' if own else 'reader', v))
+    print('    spans accepted by the writer: %d   reader starved for %d cycles'
+          % (spans, await_))
+    if clears == 0:
+        print('    *** NO CLEAR EVER COMPLETED. in_ready stays low and clear_busy')
+        print('        stays high, so the span path is jammed AND the fill is held')
+        print('        in C_IDLE. Everything else follows from this one fact.')
+    if spans == 0 and clears:
+        print('    (clears finish but no span was ever offered: the fault is UPSTREAM')
+        print('     of the writer, in the fill or the span walk, not in DDR3)')
 
 if P:
     # R363: IS THE GAME AT FULL SPEED? The i960 is 25 MHz and the frame is

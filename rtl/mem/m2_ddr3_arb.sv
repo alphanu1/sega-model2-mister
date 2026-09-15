@@ -66,10 +66,18 @@ module m2_ddr3_arb (
   output logic [63:0] dout,
 
   output logic [31:0] dbg_a_waits,     // cycles the READER spent waiting
-  output logic [31:0] dbg_b_waits
+  output logic [31:0] dbg_b_waits,
+  // R364: THE ARBITER'S STATE, OBSERVABLE. A block that can wedge the whole
+  // core by holding a grant must not be a black box -- the board reported
+  // "0 lines fetched" with nothing in flight, and busy/owner were the two bits
+  // that would have named the fault immediately.
+  output logic        dbg_busy,
+  output logic        dbg_owner
 );
 
   logic       busy, owner;             // 0 = a, 1 = b
+  assign dbg_busy = busy;
+  assign dbg_owner = owner;
   // ONE DEAD CYCLE AFTER AN ACKNOWLEDGE, and it is not politeness.
   // A master clears its request ON the acknowledge, which is a registered
   // assignment -- so for the cycle after m_ack its req is STILL HIGH. Granting
@@ -108,17 +116,31 @@ module m2_ddr3_arb (
       dbg_a_waits <= '0; dbg_b_waits <= '0;
     end else begin
       cool <= 1'b0;
-      // R360: AN ACKNOWLEDGE IN THE GRANT CYCLE MUST NOT BE MISSED. This was
-      // `busy <= 1'b1`, and the clause below that clears busy is guarded on
-      // busy -- so a transaction that finished in the cycle it was granted left
-      // the arbiter busy for ever and every other master locked out. m2_ddr3
-      // cannot do it (D_IDLE spends a cycle before D_ISSUE, so the earliest ack
-      // is two cycles out) which is why this never showed on hardware, but a
-      // memory model one cycle quicker deadlocked the whole framebuffer.
-      // `busy <= !m_ack` costs nothing and removes the class.
+      // R364: A GRANT ALWAYS BECOMES BUSY. THIS LINE WAS THE WHOLE FAULT.
+      //
+      // R360 made it `busy <= !m_ack`, to survive a transaction acknowledged in
+      // the cycle it was granted. That cannot happen with m2_ddr3 -- D_IDLE
+      // spends a cycle before D_ISSUE, so its earliest acknowledge is two cycles
+      // out -- and buying the impossible case cost the possible one:
+      //
+      //   if m_ack is high in a GRANT cycle, from the PREVIOUS transaction
+      //   finishing, the arbiter grants the new one with busy = 0. `sel_b` is
+      //   `busy ? owner : (a_req ? 0 : 1)`, so with busy low it follows a_req
+      //   LIVE -- and the reader drops a_req on its first rvalid. sel_b flips
+      //   to the writer mid-burst, `a_ack = m_ack && !sel_b` never fires, and
+      //   THE READER WAITS FOR EVER. m2_ddr3 finishes the transfer and returns
+      //   to D_IDLE, so nothing ever looks stuck: on the board this read as
+      //   0 lines fetched, 0 pixels painted, longest-in-flight a healthy 262.
+      //
+      // It was in every board test of the framebuffer. The bench that demanded
+      // it modelled a memory that answers in its grant cycle -- FASTER THAN THE
+      // HARDWARE CAN -- and a design bent to satisfy an impossible model breaks
+      // on the real one. R362 records the mirror of this: a model a cycle too
+      // OPTIMISTIC invented a deadlock that did not exist. Both directions cost
+      // a build; the model has to match the master, not bracket it.
       if (!busy) begin
-        if (a_req)      begin owner <= 1'b0; busy <= !m_ack; cool <= m_ack; end
-        else if (b_req) begin owner <= 1'b1; busy <= !m_ack; cool <= m_ack; end
+        if (a_req)      begin owner <= 1'b0; busy <= 1'b1; end
+        else if (b_req) begin owner <= 1'b1; busy <= 1'b1; end
       end else if (busy && m_ack) begin
         busy <= 1'b0;
         cool <= 1'b1;

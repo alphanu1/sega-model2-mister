@@ -73,7 +73,13 @@ module m2_fb_read #(
   output logic        rd_hit,
 
   output logic [31:0] dbg_lines,
-  output logic [31:0] dbg_late          // asked for a line that was not ready
+  output logic [31:0] dbg_late,         // asked for a line that was not ready
+  // R364: WHERE IT IS STUCK, not merely that it is. `lines 0` with nothing in
+  // flight fits both "never asked" and "asked and never answered", and those
+  // need opposite fixes. R_REQ means the request was issued and the first beat
+  // never came back; R_FILL means beats came and the acknowledge did not.
+  output logic [1:0]  dbg_st,
+  output logic        dbg_busy
 );
 
   // TWO PIXELS A BEAT, AND ONLY THE VISIBLE ONES. A 512-pixel stride is 256
@@ -143,6 +149,8 @@ module m2_fb_read #(
 
   typedef enum logic [1:0] { R_IDLE, R_REQ, R_FILL } st_t;
   st_t st;
+  assign dbg_st = st;
+  assign dbg_busy = busy;
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin

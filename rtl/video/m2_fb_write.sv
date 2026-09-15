@@ -85,7 +85,13 @@ module m2_fb_write #(
   input  logic        m_ack,
 
   output logic [31:0] dbg_spans,
-  output logic [31:0] dbg_pixels
+  output logic [31:0] dbg_pixels,
+  // R364: THE CLEAR IS THE GATE ON EVERYTHING ELSE. in_ready is low while it
+  // runs and clear_busy holds the fill in C_IDLE, so a clear that never
+  // finishes stops the whole 3D path -- and "pixels 0" cannot tell that from
+  // "the fill never produced a span". This counts clears that COMPLETED.
+  output logic [15:0] dbg_clears,
+  output logic [3:0]  dbg_st
 );
 
   // One pixel: painted in bit 24, colour below it.
@@ -100,6 +106,7 @@ module m2_fb_write #(
   typedef enum logic [3:0] { W_IDLE, W_HEAD, W_BODY, W_TAIL, W_WAIT, W_DONE,
                              W_CLR, W_CLRW } st_t;
   st_t st;
+  assign dbg_st = st;
 
   // Whole words remaining from x_r to the last EVEN-aligned pair before x1.
   // A span is a run of ONE colour, so the middle bursts and only the odd pixel
@@ -134,7 +141,7 @@ module m2_fb_write #(
     if (!rst_n) begin
       st <= W_IDLE; x_r <= '0; x1_r <= '0; row_r <= '0; addr_r <= '0; px_r <= '0;
       clr_y <= 9'd0; clr_x <= 9'd0; m_req <= 1'b0; m_blen <= 8'd1; m_be <= 8'hFF;
-      dbg_spans <= '0; dbg_pixels <= '0;
+      dbg_spans <= '0; dbg_pixels <= '0; dbg_clears <= 16'd0;
     end else begin
       case (st)
         // The clear runs a line at a time, so it interleaves with the scanout's
@@ -230,7 +237,10 @@ module m2_fb_write #(
             m_req <= 1'b0;
             if ((clr_x + 9'(WBURST)) >= 9'(BEATS)) begin
               clr_x <= 9'd0;
-              if (clr_y == 9'(SCR_H - 1)) st <= W_IDLE;
+              if (clr_y == 9'(SCR_H - 1)) begin
+              st <= W_IDLE;
+              if (!(&dbg_clears)) dbg_clears <= dbg_clears + 16'd1;   // R364
+            end
               else begin clr_y <= clr_y + 9'd1; st <= W_CLR; end
             end else begin
               clr_x <= clr_x + 9'(WBURST);
