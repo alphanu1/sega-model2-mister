@@ -100,7 +100,6 @@ module m2_ddr3 #(
   // ---- what the round trip actually costs, in clk cycles
   output logic [15:0] dbg_lat_last,
   output logic [15:0] dbg_lat_max,
-  output logic [31:0] dbg_reads,
   // R362: CYCLES IN FLIGHT, WHETHER OR NOT THE TRANSACTION EVER FINISHES.
   // dbg_lat_max is written on COMPLETION, so a transfer that hangs never
   // updates it -- the board reported a frozen 262 while the bridge had been
@@ -162,7 +161,7 @@ module m2_ddr3 #(
       st <= D_IDLE; is_wr <= 1'b0; ack <= 1'b0; dout <= '0;
       addr_r <= '0; be_r <= 8'hFF;
       blen_r <= 8'd1; beats <= 8'd1; wnext <= 1'b0; rvalid <= 1'b0;
-      lat <= '0; dbg_lat_last <= '0; dbg_lat_max <= '0; dbg_reads <= '0;
+      lat <= '0; dbg_lat_last <= '0; dbg_lat_max <= '0;
       dbg_inflight_max <= '0; dbg_stuck_wr <= 1'b0; dbg_acks <= 16'd0;
     end else begin
       ack <= 1'b0; wnext <= 1'b0; rvalid <= 1'b0;
@@ -207,7 +206,6 @@ module m2_ddr3 #(
           if (DDRAM_DOUT_READY) begin
             dout   <= DDRAM_DOUT;
             rvalid <= 1'b1;
-            if (!(&dbg_reads)) dbg_reads <= dbg_reads + 32'd1;
             if (beats == 8'd1) begin
               ack <= 1'b1;
               // THE WHOLE BURST, not the first word. What matters for a

@@ -42,15 +42,14 @@ wire        ddr_req, ddr_we, ddr_ack, ddr_wnext, ddr_rvalid;
 wire [24:0] ddr_addr;
 wire [7:0]  ddr_blen, ddr_be;
 wire [63:0] ddr_din, ddr_dout;
-wire [31:0] fb_lines, fb_late;
+wire [15:0] fb_lines, fb_late;   // R371
 wire [15:0] fb_pub, fb_drop;   // R359
-wire [31:0] fb_state, fb_spans;   // R364
+wire [31:0] fb_state;   // R364
 wire [15:0] fbr_acks;             // R370
 wire [15:0] ddr_lat_last, ddr_lat_max;
 wire [15:0] ddr_inflight_max;   // R362
 wire [15:0] ddr_acks;           // R366
 wire        ddr_stuck_wr;
-wire [31:0] ddr_reads;
 
 m2_ddr3 u_ddr3 (
 	.clk(clk_mem), .rst_n(mem_rst_n),
@@ -61,7 +60,7 @@ m2_ddr3 u_ddr3 (
 	.DDRAM_DIN(DDRAM_DIN), .DDRAM_BE(DDRAM_BE),
 	.DDRAM_WE(DDRAM_WE), .DDRAM_RD(DDRAM_RD),
 	.DDRAM_DOUT(DDRAM_DOUT), .DDRAM_DOUT_READY(DDRAM_DOUT_READY),
-	.dbg_lat_last(ddr_lat_last), .dbg_lat_max(ddr_lat_max), .dbg_reads(ddr_reads),
+	.dbg_lat_last(ddr_lat_last), .dbg_lat_max(ddr_lat_max),
 	.dbg_inflight_max(ddr_inflight_max), .dbg_stuck_wr(ddr_stuck_wr),   // R362
 	.dbg_acks(ddr_acks)   // R366
 );
@@ -4396,7 +4395,7 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	      : (tps_ph == 4'd4)                  ? {tx_h_f, tx_n_f}                // R275: texel hits : texels that were not 0xF
 	      : (tps_ph == 4'd5)                  ? {tx_m_f, tex_sweep}             // R294 texel misses; R310 whole-cache sweeps
 	      : (tps_ph == 4'd7)                  ? {oz_d2, oz_d3}                 // R334: 1/z of vertices 2 and 3 ('Q')
-	      : (tps_ph == 4'd8)                  ? {fb_late[15:0], fb_lines[15:0]}   // R358: lines fetched, and how often the fetch was asked for early
+	      : (tps_ph == 4'd8)                  ? {fb_late, fb_lines}   // R358: lines fetched, and how often the fetch was asked for early
 	      : (tps_ph == 4'd9)                  ? r3d_pixels                      // R359: pixels painted, into the framebuffer
 	      : (tps_ph == 4'd10)                 ? {11'd0, bwl_cpu}                // R363: cycles the CPU port spent waiting, last frame
 	      : (tps_ph == 4'd11)                 ? {ddr_acks, fbr_acks}               // R366/R370: acks ISSUED : acks the reader SAW
@@ -5495,15 +5494,14 @@ endfunction
 // A DELTA, NOT A SECOND COUNTER: two registers instead of one per-instruction
 // increment. 24 bits because a 25 MHz i960 cannot retire more than 416,667 in a
 // 60 Hz frame and saturating is better than wrapping.
-logic [31:0] cpu_acc_frame;
+logic [23:0] cpu_acc_frame;   // R371: only a 24-bit delta is ever taken
 logic [23:0] cpu_ipf;
 always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
-		cpu_acc_frame <= 32'd0; cpu_ipf <= 24'd0;
+		cpu_acc_frame <= 24'd0; cpu_ipf <= 24'd0;
 	end else if (cvb_d && !cvb_dd) begin
-		cpu_ipf       <= ((cpu_dbg_acc - cpu_acc_frame) > 32'h00FF_FFFF)
-		                 ? 24'hFF_FFFF : 24'(cpu_dbg_acc - cpu_acc_frame);
-		cpu_acc_frame <= cpu_dbg_acc;
+		cpu_ipf       <= 24'(cpu_dbg_acc[23:0] - cpu_acc_frame);
+		cpu_acc_frame <= cpu_dbg_acc[23:0];
 	end
 end
 
@@ -5666,7 +5664,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(3), .FB_DDR3(1'b1),
 	.fb_wnext(ddr_wnext), .fb_rvalid(ddr_rvalid), .fb_ack(ddr_ack), .fb_dout(ddr_dout),
 	.dbg_fb_lines(fb_lines), .dbg_fb_late(fb_late),
 	.dbg_fb_pub(fb_pub), .dbg_fb_drop(fb_drop),
-	.dbg_fb_state(fb_state), .dbg_fb_spans(fb_spans), .dbg_fbr_acks(fbr_acks),   // R364/R370
+	.dbg_fb_state(fb_state), .dbg_fbr_acks(fbr_acks),   // R364/R370
 	// Each bar is a proper filled rectangle traversed around its perimeter:
 	// (x0,y0) top-left, (x0,y2) bottom-left, (x2,y2) bottom-right,
 	// (x2,y0) top-right -- the same v0..v3 cycle the geometry engine emits.

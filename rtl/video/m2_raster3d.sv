@@ -152,8 +152,8 @@ module m2_raster3d #(
   input  logic        fb_rvalid,
   input  logic        fb_ack,
   input  logic [63:0] fb_dout,
-  output logic [31:0] dbg_fb_lines,
-  output logic [31:0] dbg_fb_late,
+  output logic [15:0] dbg_fb_lines,   // R371: as wide as the report, no wider
+  output logic [15:0] dbg_fb_late,
   // R359: frames PUBLISHED, and lists that arrived before the last one drew.
   // If drop climbs with pub flat the fill is not keeping up and the picture is
   // frozen rather than torn -- a failure the band path could not even express.
@@ -164,7 +164,6 @@ module m2_raster3d #(
   //  [7]     arbiter busy      [8]     arbiter owner (1 = writer)
   //  [15:9]  spare             [31:16] clear passes COMPLETED
   output logic [31:0] dbg_fb_state,
-  output logic [31:0] dbg_fb_spans,
   output logic [15:0] dbg_fbr_acks   // R370
 );
 
@@ -608,7 +607,7 @@ module m2_raster3d #(
         .in_col(tx_span_col), .in_painted(1'b1),
         .m_req(w_req), .m_we(w_we), .m_addr(w_addr), .m_blen(w_blen),
         .m_din(w_din), .m_be(w_be), .m_wnext(w_wnext), .m_ack(w_ack),
-        .dbg_spans(dbg_fb_spans), .dbg_pixels(fbw_pixels),
+        .dbg_pixels(fbw_pixels),
         .dbg_clears(fbw_clears), .dbg_st(fbw_st)
       );
 
@@ -690,13 +689,12 @@ module m2_raster3d #(
       assign fb_rd_col = 24'd0; assign fb_rd_hit = 1'b0; assign fbr_hit = 1'b0;
       assign fbw_ready = 1'b0;   // the bands own the span handshake at FB_DDR3=0
       assign fb_clear_busy = 1'b0;
-      assign dbg_fb_lines = 32'd0; assign dbg_fb_late = 32'd0;
+      assign dbg_fb_lines = 16'd0; assign dbg_fb_late = 16'd0;
       assign fbw_pixels = 32'd0;
       assign fbw_clears = 16'd0; assign fbw_st = 4'd0;
       assign fbr_st = 2'd0; assign fbr_busy = 1'b0;
       assign arb_busy = 1'b0; assign arb_owner = 1'b0; assign arb_stalls = 16'd0;
       assign fbr_acks = 16'd0;
-      assign dbg_fb_spans = 32'd0;
     end
   endgenerate
 

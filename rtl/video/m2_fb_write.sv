@@ -84,7 +84,6 @@ module m2_fb_write #(
   input  logic        m_wnext,
   input  logic        m_ack,
 
-  output logic [31:0] dbg_spans,
   output logic [31:0] dbg_pixels,
   // R364: THE CLEAR IS THE GATE ON EVERYTHING ELSE. in_ready is low while it
   // runs and clear_busy holds the fill in C_IDLE, so a clear that never
@@ -141,7 +140,7 @@ module m2_fb_write #(
     if (!rst_n) begin
       st <= W_IDLE; x_r <= '0; x1_r <= '0; row_r <= '0; addr_r <= '0; px_r <= '0;
       clr_y <= 9'd0; clr_x <= 9'd0; m_req <= 1'b0; m_blen <= 8'd1; m_be <= 8'hFF;
-      dbg_spans <= '0; dbg_pixels <= '0; dbg_clears <= 16'd0;
+      dbg_pixels <= '0; dbg_clears <= 16'd0;
     end else begin
       case (st)
         // The clear runs a line at a time, so it interleaves with the scanout's
@@ -160,7 +159,6 @@ module m2_fb_write #(
           x_r   <= in_x0;
           x1_r  <= in_x1;
           px_r  <= px;
-          if (!(&dbg_spans)) dbg_spans <= dbg_spans + 32'd1;
           st    <= (in_x0[0]) ? W_HEAD : W_BODY;
         end
 

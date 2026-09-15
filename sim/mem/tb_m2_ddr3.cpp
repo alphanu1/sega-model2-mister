@@ -164,7 +164,11 @@ int main(int argc, char **argv) {
       if (got != 0x1111111100000000ull + (uint64_t)i) wrong++;
     }
     ck("all 64 read back correctly", wrong, 0);
-    ck("and the read counter agrees", (long)d->dbg_reads >= 64, 1);
+    // R371: the dbg_reads counter is gone. It was never on the debug wire, so it
+    // existed only for this check -- and this check is weaker than the line
+    // above it, which verifies all 64 words byte for byte. Thirty-two
+    // flip-flops on a device with nine LABs to spare, to restate what a
+    // stronger assertion already proved.
   }
 
   // ---- 6. R347: BURSTS. MiSTer's guidance is that DDR3 here is ~200 ns

@@ -72,8 +72,10 @@ module m2_fb_read #(
   output logic [23:0] rd_col,
   output logic        rd_hit,
 
-  output logic [31:0] dbg_lines,
-  output logic [31:0] dbg_late,         // asked for a line that was not ready
+  // R371: SIXTEEN BITS, because sixteen is what the debug stream reports.
+  // A counter wider than its field is flip-flops nobody can ever read.
+  output logic [15:0] dbg_lines,
+  output logic [15:0] dbg_late,         // asked for a line that was not ready
   // R364: WHERE IT IS STUCK, not merely that it is. `lines 0` with nothing in
   // flight fits both "never asked" and "asked and never answered", and those
   // need opposite fixes. R_REQ means the request was issued and the first beat
@@ -183,7 +185,7 @@ module m2_fb_read #(
         end else if (!(&dbg_late)) begin
           // ASKED BEFORE THE LAST ONE LANDED. Counted rather than silent: it is
           // the number that says whether a line ahead is enough warning.
-          dbg_late <= dbg_late + 32'd1;
+          dbg_late <= dbg_late + 16'd1;
         end
       end
 
@@ -229,7 +231,7 @@ module m2_fb_read #(
             m_req <= 1'b0;
             busy  <= 1'b0;
             have  <= 1'b1;
-            if (!(&dbg_lines)) dbg_lines <= dbg_lines + 32'd1;
+            if (!(&dbg_lines)) dbg_lines <= dbg_lines + 16'd1;
             st    <= R_IDLE;
           end
         end
@@ -249,7 +251,7 @@ module m2_fb_read #(
           if (m_ack) begin
             busy <= 1'b0;
             have <= 1'b1;
-            if (!(&dbg_lines)) dbg_lines <= dbg_lines + 32'd1;
+            if (!(&dbg_lines)) dbg_lines <= dbg_lines + 16'd1;
             st       <= R_IDLE;
           end
         end

@@ -17886,3 +17886,35 @@ bits are zeros, and the decoder cannot tell an absent counter from a zero one.
 This is the second time a decoder ahead of the gateware has produced a confident
 false line -- **a decoder change and an RTL change are one change**, and a
 capture must be read against the commit it came from.
+
+**R371 -- THE INSTRUMENTATION OUTGREW THE DEVICE, AND A COUNTER WIDER THAN ITS
+REPORT IS UNREADABLE FLIP-FLOPS.**
+
+R370's build did not fit, and for once the error says exactly what it means:
+
+    Error (170012): Fitter requires 4200 LABs to implement the design,
+                    but the device contains only 4191 LABs
+
+Nine LABs, about 90 ALM. **This is a genuine hard limit and it is worth
+distinguishing from R365's withdrawn claim** -- that one was a correlation
+between 99% utilisation and board failures, which the evidence killed. This is
+the fitter refusing to place the design. Utilisation is still not a correctness
+criterion; running out of LABs is a different fact.
+
+A day of instrumentation had accumulated ~180 flip-flops of counters, and three
+of them were unreadable by construction:
+
+    m2_ddr3   dbg_reads    32 bits, NEVER on the debug wire at all
+    m2_fb_write dbg_spans  32 bits, its debug slot reassigned by R370
+    m2_fb_read dbg_lines   32 bits, reported as 16
+    m2_fb_read dbg_late    32 bits, reported as 16
+
+**A COUNTER WIDER THAN THE FIELD THAT REPORTS IT IS FLIP-FLOPS NOBODY CAN EVER
+READ.** The top halves of `dbg_lines` and `dbg_late` have never been visible in
+any capture and never could be. `dbg_reads` existed only to satisfy one bench
+assertion -- and that assertion was weaker than the line above it, which verifies
+all 64 words byte for byte.
+
+Trimmed to what the wire carries. The rule is cheap to apply and should be
+applied when a counter is ADDED, not when the fitter refuses: **decide the report
+field first, then size the counter to it.**
