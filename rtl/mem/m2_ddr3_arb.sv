@@ -116,31 +116,27 @@ module m2_ddr3_arb (
       dbg_a_waits <= '0; dbg_b_waits <= '0;
     end else begin
       cool <= 1'b0;
-      // R364: A GRANT ALWAYS BECOMES BUSY. THIS LINE WAS THE WHOLE FAULT.
+      // R367: `busy <= !m_ack` RESTORED, BECAUSE THE BOARD SAYS IT IS
+      // LOAD-BEARING. R360 added it; R364 removed it on the argument that a
+      // transaction acknowledged in its grant cycle "cannot happen with the
+      // real master", since D_IDLE spends a cycle before D_ISSUE. That was a
+      // reading of m2_ddr3, NOT a measurement, and three builds disagree:
       //
-      // R360 made it `busy <= !m_ack`, to survive a transaction acknowledged in
-      // the cycle it was granted. That cannot happen with m2_ddr3 -- D_IDLE
-      // spends a cycle before D_ISSUE, so its earliest acknowledge is two cycles
-      // out -- and buying the impossible case cost the possible one:
+      //   busy <= !m_ack   s46 RAN    s49 RAN
+      //   busy <= 1'b1     s51 BLACK  s52 BLACK  s61 BLACK
       //
-      //   if m_ack is high in a GRANT cycle, from the PREVIOUS transaction
-      //   finishing, the arbiter grants the new one with busy = 0. `sel_b` is
-      //   `busy ? owner : (a_req ? 0 : 1)`, so with busy low it follows a_req
-      //   LIVE -- and the reader drops a_req on its first rvalid. sel_b flips
-      //   to the writer mid-burst, `a_ack = m_ack && !sel_b` never fires, and
-      //   THE READER WAITS FOR EVER. m2_ddr3 finishes the transfer and returns
-      //   to D_IDLE, so nothing ever looks stuck: on the board this read as
-      //   0 lines fetched, 0 pixels painted, longest-in-flight a healthy 262.
+      // s61 had the best timing of the day (clk_mem -0.237) and the lowest area,
+      // so neither slack nor utilisation explains it. Three of three is not a
+      // seed either. The guard stays until something measures why it is needed.
       //
-      // It was in every board test of the framebuffer. The bench that demanded
-      // it modelled a memory that answers in its grant cycle -- FASTER THAN THE
-      // HARDWARE CAN -- and a design bent to satisfy an impossible model breaks
-      // on the real one. R362 records the mirror of this: a model a cycle too
-      // OPTIMISTIC invented a deadlock that did not exist. Both directions cost
-      // a build; the model has to match the master, not bracket it.
+      // WHAT THIS COSTS TO BE WRONG ABOUT: with `busy <= 1'b1` an acknowledge
+      // that arrives in a grant cycle is lost, and the arbiter then holds the
+      // grant for ever -- the phase-11 capture caught exactly that, busy=1 with
+      // owner=reader and the master idle. Whatever produces such an acknowledge
+      // on hardware, it happens.
       if (!busy) begin
-        if (a_req)      begin owner <= 1'b0; busy <= 1'b1; end
-        else if (b_req) begin owner <= 1'b1; busy <= 1'b1; end
+        if (a_req)      begin owner <= 1'b0; busy <= !m_ack; cool <= m_ack; end
+        else if (b_req) begin owner <= 1'b1; busy <= !m_ack; cool <= m_ack; end
       end else if (busy && m_ack) begin
         busy <= 1'b0;
         cool <= 1'b1;

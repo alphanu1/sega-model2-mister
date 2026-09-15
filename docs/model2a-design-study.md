@@ -17747,3 +17747,35 @@ variants deadlock the same way** -- R360's `busy <= !m_ack` and R364's
 measurement is acknowledge accounting: count the pulses m2_ddr3 issues against
 the ones the reader receives. If they differ, they are being lost between them,
 and that is a fact rather than a theory.
+
+**R367 -- THE GUARD WAS LOAD-BEARING, AND "IT CANNOT HAPPEN" WAS NOT A
+MEASUREMENT.**
+
+R360 made the arbiter's grant `busy <= !m_ack`. R364 removed it, arguing that a
+transaction acknowledged in its grant cycle cannot occur because `m2_ddr3` spends
+a cycle in `D_IDLE` before `D_ISSUE`. That argument was a reading of the source.
+The board:
+
+    busy <= !m_ack    s46 RAN     s49 RAN
+    busy <= 1'b1      s51 BLACK   s52 BLACK   s61 BLACK
+
+**s61 had the best timing of the afternoon** -- `clk_mem` -0.237, the lowest ALM
+of any build -- and came up black anyway, which removes slack and utilisation as
+explanations together. Three of three is not seed variance either. The guard is
+restored.
+
+**AND THE FAILURE MODE MATCHES.** With `busy <= 1'b1`, an acknowledge arriving in
+a grant cycle is dropped and the arbiter holds the grant for ever. Phase 11 caught
+precisely that on s52: `busy = 1, owner = reader`, the reader parked in `R_FILL`,
+the writer idle, the master idle with nothing in flight. Whatever produces such an
+acknowledge on this hardware, **it happens** -- the mechanism is still unmeasured,
+but its existence is now three times observed.
+
+**THE LESSON IS ABOUT THE KIND OF EVIDENCE.** R364 traded a working guard for a
+tidier line on the strength of a source reading, and called the scenario
+impossible. The study's standing rule is that MAME cycle counts are never hardware
+facts; this is the same error one level down -- **a claim about what the RTL can
+do is not a claim about what the silicon does**, and the cost was three builds and
+a wrong entry in this document. When a guard exists and the reason is not
+understood, removing it is an experiment, and it needs a board test before it is
+called a cleanup.
