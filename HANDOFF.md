@@ -1,6 +1,88 @@
 # Handoff
 
-**Updated:** 2026-09-15. Study entries R176-R360.
+**Updated:** 2026-09-15 evening. Study entries R176-R378.
+
+## BANKED ON `ddr3`, PAUSED. `main` IS UNTOUCHED AND STILL HAS WORKING 3D.
+
+38 commits ahead of `main`. Two days, no 3D on screen. What follows is what is
+proven, what is fixed, and what was never tested -- the last is the part that
+matters if this is revisited.
+
+**MAIN WILL MOVE. The speed work happens there, so plan the rebase now.** These
+are the files both lines of work touch, and the ones that will actually conflict:
+
+    Model2.sv              THE REAL RISK. This branch took debug phases 9, 10
+                           and 11 ('F' framebuffer, 'P' CPU pace, 'N' fb state)
+                           and widened tps_ph to 4 bits. Speed work on main will
+                           want phases of its own -- TAKE 12 AND UP, and do not
+                           renumber the existing ones, or every capture in this
+                           branch's history decodes as garbage.
+    tools/decode_uart.py   same reason; the record tags 'F', 'P', 'N' are taken
+    docs/...design-study   append-only in both, so conflicts are trivial to fix
+    rtl/video/m2_raster3d  heavily changed here (FB_DDR3 path, R358/R359).
+                           Speed work should not need it; if it does, expect work
+    rtl/mem/m2_sdram.sv    R297 lives here and this branch does NOT touch it
+    rtl/video/m2_texel*    texel work is main's; untouched here
+
+So: `git rebase main` on this branch when picking it up, and the damage is
+confined to `Model2.sv`'s debug mux and the decoder if the phase numbers were
+respected. A merge would work equally well and keeps this branch's history
+readable, which given R353-R378 is worth something.
+
+### THE ROOT CAUSE, FOUND LAST (R377) AND CONFIRMED
+
+    m2_ddr3       .clk(clk_mem)   100 MHz   -- hands out SINGLE-CYCLE ack/rvalid/wnext
+    m2_raster3d   .clk(clk_sys)    50 MHz   -- m2_fb_read / m2_fb_write sample them
+
+A one-cycle pulse at 100 MHz sampled at 50 MHz is seen only when it straddles an
+edge: **roughly half were lost.** One lost `ack` parks m2_fb_read in R_FILL for
+ever. With both on `clk_sys` the board measured a clean handshake for the first
+time:
+
+    acks ISSUED 65,535  ->  SEEN 65,535  ->  lines COMPLETED 65,535,  0 late
+
+`lint_top` now fails if a DDR3 master is clocked by `clk_mem`. Mutation-tested.
+
+### WHAT IS PROVEN ON THE BOARD
+
+* the DDR3 **read** path works end to end -- clean handshake, zero late lines
+* the framebuffer **fits**: ~41,000 ALM, **536/553 M10K** (22 freed from the band
+  buffers, 17 still spare), and s153 closed EVERY core clock with TNS 0.000 --
+  better than the working head, which runs `clk_mem` at -0.378
+* the CPU runs at ~48k instructions/frame with 3D dead, port waits 0.0% against
+  24.5% with the band renderer alive
+
+### WHAT WAS NEVER TESTED, AND IS THE WHOLE REMAINING RISK
+
+**The write path has never once run against a working reader.** The clear pass,
+the span writes, the publish logic: all of it sat behind a broken handshake for
+two days. There may be no bugs left there or there may be two. Nothing measured
+so far says which.
+
+### THE EXPENSIVE MISTAKE, SO IT IS NOT REPEATED
+
+**Eight entries -- R353, R360, R364, R367, R369, R372, R374, R375 -- changed the
+arbiter. The arbiter was never at fault.** Every measurement of it was taken
+through the dropped-pulse handshake, which made each reading look like a routing
+failure. A plain wire reporting 3 acknowledges in and 2 out is IMPOSSIBLE in one
+clock domain, and should have been read as evidence about the measurement rather
+than the component, far earlier.
+
+R376 (delete the arbiter, give the reader the idle `ram2` port) was undertaken on
+that false premise. It bought nothing and broke the TGP microcode load -- copro
+parked at PC 0, one display list in 150 s. Reverted in R378; **the mechanism is
+still not understood** and the diff reads correctly, which is why it was reverted
+rather than patched.
+
+### OPEN, IF THIS IS PICKED UP AGAIN
+
+1. does the write path work? -- the only way to know is to run it
+2. `fb_shown_ok` rises when the fill COMPLETES A PASS, not when it PAINTED
+   anything, so an empty frame is publishable. Small, real, unfixed.
+3. why does taking `ram2` kill the copro? Unexplained.
+
+---
+
 
 ## WHERE THE WORK IS NOW: branch `ddr3`, DESK-COMPLETE, NOT YET ON THE BOARD
 
