@@ -709,7 +709,11 @@ module m2_sdram #(
       // and the init sequence writes all three before the first real command, so
       // their power-up value is unobservable.
       cmd <= C_NOP;
-      sd_dq_o <= '0; sd_dq_oe <= 1'b0;
+      // R381: sd_dq_oe KEEPS its reset -- driving the bus at power-up is not
+      // acceptable -- but sd_dq_o does NOT. Its value is unobservable while the
+      // output enable is low, and the clear was stopping the output register
+      // packing into the same cells, on exactly the bits where dq_r failed.
+      sd_dq_oe <= 1'b0;
       state <= S_INIT; ready <= 1'b0;
       init_cnt <= 16'(INIT_NOP);
       ref_cnt <= '0; ref_pend <= 1'b0;
@@ -722,7 +726,27 @@ module m2_sdram #(
       grant <= '0; grant_is_wr <= 1'b0; rr_next <= '0;
       rd_total <= 4'd1; rd_issued <= '0; rd_captured <= '0;
       is_write <= 1'b0; xfer_addr <= '0; din_r <= '0; be_r <= '0;
-      wait_cnt <= '0; dq_r <= '0;
+      // R381: dq_r HAS NO RESET, and that is what lets it live in the I/O cell.
+      //
+      // The comment above says it for cmd and sd_a -- "the clear has to be gone,
+      // not merely synchronous" -- and dq_r was left with one. Quartus counts it
+      // as a clear, and a register with a clear cannot always be packed into a
+      // Cyclone V input cell. It packed on SOME placements and not others:
+      //
+      //     s201  10 of 16 dq_r bits unpacked   BLACK
+      //     s202  10 of 16 unpacked             BLACK
+      //     s203   0 unpacked                   WORKS
+      //
+      // Ten bits captured in fabric and six in the pin is a NON-UNIFORM read
+      // bus, and Model2.sdc's multicycle exception rests on arrival being
+      // consistent so one calibrated capture depth serves all sixteen. It
+      // cannot: that is why sweeping every OSD SDRAM phase on a black build
+      // changed nothing.
+      //
+      // SAFE, for the reason the others are: dq_r is a pure capture register.
+      // Its power-up value is unobservable because nothing reads it until a tag
+      // says a read is in flight, and tag_v IS reset.
+      wait_cnt <= '0;
     end else begin
       cmd      <= C_NOP;
       sd_dq_oe <= 1'b0;
