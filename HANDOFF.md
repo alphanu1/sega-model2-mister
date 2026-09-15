@@ -69,10 +69,17 @@ clock domain, and should have been read as evidence about the measurement rather
 than the component, far earlier.
 
 R376 (delete the arbiter, give the reader the idle `ram2` port) was undertaken on
-that false premise. It bought nothing and broke the TGP microcode load -- copro
-parked at PC 0, one display list in 150 s. Reverted in R378; **the mechanism is
-still not understood** and the diff reads correctly, which is why it was reverted
-rather than patched.
+that false premise. It bought nothing and left the machine **crawling** -- copro
+parked at its reset vector (`tgp 0000`), one display list in 150 s, the CPU
+running (`trap=0 halted=0`, 99%) but the game advancing only as far as the test
+screen over minutes.
+
+**NOT STALLED -- VERY SLOW.** Ben watched it advance. That distinction matters
+and an earlier draft of this file said "dead", which points at the wrong cause:
+the game is almost certainly timing out waiting for a coprocessor that never
+answers, and inching forward between timeouts. Reverted in R378; **the mechanism
+is still not understood** and the diff reads correctly, which is why it was
+reverted rather than patched.
 
 ### OPEN, IF THIS IS PICKED UP AGAIN
 
