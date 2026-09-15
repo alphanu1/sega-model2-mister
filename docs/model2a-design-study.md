@@ -18081,3 +18081,52 @@ rather than letting 26/26 imply otherwise.
 R364/R372 (models faster and slower than the hardware can be), and now this: **a
 bench can only falsify what its model can express.** When a fix is justified by
 the board and the bench agrees, that is agreement, not proof.
+
+**R376 -- THE ARBITER IS DELETED. THE READER HAS ITS OWN DDR3 PORT.**
+
+    s121  before R374   acks 3 -> seen 2 -> lines 2
+    s131  R374          acks 1 -> seen 0 -> lines 0
+    s141  R375          acks 1 -> seen 0 -> lines 0   (s142 was a dud seed; s141 confirms)
+
+Three attempts at the grant/routing pair -- R364, R374, R375 -- and each left the
+board no better or worse. **The failure mode was not understood well enough to fix
+by inspection, and three builds is enough to say so.**
+
+Ben's question was the way out: *why arbitrate at all when other ports exist?*
+`sysmem` gives the board three DDR3 interfaces and **`ram2` is idle here** -- its
+ALSA channel is compiled out by `MISTER_DISABLE_ALSA` and its palette channel
+only fires with `MISTER_FB` in 8bpp mode, which this core does not use. The
+writer keeps `ram1`; the reader gets `ram2`; `m2_ddr3_arb` is deleted.
+
+**WHAT STOPS EXISTING.** No grant, so nothing to hold. No ownership, so no
+response to route to the wrong master. No shared bus, so the scanout cannot
+starve the fill -- which was Ben's objection to the design from the start, and
+the fault every capture since R364 has shown. **R353, R360, R364, R367, R369,
+R372, R374 and R375 are eight entries about one block that did not need to be
+there.**
+
+    sys/emu_ports.vh   DDRAM2_* behind `ifdef MISTER_DDRAM2`   +22 lines
+    sys/sys_top.v      ram2 -> emu, clocked by the core, ddr_svc nets tied off
+    Model2.sv          a second m2_ddr3 on DDRAM2_*, same BASE
+    m2_raster3d.sv     writer -> port 1, reader -> port 2, arbiter gone
+    m2_ddr3_arb.sv     DELETED, with its bench
+
+**THE COST IS MAINTENANCE.** `sys/` now diverges from upstream, so framework
+updates become merges -- mitigated by keeping every change behind
+`MISTER_DDRAM2`, so the diff is additive and revertible by one macro.
+
+**ORDERING BETWEEN THE PORTS IS SAFE AND SAYING WHY MATTERS.** The two masters
+never touch the same buffer at once -- the writer fills `fb_draw`, the reader
+scans `fb_show` -- and the flip happens at `frame_start`, long after the last
+write of that frame has been acknowledged. Nothing depends on the interconnect
+ordering between ports.
+
+**AND THE BENCH GOT SIMPLER.** `tb_m2_raster3d_fb` now models two independent
+memories instead of one with ownership. The class of question it could not
+express -- *whose acknowledge is this?* -- cannot be asked.
+
+**THE LESSON IS ABOUT WHEN TO STOP.** Eight entries went into making a shared
+port behave. The check that would have avoided all of them -- *is there another
+port?* -- takes one grep of `sys_top.v`, and was never run because the single
+`DDRAM_*` interface in `emu_ports.vh` looked like the whole of what a core is
+given.

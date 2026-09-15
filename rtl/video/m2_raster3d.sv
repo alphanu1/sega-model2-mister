@@ -152,6 +152,23 @@ module m2_raster3d #(
   input  logic        fb_rvalid,
   input  logic        fb_ack,
   input  logic [63:0] fb_dout,
+
+  // R376: THE READER HAS ITS OWN DDR3 PORT. sysmem gives the board three, and
+  // ram2 is idle in this configuration, so the writer and reader no longer
+  // share one and there is no arbiter between them. A shared port meant a grant
+  // could be held and the other master starved -- which is exactly what the
+  // board showed for a day: the reader lost an acknowledge, and the writer sat
+  // in W_CLRW with its request high and unheard, so nothing was ever painted.
+  output logic        fb2_req,
+  output logic        fb2_we,
+  output logic [24:0] fb2_addr,
+  output logic [7:0]  fb2_blen,
+  output logic [63:0] fb2_din,
+  output logic [7:0]  fb2_be,
+  input  logic        fb2_wnext,
+  input  logic        fb2_rvalid,
+  input  logic        fb2_ack,
+  input  logic [63:0] fb2_dout,
   output logic [15:0] dbg_fb_lines,   // R371: as wide as the report, no wider
   output logic [15:0] dbg_fb_late,
   // R359: frames PUBLISHED, and lists that arrived before the last one drew.
@@ -647,7 +664,7 @@ module m2_raster3d #(
         .line_y((scan_y >= 10'(SCR_H - 1)) ? 9'd0 : 9'(scan_y + 10'd1)),
         .line_ready(),
         .m_req(r_req), .m_we(r_we), .m_addr(r_addr), .m_blen(r_blen),
-        .m_rvalid(r_rvalid), .m_dout(fb_dout), .m_ack(r_ack),
+        .m_rvalid(r_rvalid), .m_dout(fb2_dout), .m_ack(r_ack),
         .rd_parity(scan_y[0]), .rd_x(scan_x[$clog2(SCR_W)-1:0]),
         .rd_col(fb_rd_col), .rd_hit(fbr_hit),
         .dbg_lines(dbg_fb_lines), .dbg_late(dbg_fb_late),
@@ -666,25 +683,30 @@ module m2_raster3d #(
       end
       assign fb_rd_hit = fbr_hit && sok_s2;
 
-      // The reader wins: it has the beam deadline and the writer has not.
-      m2_ddr3_arb u_arb (
-        .clk(clk), .rst_n(rst_n),
-        .a_req(r_req), .a_we(r_we), .a_addr(r_addr), .a_blen(r_blen),
-        .a_din(64'd0), .a_be(8'hFF),
-        .a_wnext(), .a_rvalid(r_rvalid), .a_ack(r_ack),
-        .b_req(w_req), .b_we(w_we), .b_addr(w_addr), .b_blen(w_blen),
-        .b_din(w_din), .b_be(w_be),
-        .b_wnext(w_wnext), .b_rvalid(), .b_ack(w_ack),
-        .m_req(fb_req), .m_we(fb_we), .m_addr(fb_addr), .m_blen(fb_blen),
-        .m_din(fb_din), .m_be(fb_be),
-        .m_wnext(fb_wnext), .m_rvalid(fb_rvalid), .m_ack(fb_ack),
-        .m_dout(fb_dout), .dout(),
-        .dbg_a_waits(), .dbg_b_waits(),   // R372: watchdog gone
-        .dbg_busy(arb_busy), .dbg_owner(arb_owner)
-      );
+      // R376: NO ARBITER. The writer owns port 1, the reader owns port 2.
+      // Nothing is shared, so nothing can be held, routed to the wrong master,
+      // or starved -- the whole class that R353, R360, R364, R367, R369, R372,
+      // R374 and R375 were about stops existing rather than being fixed.
+      assign fb_req  = w_req;   assign fb_we   = w_we;
+      assign fb_addr = w_addr;  assign fb_blen = w_blen;
+      assign fb_din  = w_din;   assign fb_be   = w_be;
+      assign w_wnext = fb_wnext;
+      assign w_ack   = fb_ack;
+
+      assign fb2_req  = r_req;  assign fb2_we   = r_we;
+      assign fb2_addr = r_addr; assign fb2_blen = r_blen;
+      assign fb2_din  = 64'd0;  assign fb2_be   = 8'hFF;
+      assign r_rvalid = fb2_rvalid;
+      assign r_ack    = fb2_ack;
+
+      // Kept so phase 11 still has fields; there is no arbiter to report on.
+      assign arb_busy = 1'b0;
+      assign arb_owner = 1'b0;
     end else begin : g_nofb
       assign fb_req = 1'b0; assign fb_we = 1'b0; assign fb_addr = 25'd0;
       assign fb_blen = 8'd0; assign fb_din = 64'd0; assign fb_be = 8'd0;
+      assign fb2_req = 1'b0; assign fb2_we = 1'b0; assign fb2_addr = 25'd0;
+      assign fb2_blen = 8'd0; assign fb2_din = 64'd0; assign fb2_be = 8'd0;
       assign fb_rd_col = 24'd0; assign fb_rd_hit = 1'b0; assign fbr_hit = 1'b0;
       assign fbw_ready = 1'b0;   // the bands own the span handshake at FB_DDR3=0
       assign fb_clear_busy = 1'b0;

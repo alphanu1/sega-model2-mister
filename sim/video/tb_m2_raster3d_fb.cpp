@@ -46,11 +46,11 @@ static int TPL = 1600;
 // as 0xFFFF... as the integration doc requires, and here that matters twice
 // over, because bit 24 of garbage is the painted flag and the mixer would show
 // it. The first-frame gate is exactly what stops that.
-static std::map<uint32_t, uint64_t> mem;
+static std::map<uint32_t, uint64_t> mem;   // ONE memory, two ports onto it
 static const int LAT = 20;
-static int cd = 0, left = 0, is_wr = 0; static uint32_t caddr = 0;
+struct Port { int cd = 0, left = 0, is_wr = 0; uint32_t addr = 0, addr0 = 0; unsigned blen0 = 0; };
+static Port p1, p2;
 static long wbeats = 0, rbeats = 0, cyc = 0;
-static uint32_t burst_addr0 = 0; static unsigned burst_blen0 = 0;
 static long proto_err = 0;
 static int dbg_cmds = 0;
 
@@ -66,6 +66,7 @@ int main(int argc, char **argv) {
   d->tex_m_ack = 0; d->tex_m_data = 0; d->tex_inval = 0;
   d->tex_base0 = 0x1760000; d->tex_base1 = 0x17E0000;
   d->fb_wnext = 0; d->fb_rvalid = 0; d->fb_ack = 0; d->fb_dout = 0;
+  d->fb2_wnext = 0; d->fb2_rvalid = 0; d->fb2_ack = 0; d->fb2_dout = 0;
 
   int tex_wait = -1;
   auto tick = [&]() {
@@ -75,50 +76,68 @@ int main(int argc, char **argv) {
       d->tex_m_ack = 1;
       d->tex_m_data = 0x0123456789abcdefULL ^ (uint64_t)d->tex_m_addr;
     }
-    // ---- DDR3
-    d->fb_wnext = 0; d->fb_rvalid = 0; d->fb_ack = 0;
-    if (left == 0 && d->fb_req) {
-      if (dbg_cmds) std::printf("      cmd %s addr %u blen %u be %02x @%ld\n",
-                                d->fb_we ? "WR" : "RD", (unsigned)d->fb_addr,
-                                (unsigned)d->fb_blen, (unsigned)d->fb_be, cyc);
-      caddr = d->fb_addr; left = d->fb_blen ? d->fb_blen : 256; is_wr = d->fb_we;
-      burst_addr0 = d->fb_addr; burst_blen0 = d->fb_blen;
-      // NOT SERVED IN THE COMMAND CYCLE, because m2_ddr3 does not: D_IDLE spends
-      // a cycle latching before D_ISSUE, so the earliest acknowledge is two
-      // cycles out. A model that acknowledged a one-beat write in the cycle it
-      // took the command hid a deadlock in m2_ddr3_arb for an afternoon -- the
-      // arbiter registers `busy <= 1` for the grant in that same cycle and its
-      // `else if (busy && m_ack)` cannot see the acknowledge, so it stayed busy
-      // for ever. An OPTIMISTIC memory model is not a conservative one.
-      cd = is_wr ? 1 : LAT;
-    } else if (left > 0) {
-      // R362: AVALON HOLDS THE MASTER TO A CONSTANT ADDRESS AND BURSTCNT FOR
-      // EVERY BEAT. The first version of this model latched the address at the
-      // command and never looked again -- so the board wedged on a violation
-      // the bench could not express. Check it on every beat instead.
-      if (d->fb_addr != burst_addr0 || d->fb_blen != burst_blen0) {
-        if (!proto_err) std::printf("  FAIL: DDRAM_ADDR/BURSTCNT MOVED mid-burst "
-                                    "(addr %u -> %u, blen %u -> %u) -- Avalon forbids it\n",
-                                    burst_addr0, (unsigned)d->fb_addr,
-                                    burst_blen0, (unsigned)d->fb_blen);
-        proto_err++;
-      }
-      if (is_wr) {
-        if (cd > 0) cd--;
-        else {
-          uint64_t old = mem.count(caddr) ? mem[caddr] : ~0ull;
-          uint64_t m = 0;
-          for (int b = 0; b < 8; b++) if (d->fb_be & (1 << b)) m |= 0xffull << (b * 8);
-          mem[caddr] = (d->fb_din & m) | (old & ~m);
-          d->fb_wnext = 1; caddr++; left--; wbeats++;
-          if (left == 0) d->fb_ack = 1;
+    // ---- DDR3: TWO INDEPENDENT PORTS (R376).
+    //
+    // The writer owns port 1 and the reader owns port 2; sysmem gives the board
+    // three and ram2 was idle. There is no arbiter and nothing shared, so the
+    // model is two copies of the same small state machine rather than one with
+    // ownership -- which is the point: the whole class of "who does this
+    // acknowledge belong to" cannot arise.
+    //
+    // Both keep the timing m2_ddr3 actually has: NOT served in the command
+    // cycle, because D_IDLE spends a cycle latching before D_ISSUE. A model a
+    // cycle quicker invented a deadlock once (R362) and one that could not be
+    // slow enough hid a watchdog fault (R372).
+    for (int port = 0; port < 2; port++) {
+      Port &P = port ? p2 : p1;
+      // request side
+      unsigned  req   = port ? d->fb2_req   : d->fb_req;
+      unsigned  we    = port ? d->fb2_we    : d->fb_we;
+      uint32_t  addr  = port ? d->fb2_addr  : d->fb_addr;
+      unsigned  blen  = port ? d->fb2_blen  : d->fb_blen;
+      uint64_t  din   = port ? d->fb2_din   : d->fb_din;
+      unsigned  be    = port ? d->fb2_be    : d->fb_be;
+      // response side, cleared every cycle
+      unsigned wnext = 0, rvalid = 0, ack = 0; uint64_t dout = 0;
+
+      if (P.left == 0 && req) {
+        if (dbg_cmds) std::printf("      p%d cmd %s addr %u blen %u be %02x @%ld\n",
+                                  port + 1, we ? "WR" : "RD", (unsigned)addr,
+                                  blen, be, cyc);
+        P.addr = addr; P.left = blen ? blen : 256; P.is_wr = we;
+        P.addr0 = addr; P.blen0 = blen;
+        P.cd = we ? 1 : LAT;
+      } else if (P.left > 0) {
+        // Avalon holds the master to a constant address and burstcount for every
+        // beat (R362). Checked on every beat, on both ports.
+        if (addr != P.addr0 || blen != P.blen0) {
+          if (!proto_err) std::printf("  FAIL: port %d ADDR/BURSTCNT MOVED mid-burst "
+                                      "(addr %u -> %u, blen %u -> %u)\n",
+                                      port + 1, P.addr0, (unsigned)addr, P.blen0, blen);
+          proto_err++;
         }
-      } else if (cd > 0) cd--;
-      else {
-        d->fb_dout = mem.count(caddr) ? mem[caddr] : ~0ull;
-        d->fb_rvalid = 1; caddr++; left--; rbeats++;
-        if (left == 0) d->fb_ack = 1;
+        if (P.is_wr) {
+          if (P.cd > 0) P.cd--;
+          else {
+            uint64_t old = mem.count(P.addr) ? mem[P.addr] : ~0ull;
+            uint64_t m = 0;
+            for (int b = 0; b < 8; b++) if (be & (1 << b)) m |= 0xffull << (b * 8);
+            mem[P.addr] = (din & m) | (old & ~m);
+            wnext = 1; P.addr++; P.left--; wbeats++;
+            if (P.left == 0) ack = 1;
+          }
+        } else if (P.cd > 0) P.cd--;
+        else {
+          dout = mem.count(P.addr) ? mem[P.addr] : ~0ull;
+          rvalid = 1; P.addr++; P.left--; rbeats++;
+          if (P.left == 0) ack = 1;
+        }
       }
+
+      if (port) { d->fb2_wnext = wnext; d->fb2_rvalid = rvalid; d->fb2_ack = ack;
+                  if (rvalid) d->fb2_dout = dout; }
+      else      { d->fb_wnext  = wnext; d->fb_rvalid  = rvalid; d->fb_ack  = ack;
+                  if (rvalid) d->fb_dout  = dout; }
     }
     d->eval();
     d->clk_mem = 1; d->eval(); d->clk_mem = 0; d->eval();

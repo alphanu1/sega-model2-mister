@@ -108,6 +108,29 @@ output [63:0] DDRAM_DIN,
 output  [7:0] DDRAM_BE,
 output        DDRAM_WE,
 
+`ifdef MISTER_DDRAM2
+// A SECOND DDR3 PORT (R376). sysmem exposes three: ram1 is DDRAM_* above, vbuf
+// is ascal's 128-bit HDMI framebuffer, and ram2 serves ddr_svc -- ALSA on ch0
+// and the palette fetch on ch1. Both of those are IDLE in a core that sets
+// MISTER_DISABLE_ALSA and does not use MISTER_FB, so the port is free.
+//
+// It exists so a core with two framebuffer masters does not have to arbitrate
+// them onto one port. A shared port means one master can hold a grant and
+// starve the other, and every response has to be routed by ownership -- a class
+// of fault this project spent a day on before checking whether a second port
+// was available.
+output        DDRAM2_CLK,
+input         DDRAM2_BUSY,
+output  [7:0] DDRAM2_BURSTCNT,
+output [28:0] DDRAM2_ADDR,
+input  [63:0] DDRAM2_DOUT,
+input         DDRAM2_DOUT_READY,
+output        DDRAM2_RD,
+output [63:0] DDRAM2_DIN,
+output  [7:0] DDRAM2_BE,
+output        DDRAM2_WE,
+`endif
+
 //SDRAM interface with lower latency
 output        SDRAM_CLK,
 output        SDRAM_CKE,
