@@ -17046,3 +17046,52 @@ dead-copro captures (R367, R372, R376, R380) and must be treated as unproven**:
 every one of them could be this, since each was a different seed. R377 (the clock
 domain) and R368 (the dropped acknowledge) survive, because their evidence is a
 counter identity and a mutation test rather than an appearance.
+
+**R382 -- THE PACKING FAILURE IS REGISTER DUPLICATION BEING OFF, NOT A CLEAR. A
+WRONG FIX, AND WHAT THE MESSAGE ACTUALLY SAID.**
+
+R381 blamed `dq_r`'s reset, on the strength of the comment three lines above it
+("the clear has to be gone, not merely synchronous"). **Removing the clear
+changed nothing** -- three fresh seeds all reported the same 50 unpacked nodes.
+The fix is reverted.
+
+**The warning says what the cause is, and I did not read it.** Underneath
+`Can't pack` sits the reason:
+
+    Info (176253): Node "dq_r[0]" assigned to CUSTOM_REGION_X45_Y0_X89_Y36
+                   due to Automatic Periphery Placement
+    Info (176253): Node "SDRAM_DQ[0]" assigned to PIN V12 due to User Location
+                   Constraints
+    Info (171110): Nodes could not be merged because their location constraints
+                   do not overlap
+
+Not a clear. A **location conflict**: `dq_r` has been confined to a fabric region
+that does not contain the pin, so the register physically cannot reach the I/O
+cell. I pattern-matched to a nearby comment instead of reading the diagnostic,
+which is the same error as taking the striped screen for DDR3 contents.
+
+**WHY IT HAPPENS, AND WHY IT VARIES BY SEED.** `dq_r` must serve two masters: the
+I/O cell, and the capture pipeline in the fabric. Quartus would normally duplicate
+it. This project forbids that:
+
+    ROUTER_LCELL_INSERTION_AND_LOGIC_DUPLICATION  OFF
+    PHYSICAL_SYNTHESIS_REGISTER_DUPLICATION       OFF
+
+both set deliberately -- *"the physical-synthesis options stay off; they are
+where the area is"* -- on a design sitting at 98-99%. With duplication off the
+register can only be in one place, automatic periphery placement decides which,
+and that decision moves with the seed.
+
+**SO THE TRADE IS EXPLICIT**: area against a read bus that is uniform by
+construction. Turning register duplication on costs ALM this design may not have;
+leaving it off means roughly two builds in three are unusable and must be
+detected before flashing. **The detection is free either way and should be
+standing practice:**
+
+    grep -c 176229 <build>/fit.log     ->  0 = usable, non-zero = do not flash
+
+An RTL alternative exists and is untested: give the capture its own pin-side
+register with no fabric fanout, feeding a second register that the pipeline
+reads. That duplicates by hand what the fitter is forbidden to do, at the cost of
+one cycle of latency -- which the boot calibration already absorbs, since it
+sweeps the depth.
