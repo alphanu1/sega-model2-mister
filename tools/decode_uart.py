@@ -29,6 +29,7 @@ Y=[]     # R275: texture records
 Z=[]     # R294: SDRAM occupancy, phase 5
 Z2=[]    # R294: SDRAM occupancy, phase 6
 F=[]     # R359: framebuffer frames published / dropped, phase 9
+P=[]     # R363: i960 rate, phase 10
 pend=None
 for line in open(sys.argv[1],errors='replace'):
     p=line.split()
@@ -41,6 +42,7 @@ for line in open(sys.argv[1],errors='replace'):
     elif p[0]=='Q': Z.append((a,d))     # R334: {oz0,oz1} and {oz2,oz3}, phase 7
     elif p[0]=='D': D.append((a,d))     # R346: DDR3, phase 8
     elif p[0]=='F': F.append((a,d))     # R359: framebuffer frames, phase 9
+    elif p[0]=='P': P.append((a,d))     # R363: the CPU's pace, phase 10
     elif p[0]=='U': U.append((a,d))     # R255: the walk's own numbers
     elif p[0]=='V': V.append((a,d))     # R269: the glyph cache, per frame
     elif p[0]=='Y': Y.append((a,d))     # R275: the texture path, per frame
@@ -205,6 +207,30 @@ if F:
             print('    (nothing published: the fill never finishes a whole list --')
             print('     the picture is frozen on the last complete frame)')
     print('    pixels painted, last sample: %d' % d)
+
+if P:
+    # R363: IS THE GAME AT FULL SPEED? The i960 is 25 MHz and the frame is
+    # 1/60 s, so a frame is 416,667 CPU cycles. Instructions retired against
+    # that is the machine's pace, and the CPU port's wait is why it is not
+    # higher. R362 measured 24.5% waiting with the renderer alive and 0.0% with
+    # it dead -- so this is the renderer's cost to the CPU, read directly.
+    CPU_HZ, FPS = 25.0e6, 60.0
+    cyc = CPU_HZ / FPS
+    ipf = [a & 0xffffff for a, d in P]
+    wt  = [d & 0x1fffff for a, d in P]
+    ipf.sort(); wt.sort()
+    med_i, med_w = ipf[len(ipf)//2], wt[len(wt)//2]
+    print('CPU PACE (R363): %d instructions retired per frame (med of %d samples)'
+          % (med_i, len(P)))
+    print('    %.3f per CPU cycle, against a %d-cycle frame at 25 MHz / 60 Hz'
+          % (med_i / cyc, int(cyc)))
+    # bwl_cpu counts clk_mem cycles (100 MHz), so the frame there is 1.667 M
+    print('    the CPU port waited %d cycles a frame -- %.1f%% of it'
+          % (med_w, 100.0 * med_w / (100.0e6 / FPS)))
+    if med_i == 0:
+        print('    (zero retired = the CPU is halted or trapped, not merely slow)')
+    print('    min %d  max %d  (a steady figure is a steady frame rate)'
+          % (ipf[0], ipf[-1]))
 
 if Z:
     # R334: 1/z per vertex. Sanity, not accuracy -- these should be small

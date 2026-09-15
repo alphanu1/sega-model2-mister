@@ -17620,3 +17620,30 @@ and bus busy 59.7% -> 0.0%, with texel fetches 36,276 -> 0 a frame. **The
 renderer's texel traffic is what has been holding the i960 below full speed**,
 measured for the first time here, and it means the arbiter work is not optional
 once the picture returns.
+
+**R363 -- THE CPU'S PACE, PER FRAME, BECAUSE IT IS THE RENDERER'S COST SEEN FROM
+THE OTHER END.**
+
+`cpu_dbg_acc` counts instructions ACCEPTED -- exactly one per instruction
+executed -- and has existed all along, but only bits [27:16] ever reached the
+wire, stepping once per 65,536 retires. That is a trend line, not a rate, and
+the question it must answer is a rate: **is the game at full speed?**
+
+R362 answered it by accident and the answer was worth the whole capture. With
+the renderer dead the CPU port waited **0.0%** of the frame and the game ran
+visibly at full speed; with it alive, **24.5%**, and SDRAM 59.7% busy against
+36,276 texel fetches a frame. Model 1 found the same and bought the speed back
+with a clock raise. **So the CPU's rate is not a health metric here, it is the 3D
+traffic measured from the far end** -- and it must not require breaking the
+renderer to read.
+
+Phase 10 ('P') carries instructions retired last frame and the cycles the CPU
+port spent waiting. A 25 MHz i960 at 60 Hz has 416,667 cycles a frame, so the
+decoder reports retires per cycle directly. A delta of a free-running counter at
+the vblank edge, not a second counter -- two registers, and 24 bits saturating
+because a wrapped rate reads as a plausible small one.
+
+**The pairing is the point.** Retires alone cannot distinguish "the CPU is
+slow" from "the CPU is halted"; retires beside the port wait separates a machine
+starved of bus from a machine that has stopped, and zero retires is called out
+as the second.

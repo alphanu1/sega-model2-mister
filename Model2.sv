@@ -4315,6 +4315,7 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	      : (tps_ph == 4'd7)                  ? {oz_d0, oz_d1}                 // R334: 1/z of vertices 0 and 1 ('Q')
 	      : (tps_ph == 4'd8)                  ? {ddr_lat_last, ddr_stuck_wr, ddr_inflight_max[14:0]}   // R362: last completed; longest IN FLIGHT, and whether it was a write
 	      : (tps_ph == 4'd9)                  ? {fb_drop, fb_pub}               // R359: 'F' frames published : lists dropped
+	      : (tps_ph == 4'd10)                 ? {8'd0, cpu_ipf}                 // R363: 'P' i960 instructions retired last frame
 	      : {r3d_ready_cyc[15:0], r3d_bands_done[7:0], r3d_hold[7:0]}),
 	// clip_dropped read 0 on hardware and the refusal count is the number that
 	// now moves, so it takes that byte. Between them: accepted, emitted, refused
@@ -4392,6 +4393,7 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	      : (tps_ph == 4'd7)                  ? {oz_d2, oz_d3}                 // R334: 1/z of vertices 2 and 3 ('Q')
 	      : (tps_ph == 4'd8)                  ? {fb_late[15:0], fb_lines[15:0]}   // R358: lines fetched, and how often the fetch was asked for early
 	      : (tps_ph == 4'd9)                  ? r3d_pixels                      // R359: pixels painted, into the framebuffer
+	      : (tps_ph == 4'd10)                 ? {11'd0, bwl_cpu}                // R363: cycles the CPU port spent waiting, last frame
 	      : (tps_ph == 4'd6)                  ? {bwl_tex[20:5], 16'd0}          // R294: texel fetch waiting
 	      : {lum_mean_f, lum_zpc_f, wedge_slot, wedge_n[6:0], r3d_quads[11:4]}),   // R249: the frame's mean luminance and its black-polygon percentage, where the always-zero drop count and the free-running miss count were
 	.a_tag(8'h43),
@@ -4400,7 +4402,8 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	     : (tps_ph == 4'd2) ? 8'h56 : (tps_ph == 4'd4) ? 8'h59
 	     : (tps_ph == 4'd5) ? 8'h5A : (tps_ph == 4'd6) ? 8'h7A
 	     : (tps_ph == 4'd7) ? 8'h51 : (tps_ph == 4'd8) ? 8'h44
-	     : (tps_ph == 4'd9) ? 8'h46 : 8'h48),   // R359: 'F' is the framebuffer's frames   // R346: 'D' is DDR3   // R334: 'Q' is 1/z, phase 7 -- the ONLY free phase   // 'W','X','S','T','U','V','Y','Z','z' (R294),'H'          // 'C' copro in_pushed:out_pushed | TGP retires:pc
+	     : (tps_ph == 4'd9) ? 8'h46
+	     : (tps_ph == 4'd10) ? 8'h50 : 8'h48),   // R359: 'F' is the framebuffer's frames; R363: 'P' is the CPU's pace   // R346: 'D' is DDR3   // R334: 'Q' is 1/z, phase 7 -- the ONLY free phase   // 'W','X','S','T','U','V','Y','Z','z' (R294),'H'          // 'C' copro in_pushed:out_pushed | TGP retires:pc
 	                                       // 'H' out_popped:hscr2 | io_addr:flags
 	                                       // 'H' scroll h:v for layers 0,1 | layers 2,3 -- low bytes
 	                                       // '0' map0 min|max : sum
@@ -5467,6 +5470,36 @@ function automatic logic [15:0] sat16d(input logic [31:0] now, input logic [31:0
 		sat16d = (|d[31:16]) ? 16'hffff : d[15:0];
 	end
 endfunction
+// R363: THE CPU'S RATE, PER VIDEO FRAME.
+//
+// cpu_dbg_acc counts instructions ACCEPTED -- exactly one per instruction
+// executed -- and it has existed all along, but only bits [27:16] ever reached
+// the wire, stepping once per 65,536 retires. That is a trend line, not a rate,
+// and the question it has to answer is a rate: IS THE GAME AT FULL SPEED?
+//
+// THE ANSWER IS THE 3D TRAFFIC SEEN FROM THE OTHER END, which is why it earns a
+// phase of its own. R362 measured the CPU port waiting 24.5% of the frame with
+// the renderer alive and 0.0% with it dead, and the game visibly ran at full
+// speed for the first time in the second case. Model 1 found the same thing and
+// bought the speed back with a clock raise. So this number is how we will know
+// what the renderer costs the CPU, every build, without having to break the
+// renderer to find out.
+//
+// A DELTA, NOT A SECOND COUNTER: two registers instead of one per-instruction
+// increment. 24 bits because a 25 MHz i960 cannot retire more than 416,667 in a
+// 60 Hz frame and saturating is better than wrapping.
+logic [31:0] cpu_acc_frame;
+logic [23:0] cpu_ipf;
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+	if (!mem_rst_n) begin
+		cpu_acc_frame <= 32'd0; cpu_ipf <= 24'd0;
+	end else if (cvb_d && !cvb_dd) begin
+		cpu_ipf       <= ((cpu_dbg_acc - cpu_acc_frame) > 32'h00FF_FFFF)
+		                 ? 24'hFF_FFFF : 24'(cpu_dbg_acc - cpu_acc_frame);
+		cpu_acc_frame <= cpu_dbg_acc;
+	end
+end
+
 always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
 		cvb_d <= 1'b0; cvb_dd <= 1'b0;
