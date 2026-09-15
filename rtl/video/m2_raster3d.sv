@@ -501,6 +501,14 @@ module m2_raster3d #(
   // FB_DDR3 was 0, because the generate built nothing. It would have appeared
   // only in the build that turned the framebuffer on.
   logic        fbw_ready;
+  logic        fb_clear_req, fb_clear_busy;
+
+  // Raised at frame_start, dropped when the writer says it is done.
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n)                 fb_clear_req <= 1'b0;
+    else if (frame_start)       fb_clear_req <= 1'b1;
+    else if (fb_clear_busy)     fb_clear_req <= 1'b0;
+  end
 
   generate
     if (FB_DDR3) begin : g_fb
@@ -514,9 +522,13 @@ module m2_raster3d #(
 
       // Spans in, pixels to DDR3. The span walk hands over exactly what it
       // handed the band buffers; only the destination changes.
-      m2_fb_write #(.STRIDE(512)) u_fbw (
+      m2_fb_write #(.SCR_W(SCR_W), .SCR_H(SCR_H), .STRIDE(512)) u_fbw (
         .clk(clk), .rst_n(rst_n),
         .fb_sel(fb_draw),
+        // R357: clear the buffer about to be drawn into, once a frame. The band
+        // buffers cleared per band; a framebuffer that is never cleared keeps
+        // the previous frame wherever this one paints nothing.
+        .clear_req(fb_clear_req), .clear_busy(fb_clear_busy),
         .in_valid(tx_span_valid && FB_DDR3), .in_ready(fbw_ready),
         .in_y(tx_span_y[15:0]), .in_x0(tx_span_x0[15:0]), .in_x1(tx_span_x1[15:0]),
         .in_col(tx_span_col), .in_painted(1'b1),
@@ -579,6 +591,7 @@ module m2_raster3d #(
       assign fb_blen = 8'd0; assign fb_din = 64'd0; assign fb_be = 8'd0;
       assign fb_rd_col = 24'd0; assign fb_rd_hit = 1'b0;
       assign fbw_ready = 1'b0;   // the bands own the span handshake at FB_DDR3=0
+      assign fb_clear_busy = 1'b0;
       assign dbg_fb_lines = 32'd0; assign dbg_fb_late = 32'd0;
     end
   endgenerate

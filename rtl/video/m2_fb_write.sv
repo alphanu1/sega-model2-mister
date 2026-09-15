@@ -31,6 +31,8 @@
 `timescale 1ns/1ps
 
 module m2_fb_write #(
+  parameter int unsigned SCR_W  = 496,     // visible pixels a line
+  parameter int unsigned SCR_H  = 384,     // lines to clear
   parameter int unsigned STRIDE = 512      // pixels per line, a power of two so
                                            // the row address is a shift
 ) (
@@ -39,6 +41,21 @@ module m2_fb_write #(
 
   // Which buffer to draw into. The scanout reads the other.
   input  logic        fb_sel,
+
+  // R357: CLEAR THE BUFFER BEFORE DRAWING INTO IT.
+  //
+  // The band buffers were cleared per band (C_CLR), and the reference clears
+  // too -- `destmap().fill(0)` before each render. A framebuffer that is never
+  // cleared keeps the PREVIOUS frame wherever this one paints nothing, so the
+  // 3D layer would accumulate rather than replace. With the painted flag in
+  // bit 24 a cleared word is simply zero: not painted, so the mixer shows the
+  // tilemap through it.
+  //
+  // It costs 248 beats a line for 384 lines -- 95,232 beats, ~1 ms at 100 MHz,
+  // or 6% of a frame -- but they are POSTED WRITES that never wait for a round
+  // trip, and they go to the buffer the scanout is not reading.
+  input  logic        clear_req,
+  output logic        clear_busy,
 
   // ---- spans in, from m2_span_tex
   input  logic        in_valid,
@@ -66,9 +83,11 @@ module m2_fb_write #(
 
   logic signed [15:0] x_r, x1_r;
   logic [24:0]        row_r, addr_r;
+  logic [8:0]         clr_y;
   logic [31:0]        px_r;
 
-  typedef enum logic [2:0] { W_IDLE, W_HEAD, W_BODY, W_TAIL, W_WAIT, W_DONE } st_t;
+  typedef enum logic [3:0] { W_IDLE, W_HEAD, W_BODY, W_TAIL, W_WAIT, W_DONE,
+                             W_CLR, W_CLRW } st_t;
   st_t st;
 
   // Whole words remaining from x_r to the last EVEN-aligned pair before x1.
@@ -79,7 +98,8 @@ module m2_fb_write #(
   wire [8:0]         pairs  = (left <= 0) ? 9'd0 : 9'((left) >> 1);
   wire [7:0]         bcap   = (pairs > 9'd255) ? 8'd255 : 8'(pairs);
 
-  assign in_ready = (st == W_IDLE);
+  assign in_ready  = (st == W_IDLE) && !clear_req;
+  assign clear_busy = (st == W_CLR) || (st == W_CLRW);
   // R348: A REQUEST IS HELD, NOT PULSED. m_req was asserted for one cycle, so a
   // memory that was busy that cycle never saw it -- the same fault m2_ddr3
   // exists to avoid on the DDRAM side, reproduced one level up. It is cleared
@@ -95,11 +115,18 @@ module m2_fb_write #(
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      st <= W_IDLE; x_r <= '0; x1_r <= '0; row_r <= '0; addr_r <= '0; px_r <= '0; m_req <= 1'b0; m_blen <= 8'd1; m_be <= 8'hFF;
+      st <= W_IDLE; x_r <= '0; x1_r <= '0; row_r <= '0; addr_r <= '0; px_r <= '0;
+      clr_y <= 9'd0; m_req <= 1'b0; m_blen <= 8'd1; m_be <= 8'hFF;
       dbg_spans <= '0; dbg_words <= '0;
     end else begin
       case (st)
-        W_IDLE: if (in_valid) begin
+        // The clear runs a line at a time, so it interleaves with the scanout's
+        // reads through the arbiter instead of holding the bus for a whole frame.
+        W_IDLE: if (clear_req) begin
+          clr_y  <= 9'd0;
+          px_r   <= 32'd0;              // zero: not painted
+          st     <= W_CLR;
+        end else if (in_valid) begin
           // Rows are STRIDE pixels and two pixels a word, so the row address is
           // a shift and not a multiply.
           row_r <= {fb_sel, 24'(in_y)} * 25'(STRIDE / 2);
@@ -157,6 +184,28 @@ module m2_fb_write #(
         // One cycle for x_r to settle before deciding, so the comparison is not
         // made against the value the beat just changed.
         W_DONE: st <= (x_r > x1_r) ? W_IDLE : W_BODY;
+
+        W_CLR: begin
+          m_req   <= 1'b1;
+          // THE VISIBLE LINE, NOT THE STRIDE. STRIDE/2 is 256 and
+          // DDRAM_BURSTCNT is eight bits, so clamping to 255 left the last word
+          // of every line uncleared -- the same 8-bit ceiling R350 hit from the
+          // other side. 496 visible pixels are 248 beats, and the words beyond
+          // them are never read.
+          m_blen  <= 8'((SCR_W + 1) / 2);
+          m_be    <= 8'hFF;
+          addr_r  <= ({fb_sel, 24'(clr_y)} * 25'(STRIDE / 2));
+          st      <= W_CLRW;
+        end
+
+        W_CLRW: begin
+          if (m_wnext) m_req <= 1'b0;
+          if (m_ack) begin
+            m_req <= 1'b0;
+            if (clr_y == 9'(SCR_H - 1)) st <= W_IDLE;
+            else begin clr_y <= clr_y + 9'd1; st <= W_CLR; end
+          end
+        end
 
         default: st <= W_IDLE;
       endcase

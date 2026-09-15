@@ -108,7 +108,7 @@ static long verify(int y, int x0, int x1, uint32_t col, int painted, int lo, int
 int main(int argc, char **argv) {
   Verilated::commandArgs(argc, argv);
   d = new Vm2_fb_write;
-  d->clk = 0; d->rst_n = 0; d->in_valid = 0; d->fb_sel = 0;
+  d->clk = 0; d->rst_n = 0; d->in_valid = 0; d->fb_sel = 0; d->clear_req = 0;
   d->m_wnext = 0; d->m_ack = 0;
   for (int i = 0; i < 4; i++) tick();
   d->rst_n = 1; tick();
@@ -165,6 +165,30 @@ int main(int argc, char **argv) {
   }
 
   ck("no span left the writer stalled", stalls, 0);
+  // ---- R357: the clear. Without it the previous frame shows through wherever
+  //      this one paints nothing, which the band buffers avoided by clearing
+  //      per band and which the reference does with destmap().fill(0).
+  {
+    mem.clear(); valid.clear(); busy_for = 1; beats = 0;
+    std::printf("test: the clear pass zeroes the buffer\n");
+    span(5, 10, 20, 0x334455, 1);              // something to be cleared
+    beats = 0;                                 // count the CLEAR's beats only
+    d->clear_req = 1;
+    int i = 0; for (; i < 400000 && !d->clear_busy; i++) tick();
+    ck("the clear started", (long)(i < 400000), 1);
+    for (i = 0; i < 4000000 && d->clear_busy; i++) tick();
+    d->clear_req = 0;
+    ck("and finished",      (long)(i < 4000000), 1);
+    long wrong = 0;
+    for (int x = 8; x <= 22; x++) if (pix(0, 5, x) != 0u) wrong++;
+    ck("the painted span is gone", wrong, 0);
+    // a cleared pixel is NOT painted, so the mixer shows the tilemap through it
+    ck("cleared means not painted", (long)(pix(0, 5, 15) >> 24), 0);
+    ck("it wrote every visible line", beats, 384L * 248);
+    tick();
+    ck("and takes spans again", (long)d->in_ready, 1);
+  }
+
   std::printf("m2_fb_write: checks=%ld fails=%ld\n", checks, fails);
   std::printf("%s\n", fails ? "FAIL" : "PASS");
   delete d;
