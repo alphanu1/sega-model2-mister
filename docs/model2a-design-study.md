@@ -17779,3 +17779,34 @@ do is not a claim about what the silicon does**, and the cost was three builds a
 a wrong entry in this document. When a guard exists and the reason is not
 understood, removing it is an experiment, and it needs a board test before it is
 called a cleanup.
+
+**R368 -- AN ACKNOWLEDGE ARRIVING IN THE WRONG STATE, DROPPED ON THE FLOOR.**
+
+`m2_fb_read`'s `R_REQ` watched only `m_rvalid`:
+
+```systemverilog
+  R_REQ: if (m_rvalid) begin ... st <= R_FILL; end     // m_ack never tested
+```
+
+When a burst's first beat is also its last, `rvalid` and `ack` share a cycle and
+the reader is still in `R_REQ`. The acknowledge is lost; the reader sits in
+`R_FILL` for ever; `busy` never clears, so every later `line_req` counts as late;
+and the arbiter keeps a grant nobody will release.
+
+**THAT IS THE STATE THE BOARD CAPTURED, EXACTLY** -- reader `R_FILL`, arbiter
+`busy = 1, owner = reader`, writer `IDLE`, master idle with nothing in flight.
+And `dbg_lat_last` = 262 settles which side of the fork it was on: **a transfer
+had completed and issued an acknowledge**, so the pulse was sent and lost, not
+never sent. That one number eliminated the entire request-path branch without a
+build, which is what the instrument was for.
+
+Mutation-tested: with the acknowledge ignored in `R_REQ` again, the bench
+reproduces all three board symptoms -- the line never completes, it is never
+counted, and `busy` stays high.
+
+**A HANDSHAKE MUST BE HANDLED IN EVERY STATE IT CAN ARRIVE IN**, not only the one
+where it is expected. The same shape has now appeared three times in this
+project: R348's pulsed request lost to a busy bridge, R353's arbiter re-granting
+on a request still held after its acknowledge, and this. **The cheap check is to
+ask, for each handshake input, which states ignore it -- and whether the other
+end can assert it there.**

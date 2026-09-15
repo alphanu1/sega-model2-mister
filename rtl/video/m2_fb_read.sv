@@ -186,17 +186,42 @@ module m2_fb_read #(
         // The FIRST beat can arrive in this state, and it is a whole beat like
         // any other: an earlier draft wrote only its low half and did not
         // advance wp, which silently dropped pixel 1 of every line.
-        R_REQ: if (m_rvalid) begin
-          m_req <= 1'b0;
-          if (fill_buf) begin
-            lb1e[wp[7:0]] <= m_dout[24:0];      // R361: one write port each
-            lb1o[wp[7:0]] <= m_dout[56:32];
-          end else begin
-            lb0e[wp[7:0]] <= m_dout[24:0];
-            lb0o[wp[7:0]] <= m_dout[56:32];
+        // R368: AND THE ACKNOWLEDGE IS HANDLED HERE TOO.
+        //
+        // This state watched only `m_rvalid`. An acknowledge arriving while
+        // still in R_REQ was dropped on the floor -- and that happens whenever
+        // a burst's first beat is also its last, because rvalid and ack then
+        // share a cycle. The reader would sit in R_FILL for ever, `busy` never
+        // clears, every later line_req counts as late, and the arbiter keeps a
+        // grant nobody will ever release. That is exactly the state phase 11
+        // captured on the board: reader R_FILL, arbiter busy with owner=reader,
+        // the master idle, and `dbg_lat_last` proving a transfer HAD completed
+        // and issued an acknowledge that nothing acted on.
+        //
+        // A state that can receive a handshake must handle it in every state it
+        // can arrive in, not only the one where it is expected.
+        R_REQ: begin
+          if (m_rvalid) begin
+            m_req <= 1'b0;
+            if (fill_buf) begin
+              lb1e[wp[7:0]] <= m_dout[24:0];    // R361: one write port each
+              lb1o[wp[7:0]] <= m_dout[56:32];
+            end else begin
+              lb0e[wp[7:0]] <= m_dout[24:0];
+              lb0o[wp[7:0]] <= m_dout[56:32];
+            end
+            wp <= wp + 9'd1;
+            st <= R_FILL;
           end
-          wp <= wp + 9'd1;
-          st <= R_FILL;
+          // Last, so a cycle carrying BOTH still retires the line: the beat is
+          // written above and the transfer ends here.
+          if (m_ack) begin
+            m_req <= 1'b0;
+            busy  <= 1'b0;
+            have  <= 1'b1;
+            if (!(&dbg_lines)) dbg_lines <= dbg_lines + 32'd1;
+            st    <= R_IDLE;
+          end
         end
 
         default: begin

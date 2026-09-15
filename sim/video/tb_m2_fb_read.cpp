@@ -31,13 +31,17 @@ static std::map<uint32_t, uint64_t> mem;
 static long commands = 0, beats_served = 0;
 static int lat = 20;                  // ~200 ns at 100 MHz (R347)
 static int cd = 0, left = 0; static uint32_t raddr = 0;
+// R368: collapse the whole burst into one beat, so rvalid and ack share a cycle
+static int one_beat = 0;
 
 // the pixel DDR3 should hold, as a function of where it is
 static uint32_t want_px(int y, int x) { return 0x01000000u | ((uint32_t)(y * 7 + x * 3) & 0xffffff); }
 
 static void tick() {
   d->m_rvalid = 0; d->m_ack = 0;
-  if (left == 0 && d->m_req) { raddr = d->m_addr; left = d->m_blen; cd = lat; commands++; }
+  if (left == 0 && d->m_req) {
+    raddr = d->m_addr; left = one_beat ? 1 : d->m_blen; cd = lat; commands++;
+  }
   else if (left > 0) {
     if (cd > 0) cd--;
     else {
@@ -109,6 +113,31 @@ int main(int argc, char **argv) {
     d->line_y = 2; d->line_req = 1; tick(); d->line_req = 0;   // too soon
     for (int i = 0; i < 40000 && !d->line_ready; i++) tick();
     ck("the early request was counted", (long)(d->dbg_late > before), 1);
+  }
+
+  // ---- R368: AN ACKNOWLEDGE THAT ARRIVES IN R_REQ MUST NOT BE LOST.
+  //
+  // When a burst's first beat is also its last, rvalid and ack share a cycle
+  // and the reader is still in R_REQ. That state watched only rvalid, so the
+  // acknowledge went on the floor: the reader sat in R_FILL for ever, busy
+  // never cleared, and the arbiter held a grant nobody would release. The board
+  // showed exactly that -- and dbg_lat_last proved a transfer HAD completed and
+  // acknowledged, so the pulse was issued and lost rather than never sent.
+  //
+  // Modelled by serving the whole line in one beat, which collapses rvalid and
+  // ack into the same cycle. The reader must still retire the line.
+  {
+    std::printf("test: an ack arriving in R_REQ still retires the line\n");
+    mem.clear();
+    one_beat = 1;
+    uint32_t before = d->dbg_lines;
+    d->line_y = 3; d->line_req = 1; tick(); d->line_req = 0;
+    int i = 0;
+    for (; i < 40000 && !d->line_ready; i++) tick();
+    ck("the line completed", (long)(i < 40000), 1);
+    ck("and was counted",    (long)(d->dbg_lines > before), 1);
+    ck("the reader is free again", (long)d->dbg_busy, 0);
+    one_beat = 0;
   }
 
   ck("lines fetched", (long)(d->dbg_lines >= 4), 1);
