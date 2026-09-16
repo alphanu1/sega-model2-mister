@@ -86,8 +86,7 @@ module m2_cpu_sdram_harness #(
   logic [4:0][1:0]    p_be;
   logic [4:0][63:0]   p_dout;
 
-  logic        sd_cke, sd_cs_n, sd_ras_n, sd_cas_n, sd_we_n;
-  logic [15:0] sd_dq_oe;   // R384: one OE per DQ pin
+  logic        sd_cke, sd_cs_n, sd_ras_n, sd_cas_n, sd_we_n, sd_dq_oe;
   logic [1:0]  sd_ba, sd_dqm;
   logic [12:0] sd_a;
   logic [15:0] sd_dq_o, sd_dq_i;
@@ -157,7 +156,7 @@ module m2_cpu_sdram_harness #(
     .clk(clk_mem),
     .cke(sd_cke), .cs_n(sd_cs_n), .ras_n(sd_ras_n), .cas_n(sd_cas_n),
     .we_n(sd_we_n), .ba(sd_ba), .a(sd_a), .dqm(sd_dqm),
-    .dq_i(sd_dq_o), .dq_oe_i(sd_dq_oe[0]),   // R384: all sixteen are driven identically .dq_o(sd_dq_i), .dq_oe_o(),
+    .dq_i(sd_dq_o), .dq_oe_i(sd_dq_oe), .dq_o(sd_dq_i), .dq_oe_o(),
     .violations(), .v_flags(), .reads_served(), .writes_served()
   );
 

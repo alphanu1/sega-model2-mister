@@ -414,8 +414,7 @@ wire game_rst_n = pll_locked & ~RESET & ~status[0] & ~buttons[1];
 localparam int unsigned SDR_COL  = 10;
 localparam int unsigned SDR_AW   = 2 + 13 + SDR_COL;   // 25 with COL_BITS=10
 
-wire        mem_ready, rom_loaded, ldr_overflow;
-wire [15:0] sd_dq_oe;   // R384: one output enable per DQ pin, so each I/O cell has its own
+wire        mem_ready, sd_dq_oe, rom_loaded, ldr_overflow;
 wire [15:0] sd_dq_o;
 wire        ldr_wr_req, ldr_wr_ack;
 wire [SDR_AW:1] ldr_wr_addr;
@@ -1134,13 +1133,7 @@ m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(781)) u_sdram (
 	.dbg_req(sdr_pend), .dbg_grant(sdr_infl)
 );
 
-// R384: per-bit tristate, so each pin's OE comes from its own register.
-generate
-	genvar dqb;
-	for (dqb = 0; dqb < 16; dqb = dqb + 1) begin : g_dq
-		assign SDRAM_DQ[dqb] = sd_dq_oe[dqb] ? sd_dq_o[dqb] : 1'bZ;
-	end
-endgenerate
+assign SDRAM_DQ  = sd_dq_oe ? sd_dq_o : 16'bZ;
 // ITS OWN PLL OUTPUT AT 180 DEGREES, not an inversion of the controller clock.
 // pll.v's own note diagnosed the 80 MHz failure as exactly that inversion --
 // "only a half period of skew and no true phase shift" -- and named this as the
