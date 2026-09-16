@@ -307,8 +307,22 @@ module m2_sdram #(
   // pipeline is always the longest of those and the tag is injected at the
   // chosen depth. Simulation ties it to 1 and keeps CL+3, so every existing
   // harness measures what it always measured.
-  localparam int unsigned RD_LAT     = CL + 5;   // pipeline depth, the maximum
-  localparam int unsigned RD_LAT_DEF = CL + 4;   // what the board wants
+  // R383: ONE DEEPER, because the capture is now two registers.
+  //
+  // dq_pin sits in the I/O cell and its ONLY load is dq_r, so the fitter has no
+  // fabric consumer to pull it inland; dq_r is the fabric copy everything else
+  // reads. That is a register duplication done by hand, because the project
+  // forbids the fitter from doing it (PHYSICAL_SYNTHESIS_REGISTER_DUPLICATION
+  // OFF, "where the area is") and without it dq_r was placed in a region that
+  // cannot reach the pin -- on two seeds in three, giving a NON-UNIFORM read
+  // bus and a black screen (R381, R382).
+  //
+  // The extra stage costs one cycle, so every cap_depth arm gains one and the
+  // pipeline is one longer. The SELECTOR'S MEANING IS UNCHANGED: index n is
+  // still "the device's data captured n cycles after CL", which is what the
+  // boot calibration sweeps and what the OSD exposes.
+  localparam int unsigned RD_LAT     = CL + 6;   // pipeline depth, the maximum
+  localparam int unsigned RD_LAT_DEF = CL + 5;   // what the board wants, +1 stage
 
   // Which stage the tag is injected at, so it reaches slot 0 after that many
   // cycles. Registered off the selector to keep a slow OSD bit out of the
@@ -330,12 +344,12 @@ module m2_sdram #(
       // back between them.
       //
       // The default now comes from the calibration rather than from index 0.
-      3'd0:    cap_depth <= 4'(CL + 0);
-      3'd1:    cap_depth <= 4'(CL + 1);
-      3'd2:    cap_depth <= 4'(CL + 2);
-      3'd3:    cap_depth <= 4'(CL + 3);
-      3'd4:    cap_depth <= 4'(CL + 4);
-      default: cap_depth <= 4'(CL + 5);
+      3'd0:    cap_depth <= 4'(CL + 1);   // R383: +1 for the pin register
+      3'd1:    cap_depth <= 4'(CL + 2);   // R383: +1 for the pin register
+      3'd2:    cap_depth <= 4'(CL + 3);   // R383: +1 for the pin register
+      3'd3:    cap_depth <= 4'(CL + 4);   // R383: +1 for the pin register
+      3'd4:    cap_depth <= 4'(CL + 5);   // R383: +1 for the pin register
+      default: cap_depth <= 4'(CL + 6);   // R383: +1 for the pin register
     endcase
   end
 
@@ -597,6 +611,9 @@ module m2_sdram #(
   logic [$clog2(T_REFI+1)-1:0] ref_cnt;
   logic                     ref_pend;
   logic [3:0]               wait_cnt;
+  // R383: dq_pin IS THE ONE THAT PACKS. Its sole load is dq_r, so nothing in the
+  // fabric gives the fitter a reason to place it away from the pin.
+  logic [15:0]              dq_pin;
   logic [15:0]              dq_r;
 
   // TAGGED READ CAPTURE
@@ -722,11 +739,12 @@ module m2_sdram #(
       grant <= '0; grant_is_wr <= 1'b0; rr_next <= '0;
       rd_total <= 4'd1; rd_issued <= '0; rd_captured <= '0;
       is_write <= 1'b0; xfer_addr <= '0; din_r <= '0; be_r <= '0;
-      wait_cnt <= '0; dq_r <= '0;
+      wait_cnt <= '0; dq_r <= '0; dq_pin <= '0;
     end else begin
       cmd      <= C_NOP;
       sd_dq_oe <= 1'b0;
-      dq_r     <= sd_dq_i;
+      dq_pin   <= sd_dq_i;   // R383: the I/O-cell register
+      dq_r     <= dq_pin;    //        the fabric copy the pipeline reads
 
       for (int q = 0; q < NP; q++) begin
         if (ack_cnt[q] != 0) ack_cnt[q] <= ack_cnt[q] - 1'b1;
