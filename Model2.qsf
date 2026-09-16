@@ -270,9 +270,28 @@ set_global_assignment -name QII_AUTO_PACKED_REGISTERS NORMAL
 # the survivable failure -- quartus_sta and quartus_asm then finish the job on
 # the committed database. It is a ROUTER option and the crash is in routing.
 # The physical-synthesis options stay off; they are where the area is.
-set_global_assignment -name ROUTER_LCELL_INSERTION_AND_LOGIC_DUPLICATION OFF
+# R385: DUPLICATION ON, BECAUSE THE SDRAM I/O REGISTERS CANNOT REACH THEIR PINS
+# WITHOUT IT.
+#
+# Automatic Periphery Placement confines the controller's I/O registers to
+# CUSTOM_REGION_X45_Y0_X89_Y36. Six of the sixteen SDRAM_DQ pins are inside it
+# (AH13, AH14, AE24, AD23, AE23, AG14) and ten are NOT (V12, E8, D11, W12, D8,
+# AF7, AE6, AD5, AF4, AH3). A register that may exist in only one place cannot
+# serve pins on both sides of that boundary, so ten bits were captured in fabric
+# and six in the pin -- a NON-UNIFORM read bus, which the calibrated capture
+# depth cannot correct because it picks one depth for all sixteen. That is the
+# "seed lottery": which cells win moves with placement (R381, R382).
+#
+# Hand-duplicating in RTL (R383/R384) cost ~70 ALM and took it from one build in
+# three to two in three. It could not do better, because the constraint is
+# geometric and no amount of RTL puts a register outside its assigned region.
+#
+# Duplication is what the geometry actually needs: a copy next to each pin. The
+# comments below record that these are "where the area is" -- so the cost is
+# measured here rather than assumed, and optimisation follows if it is too dear.
+set_global_assignment -name ROUTER_LCELL_INSERTION_AND_LOGIC_DUPLICATION ON
 set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC ON
-set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_DUPLICATION OFF
+set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_DUPLICATION ON
 set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_RETIMING ON
 # AREA, NOT SPEED. The whole of the block below was tuned when there were
 # 8,940 ALM spare. There are 196.
