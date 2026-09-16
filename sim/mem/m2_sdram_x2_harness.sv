@@ -120,7 +120,7 @@ module m2_sdram_x2_harness #(
   logic [12:0] a;
   logic [1:0]  dqm;
   logic [15:0] dq_o, dq_i;
-  logic        dq_oe;
+  logic [15:0] dq_oe;     // R384: one OE per DQ pin
 
   m2_sdram #(
     .COL_BITS(COL_BITS), .NP(NP), .T_RCD(T_RCD), .T_RP(T_RP), .T_RC(T_RC),
@@ -148,7 +148,7 @@ module m2_sdram_x2_harness #(
   ) u_dev (
     .clk(clk), .cke(cke), .cs_n(cs_n), .ras_n(ras_n), .cas_n(cas_n),
     .we_n(we_n), .ba(ba), .a(a), .dqm(dqm),
-    .dq_i(dq_o), .dq_oe_i(dq_oe),
+    .dq_i(dq_o), .dq_oe_i(dq_oe[0]),     // R384
     .dq_o(dq_i), .dq_oe_o(dq_oe_m),
     .violations(violations), .v_flags(v_flags),
     .reads_served(reads_served), .writes_served(writes_served)

@@ -105,7 +105,8 @@ module m2_romload_harness #(
   logic [1:0]  ba, dqm;
   logic [12:0] a;
   logic [15:0] dq_c2m, dq_m2c;
-  logic        dq_oe_c, dq_oe_m;
+  logic [15:0] dq_oe_c;   // R384: one OE per DQ pin
+  logic        dq_oe_m;
   logic [15:0] v_flags;
 
   // INIT_NOP shortened only; every other number matches Model2.sv, including
@@ -139,7 +140,7 @@ module m2_romload_harness #(
   sdram_model #(.COL_BITS(COL_BITS), .T_REFI(781), .REFI_SLACK(9)) device (
     .clk(clk), .cke(cke), .cs_n(cs_n), .ras_n(ras_n), .cas_n(cas_n),
     .we_n(we_n), .ba(ba), .a(a), .dqm(dqm),
-    .dq_i(dq_c2m), .dq_oe_i(dq_oe_c),
+    .dq_i(dq_c2m), .dq_oe_i(dq_oe_c[0]),   // R384
     .dq_o(dq_m2c), .dq_oe_o(dq_oe_m),
     .violations(violations), .v_flags(v_flags),
     .reads_served(reads_served), .writes_served(writes_served)

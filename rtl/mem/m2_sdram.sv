@@ -127,7 +127,21 @@ module m2_sdram #(
   output logic [12:0]          sd_a,
   output logic [1:0]           sd_dqm,
   output logic [15:0]          sd_dq_o,
-  output logic                 sd_dq_oe,
+  // R384: SIXTEEN OUTPUT ENABLES, ONE PER DQ PIN, ALL DRIVEN IDENTICALLY.
+  //
+  // Every I/O cell needs its OWN output-enable register. A single-bit sd_dq_oe
+  // therefore has to be replicated sixteen times by the fitter -- and this
+  // project forbids that (PHYSICAL_SYNTHESIS_REGISTER_DUPLICATION OFF, "where
+  // the area is"). So it packed into some cells and not others, and the cells
+  // left without an OE register could not pack their DATA registers either.
+  // That is why dq_pin, sd_dq_o and sd_dq_oe all failed on the SAME ten bits:
+  //
+  //     10 dq_pin   20 sd_dq_o   10 sd_a   10 sd_dq_oe
+  //
+  // Replicating it here is the same hand-duplication as dq_pin (R383), applied
+  // to the signal that actually needed it. Sixteen flops, and the fitter has one
+  // OE per cell without having to invent them.
+  output logic [15:0]          sd_dq_oe,
   input  logic [15:0]          sd_dq_i,
 
   // ROM download. Highest priority while it is active; game logic is held in
@@ -726,7 +740,7 @@ module m2_sdram #(
       // and the init sequence writes all three before the first real command, so
       // their power-up value is unobservable.
       cmd <= C_NOP;
-      sd_dq_o <= '0; sd_dq_oe <= 1'b0;
+      sd_dq_o <= '0; sd_dq_oe <= 16'd0;
       state <= S_INIT; ready <= 1'b0;
       init_cnt <= 16'(INIT_NOP);
       ref_cnt <= '0; ref_pend <= 1'b0;
@@ -742,7 +756,7 @@ module m2_sdram #(
       wait_cnt <= '0; dq_r <= '0; dq_pin <= '0;
     end else begin
       cmd      <= C_NOP;
-      sd_dq_oe <= 1'b0;
+      sd_dq_oe <= 16'd0;
       dq_pin   <= sd_dq_i;   // R383: the I/O-cell register
       dq_r     <= dq_pin;    //        the fabric copy the pipeline reads
 
@@ -992,7 +1006,7 @@ module m2_sdram #(
             sd_ba    <= xfer_addr[AW:AW-1];
             sd_a     <= col_a(xfer_addr);   // A10 low inside col_a: keep row open
             sd_dq_o  <= din_r;
-            sd_dq_oe <= 1'b1;
+            sd_dq_oe <= 16'hFFFF;
             sd_dqm   <= ~be_r;
             // Hold past tWR and tRAS before anything can precharge this row.
             // The row is left open on purpose: a download write stream is
