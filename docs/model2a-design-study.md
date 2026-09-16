@@ -17095,3 +17095,46 @@ register with no fabric fanout, feeding a second register that the pipeline
 reads. That duplicates by hand what the fitter is forbidden to do, at the cost of
 one cycle of latency -- which the boot calibration already absorbs, since it
 sweeps the depth.
+
+**R385 -- DUPLICATION ON. THREE BUILDS IN THREE PACK, AND IT COSTS NOTHING.**
+
+    duplication OFF   packing failures 50 / 50 / 0    ALM 41,242 / 41,106 / 41,203
+    duplication ON    packing failures  0 /  0 / 0    ALM 41,181 / 41,211 / 41,242
+
+**Zero failures on every seed, and the area is inside seed noise.** The QSF
+called these options "where the area is" -- that figure came from the MODEL 1
+project measured on a full core, and it does not transfer: what duplication
+copies here is a handful of I/O registers, not swathes of core logic. **A cost
+measured on another design is not a cost.**
+
+It also beats the RTL alternative outright: R383/R384 hand-duplicated `dq_pin`
+and the output enable for ~70 ALM and reached only two builds in three, because
+the constraint is geometric. Automatic Periphery Placement confines the
+controller's I/O registers to `CUSTOM_REGION_X45_Y0_X89_Y36`; six SDRAM_DQ pins
+lie inside it and ten do not, and no RTL change puts a register outside its
+assigned region. Duplication gives the fitter what the geometry needs -- a copy
+beside each pin. Both hand-duplication commits are reverted.
+
+Confirmed on the board: the game runs, and the census finally has a baseline
+taken on a build whose SDRAM reads are uniform.
+
+**THE CENSUS (s243, 240 s, attract mode):**
+
+    texel misses        27,341 /frame     texel cache 68.2% of 35,355 fetches
+    SDRAM bus busy      60.5%             CPU port waits  24.5%
+    waiting for bus     geometry 45.7%    glyph 24.5%    texels 7.3%
+    glyph overruns      med 37, max 101   hit rate 84.1%
+    textured pixels     246,688 /frame    walks 6,166
+    copro               030B dominant -- starved at its FIFO wait, not saturated
+
+**AND THE STANDING CHECK THAT SHOULD HAVE EXISTED FROM THE START**, free from a
+report every build already writes:
+
+    grep -c 176229 <build>/fit.log     ->  0 = usable, non-zero = DO NOT FLASH
+
+**WHAT THIS INVALIDATES.** Two days of board results were taken from builds where
+ten of sixteen SDRAM read bits were captured in fabric. Four conclusions on the
+`ddr3` branch (R367, R372, R376, R380) rest on black screens and dead-copro
+captures and are **unproven** -- each was a different seed and could be this.
+R377 (the clock domain) and R368 (the dropped acknowledge) stand, because their
+evidence was a counter identity and a mutation test rather than an appearance.

@@ -1,5 +1,33 @@
 # Handoff
 
+## THE SEED LOTTERY IS FIXED (R385). CHECK THIS BEFORE FLASHING ANYTHING:
+
+    grep -c 176229 <build>/fit.log     ->  0 = usable, non-zero = DO NOT FLASH
+
+Builds were failing roughly two in three, and every board result for two days was
+taken without knowing which kind you had. The cause: Automatic Periphery Placement
+confines the SDRAM controller's I/O registers to a region containing six of the
+sixteen SDRAM_DQ pins; the other ten were captured in fabric. A non-uniform read
+bus cannot be corrected by the calibrated capture depth, because that picks ONE
+depth for all sixteen -- which is why forcing the OSD "SDRAM phase" never helped.
+
+The fix is two QSF lines, and it costs nothing:
+
+    ROUTER_LCELL_INSERTION_AND_LOGIC_DUPLICATION  ON
+    PHYSICAL_SYNTHESIS_REGISTER_DUPLICATION       ON
+
+    OFF:  packing failures 50 / 50 /  0   ALM 41,242 / 41,106 / 41,203
+    ON :  packing failures  0 /  0 /  0   ALM 41,181 / 41,211 / 41,242
+
+The "where the area is" warning against those options came from the Model 1
+project on a full core; here duplication copies a few I/O registers and the area
+is inside seed noise. A cost measured on another design is not a cost.
+
+**Four ddr3-branch conclusions (R367, R372, R376, R380) were drawn from black
+screens on different seeds and are now UNPROVEN.** R377 and R368 stand -- their
+evidence was arithmetic, not appearance.
+
+
 **Updated:** 2026-09-14 evening. Study entries R176-R344.
 
 ## STABLE HEAD, CONFIRMED ON THE BOARD
