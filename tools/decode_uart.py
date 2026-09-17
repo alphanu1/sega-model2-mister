@@ -26,6 +26,9 @@ U=[]     # R255: walk records
 V=[]     # R269: glyph cache records
 Y=[]     # R275: texture records
 Z=[]     # R294: SDRAM occupancy, phase 5
+Q=[]     # R334: 1/z, phase 7 -- ITS OWN LIST. It shared Z's, so the SDRAM
+         # block read 1/z mantissas as bus occupancy and sweep counts, and the
+         # 1/z block read SDRAM counters as reciprocals. Both were wrong.
 Z2=[]    # R294: SDRAM occupancy, phase 6
 pend=None
 for line in open(sys.argv[1],errors='replace'):
@@ -36,7 +39,7 @@ for line in open(sys.argv[1],errors='replace'):
     if p[0]=='C': C.append((a,d))
     elif p[0]=='H': H.append((a,d))
     elif p[0]=='T': T.append((a,d))     # R251: the light table
-    elif p[0]=='Q': Z.append((a,d))     # R334: {oz0,oz1} and {oz2,oz3}, phase 7
+    elif p[0]=='Q': Q.append((a,d))     # R334: {oz0,oz1} and {oz2,oz3}, phase 7
     elif p[0]=='U': U.append((a,d))     # R255: the walk's own numbers
     elif p[0]=='V': V.append((a,d))     # R269: the glyph cache, per frame
     elif p[0]=='Y': Y.append((a,d))     # R275: the texture path, per frame
@@ -141,7 +144,12 @@ if Z or Z2:
             print('    TEXEL CACHE SWEEPS (R310): %d total, med %d per sample'
                   % (max(tsw)-min(tsw) if tsw else 0, med3(d_sw)))
             print('    (a sweep clears every line, one per cycle, and answers nothing while it runs.')
-            print('     Frequent sweeps mean the cache is COLD, not thrashing, and size will not help.)')
+            if max(tsw) - min(tsw) > 1000:
+                print('     Frequent sweeps mean the cache is COLD, not thrashing, and size will not help.)')
+            else:
+                print('     This is NEGLIGIBLE -- the cache is not being wiped, so a poor hit rate')
+                print('     is eviction, and capacity IS a lever. R328 measured 1024->2048 lines')
+                print('     taking the hit rate 54.3%% -> 64.9%%.)')
     if Z2:
         geo=[(a>>16)&0xffff for a,_ in Z2]; chr_=[a&0xffff for a,_ in Z2]
         tex=[(d>>16)&0xffff for _,d in Z2]
@@ -157,12 +165,12 @@ def mf16(v):
     m = 1.0 + ((v & 0xff) / 256.0)
     return m * (2.0 ** (e - 127))
 
-if Z:
+if Q:
     # R334: 1/z per vertex. Sanity, not accuracy -- these should be small
     # positive numbers (z is a view-space depth), and a run of zeros means the
     # reciprocal is not reaching the store.
     vals = []
-    for a, d in Z:
+    for a, d in Q:
         for v in ((a >> 16) & 0xffff, a & 0xffff, (d >> 16) & 0xffff, d & 0xffff):
             vals.append(mf16(v))
     nz = [v for v in vals if v > 0]

@@ -17138,3 +17138,44 @@ ten of sixteen SDRAM read bits were captured in fabric. Four conclusions on the
 captures and are **unproven** -- each was a different seed and could be this.
 R377 (the clock domain) and R368 (the dropped acknowledge) stand, because their
 evidence was a counter identity and a mutation test rather than an appearance.
+
+**R386 -- THE DECODER PUT TWO RECORDS IN ONE LIST, AND THE CENSUS NUMBERS WERE
+WRONG BECAUSE OF IT.**
+
+    elif p[0]=='Q': Z.append((a,d))     # R334: 1/z, phase 7
+    elif p[0]=='Z': Z.append((a,d))     # R294: bus busy / CPU wait
+
+**Both tags appended to the same list.** So the SDRAM block read 1/z mantissas as
+bus occupancy and sweep counts, and the 1/z block read SDRAM counters as
+reciprocals. Neither reading was what it claimed to be.
+
+    field                    contaminated      corrected
+    texel misses / frame        27,341           11,038
+    SDRAM bus busy               60.5%            56.7%
+    texel cache sweeps          32,928              205  (total, whole capture)
+
+The corrected miss count reconciles with the hit rate for the first time:
+35,355 fetches at 68.2% hit is ~11,243 misses. The old figure reconciled with
+nothing, and nobody noticed because no one multiplied it out.
+
+**AND THE TOOL GAVE ADVICE FROM THE BAD FIGURE.** It printed *"Frequent sweeps
+mean the cache is COLD, not thrashing, and size will not help"* unconditionally.
+With 205 sweeps across a 240-second capture -- 0.01 per frame, two cycles of
+1.67 M -- the cache is **not** being wiped, so a 68.2% hit rate is EVICTION and
+capacity IS a lever. R328 already measured that: 1024 -> 2048 lines took the hit
+rate 54.3% -> 64.9%. **The instrument was steering the project away from the one
+change already proven to work on it.**
+
+The advice is now conditional on the number it describes, which is what it should
+always have been: a line that prints regardless of the measurement is not a
+finding, it is a slogan.
+
+**THE CENSUS, CORRECTED (s243, 240 s of attract mode):**
+
+    texel fetches   35,355 /frame   hit 68.2%   misses 11,038 /frame
+    SDRAM bus busy  56.7%           CPU port waits 24.5%
+    waiting         geometry 45.7%  glyph 24.5%  texels 7.3%
+    collect+sort    med 8.6-12.1 ms of a 16.7 ms frame, max 17.35 ms
+    bands_done      all 48          lists held 1-2 extra frames
+    copro           40.3% at its FIFO wait, 8.0% at PC 0, ~52% executing
+    i960            34.1% in its frame-wait spin, 2.2% waiting on the copro
