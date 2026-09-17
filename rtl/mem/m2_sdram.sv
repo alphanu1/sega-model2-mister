@@ -646,6 +646,22 @@ module m2_sdram #(
   // cheaper than a data mux. The registers go from NP*64 to 64.
   logic [3:0][15:0] cap;
 
+  // ------------------------------- R396: the read return, split in two
+  // `dq_r` reached `p_dout[port]` through the burst-assembly mux AND the
+  // NP-way write decode in ONE cycle, and after R394 cleared the arbitration
+  // chain that became the worst path in the design:
+  //     dq_r[11] -> p_dout[4][59]   -0.311
+  // These stage the assembled word for a cycle so the mux and the decode sit
+  // either side of a register. One extra cycle of read latency, which the
+  // requesters absorb because they wait for ack -- the same trade S_SEL
+  // already makes in this file: "this costs latency, not semantics".
+  //
+  // One deep is enough. A delivery is consumed the cycle after it is staged,
+  // so back-to-back deliveries pipeline rather than collide.
+  logic            rd_v;
+  logic [PW-1:0]   rd_port;
+  logic [63:0]     rd_word;
+
   // Acks are per port now. A single shared hold counter was fine when only one
   // transfer existed at a time; with two ports in flight it would clear the
   // other port's ack early.
@@ -719,6 +735,7 @@ module m2_sdram #(
       ack_cnt <= '0; wack_cnt <= '0; inflight <= '0; wr_inflight <= 1'b0;
       for (int b = 0; b < 4; b++) rd_bank_cnt[b] <= '0;
       p_ack <= '0; wr_ack <= 1'b0; p_dout <= '0;
+      rd_v <= 1'b0; rd_port <= '0; rd_word <= '0;
       grant <= '0; grant_is_wr <= 1'b0; rr_next <= '0;
       rd_total <= 4'd1; rd_issued <= '0; rd_captured <= '0;
       is_write <= 1'b0; xfer_addr <= '0; din_r <= '0; be_r <= '0;
@@ -786,6 +803,16 @@ module m2_sdram #(
         tag_p    <= {PW'(0), tag_p[RD_LAT-1:1]};
         tag_w    <= {2'd0, tag_w[RD_LAT-1:1]};
         tag_last <= {1'b0, tag_last[RD_LAT-1:1]};
+        // The staged delivery, one cycle behind the capture. This is the
+        // second half of the split: the NP-way write decode runs here, from a
+        // REGISTER, with no mux in front of it.
+        rd_v <= 1'b0;
+        if (rd_v) begin
+          p_dout[rd_port]   <= rd_word;
+          p_ack[rd_port]    <= 1'b1;
+          ack_cnt[rd_port]  <= 2'(ACK_HOLD - 1);
+        end
+
         if (tag_v[0]) begin
           cap[tag_w[0]] <= dq_r;
           if (tag_last[0]) begin
@@ -804,12 +831,12 @@ module m2_sdram #(
             // of a float. Unused lanes are zeroed rather than left stale so a
             // consumer reading past what it asked for sees zero, not history.
             case (tag_w[0])
-              2'd0:    p_dout[tag_p[0]] <= {48'd0, dq_r};
-              2'd1:    p_dout[tag_p[0]] <= {32'd0, dq_r, cap[0]};
-              default: p_dout[tag_p[0]] <= {dq_r, cap[2], cap[1], cap[0]};
+              2'd0:    rd_word <= {48'd0, dq_r};
+              2'd1:    rd_word <= {32'd0, dq_r, cap[0]};
+              default: rd_word <= {dq_r, cap[2], cap[1], cap[0]};
             endcase
-            p_ack[tag_p[0]]    <= 1'b1;
-            ack_cnt[tag_p[0]]  <= 2'(ACK_HOLD - 1);
+            rd_port <= tag_p[0];
+            rd_v    <= 1'b1;
           end
         end
 
