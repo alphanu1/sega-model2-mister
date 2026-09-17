@@ -15112,7 +15112,13 @@ about fifteen cycles and only four of them move data:
     S_ACT                               1   activate
     S_RCD (T_RCD=2)                     2   wait
     S_RD                                4   THE ONLY USEFUL CYCLES
-    CL2 + capture to the last word     ~4
+    CL2 + capture to the last word     ~4   NOT ON THE CRITICAL PATH -- see R387
+
+**CORRECTED BY R387.** The last line is not paid. `S_RD` returns to `S_IDLE` on
+the cycle it ISSUES the final READ, and the returning data is the tag pipeline's
+problem -- that is exactly what removing the drain stall did. The transaction is
+thirteen cycles, not fifteen, and a row HIT is seven. R387 also shows the
+proposed remedy below cannot be done as written.
 
 That is 27% efficiency. Against R294's measured 46.2% bus busy, actual data
 transfer is about 12% of the bus. With eleven masters in a round-robin,
@@ -17179,3 +17185,138 @@ finding, it is a slogan.
     bands_done      all 48          lists held 1-2 extra frames
     copro           40.3% at its FIFO wait, 8.0% at PC 0, ~52% executing
     i960            34.1% in its frame-wait spin, 2.2% waiting on the copro
+
+
+**R387 -- ARBITRATION WAS THE FREE CYCLES, NOT THE PRECHARGE. 0.420 -> 0.540
+WORDS/CYCLE.**
+
+The entry above proposed *"overlapping the next transaction's precharge and
+activate with the current burst"*. **That cannot be done in this controller, and
+the reason is one line of the mode register:**
+
+    sd_a <= {3'b000, 1'b0, 2'b00, 3'(CL), 1'b0, 3'b000};
+                                              ^^^^^^^ A[2:0] = burst length 1
+
+With BL=1 every word of a read burst needs its own READ command, so the command
+bus is occupied on **every cycle of `S_RD`**. There is no free slot to put an
+ACTIVATE in. Reaching one means switching the device to BL=4, which moves the
+capture window -- the hardware-only risk class that produced R377 and R381, and
+not a thing to change while chasing throughput.
+
+**THE FREE CYCLES ARE AT THE OTHER END.** Of the thirteen, three issue no
+command and move no data at all: `S_IDLE` (the round-robin priority encode),
+`S_SEL` (the ten-way address mux) and `S_DISPATCH` (the row comparator). They
+depend on nothing the current transaction is doing, so they can run *beside* it.
+
+**WHAT WAS BUILT.** A two-stage pipeline. A front stage does `S_IDLE` and
+`S_SEL`'s work into a one-deep handoff register while the back stage is still
+bursting; the back stage consumes the handoff and goes straight to
+`S_DISPATCH`. `S_RD` jumps directly into the next transaction on its last READ
+rather than returning to `S_IDLE`.
+
+**THE MUX IS NOT DUPLICATED, AND THAT WAS THE BINDING CONSTRAINT.** `S_SEL`
+exists because every one of the six worst setup paths in the design ran between
+two muxes inside this module; splitting the mux into a cycle of its own is what
+fixed them. So `addr_p[]` is read through ONE named wire, `pf_addr`, and both
+readers use it. The back stage is handed a settled register and never the array.
+`S_DISPATCH` still sees a settled `xfer_addr`, which is the invariant `S_SEL`
+was protecting.
+
+**MEASURED, tb_m2_sdram:**
+
+    aggregate                     0.420 -> 0.540 words/cyc   +28.6%
+                                   84.0 -> 108.0 MB/s at 100 MHz
+    transactions / 425k cycles   28,889 -> 32,377
+    cycles per transaction        14.72 -> 13.13
+    p0 (i960) wait              182,971 -> 142,091           -22.3%
+    checks                      106,898 -> 119,456   0 fails, 0 violations
+
+**PIPELINING COSTS A CYCLE WHEN THERE IS NOTHING TO HIDE IT BEHIND, AND THE
+FIRST VERSION PAID IT.** With one master running alone the front stage can never
+get ahead -- the port has one request outstanding and `inflight[]` holds it --
+so grant -> mux -> handoff -> dispatch is one cycle longer than the
+`S_IDLE -> S_SEL -> S_DISPATCH` it replaced:
+
+    p0 alone, sequential   0.301 -> 0.281 words/cyc   before the bypass
+    p0 alone, random       0.212 -> 0.202
+
+That is the i960's own port when nothing else is asking, so it is not a corner
+case. The fix is a bypass: `pf_sel` means the front stage is in its mux cycle
+*right now*, so `pf_addr` is already valid combinationally and `S_IDLE` can take
+it directly instead of waiting for the handoff register. With the bypass, 0.302
+and 0.212 -- the regression is gone and the aggregate gain is kept.
+
+**MUTATION-TESTED, because a green bench on this module is not evidence (R297):**
+
+    guard removed                             bench response
+    front stage does not set inflight[]       18,684 fails
+    handoff not invalidated in the S_RD path  546,488 fails
+    prefetched write issued while pipe_busy   322 violations, 1 fail
+    BOTH refresh guards removed                16 violations, 1 fail
+
+The refresh guard needed both copies removed to trip: the front stage and
+`pf_take` each carry `!ref_pend`, so removing one is a near-equivalent mutation
+and the bench correctly stays green. The device model does police the interval
+(`V_REFRESH`, 9x slack), which is what catches it when both go.
+
+**AND ONE GUARD THE BENCH CANNOT CHECK AT ALL -- WHICH IS THE MORE USEFUL HALF
+OF THIS ENTRY.** `S_MISS` refuses to precharge a bank while `rd_bank_cnt` for it
+is non-zero. Before R387 that was dead code, and its comment said so, adding
+that "any future shortening of the dispatch path would start truncating read
+bursts silently". R387 is that shortening, and the counter is now reached
+**24,542 times** in the bench where it was reached zero times before -- measured
+with a probe, not inferred.
+
+**Deleting it leaves the bench completely green: 0 fails, 0 violations, and
+slightly FASTER** (43,804 checks against 40,506, max latency 137 against 157).
+That is not the guard being useless. `sdram_model` raises `V_RD_TRUNC` only when
+a PRECHARGE lands *inside* CL, and without the guard the precharge lands exactly
+*at* CL -- legal for the device, and the model is right to pass it. What the
+guard actually holds off for is `cap_depth`: CL **plus the board round trip that
+`rd_lat_sel` calibrates at boot**. The margin it protects exists only on
+hardware.
+
+So the honest statement of the safety net for this change is narrower than it
+looked at the start of the work: the device model covers reservation, handoff
+invalidation, DQ conflict and refresh, and covers **none** of the capture-timing
+margin. A green `tb_m2_sdram` is necessary and not sufficient, exactly as R297
+said and exactly as R377 and R381 then demonstrated. The first thing to check on
+the board is a texture read, because a truncated burst shows there first.
+
+**WHAT THIS DOES NOT DO.** It does not overlap bank operations -- the four banks
+are still worked one transaction at a time. That remains available, and BL=4 is
+the way in, at the price of re-opening capture timing.
+
+**BUILT, THREE SEEDS (61/62/63):**
+
+    seed   176229   ALM                     slack     TNS
+    61       0      41,375 / 41,910 (99%)  -0.665   -0.665
+    62       0      41,417 / 41,910 (99%)  -0.139   -2.209
+    63      50      41,362 / 41,910 (99%)  -0.684   -7.736
+
+M10K unchanged at 553/553. **Area cost is about +100 ALM** against the census
+mean of ~41,284 -- the handoff registers and the 2:1 select in front of
+`xfer_addr`, which is what was predicted.
+
+**TIMING DID NOT REGRESS, WHICH WAS THE RISK.** The census best was -0.478;
+s62's -0.139 is the best slack recorded on this design. That is the mux
+discipline paying off: the front stage reads `addr_p[]` through one wire and the
+back stage never touches the array, so no new mux-to-mux path was created.
+
+**BUT THE PACKING LOTTERY IS NOT GONE, AND R385 SAID IT WAS.** s63 has 50
+genuine `dq_r[*]` / `SDRAM_DQ[*]` conflicts -- the exact R385 signature, with
+R385's options still ON. R385's claim rested on three clean seeds; three of
+three is perfectly consistent with a fitter that fails one time in five, and
+this is the datapoint that shows it. **R385 reduced the rate (roughly one in
+three failing, to roughly one in five) -- it did not eliminate it.** The entry
+is amended accordingly.
+
+Whether R387's ~100 ALM at 99% utilisation made it worse cannot be separated
+from seed noise at n=3, and should not be asserted either way.
+
+**AND THE STANDING CHECK HAS A FALSE-NEGATIVE MODE, FOUND HERE.** Run against
+`output_files/Model2.fit.smsg` it reports **0 for a build with 50 failures**.
+The check is only valid against `<build>/fit.log`, which is what HANDOFF names
+and what must be used:
+
+    grep -c 176229 <build>/fit.log     ->  0 = usable, non-zero = DO NOT FLASH
