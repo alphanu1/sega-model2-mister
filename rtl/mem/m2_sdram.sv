@@ -151,7 +151,13 @@ module m2_sdram #(
   // rather than the raw input, because demand is "asking and not yet served",
   // which a one-cycle request pulse would not show.
   output logic [NP-1:0]        dbg_req,
-  output logic [NP-1:0]        dbg_grant
+  output logic [NP-1:0]        dbg_grant,
+  // R401: WHY A READY TRANSFER WAS NOT STARTED. Telemetry shows geometry
+  // pending while the bus is idle in 46% of samples, worst case 86% of a frame
+  // -- the controller declining work it could do. These separate the two
+  // candidate causes in S_IDLE's entry condition.
+  output logic                 dbg_refblk,   // a refresh is due and stops everything
+  output logic                 dbg_holblk    // the rr winner is a write the pipe blocks
 );
 
   // Burst length per port, in 16-bit words. D8: p1 is tile character fetch and
@@ -679,6 +685,14 @@ module m2_sdram #(
   // With the pipeline this is genuinely several ports at once, which is what
   // the telemetry is there to show.
   assign dbg_grant = inflight;
+
+  // In S_IDLE with something to do, and this is what stopped it. Both are
+  // observation only -- nothing here gates a command.
+  assign dbg_refblk = (state == S_IDLE) && ref_pend
+                      && (rr_valid || (wr_pend && !wr_inflight));
+  assign dbg_holblk = (state == S_IDLE) && !ref_pend && rr_valid
+                      && we_p[rr_grant] && pipe_busy
+                      && !(wr_pend && !wr_inflight && !pipe_busy);
 
   // SYNCHRONOUS RESET, DELIBERATELY, and it is about the pins rather than style.
   //

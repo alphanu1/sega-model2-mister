@@ -167,6 +167,14 @@ if Z or Z2:
         tex=[(d>>16)&0xffff for _,d in Z2]
         print('    waiting for the bus: geometry %.1f%%  glyph fetch %.1f%%  texels %.1f%%'
               % (100*med3(geo)/FR, 100*med3(chr_)/FR, 100*med3(tex)/FR))
+        # R401: cycles in S_IDLE with work available that was NOT started, by
+        # cause. 8 bits each in units of 8192 memory cycles; a frame is ~204.
+        FR8 = 1670000.0/8192.0
+        rb=[(d>>8)&0xff for _,d in Z2]; hb=[d&0xff for _,d in Z2]
+        print('    NOT STARTED though ready (R401): refresh-due blocked %.1f%%  write/pipe head-of-line %.1f%%'
+              % (100*med3(rb)/FR8, 100*med3(hb)/FR8))
+        print('    (geometry pends while the bus is IDLE in 46%% of samples -- these say why.')
+        print('     refresh-due blocks EVERY transfer; head-of-line blocks all ten other ports.)')
     print('    (bus busy near 100%% with everyone waiting = BANDWIDTH; idle bus with a'
           ' queue = BLOCKED, and the fixes are opposites)')
 

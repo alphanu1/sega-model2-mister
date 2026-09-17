@@ -228,10 +228,6 @@ lint_m2_geo_engine:
 	@echo "== lint m2_geo_engine"
 	$(VERILATOR) --lint-only $(VFLAGS) --top-module m2_geo_engine $(SRCS_m2_geo_engine)
 
-lint_mb86233_core:
-	@echo "== lint mb86233_core"
-	$(VERILATOR) --lint-only $(VFLAGS) --top-module mb86233_core $(SRCS_mb86233_core)
-
 lint_i960_icache:
 	@echo "== lint i960_icache"
 	$(VERILATOR) --lint-only $(VFLAGS) --top-module i960_icache $(ICA_RTL)

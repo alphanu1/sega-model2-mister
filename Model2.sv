@@ -1080,6 +1080,9 @@ wire [NPORTS-1:0] sdr_pend, sdr_infl;
 // a 20-bit counter wraps at 1.05 M -- which would read as a quiet frame.
 logic [20:0] bw_busy, bw_cpu, bw_geo, bw_tex, bw_chr;
 logic [20:0] bwl_busy, bwl_cpu, bwl_geo, bwl_tex, bwl_chr;
+// R401: cycles in S_IDLE with work available that was NOT started, split by cause.
+wire         sdr_refblk, sdr_holblk;
+logic [20:0] bw_refblk, bw_holblk, bwl_refblk, bwl_holblk;
 logic        bw_tog, bw_tog_m, bw_tog_m2, bw_tog_m3;
 always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	if (!mem_rst_n)                bw_tog <= 1'b0;
@@ -1089,19 +1092,24 @@ always_ff @(posedge clk_mem or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
 		bw_busy <= '0; bw_cpu <= '0; bw_geo <= '0; bw_tex <= '0; bw_chr <= '0;
 		bwl_busy <= '0; bwl_cpu <= '0; bwl_geo <= '0; bwl_tex <= '0; bwl_chr <= '0;
+		bw_refblk <= '0; bw_holblk <= '0; bwl_refblk <= '0; bwl_holblk <= '0;
 		bw_tog_m <= 1'b0; bw_tog_m2 <= 1'b0; bw_tog_m3 <= 1'b0;
 	end else begin
 		bw_tog_m <= bw_tog; bw_tog_m2 <= bw_tog_m; bw_tog_m3 <= bw_tog_m2;
 		if (bw_tog_m3 != bw_tog_m2) begin
 			bwl_busy <= bw_busy; bwl_cpu <= bw_cpu; bwl_geo <= bw_geo;
 			bwl_tex  <= bw_tex;  bwl_chr <= bw_chr;
+			bwl_refblk <= bw_refblk; bwl_holblk <= bw_holblk;
 			bw_busy <= '0; bw_cpu <= '0; bw_geo <= '0; bw_tex <= '0; bw_chr <= '0;
+			bw_refblk <= '0; bw_holblk <= '0;
 		end else begin
 			if (|sdr_infl)                      bw_busy <= bw_busy + 21'd1;
 			if (sdr_pend[1]  && !sdr_infl[1])   bw_cpu  <= bw_cpu  + 21'd1;
 			if (sdr_pend[4]  && !sdr_infl[4])   bw_geo  <= bw_geo  + 21'd1;
 			if (sdr_pend[10] && !sdr_infl[10])  bw_tex  <= bw_tex  + 21'd1;
 			if (sdr_pend[3]  && !sdr_infl[3])   bw_chr  <= bw_chr  + 21'd1;
+			if (sdr_refblk)                     bw_refblk <= bw_refblk + 21'd1;
+			if (sdr_holblk)                     bw_holblk <= bw_holblk + 21'd1;
 		end
 	end
 end
@@ -1170,7 +1178,8 @@ m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(781)) u_sdram (
 	.wr_be(f_wr_be),   .wr_ack(f_wr_ack),
 	.p_req(f_req), .p_we(f_we), .p_addr(f_addr), .p_din(f_din), .p_be(f_be),
 	.p_dout(f_dout), .p_ack(f_ack),
-	.dbg_req(sdr_pend), .dbg_grant(sdr_infl)
+	.dbg_req(sdr_pend), .dbg_grant(sdr_infl),
+	.dbg_refblk(sdr_refblk), .dbg_holblk(sdr_holblk)
 );
 
 assign SDRAM_DQ  = sd_dq_oe ? sd_dq_o : 16'bZ;
@@ -4401,7 +4410,7 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	      : (tps_ph == 3'd4)                  ? {tx_h_f, tx_n_f}                // R275: texel hits : texels that were not 0xF
 	      : (tps_ph == 3'd5)                  ? {tx_m_f, tex_sweep}             // R294 texel misses; R310 whole-cache sweeps
 	      : (tps_ph == 3'd7)                  ? {oz_d2, oz_d3}                 // R334: 1/z of vertices 2 and 3 ('Q')
-	      : (tps_ph == 3'd6)                  ? {bwl_tex[20:5], 16'd0}          // R294: texel fetch waiting
+	      : (tps_ph == 3'd6)                  ? {bwl_tex[20:5], bwl_refblk[20:13], bwl_holblk[20:13]}   // R294 texel wait; R401 why a ready transfer was not started
 	      : {lum_mean_f, lum_zpc_f, wedge_slot, wedge_n[6:0], r3d_quads[11:4]}),   // R249: the frame's mean luminance and its black-polygon percentage, where the always-zero drop count and the free-running miss count were
 	.a_tag(8'h43),
 	.b_tag((wedge_have && wedge_ph == 2'd1) ? 8'h57 : (wedge_have && wedge_ph == 2'd2) ? 8'h58
