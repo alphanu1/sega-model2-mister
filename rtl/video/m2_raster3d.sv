@@ -346,7 +346,7 @@ module m2_raster3d #(
   );
 
   // ------------------------------------------------- R275: the texture walk
-  // R322/R324: EIGHT PIXELS PER TEXEL FETCH, up from two.
+  // R322/R324/R389: FOUR PIXELS PER TEXEL FETCH (was eight, was two).
   //
   // A cache line is EIGHT texels across, so at PIXSTEP=8 one line covers 64
   // pixels of span and a 100-pixel span costs ~13 fetches where PIXSTEP=2 cost
@@ -368,7 +368,19 @@ module m2_raster3d #(
   //
   // SET HERE, NOT ON THE MODULE'S DEFAULT. R313 changed m2_char_cache's default
   // while the instantiation overrode it, and the change did nothing at all.
-  m2_span_tex #(.PIXSTEP(8)) u_spantex (
+  // R389: EIGHT -> FOUR. Eight was chosen when the texture walk was starving
+  // whole bands, and this file said so at the time: "one texel across eight
+  // pixels is a real approximation, not a subtle one... a quality judgement to
+  // make by eye, not by counter." R387 bought the bandwidth to pay for four --
+  // a cache line is eight texels, so one line covers 64 pixels of span at eight
+  // and 32 at four, roughly doubling fetches from the census 35,355/frame and
+  // misses from 11,038. Set back to 8 if bands stop finishing; 2 if four still
+  // looks coarse and the budget allows it.
+  //
+  // tb_m2_span_tex now runs the SAME value as this instantiation (R389). It
+  // used to prove PIXSTEP 2 while this said 8, which is how R323's
+  // texture-step bug shipped.
+  m2_span_tex #(.PIXSTEP(4)) u_spantex (
     .clk(clk), .rst_n(rst_n),
     .in_valid(sq_qv), .in_ready(sq_rdy), .busy(spantex_busy),
     // m2_span_tex still carries these as 32; the fill and the queue are what
