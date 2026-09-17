@@ -17482,3 +17482,61 @@ hangs, the prefetch itself is, and this has narrowed it to one mechanism.
 PIXSTEP is set back to 8 for that build. Changing texture quality in the same
 build as a hang bisection would make the result unreadable, which is how four
 ddr3 conclusions became unprovable.
+
+
+**R392 -- THE PREFETCH IS WITHDRAWN. THREE BOARD TRIPS, THREE HANGS, AND EVERY
+INSTRUMENT CLEAN.**
+
+s81 (prefetch, no fast path) was confirmed on the board by MD5 --
+`1d9ec3e8e6a2179d910c7f3a2877b65b` matches the built RBF -- and it hangs, with
+3D missing from the middle, exactly as s62 and s71 did.
+
+**SO THE FAST PATH WAS NOT THE FAULT.** The R391 bisection did its job: it
+answered the question, and the answer eliminated the wrong suspect. What remains
+is the prefetch itself.
+
+**EVERYTHING THAT WAS CHECKED, AND CAME BACK CLEAN:**
+
+    deadlock watchdog          4,000,000 cycles   no stall over 52 cycles
+    read-only integrity soak   2,000,000 cycles   0 mismatches, every port
+    capture-depth sweep        rd_lat_sel 1..5    identical to known-good
+    write/read contention      0.233 vs 0.240     within 3% of known-good
+    full suite                 35 PASS
+    timing, s81                m2_sdram appears on ZERO failing paths
+    packing, s81               176229 = 0
+
+The worst path in s81 is `pll_hdmi` at -0.575, which is the framework's video
+PLL; `clk_mem` is -0.268, inside the range this design has always run at, and
+the SDRAM controller is not on any failing path. **It is not timing, not
+packing, not deadlock, not data corruption, and not the fast path.**
+
+**WHAT IS ACTUALLY DIFFERENT, for whoever picks this up.** The prefetch changes
+*when* a port is claimed: `inflight[rr_grant]` is set at SELECT time and the
+transaction then sits in a handoff register for an arbitrary number of cycles
+before it is dispatched. Within `m2_sdram` nothing reads `inflight` except the
+arbiter, so this looks safe and simulates safe. The masters are the untested
+half -- this bench drives eleven simple request/ack loops, and the core drives a
+geometry engine, a coprocessor, a texel walker and an i960 with their own
+handshakes. **The next attempt should instrument a MASTER, not the controller.**
+
+**THE DECISION.** Reverted to the known-good controller. +28.6% measured in
+simulation, 0.420 -> 0.540 words/cyc, and it has never once produced a working
+picture. A bandwidth number that cannot be shipped is worth less than the
+texture quality that can, and there were three other things waiting on it.
+
+**WHAT IS KEPT, AND IT IS THE VALUABLE PART.** Every instrument built while
+chasing this stays, and all of them pass on the known-good controller:
+
+    - the deadlock watchdog soak and the read-only integrity soak
+    - the dedicated-write-port contention test (R388), which scores the
+      known-good controller at 0.240 and the shipped R387 at 0.180
+    - the capture-depth sweep, rd_lat_sel parameterised (R387)
+    - the PIXSTEP sweep with spans that scale with the step (R389)
+
+Four tests that did not exist this morning, three of which were built after
+discovering that the bench proved a configuration the core does not build. **The
+next attempt at this is much cheaper than this one was**, which is the only
+lasting return from it.
+
+PIXSTEP goes to 4 on the known-good controller: the change Ben asked for, on a
+foundation that works.

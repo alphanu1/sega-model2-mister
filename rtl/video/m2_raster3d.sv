@@ -380,14 +380,7 @@ module m2_raster3d #(
   // tb_m2_span_tex now runs the SAME value as this instantiation (R389). It
   // used to prove PIXSTEP 2 while this said 8, which is how R323's
   // texture-step bug shipped.
-  // TEMPORARILY 8 AGAIN, FOR THE R391 BISECTION ONLY. Four is the intended
-  // value and the guard for it is in place (R389). It is parked here so the
-  // next board result answers exactly one question -- does the core still hang
-  // without the fast path -- because a build carrying a hang bisection AND a
-  // texture-quality change produces a result nobody can read. That is how four
-  // ddr3 conclusions became unprovable. Put this back to 4 once the board is
-  // well.
-  m2_span_tex #(.PIXSTEP(8)) u_spantex (
+  m2_span_tex #(.PIXSTEP(4)) u_spantex (
     .clk(clk), .rst_n(rst_n),
     .in_valid(sq_qv), .in_ready(sq_rdy), .busy(spantex_busy),
     // m2_span_tex still carries these as 32; the fill and the queue are what

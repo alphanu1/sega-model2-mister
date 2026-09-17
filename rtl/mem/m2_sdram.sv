@@ -545,22 +545,6 @@ module m2_sdram #(
   logic [1:0]              be_r;
   logic [15:0]             cap_buf [4];
 
-  // ------------------------------------------- the prefetch handoff (R387)
-  // One transaction deep. The front stage fills it, the back stage drains it.
-  // nxt_addr is a REGISTER, not the array: see the prefetch block for why the
-  // ten-way mux must have exactly one reader.
-  logic                    nxt_valid;   // handoff holds a selected transaction
-  logic                    pf_sel;      // front stage is in its mux cycle
-  logic [$clog2(NP)-1:0]   nxt_grant;
-  logic [AW:1]             nxt_addr;
-  logic [15:0]             nxt_din;
-  logic [1:0]              nxt_be;
-  logic [3:0]              nxt_total;
-  logic                    nxt_is_write;
-  // HOW LONG THE DEDICATED WRITE PORT HAS BEEN WAITING. See the prefetch
-  // block: it buys the write a bounded wait without handing it the bus.
-  logic [9:0]              wr_wait;
-
   // ROW STATE IS PER BANK
   //
   // The device holds one open row in each of its four banks, and the first
@@ -689,49 +673,6 @@ module m2_sdram #(
   logic pipe_busy;
   assign pipe_busy = |tag_v;
 
-  // The dedicated write port is ready to go: it drives DQ, so it may not be
-  // issued while read data is still returning on the same wires.
-  wire wr_ready = wr_pend && !wr_inflight && !pipe_busy;
-
-  // THE WRITE PORT IS NOT ONE WRITER. Model2.sv muxes FIVE onto it -- the ROM
-  // loader, the geometry SDRAM writes, the TGP buffer writes and two more --
-  // so wr_pend is asserted constantly while the scene is being built, not just
-  // during download. R387's first version stopped ALL read prefetching
-  // whenever wr_pend was set, which starved the renderer of the very reads it
-  // needed: on the board, 3D went missing and the core hung.
-  //
-  // wr_ready needs !pipe_busy, and reads keep the pipeline busy, so the write
-  // cannot simply outrank them either -- that is a livelock the other way.
-  // What works is a BOUNDED wait: reads prefetch freely, and only once the
-  // write has been held off this long does the front stage stand down so the
-  // pipeline can drain and the write go in. The old FSM got this for free from
-  // its three idle cycles per transaction; pipelining removed them, so the
-  // fairness it was relying on has to be made explicit.
-  // THE THRESHOLD IS HIGH ON PURPOSE. Reads are the renderer's critical path
-  // and writes are not, so the write may not simply take its turn: MEASURED at
-  // one write per 32 cycles against saturated reads, a 31-cycle threshold gave
-  // writes 752 grants and cost reads 17% of their bandwidth. The controller
-  // that ran correctly on the board let reads dominate -- 94 writes, worst
-  // write wait 736 cycles -- so that, not fairness, is the behaviour to match.
-  // 511 keeps read priority and still bounds the write, which the old FSM
-  // never did at all.
-  wire wr_starved = wr_pend && !wr_inflight && (wr_wait == 10'd511);
-
-  // The prefetched transaction may be taken. Refresh outranks it -- a refresh
-  // needs every bank precharged and the pipeline empty, and under continuous
-  // traffic it would otherwise wait forever (the device model caught that; on
-  // hardware it is silent data decay). A prefetched port WRITE waits for the
-  // pipeline for the same DQ reason as wr_ready.
-  wire pf_take  = nxt_valid && !ref_pend && !(nxt_is_write && pipe_busy);
-
-  // THE TEN-WAY MUX, NAMED ONCE. Both readers -- the prefetch register and
-  // the S_IDLE bypass -- use these wires and never index the arrays
-  // themselves, so the synthesiser cannot build a second copy of the mux that
-  // the S_SEL split was added to remove.
-  wire [AW:1] pf_addr = addr_p[nxt_grant];
-  wire [15:0] pf_din  = din_p[nxt_grant];
-  wire [1:0]  pf_be   = be_p[nxt_grant];
-
   // A port is "granted" for telemetry while its transfer is in flight, not
   // merely on the cycle it was selected. Bandwidth is a question about
   // occupancy, and counting selection edges would report a fraction of it.
@@ -782,9 +723,6 @@ module m2_sdram #(
       rd_total <= 4'd1; rd_issued <= '0; rd_captured <= '0;
       is_write <= 1'b0; xfer_addr <= '0; din_r <= '0; be_r <= '0;
       wait_cnt <= '0; dq_r <= '0;
-      nxt_valid <= 1'b0; pf_sel <= 1'b0; nxt_grant <= '0; nxt_addr <= '0;
-      nxt_din <= '0; nxt_be <= '0; nxt_total <= 4'd1; nxt_is_write <= 1'b0;
-      wr_wait <= '0;
     end else begin
       cmd      <= C_NOP;
       sd_dq_oe <= 1'b0;
@@ -843,10 +781,6 @@ module m2_sdram #(
         for (int b = 0; b < 4; b++)
           if (rd_bank_cnt[b] != 0) rd_bank_cnt[b] <= rd_bank_cnt[b] - 1'b1;
 
-        // Saturating: it only has to say "long enough", not how long.
-        if (!wr_pend || wr_inflight)  wr_wait <= '0;
-        else if (wr_wait != 10'd511)  wr_wait <= wr_wait + 1'b1;
-
         // Read capture, driven entirely by the tag that travelled with the CAS.
         tag_v    <= {1'b0, tag_v[RD_LAT-1:1]};
         tag_p    <= {PW'(0), tag_p[RD_LAT-1:1]};
@@ -879,45 +813,6 @@ module m2_sdram #(
           end
         end
 
-        // ------------------------------------------------- PREFETCH (R387)
-        // THE FRONT OF A TWO-STAGE PIPELINE, AND IT RUNS CONCURRENTLY WITH
-        // THE BACK. Arbitration used to sit in front of every transaction as
-        // S_IDLE -> S_SEL -> S_DISPATCH: three cycles that issue no command
-        // and move no data. On a four-word row hit that is 3 of 7 cycles; on a
-        // conflict miss, 3 of 13. Doing them here, while the back stage is
-        // still bursting the PREVIOUS transaction, hides all three.
-        //
-        // THE TEN-WAY MUX IS NOT DUPLICATED, AND THAT IS THE WHOLE
-        // CONSTRAINT. addr_p[] is read in exactly one place -- the pf_sel
-        // cycle below -- because S_SEL's comment records that every one of the
-        // six worst setup paths in the design ran between two muxes inside
-        // this module, and that splitting the mux into a cycle of its own is
-        // what fixed them. A second reader of addr_p[] puts that path back.
-        // The back stage is handed a settled register and never the array.
-        //
-        // The DEDICATED write port is deliberately not prefetched: wr_addr_p
-        // is a plain register, not a mux, so selecting it in S_IDLE costs
-        // nothing and the download path is left exactly as it was.
-        if (!nxt_valid && !pf_sel && !ref_pend && !wr_starved && rr_valid) begin
-          // The grant index alone, as S_IDLE did it. Reserving the port here
-          // rather than at issue is what lets the back stage consume without
-          // re-arbitrating; inflight[] stops it being selected twice.
-          nxt_grant          <= rr_grant;
-          nxt_is_write       <= we_p[rr_grant];
-          nxt_total          <= we_p[rr_grant] ? 4'd1 : blen(rr_grant);
-          inflight[rr_grant] <= 1'b1;
-          rr_next            <= (rr_grant == ($clog2(NP))'(NP-1))
-                                  ? '0 : rr_grant + 1'b1;
-          pf_sel             <= 1'b1;
-        end else if (pf_sel) begin
-          // The mux, alone in a cycle. This is S_SEL, moved.
-          nxt_addr  <= pf_addr;
-          nxt_din   <= pf_din;
-          nxt_be    <= pf_be;
-          nxt_valid <= 1'b1;
-          pf_sel    <= 1'b0;
-        end
-
         case (state)
           S_IDLE: begin
             if (ref_pend && !pipe_busy && !ras_any) begin
@@ -926,68 +821,49 @@ module m2_sdram #(
               bank_open <= '0;
               wait_cnt <= 4'(T_RP - 1);
               state    <= S_PRE_REF;
-            end else if (wr_ready) begin
-              // THE DEDICATED WRITE PORT, ON ITS ORIGINAL PATH. WIDX is
-              // selected here and S_SEL reads wr_addr_p, which is a plain
-              // register and not the ten-way mux -- so this leg carries none
-              // of the timing that the mux split was there to fix, and the
-              // download stream behaves exactly as it did.
-              grant       <= ($clog2(NP+1))'(WIDX);
-              grant_is_wr <= 1'b1;
-              wr_inflight <= 1'b1;
-              is_write    <= 1'b1;
-              rd_total    <= 4'd1;
-              rd_issued   <= '0;
-              rd_captured <= '0;
-              state       <= S_SEL;
-            end else if (pf_take) begin
-              // THE HANDOFF: already arbitrated, already muxed. S_IDLE's
-              // priority encoder and S_SEL's mux were run by the front stage
-              // behind the previous burst, so this cycle only moves settled
-              // registers. Refresh still outranks it -- pf_take carries the
-              // !ref_pend that used to sit in this condition, and without it
-              // the refresh waits forever under continuous traffic.
-              grant       <= ($clog2(NP+1))'(nxt_grant);
-              grant_is_wr <= 1'b0;
-              is_write    <= nxt_is_write;
-              rd_total    <= nxt_total;
-              xfer_addr   <= nxt_addr;
-              din_r       <= nxt_din;
-              be_r        <= nxt_be;
-              rd_issued   <= '0;
-              rd_captured <= '0;
-              nxt_valid   <= 1'b0;
-              // S_DISPATCH still sees a SETTLED xfer_addr for its row
-              // comparator. That is the invariant S_SEL existed to protect and
-              // it is preserved: the mux ran a cycle ago, in the front stage.
-              state       <= S_DISPATCH;
-            end else if (pf_sel && !ref_pend && !(nxt_is_write && pipe_busy)) begin
-              // THE IDLE BYPASS, AND IT EXISTS TO PAY A MEASURED DEBT.
-              // Pipelining costs a cycle when there is nothing to hide it
-              // behind: with one master running alone the front stage cannot
-              // get ahead, so grant -> mux -> handoff -> dispatch is one cycle
-              // longer than the S_IDLE -> S_SEL -> S_DISPATCH it replaced.
-              // MEASURED, tb_m2_sdram, p0 alone: 0.301 -> 0.281 words/cyc
-              // sequential, 0.212 -> 0.202 random. That is the i960's own port
-              // when nothing else is asking, so it is not a corner case.
+            end else if (!ref_pend &&
+                         ((wr_pend && !wr_inflight && !pipe_busy) ||
+                          (rr_valid && !(we_p[rr_grant] && pipe_busy)))) begin
+              // No new transfer once a refresh is due. Refresh needs every
+              // bank precharged and the read pipeline empty, and under
+              // continuous traffic the pipeline is never empty — so without
+              // this the refresh waits forever. The device model caught it
+              // immediately once the drain stall was removed; on hardware it
+              // would have been silent data decay, which is about the worst
+              // failure to debug in the field.
               //
-              // pf_sel means the front stage is doing its mux cycle RIGHT NOW,
-              // and pf_addr is therefore already valid combinationally --
-              // nxt_grant was registered last cycle. So take it directly and
-              // skip the handoff. nxt_valid was set by the front stage a few
-              // lines above; clearing it here wins, because this assignment is
-              // later in the same block.
-              grant       <= ($clog2(NP+1))'(nxt_grant);
-              grant_is_wr <= 1'b0;
-              is_write    <= nxt_is_write;
-              rd_total    <= nxt_total;
-              xfer_addr   <= pf_addr;
-              din_r       <= pf_din;
-              be_r        <= pf_be;
+              // The cost is a bubble of roughly a drain plus tRP plus tRC once
+              // every T_REFI cycles, which is a couple of percent.
+              // A write drives DQ, so it may not be issued while read data is
+              // still returning on the same wires. Reads have no such
+              // restriction, which is what lets them overlap.
+              // THE ADDRESS MUX LEAVES THIS CYCLE. See S_SEL below: this
+              // cycle now settles only the GRANT INDEX, and the ten-way
+              // 25-bit mux that reads addr_p[grant] happens in a cycle of its
+              // own. Everything selected by the grant moves with it.
+              if (wr_pend && !wr_inflight && !pipe_busy) begin
+                grant       <= ($clog2(NP+1))'(WIDX);
+                grant_is_wr <= 1'b1;
+                wr_inflight <= 1'b1;
+                is_write    <= 1'b1;
+                rd_total    <= 4'd1;
+              end else begin
+                grant       <= ($clog2(NP+1))'(rr_grant);
+                grant_is_wr <= 1'b0;
+                is_write    <= we_p[rr_grant];
+                rd_total    <= we_p[rr_grant] ? 4'd1 : blen(rr_grant);
+                // Writes take it too: a port writing is equally in flight and
+                // equally must not be re-selected before it completes.
+                inflight[rr_grant] <= 1'b1;
+                rr_next     <= (rr_grant == ($clog2(NP))'(NP-1))
+                                 ? '0 : rr_grant + 1'b1;
+              end
               rd_issued   <= '0;
               rd_captured <= '0;
-              nxt_valid   <= 1'b0;
-              state       <= S_DISPATCH;
+              // A dedicated dispatch cycle keeps the port mux and the row
+              // comparator out of the command-output timing cone. Requesters
+              // wait for ack, so this costs latency, not semantics.
+              state <= S_SEL;
             end
           end
 
@@ -1015,14 +891,17 @@ module m2_sdram #(
           // loop, not memory. Trading a few percent of a ceiling we do not
           // approach for a timing violation on the clock everything depends on
           // is the right way round; the reverse is not.
-          // REACHED ONLY BY THE DEDICATED WRITE PORT NOW. The port array's
-          // ten-way mux moved to the prefetch stage; what is left here reads
-          // three plain registers, so this path holds no mux at all.
           S_SEL: begin
-            xfer_addr <= wr_addr_p;
-            din_r     <= wr_din_p;
-            be_r      <= wr_be_p;
-            state     <= S_DISPATCH;
+            if (grant_is_wr) begin
+              xfer_addr <= wr_addr_p;
+              din_r     <= wr_din_p;
+              be_r      <= wr_be_p;
+            end else begin
+              xfer_addr <= addr_p[grant[$clog2(NP)-1:0]];
+              din_r     <= din_p[grant[$clog2(NP)-1:0]];
+              be_r      <= be_p[grant[$clog2(NP)-1:0]];
+            end
+            state <= S_DISPATCH;
           end
 
           S_DISPATCH: begin
@@ -1051,29 +930,14 @@ module m2_sdram #(
             // Precharge only the bank being reused: A10 low with the bank
             // address, not the precharge-all the first version used. tRAS is
             // owed from the ACTIVATE that opened this bank's row.
-            // rd_bank_cnt IS REACHED NOW, AND IT WAS NOT BEFORE R387. This
-            // comment used to say "defensive and, at this FSM's spacing, not
-            // currently reachable", because the earliest a precharge could
-            // follow that bank's last CAS was CAS -> S_IDLE -> S_DISPATCH ->
-            // S_MISS. It was kept because "any future shortening of the
-            // dispatch path would start truncating read bursts silently".
-            //
-            // R387 IS THAT SHORTENING: S_RD enters S_DISPATCH directly on the
-            // last READ, so a following transaction to the SAME bank on a
-            // different row reaches S_MISS while that bank's data is still in
-            // flight. MEASURED: 24,542 blocked cycles in tb_m2_sdram, against
-            // zero before.
-            //
-            // WHAT IT BUYS IS MARGIN, NOT JEDEC COMPLIANCE, and the difference
-            // is the whole reason to write this down. Delete the rd_bank_cnt
-            // term and the bench stays COMPLETELY GREEN -- 0 fails, 0
-            // violations, and marginally faster -- because the device model
-            // truncates only when a precharge lands INSIDE CL, and without the
-            // guard it lands exactly AT CL. The guard holds it off for
-            // cap_depth instead: CL plus the board round trip that rd_lat_sel
-            // calibrates at boot. So the exposure is hardware-only, the same
-            // class as R377 and R381, and no amount of simulation will show
-            // it. That is precisely why it stays.
+            // rd_bank_cnt is defensive and, at this FSM's spacing, not
+            // currently reachable — deleting it changes no test result. The
+            // reason is structural, not a missing case: the earliest a
+            // precharge can follow that bank's last CAS is CAS -> S_IDLE ->
+            // S_DISPATCH -> S_MISS, which now lands a cycle AFTER the data is
+            // due rather than exactly on it. It is kept because that margin
+            // used to be one state wide, and any future shortening of the
+            // dispatch path would start truncating read bursts silently.
             if (ras_cnt[dsp_bank] == 0 && rd_bank_cnt[dsp_bank] == 0) begin
               cmd                 <= C_PRE;
               sd_ba               <= dsp_bank;
@@ -1157,52 +1021,16 @@ module m2_sdram #(
             tag_w[cap_depth-1]    <= rd_issued[1:0];
             tag_last[cap_depth-1] <= (rd_issued + 1'b1 == rd_total);
             rd_bank_cnt[tbank]    <= cap_depth;
+            // Bursts wrap inside the open row: incrementing the full address
+            // would walk off the end of the row on the last column and read
+            // from a row that was never activated.
+            xfer_addr[COL_BITS:1] <= xfer_addr[COL_BITS:1] + 1'b1;
             rd_issued  <= rd_issued + 1'b1;
             if (rd_issued + 1'b1 == rd_total) begin
-              // R387: STRAIGHT INTO THE NEXT TRANSACTION, NOT BACK TO
-              // ARBITRATION. The row stays open, the data still in flight is
-              // the tag pipeline's problem, and the front stage has already
-              // arbitrated and muxed the next transaction -- so S_IDLE and
-              // S_SEL have nothing left to do and are skipped entirely. This
-              // is where the three hidden cycles are actually cashed in.
-              //
-              // wr_ready is checked so the dedicated write port keeps the
-              // priority it has in S_IDLE; in practice it is false here,
-              // because the burst just issued leaves the pipeline busy.
-              // R391: BACK TO S_IDLE, NOT STRAIGHT INTO S_DISPATCH.
-              //
-              // R387 jumped from here into the next transaction on the last
-              // READ, saving a third cycle and cutting the gap between two
-              // bursts' read tags to ONE -- the documented minimum, with the
-              // file's own note saying "one would have been enough". It also
-              // put the next transaction's S_MISS one cycle closer to the
-              // previous bank's last CAS.
-              //
-              // IT HUNG THE CORE ON HARDWARE, TWICE (s62, s71), and simulation
-              // cannot see why: 4M cycles with a deadlock watchdog shows no
-              // stall over 51 cycles, and a 2M-cycle read-only integrity soak
-              // under full contention returns the written image exactly. No
-              // deadlock, no corruption, a dead board. That is the R377/R381
-              // signature.
-              //
-              // So the fast path goes and the prefetch stays. S_IDLE is back in
-              // the dispatch path, the tag gap is two, and the pipeline still
-              // hides S_SEL: 0.420 -> 0.476 words/cyc, +13.3% of the +28.6%.
-              // If the board is well with this, the fast path is what broke it
-              // and comes back under its own test; if it still hangs, the
-              // prefetch itself is at fault and this narrows it to that.
+              // Straight back to arbitration. The row stays open, and the data
+              // still in flight is the tag pipeline's problem, not this state
+              // machine's — which is the change that removes the drain stall.
               state <= S_IDLE;
-
-            end else begin
-              // Bursts wrap inside the open row: incrementing the full address
-              // would walk off the end of the row on the last column and read
-              // from a row that was never activated.
-              //
-              // The increment is skipped on the LAST read so it cannot fight
-              // the xfer_addr load above -- the incremented value was never
-              // read by anything, and leaving both assignments live would make
-              // the burst address depend on statement order in this block.
-              xfer_addr[COL_BITS:1] <= xfer_addr[COL_BITS:1] + 1'b1;
             end
           end
 
