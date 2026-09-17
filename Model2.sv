@@ -1149,12 +1149,19 @@ m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(781)) u_sdram (
 	// tunable by hand, which is how this value gets checked rather than
 	// believed.
 	.rd_lat_sel(!cal_done          ? cal_sel      :
-	// R399: BACK TO cal_best. CL+4 fixed gave a dead core (s122); CL+2 fixed
-	// "looked good then locked up" (s131) where the SAME RTL on auto ran fine
-	// (s113). The required depth appears to follow PLACEMENT, which changes
-	// every seed -- which is what the sweep is for. Hard-setting is the wrong
-	// shape of fix; the right one is to SEE what it picks, hence a_data above.
-	            (status[7:5] != 0) ? status[7:5]  : cal_best),
+	// CL+2, FIXED. Ben: "CL+2 is right. it has always worked." That is months
+	// of board experience against a one-build inference, and the inference was
+	// wrong: it read s131 (CL+2, locked up) against s113 (auto, ran) as evidence
+	// that the depth follows placement. But s111 and s113 are the SAME RTL on
+	// auto and s111 BLUE-SCREENED -- seed variance alone produces dead and
+	// working builds, so s131's lockup implicates the seed, not the depth.
+	//
+	// CL+4 by contrast is disproven outright: s122 was completely dead and
+	// forcing CL+2 through the OSD on that same build revived it.
+	//
+	// cal_mask is still reported (R399) so the sweep's own view is visible, but
+	// it no longer chooses.
+	            (status[7:5] != 0) ? status[7:5]  : 3'd2),
 	.sd_cke(SDRAM_CKE), .sd_cs_n(SDRAM_nCS), .sd_ras_n(SDRAM_nRAS),
 	.sd_cas_n(SDRAM_nCAS), .sd_we_n(SDRAM_nWE), .sd_ba(SDRAM_BA),
 	.sd_a(SDRAM_A), .sd_dqm({SDRAM_DQMH, SDRAM_DQML}),
