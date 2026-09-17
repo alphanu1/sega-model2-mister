@@ -1,8 +1,18 @@
 # Handoff
 
-## THE SEED LOTTERY IS FIXED (R385). CHECK THIS BEFORE FLASHING ANYTHING:
+## CHECK THIS BEFORE FLASHING ANYTHING:
 
     grep -c 176229 <build>/fit.log     ->  0 = usable, non-zero = DO NOT FLASH
+
+**IT MUST BE `fit.log`.** Run against `output_files/Model2.fit.smsg` the same
+grep returns **0 for a build with 50 failures** -- that file is filtered. R387
+hit this. `fit.log` sits in the seed directory root, not in `output_files/`.
+
+**AND THE LOTTERY IS REDUCED, NOT FIXED (amended by R387).** R385 said "three
+builds in three pack". Three of three is consistent with a fitter that fails one
+in five, and R387's sweep found s63 with 50 `dq_r[*]`/`SDRAM_DQ[*]` conflicts --
+the R385 signature, with R385's options still ON. Roughly one in three failing
+became roughly one in five. **Always sweep, always check, never assume.**
 
 Builds were failing roughly two in three, and every board result for two days was
 taken without knowing which kind you had. The cause: Automatic Periphery Placement
@@ -28,7 +38,45 @@ screens on different seeds and are now UNPROVEN.** R377 and R368 stand -- their
 evidence was arithmetic, not appearance.
 
 
-**Updated:** 2026-09-14 evening. Study entries R176-R344.
+**Updated:** 2026-09-17. Study entries R176-R387.
+
+## R387 -- SDRAM ARBITRATION PIPELINED. +28.6% BUS THROUGHPUT, NOT YET ON BOARD.
+
+Branch `speed`. The controller spent three cycles in front of every transaction
+issuing no command and moving no data. They now run beside the previous burst.
+
+    aggregate         0.420 -> 0.540 words/cyc   (84.0 -> 108.0 MB/s)
+    cycles/xact        14.72 -> 13.13
+    p0 (i960) wait   182,971 -> 142,091          -22.3%
+    checks           106,898 -> 119,456   0 fails, 0 violations, 0 tag faults
+
+    seed   176229   ALM                     slack
+    61       0      41,375 / 41,910 (99%)  -0.665   usable
+    62       0      41,417 / 41,910 (99%)  -0.139   usable, BEST SLACK ON RECORD
+    63      50      41,362                 -0.684   DO NOT FLASH
+
+**`build/seeds/s62` is the one to flash.** +100 ALM, M10K unchanged 553/553.
+
+**The study's proposed fix was impossible and the entry says so.** Overlapping
+precharge/activate with the burst needs a free command slot; the mode register
+programs burst length 1, so there is none. BL=4 would create one at the price of
+moving the capture window -- R377/R381 territory. Not taken.
+
+**WHAT SIMULATION CANNOT TELL YOU HERE.** `S_MISS`'s `rd_bank_cnt` guard is now
+reached 24,542 times (zero before). Deleting it leaves the bench green AND
+faster, because the device model flags truncation only inside CL and without the
+guard the precharge lands exactly at CL. What it protects is the board round
+trip `rd_lat_sel` calibrates. So a green `tb_m2_sdram` covers reservation,
+handoff, DQ conflict and refresh -- and **none** of the capture-timing margin.
+**On the board, look at textures first: a truncated burst shows there first.**
+
+Next in this area: bank overlapping is still available and still unbuilt, with
+BL=4 as the way in. The TGP/copro clock boost Ben asked for has not been started.
+
+**Process note:** mutation edits to `m2_sdram.sv` raced three fits reading the
+same symlinked sources. Those builds happened to be clean -- `rd_bank_cnt` draws
+no "assigned but never read" warning in any of the three netlists, which proves
+the guard was compiled in -- but do not edit RTL while a sweep is running.
 
 ## STABLE HEAD, CONFIRMED ON THE BOARD
 
