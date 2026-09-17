@@ -29,6 +29,7 @@
 #include "Vm2_sdram_harness.h"
 #include "verilated.h"
 #include <cstdio>
+#include <cstdlib>
 #include <cstdint>
 #include <map>
 #include <random>
@@ -534,6 +535,119 @@ int main(int argc, char** argv) {
       h.fails++;
     }
     h.checks += 3;
+  }
+
+  // READ-ONLY INTEGRITY SOAK. NO WRITES, SO NO RACES, SO NO EXCUSES.
+  //
+  // The mixed soak below cannot attribute a data failure: two masters racing
+  // on one address makes the expected value undecidable, and it scored
+  // failures on the KNOWN-GOOD controller too. This one fills memory first
+  // through the single dedicated write port, sequentially, then never writes
+  // again. Every port then reads that fixed image under full contention. A
+  // mismatch here is the controller returning the wrong word, full stop --
+  // which is what would make the i960 execute garbage and wedge the core.
+  printf("test: read-only integrity soak under full contention\n");
+  {
+    const uint32_t BASE = 0x200000, WORDS = 4096;
+    for (uint32_t i = 0; i < WORDS; i++) {
+      h.issueWrite(BASE + i * 2, (uint16_t)(0xA000 ^ (i * 2654435761u)));
+      while (h.wr_busy) h.step();
+    }
+    h.drain();
+    long fails_before = h.fails;
+
+    long soak = 2000000;
+    if (const char* e = getenv("RSOAK_CYCLES")) soak = atol(e);
+    long t0 = h.cyc;
+    while (h.cyc - t0 < soak) {
+      for (int p = 0; p < NP; p++) {
+        if (h.port[p].busy) continue;
+        uint32_t w = (rng() % (WORDS - 8)) & ~uint32_t(burst_of(p) - 1);
+        h.issue(p, BASE + w * 2, false, 0);
+      }
+      h.step();
+    }
+    h.drain();
+    long bad = h.fails - fails_before;
+    printf("  %ld cycles, %ld read mismatches\n", soak, bad);
+    if (bad == 0) printf("  every port returned the written image\n");
+    h.checks++;
+  }
+
+  // THE SOAK, WITH A DEADLOCK WATCHDOG.
+  //
+  // WHY IT EXISTS. R387/R388 hang the core on hardware after about five
+  // seconds -- 500,000,000 cycles at 100 MHz -- while every directed test here
+  // runs 425,000 and passes. A race that fires once in 500M is a thousand
+  // times out of this bench's reach, so no amount of staring at the directed
+  // tests was going to find it. This runs the traffic the core actually makes
+  // (all masters, mixed reads and port writes, the dedicated write port) for
+  // as long as it is given, and fails the moment forward progress stops.
+  //
+  // SOAK_CYCLES= overrides the length; the default keeps `make test` quick.
+  printf("test: soak with a deadlock watchdog\n");
+  {
+    long soak = 4000000;
+    if (const char* e = getenv("SOAK_CYCLES")) soak = atol(e);
+    uint32_t cur[NP];
+    for (int p = 0; p < NP; p++) cur[p] = (uint32_t)(p % 4) << 20;
+    long t0 = h.cyc, done_before = 0, last_progress = h.cyc, worst_stall = 0;
+    long stuck_at = -1;
+    for (int p = 0; p < NP; p++) done_before += h.port[p].n_done;
+
+    while (h.cyc - t0 < soak && stuck_at < 0) {
+      for (int p = 0; p < NP; p++) {
+        if (h.port[p].busy) continue;
+        // EACH PORT OWNS ITS OWN ADDRESS RANGE. The first version let every
+        // port read and write a shared range, and two masters racing on one
+        // address makes the shadow's expected value undecidable -- it scored
+        // 4,914 failures on the KNOWN-GOOD controller as well as 6,619 on the
+        // new one, so it discriminated nothing. Disjoint ranges keep the bus
+        // contention, which is the point, and make a data failure mean
+        // something. Bits 21:18 are the owner; all four banks still get used.
+        // READS ONLY FROM THE PORTS. A port write makes the shadow's expected
+        // value ambiguous for any later read of the same word, and the first
+        // version of this scored failures on the KNOWN-GOOD controller as well
+        // as the new one -- it discriminated nothing. Write traffic still runs,
+        // from the dedicated port below, into a region no port reads. This test
+        // is the WATCHDOG; data integrity is the read-only soak above.
+        bool wr = false;
+        uint32_t a;
+        if ((rng() % 4) == 0) a = ((uint32_t)(rng() % 4) << 22) | ((uint32_t)p << 18)
+                                  | (rng() & 0x3fffe);
+        else                  a = ((uint32_t)(p % 4) << 22) | ((uint32_t)p << 18)
+                                  | (cur[p] & 0x3fffe);
+        a &= ~uint32_t(burst_of(p) - 1);
+        if (a == 0) a = burst_of(p);
+        h.issue(p, a, wr, (uint16_t)rng());
+        cur[p] += burst_of(p);
+      }
+      if (!h.wr_busy && (h.cyc % 64) == 0)
+        h.issueWrite(0xf00000u | ((rng() % 0x8000) << 1), (uint16_t)rng());
+
+      long done_now = 0;
+      for (int p = 0; p < NP; p++) done_now += h.port[p].n_done;
+      if (done_now != done_before) { done_before = done_now; last_progress = h.cyc; }
+      else if (h.cyc - last_progress > worst_stall) worst_stall = h.cyc - last_progress;
+
+      // Nothing completed for 50,000 cycles while every port has a request
+      // outstanding is not slow arbitration, it is a stopped controller.
+      if (h.cyc - last_progress > 50000) stuck_at = h.cyc;
+      h.step();
+    }
+
+    if (stuck_at >= 0) {
+      printf("  FAIL: DEADLOCK -- no transaction completed for %ld cycles (at cycle %ld)\n",
+             h.cyc - last_progress, stuck_at);
+      for (int p = 0; p < NP; p++)
+        printf("        p%-2d busy=%d done=%ld\n", p, h.port[p].busy ? 1 : 0, h.port[p].n_done);
+      printf("        wr_busy=%d\n", h.wr_busy ? 1 : 0);
+      h.fails++;
+    } else {
+      h.drain();
+      printf("  %ld cycles, no stall longer than %ld\n", soak, worst_stall);
+    }
+    h.checks++;
   }
 
   // ------------------------------------------------------------- telemetry

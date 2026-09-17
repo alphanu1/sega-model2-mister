@@ -1169,21 +1169,30 @@ module m2_sdram #(
               // wr_ready is checked so the dedicated write port keeps the
               // priority it has in S_IDLE; in practice it is false here,
               // because the burst just issued leaves the pipeline busy.
-              if (pf_take && !wr_ready && !wr_starved) begin
-                grant       <= ($clog2(NP+1))'(nxt_grant);
-                grant_is_wr <= 1'b0;
-                is_write    <= nxt_is_write;
-                rd_total    <= nxt_total;
-                xfer_addr   <= nxt_addr;
-                din_r       <= nxt_din;
-                be_r        <= nxt_be;
-                rd_issued   <= '0;
-                rd_captured <= '0;
-                nxt_valid   <= 1'b0;
-                state       <= S_DISPATCH;
-              end else begin
-                state <= S_IDLE;
-              end
+              // R391: BACK TO S_IDLE, NOT STRAIGHT INTO S_DISPATCH.
+              //
+              // R387 jumped from here into the next transaction on the last
+              // READ, saving a third cycle and cutting the gap between two
+              // bursts' read tags to ONE -- the documented minimum, with the
+              // file's own note saying "one would have been enough". It also
+              // put the next transaction's S_MISS one cycle closer to the
+              // previous bank's last CAS.
+              //
+              // IT HUNG THE CORE ON HARDWARE, TWICE (s62, s71), and simulation
+              // cannot see why: 4M cycles with a deadlock watchdog shows no
+              // stall over 51 cycles, and a 2M-cycle read-only integrity soak
+              // under full contention returns the written image exactly. No
+              // deadlock, no corruption, a dead board. That is the R377/R381
+              // signature.
+              //
+              // So the fast path goes and the prefetch stays. S_IDLE is back in
+              // the dispatch path, the tag gap is two, and the pipeline still
+              // hides S_SEL: 0.420 -> 0.476 words/cyc, +13.3% of the +28.6%.
+              // If the board is well with this, the fast path is what broke it
+              // and comes back under its own test; if it still hangs, the
+              // prefetch itself is at fault and this narrows it to that.
+              state <= S_IDLE;
+
             end else begin
               // Bursts wrap inside the open row: incrementing the full address
               // would walk off the end of the row on the last column and read

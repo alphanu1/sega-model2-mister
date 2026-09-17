@@ -17421,3 +17421,64 @@ back to 2 if it looks wrong -- this is a quality judgement to make by eye, not
 by counter."* The cost is bandwidth: a cache line is eight texels, so one line
 covers 64 pixels of span at 8 and 32 at 4, roughly doubling fetches from the
 census 35,355/frame and misses from 11,038. That is what R387's +28.6% was for.
+
+
+**R391 -- THE FAST PATH HUNG THE BOARD TWICE AND SIMULATION CANNOT SEE IT.
+PREFETCH STAYS, FAST PATH GOES.**
+
+s71 flashed: best slack this design has produced (-0.038), packs clean, and the
+core **rendered for about five seconds and stopped.** The debug stream ran the
+full 240 s, so the FPGA is alive and clocked; the game is not.
+
+    tgp      0000:90526     copro PC is 0 in EVERY sample
+    frames   303            of an expected ~14,400
+    SDRAM    bus busy 0.0%  and nobody waiting for it
+    1/z      688 samples, 0 nonzero
+
+Bus idle AND no master waiting is not a stalled controller -- a stalled
+controller has queues. The masters themselves stopped, which is what an i960
+executing corrupted code looks like. R388's write-starvation fix was real and
+measured and **did not fix this**; s62 and s71 hang the same way.
+
+**WHAT WAS BUILT TO FIND IT, AND WHAT IT FOUND.** The directed tests run 425,000
+cycles; the board survives ~500,000,000 before it dies. A race at that rate is a
+thousand times out of reach, so two soaks were added:
+
+    deadlock watchdog, 4,000,000 cycles     no stall longer than 51 cycles
+    read-only integrity, 2,000,000 cycles   0 mismatches, every port
+
+**No deadlock. No corruption. A dead board.** That is the R377/R381 signature
+exactly: capture timing, invisible to a device model that has no board round
+trip in it.
+
+**AND THE FIRST TWO SOAKS WERE WORTHLESS, WHICH IS WORTH RECORDING.** Letting
+every port read and write a shared range makes the shadow's expected value
+undecidable when two masters race one address -- it scored **4,914 failures on
+the KNOWN-GOOD controller** against 6,619 on the new one, discriminating
+nothing. Partitioning the ranges took it to 241 vs 411: still nothing. Only
+removing port writes entirely, so the sole writer is the dedicated port writing
+where no port reads, made a failure mean something. **A test that fails on
+known-good code is not a test.** That is the third time this session -- the
+capture-depth sweep (R387), the write/read overlap (R388) and the PIXSTEP sweep
+(R389) had the same defect.
+
+**THE CHANGE.** R387's `S_RD` fast path is withdrawn; the prefetch stays.
+
+    variant                        aggregate   reads under write load   board
+    pre-R387 (known good)            0.420           0.240              works
+    R387/R388 as flashed             0.540           0.234              HANGS
+    prefetch only, no fast path      0.476           0.233              to test
+    prefetch only + precharge margin 0.476           0.207              rejected
+
+The margin variant widened the precharge guard from the calibrated `cap_depth`
+to the worst-case `RD_LAT`, which is the defensible thing to do on a path
+simulation cannot check -- but it costs 11% of read bandwidth under write
+traffic and lands below the known-good 0.240, and it is a guess. **Two builds
+have now been put on hardware on the strength of a clean bench. The third will
+be a bisection step, not a third guess.** If the board is well without the fast
+path, the fast path is the fault and returns under its own test; if it still
+hangs, the prefetch itself is, and this has narrowed it to one mechanism.
+
+PIXSTEP is set back to 8 for that build. Changing texture quality in the same
+build as a hang bisection would make the result unreadable, which is how four
+ddr3 conclusions became unprovable.
