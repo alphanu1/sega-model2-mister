@@ -850,8 +850,23 @@ module m2_sdram #(
               end else begin
                 grant       <= ($clog2(NP+1))'(rr_grant);
                 grant_is_wr <= 1'b0;
-                is_write    <= we_p[rr_grant];
-                rd_total    <= we_p[rr_grant] ? 4'd1 : blen(rr_grant);
+                // R394: is_write AND rd_total MOVED TO S_SEL. They were muxes
+                // selected by the COMBINATIONAL rr_grant, sitting in the same
+                // cycle as the rotate-encode-add that produces it, and
+                // report_timing puts them on the worst path in the design:
+                //   rr_grant -> rr_next -> Mux0~3 -> Mux4~0 -> register
+                // the two muxes costing 2.742 ns of a 10 ns period.
+                //
+                // Neither value is needed until S_DISPATCH, and S_SEL already
+                // indexes the port arrays with the REGISTERED grant, so moving
+                // them there costs no cycle and adds no new select.
+                //
+                // THE ARBITER ITSELF IS NOT TOUCHED. R288 shortened this same
+                // path by rewriting the encoder, kept the order identical,
+                // tb_m2_sdram agreed -- and the board did not boot (R290). This
+                // changes WHEN two muxes are evaluated, not which port wins or
+                // in what order, which is the one property that history says
+                // must be left alone.
                 // Writes take it too: a port writing is equally in flight and
                 // equally must not be re-selected before it completes.
                 inflight[rr_grant] <= 1'b1;
@@ -900,6 +915,10 @@ module m2_sdram #(
               xfer_addr <= addr_p[grant[$clog2(NP)-1:0]];
               din_r     <= din_p[grant[$clog2(NP)-1:0]];
               be_r      <= be_p[grant[$clog2(NP)-1:0]];
+              // R394: off the arbitration cycle, onto the registered grant.
+              is_write  <= we_p[grant[$clog2(NP)-1:0]];
+              rd_total  <= we_p[grant[$clog2(NP)-1:0]] ? 4'd1
+                                                       : blen(grant[$clog2(NP)-1:0]);
             end
             state <= S_DISPATCH;
           end

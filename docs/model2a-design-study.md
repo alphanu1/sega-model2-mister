@@ -17582,3 +17582,47 @@ sweep proving one depth (R387), the write/read overlap never overlapping (R388),
 and the PIXSTEP sweep blind at the shipped value (R389). Every one of them made
 a broken thing look fine, and three of them were in the same file as the
 measurement that mattered.
+
+
+**R394 -- THE WORST PATH IN THE DESIGN IS TWO MUXES IN THE ARBITRATION CYCLE.**
+
+Queried from the fitted netlist rather than the summary (the summary has no path
+detail; grepping `sta.rpt` for a module name proves nothing, which is a mistake
+made earlier today):
+
+    rr_grant[0]~3          12.678
+      -> comb~0            13.574
+      -> rr_next~2         14.683
+      -> rr_next[1]        15.520
+      -> Mux0~3            16.822   +1.302 ns
+      -> Mux4~0            18.262   +1.440 ns
+      -> register          18.524   required 18.169  =>  -0.355 VIOLATED
+
+`is_write <= we_p[rr_grant]` and `rd_total <= blen(rr_grant)` are muxes selected
+by the COMBINATIONAL priority-encoder output, evaluated in the same cycle as the
+rotate-encode-add that produces it. **2.742 ns of a 10 ns period.**
+
+Neither value is read until S_DISPATCH, and S_SEL already indexes the port
+arrays with the registered `grant`. Moving them there costs no cycle and adds no
+new select.
+
+**WHAT WAS DELIBERATELY NOT DONE, AND WHY.** The obvious companion change is to
+fold the write test into the arbitration mask --
+`arb_ready = pend & ~inflight & ~(we_p & {NP{pipe_busy}})` -- which would take
+`we_p[rr_grant]` out of the S_IDLE condition too, and would also remove a
+head-of-line block (today a write port winning while `pipe_busy` stalls every
+other port). **It changes which port wins.** R288 shortened this same path by
+rewriting the encoder, kept the order IDENTICAL, `tb_m2_sdram` agreed, and the
+board did not boot -- i960 in one load/store loop for four minutes, display list
+zeros, coprocessor never out of reset (R290). A change that preserves order
+already broke the board once; one that alters it is not a thing to try while
+three hangs are still unexplained.
+
+So this changes only WHEN two muxes are evaluated. Bench is byte-identical to
+known-good on every figure -- 0.420 words/cyc aggregate, 0.240 under write
+contention, 0 mismatches in the 2M-cycle integrity soak, no stall over 52 cycles
+in the 4M-cycle watchdog, 35 suites green -- which is what an order-preserving
+change should look like.
+
+Predicted: -0.355 -> about +2.39 ns, roughly 131 MHz, clearing the 120 MHz that
+120/60/30 needs. To be confirmed by the fitter, not believed.
