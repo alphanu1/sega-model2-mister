@@ -17320,3 +17320,64 @@ The check is only valid against `<build>/fit.log`, which is what HANDOFF names
 and what must be used:
 
     grep -c 176229 <build>/fit.log     ->  0 = usable, non-zero = DO NOT FLASH
+
+
+**R388 -- R387 INVERTED READ AND WRITE PRIORITY, AND THE RENDERER STARVED ON
+THE BOARD.**
+
+s62 flashed, and the picture was better than the census build -- more 3D, the
+mountains and grass drawing -- but with block corruption along the top and left,
+**3D missing from the middle**, and then a hang. Ben: *"its a bit better but has
+locked up"*, *"missing 3d in teh middel aswell"*.
+
+**THE CAUSE WAS ONE TERM IN R387'S PREFETCH GATE:**
+
+    if (!nxt_valid && !pf_sel && !ref_pend
+        && !(wr_pend && !wr_inflight) && rr_valid)    <-- this
+
+`wr_pend` was treated as "the download is running, stand aside". **It is not.**
+Model2.sv line 1010 muxes FIVE writers onto that port:
+
+    wa_own_req = {ldr_wr_req, geo_sd_busy & geo_sd_req, tgp_bufw_req_r,
+                  st_run & st_req, bi_run & bi_req}
+
+-- the ROM loader AND the geometry SDRAM writes AND the TGP buffer writes. Two
+of those run continuously while a frame is being built. So the front stage
+stopped prefetching for most of every frame, and stopping the prefetch drains
+the tag pipeline, which is exactly the condition `wr_ready` waits for. Writes
+therefore got the bus far more often than before, and reads -- the renderer's
+critical path -- got it less.
+
+**MEASURED. One write per 32 cycles against saturated read traffic:**
+
+    version                 reads w/cyc   writes   worst write wait
+    pre-R387 (known good)     0.240          94       736 cyc
+    R387 as flashed (s62)     0.180  -25%   1063        64 cyc
+    R387 + 31-cycle bound     0.199  -17%    752        96 cyc
+    R387 + 511-cycle bound    0.234   -2%    199       576 cyc
+
+A quarter of read bandwidth, handed to writes that did not need it. The old FSM
+was not fair and was not meant to be: reads dominate and the write takes what is
+left, which is the right way round when one feeds the rasteriser and the other
+does not.
+
+**THE FIX IS A BOUNDED WAIT, NOT A PRIORITY.** Reads prefetch freely; only after
+the write has been held off 511 cycles does the front stage stand down so the
+pipeline can drain. That restores read bandwidth to within 2.5% of the known-good
+controller, keeps R387's +28.6% unloaded gain intact, and **bounds write latency
+at 576 cycles where the old FSM bounded it at nothing** -- it happened to peak at
+736 and had no mechanism preventing worse.
+
+**WHY THE BENCH MISSED IT, WHICH IS THE PART WORTH KEEPING.** `tb_m2_sdram` drove
+the dedicated write port only while the read ports were quiet. Read traffic and
+write traffic never overlapped, so a controller that traded one for the other
+could not be distinguished from one that did not. There is now a test that runs
+both at once and fails below 0.225 words/cyc; it scores the flashed build at
+0.180 and fails it.
+
+**And the first version of that test was worthless and said so.** Holding
+`wr_req` at 100% duty starves reads to 0.001 words/cyc on **every** version of
+this controller including the one that has always worked -- it measured the
+testbench, not the design. A test that fails identically on known-good and
+known-bad code is not evidence. The duty cycle had to match what the five
+writers actually produce before the numbers separated.

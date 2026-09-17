@@ -557,6 +557,9 @@ module m2_sdram #(
   logic [1:0]              nxt_be;
   logic [3:0]              nxt_total;
   logic                    nxt_is_write;
+  // HOW LONG THE DEDICATED WRITE PORT HAS BEEN WAITING. See the prefetch
+  // block: it buys the write a bounded wait without handing it the bus.
+  logic [9:0]              wr_wait;
 
   // ROW STATE IS PER BANK
   //
@@ -690,6 +693,30 @@ module m2_sdram #(
   // issued while read data is still returning on the same wires.
   wire wr_ready = wr_pend && !wr_inflight && !pipe_busy;
 
+  // THE WRITE PORT IS NOT ONE WRITER. Model2.sv muxes FIVE onto it -- the ROM
+  // loader, the geometry SDRAM writes, the TGP buffer writes and two more --
+  // so wr_pend is asserted constantly while the scene is being built, not just
+  // during download. R387's first version stopped ALL read prefetching
+  // whenever wr_pend was set, which starved the renderer of the very reads it
+  // needed: on the board, 3D went missing and the core hung.
+  //
+  // wr_ready needs !pipe_busy, and reads keep the pipeline busy, so the write
+  // cannot simply outrank them either -- that is a livelock the other way.
+  // What works is a BOUNDED wait: reads prefetch freely, and only once the
+  // write has been held off this long does the front stage stand down so the
+  // pipeline can drain and the write go in. The old FSM got this for free from
+  // its three idle cycles per transaction; pipelining removed them, so the
+  // fairness it was relying on has to be made explicit.
+  // THE THRESHOLD IS HIGH ON PURPOSE. Reads are the renderer's critical path
+  // and writes are not, so the write may not simply take its turn: MEASURED at
+  // one write per 32 cycles against saturated reads, a 31-cycle threshold gave
+  // writes 752 grants and cost reads 17% of their bandwidth. The controller
+  // that ran correctly on the board let reads dominate -- 94 writes, worst
+  // write wait 736 cycles -- so that, not fairness, is the behaviour to match.
+  // 511 keeps read priority and still bounds the write, which the old FSM
+  // never did at all.
+  wire wr_starved = wr_pend && !wr_inflight && (wr_wait == 10'd511);
+
   // The prefetched transaction may be taken. Refresh outranks it -- a refresh
   // needs every bank precharged and the pipeline empty, and under continuous
   // traffic it would otherwise wait forever (the device model caught that; on
@@ -757,6 +784,7 @@ module m2_sdram #(
       wait_cnt <= '0; dq_r <= '0;
       nxt_valid <= 1'b0; pf_sel <= 1'b0; nxt_grant <= '0; nxt_addr <= '0;
       nxt_din <= '0; nxt_be <= '0; nxt_total <= 4'd1; nxt_is_write <= 1'b0;
+      wr_wait <= '0;
     end else begin
       cmd      <= C_NOP;
       sd_dq_oe <= 1'b0;
@@ -815,6 +843,10 @@ module m2_sdram #(
         for (int b = 0; b < 4; b++)
           if (rd_bank_cnt[b] != 0) rd_bank_cnt[b] <= rd_bank_cnt[b] - 1'b1;
 
+        // Saturating: it only has to say "long enough", not how long.
+        if (!wr_pend || wr_inflight)  wr_wait <= '0;
+        else if (wr_wait != 10'd511)  wr_wait <= wr_wait + 1'b1;
+
         // Read capture, driven entirely by the tag that travelled with the CAS.
         tag_v    <= {1'b0, tag_v[RD_LAT-1:1]};
         tag_p    <= {PW'(0), tag_p[RD_LAT-1:1]};
@@ -866,8 +898,7 @@ module m2_sdram #(
         // The DEDICATED write port is deliberately not prefetched: wr_addr_p
         // is a plain register, not a mux, so selecting it in S_IDLE costs
         // nothing and the download path is left exactly as it was.
-        if (!nxt_valid && !pf_sel && !ref_pend
-            && !(wr_pend && !wr_inflight) && rr_valid) begin
+        if (!nxt_valid && !pf_sel && !ref_pend && !wr_starved && rr_valid) begin
           // The grant index alone, as S_IDLE did it. Reserving the port here
           // rather than at issue is what lets the back stage consume without
           // re-arbitrating; inflight[] stops it being selected twice.
@@ -1138,7 +1169,7 @@ module m2_sdram #(
               // wr_ready is checked so the dedicated write port keeps the
               // priority it has in S_IDLE; in practice it is false here,
               // because the burst just issued leaves the pipeline busy.
-              if (pf_take && !wr_ready) begin
+              if (pf_take && !wr_ready && !wr_starved) begin
                 grant       <= ($clog2(NP+1))'(nxt_grant);
                 grant_is_wr <= 1'b0;
                 is_write    <= nxt_is_write;

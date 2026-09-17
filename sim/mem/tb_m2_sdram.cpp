@@ -472,6 +472,70 @@ int main(int argc, char** argv) {
     h.checks++;
   }
 
+  // THE DEDICATED WRITE PORT IS NOT IDLE DURING RENDERING, AND THIS TEST
+  // EXISTS BECAUSE THE BENCH USED TO ASSUME IT WAS. Model2.sv muxes five
+  // writers onto it -- ROM loader, geometry SDRAM writes, TGP buffer writes
+  // and two more -- so wr_req is asserted throughout a frame, concurrently
+  // with every read master. The bench only ever drove it while the read ports
+  // were quiet, so a controller that stalled reads whenever a write was
+  // pending passed every check here and starved the renderer on the board.
+  // Both directions have to make progress AT THE SAME TIME.
+  printf("test: dedicated write port against saturated read traffic\n");
+  {
+    uint32_t cursor[NP];
+    for (int p = 0; p < NP; p++) cursor[p] = (uint32_t)(p % 4) << 20;
+    uint32_t waddr = 0x30000;
+    long words = 0, writes = 0, t0 = h.cyc, worst_wr_wait = 0, wr_start = h.cyc;
+    const long WINDOW = 60000;
+    const long WR_EVERY = 32;
+    while (h.cyc - t0 < WINDOW) {
+      for (int p = 0; p < NP; p++) {
+        if (h.port[p].busy) continue;
+        h.issue(p, cursor[p], false, 0);
+        words += burst_of(p);
+        cursor[p] += burst_of(p);
+      }
+      // A DUTY CYCLE, NOT A SATURATED PORT. Holding wr_req at 100% starves
+      // reads on EVERY version of this controller including the one that
+      // shipped, so it measures nothing. Geometry and TGP writes arrive in
+      // bursts between reads; one write per WR_EVERY cycles is that shape.
+      if (!h.wr_busy && (h.cyc % WR_EVERY) == 0) {
+        if (writes) {
+          long w = h.cyc - wr_start;
+          if (w > worst_wr_wait) worst_wr_wait = w;
+        }
+        h.issueWrite(waddr, (uint16_t)(waddr & 0xffff));
+        waddr += 2; if (waddr > 0x38000) waddr = 0x30000;
+        writes++; wr_start = h.cyc;
+      }
+      h.step();
+    }
+    h.drain();
+    double wpc = (double)words / (double)(h.cyc - t0);
+    printf("  reads %.3f words/cyc, %ld writes accepted, worst write wait %ld cyc\n",
+           wpc, writes, worst_wr_wait);
+
+    // Reads must not collapse. Unloaded aggregate is ~0.54 words/cyc; a write
+    // stream costs some of that, but an order of magnitude is starvation.
+    // The reference is the controller that ran correctly on the board: 0.240
+    // words/cyc at this duty. Materially below that is the renderer starving.
+    if (wpc < 0.225) {
+      printf("  FAIL: read traffic starved by the write port (%.3f words/cyc)\n", wpc);
+      h.fails++;
+    }
+    // And the writes must actually get in. Reads keep the tag pipeline busy
+    // and the write needs it empty, so absolute read priority livelocks it.
+    if (writes < 40) {
+      printf("  FAIL: write port starved by read traffic (%ld writes)\n", writes);
+      h.fails++;
+    }
+    if (worst_wr_wait > 1200) {
+      printf("  FAIL: write waited %ld cycles\n", worst_wr_wait);
+      h.fails++;
+    }
+    h.checks += 3;
+  }
+
   // ------------------------------------------------------------- telemetry
   printf("test: bandwidth telemetry reports the traffic that actually ran\n");
   {
