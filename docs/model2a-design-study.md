@@ -17674,3 +17674,44 @@ the assembled 64-bit word before the per-port write decode, moving `p_ack` with
 it. One extra cycle of read latency, which requesters absorb because they wait
 for ack -- the same trade S_SEL already makes, in that module's own words:
 "this costs latency, not semantics".
+
+
+**R397 -- THE CAPTURE DEPTH WAS A PER-BOOT VARIABLE UNDER EVERY BOARD RESULT.**
+
+Ben, after s111 blue-screened and s113 from the SAME build ran: *"I think it is
+because of the auto detect cl. can we not hardset it to what we are using?"*
+
+He is right, and it reframes a day of results. `rd_lat_sel` was driven by
+`cal_best`, the centre of the widest passing run found by a boot sweep. **Two
+builds of the same RTL can therefore capture at different depths, and nothing in
+the debug stream says which.** Every hang and blue screen today was read as an
+RTL fault while this was free to move underneath it.
+
+    .rd_lat_sel(!cal_done ? cal_sel : (status[7:5] != 0) ? status[7:5] : cal_best)
+
+`cal_best` is now a fixed `3'd4`. The sweep still runs -- its mask is worth
+reading -- but its result no longer chooses the capture depth.
+
+**CL+4 IS MEASURED, NOT GUESSED**, from two independent places already in the
+tree: `m2_sdram` declares `RD_LAT_DEF = CL + 4` as "what the board wants", and
+the sweep's own no-pass fallback says CL+4 is "what the Kaneko16 core uses on
+THIS board at THIS clock -- a measured value from a working design, not a
+guess". The OSD override (`status[7:5]`, CL+1..CL+5) stays, so the value can be
+checked by hand rather than believed.
+
+**WHAT THIS MAY EXPLAIN, and what it does not.** R385 found Automatic Periphery
+Placement scattering the DQ capture registers so that no single depth suited all
+sixteen bits -- the same failure mode one level down. A calibration that lands on
+a different depth per build produces exactly the pattern seen today: identical
+RTL, one seed dead, one seed fine, simulation clean throughout. It does NOT
+explain the R387 prefetch hangs on its own, because s93 and s102 ran on the same
+auto-detect and were healthy -- but it means those three board trips were run
+with an uncontrolled variable, and their conclusions are weaker than they looked.
+
+**THE INSTRUMENT GAP, still open.** `cal_mask` and `cal_best` are not in the
+debug stream, so there is no way to know what any past build calibrated to. That
+should be added before the next capture-timing question is asked; the answer to
+"which depth did this board pick" is currently unobtainable after the fact.
+
+Board, s113 (R396, m2_sdram +0.266 -- first build where the controller meets
+100 MHz): running, bands completing 16.3 / 46.5 / 53.5 / 97.7 / 100.0%.

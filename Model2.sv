@@ -1120,8 +1120,25 @@ m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(781)) u_sdram (
 	// calibration"; 1..5 force CL+1..CL+5 so a board this cannot calibrate is
 	// still tunable by hand without a rebuild. During the sweep itself the
 	// controller follows cal_sel, because that is what is being measured.
+	// R397: CL+4 FIXED, NOT cal_best. The boot sweep still runs and its mask is
+	// still worth reading, but its RESULT no longer drives the capture depth.
+	//
+	// It was a per-boot variable sitting underneath every board result taken
+	// today: a build that blue-screens and a build that runs can differ only in
+	// which depth the sweep happened to choose, and nothing in the capture says
+	// which one it picked. Three hangs and a blue screen were all read as RTL
+	// faults while this was free to move.
+	//
+	// CL+4 is measured, not guessed. m2_sdram declares RD_LAT_DEF = CL+4 as
+	// "what the board wants", and the sweep's own no-pass fallback says CL+4 is
+	// "what the Kaneko16 core uses on THIS board at THIS clock -- a measured
+	// value from a working design".
+	//
+	// The OSD override stays: a board that needs something else is still
+	// tunable by hand, which is how this value gets checked rather than
+	// believed.
 	.rd_lat_sel(!cal_done          ? cal_sel      :
-	            (status[7:5] != 0) ? status[7:5]  : cal_best),
+	            (status[7:5] != 0) ? status[7:5]  : 3'd4),
 	.sd_cke(SDRAM_CKE), .sd_cs_n(SDRAM_nCS), .sd_ras_n(SDRAM_nRAS),
 	.sd_cas_n(SDRAM_nCAS), .sd_we_n(SDRAM_nWE), .sd_ba(SDRAM_BA),
 	.sd_a(SDRAM_A), .sd_dqm({SDRAM_DQMH, SDRAM_DQML}),
