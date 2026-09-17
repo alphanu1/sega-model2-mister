@@ -220,6 +220,18 @@ lint_i960_memmap:
 	@echo "== lint i960_memmap"
 	$(VERILATOR) --lint-only $(VFLAGS) --top-module i960_memmap $(MAP_RTL)
 
+lint_m2_sdram:
+	@echo "== lint m2_sdram"
+	$(VERILATOR) --lint-only $(VFLAGS) --top-module m2_sdram $(SRCS_m2_sdram)
+
+lint_m2_geo_engine:
+	@echo "== lint m2_geo_engine"
+	$(VERILATOR) --lint-only $(VFLAGS) --top-module m2_geo_engine $(SRCS_m2_geo_engine)
+
+lint_mb86233_core:
+	@echo "== lint mb86233_core"
+	$(VERILATOR) --lint-only $(VFLAGS) --top-module mb86233_core $(SRCS_mb86233_core)
+
 lint_i960_icache:
 	@echo "== lint i960_icache"
 	$(VERILATOR) --lint-only $(VFLAGS) --top-module i960_icache $(ICA_RTL)
@@ -1069,6 +1081,16 @@ SRCS_i960_ldst := $(LST_RTL)
 SRCS_i960_lsu  := $(LSU_RTL)
 SRCS_i960_memmap := $(MAP_RTL)
 SRCS_i960_icache := $(ICA_RTL)
+
+# WHAT THE CLOCK CAN ACTUALLY BE, MEASURED PER MODULE. The 98-107 MHz SDRAM
+# ceiling that parked 120/60/30 comes from R227/R228 and predates the S_SEL mux
+# split, the cap-slot rework that took the read return off the critical cycle,
+# FAST_INPUT_REGISTER on the DQ pins and R385's duplication settings. In the
+# full design m2_sdram now appears on ZERO failing paths at 100 MHz. A parked
+# number is not a law; these three say what is really available.
+SRCS_m2_sdram     := rtl/mem/m2_sdram.sv
+SRCS_m2_geo_engine := rtl/video/m2_geo_engine.sv
+SRCS_mb86233_core := rtl/tgp/mb86233_pkg.sv $(filter-out rtl/tgp/mb86233_pkg.sv,$(wildcard rtl/tgp/mb86233*.sv)) rtl/tgp/fp_add.sv rtl/tgp/fp_mul.sv rtl/tgp/fp_div.sv
 SRCS_i960_muldiv := $(MDV_RTL)
 SRCS_i960_fpmul  := $(FPM_RTL)
 SRCS_i960_fpadd  := $(FPA_RTL)

@@ -196,11 +196,22 @@ if T:
     print('   ', ' '.join('%d:%d/%d%s' % (k, v[0], v[1], '' if (seen >> k) & 1 else '!')
                           for k, v in sorted(ent.items())))
     print('    (! = the list never wrote it, so it reads 0/0 and every polygon using it is black)')
-print(' slice  ready ms(med,max)  bands_done         hold(frames-1 per list)      luma med/min/max  black%  wedges(max)  quads x16 (med,max)')
+# BANDS: THE FRACTION THAT FELL SHORT, NOT THE TOP THREE BUCKETS.
+# most_common(3) covered 32 of 61 frames in one slice and printed "(50, 22)"
+# first, which reads as healthy. The 29 frames it did not show were the whole
+# question. A band count is only interesting when it is BELOW the full 48, so
+# report that directly: how many frames completed every band, and the worst.
+print(' slice  ready ms(med,max)  bands: %full  med  min   hold(frames-1 per list)      luma med/min/max  black%  wedges(max)  quads x16 (med,max)')
 for i in range(0,n,k):
     sl=H[i:i+k]
     if len(sl)<2: continue
     rc=sorted(((a>>16)&0xffff)*16/50000 for a,_ in sl); bd=collections.Counter((a>>8)&0xff for a,_ in sl); hd=collections.Counter(a&0xff for a,_ in sl)
     lm=sorted((d>>24)&0xff for _,d in sl); lz=max((d>>16)&0xff for _,d in sl); gd=max((d>>4)&0x7f for _,d in sl)   # R249: mean luminance, black-polygon %, wedge count
     q=sorted((d&0xff)*16 for _,d in sl)
-    print(f'{i:6d}  {rc[len(rc)//2]:6.2f} {rc[-1]:6.2f}   {bd.most_common(3)}   {hd.most_common(4)}   {lm[len(lm)//2]:3d} {lm[0]:3d} {lm[-1]:3d} {lz:3d}   {gd:4d}   {q[len(q)//2]:5d} {q[-1]:5d}')
+    bvals = sorted(bd.elements())
+    nfull = sum(v for k, v in bd.items() if k >= 48)
+    ntot  = max(1, sum(bd.values()))
+    pfull = 100.0 * nfull / ntot
+    bmed  = bvals[len(bvals)//2] if bvals else 0
+    bmin  = bvals[0] if bvals else 0
+    print(f'{i:6d}  {rc[len(rc)//2]:6.2f} {rc[-1]:6.2f}   {pfull:5.1f}% {bmed:4d} {bmin:4d}   {hd.most_common(4)}   {lm[len(lm)//2]:3d} {lm[0]:3d} {lm[-1]:3d} {lz:3d}   {gd:4d}   {q[len(q)//2]:5d} {q[-1]:5d}')

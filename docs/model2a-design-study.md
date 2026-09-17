@@ -17540,3 +17540,45 @@ lasting return from it.
 
 PIXSTEP goes to 4 on the known-good controller: the change Ben asked for, on a
 foundation that works.
+
+
+**R393 -- "BANDS_DONE ALL 48" WAS A DISPLAY ARTEFACT. FEWER THAN HALF THE FRAMES
+COMPLETE.**
+
+The census recorded `bands_done all 48`. It is wrong, and so was every reading
+built on it -- including this session's conclusion that the renderer's problem
+was bus throughput rather than list latency.
+
+`decode_uart.py` printed `bd.most_common(3)`. In one slice that was
+`[(50, 22), (0, 5), (49, 5)]`: **32 of 61 frames**, with the healthy-looking
+bucket first and the other 29 frames never shown. A band count is only
+interesting when it is BELOW 48, which is exactly what most_common hides.
+
+**MEASURED, s93, the same capture the old line called healthy:**
+
+    slice   ready ms (med/max)   frames with ALL 48 bands   median   min
+     122      5.07 / 17.20              44.3%                 32       0
+     183      8.30 / 16.98              42.6%                 30       3
+     244     10.31 / 17.36              86.9%                 50      17
+
+**In attract, 42-44% of frames complete their bands and the median is 32 of
+48.** Ben has reported this from the screen repeatedly -- "3d bands are dropping
+out", "loads of missing 3d" -- and the instrument contradicted him each time.
+The board was right and the tool was wrong.
+
+**THE CHAIN, now that the number is visible.** Geometry waits 47.0% of the frame
+for the SDRAM bus. The list therefore goes ready late -- median 5-10 ms, max
+17.2-17.4 ms against a 16.7 ms frame -- and whatever is left of the frame is all
+the fill gets. At a 10 ms ready the fill has 6.7 ms to paint 48 bands; at 17.2
+it has none. **The fault is list LATENCY, not fill throughput and not texture
+bandwidth**, which wait 9.6%.
+
+The tool now reports the fraction of frames completing every band, plus median
+and minimum. That is the number to watch for the clock work: it is the one that
+tracks what is on the screen.
+
+**This is the fourth instrument defect found today** -- after the capture-depth
+sweep proving one depth (R387), the write/read overlap never overlapping (R388),
+and the PIXSTEP sweep blind at the shipped value (R389). Every one of them made
+a broken thing look fine, and three of them were in the same file as the
+measurement that mattered.
