@@ -22,6 +22,17 @@
 #include <vector>
 
 static Vm2_span_tex *d;
+// THE BENCH MUST RUN THE PIXSTEP THE CORE SHIPS. This file hardcoded STEP = 2
+// and m2_span_tex defaults to 2, while m2_raster3d instantiates PIXSTEP(8) --
+// so every assertion here proved a configuration the core does not build. That
+// is how R323's texture-step bug shipped: `<<< (PIXSTEP == 2 ? 1 : 0)` is
+// correct at 2 and wrong at everything above it, and nothing here ever ran
+// above it. Sweep the parameter or the test confirms a setting.
+#ifndef TB_PIXSTEP
+#define TB_PIXSTEP 2
+#endif
+static const int STEP = TB_PIXSTEP;
+
 static long checks = 0, fails = 0;
 static void ck(const char *what, long got, long want) {
   ++checks;
@@ -78,14 +89,18 @@ int main(int argc, char **argv) {
 
   // 2. A TEXTURED SPAN: one GROUP of PIXSTEP pixels per fetch, stepping.
   //
-  // PIXSTEP is 2 (R279): a fetch and a handshake per pixel is four cycles a
+  // PIXSTEP comes from TB_PIXSTEP so this runs at the value the core builds.
+  // A fetch and a handshake per pixel is four cycles a
   // pixel and the bands are beam-paced, so one texel covers a pair. The last
   // group of a span is clipped to its end.
   {
     got.clear();
-    // AN ODD NUMBER OF PIXELS, so the last group is CLIPPED to one. With an
-    // even span the clip never fires and a mutation that removed it passed.
-    const int X0 = 10, X1 = 16;
+    // THE SPAN SCALES WITH THE STEP: three full groups plus one pixel. At a
+    // fixed 7-pixel span, PIXSTEP 8 produced a SINGLE group, u never stepped,
+    // and R323's texture-step bug was invisible at exactly the value the core
+    // ships. The trailing +1 keeps the last group CLIPPED to one pixel, which
+    // an earlier mutation of the clip needed to be caught.
+    const int X0 = 10, X1 = 10 + 3 * STEP;
     // ONE TEXEL IS 4 * 65536 IN THIS FORMAT -- quarter-texels with sixteen
     // fractional bits. The first version of this test stepped by 1<<10, which
     // is 1/256th of a texel a pixel: every pixel fetched the SAME texel, and a
@@ -100,7 +115,6 @@ int main(int argc, char **argv) {
     d->in_tex = 0x000001; d->in_tex_en = 1;        // bit 0 = textured
     tick();                                        // accepted
     d->in_valid = 0;
-    const int STEP = 2;
     const int groups = ((X1 - X0) / STEP) + 1;
     for (int i = 0; i < 400 && int(got.size()) < groups; ++i) tick();
     ck("one span per pixel group", long(got.size()), groups);
@@ -127,7 +141,7 @@ int main(int argc, char **argv) {
   // third is the one that matters most: on an OPAQUE polygon 0xF is a
   // legitimate full-brightness texel and must still paint.
   {
-    const int X0 = 10, X1 = 16, STEP = 2;
+    const int X0 = 10, X1 = 10 + 3 * STEP;
     const int groups = ((X1 - X0) / STEP) + 1;
     const int32_t TEXEL = 4 << 16;
     const int32_t U0 = 4 * TEXEL, V0 = 8 * TEXEL;
@@ -183,20 +197,19 @@ int main(int argc, char **argv) {
   // 3. THE CONSUMER STALLS. Nothing may be lost or repeated.
   {
     got.clear();
-    const int X0 = 0, X1 = 5;
+    const int X0 = 0, X1 = 3 * STEP;
     d->in_valid = 1; d->in_y = 9; d->in_x0 = X0; d->in_x1 = X1;
     d->in_col = 0x808080;
     d->in_u = 0; d->in_v = 0; d->in_dudx = 0x400; d->in_dvdx = 0;   // 4 texels a pixel, 8.8
     d->in_tex = 0x000001; d->in_tex_en = 1;
     tick();
     d->in_valid = 0;
-    const int STEP2 = 2;
-    const int grp2 = ((X1 - X0) / STEP2) + 1;
+    const int grp2 = ((X1 - X0) / STEP) + 1;
     for (int i = 0; i < 800 && int(got.size()) < grp2; ++i)
       tick((i % 3) != 0);                          // ready only one cycle in three
     ck("stalled: one span per pixel group", long(got.size()), grp2);
     bool ordered = true;
-    for (size_t i = 0; i < got.size(); ++i) if (got[i].x0 != X0 + int(i) * STEP2) ordered = false;
+    for (size_t i = 0; i < got.size(); ++i) if (got[i].x0 != X0 + int(i) * STEP) ordered = false;
     ck("stalled: in order, none repeated", ordered, 1);
   }
 

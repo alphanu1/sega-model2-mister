@@ -792,9 +792,14 @@ test_m2_span_tex: obj_spantex/Vm2_span_tex
 	@echo "== test m2_span_tex (the textured span walk)"
 	@./obj_spantex/Vm2_span_tex
 
+# PIXSTEP= sweeps the group width. The RTL parameter and the bench's own STEP
+# are set from the SAME variable, so they cannot drift apart -- which is the
+# defect this rule used to have.
+PIXSTEP ?= 2
 obj_spantex/Vm2_span_tex: rtl/video/m2_span_tex.sv sim/video/tb_m2_span_tex.cpp
 	$(VERILATOR) --cc --exe --build -j 0 $(VFLAGS) --top-module m2_span_tex \
-	  --Mdir obj_spantex -o Vm2_span_tex -CFLAGS -O2 \
+	  -GPIXSTEP=$(PIXSTEP) --Mdir obj_spantex -o Vm2_span_tex \
+	  -CFLAGS "-O2 -DTB_PIXSTEP=$(PIXSTEP)" \
 	  rtl/video/m2_span_tex.sv sim/video/tb_m2_span_tex.cpp
 
 test_m2_texel: obj_texel/Vm2_texel

@@ -17381,3 +17381,43 @@ this controller including the one that has always worked -- it measured the
 testbench, not the design. A test that fails identically on known-good and
 known-bad code is not evidence. The duty cycle had to match what the five
 writers actually produce before the numbers separated.
+
+
+**R389 -- THE SPAN BENCH PROVED A PIXSTEP THE CORE DOES NOT BUILD.**
+
+Before moving PIXSTEP 8 -> 4 for texture quality, the guard R323 asked for had
+to exist. R323 recorded that its texture-step bug -- `du_r <<< (PIXSTEP == 2 ? 1
+: 0)`, correct at two and wrong above it -- shipped in R322 and that **"neither
+bench could catch it... tb_m2_span_tex has 28 checks and no assertion on u or v
+at all"**.
+
+The diagnosis was half right. The bench *does* assert u and v, through the texel
+each group paints. What it could not do is run the configuration the core
+builds: `m2_span_tex`'s default is `PIXSTEP = 2`, the bench hardcoded `STEP = 2`
+in **three** places, and `m2_raster3d` instantiates `PIXSTEP(8)`. Every
+assertion was true of a module the core never builds.
+
+**Two defects, and the second is the instructive one.** Parameterising the RTL
+and the bench from one make variable was not enough:
+
+    R323's bug restored, 7-pixel span     PIXSTEP 2: pass   4: 1 fail   8: PASS
+
+At PIXSTEP 8 a 7-pixel span is a SINGLE group, so `u` never steps and a wrong
+step cannot be observed -- **blind at exactly the value the core ships.** The
+spans now scale with the step (`X1 = X0 + 3*STEP`, three full groups plus a
+clipped one), giving the same 33 checks at every step:
+
+    clean RTL          1: 0 fails  2: 0  4: 0  8: 0  16: 0
+    R323's bug back    1:    --    2: 0  4: 3  8: 3  16: 3
+
+Passing at 2 is correct -- that is where the old expression was right. **A sweep
+whose span does not scale with the parameter is not a sweep**, and this is the
+second time in one session the same shape of hole has appeared: the SDRAM bench
+also proved one capture depth (R387) and one write/read overlap (R388).
+
+PIXSTEP 4 is therefore safe to build on the RTL's own terms. Whether it looks
+better is a judgement for the screen, as m2_raster3d's own comment says: *"Set
+back to 2 if it looks wrong -- this is a quality judgement to make by eye, not
+by counter."* The cost is bandwidth: a cache line is eight texels, so one line
+covers 64 pixels of span at 8 and 32 at 4, roughly doubling fetches from the
+census 35,355/frame and misses from 11,038. That is what R387's +28.6% was for.
