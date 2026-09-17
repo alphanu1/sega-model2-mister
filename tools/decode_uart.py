@@ -55,8 +55,20 @@ ip=collections.Counter(a for a,_ in C); pc=collections.Counter(d&0xffff for _,d 
 live=sum(v for k,v in ip.items() if k!=0)
 def rng(a,b): return sum(v for k,v in ip.items() if a<=k<b)
 print('C',len(C),'H',len(H),' framewait %.1f%%'%(100*(ip[0x12b0]+ip[0x12b8])/max(1,live)),' mailbox %.1f%%'%(100*(ip[0x1166c]+ip[0x11674])/max(1,live)),' render %.1f%%'%(100*rng(0x16e58,0x17b00)/max(1,live)))
+if cal:
+    from collections import Counter as _C
+    _done = _C(x[0] for x in cal); _mask = _C(x[1] for x in cal); _best = _C(x[2] for x in cal)
+    _m, _b = _mask.most_common(1)[0][0], _best.most_common(1)[0][0]
+    print('SDRAM CAPTURE (R399): cal_done=%s  pass mask=%s (CL+0..CL+5, bit n = CL+n)  chosen=CL+%d'
+          % (dict(_done), format(_m, '06b')[::-1], _b))
+    print('    (a fixed depth was tried and rejected: CL+4 gave a dead core, CL+2 locked up')
+    print('     on a seed where auto ran fine -- the depth appears to follow placement.)')
 print('tgp  :',', '.join(f'{k:04X}:{v}' for k,v in pc.most_common(4)))
-pj=[(d>>16)&0xfff for _,d in C]
+# R399: these twelve bits used to be geo_pj_lost, which read zero in every
+# capture ever taken. They now carry the SDRAM capture calibration, which is the
+# question that was unanswerable after the fact: what depth did this build use?
+cal=[((d>>25)&1, (d>>19)&0x3f, (d>>16)&0x7) for _,d in C]
+pj=[0 for _,d in C]
 print('projections abandoned on timeout (R237): first %d, last %d, max %d' % (pj[0] if pj else 0, pj[-1] if pj else 0, max(pj) if pj else 0))
 # b_addr = {ready_cyc16 (x16), bands_done8, hold8}; b_data = {qs_dropped16, geo_dropped8, quads[11:4]}
 n=len(H); k=max(1,n//5)

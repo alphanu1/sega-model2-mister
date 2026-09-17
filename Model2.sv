@@ -1149,7 +1149,12 @@ m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(781)) u_sdram (
 	// tunable by hand, which is how this value gets checked rather than
 	// believed.
 	.rd_lat_sel(!cal_done          ? cal_sel      :
-	            (status[7:5] != 0) ? status[7:5]  : 3'd2),
+	// R399: BACK TO cal_best. CL+4 fixed gave a dead core (s122); CL+2 fixed
+	// "looked good then locked up" (s131) where the SAME RTL on auto ran fine
+	// (s113). The required depth appears to follow PLACEMENT, which changes
+	// every seed -- which is what the sweep is for. Hard-setting is the wrong
+	// shape of fix; the right one is to SEE what it picks, hence a_data above.
+	            (status[7:5] != 0) ? status[7:5]  : cal_best),
 	.sd_cke(SDRAM_CKE), .sd_cs_n(SDRAM_nCS), .sd_ras_n(SDRAM_nRAS),
 	.sd_cas_n(SDRAM_nCAS), .sd_we_n(SDRAM_nWE), .sd_ba(SDRAM_BA),
 	.sd_a(SDRAM_A), .sd_dqm({SDRAM_DQMH, SDRAM_DQML}),
@@ -4151,8 +4156,15 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// projections abandoned on timeout -- the one path that hands a late x/y
 	// to the NEXT vertex, which is the shape of the board's wedges. Zero at
 	// the desk; the board has to say.
+	// R399: THE CALIBRATION RESULT, WHERE geo_pj_lost USED TO BE.
+	// Nothing in the debug stream ever said what capture depth a build chose,
+	// so "identical RTL, one seed dead, one seed fine" was unanswerable after
+	// the fact -- and three board trips were spent blaming RTL for it. These
+	// twelve bits have read ZERO in every capture taken (R237's projection
+	// timeouts: first 0, last 0, max 0), and this record is emitted ~90,000
+	// times a capture, so the answer is now in every one.
 	.a_data({cpu_trap, cpu_halted, copro_stall, copro_dbg_ctl[31],
-	         geo_pj_lost[11:0], tgp_pc[15:0]}),
+	         2'b00, cal_done, cal_mask[5:0], cal_best[2:0], tgp_pc[15:0]}),
 	// THE i960's OWN INSTRUCTION COUNT, so the first three minutes can be
 	// diagnosed rather than described. Two readings a known time apart give the
 	// rate directly; a machine that is slow for three minutes and then is not
