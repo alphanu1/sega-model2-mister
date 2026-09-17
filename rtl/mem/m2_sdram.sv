@@ -308,7 +308,22 @@ module m2_sdram #(
   // chosen depth. Simulation ties it to 1 and keeps CL+3, so every existing
   // harness measures what it always measured.
   localparam int unsigned RD_LAT     = CL + 5;   // pipeline depth, the maximum
-  localparam int unsigned RD_LAT_DEF = CL + 4;   // what the board wants
+  // R398: CL+2, NOT CL+4. This said "what the board wants" and it was wrong --
+  // a build that hard-set CL+4 on the strength of this line was COMPLETELY DEAD
+  // (copro at PC 0 for every sample, zero frames), and forcing CL+2 through the
+  // OSD on that same build revived it. docs/mister-integration.md had CL+2
+  // recorded for the board all along.
+  //
+  // The CL+4 belief came from a pre-R385 measurement in which CL+2 read the boot
+  // IP back wrong in one bit. R385 then found the periphery placement scattering
+  // the DQ capture registers -- six of sixteen at the pins, ten in fabric -- and
+  // a non-uniform read bus is exactly what makes a shallower depth wrong in one
+  // bit. With the packing fixed, CL+2 is correct.
+  //
+  // Only the reset value: cap_depth follows rd_lat_sel the moment reset lifts.
+  // It is corrected because this line is READ as documentation, and as
+  // documentation it cost a build and a board trip.
+  localparam int unsigned RD_LAT_DEF = CL + 2;   // measured on the board (R398)
 
   // Which stage the tag is injected at, so it reaches slot 0 after that many
   // cycles. Registered off the selector to keep a slow OSD bit out of the
