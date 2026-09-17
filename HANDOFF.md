@@ -38,7 +38,80 @@ screens on different seeds and are now UNPROVEN.** R377 and R368 stand -- their
 evidence was arithmetic, not appearance.
 
 
-**Updated:** 2026-09-17. Study entries R176-R387.
+**Updated:** 2026-09-17 evening. Study entries R176-R393.
+
+## THE NUMBER TO WATCH: % OF FRAMES COMPLETING ALL 48 BANDS
+
+    slice   ready ms (med/max)   frames with ALL 48 bands   median   min
+     122      5.07 / 17.20              44.3%                 32       0
+     183      8.30 / 16.98              42.6%                 30       3
+     244     10.31 / 17.36              86.9%                 50      17
+
+**In attract, fewer than half the frames finish their bands.** The study said
+"bands_done all 48" for months; that was `most_common(3)` printing the healthy
+bucket first and hiding 29 of 61 frames (R393). Ben reported dropped bands from
+the screen repeatedly and the instrument contradicted him each time.
+
+**THE CHAIN.** Geometry waits 47.0% of the frame for the SDRAM bus -> the list
+goes ready late (median 5-10 ms, max 17.2 ms against a 16.7 ms frame) -> the
+fill gets only what is left. At 10 ms it has 6.7 ms for 48 bands; at 17.2, none.
+**It is list LATENCY.** Not fill throughput, not texture bandwidth (texels wait
+9.6%).
+
+## ON THE BOARD NOW: `build/seeds/s93` -- WORKING
+
+Known-good SDRAM controller + PIXSTEP 8->4. Ben: "other than the 3d being all
+black, no lit, which is a known bug, its working". 176229=0, ALM 41,337,
+slack -0.355.
+
+PIXSTEP 4 is affordable and stays: fetches 35,355 -> 55,474 (+57%), but the hit
+rate IMPROVED 68.2% -> 70.0% (consecutive groups share a cache line more often),
+bus busy 56.7% -> 46.2%, texels wait 9.6%.
+
+## THE SDRAM PREFETCH IS REVERTED (R387-R392). DO NOT RE-APPLY WITHOUT READING R392.
+
++28.6% in simulation, three board trips, three hangs, every instrument clean --
+no deadlock in 4M cycles, no corruption in 2M, 35 suites green, zero failing
+timing paths. The untested half is the MASTERS: the bench drives eleven simple
+request/ack loops while the core drives a geometry engine, a coprocessor, a
+texel walker and an i960 with their own handshakes. Instrument a master next.
+
+## THE CLOCK PLAN: 120/60/30, ALL FOUR BLOCKERS MEASURED
+
+Per-module worst path, queried from the fitted netlist (not the summary, which
+has no path detail -- a grep of `sta.rpt` proves nothing):
+
+    module          domain        slack    max freq   needs    gap
+    m2_sdram        clk_mem 100   -0.268    97.4 MHz   120     +23%
+    m2_raster       clk_sys  50   +0.407    51.0 MHz    60     +18%
+    mb86233 copro   clk_sys  50   +2.697    57.8 MHz    60      +4%
+    i960            clk_i960 25   +3.517    27.4 MHz    30    +9.5%
+    m2_geo_engine   clk_sys  50   +4.774    65.7 MHz    60     PASSES
+
+Endpoints, so each retime is targeted:
+  m2_sdram   Mux4~0 -> Mux1~0 (the PORT MUX again), and dq_r[11] -> p_dout[4][11]
+             (the READ RETURN). HANDOFF named both as the unpark condition.
+  m2_raster  m2_span_tex|tex_r[1] -> m2_texel cdata RAM portb address
+  i960       i960_regs|rd1[26] -> wd[15]
+
+**Sound and I/O ride along free.** Both are phase-accumulator clock enables with
+TICK_DEN passed at instantiation in Model2.sv: `TICK_DEN(50)` -> `TICK_DEN(60)`
+keeps the 68000 at exactly 10 MHz and the Z80 at exactly 4 MHz. No CDC, no extra
+domain. i960 goes 25 -> 30 to hold the 2:1 against the copro.
+
+## FOUR INSTRUMENT DEFECTS FOUND TODAY -- ALL MADE A BROKEN THING LOOK FINE
+
+    R387  tb_m2_sdram hardwired rd_lat_sel(3): proved ONE capture depth
+    R388  the write port was only ever driven while the read ports were idle,
+          so a controller trading reads for writes was invisible
+    R389  tb_m2_span_tex hardcoded STEP=2 in three places while the core builds
+          8 -- and even parameterised, a 7-pixel span is ONE group at PIXSTEP 8,
+          so the sweep was blind at the shipped value
+    R393  bands_done printed most_common(3), hiding half the frames
+
+New tests that now exist and pass on the known-good controller: deadlock
+watchdog soak, read-only integrity soak, write/read contention, capture-depth
+sweep, PIXSTEP sweep.
 
 ## R387 -- SDRAM ARBITRATION PIPELINED. +28.6% BUS THROUGHPUT, NOT YET ON BOARD.
 
