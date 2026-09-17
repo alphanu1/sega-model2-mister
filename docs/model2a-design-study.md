@@ -17762,3 +17762,43 @@ being called broken.
 **STILL OPEN:** `cal_mask` and `cal_best` are not in the debug stream. Until they
 are, "what did this build calibrate to" is unanswerable after the fact, and that
 is the question that would have caught this months ago.
+
+
+**R400 -- R396 IS THE CULPRIT. THE READ-RETURN SPLIT IS REVERTED.**
+
+    build   controller config                    board
+    s93     known-good + PIXSTEP4                worked
+    s102    + R394                               worked
+    s111    + R396                               blue screen
+    s113    + R396                               worked
+    s131    + R396 + CL+2 fixed                  locked up
+    s142    + R396 + CL+2 fixed + R399           black screen
+
+Without R396: 2 of 2. With R396: 1 of 4. s142 also had the best timing measured
+all day -- m2_sdram +0.479, m2_raster +0.378, both meeting timing for the first
+time -- and still black, so it is not a timing failure.
+
+**CL+2 WAS BEING BLAMED FOR R396's FAILURES.** The builds that carried the fixed
+depth already carried R396, and the depth was the newer-looking variable so it
+drew the suspicion. CL+2 is correct and stays; it was never the problem.
+
+**WHY THE BENCH DID NOT CATCH IT, AND THIS IS THE FIFTH TIME TODAY.** R396 staged
+the assembled read word for a cycle so the burst-assembly mux and the NP-way
+write decode sat either side of a register. `tb_m2_sdram` scored it identical to
+known-good on every figure -- 0.420 aggregate, 0.234 under write contention, 0
+mismatches in a 2M-cycle integrity soak, no stall over 51 cycles in a 4M-cycle
+watchdog, max latency 163 -> 161, 35 suites green. It changes read ACK TIMING
+relative to data by one cycle, and every requester in this bench is a simple
+request/ack loop that cannot care. The core's requesters are a geometry engine, a
+coprocessor, a texel walker and an i960 with their own handshakes, and one of
+them evidently does care.
+
+**That is the same gap R392 named and nobody closed**: "the untested half is the
+MASTERS". Three changes have now failed on hardware while the controller bench
+was green -- R387's prefetch, R288's arbiter rewrite (R290) and now R396. All
+three were changes to WHEN a port is answered rather than WHAT it is answered
+with, and this bench cannot see that class at all.
+
+**Reverted to the s102 controller**: known-good plus R394, which is the last
+configuration proven to run. R394 stays because s102 ran with it; it bought ~110
+ALM and no Fmax.
