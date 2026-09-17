@@ -17692,12 +17692,11 @@ RTL fault while this was free to move underneath it.
 `cal_best` is now a fixed `3'd4`. The sweep still runs -- its mask is worth
 reading -- but its result no longer chooses the capture depth.
 
-**CL+4 IS MEASURED, NOT GUESSED**, from two independent places already in the
-tree: `m2_sdram` declares `RD_LAT_DEF = CL + 4` as "what the board wants", and
-the sweep's own no-pass fallback says CL+4 is "what the Kaneko16 core uses on
-THIS board at THIS clock -- a measured value from a working design, not a
-guess". The OSD override (`status[7:5]`, CL+1..CL+5) stays, so the value can be
-checked by hand rather than believed.
+**CL+4 WAS WRONG, AND THE BOARD SETTLED IT IN ONE TEST -- SEE R398.** It was
+chosen because two places in this tree recommend it: `RD_LAT_DEF = CL + 4` as
+"what the board wants", and the sweep's no-pass fallback citing Kaneko16. It
+produced a completely dead core. The OSD override (`status[7:5]`, CL+1..CL+5)
+is what found the real value.
 
 **WHAT THIS MAY EXPLAIN, and what it does not.** R385 found Automatic Periphery
 Placement scattering the DQ capture registers so that no single depth suited all
@@ -17715,3 +17714,51 @@ should be added before the next capture-timing question is asked; the answer to
 
 Board, s113 (R396, m2_sdram +0.266 -- first build where the controller meets
 100 MHz): running, bands completing 16.3 / 46.5 / 53.5 / 97.7 / 100.0%.
+
+
+**R398 -- THE BOARD WANTS CL+2, AND THE RULE THAT STOPPED PICKING IT WAS BUILT
+ON PRE-R385 EVIDENCE.**
+
+R397 hard-set CL+4 on the strength of two comments in this tree. s122:
+**completely dead** -- copro at PC 0 for all 90,525 samples, zero bands, zero
+frames, framewait 0.0%. Forcing **CL+2** through the OSD on that same dead build
+brought it straight back to life. Ben: *"CL+2 is the one that works!"*
+
+**TWO THINGS ARE SETTLED BY THAT ONE TEST.**
+
+*The OSD override works.* It had been reported as inert -- "OSD never changes
+anything" -- and that reading was reasonable, because every previous comparison
+was between two pictures that both looked wrong. A dead core coming alive is
+unambiguous in a way that a subtly different picture never is. **The instrument
+was fine; the experiment had no contrast.**
+
+*The board wants CL+2*, which is also what `docs/mister-integration.md` recorded
+for the board all along, against `RD_LAT_DEF`'s CL+4.
+
+**WHY THE PICKER WAS WRONG, AND IT IS THE SAME ROOT AS R385.** The selection rule
+was changed from "lowest passing depth" to "centre of the widest passing run"
+with this justification:
+
+    the sweep saw CL+2 and CL+4 pass and CL+2 was chosen, and CL+2 read the
+    boot IP back wrong in a single bit while the Kaneko16 core runs this same
+    controller at this same clock on this same board at CL+4
+
+**That measurement predates R385.** R385 found Automatic Periphery Placement
+confining the SDRAM I/O registers to a region holding six of the sixteen DQ
+pins, with the other ten captured in fabric -- a NON-UNIFORM read bus, which is
+exactly what makes a shallower depth read correct on most bits and wrong on one.
+With the packing fixed, CL+2 is right, and the centre-of-the-run rule has been
+selecting away from it on every build since.
+
+**HOW MUCH OF TODAY THIS CONTAMINATES.** Every board result today ran with
+`cal_best` free to choose, and nothing in the debug stream records what it chose.
+A build that dies and a build that runs can differ only in that. The R387
+prefetch hangs (s62, s71, s81) are therefore **not safely attributable to the
+prefetch** -- R392 withdrew it on three board trips whose capture depth was
+uncontrolled. That withdrawal stands as a decision, but its evidence is weaker
+than R392 claims, and the prefetch deserves one more trip on a fixed CL+2 before
+being called broken.
+
+**STILL OPEN:** `cal_mask` and `cal_best` are not in the debug stream. Until they
+are, "what did this build calibrate to" is unanswerable after the fact, and that
+is the question that would have caught this months ago.

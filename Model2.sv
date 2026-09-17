@@ -1129,16 +1129,27 @@ m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(781)) u_sdram (
 	// which one it picked. Three hangs and a blue screen were all read as RTL
 	// faults while this was free to move.
 	//
-	// CL+4 is measured, not guessed. m2_sdram declares RD_LAT_DEF = CL+4 as
-	// "what the board wants", and the sweep's own no-pass fallback says CL+4 is
-	// "what the Kaneko16 core uses on THIS board at THIS clock -- a measured
-	// value from a working design".
+	// CL+2, PROVEN ON THE BOARD, AND IT IS NOT WHAT THE COMMENTS SAY.
+	// CL+4 was tried first because two places in this tree recommend it --
+	// RD_LAT_DEF, and the sweep's no-pass fallback citing Kaneko16. It produced
+	// a COMPLETELY DEAD CORE (s122: copro at PC 0 for all 90,525 samples, zero
+	// bands, zero frames). Forcing CL+2 through the OSD on that same dead build
+	// brought it straight back to life.
+	//
+	// THE CL+4 EVIDENCE WAS PRE-R385. The picker was changed from "lowest
+	// passing depth" to "centre of the widest run" because "the sweep saw CL+2
+	// and CL+4 pass and CL+2 was chosen, and CL+2 read the boot IP back wrong in
+	// a single bit". R385 then found Automatic Periphery Placement scattering
+	// the DQ capture registers -- ten of sixteen captured in fabric, a
+	// NON-UNIFORM read bus, which is precisely what makes a shallower depth read
+	// wrong in one bit. With the packing fixed, CL+2 is correct and the centre
+	// rule has been steering away from it ever since.
 	//
 	// The OSD override stays: a board that needs something else is still
 	// tunable by hand, which is how this value gets checked rather than
 	// believed.
 	.rd_lat_sel(!cal_done          ? cal_sel      :
-	            (status[7:5] != 0) ? status[7:5]  : 3'd4),
+	            (status[7:5] != 0) ? status[7:5]  : 3'd2),
 	.sd_cke(SDRAM_CKE), .sd_cs_n(SDRAM_nCS), .sd_ras_n(SDRAM_nRAS),
 	.sd_cas_n(SDRAM_nCAS), .sd_we_n(SDRAM_nWE), .sd_ba(SDRAM_BA),
 	.sd_a(SDRAM_A), .sd_dqm({SDRAM_DQMH, SDRAM_DQML}),
