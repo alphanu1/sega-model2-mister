@@ -64,7 +64,7 @@ module m2_romload_harness #(
 );
 
   // R401 probes, observed by the board telemetry; unused here.
-  logic dbg_refblk_w, dbg_holblk_w;
+  logic dbg_refblk_w, dbg_holblk_w, dbg_wrg_w;
 
   localparam int unsigned NP = 5;
 
@@ -125,7 +125,7 @@ module m2_romload_harness #(
     .p_req(p_req), .p_we('0), .p_addr(p_addr), .p_din('0), .p_be('1),
     .p_dout(p_dout), .p_ack(p_ack),
     .dbg_req(), .dbg_grant(),
-    .dbg_refblk(dbg_refblk_w), .dbg_holblk(dbg_holblk_w)
+    .dbg_refblk(dbg_refblk_w), .dbg_holblk(dbg_holblk_w), .dbg_wr_grant(dbg_wrg_w)
   );
 
   m2_rom_loader #(.SDR_AW(SDR_AW)) u_loader (

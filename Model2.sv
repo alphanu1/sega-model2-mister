@@ -1081,7 +1081,7 @@ wire [NPORTS-1:0] sdr_pend, sdr_infl;
 logic [20:0] bw_busy, bw_cpu, bw_geo, bw_tex, bw_chr;
 logic [20:0] bwl_busy, bwl_cpu, bwl_geo, bwl_tex, bwl_chr;
 // R401: cycles in S_IDLE with work available that was NOT started, split by cause.
-wire         sdr_refblk, sdr_holblk;
+wire         sdr_refblk, sdr_holblk, sdr_wr_grant;
 logic [20:0] bw_refblk, bw_holblk, bwl_refblk, bwl_holblk;
 logic        bw_tog, bw_tog_m, bw_tog_m2, bw_tog_m3;
 always_ff @(posedge clk_sys or negedge mem_rst_n) begin
@@ -1103,7 +1103,7 @@ always_ff @(posedge clk_mem or negedge mem_rst_n) begin
 			bw_busy <= '0; bw_cpu <= '0; bw_geo <= '0; bw_tex <= '0; bw_chr <= '0;
 			bw_refblk <= '0; bw_holblk <= '0;
 		end else begin
-			if (|sdr_infl)                      bw_busy <= bw_busy + 21'd1;
+			if (|sdr_infl || sdr_wr_grant)      bw_busy <= bw_busy + 21'd1;   // R402: the write port counts
 			if (sdr_pend[1]  && !sdr_infl[1])   bw_cpu  <= bw_cpu  + 21'd1;
 			if (sdr_pend[4]  && !sdr_infl[4])   bw_geo  <= bw_geo  + 21'd1;
 			if (sdr_pend[10] && !sdr_infl[10])  bw_tex  <= bw_tex  + 21'd1;
@@ -1179,7 +1179,7 @@ m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(781)) u_sdram (
 	.p_req(f_req), .p_we(f_we), .p_addr(f_addr), .p_din(f_din), .p_be(f_be),
 	.p_dout(f_dout), .p_ack(f_ack),
 	.dbg_req(sdr_pend), .dbg_grant(sdr_infl),
-	.dbg_refblk(sdr_refblk), .dbg_holblk(sdr_holblk)
+	.dbg_refblk(sdr_refblk), .dbg_holblk(sdr_holblk), .dbg_wr_grant(sdr_wr_grant)
 );
 
 assign SDRAM_DQ  = sd_dq_oe ? sd_dq_o : 16'bZ;

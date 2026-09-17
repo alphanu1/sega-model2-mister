@@ -86,7 +86,7 @@ module m2_sdram_harness #(
   output logic [23:0] mon_total
 );
   // R401 probes, observed by the board telemetry; unused here.
-  logic dbg_refblk_w, dbg_holblk_w;
+  logic dbg_refblk_w, dbg_holblk_w, dbg_wrg_w;
 
 
   localparam int unsigned NP    = 11;   // ELEVEN STILL: the core shares port 3 now
@@ -170,7 +170,7 @@ module m2_sdram_harness #(
     .p_req(p_req), .p_we(p_we), .p_addr(p_addr), .p_din(p_din), .p_be(p_be),
     .p_dout(p_dout), .p_ack(p_ack),
     .dbg_req(dbg_req), .dbg_grant(dbg_grant),
-    .dbg_refblk(dbg_refblk_w), .dbg_holblk(dbg_holblk_w)
+    .dbg_refblk(dbg_refblk_w), .dbg_holblk(dbg_holblk_w), .dbg_wr_grant(dbg_wrg_w)
   );
 
   // The same timing numbers, so the checker is checking the clock the

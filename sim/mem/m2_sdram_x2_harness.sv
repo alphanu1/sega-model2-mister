@@ -51,7 +51,7 @@ module m2_sdram_x2_harness #(
   output int unsigned writes_served
 );
   // R401 probes, observed by the board telemetry; unused here.
-  logic dbg_refblk_w, dbg_holblk_w;
+  logic dbg_refblk_w, dbg_holblk_w, dbg_wrg_w;
 
 
   // The same numbers the single-clock harness uses, and passed to BOTH sides
@@ -142,7 +142,7 @@ module m2_sdram_x2_harness #(
     .p_req(f_req), .p_we(f_we), .p_addr(f_addr), .p_din(f_din), .p_be(f_be),
     .p_dout(f_dout), .p_ack(f_ack),
     .dbg_req(), .dbg_grant(),
-    .dbg_refblk(dbg_refblk_w), .dbg_holblk(dbg_holblk_w)
+    .dbg_refblk(dbg_refblk_w), .dbg_holblk(dbg_holblk_w), .dbg_wr_grant(dbg_wrg_w)
   );
 
   logic dq_oe_m;
