@@ -17626,3 +17626,51 @@ change should look like.
 
 Predicted: -0.355 -> about +2.39 ns, roughly 131 MHz, clearing the 120 MHz that
 120/60/30 needs. To be confirmed by the fitter, not believed.
+
+
+**R395 -- R394'S PREDICTION WAS WRONG, AND THE REASON IS THE ONE THE MAKEFILE
+WARNS ABOUT.**
+
+R394 predicted `-0.355 -> about +2.39 ns, roughly 131 MHz`. Built, s102:
+
+    module      before (s81)   after R394 (s102)
+    m2_sdram      -0.268          -0.311
+    m2_raster     +0.407          -0.013
+    copro         +2.697          +2.180
+    i960          +3.517          +3.777
+
+**No Fmax gain.** And m2_sdram has read -0.268, -0.355 and -0.311 across three
+seeds of essentially the same RTL, so the module's slack is inside seed noise
+and a single build could never have confirmed 2.39 ns anyway.
+
+**THE ERROR.** The 2.742 ns was attributed to `we_p[rr_grant]` and
+`blen(rr_grant)` by reading the synthesised node names `Mux0~3` and `Mux4~0` and
+assuming they were those two muxes. Synthesised names do not map onto RTL
+constructs reliably. `quartus_paths` exists precisely for this and its comment
+says so: *"Model 1's M0 recorded getting this wrong once: the miss was
+attributed to the wrong stage and retiming there would have cost a pipeline
+stage and moved Fmax by nothing."* Same error, same session as quoting that line
+approvingly.
+
+**WHAT R394 DID DO, which is not nothing.** The arbitration chain is no longer
+the worst path. The limiter is now the OTHER half of what HANDOFF named:
+
+    From: dq_r[11]  ->  To: p_dout[4][59]      -0.311
+
+`dq_r` through the 3-way burst-assembly mux -- `{dq_r, cap[2], cap[1], cap[0]}`
+-- and the 11-way write decode into `p_dout[port]`, all in one cycle. Before
+R394 the two paths were -0.268 (arbitration) and -0.244 (read return): nearly
+equal, so removing the first exposes the second at the same depth. **Both must
+be fixed to gain anything**, which is why the module slack did not move.
+
+R394 also took ~110 ALM out, 99% -> 98%.
+
+**BOARD: s102 flashed, working, no regression.** Bands completing 39.0/44.1/83.1
+/100.0% against s93's 44.3/42.6/86.9 -- unchanged, as a change with no Fmax gain
+should be.
+
+**NEXT, and it is now precisely specified.** Pipeline the read return: register
+the assembled 64-bit word before the per-port write decode, moving `p_ack` with
+it. One extra cycle of read latency, which requesters absorb because they wait
+for ack -- the same trade S_SEL already makes, in that module's own words:
+"this costs latency, not semantics".
