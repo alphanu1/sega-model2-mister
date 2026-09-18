@@ -96,7 +96,6 @@ localparam CONF_STR = {
 	// the centre of the widest window that passed. The manual settings exist
 	// because a board that cannot be calibrated should still be usable, and
 	// because forcing a known value is how the calibration itself gets checked.
-	"O[7:5],SDRAM phase,Auto,CL+1,CL+2,CL+3,CL+4,CL+5;",
 	// WHICH 2 MB OF THE CHIP THE PORT-4 SWEEP FOLDS. Selectable because the
 	// alternative is a 25-minute build per probe, and locating a corruption in
 	// 43.62 MB takes more than one probe. Region N covers word N*0x100000 for
@@ -110,13 +109,11 @@ localparam CONF_STR = {
 	"O[16:14],Probe,bootIP,chr 3,chr 1,chr #,chr A,row2,bndry,chr0;",
 	"-;",
 	"R[17],Save settings (NVRAM);",
-	"O[18],Probe page,0,1;",
 	// OFF BY DEFAULT. The overlay is 24 rows of hex painted over the top-left
 	// of the picture, which is exactly where the game puts its own text. It
 	// stays compiled in -- the probes cost nothing now that they observe write
 	// buses instead of adding memory ports -- but it should not be in the way
 	// of looking at the game.
-	"O[19],Debug overlay,Off,On;",
 	// Off at power-up: an OSD bit is 0 until the user sets it.
 	"O[20],Geometrizer walk,On,Off;",
 	// WHICH MOMENT THE WALK STARTS ON. The reference says the 0x803008 write
@@ -129,7 +126,6 @@ localparam CONF_STR = {
 	// entry zero. The RTL's own codes are unchanged -- the swap is one mux at
 	// the synchroniser, below -- so every study entry that names a trig_mode
 	// number still means what it says.
-	"O[24:23],Walk trigger,After flip,Vblank,Flip,Write ptr;",
 	// PROVE THE DRAWING HALF, INDEPENDENTLY OF THE GEOMETRY.
 	//
 	// Everything from the quad store to the video mixer has only ever been fed
@@ -143,7 +139,6 @@ localparam CONF_STR = {
 	// proven on hardware and every remaining fault is upstream of it. If it
 	// does not, the fault is downstream and no amount of fixing the matrix
 	// would ever have shown a picture.
-	"O[22:21],Texture brightness,50%,75%,100%,25%;",
 	// THE PAIR CACHE, ON THE BOARD, WITHOUT A BUILD (R244). R214 put a
 	// one-entry cache in front of the walker's and the engine's port so a
 	// sequential stream costs half the port trips; R240 found it served the
@@ -1108,23 +1103,14 @@ end
 
 m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(781)) u_sdram (
 	.clk(clk_mem), .rst_n(mem_rst_n), .ready(mem_ready),
-	// OSD order is CL+2..CL+5 and the selector's own encoding puts CL+3 at zero,
-	// so the two are mapped rather than passed through.
-	// Labels match what selecting them does: 0->CL+1, 1->CL+0, 2->CL+2, 3->CL+3.
-	// The default is CL+1, one cycle EARLIER than the old default of CL+2, which
-	// the self-test showed captures the burst one 16-bit word late.
-	// SWEPT WHILE CALIBRATING, then held at what passed. The OSD still
-	// overrides once the sweep has finished and found nothing, so a board this
-	// cannot calibrate is still tunable by hand.
-	// AUTO BY DEFAULT, MANUAL WHEN ASKED. status[7:5] == 0 means "use the
-	// calibration"; 1..5 force CL+1..CL+5 so a board this cannot calibrate is
-	// still tunable by hand without a rebuild. During the sweep itself the
-	// controller follows cal_sel, because that is what is being measured.
-	.rd_lat_sel(!cal_done          ? cal_sel      :
-	// CL+2 FIXED. The boot sweep on this board reports pass mask 001000 and
-	// chooses CL+2, so this is the value auto-detect already picks -- fixing it
-	// removes a per-boot variable without changing the depth. OSD override stays.
-	            (status[7:5] != 0) ? status[7:5]  : 3'd2),
+	// CL+2, FIXED, NO OSD OVERRIDE (R411). Only one capture depth can ever be
+	// right -- CL+1 samples the previous word of the burst, CL+3 the next -- so
+	// the boot sweep's one-bit pass mask (001000, chosen CL+2) is the correct
+	// result, not a marginal one. The OSD knob existed to find this value on a
+	// board that would not calibrate; it is found, and it was the knob that
+	// diagnosed s122. The sweep still runs and still reports its mask over the
+	// UART (R399), it just no longer drives the depth.
+	.rd_lat_sel(!cal_done ? cal_sel : 3'd2),
 	.sd_cke(SDRAM_CKE), .sd_cs_n(SDRAM_nCS), .sd_ras_n(SDRAM_nRAS),
 	.sd_cas_n(SDRAM_nCAS), .sd_we_n(SDRAM_nWE), .sd_ba(SDRAM_BA),
 	.sd_a(SDRAM_A), .sd_dqm({SDRAM_DQMH, SDRAM_DQML}),
