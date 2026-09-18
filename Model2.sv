@@ -108,6 +108,8 @@ localparam CONF_STR = {
 	// readback) so the board can say whether that data is THERE and READABLE.
 	"O[16:14],Probe,bootIP,chr 3,chr 1,chr #,chr A,row2,bndry,chr0;",
 	"-;",
+	"O[24:23],Walk trigger,After flip,Vblank,Flip,Write ptr;",
+	"O[22:21],Texture brightness,50%,75%,100%,25%;",
 	"R[17],Save settings (NVRAM);",
 	// OFF BY DEFAULT. The overlay is 24 rows of hex painted over the top-left
 	// of the picture, which is exactly where the game puts its own text. It
@@ -3360,7 +3362,7 @@ always_ff @(posedge clk_sys) begin
 	// Upload owns the port; otherwise page 1 / Probe 6 selects word 4
 	// (the coin-mode dword) and everything else watches word 5.
 	nv_word_r <= (ioctl_upload && nv_sel)          ? ioctl_addr[13:2] :
-	             (status[18] && status[16:14] == 3'd6) ? 12'd4 : 12'd5;
+	             12'd5;   // R411: was gated on status[18], which is gone
 	nv_din_r  <= ioctl_addr[1] ? bak_dbg_q[31:16] : bak_dbg_q[15:0];
 end
 assign ioctl_din = nv_din_r;
@@ -3378,7 +3380,7 @@ m2_backup u_backup (
 	.wdata(cpu_io_wdata),
 	.rdata(bak_rdata),
 	.dbg_word(nv_word_r),
-	.dbg_rd_sel({status[18], status[16:14]}),
+	.dbg_rd_sel({1'b0, status[16:14]}),   // R411: probe page removed
 	.dbg_q(bak_dbg_q), .dbg_first(bak_first),
 	.dbg_w0(bak_w0), .dbg_writes(bak_writes)
 );
@@ -5763,204 +5765,22 @@ localparam bit DEBUG = 1'b1;
 // display list's objects point at.
 //
 //     set_global_assignment -name VERILOG_MACRO "M2_NO_OVERLAY=1"
-`ifdef M2_NO_OVERLAY
-localparam bit OVERLAY = 1'b0;
-`else
-localparam bit OVERLAY = DEBUG;
-`endif
-
-// The overlay runs on clk_vid and these all live on clk_sys or clk_i960, so
-// they cross with two flops. They are status bits and counters read by eye --
-// a torn counter is a wrong digit for one frame, not a wrong decision.
-logic [2:0] game_sync, cp_done_sync, cpu_trap_sync, cpu_halt_sync;
-logic [SDR_AW:1] ldr_top_sync;
-always_ff @(posedge clk_sys) begin
-	game_sync     <= {game_sync[1:0],     game_image};
-	cp_done_sync  <= {cp_done_sync[1:0],  cp_done};
-	cpu_trap_sync <= {cpu_trap_sync[1:0], cpu_trap};
-	cpu_halt_sync <= {cpu_halt_sync[1:0], cpu_halted};
-	ldr_top_sync  <= ldr_top;
-end
-
-generate if (OVERLAY) begin : g_diag
-m2_diag #(.NWORDS(24)) u_diag
-(
-	.clk(clk_sys),
-	.ce_pix(ce_pix),
-	.rst_n(mem_rst_n),
-	.enable(status[19]),
-	.hb(tile_hb),
-	.vb(tile_vb),
-	// REPOINTED AT THE CPU. The copy checksums did their job -- they proved the
-	// copy engine RAN on a game image, which it must not, and that is why the
-	// board showed program ROM rendered as tiles. What is needed now is whether
-	// the loader saw a game-sized image at all and whether the CPU is executing,
-	// and neither of those can be inferred from a checksum.
-	// Row 13 names the region so row 12 can never be read against the wrong
-	// expectation: DD in the top byte means the sweep FINISHED, 00 means it is
-	// still running and row 12 is a partial total, not a result.
-	// 14 THE I/O BOARD. Top nibble: bit3 answered-at-least-once, bit2 awake,
-	// bit1 filling, bit0 status raised. Then the status byte and the flag byte
-	// as the boot would read them -- the two that the old constant could only
-	// ever satisfy one of.
-	// 16 IS THE COPY, IN ONE WORD. 41474553 is "SEGA" and the block arrived
-	// intact; FFFFFFFF is the power-up value and means nothing was written at
-	// all; anything else means it arrived corrupted. Row 8's tile-write count
-	// has now meant four different things and cannot distinguish those.
-	// 17 WHAT THE i960 READ, not what the board believes it wrote. Upper half
-	// counts reads of the flag dword; lower half is {status, flag} exactly as
-	// returned on rdata. If this disagrees with row 14 the read path is wrong,
-	// and row 14 alone could never have said so.
-	// 20 THE CAPTURE SWEEP, and it answers the question the OSD option was
-	// there to ask by hand:
-	//
-	//   bits 5:0   which of CL+0..CL+5 read the known pattern back
-	//   bits 10:8  the depth in use
-	//   bit  12    the sweep has finished
-	//
-	// 00001?3F would mean every depth works; 00001?00 means none does, and that
-	// is a result about the interface rather than a range that was too narrow.
-	.words({ // 23 TRAM cell probe -- except Probe=chr0, which shows the backup
-	         // SRAM dword at byte 0x14: the settings the digits are printed
-	         // from. Sim reads 00030300 there and prints '3'.
-	         // Probe=chr0: live settings dword. Probe=row2: {read count,
-	         // low 24 bits of the FIRST value the game read from it this boot}
-	         // -- FF...FF means the draw consumed uninitialised settings.
-	         // 23 is now {total read count, read #(Probe+1) of the settings
-	         // dword, low 24 bits}. Step Probe 0..7 to walk the sequence.
-	         // 23: page 0 (O18=0): {reads, read #(Probe) captured}. Page 1,
-	         // Probe 0-3: reads #8-11 -- the board's draw-read is #9. Page 1,
-	         // Probe 6: live word 4 (coin-mode bytes 0x10-0x13). Page 1,
-	         // Probe 7: live word 5 (settings dword).
-	         // page1/Probe5: {writes-to-'3'-byte count, last data} -- the
-	         // formatter's own store, caught at the SDRAM port.
-	         // page1/Probe4: {reset edges, Z80 window writes, last window
-	         // address} -- the collision telemetry and the reset counter.
-	         // PAGE 0 IS THE TRAM CELL, WHICH IS WHAT THE PROBE NAMES HAVE
-	         // ALWAYS SAID AND WHAT THIS ROW HAS NEVER SHOWN. tp_q was
-	         // declared, clocked off tram[tp_cell] and then wired to nothing
-	         // when this mux was repurposed to walk the settings dword, so
-	         // every "chr N" reading taken from this row was in fact the
-	         // backup SRAM's first-read value under a character's name. The
-	         // cell index rides along in the top half so a reading can never
-	         // again be attributed to the wrong cell: 0469C033 is cell 1129
-	         // holding C033. Right value + glyph absent on screen = the
-	         // render path drops the CELL; wrong value = the CPU's write
-	         // never landed. Page 1 keeps the backup and collision telemetry
-	         // exactly as it was.
-	         // Page 1 / Probe 0 (bootIP): the cabinet-switch diagnostic above,
-	         // {raw in0, the byte the firmware deposited, scan count}. It
-	         // displaces the settings read #8, which the exchange's
-	         // exoneration (R64) made the least useful thing on this row.
-	         (status[18] && status[16:14] == 3'd0) ?
-	             {iob_in0, dp08_latch, dp08_wr_cnt} :
-	         // Page 1 / Probe "chr 3": the settings bytes as the Z80 writes
-	         // them. 00030300 matches MAME and exonerates the window;
-	         // 7FFF7FFF is the RAM-test pattern clobbering the deposit.
-	         // Page 1 / Probe "chr 1": WHO BLANKED THE PROBED CELL -- the IP
-	         // of the instruction that wrote a space into it. Probe "chr #"
-	         // gives the count and the value, so a zero count means the cell
-	         // was never blanked by a write and the fault is in the render.
-	         // Page 1 / Probe "chr A" was the saturating window counter and
-	         // said nothing; it now carries the char-write count and the last
-	         // address the CPU wrote in the char region.
-	         (status[18] && status[16:14] == 3'd4) ? {cw_cnt, 7'd0, cw_last[24:16]} :
-	         // Page 1 / Probe "bndry": where the renderer is actually fetching.
-	         // Compare against GAME_CHAR = 0x1690000.
-	         (status[18] && status[16:14] == 3'd6) ? {7'd0, cf_addr} :
-	         (status[18] && status[16:14] == 3'd2) ? blank_ip :
-	         (status[18] && status[16:14] == 3'd3) ?
-	             {8'd0, blank_cnt, blank_val} :
-	         (status[18] && status[16:14] == 3'd1) ? zw_set :
-	         (status[18] && status[16:14] == 3'd4) ?
-	             {rst_edges, zw_win_cnt, 5'd0, zw_last} :
-	         (status[18] && status[16:14] == 3'd5) ? {8'd0, vsw_cnt, vsw_data} :
-	         (status[18] && status[16:14] >= 3'd6) ? bak_dbg_q :
-	         status[18] ? bak_first : {1'b0, tp_cell, tp_q},
-	         // 22 THE LAST CHARACTER FETCH, verbatim. FFFFFFFF means the fetch is
-	         // reading memory nobody ever wrote -- one flat colour per palette
-	         // bank, which is the board's sky and ground. Anything varied means
-	         // real glyph data is arriving. Replaces the fetch counters, which
-	         // saturated instantly and proved only that fetches happen.
-	         // OLD 22 LINE OVERRUNS (top half) and last line's worst-layer fetch
-	         // count (low byte). Zero overruns means the renderer keeps up and
-	         // missing text is NOT a budget problem; a climbing count means it
-	         // does not. Replaces the per-channel xlat counts, which did their
-	         // job: they read 00202020, and test_m2_boot then dumped the values
-	         // and found all three ramps correct, so the table is not at fault.
-	         // OLD 22 XLAT WRITES PER CHANNEL: R low byte, then G, then B. A complete
-	         // table is 32 each -- 00202020. A zero byte names the channel that
-	         // never arrived. Replaces the M10K copy probe, which did its job
-	         // (it proved the copy sound while the renderer starved, R49) and
-	         // reads zero on a game image by design.
-	         cd_last,
-	         // 21 ALL FOUR LAYERS, top 8 bits of each. The first version packed
-	         // only layers 0 and 1 and read 00000000 on a board visibly drawing
-	         // Daytona's sky and ground: the fixture uses layer 0 and Daytona
-	         // does not. An instrument covering half the cases reports a fault
-	         // when it means "not looking there". Fixture reads 00000031.
-	         {cd_ff, vid_layer_have[3][11:4], vid_layer_have[2][11:4]},
-	         {19'd0, cal_done, 1'b0, cal_best, 2'd0, cal_mask},  // 20 capture sweep
-	         io_last_data,                              // 19 last I/O word returned
-	         io_last_addr,                              // 18 last I/O address presented
-	         {iob_flag_rd, iob_seen},                   // 17 flag reads / value seen
-	         bak_w0,                                    // 16 backup SRAM dword 0
-	         {iob_win_rd, bak_writes},                  // 15 window reads / backup writes
-	         iob_dbg,                                   // 14 I/O board
-	         {sw_done ? 8'hDD : 8'h00, 19'd0, sw_sel},  // 13 sweep region + done
-	         {8'd0, sw_val},                            // 12 SWEEP fold of that region
-	         cpu_dbg_ldout,                             // 11 last data off the port
-	         cpu_dbg_laddr,                             // 10 last address asked for
-	         cpu_dbg_palwr,                             // 9  CPU writes to the PALETTE
-	         cpu_dbg_tramwr,                            // 8  CPU writes to TILE RAM
-	         // 7 PRCB. 000000C0 IS ONLY THE BOOT VALUE. Daytona reinitializes
-	         // the PRCB through an IAC (i960_top line 1641, prcb_reg <= iac2),
-	         // after which this legitimately reads 0053F400 -- confirmed against
-	         // the boot harness, whose stream matches MAME for 803,355
-	         // instructions. A changed value here means the CPU got FURTHER, not
-	         // that the read was wrong; the old legend said the opposite and
-	         // cost a diagnosis. Study R48.
-	         cpu_dbg_prcb,                              // 7  PRCB: 000000C0 at boot, 0053F400 once reinitialized
-	         cpu_dbg_ip,                                // 6  where the CPU is
-	         cpu_dbg_acc,                               // 5  instructions accepted
-	         // 32 BITS, not 31. The first version was {27'd0, ...} = 31, which
-	         // shifted every word above it by one bit: the board showed word4 as
-	         // 80000007, its top bit being rb_w0's LSB bleeding down. A short
-	         // field in a concatenation does not warn, it silently reindexes.
-	         {16'd0, cpu_trap_sync[2], cpu_halt_sync[2],
-	          game_sync[2], cp_done_sync[2],
-	          st_ok_sync[2], ldr_overflow,
-	          loaded_sync[2], mem_ready,
-	          // bits 7:6 -- the I/O firmware: bit 7 = fw_ready (Z80 out of
-	          // reset), bit 6 = at least one firmware byte arrived. 00 here
-	          // with a black screen means the MRA's rom index 3 never came.
-	          4'd0, fw_ready, fw_seen, pll_locked, 1'b1},   // 4  status
-	         {7'd0, ldr_top_sync},                      // 3  highest word loaded
-	         rb_w0,                                     // 2  readback of words 6/7, want 00000860
-	         frame_ctr,                                 // 1  liveness
-	         32'hB0ADCAFE }),                           // 0  magic
-	// Until the copy engine has filled tile RAM and the palette there is
-	// nothing to draw, so the test pattern stands in. After that the tilemap
-	// takes over. Seeing the pattern persist therefore means the copy never
-	// finished, which is a different failure from a tilemap that draws nothing.
-	.in_r(mix_r),
-	.in_g(mix_g),
-	.in_b(mix_b),
-	.out_r(ov_r), .out_g(ov_g), .out_b(ov_b)
-);
-end else begin : g_nodiag
-	// m2_diag is a pass-through filter, so its absence is a wire.
-	// THE TEST PATTERN IS GONE. A boot-time image the game never shows, and the
-	// critical path of the whole design: a combinational divide by 62 off hcnt,
-	// through the colour mux and straight out to the pin, about 22 ns of it.
-	// That fits a 20 ns period at 50 MHz by a whisker, which is why this design
-	// has sat near -0.2 ns setup for weeks. The 3D test bars on O[21] do the same
-	// job, and if the boot copy stalls the screen is black, which is its own
-	// diagnosis.
-	assign ov_r = mix_r;
-	assign ov_g = mix_g;
-	assign ov_b = mix_b;
-end endgenerate
+// THE DEBUG OVERLAY IS GONE (R411). m2_diag rendered 24 hex words over the
+// picture and was already compiled out by M2_NO_OVERLAY, so this block - the
+// instantiation, its 24-word selector mux and the CDC syncs that fed it - was
+// never synthesised. It is deleted rather than left disabled because the UART
+// stream replaced it: every finding today came from decode_uart.py, and a
+// dormant 180-line instrument that reads OSD bits no longer in the menu is a
+// trap for the next person.
+//
+// m2_diag.sv stays in the tree and in the QSF file list; nothing instantiates
+// it. To bring it back, restore this block from git.
+//
+// The block's `else` branch passed the picture through unchanged; that is all
+// that is left of it.
+assign ov_r = mix_r;
+assign ov_g = mix_g;
+assign ov_b = mix_b;
 
 assign CLK_VIDEO = clk_sys;
 assign CE_PIXEL  = ce_pix;
