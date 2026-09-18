@@ -156,7 +156,9 @@ module m2_raster_fill (
   localparam logic [4:0] S_PF_Q2    = 5'd23;   // dv/dx and dv/dy
   localparam logic [4:0] S_PF_Q2W   = 5'd24;
   localparam logic [4:0] S_PF_B     = 5'd25;   // the plane's value at (0,0)
-  localparam logic [4:0] S_MINMAX   = 5'd26;   // R301: the vertex tournament, registered
+  localparam logic [4:0] S_MINMAX   = 5'd26;
+  // R418: one cycle to count leading zeros, so the shift is not behind it.
+  localparam logic [4:0] S_PF_NRM   = 5'd27;   // R301: the vertex tournament, registered
 
   localparam logic [1:0] EM_WALK = 2'd0;   // swapf-ordered edge pair
   localparam logic [1:0] EM_RAW  = 2'd1;   // xa, xb in chain order (fill_line tail)
@@ -224,6 +226,16 @@ module m2_raster_fill (
   logic signed [15:0] dudx, dudy, dvdx, dvdy;
   logic signed [31:0] det_r;
   logic signed [31:0] nxu, nyu, nxv, nyv;
+  // R418: THE NORMALISE, SPLIT IN TWO. pf_norm is a 32-bit negate, then clz32,
+  // then a 32-bit variable shift -- all in one cycle, and it was the worst path
+  // in the design once the physical-synthesis passes stopped hiding it:
+  //   m2_raster_fill|nxu[19] -> div_num[28]   -0.762 ns on clk_sys
+  //
+  // The same cycle also computed pf_clz(nxu) for q_z_a, so the count was done
+  // TWICE and the shift chained behind one of them. These hold the count from a
+  // cycle earlier; the shift then stands alone. One extra cycle per quad, not
+  // per pixel.
+  logic [5:0] nxu_z, nyu_z, nxv_z, nyv_z;
   logic               pf_second;         // the fit is retrying on vertices 0,2,3
   logic               pf_x;              // this divide round is the x gradient
   logic signed [31:0] q_num_a, q_num_b;
@@ -290,6 +302,15 @@ module m2_raster_fill (
 
   // Normalise the numerator so its top bit sits at 30, which is what leaves
   // the quotient its significant bits.
+  // R418: the shift half of pf_norm, given a count worked out earlier.
+  function automatic logic signed [31:0] pf_shift(input logic signed [31:0] n,
+                                                  input logic [5:0] z);
+    begin
+      if (z >= 6'd32 || z == 6'd0) pf_shift = n;
+      else                         pf_shift = n <<< (z - 6'd1);
+    end
+  endfunction
+
   function automatic logic signed [31:0] pf_norm(input logic signed [31:0] n);
     logic [31:0] a;
     logic [5:0]  z;
@@ -559,6 +580,7 @@ module m2_raster_fill (
       tex_ok <= 1'b0; pf_second <= 1'b0; tex_r <= '0;
       det_r <= '0; den_sh <= 6'd0; nxu <= '0; nyu <= '0; nxv <= '0; nyv <= '0;
       q_num_a <= '0; q_num_b <= '0; q_z_a <= '0; q_z_b <= '0;
+      nxu_z <= '0; nyu_z <= '0; nxv_z <= '0; nyv_z <= '0;   // R418
       dudx <= 16'sd0; dudy <= 16'sd0; dvdx <= 16'sd0; dvdy <= 16'sd0;
       for (int k = 0; k < 4; k++) begin qu[k] <= '0; qv[k] <= '0; end
       span_valid <= 1'b0;
@@ -630,19 +652,26 @@ module m2_raster_fill (
             nyu <= 32'(pf_ax) * 32'(pf_u2) - 32'(pf_bx) * 32'(pf_u1);
             nxv <= 32'(pf_v1) * 32'(pf_by) - 32'(pf_v2) * 32'(pf_ay);
             nyv <= 32'(pf_ax) * 32'(pf_v2) - 32'(pf_bx) * 32'(pf_v1);
-            state <= S_PF_Q1;
+            state <= S_PF_NRM;   // R418
           end
         end
 
+        // R418: count once, here, for all four numerators.
+        S_PF_NRM: begin
+          nxu_z <= pf_clz(nxu); nyu_z <= pf_clz(nyu);
+          nxv_z <= pf_clz(nxv); nyv_z <= pf_clz(nyv);
+          state <= S_PF_Q1;
+        end
+
         S_PF_Q1: if (div_ready && !div_start && divb_ready && !divb_start) begin
-          div_num   <= pf_norm(nxu);
+          div_num   <= pf_shift(nxu, nxu_z);   // R418
           div_den   <= den_n;
           div_start <= 1'b1;
-          divb_num   <= pf_norm(nyu);
+          divb_num   <= pf_shift(nyu, nyu_z);   // R418
           divb_den   <= den_n;
           divb_start <= 1'b1;
-          q_num_a <= nxu; q_z_a <= pf_clz(nxu);
-          q_num_b <= nyu; q_z_b <= pf_clz(nyu);
+          q_num_a <= nxu; q_z_a <= nxu_z;
+          q_num_b <= nyu; q_z_b <= nyu_z;
           pf_a <= 1'b0; pf_b <= 1'b0;
           state   <= S_PF_Q1W;
         end
@@ -654,14 +683,14 @@ module m2_raster_fill (
         end
 
         S_PF_Q2: if (div_ready && !div_start && divb_ready && !divb_start) begin
-          div_num   <= pf_norm(nxv);
+          div_num   <= pf_shift(nxv, nxv_z);   // R418
           div_den   <= den_n;
           div_start <= 1'b1;
-          divb_num   <= pf_norm(nyv);
+          divb_num   <= pf_shift(nyv, nyv_z);   // R418
           divb_den   <= den_n;
           divb_start <= 1'b1;
-          q_num_a <= nxv; q_z_a <= pf_clz(nxv);
-          q_num_b <= nyv; q_z_b <= pf_clz(nyv);
+          q_num_a <= nxv; q_z_a <= nxv_z;   // R418
+          q_num_b <= nyv; q_z_b <= nyv_z;   // R418
           pf_a <= 1'b0; pf_b <= 1'b0;
           state   <= S_PF_Q2W;
         end
