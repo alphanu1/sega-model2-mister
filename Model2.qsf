@@ -370,6 +370,18 @@ set_global_assignment -name QII_AUTO_PACKED_REGISTERS NORMAL
 #   this fitter -- "Fatal Error: Segment Violation at (nil)", 7 builds of 7.
 #   Model 1 runs with them off and does not crash. If it crashes here, the
 #   cause is in this design and that is what needs finding.
+# R416: ONE OPTION BACK, TO NARROW A QUARTUS CRASH.
+# Matching Model 1's configuration exactly (R414) crashed the fitter on all
+# three seeds -- "Fatal Error: Segment Violation at (nil)", immediately after
+# "Fitter placement was successful", entering routing. With the four earlier
+# builds that is 10 of 10. Model 1 runs the same configuration on the same
+# device and does not crash, so it is triggered by this netlist, but the fault
+# is inside Quartus 17.0 and cannot be fixed here - only avoided.
+#
+# R407 showed COMBO_LOGIC and ASYNCHRONOUS_SIGNAL_PIPELINING together avoid it.
+# This restores COMBO_LOGIC alone to find whether one is enough, so the
+# deviation from Model 1 is one setting rather than two.
+set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC ON
 set_global_assignment -name ROUTER_LCELL_INSERTION_AND_LOGIC_DUPLICATION OFF
 set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_DUPLICATION OFF
 # AREA, NOT SPEED. The whole of the block below was tuned when there were
