@@ -310,6 +310,7 @@ module m2_geometry (
   logic [31:0] hzmin, hzmax;
   logic [31:0] zprev;               // R246: raster->polygon_z, carried between polygons
   logic [15:0] hzkey;               // the quantised key handed to the store
+  logic [22:0] hzpre;                // R420: zval stage one, {neg, ex, ma}
   logic [9:0]  pj_wait;                    // cycles spent in Q_WAIT
   wire         pj_timeout = &pj_wait;
   // A VERTEX THE PREVIOUS POLYGON ALREADY PROJECTED IS NOT PROJECTED AGAIN
@@ -468,7 +469,19 @@ module m2_geometry (
   //   exponent < 0     -> (mantissa | 0x1000) >> -exponent
   //   exponent < 15    -> ((exponent + 1) << 12) | mantissa
   //   else             -> 0xffff
-  function automatic logic [15:0] zval(input logic [31:0] f, input logic [7:0] zbias);
+  // R420: zval SPLIT ACROSS A CYCLE. As one expression it is a 10-bit
+  // subtract, a 24-bit add, a normalise compare-and-shift, a comparison chain
+  // and a VARIABLE shift, hanging off p1prev through the zsel_c mux:
+  //   m2_geo_engine|p1prev[2][31] -> m2_geometry|hzkey[6]   -0.584 on clk_sys
+  //
+  // That one is not survivable on the board. hzkey is the z-sort key for every
+  // quad, so a wrong value makes the display list meaningless -- seed 11 came
+  // up on a blue screen, where a raster_fill path missing by MORE only degraded
+  // the texture. The path matters, not just the margin.
+  //
+  // Stage one does the arithmetic, stage two the selection. clip_in_valid does
+  // not fire until all four vertices have issued, so the second cycle is free.
+  function automatic logic [22:0] zval_pre(input logic [31:0] f, input logic [7:0] zbias);
     logic signed [9:0]  ex;
     logic        [23:0] ma;
     begin
@@ -476,11 +489,23 @@ module m2_geometry (
       ma = {1'b0, f[22:0]} + 24'h400;
       if (ma > 24'h7fffff) begin ex = ex + 10'sd1; ma = {1'b0, ma[22:0]} >> 1; end
       ma = ma >> 11;
-      if (f[31])                zval = 16'h0000;
-      else if (ex < -10'sd12)   zval = 16'h0000;
-      else if (ex < 10'sd0)     zval = 16'({4'd1, ma[11:0]} >> (-ex));
-      else if (ex < 10'sd15)    zval = {4'(ex + 10'sd1), ma[11:0]};
-      else                      zval = 16'hffff;
+      zval_pre = {f[31], ex, ma[11:0]};   // only 12 mantissa bits survive
+    end
+  endfunction
+
+  function automatic logic [15:0] zval_post(input logic [22:0] p);
+    logic               neg;
+    logic signed [9:0]  ex;
+    logic        [11:0] ma;                  // only the low 12 survive the >>11
+    begin
+      neg = p[22];
+      ex  = $signed(p[21:12]);
+      ma  = p[11:0];
+      if (neg)                  zval_post = 16'h0000;
+      else if (ex < -10'sd12)   zval_post = 16'h0000;
+      else if (ex < 10'sd0)     zval_post = 16'({4'd1, ma} >> (-ex));
+      else if (ex < 10'sd15)    zval_post = {4'(ex + 10'sd1), ma};
+      else                      zval_post = 16'hffff;
     end
   endfunction
 
@@ -511,7 +536,7 @@ module m2_geometry (
       qst <= Q_IDLE; qi <= 2'd0; clip_in_valid <= 1'b0; hzmin <= 32'd0; hzmax <= 32'd0;
       for (int k = 0; k < 4; k++) begin hu[k] <= 32'd0; hv[k] <= 32'd0; end
       ptex <= 32'd0; plum <= 8'd0;
-      zprev <= 32'h5011B5EA; hzkey <= 16'd0;   // 1e10, as render_frame_start sets it
+      zprev <= 32'h5011B5EA; hzkey <= 16'd0; hzpre <= '0;   // 1e10, as render_frame_start sets it
       dbg_nonfinite <= 16'd0; dbg_behind <= 16'd0; pj_wait <= 10'd0; dbg_pj_lost <= 16'd0;
       cvalid <= 1'b0;
       for (int k = 0; k < 4; k++) begin csx[k] <= 16'sd0; csy[k] <= 16'sd0; end
@@ -547,7 +572,7 @@ module m2_geometry (
           hzmin <= zmin_c;
           hzmax <= zmax_c;
           zprev <= zsel_c;                       // R246: carried, as raster->polygon_z is
-          hzkey <= zval(zsel_c, zadj_e);
+          hzpre <= zval_pre(zsel_c, zadj_e);   // R420: arithmetic here
           qi    <= 2'd0;
           qst   <= Q_ISS;
         end
@@ -555,12 +580,18 @@ module m2_geometry (
         // ISSUE AND WAIT ARE SEPARATE STATES for the same reason the engine's
         // transform splits them: the projector's out_valid from the PREVIOUS
         // vertex is still standing when this one's in_valid goes up.
-        Q_ISS: if (skip_here) begin
+        // R420: selection here, a cycle after the arithmetic. hzpre is stable
+        // throughout Q_ISS, so recomputing it each cycle is harmless and needs
+        // no gating; hzkey is settled long before clip_in_valid.
+        Q_ISS: begin
+          hzkey <= zval_post(hzpre);
+          if (skip_here) begin
           // R217: this vertex was projected by the previous polygon.
           sx[qi] <= csx[hit_i[qi[0]]];
           sy[qi] <= csy[hit_i[qi[0]]];
           qi <= qi + 2'd1;                       // qi < 2 here, so never the last
-        end else if (w_granted) qst <= Q_WAIT;
+          end else if (w_granted) qst <= Q_WAIT;
+        end
 
         // A PROJECTION THAT NEVER RETURNS MUST NOT STOP THE WORLD.
         //

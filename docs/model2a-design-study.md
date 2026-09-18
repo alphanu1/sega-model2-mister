@@ -17885,3 +17885,71 @@ netlist -- Model 1 runs that configuration -- but it is a fault inside Quartus
 the same framework: deps.lock pins Template_MiSTer b4726d2d there against
 0874acdf here, so sys/, ascal and sys.tcl all differ. That is the most likely
 place the trigger lives, and it is testable by pinning back.
+
+---
+
+**R418 -- SPLIT pf_norm: COUNT LEADING ZEROS A CYCLE BEFORE THE SHIFT.**
+
+`m2_raster_fill`'s perspective normalise did four `pf_clz` counts and four
+variable shifts in one state. The counts feed the shift distances, so the two
+serialise into one combinational chain of four priority encoders plus four
+barrel shifters.
+
+Fix: new state `S_PF_NRM` (5'd27) registers the four counts into `nxu_z`,
+`nyu_z`, `nxv_z`, `nyv_z`; `S_PF_Q1`/`S_PF_Q2` then shift by an already-settled
+number through `pf_shift()`. Costs one state per polygon, which is free -- the
+divider it waits on is far longer.
+
+Worth recording that this path was the worst on `clk_sys` at -0.762 and the
+board still ran with it. A wrong `pf_norm` degrades texture perspective on the
+affected span. Compare R420, which missed by LESS and would not boot.
+
+---
+
+**R419 -- THE TEXEL CACHE'S SAME-LINE FAST PATH WAS THE WORST PATH IN THE
+DESIGN, AND IT BOUGHT NOTHING MEASURABLE.**
+
+`m2_texel`'s `S_IDLE` compared the incoming request against `last_v`/`last_idx`/
+`last_tag` to answer a repeat of the previous line without a tag lookup. That
+comparison sat in front of the normal tag path rather than beside it, so every
+request -- hit or miss -- paid for it.
+
+Removed, along with the three registers and their maintenance in `S_FILL`.
+`S_IDLE` is now just the `inval_pend` and `req` branches. The tag RAM already
+answers a same-line request as a hit in the normal path; the fast path only
+saved a cycle on a case that was already fast.
+
+---
+
+**R420 -- THE Z-SORT KEY IS COMPUTED A CYCLE LATER. NOT ALL NEGATIVE SLACK
+COSTS THE SAME.**
+
+Seed 11 came up on a blue screen. Its worst `clk_sys` path:
+
+```
+m2_geo_engine|p1prev[2][31]  ->  m2_geometry|hzkey[6]     -0.584
+```
+
+`zval()` in one expression is a 10-bit subtract, a 24-bit add, a normalise
+compare-and-shift, a comparison chain and a VARIABLE shift, all hanging off
+`p1prev` through the `zsel_c` mux.
+
+The lesson is the comparison with R418, not the number. s352 ran on the board at
+`clk_sys` **-0.762** -- worse -- because its offender was `m2_raster_fill`'s
+`pf_norm`, which only degrades a texture. `hzkey` is the sort key for every
+quad, so a wrong value makes the whole display list meaningless and there is
+nothing to show. **Which path is late decides whether the board boots; the
+margin only decides how often.** Ranking seeds by worst-case slack alone will
+keep picking blue screens.
+
+Fix: `zval()` splits into `zval_pre()` (the arithmetic, in `Q_IDLE`, off the
+already-registered `zsel_c`) and `zval_post()` (the comparison chain and the
+variable shift, in `Q_ISS`) across a 23-bit `hzpre` holding `{neg, ex, ma[11:0]}`
+-- 12 mantissa bits, which is all that survives the `>>11`. `clip_in_valid` is
+only asserted in `Q_WAIT` at `qi == 3`, four vertices later, so the second cycle
+was already there for the taking.
+
+Proven equivalent before building: 5,179,648 vectors, exhaustive over sign x
+exponent x bias with the mantissa corners plus 4M random, zero mismatches.
+`tb_m2_geometry` then checks `q_z` out of the quad store against the reference
+`float_to_zval` end to end, which is the part the function sweep cannot see.
