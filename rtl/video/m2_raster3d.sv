@@ -302,8 +302,10 @@ module m2_raster3d #(
 
   // Unpacked, in the same order.
   // Only the top three fields moved: everything from u down keeps its slice.
+  /* verilator lint_off UNUSEDSIGNAL */
   wire signed [31:0] sq_o    = sq_q[241:210];   // R424
   wire signed [15:0] sq_dodx  = sq_q[209:194];
+  /* verilator lint_on UNUSEDSIGNAL */
   wire signed [15:0] sq_y    = sq_q[193:178];
   wire signed [15:0] sq_x0   = sq_q[177:162];
   wire signed [15:0] sq_x1   = sq_q[161:146];
@@ -400,7 +402,6 @@ module m2_raster3d #(
     .in_col(sq_col), .in_moire(sq_moire),
     .in_u(sq_u), .in_v(sq_v),
     .in_dudx(sq_dudx), .in_dvdx(sq_dvdx),
-    .in_o(sq_o), .in_dodx(sq_dodx),                  // R424
     .in_tex(sq_tex), .in_tex_en(sq_tex_en),
     .out_valid(tx_span_valid), .out_ready(tx_span_ready),
     .out_y(tx_span_y), .out_x0(tx_span_x0), .out_x1(tx_span_x1),
