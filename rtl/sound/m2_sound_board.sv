@@ -192,11 +192,22 @@ module m2_sound_board #(
   assign rom_addr = sel_rom1 ? {2'b01, addr[16:1]} : addr[17:1];
 
   // ------------------------------------------------------------------- RAM
-  // 64 KB, byte lanes, tagged, never cleared in reset -- the standing rule.
-  (* ramstyle = "M10K" *) logic [7:0] ram_hi [32768];
-  (* ramstyle = "M10K" *) logic [7:0] ram_lo [32768];
+  // 16 KB, NOT 64 (R412). The window is F00000-F0FFFF, but segam1audio.cpp says
+  // outright "real PCB actually has 2x 8kBx8-bit SRAMs (16kB total)", so the
+  // upper three quarters of that window ALIAS on the hardware. Model 1 measured
+  // it on this same board: tb_m1_sndboard counts the firmware touching
+  // ram_words = 8193, exactly 16 KB, and sized its own array at 8192.
+  //
+  // We were implementing the full 64 KB -- 64 M10K blocks for memory the
+  // machine does not have and the firmware never reaches. Dropping the top two
+  // address bits aliases exactly as the PCB does and frees 48 blocks, which is
+  // more of the device than the entire coprocessor uses.
+  //
+  // Byte lanes, tagged, never cleared in reset -- the standing rule.
+  (* ramstyle = "M10K" *) logic [7:0] ram_hi [8192];
+  (* ramstyle = "M10K" *) logic [7:0] ram_lo [8192];
   logic [7:0] ram_hq, ram_lq;
-  wire [14:0] ram_a = addr[15:1];
+  wire [12:0] ram_a = addr[13:1];   // R412: aliases, as the real board does
 
   always_ff @(posedge clk) begin
     ram_hq <= ram_hi[ram_a];
