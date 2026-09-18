@@ -577,7 +577,18 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_video_timing.sv
 set_global_assignment -name QIP_FILE rtl/pll/pll.qip
 set_global_assignment -name SDC_FILE Model2.sdc
 set_global_assignment -name SYSTEMVERILOG_FILE Model2.sv
-set_instance_assignment -name FAST_INPUT_REGISTER ON -to SDRAM_DQ[*]
+# R403: OFF, DELIBERATELY. ON asks for the IOE input register, and Automatic
+# Periphery Placement then assigns every dq_r bit to ONE region
+# (CUSTOM_REGION_X45_Y0_X89_Y36) while the DQ pins are spread across the device
+# -- SDRAM_DQ[0] at V12, SDRAM_DQ[1] at E8. Bits whose pin falls outside the
+# region cannot pack, so some capture in the IOE and the rest in fabric. That
+# MIXED capture is non-uniform by construction and no single cap_depth can suit
+# all sixteen bits, which is R385's finding one level down.
+#
+# Fabric capture for all sixteen is slower and UNIFORM. Uniform is what a single
+# calibrated depth requires; fast is not. The extra pin-to-fabric delay is
+# absorbed by rd_lat_sel, which exists for exactly this.
+set_instance_assignment -name FAST_INPUT_REGISTER OFF -to SDRAM_DQ[*]
 set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to HDMI_TX_CLK
 set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to HDMI_TX_DE
 set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to HDMI_TX_D[*]
