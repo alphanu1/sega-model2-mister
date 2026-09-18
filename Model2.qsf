@@ -289,10 +289,39 @@ set_global_assignment -name QII_AUTO_PACKED_REGISTERS NORMAL
 # Duplication is what the geometry actually needs: a copy next to each pin. The
 # comments below record that these are "where the area is" -- so the cost is
 # measured here rather than assumed, and optimisation follows if it is too dear.
-set_global_assignment -name ROUTER_LCELL_INSERTION_AND_LOGIC_DUPLICATION ON
-set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC ON
-set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_DUPLICATION ON
-set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_RETIMING ON
+# ---------------------------------------------------------------- R405
+# FITTER FLAGS MATCHED TO MODEL 1.
+#
+# Model 1 fits at 97-99% on this same board, same scattered SDRAM pinout, same
+# controller lineage, and passes nearly every build. This core failed roughly
+# half its seeds on SDRAM I/O packing (176229 on dq_r, sd_dq_o, sd_a,
+# sd_dq_oe). Occupancy is not the difference; the fitter configuration is.
+#
+# Model 1 sets SEVEN things and leaves the rest at Quartus defaults:
+#     OPTIMIZATION_MODE                            "Aggressive Area"
+#     OPTIMIZATION_TECHNIQUE                       AREA
+#     PHYSICAL_SYNTHESIS_REGISTER_DUPLICATION      OFF   <- one variable,
+#     ROUTER_LCELL_INSERTION_AND_LOGIC_DUPLICATION OFF   <- both settings
+#     QII_AUTO_PACKED_REGISTERS                    NORMAL
+#     ALM_REGISTER_PACKING_EFFORT                  MEDIUM
+#     FITTER_AGGRESSIVE_ROUTABILITY_OPTIMIZATION   ALWAYS
+# plus AUTO_RESOURCE_SHARING, MUX_RESTRUCTURE, REMOVE_REDUNDANT_LOGIC_CELLS and
+# AUTO_DELAY_CHAINS_FOR_HIGH_FANOUT_INPUT_PINS, all of which this file already
+# had.
+#
+# Eight further passes were switched on here over time, each for a timing
+# problem and none ever removed. R385 turned the two duplication settings ON;
+# they are what create the sd_dq_oe~_Duplicate_N nodes that cannot pack, since
+# only one copy can occupy the IOE beside a pin.
+#
+# NOTE, from the area experiment recorded above: turning the four
+# PHYSICAL_SYNTHESIS options off once produced "Fatal Error: Segment Violation"
+# in four builds of four. Model 1 runs with them off and does not crash, so
+# that is being re-tested rather than treated as settled.
+set_global_assignment -name ROUTER_LCELL_INSERTION_AND_LOGIC_DUPLICATION OFF
+set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
+set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_DUPLICATION OFF
+set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_RETIMING OFF
 # AREA, NOT SPEED. The whole of the block below was tuned when there were
 # 8,940 ALM spare. There are 196.
 # SPEED AGAIN, WITH AGGRESSIVE AREA KEPT. The two do different jobs and only
@@ -328,13 +357,13 @@ set_global_assignment -name AUTO_DELAY_CHAINS_FOR_HIGH_FANOUT_INPUT_PINS ON
 # combinational restructuring is buying nothing". Both halves of that are now
 # false: the technique is AREA and the spare is 196 ALM.
 set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC_FOR_AREA OFF
-set_global_assignment -name ADV_NETLIST_OPT_SYNTH_WYSIWYG_REMAP ON
+set_global_assignment -name ADV_NETLIST_OPT_SYNTH_WYSIWYG_REMAP OFF
 set_global_assignment -name SYNTH_GATED_CLOCK_CONVERSION ON
-set_global_assignment -name PRE_MAPPING_RESYNTHESIS ON
-set_global_assignment -name ROUTER_CLOCKING_TOPOLOGY_ANALYSIS ON
-set_global_assignment -name ECO_OPTIMIZE_TIMING ON
-set_global_assignment -name PERIPHERY_TO_CORE_PLACEMENT_AND_ROUTING_OPTIMIZATION ON
-set_global_assignment -name PHYSICAL_SYNTHESIS_ASYNCHRONOUS_SIGNAL_PIPELINING ON
+set_global_assignment -name PRE_MAPPING_RESYNTHESIS OFF
+set_global_assignment -name ROUTER_CLOCKING_TOPOLOGY_ANALYSIS OFF
+set_global_assignment -name ECO_OPTIMIZE_TIMING OFF
+set_global_assignment -name PERIPHERY_TO_CORE_PLACEMENT_AND_ROUTING_OPTIMIZATION OFF
+set_global_assignment -name PHYSICAL_SYNTHESIS_ASYNCHRONOUS_SIGNAL_PIPELINING OFF
 # HIGH, AND THIS IS THE ONE AIMED AT THE MEASURED PROBLEM. m2_geometry is
 # 5,428 combinational ALUTs and 6,607 REGISTERS, and the total went from 33,195
 # ALM to 41,714 -- about 4,000 ALM more than the parts account for. An ALM holds
