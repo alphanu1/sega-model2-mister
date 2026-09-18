@@ -18350,3 +18350,47 @@ in `S_PF_Q1W/Q2W/Q3W`; group count per frame; and the texel port's
 req/grant/wait read off the board with textures on. Bands-lost matters more than
 cycles here -- a texel miss stalls the walk MID-SPAN in the one unit that cannot
 finish its bands, so a small cycle share can cost a large band share.
+
+---
+
+**R427 -- THE READBACK PROBE HAD BEEN HAMMERING THE SDRAM SINCE R411.**
+
+`rb_req` on port 0 walked two words out of SDRAM onto the debug overlay. R411
+removed the overlay and the probe page. **The loop was left running**, and its
+own comment says it was made to loop deliberately -- *"LOOPS, and that matters"*
+-- after a one-shot version gave a false "no change".
+
+`rb_w0` and `rb_w1` have had no reader since. Verilator says so plainly
+("Signal is not used"), and nothing else in Model2.sv touches `p_req[0]`,
+`p_addr[0]`, `p_dout[0]` or `p_ack[0]`. So the design has been issuing two SDRAM
+reads per iteration, continuously, during gameplay, for nothing.
+
+**It cost twice.** The arbiter grants round-robin among PENDING ports only, so an
+idle port is free -- but this one was ALWAYS pending and took a full share every
+rotation: 1-in-11 of every grant in the design. And R288 measured the ELEVENTH
+port costing **0.37 ns on clk_mem** through the rotate-encode-add chain, which is
+exactly where the worst path sits after R425:
+
+```
+  s24:  m2_sdram|inflight[0] -> m2_sdram|grant[0]   -0.969 on clk_mem
+```
+
+**IT IS NOT THE ROM LOADER**, which was the first thing to check before touching
+it. The loader is `ldr_wr_req` -> `wa_own_req[4]` -> the DEDICATED WRITE PORT
+(Model2.sv:1007, 1143). It never uses a read port.
+
+Port 0 is tied off rather than renumbered. Ports 1-10 keep their indices --
+renumbering ten by hand costs a build to find the typo -- and Quartus
+constant-propagates `pend[0] = 0` through the rotate and the priority encoder.
+The `O[16:14],Probe` menu entry STAYS: `status[16:14]` still drives `tp_cell`
+and `dbg_rd_sel`, so it is not vestigial even though this consumer was.
+
+Warning diff against HEAD: the two dead-register warnings go, and two appear
+saying port 0's ack and dout are unused -- which is the evidence the port is
+genuinely dead rather than merely quiet.
+
+**THE GENERAL POINT.** R411 deleted a feature's front end and left its back end
+running. Nothing failed, no test noticed, and the cost was a permanent tax on
+the busiest shared resource in the design. When a debug consumer is removed, the
+producer has to go with it -- and "is anything still reading this?" is a
+question the linter answers for free.

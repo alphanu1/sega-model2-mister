@@ -418,10 +418,6 @@ wire [SDR_AW:1] ldr_wr_addr;
 wire [15:0] ldr_wr_din;
 wire  [1:0] ldr_wr_be;
 
-logic        rb_req;
-logic [SDR_AW:1] rb_addr;
-wire         rb_ack;
-wire  [63:0] rb_dout;
 
 // NP=5, NOT 1. The controller's arbiter indexes grant[2] unconditionally, so a
 // narrower port count fails to elaborate. The lifted file is left unedited and
@@ -792,8 +788,8 @@ always_comb begin
 	//   CPU still fails on 1                 -> the fault is the CPU path
 	//
 	// Either outcome is worth a build. Neither is a guess.
-	p_req[0]  = rb_req;
-	p_addr[0] = rb_addr;
+	p_req[0]  = 1'b0;            // R427: the readback probe is gone
+	p_addr[0] = '0;
 	// PORT 4 IS THE GEOMETRIZER WALKER'S NOW, NOT THE DEBUG SWEEPER'S (R167).
 	//
 	// The walker and the coprocessor used to SHARE port 9, muxed by
@@ -953,8 +949,6 @@ always_comb begin
 	p_req[1]  = cpu_sd_req;
 	p_addr[1] = cpu_sd_addr;
 end
-assign rb_dout = p_dout[0];
-assign rb_ack  = p_ack[0];
 
 // T_REFI IS IN CLOCK CYCLES, and this domain is 100 MHz (see rtl/pll/pll.v):
 // 8192 rows in 64 ms is one refresh every 7.8125 us, which is 312 cycles at 40 MHz
@@ -1151,79 +1145,29 @@ m2_rom_loader #(.SDR_AW(SDR_AW)) u_loader (
 // SDRAM onto the overlay, to be compared against the ROM file by eye. If the read
 // capture phase is wrong they come back SHIFTED — which is the failure the OSD
 // option exists for, so this is also how that option gets set.
-logic [31:0] rb_w0, rb_w1;
-logic  [1:0] rb_state;
 
-always_ff @(posedge clk_sys or negedge mem_rst_n) begin
-	if (!mem_rst_n) begin
-		rb_req <= 1'b0; rb_addr <= '0; rb_state <= 2'd0;
-		rb_w0 <= 32'd0; rb_w1 <= 32'd0;
-	end else begin
-		case (rb_state)
-			// PROBE ADDRESSES ARE CHOSEN, NOT DEFAULT. Address 0 is useless: the
-			// i960 ROM legitimately begins 00000000, so a correct read and a dead
-			// read are indistinguishable. These two carry signatures, taken from
-			// the interleaved stream the MRA builds:
-			//
-			//   word 8/9   -> FFFFF6E0
-			//   word 6/7   -> 00000860   (read aligned at 4, upper half of the burst)
-			// Also waits for the copy, for the same reason.
-			// WORD 6, not 8: this now reads exactly what the i960's boot reads for
-			// its IP -- mem[12] is words 6 and 7 -- so it is the same data through a
-			// DIFFERENT PORT. Port 1 bursts four words and is known to work; the CPU
-			// is on port 0. If this reads 00000860 and the CPU reads 0, the data is
-			// in SDRAM and the fault is the CPU's port.
-			// cal_done, NOT cp_done: game_image short-circuits cp_done without
-			// reading anything, so on a game image cp_done asserts before the
-			// capture is calibrated and this read came back at CL+0. That is the
-			// "row 2 reads FFFFFFFF, then 00000860 after three resets" the bench
-			// saw -- it was never marginal SDRAM, it was an uncalibrated read.
-			// PRESET TABLE for the OSD probe. Expected values, computed from the
-			// simulation's own CPU-written char RAM (study R59 when it lands):
-			//   0 bootIP  word 0x0000006  00000860
-			//   1 chr 3   word 0x1690330  ff0000ff   <- the missing '3'
-			//   2 chr 1   word 0x1690310  ff00000f   <- the missing '1'
-			//   3 chr #   word 0x1690230  0f0000f0   same SDRAM row as digits
-			//   4 chr A   word 0x1690410  ff0000ff   next row; renders on board
-			//   5 row2    word 0x1690400  11ff0f11
-			//   6 bndry   word 0x16903fe  f000000f   last dword of the row
-			//   7 chr0    word 0x1690000  00000000
-			2'd0: if (rom_loaded && cal_done) begin
-				case (status[16:14])
-					3'd0: rb_addr <= SDR_AW'(32'h0000006);
-					3'd1: rb_addr <= SDR_AW'(32'h1690330);
-					3'd2: rb_addr <= SDR_AW'(32'h1690310);
-					// REPOINTED (R63): the formatted value string at work RAM
-					// 0x53e540 -- the digit's last stop before the draw. Sim
-					// writes ' ','3',NUL there: expect xx003320. xx002020 on the
-					// board means the FORMATTER emitted spaces and the divergence
-					// is inside or upstream of 0x10c4, with the settings byte
-					// already proven correct.
-					3'd3: rb_addr <= SDR_AW'(32'h161F2A0);
-					3'd4: rb_addr <= SDR_AW'(32'h1690410);
-					3'd5: rb_addr <= SDR_AW'(32'h1690400);
-					3'd6: rb_addr <= SDR_AW'(32'h16903fe);
-					default: rb_addr <= SDR_AW'(32'h1690000);
-				endcase
-				rb_req <= 1'b1; rb_state <= 2'd1;
-			end
-			// ONE ACCESS PER HANDSHAKE, not per cycle of the request: it drops on
-			// ack. Harmless against RAM, and the habit is the point — the Model 1
-			// TGP popped every FIFO word twice by acting on the level instead.
-			2'd1: if (rb_ack) begin rb_w0 <= rb_dout[31:0]; rb_req <= 1'b0;
-			                        rb_addr <= SDR_AW'(4); rb_state <= 2'd2; end
-			2'd2: begin rb_req <= 1'b1; rb_state <= 2'd3; end
-			// LOOPS, and that matters. The first version ran once and latched, so
-			// changing the SDRAM phase in the OSD could not alter what was shown
-			// and the test reported "no change" whatever the setting. That is a
-			// null result from a dead instrument, which is worse than no result:
-			// it was read as evidence that the phase is not involved.
-			2'd3: if (rb_ack) begin rb_w1 <= rb_dout[63:32]; rb_req <= 1'b0;
-			                        rb_state <= 2'd0; end
-			default: ;
-		endcase
-	end
-end
+// R427: THE READBACK PROBE IS GONE, AND PORT 0 WITH IT.
+//
+// This walked two words out of SDRAM onto the overlay to be compared by eye.
+// R411 removed the overlay and the probe page; the loop was left running, and
+// its own comment -- "LOOPS, and that matters" -- says it was made deliberate.
+// rb_w0 and rb_w1 have had no reader since, which Verilator says plainly
+// ("Signal is not used"), so this issued two SDRAM reads per iteration
+// FOREVER, during gameplay, for nothing.
+//
+// It cost twice. The arbiter grants round-robin among PENDING ports, so an idle
+// port is free -- but this one was ALWAYS pending and took a full share every
+// rotation, which is 1-in-11 of every grant in the design. And R288 measured the
+// ELEVENTH port costing 0.37 ns on clk_mem through the rotate-encode-add chain,
+// which is where the worst path sits: m2_sdram|inflight[0] -> grant[0], -0.969.
+//
+// Port 0 is tied off rather than renumbered. Ports 1-10 keep their indices --
+// renumbering ten of them by hand costs a build to find the typo -- and Quartus
+// constant-propagates pend[0] = 0 through the rotate and the priority encoder.
+//
+// NOT the ROM loader, which is ldr_wr_req through wa_own_req[4] and the
+// DEDICATED WRITE PORT. Nothing else in this file touches p_req[0], p_addr[0],
+// p_dout[0] or p_ack[0].
 
 ///////////////////////   SDRAM SELF-TEST   //////////////////////
 //
