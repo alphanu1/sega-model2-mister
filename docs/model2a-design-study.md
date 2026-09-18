@@ -17841,3 +17841,47 @@ is the one withdrawn on evidence that would not now be accepted.
 if everything else is held still. Six instrument defects and a packing lottery
 were moving underneath every board test this session; three RTL changes were
 judged against them. Establish the baseline first, then change one thing.
+
+
+**R417 -- MATCHING MODEL 1'S FITTER CONFIGURATION ENDS THE PACKING LOTTERY AND
+FREES 1,850 ALM. THE TIMING BILL COMES DUE IN RTL.**
+
+s351/352/353, one setting away from Model 1's configuration
+(PHYSICAL_SYNTHESIS_COMBO_LOGIC back on to dodge the fitter crash):
+
+    seed   status       176229   ALM               M10K      slack
+    s351   Successful     0      39,589 (94%)      505/553   -1.529
+    s352   Successful     0      39,653 (95%)      505/553   -0.762
+    s353   Successful     0      40,766 (97%)      505/553   -1.911
+
+**Three of three fitted and three of three packed clean -- the first time in
+this project's history.** The lottery that was costing half of every sweep was
+never the board, the pinout, the occupancy or the RTL: it was the eight extra
+fitter passes this file had accumulated.
+
+**AND THE AREA WAS THEIRS TOO.** 41,443 -> 39,589 ALM, about 1,850 recovered.
+Register duplication, retiming and combinational restructuring had been
+spending it. With R412's 48 M10K that is 2,321 ALM and 48 M10K spare on a
+design that was at 99% ALM and 100% M10K the same morning.
+
+**WHAT IT COSTS, AND WHY THAT IS THE RIGHT TRADE.** Slack goes -0.054 -> -0.762.
+Those passes were buying Fmax by restructuring the netlist, which is why the
+RTL's own weaknesses never had to be fixed. Without them the real paths show,
+and they are the same shape every time:
+
+    R408   geometry     issue%3, ac%5            two dividers
+    R413   texel        a 12-bit subtract where two bits would do
+    now    raster fill  pf_norm: negate -> clz32 -> 32-bit barrel shift,
+                        nxu[19] -> div_num[28], all in one cycle
+
+Model 1 closes timing this way -- retiming its FP units, sharing comparators --
+and does not carry the passes. The bill is real work, but it is work that makes
+the design better rather than the fitter cleverer.
+
+**STILL OPEN.** The fitter crashes with all four PHYSICAL_SYNTHESIS options off,
+10 of 10, "Segment Violation at (nil)" entering routing. The trigger is in this
+netlist -- Model 1 runs that configuration -- but it is a fault inside Quartus
+17.0 and one option back avoids it. Note also that the two projects are NOT on
+the same framework: deps.lock pins Template_MiSTer b4726d2d there against
+0874acdf here, so sys/, ascal and sys.tcl all differ. That is the most likely
+place the trigger lives, and it is testable by pinning back.
