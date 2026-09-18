@@ -657,6 +657,26 @@ module m2_sdram #(
   // are free — which is the entire point of overlapping.
   logic [3:0]               rd_bank_cnt [4];
 
+  // R409: THE PRECHARGE GUARD, PRECOMPUTED. S_MISS tested
+  //   ras_cnt[dsp_bank] == 0 && rd_bank_cnt[dsp_bank] == 0
+  // which is two 4-entry array lookups selected by dsp_bank, two zero
+  // comparators and an AND, all gating the command registers. report_timing
+  // made it the worst path in the design once the geometry dividers were gone:
+  //   m2_sdram|dsp_bank[1] -> m2_sdram|sd_a[12]   -0.799 ns
+  // COMBINATIONAL, NOT REGISTERED, AND THAT MATTERS. A registered summary is
+  // one cycle behind: S_ACT sets ras_cnt in the same cycle the bit would be
+  // computed, so the bit would say "idle" while the bank had just activated and
+  // S_MISS could precharge inside tRAS. The bench does not hit that sequence,
+  // which is how it would have shipped.
+  //
+  // Comparing all four banks in parallel and muxing ONE bit is logically
+  // identical to muxing the counters and comparing, and it takes the two
+  // comparators out from behind the mux.
+  wire [3:0] bank_pre_ok;
+  for (genvar gb = 0; gb < 4; gb++) begin : g_bank_pre
+    assign bank_pre_ok[gb] = (ras_cnt[gb] == 0) && (rd_bank_cnt[gb] == 0);
+  end
+
   // Ports with a transfer issued but not yet acknowledged.
   //
   // `pend` alone cannot serve this purpose. It means "wants service" and only
@@ -957,7 +977,7 @@ module m2_sdram #(
             // due rather than exactly on it. It is kept because that margin
             // used to be one state wide, and any future shortening of the
             // dispatch path would start truncating read bursts silently.
-            if (ras_cnt[dsp_bank] == 0 && rd_bank_cnt[dsp_bank] == 0) begin
+            if (bank_pre_ok[dsp_bank]) begin   // R409
               cmd                 <= C_PRE;
               sd_ba               <= dsp_bank;
               sd_a                <= 13'h000;

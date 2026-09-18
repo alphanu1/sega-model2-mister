@@ -384,7 +384,12 @@ set_global_assignment -name SYNTH_GATED_CLOCK_CONVERSION ON
 set_global_assignment -name PRE_MAPPING_RESYNTHESIS ON
 set_global_assignment -name ROUTER_CLOCKING_TOPOLOGY_ANALYSIS ON
 set_global_assignment -name ECO_OPTIMIZE_TIMING ON
-set_global_assignment -name PERIPHERY_TO_CORE_PLACEMENT_AND_ROUTING_OPTIMIZATION ON
+# R409: OFF. The packing failures name it directly -- "assigned to
+# CUSTOM_REGION_X45_Y0_X89_Y36 due to Automatic Periphery Placement" -- and this
+# is the pass that creates those regions. With every pass off (R405/R406)
+# packing was 0/0/0; putting the six timing passes back brought it to 0/50/dud.
+# The other five do timing work the design needs; this one does not.
+set_global_assignment -name PERIPHERY_TO_CORE_PLACEMENT_AND_ROUTING_OPTIMIZATION OFF
 set_global_assignment -name PHYSICAL_SYNTHESIS_ASYNCHRONOUS_SIGNAL_PIPELINING ON
 # HIGH, AND THIS IS THE ONE AIMED AT THE MEASURED PROBLEM. m2_geometry is
 # 5,428 combinational ALUTs and 6,607 REGISTERS, and the total went from 33,195
