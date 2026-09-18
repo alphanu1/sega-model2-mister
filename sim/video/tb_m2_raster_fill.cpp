@@ -40,20 +40,6 @@
 #include <random>
 #include <vector>
 
-// R424: THE FIT RUNS ON u/z, v/z AND 1/z NOW. Every quad below is given the
-// SAME 1/z at all four vertices -- a flat-depth quad -- because these tests
-// were written to check the plane fit and not the perspective divide, and a
-// varying depth would make them measure the wrong thing.
-//
-// 1/z arrives as a minifloat {exponent, mantissa} and is normalised across the
-// quad to ({1,mantissa} << 6) >> (emax - e). With all four equal the shift is
-// zero, so mantissa 0 gives 1 << 14 = 16384, and u/z = u * 16384 >> 13 = 2u.
-// Hence OZ_K: the gradients and plane values this fit produces are exactly
-// twice what the affine one produced, and that factor is the test's business.
-static const uint16_t OZ_FLAT = 0x7f00;   // exponent 127, mantissa 0
-static const double   OZ_K    = 2.0;
-
-
 // ------------------------------------------------------------------ reference
 
 struct Span {
@@ -412,8 +398,6 @@ static void test_plane(Vm2_raster_fill* d) {
   d->in_u1 = U[1]; d->in_v1 = V[1];
   d->in_u2 = U[2]; d->in_v2 = V[2];
   d->in_u3 = U[3]; d->in_v3 = V[3];
-  d->in_oz0 = OZ_FLAT; d->in_oz1 = OZ_FLAT;   // R424
-  d->in_oz2 = OZ_FLAT; d->in_oz3 = OZ_FLAT;
   d->in_col = 0xffffff; d->in_moire = 0;
   d->in_tex = 1;                                // bit 0: textured
   d->in_valid = 1; d->span_ready = 1;
@@ -431,26 +415,26 @@ static void test_plane(Vm2_raster_fill* d) {
       // R286: the gradient is 8.8, not 16.16 -- sixteen bits of it, signed.
       const double du = (double)(int16_t)d->span_dudx / 256.0;
       const double dv = (double)(int16_t)d->span_dvdx / 256.0;
-      const double wu = OZ_K * (U[0] + dudx * (x0 - VX[0]) + dudy * (y - VY[0]));
-      const double wv = OZ_K * (V[0] + dvdx * (x0 - VX[0]) + dvdy * (y - VY[0]));
+      const double wu = U[0] + dudx * (x0 - VX[0]) + dudy * (y - VY[0]);
+      const double wv = V[0] + dvdx * (x0 - VX[0]) + dvdy * (y - VY[0]);
       ++spans_seen; tex_checks += 4;
       // A quarter of a texel of slack: the gradients are a fixed-point divide
       // and the span is up to 130 pixels from the vertex the plane is anchored
       // at, so a bit of the quotient is a fraction of a texel by the far end.
-      if (fabs(u - wu) > 1.0) {
+      if (fabs(u - wu) > 0.5) {
         if (tex_fails < 6) printf("  FAIL plane u at (%d,%d): %.3f want %.3f\n", x0, y, u, wu);
         ++tex_fails;
       }
-      if (fabs(v - wv) > 1.0) {
+      if (fabs(v - wv) > 0.5) {
         if (tex_fails < 6) printf("  FAIL plane v at (%d,%d): %.3f want %.3f\n", x0, y, v, wv);
         ++tex_fails;
       }
-      if (fabs(du - OZ_K * dudx) > 0.04) {
-        if (tex_fails < 6) printf("  FAIL du/dx %.5f want %.5f\n", du, OZ_K * dudx);
+      if (fabs(du - dudx) > 0.02) {
+        if (tex_fails < 6) printf("  FAIL du/dx %.5f want %.5f\n", du, dudx);
         ++tex_fails;
       }
-      if (fabs(dv - OZ_K * dvdx) > 0.04) {
-        if (tex_fails < 6) printf("  FAIL dv/dx %.5f want %.5f\n", dv, OZ_K * dvdx);
+      if (fabs(dv - dvdx) > 0.02) {
+        if (tex_fails < 6) printf("  FAIL dv/dx %.5f want %.5f\n", dv, dvdx);
         ++tex_fails;
       }
     }
@@ -477,8 +461,6 @@ static void test_plane(Vm2_raster_fill* d) {
     d->in_x2 = TX[2]; d->in_y2 = TY[2]; d->in_x3 = TX[3]; d->in_y3 = TY[3];
     d->in_u0 = 100; d->in_v0 = 200; d->in_u1 = 100; d->in_v1 = 200;
     d->in_u2 = 400; d->in_v2 = 220; d->in_u3 = 180; d->in_v3 = 700;
-    d->in_oz0 = OZ_FLAT; d->in_oz1 = OZ_FLAT;   // R424
-    d->in_oz2 = OZ_FLAT; d->in_oz3 = OZ_FLAT;
     d->in_valid = 1; d->eval();
     accepted = false; retired = false; guard = 0;
     long tri_spans = 0;
@@ -600,75 +582,6 @@ int main(int argc, char** argv) {
     VX1 = 0; VX2 = 495; VY1 = 0; VY2 = 383;
     dut.set_viewport(VX1, VX2, VY1, VY2);
     printf("  2000 quads across 5 viewports\n");
-  }
-
-  // ------------------------------------------- R430: TEXTURED, WITH REAL DEPTH
-  //
-  // THE GAP THIS CLOSES. The 150,000-quad fuzz above passes `false` for
-  // textured, so NOT ONE of them enters the plane fit. The only textured quads
-  // in this bench are test_plane's and the triangle's, and R424 gave both of
-  // them the SAME 1/z on all four vertices -- deliberately, so the pre-existing
-  // checks would keep passing. With 1/z flat, pf_o1 and pf_o2 are zero, so nxo
-  // and nyo are zero, pf_clz(0) returns 32 and pf_scale returns 0 without
-  // dividing. The THIRD DIVIDE ROUND HAS NEVER RUN WITH A REAL NUMERATOR.
-  //
-  // On the board that build freezes at the first frame with the TGP parked,
-  // which is what a fill that never retires its first textured quad looks like
-  // from four stages upstream. This drives varying depth and watches for a quad
-  // that never retires.
-  printf("test: R430, textured quads with a real depth gradient\n");
-  {
-    Vm2_raster_fill* d = dut.d;
-    auto tickf = [&]() { d->clk = 0; d->eval(); d->clk = 1; d->eval(); };
-    long hung = 0, ran = 0, worst = 0;
-    // Exponent spreads from flat to 8:1 within one quad, plus the degenerate
-    // cases: a vertex at z = infinity (1/z == 0) and all four there.
-    const uint16_t OZ[][4] = {
-      {0x7f00, 0x7f00, 0x7f00, 0x7f00},   // flat, the only case ever tested
-      {0x7f00, 0x7e00, 0x7d00, 0x7c00},   // 8:1 across the quad
-      {0x7f00, 0x7fff, 0x7e80, 0x7d40},   // mantissa spread too
-      {0x7f00, 0x0000, 0x7e00, 0x7d00},   // one vertex at infinity
-      {0x0000, 0x0000, 0x0000, 0x0000},   // all at infinity
-      {0x7fff, 0x4000, 0x7fff, 0x4000},   // alternating extremes
-      {0x8f00, 0x7f00, 0x6f00, 0x5f00},   // exponent far apart, saturating shift
-    };
-    const int32_t VX[4] = {10, 130, 118,   4};
-    const int32_t VY[4] = { 5,  19,  71,  58};
-    const int32_t U[4]  = {37, 501, 640, 122};
-    const int32_t V[4]  = {91, 160, 612, 540};
-    for (size_t c = 0; c < sizeof(OZ)/sizeof(OZ[0]); c++) {
-      d->in_x0 = VX[0]; d->in_y0 = VY[0]; d->in_x1 = VX[1]; d->in_y1 = VY[1];
-      d->in_x2 = VX[2]; d->in_y2 = VY[2]; d->in_x3 = VX[3]; d->in_y3 = VY[3];
-      d->in_u0 = U[0]; d->in_v0 = V[0]; d->in_u1 = U[1]; d->in_v1 = V[1];
-      d->in_u2 = U[2]; d->in_v2 = V[2]; d->in_u3 = U[3]; d->in_v3 = V[3];
-      d->in_oz0 = OZ[c][0]; d->in_oz1 = OZ[c][1];
-      d->in_oz2 = OZ[c][2]; d->in_oz3 = OZ[c][3];
-      d->in_col = 0xffffff; d->in_moire = 0; d->in_tex = 1;
-      d->in_valid = 1; d->span_ready = 1; d->eval();
-      bool acc = false, ret = false;
-      long g = 0;
-      for (;;) {
-        d->eval();
-        if (d->quad_done && acc) ret = true;
-        if (d->in_ready && d->in_valid) acc = true;
-        const bool drained = ret && !d->span_valid;
-        tickf();
-        if (acc) { d->in_valid = 0; d->eval(); }
-        if (drained) break;
-        if (++g > 200000) {
-          printf("  FAIL oz case %zu (%04x %04x %04x %04x) NEVER RETIRED -- "
-                 "the fill is wedged, which upstream reads as a frozen game\n",
-                 c, OZ[c][0], OZ[c][1], OZ[c][2], OZ[c][3]);
-          ++hung; break;
-        }
-      }
-      if (g > worst) worst = g;
-      ++ran;
-      d->in_valid = 0; d->eval();
-      for (int k = 0; k < 40; k++) tickf();
-    }
-    printf("  %ld depth cases, %ld hung, worst %ld cycles to retire\n", ran, hung, worst);
-    checks += ran; fails += hung;
   }
 
   // ----------------------------------------------------------------- fuzz

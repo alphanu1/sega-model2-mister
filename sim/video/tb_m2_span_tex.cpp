@@ -41,7 +41,6 @@ static void ck(const char *what, long got, long want) {
 
 struct Out { int y, x0, x1; uint32_t col; };
 static std::vector<Out> got;
-static std::vector<uint32_t> fetched_u;   // R424: tx_u at every fetch
 
 // The texel the fetch returns: a function of the coordinate, so a wrong step
 // shows up as a wrong colour.
@@ -54,8 +53,7 @@ static int texel_of(uint32_t u, uint32_t v) {
 static void tick(bool stall = false) {
   d->out_ready = stall ? 0 : 1;
   // The texel fetch answers in one cycle.
-  if (d->tx_req) { d->tx_ack = 1; d->tx_texel = texel_of(d->tx_u, d->tx_v);
-                   fetched_u.push_back(d->tx_u); }
+  if (d->tx_req) { d->tx_ack = 1; d->tx_texel = texel_of(d->tx_u, d->tx_v); }
   else           { d->tx_ack = 0; }
   d->eval();
   if (d->out_valid && d->out_ready)
@@ -63,15 +61,6 @@ static void tick(bool stall = false) {
   d->clk = 0; d->eval();
   d->clk = 1; d->eval();
 }
-
-// R424: THE SPAN CARRIES u/z, v/z AND 1/z NOW, and the walk divides. Every test
-// below predates that and asserts on u and v directly, so they drive 1/z at the
-// value that makes the divide an IDENTITY: persp() is uoz * 2^29 / ozn and u_r
-// is uoz * 2^16, so ozn == 2^13 returns u_r unchanged. 1/z in 16.16 is therefore
-// 8192 << 16. Anything else and these tests would be measuring the divide
-// instead of what they were written to measure.
-static const int32_t OZ_ID   = 8192 << 16;
-static const int16_t DOZ_FLAT = 0;
 
 int main(int argc, char **argv) {
   Verilated::commandArgs(argc, argv);
@@ -123,7 +112,6 @@ int main(int argc, char **argv) {
     d->in_valid = 1; d->in_y = 5; d->in_x0 = X0; d->in_x1 = X1;
     d->in_col = 0xffffff; d->in_moire = 0;
     d->in_u = U0; d->in_v = V0; d->in_dudx = DU; d->in_dvdx = DV;
-    d->in_o = OZ_ID; d->in_dodx = DOZ_FLAT;   // R424
     d->in_tex = 0x000001; d->in_tex_en = 1;        // bit 0 = textured
     tick();                                        // accepted
     d->in_valid = 0;
@@ -143,56 +131,6 @@ int main(int argc, char **argv) {
       ck("group colour is the texel at its first pixel", got[i].col, want);
     }
     ck("textured pixels counted", d->dbg_texpix, groups * STEP);
-  }
-
-  // 2b-R424. THE PERSPECTIVE DIVIDE ACTUALLY DIVIDES.
-  //
-  // Every other test here drives 1/z flat, which makes the divide an identity
-  // and could not tell perspective-correct from affine if the whole feature
-  // were deleted. This one holds u/z CONSTANT and sweeps 1/z over a 4:1 depth
-  // ratio -- the road-to-the-horizon case R331 measured -- so the correct
-  // answer sweeps 4:1 with it and the affine answer is a flat line.
-  {
-    got.clear(); fetched_u.clear();
-    const int    PIX = 100;
-    const int    X0  = 10, X1 = X0 + PIX - 1;
-    const int32_t U0 = 3200 << 16;          // u/z, 16.16, CONSTANT across the span
-    const int32_t O0 = 32704 << 16;         // 1/z at the near end, normalised
-    const int16_t DO = -3925;               // 12.4 a pixel: 32704 -> ~8176 over 100
-    d->in_valid = 1; d->in_y = 9; d->in_x0 = X0; d->in_x1 = X1;
-    d->in_col = 0xffffff; d->in_moire = 0;
-    d->in_u = U0; d->in_v = U0; d->in_dudx = 0; d->in_dvdx = 0;
-    d->in_o = O0; d->in_dodx = DO;
-    d->in_tex = 0x000001; d->in_tex_en = 1;
-    tick();
-    d->in_valid = 0;
-    const int groups = ((X1 - X0) / STEP) + 1;
-    for (int i = 0; i < 20000 && int(got.size()) < groups; ++i) tick();
-    ck("perspective: one span per pixel group", long(got.size()), groups);
-
-    long bad = 0; double worst = 0;
-    for (size_t i = 0; i < fetched_u.size() && int(i) < groups; ++i) {
-      const int64_t o   = int64_t(O0) + (int64_t(DO) << 12) * int64_t(i) * STEP;
-      const int64_t ozn = o >> 16;
-      // What the walk computes: u/z * 2^13 / (1/z), then shifted to texels.8.
-      const int64_t want = ((int64_t(U0) * 8192) / ozn) >> 10;
-      const int64_t err  = int64_t(fetched_u[i]) - want;
-      if (llabs(err) > 4) { if (bad < 4) printf("  FAIL persp u[%zu] got=%u want=%lld\n",
-                                                i, fetched_u[i], (long long)want); ++bad; }
-      const double rel = double(llabs(err)) / double(want ? want : 1);
-      if (rel > worst) worst = rel;
-    }
-    ck("perspective: u follows 1/z at every group", bad, 0L);
-
-    // AND THE TEST CAN TELL THE TWO APART. Affine would hold u at its first
-    // value for the whole span; the correct answer quadruples. Without this the
-    // check above would pass on a build where the divide returned its input.
-    if (fetched_u.size() >= 2) {
-      const double ratio = double(fetched_u[fetched_u.size() - 1]) / double(fetched_u[0] ? fetched_u[0] : 1);
-      printf("  perspective: u swept %.2fx across the span (affine would be 1.00x), worst error %.4f%%\n",
-             ratio, worst * 100.0);
-      ck("perspective: the sweep is hyperbolic, not flat", ratio > 3.0, true);
-    }
   }
 
   // 2c. R326: ON A TRANSLUCENT POLYGON, TEXEL 0xF IS TRANSPARENT.
@@ -216,7 +154,6 @@ int main(int argc, char **argv) {
       d->in_valid = 1; d->in_y = 7; d->in_x0 = X0; d->in_x1 = X1;
       d->in_col = 0xffffff; d->in_moire = 0;
       d->in_u = U0; d->in_v = V0; d->in_dudx = DU; d->in_dvdx = DV;
-      d->in_o = OZ_ID; d->in_dodx = DOZ_FLAT;   // R424
       d->in_tex = tex; d->in_tex_en = 1;
       tick();
       d->in_valid = 0;
@@ -264,7 +201,6 @@ int main(int argc, char **argv) {
     d->in_valid = 1; d->in_y = 9; d->in_x0 = X0; d->in_x1 = X1;
     d->in_col = 0x808080;
     d->in_u = 0; d->in_v = 0; d->in_dudx = 0x400; d->in_dvdx = 0;   // 4 texels a pixel, 8.8
-    d->in_o = OZ_ID; d->in_dodx = DOZ_FLAT;   // R424
     d->in_tex = 0x000001; d->in_tex_en = 1;
     tick();
     d->in_valid = 0;
@@ -285,7 +221,6 @@ int main(int argc, char **argv) {
     d->in_valid = 1; d->in_y = 40; d->in_x0 = 2; d->in_x1 = 3;
     d->in_col = 0xffffff; d->in_u = 0; d->in_v = 0;
     d->in_dudx = 0; d->in_dvdx = 0;
-    d->in_o = OZ_ID; d->in_dodx = DOZ_FLAT;   // R424
     d->in_tex = 0x000001; d->in_tex_en = 1;
     tick();
     d->in_valid = 0;

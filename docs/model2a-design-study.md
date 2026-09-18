@@ -18418,3 +18418,77 @@ not about the area, in a change whose own comments quote R418 and R420 on
 exactly that kind of carelessness.
 
 152,295 + 36 + 8 checks, 0 fails, no new lint warnings against HEAD.
+
+---
+
+**R431 -- PERSPECTIVE IS SHELVED AT `perspective-wip`. WHAT THE BISECT PROVED,
+AND WHAT IT DID NOT.**
+
+Five board builds and one working one. HEAD is back to the configuration on the
+board (R420 + R421 + R427); the perspective work is tagged `perspective-wip`
+(1ece27f) and loses nothing.
+
+**PROVEN.**
+
+| build | contents | board |
+|---|---|---|
+| s14, s32 | no perspective | **runs** |
+| s24 | R421 + R424 + R425 | locked up |
+| s26 | + R427 | black screen |
+| s31 | no R421, + perspective | frozen |
+| s35 | fill + walk sequencing | black screen |
+| s37 | same RTL, other seed | booted, froze at frame 1 |
+| s38 | fill only, walk fully reverted | dead from boot |
+
+Perspective is the cause, from both directions: removing it fixes, removing
+anything else does not. R421, R427 and R422/R423 are all cleared.
+
+**TIMING IS NOT THE MECHANISM, AND THIS IS THE NUMBER THAT SETTLES IT.**
+
+```
+             clk_mem   clk_sys   clk_i960
+  s32  RUNS   -1.836    -0.082    +0.474
+  s38  DEAD   -0.928    +0.444    +2.938
+```
+
+The dead build is better on every clock we own. Two theories died here and both
+were mine: that `clk_mem` corruption was wedging the mailbox, and that "99% ALM
+means the fitter cannot place" -- which Model 1 disproves outright at the same
+utilisation. **Neither was evidence. Both were excuses for a bug I had written.**
+
+**THE TEST GAP THAT LET IT THROUGH, WHICH IS THE REAL FINDING.**
+
+`tb_m2_raster_fill`'s 150,000-quad fuzz passes `false` for textured, so **not one
+of them enters the plane fit**. The only textured quads in the bench are
+`test_plane`'s and the triangle's -- and R424 gave both of them the SAME 1/z on
+all four vertices, deliberately, so the pre-existing checks would keep passing.
+With 1/z flat, `pf_o1` and `pf_o2` are zero, `nxo` and `nyo` are zero,
+`pf_clz(0)` returns 32 and `pf_scale` returns 0 WITHOUT DIVIDING.
+
+**The third divide round never once ran with a real numerator, and it went to
+hardware three times.** Adapting a bench so that old assertions still pass is how
+new code arrives untested; R424's own comments quote R418 and R420 on
+carelessness while doing it.
+
+R430 closes the gap -- seven depth cases including a vertex at 1/z = 0, all four
+at 1/z = 0, and saturating exponent spreads. **0 hung, worst 179 cycles.** So the
+fill does not wedge on any input the bench can construct, and the board still
+dies. Simulation and hardware disagree, and that disagreement is now the whole
+question.
+
+**WHAT IS STILL UNEXPLAINED -- START HERE.**
+
+- The fill is downstream of the TGP and can only reach it by backpressure, yet
+  the captures show the TGP parked with the quad store EMPTY (`quads x16 = 0`),
+  which is the opposite of backpressure.
+- The same RTL gives different symptoms on different seeds (s35 dead, s37
+  booted then froze), so something is marginal in a way the slack numbers do
+  not describe.
+- `oz_mul` widens both operands to 28 bits before multiplying, so eight 28x28
+  multipliers are built in one cycle where 13x15 was wanted. Wasteful, and the
+  likely bulk of the fill's ~2,000 ALM, but not a functional fault.
+
+**NEXT INSTRUMENT, NOT NEXT GUESS.** The fill has no counters. Before perspective
+is tried again it needs a stall counter per PF state on the debug wire, so a
+board capture says which state it sits in rather than leaving it to inference
+from four stages upstream.

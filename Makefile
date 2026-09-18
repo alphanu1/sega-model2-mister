@@ -641,9 +641,9 @@ test_m2_raster_fill: obj_raster_fill/Vm2_raster_fill
 	@echo "== test m2_raster_fill (the quad filler against its C reference)"
 	@./obj_raster_fill/Vm2_raster_fill $(TEST_ARGS)
 
-obj_raster_fill/Vm2_raster_fill: rtl/video/m2_raster_fill.sv rtl/video/m2_raster_div.sv rtl/video/m2_recip_rom.sv rtl/video/m2_persp_recip.sv sim/video/tb_m2_raster_fill.cpp
+obj_raster_fill/Vm2_raster_fill: rtl/video/m2_raster_fill.sv rtl/video/m2_raster_div.sv rtl/video/m2_recip_rom.sv sim/video/tb_m2_raster_fill.cpp
 	$(VBUILD) --top-module m2_raster_fill -Wno-UNUSEDSIGNAL -Wno-WIDTHTRUNC -Wno-TIMESCALEMOD -Wno-UNUSEDPARAM --Mdir obj_raster_fill -o Vm2_raster_fill -CFLAGS "-O2" \
-	  rtl/video/m2_raster_fill.sv rtl/video/m2_raster_div.sv rtl/video/m2_recip_rom.sv rtl/video/m2_persp_recip.sv sim/video/tb_m2_raster_fill.cpp
+	  rtl/video/m2_raster_fill.sv rtl/video/m2_raster_div.sv rtl/video/m2_recip_rom.sv sim/video/tb_m2_raster_fill.cpp
 
 test_m2_tile_fetch: obj_tile_fetch/Vm2_tile_fetch
 	@echo "== test m2_tile_fetch (the 2D tile word and glyph fetch)"
@@ -666,11 +666,11 @@ test_m2_raster3d: obj_raster3d/Vm2_raster3d
 	@./obj_raster3d/Vm2_raster3d $(TEST_ARGS)
 
 obj_raster3d/Vm2_raster3d: rtl/video/m2_raster3d.sv rtl/video/m2_quad_store.sv rtl/video/m2_raster_fill.sv \
-                           rtl/video/m2_raster_div.sv rtl/video/m2_recip_rom.sv rtl/video/m2_persp_recip.sv rtl/video/m2_raster_band.sv rtl/video/m2_span_tex.sv rtl/video/m2_texel.sv rtl/video/m2_texel_x2.sv rtl/video/m2_char_x2.sv rtl/tgp/m2_fifo_m10k.sv sim/video/tb_m2_raster3d.cpp
+                           rtl/video/m2_raster_div.sv rtl/video/m2_recip_rom.sv rtl/video/m2_raster_band.sv rtl/video/m2_span_tex.sv rtl/video/m2_texel.sv rtl/video/m2_texel_x2.sv rtl/video/m2_char_x2.sv rtl/tgp/m2_fifo_m10k.sv sim/video/tb_m2_raster3d.cpp
 	$(VBUILD) --top-module m2_raster3d -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-WIDTHEXPAND -Wno-PINCONNECTEMPTY -Wno-VARHIDDEN -Wno-WIDTHTRUNC \
 	  --Mdir obj_raster3d -o Vm2_raster3d -CFLAGS "-O2" \
 	  rtl/video/m2_raster3d.sv rtl/video/m2_quad_store.sv rtl/video/m2_raster_fill.sv \
-	  rtl/video/m2_raster_div.sv rtl/video/m2_recip_rom.sv rtl/video/m2_persp_recip.sv rtl/video/m2_raster_band.sv rtl/video/m2_span_tex.sv rtl/video/m2_texel.sv rtl/video/m2_texel_x2.sv rtl/video/m2_char_x2.sv rtl/tgp/m2_fifo_m10k.sv sim/video/tb_m2_raster3d.cpp
+	  rtl/video/m2_raster_div.sv rtl/video/m2_recip_rom.sv rtl/video/m2_raster_band.sv rtl/video/m2_span_tex.sv rtl/video/m2_texel.sv rtl/video/m2_texel_x2.sv rtl/video/m2_char_x2.sv rtl/tgp/m2_fifo_m10k.sv sim/video/tb_m2_raster3d.cpp
 
 test_m2_pair_cache: obj_pair_cache/Vm2_pair_cache
 	@echo "== test m2_pair_cache (the port's second dword serves the next read)"
@@ -804,11 +804,11 @@ test_m2_span_tex: obj_spantex/Vm2_span_tex
 # are set from the SAME variable, so they cannot drift apart -- which is the
 # defect this rule used to have.
 PIXSTEP ?= 2
-obj_spantex/Vm2_span_tex: rtl/video/m2_span_tex.sv rtl/video/m2_persp_recip.sv sim/video/tb_m2_span_tex.cpp
+obj_spantex/Vm2_span_tex: rtl/video/m2_span_tex.sv sim/video/tb_m2_span_tex.cpp
 	$(VERILATOR) --cc --exe --build -j 0 $(VFLAGS) --top-module m2_span_tex \
 	  -GPIXSTEP=$(PIXSTEP) --Mdir obj_spantex -o Vm2_span_tex \
 	  -CFLAGS "-O2 -DTB_PIXSTEP=$(PIXSTEP)" \
-	  rtl/video/m2_span_tex.sv rtl/video/m2_persp_recip.sv sim/video/tb_m2_span_tex.cpp
+	  rtl/video/m2_span_tex.sv sim/video/tb_m2_span_tex.cpp
 
 test_m2_texel: obj_texel/Vm2_texel
 	@echo "== test m2_texel (the texel fetch, against model2rd.ipp)"
