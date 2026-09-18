@@ -65,6 +65,10 @@ module m2_span_tex #(
   input  logic signed [31:0] in_u, in_v,          // quarter-texels, 16 fractional bits
   // 8.8 texels a pixel (R286), shifted up to this unit's 16.16 on the way in.
   input  logic signed [15:0] in_dudx, in_dvdx,
+  // R424: the third plane. in_u/in_v are u/z and v/z now, and this is 1/z; the
+  // walk divides one by the other to get back a texture coordinate.
+  input  logic signed [31:0] in_o,
+  input  logic signed [15:0] in_dodx,
   input  logic [23:0]        in_tex,
   input  logic               in_tex_en,
 
@@ -97,13 +101,17 @@ module m2_span_tex #(
   output logic [31:0]        dbg_texnz
 );
 
-  typedef enum logic [1:0] { T_IDLE, T_FETCH, T_EMIT, T_DRAIN } st_t;
+  typedef enum logic [2:0] { T_IDLE, T_WARM, T_FETCH, T_EMIT, T_DRAIN } st_t;
   st_t st;
 
   logic signed [31:0] y_r, x_r, x1_r;
   logic [23:0]        col_r;
   logic               moire_r;
   logic signed [31:0] u_r, v_r, du_r, dv_r;
+  logic signed [31:0] o_r, do_r;        // R424: 1/z and its gradient
+  logic [31:0]        rcp_r;            // R424: 2^30 / o_r, held for the group
+  logic [1:0]         rcp_age;          // cycles since the divider was given o
+  logic [1:0]         warm_cnt;
   logic [23:0]        tex_r;
   logic [3:0]         texel_r;
   // A FETCH THAT NEVER ANSWERS MUST NOT STOP THE BAND. m2_texel has its own
@@ -123,9 +131,51 @@ module m2_span_tex #(
   endfunction
   /* verilator lint_on UNUSEDSIGNAL */
 
+  // R424: THE PERSPECTIVE DIVIDE, ONE RECIPROCAL PER PIXSTEP GROUP.
+  //
+  // u/z, v/z and 1/z are linear in screen space and the plane fit is exact for
+  // them; u and v are not, which is the whole of the affine error R331
+  // measured at 36 texels for a 4:1 depth ratio and 1,408 for 100:1. Dividing
+  // per PIXEL is what the reference does and is not affordable here. Dividing
+  // once per group of PIXSTEP leaves only the error WITHIN four pixels, which
+  // is what consoles of this generation did.
+  //
+  // FED A GROUP AHEAD RATHER THAN STALLING. m2_persp_recip answers in two
+  // cycles. o_nxt is stable throughout T_FETCH, so handing it over on entry
+  // means the answer is waiting when the group advances, and the walk pays
+  // nothing on any fetch that took two cycles or more -- which is most of
+  // them. rcp_age is the guard for the ones that did not.
+  wire signed [31:0] o_nxt = o_r + (do_r <<< $clog2(PIXSTEP));
+  wire [15:0] rcp_d = (st == T_WARM) ? (o_r[31]   ? 16'd1 : {1'b0, o_r[30:16]})
+                                     : (o_nxt[31] ? 16'd1 : {1'b0, o_nxt[30:16]});
+  wire [31:0] rcp_q;
+  m2_persp_recip u_rcp (.clk(clk), .rst_n(rst_n), .in_d(rcp_d), .out_q(rcp_q));
+
+  // u = (u/z) / (1/z). u_r is u/z in 16.16 and rcp_r is 2^30/o, so the product
+  // is u/z * 2^29 / o and the shift brings it back to 16.16. Saturating,
+  // because a vertex whose 1/z interpolated to near zero is a vertex at the
+  // horizon and the quotient there is unbounded.
+  /* verilator lint_off UNUSEDSIGNAL */
+  function automatic logic signed [31:0] persp(input logic signed [31:0] c,
+                                               input logic [31:0] r);
+    logic [54:0] p;
+    begin
+      if (c[31]) persp = 32'sd0;                 // to_tx clamps these anyway
+      else begin
+        p = 55'({1'b0, c[30:8]}) * 55'(r);
+        persp = (p[54:9] > 46'h3fff_ffff) ? 32'sh3fff_ffff : 32'(p >> 9);
+      end
+    end
+  endfunction
+
+  /* verilator lint_on UNUSEDSIGNAL */
+
+  wire signed [31:0] u_px = persp(u_r, rcp_r);
+  wire signed [31:0] v_px = persp(v_r, rcp_r);
+
   assign tx_tex = {8'd0, tex_r};
-  assign tx_u   = to_tx(u_r);
-  assign tx_v   = to_tx(v_r);
+  assign tx_u   = to_tx(u_px);
+  assign tx_v   = to_tx(v_px);
   assign tx_req = (st == T_FETCH);
 
   // The texel as an intensity: 0x0 -> 0, 0xF -> 0xFF, evenly spaced.
@@ -199,10 +249,18 @@ module m2_span_tex #(
       st <= T_IDLE;
       y_r <= '0; x_r <= '0; x1_r <= '0; col_r <= '0; moire_r <= 1'b0;
       u_r <= '0; v_r <= '0; du_r <= '0; dv_r <= '0; tex_r <= '0; texel_r <= '0;
+      o_r <= '0; do_r <= '0; rcp_r <= 32'd0; rcp_age <= 2'd0; warm_cnt <= 2'd0;
       e_valid <= 1'b0; e_col <= '0; e_x <= '0; e_x1 <= '0; to_cnt <= '0;
       dbg_texpix <= '0; dbg_texnz <= '0;
     end else begin
       if (e_valid && out_ready) e_valid <= 1'b0;
+
+      // R424: THE AGE COUNTS UNCONDITIONALLY. It was inside the T_EMIT branch
+      // that waits on it, so a texel that came back in one cycle left rcp_age
+      // at 1 with nothing able to advance it -- the walk deadlocked and took
+      // the band with it. A guard must never be gated by the thing it guards.
+      if ((st == T_FETCH || st == T_EMIT) && rcp_age != 2'd3)
+        rcp_age <= rcp_age + 2'd1;
 
       case (st)
         T_IDLE: if (in_valid && tex_now) begin
@@ -215,8 +273,22 @@ module m2_span_tex #(
           v_r     <= in_v;
           du_r    <= 32'(in_dudx) <<< 8;
           dv_r    <= 32'(in_dvdx) <<< 8;
+          o_r     <= in_o;                       // R424
+          do_r    <= 32'(in_dodx) <<< 12;        // R424: 12.4, not 8.8
           tex_r   <= in_tex;
-          st      <= T_FETCH;
+          warm_cnt <= 2'd2;
+          st      <= T_WARM;
+        end
+
+        // R424: the span's FIRST group has nothing in flight to inherit, so it
+        // is the one place the divider is waited on. Two cycles once a span,
+        // not two cycles once a group.
+        T_WARM: begin
+          if (warm_cnt == 2'd0) begin
+            rcp_r   <= rcp_q;
+            rcp_age <= 2'd0;
+            st      <= T_FETCH;
+          end else warm_cnt <= warm_cnt - 2'd1;
         end
 
         T_FETCH: begin
@@ -233,7 +305,10 @@ module m2_span_tex #(
           end
         end
 
-        T_EMIT: if (!e_valid || out_ready) begin
+        // R424: the group cannot advance until the divider has answered for the
+        // one after it. rcp_age counts from the cycle o_nxt was handed over, so
+        // this only ever waits when the texel came back in under two cycles.
+        T_EMIT: if ((!e_valid || out_ready) && rcp_age >= 2'd2) begin
           e_valid <= !tx_skip;                  // R326: transparent texel
           e_x     <= x_r;
           e_x1    <= ((x_r + 32'(PIXSTEP) - 32'sd1) > x1_r)
@@ -264,6 +339,9 @@ module m2_span_tex #(
             // does not already give.
             u_r <= u_r + (du_r <<< $clog2(PIXSTEP));
             v_r <= v_r + (dv_r <<< $clog2(PIXSTEP));
+            o_r     <= o_nxt;                    // R424
+            rcp_r   <= rcp_q;
+            rcp_age <= 2'd0;
             st  <= T_FETCH;
           end
         end

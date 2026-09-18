@@ -225,6 +225,8 @@ module m2_raster3d #(
   logic [23:0] fl_span_col;
   logic signed [31:0] fl_span_u, fl_span_v;
   logic signed [15:0] fl_span_dudx, fl_span_dvdx;   // R286: 8.8
+  logic signed [31:0] fl_span_o;                    // R424: the 1/z plane
+  logic signed [15:0] fl_span_dodx;
   logic [23:0] fl_span_tex;
   logic        fl_span_tex_en;
 
@@ -256,7 +258,10 @@ module m2_raster3d #(
 
   // R327: 242 -> 194. y, x0 and x1 were 32 bits each for a 496x384 screen;
   // they are 16 now, which is 48 bits off every entry in this queue.
-  localparam int unsigned SQ_DW = 194;
+  // R424: +48 for the 1/z plane. The two new fields go at the TOP of the word
+  // so every existing slice keeps its position -- 32 entries of 242 bits is 13
+  // MLABs against 10, about 30 ALM, and no block RAM either way.
+  localparam int unsigned SQ_DW = 242;
   logic [SQ_DW-1:0] sq_din, sq_q;
   logic             sq_in_rdy, sq_qv, sq_rdy, sq_busy, sq_full;
   logic [15:0]      sq_cnt16;
@@ -266,7 +271,8 @@ module m2_raster3d #(
   // silently, and a silently dropped span is a hole in the picture.
   assign fl_span_ready = sq_in_rdy;
 
-  assign sq_din = { fl_span_y, fl_span_x0, fl_span_x1,
+  assign sq_din = { fl_span_o, fl_span_dodx,
+                    fl_span_y, fl_span_x0, fl_span_x1,
                     fl_span_u, fl_span_v,
                     fl_span_dudx, fl_span_dvdx,
                     fl_span_col, fl_span_tex,
@@ -296,6 +302,8 @@ module m2_raster3d #(
 
   // Unpacked, in the same order.
   // Only the top three fields moved: everything from u down keeps its slice.
+  wire signed [31:0] sq_o    = sq_q[241:210];   // R424
+  wire signed [15:0] sq_dodx  = sq_q[209:194];
   wire signed [15:0] sq_y    = sq_q[193:178];
   wire signed [15:0] sq_x0   = sq_q[177:162];
   wire signed [15:0] sq_x1   = sq_q[161:146];
@@ -333,6 +341,8 @@ module m2_raster3d #(
     .in_col(qo_col), .in_moire(qo_moire),
     .in_u0(qo_u0), .in_v0(qo_v0), .in_u1(qo_u1), .in_v1(qo_v1),
     .in_u2(qo_u2), .in_v2(qo_v2), .in_u3(qo_u3), .in_v3(qo_v3),
+    .in_oz0(qo_oz0), .in_oz1(qo_oz1),                    // R424
+    .in_oz2(qo_oz2), .in_oz3(qo_oz3),
     .in_tex(qo_tex),
     .view_x1(16'sd0), .view_x2(16'(SCR_W) - 16'sd1),
     .view_y1(band_y1), .view_y2(band_y2),
@@ -341,6 +351,7 @@ module m2_raster3d #(
     .span_col(fl_span_col), .span_moire(fl_span_moire),
     .span_u(fl_span_u), .span_v(fl_span_v),
     .span_dudx(fl_span_dudx), .span_dvdx(fl_span_dvdx),
+    .span_o(fl_span_o), .span_dodx(fl_span_dodx),        // R424
     .span_tex(fl_span_tex), .span_tex_en(fl_span_tex_en),
     .quad_done(fl_quad_done), .line_case(fl_line_case)
   );
@@ -389,6 +400,7 @@ module m2_raster3d #(
     .in_col(sq_col), .in_moire(sq_moire),
     .in_u(sq_u), .in_v(sq_v),
     .in_dudx(sq_dudx), .in_dvdx(sq_dvdx),
+    .in_o(sq_o), .in_dodx(sq_dodx),                  // R424
     .in_tex(sq_tex), .in_tex_en(sq_tex_en),
     .out_valid(tx_span_valid), .out_ready(tx_span_ready),
     .out_y(tx_span_y), .out_x0(tx_span_x0), .out_x1(tx_span_x1),

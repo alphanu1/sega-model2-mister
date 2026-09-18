@@ -18067,3 +18067,85 @@ aggregate measured in tb_m2_sdram.
 Kept in the study rather than deleted: the NBUF reasoning cost real time to
 establish and the next person to see a few bands and reach for vblank should
 find it.
+
+---
+
+**R424 -- PERSPECTIVE-CORRECT TEXTURING. R331 IS BUILT.**
+
+R274 said the plane fit is affine and "the shape of this code does not change
+when they arrive: the same plane fit runs on u/z, v/z and 1/z instead of on u
+and v." That is exactly what this is. R331 measured the affine error first: 36
+texels at a 4:1 depth ratio, 688 at 40:1, 1,408 at 100:1 on a 256-texel sheet --
+the texture wrapping several times across one polygon, and Ben's "wrong
+orientation, at least on the scenery".
+
+**THE EXPENSIVE HALF WAS ALREADY PAID.** m2_geo_project computes 1/z per vertex
+for the projection and R334 stopped discarding it. It already crosses the
+clipper and already sits in the quad store at UW = 192, exactly R331's costing.
+It terminated at dbg_oz* and was used for nothing. No new M10K.
+
+What was added:
+
+- **m2_persp_recip**: 2^30/d in two cycles. A 128-entry table on the top byte of
+  a normalised d, then one Newton step. Exhaustive over all 65,535 inputs:
+  worst relative error 0.0072%, which is 0.018 texels on a 256-texel sheet
+  against the 0.35 R331 budgets.
+- **m2_raster_fill**: 1/z normalised across the quad, u/z and v/z formed from
+  it, and a third divide round (S_PF_Q3) for the 1/z plane. Two setup states,
+  not one, because a variable shift feeding a multiplier in a single cycle is
+  the shape R418 and R420 both had to take apart afterwards.
+- **m2_span_tex**: one reciprocal per PIXSTEP group, fed a group AHEAD so the
+  walk pays nothing on any fetch that took two cycles or more. Dividing per
+  pixel is what the reference does and is not affordable; per group of four
+  leaves only the error within four pixels, which is what consoles of this
+  generation did.
+- **The span queue** grows 194 -> 242 bits. The two new fields go at the TOP of
+  the word so every existing slice keeps its position. 32 entries of 242 bits is
+  13 MLABs against 10 -- about 30 ALM, no block RAM.
+
+**FOUR DEFECTS, ALL CAUGHT BEFORE A BUILD.**
+
+1. **clz16 ran high-to-low**, so the last assignment won and it returned the
+   LOWEST set bit. Every power of two passed -- the debug dump showed d=1, 2,
+   256 and 16384 exact and everything else wrong by orders of magnitude. A
+   priority encoder's loop direction is the whole of its meaning.
+2. **The Newton residual was in the wrong binade.** dn*r0 lands in Q15, not
+   Q16, so `e` was a number near 2^15 instead of a correction near 2^16 and the
+   result was off by millions rather than parts per million.
+3. **The table clamped 2^23/128 from 65536 to 65535**, and the Newton step
+   converged on the clamp, so out_q was ALWAYS at or below the true reciprocal.
+   u then landed just under every exact texel boundary and took the texel
+   BELOW: every fetch in tb_m2_span_tex came back one short, uniformly. **A
+   rounding error with a constant sign is a different kind of bug from one
+   without.** Seventeen-bit entries and a rounded final shift; exact at every
+   power of two now.
+4. **rcp_age was incremented inside the branch that waits on it.** A texel that
+   returned in one cycle left it at 1 with nothing able to advance it -- the
+   walk deadlocked and took the band with it. A guard must never be gated by the
+   thing it guards.
+
+**AND ONE DESIGN ERROR CAUGHT AT THE DESK, WHICH IS THE POINT OF R331's METHOD.**
+pf_scale returns 8.8 and saturates at +/-32767, so +/-127.99 a pixel. Generous
+for a texture gradient; nowhere near enough for 1/z. A road quad at a 4:1 depth
+ratio moves the normalised 1/z across its whole 15-bit range in about a hundred
+pixels -- ~245 a pixel. It would have saturated flat, and a constant 1/z is
+precisely the affine picture this change exists to replace. The 1/z plane is
+12.4 instead: sixteen times the range for 1/16 LSB a pixel, which drifts 24 of
+32,704 across a 384-pixel span.
+
+**THE TEST THAT MATTERS.** Every pre-existing test drives 1/z flat, which makes
+the divide an identity -- they would all pass with the feature deleted. The new
+one holds u/z CONSTANT and sweeps 1/z over a 4:1 ratio, so the correct answer
+sweeps with it and the affine answer is a flat line:
+
+```
+  perspective: u swept 3.78x across the span (affine would be 1.00x),
+               worst error 0.0041%
+```
+
+Totals: m2_raster_fill 152,295 checks 0 fails, m2_span_tex 36/0 at both PIXSTEP
+2 and 4, m2_raster3d 8/0, m2_texel 8,066/0, m2_geometry 42/0. No new lint
+warnings against HEAD.
+
+**NOT YET MEASURED:** ALM and M10K, and whether the third divide round slows the
+fill enough to cost bands. Both need the fitter and the board.

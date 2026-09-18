@@ -40,6 +40,20 @@
 #include <random>
 #include <vector>
 
+// R424: THE FIT RUNS ON u/z, v/z AND 1/z NOW. Every quad below is given the
+// SAME 1/z at all four vertices -- a flat-depth quad -- because these tests
+// were written to check the plane fit and not the perspective divide, and a
+// varying depth would make them measure the wrong thing.
+//
+// 1/z arrives as a minifloat {exponent, mantissa} and is normalised across the
+// quad to ({1,mantissa} << 6) >> (emax - e). With all four equal the shift is
+// zero, so mantissa 0 gives 1 << 14 = 16384, and u/z = u * 16384 >> 13 = 2u.
+// Hence OZ_K: the gradients and plane values this fit produces are exactly
+// twice what the affine one produced, and that factor is the test's business.
+static const uint16_t OZ_FLAT = 0x7f00;   // exponent 127, mantissa 0
+static const double   OZ_K    = 2.0;
+
+
 // ------------------------------------------------------------------ reference
 
 struct Span {
@@ -398,6 +412,8 @@ static void test_plane(Vm2_raster_fill* d) {
   d->in_u1 = U[1]; d->in_v1 = V[1];
   d->in_u2 = U[2]; d->in_v2 = V[2];
   d->in_u3 = U[3]; d->in_v3 = V[3];
+  d->in_oz0 = OZ_FLAT; d->in_oz1 = OZ_FLAT;   // R424
+  d->in_oz2 = OZ_FLAT; d->in_oz3 = OZ_FLAT;
   d->in_col = 0xffffff; d->in_moire = 0;
   d->in_tex = 1;                                // bit 0: textured
   d->in_valid = 1; d->span_ready = 1;
@@ -415,26 +431,26 @@ static void test_plane(Vm2_raster_fill* d) {
       // R286: the gradient is 8.8, not 16.16 -- sixteen bits of it, signed.
       const double du = (double)(int16_t)d->span_dudx / 256.0;
       const double dv = (double)(int16_t)d->span_dvdx / 256.0;
-      const double wu = U[0] + dudx * (x0 - VX[0]) + dudy * (y - VY[0]);
-      const double wv = V[0] + dvdx * (x0 - VX[0]) + dvdy * (y - VY[0]);
+      const double wu = OZ_K * (U[0] + dudx * (x0 - VX[0]) + dudy * (y - VY[0]));
+      const double wv = OZ_K * (V[0] + dvdx * (x0 - VX[0]) + dvdy * (y - VY[0]));
       ++spans_seen; tex_checks += 4;
       // A quarter of a texel of slack: the gradients are a fixed-point divide
       // and the span is up to 130 pixels from the vertex the plane is anchored
       // at, so a bit of the quotient is a fraction of a texel by the far end.
-      if (fabs(u - wu) > 0.5) {
+      if (fabs(u - wu) > 1.0) {
         if (tex_fails < 6) printf("  FAIL plane u at (%d,%d): %.3f want %.3f\n", x0, y, u, wu);
         ++tex_fails;
       }
-      if (fabs(v - wv) > 0.5) {
+      if (fabs(v - wv) > 1.0) {
         if (tex_fails < 6) printf("  FAIL plane v at (%d,%d): %.3f want %.3f\n", x0, y, v, wv);
         ++tex_fails;
       }
-      if (fabs(du - dudx) > 0.02) {
-        if (tex_fails < 6) printf("  FAIL du/dx %.5f want %.5f\n", du, dudx);
+      if (fabs(du - OZ_K * dudx) > 0.04) {
+        if (tex_fails < 6) printf("  FAIL du/dx %.5f want %.5f\n", du, OZ_K * dudx);
         ++tex_fails;
       }
-      if (fabs(dv - dvdx) > 0.02) {
-        if (tex_fails < 6) printf("  FAIL dv/dx %.5f want %.5f\n", dv, dvdx);
+      if (fabs(dv - OZ_K * dvdx) > 0.04) {
+        if (tex_fails < 6) printf("  FAIL dv/dx %.5f want %.5f\n", dv, OZ_K * dvdx);
         ++tex_fails;
       }
     }
@@ -461,6 +477,8 @@ static void test_plane(Vm2_raster_fill* d) {
     d->in_x2 = TX[2]; d->in_y2 = TY[2]; d->in_x3 = TX[3]; d->in_y3 = TY[3];
     d->in_u0 = 100; d->in_v0 = 200; d->in_u1 = 100; d->in_v1 = 200;
     d->in_u2 = 400; d->in_v2 = 220; d->in_u3 = 180; d->in_v3 = 700;
+    d->in_oz0 = OZ_FLAT; d->in_oz1 = OZ_FLAT;   // R424
+    d->in_oz2 = OZ_FLAT; d->in_oz3 = OZ_FLAT;
     d->in_valid = 1; d->eval();
     accepted = false; retired = false; guard = 0;
     long tri_spans = 0;
