@@ -146,8 +146,18 @@ module m2_geo_xform (
   logic [3:0]  issue;          // multiplies issued, 0..8
   logic [3:0]  got;            // results captured, 0..9
 
-  wire [1:0]  term  = 2'(issue % 4'd3);       // which of x, y, z
-  wire [1:0]  comp  = 2'(issue / 4'd3);       // which output component
+  // R408: CARRIED, NOT DIVIDED. These were `issue % 3` and `issue / 3`. Three
+  // is not a power of two, so Quartus built a real divider and put it in the
+  // datapath: report_timing had ac[2] -> Mod1|auto_generated|divider -> the FP
+  // pool's operand muxes -> fp_add's comparator as the worst path on clk_sys,
+  // -1.784 ns of a 20 ns period.
+  //
+  // `issue` only ever resets to 0 or increments by 1, so the quotient and
+  // remainder can be carried alongside it in flops and the divider disappears.
+  // The invariant is term == issue % 3 and comp == issue / 3, maintained at
+  // every site that touches `issue`.
+  logic [1:0] term;      // which of x, y, z      == issue % 3
+  logic [1:0] comp;      // which output component == issue / 3
   wire [3:0]  m_sel = 4'({2'd0, term} * 4'd3 + {2'd0, comp});
 
   assign mul_a = mat[m_sel];
@@ -167,8 +177,11 @@ module m2_geo_xform (
   logic        atrans;
 
   // Schedule: adds at ac 0,1,2 / 5,6,7 / 10,11,12. round = ac/5, comp = ac%5.
-  wire [1:0] a_round = 2'(ac / 4'd5);
-  wire [2:0] a_comp  = 3'(ac % 4'd5);
+  // R408: carried in flops rather than divided -- see `term`/`comp` above. Five
+  // is not a power of two either, and this was the second divider on the same
+  // path.
+  logic [1:0] a_round;   // == ac / 5
+  logic [2:0] a_comp;    // == ac % 5
   wire       a_slot  = (a_comp <= 3'd2);
 
   wire [3:0]  ra    = 4'({1'd0, a_comp} * 4'd3);
@@ -205,6 +218,7 @@ module m2_geo_xform (
     if (!rst_n) begin
       mst <= M_IDLE; ast <= A_IDLE;
       issue <= '0; got <= '0; ac <= '0; a_got <= '0; a_total <= '0;
+      term <= '0; comp <= '0; a_round <= '0; a_comp <= '0;   // R408
       fill_bank <= 1'b0; sum_bank <= 1'b0; bank_full <= 1'b0;
       bank_trans <= 1'b0; atrans <= 1'b0;
       px <= '0; py <= '0; pz <= '0; ptrans <= 1'b0;
@@ -232,6 +246,7 @@ module m2_geo_xform (
           if (in_valid && in_ready) begin
             px <= in_x; py <= in_y; pz <= in_z; ptrans <= in_translate;
             issue <= '0; got <= '0;
+            term  <= '0; comp <= '0;                              // R408
             mst <= M_ISSUE;
           end
         end
@@ -242,7 +257,13 @@ module m2_geo_xform (
           // product and leave r[] one short forever.
           if (mul_gnt) begin
             if (issue == 4'd8) mst <= M_WAIT;  // stop at 8: m_sel must stay in range
-            else               issue <= issue + 4'd1;
+            else begin
+              issue <= issue + 4'd1;
+              // R408: term wraps 0,1,2 and carries into comp -- issue % 3 and
+              // issue / 3 without the divider.
+              if (term == 2'd2) begin term <= 2'd0; comp <= comp + 2'd1; end
+              else                    term <= term + 2'd1;
+            end
           end
         end
         M_WAIT: begin
@@ -264,6 +285,7 @@ module m2_geo_xform (
             fill_bank <= ~fill_bank;
             bank_full <= 1'b0;
             ac        <= '0;
+            a_round   <= '0; a_comp <= '0;                        // R408
             a_got     <= '0;
             a_total   <= '0;
             ast       <= A_RUN;
@@ -276,7 +298,12 @@ module m2_geo_xform (
           // has already written.
           if (!a_slot || add_gnt) begin
             if (ac == ac_last) ast <= A_OUT;
-            else               ac  <= ac + 4'd1;
+            else begin
+              ac <= ac + 4'd1;
+              // R408: a_comp wraps 0..4 and carries into a_round.
+              if (a_comp == 3'd4) begin a_comp <= 3'd0; a_round <= a_round + 2'd1; end
+              else                      a_comp <= a_comp + 3'd1;
+            end
           end
         end
         A_OUT: begin
