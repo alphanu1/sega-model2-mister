@@ -1,0 +1,1156 @@
+%Warning-EOFNEWLINE: rtl/sound/jt12/jt10_adpcm_acc.v:90:28: Missing newline at end of file (POSIX 3.206).
+                                                          : ... Suggest add newline.
+   90 | endmodule // jt10_adpcm_acc
+      |                            ^
+                     ... For warning description see https://verilator.org/warn/EOFNEWLINE?v=5.050
+                     ... Use "/* verilator lint_off EOFNEWLINE */" and lint_on around source to disable this message.
+%Warning-EOFNEWLINE: rtl/sound/jt12/jt10_adpcm_dbrom.v:54:30: Missing newline at end of file (POSIX 3.206).
+                                                            : ... Suggest add newline.
+   54 | endmodule // jt10_adpcm_dbrom
+      |                              ^
+%Warning-EOFNEWLINE: rtl/sound/jt12/jt10_adpcm_drvA.v:337:29: Missing newline at end of file (POSIX 3.206).
+                                                            : ... Suggest add newline.
+  337 | endmodule // jt10_adpcm_drvA
+      |                             ^
+%Warning-EOFNEWLINE: rtl/sound/jt12/jt10_adpcma_lut.v:144:29: Missing newline at end of file (POSIX 3.206).
+                                                            : ... Suggest add newline.
+  144 | endmodule // jt10_adpcma_lut
+      |                             ^
+%Warning-EOFNEWLINE: rtl/sound/jt12/jt10_adpcmb_interpol.v:96:34: Missing newline at end of file (POSIX 3.206).
+                                                                : ... Suggest add newline.
+   96 | endmodule // jt10_adpcmb_interpol
+      |                                  ^
+%Warning-EOFNEWLINE: rtl/sound/jt12/jt10_cen_burst.v:59:28: Missing newline at end of file (POSIX 3.206).
+                                                          : ... Suggest add newline.
+   59 | endmodule // jt10_cen_burst
+      |                            ^
+%Warning-EOFNEWLINE: rtl/sound/jt12/jt12_dout.v:47:23: Missing newline at end of file (POSIX 3.206).
+                                                     : ... Suggest add newline.
+   47 | endmodule // jt12_dout
+      |                       ^
+%Warning-EOFNEWLINE: rtl/sound/jt12/jt12_eg.v:203:21: Missing newline at end of file (POSIX 3.206).
+                                                    : ... Suggest add newline.
+  203 | endmodule // jt12_eg
+      |                     ^
+%Warning-EOFNEWLINE: rtl/sound/jt12/jt12_eg_cnt.v:50:25: Missing newline at end of file (POSIX 3.206).
+                                                       : ... Suggest add newline.
+   50 | endmodule // jt12_eg_cnt
+      |                         ^
+%Warning-EOFNEWLINE: rtl/sound/jt12/jt12_eg_comb.v:139:26: Missing newline at end of file (POSIX 3.206).
+                                                         : ... Suggest add newline.
+  139 | endmodule // jt12_eg_comb
+      |                          ^
+%Warning-EOFNEWLINE: rtl/sound/jt12/jt12_eg_ctrl.v:122:26: Missing newline at end of file (POSIX 3.206).
+                                                         : ... Suggest add newline.
+  122 | endmodule // jt12_eg_ctrl
+      |                          ^
+%Warning-EOFNEWLINE: rtl/sound/jt12/jt12_eg_final.v:57:27: Missing newline at end of file (POSIX 3.206).
+                                                         : ... Suggest add newline.
+   57 | endmodule // jt12_eg_final
+      |                           ^
+%Warning-EOFNEWLINE: rtl/sound/jt12/jt12_eg_pure.v:81:26: Missing newline at end of file (POSIX 3.206).
+                                                        : ... Suggest add newline.
+   81 | endmodule // jt12_eg_pure
+      |                          ^
+%Warning-EOFNEWLINE: rtl/sound/jt12/jt12_eg_step.v:111:21: Missing newline at end of file (POSIX 3.206).
+                                                         : ... Suggest add newline.
+  111 | endmodule // eg_step
+      |                     ^
+%Warning-EOFNEWLINE: rtl/sound/jt12/jt12_pcm.v:109:22: Missing newline at end of file (POSIX 3.206).
+                                                     : ... Suggest add newline.
+  109 | endmodule // jt12_pcm
+      |                      ^
+%Warning-EOFNEWLINE: rtl/sound/jt12/jt12_pg_comb.v:90:26: Missing newline at end of file (POSIX 3.206).
+                                                        : ... Suggest add newline.
+   90 | endmodule // jt12_pg_comb
+      |                          ^
+%Warning-EOFNEWLINE: rtl/sound/jt12/jt12_pg_inc.v:50:25: Missing newline at end of file (POSIX 3.206).
+                                                       : ... Suggest add newline.
+   50 | endmodule // jt12_pg_inc
+      |                         ^
+%Warning-EOFNEWLINE: rtl/sound/jt12/jt12_pg_sum.v:49:25: Missing newline at end of file (POSIX 3.206).
+                                                       : ... Suggest add newline.
+   49 | endmodule // jt12_pg_sum
+      |                         ^
+%Warning-EOFNEWLINE: rtl/sound/jt12/jt12_reg_ch.v:128:10: Missing newline at end of file (POSIX 3.206).
+                                                        : ... Suggest add newline.
+  128 | endmodule
+      |          ^
+%Warning-EOFNEWLINE: rtl/sound/jt12/jt12_rst.v:38:22: Missing newline at end of file (POSIX 3.206).
+                                                    : ... Suggest add newline.
+   38 | endmodule // jt12_rst
+      |                      ^
+%Warning-EOFNEWLINE: rtl/sound/jt12/jt12_single_acc.v:62:29: Missing newline at end of file (POSIX 3.206).
+                                                           : ... Suggest add newline.
+   62 | endmodule // jt12_single_acc
+      |                             ^
+%Warning-EOFNEWLINE: build_id.v:1:28: Missing newline at end of file (POSIX 3.206).
+                                    : ... Suggest add newline.
+    1 | `define BUILD_DATE "260906"
+      |                            ^
+%Warning-PINCONNECTEMPTY: rtl/sound/m2_sound_board.sv:163:6: Instance pin connected by name with empty reference: 'E'
+  163 |     .E(), .VMAn(),
+      |      ^
+                          ... For warning description see https://verilator.org/warn/PINCONNECTEMPTY?v=5.050
+                          ... Use "/* verilator lint_off PINCONNECTEMPTY */" and lint_on around source to disable this message.
+%Warning-PINCONNECTEMPTY: rtl/sound/m2_sound_board.sv:163:12: Instance pin connected by name with empty reference: 'VMAn'
+  163 |     .E(), .VMAn(),
+      |            ^~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/m2_sound_board.sv:165:6: Instance pin connected by name with empty reference: 'BGn'
+  165 |     .BGn(), .oRESETn(), .oHALTEDn(),
+      |      ^~~
+%Warning-PINCONNECTEMPTY: rtl/sound/m2_sound_board.sv:165:14: Instance pin connected by name with empty reference: 'oRESETn'
+  165 |     .BGn(), .oRESETn(), .oHALTEDn(),
+      |              ^~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/m2_sound_board.sv:165:26: Instance pin connected by name with empty reference: 'oHALTEDn'
+  165 |     .BGn(), .oRESETn(), .oHALTEDn(),
+      |                          ^~~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/m2_sound_board.sv:361:73: Instance pin connected by name with empty reference: 'rdata'
+  361 |     .cs(sel_pcm1 && ds), .we(we), .addr(addr[2:1]), .wdata(oedb[7:0]), .rdata(),
+      |                                                                         ^~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/m2_sound_board.sv:378:73: Instance pin connected by name with empty reference: 'rdata'
+  378 |     .cs(sel_pcm2 && ds), .we(we), .addr(addr[2:1]), .wdata(oedb[7:0]), .rdata(),
+      |                                                                         ^~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/m2_sound_board.sv:390:6: Instance pin connected by name with empty reference: 'dbg_mean_lat'
+  390 |     .dbg_mean_lat(), .dbg_miss_1k()
+      |      ^~~~~~~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/m2_sound_board.sv:390:23: Instance pin connected by name with empty reference: 'dbg_miss_1k'
+  390 |     .dbg_mean_lat(), .dbg_miss_1k()
+      |                       ^~~~~~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/m2_sound_board.sv:529:6: Instance pin connected by name with empty reference: 'dbg_underruns'
+  529 |     .dbg_underruns(), .dbg_level()
+      |      ^~~~~~~~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/m2_sound_board.sv:529:24: Instance pin connected by name with empty reference: 'dbg_level'
+  529 |     .dbg_underruns(), .dbg_level()
+      |                        ^~~~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/fx68k/fx68k.sv:352:98: Instance pin connected by name with empty reference: 'lineBmap'
+  352 |  uaddrDecode uaddrDecode( .opcode( Ir), .a1, .a2, .a3, .isPriv, .isIllegal, .isLineA, .isLineF, .lineBmap());
+      |                                                                                                  ^~~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/jt12/jt03.v:82:6: Instance pin connected by name with empty reference: 'adpcma_addr'
+   82 |     .adpcma_addr    (              ),  
+      |      ^~~~~~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/jt12/jt03.v:83:6: Instance pin connected by name with empty reference: 'adpcma_bank'
+   83 |     .adpcma_bank    (              ),
+      |      ^~~~~~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/jt12/jt03.v:84:6: Instance pin connected by name with empty reference: 'adpcma_roe_n'
+   84 |     .adpcma_roe_n   (              ),  
+      |      ^~~~~~~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/jt12/jt03.v:87:6: Instance pin connected by name with empty reference: 'adpcmb_addr'
+   87 |     .adpcmb_addr    (              ),  
+      |      ^~~~~~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/jt12/jt03.v:88:6: Instance pin connected by name with empty reference: 'adpcmb_roe_n'
+   88 |     .adpcmb_roe_n   (              ),  
+      |      ^~~~~~~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/jt12/jt03.v:95:6: Instance pin connected by name with empty reference: 'fm_snd_right'
+   95 |     .fm_snd_right   (),
+      |      ^~~~~~~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/jt12/jt03.v:96:6: Instance pin connected by name with empty reference: 'adpcmA_l'
+   96 |     .adpcmA_l       (),
+      |      ^~~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/jt12/jt03.v:97:6: Instance pin connected by name with empty reference: 'adpcmA_r'
+   97 |     .adpcmA_r       (),
+      |      ^~~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/jt12/jt03.v:98:6: Instance pin connected by name with empty reference: 'adpcmB_l'
+   98 |     .adpcmB_l       (),
+      |      ^~~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/jt12/jt03.v:99:6: Instance pin connected by name with empty reference: 'adpcmB_r'
+   99 |     .adpcmB_r       (),
+      |      ^~~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/jt12/jt03.v:102:6: Instance pin connected by name with empty reference: 'snd_left'
+  102 |     .snd_left       (),
+      |      ^~~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/jt12/jt10.v:87:6: Instance pin connected by name with empty reference: 'adpcmA_l'
+   87 |     .adpcmA_l       (              ),
+      |      ^~~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/jt12/jt10.v:88:6: Instance pin connected by name with empty reference: 'adpcmA_r'
+   88 |     .adpcmA_r       (              ),
+      |      ^~~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/jt12/jt10.v:89:6: Instance pin connected by name with empty reference: 'adpcmB_l'
+   89 |     .adpcmB_l       (              ),
+      |      ^~~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/jt12/jt10.v:90:6: Instance pin connected by name with empty reference: 'adpcmB_r'
+   90 |     .adpcmB_r       (              ),
+      |      ^~~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/jt12/jt10.v:94:6: Instance pin connected by name with empty reference: 'IOA_out'
+   94 |     .IOA_out        (               ),
+      |      ^~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/jt12/jt10.v:95:6: Instance pin connected by name with empty reference: 'IOB_out'
+   95 |     .IOB_out        (               ),
+      |      ^~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/jt12/jt10.v:96:6: Instance pin connected by name with empty reference: 'IOA_oe'
+   96 |     .IOA_oe         (               ),
+      |      ^~~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/jt12/jt10.v:97:6: Instance pin connected by name with empty reference: 'IOB_oe'
+   97 |     .IOB_oe         (               ),
+      |      ^~~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/jt12/jt10.v:106:6: Instance pin connected by name with empty reference: 'debug_view'
+  106 |     .debug_view     (              )
+      |      ^~~~~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/jt12/jt10_adpcmb_interpol.v:91:6: Instance pin connected by name with empty reference: 'r'
+   91 |     .r      (             ),
+      |      ^
+%Warning-PINCONNECTEMPTY: rtl/sound/jt12/jt10_adpcmb_interpol.v:92:6: Instance pin connected by name with empty reference: 'working'
+   92 |     .working(             )
+      |      ^~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/jt12/jt12.v:59:6: Instance pin connected by name with empty reference: 'adpcma_addr'
+   59 |     .adpcma_addr    (      ),  
+      |      ^~~~~~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/jt12/jt12.v:60:6: Instance pin connected by name with empty reference: 'adpcma_bank'
+   60 |     .adpcma_bank    (      ),
+      |      ^~~~~~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/jt12/jt12.v:61:6: Instance pin connected by name with empty reference: 'adpcma_roe_n'
+   61 |     .adpcma_roe_n   (      ),  
+      |      ^~~~~~~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/jt12/jt12.v:63:6: Instance pin connected by name with empty reference: 'adpcmb_addr'
+   63 |     .adpcmb_addr    (      ),  
+      |      ^~~~~~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/jt12/jt12.v:64:6: Instance pin connected by name with empty reference: 'adpcmb_roe_n'
+   64 |     .adpcmb_roe_n   (      ),  
+      |      ^~~~~~~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/jt12/jt12.v:68:6: Instance pin connected by name with empty reference: 'psg_A'
+   68 |     .psg_A          (),
+      |      ^~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/jt12/jt12.v:69:6: Instance pin connected by name with empty reference: 'psg_B'
+   69 |     .psg_B          (),
+      |      ^~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/jt12/jt12.v:70:6: Instance pin connected by name with empty reference: 'psg_C'
+   70 |     .psg_C          (),
+      |      ^~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/jt12/jt12.v:71:6: Instance pin connected by name with empty reference: 'fm_snd_left'
+   71 |     .fm_snd_left    (),
+      |      ^~~~~~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/jt12/jt12.v:72:6: Instance pin connected by name with empty reference: 'fm_snd_right'
+   72 |     .fm_snd_right   (),
+      |      ^~~~~~~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/jt12/jt12.v:73:6: Instance pin connected by name with empty reference: 'adpcmA_l'
+   73 |     .adpcmA_l       (              ),
+      |      ^~~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/jt12/jt12.v:74:6: Instance pin connected by name with empty reference: 'adpcmA_r'
+   74 |     .adpcmA_r       (              ),
+      |      ^~~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/jt12/jt12.v:75:6: Instance pin connected by name with empty reference: 'adpcmB_l'
+   75 |     .adpcmB_l       (              ),
+      |      ^~~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/jt12/jt12.v:76:6: Instance pin connected by name with empty reference: 'adpcmB_r'
+   76 |     .adpcmB_r       (              ),
+      |      ^~~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/jt12/jt12.v:80:6: Instance pin connected by name with empty reference: 'IOA_out'
+   80 |     .IOA_out        (               ),
+      |      ^~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/jt12/jt12.v:81:6: Instance pin connected by name with empty reference: 'IOB_out'
+   81 |     .IOB_out        (               ),
+      |      ^~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/jt12/jt12.v:82:6: Instance pin connected by name with empty reference: 'IOA_oe'
+   82 |     .IOA_oe         (               ),
+      |      ^~~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/jt12/jt12.v:83:6: Instance pin connected by name with empty reference: 'IOB_oe'
+   83 |     .IOB_oe         (               ),
+      |      ^~~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/jt12/jt12.v:86:6: Instance pin connected by name with empty reference: 'psg_snd'
+   86 |     .psg_snd        (),
+      |      ^~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/jt12/jt12.v:90:6: Instance pin connected by name with empty reference: 'debug_view'
+   90 |     .debug_view     (               )
+      |      ^~~~~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/jt12/jt12_pcm_interpol.v:104:6: Instance pin connected by name with empty reference: 'r'
+  104 |     .r      (             ),
+      |      ^
+%Warning-PINCONNECTEMPTY: rtl/sound/jt12/jt12_timers.v:83:6: Instance pin connected by name with empty reference: 'overflow'
+   83 |     .overflow   (             )
+      |      ^~~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/sound/jt12/jt12_top.v:481:14: Instance pin connected by name with empty reference: 'sample'
+  481 |             .sample     (           )
+      |              ^~~~~~
+%Warning-PINCONNECTEMPTY: rtl/io/m2_ioz80.sv:162:40: Instance pin connected by name with empty reference: 'iorq_n'
+  162 |     .m1_n(dbg_m1_n), .mreq_n(mreq_n), .iorq_n(), .rd_n(rd_n), .wr_n(wr_n),
+      |                                        ^~~~~~
+%Warning-PINCONNECTEMPTY: rtl/io/m2_ioz80.sv:163:6: Instance pin connected by name with empty reference: 'rfsh_n'
+  163 |     .rfsh_n(), .halt_n(), .busak_n(),
+      |      ^~~~~~
+%Warning-PINCONNECTEMPTY: rtl/io/m2_ioz80.sv:163:17: Instance pin connected by name with empty reference: 'halt_n'
+  163 |     .rfsh_n(), .halt_n(), .busak_n(),
+      |                 ^~~~~~
+%Warning-PINCONNECTEMPTY: rtl/io/m2_ioz80.sv:163:28: Instance pin connected by name with empty reference: 'busak_n'
+  163 |     .rfsh_n(), .halt_n(), .busak_n(),
+      |                            ^~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/cpu/tv80/tv80s.v:94:7: Instance pin connected by name with empty reference: 'IntE'
+   94 |      .IntE (),
+      |       ^~~~
+%Warning-PINCONNECTEMPTY: rtl/cpu/tv80/tv80s.v:95:7: Instance pin connected by name with empty reference: 'stop'
+   95 |      .stop (),
+      |       ^~~~
+%Warning-PINCONNECTEMPTY: rtl/tgp/m2_copro.sv:445:6: Instance pin connected by name with empty reference: 'dbg_ucode_ram_csum'
+  445 |     .dbg_ucode_ram_csum(), .dbg_ucode_ram_ok(),
+      |      ^~~~~~~~~~~~~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/tgp/m2_copro.sv:445:29: Instance pin connected by name with empty reference: 'dbg_ucode_ram_ok'
+  445 |     .dbg_ucode_ram_csum(), .dbg_ucode_ram_ok(),
+      |                             ^~~~~~~~~~~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/tgp/m2_copro.sv:450:27: Instance pin connected by name with empty reference: 'ram_we'
+  450 |     .ram_req(ram_req_w), .ram_we(), .ram_addr(), .ram_wdata(),
+      |                           ^~~~~~
+%Warning-PINCONNECTEMPTY: rtl/tgp/m2_copro.sv:450:38: Instance pin connected by name with empty reference: 'ram_addr'
+  450 |     .ram_req(ram_req_w), .ram_we(), .ram_addr(), .ram_wdata(),
+      |                                      ^~~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/tgp/m2_copro.sv:450:51: Instance pin connected by name with empty reference: 'ram_wdata'
+  450 |     .ram_req(ram_req_w), .ram_we(), .ram_addr(), .ram_wdata(),
+      |                                                   ^~~~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/video/m2_geometry.sv:726:36: Instance pin connected by name with empty reference: 'out_moire'
+  726 |     .out_col(q_col), .out_z(q_z), .out_moire(),
+      |                                    ^~~~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/video/m2_raster3d.sv:491:10: Instance pin connected by name with empty reference: 'dbg_spans'
+  491 |         .dbg_spans(), .dbg_dropped(), .dbg_pixels(bd_pixels[b])
+      |          ^~~~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/video/m2_raster3d.sv:491:24: Instance pin connected by name with empty reference: 'dbg_dropped'
+  491 |         .dbg_spans(), .dbg_dropped(), .dbg_pixels(bd_pixels[b])
+      |                        ^~~~~~~~~~~
+%Warning-PINMISSING: sys/hps_io.sv:567:14: Instance has missing pin: 'tx_empty'
+  567 |   ps2_device keyboard
+      |              ^~~~~~~~
+                     sys/hps_io.sv:721:15: ... Location of port declaration
+  721 |  output reg   tx_empty,
+      |               ^~~~~~~~
+                     ... For warning description see https://verilator.org/warn/PINMISSING?v=5.050
+                     ... Use "/* verilator lint_off PINMISSING */" and lint_on around source to disable this message.
+%Warning-PINMISSING: sys/hps_io.sv:590:14: Instance has missing pin: 'tx_empty'
+  590 |   ps2_device mouse
+      |              ^~~~~
+                     sys/hps_io.sv:721:15: ... Location of port declaration
+  721 |  output reg   tx_empty,
+      |               ^~~~~~~~
+%Warning-PINCONNECTEMPTY: rtl/pll/pll.v:190:6: Instance pin connected by name with empty reference: 'fboutclk'
+  190 |     .fboutclk   ( ),
+      |      ^~~~~~~~
+%Warning-PINCONNECTEMPTY: Model2.sv:239:3: Instance pin connected by name with empty reference: 'EXT_BUS'
+  239 |  .EXT_BUS(),
+      |   ^~~~~~~
+%Warning-PINCONNECTEMPTY: Model2.sv:240:3: Instance pin connected by name with empty reference: 'gamma_bus'
+  240 |  .gamma_bus(),
+      |   ^~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'joystick_1'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:42:20: ... Location of port declaration
+   42 |  output reg [31:0] joystick_1,
+      |                    ^~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'joystick_2'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:43:20: ... Location of port declaration
+   43 |  output reg [31:0] joystick_2,
+      |                    ^~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'joystick_3'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:44:20: ... Location of port declaration
+   44 |  output reg [31:0] joystick_3,
+      |                    ^~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'joystick_4'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:45:20: ... Location of port declaration
+   45 |  output reg [31:0] joystick_4,
+      |                    ^~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'joystick_5'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:46:20: ... Location of port declaration
+   46 |  output reg [31:0] joystick_5,
+      |                    ^~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'joystick_l_analog_1'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:50:20: ... Location of port declaration
+   50 |  output reg [15:0] joystick_l_analog_1,
+      |                    ^~~~~~~~~~~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'joystick_l_analog_2'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:51:20: ... Location of port declaration
+   51 |  output reg [15:0] joystick_l_analog_2,
+      |                    ^~~~~~~~~~~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'joystick_l_analog_3'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:52:20: ... Location of port declaration
+   52 |  output reg [15:0] joystick_l_analog_3,
+      |                    ^~~~~~~~~~~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'joystick_l_analog_4'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:53:20: ... Location of port declaration
+   53 |  output reg [15:0] joystick_l_analog_4,
+      |                    ^~~~~~~~~~~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'joystick_l_analog_5'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:54:20: ... Location of port declaration
+   54 |  output reg [15:0] joystick_l_analog_5,
+      |                    ^~~~~~~~~~~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'joystick_r_analog_1'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:57:20: ... Location of port declaration
+   57 |  output reg [15:0] joystick_r_analog_1,
+      |                    ^~~~~~~~~~~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'joystick_r_analog_2'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:58:20: ... Location of port declaration
+   58 |  output reg [15:0] joystick_r_analog_2,
+      |                    ^~~~~~~~~~~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'joystick_r_analog_3'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:59:20: ... Location of port declaration
+   59 |  output reg [15:0] joystick_r_analog_3,
+      |                    ^~~~~~~~~~~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'joystick_r_analog_4'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:60:20: ... Location of port declaration
+   60 |  output reg [15:0] joystick_r_analog_4,
+      |                    ^~~~~~~~~~~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'joystick_r_analog_5'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:61:20: ... Location of port declaration
+   61 |  output reg [15:0] joystick_r_analog_5,
+      |                    ^~~~~~~~~~~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'joystick_0_rumble'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:63:20: ... Location of port declaration
+   63 |  input      [15:0] joystick_0_rumble,  
+      |                    ^~~~~~~~~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'joystick_1_rumble'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:64:20: ... Location of port declaration
+   64 |  input      [15:0] joystick_1_rumble,
+      |                    ^~~~~~~~~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'joystick_2_rumble'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:65:20: ... Location of port declaration
+   65 |  input      [15:0] joystick_2_rumble,
+      |                    ^~~~~~~~~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'joystick_3_rumble'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:66:20: ... Location of port declaration
+   66 |  input      [15:0] joystick_3_rumble,
+      |                    ^~~~~~~~~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'joystick_4_rumble'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:67:20: ... Location of port declaration
+   67 |  input      [15:0] joystick_4_rumble,
+      |                    ^~~~~~~~~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'joystick_5_rumble'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:68:20: ... Location of port declaration
+   68 |  input      [15:0] joystick_5_rumble,
+      |                    ^~~~~~~~~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'paddle_1'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:72:20: ... Location of port declaration
+   72 |  output reg  [7:0] paddle_1,
+      |                    ^~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'paddle_2'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:73:20: ... Location of port declaration
+   73 |  output reg  [7:0] paddle_2,
+      |                    ^~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'paddle_3'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:74:20: ... Location of port declaration
+   74 |  output reg  [7:0] paddle_3,
+      |                    ^~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'paddle_4'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:75:20: ... Location of port declaration
+   75 |  output reg  [7:0] paddle_4,
+      |                    ^~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'paddle_5'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:76:20: ... Location of port declaration
+   76 |  output reg  [7:0] paddle_5,
+      |                    ^~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'spinner_0'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:79:20: ... Location of port declaration
+   79 |  output reg  [8:0] spinner_0,
+      |                    ^~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'spinner_1'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:80:20: ... Location of port declaration
+   80 |  output reg  [8:0] spinner_1,
+      |                    ^~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'spinner_2'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:81:20: ... Location of port declaration
+   81 |  output reg  [8:0] spinner_2,
+      |                    ^~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'spinner_3'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:82:20: ... Location of port declaration
+   82 |  output reg  [8:0] spinner_3,
+      |                    ^~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'spinner_4'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:83:20: ... Location of port declaration
+   83 |  output reg  [8:0] spinner_4,
+      |                    ^~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'spinner_5'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:84:20: ... Location of port declaration
+   84 |  output reg  [8:0] spinner_5,
+      |                    ^~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'ps2_kbd_clk_out'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:87:20: ... Location of port declaration
+   87 |  output            ps2_kbd_clk_out,
+      |                    ^~~~~~~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'ps2_kbd_data_out'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:88:20: ... Location of port declaration
+   88 |  output            ps2_kbd_data_out,
+      |                    ^~~~~~~~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'ps2_kbd_clk_in'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:89:20: ... Location of port declaration
+   89 |  input             ps2_kbd_clk_in,
+      |                    ^~~~~~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'ps2_kbd_data_in'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:90:20: ... Location of port declaration
+   90 |  input             ps2_kbd_data_in,
+      |                    ^~~~~~~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'ps2_kbd_led_status'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:92:20: ... Location of port declaration
+   92 |  input       [2:0] ps2_kbd_led_status,
+      |                    ^~~~~~~~~~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'ps2_kbd_led_use'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:93:20: ... Location of port declaration
+   93 |  input       [2:0] ps2_kbd_led_use,
+      |                    ^~~~~~~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'ps2_mouse_clk_out'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:95:20: ... Location of port declaration
+   95 |  output            ps2_mouse_clk_out,
+      |                    ^~~~~~~~~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'ps2_mouse_data_out'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:96:20: ... Location of port declaration
+   96 |  output            ps2_mouse_data_out,
+      |                    ^~~~~~~~~~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'ps2_mouse_clk_in'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:97:20: ... Location of port declaration
+   97 |  input             ps2_mouse_clk_in,
+      |                    ^~~~~~~~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'ps2_mouse_data_in'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:98:20: ... Location of port declaration
+   98 |  input             ps2_mouse_data_in,
+      |                    ^~~~~~~~~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'ps2_mouse'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:106:20: ... Location of port declaration
+  106 |  output reg [24:0] ps2_mouse = 0,
+      |                    ^~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'ps2_mouse_ext'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:107:20: ... Location of port declaration
+  107 |  output reg [15:0] ps2_mouse_ext = 0,  
+      |                    ^~~~~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'direct_video'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:111:20: ... Location of port declaration
+  111 |  output            direct_video,
+      |                    ^~~~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'video_rotated'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:112:20: ... Location of port declaration
+  112 |  input             video_rotated,
+      |                    ^~~~~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'new_vmode'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:115:20: ... Location of port declaration
+  115 |  input             new_vmode,
+      |                    ^~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'status_in'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:120:21: ... Location of port declaration
+  120 |  input      [127:0] status_in,
+      |                     ^~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'status_set'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:121:21: ... Location of port declaration
+  121 |  input              status_set,
+      |                     ^~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'status_menumask'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:122:21: ... Location of port declaration
+  122 |  input       [15:0] status_menumask,
+      |                     ^~~~~~~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'info_req'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:124:20: ... Location of port declaration
+  124 |  input             info_req,
+      |                    ^~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'info'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:125:20: ... Location of port declaration
+  125 |  input       [7:0] info,
+      |                    ^~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'img_mounted'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:128:20: ... Location of port declaration
+  128 |  output reg [VD:0] img_mounted,   
+      |                    ^~~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'img_readonly'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:129:20: ... Location of port declaration
+  129 |  output reg        img_readonly,  
+      |                    ^~~~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'img_size'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:130:20: ... Location of port declaration
+  130 |  output reg [63:0] img_size,      
+      |                    ^~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'sd_lba'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:133:20: ... Location of port declaration
+  133 |  input      [31:0] sd_lba[VDNUM],
+      |                    ^~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'sd_blk_cnt'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:134:20: ... Location of port declaration
+  134 |  input       [5:0] sd_blk_cnt[VDNUM],  
+      |                    ^~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'sd_rd'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:135:20: ... Location of port declaration
+  135 |  input      [VD:0] sd_rd,
+      |                    ^~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'sd_wr'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:136:20: ... Location of port declaration
+  136 |  input      [VD:0] sd_wr,
+      |                    ^~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'sd_ack'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:137:20: ... Location of port declaration
+  137 |  output reg [VD:0] sd_ack,
+      |                    ^~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'sd_buff_addr'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:140:20: ... Location of port declaration
+  140 |  output reg [AW:0] sd_buff_addr,
+      |                    ^~~~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'sd_buff_dout'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:141:20: ... Location of port declaration
+  141 |  output reg [DW:0] sd_buff_dout,
+      |                    ^~~~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'sd_buff_din'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:142:20: ... Location of port declaration
+  142 |  input      [DW:0] sd_buff_din[VDNUM],
+      |                    ^~~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'sd_buff_wr'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:143:20: ... Location of port declaration
+  143 |  output reg        sd_buff_wr,
+      |                    ^~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'ioctl_rd'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:155:20: ... Location of port declaration
+  155 |  output reg        ioctl_rd,
+      |                    ^~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'ioctl_file_ext'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:156:20: ... Location of port declaration
+  156 |  output reg [31:0] ioctl_file_ext,
+      |                    ^~~~~~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'sdram_sz'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:161:20: ... Location of port declaration
+  161 |  output reg [15:0] sdram_sz,
+      |                    ^~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'RTC'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:164:20: ... Location of port declaration
+  164 |  output reg [64:0] RTC,
+      |                    ^~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'TIMESTAMP'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:167:20: ... Location of port declaration
+  167 |  output reg [32:0] TIMESTAMP,
+      |                    ^~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'uart_mode'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:170:20: ... Location of port declaration
+  170 |  output reg  [7:0] uart_mode,
+      |                    ^~~~~~~~~
+%Warning-PINMISSING: Model2.sv:220:41: Instance has missing pin: 'uart_speed'
+  220 | hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+      |                                         ^~~~~~
+                     sys/hps_io.sv:171:20: ... Location of port declaration
+  171 |  output reg [31:0] uart_speed,
+      |                    ^~~~~~~~~~
+%Warning-PINCONNECTEMPTY: Model2.sv:1190:3: Instance pin connected by name with empty reference: 'tgp_wr'
+ 1190 |  .tgp_wr(), .tgp_addr(), .tgp_din(),
+      |   ^~~~~~
+%Warning-PINCONNECTEMPTY: Model2.sv:1190:14: Instance pin connected by name with empty reference: 'tgp_addr'
+ 1190 |  .tgp_wr(), .tgp_addr(), .tgp_din(),
+      |              ^~~~~~~~
+%Warning-PINCONNECTEMPTY: Model2.sv:1190:27: Instance pin connected by name with empty reference: 'tgp_din'
+ 1190 |  .tgp_wr(), .tgp_addr(), .tgp_din(),
+      |                           ^~~~~~~
+%Warning-PINMISSING: Model2.sv:1182:34: Instance has missing pin: 'ucode_words'
+ 1182 | m2_rom_loader #(.SDR_AW(SDR_AW)) u_loader (
+      |                                  ^~~~~~~~
+                     rtl/io/m2_rom_loader.sv:163:23: ... Location of port declaration
+  163 |   output logic [11:0] ucode_words,
+      |                       ^~~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:1182:34: Instance has missing pin: 'ucode_csum'
+ 1182 | m2_rom_loader #(.SDR_AW(SDR_AW)) u_loader (
+      |                                  ^~~~~~~~
+                     rtl/io/m2_rom_loader.sv:164:23: ... Location of port declaration
+  164 |   output logic [15:0] ucode_csum
+      |                       ^~~~~~~~~~
+%Warning-PINCONNECTEMPTY: Model2.sv:2100:32: Instance pin connected by name with empty reference: 'dbg_intr_work'
+ 2100 |  .dbg_intr_cnt(cpu_dbg_intr), .dbg_intr_work(), .dbg_acc_cnt(cpu_dbg_acc),
+      |                                ^~~~~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:2093:10: Instance has missing pin: 'dbg_rip'
+ 2093 | i960_top u_i960 (
+      |          ^~~~~~
+                     rtl/cpu/i960/i960_top.sv:93:23: ... Location of port declaration
+   93 |   output logic [31:0] dbg_rip,
+      |                       ^~~~~~~
+%Warning-PINMISSING: Model2.sv:2093:10: Instance has missing pin: 'dbg_pfp'
+ 2093 | i960_top u_i960 (
+      |          ^~~~~~
+                     rtl/cpu/i960/i960_top.sv:94:23: ... Location of port declaration
+   94 |   output logic [31:0] dbg_pfp,
+      |                       ^~~~~~~
+%Warning-PINMISSING: Model2.sv:2093:10: Instance has missing pin: 'dbg_rcache_pos'
+ 2093 | i960_top u_i960 (
+      |          ^~~~~~
+                     rtl/cpu/i960/i960_top.sv:95:30: ... Location of port declaration
+   95 |   output logic signed [31:0] dbg_rcache_pos,
+      |                              ^~~~~~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:2093:10: Instance has missing pin: 'dbg_to_memory'
+ 2093 | i960_top u_i960 (
+      |          ^~~~~~
+                     rtl/cpu/i960/i960_top.sv:96:23: ... Location of port declaration
+   96 |   output logic        dbg_to_memory,
+      |                       ^~~~~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:2093:10: Instance has missing pin: 'dbg_rf_req'
+ 2093 | i960_top u_i960 (
+      |          ^~~~~~
+                     rtl/cpu/i960/i960_top.sv:101:23: ... Location of port declaration
+  101 |   output logic        dbg_rf_req,
+      |                       ^~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:2093:10: Instance has missing pin: 'dbg_rf_ack'
+ 2093 | i960_top u_i960 (
+      |          ^~~~~~
+                     rtl/cpu/i960/i960_top.sv:102:23: ... Location of port declaration
+  102 |   output logic        dbg_rf_ack,
+      |                       ^~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:2093:10: Instance has missing pin: 'dbg_rf_addr'
+ 2093 | i960_top u_i960 (
+      |          ^~~~~~
+                     rtl/cpu/i960/i960_top.sv:103:23: ... Location of port declaration
+  103 |   output logic [31:0] dbg_rf_addr,
+      |                       ^~~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:2093:10: Instance has missing pin: 'dbg_rf_we'
+ 2093 | i960_top u_i960 (
+      |          ^~~~~~
+                     rtl/cpu/i960/i960_top.sv:104:23: ... Location of port declaration
+  104 |   output logic        dbg_rf_we,
+      |                       ^~~~~~~~~
+%Warning-PINMISSING: Model2.sv:2093:10: Instance has missing pin: 'dbg_rf_wdata'
+ 2093 | i960_top u_i960 (
+      |          ^~~~~~
+                     rtl/cpu/i960/i960_top.sv:105:23: ... Location of port declaration
+  105 |   output logic [31:0] dbg_rf_wdata
+      |                       ^~~~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:2159:69: Instance has missing pin: 'dbg_mstate'
+ 2159 |                   , .AW(SDR_AW), .BOARD_2A(1'b0), .DCACHE_EN(1'b1)) u_cpu_bridge (
+      |                                                                     ^~~~~~~~~~~~
+                     rtl/io/m2_cpu_bridge.sv:233:23: ... Location of port declaration
+  233 |   output logic  [7:0] dbg_mstate,
+      |                       ^~~~~~~~~~
+%Warning-PINCONNECTEMPTY: Model2.sv:2815:3: Instance pin connected by name with empty reference: 'mtx0'
+ 2815 |  .mtx0(), .mtx4(), .mtx8(), .mtx11(),
+      |   ^~~~
+%Warning-PINCONNECTEMPTY: Model2.sv:2815:12: Instance pin connected by name with empty reference: 'mtx4'
+ 2815 |  .mtx0(), .mtx4(), .mtx8(), .mtx11(),
+      |            ^~~~
+%Warning-PINCONNECTEMPTY: Model2.sv:2815:21: Instance pin connected by name with empty reference: 'mtx8'
+ 2815 |  .mtx0(), .mtx4(), .mtx8(), .mtx11(),
+      |                     ^~~~
+%Warning-PINCONNECTEMPTY: Model2.sv:2815:30: Instance pin connected by name with empty reference: 'mtx11'
+ 2815 |  .mtx0(), .mtx4(), .mtx8(), .mtx11(),
+      |                              ^~~~~
+%Warning-PINCONNECTEMPTY: Model2.sv:2823:30: Instance pin connected by name with empty reference: 'dbg_td_words'
+ 2823 |  .base_texram(GAME_TEXRAM), .dbg_td_words(),
+      |                              ^~~~~~~~~~~~
+%Warning-PINCONNECTEMPTY: Model2.sv:2996:79: Instance pin connected by name with empty reference: 'dbg_col_miss'
+ 2996 |  .col_inval(cpu_col_inval), .tex_lum(tex_lum_s2), .mem_space(eng_mem_space), .dbg_col_miss(),
+      |                                                                               ^~~~~~~~~~~~
+%Warning-PINCONNECTEMPTY: Model2.sv:3307:3: Instance pin connected by name with empty reference: 'dbg_in_popped'
+ 3307 |  .dbg_in_popped(), .dbg_pop_data(), .dbg_push_data(),
+      |   ^~~~~~~~~~~~~
+%Warning-PINCONNECTEMPTY: Model2.sv:3307:21: Instance pin connected by name with empty reference: 'dbg_pop_data'
+ 3307 |  .dbg_in_popped(), .dbg_pop_data(), .dbg_push_data(),
+      |                     ^~~~~~~~~~~~
+%Warning-PINCONNECTEMPTY: Model2.sv:3307:38: Instance pin connected by name with empty reference: 'dbg_push_data'
+ 3307 |  .dbg_in_popped(), .dbg_pop_data(), .dbg_push_data(),
+      |                                      ^~~~~~~~~~~~~
+%Warning-PINCONNECTEMPTY: Model2.sv:3312:3: Instance pin connected by name with empty reference: 'dbg_tgp_wr_n'
+ 3312 |  .dbg_tgp_wr_n(), .dbg_tgp_wr_addr(tgp_wr_addr), .dbg_tgp_wr_data(tgp_wr_data), .dbg_tgp_st(), .dbg_tgp_a(), .dbg_tgp_b(), .dbg_tgp_d(),
+      |   ^~~~~~~~~~~~
+%Warning-PINCONNECTEMPTY: Model2.sv:3312:82: Instance pin connected by name with empty reference: 'dbg_tgp_st'
+ 3312 |  .dbg_tgp_wr_n(), .dbg_tgp_wr_addr(tgp_wr_addr), .dbg_tgp_wr_data(tgp_wr_data), .dbg_tgp_st(), .dbg_tgp_a(), .dbg_tgp_b(), .dbg_tgp_d(),
+      |                                                                                  ^~~~~~~~~~
+%Warning-PINCONNECTEMPTY: Model2.sv:3312:97: Instance pin connected by name with empty reference: 'dbg_tgp_a'
+ 3312 |  .dbg_tgp_wr_n(), .dbg_tgp_wr_addr(tgp_wr_addr), .dbg_tgp_wr_data(tgp_wr_data), .dbg_tgp_st(), .dbg_tgp_a(), .dbg_tgp_b(), .dbg_tgp_d(),
+      |                                                                                                 ^~~~~~~~~
+%Warning-PINCONNECTEMPTY: Model2.sv:3312:111: Instance pin connected by name with empty reference: 'dbg_tgp_b'
+ 3312 |  .dbg_tgp_wr_n(), .dbg_tgp_wr_addr(tgp_wr_addr), .dbg_tgp_wr_data(tgp_wr_data), .dbg_tgp_st(), .dbg_tgp_a(), .dbg_tgp_b(), .dbg_tgp_d(),
+      |                                                                                                               ^~~~~~~~~
+%Warning-PINCONNECTEMPTY: Model2.sv:3312:125: Instance pin connected by name with empty reference: 'dbg_tgp_d'
+ 3312 |  .dbg_tgp_wr_n(), .dbg_tgp_wr_addr(tgp_wr_addr), .dbg_tgp_wr_data(tgp_wr_data), .dbg_tgp_st(), .dbg_tgp_a(), .dbg_tgp_b(), .dbg_tgp_d(),
+      |                                                                                                                             ^~~~~~~~~
+%Warning-PINMISSING: Model2.sv:3277:10: Instance has missing pin: 'dbg_uc_we'
+ 3277 | m2_copro u_copro (
+      |          ^~~~~~~
+                     rtl/tgp/m2_copro.sv:153:23: ... Location of port declaration
+  153 |   output logic        dbg_uc_we,
+      |                       ^~~~~~~~~
+%Warning-PINMISSING: Model2.sv:3277:10: Instance has missing pin: 'dbg_uc_addr'
+ 3277 | m2_copro u_copro (
+      |          ^~~~~~~
+                     rtl/tgp/m2_copro.sv:154:23: ... Location of port declaration
+  154 |   output logic [11:0] dbg_uc_addr,
+      |                       ^~~~~~~~~~~
+%Warning-PINMISSING: Model2.sv:3277:10: Instance has missing pin: 'dbg_uc_data'
+ 3277 | m2_copro u_copro (
+      |          ^~~~~~~
+                     rtl/tgp/m2_copro.sv:155:23: ... Location of port declaration
+  155 |   output logic [31:0] dbg_uc_data,
+      |                       ^~~~~~~~~~~
+%Warning-PINCONNECTEMPTY: Model2.sv:3488:3: Instance pin connected by name with empty reference: 'dbg_ee'
+ 3488 |  .dbg_ee(), .dbg_wrcnt(), .dbg_wr_stb(), .dbg_dout(), .dbg_di(),
+      |   ^~~~~~
+%Warning-PINCONNECTEMPTY: Model2.sv:3488:14: Instance pin connected by name with empty reference: 'dbg_wrcnt'
+ 3488 |  .dbg_ee(), .dbg_wrcnt(), .dbg_wr_stb(), .dbg_dout(), .dbg_di(),
+      |              ^~~~~~~~~
+%Warning-PINCONNECTEMPTY: Model2.sv:3488:28: Instance pin connected by name with empty reference: 'dbg_wr_stb'
+ 3488 |  .dbg_ee(), .dbg_wrcnt(), .dbg_wr_stb(), .dbg_dout(), .dbg_di(),
+      |                            ^~~~~~~~~~
+%Warning-PINCONNECTEMPTY: Model2.sv:3488:43: Instance pin connected by name with empty reference: 'dbg_dout'
+ 3488 |  .dbg_ee(), .dbg_wrcnt(), .dbg_wr_stb(), .dbg_dout(), .dbg_di(),
+      |                                           ^~~~~~~~
+%Warning-PINCONNECTEMPTY: Model2.sv:3488:56: Instance pin connected by name with empty reference: 'dbg_di'
+ 3488 |  .dbg_ee(), .dbg_wrcnt(), .dbg_wr_stb(), .dbg_dout(), .dbg_di(),
+      |                                                        ^~~~~~
+%Warning-PINCONNECTEMPTY: Model2.sv:3489:3: Instance pin connected by name with empty reference: 'dbg_rd_end'
+ 3489 |  .dbg_rd_end(), .dbg_ra(), .dbg_rdat(),
+      |   ^~~~~~~~~~
+%Warning-PINCONNECTEMPTY: Model2.sv:3489:18: Instance pin connected by name with empty reference: 'dbg_ra'
+ 3489 |  .dbg_rd_end(), .dbg_ra(), .dbg_rdat(),
+      |                  ^~~~~~
+%Warning-PINCONNECTEMPTY: Model2.sv:3489:29: Instance pin connected by name with empty reference: 'dbg_rdat'
+ 3489 |  .dbg_rd_end(), .dbg_ra(), .dbg_rdat(),
+      |                             ^~~~~~~~
+%Warning-PINCONNECTEMPTY: Model2.sv:3490:3: Instance pin connected by name with empty reference: 'dbg_m1_n'
+ 3490 |  .dbg_m1_n(), .dbg_a(), .dbg_last_wr(), .dbg_pf(),
+      |   ^~~~~~~~
+%Warning-PINCONNECTEMPTY: Model2.sv:3490:16: Instance pin connected by name with empty reference: 'dbg_a'
+ 3490 |  .dbg_m1_n(), .dbg_a(), .dbg_last_wr(), .dbg_pf(),
+      |                ^~~~~
+%Warning-PINCONNECTEMPTY: Model2.sv:3490:26: Instance pin connected by name with empty reference: 'dbg_last_wr'
+ 3490 |  .dbg_m1_n(), .dbg_a(), .dbg_last_wr(), .dbg_pf(),
+      |                          ^~~~~~~~~~~
+%Warning-PINCONNECTEMPTY: Model2.sv:3490:42: Instance pin connected by name with empty reference: 'dbg_pf'
+ 3490 |  .dbg_m1_n(), .dbg_a(), .dbg_last_wr(), .dbg_pf(),
+      |                                          ^~~~~~
+%Warning-PINCONNECTEMPTY: Model2.sv:5711:3: Instance pin connected by name with empty reference: 'vblank_irq'
+ 5711 |  .vblank_irq(), .dbg_fetches(vid_fetches), .dbg_overruns(vid_overruns),
+      |   ^~~~~~~~~~
+%Warning-GENUNNAMED: sys/hps_io.sv:244:20: Unnamed generate block 'genblk1' (IEEE 1800-2023 27.6)
+                                         : ... Suggest assign a label with 'begin : gen_<label_name>'
+  244 |  if(CONF_STR_BRAM) begin
+      |                    ^~~~~
+                     ... For warning description see https://verilator.org/warn/GENUNNAMED?v=5.050
+                     ... Use "/* verilator lint_off GENUNNAMED */" and lint_on around source to disable this message.
+%Warning-GENUNNAMED: sys/hps_io.sv:247:7: Unnamed generate block 'genblk1' (IEEE 1800-2023 27.6)
+                                        : ... Suggest assign a label with 'begin : gen_<label_name>'
+  247 |  else begin
+      |       ^~~~~
+%Warning-IMPLICITSTATIC: sys/hps_io.sv:271:13: Variable's lifetime implicitly set to static (IEEE 1800-2023 6.21)
+                                             : ... The initializer value will only be set once
+                                             : ... Suggest use 'static' before variable declaration'
+  271 |  reg        ps2skip = 0;
+      |             ^~~~~~~
+                         ... For warning description see https://verilator.org/warn/IMPLICITSTATIC?v=5.050
+                         ... Use "/* verilator lint_off IMPLICITSTATIC */" and lint_on around source to disable this message.
+%Warning-IMPLICITSTATIC: sys/hps_io.sv:272:13: Variable's lifetime implicitly set to static (IEEE 1800-2023 6.21)
+                                             : ... The initializer value will only be set once
+                                             : ... Suggest use 'static' before variable declaration'
+  272 |  reg  [3:0] stflg = 0;
+      |             ^~~~~
+%Warning-IMPLICITSTATIC: sys/hps_io.sv:274:13: Variable's lifetime implicitly set to static (IEEE 1800-2023 6.21)
+                                             : ... The initializer value will only be set once
+                                             : ... Suggest use 'static' before variable declaration'
+  274 |  reg        old_status_set = 0;
+      |             ^~~~~~~~~~~~~~
+%Warning-IMPLICITSTATIC: sys/hps_io.sv:275:13: Variable's lifetime implicitly set to static (IEEE 1800-2023 6.21)
+                                             : ... The initializer value will only be set once
+                                             : ... Suggest use 'static' before variable declaration'
+  275 |  reg        old_upload_req = 0;
+      |             ^~~~~~~~~~~~~~
+%Warning-IMPLICITSTATIC: sys/hps_io.sv:276:13: Variable's lifetime implicitly set to static (IEEE 1800-2023 6.21)
+                                             : ... The initializer value will only be set once
+                                             : ... Suggest use 'static' before variable declaration'
+  276 |  reg        upload_req = 0;
+      |             ^~~~~~~~~~
+%Warning-IMPLICITSTATIC: sys/hps_io.sv:277:13: Variable's lifetime implicitly set to static (IEEE 1800-2023 6.21)
+                                             : ... The initializer value will only be set once
+                                             : ... Suggest use 'static' before variable declaration'
+  277 |  reg        old_info = 0;
+      |             ^~~~~~~~
+%Warning-IMPLICITSTATIC: sys/hps_io.sv:278:13: Variable's lifetime implicitly set to static (IEEE 1800-2023 6.21)
+                                             : ... The initializer value will only be set once
+                                             : ... Suggest use 'static' before variable declaration'
+  278 |  reg  [7:0] info_n = 0;
+      |             ^~~~~~
+%Warning-GENUNNAMED: sys/hps_io.sv:551:13: Unnamed generate block 'genblk2' (IEEE 1800-2023 27.6)
+                                         : ... Suggest assign a label with 'begin : gen_<label_name>'
+  551 |  if(PS2DIV) begin
+      |             ^~~~~
+%Warning-GENUNNAMED: sys/hps_io.sv:608:7: Unnamed generate block 'genblk2' (IEEE 1800-2023 27.6)
+                                        : ... Suggest assign a label with 'begin : gen_<label_name>'
+  608 |  else begin
+      |       ^~~~~
+%Warning-IMPLICITSTATIC: sys/hps_io.sv:919:6: Variable's lifetime implicitly set to static (IEEE 1800-2023 6.21)
+                                            : ... The initializer value will only be set once
+                                            : ... Suggest use 'static' before variable declaration'
+  919 |  reg old_vs = 0, old_hs = 0, old_hs_vclk = 0, old_de = 0, old_de_vclk = 0, old_de1 = 0, old_vmode = 0;
+      |      ^~~~~~
+%Warning-IMPLICITSTATIC: sys/hps_io.sv:919:18: Variable's lifetime implicitly set to static (IEEE 1800-2023 6.21)
+                                             : ... The initializer value will only be set once
+                                             : ... Suggest use 'static' before variable declaration'
+  919 |  reg old_vs = 0, old_hs = 0, old_hs_vclk = 0, old_de = 0, old_de_vclk = 0, old_de1 = 0, old_vmode = 0;
+      |                  ^~~~~~
+%Warning-IMPLICITSTATIC: sys/hps_io.sv:919:30: Variable's lifetime implicitly set to static (IEEE 1800-2023 6.21)
+                                             : ... The initializer value will only be set once
+                                             : ... Suggest use 'static' before variable declaration'
+  919 |  reg old_vs = 0, old_hs = 0, old_hs_vclk = 0, old_de = 0, old_de_vclk = 0, old_de1 = 0, old_vmode = 0;
+      |                              ^~~~~~~~~~~
+%Warning-IMPLICITSTATIC: sys/hps_io.sv:919:47: Variable's lifetime implicitly set to static (IEEE 1800-2023 6.21)
+                                             : ... The initializer value will only be set once
+                                             : ... Suggest use 'static' before variable declaration'
+  919 |  reg old_vs = 0, old_hs = 0, old_hs_vclk = 0, old_de = 0, old_de_vclk = 0, old_de1 = 0, old_vmode = 0;
+      |                                               ^~~~~~
+%Warning-IMPLICITSTATIC: sys/hps_io.sv:919:59: Variable's lifetime implicitly set to static (IEEE 1800-2023 6.21)
+                                             : ... The initializer value will only be set once
+                                             : ... Suggest use 'static' before variable declaration'
+  919 |  reg old_vs = 0, old_hs = 0, old_hs_vclk = 0, old_de = 0, old_de_vclk = 0, old_de1 = 0, old_vmode = 0;
+      |                                                           ^~~~~~~~~~~
+%Warning-IMPLICITSTATIC: sys/hps_io.sv:919:76: Variable's lifetime implicitly set to static (IEEE 1800-2023 6.21)
+                                             : ... The initializer value will only be set once
+                                             : ... Suggest use 'static' before variable declaration'
+  919 |  reg old_vs = 0, old_hs = 0, old_hs_vclk = 0, old_de = 0, old_de_vclk = 0, old_de1 = 0, old_vmode = 0;
+      |                                                                            ^~~~~~~
+%Warning-IMPLICITSTATIC: sys/hps_io.sv:919:89: Variable's lifetime implicitly set to static (IEEE 1800-2023 6.21)
+                                             : ... The initializer value will only be set once
+                                             : ... Suggest use 'static' before variable declaration'
+  919 |  reg old_vs = 0, old_hs = 0, old_hs_vclk = 0, old_de = 0, old_de_vclk = 0, old_de1 = 0, old_vmode = 0;
+      |                                                                                         ^~~~~~~~~
+%Warning-IMPLICITSTATIC: sys/hps_io.sv:920:12: Variable's lifetime implicitly set to static (IEEE 1800-2023 6.21)
+                                             : ... The initializer value will only be set once
+                                             : ... Suggest use 'static' before variable declaration'
+  920 |  reg [3:0] resto = 0;
+      |            ^~~~~
+%Warning-IMPLICITSTATIC: sys/hps_io.sv:921:6: Variable's lifetime implicitly set to static (IEEE 1800-2023 6.21)
+                                            : ... The initializer value will only be set once
+                                            : ... Suggest use 'static' before variable declaration'
+  921 |  reg calch = 0;
+      |      ^~~~~
+%Warning-IMPLICITSTATIC: sys/hps_io.sv:983:6: Variable's lifetime implicitly set to static (IEEE 1800-2023 6.21)
+                                            : ... The initializer value will only be set once
+                                            : ... Suggest use 'static' before variable declaration'
+  983 |  reg calch = 0;
+      |      ^~~~~
+%Warning-GENUNNAMED: rtl/sound/jt12/jt12_mmr.v:187:19: Unnamed generate block 'genblk1' (IEEE 1800-2023 27.6)
+                                                     : ... Suggest assign a label with 'begin : gen_<label_name>'
+  187 |     if( use_ssg ) begin
+      |                   ^~~~~
+%Warning-GENUNNAMED: rtl/sound/jt12/jt12_mmr.v:190:14: Unnamed generate block 'genblk1' (IEEE 1800-2023 27.6)
+                                                     : ... Suggest assign a label with 'begin : gen_<label_name>'
+  190 |     end else begin
+      |              ^~~~~
+%Warning-GENUNNAMED: rtl/sound/jt12/jt12_reg.v:241:21: Unnamed generate block 'genblk1' (IEEE 1800-2023 27.6)
+                                                     : ... Suggest assign a label with 'begin : gen_<label_name>'
+  241 |     if( num_ch==6 ) begin
+      |                     ^~~~~
+%Warning-GENUNNAMED: rtl/sound/jt12/jt12_reg.v:288:10: Unnamed generate block 'genblk1' (IEEE 1800-2023 27.6)
+                                                     : ... Suggest assign a label with 'begin : gen_<label_name>'
+  288 |     else begin  
+      |          ^~~~~
+%Warning-GENUNNAMED: rtl/sound/jt12/jt12_kon.v:46:15: Unnamed generate block 'genblk1' (IEEE 1800-2023 27.6)
+                                                    : ... Suggest assign a label with 'begin : gen_<label_name>'
+   46 | if(num_ch==6) begin
+      |               ^~~~~
+%Warning-GENUNNAMED: rtl/sound/jt12/jt12_kon.v:122:6: Unnamed generate block 'genblk1' (IEEE 1800-2023 27.6)
+                                                    : ... Suggest assign a label with 'begin : gen_<label_name>'
+  122 | else begin  
+      |      ^~~~~
+%Warning-GENUNNAMED: rtl/sound/jt12/jt12_mod.v:63:21: Unnamed generate block 'genblk1' (IEEE 1800-2023 27.6)
+                                                    : ... Suggest assign a label with 'begin : gen_<label_name>'
+   63 |     if( num_ch==6 ) begin
+      |                     ^~~~~
+%Warning-GENUNNAMED: rtl/sound/jt12/jt12_mod.v:74:14: Unnamed generate block 'genblk1' (IEEE 1800-2023 27.6)
+                                                    : ... Suggest assign a label with 'begin : gen_<label_name>'
+   74 |     end else begin
+      |              ^~~~~
+%Warning-VARHIDDEN: rtl/sound/fx68k/fx68kAlu.sv:63:13: Declaration of signal hides declaration in upper scope: 'CF'
+   63 |  localparam CF = 0, VF = 1, ZF = 2, NF = 3, XF = 4;
+      |             ^~
+                    rtl/sound/fx68k/fx68k.sv:22:12: ... Location of original declaration
+   22 | localparam CF = 0, VF = 1, ZF = 2, NF = 3, XF = 4, SF = 13;
+      |            ^~
+                    ... For warning description see https://verilator.org/warn/VARHIDDEN?v=5.050
+                    ... Use "/* verilator lint_off VARHIDDEN */" and lint_on around source to disable this message.
+%Warning-VARHIDDEN: rtl/sound/fx68k/fx68kAlu.sv:63:21: Declaration of signal hides declaration in upper scope: 'VF'
+   63 |  localparam CF = 0, VF = 1, ZF = 2, NF = 3, XF = 4;
+      |                     ^~
+                    rtl/sound/fx68k/fx68k.sv:22:20: ... Location of original declaration
+   22 | localparam CF = 0, VF = 1, ZF = 2, NF = 3, XF = 4, SF = 13;
+      |                    ^~
+%Warning-VARHIDDEN: rtl/sound/fx68k/fx68kAlu.sv:63:29: Declaration of signal hides declaration in upper scope: 'ZF'
+   63 |  localparam CF = 0, VF = 1, ZF = 2, NF = 3, XF = 4;
+      |                             ^~
+                    rtl/sound/fx68k/fx68k.sv:22:28: ... Location of original declaration
+   22 | localparam CF = 0, VF = 1, ZF = 2, NF = 3, XF = 4, SF = 13;
+      |                            ^~
+%Warning-VARHIDDEN: rtl/sound/fx68k/fx68kAlu.sv:63:37: Declaration of signal hides declaration in upper scope: 'NF'
+   63 |  localparam CF = 0, VF = 1, ZF = 2, NF = 3, XF = 4;
+      |                                     ^~
+                    rtl/sound/fx68k/fx68k.sv:22:36: ... Location of original declaration
+   22 | localparam CF = 0, VF = 1, ZF = 2, NF = 3, XF = 4, SF = 13;
+      |                                    ^~
+%Warning-VARHIDDEN: rtl/sound/fx68k/fx68kAlu.sv:63:45: Declaration of signal hides declaration in upper scope: 'XF'
+   63 |  localparam CF = 0, VF = 1, ZF = 2, NF = 3, XF = 4;
+      |                                             ^~
+                    rtl/sound/fx68k/fx68k.sv:22:44: ... Location of original declaration
+   22 | localparam CF = 0, VF = 1, ZF = 2, NF = 3, XF = 4, SF = 13;
+      |                                            ^~
+%Warning-VARHIDDEN: rtl/sound/fx68k/fx68kAlu.sv:267:20: Declaration of signal hides declaration in upper scope: 'isByte'
+  267 |   input cin, bAdd, isByte;
+      |                    ^~~~~~
+                    rtl/sound/fx68k/fx68kAlu.sv:88:6: ... Location of original declaration
+   88 |  reg isByte;
+      |      ^~~~~~
+%Warning-VARHIDDEN: rtl/sound/fx68k/fx68kAlu.sv:268:21: Declaration of signal hides declaration in upper scope: 'result'
+  268 |   output reg [15:0] result;
+      |                     ^~~~~~
+                    rtl/sound/fx68k/fx68kAlu.sv:69:15: ... Location of original declaration
+   69 |  logic [15:0] result;
+      |               ^~~~~~
+%Warning-VARHIDDEN: rtl/video/m2_raster3d.sv:560:18: Declaration of signal hides declaration in upper scope: 'b'
+  560 |         for (int b = BW-1; b >= 0; b--)
+      |                  ^
+                    rtl/video/m2_raster3d.sv:477:10: ... Location of original declaration
+  477 |   genvar b;
+      |          ^
+%Warning-IMPLICIT: sys/hps_io.sv:299:14: Signal definition not found, creating implicitly: 'kbd_rd'
+                                       : ... Suggested alternative: 'sd_rd'
+  299 |  if(PS2DIV) {kbd_rd,kbd_we,mouse_rd,mouse_we} <= 0;
+      |              ^~~~~~
+                   ... For warning description see https://verilator.org/warn/IMPLICIT?v=5.050
+                   ... Use "/* verilator lint_off IMPLICIT */" and lint_on around source to disable this message.
+%Warning-IMPLICIT: sys/hps_io.sv:299:21: Signal definition not found, creating implicitly: 'kbd_we'
+                                       : ... Suggested alternative: 'kbd_rd'
+  299 |  if(PS2DIV) {kbd_rd,kbd_we,mouse_rd,mouse_we} <= 0;
+      |                     ^~~~~~
+%Warning-IMPLICIT: sys/hps_io.sv:299:28: Signal definition not found, creating implicitly: 'mouse_rd'
+  299 |  if(PS2DIV) {kbd_rd,kbd_we,mouse_rd,mouse_we} <= 0;
+      |                            ^~~~~~~~
+%Warning-IMPLICIT: sys/hps_io.sv:299:37: Signal definition not found, creating implicitly: 'mouse_we'
+                                       : ... Suggested alternative: 'mouse_rd'
+  299 |  if(PS2DIV) {kbd_rd,kbd_we,mouse_rd,mouse_we} <= 0;
+      |                                     ^~~~~~~~
+%Warning-IMPLICIT: sys/hps_io.sv:362:9: Signal definition not found, creating implicitly: 'mouse_data'
+                                      : ... Suggested alternative: 'mouse_rd'
+  362 |         mouse_data <= io_din[7:0];
+      |         ^~~~~~~~~~
+%Warning-IMPLICIT: sys/hps_io.sv:385:9: Signal definition not found, creating implicitly: 'kbd_data'
+  385 |         kbd_data <= io_din[7:0];
+      |         ^~~~~~~~
+%Warning-IMPLICIT: sys/hps_io.sv:488:20: Signal definition not found, creating implicitly: 'kbd_data_host'
+                                       : ... Suggested alternative: 'kbd_data'
+  488 |         io_dout <= kbd_data_host;
+      |                    ^~~~~~~~~~~~~
+%Warning-IMPLICIT: sys/hps_io.sv:493:20: Signal definition not found, creating implicitly: 'mouse_data_host'
+                                       : ... Suggested alternative: 'kbd_data_host'
+  493 |         io_dout <= mouse_data_host;
+      |                    ^~~~~~~~~~~~~~~

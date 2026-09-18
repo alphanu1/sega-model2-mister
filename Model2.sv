@@ -110,19 +110,6 @@ localparam CONF_STR = {
 	"-;",
 	"O[24:23],Walk trigger,After flip,Vblank,Flip,Write ptr;",
 	"O[22:21],Texture brightness,50%,75%,100%,25%;",
-	// R422: HALVE THE BEAM, NOT THE RENDERER. The 3D races the beam in 8-line
-	// bands and can run at most NBUF=4 bands ahead, so a frame it cannot finish
-	// in time is not late -- the bands it never reached are simply never drawn,
-	// which is why textures on shows a few bars and nothing under them. More
-	// vblank does not help: a band buffer is freed the moment the beam passes
-	// it, so time before the frame buys four bands and no more.
-	// Slowing ce_pix stretches every LINE, so the budget grows across the whole
-	// frame where the chase actually happens. 16 MHz -> 8 MHz is ~30 Hz, against
-	// a renderer measured at 17.2-17.4 ms on a 16.7 ms frame. The game runs at
-	// half speed; the picture is complete. H and V counters are untouched, so
-	// every sync position and the line and frame LENGTHS IN PIXELS are unchanged
-	// -- what varies is when a pixel is handed to the scaler, never which one.
-	"O[31],Slow scan (~30Hz),Off,On;",
 	"R[17],Save settings (NVRAM);",
 	// OFF BY DEFAULT. The overlay is 24 rows of hex painted over the top-left
 	// of the picture, which is exactly where the game puts its own text. It
@@ -356,24 +343,14 @@ pll pll
 // varies is when a pixel is handed over, never which pixel or how many.
 localparam int unsigned CE_NUM = 16;      // 16 MHz
 localparam int unsigned CE_DEN = 50;      // clk_sys
-// R422: the numerator is selectable. Eight of fifty is 8 MHz, which stretches
-// every line to twice its wall-clock length without moving a single counter.
-logic [2:0] slow_s;
-always_ff @(posedge clk_sys) slow_s <= {slow_s[1:0], status[31]};
-wire [5:0] ce_num = slow_s[2] ? 6'd8 : 6'(CE_NUM);
 reg [5:0] ce_acc;
 reg       ce_pix;
-// SEVEN BITS FOR THE SUM. ce_acc reaches 49 and the numerator 16, so the sum
-// reaches 65 -- which a six-bit add wraps to 1, dropping the enable exactly
-// where it should fire. The original expression added a 32-bit int and never
-// had the problem; making the numerator a wire reintroduced it.
-wire [6:0] ce_sum = {1'b0, ce_acc} + {1'b0, ce_num};
 always @(posedge clk_sys) begin
-	if (ce_sum >= 7'(CE_DEN)) begin
-		ce_acc <= 6'(ce_sum - 7'(CE_DEN));
+	if (ce_acc + CE_NUM >= CE_DEN) begin
+		ce_acc <= ce_acc + 6'(CE_NUM) - 6'(CE_DEN);
 		ce_pix <= 1'b1;
 	end else begin
-		ce_acc <= 6'(ce_sum);
+		ce_acc <= ce_acc + 6'(CE_NUM);
 		ce_pix <= 1'b0;
 	end
 end

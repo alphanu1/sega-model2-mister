@@ -18026,3 +18026,44 @@ ce_acc reaches 49 and the numerator 16, so the sum reaches 65 and wraps to 1,
 dropping the enable exactly where it should fire. Modelled before building:
 1,600 enables lost in 5,000 cycles. The sum is 7 bits now, and the 16/50
 sequence is bit-identical to the original over 5,000 cycles.
+
+---
+
+**R423 -- R422 IS WITHDRAWN. IT SLOWED THE PIXEL CLOCK, WHICH MOVES hsync.**
+
+R422 halved ce_pix to stretch the renderer's per-band budget. The analysis of
+WHY more vblank cannot work stands and is kept below. The mechanism does not.
+
+ce_pix is the pixel clock enable, so halving it halves BOTH frequencies. H_TOTAL
+stays 656 pixels; each pixel simply takes longer, so the line does too:
+
+```
+  num   pixel clock     hsync        vsync
+   16    16.000 MHz    24.39 kHz    57.52 Hz     <- the game's own timing
+   12    12.000        18.29        43.14
+    8     8.000        12.20        28.76
+    4     4.000         6.10        14.38
+    2     2.000         3.05         7.19
+```
+
+A 3 kHz line rate is not a video mode. It survives through ascal, which buffers
+the core's output and regenerates HDMI on its own timing, and it does not
+survive direct video to a CRT, where our sync is passed straight through. A
+debug convenience must not change the video standard the core claims to produce.
+
+**AND THE ALTERNATIVE DOES NOT EXIST ON THIS PART**, which is the part worth
+recording. Extra vblank keeps the line rate and buys four bands, because NBUF=4
+and a band buffer is freed the moment the beam passes its band. More buffers
+would let the renderer run further ahead, but one is 496 x 8 x 17 bits ~= 7
+M10K, so the 48 needed for a whole frame is ~336 against the 48 free.
+
+So there is no way to see a complete textured frame by changing when things are
+displayed. Either the renderer gets fast enough to keep pace with the beam, or
+the 3D renders into a real framebuffer instead of chasing it. The first is the
+work already under way; the second is an architecture change that would also
+have to find ~43 MB/s of SDRAM bandwidth for the write and read, against 84 MB/s
+aggregate measured in tb_m2_sdram.
+
+Kept in the study rather than deleted: the NBUF reasoning cost real time to
+establish and the next person to see a few bands and reach for vblank should
+find it.
