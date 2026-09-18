@@ -25,8 +25,6 @@ set_global_assignment -name MAX_CORE_JUNCTION_TEMP 100
 set_global_assignment -name POWER_PRESET_COOLING_SOLUTION "23 MM HEAT SINK WITH 200 LFPM AIRFLOW"
 set_global_assignment -name POWER_BOARD_THERMAL_MODEL "NONE (CONSERVATIVE)"
 set_global_assignment -name TIMEQUEST_MULTICORNER_ANALYSIS OFF
-set_global_assignment -name OPTIMIZE_POWER_DURING_FITTING OFF
-set_global_assignment -name FINAL_PLACEMENT_OPTIMIZATION ALWAYS
 # ROUTABILITY, WHICH THIS PROJECT HAD NEVER ASKED FOR.
 #
 # Adding the coprocessor took the design to 79% ALM / 82% M10K and the fitter
@@ -157,14 +155,12 @@ set_global_assignment -name FINAL_PLACEMENT_OPTIMIZATION ALWAYS
 # needed; if it does not, they come back one at a time with the crash rate
 # measured for each.
 set_global_assignment -name FITTER_AGGRESSIVE_ROUTABILITY_OPTIMIZATION ALWAYS
-set_global_assignment -name FITTER_EFFORT "STANDARD FIT"
 # INTERNAL HOLD PATHS ARE FIXED BY THE FITTER ONLY WHEN ASKED (R213). The
 # default, "IO Paths and Minimum TPD Paths", leaves a register-to-register
 # hold miss alone: build/dbuf4 s14 and s15 both failed hold by ~-0.3 ns on ONE
 # path, m2_cpu_bridge r_rdata[15] (50 MHz) -> bus_rdata[15] (25 MHz), with
 # every other path on the CPU clock at +0.27 or better. "All Paths" lets the
 # fitter pad it.
-set_global_assignment -name OPTIMIZE_HOLD_TIMING "ALL PATHS"
 # BALANCED, NOT AGGRESSIVE AREA. Aggressive Area crashed this fitter twice in
 # succession -- "Fatal Error: Segment Violation at (nil)" after placement
 # succeeded, with no resource numbers written either time. The speed-tuned
@@ -261,7 +257,6 @@ set_global_assignment -name OPTIMIZE_HOLD_TIMING "ALL PATHS"
 # That is the "two variables in one change" mistake this file has recorded
 # before, made again and undone.
 set_global_assignment -name OPTIMIZATION_MODE "AGGRESSIVE AREA"
-set_global_assignment -name ALLOW_POWER_UP_DONT_CARE ON
 set_global_assignment -name QII_AUTO_PACKED_REGISTERS NORMAL
 # BACK ON, AND NOT BY PREFERENCE. With this OFF the fitter dies with
 # "Fatal Error: Segment Violation at (nil)" immediately after placement, three
@@ -340,10 +335,43 @@ set_global_assignment -name QII_AUTO_PACKED_REGISTERS NORMAL
 #
 # The geometry FP path wants an RTL retime, which is what Model 1 did for its
 # own FP units (51.47 -> 72.17 MHz), rather than a fitter pass papering over it.
+# ------------------------------------------------------------------ R414
+# THE FITTER CONFIGURATION IS MODEL 1'S, EXACTLY.
+#
+# Model 1 fits at 97-99% on this same board with the same scattered SDRAM
+# pinout and passes nearly every build. This project failed roughly half its
+# seeds on SDRAM I/O packing and hit Quartus internal errors on top. The
+# difference was never occupancy or the pinout; it was that this file carried
+# ~25 fitter settings against their 11.
+#
+# Everything they leave at Quartus defaults is now left at Quartus defaults:
+# WYSIWYG remap, ECO timing, final placement optimisation, fitter effort,
+# hold-timing scope, periphery-to-core, async pipelining, combo logic,
+# retiming, pre-mapping resynthesis, clocking topology analysis, gated-clock
+# conversion, power-up don't-care, power optimisation.
+#
+# What remains is their set:
+#   OPTIMIZATION_MODE "AGGRESSIVE AREA"      OPTIMIZATION_TECHNIQUE AREA
+#   PHYSICAL_SYNTHESIS_REGISTER_DUPLICATION OFF
+#   ROUTER_LCELL_INSERTION_AND_LOGIC_DUPLICATION OFF
+#   QII_AUTO_PACKED_REGISTERS NORMAL         ALM_REGISTER_PACKING_EFFORT MEDIUM
+#   FITTER_AGGRESSIVE_ROUTABILITY_OPTIMIZATION ALWAYS
+#   AUTO_RESOURCE_SHARING / MUX_RESTRUCTURE / REMOVE_REDUNDANT_LOGIC_CELLS /
+#   AUTO_DELAY_CHAINS_FOR_HIGH_FANOUT_INPUT_PINS  all ON
+#
+# TWO THINGS THIS GIVES UP, AND BOTH ARE NOW OUR PROBLEM TO SOLVE PROPERLY:
+#
+#   OPTIMIZE_HOLD_TIMING "ALL PATHS" was padding a real register-to-register
+#   hold miss (R213): m2_cpu_bridge r_rdata[15] at 50 MHz -> bus_rdata[15] at
+#   25 MHz, about -0.3 ns. The default scope does not pad it. If that hold miss
+#   returns it is a design fault in the bridge, not a reason to re-add the flag.
+#
+#   R406 measured that turning the four PHYSICAL_SYNTHESIS options off crashes
+#   this fitter -- "Fatal Error: Segment Violation at (nil)", 7 builds of 7.
+#   Model 1 runs with them off and does not crash. If it crashes here, the
+#   cause is in this design and that is what needs finding.
 set_global_assignment -name ROUTER_LCELL_INSERTION_AND_LOGIC_DUPLICATION OFF
-set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC ON
 set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_DUPLICATION OFF
-set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_RETIMING ON
 # AREA, NOT SPEED. The whole of the block below was tuned when there were
 # 8,940 ALM spare. There are 196.
 # SPEED AGAIN, WITH AGGRESSIVE AREA KEPT. The two do different jobs and only
@@ -378,19 +406,11 @@ set_global_assignment -name AUTO_DELAY_CHAINS_FOR_HIGH_FANOUT_INPUT_PINS ON
 # EFFORT with OPTIMIZATION_TECHNIQUE SPEED and 8,940 ALM spare, so area-targeted
 # combinational restructuring is buying nothing". Both halves of that are now
 # false: the technique is AREA and the spare is 196 ALM.
-set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC_FOR_AREA OFF
-set_global_assignment -name ADV_NETLIST_OPT_SYNTH_WYSIWYG_REMAP ON
-set_global_assignment -name SYNTH_GATED_CLOCK_CONVERSION ON
-set_global_assignment -name PRE_MAPPING_RESYNTHESIS ON
-set_global_assignment -name ROUTER_CLOCKING_TOPOLOGY_ANALYSIS ON
-set_global_assignment -name ECO_OPTIMIZE_TIMING ON
 # R409: OFF. The packing failures name it directly -- "assigned to
 # CUSTOM_REGION_X45_Y0_X89_Y36 due to Automatic Periphery Placement" -- and this
 # is the pass that creates those regions. With every pass off (R405/R406)
 # packing was 0/0/0; putting the six timing passes back brought it to 0/50/dud.
 # The other five do timing work the design needs; this one does not.
-set_global_assignment -name PERIPHERY_TO_CORE_PLACEMENT_AND_ROUTING_OPTIMIZATION OFF
-set_global_assignment -name PHYSICAL_SYNTHESIS_ASYNCHRONOUS_SIGNAL_PIPELINING ON
 # HIGH, AND THIS IS THE ONE AIMED AT THE MEASURED PROBLEM. m2_geometry is
 # 5,428 combinational ALUTs and 6,607 REGISTERS, and the total went from 33,195
 # ALM to 41,714 -- about 4,000 ALM more than the parts account for. An ALM holds
