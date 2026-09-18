@@ -17802,3 +17802,42 @@ with, and this bench cannot see that class at all.
 **Reverted to the s102 controller**: known-good plus R394, which is the last
 configuration proven to run. R394 stays because s102 ran with it; it bought ~110
 ALM and no Fmax.
+
+
+**R415 -- R387 AND R396 WERE BOTH CONVICTED ON EVIDENCE THAT CANNOT SUPPORT IT.**
+
+Both were withdrawn after board failures. Both withdrawals are now doubtful, and
+for the same reason: the foundation they were tested on was itself unreliable.
+
+At the time R387 (the SDRAM prefetch) and R396 (the read-return split) were
+flashed, the design had ALL of the following wrong underneath them:
+
+    fitter flags      duplication ON, making IOE copies that cannot pack
+    packing           50-70 failures on roughly half of all seeds
+    capture depth     cal_best, a per-boot variable nothing recorded
+    geometry          two dividers on the clk_sys critical path
+
+**THE TELL WAS IN THE DATA AND I MISSED IT.** s111 blue-screened and s113 ran --
+identical RTL, different seed, opposite outcome. That is the packing lottery, not
+R396. R400 nonetheless recorded "without R396: 2 of 2; with R396: 1 of 4" and
+treated four builds across three different fitter configurations as proof.
+
+R392 did the same to the prefetch: three board trips, every one with the capture
+depth free to move, and s131 later locked up with no prefetch in it at all.
+
+**WHAT IS ACTUALLY ESTABLISHED:** neither change is shown to be faulty. Neither
+is shown to be sound either. The experiments were run on sand.
+
+**WHY IT MATTERS NOW.** With the foundation repaired -- Model 1's fitter
+configuration (R414), CL+2 fixed (R398), dividers gone (R408), sound RAM sized
+right (R412) -- the last clk_mem offender is:
+
+    m2_sdram|dq_r[11] -> m2_sdram|p_dout[4][11]   -0.054 ns  (s332)
+
+That is precisely the path R396 pipelines. The change that would close clk_mem
+is the one withdrawn on evidence that would not now be accepted.
+
+**THE RULE THIS SHOULD LEAVE.** A board result is only evidence about a change
+if everything else is held still. Six instrument defects and a packing lottery
+were moving underneath every board test this session; three RTL changes were
+judged against them. Establish the baseline first, then change one thing.
