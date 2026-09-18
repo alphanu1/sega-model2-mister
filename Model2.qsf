@@ -329,10 +329,21 @@ set_global_assignment -name QII_AUTO_PACKED_REGISTERS NORMAL
 # DUPLICATION settings stay OFF, which is what Model 1 does and what stops the
 # sd_dq_oe~_Duplicate_N copies that cannot pack: only one copy can occupy the
 # IOE beside a pin.
+#
+# R407: ONLY THE TWO DUPLICATION SETTINGS STAY OFF.
+# R405 switched off eight passes to match Model 1. Packing went 50-70 -> 0/0/0
+# and ALM 99% -> 97%, but clk_sys went +0.723 -> -1.784 and the worst path moved
+# to m2_geo_xform|ac[2] -> m2_fp_pool|fp_add|sA_sticky. The six non-duplication
+# passes were doing real timing work on the geometry's FP path; only the two
+# duplication settings cause the unpackable IOE copies. Eight were turned off
+# when two were indicated.
+#
+# The geometry FP path wants an RTL retime, which is what Model 1 did for its
+# own FP units (51.47 -> 72.17 MHz), rather than a fitter pass papering over it.
 set_global_assignment -name ROUTER_LCELL_INSERTION_AND_LOGIC_DUPLICATION OFF
 set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC ON
 set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_DUPLICATION OFF
-set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_RETIMING OFF
+set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_RETIMING ON
 # AREA, NOT SPEED. The whole of the block below was tuned when there were
 # 8,940 ALM spare. There are 196.
 # SPEED AGAIN, WITH AGGRESSIVE AREA KEPT. The two do different jobs and only
@@ -368,12 +379,12 @@ set_global_assignment -name AUTO_DELAY_CHAINS_FOR_HIGH_FANOUT_INPUT_PINS ON
 # combinational restructuring is buying nothing". Both halves of that are now
 # false: the technique is AREA and the spare is 196 ALM.
 set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC_FOR_AREA OFF
-set_global_assignment -name ADV_NETLIST_OPT_SYNTH_WYSIWYG_REMAP OFF
+set_global_assignment -name ADV_NETLIST_OPT_SYNTH_WYSIWYG_REMAP ON
 set_global_assignment -name SYNTH_GATED_CLOCK_CONVERSION ON
-set_global_assignment -name PRE_MAPPING_RESYNTHESIS OFF
-set_global_assignment -name ROUTER_CLOCKING_TOPOLOGY_ANALYSIS OFF
-set_global_assignment -name ECO_OPTIMIZE_TIMING OFF
-set_global_assignment -name PERIPHERY_TO_CORE_PLACEMENT_AND_ROUTING_OPTIMIZATION OFF
+set_global_assignment -name PRE_MAPPING_RESYNTHESIS ON
+set_global_assignment -name ROUTER_CLOCKING_TOPOLOGY_ANALYSIS ON
+set_global_assignment -name ECO_OPTIMIZE_TIMING ON
+set_global_assignment -name PERIPHERY_TO_CORE_PLACEMENT_AND_ROUTING_OPTIMIZATION ON
 set_global_assignment -name PHYSICAL_SYNTHESIS_ASYNCHRONOUS_SIGNAL_PIPELINING ON
 # HIGH, AND THIS IS THE ONE AIMED AT THE MEASURED PROBLEM. m2_geometry is
 # 5,428 combinational ALUTs and 6,607 REGISTERS, and the total went from 33,195
