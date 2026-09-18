@@ -1,5 +1,78 @@
 # Handoff
 
+## STATE, 2026-09-18: R424 PERSPECTIVE IS IN AND UNTESTED ON THE BOARD
+
+**Board is running `build/seeds/s14` (R420)** -- Ben: "that's running, no crash".
+Good picture, and the audio wobble reported against it was a capture card, not
+the core.
+
+**Newest build is `build/seeds/s24` (R425), NOT yet flashed.** ALM 41,391/41,910
+(99%), M10K 505/553, worst slack **-0.969 on clk_mem**
+(`m2_sdram|inflight[0] -> grant[0]`, the arbiter). s23 -2.488, s25 -1.345.
+
+### What is in HEAD that the board has not seen
+
+| rev | change | state |
+|---|---|---|
+| R421 | SDRAM arbiter out of the refresh state decision | built, untested |
+| R424 | perspective-correct texturing | built, untested |
+| R425 | registered the perspective divide off the cache address path | built, untested |
+| R426 | the speed programme, documented | docs only |
+
+R422 (slow scan via ce_pix) was **withdrawn** by R423 -- it moved hsync.
+
+### R424 is the one to judge by eye
+
+Textures should sit correctly on the road and scenery instead of the sheet
+wrapping across the polygon. **Band coverage may get WORSE**: it adds a third
+divide round per quad to a fill whose divider already dominates it. That is the
+expected trade, not a regression -- see R426 before reverting anything.
+
+Proof it works, since no bench could see it before: `u swept 3.78x across the
+span (affine would be 1.00x), worst error 0.0041%`. Every pre-existing test
+drives 1/z flat and would pass with the feature deleted.
+
+### The two open numbers
+
+- **ALM is 99%.** That is the binding resource now, not M10K (48 blocks free).
+  It is also why the fitter has no room to place for timing.
+- **clk_mem is -0.969.** The worst path is the arbiter, and R426's first
+  candidate -- tying off port 0's dead readback probe -- shrinks exactly that.
+
+## NEXT, IN ORDER (all detail in study R426)
+
+1. **Flash s24 and look at the textures.** Everything after this depends on
+   whether perspective is right.
+2. **Tie off `p_req[0]`** and drop the vestigial `O[16:14],Probe` menu entry.
+   `rb_w0`/`rb_w1` are dead (Verilator confirms) and the probe loops forever
+   during gameplay. Frees 1-in-11 of SDRAM grants and takes the arbiter from 11
+   ports to 10, which R288 measured at 0.37 ns on clk_mem.
+3. **Instrument the fill** -- cycles in `S_PF_Q1W/Q2W/Q3W`, cycles blocked in
+   `T_FETCH` on `tx_ack`, group count. The 436,000-cycle FILLW figure is from
+   the radix-2 era and cannot be designed against.
+4. **Plane-fit reciprocal.** All six divides assign `den_n`; one reciprocal plus
+   six multiplies replaces them.
+5. **fp_pool operand mux.** Model 1 took m1_geometry 39.6 -> 54.57 MHz with it.
+
+## WHAT NOT TO RE-PROPOSE
+
+Study R426 section 4 has the evidence. Briefly: the char cache restore (128 KB
+still overran on the board), growing the quad store (2048 is exactly the M10K
+depth boundary, so 2049 costs what 4096 costs), slowing ce_pix (moves hsync),
+the DDR3 framebuffer (Ben has ruled it out), more band buffers (~7 M10K each
+against 48 free).
+
+## INSTRUMENT DEFECTS FOUND THIS RUN
+
+Seven. The newest: **tb_m2_raster3d cannot measure the texel cache.** With
+`M2_R3D_TEX=1` it reports 15,454 hits and 1 miss -- 100% -- **identically at
+1024, 2048, 4096 and 8192 lines**, because its synthetic quads sample one
+texture line. The board's 70% is the only real datum.
+
+---
+
+## EARLIER HANDOFF (kept for the fitter/packing history)
+
 ## WORKING BASELINE: `build/seeds/s283` -- CONFIRMED ON THE BOARD
 
 Ben: "its running and has not crashed". Packs clean, clk_sys healthy, behaviour
