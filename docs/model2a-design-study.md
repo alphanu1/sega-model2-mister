@@ -17988,3 +17988,41 @@ it: per-port transaction counts, grant counts, burst maxima, aggregate
 throughput and the write-contention figures are byte-identical. 1,739,363
 checks, 0 fails, 0 protocol violations; 2M-cycle read-only integrity soak with 0
 mismatches; 4M-cycle watchdog soak with no stall longer than 52.
+
+---
+
+**R422 -- SLOW THE BEAM, NOT THE RENDERER. MORE VBLANK WOULD NOT HAVE WORKED.**
+
+With textures on the board shows a few bands and nothing beneath them. The
+obvious reading is that the renderer is "late" and needs more time before the
+frame starts. It is not, and that would not have helped.
+
+The 3D races the beam in 8-line bands through NBUF=4 band buffers, and
+m2_raster3d says it plainly at line 102: *it can run at most NBUF bands ahead
+and cannot simply fall behind*. A buffer is released the instant the beam passes
+its band -- `if (bd_ready[i] && (scan_band_f > bd_band[i])) bd_ready[i] <= 0` --
+so a band rendered after the beam has gone by is never displayed at all. The
+bands under the visible ones are not late. They were never drawn.
+
+**Extra vblank buys exactly four bands.** It adds time before the frame, and
+four is all the renderer can bank before it must wait for the beam. The other 44
+still have to keep pace with it.
+
+What does work is stretching every LINE, because that grows the budget across
+the whole frame where the chase happens. ce_pix is a fractional divider, 16 of
+50; making the numerator selectable and dropping it to 8 halves the beam's
+wall-clock speed and leaves every counter, sync position and blanking edge
+untouched. The line and frame lengths IN PIXELS do not change -- only when a
+pixel is handed to the scaler. Measured budget: the renderer peaks at 17.2-17.4
+ms against a 16.7 ms frame, so ~30 Hz clears it with room.
+
+The game runs at half speed. That is the trade, and it is worth it: perspective
+work cannot be judged on a frame where only the top few bands are drawn.
+
+**A SIX-BIT ADD WAS NOT WIDE ENOUGH, AND THE ORIGINAL NEVER KNEW.** The
+comparison was `ce_acc + CE_NUM >= CE_DEN` with CE_NUM an int, so the add
+happened at 32 bits. Making the numerator a 6-bit wire made the add 6-bit --
+ce_acc reaches 49 and the numerator 16, so the sum reaches 65 and wraps to 1,
+dropping the enable exactly where it should fire. Modelled before building:
+1,600 enables lost in 5,000 cycles. The sum is 7 bits now, and the 16/50
+sequence is bit-identical to the original over 5,000 cycles.
