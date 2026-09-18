@@ -1080,9 +1080,6 @@ wire [NPORTS-1:0] sdr_pend, sdr_infl;
 // a 20-bit counter wraps at 1.05 M -- which would read as a quiet frame.
 logic [20:0] bw_busy, bw_cpu, bw_geo, bw_tex, bw_chr;
 logic [20:0] bwl_busy, bwl_cpu, bwl_geo, bwl_tex, bwl_chr;
-// R401: cycles in S_IDLE with work available that was NOT started, split by cause.
-wire         sdr_refblk, sdr_holblk, sdr_wr_grant;
-logic [20:0] bw_refblk, bw_holblk, bwl_refblk, bwl_holblk;
 logic        bw_tog, bw_tog_m, bw_tog_m2, bw_tog_m3;
 always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	if (!mem_rst_n)                bw_tog <= 1'b0;
@@ -1092,24 +1089,19 @@ always_ff @(posedge clk_mem or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
 		bw_busy <= '0; bw_cpu <= '0; bw_geo <= '0; bw_tex <= '0; bw_chr <= '0;
 		bwl_busy <= '0; bwl_cpu <= '0; bwl_geo <= '0; bwl_tex <= '0; bwl_chr <= '0;
-		bw_refblk <= '0; bw_holblk <= '0; bwl_refblk <= '0; bwl_holblk <= '0;
 		bw_tog_m <= 1'b0; bw_tog_m2 <= 1'b0; bw_tog_m3 <= 1'b0;
 	end else begin
 		bw_tog_m <= bw_tog; bw_tog_m2 <= bw_tog_m; bw_tog_m3 <= bw_tog_m2;
 		if (bw_tog_m3 != bw_tog_m2) begin
 			bwl_busy <= bw_busy; bwl_cpu <= bw_cpu; bwl_geo <= bw_geo;
 			bwl_tex  <= bw_tex;  bwl_chr <= bw_chr;
-			bwl_refblk <= bw_refblk; bwl_holblk <= bw_holblk;
 			bw_busy <= '0; bw_cpu <= '0; bw_geo <= '0; bw_tex <= '0; bw_chr <= '0;
-			bw_refblk <= '0; bw_holblk <= '0;
 		end else begin
-			if (|sdr_infl || sdr_wr_grant)      bw_busy <= bw_busy + 21'd1;   // R402: the write port counts
+			if (|sdr_infl)                      bw_busy <= bw_busy + 21'd1;
 			if (sdr_pend[1]  && !sdr_infl[1])   bw_cpu  <= bw_cpu  + 21'd1;
 			if (sdr_pend[4]  && !sdr_infl[4])   bw_geo  <= bw_geo  + 21'd1;
 			if (sdr_pend[10] && !sdr_infl[10])  bw_tex  <= bw_tex  + 21'd1;
 			if (sdr_pend[3]  && !sdr_infl[3])   bw_chr  <= bw_chr  + 21'd1;
-			if (sdr_refblk)                     bw_refblk <= bw_refblk + 21'd1;
-			if (sdr_holblk)                     bw_holblk <= bw_holblk + 21'd1;
 		end
 	end
 end
@@ -1128,47 +1120,10 @@ m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(781)) u_sdram (
 	// calibration"; 1..5 force CL+1..CL+5 so a board this cannot calibrate is
 	// still tunable by hand without a rebuild. During the sweep itself the
 	// controller follows cal_sel, because that is what is being measured.
-	// R397: CL+4 FIXED, NOT cal_best. The boot sweep still runs and its mask is
-	// still worth reading, but its RESULT no longer drives the capture depth.
-	//
-	// It was a per-boot variable sitting underneath every board result taken
-	// today: a build that blue-screens and a build that runs can differ only in
-	// which depth the sweep happened to choose, and nothing in the capture says
-	// which one it picked. Three hangs and a blue screen were all read as RTL
-	// faults while this was free to move.
-	//
-	// CL+2, PROVEN ON THE BOARD, AND IT IS NOT WHAT THE COMMENTS SAY.
-	// CL+4 was tried first because two places in this tree recommend it --
-	// RD_LAT_DEF, and the sweep's no-pass fallback citing Kaneko16. It produced
-	// a COMPLETELY DEAD CORE (s122: copro at PC 0 for all 90,525 samples, zero
-	// bands, zero frames). Forcing CL+2 through the OSD on that same dead build
-	// brought it straight back to life.
-	//
-	// THE CL+4 EVIDENCE WAS PRE-R385. The picker was changed from "lowest
-	// passing depth" to "centre of the widest run" because "the sweep saw CL+2
-	// and CL+4 pass and CL+2 was chosen, and CL+2 read the boot IP back wrong in
-	// a single bit". R385 then found Automatic Periphery Placement scattering
-	// the DQ capture registers -- ten of sixteen captured in fabric, a
-	// NON-UNIFORM read bus, which is precisely what makes a shallower depth read
-	// wrong in one bit. With the packing fixed, CL+2 is correct and the centre
-	// rule has been steering away from it ever since.
-	//
-	// The OSD override stays: a board that needs something else is still
-	// tunable by hand, which is how this value gets checked rather than
-	// believed.
 	.rd_lat_sel(!cal_done          ? cal_sel      :
-	// CL+2, FIXED. Ben: "CL+2 is right. it has always worked." That is months
-	// of board experience against a one-build inference, and the inference was
-	// wrong: it read s131 (CL+2, locked up) against s113 (auto, ran) as evidence
-	// that the depth follows placement. But s111 and s113 are the SAME RTL on
-	// auto and s111 BLUE-SCREENED -- seed variance alone produces dead and
-	// working builds, so s131's lockup implicates the seed, not the depth.
-	//
-	// CL+4 by contrast is disproven outright: s122 was completely dead and
-	// forcing CL+2 through the OSD on that same build revived it.
-	//
-	// cal_mask is still reported (R399) so the sweep's own view is visible, but
-	// it no longer chooses.
+	// CL+2 FIXED. The boot sweep on this board reports pass mask 001000 and
+	// chooses CL+2, so this is the value auto-detect already picks -- fixing it
+	// removes a per-boot variable without changing the depth. OSD override stays.
 	            (status[7:5] != 0) ? status[7:5]  : 3'd2),
 	.sd_cke(SDRAM_CKE), .sd_cs_n(SDRAM_nCS), .sd_ras_n(SDRAM_nRAS),
 	.sd_cas_n(SDRAM_nCAS), .sd_we_n(SDRAM_nWE), .sd_ba(SDRAM_BA),
@@ -1178,8 +1133,7 @@ m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(781)) u_sdram (
 	.wr_be(f_wr_be),   .wr_ack(f_wr_ack),
 	.p_req(f_req), .p_we(f_we), .p_addr(f_addr), .p_din(f_din), .p_be(f_be),
 	.p_dout(f_dout), .p_ack(f_ack),
-	.dbg_req(sdr_pend), .dbg_grant(sdr_infl),
-	.dbg_refblk(sdr_refblk), .dbg_holblk(sdr_holblk), .dbg_wr_grant(sdr_wr_grant)
+	.dbg_req(sdr_pend), .dbg_grant(sdr_infl)
 );
 
 assign SDRAM_DQ  = sd_dq_oe ? sd_dq_o : 16'bZ;
@@ -4172,15 +4126,8 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// projections abandoned on timeout -- the one path that hands a late x/y
 	// to the NEXT vertex, which is the shape of the board's wedges. Zero at
 	// the desk; the board has to say.
-	// R399: THE CALIBRATION RESULT, WHERE geo_pj_lost USED TO BE.
-	// Nothing in the debug stream ever said what capture depth a build chose,
-	// so "identical RTL, one seed dead, one seed fine" was unanswerable after
-	// the fact -- and three board trips were spent blaming RTL for it. These
-	// twelve bits have read ZERO in every capture taken (R237's projection
-	// timeouts: first 0, last 0, max 0), and this record is emitted ~90,000
-	// times a capture, so the answer is now in every one.
 	.a_data({cpu_trap, cpu_halted, copro_stall, copro_dbg_ctl[31],
-	         2'b00, cal_done, cal_mask[5:0], cal_best[2:0], tgp_pc[15:0]}),
+	         geo_pj_lost[11:0], tgp_pc[15:0]}),
 	// THE i960's OWN INSTRUCTION COUNT, so the first three minutes can be
 	// diagnosed rather than described. Two readings a known time apart give the
 	// rate directly; a machine that is slow for three minutes and then is not
@@ -4410,7 +4357,7 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	      : (tps_ph == 3'd4)                  ? {tx_h_f, tx_n_f}                // R275: texel hits : texels that were not 0xF
 	      : (tps_ph == 3'd5)                  ? {tx_m_f, tex_sweep}             // R294 texel misses; R310 whole-cache sweeps
 	      : (tps_ph == 3'd7)                  ? {oz_d2, oz_d3}                 // R334: 1/z of vertices 2 and 3 ('Q')
-	      : (tps_ph == 3'd6)                  ? {bwl_tex[20:5], bwl_refblk[20:13], bwl_holblk[20:13]}   // R294 texel wait; R401 why a ready transfer was not started
+	      : (tps_ph == 3'd6)                  ? {bwl_tex[20:5], 16'd0}          // R294: texel fetch waiting
 	      : {lum_mean_f, lum_zpc_f, wedge_slot, wedge_n[6:0], r3d_quads[11:4]}),   // R249: the frame's mean luminance and its black-polygon percentage, where the always-zero drop count and the free-running miss count were
 	.a_tag(8'h43),
 	.b_tag((wedge_have && wedge_ph == 2'd1) ? 8'h57 : (wedge_have && wedge_ph == 2'd2) ? 8'h58

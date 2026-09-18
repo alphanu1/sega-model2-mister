@@ -22,8 +22,7 @@ module m2_romload_harness #(
   input  logic        clk,
   input  logic        rst_n,
   // Swept by the testbench. The device MODEL presents data on the same edge
-  // the controller uses and wants CL+3 (sel 0);
-  // the real board is clocked on
+  // the controller uses and wants CL+3 (sel 0); the real board is clocked on
   // the inverse and wants CL+2 (sel 1). They are different numbers for a
   // physical reason, so the harness must not hardcode either.
   input  logic  [2:0] rd_lat_sel,
@@ -62,9 +61,6 @@ module m2_romload_harness #(
   output int unsigned reads_served,
   output int unsigned writes_served
 );
-
-  // R401 probes, observed by the board telemetry; unused here.
-  logic dbg_refblk_w, dbg_holblk_w, dbg_wrg_w;
 
   localparam int unsigned NP = 5;
 
@@ -124,8 +120,7 @@ module m2_romload_harness #(
     .wr_be(ldr_wr_be), .wr_ack(ldr_wr_ack),
     .p_req(p_req), .p_we('0), .p_addr(p_addr), .p_din('0), .p_be('1),
     .p_dout(p_dout), .p_ack(p_ack),
-    .dbg_req(), .dbg_grant(),
-    .dbg_refblk(dbg_refblk_w), .dbg_holblk(dbg_holblk_w), .dbg_wr_grant(dbg_wrg_w)
+    .dbg_req(), .dbg_grant()
   );
 
   m2_rom_loader #(.SDR_AW(SDR_AW)) u_loader (

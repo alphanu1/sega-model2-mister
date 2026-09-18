@@ -56,19 +56,7 @@ live=sum(v for k,v in ip.items() if k!=0)
 def rng(a,b): return sum(v for k,v in ip.items() if a<=k<b)
 print('C',len(C),'H',len(H),' framewait %.1f%%'%(100*(ip[0x12b0]+ip[0x12b8])/max(1,live)),' mailbox %.1f%%'%(100*(ip[0x1166c]+ip[0x11674])/max(1,live)),' render %.1f%%'%(100*rng(0x16e58,0x17b00)/max(1,live)))
 print('tgp  :',', '.join(f'{k:04X}:{v}' for k,v in pc.most_common(4)))
-# R399: these twelve bits used to be geo_pj_lost, which read zero in every
-# capture ever taken. They now carry the SDRAM capture calibration, which is the
-# question that was unanswerable after the fact: what depth did this build use?
-cal=[((d>>25)&1, (d>>19)&0x3f, (d>>16)&0x7) for _,d in C]
-pj=[0 for _,d in C]
-if cal:
-    from collections import Counter as _C
-    _done = _C(x[0] for x in cal); _mask = _C(x[1] for x in cal); _best = _C(x[2] for x in cal)
-    _m, _b = _mask.most_common(1)[0][0], _best.most_common(1)[0][0]
-    print('SDRAM CAPTURE (R399): cal_done=%s  pass mask=%s (CL+0..CL+5, bit n = CL+n)  chosen=CL+%d'
-          % (dict(_done), format(_m, '06b')[::-1], _b))
-    print('    (a fixed depth was tried and rejected: CL+4 gave a dead core, CL+2 locked up')
-    print('     on a seed where auto ran fine -- the depth appears to follow placement.)')
+pj=[(d>>16)&0xfff for _,d in C]
 print('projections abandoned on timeout (R237): first %d, last %d, max %d' % (pj[0] if pj else 0, pj[-1] if pj else 0, max(pj) if pj else 0))
 # b_addr = {ready_cyc16 (x16), bands_done8, hold8}; b_data = {qs_dropped16, geo_dropped8, quads[11:4]}
 n=len(H); k=max(1,n//5)
@@ -167,14 +155,6 @@ if Z or Z2:
         tex=[(d>>16)&0xffff for _,d in Z2]
         print('    waiting for the bus: geometry %.1f%%  glyph fetch %.1f%%  texels %.1f%%'
               % (100*med3(geo)/FR, 100*med3(chr_)/FR, 100*med3(tex)/FR))
-        # R401: cycles in S_IDLE with work available that was NOT started, by
-        # cause. 8 bits each in units of 8192 memory cycles; a frame is ~204.
-        FR8 = 1670000.0/8192.0
-        rb=[(d>>8)&0xff for _,d in Z2]; hb=[d&0xff for _,d in Z2]
-        print('    NOT STARTED though ready (R401): refresh-due blocked %.1f%%  write/pipe head-of-line %.1f%%'
-              % (100*med3(rb)/FR8, 100*med3(hb)/FR8))
-        print('    (geometry pends while the bus is IDLE in 46%% of samples -- these say why.')
-        print('     refresh-due blocks EVERY transfer; head-of-line blocks all ten other ports.)')
     print('    (bus busy near 100%% with everyone waiting = BANDWIDTH; idle bus with a'
           ' queue = BLOCKED, and the fixes are opposites)')
 
