@@ -18149,3 +18149,45 @@ warnings against HEAD.
 
 **NOT YET MEASURED:** ALM and M10K, and whether the third divide round slows the
 fill enough to cost bands. Both need the fitter and the board.
+
+---
+
+**R425 -- R424's PERSPECTIVE DIVIDE WAS A WIRE INTO A BLOCK-RAM ADDRESS PORT.**
+
+R424 fitted at 98-99% ALM and missed timing by ten nanoseconds:
+
+```
+  seed   worst slack   TNS
+   20      -8.992     -2516.734
+   21     -10.208     -3021.030
+   22     -10.355     -3038.058
+```
+
+That is not placement. The path:
+
+```
+m2_span_tex|u_r[29] -> m2_texel|altsyncram|ram_block1a12~portb_address_reg9
+  -8.992 ns on clk_mem
+```
+
+`persp()` was a combinational wire, so a 24x32 multiply and a saturating
+compare sat between u_r and the texel cache's block-RAM address port -- 19 ns of
+logic on a 10 ns clock. The same class R418 and R420 exist to fix, introduced
+fresh in the change that quotes them.
+
+The fix costs nothing, because the structure to hide it was already built: the
+reciprocal is computed a group AHEAD, so the divide moves alongside it. u_px_r
+and v_px_r are registered at the same advance that latches the reciprocal, and
+the address port sees a register and a bit-select again. rcp_r is gone -- persp
+reads rcp_q directly, one cycle earlier.
+
+Unchanged by the move: `u swept 3.78x across the span (affine would be 1.00x),
+worst error 0.0041%`, and span_tex 36/0 at PIXSTEP 2 and 4, raster3d 8/0.
+
+**THE LESSON IS ABOUT WHERE A PATH ENDS, NOT HOW LONG IT IS.** Every timing fix
+in this run -- R418, R419, R420, R421 -- found arithmetic feeding something in
+the same cycle. Writing R424 I checked that the fill's new states did not do a
+shift and a multiply together, and did not check what the walk's new wire
+terminated at. An endpoint inside a memory's address port is worse than a long
+path between two flops, because the memory adds its own setup and cannot be
+retimed.

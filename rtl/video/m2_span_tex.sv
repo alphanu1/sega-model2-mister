@@ -109,7 +109,6 @@ module m2_span_tex #(
   logic               moire_r;
   logic signed [31:0] u_r, v_r, du_r, dv_r;
   logic signed [31:0] o_r, do_r;        // R424: 1/z and its gradient
-  logic [31:0]        rcp_r;            // R424: 2^30 / o_r, held for the group
   logic [1:0]         rcp_age;          // cycles since the divider was given o
   logic [1:0]         warm_cnt;
   logic [23:0]        tex_r;
@@ -146,6 +145,8 @@ module m2_span_tex #(
   // nothing on any fetch that took two cycles or more -- which is most of
   // them. rcp_age is the guard for the ones that did not.
   wire signed [31:0] o_nxt = o_r + (do_r <<< $clog2(PIXSTEP));
+  wire signed [31:0] u_nxt = u_r + (du_r <<< $clog2(PIXSTEP));   // R425
+  wire signed [31:0] v_nxt = v_r + (dv_r <<< $clog2(PIXSTEP));
   wire [15:0] rcp_d = (st == T_WARM) ? (o_r[31]   ? 16'd1 : {1'b0, o_r[30:16]})
                                      : (o_nxt[31] ? 16'd1 : {1'b0, o_nxt[30:16]});
   wire [31:0] rcp_q;
@@ -170,12 +171,18 @@ module m2_span_tex #(
 
   /* verilator lint_on UNUSEDSIGNAL */
 
-  wire signed [31:0] u_px = persp(u_r, rcp_r);
-  wire signed [31:0] v_px = persp(v_r, rcp_r);
+  // R425: REGISTERED, NOT A WIRE. As a wire this put a 24x32 multiply and a
+  // saturating compare between u_r and the texel cache's block-RAM address:
+  //   m2_span_tex|u_r[29] -> m2_texel|...|ram_block1a12~portb_address_reg9
+  //   -8.992 ns on clk_mem, TNS -3,038
+  // which is 19 ns of logic on a 10 ns clock. The divide is computed a group
+  // AHEAD alongside the reciprocal that feeds it, so the address port now sees
+  // a register and a bit-select, as it did before perspective existed.
+  logic signed [31:0] u_px_r, v_px_r;
 
   assign tx_tex = {8'd0, tex_r};
-  assign tx_u   = to_tx(u_px);
-  assign tx_v   = to_tx(v_px);
+  assign tx_u   = to_tx(u_px_r);
+  assign tx_v   = to_tx(v_px_r);
   assign tx_req = (st == T_FETCH);
 
   // The texel as an intensity: 0x0 -> 0, 0xF -> 0xFF, evenly spaced.
@@ -249,7 +256,8 @@ module m2_span_tex #(
       st <= T_IDLE;
       y_r <= '0; x_r <= '0; x1_r <= '0; col_r <= '0; moire_r <= 1'b0;
       u_r <= '0; v_r <= '0; du_r <= '0; dv_r <= '0; tex_r <= '0; texel_r <= '0;
-      o_r <= '0; do_r <= '0; rcp_r <= 32'd0; rcp_age <= 2'd0; warm_cnt <= 2'd0;
+      o_r <= '0; do_r <= '0; rcp_age <= 2'd0; warm_cnt <= 2'd0;
+      u_px_r <= '0; v_px_r <= '0;   // R425
       e_valid <= 1'b0; e_col <= '0; e_x <= '0; e_x1 <= '0; to_cnt <= '0;
       dbg_texpix <= '0; dbg_texnz <= '0;
     end else begin
@@ -285,7 +293,8 @@ module m2_span_tex #(
         // not two cycles once a group.
         T_WARM: begin
           if (warm_cnt == 2'd0) begin
-            rcp_r   <= rcp_q;
+            u_px_r  <= persp(u_r, rcp_q);       // R425: the span's first group
+            v_px_r  <= persp(v_r, rcp_q);
             rcp_age <= 2'd0;
             st      <= T_FETCH;
           end else warm_cnt <= warm_cnt - 2'd1;
@@ -337,10 +346,13 @@ module m2_span_tex #(
             // $clog2 is correct for any POWER OF TWO. A non-power-of-two step
             // (6) would need a real multiply on this path, for nothing that 8
             // does not already give.
-            u_r <= u_r + (du_r <<< $clog2(PIXSTEP));
-            v_r <= v_r + (dv_r <<< $clog2(PIXSTEP));
+            u_r <= u_nxt;
+            v_r <= v_nxt;
             o_r     <= o_nxt;                    // R424
-            rcp_r   <= rcp_q;
+            // R425: the NEXT group's coordinate, divided here so the fetch
+            // reads a register. rcp_q is already the reciprocal of o_nxt.
+            u_px_r  <= persp(u_nxt, rcp_q);
+            v_px_r  <= persp(v_nxt, rcp_q);
             rcp_age <= 2'd0;
             st  <= T_FETCH;
           end
