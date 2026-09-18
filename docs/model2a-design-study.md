@@ -18191,3 +18191,162 @@ shift and a multiply together, and did not check what the walk's new wire
 terminated at. An endpoint inside a memory's address port is worse than a long
 path between two flops, because the memory adds its own setup and cannot be
 retimed.
+
+---
+
+**R426 -- THE SPEED PROGRAMME: WHAT IS MEASURED, WHAT IS RANKED, AND WHAT IS
+ALREADY REFUTED.**
+
+Collected so nothing here has to be re-derived. Every line is either a
+measurement with its source, or is marked as an estimate.
+
+**1. THE CLOCK CANNOT DO IT ALONE.**
+
+Real Model 2A is i960KB at 25 MHz and MB86234 at 50 MHz (study S45-46). We run
+i960 at 25 and the renderer at 50: **exactly 1x, not over-doubled.**
+
+Model 1 needed more than the original board to reach 60 fps -- CPU 16 -> 29.47
+(1.84x) and 3D 25 -> 58.947 (2.36x). The same ratios here would need the
+renderer at ~118 MHz, and Model 1's own note says its 3D stops at 58.84:
+*"58.947 rather than clk_sys's 80 because the TGP's state machine misses at
+m1_raster_fill 58.84 -- 80 does not close."* Our 3D:CPU ratio is already exactly
+2:1, which is Model 1's rule so the crossing stays a clock enable.
+
+Conclusion: clock is necessary and nowhere near sufficient. Cycles per quad is
+the main lever.
+
+**2. THE DEFICIT IS ENTIRELY IN THE TEXTURE PATH.** Board evidence, Ben: with
+textures OFF the bands are fine and no drops are visible. Three costs switch on
+together and nothing else does:
+
+- `m2_raster_fill:745` -- `state <= in_tex[0] ? S_PF_OZ : S_MINMAX`. The whole
+  plane fit, all six divides, R424's normalise: textured quads ONLY.
+- `m2_span_tex:240` -- `out_valid = idle ? (in_valid && !tex_now) : e_valid`. An
+  untextured span passes through in ONE handshake; a textured one is walked in
+  groups of PIXSTEP.
+- The texel fetches exist only on the textured path.
+
+So the band deficit is the sum of divides + group expansion + texel misses, and
+the split between the three is NOT yet known.
+
+**3. RANKED CANDIDATES.**
+
+| # | change | evidence | cost |
+|---|---|---|---|
+| 1 | Port 0's readback probe is dead and never gated | below | free, helps twice |
+| 2 | Plane-fit reciprocal: 6 divides share one denominator | below | ALM |
+| 3 | fp_pool operand mux registered | Model 1: 39.6 -> 54.57 MHz | ALM + a latency step |
+| 4 | Re-test R387's prefetch on a clean base | R415 | none |
+| 5 | Texel cache 2048 -> 4096 lines | board hit rate 70% | +21 M10K |
+
+**(1) PORT 0 IS A DEBUG PROBE THAT LOOPS FOREVER WITH NO CONSUMER.** `rb_req`,
+Model2.sv:795. Its own comment says *"LOOPS, and that matters"* -- made to loop
+deliberately after a one-shot version gave a false negative. It issues two
+back-to-back reads per iteration, continuously, during gameplay, and **`rb_w0`
+and `rb_w1` are never read by anything** (Verilator: "Signal is not used"). R411
+removed the probe page and overlay that consumed them; the loop was left
+running. The `O[16:14],Probe` menu entry only picks `rb_addr`, so it is
+vestigial too.
+
+It helps twice. The arbiter grants round-robin among PENDING ports only, so an
+idle port costs nothing -- but this one is ALWAYS pending, so it takes a full
+share every rotation: every other port goes 1-in-11 to 1-in-10. And R288
+measured the ELEVENTH port costing **0.37 ns on clk_mem**, which is where the
+worst path lives right now:
+
+```
+  s24, R425:  m2_sdram|inflight[0] -> m2_sdram|grant[0]   -0.969 on clk_mem
+```
+
+Tie `p_req[0] = 1'b0` rather than renumbering ports 1-10; Quartus constant-
+propagates `pend[0] = 0` through the rotate and encoder. Renumbering ten ports
+by hand costs a build to find a typo.
+
+**(2) THE PLANE FIT'S SIX DIVIDES SHARE ONE DENOMINATOR.** m2_raster_fill lines
+812/815/831/834/851/854 all assign `den_n`. m2_raster_div is radix-4 restoring,
+16 cycles, with a table fast path only for |den| < 256. One reciprocal of
+`den_n` plus six multiplies replaces the lot. m2_persp_recip (R424) already
+proves the technique at 0.018 texels over an exhaustive sweep, and a plane fit
+needs less precision than a texture walk.
+
+The size is an ESTIMATE and the underlying figure is stale: m2_raster_div's
+header records *"FILLW 3,487,790 cycles over 8 passes = 436,000 a frame, of
+818,133"* and *"the divider IS the fill"*, but that was measured at radix-2,
+before radix-4, before PIXSTEP 4, and before R424 took the fit from four divides
+to six. Re-measure before sizing.
+
+**(3) THE fp_pool OPERAND MUX IS NOT REGISTERED HERE.** m2_fp_pool:138-146 feeds
+`mul_a[mul_win]` and `add_a[add_win]` straight into the units. Model 1 found
+this exact structure was its clk_3d critical path and registering it took
+m1_geometry **39.6 -> 54.57 MHz**; their note adds that the units themselves are
+fast (fp_add 138.48 MHz standalone, fp_mul 145.62, fp_div 117.81) so *"the
+sharing wrapper was the limit, not the arithmetic."* Corroborated here: s20's
+clk_sys worst path was `m2_geo_clip|cs[2] -> m2_fp_pool|fp_add|sA_sticky` at
++0.036 -- the same shape.
+
+Comes with: latency 4 -> 5, and the static scheduler must be told (theirs is
+FP_ADD_LAT in m1_geo_xform); everything else waits on `*_rsp`. div needs the
+same treatment afterwards, but is single-outstanding so no tag depth to retune.
+
+**(4) SDRAM: THE BANDWIDTH IS THERE, THE LATENCY IS NOT.** tb_m2_sdram, per
+port: `req=6349796 grant=859501 wait=5490295` -- ~86% of requests waiting, and
+the recorded finding is that geometry's 47% bus wait is *arbitration latency,
+not bandwidth*. R415 records that R387's prefetch was withdrawn on evidence
+taken while the fitter flags, packing, capture depth and geometry dividers were
+all wrong underneath, and that neither it nor R396 was ever shown faulty or
+sound. Worth re-testing now the base is clean.
+
+**THE WRITE PORT IS NOT A PROBLEM, CHECKED.** Five writers share it
+(`wa_own_req`), but `bi_run = rom_loaded && cal_done && !bi_done` latches off
+after one pass, and the self-test parks at `st_state 14` with `st_req <= 0`.
+Only geometry and the TGP write during play. tb_m2_sdram shows `worst write wait
+736 cyc` -- writes are starved by reads, not the reverse -- so splitting the
+write port would free no read bandwidth, and every extra port deepens the
+arbiter chain that is already the worst path.
+
+**4. REFUTED OR IMPOSSIBLE -- DO NOT RE-PROPOSE WITHOUT NEW EVIDENCE.**
+
+- **Char cache restore.** Ben measured on the board that **128 KB STILL
+  OVERRAN** (694 misses and 12 overruns a frame, against 2,146 and 51 at 64 KB).
+  The remaining misses are a latency tail, not capacity; the tile clock is the
+  fix. Currently IDX_BITS=12 (32 KB, 35 blocks); +35 reaches 64 KB, +105 reaches
+  128 KB against 48 free.
+- **Growing the quad store.** NQ=2048 is exactly the deepest native M10K
+  configuration (2048x5), so NQ=2049 costs what NQ=4096 costs -- every slice
+  needs a second block. The store is 143 blocks; growing it is +143 against 48
+  free. The same boundary blocks shrinking to 1980: it frees nothing, only 1024
+  would.
+- **Slowing the video to fit (R422).** Withdrawn by R423: ce_pix is the pixel
+  clock, so halving it moves hsync 24.39 -> 12.20 kHz. Survives ascal, does not
+  survive direct video.
+- **A DDR3 framebuffer.** It is what the Namco System 22 core does -- README:
+  *"~5.9 fps at ~4300 quads/s"*, pipeline `pc_geo -> pc_sort -> pc_raster ->
+  pc_pixel -> DDR3 framebuffer* -- and it is why a slow renderer is survivable
+  there and not here: we race the beam, so slow means bands never drawn, not a
+  low frame rate. The framework supports it (`MISTER_FB`, commented out at
+  Model2.qsf:440; sys_top wires FB_EN/FB_BASE/FB_WIDTH/... to emu). **Ben has
+  ruled it out** -- tried on a ddr3 branch, kept failing, and prefers to optimise
+  and clock up. Recorded so the option is known, not so it is re-argued.
+- **More band buffers.** NBUF=4 and a buffer is freed the moment the beam passes
+  its band, so extra vblank buys four bands and no more. A band buffer is
+  496 x 8 x 17 bits ~= 7 M10K; a whole frame is ~336 against 48 free.
+
+**5. THE INSTRUMENTS THAT CANNOT ANSWER THIS YET.**
+
+- **tb_m2_raster3d's textured workload has no locality spread.** With
+  `M2_R3D_TEX=1` it reports **15,454 hits and 1 miss -- 100% -- identically at
+  1024, 2048, 4096 and 8192 lines.** Its synthetic quads sample one texture
+  line, so it cannot measure cache behaviour at any size. The board's 70% is the
+  only real datum. Seventh instrument defect this run.
+- **No per-state cycle counters in the fill.** The 436,000-cycle FILLW figure
+  came from ad-hoc instrumentation that no longer exists.
+- `m2_texel` already exports `dbg_hits`/`dbg_misses` and m2_raster3d already
+  exposes them as `dbg_texhit`/`dbg_texmiss`; only the bench never printed them.
+- `IDX_BITS(11)` is a literal at m2_raster3d:464. R389's lesson (PIXSTEP
+  hardcoded in three places, sweep blind at the shipped value) applies exactly.
+
+**NEXT MEASUREMENT, IN ORDER:** cycles blocked in `T_FETCH` on `tx_ack`; cycles
+in `S_PF_Q1W/Q2W/Q3W`; group count per frame; and the texel port's
+req/grant/wait read off the board with textures on. Bands-lost matters more than
+cycles here -- a texel miss stalls the walk MID-SPAN in the one unit that cannot
+finish its bands, so a small cycle share can cost a large band share.
