@@ -318,8 +318,19 @@ set_global_assignment -name QII_AUTO_PACKED_REGISTERS NORMAL
 # PHYSICAL_SYNTHESIS options off once produced "Fatal Error: Segment Violation"
 # in four builds of four. Model 1 runs with them off and does not crash, so
 # that is being re-tested rather than treated as settled.
+#
+# R406: ALL FOUR OFF CRASHES THIS FITTER, CONFIRMED 7 OF 7.
+# "*** Fatal Error: Segment Violation at (nil)" -- four builds in the earlier
+# area experiment, three more in R405's sweep (s231-233), no resource numbers
+# written. Model 1 runs with them off and does not crash, so it is specific to
+# this design, but it is reproducible and settled.
+#
+# COMBO_LOGIC and ASYNCHRONOUS_SIGNAL_PIPELINING are therefore back ON. The two
+# DUPLICATION settings stay OFF, which is what Model 1 does and what stops the
+# sd_dq_oe~_Duplicate_N copies that cannot pack: only one copy can occupy the
+# IOE beside a pin.
 set_global_assignment -name ROUTER_LCELL_INSERTION_AND_LOGIC_DUPLICATION OFF
-set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
+set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC ON
 set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_DUPLICATION OFF
 set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_RETIMING OFF
 # AREA, NOT SPEED. The whole of the block below was tuned when there were
@@ -363,7 +374,7 @@ set_global_assignment -name PRE_MAPPING_RESYNTHESIS OFF
 set_global_assignment -name ROUTER_CLOCKING_TOPOLOGY_ANALYSIS OFF
 set_global_assignment -name ECO_OPTIMIZE_TIMING OFF
 set_global_assignment -name PERIPHERY_TO_CORE_PLACEMENT_AND_ROUTING_OPTIMIZATION OFF
-set_global_assignment -name PHYSICAL_SYNTHESIS_ASYNCHRONOUS_SIGNAL_PIPELINING OFF
+set_global_assignment -name PHYSICAL_SYNTHESIS_ASYNCHRONOUS_SIGNAL_PIPELINING ON
 # HIGH, AND THIS IS THE ONE AIMED AT THE MEASURED PROBLEM. m2_geometry is
 # 5,428 combinational ALUTs and 6,607 REGISTERS, and the total went from 33,195
 # ALM to 41,714 -- about 4,000 ALM more than the parts account for. An ALM holds
