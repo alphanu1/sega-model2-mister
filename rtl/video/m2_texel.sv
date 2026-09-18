@@ -170,7 +170,14 @@ module m2_texel #(
   wire [11:0] x2_0  = {1'b0, texx, 5'd0} + u0;
   wire [11:0] y2_0  = {2'd0, texy, 5'd0} + v0;
   wire        fold  = x2_0 >= 12'd1024;
-  wire [11:0] x2    = fold ? (x2_0 - 12'd1024) : x2_0;
+  // R413: A 2-BIT DECREMENT, NOT A 12-BIT SUBTRACT. 1024 is 2^10, so
+  // x2_0 - 1024 cannot affect bits [9:0] -- it is bits [11:10] minus one, and
+  // `fold` means x2_0 >= 1024 so those two bits are never zero and cannot
+  // underflow. Identical value, no 12-bit borrow chain.
+  //
+  // It sat between two adders on the worst path in the design:
+  //   m2_span_tex|tex_r[6] -> Add3 -> Add5 -> m2_texel|idx_r[1]   -0.660 ns
+  wire [11:0] x2    = fold ? {x2_0[11:10] - 2'd1, x2_0[9:0]} : x2_0;
   wire [11:0] y2    = fold ? (y2_0 ^ 12'd1024) : y2_0;
 
   // AN ADD, NOT A CONCATENATION, and this cost an hour. The reference's
