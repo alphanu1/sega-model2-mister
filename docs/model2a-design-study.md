@@ -18394,3 +18394,27 @@ running. Nothing failed, no test noticed, and the cost was a permanent tax on
 the busiest shared resource in the design. When a debug consumer is removed, the
 producer has to go with it -- and "is anything still reading this?" is a
 question the linter answers for free.
+
+---
+
+**R428 -- R424 BUILT A SECOND COPY OF THE WIDEST LOGIC IN THE MODULE.**
+
+R424 cost +2,200 ALM and took the design to 98-99%, where the fitter has no room
+left to place for timing. Two of those were straight duplication:
+
+- **pf_scale_o.** A whole second 40-bit bidirectional barrel shifter with its own
+  saturation, added only to reach a different fixed point. pf_scale's own comment
+  says what that costs -- *"a 64-bit bidirectional barrel shifter is twice the
+  logic of a 40-bit one on a path that is already the widest thing in this
+  module"* -- and it had already been cut from 64 bits to 40 for that reason. The
+  scale is an argument now (FRAC_UV = 9, FRAC_OZ = 5), so the three divide rounds
+  call ONE function from mutually exclusive states and AUTO_RESOURCE_SHARING can
+  fold them.
+- **o_at.** A second copy of uv_at -- two 32-bit multiplies, two shifts, two adds
+  -- for the same reason. The shift is an argument now.
+
+Neither costs a cycle. Both were written while thinking about the arithmetic and
+not about the area, in a change whose own comments quote R418 and R420 on
+exactly that kind of carelessness.
+
+152,295 + 36 + 8 checks, 0 fails, no new lint warnings against HEAD.

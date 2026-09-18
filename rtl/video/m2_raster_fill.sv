@@ -394,14 +394,22 @@ module m2_raster_fill (
   // RETURNS SIXTEEN BITS, because the answer is an 8.8 gradient clamped to
   // +/-32767 and because Quartus 17.0 will not index a function call's result
   // -- `pf_scale(...)[15:0]` is a syntax error there where Verilator takes it.
+  // R428: ONE SHIFTER, NOT TWO. R424 added pf_scale_o -- a whole second copy of
+  // this -- purely to reach a different fixed point. The comment below says what
+  // that costs: the 40-bit bidirectional barrel shifter is the widest thing in
+  // the module, and it was already cut down from 64 bits for exactly that
+  // reason. The scale is an ARGUMENT now, so the three divide rounds call one
+  // function from mutually exclusive states and AUTO_RESOURCE_SHARING can fold
+  // them together.
   function automatic logic signed [15:0] pf_scale(input logic signed [31:0] q,
-                                                  input logic [5:0] z);
+                                                  input logic [5:0] z,
+                                                  input logic signed [8:0] frac);
     logic signed [8:0]  net;
     logic signed [39:0] r;
     begin
       if (z >= 6'd32) pf_scale = 16'sd0;
       else begin
-        net = 9'sd9 - 9'(z) - 9'(den_sh);   // 8.8, not 16.16
+        net = frac - 9'(z) - 9'(den_sh);   // 9 = 8.8, 5 = 12.4
         // FORTY BITS, NOT SIXTY-FOUR. The answer is clamped to +/-2^27 two
         // lines below, so everything above bit 39 is thrown away -- and a
         // 64-bit bidirectional barrel shifter is twice the logic of a 40-bit
@@ -424,9 +432,9 @@ module m2_raster_fill (
   // Written out at each site it was six multiply-add pairs instead of two, and
   // this module is what put the design over the device.
   wire signed [15:0] emit_y  = (state == S_FS_WALK) ? walk_y : cury;
-  wire signed [31:0] emit_u  = uv_at(base_u, dudx, dudy, emit_cl, emit_y);
-  wire signed [31:0] emit_v  = uv_at(base_v, dvdx, dvdy, emit_cl, emit_y);
-  wire signed [31:0] emit_o  = o_at(base_o, dodx, dody, emit_cl, emit_y);    // R424
+  wire signed [31:0] emit_u  = uv_at(base_u, dudx, dudy, emit_cl, emit_y, 5'd8);
+  wire signed [31:0] emit_v  = uv_at(base_v, dvdx, dvdy, emit_cl, emit_y, 5'd8);
+  wire signed [31:0] emit_o  = uv_at(base_o, dodx, dody, emit_cl, emit_y, 5'd12);  // R424
 
   logic               pf_a, pf_b;        // the two plane-fit divides, back
 
@@ -445,12 +453,15 @@ module m2_raster_fill (
                                                input logic signed [15:0] gx,
                                                input logic signed [15:0] gy,
                                                input logic signed [15:0] x,
-                                               input logic signed [15:0] y);
+                                               input logic signed [15:0] y,
+                                               input logic [4:0] sh);
     logic signed [31:0] gxp, gyp;
     begin
       gxp = gx * x;
       gyp = gy * y;
-      uv_at = base + (gxp <<< 8) + (gyp <<< 8);
+      // R428: the shift is the fraction, so it is an argument rather than a
+      // second copy of this function.
+      uv_at = base + (gxp <<< sh) + (gyp <<< sh);
     end
   endfunction
   // R424: THE 1/z PLANE NEEDS A COARSER FRACTION AND A WIDER RANGE.
@@ -467,35 +478,10 @@ module m2_raster_fill (
   // range, +/-2047.9 a pixel. The precision given up is 1/16 of an LSB a pixel,
   // which over a 384-pixel span drifts 24 of 32,704 -- under a tenth of a
   // percent, against the 0.35 texels R331 budgets.
-  function automatic logic signed [15:0] pf_scale_o(input logic signed [31:0] q,
-                                                    input logic [5:0] z);
-    logic signed [8:0]  net;
-    logic signed [39:0] r;
-    begin
-      if (z >= 6'd32) pf_scale_o = 16'sd0;
-      else begin
-        net = 9'sd5 - 9'(z) - 9'(den_sh);   // 12.4, four below pf_scale's 8.8
-        r   = (net >= 9'sd0) ? (40'(q) <<< net[5:0]) : (40'(q) >>> (-net));
-        if      (r >  40'sd32767) pf_scale_o =  16'sd32767;
-        else if (r < -40'sd32767) pf_scale_o = -16'sd32767;
-        else                      pf_scale_o =  16'(r);
-      end
-    end
-  endfunction
-
-  // uv_at's shift is the fraction, so the 1/z plane needs its own.
-  function automatic logic signed [31:0] o_at(input logic signed [31:0] base,
-                                              input logic signed [15:0] gx,
-                                              input logic signed [15:0] gy,
-                                              input logic signed [15:0] x,
-                                              input logic signed [15:0] y);
-    logic signed [31:0] gxp, gyp;
-    begin
-      gxp = gx * x;
-      gyp = gy * y;
-      o_at = base + (gxp <<< 12) + (gyp <<< 12);
-    end
-  endfunction
+  //
+  // R428: this is the FRAC argument to pf_scale now, not a second copy of it.
+  localparam logic signed [8:0] FRAC_UV = 9'sd9;    // 8.8
+  localparam logic signed [8:0] FRAC_OZ = 9'sd5;    // 12.4
 
   logic [2:0]         ps1m1, ps2p1;
   logic signed [15:0] ya_next, yb_next;
@@ -821,8 +807,8 @@ module m2_raster_fill (
         end
 
         S_PF_Q1W: begin
-          if (div_valid)  begin dudx <= pf_scale(div_quo,  q_z_a); pf_a <= 1'b1; end
-          if (divb_valid) begin dudy <= pf_scale(divb_quo, q_z_b); pf_b <= 1'b1; end
+          if (div_valid)  begin dudx <= pf_scale(div_quo,  q_z_a, FRAC_UV); pf_a <= 1'b1; end
+          if (divb_valid) begin dudy <= pf_scale(divb_quo, q_z_b, FRAC_UV); pf_b <= 1'b1; end
           if ((pf_a || div_valid) && (pf_b || divb_valid)) state <= S_PF_Q2;
         end
 
@@ -840,8 +826,8 @@ module m2_raster_fill (
         end
 
         S_PF_Q2W: begin
-          if (div_valid)  begin dvdx <= pf_scale(div_quo,  q_z_a); pf_a <= 1'b1; end
-          if (divb_valid) begin dvdy <= pf_scale(divb_quo, q_z_b); pf_b <= 1'b1; end
+          if (div_valid)  begin dvdx <= pf_scale(div_quo,  q_z_a, FRAC_UV); pf_a <= 1'b1; end
+          if (divb_valid) begin dvdy <= pf_scale(divb_quo, q_z_b, FRAC_UV); pf_b <= 1'b1; end
           if ((pf_a || div_valid) && (pf_b || divb_valid)) state <= S_PF_Q3;
         end
 
@@ -860,8 +846,8 @@ module m2_raster_fill (
         end
 
         S_PF_Q3W: begin
-          if (div_valid)  begin dodx <= pf_scale_o(div_quo,  q_z_a); pf_a <= 1'b1; end
-          if (divb_valid) begin dody <= pf_scale_o(divb_quo, q_z_b); pf_b <= 1'b1; end
+          if (div_valid)  begin dodx <= pf_scale(div_quo,  q_z_a, FRAC_OZ); pf_a <= 1'b1; end
+          if (divb_valid) begin dody <= pf_scale(divb_quo, q_z_b, FRAC_OZ); pf_b <= 1'b1; end
           if ((pf_a || div_valid) && (pf_b || divb_valid)) state <= S_PF_B;
         end
 
