@@ -1,5 +1,22 @@
 # Handoff
 
+## WORKING BASELINE: `build/seeds/s283` -- CONFIRMED ON THE BOARD
+
+Ben: "its running and has not crashed". Packs clean, clk_sys healthy, behaviour
+identical to the last known-good build:
+
+    metric           s102 (previous good)     s283
+    bands all-48     39.0 / 44.1 / 83.1%      45.0 / 41.7 / 85.0%
+    ready ms max     17.11 / 17.36 / 17.27    17.04 / 17.30 / 17.36
+    quads x16 max    1664 / 1296 / 1264       1664 / 1376 / 1280
+    framewait        33.7%                    33.9%
+    176229           0                        0
+    clk_sys          +0.723                   +0.676
+    clk_mem          -0.086                   -0.552
+
+Contains: known-good SDRAM controller (no prefetch), PIXSTEP 4, CL+2 fixed,
+R407 fitter flags, R408 dividers removed, R409 guard off the mux.
+
 ## CHECK THIS BEFORE FLASHING ANYTHING:
 
     grep -c 176229 <build>/fit.log     ->  0 = usable, non-zero = DO NOT FLASH
