@@ -17953,3 +17953,38 @@ Proven equivalent before building: 5,179,648 vectors, exhaustive over sign x
 exponent x bias with the mantissa corners plus 4M random, zero mismatches.
 `tb_m2_geometry` then checks `q_z` out of the quad store against the reference
 `float_to_zval` end to end, which is the part the function sweep cannot see.
+
+---
+
+**R421 -- THE ARBITER WAS IN THE REFRESH DECISION FOR NO REASON.**
+
+s14's only violation in our own logic:
+
+```
+m2_sdram|rr_next[0]  ->  m2_sdram|state.S_PRE_REF     -0.474 on clk_mem
+```
+
+`S_PRE_REF`'s own condition is `ref_pend && !pipe_busy && !ras_any` and does not
+mention `rr_next`. But `state` is ONE-HOT, so that flip-flop's D input is the
+whole if/else chain, and the `else if` arm drags the arbiter in behind it. Worth
+remembering when reading a path that ends at a state bit: the named state's
+condition is not the whole story.
+
+Two terms in that arm hang off `rr_next`, and both were avoidable:
+
+- `rr_valid = |arb_rot`. A rotate is a PERMUTATION, so `|rot_r(m,n) == |m` for
+  every `n`. A barrel rotate was feeding an OR-reduction that cannot depend on
+  it. Deleted; `rr_valid = |arb_ready`.
+- `we_p[rr_grant]`. Selecting by `rr_grant` is rotate -> priority encode -> add
+  -> compare -> subtract -> NP:1 mux, in series. The granted port in ROTATED
+  coordinates is just the lowest set bit of `arb_rot`, so `arb_low & rot_r(we_p,
+  rr_next)` answers the same question with the two rotates side by side.
+
+`rr_grant` is unchanged and still feeds `grant`/`inflight`/`rr_next` -- those are
+registered on the arm that was taken and were not the offender.
+
+Verified by differencing the whole testbench against HEAD, not just by passing
+it: per-port transaction counts, grant counts, burst maxima, aggregate
+throughput and the write-contention figures are byte-identical. 1,739,363
+checks, 0 fails, 0 protocol violations; 2M-cycle read-only integrity soak with 0
+mismatches; 4M-cycle watchdog soak with no stall longer than 52.

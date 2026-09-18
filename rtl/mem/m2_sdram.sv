@@ -529,8 +529,32 @@ module m2_sdram #(
   // reaches 2*NP and one conditional subtract is exact.
   wire [PW:0]    arb_sum   = {1'b0, arb_idx} + {1'b0, rr_next};
 
+  // R421: KEEP rr_next OUT OF THE STATE DECISION.
+  //
+  //   m2_sdram|rr_next[0] -> m2_sdram|state.S_PRE_REF     -0.474 on clk_mem
+  //
+  // S_PRE_REF's own condition -- ref_pend && !pipe_busy && !ras_any -- does not
+  // mention rr_next at all. state is ONE-HOT, so that flip-flop's D input is
+  // the whole if/else chain, and the else-if arm drags the arbiter in behind
+  // it. Two terms there hang off rr_next, and both are avoidable.
+  //
+  // rr_valid: a rotate is a PERMUTATION, so |rot_r(m, n) == |m for every n.
+  // The barrel rotate was feeding an OR-reduction that cannot depend on it.
+  //
+  // we_p[rr_grant]: selecting by rr_grant is rotate -> priority encode -> add
+  // -> compare -> subtract -> NP:1 mux, all in series. The granted port in
+  // ROTATED coordinates is just the lowest set bit of arb_rot, so isolating
+  // that bit and AND-ing against a rotate of we_p answers the same question
+  // with the two rotates side by side instead of end to end.
+  //
+  // rr_grant itself is unchanged and still feeds grant/inflight/rr_next --
+  // those are registered on the arm that was taken, and were not the offender.
+  wire [NP-1:0]  arb_low   = arb_rot & (~arb_rot + {{(NP-1){1'b0}}, 1'b1});
+  wire [NP-1:0]  we_rot    = rot_r(we_p, rr_next);
+  wire           we_gr     = |(arb_low & we_rot);   // == we_p[rr_grant]
+
   always_comb begin
-    rr_valid = |arb_rot;
+    rr_valid = |arb_ready;                          // == |arb_rot, no rotate
     rr_grant = (arb_sum >= (PW+1)'(NP)) ? PW'(arb_sum - (PW+1)'(NP))
                                         : PW'(arb_sum);
   end
@@ -868,7 +892,7 @@ module m2_sdram #(
               state    <= S_PRE_REF;
             end else if (!ref_pend &&
                          ((wr_pend && !wr_inflight && !pipe_busy) ||
-                          (rr_valid && !(we_p[rr_grant] && pipe_busy)))) begin
+                          (rr_valid && !(we_gr && pipe_busy)))) begin
               // No new transfer once a refresh is due. Refresh needs every
               // bank precharged and the read pipeline empty, and under
               // continuous traffic the pipeline is never empty — so without
