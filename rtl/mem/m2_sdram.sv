@@ -672,6 +672,18 @@ module m2_sdram #(
   // Comparing all four banks in parallel and muxing ONE bit is logically
   // identical to muxing the counters and comparing, and it takes the two
   // comparators out from behind the mux.
+  // R410: THE COMPARATORS GO TOO. R409 moved them out from behind the mux and
+  // clk_mem went -0.799 -> -0.552, but ras_cnt[0][2] -> the command muxes was
+  // still the worst path: a 4-bit zero-compare per bank, in series with the
+  // mux and the command logic.
+  //
+  // Both counters are only ever LOADED at one place each and decremented
+  // otherwise, so "has expired" is maintained as a flag by the same logic that
+  // moves them. No comparator on the path, and no hazard: the flag clears in
+  // the very cycle the counter is loaded, which is what made a registered
+  // summary of the counters unsafe.
+  logic [3:0] ras_ok;    // ras_cnt[b] == 0
+  logic [3:0] rd_ok;     // rd_bank_cnt[b] == 0
   wire [3:0] bank_pre_ok;
   // Explicit genvar + generate: Quartus 17.0 rejects the inline
   // `for (genvar ...)` form that Verilator accepts, with "syntax error near
@@ -679,7 +691,7 @@ module m2_sdram #(
   genvar gb;
   generate
     for (gb = 0; gb < 4; gb = gb + 1) begin : g_bank_pre
-      assign bank_pre_ok[gb] = (ras_cnt[gb] == 0) && (rd_bank_cnt[gb] == 0);
+      assign bank_pre_ok[gb] = ras_ok[gb] && rd_ok[gb];
     end
   endgenerate
 
@@ -741,6 +753,7 @@ module m2_sdram #(
       ref_cnt <= '0; ref_pend <= 1'b0;
       bank_open <= '0;
       for (int b = 0; b < 4; b++) begin bank_row[b] <= '0; ras_cnt[b] <= '0; end
+      ras_ok <= 4'hF; rd_ok <= 4'hF;   // R410: idle out of reset
       tag_v <= '0; tag_p <= '0; tag_w <= '0; tag_last <= '0; cap <= '0;
       ack_cnt <= '0; wack_cnt <= '0; inflight <= '0; wr_inflight <= 1'b0;
       for (int b = 0; b < 4; b++) rd_bank_cnt[b] <= '0;
@@ -796,7 +809,10 @@ module m2_sdram #(
         sd_dqm <= 2'b00;
 
         for (int b = 0; b < 4; b++)
-          if (ras_cnt[b] != 0) ras_cnt[b] <= ras_cnt[b] - 1'b1;
+          if (ras_cnt[b] != 0) begin
+            ras_cnt[b] <= ras_cnt[b] - 1'b1;
+            if (ras_cnt[b] == 4'd1) ras_ok[b] <= 1'b1;   // R410: 0 next cycle
+          end
 
         ref_cnt <= ref_cnt + 1'b1;
         if (ref_cnt == ($clog2(T_REFI+1))'(T_REFI)) begin
@@ -805,7 +821,10 @@ module m2_sdram #(
         end
 
         for (int b = 0; b < 4; b++)
-          if (rd_bank_cnt[b] != 0) rd_bank_cnt[b] <= rd_bank_cnt[b] - 1'b1;
+          if (rd_bank_cnt[b] != 0) begin
+            rd_bank_cnt[b] <= rd_bank_cnt[b] - 1'b1;
+            if (rd_bank_cnt[b] == 4'd1) rd_ok[b] <= 1'b1;   // R410
+          end
 
         // Read capture, driven entirely by the tag that travelled with the CAS.
         tag_v    <= {1'b0, tag_v[RD_LAT-1:1]};
@@ -1005,6 +1024,7 @@ module m2_sdram #(
             bank_row[tbank]  <= trow;
             bank_open[tbank] <= 1'b1;
             ras_cnt[tbank]   <= 4'(T_RAS - 1);
+            ras_ok[tbank]    <= 1'b0;   // R410: cleared as the counter is loaded
             wait_cnt  <= 4'(T_RCD - 1);
             state     <= S_RCD;
           end
@@ -1066,6 +1086,7 @@ module m2_sdram #(
             tag_w[cap_depth-1]    <= rd_issued[1:0];
             tag_last[cap_depth-1] <= (rd_issued + 1'b1 == rd_total);
             rd_bank_cnt[tbank]    <= cap_depth;
+            rd_ok[tbank]          <= 1'b0;   // R410
             // Bursts wrap inside the open row: incrementing the full address
             // would walk off the end of the row on the last column and read
             // from a row that was never activated.
