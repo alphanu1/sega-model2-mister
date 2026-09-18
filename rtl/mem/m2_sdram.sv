@@ -673,9 +673,15 @@ module m2_sdram #(
   // identical to muxing the counters and comparing, and it takes the two
   // comparators out from behind the mux.
   wire [3:0] bank_pre_ok;
-  for (genvar gb = 0; gb < 4; gb++) begin : g_bank_pre
-    assign bank_pre_ok[gb] = (ras_cnt[gb] == 0) && (rd_bank_cnt[gb] == 0);
-  end
+  // Explicit genvar + generate: Quartus 17.0 rejects the inline
+  // `for (genvar ...)` form that Verilator accepts, with "syntax error near
+  // text: for; expecting endmodule". lint_top passes it, the fitter does not.
+  genvar gb;
+  generate
+    for (gb = 0; gb < 4; gb = gb + 1) begin : g_bank_pre
+      assign bank_pre_ok[gb] = (ras_cnt[gb] == 0) && (rd_bank_cnt[gb] == 0);
+    end
+  endgenerate
 
   // Ports with a transfer issued but not yet acknowledged.
   //
