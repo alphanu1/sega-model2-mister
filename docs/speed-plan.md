@@ -34,7 +34,7 @@ fetches. **The split between those three is not yet measured.**
 |---|---|---|---|---|
 | 1 | **Remove the readback probe on port 0** | +11-33% texel grants, +0.37 ns clk_mem | none | **done, R427, building** |
 | 2 | **Stop the ROM sweeper looping on port 2** | same class as #1, likely larger | none | **not done** |
-| 3 | **Plane-fit reciprocal** -- 6 divides share one denominator | ~2.4x on the fill, ~1.4x on the frame *(estimate)* | ALM | not done |
+| 3 | **Plane-fit reciprocal** -- 6 divides share one denominator | **96 cycles a quad -> under 10.** ~2.4x on the fill, ~1.4x on the frame *(estimate)* | ALM | not done |
 | 4 | **Register the fp_pool operand mux** | Model 1: 39.6 -> 54.57 MHz *(measured, theirs)* | ALM + a latency step | not done |
 | 5 | **Re-test R387's prefetch** | unknown -- never fairly tested | none | not done |
 | 6 | **Texel cache 2048 -> 4096 lines** | 70% -> ~80% hit *(estimate)* | +21 M10K | not done |
@@ -54,9 +54,26 @@ UART emits continuously, so the sweeper restarts forever -- a rolling
 it takes a full share of every rotation. It is a diagnostic worth keeping; it
 should run on demand, not on a loop.
 
-**3. Plane-fit reciprocal.** m2_raster_fill lines 812/815/831/834/851/854 all
-assign `den_n` -- six 16-cycle restoring divides by the SAME number. One
-reciprocal plus six multiplies replaces them. m2_persp_recip (R424) proves the
+**3. Plane-fit reciprocal. THE 96 -> 10.** m2_raster_fill lines
+812/815/831/834/851/854 all assign `den_n` -- six 16-cycle restoring divides by
+the SAME number:
+
+```
+  now:   6 divides x 16 cycles (radix-4)            = 96 cycles a textured quad
+  after: 1 reciprocal (2 cycles) + 6 multiplies     = under 10
+  saved: ~86 cycles a quad
+```
+
+And what that is a share OF, so the frame figure is traceable:
+
+```
+  fill per quad, radix-2 era   275 cycles, of which ~256 were divides
+  fill per quad, radix-4       ~147 cycles  (divides halved to ~128)
+  fill per quad, after this    ~61 cycles   -> ~2.4x on the fill
+  fill is ~53% of the frame                -> ~1.4x on the frame
+```
+
+One reciprocal plus six multiplies replaces them. m2_persp_recip (R424) proves the
 technique at 0.018 texels. **The size is an estimate from a stale measurement**
 ("FILLW 436,000 a frame of 818,133", "the divider IS the fill") taken at radix-2,
 before radix-4, before PIXSTEP 4, and before R424 took the fit from four divides
