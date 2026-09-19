@@ -34,7 +34,6 @@
 #include "Vm2_raster_fill.h"
 #include "verilated.h"
 #include <cstdio>
-#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -380,40 +379,15 @@ static void test_plane(Vm2_raster_fill* d) {
   const int32_t VY[4] = { 5,  19,  71,  58};
   const int32_t U[4]  = {37, 501, 640, 122};     // quarter-texels, all different
   const int32_t V[4]  = {91, 160, 612, 540};
-  // R337: 1/z per vertex, as m2_geometry's mf16 delivers it -- 8-bit IEEE
-  // exponent, top 8 mantissa bits. FOUR DIFFERENT DEPTHS, because a quad whose
-  // corners share a depth is exactly the case where affine and perspective
-  // agree, and a test that used one could not tell them apart.
-  const double Z[4] = {20.0, 35.0, 90.0, 48.0};
-  auto mf16 = [](double x) -> uint16_t {
-    union { float f; uint32_t b; } u; u.f = (float)x;
-    return (uint16_t)(((u.b >> 23) & 0xff) << 8 | ((u.b >> 15) & 0xff));
-  };
-  // The fill's own normalisation, transcribed: restore the implicit 1, put the
-  // largest of the four on bit 14, shift the rest down by the exponent gap.
-  uint16_t MF[4]; for (int i = 0; i < 4; i++) MF[i] = mf16(1.0 / Z[i]);
-  int emax = 0; for (int i = 0; i < 4; i++) emax = std::max(emax, MF[i] >> 8);
-  double OZ[4], UZ[4], VZ[4];
-  for (int i = 0; i < 4; i++) {
-    int e = MF[i] >> 8, d0 = emax - e;
-    uint32_t full = 0x100u | (MF[i] & 0xff);
-    uint32_t n = (e == 0 || d0 >= 16) ? 0u : ((full << 6) >> d0);
-    OZ[i] = (double)n;
-    // qu is rewritten in place as (u * ooz) >> 15, truncating, as the RTL does
-    UZ[i] = (double)(((uint32_t)U[i] * n) >> 15);
-    VZ[i] = (double)(((uint32_t)V[i] * n) >> 15);
-  }
 
-  // The plane through vertices 0,1,2 -- fitted to u/z and v/z now, not u and v.
+  // The same plane, in double precision, through vertices 0,1,2.
   const double ax = VX[1] - VX[0], ay = VY[1] - VY[0];
   const double bx = VX[2] - VX[0], by = VY[2] - VY[0];
   const double det = ax * by - bx * ay;
-  const double u1 = UZ[1] - UZ[0], u2 = UZ[2] - UZ[0];
-  const double v1 = VZ[1] - VZ[0], v2 = VZ[2] - VZ[0];
+  const double u1 = U[1] - U[0], u2 = U[2] - U[0];
+  const double v1 = V[1] - V[0], v2 = V[2] - V[0];
   const double dudx = (u1 * by - u2 * ay) / det, dudy = (ax * u2 - bx * u1) / det;
   const double dvdx = (v1 * by - v2 * ay) / det, dvdy = (ax * v2 - bx * v1) / det;
-  const double o1 = OZ[1] - OZ[0], o2 = OZ[2] - OZ[0];
-  const double doodx = (o1 * by - o2 * ay) / det, doody = (ax * o2 - bx * o1) / det;
 
   d->view_x1 = 0; d->view_x2 = 495; d->view_y1 = 0; d->view_y2 = 383;
   d->in_x0 = VX[0]; d->in_y0 = VY[0];
@@ -424,8 +398,6 @@ static void test_plane(Vm2_raster_fill* d) {
   d->in_u1 = U[1]; d->in_v1 = V[1];
   d->in_u2 = U[2]; d->in_v2 = V[2];
   d->in_u3 = U[3]; d->in_v3 = V[3];
-  d->in_oz0 = MF[0]; d->in_oz1 = MF[1];     // R337
-  d->in_oz2 = MF[2]; d->in_oz3 = MF[3];
   d->in_col = 0xffffff; d->in_moire = 0;
   d->in_tex = 1;                                // bit 0: textured
   d->in_valid = 1; d->span_ready = 1;
@@ -443,11 +415,8 @@ static void test_plane(Vm2_raster_fill* d) {
       // R286: the gradient is 8.8, not 16.16 -- sixteen bits of it, signed.
       const double du = (double)(int16_t)d->span_dudx / 256.0;
       const double dv = (double)(int16_t)d->span_dvdx / 256.0;
-      // R337: the plane is fitted to u/z now, so its value at vertex 0 is
-      // UZ[0], not U[0]. Using the raw coordinate as the base was the bench's
-      // own error -- the gradients were already right.
-      const double wu = UZ[0] + dudx * (x0 - VX[0]) + dudy * (y - VY[0]);
-      const double wv = VZ[0] + dvdx * (x0 - VX[0]) + dvdy * (y - VY[0]);
+      const double wu = U[0] + dudx * (x0 - VX[0]) + dudy * (y - VY[0]);
+      const double wv = V[0] + dvdx * (x0 - VX[0]) + dvdy * (y - VY[0]);
       ++spans_seen; tex_checks += 4;
       // A quarter of a texel of slack: the gradients are a fixed-point divide
       // and the span is up to 130 pixels from the vertex the plane is anchored
@@ -459,16 +428,6 @@ static void test_plane(Vm2_raster_fill* d) {
       if (fabs(v - wv) > 0.5) {
         if (tex_fails < 6) printf("  FAIL plane v at (%d,%d): %.3f want %.3f\n", x0, y, v, wv);
         ++tex_fails;
-      }
-      // R337: span_doozdx is the 1/z plane's gradient, and it is what makes the
-      // divide in m2_span_tex correct. Checked to the same tolerance.
-      {
-        const double doo = (double)(int16_t)d->span_doozdx / 256.0;
-        tex_checks++;
-        if (fabs(doo - doodx) > 0.05) {
-          if (tex_fails < 6) printf("  FAIL d(1/z)/dx %.5f want %.5f\n", doo, doodx);
-          tex_fails++;
-        }
       }
       if (fabs(du - dudx) > 0.02) {
         if (tex_fails < 6) printf("  FAIL du/dx %.5f want %.5f\n", du, dudx);

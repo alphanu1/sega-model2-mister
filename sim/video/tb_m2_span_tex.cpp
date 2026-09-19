@@ -18,8 +18,6 @@
 #include "Vm2_span_tex.h"
 #include "verilated.h"
 #include <cstdio>
-#include <cmath>
-#include <algorithm>
 #include <cstdint>
 #include <vector>
 
@@ -108,20 +106,13 @@ int main(int argc, char **argv) {
     // is 1/256th of a texel a pixel: every pixel fetched the SAME texel, and a
     // mutation that stopped the walk entirely passed it.
     const int32_t TEXEL = 4 << 16;
-    // R339: THE INPUTS ARE u/z AND v/z NOW, so they are halved and 1/z is held
-    // at 2^14, which makes the divide multiply by exactly two and reconstructs
-    // the coordinates this test always used. Holding 1/z CONSTANT is the
-    // control: a constant depth is the one case where perspective and affine
-    // agree, so these checks stay comparable to the affine ones they replace.
-    // The varying case is tested separately below, where it belongs.
-    const int32_t U0 = 2 * TEXEL, V0 = 4 * TEXEL;
-    const int32_t DU = 0x80, DV = 0x100;
-    const int32_t OOZ = 1 << 30;            // 1/z = 2^14 in 16.16
+    const int32_t U0 = 4 * TEXEL, V0 = 8 * TEXEL;
+    // R286: the fill hands over 8.8 texels a pixel; one texel is 0x100.
+    const int32_t DU = 0x100, DV = 0x200;
     d->in_valid = 1; d->in_y = 5; d->in_x0 = X0; d->in_x1 = X1;
     d->in_col = 0xffffff; d->in_moire = 0;
     d->in_u = U0; d->in_v = V0; d->in_dudx = DU; d->in_dvdx = DV;
     d->in_tex = 0x000001; d->in_tex_en = 1;        // bit 0 = textured
-    d->in_ooz = OOZ; d->in_doozdx = 0;             // R339
     tick();                                        // accepted
     d->in_valid = 0;
     const int groups = ((X1 - X0) / STEP) + 1;
@@ -133,12 +124,8 @@ int main(int argc, char **argv) {
       ck("group is PIXSTEP wide, clipped", got[i].x1, (x + STEP - 1 > X1) ? X1 : x + STEP - 1);
       // The texel unit sees the coordinate shifted from quarter-texels.16 to
       // texels.8, which is ten bits right.
-      // R339: the walk carries u/z, and the unit divides by 1/z before it
-      // fetches. With 1/z pinned at 2^14 the divide is exactly x2, so the
-      // expected texel coordinate is twice the interpolated u/z -- which is the
-      // coordinate this test used before perspective existed.
-      const uint32_t u = uint32_t((2 * (U0 + (DU << 8) * int32_t(i) * STEP)) >> 10);
-      const uint32_t v = uint32_t((2 * (V0 + (DV << 8) * int32_t(i) * STEP)) >> 10);
+      const uint32_t u = uint32_t((U0 + (DU << 8) * int32_t(i) * STEP) >> 10);
+      const uint32_t v = uint32_t((V0 + (DV << 8) * int32_t(i) * STEP) >> 10);
       const int t = texel_of(u, v);
       const uint32_t want = uint32_t((0xff * ((t << 4) | t) + 0xff) >> 8) * 0x010101u;
       ck("group colour is the texel at its first pixel", got[i].col, want);
@@ -168,7 +155,6 @@ int main(int argc, char **argv) {
       d->in_col = 0xffffff; d->in_moire = 0;
       d->in_u = U0; d->in_v = V0; d->in_dudx = DU; d->in_dvdx = DV;
       d->in_tex = tex; d->in_tex_en = 1;
-      d->in_ooz = 1 << 30; d->in_doozdx = 0;   // R339
       tick();
       d->in_valid = 0;
       for (int i = 0; i < 400 && d->busy; ++i) tick();
@@ -189,69 +175,6 @@ int main(int argc, char **argv) {
     ck("a translucent span of 0xE paints every group",  run(TRANS,  0xe), groups);
     ck("0xF on an OPAQUE polygon still paints",         run(OPAQUE, 0xf), groups);
     force_texel = -1;
-  }
-
-  // 2d. R339: 1/z VARYING -- THE TEST THAT PROVES PERSPECTIVE, not just that
-  //     the divide runs. With depth changing across the span the texel
-  //     coordinate must be NON-LINEAR in x; an affine walk cannot produce it,
-  //     so this is the check that would fail if the divide were removed.
-  //
-  //     The model is the RTL's arithmetic reduced: uq = u_r * 2^31 / ooz_r.
-  //     (uq = u_r * r1 >> (t-7) with r1 ~ 2^47/(ooz_r >> (t-23)) collapses to
-  //     exactly that, independent of where the leading bit landed.)
-  {
-    const int X0 = 10, X1 = 40, STEP = 2;
-    const int32_t U0 = 3 << 18, V0 = 5 << 18;
-    const int32_t DU = 0x140, DV = 0x90;
-    const int32_t OOZ = 1 << 30;
-    // DEPTH FALLS ~20% ACROSS THE SPAN. The first version used -(1<<21), which
-    // drove 1/z to zero on the SECOND group: the loop below broke at once, the
-    // curvature check never got its three samples, and the test PASSED having
-    // verified nothing. in_doozdx is 16-bit signed, so this is near its limit.
-    const int32_t DOZ = -26000;
-    got.clear(); force_texel = -1;
-    d->in_valid = 1; d->in_y = 11; d->in_x0 = X0; d->in_x1 = X1;
-    d->in_col = 0xffffff; d->in_moire = 0;
-    d->in_u = U0; d->in_v = V0; d->in_dudx = DU; d->in_dvdx = DV;
-    d->in_tex = 0x000001; d->in_tex_en = 1;
-    d->in_ooz = OOZ; d->in_doozdx = DOZ;
-    tick(); d->in_valid = 0;
-    const int groups = ((X1 - X0) / STEP) + 1;
-    for (int i = 0; i < 3000 && int(got.size()) < groups; ++i) tick();
-
-    std::printf("test: R339, a span whose depth changes -- the perspective divide\n");
-    ck("one span per pixel group", long(got.size()), groups);
-
-    std::vector<double> ux;
-    int ran = 0;
-    for (size_t i = 0; i < got.size(); ++i) {
-      const int64_t ur  = (int64_t)U0  + (int64_t)(DU  << 8) * (int64_t)i * STEP;
-      const int64_t vr  = (int64_t)V0  + (int64_t)(DV  << 8) * (int64_t)i * STEP;
-      const int64_t oz  = (int64_t)OOZ + (int64_t)(DOZ << 8) * (int64_t)i * STEP;
-      if (oz <= 0) break;
-      ran++;
-      const int64_t uq = (ur << 31) / oz;
-      const int64_t vq = (vr << 31) / oz;
-      ux.push_back((double)uq);
-      const int t = texel_of((uint32_t)(uq >> 10), (uint32_t)(vq >> 10));
-      const uint32_t want = uint32_t((0xff * ((t << 4) | t) + 0xff) >> 8) * 0x010101u;
-      // The reciprocal is a seed plus one Newton step (6.1e-5 relative), so a
-      // texel index may land one either side at a boundary.
-      const int tg = (int)((got[i].col & 0xff) >> 4);
-      if (abs(tg - t) > 1 && abs(tg - t) < 15) {
-        checks++; fails++;
-        if (fails < 6) std::printf("  FAIL group %zu texel got=%x want=%x\n", i, tg, t);
-      } else checks++;
-    }
-    // THE GUARD: a loop that breaks early tests nothing, and silently.
-    ck("every group was actually checked", ran, (int)got.size());
-    // ...and it must be CURVED. Affine would make the second difference zero.
-    if (ux.size() >= 3) {
-      double d2 = 0;
-      for (size_t i = 2; i < ux.size(); ++i)
-        d2 = std::max(d2, fabs((ux[i] - ux[i-1]) - (ux[i-1] - ux[i-2])));
-      ck("the coordinate is non-linear, as only a divide makes it", d2 > 1000.0, 1);
-    }
   }
 
   // 2b. A FLAT SPAN WHEN THE CONSUMER IS NOT READY. It must be HELD, not
@@ -279,7 +202,6 @@ int main(int argc, char **argv) {
     d->in_col = 0x808080;
     d->in_u = 0; d->in_v = 0; d->in_dudx = 0x400; d->in_dvdx = 0;   // 4 texels a pixel, 8.8
     d->in_tex = 0x000001; d->in_tex_en = 1;
-    d->in_ooz = 1 << 30; d->in_doozdx = 0;   // R339
     tick();
     d->in_valid = 0;
     const int grp2 = ((X1 - X0) / STEP) + 1;
@@ -300,7 +222,6 @@ int main(int argc, char **argv) {
     d->in_col = 0xffffff; d->in_u = 0; d->in_v = 0;
     d->in_dudx = 0; d->in_dvdx = 0;
     d->in_tex = 0x000001; d->in_tex_en = 1;
-    d->in_ooz = 1 << 30; d->in_doozdx = 0;   // R339
     tick();
     d->in_valid = 0;
     // The memory is gone: answer nothing at all.

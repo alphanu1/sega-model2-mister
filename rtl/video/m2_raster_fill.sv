@@ -97,9 +97,6 @@ module m2_raster_fill (
   // fetch's state; bit 0 of in_tex says the polygon is textured at all.
   input  logic [12:0]        in_u0, in_v0, in_u1, in_v1,
   input  logic [12:0]        in_u2, in_v2, in_u3, in_v3,
-  // R337: 1/z per vertex as a 16-bit minifloat (8-bit IEEE exponent, 8 mantissa
-  // bits, sign dropped -- see m2_geometry's mf16). The fill normalises them.
-  input  logic [15:0]        in_oz0, in_oz1, in_oz2, in_oz3,
   input  logic [23:0]        in_tex,
 
   // Viewport, inclusive on all four edges.
@@ -120,15 +117,6 @@ module m2_raster_fill (
   output logic signed [31:0] span_u, span_v,
   // 8.8 texels a pixel; the span walk shifts it up to its own 16.16.
   output logic signed [15:0] span_dudx, span_dvdx,
-  // R337: the perspective span. u and v above are u/z and v/z now; these carry
-  // 1/z and its gradient, and `span_oshift` is the per-quad scale that
-  // m2_span_tex must undo -- u = (uoz << oshift) / ooz.
-  // THE SCALE IS A CONSTANT 15 AND IS NOT CARRIED. Normalisation puts the
-  // largest 1/z of the quad in [2^14, 2^15), so (u * ooz) >> 15 lands in
-  // [u/2, u) and fits the same 13 bits u did. m2_span_tex undoes it with a
-  // fixed shift: u = (uoz << 15) / ooz.
-  output logic signed [31:0] span_ooz,
-  output logic signed [15:0] span_doozdx,
   output logic [23:0]        span_tex,
   output logic               span_tex_en,
 
@@ -168,16 +156,9 @@ module m2_raster_fill (
   localparam logic [4:0] S_PF_Q2    = 5'd23;   // dv/dx and dv/dy
   localparam logic [4:0] S_PF_Q2W   = 5'd24;
   localparam logic [4:0] S_PF_B     = 5'd25;   // the plane's value at (0,0)
-  localparam logic [4:0] S_MINMAX   = 5'd26;   // R301: the vertex tournament, registered
+  localparam logic [4:0] S_MINMAX   = 5'd26;
   // R418: one cycle to count leading zeros, so the shift is not behind it.
-  localparam logic [4:0] S_PF_NRM   = 5'd27;
-  // R337: one vertex per cycle, reusing one shifter and one multiplier pair
-  // rather than four of each -- 120 ALM and 6 DSP blocks, for four cycles in a
-  // machine that already idles six waiting on m2_raster_div.
-  // R432: 28/29/30, because R418 took 27 after this was written.
-  localparam logic [4:0] S_OZ       = 5'd28;
-  localparam logic [4:0] S_PF_Q3    = 5'd29;   // R337: the 1/z plane's divides
-  localparam logic [4:0] S_PF_Q3W   = 5'd30;
+  localparam logic [4:0] S_PF_NRM   = 5'd27;   // R301: the vertex tournament, registered
 
   localparam logic [1:0] EM_WALK = 2'd0;   // swapf-ordered edge pair
   localparam logic [1:0] EM_RAW  = 2'd1;   // xa, xb in chain order (fill_line tail)
@@ -233,44 +214,7 @@ module m2_raster_fill (
   // the way the reference's scanline converter does needs two divides a SPAN;
   // a plane fit needs four a QUAD, and the fill already owns two dividers that
   // are idle until the first edge slope.
-  // R337: AFTER NORMALISATION qu AND qv HOLD u/z AND v/z, not u and v. The raw
-  // coordinate is never wanted again, so reusing these arrays costs nothing
-  // where keeping both would be ~200 ALM of registers.
   logic [12:0]        qu [0:3], qv [0:3];
-  // 1/z on a scale common to the quad: the largest of the four fills bit 15.
-  logic [15:0]        qoz [0:3];
-  logic [1:0]         oz_i;              // which vertex the normaliser is on
-  logic [7:0]         oz_emax;           // largest exponent of the four, latched
-
-  // R337: the four exponents and the largest, combinational off the INPUTS
-  // because emax has to be known before the first vertex is rewritten.
-  wire [7:0] oze01_c = (in_oz1[15:8] > in_oz0[15:8]) ? in_oz1[15:8] : in_oz0[15:8];
-  wire [7:0] oze23_c = (in_oz3[15:8] > in_oz2[15:8]) ? in_oz3[15:8] : in_oz2[15:8];
-  wire [7:0] oz_emax_c = (oze23_c > oze01_c) ? oze23_c : oze01_c;
-
-  // One minifloat to the quad's common fixed scale. The implicit 1 is restored,
-  // the mantissa shifted up so the largest lands on bit 15, and the difference
-  // in exponent shifts it down. A vertex more than 15 octaves behind the
-  // nearest normalises to zero, which is "infinitely far" and is what the
-  // error model measured as the depth-ratio limit.
-  function automatic logic [15:0] oz_norm(input logic [15:0] mf, input logic [7:0] emax);
-    logic [8:0] full;
-    logic [7:0] d;
-    begin
-      full = {1'b1, mf[7:0]};
-      d    = emax - mf[15:8];
-      // BIT 14, NOT BIT 15. The plane fit forms 16-bit SIGNED differences of
-      // these (pf_o1 = qoz[fb] - qoz[fa]), so the values must fit 15 bits or
-      // every numerator, multiplier and barrel shifter in the fit widens.
-      // Largest is 256<<6 = 2^14, up to 511<<6 = 32704 < 2^15.
-      oz_norm = (mf[15:8] == 8'd0) ? 16'd0
-              : (d >= 8'd16)       ? 16'd0
-              : 16'((17'(full) << 6) >> d[3:0]);
-    end
-  endfunction
-  logic signed [15:0] dodx, dody;        // the 1/z plane's gradients
-  logic signed [31:0] base_o, nxo, nyo;
-  logic               pf_c;              // the third fit's second divide is back
   logic [23:0]        tex_r;
   logic               tex_ok;            // the fit succeeded and the poly is textured
   // SIXTEEN-BIT GRADIENTS, 8.8 TEXELS PER PIXEL (R286). Thirty-two bits of
@@ -314,9 +258,6 @@ module m2_raster_fill (
   wire signed [15:0] pf_u1 = 16'({3'd0, qu[fb]}) - 16'({3'd0, qu[fa]});
   wire signed [15:0] pf_u2 = 16'({3'd0, qu[fc]}) - 16'({3'd0, qu[fa]});
   wire signed [15:0] pf_v1 = 16'({3'd0, qv[fb]}) - 16'({3'd0, qv[fa]});
-  // R337: 1/z's, which fit 16-bit signed because oz_norm caps them at bit 14.
-  wire signed [15:0] pf_o1 = 16'(qoz[fb]) - 16'(qoz[fa]);
-  wire signed [15:0] pf_o2 = 16'(qoz[fc]) - 16'(qoz[fa]);
   wire signed [15:0] pf_v2 = 16'({3'd0, qv[fc]}) - 16'({3'd0, qv[fa]});
 
   // A DIVIDE THAT KEEPS ITS BITS. The gradient is a fraction -- texels per
@@ -417,7 +358,6 @@ module m2_raster_fill (
   wire signed [15:0] emit_y  = (state == S_FS_WALK) ? walk_y : cury;
   wire signed [31:0] emit_u  = uv_at(base_u, dudx, dudy, emit_cl, emit_y);
   wire signed [31:0] emit_v  = uv_at(base_v, dvdx, dvdy, emit_cl, emit_y);
-  wire signed [31:0] emit_o  = uv_at(base_o, dodx, dody, emit_cl, emit_y);   // R337
 
   logic               pf_a, pf_b;        // the two plane-fit divides, back
 
@@ -635,16 +575,14 @@ module m2_raster_fill (
       divb_den   <= 32'sd0;
       got_a      <= 1'b0;
       got_b      <= 1'b0;
-      span_u <= '0; span_v <= '0; base_u <= '0; base_v <= '0; span_ooz <= '0;
+      span_u <= '0; span_v <= '0; base_u <= '0; base_v <= '0;
       pf_a <= 1'b0; pf_b <= 1'b0;
       tex_ok <= 1'b0; pf_second <= 1'b0; tex_r <= '0;
       det_r <= '0; den_sh <= 6'd0; nxu <= '0; nyu <= '0; nxv <= '0; nyv <= '0;
       q_num_a <= '0; q_num_b <= '0; q_z_a <= '0; q_z_b <= '0;
       nxu_z <= '0; nyu_z <= '0; nxv_z <= '0; nyv_z <= '0;   // R418
       dudx <= 16'sd0; dudy <= 16'sd0; dvdx <= 16'sd0; dvdy <= 16'sd0;
-      for (int k = 0; k < 4; k++) begin qu[k] <= '0; qv[k] <= '0; qoz[k] <= '0; end
-      oz_i <= 2'd0; oz_emax <= 8'd0; dodx <= 16'sd0; dody <= 16'sd0;
-      base_o <= '0; nxo <= '0; nyo <= '0; pf_c <= 1'b0;
+      for (int k = 0; k < 4; k++) begin qu[k] <= '0; qv[k] <= '0; end
       span_valid <= 1'b0;
       span_y     <= 16'sd0;
       span_x0    <= 16'sd0;
@@ -678,18 +616,12 @@ module m2_raster_fill (
             moire <= in_moire;
             qu[0] <= in_u0; qv[0] <= in_v0; qu[1] <= in_u1; qv[1] <= in_v1;
             qu[2] <= in_u2; qv[2] <= in_v2; qu[3] <= in_u3; qv[3] <= in_v3;
-            qoz[0] <= in_oz0; qoz[1] <= in_oz1;            // R337: still minifloats here
-            qoz[2] <= in_oz2; qoz[3] <= in_oz3;
-            oz_emax <= oz_emax_c;
-            oz_i    <= 2'd0;
             tex_r     <= in_tex;
             tex_ok    <= 1'b0;
             pf_second <= 1'b0;
             dudx <= 16'sd0; dudy <= 16'sd0; dvdx <= 16'sd0; dvdy <= 16'sd0;
             // An untextured quad pays nothing for any of this.
-            // R337: normalise 1/z before the plane fit, because the fit runs
-            // on u/z and v/z and those do not exist until it has.
-            state <= in_tex[0] ? S_OZ : S_MINMAX;
+            state <= in_tex[0] ? S_PF_D : S_MINMAX;
           end
         end
 
@@ -699,20 +631,6 @@ module m2_raster_fill (
         // space. Zero means the three vertices are collinear as drawn, which
         // every triangle-as-quad is on one of its two choices -- hence the
         // retry on 0,2,3 before giving up.
-        // R337: ONE VERTEX A CYCLE. qoz goes from minifloat to the quad's
-        // common fixed scale, and qu/qv are rewritten in place as u/z and v/z
-        // -- the raw coordinate is not wanted again. The shift is a constant
-        // 16 because normalisation puts the largest 1/z in [2^15, 2^16), so
-        // the product lands back in the 13 bits u already occupied.
-        S_OZ: begin
-          automatic logic [15:0] n = oz_norm(qoz[oz_i], oz_emax);
-          qoz[oz_i] <= n;
-          qu[oz_i]  <= 13'((29'(qu[oz_i]) * 29'(n)) >> 15);
-          qv[oz_i]  <= 13'((29'(qv[oz_i]) * 29'(n)) >> 15);
-          if (oz_i == 2'd3) state <= S_PF_D;
-          else              oz_i  <= oz_i + 2'd1;
-        end
-
         S_PF_D: begin
           det_r <= 32'(pf_ax) * 32'(pf_by) - 32'(pf_bx) * 32'(pf_ay);
           state <= S_PF_N;
@@ -734,9 +652,7 @@ module m2_raster_fill (
             nyu <= 32'(pf_ax) * 32'(pf_u2) - 32'(pf_bx) * 32'(pf_u1);
             nxv <= 32'(pf_v1) * 32'(pf_by) - 32'(pf_v2) * 32'(pf_ay);
             nyv <= 32'(pf_ax) * 32'(pf_v2) - 32'(pf_bx) * 32'(pf_v1);
-            nxo <= 32'(pf_o1) * 32'(pf_by) - 32'(pf_o2) * 32'(pf_ay);   // R337
-            nyo <= 32'(pf_ax) * 32'(pf_o2) - 32'(pf_bx) * 32'(pf_o1);
-            state <= S_PF_NRM;   // R418 counts the zeros before R337 shifts
+            state <= S_PF_NRM;   // R418
           end
         end
 
@@ -782,29 +698,6 @@ module m2_raster_fill (
         S_PF_Q2W: begin
           if (div_valid)  begin dvdx <= pf_scale(div_quo,  q_z_a); pf_a <= 1'b1; end
           if (divb_valid) begin dvdy <= pf_scale(divb_quo, q_z_b); pf_b <= 1'b1; end
-          if ((pf_a || div_valid) && (pf_b || divb_valid)) state <= S_PF_Q3;
-        end
-
-        // R337: THE 1/z PLANE. Same shape as the two above and it reuses the
-        // same pair of dividers -- m2_raster_div does not pipeline, so this is
-        // two more divides of latency per quad, which is the real cost of
-        // perspective correction and the thing to watch in `ready ms`.
-        S_PF_Q3: if (div_ready && !div_start && divb_ready && !divb_start) begin
-          div_num   <= pf_norm(nxo);
-          div_den   <= den_n;
-          div_start <= 1'b1;
-          divb_num   <= pf_norm(nyo);
-          divb_den   <= den_n;
-          divb_start <= 1'b1;
-          q_num_a <= nxo; q_z_a <= pf_clz(nxo);
-          q_num_b <= nyo; q_z_b <= pf_clz(nyo);
-          pf_a <= 1'b0; pf_b <= 1'b0;
-          state   <= S_PF_Q3W;
-        end
-
-        S_PF_Q3W: begin
-          if (div_valid)  begin dodx <= pf_scale(div_quo,  q_z_a); pf_a <= 1'b1; end
-          if (divb_valid) begin dody <= pf_scale(divb_quo, q_z_b); pf_b <= 1'b1; end
           if ((pf_a || div_valid) && (pf_b || divb_valid)) state <= S_PF_B;
         end
 
@@ -817,11 +710,6 @@ module m2_raster_fill (
           base_v <= 32'({19'd0, qv[fa]} <<< 16)
                   - ((32'(dvdx * sx[fa])) <<< 8)
                   - ((32'(dvdy * sy[fa])) <<< 8);
-          // R337: 1/z's own plane. qoz is 15 bits, so it shifts up by 16 the
-          // same way, and the span walk divides by what this yields.
-          base_o <= 32'({16'd0, qoz[fa]} <<< 16)
-                  - ((32'(dodx * sx[fa])) <<< 8)
-                  - ((32'(dody * sy[fa])) <<< 8);
           tex_ok <= 1'b1;
           state  <= S_MINMAX;
         end
@@ -875,7 +763,6 @@ module m2_raster_fill (
               span_col   <= col;
               span_moire <= moire;
               span_u     <= emit_u;
-              span_ooz    <= emit_o;        // R337
               span_v     <= emit_v;
             end
             quad_done <= 1'b1;
@@ -1005,7 +892,6 @@ module m2_raster_fill (
               span_col   <= col;
               span_moire <= moire;
               span_u     <= emit_u;
-              span_ooz    <= emit_o;        // R337
               span_v     <= emit_v;
             end
             xa     <= xa + sla;
@@ -1039,7 +925,6 @@ module m2_raster_fill (
               span_col   <= col;
               span_moire <= moire;
               span_u     <= emit_u;
-              span_ooz    <= emit_o;        // R337
               span_v     <= emit_v;
             end
             state <= S_DONE;
@@ -1060,7 +945,6 @@ module m2_raster_fill (
   // at every emit.
   assign span_dudx   = dudx;
   assign span_dvdx   = dvdx;
-  assign span_doozdx = dodx;                               // R337
   assign span_tex    = tex_r;
   assign span_tex_en = tex_ok;
 
