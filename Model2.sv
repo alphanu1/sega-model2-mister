@@ -2813,6 +2813,13 @@ wire  [4:0] geo_tp_idx;
 wire  [7:0] geo_tp_diffuse, geo_tp_ambient;
 wire [15:0] geo_tp_n;
 wire [15:0] geo_nops;        // R255: nop commands the walker decoded last frame
+// R436: which state the fill and the walk sit in longest, straight off the
+// board. Every wedge diagnosis so far has been inferred from the TGP four
+// stages upstream, and every one of them was wrong.
+wire  [4:0] r3d_fill_hot;
+wire [15:0] r3d_fill_hotcyc;
+wire  [2:0] r3d_walk_hot;
+wire [15:0] r3d_walk_hotcyc;
 wire [15:0] geo_walk_flip, geo_walk_fb;   // R263: walks started by the list-ready write, and by the fallback
 wire        geo_push_stall;  // R260: the push queue is full and the CPU waits
 wire        cpu_buf_inval;   // R266: the CPU wrote the display list
@@ -4214,6 +4221,8 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	      : (tps_ph == 3'd2)                  ? {cc_h_f, cc_m_f}                // R269: 'V' glyph cache hits : misses, last frame
 	      : (tps_ph == 3'd4)                  ? {tx_p_f, tx_m_f}                // R275: 'Y' textured pixels : texel misses, last frame
 	      : (tps_ph == 3'd7)                  ? {oz_d0, oz_d1}                 // R334: 1/z of vertices 0 and 1 ('Q')
+	      : (tps_ph == 3'd5)                  ? {3'd0, r3d_fill_hot, r3d_walk_hot, 5'd0,
+	                                             r3d_fill_hotcyc}               // R436
 	      : {r3d_ready_cyc[15:0], r3d_bands_done[7:0], r3d_hold[7:0]}),
 	// clip_dropped read 0 on hardware and the refusal count is the number that
 	// now moves, so it takes that byte. Between them: accepted, emitted, refused
@@ -5532,6 +5541,8 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(3),
 	.dbg_texpix(tex_pixels), .dbg_texhit(tex_hits), .dbg_texmiss(tex_misses),
 	.dbg_texlost(tex_lost), .dbg_oz0(oz_d0), .dbg_oz1(oz_d1), .dbg_oz2(oz_d2), .dbg_oz3(oz_d3),
 	.dbg_texsweep(tex_sweep), .dbg_texnz(tex_nz),
+	.dbg_fill_hot(r3d_fill_hot), .dbg_fill_hotcyc(r3d_fill_hotcyc),   // R436
+	.dbg_walk_hot(r3d_walk_hot), .dbg_walk_hotcyc(r3d_walk_hotcyc),
 	.q_moire(1'b0), .q_end(q3d_end),
 	.scan_clk(clk_sys), .scan_x(vid_x), .scan_y(vid_y),
 	.scan_col(r3d_col), .scan_hit(r3d_hit),

@@ -18676,3 +18676,26 @@ the same conclusion from the fit alone -- but no build has ever put orientation
 on the board BELOW 98%. The prediction is testable and unfalsified: free the
 area first, then add it. If it still dies at 93%, the fault is in the shared 1/z
 path out of the quad store and not the area at all.
+
+---
+
+**R436 -- STOP INFERRING WHERE IT STOPS. MEASURE IT.**
+
+Four board builds of perspective have wedged and every diagnosis has been
+inferred from the TGP's program counter, four stages upstream of the code that
+changed. Every one of those inferences was wrong: the fill wedging on its first
+textured quad (simulation says it retires in 179 cycles), clk_mem corruption
+(s32 runs at -1.836, s38 is dead at -0.928), and area (Model 1 runs at 99%).
+
+This adds, to m2_raster_fill and m2_span_tex, the smallest thing that answers
+the question outright: the state each spent LONGEST in, and how long. One
+comparator, one counter, two registers each; saturating, so a real wedge pins at
+0xFFFF rather than wrapping and reading healthy. Streamed on debug phase 5,
+which `b_addr` had free.
+
+If the fill stalls, `dbg_fill_hot` names the state. If the walk stalls,
+`dbg_walk_hot` names it. If neither moves off S_IDLE/T_IDLE, the fault is not in
+either and everything downstream of that assumption has been wasted effort --
+which is the single most useful thing this could tell us.
+
+Benches unchanged: raster_fill **152,362/0**, span_tex **52/0**, raster3d 8/0.
