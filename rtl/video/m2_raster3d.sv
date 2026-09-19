@@ -92,6 +92,8 @@ module m2_raster3d #(
   // R436: the fill's and the walk's longest-dwelt states
   output logic [4:0]  dbg_fill_hot,
   output logic [15:0] dbg_fill_hotcyc,
+  output logic [23:0] dbg_fill_busy,      // R437
+  output logic [23:0] dbg_fill_starved,
   output logic [2:0]  dbg_walk_hot,
   output logic [15:0] dbg_walk_hotcyc,
 
@@ -358,7 +360,9 @@ module m2_raster3d #(
     .span_ooz(fl_span_ooz), .span_doozdx(fl_span_doozdx),     // R337
     .span_tex(fl_span_tex), .span_tex_en(fl_span_tex_en),
     .quad_done(fl_quad_done), .line_case(fl_line_case),
-    .dbg_hot(dbg_fill_hot), .dbg_hotcyc(dbg_fill_hotcyc)   // R436
+    .dbg_hot(dbg_fill_hot), .dbg_hotcyc(dbg_fill_hotcyc),   // R436
+    .dbg_busy(dbg_fill_busy), .dbg_starved(dbg_fill_starved),   // R437
+    .frame_start(frame_start)
   );
 
   // ------------------------------------------------- R275: the texture walk

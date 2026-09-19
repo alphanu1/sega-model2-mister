@@ -145,6 +145,9 @@ module m2_raster_fill (
   // the thing that stalls, this names the state outright.
   output logic [4:0]         dbg_hot,
   output logic [15:0]        dbg_hotcyc,
+  output logic [23:0]        dbg_busy,      // R437: cycles working, per frame
+  output logic [23:0]        dbg_starved,   // R437: cycles idle with no quad
+  input  logic               frame_start,
   output logic               line_case    // that quad was a wireframe, not filled
 );
 
@@ -1073,18 +1076,45 @@ module m2_raster_fill (
 
   always_comb in_ready = (state == S_IDLE);
 
-  // R436: one comparator, one counter, two registers. Saturating, so a genuine
-  // wedge pins at 0xFFFF rather than wrapping and reading as healthy.
+  // R437: THE FIRST VERSION MEASURED THE WRONG THING. "Longest dwell" is always
+  // S_IDLE, because the fill waits between quads -- on the board it read S_IDLE
+  // 100% of samples, saturated at 65,535 cycles, which said only that the fill
+  // idles for 1.3 ms at a stretch. True, and not what was asked.
+  //
+  // What is asked: when the fill IS working, where does it stop; and is it the
+  // bottleneck at all. So idle is excluded from the hot search, and busy and
+  // starved cycles are counted separately per frame.
+  //
+  //   dbg_hot/dbg_hotcyc  longest NON-IDLE dwell, and which state
+  //   dbg_busy            cycles not in S_IDLE, this frame
+  //   dbg_starved         cycles in S_IDLE with no quad offered, this frame
+  //
+  // busy >> starved means the fill is the limit and its divides are worth
+  // attacking. starved >> busy means the quad supply is, and every cycle spent
+  // on the fill is wasted.
   logic [4:0]  st_d;
   logic [15:0] st_cyc;
+  logic [23:0] busy_acc, starv_acc;
+  wire         fill_idle = (state == S_IDLE);
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       st_d <= S_IDLE; st_cyc <= 16'd0; dbg_hot <= 5'd0; dbg_hotcyc <= 16'd0;
+      busy_acc <= '0; starv_acc <= '0; dbg_busy <= '0; dbg_starved <= '0;
     end else begin
       st_d <= state;
       if (state != st_d) st_cyc <= 16'd0;
       else if (!(&st_cyc)) st_cyc <= st_cyc + 16'd1;
-      if (st_cyc > dbg_hotcyc) begin dbg_hotcyc <= st_cyc; dbg_hot <= st_d; end
+      // idle is never the answer to "where does it stop"
+      if (st_d != S_IDLE && st_cyc > dbg_hotcyc) begin
+        dbg_hotcyc <= st_cyc; dbg_hot <= st_d;
+      end
+      if (!fill_idle)            busy_acc  <= busy_acc  + 24'd1;
+      else if (!in_valid)        starv_acc <= starv_acc + 24'd1;
+      if (frame_start) begin
+        dbg_busy <= busy_acc; dbg_starved <= starv_acc;
+        busy_acc <= '0; starv_acc <= '0;
+        dbg_hotcyc <= 16'd0; dbg_hot <= 5'd0;
+      end
     end
   end
 

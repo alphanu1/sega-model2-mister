@@ -2818,6 +2818,7 @@ wire [15:0] geo_nops;        // R255: nop commands the walker decoded last frame
 // stages upstream, and every one of them was wrong.
 wire  [4:0] r3d_fill_hot;
 wire [15:0] r3d_fill_hotcyc;
+wire [23:0] r3d_fill_busy, r3d_fill_starved;   // R437
 wire  [2:0] r3d_walk_hot;
 wire [15:0] r3d_walk_hotcyc;
 wire [15:0] geo_walk_flip, geo_walk_fb;   // R263: walks started by the list-ready write, and by the fallback
@@ -4296,7 +4297,8 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	      : (tps_ph == 3'd3)                  ? {geo_walk_flip[7:0], geo_walk_fb[7:0], geo_walk_unknown[7:0], geo_dropped[7:0]}   // R255/R263
 	      : (tps_ph == 3'd2)                  ? {cc_f_f, vid_ovr_frame}         // R269: sibling fills : scanlines that overran, last frame
 	      : (tps_ph == 3'd4)                  ? {tx_h_f, tx_n_f}                // R275: texel hits : texels that were not 0xF
-	      : (tps_ph == 3'd5)                  ? {tx_m_f, tex_sweep}             // R294 texel misses; R310 whole-cache sweeps
+	      : (tps_ph == 3'd5)                  ? {4'd0, r3d_fill_busy[23:12],
+	                                             4'd0, r3d_fill_starved[23:12]}  // R437: busy : starved, per frame, in units of 4096 cycles
 	      : (tps_ph == 3'd7)                  ? {oz_d2, oz_d3}                 // R334: 1/z of vertices 2 and 3 ('Q')
 	      : (tps_ph == 3'd6)                  ? {bwl_tex[20:5], 16'd0}          // R294: texel fetch waiting
 	      : {lum_mean_f, lum_zpc_f, wedge_slot, wedge_n[6:0], r3d_quads[11:4]}),   // R249: the frame's mean luminance and its black-polygon percentage, where the always-zero drop count and the free-running miss count were
@@ -5542,6 +5544,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(3),
 	.dbg_texlost(tex_lost), .dbg_oz0(oz_d0), .dbg_oz1(oz_d1), .dbg_oz2(oz_d2), .dbg_oz3(oz_d3),
 	.dbg_texsweep(tex_sweep), .dbg_texnz(tex_nz),
 	.dbg_fill_hot(r3d_fill_hot), .dbg_fill_hotcyc(r3d_fill_hotcyc),   // R436
+	.dbg_fill_busy(r3d_fill_busy), .dbg_fill_starved(r3d_fill_starved),   // R437
 	.dbg_walk_hot(r3d_walk_hot), .dbg_walk_hotcyc(r3d_walk_hotcyc),
 	.q_moire(1'b0), .q_end(q3d_end),
 	.scan_clk(clk_sys), .scan_x(vid_x), .scan_y(vid_y),

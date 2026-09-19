@@ -18699,3 +18699,44 @@ either and everything downstream of that assumption has been wasted effort --
 which is the single most useful thing this could tell us.
 
 Benches unchanged: raster_fill **152,362/0**, span_tex **52/0**, raster3d 8/0.
+
+---
+
+**R437 -- THE FILL IS STARVED, NOT BUSY. R436's PROBE MEASURED THE WRONG THING
+AND SAID SO ANYWAY.**
+
+R436 reported the state each unit dwelt in longest. On the board, with
+orientation running:
+
+```
+  FILL  longest dwell   S_IDLE   100% of samples, 65,535 cycles (saturated)
+  WALK  longest dwell   T_IDLE   100% of samples, 65,535 cycles (saturated)
+```
+
+"Longest dwell" is always idle, because the fill waits between quads. The probe
+answered a question nobody asked -- and in doing so said something that matters:
+**the fill idles for stretches of 65,535 cycles, 1.3 ms at 50 MHz, while bands
+are only 17-22% full.**
+
+That reverses the priority in `docs/speed-plan.md`. Item 3 -- the plane-fit
+reciprocal, 96 cycles a quad to under 10 -- targets a stage that is already
+waiting. It cannot buy what it was costed at. The supply of quads is the limit,
+which is consistent with geometry waiting 39.5% for a bus that reads 0.0% busy.
+
+R437 rewrites the probe to answer the question directly:
+
+```
+  dbg_hot/dbg_hotcyc   longest NON-IDLE dwell, and which state
+  dbg_busy             cycles not in S_IDLE, per frame
+  dbg_starved          cycles in S_IDLE with NO quad offered, per frame
+```
+
+**busy >> starved** means the fill is the limit and its divides are worth
+attacking. **starved >> busy** means the quad supply is, and every cycle spent
+on the fill is wasted. The two are streamed together on debug phase 5 -- addr
+carries the hot state, data carries busy:starved in units of 4,096 cycles.
+
+**THE POINT IS THE ORDER.** Three items of the speed plan were ranked on a
+stale measurement (`the divider IS the fill`, taken at radix-2, before radix-4,
+before PIXSTEP 4, before orientation added a third divide round). Ranking work
+by an old number is how a day gets spent on the wrong stage. Measure, then rank.
