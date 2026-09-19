@@ -18740,3 +18740,58 @@ carries the hot state, data carries busy:starved in units of 4,096 cycles.
 stale measurement (`the divider IS the fill`, taken at radix-2, before radix-4,
 before PIXSTEP 4, before orientation added a third divide round). Ranking work
 by an old number is how a day gets spent on the wrong stage. Measure, then rank.
+
+---
+
+**R438 -- EVERY SDRAM CONTENTION FIGURE THIS CORE HAS EVER REPORTED WAS READ
+OFF A DEAD COUNTER.**
+
+Ben: *"something is holding on to the ports keeping them busy, because the
+bandwidth is there."* The mechanism is real and the RTL allows it exactly:
+
+```
+  arb_ready = pend & ~inflight;                    // line 495
+  if (p_ack[q] && !ack_d[q]) inflight[q] <= 1'b0;  // line 804 -- RISING EDGE ONLY
+```
+
+A transfer that never acks leaves `inflight[q]` set for ever, and that port is
+removed from the round robin **permanently** -- bus idle, queue behind it. The
+decoder's own note calls that BLOCKED as opposed to bandwidth, *"and the fixes
+are opposites"*.
+
+**IT COULD NOT BE TESTED, BECAUSE THE INSTRUMENT IS DEAD.** `bw_busy`,
+`bw_cpu`, `bw_geo` and `bw_chr` are computed correctly from `sdr_infl` and then
+never streamed. Verilator: *"Signal is not used: 'bwl_busy' / 'bwl_cpu' /
+'bwl_geo' / 'bwl_chr'"*. Only `bwl_tex` ever reached the wire.
+
+So every one of these, quoted in this study and acted on today, is whatever
+happened to be on that slot:
+
+```
+  "bus busy 10.8% of the frame"          (s31)
+  "bus busy 39.7%"                       (s32)
+  "bus busy 0.0%; the CPU port waits 125.6%; geometry 39.5%"   (s52)
+```
+
+125.6% should have been the giveaway and was not. **Eighth instrument defect
+this run, and the one that did the most damage: three conclusions were built on
+it, including the ranking in `docs/speed-plan.md`.**
+
+**WHAT R438 STREAMS INSTEAD.** `infl_hold[q]` counts consecutive cycles port q
+has been inflight; a healthy port resets it on every ack, a stuck one saturates.
+Per frame, on debug phase 6's `b_addr`:
+
+```
+  infl_who_l   which port held longest
+  infl_ever_l  every port that was inflight at the frame boundary
+  infl_max_l   how long, in cycles
+```
+
+A port that is genuinely stuck reads `infl_max_l` pinned at 0xFFFF with its own
+bit set in `infl_ever_l`. A healthy design reads tens of cycles.
+
+**AND THE STANDING LESSON.** R393, R399, R402 and now this are all the same
+defect: a counter that reads zero, or a plausible number, because nothing drives
+it. The rule that catches it costs nothing -- **if a telemetry field has never
+been seen to change, it has not been verified** -- and a percentage above 100
+is proof, not noise.
