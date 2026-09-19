@@ -18550,3 +18550,57 @@ project's own rules call binding and "checked before work, not after". R331 was
 read and R337-R342 -- five entries, the same feature, finished -- were not. A
 day of builds, four dead boards and a 2,400-ALM rewrite came out of reading one
 entry and assuming it was the end of the thread.
+
+---
+
+**R433 -- WHY THE PARKED PERSPECTIVE NEVER FITTED: FOUR CHAINED MULTIPLIES IN
+ONE CYCLE. R342 SAW THE AREA AND NOT THE DEPTH.**
+
+R432 restored R338 + R339 onto today's mainline and built it for the first time.
+It does not fit and it does not close:
+
+```
+  s41/s42/s43   41,346-41,396 ALM (99%)   82 DSP   slack -12.719   TNS -3,137
+  s32 baseline  39,004 ALM (93%)          63 DSP   slack  -1.836
+```
+
+**+2,342 ALM, not the ~849 R342's arithmetic implies, and I repeated R342's own
+mistake to predict it.** That entry says *"Estimating ALM from a description is
+not a skill this project has; the fit report is"* -- and I projected 849 from its
+prose in the message after quoting it.
+
+The worst path names the cause:
+
+```
+  m2_span_tex|rcp_r[0] -> m2_span_tex|vq_r[26]    -12.719 ns on clk_sys
+```
+
+T_RCP2 did FOUR CHAINED MULTIPLIES in a single cycle -- `m_r*rcp_r`, then
+`rcp_r*nd`, then `u_r*r1` and `v_r*r1` -- with two variable shifts and two
+saturates behind them. Thirty-two nanoseconds of logic on a twenty nanosecond
+clock.
+
+**THIS IS WHY IT WAS NEVER 849 ALM.** A chain that deep is retimed, duplicated
+and spread by the fitter before it gives up, and the area that buys is invisible
+to any estimate made from the algorithm. R341 then tried to recover area by
+narrowing those same operands, lost three DSP blocks, and never touched the
+depth -- which is the thing that was actually costing.
+
+**R342's CONCLUSION NEEDS AMENDING.** It reads as *the work is done, it needs
+area*. It is more than that: **the work had never been built.** 42,104 of 41,910
+means no fit completed, so no timing was ever closed and no board ever ran it.
+"Bench-green" was true and was not the same as working.
+
+**THE FIX IS THE ONE THIS PROJECT HAS MADE FOUR TIMES.** T_RCP2 splits into
+T_RCP2/T_RCP3/T_RCP4, one multiply a cycle -- exactly R418 (clz before the
+shift), R420 (the z-key), R425 (persp off the cache address) and now this. Two
+extra cycles a PIXSTEP group, in a walk that already waits on the texel fetch.
+
+Benches unchanged: raster_fill **152,362/0**, span_tex **52/0** at PIXSTEP 2 and
+4, raster3d 8/0.
+
+**THE PATTERN WORTH NAMING.** Five separate times in this codebase the same
+defect has been written: arithmetic chained into more arithmetic inside one
+cycle, by four different pieces of work, each quoting the previous one's fix in
+its own comments. It is not carelessness about a known rule -- it is that the
+rule is easy to state and hard to see while thinking about the maths.

@@ -102,7 +102,7 @@ module m2_span_tex #(
   output logic [31:0]        dbg_texnz
 );
 
-  typedef enum logic [2:0] { T_IDLE, T_RCP1, T_RCP2, T_FETCH, T_EMIT, T_DRAIN } st_t;
+  typedef enum logic [2:0] { T_IDLE, T_RCP1, T_RCP2, T_RCP3, T_RCP4, T_FETCH, T_EMIT, T_DRAIN } st_t;
   st_t st;
 
   logic signed [31:0] y_r, x_r, x1_r;
@@ -115,6 +115,9 @@ module m2_span_tex #(
   // so to_tx() and everything downstream are unchanged.
   logic signed [31:0] uq_r, vq_r;
   logic [24:0]        rcp_r;             // 2^47 / normalised(ooz)
+  // R433: the Newton step and the coordinate multiply, split across cycles.
+  logic [31:0]        nd_r;              // 2^48 - m*r0, folded down by 24
+  logic [24:0]        r1_r;              // the refined reciprocal
   logic [5:0]         rcp_e;             // how far ooz was normalised
   logic [31:0]        m_r;               // ooz normalised to [2^23, 2^24)
 
@@ -248,7 +251,7 @@ module m2_span_tex #(
       y_r <= '0; x_r <= '0; x1_r <= '0; col_r <= '0; moire_r <= 1'b0;
       u_r <= '0; v_r <= '0; du_r <= '0; dv_r <= '0; tex_r <= '0; texel_r <= '0;
       ooz_r <= '0; doz_r <= '0; uq_r <= '0; vq_r <= '0;
-      rcp_r <= '0; rcp_e <= '0; m_r <= '0;
+      rcp_r <= '0; rcp_e <= '0; m_r <= '0; nd_r <= '0; r1_r <= '0;   // R433
       e_valid <= 1'b0; e_col <= '0; e_x <= '0; e_x1 <= '0; to_cnt <= '0;
       dbg_texpix <= '0; dbg_texnz <= '0;
     end else begin
@@ -292,6 +295,19 @@ module m2_span_tex #(
         // value that oz_norm capped at bit 14, so t is 23..31 in every case
         // that draws, and anything below that is a vertex so far away the
         // coordinate saturates regardless.
+        // R433: ONE MULTIPLY A CYCLE. As written this state did FOUR chained
+        // multiplies in one: m_r*rcp_r, then rcp_r*nd, then u_r*r1 and v_r*r1,
+        // with two variable shifts and two saturates behind them. On clk_sys
+        // that measured
+        //   m2_span_tex|rcp_r[0] -> m2_span_tex|vq_r[26]   -12.719 ns, TNS -3,137
+        // which is 32 ns of logic on a 20 ns clock -- the single reason the
+        // parked work never fitted or closed, and the same shape R418, R420 and
+        // R425 each had to take apart. R341 tried to fix the AREA by narrowing
+        // these operands and lost three DSP blocks doing it; the depth was
+        // never the thing it addressed.
+        //
+        // Two extra cycles a PIXSTEP group, in a walk that already waits on the
+        // texel fetch.
         T_RCP2: begin
           // The Newton result is 25 bits by construction: r1 ~ 2^47/m with m in
           // [2^23, 2^24), so r1 lands in [2^23, 2^24]. The wide intermediate is
@@ -300,14 +316,19 @@ module m2_span_tex #(
           // S = 2^47 it overflows: r0 is ~2^24 and the bracket ~2^47, so the
           // product is ~2^71 and 64 bits silently truncate it to zero. Folding
           // 24 of the 47 in first keeps every intermediate under 2^48.
-          /* verilator lint_off UNUSEDSIGNAL */
-          automatic logic [63:0] nd   = ((64'd1 <<< 48) - (64'(m_r) * 64'(rcp_r))) >> 24;
-          automatic logic [63:0] nr   = (64'(rcp_r) * nd) >> 23;
-          /* verilator lint_on UNUSEDSIGNAL */
-          automatic logic [24:0] r1   = 25'(nr);
-          automatic logic [4:0]  sh   = (rcp_e < 6'd23) ? 5'd16 : 5'(rcp_e - 6'd7);
-          automatic logic [63:0] pu   = 64'(u_r) * 64'(r1);
-          automatic logic [63:0] pv   = 64'(v_r) * 64'(r1);
+          nd_r <= 32'((((64'd1 <<< 48) - (64'(m_r) * 64'(rcp_r))) >> 24));
+          st   <= T_RCP3;
+        end
+
+        T_RCP3: begin
+          r1_r <= 25'((64'(rcp_r) * 64'(nd_r)) >> 23);
+          st   <= T_RCP4;
+        end
+
+        T_RCP4: begin
+          automatic logic [4:0]  sh = (rcp_e < 6'd23) ? 5'd16 : 5'(rcp_e - 6'd7);
+          automatic logic [63:0] pu = 64'(u_r) * 64'(r1_r);
+          automatic logic [63:0] pv = 64'(v_r) * 64'(r1_r);
           uq_r <= sat32(pu >> sh);
           vq_r <= sat32(pv >> sh);
           st   <= T_FETCH;
