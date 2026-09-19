@@ -18795,3 +18795,48 @@ defect: a counter that reads zero, or a plausible number, because nothing drives
 it. The rule that catches it costs nothing -- **if a telemetry field has never
 been seen to change, it has not been verified** -- and a percentage above 100
 is proof, not noise.
+
+---
+
+**R440 -- THE DESIGN IS 2 LABs OVER, AND SOME OF WHAT IS IN IT MEASURES
+NOTHING.**
+
+```
+  Error (170012): Fitter requires 4193 LABs to implement the design,
+                  but the device contains only 4191 LABs
+  Error (11802): Can't fit design in device.
+```
+
+That is R342's wall again, and R438's own instrumentation is what pushed us
+through it -- eleven 16-bit hold counters with eleven comparators, updated every
+cycle. **Three builds and six flashes went into measuring with a probe that did
+not fit**, and an ALM figure was quoted off a FAILED fit to get there
+(`Fitter Status : Failed` is the first line of that report).
+
+R439 replaces it with one counter: a stuck port leaves `sdr_infl` non-zero and
+UNCHANGING, so consecutive identical non-zero cycles answers the question and
+the latched vector names the port.
+
+**AND FOUR MORE COUNTERS WERE PURE WASTE.** `bw_busy`, `bw_cpu`, `bw_geo` and
+`bw_chr` are 21-bit counters incremented every cycle whose latched outputs are
+never read -- Verilator has been saying so all along. Only `bw_tex` reaches the
+stream. Removed.
+
+**WHERE THE INSTRUMENTATION ACTUALLY IS**, for the next person who needs room:
+
+```
+  m2_dbg_stream    382 ALM
+  m2_uart_tx        70
+  emu:emu OWN      912      <- Model2.sv's own logic: counters, sweeper,
+                               wedge capture, port muxing
+```
+
+Note that deleting the ~200 signals Verilator calls unused frees NOTHING --
+Quartus already removes unread logic, through module boundaries. Only
+instrumentation that is still DRIVEN and STREAMED costs LABs. The distinction
+matters: the tidy-up that looks productive is the one that changes no numbers.
+
+**STILL LIVE AND WORTH QUESTIONING:** the ROM checksum sweeper. It restarts for
+ever (`sw_state <= 3'd0; // and immediately go round again`), holds SDRAM port 2
+permanently in the round robin, and nothing reads its result during play. It is
+a real diagnostic, so it is gated rather than deleted when someone decides.

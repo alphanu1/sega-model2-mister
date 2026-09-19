@@ -1069,8 +1069,13 @@ m2_sdram_x2 #(.NP(NPORTS), .AW(SDR_AW)) u_sdram_x2 (
 wire [NPORTS-1:0] sdr_pend, sdr_infl;
 // TWENTY-ONE BITS: a 16.7 ms frame is 1.67 M cycles of the 100 MHz clock and
 // a 20-bit counter wraps at 1.05 M -- which would read as a quiet frame.
-logic [20:0] bw_busy, bw_cpu, bw_geo, bw_tex, bw_chr;
-logic [20:0] bwl_busy, bwl_cpu, bwl_geo, bwl_tex, bwl_chr;
+// R440: bw_busy/cpu/geo/chr removed -- five counters and five latches
+// incremented every cycle, and four of the five were never read
+// (Verilator: "Signal is not used"). Only the texel one reaches the
+// stream. The contention figures this core reported for months came
+// off those dead slots; see R438.
+logic [20:0] bw_tex;
+logic [20:0] bwl_tex;
 // R439: THE SAME TEST, ONE COUNTER INSTEAD OF ELEVEN.
 //
 // R438 gave every port its own 16-bit hold counter and comparator. That is 11
@@ -1092,29 +1097,24 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 end
 always_ff @(posedge clk_mem or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
-		bw_busy <= '0; bw_cpu <= '0; bw_geo <= '0; bw_tex <= '0; bw_chr <= '0;
-		bwl_busy <= '0; bwl_cpu <= '0; bwl_geo <= '0; bwl_tex <= '0; bwl_chr <= '0;
+		bw_tex <= '0;
+		bwl_tex <= '0;
 		infl_run <= '0; infl_run_l <= '0; infl_d <= '0; infl_stuck_l <= '0;   // R439
 		bw_tog_m <= 1'b0; bw_tog_m2 <= 1'b0; bw_tog_m3 <= 1'b0;
 	end else begin
 		bw_tog_m <= bw_tog; bw_tog_m2 <= bw_tog_m; bw_tog_m3 <= bw_tog_m2;
 		if (bw_tog_m3 != bw_tog_m2) begin
-			bwl_busy <= bw_busy; bwl_cpu <= bw_cpu; bwl_geo <= bw_geo;
 			if (infl_run > infl_run_l) begin               // R439
 				infl_run_l <= infl_run; infl_stuck_l <= infl_d;
 			end
-			bwl_tex  <= bw_tex;  bwl_chr <= bw_chr;
-			bw_busy <= '0; bw_cpu <= '0; bw_geo <= '0; bw_tex <= '0; bw_chr <= '0;
+			bwl_tex <= bw_tex;
+			bw_tex  <= '0;
 		end else begin
-			if (|sdr_infl)                      bw_busy <= bw_busy + 21'd1;
 			// R439
 			infl_d <= sdr_infl;
 			if (sdr_infl == '0 || sdr_infl != infl_d) infl_run <= 16'd0;
 			else if (!(&infl_run))                    infl_run <= infl_run + 16'd1;
-			if (sdr_pend[1]  && !sdr_infl[1])   bw_cpu  <= bw_cpu  + 21'd1;
-			if (sdr_pend[4]  && !sdr_infl[4])   bw_geo  <= bw_geo  + 21'd1;
 			if (sdr_pend[10] && !sdr_infl[10])  bw_tex  <= bw_tex  + 21'd1;
-			if (sdr_pend[3]  && !sdr_infl[3])   bw_chr  <= bw_chr  + 21'd1;
 		end
 	end
 end
