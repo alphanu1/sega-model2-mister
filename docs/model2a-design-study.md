@@ -18492,3 +18492,61 @@ question.
 is tried again it needs a stall counter per PF state on the debug wire, so a
 board capture says which state it sits in rather than leaving it to inference
 from four stages upstream.
+
+---
+
+**R432 -- THE PERSPECTIVE WORK WAS ALREADY BUILT. R424 WAS A REWRITE OF SOLVED
+WORK, THREE TIMES THE AREA, AND IT IS DISCARDED.**
+
+R338 (the three plane fits) and R339 (the divide) were written, bench-green and
+parked by R342 for one reason: *"42,104 ALM against 41,910... come back when
+there is area for them."* Branch `perspective-wip`, which is also why the tag I
+pushed under that name was ambiguous.
+
+**R424 rebuilt the same feature from scratch without reading R337-R342.**
+
+```
+  R338 + R339 (parked)     ~849 ALM   6 DSP    bench 152,362/0 and 52/0
+  R424 + R425 (mine)     ~2,400 ALM  22 DSP    board: dead on four builds
+```
+
+R337's note says exactly what I failed to do: *"one vertex per cycle, reusing
+one shifter and one multiplier pair rather than four of each -- 120 ALM and 6
+DSP blocks, for four cycles in a machine that already idles six waiting on
+m2_raster_div."* R424 instantiated four shifters and eight multipliers in
+parallel, in a fill that spends most of its time waiting on a divider.
+
+**AND THE AREA THAT PARKED IT HAS SINCE ARRIVED.**
+
+```
+  mainline when parked   ~41,255 ALM
+  mainline today (s32)    39,004 ALM      R412 sound RAM, R417 flags, R419
+  + the parked work        ~39,850 (95%)
+```
+
+R412 freed 48 M10K and R417 freed ~1,850 ALM. The work was parked waiting for
+exactly this and nobody went back for it.
+
+**RESTORED ONTO TODAY'S MAINLINE.** R338 and R339 re-applied three-way; the only
+conflict was state-code allocation, because R418 took code 27 after they were
+written. S_OZ/S_PF_Q3/S_PF_Q3W move to 28/29/30 and R418's S_PF_NRM keeps 27.
+Benches reproduce the study's own numbers exactly: raster_fill **152,362/0**,
+span_tex **52/0** at PIXSTEP 2 and 4, raster3d 8/0, texel 8,066/0.
+
+**THEIR BENCH KNEW THE TRAP MINE FELL INTO.** R338's test drives FOUR DIFFERENT
+DEPTHS, commented *"a quad whose corners share a depth is exactly the case where
+affine and perspective"* agree. R424's bench gave all four vertices the same 1/z
+so the old assertions would pass, which zeroed the numerators and meant the
+third divide round never ran.
+
+**ONE THING NOT YET DONE.** S_PF_Q3 calls `pf_norm(nxo)` and `pf_clz(nxo)` in one
+cycle -- the exact pattern R418 split apart as the worst path in the design.
+R337 predates R418 so it never got the treatment. Left alone for this build so
+the restore is measured unmodified; if clk_sys suffers, that is the first thing
+to fix and R418 is the worked example.
+
+**THE LESSON, AND IT IS NOT A SMALL ONE.** The study is §10 of a document this
+project's own rules call binding and "checked before work, not after". R331 was
+read and R337-R342 -- five entries, the same feature, finished -- were not. A
+day of builds, four dead boards and a 2,400-ALM rewrite came out of reading one
+entry and assuming it was the end of the thread.

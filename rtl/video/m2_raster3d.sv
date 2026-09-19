@@ -222,6 +222,8 @@ module m2_raster3d #(
   logic        fl_in_valid, fl_in_ready, fl_quad_done, fl_line_case;
   logic        fl_span_valid, fl_span_ready, fl_span_moire;
   logic signed [15:0] fl_span_y, fl_span_x0, fl_span_x1;
+  logic signed [31:0] fl_span_ooz;                          // R337: 1/z at the span start
+  logic signed [15:0] fl_span_doozdx;
   logic [23:0] fl_span_col;
   logic signed [31:0] fl_span_u, fl_span_v;
   logic signed [15:0] fl_span_dudx, fl_span_dvdx;   // R286: 8.8
@@ -254,9 +256,11 @@ module m2_raster3d #(
   // span per cycle anyway.
   logic spantex_busy;
 
-  // R327: 242 -> 194. y, x0 and x1 were 32 bits each for a 496x384 screen;
-  // they are 16 now, which is 48 bits off every entry in this queue.
-  localparam int unsigned SQ_DW = 194;
+  // R327: 242 -> 194 when y, x0 and x1 narrowed to 16 bits.
+  // R337: 194 -> 242, carrying 1/z (32) and its gradient (16) for the
+  // perspective divide. The queue is MLAB since R332, so this is ALM and not
+  // M10K -- which is the only reason it is affordable at 553/553 blocks.
+  localparam int unsigned SQ_DW = 242;
   logic [SQ_DW-1:0] sq_din, sq_q;
   logic             sq_in_rdy, sq_qv, sq_rdy, sq_busy, sq_full;
   logic [15:0]      sq_cnt16;
@@ -267,6 +271,7 @@ module m2_raster3d #(
   assign fl_span_ready = sq_in_rdy;
 
   assign sq_din = { fl_span_y, fl_span_x0, fl_span_x1,
+                    fl_span_ooz, fl_span_doozdx,                   // R337
                     fl_span_u, fl_span_v,
                     fl_span_dudx, fl_span_dvdx,
                     fl_span_col, fl_span_tex,
@@ -295,10 +300,13 @@ module m2_raster3d #(
   assign sq_busy   = sq_qv || (sq_cnt16 != 16'd0);
 
   // Unpacked, in the same order.
-  // Only the top three fields moved: everything from u down keeps its slice.
-  wire signed [15:0] sq_y    = sq_q[193:178];
-  wire signed [15:0] sq_x0   = sq_q[177:162];
-  wire signed [15:0] sq_x1   = sq_q[161:146];
+  // R337: ooz and its gradient sit between the coordinates and u; everything
+  // from dudx down keeps the slice it had.
+  wire signed [15:0] sq_y    = sq_q[241:226];
+  wire signed [15:0] sq_x0   = sq_q[225:210];
+  wire signed [15:0] sq_x1   = sq_q[209:194];
+  wire signed [31:0] sq_ooz  = sq_q[193:162];
+  wire signed [15:0] sq_doozdx = sq_q[161:146];
   wire signed [31:0] sq_u    = sq_q[145:114];
   wire signed [31:0] sq_v    = sq_q[113:82];
   wire signed [15:0] sq_dudx = sq_q[81:66];
@@ -333,6 +341,7 @@ module m2_raster3d #(
     .in_col(qo_col), .in_moire(qo_moire),
     .in_u0(qo_u0), .in_v0(qo_v0), .in_u1(qo_u1), .in_v1(qo_v1),
     .in_u2(qo_u2), .in_v2(qo_v2), .in_u3(qo_u3), .in_v3(qo_v3),
+    .in_oz0(qo_oz0), .in_oz1(qo_oz1), .in_oz2(qo_oz2), .in_oz3(qo_oz3),  // R337
     .in_tex(qo_tex),
     .view_x1(16'sd0), .view_x2(16'(SCR_W) - 16'sd1),
     .view_y1(band_y1), .view_y2(band_y2),
@@ -341,6 +350,7 @@ module m2_raster3d #(
     .span_col(fl_span_col), .span_moire(fl_span_moire),
     .span_u(fl_span_u), .span_v(fl_span_v),
     .span_dudx(fl_span_dudx), .span_dvdx(fl_span_dvdx),
+    .span_ooz(fl_span_ooz), .span_doozdx(fl_span_doozdx),     // R337
     .span_tex(fl_span_tex), .span_tex_en(fl_span_tex_en),
     .quad_done(fl_quad_done), .line_case(fl_line_case)
   );
@@ -389,6 +399,7 @@ module m2_raster3d #(
     .in_col(sq_col), .in_moire(sq_moire),
     .in_u(sq_u), .in_v(sq_v),
     .in_dudx(sq_dudx), .in_dvdx(sq_dvdx),
+    .in_ooz(sq_ooz), .in_doozdx(sq_doozdx),                   // R337
     .in_tex(sq_tex), .in_tex_en(sq_tex_en),
     .out_valid(tx_span_valid), .out_ready(tx_span_ready),
     .out_y(tx_span_y), .out_x0(tx_span_x0), .out_x1(tx_span_x1),
