@@ -1,5 +1,62 @@
 # Handoff
 
+## ORIENTATION WORKS. `build/seeds/s52` IS ON THE BOARD AND RUNNING.
+
+Perspective-correct texturing is in and confirmed on hardware. Tag
+`orientation-works` = 6bfa51c = R433 + R436 probe.
+
+```
+  1/z (R334): 224 samples, 212 nonzero (94.6%)
+      min 0.00376892  median 0.0593262  max 0.457031  -> z from 2.188 to 265.3
+  TEXTURES: textured pixels med 107,640 max 244,232; texel cache 61.3%
+  framewait 36.2%  mailbox 0.5%  render 8.4%   tgp spread across PCs
+```
+
+**The earlier black screens were the placement lottery, not the code.** s45 and
+s46 died; s52 is the SAME RTL and runs. Do not re-diagnose that as an area or
+timing fault -- study R435/R436 record how much time went into those blind
+alleys. If a build of this comes up black, roll a seed.
+
+## THE PROBLEM NOW IS SPEED, AND IT IS MEASURED
+
+```
+  bands: %full    16.7%  22.2%   med 11-19 of 50     (affine managed 41-85%)
+  ready ms max    17.17  16.85                       against a 16.7 ms frame
+  SDRAM: bus busy 0.0%; the CPU port waits 125.6%
+  waiting for the bus: geometry 39.5%  glyph fetch 11.3%  texels 4.9%
+```
+
+**An idle bus with a 39.5% queue is BLOCKED, not short of bandwidth** -- the
+decoder says so itself, and the fixes are opposites. That is the first thing to
+chase, ahead of anything in the speed plan, because it costs nothing to fix if
+it is an arbitration or handshake stall.
+
+## NEXT
+
+1. **Why is the bus idle while geometry waits 39.5%?** Blocked, not saturated.
+2. `docs/speed-plan.md` -- the ranked list. Item 3 (the plane-fit reciprocal,
+   96 cycles a quad to under 10) is now worth MORE than when it was written,
+   because orientation added a third divide round to the same fill.
+3. Orientation's area is 1,365 ALM direct + ~965 packing spread (study R435).
+   Reducing the fill's 883 would ease the seed lottery.
+
+## RULES BROKEN THIS SESSION, SO THEY ARE NOT BROKEN AGAIN
+
+- **Read the whole study.** R331 was read; R337-R342 -- five entries, the same
+  feature, already finished -- were not. That cost a day and a 2,400-ALM
+  rewrite of solved work.
+- **Never estimate ALM from a description** (R342 says so). Done twice more
+  here: out by 3x and by 7x.
+- **One change per build.** Four went into s24; five builds were spent
+  recovering what one-per-build gives free.
+- **A failing board is not evidence for the first theory that fits.** clk_mem,
+  then ALM, then the fill -- three explanations, all wrong, none measured. The
+  answer was a seed.
+
+---
+
+## EARLIER HANDOFF
+
 ## STATE: WORKING BUILD ON THE BOARD, ORIENTATION STILL OUT
 
 **Board: `build/seeds/s48`** -- confirmed working by Ben. 93% ALM, 63 DSP.
