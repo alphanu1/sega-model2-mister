@@ -18604,3 +18604,75 @@ defect has been written: arithmetic chained into more arithmetic inside one
 cycle, by four different pieces of work, each quoting the previous one's fix in
 its own comments. It is not carelessness about a known rule -- it is that the
 rule is easy to state and hard to see while thinking about the maths.
+
+---
+
+**R435 -- WHERE ORIENTATION'S AREA ACTUALLY GOES, MEASURED.**
+
+Two independent implementations of perspective fail identically on the board --
+R424/R425 (mine) and R338/R339 with its divide pipelined (R433). They share
+almost no code. Every board result:
+
+```
+  s14, s32, s48    no orientation   93%   WORK
+  s24, s26, s31    mine             99%   locked / black
+  s35, s37, s38    mine             98%   dead / froze
+  s45, s46         theirs           99%   black
+```
+
+The per-entity fit diff, control (s47) against orientation (s46):
+
+```
+  m2_raster_fill      2,917 -> 3,800    +883
+  m2_span_tex           180 ->   542    +362
+  span queue dpram        0 ->   120    +120
+                                       ------
+  DIRECT                                1,365
+
+  m2_geometry         6,024 -> 6,348    +324     <- RTL IDENTICAL
+  m2_sound_board      4,698 -> 5,009    +311     <- RTL IDENTICAL
+  ascal (framework)   1,725 -> 1,966    +241     <- RTL IDENTICAL
+  i960_icache           394 ->   501    +107     <- RTL IDENTICAL
+  fx68k               1,781 -> 1,854     +74     <- RTL IDENTICAL
+                                       ------
+  PACKING SPREAD                          ~965
+
+  TOTAL              39,000 -> 41,330  +2,330
+```
+
+**TWO FIFTHS OF THE COST IS NOT THE FEATURE.** Modules whose RTL does not change
+gain ~965 ALM because the design packs less densely as it fills -- the report's
+own "ALMs needed = A - B + C", where B is *estimate of ALMs recoverable by dense
+packing*. So area freed anywhere pays twice: once directly, and again by letting
+everything re-pack. It also means the marginal cost of the LAST feature added is
+always overstated relative to its own logic.
+
+**AND R337's ESTIMATE WAS OUT BY SEVEN.** It costed the sequential arithmetic at
+120 ALM; the fill gains 883. That is the third independent confirmation of
+R342's rule in this project, and the second time today I broke it myself -- I
+projected the parked work at ~849 ALM from R342's prose in the message directly
+after quoting that rule.
+
+**THE DESIGN'S AREA MAP (control, 39,000 ALM):**
+
+```
+  i960_top        7,721     m2_copro        2,398 (m2_tgp 2,342)
+  m2_geometry     6,024     fx68k           1,781
+  m2_raster3d     5,360     ascal           1,725 (framework)
+  m2_sound_board  4,698     m2_ioz80        1,397
+  m2_raster_fill  2,917     m2_fp_pool      1,198
+```
+
+There is no spare 1,400 ALM in that list -- every large block is a CPU or a
+renderer stage doing real work. The tractable end is the fill's +883 on a 2,917
+baseline: a 30% increase for a THIRD plane on a stage that already fits two, and
+the three fits share the same two dividers already. Something in the third round
+is not sharing what the first two do, and that is a measurement to take inside
+the module before any more is written.
+
+**WHAT IS NOT YET KNOWN, AND MATTERS MOST.** Whether area is the mechanism at
+all. The correlation is eleven builds and two implementations, and R342 reached
+the same conclusion from the fit alone -- but no build has ever put orientation
+on the board BELOW 98%. The prediction is testable and unfalsified: free the
+area first, then add it. If it still dies at 93%, the fault is in the shared 1/z
+path out of the quad store and not the area at all.

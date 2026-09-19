@@ -1,5 +1,61 @@
 # Handoff
 
+## STATE: WORKING BUILD ON THE BOARD, ORIENTATION STILL OUT
+
+**Board: `build/seeds/s48`** -- confirmed working by Ben. 93% ALM, 63 DSP.
+HEAD (`R434`) is that exact configuration.
+
+**Orientation does not work yet, in EITHER implementation.** See study R435.
+
+### The one-line summary
+
+Two independent perspective implementations -- mine (R424/R425) and the parked
+R338/R339 with its divide pipelined (R433) -- fail identically on hardware.
+They share almost no code. Both take the design 93% -> 98-99% ALM.
+
+```
+  s14, s32, s48    no orientation   93%   WORK
+  s24, s26, s31    mine             99%   locked / black
+  s35, s37, s38    mine             98%   dead / froze
+  s45, s46         theirs           99%   black
+```
+
+### What is preserved
+
+| ref | what |
+|---|---|
+| `R433` (814cd3d) | R338+R339 with the divide split -- BEST orientation build: clk_sys -0.476, clk_mem -1.047 |
+| `perspective-wip` (branch) | the original parked R337-R341 |
+| `R424`/`R425` | my rewrite; **discard it**, it is 3x the area for the same job |
+
+### Next, in order
+
+1. **Measure inside m2_raster_fill.** Orientation adds 883 ALM there on a 2,917
+   baseline -- 30% for a third plane on a stage that already fits two, sharing
+   the same two dividers. R337 estimated 120. Find what the third round is not
+   sharing.
+2. **Then test the area hypothesis properly.** No build has ever put orientation
+   on the board below 98%. Free area first, then add it. If it still dies at
+   93%, area was never the mechanism and the fault is in the shared 1/z path out
+   of the quad store (R334).
+3. Speed work is in `docs/speed-plan.md`, unchanged and independent of this.
+
+### Rules this session broke, recorded so they are not broken again
+
+- **Read the whole study, not one entry.** R331 was read; R337-R342 -- five
+  entries, the same feature, finished -- were not. A day of builds and a
+  2,400-ALM rewrite of solved work came out of that.
+- **Never estimate ALM from a description.** R342 says so explicitly. I did it
+  twice more in one day; out by 3x and by 7x.
+- **One change per build.** Four changes went into s24; five builds were then
+  spent recovering what one-change-per-build gives free.
+- **Ninety seconds does not establish stability**, and a testbench adapted so
+  old assertions still pass is how new code arrives untested.
+
+---
+
+## EARLIER HANDOFF
+
 ## STATE, 2026-09-18: R424 PERSPECTIVE IS IN AND UNTESTED ON THE BOARD
 
 **Board is running `build/seeds/s14` (R420)** -- Ben: "that's running, no crash".
