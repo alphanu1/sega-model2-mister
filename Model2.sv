@@ -1071,28 +1071,20 @@ wire [NPORTS-1:0] sdr_pend, sdr_infl;
 // a 20-bit counter wraps at 1.05 M -- which would read as a quiet frame.
 logic [20:0] bw_busy, bw_cpu, bw_geo, bw_tex, bw_chr;
 logic [20:0] bwl_busy, bwl_cpu, bwl_geo, bwl_tex, bwl_chr;
-// R438: A PORT LOCKED OUT OF ARBITRATION LOOKS EXACTLY LIKE AN IDLE BUS.
+// R439: THE SAME TEST, ONE COUNTER INSTEAD OF ELEVEN.
 //
-// arb_ready = pend & ~inflight, and inflight[q] clears only on the RISING edge
-// of p_ack[q]. A transfer that never acks leaves that bit set for ever and the
-// port is removed from the round robin permanently -- with the bus idle and a
-// queue behind it, which is what Ben described and what the decoder calls
-// BLOCKED rather than bandwidth.
+// R438 gave every port its own 16-bit hold counter and comparator. That is 11
+// counters updated every cycle, and it pushed the design straight through the
+// wall: "Fitter requires 4193 LABs, the device contains only 4191". Three
+// builds and six flashes were spent measuring with a probe that does not fit.
 //
-// The existing bw_* counters would have shown this and DO NOT REACH THE
-// STREAM: bwl_busy, bwl_cpu, bwl_geo and bwl_chr are written and never read
-// (Verilator says so), so every contention figure quoted from this core has
-// been whatever was on that slot. Only bwl_tex was ever streamed.
-//
-// infl_hold[q] counts consecutive cycles port q has been inflight. A healthy
-// port resets it on every ack; a stuck one saturates. infl_max is the worst
-// across all ports since the last frame, and infl_who is which port.
-logic [15:0] infl_hold [NPORTS];
-logic [15:0] infl_max;
-logic  [3:0] infl_who;
-logic [15:0] infl_max_l;
-logic  [3:0] infl_who_l;
-logic [NPORTS-1:0] infl_ever_l;
+// The question does not need per-port state. A stuck port leaves sdr_infl
+// NON-ZERO AND UNCHANGING, because nothing else can be granted while it holds
+// and nothing clears it. So: one counter of consecutive cycles sdr_infl is
+// non-zero and identical to last cycle, and a latch of the vector itself.
+// Saturated means stuck, and infl_stuck_l names which port by its bit.
+logic [15:0] infl_run, infl_run_l;
+logic [NPORTS-1:0] infl_d, infl_stuck_l;
 logic        bw_tog, bw_tog_m, bw_tog_m2, bw_tog_m3;
 always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	if (!mem_rst_n)                bw_tog <= 1'b0;
@@ -1102,30 +1094,23 @@ always_ff @(posedge clk_mem or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
 		bw_busy <= '0; bw_cpu <= '0; bw_geo <= '0; bw_tex <= '0; bw_chr <= '0;
 		bwl_busy <= '0; bwl_cpu <= '0; bwl_geo <= '0; bwl_tex <= '0; bwl_chr <= '0;
-		infl_max <= '0; infl_who <= '0; infl_max_l <= '0; infl_who_l <= '0;   // R438
-		infl_ever_l <= '0;
-		for (int q = 0; q < NPORTS; q++) infl_hold[q] <= '0;
+		infl_run <= '0; infl_run_l <= '0; infl_d <= '0; infl_stuck_l <= '0;   // R439
 		bw_tog_m <= 1'b0; bw_tog_m2 <= 1'b0; bw_tog_m3 <= 1'b0;
 	end else begin
 		bw_tog_m <= bw_tog; bw_tog_m2 <= bw_tog_m; bw_tog_m3 <= bw_tog_m2;
 		if (bw_tog_m3 != bw_tog_m2) begin
 			bwl_busy <= bw_busy; bwl_cpu <= bw_cpu; bwl_geo <= bw_geo;
-			infl_max_l <= infl_max; infl_who_l <= infl_who;   // R438
-			infl_ever_l <= sdr_infl;
-			infl_max <= 16'd0; infl_who <= 4'd0;
+			if (infl_run > infl_run_l) begin               // R439
+				infl_run_l <= infl_run; infl_stuck_l <= infl_d;
+			end
 			bwl_tex  <= bw_tex;  bwl_chr <= bw_chr;
 			bw_busy <= '0; bw_cpu <= '0; bw_geo <= '0; bw_tex <= '0; bw_chr <= '0;
 		end else begin
 			if (|sdr_infl)                      bw_busy <= bw_busy + 21'd1;
-			// R438
-			for (int q = 0; q < NPORTS; q++) begin
-				if (!sdr_infl[q]) infl_hold[q] <= 16'd0;
-				else if (!(&infl_hold[q])) infl_hold[q] <= infl_hold[q] + 16'd1;
-				if (sdr_infl[q] && infl_hold[q] > infl_max) begin
-					infl_max <= infl_hold[q];
-					infl_who <= 4'(q);
-				end
-			end
+			// R439
+			infl_d <= sdr_infl;
+			if (sdr_infl == '0 || sdr_infl != infl_d) infl_run <= 16'd0;
+			else if (!(&infl_run))                    infl_run <= infl_run + 16'd1;
 			if (sdr_pend[1]  && !sdr_infl[1])   bw_cpu  <= bw_cpu  + 21'd1;
 			if (sdr_pend[4]  && !sdr_infl[4])   bw_geo  <= bw_geo  + 21'd1;
 			if (sdr_pend[10] && !sdr_infl[10])  bw_tex  <= bw_tex  + 21'd1;
@@ -4261,8 +4246,8 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	      : (tps_ph == 3'd7)                  ? {oz_d0, oz_d1}                 // R334: 1/z of vertices 0 and 1 ('Q')
 	      : (tps_ph == 3'd5)                  ? {3'd0, r3d_fill_hot, r3d_walk_hot, 5'd0,
 	                                             r3d_fill_hotcyc}               // R436
-	      : (tps_ph == 3'd6)                  ? {infl_who_l, 1'b0, infl_ever_l,
-	                                             infl_max_l}                    // R438
+	      : (tps_ph == 3'd6)                  ? {5'd0, infl_stuck_l,
+	                                             infl_run_l}                    // R439
 	      : {r3d_ready_cyc[15:0], r3d_bands_done[7:0], r3d_hold[7:0]}),
 	// clip_dropped read 0 on hardware and the refusal count is the number that
 	// now moves, so it takes that byte. Between them: accepted, emitted, refused
