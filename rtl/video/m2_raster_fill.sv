@@ -389,6 +389,20 @@ module m2_raster_fill (
   wire [31:0] den_rcp;
   m2_persp_recip u_denr (.clk(clk), .rst_n(rst_n), .in_d(den_a), .out_q(den_rcp));
 
+  // R442: ONE MULTIPLIER, MUXED -- NOT SIX.
+  //
+  // R441 called rquo() from each of the six S_PF_Q* states and Quartus built a
+  // multiplier for every one: +900 ALM and +11 DSP, and the fit failed at 101%.
+  // AUTO_RESOURCE_SHARING did not fold them even though the states are mutually
+  // exclusive.
+  //
+  // So the operands are registered and the product computed in ONE place. Each
+  // state presents the next numerator and latches the previous gradient, which
+  // costs one extra state at the end -- S_PF_B already exists and does it.
+  logic signed [31:0] mul_n;
+  logic        [5:0]  mul_z;
+  wire signed  [31:0] mul_q = rquo(mul_n, den_rcp, den_n[31]);
+
   // num / den_n, as num * (2^30/|den_n|) >> 30 with the sign put back. One
   // multiply, and ONE PER STATE -- the six below are sequenced, not parallel,
   // so this is a single multiplier reused six times rather than six of them.
@@ -702,7 +716,7 @@ module m2_raster_fill (
       det_r <= '0; den_sh <= 6'd0; nxu <= '0; nyu <= '0; nxv <= '0; nyv <= '0;
       q_num_a <= '0; q_num_b <= '0; q_z_a <= '0; q_z_b <= '0;
       nxu_z <= '0; nyu_z <= '0; nxv_z <= '0; nyv_z <= '0;
-      nxo_z <= '0; nyo_z <= '0;   // R441   // R418
+      nxo_z <= '0; nyo_z <= '0; mul_n <= '0; mul_z <= 6'd0;   // R441/R442
       dudx <= 16'sd0; dudy <= 16'sd0; dvdx <= 16'sd0; dvdy <= 16'sd0;
       for (int k = 0; k < 4; k++) begin qu[k] <= '0; qv[k] <= '0; qoz[k] <= '0; end
       oz_i <= 2'd0; oz_emax <= 8'd0; dodx <= 16'sd0; dody <= 16'sd0;
@@ -809,28 +823,35 @@ module m2_raster_fill (
           nxu_z <= pf_clz(nxu); nyu_z <= pf_clz(nyu);
           nxv_z <= pf_clz(nxv); nyv_z <= pf_clz(nyv);
           nxo_z <= pf_clz(nxo); nyo_z <= pf_clz(nyo);   // R441
+          mul_n <= pf_shift(nxu, pf_clz(nxu));         // R442: prime the pipe
+          mul_z <= pf_clz(nxu);
           state <= S_PF_Q1;
         end
 
         // R441: one multiply a state. No handshake, no waiting: the quotient
         // is ready the cycle after the operands are.
+        // R442: present the next numerator, latch the previous gradient.
         S_PF_Q1: begin
-          dudx  <= pf_scale(rquo(pf_shift(nxu, nxu_z), den_rcp, den_n[31]), nxu_z);
+          mul_n <= pf_shift(nyu, nyu_z); mul_z <= nyu_z;
+          dudx  <= pf_scale(mul_q, mul_z);
           state <= S_PF_Q1W;
         end
 
         S_PF_Q1W: begin
-          dudy  <= pf_scale(rquo(pf_shift(nyu, nyu_z), den_rcp, den_n[31]), nyu_z);
+          mul_n <= pf_shift(nxv, nxv_z); mul_z <= nxv_z;
+          dudy  <= pf_scale(mul_q, mul_z);
           state <= S_PF_Q2;
         end
 
         S_PF_Q2: begin
-          dvdx  <= pf_scale(rquo(pf_shift(nxv, nxv_z), den_rcp, den_n[31]), nxv_z);
+          mul_n <= pf_shift(nyv, nyv_z); mul_z <= nyv_z;
+          dvdx  <= pf_scale(mul_q, mul_z);
           state <= S_PF_Q2W;
         end
 
         S_PF_Q2W: begin
-          dvdy  <= pf_scale(rquo(pf_shift(nyv, nyv_z), den_rcp, den_n[31]), nyv_z);
+          mul_n <= pf_shift(nxo, nxo_z); mul_z <= nxo_z;
+          dvdy  <= pf_scale(mul_q, mul_z);
           state <= S_PF_Q3;
         end
 
@@ -842,12 +863,13 @@ module m2_raster_fill (
         // the same cycle as the shift, which is R418's fix applied to the round
         // R337 wrote before R418 existed.
         S_PF_Q3: begin
-          dodx  <= pf_scale(rquo(pf_shift(nxo, nxo_z), den_rcp, den_n[31]), nxo_z);
+          mul_n <= pf_shift(nyo, nyo_z); mul_z <= nyo_z;
+          dodx  <= pf_scale(mul_q, mul_z);
           state <= S_PF_Q3W;
         end
 
         S_PF_Q3W: begin
-          dody  <= pf_scale(rquo(pf_shift(nyo, nyo_z), den_rcp, den_n[31]), nyo_z);
+          dody  <= pf_scale(mul_q, mul_z);
           state <= S_PF_B;
         end
 

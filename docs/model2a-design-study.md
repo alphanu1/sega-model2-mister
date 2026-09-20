@@ -18888,3 +18888,35 @@ fuzz and reshuffled the RNG -- the bench's own header warns that the stall model
 shares the RNG with quad generation. A corpus that passes is not a corpus that
 covers; changing its order is a free second opinion and should be done
 deliberately, not by accident.
+
+---
+
+**R442 -- SIX CALLS TO ONE FUNCTION BUILT SIX MULTIPLIERS. THE FIT FAILED AT
+101%.**
+
+R441 called `rquo()` from each of the six S_PF_Q* states. They are mutually
+exclusive arms of one case statement, and AUTO_RESOURCE_SHARING is ON, so one
+multiplier should have served all six. Quartus built six:
+
+```
+  R441   42,269-42,371 ALM (101%)   94 DSP   Fitter Status: FAILED
+  before 41,350 ALM (99%)           83 DSP
+```
+
++900 ALM and +11 DSP for a change whose whole point was to REMOVE work.
+
+**A FUNCTION CALL IS NOT A SHARED RESOURCE.** It is textual substitution; each
+call site is its own hardware unless the tool chooses otherwise, and whether it
+chooses is not something to rely on. To share a multiplier, mux its operands
+explicitly.
+
+R442 registers `mul_n`/`mul_z` and computes the product in ONE place. Each state
+presents the next numerator and latches the previous gradient, so the pipeline
+costs one extra latch at the end -- S_PF_B already exists and absorbs it. Cycle
+count is unchanged at 127, and 152,369 checks still pass with 0 fails.
+
+**THIS IS THE FOURTH TIME TODAY THE FIT REPORT CONTRADICTED AN ESTIMATE MADE
+FROM THE SOURCE**, after R337's 120-ALM sequential arithmetic costing 883,
+R342's parked work projected at 849 costing 2,342, and R438's probe. The rule
+from R342 has now been broken often enough to restate as a procedure: **write
+the change, build it, read the fit report, and only then say what it cost.**
