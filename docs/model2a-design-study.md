@@ -18840,3 +18840,51 @@ matters: the tidy-up that looks productive is the one that changes no numbers.
 ever (`sw_state <= 3'd0; // and immediately go round again`), holds SDRAM port 2
 permanently in the round robin, and nothing reads its result during play. It is
 a real diagnostic, so it is gated rather than deleted when someone decides.
+
+---
+
+**R441 -- SIX DIVIDES BY THE SAME NUMBER BECOME ONE RECIPROCAL AND SIX
+MULTIPLIES. 179 CYCLES A TEXTURED QUAD DOWN TO 127.**
+
+Every plane-fit divide assigns `den_n` -- dudx, dudy, dvdx, dvdy and, since
+orientation, dodx and dody. m2_raster_div is radix-4 restoring at 16 cycles, and
+its 256-entry table only helps for |den| < 256.
+
+**THE PREMISE WAS CHECKED BEFORE THE WORK, WHICH IS THE PART THAT WAS MISSING
+ALL DAY.** `den_sh_c = (det_clz >= 16) ? 0 : (16 - det_clz)` normalises the
+determinant to SIXTEEN significant bits, so |den_n| sits around 2^15 -- two
+orders above the fast path. All six take the slow route.
+
+`den_n` at 16 bits is exactly m2_persp_recip's input range, and that unit is
+already exhaustively verified: all 65,535 inputs, worst relative error 0.0072%.
+One instance, two cycles, then each gradient is a multiply -- and the six
+S_PF_Q* states already existed, so this needed NO new state codes, which matters
+because all 32 are allocated.
+
+```
+  before   3 rounds x 2 divides x 16 cycles       179 cycles to retire
+  after    1 reciprocal + 6 multiplies            127 cycles to retire
+```
+
+**152,369 checks, 0 fails** -- the gradients are bit-exact against the divider,
+through the four-depth perspective cases and the degenerate 1/z = 0 ones.
+
+**TWO DEFECTS ON THE WAY, AND THE SECOND IS THE INTERESTING ONE.**
+
+1. `p = $signed(num) * $signed({1'b0, rcp})`. **Verilog sizes a multiply by its
+   OPERANDS, not by what it is assigned to**, so the product was computed at 33
+   bits and truncated before reaching the 64-bit variable. Both operands are
+   widened first now.
+
+2. The reciprocal was fed from the REGISTERED `den_sh`, which only becomes valid
+   entering S_PF_NRM -- one state before S_PF_Q1. The unit needs two cycles, so
+   the first gradient read a stale reciprocal and saturated pf_scale at 127.996.
+   `det_r` settles a state earlier, so it is fed from the combinational
+   `den_sh_c` instead. Same value, one more cycle to compute in.
+
+**AND HOW THEY WERE CAUGHT.** The fuzz corpus passed 152,362/0 WITH BOTH BUGS
+PRESENT. They only appeared when the R430 depth test was inserted ahead of the
+fuzz and reshuffled the RNG -- the bench's own header warns that the stall model
+shares the RNG with quad generation. A corpus that passes is not a corpus that
+covers; changing its order is a free second opinion and should be done
+deliberately, not by accident.
