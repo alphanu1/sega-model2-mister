@@ -102,7 +102,7 @@ module m2_span_tex #(
   output logic [31:0]        dbg_texnz
 );
 
-  typedef enum logic [2:0] { T_IDLE, T_RCP1, T_RCP2, T_RCP3, T_RCP4, T_FETCH, T_EMIT, T_DRAIN } st_t;
+  typedef enum logic [2:0] { T_IDLE, T_WARM, T_FETCH, T_EMIT, T_DRAIN } st_t;
   st_t st;
 
   logic signed [31:0] y_r, x_r, x1_r;
@@ -114,12 +114,19 @@ module m2_span_tex #(
   // The divided coordinates, in the same quarter-texel.16 the affine path used,
   // so to_tx() and everything downstream are unchanged.
   logic signed [31:0] uq_r, vq_r;
-  logic [24:0]        rcp_r;             // 2^47 / normalised(ooz)
   // R433: the Newton step and the coordinate multiply, split across cycles.
-  logic [31:0]        nd_r;              // 2^48 - m*r0, folded down by 24
-  logic [24:0]        r1_r;              // the refined reciprocal
-  logic [5:0]         rcp_e;             // how far ooz was normalised
-  logic [31:0]        m_r;               // ooz normalised to [2^23, 2^24)
+  // R446: THE DIVIDE MOVES BESIDE THE FETCH INSTEAD OF IN FRONT OF IT.
+  //
+  // As four FSM states the walk ran T_RCP1..4 -> T_FETCH -> T_EMIT for EVERY
+  // PIXSTEP group: four cycles of divide serialised ahead of every texel fetch,
+  // on spans ~125 groups wide. Before orientation a group was T_FETCH ->
+  // T_EMIT. That serialisation is why bands fell from 41-85% to one or two.
+  //
+  // 1/z is linear, so the NEXT group's value is known as soon as this one
+  // starts: u_nxt/ooz_nxt below. The four stages become a pipeline clocked
+  // every cycle on those, so group N+1's coordinates are computed WHILE group
+  // N's texel is in flight, and the fetch never waits for a divide again.
+  // Only the first group of a span pays, once, in T_WARM.
 
   // Clamp to a positive 32-bit value: a vertex far enough away makes the
   // coordinate enormous, and to_tx would read a wrapped one as a small texel.
@@ -245,17 +252,74 @@ module m2_span_tex #(
   // and walked from the registers.
   assign in_ready  = idle && (tex_now || out_ready);
 
+  // R446: the group after this one. Stable for as long as the FSM sits in
+  // T_FETCH/T_EMIT, which is what lets the pipeline below settle on it.
+  wire signed [31:0] u_nxt   = u_r   + (du_r  <<< $clog2(PIXSTEP));
+  wire signed [31:0] v_nxt   = v_r   + (dv_r  <<< $clog2(PIXSTEP));
+  wire signed [31:0] ooz_nxt = ooz_r + (doz_r <<< $clog2(PIXSTEP));
+  wire signed [31:0] dv_o    = dv_first ? ooz_r : ooz_nxt;
+  wire signed [31:0] dv_u    = dv_first ? u_r   : u_nxt;
+  wire signed [31:0] dv_v    = dv_first ? v_r   : v_nxt;
+
+  logic        dv_first;          // the span's first group divides in place
+  logic [2:0]  dv_age;            // cycles since the operands last moved
+  logic [5:0]  d1_e;   logic [31:0] d1_m;  logic [24:0] d1_r;
+  logic [31:0] d2_nd;  logic [5:0]  d2_e;  logic [24:0] d2_r;
+  logic [24:0] d3_r1;  logic [5:0]  d3_e;
+  logic signed [31:0] d4_u, d4_v;
+  // The coordinate that entered the pipeline with the 1/z now emerging from it,
+  // delayed three cycles to match. Getting this wrong pairs a texel coordinate
+  // with the wrong pixel's depth, which is the whole fault this change exists
+  // to avoid introducing.
+  logic signed [31:0] u_h1, v_h1, u_h2, v_h2, u_h3, v_h3;
+
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      st <= T_IDLE;
+      d1_e <= '0; d1_m <= '0; d1_r <= '0;
+      d2_nd <= '0; d2_e <= '0; d2_r <= '0;
+      d3_r1 <= '0; d3_e <= '0; d4_u <= '0; d4_v <= '0;
+      u_h1 <= '0; v_h1 <= '0; u_h2 <= '0; v_h2 <= '0; u_h3 <= '0; v_h3 <= '0;
+    end else begin
+      // stage 1: normalise and seed
+      begin
+        automatic logic [5:0]  t = top_bit(dv_o);
+        automatic logic [31:0] m = (t >= 6'd23) ? (dv_o >> (t - 6'd23))
+                                                : (dv_o << (6'd23 - t));
+        d1_e <= t; d1_m <= m; d1_r <= rcp_tab[m[22:16]];
+      end
+      // stage 2: the Newton residual
+      d2_nd <= 32'((((64'd1 <<< 48) - (64'(d1_m) * 64'(d1_r))) >> 24));
+      d2_e  <= d1_e; d2_r <= d1_r;
+      // stage 3: the refined reciprocal
+      d3_r1 <= 25'((64'(d2_r) * 64'(d2_nd)) >> 23);
+      d3_e  <= d2_e;
+      // stage 4: the coordinates
+      begin
+        automatic logic [4:0]  sh = (d3_e < 6'd23) ? 5'd16 : 5'(d3_e - 6'd7);
+        d4_u <= sat32((64'(u_h3) * 64'(d3_r1)) >> sh);
+        d4_v <= sat32((64'(v_h3) * 64'(d3_r1)) >> sh);
+      end
+      u_h1 <= dv_u;  v_h1 <= dv_v;
+      u_h2 <= u_h1;  v_h2 <= v_h1;
+      u_h3 <= u_h2;  v_h3 <= v_h2;
+    end
+  end
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      st <= T_IDLE; dv_first <= 1'b0; dv_age <= 3'd0;
       y_r <= '0; x_r <= '0; x1_r <= '0; col_r <= '0; moire_r <= 1'b0;
       u_r <= '0; v_r <= '0; du_r <= '0; dv_r <= '0; tex_r <= '0; texel_r <= '0;
       ooz_r <= '0; doz_r <= '0; uq_r <= '0; vq_r <= '0;
-      rcp_r <= '0; rcp_e <= '0; m_r <= '0; nd_r <= '0; r1_r <= '0;   // R433
+      // R433
       e_valid <= 1'b0; e_col <= '0; e_x <= '0; e_x1 <= '0; to_cnt <= '0;
       dbg_texpix <= '0; dbg_texnz <= '0;
     end else begin
       if (e_valid && out_ready) e_valid <= 1'b0;
+      // R446: the pipeline is four deep; this says when its output matches the
+      // operands currently presented. It must NOT be gated by the branch that
+      // waits on it -- R424 made that mistake and deadlocked the walk.
+      if (dv_age != 3'd7) dv_age <= dv_age + 3'd1;
 
       case (st)
         T_IDLE: if (in_valid && tex_now) begin
@@ -271,67 +335,18 @@ module m2_span_tex #(
           tex_r   <= in_tex;
           ooz_r   <= in_ooz;                                  // R339
           doz_r   <= 32'(in_doozdx) <<< 8;
-          st      <= T_RCP1;
+          dv_first <= 1'b1; dv_age <= 3'd0;
+          st      <= T_WARM;
         end
 
-        // R339: normalise 1/z and take the seed. m lands in [2^23, 2^24) so the
-        // top seven mantissa bits index the table; the implicit leading one is
-        // not stored, which is what makes 128 entries enough.
-        T_RCP1: begin
-          automatic logic [5:0]  t = top_bit(ooz_r);
-          automatic logic [31:0] m = (t >= 6'd23) ? (ooz_r >> (t - 6'd23))
-                                                  : (ooz_r << (6'd23 - t));
-          rcp_e  <= t;
-          m_r    <= m;
-          rcp_r  <= rcp_tab[m[22:16]];
-          st     <= T_RCP2;
-        end
-
-        // One Newton step, then the divide itself as a multiply.
-        //   r1 = r0 * (2S - m*r0) / S          S = 2^47
-        //   u  = (uoz * r1) >> (t - 7)
-        // THE OUTPUT SHIFT IS BOUNDED, not general. A 64-bit barrel shifter
-        // over all 32 positions is ~200 ALM; 1/z reaching here is a 16.16 of a
-        // value that oz_norm capped at bit 14, so t is 23..31 in every case
-        // that draws, and anything below that is a vertex so far away the
-        // coordinate saturates regardless.
-        // R433: ONE MULTIPLY A CYCLE. As written this state did FOUR chained
-        // multiplies in one: m_r*rcp_r, then rcp_r*nd, then u_r*r1 and v_r*r1,
-        // with two variable shifts and two saturates behind them. On clk_sys
-        // that measured
-        //   m2_span_tex|rcp_r[0] -> m2_span_tex|vq_r[26]   -12.719 ns, TNS -3,137
-        // which is 32 ns of logic on a 20 ns clock -- the single reason the
-        // parked work never fitted or closed, and the same shape R418, R420 and
-        // R425 each had to take apart. R341 tried to fix the AREA by narrowing
-        // these operands and lost three DSP blocks doing it; the depth was
-        // never the thing it addressed.
-        //
-        // Two extra cycles a PIXSTEP group, in a walk that already waits on the
-        // texel fetch.
-        T_RCP2: begin
-          // The Newton result is 25 bits by construction: r1 ~ 2^47/m with m in
-          // [2^23, 2^24), so r1 lands in [2^23, 2^24]. The wide intermediate is
-          // the product, not the answer.
-          // THE SHIFT GOES INSIDE THE PRODUCT. Written as r0*(2S - m*r0)/S with
-          // S = 2^47 it overflows: r0 is ~2^24 and the bracket ~2^47, so the
-          // product is ~2^71 and 64 bits silently truncate it to zero. Folding
-          // 24 of the 47 in first keeps every intermediate under 2^48.
-          nd_r <= 32'((((64'd1 <<< 48) - (64'(m_r) * 64'(rcp_r))) >> 24));
-          st   <= T_RCP3;
-        end
-
-        T_RCP3: begin
-          r1_r <= 25'((64'(rcp_r) * 64'(nd_r)) >> 23);
-          st   <= T_RCP4;
-        end
-
-        T_RCP4: begin
-          automatic logic [4:0]  sh = (rcp_e < 6'd23) ? 5'd16 : 5'(rcp_e - 6'd7);
-          automatic logic [63:0] pu = 64'(u_r) * 64'(r1_r);
-          automatic logic [63:0] pv = 64'(v_r) * 64'(r1_r);
-          uq_r <= sat32(pu >> sh);
-          vq_r <= sat32(pv >> sh);
-          st   <= T_FETCH;
+        // R446: the span's FIRST group is the only one that waits. Every
+        // group after it was computed while the previous texel was in flight.
+        T_WARM: if (dv_age >= 3'd4) begin
+          uq_r     <= d4_u;
+          vq_r     <= d4_v;
+          dv_first <= 1'b0;
+          dv_age   <= 3'd0;
+          st       <= T_FETCH;
         end
 
         T_FETCH: begin
@@ -348,7 +363,7 @@ module m2_span_tex #(
           end
         end
 
-        T_EMIT: if (!e_valid || out_ready) begin
+        T_EMIT: if ((!e_valid || out_ready) && dv_age >= 3'd4) begin
           e_valid <= !tx_skip;                  // R326: transparent texel
           e_x     <= x_r;
           e_x1    <= ((x_r + 32'(PIXSTEP) - 32'sd1) > x1_r)
@@ -377,10 +392,13 @@ module m2_span_tex #(
             // $clog2 is correct for any POWER OF TWO. A non-power-of-two step
             // (6) would need a real multiply on this path, for nothing that 8
             // does not already give.
-            u_r   <= u_r + (du_r <<< $clog2(PIXSTEP));
-            v_r   <= v_r + (dv_r <<< $clog2(PIXSTEP));
-            ooz_r <= ooz_r + (doz_r <<< $clog2(PIXSTEP));   // R339
-            st    <= T_RCP1;                                // divide again
+            u_r   <= u_nxt;
+            v_r   <= v_nxt;
+            ooz_r <= ooz_nxt;                               // R339
+            uq_r  <= d4_u;                                  // R446: already done
+            vq_r  <= d4_v;
+            dv_age <= 3'd0;
+            st    <= T_FETCH;                               // no divide in the way
           end
         end
 

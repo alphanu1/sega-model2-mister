@@ -19031,3 +19031,48 @@ R441-R444 in history, simulation-green and hardware-unproven. It is worth
 returning to, because 179 -> 127 is a third of the fill, but not by flashing
 more seeds -- by finding an instrument that can see what differs between s78's
 one good frame and its second.
+
+---
+
+**R446 -- THE DIVIDE WAS IN FRONT OF THE FETCH, NOT BESIDE IT. THAT IS WHY
+BANDS FELL TO ONE OR TWO.**
+
+Ben, on the board: only one or two bands of fifty draw for most of the time.
+The affine build managed 41-85%. Orientation did not cost 1.5x; it cost
+something like 20x, and the reason is structural rather than arithmetic.
+
+The walk ran, **for every PIXSTEP group**:
+
+```
+  T_RCP1 -> T_RCP2 -> T_RCP3 -> T_RCP4 -> T_FETCH -> T_EMIT -> back to T_RCP1
+```
+
+Four cycles of divide SERIALISED AHEAD of every texel fetch, on spans about 125
+groups wide. Before orientation a group was `T_FETCH -> T_EMIT`.
+
+**1/z IS LINEAR, SO THE NEXT GROUP'S VALUE IS ALREADY KNOWN.** The four states
+become a pipeline clocked every cycle on `u_nxt`/`ooz_nxt`, so group N+1's
+coordinates are computed WHILE group N's texel is in flight. Only the first
+group of a span waits, once, in T_WARM. This is the structure R425 had before
+the parked implementation replaced it -- R339 did the arithmetic better and the
+sequencing worse.
+
+**THE ALIGNMENT IS THE PART TO GET RIGHT.** The pipeline is four deep, so the
+coordinate multiplied at stage 4 must be the one that entered with the 1/z now
+emerging -- three cycles back, u_h3, not the current u. Pairing a texel
+coordinate with another pixel's depth is exactly the fault this change exists to
+avoid introducing, and it would look like a subtly wrong texture rather than a
+failure.
+
+`dv_age` counts cycles since the operands moved and gates the advance. It is
+incremented OUTSIDE the branch that waits on it -- R424 made that mistake and
+deadlocked the walk.
+
+span_tex 52/0, raster3d 8/0, raster_fill 152,369/0.
+
+**HONEST SIZING.** A group costs the divide plus the texel fetch, and at the
+measured 55.9% hit rate the fetch dominates. Removing four cycles from a
+~19-cycle group is worth perhaps 1.2-1.3x on the walk, not 3x, and less end to
+end. It is worth doing because a divide has no business in front of a fetch --
+not because it closes the gap. The gap is 1-2 bands of 50 and nothing found so
+far is the size of it.
