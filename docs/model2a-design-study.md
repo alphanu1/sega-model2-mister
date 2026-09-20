@@ -19139,3 +19139,39 @@ Cost: one more cycle of warm-up per SPAN. Nothing per group, which is the whole
 point of the structure.
 
 span_tex 52/0, raster3d 8/0, raster_fill 152,362/0.
+
+---
+
+**R449 -- WHY EVERY BUILD OF THE RECIPROCAL PLANE FIT DIED: TWO PRIORITY
+ENCODERS AND TWO SHIFTERS IN ONE CYCLE.**
+
+Six seeds of R441/R442/R444 failed and three explanations were offered and
+discarded -- the ROM synthesising to zeros, ALM pressure, the seed lottery. None
+was measured. The timing report on s78, the one build that half-ran, says it
+outright:
+
+```
+  clk_sys -9.944:  m2_raster_fill|det_r[4] -> m2_persp_recip|u_denr|s1_r0[6]
+```
+
+That path is: `det_r` -> the determinant's priority encode -> a variable shift
+-> an abs -> **the reciprocal's own priority encode** -> another shift -> the
+table read. Ten nanoseconds over on a twenty nanosecond clock.
+
+**AND R441 CAUSED IT DELIBERATELY.** The reciprocal needs two cycles, and
+`den_sh` only becomes valid one state before it is read, so R441 fed the unit
+from the COMBINATIONAL `den_sh_c` to buy a cycle -- stacking the determinant's
+normalise in front of the reciprocal's. The comment written at the time says
+"Identical in value: den_sh is den_sh_c registered", which was true and missed
+the point entirely.
+
+`den_a` is registered in S_PF_N now, and S_PF_NRM takes two cycles so the unit
+settles. One cycle a quad, against the 86 the change saves: 179 -> 128 cycles to
+retire, and 152,369 checks still pass with 0 fails.
+
+**SEVENTH INSTANCE.** R418, R420, R424, R425, R433, R446 and this. Every one is
+arithmetic chained into more arithmetic inside a single cycle, and every one was
+written while thinking about the dataflow. The tell is always the same in the
+report: a path from a register in one module to a register inside a submodule it
+feeds. **When a change adds a module to an existing path, the path is now BOTH
+modules' logic -- that is the thing to check before building, not after.**
