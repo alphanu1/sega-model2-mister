@@ -408,6 +408,20 @@ module m2_raster_fill (
   // So the operands are registered and the product computed in ONE place. Each
   // state presents the next numerator and latches the previous gradient, which
   // costs one extra state at the end -- S_PF_B already exists and does it.
+  // R450: THE PRODUCT IS REGISTERED BEFORE pf_scale SEES IT.
+  //
+  // R449 fixed the reciprocal's INPUT path and the output side then showed:
+  //   m2_persp_recip|out_q[10] -> m2_raster_fill|dvdx[0]   -1.825 on clk_sys
+  // a 64-bit multiply chained straight into pf_scale's 40-bit bidirectional
+  // barrel shift and saturate. Same defect, other end of the same module.
+  //
+  // mul_q_r/mul_zr hold the product for a cycle, so each gradient is now
+  // present-operands, multiply, scale: three stages rather than two. S_PF_B
+  // takes two cycles because the bases need all six gradients and the last
+  // one only lands on its first.
+  logic signed [31:0] mul_q_r;
+  logic        [5:0]  mul_zr;
+  logic               b_wait;
   logic               nrm_wait;   // R449
   logic signed [31:0] mul_n;
   logic        [5:0]  mul_z;
@@ -843,6 +857,7 @@ module m2_raster_fill (
           nxo_z <= pf_clz(nxo); nyo_z <= pf_clz(nyo);   // R441
           mul_n <= pf_shift(nxu, pf_clz(nxu));         // R442: prime the pipe
           mul_z <= pf_clz(nxu);
+          mul_q_r <= '0; mul_zr <= 6'd0; b_wait <= 1'b0;   // R450
           state <= S_PF_Q1;
         end
 
@@ -851,25 +866,28 @@ module m2_raster_fill (
         // R442: present the next numerator, latch the previous gradient.
         S_PF_Q1: begin
           mul_n <= pf_shift(nyu, nyu_z); mul_z <= nyu_z;
-          dudx  <= pf_scale(mul_q, mul_z);
+          mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
           state <= S_PF_Q1W;
         end
 
         S_PF_Q1W: begin
           mul_n <= pf_shift(nxv, nxv_z); mul_z <= nxv_z;
-          dudy  <= pf_scale(mul_q, mul_z);
+          mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
+          dudx  <= pf_scale(mul_q_r, mul_zr);
           state <= S_PF_Q2;
         end
 
         S_PF_Q2: begin
           mul_n <= pf_shift(nyv, nyv_z); mul_z <= nyv_z;
-          dvdx  <= pf_scale(mul_q, mul_z);
+          mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
+          dudy  <= pf_scale(mul_q_r, mul_zr);
           state <= S_PF_Q2W;
         end
 
         S_PF_Q2W: begin
           mul_n <= pf_shift(nxo, nxo_z); mul_z <= nxo_z;
-          dvdy  <= pf_scale(mul_q, mul_z);
+          mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
+          dvdx  <= pf_scale(mul_q_r, mul_zr);
           state <= S_PF_Q3;
         end
 
@@ -882,18 +900,24 @@ module m2_raster_fill (
         // R337 wrote before R418 existed.
         S_PF_Q3: begin
           mul_n <= pf_shift(nyo, nyo_z); mul_z <= nyo_z;
-          dodx  <= pf_scale(mul_q, mul_z);
+          mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
+          dvdy  <= pf_scale(mul_q_r, mul_zr);
           state <= S_PF_Q3W;
         end
 
         S_PF_Q3W: begin
-          dody  <= pf_scale(mul_q, mul_z);
+          mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
+          dodx  <= pf_scale(mul_q_r, mul_zr);
           state <= S_PF_B;
         end
 
         // The plane is held as its value at screen (0,0) plus two gradients,
         // so a span costs two multiplies and no state.
-        S_PF_B: begin
+        S_PF_B: if (!b_wait) begin
+          dody   <= pf_scale(mul_q_r, mul_zr);   // R450: the last gradient
+          b_wait <= 1'b1;
+        end else begin
+          b_wait <= 1'b0;
           base_u <= 32'({19'd0, qu[fa]} <<< 16)
                   - ((32'(dudx * sx[fa])) <<< 8)
                   - ((32'(dudy * sy[fa])) <<< 8);

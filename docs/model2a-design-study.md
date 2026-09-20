@@ -19175,3 +19175,37 @@ written while thinking about the dataflow. The tell is always the same in the
 report: a path from a register in one module to a register inside a submodule it
 feeds. **When a change adds a module to an existing path, the path is now BOTH
 modules' logic -- that is the thing to check before building, not after.**
+
+---
+
+**R450 -- THE OTHER END OF THE SAME MODULE.**
+
+R449 fixed the reciprocal's INPUT path and s89 fitted and ran -- and it is the
+fastest build this core has produced:
+
+```
+  s52   93,288 textured pixels/frame   27,232 fetches   50.5% hit
+  s87  126,936                         48,379           60.0%     (walk overlap)
+  s89  173,268                         63,369           71.9%     (+ plane fit)
+```
+
+Nearly double s52. Then it froze, and the timing report named the output side:
+
+```
+  clk_sys -1.825:  m2_persp_recip|out_q[10] -> m2_raster_fill|dvdx[0]
+```
+
+A 64-bit multiply chained straight into pf_scale's 40-bit bidirectional barrel
+shift and saturate. **The same defect at the other end of the same module, in
+the same change.** Fixing one end of a path and not looking at the other is how
+this cost two builds instead of one.
+
+`mul_q_r`/`mul_zr` hold the product for a cycle: each gradient is now present-
+operands, multiply, scale. S_PF_B takes two cycles because the bases need all
+six gradients and the last lands on its first. 179 -> 129 cycles to retire,
+152,369 checks 0 fails.
+
+**EIGHTH INSTANCE.** R418, R420, R424, R425, R433, R446, R449, R450. The rule
+that would have caught every one: **after registering a signal to shorten a
+path, look at what the register now feeds.** The logic does not disappear; it
+moves to the other side.
