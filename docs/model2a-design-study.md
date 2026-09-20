@@ -18986,3 +18986,48 @@ has a working precedent in the tree, copy the precedent, not the textbook.
 **AND THE WARNING WAS THERE ON EVERY BUILD.** Two seeds were flashed and two
 black screens diagnosed before the map report was read. Grepping `10030` and
 `276004` costs nothing and would have caught this before the first flash.
+
+---
+
+**R445 -- THE RECIPROCAL PLANE FIT IS BIT-EXACT IN SIMULATION AND DOES NOT WORK
+ON THE BOARD. SIX SEEDS.**
+
+R441/R442/R444 on hardware:
+
+```
+  s75, s76, s77, s79   dead from boot   (tgp 0000, no SDRAM, no walks)
+  s78                  boots, renders ONE textured frame (114,996 pixels,
+                       texel cache 55.9% of 49,946 fetches), then the TGP
+                       parks at 00B9 and the list is held 36 frames
+  s52 (without it)     runs, 94,400 textured pixels a frame
+```
+
+So the arithmetic is right -- s78 proves the table and the gradients work, which
+also kills R444's "the ROM synthesised to zeros" theory. **That theory was
+wrong**: the warning it rested on (`10030: no driver or initial value` on
+`rtab.data_a`) is produced identically by `m2_recip_rom`, which has worked in
+this design for months. It is the unused write port of a ROM and means nothing.
+
+**WHAT IS ACTUALLY KNOWN.**
+
+- The change is bit-exact in simulation: 152,369 checks, 0 fails, through the
+  four-depth perspective cases and the degenerate 1/z = 0 ones.
+- It saves real cycles: 179 -> 127 to retire a textured quad, measured.
+- It is 99% ALM and one of six seeds half-worked. The version WITHOUT it
+  (s52, R436) is reliable at the same 99%.
+- s78's failure mode -- TGP parked at 00B9 after one frame -- is the same PC
+  s31 parked at, which predates all the speed work.
+
+**WHAT IS NOT KNOWN**, and must not be guessed at again: why. Three theories
+have died today on this same code path (clk_mem corruption, ALM pressure, the
+ROM contents), each plausible, each built from whichever evidence was in front
+of me, and each refuted by a measurement that already existed. The pattern is
+consistent enough to name: **a failing board invites a mechanism, and the
+mechanism arrives before the measurement that would test it.**
+
+**THE STATE THAT MATTERS.** `orientation-works` (6bfa51c, seed 52) is on the
+board and renders perspective-correct textures. The reciprocal work is at
+R441-R444 in history, simulation-green and hardware-unproven. It is worth
+returning to, because 179 -> 127 is a third of the fill, but not by flashing
+more seeds -- by finding an instrument that can see what differs between s78's
+one good frame and its second.
