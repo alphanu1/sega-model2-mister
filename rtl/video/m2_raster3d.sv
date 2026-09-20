@@ -89,7 +89,11 @@ module m2_raster3d #(
   output logic [15:0]     dbg_texlost,
   output logic [15:0] dbg_oz0, dbg_oz1, dbg_oz2, dbg_oz3,   // R334
   output logic [15:0] dbg_texsweep,
-  output logic [23:0] dbg_fill_busy,   // R443
+  // R436: the fill's and the walk's longest-dwelt states
+  output logic [4:0]  dbg_fill_hot,
+  output logic [15:0] dbg_fill_hotcyc,
+  output logic [2:0]  dbg_walk_hot,
+  output logic [15:0] dbg_walk_hotcyc,
 
   output logic [15:0] dbg_quads,
   output logic [15:0] dbg_dropped,
@@ -354,7 +358,7 @@ module m2_raster3d #(
     .span_ooz(fl_span_ooz), .span_doozdx(fl_span_doozdx),     // R337
     .span_tex(fl_span_tex), .span_tex_en(fl_span_tex_en),
     .quad_done(fl_quad_done), .line_case(fl_line_case),
-    .dbg_busy(dbg_fill_busy), .frame_start(frame_start)   // R443
+    .dbg_hot(dbg_fill_hot), .dbg_hotcyc(dbg_fill_hotcyc)   // R436
   );
 
   // ------------------------------------------------- R275: the texture walk
@@ -408,7 +412,8 @@ module m2_raster3d #(
     .out_col(tx_span_col), .out_moire(tx_span_moire),
     .tx_req(tex_req), .tx_ack(tex_ack), .tx_tex(tex_state),
     .tx_u(tex_u), .tx_v(tex_v), .tx_texel(tex_texel),
-    .dbg_texpix(dbg_texpix), .dbg_texnz(dbg_texnz)
+    .dbg_texpix(dbg_texpix), .dbg_texnz(dbg_texnz),
+    .dbg_hot(dbg_walk_hot), .dbg_hotcyc(dbg_walk_hotcyc)   // R436
   );
 
   // R280: THE SWEEP HAPPENS ONCE A FRAME, NOT ONCE A WRITE.

@@ -138,18 +138,13 @@ module m2_raster_fill (
   // taken. span_valid is the only authority on span delivery; a consumer that
   // stops listening at quad_done loses the last scanline.
   output logic               quad_done,
-  // R443: ONE COUNTER. The smallest thing that still answers a question.
-  //
-  // R436/R437 tracked the longest dwell per state -- a comparator tree and two
-  // register files -- and the design is 5 LABs from fitting, so the probe was
-  // costing more than the change it was meant to measure. It also answered the
-  // wrong thing: "longest dwell" is always S_IDLE.
-  //
-  // Cycles NOT in S_IDLE, per frame, is enough. The frame length is known, so
-  // busy tells us starved as well, and where the fill's time goes follows from
-  // comparing it against the quad count the stream already carries.
-  output logic [23:0]        dbg_busy,
-  input  logic               frame_start,
+  // R436: WHERE IT STOPS, not where I think it stops. Four board builds of
+  // perspective have wedged and every diagnosis so far has been inferred from
+  // the TGP four stages upstream. dbg_hot is the state this unit spent longest
+  // in since the last frame_start, and dbg_hotcyc is how long. If the fill is
+  // the thing that stalls, this names the state outright.
+  output logic [4:0]         dbg_hot,
+  output logic [15:0]        dbg_hotcyc,
   output logic               line_case    // that quad was a wireframe, not filled
 );
 
@@ -304,7 +299,6 @@ module m2_raster_fill (
   // cycle earlier; the shift then stands alone. One extra cycle per quad, not
   // per pixel.
   logic [5:0] nxu_z, nyu_z, nxv_z, nyv_z;
-  logic [5:0] nxo_z, nyo_z;   // R441: R418's treatment for the 1/z round
   logic               pf_second;         // the fit is retrying on vertices 0,2,3
   logic               pf_x;              // this divide round is the x gradient
   logic signed [31:0] q_num_a, q_num_b;
@@ -363,70 +357,6 @@ module m2_raster_fill (
   // quotient comes back, so the encode costs nothing where it is done once.
   logic [5:0] den_sh;
   wire signed [31:0] den_n = det_r >>> den_sh;
-
-  // R441: SIX DIVIDES BY THE SAME NUMBER BECOME ONE RECIPROCAL AND SIX
-  // MULTIPLIES.
-  //
-  // Every plane-fit divide assigns `den_n` -- lines for dudx, dudy, dvdx, dvdy
-  // and, since orientation, dodx and dody. m2_raster_div is radix-4 restoring,
-  // 16 cycles, and its 256-entry table only helps for |den| < 256. den_sh
-  // normalises the determinant to SIXTEEN significant bits, so |den_n| sits
-  // around 2^15 and every one of the six takes the slow path: 96 cycles a
-  // textured quad, of the 179 that R430 measured a quad to retire.
-  //
-  // den_n at 16 bits is exactly m2_persp_recip's input range, and that unit is
-  // already exhaustively verified -- all 65,535 inputs, worst relative error
-  // 0.0072%. One instance, two cycles, and each gradient is then a multiply.
-  //
-  // The dividers STAY: the edge-slope walk still uses them, and its denominator
-  // is a scanline count, not this one.
-  // FED FROM THE COMBINATIONAL den_sh_c, NOT THE REGISTERED den_sh. The unit
-  // needs two cycles and `den_sh` only becomes valid entering S_PF_NRM, which
-  // is one state before S_PF_Q1 -- so the first gradient read a STALE
-  // reciprocal and saturated pf_scale at 127.996. det_r is settled a state
-  // earlier, so this form is valid from S_PF_N and the answer is ready in time.
-  // Identical in value: den_sh is den_sh_c registered.
-  wire signed [31:0] den_c = det_r >>> den_sh_c;
-  wire [15:0] den_a  = den_c[31] ? 16'(-den_c) : 16'(den_c);
-  wire [31:0] den_rcp;
-  m2_persp_recip u_denr (.clk(clk), .rst_n(rst_n), .in_d(den_a), .out_q(den_rcp));
-
-  // R442: ONE MULTIPLIER, MUXED -- NOT SIX.
-  //
-  // R441 called rquo() from each of the six S_PF_Q* states and Quartus built a
-  // multiplier for every one: +900 ALM and +11 DSP, and the fit failed at 101%.
-  // AUTO_RESOURCE_SHARING did not fold them even though the states are mutually
-  // exclusive.
-  //
-  // So the operands are registered and the product computed in ONE place. Each
-  // state presents the next numerator and latches the previous gradient, which
-  // costs one extra state at the end -- S_PF_B already exists and does it.
-  logic signed [31:0] mul_n;
-  logic        [5:0]  mul_z;
-  wire signed  [31:0] mul_q = rquo(mul_n, den_rcp, den_n[31]);
-
-  // num / den_n, as num * (2^30/|den_n|) >> 30 with the sign put back. One
-  // multiply, and ONE PER STATE -- the six below are sequenced, not parallel,
-  // so this is a single multiplier reused six times rather than six of them.
-  function automatic logic signed [31:0] rquo(input logic signed [31:0] num,
-                                              input logic [31:0] rcp,
-                                              input logic neg);
-    logic signed [63:0] a64, b64, p;
-    logic signed [31:0] q;
-    begin
-      // BOTH OPERANDS WIDENED FIRST. Verilog sizes a multiply by its OPERANDS,
-      // not by what it is assigned to: written `$signed(num) * $signed({1'b0,
-      // rcp})` the product is computed at 33 bits and truncated before it ever
-      // reaches this 64-bit variable. The gradients then saturate pf_scale at
-      // 127.996 -- and the fuzz corpus happened to miss it until the R430 test
-      // was inserted ahead of it and reshuffled the RNG.
-      a64 = 64'(num);
-      b64 = {32'd0, rcp};
-      p   = a64 * b64;
-      q   = 32'(p >>> 30);
-      rquo = neg ? -q : q;
-    end
-  endfunction
 
   function automatic logic [5:0] pf_clz(input logic signed [31:0] n);
     logic [31:0] a;
@@ -717,8 +647,7 @@ module m2_raster_fill (
       tex_ok <= 1'b0; pf_second <= 1'b0; tex_r <= '0;
       det_r <= '0; den_sh <= 6'd0; nxu <= '0; nyu <= '0; nxv <= '0; nyv <= '0;
       q_num_a <= '0; q_num_b <= '0; q_z_a <= '0; q_z_b <= '0;
-      nxu_z <= '0; nyu_z <= '0; nxv_z <= '0; nyv_z <= '0;
-      nxo_z <= '0; nyo_z <= '0; mul_n <= '0; mul_z <= 6'd0;   // R441/R442
+      nxu_z <= '0; nyu_z <= '0; nxv_z <= '0; nyv_z <= '0;   // R418
       dudx <= 16'sd0; dudy <= 16'sd0; dvdx <= 16'sd0; dvdy <= 16'sd0;
       for (int k = 0; k < 4; k++) begin qu[k] <= '0; qv[k] <= '0; qoz[k] <= '0; end
       oz_i <= 2'd0; oz_emax <= 8'd0; dodx <= 16'sd0; dody <= 16'sd0;
@@ -819,60 +748,71 @@ module m2_raster_fill (
         end
 
         // R418: count once, here, for all four numerators.
-        // R441: the reciprocal needs two cycles and this state plus the one
-        // after it give them, so it costs nothing extra.
         S_PF_NRM: begin
           nxu_z <= pf_clz(nxu); nyu_z <= pf_clz(nyu);
           nxv_z <= pf_clz(nxv); nyv_z <= pf_clz(nyv);
-          nxo_z <= pf_clz(nxo); nyo_z <= pf_clz(nyo);   // R441
-          mul_n <= pf_shift(nxu, pf_clz(nxu));         // R442: prime the pipe
-          mul_z <= pf_clz(nxu);
           state <= S_PF_Q1;
         end
 
-        // R441: one multiply a state. No handshake, no waiting: the quotient
-        // is ready the cycle after the operands are.
-        // R442: present the next numerator, latch the previous gradient.
-        S_PF_Q1: begin
-          mul_n <= pf_shift(nyu, nyu_z); mul_z <= nyu_z;
-          dudx  <= pf_scale(mul_q, mul_z);
-          state <= S_PF_Q1W;
+        S_PF_Q1: if (div_ready && !div_start && divb_ready && !divb_start) begin
+          div_num   <= pf_shift(nxu, nxu_z);   // R418
+          div_den   <= den_n;
+          div_start <= 1'b1;
+          divb_num   <= pf_shift(nyu, nyu_z);   // R418
+          divb_den   <= den_n;
+          divb_start <= 1'b1;
+          q_num_a <= nxu; q_z_a <= nxu_z;
+          q_num_b <= nyu; q_z_b <= nyu_z;
+          pf_a <= 1'b0; pf_b <= 1'b0;
+          state   <= S_PF_Q1W;
         end
 
         S_PF_Q1W: begin
-          mul_n <= pf_shift(nxv, nxv_z); mul_z <= nxv_z;
-          dudy  <= pf_scale(mul_q, mul_z);
-          state <= S_PF_Q2;
+          if (div_valid)  begin dudx <= pf_scale(div_quo,  q_z_a); pf_a <= 1'b1; end
+          if (divb_valid) begin dudy <= pf_scale(divb_quo, q_z_b); pf_b <= 1'b1; end
+          if ((pf_a || div_valid) && (pf_b || divb_valid)) state <= S_PF_Q2;
         end
 
-        S_PF_Q2: begin
-          mul_n <= pf_shift(nyv, nyv_z); mul_z <= nyv_z;
-          dvdx  <= pf_scale(mul_q, mul_z);
-          state <= S_PF_Q2W;
+        S_PF_Q2: if (div_ready && !div_start && divb_ready && !divb_start) begin
+          div_num   <= pf_shift(nxv, nxv_z);   // R418
+          div_den   <= den_n;
+          div_start <= 1'b1;
+          divb_num   <= pf_shift(nyv, nyv_z);   // R418
+          divb_den   <= den_n;
+          divb_start <= 1'b1;
+          q_num_a <= nxv; q_z_a <= nxv_z;   // R418
+          q_num_b <= nyv; q_z_b <= nyv_z;   // R418
+          pf_a <= 1'b0; pf_b <= 1'b0;
+          state   <= S_PF_Q2W;
         end
 
         S_PF_Q2W: begin
-          mul_n <= pf_shift(nxo, nxo_z); mul_z <= nxo_z;
-          dvdy  <= pf_scale(mul_q, mul_z);
-          state <= S_PF_Q3;
+          if (div_valid)  begin dvdx <= pf_scale(div_quo,  q_z_a); pf_a <= 1'b1; end
+          if (divb_valid) begin dvdy <= pf_scale(divb_quo, q_z_b); pf_b <= 1'b1; end
+          if ((pf_a || div_valid) && (pf_b || divb_valid)) state <= S_PF_Q3;
         end
 
         // R337: THE 1/z PLANE. Same shape as the two above and it reuses the
         // same pair of dividers -- m2_raster_div does not pipeline, so this is
         // two more divides of latency per quad, which is the real cost of
         // perspective correction and the thing to watch in `ready ms`.
-        // R441: and the 1/z plane the same way. This also takes the clz out of
-        // the same cycle as the shift, which is R418's fix applied to the round
-        // R337 wrote before R418 existed.
-        S_PF_Q3: begin
-          mul_n <= pf_shift(nyo, nyo_z); mul_z <= nyo_z;
-          dodx  <= pf_scale(mul_q, mul_z);
-          state <= S_PF_Q3W;
+        S_PF_Q3: if (div_ready && !div_start && divb_ready && !divb_start) begin
+          div_num   <= pf_norm(nxo);
+          div_den   <= den_n;
+          div_start <= 1'b1;
+          divb_num   <= pf_norm(nyo);
+          divb_den   <= den_n;
+          divb_start <= 1'b1;
+          q_num_a <= nxo; q_z_a <= pf_clz(nxo);
+          q_num_b <= nyo; q_z_b <= pf_clz(nyo);
+          pf_a <= 1'b0; pf_b <= 1'b0;
+          state   <= S_PF_Q3W;
         end
 
         S_PF_Q3W: begin
-          dody  <= pf_scale(mul_q, mul_z);
-          state <= S_PF_B;
+          if (div_valid)  begin dodx <= pf_scale(div_quo,  q_z_a); pf_a <= 1'b1; end
+          if (divb_valid) begin dody <= pf_scale(divb_quo, q_z_b); pf_b <= 1'b1; end
+          if ((pf_a || div_valid) && (pf_b || divb_valid)) state <= S_PF_B;
         end
 
         // The plane is held as its value at screen (0,0) plus two gradients,
@@ -1133,14 +1073,18 @@ module m2_raster_fill (
 
   always_comb in_ready = (state == S_IDLE);
 
-  // R443: one accumulator, one latch. No comparators, no per-state storage.
-  logic [23:0] busy_acc;
+  // R436: one comparator, one counter, two registers. Saturating, so a genuine
+  // wedge pins at 0xFFFF rather than wrapping and reading as healthy.
+  logic [4:0]  st_d;
+  logic [15:0] st_cyc;
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      busy_acc <= '0; dbg_busy <= '0;
+      st_d <= S_IDLE; st_cyc <= 16'd0; dbg_hot <= 5'd0; dbg_hotcyc <= 16'd0;
     end else begin
-      if (state != S_IDLE) busy_acc <= busy_acc + 24'd1;
-      if (frame_start) begin dbg_busy <= busy_acc; busy_acc <= '0; end
+      st_d <= state;
+      if (state != st_d) st_cyc <= 16'd0;
+      else if (!(&st_cyc)) st_cyc <= st_cyc + 16'd1;
+      if (st_cyc > dbg_hotcyc) begin dbg_hotcyc <= st_cyc; dbg_hot <= st_d; end
     end
   end
 

@@ -99,7 +99,12 @@ module m2_span_tex #(
   // comes out FLAT AND FULL BRIGHTNESS -- indistinguishable, by eye, from a
   // texture path that does nothing. tb_m2_boot sees no CPU write to either
   // sheet in 20 M instructions, so this is not a hypothetical.
-  output logic [31:0]        dbg_texnz
+  output logic [31:0]        dbg_texnz,
+  // R446: kept so m2_raster3d and Model2.sv stay byte-identical to the build
+  // this is being tested against. The current state costs nothing to expose;
+  // the dwell counter that used to sit behind it is gone (R443).
+  output logic [2:0]         dbg_hot,
+  output logic [15:0]        dbg_hotcyc
 );
 
   typedef enum logic [2:0] { T_IDLE, T_WARM, T_FETCH, T_EMIT, T_DRAIN } st_t;
@@ -251,6 +256,8 @@ module m2_span_tex #(
   // the fill saw before this unit existed. A textured one is accepted at once
   // and walked from the registers.
   assign in_ready  = idle && (tex_now || out_ready);
+  assign dbg_hot    = st;          // R446: free, no counter behind it
+  assign dbg_hotcyc = 16'd0;
 
   // R446: the group after this one. Stable for as long as the FSM sits in
   // T_FETCH/T_EMIT, which is what lets the pipeline below settle on it.

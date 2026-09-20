@@ -1069,27 +1069,8 @@ m2_sdram_x2 #(.NP(NPORTS), .AW(SDR_AW)) u_sdram_x2 (
 wire [NPORTS-1:0] sdr_pend, sdr_infl;
 // TWENTY-ONE BITS: a 16.7 ms frame is 1.67 M cycles of the 100 MHz clock and
 // a 20-bit counter wraps at 1.05 M -- which would read as a quiet frame.
-// R440: bw_busy/cpu/geo/chr removed -- five counters and five latches
-// incremented every cycle, and four of the five were never read
-// (Verilator: "Signal is not used"). Only the texel one reaches the
-// stream. The contention figures this core reported for months came
-// off those dead slots; see R438.
-logic [20:0] bw_tex;
-logic [20:0] bwl_tex;
-// R439: THE SAME TEST, ONE COUNTER INSTEAD OF ELEVEN.
-//
-// R438 gave every port its own 16-bit hold counter and comparator. That is 11
-// counters updated every cycle, and it pushed the design straight through the
-// wall: "Fitter requires 4193 LABs, the device contains only 4191". Three
-// builds and six flashes were spent measuring with a probe that does not fit.
-//
-// The question does not need per-port state. A stuck port leaves sdr_infl
-// NON-ZERO AND UNCHANGING, because nothing else can be granted while it holds
-// and nothing clears it. So: one counter of consecutive cycles sdr_infl is
-// non-zero and identical to last cycle, and a latch of the vector itself.
-// Saturated means stuck, and infl_stuck_l names which port by its bit.
-logic [15:0] infl_run, infl_run_l;
-logic [NPORTS-1:0] infl_d, infl_stuck_l;
+logic [20:0] bw_busy, bw_cpu, bw_geo, bw_tex, bw_chr;
+logic [20:0] bwl_busy, bwl_cpu, bwl_geo, bwl_tex, bwl_chr;
 logic        bw_tog, bw_tog_m, bw_tog_m2, bw_tog_m3;
 always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	if (!mem_rst_n)                bw_tog <= 1'b0;
@@ -1097,24 +1078,21 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 end
 always_ff @(posedge clk_mem or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
-		bw_tex <= '0;
-		bwl_tex <= '0;
-		infl_run <= '0; infl_run_l <= '0; infl_d <= '0; infl_stuck_l <= '0;   // R439
+		bw_busy <= '0; bw_cpu <= '0; bw_geo <= '0; bw_tex <= '0; bw_chr <= '0;
+		bwl_busy <= '0; bwl_cpu <= '0; bwl_geo <= '0; bwl_tex <= '0; bwl_chr <= '0;
 		bw_tog_m <= 1'b0; bw_tog_m2 <= 1'b0; bw_tog_m3 <= 1'b0;
 	end else begin
 		bw_tog_m <= bw_tog; bw_tog_m2 <= bw_tog_m; bw_tog_m3 <= bw_tog_m2;
 		if (bw_tog_m3 != bw_tog_m2) begin
-			if (infl_run > infl_run_l) begin               // R439
-				infl_run_l <= infl_run; infl_stuck_l <= infl_d;
-			end
-			bwl_tex <= bw_tex;
-			bw_tex  <= '0;
+			bwl_busy <= bw_busy; bwl_cpu <= bw_cpu; bwl_geo <= bw_geo;
+			bwl_tex  <= bw_tex;  bwl_chr <= bw_chr;
+			bw_busy <= '0; bw_cpu <= '0; bw_geo <= '0; bw_tex <= '0; bw_chr <= '0;
 		end else begin
-			// R439
-			infl_d <= sdr_infl;
-			if (sdr_infl == '0 || sdr_infl != infl_d) infl_run <= 16'd0;
-			else if (!(&infl_run))                    infl_run <= infl_run + 16'd1;
+			if (|sdr_infl)                      bw_busy <= bw_busy + 21'd1;
+			if (sdr_pend[1]  && !sdr_infl[1])   bw_cpu  <= bw_cpu  + 21'd1;
+			if (sdr_pend[4]  && !sdr_infl[4])   bw_geo  <= bw_geo  + 21'd1;
 			if (sdr_pend[10] && !sdr_infl[10])  bw_tex  <= bw_tex  + 21'd1;
+			if (sdr_pend[3]  && !sdr_infl[3])   bw_chr  <= bw_chr  + 21'd1;
 		end
 	end
 end
@@ -2835,7 +2813,13 @@ wire  [4:0] geo_tp_idx;
 wire  [7:0] geo_tp_diffuse, geo_tp_ambient;
 wire [15:0] geo_tp_n;
 wire [15:0] geo_nops;        // R255: nop commands the walker decoded last frame
-wire [23:0] r3d_fill_busy;   // R443: cycles the fill was not idle, per frame
+// R436: which state the fill and the walk sit in longest, straight off the
+// board. Every wedge diagnosis so far has been inferred from the TGP four
+// stages upstream, and every one of them was wrong.
+wire  [4:0] r3d_fill_hot;
+wire [15:0] r3d_fill_hotcyc;
+wire  [2:0] r3d_walk_hot;
+wire [15:0] r3d_walk_hotcyc;
 wire [15:0] geo_walk_flip, geo_walk_fb;   // R263: walks started by the list-ready write, and by the fallback
 wire        geo_push_stall;  // R260: the push queue is full and the CPU waits
 wire        cpu_buf_inval;   // R266: the CPU wrote the display list
@@ -4237,9 +4221,8 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	      : (tps_ph == 3'd2)                  ? {cc_h_f, cc_m_f}                // R269: 'V' glyph cache hits : misses, last frame
 	      : (tps_ph == 3'd4)                  ? {tx_p_f, tx_m_f}                // R275: 'Y' textured pixels : texel misses, last frame
 	      : (tps_ph == 3'd7)                  ? {oz_d0, oz_d1}                 // R334: 1/z of vertices 0 and 1 ('Q')
-	      : (tps_ph == 3'd6)                  ? {5'd0, infl_stuck_l,
-	                                             infl_run_l}                    // R439
-	      : (tps_ph == 3'd5)                  ? {8'd0, r3d_fill_busy}           // R443
+	      : (tps_ph == 3'd5)                  ? {3'd0, r3d_fill_hot, r3d_walk_hot, 5'd0,
+	                                             r3d_fill_hotcyc}               // R436
 	      : {r3d_ready_cyc[15:0], r3d_bands_done[7:0], r3d_hold[7:0]}),
 	// clip_dropped read 0 on hardware and the refusal count is the number that
 	// now moves, so it takes that byte. Between them: accepted, emitted, refused
@@ -5558,7 +5541,8 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(3),
 	.dbg_texpix(tex_pixels), .dbg_texhit(tex_hits), .dbg_texmiss(tex_misses),
 	.dbg_texlost(tex_lost), .dbg_oz0(oz_d0), .dbg_oz1(oz_d1), .dbg_oz2(oz_d2), .dbg_oz3(oz_d3),
 	.dbg_texsweep(tex_sweep), .dbg_texnz(tex_nz),
-	.dbg_fill_busy(r3d_fill_busy),   // R443
+	.dbg_fill_hot(r3d_fill_hot), .dbg_fill_hotcyc(r3d_fill_hotcyc),   // R436
+	.dbg_walk_hot(r3d_walk_hot), .dbg_walk_hotcyc(r3d_walk_hotcyc),
 	.q_moire(1'b0), .q_end(q3d_end),
 	.scan_clk(clk_sys), .scan_x(vid_x), .scan_y(vid_y),
 	.scan_col(r3d_col), .scan_hit(r3d_hit),
