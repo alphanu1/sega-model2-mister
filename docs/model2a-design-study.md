@@ -18920,3 +18920,35 @@ FROM THE SOURCE**, after R337's 120-ALM sequential arithmetic costing 883,
 R342's parked work projected at 849 costing 2,342, and R438's probe. The rule
 from R342 has now been broken often enough to restate as a procedure: **write
 the change, build it, read the fit report, and only then say what it cost.**
+
+---
+
+**R443 -- A PROBE THAT COSTS MORE THAN THE CHANGE IT MEASURES IS NOT A PROBE.**
+
+R442 came 5 LABs short: *"Fitter requires 4196 LABs, the device contains only
+4191"*. Still in the design at that point were R436's per-state dwell trackers
+in BOTH the fill and the walk -- a comparator tree plus two register files --
+which had already answered the wrong question (`longest dwell` is always
+S_IDLE, 100% of samples).
+
+Deleting instrumentation outright is the wrong answer too: without it the next
+fault gets diagnosed by inference from four stages upstream, which is how this
+run lost a day. **The answer is to make the instrument small enough to keep.**
+
+One 24-bit accumulator and one latch, in the fill only:
+
+```
+  dbg_busy   cycles NOT in S_IDLE, per frame
+```
+
+The frame length is known, so busy gives starved for free; and against the quad
+count the stream already carries, it gives cycles-per-quad -- which is the
+number the speed work is actually ranked on. No comparators, no per-state
+storage, nothing in the walk.
+
+The R439 stuck-port test stays as it is: it was already one counter.
+
+**THE RULE.** An instrument is part of the design and pays rent. Before adding
+one, ask what single number would settle the question -- then build only that.
+R436 asked for a state histogram when a ratio would do, and the histogram is
+what pushed the fit over.

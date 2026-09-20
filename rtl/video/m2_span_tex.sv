@@ -99,9 +99,7 @@ module m2_span_tex #(
   // comes out FLAT AND FULL BRIGHTNESS -- indistinguishable, by eye, from a
   // texture path that does nothing. tb_m2_boot sees no CPU write to either
   // sheet in 20 M instructions, so this is not a hypothetical.
-  output logic [31:0]        dbg_texnz,
-  output logic [2:0]         dbg_hot,        // R436
-  output logic [15:0]        dbg_hotcyc
+  output logic [31:0]        dbg_texnz
 );
 
   typedef enum logic [2:0] { T_IDLE, T_RCP1, T_RCP2, T_RCP3, T_RCP4, T_FETCH, T_EMIT, T_DRAIN } st_t;
@@ -246,20 +244,6 @@ module m2_span_tex #(
   // the fill saw before this unit existed. A textured one is accepted at once
   // and walked from the registers.
   assign in_ready  = idle && (tex_now || out_ready);
-
-  // R436: the walk's longest-dwelt state, same shape as the fill's.
-  logic [2:0]  wst_d;
-  logic [15:0] wst_cyc;
-  always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) begin
-      wst_d <= T_IDLE; wst_cyc <= 16'd0; dbg_hot <= 3'd0; dbg_hotcyc <= 16'd0;
-    end else begin
-      wst_d <= st;
-      if (st != wst_d) wst_cyc <= 16'd0;
-      else if (!(&wst_cyc)) wst_cyc <= wst_cyc + 16'd1;
-      if (wst_cyc > dbg_hotcyc) begin dbg_hotcyc <= wst_cyc; dbg_hot <= wst_d; end
-    end
-  end
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin

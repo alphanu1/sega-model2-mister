@@ -138,15 +138,17 @@ module m2_raster_fill (
   // taken. span_valid is the only authority on span delivery; a consumer that
   // stops listening at quad_done loses the last scanline.
   output logic               quad_done,
-  // R436: WHERE IT STOPS, not where I think it stops. Four board builds of
-  // perspective have wedged and every diagnosis so far has been inferred from
-  // the TGP four stages upstream. dbg_hot is the state this unit spent longest
-  // in since the last frame_start, and dbg_hotcyc is how long. If the fill is
-  // the thing that stalls, this names the state outright.
-  output logic [4:0]         dbg_hot,
-  output logic [15:0]        dbg_hotcyc,
-  output logic [23:0]        dbg_busy,      // R437: cycles working, per frame
-  output logic [23:0]        dbg_starved,   // R437: cycles idle with no quad
+  // R443: ONE COUNTER. The smallest thing that still answers a question.
+  //
+  // R436/R437 tracked the longest dwell per state -- a comparator tree and two
+  // register files -- and the design is 5 LABs from fitting, so the probe was
+  // costing more than the change it was meant to measure. It also answered the
+  // wrong thing: "longest dwell" is always S_IDLE.
+  //
+  // Cycles NOT in S_IDLE, per frame, is enough. The frame length is known, so
+  // busy tells us starved as well, and where the fill's time goes follows from
+  // comparing it against the quad count the stream already carries.
+  output logic [23:0]        dbg_busy,
   input  logic               frame_start,
   output logic               line_case    // that quad was a wireframe, not filled
 );
@@ -1131,45 +1133,14 @@ module m2_raster_fill (
 
   always_comb in_ready = (state == S_IDLE);
 
-  // R437: THE FIRST VERSION MEASURED THE WRONG THING. "Longest dwell" is always
-  // S_IDLE, because the fill waits between quads -- on the board it read S_IDLE
-  // 100% of samples, saturated at 65,535 cycles, which said only that the fill
-  // idles for 1.3 ms at a stretch. True, and not what was asked.
-  //
-  // What is asked: when the fill IS working, where does it stop; and is it the
-  // bottleneck at all. So idle is excluded from the hot search, and busy and
-  // starved cycles are counted separately per frame.
-  //
-  //   dbg_hot/dbg_hotcyc  longest NON-IDLE dwell, and which state
-  //   dbg_busy            cycles not in S_IDLE, this frame
-  //   dbg_starved         cycles in S_IDLE with no quad offered, this frame
-  //
-  // busy >> starved means the fill is the limit and its divides are worth
-  // attacking. starved >> busy means the quad supply is, and every cycle spent
-  // on the fill is wasted.
-  logic [4:0]  st_d;
-  logic [15:0] st_cyc;
-  logic [23:0] busy_acc, starv_acc;
-  wire         fill_idle = (state == S_IDLE);
+  // R443: one accumulator, one latch. No comparators, no per-state storage.
+  logic [23:0] busy_acc;
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      st_d <= S_IDLE; st_cyc <= 16'd0; dbg_hot <= 5'd0; dbg_hotcyc <= 16'd0;
-      busy_acc <= '0; starv_acc <= '0; dbg_busy <= '0; dbg_starved <= '0;
+      busy_acc <= '0; dbg_busy <= '0;
     end else begin
-      st_d <= state;
-      if (state != st_d) st_cyc <= 16'd0;
-      else if (!(&st_cyc)) st_cyc <= st_cyc + 16'd1;
-      // idle is never the answer to "where does it stop"
-      if (st_d != S_IDLE && st_cyc > dbg_hotcyc) begin
-        dbg_hotcyc <= st_cyc; dbg_hot <= st_d;
-      end
-      if (!fill_idle)            busy_acc  <= busy_acc  + 24'd1;
-      else if (!in_valid)        starv_acc <= starv_acc + 24'd1;
-      if (frame_start) begin
-        dbg_busy <= busy_acc; dbg_starved <= starv_acc;
-        busy_acc <= '0; starv_acc <= '0;
-        dbg_hotcyc <= 16'd0; dbg_hot <= 5'd0;
-      end
+      if (state != S_IDLE) busy_acc <= busy_acc + 24'd1;
+      if (frame_start) begin dbg_busy <= busy_acc; busy_acc <= '0; end
     end
   end
 
