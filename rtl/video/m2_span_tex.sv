@@ -270,6 +270,7 @@ module m2_span_tex #(
 
   logic        dv_first;          // the span's first group divides in place
   logic [2:0]  dv_age;            // cycles since the operands last moved
+  logic signed [31:0] d0_o;   logic [5:0] d0_e;   // R448: stage 1a
   logic [5:0]  d1_e;   logic [31:0] d1_m;  logic [24:0] d1_r;
   logic [31:0] d2_nd;  logic [5:0]  d2_e;  logic [24:0] d2_r;
   logic [24:0] d3_r1;  logic [5:0]  d3_e;
@@ -278,21 +279,31 @@ module m2_span_tex #(
   // delayed three cycles to match. Getting this wrong pairs a texel coordinate
   // with the wrong pixel's depth, which is the whole fault this change exists
   // to avoid introducing.
-  logic signed [31:0] u_h1, v_h1, u_h2, v_h2, u_h3, v_h3;
+  logic signed [31:0] u_h1, v_h1, u_h2, v_h2, u_h3, v_h3, u_h4, v_h4;
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
+      d0_o <= '0; d0_e <= '0;
       d1_e <= '0; d1_m <= '0; d1_r <= '0;
       d2_nd <= '0; d2_e <= '0; d2_r <= '0;
       d3_r1 <= '0; d3_e <= '0; d4_u <= '0; d4_v <= '0;
       u_h1 <= '0; v_h1 <= '0; u_h2 <= '0; v_h2 <= '0; u_h3 <= '0; v_h3 <= '0;
+      u_h4 <= '0; v_h4 <= '0;
     end else begin
-      // stage 1: normalise and seed
+      // R448: STAGE 1 SPLIT IN TWO. As one cycle it was the ooz_nxt add, then
+      // top_bit's priority encode, then a variable shift, then the rcp_tab
+      // read -- four operations, and report_timing named it:
+      //   m2_span_tex|doz_r[17] -> m2_span_tex|d1_r[19]   -0.905 on clk_sys
+      // A four-stage pipeline with four things in its first stage, written to
+      // take a divide OUT of a critical path.
+      //
+      // 1a: the add and the encode. 1b: the shift and the table read.
+      d0_o <= dv_o;
+      d0_e <= top_bit(dv_o);
       begin
-        automatic logic [5:0]  t = top_bit(dv_o);
-        automatic logic [31:0] m = (t >= 6'd23) ? (dv_o >> (t - 6'd23))
-                                                : (dv_o << (6'd23 - t));
-        d1_e <= t; d1_m <= m; d1_r <= rcp_tab[m[22:16]];
+        automatic logic [31:0] m = (d0_e >= 6'd23) ? (d0_o >> (d0_e - 6'd23))
+                                                   : (d0_o << (6'd23 - d0_e));
+        d1_e <= d0_e; d1_m <= m; d1_r <= rcp_tab[m[22:16]];
       end
       // stage 2: the Newton residual
       d2_nd <= 32'((((64'd1 <<< 48) - (64'(d1_m) * 64'(d1_r))) >> 24));
@@ -303,12 +314,13 @@ module m2_span_tex #(
       // stage 4: the coordinates
       begin
         automatic logic [4:0]  sh = (d3_e < 6'd23) ? 5'd16 : 5'(d3_e - 6'd7);
-        d4_u <= sat32((64'(u_h3) * 64'(d3_r1)) >> sh);
-        d4_v <= sat32((64'(v_h3) * 64'(d3_r1)) >> sh);
+        d4_u <= sat32((64'(u_h4) * 64'(d3_r1)) >> sh);
+        d4_v <= sat32((64'(v_h4) * 64'(d3_r1)) >> sh);
       end
       u_h1 <= dv_u;  v_h1 <= dv_v;
       u_h2 <= u_h1;  v_h2 <= v_h1;
       u_h3 <= u_h2;  v_h3 <= v_h2;
+      u_h4 <= u_h3;  v_h4 <= v_h3;   // R448: one deeper, to match
     end
   end
 
@@ -348,7 +360,7 @@ module m2_span_tex #(
 
         // R446: the span's FIRST group is the only one that waits. Every
         // group after it was computed while the previous texel was in flight.
-        T_WARM: if (dv_age >= 3'd4) begin
+        T_WARM: if (dv_age >= 3'd5) begin
           uq_r     <= d4_u;
           vq_r     <= d4_v;
           dv_first <= 1'b0;
@@ -370,7 +382,7 @@ module m2_span_tex #(
           end
         end
 
-        T_EMIT: if ((!e_valid || out_ready) && dv_age >= 3'd4) begin
+        T_EMIT: if ((!e_valid || out_ready) && dv_age >= 3'd5) begin
           e_valid <= !tx_skip;                  // R326: transparent texel
           e_x     <= x_r;
           e_x1    <= ((x_r + 32'(PIXSTEP) - 32'sd1) > x1_r)

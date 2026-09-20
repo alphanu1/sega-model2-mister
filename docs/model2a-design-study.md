@@ -19115,3 +19115,27 @@ nobody has reconciled them. If it really is 1-2, the gap is ~25x and nothing on
 `docs/speed-plan.md` is that size -- which would mean the plan is aimed at the
 wrong order of magnitude and needs re-deriving from a measurement of where a
 frame's time actually goes, on a core that is running.
+
+---
+
+**R448 -- SPLIT THE STAGE THAT HAD FOUR THINGS IN IT.**
+
+R447's measurement:
+
+```
+  clk_sys -0.905:  m2_span_tex|doz_r[17] -> m2_span_tex|d1_r[19]
+```
+
+Stage 1 did the `ooz_nxt` add, `top_bit`'s priority encode, a variable shift and
+the `rcp_tab` read, in one cycle. Split: **1a** is the add and the encode, **1b**
+is the shift and the table read.
+
+The pipeline is five deep now rather than four, so the coordinate held alongside
+it goes one register deeper (`u_h4`) and the guard becomes `dv_age >= 5`. Getting
+that wrong pairs a texel coordinate with a different pixel's depth -- a subtly
+wrong texture rather than a failure, which is the harder kind to notice.
+
+Cost: one more cycle of warm-up per SPAN. Nothing per group, which is the whole
+point of the structure.
+
+span_tex 52/0, raster3d 8/0, raster_fill 152,362/0.
