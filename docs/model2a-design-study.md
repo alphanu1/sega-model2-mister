@@ -18952,3 +18952,37 @@ The R439 stuck-port test stays as it is: it was already one counter.
 one, ask what single number would settle the question -- then build only that.
 R436 asked for a state histogram when a ratio would do, and the histogram is
 what pushed the fit over.
+
+---
+
+**R444 -- THE RECIPROCAL TABLE SYNTHESISED TO ZEROS. VERILATOR RUNS `initial`
+BLOCKS; QUARTUS DOES NOT ALWAYS.**
+
+R441/R442 fitted at last and both seeds came up dead. The map report said why,
+and had been saying it all along:
+
+```
+  Info (276004): RAM logic "...|m2_persp_recip:u_denr|rtab" is uninferred due
+                 to inappropriate RAM size
+  Warning (10030): Net "rtab.data_a" has no driver or initial value, using a
+                   default initial value '0'
+```
+
+**A table of zeros makes every reciprocal zero, every gradient zero and the
+board dead** -- while the bench passed 152,369 checks, because Verilator
+executes `initial` blocks and a fitter is not obliged to.
+
+The table was written as a headless `initial for` doing 32-bit arithmetic.
+`m2_recip_rom` has been in this design for months doing exactly the same job and
+works: explicit `begin`/`end`, and `longint'` casts on the division. Rewritten
+in that idiom.
+
+**THE GENERAL RULE, AND IT IS NOT ABOUT ROMs.** `docs/mister-integration.md`
+already says simulation cannot see memory inference -- only a Quartus build can
+say where an array landed. This is the same rule one step further: simulation
+cannot see whether an array landed with its CONTENTS either. When a construct
+has a working precedent in the tree, copy the precedent, not the textbook.
+
+**AND THE WARNING WAS THERE ON EVERY BUILD.** Two seeds were flashed and two
+black screens diagnosed before the map report was read. Grepping `10030` and
+`276004` costs nothing and would have caught this before the first flash.

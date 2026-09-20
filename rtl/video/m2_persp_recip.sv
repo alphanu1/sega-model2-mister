@@ -49,10 +49,26 @@ module m2_persp_recip (
   // under every exact texel boundary and takes the texel BELOW: every fetch in
   // tb_m2_span_tex came back one short, uniformly. A rounding error that always
   // has the same sign is a different kind of bug from one that does not.
+  // R444: WRITTEN IN m2_recip_rom's IDIOM, BECAUSE MINE DID NOT SURVIVE
+  // SYNTHESIS. As a headless `initial for` doing 32-bit arithmetic, Quartus
+  // dropped the contents entirely:
+  //
+  //   Info (276004): RAM logic "...|m2_persp_recip:u_denr|rtab" is uninferred
+  //                  due to inappropriate RAM size
+  //   Warning (10030): Net "rtab.data_a" has no driver or initial value,
+  //                    using a default initial value '0'
+  //
+  // A table of zeros makes every reciprocal zero, every gradient zero, and the
+  // board dead -- while Verilator, which executes initial blocks, passed
+  // 152,369 checks. m2_recip_rom has been in this design for months doing the
+  // same job, and the differences are explicit begin/end and longint' casts.
+  // Copy what is known to synthesise rather than what is known to simulate.
   (* romstyle = "logic" *) logic [16:0] rtab [128];
-  initial
-    for (int i = 128; i < 256; i++)
-      rtab[i-128] = 17'((((32'd1 << 23) + 32'(i) - 32'd1) / 32'(i)));
+  initial begin
+    for (int i = 128; i < 256; i++) begin
+      rtab[i-128] = 17'(((longint'(1) << 23) + longint'(i) - longint'(1)) / longint'(i));
+    end
+  end
 
   wire [3:0]  s0_s  = clz16(in_d);
   wire [15:0] s0_dn = in_d << s0_s;        // [2^15, 2^16), or 0 when in_d == 0
