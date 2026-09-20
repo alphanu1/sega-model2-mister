@@ -19076,3 +19076,42 @@ measured 55.9% hit rate the fetch dominates. Removing four cycles from a
 end. It is worth doing because a divide has no business in front of a fetch --
 not because it closes the gap. The gap is 1-2 bands of 50 and nothing found so
 far is the size of it.
+
+---
+
+**R447 -- THE OVERLAPPED DIVIDE FAILS ON THREE OF THREE, AND STAGE ONE IS WHY.**
+
+R446 was first built on HEAD, which carries R441/R442 -- the reciprocal plane
+fit that had already failed on six seeds. **Testing a new change on a known-
+broken base proves nothing either way**, and Ben caught it before the fit
+finished. Rebuilt with m2_raster_fill, m2_raster3d, Model2.sv and Model2.qsf
+byte-identical to 6bfa51c (seed 52), so the ONLY difference was m2_span_tex.
+
+All three seeds dead from boot. And the timing report names the cause:
+
+```
+  clk_sys -0.905:  m2_span_tex|doz_r[17] -> m2_span_tex|d1_r[19]
+```
+
+That is stage 1 of the new pipeline, and it does FOUR things in one cycle: the
+`ooz_nxt` add, `top_bit`'s priority encode, a variable shift, and the `rcp_tab`
+lookup. **A four-stage pipeline with four operations in its first stage.**
+
+The irony is exact: R446 exists to take a divide out of a critical path, and it
+put an adder, an encoder, a shifter and a memory read into one. This is the
+sixth time in this run -- R418, R420, R424, R425, R433 and now this -- and every
+one was written while thinking about the dataflow rather than the cycle.
+
+**THE FIX IS KNOWN AND NOT YET BUILT:** split stage 1 in two -- add and encode,
+then shift and look up. Five stages instead of four, which costs one more cycle
+of warm-up per SPAN and nothing per group.
+
+**WHAT IS ON THE BOARD:** seed 52 (`orientation-works`, 6bfa51c) -- perspective
+textures, 93,288 pixels a frame, texel cache 50.5%, framewait 29.6%.
+
+**WHAT IS UNEXPLAINED AND MATTERS MOST.** Ben reports one or two bands of fifty
+drawing; the decoder reports med 14 with four slices at zero. Those disagree and
+nobody has reconciled them. If it really is 1-2, the gap is ~25x and nothing on
+`docs/speed-plan.md` is that size -- which would mean the plan is aimed at the
+wrong order of magnitude and needs re-deriving from a measurement of where a
+frame's time actually goes, on a core that is running.
