@@ -19232,3 +19232,38 @@ path is exercised once at time zero when nothing else is in flight.
 reset block, even when it looks like control flow guarantees the order. This is
 the same family as R444's initial-block finding: **what simulation supplies for
 free, hardware does not.**
+
+---
+
+**R452 -- COUNT BANDS THAT PAINTED, NOT BANDS THAT FINISHED.**
+
+Ben, watching s96: about **two bands 90% of the time, and about 38 bands the
+other 10%**. The decoder reports `bands med 17`. Both can be true, and the gap
+between them is the whole question.
+
+**A band with no quads in it completes instantly.** `dbg_bands_done` counts
+those, so seventeen bands can "finish" while two have anything drawn in them. If
+that is what is happening then the bands are not the bottleneck and the QUAD
+SUPPLY to them is -- and every cycle spent on the fill and the walk has been
+aimed at the wrong stage.
+
+One comparator on `bd_pixels`, which the band already maintains, gives
+`dbg_bands_painted`. Streamed beside `dbg_bands_done` on phase 6 so the two are
+read from the same frame.
+
+```
+  painted ~= completed   -> the renderer is simply too slow; keep optimising it
+  painted << completed   -> the bands are starved; the work is upstream
+```
+
+**AND THE BIMODALITY IS THE REAL CLUE.** A renderer that is merely too slow
+gives a consistent partial count. Two bands ninety percent of the time and
+thirty-eight the rest is intermittent, which fits `hold [(1, 28), (0, 7), (2,
+4), (42, 1)]` -- most lists held one frame, one held FORTY-TWO. Whatever that
+is, it is not throughput.
+
+**A CORRECTION FOR THE RECORD.** The `wedges` column was read as a stall count
+and used to claim the renderer wedges several times a slice. It is not:
+`wedge_hit = WEDGE_EN && q3d_valid && q3d_ready && wedge_in && (wedge_s1 ||
+wedge_s0)` is a quad-SHAPE capture for an unrelated geometry diagnostic. Reading
+a counter's name instead of its definition, one more time.

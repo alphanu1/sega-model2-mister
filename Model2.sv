@@ -2820,6 +2820,7 @@ wire  [4:0] r3d_fill_hot;
 wire [15:0] r3d_fill_hotcyc;
 wire  [2:0] r3d_walk_hot;
 wire [15:0] r3d_walk_hotcyc;
+wire  [7:0] r3d_bands_painted;   // R452: bands that painted at least one pixel
 wire [15:0] geo_walk_flip, geo_walk_fb;   // R263: walks started by the list-ready write, and by the fallback
 wire        geo_push_stall;  // R260: the push queue is full and the CPU waits
 wire        cpu_buf_inval;   // R266: the CPU wrote the display list
@@ -4221,6 +4222,8 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	      : (tps_ph == 3'd2)                  ? {cc_h_f, cc_m_f}                // R269: 'V' glyph cache hits : misses, last frame
 	      : (tps_ph == 3'd4)                  ? {tx_p_f, tx_m_f}                // R275: 'Y' textured pixels : texel misses, last frame
 	      : (tps_ph == 3'd7)                  ? {oz_d0, oz_d1}                 // R334: 1/z of vertices 0 and 1 ('Q')
+	      : (tps_ph == 3'd6)                  ? {16'd0, r3d_bands_painted,
+	                                             r3d_bands_done}                // R452: painted : completed
 	      : (tps_ph == 3'd5)                  ? {3'd0, r3d_fill_hot, r3d_walk_hot, 5'd0,
 	                                             r3d_fill_hotcyc}               // R436
 	      : {r3d_ready_cyc[15:0], r3d_bands_done[7:0], r3d_hold[7:0]}),
@@ -5549,6 +5552,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(3),
 	.dbg_quads(r3d_quads), .dbg_dropped(r3d_dropped), .dbg_tiny(r3d_tiny),
 	.dbg_bands(r3d_bands), .dbg_pixels(r3d_pixels),
 	.dbg_ready_cyc(r3d_ready_cyc), .dbg_bands_done(r3d_bands_done),
+	.dbg_bands_painted(r3d_bands_painted),   // R452
 	.dbg_late_frames(r3d_late_frames), .dbg_qend_frames(r3d_qend_frames),
 	.dbg_collect_cyc(r3d_collect_cyc), .dbg_hold(r3d_hold), .dbg_missed(r3d_missed)
 );

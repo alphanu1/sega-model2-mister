@@ -115,6 +115,11 @@ module m2_raster3d #(
   // first twelve, and if it reads 24 they are being filled and lost elsewhere.
   output logic [15:0] dbg_ready_cyc,
   output logic [7:0]  dbg_bands_done,
+  // R452: BANDS THAT PAINTED SOMETHING, not bands that finished. A band with
+  // no quads in it completes instantly, so dbg_bands_done counts those too --
+  // which is why it reads 17 while the screen shows about two. One comparator
+  // on bd_pixels, which the band already maintains.
+  output logic [7:0]  dbg_bands_painted,
   // THE FLASHING, INSTRUMENTED. The store is cleared on every frame_start.
   // A frame whose q_end has not arrived by then is still in P_COLLECT: what
   // it collected is wiped, nothing is P_READY for the beam, and the frame
@@ -679,7 +684,7 @@ module m2_raster3d #(
   logic [19:0] col_cyc;
   logic        col_run;
   logic [7:0]  hold_cnt;
-  logic  [7:0] bands_this;
+  logic  [7:0] bands_this, painted_this;   // R452
 
   // CLEAR UNCONDITIONALLY AT FRAME START, as the reference does.
   //
@@ -726,10 +731,11 @@ module m2_raster3d #(
       fill_band <= '0; fill_buf <= '0; bd_ready <= '0;
       bd_clear_req <= '0; dbg_bands <= 16'd0; dbg_pixels <= 32'd0;
       dbg_ready_cyc <= 16'd0; dbg_bands_done <= 8'd0;
+      dbg_bands_painted <= 8'd0; painted_this <= 8'd0;   // R452
       dbg_late_frames <= 8'd0; dbg_qend_frames <= 8'd0;
       dbg_collect_cyc <= 16'd0; col_cyc <= 20'd0; col_run <= 1'b0;
       dbg_hold <= 8'd0; hold_cnt <= 8'd0;
-      rdy_cyc <= 20'd0; rdy_run <= 1'b0; bands_this <= 8'd0;
+      rdy_cyc <= 20'd0; rdy_run <= 1'b0; bands_this <= 8'd0; painted_this <= 8'd0;
       for (int i = 0; i < NBUF; i++) begin bd_y0[i] <= 16'sd0; bd_band[i] <= '0; end
     end else begin
       bd_clear_req <= '0;
@@ -801,6 +807,8 @@ module m2_raster3d #(
           dbg_bands  <= dbg_bands + 16'd1;
           if (!(&bands_this)) bands_this <= bands_this + 8'd1;
           dbg_pixels <= dbg_pixels + bd_pixels[fill_buf];
+          if (bd_pixels[fill_buf] != 32'd0 && !(&painted_this))
+            painted_this <= painted_this + 8'd1;                 // R452
           fill_buf   <= (BUFW'(fill_buf) == BUFW'(NBUF-1)) ? '0 : fill_buf + BUFW'(1);
           fill_band  <= (fill_band == BW'(NBANDS-1)) ? '0 : fill_band + BW'(1);
           cst <= C_IDLE;
@@ -817,6 +825,7 @@ module m2_raster3d #(
       if (frame_start) begin
         fill_band <= '0; bd_ready <= '0;
         dbg_bands_done <= bands_this; bands_this <= 8'd0;
+        dbg_bands_painted <= painted_this; painted_this <= 8'd0;   // R452
         rdy_cyc <= 20'd0; rdy_run <= 1'b1;
         col_cyc <= 20'd0; col_run <= 1'b1;
       end
