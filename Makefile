@@ -382,7 +382,7 @@ RLD_RTL := rtl/mem/m2_sdram.sv rtl/io/m2_rom_loader.sv sim/mem/sdram_model.sv si
 
 
 .PHONY: test test_m2_backup test_m2_sndboard test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram test_fx68k test_m2_ioboard
-test: test_m2_texel test_m2_span_tex test_m2_geo test_m2_wr_arb test_m2_pair_cache test_m2_raster3d test_m2_backup test_m2_sndlink test_fx68k test_m2_sndboard test_m2_ioboard test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
+test: test_m2_handshake_cdc test_m2_texel test_m2_span_tex test_m2_geo test_m2_wr_arb test_m2_pair_cache test_m2_raster3d test_m2_backup test_m2_sndlink test_fx68k test_m2_sndboard test_m2_ioboard test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
 
 test_i960_dec: obj_i960_dec/Vi960_dec
 	@echo "== test i960_dec"
@@ -868,6 +868,15 @@ obj_spantex/Vm2_span_tex: rtl/video/m2_span_tex.sv sim/video/tb_m2_span_tex.cpp
 	  -GPIXSTEP=$(PIXSTEP) --Mdir obj_spantex -o Vm2_span_tex \
 	  -CFLAGS "-O2 -DTB_PIXSTEP=$(PIXSTEP)" \
 	  rtl/video/m2_span_tex.sv sim/video/tb_m2_span_tex.cpp
+
+test_m2_handshake_cdc: obj_hscdc/Vm2_handshake_cdc
+	@echo "== test m2_handshake_cdc (protocol only -- see the header on what a bench cannot prove)"
+	@./obj_hscdc/Vm2_handshake_cdc $(TEST_ARGS)
+
+obj_hscdc/Vm2_handshake_cdc: rtl/video/m2_handshake_cdc.sv sim/video/tb_m2_handshake_cdc.cpp
+	$(VBUILD) --top-module m2_handshake_cdc -Wno-UNUSEDPARAM \
+	  --Mdir obj_hscdc -o Vm2_handshake_cdc -CFLAGS "-O2" \
+	  rtl/video/m2_handshake_cdc.sv sim/video/tb_m2_handshake_cdc.cpp
 
 test_m2_texel: obj_texel/Vm2_texel
 	@echo "== test m2_texel (the texel fetch, against model2rd.ipp)"
