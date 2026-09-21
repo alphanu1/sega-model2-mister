@@ -35,6 +35,11 @@ VBUILD  = $(VERILATOR) --cc --exe --build -j 0 $(VFLAGS)
 
 DEC_RTL  := $(I960)/i960_dec.sv
 ALU_RTL  := $(I960)/i960_alu.sv
+# The plane fit, for area measurement. 3,419 ALM in the s115 full fit -- 8.2%
+# of the device and the worst clk_sys path both, so it is the one module where
+# a 2-minute spike beats a 25-minute core build for deciding what to change.
+RFILL_RTL := rtl/video/m2_raster_fill.sv rtl/video/m2_raster_div.sv \
+             rtl/video/m2_recip_rom.sv rtl/video/m2_persp_recip.sv
 REG_RTL  := $(I960)/i960_regs.sv
 AGU_RTL  := $(I960)/i960_agu.sv
 LST_RTL  := $(I960)/i960_ldst.sv
@@ -199,6 +204,15 @@ lint_i960_dec:
 lint_i960_alu:
 	@echo "== lint i960_alu"
 	$(VERILATOR) --lint-only $(VFLAGS) --top-module i960_alu $(ALU_RTL)
+
+lint_m2_raster_fill:
+	@echo "== lint m2_raster_fill"
+# Same waivers as this module's testbench build (obj_raster_fill, below): the
+# truncated multiply products are deliberate -- m2_raster_div takes the top
+# half of a 64-bit product on purpose -- and flagging them here would mean a
+# different lint standard for the spike than for the test.
+	$(VERILATOR) --lint-only $(VFLAGS) -Wno-UNUSEDSIGNAL -Wno-WIDTHTRUNC \
+	  -Wno-TIMESCALEMOD -Wno-UNUSEDPARAM --top-module m2_raster_fill $(RFILL_RTL)
 
 lint_i960_regs:
 	@echo "== lint i960_regs"
@@ -1072,6 +1086,7 @@ QDIR := build/quartus/$(MOD)
 SRCS_i960_dec  := $(DEC_RTL)
 SRCS_i960_alu  := $(ALU_RTL)
 SRCS_i960_regs := $(REG_RTL)
+SRCS_m2_raster_fill := $(RFILL_RTL)
 SRCS_i960_agu  := $(AGU_RTL)
 SRCS_i960_ldst := $(LST_RTL)
 SRCS_i960_lsu  := $(LSU_RTL)
