@@ -38,6 +38,13 @@ ALU_RTL  := $(I960)/i960_alu.sv
 # The plane fit, for area measurement. 3,419 ALM in the s115 full fit -- 8.2%
 # of the device and the worst clk_sys path both, so it is the one module where
 # a 2-minute spike beats a 25-minute core build for deciding what to change.
+FPADD_RTL := rtl/tgp/fp_add.sv
+FP_POOL_RTL = rtl/video/m2_fp_pool.sv $(GEO_FP)
+GEO_CLIP_RTL = rtl/video/m2_geo_clip.sv rtl/video/m2_geo_project.sv $(GEO_RTL)
+RASTER_BAND_RTL := rtl/video/m2_raster_band.sv
+QUAD_STORE_RTL := rtl/video/m2_quad_store.sv rtl/tgp/m2_fifo_m10k.sv
+TEXEL_RTL := rtl/video/m2_texel.sv
+SPAN_TEX_RTL := rtl/video/m2_span_tex.sv
 RFILL_RTL := rtl/video/m2_raster_fill.sv rtl/video/m2_raster_div.sv \
              rtl/video/m2_recip_rom.sv rtl/video/m2_persp_recip.sv
 REG_RTL  := $(I960)/i960_regs.sv
@@ -204,6 +211,44 @@ lint_i960_dec:
 lint_i960_alu:
 	@echo "== lint i960_alu"
 	$(VERILATOR) --lint-only $(VFLAGS) --top-module i960_alu $(ALU_RTL)
+
+
+# R463: spike targets for the 3D island, to measure each module against the
+# 60 MHz target separately. Waivers match each module's own testbench build.
+lint_m2_span_tex:
+	@echo "== lint m2_span_tex"
+	$(VERILATOR) --lint-only $(VFLAGS) -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-WIDTHTRUNC -Wno-WIDTHEXPAND -Wno-VARHIDDEN -Wno-PINCONNECTEMPTY \
+	  --top-module m2_span_tex $(SPAN_TEX_RTL)
+
+lint_m2_texel:
+	@echo "== lint m2_texel"
+	$(VERILATOR) --lint-only $(VFLAGS) -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-WIDTHTRUNC -Wno-WIDTHEXPAND -Wno-VARHIDDEN -Wno-PINCONNECTEMPTY \
+	  --top-module m2_texel $(TEXEL_RTL)
+
+lint_m2_quad_store:
+	@echo "== lint m2_quad_store"
+	$(VERILATOR) --lint-only $(VFLAGS) -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-WIDTHTRUNC -Wno-WIDTHEXPAND -Wno-VARHIDDEN -Wno-PINCONNECTEMPTY \
+	  --top-module m2_quad_store $(QUAD_STORE_RTL)
+
+lint_m2_raster_band:
+	@echo "== lint m2_raster_band"
+	$(VERILATOR) --lint-only $(VFLAGS) -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-WIDTHTRUNC -Wno-WIDTHEXPAND -Wno-VARHIDDEN -Wno-PINCONNECTEMPTY \
+	  --top-module m2_raster_band $(RASTER_BAND_RTL)
+
+lint_m2_geo_clip:
+	@echo "== lint m2_geo_clip"
+	$(VERILATOR) --lint-only $(VFLAGS) -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-WIDTHTRUNC -Wno-WIDTHEXPAND -Wno-VARHIDDEN -Wno-PINCONNECTEMPTY \
+	  --top-module m2_geo_clip $(GEO_CLIP_RTL)
+
+lint_m2_fp_pool:
+	@echo "== lint m2_fp_pool"
+	$(VERILATOR) --lint-only $(VFLAGS) -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-WIDTHTRUNC -Wno-WIDTHEXPAND -Wno-VARHIDDEN -Wno-PINCONNECTEMPTY \
+	  --top-module m2_fp_pool $(FP_POOL_RTL)
+
+lint_fp_add:
+	@echo "== lint fp_add"
+	$(VERILATOR) --lint-only $(VFLAGS) -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM \
+	  --top-module fp_add $(FPADD_RTL)
 
 lint_m2_raster_fill:
 	@echo "== lint m2_raster_fill"
@@ -1091,6 +1136,14 @@ SRCS_i960_dec  := $(DEC_RTL)
 SRCS_i960_alu  := $(ALU_RTL)
 SRCS_i960_regs := $(REG_RTL)
 SRCS_m2_raster_fill := $(RFILL_RTL)
+SRCS_fp_add := $(FPADD_RTL)
+SRCS_m2_span_tex := $(SPAN_TEX_RTL)
+SRCS_m2_texel := $(TEXEL_RTL)
+SRCS_m2_quad_store := $(QUAD_STORE_RTL)
+SRCS_m2_raster_band := $(RASTER_BAND_RTL)
+SRCS_m2_geo_clip := $(GEO_CLIP_RTL)
+SRCS_m2_fp_pool := $(FP_POOL_RTL)
+
 SRCS_i960_agu  := $(AGU_RTL)
 SRCS_i960_ldst := $(LST_RTL)
 SRCS_i960_lsu  := $(LSU_RTL)

@@ -424,7 +424,8 @@ module m2_raster_fill (
   logic signed [8:0] net_r;   // R459: pf_scale's shift amount, a cycle early
   logic              zbig_r;  // R459: mul_zr >= 32, likewise
   logic               b_wait;
-  logic               nrm_wait;   // R449
+  logic               nrm_wait;
+  logic pfn_wait;   // R461: S_PF_N takes two cycles, encode then shift
   logic signed [31:0] mul_n;
   logic        [5:0]  mul_z;
   wire signed  [31:0] mul_q = rquo(mul_n, den_rcp, den_n[31]);
@@ -800,7 +801,7 @@ module m2_raster_fill (
       nxu_z <= '0; nyu_z <= '0; nxv_z <= '0; nyv_z <= '0;
       nxo_z <= '0; nyo_z <= '0; mul_n <= '0; mul_z <= 6'd0;   // R441/R442
       net_r <= 9'sd0; zbig_r <= 1'b0;   // R459
-      den_a <= 16'd1; nrm_wait <= 1'b0;                      // R449
+      den_a <= 16'd1; nrm_wait <= 1'b0; pfn_wait <= 1'b0;    // R449/R461
       // R451: these were initialised in the prime step and NOT in reset. A
       // register that only gets a value once the state machine reaches a
       // particular state is undefined for every cycle before it, and b_wait
@@ -894,16 +895,38 @@ module m2_raster_fill (
               tex_ok <= 1'b0;
               state  <= S_MINMAX;
             end
-          end else begin
-            den_sh <= den_sh_c;          // R289: encode the determinant once
-            den_a  <= (det_r >>> den_sh_c) >= 0 ? 16'(det_r >>> den_sh_c)   // R449
-                                                : 16'(-(det_r >>> den_sh_c));
+          // R461: THE ENCODE AND THE SHIFT IN SEPARATE CYCLES.
+          //
+          //   m2_raster_fill|det_r[3] -> m2_raster_fill|den_a[14]   19.446 ns
+          //
+          // was the worst clk_sys path on s122 once R459 moved pf_scale off it,
+          // and 7,866 of the worst 8,000 paths at 60 MHz ended at den_a. One
+          // cycle carried a 32-bit negate (det_abs), clz32's priority encoder,
+          // the subtract that makes den_sh_c, a variable shift by it, and then
+          // an abs -- the same encoder-feeding-a-shifter shape as R457 and
+          // R459, for the third time in this module.
+          //
+          // Split across two cycles: the encode registers den_sh, the shift
+          // reads it back. The second cycle reuses `den_n` -- which is already
+          // `det_r >>> den_sh` for rquo's sign -- so no second shifter is
+          // built, and the value is identical because den_sh is den_sh_c
+          // registered.
+          //
+          // COSTS ONE CYCLE of the 129 to retire a quad. m2_persp_recip still
+          // gets its two cycles: den_a lands one cycle later and S_PF_NRM's
+          // pair is unchanged after it.
+          end else if (!pfn_wait) begin
+            pfn_wait <= 1'b1;
+            den_sh <= den_sh_c;          // R289/R461: encode, and only encode
             nxu <= 32'(pf_u1) * 32'(pf_by) - 32'(pf_u2) * 32'(pf_ay);
             nyu <= 32'(pf_ax) * 32'(pf_u2) - 32'(pf_bx) * 32'(pf_u1);
             nxv <= 32'(pf_v1) * 32'(pf_by) - 32'(pf_v2) * 32'(pf_ay);
             nyv <= 32'(pf_ax) * 32'(pf_v2) - 32'(pf_bx) * 32'(pf_v1);
             nxo <= 32'(pf_o1) * 32'(pf_by) - 32'(pf_o2) * 32'(pf_ay);   // R337
             nyo <= 32'(pf_ax) * 32'(pf_o2) - 32'(pf_bx) * 32'(pf_o1);
+          end else begin
+            pfn_wait <= 1'b0;
+            den_a  <= (den_n >= 0) ? 16'(den_n) : 16'(-den_n);   // R449/R461
             state <= S_PF_NRM;   // R418 counts the zeros before R337 shifts
           end
         end
