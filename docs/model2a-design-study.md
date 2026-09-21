@@ -19417,3 +19417,51 @@ NBUF 3 -> 5 where it takes effect. 528 -> 544 of 553, nine free. Six would need
 **AND THE CHECK THAT CATCHES IT.** The fit report's M10K total is the proof a
 memory-sized change took: if the blocks do not move, the change did not happen.
 That number was in front of me for all four seeds.
+
+---
+
+**R457 -- THE WORST clk_sys PATH WAS A CLZ AND A BARREL SHIFTER IN ONE CYCLE,
+AND THE CYCLE BEFORE IT WAS EMPTY.**
+
+Measured on s115 with `report_timing`, not guessed:
+
+```
+  emu:emu|m2_raster3d:u_raster3d|m2_raster_fill:u_fill|nxu[9]
+    -> ...|m2_raster_fill:u_fill|mul_n[28]        data delay 19.048 ns
+```
+
+against a 20 ns period. That is the whole of clk_sys's margin: **Fmax 50.09 MHz,
+slack +0.037 ns** on a clock constrained to 50.
+
+**WHAT THE PATH WAS.** Every numerator state but one shifts by a count
+registered a cycle earlier -- `pf_shift(nyu, nyu_z)`. The priming line did not:
+
+```systemverilog
+  mul_n <= pf_shift(nxu, pf_clz(nxu));   // R442: prime the pipe
+  mul_z <= pf_clz(nxu);
+```
+
+`pf_clz` is a 32-bit two's-complement negate followed by `clz32`'s priority
+encoder; `pf_shift` is a 32-bit barrel shifter. In series, from a register, in
+one cycle.
+
+**AND `nxu_z` WAS WRITTEN AND NEVER READ.** The same state registered
+`nxu_z <= pf_clz(nxu)` one line above, but nothing consumed it -- the priming
+line recomputed the count inline instead. The register was dead.
+
+**THE FIX COSTS NOTHING.** `S_PF_NRM` already spends two cycles (R449, so
+`m2_persp_recip` has settled before the first multiply reads it) and the first
+of them did nothing but set `nrm_wait`. The six counts move there; the second
+cycle keeps only the shift, reading the now-live `nxu_z`. Same six `pf_clz`
+instances, same registers, **same 129 cycles to retire**.
+
+`tb_m2_raster3d` output is byte-identical before and after -- same hits, same
+per-frame pixels, same band counts -- which is the required proof for a change
+whose whole purpose is timing.
+
+**THE GENERAL SHAPE, because this file has it twice now.** R418 already split
+count-from-shift for the other five numerators and this one was left behind as
+"priming". A state that exists only to wait is free space: if an adjacent cycle
+carries two serial operations and this one carries none, the split is available
+for nothing. Look at what the waiting cycle could be doing before adding a
+cycle anywhere else.

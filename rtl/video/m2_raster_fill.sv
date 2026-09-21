@@ -854,15 +854,37 @@ module m2_raster_fill (
         // after it give them, so it costs nothing extra.
         // R449: two cycles here, so m2_persp_recip has settled before the
         // first multiply reads it. The counts below are computed on the first.
+        // R457: THE COUNTS MOVE TO THE FIRST CYCLE, THE SHIFT STAYS ON THE
+        // SECOND, and that split is the worst clk_sys path in the design.
+        //
+        //   m2_raster_fill|nxu[9] -> m2_raster_fill|mul_n[28]   19.048 ns
+        //
+        // measured on s115 with report_timing, against a 20 ns period: clk_sys
+        // Fmax 50.09 MHz, slack +0.037. Every other numerator state shifts by a
+        // count registered a cycle earlier -- pf_shift(nyu, nyu_z) -- but the
+        // priming line recomputed pf_clz(nxu) inline and fed the shifter from
+        // it, so this one cycle carried a 32-bit two's-complement negate, then
+        // clz32's priority encoder, then a 32-bit barrel shifter, in series.
+        //
+        // S_PF_NRM already spends two cycles here (R449, so m2_persp_recip has
+        // settled before the first multiply reads it) and the first of them did
+        // nothing but set nrm_wait. The counts go there. nxu is registered in
+        // the state that branches here, so it is stable on entry and the first
+        // cycle can read it.
+        //
+        // COSTS NOTHING: same six pf_clz instances, same 129 cycles to retire,
+        // same registers -- nxu_z was previously WRITTEN AND NEVER READ, dead
+        // because the priming line recomputed the count inline. This makes it
+        // live and leaves the second cycle carrying only the shift.
         S_PF_NRM: if (!nrm_wait) begin
           nrm_wait <= 1'b1;
-        end else begin
-          nrm_wait <= 1'b0;
           nxu_z <= pf_clz(nxu); nyu_z <= pf_clz(nyu);
           nxv_z <= pf_clz(nxv); nyv_z <= pf_clz(nyv);
           nxo_z <= pf_clz(nxo); nyo_z <= pf_clz(nyo);   // R441
-          mul_n <= pf_shift(nxu, pf_clz(nxu));         // R442: prime the pipe
-          mul_z <= pf_clz(nxu);
+        end else begin
+          nrm_wait <= 1'b0;
+          mul_n <= pf_shift(nxu, nxu_z);   // R457: registered count, no clz here
+          mul_z <= nxu_z;
           mul_q_r <= '0; mul_zr <= 6'd0; b_wait <= 1'b0;   // R450
           state <= S_PF_Q1;
         end
