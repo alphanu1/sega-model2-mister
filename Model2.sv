@@ -5571,6 +5571,28 @@ m2_cdc_pulse u_r3d_ti_cdc (
 	.b_clk(clk_3d),  .b_rst_n(r3d_rst_n), .b_pulse(r3d_tex_inval)
 );
 
+// R469: q_end IS A PULSE IN ITS OWN RIGHT, NOT A FIELD OF THE QUAD.
+//
+// R465 packed q3d_end into the quad bus as the low bit and shipped it through
+// m2_handshake_cdc, which only moves data on `s_valid && s_ready`. But q3d_end
+// is generated from `geo_walk_frames != walk_frames_d` -- a one-cycle pulse
+// with no relationship to a quad transfer at all. It was therefore dropped
+// unless it happened to land on the same cycle as a handshake.
+//
+// THE COMMENT ON ITS GENERATOR SAYS WHAT THAT COSTS: "q_end is what releases
+// the rasterizer's producer from P_COLLECT into the sort, so without it nothing
+// ever draws no matter how many quads arrived." That is exactly what the board
+// showed on s137 -- 128 quads collected a frame and bands, textures and 1/z all
+// flat zero, with the display-list walk restarting 4,236 times against 175 on
+// the working build.
+//
+// A pulse crosses as a pulse. Same primitive as frame_start above.
+wire r3d_q_end;
+m2_cdc_pulse u_r3d_qe_cdc (
+	.a_clk(clk_sys), .a_rst_n(mem_rst_n), .a_pulse(q3d_end),
+	.b_clk(clk_3d),  .b_rst_n(r3d_rst_n), .b_pulse(r3d_q_end)
+);
+
 // THE QUAD BUS, 377 BITS, ONE ITEM IN FLIGHT.
 //
 // Geometry emits about 2,000 quads a frame and a transfer costs roughly
@@ -5578,14 +5600,13 @@ m2_cdc_pulse u_r3d_ti_cdc (
 // under 1%. A single entry is therefore enough and a FIFO would be 377 bits of
 // storage for nothing. The texel fetch moves 45,835 items a frame and is the
 // case where that reasoning fails; it is handled separately.
-localparam int unsigned QW = 377;
+localparam int unsigned QW = 376;   // R469: q_end left out, it is a pulse
 wire [QW-1:0] q3d_pack = {
 	q3d_x0, q3d_y0, q3d_x1, q3d_y1, q3d_x2, q3d_y2, q3d_x3, q3d_y3,   // 128
 	q3d_col, q3d_z,                                                   //  56
 	q3d_oz0, q3d_oz1, q3d_oz2, q3d_oz3,                               //  64
 	q3d_u0, q3d_v0, q3d_u1, q3d_v1, q3d_u2, q3d_v2, q3d_u3, q3d_v3,   // 104
-	{q3d_tex[23:1], q3d_tex[0] && !texoff_s[2]},                      //  24
-	q3d_end                                                           //   1
+	{q3d_tex[23:1], q3d_tex[0] && !texoff_s[2]}                       //  24
 };
 wire [QW-1:0] r3q;
 wire          r3q_valid, r3q_ready;
@@ -5606,12 +5627,11 @@ wire        [31:0] c_z;
 wire        [15:0] c_oz0, c_oz1, c_oz2, c_oz3;
 wire        [12:0] c_u0, c_v0, c_u1, c_v1, c_u2, c_v2, c_u3, c_v3;
 wire        [23:0] c_tex;
-wire               c_end;
 assign {c_x0, c_y0, c_x1, c_y1, c_x2, c_y2, c_x3, c_y3,
         c_col, c_z,
         c_oz0, c_oz1, c_oz2, c_oz3,
         c_u0, c_v0, c_u1, c_v1, c_u2, c_v2, c_u3, c_v3,
-        c_tex, c_end} = r3q;
+        c_tex} = r3q;
 
 // EVERY dbg_* OUTPUT BELOW CROSSES clk_3d -> clk_sys UNSYNCHRONISED, AND THAT
 // IS A DELIBERATE EXCEPTION WITH A LIMIT.
@@ -5660,7 +5680,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(5),
 	.dbg_texsweep(tex_sweep), .dbg_texnz(tex_nz),
 	.dbg_fill_hot(r3d_fill_hot), .dbg_fill_hotcyc(r3d_fill_hotcyc),   // R436
 	.dbg_walk_hot(r3d_walk_hot), .dbg_walk_hotcyc(r3d_walk_hotcyc),
-	.q_moire(1'b0), .q_end(c_end),
+	.q_moire(1'b0), .q_end(r3d_q_end),   // R469
 	.scan_clk(clk_sys), .scan_x(vid_x), .scan_y(vid_y),
 	.scan_col(r3d_col), .scan_hit(r3d_hit),
 	.dbg_quads(r3d_quads), .dbg_dropped(r3d_dropped), .dbg_tiny(r3d_tiny),
