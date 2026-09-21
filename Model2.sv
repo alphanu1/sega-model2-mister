@@ -5517,7 +5517,14 @@ wire [15:0] oz_d0, oz_d1, oz_d2, oz_d3;   // R334: 1/z off the quad store   // R
 // empty while the third is still being filled. The same seven blocks in the
 // texel cache take it from 1 KB to 4 KB, and the texel cache is where the
 // fill's time is going -- 27,000 fetches a frame at a 39% hit rate.
-m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(3),
+// R456: NBUF 3 -> 5. R454 raised the MODULE DEFAULT from 4 to 6 and changed
+// nothing, because this instantiation overrides it -- and it says THREE, not
+// the four every estimate in R454 was built on. The renderer has been able to
+// run three bands ahead of the beam, not four.
+//
+// A buffer is 8 M10K and 25 are free (528/553), so five leaves nine in hand.
+// Six would need 552 of 553 and not fit.
+m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(5),
               .TWO_CLOCKS(1'b0), .TEX_AW(SDR_AW)) u_raster3d (
 	// R318: clk_mem carries m2_texel, which runs at 100 MHz inside this module.
 	.clk(clk_sys), .clk_mem(clk_mem), .rst_n(mem_rst_n),

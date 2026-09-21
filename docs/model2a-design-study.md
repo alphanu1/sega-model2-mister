@@ -19383,3 +19383,37 @@ phase 6, so all three are read from the same frame.
 argument and only one of them was aimed at the number that matters. The counter
 costs sixteen bits and settles a question that would otherwise cost two builds
 and a guess.
+
+---
+
+**R456 -- R454 CHANGED A DEFAULT THAT IS OVERRIDDEN. THE BUFFER COUNT WAS
+THREE, NOT FOUR.**
+
+R454's four seeds all came back at **528 M10K -- identical to the build before
+it**. Two more band buffers at 8 blocks each should have read 544. The change
+did nothing, and the reason is one line in Model2.sv:
+
+```
+  m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(3), ...
+```
+
+**The instantiation overrides the module default**, and it says THREE. R454
+raised the default from 4 to 6; the instance has said 3 all along. So:
+
+- that build was byte-identical in behaviour to its predecessor, and four fits
+  were spent on it;
+- and every estimate in R454 -- "four buffers, ~1.2 ms of cushion" -- was built
+  on a number that was never true. The renderer has had **three** bands of head
+  start, not four.
+
+`m2_raster3d.sv:102` says *"it can run at most NBUF bands ahead"*, which is
+correct and says nothing about what NBUF is. **Reading a parameter's default
+instead of its override is the same error as reading a counter's name instead
+of its definition** (R452's `wedges`), twice in one day.
+
+NBUF 3 -> 5 where it takes effect. 528 -> 544 of 553, nine free. Six would need
+552 and not fit.
+
+**AND THE CHECK THAT CATCHES IT.** The fit report's M10K total is the proof a
+memory-sized change took: if the blocks do not move, the change did not happen.
+That number was in front of me for all four seeds.

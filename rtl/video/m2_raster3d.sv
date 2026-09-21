@@ -41,7 +41,7 @@ module m2_raster3d #(
   //
   // Two more, not three: a buffer is 8 M10K and 25 are free, so 6 leaves 9 in
   // hand where 7 would leave 1 and not fit.
-  parameter int unsigned NBUF   = 6,
+  parameter int unsigned NBUF   = 4,
 
   // ARE clk AND scan_clk ACTUALLY DIFFERENT CLOCKS?
   //
