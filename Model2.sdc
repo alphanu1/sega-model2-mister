@@ -80,11 +80,47 @@ if {[llength $core_clks] == 0} {
 # with integer dividers, so they are all related and a single group is correct.
 # If this ever fails timing, the answer is to fix the path -- not to put the
 # group back, which would silence the check rather than the failure.
+# R460: TWO GROUPS NOW, AND THE SPLIT IS THE WHOLE POINT OF THE CLOCK CHANGE.
+#
+# The single group above was correct while every core clock was an integer
+# divide of one 800 MHz VCO -- 100, 50, 25 -- because then m2_sdram_x2 and
+# m2_cpu_bridge are ADAPTERS and their paths must be timed. Adding a 60 MHz 3D
+# clock moved the VCO to 1200 and broke that for two of the four:
+#
+#   clk_3d   60 vs clk_sys  50   3:5    edges realign every 50 ns
+#   clk_3d   60 vs clk_mem 100   3:5    closest launch-to-capture 3.333 ns
+#   clk_i960 30 vs clk_sys  50   3:5    likewise
+#
+# Timing ~400,000 paths at 3.333 ns is not a design. So the family splits by
+# which relationships are still integer:
+#
+#   GROUP A  general[0] 100, general[1] 50, general[4] 100@180
+#            Exact 2:1. m2_sdram_x2 stays an adapter, carries no synchroniser,
+#            and its paths MUST stay timed -- that is what the note above says
+#            and it is still true.
+#
+#   GROUP B  general[2] 60, general[3] 30
+#            Exact 2:1 with EACH OTHER, so they stay timed together and the
+#            3D-to-CPU crossing is a clock enable rather than a handshake --
+#            which is the relationship Model 1 keeps between its clk_3d and
+#            clk_cpu for exactly that reason.
+#
+# Between the groups the paths are CUT, so every signal crossing between them
+# needs a real synchroniser. That is new for this core and it is not optional:
+# m2_handshake_cdc carries the quad bus, and m2_cpu_bridge has to have back the
+# two flops Model2.sdc's earlier note recorded removing (S_DONE 4.42 -> 7.12
+# cycles). A cut path with no synchroniser is the failure Model 1 warns is
+# "a hardware-only fault by construction" -- invisible in every bench.
+#
+# IF A CROSSING IS MISSED, THIS FILE WILL NOT SAY SO. Cutting the paths removes
+# the timing error that would otherwise point at it. The only defence is that
+# every signal between the groups goes through a synchroniser by construction.
 set_clock_groups -asynchronous \
   -group [get_clocks -nowarn {*|pll|pll_inst|altera_pll_i|general[0].*|divclk \
                               *|pll|pll_inst|altera_pll_i|general[1].*|divclk \
-                              *|pll|pll_inst|altera_pll_i|general[3].*|divclk \
-                              *|pll|pll_inst|altera_pll_i|general[4].*|divclk}]
+                              *|pll|pll_inst|altera_pll_i|general[4].*|divclk}] \
+  -group [get_clocks -nowarn {*|pll|pll_inst|altera_pll_i|general[2].*|divclk \
+                              *|pll|pll_inst|altera_pll_i|general[3].*|divclk}]
 
 # FIVE OUTPUTS NOW, AND THE COUNT IS CHECKED. The Kaneko16 core gave three
 # outputs identical settings -- same frequency, same phase, same duty -- and the

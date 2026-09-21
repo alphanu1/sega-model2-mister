@@ -256,15 +256,18 @@ module m2_cpu_bridge #(
   logic [31:0] r_addr, r_wdata;
   logic  [3:0] r_be;
   logic [31:0] r_rdata;
+  logic  [1:0] ack_cpu_s;   // R460: synchroniser for ack_mem
 
   always_ff @(posedge clk_cpu or negedge rst_n_cpu) begin
     if (!rst_n_cpu) begin
       req_cpu <= 1'b0; bus_ack <= 1'b0; cph <= C_IDLE; ack_cpu <= 1'b0;
+      ack_cpu_s <= 2'b00;   // R460
       r_we <= 1'b0; r_addr <= 32'd0; r_wdata <= 32'd0; r_be <= 4'd0;
     end else begin
-      // The same single flop in the other direction, for the same reason: one
-      // stage of settling, not two of synchronising.
-      ack_cpu <= ack_mem;
+      // R460: two flops here too -- same reason as req_mem_s below, the 2:1
+      // that justified one flop is gone at 30/50.
+      ack_cpu_s <= {ack_cpu_s[0], ack_mem};
+      ack_cpu   <= ack_cpu_s[1];
       bus_ack  <= 1'b0;
       // AN EXPLICIT FOUR-PHASE HANDSHAKE, because the condition-by-condition
       // version kept racing. The phases are req-up, ack-up, req-down, ACK-DOWN,
@@ -341,12 +344,34 @@ module m2_cpu_bridge #(
   //
   // This REQUIRES the two clocks to be declared related in Model2.sdc; they were
   // in separate -asynchronous groups, which would leave these paths unchecked.
-  logic req_mem_r;
+  // R460: TWO FLOPS AGAIN, BECAUSE THE 2:1 IS GONE.
+  //
+  // Everything above is true of 25/50. clk_i960 is 30 MHz now and clk_sys is
+  // still 50, which is 3:5 -- the edges realign every 50 ns and the closest a
+  // launch edge comes to a capture edge is 3.333 ns. Model2.sdc therefore puts
+  // general[3] in its own clock group, the paths here are CUT, and a single
+  // flop across a cut boundary is an unsynchronised crossing.
+  //
+  // WHAT THIS COSTS, AND WHY IT IS AFFORDABLE. The note above measured S_DONE
+  // at 7.12 cycles per transaction with two flops against 1.14 with one, and
+  // called protocol "essentially the whole cost of a memory access" with the
+  // data cache in front. That is a ratio on the accesses that REACH memory, not
+  // on CPU throughput, and reading it as the latter is what nearly kept this
+  // core at 25 MHz.
+  //
+  // Model 1 has the calibration, at m1_cdc_port: "The V60 can afford it:
+  // measured, 64-cycle memory latency costs it 1.8% (docs/m1-m4-plan.md, 'V60
+  // fetch'), and this bridge adds far less than that." Its CPU crosses at
+  // 29.47 against clk_sys 80 -- a 2.71 ratio, genuinely asynchronous, every
+  // cross-pair a false path in its timing report -- and that core went from 30
+  // to 60 fps when the CPU and 3D clocks went up. Six cycles here is far less
+  // than the 64 that cost 1.8%.
+  logic [1:0] req_mem_s;
   always_ff @(posedge clk_mem or negedge rst_n_mem) begin
-    if (!rst_n_mem) req_mem_r <= 1'b0;
-    else            req_mem_r <= req_cpu;
+    if (!rst_n_mem) req_mem_s <= 2'b00;
+    else            req_mem_s <= {req_mem_s[0], req_cpu};
   end
-  assign req_mem = req_mem_r;
+  assign req_mem = req_mem_s[1];
 
   // --------------------------------------------------------------- decoding
   //
