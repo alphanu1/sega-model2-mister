@@ -284,7 +284,7 @@ wire clk_sys;   // 50 MHz, the core domain, and the COPROCESSOR's clock.
                 // Model 1 paid for this: its 2:1 handshake fired on every
                 // cycle the request was held. See R152.
                   //         later steps need is the one being timed now
-wire clk_3d;      // R465: 60 MHz, the 3D domain (was clk_vid, 32 MHz, unused)
+wire clk_vid;     // 32 MHz
 wire clk_i960;    // 25 MHz -- the real i960's clock, an exact /2 of clk_sys
 wire pll_locked;
 
@@ -294,7 +294,7 @@ pll pll
 	.rst(0),
 	.outclk_0(clk_mem),      // 100 MHz, the SDRAM controller alone
 	.outclk_1(clk_sys),      // 50 MHz, everything else. Exact /2 of outclk_0.
-	.outclk_2(clk_3d),       // 60 MHz, m2_raster3d
+	.outclk_2(clk_vid),      // 32 MHz (unused)
 	.outclk_3(clk_i960),     // 25 MHz, exact /2 of clk_sys.
 	.outclk_4(clk_sdram_pin),// 100 MHz at 180 deg, straight to the device pin
 	.locked(pll_locked)
@@ -5524,155 +5524,29 @@ wire [15:0] oz_d0, oz_d1, oz_d2, oz_d3;   // R334: 1/z off the quad store   // R
 //
 // A buffer is 8 M10K and 25 are free (528/553), so five leaves nine in hand.
 // Six would need 552 of 553 and not fit.
-// ---------------------------------------------------------------- R465: clk_3d
-//
-// THE RENDERER MOVES TO ITS OWN 60 MHz DOMAIN, CUT FROM EVERYTHING ELSE.
-//
-// Model2.sdc puts general[2] in its own clock group, so every path between
-// clk_3d and clk_sys/clk_mem is a FALSE PATH. That is the arrangement Model 1
-// uses for its clk_3d and it is the only one available: 60 against 50 and 100
-// is 3:5 and 3:10, the edges realign every 50 ns, and the closest a launch edge
-// comes to a capture edge is 3.333 ns.
-//
-// WHICH MEANS NOTHING MAY CROSS WITHOUT A SYNCHRONISER, AND THE SDC WILL NOT
-// TELL US IF ONE IS MISSED -- cutting the path removes the very violation that
-// would point at it. Everything crossing here is listed, with what carries it:
-//
-//   quad bus + q_valid/q_ready  m2_handshake_cdc, one 377-bit item at a time
-//   frame_start                 m2_cdc_pulse
-//   tex_inval                   m2_cdc_pulse
-//   scan_x/y, scan_col/hit      m2_raster3d's own TWO_CLOCKS synchronisers
-//   tex_base0/1                 CONSTANTS (GAME_TEXS0/1), never change
-//   texoff_s[2]                 an OSD bit, already three-deep synchronised
-//   rst_n                       the release synchroniser below
-//   tex_m_*                     does NOT cross: m2_texel is on clk_mem
-//   dbg_*                       see the note at the instance
-//
-// The reset asserts asynchronously and releases synchronously in this domain,
-// the same pattern the video reset below uses and for the same reason: letting
-// registers leave reset on different cycles is a real fault, not a timing
-// number.
-logic [1:0] r3d_rst_sync;
-always_ff @(posedge clk_3d or negedge mem_rst_n) begin
-	if (!mem_rst_n) r3d_rst_sync <= 2'b00;
-	else            r3d_rst_sync <= {r3d_rst_sync[0], 1'b1};
-end
-wire r3d_rst_n = r3d_rst_sync[1];
-
-// The two pulses. Both are single clk_sys cycles and both must arrive as single
-// clk_3d cycles, which is what m2_cdc_pulse's toggle-and-edge-detect gives.
-wire r3d_frame_start, r3d_tex_inval;
-m2_cdc_pulse u_r3d_fs_cdc (
-	.a_clk(clk_sys), .a_rst_n(mem_rst_n), .a_pulse(geo_walk_start),
-	.b_clk(clk_3d),  .b_rst_n(r3d_rst_n), .b_pulse(r3d_frame_start)
-);
-m2_cdc_pulse u_r3d_ti_cdc (
-	.a_clk(clk_sys), .a_rst_n(mem_rst_n), .a_pulse(cpu_tex_inval),
-	.b_clk(clk_3d),  .b_rst_n(r3d_rst_n), .b_pulse(r3d_tex_inval)
-);
-
-// R469: q_end IS A PULSE IN ITS OWN RIGHT, NOT A FIELD OF THE QUAD.
-//
-// R465 packed q3d_end into the quad bus as the low bit and shipped it through
-// m2_handshake_cdc, which only moves data on `s_valid && s_ready`. But q3d_end
-// is generated from `geo_walk_frames != walk_frames_d` -- a one-cycle pulse
-// with no relationship to a quad transfer at all. It was therefore dropped
-// unless it happened to land on the same cycle as a handshake.
-//
-// THE COMMENT ON ITS GENERATOR SAYS WHAT THAT COSTS: "q_end is what releases
-// the rasterizer's producer from P_COLLECT into the sort, so without it nothing
-// ever draws no matter how many quads arrived." That is exactly what the board
-// showed on s137 -- 128 quads collected a frame and bands, textures and 1/z all
-// flat zero, with the display-list walk restarting 4,236 times against 175 on
-// the working build.
-//
-// A pulse crosses as a pulse. Same primitive as frame_start above.
-wire r3d_q_end;
-m2_cdc_pulse u_r3d_qe_cdc (
-	.a_clk(clk_sys), .a_rst_n(mem_rst_n), .a_pulse(q3d_end),
-	.b_clk(clk_3d),  .b_rst_n(r3d_rst_n), .b_pulse(r3d_q_end)
-);
-
-// THE QUAD BUS, 377 BITS, ONE ITEM IN FLIGHT.
-//
-// Geometry emits about 2,000 quads a frame and a transfer costs roughly
-// 2*16.7 + 2*20 = 73 ns, so the crossing is ~0.15 ms of a 16.7 ms frame --
-// under 1%. A single entry is therefore enough and a FIFO would be 377 bits of
-// storage for nothing. The texel fetch moves 45,835 items a frame and is the
-// case where that reasoning fails; it is handled separately.
-localparam int unsigned QW = 376;   // R469: q_end left out, it is a pulse
-wire [QW-1:0] q3d_pack = {
-	q3d_x0, q3d_y0, q3d_x1, q3d_y1, q3d_x2, q3d_y2, q3d_x3, q3d_y3,   // 128
-	q3d_col, q3d_z,                                                   //  56
-	q3d_oz0, q3d_oz1, q3d_oz2, q3d_oz3,                               //  64
-	q3d_u0, q3d_v0, q3d_u1, q3d_v1, q3d_u2, q3d_v2, q3d_u3, q3d_v3,   // 104
-	{q3d_tex[23:1], q3d_tex[0] && !texoff_s[2]}                       //  24
-};
-wire [QW-1:0] r3q;
-wire          r3q_valid, r3q_ready;
-m2_handshake_cdc #(.W(QW)) u_quad_cdc (
-	.clk_src(clk_sys), .rst_n_src(mem_rst_n),
-	.s_valid(q3d_valid), .s_ready(q3d_ready), .s_data(q3d_pack),
-	.clk_dst(clk_3d),  .rst_n_dst(r3d_rst_n),
-	.d_valid(r3q_valid), .d_ready(r3q_ready), .d_data(r3q)
-);
-
-
-// Unpacked by a concatenation that MIRRORS q3d_pack above rather than by hand
-// computed bit slices: the two are edited together or not at all, and a slice
-// that drifts by one bit silently rotates the whole quad.
-wire signed [15:0] c_x0, c_y0, c_x1, c_y1, c_x2, c_y2, c_x3, c_y3;
-wire        [23:0] c_col;
-wire        [31:0] c_z;
-wire        [15:0] c_oz0, c_oz1, c_oz2, c_oz3;
-wire        [12:0] c_u0, c_v0, c_u1, c_v1, c_u2, c_v2, c_u3, c_v3;
-wire        [23:0] c_tex;
-assign {c_x0, c_y0, c_x1, c_y1, c_x2, c_y2, c_x3, c_y3,
-        c_col, c_z,
-        c_oz0, c_oz1, c_oz2, c_oz3,
-        c_u0, c_v0, c_u1, c_v1, c_u2, c_v2, c_u3, c_v3,
-        c_tex} = r3q;
-
-// EVERY dbg_* OUTPUT BELOW CROSSES clk_3d -> clk_sys UNSYNCHRONISED, AND THAT
-// IS A DELIBERATE EXCEPTION WITH A LIMIT.
-//
-// There are 28 of them, 464 register bits, and they exist only to be rendered
-// as hex on the debug overlay. Synchronising each would cost roughly its own
-// width again in flops for numbers nobody acts on within a frame; multi-bit
-// synchronising them would be actively WRONG, which m2_raster3d's own note
-// calls "a mistake this project has already made twice" -- the bits settle
-// independently and the reader latches a value that never existed.
-//
-// So they are sampled as-is. WHAT THAT COSTS: a counter read mid-increment can
-// show one wrong digit. These are frame-scale counters read by eye, so a
-// transient wrong digit is acceptable where a wrong PIXEL would not be.
-//
-// WHAT IT WOULD COST TO BE WRONG ABOUT THIS: if any dbg_* value is ever used to
-// DRIVE something rather than to display it, this exception stops being safe
-// and that signal needs a real crossing. None does today.
 m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(5),
-              .TWO_CLOCKS(1'b1), .TEX_AW(SDR_AW)) u_raster3d (
+              .TWO_CLOCKS(1'b0), .TEX_AW(SDR_AW)) u_raster3d (
 	// R318: clk_mem carries m2_texel, which runs at 100 MHz inside this module.
-	.clk(clk_3d), .clk_mem(clk_mem), .rst_n(r3d_rst_n),   // R465
-	.frame_start(r3d_frame_start),
+	.clk(clk_sys), .clk_mem(clk_mem), .rst_n(mem_rst_n),
+	.frame_start(geo_walk_start),
 	// Each bar is a proper filled rectangle traversed around its perimeter:
 	// (x0,y0) top-left, (x0,y2) bottom-left, (x2,y2) bottom-right,
 	// (x2,y0) top-right -- the same v0..v3 cycle the geometry engine emits.
-	.q_valid(r3q_valid), .q_ready(r3q_ready),
-	.q_x0(c_x0), .q_y0(c_y0),
-	.q_x1(c_x1), .q_y1(c_y1),
-	.q_x2(c_x2), .q_y2(c_y2),
-	.q_x3(c_x3), .q_y3(c_y3),
-	.q_col(c_col), .q_z(c_z),
+	.q_valid(q3d_valid), .q_ready(q3d_ready),
+	.q_x0(q3d_x0), .q_y0(q3d_y0),
+	.q_x1(q3d_x1), .q_y1(q3d_y1),
+	.q_x2(q3d_x2), .q_y2(q3d_y2),
+	.q_x3(q3d_x3), .q_y3(q3d_y3),
+	.q_col(q3d_col), .q_z(q3d_z),
 	// R273/R275: the texture, through the store and out to the texel fetch.
-	.q_oz0(c_oz0), .q_oz1(c_oz1), .q_oz2(c_oz2), .q_oz3(c_oz3),   // R334
-	.q_u0(c_u0), .q_v0(c_v0), .q_u1(c_u1), .q_v1(c_v1),
-	.q_u2(c_u2), .q_v2(c_v2), .q_u3(c_u3), .q_v3(c_v3),
+	.q_oz0(q3d_oz0), .q_oz1(q3d_oz1), .q_oz2(q3d_oz2), .q_oz3(q3d_oz3),   // R334
+	.q_u0(q3d_u0), .q_v0(q3d_v0), .q_u1(q3d_u1), .q_v1(q3d_v1),
+	.q_u2(q3d_u2), .q_v2(q3d_v2), .q_u3(q3d_u3), .q_v3(q3d_v3),
 	// The OSD's Off clears the textured bit, which is the one thing every
 	// stage below tests -- the plane fit, the span walk and the texel fetch all
 	// fall back to what they did before in one place.
-	.q_tex(c_tex),   // R465: the texoff bit was applied before the crossing
-	.tex_base0(GAME_TEXS0), .tex_base1(GAME_TEXS1), .tex_inval(r3d_tex_inval),
+	.q_tex({q3d_tex[23:1], q3d_tex[0] && !texoff_s[2]}),
+	.tex_base0(GAME_TEXS0), .tex_base1(GAME_TEXS1), .tex_inval(cpu_tex_inval),
 	.tex_m_req(tex_m_req), .tex_m_addr(tex_m_addr),
 	.tex_m_ack(tex_m_ack), .tex_m_data(tex_m_data),
 	.dbg_texpix(tex_pixels), .dbg_texhit(tex_hits), .dbg_texmiss(tex_misses),
@@ -5680,7 +5554,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(5),
 	.dbg_texsweep(tex_sweep), .dbg_texnz(tex_nz),
 	.dbg_fill_hot(r3d_fill_hot), .dbg_fill_hotcyc(r3d_fill_hotcyc),   // R436
 	.dbg_walk_hot(r3d_walk_hot), .dbg_walk_hotcyc(r3d_walk_hotcyc),
-	.q_moire(1'b0), .q_end(r3d_q_end),   // R469
+	.q_moire(1'b0), .q_end(q3d_end),
 	.scan_clk(clk_sys), .scan_x(vid_x), .scan_y(vid_y),
 	.scan_col(r3d_col), .scan_hit(r3d_hit),
 	.dbg_quads(r3d_quads), .dbg_dropped(r3d_dropped), .dbg_tiny(r3d_tiny),

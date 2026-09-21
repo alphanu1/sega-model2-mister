@@ -99,13 +99,12 @@ if {[llength $core_clks] == 0} {
 #            and its paths MUST stay timed -- that is what the note above says
 #            and it is still true.
 #
-#   GROUP B  general[2] 60
-#            Alone. R464 put the i960 back to 25, where it is an exact /2 of
-#            clk_sys again, so general[3] returns to group A and m2_cpu_bridge
-#            keeps its single-flop crossing. Nothing in this core talks
-#            directly between the 3D layer and the CPU -- the i960's only
-#            partner is m2_cpu_bridge against clk_sys -- so 60 and 25 never
-#            needing an integer ratio costs nothing.
+#   R470: THERE IS NO GROUP B ANY MORE. The renderer is back on clk_sys and
+#   general[2] drives nothing, so naming it here would name a clock the fitter
+#   has dropped -- which this file records as giving "Internal Error:
+#   Sub-system: DTM ... three builds died on it". The PLL still generates 60 MHz
+#   on outclk_2 and the VCO stays at 1200, so putting the renderer back on it is
+#   a one-line change when the texel fetch can absorb the crossing.
 #
 # Between the groups the paths are CUT, so every signal crossing between them
 # needs a real synchroniser. That is new for this core and it is not optional:
@@ -121,8 +120,7 @@ set_clock_groups -asynchronous \
   -group [get_clocks -nowarn {*|pll|pll_inst|altera_pll_i|general[0].*|divclk \
                               *|pll|pll_inst|altera_pll_i|general[1].*|divclk \
                               *|pll|pll_inst|altera_pll_i|general[3].*|divclk \
-                              *|pll|pll_inst|altera_pll_i|general[4].*|divclk}] \
-  -group [get_clocks -nowarn {*|pll|pll_inst|altera_pll_i|general[2].*|divclk}]
+                              *|pll|pll_inst|altera_pll_i|general[4].*|divclk}]
 
 # FIVE OUTPUTS NOW, AND THE COUNT IS CHECKED. The Kaneko16 core gave three
 # outputs identical settings -- same frequency, same phase, same duty -- and the

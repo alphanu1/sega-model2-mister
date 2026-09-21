@@ -62,7 +62,7 @@ module m2_raster3d #(
   input  logic        clk,
   // R318: m2_texel runs on this, not on `clk`. A texel miss is ~280 ns of which
   // ~120 ns is that unit's own state machine, and only that half scales. See
-  // m2_texel_x2 for why the acknowledge has to be held across the crossing.
+  // m2_texel_x2 for why the acknowledge has to be held across the 2:1.
   input  logic        clk_mem,
   input  logic        rst_n,
   input  logic        frame_start,          // one pulse at the start of vblank
@@ -473,9 +473,7 @@ module m2_raster3d #(
   logic [3:0]  txf_texel;
 
   m2_texel_x2 u_texel_x2 (
-    // R467: clk is clk_3d now, unrelated to clk_mem and CUT from it, so this
-    // adapter carries real synchronisers. It used to rely on an exact 2:1.
-    .clk_fast(clk_mem), .clk_slow(clk), .rst_n(rst_n),
+    .clk_fast(clk_mem), .rst_n(rst_n),
     .s_req(tex_req), .s_ack(tex_ack), .s_tex(tex_state),
     .s_u(tex_u), .s_v(tex_v), .s_texel(tex_texel),
     .f_req(txf_req), .f_ack(txf_ack), .f_tex(txf_tex),
