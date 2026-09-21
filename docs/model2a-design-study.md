@@ -19347,3 +19347,39 @@ whether bands land, and only buffering absorbs a worst case.**
 
 NBUF 4 -> 6: two more buffers at 8 M10K each, 528 -> 544 of 553, nine left. Six
 rather than seven because seven leaves one block and would not fit.
+
+---
+
+**R455 -- MEASURE THE REPLAY FACTOR BEFORE TOUCHING BAND HEIGHT.**
+
+Ben asked whether 64 bands would help. The quad store re-issues every quad to
+every band it touches -- `C_REPLAY`, `qs_replay_busy` -- so a quad spanning N
+bands is fitted and walked N TIMES. Band height therefore trades two things
+against each other:
+
+```
+  BAND_H   bands   buffer     replay work
+     6       64     6 M10K      +33%
+     8       48     8 M10K      baseline
+    16       24    16 M10K      -50%
+```
+
+So 64 bands is probably a LOSS -- more repetition on a renderer already 4% over
+-- and 24 bands is potentially the largest single win available, at the cost of
+the buffering R454 just bought. Which way it falls depends entirely on how much
+of the fill's work is repetition, **and nobody has measured it**. `dbg_quads`
+counts quads; a quad replayed six times is six fill passes and one quad.
+
+One counter: quads handed to the fill (`fl_in_valid && fl_in_ready`) per frame.
+Over `dbg_quads` that IS the replay factor. Streamed beside the band counters on
+phase 6, so all three are read from the same frame.
+
+```
+  ratio ~ 1     band height is irrelevant; 64 bands is pure loss
+  ratio 4-6     taller bands are worth more than anything else on the list
+```
+
+**THE HABIT THIS IS TRYING TO KEEP.** R453 and R454 were both proposed from
+argument and only one of them was aimed at the number that matters. The counter
+costs sixteen bits and settles a question that would otherwise cost two builds
+and a guess.

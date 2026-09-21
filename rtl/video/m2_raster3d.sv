@@ -133,6 +133,13 @@ module m2_raster3d #(
   // which is why it reads 17 while the screen shows about two. One comparator
   // on bd_pixels, which the band already maintains.
   output logic [7:0]  dbg_bands_painted,
+  // R455: THE REPLAY FACTOR. The quad store re-issues every quad to every band
+  // it touches, so a tall quad is fitted and walked once PER BAND. dbg_quads
+  // counts quads; this counts fill PASSES. The ratio is how much of the fill's
+  // work is repetition, and it decides whether BAND_H should go up or down --
+  // taller bands halve the replay and cost buffer memory, shorter ones do the
+  // reverse. Nobody has measured it.
+  output logic [15:0] dbg_fillpass,
   // THE FLASHING, INSTRUMENTED. The store is cleared on every frame_start.
   // A frame whose q_end has not arrived by then is still in P_COLLECT: what
   // it collected is wiped, nothing is P_READY for the beam, and the frame
@@ -710,6 +717,7 @@ module m2_raster3d #(
   logic        col_run;
   logic [7:0]  hold_cnt;
   logic  [7:0] bands_this, painted_this;   // R452
+  logic [15:0] fillpass_this;              // R455
 
   // CLEAR UNCONDITIONALLY AT FRAME START, as the reference does.
   //
@@ -757,6 +765,7 @@ module m2_raster3d #(
       bd_clear_req <= '0; dbg_bands <= 16'd0; dbg_pixels <= 32'd0;
       dbg_ready_cyc <= 16'd0; dbg_bands_done <= 8'd0;
       dbg_bands_painted <= 8'd0; painted_this <= 8'd0;   // R452
+      dbg_fillpass <= 16'd0; fillpass_this <= 16'd0;     // R455
       dbg_late_frames <= 8'd0; dbg_qend_frames <= 8'd0;
       dbg_collect_cyc <= 16'd0; col_cyc <= 20'd0; col_run <= 1'b0;
       dbg_hold <= 8'd0; hold_cnt <= 8'd0;
@@ -847,10 +856,16 @@ module m2_raster3d #(
 
       // Latched and restarted together, so the reported pair always describes
       // the SAME frame rather than one number from each side of a boundary.
+      // R455: one count per quad HANDED TO THE FILL. A quad spanning six bands
+      // is handed over six times, so this over dbg_quads is the replay factor.
+      if (fl_in_valid && fl_in_ready && !(&fillpass_this))
+        fillpass_this <= fillpass_this + 16'd1;
+
       if (frame_start) begin
         fill_band <= '0; bd_ready <= '0;
         dbg_bands_done <= bands_this; bands_this <= 8'd0;
         dbg_bands_painted <= painted_this; painted_this <= 8'd0;   // R452
+        dbg_fillpass <= fillpass_this; fillpass_this <= 16'd0;      // R455
         rdy_cyc <= 20'd0; rdy_run <= 1'b1;
         col_cyc <= 20'd0; col_run <= 1'b1;
       end
