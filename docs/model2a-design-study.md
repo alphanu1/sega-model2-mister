@@ -19267,3 +19267,39 @@ and used to claim the renderer wedges several times a slice. It is not:
 `wedge_hit = WEDGE_EN && q3d_valid && q3d_ready && wedge_in && (wedge_s1 ||
 wedge_s0)` is a quad-SHAPE capture for an unrelated geometry diagnostic. Reading
 a counter's name instead of its definition, one more time.
+
+---
+
+**R453 -- THE TEXTURE PATH IS THE WHOLE COST, AND THE TEXEL CACHE IS THE ONE
+LEVER THAT COSTS M10K.**
+
+Ben: **with textures off all fifty bands land; with them on, two.** Same
+geometry, same quad store, same display list. So the quad supply is fine and
+every cycle of the 25x lives in the texture path -- which retires the "bands are
+starved" hypothesis R452 was built to test, before the build finished.
+
+The structural reason is in one line of m2_span_tex:
+
+```
+  assign out_valid = idle ? (in_valid && !tex_now) : e_valid;
+```
+
+Untextured, a span is ONE handshake. Textured, it is expanded into
+width/PIXSTEP groups, each with a texel fetch -- a 400-pixel span is a hundred
+fetches. Measured on the board: **45,835 fetches a frame at 56.3% hit**, so
+about 20,000 misses, each a full SDRAM round trip. That is the 25x, and it is
+neither the plane fit nor the divide -- both of which were optimised first,
+because the ranking came from a stale figure rather than this measurement.
+
+IDX_BITS 11 -> 12: 2048 -> 4096 lines, 16 KB -> 32 KB, **+21 M10K of the 48
+free**. It costs block RAM and not ALM, which is why it is affordable when
+nothing else has been. R328 measured 1024 -> 2048 taking the hit rate
+54.3% -> 64.9%.
+
+**AND THE TEXEL SIDE IS ALREADY CLOCKED UP.** m2_texel runs on `clk_mem` at
+100 MHz, twice the renderer's 50. Going faster means raising clk_mem, which is
+the worst domain in every build (-1.5 to -2.0 on the SDRAM arbiter path), so it
+is blocked behind that rather than being a free knob.
+
+m2_texel 8,066/0 at the new size -- R331 had already made the bench's warm-up
+size-aware, which is why doubling needed no test change.

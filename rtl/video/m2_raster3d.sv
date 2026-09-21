@@ -472,7 +472,19 @@ module m2_raster3d #(
   // 4096 lines would be 24 and was NOT taken: R322's doubling is a measurement
   // as much as a change, and spending the whole headroom before reading the
   // curve is how R304 and R307 both went wrong.
-  m2_texel #(.AW(TEX_AW), .IDX_BITS(11)) u_texel (
+  // R453: 2048 -> 4096 LINES, 16 KB -> 32 KB, +21 M10K of the 48 free.
+  //
+  // With textures OFF all fifty bands land; with them on, two. Same geometry,
+  // same quad store, same display list -- so the supply is fine and the entire
+  // cost is the texture path. Untextured a span is ONE handshake; textured it
+  // expands into width/PIXSTEP groups each with a texel fetch, so a 400-pixel
+  // span is a hundred fetches. Measured: 45,835 fetches a frame at 56.3% hit,
+  // about 20,000 misses, each an SDRAM round trip.
+  //
+  // The one lever that costs M10K rather than ALM, which is the resource this
+  // design still has. R328 measured 1024 -> 2048 taking the hit rate
+  // 54.3% -> 64.9%.
+  m2_texel #(.AW(TEX_AW), .IDX_BITS(12)) u_texel (
     .clk(clk_mem), .rst_n(rst_n),
     .base_s0(tex_base0), .base_s1(tex_base1),
     .req(txf_req), .ack(txf_ack), .tex(txf_tex),
