@@ -275,6 +275,8 @@ module m2_span_tex #(
   logic [31:0] d2_nd;  logic [5:0]  d2_e;  logic [24:0] d2_r;
   logic [24:0] d3_r1;  logic [5:0]  d3_e;
   logic signed [31:0] d4_u, d4_v;
+  logic        [63:0] d4a_pu, d4a_pv;   // R468: the product, before the shift
+  logic         [4:0] d4a_sh;
   // The coordinate that entered the pipeline with the 1/z now emerging from it,
   // delayed three cycles to match. Getting this wrong pairs a texel coordinate
   // with the wrong pixel's depth, which is the whole fault this change exists
@@ -287,6 +289,7 @@ module m2_span_tex #(
       d1_e <= '0; d1_m <= '0; d1_r <= '0;
       d2_nd <= '0; d2_e <= '0; d2_r <= '0;
       d3_r1 <= '0; d3_e <= '0; d4_u <= '0; d4_v <= '0;
+      d4a_pu <= '0; d4a_pv <= '0; d4a_sh <= '0;   // R468
       u_h1 <= '0; v_h1 <= '0; u_h2 <= '0; v_h2 <= '0; u_h3 <= '0; v_h3 <= '0;
       u_h4 <= '0; v_h4 <= '0;
     end else begin
@@ -311,12 +314,29 @@ module m2_span_tex #(
       // stage 3: the refined reciprocal
       d3_r1 <= 25'((64'(d2_r) * 64'(d2_nd)) >> 23);
       d3_e  <= d2_e;
-      // stage 4: the coordinates
-      begin
-        automatic logic [4:0]  sh = (d3_e < 6'd23) ? 5'd16 : 5'(d3_e - 6'd7);
-        d4_u <= sat32((64'(u_h4) * 64'(d3_r1)) >> sh);
-        d4_v <= sat32((64'(v_h4) * 64'(d3_r1)) >> sh);
-      end
+      // stage 4a: the coordinate multiply. R468: THE SHIFT MOVED OFF IT.
+      //
+      //   m2_span_tex|Mult1~mult_hh_pl -> m2_span_tex|d4_v[26]   16.933 ns
+      //
+      // was the worst clk_3d path on s134 once R466 moved m2_persp_recip off
+      // it. One cycle carried a 64-bit multiply, a VARIABLE shift by sh and
+      // then sat32 -- a DSP output straight into a barrel shifter, the same
+      // shape R457, R459, R461 and R466 each split.
+      //
+      // `sh` is not the offender: it comes off the registered d3_e and
+      // computes beside the multiply. The multiply feeding the shifter is.
+      //
+      // COSTS LATENCY, NOT THROUGHPUT. d0..d4 is a pipeline (R446/R448), not a
+      // state walk -- group N+1's coordinates are computed while group N's
+      // texel is in flight -- so one more stage means dv_age reaches six
+      // instead of five, and nothing issues any slower.
+      d4a_pu <= 64'(u_h4) * 64'(d3_r1);
+      d4a_pv <= 64'(v_h4) * 64'(d3_r1);
+      d4a_sh <= (d3_e < 6'd23) ? 5'd16 : 5'(d3_e - 6'd7);
+
+      // stage 4b: the un-normalise and the clamp, on the registered product.
+      d4_u <= sat32(d4a_pu >> d4a_sh);
+      d4_v <= sat32(d4a_pv >> d4a_sh);
       u_h1 <= dv_u;  v_h1 <= dv_v;
       u_h2 <= u_h1;  v_h2 <= v_h1;
       u_h3 <= u_h2;  v_h3 <= v_h2;
@@ -360,7 +380,7 @@ module m2_span_tex #(
 
         // R446: the span's FIRST group is the only one that waits. Every
         // group after it was computed while the previous texel was in flight.
-        T_WARM: if (dv_age >= 3'd5) begin
+        T_WARM: if (dv_age >= 3'd6) begin
           uq_r     <= d4_u;
           vq_r     <= d4_v;
           dv_first <= 1'b0;
@@ -382,7 +402,7 @@ module m2_span_tex #(
           end
         end
 
-        T_EMIT: if ((!e_valid || out_ready) && dv_age >= 3'd5) begin
+        T_EMIT: if ((!e_valid || out_ready) && dv_age >= 3'd6) begin
           e_valid <= !tx_skip;                  // R326: transparent texel
           e_x     <= x_r;
           e_x1    <= ((x_r + 32'(PIXSTEP) - 32'sd1) > x1_r)
