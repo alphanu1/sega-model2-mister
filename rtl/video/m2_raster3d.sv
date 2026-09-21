@@ -28,7 +28,20 @@ module m2_raster3d #(
   parameter int unsigned SCR_W  = 496,
   parameter int unsigned SCR_H  = 384,
   parameter int unsigned BAND_H = 8,
-  parameter int unsigned NBUF   = 4,
+  // R454: 4 -> 6 BAND BUFFERS. The renderer's problem is VARIANCE, not
+  // throughput: `ready ms` measures 6.08 median against 17.3 max, and the
+  // frame is 16.7. Most frames finish in a third of the time and the
+  // occasional one runs over -- and with only four buffers there is no cushion
+  // to absorb that, so one slow band throws away everything behind it.
+  //
+  // R452's counter is what showed this. Bands PAINTED is 23 median and 50 in
+  // 27% of frames, against two or three visible: the work is being done and
+  // then discarded, because a buffer is freed the moment the beam passes its
+  // band. Deeper buffering lets the fast bands bank ahead for the slow ones.
+  //
+  // Two more, not three: a buffer is 8 M10K and 25 are free, so 6 leaves 9 in
+  // hand where 7 would leave 1 and not fit.
+  parameter int unsigned NBUF   = 6,
 
   // ARE clk AND scan_clk ACTUALLY DIFFERENT CLOCKS?
   //

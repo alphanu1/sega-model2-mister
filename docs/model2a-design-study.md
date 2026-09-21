@@ -19303,3 +19303,47 @@ is blocked behind that rather than being a free knob.
 
 m2_texel 8,066/0 at the new size -- R331 had already made the bench's warm-up
 size-aware, which is why doubling needed no test change.
+
+---
+
+**R454 -- THE BANDS ARE PAINTED AND THEN THROWN AWAY. IT IS VARIANCE, NOT
+THROUGHPUT, AND THE TARGET IS 4% NOT 25x.**
+
+R452's counter, read off s106:
+
+```
+  bands COMPLETED  med 26  max 50
+  bands PAINTED    med 23  max 50
+  painted distribution: 50 bands x21 samples, 14 x6, 17 x6, 15 x4, 23 x4
+```
+
+**Painted is not much below completed**, so bands are not finishing empty -- the
+hypothesis R452 was built to test is refuted. And **in 27% of frames the
+renderer paints all fifty bands**, against the two or three Ben sees.
+
+So the work is DONE and DISCARDED. A buffer is released the instant the beam
+passes its band:
+
+```
+  if (bd_ready[i] && (scan_band_f > bd_band[i])) bd_ready[i] <= 1'b0;
+```
+
+Paint band N after the beam has gone by and it is thrown away. `ready ms max`
+is 17.23 / 17.35 / 17.31 against a 16.7 ms frame -- **consistently about 3.6%
+over**.
+
+**THIS CHANGES THE SIZE OF THE PROBLEM BY A FACTOR OF SIX HUNDRED.** Every
+estimate in this run has been framed as needing 3.5x, then 25x. It needs about
+FOUR PERCENT -- the renderer finishes just past the deadline, and because it is
+beam-locked with four buffers, being 4% late costs 90% of the picture. A cliff,
+not a slope. It also explains the bimodality exactly: when the phase happens to
+line up you see 38 bands, otherwise the two or three that made their slot.
+
+**AND THE VARIANCE IS THE LEVER.** `ready` is 6.08 MEDIAN against 17.3 max. Most
+frames finish in a third of the time. The cache doubling (R453) halved the
+median -- 10.65 -> 6.08 -- and did not move the max at all, which is why it
+changed the numbers and not the picture. **The worst-case frame is what decides
+whether bands land, and only buffering absorbs a worst case.**
+
+NBUF 4 -> 6: two more buffers at 8 M10K each, 528 -> 544 of 553, nine left. Six
+rather than seven because seven leaves one block and would not fit.
