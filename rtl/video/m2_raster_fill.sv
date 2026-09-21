@@ -421,6 +421,8 @@ module m2_raster_fill (
   // one only lands on its first.
   logic signed [31:0] mul_q_r;
   logic        [5:0]  mul_zr;
+  logic signed [8:0] net_r;   // R459: pf_scale's shift amount, a cycle early
+  logic              zbig_r;  // R459: mul_zr >= 32, likewise
   logic               b_wait;
   logic               nrm_wait;   // R449
   logic signed [31:0] mul_n;
@@ -503,6 +505,36 @@ module m2_raster_fill (
         if      (r >  40'sd32767) pf_scale =  16'sd32767;
         else if (r < -40'sd32767) pf_scale = -16'sd32767;
         else                      pf_scale =  16'(r);
+      end
+    end
+  endfunction
+
+  // R459: THE SHIFT AMOUNT, PRECOMPUTED. Same arithmetic as pf_scale above,
+  // split so the two 9-bit subtractions and the 6-bit compare do not sit in
+  // series with the 40-bit bidirectional barrel shifter.
+  //
+  //   m2_raster_fill|mul_zr[1] -> m2_raster_fill|dvdy[*]   19.652 ns / 20.000
+  //
+  // was the worst clk_sys path on s117 after R457 moved the previous one, and
+  // all 37 failing endpoints at 60 MHz were dudx/dudy/dvdx/dvdy -- every one
+  // written by this single expression.
+  //
+  // `net` depends only on mul_z and den_sh. den_sh is registered entering
+  // S_PF_NRM and does not move again for the quad, and mul_z is registered a
+  // cycle before pf_scale reads it, so both are available in the cycle that
+  // registers mul_zr. Computing it there is exact, not an approximation, and
+  // costs no cycles: that cycle already only captures a result.
+  function automatic logic signed [15:0] pf_scale_n(input logic signed [31:0] q,
+                                                    input logic signed [8:0]  net,
+                                                    input logic               zbig);
+    logic signed [39:0] r;
+    begin
+      if (zbig) pf_scale_n = 16'sd0;
+      else begin
+        r = (net >= 9'sd0) ? (40'(q) <<< net[5:0]) : (40'(q) >>> (-net));
+        if      (r >  40'sd32767) pf_scale_n =  16'sd32767;
+        else if (r < -40'sd32767) pf_scale_n = -16'sd32767;
+        else                      pf_scale_n =  16'(r);
       end
     end
   endfunction
@@ -767,6 +799,7 @@ module m2_raster_fill (
       q_num_a <= '0; q_num_b <= '0; q_z_a <= '0; q_z_b <= '0;
       nxu_z <= '0; nyu_z <= '0; nxv_z <= '0; nyv_z <= '0;
       nxo_z <= '0; nyo_z <= '0; mul_n <= '0; mul_z <= 6'd0;   // R441/R442
+      net_r <= 9'sd0; zbig_r <= 1'b0;   // R459
       den_a <= 16'd1; nrm_wait <= 1'b0;                      // R449
       // R451: these were initialised in the prime step and NOT in reset. A
       // register that only gets a value once the state machine reaches a
@@ -921,27 +954,31 @@ module m2_raster_fill (
         S_PF_Q1: begin
           mul_n <= mul_n_c; mul_z <= zsel_c;
           mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
+          net_r <= 9'sd9 - 9'(mul_z) - 9'(den_sh); zbig_r <= (mul_z >= 6'd32);   // R459
           state <= S_PF_Q1W;
         end
 
         S_PF_Q1W: begin
           mul_n <= mul_n_c; mul_z <= zsel_c;
           mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
-          dudx  <= pf_scale(mul_q_r, mul_zr);
+          net_r <= 9'sd9 - 9'(mul_z) - 9'(den_sh); zbig_r <= (mul_z >= 6'd32);   // R459
+          dudx  <= pf_scale_n(mul_q_r, net_r, zbig_r);
           state <= S_PF_Q2;
         end
 
         S_PF_Q2: begin
           mul_n <= mul_n_c; mul_z <= zsel_c;
           mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
-          dudy  <= pf_scale(mul_q_r, mul_zr);
+          net_r <= 9'sd9 - 9'(mul_z) - 9'(den_sh); zbig_r <= (mul_z >= 6'd32);   // R459
+          dudy  <= pf_scale_n(mul_q_r, net_r, zbig_r);
           state <= S_PF_Q2W;
         end
 
         S_PF_Q2W: begin
           mul_n <= mul_n_c; mul_z <= zsel_c;
           mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
-          dvdx  <= pf_scale(mul_q_r, mul_zr);
+          net_r <= 9'sd9 - 9'(mul_z) - 9'(den_sh); zbig_r <= (mul_z >= 6'd32);   // R459
+          dvdx  <= pf_scale_n(mul_q_r, net_r, zbig_r);
           state <= S_PF_Q3;
         end
 
@@ -955,20 +992,22 @@ module m2_raster_fill (
         S_PF_Q3: begin
           mul_n <= mul_n_c; mul_z <= zsel_c;
           mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
-          dvdy  <= pf_scale(mul_q_r, mul_zr);
+          net_r <= 9'sd9 - 9'(mul_z) - 9'(den_sh); zbig_r <= (mul_z >= 6'd32);   // R459
+          dvdy  <= pf_scale_n(mul_q_r, net_r, zbig_r);
           state <= S_PF_Q3W;
         end
 
         S_PF_Q3W: begin
           mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
-          dodx  <= pf_scale(mul_q_r, mul_zr);
+          net_r <= 9'sd9 - 9'(mul_z) - 9'(den_sh); zbig_r <= (mul_z >= 6'd32);   // R459
+          dodx  <= pf_scale_n(mul_q_r, net_r, zbig_r);
           state <= S_PF_B;
         end
 
         // The plane is held as its value at screen (0,0) plus two gradients,
         // so a span costs two multiplies and no state.
         S_PF_B: if (!b_wait) begin
-          dody   <= pf_scale(mul_q_r, mul_zr);   // R450: the last gradient
+          dody   <= pf_scale_n(mul_q_r, net_r, zbig_r);   // R450: the last gradient
           b_wait <= 1'b1;
         end else begin
           b_wait <= 1'b0;
