@@ -19516,3 +19516,62 @@ worth one.
 about two minutes against 25 for the core. Both measurements above cost four
 minutes together and one of them killed a wrong belief that would otherwise
 have been a build.
+
+---
+
+**R464 -- THE i960 AT 30 MHz IS PARKED, NOT ABANDONED, AND THE BLOCKER IS CPI
+RATHER THAN THE CLOCK.**
+
+R460 took clk_i960 to 30 and it built. Three seeds:
+
+```
+  seed   ALM      clk_mem   clk_sys   clk_i960 @30
+  s128   41,149   -1.769    -0.755    -5.040
+  s129   41,045   -1.424    +0.528    -4.892
+  s130   41,016   -1.793    +0.071    -4.084
+```
+
+Fitted alone at 33.333 ns, `i960_top` reports **Fmax 27.31** and the path is
+
+```
+  insn[3] -> wd[11]     slack -3.286
+```
+
+the decode / ALU / writeback chain. Note this is the REAL path: the earlier
+`ip[26] -> wd[13]` was a FALSE one, removed by duplicating the decoder so the
+arriving word never reaches writeback. That trick is spent.
+
+**WHY ANOTHER PIPELINE STAGE IS THE WRONG ANSWER.** It is exactly the `T_DECODE`
+state i960_top deleted, and that file has the arithmetic: *"Even at a 100%
+prefetch hit rate the old FETCH -> DECODE -> EXEC walk could not beat 3 CPI, and
+3 CPI at 27.44 MHz is 9.15 M instr/s against a 12.5 M floor."*
+
+```
+  2 CPI at 25 MHz  =  12.5 M instr/s
+  3 CPI at 30 MHz  =  10.0 M instr/s
+```
+
+**Buying 20% of clock with 50% of CPI is a net loss.** Reaching 30 requires the
+combinational decode-to-writeback path shortened WITHOUT a new stage.
+
+**WHAT 25 BUYS THAT 30 DOES NOT.** At 25 clk_i960 is an exact /2 of clk_sys, so
+general[3] sits in the TIMED clock group and m2_cpu_bridge keeps its
+single-flop crossing -- S_DONE 1.14 cycles against 7.12 for the synchronised
+version. Cutting the domain costs six cycles a transaction on every access that
+reaches memory.
+
+**AND A CORRECTION THAT NEARLY KEPT THIS CORE AT 25 FOR THE WRONG REASON.** That
+7.12-against-1.14 figure was quoted here as an argument that 30 MHz would make
+the CPU five times slower. It is a ratio on the PROTOCOL COMPONENT of the
+accesses that reach memory, not on CPU throughput, and with a data cache in
+front those are a small share of cycles. Model 1 has the calibration at
+`m1_cdc_port`: *"measured, 64-cycle memory latency costs it 1.8%"*. Its CPU
+crosses at 29.47 against clk_sys 80 -- a 2.71 ratio, every cross-pair a false
+path -- and that core went from 30 to 60 fps when its CPU and 3D clocks rose.
+Six cycles against the 64 that cost 1.8% is noise. **The oracle had the number;
+arguing from a ratio instead of reading it was the error.**
+
+The CPI argument above is the real blocker and it survives that correction.
+
+1200/48 = 25, so the new VCO carries the old clock unchanged and 30 costs
+nothing to revisit.

@@ -256,18 +256,15 @@ module m2_cpu_bridge #(
   logic [31:0] r_addr, r_wdata;
   logic  [3:0] r_be;
   logic [31:0] r_rdata;
-  logic  [1:0] ack_cpu_s;   // R460: synchroniser for ack_mem
 
   always_ff @(posedge clk_cpu or negedge rst_n_cpu) begin
     if (!rst_n_cpu) begin
       req_cpu <= 1'b0; bus_ack <= 1'b0; cph <= C_IDLE; ack_cpu <= 1'b0;
-      ack_cpu_s <= 2'b00;   // R460
       r_we <= 1'b0; r_addr <= 32'd0; r_wdata <= 32'd0; r_be <= 4'd0;
     end else begin
-      // R460: two flops here too -- same reason as req_mem_s below, the 2:1
-      // that justified one flop is gone at 30/50.
-      ack_cpu_s <= {ack_cpu_s[0], ack_mem};
-      ack_cpu   <= ack_cpu_s[1];
+      // The same single flop in the other direction, for the same reason: one
+      // stage of settling, not two of synchronising.
+      ack_cpu <= ack_mem;
       bus_ack  <= 1'b0;
       // AN EXPLICIT FOUR-PHASE HANDSHAKE, because the condition-by-condition
       // version kept racing. The phases are req-up, ack-up, req-down, ACK-DOWN,
@@ -344,7 +341,12 @@ module m2_cpu_bridge #(
   //
   // This REQUIRES the two clocks to be declared related in Model2.sdc; they were
   // in separate -asynchronous groups, which would leave these paths unchecked.
-  // R460: TWO FLOPS AGAIN, BECAUSE THE 2:1 IS GONE.
+  // R464: ONE FLOP AGAIN. R460 took the i960 to 30, which made this 3:5 and
+  // needed two; the CPU is back at 25 and the exact 2:1 with it, so general[3]
+  // is in the timed group again and one flop is sound. The 30 MHz version of
+  // this note is in the commit for R460 if the CPU clock ever moves.
+  //
+  // WHAT FOLLOWS IS WHY ONE FLOP IS ENOUGH AT 2:1.
   //
   // Everything above is true of 25/50. clk_i960 is 30 MHz now and clk_sys is
   // still 50, which is 3:5 -- the edges realign every 50 ns and the closest a
@@ -366,12 +368,12 @@ module m2_cpu_bridge #(
   // cross-pair a false path in its timing report -- and that core went from 30
   // to 60 fps when the CPU and 3D clocks went up. Six cycles here is far less
   // than the 64 that cost 1.8%.
-  logic [1:0] req_mem_s;
+  logic req_mem_r;
   always_ff @(posedge clk_mem or negedge rst_n_mem) begin
-    if (!rst_n_mem) req_mem_s <= 2'b00;
-    else            req_mem_s <= {req_mem_s[0], req_cpu};
+    if (!rst_n_mem) req_mem_r <= 1'b0;
+    else            req_mem_r <= req_cpu;
   end
-  assign req_mem = req_mem_s[1];
+  assign req_mem = req_mem_r;
 
   // --------------------------------------------------------------- decoding
   //

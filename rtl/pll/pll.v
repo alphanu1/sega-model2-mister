@@ -62,8 +62,7 @@
 //   outclk_2   60 MHz   the 3D domain (R460). Was 32 MHz for a video
 //                       domain that no longer exists -- the renderer and
 //                       overlay run on clk_sys with a one-in-three enable.
-//   outclk_3   30 MHz   i960 (R460). NO LONGER an exact /2 of outclk_1 --
-//                       it is an exact /2 of outclk_2 instead.
+//   outclk_3   25 MHz   i960, an exact /2 of outclk_1 (R464; 30 is parked)
 //   outclk_4  100 MHz   SDRAM_CLK pin, 180 degrees from outclk_0
 //
 // 96 MHz, AND WHAT IT COST. The 40 MHz above was a retreat from 80, and the
@@ -92,7 +91,7 @@
 //     SDRAM  1200/12 = 100 MHz     clk_sys is still an exact /2 of SDRAM
 //     core   1200/24 =  50 MHz
 //     3D     1200/20 =  60 MHz     the renderer, and 2x the i960
-//     i960   1200/40 =  30 MHz     1.2x the real part, deliberately
+//     i960   1200/48 =  25 MHz     the real part, and still /2 of clk_sys
 //
 // m2_sdram_x2 KEEPS ITS 2:1 and stays an adapter -- 100 and 50 are untouched.
 // THE CPU BRIDGE LOSES ITS 2:1: clk_i960 is 3:5 against clk_sys now, so the
@@ -151,7 +150,7 @@ module pll (
     output wire  outclk_0,   // 100 MHz  SDRAM controller
     output wire  outclk_1,   //  50 MHz  clk_sys, exact /2 of outclk_0
     output wire  outclk_2,   //  60 MHz  clk_3d (R460)
-    output wire  outclk_3,   //  30 MHz  i960 (R460)
+    output wire  outclk_3,   //  25 MHz  i960
     output wire  outclk_4,   // 100 MHz  SDRAM_CLK pin, 180 deg from outclk_0
     output wire  locked
   );
@@ -176,7 +175,7 @@ module pll_core (
     output wire  outclk_0,   // 100 MHz  SDRAM controller
     output wire  outclk_1,   //  50 MHz  clk_sys
     output wire  outclk_2,   //  60 MHz  clk_3d (R460)
-    output wire  outclk_3,   //  30 MHz  i960 (R460)
+    output wire  outclk_3,   //  25 MHz  i960
     output wire  outclk_4,   // 100 MHz  SDRAM_CLK pin, 180 deg
     output wire  locked
   );
@@ -205,11 +204,27 @@ module pll_core (
     .output_clock_frequency2("60.000000 MHz"),
     .phase_shift2("0 ps"),
     .duty_cycle2(50),
-    // R460: 30 MHz, was 25. The i960KB part is a 25 MHz device (study 45-46)
-    // and this ran it at exactly 1x; 30 is 1.2x, which is a deliberate
-    // divergence and not an accident of the clock plan.
+    // R464: BACK TO 25, AND 30 IS PARKED RATHER THAN ABANDONED.
     //
-    // IT IS NO LONGER AN EXACT /2 OF clk_sys, AND THAT BREAKS AN ASSUMPTION
+    // 30 built and fitted, and general[3] came back at -4.1 to -5.0 ns on
+    // insn -> wd -- the decode/ALU/writeback chain, measured 27.31 MHz alone.
+    // The obvious cure is another pipeline stage, which is exactly the
+    // T_DECODE state i960_top DELETED to get under 3 CPI, and its own note has
+    // the arithmetic: "3 CPI at 27.44 MHz is 9.15 M instr/s against a 12.5 M
+    // floor". Two CPI at 25 beats three at 30, so the stage would buy clock and
+    // lose throughput.
+    //
+    // Reaching 30 means shortening that combinational chain WITHOUT a new
+    // stage. Until then 25 keeps the exact /2 of clk_sys, which is worth more
+    // than the 20%: it puts general[3] back in the timed group and gives
+    // m2_cpu_bridge its single-flop crossing (S_DONE 1.14 cycles against 7.12).
+    //
+    // 1200/48 = 25 exactly, so the new VCO carries it unchanged.
+    //
+    // The 30 MHz reasoning is kept below because it is still what has to be
+    // true when the execute path is fixed.
+    //
+    // IT WOULD NO LONGER BE AN EXACT /2 OF clk_sys, WHICH BREAKS AN ASSUMPTION
     // m2_cpu_bridge RELIES ON. Model2.sdc records why the synchronisers came
     // out of that bridge: "It comes off the SAME PLL as general[1] at an exact
     // 2:1 ratio, so its edges are aligned and there was never metastability to
@@ -218,7 +233,7 @@ module pll_core (
     // that is 3:5 -- the edges realign every 50 ns and the closest approach is
     // 3.333 ns -- so the bridge needs them back and general[3] needs its own
     // clock group.
-    .output_clock_frequency3("30.000000 MHz"),
+    .output_clock_frequency3("25.000000 MHz"),
     .phase_shift3("0 ps"),
     .duty_cycle3(50),
     // 180 degrees at 100 MHz is half a 10 ns period: 5000 ps exactly. It was
