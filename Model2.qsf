@@ -822,6 +822,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/dbg/m2_uart_tx.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/dbg/m2_dbg_stream.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/mem/m2_cdc_port.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/mem/m2_cdc_pulse.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_handshake_cdc.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/io/m2_rom_loader.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_tile_decode.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_tile_fetch.sv
