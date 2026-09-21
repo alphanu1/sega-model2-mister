@@ -1082,6 +1082,10 @@ obj_fx68k/Vfx68k_harness: sim/sound/fx68k_harness.sv sim/sound/tb_fx68k.cpp $(FX
 .PHONY: quartus quartus_all quartus_report quartus_paths
 MOD  ?= i960_alu
 QDIR := build/quartus/$(MOD)
+# Spike clock period in ns. 40 (25 MHz) is loose enough that the fitter stops
+# trying, which makes the Fmax figure meaningless -- see quartus/spike.sdc.
+# Pass SPIKE_PERIOD=16.667 to ask whether a module closes at 60 MHz.
+SPIKE_PERIOD ?= 40.000
 
 SRCS_i960_dec  := $(DEC_RTL)
 SRCS_i960_alu  := $(ALU_RTL)
@@ -1182,7 +1186,7 @@ quartus: lint_$(MOD)
 	  sed -e 's/@MODULE@/$(MOD)/g' -e "s|@SRCS@|$$srcs|" quartus/spike.qsf.in > $(QDIR)/$(MOD).qsf
 	@cp quartus/spike.sdc $(QDIR)/spike.sdc
 	@echo 'PROJECT_REVISION = "$(MOD)"' > $(QDIR)/$(MOD).qpf
-	@cd $(QDIR) && PATH="$(QUARTUS)):$$PATH" sh -c \
+	@cd $(QDIR) && PATH="$(QUARTUS)):$$PATH" SPIKE_PERIOD="$(SPIKE_PERIOD)" sh -c \
 	   '$(QUARTUS)/quartus_map $(MOD) >map.log 2>&1 && \
 	    $(QUARTUS)/quartus_fit $(MOD) >fit.log 2>&1 && \
 	    $(QUARTUS)/quartus_sta $(MOD) >sta.log 2>&1' \
@@ -1200,7 +1204,7 @@ quartus_all:
 # nothing. Run this before touching anything for timing.
 quartus_paths:
 	@test -d $(QDIR) || { echo "run 'make quartus MOD=$(MOD)' first"; exit 1; }
-	@cd $(QDIR) && $(QUARTUS)/quartus_sta -t ../../../quartus/report_timing.tcl $(MOD) 2>&1 \
+	@cd $(QDIR) && SPIKE_PERIOD="$(SPIKE_PERIOD)" $(QUARTUS)/quartus_sta -t ../../../quartus/report_timing.tcl $(MOD) 2>&1 \
 	  | grep -E 'SLACK|FROM|TO ' | head -12
 
 quartus_report:

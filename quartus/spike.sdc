@@ -12,9 +12,23 @@
 # port at all, and an unguarded create_clock on an empty collection aborts the
 # whole SDC — taking the I/O cuts below with it and silently changing what is
 # being measured.
+# THE PERIOD IS A PARAMETER NOW, AND 40 ns MADE THE Fmax FIGURE MEANINGLESS.
+#
+# At 40 ns m2_raster_fill reports +18.4 ns of slack, so the fitter clears the
+# constraint on the first try and stops. The Fmax that falls out is what
+# effort-free placement achieves -- 46.36 MHz -- while the SAME RTL makes
+# 19.4 ns inside the full design, where the fitter is working against 20 ns.
+# Reading that number as capability is reading how hard the fitter tried.
+#
+# `make quartus MOD=x SPIKE_PERIOD=16.667` constrains at the real target so the
+# slack means something. ALM was never affected by this -- area does not depend
+# on timing pressure -- so the area numbers taken at 40 ns still stand.
 if {[llength [get_ports -nowarn {clk}]] > 0} {
-    create_clock -name clk -period 40.000 [get_ports {clk}]
+    set per 40.000
+    if {[info exists ::env(SPIKE_PERIOD)]} { set per $::env(SPIKE_PERIOD) }
+    create_clock -name clk -period $per [get_ports {clk}]
     derive_clock_uncertainty
+    post_message -type info "spike.sdc: clk constrained at $per ns"
 }
 
 # Cut every I/O path. Everything is virtual-pinned, so input and output delays
