@@ -701,6 +701,32 @@ module m2_raster_fill (
   end
 
   // ------------------------------------------------------------------- FSM
+  // R458: ONE BARREL SHIFTER, NOT SIX.
+  //
+  // The six gradient states each called pf_shift with DIFFERENT operands, so
+  // sharing them needs an operand mux -- Quartus cannot fold them the way it
+  // folds pf_scale, whose six calls take identical arguments and are plain
+  // common-subexpression elimination. pf_shift is a 32-bit barrel shifter and
+  // six of them is the shape that already put this module over the device
+  // once ("six multiply-add pairs instead of two", base_u/base_v below).
+  //
+  // Exactly equivalent: in each state the mux selects that state's own
+  // operands, so the shifter sees what it saw before. Only one state fires per
+  // cycle, which is what makes one shifter sufficient.
+  logic signed [31:0] nsel_c;
+  logic [5:0]         zsel_c;
+  always_comb begin
+    case (state)
+      S_PF_Q1:  begin nsel_c = nyu; zsel_c = nyu_z; end
+      S_PF_Q1W: begin nsel_c = nxv; zsel_c = nxv_z; end
+      S_PF_Q2:  begin nsel_c = nyv; zsel_c = nyv_z; end
+      S_PF_Q2W: begin nsel_c = nxo; zsel_c = nxo_z; end
+      S_PF_Q3:  begin nsel_c = nyo; zsel_c = nyo_z; end
+      default:  begin nsel_c = nxu; zsel_c = nxu_z; end   // S_PF_NRM, priming
+    endcase
+  end
+  wire signed [31:0] mul_n_c = pf_shift(nsel_c, zsel_c);
+
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       state      <= S_IDLE;
@@ -883,8 +909,8 @@ module m2_raster_fill (
           nxo_z <= pf_clz(nxo); nyo_z <= pf_clz(nyo);   // R441
         end else begin
           nrm_wait <= 1'b0;
-          mul_n <= pf_shift(nxu, nxu_z);   // R457: registered count, no clz here
-          mul_z <= nxu_z;
+          mul_n <= mul_n_c;   // R457/R458: registered count, one shared shifter
+          mul_z <= zsel_c;
           mul_q_r <= '0; mul_zr <= 6'd0; b_wait <= 1'b0;   // R450
           state <= S_PF_Q1;
         end
@@ -893,27 +919,27 @@ module m2_raster_fill (
         // is ready the cycle after the operands are.
         // R442: present the next numerator, latch the previous gradient.
         S_PF_Q1: begin
-          mul_n <= pf_shift(nyu, nyu_z); mul_z <= nyu_z;
+          mul_n <= mul_n_c; mul_z <= zsel_c;
           mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
           state <= S_PF_Q1W;
         end
 
         S_PF_Q1W: begin
-          mul_n <= pf_shift(nxv, nxv_z); mul_z <= nxv_z;
+          mul_n <= mul_n_c; mul_z <= zsel_c;
           mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
           dudx  <= pf_scale(mul_q_r, mul_zr);
           state <= S_PF_Q2;
         end
 
         S_PF_Q2: begin
-          mul_n <= pf_shift(nyv, nyv_z); mul_z <= nyv_z;
+          mul_n <= mul_n_c; mul_z <= zsel_c;
           mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
           dudy  <= pf_scale(mul_q_r, mul_zr);
           state <= S_PF_Q2W;
         end
 
         S_PF_Q2W: begin
-          mul_n <= pf_shift(nxo, nxo_z); mul_z <= nxo_z;
+          mul_n <= mul_n_c; mul_z <= zsel_c;
           mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
           dvdx  <= pf_scale(mul_q_r, mul_zr);
           state <= S_PF_Q3;
@@ -927,7 +953,7 @@ module m2_raster_fill (
         // the same cycle as the shift, which is R418's fix applied to the round
         // R337 wrote before R418 existed.
         S_PF_Q3: begin
-          mul_n <= pf_shift(nyo, nyo_z); mul_z <= nyo_z;
+          mul_n <= mul_n_c; mul_z <= zsel_c;
           mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
           dvdy  <= pf_scale(mul_q_r, mul_zr);
           state <= S_PF_Q3W;

@@ -19465,3 +19465,54 @@ count-from-shift for the other five numerators and this one was left behind as
 carries two serial operations and this one carries none, the split is available
 for nothing. Look at what the waiting cycle could be doing before adding a
 cycle anywhere else.
+
+---
+
+**R458 -- QUARTUS SHARES A REPEATED CALL FOR FREE AND A DIFFERING ONE NOT AT
+ALL, AND THE DIFFERENCE IS WORTH 395 ALM AND 6% FMAX.**
+
+Two operators in `m2_raster_fill`, each called from six mutually exclusive
+states. They behave completely differently, and the reason is the arguments.
+
+**`pf_scale` -- six calls, IDENTICAL arguments.** Every site reads
+`pf_scale(mul_q_r, mul_zr)`. Hoisting it to one wire is plain
+common-subexpression elimination and Quartus had already done it:
+
+```
+  before   ALM 4,070   reg 1876   DSP 38   Fmax 46.25
+  hoisted  ALM 4,070   reg 1876   DSP 38   Fmax 46.25
+```
+
+**Byte-identical in every column.** The change was reverted. This is R454's
+rule in the area currency: **if the total does not move, the change did not
+happen.**
+
+**`pf_shift` -- six calls, DIFFERENT arguments.** `(nxu,nxu_z)`, `(nyu,nyu_z)`
+and so on. Sharing these needs an operand mux, which Quartus will not
+introduce, so it built six 32-bit barrel shifters. Muxing them by hand:
+
+```
+  six shifters   ALM 4,070   Fmax 46.25
+  one + mux      ALM 3,675   Fmax 43.46
+                     -395        -2.79 (-6.0%)
+```
+
+**THE RULE.** Identical arguments are folded for nothing; differing arguments
+in exclusive states are not folded at all. The "six multiply-add pairs instead
+of two" note against `base_u`/`base_v` in this same file is the second case,
+which is why that one cost a fit and this one did not. **Check which kind it is
+before predicting a saving** -- half of these are already done.
+
+**AND THE SAVING IS NOT FREE.** The operand mux lands in series with the
+shifter, so area comes out of the clock. That matters because the clock is the
+goal: the 3D path has to reach 16.67 ns for 60 MHz and is at 19.6. A spike
+build measures ONE module with no surrounding congestion, so it sees the logic
+depth and not the placement relief 395 ALM buys at 99% utilisation -- where a
+seed has already failed outright at "4193 LABs, device contains 4191". Only a
+core build can weigh the two, and the spike's job is to say which changes are
+worth one.
+
+**THE LOOP ITSELF.** `make quartus MOD=m2_raster_fill` fits the module alone in
+about two minutes against 25 for the core. Both measurements above cost four
+minutes together and one of them killed a wrong belief that would otherwise
+have been a build.
