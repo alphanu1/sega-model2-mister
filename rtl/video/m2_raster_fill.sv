@@ -742,6 +742,12 @@ module m2_raster_fill (
       nxu_z <= '0; nyu_z <= '0; nxv_z <= '0; nyv_z <= '0;
       nxo_z <= '0; nyo_z <= '0; mul_n <= '0; mul_z <= 6'd0;   // R441/R442
       den_a <= 16'd1; nrm_wait <= 1'b0;                      // R449
+      // R451: these were initialised in the prime step and NOT in reset. A
+      // register that only gets a value once the state machine reaches a
+      // particular state is undefined for every cycle before it, and b_wait
+      // powering up set would make S_PF_B compute its bases from a gradient
+      // that had not been latched yet.
+      mul_q_r <= '0; mul_zr <= 6'd0; b_wait <= 1'b0;
       dudx <= 16'sd0; dudy <= 16'sd0; dvdx <= 16'sd0; dvdy <= 16'sd0;
       for (int k = 0; k < 4; k++) begin qu[k] <= '0; qv[k] <= '0; qoz[k] <= '0; end
       oz_i <= 2'd0; oz_emax <= 8'd0; dodx <= 16'sd0; dody <= 16'sd0;

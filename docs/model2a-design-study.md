@@ -19209,3 +19209,26 @@ six gradients and the last lands on its first. 179 -> 129 cycles to retire,
 that would have caught every one: **after registering a signal to shorten a
 path, look at what the register now feeds.** The logic does not disappear; it
 moves to the other side.
+
+---
+
+**R451 -- REGISTERS INITIALISED IN A STATE, NOT IN RESET.**
+
+Both R450 seeds died from boot with the best timing any speed build has had --
+clk_sys **+0.289**, clk_mem -1.553, both better than the s52 that runs happily.
+So timing was not the cause, and the change had to be read rather than
+theorised about.
+
+`mul_q_r`, `mul_zr` and `b_wait` were given values in the PRIME step -- the
+second cycle of S_PF_NRM -- and not in the reset block. A register whose only
+assignment is inside one state is undefined for every cycle before the machine
+reaches that state, and `b_wait` powering up set makes S_PF_B compute its bases
+from a gradient that has not been latched.
+
+Simulation cannot see it: Verilator zeroes what the RTL does not, and the reset
+path is exercised once at time zero when nothing else is in flight.
+
+**THE HABIT.** Every register assigned inside a case arm needs a value in the
+reset block, even when it looks like control flow guarantees the order. This is
+the same family as R444's initial-block finding: **what simulation supplies for
+free, hardware does not.**
