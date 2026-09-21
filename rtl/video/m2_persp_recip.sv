@@ -25,7 +25,7 @@ module m2_persp_recip (
   input  logic        clk,
   input  logic        rst_n,
   input  logic [15:0] in_d,        // 1..65535; zero returns the maximum
-  output logic [31:0] out_q        // ~= 2^30 / in_d, valid two cycles later
+  output logic [31:0] out_q        // ~= 2^30 / in_d, valid THREE cycles later (R466)
 );
 
   // ---- stage 0: normalise, and look the leading byte up
@@ -77,10 +77,16 @@ module m2_persp_recip (
   logic [16:0] s1_r0;
   logic [3:0]  s1_s;
   logic        s1_zero;
+  // R466: the second half of the Newton step
+  logic [17:0] s2_e;
+  logic [16:0] s2_r0;
+  logic [3:0]  s2_s;
+  logic        s2_zero;
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       s1_dn <= 16'd0; s1_r0 <= 17'd0; s1_s <= 4'd0; s1_zero <= 1'b0;
+      s2_e  <= 18'd0; s2_r0 <= 17'd0; s2_s <= 4'd0; s2_zero <= 1'b0;   // R466
       out_q <= 32'd0;
     end else begin
       s1_dn   <= s0_dn;
@@ -98,27 +104,49 @@ module m2_persp_recip (
       //   p  = dn * r0 >> 15      ~= 2^16, which is dn*R0 in Q16
       //   e  = 2^17 - p           ~= 2^16, which is (2 - dn*R0) in Q16
       //   r1 = r0 * e >> 16       ~= 2^31 / dn
-      out_q <= s1_zero ? 32'hffff_ffff : persp_q(s1_dn, s1_r0, s1_s);
+      //
+      // R466: SPLIT ACROSS TWO CYCLES, because both multiplies were in series.
+      //
+      //   m2_persp_recip|s1_dn[0] -> m2_persp_recip|out_q[30]   16.922 ns
+      //
+      // was the worst clk_3d path on s133 at -1.033 ns against a 16.667 ns
+      // period -- the only thing between the renderer and 60 MHz. One cycle
+      // carried dn*r0, the subtract, r0*e and then a variable shift by s: two
+      // multipliers end to end.
+      //
+      // The cut is between them. This stage does the first multiply and the
+      // subtract; the next does the second multiply, the shift and the round.
+      // Identical arithmetic, same widths, same answer -- persp_q is split, not
+      // rewritten, and tb_m2_raster_fill sweeps it exhaustively.
+      //
+      // COSTS ONE CYCLE of latency, which m2_raster_fill absorbs by waiting a
+      // third cycle in S_PF_NRM -- one of about 130 to retire a quad.
+      s2_e    <= 18'h20000 - 18'((33'(s1_dn) * 33'(s1_r0)) >> 15);
+      s2_r0   <= s1_r0;
+      s2_s    <= s1_s;
+      s2_zero <= s1_zero;
+
+      // ---- stage 2: the second multiply, the un-normalise and the round.
+      out_q <= s2_zero ? 32'hffff_ffff : persp_q2(s2_r0, s2_e, s2_s);
     end
   end
 
-  function automatic logic [31:0] persp_q(input logic [15:0] dn,
-                                          input logic [16:0] r0,
-                                          input logic [3:0]  s);
-    logic [17:0] p;
-    logic [17:0] e;
+  // R466: THE SECOND HALF ONLY. `e` now arrives already computed, so this is
+  // r0*e, the un-normalise and the round -- the same expressions persp_q used,
+  // with the first multiply and the subtract moved a cycle earlier.
+  function automatic logic [31:0] persp_q2(input logic [16:0] r0,
+                                           input logic [17:0] e,
+                                           input logic [3:0]  s);
     logic [35:0] c;
     logic [18:0] r1;
     logic [32:0] q;
     begin
-      p  = 18'((33'(dn) * 33'(r0)) >> 15);
-      e  = 18'h20000 - p;
       c  = 36'(r0) * 36'(e);
       r1 = 19'(c >> 16);
       // r1 ~= 2^31/dn and dn == d << s, so 2^30/d == r1 << s >> 1. The +1
       // rounds that last shift instead of always truncating downwards.
       q  = (33'(r1) << s) + 33'd1;
-      persp_q = 32'(q >> 1);
+      persp_q2 = 32'(q >> 1);
     end
   endfunction
 endmodule

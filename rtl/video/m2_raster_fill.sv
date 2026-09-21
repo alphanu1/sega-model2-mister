@@ -424,7 +424,7 @@ module m2_raster_fill (
   logic signed [8:0] net_r;   // R459: pf_scale's shift amount, a cycle early
   logic              zbig_r;  // R459: mul_zr >= 32, likewise
   logic               b_wait;
-  logic               nrm_wait;
+  logic         [1:0] nrm_wait;   // R466: three cycles, the recip takes three
   logic pfn_wait;   // R461: S_PF_N takes two cycles, encode then shift
   logic signed [31:0] mul_n;
   logic        [5:0]  mul_z;
@@ -801,7 +801,7 @@ module m2_raster_fill (
       nxu_z <= '0; nyu_z <= '0; nxv_z <= '0; nyv_z <= '0;
       nxo_z <= '0; nyo_z <= '0; mul_n <= '0; mul_z <= 6'd0;   // R441/R442
       net_r <= 9'sd0; zbig_r <= 1'b0;   // R459
-      den_a <= 16'd1; nrm_wait <= 1'b0; pfn_wait <= 1'b0;    // R449/R461
+      den_a <= 16'd1; nrm_wait <= 2'd0; pfn_wait <= 1'b0;    // R449/R461/R466
       // R451: these were initialised in the prime step and NOT in reset. A
       // register that only gets a value once the state machine reaches a
       // particular state is undefined for every cycle before it, and b_wait
@@ -958,13 +958,23 @@ module m2_raster_fill (
         // same registers -- nxu_z was previously WRITTEN AND NEVER READ, dead
         // because the priming line recomputed the count inline. This makes it
         // live and leaves the second cycle carrying only the shift.
-        S_PF_NRM: if (!nrm_wait) begin
-          nrm_wait <= 1'b1;
-          nxu_z <= pf_clz(nxu); nyu_z <= pf_clz(nyu);
-          nxv_z <= pf_clz(nxv); nyv_z <= pf_clz(nyv);
-          nxo_z <= pf_clz(nxo); nyo_z <= pf_clz(nyo);   // R441
+        // R466: THREE CYCLES NOW, NOT TWO. m2_persp_recip splits its Newton
+        // step across two cycles (both multiplies were in series and that was
+        // the worst clk_3d path at 60 MHz), so it answers a cycle later and
+        // this state waits one more before S_PF_Q1 reads den_rcp. One cycle of
+        // about 130 to retire a quad.
+        S_PF_NRM: if (nrm_wait != 2'd2) begin
+          nrm_wait <= nrm_wait + 2'd1;
+          // The counts still land on the FIRST cycle only -- repeating them on
+          // the new third cycle would be harmless but would re-time six
+          // priority encoders for nothing.
+          if (nrm_wait == 2'd0) begin
+            nxu_z <= pf_clz(nxu); nyu_z <= pf_clz(nyu);
+            nxv_z <= pf_clz(nxv); nyv_z <= pf_clz(nyv);
+            nxo_z <= pf_clz(nxo); nyo_z <= pf_clz(nyo);   // R441
+          end
         end else begin
-          nrm_wait <= 1'b0;
+          nrm_wait <= 2'd0;
           mul_n <= mul_n_c;   // R457/R458: registered count, one shared shifter
           mul_z <= zsel_c;
           mul_q_r <= '0; mul_zr <= 6'd0; b_wait <= 1'b0;   // R450
