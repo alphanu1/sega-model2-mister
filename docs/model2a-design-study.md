@@ -20536,3 +20536,61 @@ that mixed traffic (992 cycles against 1181). So these tests do not find a
 fault -- which, after R494, is stated carefully: they are evidence the cases
 are handled, not proof the board will run. THE BOARD IS THE ORACLE and it has
 not seen the overlap on top of R498 yet.
+
+---
+
+**R500 -- THE CONTROLLED PAIR. THE OVERLAP FAILS WITH BOTH CLOCKS MET, SO IT IS
+FUNCTIONAL, AND R499's RETRACTION OF R497 WAS WRONG.**
+
+```
+  s190   R498 only        clk_mem -0.145   clk_sys +0.619   RUNS
+  s195   R498 + R490      clk_mem +0.243   clk_sys +0.623   BLACK
+```
+
+s195 is the first build of this design EVER to meet clk_mem -- +0.243 against a
+100 MHz constraint that has been missed by every build since the controller was
+written -- and it is black. It has better timing than the build that runs, on
+both clocks, and differs from it only by the span overlap.
+
+That is the experiment this should have started with. Nineteen builds were
+flashed today and only these two are informative, because only these two differ
+by one thing with everything else held.
+
+THE SEQUENCE OF WRONG CALLS, because the pattern is the lesson:
+
+  R497  declared R490 functional, from s185 at clk_mem -1.043.
+  R499  retracted that: -1.043 is the coin-toss band, so the evidence was
+        worthless. CORRECT REASONING.
+  R500  the overlap fails at +0.243 as well. R497's CONCLUSION was right and
+        its evidence was not, and R499 was right to reject the evidence and
+        wrong to reject the conclusion.
+
+A conclusion drawn from bad evidence is not thereby false. R499 should have
+said "unproven, get a build with margin and retest" -- which is what happened
+anyway, one sweep later, and it settled it. The mistake cost nothing here only
+because the retest was already queued.
+
+WHAT IS KNOWN ABOUT THE FAULT. Nothing from simulation: 7,199 checks pass, at
+0%, 50% and 80% consumer stall, with flat spans interleaved among textured
+ones, with degenerate x0 == x1 and x1 < x0 widths, and with every span
+accepted and no output going backwards in y. The overlap is 16% faster on that
+mixed traffic and cycle-correct throughout.
+
+SUSPECTS, RULED IN AND OUT, for whoever picks this up:
+
+  * `tx_span_ready` -- RULED OUT. It is the BAND's ready
+    (`bd_span_ready[fill_buf]`), not m2_span_tex's in_ready, so R490 did not
+    change what m2_raster3d's C_DONE test sees there.
+  * `busy` = `!idle || e_valid`, which m2_raster3d's C_DONE uses as
+    `!spantex_busy`. `idle` is `st == T_IDLE` and st now stays T_RUN while any
+    span is in flight, so this LOOKS right -- but it is the one cross-module
+    signal whose meaning R490 changed, and R310 records what happens when the
+    fill leaves C_FILL early: spans painted into the NEXT band, "a frame with
+    no new list painted 2214, the previous 2009".
+  * The quad store's FIFO drains faster now, so `!qs_out_valid` can go true
+    with two spans still held inside m2_span_tex where before it meant one.
+
+THE ARBITER FIX IS KEPT AND IS THE DAY'S REAL RESULT. R498 alone took clk_mem
+from -1.043 to -0.145 and, with a lucky seed, to +0.243. s190 runs. The overlap
+is reverted in the tree and preserved at 8c82f4c, 905da0d and 9226e0c with its
+tests, which stay in the bench and pass against the pre-overlap RTL.
