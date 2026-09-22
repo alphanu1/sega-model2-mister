@@ -274,6 +274,14 @@ module m2_raster_band #(
           if (clear_req) begin
             clr_addr <= '0;
             st       <= S_CLEAR;
+            // R486: THE FLAG IS PER BAND-FILL, AND IT NEVER WAS. It was reset
+            // only by rst_n, so `painted` stayed true from the first pixel
+            // drawn after power-on and m2_raster3d's `!= 0` test on it was
+            // true for every band thereafter. dbg_bands_painted has therefore
+            // reported exactly dbg_bands_done since R452 introduced it -- the
+            // board sends 52 and 52 in every sample -- and that was read as
+            // "every band painted" while the screen showed three.
+            dbg_painted <= 1'b0;
           end else if (span_valid) begin
             if (takeable) begin
               cur_x     <= clip_x0;

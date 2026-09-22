@@ -19849,3 +19849,56 @@ by reading the buffer back. The buffer compare already caught wrong ranges and
 stray writes, so what is given up is a second write to a pixel with the SAME
 value -- a wasted cycle, not a wrong picture. `tb_m2_span_tex`'s
 cycles-per-group is where a wasted cycle shows.
+
+---
+
+**R486 -- `dbg_bands_painted` HAS REPORTED `dbg_bands_done` SINCE THE DAY IT WAS
+WRITTEN, AND THE 52 IT SENDS WAS READ AS "EVERY BAND PAINTED".**
+
+R452 added the number to separate bands that DREW something from bands that
+merely completed -- "a band with no quads in it completes instantly, which is
+why dbg_bands_done reads 17 while the screen shows about two". The separation
+was never delivered. `m2_raster_band`'s flag (32-bit `dbg_pixels` then, a
+1-bit `dbg_painted` after R485) is assigned in exactly two places:
+
+```
+  if (!rst_n) ... dbg_painted <= 1'b0;      // power-on, and nowhere else
+  S_PAINT:        dbg_painted <= 1'b1;
+```
+
+`clear_req` empties the band buffer every frame and does not touch it. So from
+the first pixel drawn after power-on the flag is permanently one, m2_raster3d's
+`bd_painted[fill_buf]` test is true for every band, and `painted_this` counts
+exactly what `bands_this` counts.
+
+THE BOARD SAID SO AND IT WAS NOT HEARD. A 30-second capture of s162 carries 25
+samples and every one reads
+
+```
+  z 00003434    bands_painted = 0x34 = 52,  bands_done = 0x34 = 52
+```
+
+identical, and identical to each other, across a capture during which the
+picture was doing what it always does -- mostly three bands, occasionally half
+the screen, occasionally all of them. 52 IS ALSO WHAT "ALL BANDS PAINTED" WOULD
+LOOK LIKE, which is the trap: the value is not absurd, it is merely constant.
+The screen varied and the number did not, and that is the tell. The proof is in
+the RTL rather than the capture; the capture only says the RTL is being obeyed.
+
+WHY THIS ONE COST SO MUCH. Of the handful of numbers that could say whether the
+renderer BELIEVES it drew a band the screen does not show, this was the
+directly relevant one, and it has been answering a different question -- the
+same question `dbg_bands_done` already answers -- for every band investigation
+since R452.
+
+THE BENCH DID NOT COVER THE CLEAR. `tb_m2_raster_band` checked painting,
+clipping, the inclusive range, the stipple and a fuzz against a whole-buffer
+model, and never once checked what the flag read after a clear. The test added
+with this entry fails twice against the old RTL.
+
+RELATED FAULT, SAME SHAPE, SAME SESSION: R484, where two counters read as
+per-frame deltas saturated instead of wrapping and reported zero. Both are
+instruments that were wrong in a way no simulation asked about and that
+hardware reports without complaint. When a debug number is used to make a
+design decision here, check what clears it and what it does at its limit BEFORE
+believing it.

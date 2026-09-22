@@ -168,6 +168,30 @@ int main(int argc, char** argv) {
         printf("  painted %d pixels for [10,20]\n", n);
     }
 
+    // R486: THE FLAG MUST CLEAR WITH THE BAND. It did not -- it was reset only
+    // by rst_n -- so from the first pixel drawn after power-on m2_raster3d saw
+    // every band as painted and dbg_bands_painted reported exactly
+    // dbg_bands_done for as long as R452's instrument existed. The board sent
+    // 52 and 52 in all 25 samples of a capture during which the picture
+    // demonstrably changed. No check here covered the clear, so nothing caught
+    // it; this is that check.
+    printf("test: R486, dbg_painted clears with the band and sets on a paint\n");
+    {
+        Dut t; t.reset(); t.clear();
+        check(t.d->dbg_painted == 0, "nothing painted yet");
+        t.span(5, 10, 20, 0xabcd, false);
+        check(t.d->dbg_painted == 1, "a painted span sets the flag");
+        t.clear();
+        check(t.d->dbg_painted == 0, "the clear must reset it -- R486");
+        // And a band that takes NO span must stay clear: a span outside the
+        // band is the case that makes dbg_bands_painted differ from
+        // dbg_bands_done at all, which is the number's whole reason to exist.
+        t.d->band_y0 = 0;
+        t.span(100, 10, 20, 0xabcd, false);     // y_rel = 100, past H = 64
+        check(t.d->dbg_painted == 0, "an out-of-band span must not set it");
+        printf("  clears, sets, clears again, and out-of-band leaves it clear\n");
+    }
+
     printf("test: a ONE-PIXEL span (x0 == x1) is not dropped\n");
     {
         Dut t; t.reset(); t.clear();
