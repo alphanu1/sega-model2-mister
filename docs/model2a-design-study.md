@@ -20123,6 +20123,9 @@ acceptance test for anything touching this pipeline.
 
 ---
 
+**R491 -- SUPERSEDED BY R492 ONE BUILD LATER. THE CLOCK NAMED HERE IS THE
+WRONG ONE. Kept because the reasoning error is the point.**
+
 **R491 -- clk_sys MARGIN, NOT ALM, PREDICTS WHETHER A BUILD BOOTS. POSITIVE IS
 NOT ENOUGH.**
 
@@ -20160,3 +20163,55 @@ clock.
 USE IT AS A FILTER, NOT A RANKING. Assemble and flash the seed with the most
 clk_sys headroom, and do not spend a flash on one near zero however small it
 is. Three of today's four black screens were spent learning this.
+
+---
+
+**R492 -- IT IS clk_mem THAT DECIDES, NOT clk_sys, AND R491 WAS A RULE FITTED
+TO SIX POINTS THAT THE SEVENTH BROKE.**
+
+s171 was selected by R491's rule -- the best clk_sys of its sweep at +0.483,
+better than the +0.271 of the known-good s153 -- and it is black. That is the
+exact case R491 said could not happen, one build after it was written.
+
+Ranked by clk_mem instead, the same seven builds separate perfectly:
+
+```
+  clk_mem   clk_sys    ALM      result
+  -1.025    +0.271     41,133   boots      s153
+  -1.211    +0.815     41,207   boots      s162
+  ------------------------------------------- the line, about -1.3
+  -1.427    +0.028     41,173   BLACK      s166
+  -1.752    -0.520     41,300   BLACK      s158
+  -1.852    -1.308     41,376   BLACK      s157
+  -2.000    +0.483     41,316   BLACK      s171
+```
+
+Six for six on clk_mem. clk_sys does not order them at all: s171 has more
+clk_sys margin than s153 and does not run.
+
+WHY THE WRONG CLOCK LOOKED RIGHT. In the first six builds clk_mem and clk_sys
+happened to move together, because both degrade as the same design gets denser.
+Two correlated variables and one outcome cannot be separated by ranking; the
+only thing that separates them is a build where they DISAGREE, and s171 is that
+build. The rule was not wrong about the data it had -- it was untestable on the
+data it had, and stating it as a rule rather than as a hypothesis awaiting a
+disagreeing case is the error.
+
+THIS IS THE SAME SHAPE AS R471, which is uncomfortable, because R491 explicitly
+cited R471 while repeating it. R471 recorded that ranking seeds by slack gives
+the wrong answer. R491 accepted that for clk_mem and then did it for clk_sys.
+
+WHAT TO ACTUALLY DO. Select on clk_mem, and treat -1.3 as a filter rather than
+a score: a seed worse than that has not booted, four times. A seed better than
+it has booted twice, which is not enough to promise anything. THE HONEST
+STATEMENT IS THE USER'S OWN -- "its timing, 1 in 4 normally works" -- and the
+value of clk_mem here is in refusing to spend a flash on a seed that cannot,
+not in predicting that one will.
+
+AND THE REAL PROBLEM IS UNDERNEATH IT. Every build of this design has NEGATIVE
+clk_mem; the question is only how negative. R477 named the path -- m2_sdram's
+`inflight[5] -> state.S_SEL` at 11.24 ns against 10.00 -- and the obvious fix
+starved writes and was reverted. Until that path moves, whether a build runs is
+decided by placement luck, and each seed carrying new area makes the draw
+worse. R490 added ~110 ALM for the span overlap and has not been on hardware
+once in three attempts.
