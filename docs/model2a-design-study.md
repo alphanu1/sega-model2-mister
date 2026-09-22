@@ -20426,3 +20426,69 @@ worst path in the design. Both came from measurement. Everything between them
 was seed roulette and three falsified rules about which slack predicts a boot,
 and the command that ended it -- report_timing -- has been in the Makefile
 since R457 with a comment telling me to run it first.
+
+---
+
+**R498 -- THE ROUND-ROBIN MASK IS A REGISTER. 0.50 ns OFF clk_mem's WORST PATH,
+AND R288's REWRITE DONE SAFELY BECAUSE THE TEST R290 ASKED FOR NOW EXISTS.**
+
+`m2_sdram|rr_next[0] -> state.S_SEL` has been the worst clk_mem path in every
+build of this design, and with R490's regression repaired (R496) it is the
+worst again: -1.043 ns on s185, with 26 of the 30 worst paths being it.
+
+The chain was `rr_next -> barrel rotate -> priority scan -> modular add ->
+conditional subtract`, plus a SECOND barrel rotate of we_p to answer "is the
+granted port a write". Round-robin is "the lowest pending port at or above
+rr_next, wrapping to the lowest overall", and the rotate said that by moving
+rr_next to bit 0.
+
+Said instead as a mask, with the mask REGISTERED beside the grant:
+
+```
+  logic [NP-1:0] rr_mask;                        // ports at or above next
+  wire [NP-1:0] arb_hi  = arb_ready & rr_mask;
+  wire [NP-1:0] low_hi  = arb_hi    & (~arb_hi    + 1);
+  wire [NP-1:0] low_all = arb_ready & (~arb_ready + 1);
+  wire [NP-1:0] arb_sel = (|arb_hi) ? low_hi : low_all;   // one-hot, REAL coords
+  wire          we_gr   = |(arb_sel & we_p);              // no second rotate
+```
+
+Both rotates go, the modular add and its conditional subtract go, and `rr_next`
+itself goes -- it existed only to be rotated by, and the mask IS the position.
+
+MEASURED, spike synthesis at a 10 ns constraint:
+
+```
+  before   Fmax 138.37   ALM 793      7.227 ns
+  after    Fmax 148.74   ALM 786      6.723 ns     -0.504 ns, -7 ALM
+```
+
+WHY THIS IS NOT R288 AGAIN. R290 reverted R288's two-encoder version because
+THE BOARD DID NOT BOOT and said to retry it "when this is tried again with a
+way to test it". Two things are different.
+
+The STRUCTURE: R288 decoded its "at or above" mask combinationally from
+rr_next, so rr_next still reached `state` through it. Here the mask is a
+register written on the arm that takes a grant, where there is a whole cycle,
+so the arbitration feeding `state` begins at two registers and rr_next appears
+nowhere in it.
+
+And the TEST: R477 added max latency to tb_m2_sdram precisely because "a bench
+that only checks what arrives cannot see a port that is merely very late" --
+its own arbiter shortcut took that number from 163 to 14,445 while every count
+and value stayed correct. Against this change the bench is CYCLE-IDENTICAL:
+
+```
+  transactions   477,816  ->  477,816
+  total cycles   6,519,201 -> 6,519,201
+  max latency    163      ->  163
+  per-port xacts p0 47,415 ... p10 42,554, every port unchanged
+  checks 1,739,363, 0 fails, 0 violations, 0 tag faults
+```
+
+Not "equivalent within tolerance" -- the same arbitration, cycle for cycle.
+That is the evidence R288 could not produce, and it is what makes the
+difference between this and the change that stopped the board booting.
+
+0.50 ns is HALF of the -1.043 and is not on its own enough. It is also free in
+area, which nothing else today has been.

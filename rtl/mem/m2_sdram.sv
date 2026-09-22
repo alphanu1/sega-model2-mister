@@ -436,7 +436,10 @@ module m2_sdram #(
   // master that always has a request outstanding — the V60 during a cache miss
   // storm — cannot hold the bus. The write port sits above the rotation and
   // only matters during ROM download.
-  logic [$clog2(NP)-1:0] rr_next;
+  // R498: THE ROUND-ROBIN POSITION IS THE MASK. rr_next is gone -- it existed
+  // only to be rotated by, and nothing rotates now. rr_mask holds the ports at
+  // or above the next-to-serve position directly.
+  logic [NP-1:0]         rr_mask;
   logic [$clog2(NP)-1:0] rr_grant;
   logic                  rr_valid;
 
@@ -523,11 +526,38 @@ module m2_sdram #(
   // "at or above" mask is a decode of rr_next that computes in parallel with
   // pend, and the two scans run side by side. Nothing about the ORDER changes,
   // which is what tb_m2_sdram's per-port transaction counts check.
-  wire [NP-1:0]  arb_rot   = rot_r(arb_ready, rr_next);
-  wire [PW-1:0]  arb_idx   = low_idx(arb_rot);
-  // Rotate the index back. arb_idx < NP and rr_next < NP, so the sum never
-  // reaches 2*NP and one conditional subtract is exact.
-  wire [PW:0]    arb_sum   = {1'b0, arb_idx} + {1'b0, rr_next};
+  // R498: THE "AT OR ABOVE" MASK IS A REGISTER, WHICH TAKES rr_next OUT OF THE
+  // PATH ALTOGETHER.
+  //
+  // R288 tried this as two priority encoders and R290 reverted it because THE
+  // BOARD DID NOT BOOT -- "the i960 sat in one load/store loop for four
+  // minutes" -- with the note that it should be retried "when this is tried
+  // again with a way to test it". That way now exists: R477 added MAX LATENCY
+  // to tb_m2_sdram, and it is the number that catches a starved port where
+  // counts and values do not. R477's own arbiter shortcut took it from 163 to
+  // 14,445 and was caught by nothing else.
+  //
+  // WHAT IS DIFFERENT FROM R288. Its "at or above" mask was a combinational
+  // decode of rr_next, so rr_next still reached the state logic through it.
+  // Here the mask is REGISTERED beside rr_next -- both are written on the arm
+  // that takes a grant, where there is a whole cycle -- so the arbitration
+  // that feeds `state` starts at two registers, `arb_ready` and `rr_mask`, and
+  // rr_next does not appear in it at all.
+  //
+  // Round-robin is "the lowest pending port at or above rr_next, wrapping to
+  // the lowest overall". The rotate said that by moving rr_next to bit 0; this
+  // says it by masking, and the two scans run side by side instead of end to
+  // end. The ORDER is identical, which is what tb_m2_sdram's per-port
+  // transaction counts check.
+  wire [NP-1:0]  arb_hi    = arb_ready & rr_mask;
+  wire [NP-1:0]  low_hi    = arb_hi    & (~arb_hi    + {{(NP-1){1'b0}}, 1'b1});
+  wire [NP-1:0]  low_all   = arb_ready & (~arb_ready + {{(NP-1){1'b0}}, 1'b1});
+  // One-hot, and it is the granted port in REAL coordinates -- no rotation to
+  // undo, so the modular add and its conditional subtract are gone too.
+  wire [NP-1:0]  arb_sel   = (|arb_hi) ? low_hi : low_all;
+  // R498: arb_rot, arb_idx and arb_sum are gone with the rotate -- the barrel
+  // rotate, the encode of its output, the modular add and its conditional
+  // subtract were the chain this entry exists to remove.
 
   // R421: KEEP rr_next OUT OF THE STATE DECISION.
   //
@@ -549,14 +579,13 @@ module m2_sdram #(
   //
   // rr_grant itself is unchanged and still feeds grant/inflight/rr_next --
   // those are registered on the arm that was taken, and were not the offender.
-  wire [NP-1:0]  arb_low   = arb_rot & (~arb_rot + {{(NP-1){1'b0}}, 1'b1});
-  wire [NP-1:0]  we_rot    = rot_r(we_p, rr_next);
-  wire           we_gr     = |(arb_low & we_rot);   // == we_p[rr_grant]
+  // R498: the granted port is already in real coordinates, so selecting its
+  // write flag is one AND and one OR -- no second barrel rotate of we_p.
+  wire           we_gr     = |(arb_sel & we_p);     // == we_p[rr_grant]
 
   always_comb begin
-    rr_valid = |arb_ready;                          // == |arb_rot, no rotate
-    rr_grant = (arb_sum >= (PW+1)'(NP)) ? PW'(arb_sum - (PW+1)'(NP))
-                                        : PW'(arb_sum);
+    rr_valid = |arb_ready;                          // R421: no rotate needed
+    rr_grant = low_idx(arb_sel);                    // R498: one-hot -> index
   end
 
   // ------------------------------------------------------------- transfer
@@ -782,7 +811,7 @@ module m2_sdram #(
       ack_cnt <= '0; wack_cnt <= '0; inflight <= '0; wr_inflight <= 1'b0;
       for (int b = 0; b < 4; b++) rd_bank_cnt[b] <= '0;
       p_ack <= '0; wr_ack <= 1'b0; p_dout <= '0;
-      grant <= '0; grant_is_wr <= 1'b0; rr_next <= '0;
+      grant <= '0; grant_is_wr <= 1'b0; rr_mask <= '1;                  // R498
       rd_total <= 4'd1; rd_issued <= '0; rd_captured <= '0;
       is_write <= 1'b0; xfer_addr <= '0; din_r <= '0; be_r <= '0;
       wait_cnt <= '0; dq_r <= '0;
@@ -939,8 +968,13 @@ module m2_sdram #(
                 // Writes take it too: a port writing is equally in flight and
                 // equally must not be re-selected before it completes.
                 inflight[rr_grant] <= 1'b1;
-                rr_next     <= (rr_grant == ($clog2(NP))'(NP-1))
-                                 ? '0 : rr_grant + 1'b1;
+                // R498: the mask follows rr_next -- bits at or above it. A
+                // left shift of all-ones IS that mask, and on the wrap to zero
+                // it is all ones, which is "consider every port": exactly what
+                // "lowest overall" meant in the rotated form.
+                rr_mask     <= (rr_grant == ($clog2(NP))'(NP-1))
+                                 ? {NP{1'b1}}
+                                 : ({NP{1'b1}} << (rr_grant + 1'b1));
               end
               rd_issued   <= '0;
               rd_captured <= '0;
