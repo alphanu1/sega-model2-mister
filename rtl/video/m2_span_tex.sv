@@ -425,8 +425,13 @@ module m2_span_tex #(
             //
             // NEITHER BENCH COULD CATCH IT. tb_m2_raster3d counts pixels
             // painted, which is unchanged by a wrong texture coordinate, and
-            // tb_m2_span_tex has 28 checks and no assertion on u or v at all.
+            // tb_m2_span_tex had 28 checks and no assertion on u or v at all.
             // A span walk needs a test that says WHICH TEXEL each pixel took.
+            //
+            // R339 added that for one span; R472 made it a corpus -- 120 spans,
+            // 7,194 checks, every group's texel against the reduced-arithmetic
+            // model, plus output count, strict x ordering and tail clamping.
+            // That is what makes this module safe to restructure.
             //
             // $clog2 is correct for any POWER OF TWO. A non-power-of-two step
             // (6) would need a real multiply on this path, for nothing that 8

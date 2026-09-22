@@ -254,6 +254,95 @@ int main(int argc, char **argv) {
     }
   }
 
+  // 2e. R472: MANY SPANS, EVERY GROUP'S TEXEL CHECKED, AND THE ORDER TOO.
+  //
+  // WHY THIS EXISTS. 2d proves perspective on ONE span with one set of
+  // gradients, which is 52 checks in total -- and m2_span_tex is about to be
+  // rewritten from a state machine into a pipeline. A pipeline can get the
+  // arithmetic right and the ORDER wrong, or drop a group, or emit one twice,
+  // and none of those show up in a single hand-built span.
+  //
+  // m2_span_tex.sv still carries a note saying this bench "has no assertion on
+  // u or v at all". That was true when R323 wrote it and R339 fixed it; the
+  // note is stale. What was still true is that one span is not a corpus.
+  //
+  // THE CHECKS, and each is a different way a pipeline breaks:
+  //   * every group's texel against the same reduced-arithmetic model 2d uses
+  //   * one output per group, so nothing is dropped or duplicated
+  //   * x0 strictly increasing, so nothing is reordered
+  //   * x1 within the span, so the tail group is clamped and not wrapped
+  {
+    std::printf("test: R472, a corpus of spans -- texel, count and order\n");
+    uint32_t rng = 0xC0FFEEu;
+    auto roll = [&](uint32_t n) { rng = rng*1664525u + 1013904223u; return (rng >> 8) % n; };
+    long spans_run = 0, groups_checked = 0;
+
+    for (int trial = 0; trial < 120; ++trial) {
+      const int STEP = 2;
+      const int X0 = 4 + int(roll(60));
+      const int X1 = X0 + STEP * int(1 + roll(40));
+      const int32_t U0  = int32_t(roll(8) << 18);
+      const int32_t V0  = int32_t(roll(8) << 18);
+      // POSITIVE GRADIENTS ONLY, and that is a range limit rather than a
+      // preference. A negative du/dx walks u below zero, sat32 clamps the
+      // product to 0x7FFFFFFF, and every texel from there on is the same
+      // value -- the first version of this fuzz read 0xe for group after group
+      // and looked like an RTL fault. 2d uses positive gradients for the same
+      // reason. Spans that walk a texture backwards are a separate question
+      // and need their own test, not this one.
+      const int32_t DU  = int32_t(roll(0x180)) + 0x20;
+      const int32_t DV  = int32_t(roll(0x180)) + 0x20;
+      const int32_t OOZ = int32_t(1u << 30);
+      // Keep 1/z positive for the whole span: 2d records that letting it reach
+      // zero makes the loop break on the second group and the test pass having
+      // checked nothing.
+      const int groups = ((X1 - X0) / STEP) + 1;
+      const int32_t DOZ = -int32_t(roll(20000)) / (groups ? groups : 1);
+
+      got.clear(); force_texel = -1;
+      d->in_valid = 1; d->in_y = 11 + int(roll(40));
+      d->in_x0 = X0; d->in_x1 = X1;
+      d->in_col = 0xffffff; d->in_moire = 0;
+      d->in_u = U0; d->in_v = V0; d->in_dudx = DU; d->in_dvdx = DV;
+      d->in_tex = 0x000001; d->in_tex_en = 1;
+      d->in_ooz = OOZ; d->in_doozdx = DOZ;
+      tick(); d->in_valid = 0;
+      for (int i = 0; i < 4000 && int(got.size()) < groups; ++i) tick();
+
+      ck("one output per group", long(got.size()), groups);
+      if (int(got.size()) != groups) continue;
+      spans_run++;
+
+      int last_x0 = -1;
+      for (size_t i = 0; i < got.size(); ++i) {
+        const int64_t ur = (int64_t)U0  + (int64_t)(DU  << 8) * (int64_t)i * STEP;
+        const int64_t vr = (int64_t)V0  + (int64_t)(DV  << 8) * (int64_t)i * STEP;
+        const int64_t oz = (int64_t)OOZ + (int64_t)(DOZ << 8) * (int64_t)i * STEP;
+        if (oz <= 0) break;
+        const int64_t uq = (ur << 31) / oz;
+        const int64_t vq = (vr << 31) / oz;
+        const int t  = texel_of((uint32_t)(uq >> 10), (uint32_t)(vq >> 10));
+        const int tg = (int)((got[i].col & 0xff) >> 4);
+        ++checks; ++groups_checked;
+        // Same one-index tolerance 2d uses: the reciprocal is a seed plus one
+        // Newton step, so a texel may land either side at a boundary.
+        if (abs(tg - t) > 1 && abs(tg - t) < 15) {
+          ++fails;
+          if (fails < 8)
+            std::printf("  FAIL trial %d group %zu texel got=%x want=%x\n", trial, i, tg, t);
+        }
+        // ORDER AND EXTENT. A pipeline that reorders or clamps wrongly passes
+        // every arithmetic check above and still draws a broken span.
+        ck("x0 strictly increasing", got[i].x0 > last_x0, 1);
+        last_x0 = got[i].x0;
+        ck("x1 inside the span", got[i].x1 <= X1, 1);
+      }
+    }
+    // THE GUARD, as 2d has: a corpus that silently ran nothing proves nothing.
+    ck("spans actually ran", spans_run > 100, 1);
+    ck("groups actually checked", groups_checked > 1000, 1);
+  }
+
   // 2b. A FLAT SPAN WHEN THE CONSUMER IS NOT READY. It must be HELD, not
   //     consumed: in_ready is the band's ready, exactly as it was before this
   //     unit existed, or the fill drops a span whenever a band is busy.
