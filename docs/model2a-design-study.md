@@ -20751,3 +20751,58 @@ inferring it. R489's "skip bands the beam has passed" was aimed at this and was
 rejected by the bench for a good reason -- at frame start there IS no lead to
 protect -- but re-phasing to sit just ahead of the beam, rather than restarting
 at band 0, is the shape of the fix.
+
+---
+
+**R505 -- THE BENCH PULSED frame_start WITH THE BEAM ON THE LAST VISIBLE LINE,
+WHICH IS WHY R489 WAS REVERTED. AND RE-PHASING IS RIGHT IN THE LATE REGIME AND
+WRONG IN THE FAST ONE.**
+
+TWO FINDINGS, THE FIRST WORTH MORE THAN THE SECOND.
+
+**The bench was not blank-first.** Its own comment says "THE FRAME IS
+BLANK-FIRST, AS THE BOARD'S IS (R225)", and it pulsed frame_start while scan_y
+still held the last VISIBLE line from the previous loop:
+
+```
+  for (y = 0; y < SCR_H; y++) ... d->scan_y = y;      // ends at SCR_H-1
+  d->frame_start = 1; tick(); d->frame_start = 0;     // scan_y still 383
+```
+
+so the DUT saw the beam at band 47 while the fill reset to band 0. Any logic
+comparing the two -- which is the natural way to ask "is the fill behind the
+beam" -- fires spuriously on that tick. R489 was reverted on exactly that,
+reported as "the top band painted nothing on a held frame", and recorded as a
+margin-tuning trap. IT WAS A BENCH FAULT. On the board frame_start is the start
+of vblank, scan_y is at or past SCR_H, and m2_raster3d clamps scan_band_rel to
+zero there, so the comparison reads 0 > 0 and does not fire. The bench now
+parks the beam in blanking before the pulse.
+
+That is the FIFTH instrument fault in this session, after R484, R486, R487 and
+R494. Four of the five made a correct thing look wrong.
+
+**Re-phasing helps a late fill and destabilises a fast one.** Skipping bands the
+beam has passed, landing one band AHEAD of it (`scan_band_f >= fill_band`, not
+`>`, which chases the beam and finishes nothing -- 861 pixels against 8,912):
+
+```
+  TPL   baseline   re-phased
+  400    10,824     erratic: 0, 10824, 902, 4961, 902, 10824
+  150     8,912      8,912
+  140       858        819
+  130       464      3,680      8x
+  120       304        399
+  110       144        657      4.5x
+```
+
+Large gains where the fill is late, which is the board's regime, and INSTABILITY
+where it is not. Reverted rather than shipped: at TPL 400 the fill is
+comfortably ahead and the skip still fires, so the condition is wrong for the
+healthy case and the cause is not yet understood.
+
+The direction is right and the numbers say so. What it needs is a condition
+that cannot fire when the fill is genuinely ahead -- and, before that, a bench
+that can hold the board's OWN regime, which neither TPL setting reproduces: a
+fill fast enough to complete 51 bands and still out of phase. That needs
+VARIANCE in band cost -- cheap sky bands and expensive road bands, as the game
+has -- and the bench's quads are uniform.

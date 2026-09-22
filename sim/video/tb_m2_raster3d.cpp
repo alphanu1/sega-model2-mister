@@ -112,6 +112,15 @@ int main(int argc, char **argv) {
     // idle 600 ticks with scan_y parked on the last visible line, so it had
     // neither the head start nor the out-of-range line numbers and could not
     // see the top of the screen being thrown away.
+    // R505: THE BEAM IS ALREADY IN BLANKING WHEN frame_start FIRES, as it is
+    // on the board -- frame_start is the start of vblank, so scan_y is at or
+    // past SCR_H and m2_raster3d clamps scan_band_rel to zero there. This line
+    // used to pulse it with scan_y still on the LAST VISIBLE LINE, so the DUT
+    // saw the beam at band 47 while the fill reset to band 0. Any logic that
+    // compares the two -- which is the natural way to ask "is the fill behind
+    // the beam" -- fired spuriously for that tick. R489 was reverted on exactly
+    // that, reported as "the top band painted nothing".
+    d->scan_y = SCR_H; d->scan_x = 0; tick();
     d->frame_start = 1; tick(); d->frame_start = 0;
     long hits = 0;
     top_hits = 0;
