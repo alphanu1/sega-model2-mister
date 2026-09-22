@@ -18,6 +18,7 @@
 #include "Vm2_span_tex.h"
 #include "verilated.h"
 #include <cstdio>
+#include <cstdlib>
 #include <cmath>
 #include <algorithm>
 #include <cstdint>
@@ -57,8 +58,28 @@ static void tick(bool stall = false) {
   ++ticks_done;
   d->out_ready = stall ? 0 : 1;
   // The texel fetch answers in one cycle.
-  if (d->tx_req) { d->tx_ack = 1; d->tx_texel = texel_of(d->tx_u, d->tx_v); }
-  else           { d->tx_ack = 0; }
+  // R479: A TEXEL THAT CAN MISS. Answering every fetch in one cycle is what
+  // made this bench blind to the fault the board shows: with textures off every
+  // band lands, with them on only two to five do, and m2_texel says why --
+  // "one miss BLOCKS every span behind it". A perfect cache has no stall to
+  // block with, so no amount of walk optimisation measured here would predict
+  // anything about bands.
+  //
+  // M2_MISS_PCT (default 0) makes a fraction of fetches take M2_MISS_CYC cycles.
+  // 26% at 14 cycles is the board's measured hit rate and a ~280 ns miss at
+  // 50 MHz.
+  static const int miss_pct = std::getenv("M2_MISS_PCT") ? atoi(std::getenv("M2_MISS_PCT")) : 0;
+  static const int miss_cyc = std::getenv("M2_MISS_CYC") ? atoi(std::getenv("M2_MISS_CYC")) : 14;
+  static uint32_t tex_rng = 99991;
+  static int      tex_wait = -1;
+  if (d->tx_req) {
+    if (tex_wait < 0) {                       // a new fetch: decide hit or miss
+      tex_rng = tex_rng * 1103515245u + 12345u;
+      tex_wait = (int)((tex_rng >> 16) % 100) < miss_pct ? miss_cyc : 0;
+    }
+    if (tex_wait > 0) { --tex_wait; d->tx_ack = 0; }
+    else              { d->tx_ack = 1; d->tx_texel = texel_of(d->tx_u, d->tx_v); tex_wait = -1; }
+  } else { d->tx_ack = 0; tex_wait = -1; }
   d->eval();
   if (d->out_valid && d->out_ready)
     got.push_back({int(d->out_y), int(d->out_x0), int(d->out_x1), d->out_col});
