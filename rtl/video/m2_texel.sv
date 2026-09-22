@@ -471,7 +471,13 @@ module m2_texel #(
           for (int k = 0; k < RSP_D; k++) begin rs_rdy[k] <= 1'b0; rs_ism[k] <= 1'b0; end
           for (int k = 0; k < 2; k++)  begin ms_busy[k] <= 1'b0;  ms_done[k] <= 1'b0; end
           st     <= S_INIT;
-        end else if (req) begin
+        // R481: `req && rdy`, NOT `req`. This condition predates rdy, and when
+        // R474 made the cache streaming the back-to-back path in S_LOOK got the
+        // check while this one kept accepting whenever a request was present --
+        // with no free MSHR, no FIFO space, and a fill stealing the arrays. A
+        // third miss then allocated into two slots and clobbered a fill in
+        // flight. Every guard in rdy was being bypassed at the front door.
+        end else if (req && rdy) begin
           idx_r   <= req_idx;
           tag_r   <= req_tag;
           sel_r   <= req_sel;

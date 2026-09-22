@@ -16,7 +16,6 @@
 //   5. The cache returns what memory holds, including after an upload.
 
 #include "Vm2_texel.h"
-#include "Vm2_texel___024root.h"
 #include "verilated.h"
 #include <cstdio>
 #include <vector>
@@ -372,18 +371,7 @@ int main(int argc, char **argv) {
     // Where the wrong ones sit, and whether the value is a NEIGHBOUR of the
     // right one -- a shifted-by-one answer means the queue paired a group with
     // the wrong entry; an unrelated value means the line itself is wrong.
-    std::printf("    [probe] issued=%d accepted=%zu answered=%zu wp=%u rp=%u\n",
-                issued, want.size(), got.size(),
-                (unsigned)d->rootp->m2_texel__DOT__rs_wp,
-                (unsigned)d->rootp->m2_texel__DOT__rs_rp);
-    std::printf("    [probe] first 24: ");
-    for (size_t k = 0; k < 24 && k < got.size() && k < want.size(); ++k)
-      std::printf("%s", got[k] == want[k] ? "." : "X");
-    std::printf("\n    [probe] shifted-by-one matches: ");
-    int off1 = 0;
-    for (size_t k = 1; k < got.size() && k < want.size(); ++k)
-      if (got[k] != want[k] && got[k] == want[k-1]) ++off1;
-    std::printf("%d of %d wrong\n", off1, wrong);
+
     mem_lat = 3; mem2_lat = 5;
   }
 
