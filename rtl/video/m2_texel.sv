@@ -256,7 +256,6 @@ module m2_texel #(
   logic [WA_BITS-1:0]  wa_r;             // [1:0] selects the word, not the line
   /* verilator lint_on UNUSEDSIGNAL */
   logic                sheet_r;
-  logic [63:0]         hold;
   // A MEMORY THAT NEVER ANSWERS MUST NOT STOP THE PICTURE. This unit sits
   // inside the band fill, so a request that is never acknowledged holds the
   // span walk, which holds the band, which holds every band after it -- the
@@ -308,13 +307,6 @@ module m2_texel #(
   // the span queue (R310) decoupled the texel fetch from the fill -- so this
   // unit can now be clocked on clk_mem independently of clk_sys, across a clean
   // 2:1 with a narrow interface, without touching the renderer.
-  // R474: THE RESPONSE STAGE. `hold` is loaded on the hit cycle and read the
-  // cycle after, so the selectors that pick its nibble must be the ones that
-  // arrived WITH that line -- not the request accepted behind it. Without this
-  // pair the pipeline answers request N with N+1's nibble: a wrong texel, not a
-  // wrong count, so it reads as corrupt texture rather than broken flow control.
-  logic [1:0]  sel_q;
-  logic        x2_q, y2_q;   // only the parity picks the nibble
 
   // R480: TWO MISS-STATUS REGISTERS, ONE PER SDRAM PORT.
   //
@@ -346,9 +338,35 @@ module m2_texel #(
   wire                 ms_fill_rdy  = (ms_busy[0] && ms_done[0]) || (ms_busy[1] && ms_done[1]);
   wire                 ms_fill_sel  = (ms_busy[0] && ms_done[0]) ? 1'b0 : 1'b1;
 
+  // R483: THE QUEUE HOLDS THE NIBBLE, NOT THE LINE.
+  //
+  // Each entry carried the whole 64-bit line and the selectors to pick from it
+  // later -- 256 registers of cache line held so that four bits could be read
+  // out of it, plus `hold` downstream. Extracting at push (for a hit) or at
+  // fill (for a miss) keeps 4 bits instead of 64. The selectors stay because a
+  // miss still needs them when its line arrives.
+  //
+  // R482 put ~294 ALM back on and took the design over 99%, where every build
+  // this week has failed to boot while both 98% builds came up first try.
+  function automatic logic [3:0] nib(input logic [63:0] line,
+                                     input logic [1:0]  sel,
+                                     input logic        px, input logic py);
+    logic [15:0] w;
+    begin
+      case (sel)
+        2'd0: w = line[15:0];
+        2'd1: w = line[31:16];
+        2'd2: w = line[47:32];
+        default: w = line[63:48];
+      endcase
+      nib = py ? (px ? w[3:0]  : w[7:4])
+               : (px ? w[11:8] : w[15:12]);
+    end
+  endfunction
+
   localparam int unsigned RSP_D = 4;
   logic                rs_rdy [RSP_D];   // data already in hand
-  logic [63:0]         rs_dat [RSP_D];
+  logic [3:0]          rs_tex [RSP_D];   // R483: the nibble, not the line
   logic [1:0]          rs_sel [RSP_D];
   logic                rs_x2  [RSP_D], rs_y2 [RSP_D];
   logic                rs_ism [RSP_D];   // waiting on an MSHR
@@ -364,8 +382,7 @@ module m2_texel #(
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       st <= S_INIT; sweep <= '0; idx_r <= '0; tag_r <= '0; sel_r <= '0;
-      wa_r <= '0; sheet_r <= 1'b0; hold <= '0; x2_r <= '0; y2_r <= '0;
-      sel_q <= 2'd0; x2_q <= 1'b0; y2_q <= 1'b0;   // R474
+      wa_r <= '0; sheet_r <= 1'b0; x2_r <= '0; y2_r <= '0;
       m_req <= 1'b0; m_addr <= '0; ack <= 1'b0; dbg_lost <= '0;
       m2_req <= 1'b0; m2_addr <= '0;
       rs_wp <= '0; rs_rp <= '0;
@@ -374,7 +391,7 @@ module m2_texel #(
         ms_idx[k] <= '0; ms_tag[k] <= '0; ms_dat[k] <= '0; ms_to[k] <= '0;
       end
       for (int k = 0; k < RSP_D; k++) begin
-        rs_rdy[k] <= 1'b0; rs_dat[k] <= '0; rs_sel[k] <= 2'd0;
+        rs_rdy[k] <= 1'b0; rs_tex[k] <= 4'd0; rs_sel[k] <= 2'd0;
         rs_x2[k] <= 1'b0; rs_y2[k] <= 1'b0; rs_ism[k] <= 1'b0; rs_slt[k] <= 1'b0;
       end
       inval_d <= 1'b0; inval_pend <= 1'b0;
@@ -413,23 +430,24 @@ module m2_texel #(
         ms_dat[0] <= m_data;  ms_done[0] <= 1'b1;  m_req <= 1'b0;
         for (int k = 0; k < RSP_D; k++)
           if (rs_ism[k] && !rs_slt[k]) begin
-            rs_dat[k] <= m_data;  rs_rdy[k] <= 1'b1;  rs_ism[k] <= 1'b0;
+            rs_tex[k] <= nib(m_data,  rs_sel[k], rs_x2[k], rs_y2[k]);
+            rs_rdy[k] <= 1'b1;  rs_ism[k] <= 1'b0;
           end
       end
       if (m2_ack && ms_busy[1] && !ms_done[1]) begin
         ms_dat[1] <= m2_data; ms_done[1] <= 1'b1;  m2_req <= 1'b0;
         for (int k = 0; k < RSP_D; k++)
           if (rs_ism[k] && rs_slt[k]) begin
-            rs_dat[k] <= m2_data; rs_rdy[k] <= 1'b1;  rs_ism[k] <= 1'b0;
+            rs_tex[k] <= nib(m2_data, rs_sel[k], rs_x2[k], rs_y2[k]);
+            rs_rdy[k] <= 1'b1;  rs_ism[k] <= 1'b0;
           end
       end
 
       // ---- the response head. In order, always.
       if (!rs_empty && rs_rdy[rs_hd]) begin
-        ack   <= 1'b1;
-        hold  <= rs_dat[rs_hd];
-        sel_q <= rs_sel[rs_hd];  x2_q <= rs_x2[rs_hd];  y2_q <= rs_y2[rs_hd];
-        rs_rp <= rs_rp + 1'd1;
+        ack    <= 1'b1;
+        texel  <= rs_tex[rs_hd];   // R483: already the nibble
+        rs_rp  <= rs_rp + 1'd1;
         // R481: RETIRE THE ENTRY. Leaving rdy and ism set means a later m_ack
         // for the same slot re-marks an entry that has already been answered,
         // and the head then pops it again -- the read pointer walks past the
@@ -500,7 +518,8 @@ module m2_texel #(
         // lookup pipeline keeps going. A miss takes an MSHR and issues on its
         // port; it no longer stops anything behind it.
         S_LOOK: if (hit) begin
-          rs_rdy[rs_tl] <= 1'b1;   rs_dat[rs_tl] <= cd_q;
+          rs_rdy[rs_tl] <= 1'b1;
+          rs_tex[rs_tl] <= nib(cd_q, sel_r, x2_r[0], y2_r[0]);   // R483
           rs_sel[rs_tl] <= sel_r;  rs_x2[rs_tl]  <= x2_r[0];
           rs_y2[rs_tl]  <= y2_r[0]; rs_ism[rs_tl] <= 1'b0;
           rs_wp    <= rs_wp + 1'd1;
@@ -562,42 +581,25 @@ module m2_texel #(
   // the FETCHED coordinates', held with the request -- the reference takes them
   // from u0/v0, and those have the same parity as x2/y2 because the texture's
   // origin is a multiple of 32.
-  logic [15:0] word;
-  always_comb begin
-    case (sel_q)   // R474: the response stage's selector
-      2'd0: word = hold[15:0];
-      2'd1: word = hold[31:16];
-      2'd2: word = hold[47:32];
-      default: word = hold[63:48];
-    endcase
-  end
+  // R483: `word`, the nibble mux and `hold` are gone -- the queue already
+  // holds the extracted texel, and `texel` is registered by the response head.
 
-  assign texel = y2_q ? (x2_q ? word[3:0]   : word[7:4])
-                      : (x2_q ? word[11:8]  : word[15:12]);
-
-  // R474: free whenever nothing is stalled. A miss holds rdy low for its whole
-  // fill -- hit-under-miss needs a miss-status register and is a later change.
-  // R480: ready needs somewhere to put the answer (FIFO space), somewhere to
-  // put a miss (a free MSHR -- a lookup cannot know yet whether it will miss),
-  // and the arrays free (a fill steals them for a cycle).
-  // R481: a slot must be reserved for the lookup already in the compare stage.
-  // rdy is checked at ACCEPT, but whether that request misses is not known
-  // until a cycle later -- two lookups can both miss with one slot between
-  // them, and ms_pick returns slot 1 unconditionally when slot 0 is busy, so
-  // the second clobbers a fill still in flight.
-  // R481: SPACE MUST BE RESERVED FOR THE LOOKUP IN FLIGHT TOO, for exactly the
-  // same reason as the slot. rs_full is tested when a request is ACCEPTED, but
-  // its entry is not pushed until the compare a cycle later -- so a request
-  // accepted with one place left pushes after the previous compare has taken
-  // it. rs_wp then passes rs_rp by more than the depth, and because rs_full is
-  // an EQUALITY test it never matches again: the pointers free-run and the head
-  // pops entries that were never written. 70 requests produced 200 responses.
-  // With one port there is no second slot to reserve for the lookup already
-  // in flight, so nothing is accepted from S_LOOK -- the pre-R480 behaviour.
+  // R481: READY NEEDS EVERY RESOURCE THE REQUEST WILL CONSUME, and they are
+  // consumed a cycle after it is accepted, in the compare stage. rdy is tested
+  // at ACCEPT, so a request taken with one MSHR or one queue place left finds
+  // it gone by the time it needs it -- two lookups both missing with one slot
+  // between them, and ms_pick returns slot 1 unconditionally when slot 0 is
+  // busy, clobbering a fill in flight.
+  //
+  // So from S_IDLE one of each is enough; from S_LOOK there is already a lookup
+  // that may take one, and both must be free. With the second port disabled
+  // there is no slot to reserve, so nothing is accepted from S_LOOK -- the
+  // pre-R480 behaviour.
   wire ms_both_free = !ms_busy[0] && m2_en && !ms_busy[1];
   wire rs_room2     = ((rs_wp - rs_rp) <= ($clog2(RSP_D)+1)'(RSP_D - 2));
   assign rdy = !inval_pend && !ms_fill_rdy
                && (((st == S_IDLE) && !rs_full && ms_have_free)
                 || ((st == S_LOOK) && rs_room2 && ms_both_free));
+
 
 endmodule
