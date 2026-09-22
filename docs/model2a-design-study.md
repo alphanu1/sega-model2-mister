@@ -20691,3 +20691,63 @@ being tested by the board and nothing else, at forty minutes a build.
 That is the next piece of work and it is worth more than any further change
 here: a knob that slows the fill -- a texel fetch that misses, or a stall
 injected into the span path -- and assertions that bands still reach the beam.
+
+---
+
+**R504 -- THE FILL IS NOT SLOW, IT IS OUT OF PHASE. `bands_done` 51 WITH THREE
+BANDS ON SCREEN IS NOT WHAT A LATE FILL LOOKS LIKE.**
+
+`tb_m2_raster3d` has had `M2_R3D_TPL` -- core clocks per scanline -- since R225,
+and it was never used to make the fill late. Doing so gives the signature of a
+genuinely slow fill:
+
+```
+  TPL=400   bands_done 51   paints 10,824      fill ten times faster than the beam
+  TPL=170   bands_done 51   paints 10,824
+  TPL=150   bands_done  4   paints  8,912      going late
+  TPL=130   bands_done 13   paints    464
+```
+
+A LATE FILL'S `bands_done` COLLAPSES. It cannot complete 48 bands in a frame it
+does not have time for.
+
+The board reports **51 to 52 band-fills a frame with two to five bands on
+screen**, in every capture, for months. That is not this regime. The fill is
+completing every band and the bands are not reaching the beam.
+
+WHAT THAT MEANS. The fill is running at the right RATE and at the wrong PHASE:
+finishing band N while the beam is already past band N. The release is
+
+```
+  if (bd_ready[i] && (scan_band_f > bd_band[i])) bd_ready[i] <= 1'b0;
+```
+
+so each band is freed within a cycle of C_DONE setting it, having never been
+displayed. The only bands that land in time are those built during blanking
+before the beam starts -- which is precisely the two-to-five CONTIGUOUS bands at
+the top of every photograph, with the rest of the screen empty.
+
+EVERYTHING TRIED THIS YEAR HAS ATTACKED THROUGHPUT AND THROUGHPUT IS NOT THE
+PROBLEM. The 60 MHz renderer (bands unchanged), PIXSTEP 4 vs 8 (unchanged), the
+two-port texel cache (73.2% -> 90.8% hit rate, unchanged), R490's span overlap
+(-32%, never ran), R483's nibble queue, the arbiter work. A pipeline at the
+wrong phase draws the same three bands however fast it is.
+
+WHY TEXTURES STILL MATTER, because the user's controlled experiment stands and
+must be explained rather than dismissed: textures off, all bands draw. The
+phase is SET at the start of the frame -- the fill has the blanking window to
+build its lead, and a textured band takes long enough that it does not finish
+band 0 before the beam arrives. It then never recovers, because C_IDLE waits on
+buffer release and cannot get more than NBUF ahead. Flat shading finishes the
+early bands inside blanking and the phase is right for the whole frame. SO THE
+DEADLINE THAT MATTERS IS BAND 0's, NOT THE AVERAGE BAND'S -- Model 1 says the
+same thing in its own words: "band 0, the only band whose presentation is tied
+to the BLANKING window rather than to the band ahead of it".
+
+WHAT TO MEASURE NEXT, and it is one number: the band index the fill is working
+on when the beam starts a frame, and the beam's index at that moment. Their
+DIFFERENCE is the phase, it is not on the wire, and every entry above has been
+inferring it. R489's "skip bands the beam has passed" was aimed at this and was
+rejected by the bench for a good reason -- at frame start there IS no lead to
+protect -- but re-phasing to sit just ahead of the beam, rather than restarting
+at band 0, is the shape of the fix.
