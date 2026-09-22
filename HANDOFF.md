@@ -1,21 +1,89 @@
 # Handoff
 
-## ORIENTATION WORKS. `build/seeds/s52` IS ON THE BOARD AND RUNNING.
+## `build/seeds/s142` IS ON THE BOARD AND RUNNING. RENDERER IS AT 50 MHz.
 
-Perspective-correct texturing is in and confirmed on hardware. Tag
-`orientation-works` = 6bfa51c = R433 + R436 probe.
+The 60 MHz renderer was built, measured and REVERTED. It works -- it closed at
++0.857 ns and drew correctly on the board -- and it changed nothing:
 
 ```
-  1/z (R334): 224 samples, 212 nonzero (94.6%)
-      min 0.00376892  median 0.0593262  max 0.457031  -> z from 2.188 to 265.3
-  TEXTURES: textured pixels med 107,640 max 244,232; texel cache 61.3%
-  framewait 36.2%  mailbox 0.5%  render 8.4%   tgp spread across PCs
+  bands, 50 MHz renderer:  2-5, 90% of the time
+  bands, 60 MHz renderer:  2-5, 90% of the time
 ```
 
-**The earlier black screens were the placement lottery, not the code.** s45 and
-s46 died; s52 is the SAME RTL and runs. Do not re-diagnose that as an area or
-timing fault -- study R435/R436 record how much time went into those blind
-alleys. If a build of this comes up black, roll a seed.
+**The clock gain went straight back out through the texel crossing.** Four
+synchroniser trips a fetch is ~50 ns, against 45,835 fetches a frame: ~2.3 ms
+of a 16.7 ms frame, almost exactly the 20% the clock bought. Study R470.
+
+DO NOT RE-RUN THAT EXPERIMENT. What the clock needs first is a texel fetch that
+tolerates latency; until then 60 MHz is a wash and, because its crossings are
+physically unbounded, a per-build coin toss (s139 and s141 are identical RTL,
+one drew nothing).
+
+**THE 60 MHz WORK IS BANKED, NOT LOST.** Five encoder/multiplier-into-shifter
+splits (R457, R459, R461, R466, R468) were made to reach 16.667 ns. At 20 ns
+they are margin: clk_sys +0.588 and 41,237 ALM, the best and lowest of the
+whole effort. The PLL still generates 60 MHz on outclk_2 and the VCO stays at
+1200, so putting the renderer back is a one-line change plus re-adding the
+crossings (m2_handshake_cdc is in the tree, tested).
+
+## THE LEVER IS THE TEXEL FETCH, AND IT IS MEASURED
+
+```
+  45,835 fetches a frame, ~26% miss  ->  11,871 misses
+  a miss is ~280 ns                  ->  3.3 ms of a 16.7 ms frame
+```
+
+m2_span_tex BLOCKS in T_FETCH until each acknowledge returns, one at a time.
+That 3.3 ms is serialised at 50 MHz with no crossing involved. Two options:
+
+  A. Skip the fetch when a PIXSTEP group maps to the same texel as the last --
+     a one-entry register in m2_span_tex. Cheap. Measure first: count
+     repeat-vs-distinct texels per span in tb_m2_span_tex.
+  B. Hit-under-miss in m2_texel plus several groups in flight in m2_span_tex.
+     A real redesign of both, and what actually attacks the whole 3.3 ms.
+
+## TWO THINGS THAT COST TIME THIS SESSION
+
+**STA slack does not predict whether a build boots (R471).** Three seeds of
+identical RTL: the one with the WORST clk_mem by 1.3 ns comes up, the one with
+the best clk_sys and clk_i960 does not. Flash by trying seeds, not by ranking
+them, and do not read a black screen as evidence against the change under test
+until the whole batch has been tried.
+
+**tools/board-capture.sh flashes, waits 5 s and captures -- which records the
+TEST MENU, not the game.** The board needs a manual restart after a flash
+before it runs attract. Every capture taken through that script this session
+measured the wrong thing, and comparisons built on them were worthless. Restart
+first, then capture with tools/uart_capture.py directly.
+
+**The clk_3d debug counters garbled** because they crossed unsynchronised by a
+deliberate choice -- `bands med 52` against NBANDS 48 is the proof. If the 3D
+domain is ever split again, those counters need a real crossing first, or the
+only instrument into that domain lies.
+
+## THE CPU: 25 MHz, AND 30 IS PARKED WITH A REASON (R464)
+
+Measured CPI on REAL game code via tb_m2_boot is **7.49**, not the 2 that an
+earlier note implied:
+
+```
+  T_MEM_W   3.00   T_FETCH_W 2.23   T_FETCH 1.00   T_EXEC 1.00   T_MULDIV 0.00
+  bus transactions 0.595 per instruction, 12.6 cycles of wait each
+  of which WRITES 23.6% -- waiting on them is 3.25 of the CPI
+```
+
+**Waiting on writes is 43% of all CPU time**, and a write has nothing to
+return. Posting them is worth ~+68%, far more than 25->30 MHz (+20%) -- and
+posting them drops CPI below 5, which is the break-even where trading a
+pipeline stage for the clock stops paying. So: posted writes first, then the
+front end (2.55 cyc/instr at a 64% prefetch hit rate), and reach 30 MHz only by
+shortening insn -> wd WITHOUT a new stage.
+
+m2_cpu_bridge acknowledges only at the end of S_LO/S_HI. Posting means
+acknowledging at dispatch, and that module records that its acknowledge
+lifetime is load-bearing in ways its tests do not catch ("this is the exact
+hazard that put a wrong boot vector on the board"). tb_m2_boot prints CPI
+directly, so it is verifiable in simulation before it reaches hardware.
 
 ## THE PROBLEM NOW IS SPEED, AND IT IS MEASURED
 
