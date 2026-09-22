@@ -36,6 +36,7 @@ static Vm2_span_tex *d;
 static const int STEP = TB_PIXSTEP;
 
 static long checks = 0, fails = 0;
+static long ticks_done = 0;
 static void ck(const char *what, long got, long want) {
   ++checks;
   if (got != want) { std::printf("  FAIL %-34s got=%ld want=%ld\n", what, got, want); ++fails; }
@@ -53,6 +54,7 @@ static int texel_of(uint32_t u, uint32_t v) {
 }
 
 static void tick(bool stall = false) {
+  ++ticks_done;
   d->out_ready = stall ? 0 : 1;
   // The texel fetch answers in one cycle.
   if (d->tx_req) { d->tx_ack = 1; d->tx_texel = texel_of(d->tx_u, d->tx_v); }
@@ -276,6 +278,9 @@ int main(int argc, char **argv) {
     uint32_t rng = 0xC0FFEEu;
     auto roll = [&](uint32_t n) { rng = rng*1664525u + 1013904223u; return (rng >> 8) % n; };
     long spans_run = 0, groups_checked = 0;
+    // R475: CYCLES PER GROUP, which nothing has measured. The walk's floor
+    // decides whether the texel fetch is the bottleneck or merely a term.
+    long tick_total = 0, group_total = 0;
 
     for (int trial = 0; trial < 120; ++trial) {
       const int STEP = 2;
@@ -307,7 +312,9 @@ int main(int argc, char **argv) {
       d->in_tex = 0x000001; d->in_tex_en = 1;
       d->in_ooz = OOZ; d->in_doozdx = DOZ;
       tick(); d->in_valid = 0;
+      long t0 = ticks_done;
       for (int i = 0; i < 4000 && int(got.size()) < groups; ++i) tick();
+      tick_total += ticks_done - t0; group_total += groups;
 
       ck("one output per group", long(got.size()), groups);
       if (int(got.size()) != groups) continue;
@@ -339,6 +346,9 @@ int main(int argc, char **argv) {
       }
     }
     // THE GUARD, as 2d has: a corpus that silently ran nothing proves nothing.
+    std::printf("    walk rate: %ld cycles for %ld groups -- %.2f cycles per group\n",
+                tick_total, group_total,
+                group_total ? double(tick_total)/double(group_total) : 0.0);
     ck("spans actually ran", spans_run > 100, 1);
     ck("groups actually checked", groups_checked > 1000, 1);
   }
