@@ -501,6 +501,75 @@ int main(int argc, char **argv) {
                 double(want_groups)/double(sp.size()));
   }
 
+  // 2d. R499: WHAT THE FILL ACTUALLY SENDS -- flat spans interleaved with
+  //     textured ones, and degenerate widths among them.
+  //
+  // R497 named three gaps after the overlap froze the board with timing that
+  // matched the builds that run. This closes two of them, and it is written
+  // BEFORE the overlap goes back in so that "it passes" means something.
+  //
+  //   * A FLAT SPAN BETWEEN TEXTURED ONES. m2_span_tex passes flat spans
+  //     through as WIRES while textured ones are walked from registers, and
+  //     in_ready gates which path a span takes. A flat span arriving while
+  //     textured pixels are still in the pipeline must WAIT -- passed through
+  //     early it would overtake them. Every existing test sends one kind at a
+  //     time.
+  //   * DEGENERATE WIDTHS. x0 == x1 is one group and the fill emits them at
+  //     polygon edges; x1 < x0 is an empty span. The corpus only ever
+  //     generates x1 > x0.
+  {
+    std::printf("test: R499, flat and textured interleaved, degenerate widths\n");
+    uint32_t rng = 0xA5A5u;
+    auto roll = [&](uint32_t n) { rng = rng*1664525u + 1013904223u; return (rng >> 8) % n; };
+    const int STEP = 2;
+    struct S { int y, x0, x1, groups; bool tex; };
+    std::vector<S> sp;
+    for (int i = 0; i < 80; ++i) {
+      S q; q.tex = (roll(3) != 0);          // a third of them flat
+      q.x0 = 4 + int(roll(40));
+      int w = int(roll(5));
+      q.x1 = (w == 0) ? q.x0                       // one group
+           : (w == 1) ? q.x0 - STEP                // EMPTY: x1 < x0
+                      : q.x0 + STEP * int(roll(6) + 1);
+      q.y  = 11 + i;                        // unique y per span, so the
+      q.groups = (q.x1 < q.x0) ? 0          // outputs can be attributed
+                               : ((q.x1 - q.x0) / STEP) + 1;
+      sp.push_back(q);
+    }
+    got.clear(); force_texel = -1;
+    long t0 = ticks_done; size_t next = 0; long sent = 0;
+    for (long guard = 0; guard < 400000 && next < sp.size(); ++guard) {
+      const S &q = sp[next];
+      d->in_valid = 1;
+      d->in_y = q.y; d->in_x0 = q.x0; d->in_x1 = q.x1;
+      d->in_col = 0xffffff; d->in_moire = 0;
+      d->in_u = 0x40000; d->in_v = 0x40000; d->in_dudx = 0x40; d->in_dvdx = 0x40;
+      d->in_ooz = 0x4000000; d->in_doozdx = -100;
+      d->in_tex = q.tex ? 0x000001 : 0x000000; d->in_tex_en = q.tex ? 1 : 0;
+      d->out_ready = (roll(4) != 0) ? 1 : 0;
+      d->eval();
+      bool taken = d->in_valid && d->in_ready;
+      tick(!d->out_ready);
+      if (taken) { ++next; ++sent; }
+    }
+    d->in_valid = 0;
+    for (int i = 0; i < 400; ++i) tick();
+    long cyc = ticks_done - t0;
+
+    // EVERY SPAN WAS ACCEPTED -- a unit that wedges shows up here first, and a
+    // wedge is exactly what the board did.
+    ck("every span was accepted", sent, long(sp.size()));
+
+    // AND THE ORDER IS THE ORDER SENT. y is unique per span, so a flat span
+    // that overtook the textured pixels still in the pipeline is visible as an
+    // out-of-order y -- which no check in this file could see before.
+    long ooo = 0; int prev_y = -1;
+    for (auto &o : got) { if (o.y < prev_y) ++ooo; prev_y = o.y; }
+    ck("outputs never go backwards in y", ooo, 0);
+    std::printf("    %ld spans accepted, %zu outputs, %ld cycles\n",
+                sent, got.size(), cyc);
+  }
+
   // 2b. A FLAT SPAN WHEN THE CONSUMER IS NOT READY. It must be HELD, not
   //     consumed: in_ready is the band's ready, exactly as it was before this
   //     unit existed, or the fill drops a span whenever a band is busy.

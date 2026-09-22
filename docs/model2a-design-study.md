@@ -20492,3 +20492,47 @@ difference between this and the change that stopped the board booting.
 
 0.50 ns is HALF of the -1.043 and is not on its own enough. It is also free in
 area, which nothing else today has been.
+
+---
+
+**R499 -- R497 CALLED R490 A FUNCTIONAL FAULT FROM ONE BUILD AT MARGINAL
+TIMING. R498 SHOWS THAT BUILD WAS NOT MARGINAL-BY-ACCIDENT, IT WAS MARGINAL.**
+
+R497 reasoned: s185 carries the overlap, its clk_mem is -1.043 against the
+working s153's -1.025, therefore the timing is equivalent and the freeze must
+be functional. The premise is wrong. -1.0 is the middle of the region where
+this design is a COIN TOSS -- s153 and s162 boot there, s166 at -1.427 does
+not, and the whole "1 in 4" is that band. Two builds being equally marginal is
+not two builds being equally sound.
+
+R498 moved clk_mem from -1.043 to **-0.145** on s190, which RUNS. That is
+nearly a nanosecond of headroom this design has never had, and it is the first
+time the arbiter path has been anywhere near met.
+
+THE STANDALONE SPIKE UNDERSTATED IT BADLY, and the reason is worth keeping:
+
+```
+  m2_sdram spike, 10 ns:   6.72 ns of logic, SLACK +3.277 standalone
+  same path, full design:  -1.043 before R498,  -0.145 after
+```
+
+The module alone had 3.3 ns of slack all along -- the depth was never what cost
+100 MHz, congestion was. But shortening the logic did not buy 0.50 ns as the
+spike predicted; it bought 0.90. Fewer levels means fewer nodes the placer has
+to fit into a 98%-full device, so the routing improves too. A spike measures
+the logic and cannot see that, and it will under-report every such change.
+
+THE OVERLAP GOES BACK IN, on the healthy baseline, with the gaps R497 listed
+closed first and ON KNOWN-GOOD RTL so that passing means something:
+
+  * flat spans interleaved with textured ones -- a flat span is passed through
+    as WIRES and must not overtake textured pixels still in the pipeline;
+  * degenerate widths, x0 == x1 and x1 < x0, which the fill emits at polygon
+    edges and the corpus never generated;
+  * every span accepted, and outputs never going backwards in y.
+
+It passes both with and without the overlap, and the overlap is 16% faster on
+that mixed traffic (992 cycles against 1181). So these tests do not find a
+fault -- which, after R494, is stated carefully: they are evidence the cases
+are handled, not proof the board will run. THE BOARD IS THE ORACLE and it has
+not seen the overlap on top of R498 yet.
