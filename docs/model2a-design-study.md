@@ -20013,3 +20013,50 @@ WHAT NOT TO DO NEXT, recorded because both were nearly done here: the per-band
 clear is 992 cycles of 15,750 (the buffer is banked four ways), and texel miss
 latency is ~1.5 ms of a 16.7 ms frame at the s162 measured rate of 5,293 misses
 a frame. Neither is the 8.
+
+---
+
+**R489 -- SKIPPING BANDS THE BEAM HAS PASSED THROWS AWAY THE ONLY BANDS THAT
+CURRENTLY DRAW. TRIED, REJECTED BY THE BENCH, NOT BUILT.**
+
+The reasoning was sound as far as it went. The fill is paced by buffer release
+-- `C_IDLE` waits on `!bd_ready[fill_buf]` -- so it can never be more than NBUF
+bands AHEAD, and nothing bounded how far behind it could fall. A band that
+overran its ~15,750-cycle budget put the fill in arrears for the rest of the
+frame, and a band the beam has passed cannot be displayed however fast it is
+built. Skipping it looked free.
+
+```
+  C_IDLE: if (dvalid && (scan_band_f > fill_band)) begin
+    fill_band <= fill_band + 1;          // abandon it, catch up
+  end else if (dvalid && !bd_ready[fill_buf] && ...
+```
+
+`tb_m2_raster3d` failed three ways at once, and the third names the fault:
+
+```
+  FAIL: the top band painted nothing on a held frame (R225)
+  FAIL: the top band painted nothing on a later frame (R225)
+  FAIL: the frame during which the next list was collected painted 4961,
+        not 10373 -- the picture flashes
+```
+
+AT FRAME START THERE IS NO HEAD START YET. `frame_start` resets `fill_band` to
+zero with the beam also at band zero, so the beam is "past" band 0 the moment
+it moves, and the skip abandons band 0, then 1, then 2 -- which are precisely
+the bands the head start builds during blanking and precisely the ones the
+board does display. The change would have removed the top strip that is
+currently the only reliable output, in the name of catching up to a beam that
+was never ahead.
+
+The condition would have to be "more than one band past", or gated off until
+the head start exists. BOTH OF THOSE ARE MARGINS CHOSEN TO MAKE THE BENCH
+QUIET, and R225 exists because "the top band painted nothing" was already a
+shipped bug once. Reverted whole rather than tuned.
+
+WHAT SURVIVES THE FAILURE: the lag analysis itself is untouched and is still
+the best account of the photographs -- five contiguous bands at the top (the
+NBUF = 5 head start), a gap, one or two lower down where the fill briefly
+caught up. What is wrong is the idea that the lag can be fixed at the buffer
+end. The fill is at ~100% of its per-band budget; the budget is what has to
+move, and R488 says where 13-26% of it goes.
