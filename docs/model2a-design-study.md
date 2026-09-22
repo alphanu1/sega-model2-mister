@@ -20120,3 +20120,43 @@ overlapping, and cannot be caught overlapping WRONGLY. That is why R488's fixed
 cost was invisible here for eleven revisions, and why 7,194 checks passed
 against RTL with three overlap faults in it. The back-to-back loop is now the
 acceptance test for anything touching this pipeline.
+
+---
+
+**R491 -- clk_sys MARGIN, NOT ALM, PREDICTS WHETHER A BUILD BOOTS. POSITIVE IS
+NOT ENOUGH.**
+
+Eight builds of the same RTL family, ranked by setup slack on general[1]
+(clk_sys, 50 MHz):
+
+```
+  s162   41,207 ALM   clk_sys +0.815   boots
+  s153   41,133 ALM   clk_sys +0.271   boots
+  s166   41,173 ALM   clk_sys +0.028   BLACK
+  s158   41,300 ALM   clk_sys -0.520   BLACK
+  s159   41,309 ALM   clk_sys -0.573   (not flashed)
+  s157   41,376 ALM   clk_sys -1.308   BLACK
+  s168   41,312 ALM   clk_sys -2.880   (not flashed)
+  s161   41,299 ALM   clk_sys -7.012   (not flashed)
+```
+
+s166 is the entry that matters. At 41,173 ALM it is the SECOND SMALLEST build
+here, 40 ALM off the known-good s153, and it is black. Area was the thing being
+optimised for and it is not what separates these.
+
++0.028 ns is a positive number and it is not margin -- it is under the
+resolution of anything the fitter is modelling. The two that boot have +0.271
+and +0.815.
+
+THIS DOES NOT CONTRADICT R471, and the distinction is worth keeping straight.
+R471 recorded that ranking seeds by slack got the wrong answer -- s144 had the
+best clk_sys and clk_i960 and would not boot, s142 had the worst clk_mem at
+-3.003 and did. That was about clk_mem, which is negative in EVERY build of
+this design including every one that works, and about treating a ranking as a
+prediction. What is claimed here is narrower: clk_sys at or below zero has not
+booted, four times; clk_sys with real margin has booted, twice. Six points, one
+clock.
+
+USE IT AS A FILTER, NOT A RANKING. Assemble and flash the seed with the most
+clk_sys headroom, and do not spend a flash on one near zero however small it
+is. Three of today's four black screens were spent learning this.
