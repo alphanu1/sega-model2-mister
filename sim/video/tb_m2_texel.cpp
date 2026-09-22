@@ -180,6 +180,7 @@ int main(int argc, char **argv) {
   Verilated::commandArgs(argc, argv);
   d = new Vm2_texel;
   d->rst_n = 0; d->req = 0; d->m_ack = 0; d->m2_ack = 0; d->inval = 0;
+  d->m2_en = 1;   // R482: the board enables it once the boot users of port 2 are done
   d->base_s0 = BASE0; d->base_s1 = BASE1;
   for (int i = 0; i < 4; ++i) tick();
   d->rst_n = 1;

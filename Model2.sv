@@ -763,8 +763,34 @@ always_comb begin
 	// to nothing at all -- it sat in its read state taking the engine's acks
 	// as its own. It is the instrument for the question R237 leaves: does the
 	// polygon ROM read back through the SDRAM as the image the MRA loaded?
-	p_req[2]  = cp_req ? cp_req  : st_rd_req ? st_rd_req  : sw_req;
-	p_addr[2] = cp_req ? cp_addr : st_rd_req ? st_rd_addr : sw_addr;
+	// R482: THE TEXEL CACHE'S SECOND PORT SHARES THIS ONE.
+	//
+	// m2_sdram allows one transaction per port at a time, so the texel fetch on
+	// port 10 serialised every miss: 15,703 a frame at ~160 ns is 2.5 ms of a
+	// 16.7 ms frame, and a miss stops the span, which stops the band. A second
+	// port lets two fills be in flight.
+	//
+	// PORT 2, NOT PORT 0, and that is deliberate. Port 0 is genuinely spare
+	// since R427 removed the readback probe, but it carries an unexplained
+	// fault -- "port 0 returns zero for the same SDRAM at the same capture
+	// depth" -- which is why the CPU was moved off it. Port 2's users are the
+	// copy engine, the calibration read and the read-back sweep, all of which
+	// finish at boot, and it is proven working.
+	//
+	// OWNERSHIP IS EXCLUSIVE AND LATCHED, because those three read p_ack[2]
+	// gated only on their own request: if one of them started while a texel
+	// fetch was in flight it would take the texel's acknowledge as its own.
+	// p2_tex takes the port for good once cp_done and cal_done are both set,
+	// and the texel cache's m2_en is held low until then so it never allocates
+	// a slot whose fill cannot be acknowledged.
+	//
+	// THE READ-BACK SWEEP IS GIVEN UP FOR THIS. It is the diagnostic R237/R238
+	// left behind and it runs forever otherwise; it is masked once the texel
+	// owns the port. Say so rather than let it look like it still works.
+	p_req[2]  = p2_tex ? tex_m2_req
+	                   : (cp_req ? cp_req  : st_rd_req ? st_rd_req  : sw_req);
+	p_addr[2] = p2_tex ? tex_m2_addr
+	                   : (cp_req ? cp_addr : st_rd_req ? st_rd_addr : sw_addr);
 	// PORT 1, NOT PORT 0. m2_sdram's blen() gives ports 1-3 a four-word burst and
 	// ports 0 and 4 a single word, and the copy engine was the ONLY consumer of a
 	// single-word read -- and the only reader that fails. The self-test on port 2
@@ -5524,6 +5550,20 @@ wire [15:0] oz_d0, oz_d1, oz_d2, oz_d3;   // R334: 1/z off the quad store   // R
 //
 // A buffer is 8 M10K and 25 are free (528/553), so five leaves nine in hand.
 // Six would need 552 of 553 and not fit.
+// R482: port 2 passes to the texel cache once the boot users are finished with
+// it, and never passes back. cp_done and cal_done are the same pair the video
+// reset waits on.
+logic p2_tex;
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+	if (!mem_rst_n)                 p2_tex <= 1'b0;
+	else if (cp_done && cal_done)   p2_tex <= 1'b1;
+end
+wire        tex_m2_en = p2_tex;
+wire        tex_m2_req;
+wire [SDR_AW:1] tex_m2_addr;
+wire        tex_m2_ack  = p2_tex & p_ack[2];
+wire [63:0] tex_m2_data = p_dout[2];
+
 m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(5),
               .TWO_CLOCKS(1'b0), .TEX_AW(SDR_AW)) u_raster3d (
 	// R318: clk_mem carries m2_texel, which runs at 100 MHz inside this module.
@@ -5547,6 +5587,8 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(5),
 	// fall back to what they did before in one place.
 	.q_tex({q3d_tex[23:1], q3d_tex[0] && !texoff_s[2]}),
 	.tex_base0(GAME_TEXS0), .tex_base1(GAME_TEXS1), .tex_inval(cpu_tex_inval),
+	.tex_m2_en(tex_m2_en), .tex_m2_req(tex_m2_req), .tex_m2_addr(tex_m2_addr),
+	.tex_m2_ack(tex_m2_ack), .tex_m2_data(tex_m2_data),
 	.tex_m_req(tex_m_req), .tex_m_addr(tex_m_addr),
 	.tex_m_ack(tex_m_ack), .tex_m_data(tex_m_data),
 	.dbg_texpix(tex_pixels), .dbg_texhit(tex_hits), .dbg_texmiss(tex_misses),

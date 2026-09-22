@@ -129,6 +129,11 @@ module m2_texel #(
   output logic [AW:1]      m_addr,
   input  logic             m_ack,
   input  logic [63:0]      m_data,
+  // R482: the second port is only usable once the boot users of SDRAM port 2
+  // -- the copy engine, the calibration read and the read-back sweep -- are
+  // finished with it. Before that the cache runs on one port, exactly as it
+  // did, rather than allocating a slot whose fill can never be acknowledged.
+  input  logic             m2_en,
   output logic             m2_req,
   output logic [AW:1]      m2_addr,
   input  logic             m2_ack,
@@ -334,7 +339,7 @@ module m2_texel #(
   // band after it." Each fill answers with whatever is in hand rather than
   // hanging, exactly as the old one did.
   logic [9:0]          ms_to   [2];
-  wire                 ms_have_free = !ms_busy[0] || !ms_busy[1];
+  wire                 ms_have_free = !ms_busy[0] || (m2_en && !ms_busy[1]);
   wire                 ms_pick      = !ms_busy[0] ? 1'b0 : 1'b1;
   // A fill needs the array write port, which the lookup read is using. One
   // stolen cycle per fill; rdy drops for it.
@@ -587,7 +592,9 @@ module m2_texel #(
   // it. rs_wp then passes rs_rp by more than the depth, and because rs_full is
   // an EQUALITY test it never matches again: the pointers free-run and the head
   // pops entries that were never written. 70 requests produced 200 responses.
-  wire ms_both_free = !ms_busy[0] && !ms_busy[1];
+  // With one port there is no second slot to reserve for the lookup already
+  // in flight, so nothing is accepted from S_LOOK -- the pre-R480 behaviour.
+  wire ms_both_free = !ms_busy[0] && m2_en && !ms_busy[1];
   wire rs_room2     = ((rs_wp - rs_rp) <= ($clog2(RSP_D)+1)'(RSP_D - 2));
   assign rdy = !inval_pend && !ms_fill_rdy
                && (((st == S_IDLE) && !rs_full && ms_have_free)
