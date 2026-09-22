@@ -19902,3 +19902,59 @@ instruments that were wrong in a way no simulation asked about and that
 hardware reports without complaint. When a debug number is used to make a
 design decision here, check what clears it and what it does at its limit BEFORE
 believing it.
+
+---
+
+**R487 -- THE ONE COUNTER THAT ANSWERS THE BAND QUESTION DIRECTLY HAS NEVER
+BEEN ON THE WIRE, AND SATURATES IN THREE SECONDS IF IT WERE.**
+
+`dbg_missed` is incremented once per visible scanline whose band no buffer was
+holding when the beam arrived:
+
+```
+  if (scan_x == 0 && scan_x_d != 0 && scan_y < SCR_H) begin
+    for (i = 0; i < NBUF; i++)
+      if (rdy_s2[i] && band_s2[i] == scan_band) any_rdy = 1;
+    if (!any_rdy) dbg_missed <= dbg_missed + 1;
+  end
+```
+
+That is "the picture is missing here", measured at the only place it can be
+measured. Two things were wrong with it.
+
+It is NOT READ. `r3d_missed` is declared at the top level, connected to the
+port, and consumed by nothing, so it is one of the 112 dead debug signals R485
+found and the fitter deletes it. Every band investigation since R213 has been
+inferring what this counter states outright.
+
+And it SATURATES. Its own comment says "free-running; the debug stream takes
+deltas", which is the right design -- a delta is correct across a wrap -- but
+the increment was guarded `!(&dbg_missed)`. At up to 384 a frame that sticks at
+0xFFFF in about three seconds. Third instance of the identical fault in one
+session, after R484's two texture counters, and the third time the guard was
+written by someone protecting a counter that was never meant to be read as a
+total.
+
+Wired into the `z` channel's low sixteen bits, which were literally `16'd0`.
+The delta is taken in SIXTEEN bits, not through `sat16d`: that function takes
+32-bit arguments, and zero-extending a 16-bit wrapping counter into it makes
+`5 - 65530` a large positive 32-bit number and saturates the result. The
+per-frame value cannot exceed SCR_H = 384.
+
+WHAT IT WILL SETTLE. The board draws ~145,000 textured pixels a frame and
+completes 52 band-fills a frame -- both measured on s162 -- while showing two
+to five bands. Photographs show those bands are NOT contiguous: about five at
+the top, which is exactly the NBUF = 5 head start built during blanking, then a
+gap, then one or two lower down. Two readings are possible and they need
+opposite fixes:
+
+  * `missed` near 344 (43 bands x 8 lines) -- the fill never gets there in
+    time, and the per-band budget of ~15,750 clk_sys cycles is the problem;
+  * `missed` near zero -- a buffer WAS holding each band and the picture is
+    lost after that point, in the scan-out mux or the buffer release.
+
+THE PER-BAND CLEAR IS NOT THE ANSWER, checked first because it looked like one.
+The band buffer is banked four ways (`NBANK = 4`), so `BWORDS = 124 * 8 = 992`
+and the clear is 992 cycles of the 15,750, about 6%. It is serial with the fill
+-- `C_IDLE -> C_CLR -> C_CLRW -> C_REPLAY -> C_FILL` -- but it is not what
+costs the frame.

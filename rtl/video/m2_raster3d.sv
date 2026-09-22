@@ -685,6 +685,14 @@ module m2_raster3d #(
   // stream takes deltas.
   logic [9:0] scan_x_d;
   always_ff @(posedge scan_clk or negedge rst_n) begin
+    // R487: WRAPS. The comment above says the stream takes deltas, and a delta
+    // is right across a wrap -- but the guard below stuck it at 0xFFFF. At up
+    // to 384 a frame that arrives in about three seconds, after which every
+    // delta is zero. Identical to R484's two texture counters. NOTHING HAS EVER
+    // READ THIS NUMBER: r3d_missed is declared at the top level, connected, and
+    // consumed by nobody, so the fitter deletes it. It is the direct measure of
+    // "the beam reached this band and no buffer was holding it" -- the one
+    // question the band investigation has been trying to answer by inference.
     if (!rst_n) begin dbg_missed <= 16'd0; scan_x_d <= 10'd0; end
     else begin
       scan_x_d <= scan_x;
@@ -692,7 +700,7 @@ module m2_raster3d #(
         automatic logic any_rdy = 1'b0;
         for (int i = 0; i < NBUF; i++)
           if (rdy_s2[i] && (band_s2[i] == scan_band)) any_rdy = 1'b1;
-        if (!any_rdy && !(&dbg_missed)) dbg_missed <= dbg_missed + 16'd1;
+        if (!any_rdy) dbg_missed <= dbg_missed + 16'd1;
       end
     end
   end
