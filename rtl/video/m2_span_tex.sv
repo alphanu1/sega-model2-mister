@@ -107,15 +107,17 @@ module m2_span_tex #(
   output logic [15:0]        dbg_hotcyc
 );
 
-  typedef enum logic [2:0] { T_IDLE, T_WARM, T_FETCH, T_EMIT, T_DRAIN } st_t;
+  typedef enum logic [2:0] { T_IDLE, T_RUN, T_DRAIN } st_t;   // R476
   st_t st;
 
-  logic signed [31:0] y_r, x_r, x1_r;
+  logic signed [31:0] y_r, x1_r;   // R476: x_r is iss_x/fq_x now
   logic [23:0]        col_r;
   logic               moire_r;
-  logic signed [31:0] u_r, v_r, du_r, dv_r;
+  // R476: u_r/v_r/ooz_r are gone -- the issue pointer walks the span and the
+  // gradients are all the consumer needs.
+  logic signed [31:0] du_r, dv_r;
   // R339: 1/z walks the span exactly as u and v do.
-  logic signed [31:0] ooz_r, doz_r;
+  logic signed [31:0] doz_r;
   // The divided coordinates, in the same quarter-texel.16 the affine path used,
   // so to_tx() and everything downstream are unchanged.
   logic signed [31:0] uq_r, vq_r;
@@ -167,7 +169,7 @@ module m2_span_tex #(
     end
   endfunction
   logic [23:0]        tex_r;
-  logic [3:0]         texel_r;
+  // R476: no registered texel -- the emit uses the one that has just arrived.
   // A FETCH THAT NEVER ANSWERS MUST NOT STOP THE BAND. m2_texel has its own
   // timeout on the memory, but it also goes deaf while it sweeps its tags, and
   // this walk is inside the band fill -- a wait here is a band that never
@@ -189,10 +191,11 @@ module m2_span_tex #(
   // R339: the DIVIDED coordinates, not u/z and v/z themselves.
   assign tx_u   = to_tx(uq_r);
   assign tx_v   = to_tx(vq_r);
-  assign tx_req = (st == T_FETCH);
+  assign tx_req = fq_valid;   // R476
 
   // The texel as an intensity: 0x0 -> 0, 0xF -> 0xFF, evenly spaced.
-  wire [7:0] inten = {texel_r, texel_r};
+  // R476: the emit computes its own intensity from the texel that has just
+  // arrived, so there is no registered copy to derive one from.
   /* verilator lint_off UNUSEDSIGNAL */
   function automatic logic [7:0] scale(input logic [7:0] c, input logic [7:0] i);
     logic [15:0] p;
@@ -223,7 +226,7 @@ module m2_span_tex #(
   //
   // Skipping costs nothing but the pixel: the walk advances identically, so a
   // fully transparent span still terminates on its own x1.
-  wire tx_skip = tex_r[8] && (texel_r == 4'hf);
+
   wire idle    = (st == T_IDLE);
   assign busy  = !idle || e_valid;
 
@@ -261,15 +264,62 @@ module m2_span_tex #(
 
   // R446: the group after this one. Stable for as long as the FSM sits in
   // T_FETCH/T_EMIT, which is what lets the pipeline below settle on it.
-  wire signed [31:0] u_nxt   = u_r   + (du_r  <<< $clog2(PIXSTEP));
-  wire signed [31:0] v_nxt   = v_r   + (dv_r  <<< $clog2(PIXSTEP));
-  wire signed [31:0] ooz_nxt = ooz_r + (doz_r <<< $clog2(PIXSTEP));
-  wire signed [31:0] dv_o    = dv_first ? ooz_r : ooz_nxt;
-  wire signed [31:0] dv_u    = dv_first ? u_r   : u_nxt;
-  wire signed [31:0] dv_v    = dv_first ? v_r   : v_nxt;
+  // R476: THE PIPELINE CARRIES SUCCESSIVE GROUPS NOW, NOT ONE HELD STILL.
+  //
+  // It used to be fed dv_u/dv_o = u_nxt/ooz_nxt -- the SAME next-group value,
+  // recomputed every cycle while the walk sat on the current one -- and the FSM
+  // waited `dv_age >= 6` for it to settle, then advanced and waited again. A
+  // fixed-latency pipeline fed a constant, so nothing overlapped.
+  //
+  // R475 measured what that costs, with the bench answering every texel in ONE
+  // cycle: **7.41 cycles per group**, which is 45,835 groups x 7.41 x 20 ns =
+  // 6.8 ms of a 16.7 ms frame before any texel latency at all -- twice the
+  // 3.3 ms the misses cost. The divide was the bottleneck, not the fetch, and
+  // it is why R470's 60 MHz renderer bought nothing: a faster clock shortens a
+  // fixed wait proportionally while the crossing it added got longer.
+  //
+  // So an ISSUE pointer walks the span a group per cycle into the pipeline, a
+  // shadow carries each group's x alongside, and the consumer takes results as
+  // they emerge. The divide's six cycles are paid once per SPAN instead of once
+  // per group.
+  logic signed [31:0] iss_u, iss_v, iss_ooz;
+  logic signed [31:0] iss_x;
+  logic               iss_run;      // still issuing groups for this span
+  wire                iss_last  = (iss_x + 32'(PIXSTEP) - 32'sd1) >= x1_r;
 
-  logic        dv_first;          // the span's first group divides in place
-  logic [2:0]  dv_age;            // cycles since the operands last moved
+  wire signed [31:0] dv_o    = iss_ooz;
+  wire signed [31:0] dv_u    = iss_u;
+  wire signed [31:0] dv_v    = iss_v;
+
+  // THE SHADOW. Six deep, matching d0..d4b, so the x that arrives with a
+  // result is the x that was issued with its operands. Getting this depth
+  // wrong pairs a group's coordinates with another group's position, which
+  // draws a span whose texture slides along it -- and every arithmetic check
+  // still passes.
+  localparam int unsigned PIPE_D = 6;
+  logic                    sh_v    [PIPE_D];
+  logic signed [31:0]      sh_x    [PIPE_D];
+  logic                    sh_last [PIPE_D];
+
+  logic [2:0]  dv_age;            // kept: the span's first result still warms
+
+  // R476: the result standing at the end of the pipeline, and the fetch slot.
+  wire                res_valid = sh_v[PIPE_D-1];
+  wire signed [31:0]  res_x     = sh_x[PIPE_D-1];
+  wire                res_last  = sh_last[PIPE_D-1];
+
+  logic               fq_valid;   // a texel fetch is outstanding
+  logic signed [31:0] fq_x;
+  logic               fq_last;
+
+  // Take a result when there is one, no fetch is outstanding, and the emit
+  // slot will be free. The pipeline runs whenever the output is not being held.
+  // The span load, seen by the pipeline block so the issue pointer starts with
+  // the span. The FSM loads du_r/dv_r/doz_r on the same edge; the first advance
+  // happens a cycle later, by which time they are valid.
+  wire ld_span   = (st == T_IDLE) && in_valid && tex_now;
+  wire cons_take = res_valid && !fq_valid && (!e_valid || out_ready) && (st == T_RUN);
+  wire pipe_en   = !res_valid || cons_take;
   logic signed [31:0] d0_o;   logic [5:0] d0_e;   // R448: stage 1a
   logic [5:0]  d1_e;   logic [31:0] d1_m;  logic [24:0] d1_r;
   logic [31:0] d2_nd;  logic [5:0]  d2_e;  logic [24:0] d2_r;
@@ -292,7 +342,45 @@ module m2_span_tex #(
       d4a_pu <= '0; d4a_pv <= '0; d4a_sh <= '0;   // R468
       u_h1 <= '0; v_h1 <= '0; u_h2 <= '0; v_h2 <= '0; u_h3 <= '0; v_h3 <= '0;
       u_h4 <= '0; v_h4 <= '0;
-    end else begin
+      iss_u <= '0; iss_v <= '0; iss_ooz <= '0; iss_x <= '0; iss_run <= 1'b0;
+      for (int k = 0; k < PIPE_D; k++) begin
+        sh_v[k] <= 1'b0; sh_x[k] <= '0; sh_last[k] <= 1'b0;
+      end
+    end else if (ld_span) begin
+      // R476: START OF SPAN. The shadow is cleared so a stale valid from the
+      // previous span cannot emerge as a group of this one -- which would draw
+      // one span's texel at another span's x and pass every arithmetic check.
+      iss_u   <= in_u;
+      iss_v   <= in_v;
+      iss_ooz <= in_ooz;
+      iss_x   <= in_x0;
+      iss_run <= 1'b1;
+      for (int k = 0; k < PIPE_D; k++) begin
+        sh_v[k] <= 1'b0; sh_x[k] <= '0; sh_last[k] <= 1'b0;
+      end
+    end else if (pipe_en) begin
+      // R476: THE WHOLE PIPELINE STALLS TOGETHER. When the consumer cannot take
+      // the result at the output, nothing moves -- issue, stages and shadow all
+      // hold. Letting the stages advance while the output is held would drop
+      // the result that is standing there.
+      //
+      // Issue one group per enabled cycle, and shift the shadow with it.
+      if (iss_run) begin
+        iss_u   <= iss_u   + (du_r  <<< $clog2(PIXSTEP));
+        iss_v   <= iss_v   + (dv_r  <<< $clog2(PIXSTEP));
+        iss_ooz <= iss_ooz + (doz_r <<< $clog2(PIXSTEP));
+        iss_x   <= iss_x   + 32'(PIXSTEP);
+        if (iss_last) iss_run <= 1'b0;
+      end
+      sh_v[0]    <= iss_run;
+      sh_x[0]    <= iss_x;
+      sh_last[0] <= iss_run && iss_last;
+      for (int k = 1; k < PIPE_D; k++) begin
+        sh_v[k]    <= sh_v[k-1];
+        sh_x[k]    <= sh_x[k-1];
+        sh_last[k] <= sh_last[k-1];
+      end
+
       // R448: STAGE 1 SPLIT IN TWO. As one cycle it was the ooz_nxt add, then
       // top_bit's priority encode, then a variable shift, then the rcp_tab
       // read -- four operations, and report_timing named it:
@@ -346,10 +434,10 @@ module m2_span_tex #(
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      st <= T_IDLE; dv_first <= 1'b0; dv_age <= 3'd0;
-      y_r <= '0; x_r <= '0; x1_r <= '0; col_r <= '0; moire_r <= 1'b0;
-      u_r <= '0; v_r <= '0; du_r <= '0; dv_r <= '0; tex_r <= '0; texel_r <= '0;
-      ooz_r <= '0; doz_r <= '0; uq_r <= '0; vq_r <= '0;
+      st <= T_IDLE; dv_age <= 3'd0; fq_valid <= 1'b0; fq_x <= '0; fq_last <= 1'b0;
+      y_r <= '0; x1_r <= '0; col_r <= '0; moire_r <= 1'b0;
+      du_r <= '0; dv_r <= '0; tex_r <= '0;
+      doz_r <= '0; uq_r <= '0; vq_r <= '0;
       // R433
       e_valid <= 1'b0; e_col <= '0; e_x <= '0; e_x1 <= '0; to_cnt <= '0;
       dbg_texpix <= '0; dbg_texnz <= '0;
@@ -363,86 +451,57 @@ module m2_span_tex #(
       case (st)
         T_IDLE: if (in_valid && tex_now) begin
           y_r     <= in_y;
-          x_r     <= in_x0;
           x1_r    <= in_x1;
           col_r   <= in_col;
           moire_r <= in_moire;
-          u_r     <= in_u;
-          v_r     <= in_v;
           du_r    <= 32'(in_dudx) <<< 8;
           dv_r    <= 32'(in_dvdx) <<< 8;
           tex_r   <= in_tex;
-          ooz_r   <= in_ooz;                                  // R339
           doz_r   <= 32'(in_doozdx) <<< 8;
-          dv_first <= 1'b1; dv_age <= 3'd0;
-          st      <= T_WARM;
+          dv_age  <= 3'd0;
+          fq_valid <= 1'b0;
+          to_cnt  <= '0;
+          st      <= T_RUN;
         end
 
-        // R446: the span's FIRST group is the only one that waits. Every
-        // group after it was computed while the previous texel was in flight.
-        T_WARM: if (dv_age >= 3'd6) begin
-          uq_r     <= d4_u;
-          vq_r     <= d4_v;
-          dv_first <= 1'b0;
-          dv_age   <= 3'd0;
-          st       <= T_FETCH;
-        end
-
-        T_FETCH: begin
+        // R476: ONE STATE, NOT THREE. T_WARM waited for the first divide,
+        // T_FETCH waited for a texel and T_EMIT waited for dv_age to reach six
+        // again -- and that last wait was per GROUP, which R475 measured as
+        // 7.41 cycles a group with a perfect cache. The pipeline now carries
+        // successive groups, so the six cycles are paid once per span while it
+        // fills, and after that a result is standing at the output every cycle
+        // the consumer can take one.
+        T_RUN: begin
           to_cnt <= to_cnt + 1'd1;
-          if (tx_ack) begin
-            texel_r <= tx_texel;
-            if (tx_texel != 4'hf && !(&dbg_texnz)) dbg_texnz <= dbg_texnz + 1'd1;
-            to_cnt  <= '0;
-            st      <= T_EMIT;
-          end else if (&to_cnt) begin
-            texel_r <= 4'hf;
-            to_cnt  <= '0;
-            st      <= T_EMIT;
-          end
-        end
 
-        T_EMIT: if ((!e_valid || out_ready) && dv_age >= 3'd6) begin
-          e_valid <= !tx_skip;                  // R326: transparent texel
-          e_x     <= x_r;
-          e_x1    <= ((x_r + 32'(PIXSTEP) - 32'sd1) > x1_r)
-                       ? x1_r : (x_r + 32'(PIXSTEP) - 32'sd1);
-          e_col   <= {scale(col_r[23:16], inten),
-                      scale(col_r[15:8],  inten),
-                      scale(col_r[7:0],   inten)};
-          if (!tx_skip && !(&dbg_texpix)) dbg_texpix <= dbg_texpix + 32'(PIXSTEP);
-          if (x_r + 32'(PIXSTEP) - 32'sd1 >= x1_r) begin
-            st <= T_DRAIN;
-          end else begin
-            x_r <= x_r + 32'(PIXSTEP);
-            // R323: THE TEXTURE STEP MUST MATCH PIXSTEP, and this only ever
-            // handled 1 and 2. It read `<<< (PIXSTEP == 2 ? 1 : 0)`, so at any
-            // PIXSTEP above two `x` advanced by PIXSTEP while u and v advanced
-            // by ONE texel -- the texture magnified by PIXSTEP/2 along every
-            // span, which on the board looks like texels at the wrong scale and
-            // orientation. R322 set PIXSTEP to 4 and shipped that before this
-            // was noticed.
-            //
-            // NEITHER BENCH COULD CATCH IT. tb_m2_raster3d counts pixels
-            // painted, which is unchanged by a wrong texture coordinate, and
-            // tb_m2_span_tex had 28 checks and no assertion on u or v at all.
-            // A span walk needs a test that says WHICH TEXEL each pixel took.
-            //
-            // R339 added that for one span; R472 made it a corpus -- 120 spans,
-            // 7,194 checks, every group's texel against the reduced-arithmetic
-            // model, plus output count, strict x ordering and tail clamping.
-            // That is what makes this module safe to restructure.
-            //
-            // $clog2 is correct for any POWER OF TWO. A non-power-of-two step
-            // (6) would need a real multiply on this path, for nothing that 8
-            // does not already give.
-            u_r   <= u_nxt;
-            v_r   <= v_nxt;
-            ooz_r <= ooz_nxt;                               // R339
-            uq_r  <= d4_u;                                  // R446: already done
-            vq_r  <= d4_v;
-            dv_age <= 3'd0;
-            st    <= T_FETCH;                               // no divide in the way
+          // Take the next result and start its fetch.
+          if (cons_take) begin
+            uq_r   <= d4_u;
+            vq_r   <= d4_v;
+            fq_x    <= res_x;
+            fq_last <= res_last;
+            fq_valid <= 1'b1;
+            to_cnt  <= '0;
+          end
+
+          // Retire the outstanding fetch: emit its group.
+          if (fq_valid && (tx_ack || (&to_cnt))) begin
+            automatic logic [3:0] tnow = tx_ack ? tx_texel : 4'hf;
+            automatic logic       skip = tex_r[8] && (tnow == 4'hf);
+            automatic logic [7:0] iv   = {tnow, tnow};
+            fq_valid <= 1'b0;
+            to_cnt   <= '0;
+            if (tx_ack && tnow != 4'hf && !(&dbg_texnz)) dbg_texnz <= dbg_texnz + 1'd1;
+
+            e_valid <= !skip;                     // R326: transparent texel
+            e_x     <= fq_x;
+            e_x1    <= ((fq_x + 32'(PIXSTEP) - 32'sd1) > x1_r)
+                         ? x1_r : (fq_x + 32'(PIXSTEP) - 32'sd1);
+            e_col   <= {scale(col_r[23:16], iv),
+                        scale(col_r[15:8],  iv),
+                        scale(col_r[7:0],   iv)};
+            if (!skip && !(&dbg_texpix)) dbg_texpix <= dbg_texpix + 32'(PIXSTEP);
+            if (fq_last) st <= T_DRAIN;
           end
         end
 
