@@ -41,6 +41,7 @@ module m2_texel_x2 (
 
   // ------------------------------------------------- m2_texel, fast (clk_mem)
   output logic        f_req,
+  input  logic        f_rdy,          // R474: the cache accepts when f_req & f_rdy
   input  logic        f_ack,
   output logic [31:0] f_tex,
   output logic [19:0] f_u, f_v,
@@ -49,11 +50,23 @@ module m2_texel_x2 (
 
   logic       done;
   logic [3:0] texel_r;
+  // R474: THE CACHE IS PIPELINED NOW AND TAKES A REQUEST ON ACCEPTANCE, not on
+  // acknowledgement. `done` alone cannot mask f_req any more: it is registered
+  // from f_ack, which rises the cycle AFTER the lookup hits, so the request
+  // would still be standing during the accept cycle and be taken a second time.
+  // R473 measured that as 1,920 hits becoming 3,839 for the same fetches, with
+  // every texel value still correct -- a silently doubled hit rate and twice the
+  // cache traffic, and no wrong pixel to notice it by.
+  logic       sent;
 
   always_ff @(posedge clk_fast or negedge rst_n) begin
     if (!rst_n) begin
-      done <= 1'b0; texel_r <= 4'd0;
+      done <= 1'b0; texel_r <= 4'd0; sent <= 1'b0;
     end else begin
+      // Cleared by the slow side lowering its request, like `done`: one request
+      // in, one acceptance out.
+      if (!s_req)             sent <= 1'b0;
+      else if (f_req && f_rdy) sent <= 1'b1;
       // Cleared by the slow side lowering its request, which is the only event
       // that means "this fetch is finished with".
       if (!s_req)     done <= 1'b0;
@@ -65,7 +78,7 @@ module m2_texel_x2 (
   // Masked from the acknowledge itself, not from the registered `done` a cycle
   // later: m2_texel takes a request while `req` is high, and one more fast cycle
   // of a held request is one more chance for it to start a second fetch.
-  assign f_req   = s_req & ~done & ~f_ack;
+  assign f_req   = s_req & ~done & ~f_ack & ~sent;   // R474
   assign f_tex   = s_tex;
   assign f_u     = s_u;
   assign f_v     = s_v;

@@ -92,7 +92,13 @@ module m2_texel #(
 
   // One texel, please. `tex` is m2_geo_engine's packed texture state (R271);
   // u and v carry eight fractional bits, as the reference's do.
+  // R474: STREAMING. A request is accepted on any cycle where req and rdy are
+  // both high, and its answer comes back later on `ack` with `texel` beside it,
+  // in order. The requester must DEASSERT on acceptance: a held level would be
+  // read as a second request, which is what R473 measured (1,920 hits became
+  // 3,839 for the same fetches, every value still correct).
   input  logic             req,
+  output logic             rdy,
   output logic             ack,
   // Bits 0, 7:8, 11 and 31:24 -- textured, wrap, checker and the luma base --
   // belong to stages above this one; they are carried in the same word because
@@ -222,7 +228,7 @@ module m2_texel #(
   // change. It is not a second cache -- it is the one line the walk is
   // already inside.
 
-  typedef enum logic [2:0] { S_INIT, S_IDLE, S_LOOK, S_MISS, S_FILL, S_ACK } st_t;
+  typedef enum logic [2:0] { S_INIT, S_IDLE, S_LOOK, S_MISS, S_FILL } st_t;   // R474
   st_t st;
 
   logic [IDX_BITS-1:0] sweep, idx_r;
@@ -251,7 +257,10 @@ module m2_texel #(
     ct_din   = {1'b1, tag_r};
     case (st)
       S_INIT: begin mem_addr = sweep; ct_we = 1'b1; ct_din = '0; end
-      S_LOOK: mem_addr = idx_r;
+      // R474: S_LOOK leaves mem_addr at the default req_idx, so the NEXT
+      // lookup's tag read is issued while this one is compared. The compare
+      // uses ct_q, read a cycle ago, so driving this line's own index here
+      // was a no-op that stopped the pipeline.
       S_FILL: begin mem_addr = idx_r; cd_we = 1'b1; ct_we = 1'b1; end
       default: ;
     endcase
@@ -281,12 +290,21 @@ module m2_texel #(
   // the span queue (R310) decoupled the texel fetch from the fill -- so this
   // unit can now be clocked on clk_mem independently of clk_sys, across a clean
   // 2:1 with a narrow interface, without touching the renderer.
+  // R474: THE RESPONSE STAGE. `hold` is loaded on the hit cycle and read the
+  // cycle after, so the selectors that pick its nibble must be the ones that
+  // arrived WITH that line -- not the request accepted behind it. Without this
+  // pair the pipeline answers request N with N+1's nibble: a wrong texel, not a
+  // wrong count, so it reads as corrupt texture rather than broken flow control.
+  logic [1:0]  sel_q;
+  logic        x2_q, y2_q;   // only the parity picks the nibble
+
   logic h_pulse, m_pulse;
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       st <= S_INIT; sweep <= '0; idx_r <= '0; tag_r <= '0; sel_r <= '0;
       wa_r <= '0; sheet_r <= 1'b0; hold <= '0; x2_r <= '0; y2_r <= '0;
+      sel_q <= 2'd0; x2_q <= 1'b0; y2_q <= 1'b0;   // R474
       m_req <= 1'b0; m_addr <= '0; ack <= 1'b0; to_cnt <= '0; dbg_lost <= '0;
       inval_d <= 1'b0; inval_pend <= 1'b0;
       dbg_hits <= '0; dbg_misses <= '0; dbg_sweeps <= '0;
@@ -338,11 +356,22 @@ module m2_texel #(
           st      <= S_LOOK;
         end
 
+        // R474: A HIT ANSWERS AND ACCEPTS IN THE SAME CYCLE. S_ACK used to wait
+        // here for the requester to drop `req`, which made every fetch a full
+        // round trip whether it hit or not.
         S_LOOK: if (hit) begin
           hold     <= cd_q;
+          sel_q    <= sel_r;  x2_q <= x2_r[0];  y2_q <= y2_r[0];
           ack      <= 1'b1;
           h_pulse  <= 1'b1;
-          st       <= S_ACK;
+          if (req && !inval_pend) begin
+            idx_r   <= req_idx;  tag_r   <= req_tag;  sel_r <= req_sel;
+            wa_r    <= waddr;    sheet_r <= sheet;
+            x2_r    <= x2;       y2_r    <= y2;
+            st      <= S_LOOK;
+          end else begin
+            st      <= S_IDLE;
+          end
         end else begin
           m_req      <= 1'b1;
           to_cnt     <= '0;
@@ -364,16 +393,16 @@ module m2_texel #(
             to_cnt <= '0;
             if (!(&dbg_lost)) dbg_lost <= dbg_lost + 1'd1;
             ack    <= 1'b1;             // answer with what is in hand, never hang
-            st     <= S_ACK;
+            sel_q  <= sel_r;  x2_q <= x2_r[0];  y2_q <= y2_r[0];   // R474
+            st     <= S_IDLE;
           end
         end
 
         S_FILL: begin
           ack      <= 1'b1;
-          st       <= S_ACK;   // R419: no last_* line to remember any more
+          sel_q    <= sel_r;  x2_q <= x2_r[0];  y2_q <= y2_r[0];   // R474
+          st       <= S_IDLE;  // R419: no last_* line to remember any more
         end
-
-        S_ACK: if (!req) st <= S_IDLE;
 
         default: st <= S_IDLE;
       endcase
@@ -386,7 +415,7 @@ module m2_texel #(
   // origin is a multiple of 32.
   logic [15:0] word;
   always_comb begin
-    case (sel_r)
+    case (sel_q)   // R474: the response stage's selector
       2'd0: word = hold[15:0];
       2'd1: word = hold[31:16];
       2'd2: word = hold[47:32];
@@ -394,7 +423,11 @@ module m2_texel #(
     endcase
   end
 
-  assign texel = y2_r[0] ? (x2_r[0] ? word[3:0]   : word[7:4])
-                         : (x2_r[0] ? word[11:8]  : word[15:12]);
+  assign texel = y2_q ? (x2_q ? word[3:0]   : word[7:4])
+                      : (x2_q ? word[11:8]  : word[15:12]);
+
+  // R474: free whenever nothing is stalled. A miss holds rdy low for its whole
+  // fill -- hit-under-miss needs a miss-status register and is a later change.
+  assign rdy = !inval_pend && ((st == S_IDLE) || ((st == S_LOOK) && hit));
 
 endmodule

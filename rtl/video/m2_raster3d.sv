@@ -467,7 +467,7 @@ module m2_raster3d #(
   // and a missed acknowledge hangs the span walk in T_FETCH until its 511-cycle
   // timeout. m2_texel_x2 holds it up until the request drops, exactly as
   // m2_sdram_x2 does for the memory ports.
-  logic        txf_req, txf_ack;
+  logic        txf_req, txf_ack, txf_rdy;   // R474
   logic [31:0] txf_tex;
   logic [19:0] txf_u, txf_v;
   logic [3:0]  txf_texel;
@@ -476,7 +476,7 @@ module m2_raster3d #(
     .clk_fast(clk_mem), .rst_n(rst_n),
     .s_req(tex_req), .s_ack(tex_ack), .s_tex(tex_state),
     .s_u(tex_u), .s_v(tex_v), .s_texel(tex_texel),
-    .f_req(txf_req), .f_ack(txf_ack), .f_tex(txf_tex),
+    .f_req(txf_req), .f_rdy(txf_rdy), .f_ack(txf_ack), .f_tex(txf_tex),
     .f_u(txf_u), .f_v(txf_v), .f_texel(txf_texel)
   );
 
@@ -507,7 +507,7 @@ module m2_raster3d #(
   m2_texel #(.AW(TEX_AW), .IDX_BITS(12)) u_texel (
     .clk(clk_mem), .rst_n(rst_n),
     .base_s0(tex_base0), .base_s1(tex_base1),
-    .req(txf_req), .ack(txf_ack), .tex(txf_tex),
+    .req(txf_req), .rdy(txf_rdy), .ack(txf_ack), .tex(txf_tex),
     .u(txf_u), .v(txf_v), .texel(txf_texel),
     .m_req(tex_m_req), .m_addr(tex_m_addr), .m_ack(tex_m_ack), .m_data(tex_m_data),
     .inval(tex_sweep),

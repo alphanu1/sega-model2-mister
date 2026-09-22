@@ -121,8 +121,16 @@ static int fetch(const TexState& t, int32_t u, int32_t v) {
   d->req = 1;
   int got = -1;
   for (int i = 0; i < 4000; ++i) {
+    // R474: DEASSERT ON ACCEPTANCE, which is what the module now requires. The
+    // cache takes a request on the cycle req and rdy are both high; holding the
+    // level past that is read as a SECOND request. This bench drives m2_texel
+    // directly, so it has to model what m2_texel_x2 does for the real
+    // requester -- without it the scanline walk reported 3,839 hits for 2,048
+    // fetches, every texel still correct (R473).
+    const bool accepted = d->req && d->rdy;
     if (d->m_req) last_addr = d->m_addr;
     tick();
+    if (accepted) d->req = 0;
     if (d->ack) { got = d->texel; break; }
   }
   d->req = 0;
