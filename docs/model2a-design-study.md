@@ -20320,3 +20320,62 @@ in_valid is registered, so in_valid cannot depend on in_ready. s175 had clk_sys
 control wedges the walk where a marginal path elsewhere blanks the output. A
 hang and a black screen are the same lottery with different symptoms until
 something distinguishes them.
+
+---
+
+**R496 -- R490 PUT A MUX IN FRONT OF AN M10K ADDRESS PORT AND BECAME THE WORST
+clk_mem PATH IN THE DESIGN. EIGHT BUILDS FAILED FOR THAT REASON.**
+
+`report_timing` on s183, the thirty worst setup paths:
+
+```
+  -1.271  m2_span_tex|tex_p[0][5] -> m2_texel|...|ram_block1a17~portb_address_reg11
+  -1.269  m2_sdram|pend[7]        -> m2_sdram|state.S_SEL
+  -1.262  m2_sdram|inflight[8]    -> m2_sdram|state.S_SEL
+  -1.246  m2_span_tex|fq_p        -> m2_texel|...|ram_block1a17~portb_address_reg11
+  ... 26 of the 30 are tex_p or fq_p into that address port
+```
+
+`m2_sdram`'s `inflight -> state.S_SEL` has been the worst path in every build of
+this design (R477). It is not any more. R490 wrote
+
+```
+  assign tx_tex = {8'd0, tex_p[fq_p]};     // was: tex_r
+```
+
+which turned a plain register read into a 2:1 select on a path that lands
+directly on an M10K address input inside m2_texel. Registers feeding block-RAM
+address ports have no slack to give: the whole path is the register's clock-to-
+out plus routing, and anything inserted there is charged in full.
+
+EIGHT BUILDS CARRYING R490 WERE FLASHED AND NONE RAN -- five black, two frozen,
+one reaching the test screen. The change written to fix the picture moved the
+clock instead, and the failures were attributed to the seed lottery for most of
+a day while three separate rules (R491, R492, R493) were written about which
+slack number predicts a boot. THE ANSWER WAS THAT THE DESIGN HAD GOT WORSE AND
+NOBODY HAD LOOKED AT WHERE.
+
+THE FIX IS TO RESOLVE THE SELECT WHERE THE FETCH IS ISSUED and hold it in one
+register, so the cache sees what it saw before R490 -- a register:
+
+```
+  logic [23:0] tex_q;
+  assign tx_tex = {8'd0, tex_q};
+  ...
+  if (cons_take) begin  fq_p <= res_p;  tex_q <= tex_p[res_p];  end
+```
+
+Behaviour is identical -- 7,197 checks at 0%, 50% and 80% consumer stall, and
+the overlap's 11.37 cycles a span is unchanged.
+
+THE RULE, and it is not a new one in this project: RUN report_timing AFTER A
+CHANGE, NOT AFTER A RUN OF FAILURES. The Makefile has had a `quartus_paths`
+target for this since R457 and its own comment says "run this before touching
+anything for timing". Eight flashes and four sweeps would have been one command.
+
+ON DROPPING clk_mem TO 80 MHz LIKE MODEL 1: it is a real option and it is the
+fallback, but it is not free here. m2_sdram_x2 is a ratio adapter with no
+synchronisers and requires clk_mem to be exactly twice clk_sys, so 100/50 goes
+to 80/40 -- a 20% slower renderer. The band budget it would cut from ~15,750
+cycles to ~12,600 is the same budget R490 exists to fit inside. Try it only
+after the paths that are actually regressions have been repaired.

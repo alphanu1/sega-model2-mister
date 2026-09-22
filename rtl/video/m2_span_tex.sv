@@ -204,7 +204,25 @@ module m2_span_tex #(
   endfunction
   /* verilator lint_on UNUSEDSIGNAL */
 
-  assign tx_tex = {8'd0, tex_p[fq_p]};
+  // R496: A REGISTER, NOT A MUX, IN FRONT OF THE CACHE'S ADDRESS PORT.
+  //
+  // R490 wrote this as `tex_p[fq_p]`, which put a 2:1 select on a path that
+  // had been a plain register read and that lands directly on an M10K address
+  // input inside m2_texel. Twenty-six of the thirty worst clk_mem paths in
+  // s183 were this one:
+  //
+  //   m2_span_tex|tex_p[0][5] -> m2_texel|...|ram_block1a17~portb_address_reg11
+  //                                                              -1.271 ns
+  //
+  // ahead of m2_sdram's `inflight -> state.S_SEL`, which had been the worst
+  // path in every previous build of this design. Eight builds carrying R490
+  // failed to run and this is why: the change made to fix the picture moved
+  // the clock instead.
+  //
+  // The select is resolved when the fetch is ISSUED and held in one register,
+  // so the cache sees exactly what it saw before R490 -- a register.
+  logic [23:0] tex_q;
+  assign tx_tex = {8'd0, tex_q};
   // R339: the DIVIDED coordinates, not u/z and v/z themselves.
   assign tx_u   = to_tx(uq_r);
   assign tx_v   = to_tx(vq_r);
@@ -527,6 +545,7 @@ module m2_span_tex #(
       end
       sp_iss <= 1'b0; sp_out <= 1'b0; sp_n <= 2'd0; e_last <= 1'b0;   // R490
       fq_p <= 1'b0; rt_p <= 1'b0; e_p <= 1'b0;                        // R490
+      tex_q <= '0;                                                    // R496
       du_r <= '0; dv_r <= '0;
       doz_r <= '0; uq_r <= '0; vq_r <= '0;
       // R433
@@ -597,6 +616,7 @@ module m2_span_tex #(
             fq_x    <= res_x;
             fq_last <= res_last;
             fq_p    <= res_p;                     // R490
+            tex_q   <= tex_p[res_p];              // R496: resolved here, once
             fq_valid <= 1'b1;
             to_cnt  <= '0;
           end
