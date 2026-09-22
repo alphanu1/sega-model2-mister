@@ -425,6 +425,13 @@ module m2_texel #(
         hold  <= rs_dat[rs_hd];
         sel_q <= rs_sel[rs_hd];  x2_q <= rs_x2[rs_hd];  y2_q <= rs_y2[rs_hd];
         rs_rp <= rs_rp + 1'd1;
+        // R481: RETIRE THE ENTRY. Leaving rdy and ism set means a later m_ack
+        // for the same slot re-marks an entry that has already been answered,
+        // and the head then pops it again -- the read pointer walks past the
+        // write pointer and free-runs until it wraps. 70 requests produced 200
+        // responses.
+        rs_rdy[rs_hd] <= 1'b0;
+        rs_ism[rs_hd] <= 1'b0;
       end
 
       case (st)
@@ -562,7 +569,22 @@ module m2_texel #(
   // R480: ready needs somewhere to put the answer (FIFO space), somewhere to
   // put a miss (a free MSHR -- a lookup cannot know yet whether it will miss),
   // and the arrays free (a fill steals them for a cycle).
-  assign rdy = !inval_pend && !rs_full && ms_have_free && !ms_fill_rdy
-               && ((st == S_IDLE) || (st == S_LOOK));
+  // R481: a slot must be reserved for the lookup already in the compare stage.
+  // rdy is checked at ACCEPT, but whether that request misses is not known
+  // until a cycle later -- two lookups can both miss with one slot between
+  // them, and ms_pick returns slot 1 unconditionally when slot 0 is busy, so
+  // the second clobbers a fill still in flight.
+  // R481: SPACE MUST BE RESERVED FOR THE LOOKUP IN FLIGHT TOO, for exactly the
+  // same reason as the slot. rs_full is tested when a request is ACCEPTED, but
+  // its entry is not pushed until the compare a cycle later -- so a request
+  // accepted with one place left pushes after the previous compare has taken
+  // it. rs_wp then passes rs_rp by more than the depth, and because rs_full is
+  // an EQUALITY test it never matches again: the pointers free-run and the head
+  // pops entries that were never written. 70 requests produced 200 responses.
+  wire ms_both_free = !ms_busy[0] && !ms_busy[1];
+  wire rs_room2     = ((rs_wp - rs_rp) <= ($clog2(RSP_D)+1)'(RSP_D - 2));
+  assign rdy = !inval_pend && !ms_fill_rdy
+               && (((st == S_IDLE) && !rs_full && ms_have_free)
+                || ((st == S_LOOK) && rs_room2 && ms_both_free));
 
 endmodule

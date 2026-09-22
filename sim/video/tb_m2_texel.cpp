@@ -16,6 +16,7 @@
 //   5. The cache returns what memory holds, including after an upload.
 
 #include "Vm2_texel.h"
+#include "Vm2_texel___024root.h"
 #include "verilated.h"
 #include <cstdio>
 #include <vector>
@@ -325,7 +326,7 @@ int main(int argc, char **argv) {
   {
     d->inval = 1; tick(); d->inval = 0;
     for (int i = 0; i < SWEEP_TICKS; ++i) tick();   // cold, so most of these miss
-    mem_lat = 3; mem2_lat = 7;
+    mem_lat = 3; mem2_lat = 7;   // different, so out-of-order completion is possible
 
     const int N = 200;
     std::vector<int> want, got;
@@ -335,8 +336,11 @@ int main(int argc, char **argv) {
     for (int i = 0; i < 40000 && (int)got.size() < N; ++i) {
       // Offer the next request whenever the cache can take one.
       if (issued < N && !d->req) {
-        d->u = (33 + issued * 37) << 8;
-        d->v = (44 + issued * 11) << 8;
+        // MASK TO 20 BITS, as fetch() does. The port is 20 bits wide, so the
+        // DUT sees the masked value while ref_texel below was handed the raw
+        // one -- the expectations were wrong, not the cache. 197 of 200 "wrong".
+        d->u = ((33 + issued * 37) << 8) & 0xfffff;
+        d->v = ((44 + issued * 11) << 8) & 0xfffff;
         d->req = 1;
       }
       const bool accepted = d->req && d->rdy;
@@ -360,13 +364,26 @@ int main(int argc, char **argv) {
     for (size_t k = 0; k < got.size() && k < want.size(); ++k) {
       ++checks;
       if (got[k] != want[k]) {
-        if (++wrong <= 4)
-          std::printf("  FAIL streaming #%zu: got=%x want=%x\n", k, got[k], want[k]);
-        ++fails;
+        ++wrong; ++fails;
       }
     }
     std::printf("  streaming: %zu answered in order, %d cycles on the second port, %d wrong\n",
                 got.size(), seen_p2, wrong);
+    // Where the wrong ones sit, and whether the value is a NEIGHBOUR of the
+    // right one -- a shifted-by-one answer means the queue paired a group with
+    // the wrong entry; an unrelated value means the line itself is wrong.
+    std::printf("    [probe] issued=%d accepted=%zu answered=%zu wp=%u rp=%u\n",
+                issued, want.size(), got.size(),
+                (unsigned)d->rootp->m2_texel__DOT__rs_wp,
+                (unsigned)d->rootp->m2_texel__DOT__rs_rp);
+    std::printf("    [probe] first 24: ");
+    for (size_t k = 0; k < 24 && k < got.size() && k < want.size(); ++k)
+      std::printf("%s", got[k] == want[k] ? "." : "X");
+    std::printf("\n    [probe] shifted-by-one matches: ");
+    int off1 = 0;
+    for (size_t k = 1; k < got.size() && k < want.size(); ++k)
+      if (got[k] != want[k] && got[k] == want[k-1]) ++off1;
+    std::printf("%d of %d wrong\n", off1, wrong);
     mem_lat = 3; mem2_lat = 5;
   }
 
