@@ -538,6 +538,7 @@ int main(int argc, char **argv) {
     }
     got.clear(); force_texel = -1;
     long t0 = ticks_done; size_t next = 0; long sent = 0;
+    long busy_gap = 0, accepted_groups = 0;
     for (long guard = 0; guard < 400000 && next < sp.size(); ++guard) {
       const S &q = sp[next];
       d->in_valid = 1;
@@ -549,12 +550,38 @@ int main(int argc, char **argv) {
       d->out_ready = (roll(4) != 0) ? 1 : 0;
       d->eval();
       bool taken = d->in_valid && d->in_ready;
+      size_t before = got.size();
       tick(!d->out_ready);
-      if (taken) { ++next; ++sent; }
+      // ONLY TEXTURED SPANS MAKE IT BUSY. A flat span is passed through as
+      // wires in the cycle it is accepted, so counting its groups as work in
+      // flight makes the check fail against known-good RTL -- which it did,
+      // 476 times, before this line said `q.tex`.
+      if (taken) { ++next; ++sent; if (q.tex) accepted_groups += q.groups; }
+      if (q.tex || accepted_groups > 0) accepted_groups -= long(got.size() - before);
+      // Work outstanding in the unit -> busy must be asserted.
+      if (accepted_groups > 0 && !d->busy) ++busy_gap;
     }
     d->in_valid = 0;
-    for (int i = 0; i < 400; ++i) tick();
+    for (int i = 0; i < 400; ++i) {
+      size_t before = got.size();
+      tick();
+      accepted_groups -= long(got.size() - before);
+      if (accepted_groups > 0 && !d->busy) ++busy_gap;
+    }
     long cyc = ticks_done - t0;
+
+    // R501: `busy` MUST COVER EVERY SPAN IN FLIGHT.
+    //
+    // m2_raster3d leaves C_FILL for C_DONE on
+    //   !qs_out_valid && !qs_replay_busy && !sq_busy && !spantex_busy && ...
+    // so `busy` going low with work still inside this unit ends the band
+    // early. R310 records what that costs: spans painted into the NEXT band,
+    // "a frame with no new list painted 2214, the previous 2009". R490 changed
+    // what `busy` means -- idle is now "no span in flight" rather than "not
+    // walking a span" -- and NOTHING CHECKED IT. Counted here: busy must be
+    // high on every cycle between a span being accepted and its last pixel
+    // leaving.
+    ck("busy covered every span in flight", busy_gap, 0);
 
     // EVERY SPAN WAS ACCEPTED -- a unit that wedges shows up here first, and a
     // wedge is exactly what the board did.
