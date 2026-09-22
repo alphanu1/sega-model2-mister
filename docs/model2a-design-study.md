@@ -20215,3 +20215,53 @@ starved writes and was reverted. Until that path moves, whether a build runs is
 decided by placement luck, and each seed carrying new area makes the draw
 worse. R490 added ~110 ALM for the span overlap and has not been on hardware
 once in three attempts.
+
+---
+
+**R493 -- NO SLACK NUMBER PREDICTS A BOOT. R492 LASTED ONE BUILD, EXACTLY AS
+R491 DID, AND THE LESSON IS ABOUT METHOD RATHER THAN ABOUT CLOCKS.**
+
+s174 has clk_mem -0.953 -- the BEST of any build of this design, better than
+both builds that run -- and it is black.
+
+```
+  clk_mem   clk_sys    ALM      result
+  -0.953    +0.390     41,365   BLACK      s174   <- best clk_mem ever measured
+  -1.025    +0.271     41,133   boots      s153
+  -1.211    +0.815     41,207   boots      s162
+  -1.427    +0.028     41,173   BLACK      s166
+  -1.637    -1.793     41,303   (not flashed)     s172
+  -1.715    -3.232     41,279   (not flashed)     s173
+  -1.752    -0.520     41,300   BLACK      s158
+  -1.852    -1.308     41,376   BLACK      s157
+  -2.000    +0.483     41,316   BLACK      s171   <- broke R491
+```
+
+Neither clock orders this. Neither does ALM: s174 is the LARGEST build in the
+table and has the best clk_mem, while s166 is nearly the smallest and has one
+of the worst.
+
+THREE RULES IN ONE DAY, EACH FALSIFIED BY THE NEXT BUILD. R491 said clk_sys,
+s171 broke it. R492 said clk_mem, s174 broke it. Both were fitted to a handful
+of points in which the candidate variables moved together, and both were stated
+as rules rather than as predictions awaiting a disagreeing case. R471 recorded
+this same error in September and both entries cited it while repeating it.
+
+THE STANDING ACCOUNT IS THE RIGHT ONE AND IT CAME FROM THE USER: "it's timing,
+1 in 4 normally works." Nine builds, two of them running, is 22% -- which is
+that number. Five consecutive black screens at a 25% success rate happens about
+24% of the time, so the run needs no explanation beyond the draw.
+
+WHAT THIS MEANS PRACTICALLY. Do not rank seeds, do not skip a seed for having
+poor slack, and do not spend analysis on which one "should" work. Assemble them
+and flash them. The only real lever is to stop the design being marginal at all
+-- R477's `inflight[5] -> state.S_SEL` at 11.24 ns against 10.00, which every
+build of this design fails and which the one attempted fix made worse by
+starving writes.
+
+A CORRELATION LEFT OPEN, STATED SO IT IS NOT FORGOTTEN OR OVERREAD: every build
+carrying R486 and R487 is black (five of five) and both builds that run predate
+them. Fisher's exact on 2-of-4 against 0-of-5 gives p ~ 0.17. That is not
+evidence, and scan_clk is clk_sys so R487 adds no clock crossing. Recorded
+because it is cheap to watch and expensive to rediscover -- if the next three
+seeds are also black, it stops being a coincidence worth ignoring.
