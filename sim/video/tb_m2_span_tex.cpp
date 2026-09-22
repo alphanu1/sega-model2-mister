@@ -425,6 +425,9 @@ int main(int argc, char **argv) {
     for (auto &q : sp) want_groups += q.groups;
 
     got.clear(); force_texel = -1;
+    static const int stall_pct = std::getenv("M2_STALL_PCT")
+                               ? atoi(std::getenv("M2_STALL_PCT")) : 0;
+    uint32_t stall_rng = 0xBEEF1234u;
     long t0 = ticks_done;
     size_t next = 0;
     d->in_tex = 0x000001; d->in_tex_en = 1; d->in_col = 0xffffff; d->in_moire = 0;
@@ -439,8 +442,25 @@ int main(int argc, char **argv) {
         d->in_valid = 0;
       }
       // in_ready is sampled BEFORE the edge, as the DUT sees it.
+      // R494: SAMPLE in_ready AFTER SETTLING IT, not before. Until R490
+      // in_ready did not depend on in_valid, so reading it at the top of the
+      // loop was harmless. ld_over does depend on in_valid, so the stale read
+      // made the bench miss an accept, re-present the same span, and the DUT
+      // take it twice -- 2x the groups, which looked exactly like an RTL fault
+      // and is not one. out_ready is driven here in the same order tick() does
+      // it so the value sampled is the value the edge will use.
+      stall_rng = stall_rng * 1103515245u + 12345u;
+      bool stall = stall_pct && (int((stall_rng >> 16) % 100) < stall_pct);
+      d->out_ready = stall ? 0 : 1;
+      d->eval();
       bool taken = d->in_valid && d->in_ready;
-      tick();
+      // THE CONSUMER STALLS, because the real one does. m2_raster_band
+      // drops span_ready for the whole time it is painting a group, and the
+      // R490 overlap was tested with out_ready tied high for every cycle --
+      // which is the one thing the band NEVER does. A unit that only deadlocks
+      // when the output backs up cannot be caught by a bench that never backs
+      // it up.
+      tick(stall);
       if (taken) ++next;
       if (next >= sp.size() && long(got.size()) >= want_groups) break;
     }

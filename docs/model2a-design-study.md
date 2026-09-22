@@ -20265,3 +20265,58 @@ them. Fisher's exact on 2-of-4 against 0-of-5 gives p ~ 0.17. That is not
 evidence, and scan_clk is clk_sys so R487 adds no clock crossing. Recorded
 because it is cheap to watch and expensive to rediscover -- if the next three
 seeds are also black, it stops being a coincidence worth ignoring.
+
+---
+
+**R494 -- THE BENCH READ in_ready BEFORE SETTLING IT, AND R490 MADE THAT MATTER.
+IT LOOKED EXACTLY LIKE A DEADLOCK IN THE NEW CODE AND WAS NOT.**
+
+s175 froze on its first frame. The back-to-back loop was then run against a
+STALLING consumer for the first time -- the band drops span_ready for the whole
+time it is painting, and R490 had only ever been tested with out_ready tied
+high, which is the one thing the band never does. It failed immediately:
+
+```
+  stall  0%   289 groups of 289      ok
+  stall 20%   289 of 289             ok
+  stall 50%   320 of 289             every group of some spans DOUBLED
+  stall 80%   480 of 289
+```
+
+Exact doubling, which is the signature of a span being ACCEPTED TWICE, and the
+cause was in the bench:
+
+```
+  if (next < sp.size()) { d->in_valid = 1; ...params... }
+  bool taken = d->in_valid && d->in_ready;   // read with no eval() since
+  tick(stall);                               // the inputs changed
+```
+
+UNTIL R490, in_ready DID NOT DEPEND ON in_valid -- it was `idle && (tex_now ||
+out_ready)` -- so sampling it stale was harmless and had been harmless in this
+bench for its whole life. `ld_over` depends on in_valid. The stale read made the
+bench miss an accept, leave `next` where it was, present the same span again,
+and the DUT correctly took it a second time. With out_ready settled first and
+in_ready sampled after eval(), all four stall levels pass 7,197 checks.
+
+TWO THINGS WORTH KEEPING.
+
+A bench convention that is safe becomes unsafe when the DUT's combinational
+dependencies change, and nothing warns. The old code could not have exhibited
+this; the new code can; the bench was not revisited because it was not edited.
+Sample every handshake AFTER settling the inputs the DUT will see on that edge,
+whether or not it currently matters.
+
+And the near-miss is the point. The doubling was about to be written up as a
+deadlock in R490 and the change reverted -- a correct change, measured at -32%,
+discarded on the evidence of a broken measurement. That is the same fault as
+R484, R486 and R487, which were instruments lying about the hardware; this was
+an instrument lying about the RTL.
+
+THE FREEZE IS STILL UNEXPLAINED. R490 passes at every stall level, lint is
+clean, and there is no combinational loop -- the FIFO's `q_valid` driving
+in_valid is registered, so in_valid cannot depend on in_ready. s175 had clk_sys
+-0.122 and clk_mem -1.652, both negative, and a marginal path in the renderer's
+control wedges the walk where a marginal path elsewhere blanks the output. A
+hang and a black screen are the same lottery with different symptoms until
+something distinguishes them.
