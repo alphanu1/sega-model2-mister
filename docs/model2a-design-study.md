@@ -20379,3 +20379,50 @@ synchronisers and requires clk_mem to be exactly twice clk_sys, so 100/50 goes
 to 80/40 -- a 20% slower renderer. The band budget it would cut from ~15,750
 cycles to ~12,600 is the same budget R490 exists to fit inside. Try it only
 after the paths that are actually regressions have been repaired.
+
+---
+
+**R497 -- R496 FIXED THE TIMING AND THE BUILD STILL FROZE, SO R490 IS A
+FUNCTIONAL FAULT AND NOT A TIMING ONE. THE OVERLAP IS PARKED.**
+
+s185 carries R490 with R496's fix and its slack is indistinguishable from the
+builds that run:
+
+```
+  s153   clk_mem -1.025   clk_sys +0.271   works
+  s162   clk_mem -1.211   clk_sys +0.815   works
+  s185   clk_mem -1.043   clk_sys +0.827   FROZE on the test screen
+```
+
+report_timing on s185 confirms R496 did what it claimed -- every m2_span_tex
+path is gone from the thirty worst and the leader is back to
+`m2_sdram|rr_next[0] -> state.S_SEL` at -1.043, which is where it sits in every
+build that has ever booted. So the remaining fault is in what the RTL DOES, not
+in how fast it does it, and nine builds of seed roulette could not have found
+that. One report_timing and one comparison did.
+
+WHAT THE BENCH DOES NOT COVER, listed because this is where to start:
+
+  * DEGENERATE SPANS. The corpus generates x1 > x0 always. The fill emits
+    single-pixel and zero-width spans at polygon edges.
+  * tex_en CHANGING while spans are in flight. `tex_now` is sampled per span;
+    a flat span arriving mid-drain takes the pass-through path, and R490
+    changed exactly the condition that gates it (`in_ready`).
+  * THE REAL FILL'S HANDSHAKE. tb_m2_span_tex drives in_valid itself. The
+    quad store's FIFO drives it on the board, and R494 has already shown that
+    this bench's handshake conventions were wrong in a way that only R490's
+    new in_valid -> in_ready dependency exposed.
+
+PARKED, NOT DELETED. m2_span_tex goes back to the pre-R490 file; R488's
+measurement stands, the back-to-back and stall tests stand (they pass against
+the old RTL too, at 18.63 cycles a span instead of 11.37), and the overlap is
+kept in the history at 8c82f4c plus 905da0d. The next attempt starts by
+extending the bench to the three cases above and only then re-applies it.
+
+THE DAY'S ARITHMETIC, recorded because it is the real lesson. Eleven builds
+flashed, one working core -- s162, which existed before any of it. Two genuine
+results: R488's 8 + 2*groups, and R496's discovery that R490 had become the
+worst path in the design. Both came from measurement. Everything between them
+was seed roulette and three falsified rules about which slack predicts a boot,
+and the command that ended it -- report_timing -- has been in the Makefile
+since R457 with a comment telling me to run it first.
