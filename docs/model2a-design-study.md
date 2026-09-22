@@ -19958,3 +19958,58 @@ The band buffer is banked four ways (`NBANK = 4`), so `BWORDS = 124 * 8 = 992`
 and the clear is 992 cycles of the 15,750, about 6%. It is serial with the fill
 -- `C_IDLE -> C_CLR -> C_CLRW -> C_REPLAY -> C_FILL` -- but it is not what
 costs the frame.
+
+---
+
+**R488 -- THE TEXTURED SPAN WALK COSTS 8 CYCLES A SPAN PLUS 2 A GROUP, AND THE
+8 IS THE ONE THAT MATTERS.**
+
+Measured on `tb_m2_span_tex`'s corpus with the span length swept over a ten-fold
+range, which is the only way to separate a fixed cost from a per-group one:
+
+```
+  groups/span   cycles/span
+     2.00          12.00
+     2.52          13.03
+     3.92          15.83
+     6.25          20.50
+    19.50          47.00
+
+  cycles/span = 8.0 + 2.0 * groups      every point within 0.01
+```
+
+The 8 is the six-deep divide pipeline refilling from empty on every span, plus
+the accept and the drain. On a two-group span it is 67% of the cost.
+
+THIS IS WHAT R475's "2.41 CYCLES PER GROUP" WAS HIDING. That figure came from
+one corpus at 19.5 groups a span, where the fixed cost is amortised almost
+away. It was quoted as the walk's rate for several findings afterwards. A
+single-point measurement of a two-term cost reports whichever term the point
+happens to emphasise, and there was no way to tell from the number itself.
+
+IT EXPLAINS THE BOARD'S OWN EVIDENCE, which had been contradicting every
+estimate here. PIXSTEP 4 -> 8 halves both the groups per span and the texel
+fetches per span, and it changed nothing visible. That rules out both per-group
+terms outright, and it is exactly what this fit predicts: a four-group span
+goes 16 -> 12 cycles, 25%, invisible. The conclusion recorded at the time was
+"rules out per-group cost AND fetch count", which was correct and was then not
+acted on.
+
+AND IT EXPLAINS TEXTURES-OFF. An untextured span bypasses m2_span_tex
+altogether, so it pays none of the 8. Every band finishes inside its budget and
+all 48 draw -- which is the controlled experiment, already run, and worth more
+than the instrumentation that kept being added around it.
+
+THE BAND BUDGET, for scale: 8 scanlines of a 424-line 60 Hz frame is 315 us, or
+~15,750 clk_sys cycles. The fill is paced by buffer release -- C_IDLE waits on
+`!bd_ready[fill_buf]` -- so it can fall behind without limit but can never be
+more than NBUF = 5 bands ahead. A frame's early overrun is therefore PERMANENT
+for that frame: the fill still completes 52 band-fills, every one of them late,
+and only the bands built during blanking are ever on time. That is exactly what
+the board shows -- about five contiguous bands at the top, a gap, then one or
+two lower down where it briefly caught up.
+
+WHAT NOT TO DO NEXT, recorded because both were nearly done here: the per-band
+clear is 992 cycles of 15,750 (the buffer is banked four ways), and texel miss
+latency is ~1.5 ms of a 16.7 ms frame at the s162 measured rate of 5,293 misses
+a frame. Neither is the 8.

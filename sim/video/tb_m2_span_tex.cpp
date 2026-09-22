@@ -305,8 +305,16 @@ int main(int argc, char **argv) {
 
     for (int trial = 0; trial < 120; ++trial) {
       const int STEP = 2;
+      // R488: the span LENGTH is settable, because the fixed cost of starting a
+      // span and the per-group cost of walking it cannot be separated from one
+      // corpus. Two runs at different lengths give two equations. The board's
+      // own evidence demanded this: PIXSTEP 4 -> 8 halves the groups AND the
+      // fetches per span and changed nothing on screen, which rules out both
+      // per-group terms and leaves the per-span one.
+      static const int SPAN_LEN = std::getenv("M2_SPAN_LEN")
+                                ? atoi(std::getenv("M2_SPAN_LEN")) : 40;
       const int X0 = 4 + int(roll(60));
-      const int X1 = X0 + STEP * int(1 + roll(40));
+      const int X1 = X0 + STEP * int(1 + roll(SPAN_LEN));
       const int32_t U0  = int32_t(roll(8) << 18);
       const int32_t V0  = int32_t(roll(8) << 18);
       // POSITIVE GRADIENTS ONLY, and that is a range limit rather than a
@@ -370,6 +378,11 @@ int main(int argc, char **argv) {
     std::printf("    walk rate: %ld cycles for %ld groups -- %.2f cycles per group\n",
                 tick_total, group_total,
                 group_total ? double(tick_total)/double(group_total) : 0.0);
+    std::printf("    per span: %ld cycles for %ld spans -- %.2f cycles per span"
+                " (%.2f groups per span)\n",
+                tick_total, spans_run,
+                spans_run ? double(tick_total)/double(spans_run) : 0.0,
+                spans_run ? double(group_total)/double(spans_run) : 0.0);
     ck("spans actually ran", spans_run > 100, 1);
     ck("groups actually checked", groups_checked > 1000, 1);
   }
