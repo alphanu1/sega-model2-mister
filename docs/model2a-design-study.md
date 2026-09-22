@@ -19651,3 +19651,51 @@ Until it is understood, **flash by trying seeds, not by ranking them** -- and do
 not read a black screen as evidence against the change under test until every
 seed in the batch has been tried. Two of three were black here on a revert that
 was correct.
+
+---
+
+**R473 -- THE TEXEL PIPELINE CANNOT BE LANDED ONE MODULE AT A TIME, AND THE
+REASON IS THE ACKNOWLEDGE BEING REGISTERED.**
+
+The plan was m2_texel first (it has the strong bench: 8,066 checks), then the
+adapter, then the span walk. m2_texel pipelines easily -- the tag read is
+already issued by `mem_addr`'s default `req_idx`, so `S_LOOK` compares a line
+that was fetched a cycle earlier and there is nothing to wait for on a hit.
+Removing `S_ACK` and adding `rdy` took about forty lines and lint was clean.
+
+**IT DOUBLE-FETCHES WITH A LEVEL-HOLDING REQUESTER, AND SO WOULD THE BOARD.**
+
+m2_texel_x2 masks the request with `~f_ack`. `f_ack` is REGISTERED: it rises the
+cycle AFTER `S_LOOK` hits. So during the hit cycle the request is still high,
+and a pipelined `S_LOOK` reads that as a NEW request and starts a redundant
+lookup of the same line.
+
+Measured in tb_m2_texel: the scanline walk went from **1,920 hits to 3,839** for
+the same 2,048 fetches. Every texel value stayed correct, which is what makes it
+dangerous -- it would have reached hardware as a silently doubled hit rate on
+the debug overlay and twice the cache traffic, with no wrong pixel to notice.
+
+**WHAT THIS MEANS FOR THE WORK.** A pipelined cache requires a requester that
+DEASSERTS ON ACCEPTANCE -- valid/ready, not a held level. m2_span_tex holds
+`tx_req` for as long as it is in `T_FETCH`, so the three modules have to change
+together:
+
+```
+  m2_texel      S_ACK removed, rdy added, response-stage selectors
+  m2_texel_x2   carry a stream, not a req/ack round trip
+  m2_span_tex   issue a group per cycle, consume texels in order
+```
+
+The partial change was reverted rather than left in the tree.
+
+**AND THE PREREQUISITE IS IN (R472).** tb_m2_span_tex went from 52 checks on one
+hand-built span to 7,194 across 120 -- every group's texel, output count, strict
+x ordering, tail clamping. That is what makes the span walk safe to restructure,
+and it is committed independently of this.
+
+**THE FLOOR THE REWRITE IS AIMED AT.** `T_FETCH -> T_EMIT` is two cycles per
+PIXSTEP group at 50 MHz: 45,835 groups x 40 ns = **1.83 ms of a 16.7 ms frame
+before any texel latency at all**. Add 11,871 misses x 280 ns and the texture
+path is about a third of the frame. R310 already recorded that a queue cannot
+fix this -- "a queue absorbs BURSTS, and this is a sustained rate mismatch" --
+which is why the walk itself has to become a pipeline.
