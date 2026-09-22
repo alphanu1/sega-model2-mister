@@ -19699,3 +19699,53 @@ before any texel latency at all**. Add 11,871 misses x 280 ns and the texture
 path is about a third of the frame. R310 already recorded that a queue cannot
 fix this -- "a queue absorbs BURSTS, and this is a sustained rate mismatch" --
 which is why the walk itself has to become a pipeline.
+
+---
+
+**R477 -- THE ARBITER'S WRITE STALL IS A FAIRNESS MECHANISM, NOT AN ACCIDENT,
+AND SHORTENING THE PATH BY REMOVING IT STARVES WRITES.**
+
+`m2_sdram|inflight[5] -> state.S_SEL` at 11.24 ns against 10.00 has been the
+worst clk_mem path in every build of this design, and clk_mem has been negative
+in every one. The chain is
+
+```
+  arb_ready -> barrel rotate -> 11-bit carry chain (arb_low)
+            -> AND with a SECOND barrel rotate (we_rot) -> OR-reduce -> state
+```
+
+and it exists only to answer "is the granted port a write?" so S_IDLE can
+refuse to leave. The obvious fix is to answer it BEFORE the grant:
+
+```systemverilog
+  arb_ready = pend & ~inflight & ~(we_p & {NP{pipe_busy}});
+```
+
+which deletes all three terms and makes the condition just `rr_valid`.
+
+**IT DOES NOT WORK, AND tb_m2_sdram SAYS SO IN ONE NUMBER:**
+
+```
+                       concurrent fails   max latency
+  before                       0             163 cycles
+  arb_ready masked             2          14,445 cycles
+```
+
+**WHY, AND IT IS THE WHOLE POINT OF THE STALL.** When a blocked write wins the
+rotation and halts the arbiter, no new reads are issued, `pipe_busy` DRAINS, and
+the write then proceeds. That stall is what guarantees forward progress for
+writes. Masking readiness instead lets reads keep flowing, so `pipe_busy` never
+clears and the write port is never a candidate again -- starvation, and the two
+data failures are its consequence rather than a separate fault.
+
+So the path cannot be shortened by removing the question. It has to be shortened
+by answering the SAME question more cheaply, or by finding another way to
+guarantee write progress -- a starvation counter that forces the stall after N
+skips would do it, and is the next thing to try.
+
+**STUDY R288 IS THE PRECEDENT AND IT WAS NOT ENOUGH.** That change rewrote this
+chain order-PRESERVINGLY, the bench agreed to the transaction counts, and the
+board sat in one load/store loop for four minutes. This one was caught, and the
+thing that caught it was MAX LATENCY, not a count or a value -- 163 to 14,445.
+A bench that only checks what arrives cannot see a port that is merely very
+late. That number is worth watching on any arbiter change.
