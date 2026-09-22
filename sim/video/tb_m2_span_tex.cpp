@@ -387,6 +387,100 @@ int main(int argc, char **argv) {
     ck("groups actually checked", groups_checked > 1000, 1);
   }
 
+  // 2c. R490: SPANS BACK TO BACK, WHICH IS HOW THE FILL ACTUALLY DRIVES THIS.
+  //
+  // Every test above hands over ONE span, drops in_valid, and waits for all of
+  // its groups before offering the next. That is not what m2_raster_fill does
+  // and it is why R488's fixed cost was invisible here for so long: a unit that
+  // is never offered a second span while the first drains cannot be measured
+  // for, or caught overlapping, or caught overlapping WRONGLY.
+  //
+  // This holds a span on the input until in_ready takes it and immediately
+  // presents the next, so the pipeline is offered work continuously. The
+  // per-span figure from this loop is the one that decides whether the divide
+  // pipeline is still refilling from empty -- R488 measured 8.0 + 2.0*groups
+  // with the pipeline draining every time.
+  {
+    std::printf("test: R490, spans back to back -- the fill's own pattern\n");
+    uint32_t rng = 0x5EEDu;
+    auto roll = [&](uint32_t n) { rng = rng*1664525u + 1013904223u; return (rng >> 8) % n; };
+    const int STEP = 2;
+    const int NSPAN = 60;
+    struct S { int y, x0, x1, u, v, du, dv, ooz, doz, groups; };
+    std::vector<S> sp;
+    for (int i = 0; i < NSPAN; ++i) {
+      S q;
+      q.x0 = 4 + int(roll(40));
+      q.x1 = q.x0 + STEP * int(1 + roll(6));      // SHORT spans: 2-7 groups
+      q.y  = 11 + int(roll(40));
+      q.u  = int32_t(roll(8) << 18);  q.v = int32_t(roll(8) << 18);
+      q.du = int32_t(roll(0x180)) + 0x20;
+      q.dv = int32_t(roll(0x180)) + 0x20;
+      q.groups = ((q.x1 - q.x0) / STEP) + 1;
+      q.ooz = 0x2000000 + int32_t(roll(0x1000000));
+      q.doz = -int32_t(roll(20000)) / (q.groups ? q.groups : 1);
+      sp.push_back(q);
+    }
+    long want_groups = 0;
+    for (auto &q : sp) want_groups += q.groups;
+
+    got.clear(); force_texel = -1;
+    long t0 = ticks_done;
+    size_t next = 0;
+    d->in_tex = 0x000001; d->in_tex_en = 1; d->in_col = 0xffffff; d->in_moire = 0;
+    for (long guard = 0; guard < 200000; ++guard) {
+      if (next < sp.size()) {
+        const S &q = sp[next];
+        d->in_valid = 1;
+        d->in_y = q.y; d->in_x0 = q.x0; d->in_x1 = q.x1;
+        d->in_u = q.u; d->in_v = q.v; d->in_dudx = q.du; d->in_dvdx = q.dv;
+        d->in_ooz = q.ooz; d->in_doozdx = q.doz;
+      } else {
+        d->in_valid = 0;
+      }
+      // in_ready is sampled BEFORE the edge, as the DUT sees it.
+      bool taken = d->in_valid && d->in_ready;
+      tick();
+      if (taken) ++next;
+      if (next >= sp.size() && long(got.size()) >= want_groups) break;
+    }
+    d->in_valid = 0;
+    long cyc = ticks_done - t0;
+
+    // NOTHING LOST AND NOTHING INVENTED across the span boundaries, which is
+    // the fault an overlap introduces: a group of span N coloured with span
+    // N+1's parameters, or a span's tail dropped when the next one loads.
+    ck("every group came out", long(got.size()), want_groups);
+    if (std::getenv("M2_DBG")) {
+      size_t kk = 0;
+      for (size_t i = 0; i < sp.size() && kk < got.size(); ++i) {
+        int n = 0;
+        while (kk + n < got.size() && got[kk+n].y == sp[i].y) ++n;
+        if (n != sp[i].groups)
+          std::printf("      span %zu y=%d x[%d..%d] want %d groups, saw %d\n",
+                      i, sp[i].y, sp[i].x0, sp[i].x1, sp[i].groups, n);
+        kk += n;
+        if (i > 8) break;
+      }
+    }
+    size_t k = 0; long bad_y = 0, bad_x = 0;
+    for (size_t i = 0; i < sp.size() && k + sp[i].groups <= got.size(); ++i) {
+      int last_x0 = -1;
+      for (int g = 0; g < sp[i].groups; ++g, ++k) {
+        if (got[k].y != sp[i].y) ++bad_y;
+        if (got[k].x0 <= last_x0 || got[k].x1 > sp[i].x1) ++bad_x;
+        last_x0 = got[k].x0;
+      }
+    }
+    ck("each group carries its own span's y", bad_y, 0);
+    ck("x ascends within a span and stays inside it", bad_x, 0);
+    std::printf("    back to back: %ld cycles for %zu spans, %ld groups"
+                " -- %.2f cycles per span (%.2f groups per span)\n",
+                cyc, sp.size(), want_groups,
+                double(cyc)/double(sp.size()),
+                double(want_groups)/double(sp.size()));
+  }
+
   // 2b. A FLAT SPAN WHEN THE CONSUMER IS NOT READY. It must be HELD, not
   //     consumed: in_ready is the band's ready, exactly as it was before this
   //     unit existed, or the fill drops a span whenever a band is busy.

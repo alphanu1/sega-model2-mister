@@ -20060,3 +20060,63 @@ NBUF = 5 head start), a gap, one or two lower down where the fill briefly
 caught up. What is wrong is the idea that the lag can be fixed at the buffer
 end. The fill is at ~100% of its per-band budget; the budget is what has to
 move, and R488 says where 13-26% of it goes.
+
+---
+
+**R490 -- THE SPAN WALK OVERLAPS SPANS NOW. 23.07 -> 15.77 CYCLES A SPAN, 32%,
+AT THE BOARD'S OWN MISS RATE.**
+
+R488 measured the walk at 8 + 2*groups cycles and named the 8 as the six-deep
+divide pipeline refilling from empty on every span. This removes most of it by
+letting the next span start issuing while the previous one drains.
+
+MEASURED, both directions, same bench, same corpus of 60 short spans averaging
+4.82 groups -- which is what a band actually contains, not the 19.5-group spans
+the old corpus used:
+
+```
+                        perfect cache      9% miss, 14 cycles
+  before                18.63 /span        23.07 /span
+  after                 11.37 /span        15.77 /span
+                        -39%               -32%
+```
+
+The fixed cost falls from 8.0 to about 1.7. The 18.63 baseline independently
+reproduces R488's fit (8 + 2*4.82 = 17.6), which is worth stating because the
+two numbers were taken by different means.
+
+ONLY THE OUTPUT SIDE IS DOUBLE-BUFFERED. du/dv/doz and the issue pointer are
+finished with a span the moment its last group is issued, which is exactly when
+the next is now accepted, so they stay single. y, x1, col, moire and tex get
+two sets -- about 97 bits.
+
+THREE FAULTS ON THE WAY IN, all found by one new test and none by the 7,194
+checks that already existed.
+
+1. A SINGLE sp_out POINTER CANNOT SERVE THE TAIL OF THE PIPELINE. The retire
+   stage and the output stage are separate, so while span A's last pixel is
+   being taken at the output, span B's first group is already being coloured at
+   retire. Reading both from one pointer coloured B's groups with A's
+   parameters: 194 groups carrying the wrong span's y. The tag has to travel
+   WITH the group -- sh_p through the shadow, then fq_p, rt_p, e_p.
+
+2. THE OVERLAPPED LOAD TOOK A BRANCH THAT SKIPPED THE SHADOW SHIFT, while the
+   FSM -- a DIFFERENT always_ff -- went on consuming the result standing at the
+   pipeline's output. The two desynchronised and a group emerged twice: 294
+   groups where 289 were sent. The load now rides inside the shifting path and
+   `ld_over` carries `pipe_en`, so a span is only accepted on a cycle the
+   pipeline is moving.
+
+3. A SPAN WHOSE LAST GROUP IS A TRANSPARENT TEXEL NEVER RAISES e_valid, so
+   waiting on `e_valid && out_ready && e_last` alone would strand its parameter
+   set and wedge the unit behind a span that had already ended. `span_done`
+   takes the skip case too.
+
+AND THE REAL FINDING IS THE TEST. Every existing check handed the unit ONE span,
+dropped in_valid, and waited for all of its groups before offering the next.
+m2_raster_fill does not drive it that way, and a unit never offered a second
+span while the first drains cannot be measured for the refill, cannot be caught
+overlapping, and cannot be caught overlapping WRONGLY. That is why R488's fixed
+cost was invisible here for eleven revisions, and why 7,194 checks passed
+against RTL with three overlap faults in it. The back-to-back loop is now the
+acceptance test for anything touching this pipeline.
