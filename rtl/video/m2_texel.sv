@@ -115,11 +115,24 @@ module m2_texel #(
   /* verilator lint_on UNUSEDSIGNAL */
   output logic [3:0]       texel,
 
-  // Memory, one 64-bit line a transaction.
+  // Memory, one 64-bit line a transaction. R480: TWO PORTS, because
+  // m2_sdram allows one transaction per port at a time (arb_ready = pend &
+  // ~inflight), so a single port serialises every miss -- 15,703 a frame at
+  // ~160 ns of SDRAM each is 2.5 ms of a 16.7 ms frame that nothing in this
+  // module could overlap. Two ports halve it.
+  //
+  // Both must burst FOUR. R108 records what happens otherwise: rd_total is a
+  // single global register, so a port with a different burst length corrupts
+  // whichever transaction is issuing beside it, silently. Port 2 bursts four
+  // like every other.
   output logic             m_req,
   output logic [AW:1]      m_addr,
   input  logic             m_ack,
   input  logic [63:0]      m_data,
+  output logic             m2_req,
+  output logic [AW:1]      m2_addr,
+  input  logic             m2_ack,
+  input  logic [63:0]      m2_data,
 
   // THE SHEETS ARE WRITABLE: the game uploads textures by CPU stores (R264),
   // so a line filled before an upload is stale exactly the way the glyph
@@ -228,7 +241,7 @@ module m2_texel #(
   // change. It is not a second cache -- it is the one line the walk is
   // already inside.
 
-  typedef enum logic [2:0] { S_INIT, S_IDLE, S_LOOK, S_MISS, S_FILL } st_t;   // R474
+  typedef enum logic [2:0] { S_INIT, S_IDLE, S_LOOK, S_FILL } st_t;   // R480
   st_t st;
 
   logic [IDX_BITS-1:0] sweep, idx_r;
@@ -244,7 +257,7 @@ module m2_texel #(
   // span walk, which holds the band, which holds every band after it -- the
   // R162 failure mode, one missed pulse costing the rest of the session. On
   // expiry the line is taken as whatever is in hand and the fetch is counted.
-  logic [9:0]          to_cnt;
+  // R480: to_cnt is per-slot now (ms_to), the single counter went with S_MISS.
   /* verilator lint_off UNUSEDSIGNAL */
   logic [11:0]         x2_r, y2_r;       // only the parity survives the latch
   /* verilator lint_on UNUSEDSIGNAL */
@@ -253,15 +266,15 @@ module m2_texel #(
     mem_addr = req_idx;
     cd_we    = 1'b0;
     ct_we    = 1'b0;
-    cd_din   = m_data;
-    ct_din   = {1'b1, tag_r};
+    cd_din   = ms_dat[ms_fill_sel];   // R480
+    ct_din   = {1'b1, ms_tag[ms_fill_sel]};   // R480
     case (st)
       S_INIT: begin mem_addr = sweep; ct_we = 1'b1; ct_din = '0; end
       // R474: S_LOOK leaves mem_addr at the default req_idx, so the NEXT
       // lookup's tag read is issued while this one is compared. The compare
       // uses ct_q, read a cycle ago, so driving this line's own index here
       // was a no-op that stopped the pipeline.
-      S_FILL: begin mem_addr = idx_r; cd_we = 1'b1; ct_we = 1'b1; end
+      S_FILL: begin mem_addr = ms_idx[ms_fill_sel]; cd_we = 1'b1; ct_we = 1'b1; end   // R480
       default: ;
     endcase
   end
@@ -298,6 +311,49 @@ module m2_texel #(
   logic [1:0]  sel_q;
   logic        x2_q, y2_q;   // only the parity picks the nibble
 
+  // R480: TWO MISS-STATUS REGISTERS, ONE PER SDRAM PORT.
+  //
+  // m2_sdram allows one transaction per port at a time, so a single port
+  // serialises every miss: 15,703 a frame at ~160 ns of SDRAM is 2.5 ms of a
+  // 16.7 ms frame, and on the board that is what takes the band -- "one miss
+  // BLOCKS every span behind it". Two ports let two fills be in flight.
+  //
+  // RESPONSES STAY IN ORDER. The span walk emits in x order, so a hit found
+  // behind a miss must still answer after it. The FIFO below is what enforces
+  // that: every accepted request takes a slot in it, hits carry their data
+  // straight in, misses carry the MSHR they are waiting on, and the head is
+  // what answers.
+  logic                ms_busy [2];
+  logic                ms_done [2];
+  logic [IDX_BITS-1:0] ms_idx  [2];
+  logic [TAG_BITS-1:0] ms_tag  [2];
+  logic [63:0]         ms_dat  [2];
+  // R480: ONE TIMEOUT PER SLOT. The single S_MISS counter went with the state,
+  // and this module's own note says why it cannot: "a request that is never
+  // acknowledged holds the span walk, which holds the band, which holds every
+  // band after it." Each fill answers with whatever is in hand rather than
+  // hanging, exactly as the old one did.
+  logic [9:0]          ms_to   [2];
+  wire                 ms_have_free = !ms_busy[0] || !ms_busy[1];
+  wire                 ms_pick      = !ms_busy[0] ? 1'b0 : 1'b1;
+  // A fill needs the array write port, which the lookup read is using. One
+  // stolen cycle per fill; rdy drops for it.
+  wire                 ms_fill_rdy  = (ms_busy[0] && ms_done[0]) || (ms_busy[1] && ms_done[1]);
+  wire                 ms_fill_sel  = (ms_busy[0] && ms_done[0]) ? 1'b0 : 1'b1;
+
+  localparam int unsigned RSP_D = 4;
+  logic                rs_rdy [RSP_D];   // data already in hand
+  logic [63:0]         rs_dat [RSP_D];
+  logic [1:0]          rs_sel [RSP_D];
+  logic                rs_x2  [RSP_D], rs_y2 [RSP_D];
+  logic                rs_ism [RSP_D];   // waiting on an MSHR
+  logic                rs_slt [RSP_D];
+  logic [$clog2(RSP_D):0] rs_wp, rs_rp;
+  wire rs_empty = (rs_wp == rs_rp);
+  wire rs_full  = ((rs_wp - rs_rp) == ($clog2(RSP_D)+1)'(RSP_D));
+  wire [$clog2(RSP_D)-1:0] rs_hd = rs_rp[$clog2(RSP_D)-1:0];
+  wire [$clog2(RSP_D)-1:0] rs_tl = rs_wp[$clog2(RSP_D)-1:0];
+
   logic h_pulse, m_pulse;
 
   always_ff @(posedge clk or negedge rst_n) begin
@@ -305,7 +361,17 @@ module m2_texel #(
       st <= S_INIT; sweep <= '0; idx_r <= '0; tag_r <= '0; sel_r <= '0;
       wa_r <= '0; sheet_r <= 1'b0; hold <= '0; x2_r <= '0; y2_r <= '0;
       sel_q <= 2'd0; x2_q <= 1'b0; y2_q <= 1'b0;   // R474
-      m_req <= 1'b0; m_addr <= '0; ack <= 1'b0; to_cnt <= '0; dbg_lost <= '0;
+      m_req <= 1'b0; m_addr <= '0; ack <= 1'b0; dbg_lost <= '0;
+      m2_req <= 1'b0; m2_addr <= '0;
+      rs_wp <= '0; rs_rp <= '0;
+      for (int k = 0; k < 2; k++) begin
+        ms_busy[k] <= 1'b0; ms_done[k] <= 1'b0;
+        ms_idx[k] <= '0; ms_tag[k] <= '0; ms_dat[k] <= '0; ms_to[k] <= '0;
+      end
+      for (int k = 0; k < RSP_D; k++) begin
+        rs_rdy[k] <= 1'b0; rs_dat[k] <= '0; rs_sel[k] <= 2'd0;
+        rs_x2[k] <= 1'b0; rs_y2[k] <= 1'b0; rs_ism[k] <= 1'b0; rs_slt[k] <= 1'b0;
+      end
       inval_d <= 1'b0; inval_pend <= 1'b0;
       dbg_hits <= '0; dbg_misses <= '0; dbg_sweeps <= '0;
       h_pulse <= 1'b0; m_pulse <= 1'b0;
@@ -317,6 +383,49 @@ module m2_texel #(
       if (m_pulse) dbg_misses <= dbg_misses + 1'd1;
       inval_d <= inval;
       if (inval && !inval_d) inval_pend <= 1'b1;
+
+      // ---- R480: per-slot timeouts.
+      for (int k = 0; k < 2; k++) begin
+        if (ms_busy[k] && !ms_done[k]) begin
+          ms_to[k] <= ms_to[k] + 1'd1;
+          if (&ms_to[k]) begin
+            ms_done[k] <= 1'b1;
+            if (!(&dbg_lost)) dbg_lost <= dbg_lost + 1'd1;
+            if (k == 0) m_req <= 1'b0; else m2_req <= 1'b0;
+            for (int j = 0; j < RSP_D; j++)
+              if (rs_ism[j] && (rs_slt[j] == 1'(k))) begin
+                rs_rdy[j] <= 1'b1;  rs_ism[j] <= 1'b0;   // answer with what is in hand
+              end
+          end
+        end
+      end
+
+      // ---- R480: the two ports complete independently and out of order. The
+      // returned line goes to the FIFO entry that is waiting on that slot, so
+      // the ORDER the walk sees is the order it asked in, whichever port
+      // answered first.
+      if (m_ack && ms_busy[0] && !ms_done[0]) begin
+        ms_dat[0] <= m_data;  ms_done[0] <= 1'b1;  m_req <= 1'b0;
+        for (int k = 0; k < RSP_D; k++)
+          if (rs_ism[k] && !rs_slt[k]) begin
+            rs_dat[k] <= m_data;  rs_rdy[k] <= 1'b1;  rs_ism[k] <= 1'b0;
+          end
+      end
+      if (m2_ack && ms_busy[1] && !ms_done[1]) begin
+        ms_dat[1] <= m2_data; ms_done[1] <= 1'b1;  m2_req <= 1'b0;
+        for (int k = 0; k < RSP_D; k++)
+          if (rs_ism[k] && rs_slt[k]) begin
+            rs_dat[k] <= m2_data; rs_rdy[k] <= 1'b1;  rs_ism[k] <= 1'b0;
+          end
+      end
+
+      // ---- the response head. In order, always.
+      if (!rs_empty && rs_rdy[rs_hd]) begin
+        ack   <= 1'b1;
+        hold  <= rs_dat[rs_hd];
+        sel_q <= rs_sel[rs_hd];  x2_q <= rs_x2[rs_hd];  y2_q <= rs_y2[rs_hd];
+        rs_rp <= rs_rp + 1'd1;
+      end
 
       case (st)
         S_INIT: begin
@@ -341,9 +450,19 @@ module m2_texel #(
         // The cost is one cycle per repeated texel. Texels wait 9.6% of the
         // frame, so that is a few percent of a small number, against clk_mem
         // which gates the 2:1 ratio the whole clock plan rests on.
-        S_IDLE: if (inval_pend) begin
+        S_IDLE: if (ms_fill_rdy) begin
+          st <= S_FILL;                  // R480: steal a cycle for the array write
+        end else if (inval_pend) begin
           if (!(&dbg_sweeps)) dbg_sweeps <= dbg_sweeps + 1'd1;
           sweep  <= '0;
+          // R480: THE QUEUE IS FLUSHED WITH THE CACHE. Every line is about to
+          // be invalidated, so an entry still holding one is stale -- it would
+          // answer a later request with a line the sweep was clearing. The old
+          // design had no queue and so nothing to flush. Safe here because the
+          // sweep runs at frame_start with the walk idle.
+          rs_wp  <= '0;  rs_rp <= '0;
+          for (int k = 0; k < RSP_D; k++) begin rs_rdy[k] <= 1'b0; rs_ism[k] <= 1'b0; end
+          for (int k = 0; k < 2; k++)  begin ms_busy[k] <= 1'b0;  ms_done[k] <= 1'b0; end
           st     <= S_INIT;
         end else if (req) begin
           idx_r   <= req_idx;
@@ -359,12 +478,16 @@ module m2_texel #(
         // R474: A HIT ANSWERS AND ACCEPTS IN THE SAME CYCLE. S_ACK used to wait
         // here for the requester to drop `req`, which made every fetch a full
         // round trip whether it hit or not.
+        // R480: the compare pushes its answer into the response FIFO and the
+        // lookup pipeline keeps going. A miss takes an MSHR and issues on its
+        // port; it no longer stops anything behind it.
         S_LOOK: if (hit) begin
-          hold     <= cd_q;
-          sel_q    <= sel_r;  x2_q <= x2_r[0];  y2_q <= y2_r[0];
-          ack      <= 1'b1;
+          rs_rdy[rs_tl] <= 1'b1;   rs_dat[rs_tl] <= cd_q;
+          rs_sel[rs_tl] <= sel_r;  rs_x2[rs_tl]  <= x2_r[0];
+          rs_y2[rs_tl]  <= y2_r[0]; rs_ism[rs_tl] <= 1'b0;
+          rs_wp    <= rs_wp + 1'd1;
           h_pulse  <= 1'b1;
-          if (req && !inval_pend) begin
+          if (req && rdy) begin
             idx_r   <= req_idx;  tag_r   <= req_tag;  sel_r <= req_sel;
             wa_r    <= waddr;    sheet_r <= sheet;
             x2_r    <= x2;       y2_r    <= y2;
@@ -373,35 +496,43 @@ module m2_texel #(
             st      <= S_IDLE;
           end
         end else begin
-          m_req      <= 1'b1;
-          to_cnt     <= '0;
-          m_addr     <= (sheet_r ? base_s1 : base_s0)
-                      + AW'({wa_r[WA_BITS-1:2], 2'b00});
+          // R480: take a slot, issue on its port, and carry on.
+          ms_busy[ms_pick] <= 1'b1;
+          ms_done[ms_pick] <= 1'b0;
+          ms_to  [ms_pick] <= '0;
+          ms_idx [ms_pick] <= idx_r;
+          ms_tag [ms_pick] <= tag_r;
+          if (!ms_pick) begin
+            m_req  <= 1'b1;
+            m_addr <= (sheet_r ? base_s1 : base_s0)
+                    + AW'({wa_r[WA_BITS-1:2], 2'b00});
+          end else begin
+            m2_req  <= 1'b1;
+            m2_addr <= (sheet_r ? base_s1 : base_s0)
+                     + AW'({wa_r[WA_BITS-1:2], 2'b00});
+          end
+          rs_rdy[rs_tl] <= 1'b0;    rs_ism[rs_tl] <= 1'b1;
+          rs_slt[rs_tl] <= ms_pick;
+          rs_sel[rs_tl] <= sel_r;   rs_x2[rs_tl] <= x2_r[0];
+          rs_y2[rs_tl]  <= y2_r[0];
+          rs_wp      <= rs_wp + 1'd1;
           m_pulse    <= 1'b1;
-          st         <= S_MISS;
-        end
-
-        S_MISS: begin
-          to_cnt <= to_cnt + 1'd1;
-          if (m_ack) begin
-            m_req  <= 1'b0;
-            hold   <= m_data;
-            to_cnt <= '0;
-            st     <= S_FILL;
-          end else if (&to_cnt) begin
-            m_req  <= 1'b0;
-            to_cnt <= '0;
-            if (!(&dbg_lost)) dbg_lost <= dbg_lost + 1'd1;
-            ack    <= 1'b1;             // answer with what is in hand, never hang
-            sel_q  <= sel_r;  x2_q <= x2_r[0];  y2_q <= y2_r[0];   // R474
-            st     <= S_IDLE;
+          if (req && rdy) begin
+            idx_r   <= req_idx;  tag_r   <= req_tag;  sel_r <= req_sel;
+            wa_r    <= waddr;    sheet_r <= sheet;
+            x2_r    <= x2;       y2_r    <= y2;
+            st      <= S_LOOK;
+          end else begin
+            st      <= S_IDLE;
           end
         end
 
         S_FILL: begin
-          ack      <= 1'b1;
-          sel_q    <= sel_r;  x2_q <= x2_r[0];  y2_q <= y2_r[0];   // R474
-          st       <= S_IDLE;  // R419: no last_* line to remember any more
+          // The stolen cycle: the returned line goes into the arrays. mem_addr
+          // is driven to ms_idx by the comb block below, so no lookup can read
+          // this cycle -- rdy is low for it.
+          ms_busy[ms_fill_sel] <= 1'b0;
+          st <= S_IDLE;
         end
 
         default: st <= S_IDLE;
@@ -428,6 +559,10 @@ module m2_texel #(
 
   // R474: free whenever nothing is stalled. A miss holds rdy low for its whole
   // fill -- hit-under-miss needs a miss-status register and is a later change.
-  assign rdy = !inval_pend && ((st == S_IDLE) || ((st == S_LOOK) && hit));
+  // R480: ready needs somewhere to put the answer (FIFO space), somewhere to
+  // put a miss (a free MSHR -- a lookup cannot know yet whether it will miss),
+  // and the arrays free (a fill steals them for a cycle).
+  assign rdy = !inval_pend && !rs_full && ms_have_free && !ms_fill_rdy
+               && ((st == S_IDLE) || (st == S_LOOK));
 
 endmodule

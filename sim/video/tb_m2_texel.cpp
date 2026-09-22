@@ -18,6 +18,7 @@
 #include "Vm2_texel.h"
 #include "verilated.h"
 #include <cstdio>
+#include <vector>
 #include <cstdint>
 #include <cstdlib>
 #include <random>
@@ -52,25 +53,34 @@ static const uint32_t BASE0 = 0x1760000;
 static const uint32_t BASE1 = 0x17E0000;
 
 static int mem_lat = 3, mem_wait = -1;
+// R480: THE SECOND PORT, MODELLED SEPARATELY AND WITH ITS OWN LATENCY.
+// m2_texel now issues fills on two SDRAM ports so two can be in flight. Giving
+// them the same latency would hide the thing that matters -- the two ports
+// complete INDEPENDENTLY and out of order, and the response FIFO is what puts
+// the answers back in the order the walk asked in. A different latency here is
+// what proves that rather than assumes it.
+static int mem2_lat = 5, mem2_wait = -1;
+
+static uint64_t line_at(uint32_t a) {
+  uint64_t v = 0;
+  const int sheet = (a >= BASE1) ? 1 : 0;
+  const uint32_t off = a - (sheet ? BASE1 : BASE0);
+  for (int i = 0; i < 4; i++)
+    v |= (uint64_t)sheetmem(sheet, (off + i) & (SHEET_WORDS - 1)) << (16 * i);
+  return v;
+}
 
 static void tick() {
-  if (d->m_req && mem_wait < 0) mem_wait = mem_lat;
-  if (mem_wait == 0) {
-    d->m_ack = 1;
-    uint64_t v = 0;
-    const uint32_t a = d->m_addr;
-    const int sheet = (a >= BASE1) ? 1 : 0;
-    const uint32_t off = a - (sheet ? BASE1 : BASE0);
-    for (int i = 0; i < 4; i++)
-      v |= (uint64_t)sheetmem(sheet, (off + i) & (SHEET_WORDS - 1)) << (16 * i);
-    d->m_data = v;
-  }
+  if (d->m_req  && mem_wait  < 0) mem_wait  = mem_lat;
+  if (d->m2_req && mem2_wait < 0) mem2_wait = mem2_lat;
+  if (mem_wait  == 0) { d->m_ack  = 1; d->m_data  = line_at(d->m_addr);  }
+  if (mem2_wait == 0) { d->m2_ack = 1; d->m2_data = line_at(d->m2_addr); }
   d->eval();
   d->clk = 0; d->eval();
   d->clk = 1; d->eval();
   ++cyc;
-  if (d->m_ack) { d->m_ack = 0; mem_wait = -1; }
-  else if (mem_wait > 0) --mem_wait;
+  if (d->m_ack)  { d->m_ack  = 0; mem_wait  = -1; } else if (mem_wait  > 0) --mem_wait;
+  if (d->m2_ack) { d->m2_ack = 0; mem2_wait = -1; } else if (mem2_wait > 0) --mem2_wait;
 }
 
 // ------------------------------------------------ the reference, transcribed
@@ -169,7 +179,7 @@ static void check(const TexState& t, int32_t u, int32_t v, const char* what) {
 int main(int argc, char **argv) {
   Verilated::commandArgs(argc, argv);
   d = new Vm2_texel;
-  d->rst_n = 0; d->req = 0; d->m_ack = 0; d->inval = 0;
+  d->rst_n = 0; d->req = 0; d->m_ack = 0; d->m2_ack = 0; d->inval = 0;
   d->base_s0 = BASE0; d->base_s1 = BASE1;
   for (int i = 0; i < 4; ++i) tick();
   d->rst_n = 1;
@@ -280,8 +290,18 @@ int main(int argc, char **argv) {
     mem_lat = 1000000;                          // the memory is gone
     TexState t{2, 2, 0, 0, 0, 4, 2};
     d->tex = t.packed(); d->u = 33 << 8; d->v = 44 << 8; d->req = 1;
+    // R480: DEASSERT ON ACCEPTANCE, as fetch() does. Holding req while the
+    // cache is ready means offering it again -- the streaming cache took this
+    // one twice, allocated BOTH miss slots, and the second port answered it in
+    // nine ticks while the first was still staring at a dead memory. The
+    // timeout never got a chance to fire and this test read as an RTL fault.
     bool acked = false;
-    for (int i = 0; i < 4000; ++i) { tick(); if (d->ack) { acked = true; break; } }
+    for (int i = 0; i < 4000; ++i) {
+      const bool accepted = d->req && d->rdy;
+      tick();
+      if (accepted) d->req = 0;
+      if (d->ack) { acked = true; break; }
+    }
     d->req = 0; tick();
     ++checks;
     if (!acked) { std::printf("  FAIL: a dead memory hung the texel fetch\n"); ++fails; }
@@ -292,6 +312,62 @@ int main(int argc, char **argv) {
       std::printf("  dead memory: answered anyway, %u abandoned\n", d->dbg_lost - lost0);
     }
     mem_lat = 3; mem_wait = -1;
+  }
+
+  // ---- R480: STREAMING, AND THE ORDER IT PROMISES.
+  //
+  // Everything above drives one request at a time, so it never allocates a
+  // second MSHR and never proves the thing the redesign exists for: two fills
+  // in flight on two ports, answered IN THE ORDER ASKED. The two ports have
+  // different latencies in this bench precisely so an out-of-order completion
+  // is possible -- if the response FIFO were not doing its job, the values
+  // would come back swapped and every one of them would still be a real texel.
+  {
+    d->inval = 1; tick(); d->inval = 0;
+    for (int i = 0; i < SWEEP_TICKS; ++i) tick();   // cold, so most of these miss
+    mem_lat = 3; mem2_lat = 7;
+
+    const int N = 200;
+    std::vector<int> want, got;
+    TexState t{2, 2, 0, 0, 0, 4, 2};
+    int issued = 0, seen_p2 = 0;
+    d->tex = t.packed();
+    for (int i = 0; i < 40000 && (int)got.size() < N; ++i) {
+      // Offer the next request whenever the cache can take one.
+      if (issued < N && !d->req) {
+        d->u = (33 + issued * 37) << 8;
+        d->v = (44 + issued * 11) << 8;
+        d->req = 1;
+      }
+      const bool accepted = d->req && d->rdy;
+      if (accepted) want.push_back(ref_texel(t, (int32_t)d->u, (int32_t)d->v));
+      if (d->m2_req) ++seen_p2;
+      tick();
+      if (accepted) { d->req = 0; ++issued; }
+      if (d->ack) got.push_back(d->texel);
+    }
+    d->req = 0; tick();
+
+    ++checks;
+    if ((int)got.size() != N) {
+      std::printf("  FAIL streaming: %zu of %d answered\n", got.size(), N); ++fails;
+    }
+    ++checks;
+    if (!seen_p2) {
+      std::printf("  FAIL streaming: the second port was never used\n"); ++fails;
+    }
+    int wrong = 0;
+    for (size_t k = 0; k < got.size() && k < want.size(); ++k) {
+      ++checks;
+      if (got[k] != want[k]) {
+        if (++wrong <= 4)
+          std::printf("  FAIL streaming #%zu: got=%x want=%x\n", k, got[k], want[k]);
+        ++fails;
+      }
+    }
+    std::printf("  streaming: %zu answered in order, %d cycles on the second port, %d wrong\n",
+                got.size(), seen_p2, wrong);
+    mem_lat = 3; mem2_lat = 5;
   }
 
   std::printf("m2_texel: checks=%ld fails=%ld\n", checks, fails);

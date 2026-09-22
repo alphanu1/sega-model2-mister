@@ -98,6 +98,12 @@ module m2_raster3d #(
   output logic [TEX_AW:1] tex_m_addr,
   input  logic            tex_m_ack,
   input  logic [63:0]     tex_m_data,
+  // R480: a second texel port -- one transaction per SDRAM port at a time,
+  // so a single port serialises every miss.
+  output logic            tex_m2_req,
+  output logic [TEX_AW:1] tex_m2_addr,
+  input  logic            tex_m2_ack,
+  input  logic [63:0]     tex_m2_data,
   output logic [31:0]     dbg_texpix, dbg_texhit, dbg_texmiss, dbg_texnz,
   output logic [15:0]     dbg_texlost,
   output logic [15:0] dbg_oz0, dbg_oz1, dbg_oz2, dbg_oz3,   // R334
@@ -510,6 +516,8 @@ module m2_raster3d #(
     .req(txf_req), .rdy(txf_rdy), .ack(txf_ack), .tex(txf_tex),
     .u(txf_u), .v(txf_v), .texel(txf_texel),
     .m_req(tex_m_req), .m_addr(tex_m_addr), .m_ack(tex_m_ack), .m_data(tex_m_data),
+    // R480: the second SDRAM port, so two fills can be in flight.
+    .m2_req(tex_m2_req), .m2_addr(tex_m2_addr), .m2_ack(tex_m2_ack), .m2_data(tex_m2_data),
     .inval(tex_sweep),
     .dbg_hits(dbg_texhit), .dbg_misses(dbg_texmiss), .dbg_lost(dbg_texlost),
     .dbg_sweeps(dbg_texsweep)
