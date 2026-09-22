@@ -20594,3 +20594,52 @@ THE ARBITER FIX IS KEPT AND IS THE DAY'S REAL RESULT. R498 alone took clk_mem
 from -1.043 to -0.145 and, with a lucky seed, to +0.243. s190 runs. The overlap
 is reverted in the tree and preserved at 8c82f4c, 905da0d and 9226e0c with its
 tests, which stay in the bench and pass against the pre-overlap RTL.
+
+---
+
+**R502 -- THE HEAD START WAS BEING DISCARDED WITHIN A CYCLE OF BEING BUILT, BY
+THE RELEASE, NOT BY frame_start.**
+
+`dbg_bands_done` reads 52 against NBANDS=48 in every capture. That was recorded
+long ago as "three to eight bands a frame were being built and thrown away" and
+attributed to the blanking-window band index; the clamp at `scan_band_rel` was
+meant to have fixed it. It did not, and the mechanism is simpler than that.
+
+The fill wraps past band 47 and begins the NEXT frame's low bands while the
+beam is still finishing this one. The release is
+
+```
+  if (bd_ready[i] && (scan_band_f > bd_band[i])) bd_ready[i] <= 1'b0;
+```
+
+and the beam is past band 0 for the whole rest of the frame, so a band built
+after the wrap is freed within a cycle of `C_DONE` setting it. FOUR BANDS OF
+HEAD START, BUILT AND BINNED, EVERY FRAME.
+
+The head start was then rebuilt from nothing during the 40 lines of blanking --
+five band-times for five buffers, no slack whatever -- and a single band that
+overran left the fill behind for the entire frame, because `C_IDLE` waits on
+buffer release and so can never get more than NBUF ahead again. That is the
+five-contiguous-bands-then-a-gap pattern the photographs show, and it is why
+the fill completes 52 band-fills a frame with only two to five of them
+arriving in time.
+
+ONE BIT PER BUFFER. `bd_frame[i]` says which frame a finished band belongs to,
+`fill_frame` toggles when the fill wraps, `disp_frame` follows it at
+frame_start. A band tagged for the next frame is neither released nor
+displayed by this one, and at frame_start the pointer advances -- which makes
+those bands current instead of discarding them. The indiscriminate
+`bd_ready <= '0` is replaced by freeing only the buffers still holding the
+frame just finished.
+
+TRIED FIRST AND WRONG: simply deleting `bd_ready <= '0`. Every buffer stayed
+marked ready through blanking -- `scan_band_rel` is clamped to zero there, so
+nothing is ever released during it -- the fill had no free buffer, stalled, and
+`tb_m2_raster3d` painted 205 pixels where it should paint 10,824. The clear was
+load-bearing precisely because nothing else frees buffers in the blanking
+window. That is why the fix needs the tag rather than the deletion.
+
+WHAT THE BENCH CAN AND CANNOT SAY. 10,824 pixels a frame either way, 246 in the
+top band, textured and untextured, so no regression. It CANNOT show the gain:
+its fill always makes its deadline, so it has no lateness to absorb. THE BOARD
+IS THE ORACLE for this one.
