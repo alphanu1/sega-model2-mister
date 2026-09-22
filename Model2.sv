@@ -5508,7 +5508,6 @@ wire [9:0] vid_x, vid_y;
 wire [15:0] r3d_col;
 wire        r3d_hit;
 wire [15:0] r3d_quads, r3d_dropped, r3d_bands, r3d_tiny;
-wire [31:0] r3d_pixels;
 
 // TWO_CLOCKS(0): clk and scan_clk below are BOTH clk_sys, so every synchroniser
 // in this module would be a crossing it invents against itself -- six cycles of
@@ -5600,7 +5599,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(5),
 	.scan_clk(clk_sys), .scan_x(vid_x), .scan_y(vid_y),
 	.scan_col(r3d_col), .scan_hit(r3d_hit),
 	.dbg_quads(r3d_quads), .dbg_dropped(r3d_dropped), .dbg_tiny(r3d_tiny),
-	.dbg_bands(r3d_bands), .dbg_pixels(r3d_pixels),
+	.dbg_bands(r3d_bands),
 	.dbg_ready_cyc(r3d_ready_cyc), .dbg_bands_done(r3d_bands_done),
 	.dbg_bands_painted(r3d_bands_painted),   // R452
 	.dbg_fillpass(r3d_fillpass),             // R455

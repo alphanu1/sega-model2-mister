@@ -129,9 +129,12 @@ int main(int argc, char **argv) {
       }
     }
     if (painted) *painted = hits;
-    std::printf("    frame: hits %ld  quads %d dropped %d  bands_done %d ready_cyc %d late %d qend %d bands %d pixels %u\n",
+    // R485: `pixels` is gone -- it was a 32-bit sum that reached nothing in the
+    // real design and Quartus deleted it there. `painted` is the number the
+    // five per-band flags now feed, and it is the one that was ever read.
+    std::printf("    frame: hits %ld  quads %d dropped %d  bands_done %d ready_cyc %d late %d qend %d bands %d painted %d\n",
                 hits, (int)d->dbg_quads, (int)d->dbg_dropped, (int)d->dbg_bands_done, (int)d->dbg_ready_cyc,
-                (int)d->dbg_late_frames, (int)d->dbg_qend_frames, (int)d->dbg_bands, (unsigned)d->dbg_pixels);
+                (int)d->dbg_late_frames, (int)d->dbg_qend_frames, (int)d->dbg_bands, (int)d->dbg_bands_painted);
     std::printf("      bands filled during vblank: %u\n", vbl_bands);
   };
 

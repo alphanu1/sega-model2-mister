@@ -122,6 +122,27 @@ struct Dut {
             }
         }
     }
+
+    // R485: COUNT WHAT IS PAINTED BY READING IT BACK, not by asking the module
+    // how many it thinks it wrote. The module's own dbg_pixels counter is gone
+    // -- five 32-bit copies of it existed in hardware to answer one boolean --
+    // and an instrument that counts itself was the weaker evidence anyway.
+    //
+    // WHAT THIS GIVES UP, said plainly: a second write to a pixel with the SAME
+    // value is now invisible here, where the counter would have shown 12 for an
+    // 11-pixel span. That is a wasted cycle and not a wrong picture, and the
+    // span walk's cycles-per-group figure in tb_m2_span_tex is where a wasted
+    // cycle actually shows up.
+    int painted_now() {
+        int n = 0;
+        for (int row = 0; row < H; row++)
+            for (int x = 0; x < W; x++) {
+                d->rd_row = row; d->rd_x = x;
+                tick();
+                if (d->rd_hit & 1) n++;
+            }
+        return n;
+    }
 };
 
 int main(int argc, char** argv) {
@@ -142,8 +163,9 @@ int main(int argc, char** argv) {
         t.span(5, 10, 20, 0xabcd, false);
         t.verify("simple span");
         // and the count is 11, not 10 - an exclusive range is the classic bug
-        check(t.d->dbg_pixels == 11, "an inclusive [10,20] span should write 11 pixels");
-        printf("  wrote %u pixels for [10,20]\n", (unsigned)t.d->dbg_pixels);
+        int n = t.painted_now();
+        check(n == 11, "an inclusive [10,20] span should paint 11 pixels");
+        printf("  painted %d pixels for [10,20]\n", n);
     }
 
     printf("test: a ONE-PIXEL span (x0 == x1) is not dropped\n");
@@ -151,7 +173,7 @@ int main(int argc, char** argv) {
         Dut t; t.reset(); t.clear();
         t.span(0, 42, 42, 0x0f0f, false);
         t.verify("one-pixel span");
-        check(t.d->dbg_pixels == 1, "x0 == x1 should write exactly one pixel");
+        check(t.painted_now() == 1, "x0 == x1 should paint exactly one pixel");
     }
 
     printf("test: NEGATIVE span_y is out of band, not wrapped into it\n");

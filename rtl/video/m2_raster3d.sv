@@ -119,7 +119,6 @@ module m2_raster3d #(
   output logic [15:0] dbg_dropped,
   output logic [15:0] dbg_tiny,            // R216
   output logic [15:0] dbg_bands,
-  output logic [31:0] dbg_pixels,
 
   // WHY THE TOP OF THE FRAME IS MISSING, INSTRUMENTED. R200 measured that
   // bands 0-11 never render and 12+ render perfectly, on a fill that is
@@ -138,7 +137,7 @@ module m2_raster3d #(
   // R452: BANDS THAT PAINTED SOMETHING, not bands that finished. A band with
   // no quads in it completes instantly, so dbg_bands_done counts those too --
   // which is why it reads 17 while the screen shows about two. One comparator
-  // on bd_pixels, which the band already maintains.
+  // R485: one AND on bd_painted, the flag the band already maintains.
   output logic [7:0]  dbg_bands_painted,
   // R455: THE REPLAY FACTOR. The quad store re-issues every quad to every band
   // it touches, so a tall quad is fitted and walked once PER BAND. dbg_quads
@@ -534,7 +533,7 @@ module m2_raster3d #(
   logic [NBUF-1:0]       bd_span_valid, bd_span_ready;
   logic [NBUF-1:0][15:0] bd_rd_col;
   logic [NBUF-1:0]       bd_rd_hit;
-  logic [NBUF-1:0][31:0] bd_pixels;
+  logic [NBUF-1:0]       bd_painted;   // R485: a flag per band, not a count
   logic signed [15:0]    bd_y0 [NBUF];
   logic [BW-1:0]         bd_band [NBUF];
   logic [NBUF-1:0]       bd_ready;          // holds a finished band
@@ -553,7 +552,7 @@ module m2_raster3d #(
         .rd_x(scan_x[$clog2(SCR_W)-1:0]),
         .rd_row(scan_y[$clog2(BAND_H)-1:0]),
         .rd_col(bd_rd_col[b]), .rd_hit(bd_rd_hit[b]),
-        .dbg_spans(), .dbg_dropped(), .dbg_pixels(bd_pixels[b])
+        .dbg_spans(), .dbg_dropped(), .dbg_painted(bd_painted[b])
       );
     end
   endgenerate
@@ -772,7 +771,7 @@ module m2_raster3d #(
       pst <= P_COLLECT; cst <= C_IDLE;
       bank <= 1'b0; dvalid <= 1'b0;
       fill_band <= '0; fill_buf <= '0; bd_ready <= '0;
-      bd_clear_req <= '0; dbg_bands <= 16'd0; dbg_pixels <= 32'd0;
+      bd_clear_req <= '0; dbg_bands <= 16'd0;
       dbg_ready_cyc <= 16'd0; dbg_bands_done <= 8'd0;
       dbg_bands_painted <= 8'd0; painted_this <= 8'd0;   // R452
       dbg_fillpass <= 16'd0; fillpass_this <= 16'd0;     // R455
@@ -850,9 +849,14 @@ module m2_raster3d #(
           bd_ready[fill_buf] <= 1'b1;
           dbg_bands  <= dbg_bands + 16'd1;
           if (!(&bands_this)) bands_this <= bands_this + 8'd1;
-          dbg_pixels <= dbg_pixels + bd_pixels[fill_buf];
-          if (bd_pixels[fill_buf] != 32'd0 && !(&painted_this))
-            painted_this <= painted_this + 8'd1;                 // R452
+          // R485: dbg_pixels is gone. It summed the five bands' 32-bit pixel
+          // totals into a counter that reaches nothing -- Quartus deletes it,
+          // and querying the fitted netlist for it returns zero registers --
+          // while the five counters feeding it survived only because of the
+          // `!= 0` test below. That test is a boolean, so the bands now keep a
+          // flag and the 160 registers of adder go.
+          if (bd_painted[fill_buf] && !(&painted_this))
+            painted_this <= painted_this + 8'd1;                 // R452, R485
           fill_buf   <= (BUFW'(fill_buf) == BUFW'(NBUF-1)) ? '0 : fill_buf + BUFW'(1);
           fill_band  <= (fill_band == BW'(NBANDS-1)) ? '0 : fill_band + BW'(1);
           cst <= C_IDLE;

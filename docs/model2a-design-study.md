@@ -19804,3 +19804,48 @@ netlist, against 147 debug signals wired at the top level carrying ~2,900 bits.
 back as zero registers post-fit. So DELETING DEAD DEBUG SOURCE BUYS NO AREA; it
 is hygiene. The area is in the live instrument: `m2_dbg_stream` plus its UART is
 393 ALM measured, and the surviving counters are perhaps 400-500 more.
+
+---
+
+**R485 -- FIVE 32-BIT COUNTERS EXISTED TO ANSWER FIVE BOOLEANS, AND THE TOTAL
+THEY FED WAS ALREADY BEING DELETED BY THE FITTER.**
+
+`m2_raster_band` kept a 32-bit `dbg_pixels` per band, five bands, 160
+registers plus their adders. `m2_raster3d` consumed them twice:
+
+```
+  dbg_pixels <= dbg_pixels + bd_pixels[fill_buf];          // the sum
+  if (bd_pixels[fill_buf] != 32'd0 && !(&painted_this))    // the test
+    painted_this <= painted_this + 8'd1;
+```
+
+The sum reaches nothing. `r3d_pixels` at the top level is declared, connected
+and read by no one, and querying the FITTED netlist for
+`m2_raster3d|dbg_pixels` returns zero registers -- Quartus deleted it. The five
+band counters survived only because of the second line, and that line is a
+COMPARISON AGAINST ZERO. A boolean.
+
+So the bands keep a sticky flag instead, `dbg_painted`, set on the first painted
+group and cleared with the band. `dbg_bands_painted` is unchanged and still on
+the wire.
+
+HOW THIS WAS FOUND, because the method generalises: not by reading the source
+but by asking the fitted netlist what survived.
+
+```
+  create_timing_netlist 7_slow_1100mv_85c
+  get_registers "*dbg*"          ->  819 registers
+```
+
+against 147 debug signals wired at the top level carrying ~2,900 bits. 112 of
+the 147 reach nothing and are already gone. THE CONSEQUENCE IS THE OPPOSITE OF
+THE OBVIOUS ONE: deleting dead debug source buys no area at all, and the only
+trims worth making are to counters that ARE live. Those 819 registers, plus
+`m2_dbg_stream` and its UART at 393 ALM measured, are the whole instrument.
+
+THE BENCH LOSES SOMETHING AND IT IS WRITTEN DOWN. `tb_m2_raster_band` checked
+`dbg_pixels == 11` for an inclusive [10,20] span; it now counts painted pixels
+by reading the buffer back. The buffer compare already caught wrong ranges and
+stray writes, so what is given up is a second write to a pixel with the SAME
+value -- a wasted cycle, not a wrong picture. `tb_m2_span_tex`'s
+cycles-per-group is where a wasted cycle shows.

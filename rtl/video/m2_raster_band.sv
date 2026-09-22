@@ -105,7 +105,12 @@ module m2_raster_band #(
   // binning is wrong" from "the geometry is empty".
   output logic [15:0]            dbg_spans,
   output logic [15:0]            dbg_dropped,
-  output logic [31:0]            dbg_pixels
+  // R485: A FLAG, NOT A COUNT. The only consumer ever was m2_raster3d's
+  // `bd_pixels[fill_buf] != 0` test feeding dbg_bands_painted -- a boolean --
+  // and the 32-bit total it tested was accumulated into a counter that reaches
+  // nothing and that Quartus deletes. Five bands x 32 bits of adder existed to
+  // answer one bit each. Set on the first painted group, cleared with the band.
+  output logic                   dbg_painted
 );
 
   localparam int unsigned XW = $clog2(WIDTH);
@@ -262,7 +267,7 @@ module m2_raster_band #(
       cur_x       <= '0; cur_x1 <= '0; cur_y <= '0;
       cur_col     <= '0; cur_moire <= 1'b0; cur_row <= '0;
       clr_addr    <= '0;
-      dbg_spans   <= '0; dbg_dropped <= '0; dbg_pixels <= '0;
+      dbg_spans   <= '0; dbg_dropped <= '0; dbg_painted <= 1'b0;
     end else begin
       case (st)
         S_IDLE: begin
@@ -288,7 +293,7 @@ module m2_raster_band #(
         end
 
         S_PAINT: begin
-          dbg_pixels <= dbg_pixels + 32'(grp_n);
+          dbg_painted <= 1'b1;                      // R485
           // Advance to the next group boundary, not the next pixel.
           if (16'(grp_x0) + 16'(NBANK - 1) >= cur_x1) st <= S_IDLE;
           else cur_x <= 16'(grp_x0) + 16'(NBANK);
