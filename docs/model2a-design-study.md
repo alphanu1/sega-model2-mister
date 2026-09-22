@@ -19575,3 +19575,79 @@ The CPI argument above is the real blocker and it survives that correction.
 
 1200/48 = 25, so the new VCO carries the old clock unchanged and 30 costs
 nothing to revisit.
+
+---
+
+**R470 -- THE RENDERER RUNS AT 60 MHz AND IT BUYS NOTHING, BECAUSE THE CROSSING
+COSTS EXACTLY WHAT THE CLOCK GAINS.**
+
+The 3D path was moved to its own 60 MHz domain, cut from clk_sys and clk_mem,
+with real synchronisers on every crossing. It closed (+0.857 ns on clk_3d) and
+it drew correctly on the board. **Bands were unchanged: still 2-5, 90% of the
+time.**
+
+```
+  clock gain                        +20%
+  texel crossing, 4 sync trips      ~50 ns x 45,835 fetches/frame
+                                  = ~2.3 ms of a 16.7 ms frame
+```
+
+Compute got faster and the one path bands actually wait on got slower by the
+same amount. **The clock was never the lever.** The fetch is: m2_span_tex blocks
+in T_FETCH until each acknowledge returns, and at 50 MHz that already
+serialises 11,871 misses x 280 ns = **3.3 ms a frame** with no crossing
+involved at all.
+
+So the renderer is back on clk_sys and the five path splits that were spent
+reaching 16.667 ns (R457, R459, R461, R466, R468) become margin at 20 ns:
+clk_sys +0.588, the best of the whole effort, at 41,237 ALM, the lowest.
+
+**AND THE CUT PATHS ARE PHYSICALLY UNBOUNDED, WHICH IS THE REASON NOT TO SHIP
+IT EVEN WHEN IT WORKS.** s139 and s141 are the SAME RTL and differ only in
+fitter seed: s139 drew nothing, s141 drew. A cut path carries no timing
+constraint, so the fitter routes it freely, and this file records that the
+usual bound cannot be applied here -- set_net_delay gives "Internal Error:
+Sub-system: STA", three times out of three with the coprocessor in the design.
+A 60 MHz renderer without bounded crossings is a coin toss per build.
+
+**TWO CROSSINGS WERE MISSED IN THE INVENTORY, AND BOTH WERE INSIDE THINGS
+ALREADY TICKED OFF.**
+
+  * `q_end` was packed into the 377-bit quad bus. It is generated as
+    `geo_walk_frames != walk_frames_d` -- a standalone pulse with no relation
+    to a quad transfer -- and m2_handshake_cdc only moves data on
+    `s_valid && s_ready`, so it was dropped except by coincidence. Its
+    generator already said what that costs: "without it nothing ever draws no
+    matter how many quads arrived."
+  * The texel REQUEST crosses, and the inventory checked the texel's SDRAM
+    MASTER, which does not. "tex_m_* does NOT cross: m2_texel is on clk_mem"
+    was true and irrelevant.
+
+**A pulse and a bus need different carriers, and an inventory only protects the
+entries it names.** Both faults were invisible to every bench -- tb_m2_raster3d
+drives the renderer directly rather than through the CDC and passes with q_end
+dropped. The board found each in about 150 seconds.
+
+---
+
+**R471 -- STA SLACK DOES NOT PREDICT WHETHER THIS DESIGN BOOTS.**
+
+Three seeds of identical RTL, all fitted at 98% ALM:
+
+```
+  seed   clk_mem   clk_sys   clk_i960   boots?
+  s142   -3.003    +0.289    -0.721     YES
+  s143   -1.194    +0.184    -0.959     black screen
+  s144   -1.687    +0.588    +2.308     black screen
+```
+
+**The seed with the WORST clk_mem by 1.3 ns is the one that comes up**, and the
+seed with the best clk_sys and best clk_i960 does not. Picking the build with
+the best summary slack is not picking the build most likely to work, and it was
+done twice here before the pattern was believed.
+
+This is the "1 in 3" lottery recorded elsewhere in this project, quantified.
+Until it is understood, **flash by trying seeds, not by ranking them** -- and do
+not read a black screen as evidence against the change under test until every
+seed in the batch has been tried. Two of three were black here on a revert that
+was correct.
