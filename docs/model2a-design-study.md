@@ -20643,3 +20643,51 @@ WHAT THE BENCH CAN AND CANNOT SAY. 10,824 pixels a frame either way, 246 in the
 top band, textured and untextured, so no regression. It CANNOT show the gain:
 its fill always makes its deadline, so it has no lateness to absorb. THE BOARD
 IS THE ORACLE for this one.
+
+---
+
+**R503 -- R502's FRAME TAG IS AMBIGUOUS EXACTLY WHEN IT MATTERS, AND STARVED
+THE FILL. 0 FOR 4 ON HARDWARE.**
+
+R502 tagged each finished band with `fill_frame` and freed, at frame_start,
+the buffers whose tag was "not the new frame":
+
+```
+  disp_frame <= fill_frame;
+  for (i) if (bd_frame[i] != fill_frame) bd_ready[i] <= 1'b0;
+```
+
+If the fill has WRAPPED past band 47, fill_frame has toggled and that frees the
+finished frame's buffers. IF IT HAS NOT, fill_frame still equals disp_frame and
+the test frees NOTHING -- while every buffer holds bands of the frame that has
+just ended. Nothing is released during blanking either, because scan_band_rel
+is clamped to zero there and the release is `scan_band_f > bd_band[i]`.
+
+So the fill entered the frame with no free buffer and starved. And the case it
+fails in is the case the entry exists for: THE FILL IS LATE, which is why it
+has not wrapped. Four builds, four failures -- s196 black, s197 stuck on the
+red bars, s201 black, s200 frozen on frame 1.
+
+ONE BIT, BUT THE RIGHT BIT. `bd_ahead[i]` is set at C_DONE only when the fill
+has already wrapped past the frame being displayed, so it means "this band is
+for the NEXT frame" and nothing else. At frame_start:
+
+```
+  for (i) begin  bd_ready[i] <= bd_ahead[i];  bd_ahead[i] <= 1'b0;  end
+```
+
+With no wrap nothing is ahead and every buffer is freed -- identical to the old
+unconditional clear. With a wrap, exactly the bands built ahead survive. There
+is no state in which it frees too few.
+
+THE BENCH PASSED THE BROKEN VERSION, 8 checks, textured and untextured, 10,824
+pixels a frame and 51 bands done. It could not fail: tb_m2_raster3d's fill
+always makes its deadline, so it always wraps, so the ambiguous branch is never
+taken. EVERY FAULT IN THIS AREA HAS THE SAME SHAPE -- the bench models a
+renderer that keeps up, and the entire problem is a renderer that does not.
+Until that bench can be made LATE on demand, changes to the band handshake are
+being tested by the board and nothing else, at forty minutes a build.
+
+That is the next piece of work and it is worth more than any further change
+here: a knob that slows the fill -- a texel fetch that misses, or a stall
+injected into the span path -- and assertions that bands still reach the beam.

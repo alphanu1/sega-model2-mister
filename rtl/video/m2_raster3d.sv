@@ -554,7 +554,21 @@ module m2_raster3d #(
   //
   // One bit per buffer fixes it: a band built for the next frame is not the
   // current frame's to release or to display.
-  logic [NBUF-1:0]       bd_frame;
+  // R503: A FLAG, NOT A FRAME NUMBER. R502 tagged each buffer with fill_frame
+  // and freed those "not of the new frame" at frame_start. When the fill has
+  // NOT wrapped past band 47 -- which is most of the time, because it runs
+  // late, which is the whole problem -- fill_frame still equals disp_frame,
+  // so that test frees NOTHING while every buffer holds the finished frame's
+  // bands. Nothing is released during blanking either (scan_band_rel is
+  // clamped to zero there), so the fill entered the frame with no free buffer
+  // at all and starved. Four builds: two black, one stuck on the red bars,
+  // one frozen on frame 1.
+  //
+  // `bd_ahead` is set only when the fill has already wrapped past the band
+  // being displayed, so it means exactly "this band is for the NEXT frame"
+  // and is unambiguous when there has been no wrap -- then no buffer is ahead
+  // and frame_start frees them all, which is precisely the old behaviour.
+  logic [NBUF-1:0]       bd_ahead;
   logic                  fill_frame, disp_frame;
 
   genvar b;
@@ -687,8 +701,7 @@ module m2_raster3d #(
           for (int i = 0; i < NBUF; i++) begin band_s1[i] <= '0; band_s2[i] <= '0; end
         end else begin
           rdy_s1 <= bd_ready; rdy_s2 <= rdy_s1;
-          frm_s1 <= bd_frame; frm_s2 <= frm_s1;
-          dfr_s1 <= disp_frame; dfr_s2 <= dfr_s1;
+          frm_s1 <= bd_ahead; frm_s2 <= frm_s1;
           for (int i = 0; i < NBUF; i++) begin
             band_s1[i] <= bd_band[i]; band_s2[i] <= band_s1[i];
           end
@@ -699,7 +712,7 @@ module m2_raster3d #(
       // cycle it becomes ready rather than two cycles later.
       always_comb begin
         rdy_s2 = bd_ready;
-        frm_s2 = bd_frame; dfr_s2 = disp_frame;      // R502
+        frm_s2 = bd_ahead;                           // R503
         for (int i = 0; i < NBUF; i++) band_s2[i] = bd_band[i];
       end
     end
@@ -726,7 +739,7 @@ module m2_raster3d #(
       if (scan_x == 10'd0 && scan_x_d != 10'd0 && scan_y < 10'(SCR_H)) begin
         automatic logic any_rdy = 1'b0;
         for (int i = 0; i < NBUF; i++)
-          if (rdy_s2[i] && (frm_s2[i] == dfr_s2) && (band_s2[i] == scan_band)) any_rdy = 1'b1;
+          if (rdy_s2[i] && !frm_s2[i] && (band_s2[i] == scan_band)) any_rdy = 1'b1;
         if (!any_rdy) dbg_missed <= dbg_missed + 16'd1;
       end
     end
@@ -736,7 +749,7 @@ module m2_raster3d #(
     scan_col = 16'd0;
     scan_hit = 1'b0;
     for (int i = 0; i < NBUF; i++)
-      if (rdy_s2[i] && (frm_s2[i] == dfr_s2) && (band_s2[i] == scan_band)) begin
+      if (rdy_s2[i] && !frm_s2[i] && (band_s2[i] == scan_band)) begin
         scan_col = bd_rd_col[i];
         scan_hit = bd_rd_hit[i];
       end
@@ -806,7 +819,7 @@ module m2_raster3d #(
       pst <= P_COLLECT; cst <= C_IDLE;
       bank <= 1'b0; dvalid <= 1'b0;
       fill_band <= '0; fill_buf <= '0; bd_ready <= '0;
-      bd_frame <= '0; fill_frame <= 1'b0; disp_frame <= 1'b0;   // R502
+      bd_ahead <= '0; fill_frame <= 1'b0; disp_frame <= 1'b0;   // R502
       bd_clear_req <= '0; dbg_bands <= 16'd0;
       dbg_ready_cyc <= 16'd0; dbg_bands_done <= 8'd0;
       dbg_bands_painted <= 8'd0; painted_this <= 8'd0;   // R452
@@ -883,7 +896,7 @@ module m2_raster3d #(
         C_FILLW: if (fl_quad_done) cst <= C_FILL;
         C_DONE: begin
           bd_ready[fill_buf] <= 1'b1;
-          bd_frame[fill_buf] <= fill_frame;              // R502
+          bd_ahead[fill_buf] <= (fill_frame != disp_frame);   // R502/R503
           dbg_bands  <= dbg_bands + 16'd1;
           if (!(&bands_this)) bands_this <= bands_this + 8'd1;
           // R485: dbg_pixels is gone. It summed the five bands' 32-bit pixel
@@ -906,7 +919,7 @@ module m2_raster3d #(
       // A buffer is free again once the beam has passed its band.
       for (int i = 0; i < NBUF; i++)
         // R502: a band built for the NEXT frame is not this one's to free.
-        if (bd_ready[i] && (bd_frame[i] == disp_frame)
+        if (bd_ready[i] && !bd_ahead[i]
                         && (scan_band_f > bd_band[i])) bd_ready[i] <= 1'b0;
 
       // Latched and restarted together, so the reported pair always describes
@@ -922,9 +935,14 @@ module m2_raster3d #(
         // holding the frame just finished are freed here -- that is what
         // `bd_ready <= '0` used to do for every buffer indiscriminately, head
         // start included.
+        // R503: keep exactly the bands built AHEAD and free the rest -- with
+        // no wrap nothing is ahead and every buffer is freed, which is what
+        // the old unconditional clear did.
         disp_frame <= fill_frame;
-        for (int i = 0; i < NBUF; i++)
-          if (bd_frame[i] != fill_frame) bd_ready[i] <= 1'b0;
+        for (int i = 0; i < NBUF; i++) begin
+          bd_ready[i] <= bd_ahead[i];
+          bd_ahead[i] <= 1'b0;
+        end
         fill_band <= '0;
         dbg_bands_done <= bands_this; bands_this <= 8'd0;
         dbg_bands_painted <= painted_this; painted_this <= 8'd0;   // R452
