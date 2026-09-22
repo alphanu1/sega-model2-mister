@@ -309,6 +309,20 @@ module m2_span_tex #(
   wire                res_last  = sh_last[PIPE_D-1];
 
   logic               fq_valid;   // a texel fetch is outstanding
+  // R478: THE RETIRE STAGE. R476 computed e_col straight from the arriving
+  // texel, which put m2_texel's `hold` register, the nibble select, the
+  // adapter and scale() in ONE cycle:
+  //
+  //   m2_texel|hold[12] -> m2_span_tex|e_col[22]   9.570 ns
+  //
+  // and cost about 0.6 ns of clk_sys across three seeds. The old walk
+  // registered the texel first and coloured it the cycle after; streaming the
+  // walk removed that stage by accident. Putting it back costs a stage but not
+  // a cycle per group, because the next fetch is issued on the same edge.
+  logic               rt_valid;
+  logic [3:0]         rt_texel;
+  logic signed [31:0] rt_x;
+  logic               rt_last;
   logic signed [31:0] fq_x;
   logic               fq_last;
 
@@ -318,7 +332,11 @@ module m2_span_tex #(
   // the span. The FSM loads du_r/dv_r/doz_r on the same edge; the first advance
   // happens a cycle later, by which time they are valid.
   wire ld_span   = (st == T_IDLE) && in_valid && tex_now;
-  wire cons_take = res_valid && !fq_valid && (!e_valid || out_ready) && (st == T_RUN);
+  // R478: the retire slot only has to be free by the NEXT edge, not this one.
+  // Requiring !rt_valid outright cost a whole cycle a group (2.36 -> 3.36):
+  // the emit that frees it happens on the same edge the fetch would start.
+  wire rt_frees  = rt_valid && (!e_valid || out_ready);
+  wire cons_take = res_valid && !fq_valid && (!rt_valid || rt_frees) && (st == T_RUN);
   wire pipe_en   = !res_valid || cons_take;
   logic signed [31:0] d0_o;   logic [5:0] d0_e;   // R448: stage 1a
   logic [5:0]  d1_e;   logic [31:0] d1_m;  logic [24:0] d1_r;
@@ -435,6 +453,7 @@ module m2_span_tex #(
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       st <= T_IDLE; dv_age <= 3'd0; fq_valid <= 1'b0; fq_x <= '0; fq_last <= 1'b0;
+      rt_valid <= 1'b0; rt_texel <= 4'd0; rt_x <= '0; rt_last <= 1'b0;   // R478
       y_r <= '0; x1_r <= '0; col_r <= '0; moire_r <= 1'b0;
       du_r <= '0; dv_r <= '0; tex_r <= '0;
       doz_r <= '0; uq_r <= '0; vq_r <= '0;
@@ -484,24 +503,34 @@ module m2_span_tex #(
             to_cnt  <= '0;
           end
 
-          // Retire the outstanding fetch: emit its group.
+          // Retire the outstanding fetch into the colour stage. R478: the texel
+          // is REGISTERED here and coloured on the next edge, so the cache's
+          // output does not reach scale() combinationally.
           if (fq_valid && (tx_ack || (&to_cnt))) begin
             automatic logic [3:0] tnow = tx_ack ? tx_texel : 4'hf;
-            automatic logic       skip = tex_r[8] && (tnow == 4'hf);
-            automatic logic [7:0] iv   = {tnow, tnow};
+            rt_valid <= 1'b1;
+            rt_texel <= tnow;
+            rt_x     <= fq_x;
+            rt_last  <= fq_last;
             fq_valid <= 1'b0;
             to_cnt   <= '0;
             if (tx_ack && tnow != 4'hf && !(&dbg_texnz)) dbg_texnz <= dbg_texnz + 1'd1;
+          end
 
+          // Colour and emit the retired group.
+          if (rt_valid && (!e_valid || out_ready)) begin
+            automatic logic       skip = tex_r[8] && (rt_texel == 4'hf);
+            automatic logic [7:0] iv   = {rt_texel, rt_texel};
+            rt_valid <= 1'b0;
             e_valid <= !skip;                     // R326: transparent texel
-            e_x     <= fq_x;
-            e_x1    <= ((fq_x + 32'(PIXSTEP) - 32'sd1) > x1_r)
-                         ? x1_r : (fq_x + 32'(PIXSTEP) - 32'sd1);
+            e_x     <= rt_x;
+            e_x1    <= ((rt_x + 32'(PIXSTEP) - 32'sd1) > x1_r)
+                         ? x1_r : (rt_x + 32'(PIXSTEP) - 32'sd1);
             e_col   <= {scale(col_r[23:16], iv),
                         scale(col_r[15:8],  iv),
                         scale(col_r[7:0],   iv)};
             if (!skip && !(&dbg_texpix)) dbg_texpix <= dbg_texpix + 32'(PIXSTEP);
-            if (fq_last) st <= T_DRAIN;
+            if (rt_last) st <= T_DRAIN;
           end
         end
 
