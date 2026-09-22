@@ -514,7 +514,18 @@ module m2_span_tex #(
             rt_last  <= fq_last;
             fq_valid <= 1'b0;
             to_cnt   <= '0;
-            if (tx_ack && tnow != 4'hf && !(&dbg_texnz)) dbg_texnz <= dbg_texnz + 1'd1;
+            // R484: WRAPS, DOES NOT SATURATE. The top level reads this as a
+            // per-frame delta (`sat16d(now, prev)`, an unsigned 32-bit
+            // subtract), and that subtraction is correct across a wrap but
+            // reads ZERO forever once the counter sticks at all-ones. At
+            // 180,080 textured groups a frame this saturated after ~6.6
+            // minutes of attract mode -- so the instrument reported "no
+            // non-transparent texels" while the screen was plainly showing
+            // textures. m2_texel's and m2_char_cache's counters have always
+            // wrapped and have never had this fault. Dropping the guard also
+            // takes a 32-input AND out of the increment enable, which this
+            // module has been bitten by before (see m2_texel's dbg_misses).
+            if (tx_ack && tnow != 4'hf) dbg_texnz <= dbg_texnz + 1'd1;
           end
 
           // Colour and emit the retired group.
@@ -529,7 +540,7 @@ module m2_span_tex #(
             e_col   <= {scale(col_r[23:16], iv),
                         scale(col_r[15:8],  iv),
                         scale(col_r[7:0],   iv)};
-            if (!skip && !(&dbg_texpix)) dbg_texpix <= dbg_texpix + 32'(PIXSTEP);
+            if (!skip) dbg_texpix <= dbg_texpix + 32'(PIXSTEP);   // R484: wraps
             if (rt_last) st <= T_DRAIN;
           end
         end

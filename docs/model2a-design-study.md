@@ -19749,3 +19749,58 @@ board sat in one load/store loop for four minutes. This one was caught, and the
 thing that caught it was MAX LATENCY, not a count or a value -- 163 to 14,445.
 A bench that only checks what arrives cannot see a port that is merely very
 late. That number is worth watching on any arbiter change.
+
+---
+
+**R484 -- TWO OF THE FOUR TEXTURE COUNTERS HAVE BEEN READING ZERO SINCE ABOUT
+SEVEN MINUTES INTO EVERY SESSION, AND THE SCREEN WAS RIGHT AND THE LOG WAS
+WRONG.**
+
+`tx_p_f` (textured pixels) and `tx_n_f` (texels that were not 0xF) are reported
+as per-frame deltas. The top level computes them with
+
+```
+  function automatic logic [15:0] sat16d(input logic [31:0] now, prev);
+    d = now - prev;                       // unsigned, 32-bit
+```
+
+which is CORRECT ACROSS A WRAP and gives the right delta forever -- provided the
+counter wraps. `m2_span_tex`'s two did not:
+
+```
+  if (tx_ack && tnow != 4'hf && !(&dbg_texnz)) dbg_texnz <= dbg_texnz + 1'd1;
+  if (!skip && !(&dbg_texpix))                 dbg_texpix <= dbg_texpix + PIXSTEP;
+```
+
+The `!(&...)` guards stick each counter at all-ones, after which every delta is
+zero. `dbg_texpix` peaks at 180,080 a frame, so 2^32 arrives in roughly
+
+```
+  4,294,967,296 / 180,080 / 60  ~=  398 s  ~=  6.6 minutes
+```
+
+of attract mode. The board is routinely watched for longer than that. So the
+instrument reported "no non-transparent texels" and "no textured pixels" while
+the picture plainly showed textures, and that reading was taken at face value.
+
+WHAT MAKES THIS WORTH AN ENTRY rather than a one-line fix is that the same
+codebase already had it right twice. `m2_texel`'s `dbg_hits`/`dbg_misses` and
+all three of `m2_char_cache`'s counters wrap freely and have never had this
+fault -- the hit-rate figure of 73.2% was trustworthy the whole time while the
+two numbers beside it were not. A saturating counter and a wrapping counter are
+indistinguishable in simulation, in lint, and for the first six minutes on
+hardware.
+
+THE RULE: a counter that is read as a DELTA must wrap. Saturation is only
+correct for a counter that is read as a TOTAL, and there are none of those on
+this wire. Dropping the guards also removes a 32-input AND from each increment
+enable, which this module has been bitten by before -- see m2_texel's own note
+at `dbg_misses`, where instrumentation was on the critical path.
+
+MEASURED alongside: only 819 `dbg`-named registers survive into the fitted
+netlist, against 147 debug signals wired at the top level carrying ~2,900 bits.
+112 of those 147 reach nothing at all and Quartus has already deleted them --
+`r3d_pixels`, `geo_polys`, `snd_insns`, `cpu_dbg_pc` and `tgp_retires` all query
+back as zero registers post-fit. So DELETING DEAD DEBUG SOURCE BUYS NO AREA; it
+is hygiene. The area is in the live instrument: `m2_dbg_stream` plus its UART is
+393 ALM measured, and the surviving counters are perhaps 400-500 more.
