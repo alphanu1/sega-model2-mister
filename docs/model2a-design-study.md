@@ -20970,3 +20970,44 @@ the longest-dwelt one its own header describes ("dbg_hot is the state this unit
 spent longest in since the last frame_start, and dbg_hotcyc is how long"). It
 has been reporting 0 on the wire for as long as it has existed. After R484,
 R486, R487, R494 and the NBUF default, that is six.
+
+---
+
+**R511 -- R510 REVERTED. THE SPIKE SAID +15 MHz AND THE REAL DESIGN GOT 3.5 ns
+WORSE. A ONE-HOT ENCODED BACK TO AN INDEX IS NOT THE SAME AS AN INDEX.**
+
+R510 replaced the FP pool's `rr_pick` with a registered mask, as R498 did for
+the SDRAM arbiter. Spike at NC=3: Fmax 53.15 -> 68.10, 4.13 ns. The real design
+at NC=4:
+
+```
+  before   m2_geo_xform|sum_bank -> fp_add|sA_sticky    -0.515
+  after    m2_geo_xform|a_comp[1] -> fp_add|sA_sticky   -4.017      s214
+                                                        -3.973      s216
+```
+
+WHY IT WAS WRONG, and it is not the same as R498. The arbiter's winner feeds a
+STATE DECISION, so a one-hot is the natural form and R498 could delete the
+encoder outright. The pool's winner feeds an OPERAND MUX -- `add_a[add_win]` --
+so R510 computed a one-hot and then encoded it BACK to an index to index that
+array. `rr_pick` produced the index in a single scan. The "optimisation" added
+a priority encoder to the path it was meant to shorten.
+
+DRIVING THE MUX FROM THE ONE-HOT DIRECTLY fixes the structure -- AND-OR across
+the clients, encoder only for the pointer update and the grant, which are
+registered -- and measures Fmax 61.92 for **+165 ALM**, three 32-bit AND-OR
+trees for mul, add and div. At 98.5% full that area costs more than 2.66 ns
+buys, and the first version had just demonstrated that this module's spike does
+not predict its in-design behaviour.
+
+THE SPIKE ALSO RAN THE WRONG CONFIGURATION: NC defaults to 3 and m2_geometry
+instantiates with 4. That is the NBUF fault of R508 again -- a module default
+that does not track its only instantiation -- and it is the second time in two
+days a spike has measured a size the design does not build.
+
+WHAT THIS LEAVES. s210 -- R498+R506+R507+R508, no R490 -- has clk_mem +0.204
+and clk_sys +0.227, both met, and draws 24 bands of 48. R490 adds about 100 ALM
+and every build carrying it is negative on both clocks. The choice is real and
+it is not a timing bug to be fixed: 25-49% more horizon bands, or the margin.
+Reducing R490's own cost is the way through, not shortening paths elsewhere to
+pay for it.
