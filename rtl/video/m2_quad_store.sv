@@ -43,27 +43,8 @@
 `timescale 1ns/1ps
 
 module m2_quad_store #(
-  // R514: 2048 -> 1024, TO BUY BAND BUFFERS.
-  //
-  // This store is 149 M10K of the 553 on the device -- three times the texel
-  // cache, and eighteen band buffers' worth. The band count is what the
-  // picture is short of: R504 established that the fill is at the right rate
-  // and the wrong phase, R506 stopped the lag carrying between frames and put
-  // 24 bands of 48 on screen, and the buffers are what bound how much lateness
-  // can be absorbed before a band is lost. NBUF is at six because M10K ran out
-  // at 550 of 553, not because six is enough.
-  //
-  // Halving the store frees about 75 blocks -- NINE more buffers.
-  //
-  // WHAT IT RISKS, stated because it is a real trade and not a free win: a
-  // frame needing more than 1024 quads loses the ones past it, and geometry
-  // disappears. Model 1 records the same decision going the other way -- "the
-  // attract pit stop needs 2,671 for its frame 2500 and at 2,048 the
-  // grandstand at the end of the list fell off" -- but that is Model 1's
-  // scene, and this core's own dbg_quads has read in the hundreds. The screen
-  // says which immediately: missing objects, not missing bands.
-  parameter int unsigned NQ     = 1024,      // quads held
-  parameter int unsigned IW     = 10,        // ceil(log2(NQ))
+  parameter int unsigned NQ     = 2048,      // quads held
+  parameter int unsigned IW     = 11,        // ceil(log2(NQ))
   // THE BAND GEOMETRY IS A PARAMETER, not three hardcoded constants.
   //
   // It was written for six 64-row bands: a 6-bit mask, a 3-bit band select, and

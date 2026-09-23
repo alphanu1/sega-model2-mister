@@ -5617,7 +5617,7 @@ wire [SDR_AW:1] tex_m2_addr;
 wire        tex_m2_ack  = p2_tex & p_ack[2];
 wire [63:0] tex_m2_data = p_dout[2];
 
-m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(12),
+m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6),
               .TWO_CLOCKS(1'b0), .TEX_AW(SDR_AW)) u_raster3d (
 	// R318: clk_mem carries m2_texel, which runs at 100 MHz inside this module.
 	.clk(clk_sys), .clk_mem(clk_mem), .rst_n(mem_rst_n),
