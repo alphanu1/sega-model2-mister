@@ -21094,3 +21094,48 @@ about to be replaced -- and it only looked harmless because at NBUF=6 hardly
 any band is ever ahead. THE BUFFERS ARE WORTH HAVING; the quad store is not
 where to get them from. The remaining candidates are m2_char_cache at 35 and
 the 64-block tilemap RAM, neither yet examined for what it actually needs.
+
+---
+
+**R516 -- NO DEPTH BETWEEN 1024 AND 2048 SAVES A SINGLE M10K, AND THE
+AHEAD-KEEPING GOES ANYWAY BECAUSE IT MAKES THE PICTURE ALTERNATE.**
+
+**The store cannot be shrunk usefully.** Measured, three depths:
+
+```
+  NQ=2048   149 M10K
+  NQ=1536   149 M10K
+  NQ=1280   149 M10K
+```
+
+Identical. M10K is 10,240 bits with fixed depth configurations -- 1024x10,
+2048x5, 512x20 -- so an array deeper than 1024 takes a 2048-deep allocation
+whatever its declared size. EVERY VALUE FROM 1025 TO 2048 COSTS THE SAME. Only
+crossing to 1024 saves, and R515 measured the board's peak at 1,408 quads. The
+quad store is closed as a source of memory.
+
+**Nor is the glyph cache, on the evidence.** 4,096 lines for 35 blocks, and the
+board reports a median hit rate of 86.4% with 1,436 misses a frame. Halving it
+roughly doubles those, and each miss is an SDRAM fetch contending with the
+texel fetches the fill is waiting on -- buying band buffers with 3D bandwidth.
+
+**What is free is deleting R502/R503.** Ahead-keeping makes the picture
+ALTERNATE between a frame of fresh bands and a frame of stale ones, because
+bands built ahead come from the display list that is about to be replaced:
+
+```
+                      HEAVY=64                    HEAVY=96
+  with     15238 15074 15238 15074 15074    10487 10200 10487 10200
+  without  15238 15238 15238 15238 15238    10487 10487 10487 10487
+```
+
+It always holds the BETTER of the two values instead of oscillating, and it
+deletes logic rather than adding it. At NBUF=12 the same removal was worth 79%
+(R514); at six it is worth stability, which is what the screen shows as flicker.
+
+A TRAP IN THE REMOVAL, caught by the bench and worth recording: the regex that
+deleted R503's frame_start block also took `disp_frame <= fill_frame` with it.
+R506's re-phase guard tests `fill_frame == disp_frame`, so without that update
+the guard never releases and the picture degraded frame by frame -- 15238,
+12655, 12163 -- instead of holding. fill_frame and disp_frame STAY; only
+bd_ahead goes.
