@@ -72,9 +72,29 @@ int main(int argc, char **argv) {
   d->rst_n = 1; tick();
 
   // One frame's list: a column of quads down the screen, one per band.
+  //
+  // R506: AND OPTIONALLY A ROAD. Every quad here is identical, so every band
+  // costs the same and the fill is either comfortably ahead of the beam or
+  // uniformly too slow for it. THE BOARD IS IN NEITHER STATE: it completes 51
+  // band-fills a frame -- which a uniformly slow fill cannot do -- and still
+  // shows two to five bands, because its cost is NOT uniform. The top of a
+  // Daytona frame is sky and mountains and is cheap; the road across the lower
+  // half is heavily textured and each of those bands overruns its band-time.
+  // The fill loses its lead there and, at 8% average margin, never gets it
+  // back inside the frame.
+  //
+  // M2_R3D_HEAVY puts that variance in: bands in the lower half get that many
+  // quads instead of one. Without it this bench cannot reproduce the fault it
+  // is meant to be testing, which is why every band-handshake change this
+  // session passed it and failed on hardware.
+  static const int HEAVY = std::getenv("M2_R3D_HEAVY")
+                         ? std::atoi(std::getenv("M2_R3D_HEAVY")) : 1;
   auto push_list = [&](int frame_no) {
     d->frame_start = 0;
-    for (int b = 0; b < SCR_H / 16; b++) {
+    const int NB = SCR_H / 16;
+    for (int b = 0; b < NB; b++) {
+     const int reps = (b >= NB/2) ? HEAVY : 1;
+     for (int r = 0; r < reps; r++) {
       // R220: the store may be holding a finished list; wait for it.
       { int g = 0; d->q_valid = 0; d->eval(); while (!d->q_ready && g++ < 100000) tick(); }
       d->q_valid = 1;
@@ -95,8 +115,9 @@ int main(int argc, char **argv) {
       } else {
         d->q_tex = 0;
       }
-      d->q_end = (b == SCR_H / 16 - 1);
+      d->q_end = (b == NB - 1) && (r == reps - 1);
       tick();
+     }
     }
     d->q_valid = 0; d->q_end = 0;
   };

@@ -20806,3 +20806,57 @@ that can hold the board's OWN regime, which neither TPL setting reproduces: a
 fill fast enough to complete 51 bands and still out of phase. That needs
 VARIANCE in band cost -- cheap sky bands and expensive road bands, as the game
 has -- and the bench's quads are uniform.
+
+---
+
+**R506 -- THE FILL RE-PHASES INSTEAD OF CARRYING ITS LAG. THE PICTURE STOPS
+COLLAPSING AFTER THE FIRST FRAME.**
+
+Three conditions had to be right, and each wrong one looked like the idea being
+wrong rather than the condition:
+
+  * `scan_band_f > fill_band`, incrementing by one -- crawls forward and stops
+    ON the beam's band, finishes it after the beam has gone, skips again.
+    861 pixels against 8,912.
+  * `scan_band_f >= fill_band` -- also fires when the fill is on the beam's OWN
+    band, which still has eight lines to run and would have landed. Erratic.
+  * the jump with no frame guard -- after band 47 the fill builds the NEXT
+    frame's head start while the beam sits at 47, so `47 > 0` fires, the jump
+    lands back on 0, and it fires again. THE FILL DOES NOTHING FOR THE REST OF
+    THE FRAME: 10824, 902, 902, 10824, 902.
+
+Right: strictly behind, jump in one step to the band AFTER the beam's, and only
+while the fill is still on the frame being displayed (`fill_frame ==
+disp_frame`, the flag R503 added).
+
+MEASURED. The healthy case is untouched and the late cases stop degrading:
+
+```
+  healthy     base 10824 10701 10824 10702 10701
+              R506 10824 10701 10824 10702 10701     identical, 0 fails
+
+  TPL=150     identical both ways
+
+  TPL=130     base 2370  480  480  464  464
+              R506 2956 2956 2956 2859 2859
+
+  TPL=110     base  500  160  160  144  144
+              R506  600  600  600  540  540
+
+  HEAVY=16    base 6437  861 6191  861  902          total 15,252
+              R506 6519  861 6519  861 6519          total 21,279   +40%
+```
+
+THE SHAPE OF THE BASELINE IS THE WHOLE POINT. It starts well and collapses
+after the first frame -- 2370 to 464 -- and never comes back. That is the lag
+accumulating exactly as R504 derived: the fill loses its lead on the expensive
+bands and, at 8% average margin, needs 62 bands to recover five in a frame that
+is 48 long. R506 does not make it faster; it stops the deficit carrying over.
+
+AND R506 IS ONLY TESTABLE BECAUSE OF THE BENCH WORK. `M2_R3D_HEAVY` gives the
+lower bands sixteen quads where the upper get one, which is the first time this
+bench has reproduced the board's actual signature -- `bands_done` 41 of 48 with
+861 pixels on screen, a fill completing nearly every band and showing almost
+none. Uniform quads gave only two states, comfortably-ahead or uniformly-slow,
+and the board is in neither. Every band-handshake change this session passed
+against uniform quads and failed on hardware.

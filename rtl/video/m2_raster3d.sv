@@ -873,7 +873,57 @@ module m2_raster3d #(
         // sample equal to the beam's own band would present a buffer being
         // cleared. Model 1 found the same class on its beam-band index
         // (a1d9192). Eight cycles of settle covers the two-flop crossing.
-        C_IDLE: if (dvalid && !bd_ready[fill_buf] && bd_settled[fill_buf]) begin
+        // R505: DO NOT BUILD A BAND THE BEAM HAS ALREADY PASSED. RE-PHASE.
+        //
+        // The fill completes 51 band-fills a frame and two to five reach the
+        // screen: it is at the right RATE and the wrong PHASE, finishing band
+        // N just after the beam has gone by, so the release clears bd_ready
+        // within a cycle of C_DONE setting it and the band is never shown
+        // (R504). Grinding on in band order keeps it exactly that far behind
+        // for the whole frame, because the average margin is only 8% -- 0.92
+        // band-times a band -- which needs 62 bands to recover five and the
+        // frame is 48.
+        //
+        // Skipped, the fill re-synchronises within a few bands and every band
+        // after that lands. The skipped ones are not a loss: they could not
+        // have been displayed, which is the whole point.
+        //
+        // R489 TRIED THIS AND WAS REVERTED, on tb_m2_raster3d reporting "the
+        // top band painted nothing". That was the BENCH: it pulsed frame_start
+        // with scan_y still on the last visible line, so the DUT saw the beam
+        // at band 47 while the fill reset to band 0, and the comparison fired
+        // for that tick and threw band 0 away. On the board frame_start is the
+        // start of vblank, scan_y is past SCR_H and scan_band_rel is clamped to
+        // zero, so it reads 0 > 0 and does not fire. R505 fixes the bench to be
+        // blank-first as the board is, which is what its own comment always
+        // claimed it was.
+        // AT OR BEHIND, NOT JUST BEHIND. `>` skips until the fill lands ON the
+        // beam's own band -- it then spends a band-time building the band the
+        // beam is already crossing, the beam moves past while it works, and it
+        // skips again. It chases the beam and finishes nothing: 861 pixels
+        // against the 8,912 of not skipping at all, at TPL=150. `>=` leaves it
+        // one band AHEAD, which is the least that can actually be displayed.
+        // STRICTLY BEHIND, AND JUMP STRAIGHT TO ONE AHEAD.
+        //
+        // `>=` also fired when the fill was on the beam's OWN band, which can
+        // still be displayed -- the beam is only entering it and has eight
+        // lines to go -- so it threw away bands that would have landed and the
+        // output went erratic in the healthy case. `>` alone crawls forward one
+        // band a cycle and stops ON the beam, which is the same trap one band
+        // later: 861 pixels against 8,912.
+        //
+        // Strictly behind, jumped in one step to the band after the beam's.
+        // AND NOT ONCE THE FILL HAS WRAPPED. After band 47 the fill is
+        // building the NEXT frame's head start while the beam is still at 47,
+        // so `47 > 0` fires, the jump lands back on 0, and it fires again --
+        // the fill does nothing at all for the rest of the frame, which is the
+        // erratic healthy case (10824, 902, 902, 10824, 902). fill_frame says
+        // which frame the fill is working on, so the skip applies only while
+        // it is still on the one being displayed.
+        C_IDLE: if (dvalid && (fill_frame == disp_frame)
+                           && (scan_band_f > fill_band)) begin
+          fill_band <= (scan_band_f == BW'(NBANDS-1)) ? '0 : scan_band_f + BW'(1);
+        end else if (dvalid && !bd_ready[fill_buf] && bd_settled[fill_buf]) begin
           bd_y0[fill_buf]   <= 16'sd0 + 16'(fill_band) * 16'(BAND_H);
           bd_band[fill_buf] <= fill_band;
           bd_clear_req[fill_buf] <= 1'b1;
