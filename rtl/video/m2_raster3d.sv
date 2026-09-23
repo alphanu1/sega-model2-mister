@@ -41,7 +41,12 @@ module m2_raster3d #(
   //
   // Two more, not three: a buffer is 8 M10K and 25 are free, so 6 leaves 9 in
   // hand where 7 would leave 1 and not fit.
-  parameter int unsigned NBUF   = 4,
+  // R508: THE MODULE DEFAULT IS THE BENCH'S VALUE. tb_m2_raster3d instantiates
+  // this module directly, so it has been testing FOUR buffers while Model2.sv
+  // overrides to five (R456 records the same trap the other way round: R454
+  // changed this default and the instantiation ignored it). Tracking the
+  // override so the bench measures what the design builds.
+  parameter int unsigned NBUF   = 6,
 
   // ARE clk AND scan_clk ACTUALLY DIFFERENT CLOCKS?
   //

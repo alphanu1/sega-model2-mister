@@ -2313,17 +2313,43 @@ localparam logic [SDR_AW:1] SND_SCAN_LO   = SDR_AW'(32'h0800000);
 localparam logic [SDR_AW:1] SND_SCAN_HI   = SDR_AW'(32'h1600000);
 localparam logic [SDR_AW:1] SND_SCAN_STEP = SDR_AW'(32'h0008000);   // 64 KB
 
-typedef enum logic [1:0] { SC_IDLE, SC_REQ, SC_WAIT, SC_DONE } scan_t;
+// R507: SC_CMP added -- three bits now, and the unused codes must not latch.
+typedef enum logic [2:0] { SC_IDLE, SC_REQ, SC_WAIT, SC_CMP, SC_DONE } scan_t;
 scan_t          sc_st;
 logic [SDR_AW:1] sc_addr, snd_base;
 logic            sc_req, snd_found;
 logic [31:0]     sc_first;      // what the first candidate held, for the log
 
+// R507: THE SIGNATURE IS COMPARED FROM A REGISTER, NOT FROM THE BUS.
+//
+// `p_ack[5] -> sc_addr[16..25]` was the worst clk_sys path in the design at
+// -1.473 ns, and TEN of the twelve worst were it. The arm did a 64-bit
+// signature compare, a 26-bit range compare and the enable of a 26-bit adder
+// in the cycle the acknowledge arrived.
+//
+// THIS IS A BOOT-TIME ROM SCAN. It sweeps 64 KB-aligned candidates for the
+// 68000's reset vector, finds one, and sits in SC_DONE for the rest of time.
+// Between two updates of sc_addr there is a full SDRAM transaction -- request,
+// wait, acknowledge -- so nothing here needed to be in one cycle, and the cost
+// was being paid by every frame the machine ever renders.
+//
+// Latched on the acknowledge and compared the cycle after. One extra cycle per
+// candidate on a scan that runs once at power-on.
+logic [63:0] sc_dat;
+logic        sc_dv;
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+	if (!mem_rst_n)          begin sc_dat <= '0; sc_dv <= 1'b0; end
+	else begin
+		sc_dv <= (sc_st == SC_WAIT) && p_ack[5];
+		if ((sc_st == SC_WAIT) && p_ack[5]) sc_dat <= p_dout[5];
+	end
+end
+
 // The swapped view of the burst, which is what the 68000 would see.
-wire [15:0] sc_w0 = {p_dout[5][ 7: 0], p_dout[5][15: 8]};
-wire [15:0] sc_w1 = {p_dout[5][23:16], p_dout[5][31:24]};
-wire [15:0] sc_w2 = {p_dout[5][39:32], p_dout[5][47:40]};
-wire [15:0] sc_w3 = {p_dout[5][55:48], p_dout[5][63:56]};
+wire [15:0] sc_w0 = {sc_dat[ 7: 0], sc_dat[15: 8]};
+wire [15:0] sc_w1 = {sc_dat[23:16], sc_dat[31:24]};
+wire [15:0] sc_w2 = {sc_dat[39:32], sc_dat[47:40]};
+wire [15:0] sc_w3 = {sc_dat[55:48], sc_dat[63:56]};
 wire        sc_hit = (sc_w0 == 16'h00f0) && (sc_w1 == 16'hfffe)
                   && (sc_w2 == 16'h0000) && (sc_w3 == 16'h0300);
 
@@ -2338,8 +2364,13 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 				sc_st  <= SC_REQ;
 			end
 			SC_REQ: sc_st <= SC_WAIT;
+			// R507: the acknowledge only drops the request and moves on; the
+			// compare happens in SC_CMP off the registered word.
 			SC_WAIT: if (p_ack[5]) begin
 				sc_req <= 1'b0;
+				sc_st  <= SC_CMP;
+			end
+			SC_CMP: if (sc_dv) begin
 				if (sc_addr == SND_SCAN_LO) sc_first <= {sc_w0, sc_w1};
 				if (sc_hit) begin
 					snd_base  <= sc_addr;
@@ -5557,6 +5588,21 @@ wire [15:0] oz_d0, oz_d1, oz_d2, oz_d3;   // R334: 1/z off the quad store   // R
 //
 // A buffer is 8 M10K and 25 are free (528/553), so five leaves nine in hand.
 // Six would need 552 of 553 and not fit.
+//
+// R508: NBUF 5 -> 6, and six DOES fit now -- the build sits at 542 of 553, so
+// the sixth takes it to 550 with three in hand. R456's arithmetic was right
+// for the design it was written against.
+//
+// WHY A SIXTH IS WORTH M10K THAT CANNOT BE SPARED TWICE. Model 1 says it
+// plainly at its own NBUF: "a third buffer does not double the time a fill is
+// given -- it ABSORBS VARIANCE. The fill runs one band ahead of the one being
+// displayed, so a slow band borrows time from a fast one instead of missing
+// its slot." Our variance is the whole problem: the sky bands are cheap and
+// the road bands overrun, and R504 measured the fill's average margin at 8% --
+// enough to keep up on average and nowhere near enough to absorb a band that
+// takes half as long again. R506 stopped the resulting lag carrying from frame
+// to frame, which is what put the bands back on screen; this widens the window
+// the lag has to fit inside in the first place.
 // R482: port 2 passes to the texel cache once the boot users are finished with
 // it, and never passes back. cp_done and cal_done are the same pair the video
 // reset waits on.
@@ -5571,7 +5617,7 @@ wire [SDR_AW:1] tex_m2_addr;
 wire        tex_m2_ack  = p2_tex & p_ack[2];
 wire [63:0] tex_m2_data = p_dout[2];
 
-m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(5),
+m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6),
               .TWO_CLOCKS(1'b0), .TEX_AW(SDR_AW)) u_raster3d (
 	// R318: clk_mem carries m2_texel, which runs at 100 MHz inside this module.
 	.clk(clk_sys), .clk_mem(clk_mem), .rst_n(mem_rst_n),

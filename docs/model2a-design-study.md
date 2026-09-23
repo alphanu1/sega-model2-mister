@@ -20860,3 +20860,59 @@ bench has reproduced the board's actual signature -- `bands_done` 41 of 48 with
 none. Uniform quads gave only two states, comfortably-ahead or uniformly-slow,
 and the board is in neither. Every band-handshake change this session passed
 against uniform quads and failed on hardware.
+
+---
+
+**R507/R508 -- clk_sys's WORST PATH IS A BOOT-TIME ROM SCAN, AND THE BENCH HAS
+BEEN TESTING FOUR BAND BUFFERS WHILE THE DESIGN BUILDS FIVE.**
+
+**R507.** With clk_mem repaired (R498), clk_sys is the binding clock, and
+report_timing on s207 names it:
+
+```
+  -1.473  m2_sdram|p_ack[5] -> sc_addr[16..25]     ten of the worst twelve
+  -1.455  ascal|o_vpixq_pre -> o_vpixq             MiSTer framework, another domain
+```
+
+`sc_addr` is the SOUND ROM SCAN. It sweeps 64 KB-aligned candidates for the
+68000's reset vector signature, finds one, and sits in SC_DONE for the rest of
+time. The acknowledge arm did a 64-bit signature compare, a 26-bit range
+compare and the enable of a 26-bit adder in one cycle -- and between two
+updates of sc_addr there is a whole SDRAM transaction, so none of it needed to
+be. A scan that runs ONCE AT POWER-ON was setting the clock every frame of
+every game thereafter.
+
+Latched on the acknowledge, compared in a new SC_CMP state the cycle after.
+One extra cycle per candidate, on a scan nothing waits for. Quartus had also
+been reporting `sc_addr` as an INFERRED LATCH since before this session and it
+was read as pre-existing noise.
+
+**R508.** `tb_m2_raster3d` instantiates m2_raster3d directly, so it takes the
+MODULE DEFAULT of NBUF -- four -- while Model2.sv overrides to five. The bench
+has never tested the buffer count the design builds. R456 records the identical
+trap in the other direction: R454 changed the default and the instantiation
+ignored it, and four fits were spent on a build that was byte-identical to its
+predecessor.
+
+With the default tracking the override, the sixth buffer measures:
+
+```
+  HEAVY=16   NBUF=4   6519  861 6519  861 6519
+             NBUF=6   7421 1107 7421 1107 7421    +14% / +29%
+  HEAVY=24   NBUF=4   5822  902 ...
+             NBUF=6   6232 1312 ...
+```
+
+Six buffers is 550 M10K of 553. R456's "six would need 552 and not fit" was
+right for the design it was written against, which sat at 528.
+
+WHY IT EARNS THE BLOCKS, in Model 1's words at its own NBUF: "a third buffer
+does not double the time a fill is given -- it ABSORBS VARIANCE." Our variance
+IS the fault: cheap sky bands, road bands that overrun, and an 8% average
+margin (R504). R506 stopped the resulting lag carrying between frames -- which
+is what put the bands back on the board -- and this widens the window that lag
+has to fit inside.
+
+R506 CONFIRMED ON HARDWARE. s205: "much more bands, still missing quite a few
+but much better". First movement on this fault in weeks, and it came from
+re-phasing rather than from any of the throughput work.
