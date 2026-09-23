@@ -264,6 +264,40 @@ int main(int argc, char **argv) {
   video_frame(true, &px[5]); top_px[5] = top_hits;
 
   std::printf("  pixels painted per video frame: %ld %ld %ld %ld %ld %ld\n", px[0], px[1], px[2], px[3], px[4], px[5]);
+
+  // R519: A LONG RUN, BECAUSE THE FAULT TAKES THREE HUNDRED FRAMES.
+  //
+  // Everything above is six frames. R490 draws correctly on the board for
+  // three to five seconds -- two to three hundred frames -- and then the 3D
+  // stops for good while the CPU, the tilemap and the video carry on. Six
+  // frames cannot see that, and neither can any of the five regimes closed by
+  // R513/R517/R518: stall, degenerate spans, flat/textured mixing, a
+  // 20,000-span soak, both texel ports, cache sweeps. What is left is
+  // DURATION, and a new list every frame rather than the same one replayed.
+  //
+  // M2_R3D_FRAMES sets how many; 0 skips it so the normal run stays quick.
+  {
+    const long NF = std::getenv("M2_R3D_FRAMES")
+                  ? atol(std::getenv("M2_R3D_FRAMES")) : 0;
+    if (NF > 0) {
+      std::printf("  R519: soaking %ld frames\n", NF);
+      long dead = 0, worst_dead = 0, last = -1;
+      for (long f = 0; f < NF; f++) {
+        push_list(int(2 + f));
+        long hits = 0;
+        video_frame(true, &hits);
+        // THE FAULT IS A FRAME THAT PAINTS NOTHING AND NEVER RECOVERS. A frame
+        // may legitimately paint little while a list is mid-flight; a RUN of
+        // them is the 3D having stopped.
+        if (hits == 0) { if (++dead > worst_dead) worst_dead = dead; }
+        else dead = 0;
+        last = hits;
+      }
+      CHECK(worst_dead < 8, "the 3D stopped for %ld frames and did not recover", worst_dead);
+      std::printf("    last frame painted %ld, longest dead run %ld frames\n",
+                  last, worst_dead);
+    }
+  }
   // Within 2%: the count includes bands the beam reaches while the fill is
   // still landing them, which moves a few pixels frame to frame in this
   // bench. The fault this guards against is a frame that paints NOTHING.

@@ -260,7 +260,39 @@ module m2_span_tex #(
   // and walked from the registers.
   assign in_ready  = idle && (tex_now || out_ready);
   assign dbg_hot    = st;          // R446: free, no counter behind it
-  assign dbg_hotcyc = 16'd0;
+
+  // R520: THE LONGEST STRETCH THIS UNIT WAS BUSY AND DID NOTHING.
+  //
+  // dbg_hotcyc has been hardwired to zero since it was declared -- its header
+  // describes a longest-dwelt-state counter that was never built, the seventh
+  // dead instrument found in this push. It is already routed to the top level
+  // and onto the UART's Z channel, so the number that actually matters costs
+  // no ports and no bandwidth.
+  //
+  // WHAT IT MEASURES AND WHY. R490 draws on the board for three to five
+  // seconds and then the 3D stops for good while the CPU and tilemap run on.
+  // That is this unit ceasing to accept: a span that never completes leaves
+  // sp_n high, in_ready never asserts again, the quad store's FIFO backs up
+  // and the fill can never finish another band. Six simulated regimes have
+  // failed to reproduce it (R513, R517, R518).
+  //
+  // A healthy unit is sometimes busy for a long time -- a texel timeout is 511
+  // cycles and a stalled band adds more -- but it always comes back. So the
+  // diagnostic is the MAXIMUM run of cycles spent busy while accepting nothing
+  // and emitting nothing. Hundreds is normal. Saturated is wedged, and the
+  // value says so without needing the frame it happened in.
+  logic [15:0] stuck_run;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      stuck_run <= 16'd0; dbg_hotcyc <= 16'd0;
+    end else begin
+      if (!busy || (in_valid && in_ready) || (out_valid && out_ready))
+        stuck_run <= 16'd0;
+      else if (!(&stuck_run))
+        stuck_run <= stuck_run + 16'd1;
+      if (stuck_run > dbg_hotcyc) dbg_hotcyc <= stuck_run;
+    end
+  end
 
   // R446: the group after this one. Stable for as long as the FSM sits in
   // T_FETCH/T_EMIT, which is what lets the pipeline below settle on it.
