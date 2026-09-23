@@ -21055,3 +21055,42 @@ WHAT SHIPS MEANWHILE. s210 -- R498, R506, R507, R508, no R490 -- has clk_mem
 +0.204 and clk_sys +0.227, both met, and draws 24 bands of 48 stably. That is
 the release candidate. R512 takes clk_sys to +1.122 and is bit-identical on
 1,968,564 checks, so it belongs in the next one regardless of R490.
+
+---
+
+**R515 -- 1024 QUADS IS NOT ENOUGH. THE BOARD SAYS 1,408 AT PEAK, AND R514 IS
+REVERTED.**
+
+R514 halved the quad store to buy band buffers, on the reasoning that the
+store's 149 M10K is eighteen buffers' worth and "this core's own dbg_quads has
+read in the hundreds". MEASURED ON THE BOARD BEFORE THAT REACHED HARDWARE:
+
+```
+  dbg_count sampled over 40 s of attract, s210
+    median   320 quads a frame
+    p95    1,232
+    MAX    1,408
+```
+
+1024 would have dropped geometry on more than one frame in twenty -- objects
+vanishing rather than bands missing, which is the worse fault and the harder
+one to attribute. The sample is 32 points of a LIVE write count, so 1,408 is a
+lower bound on the true peak.
+
+The "read in the hundreds" figure came from the same s162 capture and was the
+MEDIAN. Reading a distribution's middle and sizing a buffer by it is the same
+error as R488's single-point measurement of a two-term cost: the number was not
+wrong, it was answering a different question. A capacity is sized by the PEAK.
+
+REVERTED WHOLE -- store back to 2048, NBUF back to 6 -- rather than retuned to
+1536, because the peak is a lower bound and the margin at 1536 would be 128
+quads on a number that is not fully characterised.
+
+WHAT SURVIVES THE REVERT, and it is worth coming back for: at NBUF=12 with
+R502/R503's ahead-keeping REMOVED, the heavy-horizon case went from 15,074
+steady to 27,005 steady, +79%, with no alternation. The ahead-keeping is wrong
+for the reason R514 records -- bands built ahead come from the list that is
+about to be replaced -- and it only looked harmless because at NBUF=6 hardly
+any band is ever ahead. THE BUFFERS ARE WORTH HAVING; the quad store is not
+where to get them from. The remaining candidates are m2_char_cache at 35 and
+the 64-block tilemap RAM, neither yet examined for what it actually needs.
