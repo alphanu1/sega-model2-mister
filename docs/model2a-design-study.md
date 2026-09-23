@@ -20970,3 +20970,48 @@ the longest-dwelt one its own header describes ("dbg_hot is the state this unit
 spent longest in since the last frame_start, and dbg_hotcyc is how long"). It
 has been reporting 0 on the wire for as long as it has existed. After R484,
 R486, R487, R494 and the NBUF default, that is six.
+
+---
+
+**R510 -- R498's FIX AGAIN, IN THE FP POOL. 4.13 ns OFF clk_sys's WORST PATH
+FOR TWELVE ALM.**
+
+With clk_mem repaired (R498) and the ROM scan off the path (R507), s213's worst
+clk_sys path is
+
+```
+  m2_geo_xform|sum_bank -> m2_fp_pool|fp_add|sA_sticky      -0.515
+```
+
+and the chain is the SDRAM arbiter's, in a different module:
+
+```
+  req -> rr_pick()  a priority walk whose loop index carries a `% NC`
+      -> win        a rotated position resolved combinationally
+      -> add_a[win] an NC:1 mux of 32-bit operands
+      -> the adder's first stage
+```
+
+all in the cycle a client asserts. Written as a registered MASK -- the clients
+at or above the pointer, held beside it -- the pointer leaves the path, the two
+scans run side by side instead of end to end, the winner comes out ONE-HOT in
+real client order, and the modulo goes with the rotation.
+
+```
+  before   Fmax 53.15   ALM 1,122      18.81 ns
+  after    Fmax 68.10   ALM 1,134      14.68 ns      -4.13 ns, +12 ALM
+```
+
+THAT IS THE SAME TRANSFORMATION AS R498 AND IT IS THE THIRD TIME THIS PATTERN
+HAS BEEN THE CRITICAL PATH -- m2_sdram's arbiter, m2_span_tex's `tex_p[fq_p]`
+into an M10K address port (R496), and now the FP pool. A rotating pointer
+resolved combinationally and then USED TO SELECT is the shape to look for.
+Worth checking the remaining arbiters against it before they surface one at a
+time: m2_quad_store, m2_char_cache and the geometry's own client muxes.
+
+THE FIX IS ALSO ALMOST FREE IN AREA, which none of the throughput work has
+been. R498 was -7 ALM, R507 was a handful, this is +12.
+
+Verified on the benches that drive the pool: m2_geo_xform 7,813 checks,
+m2_geo_clip 2,003, m2_geo_engine 68, m2_geometry 42, all clean, and the
+round-robin ORDER is unchanged by construction.

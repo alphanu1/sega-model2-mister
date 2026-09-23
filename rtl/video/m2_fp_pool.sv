@@ -94,6 +94,8 @@ module m2_fp_pool #(
   // ------------------------------------------------------------- arbiters
   // Rotating pointer: the client after the last winner gets first refusal.
   logic [CW-1:0] mul_rr, add_rr, div_rr;
+  // R510: clients at or above the pointer, registered beside it.
+  logic [NC-1:0] mul_mask, add_mask, div_mask;
 
   // The winner is chosen with a plain priority chain over a ROTATED request
   // vector, walked from the last index down so the lowest rotated index wins.
@@ -114,9 +116,43 @@ module m2_fp_pool #(
     rr_pick = found ? best : first;
   endfunction
 
-  wire [CW-1:0] mul_win = rr_pick(mul_req, mul_rr);
-  wire [CW-1:0] add_win = rr_pick(add_req, add_rr);
-  wire [CW-1:0] div_win = rr_pick(div_req, div_rr);
+  // R510: THE SAME FIX AS R498, ON THE SAME SHAPE OF PATH.
+  //
+  //   m2_geo_xform|sum_bank -> m2_fp_pool|fp_add|sA_sticky    -0.515 on clk_sys
+  //
+  // was the worst clk_sys path in s213, and the chain is
+  //
+  //   req -> rr_pick (a priority walk with a `% NC` in the loop index)
+  //       -> win -> add_a[win], an NC:1 mux of 32-bit operands
+  //       -> the adder's first stage
+  //
+  // all in the cycle the client asserts -- the SDRAM arbiter's old
+  // rotate-encode-mux chain in a different module.
+  //
+  // Said as a MASK registered beside the pointer, the two scans run side by
+  // side and the pointer leaves the path: `*_mask` holds the clients at or
+  // above the next-to-serve position, the winner is the lowest set bit of
+  // (req & mask) or of req when that is empty, and it is ONE-HOT in real
+  // client order -- no rotation to undo, so the modulo goes with it.
+  //
+  // Round-robin ORDER is unchanged, which is what the geometry benches check.
+  function automatic logic [NC-1:0] low1(input logic [NC-1:0] m);
+    low1 = m & (~m + {{(NC-1){1'b0}}, 1'b1});
+  endfunction
+  function automatic logic [CW-1:0] enc1(input logic [NC-1:0] m);
+    enc1 = '0;
+    for (int e = NC-1; e >= 0; e--) if (m[e]) enc1 = CW'(e);
+  endfunction
+
+  wire [NC-1:0] mul_hi  = mul_req & mul_mask;
+  wire [NC-1:0] add_hi  = add_req & add_mask;
+  wire [NC-1:0] div_hi  = div_req & div_mask;
+  wire [NC-1:0] mul_sel = (|mul_hi) ? low1(mul_hi) : low1(mul_req);
+  wire [NC-1:0] add_sel = (|add_hi) ? low1(add_hi) : low1(add_req);
+  wire [NC-1:0] div_sel = (|div_hi) ? low1(div_hi) : low1(div_req);
+  wire [CW-1:0] mul_win = enc1(mul_sel);
+  wire [CW-1:0] add_win = enc1(add_sel);
+  wire [CW-1:0] div_win = enc1(div_sel);
 
   wire mul_any = |mul_req;
   wire add_any = |add_req;
@@ -194,6 +230,7 @@ module m2_fp_pool #(
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       mul_rr <= '0; add_rr <= '0; div_rr <= '0;
+      mul_mask <= '1; add_mask <= '1; div_mask <= '1;      // R510
       mtag_v <= '0; atag_v <= '0; dtag <= '0;
       div_outstanding <= 1'b0;
       for (int i = 0; i < 4; i++) begin mtag[i] <= '0; atag[i] <= '0; end
@@ -209,13 +246,23 @@ module m2_fp_pool #(
       atag[0] <= add_win;
 
       // Rotate past the winner so the next client gets first refusal.
-      if (mul_any) mul_rr <= (mul_win == CW'(NC-1)) ? '0 : mul_win + CW'(1);
-      if (add_any) add_rr <= (add_win == CW'(NC-1)) ? '0 : add_win + CW'(1);
+      if (mul_any) begin
+        mul_rr   <= (mul_win == CW'(NC-1)) ? '0 : mul_win + CW'(1);
+        mul_mask <= (mul_win == CW'(NC-1)) ? {NC{1'b1}}
+                                           : ({NC{1'b1}} << (mul_win + CW'(1)));
+      end
+      if (add_any) begin
+        add_rr   <= (add_win == CW'(NC-1)) ? '0 : add_win + CW'(1);
+        add_mask <= (add_win == CW'(NC-1)) ? {NC{1'b1}}
+                                           : ({NC{1'b1}} << (add_win + CW'(1)));
+      end
 
       if (div_issue) begin
         dtag            <= div_win;
         div_outstanding <= 1'b1;
         div_rr          <= (div_win == CW'(NC-1)) ? '0 : div_win + CW'(1);
+        div_mask        <= (div_win == CW'(NC-1)) ? {NC{1'b1}}       // R510
+                                                  : ({NC{1'b1}} << (div_win + CW'(1)));
       end else if (d_valid && div_outstanding) begin
         div_outstanding <= 1'b0;
       end
