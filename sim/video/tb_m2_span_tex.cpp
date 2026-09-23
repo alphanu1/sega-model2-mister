@@ -597,6 +597,66 @@ int main(int argc, char **argv) {
                 sent, got.size(), cyc);
   }
 
+  // 2e. R513: A SOAK, BECAUSE THE FAULT IS RARE AND PERMANENT.
+  //
+  // The board runs for three to five seconds -- two to three hundred frames --
+  // drawing bands, and then the 3D stops for good while the CPU, the tilemap
+  // and the video carry on. That is this unit wedging: if a span is accepted
+  // and never completes, sp_n never returns, sp_room stays false, in_ready
+  // never asserts again, the quad store's FIFO backs up and the fill can never
+  // finish another band. Nothing else in the machine notices.
+  //
+  // A rare, absorbing state cannot be found by 60 spans or 120. This drives
+  // tens of thousands with every knob moving -- length, flat/textured,
+  // consumer stall, texel miss -- and watches for the only symptom that
+  // matters: a stretch during which nothing is accepted and nothing comes out.
+  {
+    std::printf("test: R513, soak -- the unit must never stop accepting\n");
+    uint32_t rng = 0x13577531u;
+    auto roll = [&](uint32_t n) { rng = rng*1664525u + 1013904223u; return (rng >> 8) % n; };
+    const int STEP = 2;
+    const long NSPAN = std::getenv("M2_SOAK") ? atol(std::getenv("M2_SOAK")) : 20000;
+    got.clear(); force_texel = -1;
+    long sent = 0, stall_run = 0, worst_stall = 0;
+    long guard = 0;
+    while (sent < NSPAN && guard < 40000000) {
+      ++guard;
+      const int x0 = 4 + int(roll(60));
+      const int w  = int(roll(6));
+      const int x1 = (w == 0) ? x0 : (w == 1) ? x0 - STEP
+                                              : x0 + STEP * int(roll(30) + 1);
+      const bool tex = (roll(4) != 0);
+      d->in_valid = 1;
+      d->in_y = 11 + int(roll(60)); d->in_x0 = x0; d->in_x1 = x1;
+      d->in_col = 0xffffff; d->in_moire = (roll(8) == 0);
+      d->in_u = int32_t(roll(64) << 16); d->in_v = int32_t(roll(64) << 16);
+      d->in_dudx = int32_t(roll(0x200)); d->in_dvdx = int32_t(roll(0x200));
+      d->in_ooz = 0x1000000 + int32_t(roll(0x3000000));
+      d->in_doozdx = -int32_t(roll(30000));
+      d->in_tex = tex ? 0x000001 : 0; d->in_tex_en = tex;
+      d->out_ready = (roll(5) != 0) ? 1 : 0;
+      d->eval();
+      const bool taken = d->in_valid && d->in_ready;
+      const size_t before = got.size();
+      tick(!d->out_ready);
+      if (taken) { ++sent; stall_run = 0; }
+      else if (got.size() == before) {
+        if (++stall_run > worst_stall) worst_stall = stall_run;
+      } else stall_run = 0;
+    }
+    d->in_valid = 0;
+    for (int i = 0; i < 2000; ++i) tick();
+
+    // THE WEDGE IS THE CHECK. A healthy unit is sometimes busy for a long time
+    // -- a texel timeout is 511 cycles and a stalled consumer adds more -- but
+    // it always comes back. Ten thousand cycles with neither an acceptance nor
+    // an output is not busy, it is stuck.
+    ck("never stopped accepting for 10k cycles", worst_stall < 10000, 1);
+    ck("the soak actually ran", sent >= NSPAN, 1);
+    std::printf("    %ld spans, %zu outputs, longest quiet stretch %ld cycles\n",
+                sent, got.size(), worst_stall);
+  }
+
   // 2b. A FLAT SPAN WHEN THE CONSUMER IS NOT READY. It must be HELD, not
   //     consumed: in_ready is the band's ready, exactly as it was before this
   //     unit existed, or the fill drops a span whenever a band is busy.

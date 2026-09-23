@@ -21011,3 +21011,47 @@ and every build carrying it is negative on both clocks. The choice is real and
 it is not a timing bug to be fixed: 25-49% more horizon bands, or the margin.
 Reducing R490's own cost is the way through, not shortening paths elsewhere to
 pay for it.
+
+---
+
+**R513 -- THE SOAK CLEARS m2_span_tex, SO R490's WEDGE IS IN THE TEXEL
+HANDSHAKE -- THE ONE INTERFACE NO INTEGRATION TEST DRIVES.**
+
+s217 carries R490 with clk_sys +1.122 and clk_mem -0.173. On the board it draws
+its usual 24 bands for three to five seconds and then the 3D stops FOR GOOD,
+while the CPU runs, the tilemap scrolls and the attract sequence continues.
+That is this unit wedging and nothing else noticing: a span accepted and never
+completed leaves sp_n high, so sp_room stays false, in_ready never asserts
+again, the quad store's FIFO backs up, and the fill can never finish another
+band.
+
+A 20,000-span soak -- random lengths including degenerate, random flat/textured
+mix, random consumer stall, watching for any stretch with neither an acceptance
+nor an output -- does not reproduce it:
+
+```
+  baseline   20,000 spans, 177,526 outputs, longest quiet stretch 16 cycles
+  R490       20,000 spans, 225,967 outputs, longest quiet stretch 13 cycles
+```
+
+R490 is if anything QUIETER, and 225,967 outputs against 177,526 for the same
+spans is the overlap doing its job.
+
+SO THE FAULT NEEDS THE REAL TEXEL PATH, and that is exactly what nothing tests.
+`tb_m2_raster3d` drives no memory ports at all, so every texel fetch in it
+times out after 511 cycles -- the texture path is INERT, which is also why
+textured and untextured runs give identical pixel counts. `tb_m2_span_tex`
+answers fetches itself, in one cycle or with the R479 miss model, and never
+with m2_texel_x2 and a real cache in between. R490 changes WHEN fetches are
+issued relative to spans; the one interface it perturbs is the one no test
+exercises end to end.
+
+THAT IS THE NEXT PIECE OF WORK and it is worth more than another attempt at
+R490: give tb_m2_raster3d a texel memory model. Until then R490 goes to the
+board on hope, and it has now failed there three times in three different ways
+-- black, frozen, and this.
+
+WHAT SHIPS MEANWHILE. s210 -- R498, R506, R507, R508, no R490 -- has clk_mem
++0.204 and clk_sys +0.227, both met, and draws 24 bands of 48 stably. That is
+the release candidate. R512 takes clk_sys to +1.122 and is bit-identical on
+1,968,564 checks, so it belongs in the next one regardless of R490.
