@@ -93,15 +93,33 @@ int main(int argc, char **argv) {
     d->frame_start = 0;
     const int NB = SCR_H / 16;
     for (int b = 0; b < NB; b++) {
-     const int reps = (b >= NB/2) ? HEAVY : 1;
+     // R509: THE MIDDLE, NOT THE LOWER HALF. The board draws bands at the top
+     // AND at the bottom and misses the ones between, so the expensive bands
+     // are the MIDDLE ones -- the horizon, where the road meets the sky. That
+     // is where the geometry is most distant, so it is the most polygons and
+     // each is small, which means MANY SHORT SPANS. R488 measured a span at
+     // 8 + 2*groups cycles, so a short span is almost all fixed cost: the
+     // bands that fail are the ones with the most spans and the shortest.
+     // Modelling the load in the lower half instead put the cost where the
+     // board does not have it.
+     const int reps = (b >= NB/3 && b < 2*NB/3) ? HEAVY : 1;
      for (int r = 0; r < reps; r++) {
       // R220: the store may be holding a finished list; wait for it.
       { int g = 0; d->q_valid = 0; d->eval(); while (!d->q_ready && g++ < 100000) tick(); }
       d->q_valid = 1;
-      d->q_x0 = 100 + frame_no; d->q_y0 = b * 16 + 2;
-      d->q_x1 = 140 + frame_no; d->q_y1 = b * 16 + 2;
-      d->q_x2 = 140 + frame_no; d->q_y2 = b * 16 + 12;
-      d->q_x3 = 100 + frame_no; d->q_y3 = b * 16 + 12;
+      // R509: THE HEAVY BANDS GET NARROW QUADS, SPREAD ACROSS THE LINE.
+      //
+      // Replicating the same 40-pixel quad makes many LONG spans, and R488
+      // says a long span amortises the fixed per-span cost almost away -- so
+      // that model showed R490 worth 5% when the board's horizon is the case
+      // it was built for. Distant geometry is many SMALL polygons: short
+      // spans, where the 8-cycle pipeline refill is most of the cost.
+      const int qx = (reps > 1) ? (8 + r * 12) : (100 + frame_no);
+      const int qw = (reps > 1) ? 6 : 40;
+      d->q_x0 = qx;      d->q_y0 = b * 16 + 2;
+      d->q_x1 = qx + qw; d->q_y1 = b * 16 + 2;
+      d->q_x2 = qx + qw; d->q_y2 = b * 16 + 12;
+      d->q_x3 = qx;      d->q_y3 = b * 16 + 12;
       d->q_col = 0xFFFFFF; d->q_z = 0x3F800000; d->q_moire = 0;
       // R291: THE TEXTURED BIT, which no test has ever set. Two builds with
       // the texture path live hung the board before the game started, and the

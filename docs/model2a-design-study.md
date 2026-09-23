@@ -20916,3 +20916,57 @@ has to fit inside.
 R506 CONFIRMED ON HARDWARE. s205: "much more bands, still missing quite a few
 but much better". First movement on this fault in weeks, and it came from
 re-phasing rather than from any of the throughput work.
+
+---
+
+**R509 -- THE MISSING BANDS ARE THE HORIZON, AND THE HORIZON IS MANY SMALL
+POLYGONS. MODELLING IT AS FEWER BIG ONES HID R490's VALUE BY TEN TIMES.**
+
+The board with R506+R507+R508 draws about 24 bands of 48, and the user's
+description places them: "bands at the top and bands at the bottom, missing
+bands in the middle". NOT the lower half, which is what the bench had been
+modelling since R506.
+
+The middle of a Daytona frame is the horizon -- the road meeting the sky -- and
+that is where the geometry is most DISTANT. Distant geometry is the most
+polygons and each is the smallest, which means MANY SHORT SPANS. R488 measured
+a span at 8 + 2*groups cycles, so a short span is almost entirely the fixed
+eight-cycle refill of the divide pipeline. The bands that fail are precisely
+the bands with the most spans and the shortest ones.
+
+THE BENCH MODEL WAS WRONG TWICE AND EACH ERROR CHANGED THE ANSWER:
+
+```
+  heavy bands in the LOWER half, 24 copies of one 40-pixel quad
+      R490 worth +23%
+  heavy bands in the MIDDLE, same wide quads
+      R490 worth +5.6%          <- long spans amortise the fixed cost away
+  heavy bands in the MIDDLE, narrow 6-pixel quads, 24 of them
+      no shortfall at all       <- 24 small quads is not a load
+  heavy bands in the MIDDLE, narrow quads, 64 and 96 of them
+      HEAVY=64   15,238 -> 22,692    +49%
+      HEAVY=96   10,487 -> 13,088    +25%
+```
+
+A load model that gets the SHAPE wrong reports a number that is precisely
+wrong rather than roughly right, and 5.6% would have been read as "the span
+overlap is not worth the risk". The same change is worth half again as much
+when the geometry looks like the geometry the board is actually drawing.
+
+WHAT MADE THIS FINDABLE was a sentence from the board that no counter carries:
+which bands are missing. `dbg_bands_painted` counts them and has never said
+WHERE. That is worth more than the count, and it is one 48-bit register --
+a bit per band, set when the band is displayed -- if this comes up again.
+
+AND THE SIXTH DEAD INSTRUMENT, found looking for where the fill's time goes:
+
+```
+  assign dbg_hot    = state;   // R449: free, no counter behind it
+  assign dbg_hotcyc = 16'd0;
+```
+
+`dbg_hotcyc` is hardwired to zero and `dbg_hot` is the INSTANTANEOUS state, not
+the longest-dwelt one its own header describes ("dbg_hot is the state this unit
+spent longest in since the last frame_start, and dbg_hotcyc is how long"). It
+has been reporting 0 on the wire for as long as it has existed. After R484,
+R486, R487, R494 and the NBUF default, that is six.
