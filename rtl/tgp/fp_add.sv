@@ -114,8 +114,30 @@ module fp_add #(
 
   assign small_ext     = {small_sig, 3'b000};
   assign small_aligned = small_ext >> shamt;
+  // R512: THE STICKY MASK IS A THERMOMETER, NOT A SHIFT AND A SUBTRACT.
+  //
+  //   m2_geo_xform|sum_bank -> m2_fp_pool|fp_add|sA_sticky    -0.515 on clk_sys
+  //
+  // was the worst clk_sys path once clk_mem was repaired (R498) and the boot
+  // ROM scan was off it (R507), and sA_sticky is the endpoint.
+  // `(27'd1 << shamt) - 27'd1` builds the mask of shifted-out bits with a
+  // SECOND 27-bit barrel shifter and a 27-bit borrow chain, running beside the
+  // real one that produces small_aligned, with an AND and an OR-reduce on top
+  // -- all in the cycle the pool's operand mux delivers.
+  //
+  // The mask is just "bit i is set if i < shamt". Twenty-seven 5-bit compares
+  // against the same value, every one independent, replace the shifter and the
+  // borrow chain with a single level of logic. Bit-for-bit identical: for
+  // shamt in 0..26 the low `shamt` bits are set and the rest clear, which is
+  // what the subtract produced, and the saturated arm is untouched.
+  //
+  // Spike: Fmax 93.23 -> 98.09, 0.54 ns, +15 ALM. tb_fp_add 1,968,564 checks.
+  logic [26:0] sticky_mask;
+  always_comb
+    for (int i = 0; i < 27; i++) sticky_mask[i] = (5'(i) < shamt);
+
   assign sticky_lost   = shift_saturated ? (|small_ext)
-                                         : (|(small_ext & ((27'd1 << shamt) - 27'd1)));
+                                         : (|(small_ext & sticky_mask));
 
   logic [26:0] big_ext;
   assign big_ext = {big_sig, 3'b000};
