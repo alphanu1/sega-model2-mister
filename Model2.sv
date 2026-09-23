@@ -4283,7 +4283,7 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	      : (tps_ph == 3'd6)                  ? {r3d_fillpass, r3d_bands_painted,
 	                                             r3d_bands_done}                // R452/R455: passes : painted : completed
 	      : (tps_ph == 3'd5)                  ? {3'd0, r3d_fill_hot, r3d_walk_hot, 5'd0,
-	                                             r3d_fill_hotcyc}               // R436
+	                                             r3d_walk_hotcyc}               // R436; R521: the walk's wedge detector, not the fill's hardwired zero
 	      : {r3d_ready_cyc[15:0], r3d_bands_done[7:0], r3d_hold[7:0]}),
 	// clip_dropped read 0 on hardware and the refusal count is the number that
 	// now moves, so it takes that byte. Between them: accepted, emitted, refused
