@@ -294,7 +294,7 @@ pll pll
 	.rst(0),
 	.outclk_0(clk_mem),      // 100 MHz, the SDRAM controller alone
 	.outclk_1(clk_sys),      // 50 MHz, everything else. Exact /2 of outclk_0.
-	.outclk_2(clk_vid),      // 32 MHz (unused)
+	.outclk_2(clk_vid),      // 60 MHz, UNUSED -- the 3D clock, already in the PLL
 	.outclk_3(clk_i960),     // 25 MHz, exact /2 of clk_sys.
 	.outclk_4(clk_sdram_pin),// 100 MHz at 180 deg, straight to the device pin
 	.locked(pll_locked)

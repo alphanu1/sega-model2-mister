@@ -45,17 +45,63 @@ int main(int argc, char **argv) {
   d->clk = 0; d->clk_mem = 0; d->scan_clk = 0; d->rst_n = 0; d->frame_start = 0; d->q_valid = 0; d->q_end = 0;
   d->scan_x = 0; d->scan_y = 0;
   d->tex_m_ack = 0; d->tex_m_data = 0; d->tex_inval = 0;
+  d->tex_m2_ack = 0; d->tex_m2_data = 0;
+  // The board raises this once boot is done and never lowers it.
+  d->tex_m2_en = 1;                                        // R517
   d->tex_base0 = 0x1760000; d->tex_base1 = 0x17E0000;
   // R291: A MEMORY FOR THE TEXEL FETCH. Without one the unit times out on
   // every fetch -- 1,023 cycles a texel -- and the fill grinds to a halt,
   // which is a bench artefact and not the fault being chased. With one, this
   // bench runs the whole texture path for the first time.
-  int tex_wait = -1;
+  // R517: AND THE SECOND PORT, WHICH THIS BENCH HAS NEVER DRIVEN.
+  //
+  // R482 gave the texel cache a second SDRAM port and two MSHRs, and the board
+  // enables it (p2_tex) once the coprocessor and calibration are done. This
+  // bench left tex_m2_en low and tex_m2_ack dead, so every run here has
+  // exercised a SINGLE-PORT cache while the board runs a two-port one.
+  //
+  // That matters for R490: the span overlap changes WHEN fetches are issued
+  // relative to spans, the cache's two MSHRs change how they are served, and
+  // the interaction between them is the one thing no test has ever covered.
+  // R490 has failed on hardware three times in three different ways and passes
+  // every bench, including a 20,000-span soak (R513).
+  //
+  // THE TWO PORTS ANSWER AT DIFFERENT LATENCIES ON PURPOSE. Equal latencies
+  // let a cache return responses in issue order by accident; different ones
+  // prove it does so by construction. tb_m2_texel uses 7 against 3 for exactly
+  // this reason.
+  // R518: AND THE CACHE GETS SWEPT, because on the board it does.
+  //
+  // tex_inval has been tied to zero here for the life of this bench. The board
+  // sweeps the texel cache whenever the texture base moves -- the capture of
+  // s162 shows the count climbing about 1.7 times a second -- and a sweep
+  // drops m2_texel's `rdy` for the duration while requests are outstanding.
+  //
+  // That is the window R490 widens: with the overlap there are two spans in
+  // flight rather than one, so a sweep is far more likely to land while a
+  // fetch is outstanding. R490 works on the board for THREE TO FIVE SECONDS
+  // and then the 3D stops for good, which is the right order of magnitude for
+  // an event arriving twice a second.
+  //
+  // M2_R3D_SWEEP is the period in ticks; 0 disables it.
+  static const long SWEEP = std::getenv("M2_R3D_SWEEP")
+                          ? atol(std::getenv("M2_R3D_SWEEP")) : 0;
+  long sweep_ctr = 0;
+  int tex_wait = -1, tex2_wait = -1;
   auto tick = [&]() {
+    if (SWEEP) {
+      if (++sweep_ctr >= SWEEP) { sweep_ctr = 0; d->tex_inval = 1; }
+      else                        d->tex_inval = 0;
+    }
     if (d->tex_m_req && tex_wait < 0) tex_wait = 8;
     if (tex_wait == 0) {
       d->tex_m_ack = 1;
       d->tex_m_data = 0x0123456789abcdefULL ^ (uint64_t)d->tex_m_addr;
+    }
+    if (d->tex_m2_req && tex2_wait < 0) tex2_wait = 14;
+    if (tex2_wait == 0) {
+      d->tex_m2_ack = 1;
+      d->tex_m2_data = 0x0123456789abcdefULL ^ (uint64_t)d->tex_m2_addr;
     }
     d->eval();
     // R318: clk_mem runs at 2x clk, as it does on hardware -- m2_texel lives on
@@ -67,6 +113,8 @@ int main(int argc, char **argv) {
     d->clk_mem = 1; d->eval(); d->clk_mem = 0; d->eval();
     if (d->tex_m_ack) { d->tex_m_ack = 0; tex_wait = -1; }
     else if (tex_wait > 0) --tex_wait;
+    if (d->tex_m2_ack) { d->tex_m2_ack = 0; tex2_wait = -1; }
+    else if (tex2_wait > 0) --tex2_wait;
   };
   for (int i = 0; i < 4; i++) tick();
   d->rst_n = 1; tick();

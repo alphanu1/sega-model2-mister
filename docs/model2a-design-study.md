@@ -21139,3 +21139,48 @@ R506's re-phase guard tests `fill_frame == disp_frame`, so without that update
 the guard never releases and the picture degraded frame by frame -- 15238,
 12655, 12163 -- instead of holding. fill_frame and disp_frame STAY; only
 bd_ahead goes.
+
+---
+
+**R517/R518 -- THE INTEGRATION BENCH NOW DRIVES BOTH TEXEL PORTS AND SWEEPS THE
+CACHE. R490 STILL PASSES, SO THE WEDGE IS SOMEWHERE ELSE AGAIN.**
+
+Two more things the board does that tb_m2_raster3d never did:
+
+  * **The second texel port.** R482 gave m2_texel a second SDRAM port and two
+    MSHRs, and the board enables it after boot. This bench left tex_m2_en low
+    and tex_m2_ack dead, so every run of it has exercised a SINGLE-PORT cache
+    against a board running a two-port one. Now driven, at 14 cycles against
+    the first port's 8 -- different on purpose, because equal latencies let a
+    cache return responses in order by accident.
+  * **The sweep.** tex_inval was tied to zero for the life of the bench. The
+    board sweeps whenever the texture base moves, about 1.7 times a second on
+    the s162 capture, and a sweep drops m2_texel's `rdy` while requests are
+    outstanding -- the window R490 widens, since it keeps two spans in flight
+    rather than one. R490 survives three to five seconds on hardware, which is
+    the right order for an event arriving twice a second.
+
+NEITHER REPRODUCES IT. With both ports live and sweeps at 400, 1200 and 5000
+tick periods, R490 is stable at 22,692 pixels a frame across every load, with
+no failures, and still worth +49% at HEAVY=64 and +25% at HEAVY=96.
+
+That is five distinct regimes now closed -- consumer stall, degenerate spans,
+flat/textured interleaving, a 20,000-span soak, the second port, the sweep --
+and the fault is in none of them. What is left untested is the fill's own
+handshake under real timing, which needs tb_m2_raster3d to run the quad store
+and m2_raster_fill against a live texel path AND a beam, all at once, for long
+enough. The bench now has every piece of that except duration.
+
+**AND THE 60 MHz CLOCK IS ALREADY IN THE PLL.** outclk_2 is configured at
+60.000000 MHz and wired to `clk_vid`, which nothing uses. Model2.sv's comment
+beside it says "32 MHz (unused)" and is simply wrong -- corrected here, because
+it was read at face value and used to argue the clock raise needed PLL work
+that it does not.
+
+What a 60 MHz renderer still needs is the CROSSING, and that is the part R465
+measured as costing what the clock gained. The difference now is that R504
+established the fill is bounded by per-band TIME, so 60/50 is +20% of the band
+budget directly -- which is the same order as R490 and needs no new M10K.
+clk_i960 is 25 and 30 is NOT prepped, but the VCO must be 1200 for 60 to exist
+and 1200/40 is 30, so that is a one-line change whenever R464's `insn -> wd`
+path is shortened.
