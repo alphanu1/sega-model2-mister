@@ -21502,3 +21502,36 @@ Results: 7,203 checks pass; soaks of 200,000 spans clean with and without 26%
 texel misses (longest quiet stretch 25 and 83 cycles); back-to-back unchanged
 at 11.37 cycles a span, so none of R490's gain is spent; m2_raster3d heavy,
 20 frames, longest dead run 0.
+
+---
+
+**R536 -- R535 HOLDS ON THE BOARD; THE MIDDLE BANDS GET MEASURED BY NAME, AND
+POSTED WRITES COME BACK.**
+
+s241 (R535; clk_mem -0.401, clk_sys +0.866, hold all positive, zero SDRAM
+packing warnings): the 3D stays up. walk_stuck_max peaked at 2,172 cycles over
+150 s and always recovered, against 0xFFFF before. Ben: "looking good. but
+still missing the middle bands" -- 5 to 10 of them, always the middle.
+
+The fill's own counters disagree with the picture: bands_done >= 48 in 80-100%
+of frames. Both are true only if the middle bands complete AFTER the beam has
+passed them, or on time and empty. dbg_missed -- "the beam reached this band
+and no buffer was holding it" -- was the direct measure and was never on the
+wire (the fitter deleted it). This build streams, in 'z':
+
+  * bits 31:18  cpu_dbg_acc[31:18], the retired-instruction count (R524's
+                idea, re-placed): two captures a known time apart give the
+                board's CPI;
+  * bits 17:16  idx; bits 15:0 = missed-band map bands 16*idx..+15 for idx
+                0-2, missed scanlines last frame for idx 3.
+
+A band in the map was late; a missing band NOT in the map was on time and had
+nothing in it. The fixes for those are opposites.
+
+POSTED WRITES RETURN, because the pin fault (R534) was present in every build
+that ever tried them. The bridge change is the cpi branch's, unchanged (with
+its bench). The real-CPU harness: 15.50 -> 14.44 CPI, trace hash identical
+(c8f4312e281e040b), copy folds identical. The ~4.5 target is 7.49 board CPI
+less the 3.25 of write waiting; posting alone gets a fraction of it because a
+read behind a posted write still waits for memory on the bridge's single
+channel. Hit-under-write is the next step.

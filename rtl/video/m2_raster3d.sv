@@ -167,7 +167,11 @@ module m2_raster3d #(
   // R213: how many video frames the last list stayed on display (latched at
   // the swap), and scanlines the beam drew with no band buffer ready.
   output logic [7:0]  dbg_hold,
-  output logic [15:0] dbg_missed
+  output logic [15:0] dbg_missed,
+  // R536: WHICH bands the beam found with no buffer ready, last frame -- bit b
+  // is band b, bands past NBANDS read 0 -- and how many scanlines that was.
+  output logic [63:0] dbg_miss_map,
+  output logic [15:0] dbg_miss_lines
 );
 
   localparam int unsigned NBANDS = (SCR_H + BAND_H - 1) / BAND_H;
@@ -711,6 +715,36 @@ module m2_raster3d #(
         for (int i = 0; i < NBUF; i++)
           if (rdy_s2[i] && (band_s2[i] == scan_band)) any_rdy = 1'b1;
         if (!any_rdy) dbg_missed <= dbg_missed + 16'd1;
+      end
+    end
+  end
+
+  // R536: THE MISSED BANDS BY NAME, ONE FRAME AT A TIME.
+  //
+  // "5-10 bands always missing in the middle", and the fill's own counters say
+  // it completes 48 bands in 80-100% of frames. Both can be true only if the
+  // bands complete AFTER the beam has passed them -- or on time and empty.
+  // This says which: a band set here was not standing in any buffer when the
+  // beam started one of its lines. Latched at the first line past the picture.
+  logic [63:0] miss_cur;
+  logic [15:0] miss_lines_cur;
+  always_ff @(posedge scan_clk or negedge rst_n) begin
+    if (!rst_n) begin
+      miss_cur <= '0; miss_lines_cur <= '0; dbg_miss_map <= '0; dbg_miss_lines <= '0;
+    end else if (scan_x == 10'd0 && scan_x_d != 10'd0) begin
+      if (scan_y < 10'(SCR_H)) begin
+        automatic logic any_rdy = 1'b0;
+        for (int i = 0; i < NBUF; i++)
+          if (rdy_s2[i] && (band_s2[i] == scan_band)) any_rdy = 1'b1;
+        if (!any_rdy) begin
+          miss_cur[6'(scan_band)] <= 1'b1;
+          miss_lines_cur          <= miss_lines_cur + 16'd1;
+        end
+      end else if (scan_y == 10'(SCR_H)) begin
+        dbg_miss_map   <= miss_cur;
+        dbg_miss_lines <= miss_lines_cur;
+        miss_cur       <= '0;
+        miss_lines_cur <= '0;
       end
     end
   end

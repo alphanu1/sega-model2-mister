@@ -247,10 +247,11 @@ module m2_cpu_bridge #(
   // the standard condition for not synchronising a data bus, and it is the
   // reason this is a handshake rather than a FIFO.
   logic        req_cpu;
-  typedef enum logic [1:0] { C_IDLE, C_WAIT, C_CLR } cph_e;
+  typedef enum logic [1:0] { C_IDLE, C_WAIT, C_CLR, C_POST } cph_e;
   cph_e cph;
   logic        req_mem, ack_mem;
   logic        ack_cpu;          // ack_mem, one CPU flop later
+  logic        posted;
 
   logic        r_we;
   logic [31:0] r_addr, r_wdata;
@@ -260,6 +261,7 @@ module m2_cpu_bridge #(
   always_ff @(posedge clk_cpu or negedge rst_n_cpu) begin
     if (!rst_n_cpu) begin
       req_cpu <= 1'b0; bus_ack <= 1'b0; cph <= C_IDLE; ack_cpu <= 1'b0;
+      posted <= 1'b0;
       r_we <= 1'b0; r_addr <= 32'd0; r_wdata <= 32'd0; r_be <= 4'd0;
     end else begin
       // The same single flop in the other direction, for the same reason: one
@@ -288,7 +290,7 @@ module m2_cpu_bridge #(
           r_wdata <= bus_wdata;
           r_be    <= bus_be;
           req_cpu <= 1'b1;
-          cph     <= C_WAIT;
+          cph     <= bus_we ? C_POST : C_WAIT;
         end
         C_WAIT: if (ack_cpu) begin
           req_cpu   <= 1'b0;
@@ -297,6 +299,10 @@ module m2_cpu_bridge #(
           cph       <= C_CLR;
         end
 
+        C_POST: begin
+          if (!posted) begin posted <= 1'b1; bus_ack <= 1'b1; end
+          if (ack_cpu) begin req_cpu <= 1'b0; posted <= 1'b0; cph <= C_CLR; end
+        end
         // The fourth phase. Nothing starts until the acknowledge has gone away.
         default: if (!ack_cpu) cph <= C_IDLE;
       endcase

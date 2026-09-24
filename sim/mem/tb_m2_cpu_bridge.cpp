@@ -90,6 +90,9 @@ static void step() {
     } else if (dut->sd_req && ackhold == 0) {
       pa = dut->sd_addr; pw = dut->sd_we; pd = dut->sd_din; pb = dut->sd_be;
       pend = true;
+      if (std::getenv("M2_TRACE_SD"))
+        std::printf("      SD %s addr=%08x din=%04x be=%x\n",
+                    pw ? "WR" : "rd", pa, pd, pb);
     }
     // On-chip arrays: REGISTERED reads, as M10K is.
     dut->oc_tram_q = tram[dut->oc_addr & 0x7fff];
@@ -131,9 +134,28 @@ static bool access(bool we, uint32_t addr, uint32_t wdata, uint8_t be, uint32_t 
   for (int g = 0; g < 4000; ++g) {
     step();
     if (dut->bus_ack) {
+      if (std::getenv("M2_TRACE_SD"))
+        std::printf("      ACK %s addr=%08x after %d steps rdata=%08x\n",
+                    we ? "wr" : "RD", addr, g, dut->bus_rdata);
       if (out) *out = dut->bus_rdata;
       dut->bus_req = 0;
       for (int k = 0; k < CPU_DIV * 3; ++k) step();
+      // R522: A POSTED WRITE IS ACKNOWLEDGED AT DISPATCH, SO THE ACK NO LONGER
+      // MEANS THE DATA HAS LANDED.
+      //
+      // Several checks below read the memory MODEL directly straight after a
+      // write -- `expect("work RAM low word", sdram[...], 0xbeef)` -- which was
+      // exact while the bridge acknowledged on completion and is a race now.
+      // Ten of them failed, every one reading back zero, and the RTL was
+      // innocent: the trace shows the stores reaching memory byte-for-byte as
+      // before, just after the check had already run.
+      //
+      // The DUT still acknowledges early -- that is the point, and it is what
+      // the CPU sees. The BENCH waits, because it is inspecting the far side.
+      // The first write of the run is far slower than the rest - the trace
+      // shows 2,143 steps against 15 - so the drain is sized for that, not
+      // for the steady state.
+      if (we) for (int k = 0; k < CPU_DIV * 400; ++k) step();
       return true;
     }
   }
@@ -431,6 +453,52 @@ int main(int argc, char **argv) {
 
   std::printf("  [before boot walk] reads=%u last_addr=%08x last_dout=%08x\n",
               dut->dbg_cpu_reads, dut->dbg_last_addr, dut->dbg_last_dout);
+
+  // ---- R526: A RUN OF WRITES WITH THE REQUEST HELD ----
+  //
+  // The boot walk below covers a held request for READS. Nothing covered it for
+  // WRITES, and that is exactly what R523's posted acknowledge changes: the CPU
+  // is told the store is done at DISPATCH, and this master moves bus_addr on
+  // that acknowledge without ever dropping bus_req. Two builds of posted writes
+  // went to the board -- one black, one locked up before the first frame --
+  // while access() above, which DROPS the request after every ack, passed 127
+  // checks.
+  //
+  // The bridge's own header warns about precisely this: "it HOLDS bus_req high
+  // across a run of accesses and moves bus_addr ON THE ACK ... so 'a new
+  // request is present' is true continuously and cannot be used to separate one
+  // access from the next. Only the acknowledge can."
+  {
+    const uint32_t base = 0x00500200u;
+    const int N = 6;
+    int idx = 0;
+    bool ack_prev = false;
+    dut->bus_req = 1; dut->bus_we = 1; dut->bus_be = 0xf;
+    dut->bus_addr = base; dut->bus_wdata = 0xa000u;
+    for (int g = 0; g < 200000 && idx < N; ++g) {
+      step();
+      const bool ack_now = dut->bus_ack;
+      const bool ack_rise = ack_now && !ack_prev;
+      ack_prev = ack_now;
+      if (ack_rise) {
+        ++idx;
+        if (idx < N) {                       // move BOTH on the ack, req held
+          dut->bus_addr  = base + uint32_t(idx * 4);
+          dut->bus_wdata = 0xa000u + uint32_t(idx);
+        }
+      }
+    }
+    dut->bus_req = 0;
+    for (int k = 0; k < CPU_DIV * 400; ++k) step();
+    expect("held-request writes all acknowledged", idx, N);
+    int bad = 0;
+    for (int i = 0; i < N; ++i) {
+      const uint32_t wa = 0x20000u + (((base + uint32_t(i * 4)) & 0xfffffu) >> 1);
+      const uint16_t want = uint16_t(0xa000u + uint32_t(i));
+      if (!sdram.count(wa) || sdram[wa] != want) ++bad;
+    }
+    expect("held-request writes all landed", bad, 0);
+  }
 
   // ---- THE i960's BOOT WALK: req HELD, address changed ON THE ACK ----
   //

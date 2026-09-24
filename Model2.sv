@@ -574,6 +574,8 @@ wire  [7:0] r3d_qend_frames; // frames the geometry stage finished
 wire [15:0] r3d_collect_cyc; // R210: frame_start -> q_end, units of 16 clk_sys cycles
 wire  [7:0] r3d_hold;        // R213: frames the last list stayed on display
 wire [15:0] r3d_missed;      // R213: scanlines drawn with no band ready
+wire [63:0] r3d_miss_map;   // R536: bands the beam found not ready, last frame
+wire [15:0] r3d_miss_lines; // R536: and how many scanlines
 wire [15:0] geo_behind;      // R246: polygons entirely behind the eye, culled as the reference culls them
 wire        geo_lum_go;      // R249: one pulse per polygon handed to the clipper
 wire  [7:0] geo_lum;         // ...with its luminance
@@ -2056,37 +2058,8 @@ always_ff @(posedge clk_i960 or negedge cpu_rst_n) begin
 	end
 end
 
-// R533: WHERE THE COPY GOES WRONG, AND ON WHICH SIDE OF THE CPU.
-//
-// s239 reported 0x15E2 against the 0x14B8 the real-CPU harness computes from
-// the same ROM (which the board's zip matches, CRC for CRC) -- the CPU SENT
-// wrong data. Two questions follow, and one build answers both:
-//
-//   br_fold  -- the same fold over what the CPU READ from program ROM while
-//               the copy ran. Right here and wrong in bw_fold means the data
-//               came in correct and the CPU changed it; wrong here means the
-//               read path handed it bad data.
-//   bw_ck    -- the write fold split into sixteen 8 KB chunks (12 bits each),
-//               so the damage is placed rather than just detected.
-//
-// Both are mirrored verbatim in sim/mem/m2_cpu_real_harness.sv, which prints
-// the reference values.
-logic [15:0] br_fold;
-logic [11:0] bw_ck [16];
-always_ff @(posedge clk_i960 or negedge cpu_rst_n) begin
-	if (!cpu_rst_n) begin
-		br_fold <= 16'd0;
-		for (int i = 0; i < 16; i++) bw_ck[i] <= 12'd0;
-	end else begin
-		if (cpu_ack && !cpu_we && bw_cnt != 16'd0 && !bw_cnt[15]
-		    && cpu_addr < 32'h0002_0000)
-			br_fold <= br_fold + cpu_rdata[31:16] + cpu_rdata[15:0];
-		if (cpu_ack && cpu_we && !bw_cnt[15]
-		    && cpu_addr >= 32'h0020_0000 && cpu_addr < 32'h0022_0000)
-			bw_ck[bw_cnt[14:11]] <= bw_ck[bw_cnt[14:11]]
-			                        + cpu_wdata[27:16] + cpu_wdata[11:0];
-	end
-end
+// R533's read fold and chunk folds lived here; they found the copy wrong
+// and then right (R534/R535), and are kept in m2_cpu_real_harness.
 
 wire        cpu_tram_we, cpu_pal_we, cpu_xlat_we_b;
 wire [14:0] cpu_oc_addr;
@@ -4424,7 +4397,14 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	      : (tps_ph == 3'd4)                  ? {tx_h_f, tx_n_f}                // R275: texel hits : texels that were not 0xF
 	      : (tps_ph == 3'd5)                  ? {tx_m_f, tex_sweep}             // R294 texel misses; R310 whole-cache sweeps
 	      : (tps_ph == 3'd7)                  ? {oz_d2, oz_d3}                 // R334: 1/z of vertices 2 and 3 ('Q')
-	      : (tps_ph == 3'd6)                  ? {br_fold, ck_idx, bw_ck[ck_idx]} // R533: copy read fold : chunk : chunk write fold
+	      // R536: z carries the CPU's retired-instruction count (bits 31:18, one
+	      // step per 262,144 -- two captures a known time apart give the rate,
+	      // so the CPI work can be judged) and, a quarter per record, the
+	      // missed-band map: idx 0-2 = bands 0-15, 16-31, 32-47; idx 3 = the
+	      // scanlines missed. R533's copy folds did their job and are gone.
+	      : (tps_ph == 3'd6)                  ? {cpu_dbg_acc[31:18], ck_idx[1:0],
+	                                             (ck_idx[1:0] == 2'd3) ? r3d_miss_lines
+	                                                                   : r3d_miss_map[16*ck_idx[1:0] +: 16]}
 	      : {lum_mean_f, lum_zpc_f, wedge_slot, wedge_n[6:0], r3d_quads[11:4]}),   // R249: the frame's mean luminance and its black-polygon percentage, where the always-zero drop count and the free-running miss count were
 	.a_tag(8'h43),
 	.b_tag((wedge_have && wedge_ph == 2'd1) ? 8'h57 : (wedge_have && wedge_ph == 2'd2) ? 8'h58
@@ -5723,7 +5703,8 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6),
 	.dbg_bands_painted(r3d_bands_painted),   // R452
 	.dbg_fillpass(r3d_fillpass),             // R455
 	.dbg_late_frames(r3d_late_frames), .dbg_qend_frames(r3d_qend_frames),
-	.dbg_collect_cyc(r3d_collect_cyc), .dbg_hold(r3d_hold), .dbg_missed(r3d_missed)
+	.dbg_collect_cyc(r3d_collect_cyc), .dbg_hold(r3d_hold), .dbg_missed(r3d_missed),
+	.dbg_miss_map(r3d_miss_map), .dbg_miss_lines(r3d_miss_lines)   // R536
 );
 
 // The 3D layer sits OVER the tilemap where it painted, and shows the tilemap
