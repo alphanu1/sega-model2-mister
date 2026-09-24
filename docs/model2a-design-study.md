@@ -21535,3 +21535,61 @@ its bench). The real-CPU harness: 15.50 -> 14.44 CPI, trace hash identical
 less the 3.25 of write waiting; posting alone gets a fraction of it because a
 read behind a posted write still waits for memory on the bridge's single
 channel. Hit-under-write is the next step.
+
+---
+
+**R537 -- WHICH BANDS ARE MISSING, BY NAME: THE MIDDLE ONES ARE LATE. THE SDRAM
+PREFETCH COMES BACK FOR THEM.**
+
+s241 with R536 (clk_mem -0.878, clk_sys +0.956, hold positive, 0 packing
+warnings). Ben: "some scenes fill 48 bands but the majority are missing 5-10
+bands in the middle". The missed-band map, 21 sampled frames per band:
+
+```
+  bands  0-5    almost never late
+  bands  6-14   ~13% of frames
+  bands 15-24   16-33%          <- the horizon
+  bands 25-29   5-11%
+  bands 30-47   never
+```
+
+missed scanlines per frame: median 18, max 116, zero in 10 of 21.
+
+The middle bands are LATE -- completed after the beam passed. The fill falls
+behind on the horizon, R506 re-phases it past the beam, and it catches up on
+the cheap bottom bands. The rate sampled is below what the eye reports, so some
+of the gap may be on-time bands short of geometry; lateness is the main
+effect, and the capture says what the fill is waiting on: texels waiting for
+the SDRAM bus.
+
+Board CPU rate on this build: 2.31 M instructions/s, CPI 10.83 at 25 MHz, from
+cpu_dbg_acc over 98.6 s. NOT comparable with R524's 7.49, which came from a
+different instrument; the posted-write gain on the board needs the same counter
+on a build without them.
+
+s244 of the batch: clk_sys -6.515 on m2_geo_xform -> fp_add and clk_i960
+-2.186 on i960_regs -> wd. Unchanged paths badly placed at 98.9% ALM -- a
+congestion seed, discarded. The fill level is itself a risk now.
+
+THE SDRAM PREFETCH, AGAIN. R392 withdrew it after three board hangs "with 3D
+missing from the middle" and every instrument clean -- including "packing,
+s81: 176229 = 0". That counted the DQ packing warning. It never looked at
+176279, the sd_a warning R534 fixed, present on every build then as now. The
+prefetch was convicted during the pin fault, exactly as R490 was.
+
+Restored: b002d08's controller (prefetch without R387's fast path, with R396's
+read-return split) merged onto R409, R410, R421 and R498. Three conflicts:
+
+  * S_IDLE -- the prefetch's write port, handoff and idle bypass; R498's
+    registered round-robin mask moved into the prefetch front stage, which
+    still wrote the rr_next pointer R498 had removed.
+  * S_MISS -- R409/R410's precomputed bank_pre_ok, the prefetch's comment on
+    why the guard is now reachable.
+  * the read CAS -- the prefetch's placement of the column increment (not on
+    the last read, so it cannot fight the handoff's xfer_addr load) plus
+    R410's rd_ok clear. Taking "ours" whole left two increments.
+
+tb_m2_sdram: 1,797,835 checks, 0 fails, 0 violations, 0 tag faults; sdram128,
+x2, romload, cpu_sdram, cpu_bridge all pass. Aggregate 0.420 -> 0.476
+words/cyc (+13.3%, R391's figure); a single port unchanged. Real-CPU harness
+identical (14.44 CPI, hash c8f4312e281e040b, fold 14b8).
