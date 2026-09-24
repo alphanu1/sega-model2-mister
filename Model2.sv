@@ -1130,9 +1130,25 @@ m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(781)) u_sdram (
 	// the boot sweep's one-bit pass mask (001000, chosen CL+2) is the correct
 	// result, not a marginal one. The OSD knob existed to find this value on a
 	// board that would not calibrate; it is found, and it was the knob that
-	// diagnosed s122. The sweep still runs and still reports its mask over the
-	// UART (R399), it just no longer drives the depth.
-	.rd_lat_sel(!cal_done ? cal_sel : 3'd2),
+	// diagnosed s122. (R531: the sweep drives the depth again -- see below --
+	// and its mask is back on the UART's C channel, which it had not been since
+	// a later change took R399's slot.)
+	// R531: THE CALIBRATED DEPTH AGAIN, NOT A PIN. Every R490 build that went
+	// black on the board (s224, s234) shows the i960 TRAPPED AND HALTED before
+	// its first instruction -- IP 0x0 and 0x200840 -- so the renderer R490
+	// changed was never even reached. A CPU that dies before executing reads a
+	// bad boot record, and on this core every read goes through a capture depth
+	// that was pinned to CL+2 after the sweep measured a ONE-DEPTH window,
+	// 001000. One depth is no margin: a placement that shifts the capture by a
+	// fraction of a cycle moves the window to CL+1 or CL+3, the pin reads the
+	// neighbouring word of every burst, and the boot record comes back wrong.
+	// R490 adds area; area moves placement. That is how a renderer change kills
+	// the CPU.
+	//
+	// Where the sweep finds CL+2 -- every board this was measured on --
+	// cal_best IS 2 and nothing changes. It differs only when the window has
+	// moved, which is exactly the case the pin gets wrong.
+	.rd_lat_sel(!cal_done ? cal_sel : cal_best),
 	.sd_cke(SDRAM_CKE), .sd_cs_n(SDRAM_nCS), .sd_ras_n(SDRAM_nRAS),
 	.sd_cas_n(SDRAM_nCAS), .sd_we_n(SDRAM_nWE), .sd_ba(SDRAM_BA),
 	.sd_a(SDRAM_A), .sd_dqm({SDRAM_DQMH, SDRAM_DQML}),
@@ -1285,11 +1301,11 @@ wire [2:0] cal_scan =
   (m[0] & m[1])                      ? 3'd1 :
   m[5] ? 3'd5 : m[4] ? 3'd4 : m[3] ? 3'd3 :     // lone survivor: take it
   m[2] ? 3'd2 : m[1] ? 3'd1 : m[0] ? 3'd0 :
-  3'd4;                                         // nothing passed: CL+4, which
-                                                // is what the Kaneko16 core uses
-                                                // on THIS board at THIS clock --
-                                                // a measured value from a
-                                                // working design, not a guess
+  3'd2;                                         // R531: nothing passed -> CL+2,
+                                                // the depth R411 measured on this
+                                                // board and pinned. CL+4 was
+                                                // Kaneko16's value and R399 records
+                                                // it giving a dead core (s122).
 wire   [2:0]     cal_best = cal_scan;
 // TWELVE AND ABOVE, not twelve exactly: the states after it fill texture RAM
 // (R223) and everything that waits on calibration must stay released through
@@ -4125,7 +4141,10 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	// to the NEXT vertex, which is the shape of the board's wedges. Zero at
 	// the desk; the board has to say.
 	.a_data({cpu_trap, cpu_halted, copro_stall, copro_dbg_ctl[31],
-	         geo_pj_lost[11:0], tgp_pc[15:0]}),
+	         // R531: the SDRAM capture calibration, which R399 put here and a
+	         // later change overwrote -- the comment at the controller still
+	         // says it is reported. {cal_done, 00, pass mask[5:0], chosen[2:0]}.
+	         cal_done, 2'b00, cal_mask[5:0], cal_best[2:0], tgp_pc[15:0]}),
 	// THE i960's OWN INSTRUCTION COUNT, so the first three minutes can be
 	// diagnosed rather than described. Two readings a known time apart give the
 	// rate directly; a machine that is slow for three minutes and then is not

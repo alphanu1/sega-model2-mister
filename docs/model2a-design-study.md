@@ -21225,3 +21225,48 @@ That is the CPI lever. Posting is its first half.
 main_data ROMs (those reads return 0xFFFF and the code takes a different
 path), no interrupts and no competing traffic, and it is the cold boot spin.
 It is a baseline for A/B, not a model of the board's rate.
+
+---
+
+**R531 -- R490's BLACK SCREENS ARE THE CPU DYING AT BOOT. THE RENDERER WAS
+NEVER REACHED.**
+
+The wedge detector (R520), wired to the UART at last, reads zero on s234 --
+and so do the texel miss and sweep counts. The span walk was not wedged; it
+was never busy. The C channel says why:
+
+```
+  s234  R490  black    CPU IP 0x00000000 every sample   cpu_trap=1 cpu_halted=1
+  s224  R490  black    CPU IP 0x00200840 every sample   cpu_trap=1 cpu_halted=1
+  s210  main  works    CPU IP 0x12b0 / 0x12b8 / 0x178dc ...   running
+```
+
+The i960 traps before executing its first instruction. No display list, no
+geometry, no quads, no spans. EVERY R490 INVESTIGATION -- seven simulated
+regimes, stall and soak and sweep and both texel ports -- WAS LOOKING AT A UNIT
+THAT NEVER RECEIVED ANYTHING.
+
+WHY A RENDERER CHANGE CAN KILL THE CPU. It cannot logically. It moves
+placement. A CPU that dies before executing reads a bad boot record, and every
+read goes through an SDRAM capture depth that R411 PINNED to CL+2 after the
+boot sweep measured a pass mask of 001000 -- a one-depth window. One depth is
+no margin: a placement that shifts the capture by a fraction of a cycle moves
+the window, the pin reads the neighbouring word of every burst, and the boot
+record comes back wrong. That is invisible to internal STA -- it is pin-level
+capture -- and it moves with every seed and every area change. It also fits
+what three rules about internal slack (R491, R492, R493) could never predict.
+
+The sweep result was meant to be on the UART; the comment at the controller
+said so. It was not -- a later change had taken R399's slot.
+
+THE CHANGE, one build that diagnoses and fixes together:
+
+  * the depth is cal_best again, not a pin. Where the sweep finds CL+2 -- every
+    board this was measured on -- cal_best IS 2 and nothing changes. It differs
+    only when the window has moved, which is the case the pin gets wrong.
+    Nothing passing falls back to CL+2, the measured-good depth, not CL+4.
+  * {cal_done, mask, chosen} back on the C channel, in the 12 bits geo_pj_lost
+    held (R237's question, zero at the desk, lowest value on the wire).
+
+If a black R490 build shows a mask other than 001000, the cause is confirmed.
+If it boots with cal_best != 2, the pin was the killer.
