@@ -664,6 +664,22 @@ obj_m2_cs/Vm2_cpu_sdram_harness: rtl/io/m2_cpu_bridge.sv rtl/mem/m2_sdram.sv \
 	  --Mdir obj_m2_cs -o Vm2_cpu_sdram_harness rtl/io/m2_cpu_bridge.sv rtl/mem/m2_sdram.sv \
 	  sim/mem/sdram_model.sv sim/mem/m2_cpu_sdram_harness.sv sim/mem/tb_m2_cpu_sdram.cpp
 
+# R527: THE REAL CPU ON THE REAL MEMORY PATH. i960_top, m2_cpu_bridge and
+# m2_sdram together, running the real program ROM. Two changes to this path
+# have been correct in every bench and wrong on the board; this is the
+# composition none of them tested. Skips without ROMs, as test_i960_rom does.
+test_m2_cpu_real: obj_m2_cr/Vm2_cpu_real_harness
+	@echo "== test i960_top + m2_cpu_bridge + m2_sdram (the real CPU on the real memory path)"
+	@./obj_m2_cr/Vm2_cpu_real_harness $(TEST_ARGS)
+
+obj_m2_cr/Vm2_cpu_real_harness: $(TOP_RTL) rtl/io/m2_cpu_bridge.sv rtl/mem/m2_sdram.sv \
+	  sim/mem/sdram_model.sv sim/mem/m2_cpu_sdram_harness.sv \
+	  sim/mem/m2_cpu_real_harness.sv sim/mem/tb_m2_cpu_real.cpp
+	$(VBUILD) -Wno-fatal -Wno-PINCONNECTEMPTY --top-module m2_cpu_real_harness -CFLAGS "-O2" \
+	  --Mdir obj_m2_cr -o Vm2_cpu_real_harness $(TOP_RTL) rtl/io/m2_cpu_bridge.sv rtl/mem/m2_sdram.sv \
+	  sim/mem/sdram_model.sv sim/mem/m2_cpu_sdram_harness.sv \
+	  sim/mem/m2_cpu_real_harness.sv sim/mem/tb_m2_cpu_real.cpp
+
 # Real ROM execution. P1 exit criterion 3, and the only test here whose input
 # this project did not write. Skips with a message when the set is absent -- a
 # missing ROM is not a broken build, and NO ROM BYTE ENTERS THE REPOSITORY.
