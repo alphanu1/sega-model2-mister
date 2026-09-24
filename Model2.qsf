@@ -665,6 +665,21 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_video_timing.sv
 set_global_assignment -name QIP_FILE rtl/pll/pll.qip
 set_global_assignment -name SDC_FILE Model2.sdc
 set_global_assignment -name SYSTEMVERILOG_FILE Model2.sv
+# R534: NINE ADDRESS BITS WERE NEVER IN THEIR PINS, ON ANY SEED.
+#
+# SDRAM_A[0-4] and [6-9] fail to pack on every build, good or bad:
+#   Warning (176279): Can't pack register node "sd_a[0]" into I/O pin
+#     "SDRAM_A[0]". The node cannot simultaneously use clear and load signals.
+# m2_sdram's single-bank precharge writes `sd_a <= 13'h000`, which synthesis
+# turns into a SYNCHRONOUS CLEAR on every bit that is otherwise loaded with
+# address data; an I/O register has one or the other. So those nine bits leave
+# from fabric registers, their clock-to-pad delay moves with placement, and the
+# interface is not timed (SDRAM_CLK_pin falls outside Model2.sdc's clock group,
+# so every path to and from it is a false path). A late bit is a wrong address:
+# wrong data, only on some seeds, invisible to STA and to simulation.
+# Model 1 reached the same cause and named this assignment as the remaining
+# route (tools/model1-ref docs/findings.md, 2026-08-18); it was not tried there.
+set_instance_assignment -name ALLOW_SYNCH_CTRL_USAGE OFF -to "emu:emu|m2_sdram:u_sdram|sd_a[*]"
 # SDRAM I/O REGISTERS ARE THE FRAMEWORK'S, NOT OURS (R404).
 # sys/sys.tcl lines 95-97 already set FAST_OUTPUT_REGISTER on SDRAM_*,
 # FAST_OUTPUT_ENABLE_REGISTER and FAST_INPUT_REGISTER on SDRAM_DQ[*]. This file
