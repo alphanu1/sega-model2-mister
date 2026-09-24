@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <vector>
+#include <deque>
 
 static Vm2_span_tex *d;
 // THE BENCH MUST RUN THE PIXSTEP THE CORE SHIPS. This file hardcoded STEP = 2
@@ -54,6 +55,15 @@ static int texel_of(uint32_t u, uint32_t v) {
   return int(((u >> 8) + (v >> 8)) & 0xf);
 }
 
+// R539: the fetches the unit has issued and not yet taken, in order.
+struct TReq { uint32_t u, v; long ready_at; };
+static std::deque<TReq> tq;
+static bool tex_dead = false;        // the server never answers
+static long take_without_ack = 0;
+// R539: acceptance as the clock edge saw it -- after tick() has set this
+// cycle's texel inputs. in_ready depends on tx_rdy through ld_over, so a
+// test that samples it before tick() reads last cycle's (R494's trap again).
+static bool last_in_taken = false;
 static void tick(bool stall = false) {
   ++ticks_done;
   d->out_ready = stall ? 0 : 1;
@@ -70,21 +80,33 @@ static void tick(bool stall = false) {
   // 50 MHz.
   static const int miss_pct = std::getenv("M2_MISS_PCT") ? atoi(std::getenv("M2_MISS_PCT")) : 0;
   static const int miss_cyc = std::getenv("M2_MISS_CYC") ? atoi(std::getenv("M2_MISS_CYC")) : 14;
+  // R539: AN IN-ORDER SERVER, AS m2_texel_x2 IS. Issues are taken while a
+  // credit is free (four, as the adapter's K); each answers after a hit or
+  // miss latency, never before the one ahead of it; the unit consumes the
+  // head with tx_take. HIT_LAT is the adapter's round trip in clk_sys cycles.
+  static const int hit_lat = std::getenv("M2_HIT_LAT") ? atoi(std::getenv("M2_HIT_LAT")) : 3;
   static uint32_t tex_rng = 99991;
-  static int      tex_wait = -1;
-  if (d->tx_req) {
-    if (tex_wait < 0) {                       // a new fetch: decide hit or miss
-      tex_rng = tex_rng * 1103515245u + 12345u;
-      tex_wait = (int)((tex_rng >> 16) % 100) < miss_pct ? miss_cyc : 0;
-    }
-    if (tex_wait > 0) { --tex_wait; d->tx_ack = 0; }
-    else              { d->tx_ack = 1; d->tx_texel = texel_of(d->tx_u, d->tx_v); tex_wait = -1; }
-  } else { d->tx_ack = 0; tex_wait = -1; }
+  const bool head_ready = !tq.empty() && tq.front().ready_at <= ticks_done && !tex_dead;
+  d->tx_rdy   = tq.size() < 4;
+  d->tx_ack   = head_ready;
+  d->tx_texel = head_ready ? texel_of(tq.front().u, tq.front().v) : 0;
   d->eval();
   if (d->out_valid && d->out_ready)
     got.push_back({int(d->out_y), int(d->out_x0), int(d->out_x1), d->out_col});
+  last_in_taken = d->in_valid && d->in_ready;
+  const bool issue = d->tx_req && d->tx_rdy, take = d->tx_take && d->tx_ack;
+  const uint32_t iu = d->tx_u, iv = d->tx_v;
+  if (take && !d->tx_ack) ++take_without_ack;
   d->clk = 0; d->eval();
   d->clk = 1; d->eval();
+  if (take) tq.pop_front();
+  if (issue) {
+    tex_rng = tex_rng * 1103515245u + 12345u;
+    const long lat = (int)((tex_rng >> 16) % 100) < miss_pct ? miss_cyc : hit_lat;
+    long at = ticks_done + lat;
+    if (!tq.empty() && tq.back().ready_at > at) at = tq.back().ready_at;
+    tq.push_back({iu, iv, at});
+  }
 }
 
 int main(int argc, char **argv) {
@@ -453,7 +475,7 @@ int main(int argc, char **argv) {
       bool stall = stall_pct && (int((stall_rng >> 16) % 100) < stall_pct);
       d->out_ready = stall ? 0 : 1;
       d->eval();
-      bool taken = d->in_valid && d->in_ready;
+      bool taken = false;   // R539: set from tick(), below
       // THE CONSUMER STALLS, because the real one does. m2_raster_band
       // drops span_ready for the whole time it is painting a group, and the
       // R490 overlap was tested with out_ready tied high for every cycle --
@@ -461,6 +483,7 @@ int main(int argc, char **argv) {
       // when the output backs up cannot be caught by a bench that never backs
       // it up.
       tick(stall);
+      taken = last_in_taken;
       if (taken) ++next;
       if (next >= sp.size() && long(got.size()) >= want_groups) break;
     }
@@ -549,9 +572,10 @@ int main(int argc, char **argv) {
       d->in_tex = q.tex ? 0x000001 : 0x000000; d->in_tex_en = q.tex ? 1 : 0;
       d->out_ready = (roll(4) != 0) ? 1 : 0;
       d->eval();
-      bool taken = d->in_valid && d->in_ready;
+      bool taken = false;   // R539: set from tick(), below
       size_t before = got.size();
       tick(!d->out_ready);
+      taken = last_in_taken;
       // ONLY TEXTURED SPANS MAKE IT BUSY. A flat span is passed through as
       // wires in the cycle it is accepted, so counting its groups as work in
       // flight makes the check fail against known-good RTL -- which it did,
@@ -628,9 +652,10 @@ int main(int argc, char **argv) {
       if (holding) {
         d->out_ready = (roll(5) != 0) ? 1 : 0;
         d->eval();
-        const bool taken = d->in_ready;
+        bool taken = false;   // R539: set from tick(), below
         const size_t before = got.size();
         tick(!d->out_ready);
+        taken = last_in_taken;
         if (taken) { ++sent; stall_run = 0; holding = false; }
         else if (got.size() == before) {
           if (++stall_run > worst_stall) worst_stall = stall_run;
@@ -657,9 +682,10 @@ int main(int argc, char **argv) {
       d->in_tex = tex ? (trans ? 0x000101 : 0x000001) : 0; d->in_tex_en = tex;
       d->out_ready = (roll(5) != 0) ? 1 : 0;
       d->eval();
-      const bool taken = d->in_valid && d->in_ready;
+      bool taken = false;   // R539: set from tick(), below
       const size_t before = got.size();
       tick(!d->out_ready);
+      taken = last_in_taken;
       if (taken) { ++sent; stall_run = 0; }
       else {
         holding = true;
@@ -721,27 +747,34 @@ int main(int argc, char **argv) {
     ck("stalled: in order, none repeated", ordered, 1);
   }
 
-  // 4. A TEXEL FETCH THAT NEVER ANSWERS. m2_texel goes deaf while it sweeps
-  //    its tags, and this walk is inside the band fill: a wait here is a band
-  //    that never completes and a picture that stops.
+  // 4. A SLOW TEXEL ANSWER. R539: "a fetch that never answers" is no longer
+  //    this unit's to survive -- m2_texel_x2 answers a request the cache will
+  //    not take (0xF, in order), and m2_texel answers every one it does. What
+  //    this unit must do is wait, in order, however long the answer takes.
   {
-    got.clear();
-    d->in_valid = 1; d->in_y = 40; d->in_x0 = 2; d->in_x1 = 3;
+    got.clear(); force_texel = 0x3;
+    d->in_valid = 1; d->in_y = 40; d->in_x0 = 2; d->in_x1 = 2 + 3 * 4;
     d->in_col = 0xffffff; d->in_u = 0; d->in_v = 0;
     d->in_dudx = 0; d->in_dvdx = 0;
     d->in_tex = 0x000001; d->in_tex_en = 1;
     d->in_ooz = 1 << 30; d->in_doozdx = 0;   // R339
+    tex_dead = true;
     tick();
     d->in_valid = 0;
-    // The memory is gone: answer nothing at all.
-    for (int i = 0; i < 4000 && got.empty(); ++i) {
-      d->out_ready = 1;
-      if (d->out_valid) got.push_back({int(d->out_y), int(d->out_x0), int(d->out_x1), d->out_col});
-      d->eval();
-      d->clk = 0; d->eval(); d->clk = 1; d->eval();
-    }
-    ck("a dead texel fetch does not stop the band", long(got.size()) > 0, 1);
-    if (!got.empty()) ck("and the pixel takes 0xF", got[0].col, 0xffffffu);
+    for (int i = 0; i < 600; ++i) tick();
+    ck("nothing emitted while no answer comes", long(got.size()), 0);
+    ck("the unit stays busy meanwhile", d->busy, 1);
+    tex_dead = false;
+    for (int i = 0; i < 200 && d->busy; ++i) tick();
+    // The step is whatever this build's PIXSTEP is: read it off the first two.
+    const int step = got.size() > 1 ? got[1].x0 - got[0].x0 : 1;
+    ck("every group once the answers come", long(got.size()), (12 / step) + 1);
+    bool ord = step > 0;
+    for (size_t i = 0; i < got.size(); ++i)
+      if (got[i].x0 != 2 + int(i) * step || got[i].col != 0x333333) ord = false;
+    ck("in order, each with its own texel", ord, 1);
+    ck("never took an answer that was not there", take_without_ack, 0);
+    force_texel = -1;
   }
 
   std::printf("m2_span_tex: checks=%ld fails=%ld\n", checks, fails);

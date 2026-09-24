@@ -211,6 +211,7 @@ module m2_raster3d #(
   logic [23:0] qo_tex;
   // R275: the texel fetch's wires, declared here because two modules share them.
   logic        tex_req, tex_ack;
+  logic        tex_rdy, tex_take;   // R539: a credit is free / the walk takes an answer
   logic [31:0] tex_state;
   logic [19:0] tex_u, tex_v;
   logic [3:0]  tex_texel;
@@ -436,7 +437,7 @@ module m2_raster3d #(
   // tb_m2_span_tex now runs the SAME value as this instantiation (R389). It
   // used to prove PIXSTEP 2 while this said 8, which is how R323's
   // texture-step bug shipped.
-  m2_span_tex #(.PIXSTEP(4)) u_spantex (
+  m2_span_tex #(.PIXSTEP(4), .TXK(4)) u_spantex (
     .clk(clk), .rst_n(rst_n),
     .in_valid(sq_qv), .in_ready(sq_rdy), .busy(spantex_busy),
     // m2_span_tex still carries these as 32; the fill and the queue are what
@@ -450,8 +451,8 @@ module m2_raster3d #(
     .out_valid(tx_span_valid), .out_ready(tx_span_ready),
     .out_y(tx_span_y), .out_x0(tx_span_x0), .out_x1(tx_span_x1),
     .out_col(tx_span_col), .out_moire(tx_span_moire),
-    .tx_req(tex_req), .tx_ack(tex_ack), .tx_tex(tex_state),
-    .tx_u(tex_u), .tx_v(tex_v), .tx_texel(tex_texel),
+    .tx_req(tex_req), .tx_rdy(tex_rdy), .tx_ack(tex_ack), .tx_tex(tex_state),
+    .tx_u(tex_u), .tx_v(tex_v), .tx_texel(tex_texel), .tx_take(tex_take),   // R539
     .dbg_texpix(dbg_texpix), .dbg_texnz(dbg_texnz),
     .dbg_hot(dbg_walk_hot), .dbg_hotcyc(dbg_walk_hotcyc)   // R436
   );
@@ -487,10 +488,11 @@ module m2_raster3d #(
   logic [19:0] txf_u, txf_v;
   logic [3:0]  txf_texel;
 
-  m2_texel_x2 u_texel_x2 (
-    .clk_fast(clk_mem), .rst_n(rst_n),
-    .s_req(tex_req), .s_ack(tex_ack), .s_tex(tex_state),
-    .s_u(tex_u), .s_v(tex_v), .s_texel(tex_texel),
+  // R539: up to four fetches in flight; K must equal m2_span_tex's TXK.
+  m2_texel_x2 #(.K(4)) u_texel_x2 (
+    .clk_slow(clk), .clk_fast(clk_mem), .rst_n(rst_n),
+    .s_req(tex_req), .s_rdy(tex_rdy), .s_ack(tex_ack), .s_tex(tex_state),
+    .s_u(tex_u), .s_v(tex_v), .s_texel(tex_texel), .s_take(tex_take),
     .f_req(txf_req), .f_rdy(txf_rdy), .f_ack(txf_ack), .f_tex(txf_tex),
     .f_u(txf_u), .f_v(txf_v), .f_texel(txf_texel)
   );

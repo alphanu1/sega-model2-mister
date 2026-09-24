@@ -51,7 +51,9 @@ module m2_span_tex #(
   // costs, and on this screen it is barely visible -- Daytona's textures are
   // magnified far more often than minified, so adjacent pixels usually share a
   // texel anyway. Set to 1 to fetch per pixel.
-  parameter int unsigned PIXSTEP = 2
+  parameter int unsigned PIXSTEP = 2,
+  // R539: texel fetches in flight; must equal m2_texel_x2's K.
+  parameter int unsigned TXK = 4
 ) (
   input  logic               clk,
   input  logic               rst_n,
@@ -85,12 +87,16 @@ module m2_span_tex #(
   output logic [23:0]        out_col,
   output logic               out_moire,
 
-  // ---- the texel fetch
+  // ---- the texel fetch. R539: ISSUED, NOT HELD. tx_req is a one-cycle issue
+  // with its payload, taken whenever tx_rdy; answers come back in issue order
+  // on tx_ack/tx_texel and are consumed with tx_take. Up to TXK in flight.
   output logic               tx_req,
+  input  logic               tx_rdy,
   input  logic               tx_ack,
   output logic [31:0]        tx_tex,
   output logic [19:0]        tx_u, tx_v,
   input  logic [3:0]         tx_texel,
+  output logic               tx_take,
 
   output logic [31:0]        dbg_texpix,      // textured pixels emitted
   // TEXELS THAT ARE NOT 0xF, which is the question "did the game upload its
@@ -135,9 +141,7 @@ module m2_span_tex #(
   logic signed [31:0] du_r, dv_r;
   // R339: 1/z walks the span exactly as u and v do.
   logic signed [31:0] doz_r;
-  // The divided coordinates, in the same quarter-texel.16 the affine path used,
-  // so to_tx() and everything downstream are unchanged.
-  logic signed [31:0] uq_r, vq_r;
+  // R539: uq_r/vq_r are gone -- the fetch takes d4_u/d4_v with its issue.
   // R433: the Newton step and the coordinate multiply, split across cycles.
   // R446: THE DIVIDE MOVES BESIDE THE FETCH INSTEAD OF IN FRONT OF IT.
   //
@@ -192,7 +196,8 @@ module m2_span_tex #(
   // this walk is inside the band fill -- a wait here is a band that never
   // completes and a picture that stops. On expiry the texel is taken as 0xF,
   // which is what unwritten memory reads anyway.
-  logic [8:0]         to_cnt;
+  // R539: to_cnt is gone. A fetch the cache cannot take is answered by
+  // m2_texel_x2 (0xF, in order), which is where the timeout can keep order.
 
   // The stored coordinate is quarter-texels with sixteen fractional bits; the
   // fetch wants texels with eight, which is ten bits to the right. Negative
@@ -221,12 +226,6 @@ module m2_span_tex #(
   //
   // The select is resolved when the fetch is ISSUED and held in one register,
   // so the cache sees exactly what it saw before R490 -- a register.
-  logic [23:0] tex_q;
-  assign tx_tex = {8'd0, tex_q};
-  // R339: the DIVIDED coordinates, not u/z and v/z themselves.
-  assign tx_u   = to_tx(uq_r);
-  assign tx_v   = to_tx(vq_r);
-  assign tx_req = fq_valid;   // R476
 
   // The texel as an intensity: 0x0 -> 0, 0xF -> 0xFF, evenly spaced.
   // R476: the emit computes its own intensity from the texel that has just
@@ -392,7 +391,14 @@ module m2_span_tex #(
   wire                res_last  = sh_last[PIPE_D-1];
   wire                res_p     = sh_p[PIPE_D-1];
 
-  logic               fq_valid;   // a texel fetch is outstanding
+  // R539: the fetches in flight, in issue order -- each one's pixel x, its
+  // span's last-group flag and its parameter set. Answers arrive in the same
+  // order, so the head of this queue is always the answer's owner.
+  localparam int unsigned OW = $clog2(TXK) + 1;
+  logic signed [31:0] of_x    [TXK];
+  logic               of_last [TXK];
+  logic               of_p    [TXK];
+  logic [OW-1:0]      of_wp, of_rp;
   // R478: THE RETIRE STAGE. R476 computed e_col straight from the arriving
   // texel, which put m2_texel's `hold` register, the nibble select, the
   // adapter and scale() in ONE cycle:
@@ -407,9 +413,7 @@ module m2_span_tex #(
   logic [3:0]         rt_texel;
   logic signed [31:0] rt_x;
   logic               rt_last;
-  logic signed [31:0] fq_x;
-  logic               fq_last;
-  logic               fq_p, rt_p, e_p;   // R490
+  logic               rt_p, e_p;   // R490
 
   // Take a result when there is one, no fetch is outstanding, and the emit
   // slot will be free. The pipeline runs whenever the output is not being held.
@@ -429,7 +433,15 @@ module m2_span_tex #(
   // Requiring !rt_valid outright cost a whole cycle a group (2.36 -> 3.36):
   // the emit that frees it happens on the same edge the fetch would start.
   wire rt_frees  = rt_valid && (!e_valid || out_ready);
-  wire cons_take = res_valid && !fq_valid && (!rt_valid || rt_frees) && (st == T_RUN);
+  // R539: a result is issued as a fetch whenever a credit is free -- no longer
+  // only when the previous fetch has come back. The retire slot is not
+  // reserved here; the answer waits in the adapter until it is free.
+  wire of_room   = ((of_wp - of_rp) != OW'(TXK));
+  wire cons_take = res_valid && tx_rdy && of_room && (st == T_RUN);
+  // An answer moves into the retire stage when that stage is empty or
+  // emptying this cycle.
+  wire rt_take   = tx_ack && (of_wp != of_rp) && (!rt_valid || rt_frees) && (st == T_RUN);
+  assign tx_take = rt_take;
   wire pipe_en   = !res_valid || cons_take;
   logic signed [31:0] d0_o;   logic [5:0] d0_e;   // R448: stage 1a
   logic [5:0]  d1_e;   logic [31:0] d1_m;  logic [24:0] d1_r;
@@ -443,6 +455,15 @@ module m2_span_tex #(
   // with the wrong pixel's depth, which is the whole fault this change exists
   // to avoid introducing.
   logic signed [31:0] u_h1, v_h1, u_h2, v_h2, u_h3, v_h3, u_h4, v_h4;
+
+  // R539: the register R496 asked for now lives in m2_texel_x2, which loads
+  // each request into f_tex/f_u/f_v before the cache's adders see it. Here the
+  // payload goes straight into the adapter's request queue with the issue.
+  assign tx_tex = {8'd0, tex_p[res_p]};
+  // R339: the DIVIDED coordinates, not u/z and v/z themselves.
+  assign tx_u   = to_tx(d4_u);
+  assign tx_v   = to_tx(d4_v);
+  assign tx_req = cons_take;
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -570,19 +591,18 @@ module m2_span_tex #(
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      st <= T_IDLE; dv_age <= 3'd0; fq_valid <= 1'b0; fq_x <= '0; fq_last <= 1'b0;
+      st <= T_IDLE; dv_age <= 3'd0; of_wp <= '0; of_rp <= '0;   // R539
       rt_valid <= 1'b0; rt_texel <= 4'd0; rt_x <= '0; rt_last <= 1'b0;   // R478
       for (int k = 0; k < 2; k++) begin
         y_p[k] <= '0; x1_p[k] <= '0; col_p[k] <= '0;
         moire_p[k] <= 1'b0; tex_p[k] <= '0;
       end
       sp_iss <= 1'b0; sp_out <= 1'b0; sp_n <= 2'd0; e_last <= 1'b0;   // R490
-      fq_p <= 1'b0; rt_p <= 1'b0; e_p <= 1'b0;                        // R490
-      tex_q <= '0;                                                    // R496
+      rt_p <= 1'b0; e_p <= 1'b0;                                      // R490
       du_r <= '0; dv_r <= '0;
-      doz_r <= '0; uq_r <= '0; vq_r <= '0;
+      doz_r <= '0;
       // R433
-      e_valid <= 1'b0; e_col <= '0; e_x <= '0; e_x1 <= '0; to_cnt <= '0;
+      e_valid <= 1'b0; e_col <= '0; e_x <= '0; e_x1 <= '0;
       dbg_texpix <= '0; dbg_texnz <= '0;
     end else begin
       if (e_valid && out_ready) e_valid <= 1'b0;
@@ -634,8 +654,6 @@ module m2_span_tex #(
       case (st)
         T_IDLE: if (ld_cold) begin
           dv_age  <= 3'd0;
-          fq_valid <= 1'b0;
-          to_cnt  <= '0;
           st      <= T_RUN;
         end
 
@@ -647,51 +665,35 @@ module m2_span_tex #(
         // fills, and after that a result is standing at the output every cycle
         // the consumer can take one.
         T_RUN: begin
-          to_cnt <= to_cnt + 1'd1;
-
-          // Take the next result and start its fetch.
+          // R539: issue. The result standing at the pipeline's output goes to
+          // the adapter as a fetch (tx_req = cons_take, payload combinational
+          // from d4_u/d4_v) and its pixel joins the in-flight queue.
           if (cons_take) begin
-            uq_r   <= d4_u;
-            vq_r   <= d4_v;
-            fq_x    <= res_x;
-            fq_last <= res_last;
-            fq_p    <= res_p;                     // R490
-            tex_q   <= tex_p[res_p];              // R496: resolved here, once
-            fq_valid <= 1'b1;
-            to_cnt  <= '0;
+            of_x   [of_wp[OW-2:0]] <= res_x;
+            of_last[of_wp[OW-2:0]] <= res_last;
+            of_p   [of_wp[OW-2:0]] <= res_p;
+            of_wp <= of_wp + 1'd1;
           end
 
-          // Retire the outstanding fetch into the colour stage. R478: the texel
-          // is REGISTERED here and coloured on the next edge, so the cache's
-          // output does not reach scale() combinationally.
-          if (fq_valid && (tx_ack || (&to_cnt))) begin
-            automatic logic [3:0] tnow = tx_ack ? tx_texel : 4'hf;
+          // R539: retire. The oldest answer joins the oldest pixel. The retire
+          // stage is loaded here and EMPTIED below -- and the two can happen
+          // on the same edge, so the emptying must not undo the loading.
+          if (rt_take) begin
             rt_valid <= 1'b1;
-            rt_texel <= tnow;
-            rt_x     <= fq_x;
-            rt_last  <= fq_last;
-            rt_p     <= fq_p;                     // R490
-            fq_valid <= 1'b0;
-            to_cnt   <= '0;
-            // R484: WRAPS, DOES NOT SATURATE. The top level reads this as a
-            // per-frame delta (`sat16d(now, prev)`, an unsigned 32-bit
-            // subtract), and that subtraction is correct across a wrap but
-            // reads ZERO forever once the counter sticks at all-ones. At
-            // 180,080 textured groups a frame this saturated after ~6.6
-            // minutes of attract mode -- so the instrument reported "no
-            // non-transparent texels" while the screen was plainly showing
-            // textures. m2_texel's and m2_char_cache's counters have always
-            // wrapped and have never had this fault. Dropping the guard also
-            // takes a 32-input AND out of the increment enable, which this
-            // module has been bitten by before (see m2_texel's dbg_misses).
-            if (tx_ack && tnow != 4'hf) dbg_texnz <= dbg_texnz + 1'd1;
+            rt_texel <= tx_texel;
+            rt_x     <= of_x   [of_rp[OW-2:0]];
+            rt_last  <= of_last[of_rp[OW-2:0]];
+            rt_p     <= of_p   [of_rp[OW-2:0]];
+            of_rp    <= of_rp + 1'd1;
+            // R484: WRAPS, DOES NOT SATURATE (see the history in git).
+            if (tx_texel != 4'hf) dbg_texnz <= dbg_texnz + 1'd1;
           end
 
           // Colour and emit the retired group.
           if (rt_valid && (!e_valid || out_ready)) begin
             automatic logic       skip = tex_p[rt_p][8] && (rt_texel == 4'hf);
             automatic logic [7:0] iv   = {rt_texel, rt_texel};
-            rt_valid <= 1'b0;
+            if (!rt_take) rt_valid <= 1'b0;       // R539: a take refills it
             e_valid <= !skip;                     // R326: transparent texel
             e_last  <= rt_last;                   // R490
             e_x     <= rt_x;

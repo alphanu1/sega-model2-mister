@@ -482,7 +482,15 @@ module m2_texel #(
         // which gates the 2:1 ratio the whole clock plan rests on.
         S_IDLE: if (ms_fill_rdy) begin
           st <= S_FILL;                  // R480: steal a cycle for the array write
-        end else if (inval_pend) begin
+        // R539: NOT UNTIL EVERY ACCEPTED REQUEST HAS BEEN ANSWERED. The flush
+        // below drops whatever the response queue holds; with one fetch in
+        // flight that cost one texel, which m2_span_tex's timeout covered.
+        // m2_texel_x2 now keeps several in flight and pairs answers with
+        // requests by ORDER, so a dropped answer would shift every texel
+        // after it. rdy is already low while inval_pend, so nothing new is
+        // taken; the queue and the misses drain (a miss that never returns is
+        // answered by its own timeout) and then the sweep runs.
+        end else if (inval_pend && rs_empty && !ms_busy[0] && !ms_busy[1]) begin
           if (!(&dbg_sweeps)) dbg_sweeps <= dbg_sweeps + 1'd1;
           sweep  <= '0;
           // R480: THE QUEUE IS FLUSHED WITH THE CACHE. Every line is about to

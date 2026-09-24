@@ -27,6 +27,7 @@ static const int SCR_W = 496, SCR_H = 384;
 // R538: BAND_H follows the build (-GBAND_H=...) through M2_R3D_BAND_H.
 static const int V_TOTAL = 424;
 static int BAND_H = 8;
+static uint64_t pix_hash = 1469598103934665603ull;   // R539: every painted pixel, all frames
 static long top_hits = 0;
 static unsigned vbl_bands = 0;
 // CLOCKS PER SCANLINE, AND IT IS A TEST PARAMETER BECAUSE THE FAULT LIVES IN
@@ -230,7 +231,12 @@ int main(int argc, char **argv) {
       for (int t = 0; t < TPL; t++) {
         d->scan_y = y; d->scan_x = (t < SCR_W) ? t : SCR_W - 1;
         tick();
-        if (count_pixels && t < SCR_W && d->scan_hit) { ++hits; if (y < BAND_H) ++top_hits; }
+        if (count_pixels && t < SCR_W && d->scan_hit) {
+          ++hits; if (y < BAND_H) ++top_hits;
+          // R539: WHAT was painted, not only how much -- a change to WHEN
+          // texels arrive must leave this identical.
+          pix_hash = (pix_hash ^ (uint64_t(y) << 40 ^ uint64_t(t) << 20 ^ d->scan_col)) * 1099511628211ull;
+        }
       }
     }
     if (painted) *painted = hits;
@@ -242,6 +248,7 @@ int main(int argc, char **argv) {
                 (int)d->dbg_late_frames, (int)d->dbg_qend_frames, (int)d->dbg_bands, (int)d->dbg_bands_painted);
     std::printf("      bands filled during vblank: %u\n", vbl_bands);
     std::printf("      R536 missed scanlines last frame: %d\n", (int)d->dbg_miss_lines);
+    std::printf("      R539 pixel hash: %016llx\n", (unsigned long long)pix_hash);
   };
 
   long px[8] = {0};

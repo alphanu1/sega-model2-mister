@@ -21626,3 +21626,49 @@ Textured, TPL=400, missed scanlines per frame (steady state):
 built to favour them. BAND_H stays 8. (A first 2-line run placed the quads
 across a 4-line boundary, which biased it against small bands; it was rerun
 with them inside one band before concluding.)
+
+---
+
+**R539 -- FOUR TEXEL FETCHES IN FLIGHT. THE SPAN WALK STOPS WAITING FOR EACH
+ANSWER.**
+
+R537 put the remaining late bands on the span walk: with texel bus waits at 4%
+(prefetch), the busy fill is in S_FS_WALK handing spans to m2_span_tex, which
+costs ~2 cycles per 4-pixel group because it held ONE fetch at a time --
+cons_take required !fq_valid. m2_texel has streamed since R474 (a request per
+cycle, in-order answers through its response queue); the limit was
+m2_texel_x2, which carried one held request across the 2:1.
+
+Ben ruled out the cheap lever: PIXSTEP 8 "makes the textures blocky and
+horrible". It stays 4.
+
+THE CHANGE:
+  * m2_texel_x2: issue/credit protocol. K=4 credits; a slow-side request queue
+    and a fast-side in-order answer queue. The cache still sees a REGISTER
+    (f_tex/f_u/f_v loaded one cycle ahead), per R496's -1.271 ns lesson.
+    A request the cache will not take (a 4,096-cycle sweep, or a dead cache)
+    with nothing older outstanding is answered HERE as 0xF after 1,023 fast
+    cycles -- m2_span_tex's own 511-cycle timeout, moved to where order can be
+    kept.
+  * m2_span_tex: issue whenever a divide result and a credit are free; an
+    in-order queue of each fetch's x / last / parameter set pairs answers with
+    pixels. The retire-stage load and the emit on the same edge are now
+    explicit (the old code let the emit's rt_valid <= 0 win, unreachable at
+    one-in-flight and reachable now).
+  * m2_texel: the sweep waits for its answer queue and miss slots to drain.
+    It used to flush answers in flight, which cost one texel under the old
+    protocol and would shift every later texel under this one.
+
+THE BENCH TRAP, THIRD TIME. The span bench sampled in_ready BEFORE tick() set
+that cycle's texel inputs; in_ready now depends on tx_rdy through ld_over, so
+with misses the test miscounted acceptances and reported extra groups with the
+wrong span's y. R494's stale-in_ready fault exactly. tick() now records
+acceptance from its final evaluation and all four sites use it.
+
+RESULTS (span bench, texel answers modelled in order, hit 3 cycles):
+  back-to-back 60 spans   no misses 11.37 -> 8.72 cycles/span
+                          26% misses 27.00 -> 15.35  (-43%)
+  soaks 200,000 spans at 0/26/50% misses, and 40% stalls + 26% misses: clean
+m2_texel 8,268 checks pass. m2_raster3d: painted-pixel hash IDENTICAL to the
+previous walk over six textured frames at two loads (261ac8b6a8610143,
+3728132ca9879503) -- the change moves when texels arrive, never which.
