@@ -125,13 +125,22 @@ static long bus_n = 0;
 // by the time the ack edge is seen the address already names the NEXT access.
 // The first version sampled at the edge and every transaction read as 0.
 static uint32_t pend_addr = 0, pend_ip = 0; static bool pend_we = false;
+static uint32_t pend_wdata = 0;
+// R532: the same fold Model2.sv computes -- first 32,768 dword writes into
+// board RAM, 16-bit sum of both halves -- so the board's value has a reference.
+static uint16_t bw_fold = 0; static uint32_t bw_cnt = 0;
 static long trace_from = -1, trace_n = 0;      // M2_TRACE_BUS=from,count
 static void note_reads() {
   // Nothing before the CPU is released: while it is held in reset during the
   // preload it still presents a request at address 0, and the first version
   // counted 102,815 of them as the loop's most-read address.
   if (!dut->cpu_rst_n) { ack_seen = dut->bus_ack; return; }
-  if (dut->bus_req && !dut->bus_ack) { pend_addr = dut->bus_addr; pend_we = dut->bus_we; pend_ip = dut->dbg_ip; }
+  if (dut->bus_req && !dut->bus_ack) { pend_addr = dut->bus_addr; pend_we = dut->bus_we; pend_ip = dut->dbg_ip; pend_wdata = dut->bus_wdata; }
+  if (dut->bus_ack && !ack_seen && pend_we && bw_cnt < 32768
+      && pend_addr >= 0x00200000u && pend_addr < 0x00220000u) {
+    bw_fold = uint16_t(bw_fold + (pend_wdata >> 16) + (pend_wdata & 0xffff));
+    ++bw_cnt;
+  }
   if (dut->bus_ack && !ack_seen) {
     if (trace_from >= 0 && bus_n >= trace_from && bus_n < trace_from + trace_n)
       std::printf("      bus#%-6ld ip=%08x %s %08x %s%08x\n", bus_n, pend_ip,
@@ -280,6 +289,7 @@ int main(int argc, char **argv) {
     for (size_t i = 0; i < rd_hist.size() && i < 6; ++i) std::printf("    rd %08x  x%ld\n", rd_hist[i].first, rd_hist[i].second);
   }
   std::printf("  bus transactions seen: %ld (trace window %ld,%ld)\n", bus_n, trace_from, trace_n);
+  std::printf("  board-RAM copy fold: %04x over %u writes (the board reports this in z[15:0])\n", bw_fold, bw_cnt);
   std::printf("  I/O accesses: %ld\n", io_accesses);
   for (auto &e : io_hist) std::printf("    io %08x  x%ld\n", e.first, e.second);
   std::printf("m2_cpu_real: checks=%d fails=%d\n", checks, fails);

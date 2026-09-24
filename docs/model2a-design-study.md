@@ -21270,3 +21270,44 @@ THE CHANGE, one build that diagnoses and fixes together:
 
 If a black R490 build shows a mask other than 001000, the cause is confirmed.
 If it boots with cal_best != 2, the pin was the killer.
+
+---
+
+**R532 -- THE CALIBRATION THEORY IS DEAD; THE BOOT COPY IS THE SUSPECT.**
+
+s235 carried R531 and went black like the rest. Its UART settles R531 at once:
+
+```
+  cal_done=1   mask=000100 (CL+2 only)   chosen CL+2
+  cpu_trap=1   cpu_halted=1   IP 0x00000910
+```
+
+Capture is exactly as on the good boards, so SDRAM READS are sound and R531's
+theory is wrong. Reverted -- the pin stays at CL+2.
+
+But the halt IP moves the diagnosis. Across three black R490 builds the CPU
+stopped at 0x0, 0x910 and 0x200840. The real-CPU harness shows what 0x910 is:
+a loop that quad-loads the program from ROM at 0x0 and quad-stores it to BOARD
+RAM at 0x200000, 8,194 passes. And 0x200840 is inside that copy -- ROM offset
+0x840 -- so the boot code copies itself to RAM and runs from there. The CPU
+dies either while copying or while executing the copy. With reads proven, the
+suspect is the WRITES: a copy that lands wrong is garbage to execute.
+
+This build reports:
+
+  * a 16-bit fold of the first 32,768 dword writes into 0x200000-0x21FFFF,
+    taken at the CPU's own bus (what the CPU SENT), in z[15:0];
+  * how far the copy got, in 4,096-write units, and trap_op, in the C channel.
+
+THE REFERENCE COMES FROM THE ROM, NOT THE HARNESS. Folding ROM dwords
+0..32767 directly gives 0x14b8. The harness gives 0x13f8 -- different by
+exactly 0x0c0, which is the PRCB word at byte 4, and the harness's own bus
+trace reads that word back as 0 (`rd 00000004 -> 00000000`) where the ROM
+holds 0xc0. So the harness has one bad word from its preload, probably lost to
+the "no REFRESH for 7030 cycles" violation its SDRAM model reports at start-up.
+Noted, not chased; the ROM is the better oracle anyway.
+
+  fold = 14b8, copy complete, still traps -> the CPU sent the right data; the
+         fault is between the bridge and the RAM, or not in the copy at all.
+  fold != 14b8                           -> the CPU sent wrong data.
+  copy incomplete                        -> it dies mid-copy; trap_op says how.

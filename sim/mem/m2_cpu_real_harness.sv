@@ -56,6 +56,7 @@ module m2_cpu_real_harness #(
   output logic        bus_ack,
   output logic [31:0] bus_addr,
   output logic [31:0] bus_rdata,     // for the bench's bus trace
+  output logic [31:0] bus_wdata,     // R532: for the copy checksum
 
   // R529: competing traffic on the controller's other ports, driven by the
   // bench the way tb_m2_cpu_sdram drives them.
@@ -79,7 +80,6 @@ module m2_cpu_real_harness #(
 );
 
   logic  [3:0] bus_be;
-  logic [31:0] bus_wdata;
 
   i960_top u_cpu (
     .clk(clk_cpu), .rst_n(cpu_rst_n),
