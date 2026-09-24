@@ -619,8 +619,25 @@ int main(int argc, char **argv) {
     got.clear(); force_texel = -1;
     long sent = 0, stall_run = 0, worst_stall = 0;
     long guard = 0;
+    // R535: A SPAN IS HELD UNTIL IT IS TAKEN, as the fill holds it. Drawing a
+    // fresh one every cycle let a textured span slip past a flat one the unit
+    // would never have accepted, and hid the wedge the board shows.
+    bool holding = false;
     while (sent < NSPAN && guard < 40000000) {
       ++guard;
+      if (holding) {
+        d->out_ready = (roll(5) != 0) ? 1 : 0;
+        d->eval();
+        const bool taken = d->in_ready;
+        const size_t before = got.size();
+        tick(!d->out_ready);
+        if (taken) { ++sent; stall_run = 0; holding = false; }
+        else if (got.size() == before) {
+          if (++stall_run > worst_stall) worst_stall = stall_run;
+          if (stall_run > 20000) break;           // wedged: stop, the check reports it
+        } else stall_run = 0;
+        continue;
+      }
       const int x0 = 4 + int(roll(60));
       const int w  = int(roll(6));
       const int x1 = (w == 0) ? x0 : (w == 1) ? x0 - STEP
@@ -633,19 +650,29 @@ int main(int argc, char **argv) {
       d->in_dudx = int32_t(roll(0x200)); d->in_dvdx = int32_t(roll(0x200));
       d->in_ooz = 0x1000000 + int32_t(roll(0x3000000));
       d->in_doozdx = -int32_t(roll(30000));
-      d->in_tex = tex ? 0x000001 : 0; d->in_tex_en = tex;
+      // R535: TRANSLUCENT SPANS TOO. A translucent 0xF texel is SKIPPED at the
+      // retire stage, which ends a span without an output handshake; the board
+      // draws plenty of them and this soak never sent one.
+      const bool trans = (roll(3) == 0);
+      d->in_tex = tex ? (trans ? 0x000101 : 0x000001) : 0; d->in_tex_en = tex;
       d->out_ready = (roll(5) != 0) ? 1 : 0;
       d->eval();
       const bool taken = d->in_valid && d->in_ready;
       const size_t before = got.size();
       tick(!d->out_ready);
       if (taken) { ++sent; stall_run = 0; }
-      else if (got.size() == before) {
-        if (++stall_run > worst_stall) worst_stall = stall_run;
-      } else stall_run = 0;
+      else {
+        holding = true;
+        if (got.size() == before) {
+          if (++stall_run > worst_stall) worst_stall = stall_run;
+        } else stall_run = 0;
+      }
     }
     d->in_valid = 0;
     for (int i = 0; i < 2000; ++i) tick();
+    // R535: drained, the unit must be IDLE -- a span counted in flight that
+    // has ended leaves it refusing every flat span forever.
+    ck("idle once drained", d->busy, 0);
 
     // THE WEDGE IS THE CHECK. A healthy unit is sometimes busy for a long time
     // -- a texel timeout is 511 cycles and a stalled consumer adds more -- but

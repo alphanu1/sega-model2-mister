@@ -21450,3 +21450,55 @@ The framework saw this coming. The MiSTer template line `set_instance_assignment
 synchronous controls off the SDRAM output registers -- but it matches registers
 named like the pins, and m2_sdram's are sd_a/sd_ba/sd_dqm. The guard has never
 applied to this core. The new line names sd_a directly.
+
+---
+
+**R535 -- R534 WORKED: THE FIRST R490 BUILD TO BOOT. THEN THE SPAN WALK
+WEDGED, AND THAT WAS A REAL R490 BUG.**
+
+s239 with the sd_a assignment (clk_mem -0.624, clk_sys +0.667, hold all
+positive): the fit report shows EVERY SDRAM register in its pin -- A, BA,
+commands, DQM, DQ out, DQ in. On the board:
+
+```
+  read fold d830 (ref d830)    all sixteen chunk folds equal the ROM
+  no trap; CPU hot spots match s210 (0x12b0 idle loop, 0x178d0, 0x112a0 ...)
+```
+
+The boot corruption is gone. R534's cause is confirmed.
+
+(Seeds 238 and 240 of the same batch packed sd_a but hit R385's DQ lottery --
+sd_dq_o / sd_dq_oe "conflicting location assignments", 100 and 140 warnings.
+That lottery is still open.)
+
+Ben: "3d shows for a few seconds then dropped out", ~24 bands before it did.
+The R520 detector: walk_stuck_max 0xFFFF, fill state 15, walk T_RUN --
+m2_span_tex wedged, exactly R520's prediction.
+
+THE BUG. A span ends two ways: its last pixel is taken at the output
+(e_valid && out_ready && e_last), or -- translucent polygon, texel 0xF -- its
+last group is SKIPPED at the retire stage and never becomes a pixel. R490's
+completion was one OR of the two, counted once. With the overlap, both happen
+on the same edge whenever span A's last pixel leaves while span B, one group
+wide, is skipped behind it. Two spans end, sp_n drops by one, stays a span
+high for good, st never returns to T_IDLE, and the first flat span -- accepted
+only when idle -- waits forever. A narrow translucent span behind another span
+is ordinary in a real scene.
+
+WHY THE BENCH NEVER SAW IT, twice over:
+
+  * the soak never sent a translucent span (in_tex was only ever 0x000001);
+  * the soak drew a FRESH span every cycle instead of holding one until taken,
+    so a textured span always slipped past the flat one the unit was refusing.
+    The fill holds its span; that is what makes the state absorbing.
+
+With both fixed the soak wedges after 5,047 spans, and the test after it -- a
+single flat span -- is never accepted. A new check requires the unit to be
+idle once drained.
+
+THE FIX counts both completions: sp_n <= sp_n + ld - done_e - done_rt, sp_out
+toggles only when exactly one ends, T_IDLE when the count reaches zero.
+Results: 7,203 checks pass; soaks of 200,000 spans clean with and without 26%
+texel misses (longest quiet stretch 25 and 83 cycles); back-to-back unchanged
+at 11.37 cycles a span, so none of R490's gain is spent; m2_raster3d heavy,
+20 frames, longest dead run 0.

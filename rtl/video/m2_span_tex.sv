@@ -592,14 +592,25 @@ module m2_span_tex #(
       // skip case is easy to miss: e_valid is never raised for it, so waiting
       // on out_ready alone would strand the parameter set and wedge the unit
       // behind a span that had already ended.
+      //
+      // R535: AND BOTH CAN HAPPEN ON THE SAME EDGE. Span A's last pixel is taken
+      // at the output while span B -- one group wide, translucent, texel 0xF --
+      // is skipped at the retire stage behind it. Two spans end; the old single
+      // `span_done` counted one, sp_n stayed a span too high for good, the unit
+      // never returned to T_IDLE, and a flat span (accepted only when idle) then
+      // waited forever. That is the wedge R520 caught on the board the first
+      // time an R490 build booted (s239, walk_stuck_max 0xFFFF). Narrow
+      // translucent edges are common in a real scene and absent from every
+      // bench until the soak sent them.
       begin
-        automatic logic span_done =
-            (e_valid && out_ready && e_last)
-         || (rt_valid && (!e_valid || out_ready) && rt_last
-             && tex_p[rt_p][8] && (rt_texel == 4'hf));
+        automatic logic done_e  = e_valid && out_ready && e_last;
+        automatic logic done_rt = rt_valid && (!e_valid || out_ready) && rt_last
+                                  && tex_p[rt_p][8] && (rt_texel == 4'hf);
+        automatic logic [2:0] n_next = 3'(sp_n) + 3'(ld_span)
+                                     - 3'(done_e) - 3'(done_rt);
         automatic logic slot = ld_cold ? sp_out : ~sp_iss;
 
-        if (span_done) sp_out <= ~sp_out;
+        if (done_e ^ done_rt) sp_out <= ~sp_out;   // both: two steps, same slot
         if (ld_span) begin
           y_p[slot]     <= in_y;
           x1_p[slot]    <= in_x1;
@@ -611,13 +622,9 @@ module m2_span_tex #(
           doz_r         <= 32'(in_doozdx) <<< 8;
           sp_iss        <= slot;
         end
-        case ({ld_span, span_done})
-          2'b10:   sp_n <= sp_n + 2'd1;
-          2'b01:   sp_n <= sp_n - 2'd1;
-          default: ;
-        endcase
+        sp_n <= n_next[1:0];
         // Back to passing flat spans through only when nothing is left.
-        if (span_done && (sp_n == 2'd1) && !ld_span) st <= T_IDLE;
+        if ((done_e || done_rt) && (n_next == 3'd0)) st <= T_IDLE;
       end
       // R446: the pipeline is four deep; this says when its output matches the
       // operands currently presented. It must NOT be gated by the branch that
