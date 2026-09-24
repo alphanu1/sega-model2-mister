@@ -76,8 +76,42 @@ module m2_cpu_real_harness #(
   output logic  [3:0] io_be,
   input  logic [31:0] io_rdata,
   input  logic        io_stall,
-  input  logic  [3:0] irq
+  input  logic  [3:0] irq,
+
+  // R533: Model2.sv's R532 copy fold, verbatim, so the board's number can be
+  // checked against the bench's reference rather than trusted.
+  output logic [15:0] rtl_bw_fold,
+  output logic [15:0] rtl_bw_cnt,
+  // R533: the read fold and the sixteen chunk folds, also verbatim.
+  output logic [15:0] rtl_br_fold,
+  output logic [191:0] rtl_bw_ck
 );
+
+  logic [11:0] bw_ck [16];
+  always_ff @(posedge clk_cpu or negedge cpu_rst_n) begin
+    if (!cpu_rst_n) begin
+      rtl_br_fold <= 16'd0;
+      for (int i = 0; i < 16; i++) bw_ck[i] <= 12'd0;
+    end else begin
+      if (bus_ack && !bus_we && rtl_bw_cnt != 16'd0 && !rtl_bw_cnt[15]
+          && bus_addr < 32'h0002_0000)
+        rtl_br_fold <= rtl_br_fold + bus_rdata[31:16] + bus_rdata[15:0];
+      if (bus_ack && bus_we && !rtl_bw_cnt[15]
+          && bus_addr >= 32'h0020_0000 && bus_addr < 32'h0022_0000)
+        bw_ck[rtl_bw_cnt[14:11]] <= bw_ck[rtl_bw_cnt[14:11]]
+                                    + bus_wdata[27:16] + bus_wdata[11:0];
+    end
+  end
+  always_comb for (int i = 0; i < 16; i++) rtl_bw_ck[i*12 +: 12] = bw_ck[i];
+
+  always_ff @(posedge clk_cpu or negedge cpu_rst_n) begin
+    if (!cpu_rst_n) begin rtl_bw_fold <= 16'd0; rtl_bw_cnt <= 16'd0; end
+    else if (bus_ack && bus_we && !rtl_bw_cnt[15]
+             && bus_addr >= 32'h0020_0000 && bus_addr < 32'h0022_0000) begin
+      rtl_bw_fold <= rtl_bw_fold + bus_wdata[31:16] + bus_wdata[15:0];
+      rtl_bw_cnt  <= rtl_bw_cnt + 16'd1;
+    end
+  end
 
   logic  [3:0] bus_be;
 
@@ -94,8 +128,13 @@ module m2_cpu_real_harness #(
     .dbg_rf_we(), .dbg_rf_wdata()
   );
 
-  m2_cpu_sdram_harness #(.COL_BITS(COL_BITS), .DCACHE_EN_TOP(DCACHE_EN_TOP)) u_mem (
-    .clk_cpu(clk_cpu), .clk_mem(clk_mem), .rst_n(rst_n),
+  // R533: the bridge is reset with the CPU, as Model2.sv has it. Sharing the
+  // memory reset let the held CPU's address-0 request fill a cache line from
+  // SDRAM before the preload had written it, and the zeros stayed: the
+  // "lost PRCB word" was this, not the preload.
+  m2_cpu_sdram_harness #(.COL_BITS(COL_BITS), .DCACHE_EN_TOP(DCACHE_EN_TOP),
+                         .BR_OWN_RST(1'b1)) u_mem (
+    .clk_cpu(clk_cpu), .clk_mem(clk_mem), .rst_n(rst_n), .br_rst_n(cpu_rst_n),
     .bus_req(bus_req), .bus_we(bus_we), .bus_addr(bus_addr), .bus_be(bus_be),
     .bus_wdata(bus_wdata), .bus_rdata(bus_rdata), .bus_ack(bus_ack),
     .wr_req(wr_req), .wr_addr(wr_addr), .wr_din(wr_din), .wr_ack(wr_ack),

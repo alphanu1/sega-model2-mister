@@ -36,11 +36,16 @@ module m2_cpu_sdram_harness #(
   // path. With it in, every SDRAM read takes the cached route and the plain
   // read path is dead code -- which is how it bit-rotted unnoticed until a
   // hardware build ran it (black screen, boot record read as FFFFFFFF).
-  parameter bit DCACHE_EN_TOP = 1'b1
+  parameter bit DCACHE_EN_TOP = 1'b1,
+  // R533: reset the bridge from br_rst_n, as Model2.sv does (the bridge sits on
+  // cpu_rst_n there, so its cache is swept when the CPU is released). Off, the
+  // bridge shares the memory reset, which is what the model-driven bench wants.
+  parameter bit BR_OWN_RST = 1'b0
 ) (
   input  logic        clk_cpu,
   input  logic        clk_mem,
   input  logic        rst_n,
+  input  logic        br_rst_n,       // used only with BR_OWN_RST
 
   // The CPU side, driven exactly as i960_top drives it.
   input  logic        bus_req,
@@ -106,15 +111,17 @@ module m2_cpu_sdram_harness #(
   logic [15:0] b_din;
   logic  [1:0] b_be;
 
+  wire br_rst = BR_OWN_RST ? (rst_n & br_rst_n) : rst_n;
+
   m2_cpu_bridge #(.AW(AW), .BOARD_2A(1'b0), .DCACHE_EN(DCACHE_EN_TOP)) u_bridge (
     .io_stall(io_stall),   // R530: the bench's device model may stall
     .dbg_dc_hits(), .dbg_dc_miss(),
     .char_wr(), .char_wr_addr(),
-    .clk_cpu(clk_cpu), .rst_n_cpu(rst_n),
+    .clk_cpu(clk_cpu), .rst_n_cpu(br_rst),
     .bus_req(bus_req), .bus_we(bus_we), .bus_addr(bus_addr), .bus_be(bus_be),
     .bus_wdata(bus_wdata), .bus_rdata(bus_rdata), .bus_ack(bus_ack),
 
-    .clk_mem(clk_mem), .rst_n_mem(rst_n),
+    .clk_mem(clk_mem), .rst_n_mem(br_rst),
     // The game map, same bases Model2.sv uses.
     .base_prog(AW'(32'h0000000)), .base_data(AW'(32'h0020000)),
     .base_work(AW'(32'h1600000)), .base_board(AW'(32'h1680000)),

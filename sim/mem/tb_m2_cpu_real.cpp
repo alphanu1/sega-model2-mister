@@ -290,6 +290,17 @@ int main(int argc, char **argv) {
   }
   std::printf("  bus transactions seen: %ld (trace window %ld,%ld)\n", bus_n, trace_from, trace_n);
   std::printf("  board-RAM copy fold: %04x over %u writes (the board reports this in z[15:0])\n", bw_fold, bw_cnt);
+  std::printf("  the RTL fold Model2.sv uses:  %04x over %u writes\n", dut->rtl_bw_fold, dut->rtl_bw_cnt);
+  // R533: the references the board's 'z' records are compared against.
+  std::printf("  copy read fold (R533):         %04x\n", dut->rtl_br_fold);
+  std::printf("  copy chunk folds (R533):      ");
+  for (int i = 0; i < 16; ++i) {
+    const int b = i * 12;
+    const uint32_t v = (dut->rtl_bw_ck[b / 32] >> (b % 32)
+                        | (b % 32 > 20 ? dut->rtl_bw_ck[b / 32 + 1] << (32 - b % 32) : 0)) & 0xfff;
+    std::printf(" %x:%03x", i, v);
+  }
+  std::printf("\n");
   std::printf("  I/O accesses: %ld\n", io_accesses);
   for (auto &e : io_hist) std::printf("    io %08x  x%ld\n", e.first, e.second);
   std::printf("m2_cpu_real: checks=%d fails=%d\n", checks, fails);

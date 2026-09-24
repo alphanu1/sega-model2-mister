@@ -593,9 +593,10 @@ logic  [7:0] tps_dif [32], tps_amb [32];
 logic [31:0] tps_seen;
 logic  [4:0] tps_sel;
 logic  [2:0] tps_ph;   // R275: three bits, so the texture record has a slot
+logic  [3:0] ck_idx;   // R533: the copy chunk the next 'z' record reports
 always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
-		tps_seen <= 32'd0; tps_sel <= 5'd0; tps_ph <= 3'd0;
+		tps_seen <= 32'd0; tps_sel <= 5'd0; tps_ph <= 3'd0; ck_idx <= 4'd0;
 	end else begin
 		if (geo_tp_we) begin
 			tps_dif[geo_tp_idx]  <= geo_tp_diffuse;
@@ -605,6 +606,7 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		if (geo_walk_start) begin
 			tps_ph <= tps_ph + 3'd1;
 			if (tps_ph == 3'd1) tps_sel <= tps_sel + 5'd1;
+			if (tps_ph == 3'd6) ck_idx  <= ck_idx + 4'd1;
 		end
 	end
 end
@@ -2051,6 +2053,38 @@ always_ff @(posedge clk_i960 or negedge cpu_rst_n) begin
 	             && cpu_addr >= 32'h0020_0000 && cpu_addr < 32'h0022_0000) begin
 		bw_fold <= bw_fold + cpu_wdata[31:16] + cpu_wdata[15:0];
 		bw_cnt  <= bw_cnt + 16'd1;
+	end
+end
+
+// R533: WHERE THE COPY GOES WRONG, AND ON WHICH SIDE OF THE CPU.
+//
+// s239 reported 0x15E2 against the 0x14B8 the real-CPU harness computes from
+// the same ROM (which the board's zip matches, CRC for CRC) -- the CPU SENT
+// wrong data. Two questions follow, and one build answers both:
+//
+//   br_fold  -- the same fold over what the CPU READ from program ROM while
+//               the copy ran. Right here and wrong in bw_fold means the data
+//               came in correct and the CPU changed it; wrong here means the
+//               read path handed it bad data.
+//   bw_ck    -- the write fold split into sixteen 8 KB chunks (12 bits each),
+//               so the damage is placed rather than just detected.
+//
+// Both are mirrored verbatim in sim/mem/m2_cpu_real_harness.sv, which prints
+// the reference values.
+logic [15:0] br_fold;
+logic [11:0] bw_ck [16];
+always_ff @(posedge clk_i960 or negedge cpu_rst_n) begin
+	if (!cpu_rst_n) begin
+		br_fold <= 16'd0;
+		for (int i = 0; i < 16; i++) bw_ck[i] <= 12'd0;
+	end else begin
+		if (cpu_ack && !cpu_we && bw_cnt != 16'd0 && !bw_cnt[15]
+		    && cpu_addr < 32'h0002_0000)
+			br_fold <= br_fold + cpu_rdata[31:16] + cpu_rdata[15:0];
+		if (cpu_ack && cpu_we && !bw_cnt[15]
+		    && cpu_addr >= 32'h0020_0000 && cpu_addr < 32'h0022_0000)
+			bw_ck[bw_cnt[14:11]] <= bw_ck[bw_cnt[14:11]]
+			                        + cpu_wdata[27:16] + cpu_wdata[11:0];
 	end
 end
 
@@ -4390,7 +4424,7 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	      : (tps_ph == 3'd4)                  ? {tx_h_f, tx_n_f}                // R275: texel hits : texels that were not 0xF
 	      : (tps_ph == 3'd5)                  ? {tx_m_f, tex_sweep}             // R294 texel misses; R310 whole-cache sweeps
 	      : (tps_ph == 3'd7)                  ? {oz_d2, oz_d3}                 // R334: 1/z of vertices 2 and 3 ('Q')
-	      : (tps_ph == 3'd6)                  ? {bwl_tex[20:5], bw_fold}        // R294; R532: board-RAM copy checksum
+	      : (tps_ph == 3'd6)                  ? {br_fold, ck_idx, bw_ck[ck_idx]} // R533: copy read fold : chunk : chunk write fold
 	      : {lum_mean_f, lum_zpc_f, wedge_slot, wedge_n[6:0], r3d_quads[11:4]}),   // R249: the frame's mean luminance and its black-polygon percentage, where the always-zero drop count and the free-running miss count were
 	.a_tag(8'h43),
 	.b_tag((wedge_have && wedge_ph == 2'd1) ? 8'h57 : (wedge_have && wedge_ph == 2'd2) ? 8'h58

@@ -21311,3 +21311,71 @@ Noted, not chased; the ROM is the better oracle anyway.
          fault is between the bridge and the RAM, or not in the copy at all.
   fold != 14b8                           -> the CPU sent wrong data.
   copy incomplete                        -> it dies mid-copy; trap_op says how.
+
+---
+
+**R533 -- THE CPU SENT WRONG DATA; THE HARNESS'S "PRESET WORD" WAS ITS OWN
+CACHE.**
+
+s239 (R490, clk_mem -0.590, clk_sys -0.898) ran but froze on three frames.
+Its UART, all 11,313 C records and all 24 z records alike:
+
+```
+  IP 0x3ea8f5c3   trap=1 halted=1   trap_op=00   copy progress 8/8
+  copy fold 0x15e2   (ROM gives 0x14b8)
+```
+
+The copy COMPLETED -- all 32,768 writes -- and the CPU sent different data
+from what the ROM holds, then jumped to a garbage IP and halted. By R532's
+table the fault is upstream of the bridge's write side.
+
+THE REFERENCE WAS CHECKED THREE WAYS BEFORE BEING TRUSTED:
+
+  * The board's zip carries epr-16530a.12 CRC 39e962b5 and epr-16531a.13 CRC
+    693126eb -- the files the harness and the ROM fold use.
+  * R532's fold logic, copied verbatim into m2_cpu_real_harness, gives 0x14b8
+    in simulation. Sampling cpu_addr/cpu_wdata on the acknowledge is sound.
+  * The harness now also gives 0x14b8, with and without competing SDRAM
+    traffic (M2_COMPETE, 15.50 and 24.38 CPI).
+
+R532's "harness loses the PRCB word in preload" WAS WRONG. It was the bridge's
+data cache. The harness reset the bridge with the MEMORY reset; the held i960
+still presents a read at address 0, so the cache filled line 0 from SDRAM
+before the preload had written it, and kept the zeros -- a sim trace shows
+`fill a=0 din=0000000000000000` long before the CPU is released. With
+DCACHE_EN=0 the same read returned 0xc0. Model2.sv resets the bridge with
+cpu_rst_n, so the board sweeps the cache at CPU release and cannot do this;
+the harness now does the same (m2_cpu_sdram_harness BR_OWN_RST, which the
+model-driven bench leaves off). The SDRAM model's start-up REFRESH warning
+was not the cause.
+
+Also ruled out as a per-seed variable: SDRAM_DQ capture. dq_r is a Fast Input
+Register in the fit report of the failing s239 and of the good s210 alike, so
+the pad-to-register delay does not move with placement. And the clk_i960 /
+clk_sys crossing is timed -- general[3] is in the same clock group as [0] and
+[1] -- so it is covered by the summary: s195, black, passed setup and hold on
+every core clock.
+
+THIS BUILD localises it. In 'z', replacing R532's word:
+
+  * b_data[31:16] -- br_fold, the same fold over what the CPU READ from
+    program ROM (< 0x20000) while the copy ran;
+  * b_data[15:12] -- a chunk index, advancing once per z record;
+  * b_data[11:0]  -- that 8 KB chunk's 12-bit write fold.
+
+References (harness, equal to a direct fold of the ROM files):
+
+```
+  read fold d830
+  chunks 0:2d0 1:04a 2:182 3:805 4:365 5:410 6:f6e 7:e6f
+         8:caf 9:278 a:2bb b:e8b c:352 d:63d e:8c9 f:000
+```
+
+  read fold right, chunks wrong -> the CPU received correct data and changed
+                                   it: its datapath or its clock.
+  read fold wrong               -> the read path handed it bad data; the
+                                   chunks say where.
+
+A control build -- the same instrumentation on main's span walk, no R490 --
+runs alongside, because a working board must report these values too before
+any R490 number means anything.
