@@ -28,6 +28,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <algorithm>
 
 static Vm2_cpu_real_harness *dut;
 static int checks = 0, fails = 0;
@@ -51,13 +52,111 @@ static void drive_traffic() {
   else if (!dut->p3_req) { dut->p3_addr = p3a; dut->p3_req = 1; }
 }
 
+// R530: THE DEVICES THE BOOT CODE TALKS TO, ported from tb_i960_rom's model:
+// the irq controller, videoctl's frame counter, a copro that reports drained,
+// the copro ID string, the I/O board's dual-port RAM, and backup SRAM as
+// unwritten. Everything else in the I/O window reads as zero. A vblank every
+// VBLANK_CYCLES CPU cycles raises irq 0 when the game has enabled it.
+static uint32_t intreq = 0, intena = 0, videoctl = 0;
+static uint64_t vblanks = 0;
+static uint8_t  io_dp[0x800];
+static const unsigned long long VBLANK_TICKS = 434600ULL * CPU_DIV;
+static void drive_irq() {
+  dut->irq = uint8_t(((intreq & 0x001u) ? 1u : 0u) | ((intreq & 0x002u) ? 2u : 0u) |
+                     ((intreq & 0x3fcu) ? 4u : 0u) | ((intreq & 0xc00u) ? 8u : 0u));
+}
+static uint32_t io_read(uint32_t a) {
+  a &= ~3u;
+  if (a == 0x00980004u) return 1;                                   // copro drained
+  if (a >= 0x00980030u && a < 0x00980040u) {
+    static const uint8_t ID[16] = {0,'T','A','H',0,'A','K','O',0,'Z','A','K',0,'M','T','K'};
+    const uint32_t o = a & 0xfu;
+    return uint32_t(ID[o]) | (uint32_t(ID[o|1]) << 8) | (uint32_t(ID[o|2]) << 16) | (uint32_t(ID[o|3]) << 24);
+  }
+  if (a == 0x0098000cu) {                                           // videoctl_r
+    const uint32_t fn = uint32_t(vblanks);
+    return (videoctl & 1u) ? (((fn & 1u) << 2) | (videoctl & 3u)) : (((fn & 2u) << 1) | (videoctl & 3u));
+  }
+  if (a == 0x00e80000u) return intreq;
+  if (a == 0x00e80004u) return intena;
+  if (a >= 0x01c00000u && a < 0x01c01000u) { const uint32_t k = (a - 0x01c00000u) >> 2; return uint32_t(io_dp[2*k]) | (uint32_t(io_dp[2*k+1]) << 16); }
+  if (a >= 0x01d00000u && a <= 0x01d03fffu) return 0xffffffffu;   // backup SRAM, unwritten
+  return 0;
+}
+static void io_write(uint32_t a, uint32_t v, uint8_t be) {
+  a &= ~3u;
+  if (a == 0x00e80000u) { intreq &= v; drive_irq(); return; }
+  if (a == 0x00e80004u) { intena  = v; return; }
+  if (a == 0x0098000cu) { videoctl = v; return; }
+  if (a >= 0x01c00000u && a < 0x01c01000u) {
+    const uint32_t k = (a - 0x01c00000u) >> 2;
+    if (be & 0x1) io_dp[2*k]   = uint8_t(v);
+    if (be & 0x4) io_dp[2*k+1] = uint8_t(v >> 16);
+  }
+}
+static bool io_we_seen = false;
+static bool io_sel_seen = false;
+static long io_accesses = 0;
+static std::vector<std::pair<uint32_t,long>> io_hist;     // (addr, count), small
+static void io_note(uint32_t a) {
+  for (auto &e : io_hist) if (e.first == a) { ++e.second; return; }
+  if (io_hist.size() < 32) io_hist.push_back({a, 1});
+}
+static void drive_io() {
+  dut->io_stall = 0;
+  if (dut->io_sel && !io_sel_seen) { ++io_accesses; io_note(dut->io_addr & ~3u); }
+  io_sel_seen = dut->io_sel;
+  if (dut->io_sel) {
+    dut->io_rdata = io_read(dut->io_addr);
+    if (dut->io_we && !io_we_seen) io_write(dut->io_addr, dut->io_wdata, uint8_t(dut->io_be));
+    io_we_seen = dut->io_we;
+  } else io_we_seen = false;
+  if ((tk % VBLANK_TICKS) == VBLANK_TICKS - 1) { ++vblanks; if (intena & 1u) { intreq |= 1u; drive_irq(); } }
+}
+
+// R530: WHAT THE CPU IS POLLING. A core in a spin loop is waiting on ONE
+// address; tb_i960_rom names it for the same reason. Counted on the rising
+// edge of bus_ack for reads.
+static std::vector<std::pair<uint32_t,long>> rd_hist;
+static bool ack_seen = false;
+static long bus_n = 0;
+// THE ADDRESS MUST BE TAKEN WHILE THE REQUEST IS PENDING, NOT AT THE ACK. The
+// real CPU moves bus_addr ON the acknowledge (the bridge header says so), so
+// by the time the ack edge is seen the address already names the NEXT access.
+// The first version sampled at the edge and every transaction read as 0.
+static uint32_t pend_addr = 0, pend_ip = 0; static bool pend_we = false;
+static long trace_from = -1, trace_n = 0;      // M2_TRACE_BUS=from,count
+static void note_reads() {
+  // Nothing before the CPU is released: while it is held in reset during the
+  // preload it still presents a request at address 0, and the first version
+  // counted 102,815 of them as the loop's most-read address.
+  if (!dut->cpu_rst_n) { ack_seen = dut->bus_ack; return; }
+  if (dut->bus_req && !dut->bus_ack) { pend_addr = dut->bus_addr; pend_we = dut->bus_we; pend_ip = dut->dbg_ip; }
+  if (dut->bus_ack && !ack_seen) {
+    if (trace_from >= 0 && bus_n >= trace_from && bus_n < trace_from + trace_n)
+      std::printf("      bus#%-6ld ip=%08x %s %08x %s%08x\n", bus_n, pend_ip,
+                  pend_we ? "WR" : "rd", pend_addr,
+                  pend_we ? "" : "-> ", pend_we ? 0u : dut->bus_rdata);
+    ++bus_n;
+  }
+  if (dut->bus_ack && !ack_seen && !pend_we) {
+    const uint32_t a = pend_addr & ~3u;
+    bool hit = false;
+    for (auto &e : rd_hist) if (e.first == a) { ++e.second; hit = true; break; }
+    if (!hit && rd_hist.size() < 64) rd_hist.push_back({a, 1});
+  }
+  ack_seen = dut->bus_ack;
+}
+
 static void step() {
   ++tk;
   drive_traffic();
+  drive_io();
   if ((tk % CPU_DIV) == 0) { dut->clk_cpu = 0; dut->eval(); }
   if ((tk % MEM_DIV) == 0) { dut->clk_mem = 0; dut->eval(); }
   if ((tk % CPU_DIV) == 0) { dut->clk_cpu = 1; dut->eval(); }
   if ((tk % MEM_DIV) == 0) { dut->clk_mem = 1; dut->eval(); }
+  note_reads();          // R530: after the edges, so bus_* are this tick's values
 }
 
 static bool load_file(const std::string &path, std::vector<uint8_t> &out) {
@@ -104,8 +203,9 @@ int main(int argc, char **argv) {
   // ------------------------------------------------------------- bring-up
   dut->clk_cpu = 0; dut->clk_mem = 0; dut->rst_n = 0; dut->cpu_rst_n = 0;
   dut->wr_req = 0; dut->wr_addr = 0; dut->wr_din = 0;
-  dut->p2_req = 0; dut->p3_req = 0;
+  dut->p2_req = 0; dut->p3_req = 0; dut->irq = 0; dut->io_rdata = 0; dut->io_stall = 0;
   competing = std::getenv("M2_COMPETE") && atoi(std::getenv("M2_COMPETE"));
+  if (const char *tb = std::getenv("M2_TRACE_BUS")) { long f=0,n=0; if (sscanf(tb, "%ld,%ld", &f, &n) == 2) { trace_from = f; trace_n = n; } }
   for (int i = 0; i < 64; ++i) step();
   dut->rst_n = 1;
   { long g = 0; while (!dut->mem_ready && g++ < 4000000) step(); }
@@ -136,6 +236,7 @@ int main(int argc, char **argv) {
   uint64_t hash = 1469598103934665603ULL;          // FNV-1a over retired IPs
   uint32_t first_ip = 0; bool got_first = false;
   long retired = 0;
+  std::vector<uint8_t> seen(1u << 18, 0); long distinct = 0;   // IPs below 256 KB
 
   while (retired < N && !dut->halted && !dut->trap) {
     step();
@@ -146,6 +247,7 @@ int main(int argc, char **argv) {
       const uint32_t ip = dut->dbg_ip;
       if (!got_first) { first_ip = ip; got_first = true; }
       hash ^= ip; hash *= 1099511628211ULL;
+      if (ip < (1u << 18) && !seen[ip]) { seen[ip] = 1; ++distinct; }
       const unsigned long long quiet = tk - last_change;
       if (quiet > worst_quiet) worst_quiet = quiet;
       last_change = tk;
@@ -157,8 +259,8 @@ int main(int argc, char **argv) {
 
   std::printf("  retired %ld instructions in %llu CPU cycles -- %.2f CPI\n",
               retired, cycles, retired ? double(cycles) / double(retired) : 0.0);
-  std::printf("  first IP %08x  last IP %08x  longest quiet %llu ticks  trace hash %016llx\n",
-              first_ip, dut->dbg_ip, worst_quiet, (unsigned long long)hash);
+  std::printf("  first IP %08x  last IP %08x  %ld distinct IPs  %llu vblanks  longest quiet %llu ticks  trace hash %016llx\n",
+              first_ip, dut->dbg_ip, distinct, (unsigned long long)vblanks, worst_quiet, (unsigned long long)hash);
   if (const char *ho = std::getenv("M2_HASH_OUT")) {
     if (FILE *f = std::fopen(ho, "w")) { std::fprintf(f, "%016llx %ld\n", (unsigned long long)hash, retired); std::fclose(f); }
   }
@@ -172,6 +274,14 @@ int main(int argc, char **argv) {
         dut->bus_req, dut->bus_we, dut->bus_ack, dut->bus_addr);
   CHECK(got_first && first_ip == 0x00000860u, "boot IP was %08x, the ROM's record says 00000860", first_ip);
 
+  {
+    std::sort(rd_hist.begin(), rd_hist.end(), [](auto &x, auto &y){ return x.second > y.second; });
+    std::printf("  top read addresses:\n");
+    for (size_t i = 0; i < rd_hist.size() && i < 6; ++i) std::printf("    rd %08x  x%ld\n", rd_hist[i].first, rd_hist[i].second);
+  }
+  std::printf("  bus transactions seen: %ld (trace window %ld,%ld)\n", bus_n, trace_from, trace_n);
+  std::printf("  I/O accesses: %ld\n", io_accesses);
+  for (auto &e : io_hist) std::printf("    io %08x  x%ld\n", e.first, e.second);
   std::printf("m2_cpu_real: checks=%d fails=%d\n", checks, fails);
   std::printf("%s\n", fails ? "FAIL" : "PASS");
   delete dut;

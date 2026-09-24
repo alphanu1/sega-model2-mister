@@ -72,6 +72,16 @@ module m2_cpu_sdram_harness #(
   output logic        p3_ack,
   output logic [63:0] p3_dout,
 
+  // R530: THE BRIDGE'S I/O SIDE, brought out instead of tied off. With it tied
+  // the real CPU (m2_cpu_real_harness) spins forever polling a copro status
+  // that never answers, so nothing past the boot loop was ever reached.
+  output logic        io_sel,
+  output logic        io_we,
+  output logic [31:0] io_addr,
+  output logic [31:0] io_wdata,
+  output logic  [3:0] io_be,
+  input  logic [31:0] io_rdata,
+  input  logic        io_stall,
   output logic        mem_ready,
   output logic [31:0] dbg_last_addr,
   output logic [31:0] dbg_last_dout,
@@ -97,7 +107,7 @@ module m2_cpu_sdram_harness #(
   logic  [1:0] b_be;
 
   m2_cpu_bridge #(.AW(AW), .BOARD_2A(1'b0), .DCACHE_EN(DCACHE_EN_TOP)) u_bridge (
-    .io_stall(1'b0),   // no stalling peripheral in this harness
+    .io_stall(io_stall),   // R530: the bench's device model may stall
     .dbg_dc_hits(), .dbg_dc_miss(),
     .char_wr(), .char_wr_addr(),
     .clk_cpu(clk_cpu), .rst_n_cpu(rst_n),
@@ -117,7 +127,7 @@ module m2_cpu_sdram_harness #(
     .oc_tram_we(), .oc_pal_we(), .oc_addr(), .oc_din(),
     .oc_tram_q(16'd0), .oc_pal_q(16'd0),
     .oc_xlat_we(), .oc_xlat_addr(), .oc_xlat_din(),
-    .io_rdata(32'd0), .io_sel(), .io_we(), .io_addr(), .io_wdata(),
+    .io_rdata(io_rdata), .io_sel(io_sel), .io_we(io_we), .io_addr(io_addr), .io_wdata(io_wdata), .io_be(io_be),
     .dbg_cpu_reads(dbg_reads), .dbg_cpu_writes(), .dbg_unmapped(),
     .dbg_last_addr(dbg_last_addr), .dbg_last_dout(dbg_last_dout)
   );

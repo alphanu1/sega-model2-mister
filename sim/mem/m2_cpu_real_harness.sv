@@ -55,6 +55,7 @@ module m2_cpu_real_harness #(
   output logic        bus_we,
   output logic        bus_ack,
   output logic [31:0] bus_addr,
+  output logic [31:0] bus_rdata,     // for the bench's bus trace
 
   // R529: competing traffic on the controller's other ports, driven by the
   // bench the way tb_m2_cpu_sdram drives them.
@@ -63,17 +64,28 @@ module m2_cpu_real_harness #(
   output logic        p2_ack,
   input  logic        p3_req,
   input  logic [COL_BITS+14:1] p3_addr,
-  output logic        p3_ack
+  output logic        p3_ack,
+
+  // R530: the bridge's I/O side and the CPU's interrupt lines, so the bench
+  // can model the devices the boot code talks to.
+  output logic        io_sel,
+  output logic        io_we,
+  output logic [31:0] io_addr,
+  output logic [31:0] io_wdata,
+  output logic  [3:0] io_be,
+  input  logic [31:0] io_rdata,
+  input  logic        io_stall,
+  input  logic  [3:0] irq
 );
 
   logic  [3:0] bus_be;
-  logic [31:0] bus_wdata, bus_rdata;
+  logic [31:0] bus_wdata;
 
   i960_top u_cpu (
     .clk(clk_cpu), .rst_n(cpu_rst_n),
     .bus_req(bus_req), .bus_we(bus_we), .bus_addr(bus_addr), .bus_be(bus_be),
     .bus_wdata(bus_wdata), .bus_rdata(bus_rdata), .bus_ack(bus_ack),
-    .irq(4'd0),
+    .irq(irq),
     .dbg_pc(dbg_pc), .dbg_ip(dbg_ip), .dbg_acc_cnt(dbg_acc_cnt),
     .trap(trap), .halted(halted),
     .dbg_sat(), .dbg_prcb(), .dbg_icr(), .dbg_intr_cnt(), .dbg_intr_work(),
@@ -89,6 +101,8 @@ module m2_cpu_real_harness #(
     .wr_req(wr_req), .wr_addr(wr_addr), .wr_din(wr_din), .wr_ack(wr_ack),
     .p2_req(p2_req), .p2_addr(p2_addr), .p2_ack(p2_ack), .p2_dout(),
     .p3_req(p3_req), .p3_addr(p3_addr), .p3_ack(p3_ack), .p3_dout(),
+    .io_sel(io_sel), .io_we(io_we), .io_addr(io_addr), .io_wdata(io_wdata),
+    .io_be(io_be), .io_rdata(io_rdata), .io_stall(io_stall),
     .mem_ready(mem_ready),
     .dbg_last_addr(), .dbg_last_dout(), .dbg_reads()
   );
