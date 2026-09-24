@@ -21379,3 +21379,74 @@ References (harness, equal to a direct fold of the ROM files):
 A control build -- the same instrumentation on main's span walk, no R490 --
 runs alongside, because a working board must report these values too before
 any R490 number means anything.
+
+---
+
+**R534 -- THE CONTROL FAILED TOO. IT IS NOT R490: IT IS THE SDRAM ADDRESS
+PINS, AND THE INTERFACE HAS NEVER BEEN TIMED.**
+
+R533's batch (all three miss clk_mem setup slightly):
+
+```
+  s239  R490     clk_mem -0.273  clk_sys +0.841  hold -0.063
+  s238  R490     clk_mem -0.524  clk_sys +0.376  hold -0.721   (not flashed)
+  c239  control  clk_mem -0.103  clk_sys +0.702  hold +0.245
+```
+
+s239: `IP 0x0 trap=1 halted=1, copy 0/8`. It never executed an instruction --
+the initial boot-record reads came back wrong.
+
+c239, main's span walk plus instrumentation and NOTHING ELSE (git diff main:
+Model2.sv only, all debug): it boots, copies, runs game code at 0x228240 and
+0x1899c, then traps at 0x227c48 (trap_op 0x65) and halts. Its folds:
+
+```
+  read fold 45bb (ref d830)
+  chunks: 5, 8, 9, e, f right; the other eleven wrong
+```
+
+So the READS are wrong, on a build without R490. R490 was never the cause; it
+moved placement, and placement decides this. s210 is a seed that happens to
+land well.
+
+WHY PLACEMENT CAN CORRUPT READS WITH STA CLEAN:
+
+  * The SDRAM interface is NOT TIMED. The STA clock-transfer table lists
+    SDRAM_CLK_pin -> general[0] and general[0] -> SDRAM_CLK_pin as "false
+    path": Model2.sdc's set_clock_groups -asynchronous names general[0,1,3,4]
+    and leaves SDRAM_CLK_pin out, which makes it asynchronous to all of them.
+    The set_input_delay / set_output_delay / multicycle block in Model2.sdc is
+    therefore never analysed. The summary has no SDRAM_CLK_pin row at all.
+  * SDRAM_A[0-4] and [6-9] -- nine address bits -- are NOT in I/O registers
+    on ANY build (s210, c239, s235 identical): "Can't pack register node
+    sd_a[0] into I/O pin ... cannot simultaneously use clear and load
+    signals". The single-bank precharge's `sd_a <= 13'h000` is implemented as
+    a synchronous clear, and an I/O register cannot have both. Bits 5 and
+    10-12 pack because other commands give them constant ones.
+
+Nine address bits leaving from fabric, with seed-dependent clock-to-pad and no
+timing check: a late bit latches the wrong row or column and returns the
+wrong word. That is every symptom -- wrong data, only on some seeds, invisible
+to STA, invisible to simulation, and passing the calibration sweep, which
+reads one pattern on one port.
+
+Model 1 reached the same packing cause (tools/model1-ref docs/findings.md,
+2026-08-18: "the init sequence assigns sd_a <= 13'h000 ... which Quartus
+implements as a synchronous clear") and named ALLOW_SYNCH_CTRL_USAGE OFF on
+sd_a[*] as the remaining route. It was not tried there. It is tried here, in
+Model2.qsf, and the test is binary: nine packing warnings or none.
+
+Also recorded, not yet changed: the SDC false-paths the whole SDRAM interface.
+Model 1 found that Quartus 17.0's fitter segfaults on a multicycle to these
+ports and made its SDRAM constraints opt-in; putting SDRAM_CLK_pin into the
+group here would activate this project's multicycles and may meet the same
+crash. One variable at a time -- packing first.
+
+R533's harness references stand; the reference was right, the board was
+reading wrong.
+
+The framework saw this coming. The MiSTer template line `set_instance_assignment
+-name ALLOW_SYNCH_CTRL_USAGE OFF -to *|SDRAM_*` (Model2.qsf) exists to keep
+synchronous controls off the SDRAM output registers -- but it matches registers
+named like the pins, and m2_sdram's are sd_a/sd_ba/sd_dqm. The guard has never
+applied to this core. The new line names sd_a directly.

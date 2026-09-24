@@ -679,6 +679,9 @@ set_global_assignment -name SYSTEMVERILOG_FILE Model2.sv
 # wrong data, only on some seeds, invisible to STA and to simulation.
 # Model 1 reached the same cause and named this assignment as the remaining
 # route (tools/model1-ref docs/findings.md, 2026-08-18); it was not tried there.
+# The MiSTer template ALREADY guards this -- `ALLOW_SYNCH_CTRL_USAGE OFF -to
+# *|SDRAM_*`, below -- but it matches registers NAMED like the pins, and
+# m2_sdram's are sd_a/sd_ba/sd_dqm, so the guard has never applied here.
 set_instance_assignment -name ALLOW_SYNCH_CTRL_USAGE OFF -to "emu:emu|m2_sdram:u_sdram|sd_a[*]"
 # SDRAM I/O REGISTERS ARE THE FRAMEWORK'S, NOT OURS (R404).
 # sys/sys.tcl lines 95-97 already set FAST_OUTPUT_REGISTER on SDRAM_*,
