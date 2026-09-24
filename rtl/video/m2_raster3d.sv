@@ -575,6 +575,10 @@ module m2_raster3d #(
   // The buffer being filled, and the one the beam is reading.
   logic [BUFW-1:0] fill_buf;
   logic [NBUF-1:0] bd_settled;
+  // R540: BUFFERS ARE CLEARED IN THE BACKGROUND. bd_clean: cleared since the
+  // beam last released it, and not yet claimed. bd_clr_pend/bd_clr_run: a
+  // background clear has been asked for / has been seen running.
+  logic [NBUF-1:0] bd_clean, bd_clr_pend, bd_clr_run;
   logic [3:0]      bd_settle_cnt [NBUF];
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -771,7 +775,7 @@ module m2_raster3d #(
   typedef enum logic [1:0] { P_COLLECT, P_SORT, P_SORTW, P_READY } pstate_t;
   typedef enum logic [2:0] { C_IDLE, C_CLR, C_CLRW, C_REPLAY, C_FILL, C_FILLW, C_DONE } cstate_t;
   pstate_t pst;
-  cstate_t cst;
+  cstate_t cst /*verilator public_flat_rd*/;   // R539: the bench histograms it
 
   // R200 instrumentation: see the port comments.
   logic [19:0] rdy_cyc;
@@ -827,6 +831,7 @@ module m2_raster3d #(
       fill_band <= '0; fill_buf <= '0; bd_ready <= '0;
       fill_frame <= 1'b0; disp_frame <= 1'b0;   // R506: the re-phase guard
       bd_clear_req <= '0; dbg_bands <= 16'd0;
+      bd_clean <= '0; bd_clr_pend <= '0; bd_clr_run <= '0;   // R540
       dbg_ready_cyc <= 16'd0; dbg_bands_done <= 8'd0;
       dbg_bands_painted <= 8'd0; painted_this <= 8'd0;   // R452
       dbg_fillpass <= 16'd0; fillpass_this <= 16'd0;     // R455
@@ -837,6 +842,33 @@ module m2_raster3d #(
       for (int i = 0; i < NBUF; i++) begin bd_y0[i] <= 16'sd0; bd_band[i] <= '0; end
     end else begin
       bd_clear_req <= '0;
+
+      // R540: THE CLEAR MOVES OFF THE FILL'S PATH.
+      //
+      // The sequencer used to claim a buffer, clear it -- one word a cycle,
+      // ~960 cycles -- and only then fill it. tb_m2_raster3d put that wait,
+      // C_CLRW, at 27% of ALL cycles in a frame whose middle bands miss the
+      // beam, with the fill idle 71% of the time: the fill was not slow, it
+      // was waiting for clean buffers. A clear does not depend on which band
+      // the buffer will hold, and every buffer has its own clear engine, so
+      // any buffer the beam has released is cleared at once, in the
+      // background, while the fill works on another. By the time the
+      // sequencer reaches it, it is clean.
+      //
+      // Never the buffer the sequencer is on or about to claim (fill_buf):
+      // that one keeps the original path, so the two can never both drive it.
+      for (int i = 0; i < NBUF; i++) begin
+        if (bd_clr_pend[i]) begin
+          if (bd_clear_busy[i]) bd_clr_run[i] <= 1'b1;
+          else if (bd_clr_run[i]) begin
+            bd_clr_pend[i] <= 1'b0; bd_clr_run[i] <= 1'b0; bd_clean[i] <= 1'b1;
+          end
+        end else if (BUFW'(i) != fill_buf && !bd_ready[i] && bd_settled[i]
+                     && !bd_clean[i] && !bd_clear_busy[i]) begin
+          bd_clear_req[i] <= 1'b1;
+          bd_clr_pend[i]  <= 1'b1;
+        end
+      end
 
       // ---- R200's two numbers.
       //
@@ -929,11 +961,18 @@ module m2_raster3d #(
         C_IDLE: if (dvalid && (fill_frame == disp_frame)
                            && (scan_band_f > fill_band)) begin
           fill_band <= (scan_band_f == BW'(NBANDS-1)) ? '0 : scan_band_f + BW'(1);
-        end else if (dvalid && !bd_ready[fill_buf] && bd_settled[fill_buf]) begin
+        end else if (dvalid && !bd_ready[fill_buf] && bd_settled[fill_buf]
+                     && !bd_clr_pend[fill_buf]) begin   // R540: a clear in flight finishes first
           bd_y0[fill_buf]   <= 16'sd0 + 16'(fill_band) * 16'(BAND_H);
           bd_band[fill_buf] <= fill_band;
-          bd_clear_req[fill_buf] <= 1'b1;
-          cst <= C_CLR;
+          if (bd_clean[fill_buf]) begin
+            // R540: cleared in the background -- straight to the fill.
+            bd_clean[fill_buf] <= 1'b0;
+            cst <= C_REPLAY;
+          end else begin
+            bd_clear_req[fill_buf] <= 1'b1;
+            cst <= C_CLR;
+          end
         end
         C_CLR:  cst <= C_CLRW;
         C_CLRW: if (!bd_clear_busy[fill_buf]) cst <= C_REPLAY;

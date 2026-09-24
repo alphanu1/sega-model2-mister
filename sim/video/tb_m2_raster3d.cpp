@@ -13,6 +13,7 @@
 // the first, including the frames during which the NEXT list is collected.
 #include "Vm2_raster3d.h"
 #include "verilated.h"
+#include "Vm2_raster3d___024root.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstdint>
@@ -28,6 +29,7 @@ static const int SCR_W = 496, SCR_H = 384;
 static const int V_TOTAL = 424;
 static int BAND_H = 8;
 static uint64_t pix_hash = 1469598103934665603ull;   // R539: every painted pixel, all frames
+static long fill_hist[32], walk_busy = 0, cst_hist[8];   // R539: fill state per cycle, per frame
 static long top_hits = 0;
 static unsigned vbl_bands = 0;
 // CLOCKS PER SCANLINE, AND IT IS A TEST PARAMETER BECAUSE THE FAULT LIVES IN
@@ -118,7 +120,10 @@ int main(int argc, char **argv) {
     if (d->tex_m_ack) { d->tex_m_ack = 0; tex_wait = -1; }
     else if (tex_wait > 0) --tex_wait;
     if (d->tex_m2_ack) { d->tex_m2_ack = 0; tex2_wait = -1; }
-    else if (tex2_wait > 0) --tex2_wait;
+    else if (tex2_wait > 0) --tex2_wait;    // R539: where the fill's time goes, a cycle at a time.
+    ++fill_hist[d->dbg_fill_hot & 31];
+    ++cst_hist[d->rootp->m2_raster3d__DOT__cst & 7];
+    if (d->dbg_walk_hot) ++walk_busy;
   };
   for (int i = 0; i < 4; i++) tick();
   d->rst_n = 1; tick();
@@ -249,6 +254,18 @@ int main(int argc, char **argv) {
     std::printf("      bands filled during vblank: %u\n", vbl_bands);
     std::printf("      R536 missed scanlines last frame: %d\n", (int)d->dbg_miss_lines);
     std::printf("      R539 pixel hash: %016llx\n", (unsigned long long)pix_hash);
+    {
+      long tot = 0; for (long v : fill_hist) tot += v;
+      std::printf("      R539 fill states (%% of cycles):");
+      for (int k = 0; k < 32; ++k) if (fill_hist[k] * 100 >= tot) std::printf(" %d:%ld%%", k, fill_hist[k] * 100 / (tot ? tot : 1));
+      std::printf("  | walk busy %ld%%\n", walk_busy * 100 / (tot ? tot : 1));
+      static const char *cn[8] = {"IDLE","CLR","CLRW","REPLAY","FILL","FILLW","DONE","?"};
+      std::printf("      R539 band sequencer (%% of cycles):");
+      for (int k = 0; k < 8; ++k) if (cst_hist[k]) std::printf(" %s:%ld%%", cn[k], cst_hist[k] * 100 / (tot ? tot : 1));
+      std::printf("\n");
+      for (long &v : cst_hist) v = 0;
+      for (long &v : fill_hist) v = 0; walk_busy = 0;
+    }
   };
 
   long px[8] = {0};

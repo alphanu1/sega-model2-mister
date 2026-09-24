@@ -21672,3 +21672,49 @@ RESULTS (span bench, texel answers modelled in order, hit 3 cycles):
 m2_texel 8,268 checks pass. m2_raster3d: painted-pixel hash IDENTICAL to the
 previous walk over six textured frames at two loads (261ac8b6a8610143,
 3728132ca9879503) -- the change moves when texels arrive, never which.
+
+---
+
+**R540 -- R539 ALONE MOVES NOTHING IN THE WHOLE RENDERER. THE FILL WAS
+STARVED, AND A QUARTER OF THE FRAME WAS THE BUFFER CLEAR.**
+
+R539's span walk is 43% faster in its unit bench, but tb_m2_raster3d's
+missed lines were IDENTICAL old and new at every load (60: 8/8, 80: 88/88,
+100: 102/102, 2-line 160: 80/80). So the walk was not the limit. The bench now
+counts, per cycle, the fill's state and the band sequencer's (cst, read through
+a verilator public_flat_rd annotation Quartus ignores). At HEAVY=100, missing
+102 lines a frame:
+
+```
+  fill   S_IDLE 71%        walk busy 16%
+  seq    IDLE 19%  CLRW 27%  FILL 23%  FILLW 29%
+```
+
+The fill was idle 71% of the time; a quarter of every cycle was C_CLRW -- the
+sequencer waiting ~960 cycles (one word a cycle) for the buffer it had just
+claimed to be cleared, before filling could start. The clear was serial with
+the fill.
+
+THE CHANGE. A clear does not depend on which band the buffer will hold, and
+each buffer has its own engine. Any buffer the beam has released -- except
+fill_buf, which keeps the original path so the two can never both drive it --
+is now cleared in the background (bd_clean, bd_clr_pend, bd_clr_run). C_IDLE
+claims a clean buffer straight into C_REPLAY; one whose background clear is
+still running is waited for; anything else takes the old C_CLR path.
+
+tb_m2_raster3d, textured, TPL=400, old (R539 only) against new (R539+R540):
+
+```
+  load          missed lines        pixel hash
+  1             0 -> 0              identical
+  20            0 -> 0              identical
+  60            8 -> 0              differs: more drawn
+  80           88 -> 23  (-74%)
+  100         102 -> 87
+  160 (2-line)  80 -> 52
+  200 (2-line) 109 -> 95
+```
+
+Identical pixels wherever nothing was late; where lines were missed, more of
+the picture is drawn. m2_raster3d checks pass. R539 stays: it is the fill's
+next limit once the clear is out of the way.
