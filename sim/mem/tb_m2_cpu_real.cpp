@@ -38,8 +38,22 @@ static int checks = 0, fails = 0;
 static const int CPU_DIV = 8, MEM_DIV = 5;
 static unsigned long long tk = 0;
 
+// R529: COMPETING SDRAM TRAFFIC, as tb_m2_cpu_sdram has it. On the board ports
+// 2 and 3 are never idle -- the self-test loops and the character fetch runs
+// every line -- and a CPU access waits its turn behind them. M2_COMPETE=1.
+static bool competing = false;
+static uint32_t p2a = 0x100000, p3a = 0x200000;
+static void drive_traffic() {
+  if (!competing) { dut->p2_req = 0; dut->p3_req = 0; return; }
+  if (dut->p2_ack) { dut->p2_req = 0; p2a = 0x100000 + ((p2a + 4) & 0xfff); }
+  else if (!dut->p2_req) { dut->p2_addr = p2a; dut->p2_req = 1; }
+  if (dut->p3_ack) { dut->p3_req = 0; p3a = 0x200000 + ((p3a + 4) & 0xfff); }
+  else if (!dut->p3_req) { dut->p3_addr = p3a; dut->p3_req = 1; }
+}
+
 static void step() {
   ++tk;
+  drive_traffic();
   if ((tk % CPU_DIV) == 0) { dut->clk_cpu = 0; dut->eval(); }
   if ((tk % MEM_DIV) == 0) { dut->clk_mem = 0; dut->eval(); }
   if ((tk % CPU_DIV) == 0) { dut->clk_cpu = 1; dut->eval(); }
@@ -90,6 +104,8 @@ int main(int argc, char **argv) {
   // ------------------------------------------------------------- bring-up
   dut->clk_cpu = 0; dut->clk_mem = 0; dut->rst_n = 0; dut->cpu_rst_n = 0;
   dut->wr_req = 0; dut->wr_addr = 0; dut->wr_din = 0;
+  dut->p2_req = 0; dut->p3_req = 0;
+  competing = std::getenv("M2_COMPETE") && atoi(std::getenv("M2_COMPETE"));
   for (int i = 0; i < 64; ++i) step();
   dut->rst_n = 1;
   { long g = 0; while (!dut->mem_ready && g++ < 4000000) step(); }

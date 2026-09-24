@@ -54,7 +54,16 @@ module m2_cpu_real_harness #(
   output logic        bus_req,
   output logic        bus_we,
   output logic        bus_ack,
-  output logic [31:0] bus_addr
+  output logic [31:0] bus_addr,
+
+  // R529: competing traffic on the controller's other ports, driven by the
+  // bench the way tb_m2_cpu_sdram drives them.
+  input  logic        p2_req,
+  input  logic [COL_BITS+14:1] p2_addr,
+  output logic        p2_ack,
+  input  logic        p3_req,
+  input  logic [COL_BITS+14:1] p3_addr,
+  output logic        p3_ack
 );
 
   logic  [3:0] bus_be;
@@ -78,10 +87,8 @@ module m2_cpu_real_harness #(
     .bus_req(bus_req), .bus_we(bus_we), .bus_addr(bus_addr), .bus_be(bus_be),
     .bus_wdata(bus_wdata), .bus_rdata(bus_rdata), .bus_ack(bus_ack),
     .wr_req(wr_req), .wr_addr(wr_addr), .wr_din(wr_din), .wr_ack(wr_ack),
-    // No competing traffic in this first version: the question is whether the
-    // CPU and the bridge agree with each other, before anything else is added.
-    .p2_req(1'b0), .p2_addr('0), .p2_ack(), .p2_dout(),
-    .p3_req(1'b0), .p3_addr('0), .p3_ack(), .p3_dout(),
+    .p2_req(p2_req), .p2_addr(p2_addr), .p2_ack(p2_ack), .p2_dout(),
+    .p3_req(p3_req), .p3_addr(p3_addr), .p3_ack(p3_ack), .p3_dout(),
     .mem_ready(mem_ready),
     .dbg_last_addr(), .dbg_last_dout(), .dbg_reads()
   );
