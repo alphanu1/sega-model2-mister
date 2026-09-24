@@ -776,6 +776,10 @@ module m2_raster3d #(
   typedef enum logic [2:0] { C_IDLE, C_CLR, C_CLRW, C_REPLAY, C_FILL, C_FILLW, C_DONE } cstate_t;
   pstate_t pst;
   cstate_t cst /*verilator public_flat_rd*/;   // R539: the bench histograms it
+  // R541: WHY C_FILL IS WAITING, for the bench only (nothing reads it, so the
+  // fitter drops it). 1 quad handed over, 2 quad offered and the fill busy,
+  // 3 the store still replaying, 4 the band's last spans still painting.
+  logic [2:0] fill_why /*verilator public_flat_rd*/;
 
   // R200 instrumentation: see the port comments.
   logic [19:0] rdy_cyc;
@@ -821,6 +825,14 @@ module m2_raster3d #(
   assign qs_clear        = swap_d;
   assign qs_sort_start   = (pst == P_SORT);
   assign qs_replay_start = (cst == C_REPLAY);
+  always_comb begin
+    fill_why = 3'd0;
+    if (cst == C_FILL) begin
+      if (qs_out_valid)        fill_why = fl_in_ready ? 3'd1 : 3'd2;
+      else if (qs_replay_busy) fill_why = 3'd3;
+      else                     fill_why = 3'd4;
+    end
+  end
   assign qs_out_ready    = (cst == C_FILL) && fl_in_ready;
   assign fl_in_valid     = (cst == C_FILL) && qs_out_valid;
 

@@ -29,7 +29,7 @@ static const int SCR_W = 496, SCR_H = 384;
 static const int V_TOTAL = 424;
 static int BAND_H = 8;
 static uint64_t pix_hash = 1469598103934665603ull;   // R539: every painted pixel, all frames
-static long fill_hist[32], walk_busy = 0, cst_hist[8];   // R539: fill state per cycle, per frame
+static long fill_hist[32], walk_busy = 0, cst_hist[8], why_hist[8];   // R539: fill state per cycle, per frame
 static long top_hits = 0;
 static unsigned vbl_bands = 0;
 // CLOCKS PER SCANLINE, AND IT IS A TEST PARAMETER BECAUSE THE FAULT LIVES IN
@@ -123,6 +123,7 @@ int main(int argc, char **argv) {
     else if (tex2_wait > 0) --tex2_wait;    // R539: where the fill's time goes, a cycle at a time.
     ++fill_hist[d->dbg_fill_hot & 31];
     ++cst_hist[d->rootp->m2_raster3d__DOT__cst & 7];
+    ++why_hist[d->rootp->m2_raster3d__DOT__fill_why & 7];
     if (d->dbg_walk_hot) ++walk_busy;
   };
   for (int i = 0; i < 4; i++) tick();
@@ -171,7 +172,10 @@ int main(int argc, char **argv) {
       // that model showed R490 worth 5% when the board's horizon is the case
       // it was built for. Distant geometry is many SMALL polygons: short
       // spans, where the 8-cycle pipeline refill is most of the cost.
-      const int qx = (reps > 1) ? (8 + r * 12) : (100 + frame_no);
+      // R541: M2_R3D_OVERLAP packs the heavy quads two pixels apart, each its
+      // own colour, so they overlap and the picture depends on paint ORDER.
+      static const bool OVL = std::getenv("M2_R3D_OVERLAP") != nullptr;
+      const int qx = (reps > 1) ? (OVL ? 8 + r * 2 : 8 + r * 12) : (100 + frame_no);
       const int qw = (reps > 1) ? 6 : 40;
       static const int QY = std::getenv("M2_R3D_QY") ? std::atoi(std::getenv("M2_R3D_QY")) : 2;
       const int qy = (reps > 1) ? QY : 2;   // R538: heavy quads' first line in the 16-line row
@@ -183,7 +187,8 @@ int main(int argc, char **argv) {
       const int qh = (reps > 1) ? QH : 10;
       d->q_x2 = qx + qw; d->q_y2 = b * 16 + qy + qh;
       d->q_x3 = qx;      d->q_y3 = b * 16 + qy + qh;
-      d->q_col = 0xFFFFFF; d->q_z = 0x3F800000; d->q_moire = 0;
+      d->q_col = (OVL && reps > 1) ? (0x100000u * (r & 15) + 0x001000u * (b & 15) + 0x10u * ((r >> 4) & 15)) : 0xFFFFFF;
+      d->q_z = 0x3F800000; d->q_moire = 0;
       // R291: THE TEXTURED BIT, which no test has ever set. Two builds with
       // the texture path live hung the board before the game started, and the
       // only thing they have that the working build does not is this bit.
@@ -263,6 +268,9 @@ int main(int argc, char **argv) {
       std::printf("      R539 band sequencer (%% of cycles):");
       for (int k = 0; k < 8; ++k) if (cst_hist[k]) std::printf(" %s:%ld%%", cn[k], cst_hist[k] * 100 / (tot ? tot : 1));
       std::printf("\n");
+      std::printf("      R541 C_FILL split (%% of cycles): handoff %ld%%  fill-busy %ld%%  replaying %ld%%  band-end drain %ld%%\n",
+                  why_hist[1]*100/(tot?tot:1), why_hist[2]*100/(tot?tot:1), why_hist[3]*100/(tot?tot:1), why_hist[4]*100/(tot?tot:1));
+      for (long &v : why_hist) v = 0;
       for (long &v : cst_hist) v = 0;
       for (long &v : fill_hist) v = 0; walk_busy = 0;
     }

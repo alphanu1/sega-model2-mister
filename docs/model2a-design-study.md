@@ -21718,3 +21718,47 @@ tb_m2_raster3d, textured, TPL=400, old (R539 only) against new (R539+R540):
 Identical pixels wherever nothing was late; where lines were missed, more of
 the picture is drawn. m2_raster3d checks pass. R539 stays: it is the fill's
 next limit once the clear is out of the way.
+
+---
+
+**R541 -- s252 IS THE BEST BOARD YET; THE QUAD STORE'S SCAN NOW RUNS AHEAD OF
+THE FILL.**
+
+s252 (R539+R540): clk_mem +0.259, clk_sys +0.310, i960 +1.595, every hold
+positive, 0 SDRAM packing warnings -- the first fully clean build of this line.
+Board, against s245:
+
+```
+                          s245        s252
+  frames, 0 missed lines  15/26       21/28
+  worst frame             199 lines   97
+  bands 16-21 late        28-36%      20-29%
+  bands 22-28 late        24-36%      4-8%
+```
+
+Ben: "so close! still some bands missing".
+
+WHERE THE REST GOES. tb_m2_raster3d at HEAVY=100 with R540: C_CLRW 14%,
+C_FILLW 34%, C_FILL 24% -- and C_FILL split (a bench-only fill_why) is 21%
+"replaying": the fill free, waiting for m2_quad_store to find the band's next
+quad. The list is sorted by DEPTH (painter's order), so a band cannot stop its
+walk early; it scans the whole list, one quad a cycle. And the scan FROZE on
+every hit until the fill had taken that quad -- then idled through the fill's
+C_FILLW on it. Scan and fill were serial.
+
+THE CHANGE. Hits go into a 4-deep queue (index + {moire, col565}) and the scan
+continues, stalling only when the queue is full; an emitter reads the head's
+vertices (one read per array, R262) and hands it over. FIFO, so the order is
+the sort's. No M10K; the three-stage scan alignment is untouched.
+
+tb_m2_raster3d gained M2_R3D_OVERLAP: heavy quads two pixels apart, each its
+own colour, so the picture depends on paint ORDER (the old heavy quads never
+overlapped and were all white -- order could not show). R540 vs R541:
+
+```
+  overlap 10, 30        identical hashes (4f38c9d8.., 731e8251..)
+  60                    0 -> 0, identical
+  80                    23 -> 5 missed lines
+  160 (2-line)          52 -> 46
+  100                   87 -> 90   (past capacity either way)
+```

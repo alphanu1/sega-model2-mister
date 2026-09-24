@@ -532,9 +532,27 @@ module m2_quad_store #(
   // not with ord_idx itself. Re-registering ord_idx into another stage instead
   // shifts the quad one place against its own attributes, which draws every quad
   // exactly once and in the wrong order.
-  typedef enum logic [1:0] { P_IDLE, P_RUN, P_OUT } pstate_t;
-  pstate_t p_st;
+  // R541: THE SCAN RUNS AHEAD OF THE FILL.
+  //
+  // The scan above froze on every hit until the fill had TAKEN that quad --
+  // and the fill then spent tens of cycles on it (C_FILLW, 34% of a heavy
+  // frame's cycles in tb_m2_raster3d) while the scan sat idle, after which the
+  // fill waited again for the scan to find the next one ("replaying", 21%).
+  // The two were serial. Now each hit goes into a small queue and the scan
+  // carries on, stopping only when the queue is full; an emitter reads the
+  // head's vertices and hands it over. First in, first out, so the painter's
+  // order the sort established is exactly what the fill sees.
+  localparam int unsigned HQ = 4;
+  localparam int unsigned HW = $clog2(HQ) + 1;
+  logic [IW-1:0] hq_q   [HQ];
+  logic [CW:0]   hq_att [HQ];         // {moire, col565}, taken at the hit
+  logic [HW-1:0] hq_wp, hq_rp;
+  wire           hq_empty = (hq_wp == hq_rp);
+  wire           hq_full  = ((hq_wp - hq_rp) == HW'(HQ));
+  wire           hq_two   = ((hq_wp - hq_rp) >= HW'(2));
+  wire [HW-2:0]  hq_nx    = hq_rp[HW-2:0] + 1'b1;   // the entry after the head
 
+  logic          sc_run;              // the scan is walking the list
   logic [IW:0]   pi;
   logic [IW-1:0] q;
   logic          v1, v2;
@@ -564,26 +582,36 @@ module m2_quad_store #(
   assign out_oz2 = uvt_r[OZ0 + 2*OZW +: OZW];
   assign out_oz3 = uvt_r[OZ0 + 3*OZW +: OZW];
 
-  wire v0 = (pi < rcount);
+  wire v0 = sc_run && (pi < rcount);
 
-  // Frozen while a quad is being emitted: the vertex reads and the output
-  // register are shared, and those are the quads the band exists to draw.
   wire [BW-1:0] q_band_hi = att_rd[AT_W-1:AT_W-BW];
   wire [BW-1:0] q_band_lo = att_rd[AT_W-BW-1:CW+1];
   wire          hit = v2 && (replay_band >= q_band_lo) && (replay_band <= q_band_hi);
-  wire              adv = (p_st == P_RUN) && !hit;
+  // The pipeline moves unless a hit is standing with nowhere to go.
+  wire          adv = sc_run && !(hit && hq_full);
 
-  assign replay_busy = (p_st != P_IDLE);
+  typedef enum logic [1:0] { E_IDLE, E_READ, E_OUT } estate_t;
+  estate_t e_st;
+
+  assign replay_busy = sc_run || !hq_empty || (e_st != E_IDLE);
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      p_st <= P_IDLE; pi <= '0; q <= '0;
+      sc_run <= 1'b0; pi <= '0; q <= '0;
       v1 <= 1'b0; v2 <= 1'b0; q2 <= '0;
       ord_idx <= '0; att_rd <= '0;
+      hq_wp <= '0; hq_rp <= '0; e_st <= E_IDLE;
       out_valid <= 1'b0;
       vtx_r <= '0; uvt_r <= '0;
       out_col <= '0; out_moire <= 1'b0;
+    end else if (replay_start) begin
+      // A band starts only when the previous one has drained (the sequencer
+      // waits on replay_busy), so nothing is lost here.
+      sc_run <= (rcount != 0);
+      pi <= '0; v1 <= 1'b0; v2 <= 1'b0;
+      hq_wp <= '0; hq_rp <= '0; e_st <= E_IDLE; out_valid <= 1'b0;
     end else begin
+      // ---- the scan: the same three-stage alignment as before (see above).
       if (adv) begin
         ord_idx <= rbank ? idx_a1[pi[IW-1:0]] : idx_a0[pi[IW-1:0]];
         att_rd  <= rbank ? att_1[ord_idx] : att_0[ord_idx];
@@ -591,55 +619,45 @@ module m2_quad_store #(
         v1      <= v0;
         v2      <= v1;
         if (v0) pi <= pi + 1'b1;
+        // The hit in stage two leaves the pipeline on this same edge, into
+        // the queue.
+        if (hit) begin
+          hq_q  [hq_wp[HW-2:0]] <= q2;
+          hq_att[hq_wp[HW-2:0]] <= att_rd[CW:0];
+          hq_wp <= hq_wp + 1'b1;
+        end
       end
+      if (sc_run && !v0 && !v1 && !v2) sc_run <= 1'b0;   // drained
 
-      case (p_st)
-        P_IDLE: begin
-          out_valid <= 1'b0;
-          if (replay_start && rcount != 0) begin
-            pi <= '0; v1 <= 1'b0; v2 <= 1'b0;
-            p_st <= P_RUN;
-          end
+      // ---- the emitter. The vertex memories are registered: the quad's data
+      // is ready the cycle after q settles, which is when out_valid rises.
+      // ONE READ PER ARRAY (R262): the slices are taken from the registered
+      // word, not from two reads of the array.
+      case (e_st)
+        E_IDLE: if (!hq_empty) begin
+          q         <= hq_q[hq_rp[HW-2:0]];
+          out_col   <= c888(hq_att[hq_rp[HW-2:0]][CW-1:0]);
+          out_moire <= hq_att[hq_rp[HW-2:0]][CW];
+          e_st      <= E_READ;
         end
-
-        P_RUN: begin
-          if (hit) begin
-            q         <= q2;
-            out_col   <= c888(att_rd[CW-1:0]);
-            out_moire <= att_rd[CW];
-            p_st      <= P_OUT;
-          end else if (!v0 && !v1 && !v2) begin
-            p_st <= P_IDLE;              // drained
-          end
-        end
-
-        // The vertex memories are registered, so the quad's data is ready the
-        // cycle after q settles.
-        //
-        // ONE READ PER ARRAY, NOT TWO. `vtx0[q][15:0]` and `vtx0[q][31:16]` are
-        // two separate reads of the same array at the same address as far as
-        // synthesis is concerned, and Quartus answers a second read port by
-        // DUPLICATING the memory. Measured in the fit report: vtx0 as
-        // vtx0_rtl_0 and vtx0_rtl_1, 10 and 11 M10K for one 65,536-bit array,
-        // and the same for the other three - 91 blocks for 411,648 bits of
-        // unique data, 40% packing efficiency.
-        //
-        // A concatenation on the left is one read, split on the way out, and it
-        // is bit-identical: the store writes {in_y, in_x}.
-        P_OUT: begin
-          // ONE READ PER ARRAY (see the note above): the slices are taken
-          // from the registered word, not from two reads of the array.
-          vtx_r <= rbank ? vtx_1[q] : vtx_0[q];   // R262: one read, all four vertices
-          uvt_r <= rbank ? uvt_1[q] : uvt_0[q];   // R273: and its texture
+        E_READ: begin
+          vtx_r     <= rbank ? vtx_1[q] : vtx_0[q];
+          uvt_r     <= rbank ? uvt_1[q] : uvt_0[q];
           out_valid <= 1'b1;
-          if (out_valid && out_ready) begin
-            out_valid <= 1'b0;
-            v2        <= 1'b0;           // this one is consumed
-            p_st      <= P_RUN;
-          end
+          e_st      <= E_OUT;
         end
-
-        default: p_st <= P_IDLE;
+        E_OUT: if (out_ready) begin
+          out_valid <= 1'b0;
+          hq_rp     <= hq_rp + 1'b1;
+          // Straight on to the next if one is already waiting.
+          if (hq_two) begin
+            q         <= hq_q[hq_nx];
+            out_col   <= c888(hq_att[hq_nx][CW-1:0]);
+            out_moire <= hq_att[hq_nx][CW];
+            e_st      <= E_READ;
+          end else e_st <= E_IDLE;
+        end
+        default: e_st <= E_IDLE;
       endcase
     end
   end
