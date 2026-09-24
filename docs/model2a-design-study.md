@@ -21593,3 +21593,36 @@ tb_m2_sdram: 1,797,835 checks, 0 fails, 0 violations, 0 tag faults; sdram128,
 x2, romload, cpu_sdram, cpu_bridge all pass. Aggregate 0.420 -> 0.476
 words/cyc (+13.3%, R391's figure); a single port unchanged. Real-CPU harness
 identical (14.44 CPI, hash c8f4312e281e040b, fold 14b8).
+
+---
+
+**R538 -- SMALLER BANDS ARE SLOWER, MEASURED, EVEN WHERE THEY SHOULD WIN.**
+
+Ben: "can we not go to 84 bands -- at least then we can buffer 12 bands, plus
+each band costs less per cycle. I keep getting told this will be slower, but it
+sounds faster."
+
+12 x 4-line buffers are the same M10K as 6 x 8 and hold the SAME 48 lines, so
+the lookahead does not grow; what grows is the release granularity (a buffer
+frees after 4 lines shown instead of 8). Against that, each band carries fixed
+cost -- start, quad-list walk, finish -- and a polygon crossing bands is set up
+once per band. Which wins is a measurement, so tb_m2_raster3d now takes the
+band height (M2_R3D_BAND_H, matching -GBAND_H) and the heavy quads' height and
+row offset (M2_R3D_QH, M2_R3D_QY), and prints R536's missed scanlines.
+
+Textured, TPL=400, missed scanlines per frame (steady state):
+
+```
+  load   10-line quads      2-line quads, in ONE small band
+         8x6     4x12        8x6     4x12
+   40      0       46          -       -
+   60      8       96          0       0
+   80      -        -          0       0
+  100      -        -          0     48-62
+  120      -        -         50   143-146
+```
+
+4-line bands break down earlier and harder in every case, including the one
+built to favour them. BAND_H stays 8. (A first 2-line run placed the quads
+across a 4-line boundary, which biased it against small bands; it was rerun
+with them inside one band before concluding.)

@@ -24,7 +24,9 @@ static int checks = 0, fails = 0;
 static const int SCR_W = 496, SCR_H = 384;
 // The real vertical timing, because the fault R225 fixed lives in the blanking
 // lines: 424 total against 384 visible (m2_video_timing, MAME's set_raw).
-static const int V_TOTAL = 424, BAND_H = 8;
+// R538: BAND_H follows the build (-GBAND_H=...) through M2_R3D_BAND_H.
+static const int V_TOTAL = 424;
+static int BAND_H = 8;
 static long top_hits = 0;
 static unsigned vbl_bands = 0;
 // CLOCKS PER SCANLINE, AND IT IS A TEST PARAMETER BECAUSE THE FAULT LIVES IN
@@ -39,6 +41,7 @@ int main(int argc, char **argv) {
   Verilated::commandArgs(argc, argv);
   const bool g_textured = std::getenv("M2_R3D_TEX") != nullptr;
   if (const char *e = std::getenv("M2_R3D_TPL")) TPL = std::atoi(e);
+  if (const char *e = std::getenv("M2_R3D_BAND_H")) BAND_H = std::atoi(e);
   if (g_textured) std::printf("  TEXTURED quads (M2_R3D_TEX)\n");
   std::printf("  %d core clocks per scanline\n", TPL);
   auto d = new Vm2_raster3d;
@@ -164,10 +167,16 @@ int main(int argc, char **argv) {
       // spans, where the 8-cycle pipeline refill is most of the cost.
       const int qx = (reps > 1) ? (8 + r * 12) : (100 + frame_no);
       const int qw = (reps > 1) ? 6 : 40;
-      d->q_x0 = qx;      d->q_y0 = b * 16 + 2;
-      d->q_x1 = qx + qw; d->q_y1 = b * 16 + 2;
-      d->q_x2 = qx + qw; d->q_y2 = b * 16 + 12;
-      d->q_x3 = qx;      d->q_y3 = b * 16 + 12;
+      static const int QY = std::getenv("M2_R3D_QY") ? std::atoi(std::getenv("M2_R3D_QY")) : 2;
+      const int qy = (reps > 1) ? QY : 2;   // R538: heavy quads' first line in the 16-line row
+      d->q_x0 = qx;      d->q_y0 = b * 16 + qy;
+      d->q_x1 = qx + qw; d->q_y1 = b * 16 + qy;
+      // R538: M2_R3D_QH sets the heavy quads' height (default 10 lines), so
+      // distant 2-3 line polygons can be modelled as well as 10-line ones.
+      static const int QH = std::getenv("M2_R3D_QH") ? std::atoi(std::getenv("M2_R3D_QH")) : 10;
+      const int qh = (reps > 1) ? QH : 10;
+      d->q_x2 = qx + qw; d->q_y2 = b * 16 + qy + qh;
+      d->q_x3 = qx;      d->q_y3 = b * 16 + qy + qh;
       d->q_col = 0xFFFFFF; d->q_z = 0x3F800000; d->q_moire = 0;
       // R291: THE TEXTURED BIT, which no test has ever set. Two builds with
       // the texture path live hung the board before the game started, and the
@@ -232,6 +241,7 @@ int main(int argc, char **argv) {
                 hits, (int)d->dbg_quads, (int)d->dbg_dropped, (int)d->dbg_bands_done, (int)d->dbg_ready_cyc,
                 (int)d->dbg_late_frames, (int)d->dbg_qend_frames, (int)d->dbg_bands, (int)d->dbg_bands_painted);
     std::printf("      bands filled during vblank: %u\n", vbl_bands);
+    std::printf("      R536 missed scanlines last frame: %d\n", (int)d->dbg_miss_lines);
   };
 
   long px[8] = {0};
