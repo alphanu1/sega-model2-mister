@@ -21184,3 +21184,44 @@ budget directly -- which is the same order as R490 and needs no new M10K.
 clk_i960 is 25 and 30 is NOT prepped, but the VCO must be 1200 for 60 to exist
 and 1200/40 is 30, so that is a one-line change whenever R464's `insn -> wd`
 path is shortened.
+
+---
+
+**R527/R528 -- THE REAL CPU ON THE REAL MEMORY PATH EXISTS NOW, AND POSTED
+WRITES ARE CORRECT ON IT. THEY ARE ALSO WORTH 4%.**
+
+`tb_m2_cpu_real` puts i960_top, m2_cpu_bridge and m2_sdram together running
+the real Daytona program ROM -- the composition R490 and R523 both perturbed
+and no bench had ever exercised. The checks are the board's symptoms: the CPU
+must keep retiring, never halt or trap, and the FNV hash over its retired-IP
+stream must not change when the memory path does.
+
+```
+                        instructions   CPI     trace hash          result
+  bridge as shipped        100,000     21.21   a95ee045a6c3424b    PASS
+  posted writes (R523)     100,000     20.33   a95ee045a6c3424b    PASS
+```
+
+IDENTICAL HASH. Posting changed when the CPU was told and not one instruction
+of what it executed. On the real CPU, holding its request and releasing its
+grant on the acknowledge, the change is correct.
+
+SO THE HARDWARE FAILURE IS STILL SOMEWHERE ELSE, and the harness names what
+it does not yet have: interrupts (irq is tied to zero; the board's V-blank
+takes the aux master mid-frame, and the register-frame spill it triggers is
+the collision R34 records), competing SDRAM traffic (p2/p3 are off; on the
+board they are never idle), and the data cache seeing writers it cannot see.
+Each is a knob the existing benches already model somewhere.
+
+AND THE GAIN IS 4%, NOT 68%. This loop is the boot spin the board spends 91%
+of its time in -- four memory instructions -- and with one request channel
+the instruction after a posted store is another access that waits at the
+bridge instead of at the CPU. The 3.25 CPI of write-waiting does not go away
+by acknowledging early; it goes away by letting a READ be dispatched while the
+write drains, which is a one-entry write buffer with an address-match stall.
+That is the CPI lever. Posting is its first half.
+
+21 CPI here against 7.49 on the board is not a contradiction: this run has no
+main_data ROMs (those reads return 0xFFFF and the code takes a different
+path), no interrupts and no competing traffic, and it is the cold boot spin.
+It is a baseline for A/B, not a model of the board's rate.
