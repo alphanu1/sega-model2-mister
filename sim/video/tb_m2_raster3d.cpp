@@ -27,7 +27,7 @@ static const int SCR_W = 496, SCR_H = 384;
 // lines: 424 total against 384 visible (m2_video_timing, MAME's set_raw).
 // R538: BAND_H follows the build (-GBAND_H=...) through M2_R3D_BAND_H.
 static const int V_TOTAL = 424;
-static int BAND_H = 16;   // R542: the shipped band height
+static int BAND_H = 8;    // the shipped band height
 static bool px_dump = false;   // R542: M2_R3D_PXDUMP, every painted pixel of the last frame
 static uint64_t frame_hash = 1469598103934665603ull;   // R542: this frame only
 static uint64_t pix_hash = 1469598103934665603ull;   // R539: every painted pixel, all frames

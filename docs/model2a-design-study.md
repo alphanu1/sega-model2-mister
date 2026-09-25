@@ -21811,3 +21811,28 @@ kind, and at most a one-texel shift on the odd row.
 The module defaults and the bench default change with Model2.sv (R508: the
 bench must build what ships). The per-frame pixel hash and a pixel dump
 (M2_R3D_PXDUMP) are in the bench now.
+
+---
+
+**R543 -- 16-LINE BANDS DID NOT CARRY TO THE BOARD. REVERTED TO 8 x 6.**
+
+s257 (R542; clk_mem -0.684, clk_sys +0.997, hold -0.001, M10K 552/553 --
+two MORE than 8x6, so the taller buffers were not free after all):
+
+```
+                          s256 (8x6)    s257 (16x3)
+  frames, 0 missed lines  22/27         21/30
+  worst frame             98 lines      120
+  y 128-191 late          18-22%        24-28%   (16-line bands: twice the exposure)
+```
+
+Ben: "about the same. still missing bands in the middle quite often." The
+missed-line figures do not depend on band size and are no better.
+
+WHY THE BENCH WAS WRONG, as far as can be said: with 16-line bands R506's
+re-phase discards 16 lines at a time when the fill falls behind, not 8, and a
+buffer is reusable only after 16 lines have been shown. A real scene varies
+far more from band to band than the bench's uniform horizon, and that punishes
+coarse granularity which the synthetic load never exercises. R538 said the
+same from the other direction: the bench's scene cannot settle band size.
+Band height stays 8, NBUF 6. The per-frame hash and pixel dump stay.

@@ -27,7 +27,7 @@
 module m2_raster3d #(
   parameter int unsigned SCR_W  = 496,
   parameter int unsigned SCR_H  = 384,
-  parameter int unsigned BAND_H = 16,   // R542: tracks Model2.sv (R508's lesson)
+  parameter int unsigned BAND_H = 8,    // tracks Model2.sv (R508's lesson)
   // R454: 4 -> 6 BAND BUFFERS. The renderer's problem is VARIANCE, not
   // throughput: `ready ms` measures 6.08 median against 17.3 max, and the
   // frame is 16.7. Most frames finish in a third of the time and the
@@ -46,7 +46,7 @@ module m2_raster3d #(
   // overrides to five (R456 records the same trap the other way round: R454
   // changed this default and the instantiation ignored it). Tracking the
   // override so the bench measures what the design builds.
-  parameter int unsigned NBUF   = 3,    // R542
+  parameter int unsigned NBUF   = 6,
 
   // ARE clk AND scan_clk ACTUALLY DIFFERENT CLOCKS?
   //
