@@ -175,8 +175,8 @@ module m2_raster3d #(
   // R547: WHAT THE SEQUENCER WAITS ON WHEN IT MATTERS, per frame, in units of
   // 256 cycles (saturating): counted only while the fill is on the displayed
   // frame and at most one band ahead of the beam -- the moments a band can be
-  // late. a = {critical total, C_IDLE, C_CLRW, C_FILLW};
-  // b = {list walk (replaying), band-end drain, quad handoff, span walk busy}.
+  // late. a = {critical total, C_FILLW, list walk (replaying), span walk busy};
+  // b is zero (R547's first form had eight counters and did not fit).
   output logic [31:0] dbg_seq_a,
   output logic [31:0] dbg_seq_b
 );
@@ -842,32 +842,31 @@ module m2_raster3d #(
 
   end
 
-  // R547: the critical-period histogram. See dbg_seq_a/b.
-  logic [15:0] sq_c [8];
+  // R547: the critical-period histogram. See dbg_seq_a. FOUR counters, not
+  // eight: the eight-counter version took the design to 4,200 LABs of 4,191.
+  // C_CLRW, the handoff and the band-end drain read ~0 in every bench regime,
+  // and C_IDLE cannot occur while the fill is behind the beam.
+  logic [15:0] sq_c [4];
   wire sq_crit = dvalid && (fill_frame == disp_frame) && (scan_y < 10'(SCR_H))
               && ((BW+1)'(fill_band) <= (BW+1)'(scan_band_f) + (BW+1)'(1));
   function automatic logic [7:0] sq8(input logic [15:0] c);
-    sq8 = (c[15:8] == 8'hff) ? 8'hff : c[15:8];
+    sq8 = c[15:8];
   endfunction
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      for (int k = 0; k < 8; k++) sq_c[k] <= '0;
-      dbg_seq_a <= '0; dbg_seq_b <= '0;
+      for (int k = 0; k < 4; k++) sq_c[k] <= '0;
+      dbg_seq_a <= '0;
     end else if (frame_start) begin
       dbg_seq_a <= {sq8(sq_c[0]), sq8(sq_c[1]), sq8(sq_c[2]), sq8(sq_c[3])};
-      dbg_seq_b <= {sq8(sq_c[4]), sq8(sq_c[5]), sq8(sq_c[6]), sq8(sq_c[7])};
-      for (int k = 0; k < 8; k++) sq_c[k] <= '0;
+      for (int k = 0; k < 4; k++) sq_c[k] <= '0;
     end else if (sq_crit) begin
       if (!(&sq_c[0])) sq_c[0] <= sq_c[0] + 1'b1;
-      if (cst == C_IDLE  && !(&sq_c[1])) sq_c[1] <= sq_c[1] + 1'b1;
-      if (cst == C_CLRW  && !(&sq_c[2])) sq_c[2] <= sq_c[2] + 1'b1;
-      if (cst == C_FILLW && !(&sq_c[3])) sq_c[3] <= sq_c[3] + 1'b1;
-      if (fill_why == 3'd3 && !(&sq_c[4])) sq_c[4] <= sq_c[4] + 1'b1;
-      if (fill_why == 3'd4 && !(&sq_c[5])) sq_c[5] <= sq_c[5] + 1'b1;
-      if ((fill_why == 3'd1 || fill_why == 3'd2) && !(&sq_c[6])) sq_c[6] <= sq_c[6] + 1'b1;
-      if (spantex_busy && !(&sq_c[7])) sq_c[7] <= sq_c[7] + 1'b1;
+      if (cst == C_FILLW && !(&sq_c[1])) sq_c[1] <= sq_c[1] + 1'b1;
+      if (fill_why == 3'd3 && !(&sq_c[2])) sq_c[2] <= sq_c[2] + 1'b1;
+      if (spantex_busy && !(&sq_c[3])) sq_c[3] <= sq_c[3] + 1'b1;
     end
   end
+  assign dbg_seq_b = '0;
   assign qs_out_ready    = (cst == C_FILL) && fl_in_ready;
   assign fl_in_valid     = (cst == C_FILL) && qs_out_valid;
 

@@ -22042,3 +22042,9 @@ fill already takes. Only a miss refills.
 test_i960_icache (0 mismatches), test_i960_top, test_i960_rom pass. Still
 open: the line AFTER a hot loop is prefetched and abandoned every pass
 (0x16c0, 64,515 words) -- a smaller fix for another day.
+
+R547, AMENDED: the eight-counter histogram did not fit -- "Fitter requires
+4,200 LABs ... the device contains only 4,191" on all three seeds. Cut to four
+counters, a = {critical total, C_FILLW, list walk, span walk busy}; b is zero.
+The design is now within ~9 LABs of the device, and any instrument has to be
+paid for.
