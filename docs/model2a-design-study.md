@@ -22071,3 +22071,23 @@ the i960's critical path supports ~25.6 MHz. At 99% LABs the fitter has little
 to give. A clock raise means re-pipelining the i960, the geometry engine and
 the texel cache: not a near-term lever. CPI levers stay the architectural ones
 (R548 and after).
+
+---
+
+**R550 -- OUT OF LOGIC: 4,216-4,227 LABs OF 4,191. R546 COMES OUT; THE LIGHT
+SHADOW MOVES TO LUT-RAM.**
+
+R547's four counters plus R548's redirect-hit compare did not fit either:
+s269-s271 needed 4,216, 4,223 and 4,227 LABs. s265 had already been at
+41,759 / 41,910 ALMs (99.6%). About 36 LABs had to come back.
+
+  * R546's block summary is reverted -- it measured no gain on the board
+    (R547), so its logic was pure cost.
+  * The 'T' light-table shadow (tps_dif/tps_amb, 32 x 2 x 8 bits) was written
+    inside Model2.sv's async-reset block, so it could only be ~512 flip-flops.
+    Its writes move to a reset-free block tagged MLAB -- the project's own
+    memory rule, missed here. Same shadow, same records; it is the lighting
+    investigation's main instrument and is kept.
+
+Checked and NOT worth touching: mapnz/mapreal/fold_*/chw_* are written but
+never read, so synthesis already deletes them; xlat_stage is functional.

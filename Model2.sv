@@ -592,7 +592,17 @@ wire  [7:0] geo_lum;         // ...with its luminance
 // this. So: a shadow of the raw bytes the walker writes, a bit per entry
 // written, and the walker's command count, streamed as 'T' records that rotate
 // through the entries one per frame.
-logic  [7:0] tps_dif [32], tps_amb [32];
+// R550: IN LUT-RAM, NOT FLIP-FLOPS. Written inside the async-reset block below
+// these 512 bits could only be registers; written from a block with no reset
+// they are one small MLAB. Same shadow, same 'T' records.
+(* ramstyle = "MLAB" *) logic [7:0] tps_dif [32];
+(* ramstyle = "MLAB" *) logic [7:0] tps_amb [32];
+always_ff @(posedge clk_sys) begin
+	if (geo_tp_we) begin
+		tps_dif[geo_tp_idx] <= geo_tp_diffuse;
+		tps_amb[geo_tp_idx] <= geo_tp_ambient;
+	end
+end
 logic [31:0] tps_seen;
 logic  [4:0] tps_sel;
 logic  [2:0] tps_ph;   // R275: three bits, so the texture record has a slot
@@ -601,11 +611,7 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
 		tps_seen <= 32'd0; tps_sel <= 5'd0; tps_ph <= 3'd0; ck_idx <= 4'd0;
 	end else begin
-		if (geo_tp_we) begin
-			tps_dif[geo_tp_idx]  <= geo_tp_diffuse;
-			tps_amb[geo_tp_idx]  <= geo_tp_ambient;
-			tps_seen[geo_tp_idx] <= 1'b1;
-		end
+		if (geo_tp_we) tps_seen[geo_tp_idx] <= 1'b1;   // R550: the arrays are written above
 		if (geo_walk_start) begin
 			tps_ph <= tps_ph + 3'd1;
 			if (tps_ph == 3'd1) tps_sel <= tps_sel + 5'd1;
