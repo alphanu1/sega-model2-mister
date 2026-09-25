@@ -22620,3 +22620,31 @@ against 2.23 (11.21) -- the crossing costs the CPU 1.1% on the board, a third
 of the bench's 3.5%. Bands, critical periods (2,769 against 2,967) and the
 texel cache (75.1% of 67,439 fetches against 76.1%) unchanged, as they
 should be: nothing in 1(a) touches the renderer.
+
+---
+
+**R565 -- STEP 2 SIZED FROM A REAL NETLIST: WHAT FAILS AT 60 / 30.**
+
+From s297's timing netlist (step 1(a) on the board): every clk_sys endpoint
+with less than 3.33 ns of setup slack at 50 MHz, which is what a 16.67 ns
+period removes, and every i960 endpoint with less than 6.67 ns at 25 (the
+i960 at 30). One path per endpoint.
+
+    target            source   endpoints  worst at 50  -> at 60/30
+    clk_sys  60       clk_sys     472       +1.113        -2.22 ns
+    clk_sys  60       clk_mem     186       +1.726        (cut by step 1(e))
+    i960     30       i960         31       +3.105        -3.56 ns
+    i960     30       clk_sys     210       +5.492        +2.16 ns (2:1 window
+                                                           16.67 ns: fits)
+
+The core-internal failures are in five places, worst first: the geometry
+FP pool's adder (u_pool/u_add, +1.113) and multiplier (+2.496) -- the same
+wall Model 1 hit at 53.25 MHz and registered (R227); the quad store and its
+two attribute RAMs (+1.125, +1.967, +2.194); the geometry engine's own
+control (+1.842); the fill (+2.601); the TGP core (+2.627). The clk_mem ->
+clk_sys endpoints are the tilemap fetch (removed by step 1(b), where both
+ends are clk_mem) and the per-frame debug snapshots.
+
+R227 recorded the i960 as 5.68 ns short of 30; on today's netlist it is
+3.56. Earlier measurement, different design state -- the number to use is
+this one, and a build at the target is what settles it.
