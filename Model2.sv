@@ -751,6 +751,14 @@ logic [NPORTS-1:0][1:0]   p_be;
 logic [NPORTS-1:0][SDR_AW:1]  p_addr;
 wire  [NPORTS-1:0][63:0]  p_dout;
 wire  [NPORTS-1:0]        p_ack;
+// R561: port 2 is native to clk_mem (the texel cache's second miss port), so
+// its boot-time owners -- the self-test read and the copy engine, strictly one
+// after the other -- cross on a port of their own, u_p2s, and are muxed in
+// on the memory side. p2_tex_f is p2_tex in that domain.
+logic             p2s_req;
+logic [SDR_AW:1]  p2s_addr;
+wire              p2s_freq, p2s_ack;
+logic             p2_tex_f;
 
 always_comb begin
 	p_req  = '0;
@@ -798,10 +806,13 @@ always_comb begin
 	// THE READ-BACK SWEEP IS GIVEN UP FOR THIS. It is the diagnostic R237/R238
 	// left behind and it runs forever otherwise; it is masked once the texel
 	// owns the port. Say so rather than let it look like it still works.
-	p_req[2]  = p2_tex ? tex_m2_req
-	                   : (cp_req ? cp_req  : st_rd_req ? st_rd_req  : sw_req);
-	p_addr[2] = p2_tex ? tex_m2_addr
-	                   : (cp_req ? cp_addr : st_rd_req ? st_rd_addr : sw_addr);
+	//
+	// R561: the boot owners' level and address are clk_sys; they reach the
+	// port through u_p2s. The mux itself is on the clk_mem side.
+	p2s_req   = !p2_tex && (cp_req || st_rd_req || sw_req);
+	p2s_addr  = cp_req ? cp_addr : st_rd_req ? st_rd_addr : sw_addr;
+	p_req[2]  = p2_tex_f ? tex_m2_req  : p2s_freq;
+	p_addr[2] = p2_tex_f ? tex_m2_addr : p2s_addr;
 	// PORT 1, NOT PORT 0. m2_sdram's blen() gives ports 1-3 a four-word burst and
 	// ports 0 and 4 a single word, and the copy engine was the ONLY consumer of a
 	// single-word read -- and the only reader that fails. The self-test on port 2
@@ -1058,8 +1069,13 @@ m2_wr_arb #(.N(5), .AW(SDR_AW)) u_wr_arb (
 	.s_req(wa_req), .s_addr(wa_addr), .s_din(wa_din), .s_ack(ldr_wr_ack)
 );
 
-m2_sdram_x2 #(.NP(NPORTS), .AW(SDR_AW)) u_sdram_x2 (
-	.clk_fast(clk_mem),
+// R561: ASYNCHRONOUS, NOT 2:1. m2_sdram_x2 relied on clk_sys being an exact /2
+// of clk_mem; this crosses at any ratio with the same slow-side contract, so no
+// requester changes. Ports 2, 3 and 10 are the caches on clk_mem and pass
+// straight through; port 2's boot owners cross on u_p2s below.
+m2_sdram_cdc #(.NP(NPORTS), .AW(SDR_AW), .FAST(11'b100_0000_1100)) u_sdram_x2 (
+	.clk_slow(clk_sys), .s_rst_n(mem_rst_n),
+	.clk_fast(clk_mem), .f_rst_n(mem_rst_n),
 	.s_req(p_req), .s_addr(p_addr), .s_ack(p_ack), .s_dout(p_dout),
 	.s_we(p_we),   .s_din(p_din),   .s_be(p_be),
 	// ONE OWNER AT A TIME (R209): m2_wr_arb grants the port for a whole
@@ -1073,6 +1089,12 @@ m2_sdram_x2 #(.NP(NPORTS), .AW(SDR_AW)) u_sdram_x2 (
 	.f_we(f_we),   .f_din(f_din),   .f_be(f_be),
 	.f_wr_req(f_wr_req), .f_wr_addr(f_wr_addr), .f_wr_din(f_wr_din),
 	.f_wr_be(f_wr_be),   .f_wr_ack(f_wr_ack)
+);
+
+m2_sdram_cdc_port u_p2s (
+	.clk_slow(clk_sys), .s_rst_n(mem_rst_n), .clk_fast(clk_mem), .f_rst_n(mem_rst_n),
+	.s_req(p2s_req), .s_ack(p2s_ack),
+	.f_req(p2s_freq), .f_ack(p_ack[2] & ~p2_tex_f)
 );
 
 // CL2, WHICH IS WHAT WORKS ON THIS BOARD AT THIS CLOCK. Briefly changed to CL3
@@ -1486,7 +1508,7 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 			4'd8: begin
 				st_rd_addr <= ST_BASE; st_rd_req <= 1'b1; st_state <= 4'd9;
 			end
-			4'd9: if (p_ack[2]) begin
+			4'd9: if (p2s_ack) begin      // R561: port 2's boot side, crossed
 				st_got <= p_dout[2]; st_rd_req <= 1'b0; st_state <= 4'd10;
 			end
 			4'd10: begin
@@ -1913,7 +1935,7 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 				default: cp_addr <= xlat_rd_addr;
 			endcase
 			cp_req  <= 1'b1;
-		end else if (cp_req && p_ack[2]) begin
+		end else if (cp_req && p2s_ack) begin   // R561
 			cp_req   <= 1'b0;
 			cp_wdata <= p_dout[2][15:0];
 			case (cp_phase)
@@ -4798,7 +4820,7 @@ logic  [1:0]     sw_wsel;
 logic  [4:0]     sw_sel;
 logic            sw_done;
 logic            sw_done_d, sw_emit;
-wire             sw_ack = p_ack[2] && sw_req && !cp_req && !st_rd_req;   // R238: port 2, ours only when the others are idle
+wire             sw_ack = p2s_ack && sw_req && !cp_req && !st_rd_req;   // R238: port 2, ours only when the others are idle
 logic            sw_pend;         // a completed fold waiting for the stream
 logic [23:0]     sw_out;
 logic  [4:0]     sw_out_sel;
@@ -5663,10 +5685,17 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	if (!mem_rst_n)                 p2_tex <= 1'b0;
 	else if (cp_done && cal_done)   p2_tex <= 1'b1;
 end
-wire        tex_m2_en = p2_tex;
+// R561: and in the texel cache's own domain. It changes once, at the end of
+// the boot, while nothing is using the port.
+logic p2_tex_f1;
+always_ff @(posedge clk_mem or negedge mem_rst_n) begin
+	if (!mem_rst_n) begin p2_tex_f1 <= 1'b0; p2_tex_f <= 1'b0; end
+	else            begin p2_tex_f1 <= p2_tex; p2_tex_f <= p2_tex_f1; end
+end
+wire        tex_m2_en = p2_tex_f;
 wire        tex_m2_req;
 wire [SDR_AW:1] tex_m2_addr;
-wire        tex_m2_ack  = p2_tex & p_ack[2];
+wire        tex_m2_ack  = p2_tex_f & p_ack[2];
 wire [63:0] tex_m2_data = p_dout[2];
 
 // R543: back to 8x6 -- R542's 16x3 won in the bench and not on the board.

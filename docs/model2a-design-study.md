@@ -22444,3 +22444,58 @@ same slow-side contract; (b) the character cache's crossing; (c) m2_texel_x2
 as an asynchronous queue, plus the texel cache's control inputs; (d) the
 debug counters; (e) the inventory rerun, then the clock groups; (f) a board
 build at 100/50/25, which must behave as today, before step 2.
+
+---
+
+**R562 -- STEP 1(a): m2_sdram_cdc REPLACES m2_sdram_x2. AND THE i960 IS
+MEMORY-BOUND: 20% MORE CLOCK BUYS IT 2.5%.**
+
+m2_sdram_cdc keeps m2_sdram_x2's slow-side contract exactly (req held with
+its address until ack, ack sticky while req stands, data valid with ack), so
+no requester changes. The request level crosses on two flops; the completion
+crosses as a TOGGLE, because a synchronised level has to fall and be seen
+falling before a request re-raised after one idle cycle can be told apart
+from the last -- a race against the SDRAM's own latency. No payload
+registers either way: requesters hold address and data (R34), and m2_sdram
+holds p_dout[port] from its acknowledge until that port completes again.
+Ports 2, 3 and 10 are native to clk_mem and pass through with
+m2_sdram_x2's logic; port 2's boot owners (self-test, then copy -- strictly
+sequential; the sweep is compiled out) cross on a port of their own,
+u_p2s, muxed on the clk_mem side by p2_tex_f.
+
+*tb_m2_sdram_cdc* drives the two clocks from absolute time: 54 runs over
+100/60, 2:1 at two phases, +/-3 ns jitter, slow clocks from 25 to 95 MHz, six
+seeds each; every read correct, the device serves exactly four words a
+burst, writes exactly once, no hangs, no timing violations. Mutations:
+completion as a level fails 21,859 checks; s_ack not gated by s_req fails
+5,023 -- an acknowledge still showing the cycle after the request fell,
+which m2_sdram_x2 never gave and which `tgp_tbl_ack_r <= p_ack[8]` and
+`p4_ack_d <= p_ack[4]` in Model2.sv would count; f_req unmasked by `done`
+fails nothing, as m2_sdram_x2 records for itself (the controller
+edge-detects).
+
+*A bench fault it exposed.* tb_m2_cpu_real's preload and competing-traffic
+drivers act on 5 ns ticks and raised the next request the tick after the
+acknowledge fell. m2_sdram_x2 hid it (its acknowledge stayed up until a
+fast edge had seen the request fall); the new crossing does not, and the CPU
+trapped at IP 0 on garbage ROM. No RTL requester can do this -- each is a
+register on its own clock, and m2_wr_arb releases with a dead cycle -- so
+the drivers now hold the request low for a whole requester cycle.
+
+*What it costs, and what the clock plan buys the CPU* -- tb_m2_cpu_real,
+Daytona's boot, 300,000 instructions, competing traffic on, the controller
+on its own clock (the harness's new XMODE), identical trace hash in every
+case:
+
+    configuration                         CPI     ns/instr   vs today
+    m2_sdram_x2, 25 / 50 / 100 (today)   10.04    402
+    m2_sdram_cdc, 25 / 50 / 100          10.40    416        -3.5%
+    m2_sdram_cdc, 30 / 60 / 100          11.75    392        +2.5%
+    m2_sdram_cdc, 25 / 60 / 100           9.89    396        +1.5%
+
+At ten cycles an instruction the i960 is waiting on memory, and a faster
+core clock mostly adds cycles to each wait. The clock plan still pays for
+the coprocessor and the renderer, which run on clk_sys; for the CPU the
+lever is the SDRAM round trip (arbitration, the crossing, the bridge's own
+states), not the clock. The boot is copy-heavy and may overstate this for
+game code; the board's own CPI has not been measured.

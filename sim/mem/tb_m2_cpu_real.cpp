@@ -37,7 +37,10 @@ static int checks = 0, fails = 0;
 
 // Same clock ratio as tb_m2_cpu_sdram, so the bridge's crossing is exercised
 // the way the composition test already exercises it.
-static const int CPU_DIV = 8, MEM_DIV = 5;
+// R561: M2_CPU_DIV / M2_MEM_DIV / M2_SD_DIV override them, in 5 ns ticks, and
+// M2_SD_DIV gives the controller its own clock (the harness's XMODE 1 or 2).
+// 8/4/2 is the board today: 25 / 50 / 100 MHz.
+static int CPU_DIV = 8, MEM_DIV = 5, SD_DIV = 0;
 static unsigned long long tk = 0;
 
 // R529: COMPETING SDRAM TRAFFIC, as tb_m2_cpu_sdram has it. On the board ports
@@ -45,11 +48,15 @@ static unsigned long long tk = 0;
 // every line -- and a CPU access waits its turn behind them. M2_COMPETE=1.
 static bool competing = false;
 static uint32_t p2a = 0x100000, p3a = 0x200000;
+static int p2_off = 0, p3_off = 0;   // R561: ticks the request must stay low
 static void drive_traffic() {
   if (!competing) { dut->p2_req = 0; dut->p3_req = 0; return; }
-  if (dut->p2_ack) { dut->p2_req = 0; p2a = 0x100000 + ((p2a + 4) & 0xfff); }
+  // R561: low for a whole requester cycle between requests -- see preload().
+  if (dut->p2_req && dut->p2_ack) { dut->p2_req = 0; p2_off = MEM_DIV; p2a = 0x100000 + ((p2a + 4) & 0xfff); }
+  else if (!dut->p2_req && p2_off > 0) --p2_off;
   else if (!dut->p2_req) { dut->p2_addr = p2a; dut->p2_req = 1; }
-  if (dut->p3_ack) { dut->p3_req = 0; p3a = 0x200000 + ((p3a + 4) & 0xfff); }
+  if (dut->p3_req && dut->p3_ack) { dut->p3_req = 0; p3_off = MEM_DIV; p3a = 0x200000 + ((p3a + 4) & 0xfff); }
+  else if (!dut->p3_req && p3_off > 0) --p3_off;
   else if (!dut->p3_req) { dut->p3_addr = p3a; dut->p3_req = 1; }
 }
 
@@ -61,7 +68,7 @@ static void drive_traffic() {
 static uint32_t intreq = 0, intena = 0, videoctl = 0;
 static uint64_t vblanks = 0;
 static uint8_t  io_dp[0x800];
-static const unsigned long long VBLANK_TICKS = 434600ULL * CPU_DIV;
+static unsigned long long VBLANK_TICKS = 434600ULL * 8;   // set again once CPU_DIV is known
 static void drive_irq() {
   dut->irq = uint8_t(((intreq & 0x001u) ? 1u : 0u) | ((intreq & 0x002u) ? 2u : 0u) |
                      ((intreq & 0x3fcu) ? 4u : 0u) | ((intreq & 0xc00u) ? 8u : 0u));
@@ -198,6 +205,22 @@ static void step() {
   ++tk;
   drive_traffic();
   drive_io();
+  if (SD_DIV) {
+    // Three clocks: every edge due on this tick moves at once, then ONE
+    // evaluation. Aligned clocks evaluated one after the other would let a
+    // register clocked first be seen by one clocked second in the same instant,
+    // which is a race the hardware does not have.
+    const bool c = (tk % CPU_DIV) == 0, m = (tk % MEM_DIV) == 0, sd = (tk % SD_DIV) == 0;
+    if (c || m || sd) {
+      if (c) dut->clk_cpu = 0; if (m) dut->clk_mem = 0; if (sd) dut->clk_sd = 0;
+      dut->eval();
+      if (c) dut->clk_cpu = 1; if (m) dut->clk_mem = 1; if (sd) dut->clk_sd = 1;
+      dut->eval();
+    }
+    note_reads();
+    if (c) cpu_account();
+    return;
+  }
   if ((tk % CPU_DIV) == 0) { dut->clk_cpu = 0; dut->eval(); }
   if ((tk % MEM_DIV) == 0) { dut->clk_mem = 0; dut->eval(); }
   if ((tk % CPU_DIV) == 0) { dut->clk_cpu = 1; dut->eval(); }
@@ -224,6 +247,13 @@ static bool preload(uint32_t word_addr, uint16_t data) {
   for (int g = 0; g < 100000; ++g) { step(); if (dut->wr_ack) { acked = true; break; } }
   dut->wr_req = 0;
   for (int g = 0; g < 100000 && dut->wr_ack; ++g) step();
+  // R561: AND LOW FOR A WHOLE REQUESTER CYCLE. This loop acts on 5 ns ticks,
+  // faster than the clock the requester lives on, and used to raise the next
+  // write the tick after the acknowledge fell. m2_sdram_x2 happened to hide
+  // that -- its acknowledge stayed up until a fast edge had seen the request
+  // fall -- but no RTL requester can do it: every one is a register on its own
+  // clock, and m2_wr_arb releases the port with a dead cycle.
+  for (int g = 0; g < MEM_DIV; ++g) step();
   return acked;
 }
 
@@ -252,6 +282,12 @@ int main(int argc, char **argv) {
   dut->wr_req = 0; dut->wr_addr = 0; dut->wr_din = 0;
   dut->p2_req = 0; dut->p3_req = 0; dut->irq = 0; dut->io_rdata = 0; dut->io_stall = 0;
   competing = std::getenv("M2_COMPETE") && atoi(std::getenv("M2_COMPETE"));
+  if (const char *e = std::getenv("M2_CPU_DIV")) CPU_DIV = atoi(e);
+  if (const char *e = std::getenv("M2_MEM_DIV")) MEM_DIV = atoi(e);
+  if (const char *e = std::getenv("M2_SD_DIV"))  SD_DIV  = atoi(e);
+  VBLANK_TICKS = 434600ULL * CPU_DIV;
+  std::printf("m2_cpu_real: clocks in 5 ns ticks -- cpu /%d  bridge /%d  controller /%d\n",
+              CPU_DIV, MEM_DIV, SD_DIV ? SD_DIV : MEM_DIV);
   if (const char *tb = std::getenv("M2_TRACE_BUS")) { long f=0,n=0; if (sscanf(tb, "%ld,%ld", &f, &n) == 2) { trace_from = f; trace_n = n; } }
   for (int i = 0; i < 64; ++i) step();
   dut->rst_n = 1;

@@ -388,7 +388,7 @@ RLD_RTL := rtl/mem/m2_sdram.sv rtl/io/m2_rom_loader.sv sim/mem/sdram_model.sv si
 
 
 .PHONY: test test_m2_backup test_m2_sndboard test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram test_fx68k test_m2_ioboard
-test: test_m2_handshake_cdc test_m2_texel test_m2_span_tex test_m2_geo test_m2_wr_arb test_m2_pair_cache test_m2_raster3d test_m2_backup test_m2_sndlink test_fx68k test_m2_sndboard test_m2_ioboard test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
+test: test_m2_handshake_cdc test_m2_texel test_m2_span_tex test_m2_geo test_m2_wr_arb test_m2_pair_cache test_m2_raster3d test_m2_backup test_m2_sndlink test_fx68k test_m2_sndboard test_m2_ioboard test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_sdram_cdc test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
 
 test_i960_dec: obj_i960_dec/Vi960_dec
 	@echo "== test i960_dec"
@@ -659,9 +659,11 @@ test_m2_cpu_sdram: obj_m2_cs/Vm2_cpu_sdram_harness
 	@./obj_m2_cs/Vm2_cpu_sdram_harness $(TEST_ARGS)
 
 obj_m2_cs/Vm2_cpu_sdram_harness: rtl/io/m2_cpu_bridge.sv rtl/mem/m2_sdram.sv \
+	  rtl/mem/m2_sdram_x2.sv rtl/mem/m2_sdram_cdc.sv \
 	  sim/mem/sdram_model.sv sim/mem/m2_cpu_sdram_harness.sv sim/mem/tb_m2_cpu_sdram.cpp
 	$(VBUILD) -Wno-fatal --top-module m2_cpu_sdram_harness -CFLAGS "-O2" \
 	  --Mdir obj_m2_cs -o Vm2_cpu_sdram_harness rtl/io/m2_cpu_bridge.sv rtl/mem/m2_sdram.sv \
+	  rtl/mem/m2_sdram_x2.sv rtl/mem/m2_sdram_cdc.sv \
 	  sim/mem/sdram_model.sv sim/mem/m2_cpu_sdram_harness.sv sim/mem/tb_m2_cpu_sdram.cpp
 
 # R527: THE REAL CPU ON THE REAL MEMORY PATH. i960_top, m2_cpu_bridge and
@@ -673,10 +675,12 @@ test_m2_cpu_real: obj_m2_cr/Vm2_cpu_real_harness
 	@./obj_m2_cr/Vm2_cpu_real_harness $(TEST_ARGS)
 
 obj_m2_cr/Vm2_cpu_real_harness: $(TOP_RTL) rtl/io/m2_cpu_bridge.sv rtl/mem/m2_sdram.sv \
+	  rtl/mem/m2_sdram_x2.sv rtl/mem/m2_sdram_cdc.sv \
 	  sim/mem/sdram_model.sv sim/mem/m2_cpu_sdram_harness.sv \
 	  sim/mem/m2_cpu_real_harness.sv sim/mem/tb_m2_cpu_real.cpp
 	$(VBUILD) -Wno-fatal -Wno-PINCONNECTEMPTY --top-module m2_cpu_real_harness -CFLAGS "-O2" \
 	  --Mdir obj_m2_cr -o Vm2_cpu_real_harness $(TOP_RTL) rtl/io/m2_cpu_bridge.sv rtl/mem/m2_sdram.sv \
+	  rtl/mem/m2_sdram_x2.sv rtl/mem/m2_sdram_cdc.sv \
 	  sim/mem/sdram_model.sv sim/mem/m2_cpu_sdram_harness.sv \
 	  sim/mem/m2_cpu_real_harness.sv sim/mem/tb_m2_cpu_real.cpp
 
@@ -780,6 +784,25 @@ obj_x2/Vm2_sdram_x2_harness: sim/mem/m2_sdram_x2_harness.sv rtl/mem/m2_sdram_x2.
 	  --Mdir obj_x2 -o Vm2_sdram_x2_harness -CFLAGS "-O2" \
 	  sim/mem/m2_sdram_x2_harness.sv rtl/mem/m2_sdram_x2.sv rtl/mem/m2_sdram.sv \
 	  sim/mem/sdram_model.sv sim/mem/tb_m2_sdram_x2.cpp
+
+# -------------------------------------- SDRAM across an asynchronous boundary
+#
+# m2_sdram_cdc (R561) with the two clocks driven independently from absolute
+# time. The default is 100/60, the clock plan's target; M2_CDC_TF/TS/PH/JIT set
+# the periods, phase and jitter, so the ratio is a test parameter. All five
+# ports and the write port run at once; port 4 is native to the fast clock.
+.PHONY: test_m2_sdram_cdc
+test_m2_sdram_cdc: obj_cdc/Vm2_sdram_cdc_harness
+	@echo "== test m2_sdram_cdc (controller and requesters on unrelated clocks)"
+	@./obj_cdc/Vm2_sdram_cdc_harness $(TEST_ARGS)
+
+obj_cdc/Vm2_sdram_cdc_harness: sim/mem/m2_sdram_cdc_harness.sv rtl/mem/m2_sdram_cdc.sv \
+                               rtl/mem/m2_sdram.sv sim/mem/sdram_model.sv sim/mem/tb_m2_sdram_cdc.cpp
+	$(VBUILD) --top-module m2_sdram_cdc_harness -Wno-PINCONNECTEMPTY -Wno-SYNCASYNCNET \
+	  -Wno-WIDTHEXPAND -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM \
+	  --Mdir obj_cdc -o Vm2_sdram_cdc_harness -CFLAGS "-O2" \
+	  sim/mem/m2_sdram_cdc_harness.sv rtl/mem/m2_sdram_cdc.sv rtl/mem/m2_sdram.sv \
+	  sim/mem/sdram_model.sv sim/mem/tb_m2_sdram_cdc.cpp
 
 # ------------------------------------------------- the boot, through the bridge
 #

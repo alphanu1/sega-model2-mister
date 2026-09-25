@@ -29,10 +29,12 @@
 
 module m2_cpu_real_harness #(
   parameter int unsigned COL_BITS      = 10,
-  parameter bit          DCACHE_EN_TOP = 1'b1
+  parameter bit          DCACHE_EN_TOP = 1'b1,
+  parameter int unsigned XMODE         = 0       // R561: see m2_cpu_sdram_harness
 ) (
   input  logic        clk_cpu,
   input  logic        clk_mem,
+  input  logic        clk_sd,
   input  logic        rst_n,          // memory side
   input  logic        cpu_rst_n,      // the CPU, released after preload
 
@@ -133,8 +135,8 @@ module m2_cpu_real_harness #(
   // SDRAM before the preload had written it, and the zeros stayed: the
   // "lost PRCB word" was this, not the preload.
   m2_cpu_sdram_harness #(.COL_BITS(COL_BITS), .DCACHE_EN_TOP(DCACHE_EN_TOP),
-                         .BR_OWN_RST(1'b1)) u_mem (
-    .clk_cpu(clk_cpu), .clk_mem(clk_mem), .rst_n(rst_n), .br_rst_n(cpu_rst_n),
+                         .BR_OWN_RST(1'b1), .XMODE(XMODE)) u_mem (
+    .clk_cpu(clk_cpu), .clk_mem(clk_mem), .clk_sd(clk_sd), .rst_n(rst_n), .br_rst_n(cpu_rst_n),
     .bus_req(bus_req), .bus_we(bus_we), .bus_addr(bus_addr), .bus_be(bus_be),
     .bus_wdata(bus_wdata), .bus_rdata(bus_rdata), .bus_ack(bus_ack),
     .wr_req(wr_req), .wr_addr(wr_addr), .wr_din(wr_din), .wr_ack(wr_ack),

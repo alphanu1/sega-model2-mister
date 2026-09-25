@@ -40,10 +40,16 @@ module m2_cpu_sdram_harness #(
   // R533: reset the bridge from br_rst_n, as Model2.sv does (the bridge sits on
   // cpu_rst_n there, so its cache is swept when the CPU is released). Off, the
   // bridge shares the memory reset, which is what the model-driven bench wants.
-  parameter bit BR_OWN_RST = 1'b0
+  parameter bit BR_OWN_RST = 1'b0,
+  // R561: WHAT SITS BETWEEN THE BRIDGE AND THE CONTROLLER. 0: nothing, the
+  // controller on clk_mem (what every bench before R561 measured); 1:
+  // m2_sdram_x2 with the controller on clk_sd, which must be exactly 2x clk_mem
+  // (the board today); 2: m2_sdram_cdc, clk_sd at any ratio (the clock plan).
+  parameter int unsigned XMODE = 0
 ) (
   input  logic        clk_cpu,
   input  logic        clk_mem,
+  input  logic        clk_sd,         // the controller's clock when XMODE != 0
   input  logic        rst_n,
   input  logic        br_rst_n,       // used only with BR_OWN_RST
 
@@ -157,20 +163,68 @@ module m2_cpu_sdram_harness #(
   assign p3_ack = p_ack[3];
   assign p3_dout = p_dout[3];
 
+  // R561: the controller's side of the optional adapter.
+  logic [4:0]         f_req, f_we, f_ack;
+  logic [4:0][AW:1]   f_addr;
+  logic [4:0][15:0]   f_din;
+  logic [4:0][1:0]    f_be;
+  logic [4:0][63:0]   f_dout;
+  logic               f_wr_req, f_wr_ack;
+  logic [AW:1]        f_wr_addr;
+  logic [15:0]        f_wr_din;
+  logic [1:0]         f_wr_be;
+  logic               s_wr_ack;
+  wire                clk_ctl = (XMODE == 0) ? clk_mem : clk_sd;
+
+  generate
+    if (XMODE == 0) begin : g_direct
+      assign f_req = p_req; assign f_we = p_we; assign f_addr = p_addr;
+      assign f_din = p_din; assign f_be = p_be;
+      assign p_ack = f_ack; assign p_dout = f_dout;
+      assign f_wr_req = wr_req; assign f_wr_addr = AW'(wr_addr);
+      assign f_wr_din = wr_din; assign f_wr_be = 2'b11; assign s_wr_ack = f_wr_ack;
+    end else if (XMODE == 1) begin : g_x2
+      m2_sdram_x2 #(.NP(5), .AW(AW)) u_x (
+        .clk_fast(clk_sd),
+        .s_req(p_req), .s_addr(p_addr), .s_ack(p_ack), .s_dout(p_dout),
+        .s_we(p_we), .s_din(p_din), .s_be(p_be),
+        .s_wr_req(wr_req), .s_wr_addr(AW'(wr_addr)), .s_wr_din(wr_din),
+        .s_wr_be(2'b11), .s_wr_ack(s_wr_ack),
+        .f_req(f_req), .f_addr(f_addr), .f_ack(f_ack), .f_dout(f_dout),
+        .f_we(f_we), .f_din(f_din), .f_be(f_be),
+        .f_wr_req(f_wr_req), .f_wr_addr(f_wr_addr), .f_wr_din(f_wr_din),
+        .f_wr_be(f_wr_be), .f_wr_ack(f_wr_ack)
+      );
+    end else begin : g_cdc
+      m2_sdram_cdc #(.NP(5), .AW(AW)) u_x (
+        .clk_slow(clk_mem), .s_rst_n(rst_n), .clk_fast(clk_sd), .f_rst_n(rst_n),
+        .s_req(p_req), .s_addr(p_addr), .s_ack(p_ack), .s_dout(p_dout),
+        .s_we(p_we), .s_din(p_din), .s_be(p_be),
+        .s_wr_req(wr_req), .s_wr_addr(AW'(wr_addr)), .s_wr_din(wr_din),
+        .s_wr_be(2'b11), .s_wr_ack(s_wr_ack),
+        .f_req(f_req), .f_addr(f_addr), .f_ack(f_ack), .f_dout(f_dout),
+        .f_we(f_we), .f_din(f_din), .f_be(f_be),
+        .f_wr_req(f_wr_req), .f_wr_addr(f_wr_addr), .f_wr_din(f_wr_din),
+        .f_wr_be(f_wr_be), .f_wr_ack(f_wr_ack)
+      );
+    end
+  endgenerate
+  assign wr_ack = s_wr_ack;
+
   m2_sdram #(.COL_BITS(COL_BITS), .NP(5), .T_REFI(300)) u_sdram (
-    .clk(clk_mem), .rst_n(rst_n), .ready(mem_ready),
+    .clk(clk_ctl), .rst_n(rst_n), .ready(mem_ready),
     .rd_lat_sel(RD_LAT_SEL),
     .sd_cke(sd_cke), .sd_cs_n(sd_cs_n), .sd_ras_n(sd_ras_n), .sd_cas_n(sd_cas_n),
     .sd_we_n(sd_we_n), .sd_ba(sd_ba), .sd_a(sd_a), .sd_dqm(sd_dqm),
     .sd_dq_o(sd_dq_o), .sd_dq_oe(sd_dq_oe), .sd_dq_i(sd_dq_i),
-    .wr_req(wr_req), .wr_addr(AW'(wr_addr)), .wr_din(wr_din), .wr_be(2'b11),
-    .wr_ack(wr_ack),
-    .p_req(p_req), .p_we(p_we), .p_addr(p_addr), .p_din(p_din), .p_be(p_be),
-    .p_dout(p_dout), .p_ack(p_ack)
+    .wr_req(f_wr_req), .wr_addr(f_wr_addr), .wr_din(f_wr_din), .wr_be(f_wr_be),
+    .wr_ack(f_wr_ack),
+    .p_req(f_req), .p_we(f_we), .p_addr(f_addr), .p_din(f_din), .p_be(f_be),
+    .p_dout(f_dout), .p_ack(f_ack)
   );
 
   sdram_model #(.COL_BITS(COL_BITS)) u_model (
-    .clk(clk_mem),
+    .clk(clk_ctl),
     .cke(sd_cke), .cs_n(sd_cs_n), .ras_n(sd_ras_n), .cas_n(sd_cas_n),
     .we_n(sd_we_n), .ba(sd_ba), .a(sd_a), .dqm(sd_dqm),
     .dq_i(sd_dq_o), .dq_oe_i(sd_dq_oe), .dq_o(sd_dq_i), .dq_oe_o(),
