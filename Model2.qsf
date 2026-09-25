@@ -927,3 +927,20 @@ set_instance_assignment -name AUTO_RESOURCE_SHARING OFF -to "osd:hdmi_osd"
 set_instance_assignment -name OPTIMIZATION_TECHNIQUE SPEED -to "osd:vga_osd"
 set_instance_assignment -name AUTO_RESOURCE_SHARING OFF -to "osd:vga_osd"
 set_instance_assignment -name OPTIMIZATION_TECHNIQUE SPEED -to "pll_hdmi:pll_hdmi"
+
+# ---- R567: THE CORE PLL'S OUTPUTS ON GLOBAL CLOCKS, ALWAYS ----
+#
+# s300 (and s298) never passed the SDRAM read calibration: the board sat on a
+# black screen with cal_done low. Same RTL as s299, which ran. The difference
+# was one fitter choice: clk_mem went on a REGIONAL clock (RCLK29, RCLK57)
+# instead of a global one, and that region does not reach every SDRAM_DQ pin --
+# "dq_r[0] assigned to CUSTOM_REGION_X45_Y0_X89_Y36 due to Automatic Periphery
+# Placement ... SDRAM_DQ[0]~input assigned to IOIBUF_X40_Y0". So 10 of the 16
+# DQ capture registers could not pack into their I/O cells, landed in the
+# fabric with routing-dependent timing, and no capture delay read the pattern.
+# Every seed that worked had clk_mem on a global clock and 16 of 16 packed.
+# This takes the coin toss away.
+set_instance_assignment -name GLOBAL_SIGNAL "GLOBAL CLOCK" -to "emu:emu|pll:pll|pll_core:pll_inst|altera_pll:altera_pll_i|outclk_wire[0]"
+set_instance_assignment -name GLOBAL_SIGNAL "GLOBAL CLOCK" -to "emu:emu|pll:pll|pll_core:pll_inst|altera_pll:altera_pll_i|outclk_wire[1]"
+set_instance_assignment -name GLOBAL_SIGNAL "GLOBAL CLOCK" -to "emu:emu|pll:pll|pll_core:pll_inst|altera_pll:altera_pll_i|outclk_wire[3]"
+set_instance_assignment -name GLOBAL_SIGNAL "GLOBAL CLOCK" -to "emu:emu|pll:pll|pll_core:pll_inst|altera_pll:altera_pll_i|outclk_wire[4]"

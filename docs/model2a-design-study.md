@@ -22648,3 +22648,55 @@ ends are clk_mem) and the per-frame debug snapshots.
 R227 recorded the i960 as 5.68 ns short of 30; on today's netlist it is
 3.56. Earlier measurement, different design state -- the number to use is
 this one, and a build at the target is what settles it.
+
+---
+
+**R567 -- A BLACK-SCREEN SEED, A STALE DECODER AND A WRONG DIAGNOSIS. THE
+CAUSE WAS clk_mem ON A REGIONAL CLOCK.**
+
+*What happened.* s300 (step 1(c), best timing of its batch) came up on a black
+screen: no instructions retired, the TGP at PC 0, the SDRAM bus idle. I read
+the C channel with scratchpad cdecode.py, which reported cal_done = 0 with a
+calibration mask of 000000, then loaded s299 and s297 and read the same --
+and concluded the board had wedged, asked Ben to power-cycle it, and rebooted
+it. **Wrong.** cdecode.py decodes R531's C-channel layout, which no longer
+exists: it reports cal_done = 0 on the original, working s297 capture too.
+Decoded with tools/decode_uart.py, s299 and s297 were running normally the
+whole time (2.2-3.4 M instructions/s, TGP busy, ~250,000 textured pixels a
+frame). Only s300 was dead. Rule taken: a decoder is checked against a
+capture known to be good before a failure is read from it.
+
+*What s300 actually did.* The glyph cache ran (its reset needs cp_done) and
+the video was black (its reset needs cp_done AND cal_done), so the copy had
+finished and the SDRAM read calibration never succeeded. Its fit report says
+why:
+
+    Can't pack node m2_sdram|dq_r[0] and I/O node SDRAM_DQ[0] -- nodes have
+    conflicting location assignments
+      dq_r[0] assigned to CUSTOM_REGION_X45_Y0_X89_Y36 due to Automatic
+      Periphery Placement; SDRAM_DQ[0]~input assigned to IOIBUF_X40_Y0
+
+    seed   clk_mem network     DQ capture packed in I/O   board
+    s297   Global GCLK10       16 of 16                   works
+    s299   Global GCLK10       16 of 16                   works
+    s298   Regional RCLK57      6 of 16                   (not tried)
+    s300   Regional RCLK29      6 of 16                   dead
+
+The fitter is free to put a PLL output on a regional clock, and when it does
+for clk_mem the region misses some DQ pins: those capture registers land in
+the fabric, the read-capture timing becomes a routing accident, and no
+calibration delay reads the pattern. It has nothing to do with the crossings
+-- it is a coin toss in every fit, and it is what the old batch summaries'
+"packwarn" count was measuring. Model2.qsf now puts all four core PLL outputs
+on GLOBAL CLOCK, and no seed goes to the board without 16 of 16 DQ packed.
+
+*Step 1(c) on the board (s299, 240 s against s297).* Boots, textures clean at
+eight fetches in flight (Ben: "it's working fine") -- R553's scramble does not
+come back with the asynchronous queue and its exceptions. But it does not help
+the bands: no-credit stalls fall (185 -> 136) while texel wait rises (2,005
+-> 2,465) and critical periods with it (2,769 -> 3,492); the late middle bands
+are unchanged (y 128-168, 6-16% of frames). The bench said the opposite
+(texel wait 28% -> 22%) because its SDRAM answers in 8 cycles; on the board
+the misses are long and contended, and two synchroniser round trips per
+fetch cost more than four more fetches in flight recover. The crossing is
+needed for the clock plan; the bands' lever remains the fill's own speed.
