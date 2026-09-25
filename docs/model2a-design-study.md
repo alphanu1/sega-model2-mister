@@ -21876,3 +21876,70 @@ tb_m2_raster_fill: 152,369 checks, 31.8 M spans, pass. tb_m2_raster3d, R541
 
 Where R541 drew everything the pictures are bit-identical; where it missed,
 R544 draws exactly the complete frame (its hash equals the unmissed one).
+
+---
+
+**OPEN ISSUE (recorded 2026-09-25, to be taken up once the bands are done) --
+THE LIGHTING DROPS OUT AFTER A WHILE AND THEN COMES BACK.**
+
+Ben: "we still have issues with lighting. it drops out after running for a
+little while, then does eventually come back. This is not a new bug. it's been
+around for a while." Seen on s261 (R544) in attract mode: the textured
+polygons -- the mountain backdrop -- draw correctly, and the flat-shaded ones
+in front of them render BLACK (the ground below the mountains, the lower left
+of the frame), with the 2D layer intact.
+
+WHAT IS ALREADY KNOWN, so the next session does not start from zero:
+  * R333: the light table's 32 entries were all overwritten with 0/0 when the
+    display-list walk lost its place and decoded payload as op 0x06. That
+    failure went black and STAYED black until reset, and the walk's NOP
+    counter (R255, "nops should be ZERO") was the tell. This one RECOVERS, so
+    it is either a different fault or R333's recurring and being rewritten
+    correctly by the next legitimate 0x06 (op 0x06 is rare: ~7 in 400 s).
+  * R302: the light table corrupted in proportion to how often something ran
+    (read that entry before theorising).
+  * The instruments are on the wire already: tools/decode_uart.py prints the
+    light table ('T' records, R251, entries 0/0 flagged with '!'), the walk's
+    NOPs per frame (R255) and the black-polygon percentage (R249). A capture
+    spanning a dropout and its recovery answers the first question: do the
+    light entries go 0/0 and come back, and do the NOPs spike when they do.
+  * Textured polygons unaffected is itself a clue: the span walk colours
+    textured pixels from the texel, so a zero luminance would darken them
+    too unless the textured path takes its colour differently -- check what
+    the fill's `col` is for textured quads before assuming the light table.
+
+---
+
+**R545 -- CLEARING ROWS BEHIND THE BEAM REMOVES C_CLRW AND BUYS NOTHING.
+NOT KEPT. THE LIST SCAN IS THE LIMIT.**
+
+R544 left C_CLRW at 15-18% of a heavy frame: the buffer is claimed the moment
+the beam releases it, so R540's background clear cannot get ahead of it. Tried:
+clearing each ROW as soon as the beam passes it (the write port of a buffer on
+screen is idle), so only the last row remains at release -- enabled only when
+scan and fill share a clock, per m2_raster_band's dual-clock speckle note.
+
+It worked as designed and did nothing useful. Same clock mode both sides:
+
+```
+  load          R544 miss  CLRW     R545 miss  CLRW
+  100               0      15%          0      0%     identical picture
+  140              81      15%         84      0%
+  2-line 240       89      10%         86      0%
+```
+
+The clear waits fell in bands where the fill was AHEAD of the beam; the freed
+time became C_IDLE. At the breaking point the sequencer is:
+
+```
+  140          FILL 32% (replaying 30%)  FILLW 30%  IDLE 21%  CLRW 15%
+  2-line 240   FILL 56% (replaying 54%)  FILLW 25%  IDLE  7%  CLRW 10%
+```
+
+So the limit is the quad store walking the whole depth-sorted list once per
+band. Reverted -- writing a buffer while it is on screen is a risk not worth
+taking for no gain.
+
+KEPT: m2_raster3d's TWO_CLOCKS module default is now 0, what Model2.sv builds.
+The bench had been exercising the two-clock crossing the core does not ship
+(R508's lesson, a third time).

@@ -60,7 +60,7 @@ module m2_raster3d #(
   // 1 restores all of it, and it must be 1 the moment the video moves to the
   // memory clock. The logic is kept rather than deleted precisely because that
   // move is planned and R199 records what it costs to rediscover.
-  parameter bit TWO_CLOCKS = 1'b1,
+  parameter bit TWO_CLOCKS = 1'b0,   // R545: what Model2.sv builds (R508's lesson)
   // R275: the SDRAM address width the texel fetch drives.
   parameter int unsigned TEX_AW = 25
 ) (
