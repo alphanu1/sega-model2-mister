@@ -27,9 +27,11 @@ static const int SCR_W = 496, SCR_H = 384;
 // lines: 424 total against 384 visible (m2_video_timing, MAME's set_raw).
 // R538: BAND_H follows the build (-GBAND_H=...) through M2_R3D_BAND_H.
 static const int V_TOTAL = 424;
-static int BAND_H = 8;
+static int BAND_H = 16;   // R542: the shipped band height
+static bool px_dump = false;   // R542: M2_R3D_PXDUMP, every painted pixel of the last frame
+static uint64_t frame_hash = 1469598103934665603ull;   // R542: this frame only
 static uint64_t pix_hash = 1469598103934665603ull;   // R539: every painted pixel, all frames
-static long fill_hist[32], walk_busy = 0, cst_hist[8], why_hist[8];   // R539: fill state per cycle, per frame
+static long fill_hist[32], walk_busy = 0, cst_hist[8], why_hist[8], fw_hist[32];   // R539: fill state per cycle, per frame
 static long top_hits = 0;
 static unsigned vbl_bands = 0;
 // CLOCKS PER SCANLINE, AND IT IS A TEST PARAMETER BECAUSE THE FAULT LIVES IN
@@ -124,6 +126,7 @@ int main(int argc, char **argv) {
     ++fill_hist[d->dbg_fill_hot & 31];
     ++cst_hist[d->rootp->m2_raster3d__DOT__cst & 7];
     ++why_hist[d->rootp->m2_raster3d__DOT__fill_why & 7];
+    if ((d->rootp->m2_raster3d__DOT__cst & 7) == 5) ++fw_hist[d->dbg_fill_hot & 31];   // R542: C_FILLW, by fill state
     if (d->dbg_walk_hot) ++walk_busy;
   };
   for (int i = 0; i < 4; i++) tick();
@@ -246,6 +249,8 @@ int main(int argc, char **argv) {
           // R539: WHAT was painted, not only how much -- a change to WHEN
           // texels arrive must leave this identical.
           pix_hash = (pix_hash ^ (uint64_t(y) << 40 ^ uint64_t(t) << 20 ^ d->scan_col)) * 1099511628211ull;
+          frame_hash = (frame_hash ^ (uint64_t(y) << 40 ^ uint64_t(t) << 20 ^ d->scan_col)) * 1099511628211ull;
+          if (px_dump) std::printf("PX %d %d %04x\n", y, t, (unsigned)d->scan_col);   // R542
         }
       }
     }
@@ -258,7 +263,8 @@ int main(int argc, char **argv) {
                 (int)d->dbg_late_frames, (int)d->dbg_qend_frames, (int)d->dbg_bands, (int)d->dbg_bands_painted);
     std::printf("      bands filled during vblank: %u\n", vbl_bands);
     std::printf("      R536 missed scanlines last frame: %d\n", (int)d->dbg_miss_lines);
-    std::printf("      R539 pixel hash: %016llx\n", (unsigned long long)pix_hash);
+    std::printf("      R539 pixel hash: %016llx  frame %016llx\n", (unsigned long long)pix_hash, (unsigned long long)frame_hash);
+    frame_hash = 1469598103934665603ull;
     {
       long tot = 0; for (long v : fill_hist) tot += v;
       std::printf("      R539 fill states (%% of cycles):");
@@ -271,6 +277,17 @@ int main(int argc, char **argv) {
       std::printf("      R541 C_FILL split (%% of cycles): handoff %ld%%  fill-busy %ld%%  replaying %ld%%  band-end drain %ld%%\n",
                   why_hist[1]*100/(tot?tot:1), why_hist[2]*100/(tot?tot:1), why_hist[3]*100/(tot?tot:1), why_hist[4]*100/(tot?tot:1));
       for (long &v : why_hist) v = 0;
+      {
+        static const char *fn[32] = {"IDLE","CLASSIFY","FLAT","START1","START2","LOADX","DIVA","DIVAW","DIVB","DIVBW",
+          "DECIDE","FS_ENTER","FS_MULA","FS_MULB","FS_SWAP","FS_WALK","FS_END","FINAL","DONE","PF_D","PF_N","PF_Q1",
+          "PF_Q1W","PF_Q2","PF_Q2W","PF_B","MINMAX","PF_NRM","OZ","PF_Q3","PF_Q3W","31"};
+        long fwt = 0; for (long v : fw_hist) fwt += v;
+        const long nq = d->dbg_fillpass ? d->dbg_fillpass : 1;
+        std::printf("      R542 fill per quad handed (%ld handed last frame): %.1f cycles --", (long)d->dbg_fillpass, double(fwt) / nq);
+        for (int k = 0; k < 32; ++k) if (fw_hist[k] * 50 >= fwt && fw_hist[k]) std::printf(" %s %.1f", fn[k], double(fw_hist[k]) / nq);
+        std::printf("\n");
+        for (long &v : fw_hist) v = 0;
+      }
       for (long &v : cst_hist) v = 0;
       for (long &v : fill_hist) v = 0; walk_busy = 0;
     }
@@ -327,7 +344,9 @@ int main(int argc, char **argv) {
       for (long f = 0; f < NF; f++) {
         push_list(int(2 + f));
         long hits = 0;
+        px_dump = std::getenv("M2_R3D_PXDUMP") && (f == NF - 1);
         video_frame(true, &hits);
+        px_dump = false;
         // THE FAULT IS A FRAME THAT PAINTS NOTHING AND NEVER RECOVERS. A frame
         // may legitimately paint little while a list is mid-flight; a RUN of
         // them is the 3D having stopped.

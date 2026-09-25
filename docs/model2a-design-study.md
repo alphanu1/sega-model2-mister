@@ -21762,3 +21762,52 @@ overlapped and were all white -- order could not show). R540 vs R541:
   160 (2-line)          52 -> 46
   100                   87 -> 90   (past capacity either way)
 ```
+
+---
+
+**R542 -- 16-LINE BANDS, THREE BUFFERS. EACH POLYGON PASS IS 44 CYCLES AND
+ONLY 6 OF THEM DRAW.**
+
+s256 (R541; clk_mem -0.167, clk_sys +0.394, hold clk_mem -0.223): zero-miss
+frames 22/27, bands 8-15 late 0-3% (was 8-16%), bands 16-21 18-22% (was
+20-29%). Better; the horizon core still misses about one frame in five.
+
+WHERE THE REST GOES. With R541, tb_m2_raster3d's "replaying" is still ~20%
+(the depth-sorted list is walked once per band, a floor of ~1,400 cycles, and
+it binds on LIGHT bands, which run ahead anyway), and the fill's own work is
+C_FILLW. Per quad handed (HEAVY=80: 1,317 passes for 656 quads, each crossing
+~2 bands): 44.0 cycles -- FS_WALK 6, and a chain of ~25 setup states for the
+rest (DIVAW 5, OZ 4, PF_NRM 3, PF_N 2, PF_B 2, START2 2, eighteen at 1). Tiny
+horizon polygons are almost all setup, and a polygon is set up again for
+every band it touches.
+
+So TALLER bands, which R538 measured in the other direction (4-line was
+worse in every case). 16 x 3 holds the same 48 lines as 8 x 6 and the same
+M10K bits; per-band overhead -- the list walk and the repeated setup -- halves.
+Missed scanlines, steady state, textured:
+
+```
+  load                  8x6    16x3
+  80                     5      0
+  100                   90      0
+  120                  103     59
+  2-line 140             3      0
+  2-line 160            46     31
+  2-line 180            82    103     (both far past capacity)
+  2-line 200            87     97
+```
+
+It raises the load carried without a miss; beyond that, where both collapse,
+8x6 collapses slightly less. The board sits near the threshold.
+
+THE PICTURE. Untextured, 8x6 and 16x3 are identical frame for frame. Textured,
+224 of 11,176 pixels differ, ALL on the last scanline of the heavy quads, same
+hue brighter: a different TEXEL. The fill steps v down from each band's first
+line in fixed point; a 16-line band takes up to 15 steps where an 8-line one
+takes 7, and the rounding tips a texel boundary on that row. The same
+approximation 8x6 already makes at its own boundaries -- not a regression in
+kind, and at most a one-texel shift on the odd row.
+
+The module defaults and the bench default change with Model2.sv (R508: the
+bench must build what ships). The per-frame pixel hash and a pixel dump
+(M2_R3D_PXDUMP) are in the bench now.
