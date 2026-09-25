@@ -434,6 +434,21 @@ module m2_raster_fill (
   logic signed [8:0] net_r;   // R459: pf_scale's shift amount, a cycle early
   logic              zbig_r;  // R459: mul_zr >= 32, likewise
   logic               b_wait;
+  // R566: 60 MHz. The normaliser and the plane's base each did too much in one
+  // cycle (s297: oz_i -> qv +2.601, sx -> base_u +2.700 at 50 MHz). Each now
+  // takes one more: the normaliser is PIPELINED -- vertex k+1 is selected and
+  // normalised while vertex k is multiplied, five cycles for four vertices
+  // rather than eight (doubling it cost the heavy bench scene 16% of its
+  // pixels: on small quads the fit is the fill's critical path) -- and
+  // b_prod registers the six plane products, with no reset so they can pack
+  // into the DSP blocks' own output registers, before the subtracts.
+  logic               oz_w_v, oz_last, b_prod;
+  logic [1:0]         oz_w;
+  logic [15:0]        oz_n;
+  logic [12:0]        oz_u, oz_v;
+  logic signed [31:0] bp_ux, bp_uy, bp_vx, bp_vy, bp_ox, bp_oy;
+  logic [12:0]        bq_u, bq_v;
+  logic [15:0]        bq_o;
   logic         [1:0] nrm_wait;   // R466: three cycles, the recip takes three
   logic pfn_wait;   // R461: S_PF_N takes two cycles, encode then shift
   logic signed [31:0] mul_n;
@@ -818,7 +833,7 @@ module m2_raster_fill (
       // particular state is undefined for every cycle before it, and b_wait
       // powering up set would make S_PF_B compute its bases from a gradient
       // that had not been latched yet.
-      mul_q_r <= '0; mul_zr <= 6'd0; b_wait <= 1'b0;
+      mul_q_r <= '0; mul_zr <= 6'd0; b_wait <= 1'b0; oz_w_v <= 1'b0; oz_last <= 1'b0; oz_w <= 2'd0; b_prod <= 1'b0;
       dudx <= 16'sd0; dudy <= 16'sd0; dvdx <= 16'sd0; dvdy <= 16'sd0;
       for (int k = 0; k < 4; k++) begin qu[k] <= '0; qv[k] <= '0; qoz[k] <= '0; end
       oz_i <= 2'd0; oz_emax <= 8'd0; dodx <= 16'sd0; dody <= 16'sd0;
@@ -860,12 +875,26 @@ module m2_raster_fill (
         // 16 because normalisation puts the largest 1/z in [2^15, 2^16), so
         // the product lands back in the 13 bits u already occupied.
         S_OZ: begin
-          automatic logic [15:0] n = oz_norm(qoz[oz_i], oz_emax);
-          qoz[oz_i] <= n;
-          qu[oz_i]  <= 13'((29'(qu[oz_i]) * 29'(n)) >> 15);
-          qv[oz_i]  <= 13'((29'(qv[oz_i]) * 29'(n)) >> 15);
-          if (oz_i == 2'd3) pf_st <= S_PF_D;
-          else              oz_i  <= oz_i + 2'd1;
+          // R566: stage one -- select vertex oz_i and normalise its 1/z.
+          if (!oz_last) begin
+            oz_n   <= oz_norm(qoz[oz_i], oz_emax);
+            oz_u   <= qu[oz_i];
+            oz_v   <= qv[oz_i];
+            oz_w   <= oz_i;
+            oz_w_v <= 1'b1;
+            if (oz_i == 2'd3) oz_last <= 1'b1;
+            else              oz_i    <= oz_i + 2'd1;
+          end else begin
+            oz_w_v <= 1'b0;
+          end
+          // Stage two -- multiply and write back the vertex selected last
+          // cycle. It is never the one stage one is reading this cycle.
+          if (oz_w_v) begin
+            qoz[oz_w] <= oz_n;
+            qu[oz_w]  <= 13'((29'(oz_u) * 29'(oz_n)) >> 15);
+            qv[oz_w]  <= 13'((29'(oz_v) * 29'(oz_n)) >> 15);
+            if (oz_last) begin oz_last <= 1'b0; pf_st <= S_PF_D; end
+          end
         end
 
         S_PF_D: begin
@@ -966,6 +995,7 @@ module m2_raster_fill (
           mul_n <= mul_n_c;   // R457/R458: registered count, one shared shifter
           mul_z <= zsel_c;
           mul_q_r <= '0; mul_zr <= 6'd0; b_wait <= 1'b0;   // R450
+          oz_w_v <= 1'b0; oz_last <= 1'b0; b_prod <= 1'b0; // R566
           pf_st <= S_PF_Q1;
         end
 
@@ -1030,19 +1060,21 @@ module m2_raster_fill (
         S_PF_B: if (!b_wait) begin
           dody   <= pf_scale_n(mul_q_r, net_r, zbig_r);   // R450: the last gradient
           b_wait <= 1'b1;
+        end else if (!b_prod) begin
+          // R566: the six products and the corner, registered.
+          bp_ux <= 32'(dudx * sx[fa]);  bp_uy <= 32'(dudy * sy[fa]);
+          bp_vx <= 32'(dvdx * sx[fa]);  bp_vy <= 32'(dvdy * sy[fa]);
+          bp_ox <= 32'(dodx * sx[fa]);  bp_oy <= 32'(dody * sy[fa]);
+          bq_u  <= qu[fa]; bq_v <= qv[fa]; bq_o <= qoz[fa];
+          b_prod <= 1'b1;
         end else begin
           b_wait <= 1'b0;
-          base_u <= 32'({19'd0, qu[fa]} <<< 16)
-                  - ((32'(dudx * sx[fa])) <<< 8)
-                  - ((32'(dudy * sy[fa])) <<< 8);
-          base_v <= 32'({19'd0, qv[fa]} <<< 16)
-                  - ((32'(dvdx * sx[fa])) <<< 8)
-                  - ((32'(dvdy * sy[fa])) <<< 8);
+          b_prod <= 1'b0;
+          base_u <= 32'({19'd0, bq_u} <<< 16) - (bp_ux <<< 8) - (bp_uy <<< 8);
+          base_v <= 32'({19'd0, bq_v} <<< 16) - (bp_vx <<< 8) - (bp_vy <<< 8);
           // R337: 1/z's own plane. qoz is 15 bits, so it shifts up by 16 the
           // same way, and the span walk divides by what this yields.
-          base_o <= 32'({16'd0, qoz[fa]} <<< 16)
-                  - ((32'(dodx * sx[fa])) <<< 8)
-                  - ((32'(dody * sy[fa])) <<< 8);
+          base_o <= 32'({16'd0, bq_o} <<< 16) - (bp_ox <<< 8) - (bp_oy <<< 8);
           tex_ok <= 1'b1;
           pf_st  <= S_IDLE;
         end
