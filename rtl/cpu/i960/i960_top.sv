@@ -814,7 +814,7 @@ module i960_top (
   localparam logic [2:0] G_NONE = 3'd0, G_BOOT = 3'd1, G_RF = 3'd2,
                          G_LSU  = 3'd3, G_IC   = 3'd4;
 
-  logic [2:0] sel_next, grant_q, gsel;
+  logic [2:0] sel_next, grant_q, gsel /*verilator public_flat_rd*/;   // R548: the bench splits bus time by master
 
   always_comb begin
     if      (boot_req)   sel_next = G_BOOT;

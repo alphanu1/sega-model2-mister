@@ -22000,3 +22000,45 @@ band ahead of the beam -- the moments a band can be late -- the cycles in
 C_IDLE, C_CLRW, C_FILLW, the list walk, the band-end drain, the quad handoff,
 and span-walk busy, in 256-cycle units ('Q', replacing R334's 1/z record,
 which is finished with). One capture then says what late bands wait on.
+
+---
+
+**R548 -- THE INSTRUCTION CACHE NEVER HELD A LOOP. CPI -15%.**
+
+Ben: "have we been able to get the CPU CPI down yet? we need this for speed!"
+Posted writes (R536) were worth 7% in the real-CPU harness, and the board has
+read ~11 CPI on every build since. tb_m2_cpu_real now accounts every CPU
+cycle (off the bus, or waiting, by address class and by bus master via a
+verilator public_flat_rd on i960_top's gsel). 2 M instructions, with
+competing SDRAM traffic (10.39 CPI, near the board's):
+
+```
+  off the bus 42.6%   ROM reads 29.5% (12.3 cycles each)   I/O reads 14.3%
+  writes 6.9%         -- so posted writes could only ever touch 7%.
+  ROM-read waiting by master: icache 5.53 M cycles, LSU 0.61 M
+```
+
+A 512-byte cache refetching loop code... but a 2 KB and an 8 KB build gave the
+IDENTICAL cycle count, to the cycle -- no working cache does that. Fill words
+by line: 466,453 over only 64 distinct lines; 0x16b0 fetched 258,048 times,
+the boot copy's 0x910 32,772 (four words x 8,193 passes -- every pass).
+
+THE BUG. A redirect arriving mid-fill (a loop's branch back, while the
+prefetch fills the NEXT line) always REFILLED its target: cvalid cleared and
+the line fetched again, whether or not it was already in the cache. So no loop
+ever ran from the cache. Now, when the redirect resolves on the outstanding
+fetch's acknowledge (R45's rule, unchanged), a target that hits abandons the
+fill and is answered through S_DONE from req_addr_q -- the path a completed
+fill already takes. Only a miss refills.
+
+```
+                       before     after
+  CPI, alone            8.64       7.38
+  CPI, contention      10.39       8.83     (-15%)
+  icache fill words   466,453     93,493
+  trace hash         f6953e5d9c861c63 both   copy fold 14b8 both
+```
+
+test_i960_icache (0 mismatches), test_i960_top, test_i960_rom pass. Still
+open: the line AFTER a hot loop is prefetched and abandoned every pass
+(0x16c0, 64,515 words) -- a smaller fix for another day.

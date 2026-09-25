@@ -268,7 +268,25 @@ module i960_icache #(
           //
           // The abandoned word is not discarded -- it is still written to the
           // old line, which is correct data for a line nothing is waiting on.
-          if (bus_ack && (redir_now || redir_q)) begin
+          // R548: AND A REDIRECT TO A LINE ALREADY IN THE CACHE IS A HIT. This
+          // path used to refill the target unconditionally -- invalidating a
+          // valid line and fetching it again. Every loop iterates by branching
+          // back while the prefetch fills the NEXT line, so every loop line
+          // was refetched every pass: the boot copy's 0x910 8,193 times, the
+          // loop at 0x16b0 258,048 times in 2 M instructions, and a 16x larger
+          // cache changed the cycle count by exactly nothing. Instruction fetch
+          // was 27% of all CPU cycles under contention. The fill is abandoned
+          // (its line is already invalid, set at the fill's start) and the
+          // target is answered from the array through S_DONE, which reads
+          // req_addr_q -- the same completion path a finished fill takes.
+          if (bus_ack && ((redir_now && hit) ||
+                          (!redir_now && redir_q && cvalid[redir_idx]
+                                      && (ctag[redir_idx] == redir_tag)))) begin
+            redir_q    <= 1'b0;
+            bus_req    <= 1'b0;
+            req_addr_q <= redir_now ? addr : redir_addr;
+            state      <= S_DONE;
+          end else if (bus_ack && (redir_now || redir_q)) begin
             // Safe here: the outstanding fetch has just been answered, so
             // moving the address starts a new transaction rather than
             // corrupting one in progress.

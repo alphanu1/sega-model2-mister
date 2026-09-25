@@ -23,6 +23,7 @@
 
 #include "Vm2_cpu_real_harness.h"
 #include "verilated.h"
+#include "Vm2_cpu_real_harness___024root.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstdint>
@@ -157,6 +158,42 @@ static void note_reads() {
   ack_seen = dut->bus_ack;
 }
 
+// R548: WHERE THE CPU'S CYCLES GO. On each CPU edge: waiting on the bus (a
+// request up, not yet acknowledged), by class of what it waits for; or not on
+// the bus at all (the core computing, or stalled on something internal).
+static long acc_cyc = 0, acc_nobus = 0, acc_wait[6], acc_n[6];
+static const char *acc_name[6] = {"write", "read ROM", "read board RAM", "read work RAM", "read I/O+other", "(unused)"};
+static bool acc_ack_d = false;
+static long mst_wait[8], rom_by_mst[8];
+#include <unordered_map>
+static std::unordered_map<uint32_t, long> ic_lines;   // R548: icache fill words by 16-byte line
+static long ic_words = 0;
+static bool ic_ack_d = false;   // by bus master: 1 boot, 2 reg-frame, 3 LSU, 4 icache
+static int acc_class(uint32_t a, bool we) {
+  if (we) return 0;
+  if (a < 0x00200000u) return 1;
+  if (a < 0x00240000u) return 2;
+  if (a >= 0x00500000u && a < 0x00600000u) return 3;
+  return 4;
+}
+static void cpu_account() {
+  if (!dut->cpu_rst_n) return;
+  ++acc_cyc;
+  if (!dut->bus_req) ++acc_nobus;
+  else if (!dut->bus_ack) {
+    ++acc_wait[acc_class(dut->bus_addr, dut->bus_we)];
+    ++mst_wait[dut->rootp->m2_cpu_real_harness__DOT__u_cpu__DOT__gsel & 7];
+    if (!dut->bus_we && dut->bus_addr < 0x00200000u) ++rom_by_mst[dut->rootp->m2_cpu_real_harness__DOT__u_cpu__DOT__gsel & 7];
+  }
+  if (dut->bus_ack && !acc_ack_d) ++acc_n[acc_class(pend_addr, pend_we)];
+  {
+    const bool ic = (dut->rootp->m2_cpu_real_harness__DOT__u_cpu__DOT__gsel & 7) == 4;
+    if (ic && dut->bus_ack && !ic_ack_d) { ++ic_words; ++ic_lines[dut->bus_addr >> 4]; }
+    ic_ack_d = dut->bus_ack;
+  }
+  acc_ack_d = dut->bus_ack;
+}
+
 static void step() {
   ++tk;
   drive_traffic();
@@ -166,6 +203,7 @@ static void step() {
   if ((tk % CPU_DIV) == 0) { dut->clk_cpu = 1; dut->eval(); }
   if ((tk % MEM_DIV) == 0) { dut->clk_mem = 1; dut->eval(); }
   note_reads();          // R530: after the edges, so bus_* are this tick's values
+  if ((tk % CPU_DIV) == 0) cpu_account();   // R548
 }
 
 static bool load_file(const std::string &path, std::vector<uint8_t> &out) {
@@ -290,6 +328,18 @@ int main(int argc, char **argv) {
   }
   std::printf("  bus transactions seen: %ld (trace window %ld,%ld)\n", bus_n, trace_from, trace_n);
   std::printf("  board-RAM copy fold: %04x over %u writes (the board reports this in z[15:0])\n", bw_fold, bw_cnt);
+  std::printf("  R548 CPU cycles: %ld  off the bus %.1f%%\n", acc_cyc, 100.0 * acc_nobus / (acc_cyc ? acc_cyc : 1));
+  { long maxl = 0; for (auto &kv : ic_lines) maxl = std::max(maxl, kv.second);
+    { std::vector<std::pair<long,uint32_t>> v; for (auto &kv : ic_lines) v.push_back({kv.second, kv.first});
+      std::sort(v.rbegin(), v.rend());
+      std::printf("    hottest icache lines:"); for (size_t i = 0; i < v.size() && i < 6; ++i) std::printf(" %08x:%ld", v[i].second << 4, v[i].first); std::printf("\n"); }
+    std::printf("    icache fill words %ld over %zu distinct lines (%.1f words a line; worst line fetched %ld words)\n",
+                ic_words, ic_lines.size(), double(ic_words) / (ic_lines.size() ? ic_lines.size() : 1), maxl); }
+  std::printf("    by master (cycles waiting): boot %ld  reg-frame %ld  LSU %ld  icache %ld   | ROM reads: LSU %ld  icache %ld\n",
+              mst_wait[1], mst_wait[2], mst_wait[3], mst_wait[4], rom_by_mst[3], rom_by_mst[4]);
+  for (int k = 0; k < 5; ++k)
+    std::printf("    %-16s %8ld accesses  %9ld cycles waiting  (%5.1f%% of all, %.1f a access)\n", acc_name[k], acc_n[k], acc_wait[k],
+                100.0 * acc_wait[k] / (acc_cyc ? acc_cyc : 1), double(acc_wait[k]) / (acc_n[k] ? acc_n[k] : 1));
   std::printf("  the RTL fold Model2.sv uses:  %04x over %u writes\n", dut->rtl_bw_fold, dut->rtl_bw_cnt);
   // R533: the references the board's 'z' records are compared against.
   std::printf("  copy read fold (R533):         %04x\n", dut->rtl_br_fold);
