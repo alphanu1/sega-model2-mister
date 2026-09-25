@@ -565,6 +565,25 @@ module i960_top (
   logic [63:0] fadd_y, fmul_y, fdiv_y, fsqrt_y, fmisc_y;
   logic [31:0] fmisc_yi;
   logic [2:0]  fmisc_cc;
+  // R566: FPMISC'S RESULT IS REGISTERED, AND ITS INSTRUCTIONS TAKE TWO CYCLES
+  // IN T_FP. The i960's worst path at 25 MHz (s297, +3.105 ns of 40) was one
+  // cycle from the register file through u_cvt_a's single-to-double unpack,
+  // the whole of i960_fpmisc (~25 ns: exponent add, compares, the round add,
+  // a leading-zero count and a shift), u_cvt_a's double-to-single pack and the
+  // write-back mux -- 36.7 ns against the 33.3 a 30 MHz clock allows.
+  // Registering fpmisc's three outputs splits it at ~28 / ~9 ns. Every other
+  // FP unit already runs req/done across cycles; fpmisc was the one computed
+  // and written in the same state. The cost is one cycle on cmpr, cvt, round,
+  // logb and scale.
+  logic [63:0] fmisc_y_q;
+  logic [31:0] fmisc_yi_q;
+  logic [2:0]  fmisc_cc_q;
+  logic        misc_ph;          // second T_FP cycle of an fpmisc instruction
+  always_ff @(posedge clk) begin
+    fmisc_y_q  <= fmisc_y;
+    fmisc_yi_q <= fmisc_yi;
+    fmisc_cc_q <= fmisc_cc;
+  end
   logic        fadd_sub;
 
   i960_fpadd  u_fpadd  (.clk(clk), .rst_n(rst_n), .req(fadd_req),
@@ -605,7 +624,7 @@ module i960_top (
                      : fp_is_mul  ? fmul_y
                      : fp_is_div  ? fdiv_y
                      : fp_is_sqrt ? fsqrt_y
-                                  : fmisc_y;
+                                  : fmisc_y_q;          // R566: registered
   i960_fpmisc u_fpmisc (.op(fmisc_op), .rmode(ac[31:30]),
                         .a(fp_a), .b(fp_b), .ai(src1_val),
                         .y(fmisc_y), .yi(fmisc_yi), .cc(fmisc_cc));
@@ -652,6 +671,11 @@ module i960_top (
   logic fp_writes_int, fp_writes_cc;
   assign fp_writes_cc  = fp_is_misc && (fmisc_op == 3'd0);
   assign fp_writes_int = fp_is_misc && ((fmisc_op == 3'd3) || (fmisc_op == 3'd4));
+  // R566: high for exactly the second T_FP cycle of an fpmisc instruction.
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) misc_ph <= 1'b0;
+    else        misc_ph <= (ts == T_FP) && fp_is_misc && !misc_ph;
+  end
 
   // ---------------------------------------------------------------- AGU
 
@@ -1526,15 +1550,15 @@ module i960_top (
           // to it. Accepting any unit's done lets a stale strobe from an
           // earlier instruction retire the wrong result — and the multi-cycle
           // units (divide, sqrt) are exactly where that window is wide.
-          if (fp_is_misc
+          if ((fp_is_misc && misc_ph)            // R566: a cycle to register it
               || (fp_is_add  && fadd_done)
               || (fp_is_mul  && fmul_done)
               || (fp_is_div  && fdiv_done)
               || (fp_is_sqrt && fsqrt_done)) begin
             if (fp_writes_cc) begin
-              ac <= {ac[31:3], fmisc_cc};
+              ac <= {ac[31:3], fmisc_cc_q};
             end else if (fp_writes_int) begin
-              wa <= d_srcdst; wd <= fmisc_yi; we <= 1'b1;
+              wa <= d_srcdst; wd <= fmisc_yi_q; we <= 1'b1;
             end else if (d_dst_lit) begin
               // A "literal" destination on an FP op selects fp0-fp3.
               fpr[d_srcdst[1:0]] <= fp_res_wide;
