@@ -21836,3 +21836,43 @@ far more from band to band than the bench's uniform horizon, and that punishes
 coarse granularity which the synthetic load never exercises. R538 said the
 same from the other direction: the bench's scene cannot settle band size.
 Band height stays 8, NBUF 6. The per-frame hash and pixel dump stay.
+
+---
+
+**R544 -- THE PLANE FIT RUNS BESIDE THE EDGE SETUP. 44 -> ~32 CYCLES A QUAD,
+AND A LATENT SPAN HAZARD FOUND ON THE WAY.**
+
+R542 measured 44 cycles per quad handed, 6 of them drawing. A textured quad
+walked the plane fit (S_OZ .. S_PF_B, ~18 cycles) and THEN the edge setup
+(S_MINMAX .. S_DECIDE, ~12). The two share nothing -- the fit uses
+m2_persp_recip and mul_q, the edges the m2_raster_div pair and mul_prod -- and
+the edges never read a gradient; only span emission does. The fit now has its
+own state (pf_st), started with the edges on accept; S_FLAT, S_FS_WALK and
+S_FINAL wait for it before emitting; a quad that ends before its first span
+(a line, or rejected whole) cancels it; nsel_c's numerator mux follows pf_st.
+
+THE HAZARD. First results differed on the LAST scanline of quads where
+neither build missed a line -- R544 drew it flat white. span_tex_en and
+span_dudx/dvdx/doozdx are not latched with a span; they are the quad's own
+registers. S_FINAL emits the last span, and if the span queue is full that
+span WAITS while the fill accepts the next quad, which resets tex_ok and the
+gradients under it. The old fill was too slow to back the queue up; the faster
+one does. Latent in every build before this one. in_ready now also requires
+!span_valid -- nothing can be emitted while a span is held anyway.
+
+tb_m2_raster_fill: 152,369 checks, 31.8 M spans, pass. tb_m2_raster3d, R541
+(s256) against R544, per-frame hash, textured:
+
+```
+  load            R541 cyc/quad  miss    R544 cyc/quad  miss   picture
+  overlap 20          44.0        0          31.1         0    identical
+  overlap 40          44.0        0          36.0         0    identical
+  40, 60              44.0        0      35.0, 32.9       0    identical
+  80                  44.0        5          31.7         0    = the full frame
+  100                 44.0       90          31.0         0    = the full frame
+  2-line 140          40.1        3          25.1         0    = the full frame
+  2-line 180          40.1       82          25.1         0    = the full frame
+```
+
+Where R541 drew everything the pictures are bit-identical; where it missed,
+R544 draws exactly the complete frame (its hash equals the unmissed one).

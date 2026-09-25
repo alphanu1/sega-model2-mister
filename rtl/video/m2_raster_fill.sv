@@ -191,6 +191,16 @@ module m2_raster_fill (
   localparam logic [1:0] EM_FLAT = 2'd2;   // the flat-quad min/max pair
 
   logic [4:0] state /* verilator public_flat_rd */;
+  // R544: THE PLANE FIT RUNS BESIDE THE EDGE SETUP, NOT BEFORE IT.
+  //
+  // A textured quad used to walk S_OZ .. S_PF_B (~18 cycles) and only then
+  // S_MINMAX .. S_DECIDE (~12) -- and tb_m2_raster3d measured 44 cycles a
+  // quad handed, of which 6 draw anything. The two chains share nothing: the
+  // fit uses m2_persp_recip and mul_q, the edges m2_raster_div and mul_prod,
+  // and the edges never read a gradient. Only a span does. So the fit has its
+  // own state (pf_st, S_IDLE when done) and every state that EMITS a span
+  // waits for it.
+  logic [4:0] pf_st;
 
   // Latched quad. sx/sy are the raw screen coordinates: the wireframe test
   // compares them whole, so the pre-shift value has to survive.
@@ -749,7 +759,7 @@ module m2_raster_fill (
   logic signed [31:0] nsel_c;
   logic [5:0]         zsel_c;
   always_comb begin
-    case (state)
+    case (pf_st)   // R544: the fit's own state
       S_PF_Q1:  begin nsel_c = nyu; zsel_c = nyu_z; end
       S_PF_Q1W: begin nsel_c = nxv; zsel_c = nxv_z; end
       S_PF_Q2:  begin nsel_c = nyv; zsel_c = nyv_z; end
@@ -763,6 +773,7 @@ module m2_raster_fill (
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       state      <= S_IDLE;
+      pf_st      <= S_IDLE;   // R544
       ps1        <= 3'd0;
       ps2        <= 3'd0;
       xa         <= 32'sd0;
@@ -834,32 +845,9 @@ module m2_raster_fill (
       line_case <= 1'b0;
       if (span_valid && span_ready) span_valid <= 1'b0;
 
-      case (state)
-        S_IDLE: begin
-          if (in_valid) begin
-            sx[0] <= in_x0; sy[0] <= in_y0;
-            sx[1] <= in_x1; sy[1] <= in_y1;
-            sx[2] <= in_x2; sy[2] <= in_y2;
-            sx[3] <= in_x3; sy[3] <= in_y3;
-            col   <= in_col;
-            moire <= in_moire;
-            qu[0] <= in_u0; qv[0] <= in_v0; qu[1] <= in_u1; qv[1] <= in_v1;
-            qu[2] <= in_u2; qv[2] <= in_v2; qu[3] <= in_u3; qv[3] <= in_v3;
-            qoz[0] <= in_oz0; qoz[1] <= in_oz1;            // R337: still minifloats here
-            qoz[2] <= in_oz2; qoz[3] <= in_oz3;
-            oz_emax <= oz_emax_c;
-            oz_i    <= 2'd0;
-            tex_r     <= in_tex;
-            tex_ok    <= 1'b0;
-            pf_second <= 1'b0;
-            dudx <= 16'sd0; dudy <= 16'sd0; dvdx <= 16'sd0; dvdy <= 16'sd0;
-            // An untextured quad pays nothing for any of this.
-            // R337: normalise 1/z before the plane fit, because the fit runs
-            // on u/z and v/z and those do not exist until it has.
-            state <= in_tex[0] ? S_OZ : S_MINMAX;
-          end
-        end
-
+      // ---- R544: the plane fit's own machine (states moved, bodies unchanged
+      // except that the fit ends in S_IDLE rather than handing to S_MINMAX).
+      case (pf_st)
         // ---- R274: the plane fit, four states and two divide rounds.
         //
         // det is the cross product of the two edges out of vertex 0 in SCREEN
@@ -876,24 +864,24 @@ module m2_raster_fill (
           qoz[oz_i] <= n;
           qu[oz_i]  <= 13'((29'(qu[oz_i]) * 29'(n)) >> 15);
           qv[oz_i]  <= 13'((29'(qv[oz_i]) * 29'(n)) >> 15);
-          if (oz_i == 2'd3) state <= S_PF_D;
+          if (oz_i == 2'd3) pf_st <= S_PF_D;
           else              oz_i  <= oz_i + 2'd1;
         end
 
         S_PF_D: begin
           det_r <= 32'(pf_ax) * 32'(pf_by) - 32'(pf_bx) * 32'(pf_ay);
-          state <= S_PF_N;
+          pf_st <= S_PF_N;
         end
 
         S_PF_N: begin
           if (det_r == 32'sd0) begin
             if (!pf_second) begin
               pf_second <= 1'b1;
-              state     <= S_PF_D;
+              pf_st     <= S_PF_D;
             end else begin
               // No plane through these three points: draw it flat.
               tex_ok <= 1'b0;
-              state  <= S_MINMAX;
+              pf_st  <= S_IDLE;
             end
           // R461: THE ENCODE AND THE SHIFT IN SEPARATE CYCLES.
           //
@@ -927,7 +915,7 @@ module m2_raster_fill (
           end else begin
             pfn_wait <= 1'b0;
             den_a  <= (den_n >= 0) ? 16'(den_n) : 16'(-den_n);   // R449/R461
-            state <= S_PF_NRM;   // R418 counts the zeros before R337 shifts
+            pf_st <= S_PF_NRM;   // R418 counts the zeros before R337 shifts
           end
         end
 
@@ -978,7 +966,7 @@ module m2_raster_fill (
           mul_n <= mul_n_c;   // R457/R458: registered count, one shared shifter
           mul_z <= zsel_c;
           mul_q_r <= '0; mul_zr <= 6'd0; b_wait <= 1'b0;   // R450
-          state <= S_PF_Q1;
+          pf_st <= S_PF_Q1;
         end
 
         // R441: one multiply a state. No handshake, no waiting: the quotient
@@ -988,7 +976,7 @@ module m2_raster_fill (
           mul_n <= mul_n_c; mul_z <= zsel_c;
           mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
           net_r <= 9'sd9 - 9'(mul_z) - 9'(den_sh); zbig_r <= (mul_z >= 6'd32);   // R459
-          state <= S_PF_Q1W;
+          pf_st <= S_PF_Q1W;
         end
 
         S_PF_Q1W: begin
@@ -996,7 +984,7 @@ module m2_raster_fill (
           mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
           net_r <= 9'sd9 - 9'(mul_z) - 9'(den_sh); zbig_r <= (mul_z >= 6'd32);   // R459
           dudx  <= pf_scale_n(mul_q_r, net_r, zbig_r);
-          state <= S_PF_Q2;
+          pf_st <= S_PF_Q2;
         end
 
         S_PF_Q2: begin
@@ -1004,7 +992,7 @@ module m2_raster_fill (
           mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
           net_r <= 9'sd9 - 9'(mul_z) - 9'(den_sh); zbig_r <= (mul_z >= 6'd32);   // R459
           dudy  <= pf_scale_n(mul_q_r, net_r, zbig_r);
-          state <= S_PF_Q2W;
+          pf_st <= S_PF_Q2W;
         end
 
         S_PF_Q2W: begin
@@ -1012,7 +1000,7 @@ module m2_raster_fill (
           mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
           net_r <= 9'sd9 - 9'(mul_z) - 9'(den_sh); zbig_r <= (mul_z >= 6'd32);   // R459
           dvdx  <= pf_scale_n(mul_q_r, net_r, zbig_r);
-          state <= S_PF_Q3;
+          pf_st <= S_PF_Q3;
         end
 
         // R337: THE 1/z PLANE. Same shape as the two above and it reuses the
@@ -1027,14 +1015,14 @@ module m2_raster_fill (
           mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
           net_r <= 9'sd9 - 9'(mul_z) - 9'(den_sh); zbig_r <= (mul_z >= 6'd32);   // R459
           dvdy  <= pf_scale_n(mul_q_r, net_r, zbig_r);
-          state <= S_PF_Q3W;
+          pf_st <= S_PF_Q3W;
         end
 
         S_PF_Q3W: begin
           mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
           net_r <= 9'sd9 - 9'(mul_z) - 9'(den_sh); zbig_r <= (mul_z >= 6'd32);   // R459
           dodx  <= pf_scale_n(mul_q_r, net_r, zbig_r);
-          state <= S_PF_B;
+          pf_st <= S_PF_B;
         end
 
         // The plane is held as its value at screen (0,0) plus two gradients,
@@ -1056,7 +1044,41 @@ module m2_raster_fill (
                   - ((32'(dodx * sx[fa])) <<< 8)
                   - ((32'(dody * sy[fa])) <<< 8);
           tex_ok <= 1'b1;
-          state  <= S_MINMAX;
+          pf_st  <= S_IDLE;
+        end
+
+        default: ;
+      endcase
+
+      case (state)
+        S_IDLE: begin
+          if (in_valid && pf_st == S_IDLE && !span_valid) begin   // R544: see in_ready
+            sx[0] <= in_x0; sy[0] <= in_y0;
+            sx[1] <= in_x1; sy[1] <= in_y1;
+            sx[2] <= in_x2; sy[2] <= in_y2;
+            sx[3] <= in_x3; sy[3] <= in_y3;
+            col   <= in_col;
+            moire <= in_moire;
+            qu[0] <= in_u0; qv[0] <= in_v0; qu[1] <= in_u1; qv[1] <= in_v1;
+            qu[2] <= in_u2; qv[2] <= in_v2; qu[3] <= in_u3; qv[3] <= in_v3;
+            qoz[0] <= in_oz0; qoz[1] <= in_oz1;            // R337: still minifloats here
+            qoz[2] <= in_oz2; qoz[3] <= in_oz3;
+            oz_emax <= oz_emax_c;
+            oz_i    <= 2'd0;
+            tex_r     <= in_tex;
+            tex_ok    <= 1'b0;
+            pf_second <= 1'b0;
+            dudx <= 16'sd0; dudy <= 16'sd0; dvdx <= 16'sd0; dvdy <= 16'sd0;
+            // An untextured quad pays nothing for any of this.
+            // R337: normalise 1/z before the plane fit, because the fit runs
+            // on u/z and v/z and those do not exist until it has.
+            state <= S_MINMAX;                       // R544: the edges start at once
+            pf_st <= in_tex[0] ? S_OZ : S_IDLE;      // and the fit beside them
+          end else if (pf_st != S_IDLE) begin
+            // R544: the quad ended before its first span (a line, or
+            // rejected whole): its fit is not wanted.
+            pf_st <= S_IDLE;
+          end
         end
 
         // One cycle of pure comparison: wireframe, top and bottom vertices, and
@@ -1099,7 +1121,7 @@ module m2_raster_fill (
         end
 
         S_FLAT: begin
-          if (!span_valid || span_ready) begin
+          if ((!span_valid || span_ready) && pf_st == S_IDLE) begin   // R544
             if ((cury <= view_y2) && (cury >= view_y1) && emit_ok) begin
               span_valid <= 1'b1;
               span_y     <= cury;
@@ -1229,7 +1251,7 @@ module m2_raster_fill (
         S_FS_WALK: begin
           if (walk_y >= walk_end) begin
             state <= S_FS_END;
-          end else if (!span_valid || span_ready) begin
+          end else if ((!span_valid || span_ready) && pf_st == S_IDLE) begin   // R544
             if (emit_ok) begin
               span_valid <= 1'b1;
               span_y     <= walk_y;
@@ -1263,7 +1285,7 @@ module m2_raster_fill (
         // The last scanline of the quad, drawn unordered: fill_line does not
         // sort its two x values, so a crossed pair emits nothing.
         S_FINAL: begin
-          if (!span_valid || span_ready) begin
+          if ((!span_valid || span_ready) && pf_st == S_IDLE) begin   // R544
             if ((cury == limy) && (cury <= view_y2) && (cury >= view_y1) && emit_ok) begin
               span_valid <= 1'b1;
               span_y     <= cury;
@@ -1297,7 +1319,13 @@ module m2_raster_fill (
   assign span_tex    = tex_r;
   assign span_tex_en = tex_ok;
 
-  always_comb in_ready = (state == S_IDLE);
+  // R544: AND NOT WHILE THE LAST SPAN IS STILL WAITING. span_tex_en and the
+  // three gradients below are NOT latched with a span -- they are this quad's
+  // registers -- so accepting the next quad while a span is held resets them
+  // under it, and that span goes out with the next quad's texture state (flat
+  // white, in the bench). The slower fill never let the span queue back up;
+  // the faster one does. Nothing can be emitted while a span is held anyway.
+  always_comb in_ready = (state == S_IDLE) && (pf_st == S_IDLE) && !span_valid;
   assign dbg_hot    = state;   // R449: free, no counter behind it
   assign dbg_hotcyc = 16'd0;
 
