@@ -136,6 +136,38 @@ set_clock_groups -asynchronous \
 # the finished STA report instead.
 
 
+# ---- R563: THE TEXEL QUEUE'S PAYLOAD IS MULTICYCLE BY PROTOCOL.
+#
+# m2_texel_cdc (instance u_texel_x2) is an asynchronous FIFO: a request is
+# written into q_* on the core clock, and its slot is read into f_tex/f_u/f_v
+# on clk_mem only after the Gray-coded issue pointer has crossed -- at least
+# three clk_mem edges later. An answer is written into r_tex on clk_mem and
+# read on the core clock only after the answer pointer has crossed -- at least
+# two core edges later. While the two clocks are one PLL at 2:1, STA would
+# otherwise time both at 10 ns, and that is exactly what failed on s285 when
+# R553 widened the queue to eight (R558).
+#
+# The queue's READ side is excluded: an MLAB's portb registers are clocked by
+# clk_mem and move every cycle while the queue streams, and must stay timed.
+# Guarded, because an empty collection makes the exception a silent no-op.
+set txq_all  [get_keepers -nowarn {*u_texel_x2|q_*}]
+set txq_rd   [get_keepers -nowarn {*u_texel_x2|q_*portb*}]
+set txq_from [remove_from_collection $txq_all $txq_rd]
+set txq_to   [get_registers -nowarn {*u_texel_x2|f_tex[*] *u_texel_x2|f_u[*] *u_texel_x2|f_v[*]}]
+set txr_from [get_registers -nowarn {*u_texel_x2|r_tex*}]
+if {[get_collection_size $txq_from] == 0 || [get_collection_size $txq_to] == 0 \
+    || [get_collection_size $txr_from] == 0} {
+    post_message -type critical_warning \
+      "Model2.sdc: m2_texel_cdc's queue or answer registers did not match -- \
+       its payload paths are timed at the full 2:1 window. See study R563."
+} else {
+    set_multicycle_path -setup -end 2 -from $txq_from -to $txq_to
+    set_multicycle_path -hold  -end 1 -from $txq_from -to $txq_to
+    set_multicycle_path -setup -end 2 -from $txr_from
+    set_multicycle_path -hold  -end 1 -from $txr_from
+}
+
+
 # ---- THE CHARACTER-FETCH CROSSING, CONSTRAINED (third time; the story is the
 # point -- study R57/R58)
 #

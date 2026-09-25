@@ -22499,3 +22499,124 @@ the coprocessor and the renderer, which run on clk_sys; for the CPU the
 lever is the SDRAM round trip (arbitration, the crossing, the bridge's own
 states), not the clock. The boot is copy-heavy and may overstate this for
 game code; the board's own CPI has not been measured.
+
+---
+
+**R563 -- STEP 1(c): THE TEXEL QUEUE BECOMES AN ASYNCHRONOUS FIFO, AND WITH
+IT EIGHT FETCHES IN FLIGHT ARE BACK.**
+
+m2_texel_cdc replaces m2_texel_x2 with the same ports and protocol (issue
+pulse with payload, K credits, in-order answers, the local 0xF after
+TO_CYC). The issue and answer pointers cross in Gray code on two flops; a
+queue slot is read on clk_mem only after the issue pointer covering it has
+arrived, and an answer is read on the core clock only after the answer
+pointer has. The sweep pulse (tex_dirty && frame_start, which is where the
+inventory's io_videoctl / io_framenum / vbl_d / dv_hs1 paths into u_texel
+all came from) crosses as a toggle. The texture bases are constants. p2_tex
+reaches the cache as p2_tex_f (R562).
+
+*tb_m2_texel_cdc*, both clocks from absolute time: 20,000 fetches over four
+paces (bursts, trickles, a requester slow to take), then a cache that stops
+accepting while sitting on slow misses; 60 runs over 100/60, 2:1, jitter,
+and slow clocks from 25 to 111 MHz -- the last FASTER than the fast side --
+all pass. The one mutation that matters here, the local answer not waiting
+for older answers, passed the first version of the bench (the stall never
+coincided with an outstanding miss) and fails the second (answers one off
+from 20,002 on).
+
+*The cost at K = 4 and why K is now 8.* tb_m2_raster3d at 2:1 against the
+2:1 adapter: texel wait 28% -> 40% on the flat image and 33% -> 44% on the
+perspective one, and the textured spread lost pixels to lateness (15,770 ->
+12,219). The round trip grew by the synchronisers and four credits no longer
+cover it. At K = 8 (TXK 8): both images pixel-identical to today, texel wait
+22% and 26% -- BELOW today's -- and the spread 19,446 against today's 15,770.
+The heavy untextured scene stays 1% down (27,544 -> 27,282): isolated
+fetches pay the latency and there is nothing to overlap it with.
+
+*R553 was K = 8 and scrambled textures on the board (R558).* That was timing,
+not depth: s285 had failing paths across the 2:1 into the cache, where the
+payload is read one fast edge after it is written. In the asynchronous queue
+the payload is read at least three clk_mem edges after it is written and an
+answer at least two core edges after, so Model2.sdc now carries multicycle
+exceptions for exactly those paths (q_* write side -> f_tex/f_u/f_v, and
+r_tex -> anywhere), with the MLAB's read-side portb registers excluded --
+they are clk_mem and move every cycle. The patterns were checked against the
+s293 netlist (157 queue nodes, 16 answer registers) before use. While the
+clocks are still one PLL this is what stops the 10 ns relationship that
+broke R553 from being timed at all.
+
+*A build-process trap, found by nearly falling into it.* tools/seed-pair.sh
+symlinks every root file into the seed directory, Model2.sdc included, and
+each seed runs quartus_sta after its fit -- so an SDC edited while a batch is
+fitting is read by that batch's STA even though its fitter used the old one.
+The exception above was written during s296-s298's fit, caught, and held back
+until their STA had run (the fit logs show every fitter read the SDC eight
+minutes before the edit). RTL is safe once map is done; the SDC is not safe
+until STA is done.
+
+---
+
+**OPEN ISSUE (recorded 2026-09-25, to be taken up with the other texture
+work) -- THE ROAD'S TEXTURE IS ORIENTED WRONGLY, AND MOVES WRONGLY AS THE
+CAMERA TURNS.**
+
+Ben, with a screenshot of the start of a race (R558 line on the board):
+"When orientation was added, textures are better in most places except for
+the road!!" and, correcting the first write-up of this entry: "the grey and
+colour stripes are still on all objects. Road is just not orientated
+correctly or not updating as the camera changes angles!" -- and then, on the
+second write-up: "no they do change but not correctly!", and: "they change
+when very close to the car but not in mid to long distance".
+
+So two separate things, and this entry is only the second:
+  * the grey and colour stripes are on EVERY textured object -- that is the
+    open issue above (R557/R559/R560), not a road fault;
+  * the road's texture is oriented wrongly, and as the view rotates it
+    changes, but not the way the road does. The car, cliff, grass, banners
+    and wall are oriented correctly since R339's perspective divide; the
+    road's is not.
+
+What sets the road apart: it is the one large polygon seen at a grazing
+angle, it has by far the largest depth range across itself, and its texture
+repeats many times along the track.
+
+THE DISTANCE IS THE CLUE. Close to the car the texture responds to the
+camera; from mid distance out it does not. (The first write-up guessed a
+texture fixed to the whole screen; Ben corrected it twice.) Far away 1/z is
+SMALL, and so are u/z and v/z. If any of them runs out of low-order bits --
+in the geometry stage's output format, in q_oz, in the plane fit's
+fixed-point gradients, or at the bottom of the reciprocal's range -- the far
+part of the road rounds to a few values and stops responding, while close
+up the values are large and survive. So this is a PRECISION fault at small
+1/z, most likely, not an orientation one. SUSPECTS, in order, bench first
+(tb_m2_raster3d drives 1/z since R555; the road needs a scene of its own,
+with 1/z ranging down to what the far road actually gets):
+  * q_oz's format at the far end: how many significant bits a far road
+    vertex's 1/z actually has when it reaches the renderer. dbg_oz0..3 are
+    already wired -- capture a road polygon's four values on the board and
+    MAME's for the same polygon;
+  * the plane fit's d(1/z)/dx, d(u/z)/dx, d(v/z)/dx over a span far from the
+    camera -- tiny gradients quantised to zero give a texture that does not
+    move within or between frames;
+  * u/z and v/z losing their range at the far end of the polygon for the
+    same reason;
+  * texture wrap for a coordinate many sheets long -- whether the repeat is
+    taken before or after the divide;
+  * the seed-plus-Newton reciprocal (R339) outside the 4:1 and 40:1 depth
+    ratios it was measured at.
+MAME's vertex z and texture coordinates for the road polygons are the
+reference to capture first.
+
+**R562, on the board -- s297 (seeds 296/297/298).** All three fitted with
+positive setup on every clock (mem +0.54, sys +1.11, cpu +3.11 on s297) and
+40,828-40,929 ALM, about 300 fewer than s293. One negative hold path on
+clk_sys, -0.272 ns: m2_char_cache hold[8] -> m2_tile_fetch cc_data, the
+aligned-edge hold race R319 describes and the same class s293 carried -- it
+goes away with step 1(b), where both ends are on clk_mem. No STA internal
+error (R321's sta_scc) with the new adapter's `& ~f_ack` term.
+
+240 s capture against s291's: the i960 at 2.21 M instructions/s (CPI 11.33)
+against 2.23 (11.21) -- the crossing costs the CPU 1.1% on the board, a third
+of the bench's 3.5%. Bands, critical periods (2,769 against 2,967) and the
+texel cache (75.1% of 67,439 fetches against 76.1%) unchanged, as they
+should be: nothing in 1(a) touches the renderer.
