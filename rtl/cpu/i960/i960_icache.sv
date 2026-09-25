@@ -93,8 +93,18 @@ module i960_icache #(
   // the same circuit: verilator models the array combinationally and cannot
   // see this, which is the standing rule about memory inference exactly.
   // Found only once the fitter report started printing M10K.
-  (* ramstyle = "logic" *)
-  logic [TAG_W-1:0] ctag  [0:LINES-1];
+  // R552: THE TAGS ARE LUT-RAM, NOT FLIP-FLOPS. The note above kept them in
+  // registers because they are read and compared combinationally on every
+  // fetch -- but a Cyclone V MLAB reads asynchronously, which is exactly that.
+  // As registers they were 736 flip-flops and most of this block's 734 ALMs,
+  // in a design that no longer fits. cvalid stays in registers: reset and
+  // invalidate clear it all at once, which a RAM cannot do.
+  // MLAB, NOT M10K, AND THE DIFFERENCE IS THE WHOLE POINT OF THE NOTE ABOVE:
+  // an M10K read is synchronous and was not the simulated circuit; an MLAB
+  // read is asynchronous and is. The fit report must show this array in MLAB
+  // (it is checked, R552) -- if Quartus ever puts it in an M10K again, pin it
+  // back to "logic".
+  (* ramstyle = "MLAB, no_rw_check" *) logic [TAG_W-1:0] ctag  [0:LINES-1];
   logic             cvalid[0:LINES-1];
 
   logic [IDX_W-1:0] idx;
@@ -177,6 +187,13 @@ module i960_icache #(
   assign rd_we    = (state == S_FILL) && bus_ack;
 
   assign data = cdata_q;
+
+  // R552: the tag write, from a block with no reset so the array can be an
+  // MLAB. The condition is exactly the FSM's completed-fill branch: the last
+  // word acknowledged with no redirect standing.
+  wire tag_we = (state == S_FILL) && bus_ack && !redir_now && !redir_q
+             && (fill_word == 2'd3);
+  always_ff @(posedge clk) if (tag_we) ctag[fill_idx] <= fill_tag;
 
   integer i;
   always_ff @(posedge clk or negedge rst_n) begin
@@ -314,8 +331,7 @@ module i960_icache #(
           end else if (bus_ack) begin
             if (fill_word == 2'd3) begin
               bus_req          <= 1'b0;
-              ctag[fill_idx]   <= fill_tag;
-              cvalid[fill_idx] <= 1'b1;
+              cvalid[fill_idx] <= 1'b1;   // R552: ctag is written below
               state            <= S_DONE;
             end else begin
               fill_word <= fill_word + 2'd1;

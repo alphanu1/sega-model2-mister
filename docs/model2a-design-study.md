@@ -22174,3 +22174,32 @@ latched (clr_pend) and reported busy until done.
 ```
 
 tb_m2_raster_band 825,355 checks and tb_m2_raster3d pass.
+
+---
+
+**R552 -- ALM SURVEY; THE ICACHE TAGS MOVE TO MLAB (~350 ALMs, PENDING THE
+FIT REPORT).**
+
+Ben: "if we go over, investigate all modules and find where there is wasted
+ALM and optimise". Second-level blocks over 200 ALMs (s272 fit report):
+m2_raster_fill 2,908 (self 1,927), m2_tgp 2,296, m2_geo_engine 1,917,
+fx68k 1,810, m2_geo_clip 1,624, m2_quad_store 1,618, i960_regs 1,608 (self
+1,544), fp_pool 1,172, m2_span_tex 882, i960_fpmisc 782, i960_icache 734 ...
+The framework's optional logic is already off (ADAPTIVE, YC, ALSA, NN
+downscale).
+
+i960_icache: 734 ALMs for a 512-byte cache whose DATA is in M10K -- the
+cost is the 32 x 23-bit tag array held in 736 flip-flops, pinned to "logic"
+because Quartus had once put it in an M10K, whose SYNCHRONOUS read was not
+the simulated (combinational) circuit. An MLAB reads asynchronously, so it IS
+the simulated circuit. Tag writes move to a reset-free block (tag_we: the
+FSM's completed-fill branch exactly), ramstyle "MLAB, no_rw_check"; cvalid
+stays in registers (reset and invalidate clear it at once). CPU tests pass;
+tb_m2_cpu_real identical (8.83 CPI, f6953e5d9c861c63).
+
+TO CONFIRM IN THE FIT REPORT, NOT BELIEVE: ctag must appear as MLAB, not an
+M10K altsyncram. If it is ever in an M10K, pin it back to "logic".
+
+Checked and left: i960_regs' loc/glb (1,024 bits) are read through several
+ports at once -- direct R_RIP/R_PFP/G_FP/R_SP reads and four-word spill reads
+-- which an MLAB cannot serve.
