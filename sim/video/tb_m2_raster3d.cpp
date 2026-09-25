@@ -42,6 +42,29 @@ static unsigned vbl_bands = 0;
 // it; the default is tight enough to reproduce that.
 static int TPL = 400;
 
+// R555: M2_R3D_TEXPAT -- a 4x4-texel checkerboard (3 / C) in place of noise,
+// so a texel taken from the wrong place is visible in an image. A 16-bit word
+// holds a 2x2 texel block (nib() in m2_texel: py0px0 [15:12], py0px1 [11:8],
+// py1px0 [7:4], py1px1 [3:0]); a sheet row is 512 words; a line is 4 words.
+static uint64_t texpat_line(uint32_t addr, uint32_t base) {
+  static const bool PAT = std::getenv("M2_R3D_TEXPAT") != nullptr;
+  if (!PAT) return 0x0123456789abcdefULL ^ (uint64_t)addr;
+  uint64_t line = 0;
+  for (int k = 0; k < 4; ++k) {
+    const uint32_t w = addr + k - base;
+    const int tx0 = int(w % 512) * 2, ty0 = int(w / 512) * 2;
+    uint32_t word = 0;
+    for (int py = 0; py < 2; ++py) for (int px = 0; px < 2; ++px) {
+      const int tx = tx0 + px, ty = ty0 + py;
+      const uint32_t v = (((tx >> 2) ^ (ty >> 2)) & 1) ? 0xC : 0x3;
+      const int sh = 12 - 4 * (py * 2 + px);
+      word |= v << sh;
+    }
+    line |= uint64_t(word) << (16 * k);
+  }
+  return line;
+}
+
 int main(int argc, char **argv) {
   Verilated::commandArgs(argc, argv);
   const bool g_textured = std::getenv("M2_R3D_TEX") != nullptr;
@@ -57,6 +80,13 @@ int main(int argc, char **argv) {
   // The board raises this once boot is done and never lowers it.
   d->tex_m2_en = 1;                                        // R517
   d->tex_base0 = 0x1760000; d->tex_base1 = 0x17E0000;
+  // R555: 1/z FOR EVERY VERTEX, WHICH THIS BENCH NEVER DROVE. q_oz0..3 (R334,
+  // a minifloat: 8-bit exponent, top 8 mantissa bits) were left at zero, so the
+  // perspective divide gave every pixel the same texture coordinate -- every
+  // textured scene here sampled ONE texel, always a cache hit. 0x7F00 is 1.0:
+  // equal 1/z, plain affine texturing. M2_R3D_OZ overrides it.
+  { const unsigned oz = std::getenv("M2_R3D_OZ") ? unsigned(std::strtoul(std::getenv("M2_R3D_OZ"), nullptr, 16)) : 0x7F00u;
+    d->q_oz0 = oz; d->q_oz1 = oz; d->q_oz2 = oz; d->q_oz3 = oz; }
   // R291: A MEMORY FOR THE TEXEL FETCH. Without one the unit times out on
   // every fetch -- 1,023 cycles a texel -- and the fill grinds to a halt,
   // which is a bench artefact and not the fault being chased. With one, this
@@ -107,12 +137,12 @@ int main(int argc, char **argv) {
     if (d->tex_m_req && tex_wait < 0) tex_wait = TEXLAT;
     if (tex_wait == 0) {
       d->tex_m_ack = 1;
-      d->tex_m_data = 0x0123456789abcdefULL ^ (uint64_t)d->tex_m_addr;
+      d->tex_m_data = texpat_line(d->tex_m_addr, d->tex_base0);
     }
     if (d->tex_m2_req && tex2_wait < 0) tex2_wait = TEXLAT + 6;
     if (tex2_wait == 0) {
       d->tex_m2_ack = 1;
-      d->tex_m2_data = 0x0123456789abcdefULL ^ (uint64_t)d->tex_m2_addr;
+      d->tex_m2_data = texpat_line(d->tex_m2_addr, d->tex_base0);
     }
     d->eval();
     // R318: clk_mem runs at 2x clk, as it does on hardware -- m2_texel lives on
@@ -156,6 +186,23 @@ int main(int argc, char **argv) {
                          ? std::atoi(std::getenv("M2_R3D_HEAVY")) : 1;
   auto push_list = [&](int frame_no) {
     d->frame_start = 0;
+    // R555: M2_R3D_IMG -- ONE big textured quad, off both sides of the screen,
+    // many bands tall, for looking at the picture rather than counting it.
+    if (std::getenv("M2_R3D_IMG")) {
+      { int g = 0; d->q_valid = 0; d->eval(); while (!d->q_ready && g++ < 100000) tick(); }
+      d->q_valid = 1;
+      d->q_x0 = -40; d->q_y0 = 20; d->q_x1 = 540; d->q_y1 = 20;
+      d->q_x2 = 540; d->q_y2 = 360; d->q_x3 = -40; d->q_y3 = 360;
+      d->q_col = 0xFFFFFF; d->q_z = 0x3F800000; d->q_moire = 0;
+      d->q_tex = 0x000001 | (2u << 1) | (2u << 4);
+      static const int IU = std::getenv("M2_R3D_IMGU") ? std::atoi(std::getenv("M2_R3D_IMGU")) : 4000;
+      d->q_u0 = 0;   d->q_v0 = 0;   d->q_u1 = IU;  d->q_v1 = 0;
+      d->q_u2 = IU;  d->q_v2 = IU;  d->q_u3 = 0;   d->q_v3 = IU;
+      d->q_end = 1;
+      tick();
+      d->q_valid = 0; d->q_end = 0;
+      return;
+    }
     const int NB = SCR_H / 16;
     for (int b = 0; b < NB; b++) {
      // R509: THE MIDDLE, NOT THE LOWER HALF. The board draws bands at the top

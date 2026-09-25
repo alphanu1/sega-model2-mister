@@ -22248,3 +22248,59 @@ cache (0 misses with one texture, 4 with M2_R3D_TEXSPREAD's regions, 50 with
 them moving per frame), so latency sweeps (M2_R3D_TEXLAT) showed nothing.
 Rather than keep tuning a synthetic load, the walk's wait_why goes on a port
 and R547's record becomes {critical, texel wait, no credit, painter stall}.
+
+---
+
+**R555 -- THE BENCH NEVER DROVE 1/z. EVERY TEXTURED SCENE SAMPLED ONE TEXEL.
+AND THE BOARD'S TEXTURE WALK WAITS ON TEXELS, 68%.**
+
+s289 (R554; clk_mem -0.156, clk_sys +0.670, hold all positive, clean pins),
+300 s capture, 57 sampled frames: zero-miss frames 40/57; late bands at
+y 144-190. R554's counters over the critical periods: WAITING FOR A TEXEL
+68%, out of credits 4%, painter stall 3%. The late bands are texel-LATENCY
+bound on the board.
+
+The bench could not show it because tb_m2_raster3d never set q_oz0..3 (R334's
+per-vertex 1/z). At zero the perspective divide gave every pixel the same
+texture coordinate: one texel, always a hit. R539's and R553's latency
+sweeps showed nothing for that reason. Now 0x7F00 (1.0) on every vertex
+(M2_R3D_OZ overrides). With it, and M2_R3D_TEXPAT (a 4x4-texel checkerboard
+in place of noise) and M2_R3D_IMG (one large quad off both sides, many bands
+tall), the bench renders a real, viewable texture: 1,792-4,522 misses a frame.
+
+GREY LINES / GREEN STRIPES (Ben, two screenshots: grey streaks across the red
+car, green stripes running RIGHT from the Hornet logo on the roof). Two
+exclusions, both measured:
+  * not a colour mix-up between overlapped spans -- the back-to-back test now
+    gives every span its own colour and checks every group, 0 errors under 60%
+    stalls and 26% misses;
+  * not the texel path's ordering -- the same frame at texel latency 8 and 20
+    is bit-identical despite different miss counts, and at 40 every pixel
+    painted matches (104 lines missed for time, none wrong).
+
+**R556 (experiment, not built) -- an XOR-hashed texel index** (tag folded into
+the index's top bits so textures one index period -- 64 texel rows -- apart
+stop evicting each other). Benches built; not yet measured.
+
+**R557 -- THE STRIPES ARE A TIMING FAULT: dq_r -> p_dout.**
+
+The failing clk_mem paths on s289 are all dq_r -> p_dout (the pin register to
+the ports' read data) -- ports 10 (texel fetch) and 1 (CPU). s265 and s285:
+the same, 13 paths each. dq_r fanned out to eleven ports x four word slots. A
+late bit is a wrong bit of read data; on the texel port that corrupts a line
+that is then CACHED until evicted -- a stripe that persists, board-only, which
+is what the latency test above says it must be.
+
+Staged: the last word of a burst assembles the line into dl_data with its
+port, and the next cycle delivers it to p_dout and raises the acknowledge
+together. One cycle more read latency; the fan-out from the pin register is
+one 64-bit stage. Bursts complete several cycles apart, so the stage is never
+overwritten undelivered.
+
+tb_m2_sdram 1,796,727 checks, 0 fails, 0 violations, 0 tag faults; sdram128,
+x2, romload, cpu_sdram, cpu_bridge pass; tb_m2_cpu_real identical (8.83 CPI,
+f6953e5d9c861c63, fold 14b8). Aggregate 0.476 words/cyc unchanged; a lone
+port 0.302 -> 0.281 (the extra cycle).
+
+DDR3 FOR TEXTURES (Ben asked): no -- the HPS DDR3 path's latency is well above
+the SDRAM's, and the walk is latency-bound. It would lengthen every miss.

@@ -428,7 +428,7 @@ int main(int argc, char **argv) {
     auto roll = [&](uint32_t n) { rng = rng*1664525u + 1013904223u; return (rng >> 8) % n; };
     const int STEP = 2;
     const int NSPAN = 60;
-    struct S { int y, x0, x1, u, v, du, dv, ooz, doz, groups; };
+    struct S { int y, x0, x1, u, v, du, dv, ooz, doz, groups; uint32_t col; };
     std::vector<S> sp;
     for (int i = 0; i < NSPAN; ++i) {
       S q;
@@ -441,6 +441,9 @@ int main(int argc, char **argv) {
       q.groups = ((q.x1 - q.x0) / STEP) + 1;
       q.ooz = 0x2000000 + int32_t(roll(0x1000000));
       q.doz = -int32_t(roll(20000)) / (q.groups ? q.groups : 1);
+      // R555: A DIFFERENT COLOUR PER SPAN. Every span here was 0xffffff, so a
+      // group coloured with its neighbour's parameters was invisible.
+      q.col = 0x010000u * uint32_t(40 + (i * 37) % 200) + 0x000100u * uint32_t((i * 91) % 256) + uint32_t((i * 13) % 256);
       sp.push_back(q);
     }
     long want_groups = 0;
@@ -453,6 +456,8 @@ int main(int argc, char **argv) {
     long t0 = ticks_done;
     size_t next = 0;
     d->in_tex = 0x000001; d->in_tex_en = 1; d->in_col = 0xffffff; d->in_moire = 0;
+    const int saved_force = force_texel;
+    force_texel = 0xf;   // R555: texel 0xF scales a colour to itself exactly
     for (long guard = 0; guard < 200000; ++guard) {
       if (next < sp.size()) {
         const S &q = sp[next];
@@ -460,6 +465,7 @@ int main(int argc, char **argv) {
         d->in_y = q.y; d->in_x0 = q.x0; d->in_x1 = q.x1;
         d->in_u = q.u; d->in_v = q.v; d->in_dudx = q.du; d->in_dvdx = q.dv;
         d->in_ooz = q.ooz; d->in_doozdx = q.doz;
+        d->in_col = q.col;
       } else {
         d->in_valid = 0;
       }
@@ -506,16 +512,23 @@ int main(int argc, char **argv) {
         if (i > 8) break;
       }
     }
-    size_t k = 0; long bad_y = 0, bad_x = 0;
+    force_texel = saved_force;
+    size_t k = 0; long bad_y = 0, bad_x = 0, bad_col = 0;
     for (size_t i = 0; i < sp.size() && k + sp[i].groups <= got.size(); ++i) {
       int last_x0 = -1;
       for (int g = 0; g < sp[i].groups; ++g, ++k) {
         if (got[k].y != sp[i].y) ++bad_y;
+        if (got[k].col != sp[i].col) {
+          if (bad_col < 6 && std::getenv("M2_DBG"))
+            std::printf("      span %zu group %d: col %06x want %06x\n", i, g, got[k].col, sp[i].col);
+          ++bad_col;
+        }
         if (got[k].x0 <= last_x0 || got[k].x1 > sp[i].x1) ++bad_x;
         last_x0 = got[k].x0;
       }
     }
     ck("each group carries its own span's y", bad_y, 0);
+    ck("each group carries its own span's COLOUR (R555)", bad_col, 0);
     ck("x ascends within a span and stays inside it", bad_x, 0);
     std::printf("    back to back: %ld cycles for %zu spans, %ld groups"
                 " -- %.2f cycles per span (%.2f groups per span)\n",

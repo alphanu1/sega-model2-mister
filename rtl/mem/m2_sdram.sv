@@ -695,6 +695,10 @@ module m2_sdram #(
   // healthy-looking coprocessor.
   logic [RD_LAT-1:0][PW-1:0] tag_p;      // port index
   logic [RD_LAT-1:0][1:0]   tag_w;      // word index within the burst
+  // R557: the read-data stage between the pin register and the ports.
+  logic                     dl_v;
+  logic [PW-1:0]            dl_p;
+  logic [63:0]              dl_data;
   logic [RD_LAT-1:0]        tag_last;
   // ONE SET OF CAPTURE SLOTS, NOT ONE PER PORT, because two ports' words can
   // never interleave in this pipeline and the per-port index was costing both
@@ -870,6 +874,7 @@ module m2_sdram #(
       ack_cnt <= '0; wack_cnt <= '0; inflight <= '0; wr_inflight <= 1'b0;
       for (int b = 0; b < 4; b++) rd_bank_cnt[b] <= '0;
       p_ack <= '0; wr_ack <= 1'b0; p_dout <= '0;
+      dl_v <= 1'b0; dl_p <= '0; dl_data <= '0;   // R557
       grant <= '0; grant_is_wr <= 1'b0; rr_mask <= '1;                  // R498
       rd_total <= 4'd1; rd_issued <= '0; rd_captured <= '0;
       is_write <= 1'b0; xfer_addr <= '0; din_r <= '0; be_r <= '0;
@@ -967,14 +972,32 @@ module m2_sdram #(
             // and wrong only in the upper half, which is the exponent and sign
             // of a float. Unused lanes are zeroed rather than left stale so a
             // consumer reading past what it asked for sees zero, not history.
+            // R557: STAGED, NOT DELIVERED STRAIGHT FROM THE PIN REGISTER.
+            // dq_r used to fan out to every port's 64-bit p_dout -- eleven
+            // ports x four word slots -- and dq_r -> p_dout was the failing
+            // clk_mem path on s265, s285 and s289 alike (13 paths each). A late
+            // bit there is a wrong bit of read data, and port 10 is the texel
+            // fetch: a corrupted texel is cached until its line is evicted,
+            // which is a stripe that stays -- Ben's grey and green lines. Now
+            // dq_r reaches one 64-bit stage; the port gets it a cycle later,
+            // data and acknowledge still together.
             case (tag_w[0])
-              2'd0:    p_dout[tag_p[0]] <= {48'd0, dq_r};
-              2'd1:    p_dout[tag_p[0]] <= {32'd0, dq_r, cap[0]};
-              default: p_dout[tag_p[0]] <= {dq_r, cap[2], cap[1], cap[0]};
+              2'd0:    dl_data <= {48'd0, dq_r};
+              2'd1:    dl_data <= {32'd0, dq_r, cap[0]};
+              default: dl_data <= {dq_r, cap[2], cap[1], cap[0]};
             endcase
-            p_ack[tag_p[0]]    <= 1'b1;
-            ack_cnt[tag_p[0]]  <= 2'(ACK_HOLD - 1);
+            dl_p <= tag_p[0];
+            dl_v <= 1'b1;
           end
+        end
+        // R557: the stage's delivery. Bursts complete several cycles apart
+        // (S_IDLE -> S_SEL -> S_DISPATCH -> S_RD between one's last tag and
+        // the next's first), so the stage is never overwritten undelivered.
+        if (dl_v) begin
+          dl_v            <= 1'b0;
+          p_dout[dl_p]    <= dl_data;
+          p_ack[dl_p]     <= 1'b1;
+          ack_cnt[dl_p]   <= 2'(ACK_HOLD - 1);
         end
 
         // ------------------------------------------------- PREFETCH (R387)
