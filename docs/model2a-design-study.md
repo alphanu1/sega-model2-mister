@@ -22357,3 +22357,21 @@ Steps, each buildable alone:
   4. the i960 to 30 (5.68 ns short today).
 Cost to watch: an asynchronous crossing adds cycles to every SDRAM access,
 including the texel misses the bands wait on (R555: 68%).
+
+---
+
+**R560 -- THE STRIPES ARE THE SAME ON EVERY BUILD OF THIS SESSION. AND THE
+TEXEL CACHE CANNOT SIMPLY MOVE TO THE CORE CLOCK.**
+
+Ben compared s256 (R541), s261 (R544), s275 (R550), s281 (R551/R552) and
+s293 (R558) on the board, one after another: "all the same when it comes to
+the grey and colour stripes". So the stripes predate this session entirely --
+not the painter, the parallel plane fit, the prefetch, the texel queue or the
+read staging. Their cause is older and still open.
+
+Step 1a of the clock plan -- m2_texel and m2_texel_x2 both on the core clock,
+Model 1's arrangement -- was tried in the bench and NOT kept: with a real
+textured frame (R555) it painted 117,415 pixels of 136,000 with no missed
+lines, i.e. pixel groups were lost, and the heavy close-ups missed more
+(4 layers: 0 -> 88). The patch is kept aside; the loss has to be understood
+before the texel path moves domain.
