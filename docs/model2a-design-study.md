@@ -22375,3 +22375,72 @@ textured frame (R555) it painted 117,415 pixels of 136,000 with no missed
 lines, i.e. pixel groups were lost, and the heavy close-ups missed more
 (4 layers: 0 -> 88). The patch is kept aside; the loss has to be understood
 before the texel path moves domain.
+
+---
+
+**R561 -- R560 WAS WRONG: THE TEXEL CACHE ON THE CORE CLOCK LOSES NOTHING, IT
+IS SLOWER. SO IT STAYS ON clk_mem, AND THE ADAPTER BECOMES THE CROSSING.**
+
+*Believed (R560):* with m2_texel and m2_texel_x2 both on clk, the perspective
+image painted 117,415 pixels of 136,000 "with no missed lines", so pixel
+groups were being lost.
+
+*Now known:* nothing is lost. A pixel-by-pixel diff of the last frame
+(M2_R3D_PXDUMP, IMG + TEXPAT + IMGU 2000 + PERSP) against HEAD: 117,415 in
+common, **0 differ**, 18,585 missing, none extra. The missing pixels are the
+TOP rows of bands from scanline 296 down -- 304-309 missing, 310-311 painted,
+312-318 missing -- i.e. each lower band became ready part-way through the
+beam's pass over it. Texel hits and misses are within ten of each other
+(37,113/7,527 against 37,103/7,537); the span walk's texel wait goes 33% ->
+54% of cycles. The flat image does the same on a smaller scale (135,361 of
+136,000; scanline 48 and 239 pixels of 49).
+
+"No missed lines" was a bench-reading error, not a counter fault. R536's
+`dbg_miss_lines` latches at the first blanking line, and tb_m2_raster3d
+prints it BEFORE the next frame's blanking, so every print describes the
+frame before. The R560 frames read 58 missed lines, one print late; the
+final print was the list-collect frame, which had none. The board's 'z'
+channel reads the latched value and is unaffected.
+
+*Consequence for the clock plan.* Step 1's "the texel cache into the core
+domain, Model 1 style" is dropped. The cache's own state machine is about
+half of a miss (R309) and runs twice as fast on clk_mem; moving it to the
+core clock costs lines on exactly the scenes the bands already lose. Model 1
+can afford it at 80/59 (a 1.36 ratio); at 100/50 or 100/60 this design
+cannot. The cache stays on clk_mem, where its misses do not cross at all,
+and **m2_texel_x2 becomes an asynchronous queue** (Gray-coded issue and
+answer pointers, payload held in the queue, read only after its pointer
+has crossed). This is the one place the plan departs from Model 1, and this
+measurement is why.
+
+*The crossing inventory (s293, quartus_sta, every clk_sys <-> clk_mem pair).*
+The 2:1 assumption is not confined to the adapters, and each of these has to
+become a real crossing before the clocks can differ:
+
+  - SDRAM ports 1, 4-9, the cp/cal half of 2, and the write port: requesters
+    read u_sdram's p_ack/p_dout combinationally through m2_sdram_x2, and
+    u_sdram reads their address and data directly (~7,000 paths, including
+    the boot engines cp_/sc_/sw_/st_/bi_/xlat_ and tf_i). m2_sdram_x2 is the
+    single choke point: an asynchronous adapter that keeps its contract --
+    ack sticky until req drops, data held with it -- changes no requester.
+  - The character cache (clk_mem): the CPU bridge and the tilemap drive its
+    M10K address and write ports directly, and its data returns straight
+    into the tilemap fetch (~10,000 paths). This is a 2:1 dependency deep in
+    the tilemap, not an adapter.
+  - The texel cache: m2_texel_x2 both ways; p2_tex, io_videoctl,
+    io_framenum, vbl_d/vbl_dd, dv_hs1 and m2_raster3d's texture bases into
+    u_texel (~1,100 paths).
+  - Debug counters: tx_*, cc_*, g_dbg.u_dbg_stream (~2,300 paths).
+
+The script is `xings.tcl` (kept with the build scratch, not the repository):
+get_timing_paths -from_clock/-to_clock with -pairs_only. It is also the
+acceptance test for step 1: run on a 100/50 build with the crossings
+converted, BEFORE any asynchronous clock group is declared, and every
+remaining endpoint must be a synchroniser or an adapter payload register.
+Declaring the groups first would hide exactly the paths it has to find.
+
+*Step 1, re-ordered:* (a) an asynchronous m2_sdram_x2 replacement with the
+same slow-side contract; (b) the character cache's crossing; (c) m2_texel_x2
+as an asynchronous queue, plus the texel cache's control inputs; (d) the
+debug counters; (e) the inventory rerun, then the clock groups; (f) a board
+build at 100/50/25, which must behave as today, before step 2.
