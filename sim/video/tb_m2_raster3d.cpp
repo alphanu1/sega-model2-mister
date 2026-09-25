@@ -31,7 +31,7 @@ static int BAND_H = 8;    // the shipped band height
 static bool px_dump = false;   // R542: M2_R3D_PXDUMP, every painted pixel of the last frame
 static uint64_t frame_hash = 1469598103934665603ull;   // R542: this frame only
 static uint64_t pix_hash = 1469598103934665603ull;   // R539: every painted pixel, all frames
-static long fill_hist[32], walk_busy = 0, cst_hist[8], why_hist[8], fw_hist[32];   // R539: fill state per cycle, per frame
+static long fill_hist[32], walk_busy = 0, cst_hist[8], why_hist[8], fw_hist[32], sw_hist[8];   // R539: fill state per cycle, per frame
 static long top_hits = 0;
 static unsigned vbl_bands = 0;
 // CLOCKS PER SCANLINE, AND IT IS A TEST PARAMETER BECAUSE THE FAULT LIVES IN
@@ -127,6 +127,7 @@ int main(int argc, char **argv) {
     ++cst_hist[d->rootp->m2_raster3d__DOT__cst & 7];
     ++why_hist[d->rootp->m2_raster3d__DOT__fill_why & 7];
     if ((d->rootp->m2_raster3d__DOT__cst & 7) == 5) ++fw_hist[d->dbg_fill_hot & 31];   // R542: C_FILLW, by fill state
+    ++sw_hist[d->rootp->m2_raster3d__DOT__u_spantex__DOT__wait_why & 7];   // R551
     if (d->dbg_walk_hot) ++walk_busy;
   };
   for (int i = 0; i < 4; i++) tick();
@@ -163,7 +164,14 @@ int main(int argc, char **argv) {
      // bands that fail are the ones with the most spans and the shortest.
      // Modelling the load in the lower half instead put the cost where the
      // board does not have it.
-     const int reps = (b >= NB/3 && b < 2*NB/3) ? HEAVY : 1;
+     // R551: M2_R3D_BIG=n puts n layers of FULL-WIDTH textured quads in the
+     // middle rows instead -- the close-up case (the car, the mountains),
+     // where the texture is magnified (M2_R3D_MAGU: u span across the quad,
+     // default 120 quarter-texels = 30 texels over 496 pixels).
+     static const int BIG = std::getenv("M2_R3D_BIG") ? std::atoi(std::getenv("M2_R3D_BIG")) : 0;
+     static const int MAGU = std::getenv("M2_R3D_MAGU") ? std::atoi(std::getenv("M2_R3D_MAGU")) : 120;
+     const bool bigrow = BIG && (b >= NB/3 && b < 2*NB/3);
+     const int reps = bigrow ? BIG : (b >= NB/3 && b < 2*NB/3) ? HEAVY : 1;
      for (int r = 0; r < reps; r++) {
       // R220: the store may be holding a finished list; wait for it.
       { int g = 0; d->q_valid = 0; d->eval(); while (!d->q_ready && g++ < 100000) tick(); }
@@ -178,8 +186,8 @@ int main(int argc, char **argv) {
       // R541: M2_R3D_OVERLAP packs the heavy quads two pixels apart, each its
       // own colour, so they overlap and the picture depends on paint ORDER.
       static const bool OVL = std::getenv("M2_R3D_OVERLAP") != nullptr;
-      const int qx = (reps > 1) ? (OVL ? 8 + r * 2 : 8 + r * 12) : (100 + frame_no);
-      const int qw = (reps > 1) ? 6 : 40;
+      const int qx = bigrow ? 0 : (reps > 1) ? (OVL ? 8 + r * 2 : 8 + r * 12) : (100 + frame_no);
+      const int qw = bigrow ? 495 : (reps > 1) ? 6 : 40;
       static const int QY = std::getenv("M2_R3D_QY") ? std::atoi(std::getenv("M2_R3D_QY")) : 2;
       const int qy = (reps > 1) ? QY : 2;   // R538: heavy quads' first line in the 16-line row
       d->q_x0 = qx;      d->q_y0 = b * 16 + qy;
@@ -198,9 +206,9 @@ int main(int argc, char **argv) {
       if (g_textured) {
         d->q_tex = 0x000001 | (2u << 1) | (2u << 4);   // 128x128, sheet 0
         d->q_u0 = 0;   d->q_v0 = 0;
-        d->q_u1 = 400; d->q_v1 = 0;
-        d->q_u2 = 400; d->q_v2 = 200;
-        d->q_u3 = 0;   d->q_v3 = 200;
+        d->q_u1 = bigrow ? MAGU : 400; d->q_v1 = 0;
+        d->q_u2 = bigrow ? MAGU : 400; d->q_v2 = bigrow ? 40 : 200;
+        d->q_u3 = 0;   d->q_v3 = bigrow ? 40 : 200;
       } else {
         d->q_tex = 0;
       }
@@ -277,6 +285,9 @@ int main(int argc, char **argv) {
       std::printf("      R541 C_FILL split (%% of cycles): handoff %ld%%  fill-busy %ld%%  replaying %ld%%  band-end drain %ld%%\n",
                   why_hist[1]*100/(tot?tot:1), why_hist[2]*100/(tot?tot:1), why_hist[3]*100/(tot?tot:1), why_hist[4]*100/(tot?tot:1));
       for (long &v : why_hist) v = 0;
+      std::printf("      R551 span walk busy (%% of cycles): painter-stall %ld%%  texel-wait %ld%%  no-credit %ld%%  refill %ld%%  moving %ld%%\n",
+                  sw_hist[1]*100/(tot?tot:1), sw_hist[2]*100/(tot?tot:1), sw_hist[3]*100/(tot?tot:1), sw_hist[4]*100/(tot?tot:1), sw_hist[0]*0);
+      for (long &v : sw_hist) v = 0;
       {
         static const char *fn[32] = {"IDLE","CLASSIFY","FLAT","START1","START2","LOADX","DIVA","DIVAW","DIVB","DIVBW",
           "DECIDE","FS_ENTER","FS_MULA","FS_MULB","FS_SWAP","FS_WALK","FS_END","FINAL","DONE","PF_D","PF_N","PF_Q1",

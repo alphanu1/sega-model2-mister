@@ -442,6 +442,21 @@ module m2_span_tex #(
   // emptying this cycle.
   wire rt_take   = tx_ack && (of_wp != of_rp) && (!rt_valid || rt_frees) && (st == T_RUN);
   assign tx_take = rt_take;
+  // R551: WHY THE WALK IS BUSY, for the bench only (nothing reads it, so the
+  // fitter drops it). 1 the band painter is not taking the emitted group,
+  // 2 fetches are out and the oldest has not been answered, 3 a result is
+  // ready but no fetch credit is free, 4 the divide pipeline has nothing ready
+  // (span start / refill), 0 not busy.
+  logic [2:0] wait_why /*verilator public_flat_rd*/;
+  always_comb begin
+    wait_why = 3'd0;
+    if (busy) begin
+      if (e_valid && !out_ready)                        wait_why = 3'd1;
+      else if ((of_wp != of_rp) && !tx_ack)             wait_why = 3'd2;
+      else if (res_valid && !tx_rdy)                    wait_why = 3'd3;
+      else if (!res_valid)                              wait_why = 3'd4;
+    end
+  end
   wire pipe_en   = !res_valid || cons_take;
   logic signed [31:0] d0_o;   logic [5:0] d0_e;   // R448: stage 1a
   logic [5:0]  d1_e;   logic [31:0] d1_m;  logic [24:0] d1_r;

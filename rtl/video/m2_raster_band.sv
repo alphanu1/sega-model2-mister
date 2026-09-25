@@ -218,6 +218,7 @@ module m2_raster_band #(
   logic               cur_moire;
   logic [YW-1:0]      cur_row;
   logic [BAW-1:0]     clr_addr;
+  logic               clr_pend;   // R551: a clear asked for while painting
 
   // In-band and on-screen tests, both in screen coordinates.
   //
@@ -242,8 +243,23 @@ module m2_raster_band #(
   wire signed [15:0] clip_x1 = (span_x1 > $signed(16'(WIDTH-1))) ? $signed(16'(WIDTH-1))
                                                                  : span_x1;
 
-  assign span_ready = (st == S_IDLE) && !clear_req;
-  assign clear_busy = (st == S_CLEAR);
+  // R551: THE NEXT SPAN IS TAKEN ON THE LAST GROUP OF THIS ONE. Accepting only
+  // in S_IDLE made every span cost S_IDLE + S_PAINT -- and a textured span
+  // from m2_span_tex IS one group, so textured pixels painted at half rate.
+  // tb_m2_raster3d's close-up scene (full-width magnified textures, the car
+  // and mountain case the board misses bands on) had the span walk stalled
+  // on this painter for half of its busy time, and out of fetch credits for
+  // the other half as a knock-on (credits free only when an answer is taken).
+  wire paint_last = (st == S_PAINT) && (16'(grp_x0) + 16'(NBANK - 1) >= cur_x1);
+  assign span_ready = ((st == S_IDLE) || paint_last) && !clear_req && !clr_pend;
+  // R551: A CLEAR ASKED FOR WHILE PAINTING IS REMEMBERED, NOT DROPPED. S_IDLE
+  // was the only state that looked at clear_req, so a one-cycle request that
+  // landed on a paint vanished and the caller -- seeing clear_busy low -- went
+  // on as if the band were clean. Harmless while spans were only ever taken in
+  // S_IDLE and the band was idle long before any clear; with back-to-back spans
+  // the painter can be busy at any moment. Busy while pending, so no caller can
+  // mistake a pending clear for a finished one.
+  assign clear_busy = (st == S_CLEAR) || clr_pend;
 
   always_comb begin
     wr_en   = '0;
@@ -267,11 +283,14 @@ module m2_raster_band #(
       cur_x       <= '0; cur_x1 <= '0; cur_y <= '0;
       cur_col     <= '0; cur_moire <= 1'b0; cur_row <= '0;
       clr_addr    <= '0;
+      clr_pend    <= 1'b0;
       dbg_spans   <= '0; dbg_dropped <= '0; dbg_painted <= 1'b0;
     end else begin
+      if (clear_req && (st == S_PAINT)) clr_pend <= 1'b1;   // not S_CLEAR: a held request is that clear
       case (st)
         S_IDLE: begin
-          if (clear_req) begin
+          if (clear_req || clr_pend) begin
+            clr_pend <= 1'b0;
             clr_addr <= '0;
             st       <= S_CLEAR;
             // R486: THE FLAG IS PER BAND-FILL, AND IT NEVER WAS. It was reset
@@ -303,7 +322,23 @@ module m2_raster_band #(
         S_PAINT: begin
           dbg_painted <= 1'b1;                      // R485
           // Advance to the next group boundary, not the next pixel.
-          if (16'(grp_x0) + 16'(NBANK - 1) >= cur_x1) st <= S_IDLE;
+          if (paint_last) begin
+            // R551: straight on to the next span if one is offered.
+            if (span_valid && !clear_req) begin
+              if (takeable) begin
+                cur_x     <= clip_x0;
+                cur_x1    <= clip_x1;
+                cur_y     <= span_y;
+                cur_row   <= YW'(y_rel);
+                cur_col   <= span_col;
+                cur_moire <= span_moire;
+                if (dbg_spans != 16'hffff) dbg_spans <= dbg_spans + 16'd1;
+              end else begin
+                if (dbg_dropped != 16'hffff) dbg_dropped <= dbg_dropped + 16'd1;
+                st <= S_IDLE;
+              end
+            end else st <= S_IDLE;
+          end
           else cur_x <= 16'(grp_x0) + 16'(NBANK);
         end
 

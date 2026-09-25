@@ -22131,3 +22131,46 @@ SUSPECTS, not conclusions -- to be checked in this order:
   * Whether it predates R539/R541/R544 (textures looked right before?): the
     UART's texel counters and a bench pixel dump of a textured quad crossing
     x=0 and x=495 would separate the three.
+
+---
+
+**R551 -- THE BAND PAINTER TOOK ONE TEXTURED GROUP EVERY TWO CYCLES. THE
+BOARD'S LATE BANDS ARE TEXTURE-BOUND, AND THIS WAS WHY.**
+
+s275 (R550; clk_mem -0.666, hold clk_mem -0.224, 0 packing warnings) on the
+board, R547's counters over 105 records: during critical periods (fill on the
+displayed frame, at most one band ahead of the beam) C_FILLW ~99%, span walk
+busy ~100%, list walk ~4% -- the late bands wait on TEXTURE throughput. Bands
+0-15 were never late in that capture; 16-22 at 5-15%.
+
+The bench got a close-up mode (M2_R3D_BIG=n: n layers of full-width textured
+quads in the middle rows, texture magnified -- M2_R3D_MAGU), which reproduces
+it: 3 layers miss 25 lines, 4 miss 88. A bench-only wait_why in m2_span_tex
+split the walk's busy time: painter not taking the group ~21% of all cycles,
+no fetch credit ~20%, waiting for a texel 0%. The credit shortage is a knock-on
+-- credits free only when an answer is taken, and nothing is taken while the
+output stalls.
+
+THE CAUSE. m2_raster_band accepted a span only in S_IDLE, so every span cost
+S_IDLE + S_PAINT -- and a textured span from m2_span_tex IS one PIXSTEP group.
+Textured pixels painted at half rate from the day the span walk streamed. Now
+the next span is taken on the last group of the current one (paint_last).
+
+AND A CLEAR REQUEST NO LONGER VANISHES. S_IDLE was the only state that read
+clear_req; a one-cycle request landing on a paint was dropped while
+clear_busy read low. Unreachable in the core (a buffer is cleared long after
+its last paint) but tb_m2_raster_band's clear() hit it at once under
+back-to-back spans (16 of 394,427 checks). A request during S_PAINT is now
+latched (clr_pend) and reported busy until done.
+
+```
+  close-up layers   before   R551        picture
+  2                    0       0         identical
+  3                   25       0         = the complete frame
+  4                   88       0         = the complete frame
+  6                  120      85
+  overlap 20, 100      0       0         identical
+  heavy 140           81      85         (a different limit: the fill)
+```
+
+tb_m2_raster_band 825,355 checks and tb_m2_raster3d pass.
