@@ -446,7 +446,7 @@ module m2_raster3d #(
   // tb_m2_span_tex now runs the SAME value as this instantiation (R389). It
   // used to prove PIXSTEP 2 while this said 8, which is how R323's
   // texture-step bug shipped.
-  m2_span_tex #(.PIXSTEP(4), .TXK(4)) u_spantex (
+  m2_span_tex #(.PIXSTEP(4), .TXK(8)) u_spantex (
     .clk(clk), .rst_n(rst_n),
     .in_valid(sq_qv), .in_ready(sq_rdy), .busy(spantex_busy),
     // m2_span_tex still carries these as 32; the fill and the queue are what
@@ -488,6 +488,22 @@ module m2_raster3d #(
   end
   wire tex_sweep = tex_dirty && frame_start;
 
+  // R561: AND IT CROSSES TO clk_mem AS A TOGGLE. tex_sweep is one core-clock
+  // pulse and the cache lives on clk_mem; at any ratio but an exact 2:1 a
+  // pulse cannot simply be wired across. m2_texel edge-detects `inval`, so a
+  // one-cycle pulse on its own clock is what it wants.
+  logic       sweep_tog;
+  logic [2:0] sweep_s;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n)         sweep_tog <= 1'b0;
+    else if (tex_sweep) sweep_tog <= ~sweep_tog;
+  end
+  always_ff @(posedge clk_mem or negedge rst_n) begin
+    if (!rst_n) sweep_s <= 3'd0;
+    else        sweep_s <= {sweep_s[1:0], sweep_tog};
+  end
+  wire tex_sweep_f = sweep_s[2] ^ sweep_s[1];
+
   // R318: the request crosses to clk_mem here. m2_texel's `ack` is one cycle,
   // which at 100 MHz is 10 ns and invisible to a 50 MHz sampler half the time --
   // and a missed acknowledge hangs the span walk in T_FETCH until its 511-cycle
@@ -503,8 +519,10 @@ module m2_raster3d #(
   // (s285, Ben: "that's the broken one"; s281 at four is clean) while being
   // pixel-exact in simulation -- the wider queues across the 2:1 had failing
   // paths into m2_texel on s285. Back to the configuration the board trusts.
-  m2_texel_x2 #(.K(4)) u_texel_x2 (
-    .clk_slow(clk), .clk_fast(clk_mem), .rst_n(rst_n),
+  // R561: AN ASYNCHRONOUS QUEUE, NOT A 2:1 RATIO -- m2_texel_cdc. Same ports
+  // and protocol; the pointers cross in Gray code.
+  m2_texel_cdc #(.K(8)) u_texel_x2 (
+    .clk_slow(clk), .s_rst_n(rst_n), .clk_fast(clk_mem), .f_rst_n(rst_n),
     .s_req(tex_req), .s_rdy(tex_rdy), .s_ack(tex_ack), .s_tex(tex_state),
     .s_u(tex_u), .s_v(tex_v), .s_texel(tex_texel), .s_take(tex_take),
     .f_req(txf_req), .f_rdy(txf_rdy), .f_ack(txf_ack), .f_tex(txf_tex),
@@ -544,7 +562,7 @@ module m2_raster3d #(
     // R480: the second SDRAM port, so two fills can be in flight.
     .m2_en(tex_m2_en), .m2_req(tex_m2_req), .m2_addr(tex_m2_addr),
     .m2_ack(tex_m2_ack), .m2_data(tex_m2_data),
-    .inval(tex_sweep),
+    .inval(tex_sweep_f),                          // R561: crossed
     .dbg_hits(dbg_texhit), .dbg_misses(dbg_texmiss), .dbg_lost(dbg_texlost),
     .dbg_sweeps(dbg_texsweep)
   );
