@@ -1134,19 +1134,14 @@ wire [NPORTS-1:0] sdr_pend, sdr_infl;
 // a 20-bit counter wraps at 1.05 M -- which would read as a quiet frame.
 logic [20:0] bw_busy, bw_cpu, bw_geo, bw_tex, bw_chr;
 logic [20:0] bwl_busy, bwl_cpu, bwl_geo, bwl_tex, bwl_chr;
-logic        bw_tog, bw_tog_m, bw_tog_m2, bw_tog_m3;
-always_ff @(posedge clk_sys or negedge mem_rst_n) begin
-	if (!mem_rst_n)                bw_tog <= 1'b0;
-	else if (cvb_d && !cvb_dd)     bw_tog <= ~bw_tog;      // one toggle a frame
-end
+// R564: the frame edge (cvb_d, from tile_vb) is clk_mem's now, the same domain
+// as these counters, so the toggle that carried it across from clk_sys is gone.
 always_ff @(posedge clk_mem or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
 		bw_busy <= '0; bw_cpu <= '0; bw_geo <= '0; bw_tex <= '0; bw_chr <= '0;
 		bwl_busy <= '0; bwl_cpu <= '0; bwl_geo <= '0; bwl_tex <= '0; bwl_chr <= '0;
-		bw_tog_m <= 1'b0; bw_tog_m2 <= 1'b0; bw_tog_m3 <= 1'b0;
 	end else begin
-		bw_tog_m <= bw_tog; bw_tog_m2 <= bw_tog_m; bw_tog_m3 <= bw_tog_m2;
-		if (bw_tog_m3 != bw_tog_m2) begin
+		if (cvb_d && !cvb_dd) begin
 			bwl_busy <= bw_busy; bwl_cpu <= bw_cpu; bwl_geo <= bw_geo;
 			bwl_tex  <= bw_tex;  bwl_chr <= bw_chr;
 			bw_busy <= '0; bw_cpu <= '0; bw_geo <= '0; bw_tex <= '0; bw_chr <= '0;
