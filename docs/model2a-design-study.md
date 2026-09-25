@@ -22048,3 +22048,26 @@ R547, AMENDED: the eight-counter histogram did not fit -- "Fitter requires
 counters, a = {critical total, C_FILLW, list walk, span walk busy}; b is zero.
 The design is now within ~9 LABs of the device, and any instrument has to be
 paid for.
+
+---
+
+**R549 -- 120/60/30 IS NOT NEAR. MEASURED ON s265, NOT ESTIMATED.**
+
+Ben asked whether clk_mem could go to 120 (120/60/30 keeps every ratio 2:1,
+the plan R228 built at 84% fill). Every setup path in s265 that would miss its
+period at 120/60/30 -- slack today under 1.667 ns (clk_mem), 3.333 (clk_sys),
+6.667 (clk_i960) -- counted with report_timing, capped at 20,000 a clock:
+
+```
+  clock           worst today   at 120/60/30   paths failing   where
+  memory 100->120   -0.680        -2.347        20,000+         m2_texel 16.5k, m2_sdram 2.9k, m2_char_cache 0.6k
+  core    50->60    +0.370        -2.963        20,000+         m2_geometry 19.6k
+  i960    25->30    +0.984        -5.683        20,000+         all i960_top
+```
+
+Not a handful of paths but tens of thousands in three subsystems. clk_mem does
+not close at 100 today on most seeds (-0.7 .. +0.3 ns across this session), and
+the i960's critical path supports ~25.6 MHz. At 99% LABs the fitter has little
+to give. A clock raise means re-pipelining the i960, the geometry engine and
+the texel cache: not a near-term lever. CPI levers stay the architectural ones
+(R548 and after).
