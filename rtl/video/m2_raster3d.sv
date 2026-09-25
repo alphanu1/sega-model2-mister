@@ -172,7 +172,7 @@ module m2_raster3d #(
   // is band b, bands past NBANDS read 0 -- and how many scanlines that was.
   output logic [63:0] dbg_miss_map,
   output logic [15:0] dbg_miss_lines,
-  // R547: WHAT THE SEQUENCER WAITS ON WHEN IT MATTERS, per frame, in units of
+  // R547: WHAT THE SEQUENCER WAITS ON WHEN IT MATTERS, per frame, in units of 1,024 (R553; was
   // 256 cycles (saturating): counted only while the fill is on the displayed
   // frame and at most one band ahead of the beam -- the moments a band can be
   // late. a = {critical total, C_FILLW, list walk (replaying), span walk busy};
@@ -847,11 +847,11 @@ module m2_raster3d #(
   // eight: the eight-counter version took the design to 4,200 LABs of 4,191.
   // C_CLRW, the handoff and the band-end drain read ~0 in every bench regime,
   // and C_IDLE cannot occur while the fill is behind the beam.
-  logic [15:0] sq_c [4];
+  logic [17:0] sq_c [4];   // R553: 18 bits, reported in 1,024-cycle units (16 saturated)
   wire sq_crit = dvalid && (fill_frame == disp_frame) && (scan_y < 10'(SCR_H))
               && ((BW+1)'(fill_band) <= (BW+1)'(scan_band_f) + (BW+1)'(1));
-  function automatic logic [7:0] sq8(input logic [15:0] c);
-    sq8 = c[15:8];
+  function automatic logic [7:0] sq8(input logic [17:0] c);
+    sq8 = c[17:10];
   endfunction
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
