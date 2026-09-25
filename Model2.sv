@@ -341,16 +341,20 @@ pll pll
 // all in units of ce_pix and are unchanged. The scaler latches a pixel per
 // enable into a line buffer and drives its output from its own clock, so what
 // varies is when a pixel is handed over, never which pixel or how many.
+// R564: ON clk_mem NOW, BECAUSE THE VIDEO IS. Model 1 runs its whole video --
+// fetch and scanout -- on the memory clock with an enable, and this core now
+// does the same: 16 enables every 100 clk_mem cycles, six or seven cycles
+// apart, still exactly 16 MHz on average and still 57.5242 Hz a frame.
 localparam int unsigned CE_NUM = 16;      // 16 MHz
-localparam int unsigned CE_DEN = 50;      // clk_sys
-reg [5:0] ce_acc;
+localparam int unsigned CE_DEN = 100;     // clk_mem
+reg [6:0] ce_acc;
 reg       ce_pix;
-always @(posedge clk_sys) begin
+always @(posedge clk_mem) begin
 	if (ce_acc + CE_NUM >= CE_DEN) begin
-		ce_acc <= ce_acc + 6'(CE_NUM) - 6'(CE_DEN);
+		ce_acc <= ce_acc + 7'(CE_NUM) - 7'(CE_DEN);
 		ce_pix <= 1'b1;
 	end else begin
-		ce_acc <= ce_acc + 6'(CE_NUM);
+		ce_acc <= ce_acc + 7'(CE_NUM);
 		ce_pix <= 1'b0;
 	end
 end
@@ -1130,19 +1134,14 @@ wire [NPORTS-1:0] sdr_pend, sdr_infl;
 // a 20-bit counter wraps at 1.05 M -- which would read as a quiet frame.
 logic [20:0] bw_busy, bw_cpu, bw_geo, bw_tex, bw_chr;
 logic [20:0] bwl_busy, bwl_cpu, bwl_geo, bwl_tex, bwl_chr;
-logic        bw_tog, bw_tog_m, bw_tog_m2, bw_tog_m3;
-always_ff @(posedge clk_sys or negedge mem_rst_n) begin
-	if (!mem_rst_n)                bw_tog <= 1'b0;
-	else if (cvb_d && !cvb_dd)     bw_tog <= ~bw_tog;      // one toggle a frame
-end
+// R564: the frame edge (cvb_d, from tile_vb) is clk_mem's now, the same domain
+// as these counters, so the toggle that carried it across from clk_sys is gone.
 always_ff @(posedge clk_mem or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
 		bw_busy <= '0; bw_cpu <= '0; bw_geo <= '0; bw_tex <= '0; bw_chr <= '0;
 		bwl_busy <= '0; bwl_cpu <= '0; bwl_geo <= '0; bwl_tex <= '0; bwl_chr <= '0;
-		bw_tog_m <= 1'b0; bw_tog_m2 <= 1'b0; bw_tog_m3 <= 1'b0;
 	end else begin
-		bw_tog_m <= bw_tog; bw_tog_m2 <= bw_tog_m; bw_tog_m3 <= bw_tog_m2;
-		if (bw_tog_m3 != bw_tog_m2) begin
+		if (cvb_d && !cvb_dd) begin
 			bwl_busy <= bw_busy; bwl_cpu <= bw_cpu; bwl_geo <= bw_geo;
 			bwl_tex  <= bw_tex;  bwl_chr <= bw_chr;
 			bw_busy <= '0; bw_cpu <= '0; bw_geo <= '0; bw_tex <= '0; bw_chr <= '0;
@@ -1702,7 +1701,7 @@ wire [11:0] pal_addr;
 // exactly what a packing fix must not do. Continuous, so the depth is identical.
 wire [15:0] tram_data = tram_q_vid;
 wire [15:0] pal_data  = pal_q_vid;
-always_ff @(posedge clk_sys) begin
+always_ff @(posedge clk_mem) begin   // R564: the video's read port is clk_mem's
 	// WHAT THE RENDERER ACTUALLY GETS OUT.
 	//
 	// The CPU writes 42,013 NON-ZERO tile indices on hardware -- measured, not
@@ -1778,15 +1777,21 @@ wire [15:0] ocb_din     = (cp_tram_we | cp_pal_we) ? cp_wr_data : cpu_oc_din;
 // version was `tram_data <= tram[addr]`, one cycle, and this is the memory's
 // own cycle plus that register. Both consumers already tolerated a registered
 // read; what matters is that the number did not move.
-m2_tdp_ram #(.DW(16), .AW(15)) u_tram (
-	.clk(clk_sys),
+// R564: DUAL-CLOCK. The CPU's port stays on clk_sys and the video's moves to
+// clk_mem with the video; Model 1 does exactly this for its tilemap and
+// palette ("dual-clock RAMs and need no handshake because only the CPU writes
+// them"). See m2_tdp_ram2c.
+m2_tdp_ram2c #(.DW(16), .AW(15)) u_tram (
+	.a_clk(clk_sys),
 	.a_addr(ocb_addr),  .a_din(ocb_din), .a_we(ocb_tram_we), .a_q(tram_q_cpu),
+	.b_clk(clk_mem),
 	.b_addr(tram_addr), .b_q(tram_q_vid)
 );
 
-m2_tdp_ram #(.DW(16), .AW(13)) u_pal (
-	.clk(clk_sys),
+m2_tdp_ram2c #(.DW(16), .AW(13)) u_pal (
+	.a_clk(clk_sys),
 	.a_addr(ocb_addr[12:0]), .a_din(ocb_din), .a_we(ocb_pal_we), .a_q(pal_q_cpu),
+	.b_clk(clk_mem),
 	.b_addr({1'b0, pal_addr}), .b_q(pal_q_vid)
 );
 
@@ -2186,7 +2191,7 @@ m2_cpu_bridge #(.BUFFERRAM(1'b1), .BUFFERRAM_WRONLY(1'b0)
 logic [11:0] io_intreq, io_intena;
 logic [31:0] io_videoctl;
 logic [31:0] io_framenum;
-logic        vbl_d, vbl_dd;
+logic        vbl_s, vbl_d, vbl_dd;   // R564: vbl_s is the first synchroniser stage
 
 // V-blank into bit 0, the same line MAME's screen_vblank sets. irq_update()
 // folds the twelve request bits onto the i960's four lines.
@@ -2197,7 +2202,7 @@ always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
 	if (!cpu_rst_n) begin
 		io_intreq <= 12'd0; io_intena <= 12'd0; io_videoctl <= 32'd0;
 		uart_irq_d <= 1'b0;
-		io_framenum <= 32'd0; vbl_d <= 1'b0; vbl_dd <= 1'b0;
+		io_framenum <= 32'd0; vbl_s <= 1'b0; vbl_d <= 1'b0; vbl_dd <= 1'b0;
 	end else begin
 		// FROM THE PICTURE'S OWN VBLANK, not the duplicate timing generator.
 		//
@@ -2209,7 +2214,10 @@ always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
 		// tile_vb is m2_video's vid_vb: the blanking the picture is actually
 		// built from. Correct on any clock arrangement -- this is not a
 		// domain-crossing fix, it is the frame counter counting the right thing.
-		vbl_d  <= tile_vb;
+		// R564: tile_vb is clk_mem's now. vbl_s is the synchroniser's first
+		// stage and nothing reads it but vbl_d.
+		vbl_s  <= tile_vb;
+		vbl_d  <= vbl_s;
 		vbl_dd <= vbl_d;
 		if (vbl_d && !vbl_dd) begin
 			io_framenum <= io_framenum + 32'd1;
@@ -3779,7 +3787,7 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	end
 end
 logic [31:0] cr_hi;              // cycles with char_req asserted
-always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+always_ff @(posedge clk_mem or negedge mem_rst_n) begin   // R564: the char fetch is clk_mem's
 	if (!mem_rst_n) begin
 		cf_cnt <= 32'd0; cf_nz <= 32'd0; cr_hi <= 32'd0;
 	end else begin
@@ -5024,7 +5032,7 @@ wire [17:0] vid_layer_px [4];
 // and it cannot be argued with, unlike every stage census so far.
 logic [23:0] px_prev;
 logic [31:0] px_changes, px_total;
-always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+always_ff @(posedge clk_mem or negedge mem_rst_n) begin   // R564: the pixel stream is clk_mem's
 	if (!mem_rst_n) begin
 		px_prev <= 24'd0; px_changes <= 32'd0; px_total <= 32'd0;
 	end else if (ce_pix) begin
@@ -5289,7 +5297,7 @@ end
 logic [14:0] tra_d1;
 logic        tr_v;
 logic [31:0] tr_ad, tr_dt;
-always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+always_ff @(posedge clk_mem or negedge mem_rst_n) begin   // R564: follows tram_addr
 	if (!mem_rst_n) begin
 		tra_d1 <= 15'd0; tr_v <= 1'b0; tr_ad <= 32'd0; tr_dt <= 32'd0;
 	end else begin
@@ -5380,7 +5388,7 @@ wire [31:0] char_data;
 // address is wrong rather than the renderer.
 logic [31:0] cd_last;
 logic [15:0] cd_ff;
-always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+always_ff @(posedge clk_mem or negedge mem_rst_n) begin   // R564: the char fetch is clk_mem's
 	if (!mem_rst_n) begin
 		cd_last <= 32'd0; cd_ff <= 16'd0;
 	end else if (char_ack) begin
@@ -5462,11 +5470,25 @@ logic        ccf_req, ccf_ack;
 logic [17:0] ccf_addr;
 logic [31:0] ccf_data;
 
-m2_char_x2 #(.ADDR_BITS(18)) u_char_x2 (
-	.clk_fast(clk_mem), .rst_n(cc_rst_n_s),
-	.s_req(char_req), .s_addr(char_addr), .s_ack(char_ack), .s_data(char_data),
-	.f_req(ccf_req), .f_addr(ccf_addr), .f_ack(ccf_ack), .f_data(ccf_data)
-);
+// R564: NO ADAPTER ANY MORE. The fetch engine and the cache are both on
+// clk_mem, so the fetch's request goes straight in and the cache's one-cycle
+// acknowledge, with its data, comes straight back -- the pair's own contract.
+assign ccf_req   = char_req;
+assign ccf_addr  = char_addr;
+assign char_ack  = ccf_ack;
+assign char_data = ccf_data;
+
+// THE CPU'S GLYPH WRITES ARE THE ONE THING THAT STILL CROSSES. cpu_char_wr is
+// the bridge's S_LO state for a write into character RAM: a level, held for
+// the whole SDRAM write of the low word, with its address latched and not
+// moving until a NEW CPU request several states later. So two flops on the
+// level are enough and the index crosses as it is. The last invalidate lands
+// after the SDRAM write has completed, as it did at 2:1.
+logic [1:0] cwr_s;
+always_ff @(posedge clk_mem or negedge cc_rst_n_s) begin
+	if (!cc_rst_n_s) cwr_s <= 2'b00;
+	else             cwr_s <= {cwr_s[0], cpu_char_wr};
+end
 
 m2_char_cache #(.IDX_BITS(12)) u_char_cache (   // R313: 32 KB, an ALM/M10K trade -- see the module
 	.clk(clk_mem), .rst_n(cc_rst_n_s),
@@ -5478,7 +5500,7 @@ m2_char_cache #(.IDX_BITS(12)) u_char_cache (   // R313: 32 KB, an ALM/M10K trad
 	// IDX_BITS: [14:2] for 13 bits, not [15:2]. A stale width here invalidates
 	// the wrong line on a CPU character write, which shows up as glyphs that
 	// are correct until the game rewrites one and then stay stale.
-	.inval(cpu_char_wr), .inval_idx(cpu_char_wr_addr[13:2]),   // R313: IDX_BITS 13 -> 12
+	.inval(cwr_s[1]), .inval_idx(cpu_char_wr_addr[13:2]),   // R313: IDX_BITS 13 -> 12; R564: synchronised
 	.dbg_hits(char_hits), .dbg_misses(char_misses), .dbg_fills(char_fills)
 );
 
@@ -5515,13 +5537,20 @@ function automatic logic [15:0] sat16d(input logic [31:0] now, input logic [31:0
 		sat16d = (|d[31:16]) ? 16'hffff : d[15:0];
 	end
 endfunction
-always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+// R564: SPLIT BY DOMAIN. The character cache's and the texel cache's counters
+// are clk_mem's, and so is tile_vb now: they are snapshotted there, on the
+// frame edge in their own domain. The span walk's two (textured pixels, and
+// non-zero texels) are clk_sys's and are snapshotted there on the synchronised
+// edge. Each _f result is stable for a frame and is read by the debug stream
+// on clk_sys; a read landing on the snapshot edge itself can tear, once a
+// frame at most, in a debug value.
+always_ff @(posedge clk_mem or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
 		cvb_d <= 1'b0; cvb_dd <= 1'b0;
 		cc_h_p <= 32'd0; cc_m_p <= 32'd0; cc_f_p <= 32'd0;
 		cc_h_f <= 16'd0; cc_m_f <= 16'd0; cc_f_f <= 16'd0;
-		tx_p_p <= 32'd0; tx_h_p <= 32'd0; tx_m_p <= 32'd0; tx_n_p <= 32'd0;
-		tx_p_f <= 16'd0; tx_h_f <= 16'd0; tx_m_f <= 16'd0; tx_n_f <= 16'd0;
+		tx_h_p <= 32'd0; tx_m_p <= 32'd0;
+		tx_h_f <= 16'd0; tx_m_f <= 16'd0;
 	end else begin
 		cvb_d  <= tile_vb;
 		cvb_dd <= cvb_d;
@@ -5532,21 +5561,28 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 			cc_h_p <= char_hits;
 			cc_m_p <= char_misses;
 			cc_f_p <= char_fills;
-			// R324: COUNTED IN FOURS, because it saturated. The frame delta
-			// is a 16-bit field and build/char100b read 65535 of 65535 -- "at
-			// least this many", which cannot show whether a change helped.
-			// Shifting by two gives a range of 262,140 pixels against a
-			// 190,464-pixel screen, so it can no longer saturate. The decoder
-			// multiplies it back.
-			tx_p_f <= sat16d(tex_pixels >> 2, tx_p_p >> 2);
 			tx_h_f <= sat16d(tex_hits,   tx_h_p);
 			tx_m_f <= sat16d(tex_misses, tx_m_p);
-			tx_n_f <= sat16d(tex_nz, tx_n_p);
-			tx_p_p <= tex_pixels;
 			tx_h_p <= tex_hits;
 			tx_m_p <= tex_misses;
-			tx_n_p <= tex_nz;
 		end
+	end
+end
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+	if (!mem_rst_n) begin
+		tx_p_p <= 32'd0; tx_n_p <= 32'd0;
+		tx_p_f <= 16'd0; tx_n_f <= 16'd0;
+	end else if (vbl_d && !vbl_dd) begin
+		// R324: COUNTED IN FOURS, because it saturated. The frame delta
+		// is a 16-bit field and build/char100b read 65535 of 65535 -- "at
+		// least this many", which cannot show whether a change helped.
+		// Shifting by two gives a range of 262,140 pixels against a
+		// 190,464-pixel screen, so it can no longer saturate. The decoder
+		// multiplies it back.
+		tx_p_f <= sat16d(tex_pixels >> 2, tx_p_p >> 2);
+		tx_n_f <= sat16d(tex_nz, tx_n_p);
+		tx_p_p <= tex_pixels;
+		tx_n_p <= tex_nz;
 	end
 end
 
@@ -5700,7 +5736,7 @@ wire [63:0] tex_m2_data = p_dout[2];
 
 // R543: back to 8x6 -- R542's 16x3 won in the bench and not on the board.
 m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6),
-              .TWO_CLOCKS(1'b0), .TEX_AW(SDR_AW)) u_raster3d (
+              .TWO_CLOCKS(1'b1), .TEX_AW(SDR_AW)) u_raster3d (   // R564: scan on clk_mem
 	// R318: clk_mem carries m2_texel, which runs at 100 MHz inside this module.
 	.clk(clk_sys), .clk_mem(clk_mem), .rst_n(mem_rst_n),
 	.frame_start(geo_walk_start),
@@ -5732,7 +5768,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6),
 	.dbg_fill_hot(r3d_fill_hot), .dbg_fill_hotcyc(r3d_fill_hotcyc),   // R436
 	.dbg_walk_hot(r3d_walk_hot), .dbg_walk_hotcyc(r3d_walk_hotcyc),
 	.q_moire(1'b0), .q_end(q3d_end),
-	.scan_clk(clk_sys), .scan_x(vid_x), .scan_y(vid_y),
+	.scan_clk(clk_mem), .scan_x(vid_x), .scan_y(vid_y),   // R564: the video's clock
 	.scan_col(r3d_col), .scan_hit(r3d_hit),
 	.dbg_quads(r3d_quads), .dbg_dropped(r3d_dropped), .dbg_tiny(r3d_tiny),
 	.dbg_bands(r3d_bands),
@@ -5773,11 +5809,13 @@ wire       tile_hs, tile_vs, tile_hb, tile_vb;
 logic [1:0] vid_rst_sync, cc_rst_sync;
 wire vid_rst_src = mem_rst_n & cp_done & cal_done;
 wire cc_rst_src  = mem_rst_n & cp_done;
-always_ff @(posedge clk_sys or negedge vid_rst_src) begin
+// R564: BOTH ON clk_mem NOW -- the video moved there, and the character cache
+// has run there since R320 while its reset was still released on clk_sys.
+always_ff @(posedge clk_mem or negedge vid_rst_src) begin
 	if (!vid_rst_src) vid_rst_sync <= 2'b00;
 	else              vid_rst_sync <= {vid_rst_sync[0], 1'b1};
 end
-always_ff @(posedge clk_sys or negedge cc_rst_src) begin
+always_ff @(posedge clk_mem or negedge cc_rst_src) begin
 	if (!cc_rst_src) cc_rst_sync <= 2'b00;
 	else             cc_rst_sync <= {cc_rst_sync[0], 1'b1};
 end
@@ -5790,7 +5828,7 @@ m2_video u_tilemap (
 	// at CL+0 until the calibration caught up. Those are live re-reads rather
 	// than a latched copy, so it corrected itself -- but it is the last reader
 	// that was not waiting, and "it fixes itself" is not a reason to leave one.
-	.clk(clk_sys), .ce_pix(ce_pix), .rst_n(vid_rst_n_s),
+	.clk(clk_mem), .ce_pix(ce_pix), .rst_n(vid_rst_n_s),   // R564: the memory clock, as Model 1's video
 	.tile_mask(14'h3FFF),
 	// Colour translation table not loaded yet: it powers up holding pal5bit,
 	// which is exactly what this rendered before the table existed, so the
@@ -5801,6 +5839,7 @@ m2_video u_tilemap (
 	// The copy engine loads it at startup; the CPU owns it afterwards, and a
 	// game that programs its own table -- Daytona does, once it is past the
 	// sound handshake -- overwrites what was loaded.
+	.xlat_clk(clk_sys),   // R564: its writers' clock
 	.xlat_we(cpu_xlat_we_b | (xlat_we_r & xlat_ok)),
 	.xlat_addr(cpu_xlat_we_b ? cpu_xlat_addr_b : xlat_addr_r),
 	.xlat_din (cpu_xlat_we_b ? cpu_xlat_din_b  : xlat_din_r),
@@ -5868,8 +5907,8 @@ always @(posedge clk_sys) begin
   if (!mem_rst_n) begin
     frame_ctr <= 0; vbl_ov_d <= 1'b0;
   end else begin
-    vbl_ov_d <= tile_vb;
-    if (tile_vb && !vbl_ov_d) frame_ctr <= frame_ctr + 1'd1;
+    vbl_ov_d <= vbl_d;                                   // R564: synchronised
+    if (vbl_d && !vbl_ov_d) frame_ctr <= frame_ctr + 1'd1;
   end
 end
 
@@ -5929,7 +5968,7 @@ assign ov_r = mix_r;
 assign ov_g = mix_g;
 assign ov_b = mix_b;
 
-assign CLK_VIDEO = clk_sys;
+assign CLK_VIDEO = clk_mem;   // R564: the video runs on the memory clock
 assign CE_PIXEL  = ce_pix;
 
 assign VGA_DE = ~(tile_hb | tile_vb);

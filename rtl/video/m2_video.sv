@@ -62,6 +62,12 @@ module m2_video #(
 
   // Colour translation table load. Written by whatever owns the colorxlat RAM
   // -- the copy engine today, the i960 once it is wired in.
+  // R564: ON ITS WRITER'S CLOCK, not this module's. The CPU and the copy engine
+  // are on the core clock and the video is on clk_mem; the table is a 96-byte
+  // MLAB whose write port takes its own clock and whose read is asynchronous,
+  // so the memory is the crossing. A read of an entry being written returns
+  // the old or the new value, for one pixel.
+  input  logic        xlat_clk,
   input  logic        xlat_we,
   input  logic  [6:0] xlat_addr,
   input  logic  [7:0] xlat_din,
@@ -779,7 +785,7 @@ module m2_video #(
       for (int i = 0; i < 32; i++)
         xlat_tbl[c*32 + i] = {i[4:0], i[4:2]};      // pal5bit
   end
-  always_ff @(posedge clk)
+  always_ff @(posedge xlat_clk)
     if (xlat_we) xlat_tbl[xlat_addr] <= xlat_din;
 
   logic [4:0] x_r5, x_g5, x_b5;
