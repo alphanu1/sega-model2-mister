@@ -22091,3 +22091,13 @@ s269-s271 needed 4,216, 4,223 and 4,227 LABs. s265 had already been at
 
 Checked and NOT worth touching: mapnz/mapreal/fold_*/chw_* are written but
 never read, so synthesis already deletes them; xlat_stage is functional.
+
+R550, CONTINUED: s272 and s274 still needed 4,200 and 4,199 LABs (s273's fitter
+crashed on exit, the known 17.0 fault). Model2.sv's own logic fell 987 -> 835
+ALMs and the debug streamer 425 -> 333, but i960_top had grown ~100 ALMs with
+R548: its deferred-redirect check re-read ctag[redir_idx], a 32-way mux of
+23-bit tags. Replaced by one bit, redir_hit, captured from the existing `hit`
+when the redirect arrives -- it cannot go stale, because the only line written
+during a fill is fill_idx's, invalidated when the fill began. tb_m2_cpu_real is
+identical to the cycle (8.83 CPI, hash f6953e5d9c861c63, 93,493 fill words);
+test_i960_icache, test_i960_top, test_i960_rom pass.

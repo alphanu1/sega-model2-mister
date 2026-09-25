@@ -163,6 +163,12 @@ module i960_icache #(
   // Where a redirect is going, held from when it arrives until an acknowledge
   // makes it safe to move the address. See S_FILL.
   logic             redir_q;
+  // R550: the deferred redirect's target was a hit WHEN IT ARRIVED. Kept as one
+  // bit instead of re-reading ctag[redir_idx] at the acknowledge -- that was a
+  // 32-way, 23-bit mux (~100 ALMs, and the design is out of LABs). It cannot go
+  // stale: the only line written during a fill is fill_idx's, invalidated when
+  // the fill began, so a target on it was never a hit.
+  logic             redir_hit;
   logic [IDX_W-1:0] redir_idx;
   logic [TAG_W-1:0] redir_tag;
   logic [31:2]      redir_addr;
@@ -184,6 +190,7 @@ module i960_icache #(
       fill_tag  <= '0;
       fill_base <= 32'd0;
       redir_q    <= 1'b0;
+      redir_hit  <= 1'b0;
       redir_idx  <= '0;
       redir_tag  <= '0;
       redir_addr <= '0;
@@ -279,9 +286,7 @@ module i960_icache #(
           // (its line is already invalid, set at the fill's start) and the
           // target is answered from the array through S_DONE, which reads
           // req_addr_q -- the same completion path a finished fill takes.
-          if (bus_ack && ((redir_now && hit) ||
-                          (!redir_now && redir_q && cvalid[redir_idx]
-                                      && (ctag[redir_idx] == redir_tag)))) begin
+          if (bus_ack && ((redir_now && hit) || (!redir_now && redir_q && redir_hit))) begin
             redir_q    <= 1'b0;
             bus_req    <= 1'b0;
             req_addr_q <= redir_now ? addr : redir_addr;
@@ -302,6 +307,7 @@ module i960_icache #(
             // A fetch is outstanding. Remember where we are going and keep the
             // address still until it is answered.
             redir_q    <= 1'b1;
+            redir_hit  <= hit;          // R550
             redir_idx  <= idx;
             redir_tag  <= tag;
             redir_addr <= addr;
