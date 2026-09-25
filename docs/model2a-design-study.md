@@ -22700,3 +22700,63 @@ are unchanged (y 128-168, 6-16% of frames). The bench said the opposite
 the misses are long and contended, and two synchroniser round trips per
 fetch cost more than four more fetches in flight recover. The crossing is
 needed for the clock plan; the bands' lever remains the fill's own speed.
+
+---
+
+**R564 -- STEP 1(b): THE VIDEO MOVES TO clk_mem, MODEL 1'S ARRANGEMENT. THE
+CHARACTER PATH STOPS CROSSING AT ALL.**
+
+The character cache is on clk_mem (R320) and its requester, the tilemap
+fetch, was on clk_sys through m2_char_x2 -- a 2:1 adapter, and the deepest of
+the inventory's crossings (R561: ~10,000 paths, the tilemap driving the
+cache's M10K ports directly). Two ways to make it a real crossing, and both
+cost the fetch that R320 sped up:
+
+  - cross every glyph lookup: m2_tile_fetch is strictly serialised and
+    latency-bound (its own header: 69% of its time waiting), so a synchroniser
+    round trip on every HIT brings the overruns back;
+  - move the cache to the core clock: its walk slows and every miss crosses,
+    ~316 ns a miss against a 480 ns column budget for two.
+
+Model 1 answers it the other way: its WHOLE video -- fetch, mixing and
+scanout -- runs on the memory clock with a pixel enable, and the CPU reaches
+it only through dual-clock tile and palette RAMs "which need no handshake
+because only the CPU writes them" (m1_integrated). So here:
+
+  - m2_video on clk_mem; ce_pix is a 16/100 accumulator (6 or 7 cycles apart,
+    16 MHz exactly on average, 57.5242 Hz a frame as before); CLK_VIDEO is
+    clk_mem.
+  - tile RAM and palette: m2_tdp_ram2c, the same M10K with port B on its own
+    clock (m2_tdp_ram is left alone -- the backup RAM's power-up value is part
+    of the game's contract). The xlat table is an MLAB written on its
+    writers' clock and read asynchronously.
+  - the fetch talks to the cache directly; m2_char_x2 is gone. The CPU's
+    glyph-write invalidate (cpu_char_wr, the bridge's S_LO level, address
+    latched until a new request) crosses on two flops.
+  - m2_raster3d TWO_CLOCKS = 1, scan_clk = clk_mem: the dormant synchronisers
+    R199/R545 kept for exactly this.
+  - the video and character-cache reset synchronisers run on clk_mem. The
+    cache's had been released on clk_sys since R320 while the cache ran on
+    clk_mem -- harmless at 2:1, wrong at any other ratio.
+  - clk_sys readers of the video: the frame interrupt gains a synchroniser
+    stage (vbl_s), the frame counter reads the synchronised edge, the per-frame
+    debug snapshots split by the domain of what they count, and four old
+    probes on the video's signals move to clk_mem with their inputs.
+
+It also doubles the tile fetch's cycles per scanline (the budget in
+m2_tile_fetch's header is computed at 100 MHz), which is the margin R320 was
+fighting for.
+
+*Desk:* lint clean; tb_m2_raster3d with TWO_CLOCKS = 1 and the scan side on
+clk_mem is pixel-identical on the default, perspective and overlap scenes and
+3 pixels short on two heavy ones (of 27,282 and 19,446 -- the two-flop
+presentation latency landing on a band already late by that much);
+tile_fetch, char_cache, video_timing, raster3d pass. Nothing at the desk
+drives Model2.sv's video wiring as a whole: the board is the test.
+
+*Found after the draft above, before any build:* the SDRAM bandwidth counters
+(R294) latched on a toggle driven from clk_sys by cvb_d -- which this change
+moves to clk_mem. The frame edge and the counters are now in one domain and
+the toggle crossing is gone. The line-by-line search for clk_sys readers of
+video signals had missed it because cvb_d was not in the list searched; the
+STA inventory (step 1(e)) is the check that cannot miss one.
