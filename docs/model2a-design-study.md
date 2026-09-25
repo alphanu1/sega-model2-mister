@@ -22101,3 +22101,33 @@ when the redirect arrives -- it cannot go stale, because the only line written
 during a fill is fill_idx's, invalidated when the fill began. tb_m2_cpu_real is
 identical to the cycle (8.83 CPI, hash f6953e5d9c861c63, 93,493 fill words);
 test_i960_icache, test_i960_top, test_i960_rom pass.
+
+---
+
+**OPEN ISSUE (recorded 2026-09-25, after the lighting dropout) -- GREY LINES
+THROUGH TEXTURES, REPEATING INTO THE NEXT SCANLINE AT BAND ENDS.**
+
+Ben, with a screenshot of the attract close-up of the red car (s265 on the
+board): "see the textures and band lines where there are grey lines. these
+grey lines should not be there, it makes the textures look wrong. also at the
+end of the band the grey lines start to repeat at the start of the next scan
+line." Visible: short grey horizontal streaks across textured surfaces (the
+car's side panel and wheel), a column of grey dashes down the left edge of
+the 3D area, and texture detail that looks sheared along scanlines.
+
+SUSPECTS, not conclusions -- to be checked in this order:
+  * A texel answered as 0xF (grey/white at full scale) instead of its value:
+    m2_texel_x2's local answer after TO_CYC (R539) and m2_texel's miss
+    timeouts both substitute 0xF. dbg_texlost counts the latter; the former
+    has no counter yet. A burst of them on one span is a grey streak.
+  * Span x1 / group boundaries: a span whose last group is clamped (e_x1) or
+    a PIXSTEP group straddling the band buffer's right edge, wrapping into
+    column 0 of the next row -- "repeats at the start of the next scanline"
+    is what a row-address overflow in m2_raster_band looks like (wr_addr =
+    row*BCOLS + x>>2 with x past WIDTH).
+  * The left-edge dashes line up with span starts clipped at x < 0 (clip_x0)
+    -- check whether the texel for a clipped start is the clipped pixel's or
+    the unclipped one's (the fill emits u,v at the unclipped x0).
+  * Whether it predates R539/R541/R544 (textures looked right before?): the
+    UART's texel counters and a bench pixel dump of a textured quad crossing
+    x=0 and x=495 would separate the three.
