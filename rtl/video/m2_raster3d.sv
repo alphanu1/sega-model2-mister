@@ -444,7 +444,7 @@ module m2_raster3d #(
   // tb_m2_span_tex now runs the SAME value as this instantiation (R389). It
   // used to prove PIXSTEP 2 while this said 8, which is how R323's
   // texture-step bug shipped.
-  m2_span_tex #(.PIXSTEP(4), .TXK(4)) u_spantex (
+  m2_span_tex #(.PIXSTEP(4), .TXK(8)) u_spantex (
     .clk(clk), .rst_n(rst_n),
     .in_valid(sq_qv), .in_ready(sq_rdy), .busy(spantex_busy),
     // m2_span_tex still carries these as 32; the fill and the queue are what
@@ -495,8 +495,9 @@ module m2_raster3d #(
   logic [19:0] txf_u, txf_v;
   logic [3:0]  txf_texel;
 
-  // R539: up to four fetches in flight; K must equal m2_span_tex's TXK.
-  m2_texel_x2 #(.K(4)) u_texel_x2 (
+  // R539: fetches in flight; K must equal m2_span_tex's TXK (R553: 8).
+  // R553: eight in flight -- four left the close-up case waiting on texels.
+  m2_texel_x2 #(.K(8)) u_texel_x2 (
     .clk_slow(clk), .clk_fast(clk_mem), .rst_n(rst_n),
     .s_req(tex_req), .s_rdy(tex_rdy), .s_ack(tex_ack), .s_tex(tex_state),
     .s_u(tex_u), .s_v(tex_v), .s_texel(tex_texel), .s_take(tex_take),

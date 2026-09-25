@@ -387,7 +387,9 @@ module m2_span_tex #(
 
   // R476: the result standing at the end of the pipeline, and the fetch slot.
   wire                res_valid = sh_v[PIPE_D-1];
+  /* verilator lint_off UNUSEDSIGNAL */   // R553: only [15:0] is queued
   wire signed [31:0]  res_x     = sh_x[PIPE_D-1];
+  /* verilator lint_on UNUSEDSIGNAL */
   wire                res_last  = sh_last[PIPE_D-1];
   wire                res_p     = sh_p[PIPE_D-1];
 
@@ -395,7 +397,8 @@ module m2_span_tex #(
   // span's last-group flag and its parameter set. Answers arrive in the same
   // order, so the head of this queue is always the answer's owner.
   localparam int unsigned OW = $clog2(TXK) + 1;
-  logic signed [31:0] of_x    [TXK];
+  // R553: 16 bits, not 32 -- screen x, and the band takes span_x0[15:0].
+  logic signed [15:0] of_x    [TXK];
   logic               of_last [TXK];
   logic               of_p    [TXK];
   logic [OW-1:0]      of_wp, of_rp;
@@ -684,7 +687,7 @@ module m2_span_tex #(
           // the adapter as a fetch (tx_req = cons_take, payload combinational
           // from d4_u/d4_v) and its pixel joins the in-flight queue.
           if (cons_take) begin
-            of_x   [of_wp[OW-2:0]] <= res_x;
+            of_x   [of_wp[OW-2:0]] <= res_x[15:0];
             of_last[of_wp[OW-2:0]] <= res_last;
             of_p   [of_wp[OW-2:0]] <= res_p;
             of_wp <= of_wp + 1'd1;
@@ -696,7 +699,7 @@ module m2_span_tex #(
           if (rt_take) begin
             rt_valid <= 1'b1;
             rt_texel <= tx_texel;
-            rt_x     <= of_x   [of_rp[OW-2:0]];
+            rt_x     <= 32'(of_x[of_rp[OW-2:0]]);   // sign-extended
             rt_last  <= of_last[of_rp[OW-2:0]];
             rt_p     <= of_p   [of_rp[OW-2:0]];
             of_rp    <= of_rp + 1'd1;

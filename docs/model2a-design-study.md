@@ -22203,3 +22203,28 @@ M10K altsyncram. If it is ever in an M10K, pin it back to "logic".
 Checked and left: i960_regs' loc/glb (1,024 bits) are read through several
 ports at once -- direct R_RIP/R_PFP/G_FP/R_SP reads and four-word spill reads
 -- which an MLAB cannot serve.
+
+---
+
+**R553 -- EIGHT TEXEL FETCHES IN FLIGHT.**
+
+With R551 the close-up scene's span walk runs at its full group a cycle
+most of the time, but 5+ layers still miss: 43% of cycles busy, of which ~8%
+waiting on a texel and ~8% out of fetch credits -- latency four credits do not
+cover. Tried K=8 in simulation first (a sed copy of m2_raster3d), then made
+it the design: m2_texel_x2 K=8, m2_span_tex TXK=8, and of_x narrowed to the
+16 bits the band ever takes (it held 32).
+
+```
+  close-up layers    R551     R553 (K=8)   picture
+  3                    0        0          identical
+  5                   49        0          = the complete frame
+  6                   85       30
+  overlap 20, 100      0        0          identical
+  2-line 180           0        0          identical
+```
+
+tb_m2_span_tex passes (soaks at 26% and 50% misses); tb_m2_raster3d passes.
+
+R552 CONFIRMED IN SYNTHESIS: s281's map report infers the icache tags as
+altdpram (LUT-RAM, asynchronous read), not an M10K altsyncram.
