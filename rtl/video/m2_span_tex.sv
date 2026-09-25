@@ -110,7 +110,10 @@ module m2_span_tex #(
   // this is being tested against. The current state costs nothing to expose;
   // the dwell counter that used to sit behind it is gone (R443).
   output logic [2:0]         dbg_hot,
-  output logic [15:0]        dbg_hotcyc
+  output logic [15:0]        dbg_hotcyc,
+  // R554: wait_why on a port, so the board can count it (R551 made it for the
+  // bench; the board's late bands are texture-bound and this says on what).
+  output logic [2:0]         dbg_wait
 );
 
   typedef enum logic [2:0] { T_IDLE, T_RUN, T_DRAIN } st_t;   // R476
@@ -451,6 +454,7 @@ module m2_span_tex #(
   // ready but no fetch credit is free, 4 the divide pipeline has nothing ready
   // (span start / refill), 0 not busy.
   logic [2:0] wait_why /*verilator public_flat_rd*/;
+  assign dbg_wait = wait_why;
   always_comb begin
     wait_why = 3'd0;
     if (busy) begin

@@ -101,12 +101,15 @@ int main(int argc, char **argv) {
       if (++sweep_ctr >= SWEEP) { sweep_ctr = 0; d->tex_inval = 1; }
       else                        d->tex_inval = 0;
     }
-    if (d->tex_m_req && tex_wait < 0) tex_wait = 8;
+    // R553: M2_R3D_TEXLAT sets the texel memory's latency in core cycles; the
+    // default 8 is far quicker than the board's contended SDRAM.
+    static const int TEXLAT = std::getenv("M2_R3D_TEXLAT") ? std::atoi(std::getenv("M2_R3D_TEXLAT")) : 8;
+    if (d->tex_m_req && tex_wait < 0) tex_wait = TEXLAT;
     if (tex_wait == 0) {
       d->tex_m_ack = 1;
       d->tex_m_data = 0x0123456789abcdefULL ^ (uint64_t)d->tex_m_addr;
     }
-    if (d->tex_m2_req && tex2_wait < 0) tex2_wait = 14;
+    if (d->tex_m2_req && tex2_wait < 0) tex2_wait = TEXLAT + 6;
     if (tex2_wait == 0) {
       d->tex_m2_ack = 1;
       d->tex_m2_data = 0x0123456789abcdefULL ^ (uint64_t)d->tex_m2_addr;
@@ -205,6 +208,13 @@ int main(int argc, char **argv) {
       // only thing they have that the working build does not is this bit.
       if (g_textured) {
         d->q_tex = 0x000001 | (2u << 1) | (2u << 4);   // 128x128, sheet 0
+        // R553: M2_R3D_TEXSPREAD gives every close-up quad its own region of
+        // the sheet (texx bits 18:13, texy 23:19), so the working set is many
+        // textures -- far larger than the texel cache, as on the board. One
+        // shared 128x128 texture fits the cache whole and never misses.
+        static const bool SPREAD = std::getenv("M2_R3D_TEXSPREAD") != nullptr;
+        if (SPREAD && bigrow)
+          d->q_tex |= (uint32_t((r * 5 + b * 3 + frame_no * 11) & 63) << 13) | (uint32_t((r * 7 + b + frame_no * 3) & 31) << 19);   // moves every frame, as a scene does
         d->q_u0 = 0;   d->q_v0 = 0;
         d->q_u1 = bigrow ? MAGU : 400; d->q_v1 = 0;
         d->q_u2 = bigrow ? MAGU : 400; d->q_v2 = bigrow ? 40 : 200;
@@ -271,6 +281,7 @@ int main(int argc, char **argv) {
                 (int)d->dbg_late_frames, (int)d->dbg_qend_frames, (int)d->dbg_bands, (int)d->dbg_bands_painted);
     std::printf("      bands filled during vblank: %u\n", vbl_bands);
     std::printf("      R536 missed scanlines last frame: %d\n", (int)d->dbg_miss_lines);
+    { static uint32_t h0 = 0, m0 = 0; std::printf("      R553 texel hits %u misses %u this frame\n", d->dbg_texhit - h0, d->dbg_texmiss - m0); h0 = d->dbg_texhit; m0 = d->dbg_texmiss; }
     std::printf("      R539 pixel hash: %016llx  frame %016llx\n", (unsigned long long)pix_hash, (unsigned long long)frame_hash);
     frame_hash = 1469598103934665603ull;
     {

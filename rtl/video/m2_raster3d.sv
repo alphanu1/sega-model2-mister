@@ -175,7 +175,8 @@ module m2_raster3d #(
   // R547: WHAT THE SEQUENCER WAITS ON WHEN IT MATTERS, per frame, in units of 1,024 (R553; was
   // 256 cycles (saturating): counted only while the fill is on the displayed
   // frame and at most one band ahead of the beam -- the moments a band can be
-  // late. a = {critical total, C_FILLW, list walk (replaying), span walk busy};
+  // late. a = {critical total, span walk waiting on a texel, span walk out of
+  // fetch credits, span walk stalled by the painter} (R554).
   // b is zero (R547's first form had eight counters and did not fit).
   output logic [31:0] dbg_seq_a,
   output logic [31:0] dbg_seq_b
@@ -308,6 +309,7 @@ module m2_raster3d #(
   // fill walks edges over several cycles per scanline and cannot produce one
   // span per cycle anyway.
   logic spantex_busy;
+  logic [2:0] walk_wait;   // R554: m2_span_tex's wait_why
 
   // R327: 242 -> 194 when y, x0 and x1 narrowed to 16 bits.
   // R337: 194 -> 242, carrying 1/z (32) and its gradient (16) for the
@@ -461,7 +463,8 @@ module m2_raster3d #(
     .tx_req(tex_req), .tx_rdy(tex_rdy), .tx_ack(tex_ack), .tx_tex(tex_state),
     .tx_u(tex_u), .tx_v(tex_v), .tx_texel(tex_texel), .tx_take(tex_take),   // R539
     .dbg_texpix(dbg_texpix), .dbg_texnz(dbg_texnz),
-    .dbg_hot(dbg_walk_hot), .dbg_hotcyc(dbg_walk_hotcyc)   // R436
+    .dbg_hot(dbg_walk_hot), .dbg_hotcyc(dbg_walk_hotcyc),   // R436
+    .dbg_wait(walk_wait)                                    // R554
   );
 
   // R280: THE SWEEP HAPPENS ONCE A FRAME, NOT ONCE A WRITE.
@@ -862,9 +865,11 @@ module m2_raster3d #(
       for (int k = 0; k < 4; k++) sq_c[k] <= '0;
     end else if (sq_crit) begin
       if (!(&sq_c[0])) sq_c[0] <= sq_c[0] + 1'b1;
-      if (cst == C_FILLW && !(&sq_c[1])) sq_c[1] <= sq_c[1] + 1'b1;
-      if (fill_why == 3'd3 && !(&sq_c[2])) sq_c[2] <= sq_c[2] + 1'b1;
-      if (spantex_busy && !(&sq_c[3])) sq_c[3] <= sq_c[3] + 1'b1;
+      // R554: the span walk's reasons, now that R547 has shown C_FILLW and
+      // span-walk-busy each ~100% of the critical time on the board.
+      if (walk_wait == 3'd2 && !(&sq_c[1])) sq_c[1] <= sq_c[1] + 1'b1;   // texel
+      if (walk_wait == 3'd3 && !(&sq_c[2])) sq_c[2] <= sq_c[2] + 1'b1;   // no credit
+      if (walk_wait == 3'd1 && !(&sq_c[3])) sq_c[3] <= sq_c[3] + 1'b1;   // painter
     end
   end
   assign dbg_seq_b = '0;

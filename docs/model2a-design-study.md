@@ -22228,3 +22228,23 @@ tb_m2_span_tex passes (soaks at 26% and 50% misses); tb_m2_raster3d passes.
 
 R552 CONFIRMED IN SYNTHESIS: s281's map report infers the icache tags as
 altdpram (LUT-RAM, asynchronous read), not an M10K altsyncram.
+
+---
+
+**R554 -- THE PAINTER FIX DID NOT MOVE THE BOARD. PUT THE SPAN WALK'S WAIT ON
+THE WIRE.**
+
+s281 (R551 + R552: clk_mem +0.290, clk_sys +1.103, hold -0.022, 0 packing
+warnings, ALMs 41,284 -- 475 back from R552's MLAB tags, M10K 553/553):
+zero-miss frames 23/27, bands 16-23 late 5-20% -- no change from s275. The
+critical period is still ~100% C_FILLW and ~100% span-walk busy. So the board's
+texture limit was not the painter (the bench's magnified close-up was painter-
+bound; the board is not). The board fetches 71,327 texels a frame at 72.7% --
+22,998 misses, each a contended SDRAM round trip -- so texel LATENCY against
+four fetches in flight is the prime suspect, which R553's eight address.
+
+The bench could not reproduce the board's misses: its textures fit the texel
+cache (0 misses with one texture, 4 with M2_R3D_TEXSPREAD's regions, 50 with
+them moving per frame), so latency sweeps (M2_R3D_TEXLAT) showed nothing.
+Rather than keep tuning a synthetic load, the walk's wait_why goes on a port
+and R547's record becomes {critical, texel wait, no credit, painter stall}.
