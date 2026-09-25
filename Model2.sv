@@ -574,6 +574,7 @@ wire  [7:0] r3d_qend_frames; // frames the geometry stage finished
 wire [15:0] r3d_collect_cyc; // R210: frame_start -> q_end, units of 16 clk_sys cycles
 wire  [7:0] r3d_hold;        // R213: frames the last list stayed on display
 wire [15:0] r3d_missed;      // R213: scanlines drawn with no band ready
+wire [31:0] r3d_seq_a, r3d_seq_b;   // R547: sequencer critical-period histogram
 wire [63:0] r3d_miss_map;   // R536: bands the beam found not ready, last frame
 wire [15:0] r3d_miss_lines; // R536: and how many scanlines
 wire [15:0] geo_behind;      // R246: polygons entirely behind the eye, culled as the reference culls them
@@ -4317,7 +4318,7 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	      : (tps_ph == 3'd3)                  ? {geo_nops, geo_walk_ops}        // R255: 'U' nops decoded : commands walked, last frame
 	      : (tps_ph == 3'd2)                  ? {cc_h_f, cc_m_f}                // R269: 'V' glyph cache hits : misses, last frame
 	      : (tps_ph == 3'd4)                  ? {tx_p_f, tx_m_f}                // R275: 'Y' textured pixels : texel misses, last frame
-	      : (tps_ph == 3'd7)                  ? {oz_d0, oz_d1}                 // R334: 1/z of vertices 0 and 1 ('Q')
+	      : (tps_ph == 3'd7)                  ? r3d_seq_a                      // R547: the sequencer's critical-period histogram, a ('Q')
 	      : (tps_ph == 3'd6)                  ? {r3d_fillpass, r3d_bands_painted,
 	                                             r3d_bands_done}                // R452/R455: passes : painted : completed
 	      : (tps_ph == 3'd5)                  ? {3'd0, r3d_fill_hot, r3d_walk_hot, 5'd0,
@@ -4396,7 +4397,7 @@ m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
 	      : (tps_ph == 3'd2)                  ? {cc_f_f, vid_ovr_frame}         // R269: sibling fills : scanlines that overran, last frame
 	      : (tps_ph == 3'd4)                  ? {tx_h_f, tx_n_f}                // R275: texel hits : texels that were not 0xF
 	      : (tps_ph == 3'd5)                  ? {tx_m_f, tex_sweep}             // R294 texel misses; R310 whole-cache sweeps
-	      : (tps_ph == 3'd7)                  ? {oz_d2, oz_d3}                 // R334: 1/z of vertices 2 and 3 ('Q')
+	      : (tps_ph == 3'd7)                  ? r3d_seq_b                      // R547: ... and b
 	      // R536: z carries the CPU's retired-instruction count (bits 31:18, one
 	      // step per 262,144 -- two captures a known time apart give the rate,
 	      // so the CPI work can be judged) and, a quarter per record, the
@@ -5705,7 +5706,8 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6),
 	.dbg_fillpass(r3d_fillpass),             // R455
 	.dbg_late_frames(r3d_late_frames), .dbg_qend_frames(r3d_qend_frames),
 	.dbg_collect_cyc(r3d_collect_cyc), .dbg_hold(r3d_hold), .dbg_missed(r3d_missed),
-	.dbg_miss_map(r3d_miss_map), .dbg_miss_lines(r3d_miss_lines)   // R536
+	.dbg_miss_map(r3d_miss_map), .dbg_miss_lines(r3d_miss_lines),
+	.dbg_seq_a(r3d_seq_a), .dbg_seq_b(r3d_seq_b)   // R536, R547
 );
 
 // The 3D layer sits OVER the tilemap where it painted, and shows the tilemap

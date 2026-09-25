@@ -21980,3 +21980,23 @@ tb_m2_raster3d, one clock, against R544:
 The one failed check at 2-line 320 is "quads dropped: 528" and R544 fails it
 identically: that scene exceeds the store's 2,048 quads. Past the new
 breaking point the fill's own setup (FILLW) is the limit again.
+
+---
+
+**R547 -- s265 (R546) IS NO BETTER ON THE BOARD. THE BENCH HAS RUN OUT;
+MEASURE THE SEQUENCER ON THE BOARD.**
+
+s265 (clk_mem -0.680, clk_sys +0.370, hold all positive, M10K 552/553):
+zero-miss frames 16/22 against s261's 14/20; bands 12-15 late 11-15% (same),
+16-22 7-10% (s261 3-7%). No change the sample can separate. The board's lists
+are 300-600 quads (the UART's quads column), far shorter than the bench's
+densest horizons where the walk dominated -- R546 fixed a load the board does
+not carry. R546 stays (it costs a 32-entry summary and helps dense lists).
+
+The bench has now been right about the mechanism and wrong about the board
+twice (R542, R546). So the sequencer's own accounting goes on the wire: per
+frame, counted ONLY while the fill is on the displayed frame and at most one
+band ahead of the beam -- the moments a band can be late -- the cycles in
+C_IDLE, C_CLRW, C_FILLW, the list walk, the band-end drain, the quad handoff,
+and span-walk busy, in 256-cycle units ('Q', replacing R334's 1/z record,
+which is finished with). One capture then says what late bands wait on.
