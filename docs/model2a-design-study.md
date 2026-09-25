@@ -22330,3 +22330,30 @@ that test.
 
 The grey/green stripes are a SEPARATE, milder, older fault: s265 (K=4, before
 R553) already had them. Still open.
+
+---
+
+**R559 -- R557 DOES NOT REMOVE THE STRIPES. THEY ARE LONG-STANDING.**
+
+s293 (R558: four in flight, R554, R557; clk_mem -0.504 on tag_v -> cmd, hold
+-0.175 inside m2_texel_x2, -0.329 x2 -> sound ROM): no scramble. Ben: "the
+textures have never been clean. the grey and colour stripes are still there."
+So the stripes are not the dq_r -> p_dout timing R557 closed; they predate
+every change this week and are a fault of their own. Open, queued after the
+clock work and the lighting dropout.
+
+**THE CLOCK PLAN, AGREED: 100 / 60 / 30, MODEL 1'S ARCHITECTURE.** Model 1
+runs SDRAM 80.000, 3D 58.947, CPU 29.474 (exactly half the 3D clock) off one
+1,120 MHz VCO, with memory <-> 3D crossings asynchronous through m1_cdc_port
+(two-phase toggles, 3-flop synchronisers, payload held stable not
+synchronised). Model 2's equivalent: clk_mem 100, clk_sys 60, clk_i960 30.
+Steps, each buildable alone:
+  1. asynchronous memory <-> core crossings from m1_cdc_port's handshake,
+     replacing m2_sdram_x2's 2:1 assumption; the texel cache into the core
+     domain, Model 1 style, so only misses cross; validated at 100/50/25 first;
+  2. core logic to 60 (the FP pool operand mux first -- Model 1 hit the same
+     wall at 39.6 MHz and registered it);
+  3. 100/60 with the i960 at 25 (two-flop bridge crossing, as R460);
+  4. the i960 to 30 (5.68 ns short today).
+Cost to watch: an asynchronous crossing adds cycles to every SDRAM access,
+including the texel misses the bands wait on (R555: 68%).
