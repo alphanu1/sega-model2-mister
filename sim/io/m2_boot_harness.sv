@@ -486,6 +486,7 @@ module m2_boot_harness #(
   m2_video u_video (
     .clk(clk_vid), .ce_pix(ce_pix), .rst_n(rst_n),
     .tile_mask(14'h3FFF),
+    .xlat_clk(clk_m),   // R564: the bridge writes it, on the bridge's clock
     .xlat_we(oc_xlat_we), .xlat_addr(oc_xlat_addr), .xlat_din(oc_xlat_din),
     .tram_addr(tram_addr), .tram_data(tram_data),
     .char_req(char_req), .char_addr(char_addr),

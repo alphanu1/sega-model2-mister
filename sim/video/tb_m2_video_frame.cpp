@@ -143,7 +143,7 @@ int main(int argc, char **argv) {
   const uint64_t LIMIT = uint64_t(frames + 1) * 656 * 424 * 2 + 4096;
 
   auto half = [&](int lvl) {
-    dut->clk = lvl; dut->eval();
+    dut->clk = lvl; dut->xlat_clk = lvl; dut->eval();   // R564: one clock here
   };
 
   while (cyc < LIMIT && frame <= frames) {

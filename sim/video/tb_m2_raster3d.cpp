@@ -149,9 +149,18 @@ int main(int argc, char **argv) {
     // it now and m2_texel_x2 carries the request across the 2:1. Leaving it at
     // zero (as this bench did) means the texel unit never clocks, the crossing
     // is never exercised, and a PASS here says nothing about the change.
+    // R564: M2_R3D_SCANMEM puts the scan side on clk_mem, as Model2.sv now
+    // does (build the bench with -GTWO_CLOCKS=1 for it).
+    static const bool SCANMEM = std::getenv("M2_R3D_SCANMEM") != nullptr;
+    if (SCANMEM) {
+      d->clk_mem = 1; d->scan_clk = 1; d->eval(); d->clk_mem = 0; d->scan_clk = 0; d->eval();
+      d->clk = 1; d->eval(); d->clk = 0; d->eval();
+      d->clk_mem = 1; d->scan_clk = 1; d->eval(); d->clk_mem = 0; d->scan_clk = 0; d->eval();
+    } else {
     d->clk_mem = 1; d->eval(); d->clk_mem = 0; d->eval();
     d->clk = 1; d->scan_clk = 1; d->eval(); d->clk = 0; d->scan_clk = 0; d->eval();
     d->clk_mem = 1; d->eval(); d->clk_mem = 0; d->eval();
+    }
     if (d->tex_m_ack) { d->tex_m_ack = 0; tex_wait = -1; }
     else if (tex_wait > 0) --tex_wait;
     if (d->tex_m2_ack) { d->tex_m2_ack = 0; tex2_wait = -1; }
