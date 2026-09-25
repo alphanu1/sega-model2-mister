@@ -88,7 +88,13 @@
 
 `timescale 1ns/1ps
 
-module m2_geo_xform (
+module m2_geo_xform #(
+  // R566: m2_fp_pool's add latency, taken from Model 1 with its registered
+  // operand mux. MUST MATCH the pool: the add schedule below is spaced from it,
+  // and a stride built for latency 4 reads results not yet written (Model 1:
+  // 7,806 fails of 7,813 before that was found).
+  parameter int FP_ADD_LAT = 5
+) (
   input  logic        clk,
   input  logic        rst_n,
 
@@ -176,26 +182,50 @@ module m2_geo_xform (
   logic [31:0] t [3];
   logic        atrans;
 
-  // Schedule: adds at ac 0,1,2 / 5,6,7 / 10,11,12. round = ac/5, comp = ac%5.
-  // R408: carried in flops rather than divided -- see `term`/`comp` above. Five
-  // is not a power of two either, and this was the second divider on the same
-  // path.
-  logic [1:0] a_round;   // == ac / 5
-  logic [2:0] a_comp;    // == ac % 5
+  // Schedule: three adds a round, one round every A_STRIDE cycles -- at the
+  // pool's latency 5, ac 0,1,2 / 6,7,8 / 12,13,14. round = ac/S, comp = ac%S.
+  // R566: THE STRIDE IS DERIVED FROM THE POOL'S LATENCY (Model 1's form), and
+  // stays CARRIED rather than divided (R408): S is not a power of two, and a
+  // divider here was once the worst path on clk_sys.
+  localparam int A_STRIDE = FP_ADD_LAT + 1;
+  logic [1:0] a_round;   // == ac / A_STRIDE
+  logic [2:0] a_comp;    // == ac % A_STRIDE
   wire       a_slot  = (a_comp <= 3'd2);
 
-  wire [3:0]  ra    = 4'({1'd0, a_comp} * 4'd3);
-  assign add_a = (a_round == 2'd0) ? r[sum_bank][ra] : t[a_comp[1:0]];
-  assign add_b = (a_round == 2'd0) ? r[sum_bank][ra + 4'd1] :
-                 (a_round == 2'd1) ? r[sum_bank][ra + 4'd2]
-                                   : mat[4'd9 + {2'd0, a_comp[1:0]}];
+  // R566: SELECT THE TRIPLE, NOT THE ELEMENT (Model 1 @ 0b5d04f). `ra` was a
+  // computed index (0, 3 or 6), so r[sum_bank][ra], [ra+1] and [ra+2] were
+  // three variable-index reads of a 9-deep array; a constant-index case makes
+  // each a 3:1 mux. a_comp == 3 cannot matter here: add_req is gated on a_slot.
+  logic [31:0] rsel0, rsel1, rsel2, matsel;
+  always_comb begin
+    case (a_comp[1:0])
+      2'd0: begin
+        rsel0 = r[sum_bank][0]; rsel1 = r[sum_bank][1]; rsel2 = r[sum_bank][2];
+        matsel = mat[9];
+      end
+      2'd1: begin
+        rsel0 = r[sum_bank][3]; rsel1 = r[sum_bank][4]; rsel2 = r[sum_bank][5];
+        matsel = mat[10];
+      end
+      default: begin
+        rsel0 = r[sum_bank][6]; rsel1 = r[sum_bank][7]; rsel2 = r[sum_bank][8];
+        matsel = mat[11];
+      end
+    endcase
+  end
+  assign add_a = (a_round == 2'd0) ? rsel0 : t[a_comp[1:0]];
+  assign add_b = (a_round == 2'd0) ? rsel1 :
+                 (a_round == 2'd1) ? rsel2
+                                   : matsel;
   assign add_sub = 1'b0;
 
   wire        add_out_valid = add_rsp;
   wire [31:0] add_result    = add_res;
 
   // The last round is skipped for a vector: a direction has no origin.
-  wire [3:0] ac_last  = atrans ? 4'd12 : 4'd7;
+  // Two full strides plus three adds for a 3-round transform, one stride plus
+  // three for a 2-round one (12 / 7 at stride 5, 14 / 8 at 6).
+  wire [3:0] ac_last  = atrans ? 4'(2*A_STRIDE + 2) : 4'(A_STRIDE + 2);
   wire [3:0] want_res = atrans ? 4'd9  : 4'd6;
 
   assign mul_req = (mst == M_ISSUE);
@@ -300,8 +330,8 @@ module m2_geo_xform (
             if (ac == ac_last) ast <= A_OUT;
             else begin
               ac <= ac + 4'd1;
-              // R408: a_comp wraps 0..4 and carries into a_round.
-              if (a_comp == 3'd4) begin a_comp <= 3'd0; a_round <= a_round + 2'd1; end
+              // R408: a_comp wraps 0..S-1 and carries into a_round.
+              if (a_comp == 3'(A_STRIDE - 1)) begin a_comp <= 3'd0; a_round <= a_round + 2'd1; end
               else                      a_comp <= a_comp + 3'd1;
             end
           end
