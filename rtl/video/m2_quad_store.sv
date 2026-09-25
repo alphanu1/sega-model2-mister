@@ -560,6 +560,27 @@ module m2_quad_store #(
 
   logic [IW-1:0] ord_idx;
   logic [AT_W-1:0] att_rd;
+
+  // R546: A BAND SUMMARY PER BLOCK OF THE SORTED LIST, SO A BAND SKIPS WHAT
+  // CANNOT TOUCH IT.
+  //
+  // The list is in painter's order and every band walks all of it, one entry
+  // a cycle: at the breaking point in tb_m2_raster3d that walk is 30-54% of
+  // every cycle ("replaying"), and the fill waits on it. The walk already
+  // reads each entry's band range at stage two, so the FIRST full walk after
+  // a list arrives records, for each block of 64 sorted entries, the lowest
+  // and highest band any of them touches. Every later walk -- 47 more bands a
+  // frame, and every frame the list is held -- jumps a block whose range
+  // excludes its band in one cycle. No new read of any list memory (R262: a
+  // second read port duplicates the array), and the summary is 32 x 12 bits.
+  localparam int unsigned SB  = 6;                         // 64 entries a block
+  localparam int unsigned NSB = (NQ + (1 << SB) - 1) >> SB;
+  localparam int unsigned SBW = $clog2(NSB);
+  (* ramstyle = "MLAB" *) logic [2*BW-1:0] sm_mem [NSB];   // {hi, lo}
+  logic [2*BW-1:0] sm_q;
+  logic            sm_valid, sm_build, rbank_d;
+  logic [IW:0]     p1, p2;                                 // positions at stages 1 and 2
+  logic [BW-1:0]   acc_lo, acc_hi;
   // R262: one 104-bit word holds all four, packed {v3,v2,v1,v0} with {y,x} in
   // each. The slices below are the same four words the four arrays used to be.
   logic [VW-1:0] vtx_r;
@@ -590,6 +611,26 @@ module m2_quad_store #(
   // The pipeline moves unless a hit is standing with nowhere to go.
   wire          adv = sc_run && !(hit && hq_full);
 
+  // R546: skip a whole block at its first entry when the summary rules it out.
+  wire [BW-1:0] sm_lo = sm_q[BW-1:0];
+  wire [BW-1:0] sm_hi = sm_q[2*BW-1:BW];
+  wire          sk    = sm_valid && v0 && (pi[SB-1:0] == '0)
+                     && ((replay_band < sm_lo) || (replay_band > sm_hi));
+  wire [IW:0]   pi_nxt = replay_start ? '0
+                       : (adv && v0) ? (sk ? pi + (IW+1)'(1 << SB) : pi + 1'b1)
+                       : pi;
+  // The block summary's write: the entry leaving stage two, folded into its
+  // block's running range, written at the block's last entry (or the list's).
+  wire          blk_first = (p2[SB-1:0] == '0);
+  wire [BW-1:0] nlo_c = (blk_first || (q_band_lo < acc_lo)) ? q_band_lo : acc_lo;
+  wire [BW-1:0] nhi_c = (blk_first || (q_band_hi > acc_hi)) ? q_band_hi : acc_hi;
+  wire          sm_we = sm_build && adv && v2
+                     && ((p2[SB-1:0] == '1) || (p2 == rcount - 1'b1));
+  always_ff @(posedge clk) begin
+    if (sm_we) sm_mem[p2[IW-1:SB]] <= {nhi_c, nlo_c};
+    sm_q <= sm_mem[pi_nxt[IW-1:SB]];     // the block pi will be in next cycle
+  end
+
   typedef enum logic [1:0] { E_IDLE, E_READ, E_OUT } estate_t;
   estate_t e_st;
 
@@ -604,11 +645,14 @@ module m2_quad_store #(
       out_valid <= 1'b0;
       vtx_r <= '0; uvt_r <= '0;
       out_col <= '0; out_moire <= 1'b0;
+      sm_valid <= 1'b0; sm_build <= 1'b0; rbank_d <= 1'b0;   // R546
+      p1 <= '0; p2 <= '0; acc_lo <= '0; acc_hi <= '0;
     end else if (replay_start) begin
       // A band starts only when the previous one has drained (the sequencer
       // waits on replay_busy), so nothing is lost here.
       sc_run <= (rcount != 0);
       pi <= '0; v1 <= 1'b0; v2 <= 1'b0;
+      if (!sm_valid) sm_build <= 1'b1;   // R546: this walk records the summary
       hq_wp <= '0; hq_rp <= '0; e_st <= E_IDLE; out_valid <= 1'b0;
     end else begin
       // ---- the scan: the same three-stage alignment as before (see above).
@@ -616,9 +660,12 @@ module m2_quad_store #(
         ord_idx <= rbank ? idx_a1[pi[IW-1:0]] : idx_a0[pi[IW-1:0]];
         att_rd  <= rbank ? att_1[ord_idx] : att_0[ord_idx];
         q2      <= ord_idx;
-        v1      <= v0;
+        v1      <= v0 && !sk;            // R546: a skipped block issues nothing
         v2      <= v1;
-        if (v0) pi <= pi + 1'b1;
+        p1      <= pi;
+        p2      <= p1;
+        if (v0) pi <= sk ? pi + (IW+1)'(1 << SB) : pi + 1'b1;
+        if (sm_build && v2) begin acc_lo <= nlo_c; acc_hi <= nhi_c; end
         // The hit in stage two leaves the pipeline on this same edge, into
         // the queue.
         if (hit) begin
@@ -627,7 +674,13 @@ module m2_quad_store #(
           hq_wp <= hq_wp + 1'b1;
         end
       end
-      if (sc_run && !v0 && !v1 && !v2) sc_run <= 1'b0;   // drained
+      if (sc_run && !v0 && !v1 && !v2) begin             // drained
+        sc_run <= 1'b0;
+        if (sm_build) begin sm_build <= 1'b0; sm_valid <= 1'b1; end   // R546
+      end
+      // R546: a new list on display invalidates the summary (last, so it wins).
+      rbank_d <= rbank;
+      if (rbank != rbank_d) begin sm_valid <= 1'b0; sm_build <= 1'b0; end
 
       // ---- the emitter. The vertex memories are registered: the quad's data
       // is ready the cycle after q settles, which is when out_valid rises.

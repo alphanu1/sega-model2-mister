@@ -21943,3 +21943,40 @@ taking for no gain.
 KEPT: m2_raster3d's TWO_CLOCKS module default is now 0, what Model2.sv builds.
 The bench had been exercising the two-clock crossing the core does not ship
 (R508's lesson, a third time).
+
+---
+
+**R546 -- A BAND SUMMARY PER BLOCK OF THE SORTED LIST. THE WALK'S WAIT GOES
+FROM 30-54% TO 1%.**
+
+R545 put the limit at the quad store's walk: every band scans the whole
+depth-sorted list, one entry a cycle, and at the breaking point the fill waits
+on it 30% (tall quads) to 54% (2-line quads) of all cycles. The list cannot be
+cut short -- it is in painter's order -- and adding a read of the attribute
+array to precompute anything would duplicate it (R262), ~12 M10K against 3
+free; carrying band ranges in the sort key would cost exactly the last 3.
+
+But the walk ALREADY reads every entry's band range, at stage two. So the
+first full walk after a list arrives records, per block of 64 sorted entries,
+the lowest and highest band touched (a 32 x 12-bit MLAB), and every later walk
+-- 47 more bands a frame, and every frame the list is held -- jumps a block
+that cannot touch its band in one cycle. Invalidated when the displayed bank
+changes. No list memory gains a read port. In a racing scene depth tracks
+screen height (far = horizon, near = bottom), so blocks cluster by band.
+
+tb_m2_raster3d, one clock, against R544:
+
+```
+  load            R544 miss   R546 miss   replaying   picture
+  overlap 20, 40      0           0          1%       identical
+  100                 0           0          1%       identical
+  2-line 180          0           0          1%       identical
+  2-line 240         89           0          1%       = the complete frame
+  2-line 320         79          16          1%       (store overflows: 528 dropped in BOTH)
+  140                81          58          1%
+  180               114          95          1%
+```
+
+The one failed check at 2-line 320 is "quads dropped: 528" and R544 fails it
+identically: that scene exceeds the store's 2,048 quads. Past the new
+breaking point the fill's own setup (FILLW) is the limit again.
