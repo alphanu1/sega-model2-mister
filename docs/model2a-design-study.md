@@ -22304,3 +22304,29 @@ port 0.302 -> 0.281 (the extra cycle).
 
 DDR3 FOR TEXTURES (Ben asked): no -- the HPS DDR3 path's latency is well above
 the SDRAM's, and the walk is latency-bound. It would lengthen every miss.
+
+---
+
+**R558 -- R553 (EIGHT TEXEL FETCHES IN FLIGHT) SCRAMBLES TEXTURES ON THE
+BOARD. REVERTED TO FOUR. BISECTED ON THE BOARD, NOT GUESSED.**
+
+s291 (R557) showed scrambled car textures and heavier left-edge dashes; then
+s289 (R554) did too, from cold -- not temperature. Ben: "it was not scrambled
+on a previous version... the LUT-RAM one was fine". Board bisect with the kept
+bitstreams: s281 (R551 + R552) clean; s285 (R553 alone on top) "that's the
+broken one". So R553.
+
+The simulator could not see it, and the bench no longer has the excuse of
+degenerate textures: R541, R544, R551 and HEAD, rendered with real 1/z
+(flat and perspective) and a checkerboard, agree in colour on every pixel both
+paint (0 differences in ~136,000); only 18-58 edge pixels are added by later
+versions. So R553 is correct logic and wrong hardware: its wider queues across
+the 2:1 had 10 failing paths m2_texel_x2 -> m2_texel on s285. Back to K=4
+(TXK=4). of_x stays 16 bits (local to m2_span_tex, tested).
+
+Kept: R554's counters and R557's read-data staging -- R557 has so far only run
+on top of R553 (s291), so it has not had a fair board test yet; this build is
+that test.
+
+The grey/green stripes are a SEPARATE, milder, older fault: s265 (K=4, before
+R553) already had them. Still open.

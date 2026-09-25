@@ -198,6 +198,9 @@ int main(int argc, char **argv) {
       static const int IU = std::getenv("M2_R3D_IMGU") ? std::atoi(std::getenv("M2_R3D_IMGU")) : 4000;
       d->q_u0 = 0;   d->q_v0 = 0;   d->q_u1 = IU;  d->q_v1 = 0;
       d->q_u2 = IU;  d->q_v2 = IU;  d->q_u3 = 0;   d->q_v3 = IU;
+      // R558: M2_R3D_PERSP gives the four vertices different 1/z (near on the
+      // left, far on the right), so the perspective divide is exercised.
+      if (std::getenv("M2_R3D_PERSP")) { d->q_oz0 = 0x7F00; d->q_oz1 = 0x7D80; d->q_oz2 = 0x7D80; d->q_oz3 = 0x7F00; }
       d->q_end = 1;
       tick();
       d->q_valid = 0; d->q_end = 0;
