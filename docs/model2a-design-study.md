@@ -23469,7 +23469,8 @@ depth (model2rd.ipp:303):
     level = clamp(mml >> 7, 0, max_level)      // then texwidth >> level,
                                                // tex_x >> level, u >> level
 
-and this core always reads level 0 (R2xx, "DEFERRED, deliberately: bilinear
+and this core always reads level 0 ("Texture mapping: what the reference
+does, and the first step taken", after R263: "DEFERRED, deliberately: bilinear
 filtering, mipmap level selection and the microtexture blend"). A distant
 polygon read at level 0 steps several texels per pixel, so almost every pixel
 lands on a new 64-bit cache line -- exactly the far scenery where the bands
