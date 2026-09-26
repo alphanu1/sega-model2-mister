@@ -362,10 +362,13 @@ module mb86233_core (
   logic [16:0] mem_addr;
   logic [31:0] mem_wdata, mem_rdata;
   logic        mem_stall, mem_stall_c;
+  logic        mem_wreq;   // R602: the data RAM's write, S_DST_W only
+  logic [16:0] ea_dst_q;   // R591, declared here for u_mem's write port (R602)
 
-  mb86233_mem u_mem (
+  mb86233_mem #(.SPLIT_WR(1'b1)) u_mem (   // R602
     .clk(clk), .rst_n(rst_n),
     .req(mem_req), .we(mem_we), .addr(mem_addr), .wdata(mem_wdata),
+    .wreq(mem_wreq), .waddr(ea_dst_q),
     .rdata(mem_rdata), .stall(mem_stall_c),
     .dbg_wr_n(dbg_wr_n), .dbg_wr_addr(dbg_wr_addr), .dbg_wr_data(dbg_wr_data),
     .ext_rd(mem_fifo_rd), .ext_wr(mem_fifo_wr), .ext_wdata(mem_fifo_wdata),
@@ -643,8 +646,11 @@ module mb86233_core (
   assign ea_src = agu_ea + ((x_src_200 || x_lab_a200) ? 17'h200 : 17'd0);
   assign ea_dst = agu_ea + (x_dst_200 ? 17'h200 : 17'd0);
   // R591: ea_dst held from S_DST into S_DST_W (see the destination request).
-  logic [16:0] ea_dst_q;
   always_ff @(posedge clk) if (state == S_DST) ea_dst_q <= ea_dst;
+  // R602: the data RAM is written in S_DST_W alone, at ea_dst_q -- a register
+  // -- so no write enable is decoded from the live address. It used to be
+  // written in both S_DST and S_DST_W, the same word twice.
+  assign mem_wreq = (state == S_DST_W) && !x_dst_reg && (x_dst_sp == mb86233_pkg::EP_DATA);
   wire  [16:0] ea_dst_cur = (state == S_DST_W) ? ea_dst_q : ea_dst;
 
   // R600: THE I/O ADDRESS IS ALWAYS A REGISTER. m2_tgp decodes io_addr into

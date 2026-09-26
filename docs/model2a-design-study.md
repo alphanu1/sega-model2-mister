@@ -23328,3 +23328,16 @@ The lesson of R591/R596/R600/R601 together: a fan-out that is critical is
 fixed by cutting EVERY route out of the combinational source, not the worst
 one -- each partial fix hands the placer the next route, and the next seed
 finds it.
+
+**R602 -- THE DATA RAM'S WRITE ENABLE, THE LAST ROUTE OUT OF THE AGU.**
+s329 also showed state.S_LABB_W -> AGU -> +0x200 -> address mux -> u_mem
+sel_ram1 -> ram1's write enable, -1.301 ns: mb86233_mem decoded its M10K
+write enables from the same live address the read uses. The read address
+has to stay live (the RAM registers it), but the core only writes data
+memory in S_DST/S_DST_W, and S_DST_W's address is already a register
+(R591's ea_dst_q). mb86233_mem gains SPLIT_WR: writes come from their own
+registered address and request, the read port keeps `addr`. The core writes
+in S_DST_W alone. It used to write the same word in both S_DST and S_DST_W:
+the boot harness's data-RAM write count is exactly half (752 -> 376), TGP
+output, retires, pops and pushes identical. tb_mb86233_mem (default mode)
+178,399 checks, tb_mb86233_core 45 + 8,000 lockstep, 0 fail.

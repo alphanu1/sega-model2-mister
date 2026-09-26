@@ -36,7 +36,11 @@
 
 `timescale 1ns/1ps
 
-module mb86233_mem (
+module mb86233_mem #(
+  // R602: writes from their own, registered, address. Off, the module is as
+  // it always was (its unit bench runs that way); mb86233_core turns it on.
+  parameter bit SPLIT_WR = 1'b0
+) (
   input  logic        clk,
   input  logic        rst_n,
 
@@ -46,6 +50,8 @@ module mb86233_mem (
   input  logic        we,
   input  logic [16:0] addr,        // 17 bits: the +0x200 adder can reach 0x101ff
   input  logic [31:0] wdata,
+  input  logic        wreq,        // R602, SPLIT_WR only: write wdata at waddr
+  input  logic [16:0] waddr,
   output logic [31:0] rdata,
   output logic        stall,       // external access not yet satisfied
 
@@ -116,13 +122,28 @@ module mb86233_mem (
 
   logic [31:0] ram0_q, ram1_q;
 
+  // R602: WITH SPLIT_WR THE WRITE ENABLE IS DECODED FROM waddr, NOT addr.
+  // addr is live from the core's address generator -- it has to be, the read
+  // is registered inside the RAM -- and decoding the write enable from it put
+  // the AGU, the +0x200 add and the address mux in front of every M10K write
+  // enable (s329: state.S_LABB_W -> ram1 porta_we, -1.301 ns at 70 MHz).
+  // The core writes only in S_DST_W, where the address is already a
+  // register, so the write port takes that and the read port keeps addr.
+  wire        w_ram0 = SPLIT_WR ? (wreq && (waddr <= 17'h000ff))
+                                : (req && we && sel_ram0);
+  wire        w_ram1 = SPLIT_WR ? (wreq && (waddr >= 17'h00200) && (waddr <= 17'h003ff))
+                                : (req && we && sel_ram1);
+  wire [7:0]  w_a0   = SPLIT_WR ? waddr[7:0] : a0;
+  wire [8:0]  w_a1   = SPLIT_WR ? waddr[8:0] : a1;
+  wire [16:0] w_addr = SPLIT_WR ? waddr : addr;
+
   always_ff @(posedge clk) begin
-    if (req && we && sel_ram0) ram0[a0] <= wdata;
+    if (w_ram0) ram0[w_a0] <= wdata;
     ram0_q <= ram0[a0];
   end
 
   always_ff @(posedge clk) begin
-    if (req && we && sel_ram1) ram1[a1] <= wdata;
+    if (w_ram1) ram1[w_a1] <= wdata;
     ram1_q <= ram1[a1];
   end
 
@@ -131,9 +152,9 @@ module mb86233_mem (
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       dbg_wr_n <= 32'd0; dbg_wr_addr <= 17'd0; dbg_wr_data <= 32'd0;
-    end else if (req && we && (sel_ram0 || sel_ram1)) begin
+    end else if (w_ram0 || w_ram1) begin   // R602
       if (!(&dbg_wr_n)) dbg_wr_n <= dbg_wr_n + 32'd1;
-      dbg_wr_addr <= addr;
+      dbg_wr_addr <= w_addr;
       dbg_wr_data <= wdata;
     end
   end
