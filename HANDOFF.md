@@ -1,5 +1,39 @@
 # Handoff
 
+## 2026-09-26 (night): s381 IS ON THE BOARD. BILINEAR BUILT, RETIMED, BUILDING (s393-s395).
+
+The board runs s381 (PIXSTEP 2, point sampling). s386 (PIXSTEP 1) went on and
+came off: Ben saw bands dropping on heavy scenes (R621).
+
+IN HEAD, NOT YET ON THE BOARD:
+- R620/R622/R625 m2_texel_bl -- bilinear texel fetch, exact to
+  model2rd.ipp's fetch_bilinear_texel (tb_m2_texel_bl, 1,000,000 checks, 0
+  fails), OSD "Texture filter: Bilinear / Point" (status[31]; Point is the old
+  picture), PIXSTEP 2. First build did not fit (cache 2,000 ALM -> 992, R622);
+  second fitted but clk_mem missed by 2.75 ns (R625) -> retimed, standalone
+  +1.34 ns (about +0.9 in the design, by calibration), 1,123 ALM.
+- R623 the checker bit (hdr0[15]) -- never connected; the car's shadow and
+  the minimap panel are stippled on hardware and were solid here.
+
+MEASURED, NOT BUILT:
+- R624 "too dark": at OSD 100% the textured path is MAME's brightness to 1%
+  on frame 2000 (Daytona's luma table is the identity ramp). The gap to
+  Ben's hardware photo is MAME's gamma curve (max((i-64)*255/191, 0) --
+  MAME's own guess at cabinet calibration) and/or the monitor. Next: a
+  run-time gamma switch at both sites (m2_palette 2D, m2_geo_engine gam()
+  3D). m2_palette's gamma path already failed timing twice (R572, R582).
+- R623 note: MAME's wrap-y is texheader[0] bit 7; poly_tex has no slot for it
+  and m2_texel_bl wraps v unless mirrored. Open.
+
+INSTRUMENTS ADDED:
+- Standalone Quartus timing loop for one module (40 s; ~0.45 ns optimistic
+  against the design). Use it before any new block reaches a full build.
+- Scratch MAME M2COL: lumaram/colorxlat/palram and per-pixel texel and luma
+  dumped with the M2DIFF frame.
+
+RULE KEPT THIS SESSION: seed folders SYMLINK rtl/ and Model2.sv -- no RTL
+edit between a batch's launch and the end of its quartus_map.
+
 ## 2026-09-26 (late): `build/seeds/s381` IS ON THE BOARD. TEXTURES FIXED IN TWO PLACES.
 
 s377 plus R616 (textures sampled at pixel CENTRES, as MAME does -- the road's
