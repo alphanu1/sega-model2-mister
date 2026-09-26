@@ -56,6 +56,11 @@ module m2_raster3d #(
   // R626: quarter-pixel vertices for the texture plane fit (m2_quad_store,
   // m2_raster_fill); 0 is the integer-only fit
   parameter int unsigned FRB = 0,
+  // R627: BILINEAR UNLESS LATE. A texel request issued while the fill is
+  // within TXLATE bands of the beam (the frame on screen, the beam in the
+  // picture) is point-sampled -- one cache line, not up to four -- so a heavy
+  // band catches up instead of going out missing. 0: never.
+  parameter int unsigned TXLATE = 0,
 
   // ARE clk AND scan_clk ACTUALLY DIFFERENT CLOCKS?
   //
@@ -233,6 +238,7 @@ module m2_raster3d #(
   logic        tex_req, tex_ack;
   logic        tex_rdy, tex_take;   // R539: a credit is free / the walk takes an answer
   logic [31:0] tex_state;
+  logic        tex_late;    // R627: declared here, set by the band sequencer's test
   logic [19:0] tex_u, tex_v;
   logic [8:0]  tex_texel;   // R620: {discard, t}
   logic        qo_moire;
@@ -558,7 +564,7 @@ module m2_raster3d #(
   // left open: m2_texel_bl places four texels of its own.
   m2_texel_cdc #(.K(8), .TW(9), .TO_VAL(255)) u_texel_x2 (
     .clk_slow(clk), .s_rst_n(rst_n), .clk_fast(clk_mem), .f_rst_n(rst_n),
-    .s_req(tex_req), .s_rdy(tex_rdy), .s_ack(tex_ack), .s_tex(tex_state),
+    .s_req(tex_req), .s_rdy(tex_rdy), .s_ack(tex_ack), .s_tex({tex_late, tex_state[30:0]}),   // R627
     .s_u(tex_u), .s_v(tex_v), .s_texel(tex_texel), .s_take(tex_take),
     .f_req(txf_req), .f_rdy(txf_rdy), .f_ack(txf_ack), .f_tex(txf_tex),
     .f_u(txf_u), .f_v(txf_v), .f_texel(txf_texel),
@@ -1002,6 +1008,13 @@ module m2_raster3d #(
   end
   wire sq_crit = dvalid && (fill_frame == disp_frame) && sq_vis_s[1]
               && ((BW+1)'(fill_band) <= (BW+1)'(scan_band_f) + (BW+1)'(1));
+  // R627: the same test at TXLATE bands, registered; it rides bit 31 of each
+  // texel request (always 0 from m2_span_tex, unread by the cache before)
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) tex_late <= 1'b0;
+    else        tex_late <= (TXLATE != 0) && dvalid && (fill_frame == disp_frame) && sq_vis_s[1]
+                            && ((BW+1)'(fill_band) <= (BW+1)'(scan_band_f) + (BW+1)'(TXLATE));
+  end
   function automatic logic [7:0] sq8(input logic [17:0] c);
     sq8 = c[17:10];
   endfunction

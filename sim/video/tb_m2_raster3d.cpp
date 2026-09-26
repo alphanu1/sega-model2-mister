@@ -175,6 +175,21 @@ int main(int argc, char **argv) {
     }
     d->eval();
     // R615: every real fetch, for the frame differential
+#ifdef M2_R3D_TXPROBE
+    // R627: why a new miss waits -- in clk_sys ticks, sampled once a tick
+    { auto *r = d->rootp; static long nb = 0, held = 0, fly = 0, nt = 0, act = 0;
+      ++nt;
+      if (!r->m2_raster3d__DOT__u_texel__DOT__rs_empty) ++act;
+      if (r->m2_raster3d__DOT__u_texel__DOT__d_block) {
+        ++nb;
+        const bool h0 = r->m2_raster3d__DOT__u_texel__DOT__ms_busy[0] && r->m2_raster3d__DOT__u_texel__DOT__ms_filled[0];
+        const bool h1 = r->m2_raster3d__DOT__u_texel__DOT__ms_busy[1] && r->m2_raster3d__DOT__u_texel__DOT__ms_filled[1];
+        if (h0 || h1) ++held; else ++fly;
+      }
+      if ((nt % 1000000) == 0)
+        std::printf("  R627 probe: %ld ticks, cache busy %ld, D blocked %ld (a slot held after its fill %ld, both in flight %ld)\n", nt, act, nb, held, fly);
+    }
+#endif
     if (d->rootp->m2_raster3d__DOT__tex_take && d->rootp->m2_raster3d__DOT__tex_ack)
       g_ans.push_back((uint16_t)d->rootp->m2_raster3d__DOT__tex_texel);
     if (d->rootp->m2_raster3d__DOT__u_spantex__DOT__dbg_fetch && !g_rec) ++g_nfetch;
@@ -196,6 +211,16 @@ int main(int argc, char **argv) {
       d->clk_mem = 1; d->scan_clk = 1; d->eval(); d->clk_mem = 0; d->scan_clk = 0; d->eval();
       d->clk = 1; d->eval(); d->clk = 0; d->eval();
       d->clk_mem = 1; d->scan_clk = 1; d->eval(); d->clk_mem = 0; d->scan_clk = 0; d->eval();
+    } else if (std::getenv("M2_R3D_R107")) {
+      // R627: THE BOARD'S RATIO, 100:70, not 2:1. clk_mem edges are spread
+      // 10 to every 7 core edges; at 2:1 each clk_mem cycle of latency costs
+      // half a core cycle, on the board 0.7 -- and a latency-bound path looks
+      // a third faster here than it is.
+      static int acc = 0;
+      acc += 10;
+      if (acc >= 7) { acc -= 7; d->clk_mem = 1; d->eval(); d->clk_mem = 0; d->eval(); }
+      d->clk = 1; d->scan_clk = 1; d->eval(); d->clk = 0; d->scan_clk = 0; d->eval();
+      if (acc >= 7) { acc -= 7; d->clk_mem = 1; d->eval(); d->clk_mem = 0; d->eval(); }
     } else {
     d->clk_mem = 1; d->eval(); d->clk_mem = 0; d->eval();
     d->clk = 1; d->scan_clk = 1; d->eval(); d->clk = 0; d->scan_clk = 0; d->eval();

@@ -24258,3 +24258,47 @@ and against the exact float plane AT OUR OWN SAMPLE POINT (the pipeline's
 arithmetic, without PIXSTEP's grouping): 53.5% -> 79.6% within a texel,
 >4 texels 8.0% -> 3.7%. What is left against MAME is mostly grouping on
 steep, far polygons -- dozens of texels a pixel, where MAME mipmaps.
+
+**R627 -- STILL MISSING BANDS AT PIXSTEP 4: THE TEXEL PATH IS MEMORY-BOUND;
+BILINEAR UNLESS LATE.** s398 (bilinear, PIXSTEP 4) on the board; Ben: "still
+missing bands". PIXSTEP 4 had cured them with m2_texel.
+
+The bench had been kind twice over. Its clocks are 2:1 and the board's
+100:70 (M2_R3D_R107 now spreads 10 clk_mem edges over 7 core edges), and its
+texel memory answers in 8 core cycles where the board's shared SDRAM is
+slower. Frame 2000, PIXSTEP 4, board ratio:
+
+    miss latency (core cycles)      8     20     40     60     80
+    texel-wait                     18%    29%    43%
+    pixels with no fetch, bilinear 0.0%  0.0%   4.5%   6.8%
+    ... point, one line a request                     4.5%   6.8%
+
+WHY, MEASURED (probe on m2_texel_bl, latency 40): D blocked on 39% of the
+cache's busy cycles, and 97% of that with BOTH SDRAM ports' misses in
+flight -- memory-level parallelism, two lines. My suspect, R622's slot held
+after its fill, was 3%. The point mode was no cheaper: it looked up all
+four texels' lines and picked one (17,016 misses either way).
+
+THE FIXES:
+  - Point mode looks up ONE texel (the nearest, known at P->B from the same
+    fractions H1 uses): ~12,400 misses on the frame, m2_texel's cost again.
+  - TXLATE: a texel request issued while the fill is within TXLATE bands of
+    the beam (sq_crit's test, widened) carries tex[31] -- always 0 from
+    m2_span_tex, unread before -- and is point-sampled. TXLATE 3: every band
+    at latency 40 (4.5% lost without it), no change at 8 or 20; on the
+    frame 3,694 of 72,430 answers were degraded, and every answer is exact
+    to its mode (68,736 bilinear, 3,694 point, 0 neither). Above latency ~60
+    point sampling itself loses bands: that regime needs more lines in
+    flight (SDRAM ports) or fewer misses (prefetch), not a sampling choice.
+  - Timing, from s398 (clk_mem -0.345 in axis()): axis() split -- mirror and
+    half-texel into the K queue's write; V1 registers the down difference
+    and V2 multiplies; the fill write is registered a cycle (a slot is not
+    released until its line has landed -- without that the random bench's
+    misses rose 142k -> 161k from refetches in the gap); the lookup's pick
+    computed a cycle ahead. Standalone worst +0.86 -> +1.79 ns. Quartus 17
+    rejected `wire k_t k_in = ...` (a struct-typed net) -- caught by the
+    standalone loop, not by Verilator.
+
+Ben asked whether 80/40 would help: no -- the stall is SDRAM latency in
+nanoseconds, which a faster core clock only turns into more cycles of
+waiting; clk_sys closes at +0.47 at 70 and the device is at 99%.

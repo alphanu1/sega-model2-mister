@@ -131,16 +131,27 @@ module m2_texel_bl #(
     end
   endfunction
 
-  // one axis: mirror, half-texel, wrap, clamp. Returns {i0, i1, frac(9)}.
-  function automatic logic [32:0] axis(input logic [19:0] c, input logic [2:0] code,
-                                       input logic mir, input logic wrap);
-    logic [19:0] m, a;
+  // one axis, in TWO HALVES (R627: whole, it missed clk_mem by 0.35 ns on
+  // s398). The first -- mirror and the half-texel shift -- runs as a request
+  // is written into the K queue, straight off m2_texel_cdc's registers; the
+  // second -- mask, the next texel, the clamp -- in stage A.
+  function automatic logic [19:0] axis_pre(input logic [19:0] c, input logic [2:0] code,
+                                           input logic mir);
+    logic [19:0] m;
+    logic [11:0] w;
+    begin
+      w  = 12'(32 << code);
+      m  = (mir && ((c & (20'(w) << 8)) != 20'd0)) ? ~c : c;
+      axis_pre = m - 20'h80;
+    end
+  endfunction
+  // Returns {i0, i1, frac(9)}.
+  function automatic logic [32:0] axis(input logic [19:0] a, input logic [2:0] code,
+                                       input logic wrap);
     logic [11:0] w, i0, i1;
     logic [8:0]  f;
     begin
       w  = 12'(32 << code);
-      m  = (mir && ((c & (20'(w) << 8)) != 20'd0)) ? ~c : c;
-      a  = m - 20'h80;
       f  = {1'b0, a[7:0]};
       i0 = a[19:8] & (w - 12'd1);
       i1 = (i0 + 12'd1) & (w - 12'd1);
@@ -162,7 +173,8 @@ module m2_texel_bl #(
   // decision now comes from registers:
   //   K  a two-entry queue, so `rdy` is a register and the crossing's load
   //      logic no longer waits on this module's lookup; its head is always
-  //      k_d[0], so axis() reads a register with no select in front
+  //      k_d[0], so axis() reads a register with no select in front; it holds
+  //      u and v already mirrored and shifted half a texel (axis_pre, R627)
   //   A  axis(), on the way in
   //   P  place() for the four texels
   //   B  the lookups, one or two lines a cycle; the texels' same-line
@@ -175,7 +187,15 @@ module m2_texel_bl #(
   // which is a few gates from D's registers, not on a compare.
 
   // ---- K and A
-  typedef struct packed { logic [31:0] tex; logic [19:0] u, v; logic bl; } k_t;
+  typedef struct packed { logic [31:0] tex; logic [19:0] u, v; logic bl; } k_t;   // u, v: axis_pre()
+  // model2_v.cpp: "disable smooth wrapping if mirroring is enabled".
+  // poly_tex carries texwrapx (bit 7) but not texwrapy -- bit 8 is
+  // translucent (R326) -- so v wraps unless mirrored (R620).
+  // (a variable and an assign: Quartus 17 rejects `wire k_t` -- a struct-typed net)
+  k_t k_in;
+  // R627: tex[31] set -- m2_raster3d's fill is running late -- point-samples
+  // this request whatever the OSD says
+  assign k_in = {tex, axis_pre(u, tex[3:1], tex[9]), axis_pre(v, tex[6:4], tex[10]), bilinear && !tex[31]};
   logic        k_v [2];
   k_t          k_d [2];
   logic        a_v;
@@ -281,8 +301,16 @@ module m2_texel_bl #(
   tx_t           ms_line [2];
   logic [63:0]   ms_dat  [2];
   logic [9:0]    ms_to   [2];
-  logic          fill_now;          // a done miss is written this cycle
+  logic          fill_now;          // a done miss is taken for writing this cycle
   logic          fill_sel;
+  // R627: THE FILL IS WRITTEN FROM REGISTERS, a cycle after it is taken
+  // (standalone: ms_done -> the RAM's write address was the worst path left).
+  // The line, index and tag are copied here, so the slot may be released
+  // behind it; a lookup of the line in between misses and joins or refetches.
+  logic          fl_v, fl_b, fl_s;   // fl_s: the slot being written
+  logic [IB-1:0] fl_i;
+  logic [63:0]   fl_d;
+  logic [TB:0]   fl_t;
 
   // ------------------------------------------------------------ responses
   logic          rs_used [RSP_D];
@@ -338,7 +366,8 @@ module m2_texel_bl #(
   typedef struct packed {
     logic              v;
     logic [8:0]        l0x, a0x;
-    logic signed [18:0] pl, pa;             // (bottom - top) * vf
+    logic signed [9:0] dl, da;              // bottom - top; the product is V2's
+    logic [8:0]        vf;
     logic              tl, bl;
     logic [3:0]        nn;
   } v1_t;
@@ -414,10 +443,11 @@ module m2_texel_bl #(
       // order, luma only: with the rule decided in H1 (z0, z1), either firing
       // leaves both rows equal, so the down difference is zero and the base
       // is the bottom row when the top was the transparent one
-      r.l0x = h.z0 ? h.l1x : h.l0x; r.a0x = h.a0x;
-      r.pl  = (h.z0 || h.z1) ? 19'sd0
-            : (19'(signed'({1'b0, h.l1x})) - 19'(signed'({1'b0, h.l0x}))) * 19'(signed'({1'b0, h.vf}));
-      r.pa  = (19'(signed'({1'b0, h.a1x})) - 19'(signed'({1'b0, h.a0x}))) * 19'(signed'({1'b0, h.vf}));
+      r.l0x = h.z0 ? h.l1x : h.l0x; r.a0x = h.a0x; r.vf = h.vf;
+      // R627: the difference registered here and multiplied in V2, so the
+      // multiply's operands come straight from registers (s398's paths)
+      r.dl  = (h.z0 || h.z1) ? 10'sd0 : (10'(signed'({1'b0, h.l1x})) - 10'(signed'({1'b0, h.l0x})));
+      r.da  = 10'(signed'({1'b0, h.a1x})) - 10'(signed'({1'b0, h.a0x}));
       stage_v1 = r;
     end
   endfunction
@@ -425,8 +455,8 @@ module m2_texel_bl #(
   function automatic logic [8:0] stage_v2(input v1_t h);
     logic [8:0] lo, ao;
     begin
-      lo = 9'(signed'(19'({10'd0, h.l0x})) + (h.pl >>> 8));
-      ao = 9'(signed'(19'({10'd0, h.a0x})) + (h.pa >>> 8));
+      lo = 9'(signed'(19'({10'd0, h.l0x})) + ((19'(h.dl) * 19'(signed'({1'b0, h.vf}))) >>> 8));
+      ao = 9'(signed'(19'({10'd0, h.a0x})) + ((19'(h.da) * 19'(signed'({1'b0, h.vf}))) >>> 8));
       if (!h.bl) stage_v2 = {h.tl && (h.nn == 4'hF), {h.nn, h.nn}};
       else       stage_v2 = {h.tl && (ao < 9'h40), lo[7:0]};
     end
@@ -489,25 +519,36 @@ module m2_texel_bl #(
 
   // ------------------------------------------------------------ B's pick
   // One not-yet-looked-up line in each bank, and every texel sharing it.
+  // R627: COMPUTED A CYCLE AHEAD -- as a request enters B, and after each
+  // access for the next -- and held in registers, so the RAM's read address is
+  // a two-way select of registers (standalone: the pick in front of it was
+  // the worst path left).
+  typedef struct packed { logic ph0, ph1; logic [3:0] pk0, pk1; logic [1:0] f0, f1; } pk_t;
+  function automatic pk_t pick_of(input logic [3:0] done, input logic [3:0] bank, input logic [5:0] e);
+    pk_t r;
+    begin
+      r = '0;
+      for (int k = 3; k >= 0; k--) begin
+        if (!done[k] && !bank[k]) begin r.ph0 = 1'b1; r.f0 = 2'(k); end
+        if (!done[k] &&  bank[k]) begin r.ph1 = 1'b1; r.f1 = 2'(k); end
+      end
+      for (int k = 0; k < 4; k++) begin
+        r.pk0[k] = r.ph0 && !done[k] && !bank[k] && eqm(e, int'(r.f0), k);
+        r.pk1[k] = r.ph1 && !done[k] &&  bank[k] && eqm(e, int'(r.f1), k);
+      end
+      pick_of = r;
+    end
+  endfunction
   logic [3:0]  pick0, pick1;
   tx_t         pl0, pl1;
   logic        ph0, ph1;
-  always_comb begin
-    automatic int f0 = 0, f1 = 0;
-    ph0 = 1'b0; ph1 = 1'b0;
-    for (int k = 3; k >= 0; k--) begin
-      if (!b_done[k] && !b_bank[k]) begin ph0 = 1'b1; f0 = k; end
-      if (!b_done[k] &&  b_bank[k]) begin ph1 = 1'b1; f1 = k; end
-    end
-    pl0 = b_tx[f0]; pl1 = b_tx[f1];
-    for (int k = 0; k < 4; k++) begin
-      pick0[k] = ph0 && !b_done[k] && !b_bank[k] && eqm(b_eq, f0, k);
-      pick1[k] = ph1 && !b_done[k] &&  b_bank[k] && eqm(b_eq, f1, k);
-    end
-  end
   wire b_last  = b_first ? b_single : b_remone;           // registers only
   wire l_go    = b_v && !sweeping && !d_stall;
   wire b_adv   = l_go && b_last;
+
+  // R627: point mode's one texel: {v >= half, u >= half}, as H1's nn
+  wire [1:0] p_nk   = {p_vf[8] | p_vf[7], p_uf[8] | p_uf[7]};
+  wire [3:0] p_near = 4'd1 << p_nk;
 
   // the hand-offs, back to front
   wire p_take = p_v && (!b_v || b_adv) && !rs_full && !sweeping;
@@ -526,11 +567,9 @@ module m2_texel_bl #(
     wr0 = 1'b0; wr1 = 1'b0; wa = '0; wd = '0; wt = '0;
     if (sweeping) begin
       wr0 = 1'b1; wr1 = 1'b1; wa = sweep; wd = '0; wt = '0;
-    end else if (fill_now) begin
-      wa = idx_of(ms_line[fill_sel]);
-      wd = ms_dat[fill_sel];
-      wt = {1'b1, tag_of(ms_line[fill_sel])};
-      if (ms_line[fill_sel].rp[0]) wr1 = 1'b1; else wr0 = 1'b1;
+    end else if (fl_v) begin
+      wa = fl_i; wd = fl_d; wt = fl_t;
+      if (fl_b) wr1 = 1'b1; else wr0 = 1'b1;
     end
   end
 
@@ -579,10 +618,12 @@ module m2_texel_bl #(
       for (int k = 0; k < 4; k++) begin p_tx[k] <= '0; b_tx[k] <= '0; end
       b_v <= 1'b0; b_done <= '0; b_ent <= '0; b_bank <= '0; b_eq <= '0;
       b_first <= 1'b0; b_single <= 1'b0; b_remone <= 1'b0;
+      pick0 <= '0; pick1 <= '0; ph0 <= 1'b0; ph1 <= 1'b0; pl0 <= '0; pl1 <= '0;
       c_v <= 1'b0; c_k0 <= '0; c_k1 <= '0; c_has0 <= 1'b0; c_has1 <= 1'b0;
       c_ent <= '0; c_t0 <= '0; c_t1 <= '0;
       for (int k = 0; k < 4; k++) c_sel[k] <= '0;
       ra0_d <= '0; ra1_d <= '0; fw_v <= 1'b0; fw_b <= 1'b0; fw_i <= '0;
+      fl_v <= 1'b0; fl_b <= 1'b0; fl_s <= 1'b0; fl_i <= '0; fl_d <= '0; fl_t <= '0;
       d_v <= 1'b0; d_k0 <= '0; d_k1 <= '0; d_has0 <= 1'b0; d_has1 <= 1'b0;
       d_ent <= '0; d_t0 <= '0; d_t1 <= '0; d_hit0 <= 1'b0; d_hit1 <= 1'b0;
       d_j0 <= '0; d_j1 <= '0;
@@ -622,17 +663,17 @@ module m2_texel_bl #(
       // K: packed from the head down
       case ({k_push, k_pop})
         2'b01: begin k_d[0] <= k_d[1]; k_v[0] <= k_v[1]; k_v[1] <= 1'b0; end
-        2'b10: if (!k_v[0]) begin k_d[0] <= {tex, u, v, bilinear}; k_v[0] <= 1'b1; end
-               else         begin k_d[1] <= {tex, u, v, bilinear}; k_v[1] <= 1'b1; end
-        2'b11: if (k_v[1]) begin k_d[0] <= k_d[1]; k_d[1] <= {tex, u, v, bilinear}; end
-               else        begin k_d[0] <= {tex, u, v, bilinear}; end
+        2'b10: if (!k_v[0]) begin k_d[0] <= k_in; k_v[0] <= 1'b1; end
+               else         begin k_d[1] <= k_in; k_v[1] <= 1'b1; end
+        2'b11: if (k_v[1]) begin k_d[0] <= k_d[1]; k_d[1] <= k_in; end
+               else        begin k_d[0] <= k_in; end
         default: ;
       endcase
       // A: the axes
       if (k_pop) begin
         a_v <= 1'b1; a_tex <= k_d[0].tex; a_bl <= k_d[0].bl;
-        a_ax <= axis(k_d[0].u, k_d[0].tex[3:1], k_d[0].tex[9],  k_d[0].tex[7] && !k_d[0].tex[9]);
-        a_ay <= axis(k_d[0].v, k_d[0].tex[6:4], k_d[0].tex[10], !k_d[0].tex[10]);
+        a_ax <= axis(k_d[0].u, k_d[0].tex[3:1], k_d[0].tex[7] && !k_d[0].tex[9]);
+        a_ay <= axis(k_d[0].v, k_d[0].tex[6:4], !k_d[0].tex[10]);
       end else if (a_take) a_v <= 1'b0;
 
       // ---- P: the four texels placed
@@ -655,11 +696,21 @@ module m2_texel_bl #(
         b_v <= 1'b1;
         for (int k = 0; k < 4; k++) b_tx[k] <= p_tx[k];
         b_eq <= e; b_bank <= bk;
-        b_first <= 1'b1; b_single <= one_acc(4'hF, bk, e);
-        b_done <= 4'd0;
+        begin
+          automatic pk_t pk = pick_of(p_bl ? 4'd0 : ~p_near, bk, e);
+          pick0 <= pk.pk0; pick1 <= pk.pk1; ph0 <= pk.ph0; ph1 <= pk.ph1;
+          pl0 <= p_tx[pk.f0]; pl1 <= p_tx[pk.f1];
+        end
+        // R627: POINT MODE LOOKS UP ONE TEXEL. The nearest of the four is
+        // known here (H1's nn picks it from the same fractions), so the
+        // other three are marked looked-up and ready: a point-sampled request
+        // is one line again, as m2_texel's was, not up to four.
+        b_first <= 1'b1;
+        b_single <= p_bl ? one_acc(4'hF, bk, e) : 1'b1;
+        b_done <= p_bl ? 4'd0 : ~p_near;
         b_ent  <= rs_wp[RW-1:0];
         rs_used[rs_wp[RW-1:0]] <= 1'b1;
-        rs_rdy [rs_wp[RW-1:0]] <= 4'd0;
+        rs_rdy [rs_wp[RW-1:0]] <= p_bl ? 4'd0 : ~p_near;   // R627: the rest unused
         rs_pend[rs_wp[RW-1:0]] <= 4'd0;
         rs_uf  [rs_wp[RW-1:0]] <= p_uf; rs_vf[rs_wp[RW-1:0]] <= p_vf;
         rs_tl  [rs_wp[RW-1:0]] <= p_tl; rs_bl[rs_wp[RW-1:0]] <= p_bl;
@@ -674,11 +725,24 @@ module m2_texel_bl #(
         b_done   <= b_done | pick0 | pick1;
         b_first  <= 1'b0;
         b_remone <= one_acc(~(b_done | pick0 | pick1), b_bank, b_eq);
+        begin
+          automatic pk_t pk = pick_of(b_done | pick0 | pick1, b_bank, b_eq);
+          pick0 <= pk.pk0; pick1 <= pk.pk1; ph0 <= pk.ph0; ph1 <= pk.ph1;
+          pl0 <= b_tx[pk.f0]; pl1 <= b_tx[pk.f1];
+        end
       end
 
       // ---- L -> C1 (the RAM is read this cycle; C1 sees it next)
       ra0_d <= ra0; ra1_d <= ra1;
-      fw_v  <= fill_now; fw_b <= wr1; fw_i <= wa;
+      fw_v  <= fl_v && !sweeping; fw_b <= wr1; fw_i <= wa;   // what was written
+      fl_v  <= fill_now;
+      if (fill_now) begin
+        fl_b <= ms_line[fill_sel].rp[0];
+        fl_s <= fill_sel;
+        fl_i <= idx_of(ms_line[fill_sel]);
+        fl_d <= ms_dat[fill_sel];
+        fl_t <= {1'b1, tag_of(ms_line[fill_sel])};
+      end
       if (!d_stall) begin
         c_v <= l_go;
         if (l_go) begin
@@ -764,7 +828,9 @@ module m2_texel_bl #(
       // released once filled and no texel waits on it -- nor is about to
       // (named by C1's or D's join)
       for (int s = 0; s < 2; s++)
-        if (ms_busy[s] && ms_filled[s] && !ms_ref[s] && !names[s]) begin
+        // ... and not before its line is IN the RAM (the write lands a cycle
+        // after the fill is taken): a lookup in that gap joins the slot
+        if (ms_busy[s] && ms_filled[s] && !ms_ref[s] && !names[s] && !(fl_v && fl_s == 1'(s))) begin
           ms_busy[s] <= 1'b0;
           if (d_j0 == {1'b1, 1'(s)}) d_j0 <= 2'b00;   // only a held D can still name it
           if (d_j1 == {1'b1, 1'(s)}) d_j1 <= 2'b00;
