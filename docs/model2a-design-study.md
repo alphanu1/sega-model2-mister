@@ -23490,3 +23490,65 @@ fetch per pixel and waits until the first half is measured.
 
 Measure before building: tb_m2_span_tex with a minified scene, misses per
 fetch at level 0 against at the selected level.
+
+**R606 -- MEASURED IN THE REFERENCE: MIP SELECTION IS NOT THE LEVER.
+FRONT-TO-BACK WITH THE FILL SKIP IS. (Corrects the entry above, which named
+mip selection before measuring it.)**
+
+HOW. MAME 0.289 (the version installed here), shallow-cloned into a scratch
+directory -- not third_party/, which is untouched -- with counters added to
+model2rd.ipp's draw_scanline_tex and printed at "End of frame", built for the
+Model 2 driver alone (SUBTARGET/SOURCES: 1,271 files, ten minutes; a full
+MAME is hours). Every textured pixel MAME iterates is fed to FOUR models of
+THIS core's texel cache (m2_texel: direct-mapped, 1,024 lines of 64 bits,
+index waddr[11:2], tag {sheet, upper waddr}; point sample u >> 8, the fold
+at x2 >= 1024, as m2_texel_addr does):
+
+  painter, level 0 -- every pixel of every polygon fetches (THIS CORE TODAY:
+                      back to front, last write wins, as Model 1 does)
+  painter, mip     -- the same, at MAME's level (model2rd.ipp:303)
+  front-to-back skip, level 0 -- only pixels not yet filled fetch (MAME's
+                      `if (fill[x] > 0) continue;`, before the fetch)
+  front-to-back skip, mip
+
+Daytona attract, 150 emulated seconds, -numprocessors 1 (one pixel order),
+7,640 rendered frames with 3D. Per frame:
+
+| region | px iterated | already filled | misses today | mip | ftb | ftb + mip |
+|---|---|---|---|---|---|---|
+| top third | 61,294 | 35.2% | 27,051 | 26,039 | 14,792 | 14,245 |
+| middle | 101,758 | 36.3% | 50,309 | 45,650 | 27,678 | 25,570 |
+| bottom | 93,452 | 26.1% | 9,802 | 9,161 | 6,262 | 6,170 |
+| whole frame | | | 87,162 | 80,850 | 48,732 | 45,985 |
+
+The worst 5% of frames by top-third misses: 142,482 today, 138,885 with mip,
+**44,138 front-to-back (-69%)**, 42,762 both.
+
+Mip level of drawn pixels: L0 95.0%, L1 2.9%, L2 1.3%, L3 0.5%, deeper 0.3%.
+Daytona's texlod keeps almost everything at level 0, so selecting levels
+moves misses 7%. The prediction that the far scenery was minified enough to
+need it was WRONG, and was made from the architecture, not a measurement.
+
+What front-to-back buys is that a third of the top and middle's pixels are
+behind something nearer already drawn, and the reference never fetches their
+texels. This core paints back to front -- Model 1's order (m2_raster_band:
+"paints unconditionally - the last write to a pixel wins"), where Model 1 has
+no textures and overdraw costs nothing -- so every one of those pixels
+fetches, and misses. MAME's notes (model2_v.cpp, "Hardware Renderer Notes")
+say the Model 2 board does exactly this: "Polygons are rendered from
+front-to-back. A fill buffer is used to track which pixels in the framebuffer
+have already been drawn to ... in case the renderer runs out of time and has
+to skip ahead to the next frame." So it is the reference's order, and it
+brings the reference's failure mode with it: out of time, the FAR detail is
+what is lost, not a whole band.
+
+Caveats: MAME renders a whole frame polygon by polygon, this core band by
+band, so absolute hit rates will differ; the fetch and miss RATIOS are what
+transfer. Mip stays deferred as an accuracy item, not a speed one.
+
+Cost, first estimate: the sort's key complement flipped (the store sorts
+ascending already, and complements to get the painter's descending order);
+a 1-bit fill mask per band buffer, 496 x 8 = 3,968 bits, in MLAB (~70 ALM
+per buffer, no M10K); the span walk reads the mask before it requests a
+texel and skips filled pixels; the band writes only unfilled pixels.
+Translucent and checker (moire) pixels do not set the mask, as in MAME.
