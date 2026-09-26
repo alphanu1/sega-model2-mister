@@ -63,9 +63,11 @@ module m2_span_tex #(
   parameter bit          FTB    = 1'b0,
   parameter int unsigned SCR_W  = 496,
   parameter int unsigned BAND_H = 8,
-  localparam int unsigned MROW  = (SCR_W + 31) / 32,
-  localparam int unsigned MDEP  = BAND_H * MROW,
-  localparam int unsigned MAW   = $clog2(MDEP)
+  // Derived -- never overridden. PARAMETERS, not localparams: Quartus 17.0
+  // rejects a localparam in the parameter port list, where Verilator takes it.
+  parameter int unsigned MROW  = (SCR_W + 31) / 32,
+  parameter int unsigned MDEP  = BAND_H * MROW,
+  parameter int unsigned MAW   = $clog2(MDEP)
 ) (
   input  logic               clk,
   input  logic               rst_n,
