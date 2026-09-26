@@ -23689,3 +23689,51 @@ polygon that itself spans more than 2,048 texels. Checked in Python against
 m2_texel_addr's own wrap and mirror: 5,643 random polygons that fit, 0 texel
 mismatches; interior pixels shift by the same offset because the plane is
 linear. tb_m2_geometry and tb_m2_geo pass.
+
+**R608 / R610 -- THE SCENERY DROPOUT: THE WALK READ A LIST THE GAME WAS
+OVERWRITING. MEASURED ON THE BOARD, AND FIXED.**
+
+Ben: "every 5 seconds the scenery vanishes for a split second and then comes
+back ... always been there ... only on really busy screens".
+
+Not the store: in MAME's 300 s of attract the polygons this store keeps
+(>= 4 px) peak at 1,906 a frame, under its 2,048 (all polygons peak at 2,368;
+2% of frames exceed 2,048 before the tiny cull). MAME's own limit is 32,768.
+
+R608 counts list words that drain to buffer RAM AT OR AHEAD of the walk's
+read pointer while a walk runs. s351 (R607 + the counter; clk_sys -0.455 in
+the fill mask only, nothing in the walk -- on the board briefly for this),
+240 s capture:
+
+  - 27 of 29 samples show overwrites; at least 3,795 words in 152 s (an 8-bit
+    field per ~5 s window, so a floor);
+  - two sampled walks retired THREE opcodes where the rest retire 50-100 --
+    the list's head overwritten by the next list's early end: the frame
+    whose scenery vanishes;
+  - 19.7 walks a second.
+
+Daytona's list is single-buffered at address 0 (R211) and the game pushes
+the next one while this core is still walking the last; the reference and
+the board consume a list almost at once, so they never meet it.
+
+R610: m2_geo's push queue does not drain while a walk is running. The words
+wait in the 128-deep queue and, when it fills, push_stall (R260) holds the
+CPU until the walk ends -- a FIFO pacing its writer. The walk's own
+polygon-data writes are not held. Consequence: whenever this walk is slower
+than the game's next list, the GAME now waits instead of the picture
+tearing, so the walk's speed is the frame-rate lever from here on.
+
+Also measured the lighting dropout's suspect path here: the same race can
+hand the walk garbage as op 0x06 and zero the light table until the next
+genuine 0x06 (~7 in 400 s) -- R333's mechanism, recovering. The light table
+was intact over this capture (one 0x06, all 32 entries written), so it is
+not confirmed; R610 removes the mechanism either way.
+
+tb_m2_geo: 76 checks, 0 fail -- after the bench's read side answers `end`
+(0x07800f0f) until the walker tests, since a pointer write triggers a walk
+and a walk waiting on a read the bench never answered now holds every push.
+Boot harness, 30 M instructions: identical to R602's run (371 frames, walk
+counts, TGP output).
+
+s350 did NOT FIT: "requires 4193 LABs, device contains only 4191". The
+design (41,4xx ALM) is at the device edge after R607.

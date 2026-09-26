@@ -329,7 +329,16 @@ module m2_geo #(
                            : (pd_wbase + AW'({pd_widx, 1'b0}));
 
   assign sd_busy = (dst != D_IDLE);
-  assign q_pop   = (dst == D_IDLE) && !pd_req && q_valid;
+  // R610: THE QUEUE DOES NOT DRAIN WHILE A WALK RUNS. Daytona's list is
+  // single-buffered at address 0 and the next one is pushed while this walk
+  // is still reading it; R608 counted 3,795+ words written ahead of the walk
+  // in 152 s and caught walks retiring 3 opcodes (the scenery dropout). Held
+  // here, the words wait in the queue; when it fills, push_stall holds the
+  // CPU -- a FIFO pacing its writer, which is what the board's geometrizer
+  // does -- and the walk always reads the list it was started on. The walk's
+  // own polygon-data writes (pd_req) are not held.
+  logic walk_active;
+  assign q_pop   = (dst == D_IDLE) && !pd_req && q_valid && !walk_active;
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -361,7 +370,7 @@ module m2_geo #(
           sd_wr_din  <= pd_wdata[15:0];
           sd_wr_req  <= 1'b1;
           dst        <= D_LO;
-        end else if (q_valid) begin
+        end else if (q_valid && !walk_active) begin   // R610: as q_pop
           pd_active  <= 1'b0;
           wr_ptr     <= q_data[51:32];
           dw_hi      <= q_data[31:16];
@@ -1003,5 +1012,7 @@ module m2_geo #(
     else if (q_pop && (wst != W_IDLE) && (19'(q_data[48:34]) >= w_ip))
       dbg_overtake <= dbg_overtake + 16'd1;
   end
+
+  assign walk_active = (wst != W_IDLE);   // R610
 
 endmodule

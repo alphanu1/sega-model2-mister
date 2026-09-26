@@ -34,7 +34,15 @@ static std::map<uint32_t,uint16_t> mem;
 static bool trace_wr = false;      // SDRAM word address -> data
 static const uint32_t BASE = 0x16f0000;
 
+// R610: until the walker tests take over the read side, a read is answered
+// with an `end` (MAME's own bufferram fill, 0x07800f0f), so a walk the pointer
+// writes trigger finishes as it would on hardware. The push queue now holds
+// while a walk runs, so a walk left waiting on a read that never comes would
+// keep every push out of memory -- a bench artefact, since the board always
+// answers.
+static bool auto_end = true;
 static void tick() {
+  if (auto_end) { d->rd_ack = 0; if (d->rd_req) { d->rd_data = 0x07800f0fu; d->rd_ack = 1; } }
   // the shared write port: ack a request the cycle after it is seen
   static bool pend = false; static uint32_t pa; static uint16_t pd;
   d->sd_wr_ack = 0;
@@ -158,6 +166,7 @@ int main(int argc,char**argv){
   // and the write pointer advanced once per dword, so the list has no hole
   ck("write pointer after 4000 held pushes", d->dbg_wp, 0x00001000u + 4000u*4u);
 
+  auto_end = false;   // R610: the walker tests serve their own reads from here
   // ---- 7. THE DISPLAY-LIST WALK
   //
   // A SYNTHETIC list with the same shape as Daytona's, because the real one is
