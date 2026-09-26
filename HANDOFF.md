@@ -1,5 +1,53 @@
 # Handoff
 
+## 2026-09-26: `build/seeds/s339` IS ON THE BOARD. CLOCKS 100 / 70 / 35.
+
+clk_mem 100 (video, SDRAM), clk_sys 70 (TGP, geometry, renderer), clk_i960 35.
+s339: clk_mem +0.002, clk_sys +0.195, clk_i960 +3.417, every hold positive,
+16/16 DQ packed, clk_mem global, 40,941 ALM. HDMI -0.139 -- see below.
+
+On the board (240 s capture against s315, the old 100/60/30 keeper):
+critical time -28%, texel wait -26%, and NO LATE BANDS in steady play (s315
+had them in about one sample in eight). Study: R594-R602 and the entries after.
+
+### HDMI slack is not part of "clean", and never was
+
+No build of this core has met the HDMI pixel clock -- s315 was -0.062. The
+failing paths are sys/'s ascal (routing in a 98%-full part), R201 says no
+Quartus Lite setting reaches it, and the framework is not edited here. The
+deploy rule as applied: core clocks >= 0, holds >= 0, HDMI reported. The
+summary script now prints HDMI so it is not invisible again.
+
+### What closed 70/35 (all in the study, R594-R602)
+
+  - Fill: gradient shift registered before its saturate; det magnitude
+    registered before its clz; skip multiply 17x32; reciprocal one stage
+    longer (latency 4, S_PF_NRM waits 4). ~3 cycles more per textured quad.
+  - Tilemap on clk_mem: window/scroll values registered; glyph-cache hit is
+    an AND-OR, not a priority chain.
+  - Geometry: four-way float min/max as six parallel compares.
+  - Quad store: the pairwise tiny test for ANY TINY. R592's version only
+    applied at TINY == 2 and the instance is TINY(4) -- it never took effect.
+  - TGP, the big one: every route out of the address generator into the
+    next-state logic cut. mem_stall and the memory-mapped FIFO strobes come
+    from a registered decode; the I/O address is always a register with
+    io_rd/io_wr only in the _W states; the data RAM is written from the
+    registered destination address only. Each partial fix moved the failure
+    to the next route -- cut them all or the next seed finds one.
+
+### Next
+
+  - Margin: m2_sdram ras_cnt -> sd_a (+0.002 on s339) and vcnt -> mixer
+    (+0.1) are the only thin clk_mem paths left.
+  - Open: road texture precision (study, OPEN ISSUE 2026-09-25; `qu`/`qv`
+    are u/z as 13-bit integers normalised to the nearest vertex -- a lead,
+    not yet measured), lighting dropout, and confirm the stripes stay gone.
+  - Seeds: ~1 in 3 dies inside Quartus (PDB/TDB/sta_scc internal errors).
+    tools/seed-sweep.sh does not run the assembler -- run quartus_asm in the
+    seed directory before flashing.
+
+## EARLIER HANDOFF
+
 ## `build/seeds/s142` IS ON THE BOARD AND RUNNING. RENDERER IS AT 50 MHz.
 
 The 60 MHz renderer was built, measured and REVERTED. It works -- it closed at
