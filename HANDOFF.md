@@ -1,5 +1,21 @@
 # Handoff
 
+## 2026-09-26 (late night): `build/seeds/s398` IS ON THE BOARD. BILINEAR, PIXSTEP 4.
+
+s398: PIXSTEP 4 (Ben: PIXSTEP 2 drops bands on heavy scenes, before bilinear
+too), bilinear (OSD Texture filter), checker. clk_sys +0.471, clk_i960 +2.263,
+clk_mem -0.345 (two paths, m2_texel_bl k_d.u -> a_ax: axis() in stage A --
+standalone +1.34 became -0.35 in the design, 1.7 ns worse than the 0.45 the
+blend's calibration suggested), HDMI -0.537. s396 clk_sys -0.868; s397 a
+Quartus internal error (TDB, tdb_node.cpp:2080 -- tool, not design).
+s395 is Model2.rbf.prev on the board.
+
+BUILDING: s405-s407 = s398 + R626 quarter-pixel vertices (the "6" on the car
+and the missing texture lines -- vertices truncated to whole pixels tilted
+the texture plane; the cache itself is exact on 132,804 real answers).
+NEXT: axis() split -- mirror and half-texel subtract into the K queue's
+write, mask/increment/clamp in A -- no added latency.
+
 ## 2026-09-26 (night): `build/seeds/s395` IS ON THE BOARD. BILINEAR + CHECKER.
 
 s395: clk_sys +0.649, clk_i960 +3.133, clk_mem -0.310 (two paths, both
