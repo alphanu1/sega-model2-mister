@@ -129,18 +129,63 @@ module mb86233_core (
   logic [2:0]  d_stmsub;
   logic [15:0] d_stmm;
 
+  logic d_lab_n;
+  logic d_ldmov_n;
+  logic d_stm_n;
+  logic d_lipl_n;
+  logic d_repgrp_n;
+  logic d_ldi_n;
+  logic d_branch_n;
+  logic d_unimpl_n;
+  logic [8:0] d_r1_n;
+  logic [8:0] d_r2_n;
+  logic [4:0] d_alu_n;
+  logic [2:0] d_sub_n;
+  logic [2:0] d_op7_n;
+  logic [4:0] d_cond_n;
+  logic [2:0] d_bsub_n;
+  logic [15:0] d_bdata_n;
+  logic d_binv_n;
+  logic [5:0] d_ldireg_n;
+  logic [31:0] d_ldival_n;
+  logic [1:0] d_lsel_n;
+  logic [31:0] d_lval_n;
+  logic [23:0] d_lpimm_n;
+  logic [2:0] d_fsub_n;
+  logic d_clra_n;
+  logic d_clrb_n;
+  logic d_clrd_n;
+  logic d_repreg_n;
+  logic [7:0] d_repimm_n;
+  logic [2:0] d_stmsub_n;
+  logic [15:0] d_stmm_n;
+  logic [1:0] x_src_sp_n;
+  logic [1:0] x_dst_sp_n;
+  logic [1:0] x_lab_b_sp_n;
+  logic x_src_reg_n;
+  logic x_dst_reg_n;
+  logic x_src_bank_n;
+  logic x_dst_bank_n;
+  logic x_src_200_n;
+  logic x_dst_200_n;
+  logic x_src_r2_n;
+  logic x_dst_r2_n;
+  logic x_lab2_n;
+  logic x_lab_a200_n;
+  logic x_lab_b200_n;
+  logic x_unimpl_n;
   mb86233_dec u_dec (
-    .opcode(ir),
-    .is_lab(d_lab), .is_ldmov(d_ldmov), .is_stm(d_stm), .is_lipl(d_lipl),
-    .is_rep_grp(d_repgrp), .is_ldi(d_ldi), .is_branch(d_branch),
-    .unimplemented(d_unimpl),
-    .r1(d_r1), .r2(d_r2), .alu(d_alu), .sub_op(d_sub), .op7_sub(d_op7),
-    .br_cond(d_cond), .br_subtype(d_bsub), .br_data(d_bdata), .br_invert(d_binv),
-    .ldi_reg(d_ldireg), .ldi_val(d_ldival),
-    .lipl_sel(d_lsel), .lipl_val(d_lval), .lipl_p_imm(d_lpimm),
-    .f_sub(d_fsub), .f_clr_a(d_clra), .f_clr_b(d_clrb), .f_clr_d(d_clrd),
-    .f_rep_from_reg(d_repreg), .f_rep_imm(d_repimm),
-    .stm_sub(d_stmsub), .stm_m(d_stmm)
+    .opcode(prog_rdata),
+    .is_lab(d_lab_n), .is_ldmov(d_ldmov_n), .is_stm(d_stm_n), .is_lipl(d_lipl_n),
+    .is_rep_grp(d_repgrp_n), .is_ldi(d_ldi_n), .is_branch(d_branch_n),
+    .unimplemented(d_unimpl_n),
+    .r1(d_r1_n), .r2(d_r2_n), .alu(d_alu_n), .sub_op(d_sub_n), .op7_sub(d_op7_n),
+    .br_cond(d_cond_n), .br_subtype(d_bsub_n), .br_data(d_bdata_n), .br_invert(d_binv_n),
+    .ldi_reg(d_ldireg_n), .ldi_val(d_ldival_n),
+    .lipl_sel(d_lsel_n), .lipl_val(d_lval_n), .lipl_p_imm(d_lpimm_n),
+    .f_sub(d_fsub_n), .f_clr_a(d_clra_n), .f_clr_b(d_clrb_n), .f_clr_d(d_clrd_n),
+    .f_rep_from_reg(d_repreg_n), .f_rep_imm(d_repimm_n),
+    .stm_sub(d_stmsub_n), .stm_m(d_stmm_n)
   );
 
   logic [1:0] x_src_sp, x_dst_sp, x_lab_b_sp;
@@ -149,15 +194,16 @@ module mb86233_core (
   logic       x_lab2, x_lab_a200, x_lab_b200, x_unimpl;
 
   mb86233_xfer u_xfer (
-    .is_lab(d_lab), .is_ldmov(d_ldmov), .sub_op(d_sub), .op7_sub(d_op7),
-    .src_space(x_src_sp), .src_is_reg(x_src_reg), .src_bank(x_src_bank),
-    .src_add200(x_src_200), .src_use_r2(x_src_r2),
-    .dst_space(x_dst_sp), .dst_is_reg(x_dst_reg), .dst_bank(x_dst_bank),
-    .dst_add200(x_dst_200), .dst_use_r2(x_dst_r2),
-    .lab_two_reads(x_lab2), .lab_b_space(x_lab_b_sp),
-    .lab_a_add200(x_lab_a200), .lab_b_add200(x_lab_b200),
-    .unimplemented(x_unimpl)
+    .is_lab(d_lab_n), .is_ldmov(d_ldmov_n), .sub_op(d_sub_n), .op7_sub(d_op7_n),
+    .src_space(x_src_sp_n), .src_is_reg(x_src_reg_n), .src_bank(x_src_bank_n),
+    .src_add200(x_src_200_n), .src_use_r2(x_src_r2_n),
+    .dst_space(x_dst_sp_n), .dst_is_reg(x_dst_reg_n), .dst_bank(x_dst_bank_n),
+    .dst_add200(x_dst_200_n), .dst_use_r2(x_dst_r2_n),
+    .lab_two_reads(x_lab2_n), .lab_b_space(x_lab_b_sp_n),
+    .lab_a_add200(x_lab_a200_n), .lab_b_add200(x_lab_b200_n),
+    .unimplemented(x_unimpl_n)
   );
+
 
   // ==================================================================
   // Register file, sequencer, AGU
@@ -395,6 +441,109 @@ module mb86233_core (
   } state_e;
 
   state_e state;
+
+  // R577: THE DECODE IS REGISTERED BESIDE ir, from the program RAM's output in
+  // S_FETCH_W. At 70 MHz the core's worst paths all began at ir and went through
+  // u_dec and u_xfer into the AGU, the register file and the I/O write decode
+  // (s312: ir[20] -> x0 / isqrt_base / mem_cnt, -1.86 ns at 70). The decode is
+  // ready in S_DECODE exactly as before -- ir is loaded on the same edge -- so
+  // no state gains a cycle; every later state now starts from registers.
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      d_lab <= '0;
+      d_ldmov <= '0;
+      d_stm <= '0;
+      d_lipl <= '0;
+      d_repgrp <= '0;
+      d_ldi <= '0;
+      d_branch <= '0;
+      d_unimpl <= '0;
+      d_r1 <= '0;
+      d_r2 <= '0;
+      d_alu <= '0;
+      d_sub <= '0;
+      d_op7 <= '0;
+      d_cond <= '0;
+      d_bsub <= '0;
+      d_bdata <= '0;
+      d_binv <= '0;
+      d_ldireg <= '0;
+      d_ldival <= '0;
+      d_lsel <= '0;
+      d_lval <= '0;
+      d_lpimm <= '0;
+      d_fsub <= '0;
+      d_clra <= '0;
+      d_clrb <= '0;
+      d_clrd <= '0;
+      d_repreg <= '0;
+      d_repimm <= '0;
+      d_stmsub <= '0;
+      d_stmm <= '0;
+      x_src_sp <= '0;
+      x_dst_sp <= '0;
+      x_lab_b_sp <= '0;
+      x_src_reg <= '0;
+      x_dst_reg <= '0;
+      x_src_bank <= '0;
+      x_dst_bank <= '0;
+      x_src_200 <= '0;
+      x_dst_200 <= '0;
+      x_src_r2 <= '0;
+      x_dst_r2 <= '0;
+      x_lab2 <= '0;
+      x_lab_a200 <= '0;
+      x_lab_b200 <= '0;
+      x_unimpl <= '0;
+    end else if (state == S_FETCH_W) begin
+      d_lab <= d_lab_n;
+      d_ldmov <= d_ldmov_n;
+      d_stm <= d_stm_n;
+      d_lipl <= d_lipl_n;
+      d_repgrp <= d_repgrp_n;
+      d_ldi <= d_ldi_n;
+      d_branch <= d_branch_n;
+      d_unimpl <= d_unimpl_n;
+      d_r1 <= d_r1_n;
+      d_r2 <= d_r2_n;
+      d_alu <= d_alu_n;
+      d_sub <= d_sub_n;
+      d_op7 <= d_op7_n;
+      d_cond <= d_cond_n;
+      d_bsub <= d_bsub_n;
+      d_bdata <= d_bdata_n;
+      d_binv <= d_binv_n;
+      d_ldireg <= d_ldireg_n;
+      d_ldival <= d_ldival_n;
+      d_lsel <= d_lsel_n;
+      d_lval <= d_lval_n;
+      d_lpimm <= d_lpimm_n;
+      d_fsub <= d_fsub_n;
+      d_clra <= d_clra_n;
+      d_clrb <= d_clrb_n;
+      d_clrd <= d_clrd_n;
+      d_repreg <= d_repreg_n;
+      d_repimm <= d_repimm_n;
+      d_stmsub <= d_stmsub_n;
+      d_stmm <= d_stmm_n;
+      x_src_sp <= x_src_sp_n;
+      x_dst_sp <= x_dst_sp_n;
+      x_lab_b_sp <= x_lab_b_sp_n;
+      x_src_reg <= x_src_reg_n;
+      x_dst_reg <= x_dst_reg_n;
+      x_src_bank <= x_src_bank_n;
+      x_dst_bank <= x_dst_bank_n;
+      x_src_200 <= x_src_200_n;
+      x_dst_200 <= x_dst_200_n;
+      x_src_r2 <= x_src_r2_n;
+      x_dst_r2 <= x_dst_r2_n;
+      x_lab2 <= x_lab2_n;
+      x_lab_a200 <= x_lab_a200_n;
+      x_lab_b200 <= x_lab_b200_n;
+      x_unimpl <= x_unimpl_n;
+    end
+  end
+
 
   // The ALU runs for exactly three instruction types. MAME calls alu_pre and
   // alu_post only from cases 0x00, 0x07 and 0x0f; everywhere else the bits that

@@ -531,15 +531,24 @@ module m2_geometry (
 
   logic [31:0] hu [4], hv [4];
   logic [31:0] ptex;  logic [7:0] plum;
-  logic        c_bad, c_behind;            // R566: the cull, registered
-  logic [31:0] c_zsel;
+  logic        c_bad;                      // R566: the non-finite test, registered
+  logic [1:0]  c_zmode;                    // R578
+  // R578: THE z PICK AND "BEHIND THE EYE" FROM THE REGISTERED MIN AND MAX. At 70
+  // MHz the four-way float min/max trees still fed c_zsel in Q_IDLE's cycle
+  // (s312: p0prev -> c_zsel, -1.73 ns at 70). hzmin/hzmax are already latched
+  // with the polygon, so Q_CHK picks from them -- the same values, a cycle on.
+  wire  [31:0] c_zsel   = (c_zmode == 2'd0) ? zprev
+                        : (c_zmode == 2'd1) ? hzmin
+                        : (c_zmode == 2'd2) ? hzmax
+                                            : 32'h5011B5EA;   // 1e10
+  wire         c_behind = hzmax[31] && (hzmax[30:0] != 31'd0);
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       qst <= Q_IDLE; qi <= 2'd0; clip_in_valid <= 1'b0; hzmin <= 32'd0; hzmax <= 32'd0;
       for (int k = 0; k < 4; k++) begin hu[k] <= 32'd0; hv[k] <= 32'd0; end
       ptex <= 32'd0; plum <= 8'd0;
-      c_bad <= 1'b0; c_behind <= 1'b0; c_zsel <= 32'd0;
+      c_bad <= 1'b0; c_zmode <= 2'd0;
       zprev <= 32'h5011B5EA; hzkey <= 16'd0; hzpre <= '0;   // 1e10, as render_frame_start sets it
       dbg_nonfinite <= 16'd0; dbg_behind <= 16'd0; pj_wait <= 10'd0; dbg_pj_lost <= 16'd0;
       cvalid <= 1'b0;
@@ -584,8 +593,7 @@ module m2_geometry (
           hzmin <= zmin_c;
           hzmax <= zmax_c;
           c_bad    <= poly_bad;
-          c_behind <= zc_behind;
-          c_zsel   <= zsel_c;
+          c_zmode  <= poly_zmode;          // R578: picked in Q_CHK, from hzmin/hzmax
           qst      <= Q_CHK;
         end
 
@@ -593,7 +601,7 @@ module m2_geometry (
           // R246: the reference sets raster->polygon_z BEFORE it culls, so a
           // culled polygon still decides what a later "old value" reads.
           zprev <= c_zsel;
-          if (c_bad || c_behind) begin
+          if (c_bad || c_behind) begin      // R578: c_zsel / c_behind are wires on hzmin/hzmax
             if (c_bad) dbg_nonfinite <= dbg_nonfinite + 16'd1;
             else       dbg_behind    <= dbg_behind + 16'd1;
             cvalid <= 1'b0;                        // R217: a refused polygon breaks the chain
