@@ -23341,3 +23341,31 @@ in S_DST_W alone. It used to write the same word in both S_DST and S_DST_W:
 the boot harness's data-RAM write count is exactly half (752 -> 376), TGP
 output, retires, pops and pushes identical. tb_mb86233_mem (default mode)
 178,399 checks, tb_mb86233_core 45 + 8,000 lockstep, 0 fail.
+
+**s334-s336 (R600-R602 in): EVERY CORE CLOCK CLOSES; THE FRAMEWORK'S HDMI
+SCALER IS WHAT IS LEFT.**
+
+| seed | clk_mem 100 | clk_sys 70 | clk_i960 35 | HDMI 148.5 | ALM |
+|---|---|---|---|---|---|
+| s334 | +0.318 | +0.005 | +3.558 | -0.939 | 40,903 |
+| s335 | -0.033 | +0.388 | +3.196 | -0.358 | 40,906 |
+| s336 | -0.357 | +0.255 | +3.609 | -0.247 | 40,881 |
+
+All holds positive, 16/16 DQ packed, clk_mem global, no SDC critical
+warnings, no internal errors (the first batch of three in a row with none).
+clk_sys is positive on all three seeds for the first time at 70 MHz, so
+R600-R602 closed the TGP fan-out for good rather than moving it. s334 is
+clean on every clock the core owns. What fails is sys/'s ascal (and the
+shadowmask ahead of it) on the HDMI pixel clock, 6.732 ns: o_vdivr ->
+o_vfrac -0.939, o_acpt4 -> o_hpixs -0.466, the polyphase taps -0.3 -- the
+framework's own logic, feeling the congestion of a 98%-full part. Its slack
+has ranged -0.114 to -0.939 over the last nine seeds, so it is placement.
+
+**s334 on the board, briefly** (HDMI not clean, so not a keeper; s315 put
+back). 240 s capture:
+  - the TGP runs -- the same program-address histogram as s320, textured
+    pixels rendered, glyph and texel caches normal -- so R600-R602's extra
+    cycle per external and FIFO access broke nothing the board can see;
+  - critical time 505 (s320: 1,394; s315: 1,599), texel wait 415 (1,080;
+    1,204);
+  - LATE BANDS: NONE, in every one of 33 samples, start-up included.
