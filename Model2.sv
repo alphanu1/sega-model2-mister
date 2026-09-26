@@ -5807,6 +5807,9 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1),   // R
 	.tex_base0(GAME_TEXS0), .tex_base1(GAME_TEXS1), .tex_inval(cpu_tex_inval),
 	.tex_bilinear(!texpt_s[2]),   // R620
 	.tex_m2_en(tex_m2_en), .tex_m2_req(tex_m2_req), .tex_m2_addr(tex_m2_addr),
+	// R628: the texel cache's third and fourth ports, unused at TXNS = 2
+	.tex_m3_en(1'b0), .tex_m3_req(), .tex_m3_addr(), .tex_m3_ack(1'b0), .tex_m3_data(64'd0),
+	.tex_m4_en(1'b0), .tex_m4_req(), .tex_m4_addr(), .tex_m4_ack(1'b0), .tex_m4_data(64'd0),
 	.tex_m2_ack(tex_m2_ack), .tex_m2_data(tex_m2_data),
 	.tex_m_req(tex_m_req), .tex_m_addr(tex_m_addr),
 	.tex_m_ack(tex_m_ack), .tex_m_data(tex_m_data),
