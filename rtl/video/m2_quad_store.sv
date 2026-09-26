@@ -265,11 +265,17 @@ module m2_quad_store #(
   // Which of the six 64-row bands this quad's rows touch. Computed from the
   // vertex extremes, clamped: a quad above the screen or below it lands in no
   // band and is never replayed.
+  function automatic logic signed [15:0] smin(input logic signed [15:0] p, q);
+    smin = (q < p) ? q : p;
+  endfunction
+  function automatic logic signed [15:0] smax(input logic signed [15:0] p, q);
+    smax = (q > p) ? q : p;
+  endfunction
   function automatic [2*BW-1:0] band_range(input logic signed [15:0] a, b, c, d);
     logic signed [15:0] lo, hi2;
     begin
-      lo  = a;  if (b < lo)  lo  = b;  if (c < lo)  lo  = c;  if (d < lo)  lo  = d;
-      hi2 = a;  if (b > hi2) hi2 = b;  if (c > hi2) hi2 = c;  if (d > hi2) hi2 = d;
+      lo  = smin(smin(a, b), smin(c, d));    // R579: balanced, as tiny_quad
+      hi2 = smax(smax(a, b), smax(c, d));
       if (hi2 < 0 || lo > $signed(16'(SCR_H - 1))) band_range = {BW'(0), BW'(NBANDS-1)};   // lo > hi: never
       else begin
         if (lo  < 0)                        lo  = 16'sd0;
@@ -289,10 +295,12 @@ module m2_quad_store #(
   function automatic logic tiny_quad(input logic signed [15:0] x0, y0, x1, y1, x2, y2, x3, y3);
     logic signed [15:0] xl, xh, yl, yh;
     begin
-      xl = x0; if (x1 < xl) xl = x1; if (x2 < xl) xl = x2; if (x3 < xl) xl = x3;
-      xh = x0; if (x1 > xh) xh = x1; if (x2 > xh) xh = x2; if (x3 > xh) xh = x3;
-      yl = y0; if (y1 < yl) yl = y1; if (y2 < yl) yl = y2; if (y3 < yl) yl = y3;
-      yh = y0; if (y1 > yh) yh = y1; if (y2 > yh) yh = y2; if (y3 > yh) yh = y3;
+      // R579: BALANCED TREES, two compare-and-select levels rather than three
+      // in series -- the same answers (s312: qsy -> a_tiny, -1.56 ns at 70).
+      xl = smin(smin(x0, x1), smin(x2, x3));
+      xh = smax(smax(x0, x1), smax(x2, x3));
+      yl = smin(smin(y0, y1), smin(y2, y3));
+      yh = smax(smax(y0, y1), smax(y2, y3));
       tiny_quad = (TINY != 0) && ((xh - xl) < $signed(16'(TINY))) && ((yh - yl) < $signed(16'(TINY)));
     end
   endfunction
