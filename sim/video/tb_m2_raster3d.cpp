@@ -480,7 +480,7 @@ int main(int argc, char **argv) {
       d->q_u0 = sat13(U[0] - um); d->q_v0 = sat13(Vv[0] - vm); d->q_u1 = sat13(U[1] - um); d->q_v1 = sat13(Vv[1] - vm);
       d->q_u2 = sat13(U[2] - um); d->q_v2 = sat13(Vv[2] - vm); d->q_u3 = sat13(U[3] - um); d->q_v3 = sat13(Vv[3] - vm);
       // colour = MAME's index, in the bits that survive RGB565: idx[4:0] in R[7:3], idx[10:5] in G[7:2]
-      d->q_tex = tex & 0xffffff; d->q_col = ((uint32_t(p.idx) & 31) << 19) | (((uint32_t(p.idx) >> 5) & 63) << 10); d->q_moire = 0;
+      d->q_tex = tex & 0xffffff; d->q_col = ((uint32_t(p.idx) & 31) << 19) | (((uint32_t(p.idx) >> 5) & 63) << 10); d->q_moire = (tex >> 11) & 1;   // R623
       d->q_z = 0x3F800000u | (p.z & 0xffff);
       d->q_end = last;
       tick(); ++nq;

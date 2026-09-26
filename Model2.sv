@@ -5810,7 +5810,12 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1),   // R
 	.dbg_texsweep(tex_sweep), .dbg_texnz(tex_nz),
 	.dbg_fill_hot(r3d_fill_hot), .dbg_fill_hotcyc(r3d_fill_hotcyc),   // R436
 	.dbg_walk_hot(r3d_walk_hot), .dbg_walk_hotcyc(r3d_walk_hotcyc),
-	.q_moire(1'b0), .q_end(q3d_end),
+	// R623: THE CHECKER BIT, WHICH WAS NEVER CONNECTED. poly_tex[11] is
+	// texheader[0] bit 15, MAME's `checker` (model2_v.cpp): the polygon paints
+	// every other pixel on a (x ^ y) grid -- how Model 2 draws the car's
+	// shadow and the minimap panel. The band has stippled since R225; it was
+	// fed a constant 0, so every checker polygon came out solid.
+	.q_moire(q3d_tex[11]), .q_end(q3d_end),
 	.scan_clk(clk_mem), .scan_x(vid_x), .scan_y(vid_y),   // R564: the video's clock
 	.scan_col(r3d_col), .scan_hit(r3d_hit),
 	.dbg_quads(r3d_quads), .dbg_dropped(r3d_dropped), .dbg_tiny(r3d_tiny),

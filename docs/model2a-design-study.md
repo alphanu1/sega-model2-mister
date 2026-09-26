@@ -24107,3 +24107,49 @@ need (R621), so PIXSTEP 1 with bilinear is further off, not nearer.
 Standalone area measurement is the lever this project did not use before:
 twelve seconds of map and fit on one module, against 25 minutes for the
 design. Use it before any new block goes into a full build.
+
+**R623 -- THE CHECKER BIT WAS NEVER CONNECTED.** Ben's photos, core against
+hardware on the same stretch: hardware draws the car's shadow as a
+checkerboard -- the road shows through every other pixel -- and ours is a
+solid black slab; the minimap panel is see-through on hardware and black
+here. model2_v.cpp: `extra.checker = (poly->texheader[0] >> 15) & 1`, and
+model2rd.ipp paints only pixels where (x ^ scanline) & 1, fill flag set on
+the painted ones only. This core has stippled in m2_raster_band since R225
+("moire"), carried the flag through the quad store and both span paths, and
+packed hdr0[15] into poly_tex[11] -- and Model2.sv fed m2_raster3d
+`.q_moire(1'b0)`. Nothing in the study records why; it was never wired.
+Now `.q_moire(q3d_tex[11])`. The FTB mask needs nothing: stipple holes are
+never written, so they never set it (R607), exactly MAME's fill[] rule.
+Frame 2000 has 32 checker polygons, 29 of them flat, but only 16 visible
+checker pixels, so the differential cannot see this one; the board can.
+
+Also found on the way: MAME takes wrap-y from texheader[0] bit 7
+(model2_v.cpp: texwrapy = (h0 >> 7) & 1 & ~mirrory). poly_tex has no slot
+for it (bit 8 became translucent, R326), so m2_texel_bl wraps v unless
+mirrored. Where bit 7 is clear, the last row blends into the first instead
+of clamping -- a one-texel seam at worst. Restoring it widens the 24-bit
+texture word through the quad store and span queue. Open.
+
+**R624 -- "TOO DARK": THE TEXTURED PATH MATCHES MAME; MAME'S GAMMA IS THE
+GAP.** Ben: "our lighting is too dark ... changed the OSD to 100% and it's
+still too dark", then "the monitor might have the brightness too high".
+Measured rather than judged from photos: the scratch MAME now also dumps
+lumaram, colorxlat, palram and each textured pixel's filtered texel and
+final luma (M2COL). On frame 2000, every textured pixel (172,199):
+
+    mean RGB, MAME's exact path       (75.4, 93.9, 82.2)
+    mean RGB, this core at 100%        (75.2, 94.5, 81.2)
+
+Daytona's luma table in use is the identity ramp (lumaram[i] = i/2, base 0,
+172,107 of the pixels; base 0x80 is its inverse, 92 pixels) and the 63 cap
+is never reached. So "colour x texel" at 100% is MAME's brightness to 1%,
+and the OSD default of 50% is half of it. MAME's render of the frame has the
+same mid-grey road as ours.
+
+What remains is the gamma curve both paths share, max((i - 64) * 255/191,
+0) -- MAME's own comment: "real cabinets probably have their monitors
+calibrated depending on the game". It sends everything below 64 to black.
+The hardware photo is brighter and bluer than MAME, which is that curve or
+the monitor, and a photo cannot separate them. Next: a run-time gamma
+switch at both sites (m2_palette for 2D, m2_geo_engine's gam() for 3D) so
+the choice is made by eye on the user's own screen.
