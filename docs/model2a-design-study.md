@@ -23956,3 +23956,12 @@ the road's texture streams toward the vanishing point at mid and far
 distance, which it had not since R339 (the open issue of 2026-09-25). The
 cause was R616's half pixel and R618's saturated gradients, found with the
 3D frame differential (R615).
+
+**R619 -- PIXSTEP 1 (Ben: "PIXSTEP 2, can we go to one?").** Frame 2000
+through the differential at PIXSTEP 1: 72.7% of textured pixels within a
+texel of MAME (68.8% at 2), 5-16 texels 0.7% (1.6%), 251,862 fetches
+(132,246 at 2); every band completes at the bench's line time. It paints
+161,996 pixels to PIXSTEP 2's 172,368: each pixel of a translucent texture
+now decides its own transparency, so point-sampled foliage has more holes
+where nothing lies behind -- MAME decides on bilinear alpha, which is the
+next step. The board decides whether the texel path keeps the bands.

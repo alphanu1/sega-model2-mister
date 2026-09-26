@@ -5772,7 +5772,7 @@ wire [63:0] tex_m2_data = p_dout[2];
 
 // R543: back to 8x6 -- R542's 16x3 won in the bench and not on the board.
 m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1),   // R607
-              .PXC(1'b1), .PIXSTEP(2),   // R616: pixel-centre planes, a texel per two pixels
+              .PXC(1'b1), .PIXSTEP(1),   // R616: pixel-centre planes; R619: a texel per pixel
               .TWO_CLOCKS(1'b1), .TEX_AW(SDR_AW)) u_raster3d (   // R564: scan on clk_mem
 	// R318: clk_mem carries m2_texel, which runs at 100 MHz inside this module.
 	.clk(clk_sys), .clk_mem(clk_mem), .rst_n(mem_rst_n),
