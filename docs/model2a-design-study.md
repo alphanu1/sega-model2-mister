@@ -23417,3 +23417,15 @@ play in about one sample in eight.
     copy one scan_clk later picks the same buffer for every visible pixel
     (vcnt -> mix_r_q, +0.105 on s339). tb_m2_raster3d frame hashes identical,
     on one clock and with M2_R3D_SCANMEM.
+
+**s340-s342 (R603-R604 in), AND R605.** s341 died in Quartus. s340: clk_mem
+-0.074, clk_sys +0.942, i960 +3.697, HDMI **-0.032** (the best HDMI of any
+build); s342: clk_mem -0.047, clk_sys +0.162, HDMI -1.214. Holds positive,
+ALM 40,942 / 40,988. Each misses clk_mem on ONE family: s340 the tilemap's
+line-buffer RAM -> lane/bank select -> m2_tile_mixer -> pal_addr_q (-0.074);
+s342 m2_sdram rd_ok -> cmd and pend -> rr_mask (-0.047, -0.017), which no
+other recent seed shows. R605 registers the four line-buffer lanes before the
+mixer: in R570's ce_pix accounting (6.25 clk_mem cycles a pixel) the palette
+data now lands at E+5 for a ce at E+6 at the earliest -- exactly in time. The
+2D frame diff runs at the hardware ce rate, 6- and 7-cycle gaps both, and
+caught R582's one-pixel shift: still EXACT against MAME, 190,464 of 190,464.

@@ -760,12 +760,20 @@ module m2_video #(
   logic [3:0][11:0] mix_pal;
   logic [3:0]       mix_transp, mix_prio, mix_masked;
 
+  // R605: THE FOUR LANES REGISTERED BEFORE THE MIXER. Line-buffer RAM ->
+  // lane and bank select -> mixer -> pal_addr_q was one clk_mem cycle (s340:
+  // -0.074 ns). The chain below is timed in ce_pix periods of 6.25 clk_mem
+  // cycles (R570): hcnt moves at E, the line buffer answers at E+1, this
+  // register at E+2, pal_addr_q E+3, the palette RAM E+4, pal_data_q E+5,
+  // and the next ce is E+6 at the earliest -- exactly in time.
+  logic [14:0] rd_qq [4];
+  always_ff @(posedge clk) for (int L = 0; L < 4; L++) rd_qq[L] <= rd_q[L];
   always_comb begin
     for (int L = 0; L < 4; L++) begin
-      mix_pal[L]    = rd_q[L][11:0];
-      mix_transp[L] = rd_q[L][12];
-      mix_prio[L]   = rd_q[L][13];
-      mix_masked[L] = rd_q[L][14];
+      mix_pal[L]    = rd_qq[L][11:0];
+      mix_transp[L] = rd_qq[L][12];
+      mix_prio[L]   = rd_qq[L][13];
+      mix_masked[L] = rd_qq[L][14];
     end
   end
 
