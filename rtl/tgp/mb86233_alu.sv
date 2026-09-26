@@ -202,6 +202,20 @@ module mb86233_alu #(
       if (cxf_mag[i]) cxf_lzc = 6'(31 - i);
   end
 
+  // R588: THE CONVERT IS SPLIT ACROSS THE FIRST TWO PIPELINE STAGES. From
+  // pre_d it was a negate, a 32-bit leading-zero count, a barrel shift, the
+  // rounding add and the result selects into the delay line's first entry in
+  // one cycle (s317: pre_d -> pop_rtl_0, -0.571 ns at 70 MHz). Stage 1 now
+  // registers the magnitude, the count and the sign; the shift, rounding and
+  // pack happen from those, and the result joins the delay line at stage 2.
+  // The line is ALU_LAT deep either way, so the op's latency is unchanged.
+  logic [31:0] c1_mag;
+  logic [5:0]  c1_lzc;
+  logic        c1_sign;
+  always_ff @(posedge clk) begin
+    c1_mag <= cxf_mag; c1_lzc <= cxf_lzc; c1_sign <= cxf_sign;
+  end
+
   logic [31:0] cxf_norm;
   logic [7:0]  cxf_exp;
   logic [22:0] cxf_frac;
@@ -211,8 +225,8 @@ module mb86233_alu #(
 
   always_comb begin
     // Leading one to bit 31, so the fraction lands at [30:8].
-    cxf_norm = cxf_mag << cxf_lzc;
-    cxf_exp  = 8'd127 + 8'd31 - 8'(cxf_lzc);
+    cxf_norm = c1_mag << c1_lzc;                      // R588: stage 2, from registers
+    cxf_exp  = 8'd127 + 8'd31 - 8'(c1_lzc);
     cxf_frac = cxf_norm[30:8];
     cxf_g    = cxf_norm[7];
     cxf_s    = |cxf_norm[6:0];
@@ -221,12 +235,12 @@ module mb86233_alu #(
     cxf_up       = cxf_g & (cxf_s | cxf_frac[0]);
     cxf_frac_rnd = {1'b0, cxf_frac} + {23'd0, cxf_up};
 
-    if (cxf_mag == 32'd0)
+    if (c1_mag == 32'd0)
       cxf_result = 32'd0;                       // float(0) is +0, never -0
     else if (cxf_frac_rnd[23])
-      cxf_result = {cxf_sign, cxf_exp + 8'd1, 23'd0};
+      cxf_result = {c1_sign, cxf_exp + 8'd1, 23'd0};
     else
-      cxf_result = {cxf_sign, cxf_exp, cxf_frac_rnd[22:0]};
+      cxf_result = {c1_sign, cxf_exp, cxf_frac_rnd[22:0]};
   end
 
   // ------------------------------------------------------------------
@@ -318,7 +332,7 @@ module mb86233_alu #(
       mb86233_pkg::ALU_LSLD: int_result = reg_d << shamt;
       mb86233_pkg::ALU_ASLD: int_result = reg_d << shamt;
       mb86233_pkg::ALU_ASRD: int_result = 32'($signed(reg_d) >>> shamt);
-      mb86233_pkg::ALU_CXFD: int_result = cxf_result;
+      mb86233_pkg::ALU_CXFD: int_result = 32'd0;      // R588: finished at stage 2
       mb86233_pkg::ALU_CFXD: int_result = cfx_result;
       default:  int_result = 32'd0;
     endcase
@@ -385,7 +399,10 @@ module mb86233_alu #(
       pxv[1] <= xfer_d_valid; pxd[1] <= xfer_d_data;
       for (pi = 2; pi <= ALU_LAT; pi = pi + 1) begin
         pv[pi]   <= pv[pi-1];   pop[pi]  <= pop[pi-1];
-        pint[pi] <= pint[pi-1]; pbit[pi] <= pbit[pi-1];
+        // R588: cxfd's result, finished from stage 1's registers, enters here.
+        if (pi == 2 && pop[1] == mb86233_pkg::ALU_CXFD) pint[pi] <= cxf_result;
+        else                                            pint[pi] <= pint[pi-1];
+        pbit[pi] <= pbit[pi-1];
         pst[pi]  <= pst[pi-1];  psrc[pi] <= psrc[pi-1];
         pxv[pi]  <= pxv[pi-1];  pxd[pi]  <= pxd[pi-1];
       end

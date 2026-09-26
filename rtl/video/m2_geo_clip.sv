@@ -313,6 +313,11 @@ module m2_geo_clip (
   wire [31:0] a_v = plane_x ? ax : ay;
   wire [31:0] b_v = plane_x ? bx : by;
   wire [31:0] test_v = plane_x ? qx[ti] : qy[ti];
+  // R587: registered in K_TEST, which always waits a cycle for the multiplier
+  // grant, so K_TESTW's float compare starts from a register instead of ti's
+  // 4:1 vertex mux (s317: ti -> test_v -> fkey -> is_out, -0.406 ns at 70).
+  logic [31:0] test_v_q;
+  always_ff @(posedge clk) if (kst == K_TEST) test_v_q <= test_v;
 
   // A child vertex is named rather than copied: bit 2 says "from a temporary",
   // bits 1:0 index the quad or the temporaries.
@@ -474,7 +479,7 @@ module m2_geo_clip (
         end
         K_TEST:  if (mul_gnt) kst <= K_TESTW;
         K_TESTW: if (mul_rsp) begin
-          is_out[ti] <= plane_gt ? fgt(test_v, mul_res) : fgt(mul_res, test_v);
+          is_out[ti] <= plane_gt ? fgt(test_v_q, mul_res) : fgt(mul_res, test_v_q);   // R587
           if (ti == 2'd3) begin
             // Decided on the last vertex, so the whole flag word is ready one
             // cycle later - which is why the decision lives in K_ROT.

@@ -150,35 +150,51 @@ set_clock_groups -asynchronous \
 # the finished STA report instead.
 
 
-# ---- R563: THE TEXEL QUEUE'S PAYLOAD IS MULTICYCLE BY PROTOCOL.
+# ---- R563's texel-queue multicycle exceptions are GONE (R590). They relaxed
+# q_* -> f_* and r_tex -> the span walk while clk_mem and clk_sys were one
+# related group; since R568 those paths cross between asynchronous groups and
+# are cut, so the exceptions had nothing left to act on -- and once R583 moved
+# the address into the queue their target list stopped matching, which left a
+# critical warning on every build. A warning that is always there is one that
+# stops being read.
+
+
+# ---- R586: THE CPU BRIDGE'S PAYLOAD IS TWO clk_sys CYCLES BY PROTOCOL.
 #
-# m2_texel_cdc (instance u_texel_x2) is an asynchronous FIFO: a request is
-# written into q_* on the core clock, and its slot is read into f_tex/f_u/f_v
-# on clk_mem only after the Gray-coded issue pointer has crossed -- at least
-# three clk_mem edges later. An answer is written into r_tex on clk_mem and
-# read on the core clock only after the answer pointer has crossed -- at least
-# two core edges later. While the two clocks are one PLL at 2:1, STA would
-# otherwise time both at 10 ns, and that is exactly what failed on s285 when
-# R553 widened the queue to eight (R558).
-#
-# The queue's READ side is excluded: an MLAB's portb registers are clocked by
-# clk_mem and move every cycle while the queue streams, and must stay timed.
-# Guarded, because an empty collection makes the exception a silent no-op.
-set txq_all  [get_keepers -nowarn {*u_texel_x2|q_*}]
-set txq_rd   [get_keepers -nowarn {*u_texel_x2|q_*portb*}]
-set txq_from [remove_from_collection $txq_all $txq_rd]
-set txq_to   [get_registers -nowarn {*u_texel_x2|f_tex[*] *u_texel_x2|f_u[*] *u_texel_x2|f_v[*]}]
-set txr_from [get_registers -nowarn {*u_texel_x2|r_tex*}]
-if {[get_collection_size $txq_from] == 0 || [get_collection_size $txq_to] == 0 \
-    || [get_collection_size $txr_from] == 0} {
+# m2_cpu_bridge writes r_addr / r_we / r_wdata / r_be on a clk_i960 edge
+# together with req_cpu. clk_sys samples req_cpu into req_mem on its next
+# edge, and the memory-side FSM acts on req_mem -- so nothing on clk_sys reads
+# the payload before the SECOND clk_sys edge after it was written, and it does
+# not change until the four-phase handshake ends. The clocks are an exact 2:1
+# (clk_i960 = clk_sys / 2), so STA would otherwise time these at one clk_sys
+# period: 14.29 ns at 70 MHz, where r_addr -> sd_addr missed by 0.95 ns
+# (sized on s312, R580).
+set br_from [get_registers -nowarn {*u_cpu_bridge|r_addr[*] *u_cpu_bridge|r_we *u_cpu_bridge|r_wdata[*] *u_cpu_bridge|r_be[*]}]
+if {[get_collection_size $br_from] == 0} {
     post_message -type critical_warning \
-      "Model2.sdc: m2_texel_cdc's queue or answer registers did not match -- \
-       its payload paths are timed at the full 2:1 window. See study R563."
+      "Model2.sdc: m2_cpu_bridge payload registers did not match -- R586's exception is not applied."
 } else {
-    set_multicycle_path -setup -end 2 -from $txq_from -to $txq_to
-    set_multicycle_path -hold  -end 1 -from $txq_from -to $txq_to
-    set_multicycle_path -setup -end 2 -from $txr_from
-    set_multicycle_path -hold  -end 1 -from $txr_from
+    set_multicycle_path -setup -end 2 -from $br_from -to [get_clocks {*|pll|pll_inst|altera_pll_i|general[1].*|divclk}]
+    set_multicycle_path -hold  -end 1 -from $br_from -to [get_clocks {*|pll|pll_inst|altera_pll_i|general[1].*|divclk}]
+}
+
+
+# ---- R590: THE I/O BOARD Z80'S CORE, TWO CYCLES, INSIDE ITSELF ONLY.
+#
+# tv80_core loads every register it has -- the state, IR, PC, flags and the
+# tv80_reg file -- only when ClkEn = cen && !BusAck, and cen is m2_ioz80's
+# 4-in-SYS_MHZ accumulator: at 70 MHz one pulse in ~17 cycles, never two in a
+# row. So a path that starts AND ends inside the core has at least two cycles
+# (s317: IR -> RegsH, -0.434 ns at 70). tv80s, the wrapper, drives the bus
+# strobes every cycle and is deliberately NOT covered: a transient strobe
+# into the firmware RAM is a write.
+set z80_core [get_registers -nowarn {*u_ioz80|u_z80|i_tv80_core|*}]
+if {[get_collection_size $z80_core] == 0} {
+    post_message -type critical_warning \
+      "Model2.sdc: the Z80 core's registers did not match -- R590's exception is not applied."
+} else {
+    set_multicycle_path -setup -end 2 -from $z80_core -to $z80_core
+    set_multicycle_path -hold  -end 1 -from $z80_core -to $z80_core
 }
 
 

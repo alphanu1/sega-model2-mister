@@ -300,7 +300,7 @@ module m2_geometry (
   // 120 cycles. At 50 MHz that is 2,700 polygons in a 60 Hz frame before this
   // stage is the limit, and the display lists measured here are far short of it.
   // R566: Q_CHK added -- the cull is decided a cycle after the polygon is taken.
-  typedef enum logic [2:0] { Q_IDLE, Q_ISS, Q_WAIT, Q_OUT, Q_CHK } qst_t;
+  typedef enum logic [2:0] { Q_IDLE, Q_ISS, Q_WAIT, Q_OUT, Q_CHK, Q_MM } qst_t;   // R589: Q_MM
   qst_t qst;
   logic [1:0]  qi;
   logic [31:0] hx [4], hy [4], hz [4];
@@ -590,11 +590,18 @@ module m2_geometry (
           hu[3] <= u2f(poly_uv3[15:0]); hv[3] <= u2f(poly_uv3[31:16]);
           pcol  <= poly_col;                       // R222
           ptex  <= poly_tex; plum <= dbg_lum;      // R271: the lighting luminance
-          hzmin <= zmin_c;
-          hzmax <= zmax_c;
           c_bad    <= poly_bad;
           c_zmode  <= poly_zmode;          // R578: picked in Q_CHK, from hzmin/hzmax
-          qst      <= Q_CHK;
+          qst      <= Q_MM;                // R589
+        end
+
+        // R589: the four-way float min and max, from the z values latched a
+        // cycle ago rather than from the engine's registers in the latch cycle
+        // (s317: p1cur -> hzmax, -0.322 ns at 70 MHz).
+        Q_MM: begin
+          hzmin <= fmin(fmin(hz[0], hz[1]), fmin(hz[2], hz[3]));
+          hzmax <= fmax(fmax(hz[0], hz[1]), fmax(hz[2], hz[3]));
+          qst   <= Q_CHK;
         end
 
         Q_CHK: begin
