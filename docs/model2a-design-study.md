@@ -23965,3 +23965,36 @@ texel of MAME (68.8% at 2), 5-16 texels 0.7% (1.6%), 251,862 fetches
 now decides its own transparency, so point-sampled foliage has more holes
 where nothing lies behind -- MAME decides on bilinear alpha, which is the
 next step. The board decides whether the texel path keeps the bands.
+
+**BILINEAR FILTERING -- THE DESIGN QUESTION (Ben: "Bilinear filtering <
+this please!", with an OSD switch to turn it on and off).**
+
+The reference (model2rd.ipp fetch_bilinear_texel, called for every textured
+pixel): u -= 0x80, v -= 0x80 (half a texel); ufrac/vfrac the low 8 bits;
+u0 = (u >> 8) & (w - 1), u1 = (u0 + 1) & (w - 1), the same in v; when the
+wrap bit is clear and u1 == 0, the pair clamps to the texture's edge; the
+four 4-bit texels are expanded << 4 and blended LERP(x, y, a) = x + ((y - x)
+* a >> 8), across then down, to an 8-bit value t. Translucent: each texel
+carries alpha (0 for 0xF), a transparent texel takes its neighbour's value,
+alpha blends the same way and the pixel is discarded below 50%. The colour
+is then lumaram[lumabase + (t >> 1)] * poly luma / 256, through the colour
+ramp -- this core's linear col * texel approximation is a second, separate
+step (it needs the luma table and the ramp per pixel).
+
+The constraint: M10K 553 of 553. A 2x2 block straddles two row pairs of the
+8x2-texel cache line HALF the time (v0 odd) and two columns one time in
+eight, so a point-sampling cache needs up to four lookups for one bilinear
+sample. Two shapes:
+
+  A. BANK THE CACHE by row-pair parity -- two 512-line banks read in
+     parallel, so both rows come back in one access nearly always (a column
+     crossing takes a second). ~+2 M10K (smaller RAMs round up worse), to be
+     freed first (e.g. the geometry push queue to MLAB, ~100 ALM).
+  B. LINES, NOT TEXELS. The cache answers with the whole 64-bit line; the
+     span walk keeps a window of recent lines and assembles each 2x2 block
+     from it. No M10K; the crossing's answer widens 4 -> 64 bits (MLAB) and
+     the walk's fetch pipeline is reworked.
+
+To be decided on measurement: the 3D differential frame, counted per pixel
+at PIXSTEP 1 -- distinct lines a bilinear sample needs, and how often a
+small window of recent lines already holds them.
