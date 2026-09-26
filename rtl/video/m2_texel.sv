@@ -81,7 +81,9 @@ module m2_texel #(
   // address.
   // THIS DEFAULT IS NOT WHAT THE CORE BUILDS. m2_raster3d overrides it (R328,
   // 2048 lines). Changing the number here moves only the benches.
-  parameter int unsigned IDX_BITS = 10
+  parameter int unsigned IDX_BITS = 10,
+  // R583: 1 = the address arrives precomputed on pa_* (see m2_texel_addr).
+  parameter bit          PREADDR  = 1'b0
 ) (
   input  logic             clk,
   input  logic             rst_n,
@@ -112,6 +114,14 @@ module m2_texel #(
   /* verilator lint_off UNUSEDSIGNAL */
   input  logic [19:0]      u,
   input  logic [19:0]      v,
+  // R583: with PREADDR, m2_texel_addr's outputs for the same request.
+  // Unused without PREADDR, as tex/u/v are unused with it.
+  /* verilator lint_off UNUSEDSIGNAL */
+  input  logic [18:0]      pa_waddr,
+  input  logic             pa_sheet,
+  input  logic             pa_x2p,
+  input  logic             pa_y2p,
+  /* verilator lint_on UNUSEDSIGNAL */
   /* verilator lint_on UNUSEDSIGNAL */
   output logic [3:0]       texel,
 
@@ -165,51 +175,24 @@ module m2_texel #(
   localparam int unsigned TAG_BITS = WA_BITS - IDX_BITS - 2 + 1;   // + sheet
 
   // ---------------------------------------------------------- the addressing
-  wire [2:0]  wcode = tex[3:1];
-  wire [2:0]  hcode = tex[6:4];
-  wire        mirx  = tex[9];
-  wire        miry  = tex[10];
-  wire        sheet = tex[12];
-  wire [5:0]  texx  = tex[18:13];
-  wire [4:0]  texy  = tex[23:19];
-
-  // 32 << code, as a mask of the same shape: (32 << c) - 1.
-  wire [11:0] wmask = 12'((32 << wcode) - 1);
-  wire [11:0] hmask = 12'((32 << hcode) - 1);
-
-  // Mirroring tests the coordinate against the texture's width in the SAME
-  // fixed point it arrives in, which is why this is a shift and not a compare.
-  wire [11:0] uint  = u[19:8];
-  wire [11:0] vint  = v[19:8];
-  wire        mir_u = mirx && ((uint & 12'(32 << wcode)) != 12'd0);
-  wire        mir_v = miry && ((vint & 12'(32 << hcode)) != 12'd0);
-  // The fraction is dropped here; the mirror inverts the whole coordinate the
-  // way the reference does, and only the integer part survives the mask.
-  wire [11:0] ua    = mir_u ? ~uint : uint;
-  wire [11:0] va    = mir_v ? ~vint : vint;
-
-  wire [11:0] u0    = ua & wmask;
-  wire [11:0] v0    = va & hmask;
-
-  wire [11:0] x2_0  = {1'b0, texx, 5'd0} + u0;
-  wire [11:0] y2_0  = {2'd0, texy, 5'd0} + v0;
-  wire        fold  = x2_0 >= 12'd1024;
-  // R413: A 2-BIT DECREMENT, NOT A 12-BIT SUBTRACT. 1024 is 2^10, so
-  // x2_0 - 1024 cannot affect bits [9:0] -- it is bits [11:10] minus one, and
-  // `fold` means x2_0 >= 1024 so those two bits are never zero and cannot
-  // underflow. Identical value, no 12-bit borrow chain.
-  //
-  // It sat between two adders on the worst path in the design:
-  //   m2_span_tex|tex_r[6] -> Add3 -> Add5 -> m2_texel|idx_r[1]   -0.660 ns
-  wire [11:0] x2    = fold ? {x2_0[11:10] - 2'd1, x2_0[9:0]} : x2_0;
-  wire [11:0] y2    = fold ? (y2_0 ^ 12'd1024) : y2_0;
-
-  // AN ADD, NOT A CONCATENATION, and this cost an hour. The reference's
-  // `offset = ((y2 / 2) * 512) + (x2 / 2)` CARRIES: one fold of the 1024
-  // column leaves x2 anywhere up to 3039, so x2/2 can exceed 511 and spill
-  // into the row above -- which is what the sheet's layout means, and dropping
-  // the carry paints a band of the wrong rows across every wide texture.
-  wire [WA_BITS-1:0] waddr = WA_BITS'({y2[10:1], 9'd0} + {8'd0, x2[11:1]});
+  // R583: the arithmetic lives in m2_texel_addr. With PREADDR the texel queue
+  // has already done it where it loads its presentation register, and the
+  // result arrives on pa_*; otherwise it is computed here as it always was.
+  logic [WA_BITS-1:0] waddr;
+  logic               sheet, x2p, y2p;
+  generate
+    if (PREADDR) begin : g_pre
+      assign waddr = pa_waddr;
+      assign sheet = pa_sheet;
+      assign x2p   = pa_x2p;
+      assign y2p   = pa_y2p;
+    end else begin : g_here
+      m2_texel_addr u_addr (.tex(tex), .u(u), .v(v),
+                            .waddr(waddr), .sheet(sheet), .x2p(x2p), .y2p(y2p));
+    end
+  endgenerate
+  wire [11:0] x2 = {11'd0, x2p};           // only the parity is ever latched
+  wire [11:0] y2 = {11'd0, y2p};
 
   wire [IDX_BITS-1:0] req_idx = waddr[IDX_BITS+1:2];
   wire [TAG_BITS-1:0] req_tag = {sheet, waddr[WA_BITS-1:IDX_BITS+2]};

@@ -43,7 +43,7 @@ FP_POOL_RTL = rtl/video/m2_fp_pool.sv $(GEO_FP)
 GEO_CLIP_RTL = rtl/video/m2_geo_clip.sv rtl/video/m2_geo_project.sv $(GEO_RTL)
 RASTER_BAND_RTL := rtl/video/m2_raster_band.sv
 QUAD_STORE_RTL := rtl/video/m2_quad_store.sv rtl/tgp/m2_fifo_m10k.sv
-TEXEL_RTL := rtl/video/m2_texel.sv
+TEXEL_RTL := rtl/video/m2_texel.sv rtl/video/m2_texel_addr.sv
 SPAN_TEX_RTL := rtl/video/m2_span_tex.sv
 RFILL_RTL := rtl/video/m2_raster_fill.sv rtl/video/m2_raster_div.sv \
              rtl/video/m2_recip_rom.sv rtl/video/m2_persp_recip.sv
@@ -736,9 +736,9 @@ test_m2_texel_cdc: obj_texel_cdc/Vm2_texel_cdc
 	@echo "== test m2_texel_cdc (texel fetches across unrelated clocks)"
 	@./obj_texel_cdc/Vm2_texel_cdc $(TEST_ARGS)
 
-obj_texel_cdc/Vm2_texel_cdc: rtl/video/m2_texel_cdc.sv sim/video/tb_m2_texel_cdc.cpp
+obj_texel_cdc/Vm2_texel_cdc: rtl/video/m2_texel_cdc.sv rtl/video/m2_texel_addr.sv sim/video/tb_m2_texel_cdc.cpp
 	$(VBUILD) --top-module m2_texel_cdc --Mdir obj_texel_cdc -o Vm2_texel_cdc -CFLAGS "-O2" \
-	  rtl/video/m2_texel_cdc.sv sim/video/tb_m2_texel_cdc.cpp
+	  rtl/video/m2_texel_cdc.sv rtl/video/m2_texel_addr.sv sim/video/tb_m2_texel_cdc.cpp
 
 test_m2_tile_fetch: obj_tile_fetch/Vm2_tile_fetch
 	@echo "== test m2_tile_fetch (the 2D tile word and glyph fetch)"
@@ -761,11 +761,11 @@ test_m2_raster3d: obj_raster3d/Vm2_raster3d
 	@./obj_raster3d/Vm2_raster3d $(TEST_ARGS)
 
 obj_raster3d/Vm2_raster3d: rtl/video/m2_raster3d.sv rtl/video/m2_quad_store.sv rtl/video/m2_raster_fill.sv \
-                           rtl/video/m2_raster_div.sv rtl/video/m2_recip_rom.sv rtl/video/m2_persp_recip.sv rtl/video/m2_raster_band.sv rtl/video/m2_span_tex.sv rtl/video/m2_texel.sv rtl/video/m2_texel_x2.sv rtl/video/m2_texel_cdc.sv rtl/video/m2_char_x2.sv rtl/tgp/m2_fifo_m10k.sv sim/video/tb_m2_raster3d.cpp
+                           rtl/video/m2_raster_div.sv rtl/video/m2_recip_rom.sv rtl/video/m2_persp_recip.sv rtl/video/m2_raster_band.sv rtl/video/m2_span_tex.sv rtl/video/m2_texel.sv rtl/video/m2_texel_addr.sv rtl/video/m2_texel_x2.sv rtl/video/m2_texel_cdc.sv rtl/video/m2_char_x2.sv rtl/tgp/m2_fifo_m10k.sv sim/video/tb_m2_raster3d.cpp
 	$(VBUILD) --top-module m2_raster3d -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-WIDTHEXPAND -Wno-PINCONNECTEMPTY -Wno-VARHIDDEN -Wno-WIDTHTRUNC \
 	  --Mdir obj_raster3d -o Vm2_raster3d -CFLAGS "-O2" \
 	  rtl/video/m2_raster3d.sv rtl/video/m2_quad_store.sv rtl/video/m2_raster_fill.sv \
-	  rtl/video/m2_raster_div.sv rtl/video/m2_recip_rom.sv rtl/video/m2_persp_recip.sv rtl/video/m2_raster_band.sv rtl/video/m2_span_tex.sv rtl/video/m2_texel.sv rtl/video/m2_texel_x2.sv rtl/video/m2_texel_cdc.sv rtl/video/m2_char_x2.sv rtl/tgp/m2_fifo_m10k.sv sim/video/tb_m2_raster3d.cpp
+	  rtl/video/m2_raster_div.sv rtl/video/m2_recip_rom.sv rtl/video/m2_persp_recip.sv rtl/video/m2_raster_band.sv rtl/video/m2_span_tex.sv rtl/video/m2_texel.sv rtl/video/m2_texel_addr.sv rtl/video/m2_texel_x2.sv rtl/video/m2_texel_cdc.sv rtl/video/m2_char_x2.sv rtl/tgp/m2_fifo_m10k.sv sim/video/tb_m2_raster3d.cpp
 
 test_m2_pair_cache: obj_pair_cache/Vm2_pair_cache
 	@echo "== test m2_pair_cache (the port's second dword serves the next read)"
@@ -937,10 +937,10 @@ test_m2_texel: obj_texel/Vm2_texel
 	@echo "== test m2_texel (the texel fetch, against model2rd.ipp)"
 	@./obj_texel/Vm2_texel
 
-obj_texel/Vm2_texel: rtl/video/m2_texel.sv sim/video/tb_m2_texel.cpp
+obj_texel/Vm2_texel: rtl/video/m2_texel.sv rtl/video/m2_texel_addr.sv sim/video/tb_m2_texel.cpp
 	$(VERILATOR) --cc --exe --build -j 0 $(VFLAGS) --top-module m2_texel \
 	  --Mdir obj_texel -o Vm2_texel -CFLAGS -O2 \
-	  rtl/video/m2_texel.sv sim/video/tb_m2_texel.cpp
+	  rtl/video/m2_texel.sv rtl/video/m2_texel_addr.sv sim/video/tb_m2_texel.cpp
 
 test_m2_char_cache: obj_charcache/Vm2_char_cache
 	@./obj_charcache/Vm2_char_cache

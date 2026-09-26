@@ -23114,3 +23114,16 @@ And tools/m2-framediff.sh at the hardware rate: **190,464 of 190,464 pixels
 identical to MAME -- EXACT.** The 2,698 pixels R570 called "a pre-existing
 gap" were the bench's own: at one enable per two clocks the tile fetch
 overran (828 overruns in that run); at the hardware's rate it does not.
+
+**R583 -- THE TEXEL CACHE'S ADDRESS COMPUTED IN THE QUEUE.** The texel cache's
+line index was computed from its presentation registers (sheet header, u, v:
+mirror, mask, two adds, the column fold, the address add) and fed its RAM's
+address in the same 10 ns (s310 -0.024, s312/s308 up to -0.66: f_u -> cdata).
+The arithmetic moves verbatim into m2_texel_addr; m2_texel_cdc runs it on the
+slot it is about to present -- written at least three clk_mem edges earlier,
+and a path the clock groups already treat as asynchronous -- and registers
+waddr, sheet and the two parities beside f_tex/f_u/f_v. m2_texel's PREADDR
+takes them ready-made (Model2 sets it; default off, so tb_m2_texel still
+drives the internal path: 8,268 checks, 0 fails, mirroring included).
+tb_m2_texel_cdc 40,804 checks, 0 fails; tb_m2_raster3d frame hashes identical
+on all five scenes.

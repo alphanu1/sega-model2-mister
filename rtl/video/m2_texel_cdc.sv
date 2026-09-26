@@ -62,7 +62,15 @@ module m2_texel_cdc #(
   input  logic        f_ack,
   output logic [31:0] f_tex,
   output logic [19:0] f_u, f_v,
-  input  logic [3:0]  f_texel
+  input  logic [3:0]  f_texel,
+  // R583: the cache's address for the presented request, computed here as the
+  // slot is loaded (m2_texel_addr), so m2_texel's RAM address comes straight
+  // from a register. The slot was written at least three clk_mem edges
+  // earlier, so this arithmetic has that long; from f_* to the RAM it had 10 ns.
+  output logic [18:0] f_waddr,
+  output logic        f_sheet,
+  output logic        f_x2p,
+  output logic        f_y2p
 );
 
   localparam int unsigned PW = $clog2(K) + 1;   // one spare bit: full vs empty
@@ -133,6 +141,14 @@ module m2_texel_cdc #(
   logic [$clog2(TO_CYC+1)-1:0] f_wait;
 
   wire [PW-1:0] f_ip   = gray2bin(f_ip_g2);
+
+  // R583: the address of the slot about to be loaded.
+  logic [18:0] ld_waddr;
+  logic        ld_sheet, ld_x2p, ld_y2p;
+  m2_texel_addr u_ldaddr (
+    .tex(q_tex[f_ld[PW-2:0]]), .u(q_u[f_ld[PW-2:0]]), .v(q_v[f_ld[PW-2:0]]),
+    .waddr(ld_waddr), .sheet(ld_sheet), .x2p(ld_x2p), .y2p(ld_y2p)
+  );
   wire f_accept  = f_valid && f_rdy;
   wire f_pending = (f_ip != f_ld);
   // Answer locally only when every older request has been answered, so the
@@ -146,6 +162,7 @@ module m2_texel_cdc #(
       f_ip_g1 <= '0; f_ip_g2 <= '0;
       f_ld <= '0; f_sent <= '0; f_wp <= '0; f_wp_g <= '0; f_valid <= 1'b0; f_wait <= '0;
       f_tex <= '0; f_u <= '0; f_v <= '0;
+      f_waddr <= '0; f_sheet <= 1'b0; f_x2p <= 1'b0; f_y2p <= 1'b0;   // R583
     end else begin
       f_ip_g1 <= s_ip_g;
       f_ip_g2 <= f_ip_g1;
@@ -156,6 +173,10 @@ module m2_texel_cdc #(
         f_tex   <= q_tex[f_ld[PW-2:0]];
         f_u     <= q_u  [f_ld[PW-2:0]];
         f_v     <= q_v  [f_ld[PW-2:0]];
+        f_waddr <= ld_waddr;             // R583
+        f_sheet <= ld_sheet;
+        f_x2p   <= ld_x2p;
+        f_y2p   <= ld_y2p;
         f_ld    <= f_ld + 1'd1;
         f_valid <= 1'b1;
       end else if (f_accept || f_timeout) begin

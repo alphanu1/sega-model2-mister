@@ -513,6 +513,8 @@ module m2_raster3d #(
   logic [31:0] txf_tex;
   logic [19:0] txf_u, txf_v;
   logic [3:0]  txf_texel;
+  logic [18:0] txf_waddr;                  // R583
+  logic        txf_sheet, txf_x2p, txf_y2p;
 
   // R539: fetches in flight; K must equal m2_span_tex's TXK (R553: 8).
   // R558: FOUR, NOT EIGHT. R553's eight scrambled textures on the board
@@ -526,7 +528,8 @@ module m2_raster3d #(
     .s_req(tex_req), .s_rdy(tex_rdy), .s_ack(tex_ack), .s_tex(tex_state),
     .s_u(tex_u), .s_v(tex_v), .s_texel(tex_texel), .s_take(tex_take),
     .f_req(txf_req), .f_rdy(txf_rdy), .f_ack(txf_ack), .f_tex(txf_tex),
-    .f_u(txf_u), .f_v(txf_v), .f_texel(txf_texel)
+    .f_u(txf_u), .f_v(txf_v), .f_texel(txf_texel),
+    .f_waddr(txf_waddr), .f_sheet(txf_sheet), .f_x2p(txf_x2p), .f_y2p(txf_y2p)   // R583
   );
 
   // R328: IDX_BITS 11 -- 2048 lines / 16 KB, SET HERE AND NOT IN THE MODULE.
@@ -553,11 +556,12 @@ module m2_raster3d #(
   // The one lever that costs M10K rather than ALM, which is the resource this
   // design still has. R328 measured 1024 -> 2048 taking the hit rate
   // 54.3% -> 64.9%.
-  m2_texel #(.AW(TEX_AW), .IDX_BITS(12)) u_texel (
+  m2_texel #(.AW(TEX_AW), .IDX_BITS(12), .PREADDR(1'b1)) u_texel (   // R583
     .clk(clk_mem), .rst_n(rst_n),
     .base_s0(tex_base0), .base_s1(tex_base1),
     .req(txf_req), .rdy(txf_rdy), .ack(txf_ack), .tex(txf_tex),
     .u(txf_u), .v(txf_v), .texel(txf_texel),
+    .pa_waddr(txf_waddr), .pa_sheet(txf_sheet), .pa_x2p(txf_x2p), .pa_y2p(txf_y2p),   // R583
     .m_req(tex_m_req), .m_addr(tex_m_addr), .m_ack(tex_m_ack), .m_data(tex_m_data),
     // R480: the second SDRAM port, so two fills can be in flight.
     .m2_en(tex_m2_en), .m2_req(tex_m2_req), .m2_addr(tex_m2_addr),
