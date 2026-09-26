@@ -1,5 +1,24 @@
 # Handoff
 
+## 2026-09-26 (afternoon): `build/seeds/s347` IS ON THE BOARD. FRONT TO BACK.
+
+s346 plus R607: polygons drawn nearest first with a one-band fill mask
+(first write wins) and no texel fetch for a group already painted -- the
+Model 2 board's own order (MAME model2_v.cpp / model2rd.ipp). Chosen by
+MEASURING in an instrumented MAME (R606): mip selection moved texel misses
+7%, front to back 44%. Capture against s346: critical time 627 -> 0, texel
+fetches -31%, hit rate 71% -> 84%, no late bands in steady play.
+s347: clk_mem +0.199, clk_sys +0.072, clk_i960 +3.445, HDMI -0.437,
+41,427 ALM (483 free). Picture bit-identical to the painter in every bench
+scene (tb_m2_raster3d, FTB 0 vs 1, M2_R3D_ZRAND).
+
+Quartus 17.0 traps from this (study R607): no localparam in a parameter
+port list; an async-read MLAB needs `ramstyle = "MLAB, no_rw_check"` or it
+silently becomes flip-flops -- grep map.log for "uninferred".
+
+Next: graceful overload (show a late band with far detail missing, as the
+board does); road-texture precision; lighting dropout.
+
 ## 2026-09-26: `build/seeds/s339` IS ON THE BOARD. CLOCKS 100 / 70 / 35.
 
 clk_mem 100 (video, SDRAM), clk_sys 70 (TGP, geometry, renderer), clk_i960 35.

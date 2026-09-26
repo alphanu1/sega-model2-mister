@@ -23623,3 +23623,35 @@ Verilator, which lints clean):**
      may be stale. ALWAYS grep the map log for "uninferred" after adding a
      memory -- the build otherwise proceeds silently to a fit that cannot
      close.
+
+**R607 ON THE BOARD: s347. THE RENDERER IS NEVER BEHIND IN STEADY PLAY.**
+
+s347-s349 (R607 in, masks in MLAB). s349 died in Quartus; s348 clk_sys
+-0.326. s347: clk_mem +0.199, clk_sys +0.072, clk_i960 +3.445, holds
+positive, DQ packed, clk_mem global, no critical warnings; HDMI -0.437
+(s346 -0.162); **41,427 ALM, +541 on s346** -- more than the ~300 estimated,
+and 483 ALM now free.
+
+240 s capture, s346 (painter) against s347 (front to back):
+
+| | s346 | s347 |
+|---|---|---|
+| critical time (units of 1,024 cycles, summed) | 627 | **0** |
+| of which texel wait | 481 | **0** |
+| texel fetches a frame | 71,737 | 49,703 (-31%) |
+| texel cache hit rate | 71.2% | 83.8% |
+| texel misses a frame (median) | 13,289 | 11,822 |
+| textured pixels written a frame (median) | 262,140 (saturated) | 183,000 |
+| late-band samples | 2 of 26, steady play | 1 of 25, at 20 s -- boot into attract |
+| i960 (relative) | 1.00 | 1.04 |
+
+The one late record is 20 s into a capture that starts at the core reload:
+the start-up transition every build shows. After it, no sample in the
+remaining 220 s has a late band, and no sampled period has the fill behind
+the beam at all. The TGP runs (same program-address histogram). s347
+replaces s346 on the board.
+
+Still to do, from the same reference behaviour: the board's own answer to
+running out of time -- show the band with its far detail missing rather
+than not at all -- which front to back now makes possible. Not needed for
+any frame measured here.
