@@ -23941,3 +23941,11 @@ for planning:**
      (fetch_bilinear_texel), which this core does not do at all -- the
      largest remaining reason textures look blocky next to the board. Four
      texels a pixel: a fetch-bandwidth and cache-shape design, not a fix.
+
+**s381 ON THE BOARD (R616 pixel centres + PIXSTEP 2, R618 16.8 gradients,
+keeper flavour).** s381-s383: s381 clk_mem +0.343, clk_sys +0.782, clk_i960
++3.669, holds positive, DQ packed, HDMI -0.373, 40,935 ALM; s382 HDMI -0.710;
+s383 clk_sys -0.709. The span queue's inferred RAM is 264 bits wide (R618's
+266 less two constant bits; 242 before), so the build carries R618 though its
+synthesis started a minute after that commit. To judge by eye: the road at
+mid and far distance, close objects (R618), whether PIXSTEP 2 costs bands.

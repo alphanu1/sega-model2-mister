@@ -1,5 +1,22 @@
 # Handoff
 
+## 2026-09-26 (late): `build/seeds/s381` IS ON THE BOARD. TEXTURES FIXED IN TWO PLACES.
+
+s377 plus R616 (textures sampled at pixel CENTRES, as MAME does -- the road's
+"orientation" was half a pixel on a steep polygon) and R618 (plane gradients
+16.8; at 8.8 they saturated at 128 a pixel and steep, close polygons drifted
+up to 37 texels), with PIXSTEP 2. Keeper flavour (M2_NO_DEBUG).
+clk_mem +0.343, clk_sys +0.782, clk_i960 +3.669, HDMI -0.373.
+
+THE 3D FRAME DIFFERENTIAL (R615) is the instrument for textures from now on:
+scratch MAME 0.289 build (scratchpad/mame289, `make SUBTARGET=m2lod
+SOURCES=src/mame/sega/model2.cpp`, ten minutes) with M2DIFF_FRAME/M2DIFF_OUT
+dumps one frame's polygons, texture RAM and per-pixel owner/texel;
+tb_m2_raster3d M2_R3D_LIST=<dir> renders it through this RTL and logs every
+texel fetch. On frame 2000: 35% of textured pixels within a texel of MAME
+on s377, 69% now. Left: thin slivers (integer vertex positions), foliage edges
+and the whole look of BILINEAR filtering, which this core does not do.
+
 ## 2026-09-26 (evening): `build/seeds/s377` IS ON THE BOARD. EVERY CLOCK CLEAN.
 
 clk_mem +0.579, clk_sys +0.450, clk_i960 +3.160, HDMI +0.072 (first ever).
