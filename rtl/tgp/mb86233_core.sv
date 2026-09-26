@@ -609,6 +609,10 @@ module mb86233_core (
   // had never executed before today.
   assign ea_src = agu_ea + ((x_src_200 || x_lab_a200) ? 17'h200 : 17'd0);
   assign ea_dst = agu_ea + (x_dst_200 ? 17'h200 : 17'd0);
+  // R591: ea_dst held from S_DST into S_DST_W (see the destination request).
+  logic [16:0] ea_dst_q;
+  always_ff @(posedge clk) if (state == S_DST) ea_dst_q <= ea_dst;
+  wire  [16:0] ea_dst_cur = (state == S_DST_W) ? ea_dst_q : ea_dst;
 
   assign prog_addr = (state == S_SRC || state == S_SRC_W)
                      && (x_src_sp == mb86233_pkg::EP_PROG)
@@ -855,12 +859,17 @@ module mb86233_core (
       end
 
       S_DST, S_DST_W: begin
+        // R591: S_DST_W presents the address registered during S_DST. The
+        // index registers only post-increment at the END of S_DST_W, so it is
+        // the same address -- from a flip-flop, which takes the address
+        // generator out of the chain m2_tgp's decode -> io_ack -> agu_post_en
+        // -> x0/x1 (s317: state.S_DST_W -> x1, -0.307 ns at 70 MHz).
         if (x_dst_reg) begin
           rf_wr_en = 1'b1; rf_wr_addr = d_r2[5:0]; rf_wr_data = src_val;
         end else if (x_dst_sp == mb86233_pkg::EP_DATA) begin
-          mem_req = 1'b1; mem_we = 1'b1; mem_addr = ea_dst; mem_wdata = src_val;
+          mem_req = 1'b1; mem_we = 1'b1; mem_addr = ea_dst_cur; mem_wdata = src_val;
         end else begin
-          io_wr = 1'b1; io_addr = ea_dst[15:0]; io_wdata = src_val;
+          io_wr = 1'b1; io_addr = ea_dst_cur[15:0]; io_wdata = src_val;
         end
       end
 

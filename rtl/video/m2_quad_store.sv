@@ -304,7 +304,26 @@ module m2_quad_store #(
       tiny_quad = (TINY != 0) && ((xh - xl) < $signed(16'(TINY))) && ((yh - yl) < $signed(16'(TINY)));
     end
   endfunction
-  wire is_tiny = tiny_quad(in_x0, in_y0, in_x1, in_y1, in_x2, in_y2, in_x3, in_y3);
+  // R592: FOR TINY = 2, PAIRWISE, NOT MIN AND MAX. max - min < 2 exactly when
+  // every pair differs by -1, 0 or +1 -- the same 16-bit arithmetic as
+  // tiny_quad, wraparound included -- and six subtracts per axis side by side
+  // are one subtract deep where the trees were compare, select, compare,
+  // select, subtract, compare (s317: qsy -> a_tiny, -0.389 ns at 70 MHz).
+  // |d| <= 1 on a 16-bit difference is "bits 15:1 all zero" (0, +1) or "all
+  // sixteen ones" (-1); -2 has bits 15:1 all ones and bit 0 clear, and fails.
+  function automatic logic near1(input logic signed [15:0] a, input logic signed [15:0] b);
+    logic [15:0] d;
+    begin
+      d = 16'(a - b);
+      near1 = (d[15:1] == 15'd0) || (d == 16'hFFFF);
+    end
+  endfunction
+  wire tiny_pw = near1(in_x0, in_x1) && near1(in_x0, in_x2) && near1(in_x0, in_x3)
+              && near1(in_x1, in_x2) && near1(in_x1, in_x3) && near1(in_x2, in_x3)
+              && near1(in_y0, in_y1) && near1(in_y0, in_y2) && near1(in_y0, in_y3)
+              && near1(in_y1, in_y2) && near1(in_y1, in_y3) && near1(in_y2, in_y3);
+  wire is_tiny = (TINY == 2) ? tiny_pw
+               : tiny_quad(in_x0, in_y0, in_x1, in_y1, in_x2, in_y2, in_x3, in_y3);
 
   // R566: THE COUNT AND THE ATTRIBUTE WORD LAND ONE CYCLE AFTER THE QUAD.
   //

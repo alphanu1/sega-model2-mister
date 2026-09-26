@@ -3438,6 +3438,19 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 end
 logic fw_dl_d;
 always_ff @(posedge clk_sys) fw_dl_d <= fw_dl;
+// R593: THE FIRMWARE WRITE, REGISTERED. hps_io's ioctl_download reached the
+// Z80 firmware RAM's write enable through the index compare and the address
+// range test in one cycle (s317: -0.100 ns at 70 MHz). A write lands one cycle
+// later; the download stays up long after its last write, so fw_ready does not
+// notice.
+logic        fw_we_q;
+logic [12:0] fw_addr_q;
+logic [15:0] fw_data_q;
+always_ff @(posedge clk_sys) begin
+	fw_we_q   <= fw_dl && ioctl_wr && (ioctl_addr < 27'd16384);
+	fw_addr_q <= ioctl_addr[13:1];
+	fw_data_q <= ioctl_dout;
+end
 wire fw_ready_set = fw_dl_d && !fw_dl;   // download ended
 logic fw_seen;
 always_ff @(posedge clk_sys or negedge mem_rst_n) begin
@@ -3523,9 +3536,9 @@ m2_ioz80 #(.TICK_NUM(4), .TICK_DEN(SYS_MHZ)) u_ioz80 (   // 4 MHz exactly, on cl
 	.clk(clk_sys), .rst_n(cpu_rst_n & fw_ready),
 	// First 16 KB only: the EPROM is 64 KB, the Z80 maps 0x0000-0x3fff, and a
 	// wrapping fw_addr[13:0] would leave the LAST quarter in the ROM.
-	.fw_we(fw_dl && ioctl_wr && (ioctl_addr < 27'd16384)),
-	.fw_addr(ioctl_addr[13:1]),
-	.fw_data(ioctl_dout),
+	.fw_we(fw_we_q),       // R593: registered, see fw_we_q
+	.fw_addr(fw_addr_q),
+	.fw_data(fw_data_q),
 	.in0(iob_in0), .in1(iob_in1), .in2(8'hFF), .dp_busy(dp_busy),
 	// The I/O BOARD's three DIP banks, not the game's. Daytona defines all 24
 	// bits PORT_DIPUNUSED_DIPLOC with the default equal to the mask, so every

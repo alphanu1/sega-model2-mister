@@ -23138,3 +23138,55 @@ the CPU port's bus wait 4.7% -> 3.0%; the i960 2.44 M instructions/s. But the
 texel port's own queue wait barely moved (8.2% -> 8.1%): what remains of it
 is the burst already in progress, which a priority class cannot pre-empt.
 A real gain, small, and near the resolution of 64 band samples a capture.
+
+---
+
+**R584-R593 -- THE FIRST 70/35 BUILD, AND WHAT IT LEFT.**
+
+s317-s319 (HEAD 44033a4: R577-R583): the i960 at 35 clean on every seed
+(+2.83 / +3.11 / +2.93) -- R575's fpmisc split was all it needed; clk_mem
+clean on s317 (+0.227); every hold positive; clk_sys at 70 -0.805 / -1.689 /
+-1.217, down from R580's projected -1.86. ALM 41,262-41,331 of 41,910. Two
+of s317's families were already fixed in the tree (R584, R585 went in after
+its map); the rest, each against s317's own path trace:
+
+  - R584, fill: pf_clz's 32-bit negate and 32-bit leading-zero encoder split
+    across S_PF_NRM's first two cycles (nxu -> nxu_z, -0.805). The counts are
+    first read on the third, so no cycle is added; fill reference 152,369
+    checks, span total unchanged.
+  - R585, fill divider: S_COR's q x d product registered, the compare and
+    select a cycle later (q_fast / d_mag -> rq, -0.574). One cycle a
+    fast-path division, ~2% of a quad.
+  - R587, clipper: the tested vertex coordinate registered in K_TEST, which
+    always waits a cycle for the multiplier (ti -> test_v -> is_out, -0.406).
+  - R588, TGP ALU: cxfd's convert split over the ALU's delay line: stage 1
+    registers magnitude, leading-zero count and sign, stage 2 shifts, rounds
+    and packs (pre_d -> the delay line's RAM, -0.571). Latency unchanged;
+    tb_mb86233_alu 2,170,388 checks, every op covered.
+  - R589, geometry: Q_MM computes the four-way float min/max from the latched
+    z values, one cycle after the latch (p1cur -> hzmax, -0.322).
+  - R590, SDC: the I/O Z80's core, from itself to itself, two cycles -- every
+    tv80_core register loads only on ClkEn = cen && !BusAck, and cen is a
+    4-in-70 accumulator, never high twice in a row (IR -> RegsH, -0.434).
+    The wrapper tv80s drives the bus strobes every cycle and is NOT covered.
+    R563's texel-queue exception removed: R568's clock groups cut those paths,
+    and its target list had stopped matching (a critical warning every build).
+  - R586, SDC: m2_cpu_bridge's payload two clk_sys cycles (r_addr -> sd_addr,
+    -0.95 at the 70/35 window), by the request flop's protocol.
+  - R591, TGP: S_DST_W presents the destination address registered during
+    S_DST -- the index registers only post-increment at S_DST_W's end, so it
+    is the same address -- taking the address generator out of m2_tgp's
+    io decode -> io_ack -> agu_post_en -> x1 chain (-0.307).
+  - R592, quad store: for TINY = 2 the size test is pairwise -- every pair of
+    x (and of y) within +-1 -- one subtract deep instead of trees then a
+    subtract (qsy -> a_tiny, -0.389). Checked against the min/max form: a
+    million quads whose spread fits in 16 bits, 0 disagree. Beyond that the
+    min/max form WRAPS -- hi - lo overflows negative and a huge quad is called
+    tiny and not counted -- and the pairwise form is right. Latent: the
+    clipper keeps coordinates far inside that range. tb_m2_raster3d frame
+    hashes unchanged.
+  - R593: the I/O Z80's firmware write registered (ioctl_download -> the
+    firmware RAM's write enable, -0.100).
+
+Left for the next build to rank: the fill's dvdx/dvdy (-0.17), den_sh (-0.14),
+xa (-0.04), and whatever the new placement turns up.
