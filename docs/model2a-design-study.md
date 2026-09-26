@@ -24014,3 +24014,66 @@ selects the blend or the nearest of the four -- with u' = u - 0.5 the
 nearest IS today's point sample, so "off" is today's picture. The 2 M10K
 the banks cost come from the geometry push queue moving to MLAB. Colour stays
 linear for now; the luma table and ramp are a separate step.
+
+**R620 -- THE BILINEAR FETCH, BUILT (m2_texel_bl).** One departure from the
+plan above: the cache blends, not the walk. It answers {discard, t} -- nine
+bits, not the sixteen-bit 2x2 block -- so the crossing widens 4 -> 9 rather
+than 4 -> 16 and the walk only swaps its intensity and its transparency test
+for the answer's. Point mode is the nearest of the same four texels, which
+with the half-texel shift is the old (u >> 8) sample; an OSD bit (status[31],
+"Texture filter", Bilinear by default) selects it on clk_mem.
+
+- tb_m2_texel_bl checks every answer against a model written from
+  model2rd.ipp's get_texel and fetch_bilinear_texel (not from the RTL):
+  random sheets, headers, u/v runs, both modes, 2-30 cycle latency on both
+  ports, the second port off at times, sweeps. 1,000,000 checks, 0 fails, at
+  IB 11 and IB 8. What it found on the way: a b_done update that collided
+  with the next request's clear (a wedge); the fold that carries into the
+  next row pair (the address must be formed as get_texel forms it, a SUM);
+  the edge clamp, which must be the reference's exact pair and weight and not
+  "the edge column" -- the colour is the same, the translucency is not; and
+  the point threshold, which must count the clamp's 0x100.
+- THE SIZE WAS WRONG IN THE FIRST DRAFT. It was written with 512 lines a bank
+  "the same as m2_texel's" -- m2_texel's DEFAULT, 1,024 lines. The instance
+  overrides it to IDX_BITS 12 (R453: 4,096 lines, 32 KB), which is the size
+  the band budget was measured at. The bank size is now a parameter, IB 11:
+  two 2,048 x 64 RAMs, which pack into fewer M10K than one 4,096 x 64
+  (13 + 13 against 32 at 2048x5 / 4096x2). R328's rule again: an instance
+  override is where the real size lives.
+- Pipelined before the first build: axis() moves into stage A's capture
+  (axis then place() in one cycle is two carry chains and a compare in
+  series), and the blend is two stages, across then down (two LERPs behind
+  an 8:1 select). Answer latency is about six clk_mem cycles to m2_texel's
+  three.
+- tb_m2_raster3d, textured, both modes, 40-frame soak, and TEXLAT 40 with
+  sweeps: PASS, no dead frame.
+
+**R621 -- PIXSTEP 1 DROPS BANDS ON THE BOARD, AND BILINEAR MAKES IT WORSE.**
+s386 (PIXSTEP 1, point, m2_texel) went on the board; Ben: "we are dropping
+bands on heavy scenes". Put back to s381 (PIXSTEP 2). s384-s386 timing:
+none clean on the core clocks -- s386's one failing path was m2_sdram's
+inflight -> rr_mask at -0.133 ns, placement noise.
+
+The MAME frame 2000 differential agrees, and says why bilinear at PIXSTEP 1
+is not yet possible:
+
+    old cache, PIXSTEP 1, point      251,862 fetches  161,996 px  no-fetch 0.1%
+    m2_texel_bl, PIXSTEP 1           239,881          152,143     6.9%
+    m2_texel_bl, PIXSTEP 1, K=16     244,008          156,607     4.6%
+    m2_texel_bl, PIXSTEP 2           132,765          172,376     0.1%
+
+The missing fetches are EXACTLY bands 25-27 (11,875), after the run of
+~8,000-fetch bands 18-24: the band buffers' slack is spent and the beam
+passes them. Not a wedge -- a probe on the cache's read pointer found no gap
+longer than 33 bench ticks, and no lost fetch. Misses are the same as the old
+cache's (41.6k against 40.9k); the difference is answer LATENCY against a
+fixed number of fetches in flight, and doubling that number (K and TXK 16)
+recovers only a third of it. The bench's line time is tighter than the
+board's, but the board has just shown PIXSTEP 1 losing bands with the FASTER
+cache.
+
+CHOSEN: bilinear at PIXSTEP 2 (s387-s389). Every band lands; the accuracy is
+R619's PIXSTEP 2 figure (68.8% within a texel), each filtered sample shared
+by two pixels. PIXSTEP 1 with bilinear needs the answer latency cut first --
+a hit path that bypasses the response queue for the head, or axis() computed
+in m2_texel_cdc's load stage as R583 did for the address.
