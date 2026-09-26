@@ -50,6 +50,9 @@ module m2_raster3d #(
   // R607: FRONT TO BACK WITH A FILL MASK, the reference's order (see the
   // study). 0 is Model 1's painter: back to front, last write wins.
   parameter bit          FTB    = 1'b0,
+  // R616: pixel-centre planes and group-centre samples; texels per fetch.
+  parameter bit          PXC    = 1'b0,
+  parameter int unsigned PIXSTEP = 4,
 
   // ARE clk AND scan_clk ACTUALLY DIFFERENT CLOCKS?
   //
@@ -388,7 +391,7 @@ module m2_raster3d #(
   wire signed [15:0] band_y1 = 16'(fill_band) * 16'(BAND_H);
   wire signed [15:0] band_y2 = band_y1 + 16'(BAND_H) - 16'sd1;
 
-  m2_raster_fill u_fill (
+  m2_raster_fill #(.PXC(PXC)) u_fill (   // R616
     .clk(clk), .rst_n(rst_n),
     .in_valid(fl_in_valid), .in_ready(fl_in_ready),
     // R327: no sign extension. m2_quad_store already saturates these to 13
@@ -463,7 +466,7 @@ module m2_raster3d #(
   logic [31:0]           mk_wd;
   logic signed [15:0]    mk_y0;
 
-  m2_span_tex #(.PIXSTEP(4), .TXK(8), .FTB(FTB), .SCR_W(SCR_W), .BAND_H(BAND_H)) u_spantex (
+  m2_span_tex #(.PIXSTEP(PIXSTEP), .TXK(8), .FTB(FTB), .GC(PXC), .SCR_W(SCR_W), .BAND_H(BAND_H)) u_spantex (
     .clk(clk), .rst_n(rst_n),
     .mk_valid(mk_valid), .mk_we(mk_we), .mk_waddr(mk_pwi), .mk_wdata(mk_wd),   // R607
     .mk_band_y0(mk_y0),

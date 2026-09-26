@@ -61,6 +61,11 @@ module m2_span_tex #(
   // band's own check, per pixel at the write, is what keeps the picture exact,
   // so a stale or conservative answer here only costs a fetch.
   parameter bit          FTB    = 1'b0,
+  // R616: SAMPLE EACH GROUP AT ITS CENTRE. One texel serves PIXSTEP pixels;
+  // taken at the group's first pixel it lags the rest by up to PIXSTEP-1
+  // pixels of gradient. 1 starts the walk (PIXSTEP-1)/2 pixels in, for u/z,
+  // v/z and 1/z alike so the divide still pairs them at one point.
+  parameter bit          GC     = 1'b0,
   parameter int unsigned SCR_W  = 496,
   parameter int unsigned BAND_H = 8,
   // Derived -- never overridden. PARAMETERS, not localparams: Quartus 17.0
@@ -488,6 +493,10 @@ module m2_span_tex #(
   wire ld_over   = (st == T_RUN) && in_valid && tex_now && !iss_run && sp_room
                 && pipe_en;
   wire ld_span   = ld_cold || ld_over;
+  // R616: (PIXSTEP-1)/2 pixels of each gradient, 16.16 (gradients are 8.8).
+  wire signed [31:0] gc_du = GC ? ((32'(in_dudx)   * 32'(PIXSTEP - 1)) <<< 7) : 32'sd0;
+  wire signed [31:0] gc_dv = GC ? ((32'(in_dvdx)   * 32'(PIXSTEP - 1)) <<< 7) : 32'sd0;
+  wire signed [31:0] gc_do = GC ? ((32'(in_doozdx) * 32'(PIXSTEP - 1)) <<< 7) : 32'sd0;
   // R478: the retire slot only has to be free by the NEXT edge, not this one.
   // Requiring !rt_valid outright cost a whole cycle a group (2.36 -> 3.36):
   // the emit that frees it happens on the same edge the fetch would start.
@@ -544,6 +553,24 @@ module m2_span_tex #(
   assign tx_u   = to_tx(d4_u);
   assign tx_v   = to_tx(d4_v);
   assign tx_req = cons_take && !res_skip;   // R607
+  // R615: THE 3D FRAME DIFFERENTIAL'S PROBE -- every real fetch, with the
+  // pixel group and texture it is for. Read by tb_m2_raster3d through
+  // the simulator's public access; nothing in the design reads it, so synthesis
+  // removes it.
+  logic               dbg_fetch   /*verilator public_flat_rd*/;
+  logic signed [31:0] dbg_fetch_x /*verilator public_flat_rd*/;
+  logic signed [31:0] dbg_fetch_y /*verilator public_flat_rd*/;
+  logic        [19:0] dbg_fetch_u /*verilator public_flat_rd*/;
+  logic        [19:0] dbg_fetch_v /*verilator public_flat_rd*/;
+  logic        [23:0] dbg_fetch_t /*verilator public_flat_rd*/;
+  logic        [23:0] dbg_fetch_c /*verilator public_flat_rd*/;
+  assign dbg_fetch   = tx_req;
+  assign dbg_fetch_x = res_x;
+  assign dbg_fetch_y = y_p[res_p];
+  assign dbg_fetch_u = tx_u;
+  assign dbg_fetch_v = tx_v;
+  assign dbg_fetch_t = tex_p[res_p];
+  assign dbg_fetch_c = col_p[res_p];
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -570,9 +597,9 @@ module m2_span_tex #(
       // the previous span would lose its remaining groups. Order is preserved
       // by the pipeline and each span's end is marked by sh_last, so the two
       // spans' groups coexist without a per-stage tag.
-      iss_u   <= in_u;
-      iss_v   <= in_v;
-      iss_ooz <= in_ooz;
+      iss_u   <= in_u   + gc_du;     // R616
+      iss_v   <= in_v   + gc_dv;
+      iss_ooz <= in_ooz + gc_do;
       iss_x   <= in_x0;
       iss_run <= 1'b1;
       if (ld_cold) begin
@@ -596,9 +623,9 @@ module m2_span_tex #(
       // where 289 were sent. A load may only be accepted on a cycle the
       // pipeline is moving, which is why ld_over carries `pipe_en`.
       if (ld_over) begin
-        iss_u   <= in_u;
-        iss_v   <= in_v;
-        iss_ooz <= in_ooz;
+        iss_u   <= in_u   + gc_du;   // R616
+        iss_v   <= in_v   + gc_dv;
+        iss_ooz <= in_ooz + gc_do;
         iss_x   <= in_x0;
         iss_run <= 1'b1;
       end else if (iss_run) begin

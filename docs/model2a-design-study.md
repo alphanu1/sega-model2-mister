@@ -23835,3 +23835,56 @@ session:**
 The instrument all of the 3D ones want: a 3D frame differential -- MAME's
 post-clip polygon list and texture RAM for one frame fed to tb_m2_raster3d,
 per-pixel texel coordinates compared with MAME's.
+
+**R615 -- THE 3D FRAME DIFFERENTIAL, AND R616 -- TEXTURES SAMPLED AT PIXEL
+CENTRES. THE ROAD'S "ORIENTATION" WAS HALF A PIXEL.**
+
+R615, THE INSTRUMENT. The instrumented MAME (scratch build, R606) dumps one
+rendered frame (M2DIFF_FRAME): every polygon after its clip and projection
+(submission index, z bucket, window, header words, luma, viewport, per vertex
+screen x/y, z, raw u/v), both texture RAMs, MAME's 3D buffer as an image,
+and per pixel the owning polygon and its texel at level 0 under THIS core's
+rule (u >> 8, mirrored, masked). tb_m2_raster3d gains M2_R3D_LIST=<dir>: the
+list becomes this rasteriser's quad interface exactly as m2_geometry
+presents it (fan into quads, triangles as a repeated vertex, pu/2 with R609's
+period move, 1/z as the minifloat, poly_tex packed as m2_geo_engine does,
+MAME's z bucket as the key, submission order, the polygon index carried in
+the colour bits RGB565 keeps), texels served from MAME's own texture RAM,
+and every fetch of the displayed frame logged through a probe in
+m2_span_tex (dbg_fetch*, Verilator-public, unread by the design).
+
+Frame 2000 of Daytona's attract (road straight ahead; 1,549 polygons, all in
+window 1). FIRST RESULT: only 35% of textured pixels within a texel of
+MAME's. The worst were the road: poly 521 (the mid-distance road, a 6-vertex
+sliver 31 px tall and 497 wide, v moving ~12 texels a pixel vertically)
+wrong everywhere by > 16 texels. It is exactly planar (vertices 3-5 lie on
+the plane through 0-2), so a plane fit is the right model -- and the exact
+plane still disagreed with MAME, until evaluated half a pixel over: fitting
+an offset over its 1,089 pixels, MAME's texel is the plane at (x + 0.5,
+y + 0.5), mean error 0.66 texel (6.40 at the corner). Same on polys 522
+and 607. MAME samples pixel CENTRES; this core's planes were evaluated at
+pixel CORNERS -- on a steep polygon half a pixel is 6 texels. That is the
+road Ben has been reporting since 2026-09-25 ("under the car ok, in front
+not").
+
+R616, THE FIX. m2_raster_fill PXC: half of each gradient added to every
+plane's base (u/z, v/z, 1/z; registered in the product cycle so the base
+stage gains one term). m2_span_tex GC: each PIXSTEP group sampled at its
+centre, (PIXSTEP-1)/2 pixels in, for all three planes. m2_raster3d takes PXC
+and PIXSTEP as parameters; Model2.sv sets PXC 1 and PIXSTEP 2 (Ben: "is it
+possible to try pixstep @2, textures still look quite bad"). On frame 2000,
+every textured pixel against MAME's:
+
+| build | <= 1 texel | 2-4 | 5-16 | > 16 | other polygon | fetches |
+|---|---|---|---|---|---|---|
+| s377 (corner, PIXSTEP 4) | 35.1% | 33.8% | 7.3% | 6.7% | 17.1% | 72,311 |
+| centre, PIXSTEP 4 | 43.4% | 30.9% | 2.9% | 5.7% | 17.1% | 71,857 |
+| centre, PIXSTEP 2 | 51.9% | 24.1% | 1.9% | 5.4% | 16.7% | 132,246 |
+
+Left: 5% of pixels more than 16 texels out (next to chase with the same
+instrument); 17% owned by another polygon -- the swaps are translucent
+foliage (h0 6413 / 64d2) where MAME discards below 50% BILINEAR alpha and
+this core point-samples once a group; and 24% at 2-4 texels (vertex
+positions are integers here, floats in MAME; the reciprocal; to_tx dropping
+bits). Benches with PXC/GC off unchanged (fill 152,369 checks, raster3d
+hashes, span_tex 7,207).

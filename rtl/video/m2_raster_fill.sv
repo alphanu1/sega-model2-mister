@@ -78,7 +78,17 @@
 // free while it has 550 ALMs free. Left to itself the synthesiser built them
 // out of logic.
 (* multstyle = "dsp" *)
-module m2_raster_fill (
+module m2_raster_fill #(
+  // R616: THE PLANES ARE EVALUATED AT PIXEL CENTRES, as the reference samples
+  // them. MAME's texel at (x, y) is the perspective plane at (x + 0.5,
+  // y + 0.5): the 3D frame differential (R615) matched it to 0.66 texels
+  // there and to 6.4 at the corner, on the mid-distance road (poly 521, where
+  // v moves 12 texels a pixel vertically -- half a pixel is 6 texels, which
+  // is the road's wrong orientation). 1 adds half of each gradient to every
+  // plane's base. 0 keeps the corner, which tb_m2_raster_fill's reference
+  // models.
+  parameter bit PXC = 1'b0
+) (
   input  logic               clk,
   input  logic               rst_n,
 
@@ -458,6 +468,7 @@ module m2_raster_fill (
   logic [15:0]        oz_n;
   logic [12:0]        oz_u, oz_v;
   logic signed [31:0] bp_ux, bp_uy, bp_vx, bp_vy, bp_ox, bp_oy;
+  logic signed [31:0] bh_u, bh_v, bh_o;   // R616: half a pixel of each plane, both axes
   logic [12:0]        bq_u, bq_v;
   logic [15:0]        bq_o;
   logic         [1:0] nrm_wait;   // R466/R599: four cycles, the recip takes four
@@ -1106,16 +1117,20 @@ module m2_raster_fill (
           bp_vx <= 32'(dvdx * sx[fa]);  bp_vy <= 32'(dvdy * sy[fa]);
           bp_ox <= 32'(dodx * sx[fa]);  bp_oy <= 32'(dody * sy[fa]);
           bq_u  <= qu[fa]; bq_v <= qv[fa]; bq_o <= qoz[fa];
+          // R616: (gx + gy) / 2 in 16.16 -- the gradients are 8.8, so << 7.
+          bh_u  <= PXC ? ((32'(dudx) + 32'(dudy)) <<< 7) : 32'sd0;
+          bh_v  <= PXC ? ((32'(dvdx) + 32'(dvdy)) <<< 7) : 32'sd0;
+          bh_o  <= PXC ? ((32'(dodx) + 32'(dody)) <<< 7) : 32'sd0;
           b_prod <= 1'b1;
         end else begin
           b_wait <= 1'b0;
           b_w2   <= 1'b0;
           b_prod <= 1'b0;
-          base_u <= 32'({19'd0, bq_u} <<< 16) - (bp_ux <<< 8) - (bp_uy <<< 8);
-          base_v <= 32'({19'd0, bq_v} <<< 16) - (bp_vx <<< 8) - (bp_vy <<< 8);
+          base_u <= 32'({19'd0, bq_u} <<< 16) - (bp_ux <<< 8) - (bp_uy <<< 8) + bh_u;   // R616
+          base_v <= 32'({19'd0, bq_v} <<< 16) - (bp_vx <<< 8) - (bp_vy <<< 8) + bh_v;
           // R337: 1/z's own plane. qoz is 15 bits, so it shifts up by 16 the
           // same way, and the span walk divides by what this yields.
-          base_o <= 32'({16'd0, bq_o} <<< 16) - (bp_ox <<< 8) - (bp_oy <<< 8);
+          base_o <= 32'({16'd0, bq_o} <<< 16) - (bp_ox <<< 8) - (bp_oy <<< 8) + bh_o;
           tex_ok <= 1'b1;
           pf_st  <= S_IDLE;
         end

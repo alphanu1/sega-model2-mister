@@ -15,6 +15,10 @@
 #include "verilated.h"
 #include "Vm2_raster3d___024root.h"
 #include <cstdio>
+#include <cstring>
+#include <cmath>
+#include <string>
+#include <algorithm>
 #include <cstdlib>
 #include <cstdint>
 #include <vector>
@@ -46,7 +50,22 @@ static int TPL = 400;
 // so a texel taken from the wrong place is visible in an image. A 16-bit word
 // holds a 2x2 texel block (nib() in m2_texel: py0px0 [15:12], py0px1 [11:8],
 // py1px0 [7:4], py1px1 [3:0]); a sheet row is 512 words; a line is 4 words.
+// R615: M2_R3D_LIST mode serves texels from MAME's own texture RAM (two
+// sheets, 16-bit words, word i = the i-th halfword of MAME's u32 array).
+static std::vector<uint32_t> g_tex[2];
+static uint32_t g_tbase1 = 0;
 static uint64_t texpat_line(uint32_t addr, uint32_t base) {
+  if (!g_tex[0].empty()) {
+    const int sh = (addr >= g_tbase1) ? 1 : 0;
+    const uint32_t w0 = addr - (sh ? g_tbase1 : base);
+    uint64_t line = 0;
+    for (int k = 0; k < 4; ++k) {
+      const uint32_t w = w0 + k;
+      const uint32_t dw = (w >> 1) < g_tex[sh].size() ? g_tex[sh][w >> 1] : 0xffffffffu;
+      line |= uint64_t((w & 1) ? (dw >> 16) : (dw & 0xffff)) << (16 * k);
+    }
+    return line;
+  }
   static const bool PAT = std::getenv("M2_R3D_TEXPAT") != nullptr;
   if (!PAT) return 0x0123456789abcdefULL ^ (uint64_t)addr;
   uint64_t line = 0;
@@ -64,6 +83,10 @@ static uint64_t texpat_line(uint32_t addr, uint32_t base) {
   }
   return line;
 }
+
+struct Fetch { int y, x; uint32_t u, v, t, c; };
+static std::vector<Fetch> g_fetch;
+static bool g_rec = false;
 
 int main(int argc, char **argv) {
   Verilated::commandArgs(argc, argv);
@@ -145,6 +168,14 @@ int main(int argc, char **argv) {
       d->tex_m2_data = texpat_line(d->tex_m2_addr, d->tex_base0);
     }
     d->eval();
+    // R615: every real fetch, for the frame differential
+    if (g_rec && d->rootp->m2_raster3d__DOT__u_spantex__DOT__dbg_fetch)
+      g_fetch.push_back({(int)d->rootp->m2_raster3d__DOT__u_spantex__DOT__dbg_fetch_y,
+                         (int)d->rootp->m2_raster3d__DOT__u_spantex__DOT__dbg_fetch_x,
+                         (uint32_t)d->rootp->m2_raster3d__DOT__u_spantex__DOT__dbg_fetch_u,
+                         (uint32_t)d->rootp->m2_raster3d__DOT__u_spantex__DOT__dbg_fetch_v,
+                         (uint32_t)d->rootp->m2_raster3d__DOT__u_spantex__DOT__dbg_fetch_t,
+                         (uint32_t)d->rootp->m2_raster3d__DOT__u_spantex__DOT__dbg_fetch_c});
     // R318: clk_mem runs at 2x clk, as it does on hardware -- m2_texel lives on
     // it now and m2_texel_x2 carries the request across the 2:1. Leaving it at
     // zero (as this bench did) means the texel unit never clocks, the crossing
@@ -387,6 +418,96 @@ int main(int argc, char **argv) {
   long top_px[8] = {0};
   // Frame 0: the walk delivers list A during the frame (as it does after the
   // flip); nothing is on display yet.
+  // R615: M2_R3D_LIST=<dir> -- THE 3D FRAME DIFFERENTIAL. MAME's post-clip
+  // polygons for one frame (polys.txt) and its texture RAM (tex0/1.bin) from
+  // the instrumented MAME, turned into this rasteriser's quad interface exactly
+  // as m2_geometry would present them, fed in submission order, and every
+  // texel fetch of the frame that displays them written to fetch.txt.
+  if (const char *lp = std::getenv("M2_R3D_LIST")) {
+    const std::string dir(lp);
+    for (int k = 0; k < 2; k++) {
+      FILE *f = std::fopen((dir + (k ? "/tex1.bin" : "/tex0.bin")).c_str(), "rb");
+      if (!f) { std::printf("  no %s\n", k ? "tex1" : "tex0"); return 1; }
+      std::fseek(f, 0, SEEK_END); long n = std::ftell(f); std::fseek(f, 0, SEEK_SET);
+      g_tex[k].resize(n / 4); if (std::fread(g_tex[k].data(), 4, n / 4, f) != size_t(n / 4)) return 1;
+      std::fclose(f);
+    }
+    g_tbase1 = d->tex_base1;
+    struct V { double x, y, z, pu, pv; };
+    struct P { int idx; unsigned z, h0, h1, h2, h3; std::vector<V> v; };
+    std::vector<P> polys;
+    { FILE *f = std::fopen((dir + "/polys.txt").c_str(), "r"); char line[8192];
+      while (f && std::fgets(line, sizeof line, f)) {
+        P p; int win, n, vp[4]; unsigned luma; char *q = line;
+        if (std::sscanf(q, "P %d z=%u win=%d h=%x,%x,%x,%x luma=%u vp=%d,%d,%d,%d n=%d",
+                        &p.idx, &p.z, &win, &p.h0, &p.h1, &p.h2, &p.h3, &luma, &vp[0], &vp[1], &vp[2], &vp[3], &n) != 13) continue;
+        q = std::strstr(q, " n="); q = std::strchr(q + 1, ' ');
+        for (int i = 0; i < n && q; i++) { V v; if (std::sscanf(q, " %lf,%lf,%lf,%lf,%lf", &v.x, &v.y, &v.z, &v.pu, &v.pv) != 5) break; p.v.push_back(v); q = std::strchr(q + 1, ' '); }
+        polys.push_back(p);
+      }
+      if (f) std::fclose(f); }
+    std::sort(polys.begin(), polys.end(), [](const P &a, const P &b) { return a.idx < b.idx; });
+    std::printf("  R615 list mode: %zu polygons from %s\n", polys.size(), lp);
+    auto mf16 = [](double x) -> uint16_t { union { float f; uint32_t b; } u; u.f = (float)x; return (uint16_t)(((u.b >> 23) & 0xff) << 8 | ((u.b >> 15) & 0xff)); };
+    auto wide = [](double pu) -> uint32_t { if (!(pu >= 2.0)) return 0; double w = std::floor(pu / 2.0); return w > 32767 ? 32767u : (uint32_t)w; };
+    long nq = 0;
+    auto push_quad = [&](const P &p, int a, int b, int c, int e, bool last) {
+      const int ix[4] = {a, b, c, e};
+      int32_t X[4], Y[4]; uint16_t OZ[4]; uint32_t U[4], Vv[4];
+      for (int k = 0; k < 4; k++) {
+        const V &v = p.v[ix[k]];
+        X[k] = (int32_t)std::lround(v.x); Y[k] = (int32_t)std::lround(v.y);
+        OZ[k] = mf16(1.0 / v.z); U[k] = wide(v.pu); Vv[k] = wide(v.pv);
+      }
+      // R609: move by a whole number of TWICE the texture's size
+      const uint32_t uper = (256u << (p.h0 & 7)) - 1, vper = (256u << ((p.h0 >> 3) & 7)) - 1;
+      uint32_t um = std::min(std::min(U[0], U[1]), std::min(U[2], U[3])) & ~uper & 0x7fff;
+      uint32_t vm = std::min(std::min(Vv[0], Vv[1]), std::min(Vv[2], Vv[3])) & ~vper & 0x7fff;
+      auto sat13 = [](uint32_t x) { return x > 8191 ? 8191u : x; };
+      const uint32_t h0 = p.h0, h1 = p.h1, h2 = p.h2;
+      const uint32_t tex = ((h0 >> 14) & 1) | ((h0 & 7) << 1) | (((h0 >> 3) & 7) << 4) | (((h0 >> 6) & 1) << 7)
+                         | (((h0 >> 13) & 1) << 8) | (((h0 >> 8) & 1) << 9) | (((h0 >> 9) & 1) << 10) | (((h0 >> 15) & 1) << 11)
+                         | (((h2 >> 12) & 1) << 12) | ((h2 & 0x3f) << 13) | (((h2 >> 6) & 0x1f) << 19);
+      (void)h1;
+      { int g = 0; d->q_valid = 0; d->eval(); while (!d->q_ready && g++ < 200000) tick(); }
+      d->q_valid = 1;
+      d->q_x0 = X[0]; d->q_y0 = Y[0]; d->q_x1 = X[1]; d->q_y1 = Y[1];
+      d->q_x2 = X[2]; d->q_y2 = Y[2]; d->q_x3 = X[3]; d->q_y3 = Y[3];
+      d->q_oz0 = OZ[0]; d->q_oz1 = OZ[1]; d->q_oz2 = OZ[2]; d->q_oz3 = OZ[3];
+      d->q_u0 = sat13(U[0] - um); d->q_v0 = sat13(Vv[0] - vm); d->q_u1 = sat13(U[1] - um); d->q_v1 = sat13(Vv[1] - vm);
+      d->q_u2 = sat13(U[2] - um); d->q_v2 = sat13(Vv[2] - vm); d->q_u3 = sat13(U[3] - um); d->q_v3 = sat13(Vv[3] - vm);
+      // colour = MAME's index, in the bits that survive RGB565: idx[4:0] in R[7:3], idx[10:5] in G[7:2]
+      d->q_tex = tex & 0xffffff; d->q_col = ((uint32_t(p.idx) & 31) << 19) | (((uint32_t(p.idx) >> 5) & 63) << 10); d->q_moire = 0;
+      d->q_z = 0x3F800000u | (p.z & 0xffff);
+      d->q_end = last;
+      tick(); ++nq;
+      d->q_valid = 0; d->q_end = 0;
+    };
+    d->frame_start = 0;
+    for (size_t i = 0; i < polys.size(); i++) {
+      const P &p = polys[i]; const int n = (int)p.v.size();
+      if (n < 3) continue;
+      const bool lastp = (i + 1 == polys.size());
+      // a fan: (0,1,2,3), (0,3,4,5), ...; a triangle repeats its last vertex
+      for (int k = 1; k < n - 1; k += 2) {
+        const int c = k + 1, e = (k + 2 < n) ? k + 2 : k + 1;
+        push_quad(p, 0, k, c, e, lastp && (k + 2 >= n - 1));
+      }
+    }
+    std::printf("  R615: %ld quads pushed\n", nq);
+    long hits = 0;
+    video_frame(false, &hits);           // the list is collected, then swapped in
+    g_rec = true;
+    video_frame(true, &hits);            // the frame that displays it
+    g_rec = false;
+    FILE *fo = std::fopen((dir + "/fetch.txt").c_str(), "w");
+    for (const Fetch &f : g_fetch) std::fprintf(fo, "%d %d %u %u %u %u\n", f.y, f.x, f.u, f.v, f.t, f.c);
+    std::fclose(fo);
+    std::printf("  R615: %zu fetches recorded, %ld pixels painted\n", g_fetch.size(), hits);
+    delete d;
+    return 0;
+  }
+
   push_list(0);
   video_frame(true, &px[0]); top_px[0] = top_hits;
   // Frames 1..3: no new list. All three must draw list A.
