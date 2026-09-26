@@ -24194,3 +24194,67 @@ mixed-port answer is undefined), which let the fill stop blocking lookups.
 Frame 2000 at PIXSTEP 2: 132,804 fetches, every band, texel-wait 22% (18%
 before -- the longer pipeline). The bench's clocks are 2:1; the board's are
 100:70, where each clk_mem cycle of latency costs more.
+
+**R626 -- PIXSTEP 4, AND QUARTER-PIXEL VERTICES FOR THE PLANE FIT.**
+
+Ben on s395: "at PIXSTEP 2 we get missing bands; only PIXSTEP 4 seems to fix
+that" (true before bilinear too), and "some textures are missing lines ...
+look at the 6 on the white car, at the top of the 6: sometimes it's
+completely gone, other times it's skewed". The photo also confirmed R623:
+the car's shadow is now a checkerboard.
+
+PIXSTEP 4 with bilinear: s396-s398 (frame 2000: every band, texel-wait 15%).
+
+THE MISSING LINES ARE NOT THE CACHE. tb_m2_raster3d now logs every texel
+ANSWER beside its fetch (answers.txt, in order), and cachechk.py checks each
+against model2rd.ipp's fetch_bilinear_texel evaluated at OUR coordinate on
+MAME's texture RAM: 132,804 answers, 0 wrong. The error is in where we
+sample. Modelled per polygon on frame 2000 (floats, then each input
+quantised as the hardware does, one at a time), median texel error on the
+worst polygons:
+
+    exact floats                         0
+    1/z to the 8-bit-mantissa minifloat  0-1
+    u, v to quarter texels               0-1
+    vertex x, y to whole pixels          13-58     <- this
+
+And the hardware does not even round: m2_geo_project's fp_to_int TRUNCATES.
+Whole frame (model): within a texel 89.9% with rounded vertices; 96.2% with
+quarter pixels, 98.7% with eighths; option (b) of the R619 list (correct
+each vertex's u, v, 1/z to the exact plane at its rounded position) 99.0%;
+option (c) (best-conditioned triangle) 91.5%. An earlier guess in this
+session -- that u/v spans overflowed 13 bits -- was wrong: I had pu's units
+off by 8; no polygon on the frame saturates.
+
+THE FIX, AT NO M10K COST. R619's option (a) was costed at ~8 M10K for wider
+coordinates. But the store's 13-bit coordinate saturates at +/-4095 and a
+clipped vertex lies in the viewport (x -1..496, y 128..512): 11 bits of
+integer. So each coordinate is now 11.2 in the same 13 bits (FRB = 2):
+  - m2_geo_project: a second fp_to_int on the float x 4 (exponent + 2);
+    out_fx = trunc(4x)[1:0], 0 for x < 0. The integer is unchanged.
+  - m2_geometry (and its strip cache), m2_geo_clip: carried beside the pixel.
+  - m2_quad_store FRB: packed below the integer; out_x unchanged.
+  - m2_raster_fill FRB: the fit on 4x + f -- det x16, numerators x4, the
+    divide's normalisation keeps the same bits, the undo shifts 2 more
+    (NET0 = 11), the base products shift 6 not 8. EDGES AND COVERAGE STILL
+    USE THE INTEGERS -- nothing else moves.
+A 16-bit side field would have cost 6 M10K (208 bits packs three blocks
+worse than 192 at 2,048 deep); 5 are free.
+
+Verified: tb_m2_raster_fill at FRB 0 and FRB 2 (zero quarters) both
+152,369 checks, 0 fails -- the rescaled fit is exact. tb_m2_geo_project
+20,437 checks including the quarters (its wrapper had not built since R331:
+out_invz unconnected -- fixed). tb_m2_geo_clip 2,003, tb_m2_geometry 42,
+tb_m2_geo 76, raster3d soaks: all pass. Frame 2000, hardware-style vertices
+(M2_R3D_HWXY: trunc) against quarters (M2_R3D_FRAC):
+
+                        within 1   2-4    5-16   >16    (vs MAME's texel)
+    PIXSTEP 2, trunc     54.6%    22.7%   3.4%   2.7%
+    PIXSTEP 2, quarters  65.2%    14.5%   1.7%   2.1%
+    PIXSTEP 4, trunc     47.8%    27.8%   4.6%   3.0%
+    PIXSTEP 4, quarters  55.1%    22.7%   2.9%   2.4%
+
+and against the exact float plane AT OUR OWN SAMPLE POINT (the pipeline's
+arithmetic, without PIXSTEP's grouping): 53.5% -> 79.6% within a texel,
+>4 texels 8.0% -> 3.7%. What is left against MAME is mostly grouping on
+steep, far polygons -- dozens of texels a pixel, where MAME mipmaps.

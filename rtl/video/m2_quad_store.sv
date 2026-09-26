@@ -44,6 +44,12 @@
 
 module m2_quad_store #(
   parameter int unsigned NQ     = 2048,      // quads held
+  // R626: FRACTION BITS IN THE STORED COORDINATE. 2 keeps each vertex as
+  // 11.2 in the same XW = 13 bits -- the integer part saturates at +/-1023
+  // (clipped vertices lie inside the viewport, -1..512) and the quarter pixel
+  // below it rides free, for the texture plane fit (m2_geo_project, R626).
+  // 0 is the old 13-bit integer, and no in_frac.
+  parameter int unsigned FRB    = 0,
   parameter int unsigned IW     = 11,        // ceil(log2(NQ))
   // THE BAND GEOMETRY IS A PARAMETER, not three hardcoded constants.
   //
@@ -133,6 +139,7 @@ module m2_quad_store #(
   input  logic [UVW-1:0] in_u0, in_v0, in_u1, in_v1,
   input  logic [UVW-1:0] in_u2, in_v2, in_u3, in_v3,
   input  logic [OZW-1:0] in_oz0, in_oz1, in_oz2, in_oz3,   // R334
+  input  logic [15:0]    in_frac,                           // R626: {fy3,fx3..fy0,fx0}
   input  logic [TXW-1:0] in_tex,
 
   // ---- sort
@@ -160,6 +167,7 @@ module m2_quad_store #(
   output logic [UVW-1:0] out_u0, out_v0, out_u1, out_v1,
   output logic [UVW-1:0] out_u2, out_v2, out_u3, out_v3,
   output logic [OZW-1:0] out_oz0, out_oz1, out_oz2, out_oz3,   // R334
+  output logic [15:0]    out_frac,                             // R626
   output logic [TXW-1:0] out_tex,
 
   output logic [15:0] dbg_count,
@@ -234,6 +242,25 @@ module m2_quad_store #(
   endfunction
   function automatic [15:0] sx(input logic [XW-1:0] v);
     sx = {{(16-XW){v[XW-1]}}, v};
+  endfunction
+  // R626: with FRB, the integer saturated to XW-FRB bits and the quarters below
+  localparam int unsigned XI = XW - FRB;
+  function automatic [XW-1:0] satf(input logic signed [15:0] v, input logic [1:0] f);
+    logic signed [15:0] hi, lo;
+    logic [XW-1:0] r;
+    begin
+      if (FRB == 0) satf = sat(v);
+      else begin
+        hi = 16'sd1 <<< (XI - 1); hi = hi - 16'sd1;   // +1023 at FRB 2
+        lo = -hi - 16'sd1;
+        r  = XW'((v > hi) ? hi : (v < lo) ? lo : v) << FRB;
+        r[1:0] = (v > hi || v < lo) ? 2'd0 : f;     // a saturated vertex has no quarter
+        satf = r;
+      end
+    end
+  endfunction
+  function automatic [15:0] sxf(input logic [XW-1:0] v);
+    sxf = (FRB == 0) ? sx(v) : 16'(signed'(v) >>> FRB);
   endfunction
   // 888 -> 565 and back: m2_raster3d takes [23:19], [15:10], [7:3] of out_col,
   // so an entry expanded this way yields the same 565 it was stored from.
@@ -390,14 +417,18 @@ module m2_quad_store #(
       // withheld when it is tiny: the slot is simply reused by the next quad.
       if (in_valid && has_room) begin
         if (wbank) begin
-          vtx_1[wcount[IW-1:0]] <= {sat(in_y3), sat(in_x3), sat(in_y2), sat(in_x2),
-                                    sat(in_y1), sat(in_x1), sat(in_y0), sat(in_x0)};
+          vtx_1[wcount[IW-1:0]] <= {satf(in_y3, in_frac[15:14]), satf(in_x3, in_frac[13:12]),
+                                    satf(in_y2, in_frac[11:10]), satf(in_x2, in_frac[9:8]),
+                                    satf(in_y1, in_frac[7:6]),   satf(in_x1, in_frac[5:4]),
+                                    satf(in_y0, in_frac[3:2]),   satf(in_x0, in_frac[1:0])};
           uvt_1[wcount[IW-1:0]]  <= {in_oz3, in_oz2, in_oz1, in_oz0,
                                      in_tex, in_v3, in_u3, in_v2, in_u2,
                                      in_v1, in_u1, in_v0, in_u0};
         end else begin
-          vtx_0[wcount[IW-1:0]] <= {sat(in_y3), sat(in_x3), sat(in_y2), sat(in_x2),
-                                    sat(in_y1), sat(in_x1), sat(in_y0), sat(in_x0)};
+          vtx_0[wcount[IW-1:0]] <= {satf(in_y3, in_frac[15:14]), satf(in_x3, in_frac[13:12]),
+                                    satf(in_y2, in_frac[11:10]), satf(in_x2, in_frac[9:8]),
+                                    satf(in_y1, in_frac[7:6]),   satf(in_x1, in_frac[5:4]),
+                                    satf(in_y0, in_frac[3:2]),   satf(in_x0, in_frac[1:0])};
           uvt_0[wcount[IW-1:0]]  <= {in_oz3, in_oz2, in_oz1, in_oz0,
                                      in_tex, in_v3, in_u3, in_v2, in_u2,
                                      in_v1, in_u1, in_v0, in_u0};
@@ -655,10 +686,14 @@ module m2_quad_store #(
   wire [2*XW-1:0] v1_r = vtx_r[1*2*XW +: 2*XW];
   wire [2*XW-1:0] v2_r = vtx_r[2*2*XW +: 2*XW];
   wire [2*XW-1:0] v3_r = vtx_r[3*2*XW +: 2*XW];
-  assign out_y0 = sx(v0_r[2*XW-1:XW]); assign out_x0 = sx(v0_r[XW-1:0]);
-  assign out_y1 = sx(v1_r[2*XW-1:XW]); assign out_x1 = sx(v1_r[XW-1:0]);
-  assign out_y2 = sx(v2_r[2*XW-1:XW]); assign out_x2 = sx(v2_r[XW-1:0]);
-  assign out_y3 = sx(v3_r[2*XW-1:XW]); assign out_x3 = sx(v3_r[XW-1:0]);
+  assign out_y0 = sxf(v0_r[2*XW-1:XW]); assign out_x0 = sxf(v0_r[XW-1:0]);
+  assign out_y1 = sxf(v1_r[2*XW-1:XW]); assign out_x1 = sxf(v1_r[XW-1:0]);
+  assign out_y2 = sxf(v2_r[2*XW-1:XW]); assign out_x2 = sxf(v2_r[XW-1:0]);
+  assign out_y3 = sxf(v3_r[2*XW-1:XW]); assign out_x3 = sxf(v3_r[XW-1:0]);
+  // R626: the quarters, {fy3,fx3..fy0,fx0}; zero without FRB
+  assign out_frac = (FRB == 0) ? 16'd0
+                  : {v3_r[XW+1:XW], v3_r[1:0], v2_r[XW+1:XW], v2_r[1:0],
+                     v1_r[XW+1:XW], v1_r[1:0], v0_r[XW+1:XW], v0_r[1:0]};
   assign out_u0 = uvt_r[0*UVW +: UVW]; assign out_v0 = uvt_r[1*UVW +: UVW];
   assign out_u1 = uvt_r[2*UVW +: UVW]; assign out_v1 = uvt_r[3*UVW +: UVW];
   assign out_u2 = uvt_r[4*UVW +: UVW]; assign out_v2 = uvt_r[5*UVW +: UVW];

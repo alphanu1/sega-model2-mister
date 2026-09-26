@@ -84,8 +84,11 @@ static uint64_t texpat_line(uint32_t addr, uint32_t base) {
   return line;
 }
 
-struct Fetch { int y, x; uint32_t u, v, t, c; };
+struct Fetch { int y, x; uint32_t u, v, t, c; long n; };
 static std::vector<Fetch> g_fetch;
+// R626: every texel answer, in order -- answer n belongs to fetch n
+static std::vector<uint16_t> g_ans;
+static long g_nfetch = 0;
 static bool g_rec = false;
 
 int main(int argc, char **argv) {
@@ -172,13 +175,16 @@ int main(int argc, char **argv) {
     }
     d->eval();
     // R615: every real fetch, for the frame differential
+    if (d->rootp->m2_raster3d__DOT__tex_take && d->rootp->m2_raster3d__DOT__tex_ack)
+      g_ans.push_back((uint16_t)d->rootp->m2_raster3d__DOT__tex_texel);
+    if (d->rootp->m2_raster3d__DOT__u_spantex__DOT__dbg_fetch && !g_rec) ++g_nfetch;
     if (g_rec && d->rootp->m2_raster3d__DOT__u_spantex__DOT__dbg_fetch)
       g_fetch.push_back({(int)d->rootp->m2_raster3d__DOT__u_spantex__DOT__dbg_fetch_y,
                          (int)d->rootp->m2_raster3d__DOT__u_spantex__DOT__dbg_fetch_x,
                          (uint32_t)d->rootp->m2_raster3d__DOT__u_spantex__DOT__dbg_fetch_u,
                          (uint32_t)d->rootp->m2_raster3d__DOT__u_spantex__DOT__dbg_fetch_v,
                          (uint32_t)d->rootp->m2_raster3d__DOT__u_spantex__DOT__dbg_fetch_t,
-                         (uint32_t)d->rootp->m2_raster3d__DOT__u_spantex__DOT__dbg_fetch_c});
+                         (uint32_t)d->rootp->m2_raster3d__DOT__u_spantex__DOT__dbg_fetch_c, g_nfetch++});
     // R318: clk_mem runs at 2x clk, as it does on hardware -- m2_texel lives on
     // it now and m2_texel_x2 carries the request across the 2:1. Leaving it at
     // zero (as this bench did) means the texel unit never clocks, the crossing
@@ -457,9 +463,22 @@ int main(int argc, char **argv) {
     auto push_quad = [&](const P &p, int a, int b, int c, int e, bool last) {
       const int ix[4] = {a, b, c, e};
       int32_t X[4], Y[4]; uint16_t OZ[4]; uint32_t U[4], Vv[4];
+      // R626: M2_R3D_HWXY takes the vertex as the hardware does -- trunc(x),
+      // m2_geo_project's fp_to_int -- and M2_R3D_FRAC adds the quarter pixel
+      // below it (the low two bits of trunc(4x), 0 for x < 0); build with FRB=2
+      static const bool HWXY = std::getenv("M2_R3D_HWXY") || std::getenv("M2_R3D_FRAC");
+      static const bool FRAC = std::getenv("M2_R3D_FRAC") != nullptr;
+      uint32_t frac = 0;
       for (int k = 0; k < 4; k++) {
         const V &v = p.v[ix[k]];
-        X[k] = (int32_t)std::lround(v.x); Y[k] = (int32_t)std::lround(v.y);
+        if (HWXY) {
+          X[k] = (int32_t)std::trunc(v.x); Y[k] = (int32_t)std::trunc(v.y);
+          const uint32_t fx = (FRAC && v.x >= 0) ? (uint32_t)(int64_t)std::trunc(v.x * 4.0) & 3u : 0u;
+          const uint32_t fy = (FRAC && v.y >= 0) ? (uint32_t)(int64_t)std::trunc(v.y * 4.0) & 3u : 0u;
+          frac |= ((fy << 2) | fx) << (4 * k);
+        } else {
+          X[k] = (int32_t)std::lround(v.x); Y[k] = (int32_t)std::lround(v.y);
+        }
         OZ[k] = mf16(1.0 / v.z); U[k] = wide(v.pu); Vv[k] = wide(v.pv);
       }
       // R609: move by a whole number of TWICE the texture's size
@@ -480,6 +499,7 @@ int main(int argc, char **argv) {
       d->q_u0 = sat13(U[0] - um); d->q_v0 = sat13(Vv[0] - vm); d->q_u1 = sat13(U[1] - um); d->q_v1 = sat13(Vv[1] - vm);
       d->q_u2 = sat13(U[2] - um); d->q_v2 = sat13(Vv[2] - vm); d->q_u3 = sat13(U[3] - um); d->q_v3 = sat13(Vv[3] - vm);
       // colour = MAME's index, in the bits that survive RGB565: idx[4:0] in R[7:3], idx[10:5] in G[7:2]
+      d->q_frac = frac;   // R626
       d->q_tex = tex & 0xffffff; d->q_col = ((uint32_t(p.idx) & 31) << 19) | (((uint32_t(p.idx) >> 5) & 63) << 10); d->q_moire = (tex >> 11) & 1;   // R623
       d->q_z = 0x3F800000u | (p.z & 0xffff);
       d->q_end = last;
@@ -505,6 +525,10 @@ int main(int argc, char **argv) {
     g_rec = false;
     FILE *fo = std::fopen((dir + "/fetch.txt").c_str(), "w");
     for (const Fetch &f : g_fetch) std::fprintf(fo, "%d %d %u %u %u %u\n", f.y, f.x, f.u, f.v, f.t, f.c);
+    // R626: the answer each fetch got, {discard, t}; -1 if it never came
+    { FILE *fa = std::fopen((dir + "/answers.txt").c_str(), "w");
+      for (const Fetch &f : g_fetch) std::fprintf(fa, "%d\n", f.n < (long)g_ans.size() ? (int)g_ans[f.n] : -1);
+      std::fclose(fa); }
     std::fclose(fo);
     std::printf("  R615: %zu fetches recorded, %ld pixels painted\n", g_fetch.size(), hits);
     delete d;

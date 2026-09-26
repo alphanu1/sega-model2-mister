@@ -114,6 +114,9 @@ module m2_geo_clip (
   input  logic [15:0] in_oz0, in_oz1, in_oz2, in_oz3,
   input  logic signed [15:0] in_sx0, in_sy0, in_sx1, in_sy1,
   input  logic signed [15:0] in_sx2, in_sy2, in_sx3, in_sy3,
+  // R626: the quarter pixel below each, {fy3,fx3,...,fy0,fx0}; it travels
+  // exactly as the pixel does
+  input  logic [15:0] in_frac,
   // R270: THE TEXTURE COORDINATES, AS FLOATS, ONE PAIR A VERTEX. A created
   // vertex interpolates them on the same t the position uses -- MAME's
   // clip_polygon does exactly that, `out.pu = cur->pu + (next->pu - cur->pu) *
@@ -161,6 +164,7 @@ module m2_geo_clip (
   output logic [31:0] pj_x, pj_y, pj_z,
   input  logic        pj_out_valid,
   input  logic signed [31:0] pj_out_sx, pj_out_sy,
+  input  logic [1:0]  pj_out_fx, pj_out_fy, // R626
   input  logic [31:0] pj_out_invz,          // R334
 
   // Zero or more quads out, screen space.
@@ -169,6 +173,7 @@ module m2_geo_clip (
   output logic [15:0] out_oz0, out_oz1, out_oz2, out_oz3,   // R334
   output logic signed [15:0] out_sx0, out_sy0, out_sx1, out_sy1,
   output logic signed [15:0] out_sx2, out_sy2, out_sx3, out_sy3,
+  output logic [15:0] out_frac,             // R626
   output logic [23:0] out_col,
   output logic [31:0] out_z,
   output logic        out_moire,
@@ -234,6 +239,7 @@ module m2_geo_clip (
   logic [1:0]         qid [4];
   logic               qpx [4];
   logic signed [15:0] ipx [4], ipy [4];
+  logic [3:0]         ipf [4], qsf [4];     // R626: {fy, fx}
   // R334: 1/z travels exactly as the pixel does -- a vertex the clipper did
   // NOT create keeps the one it arrived with (R218), and one it DID create
   // takes the reciprocal from the projection it just ran.
@@ -403,6 +409,7 @@ module m2_geo_clip (
   assign out_sx1 = qsx[1]; assign out_sy1 = qsy[1];
   assign out_sx2 = qsx[2]; assign out_sy2 = qsy[2];
   assign out_sx3 = qsx[3]; assign out_sy3 = qsy[3];
+  assign out_frac = {qsf[3], qsf[2], qsf[1], qsf[0]};   // R626
   assign out_col = a_col; assign out_z = a_z; assign out_moire = a_moire;
   assign out_tex = a_tex; assign out_lum = a_lum;
   assign out_u0 = qu[0]; assign out_v0 = qv[0];
@@ -424,7 +431,7 @@ module m2_geo_clip (
       for (si = 0; si < 4; si = si + 1) begin
         qx[si] <= '0; qy[si] <= '0; qz[si] <= '0; qsx[si] <= '0; qsy[si] <= '0; qpx[si] <= 1'b0; qid[si] <= 2'd0;
         qoz[si] <= 16'd0;
-        ipx[si] <= '0; ipy[si] <= '0; ioz[si] <= 16'd0;
+        ipx[si] <= '0; ipy[si] <= '0; ioz[si] <= 16'd0; ipf[si] <= 4'd0; qsf[si] <= 4'd0;
         tx[si] <= '0; ty[si] <= '0; tz[si] <= '0;
         qu[si] <= '0; qv[si] <= '0; tu[si] <= '0; tv[si] <= '0;
       end
@@ -442,6 +449,8 @@ module m2_geo_clip (
           qu[2] <= in_u2; qv[2] <= in_v2; qu[3] <= in_u3; qv[3] <= in_v3;
           ipx[0] <= in_sx0; ipy[0] <= in_sy0; ipx[1] <= in_sx1; ipy[1] <= in_sy1;
           ipx[2] <= in_sx2; ipy[2] <= in_sy2; ipx[3] <= in_sx3; ipy[3] <= in_sy3;
+          ipf[0] <= in_frac[3:0]; ipf[1] <= in_frac[7:4];
+          ipf[2] <= in_frac[11:8]; ipf[3] <= in_frac[15:12];
           ioz[0] <= in_oz0; ioz[1] <= in_oz1; ioz[2] <= in_oz2; ioz[3] <= in_oz3;
           qpx[0] <= 1'b1; qpx[1] <= 1'b1; qpx[2] <= 1'b1; qpx[3] <= 1'b1;   // R218
           qid[0] <= 2'd0; qid[1] <= 2'd1; qid[2] <= 2'd2; qid[3] <= 2'd3;
@@ -560,6 +569,7 @@ module m2_geo_clip (
         // the pixel they arrived with (R218).
         K_EPROJ:  if (qpx[ti]) begin
           qsx[ti] <= ipx[qid[ti]]; qsy[ti] <= ipy[qid[ti]];
+          qsf[ti] <= ipf[qid[ti]];               // R626
           qoz[ti] <= ioz[qid[ti]];               // R334
           if (ti == 2'd3) kst <= K_EMIT;
           else ti <= ti + 2'd1;
@@ -569,6 +579,7 @@ module m2_geo_clip (
           // construction, which is why the quad store can keep 16.
           qsx[ti] <= pj_out_sx[15:0];
           qsy[ti] <= pj_out_sy[15:0];
+          qsf[ti] <= {pj_out_fy, pj_out_fx};     // R626
           // R334: the minifloat, formed here rather than carried as 32 bits.
           qoz[ti] <= {pj_out_invz[30:23], pj_out_invz[22:15]};
           if (ti == 2'd3) kst <= K_EMIT;

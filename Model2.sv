@@ -2994,6 +2994,7 @@ wire        cpu_tex_inval;   // R275: the CPU wrote a texture sheet
 // with no texture input at all, so shape comes first and shading second.
 wire        q3d_valid, q3d_ready;
 wire signed [15:0] q3d_x0, q3d_y0, q3d_x1, q3d_y1, q3d_x2, q3d_y2, q3d_x3, q3d_y3;
+wire        [15:0] q3d_frac;   // R626: the quarter pixel below each vertex
 /* verilator lint_off UNUSEDSIGNAL */
 wire [12:0] q3d_u0, q3d_v0, q3d_u1, q3d_v1, q3d_u2, q3d_v2, q3d_u3, q3d_v3;   // R273
 wire [15:0] q3d_oz0, q3d_oz1, q3d_oz2, q3d_oz3;   // R334: 1/z per vertex
@@ -3070,6 +3071,7 @@ m2_geometry u_geometry (
 	// simply never driven. That is what this line said for one build, and the
 	// board drew ZERO textured pixels because of it.
 	.q_tex(q3d_tex), .q_lum(q3d_lum),                                 // R271
+	.q_frac(q3d_frac),                                                // R626
 	.q_col(q3d_col), .q_z(q3d_z),
 	.dbg_polys(geo_polys), .dbg_objects(geo_objs_done), .dbg_capped(geo_capped),
 	.dbg_culled(geo_culled),
@@ -5777,7 +5779,8 @@ wire [63:0] tex_m2_data = p_dout[2];
 
 // R543: back to 8x6 -- R542's 16x3 won in the bench and not on the board.
 m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1),   // R607
-              .PXC(1'b1), .PIXSTEP(4),   // R616: pixel-centre planes; R626: bilinear, a texel per four pixels (PIXSTEP 2 drops bands on the board)
+              .PXC(1'b1), .PIXSTEP(4), .FRB(2),   // R626: quarter-pixel plane fit
+                // R616: pixel-centre planes; R626: bilinear, a texel per four pixels (PIXSTEP 2 drops bands on the board)
               .TWO_CLOCKS(1'b1), .TEX_AW(SDR_AW)) u_raster3d (   // R564: scan on clk_mem
 	// R318: clk_mem carries m2_texel, which runs at 100 MHz inside this module.
 	.clk(clk_sys), .clk_mem(clk_mem), .rst_n(mem_rst_n),
@@ -5793,6 +5796,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1),   // R
 	.q_col(q3d_col), .q_z(q3d_z),
 	// R273/R275: the texture, through the store and out to the texel fetch.
 	.q_oz0(q3d_oz0), .q_oz1(q3d_oz1), .q_oz2(q3d_oz2), .q_oz3(q3d_oz3),   // R334
+	.q_frac(q3d_frac),                                                // R626
 	.q_u0(q3d_u0), .q_v0(q3d_v0), .q_u1(q3d_u1), .q_v1(q3d_v1),
 	.q_u2(q3d_u2), .q_v2(q3d_v2), .q_u3(q3d_u3), .q_v3(q3d_v3),
 	// The OSD's Off clears the textured bit, which is the one thing every

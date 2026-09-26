@@ -60,6 +60,7 @@ module tb_clip_top (
   logic        pj_valid, pj_ready, pj_out_valid, pj_behind;
   logic [31:0] pj_x, pj_y, pj_z, pj_out_z;
   logic signed [31:0] pj_out_sx, pj_out_sy;
+  logic [1:0]         pj_out_fx, pj_out_fy;   // R626
 
   m2_geo_project u_project (
     .clk(clk), .rst_n(rst_n),
@@ -75,6 +76,7 @@ module tb_clip_top (
     .div_req(div_req[0]), .div_a(div_a[0]), .div_b(div_b[0]),
     .div_gnt(div_gnt[0]), .div_rsp(div_rsp[0]), .div_res(div_res),
     .out_valid(pj_out_valid), .out_sx(pj_out_sx), .out_sy(pj_out_sy),
+    .out_fx(pj_out_fx), .out_fy(pj_out_fy),
     .out_z(pj_out_z), .out_invz(), .out_behind(pj_behind)   // R331
   );
 
@@ -93,6 +95,7 @@ module tb_clip_top (
     .in_x3(in_x3), .in_y3(in_y3), .in_z3(in_z3),
     .in_sx0(in_sx0), .in_sy0(in_sy0), .in_sx1(in_sx1), .in_sy1(in_sy1),
     .in_sx2(in_sx2), .in_sy2(in_sy2), .in_sx3(in_sx3), .in_sy3(in_sy3),
+    .in_frac(16'd0), .out_frac(), .pj_out_fx(pj_out_fx), .pj_out_fy(pj_out_fy),   // R626
     .in_u0(in_u0), .in_v0(in_v0), .in_u1(in_u1), .in_v1(in_v1),
     .in_u2(in_u2), .in_v2(in_v2), .in_u3(in_u3), .in_v3(in_v3),
     .in_col(24'h334455), .in_z(32'h40000000), .in_moire(1'b0),

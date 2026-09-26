@@ -117,6 +117,9 @@ module m2_geometry (
   output logic [12:0] q_u2, q_v2, q_u3, q_v3,
   output logic [23:0] q_tex,           // R271: the polygon's texture state
   output logic  [7:0] q_lum,
+  // R626: each vertex's quarter pixel below q_x/q_y, {fy3,fx3,...,fy0,fx0}.
+  // For the texture plane fit only (m2_geo_project says why).
+  output logic [15:0] q_frac,
   output logic [23:0] q_col,
   output logic [31:0] q_z,
 
@@ -213,6 +216,7 @@ module m2_geometry (
   logic        pj_ready, pj_out_valid, pj_behind;
   logic [31:0] pj_out_z;
   logic signed [31:0] pj_out_sx, pj_out_sy;
+  logic [1:0]         pj_out_fx, pj_out_fy;   // R626
   // R331: 1/z for this vertex, which the projector already computed.
   logic [31:0]        pj_out_invz;
 
@@ -285,6 +289,7 @@ module m2_geometry (
     .div_req(div_req[3]), .div_a(div_a[3]), .div_b(div_b[3]),
     .div_gnt(div_gnt[3]), .div_rsp(div_rsp[3]), .div_res(div_res),
     .out_valid(pj_out_valid), .out_sx(pj_out_sx), .out_sy(pj_out_sy),
+    .out_fx(pj_out_fx), .out_fy(pj_out_fy),   // R626
     .out_z(pj_out_z), .out_invz(pj_out_invz), .out_behind(pj_behind)
   );
 
@@ -305,6 +310,7 @@ module m2_geometry (
   logic [1:0]  qi;
   logic [31:0] hx [4], hy [4], hz [4];
   logic signed [15:0] sx [4], sy [4];
+  logic [3:0]  sf [4];                               // R626: {fy, fx} quarters
   logic [15:0] soz [4];                              // R334: 1/z per vertex
   logic        clip_in_valid;
   logic        clip_in_ready;
@@ -331,6 +337,7 @@ module m2_geometry (
   // emitted (poly_chain_ok); the eight 96-bit comparators were +465 ALUTs
   // on a device at 98% and hit two times in three, this hits every time.
   logic signed [15:0] csx [4], csy [4];
+  logic [3:0]  csf [4];                  // R626
   logic        cvalid;                 // the last polygon's pixels are good
   logic [1:0]  poly_prev_link;
   logic        poly_chain_ok;
@@ -585,10 +592,10 @@ module m2_geometry (
       zprev <= 32'h5011B5EA; hzkey <= 16'd0; hzpre <= '0;   // 1e10, as render_frame_start sets it
       dbg_nonfinite <= 16'd0; dbg_behind <= 16'd0; pj_wait <= 10'd0; dbg_pj_lost <= 16'd0;
       cvalid <= 1'b0;
-      for (int k = 0; k < 4; k++) begin csx[k] <= 16'sd0; csy[k] <= 16'sd0; end
+      for (int k = 0; k < 4; k++) begin csx[k] <= 16'sd0; csy[k] <= 16'sd0; csf[k] <= 4'd0; end
       for (int k = 0; k < 4; k++) begin
         hx[k] <= 32'd0; hy[k] <= 32'd0; hz[k] <= 32'd0;
-        sx[k] <= 16'sd0; sy[k] <= 16'sd0; soz[k] <= 16'd0;
+        sx[k] <= 16'sd0; sy[k] <= 16'sd0; soz[k] <= 16'd0; sf[k] <= 4'd0;
       end
     end else begin
       pj_wait <= (qst == Q_WAIT) ? (pj_wait + 10'd1) : 10'd0;
@@ -665,6 +672,7 @@ module m2_geometry (
           // R217: this vertex was projected by the previous polygon.
           sx[qi] <= csx[hit_i[qi[0]]];
           sy[qi] <= csy[hit_i[qi[0]]];
+          sf[qi] <= csf[hit_i[qi[0]]];
           qi <= qi + 2'd1;                       // qi < 2 here, so never the last
           end else if (w_granted) qst <= Q_WAIT;
         end
@@ -691,6 +699,7 @@ module m2_geometry (
         end else if (w_pj_out_valid) begin
           sx[qi] <= pj_out_sx[15:0];
           sy[qi] <= pj_out_sy[15:0];
+          sf[qi] <= {pj_out_fy, pj_out_fx};   // R626
           // R334: THE RECIPROCAL, KEPT. m2_geo_project computes 1/z for every
           // vertex it projects and used to discard it. As a 16-bit minifloat
           // -- the 8-bit IEEE exponent and the top 8 mantissa bits, the sign
@@ -711,7 +720,7 @@ module m2_geometry (
           clip_in_valid <= 1'b0;
           qst <= Q_IDLE;
           // R217: remember this polygon's vertices and their pixels.
-          for (int k = 0; k < 4; k++) begin csx[k] <= sx[k]; csy[k] <= sy[k]; end
+          for (int k = 0; k < 4; k++) begin csx[k] <= sx[k]; csy[k] <= sy[k]; csf[k] <= sf[k]; end
           cvalid <= 1'b1;
         end
 
@@ -850,6 +859,8 @@ module m2_geometry (
     .out_oz0(coz[0]), .out_oz1(coz[1]), .out_oz2(coz[2]), .out_oz3(coz[3]),
     .in_sx0(sx[0]), .in_sy0(sy[0]), .in_sx1(sx[1]), .in_sy1(sy[1]),
     .in_sx2(sx[2]), .in_sy2(sy[2]), .in_sx3(sx[3]), .in_sy3(sy[3]),
+    .in_frac({sf[3], sf[2], sf[1], sf[0]}), .out_frac(q_frac),   // R626
+    .pj_out_fx(pj_out_fx), .pj_out_fy(pj_out_fy),
     .in_u0(hu[0]), .in_v0(hv[0]), .in_u1(hu[1]), .in_v1(hv[1]),
     .in_u2(hu[2]), .in_v2(hv[2]), .in_u3(hu[3]), .in_v3(hv[3]),
     .in_col(pcol), .in_z({16'd0, hzkey}), .in_moire(1'b0),   // R246: the reference's 16-bit z value

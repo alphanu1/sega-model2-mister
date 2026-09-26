@@ -88,6 +88,14 @@ module m2_geo_project (
 
   output logic        out_valid,
   output logic signed [31:0] out_sx, out_sy,   // pixels
+  // R626: THE QUARTER PIXEL BELOW THEM. out_sx is trunc(x); out_fx is the
+  // remainder in quarters, 0..3 (0 when x < 0 -- only the viewport's -1..0
+  // sliver). It is for the texture plane fit alone: every integer use of the
+  // vertex is unchanged. The fit through TRUNCATED vertices tilts the plane on
+  // small or steep polygons -- 13 to 58 texels on frame 2000's worst (the car
+  // numbers, Ben's "6") -- and quarter pixels take 89.9% of textured pixels
+  // within a texel to 96% in the model.
+  output logic [1:0]  out_fx, out_fy,
   output logic [31:0] out_z,                   // passed through, for the sort
   // R331: THE RECIPROCAL, KEPT INSTEAD OF THROWN AWAY.
   //
@@ -151,6 +159,16 @@ module m2_geo_project (
   logic signed [31:0] sx_i, sy_i;
   fp_to_int u_f2i_x (.f(sx_f), .i(sx_i));
   fp_to_int u_f2i_y (.f(sy_f), .i(sy_i));
+  // R626: the same floats times four -- the exponent plus two -- truncated; the
+  // low two bits are the quarters. Zero, denormal and near-infinite exponents
+  // are passed as they are (the quarters of those are not wanted).
+  function automatic logic [31:0] times4(input logic [31:0] f);
+    times4 = (f[30:23] != 8'd0 && f[30:23] < 8'd253) ? {f[31], f[30:23] + 8'd2, f[22:0]} : f;
+  endfunction
+  logic signed [31:0] sx4_i, sy4_i;
+  wire [31:0] sx_f4 = times4(sx_f), sy_f4 = times4(sy_f);
+  fp_to_int u_f2i_x4 (.f(sx_f4), .i(sx4_i));
+  fp_to_int u_f2i_y4 (.f(sy_f4), .i(sy4_i));
 
   assign in_ready = (rst_st == R_IDLE);
 
@@ -196,6 +214,7 @@ module m2_geo_project (
       sx_f <= '0; sy_f <= '0; s_behind <= 1'b0; s_z <= '0;
       step <= '0; n_got <= '0;
       out_valid <= 1'b0; out_sx <= '0; out_sy <= '0; out_z <= '0; out_invz <= '0;
+      out_fx <= 2'd0; out_fy <= 2'd0;
       out_behind <= 1'b0;
     end else begin
       out_valid <= 1'b0;
@@ -279,6 +298,8 @@ module m2_geo_project (
           // one, because the float chain was never run for it.
           out_sx     <= s_behind ? 32'sd0 : sx_i;
           out_sy     <= s_behind ? 32'sd0 : sy_i;
+          out_fx     <= (s_behind || sx_f[31]) ? 2'd0 : sx4_i[1:0];   // R626
+          out_fy     <= (s_behind || sy_f[31]) ? 2'd0 : sy4_i[1:0];
           out_z      <= s_z;
           out_invz   <= sr;                  // R331: 1/z, alongside z
           out_behind <= s_behind;

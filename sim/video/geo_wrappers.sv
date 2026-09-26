@@ -61,6 +61,7 @@ module m2_geo_project_top (
   input  logic [31:0] in_x, in_y, in_z,
   output logic        out_valid,
   output logic signed [31:0] out_sx, out_sy,
+  output logic [1:0]  out_fx, out_fy,        // R626
   output logic [31:0] out_z,
   output logic        out_behind
 );
@@ -80,7 +81,7 @@ module m2_geo_project_top (
     .add_gnt(ag[0]), .add_rsp(arsp[0]), .add_res(ares),
     .div_req(dr[0]), .div_a(da[0]), .div_b(db[0]),
     .div_gnt(dg[0]), .div_rsp(drsp[0]), .div_res(dres),
-    .out_valid(out_valid), .out_sx(out_sx), .out_sy(out_sy),
+    .out_valid(out_valid), .out_sx(out_sx), .out_sy(out_sy), .out_fx(out_fx), .out_fy(out_fy), .out_invz(),
     .out_z(out_z), .out_behind(out_behind)
   );
 

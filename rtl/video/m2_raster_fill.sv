@@ -87,7 +87,14 @@ module m2_raster_fill #(
   // is the road's wrong orientation). 1 adds half of each gradient to every
   // plane's base. 0 keeps the corner, which tb_m2_raster_fill's reference
   // models.
-  parameter bit PXC = 1'b0
+  parameter bit PXC = 1'b0,
+  // R626: QUARTER-PIXEL VERTICES FOR THE PLANE FIT. With FRB = 2, in_frac
+  // carries each vertex's quarter pixel below its integer position, and the
+  // fit runs on 4x + f: det grows by 16 and each numerator by 4, the divide's
+  // normalisation keeps the same significant bits, and the undo shifts two
+  // more. With every quarter zero the gradients and bases are bit-identical
+  // to FRB = 0. The edges -- coverage -- still use the integers.
+  parameter int unsigned FRB = 0
 ) (
   input  logic               clk,
   input  logic               rst_n,
@@ -110,6 +117,7 @@ module m2_raster_fill #(
   // R337: 1/z per vertex as a 16-bit minifloat (8-bit IEEE exponent, 8 mantissa
   // bits, sign dropped -- see m2_geometry's mf16). The fill normalises them.
   input  logic [15:0]        in_oz0, in_oz1, in_oz2, in_oz3,
+  input  logic [15:0]        in_frac,          // R626: {fy3,fx3..fy0,fx0}
   input  logic [23:0]        in_tex,
 
   // Viewport, inclusive on all four edges.
@@ -215,6 +223,13 @@ module m2_raster_fill #(
   // Latched quad. sx/sy are the raw screen coordinates: the wireframe test
   // compares them whole, so the pre-shift value has to survive.
   logic signed [15:0] sx [0:3];
+  logic [3:0]         sf [0:3];      // R626: {fy, fx}
+  // the plane fit's vertex positions, in quarters when FRB
+  function automatic logic signed [15:0] p4(input logic signed [15:0] v, input logic [1:0] f);
+    p4 = (FRB == 0) ? v : ((v <<< 2) + 16'(f));
+  endfunction
+  localparam logic signed [8:0] NET0 = (FRB == 0) ? 9'sd9 : 9'sd11;   // 8.8, and the 4 undone
+  localparam int unsigned BPS = (FRB == 0) ? 8 : 6;
   logic signed [15:0] sy [0:3];
   logic [23:0]        col;
   logic               moire;
@@ -344,10 +359,10 @@ module m2_raster_fill #(
   wire [1:0] fb = pf_second ? 2'd2 : 2'd1;
   wire [1:0] fc = pf_second ? 2'd3 : 2'd2;
 
-  wire signed [15:0] pf_ax = sx[fb] - sx[fa];
-  wire signed [15:0] pf_ay = sy[fb] - sy[fa];
-  wire signed [15:0] pf_bx = sx[fc] - sx[fa];
-  wire signed [15:0] pf_by = sy[fc] - sy[fa];
+  wire signed [15:0] pf_ax = p4(sx[fb], sf[fb][1:0]) - p4(sx[fa], sf[fa][1:0]);   // R626
+  wire signed [15:0] pf_ay = p4(sy[fb], sf[fb][3:2]) - p4(sy[fa], sf[fa][3:2]);
+  wire signed [15:0] pf_bx = p4(sx[fc], sf[fc][1:0]) - p4(sx[fa], sf[fa][1:0]);
+  wire signed [15:0] pf_by = p4(sy[fc], sf[fc][3:2]) - p4(sy[fa], sf[fa][3:2]);
   wire signed [15:0] pf_u1 = 16'({3'd0, qu[fb]}) - 16'({3'd0, qu[fa]});
   wire signed [15:0] pf_u2 = 16'({3'd0, qu[fc]}) - 16'({3'd0, qu[fa]});
   wire signed [15:0] pf_v1 = 16'({3'd0, qv[fb]}) - 16'({3'd0, qv[fa]});
@@ -557,7 +572,7 @@ module m2_raster_fill #(
     begin
       if (z >= 6'd32) pf_scale = 16'sd0;
       else begin
-        net = 9'sd9 - 9'(z) - 9'(den_sh);   // 8.8, not 16.16
+        net = NET0 - 9'(z) - 9'(den_sh);   // 8.8, not 16.16 (R626: NET0)
         // FORTY BITS, NOT SIXTY-FOUR. The answer is clamped to +/-2^27 two
         // lines below, so everything above bit 39 is thrown away -- and a
         // 64-bit bidirectional barrel shifter is twice the logic of a 40-bit
@@ -1063,21 +1078,21 @@ module m2_raster_fill #(
         S_PF_Q1: begin
           mul_n <= mul_n_c; mul_z <= zsel_c;
           mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
-          net_r <= 9'sd9 - 9'(mul_z) - 9'(den_sh); zbig_r <= (mul_z >= 6'd32);   // R459
+          net_r <= NET0 - 9'(mul_z) - 9'(den_sh); zbig_r <= (mul_z >= 6'd32);   // R459, R626
           pf_st <= S_PF_Q1W;
         end
 
         S_PF_Q1W: begin
           mul_n <= mul_n_c; mul_z <= zsel_c;
           mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
-          net_r <= 9'sd9 - 9'(mul_z) - 9'(den_sh); zbig_r <= (mul_z >= 6'd32);   // R459
+          net_r <= NET0 - 9'(mul_z) - 9'(den_sh); zbig_r <= (mul_z >= 6'd32);   // R459, R626
           pf_st <= S_PF_Q2;
         end
 
         S_PF_Q2: begin
           mul_n <= mul_n_c; mul_z <= zsel_c;
           mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
-          net_r <= 9'sd9 - 9'(mul_z) - 9'(den_sh); zbig_r <= (mul_z >= 6'd32);   // R459
+          net_r <= NET0 - 9'(mul_z) - 9'(den_sh); zbig_r <= (mul_z >= 6'd32);   // R459, R626
           dudx  <= pf_sat(sc_r);   // R594
           pf_st <= S_PF_Q2W;
         end
@@ -1085,7 +1100,7 @@ module m2_raster_fill #(
         S_PF_Q2W: begin
           mul_n <= mul_n_c; mul_z <= zsel_c;
           mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
-          net_r <= 9'sd9 - 9'(mul_z) - 9'(den_sh); zbig_r <= (mul_z >= 6'd32);   // R459
+          net_r <= NET0 - 9'(mul_z) - 9'(den_sh); zbig_r <= (mul_z >= 6'd32);   // R459, R626
           dudy  <= pf_sat(sc_r);
           pf_st <= S_PF_Q3;
         end
@@ -1100,14 +1115,14 @@ module m2_raster_fill #(
         S_PF_Q3: begin
           mul_n <= mul_n_c; mul_z <= zsel_c;
           mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
-          net_r <= 9'sd9 - 9'(mul_z) - 9'(den_sh); zbig_r <= (mul_z >= 6'd32);   // R459
+          net_r <= NET0 - 9'(mul_z) - 9'(den_sh); zbig_r <= (mul_z >= 6'd32);   // R459, R626
           dvdx  <= pf_sat(sc_r);
           pf_st <= S_PF_Q3W;
         end
 
         S_PF_Q3W: begin
           mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
-          net_r <= 9'sd9 - 9'(mul_z) - 9'(den_sh); zbig_r <= (mul_z >= 6'd32);   // R459
+          net_r <= NET0 - 9'(mul_z) - 9'(den_sh); zbig_r <= (mul_z >= 6'd32);   // R459, R626
           dvdy  <= pf_sat(sc_r);
           pf_st <= S_PF_B;
         end
@@ -1122,9 +1137,11 @@ module m2_raster_fill #(
           b_w2   <= 1'b1;
         end else if (!b_prod) begin
           // R566: the six products and the corner, registered.
-          bp_ux <= 32'(dudx * sx[fa]);  bp_uy <= 32'(dudy * sy[fa]);
-          bp_vx <= 32'(dvdx * sx[fa]);  bp_vy <= 32'(dvdy * sy[fa]);
-          bp_ox <= 32'(dodx * sx[fa]);  bp_oy <= 32'(dody * sy[fa]);
+          // R626: at the vertex's quarter-pixel position when FRB (the <<< 8
+          // below becomes <<< 6 -- the product is four times as large)
+          bp_ux <= 32'(dudx * p4(sx[fa], sf[fa][1:0]));  bp_uy <= 32'(dudy * p4(sy[fa], sf[fa][3:2]));
+          bp_vx <= 32'(dvdx * p4(sx[fa], sf[fa][1:0]));  bp_vy <= 32'(dvdy * p4(sy[fa], sf[fa][3:2]));
+          bp_ox <= 32'(dodx * p4(sx[fa], sf[fa][1:0]));  bp_oy <= 32'(dody * p4(sy[fa], sf[fa][3:2]));
           bq_u  <= qu[fa]; bq_v <= qv[fa]; bq_o <= qoz[fa];
           // R616: (gx + gy) / 2 in 16.16 -- the gradients are 8.8, so << 7.
           bh_u  <= PXC ? ((32'(dudx) + 32'(dudy)) <<< 7) : 32'sd0;
@@ -1135,11 +1152,11 @@ module m2_raster_fill #(
           b_wait <= 1'b0;
           b_w2   <= 1'b0;
           b_prod <= 1'b0;
-          base_u <= 32'({19'd0, bq_u} <<< 16) - (bp_ux <<< 8) - (bp_uy <<< 8) + bh_u;   // R616
-          base_v <= 32'({19'd0, bq_v} <<< 16) - (bp_vx <<< 8) - (bp_vy <<< 8) + bh_v;
+          base_u <= 32'({19'd0, bq_u} <<< 16) - (bp_ux <<< BPS) - (bp_uy <<< BPS) + bh_u;   // R616, R626
+          base_v <= 32'({19'd0, bq_v} <<< 16) - (bp_vx <<< BPS) - (bp_vy <<< BPS) + bh_v;
           // R337: 1/z's own plane. qoz is 15 bits, so it shifts up by 16 the
           // same way, and the span walk divides by what this yields.
-          base_o <= 32'({16'd0, bq_o} <<< 16) - (bp_ox <<< 8) - (bp_oy <<< 8) + bh_o;
+          base_o <= 32'({16'd0, bq_o} <<< 16) - (bp_ox <<< BPS) - (bp_oy <<< BPS) + bh_o;
           tex_ok <= 1'b1;
           pf_st  <= S_IDLE;
         end
@@ -1154,6 +1171,8 @@ module m2_raster_fill #(
             sx[1] <= in_x1; sy[1] <= in_y1;
             sx[2] <= in_x2; sy[2] <= in_y2;
             sx[3] <= in_x3; sy[3] <= in_y3;
+            sf[0] <= in_frac[3:0];  sf[1] <= in_frac[7:4];     // R626
+            sf[2] <= in_frac[11:8]; sf[3] <= in_frac[15:12];
             col   <= in_col;
             moire <= in_moire;
             qu[0] <= in_u0; qv[0] <= in_v0; qu[1] <= in_u1; qv[1] <= in_v1;

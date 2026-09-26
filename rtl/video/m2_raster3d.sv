@@ -53,6 +53,9 @@ module m2_raster3d #(
   // R616: pixel-centre planes and group-centre samples; texels per fetch.
   parameter bit          PXC    = 1'b0,
   parameter int unsigned PIXSTEP = 4,
+  // R626: quarter-pixel vertices for the texture plane fit (m2_quad_store,
+  // m2_raster_fill); 0 is the integer-only fit
+  parameter int unsigned FRB = 0,
 
   // ARE clk AND scan_clk ACTUALLY DIFFERENT CLOCKS?
   //
@@ -90,6 +93,7 @@ module m2_raster3d #(
   // fetch's share of the header. Arrives already converted from the floats the
   // clipper interpolates; see m2_geometry's f2uv.
   input  logic [15:0] q_oz0, q_oz1, q_oz2, q_oz3,   // R334: 1/z, minifloat
+  input  logic [15:0] q_frac,                       // R626: {fy3,fx3..fy0,fx0}
   input  logic [12:0] q_u0, q_v0, q_u1, q_v1,
   input  logic [12:0] q_u2, q_v2, q_u3, q_v3,
   input  logic [23:0] q_tex,
@@ -223,6 +227,7 @@ module m2_raster3d #(
   // costs. It also lets the values be checked on the board before the fill is
   // made to depend on them.
   logic [15:0] qo_oz0, qo_oz1, qo_oz2, qo_oz3;
+  logic [15:0] qo_frac;                              // R626
   logic [23:0] qo_tex;
   // R275: the texel fetch's wires, declared here because two modules share them.
   logic        tex_req, tex_ack;
@@ -255,7 +260,7 @@ module m2_raster3d #(
   // so this drops the right things first, and it is a parameter so the number
   // can move when the store can grow.
   m2_quad_store #(.BAND_H(BAND_H), .NBANDS(NBANDS), .BW(BW), .SCR_H(SCR_H), .TINY(4),
-                  .FTB(FTB)) u_store (   // R607
+                  .FTB(FTB), .FRB(FRB)) u_store (   // R607, R626
     .clk(clk), .rst_n(rst_n),
     .clear(qs_clear), .wbank(bank), .rbank(~bank),
     .in_valid(q_take),
@@ -263,6 +268,7 @@ module m2_raster3d #(
     .in_x2(q_x2), .in_y2(q_y2), .in_x3(q_x3), .in_y3(q_y3),
     .in_col(q_col), .in_z(q_z), .in_moire(q_moire),
     .in_oz0(q_oz0), .in_oz1(q_oz1), .in_oz2(q_oz2), .in_oz3(q_oz3),   // R334
+    .in_frac(q_frac), .out_frac(qo_frac),                             // R626
     .in_u0(q_u0), .in_v0(q_v0), .in_u1(q_u1), .in_v1(q_v1),
     .in_u2(q_u2), .in_v2(q_v2), .in_u3(q_u3), .in_v3(q_v3),
     .in_tex(q_tex),
@@ -394,7 +400,7 @@ module m2_raster3d #(
   wire signed [15:0] band_y1 = 16'(fill_band) * 16'(BAND_H);
   wire signed [15:0] band_y2 = band_y1 + 16'(BAND_H) - 16'sd1;
 
-  m2_raster_fill #(.PXC(PXC)) u_fill (   // R616
+  m2_raster_fill #(.PXC(PXC), .FRB(FRB)) u_fill (   // R616, R626
     .clk(clk), .rst_n(rst_n),
     .in_valid(fl_in_valid), .in_ready(fl_in_ready),
     // R327: no sign extension. m2_quad_store already saturates these to 13
@@ -407,6 +413,7 @@ module m2_raster3d #(
     .in_u0(qo_u0), .in_v0(qo_v0), .in_u1(qo_u1), .in_v1(qo_v1),
     .in_u2(qo_u2), .in_v2(qo_v2), .in_u3(qo_u3), .in_v3(qo_v3),
     .in_oz0(qo_oz0), .in_oz1(qo_oz1), .in_oz2(qo_oz2), .in_oz3(qo_oz3),  // R337
+    .in_frac(qo_frac),                                                    // R626
     .in_tex(qo_tex),
     .view_x1(16'sd0), .view_x2(16'(SCR_W) - 16'sd1),
     .view_y1(band_y1), .view_y2(band_y2),

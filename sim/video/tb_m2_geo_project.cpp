@@ -33,6 +33,7 @@
 #include <cstdint>
 #include <cstring>
 #include <cmath>
+#include <cmath>
 #include <random>
 #include <vector>
 
@@ -80,6 +81,12 @@ static void model(const View& v, float x, float y, float z,
     volatile float fx = v.xc + (xx * v.zoomx + v.viewx);
     volatile float fy = v.yc - (yy * v.zoomy + v.viewy);
     *sx = (int32_t)fx; *sy = (int32_t)fy;
+}
+// R626: the quarter pixel below trunc(x), 0 for x < 0 -- out_fx's contract
+static int model_q(const View& v, float x, float z) {
+    volatile float xx = x / z;
+    volatile float fx = v.xc + (xx * v.zoomx + v.viewx);
+    return fx < 0.0f ? 0 : (int)((int64_t)std::trunc((double)fx * 4.0) & 3);
 }
 
 int main(int argc, char** argv) {
@@ -248,6 +255,13 @@ int main(int argc, char** argv) {
                 checks++;
                 long dx = labs((long)(int32_t)t.d->out_sx - esx);
                 long dy = labs((long)(int32_t)t.d->out_sy - esy);
+                // R626: the quarters, exact where the integer is exact
+                if (dx == 0 && (int)t.d->out_fx != model_q(v, vx[recv], vz[recv])) {
+                    fails++;
+                    if (printed++ < 20)
+                        printf("  FAIL quarter pixel %d: got %d want %d\n", recv, (int)t.d->out_fx, model_q(v, vx[recv], vz[recv]));
+                }
+                checks++;
                 if (dx > 1 || dy > 1) {
                     fails++;
                     if (printed++ < 20)
