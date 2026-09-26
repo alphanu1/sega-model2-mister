@@ -23260,3 +23260,44 @@ throughout; its span total moves with every change to the fill's cycle count
 (HEAD 31,866,923; after these 31,834,121) because the bench draws its
 backpressure RNG once per stalled cycle, which reshuffles every later random
 quad. The totals are not a correctness signal; the checks are.
+
+**R600 -- THE THIRD 70/35 BUILD (s324-s326): ONE FAMILY LEFT, AND IT IS FIXED.
+AND 70/35 ON THE BOARD, BRIEFLY.**
+
+s324 and s325 died inside Quartus (PDB pdb_error.cpp:53, TDB tdb_node.cpp:1998
+-- the known per-seed internal errors, two of three this time). s326 (HEAD
+65a6c19, R594-R599): clk_mem **+0.034**, clk_i960 +3.059, clk_sys -0.569, HDMI
+-0.277, every hold positive, 40,777 ALM -- 300 fewer than s320/s321. R595's
+tilemap fixes cleared clk_mem entirely, and below +0.4 ns on clk_mem only one
+family is left (the tile RAM -> pal_addr_q, +0.034). On clk_sys EVERY failing
+path is one family:
+
+  state.S_LABB_W -> AGU -> +0x200 -> io address mux -> m2_tgp's decode
+  (io_lo, sel_math) -> io_ack -> agu_post_en -> x0      -0.569 ns
+  ... -> io_ack -> lab_b_val's enable                     -0.440 ns
+
+R591 had registered the address for S_DST_W only, and R596 took mem_stall off
+the address; neither removes this, because the AGU's live leg of the address
+mux is still a structural path into io_ack whichever state selects it. R600:
+the I/O address is ALWAYS a register -- captured in S_SRC, S_LABB or S_DST --
+and io_rd/io_wr are raised only in the _W state. io_ack is only ever read in
+the _W states; m2_tgp's side effects are held until the ack (table, ROM,
+buffer and RAM requests) or idempotent (the table-base and address-register
+writes, which used to happen twice, in both cycles). One cycle more per TGP
+external access. tb_mb86233_core 45 checks and 8,000 lockstep registers, 0
+fail; boot harness 30 M instructions: TGP output, retires (2,286), pops (109),
+pushes (62) and data-RAM writes (752) identical to R596's run. That bench
+never reaches the 3D workload, so the board is the check that counts.
+
+**On the board, s320 BRIEFLY** (not timing-clean: clk_mem -0.712, HDMI -0.601
+-- a measurement, not a keeper; s315 was put back straight after). 240 s
+capture against s315's (100/60/30):
+
+  - i960: 25% more instructions a second (r536.py, same window; its absolute
+    M/s is doubled by the default 120 s window, the ratio is not);
+  - critical time -13% (1,394 against 1,599), texel wait -10% (1,080 / 1,204);
+  - LATE BANDS: s315 shows late bands in steady play in about one sample in
+    eight (1:0180, 1:00f8, 1:01f8 -- bands 16-24); s320's only late samples
+    are its first two records, the start-up, and every one of the other 30
+    is clean. Few samples, but the direction is the one the clock plan
+    predicted: at 70/35 the middle bands keep up.

@@ -629,6 +629,27 @@ module mb86233_core (
   always_ff @(posedge clk) if (state == S_DST) ea_dst_q <= ea_dst;
   wire  [16:0] ea_dst_cur = (state == S_DST_W) ? ea_dst_q : ea_dst;
 
+  // R600: THE I/O ADDRESS IS ALWAYS A REGISTER. m2_tgp decodes io_addr into
+  // io_ack, and the core reads io_ack in the _W states to decide the next
+  // state and the post-increment; with the address live from the AGU, that
+  // was AGU -> +0x200 -> address mux -> m2_tgp's decode -> io_ack ->
+  // agu_post_en -> x0 in one cycle (s326: state.S_LABB_W -> x0, -0.569 ns
+  // at 70 MHz, the only failing clk_sys family left). R591 registered it for
+  // S_DST_W alone, which leaves the live leg of the mux in the path. So the
+  // address is captured in the partner state and io_rd/io_wr are raised only
+  // in the _W state: nothing reaches io_ack from the AGU in the same cycle.
+  // One cycle more per external access; io_ack was never read outside the
+  // _W states, and m2_tgp's side effects are level-held until the ack or
+  // idempotent (the table-base and address-register writes).
+  logic [15:0] io_addr_q;
+  always_ff @(posedge clk)
+    unique case (state)
+      S_SRC:   io_addr_q <= ea_src[15:0];
+      S_LABB:  io_addr_q <= agu_ea[15:0];
+      S_DST:   io_addr_q <= ea_dst[15:0];
+      default: ;
+    endcase
+
   assign prog_addr = (state == S_SRC || state == S_SRC_W)
                      && (x_src_sp == mb86233_pkg::EP_PROG)
                      ? agu_ea[15:0] : seq_pc;
@@ -836,7 +857,7 @@ module mb86233_core (
                 || ((state == S_LABB_W) && labb_done);
 
     mem_req   = 1'b0; mem_we = 1'b0; mem_addr = 17'd0; mem_wdata = 32'd0;
-    io_rd     = 1'b0; io_wr  = 1'b0; io_addr  = 16'd0; io_wdata  = 32'd0;
+    io_rd     = 1'b0; io_wr  = 1'b0; io_addr  = io_addr_q; io_wdata  = 32'd0;   // R600
     rf_rd_addr = 6'd0; rf_wr_en = 1'b0; rf_wr_addr = 6'd0; rf_wr_data = 32'd0;
     alu_in_valid = 1'b0;
     xfer_d_valid = 1'b0; xfer_d_data = 32'd0;
@@ -860,7 +881,7 @@ module mb86233_core (
         else if (x_src_sp == mb86233_pkg::EP_DATA) begin
           mem_req = 1'b1; mem_addr = ea_src;
         end else if (x_src_sp == mb86233_pkg::EP_IO) begin
-          io_rd = 1'b1; io_addr = ea_src[15:0];
+          io_rd = (state == S_SRC_W);   // R600
         end
       end
 
@@ -869,7 +890,7 @@ module mb86233_core (
           mem_req = 1'b1;
           mem_addr = agu_ea + (x_lab_b200 ? 17'h200 : 17'd0);
         end else begin
-          io_rd = 1'b1; io_addr = agu_ea[15:0];
+          io_rd = (state == S_LABB_W);  // R600
         end
       end
 
@@ -884,7 +905,7 @@ module mb86233_core (
         end else if (x_dst_sp == mb86233_pkg::EP_DATA) begin
           mem_req = 1'b1; mem_we = 1'b1; mem_addr = ea_dst_cur; mem_wdata = src_val;
         end else begin
-          io_wr = 1'b1; io_addr = ea_dst_cur[15:0]; io_wdata = src_val;
+          io_wr = (state == S_DST_W); io_wdata = src_val;   // R600
         end
       end
 
