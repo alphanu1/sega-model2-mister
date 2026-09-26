@@ -791,11 +791,18 @@ module m2_raster3d #(
     end
   end
 
+  // R604: THE SELECT READS scan_band REGISTERED. scan_y moves only at the
+  // start of a line, deep in horizontal blanking, so a copy one scan_clk
+  // later picks the same buffer for every visible pixel -- and takes the
+  // video timing counter's decode out of the mixer's path (s339: vcnt ->
+  // mix_r_q, +0.105 ns, the second-thinnest path on clk_mem).
+  logic [BW-1:0] scan_band_q;
+  always_ff @(posedge scan_clk) scan_band_q <= scan_band;
   always_comb begin
     scan_col = 16'd0;
     scan_hit = 1'b0;
     for (int i = 0; i < NBUF; i++)
-      if (rdy_s2[i] && (band_s2[i] == scan_band)) begin
+      if (rdy_s2[i] && (band_s2[i] == scan_band_q)) begin
         scan_col = bd_rd_col[i];
         scan_hit = bd_rd_hit[i];
       end

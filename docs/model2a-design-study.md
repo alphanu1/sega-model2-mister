@@ -23403,3 +23403,17 @@ histogram), every textured pixel drawn, critical time 1,155 against s315's
 the fifth record of the capture -- the start-up record s320 showed too --
 and every steady-state sample after it clean. s315 had late bands in steady
 play in about one sample in eight.
+
+**R603-R604 -- MARGIN ON clk_mem, FROM s339's TWO THINNEST PATHS.**
+
+  - R603, m2_sdram: the refresh decision's "any bank still in tRAS" is
+    !(&ras_ok), not four 4-bit compares of the counters. R410's ras_ok[b] is
+    (ras_cnt[b] == 0) held as a register, so it is the same bit (ras_cnt ->
+    sd_a, +0.002 on s339). Exact for T_RAS >= 2; it is 5. tb_m2_sdram
+    1,796,727 checks and tb_m2_sdram128 1,626,207, 0 fails and 0 timing
+    violations; x2 and cdc benches pass.
+  - R604, raster3d: the scan-out select compares a registered scan_band.
+    scan_y moves only at the start of a line, in horizontal blanking, so the
+    copy one scan_clk later picks the same buffer for every visible pixel
+    (vcnt -> mix_r_q, +0.105 on s339). tb_m2_raster3d frame hashes identical,
+    on one clock and with M2_R3D_SCANMEM.

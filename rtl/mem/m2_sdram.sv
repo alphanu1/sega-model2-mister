@@ -677,9 +677,15 @@ module m2_sdram #(
 
   // Refresh needs every bank closed, so it must wait for the longest
   // outstanding tRAS rather than just the one it happens to look at.
+  // R603: FROM ras_ok, NOT THE COUNTERS. R410 keeps ras_ok[b] equal to
+  // (ras_cnt[b] == 0) as a register -- set as the counter steps off 1, cleared
+  // as it loads T_RAS - 1 -- so this is the same bit with four 4-bit compares
+  // taken out of the refresh decision (s339: ras_cnt -> sd_a, +0.002 ns, the
+  // thinnest path on clk_mem). Exact while T_RAS >= 2 (it is 5); T_RAS = 1
+  // would load 0 and clear ras_ok, which R410's ras_ok already gets wrong.
+  logic [3:0] ras_ok;    // ras_cnt[b] == 0 (R410; declared here for R603)
   logic ras_any;
-  assign ras_any = (ras_cnt[0] != 0) || (ras_cnt[1] != 0)
-                || (ras_cnt[2] != 0) || (ras_cnt[3] != 0);
+  assign ras_any = !(&ras_ok);
 
   logic [15:0]              init_cnt;
   // R581: the bring-up steps, decoded one count early (see S_INIT).
@@ -784,7 +790,6 @@ module m2_sdram #(
   // moves them. No comparator on the path, and no hazard: the flag clears in
   // the very cycle the counter is loaded, which is what made a registered
   // summary of the counters unsafe.
-  logic [3:0] ras_ok;    // ras_cnt[b] == 0
   logic [3:0] rd_ok;     // rd_bank_cnt[b] == 0
   wire [3:0] bank_pre_ok;
   // Explicit genvar + generate: Quartus 17.0 rejects the inline
