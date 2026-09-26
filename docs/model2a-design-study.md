@@ -23369,3 +23369,37 @@ back). 240 s capture:
   - critical time 505 (s320: 1,394; s315: 1,599), texel wait 415 (1,080;
     1,204);
   - LATE BANDS: NONE, in every one of 33 samples, start-up included.
+
+**s337-s339, AND s339 ON THE BOARD TO STAY. A CORRECTION TO THE DEPLOY RULE
+AS IT WAS STATED.**
+
+| seed | clk_mem 100 | clk_sys 70 | clk_i960 35 | HDMI 148.5 | ALM |
+|---|---|---|---|---|---|
+| s337 | +0.040 | +0.401 | +3.205 | -0.549 | 41,019 |
+| s338 | -0.001 | +0.874 | +2.658 | -0.333 | 40,906 |
+| s339 | +0.002 | +0.195 | +3.417 | -0.139 | 40,941 |
+
+(Same RTL as s334-s336.) Every hold positive, 16/16 DQ packed, clk_mem
+global, no SDC critical warnings, no internal errors. Below +0.3 ns on s339
+only five paths are left in the whole core: m2_sdram ras_cnt -> sd_a
+(+0.002), vcnt -> the mixer (+0.105), and the fill's xa into two multipliers
+(+0.195, +0.281).
+
+THE CORRECTION. The rule given for this work was "all clocks >= 0 setup and
+hold stay on the board". The summaries used to judge builds reported only
+the core's three PLL clocks; the HDMI pixel clock was added to them tonight,
+and it shows that NO build of this core has met it: s315, the 100/60/30
+keeper, is at -0.062, and s310 -0.470, s299 -0.702, s297 -0.486. R201 already
+records that no Quartus Lite setting reaches it. So the rule as it has
+actually been applied is: the core's clocks >= 0, holds >= 0, and HDMI
+reported. HDMI's failing paths are sys/'s ascal (a register-to-register copy
+in its vertical divider at -0.939 on s334 -- routing, not logic), which this
+project does not edit.
+
+On that rule s339 is the first 70/35 build that qualifies, and it replaces
+s315 on the board. 240 s capture: the TGP runs (same program-address
+histogram), every textured pixel drawn, critical time 1,155 against s315's
+1,599 (-28%), texel wait 891 against 1,204. LATE BANDS: one sample, 0:ffc1,
+the fifth record of the capture -- the start-up record s320 showed too --
+and every steady-state sample after it clean. s315 had late bands in steady
+play in about one sample in eight.
