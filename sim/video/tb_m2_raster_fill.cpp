@@ -694,6 +694,101 @@ int main(int argc, char** argv) {
     checks += ran; fails += hung;
   }
 
+  // ------------------------------------------- R609: THE ROAD, MEASURED
+  //
+  // Ben, on the board: the road is right under the car and wrong from mid
+  // distance out -- horizontal bands where the texture should stream toward
+  // the vanishing point. A road quad runs from under the camera to far ahead,
+  // so its 1/z falls by a large ratio across ONE quad, and the span walk
+  // divides u/z by a 1/z that is tiny at the far end: any error in the u/z
+  // plane is multiplied by the depth ratio there. Every other test here keeps
+  // the ratio under 8:1 on a small quad. This one reports, row by row, how far
+  // the u and v this fill's spans produce (divided exactly, as m2_span_tex
+  // does) are from true perspective -- no pass/fail yet, it is the
+  // measurement the fix is sized against.
+  if (std::getenv("M2_FILL_ROAD")) {
+    Vm2_raster_fill* d = dut.d;
+    auto tickf = [&]() { d->clk = 0; d->eval(); d->clk = 1; d->eval(); };
+    auto mf16r = [](double x) -> uint16_t {
+      union { float f; uint32_t b; } u; u.f = (float)x;
+      return (uint16_t)(((u.b >> 23) & 0xff) << 8 | ((u.b >> 15) & 0xff));
+    };
+    auto mfval = [](uint16_t m) -> double {
+      int e = m >> 8; if (!e) return 0.0;
+      return (1.0 + (m & 0xff) / 256.0) * std::ldexp(1.0, e - 127);
+    };
+    const int ratios[] = {4, 16, 64};
+    for (int R : ratios) {
+      // Near edge across the bottom, far edge narrow near the top.
+      const int32_t VX[4] = {  0, 495, 300, 196};
+      const int32_t VY[4] = {383, 383, 120, 120};
+      const int32_t U[4]  = {  0, 1024, 1024,    0};   // quarter-texels: 256 texels across
+      const int32_t V[4]  = {  0,    0, 8000, 8000};   // 2,000 texels along
+      const double  Zn = 10.0, Zf = 10.0 * R;
+      const double  Z[4] = {Zn, Zn, Zf, Zf};
+      uint16_t MF[4]; double OZt[4];
+      for (int i = 0; i < 4; i++) { MF[i] = mf16r(1.0 / Z[i]); OZt[i] = mfval(MF[i]); }
+      // Truth: u/z, v/z and 1/z are planes in screen space; fit them exactly
+      // through vertices 0,1,2 from the SAME quantised 1/z the fill is given.
+      const double ax = VX[1]-VX[0], ay = VY[1]-VY[0], bx = VX[2]-VX[0], by = VY[2]-VY[0];
+      const double det = ax*by - bx*ay;
+      auto plane = [&](const double *P, double &p0, double &gx, double &gy) {
+        const double p1 = P[1]-P[0], p2 = P[2]-P[0];
+        gx = (p1*by - p2*ay)/det; gy = (ax*p2 - bx*p1)/det; p0 = P[0];
+      };
+      double UZt[4], VZt[4];
+      for (int i = 0; i < 4; i++) { UZt[i] = U[i]*OZt[i]; VZt[i] = V[i]*OZt[i]; }
+      double u0,ugx,ugy, v0,vgx,vgy, o0,ogx,ogy;
+      plane(UZt,u0,ugx,ugy); plane(VZt,v0,vgx,vgy); plane(OZt,o0,ogx,ogy);
+      d->view_x1 = 0; d->view_x2 = 495; d->view_y1 = 0; d->view_y2 = 383;
+      d->in_x0 = VX[0]; d->in_y0 = VY[0]; d->in_x1 = VX[1]; d->in_y1 = VY[1];
+      d->in_x2 = VX[2]; d->in_y2 = VY[2]; d->in_x3 = VX[3]; d->in_y3 = VY[3];
+      d->in_u0 = U[0]; d->in_v0 = V[0]; d->in_u1 = U[1]; d->in_v1 = V[1];
+      d->in_u2 = U[2]; d->in_v2 = V[2]; d->in_u3 = U[3]; d->in_v3 = V[3];
+      d->in_oz0 = MF[0]; d->in_oz1 = MF[1]; d->in_oz2 = MF[2]; d->in_oz3 = MF[3];
+      d->in_col = 0xffffff; d->in_moire = 0; d->in_tex = 1;
+      d->in_valid = 1; d->span_ready = 1; d->eval();
+      // error per band of rows: [0] far third .. [2] near third
+      double emax[3] = {0,0,0}, esum[3] = {0,0,0}; long en[3] = {0,0,0};
+      bool acc = false, ret = false; long g = 0;
+      for (;;) {
+        d->eval();
+        if (d->span_valid && d->span_ready && d->span_tex_en) {
+          const int y = (int16_t)d->span_y, xa = (int16_t)d->span_x0, xb = (int16_t)d->span_x1;
+          const double su = (double)(int32_t)d->span_u / 65536.0, sv = (double)(int32_t)d->span_v / 65536.0;
+          const double so = (double)(int32_t)d->span_ooz / 65536.0;
+          const double du = (double)(int16_t)d->span_dudx / 256.0, dv = (double)(int16_t)d->span_dvdx / 256.0;
+          const double doo = (double)(int16_t)d->span_doozdx / 256.0;
+          for (int x = xa; x <= xb; x += 7) {
+            const int k = x - xa;
+            const double ro = so + k*doo;
+            if (ro <= 0) continue;
+            // the fill's plane is (u * n) >> 15 over n, so the quotient is u / 2^15
+            const double ru = 32768.0 * (su + k*du) / ro, rv = 32768.0 * (sv + k*dv) / ro;   // quarter-texels
+            const double to = o0 + ogx*(x-VX[0]) + ogy*(y-VY[0]);
+            const double tu = (u0 + ugx*(x-VX[0]) + ugy*(y-VY[0])) / to;
+            const double tv = (v0 + vgx*(x-VX[0]) + vgy*(y-VY[0])) / to;
+            const double e = std::max(std::fabs(ru-tu), std::fabs(rv-tv)) / 4.0;   // texels
+            const int b = (y < 208) ? 0 : (y < 296) ? 1 : 2;
+            emax[b] = std::max(emax[b], e); esum[b] += e; en[b]++;
+          }
+        }
+        if (d->quad_done && acc) ret = true;
+        if (d->in_ready && d->in_valid) acc = true;
+        const bool drained = ret && !d->span_valid;
+        tickf();
+        if (acc) { d->in_valid = 0; d->eval(); }
+        if (drained) break;
+        if (++g > 400000) { printf("  road %d:1 timeout\n", R); break; }
+      }
+      printf("  road 1/z %2d:1 -- error in texels, far/mid/near thirds: max %.1f/%.1f/%.1f  mean %.2f/%.2f/%.2f\n",
+             R, emax[0], emax[1], emax[2],
+             en[0]?esum[0]/en[0]:0, en[1]?esum[1]/en[1]:0, en[2]?esum[2]/en[2]:0);
+      d->in_valid = 0; d->eval();
+      for (int k = 0; k < 40; k++) tickf();
+    }
+  }
+
   // ----------------------------------------------------------------- fuzz
   // Three coordinate regimes, because they reach different code: on-screen
   // exercises the walk, near-edge exercises the clamps, and wild exercises the

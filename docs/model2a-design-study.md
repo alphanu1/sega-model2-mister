@@ -23655,3 +23655,37 @@ Still to do, from the same reference behaviour: the board's own answer to
 running out of time -- show the band with its far detail missing rather
 than not at all -- which front to back now makes possible. Not needed for
 any frame measured here.
+
+**R609 -- THE ROAD: u AND v WERE CLAMPED AT 2,048 TEXELS, AND DAYTONA'S GO TO
+8,192. (Closes the OPEN ISSUE of 2026-09-25 as far as its cause; the board
+decides whether it is the whole of it.)**
+
+Ben, with two photos from the board (s347): "under the car ok, in front not.
+it just seems to be the road" -- the far road shows bands parallel to the
+horizon where the texture should stream toward the vanishing point.
+
+MEASURED, in the reference. The instrumented MAME (R606) counted, per
+rendered frame, polygons with a raw u or v (13.3) past 16,383 -- the point
+where m2_geometry's f2uv clamps its 13-bit quarter-texel to 8,191 (2,047.75
+texels). 7,277 of 7,644 frames with 3D (95%) have one; ~11 polygons a frame;
+raw values up to 65,535 (8,191.9 texels). f2uv's comment called 16,383 "the
+largest useful value" -- true for a texel ADDRESS, not for a coordinate that
+the fetch reduces modulo the texture. A clamped far vertex bends the whole
+u/z plane, and the error grows with distance along the polygon.
+
+The fill's own precision was measured first and is NOT it (a new, opt-in
+road test in tb_m2_raster_fill, M2_FILL_ROAD=1: a road quad at 4:1, 16:1 and
+64:1 in 1/z, u and v rebuilt per pixel exactly as m2_span_tex divides them,
+against true perspective: at most 4.7 texels at the far end, mean ~1, near
+and middle under half a texel -- not the bands in the photos).
+
+THE FIX. The reference reads a coordinate only as `(u >> 8) & (w - 1)`, and
+its mirror test the next bit up, so moving all four vertices by the same
+multiple of TWICE the texture size changes no texel and no mirror phase.
+m2_geometry now converts each vertex to a 15-bit quarter-texel, rounds the
+smallest of the four down to 256 << code (2 x (32 << code) texels, width code
+for u, height code for v), subtracts it from all four, and clamps only a
+polygon that itself spans more than 2,048 texels. Checked in Python against
+m2_texel_addr's own wrap and mirror: 5,643 random polygons that fit, 0 texel
+mismatches; interior pixels shift by the same offset because the plane is
+linear. tb_m2_geometry and tb_m2_geo pass.

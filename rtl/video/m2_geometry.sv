@@ -758,10 +758,56 @@ module m2_geometry (
       end
     end
   endfunction
-  assign q_u0 = f2uv(cu[0]); assign q_v0 = f2uv(cv[0]);
-  assign q_u1 = f2uv(cu[1]); assign q_v1 = f2uv(cv[1]);
-  assign q_u2 = f2uv(cu[2]); assign q_v2 = f2uv(cv[2]);
-  assign q_u3 = f2uv(cu[3]); assign q_v3 = f2uv(cv[3]);
+  // R609: THE COORDINATE WRAPS, SO THE POLYGON IS MOVED, NOT CLAMPED.
+  //
+  // f2uv clamps at 8,191 quarter-texels (2,047.75 texels), and Daytona's
+  // polygons go far past that: in MAME, 95% of frames with 3D (7,277 of
+  // 7,644) have a polygon with a vertex beyond 2,048 texels, ~11 a frame, up
+  // to the full 16 bits (8,191.9 texels). The long repeating surfaces -- the
+  // road -- are the ones. Clamping a far vertex bends the u/z plane in
+  // proportion to the distance along the polygon: right under the car, wrong
+  // ahead, as Ben saw on the board.
+  //
+  // The reference only ever uses the coordinate modulo the texture:
+  // `(u >> 8) & (tex_width - 1)`, and the mirror test reads the next bit up
+  // (`u & (tex_width << 8)`). So subtracting the same multiple of TWICE the
+  // texture's size from all four vertices changes no texel and no mirror
+  // phase. Per axis: each vertex to a 15-bit quarter-texel (pu/2, up to
+  // 32,767), the smallest of the four rounded down to 256 << code quarter-
+  // texels (2 x (32 << code) texels), subtracted from all four. Only a polygon
+  // that itself spans more than 2,048 texels still clamps.
+  function automatic logic [14:0] f2uvw(input logic [31:0] f);
+    logic [7:0]  e;
+    logic [23:0] m;
+    begin
+      e = f[30:23];
+      m = {1'b1, f[22:0]};
+      if (f[31] || e < 8'd127)      f2uvw = 15'd0;
+      else if (e >= 8'd127 + 8'd15) f2uvw = 15'h7fff;
+      else                          f2uvw = 15'(m >> (5'(8'd24 - (e - 8'd127))));
+    end
+  endfunction
+  function automatic logic [14:0] min4w(input logic [14:0] a, b, c, d);
+    logic [14:0] p, q;
+    begin
+      p = (a < b) ? a : b;
+      q = (c < d) ? c : d;
+      min4w = (p < q) ? p : q;
+    end
+  endfunction
+  logic [14:0] wu [4], wv [4];
+  always_comb for (int k = 0; k < 4; k++) begin wu[k] = f2uvw(cu[k]); wv[k] = f2uvw(cv[k]); end
+  wire  [15:0] uper = (16'd256 << ctex[3:1]) - 16'd1;   // 2 x width, quarter-texels, less one
+  wire  [15:0] vper = (16'd256 << ctex[6:4]) - 16'd1;
+  wire  [14:0] uoff = min4w(wu[0], wu[1], wu[2], wu[3]) & ~uper[14:0];
+  wire  [14:0] voff = min4w(wv[0], wv[1], wv[2], wv[3]) & ~vper[14:0];
+  function automatic logic [12:0] sat13(input logic [14:0] x);
+    sat13 = (x > 15'd8191) ? 13'h1fff : x[12:0];
+  endfunction
+  assign q_u0 = sat13(wu[0] - uoff); assign q_v0 = sat13(wv[0] - voff);
+  assign q_u1 = sat13(wu[1] - uoff); assign q_v1 = sat13(wv[1] - voff);
+  assign q_u2 = sat13(wu[2] - uoff); assign q_v2 = sat13(wv[2] - voff);
+  assign q_u3 = sat13(wu[3] - uoff); assign q_v3 = sat13(wv[3] - voff);
   assign q_tex = ctex[23:0];
   assign q_oz0 = coz[0]; assign q_oz1 = coz[1];      // R334
   assign q_oz2 = coz[2]; assign q_oz3 = coz[3];
