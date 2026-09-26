@@ -1,6 +1,17 @@
 # Handoff
 
-## 2026-09-26 (late night): `build/seeds/s398` IS ON THE BOARD. BILINEAR, PIXSTEP 4.
+## 2026-09-27: `build/seeds/s407` IS ON THE BOARD. EVERY CORE CLOCK CLEAN.
+
+s407 = s398 + R626 quarter-pixel vertices (the "6" / missing texture lines).
+clk_mem +0.222, clk_sys +0.300, clk_i960 +3.571, HDMI -0.331, 41,375 ALM.
+s405 also clean (clk_mem +0.099, clk_sys +0.444); s406 the Quartus TDB
+internal error again. s398 is Model2.rbf.prev. Bands still drop on heavy
+scenes (as s398) -- R627 "bilinear unless late" is s408-s410, building.
+Next after that: more texel reads in flight / texture priority in m2_sdram
+(Ben: the SDRAM bandwidth is not used up -- right; the limit is two lines in
+flight and queueing behind the other masters).
+
+## 2026-09-26 (late night): `build/seeds/s398` WAS ON THE BOARD. BILINEAR, PIXSTEP 4.
 
 s398: PIXSTEP 4 (Ben: PIXSTEP 2 drops bands on heavy scenes, before bilinear
 too), bilinear (OSD Texture filter), checker. clk_sys +0.471, clk_i960 +2.263,
