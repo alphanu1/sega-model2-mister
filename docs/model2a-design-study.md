@@ -23778,3 +23778,13 @@ the clipper holding a quad is not. tb_m2_geometry and tb_m2_geo pass (their
 quads are untextured, so u/v equality at the handshake was checked with a
 temporary probe: 14 quads, 0 stale -- vacuous on u/v values, which is why the
 argument above is the proof).
+
+**R614.** s366-s368 (R613): FIT (39,773-40,849 ALM). s367 clk_sys -0.221
+(one band-paint path into the M10K, not seen on the other two), clk_mem
++0.288, HDMI -0.266; s368 clk_sys -0.796, clk_mem +0.097, **HDMI +0.014**;
+s366 clk_sys -1.061, clk_mem -0.281, HDMI +0.112. Two of three pass HDMI
+with the stream compiled out. The common clk_sys family: m2_geo_clip qu/qv
+-> ru/rv, i.e. R613's register still had the float conversion, the minimum,
+the subtract and the clamp in front of it. The conversion is now its own
+stage (wu/wv registered) and the quad is presented once held two cycles
+(c_age), two cycles a quad in all. tb_m2_geometry and tb_m2_geo pass.

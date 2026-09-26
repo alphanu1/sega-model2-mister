@@ -795,8 +795,10 @@ module m2_geometry (
       min4w = (p < q) ? p : q;
     end
   endfunction
+  // R614: the conversion is its own stage -- s368 still had clipper -> ru/rv
+  // at -0.796 with conversion, minimum, subtract and clamp in one cycle.
   logic [14:0] wu [4], wv [4];
-  always_comb for (int k = 0; k < 4; k++) begin wu[k] = f2uvw(cu[k]); wv[k] = f2uvw(cv[k]); end
+  always_ff @(posedge clk) for (int k = 0; k < 4; k++) begin wu[k] <= f2uvw(cu[k]); wv[k] <= f2uvw(cv[k]); end
   wire  [15:0] uper = (16'd256 << ctex[3:1]) - 16'd1;   // 2 x width, quarter-texels, less one
   wire  [15:0] vper = (16'd256 << ctex[6:4]) - 16'd1;
   wire  [14:0] uoff = min4w(wu[0], wu[1], wu[2], wu[3]) & ~uper[14:0];
@@ -812,14 +814,19 @@ module m2_geometry (
   // now hold THIS quad's values. Everything else the store takes (x, y, z,
   // 1/z, texture, colour) comes straight off the held clipper outputs.
   logic c_valid, c_ready, c_seen;
+  logic [1:0] c_age;   // R614: cycles this quad has been held, to 2
   logic [12:0] ru [4], rv [4];
   always_ff @(posedge clk) for (int k = 0; k < 4; k++) begin
     ru[k] <= sat13(wu[k] - uoff);
     rv[k] <= sat13(wv[k] - voff);
   end
+  // R614: two register stages now (wu/wv, then ru/rv), so the quad is shown
+  // once it has been held two cycles.
   always_ff @(posedge clk or negedge rst_n)
-    if (!rst_n) c_seen <= 1'b0;
-    else        c_seen <= c_valid && !(c_valid && c_ready);
+    if (!rst_n)                  c_age <= 2'd0;
+    else if (!c_valid || c_ready) c_age <= 2'd0;   // gone, or taken this cycle
+    else if (c_age != 2'd2)       c_age <= c_age + 2'd1;
+  assign c_seen = (c_age == 2'd2);
   assign q_valid = c_valid && c_seen;
   assign c_ready = q_ready && c_seen;
   assign q_u0 = ru[0]; assign q_v0 = rv[0];
