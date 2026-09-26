@@ -36,6 +36,9 @@ void set(int op, double A, double B, int32_t I, int rm) {
   U ua{A}, ub{B};
   dut->op = op; dut->a = ua.u; dut->b = ub.u;
   dut->ai = (uint32_t)I; dut->rmode = rm; dut->eval();
+  // R575: one clock edge, so the STAGED build's register takes the operands.
+  // The combinational build ignores clk and reads the same thing.
+  dut->clk = 0; dut->eval(); dut->clk = 1; dut->eval();
 }
 
 // round_to_int, exactly as the reference selects it from AC[31:30].

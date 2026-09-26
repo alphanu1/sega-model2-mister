@@ -578,7 +578,7 @@ module i960_top (
   logic [63:0] fmisc_y_q;
   logic [31:0] fmisc_yi_q;
   logic [2:0]  fmisc_cc_q;
-  logic        misc_ph;          // second T_FP cycle of an fpmisc instruction
+  logic [1:0]  misc_ph;          // T_FP cycles spent on an fpmisc instruction
   always_ff @(posedge clk) begin
     fmisc_y_q  <= fmisc_y;
     fmisc_yi_q <= fmisc_yi;
@@ -625,7 +625,10 @@ module i960_top (
                      : fp_is_div  ? fdiv_y
                      : fp_is_sqrt ? fsqrt_y
                                   : fmisc_y_q;          // R566: registered
-  i960_fpmisc u_fpmisc (.op(fmisc_op), .rmode(ac[31:30]),
+  // R575: STAGED -- a register inside the unit after the round add, so the
+  // i960 can run at 35 MHz (R565's list: fpmisc is the only path over 28 ns).
+  localparam bit FPMISC_STAGED = 1'b1;
+  i960_fpmisc #(.STAGED(FPMISC_STAGED)) u_fpmisc (.clk(clk), .op(fmisc_op), .rmode(ac[31:30]),
                         .a(fp_a), .b(fp_b), .ai(src1_val),
                         .y(fmisc_y), .yi(fmisc_yi), .cc(fmisc_cc));
 
@@ -671,10 +674,14 @@ module i960_top (
   logic fp_writes_int, fp_writes_cc;
   assign fp_writes_cc  = fp_is_misc && (fmisc_op == 3'd0);
   assign fp_writes_int = fp_is_misc && ((fmisc_op == 3'd3) || (fmisc_op == 3'd4));
-  // R566: high for exactly the second T_FP cycle of an fpmisc instruction.
+  // R566: counts an fpmisc instruction's T_FP cycles. It retires when the
+  // registered result is ready: after 1 (R566's output register) or, with the
+  // unit STAGED (R575), after 2.
+  localparam logic [1:0] MISC_LAST = FPMISC_STAGED ? 2'd2 : 2'd1;
   always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) misc_ph <= 1'b0;
-    else        misc_ph <= (ts == T_FP) && fp_is_misc && !misc_ph;
+    if (!rst_n)                                            misc_ph <= 2'd0;
+    else if ((ts == T_FP) && fp_is_misc && (misc_ph != MISC_LAST)) misc_ph <= misc_ph + 2'd1;
+    else                                                   misc_ph <= 2'd0;
   end
 
   // ---------------------------------------------------------------- AGU
@@ -1550,7 +1557,7 @@ module i960_top (
           // to it. Accepting any unit's done lets a stale strobe from an
           // earlier instruction retire the wrong result — and the multi-cycle
           // units (divide, sqrt) are exactly where that window is wide.
-          if ((fp_is_misc && misc_ph)            // R566: a cycle to register it
+          if ((fp_is_misc && (misc_ph == MISC_LAST))   // R566/R575: its result registered
               || (fp_is_add  && fadd_done)
               || (fp_is_mul  && fmul_done)
               || (fp_is_div  && fdiv_done)

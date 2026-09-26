@@ -32,7 +32,17 @@
 // Model 1's M0 recorded the same trap on the TGP's cfxd — "round to nearest"
 // in a mode field usually means half-to-even and here it does not.
 
-module i960_fpmisc (
+module i960_fpmisc #(
+  // R575: 1 puts a register after the round add, splitting the unit's ~25 ns
+  // at about half: unpack, fraction mask, round decision and the add before
+  // it; the shift, overflow, leading-zero count, renormalise and the result
+  // select after. Results then appear one clk after the operands. 0 is the
+  // combinational unit exactly as it was, and clk is unused.
+  parameter bit STAGED = 1'b0
+) (
+  /* verilator lint_off UNUSEDSIGNAL */
+  input  logic        clk,          // R575: used only when STAGED
+  /* verilator lint_on UNUSEDSIGNAL */
   input  logic [2:0]  op,
   input  logic [1:0]  rmode,        // AC[31:30]
   input  logic [63:0] a,            // FP operand
@@ -94,11 +104,12 @@ module i960_fpmisc (
                              : (sa ? (!mag_lt && !mag_eq) : mag_lt);
   assign a_eq_b = both_zero || ((sa == sb) && mag_eq);
 
+  logic [2:0] cc_c;
   always_comb begin
-    if (a_nan || b_nan) cc = 3'b000;
-    else if (a_lt_b)    cc = 3'b100;
-    else if (a_eq_b)    cc = 3'b010;
-    else                cc = 3'b001;
+    if (a_nan || b_nan) cc_c = 3'b000;
+    else if (a_lt_b)    cc_c = 3'b100;
+    else if (a_eq_b)    cc_c = 3'b010;
+    else                cc_c = 3'b001;
   end
 
   // ----------------------------------------------------- int32 -> double
@@ -173,47 +184,77 @@ module i960_fpmisc (
   assign rounded = {1'b0, int_part} +
                    (inc ? ({1'b0, frac_mask} + 57'd1) : 57'd0);
 
+  // --------------------------------------------------- R575: the stage
+  //
+  // Everything the second half needs, and every result the first half has
+  // already finished (compare, int-to-double, scale, logb -- computed below
+  // from the operands and registered with the rest).
+  logic [56:0]        r2_rounded;
+  logic [5:0]         r2_fbits;
+  logic signed [12:0] r2_eu;
+  logic               r2_sa, r2_a_nan, r2_a_inf, r2_inc;
+  logic [63:0]        r2_a, r2_i2d, r2_scaled, r2_logb_d;
+  logic [2:0]         r2_op;
+  logic [63:0]        scaled, logb_d;       // declared here, computed below
+  generate
+    if (STAGED) begin : g_staged
+      always_ff @(posedge clk) begin
+        r2_rounded <= rounded; r2_fbits <= fbits; r2_eu <= eu;
+        r2_sa <= sa; r2_a_nan <= a_nan; r2_a_inf <= a_inf; r2_inc <= inc;
+        r2_a <= a; r2_i2d <= i2d; r2_scaled <= scaled; r2_logb_d <= logb_d;
+        r2_op <= op; cc <= cc_c;
+      end
+    end else begin : g_comb
+      always_comb begin
+        r2_rounded = rounded; r2_fbits = fbits; r2_eu = eu;
+        r2_sa = sa; r2_a_nan = a_nan; r2_a_inf = a_inf; r2_inc = inc;
+        r2_a = a; r2_i2d = i2d; r2_scaled = scaled; r2_logb_d = logb_d;
+        r2_op = op; cc = cc_c;
+      end
+    end
+  endgenerate
+
   // Integer result: shift the significand down to the units position. No
-  // short-circuit on a negative exponent — 0.5 rounds to 1, not to 0.
+  // short-circuit on r2_a negative exponent — 0.5 rounds to 1, not to 0.
   // Keep the shift at full width. Truncating it to 32 bits first destroys the
   // evidence: rounding can carry the magnitude up past 2^32 -- 4294967295.5
-  // rounds to 2^32 -- and the truncated result is then 0, which looks like a
+  // rounds to 2^32 -- and the truncated result is then 0, which looks like r2_a
   // small in-range value and passes any test that only inspects bit 31.
   logic [56:0] shifted;
-  assign shifted = rounded >> fbits;
+  assign shifted = r2_rounded >> r2_fbits;
 
   logic [31:0] int_abs;
   always_comb begin
-    if (eu > 13'sd31) int_abs = 32'h8000_0000;
+    if (r2_eu > 13'sd31) int_abs = 32'h8000_0000;
     else              int_abs = shifted[31:0];
   end
 
-  // Overflow is NOT `eu > 31`. An exponent of exactly 31 covers magnitudes in
+  // Overflow is NOT `r2_eu > 31`. An exponent of exactly 31 covers magnitudes in
   // [2^31, 2^32), all of which are out of int32 range -- except -2^31, which is
-  // representable. Testing the exponent alone silently wrapped -3.18e9 to a
+  // representable. Testing the exponent alone silently wrapped -3.18e9 to r2_a
   // positive value and agreed with nothing.
   //
-  // The out-of-range value is 0x8000_0000, matching the oracle. MAME casts a
+  // The out-of-range value is 0x8000_0000, matching the oracle. MAME casts r2_a
   // double to int32_t, which is undefined in C++ and yields x86's indefinite
   // value; the i960 manual instead specifies the truncated low 32 bits when the
   // integer-overflow fault is masked. Those disagree, and the oracle wins --
   // see the design study for the record. Daytona converts no out-of-range
   // float, so nothing in the game depends on which was chosen.
   logic ovf;
-  assign ovf = (eu > 13'sd31) || (|shifted[56:32]) ||
-               (shifted[31] && !(sa && (shifted[30:0] == 31'd0)));
+  assign ovf = (r2_eu > 13'sd31) || (|shifted[56:32]) ||
+               (shifted[31] && !(r2_sa && (shifted[30:0] == 31'd0)));
 
-  assign yi = (a_nan || ovf) ? 32'h8000_0000
-                             : (sa ? (~int_abs + 32'd1) : int_abs);
+  assign yi = (r2_a_nan || ovf) ? 32'h8000_0000
+                             : (r2_sa ? (~int_abs + 32'd1) : int_abs);
 
-  // Integral double result. The integral value is rounded * 2^(eu-52), so it
+  // Integral double result. The integral value is r2_rounded * 2^(r2_eu-52), so it
   // is renormalised rather than pasted back under the original exponent —
-  // which is what produced a nonsense exponent for |x| < 1.
+  // which is what produced r2_a nonsense exponent for |x| < 1.
   logic [5:0] rlz;
   always_comb begin
     rlz = 6'd57;
     for (int i = 0; i < 57; i++)
-      if (rounded[i]) rlz = 6'(i);          // index of the highest set bit
+      if (r2_rounded[i]) rlz = 6'(i);          // index of the highest set bit
   end
 
   // Rounding to an integral value cannot overflow or underflow the exponent
@@ -221,23 +262,23 @@ module i960_fpmisc (
   /* verilator lint_off UNUSEDSIGNAL */
   logic signed [12:0] rexp;
   /* verilator lint_on UNUSEDSIGNAL */
-  assign rexp = $signed({7'd0, rlz}) + eu - 13'sd52 + 13'sd1023;
+  assign rexp = $signed({7'd0, rlz}) + r2_eu - 13'sd52 + 13'sd1023;
 
   logic [51:0] rman;
-  assign rman = (rlz >= 6'd52) ? 52'(rounded >> (rlz - 6'd52))
-                               : 52'(rounded << (6'd52 - rlz));
+  assign rman = (rlz >= 6'd52) ? 52'(r2_rounded >> (rlz - 6'd52))
+                               : 52'(r2_rounded << (6'd52 - rlz));
 
   logic [63:0] round_d;
   always_comb begin
-    if (a_nan || a_inf || (eu >= 13'sd52)) round_d = a;
+    if (r2_a_nan || r2_a_inf || (r2_eu >= 13'sd52)) round_d = r2_a;
     // |x| < 1 rounds to zero or to +/-1 and nothing else, so it needs no
-    // renormalising. It also MUST bypass it: fbits is capped at 55 below 2^-3,
-    // which breaks the value = rounded * 2^(eu-52) relation the general path
-    // depends on and produced a nonsense exponent.
-    else if (eu < 13'sd0)                  round_d = inc ? {sa, 11'd1023, 52'd0}
-                                                         : {sa, 63'd0};
-    else if (rounded == 57'd0)             round_d = {sa, 63'd0};
-    else                                   round_d = {sa, rexp[10:0], rman};
+    // renormalising. It also MUST bypass it: r2_fbits is capped at 55 below 2^-3,
+    // which breaks the value = r2_rounded * 2^(r2_eu-52) relation the general path
+    // depends on and produced r2_a nonsense exponent.
+    else if (r2_eu < 13'sd0)                  round_d = r2_inc ? {r2_sa, 11'd1023, 52'd0}
+                                                         : {r2_sa, 63'd0};
+    else if (r2_rounded == 57'd0)             round_d = {r2_sa, 63'd0};
+    else                                   round_d = {r2_sa, rexp[10:0], rman};
   end
 
   // ------------------------------------------------------------- scale
@@ -248,7 +289,6 @@ module i960_fpmisc (
   logic signed [12:0] sc_exp;
   assign sc_exp = $signed({2'b0, ea}) + $signed(ai[12:0]);
 
-  logic [63:0] scaled;
   always_comb begin
     if (a_nan || a_inf || a_zero)     scaled = a;
     else if (sc_exp >= 13'sd2047)     scaled = {sa, 11'h7ff, 52'd0};
@@ -274,7 +314,6 @@ module i960_fpmisc (
       if (lmag[i]) llz = 6'(31 - i);
   end
 
-  logic [63:0] logb_d;
   assign logb_d = a_zero ? {1'b1, 11'h7ff, 52'd0}                 // logb(0) = -inf
                 : a_inf  ? {1'b0, 11'h7ff, 52'd0}
                 : a_nan  ? a
@@ -286,14 +325,14 @@ module i960_fpmisc (
   // ------------------------------------------------------------- select
 
   always_comb begin
-    case (op)
-      OP_LOGB:            y = logb_d;
-      OP_CVTIR:           y = i2d;
+    case (r2_op)
+      OP_LOGB:            y = r2_logb_d;
+      OP_CVTIR:           y = r2_i2d;
       OP_ROUND:           y = round_d;
-      OP_SCALE:           y = scaled;
+      OP_SCALE:           y = r2_scaled;
       OP_CMP, OP_MOV,
-      OP_CVTRI, OP_CVTZRI: y = a;   // cmp and the int converts produce yi/cc
-      default:            y = a;
+      OP_CVTRI, OP_CVTZRI: y = r2_a;   // cmp and the int converts produce yi/cc
+      default:            y = r2_a;
     endcase
   end
 
