@@ -248,14 +248,22 @@ module m2_tile_fetch #(
   logic [31:0] cc_hit_data;
   logic        cc_hit_q;            // R572
   logic [31:0] cc_hit_data_q;
+  // R595: AND-OR, NOT A PRIORITY CHAIN. Written as "last match wins" this was
+  // sixteen mux levels behind the compare (s320: f_char_addr_q ->
+  // cc_hit_data_q, -0.419 ns at clk_mem 100). An address is only ever written
+  // on a miss for that same address, so no two valid entries match and the
+  // OR of the masked entries is the same answer.
+  logic [CC_N-1:0] cc_m;
+  always_comb
+    for (int i = 0; i < CC_N; i++)
+      cc_m[i] = cc_val[i] && (cc_addr[i] == f_char_addr_q);
   always_comb begin
     cc_hit      = 1'b0;
     cc_hit_data = 32'd0;
-    for (int i = 0; i < CC_N; i++)
-      if (cc_val[i] && (cc_addr[i] == f_char_addr_q)) begin
-        cc_hit      = 1'b1;
-        cc_hit_data = cc_data[i];
-      end
+    for (int i = 0; i < CC_N; i++) begin
+      cc_hit      = cc_hit | cc_m[i];
+      cc_hit_data = cc_hit_data | ({32{cc_m[i]}} & cc_data[i]);
+    end
   end
   logic        tile_valid;
 

@@ -442,6 +442,25 @@ module m2_video #(
   wire [15:0] f_hscr = win_mode ? hctrl_r : hscr_r;
   wire [15:0] f_vscr = win_mode ? ctrl_r  : vscr_r;
 
+  // R595: 70/35, clk_mem. ctrl_r ran a 16-bit negate, the compare against
+  // cur_line, the window pick and the scroll select straight into the fetch
+  // engine's start and tile-RAM address (s320: ctrl_r -> fetch, -0.712 ns,
+  // 128 of the 133 failing clk_mem paths). Everything here is settled at
+  // least seven cycles before f_start -- hctrl_r lands in Q_HCTRL_W, then
+  // four mask reads -- and holds through Q_RUN, so registering it every
+  // cycle hands the fetch engine the same values.
+  logic [15:0] f_hscr_q, f_vscr_q;
+  logic        win_suppress_q, win_hsplit_q, win_right_q;
+  logic [8:0]  win_h_q;
+  always_ff @(posedge clk) begin
+    f_hscr_q       <= f_hscr;
+    f_vscr_q       <= f_vscr;
+    win_suppress_q <= win_suppress;
+    win_hsplit_q   <= win_hsplit;
+    win_h_q        <= win_h;
+    win_right_q    <= win_right;
+  end
+
   // Base of this layer's table. MAME picks it with `layer & 4` on the 8-way
   // draw index, which is bit 1 of the tilemap number: 0/1 -> 0x6000,
   // 2/3 -> 0x6800. Four words per scanline, so the line scales by four.
@@ -468,9 +487,9 @@ module m2_video #(
   m2_tile_fetch #(.COLUMNS(COLUMNS)) fetch (
     .clk(clk), .rst_n(rst_n),
     .start(f_start), .line(cur_line), .layer(cur_layer),
-    .hscr(f_hscr), .vscr(f_vscr), .tile_mask(tile_mask),
-    .layer_off(win_suppress),
-    .split_en(win_hsplit), .split_x(win_h), .split_right(win_right),
+    .hscr(f_hscr_q), .vscr(f_vscr_q), .tile_mask(tile_mask),
+    .layer_off(win_suppress_q),
+    .split_en(win_hsplit_q), .split_x(win_h_q), .split_right(win_right_q),
     .busy(f_busy), .done(f_done),
     .tram_addr(f_tram_addr), .tram_data(tram_data),
     .char_req(char_req), .char_addr(char_addr),

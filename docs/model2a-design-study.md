@@ -23190,3 +23190,73 @@ its map); the rest, each against s317's own path trace:
 
 Left for the next build to rank: the fill's dvdx/dvdy (-0.17), den_sh (-0.14),
 xa (-0.04), and whatever the new placement turns up.
+
+**R594-R599 -- THE SECOND 70/35 BUILD (s320-s322), AND ITS FIXES.**
+
+s320-s322 (HEAD 18fa995: R584-R593). s322 died in Quartus's own STA
+(sta_scc.cpp:1041, the known per-seed internal error). The two that finished:
+
+| seed | clk_mem 100 | clk_sys 70 | clk_i960 35 | HDMI | ALM |
+|---|---|---|---|---|---|
+| s320 | -0.712 | -0.356 | +3.349 | -0.601 | 41,036 |
+| s321 | -0.236 | -2.114 | +3.052 | ok | 41,072 |
+
+Every hold positive, 16/16 DQ packed, clk_mem on a global clock, no SDC
+critical warnings. Neither is clean, so neither stays on the board. The two
+seeds failed on DIFFERENT paths -- s320 mostly clk_mem, s321 mostly clk_sys --
+which is what a design at 98% of its ALMs looks like: every path within half a
+nanosecond is a coin toss on placement, and the way to a clean seed is to take
+paths OUT of that band, not only to fix the worst one. s321's pool -> xform
+(t, r) paths were pure routing (one wire, 14 ns register to register, no logic)
+and s320's HDMI (ascal) and s321's OSD paths are framework logic: placement,
+not design, and not touched.
+
+  - R594, fill: pf_scale's 40-bit shift registered every cycle (sc_r) and
+    saturated a cycle later, so each gradient lands one state later and S_PF_B
+    gains a cycle for dody (mul_q_r -> dudy, -0.874 on s321). det_r's
+    magnitude registered before its leading-zero count -- S_PF_N is now three
+    cycles (det_r -> den_sh, -0.644 on s321). The viewport skip's multiply is
+    17 x 32, not 32 x 32: its delta is a difference of two 16-bit rows (xa,
+    -0.04). The rejected cheaper form for den_sh -- count leading sign bits,
+    skipping the negate -- is off by one for a negative power of two, so it is
+    not the same number.
+  - R595, tilemap (clk_mem): everything the fetch engine takes from ctrl_r and
+    hctrl_r -- the scrolls, the window pick, the split -- registered. It is
+    settled seven cycles before f_start and holds through Q_RUN (s320:
+    ctrl_r -> fetch start and tile-RAM address, -0.712, 128 of 133 failing
+    clk_mem paths). The glyph cache's hit select is an AND-OR, not a
+    "last match wins" priority chain: an address is only written on a miss for
+    that same address, so no two valid entries match (f_char_addr_q ->
+    cc_hit_data_q, -0.419). 2D frame still EXACT against MAME.
+  - R596, TGP: mem_stall from a registered FIFO decode. It is only read in the
+    _W states, each entered from its partner state with the same request,
+    direction and address, so the FIFO decode is known a cycle early and only
+    the FIFO's ack is live (s320: state.S_LABB -> AGU -> +0x200 -> address
+    mux -> FIFO compare -> next state, -0.356). Checked in the boot harness
+    against the address-decoded stall on every _W cycle of 30 M instructions:
+    0 mismatches.
+  - R597, geometry: Q_MM's four-way float min/max as six parallel compares
+    and a one-hot AND-OR, one compare deep instead of two compare-and-select
+    levels (s321: hz -> hzmax, -2.114). fkey is a bijection, so a tie is two
+    identical bit patterns and cannot change the value; against the tree,
+    400,000 sets with forced ties, zeros, infinities and negatives, 0 disagree.
+  - R598, quad store: **R592 NEVER TOOK EFFECT ON HARDWARE.** It switched the
+    size test to the pairwise form only for TINY == 2, and m2_raster3d builds
+    the store with TINY(4) (R233), so the min/max trees stayed in every build
+    since (s321: qsx -> smin -> a_tiny, -0.331). The pairwise form now covers
+    any TINY: max - min < T exactly when every 16-bit pair difference d has
+    d <= T-1 or d >= 2^16 - (T-1). Against the tree, T = 2, 4 and 8, 300,000
+    quads each, 0 disagree. The lesson is R592's own bench: it tested the
+    module at its default parameter, not at the value the design instantiates.
+  - R599, reciprocal: m2_persp_recip's clz16 and shift registered before the
+    table read (den_a -> s1_r0, -0.313 on s321). Latency 4, not 3; the fill's
+    S_PF_NRM waits four cycles. All 65,536 inputs checked at latency 4 against
+    a C model of the arithmetic: 0 wrong, worst relative error 0.00718%,
+    unchanged.
+
+The fill now takes three more cycles to retire a textured quad (R594's two,
+R599's one) -- about 2% of the ~129. Fill reference 152,369 checks, 0 fails
+throughout; its span total moves with every change to the fill's cycle count
+(HEAD 31,866,923; after these 31,834,121) because the bench draws its
+backpressure RNG once per stalled cycle, which reshuffles every later random
+quad. The totals are not a correctness signal; the checks are.

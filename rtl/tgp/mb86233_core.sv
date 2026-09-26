@@ -360,12 +360,12 @@ module mb86233_core (
   logic        mem_req, mem_we;
   logic [16:0] mem_addr;
   logic [31:0] mem_wdata, mem_rdata;
-  logic        mem_stall;
+  logic        mem_stall, mem_stall_c;
 
   mb86233_mem u_mem (
     .clk(clk), .rst_n(rst_n),
     .req(mem_req), .we(mem_we), .addr(mem_addr), .wdata(mem_wdata),
-    .rdata(mem_rdata), .stall(mem_stall),
+    .rdata(mem_rdata), .stall(mem_stall_c),
     .dbg_wr_n(dbg_wr_n), .dbg_wr_addr(dbg_wr_addr), .dbg_wr_data(dbg_wr_data),
     .ext_rd(mem_fifo_rd), .ext_wr(mem_fifo_wr), .ext_wdata(mem_fifo_wdata),
     .ext_rdata(fifo_rdata), .ext_ack(fifo_ack),
@@ -375,6 +375,21 @@ module mb86233_core (
     .sel_fifo_in(mem_sel_fin), .sel_fifo_out(mem_sel_fout),
     .unmapped(mem_unmapped)
   );
+
+  // R596: THE STALL FROM A REGISTERED DECODE. mem_stall is only ever read in
+  // a _W state (S_SRC_W, S_LABB_W, S_DST_W, S_BRUL_W), each entered only from
+  // its partner state with the same request, direction and address -- the
+  // index registers post-increment at the END of the _W state -- and held
+  // with them unchanged. So "this access is a FIFO access" is known a cycle
+  // early, and only the FIFO's own ack is live. Decoded from the address
+  // instead, the chain ran the AGU, the +0x200 add, the address mux and the
+  // FIFO compare into the next-state logic (s320: state.S_LABB -> state,
+  // -0.356 ns at 70 MHz).
+  logic mem_fifo_q;
+  always_ff @(posedge clk or negedge rst_n)
+    if (!rst_n) mem_fifo_q <= 1'b0;
+    else        mem_fifo_q <= mem_req & (mem_sel_fin | mem_sel_fout);
+  assign mem_stall = mem_fifo_q & ~fifo_ack;
 
   // ==================================================================
   // ALU

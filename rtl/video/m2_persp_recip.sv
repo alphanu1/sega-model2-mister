@@ -25,7 +25,7 @@ module m2_persp_recip (
   input  logic        clk,
   input  logic        rst_n,
   input  logic [15:0] in_d,        // 1..65535; zero returns the maximum
-  output logic [31:0] out_q        // ~= 2^30 / in_d, valid THREE cycles later (R466)
+  output logic [31:0] out_q        // ~= 2^30 / in_d, valid FOUR cycles later (R466, R599)
 );
 
   // ---- stage 0: normalise, and look the leading byte up
@@ -73,6 +73,13 @@ module m2_persp_recip (
   wire [3:0]  s0_s  = clz16(in_d);
   wire [15:0] s0_dn = in_d << s0_s;        // [2^15, 2^16), or 0 when in_d == 0
 
+  // R599: THE ENCODE-AND-SHIFT REGISTERED BEFORE THE TABLE. clz16, the
+  // variable shift and the 128-entry table read were one cycle into the
+  // multiplier's input register (s321: den_a -> s1_r0, -0.313 ns at 70 MHz).
+  // One more stage; the fill's S_PF_NRM waits one more cycle for it.
+  logic [15:0] sa_dn;
+  logic [3:0]  sa_s;
+  logic        sa_zero;
   logic [15:0] s1_dn;
   logic [16:0] s1_r0;
   logic [3:0]  s1_s;
@@ -85,14 +92,18 @@ module m2_persp_recip (
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
+      sa_dn <= 16'd0; sa_s <= 4'd0; sa_zero <= 1'b0;   // R599
       s1_dn <= 16'd0; s1_r0 <= 17'd0; s1_s <= 4'd0; s1_zero <= 1'b0;
       s2_e  <= 18'd0; s2_r0 <= 17'd0; s2_s <= 4'd0; s2_zero <= 1'b0;   // R466
       out_q <= 32'd0;
     end else begin
-      s1_dn   <= s0_dn;
-      s1_s    <= s0_s;
-      s1_zero <= (in_d == 16'd0);
-      s1_r0   <= rtab[s0_dn[14:8]];        // top byte less its always-set bit
+      sa_dn   <= s0_dn;                    // R599
+      sa_s    <= s0_s;
+      sa_zero <= (in_d == 16'd0);
+      s1_dn   <= sa_dn;
+      s1_s    <= sa_s;
+      s1_zero <= sa_zero;
+      s1_r0   <= rtab[sa_dn[14:8]];        // top byte less its always-set bit
 
       // ---- stage 1: one Newton step, then undo the normalise.
       //

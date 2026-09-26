@@ -453,6 +453,39 @@ module m2_geometry (
     fmax = (fkey(a) > fkey(b)) ? a : b;
   endfunction
 
+  // R597: ONE COMPARE DEEP, NOT TWO. The tree above is compare-mux-compare-
+  // mux on 32 bits (s321: hz -> hzmax, -2.114 ns at 70 MHz). The six pairwise
+  // compares run in parallel instead, ties broken by index so exactly one
+  // vertex is the minimum and one the maximum, and the answer is an AND-OR of
+  // the one-hot pick. fkey is a bijection, so a tie is two identical bit
+  // patterns and the tie rule cannot change the value returned: checked
+  // against the tree on 400,000 sets with forced ties, zeros, infinities and
+  // negatives, 0 disagree. Six comparators, the same as the tree.
+  logic [31:0] mm_k [4];
+  logic        mm_le01, mm_le02, mm_le03, mm_le12, mm_le13, mm_le23;   // k_i <= k_j, i < j
+  logic [3:0]  mm_lo, mm_hi;
+  logic [31:0] mm_min, mm_max;
+  always_comb begin
+    for (int i = 0; i < 4; i++) mm_k[i] = fkey(hz[i]);
+    mm_le01 = mm_k[0] <= mm_k[1];  mm_le02 = mm_k[0] <= mm_k[2];
+    mm_le03 = mm_k[0] <= mm_k[3];  mm_le12 = mm_k[1] <= mm_k[2];
+    mm_le13 = mm_k[1] <= mm_k[3];  mm_le23 = mm_k[2] <= mm_k[3];
+    // i comes before j: k_i <= k_j when i < j, k_i < k_j when i > j.
+    mm_lo[0] =  mm_le01 &  mm_le02 &  mm_le03;
+    mm_lo[1] = ~mm_le01 &  mm_le12 &  mm_le13;
+    mm_lo[2] = ~mm_le02 & ~mm_le12 &  mm_le23;
+    mm_lo[3] = ~mm_le03 & ~mm_le13 & ~mm_le23;
+    mm_hi[0] = ~mm_le01 & ~mm_le02 & ~mm_le03;
+    mm_hi[1] =  mm_le01 & ~mm_le12 & ~mm_le13;
+    mm_hi[2] =  mm_le02 &  mm_le12 & ~mm_le23;
+    mm_hi[3] =  mm_le03 &  mm_le13 &  mm_le23;
+    mm_min = '0; mm_max = '0;
+    for (int i = 0; i < 4; i++) begin
+      mm_min = mm_min | ({32{mm_lo[i]}} & hz[i]);
+      mm_max = mm_max | ({32{mm_hi[i]}} & hz[i]);
+    end
+  end
+
   // R246: THE SORT KEY IS THE REFERENCE'S 16-BIT z VALUE, NOT THE FLOAT.
   //
   // model2_v.cpp's float_to_zval rounds the mantissa to twelve bits and packs
@@ -599,8 +632,8 @@ module m2_geometry (
         // cycle ago rather than from the engine's registers in the latch cycle
         // (s317: p1cur -> hzmax, -0.322 ns at 70 MHz).
         Q_MM: begin
-          hzmin <= fmin(fmin(hz[0], hz[1]), fmin(hz[2], hz[3]));
-          hzmax <= fmax(fmax(hz[0], hz[1]), fmax(hz[2], hz[3]));
+          hzmin <= mm_min;   // R597
+          hzmax <= mm_max;
           qst   <= Q_CHK;
         end
 

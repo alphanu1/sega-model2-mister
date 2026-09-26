@@ -355,7 +355,10 @@ module m2_raster_fill (
   endfunction
 
   wire [31:0] det_abs = det_r[31] ? (~det_r + 32'd1) : det_r;
-  wire [5:0]  det_clz = clz32(det_abs);
+  // R594: 70 MHz. The negate and the encode were still one cycle (s319:
+  // det_r -> den_sh, -0.14 ns); the magnitude is registered first.
+  logic [31:0] det_abs_r;
+  wire [5:0]  det_clz = clz32(det_abs_r);
   // Bits the denominator must lose to fit in sixteen.
   wire [5:0]  den_sh_c = (det_clz >= 6'd16) ? 6'd0 : (6'd16 - det_clz);
   // REGISTERED, AND THAT IS THE WORST PATH IN THE DESIGN (R289). `den_sh` is a
@@ -433,6 +436,14 @@ module m2_raster_fill (
   logic        [5:0]  mul_zr;
   logic signed [8:0] net_r;   // R459: pf_scale's shift amount, a cycle early
   logic              zbig_r;  // R459: mul_zr >= 32, likewise
+  // R594: 70 MHz. pf_scale_n's 40-bit bidirectional shift and its saturate
+  // were still one cycle (s319: net_r -> dvdx, -0.17 ns). The shift is now
+  // registered every cycle into sc_r and saturated the cycle after, so each
+  // gradient lands one state later than it did; S_PF_B gains one cycle for
+  // dody. Same values: sc_r is the shift of exactly the operands the old
+  // single-cycle form read, taken one state earlier.
+  logic signed [39:0] sc_r;
+  logic               b_w2;
   logic               b_wait;
   // R566: 60 MHz. The normaliser and the plane's base each did too much in one
   // cycle (s297: oz_i -> qv +2.601, sx -> base_u +2.700 at 50 MHz). Each now
@@ -449,8 +460,8 @@ module m2_raster_fill (
   logic signed [31:0] bp_ux, bp_uy, bp_vx, bp_vy, bp_ox, bp_oy;
   logic [12:0]        bq_u, bq_v;
   logic [15:0]        bq_o;
-  logic         [1:0] nrm_wait;   // R466: three cycles, the recip takes three
-  logic pfn_wait;   // R461: S_PF_N takes two cycles, encode then shift
+  logic         [1:0] nrm_wait;   // R466/R599: four cycles, the recip takes four
+  logic [1:0] pfn_wait;   // R461/R594: S_PF_N takes three cycles: abs, encode, shift
   logic signed [31:0] mul_n;
   logic        [5:0]  mul_z;
   wire signed  [31:0] mul_q = rquo(mul_n, den_rcp, den_n[31]);
@@ -556,18 +567,20 @@ module m2_raster_fill (
   // cycle before pf_scale reads it, so both are available in the cycle that
   // registers mul_zr. Computing it there is exact, not an approximation, and
   // costs no cycles: that cycle already only captures a result.
-  function automatic logic signed [15:0] pf_scale_n(input logic signed [31:0] q,
-                                                    input logic signed [8:0]  net,
-                                                    input logic               zbig);
-    logic signed [39:0] r;
+  function automatic logic signed [39:0] pf_gshift(input logic signed [31:0] q,
+                                                  input logic signed [8:0]  net,
+                                                  input logic               zbig);
     begin
-      if (zbig) pf_scale_n = 16'sd0;
-      else begin
-        r = (net >= 9'sd0) ? (40'(q) <<< net[5:0]) : (40'(q) >>> (-net));
-        if      (r >  40'sd32767) pf_scale_n =  16'sd32767;
-        else if (r < -40'sd32767) pf_scale_n = -16'sd32767;
-        else                      pf_scale_n =  16'(r);
-      end
+      if (zbig) pf_gshift = 40'sd0;
+      else      pf_gshift = (net >= 9'sd0) ? (40'(q) <<< net[5:0]) : (40'(q) >>> (-net));
+    end
+  endfunction
+
+  function automatic logic signed [15:0] pf_sat(input logic signed [39:0] r);
+    begin
+      if      (r >  40'sd32767) pf_sat =  16'sd32767;
+      else if (r < -40'sd32767) pf_sat = -16'sd32767;
+      else                      pf_sat =  16'(r);
     end
   endfunction
 
@@ -674,8 +687,12 @@ module m2_raster_fill (
   // by delta scanlines in one step. Only the low 32 bits are kept, which is
   // what the C does on int32 and is also what makes an iterative skip and this
   // multiply agree bit for bit.
-  logic signed [31:0] mul_delta, mul_sl;
-  logic signed [63:0] mul_prod;
+  // R594: 70 MHz. mul_delta is a difference of two 16-bit rows, so seventeen
+  // bits hold it exactly; at 32 the multiply was 32x32 and chained into the
+  // accumulate (s319: -> xa, -0.04 ns). The low 32 bits are unchanged.
+  logic signed [16:0] mul_delta;
+  logic signed [31:0] mul_sl;
+  logic signed [48:0] mul_prod;
   always_comb mul_prod = mul_delta * mul_sl;
 
   // ------------------------------------------------------- vertex selection
@@ -815,7 +832,7 @@ module m2_raster_fill (
       flat_hi    <= 32'sd0;
       col        <= 24'd0;
       moire      <= 1'b0;
-      mul_delta  <= 32'sd0;
+      mul_delta  <= 17'sd0;
       mul_sl     <= 32'sd0;
       div_start  <= 1'b0;
       div_num    <= 32'sd0;
@@ -833,13 +850,13 @@ module m2_raster_fill (
       nxu_z <= '0; nyu_z <= '0; nxv_z <= '0; nyv_z <= '0;
       nxo_z <= '0; nyo_z <= '0; mul_n <= '0; mul_z <= 6'd0;   // R441/R442
       net_r <= 9'sd0; zbig_r <= 1'b0;   // R459
-      den_a <= 16'd1; nrm_wait <= 2'd0; pfn_wait <= 1'b0;    // R449/R461/R466
+      den_a <= 16'd1; nrm_wait <= 2'd0; pfn_wait <= 2'd0; det_abs_r <= '0;    // R449/R461/R466/R594
       // R451: these were initialised in the prime step and NOT in reset. A
       // register that only gets a value once the state machine reaches a
       // particular state is undefined for every cycle before it, and b_wait
       // powering up set would make S_PF_B compute its bases from a gradient
       // that had not been latched yet.
-      mul_q_r <= '0; mul_zr <= 6'd0; b_wait <= 1'b0; oz_w_v <= 1'b0; oz_last <= 1'b0; oz_w <= 2'd0; b_prod <= 1'b0;
+      mul_q_r <= '0; mul_zr <= 6'd0; b_wait <= 1'b0; b_w2 <= 1'b0; sc_r <= '0; oz_w_v <= 1'b0; oz_last <= 1'b0; oz_w <= 2'd0; b_prod <= 1'b0;
       dudx <= 16'sd0; dudy <= 16'sd0; dvdx <= 16'sd0; dvdy <= 16'sd0;
       for (int k = 0; k < 4; k++) begin qu[k] <= '0; qv[k] <= '0; qoz[k] <= '0; end
       oz_i <= 2'd0; oz_emax <= 8'd0; dodx <= 16'sd0; dody <= 16'sd0;
@@ -863,6 +880,7 @@ module m2_raster_fill (
       div_start  <= 1'b0;
       divb_start <= 1'b0;
       quad_done  <= 1'b0;
+      sc_r      <= pf_gshift(mul_q_r, net_r, zbig_r);   // R594: every cycle
       line_case <= 1'b0;
       if (span_valid && span_ready) span_valid <= 1'b0;
 
@@ -938,17 +956,20 @@ module m2_raster_fill (
           // COSTS ONE CYCLE of the 129 to retire a quad. m2_persp_recip still
           // gets its two cycles: den_a lands one cycle later and S_PF_NRM's
           // pair is unchanged after it.
-          end else if (!pfn_wait) begin
-            pfn_wait <= 1'b1;
-            den_sh <= den_sh_c;          // R289/R461: encode, and only encode
+          end else if (pfn_wait == 2'd0) begin
+            pfn_wait  <= 2'd1;
+            det_abs_r <= det_abs;        // R594: magnitude, and only magnitude
             nxu <= 32'(pf_u1) * 32'(pf_by) - 32'(pf_u2) * 32'(pf_ay);
             nyu <= 32'(pf_ax) * 32'(pf_u2) - 32'(pf_bx) * 32'(pf_u1);
             nxv <= 32'(pf_v1) * 32'(pf_by) - 32'(pf_v2) * 32'(pf_ay);
             nyv <= 32'(pf_ax) * 32'(pf_v2) - 32'(pf_bx) * 32'(pf_v1);
             nxo <= 32'(pf_o1) * 32'(pf_by) - 32'(pf_o2) * 32'(pf_ay);   // R337
             nyo <= 32'(pf_ax) * 32'(pf_o2) - 32'(pf_bx) * 32'(pf_o1);
+          end else if (pfn_wait == 2'd1) begin
+            pfn_wait <= 2'd2;
+            den_sh <= den_sh_c;          // R289/R461: encode, and only encode
           end else begin
-            pfn_wait <= 1'b0;
+            pfn_wait <= 2'd0;
             den_a  <= (den_n >= 0) ? 16'(den_n) : 16'(-den_n);   // R449/R461
             pf_st <= S_PF_NRM;   // R418 counts the zeros before R337 shifts
           end
@@ -986,7 +1007,7 @@ module m2_raster_fill (
         // the worst clk_3d path at 60 MHz), so it answers a cycle later and
         // this state waits one more before S_PF_Q1 reads den_rcp. One cycle of
         // about 130 to retire a quad.
-        S_PF_NRM: if (nrm_wait != 2'd2) begin
+        S_PF_NRM: if (nrm_wait != 2'd3) begin   // R599: was 2
           nrm_wait <= nrm_wait + 2'd1;
           // The counts still land on the FIRST cycle only -- repeating them on
           // the new third cycle would be harmless but would re-time six
@@ -1011,7 +1032,7 @@ module m2_raster_fill (
           nrm_wait <= 2'd0;
           mul_n <= mul_n_c;   // R457/R458: registered count, one shared shifter
           mul_z <= zsel_c;
-          mul_q_r <= '0; mul_zr <= 6'd0; b_wait <= 1'b0;   // R450
+          mul_q_r <= '0; mul_zr <= 6'd0; b_wait <= 1'b0; b_w2 <= 1'b0;   // R450/R594
           oz_w_v <= 1'b0; oz_last <= 1'b0; b_prod <= 1'b0; // R566
           pf_st <= S_PF_Q1;
         end
@@ -1030,7 +1051,6 @@ module m2_raster_fill (
           mul_n <= mul_n_c; mul_z <= zsel_c;
           mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
           net_r <= 9'sd9 - 9'(mul_z) - 9'(den_sh); zbig_r <= (mul_z >= 6'd32);   // R459
-          dudx  <= pf_scale_n(mul_q_r, net_r, zbig_r);
           pf_st <= S_PF_Q2;
         end
 
@@ -1038,7 +1058,7 @@ module m2_raster_fill (
           mul_n <= mul_n_c; mul_z <= zsel_c;
           mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
           net_r <= 9'sd9 - 9'(mul_z) - 9'(den_sh); zbig_r <= (mul_z >= 6'd32);   // R459
-          dudy  <= pf_scale_n(mul_q_r, net_r, zbig_r);
+          dudx  <= pf_sat(sc_r);   // R594
           pf_st <= S_PF_Q2W;
         end
 
@@ -1046,7 +1066,7 @@ module m2_raster_fill (
           mul_n <= mul_n_c; mul_z <= zsel_c;
           mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
           net_r <= 9'sd9 - 9'(mul_z) - 9'(den_sh); zbig_r <= (mul_z >= 6'd32);   // R459
-          dvdx  <= pf_scale_n(mul_q_r, net_r, zbig_r);
+          dudy  <= pf_sat(sc_r);
           pf_st <= S_PF_Q3;
         end
 
@@ -1061,22 +1081,25 @@ module m2_raster_fill (
           mul_n <= mul_n_c; mul_z <= zsel_c;
           mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
           net_r <= 9'sd9 - 9'(mul_z) - 9'(den_sh); zbig_r <= (mul_z >= 6'd32);   // R459
-          dvdy  <= pf_scale_n(mul_q_r, net_r, zbig_r);
+          dvdx  <= pf_sat(sc_r);
           pf_st <= S_PF_Q3W;
         end
 
         S_PF_Q3W: begin
           mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
           net_r <= 9'sd9 - 9'(mul_z) - 9'(den_sh); zbig_r <= (mul_z >= 6'd32);   // R459
-          dodx  <= pf_scale_n(mul_q_r, net_r, zbig_r);
+          dvdy  <= pf_sat(sc_r);
           pf_st <= S_PF_B;
         end
 
         // The plane is held as its value at screen (0,0) plus two gradients,
         // so a span costs two multiplies and no state.
         S_PF_B: if (!b_wait) begin
-          dody   <= pf_scale_n(mul_q_r, net_r, zbig_r);   // R450: the last gradient
+          dodx   <= pf_sat(sc_r);   // R594: one state later than R450 put it
           b_wait <= 1'b1;
+        end else if (!b_w2) begin
+          dody   <= pf_sat(sc_r);   // the last gradient
+          b_w2   <= 1'b1;
         end else if (!b_prod) begin
           // R566: the six products and the corner, registered.
           bp_ux <= 32'(dudx * sx[fa]);  bp_uy <= 32'(dudy * sy[fa]);
@@ -1086,6 +1109,7 @@ module m2_raster_fill (
           b_prod <= 1'b1;
         end else begin
           b_wait <= 1'b0;
+          b_w2   <= 1'b0;
           b_prod <= 1'b0;
           base_u <= 32'({19'd0, bq_u} <<< 16) - (bp_ux <<< 8) - (bp_uy <<< 8);
           base_v <= 32'({19'd0, bq_v} <<< 16) - (bp_vx <<< 8) - (bp_vy <<< 8);
@@ -1260,14 +1284,14 @@ module m2_raster_fill (
           if (cury > view_y2) begin
             state <= S_FS_END;
           end else if (seg_y1 <= view_y1) begin
-            mul_delta <= 32'(seg_y1 - cury);
+            mul_delta <= 17'(seg_y1 - cury);
             mul_sl    <= sla;
             skip_only <= 1'b1;
             state     <= S_FS_MULA;
           end else begin
             walk_end <= (seg_y1 > view_y2) ? (view_y2 + 16'sd1) : seg_y1;
             if (cury < view_y1) begin
-              mul_delta <= 32'(view_y1 - cury);
+              mul_delta <= 17'(view_y1 - cury);
               mul_sl    <= sla;
               skip_only <= 1'b0;
               walk_y    <= view_y1;

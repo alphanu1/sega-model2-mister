@@ -311,19 +311,27 @@ module m2_quad_store #(
   // select, subtract, compare (s317: qsy -> a_tiny, -0.389 ns at 70 MHz).
   // |d| <= 1 on a 16-bit difference is "bits 15:1 all zero" (0, +1) or "all
   // sixteen ones" (-1); -2 has bits 15:1 all ones and bit 0 clear, and fails.
-  function automatic logic near1(input logic signed [15:0] a, input logic signed [15:0] b);
+  //
+  // R598: AND FOR ANY TINY -- WHICH MATTERS, BECAUSE THE INSTANCE IS TINY = 4.
+  // m2_raster3d builds this store with TINY(4) (R233), so R592's TINY == 2
+  // branch was never taken on hardware and the trees stayed in the build
+  // (s321: qsx -> smin -> a_tiny, -0.331 ns). max - min < T exactly when
+  // every pair differs by at most T-1 either way; on the 16-bit difference
+  // that is d <= T-1 or d >= 2^16 - (T-1), two constant compares. At T = 2 it
+  // is R592's near1. Checked against the tree form for T = 2, 4 and 8, 300,000
+  // quads each with spreads from 1 to 3,000: 0 disagree.
+  function automatic logic near_t(input logic signed [15:0] a, input logic signed [15:0] b);
     logic [15:0] d;
     begin
       d = 16'(a - b);
-      near1 = (d[15:1] == 15'd0) || (d == 16'hFFFF);
+      near_t = (d <= 16'(TINY - 1)) || (d >= 16'(32'h1_0000 - (TINY - 1)));
     end
   endfunction
-  wire tiny_pw = near1(in_x0, in_x1) && near1(in_x0, in_x2) && near1(in_x0, in_x3)
-              && near1(in_x1, in_x2) && near1(in_x1, in_x3) && near1(in_x2, in_x3)
-              && near1(in_y0, in_y1) && near1(in_y0, in_y2) && near1(in_y0, in_y3)
-              && near1(in_y1, in_y2) && near1(in_y1, in_y3) && near1(in_y2, in_y3);
-  wire is_tiny = (TINY == 2) ? tiny_pw
-               : tiny_quad(in_x0, in_y0, in_x1, in_y1, in_x2, in_y2, in_x3, in_y3);
+  wire tiny_pw = near_t(in_x0, in_x1) && near_t(in_x0, in_x2) && near_t(in_x0, in_x3)
+              && near_t(in_x1, in_x2) && near_t(in_x1, in_x3) && near_t(in_x2, in_x3)
+              && near_t(in_y0, in_y1) && near_t(in_y0, in_y2) && near_t(in_y0, in_y3)
+              && near_t(in_y1, in_y2) && near_t(in_y1, in_y3) && near_t(in_y2, in_y3);
+  wire is_tiny = (TINY != 0) && tiny_pw;
 
   // R566: THE COUNT AND THE ATTRIBUTE WORD LAND ONE CYCLE AFTER THE QUAD.
   //
