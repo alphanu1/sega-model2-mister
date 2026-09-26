@@ -45,7 +45,9 @@ module m2_cpu_sdram_harness #(
   // controller on clk_mem (what every bench before R561 measured); 1:
   // m2_sdram_x2 with the controller on clk_sd, which must be exactly 2x clk_mem
   // (the board today); 2: m2_sdram_cdc, clk_sd at any ratio (the clock plan).
-  parameter int unsigned XMODE = 0
+  parameter int unsigned XMODE = 0,
+  // R576: m2_cpu_bridge's ASYNC -- for clk_cpu not an exact /2 of clk_mem.
+  parameter bit CPU_ASYNC = 1'b0
 ) (
   input  logic        clk_cpu,
   input  logic        clk_mem,
@@ -119,7 +121,7 @@ module m2_cpu_sdram_harness #(
 
   wire br_rst = BR_OWN_RST ? (rst_n & br_rst_n) : rst_n;
 
-  m2_cpu_bridge #(.AW(AW), .BOARD_2A(1'b0), .DCACHE_EN(DCACHE_EN_TOP)) u_bridge (
+  m2_cpu_bridge #(.AW(AW), .BOARD_2A(1'b0), .DCACHE_EN(DCACHE_EN_TOP), .ASYNC(CPU_ASYNC)) u_bridge (
     .io_stall(io_stall),   // R530: the bench's device model may stall
     .dbg_dc_hits(), .dbg_dc_miss(),
     .char_wr(), .char_wr_addr(),

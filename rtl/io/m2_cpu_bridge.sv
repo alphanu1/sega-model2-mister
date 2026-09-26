@@ -67,7 +67,11 @@ module m2_cpu_bridge #(
   parameter bit BUFFERRAM_WRONLY = 1'b0,   // writes land, reads still read 0
   parameter bit BUFFER_NOCACHE   = 1'b1,   // buffer-RAM lines are never retained
   parameter int unsigned AW = 25,        // SDRAM word address width
-  parameter bit          BOARD_2A = 0    // 0 = model2o, 1 = 2A-CRX
+  parameter bit          BOARD_2A = 0,   // 0 = model2o, 1 = 2A-CRX
+  // R576: 1 when clk_cpu is NOT an exact /2 of clk_mem (the i960 at 35.3 MHz
+  // against a 60 MHz core): R460's two synchroniser flops each way, as the
+  // i960 at 30 against 50 had. 0 keeps R464's single flop, sound only at 2:1.
+  parameter bit          ASYNC    = 0
 ) (
   // ------------------------------------------------- CPU domain (25 MHz)
   input  logic        clk_cpu,
@@ -251,6 +255,7 @@ module m2_cpu_bridge #(
   cph_e cph;
   logic        req_mem, ack_mem;
   logic        ack_cpu;          // ack_mem, one CPU flop later
+  logic  [1:0] ack_cpu_s;        // R576: its synchroniser when ASYNC
   logic        posted;
 
   logic        r_we;
@@ -261,12 +266,14 @@ module m2_cpu_bridge #(
   always_ff @(posedge clk_cpu or negedge rst_n_cpu) begin
     if (!rst_n_cpu) begin
       req_cpu <= 1'b0; bus_ack <= 1'b0; cph <= C_IDLE; ack_cpu <= 1'b0;
+      ack_cpu_s <= 2'b00;                                   // R576
       posted <= 1'b0;
       r_we <= 1'b0; r_addr <= 32'd0; r_wdata <= 32'd0; r_be <= 4'd0;
     end else begin
       // The same single flop in the other direction, for the same reason: one
-      // stage of settling, not two of synchronising.
-      ack_cpu <= ack_mem;
+      // stage of settling, not two of synchronising. R576: two more when ASYNC.
+      ack_cpu_s <= {ack_cpu_s[0], ack_mem};
+      ack_cpu   <= ASYNC ? ack_cpu_s[1] : ack_mem;
       bus_ack  <= 1'b0;
       // AN EXPLICIT FOUR-PHASE HANDSHAKE, because the condition-by-condition
       // version kept racing. The phases are req-up, ack-up, req-down, ACK-DOWN,
@@ -374,12 +381,16 @@ module m2_cpu_bridge #(
   // cross-pair a false path in its timing report -- and that core went from 30
   // to 60 fps when the CPU and 3D clocks went up. Six cycles here is far less
   // than the 64 that cost 1.8%.
-  logic req_mem_r;
+  // R576: TWO FLOPS WHEN ASYNC (R460's form), for the i960 at 35.3 MHz against
+  // a 60 MHz core: the payload rule above still holds -- r_addr and friends are
+  // written with req_cpu and stay put until the four-phase handshake ends --
+  // and the second flop is what makes the request itself safe to sample.
+  logic [1:0] req_mem_s;
   always_ff @(posedge clk_mem or negedge rst_n_mem) begin
-    if (!rst_n_mem) req_mem_r <= 1'b0;
-    else            req_mem_r <= req_cpu;
+    if (!rst_n_mem) req_mem_s <= 2'b00;
+    else            req_mem_s <= {req_mem_s[0], req_cpu};
   end
-  assign req_mem = req_mem_r;
+  assign req_mem = ASYNC ? req_mem_s[1] : req_mem_s[0];
 
   // --------------------------------------------------------------- decoding
   //

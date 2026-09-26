@@ -22990,3 +22990,42 @@ cycle starvation. With PRI off the bench is unchanged to the check.
 The board measures it: port 10's bus wait (8.2% of the frame today), texel
 wait's share of the critical time (78%), the CPU port's wait (4.7%) and the
 late bands.
+
+---
+
+**R575 / R576 -- THE i960 AT 35.3 MHz IS SLOWER THAN AT 30. NOT TAKEN.**
+
+Ben asked for the CPU at 35 or 40. The 1,200 MHz VCO gives 35.3 (/34), 37.5
+(/32) or 40 (/30) -- 35 exactly is not an integer divide. s312's netlist at
+30 MHz: only fpmisc's result path is within 6 ns of its period (+2.68 ns);
+everything else in the i960 has more than 6 ns spare. So 35.3 (28.33 ns)
+needed exactly two things, both built and both in the tree:
+
+  - R575: i960_fpmisc STAGED -- a register after the round add, splitting its
+    ~25 ns at about half; T_FP waits a third cycle for its instructions.
+    tb_i960_fpmisc 1,198,705 host-checked vectors, 0 mismatches, in both the
+    staged and the combinational form; read without the clock edge, the
+    staged form fails 1,073,314 -- the register is real. i960_top, top_irq and
+    rom (against MAME) pass. i960_top sets FPMISC_STAGED = 1: it costs a cycle
+    on cmpr/cvt/round/logb/scale and takes the i960's worst path off 30 MHz's
+    margin either way.
+  - R576: m2_cpu_bridge ASYNC (default 0) -- R460's two synchroniser flops
+    each way, for a CPU clock that is not an exact /2 of clk_sys.
+
+*And then the measurement that decides it.* tb_m2_cpu_real, Daytona's boot,
+300,000 instructions, competing traffic, m2_sdram_cdc to a 100 MHz
+controller, identical trace hash in every run:
+
+    i960 / core   bridge              CPI      instructions / s
+    30 / 60       one flop (2:1)      11.75    2.55 M     <- the board now
+    30 / 60       two flops (async)   13.84    2.17 M
+    35.3 / 60     two flops (async)   14.75    2.39 M     -6%
+
+A four-phase handshake pays its synchroniser four times a transaction, and at
+CPI 10-15 the i960 is mostly waiting on memory: the crossing costs more than
+17.6% more clock buys. **The CPU stays at 30, an exact half of the core.**
+What would speed it: a two-phase (toggle) bridge like m2_sdram_cdc's, which
+pays the crossing twice instead of four times -- worth doing only if the CPU
+clock ever has to leave the 2:1 -- or less memory latency for the CPU port
+(it waits 4.7% of each frame for the bus; R574's priority class could take
+it). The i960 clock was never the band lever (R573).
