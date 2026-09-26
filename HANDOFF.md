@@ -1,6 +1,18 @@
 # Handoff
 
-## 2026-09-27: `build/seeds/s407` IS ON THE BOARD. EVERY CORE CLOCK CLEAN.
+## 2026-09-27 (00:45): `build/seeds/s409` IS ON THE BOARD. BILINEAR UNLESS LATE.
+
+s409 = s407 + R627: texel requests point-sampled while the fill is within 3
+bands of the beam (TXLATE 3), point mode one line a request, and the cache's
+timing fixes. clk_mem +0.381, clk_i960 +3.301, clk_sys -0.066 (one path,
+m2_span_tex sh_x -> sh_m -- untouched logic, placement), HDMI -0.120,
+41,455 ALM. s408 clk_sys -1.881, s410 clk_sys -0.230. s407 is .prev.
+THE QUESTION FOR THE BOARD: do bands still drop? If yes, R628 (4 slots x
+8-deep queue, +637 ALM) and freeing area; if no, R628 is an upgrade.
+Open: the cars run slow -- long-standing (Ben), maybe a little slower since
+the bilinear builds; not measured (the telemetry build does not fit).
+
+## 2026-09-27: `build/seeds/s407` WAS ON THE BOARD. EVERY CORE CLOCK CLEAN.
 
 s407 = s398 + R626 quarter-pixel vertices (the "6" / missing texture lines).
 clk_mem +0.222, clk_sys +0.300, clk_i960 +3.571, HDMI -0.331, 41,375 ALM.
