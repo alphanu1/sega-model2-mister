@@ -22920,3 +22920,21 @@ pipelined and plane products registered, the i960's fpmisc registered).
 
 R565 projected -2.22 ns on clk_sys and -3.56 on the i960 before the timing
 work; this build measures what is left.
+
+**R572, on the board -- s310 (seeds 308/309/310): STEP 1 COMPLETE AT 100/50/25.**
+Every hold positive for the first time this session (the clock groups remove
+the aligned-edge hold races across clk_mem / clk_sys); clk_mem setup -0.024 on
+s310, -0.442 on s308 (the texel queue's f_u -> m2_texel address, R572);
+clk_mem on a global clock and 16 of 16 DQ packed. s309 died in the fitter's
+STA with "Internal Error: Sub-system: STA, sta_scc.cpp, Line: 1041" -- R321's
+crash, one seed in three here as s305's DYN crash was; s310's fitter crashed
+in teardown after writing its result (the case tools/seed-pair.sh already
+judges by the summary), so its fit report is missing and packing and clock
+promotion were read from fit.log instead.
+
+240 s against s299 (step 1(c) alone): CPU 2.21 M instructions/s both; the
+TGP in the same loops; textures 250,992 pixels a frame, texel cache 75.9%;
+critical periods 3,251 against 3,492. The video move shows where it should:
+**tilemap scanline overruns median 17 -> 8, worst 57 -> 43** -- the fetch has
+twice the cycles a line on clk_mem. The late middle bands are unchanged
+(y 128-192), as expected: nothing in step 1 speeds up the fill.
