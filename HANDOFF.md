@@ -1,8 +1,14 @@
 # Handoff
 
-## 2026-09-26 (night): s381 IS ON THE BOARD. BILINEAR BUILT, RETIMED, BUILDING (s393-s395).
+## 2026-09-26 (night): `build/seeds/s395` IS ON THE BOARD. BILINEAR + CHECKER.
 
-The board runs s381 (PIXSTEP 2, point sampling). s386 (PIXSTEP 1) went on and
+s395: clk_sys +0.649, clk_i960 +3.133, clk_mem -0.310 (two paths, both
+m2_sdram rd_ok -> cmd; nothing in the texel cache), HDMI -0.347, 41,406 ALM.
+s393/s394 fitted too (clk_mem -0.277/-0.271, clk_sys -0.536/-0.170). s390 (the
+pre-retime cache) finished at clk_mem -9.1, clk_sys -7.9. s381 is kept as
+Model2.rbf.prev on the board.
+
+Before s395 the board ran s381 (PIXSTEP 2, point sampling). s386 (PIXSTEP 1) went on and
 came off: Ben saw bands dropping on heavy scenes (R621).
 
 IN HEAD, NOT YET ON THE BOARD:
