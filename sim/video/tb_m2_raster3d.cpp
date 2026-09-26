@@ -262,6 +262,12 @@ int main(int argc, char **argv) {
       d->q_x3 = qx;      d->q_y3 = b * 16 + qy + qh;
       d->q_col = (OVL && reps > 1) ? (0x100000u * (r & 15) + 0x001000u * (b & 15) + 0x10u * ((r >> 4) & 15)) : 0xFFFFFF;
       d->q_z = 0x3F800000; d->q_moire = 0;
+      // R607: M2_R3D_ZRAND gives every quad its own depth (the store keys on
+      // the low 16 bits, the reference's zval), so the picture depends on the
+      // DEPTH order and not only on the tie rule -- the test that front to
+      // back with a fill mask draws what the painter draws.
+      static const bool ZRAND = std::getenv("M2_R3D_ZRAND") != nullptr;
+      if (ZRAND) d->q_z = 0x3F800000u | ((uint32_t(r * 2654435761u + b * 40503u + frame_no * 977u) >> 7) & 0x0FFFu);
       // R291: THE TEXTURED BIT, which no test has ever set. Two builds with
       // the texture path live hung the board before the game started, and the
       // only thing they have that the working build does not is this bit.

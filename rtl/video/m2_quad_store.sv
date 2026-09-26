@@ -104,7 +104,13 @@ module m2_quad_store #(
   // not with screen size.
   parameter int unsigned OZW    = 16,
   parameter int unsigned TINY   = 2,
-  parameter int unsigned SCR_H  = 384
+  parameter int unsigned SCR_H  = 384,
+  // R607: FRONT TO BACK, the reference's order (model2_v.cpp render_polygons:
+  // z buckets from min_z up, each bucket a LIFO -- the last polygon submitted
+  // at a z is drawn first). With the fill mask, first write wins, so the last
+  // submitted wins a tie, exactly as it does under the painter's last-write-
+  // wins. 0 keeps the painter's order (z descending, submission order).
+  parameter bit          FTB    = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -400,7 +406,8 @@ module m2_quad_store #(
         // (m2_geometry's zval, model2_v.cpp's float_to_zval), not a float.
         // Complemented because the sort is ascending and the painter wants the
         // largest z -- the furthest -- first.
-        key[wcount[IW-1:0]] <= ~in_z[KW-1:0];
+        // R607: uncomplemented when front to back -- nearest first.
+        key[wcount[IW-1:0]] <= FTB ? in_z[KW-1:0] : ~in_z[KW-1:0];
       end
       // R566: a cycle later, from the registered comparators.
       if (a_v) begin
@@ -510,8 +517,11 @@ module m2_quad_store #(
 
         // Submission order to start with: a stable sort then keeps it as the
         // tie-break, exactly as quad_t::compare does with the address.
+        // R607: FRONT TO BACK STARTS IN REVERSE SUBMISSION ORDER, so the stable
+        // sort leaves ties last-submitted-first -- MAME's bucket LIFO.
         R_INIT: begin
-          if (wbank) idx_a1[ri[IW-1:0]] <= ri[IW-1:0]; else idx_a0[ri[IW-1:0]] <= ri[IW-1:0];
+          if (wbank) idx_a1[ri[IW-1:0]] <= FTB ? IW'(wcount - 1'b1 - ri) : ri[IW-1:0];
+          else       idx_a0[ri[IW-1:0]] <= FTB ? IW'(wcount - 1'b1 - ri) : ri[IW-1:0];
           if (ri + 1 >= wcount) begin ri <= '0; hi <= '0; rst_st <= R_CNT; end
           else                       ri <= ri + 1'b1;
         end

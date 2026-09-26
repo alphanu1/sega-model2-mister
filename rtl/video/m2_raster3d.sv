@@ -47,6 +47,9 @@ module m2_raster3d #(
   // changed this default and the instantiation ignored it). Tracking the
   // override so the bench measures what the design builds.
   parameter int unsigned NBUF   = 6,
+  // R607: FRONT TO BACK WITH A FILL MASK, the reference's order (see the
+  // study). 0 is Model 1's painter: back to front, last write wins.
+  parameter bit          FTB    = 1'b0,
 
   // ARE clk AND scan_clk ACTUALLY DIFFERENT CLOCKS?
   //
@@ -247,7 +250,8 @@ module m2_raster3d #(
   // every one of them distant detail under four pixels across. Small is far,
   // so this drops the right things first, and it is a parameter so the number
   // can move when the store can grow.
-  m2_quad_store #(.BAND_H(BAND_H), .NBANDS(NBANDS), .BW(BW), .SCR_H(SCR_H), .TINY(4)) u_store (
+  m2_quad_store #(.BAND_H(BAND_H), .NBANDS(NBANDS), .BW(BW), .SCR_H(SCR_H), .TINY(4),
+                  .FTB(FTB)) u_store (   // R607
     .clk(clk), .rst_n(rst_n),
     .clear(qs_clear), .wbank(bank), .rbank(~bank),
     .in_valid(q_take),
@@ -446,8 +450,23 @@ module m2_raster3d #(
   // tb_m2_span_tex now runs the SAME value as this instantiation (R389). It
   // used to prove PIXSTEP 2 while this said 8, which is how R323's
   // texture-step bug shipped.
-  m2_span_tex #(.PIXSTEP(4), .TXK(8)) u_spantex (
+  // R607: THE FILL MASK'S WIRES, declared ahead of both users. One bit a
+  // pixel for the ONE band being filled -- the fill does a band start to
+  // finish (C_REPLAY .. C_DONE) -- 32 pixels a word, MROW words a row. Its
+  // logic is below fill_buf.
+  localparam int unsigned MROW = (SCR_W + 31) / 32;
+  localparam int unsigned MDEP = BAND_H * MROW;
+  localparam int unsigned MAW  = $clog2(MDEP);
+  logic [MDEP-1:0]       mk_valid;
+  logic                  mk_we;
+  logic [MAW-1:0]        mk_pwi;
+  logic [31:0]           mk_wd;
+  logic signed [15:0]    mk_y0;
+
+  m2_span_tex #(.PIXSTEP(4), .TXK(8), .FTB(FTB), .SCR_W(SCR_W), .BAND_H(BAND_H)) u_spantex (
     .clk(clk), .rst_n(rst_n),
+    .mk_valid(mk_valid), .mk_we(mk_we), .mk_waddr(mk_pwi), .mk_wdata(mk_wd),   // R607
+    .mk_band_y0(mk_y0),
     .in_valid(sq_qv), .in_ready(sq_rdy), .busy(spantex_busy),
     // m2_span_tex still carries these as 32; the fill and the queue are what
     // this change narrows.
@@ -588,11 +607,17 @@ module m2_raster3d #(
   // R506's re-phase needs to know whether the fill is still on the frame
   // being displayed.
   logic                  fill_frame, disp_frame;
+  // R607: each band's painting group, and the mask's answer for it.
+  logic [NBUF-1:0]                    bd_pg_active;
+  logic [$clog2(BAND_H)-1:0]          bd_pg_row    [NBUF];
+  logic [$clog2(SCR_W)-1:0]           bd_pg_x0     [NBUF];
+  logic [3:0]                         bd_pg_wr     [NBUF];
+  logic [3:0]                         bd_pg_filled [NBUF];
 
   genvar b;
   generate
     for (b = 0; b < NBUF; b++) begin : g_band
-      m2_raster_band #(.WIDTH(SCR_W), .HEIGHT(BAND_H)) u_band (
+      m2_raster_band #(.WIDTH(SCR_W), .HEIGHT(BAND_H), .FTB(FTB)) u_band (
         .clk(clk), .rd_clk(scan_clk), .rst_n(rst_n),
         .band_y0(bd_y0[b]),
         .clear_req(bd_clear_req[b]), .clear_busy(bd_clear_busy[b]),
@@ -603,13 +628,49 @@ module m2_raster3d #(
         .rd_x(scan_x[$clog2(SCR_W)-1:0]),
         .rd_row(scan_y[$clog2(BAND_H)-1:0]),
         .rd_col(bd_rd_col[b]), .rd_hit(bd_rd_hit[b]),
-        .dbg_spans(), .dbg_dropped(), .dbg_painted(bd_painted[b])
+        .dbg_spans(), .dbg_dropped(), .dbg_painted(bd_painted[b]),
+        .pg_active(bd_pg_active[b]), .pg_row(bd_pg_row[b]), .pg_x0(bd_pg_x0[b]),   // R607
+        .pg_wr(bd_pg_wr[b]), .pg_filled(bd_pg_filled[b])
       );
     end
   endgenerate
 
   // The buffer being filled, and the one the beam is reading.
   logic [BUFW-1:0] fill_buf;
+
+  // R607: THE FILL MASK. Only fill_buf paints, so one mask serves every
+  // buffer. The band asks about the four-pixel group it is painting and
+  // writes only the lanes not yet filled (first write wins); what it writes
+  // is ORed into the word. A word is read asynchronously out of an MLAB; the
+  // last two writes are bypassed so a read of a word written a cycle or two
+  // earlier -- consecutive groups of one span share a word -- never sees it
+  // stale, whatever the MLAB's read-during-write timing. mk_valid says a
+  // word has been written since the band started: clearing 128 flops at
+  // C_REPLAY is instant where clearing the MLAB would take 128 cycles.
+  (* ramstyle = "MLAB" *) logic [31:0] mk_a [MDEP];
+  logic [MAW-1:0] mk_b1_a, mk_b2_a;
+  logic [31:0]    mk_b1_d, mk_b2_d;
+  logic           mk_b1_v, mk_b2_v;
+  wire  [$clog2(BAND_H)-1:0] mk_prow = bd_pg_row[fill_buf];
+  wire  [$clog2(SCR_W)-1:0]  mk_px0  = bd_pg_x0[fill_buf];
+  wire  [3:0]                mk_pwr  = bd_pg_wr[fill_buf];
+  wire  [4:0]                mk_poff = mk_px0[4:0];            // a multiple of 4
+  assign mk_pwi = MAW'(mk_prow) * MAW'(MROW) + MAW'(mk_px0 >> 5);
+  logic [31:0] mk_pword;
+  always_comb begin
+    if      (mk_b1_v && (mk_b1_a == mk_pwi)) mk_pword = mk_b1_d;
+    else if (mk_b2_v && (mk_b2_a == mk_pwi)) mk_pword = mk_b2_d;
+    else if (mk_valid[mk_pwi])               mk_pword = mk_a[mk_pwi];
+    else                                     mk_pword = 32'd0;
+  end
+  wire [3:0] mk_pfill = 4'(mk_pword >> mk_poff);
+  always_comb
+    for (int k = 0; k < NBUF; k++)
+      bd_pg_filled[k] = (FTB && (BUFW'(k) == fill_buf)) ? mk_pfill : 4'd0;
+  assign mk_we = FTB && bd_pg_active[fill_buf] && (mk_pwr != 4'd0);
+  assign mk_wd = mk_pword | (32'(mk_pwr) << mk_poff);
+  assign mk_y0 = bd_y0[fill_buf];
+  always_ff @(posedge clk) if (mk_we) mk_a[mk_pwi] <= mk_wd;
   logic [NBUF-1:0] bd_settled;
   // R540: BUFFERS ARE CLEARED IN THE BACKGROUND. bd_clean: cleared since the
   // beam last released it, and not yet claimed. bd_clr_pend/bd_clr_run: a
@@ -819,6 +880,19 @@ module m2_raster3d #(
   typedef enum logic [2:0] { C_IDLE, C_CLR, C_CLRW, C_REPLAY, C_FILL, C_FILLW, C_DONE } cstate_t;
   pstate_t pst;
   cstate_t cst /*verilator public_flat_rd*/;   // R539: the bench histograms it
+  // R607: the fill mask's valid bits and bypass (declared with it, above).
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      mk_valid <= '0; mk_b1_v <= 1'b0; mk_b2_v <= 1'b0;
+      mk_b1_a <= '0; mk_b2_a <= '0; mk_b1_d <= '0; mk_b2_d <= '0;
+    end else if (cst == C_REPLAY) begin   // a band's fill starts: nothing painted
+      mk_valid <= '0; mk_b1_v <= 1'b0; mk_b2_v <= 1'b0;
+    end else if (mk_we) begin
+      mk_valid[mk_pwi] <= 1'b1;
+      mk_b2_v <= mk_b1_v; mk_b2_a <= mk_b1_a; mk_b2_d <= mk_b1_d;
+      mk_b1_v <= 1'b1;    mk_b1_a <= mk_pwi;  mk_b1_d <= mk_wd;
+    end
+  end
   // R541: WHY C_FILL IS WAITING, for the bench only (nothing reads it, so the
   // fitter drops it). 1 quad handed over, 2 quad offered and the fill busy,
   // 3 the store still replaying, 4 the band's last spans still painting.

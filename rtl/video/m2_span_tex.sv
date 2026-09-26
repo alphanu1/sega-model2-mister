@@ -53,10 +53,28 @@ module m2_span_tex #(
   // texel anyway. Set to 1 to fetch per pixel.
   parameter int unsigned PIXSTEP = 2,
   // R539: texel fetches in flight; must equal m2_texel_x2's K.
-  parameter int unsigned TXK = 4
+  parameter int unsigned TXK = 4,
+  // R607: FRONT TO BACK. A group whose pixels are all already painted this
+  // band -- by a nearer polygon -- is not fetched: the reference never
+  // fetches a filled pixel (model2rd.ipp: `if (fill[x] > 0) continue;`
+  // before the texel). This copy of m2_raster3d's fill mask is read here; the
+  // band's own check, per pixel at the write, is what keeps the picture exact,
+  // so a stale or conservative answer here only costs a fetch.
+  parameter bit          FTB    = 1'b0,
+  parameter int unsigned SCR_W  = 496,
+  parameter int unsigned BAND_H = 8,
+  localparam int unsigned MROW  = (SCR_W + 31) / 32,
+  localparam int unsigned MDEP  = BAND_H * MROW,
+  localparam int unsigned MAW   = $clog2(MDEP)
 ) (
   input  logic               clk,
   input  logic               rst_n,
+  // R607: the fill mask -- written by m2_raster3d as the band paints.
+  input  logic [MDEP-1:0]    mk_valid,
+  input  logic               mk_we,
+  input  logic [MAW-1:0]     mk_waddr,
+  input  logic [31:0]        mk_wdata,
+  input  logic signed [15:0] mk_band_y0,
 
   // ---- span in, from m2_raster_fill
   input  logic               in_valid,
@@ -390,6 +408,36 @@ module m2_span_tex #(
 
   // R476: the result standing at the end of the pipeline, and the fetch slot.
   wire                res_valid = sh_v[PIPE_D-1];
+  // R607: this group's pixels are all painted already (registered one stage
+  // before the fetch decision, from the mask as it stood a cycle earlier).
+  logic               sh_m;
+  wire                res_skip  = FTB && sh_m;
+
+  // R607: THE MASK COPY AND THE QUERY. One bit a pixel, 32 to a word, a row
+  // of the band in MROW words; m2_raster3d owns the valid bits (cleared as a
+  // band starts) and writes both copies as the band paints. The query is for
+  // the group one stage before the fetch decision. A group that crosses a
+  // 32-pixel word is not skipped -- conservative, and about one in eight at
+  // PIXSTEP 4. Pixels off the screen or outside the band count as painted:
+  // the band would drop them.
+  (* ramstyle = "MLAB" *) logic [31:0] mk [MDEP];
+  always_ff @(posedge clk) if (mk_we) mk[mk_waddr] <= mk_wdata;
+  logic mq_full;
+  always_comb begin
+    automatic logic               qp   = sh_p[PIPE_D-2];
+    automatic logic signed [31:0] qx   = sh_x[PIPE_D-2];
+    automatic logic signed [31:0] qe   = qx + 32'(PIXSTEP) - 32'sd1;
+    automatic logic signed [31:0] qxe  = (qe > x1_p[qp]) ? x1_p[qp] : qe;
+    automatic logic signed [31:0] qrow = y_p[qp] - 32'(mk_band_y0);
+    automatic logic signed [31:0] xa   = (qx  < 0) ? 32'sd0 : qx;
+    automatic logic signed [31:0] xb   = (qxe > $signed(32'(SCR_W - 1))) ? $signed(32'(SCR_W - 1)) : qxe;
+    automatic logic [MAW-1:0]     wi   = MAW'(qrow) * MAW'(MROW) + MAW'(xa >>> 5);
+    automatic logic [31:0]        w    = mk_valid[wi] ? mk[wi] : 32'd0;
+    automatic logic [31:0]        need = (32'hFFFF_FFFF << xa[4:0]) & (32'hFFFF_FFFF >> (5'd31 - xb[4:0]));
+    if ((qrow < 0) || (qrow >= $signed(32'(BAND_H))) || (xb < xa)) mq_full = 1'b1;
+    else if (xa[31:5] != xb[31:5])                                 mq_full = 1'b0;
+    else                                                           mq_full = ((w & need) == need);
+  end
   /* verilator lint_off UNUSEDSIGNAL */   // R553: only [15:0] is queued
   wire signed [31:0]  res_x     = sh_x[PIPE_D-1];
   /* verilator lint_on UNUSEDSIGNAL */
@@ -404,6 +452,7 @@ module m2_span_tex #(
   logic signed [15:0] of_x    [TXK];
   logic               of_last [TXK];
   logic               of_p    [TXK];
+  logic               of_skip [TXK];   // R607
   logic [OW-1:0]      of_wp, of_rp;
   // R478: THE RETIRE STAGE. R476 computed e_col straight from the arriving
   // texel, which put m2_texel's `hold` register, the nibble select, the
@@ -420,6 +469,7 @@ module m2_span_tex #(
   logic signed [31:0] rt_x;
   logic               rt_last;
   logic               rt_p, e_p;   // R490
+  logic               rt_skip;     // R607
 
   // Take a result when there is one, no fetch is outstanding, and the emit
   // slot will be free. The pipeline runs whenever the output is not being held.
@@ -443,11 +493,16 @@ module m2_span_tex #(
   // only when the previous fetch has come back. The retire slot is not
   // reserved here; the answer waits in the adapter until it is free.
   wire of_room   = ((of_wp - of_rp) != OW'(TXK));
-  wire cons_take = res_valid && tx_rdy && of_room && (st == T_RUN);
+  // R607: a skipped group takes a queue slot but no credit and no fetch, and
+  // leaves the queue without an answer once it is at the head -- the answers
+  // still come back in the order the real fetches were made.
+  wire cons_take = res_valid && (res_skip || tx_rdy) && of_room && (st == T_RUN);
+  wire head_skip = of_skip[of_rp[OW-2:0]];
   // An answer moves into the retire stage when that stage is empty or
   // emptying this cycle.
-  wire rt_take   = tx_ack && (of_wp != of_rp) && (!rt_valid || rt_frees) && (st == T_RUN);
-  assign tx_take = rt_take;
+  wire rt_take   = (head_skip || tx_ack) && (of_wp != of_rp) && (!rt_valid || rt_frees)
+                && (st == T_RUN);
+  assign tx_take = rt_take && !head_skip;   // R607
   // R551: WHY THE WALK IS BUSY, for the bench only (nothing reads it, so the
   // fitter drops it). 1 the band painter is not taking the emitted group,
   // 2 fetches are out and the oldest has not been answered, 3 a result is
@@ -459,7 +514,7 @@ module m2_span_tex #(
     wait_why = 3'd0;
     if (busy) begin
       if (e_valid && !out_ready)                        wait_why = 3'd1;
-      else if ((of_wp != of_rp) && !tx_ack)             wait_why = 3'd2;
+      else if ((of_wp != of_rp) && !tx_ack && !head_skip) wait_why = 3'd2;
       else if (res_valid && !tx_rdy)                    wait_why = 3'd3;
       else if (!res_valid)                              wait_why = 3'd4;
     end
@@ -485,7 +540,7 @@ module m2_span_tex #(
   // R339: the DIVIDED coordinates, not u/z and v/z themselves.
   assign tx_u   = to_tx(d4_u);
   assign tx_v   = to_tx(d4_v);
-  assign tx_req = cons_take;
+  assign tx_req = cons_take && !res_skip;   // R607
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -495,7 +550,7 @@ module m2_span_tex #(
       d3_r1 <= '0; d3_e <= '0; d4_u <= '0; d4_v <= '0;
       d4a_pu <= '0; d4a_pv <= '0; d4a_sh <= '0;   // R468
       u_h1 <= '0; v_h1 <= '0; u_h2 <= '0; v_h2 <= '0; u_h3 <= '0; v_h3 <= '0;
-      u_h4 <= '0; v_h4 <= '0;
+      u_h4 <= '0; v_h4 <= '0; sh_m <= 1'b0;   // R607
       iss_u <= '0; iss_v <= '0; iss_ooz <= '0; iss_x <= '0; iss_run <= 1'b0;
       for (int k = 0; k < PIPE_D; k++) begin
         sh_v[k] <= 1'b0; sh_x[k] <= '0; sh_last[k] <= 1'b0; sh_p[k] <= 1'b0;
@@ -521,6 +576,7 @@ module m2_span_tex #(
         for (int k = 0; k < PIPE_D; k++) begin
           sh_v[k] <= 1'b0; sh_x[k] <= '0; sh_last[k] <= 1'b0; sh_p[k] <= 1'b0;
         end
+        sh_m <= 1'b0;   // R607
       end
     end else if (pipe_en) begin
       // R476: THE WHOLE PIPELINE STALLS TOGETHER. When the consumer cannot take
@@ -553,6 +609,7 @@ module m2_span_tex #(
       sh_x[0]    <= iss_x;
       sh_last[0] <= iss_run && iss_last;
       sh_p[0]    <= sp_iss;                 // R490
+      sh_m       <= mq_full;                // R607: follows sh_*[PIPE_D-1]
       for (int k = 1; k < PIPE_D; k++) begin
         sh_v[k]    <= sh_v[k-1];
         sh_x[k]    <= sh_x[k-1];
@@ -620,7 +677,7 @@ module m2_span_tex #(
         moire_p[k] <= 1'b0; tex_p[k] <= '0;
       end
       sp_iss <= 1'b0; sp_out <= 1'b0; sp_n <= 2'd0; e_last <= 1'b0;   // R490
-      rt_p <= 1'b0; e_p <= 1'b0;                                      // R490
+      rt_p <= 1'b0; e_p <= 1'b0; rt_skip <= 1'b0;                     // R490, R607
       du_r <= '0; dv_r <= '0;
       doz_r <= '0;
       // R433
@@ -647,7 +704,7 @@ module m2_span_tex #(
       begin
         automatic logic done_e  = e_valid && out_ready && e_last;
         automatic logic done_rt = rt_valid && (!e_valid || out_ready) && rt_last
-                                  && tex_p[rt_p][8] && (rt_texel == 4'hf);
+                                  && (rt_skip || (tex_p[rt_p][8] && (rt_texel == 4'hf)));   // R607
         automatic logic [2:0] n_next = 3'(sp_n) + 3'(ld_span)
                                      - 3'(done_e) - 3'(done_rt);
         automatic logic slot = ld_cold ? sp_out : ~sp_iss;
@@ -694,6 +751,7 @@ module m2_span_tex #(
             of_x   [of_wp[OW-2:0]] <= res_x[15:0];
             of_last[of_wp[OW-2:0]] <= res_last;
             of_p   [of_wp[OW-2:0]] <= res_p;
+            of_skip[of_wp[OW-2:0]] <= res_skip;   // R607
             of_wp <= of_wp + 1'd1;
           end
 
@@ -706,14 +764,15 @@ module m2_span_tex #(
             rt_x     <= 32'(of_x[of_rp[OW-2:0]]);   // sign-extended
             rt_last  <= of_last[of_rp[OW-2:0]];
             rt_p     <= of_p   [of_rp[OW-2:0]];
+            rt_skip  <= head_skip;                  // R607
             of_rp    <= of_rp + 1'd1;
             // R484: WRAPS, DOES NOT SATURATE (see the history in git).
-            if (tx_texel != 4'hf) dbg_texnz <= dbg_texnz + 1'd1;
+            if (!head_skip && tx_texel != 4'hf) dbg_texnz <= dbg_texnz + 1'd1;
           end
 
           // Colour and emit the retired group.
           if (rt_valid && (!e_valid || out_ready)) begin
-            automatic logic       skip = tex_p[rt_p][8] && (rt_texel == 4'hf);
+            automatic logic       skip = rt_skip || (tex_p[rt_p][8] && (rt_texel == 4'hf));   // R607
             automatic logic [7:0] iv   = {rt_texel, rt_texel};
             if (!rt_take) rt_valid <= 1'b0;       // R539: a take refills it
             e_valid <= !skip;                     // R326: transparent texel

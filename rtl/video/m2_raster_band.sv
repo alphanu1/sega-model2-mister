@@ -43,7 +43,12 @@
 module m2_raster_band #(
   parameter int unsigned WIDTH  = 496,   // active pixels per line
   parameter int unsigned HEIGHT = 64,    // rows in one band
-  parameter int unsigned AW     = 15     // ceil(log2(WIDTH*HEIGHT))
+  parameter int unsigned AW     = 15,    // ceil(log2(WIDTH*HEIGHT))
+  // R607: FIRST WRITE WINS. The caller (m2_raster3d) holds one fill mask for
+  // the band being filled and answers pg_filled for the group on pg_row/pg_x0;
+  // only the lanes not yet filled are written, and pg_wr says which were.
+  // 0 is the painter's last-write-wins and ignores pg_filled.
+  parameter bit          FTB    = 1'b0
 ) (
   input  logic                   clk,
   input  logic                   rst_n,
@@ -110,7 +115,13 @@ module m2_raster_band #(
   // and the 32-bit total it tested was accumulated into a counter that reaches
   // nothing and that Quartus deletes. Five bands x 32 bits of adder existed to
   // answer one bit each. Set on the first painted group, cleared with the band.
-  output logic                   dbg_painted
+  output logic                   dbg_painted,
+  // R607: the group being painted this cycle, and the answer about it.
+  output logic                   pg_active,
+  output logic [$clog2(HEIGHT)-1:0] pg_row,
+  output logic [$clog2(WIDTH)-1:0]  pg_x0,     // multiple of 4
+  output logic [3:0]             pg_wr,      // lanes written this cycle
+  input  logic [3:0]             pg_filled   // lanes already painted this band
 );
 
   localparam int unsigned XW = $clog2(WIDTH);
@@ -271,7 +282,7 @@ module m2_raster_band #(
       wr_addr = clr_addr;
       wr_data = 17'd0;                      // hit = 0: show the 2D
     end else if (st == S_PAINT) begin
-      wr_en   = grp_en;
+      wr_en   = FTB ? (grp_en & ~pg_filled) : grp_en;   // R607
       wr_addr = BAW'(cur_row) * BAW'(BCOLS) + BAW'(cur_xu >> BW_);
       wr_data = {1'b1, cur_col};
     end
@@ -351,5 +362,12 @@ module m2_raster_band #(
       endcase
     end
   end
+
+  // R607: the fill mask's side of the paint. wr_en is the lanes written, so it
+  // is also what the mask must gain; during a clear pg_active is low.
+  assign pg_active = (st == S_PAINT);
+  assign pg_row    = cur_row;
+  assign pg_x0     = grp_x0;
+  assign pg_wr     = (st == S_PAINT) ? wr_en : 4'd0;
 
 endmodule

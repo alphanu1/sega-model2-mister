@@ -23552,3 +23552,56 @@ a 1-bit fill mask per band buffer, 496 x 8 = 3,968 bits, in MLAB (~70 ALM
 per buffer, no M10K); the span walk reads the mask before it requests a
 texel and skips filled pixels; the band writes only unfilled pixels.
 Translucent and checker (moire) pixels do not set the mask, as in MAME.
+
+**R607 -- FRONT TO BACK WITH A FILL MASK (R606's lever), BUILT.**
+
+Every piece follows the reference (model2_v.cpp render_polygons,
+model2rd.ipp draw_scanline_tex); none of it is Model 1's, because Model 1 has
+no textures and its painter's order costs it nothing.
+
+  - ORDER. m2_quad_store FTB: the key is stored uncomplemented (nearest
+    first) and the sort's starting index list is REVERSE submission order, so
+    the stable radix sort leaves ties last-submitted-first -- MAME's z
+    buckets are LIFO (`poly->next = zpoly`). With first write wins the last
+    submitted polygon wins a tie, exactly as it did under the painter's
+    last write wins. No wider key, no extra pass.
+  - THE MASK. One bit a pixel for the ONE band being filled -- the sequencer
+    does a band from C_REPLAY to C_DONE and only fill_buf paints -- so one
+    mask serves all six buffers: 8 rows x 16 words of 32 pixels, an MLAB, not
+    M10K. (Ben: "won't that conflict with the buffers in M10K?" -- it does
+    not touch them; the cost is ALM, and a mask per buffer would have been
+    ~960 ALM of the ~1,000 free. One mask is ~160.) 128 valid flops clear it
+    at C_REPLAY in one cycle. The last two writes are bypassed, so a word
+    read a cycle or two after it was written is never stale whatever the
+    MLAB's read-during-write timing.
+  - FIRST WRITE WINS. m2_raster_band FTB: the painting group's lanes are
+    written only where the mask is clear, and what is written is ORed in.
+    Stipple holes and transparent texels are never written, so they never
+    set the mask and a farther polygon fills them -- as they showed it
+    through before.
+  - NO FETCH FOR A FILLED GROUP. m2_span_tex FTB keeps a second copy of the
+    mask and asks, one pipeline stage before the fetch decision, whether
+    every pixel of the group is painted. If so the group takes a slot in the
+    in-order answer queue but no credit and no fetch, and retires like a
+    transparent texel when it reaches the head. A group that crosses a
+    32-pixel word, or a stale answer, just fetches: the band's per-pixel
+    check keeps the picture exact regardless.
+
+Bench (tb_m2_raster3d built with FTB 0 and FTB 1, run side by side; the bench
+gains M2_R3D_ZRAND, a per-quad depth, because every quad in it had the same
+z and a painter-vs-front-to-back comparison on one z tests only the tie):
+
+| scene | picture | texel fetches FTB 0 -> 1 |
+|---|---|---|
+| default (flat) | identical | 0 -> 0 |
+| textured, overlapping, one z | identical | 4,356 -> 3,476 |
+| textured, overlapping, random z | identical | 4,356 -> 3,443 |
+| flat, overlapping, random z | identical | 0 -> 0 |
+| close-up full-width textured layers, random z | identical | 45,892 -> 13,156 (-71%) |
+
+Random z does change the picture (its hash differs from the one-z scene), so
+the identity is not vacuous. tb_m2_span_tex 7,207 and tb_m2_raster_band
+825,355 checks, 0 fail, in their default (painter) mode. A beam race at 60
+clocks a line misses most of the screen in both modes, and the bench's
+texture set sits in the cache, so it cannot show the board's texel-bound
+regime: the board is the test for speed.
