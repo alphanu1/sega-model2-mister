@@ -23922,3 +23922,22 @@ Frame 2000, every textured pixel against MAME's:
 
 Benches unchanged (their cases never reached 128): fill 152,369, span_tex
 7,207, raster3d hashes.
+
+**What the 3D differential leaves after R616/R618 (frame 2000, PIXSTEP 2),
+for planning:**
+
+  1. THIN SLIVERS (2.2% of textured pixels > 16 texels out): polys 520, 603,
+     604, 613 are 4-8 px tall, 521 is 31. Vertex positions are INTEGERS here
+     and floats in MAME; half a pixel is a large share of the height and the
+     plane fit through three rounded vertices tilts. Options: (a) sub-pixel
+     vertex bits through the store (~8 M10K -- not available); (b)
+     m2_geometry corrects each vertex's u, v, 1/z to the exact plane at its
+     ROUNDED position (float ops per quad, on the pipeline that paces the
+     game since R610); (c) the fill fits the best-conditioned triangle of
+     the four vertices (cheap; helps only some quads).
+  2. ANOTHER POLYGON OWNS THE PIXEL (16.7%): translucent foliage edges. MAME
+     discards below 50% of a BILINEAR-filtered alpha; this core point-samples
+     once per PIXSTEP group. And MAME bilinear-filters every texture's colour
+     (fetch_bilinear_texel), which this core does not do at all -- the
+     largest remaining reason textures look blocky next to the board. Four
+     texels a pixel: a fetch-bandwidth and cache-shape design, not a fix.
