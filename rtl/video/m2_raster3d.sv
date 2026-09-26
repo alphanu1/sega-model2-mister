@@ -647,7 +647,10 @@ module m2_raster3d #(
   // stale, whatever the MLAB's read-during-write timing. mk_valid says a
   // word has been written since the band started: clearing 128 flops at
   // C_REPLAY is instant where clearing the MLAB would take 128 cycles.
-  (* ramstyle = "MLAB" *) logic [31:0] mk_a [MDEP];
+  // no_rw_check: without it Quartus 17.0 will not infer an async-read MLAB
+  // ("uninferred due to unsupported read-during-write behavior") and builds
+  // the mask from 4,096 flip-flops. The bypass above makes the answer exact.
+  (* ramstyle = "MLAB, no_rw_check" *) logic [31:0] mk_a [MDEP];
   logic [MAW-1:0] mk_b1_a, mk_b2_a;
   logic [31:0]    mk_b1_d, mk_b2_d;
   logic           mk_b1_v, mk_b2_v;

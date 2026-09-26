@@ -422,7 +422,8 @@ module m2_span_tex #(
   // 32-pixel word is not skipped -- conservative, and about one in eight at
   // PIXSTEP 4. Pixels off the screen or outside the band count as painted:
   // the band would drop them.
-  (* ramstyle = "MLAB" *) logic [31:0] mk [MDEP];
+  // no_rw_check: see m2_raster3d mk_a. A stale answer here only costs a fetch.
+  (* ramstyle = "MLAB, no_rw_check" *) logic [31:0] mk [MDEP];
   always_ff @(posedge clk) if (mk_we) mk[mk_waddr] <= mk_wdata;
   logic mq_full;
   always_comb begin
