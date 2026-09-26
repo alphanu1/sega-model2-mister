@@ -24077,3 +24077,33 @@ R619's PIXSTEP 2 figure (68.8% within a texel), each filtered sample shared
 by two pixels. PIXSTEP 1 with bilinear needs the answer latency cut first --
 a hit path that bypasses the response queue for the head, or axis() computed
 in m2_texel_cdc's load stage as R583 did for the address.
+
+**R622 -- s387-s389 DID NOT FIT: THE CACHE WAS 2,000 ALM.** 42,330 of
+41,910 ALM, 4,278 LABs for 4,191. m2_texel_bl came out at 1,999 ALM in the
+design against m2_texel's 302 (s381). The cost was a choice made in R620,
+not the filter: every waiting texel in the response queue (8 entries x 4)
+took its nibble from the miss buffers wherever it waited -- thirty-two
+64-bit-to-4-bit selectors on both slots.
+
+Fixed by resolving waiting texels AT THE HEAD only (four selectors), with a
+miss slot HELD after its fill until no waiting texel names it (a slot C
+names in the same cycle is not released either). The queue keeps a 4-bit
+select per texel. Then RSP_D 8 -> 4.
+
+Measured standalone in Quartus 17 (a wrapper project, the module alone,
+fitted) -- calibrated against the design: the committed version measured
+2,100 there, 1,999 in s387.
+
+    committed (s387)             2,100 ALM
+    head-only resolve, RSP_D 8   1,191
+    ..., RSP_D 4                   992
+
+tb_m2_texel_bl: 1,000,000 checks, 0 fails (IB 11 and 8); the random bench
+runs 22% longer with head-only resolve and a further ~6% at RSP_D 4. On
+MAME frame 2000 at PIXSTEP 2 neither shows: 132,766 fetches, every band,
+texel-wait 18% in both. The throughput it costs is what PIXSTEP 1 would
+need (R621), so PIXSTEP 1 with bilinear is further off, not nearer.
+
+Standalone area measurement is the lever this project did not use before:
+twelve seconds of map and fit on one module, against 25 minutes for the
+design. Use it before any new block goes into a full build.

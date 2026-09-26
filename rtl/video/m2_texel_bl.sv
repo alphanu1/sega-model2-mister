@@ -200,22 +200,30 @@ module m2_texel_bl #(
   function automatic logic same_line(input tx_t a, input tx_t b);
     same_line = (a.sheet == b.sheet) && (a.rp == b.rp) && (a.cg == b.cg);
   endfunction
-  function automatic logic [3:0] nib(input logic [63:0] line, input tx_t t);
+  // where a texel's nibble sits in its line: {wsel, px, py}
+  function automatic logic [3:0] sel_of(input tx_t t);
+    sel_of = {t.wsel, t.px, t.py};
+  endfunction
+  function automatic logic [3:0] nib(input logic [63:0] line, input logic [3:0] t);
     logic [15:0] w;
     begin
-      case (t.wsel)
+      case (t[3:2])
         2'd0: w = line[15:0];
         2'd1: w = line[31:16];
         2'd2: w = line[47:32];
         default: w = line[63:48];
       endcase
-      nib = t.py ? (t.px ? w[3:0]  : w[7:4])
-                 : (t.px ? w[11:8] : w[15:12]);
+      nib = t[0] ? (t[1] ? w[3:0]  : w[7:4])
+                 : (t[1] ? w[11:8] : w[15:12]);
     end
   endfunction
 
   // ------------------------------------------------------------ the misses
-  logic          ms_busy [2], ms_done [2];
+  // A SLOT IS HELD after its fill until no waiting texel names it: waiting
+  // texels take their nibble from the slot at the HEAD of the response queue,
+  // not wherever they wait -- four selectors, where one per waiting texel was
+  // thirty-two, 64 bits wide, and most of this module's area (s387: 2,000 ALM).
+  logic          ms_busy [2], ms_done [2], ms_filled [2];
   tx_t           ms_line [2];
   logic [63:0]   ms_dat  [2];
   logic [9:0]    ms_to   [2];
@@ -228,7 +236,7 @@ module m2_texel_bl #(
   logic [3:0]    rs_nib  [RSP_D][4];
   logic [3:0]    rs_pend [RSP_D];     // waiting on a miss
   logic          rs_slot [RSP_D][4];  // which miss
-  tx_t           rs_tx   [RSP_D][4];
+  logic [3:0]    rs_sel  [RSP_D][4];  // sel_of() -- all the head needs
   logic [8:0]    rs_uf   [RSP_D], rs_vf [RSP_D];
   logic          rs_tl   [RSP_D], rs_bl [RSP_D];
   logic [RW:0]   rs_wp, rs_rp;
@@ -249,6 +257,7 @@ module m2_texel_bl #(
   logic          c_has0, c_has1;
   logic [RW-1:0] c_ent;
   tx_t           c_t0, c_t1;
+  logic [3:0]    c_sel [4];
 
   // Pick, for this cycle, one not-yet-looked-up line in each bank, and every
   // texel of the request that shares it.
@@ -369,8 +378,18 @@ module m2_texel_bl #(
   // ------------------------------------------------------------ sequencing
   wire ms_free0 = !ms_busy[0];
   wire ms_free1 = m2_en && !ms_busy[1];
-  assign fill_sel = (ms_busy[0] && ms_done[0]) ? 1'b0 : 1'b1;
-  assign fill_now = !sweeping && ((ms_busy[0] && ms_done[0]) || (ms_busy[1] && ms_done[1]));
+  wire ms_fill0 = ms_busy[0] && ms_done[0] && !ms_filled[0];
+  wire ms_fill1 = ms_busy[1] && ms_done[1] && !ms_filled[1];
+  assign fill_sel = ms_fill0 ? 1'b0 : 1'b1;
+  assign fill_now = !sweeping && (ms_fill0 || ms_fill1);
+  // texels waiting on each slot
+  logic [1:0] ms_ref;
+  always_comb begin
+    ms_ref = 2'b00;
+    for (int e = 0; e < RSP_D; e++)
+      for (int k = 0; k < 4; k++)
+        if (rs_pend[e][k]) ms_ref[rs_slot[e][k]] = 1'b1;
+  end
 
   // Stage C's miss handling may need a miss slot; if none is free the whole
   // front stalls (C holds, and L behind it).
@@ -392,6 +411,15 @@ module m2_texel_bl #(
   wire c_block = c_v && (c_need0 || c_need1) && (c_nfree == 2'd0);
   wire c_split = c_v && c_need0 && c_need1 && (c_nfree == 2'd1);
   wire c_stall = c_block || c_split;
+  // the slots stage C names this cycle (joins; a new miss re-arms its slot anyway)
+  logic [1:0] c_names;
+  always_comb begin
+    c_names = 2'b00;
+    if (c_v && !c_block) begin
+      if (c_has0 && !c_hit0 && c_j0[1]) c_names[c_j0[0]] = 1'b1;
+      if (c_has1 && !c_hit1 && c_j1[1] && !c_split) c_names[c_j1[0]] = 1'b1;
+    end
+  end
   // the RAM output is only valid the cycle after the read: a held C re-reads
   logic c_reread;
 
@@ -408,9 +436,10 @@ module m2_texel_bl #(
       for (int k = 0; k < 4; k++) b_tx[k] <= '0;
       c_v <= 1'b0; c_k0 <= '0; c_k1 <= '0; c_has0 <= 1'b0; c_has1 <= 1'b0;
       c_ent <= '0; c_t0 <= '0; c_t1 <= '0; c_reread <= 1'b0;
+      for (int k = 0; k < 4; k++) c_sel[k] <= '0;
       l_v <= 1'b0;
       for (int k = 0; k < 2; k++) begin
-        ms_busy[k] <= 1'b0; ms_done[k] <= 1'b0; ms_line[k] <= '0;
+        ms_busy[k] <= 1'b0; ms_done[k] <= 1'b0; ms_filled[k] <= 1'b0; ms_line[k] <= '0;
         ms_dat[k] <= '0; ms_to[k] <= '0;
       end
       m_req <= 1'b0; m_addr <= '0; m2_req <= 1'b0; m2_addr <= '0;
@@ -418,7 +447,7 @@ module m2_texel_bl #(
       for (int e = 0; e < RSP_D; e++) begin
         rs_used[e] <= 1'b0; rs_rdy[e] <= '0; rs_pend[e] <= '0;
         rs_uf[e] <= '0; rs_vf[e] <= '0; rs_tl[e] <= 1'b0; rs_bl[e] <= 1'b0;
-        for (int k = 0; k < 4; k++) begin rs_nib[e][k] <= '0; rs_slot[e][k] <= 1'b0; rs_tx[e][k] <= '0; end
+        for (int k = 0; k < 4; k++) begin rs_nib[e][k] <= '0; rs_slot[e][k] <= 1'b0; rs_sel[e][k] <= '0; end
       end
       ack <= 1'b0; texel <= '0; hz_v <= 1'b0; hz <= '0;
       sweep <= '0; sweeping <= 1'b1; inval_d <= 1'b0; inval_pend <= 1'b0;
@@ -465,10 +494,10 @@ module m2_texel_bl #(
         rs_pend[rs_wp[RW-1:0]] <= 4'd0;
         rs_uf  [rs_wp[RW-1:0]] <= ax[8:0];  rs_vf[rs_wp[RW-1:0]] <= ay[8:0];
         rs_tl  [rs_wp[RW-1:0]] <= a_tex[8]; rs_bl[rs_wp[RW-1:0]] <= a_bl;
-        rs_tx[rs_wp[RW-1:0]][0] <= place(a_tex, ax[32:21], ay[32:21]);
-        rs_tx[rs_wp[RW-1:0]][1] <= place(a_tex, ax[20:9],  ay[32:21]);
-        rs_tx[rs_wp[RW-1:0]][2] <= place(a_tex, ax[32:21], ay[20:9]);
-        rs_tx[rs_wp[RW-1:0]][3] <= place(a_tex, ax[20:9],  ay[20:9]);
+        rs_sel[rs_wp[RW-1:0]][0] <= sel_of(place(a_tex, ax[32:21], ay[32:21]));
+        rs_sel[rs_wp[RW-1:0]][1] <= sel_of(place(a_tex, ax[20:9],  ay[32:21]));
+        rs_sel[rs_wp[RW-1:0]][2] <= sel_of(place(a_tex, ax[32:21], ay[20:9]));
+        rs_sel[rs_wp[RW-1:0]][3] <= sel_of(place(a_tex, ax[20:9],  ay[20:9]));
         rs_wp  <= rs_wp + 1'd1;
       end else if (b_adv) begin
         b_v <= 1'b0;
@@ -480,6 +509,7 @@ module m2_texel_bl #(
         if (l_go) begin
           c_k0 <= pick0; c_k1 <= pick1; c_has0 <= ph0; c_has1 <= ph1;
           c_ent <= b_ent; c_t0 <= pl0; c_t1 <= pl1;
+          for (int k = 0; k < 4; k++) c_sel[k] <= sel_of(b_tx[k]);
           // not on the request's LAST access: then B empties or takes the next
           // request, whose b_done <= 0 this would overwrite
           if (!b_last) b_done <= b_done | pick0 | pick1;
@@ -496,30 +526,26 @@ module m2_texel_bl #(
         for (int k = 0; k < 4; k++) begin
           if (c_k0[k]) begin
             if (c_hit0) begin
-              rs_nib[c_ent][k] <= nib(cd0_q, rs_tx[c_ent][k]); rs_rdy[c_ent][k] <= 1'b1;
-            end else if (c_j0[1] && ms_done[c_j0[0]]) begin
-              rs_nib[c_ent][k] <= nib(ms_dat[c_j0[0]], rs_tx[c_ent][k]); rs_rdy[c_ent][k] <= 1'b1;
+              rs_nib[c_ent][k] <= nib(cd0_q, c_sel[k]); rs_rdy[c_ent][k] <= 1'b1;
             end else begin
               rs_pend[c_ent][k] <= 1'b1; rs_slot[c_ent][k] <= c_j0[1] ? c_j0[0] : s0;
             end
           end
           if (c_k1[k] && do1) begin
             if (c_hit1) begin
-              rs_nib[c_ent][k] <= nib(cd1_q, rs_tx[c_ent][k]); rs_rdy[c_ent][k] <= 1'b1;
-            end else if (c_j1[1] && ms_done[c_j1[0]]) begin
-              rs_nib[c_ent][k] <= nib(ms_dat[c_j1[0]], rs_tx[c_ent][k]); rs_rdy[c_ent][k] <= 1'b1;
+              rs_nib[c_ent][k] <= nib(cd1_q, c_sel[k]); rs_rdy[c_ent][k] <= 1'b1;
             end else begin
               rs_pend[c_ent][k] <= 1'b1; rs_slot[c_ent][k] <= c_j1[1] ? c_j1[0] : s1;
             end
           end
         end
         if (c_need0) begin
-          ms_busy[s0] <= 1'b1; ms_done[s0] <= 1'b0; ms_to[s0] <= '0; ms_line[s0] <= c_t0;
+          ms_busy[s0] <= 1'b1; ms_done[s0] <= 1'b0; ms_filled[s0] <= 1'b0; ms_to[s0] <= '0; ms_line[s0] <= c_t0;
           if (!s0) begin m_req  <= 1'b1; m_addr  <= (c_t0.sheet ? base_s1 : base_s0) + AW'({c_t0.rp, c_t0.cg, 2'b00}); end
           else     begin m2_req <= 1'b1; m2_addr <= (c_t0.sheet ? base_s1 : base_s0) + AW'({c_t0.rp, c_t0.cg, 2'b00}); end
         end
         if (c_need1 && do1) begin
-          ms_busy[s1] <= 1'b1; ms_done[s1] <= 1'b0; ms_to[s1] <= '0; ms_line[s1] <= c_t1;
+          ms_busy[s1] <= 1'b1; ms_done[s1] <= 1'b0; ms_filled[s1] <= 1'b0; ms_to[s1] <= '0; ms_line[s1] <= c_t1;
           if (!s1) begin m_req  <= 1'b1; m_addr  <= (c_t1.sheet ? base_s1 : base_s0) + AW'({c_t1.rp, c_t1.cg, 2'b00}); end
           else     begin m2_req <= 1'b1; m2_addr <= (c_t1.sheet ? base_s1 : base_s0) + AW'({c_t1.rp, c_t1.cg, 2'b00}); end
         end
@@ -546,14 +572,19 @@ module m2_texel_bl #(
       if (m2_ack && ms_busy[1] && !ms_done[1]) begin
         ms_dat[1] <= m2_data; ms_done[1] <= 1'b1; m2_req <= 1'b0;
       end
-      // waiting texels take their nibble once their miss is done
-      for (int e = 0; e < RSP_D; e++)
+      // the head's waiting texels take their nibble once their miss is done
+      if (!rs_empty)
         for (int k = 0; k < 4; k++)
-          if (rs_pend[e][k] && ms_busy[rs_slot[e][k]] && ms_done[rs_slot[e][k]]) begin
-            rs_nib[e][k] <= nib(ms_dat[rs_slot[e][k]], rs_tx[e][k]);
-            rs_rdy[e][k] <= 1'b1; rs_pend[e][k] <= 1'b0;
+          if (rs_pend[rs_hd][k] && ms_done[rs_slot[rs_hd][k]]) begin
+            rs_nib[rs_hd][k] <= nib(ms_dat[rs_slot[rs_hd][k]], rs_sel[rs_hd][k]);
+            rs_rdy[rs_hd][k] <= 1'b1; rs_pend[rs_hd][k] <= 1'b0;
           end
-      if (fill_now) ms_busy[fill_sel] <= 1'b0;   // written this cycle
+      if (fill_now) ms_filled[fill_sel] <= 1'b1;   // written this cycle
+      // released once filled and no texel waits on it -- nor is about to: stage
+      // C names a slot as it marks a texel waiting (a join, or a new miss on a
+      // slot this edge re-arms, which the free test cannot see)
+      for (int s = 0; s < 2; s++)
+        if (ms_busy[s] && ms_filled[s] && !ms_ref[s] && !c_names[s]) ms_busy[s] <= 1'b0;
 
       // ---- answer the head
       hz_v <= hd_ready;

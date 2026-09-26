@@ -586,7 +586,7 @@ module m2_raster3d #(
   // R620: m2_texel_bl, the bilinear fetch -- the same 4,096 lines as two
   // 2,048-line banks by row-pair parity (IB 11), so a 2x2 block comes back in
   // one access 87.5% of the time. Point mode is the old picture.
-  m2_texel_bl #(.AW(TEX_AW), .IB(11)) u_texel (
+  m2_texel_bl #(.AW(TEX_AW), .IB(11), .RSP_D(4)) u_texel (   // R622: 4 entries, measured equal
     .clk(clk_mem), .rst_n(rst_n),
     .base_s0(tex_base0), .base_s1(tex_base1), .bilinear(tex_bilinear),
     .req(txf_req), .rdy(txf_rdy), .ack(txf_ack), .tex(txf_tex),
