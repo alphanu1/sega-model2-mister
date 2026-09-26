@@ -23949,3 +23949,10 @@ s383 clk_sys -0.709. The span queue's inferred RAM is 264 bits wide (R618's
 266 less two constant bits; 242 before), so the build carries R618 though its
 synthesis started a minute after that commit. To judge by eye: the road at
 mid and far distance, close objects (R618), whether PIXSTEP 2 costs bands.
+
+**CONFIRMED ON THE BOARD (s381):** Ben, with a photo of the attract race:
+"the road is already looking much better with the bug fix on the board" --
+the road's texture streams toward the vanishing point at mid and far
+distance, which it had not since R339 (the open issue of 2026-09-25). The
+cause was R616's half pixel and R618's saturated gradients, found with the
+3D frame differential (R615).
