@@ -23127,3 +23127,14 @@ takes them ready-made (Model2 sets it; default off, so tb_m2_texel still
 drives the internal path: 8,268 checks, 0 fails, mirroring included).
 tb_m2_texel_cdc 40,804 checks, 0 fails; tb_m2_raster3d frame hashes identical
 on all five scenes.
+
+**R574, on the board -- s315: THE FIRST FULLY CLEAN 100/60/30 BUILD.** s314 and
+s315 met every clock on setup and hold (s315: clk_mem +0.210, clk_sys +0.263,
+i960 +2.826; all holds +0.24..+0.27; 16 of 16 DQ packed, clk_mem global).
+240 s against s311 (60/30 without the priority class): the band sequencer's
+critical time 1,788 -> 1,599 (-11%), its texel wait 1,386 -> 1,204 (-13%);
+late middle bands y 152-192 at 12-18% of samples, y 200-216 no longer late;
+the CPU port's bus wait 4.7% -> 3.0%; the i960 2.44 M instructions/s. But the
+texel port's own queue wait barely moved (8.2% -> 8.1%): what remains of it
+is the burst already in progress, which a priority class cannot pre-empt.
+A real gain, small, and near the resolution of 64 band samples a capture.
