@@ -248,7 +248,13 @@ module m2_quad_store #(
   (* ramstyle = "M10K" *) logic [IW-1:0] idx_b [NQ];
 
   logic [IW:0]  count [NBANK];
-  wire  [IW:0]  wcount = count[wbank];
+  // R566: the count as it WILL be once a quad still in the one-cycle attribute
+  // stage below has been counted -- so a quad arriving the very next cycle
+  // takes the next slot rather than the pending one's. Every term is a
+  // register, so this does not bring the comparator trees back into the path.
+  logic          a_v, a_room, a_tiny, a_bank;
+  wire           a_inc  = a_v && a_room && !a_tiny && (a_bank == wbank);
+  wire  [IW:0]  wcount = count[wbank] + {{IW{1'b0}}, a_inc};
   wire  [IW:0]  rcount = count[rbank];
   assign dbg_count = {{(16-IW-1){1'b0}}, wcount};
 
@@ -292,6 +298,44 @@ module m2_quad_store #(
   endfunction
   wire is_tiny = tiny_quad(in_x0, in_y0, in_x1, in_y1, in_x2, in_y2, in_x3, in_y3);
 
+  // R566: THE COUNT AND THE ATTRIBUTE WORD LAND ONE CYCLE AFTER THE QUAD.
+  //
+  // At 50 MHz the clipper's output coordinate reached this store's quad COUNT
+  // through tiny_quad()'s eight-way min/max tree in one cycle (s297: qsx[1][14]
+  // -> count[0][*], +1.125 ns), and the attribute RAMs' data through
+  // band_range() (+1.967 / +2.194). A 60 MHz core clock takes 3.33 ns off
+  // both. So the two comparator trees, and the attribute word they feed, are
+  // registered, and the count and att write happen the next cycle.
+  //
+  // WHY ONE CYCLE LATE IS SAFE. (1) A quad arriving the very next cycle takes
+  // the slot after the pending one: wcount above includes a pending increment
+  // (m2_geo_clip cannot emit back to back, but tb_m2_raster3d does, and the
+  // store should not depend on its source's pacing). (2) The sort reads the
+  // count no earlier than two cycles after the last quad: q_end -> P_SORT ->
+  // sort_start -> R_IDLE -> R_INIT. (3) The vertex,
+  // texture and key RAMs are still written on the quad's own cycle at wcount,
+  // exactly as before; a tiny quad's slot is reused by the next quad as it
+  // always was. `clear` wins over a pending increment, as it did over in_valid.
+  logic                a_moire;
+  logic [IW-1:0]       a_slot;
+  logic [2*BW-1:0]     a_band;
+  logic [CW-1:0]       a_col;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      a_v <= 1'b0; a_room <= 1'b0; a_tiny <= 1'b0; a_bank <= 1'b0; a_moire <= 1'b0;
+      a_slot <= '0; a_band <= '0; a_col <= '0;
+    end else begin
+      a_v     <= in_valid && !clear;
+      a_room  <= has_room;
+      a_tiny  <= is_tiny;
+      a_bank  <= wbank;
+      a_slot  <= wcount[IW-1:0];
+      a_band  <= band_range(in_y0, in_y1, in_y2, in_y3);
+      a_moire <= in_moire;
+      a_col   <= c565(in_col);
+    end
+  end
+
   logic [IW-1:0] wi;
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -299,29 +343,20 @@ module m2_quad_store #(
       wi <= '0; dbg_dropped <= '0; dbg_tiny <= '0;
     end else if (clear) begin
       count[wbank] <= '0; wi <= '0; dbg_dropped <= '0; dbg_tiny <= '0;
-    end else if (in_valid) begin
+    end else begin
       // THE VERTEX RAMs' WRITE ENABLE DOES NOT WAIT FOR THE TINY TEST (R222).
-      // It used to be `in_valid && !is_tiny && has_room`, and is_tiny is a
-      // min/max tree over eight 16-bit coordinates -- so the clipper's output
-      // y fed a comparator chain and then a block RAM's write-enable pin, and
-      // that was the worst path in the design at 50 MHz once lighting made the
-      // placement tighter (build/lit1 s13: -0.210 ns, qsy[0][7] -> the vertex
-      // RAM's porta_we). Now every accepted quad is WRITTEN at slot wcount and
-      // only the COUNT is withheld when it is tiny: the slot is simply reused
-      // by the next quad, so the stored list is identical, and the comparator
-      // tree ends at a small counter instead of a RAM control pin.
-      if (has_room) begin
+      // Every accepted quad is WRITTEN at slot wcount and only the COUNT is
+      // withheld when it is tiny: the slot is simply reused by the next quad.
+      if (in_valid && has_room) begin
         if (wbank) begin
           vtx_1[wcount[IW-1:0]] <= {sat(in_y3), sat(in_x3), sat(in_y2), sat(in_x2),
                                     sat(in_y1), sat(in_x1), sat(in_y0), sat(in_x0)};
-          att_1[wcount[IW-1:0]]  <= {band_range(in_y0, in_y1, in_y2, in_y3), in_moire, c565(in_col)};
           uvt_1[wcount[IW-1:0]]  <= {in_oz3, in_oz2, in_oz1, in_oz0,
                                      in_tex, in_v3, in_u3, in_v2, in_u2,
                                      in_v1, in_u1, in_v0, in_u0};
         end else begin
           vtx_0[wcount[IW-1:0]] <= {sat(in_y3), sat(in_x3), sat(in_y2), sat(in_x2),
                                     sat(in_y1), sat(in_x1), sat(in_y0), sat(in_x0)};
-          att_0[wcount[IW-1:0]]  <= {band_range(in_y0, in_y1, in_y2, in_y3), in_moire, c565(in_col)};
           uvt_0[wcount[IW-1:0]]  <= {in_oz3, in_oz2, in_oz1, in_oz0,
                                      in_tex, in_v3, in_u3, in_v2, in_u2,
                                      in_v1, in_u1, in_v0, in_u0};
@@ -332,12 +367,19 @@ module m2_quad_store #(
         // largest z -- the furthest -- first.
         key[wcount[IW-1:0]] <= ~in_z[KW-1:0];
       end
-      if (is_tiny) begin
-        if (dbg_tiny != 16'hffff) dbg_tiny <= dbg_tiny + 16'd1;
-      end else if (has_room) begin
-        count[wbank] <= wcount + 1'b1;
-      end else if (dbg_dropped != 16'hffff) begin
-        dbg_dropped <= dbg_dropped + 16'd1;
+      // R566: a cycle later, from the registered comparators.
+      if (a_v) begin
+        if (a_room) begin
+          if (a_bank) att_1[a_slot] <= {a_band, a_moire, a_col};
+          else        att_0[a_slot] <= {a_band, a_moire, a_col};
+        end
+        if (a_tiny) begin
+          if (dbg_tiny != 16'hffff) dbg_tiny <= dbg_tiny + 16'd1;
+        end else if (a_room) begin
+          count[a_bank] <= count[a_bank] + 1'b1;
+        end else if (dbg_dropped != 16'hffff) begin
+          dbg_dropped <= dbg_dropped + 16'd1;
+        end
       end
     end
   end

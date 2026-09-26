@@ -299,7 +299,8 @@ module m2_geometry (
   // reciprocal is 29 cycles and does not pipeline, so four vertices cost about
   // 120 cycles. At 50 MHz that is 2,700 polygons in a 60 Hz frame before this
   // stage is the limit, and the display lists measured here are far short of it.
-  typedef enum logic [1:0] { Q_IDLE, Q_ISS, Q_WAIT, Q_OUT } qst_t;
+  // R566: Q_CHK added -- the cull is decided a cycle after the polygon is taken.
+  typedef enum logic [2:0] { Q_IDLE, Q_ISS, Q_WAIT, Q_OUT, Q_CHK } qst_t;
   qst_t qst;
   logic [1:0]  qi;
   logic [31:0] hx [4], hy [4], hz [4];
@@ -530,12 +531,15 @@ module m2_geometry (
 
   logic [31:0] hu [4], hv [4];
   logic [31:0] ptex;  logic [7:0] plum;
+  logic        c_bad, c_behind;            // R566: the cull, registered
+  logic [31:0] c_zsel;
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       qst <= Q_IDLE; qi <= 2'd0; clip_in_valid <= 1'b0; hzmin <= 32'd0; hzmax <= 32'd0;
       for (int k = 0; k < 4; k++) begin hu[k] <= 32'd0; hv[k] <= 32'd0; end
       ptex <= 32'd0; plum <= 8'd0;
+      c_bad <= 1'b0; c_behind <= 1'b0; c_zsel <= 32'd0;
       zprev <= 32'h5011B5EA; hzkey <= 16'd0; hzpre <= '0;   // 1e10, as render_frame_start sets it
       dbg_nonfinite <= 16'd0; dbg_behind <= 16'd0; pj_wait <= 10'd0; dbg_pj_lost <= 16'd0;
       cvalid <= 1'b0;
@@ -550,14 +554,22 @@ module m2_geometry (
         // A refused polygon is still ACCEPTED from the engine -- poly_ready is
         // high here -- it simply goes no further. Refusing to accept it would
         // stall the engine instead of the clipper and fix nothing.
-        Q_IDLE: if (poly_valid && (poly_bad || zc_behind)) begin
-          // R246: the reference sets raster->polygon_z BEFORE it culls, so a
-          // culled polygon still decides what a later "old value" reads.
-          zprev <= zsel_c;
-          if (poly_bad) dbg_nonfinite <= dbg_nonfinite + 16'd1;
-          else          dbg_behind    <= dbg_behind + 16'd1;
-          cvalid <= 1'b0;                        // R217: a refused polygon breaks the chain
-        end else if (poly_valid) begin
+        // R566: TAKE THE POLYGON UNCONDITIONALLY, DECIDE THE CULL A CYCLE LATER.
+        //
+        // The cull -- eight non-finite tests and a four-way float max for
+        // "wholly behind the eye" -- used to gate the load of every register
+        // below in the same cycle, so the engine's vertex registers reached
+        // ~150 load enables through a comparator tree (s297: p0prev -> hzpre
+        // +1.842, -> hz/hu/hx/hy/pcol +2.65..+3.03 at 50 MHz; -1.5 at 60).
+        // Now the polygon is always latched, the two cull flags and the
+        // z-mode's pick are registered beside it, and Q_CHK acts on them. A
+        // refused polygon's latched values are simply never used. One cycle a
+        // polygon, against a 68-cycle budget.
+        //
+        // A refused polygon is still ACCEPTED from the engine -- poly_ready is
+        // high in Q_IDLE -- it simply goes no further. Refusing to accept it
+        // would stall the engine instead of the clipper and fix nothing.
+        Q_IDLE: if (poly_valid) begin
           hx[0] <= v0x; hy[0] <= v0y; hz[0] <= v0z;
           hx[1] <= v1x; hy[1] <= v1y; hz[1] <= v1z;
           hx[2] <= v2x; hy[2] <= v2y; hz[2] <= v2z;
@@ -571,10 +583,26 @@ module m2_geometry (
           ptex  <= poly_tex; plum <= dbg_lum;      // R271: the lighting luminance
           hzmin <= zmin_c;
           hzmax <= zmax_c;
-          zprev <= zsel_c;                       // R246: carried, as raster->polygon_z is
-          hzpre <= zval_pre(zsel_c, zadj_e);   // R420: arithmetic here
-          qi    <= 2'd0;
-          qst   <= Q_ISS;
+          c_bad    <= poly_bad;
+          c_behind <= zc_behind;
+          c_zsel   <= zsel_c;
+          qst      <= Q_CHK;
+        end
+
+        Q_CHK: begin
+          // R246: the reference sets raster->polygon_z BEFORE it culls, so a
+          // culled polygon still decides what a later "old value" reads.
+          zprev <= c_zsel;
+          if (c_bad || c_behind) begin
+            if (c_bad) dbg_nonfinite <= dbg_nonfinite + 16'd1;
+            else       dbg_behind    <= dbg_behind + 16'd1;
+            cvalid <= 1'b0;                        // R217: a refused polygon breaks the chain
+            qst    <= Q_IDLE;
+          end else begin
+            hzpre <= zval_pre(c_zsel, zadj_e);     // R420: arithmetic here
+            qi    <= 2'd0;
+            qst   <= Q_ISS;
+          end
         end
 
         // ISSUE AND WAIT ARE SEPARATE STATES for the same reason the engine's
