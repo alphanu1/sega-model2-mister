@@ -872,7 +872,15 @@ module m2_raster3d #(
   // C_CLRW, the handoff and the band-end drain read ~0 in every bench regime,
   // and C_IDLE cannot occur while the fill is behind the beam.
   logic [17:0] sq_c [4];   // R553: 18 bits, reported in 1,024-cycle units (16 saturated)
-  wire sq_crit = dvalid && (fill_frame == disp_frame) && (scan_y < 10'(SCR_H))
+  // R571: "the beam is in the picture" comes from scan_clk's domain, and with
+  // the video on clk_mem (R564) it is synchronised like scan_band_f beside it.
+  // The crossing inventory found this read raw: 216 endpoints.
+  logic [1:0] sq_vis_s;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) sq_vis_s <= 2'b00;
+    else        sq_vis_s <= {sq_vis_s[0], (scan_y < 10'(SCR_H))};
+  end
+  wire sq_crit = dvalid && (fill_frame == disp_frame) && sq_vis_s[1]
               && ((BW+1)'(fill_band) <= (BW+1)'(scan_band_f) + (BW+1)'(1));
   function automatic logic [7:0] sq8(input logic [17:0] c);
     sq8 = c[17:10];

@@ -22826,3 +22826,41 @@ both times -- the 2,698 that differ are the same pixels either way, a
 pre-existing gap, not this change. tile_fetch passes its bench.
 The texel-address and sd_a paths are left to the next build: both met timing
 at this clock on s299.
+
+---
+
+**R571 -- STEP 1(e): THE CROSSING INVENTORY ON THE VIDEO-MOVE NETLIST (s303),
+TAKEN BEFORE ANY CLOCK GROUP IS DECLARED.**
+
+xings.tcl over s303, every clk_sys <-> clk_mem register pair (10,814). Each
+group is one of:
+
+  - SDRAM crossing (m2_sdram_cdc): requester address/data -> u_sdram capture
+    (held by protocol, R34); the request level -> the port's two-flop
+    synchroniser; u_sdram's held p_dout -> requester data registers (read two
+    slow edges after the completion toggle); the ports' own toggle syncs.
+  - texel queue (m2_texel_cdc): Gray pointers into their synchronisers, the
+    payload both ways (multicycle-excepted, R563), the sweep toggle.
+  - m2_raster3d TWO_CLOCKS: band flags and indices into rdy_s1/band_s1, the
+    beam band into sb_gray_s1.
+  - single-bit synchronisers: vbl_s, p2_tex_f1, cwr_s (the char-write
+    invalidate; a combinational level from the bridge's registers -- a glitch
+    could only invalidate an extra line, costing one refetch).
+  - the xlat table: MLAB written on clk_sys, read asynchronously on clk_mem
+    (6,144 paths); a read of an entry being written returns old or new.
+  - debug values latched per frame (cc_*, tx_*, dbg_stream).
+  - the MiSTer framework's own: OSD, scaler configuration, hps_io's
+    video_calc, sys_top's sync measurement -- written for a CLK_VIDEO other
+    than clk_sys, as most cores have.
+
+And two that were NOT safe, fixed here:
+  - u_sdram's `ready` -> m2_rom_loader, raw on clk_sys. It rises once, but the
+    loader gates ioctl_wait on it and ioctl_wait stalls the HPS: now two flops.
+  - R547's band-sequencer counters compared the raw beam line (scan_y <
+    SCR_H) on the fill clock -- 216 endpoints. Debug, but it is the
+    measurement behind "texel wait is 68% of the critical time": now its own
+    two-flop copy beside the already-synchronised scan_band_f.
+
+With those, nothing crosses that is not a synchroniser, a protocol-held
+payload, a dual-clock memory, a frame-latched debug value or framework code.
+The clock groups (R568) go in with the next build.

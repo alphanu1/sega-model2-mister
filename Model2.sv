@@ -1183,12 +1183,22 @@ assign SDRAM_DQ  = sd_dq_oe ? sd_dq_o : 16'bZ;
 // fix. outclk_4 is a real output counter with a real phase shift.
 assign SDRAM_CLK = clk_sdram_pin;
 
+// R571: mem_ready is m2_sdram's, on clk_mem; the loader is on clk_sys. It rises
+// once, at the end of the controller's bring-up, but the loader gates
+// ioctl_wait -- which stalls the HPS -- on it, so it crosses on two flops.
+logic [1:0] mem_ready_sy;
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+	if (!mem_rst_n) mem_ready_sy <= 2'b00;
+	else            mem_ready_sy <= {mem_ready_sy[0], mem_ready};
+end
+wire mem_ready_s = mem_ready_sy[1];
+
 // `ioctl_wait` STALLS THE HPS ITSELF, so the loader gates it on `ioctl_download`
 // internally — and it ASKS the host to stop rather than stopping it, which is why
 // it buffers into a FIFO with margin instead of trusting the wait to take effect.
 m2_rom_loader #(.SDR_AW(SDR_AW)) u_loader (
 	.clk(clk_sys), .rst(~mem_rst_n),
-	.mem_ready(mem_ready),
+	.mem_ready(mem_ready_s),   // R571: synchronised -- see below
 	.ioctl_download(ioctl_download), .ioctl_index(ioctl_index),
 	.ioctl_wr(ioctl_wr), .ioctl_addr(ioctl_addr), .ioctl_dout(ioctl_dout),
 	.ioctl_wait(ioctl_wait),
