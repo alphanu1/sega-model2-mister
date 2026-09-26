@@ -265,7 +265,10 @@ wire [26:0] ioctl_addr;
 
 wire clk_mem;        // 100 MHz, m2_sdram ONLY
 wire clk_sdram_pin;  // 100 MHz at 180 deg, drives SDRAM_CLK
-wire clk_sys;   // 50 MHz, the core domain, and the COPROCESSOR's clock.
+// R573: THE CORE CLOCK IN MHz, and every rate that hangs off it derives from
+// this one number (R227's list). 60: the clock plan's target; clk_i960 is half.
+localparam int unsigned SYS_MHZ = 60;
+wire clk_sys;   // 60 MHz (R573), the core domain, and the COPROCESSOR's clock.
                 // Exactly the real MB86234's 50 MHz, and an exact 2x clk_i960 --
                 // the board's own ratio. Model 1 had to retrofit 2:1 onto a
                 // 1:1 arrangement; this core was built at the ratio.
@@ -293,7 +296,7 @@ pll pll
 	.refclk(CLK_50M),
 	.rst(0),
 	.outclk_0(clk_mem),      // 100 MHz, the SDRAM controller alone
-	.outclk_1(clk_sys),      // 50 MHz, everything else. Exact /2 of outclk_0.
+	.outclk_1(clk_sys),      // 60 MHz (R573), everything else. Asynchronous to outclk_0 (R568).
 	.outclk_2(clk_vid),      // 60 MHz, UNUSED -- the 3D clock, already in the PLL
 	.outclk_3(clk_i960),     // 25 MHz, exact /2 of clk_sys.
 	.outclk_4(clk_sdram_pin),// 100 MHz at 180 deg, straight to the device pin
@@ -2329,7 +2332,7 @@ m2_i8251 u_uart_main (
 	.irq(uart_irq), .irq_rx(uart_irq_rx), .irq_tx(uart_irq_tx)
 );
 
-m2_sound_link u_snd_link (
+m2_sound_link #(.BYTE_CYCLES(320 * SYS_MHZ)) u_snd_link (   // R573: 31,250 baud at SYS_MHZ
 	.clk(clk_sys), .rst_n(cpu_rst_n),
 	.a_tx_data(a_tx_d), .a_tx_valid(a_tx_v), .a_tx_ack(a_tx_a),
 	.a_rx_data(a_rx_d), .a_rx_valid(a_rx_v), .a_rx_ack(a_rx_a),
@@ -2493,7 +2496,7 @@ wire signed [15:0] snd_l, snd_r;
 // cache the chip cannot produce samples that fast, so the buffer runs dry.
 // The cache alone leaves the rate short and the period uneven. Together they
 // hold 100% with no underruns at every latency from 40 to 600 cycles.
-m2_sound_board #(.PCM_CACHE(1'b1), .PCM_RATE(1'b1), .TICK_DEN(50)) u_sndboard (
+m2_sound_board #(.PCM_CACHE(1'b1), .PCM_RATE(1'b1), .TICK_DEN(SYS_MHZ)) u_sndboard (   // R573
 	.clk(clk_sys), .rst_n(cpu_rst_n & mem_rst_n & cp_done & snd_found),
 	.rx_data(b_rx_d), .rx_valid(b_rx_v), .rx_ack(b_rx_a),
 	.tx_data(b_tx_d), .tx_valid(b_tx_v), .tx_ack(b_tx_a),
@@ -3511,7 +3514,7 @@ wire  [7:0] zio_wdata, zio_rdata;
 wire [31:0] dc_hits, dc_miss;
 wire  [7:0] iob_pa;       // PA latch; bit 0 selects the DIP banks
 wire [15:0] iob_seccnt;   // times the firmware has selected them
-m2_ioz80 #(.TICK_NUM(4), .TICK_DEN(50)) u_ioz80 (   // 4 MHz exactly, on 50 MHz clk_sys
+m2_ioz80 #(.TICK_NUM(4), .TICK_DEN(SYS_MHZ)) u_ioz80 (   // 4 MHz exactly, on clk_sys (R573)
 	.clk(clk_sys), .rst_n(cpu_rst_n & fw_ready),
 	// First 16 KB only: the EPROM is 64 KB, the Z80 maps 0x0000-0x3fff, and a
 	// wrapping fw_addr[13:0] would leave the LAST quarter in the ROM.
@@ -3908,7 +3911,7 @@ end
 // So this is now a ~100 ms tick carrying the running totals. The counts are
 // cumulative, so sampling them cannot lose an event, and the wire is left for
 // the payload that actually needs every line.
-localparam int unsigned HB_CYC = 4_800_000;    // 100 ms at 48 MHz
+localparam int unsigned HB_CYC = SYS_MHZ * 100_000;    // 100 ms (R573)
 logic [22:0] hb_ctr;
 logic        hb_tick, hb_tick_b;
 always_ff @(posedge clk_sys or negedge mem_rst_n) begin
@@ -4039,7 +4042,9 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	end
 end
 
-m2_dbg_stream #(.DIVISOR(417), .BUDGET_CYC(200_000)) u_dbg_stream (
+// R573: 115,200 baud from SYS_MHZ, rounded (521 at 60). 417 was 48 MHz's
+// figure and ran 4% fast at 50.
+m2_dbg_stream #(.DIVISOR((SYS_MHZ * 1_000_000 + 57_600) / 115_200), .BUDGET_CYC(200_000)) u_dbg_stream (
 	.clk(clk_sys), .rst_n(mem_rst_n),
 	// THE IP RING: 512 consecutive retired instructions, recorded at full
 	// speed and read out slowly. Sampling cannot show a BRANCH, and a branch
@@ -4772,8 +4777,9 @@ m2_ioboard #(
 	// self-test at 2.52 s -- so the 60 MHz core clock scales both by 6/5. The
 	// game spins waiting for the status byte, so being early is harmless and
 	// being late is not; keeping the real duration keeps the boot as measured.
-	.STATUS_CYCLES  (5_072_464),
-	.SELFTEST_CYCLES(126_086_957)
+	// R573: DURATIONS, so they scale with the clock (0.101 s and 2.52 s).
+	.STATUS_CYCLES  (int'((64'd5_072_464   * SYS_MHZ + 25) / 50)),
+	.SELFTEST_CYCLES(int'((64'd126_086_957 * SYS_MHZ + 25) / 50))
 ) u_ioboard (
 	.clk(clk_sys),
 	.rst_n(cpu_rst_n),

@@ -22890,3 +22890,33 @@ tools/m2-framediff.sh: byte-identical frame again (md5 1bb8097d...).
 **The clock groups (R568)** are in Model2.sdc with this change: clk_mem and
 the SDRAM pin clock asynchronous to clk_sys and the i960, which stay related
 to each other. The inventory that had to come first is R571.
+
+---
+
+**R573 -- 100 / 60 / 30: THE FIRST BUILD AT THE CLOCK PLAN'S TARGET.**
+
+Steps 2-4 together, on top of step 1 (R561-R572) and the 60 MHz timing work
+merged from its branch (R565's list: the FP pool re-taken from Model 1 at
+0b5d04f with its registered operand mux, the quad store counting a cycle
+after the quad, the geometry cull in its own state, the fill's normaliser
+pipelined and plane products registered, the i960's fpmisc registered).
+
+  - rtl/pll/pll.v: outclk_1 (clk_sys) 50 -> 60 MHz, outclk_3 (clk_i960) 25 ->
+    30 -- still exactly clk_sys / 2, so m2_cpu_bridge's crossing stays timed
+    (R460). The unused outclk_2 moves 60 -> 40 so it is not identical to
+    outclk_1: identical outputs can be merged onto one counter, which renames
+    the clocks the SDC groups by. VCO 1,200 MHz divides all of them.
+  - Model2.sv: SYS_MHZ = 60, and every rate R227 listed derives from it --
+    the sound board's TICK_DEN (68000 phases, YM3438's 25/(3 x TICK_DEN)),
+    MultiPCM's CE_DEN / OUT_DEN (which were left at their 50 MHz module
+    defaults and are now passed), the I/O board Z80's TICK_DEN, the sound
+    link's BYTE_CYCLES (320 x SYS_MHZ, 31,250 baud), the debug UART's
+    divisor (521 at 60; the 417 it had was 48 MHz's and ran 4% fast at 50),
+    the I/O board's status and self-test durations, the heartbeat. ce_pix is
+    on clk_mem since R564 and does not move.
+  - The coprocessor and the i960 now run 20% faster than the real board's
+    50 and 25 MHz. That is the point of the plan; nothing in either waits on
+    wall-clock time except through the rates above.
+
+R565 projected -2.22 ns on clk_sys and -3.56 on the i960 before the timing
+work; this build measures what is left.

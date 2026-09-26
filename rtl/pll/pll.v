@@ -188,7 +188,7 @@ module pll_core (
     .output_clock_frequency0("100.000000 MHz"),
     .phase_shift0("0 ps"),
     .duty_cycle0(50),
-    .output_clock_frequency1("50.000000 MHz"),
+    .output_clock_frequency1("60.000000 MHz"),   // R573: clk_sys, 50 -> 60
     .phase_shift1("0 ps"),
     .duty_cycle1(50),
     // R460: 60 MHz, THE 3D DOMAIN. Was 32 MHz and drove nothing -- the
@@ -201,7 +201,7 @@ module pll_core (
     // 50 (/24), 60 (/20), 25 (/48) -- so the other four frequencies are
     // unchanged to the digit while every output counter is reprogrammed.
     // Expect placement to shift even though nothing else in this file did.
-    .output_clock_frequency2("60.000000 MHz"),
+    .output_clock_frequency2("40.000000 MHz"),   // R573: unused; kept DISTINCT from outclk_1 (R460)
     .phase_shift2("0 ps"),
     .duty_cycle2(50),
     // R464: BACK TO 25, AND 30 IS PARKED RATHER THAN ABANDONED.
@@ -233,7 +233,7 @@ module pll_core (
     // that is 3:5 -- the edges realign every 50 ns and the closest approach is
     // 3.333 ns -- so the bridge needs them back and general[3] needs its own
     // clock group.
-    .output_clock_frequency3("25.000000 MHz"),
+    .output_clock_frequency3("30.000000 MHz"),   // R573: clk_i960, 25 -> 30, still clk_sys / 2
     .phase_shift3("0 ps"),
     .duty_cycle3(50),
     // 180 degrees at 100 MHz is half a 10 ns period: 5000 ps exactly. It was

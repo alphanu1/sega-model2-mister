@@ -515,14 +515,15 @@ module m2_sound_board #(
   assign snd_l = sat16(mix_l);
   assign snd_r = sat16(mix_r);
 
-  m2_pcm_rate #(.BYPASS(!PCM_RATE)) u_rate1 (
+  // R573: the MultiPCM rate from TICK_DEN, not the 50 MHz defaults (R227).
+  m2_pcm_rate #(.BYPASS(!PCM_RATE), .CE_DEN(TICK_DEN), .OUT_DEN(TICK_DEN * 1_000_000)) u_rate1 (
     .clk(clk), .rst_n(rst_n), .ce(ce_pcm1),
     .s_valid(p1_stb), .s_l(p1_raw_l), .s_r(p1_raw_r),
     .o_l(p1_l), .o_r(p1_r),
     .dbg_underruns(dbg_pcm_under), .dbg_level(dbg_pcm_level)
   );
 
-  m2_pcm_rate #(.BYPASS(!PCM_RATE)) u_rate2 (
+  m2_pcm_rate #(.BYPASS(!PCM_RATE), .CE_DEN(TICK_DEN), .OUT_DEN(TICK_DEN * 1_000_000)) u_rate2 (
     .clk(clk), .rst_n(rst_n), .ce(ce_pcm2),
     .s_valid(p2_stb), .s_l(p2_raw_l), .s_r(p2_raw_r),
     .o_l(p2_l), .o_r(p2_r),
