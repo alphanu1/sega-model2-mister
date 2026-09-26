@@ -22760,3 +22760,31 @@ moves to clk_mem. The frame edge and the counters are now in one domain and
 the toggle crossing is gone. The line-by-line search for clk_sys readers of
 video signals had missed it because cvb_d was not in the list searched; the
 STA inventory (step 1(e)) is the check that cannot miss one.
+
+---
+
+**R569 -- THE GREY AND COLOUR STRIPES ARE GONE ON s299. THE MOST LIKELY CAUSE
+WAS m2_texel_x2 ITSELF.**
+
+Ben, with a screenshot of the attract close-up of the car on s299 (steps 1(a)
++ 1(c)): "the current build on the board does not have the grey or coloured
+smeared pixels!" The open issue recorded after R556 -- grey and colour
+streaks through every textured object, repeating into the next scanline at
+band ends, the same on every build of the session (R559, R560) -- does not
+show.
+
+The only change on the texture path between s297 (stripes) and s299 (clean)
+is m2_texel_x2 -> m2_texel_cdc. The 2:1 adapter loaded a request's payload
+(sheet, u, v) into the cache's presentation registers ONE clk_mem edge after
+the core clock wrote it, and handed answers back across the aligned edges --
+a 10 ns relationship timed at its limit, the class R319 describes and the
+char path's remaining hold violation still belongs to. A payload caught
+mid-change fetches the texel from the wrong place; that is a wrong-coloured
+or grey texel on any textured surface, on every build, differing in detail
+by placement -- which is what the stripes were. The asynchronous queue reads a
+slot at least three clk_mem edges after it is written, and R553's K = 8
+making the old adapter visibly worse (R558) fits the same mechanism.
+
+STRONGLY INDICATED, NOT PROVEN: one scene, one seed. The step-1(b) build
+carries the same queue; if it is also clean, and it stays clean across
+scenes, the open issue closes on this entry.
