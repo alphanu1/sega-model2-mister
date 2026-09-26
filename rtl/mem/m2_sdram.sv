@@ -682,6 +682,16 @@ module m2_sdram #(
                 || (ras_cnt[2] != 0) || (ras_cnt[3] != 0);
 
   logic [15:0]              init_cnt;
+  // R581: the bring-up steps, decoded one count early (see S_INIT).
+  logic                     ini_pre, ini_ref, ini_mrs, ini_rdy;
+  always_ff @(posedge clk) begin
+    ini_pre <= (init_cnt == 16'd401);
+    ini_ref <= (init_cnt == 16'd361) || (init_cnt == 16'd351) || (init_cnt == 16'd341)
+            || (init_cnt == 16'd331) || (init_cnt == 16'd321) || (init_cnt == 16'd311)
+            || (init_cnt == 16'd301) || (init_cnt == 16'd291);
+    ini_mrs <= (init_cnt == 16'd201);
+    ini_rdy <= (init_cnt == 16'd2);
+  end
   logic [$clog2(T_REFI+1)-1:0] ref_cnt;
   logic                     ref_pend;
   logic [3:0]               wait_cnt;
@@ -928,11 +938,15 @@ module m2_sdram #(
         init_cnt <= init_cnt - 1'b1;
         // JEDEC bring-up: NOPs, precharge all, eight refreshes, mode register.
         // Spacing is generous rather than minimal; this runs once.
-        case (init_cnt)
-          16'd400: begin cmd <= C_PRE; sd_a <= 13'h400; end
-          16'd360, 16'd350, 16'd340, 16'd330,
-          16'd320, 16'd310, 16'd300, 16'd290: cmd <= C_REF;
-          16'd200: begin
+        // R581: the steps are decoded a cycle AHEAD, from init_cnt + 1, into
+        // single flags -- init_cnt only ever counts down by one here -- so a
+        // 16-bit compare no longer sits in front of cmd and sd_a (s311:
+        // init_cnt -> cmd, -0.060 ns; s312: -> sd_a, -0.574 at 100 MHz).
+        // The same step lands on the same count as before.
+        unique case (1'b1)
+          ini_pre: begin cmd <= C_PRE; sd_a <= 13'h400; end
+          ini_ref: cmd <= C_REF;
+          ini_mrs: begin
             cmd   <= C_MRS;
             sd_ba <= 2'b00;
             // CAS LATENCY FROM THE PARAMETER, NOT A LITERAL. This was
@@ -942,7 +956,7 @@ module m2_sdram #(
             // the capture window without telling the device.
             sd_a  <= {3'b000, 1'b0, 2'b00, 3'(CL), 1'b0, 3'b000};
           end
-          16'd1: begin ready <= 1'b1; state <= S_IDLE; end
+          ini_rdy: begin ready <= 1'b1; state <= S_IDLE; end
           default: ;
         endcase
       end else begin

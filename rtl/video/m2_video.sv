@@ -801,9 +801,14 @@ module m2_video #(
 
   logic [4:0] x_r5, x_g5, x_b5;
   logic [7:0] x_r, x_g, x_b;
-  assign x_r = xlat_tbl[{2'd0, x_r5}];
-  assign x_g = xlat_tbl[{2'd1, x_g5}];
-  assign x_b = xlat_tbl[{2'd2, x_b5}];
+  // R582: the xlat lookup registered before the gamma curve (s312: pal_data_q
+  // -> xlat -> gamma -> pb_q, -0.278 ns at 100 MHz). See vid_r below for where
+  // the cycle comes from.
+  always_ff @(posedge clk) begin
+    x_r <= xlat_tbl[{2'd0, x_r5}];
+    x_g <= xlat_tbl[{2'd1, x_g5}];
+    x_b <= xlat_tbl[{2'd2, x_b5}];
+  end
 
   logic [7:0] pr, pg, pb;
   // R572: and the palette's output registered too (s306: pal_data_q -> gamma
@@ -838,23 +843,57 @@ module m2_video #(
   // a second delayed copy of `visible` instead put the colour one pixel behind
   // its own blanking, which blanked the first visible column of every line and
   // left the rest correct: a single black column down the left edge.
+  // R582: declared before the output block that reads them.
+  logic ce_d, vis_q, cat1_q, hb_q, vb_q, hs_q, vs_q;
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      vid_r <= '0; vid_g <= '0; vid_b <= '0; vid_cat1 <= 1'b0;
+      vid_cat1 <= 1'b0;
       vid_hb <= 1'b1; vid_vb <= 1'b1; vid_hs <= 1'b0; vid_vs <= 1'b0;
-    end else if (ce_pix) begin
-      vid_cat1 <= visible && !mix_src[3] && !mix_src[2];   // sources 0-3
+    end else if (ce_d) begin
+      // R582: ALL OUTPUTS MOVE TOGETHER, on ce_d, from values latched on ce.
       // Every sync and blank is delayed with the data, not just `visible`.
       // Exposing undelayed blanking beside delayed colour puts the picture one
       // column out of its own window, which a scaler renders as a stray column
-      // at the edge rather than as anything recognisably a timing fault.
-      vid_hb <= hblank;
-      vid_vb <= vblank;
-      vid_hs <= hsync_i;
-      vid_vs <= vsync_i;
-      vid_r <= visible ? pr_q : 8'd0;      // R572
-      vid_g <= visible ? pg_q : 8'd0;
-      vid_b <= visible ? pb_q : 8'd0;
+      // at the edge rather than as anything recognisably a timing fault. (R582
+      // did exactly that for one build: colour on ce_d, flags still on ce --
+      // tb_m2_video_frame at the hardware enable rate showed the frame one
+      // pixel out, zero pixels different at that offset.)
+      vid_cat1 <= cat1_q;
+      vid_hb   <= hb_q;
+      vid_vb   <= vb_q;
+      vid_hs   <= hs_q;
+      vid_vs   <= vs_q;
+    end
+  end
+
+  // R582: THE COLOUR IS TAKEN ONE CYCLE AFTER THE PIXEL ENABLE, the flags above
+  // on it. hcnt moves at a ce edge E; the colour is now ready at E+6 (line
+  // buffer E+1, palette address E+2, palette RAM E+3, its data E+4, xlat E+5,
+  // gamma E+6), and ce edges are six or seven cycles apart, so the next one
+  // can be exactly E+6 -- one too early. Taking the colour at ce_d, with the
+  // visibility gate latched on ce itself, keeps colour and flags on the same
+  // pixel; both settle inside the pixel period and the framework samples on
+  // the next enable.
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      ce_d <= 1'b0; vis_q <= 1'b0;
+      cat1_q <= 1'b0; hb_q <= 1'b1; vb_q <= 1'b1; hs_q <= 1'b0; vs_q <= 1'b0;
+      vid_r <= '0; vid_g <= '0; vid_b <= '0;
+    end else begin
+      ce_d <= ce_pix;
+      if (ce_pix) begin
+        vis_q  <= visible;
+        cat1_q <= visible && !mix_src[3] && !mix_src[2];   // sources 0-3
+        hb_q   <= hblank;
+        vb_q   <= vblank;
+        hs_q   <= hsync_i;
+        vs_q   <= vsync_i;
+      end
+      if (ce_d) begin
+        vid_r <= vis_q ? pr_q : 8'd0;
+        vid_g <= vis_q ? pg_q : 8'd0;
+        vid_b <= vis_q ? pb_q : 8'd0;
+      end
     end
   end
 

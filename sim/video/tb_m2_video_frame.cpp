@@ -140,14 +140,26 @@ int main(int argc, char **argv) {
   int  x = 0, y = -1, frame = 0;
   bool hb_p = true, vb_p = true;
   uint64_t cyc = 0;
-  const uint64_t LIMIT = uint64_t(frames + 1) * 656 * 424 * 2 + 4096;
+  // R582: ce_pix AS THE HARDWARE DRIVES IT since R564 -- 16 enables every 100
+  // clk_mem cycles, six or seven apart. The video pipeline after R570/R572/R582
+  // is correct only because enables are at least six cycles apart; driven
+  // every second cycle, as this bench used to, it cannot keep up and the frame
+  // is wrong. M2_VF_CE2 restores the old spacing for RTL from before R570.
+  static const bool CE100 = std::getenv("M2_VF_CE2") == nullptr;
+  unsigned ce_acc = 0;
+  const uint64_t LIMIT = uint64_t(frames + 1) * 656 * 424 * (CE100 ? 7 : 2) + 4096;
 
   auto half = [&](int lvl) {
     dut->clk = lvl; dut->xlat_clk = lvl; dut->eval();   // R564: one clock here
   };
 
   while (cyc < LIMIT && frame <= frames) {
-    dut->ce_pix = !dut->ce_pix;
+    if (CE100) {
+      if (ce_acc + 16 >= 100) { ce_acc = ce_acc + 16 - 100; dut->ce_pix = 1; }
+      else                    { ce_acc += 16;              dut->ce_pix = 0; }
+    } else {
+      dut->ce_pix = !dut->ce_pix;
+    }
 
     // Memory model, sampled before the edge.
     dut->tram_data = tram_q;

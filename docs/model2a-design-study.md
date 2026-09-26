@@ -23073,3 +23073,44 @@ MultiPCM (-0.28 / -0.16).
 The fill, its dividers, the bridge, the pool adder and the sound/I/O CPUs are
 left for the first 70/35 build to rank: the Z80, 68000 and MultiPCM run on
 clock enables and may take multicycle exceptions rather than logic.
+
+---
+
+**R581 / R582 -- TWO clk_mem PATHS, A FRAME BENCH THAT HAD BEEN CHECKING
+NOTHING, AND THE 2D FRAME NOW IDENTICAL TO MAME.**
+
+*R581, m2_sdram's bring-up.* init_cnt, a 16-bit down-counter, was compared
+against five constants in front of cmd and sd_a (s311: -0.060 ns; s312: -0.574
+at 100 MHz). It only ever counts down by one, so each step is now decoded a
+cycle early from init_cnt + 1 into a single flag. tb_m2_sdram: 1,796,727
+checks, identical to the check, 0 JEDEC violations; the sdram_cdc, sdram_x2
+and cpu_sdram benches pass.
+
+*R582, the palette.* s312: pal_data_q -> xlat -> gamma -> pb_q, -0.278 ns at
+100. The xlat lookup is registered before the gamma curve. That needs a cycle
+the chain did not have (R572: the colour ready at E+6 and the next ce edge can
+be E+6), so every video output -- colour, syncs, blanks, the category bit --
+now updates on ce_d, the cycle after ce, from values latched on ce.
+
+*THE FRAME BENCH HAD BEEN CHECKING NOTHING.* R570 and R572 each recorded "a
+byte-identical frame before and after" from tools/m2-framediff.sh. That
+script runs whatever obj_m2_vf/Vm2_video already exists and rebuilds nothing,
+so both results compared one stale binary with itself. Worse, the bench
+drove ce_pix every SECOND clock, where the hardware since R564 drives 16 in
+100; a pipeline that relies on six-cycle spacing cannot be tested there.
+tb_m2_video_frame now drives ce_pix at the hardware rate by default
+(M2_VF_CE2 restores the old spacing for pre-R570 RTL), and the bench is
+rebuilt before every comparison (tools/ is not edited; the build is run by
+hand). Re-done properly, at the hardware rate:
+
+    pre-R570 (b627459)       43f773a7...
+    R570 (334b309)           43f773a7...   -- the claim was right, the check was not
+    R572 (a44b39a)           43f773a7...
+    R582, colour on ce_d,
+      flags still on ce      74a45034...   -- ONE PIXEL out: 0 pixels differ at dx=-1
+    R582, all outputs ce_d   43f773a7...
+
+And tools/m2-framediff.sh at the hardware rate: **190,464 of 190,464 pixels
+identical to MAME -- EXACT.** The 2,698 pixels R570 called "a pre-existing
+gap" were the bench's own: at one enable per two clocks the tile fetch
+overran (828 overruns in that run); at the hardware's rate it does not.
