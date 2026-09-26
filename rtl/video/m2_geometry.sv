@@ -804,10 +804,28 @@ module m2_geometry (
   function automatic logic [12:0] sat13(input logic [14:0] x);
     sat13 = (x > 15'd8191) ? 13'h1fff : x[12:0];
   endfunction
-  assign q_u0 = sat13(wu[0] - uoff); assign q_v0 = sat13(wv[0] - voff);
-  assign q_u1 = sat13(wu[1] - uoff); assign q_v1 = sat13(wv[1] - voff);
-  assign q_u2 = sat13(wu[2] - uoff); assign q_v2 = sat13(wv[2] - voff);
-  assign q_u3 = sat13(wu[3] - uoff); assign q_v3 = sat13(wv[3] - voff);
+  // R613: REGISTERED. The conversion, the four-way minimum, the subtract and
+  // the saturate were one cycle from the clipper into the store's M10K
+  // (s358: qv -> uvt, -1.919 ns at 70 MHz). The clipper HOLDS a quad until it
+  // is taken, so the reduced u/v are registered every cycle and the quad is
+  // presented one cycle after it first appears -- c_seen says the registers
+  // now hold THIS quad's values. Everything else the store takes (x, y, z,
+  // 1/z, texture, colour) comes straight off the held clipper outputs.
+  logic c_valid, c_ready, c_seen;
+  logic [12:0] ru [4], rv [4];
+  always_ff @(posedge clk) for (int k = 0; k < 4; k++) begin
+    ru[k] <= sat13(wu[k] - uoff);
+    rv[k] <= sat13(wv[k] - voff);
+  end
+  always_ff @(posedge clk or negedge rst_n)
+    if (!rst_n) c_seen <= 1'b0;
+    else        c_seen <= c_valid && !(c_valid && c_ready);
+  assign q_valid = c_valid && c_seen;
+  assign c_ready = q_ready && c_seen;
+  assign q_u0 = ru[0]; assign q_v0 = rv[0];
+  assign q_u1 = ru[1]; assign q_v1 = rv[1];
+  assign q_u2 = ru[2]; assign q_v2 = rv[2];
+  assign q_u3 = ru[3]; assign q_v3 = rv[3];
   assign q_tex = ctex[23:0];
   assign q_oz0 = coz[0]; assign q_oz1 = coz[1];      // R334
   assign q_oz2 = coz[2]; assign q_oz3 = coz[3];
@@ -839,7 +857,7 @@ module m2_geometry (
     .pj_x(k_pj_x), .pj_y(k_pj_y), .pj_z(k_pj_z),
     .pj_out_valid(k_pj_out_valid), .pj_out_sx(pj_out_sx), .pj_out_sy(pj_out_sy),
     .pj_out_invz(pj_out_invz),                       // R334
-    .out_valid(q_valid), .out_ready(q_ready),
+    .out_valid(c_valid), .out_ready(c_ready),   // R613: presented a cycle late
     .out_sx0(q_x0), .out_sy0(q_y0), .out_sx1(q_x1), .out_sy1(q_y1),
     .out_sx2(q_x2), .out_sy2(q_y2), .out_sx3(q_x3), .out_sy3(q_y3),
     .out_u0(cu[0]), .out_v0(cv[0]), .out_u1(cu[1]), .out_v1(cv[1]),

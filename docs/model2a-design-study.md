@@ -23754,3 +23754,27 @@ geometry 6,003, sound board 4,952, copro 2,402, framework scaler 1,994,
 Z80 1,476, tilemap 1,472. `M2_NO_DEBUG` (Model2.sv, R140) strips the UART
 stream and the counters that only feed it: the keeper build can take it,
 measurement builds keep it.
+
+**R612 / R613 -- THE KEEPER BUILD FITS, AND R609's PATH IS REGISTERED.**
+
+s354-s356 (R609 + R610) did NOT FIT: 4,226-4,230 LABs of 4,191. R612 builds
+the keeper with M2_NO_DEBUG (Model2.qsf; one line to comment out for a
+measurement build) and drives sw_take to 0 when the stream is compiled out
+(it is written only inside the stream's block). s357-s359 (R609-R612): FIT,
+40,868-41,009 ALM (~850 recovered); clk_mem +0.090..+0.416, clk_i960
++3.571..+4.001, holds positive, HDMI **+0.081** on s357 (the first positive
+HDMI of any build) and -0.243/-0.249; clk_sys -1.919..-2.781 on ONE new
+family: m2_geo_clip qu/qv -> R609's 15-bit conversion, four-way minimum,
+subtract and saturate -> m2_quad_store's uvt M10K, in one cycle.
+
+R613: the reduced u/v are registered every cycle and the quad is presented
+to the store one cycle after it first appears (c_seen). The clipper holds a
+quad's outputs from K_EMIT until out_ready (out_valid = kst == K_EMIT,
+outputs from its qu/qv registers, nothing written in K_EMIT), so the
+registers hold THAT quad's values when it is presented; everything else the
+store takes still comes straight off the held outputs. One cycle a quad.
+q_end cannot overtake it: the walk ends only once the geometry is idle, and
+the clipper holding a quad is not. tb_m2_geometry and tb_m2_geo pass (their
+quads are untextured, so u/v equality at the handshake was checked with a
+temporary probe: 14 quads, 0 stale -- vacuous on u/v values, which is why the
+argument above is the proof).
