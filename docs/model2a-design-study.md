@@ -23605,3 +23605,21 @@ the identity is not vacuous. tb_m2_span_tex 7,207 and tb_m2_raster_band
 clocks a line misses most of the screen in both modes, and the bench's
 texture set sits in the cache, so it cannot show the board's texel-bound
 regime: the board is the test for speed.
+
+**R607, two Quartus 17.0 facts that cost two build starts (both invisible to
+Verilator, which lints clean):**
+
+  1. A `localparam` in a module's PARAMETER PORT LIST is a syntax error in
+     Quartus 17.0 (Error 10170 at the keyword). Derived widths there must be
+     `parameter` with a computed default.
+  2. An MLAB with an ASYNCHRONOUS read (`q = mem[ra]` combinational, write in
+     always_ff) is NOT inferred as `(* ramstyle = "MLAB" *)`: "uninferred due
+     to unsupported read-during-write behavior", and the array becomes flip-
+     flops -- here 2 x 4,096 of them plus two 128-way 32-bit read muxes, some
+     thousands of ALM on a part with ~1,000 free. `(* ramstyle = "MLAB,
+     no_rw_check" *)` infers it (checked on a one-module project first: MLAB,
+     simple dual port, 128 x 32, zero registers). no_rw_check is safe here
+     because the mask's bypass makes the answer exact and the walker's copy
+     may be stale. ALWAYS grep the map log for "uninferred" after adding a
+     memory -- the build otherwise proceeds silently to a fit that cannot
+     close.
