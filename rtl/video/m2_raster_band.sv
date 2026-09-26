@@ -366,8 +366,11 @@ module m2_raster_band #(
   // R607: the fill mask's side of the paint. wr_en is the lanes written, so it
   // is also what the mask must gain; during a clear pg_active is low.
   assign pg_active = (st == S_PAINT);
-  assign pg_row    = cur_row;
-  assign pg_x0     = grp_x0;
+  // R611: zero unless painting, so the caller can OR the six bands together
+  // instead of selecting one by fill_buf -- the select was the start of the
+  // mask's critical path.
+  assign pg_row    = (st == S_PAINT) ? cur_row : '0;
+  assign pg_x0     = (st == S_PAINT) ? grp_x0  : '0;
   assign pg_wr     = (st == S_PAINT) ? wr_en : 4'd0;
 
 endmodule

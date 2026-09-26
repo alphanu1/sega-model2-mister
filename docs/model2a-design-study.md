@@ -23737,3 +23737,20 @@ counts, TGP output).
 
 s350 did NOT FIT: "requires 4193 LABs, device contains only 4191". The
 design (41,4xx ALM) is at the device edge after R607.
+
+**R611 -- THE FILL MASK'S PATH STARTS AT A REGISTER, NOT AT fill_buf.** s351
+failed clk_sys only on R607's mask: fill_buf -> the six-way select of the
+painting band's group -> mask address -> MLAB read and bypass -> the band's
+write enable and the mask write (-0.455; 176 MLAB-write endpoints at -0.32).
+Only the painting band drives its group signals now (m2_raster_band gates
+pg_row/pg_x0 on S_PAINT, pg_wr already was), so m2_raster3d ORs the six;
+the answer goes to all six, used only by the one painting; the span walk's
+band origin is registered (it changes in C_IDLE / at C_DONE, two cycles
+before the first query). tb_m2_raster3d FTB 0 vs 1: pictures identical,
+texel counts unchanged (3,443 and 13,156 fetches as before).
+
+AREA, for the record: s351 by entity -- i960 7,280 ALM, raster3d 7,876,
+geometry 6,003, sound board 4,952, copro 2,402, framework scaler 1,994,
+Z80 1,476, tilemap 1,472. `M2_NO_DEBUG` (Model2.sv, R140) strips the UART
+stream and the counters that only feed it: the keeper build can take it,
+measurement builds keep it.

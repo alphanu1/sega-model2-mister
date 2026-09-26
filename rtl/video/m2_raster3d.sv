@@ -654,9 +654,21 @@ module m2_raster3d #(
   logic [MAW-1:0] mk_b1_a, mk_b2_a;
   logic [31:0]    mk_b1_d, mk_b2_d;
   logic           mk_b1_v, mk_b2_v;
-  wire  [$clog2(BAND_H)-1:0] mk_prow = bd_pg_row[fill_buf];
-  wire  [$clog2(SCR_W)-1:0]  mk_px0  = bd_pg_x0[fill_buf];
-  wire  [3:0]                mk_pwr  = bd_pg_wr[fill_buf];
+  // R611: OR of the six, not a select by fill_buf -- only the painting band
+  // drives anything but zero (m2_raster_band gates pg_* on S_PAINT).
+  logic [$clog2(BAND_H)-1:0] mk_prow;
+  logic [$clog2(SCR_W)-1:0]  mk_px0;
+  logic [3:0]                mk_pwr;
+  logic                      mk_pact;
+  always_comb begin
+    mk_prow = '0; mk_px0 = '0; mk_pwr = '0; mk_pact = 1'b0;
+    for (int k = 0; k < NBUF; k++) begin
+      mk_prow = mk_prow | bd_pg_row[k];
+      mk_px0  = mk_px0  | bd_pg_x0[k];
+      mk_pwr  = mk_pwr  | bd_pg_wr[k];
+      mk_pact = mk_pact | bd_pg_active[k];
+    end
+  end
   wire  [4:0]                mk_poff = mk_px0[4:0];            // a multiple of 4
   assign mk_pwi = MAW'(mk_prow) * MAW'(MROW) + MAW'(mk_px0 >> 5);
   logic [31:0] mk_pword;
@@ -667,12 +679,15 @@ module m2_raster3d #(
     else                                     mk_pword = 32'd0;
   end
   wire [3:0] mk_pfill = 4'(mk_pword >> mk_poff);
+  // R611: the answer goes to every band; only the painting one uses it.
   always_comb
     for (int k = 0; k < NBUF; k++)
-      bd_pg_filled[k] = (FTB && (BUFW'(k) == fill_buf)) ? mk_pfill : 4'd0;
-  assign mk_we = FTB && bd_pg_active[fill_buf] && (mk_pwr != 4'd0);
+      bd_pg_filled[k] = FTB ? mk_pfill : 4'd0;
+  assign mk_we = FTB && mk_pact && (mk_pwr != 4'd0);
   assign mk_wd = mk_pword | (32'(mk_pwr) << mk_poff);
-  assign mk_y0 = bd_y0[fill_buf];
+  // R611: registered. bd_y0[fill_buf] is set in C_IDLE and fill_buf moves at
+  // C_DONE; the span walk first queries at least two cycles after either.
+  always_ff @(posedge clk) mk_y0 <= bd_y0[fill_buf];
   always_ff @(posedge clk) if (mk_we) mk_a[mk_pwi] <= mk_wd;
   logic [NBUF-1:0] bd_settled;
   // R540: BUFFERS ARE CLEARED IN THE BACKGROUND. bd_clean: cleared since the
