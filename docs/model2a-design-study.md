@@ -23806,3 +23806,32 @@ the road's texture-period move (R609, R613, R614) and the list-overwrite
 hold (R610). Telemetry is compiled out, so this build is judged by eye;
 a measurement build (the M2_NO_DEBUG line commented out) will not fit
 without the area back.
+
+**OPEN ISSUES from s377 on the board (2026-09-26 evening), for the next
+session:**
+
+  - LIGHTING: Ben, "from what I can see lighting is now fine!" -- first
+    report without the dropout since it was recorded (2026-09-25). Most
+    likely R610 (the walk no longer reads a list being overwritten, R333's
+    light-table mechanism) -- consistent, not proven.
+  - ROAD ORIENTATION: still wrong after R609 (Ben). Ruled out: the fill's
+    plane precision (R609's road bench: <1/2 texel near, <5 far), the u/v
+    clamp (R609), the texture-header packing (m2_geo_engine's poly_tex
+    matches model2_v.cpp field for field, u/v read v-then-u as MAME does).
+    MAME's near-road polygons (instrumented dump): h0=44db (256x256, wrap
+    x/y, no mirror, microtexture LOD 1), n=5 after its clip, u 0-197 and v
+    280-576 texels, 1/z ratio ~4:1 -- nothing exotic.
+  - TEXTURES ON THE WRONG SCENERY at the bridge: "always been like this".
+  - FLAT GREEN POLYGON beside the car (s347 photo): not yet re-checked.
+  - RESULTS SCREEN: the GAME OVER letters sit under the "39th" placement and
+    the G is missing; Ben: GAME OVER belongs on the top UI layer. This
+    core's composition is MAME's (every layer's category-1 tiles over the
+    3D over every category-0 tile; m2_tile_mixer checks cat-1 on layers
+    0..3 first), so either the letters are tiles and the layer/window
+    handling puts the wrong one on top (window modes 2/3 and the per-line
+    scroll table are still owed, m2_video), or "39th" is category 1 in the
+    game data and MAME would agree with the board.
+
+The instrument all of the 3D ones want: a 3D frame differential -- MAME's
+post-clip polygon list and texture RAM for one frame fed to tb_m2_raster3d,
+per-pixel texel coordinates compared with MAME's.
