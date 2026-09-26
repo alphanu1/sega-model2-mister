@@ -200,7 +200,7 @@ module m2_tile_fetch #(
   // ------------------------------------------------------------------------
 
   typedef enum logic [2:0] {
-    F_IDLE, F_CHECK, F_TILE, F_CHAR, F_FULL
+    F_IDLE, F_CHECK, F_TILE, F_CHAR, F_FULL, F_CADDR   // R570: F_CADDR
   } fstate_t;
   typedef enum logic [1:0] {
     E_IDLE, E_WAIT, E_EMIT, E_DONE
@@ -238,13 +238,19 @@ module m2_tile_fetch #(
   logic [CC_N-1:0] cc_val;
   logic [CC_W-1:0] cc_rr;              // round-robin replacement
 
+  // R570: REGISTERED IN F_CADDR, a cycle before F_CHAR uses it. The fetch runs
+  // on clk_mem now (R564), and line -> tile row -> this address -> the 16-way
+  // glyph-cache compare -> the store enable was one 10 ns cycle (s303: cur_line
+  // -> cc_data, -0.956 ns). One cycle per fetched column; the fetch has twice
+  // the cycles per scanline it had on clk_sys.
+  logic [17:0] f_char_addr_q;
   logic        cc_hit;
   logic [31:0] cc_hit_data;
   always_comb begin
     cc_hit      = 1'b0;
     cc_hit_data = 32'd0;
     for (int i = 0; i < CC_N; i++)
-      if (cc_val[i] && (cc_addr[i] == f_char_addr)) begin
+      if (cc_val[i] && (cc_addr[i] == f_char_addr_q)) begin
         cc_hit      = 1'b1;
         cc_hit_data = cc_data[i];
       end
@@ -326,7 +332,7 @@ module m2_tile_fetch #(
   endgenerate
 
   assign tram_addr = f_tile_addr;
-  assign char_addr = f_char_addr;
+  assign char_addr = f_char_addr_q;   // R570
   assign busy      = (est != E_IDLE) || (fst != F_IDLE);
 
   // Where the emit side is inside its tile, and where the fetch side is inside
@@ -383,7 +389,7 @@ module m2_tile_fetch #(
         F_CHECK: begin
           // f_tile_addr is combinational off fx. Refetch only when the tile
           // actually changed.
-          if (tile_valid && (f_tile_addr == last_tile)) fst <= F_CHAR;
+          if (tile_valid && (f_tile_addr == last_tile)) fst <= F_CADDR;
           else                                          fst <= F_TILE;
         end
 
@@ -391,15 +397,21 @@ module m2_tile_fetch #(
           tw_f       <= tram_data;
           last_tile  <= f_tile_addr;
           tile_valid <= 1'b1;
-          fst        <= F_CHAR;
+          fst        <= F_CADDR;
           // Same rule the MAME script and the frame testbench use: non-zero, and
           // not tile 0x20, which is the space character.
           tw_nonblank <= (tram_data != 16'h0000)
                       && ((tram_data & 16'h3fff) != 16'h0020);
         end
 
+        // R570: the character address, registered.
+        F_CADDR: begin
+          f_char_addr_q <= f_char_addr;
+          fst           <= F_CHAR;
+        end
+
         F_CHAR: begin
-          // f_char_addr is valid now the tile word is latched.
+          // f_char_addr_q is valid now the tile word is latched.
           if (cc_hit) begin
             // Already fetched this glyph on this line; nothing to ask for.
             ch_f   <= cc_hit_data;
@@ -410,7 +422,7 @@ module m2_tile_fetch #(
           end else if (char_ack) begin
             char_req   <= 1'b0;
             ch_f       <= char_data;
-            cc_addr[cc_rr] <= f_char_addr;
+            cc_addr[cc_rr] <= f_char_addr_q;
             cc_data[cc_rr] <= char_data;
             cc_val[cc_rr]  <= 1'b1;
             cc_rr <= (cc_rr == CC_W'(CC_N-1)) ? '0 : cc_rr + CC_W'(1);

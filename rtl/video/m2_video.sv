@@ -766,7 +766,18 @@ module m2_video #(
     .source(mix_src)
   );
 
-  assign pal_addr = mixed;
+  // R570: REGISTERED. The video runs on clk_mem now (R564), and line buffer ->
+  // mixer -> palette address was one 10 ns cycle (s303: -1.26 ns). Scanout only
+  // advances on ce_pix, one pixel in six or seven clk_mem cycles, so a register
+  // here -- and one on the palette's read data below -- costs no pixel: hcnt
+  // moves at a ce edge E, the line buffer answers at E+1, this register at E+2,
+  // the palette RAM at E+3, its data register at E+4, and vid_r takes it at
+  // the next ce edge, E+6 at the earliest.
+  logic [11:0] pal_addr_q;
+  always_ff @(posedge clk) pal_addr_q <= mixed;
+  assign pal_addr = pal_addr_q;
+  logic [15:0] pal_data_q;
+  always_ff @(posedge clk) pal_data_q <= pal_data;
 
   // COLOUR TRANSLATION TABLE. Model 2's palette runs each 5-bit channel through
   // a RAM the game programs at 0x01810000 before the gamma curve -- see
@@ -796,7 +807,7 @@ module m2_video #(
 
   logic [7:0] pr, pg, pb;
   m2_palette pal (
-    .entry(pal_data),
+    .entry(pal_data_q),                  // R570: registered, see pal_addr
     .x_r5(x_r5), .x_g5(x_g5), .x_b5(x_b5),
     .x_r(x_r),   .x_g(x_g),   .x_b(x_b),
     .r(pr), .g(pg), .b(pb)

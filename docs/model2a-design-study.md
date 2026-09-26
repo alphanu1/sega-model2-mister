@@ -22788,3 +22788,41 @@ making the old adapter visibly worse (R558) fits the same mechanism.
 STRONGLY INDICATED, NOT PROVEN: one scene, one seed. The step-1(b) build
 carries the same queue; if it is also clean, and it stays clean across
 scenes, the open issue closes on this entry.
+
+---
+
+**R570 -- THE VIDEO ON clk_mem MISSED 100 MHz BY 1.26 ns. THREE REGISTERS
+WHERE THE PIXEL ENABLE LEAVES ROOM.**
+
+The step-1(b) build (s302-s304) put all four core clocks on global networks
+with 16 of 16 DQ registers packed -- R567's fix holds -- but clk_mem setup
+failed on every seed (-1.260 / -1.829 / -2.089 ns, ~500 endpoints): logic
+laid out for 20 ns at 50 MHz now has 10. Five families on s303:
+
+    -1.26  line buffer -> m2_tile_mixer -> palette RAM address; palette data
+           -> m2_palette -> xlat -> vid_r/g/b
+    -0.96  m2_video cur_line -> m2_tile_fetch's glyph-cache compare -> cc_data
+    -0.91  video counter -> m2_raster3d scan-out select -> scan_hit -> the
+           mix -> VGA_R, UNREGISTERED, into sys_top's direct-video delay line
+    -0.66  texel queue f_u -> m2_texel's cdata address (met on s299 at the
+           same clock; placement pressure from the video)
+    -0.48  m2_sdram state -> sd_a (likewise)
+
+Model 1 runs its video at its memory clock with no multicycle exceptions --
+it registers. So, where scanout's pixel enable leaves the cycles (hcnt moves
+at a ce edge E; the next capture is E+6 at the earliest):
+  - m2_video: the palette address registered (E+2) and the palette RAM's read
+    data registered (E+4);
+  - Model2.sv: the mixed colour registered on clk_mem every cycle before
+    VGA_R/G/B -- every input to the mix holds for a pixel and the framework
+    samples on ce_pix, so nothing moves;
+  - m2_tile_fetch: F_CADDR registers the character address before F_CHAR's
+    16-way compare, one cycle per fetched column.
+
+*Proof at the desk:* tools/m2-framediff.sh (the real ROM through our i960 and
+MAME to the same frame, rendered by m2_video) gives a BYTE-IDENTICAL frame
+before and after (md5 1bb8097d...), 187,766 of 190,464 pixels matching MAME
+both times -- the 2,698 that differ are the same pixels either way, a
+pre-existing gap, not this change. tile_fetch passes its bench.
+The texel-address and sd_a paths are left to the next build: both met timing
+at this clock on s299.

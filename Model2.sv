@@ -5964,9 +5964,19 @@ localparam bit DEBUG = 1'b1;
 //
 // The block's `else` branch passed the picture through unchanged; that is all
 // that is left of it.
-assign ov_r = mix_r;
-assign ov_g = mix_g;
-assign ov_b = mix_b;
+// R570: THE MIXED COLOUR IS REGISTERED BEFORE THE FRAMEWORK. With the video on
+// clk_mem the 3D half of the mix was combinational from the video counter,
+// through the renderer's scan-out buffer select, into sys_top's direct-video
+// delay line (s303: vcnt -> scan_hit -> dv_hs1, -0.91 ns at 100 MHz). Every
+// input to the mix holds for a whole pixel period and the framework samples on
+// ce_pix, so a register clocked every cycle moves nothing on screen.
+logic [7:0] mix_r_q, mix_g_q, mix_b_q;
+always_ff @(posedge clk_mem) begin
+	mix_r_q <= mix_r; mix_g_q <= mix_g; mix_b_q <= mix_b;
+end
+assign ov_r = mix_r_q;
+assign ov_g = mix_g_q;
+assign ov_b = mix_b_q;
 
 assign CLK_VIDEO = clk_mem;   // R564: the video runs on the memory clock
 assign CE_PIXEL  = ce_pix;
