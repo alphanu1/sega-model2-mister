@@ -226,8 +226,9 @@ module mb86233_core (
   logic [31:0] mem_fifo_wdata;
   logic        rf_fifo_rd, rf_fifo_wr;
   logic [31:0] rf_fifo_wdata;
-  assign fifo_rd    = mem_fifo_rd | rf_fifo_rd;
-  assign fifo_wr    = mem_fifo_wr | rf_fifo_wr;
+  logic        mem_fifo_rd_w, mem_fifo_wr_w;   // R601
+  assign fifo_rd    = mem_fifo_rd_w | rf_fifo_rd;
+  assign fifo_wr    = mem_fifo_wr_w | rf_fifo_wr;
   assign fifo_wdata = rf_fifo_wr ? rf_fifo_wdata : mem_fifo_wdata;
 
   logic [5:0]  rf_rd_addr;
@@ -385,11 +386,6 @@ module mb86233_core (
   // instead, the chain ran the AGU, the +0x200 add, the address mux and the
   // FIFO compare into the next-state logic (s320: state.S_LABB -> state,
   // -0.356 ns at 70 MHz).
-  logic mem_fifo_q;
-  always_ff @(posedge clk or negedge rst_n)
-    if (!rst_n) mem_fifo_q <= 1'b0;
-    else        mem_fifo_q <= mem_req & (mem_sel_fin | mem_sel_fout);
-  assign mem_stall = mem_fifo_q & ~fifo_ack;
 
   // ==================================================================
   // ALU
@@ -456,6 +452,28 @@ module mb86233_core (
   } state_e;
 
   state_e state;
+
+  // R601: AND THE FIFO STROBES THEMSELVES. fifo_ack answers fifo_rd, and
+  // u_mem's ext_rd was decoded from the live address, so R596 still left
+  // AGU -> address -> ext_rd -> the FIFO's do_read -> fifo_ack -> mem_stall
+  // -> src_val, and the same ext_rd into the FIFO's counters (s329:
+  // state.S_LABB_W -> src_val, -1.597 ns; -> u_fin mem_cnt, -0.818). The
+  // selection is registered from the partner state, as mem_stall's is, and
+  // the strobes are raised only in the _W states -- the one place the core
+  // reads the ack. One cycle more per memory-mapped FIFO access; a FIFO
+  // access was never completed outside a _W state.
+  logic mem_fin_q, mem_fout_q;
+  always_ff @(posedge clk or negedge rst_n)
+    if (!rst_n) begin mem_fin_q <= 1'b0; mem_fout_q <= 1'b0; end
+    else begin
+      mem_fin_q  <= mem_req & mem_sel_fin;
+      mem_fout_q <= mem_req & mem_sel_fout;
+    end
+  wire mem_in_w = (state == S_SRC_W) || (state == S_LABB_W)
+               || (state == S_DST_W) || (state == S_BRUL_W);
+  assign mem_fifo_rd_w = mem_in_w & mem_fin_q;
+  assign mem_fifo_wr_w = mem_in_w & mem_fout_q;
+  assign mem_stall     = (mem_fin_q | mem_fout_q) & ~fifo_ack;
 
   // R577: THE DECODE IS REGISTERED BESIDE ir, from the program RAM's output in
   // S_FETCH_W. At 70 MHz the core's worst paths all began at ir and went through

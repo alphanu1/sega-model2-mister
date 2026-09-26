@@ -23301,3 +23301,30 @@ capture against s315's (100/60/30):
     are its first two records, the start-up, and every one of the other 30
     is clean. Few samples, but the direction is the one the clock plan
     predicted: at 70/35 the middle bands keep up.
+
+**R601 -- s327-s329 (R600 in): THE SAME FAMILY, BY ITS OTHER ROUTE.**
+
+s328 died in Quartus (internal error). s327: clk_sys -1.128, clk_mem +0.041,
+i960 +3.489, HDMI -0.124, 40,911 ALM. s329: clk_sys -1.597, clk_mem -0.184,
+HDMI -0.266. Every failing clk_sys path on both still starts at state.S_LABB
+or S_LABB_W -- R600 took io_ack off the AGU, and the placement moved the
+same fan-out onto its other exit: the MEMORY-MAPPED FIFO. R596 had registered
+mem_stall's FIFO decode, but fifo_ack answers fifo_rd, and u_mem's ext_rd was
+still decoded from the live address:
+
+  S_LABB_W -> AGU -> address mux -> u_mem ext_rd -> u_fin do_read ->
+  fifo_ack -> mem_stall -> src_val / lab_b_val / state      -1.597 (s329)
+  ... -> ext_rd -> u_fin do_read -> mem_cnt                  -0.818
+
+R601: the FIFO selection is registered from the partner state (as R596 did
+for the stall) and the memory-mapped FIFO strobes are raised only in the _W
+states -- the one place the core reads the ack. The register-file FIFO path
+(0x21) is unchanged: its decode is the register-number mux, not the AGU.
+tb_mb86233_core 45 checks and 8,000 lockstep registers, 0 fail; boot harness
+30 M instructions, TGP output, retires, 109 pops, 62 pushes and 752 data-RAM
+writes identical.
+
+The lesson of R591/R596/R600/R601 together: a fan-out that is critical is
+fixed by cutting EVERY route out of the combinational source, not the worst
+one -- each partial fix hands the placer the next route, and the next seed
+finds it.
