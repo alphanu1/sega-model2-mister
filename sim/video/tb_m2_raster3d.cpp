@@ -102,6 +102,9 @@ int main(int argc, char **argv) {
   d->tex_m2_ack = 0; d->tex_m2_data = 0;
   // The board raises this once boot is done and never lowers it.
   d->tex_m2_en = 1;                                        // R517
+  // R620: M2_R3D_POINT selects the nearest-texel mode; bilinear otherwise,
+  // as the OSD's default is.
+  d->tex_bilinear = std::getenv("M2_R3D_POINT") ? 0 : 1;
   d->tex_base0 = 0x1760000; d->tex_base1 = 0x17E0000;
   // R555: 1/z FOR EVERY VERTEX, WHICH THIS BENCH NEVER DROVE. q_oz0..3 (R334,
   // a minifloat: 8-bit exponent, top 8 mantissa bits) were left at zero, so the
@@ -377,7 +380,7 @@ int main(int argc, char **argv) {
                 (int)d->dbg_late_frames, (int)d->dbg_qend_frames, (int)d->dbg_bands, (int)d->dbg_bands_painted);
     std::printf("      bands filled during vblank: %u\n", vbl_bands);
     std::printf("      R536 missed scanlines last frame: %d\n", (int)d->dbg_miss_lines);
-    { static uint32_t h0 = 0, m0 = 0; std::printf("      R553 texel hits %u misses %u this frame\n", d->dbg_texhit - h0, d->dbg_texmiss - m0); h0 = d->dbg_texhit; m0 = d->dbg_texmiss; }
+    { static uint32_t h0 = 0, m0 = 0; std::printf("      R553 texel hits %u misses %u this frame, lost %u\n", d->dbg_texhit - h0, d->dbg_texmiss - m0, (unsigned)d->dbg_texlost); h0 = d->dbg_texhit; m0 = d->dbg_texmiss; }
     std::printf("      R539 pixel hash: %016llx  frame %016llx\n", (unsigned long long)pix_hash, (unsigned long long)frame_hash);
     frame_hash = 1469598103934665603ull;
     {

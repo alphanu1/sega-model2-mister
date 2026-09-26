@@ -40,7 +40,11 @@
 
 module m2_texel_cdc #(
   parameter int unsigned K      = 4,      // fetches in flight; a power of two
-  parameter int unsigned TO_CYC = 1023    // fast cycles before a local answer
+  parameter int unsigned TO_CYC = 1023,   // fast cycles before a local answer
+  // R620: the answer's width -- 4 for m2_texel's nibble, 9 for m2_texel_bl's
+  // {discard, t} -- and what a timed-out fetch answers: a full, opaque texel.
+  parameter int unsigned TW     = 4,
+  parameter int unsigned TO_VAL = 15
 ) (
   input  logic        clk_slow,       // the core clock
   input  logic        s_rst_n,
@@ -53,7 +57,7 @@ module m2_texel_cdc #(
   input  logic [31:0] s_tex,
   input  logic [19:0] s_u, s_v,
   output logic        s_ack,          // an answer is standing, in issue order
-  output logic [3:0]  s_texel,
+  output logic [TW-1:0] s_texel,
   input  logic        s_take,         // the requester takes it this cycle
 
   // ------------------------------------------------- m2_texel, fast (clk_mem)
@@ -62,7 +66,7 @@ module m2_texel_cdc #(
   input  logic        f_ack,
   output logic [31:0] f_tex,
   output logic [19:0] f_u, f_v,
-  input  logic [3:0]  f_texel,
+  input  logic [TW-1:0] f_texel,
   // R583: the cache's address for the presented request, computed here as the
   // slot is loaded (m2_texel_addr), so m2_texel's RAM address comes straight
   // from a register. The slot was written at least three clk_mem edges
@@ -88,7 +92,7 @@ module m2_texel_cdc #(
   // Written on the fast side, read on the slow: declared first.
   logic [PW-1:0] f_wp;                 // answers written
   logic [PW-1:0] f_wp_g;               // ... in Gray code, the value that crosses
-  logic [3:0]    r_tex [K];
+  logic [TW-1:0] r_tex [K];
 
   // ------------------------------------------------------------- slow side
   logic [PW-1:0] s_ip;                 // requests issued
@@ -200,7 +204,7 @@ module m2_texel_cdc #(
   end
   always_ff @(posedge clk_fast) begin
     if (f_ack)          r_tex[f_wp[PW-2:0]] <= f_texel;
-    else if (f_timeout) r_tex[f_wp[PW-2:0]] <= 4'hf;
+    else if (f_timeout) r_tex[f_wp[PW-2:0]] <= TW'(TO_VAL);
   end
 
   assign f_req = f_valid;

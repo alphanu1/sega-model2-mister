@@ -56,7 +56,7 @@ static int texel_of(uint32_t u, uint32_t v) {
 }
 
 // R539: the fetches the unit has issued and not yet taken, in order.
-struct TReq { uint32_t u, v; long ready_at; };
+struct TReq { uint32_t u, v; long ready_at; uint32_t tex; };
 static std::deque<TReq> tq;
 static bool tex_dead = false;        // the server never answers
 static long take_without_ack = 0;
@@ -89,13 +89,18 @@ static void tick(bool stall = false) {
   const bool head_ready = !tq.empty() && tq.front().ready_at <= ticks_done && !tex_dead;
   d->tx_rdy   = tq.size() < 4;
   d->tx_ack   = head_ready;
-  d->tx_texel = head_ready ? texel_of(tq.front().u, tq.front().v) : 0;
+  // R620: the answer is m2_texel_bl's {discard, t}: t the nibble replicated
+  // (its point mode), discard the translucent test it now makes itself.
+  if (head_ready) {
+    const int t = texel_of(tq.front().u, tq.front().v);
+    d->tx_texel = (uint32_t(((tq.front().tex >> 8) & 1) && t == 0xf) << 8) | uint32_t(t * 0x11);
+  } else d->tx_texel = 0;
   d->eval();
   if (d->out_valid && d->out_ready)
     got.push_back({int(d->out_y), int(d->out_x0), int(d->out_x1), d->out_col});
   last_in_taken = d->in_valid && d->in_ready;
   const bool issue = d->tx_req && d->tx_rdy, take = d->tx_take && d->tx_ack;
-  const uint32_t iu = d->tx_u, iv = d->tx_v;
+  const uint32_t iu = d->tx_u, iv = d->tx_v, itex = d->tx_tex;
   if (take && !d->tx_ack) ++take_without_ack;
   d->clk = 0; d->eval();
   d->clk = 1; d->eval();
@@ -105,7 +110,7 @@ static void tick(bool stall = false) {
     const long lat = (int)((tex_rng >> 16) % 100) < miss_pct ? miss_cyc : hit_lat;
     long at = ticks_done + lat;
     if (!tq.empty() && tq.back().ready_at > at) at = tq.back().ready_at;
-    tq.push_back({iu, iv, at});
+    tq.push_back({iu, iv, at, itex});
   }
 }
 

@@ -169,6 +169,9 @@ localparam CONF_STR = {
 	// passes every span through, so the comparison is the texture path and
 	// nothing else.
 	"O[27],Textures,On,Off;",
+	// R620: BILINEAR, WITH AN OFF SWITCH, for the same reason. Point is the
+	// nearest of the same four texels -- this core's picture before R620.
+	"O[31],Texture filter,Bilinear,Point;",
 	// Which half of the right stick's Y is the throttle. Axis polarity is not
 	// standardised across pads, so this is a setting rather than a rebuild.
 	"O[28],Pedals,Normal,Swapped;",
@@ -550,6 +553,8 @@ reg [2:0] wrate_s;   // R256/R229: the OSD bit reaches the datapath through thre
 always_ff @(posedge clk_sys) wrate_s <= {wrate_s[1:0], status[26]};
 reg [2:0] texoff_s;  // R275: the same, for the texture switch
 always_ff @(posedge clk_sys) texoff_s <= {texoff_s[1:0], status[27]};
+reg [2:0] texpt_s;   // R620: the filter switch, on clk_mem where the texel cache runs
+always_ff @(posedge clk_mem) texpt_s <= {texpt_s[1:0], status[31]};
 // R265: THE WALK TRIGGER WAS THE ONE OSD BIT TAKEN RAW. Every other option in
 // this core reaches the datapath through three flops (R229) and this one went
 // straight from `status` into the geometrizer's mode select. The board showed
@@ -5772,7 +5777,7 @@ wire [63:0] tex_m2_data = p_dout[2];
 
 // R543: back to 8x6 -- R542's 16x3 won in the bench and not on the board.
 m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1),   // R607
-              .PXC(1'b1), .PIXSTEP(1),   // R616: pixel-centre planes; R619: a texel per pixel
+              .PXC(1'b1), .PIXSTEP(2),   // R616: pixel-centre planes; R620: bilinear at a texel per two pixels
               .TWO_CLOCKS(1'b1), .TEX_AW(SDR_AW)) u_raster3d (   // R564: scan on clk_mem
 	// R318: clk_mem carries m2_texel, which runs at 100 MHz inside this module.
 	.clk(clk_sys), .clk_mem(clk_mem), .rst_n(mem_rst_n),
@@ -5795,6 +5800,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1),   // R
 	// fall back to what they did before in one place.
 	.q_tex({q3d_tex[23:1], q3d_tex[0] && !texoff_s[2]}),
 	.tex_base0(GAME_TEXS0), .tex_base1(GAME_TEXS1), .tex_inval(cpu_tex_inval),
+	.tex_bilinear(!texpt_s[2]),   // R620
 	.tex_m2_en(tex_m2_en), .tex_m2_req(tex_m2_req), .tex_m2_addr(tex_m2_addr),
 	.tex_m2_ack(tex_m2_ack), .tex_m2_data(tex_m2_data),
 	.tex_m_req(tex_m_req), .tex_m_addr(tex_m_addr),

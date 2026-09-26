@@ -120,7 +120,9 @@ module m2_span_tex #(
   input  logic               tx_ack,
   output logic [31:0]        tx_tex,
   output logic [19:0]        tx_u, tx_v,
-  input  logic [3:0]         tx_texel,
+  // R620: {discard, t} from m2_texel_bl -- t is the filtered 8-bit texel and
+  // discard is the reference's translucent test, made where the four texels are.
+  input  logic [8:0]         tx_texel,
   output logic               tx_take,
 
   output logic [31:0]        dbg_texpix,      // textured pixels emitted
@@ -288,6 +290,10 @@ module m2_span_tex #(
   //
   // Skipping costs nothing but the pixel: the walk advances identically, so a
   // fully transparent span still terminates on its own x1.
+  //
+  // R620: THE TEST NOW LIVES IN m2_texel_bl, which blends the four texels'
+  // alphas and discards below half, as fetch_bilinear_texel does; its point
+  // mode reduces to the rule above. It arrives here as bit 8 of the answer.
 
   wire idle    = (st == T_IDLE);
   assign busy  = !idle || e_valid;
@@ -473,7 +479,7 @@ module m2_span_tex #(
   // walk removed that stage by accident. Putting it back costs a stage but not
   // a cycle per group, because the next fetch is issued on the same edge.
   logic               rt_valid;
-  logic [3:0]         rt_texel;
+  logic [8:0]         rt_texel;   // R620: {discard, t}
   logic signed [31:0] rt_x;
   logic               rt_last;
   logic               rt_p, e_p;   // R490
@@ -701,7 +707,7 @@ module m2_span_tex #(
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       st <= T_IDLE; dv_age <= 3'd0; of_wp <= '0; of_rp <= '0;   // R539
-      rt_valid <= 1'b0; rt_texel <= 4'd0; rt_x <= '0; rt_last <= 1'b0;   // R478
+      rt_valid <= 1'b0; rt_texel <= 9'd0; rt_x <= '0; rt_last <= 1'b0;   // R478
       for (int k = 0; k < 2; k++) begin
         y_p[k] <= '0; x1_p[k] <= '0; col_p[k] <= '0;
         moire_p[k] <= 1'b0; tex_p[k] <= '0;
@@ -734,7 +740,7 @@ module m2_span_tex #(
       begin
         automatic logic done_e  = e_valid && out_ready && e_last;
         automatic logic done_rt = rt_valid && (!e_valid || out_ready) && rt_last
-                                  && (rt_skip || (tex_p[rt_p][8] && (rt_texel == 4'hf)));   // R607
+                                  && (rt_skip || rt_texel[8]);   // R607, R620
         automatic logic [2:0] n_next = 3'(sp_n) + 3'(ld_span)
                                      - 3'(done_e) - 3'(done_rt);
         automatic logic slot = ld_cold ? sp_out : ~sp_iss;
@@ -797,13 +803,13 @@ module m2_span_tex #(
             rt_skip  <= head_skip;                  // R607
             of_rp    <= of_rp + 1'd1;
             // R484: WRAPS, DOES NOT SATURATE (see the history in git).
-            if (!head_skip && tx_texel != 4'hf) dbg_texnz <= dbg_texnz + 1'd1;
+            if (!head_skip && tx_texel[7:0] != 8'hff) dbg_texnz <= dbg_texnz + 1'd1;
           end
 
           // Colour and emit the retired group.
           if (rt_valid && (!e_valid || out_ready)) begin
-            automatic logic       skip = rt_skip || (tex_p[rt_p][8] && (rt_texel == 4'hf));   // R607
-            automatic logic [7:0] iv   = {rt_texel, rt_texel};
+            automatic logic       skip = rt_skip || rt_texel[8];   // R607, R620
+            automatic logic [7:0] iv   = rt_texel[7:0];            // R620: already 8 bits
             if (!rt_take) rt_valid <= 1'b0;       // R539: a take refills it
             e_valid <= !skip;                     // R326: transparent texel
             e_last  <= rt_last;                   // R490

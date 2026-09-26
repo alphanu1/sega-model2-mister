@@ -105,6 +105,7 @@ module m2_raster3d #(
   // ---- R275: the texture sheets, in SDRAM
   input  logic [TEX_AW:1] tex_base0, tex_base1,
   input  logic            tex_inval,
+  input  logic            tex_bilinear,   // R620: on clk_mem, quasi-static (OSD)
   output logic            tex_m_req,
   output logic [TEX_AW:1] tex_m_addr,
   input  logic            tex_m_ack,
@@ -228,7 +229,7 @@ module m2_raster3d #(
   logic        tex_rdy, tex_take;   // R539: a credit is free / the walk takes an answer
   logic [31:0] tex_state;
   logic [19:0] tex_u, tex_v;
-  logic [3:0]  tex_texel;
+  logic [8:0]  tex_texel;   // R620: {discard, t}
   logic        qo_moire;
 
   // THE STORE TAKES QUADS ONLY WHILE COLLECTING (R220). Between a list's
@@ -536,9 +537,7 @@ module m2_raster3d #(
   logic        txf_req, txf_ack, txf_rdy;   // R474
   logic [31:0] txf_tex;
   logic [19:0] txf_u, txf_v;
-  logic [3:0]  txf_texel;
-  logic [18:0] txf_waddr;                  // R583
-  logic        txf_sheet, txf_x2p, txf_y2p;
+  logic [8:0]  txf_texel;                  // R620: {discard, t}
 
   // R539: fetches in flight; K must equal m2_span_tex's TXK (R553: 8).
   // R558: FOUR, NOT EIGHT. R553's eight scrambled textures on the board
@@ -547,13 +546,16 @@ module m2_raster3d #(
   // paths into m2_texel on s285. Back to the configuration the board trusts.
   // R561: AN ASYNCHRONOUS QUEUE, NOT A 2:1 RATIO -- m2_texel_cdc. Same ports
   // and protocol; the pointers cross in Gray code.
-  m2_texel_cdc #(.K(8)) u_texel_x2 (
+  // R620: nine bits back; a timed-out fetch answers opaque and full (0x0FF).
+  // f_waddr and friends (R583) are m2_texel's precomputed address and are
+  // left open: m2_texel_bl places four texels of its own.
+  m2_texel_cdc #(.K(8), .TW(9), .TO_VAL(255)) u_texel_x2 (
     .clk_slow(clk), .s_rst_n(rst_n), .clk_fast(clk_mem), .f_rst_n(rst_n),
     .s_req(tex_req), .s_rdy(tex_rdy), .s_ack(tex_ack), .s_tex(tex_state),
     .s_u(tex_u), .s_v(tex_v), .s_texel(tex_texel), .s_take(tex_take),
     .f_req(txf_req), .f_rdy(txf_rdy), .f_ack(txf_ack), .f_tex(txf_tex),
     .f_u(txf_u), .f_v(txf_v), .f_texel(txf_texel),
-    .f_waddr(txf_waddr), .f_sheet(txf_sheet), .f_x2p(txf_x2p), .f_y2p(txf_y2p)   // R583
+    .f_waddr(), .f_sheet(), .f_x2p(), .f_y2p()
   );
 
   // R328: IDX_BITS 11 -- 2048 lines / 16 KB, SET HERE AND NOT IN THE MODULE.
@@ -580,12 +582,15 @@ module m2_raster3d #(
   // The one lever that costs M10K rather than ALM, which is the resource this
   // design still has. R328 measured 1024 -> 2048 taking the hit rate
   // 54.3% -> 64.9%.
-  m2_texel #(.AW(TEX_AW), .IDX_BITS(12), .PREADDR(1'b1)) u_texel (   // R583
+  //
+  // R620: m2_texel_bl, the bilinear fetch -- the same 4,096 lines as two
+  // 2,048-line banks by row-pair parity (IB 11), so a 2x2 block comes back in
+  // one access 87.5% of the time. Point mode is the old picture.
+  m2_texel_bl #(.AW(TEX_AW), .IB(11)) u_texel (
     .clk(clk_mem), .rst_n(rst_n),
-    .base_s0(tex_base0), .base_s1(tex_base1),
+    .base_s0(tex_base0), .base_s1(tex_base1), .bilinear(tex_bilinear),
     .req(txf_req), .rdy(txf_rdy), .ack(txf_ack), .tex(txf_tex),
     .u(txf_u), .v(txf_v), .texel(txf_texel),
-    .pa_waddr(txf_waddr), .pa_sheet(txf_sheet), .pa_x2p(txf_x2p), .pa_y2p(txf_y2p),   // R583
     .m_req(tex_m_req), .m_addr(tex_m_addr), .m_ack(tex_m_ack), .m_data(tex_m_data),
     // R480: the second SDRAM port, so two fills can be in flight.
     .m2_en(tex_m2_en), .m2_req(tex_m2_req), .m2_addr(tex_m2_addr),
