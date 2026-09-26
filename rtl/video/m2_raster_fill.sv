@@ -478,6 +478,12 @@ module m2_raster_fill (
     end
   endfunction
 
+  // R584: pf_clz's first half, on its own.
+  function automatic logic [31:0] pf_abs(input logic signed [31:0] n);
+    pf_abs = n[31] ? (~n + 32'd1) : n;
+  endfunction
+  logic [31:0] a_nxu, a_nyu, a_nxv, a_nyv, a_nxo, a_nyo;   // R584
+
   function automatic logic [5:0] pf_clz(input logic signed [31:0] n);
     logic [31:0] a;
     begin
@@ -985,10 +991,21 @@ module m2_raster_fill (
           // The counts still land on the FIRST cycle only -- repeating them on
           // the new third cycle would be harmless but would re-time six
           // priority encoders for nothing.
+          // R584: THE NEGATE AND THE COUNT IN SEPARATE CYCLES. pf_clz was a
+          // 32-bit two's-complement negate and clz32's encoder in series, six
+          // times (s312: nyo -> nyo_z, -1.40 ns at 70 MHz). The magnitudes are
+          // registered on the first cycle and counted on the second; the
+          // first reader is the third cycle's mul_n, so no cycle is added and
+          // the counts are the same numbers.
           if (nrm_wait == 2'd0) begin
-            nxu_z <= pf_clz(nxu); nyu_z <= pf_clz(nyu);
-            nxv_z <= pf_clz(nxv); nyv_z <= pf_clz(nyv);
-            nxo_z <= pf_clz(nxo); nyo_z <= pf_clz(nyo);   // R441
+            a_nxu <= pf_abs(nxu); a_nyu <= pf_abs(nyu);
+            a_nxv <= pf_abs(nxv); a_nyv <= pf_abs(nyv);
+            a_nxo <= pf_abs(nxo); a_nyo <= pf_abs(nyo);
+          end
+          if (nrm_wait == 2'd1) begin
+            nxu_z <= clz32(a_nxu); nyu_z <= clz32(a_nyu);
+            nxv_z <= clz32(a_nxv); nyv_z <= clz32(a_nyv);
+            nxo_z <= clz32(a_nxo); nyo_z <= clz32(a_nyo);   // R441
           end
         end else begin
           nrm_wait <= 2'd0;

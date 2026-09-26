@@ -100,7 +100,8 @@ module m2_raster_div #(
   localparam logic [2:0] S_FIN  = 3'd2;
   localparam logic [2:0] S_Z    = 3'd3;
   localparam logic [2:0] S_MUL  = 3'd4;   // fast path: the reciprocal multiply
-  localparam logic [2:0] S_COR  = 3'd5;   // fast path: the single correction
+  localparam logic [2:0] S_COR  = 3'd5;   // fast path: q x d, registered (R585)
+  localparam logic [2:0] S_COR2 = 3'd6;   // fast path: the single correction
 
   // ceil(2^32/d) for d in 1..511. Entry 0 is unused (den == 0 is trapped) and
   // entry 1 would be 2^32, so d == 1 takes the quotient straight from the
@@ -132,7 +133,7 @@ module m2_raster_div #(
   wire [63:0] mul_full = {32'd0, n_mag} * {32'd0, recip_q};
   wire [31:0] mul_hi   = mul_full[63:32];
   wire [42:0] q_times_d = {11'd0, q_fast} * {32'd0, d_mag[10:0]};
-  wire        over      = q_times_d > {11'd0, n_mag};
+  logic [42:0] qd_q;       // R585: q_times_d, registered
   logic [31:0] q_fast;
   logic [2:0]  state;
   logic [31:0] n_mag;    // dividend magnitude, shifted out MSB first
@@ -210,8 +211,15 @@ module m2_raster_div #(
 
         // The single downward correction. q_est is floor(n/d) or one more, so
         // this makes it exact - and the multiply is 18 x 9 bits.
+        // R585: the product registered first, the compare and select a cycle
+        // later (s312: q_fast -> rq, -1.13 ns at 70 MHz: a 32 x 11 multiply, a
+        // 43-bit compare and a decrement-select in one cycle).
         S_COR: begin
-          rq    <= over ? (q_fast - 32'd1) : q_fast;
+          qd_q  <= q_times_d;
+          state <= S_COR2;
+        end
+        S_COR2: begin
+          rq    <= (qd_q > {11'd0, n_mag}) ? (q_fast - 32'd1) : q_fast;
           state <= S_FIN;
         end
 
