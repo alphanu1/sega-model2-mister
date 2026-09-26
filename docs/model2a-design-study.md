@@ -24153,3 +24153,44 @@ The hardware photo is brighter and bluer than MAME, which is that curve or
 the monitor, and a photo cannot separate them. Next: a run-time gamma
 switch at both sites (m2_palette for 2D, m2_geo_engine's gam() for 3D) so
 the choice is made by eye on the user's own screen.
+
+**R625 -- s390-s392: IT FITS, BUT clk_mem MISSED BY 2.75 ns; THE CACHE
+RETIMED.** s391 fitted (41,458 ALM), s392 missed by one LAB, s390 did not
+finish; s391's clk_mem worst -2.750 ns, 741 failing paths, TNS -457 ns, every
+bad one in m2_texel_bl:
+
+    hz (the across blend) -> texel             -2.75   two LERPs a stage
+    rs_rp (the head select) -> hz              -2.20   select + LERP
+    b_done -> m2_texel_cdc f_ld                -1.82   `rdy` from the lookup
+    c_t1 / ms_line -> the RAM's read address   -1.41   a held compare re-read,
+                                                        its address chosen by
+                                                        the compare itself
+
+A STANDALONE TIMING LOOP, calibrated first: the module alone in a Quartus 17
+wrapper with a 100 MHz clock -- map, fit and STA in ~40 s. The pre-retime
+module gave -2.30 there against -2.75 in the design: about 0.45 ns optimistic.
+Each change below was measured that way and benched (1,000,000 checks, 0
+fails, IB 11 and 8) before the next:
+
+    blend in five stages (latch, across products, across sums, down
+    products, down sums)                                         +0.33
+    lookup: place() its own stage (P); the four texels' same-line
+    relations decided as a request enters B; "last access" a
+    register (one_acc of what remains); compare (C1) split from
+    decide (D), D stalling from registers; a registered `rdy`    +0.76
+    a two-entry input queue in place of the skid, so axis()
+    reads a register with no select in front                      +0.96
+    the translucent row rule decided in H1 (both texels of a
+    row transparent), so the down product has no compare
+    in front of it                                                +1.34
+
+1,123 ALM (from 992). One wedge on the way, caught by the bench: a D stage
+held waiting for a free miss slot still "named" the slot it had joined, so
+that slot was never released. A held stage now names nothing; a slot freed
+under a held D's join drops the join and D fetches afresh. A read and a fill
+of the same line on the same edge is now taken as a miss (the M10K's
+mixed-port answer is undefined), which let the fill stop blocking lookups.
+
+Frame 2000 at PIXSTEP 2: 132,804 fetches, every band, texel-wait 22% (18%
+before -- the longer pipeline). The bench's clocks are 2:1; the board's are
+100:70, where each clk_mem cycle of latency costs more.
