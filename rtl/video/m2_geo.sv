@@ -148,6 +148,10 @@ module m2_geo #(
   // walks are fallback walks this says so outright.
   output logic [15:0]   dbg_walk_flip,
   output logic [15:0]   dbg_walk_fallback,
+  // R608: list words the game wrote AT OR AHEAD of the walk while it was
+  // walking -- the single-buffered list overwritten before it was read.
+  // Wraps; the stream takes deltas.
+  output logic [15:0]   dbg_overtake,
   // R260: BACKPRESSURE, DONE PROPERLY. The queue between the i960 and SDRAM
   // drops when full, and a drop is a HOLE: the write pointer deliberately does
   // not advance, so the next dword takes the missing one's slot. The reference
@@ -985,6 +989,19 @@ module m2_geo #(
         default: wst <= W_IDLE;
       endcase
     end
+  end
+
+  // R608: THE OVERWRITE RACE, COUNTED. Daytona's list is single-buffered at
+  // address 0 (R211) and the next one is pushed while the walk may still be
+  // reading this one. A pushed dword that lands at or beyond the walk's read
+  // pointer, while a walk is running, replaces a word the walk has not read.
+  // Counted as it drains to memory -- the moment it becomes visible to the
+  // walk. A jump can move w_ip backwards, so this over-counts on a list that
+  // jumps; zero is the answer that matters.
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) dbg_overtake <= 16'd0;
+    else if (q_pop && (wst != W_IDLE) && (19'(q_data[48:34]) >= w_ip))
+      dbg_overtake <= dbg_overtake + 16'd1;
   end
 
 endmodule

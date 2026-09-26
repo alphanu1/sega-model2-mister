@@ -2874,6 +2874,7 @@ m2_geo #(.AW(SDR_AW), .DEPTH(128)) u_geo (
 	.lit_x(geo_lit_x), .lit_y(geo_lit_y), .lit_z(geo_lit_z),
 	.dbg_lit_n(geo_lit_n), .dbg_nops(geo_nops),
 	.dbg_walk_flip(geo_walk_flip), .dbg_walk_fallback(geo_walk_fb), .push_stall(geo_push_stall),
+	.dbg_overtake(geo_overtake),   // R608
 	// The diffuse/ambient table, streamed. Captured but not yet consumed -- the
 	// luminance stage that reads it is the next piece.
 	.tp_we(geo_tp_we), .tp_idx(geo_tp_idx),
@@ -2969,6 +2970,7 @@ wire [15:0] r3d_walk_hotcyc;
 wire  [7:0] r3d_bands_painted;   // R452: bands that painted at least one pixel
 wire [15:0] r3d_fillpass;        // R455: quads handed to the fill, per frame
 wire [15:0] geo_walk_flip, geo_walk_fb;   // R263: walks started by the list-ready write, and by the fallback
+wire [15:0] geo_overtake;                 // R608: list words overwritten ahead of the walk
 wire        geo_push_stall;  // R260: the push queue is full and the CPU waits
 wire        cpu_buf_inval;   // R266: the CPU wrote the display list
 wire        cpu_tex_inval;   // R275: the CPU wrote a texture sheet
@@ -4462,7 +4464,7 @@ m2_dbg_stream #(.DIVISOR((SYS_MHZ * 1_000_000 + 57_600) / 115_200), .BUDGET_CYC(
 	      : (wedge_have && wedge_ph == 2'd2) ? wedge_q[31:0]
 	      : sw_pend                         ? {8'd0, sw_out}                    // R238: the fold
 	      : (tps_ph == 3'd1)                  ? {3'd0, tps_sel, tps_dif[tps_sel], tps_amb[tps_sel], geo_tp_n[7:0]}   // R251
-	      : (tps_ph == 3'd3)                  ? {geo_walk_flip[7:0], geo_walk_fb[7:0], geo_walk_unknown[7:0], geo_dropped[7:0]}   // R255/R263
+	      : (tps_ph == 3'd3)                  ? {geo_walk_flip[7:0], geo_overtake[7:0], geo_walk_unknown[7:0], geo_dropped[7:0]}   // R255/R263; R608: the fallback count (0 since R263) gives way to overtakes
 	      : (tps_ph == 3'd2)                  ? {cc_f_f, vid_ovr_frame}         // R269: sibling fills : scanlines that overran, last frame
 	      : (tps_ph == 3'd4)                  ? {tx_h_f, tx_n_f}                // R275: texel hits : texels that were not 0xF
 	      : (tps_ph == 3'd5)                  ? {tx_m_f, tex_sweep}             // R294 texel misses; R310 whole-cache sweeps
