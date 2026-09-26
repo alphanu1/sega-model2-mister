@@ -22958,3 +22958,35 @@ misses did not. The display list's readiness does not bound them: a finished
 list is swapped in at a frame start and a band fill never waits for it -- it
 decides whether a frame shows new geometry or holds the old list. Next: the
 texel misses' SDRAM latency (texel-first arbitration), then the i960 to 35.
+
+---
+
+**R574 -- TEXEL-FIRST SDRAM ARBITRATION, CAPPED.**
+
+At 100/60/30 the band sequencer's critical time is 78% texel wait (R573), and
+R294's counters say port 10 -- the texel cache's main miss port -- spends
+8.2% of every frame with a request pending and not yet granted: ~137,000
+cycles a frame over ~15,700 misses (some go to port 2), so roughly 9-17
+cycles of queueing per miss before the SDRAM access starts. (The same
+decode's "bus busy" reads 0.0% on every capture including the good ones; that
+field is broken and was not chased.)
+
+m2_sdram gains a priority class ahead of the round-robin: PRI (a port mask,
+default none -- the controller exactly as before) and PRI_CAP. A PRI port is
+granted first unless ports outside the class are waiting AND the class has
+taken PRI_CAP grants in a row, in which case one round-robin grant goes
+through. The cap count is a register, so the class is a 2:1 mux after the
+existing select (R498's path discipline); a priority grant leaves the
+rotation where it was, so the other ports keep their order. Model2.sv sets
+PRI to ports 10 and 2 (the texel cache's two miss ports; port 2 is the boot
+copy engine's until p2_tex) with PRI_CAP 2. The CPU port is deliberately NOT
+in the class yet, so this build measures the texel effect alone.
+
+tb_m2_sdram with PRI on: 1,835,799 checks, 0 fails, 0 violations; the
+all-masters-concurrent test's worst latency for any port 161 -> 326 cycles --
+the cost of priority, bounded by the cap, and nowhere near R477's 14,445-
+cycle starvation. With PRI off the bench is unchanged to the check.
+
+The board measures it: port 10's bus wait (8.2% of the frame today), texel
+wait's share of the critical time (78%), the CPU port's wait (4.7%) and the
+late bands.

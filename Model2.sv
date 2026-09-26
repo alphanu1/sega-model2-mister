@@ -1158,7 +1158,12 @@ always_ff @(posedge clk_mem or negedge mem_rst_n) begin
 	end
 end
 
-m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(781)) u_sdram (
+// R574: THE TEXEL CACHE'S TWO MISS PORTS (10, and 2 once p2_tex owns it) AHEAD
+// OF THE ROUND-ROBIN, capped at two grants in a row while anyone else waits.
+// At 100/60/30 the band sequencer's critical time is 78% texel wait (R573)
+// and port 10 alone spends 8.2% of every frame queued for the bus.
+m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(781),
+           .PRI(11'b100_0000_0100), .PRI_CAP(2)) u_sdram (
 	.clk(clk_mem), .rst_n(mem_rst_n), .ready(mem_ready),
 	// CL+2, FIXED, NO OSD OVERRIDE (R411). Only one capture depth can ever be
 	// right -- CL+1 samples the previous word of the burst, CL+3 the next -- so

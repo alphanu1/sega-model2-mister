@@ -94,7 +94,15 @@ module m2_sdram #(
 
   // Ack hold. Requesters on a slower synchronous clock must see exactly one
   // rising edge with ack high, so this is 2 for a clk/2 requester.
-  parameter int unsigned ACK_HOLD = 2
+  parameter int unsigned ACK_HOLD = 2,
+
+  // R574: A PRIORITY CLASS AHEAD OF THE ROUND-ROBIN. Ports set in PRI are
+  // granted before the rotation, unless ports outside it are waiting and PRI
+  // has already taken PRI_CAP grants in a row -- then one round-robin grant
+  // goes through, so nothing starves. Default none: the controller exactly as
+  // it was. PRI_CAP must be at least 1.
+  parameter logic [NP-1:0] PRI     = '0,
+  parameter int unsigned   PRI_CAP = 2
 ) (
   input  logic                 clk,
   input  logic                 rst_n,
@@ -554,7 +562,18 @@ module m2_sdram #(
   wire [NP-1:0]  low_all   = arb_ready & (~arb_ready + {{(NP-1){1'b0}}, 1'b1});
   // One-hot, and it is the granted port in REAL coordinates -- no rotation to
   // undo, so the modular add and its conditional subtract are gone too.
-  wire [NP-1:0]  arb_sel   = (|arb_hi) ? low_hi : low_all;
+  wire [NP-1:0]  rr_sel    = (|arb_hi) ? low_hi : low_all;
+  // R574: THE PRIORITY CLASS. The texel cache's miss ports wait ~9-17 cycles a
+  // miss for the bus under round-robin (R574); a band's span walk is waiting on
+  // exactly those misses. pri_capped is a register, so the class adds a 2:1 mux
+  // after the existing select and nothing in front of it.
+  logic [$clog2(PRI_CAP+1)-1:0] pri_run;          // PRI grants in a row with others waiting
+  wire           pri_capped = (pri_run == ($clog2(PRI_CAP+1))'(PRI_CAP));
+  wire [NP-1:0]  pri_ready  = arb_ready & PRI;
+  wire           oth_ready  = |(arb_ready & ~PRI);
+  wire [NP-1:0]  low_pri    = pri_ready & (~pri_ready + {{(NP-1){1'b0}}, 1'b1});
+  wire           use_pri    = (|pri_ready) && !(oth_ready && pri_capped);
+  wire [NP-1:0]  arb_sel    = use_pri ? low_pri : rr_sel;
   // R498: arb_rot, arb_idx and arb_sum are gone with the rotate -- the barrel
   // rotate, the encode of its output, the modular add and its conditional
   // subtract were the chain this entry exists to remove.
@@ -876,6 +895,7 @@ module m2_sdram #(
       p_ack <= '0; wr_ack <= 1'b0; p_dout <= '0;
       dl_v <= 1'b0; dl_p <= '0; dl_data <= '0;   // R557
       grant <= '0; grant_is_wr <= 1'b0; rr_mask <= '1;                  // R498
+      pri_run <= '0;                                                    // R574
       rd_total <= 4'd1; rd_issued <= '0; rd_captured <= '0;
       is_write <= 1'b0; xfer_addr <= '0; din_r <= '0; be_r <= '0;
       wait_cnt <= '0; dq_r <= '0;
@@ -1027,11 +1047,19 @@ module m2_sdram #(
           nxt_is_write       <= we_p[rr_grant];
           nxt_total          <= we_p[rr_grant] ? 4'd1 : blen(rr_grant);
           inflight[rr_grant] <= 1'b1;
-          // R498: the round-robin position is the registered mask -- bits at
-          // or above the port after this one; all ones on the wrap.
-          rr_mask            <= (rr_grant == ($clog2(NP))'(NP-1))
-                                  ? {NP{1'b1}}
-                                  : ({NP{1'b1}} << (rr_grant + 1'b1));
+          // R574: a priority grant leaves the rotation where it was, so the
+          // other ports keep their order; it counts toward the cap only while
+          // someone else is waiting.
+          if (use_pri) begin
+            pri_run <= oth_ready ? (pri_capped ? pri_run : pri_run + 1'b1) : '0;
+          end else begin
+            pri_run <= '0;
+            // R498: the round-robin position is the registered mask -- bits at
+            // or above the port after this one; all ones on the wrap.
+            rr_mask            <= (rr_grant == ($clog2(NP))'(NP-1))
+                                    ? {NP{1'b1}}
+                                    : ({NP{1'b1}} << (rr_grant + 1'b1));
+          end
           pf_sel             <= 1'b1;
         end else if (pf_sel) begin
           // The mux, alone in a cycle. This is S_SEL, moved.
