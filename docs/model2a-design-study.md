@@ -23788,3 +23788,21 @@ with the stream compiled out. The common clk_sys family: m2_geo_clip qu/qv
 the subtract and the clamp in front of it. The conversion is now its own
 stage (wu/wv registered) and the quad is presented once held two cycles
 (c_age), two cycles a quad in all. tb_m2_geometry and tb_m2_geo pass.
+
+**s377 -- THE FIRST BUILD CLEAN ON EVERY CLOCK, HDMI INCLUDED. ON THE BOARD.**
+
+s375-s377 (R607-R614, keeper flavour, M2_NO_DEBUG):
+
+| seed | clk_mem 100 | clk_sys 70 | clk_i960 35 | HDMI 148.5 | ALM |
+|---|---|---|---|---|---|
+| s375 | +0.084 | +0.457 | +3.360 | -0.359 | 40,946 |
+| s376 | -0.131 | +0.341 | +4.017 | -0.035 | 39,788 |
+| s377 | **+0.579** | **+0.450** | **+3.160** | **+0.072** | 40,876 |
+
+s377: every hold positive, 16/16 DQ packed, clk_mem global, no internal
+errors -- the deploy rule as it was first stated (every clock >= 0), met for
+the first time; HDMI had never been. Carries front to back (R607, R611),
+the road's texture-period move (R609, R613, R614) and the list-overwrite
+hold (R610). Telemetry is compiled out, so this build is judged by eye;
+a measurement build (the M2_NO_DEBUG line commented out) will not fit
+without the area back.

@@ -1,5 +1,23 @@
 # Handoff
 
+## 2026-09-26 (evening): `build/seeds/s377` IS ON THE BOARD. EVERY CLOCK CLEAN.
+
+clk_mem +0.579, clk_sys +0.450, clk_i960 +3.160, HDMI +0.072 (first ever).
+KEEPER FLAVOUR: `M2_NO_DEBUG` in Model2.qsf -- no UART telemetry, so no
+captures from it. Comment that one line out for a measurement build (it will
+need area back first: the telemetry build no longer fits, study R612).
+
+On top of s347 (front to back): R609 road -- u/v were clamped at 2,048
+texels, Daytona goes to 8,192; polygons are now moved by a whole texture
+period instead (exact). R610 scenery dropout -- the game overwrote the
+single-buffered display list while the walk read it (measured: 3,795+ words
+ahead of the walk in 152 s, walks cut to 3 opcodes); the push queue now
+holds while a walk runs. R611/R613/R614 timing. Lighting dropout: probably
+the same race (R333's mechanism), removed by R610 -- unconfirmed.
+
+To check by eye: the far road, busy scenes (scenery vanishing), lighting over
+a long run, and the green flat polygon Ben saw beside the car on s347.
+
 ## 2026-09-26 (afternoon): `build/seeds/s347` IS ON THE BOARD. FRONT TO BACK.
 
 s346 plus R607: polygons drawn nearest first with a one-band fill mask
