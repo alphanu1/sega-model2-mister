@@ -284,10 +284,10 @@ module m2_raster3d #(
   logic        fl_span_valid, fl_span_ready, fl_span_moire;
   logic signed [15:0] fl_span_y, fl_span_x0, fl_span_x1;
   logic signed [31:0] fl_span_ooz;                          // R337: 1/z at the span start
-  logic signed [15:0] fl_span_doozdx;
+  logic signed [23:0] fl_span_doozdx;   // R618
   logic [23:0] fl_span_col;
   logic signed [31:0] fl_span_u, fl_span_v;
-  logic signed [15:0] fl_span_dudx, fl_span_dvdx;   // R286: 8.8
+  logic signed [23:0] fl_span_dudx, fl_span_dvdx;   // R286: 8.8; R618: 16.8
   logic [23:0] fl_span_tex;
   logic        fl_span_tex_en;
 
@@ -322,7 +322,7 @@ module m2_raster3d #(
   // R337: 194 -> 242, carrying 1/z (32) and its gradient (16) for the
   // perspective divide. The queue is MLAB since R332, so this is ALM and not
   // M10K -- which is the only reason it is affordable at 553/553 blocks.
-  localparam int unsigned SQ_DW = 242;
+  localparam int unsigned SQ_DW = 266;   // R618: three gradients 16 -> 24 bits
   logic [SQ_DW-1:0] sq_din, sq_q;
   logic             sq_in_rdy, sq_qv, sq_rdy, sq_busy, sq_full;
   logic [15:0]      sq_cnt16;
@@ -364,15 +364,17 @@ module m2_raster3d #(
   // Unpacked, in the same order.
   // R337: ooz and its gradient sit between the coordinates and u; everything
   // from dudx down keeps the slice it had.
-  wire signed [15:0] sq_y    = sq_q[241:226];
-  wire signed [15:0] sq_x0   = sq_q[225:210];
-  wire signed [15:0] sq_x1   = sq_q[209:194];
-  wire signed [31:0] sq_ooz  = sq_q[193:162];
-  wire signed [15:0] sq_doozdx = sq_q[161:146];
-  wire signed [31:0] sq_u    = sq_q[145:114];
-  wire signed [31:0] sq_v    = sq_q[113:82];
-  wire signed [15:0] sq_dudx = sq_q[81:66];
-  wire signed [15:0] sq_dvdx = sq_q[65:50];
+  // R618: 266 = 3x16 (y, x0, x1) + 32 (ooz) + 24 (doozdx) + 2x32 (u, v)
+  //       + 2x24 (dudx, dvdx) + 24 (col) + 24 (tex) + 2 (moire, tex_en)
+  wire signed [15:0] sq_y    = sq_q[265:250];
+  wire signed [15:0] sq_x0   = sq_q[249:234];
+  wire signed [15:0] sq_x1   = sq_q[233:218];
+  wire signed [31:0] sq_ooz  = sq_q[217:186];
+  wire signed [23:0] sq_doozdx = sq_q[185:162];
+  wire signed [31:0] sq_u    = sq_q[161:130];
+  wire signed [31:0] sq_v    = sq_q[129:98];
+  wire signed [23:0] sq_dudx = sq_q[97:74];
+  wire signed [23:0] sq_dvdx = sq_q[73:50];
   wire        [23:0] sq_col  = sq_q[49:26];
   wire        [23:0] sq_tex  = sq_q[25:2];
   wire               sq_moire  = sq_q[1];

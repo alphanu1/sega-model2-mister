@@ -23888,3 +23888,37 @@ this core point-samples once a group; and 24% at 2-4 texels (vertex
 positions are integers here, floats in MAME; the reciprocal; to_tx dropping
 bits). Benches with PXC/GC off unchanged (fill 152,369 checks, raster3d
 hashes, span_tex 7,207).
+
+**R617 / R618 -- THE PLANE GRADIENTS SATURATED AT 128 A PIXEL. NOW 16.8.**
+
+The 3D differential's next worst after the road: poly 517 (a 128x32
+translucent texture, 64 px tall, 1/z ratio 3.4) -- u drifting from the exact
+plane down the polygon, 17 texels by row 226 and 37 by row 284, v nearly
+right. Not rounding: the exact plane and a rounded-vertex plane agree to a
+texel there. R617, tb_m2_raster_fill M2_FILL_QUAD (a MAME polygon presented
+as m2_geometry would, span planes against the exact plane at pixel centres)
+reproduced it in the fill alone. Cause, by hand: the fill carries each
+per-pixel gradient as 16-bit 8.8, so +-128, and 1/z -- normalised per quad
+to ~2^15 at the nearest vertex -- climbs ~313 a pixel vertically here
+(9,700 to 28,200 over ~50 rows). dody clamped at 128, every u/z / 1/z
+divide drifted with distance from the fitting vertex. Any steep, close
+polygon; u/z and v/z can reach it the same way.
+
+R618: all six gradients 24-bit, 16.8 (pf_sat clamps at +-2^23; the span
+queue's three x-gradient fields 16 -> 24, SQ_DW 242 -> 266, an MLAB FIFO;
+m2_span_tex's inputs 24-bit, its 16.16 internals unchanged). The planes are
+modular -- base is the value extrapolated to (0,0), wrapping mod 2^32 with
+every product and accumulator, and the value at a pixel inside the polygon
+comes back in range -- so nothing else widens. Poly 517 through the fill:
+within 1-2 texels all the way down (was 27-37 off).
+
+Frame 2000, every textured pixel against MAME's:
+
+| build | <= 1 texel | 2-4 | 5-16 | > 16 | other polygon |
+|---|---|---|---|---|---|
+| s377 (on the board) | 35.1% | 33.8% | 7.3% | 6.7% | 17.1% |
+| R616 + R618, PIXSTEP 4 | 59.9% | 17.7% | 2.7% | 2.5% | 17.1% |
+| R616 + R618, PIXSTEP 2 | 68.8% | 10.6% | 1.6% | 2.2% | 16.7% |
+
+Benches unchanged (their cases never reached 128): fill 152,369, span_tex
+7,207, raster3d hashes.

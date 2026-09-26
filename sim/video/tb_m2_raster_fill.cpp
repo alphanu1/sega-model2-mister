@@ -32,8 +32,11 @@
 // duplicated span fails even where it would paint the same pixels.
 
 #include "Vm2_raster_fill.h"
+// R618: the gradients are 24-bit signed (16.8) now.
+static inline int32_t sx24(uint32_t v) { return int32_t(v << 8) >> 8; }
 #include "verilated.h"
 #include <cstdio>
+#include <cstring>
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -441,8 +444,8 @@ static void test_plane(Vm2_raster_fill* d) {
       const double u  = (double)(int32_t)d->span_u / 65536.0;
       const double v  = (double)(int32_t)d->span_v / 65536.0;
       // R286: the gradient is 8.8, not 16.16 -- sixteen bits of it, signed.
-      const double du = (double)(int16_t)d->span_dudx / 256.0;
-      const double dv = (double)(int16_t)d->span_dvdx / 256.0;
+      const double du = (double)sx24(d->span_dudx) / 256.0;
+      const double dv = (double)sx24(d->span_dvdx) / 256.0;
       // R337: the plane is fitted to u/z now, so its value at vertex 0 is
       // UZ[0], not U[0]. Using the raw coordinate as the base was the bench's
       // own error -- the gradients were already right.
@@ -463,7 +466,7 @@ static void test_plane(Vm2_raster_fill* d) {
       // R337: span_doozdx is the 1/z plane's gradient, and it is what makes the
       // divide in m2_span_tex correct. Checked to the same tolerance.
       {
-        const double doo = (double)(int16_t)d->span_doozdx / 256.0;
+        const double doo = (double)sx24(d->span_doozdx) / 256.0;
         tex_checks++;
         if (fabs(doo - doodx) > 0.05) {
           if (tex_fails < 6) printf("  FAIL d(1/z)/dx %.5f want %.5f\n", doo, doodx);
@@ -757,8 +760,8 @@ int main(int argc, char** argv) {
           const int y = (int16_t)d->span_y, xa = (int16_t)d->span_x0, xb = (int16_t)d->span_x1;
           const double su = (double)(int32_t)d->span_u / 65536.0, sv = (double)(int32_t)d->span_v / 65536.0;
           const double so = (double)(int32_t)d->span_ooz / 65536.0;
-          const double du = (double)(int16_t)d->span_dudx / 256.0, dv = (double)(int16_t)d->span_dvdx / 256.0;
-          const double doo = (double)(int16_t)d->span_doozdx / 256.0;
+          const double du = (double)sx24(d->span_dudx) / 256.0, dv = (double)sx24(d->span_dvdx) / 256.0;
+          const double doo = (double)sx24(d->span_doozdx) / 256.0;
           for (int x = xa; x <= xb; x += 7) {
             const int k = x - xa;
             const double ro = so + k*doo;
@@ -787,6 +790,68 @@ int main(int argc, char** argv) {
       d->in_valid = 0; d->eval();
       for (int k = 0; k < 40; k++) tickf();
     }
+  }
+
+  // ------------------------------------------- R617: ONE QUAD FROM MAME
+  // M2_FILL_QUAD="x,y,z,pu,pv;x,y,z,pu,pv;..." (four vertices, MAME's floats:
+  // screen x/y, z, raw 13.3 u/v) -- presented as m2_geometry would (rounded
+  // x/y, pu/2 with R609's period move, 1/z as the minifloat), and the fill's
+  // planes compared, span by span, with the exact perspective plane at pixel
+  // centres. Localises a texel error between the fill and the span walk.
+  if (const char *qs = std::getenv("M2_FILL_QUAD")) {
+    Vm2_raster_fill* d = dut.d;
+    auto tickf = [&]() { d->clk = 0; d->eval(); d->clk = 1; d->eval(); };
+    double FX[4], FY[4], FZ[4], FU[4], FV[4];
+    { const char *q = qs; for (int i = 0; i < 4; i++) { std::sscanf(q, "%lf,%lf,%lf,%lf,%lf", &FX[i], &FY[i], &FZ[i], &FU[i], &FV[i]); q = std::strchr(q, ';'); if (!q) break; q++; } }
+    const unsigned wcode = std::getenv("M2_FILL_WCODE") ? std::atoi(std::getenv("M2_FILL_WCODE")) : 3;
+    const unsigned hcode = std::getenv("M2_FILL_HCODE") ? std::atoi(std::getenv("M2_FILL_HCODE")) : 3;
+    auto mf16r = [](double x) -> uint16_t { union { float f; uint32_t b; } u; u.f = (float)x; return (uint16_t)(((u.b >> 23) & 0xff) << 8 | ((u.b >> 15) & 0xff)); };
+    auto wide = [](double pu) -> uint32_t { if (!(pu >= 2.0)) return 0; double w = std::floor(pu / 2.0); return w > 32767 ? 32767u : (uint32_t)w; };
+    int32_t X[4], Y[4]; uint32_t U[4], V[4]; uint16_t MF[4];
+    for (int i = 0; i < 4; i++) { X[i] = (int32_t)std::lround(FX[i]); Y[i] = (int32_t)std::lround(FY[i]); U[i] = wide(FU[i]); V[i] = wide(FV[i]); MF[i] = mf16r(1.0 / FZ[i]); }
+    const uint32_t um = std::min(std::min(U[0],U[1]),std::min(U[2],U[3])) & ~((256u << wcode) - 1) & 0x7fff;
+    const uint32_t vm = std::min(std::min(V[0],V[1]),std::min(V[2],V[3])) & ~((256u << hcode) - 1) & 0x7fff;
+    // exact plane through MAME's float vertices 0,1,2, in texels
+    const double ax = FX[1]-FX[0], ay = FY[1]-FY[0], bx = FX[2]-FX[0], by = FY[2]-FY[0], det = ax*by-bx*ay;
+    auto pl = [&](const double *P, double *r) { double p1 = P[1]-P[0], p2 = P[2]-P[0]; r[0] = P[0]; r[1] = (p1*by-p2*ay)/det; r[2] = (ax*p2-bx*p1)/det; };
+    double OZt[4], UZt[4], VZt[4], Po[3], Pu[3], Pv[3];
+    for (int i = 0; i < 4; i++) { OZt[i] = 1.0/FZ[i]; UZt[i] = (FU[i]/8.0 - um/4.0)/FZ[i]; VZt[i] = (FV[i]/8.0 - vm/4.0)/FZ[i]; }
+    pl(OZt, Po); pl(UZt, Pu); pl(VZt, Pv);
+    d->view_x1 = 0; d->view_x2 = 495; d->view_y1 = 0; d->view_y2 = 383;
+    d->in_x0 = X[0]; d->in_y0 = Y[0]; d->in_x1 = X[1]; d->in_y1 = Y[1];
+    d->in_x2 = X[2]; d->in_y2 = Y[2]; d->in_x3 = X[3]; d->in_y3 = Y[3];
+    d->in_u0 = std::min(U[0]-um, 8191u); d->in_v0 = std::min(V[0]-vm, 8191u); d->in_u1 = std::min(U[1]-um, 8191u); d->in_v1 = std::min(V[1]-vm, 8191u);
+    d->in_u2 = std::min(U[2]-um, 8191u); d->in_v2 = std::min(V[2]-vm, 8191u); d->in_u3 = std::min(U[3]-um, 8191u); d->in_v3 = std::min(V[3]-vm, 8191u);
+    d->in_oz0 = MF[0]; d->in_oz1 = MF[1]; d->in_oz2 = MF[2]; d->in_oz3 = MF[3];
+    d->in_col = 0xffffff; d->in_moire = 0; d->in_tex = 1;
+    d->in_valid = 1; d->span_ready = 1; d->eval();
+    bool acc = false, ret = false; long g = 0; int shown = 0;
+    for (;;) {
+      d->eval();
+      if (d->span_valid && d->span_ready && d->span_tex_en && shown < 12) {
+        const int y = (int16_t)d->span_y, xa = (int16_t)d->span_x0, xb = (int16_t)d->span_x1;
+        const double su = (double)(int32_t)d->span_u / 65536.0, sv = (double)(int32_t)d->span_v / 65536.0;
+        const double so = (double)(int32_t)d->span_ooz / 65536.0;
+        const double du = (double)sx24(d->span_dudx) / 256.0, doo = (double)sx24(d->span_doozdx) / 256.0;
+        for (int x : {xa, (xa + xb) / 2, xb}) {
+          const int k = x - xa; const double ro = so + k*doo;
+          const double ru = 32768.0 * (su + k*du) / ro / 4.0;   // texels
+          const double cx = x + 0.5 - FX[0], cy = y + 0.5 - FY[0];
+          const double to = Po[0]+Po[1]*cx+Po[2]*cy, tu = (Pu[0]+Pu[1]*cx+Pu[2]*cy)/to;
+          std::printf("  R617 y=%d x=%d fill u=%.2f exact u=%.2f\n", y, x, ru, tu);
+        }
+        if ((y & 7) == 0) shown++;
+      }
+      if (d->quad_done && acc) ret = true;
+      if (d->in_ready && d->in_valid) acc = true;
+      const bool drained = ret && !d->span_valid;
+      tickf();
+      if (acc) { d->in_valid = 0; d->eval(); }
+      if (drained) break;
+      if (++g > 400000) { std::printf("  R617 timeout\n"); break; }
+    }
+    d->in_valid = 0; d->eval();
+    for (int k = 0; k < 40; k++) tickf();
   }
 
   // ----------------------------------------------------------------- fuzz

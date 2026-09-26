@@ -91,12 +91,12 @@ module m2_span_tex #(
   input  logic               in_moire,
   input  logic signed [31:0] in_u, in_v,          // quarter-texels, 16 fractional bits
   // 8.8 texels a pixel (R286), shifted up to this unit's 16.16 on the way in.
-  input  logic signed [15:0] in_dudx, in_dvdx,
+  input  logic signed [23:0] in_dudx, in_dvdx,     // R618: 16.8
   // R339: 1/z at the span's start and its gradient along x. u and v above are
   // u/z and v/z, and the texel coordinate is u = (uoz << 15) / ooz -- the
   // perspective divide, done once per PIXSTEP group.
   input  logic signed [31:0] in_ooz,
-  input  logic signed [15:0] in_doozdx,
+  input  logic signed [23:0] in_doozdx,
   input  logic [23:0]        in_tex,
   input  logic               in_tex_en,
 

@@ -129,7 +129,7 @@ module m2_raster_fill #(
   // both 16.16 in texels. The consumer walks u += span_dudx a pixel.
   output logic signed [31:0] span_u, span_v,
   // 8.8 texels a pixel; the span walk shifts it up to its own 16.16.
-  output logic signed [15:0] span_dudx, span_dvdx,
+  output logic signed [23:0] span_dudx, span_dvdx,     // R618: 16.8, was 8.8
   // R337: the perspective span. u and v above are u/z and v/z now; these carry
   // 1/z and its gradient, and `span_oshift` is the per-quad scale that
   // m2_span_tex must undo -- u = (uoz << oshift) / ooz.
@@ -138,7 +138,7 @@ module m2_raster_fill #(
   // [u/2, u) and fits the same 13 bits u did. m2_span_tex undoes it with a
   // fixed shift: u = (uoz << 15) / ooz.
   output logic signed [31:0] span_ooz,
-  output logic signed [15:0] span_doozdx,
+  output logic signed [23:0] span_doozdx,
   output logic [23:0]        span_tex,
   output logic               span_tex_en,
 
@@ -295,7 +295,16 @@ module m2_raster_fill #(
               : 16'((17'(full) << 6) >> d[3:0]);
     end
   endfunction
-  logic signed [15:0] dodx, dody;        // the 1/z plane's gradients
+  // R618: TWENTY-FOUR BITS, 16.8. At 8.8 a gradient saturated at 128 a
+  // pixel, and 1/z -- normalised per quad to ~2^15 at the nearest vertex --
+  // moves faster than that on any steep, close polygon (the 3D differential's
+  // poly 517: ~313 a pixel vertically, clamped to 128, so every u/z / 1/z
+  // divide drifted, 37 texels by the far edge). The planes are modular:
+  // base is the value extrapolated to (0,0) and wraps mod 2^32, every
+  // product and accumulator wraps with it, and the value at a pixel inside
+  // the polygon comes back in range -- so only these registers, their clamp
+  // and the queue fields widen.
+  logic signed [23:0] dodx, dody;        // the 1/z plane's gradients
   logic signed [31:0] base_o, nxo, nyo;
   logic               pf_c;              // the third fit's second divide is back
   logic [23:0]        tex_r;
@@ -306,7 +315,7 @@ module m2_raster_fill #(
   // a texel across the widest span this screen has. What it costs is every
   // multiplier and every barrel shifter in the fit at double width, on a part
   // with 550 ALMs free.
-  logic signed [15:0] dudx, dudy, dvdx, dvdy;
+  logic signed [23:0] dudx, dudy, dvdx, dvdy;   // R618
   logic signed [31:0] det_r;
   logic signed [31:0] nxu, nyu, nxv, nyv;
   // R418: THE NORMALISE, SPLIT IN TWO. pf_norm is a 32-bit negate, then clz32,
@@ -587,11 +596,11 @@ module m2_raster_fill #(
     end
   endfunction
 
-  function automatic logic signed [15:0] pf_sat(input logic signed [39:0] r);
+  function automatic logic signed [23:0] pf_sat(input logic signed [39:0] r);
     begin
-      if      (r >  40'sd32767) pf_sat =  16'sd32767;
-      else if (r < -40'sd32767) pf_sat = -16'sd32767;
-      else                      pf_sat =  16'(r);
+      if      (r >  40'sd8388607) pf_sat =  24'sd8388607;   // R618
+      else if (r < -40'sd8388607) pf_sat = -24'sd8388607;
+      else                        pf_sat =  24'(r);
     end
   endfunction
 
@@ -620,8 +629,8 @@ module m2_raster_fill #(
   // The gradient is 8.8 and the answer is 16.16, so each product -- 16 x 16,
   // one DSP -- is shifted up by eight on its way in.
   function automatic logic signed [31:0] uv_at(input logic signed [31:0] base,
-                                               input logic signed [15:0] gx,
-                                               input logic signed [15:0] gy,
+                                               input logic signed [23:0] gx,   // R618
+                                               input logic signed [23:0] gy,
                                                input logic signed [15:0] x,
                                                input logic signed [15:0] y);
     logic signed [31:0] gxp, gyp;
@@ -868,9 +877,9 @@ module m2_raster_fill #(
       // powering up set would make S_PF_B compute its bases from a gradient
       // that had not been latched yet.
       mul_q_r <= '0; mul_zr <= 6'd0; b_wait <= 1'b0; b_w2 <= 1'b0; sc_r <= '0; oz_w_v <= 1'b0; oz_last <= 1'b0; oz_w <= 2'd0; b_prod <= 1'b0;
-      dudx <= 16'sd0; dudy <= 16'sd0; dvdx <= 16'sd0; dvdy <= 16'sd0;
+      dudx <= '0; dudy <= '0; dvdx <= '0; dvdy <= '0;
       for (int k = 0; k < 4; k++) begin qu[k] <= '0; qv[k] <= '0; qoz[k] <= '0; end
-      oz_i <= 2'd0; oz_emax <= 8'd0; dodx <= 16'sd0; dody <= 16'sd0;
+      oz_i <= 2'd0; oz_emax <= 8'd0; dodx <= '0; dody <= '0;
       base_o <= '0; nxo <= '0; nyo <= '0; pf_c <= 1'b0;
       span_valid <= 1'b0;
       span_y     <= 16'sd0;
@@ -1156,7 +1165,7 @@ module m2_raster_fill #(
             tex_r     <= in_tex;
             tex_ok    <= 1'b0;
             pf_second <= 1'b0;
-            dudx <= 16'sd0; dudy <= 16'sd0; dvdx <= 16'sd0; dvdy <= 16'sd0;
+            dudx <= '0; dudy <= '0; dvdx <= '0; dvdy <= '0;
             // An untextured quad pays nothing for any of this.
             // R337: normalise 1/z before the plane fit, because the fit runs
             // on u/z and v/z and those do not exist until it has.
