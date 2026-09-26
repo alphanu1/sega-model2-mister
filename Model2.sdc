@@ -116,11 +116,25 @@ if {[llength $core_clks] == 0} {
 # IF A CROSSING IS MISSED, THIS FILE WILL NOT SAY SO. Cutting the paths removes
 # the timing error that would otherwise point at it. The only defence is that
 # every signal between the groups goes through a synchroniser by construction.
+# R568: TWO GROUPS -- THE MEMORY CLOCK IS ASYNCHRONOUS TO THE CORE NOW.
+#
+# Step 1 of the clock plan (R561-R564) made every clk_mem <-> clk_sys crossing a
+# real one: the SDRAM ports (m2_sdram_cdc), the texel queue (m2_texel_cdc), the
+# video on clk_mem with dual-clock tile and palette RAMs, the frame edge and
+# the char-cache invalidate on synchronisers, debug values frame-latched. The
+# inventory taken on the step-1(b) netlist BEFORE this cut (xings.tcl) is the
+# check that nothing else crosses: this statement removes the timing error that
+# would otherwise point at a missed crossing, so it goes in only after that.
+#
+#   GROUP A  general[0] clk_mem 100, general[4] SDRAM_CLK 100 @ 180
+#   GROUP B  general[1] clk_sys, general[3] clk_i960 -- still an exact 2:1
+#            (50/25 today, 60/30 in the plan), and m2_cpu_bridge's crossing
+#            between them is TIMED, as R460 requires.
 set_clock_groups -asynchronous \
   -group [get_clocks -nowarn {*|pll|pll_inst|altera_pll_i|general[0].*|divclk \
-                              *|pll|pll_inst|altera_pll_i|general[1].*|divclk \
-                              *|pll|pll_inst|altera_pll_i|general[3].*|divclk \
-                              *|pll|pll_inst|altera_pll_i|general[4].*|divclk}]
+                              *|pll|pll_inst|altera_pll_i|general[4].*|divclk}] \
+  -group [get_clocks -nowarn {*|pll|pll_inst|altera_pll_i|general[1].*|divclk \
+                              *|pll|pll_inst|altera_pll_i|general[3].*|divclk}]
 
 # FIVE OUTPUTS NOW, AND THE COUNT IS CHECKED. The Kaneko16 core gave three
 # outputs identical settings -- same frequency, same phase, same duty -- and the

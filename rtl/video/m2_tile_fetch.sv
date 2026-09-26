@@ -200,7 +200,7 @@ module m2_tile_fetch #(
   // ------------------------------------------------------------------------
 
   typedef enum logic [2:0] {
-    F_IDLE, F_CHECK, F_TILE, F_CHAR, F_FULL, F_CADDR   // R570: F_CADDR
+    F_IDLE, F_CHECK, F_TILE, F_CHAR, F_FULL, F_CADDR, F_CHIT   // R570, R572
   } fstate_t;
   typedef enum logic [1:0] {
     E_IDLE, E_WAIT, E_EMIT, E_DONE
@@ -246,6 +246,8 @@ module m2_tile_fetch #(
   logic [17:0] f_char_addr_q;
   logic        cc_hit;
   logic [31:0] cc_hit_data;
+  logic        cc_hit_q;            // R572
+  logic [31:0] cc_hit_data_q;
   always_comb begin
     cc_hit      = 1'b0;
     cc_hit_data = 32'd0;
@@ -407,14 +409,22 @@ module m2_tile_fetch #(
         // R570: the character address, registered.
         F_CADDR: begin
           f_char_addr_q <= f_char_addr;
+          fst           <= F_CHIT;
+        end
+
+        // R572: and the 16-way compare's answer registered before F_CHAR acts
+        // on it (s306: f_char_addr_q -> cc_hit_data -> ch_f, -0.243 ns).
+        F_CHIT: begin
+          cc_hit_q      <= cc_hit;
+          cc_hit_data_q <= cc_hit_data;
           fst           <= F_CHAR;
         end
 
         F_CHAR: begin
           // f_char_addr_q is valid now the tile word is latched.
-          if (cc_hit) begin
+          if (cc_hit_q) begin
             // Already fetched this glyph on this line; nothing to ask for.
-            ch_f   <= cc_hit_data;
+            ch_f   <= cc_hit_data_q;
             f_have <= 1'b1;
             fst    <= F_FULL;
           end else if (!char_req) begin

@@ -806,6 +806,11 @@ module m2_video #(
   assign x_b = xlat_tbl[{2'd2, x_b5}];
 
   logic [7:0] pr, pg, pb;
+  // R572: and the palette's output registered too (s306: pal_data_q -> gamma
+  // -> xlat -> vid_b, -0.863 ns). Ready at E+5; vid_r takes it at the next ce
+  // edge, E+6 at the earliest (100 / 16 puts ce edges six or seven apart).
+  logic [7:0] pr_q, pg_q, pb_q;
+  always_ff @(posedge clk) begin pr_q <= pr; pg_q <= pg; pb_q <= pb; end
   m2_palette pal (
     .entry(pal_data_q),                  // R570: registered, see pal_addr
     .x_r5(x_r5), .x_g5(x_g5), .x_b5(x_b5),
@@ -847,9 +852,9 @@ module m2_video #(
       vid_vb <= vblank;
       vid_hs <= hsync_i;
       vid_vs <= vsync_i;
-      vid_r <= visible ? pr : 8'd0;
-      vid_g <= visible ? pg : 8'd0;
-      vid_b <= visible ? pb : 8'd0;
+      vid_r <= visible ? pr_q : 8'd0;      // R572
+      vid_g <= visible ? pg_q : 8'd0;
+      vid_b <= visible ? pb_q : 8'd0;
     end
   end
 

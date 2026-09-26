@@ -22864,3 +22864,29 @@ And two that were NOT safe, fixed here:
 With those, nothing crosses that is not a synchroniser, a protocol-held
 payload, a dual-clock memory, a frame-latched debug value or framework code.
 The clock groups (R568) go in with the next build.
+
+---
+
+**R572 -- TWO MORE VIDEO REGISTERS, AND STEP 1 IS COMPLETE: THE CLOCK GROUPS
+GO IN.**
+
+s306 (R570 + R571) left 24 failing clk_mem endpoints: pal_data_q -> m2_palette
+gamma -> xlat -> vid_b (-0.863), the tile fetch's 16-way glyph compare ->
+cc_hit_data -> ch_f (-0.243), and the texel queue's f_u -> m2_texel's cdata
+address (-0.068; it met on s299 and is left to placement). s305 died in the
+fitter with "Internal Error: Sub-system: DYN, dyn_enum.cpp line 186" -- a
+tool crash, not the design.
+
+  - m2_video: the palette's output registered (pr_q). hcnt at a ce edge E ->
+    line buffer E+1 -> palette address E+2 -> palette RAM E+3 -> its data E+4
+    -> this E+5 -> vid_r at the next ce edge, E+6 at the earliest (100/16
+    puts ce edges six or seven cycles apart). No slack left in that chain:
+    another stage would need vid_r to move to the ce edge after.
+  - m2_tile_fetch: F_CHIT registers the compare's hit and data before F_CHAR
+    acts on them; nothing writes the glyph cache between the two states.
+
+tools/m2-framediff.sh: byte-identical frame again (md5 1bb8097d...).
+
+**The clock groups (R568)** are in Model2.sdc with this change: clk_mem and
+the SDRAM pin clock asynchronous to clk_sys and the i960, which stay related
+to each other. The inventory that had to come first is R571.
