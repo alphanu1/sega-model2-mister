@@ -22938,3 +22938,23 @@ critical periods 3,251 against 3,492. The video move shows where it should:
 **tilemap scanline overruns median 17 -> 8, worst 57 -> 43** -- the fetch has
 twice the cycles a line on clk_mem. The late middle bands are unchanged
 (y 128-192), as expected: nothing in step 1 speeds up the fill.
+
+**R573, on the board -- s311: 100 / 60 / 30 RUNS.** STA timed clk_sys at 60.0
+and the i960 at 30.0 (Fmax 61.96 and 32.62; s312 met both, +0.526 and +2.681
+ns -- against R565's projected -2.22 and -3.56 before the timing work). s311
+misses by 0.113 ns on clk_sys (the TGP's S_DST -> src_val / lab_b_val, R565's
+list) and 0.060 on clk_mem (m2_sdram's bring-up init_cnt -> cmd). s313 died
+in the fitter: "Internal Error: Sub-system: A2T, a2t_recursive_visitor.cpp,
+Line: 2033" -- the third different Quartus internal error in three batches.
+
+240 s against s310 (100/50/25): the i960 2.21 -> 2.46 M instructions/s
+(+11% for +20% clock: memory-bound, as R562 measured); TGP idle waiting for
+work 35.5% -> 30.7%; the list's median ready time 7.3 -> 7.7 ms, worst 17.4 ->
+20.5 ms. Ben: "it's better, but still around 3-5 missing bands."
+
+WHAT BOUNDS THE BANDS NOW: of the band sequencer's critical time, texel wait
+78% (72% at 50), no-credit 3%, painter 3%. The fill got faster and the texel
+misses did not. The display list's readiness does not bound them: a finished
+list is swapped in at a frame start and a band fill never waits for it -- it
+decides whether a frame shows new geometry or holds the old list. Next: the
+texel misses' SDRAM latency (texel-first arbitration), then the i960 to 35.
