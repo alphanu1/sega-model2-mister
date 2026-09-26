@@ -23029,3 +23029,47 @@ pays the crossing twice instead of four times -- worth doing only if the CPU
 clock ever has to leave the 2:1 -- or less memory latency for the CPU port
 (it waits 4.7% of each frame for the bus; R574's priority class could take
 it). The i960 clock was never the band lever (R573).
+
+---
+
+**R577-R580 -- TOWARD 70 / 35: THE CORE AT 70 WITH THE i960 AT EXACTLY HALF.**
+
+Ben: "tgp at 70 then 70/35!" -- the core (and with it the TGP) at 70, the i960
+at 35 = clk_sys / 2, so the bridge keeps R464's single flop and none of R576's
+crossing cost. 70 is not a divide of 1,200; a 1,400 MHz VCO gives 100 (/14),
+70 (/20) and 35 (/40), inside Cyclone V's 600-1,600 MHz range.
+
+Sized on s312's netlist (the 60/30 build): every clk_sys endpoint with less
+than 2.381 ns slack at 60 fails at 70 -- 786 of them, worst -1.86 ns -- and
+the i960 at 35 fails only on fpmisc, which R575 already split. By block: the
+TGP core (ir -> x0 / isqrt_base / the FIFOs' mem_cnt / wp, ~500 endpoints,
+-1.86), geometry (p0prev -> c_zsel, -1.73), the quad store (qsy -> a_tiny,
+-1.56), the fill and its dividers (-1.40 / -1.13), the i960 bridge (its 2:1
+window shrinks to 14.29 ns, -0.95), the FP pool's adder (-0.93), the TGP's
+FIFOs (-1.28 / -0.44), the I/O board's Z80 (-0.82), the sound 68000 and
+MultiPCM (-0.28 / -0.16).
+
+  - R577, the TGP: u_dec and u_xfer take the program RAM's read data and their
+    45 outputs are registered in S_FETCH_W beside ir. The decode is ready in
+    S_DECODE exactly as before, so no instruction gains a cycle; every later
+    state starts from registers instead of from ir through two decoders.
+    test_mb86233_{mem,dec,xfer,seq,core} pass; the core's lockstep matches HEAD
+    (45 checks, 8,000 register compares, 0 diverged -- its own note says
+    microcode-driven lockstep is still owed, so the board is the real test).
+    test_mb86233_regs fails 46,966 of 3,000,000 -- IDENTICALLY AT HEAD, so it
+    predates this; most likely the bench still expects Model 1's FIFO map
+    that 0e49c54 moved. Recorded, not chased here.
+  - R578, geometry: Q_CHK picks z and decides "behind the eye" from hzmin /
+    hzmax, which are already latched with the polygon, instead of from the
+    four-way float min/max trees in Q_IDLE's cycle.
+  - R579, the quad store: tiny_quad's and band_range's min/max as balanced
+    trees (two compare-and-select levels, not three in series). tb_m2_raster3d
+    frame hashes identical on four scenes.
+  - R580: pll.v 70 / 35 (outclk_2, unused, moves to 50 so no two outputs are
+    identical); SYS_MHZ = 70 re-derives every rate R573 listed (UART divisor
+    608, sound link 22,400 cycles a byte, self-test 176.5 M cycles; every
+    counter width derives from its parameter).
+
+The fill, its dividers, the bridge, the pool adder and the sound/I/O CPUs are
+left for the first 70/35 build to rank: the Z80, 68000 and MultiPCM run on
+clock enables and may take multicycle exceptions rather than logic.
