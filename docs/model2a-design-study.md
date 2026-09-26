@@ -23429,3 +23429,63 @@ mixer: in R570's ce_pix accounting (6.25 clk_mem cycles a pixel) the palette
 data now lands at E+5 for a ce at E+6 at the earliest -- exactly in time. The
 2D frame diff runs at the hardware ce rate, 6- and 7-cycle gaps both, and
 caught R582's one-pixel shift: still EXACT against MAME, 190,464 of 190,464.
+
+**s344-s346 (R605 in): THE FIRST BATCH CLEAN ON EVERY CORE CLOCK, AND s346
+REPLACES s339.**
+
+| seed | clk_mem 100 | clk_sys 70 | clk_i960 35 | HDMI 148.5 | ALM |
+|---|---|---|---|---|---|
+| s344 | +0.498 | +0.312 | +3.736 | -0.264 | 40,782 |
+| s345 | +0.317 | +0.504 | +3.352 | -0.239 | 40,793 |
+| s346 | +0.362 | +0.774 | +2.835 | -0.162 | 40,886 |
+
+Holds positive, DQ packed, clk_mem global, no internal errors on any of the
+three. s346 has the widest worst-case core margin of any build (+0.362
+against s339's +0.002) and is on the board: TGP running, every textured
+pixel drawn, critical 627 and texel wait 481 over 240 s, late bands in 2 of
+26 samples (0:ffc1 = band 0 and bands 6-15; 1:0003 = bands 16-17).
+
+**WHERE THE REMAINING LATE BANDS COME FROM (Ben, on s346: "much less missing
+bands ... around 4 missing when it does happen, but less often ... no longer
+in the middle ... in the top third").** Three measurements:
+
+  1. It is not the collect. The store is double-banked (R211): the display
+     bank is complete and sorted at frame_start whatever the collecting bank
+     is doing. (decode_uart.py's "ready ms" still converts at 50 MHz --
+     multiply by 50/70 -- and it times the COLLECTING bank, not the one the
+     beam reads.)
+  2. The fill is beam-paced and falls behind in the top third -- the far
+     scenery, the horizon, the grandstands: many small, distant, textured
+     polygons.
+  3. Of the fill's critical time on s346, 77% is the span walk waiting for
+     texels (481 of 627); on s339 77% (891 of 1,155). The texel cache hits
+     71-77% of ~72,000 fetches a frame: ~20,000 misses, each an SDRAM round
+     trip through the clk_sys/clk_mem crossing.
+
+THE LEVER IS MIP LEVEL SELECTION. The reference picks a level per pixel from
+depth (model2rd.ipp:303):
+
+    mml   = -texlod + fast_log2(z)
+    level = clamp(mml >> 7, 0, max_level)      // then texwidth >> level,
+                                               // tex_x >> level, u >> level
+
+and this core always reads level 0 (R2xx, "DEFERRED, deliberately: bilinear
+filtering, mipmap level selection and the microtexture blend"). A distant
+polygon read at level 0 steps several texels per pixel, so almost every pixel
+lands on a new 64-bit cache line -- exactly the far scenery where the bands
+are late. At the right level the step is about one texel a pixel and the 2x2
+words and 8x2 lines give the locality §6.4 counted on ("Mipmapping helps --
+minified surfaces read smaller levels, improving hit rate"). It is also an
+ACCURACY fix: distant textures here are point-sampled at level 0 where the
+reference minifies them, and the road's wrong mid-to-long-distance texture
+(OPEN ISSUE, 2026-09-25) is a candidate for the same cause -- a hypothesis,
+to be tested, not a finding.
+
+Cost: per pixel, a log2 of 1/z (the span walk already has 1/z), a subtract,
+a shift and a clamp, and the texel address shifted by the level. No M10K --
+the levels live in the texture sheets already (texsheet[level & 1]). Point
+sample at the selected level first; MAME's blend with level + 1 is a second
+fetch per pixel and waits until the first half is measured.
+
+Measure before building: tb_m2_span_tex with a minified scene, misses per
+fetch at level 0 against at the selected level.
