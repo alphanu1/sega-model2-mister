@@ -5969,6 +5969,10 @@ localparam bit DEBUG = 1'b0;
 `else
 localparam bit DEBUG = 1'b1;
 `endif
+// R612: with the stream compiled out (M2_NO_DEBUG) nothing else drives it.
+generate if (!DEBUG) begin : g_nodbg_sw
+	assign sw_take = 1'b0;
+end endgenerate
 
 // AND THE TWO INSTRUMENTS ARE NOW SEPARATELY SWITCHED, because the design
 // stopped fitting and they are not worth the same.

@@ -471,6 +471,13 @@ set_global_assignment -name VERILOG_MACRO "MISTER_DISABLE_YC=1"
 # list's objects point at, which is the question the 3D work now turns on.
 set_global_assignment -name VERILOG_MACRO "M2_NO_OVERLAY=1"
 
+# THE KEEPER BUILD DROPS THE UART STREAM TOO (R612). R607 (front to back) and
+# R609 (the road) took the design to "requires 4226 LABs, the device contains
+# only 4191". The stream and the counters that only feed it are the one block
+# the picture does not need. Comment this line out for a MEASUREMENT build --
+# every capture tool reads that stream.
+set_global_assignment -name VERILOG_MACRO "M2_NO_DEBUG=1"
+
 # Disable ALSA audio output to save some resources.
 # ENABLED, 251.5 ALM. ALSA is the HPS/Linux audio channel INTO audio_out's
 # mixer, not an output: `core_l`/`core_r` carry this core's sound and sit
