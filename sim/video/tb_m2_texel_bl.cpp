@@ -109,27 +109,41 @@ int main(int argc, char **argv) {
   d = new Vm2_texel_bl;
   d->clk = 0; d->rst_n = 0; d->base_s0 = BASE0; d->base_s1 = BASE1; d->bilinear = 1;
   d->req = 0; d->m_ack = 0; d->m2_ack = 0; d->m2_en = 1; d->inval = 0;
+  d->m3_ack = 0; d->m4_ack = 0; d->m3_en = 1; d->m4_en = 1;   // R628: used when built NS=4
   auto tick = [&]() { d->clk = 0; d->eval(); d->clk = 1; d->eval(); };
   for (int i = 0; i < 8; i++) tick();
   d->rst_n = 1;
   std::deque<Req> sent;
   long issued = 0, answered = 0, cyc = 0;
-  int lat0 = -1, lat1 = -1; uint32_t a0 = 0, a1 = 0;
+  int lat[4] = {-1, -1, -1, -1}; uint32_t ad[4] = {0, 0, 0, 0};
   Req cur{}; bool have = false;
   const int pat = 0;
   while (answered < N && cyc < N * 60) {
     ++cyc;
     // memory: random latency on each port
-    d->m_ack = 0; d->m2_ack = 0;
-    if (d->m_req && lat0 < 0) { lat0 = 2 + rng() % 30; a0 = d->m_addr; }
-    if (lat0 == 0) { d->m_ack = 1; d->m_data = line_at(a0); }
-    if (lat0 >= 0) --lat0;
-    if (d->m2_req && lat1 < 0) { lat1 = 2 + rng() % 30; a1 = d->m2_addr; }
-    if (lat1 == 0) { d->m2_ack = 1; d->m2_data = line_at(a1); }
-    if (lat1 >= 0) --lat1;
-    // occasional port-2 off stretches and sweeps
+    d->m_ack = 0; d->m2_ack = 0; d->m3_ack = 0; d->m4_ack = 0;
+    {
+      const bool rq[4] = {(bool)d->m_req, (bool)d->m2_req, (bool)d->m3_req, (bool)d->m4_req};
+      const uint32_t aa[4] = {d->m_addr, d->m2_addr, d->m3_addr, d->m4_addr};
+      for (int p = 0; p < 4; p++) {
+        if (rq[p] && lat[p] < 0) { lat[p] = 2 + rng() % 30; ad[p] = aa[p]; }
+        if (lat[p] == 0) {
+          const uint64_t l = line_at(ad[p]);
+          if (p == 0) { d->m_ack = 1; d->m_data = l; }
+          if (p == 1) { d->m2_ack = 1; d->m2_data = l; }
+          if (p == 2) { d->m3_ack = 1; d->m3_data = l; }
+          if (p == 3) { d->m4_ack = 1; d->m4_data = l; }
+        }
+        if (lat[p] >= 0) --lat[p];
+      }
+    }
+    // occasional port-off stretches (2, and 3/4 when built NS=4) and sweeps
     if ((cyc % 50000) == 20000) d->m2_en = 0;
     if ((cyc % 50000) == 30000) d->m2_en = 1;
+    if ((cyc % 70000) == 10000) d->m3_en = 0;
+    if ((cyc % 70000) == 35000) d->m3_en = 1;
+    if ((cyc % 90000) == 40000) d->m4_en = 0;
+    if ((cyc % 90000) == 41000) d->m4_en = 1;
     d->inval = ((cyc % 37000) == 100) ? 1 : 0;
     // requests: coherent runs (a span walking a texture) and random jumps
     if (!have && issued < N && (rng() % 4)) {

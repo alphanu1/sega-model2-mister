@@ -105,6 +105,9 @@ int main(int argc, char **argv) {
   d->tex_m2_ack = 0; d->tex_m2_data = 0;
   // The board raises this once boot is done and never lowers it.
   d->tex_m2_en = 1;                                        // R517
+  // R628: slots 2 and 3 (a TXNS=4 build); M2_R3D_NS2 keeps them off
+  d->tex_m3_en = std::getenv("M2_R3D_NS2") ? 0 : 1; d->tex_m4_en = d->tex_m3_en;
+  d->tex_m3_ack = 0; d->tex_m4_ack = 0;
   // R620: M2_R3D_POINT selects the nearest-texel mode; bilinear otherwise,
   // as the OSD's default is.
   d->tex_bilinear = std::getenv("M2_R3D_POINT") ? 0 : 1;
@@ -154,7 +157,7 @@ int main(int argc, char **argv) {
   static const long SWEEP = std::getenv("M2_R3D_SWEEP")
                           ? atol(std::getenv("M2_R3D_SWEEP")) : 0;
   long sweep_ctr = 0;
-  int tex_wait = -1, tex2_wait = -1;
+  int tex_wait = -1, tex2_wait = -1, tex3_wait = -1, tex4_wait = -1;
   auto tick = [&]() {
     if (SWEEP) {
       if (++sweep_ctr >= SWEEP) { sweep_ctr = 0; d->tex_inval = 1; }
@@ -168,6 +171,11 @@ int main(int argc, char **argv) {
       d->tex_m_ack = 1;
       d->tex_m_data = texpat_line(d->tex_m_addr, d->tex_base0);
     }
+    // R628: ports 3 and 4 answer like port 2 (their own round trip)
+    if (d->tex_m3_req && tex3_wait < 0) tex3_wait = TEXLAT + 6;
+    if (tex3_wait == 0) { d->tex_m3_ack = 1; d->tex_m3_data = texpat_line(d->tex_m3_addr, d->tex_base0); }
+    if (d->tex_m4_req && tex4_wait < 0) tex4_wait = TEXLAT + 6;
+    if (tex4_wait == 0) { d->tex_m4_ack = 1; d->tex_m4_data = texpat_line(d->tex_m4_addr, d->tex_base0); }
     if (d->tex_m2_req && tex2_wait < 0) tex2_wait = TEXLAT + 6;
     if (tex2_wait == 0) {
       d->tex_m2_ack = 1;
@@ -228,6 +236,10 @@ int main(int argc, char **argv) {
     }
     if (d->tex_m_ack) { d->tex_m_ack = 0; tex_wait = -1; }
     else if (tex_wait > 0) --tex_wait;
+    if (d->tex_m3_ack) { d->tex_m3_ack = 0; tex3_wait = -1; }
+    else if (tex3_wait > 0) --tex3_wait;
+    if (d->tex_m4_ack) { d->tex_m4_ack = 0; tex4_wait = -1; }
+    else if (tex4_wait > 0) --tex4_wait;
     if (d->tex_m2_ack) { d->tex_m2_ack = 0; tex2_wait = -1; }
     else if (tex2_wait > 0) --tex2_wait;    // R539: where the fill's time goes, a cycle at a time.
     ++fill_hist[d->dbg_fill_hot & 31];

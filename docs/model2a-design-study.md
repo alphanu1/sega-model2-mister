@@ -24302,3 +24302,36 @@ THE FIXES:
 Ben asked whether 80/40 would help: no -- the stall is SDRAM latency in
 nanoseconds, which a faster core clock only turns into more cycles of
 waiting; clk_sys closes at +0.47 at 70 and the device is at 99%.
+
+**R628 -- MORE TEXEL READS IN FLIGHT: MEASURED, PARKED ON AREA.** Ben: "the
+bandwidth is there, it doesn't consume it all" -- right: two cache lines in
+flight (one per SDRAM port) and in-order answers are the limit, not the
+SDRAM's rate. Asked to decouple the SDRAM onto its own ~133 MHz clock: 8 of
+m2_sdram's 11 ports already cross from clk_sys (they would simply cross to
+the faster clock), but the 3 on clk_mem -- both texel ports and the
+character cache -- would gain a crossing that costs about what the faster
+access saves; the gain is less queueing behind the other masters. s407 at
+133 MHz: 2,120 clk_mem paths under 2.5 ns of slack (texel cache 1,213,
+character cache 342, tile fetch 91, m2_sdram 87, ...). Ben chose reads in
+flight first.
+
+m2_texel_bl NS (miss slots, one SDRAM port each: m, m2, and now m3, m4 for
+NS = 4). NS = 2 is cycle-identical to before (tb_m2_texel_bl: 4,225,392
+cycles, same hits and misses); NS = 4 exact, 1,000,000 checks, 0 fails at
+IB 11 and 8. Frame 2000, PIXSTEP 4, TXLATE 3, board clock ratio, pixels
+with no fetch:
+
+    slots x response queue    ALM (standalone)   latency 40   60     100
+    2 x 4 (s408)                  1,183             0.0%     4.6%   4.6%+
+    2 x 8                         1,421                      4.5%
+    4 x 4                         1,539             0.0%     4.6%   4.6%
+    4 x 8                         1,820             0.0%     0.0%   4.5%
+    4 x 8, 16 in flight                                      0.0%   4.5%
+
+(4 x 8 texel-wait at 60: 42%, against 54% at 2 x 4.) Only both together
+move the threshold (latency ~40 -> ~60-80 core cycles): four slots with a
+four-deep queue cannot discover the misses; an eight-deep queue with two
+slots cannot issue them. +637 ALM, plus two SDRAM ports, against ~500 free:
+it does not fit without freeing area -- a study-level decision. PARKED until
+the board says whether R627 (TXLATE) alone keeps the bands: if it does, the
+board's miss latency is inside the range the 2 x 4 cache covers.

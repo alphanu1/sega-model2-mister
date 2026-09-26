@@ -55,6 +55,10 @@
 module m2_texel_bl #(
   parameter int unsigned AW = 25,
   parameter int unsigned RSP_D = 8,   // response entries; a power of two
+  // R628: MISS SLOTS, ONE SDRAM PORT EACH -- 2 (m, m2) or 4 (m, m2, m3, m4).
+  // Two lines in flight was the limit on the board (R627: D blocked with both
+  // ports busy 97% of its stalls).
+  parameter int unsigned NS = 2,
   parameter int unsigned IB = 11      // index bits a bank, 8..11: 2048 lines is
                                       // m2_texel's IDX_BITS 12 (R453) in two halves
 ) (
@@ -81,6 +85,11 @@ module m2_texel_bl #(
   output logic [AW:1]      m2_addr,
   input  logic             m2_ack,
   input  logic [63:0]      m2_data,
+  input  logic             m3_en, m4_en,   // R628: slots 2 and 3 (NS = 4)
+  output logic             m3_req, m4_req,
+  output logic [AW:1]      m3_addr, m4_addr,
+  input  logic             m3_ack, m4_ack,
+  input  logic [63:0]      m3_data, m4_data,
 
   input  logic             inval,
   output logic [31:0]      dbg_hits,
@@ -297,17 +306,37 @@ module m2_texel_bl #(
   // texels take their nibble from the slot at the HEAD of the response queue,
   // not wherever they wait -- four selectors, where one per waiting texel was
   // thirty-two, 64 bits wide, and most of this module's area (s387: 2,000 ALM).
-  logic          ms_busy [2], ms_done [2], ms_filled [2];
-  tx_t           ms_line [2];
-  logic [63:0]   ms_dat  [2];
-  logic [9:0]    ms_to   [2];
+  localparam int unsigned SW = (NS > 2) ? 2 : 1;       // slot index width
+  logic          ms_busy [NS], ms_done [NS], ms_filled [NS];
+  tx_t           ms_line [NS];
+  logic [63:0]   ms_dat  [NS];
+  logic [9:0]    ms_to   [NS];
+  // the ports, as arrays: slot s asks port s
+  logic          mq_req  [NS];
+  logic [AW:1]   mq_addr [NS];
+  // (packed vectors and plain assigns: Quartus 17 is not trusted with '{...}
+  // on an unpacked net)
+  wire [3:0]     mq_en  = {m4_en, m3_en, m2_en, 1'b1};
+  wire [3:0]     mq_ack = {m4_ack, m3_ack, m2_ack, m_ack};
+  logic [63:0]   mq_data [4];
+  assign mq_data[0] = m_data;  assign mq_data[1] = m2_data;
+  assign mq_data[2] = m3_data; assign mq_data[3] = m4_data;
+  assign m_req  = mq_req[0];   assign m_addr  = mq_addr[0];
+  assign m2_req = mq_req[1];   assign m2_addr = mq_addr[1];
+  generate if (NS > 2) begin : g_p34
+    assign m3_req = mq_req[2]; assign m3_addr = mq_addr[2];
+    assign m4_req = mq_req[3]; assign m4_addr = mq_addr[3];
+  end else begin : g_no34
+    assign m3_req = 1'b0; assign m3_addr = '0;
+    assign m4_req = 1'b0; assign m4_addr = '0;
+  end endgenerate
   logic          fill_now;          // a done miss is taken for writing this cycle
-  logic          fill_sel;
   // R627: THE FILL IS WRITTEN FROM REGISTERS, a cycle after it is taken
   // (standalone: ms_done -> the RAM's write address was the worst path left).
   // The line, index and tag are copied here, so the slot may be released
   // behind it; a lookup of the line in between misses and joins or refetches.
-  logic          fl_v, fl_b, fl_s;   // fl_s: the slot being written
+  logic          fl_v, fl_b;
+  logic [SW-1:0] fl_s;               // the slot being written
   logic [IB-1:0] fl_i;
   logic [63:0]   fl_d;
   logic [TB:0]   fl_t;
@@ -317,7 +346,7 @@ module m2_texel_bl #(
   logic [3:0]    rs_rdy  [RSP_D];
   logic [3:0]    rs_nib  [RSP_D][4];
   logic [3:0]    rs_pend [RSP_D];     // waiting on a miss
-  logic          rs_slot [RSP_D][4];  // which miss
+  logic [SW-1:0] rs_slot [RSP_D][4];  // which miss
   logic [3:0]    rs_sel  [RSP_D][4];  // sel_of() -- all the head needs
   logic [8:0]    rs_uf   [RSP_D], rs_vf [RSP_D];
   logic          rs_tl   [RSP_D], rs_bl [RSP_D];
@@ -479,18 +508,26 @@ module m2_texel_bl #(
   logic [RW-1:0] d_ent;
   tx_t           d_t0, d_t1;
   logic          d_hit0, d_hit1;
-  logic [1:0]    d_j0, d_j1;      // {joined, slot}
+  logic [SW:0]   d_j0, d_j1;      // {joined, slot}
   logic [3:0]    d_nb0 [4], d_nb1 [4];
 
   // ------------------------------------------------------------ inval
   logic inval_d, inval_pend;
 
   // ------------------------------------------------------------ D's decision
-  wire ms_free0 = !ms_busy[0];
-  wire ms_free1 = m2_en && !ms_busy[1];
-  wire d_need0 = d_v && d_has0 && !d_hit0 && !d_j0[1];   // a new miss
-  wire d_need1 = d_v && d_has1 && !d_hit1 && !d_j1[1];
-  wire [1:0] d_nfree = 2'(ms_free0) + 2'(ms_free1);
+  logic [NS-1:0] ms_free;
+  always_comb for (int k = 0; k < NS; k++) ms_free[k] = mq_en[k] && !ms_busy[k];
+  wire d_need0 = d_v && d_has0 && !d_hit0 && !d_j0[SW];   // a new miss
+  wire d_need1 = d_v && d_has1 && !d_hit1 && !d_j1[SW];
+  // the first free slot, and the first after it
+  logic [SW-1:0] fs_a, fs_b;
+  logic          fs_av, fs_bv;
+  always_comb begin
+    fs_a = '0; fs_b = '0; fs_av = 1'b0; fs_bv = 1'b0;
+    for (int k = NS - 1; k >= 0; k--) if (ms_free[k]) begin fs_a = SW'(k); fs_av = 1'b1; end
+    for (int k = NS - 1; k >= 0; k--) if (ms_free[k] && SW'(k) != fs_a) begin fs_b = SW'(k); fs_bv = 1'b1; end
+  end
+  wire [1:0] d_nfree = fs_bv ? 2'd2 : (fs_av ? 2'd1 : 2'd0);   // capped at two: D needs at most two
   // no free slot for a needed miss: hold. Two needed, one free: take the
   // bank-0 line now and hold for the bank-1 line (with the second port off,
   // m2_en low, two at once would never be free).
@@ -498,20 +535,24 @@ module m2_texel_bl #(
   wire d_split = d_v && d_need0 && d_need1 && (d_nfree == 2'd1);
   wire d_stall = d_block || d_split;
   // the slot each new miss takes: bank 0 the first free, bank 1 the other
-  wire d_s0 = ms_free0 ? 1'b0 : 1'b1;
-  wire d_s1 = d_need0 ? ~d_s0 : (ms_free0 ? 1'b0 : 1'b1);
+  wire [SW-1:0] d_s0 = fs_a;
+  wire [SW-1:0] d_s1 = d_need0 ? fs_b : fs_a;
   wire d_do1 = !d_split;
   wire fa0 = d_v && !d_block && d_need0;                  // allocations this cycle,
   wire fa1 = d_v && !d_block && d_need1 && d_do1;         // forwarded to C1's joins
 
-  wire ms_fill0 = ms_busy[0] && ms_done[0] && !ms_filled[0];
-  wire ms_fill1 = ms_busy[1] && ms_done[1] && !ms_filled[1];
-  assign fill_sel = ms_fill0 ? 1'b0 : 1'b1;
-  assign fill_now = !sweeping && (ms_fill0 || ms_fill1);
-  // texels waiting on each slot
-  logic [1:0] ms_ref;
+  logic [SW-1:0] fill_s;
+  logic          fill_any;
   always_comb begin
-    ms_ref = 2'b00;
+    fill_s = '0; fill_any = 1'b0;
+    for (int k = NS - 1; k >= 0; k--)
+      if (ms_busy[k] && ms_done[k] && !ms_filled[k]) begin fill_s = SW'(k); fill_any = 1'b1; end
+  end
+  assign fill_now = !sweeping && fill_any;
+  // texels waiting on each slot
+  logic [NS-1:0] ms_ref;
+  always_comb begin
+    ms_ref = '0;
     for (int e = 0; e < RSP_D; e++)
       for (int k = 0; k < 4; k++)
         if (rs_pend[e][k]) ms_ref[rs_slot[e][k]] = 1'b1;
@@ -580,27 +621,33 @@ module m2_texel_bl #(
   wire rdw1 = fw_v &&  fw_b && (fw_i == ra1_d);
   wire c_hit0 = ct0_q[TB] && (ct0_q[TB-1:0] == tag_of(c_t0)) && !rdw0;
   wire c_hit1 = ct1_q[TB] && (ct1_q[TB-1:0] == tag_of(c_t1)) && !rdw1;
-  function automatic logic [1:0] join_of(input tx_t t);
+  function automatic logic [SW:0] join_of(input tx_t t);
     // {found, slot}: a slot fetching this line, or one D allocates for it now
-    join_of = 2'b00;
-    if      (ms_busy[0] && same_line(ms_line[0], t)) join_of = 2'b10;
-    else if (ms_busy[1] && same_line(ms_line[1], t)) join_of = 2'b11;
-    else if (fa0 && same_line(d_t0, t))              join_of = {1'b1, d_s0};
-    else if (fa1 && same_line(d_t1, t))              join_of = {1'b1, d_s1};
+    join_of = '0;
+    if      (fa0 && same_line(d_t0, t)) join_of = {1'b1, d_s0};
+    else if (fa1 && same_line(d_t1, t)) join_of = {1'b1, d_s1};
+    for (int k = NS - 1; k >= 0; k--)
+      if (ms_busy[k] && same_line(ms_line[k], t)) join_of = {1'b1, SW'(k)};
   endfunction
-  wire [1:0] c_j0 = join_of(c_t0), c_j1 = join_of(c_t1);
+  wire [SW:0] c_j0 = join_of(c_t0), c_j1 = join_of(c_t1);
   // slots that must not be released this cycle: named by C1 as it moves to
   // D, or by D as it writes. A STAGE THAT IS HELD NAMES NOTHING -- a blocked D
   // waiting for a free slot must not keep its own joined slot from being
   // freed (that wedged the first retimed version); instead, a slot released
   // under a held D's join drops the join, and D fetches the line afresh.
-  logic [1:0] names;
+  logic [NS-1:0] names;
   always_comb begin
-    names = 2'b00;
-    if (c_v && !d_stall && c_has0 && c_j0[1]) names[c_j0[0]] = 1'b1;
-    if (c_v && !d_stall && c_has1 && c_j1[1]) names[c_j1[0]] = 1'b1;
-    if (d_v && !d_block && d_has0 && d_j0[1]) names[d_j0[0]] = 1'b1;
-    if (d_v && !d_block && d_has1 && d_j1[1] && d_do1) names[d_j1[0]] = 1'b1;
+    names = '0;
+    if (c_v && !d_stall && c_has0 && c_j0[SW]) names[c_j0[SW-1:0]] = 1'b1;
+    if (c_v && !d_stall && c_has1 && c_j1[SW]) names[c_j1[SW-1:0]] = 1'b1;
+    if (d_v && !d_block && d_has0 && d_j0[SW]) names[d_j0[SW-1:0]] = 1'b1;
+    if (d_v && !d_block && d_has1 && d_j1[SW] && d_do1) names[d_j1[SW-1:0]] = 1'b1;
+  end
+
+  logic ms_busy_any;
+  always_comb begin
+    ms_busy_any = 1'b0;
+    for (int k = 0; k < NS; k++) ms_busy_any = ms_busy_any | ms_busy[k];
   end
 
   // the head's answer, registered once all four texels are in
@@ -623,21 +670,20 @@ module m2_texel_bl #(
       c_ent <= '0; c_t0 <= '0; c_t1 <= '0;
       for (int k = 0; k < 4; k++) c_sel[k] <= '0;
       ra0_d <= '0; ra1_d <= '0; fw_v <= 1'b0; fw_b <= 1'b0; fw_i <= '0;
-      fl_v <= 1'b0; fl_b <= 1'b0; fl_s <= 1'b0; fl_i <= '0; fl_d <= '0; fl_t <= '0;
+      fl_v <= 1'b0; fl_b <= 1'b0; fl_s <= '0; fl_i <= '0; fl_d <= '0; fl_t <= '0;
       d_v <= 1'b0; d_k0 <= '0; d_k1 <= '0; d_has0 <= 1'b0; d_has1 <= 1'b0;
       d_ent <= '0; d_t0 <= '0; d_t1 <= '0; d_hit0 <= 1'b0; d_hit1 <= 1'b0;
       d_j0 <= '0; d_j1 <= '0;
       for (int k = 0; k < 4; k++) begin d_nb0[k] <= '0; d_nb1[k] <= '0; end
-      for (int k = 0; k < 2; k++) begin
+      for (int k = 0; k < NS; k++) begin
         ms_busy[k] <= 1'b0; ms_done[k] <= 1'b0; ms_filled[k] <= 1'b0; ms_line[k] <= '0;
-        ms_dat[k] <= '0; ms_to[k] <= '0;
+        ms_dat[k] <= '0; ms_to[k] <= '0; mq_req[k] <= 1'b0; mq_addr[k] <= '0;
       end
-      m_req <= 1'b0; m_addr <= '0; m2_req <= 1'b0; m2_addr <= '0;
       rs_wp <= '0; rs_rp <= '0;
       for (int e = 0; e < RSP_D; e++) begin
         rs_used[e] <= 1'b0; rs_rdy[e] <= '0; rs_pend[e] <= '0;
         rs_uf[e] <= '0; rs_vf[e] <= '0; rs_tl[e] <= 1'b0; rs_bl[e] <= 1'b0;
-        for (int k = 0; k < 4; k++) begin rs_nib[e][k] <= '0; rs_slot[e][k] <= 1'b0; rs_sel[e][k] <= '0; end
+        for (int k = 0; k < 4; k++) begin rs_nib[e][k] <= '0; rs_slot[e][k] <= '0; rs_sel[e][k] <= '0; end
       end
       ack <= 1'b0; texel <= '0; o_q <= '0; h1_q <= '0; h2_q <= '0; v1_q <= '0;
       sweep <= '0; sweeping <= 1'b1; inval_d <= 1'b0; inval_pend <= 1'b0;
@@ -651,7 +697,7 @@ module m2_texel_bl #(
         sweep <= sweep + 1'd1;
         if (sweep == IB'(LINES - 1)) begin sweeping <= 1'b0; inval_pend <= 1'b0; end
       end else if (inval_pend && !k_v[0] && !a_v && !p_v && !b_v && !c_v && !d_v && rs_empty
-                   && !ms_busy[0] && !ms_busy[1]) begin
+                   && !ms_busy_any) begin
         sweep <= '0; sweeping <= 1'b1;
         if (!(&dbg_sweeps)) dbg_sweeps <= dbg_sweeps + 1'd1;
       end
@@ -737,11 +783,11 @@ module m2_texel_bl #(
       fw_v  <= fl_v && !sweeping; fw_b <= wr1; fw_i <= wa;   // what was written
       fl_v  <= fill_now;
       if (fill_now) begin
-        fl_b <= ms_line[fill_sel].rp[0];
-        fl_s <= fill_sel;
-        fl_i <= idx_of(ms_line[fill_sel]);
-        fl_d <= ms_dat[fill_sel];
-        fl_t <= {1'b1, tag_of(ms_line[fill_sel])};
+        fl_b <= ms_line[fill_s].rp[0];
+        fl_s <= fill_s;
+        fl_i <= idx_of(ms_line[fill_s]);
+        fl_d <= ms_dat[fill_s];
+        fl_t <= {1'b1, tag_of(ms_line[fill_s])};
       end
       if (!d_stall) begin
         c_v <= l_go;
@@ -773,26 +819,24 @@ module m2_texel_bl #(
             if (d_hit0) begin
               rs_nib[d_ent][k] <= d_nb0[k]; rs_rdy[d_ent][k] <= 1'b1;
             end else begin
-              rs_pend[d_ent][k] <= 1'b1; rs_slot[d_ent][k] <= d_j0[1] ? d_j0[0] : d_s0;
+              rs_pend[d_ent][k] <= 1'b1; rs_slot[d_ent][k] <= d_j0[SW] ? d_j0[SW-1:0] : d_s0;
             end
           end
           if (d_k1[k] && d_do1) begin
             if (d_hit1) begin
               rs_nib[d_ent][k] <= d_nb1[k]; rs_rdy[d_ent][k] <= 1'b1;
             end else begin
-              rs_pend[d_ent][k] <= 1'b1; rs_slot[d_ent][k] <= d_j1[1] ? d_j1[0] : d_s1;
+              rs_pend[d_ent][k] <= 1'b1; rs_slot[d_ent][k] <= d_j1[SW] ? d_j1[SW-1:0] : d_s1;
             end
           end
         end
         if (d_need0) begin
           ms_busy[d_s0] <= 1'b1; ms_done[d_s0] <= 1'b0; ms_filled[d_s0] <= 1'b0; ms_to[d_s0] <= '0; ms_line[d_s0] <= d_t0;
-          if (!d_s0) begin m_req  <= 1'b1; m_addr  <= (d_t0.sheet ? base_s1 : base_s0) + AW'({d_t0.rp, d_t0.cg, 2'b00}); end
-          else       begin m2_req <= 1'b1; m2_addr <= (d_t0.sheet ? base_s1 : base_s0) + AW'({d_t0.rp, d_t0.cg, 2'b00}); end
+          mq_req[d_s0] <= 1'b1; mq_addr[d_s0] <= (d_t0.sheet ? base_s1 : base_s0) + AW'({d_t0.rp, d_t0.cg, 2'b00});
         end
         if (d_need1 && d_do1) begin
           ms_busy[d_s1] <= 1'b1; ms_done[d_s1] <= 1'b0; ms_filled[d_s1] <= 1'b0; ms_to[d_s1] <= '0; ms_line[d_s1] <= d_t1;
-          if (!d_s1) begin m_req  <= 1'b1; m_addr  <= (d_t1.sheet ? base_s1 : base_s0) + AW'({d_t1.rp, d_t1.cg, 2'b00}); end
-          else       begin m2_req <= 1'b1; m2_addr <= (d_t1.sheet ? base_s1 : base_s0) + AW'({d_t1.rp, d_t1.cg, 2'b00}); end
+          mq_req[d_s1] <= 1'b1; mq_addr[d_s1] <= (d_t1.sheet ? base_s1 : base_s0) + AW'({d_t1.rp, d_t1.cg, 2'b00});
         end
         if (d_need0 || (d_need1 && d_do1)) begin if (!(&dbg_misses)) dbg_misses <= dbg_misses + 1'd1; end
         else if (!(&dbg_hits)) dbg_hits <= dbg_hits + 1'd1;
@@ -800,23 +844,21 @@ module m2_texel_bl #(
       end
 
       // ---- the misses: data in, timeout, fill
-      for (int s = 0; s < 2; s++) begin
+      for (int s = 0; s < NS; s++) begin
         if (ms_busy[s] && !ms_done[s]) begin
           ms_to[s] <= ms_to[s] + 1'd1;
           if (&ms_to[s]) begin
             // the memory never answered: answer with what is in hand (zeros)
             ms_done[s] <= 1'b1; ms_dat[s] <= '0;
-            if (s == 0) m_req <= 1'b0; else m2_req <= 1'b0;
+            mq_req[s] <= 1'b0;
             if (!(&dbg_lost)) dbg_lost <= dbg_lost + 1'd1;
           end
         end
       end
-      if (m_ack && ms_busy[0] && !ms_done[0]) begin
-        ms_dat[0] <= m_data; ms_done[0] <= 1'b1; m_req <= 1'b0;
-      end
-      if (m2_ack && ms_busy[1] && !ms_done[1]) begin
-        ms_dat[1] <= m2_data; ms_done[1] <= 1'b1; m2_req <= 1'b0;
-      end
+      for (int s = 0; s < NS; s++)
+        if (mq_ack[s] && ms_busy[s] && !ms_done[s]) begin
+          ms_dat[s] <= mq_data[s]; ms_done[s] <= 1'b1; mq_req[s] <= 1'b0;
+        end
       // the head's waiting texels take their nibble once their miss is done
       if (!rs_empty)
         for (int k = 0; k < 4; k++)
@@ -824,16 +866,16 @@ module m2_texel_bl #(
             rs_nib[rs_hd][k] <= nib(ms_dat[rs_slot[rs_hd][k]], rs_sel[rs_hd][k]);
             rs_rdy[rs_hd][k] <= 1'b1; rs_pend[rs_hd][k] <= 1'b0;
           end
-      if (fill_now) ms_filled[fill_sel] <= 1'b1;   // written this cycle
+      if (fill_now) ms_filled[fill_s] <= 1'b1;   // written this cycle
       // released once filled and no texel waits on it -- nor is about to
       // (named by C1's or D's join)
-      for (int s = 0; s < 2; s++)
+      for (int s = 0; s < NS; s++)
         // ... and not before its line is IN the RAM (the write lands a cycle
         // after the fill is taken): a lookup in that gap joins the slot
-        if (ms_busy[s] && ms_filled[s] && !ms_ref[s] && !names[s] && !(fl_v && fl_s == 1'(s))) begin
+        if (ms_busy[s] && ms_filled[s] && !ms_ref[s] && !names[s] && !(fl_v && fl_s == SW'(s))) begin
           ms_busy[s] <= 1'b0;
-          if (d_j0 == {1'b1, 1'(s)}) d_j0 <= 2'b00;   // only a held D can still name it
-          if (d_j1 == {1'b1, 1'(s)}) d_j1 <= 2'b00;
+          if (d_j0 == {1'b1, SW'(s)}) d_j0 <= '0;   // only a held D can still name it
+          if (d_j1 == {1'b1, SW'(s)}) d_j1 <= '0;
         end
 
       // ---- answer the head
