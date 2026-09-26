@@ -23998,3 +23998,19 @@ sample. Two shapes:
 To be decided on measurement: the 3D differential frame, counted per pixel
 at PIXSTEP 1 -- distinct lines a bilinear sample needs, and how often a
 small window of recent lines already holds them.
+
+MEASURED (frame 2000, every textured pixel in scan order, the 2x2 block at
+MAME's texel): distinct cache lines a block needs -- 1: 43.8%, 2: 50.0%,
+4: 6.2%. Option A, banked by row-pair parity: one access 87.5%, two 12.5%,
+1.125 a pixel (point sampling at PIXSTEP 1 is 1.0). Option B, a window of
+recent lines: 0.68 line fetches a pixel with 2 lines, 0.52 with 4, no better
+with 8 or 16 -- fewer fetches, but each a full round trip, so B needs a
+non-blocking prefetch window with slot tracking in the walk.
+
+CHOSEN: A. The walk keeps its pipeline (one request a pixel, answers in
+order, TXK in flight); the cache answers with the 2x2 block (16 bits) and
+the walk blends it with the fractions it already computes. The OSD switch
+selects the blend or the nearest of the four -- with u' = u - 0.5 the
+nearest IS today's point sample, so "off" is today's picture. The 2 M10K
+the banks cost come from the geometry push queue moving to MLAB. Colour stays
+linear for now; the luma table and ramp are a separate step.
