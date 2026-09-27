@@ -24641,3 +24641,62 @@ priority class): all fit (41,334-41,407 ALM). s431: clk_mem +0.201, clk_sys
 +0.266, clk_i960 +2.925, holds +0.119..+0.264, HDMI -0.296 -- clean,
 deployed 18:01. s429 clk_mem -0.151, s430 clk_sys -0.551: not used. The
 tile overruns are judged by eye on this one (no counter in the keeper).
+
+**R640 -- THE 3D LAYER INTO A DDR3 FRAMEBUFFER: THE ddr3 BRANCH, PORTED.**
+
+Ben: "just use this for 3D as its mostly done. check it works then plan to
+push 2D there too". Branch `ddr3` (R345-R380 in its own numbering, forked
+304 commits back at 64bd446) had the pieces -- m2_ddr3 (the DDRAM master,
+BURSTCNT/BUSY honoured, BASE 29'h04C0_0000 in 64-bit words), m2_ddr3_arb
+(reader first), m2_fb_write (spans to DDR3, a clear per list), m2_fb_read (a
+line ahead of the beam into a two-line buffer), and R358/R359's sequencing (a
+list drawn ONCE, shown only when complete). Its board record: the read path
+proven (65,535 lines, 0 late, R377); the write path never run against a
+working reader; the coprocessor dying the moment the reader worked (R380).
+
+Ported rather than rebased (Model2.sv and m2_raster3d have moved too far):
+the four modules and their benches as they were (89 checks, pass unchanged),
+and m2_raster3d's FB_DDR3 path re-applied to today's renderer with:
+
+  - THE LINE-AHEAD REQUEST CROSSES A CLOCK NOW. The branch sampled scan_y on
+    `clk` and said itself it was safe only while the scan shared that clock;
+    since R564 the scan is on clk_mem. A toggle in scan_clk's domain, two
+    flops into clk, and the line number sampled once the toggle has arrived
+    (it changes once a line, ~4,000 cycles).
+  - FTB = 0 WITH THE FRAMEBUFFER (a generate refuses the combination): R607's
+    front-to-back mask is fed by the painting band, and there are no bands.
+    The store sorts back to front, as before R607.
+  - TXLATE is inert (tex_late forced 0): nothing is ever late, so bilinear
+    always.
+  - MOIRE in m2_fb_write: the stipple !((x^y)&1) keeps one half of every
+    two-pixel word on a line -- a byte enable, no extra traffic. Bench: 16
+    stippled spans over both line parities and every alignment; with the
+    stipple forced off 14 fail (the 2 that pass are single pixels that sit on
+    the stipple).
+  - R380, NEVER TRIED ON THE BRANCH: m2_ddr3 is held in reset until cp_done,
+    so the reader no longer competes with the ROM and TGP microcode crossing
+    the HPS bridge at boot. m2_ddr3 on clk_sys (R377), DDRAM_CLK = clk_sys.
+
+tb_m2_raster3d, M2_R3D_FB (the branch's DDR3 model: bursts, 20-cycle reads,
+Avalon address/count checked every beat, unwritten = 0xFFFF...), MAME frames
+at TPL 3000, TEXLAT 60, both builds FTB 0 / TXLATE 0:
+
+    frame   MAME 3D px   bands: px in MAME   framebuffer: px in MAME / extra
+    2000    172,319      108,485             171,707 / 690
+    9000    190,464      144,832             190,460 / 0
+
+Every pixel the band path draws, the framebuffer draws identically; the
+band path loses whole rows to late bands even here -- the drops -- and the
+framebuffer draws the list whole. 0 Avalon violations. First-frame gate:
+nothing shown until a list is complete.
+
+THE COST, MEASURED: the first draw of f2000 took ~1.6 video frames of bench
+time (2.0 M core cycles): the fill waits on the writer ~20% of its time
+("painter-stall"), because every span is its own DDR3 command and a textured
+span is one four-pixel texel group -- up to three commands (head, body, tail)
+where the band buffer took four cycles. With no beam deadline that is a
+slower draw, not a broken picture, while lists come every ~2 vblanks; at one
+a vblank it would drop lists (held frames). THE FIX WHEN IT MATTERS: keep ONE
+band buffer as a write-combining tile -- render the band on chip (and FTB's
+mask with it), then flush it to DDR3 in eight 248-beat bursts (~2,000 cycles
+a band, ~100 k a frame), with no separate clear pass.
