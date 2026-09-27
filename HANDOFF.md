@@ -1,6 +1,14 @@
 # Handoff
 
-## 2026-09-27 (11:00): `build/seeds/s412` IS ON THE BOARD. EVERY CORE CLOCK CLEAN.
+## 2026-09-27 (15:00): `build/seeds/s412` STAYS ON THE BOARD. BAND DROPS PARKED.
+
+Ben: s412 "overall good", a couple of band drops on the heaviest scene;
+R633's reuse (every other texel group while late) rejected by eye (R634) --
+s414-s416 carry it and are NOT to be deployed. Remaining options measured
+and parked (R635). Instruments now persistent under build/ (mame289,
+mame_patches, m2frames, m2sim, m2scripts); /tmp is wiped on reboot.
+
+## 2026-09-27 (11:00): `build/seeds/s412` ON THE BOARD. EVERY CORE CLOCK CLEAN.
 
 s412 = R627 (bilinear unless late, point one line) + R631 (fill edge step and
 skip-mask query given margin) + R630 (OSD Gamma) + R626 (quarter-pixel

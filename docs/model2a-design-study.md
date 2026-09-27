@@ -24454,3 +24454,21 @@ What is left WITHOUT a visual cost: fewer or faster misses, not coarser
 sampling -- texture priority in m2_sdram while the fill is late (queueing
 behind the other masters is most of a miss on the board), paired 8-word
 bursts (-16 to -19% misses), R628 (area).
+
+**R635 -- THE LAST BAND DROPS: PARKED (Ben's call).** s412 stays: "only a
+couple of band drops on the heavy scene, but overall good". The measured
+options that keep the picture, for when this is picked up again:
+  - R628, 4 texel reads in flight x 8-deep response queue: 0 dropped bands
+    at latency 60 on f1000/f2000/f9000. +637 ALM (cache) plus two SDRAM
+    ports against ~450 free; trimming the queue's once-written fields into
+    MLAB might save ~150. Needs a visible cut or a new area source.
+  - Paired 8-word bursts: -16 to -19% misses (cache model), SDRAM
+    controller texture-port change, little area.
+  - Texture priority while late: takes memory time from the i960 (already
+    too slow -- "the cars are slow"), and m2_sdram's selection logic has
+    broken the board before (R288, R290).
+Instruments to pick it up with: build/mame289 (+ build/mame_patches),
+build/m2frames (f1000..f9000), build/m2sim, build/m2scripts (cachesim.py,
+diff3d3.py), tb_m2_raster3d M2_R3D_R107 / M2_R3D_TEXLAT / answers.txt.
+Dropped on-screen bands = bands with MAME texture and no fetch of ours
+(not dbg_bands, R634).
