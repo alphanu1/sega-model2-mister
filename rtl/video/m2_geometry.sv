@@ -792,8 +792,14 @@ module m2_geometry (
     begin
       e = f[30:23];
       m = {1'b1, f[22:0]};
+      // R643: THE CLAMP WAS ONE BINADE EARLY. The result is f/2 in 15 bits, so
+      // every f below 65,536 fits (e <= 127+15 shifts right by 9 or more); the
+      // clamp stood at e >= 127+15 and threw away 32,768..65,535 -- half the
+      // range R609 made room for. The geometry differential found it: MAME
+      // raw v 32,798..32,932 on a close-up textured surface came out 32,767
+      // at every vertex, reduced to 511, the texture squashed flat.
       if (f[31] || e < 8'd127)      f2uvw = 15'd0;
-      else if (e >= 8'd127 + 8'd15) f2uvw = 15'h7fff;
+      else if (e >= 8'd127 + 8'd16) f2uvw = 15'h7fff;
       else                          f2uvw = 15'(m >> (5'(8'd24 - (e - 8'd127))));
     end
   endfunction

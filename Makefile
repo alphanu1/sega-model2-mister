@@ -740,6 +740,19 @@ obj_texel_cdc/Vm2_texel_cdc: rtl/video/m2_texel_cdc.sv rtl/video/m2_texel_addr.s
 	$(VBUILD) --top-module m2_texel_cdc --Mdir obj_texel_cdc -o Vm2_texel_cdc -CFLAGS "-O2" \
 	  rtl/video/m2_texel_cdc.sv rtl/video/m2_texel_addr.sv sim/video/tb_m2_texel_cdc.cpp
 
+# R643: THE GEOMETRY DIFFERENTIAL -- one MAME walk (patch p14) through the
+# walker, projection and geometry. M2GD_DIR=<dump dir>; then
+# build/m2scripts/geodiff.py <dump dir>.
+geodiff: obj_geodiff/Vgeodiff_top
+	@./obj_geodiff/Vgeodiff_top $(TEST_ARGS)
+
+obj_geodiff/Vgeodiff_top: sim/video/geodiff_top.sv sim/video/tb_m2_geodiff.cpp rtl/video/m2_geo.sv rtl/video/m2_geo_view.sv \
+    rtl/video/m2_geometry.sv rtl/video/m2_geo_engine.sv rtl/video/m2_geo_xform.sv rtl/video/m2_geo_clip.sv rtl/video/m2_geo_project.sv $(GEO_RTL)
+	$(VBUILD) --top-module geodiff_top -CFLAGS "-O2" $(TGPFLAGS) -Wno-WIDTHTRUNC -Irtl/tgp -Irtl/video --public-flat-rw \
+	  --Mdir obj_geodiff -o Vgeodiff_top sim/video/geodiff_top.sv rtl/video/m2_geo.sv rtl/video/m2_geo_view.sv rtl/tgp/m2_fifo_m10k.sv \
+	  rtl/video/m2_geometry.sv rtl/video/m2_geo_engine.sv rtl/video/m2_geo_xform.sv \
+	  rtl/video/m2_geo_clip.sv rtl/video/m2_geo_project.sv $(GEO_RTL) sim/video/tb_m2_geodiff.cpp
+
 test_m2_geo_view: obj_geoview/Vm2_geo_view
 	@echo "== test m2_geo_view (the projection from the window command)"
 	@./obj_geoview/Vm2_geo_view $(TEST_ARGS)
