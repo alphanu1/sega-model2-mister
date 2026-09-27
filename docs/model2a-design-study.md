@@ -24599,3 +24599,45 @@ counts a missed tick at 0x5010B4. At 1.93 vblanks a frame with ~23% of the
 time waiting, a game frame's work takes ~1.5 vblanks here against under one
 in MAME: the i960's throughput is now the limit (R636: 7.3 CPI, mostly
 waiting on memory through the bridge). That is the next lever.
+
+**R639 -- DEFAULTS, THE CPU'S RATE ON THE WIRE, AND THE TILE FETCH IN THE
+PRIORITY CLASS.**
+
+*Defaults (Ben: "Default lighting to 100% and default gamma to off").* An OSD
+field is 0 until set, so the wanted value goes first: "Texture brightness"
+lists 100%,25%,50%,75% and the index is XORed with 2 into scale_lum's
+encoding; "Gamma" lists Off,MAME,Mild and maps 0->2, 1->0, 2->1. A config
+saved before reads shifted (a saved 100% shows as 50%).
+
+*The CPU's rate (M2_DEBUG_LITE).* R638 left the i960's own throughput as the
+limit, and the only CPI figures are from the boot (R636) -- tb_m2_cpu_real
+cannot reach gameplay: at 20 M instructions it is polling 0x01C00040 (9.7 M
+reads) for hardware it does not model. So the board measures it: the a
+channel carries, in turn with 'C', running totals 'P' {acc_cnt (an
+instruction per fetch_word_ok) | data-cache hits} and 'Q' {data-cache misses
+| i960 cycles with bus_req && !bus_ack}; decode_lite.py differences them.
+s426-s428 carry this with the defaults.
+
+*Tile overruns (Ben: "it repeats a row because it can't keep up ... the text
+... jumps up and down").* That is m2_video's Q_RUN overrun: line_start arrives
+while the four layers are still fetching, the bank does not flip, and the
+previous scanline is shown again (R85, R292). The tilemap is already on
+clk_mem (R564: median 17 -> 8, worst 57 -> 43 a frame then). A faster CPU
+does not help it -- if anything more SDRAM traffic. What the tile fetch
+competes with: R574 put the texel cache's two miss ports (10, 2) in a
+priority class, two grants in a row before one round-robin grant, and left
+port 3 -- the glyph cache, the tile fetch's only path to SDRAM, and the one
+reader with a per-scanline deadline -- in the rotation behind them. R574
+measured bands and the CPU port, not overruns. Port 3 joins the class
+(PRI 11'b100_0000_1100); its traffic is small (the glyph cache hits ~90%) so
+the texel cost should be too. The 'F' record becomes 'G': its low half is
+the frame's overrun count (dbg_ovr_frame, two flops across the asynchronous
+groups) in place of i960 pushes (a mean of 5, no longer informative).
+
+**R639, built.** s426-s428 (defaults + P/Q counters, telemetry lite on) did
+not fit: 4,211 LABs of 4,191 (41,637-41,671 ALM) -- the counters cost ~270
+ALM. s429-s431, the beta keeper (telemetry lite off, defaults, port 3 in the
+priority class): all fit (41,334-41,407 ALM). s431: clk_mem +0.201, clk_sys
++0.266, clk_i960 +2.925, holds +0.119..+0.264, HDMI -0.296 -- clean,
+deployed 18:01. s429 clk_mem -0.151, s430 clk_sys -0.551: not used. The
+tile overruns are judged by eye on this one (no counter in the keeper).

@@ -1,5 +1,15 @@
 # Handoff
 
+## 2026-09-27 (18:01): `build/seeds/s431` ON THE BOARD -- the beta candidate.
+
+s431 = s424 + R639 (Texture brightness 100% / Gamma Off by default; the tile
+fetch's SDRAM port in the priority class; telemetry off). Clean: clk_mem
++0.201, clk_sys +0.266, clk_i960 +2.925, holds positive, HDMI -0.296.
+Ben judges the tile overruns by eye. s424 is Model2.rbf.prev.
+DDR3 framebuffer port in progress in worktree ../sega-model2-fb3d (branch
+fb3d): the ddr3 branch's modules and benches imported and passing (89
+checks); the renderer port under way (R640).
+
 ## 2026-09-27 (17:35): main = 298d511 (s424) PUSHED. Branch r639-beta. s429-s431 BUILDING.
 
 origin/main fast-forwarded 591e148 -> 298d511 (137 commits, s424's RTL: R638
