@@ -477,6 +477,8 @@ set_global_assignment -name VERILOG_MACRO "M2_NO_OVERLAY=1"
 # the picture does not need. Comment this line out for a MEASUREMENT build --
 # every capture tool reads that stream.
 set_global_assignment -name VERILOG_MACRO "M2_NO_DEBUG=1"
+# R637: telemetry lite (UART C/F records, ~230 ALM) -- a measurement build; see Model2.sv g_nodbg
+set_global_assignment -name VERILOG_MACRO "M2_DEBUG_LITE=1"
 
 # Disable ALSA audio output to save some resources.
 # ENABLED, 251.5 ALM. ALSA is the HPS/Linux audio channel INTO audio_out's

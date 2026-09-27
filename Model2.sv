@@ -4512,8 +4512,53 @@ m2_dbg_stream #(.DIVISOR((SYS_MHZ * 1_000_000 + 57_600) / 115_200), .BUDGET_CYC(
 	.tx(UART_TXD), .dbg_dropped(uart_dropped)
 );
 end else begin : g_nodbg
+`ifdef M2_DEBUG_LITE
+	// R637: TELEMETRY LITE -- the one question "why does the game run slow"
+	// needs, in the area the keeper build has left (~230 ALM against the full
+	// stream's ~850, R612). Two channels on m2_dbg_stream's UART:
+	//   'C' ~270 Hz: the i960's IP | {copro_stall, 15'b0, TGP pc}
+	//   'F' every vblank: {game flips (0x803008 writes), vblanks} |
+	//       {TGP instructions retired, words the i960 pushed to the TGP} for
+	//       that frame
+	// Decoder: build/m2scripts/decode_lite.py.
+	logic [1:0]  lt_div;
+	logic        lt_a_valid;
+	logic [15:0] lt_flips, lt_vbl, lt_tgp0, lt_push0;
+	logic        lt_b_valid;
+	logic [31:0] lt_b_addr, lt_b_data;
+	always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+		if (!mem_rst_n) begin
+			lt_div <= 2'd0; lt_a_valid <= 1'b0; lt_flips <= 16'd0; lt_vbl <= 16'd0;
+			lt_tgp0 <= 16'd0; lt_push0 <= 16'd0; lt_b_valid <= 1'b0; lt_b_addr <= '0; lt_b_data <= '0;
+		end else begin
+			lt_a_valid <= 1'b0; lt_b_valid <= 1'b0;
+			if (prof_tick) begin
+				lt_div <= lt_div + 2'd1;
+				lt_a_valid <= (lt_div == 2'd0);
+			end
+			if (geo_wr_setrp) lt_flips <= lt_flips + 16'd1;
+			if (vbl_d && !vbl_dd) begin
+				lt_vbl     <= lt_vbl + 16'd1;
+				lt_b_valid <= 1'b1;
+				lt_b_addr  <= {lt_flips, lt_vbl};
+				lt_b_data  <= {tgp_retires - lt_tgp0, copro_in_pushed - lt_push0};
+				lt_tgp0    <= tgp_retires;
+				lt_push0   <= copro_in_pushed;
+			end
+		end
+	end
+	m2_dbg_stream #(.DIVISOR((SYS_MHZ * 1_000_000 + 57_600) / 115_200), .BUDGET_CYC(200_000)) u_dbg_lite (
+		.clk(clk_sys), .rst_n(mem_rst_n),
+		.a_valid(lt_a_valid), .a_addr(cpu_dbg_ip), .a_data({copro_stall, 15'd0, tgp_pc}),
+		.b_valid(lt_b_valid), .b_addr(lt_b_addr), .b_data(lt_b_data),
+		.a_tag(8'h43), .b_tag(8'h46),     // 'C', 'F'
+		.enable(1'b1),
+		.tx(UART_TXD), .dbg_dropped(uart_dropped)
+	);
+`else
 	assign UART_TXD = 1'b1;        // idle high; a floating TX reads as framing errors
 	assign uart_dropped = 32'd0;   // read by the overlay, which is also gone
+`endif
 end endgenerate
 
 // WHO WRITES THE SPACE. Everything upstream is now measured CLEAN on the
