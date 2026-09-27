@@ -301,7 +301,10 @@ module m2_geo_engine #(
   // them; the colour cache: 256 entries direct-mapped on {colorbase, luma6}.
   (* ramstyle = "MLAB" *) logic [63:0] tp_tab [32];    // {ambient, diffuse}
   logic [63:0] tp_rd;
-  (* ramstyle = "MLAB" *) logic [40:0] cc_mem [256];   // {textured, key, r, g, b}
+  // R637: M10K, not MLAB. 256 x 41 in LUT-RAM is ~16 MLABs (~160 ALM); the
+  // read is registered (cc_rd below), so two M10K blocks hold it. The ALM
+  // pays for the telemetry-lite build (4,196-4,205 LABs of 4,191 without it).
+  (* ramstyle = "M10K" *) logic [40:0] cc_mem [256];   // {textured, key, r, g, b}
   logic [40:0] cc_rd;
   wire  [16:0] cc_key = {tex_flat, cbase, luma8[7:2]};
   // R231/R234: THE PLACEHOLDER FOR A TEXTURE. The reference paints a textured
