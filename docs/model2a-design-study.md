@@ -24641,3 +24641,41 @@ priority class): all fit (41,334-41,407 ALM). s431: clk_mem +0.201, clk_sys
 +0.266, clk_i960 +2.925, holds +0.119..+0.264, HDMI -0.296 -- clean,
 deployed 18:01. s429 clk_mem -0.151, s430 clk_sys -0.551: not used. The
 tile overruns are judged by eye on this one (no counter in the keeper).
+
+**R641 -- THE PROJECTION CENTRE IS THE GAME'S, AND IT MOVES. R174 ASSUMED IT.**
+
+Ben on s445: "running great ... still some texture overruns or just missing
+... missing wheels" and "missing textures is more like orientation is not
+quite right". Looking for what this core does not model in the 3D setup,
+MAME 0.289 patch p13 (M2WIN_OUT: every geo_window_data, its six words, and
+the objects since by centre select), 4,220 frames of attract:
+
+  - ONE window a frame, always (cur_window 1): window ORDER is not a cause.
+  - Every object uses centre 0 (185,393 of 185,393): centre select is not
+    a cause either.
+  - The six words: viewport (-1,128)-(496,512); centre 0 at (248, 0x10e =
+    270) in 85% of frames and ANIMATED 270 -> 312 -> 270 over ~200 frames
+    at a time (the attract cameras tilting); centres 1-3 (248,316),
+    (352,152), (248,316) unused.
+
+This core's projection is constants in Model2.sv -- xc 248, yc 192, clip
+slopes +-248 / +-192 -- from R174: "For a 496x384 screen centred at
+(248,192)". An assumption, never checked against the window data: MAME's
+frustum at centre y 270 over viewport y 128..512 is 242 lines above the
+centre and 142 below, not 192 and 192, and it moves with the camera. The
+3D differential (R615) could not see it: it feeds the rasteriser MAME's
+projected vertices. What it predicts on the board: the 3D clipped and
+placed wrongly when the camera tilts, and polygons near the top or bottom
+edge clipped where MAME keeps them (or kept where it clips).
+
+NEXT: (1) take xc/yc and the four slopes from the window command (m2_geo
+already parses op 0x03's six words, for their length only); (2) a GEOMETRY
+differential -- our m2_geo + m2_geometry fed MAME's display list and polygon
+memory for one frame, vertices and texture coordinates compared with MAME's
+post-clip polygons. That is the instrument for "orientation not right" and
+the missing wheels: every texture-mapping and clipping step the rasteriser
+differential skips.
+
+The select-screen drive (build/dasm/select.lua) needs three coins a credit
+(CREDIT 1/3); its snapshots are MAME's reference pictures of the attract
+close-ups.
