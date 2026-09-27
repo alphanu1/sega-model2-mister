@@ -24518,3 +24518,84 @@ the i960 pushed to the TGP}. build/m2scripts/decode_lite.py. The
 questions it answers: frames per vblank (the game's real rate), whether the
 i960 sits in a poll loop and which, whether the TGP is idle (few retires)
 while the i960 works, or the i960 held by the TGP (copro_stall).
+
+**R637, THE ANSWER (s422 on the board, 220 s of attract).** A new game
+frame every **2.03 vblanks** (6,218 flips in 12,652 vblanks: 28.3 fps of
+57.5). MAME flips on every vblank (build/dasm/flips.lua: one 0x803008 write
+per frame), and Daytona is not on MAME's 30 Hz list -- so this core runs the
+game at half speed, and R211's "a list every second frame" was this core's
+rate, not the game's. Where the i960 is (58,507 IP samples): 0x19F58 35.7%,
+the frame-sync wait at 0x12B0/0x12B8 25.1%; held by the TGP only 4.4%. The
+TGP is not the limit either (mean 11,709 instructions a vblank, bursts to
+40,834). 0x19F58 is a store loop to 0x804000 (g10 + g12) -- the geometrizer
+push -- that MAME runs ~84 times a frame. On the board it sits there because
+push_stall holds it: the push queue was full.
+
+**R638 -- WHY IT WAS FULL: R610 HELD THE OTHER BUFFER. DAYTONA'S LIST IS
+DOUBLE-BUFFERED.** R610 stopped the push queue draining for the whole of a
+walk, on R211's premise that the list is single-buffered at address 0. MAME
+0.289 (patch p12, M2JMP_OUT: every walk's start, jumps and last opcode), 180 s
+of attract: 10,355 walks, 57.5 a second, the start alternating **dword
+0x0000 / 0x4000 on every walk** after boot; **no jumps** in any walk; lists
+at most 2,057 dwords (mean ~700). So while one list is walked the game is
+writing the other, which this walk never reads -- and R610 held those words
+until the walk ended, filled the 128-deep queue, and stalled the i960 in
+0x19F58 for the rest of the walk. That is the half speed.
+
+What R608 saw is still real: with no hold at all, a walk that runs longer
+than a frame meets the game's NEXT list for the same buffer, which it starts
+from the head. R638 holds only a word that lands in [w_ip, w_ip + 0x3000)
+dwords while a walk runs -- at or ahead of the walker, within 12,288 dwords
+(six times the longest list; the other buffer is 16,384 away). A word below
+w_ip has been read (the walker reads only at w_ip, rd_addr = w_ip, and moves
+forward); a word beyond the window is the other buffer. After a jump "below
+= read" fails, so the hold is total for the rest of that walk (Daytona never
+jumps; a word let through before a backward jump is not covered). The game
+can now be at most one list ahead, as on the board with a FIFO: it finishes
+the other buffer and flips, then its writes into the walked list stall when
+they reach w_ip. The R608 counter now counts pops into the window: zero by
+construction, kept as the check.
+
+Also fixed: drain_wait (the grace a flipped walk gives the queue to empty
+before starting) counted during the previous walk, so it had always expired
+by the time that walk ended and the next walk started at once, over its own
+list's tail if any was still queued -- which R610 then held. It counts only
+while no walk runs.
+
+tb_m2_geo test 8: a walk served slowly from the bench's own memory, so a
+drained word is one the walk reads. During it: list B (300 dwords) into the
+other buffer lands while A runs; words behind A land; `end` written ahead of
+A is held until A ends; B, flipped during A, is walked in full. Mutants: R610's
+hold fails 7 checks (B cannot land until A ends); no hold reproduces the
+dropout (walk A stops at 57 ops of 65 on the injected `end`, 4 overtakes).
+tb_m2_geo 85 checks, tb_m2_geometry 42, 0 fails.
+
+With it, R638b: s420-s422 failed clk_sys by 0.68-0.80 ns on m2_raster_fill
+sx -> nxu (R626's p4() and the fb/fc select in front of the numerators'
+multiplies; s412 met it by luck). The four screen differences are registered
+(pr_ax/ay/bx/by) and used for nxu..nyo only, which are formed in S_PF_N at
+the earliest, a cycle after every operand last changes; det_r keeps the
+wires. tb_m2_raster_fill 152,369 checks 0 fails; tb_m2_raster3d on MAME
+frames 2000 and 9000 (1,549 / 1,168 polygons): texel answers, fetch trace
+and pixel owners bit-identical to the s412 RTL.
+
+**R638, ON THE BOARD: s424 (R638 + R638b + telemetry lite).** s423-s425 all
+fit (41,393-41,404 ALM). s424: clk_mem +0.276, clk_sys +0.312, clk_i960
++2.024, holds all positive, HDMI -0.449 (framework) -- clean, deployed. s423
+clk_sys -1.634, s425 clk_sys -3.356: not used.
+240 s attract capture (build/captures/s424_attract.txt) against s422's:
+
+                              s422 (R610)     s424 (R638)
+    vblanks per game frame    2.03            1.93   (29.8 fps of 57.5)
+    i960 in 0x19F58 (push)    35.7%           ~7% (19f44..19f70 together)
+    i960 in 0x12B0/12B8 wait  25.1%           23.1%
+    held by the TGP           4.4%            4.7%
+
+The push stall is gone and the frame rate barely moved: the CPU's time went
+to the game's own work (0x17xxx now leads). R638 was necessary, not
+sufficient. The main loop (0x12A8) waits for the tick counter at 0x500000
+(MAME: two writes a frame, one IRQ increment and the loop's clear) and
+counts a missed tick at 0x5010B4. At 1.93 vblanks a frame with ~23% of the
+time waiting, a game frame's work takes ~1.5 vblanks here against under one
+in MAME: the i960's throughput is now the limit (R636: 7.3 CPI, mostly
+waiting on memory through the bridge). That is the next lever.

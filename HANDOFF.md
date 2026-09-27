@@ -1,5 +1,32 @@
 # Handoff
 
+## 2026-09-27 (17:05): `build/seeds/s424` ON THE BOARD (R638, telemetry lite).
+
+s424 clean on every core clock (clk_mem +0.276, clk_sys +0.312, clk_i960
++2.024, HDMI -0.449). Push stall gone (0x19F58 35.7% -> ~7%) but the game
+still takes 1.93 vblanks a frame: its own work takes ~1.5 vblanks here, so
+the i960's throughput is the next limit (R638 on the board). Ask Ben about
+the scenery dropout (R608's symptom) -- the overtake counter is not in the
+lite stream. s412 remains the non-telemetry keeper (local rbf).
+
+## 2026-09-27 (16:20): THE PUSH STALL -- FOUND. s423-s425 BUILDING.
+
+s422 (telemetry lite, R637) on the board, 220 s attract: a new game frame
+every 2.03 vblanks (MAME: every vblank). i960 35.7% in 0x19F58 (the
+geometry push loop) held by push_stall. Cause (R638): R610 held the push
+queue for the whole of a walk, but Daytona DOUBLE-buffers its list (MAME
+p12: walks alternate dword 0x0000/0x4000 every frame, no jumps, <= 2,057
+dwords) -- the held words were the other buffer. Now only words landing in
+[w_ip, w_ip+0x3000) are held; drain_wait counts only between walks.
+tb_m2_geo test 8 proves both directions (R610 mutant and no-hold mutant fail).
+R638b: fill sx -> nxu (clk_sys -0.68..-0.80 on s420-s422) given a register
+stage; raster3d bit-identical on two MAME frames.
+s423-s425 = R638 + R638b + telemetry lite. On the board: check flips/vblank
+(decode_lite.py) -> expect ~1.0, and that the scenery does not drop out
+(R608's symptom). s412 is still the keeper if it misbehaves.
+Wrong turn recorded: R211's "single-buffered, a list every second frame"
+was this core's own half-speed rate, and R610 was built on it.
+
 ## 2026-09-27 (15:00): `build/seeds/s412` STAYS ON THE BOARD. BAND DROPS PARKED.
 
 Ben: s412 "overall good", a couple of band drops on the heaviest scene;
