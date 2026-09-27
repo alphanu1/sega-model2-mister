@@ -5636,10 +5636,19 @@ assign char_data = ccf_data;
 // level are enough and the index crosses as it is. The last invalidate lands
 // after the SDRAM write has completed, as it did at 2:1.
 logic [1:0] cwr_s;
+logic [3:0] cwr_tail;   // R647: go on invalidating 16 cycles after the write's level drops
 always_ff @(posedge clk_mem or negedge cc_rst_n_s) begin
-	if (!cc_rst_n_s) cwr_s <= 2'b00;
-	else             cwr_s <= {cwr_s[0], cpu_char_wr};
+	if (!cc_rst_n_s) begin cwr_s <= 2'b00; cwr_tail <= 4'd0; end
+	else begin
+		cwr_s <= {cwr_s[0], cpu_char_wr};
+		if (cwr_s[1])              cwr_tail <= 4'hF;
+		else if (cwr_tail != 4'd0) cwr_tail <= cwr_tail - 4'd1;
+	end
 end
+// R647: the index is the bridge's latched address, which holds until its next
+// request -- several states after the write -- so it is still this write's
+// line through the tail.
+wire cwr_inval = cwr_s[1] || (cwr_tail != 4'd0);
 
 // R644: BACK TO 64 KB. R313 halved it for block RAM; the framebuffer (R640)
 // returned ~50 M10K, and R313/R320 measured the halving at 14 -> 53 scanline
@@ -5654,7 +5663,7 @@ m2_char_cache #(.IDX_BITS(13)) u_char_cache (
 	// IDX_BITS: [14:2] for 13 bits, not [15:2]. A stale width here invalidates
 	// the wrong line on a CPU character write, which shows up as glyphs that
 	// are correct until the game rewrites one and then stay stale.
-	.inval(cwr_s[1]), .inval_idx(cpu_char_wr_addr[14:2]),   // R644: IDX_BITS 13 again; R564: synchronised
+	.inval(cwr_inval), .inval_idx(cpu_char_wr_addr[14:2]),   // R644: IDX_BITS 13 again; R564: synchronised
 	.dbg_hits(char_hits), .dbg_misses(char_misses), .dbg_fills(char_fills)
 );
 
