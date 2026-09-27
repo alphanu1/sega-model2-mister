@@ -24403,3 +24403,34 @@ in flight (R627/R628: latency past ~60 core cycles in the bench). The
 remaining levers, in cost order: TXLATE earlier (a parameter; the bench
 showed no gain from 3 to 5 at latency 60, so probably small), then R628
 (4 slots x 8-deep queue, +637 ALM plus two SDRAM ports -- area first).
+
+**R633 -- THE LAST BAND DROPS: HALF THE FETCHES WHILE LATE (Ben chose "last
+band drops" after s412).** The instruments came back first: the machine's
+reboot had taken the scratch MAME; it now lives in build/mame289 (git-
+ignored, persistent), its patches consolidated in
+build/mame_patches/m2instruments.patch and rebuilt from the session log
+(frame 2000 reproduced exactly: 1,549 polygons, 172,199 textured pixels).
+Nine frames dumped (1000..9000). At the board's clock ratio, PIXSTEP 4,
+TXLATE 3 (s412): every band at miss latency 40; at 60, three heavy frames
+lose bands (f1000 49 of 53, f2000 50 of 53, f9000 47 of 49).
+
+WHERE THE MISSES ARE (a cache model on each frame's recorded fetches, line
+mapping exactly as m2_texel_bl's place()):
+    f1000 35,287 misses, 19,863 of them a line's first touch; f2000 21,744 /
+    11,397; f9000 29,184 / 13,470. Two-way associativity: -2 to -3%
+    (conflicts are not the problem). Paired 8-word bursts: -16 to -19%.
+    Double the cache: -20 to -38% (and ~30 M10K). Point sampling (R627's
+    late mode): -37%. Point AND only every other group fetched: -57 to -59%.
+The area to fund R628 (4 slots x 8-deep queue, +637 ALM + two ports) does
+not exist: R313 already spent the char-cache lever, M10K is 548/553, and
+docs/area-budget.md has nothing else cheap.
+
+REUSE (m2_span_tex, TXREUSE): while tex_late, a group directly after a
+fetched group of the same span fetches nothing and paints with its
+neighbour's texel (an answer-queue slot with no fetch, like R607's skip) --
+fetch, reuse, fetch, reuse. Bands completed, latency 60: f1000 49 -> 53,
+f2000 50 -> 53, f9000 47 -> 49 (the latency-40 counts); latency 80: 51, 50,
+49. Off (REUSE 0), tb_m2_raster3d's pixel hashes are identical to before;
+on, the soaks pass (sweeps, point at latency 80, overlap). The cost is only
+while late: 8 pixels a texel instead of 4. The neighbour's x + PIXSTEP is
+added as it is stored, so pipe_en's path gains only an equality compare.

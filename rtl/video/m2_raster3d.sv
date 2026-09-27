@@ -63,6 +63,8 @@ module m2_raster3d #(
   parameter int unsigned TXLATE = 0,
   // R628: texel miss slots -- 2 (tex_m, tex_m2) or 4 (+ tex_m3, tex_m4)
   parameter int unsigned TXNS = 2,
+  // R633: while tex_late, every other group reuses its neighbour's texel
+  parameter bit          TXREUSE = 1'b0,
 
   // ARE clk AND scan_clk ACTUALLY DIFFERENT CLOCKS?
   //
@@ -490,7 +492,8 @@ module m2_raster3d #(
   logic [31:0]           mk_wd;
   logic signed [15:0]    mk_y0;
 
-  m2_span_tex #(.PIXSTEP(PIXSTEP), .TXK(8), .FTB(FTB), .GC(PXC), .SCR_W(SCR_W), .BAND_H(BAND_H)) u_spantex (
+  m2_span_tex #(.PIXSTEP(PIXSTEP), .TXK(8), .FTB(FTB), .GC(PXC), .SCR_W(SCR_W), .BAND_H(BAND_H),
+                .REUSE(TXREUSE)) u_spantex (   // R633
     .clk(clk), .rst_n(rst_n),
     .mk_valid(mk_valid), .mk_we(mk_we), .mk_waddr(mk_pwi), .mk_wdata(mk_wd),   // R607
     .mk_band_y0(mk_y0),
@@ -508,6 +511,7 @@ module m2_raster3d #(
     .out_col(tx_span_col), .out_moire(tx_span_moire),
     .tx_req(tex_req), .tx_rdy(tex_rdy), .tx_ack(tex_ack), .tx_tex(tex_state),
     .tx_u(tex_u), .tx_v(tex_v), .tx_texel(tex_texel), .tx_take(tex_take),   // R539
+    .late(tex_late),                                                          // R633
     .dbg_texpix(dbg_texpix), .dbg_texnz(dbg_texnz),
     .dbg_hot(dbg_walk_hot), .dbg_hotcyc(dbg_walk_hotcyc),   // R436
     .dbg_wait(walk_wait)                                    // R554

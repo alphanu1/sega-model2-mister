@@ -61,6 +61,12 @@ module m2_span_tex #(
   // band's own check, per pixel at the write, is what keeps the picture exact,
   // so a stale or conservative answer here only costs a fetch.
   parameter bit          FTB    = 1'b0,
+  // R633: HALF THE FETCHES WHILE LATE. With REUSE, a group issued while `late`
+  // is high, directly after a fetched group of the same span, fetches nothing
+  // and paints with its neighbour's texel -- fetch, reuse, fetch, reuse.
+  // Modelled on MAME's heavy frames: with m2_texel_bl's point mode (R627)
+  // it cuts the misses by 57-59% where point alone cuts 37%.
+  parameter bit          REUSE  = 1'b0,
   // R616: SAMPLE EACH GROUP AT ITS CENTRE. One texel serves PIXSTEP pixels;
   // taken at the group's first pixel it lags the rest by up to PIXSTEP-1
   // pixels of gradient. 1 starts the walk (PIXSTEP-1)/2 pixels in, for u/z,
@@ -124,6 +130,7 @@ module m2_span_tex #(
   // discard is the reference's translucent test, made where the four texels are.
   input  logic [8:0]         tx_texel,
   output logic               tx_take,
+  input  logic               late,            // R633: m2_raster3d's tex_late
 
   output logic [31:0]        dbg_texpix,      // textured pixels emitted
   // TEXELS THAT ARE NOT 0xF, which is the question "did the game upload its
@@ -425,6 +432,13 @@ module m2_span_tex #(
   // before the fetch decision, from the mask as it stood a cycle earlier).
   logic               sh_m;
   wire                res_skip  = FTB && sh_m;
+  // R633: reuse the texel of the group fetched just before, same span,
+  // adjacent -- tracked at the consumer (cons_take), where fetches are issued
+  logic               lf_v;          // the last group taken was a real fetch
+  logic               lf_p;          // ... of this span slot
+  logic signed [15:0] lf_xn;         // ... whose neighbour is at this x (x + PIXSTEP,
+                                     // added as it is stored: cons_take drives pipe_en)
+  wire                res_reuse;
 
   // R607: THE MASK COPY AND THE QUERY. One bit a pixel, 32 to a word, a row
   // of the band in MROW words; m2_raster3d owns the valid bits (cleared as a
@@ -485,6 +499,7 @@ module m2_span_tex #(
   logic               of_last [TXK];
   logic               of_p    [TXK];
   logic               of_skip [TXK];   // R607
+  logic               of_reuse [TXK];  // R633
   logic [OW-1:0]      of_wp, of_rp;
   // R478: THE RETIRE STAGE. R476 computed e_col straight from the arriving
   // texel, which put m2_texel's `hold` register, the nibble select, the
@@ -502,6 +517,7 @@ module m2_span_tex #(
   logic               rt_last;
   logic               rt_p, e_p;   // R490
   logic               rt_skip;     // R607
+  logic [8:0]         lt_texel;    // R633: the last fetched answer, for a reuse
 
   // Take a result when there is one, no fetch is outstanding, and the emit
   // slot will be free. The pipeline runs whenever the output is not being held.
@@ -532,13 +548,16 @@ module m2_span_tex #(
   // R607: a skipped group takes a queue slot but no credit and no fetch, and
   // leaves the queue without an answer once it is at the head -- the answers
   // still come back in the order the real fetches were made.
-  wire cons_take = res_valid && (res_skip || tx_rdy) && of_room && (st == T_RUN);
+  assign res_reuse = REUSE && late && !res_skip && lf_v && (lf_p == res_p)
+                  && (lf_xn == res_x[15:0]);
+  wire cons_take = res_valid && (res_skip || res_reuse || tx_rdy) && of_room && (st == T_RUN);
   wire head_skip = of_skip[of_rp[OW-2:0]];
+  wire head_reuse = of_reuse[of_rp[OW-2:0]];   // R633
   // An answer moves into the retire stage when that stage is empty or
   // emptying this cycle.
-  wire rt_take   = (head_skip || tx_ack) && (of_wp != of_rp) && (!rt_valid || rt_frees)
+  wire rt_take   = (head_skip || head_reuse || tx_ack) && (of_wp != of_rp) && (!rt_valid || rt_frees)
                 && (st == T_RUN);
-  assign tx_take = rt_take && !head_skip;   // R607
+  assign tx_take = rt_take && !head_skip && !head_reuse;   // R607, R633
   // R551: WHY THE WALK IS BUSY, for the bench only (nothing reads it, so the
   // fitter drops it). 1 the band painter is not taking the emitted group,
   // 2 fetches are out and the oldest has not been answered, 3 a result is
@@ -550,7 +569,7 @@ module m2_span_tex #(
     wait_why = 3'd0;
     if (busy) begin
       if (e_valid && !out_ready)                        wait_why = 3'd1;
-      else if ((of_wp != of_rp) && !tx_ack && !head_skip) wait_why = 3'd2;
+      else if ((of_wp != of_rp) && !tx_ack && !head_skip && !head_reuse) wait_why = 3'd2;
       else if (res_valid && !tx_rdy)                    wait_why = 3'd3;
       else if (!res_valid)                              wait_why = 3'd4;
     end
@@ -576,7 +595,7 @@ module m2_span_tex #(
   // R339: the DIVIDED coordinates, not u/z and v/z themselves.
   assign tx_u   = to_tx(d4_u);
   assign tx_v   = to_tx(d4_v);
-  assign tx_req = cons_take && !res_skip;   // R607
+  assign tx_req = cons_take && !res_skip && !res_reuse;   // R607, R633
   // R615: THE 3D FRAME DIFFERENTIAL'S PROBE -- every real fetch, with the
   // pixel group and texture it is for. Read by tb_m2_raster3d through
   // the simulator's public access; nothing in the design reads it, so synthesis
@@ -735,6 +754,7 @@ module m2_span_tex #(
       end
       sp_iss <= 1'b0; sp_out <= 1'b0; sp_n <= 2'd0; e_last <= 1'b0;   // R490
       rt_p <= 1'b0; e_p <= 1'b0; rt_skip <= 1'b0;                     // R490, R607
+      lf_v <= 1'b0; lf_p <= 1'b0; lf_xn <= '0; lt_texel <= 9'd0;      // R633
       du_r <= '0; dv_r <= '0;
       doz_r <= '0;
       // R433
@@ -809,7 +829,13 @@ module m2_span_tex #(
             of_last[of_wp[OW-2:0]] <= res_last;
             of_p   [of_wp[OW-2:0]] <= res_p;
             of_skip[of_wp[OW-2:0]] <= res_skip;   // R607
+            of_reuse[of_wp[OW-2:0]] <= res_reuse; // R633
             of_wp <= of_wp + 1'd1;
+            // R633: the last real fetch -- a reuse or a skip breaks the chain,
+            // so fetches and reuses alternate
+            lf_v <= !res_skip && !res_reuse;
+            lf_p <= res_p;
+            lf_xn <= res_x[15:0] + 16'(PIXSTEP);
           end
 
           // R539: retire. The oldest answer joins the oldest pixel. The retire
@@ -817,14 +843,15 @@ module m2_span_tex #(
           // on the same edge, so the emptying must not undo the loading.
           if (rt_take) begin
             rt_valid <= 1'b1;
-            rt_texel <= tx_texel;
+            rt_texel <= head_reuse ? lt_texel : tx_texel;   // R633
+            if (!head_skip && !head_reuse) lt_texel <= tx_texel;
             rt_x     <= 32'(of_x[of_rp[OW-2:0]]);   // sign-extended
             rt_last  <= of_last[of_rp[OW-2:0]];
             rt_p     <= of_p   [of_rp[OW-2:0]];
             rt_skip  <= head_skip;                  // R607
             of_rp    <= of_rp + 1'd1;
             // R484: WRAPS, DOES NOT SATURATE (see the history in git).
-            if (!head_skip && tx_texel[7:0] != 8'hff) dbg_texnz <= dbg_texnz + 1'd1;
+            if (!head_skip && !head_reuse && tx_texel[7:0] != 8'hff) dbg_texnz <= dbg_texnz + 1'd1;
           end
 
           // Colour and emit the retired group.
