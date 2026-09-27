@@ -24434,3 +24434,23 @@ f2000 50 -> 53, f9000 47 -> 49 (the latency-40 counts); latency 80: 51, 50,
 on, the soaks pass (sweeps, point at latency 80, overlap). The cost is only
 while late: 8 pixels a texel instead of 4. The neighbour's x + PIXSTEP is
 added as it is stored, so pipe_en's path gains only an equality compare.
+
+**R634 -- R633 REJECTED BY EYE, BEFORE A BUILD REACHED THE BOARD.** Ben: "no,
+they won't look acceptable, especially considering it's already upscaled
+from ~480p to 1080p". A coarse strip (8 pixels a texel across) scaled 2.25x
+is exactly the artefact the bilinear work set out to remove. TXREUSE stays
+in the source, OFF (Model2.sv), as the record of what was tried; s414-s416
+(built with it on) are not deployed.
+
+CORRECTION to R633's table: "bands 53" is dbg_bands -- band FILLS in the
+bench's window, including the ~6 head-start bands filled in vblank for the
+next frame -- not bands on screen (48 = 384 / 8). Re-scored as on-screen
+bands with MAME texture and no fetch of ours at all:
+    latency 60, s412: f1000 4 dropped (13, 14, 18, 19), f2000 3 (24-26),
+    f9000 2 (4, 5); with reuse 0, 0, 0; latency 80 with reuse 2, 3, 0.
+The finding stands; the unit was wrong, and Ben caught it.
+
+What is left WITHOUT a visual cost: fewer or faster misses, not coarser
+sampling -- texture priority in m2_sdram while the fill is late (queueing
+behind the other masters is most of a miss on the board), paired 8-word
+bursts (-16 to -19% misses), R628 (area).

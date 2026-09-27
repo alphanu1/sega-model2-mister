@@ -5789,7 +5789,7 @@ wire [63:0] tex_m2_data = p_dout[2];
 m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1),   // R607
               .PXC(1'b1), .PIXSTEP(4), .FRB(2),   // R626: quarter-pixel plane fit
               .TXLATE(3),   // R627: point-sample while the fill is within 3 bands of the beam
-              .TXREUSE(1'b1),   // R633: ... and fetch every other group
+              .TXREUSE(1'b0),   // R633: every other group while late -- REJECTED by eye (R634)
                 // R616: pixel-centre planes; R626: bilinear, a texel per four pixels (PIXSTEP 2 drops bands on the board)
               .TWO_CLOCKS(1'b1), .TEX_AW(SDR_AW)) u_raster3d (   // R564: scan on clk_mem
 	// R318: clk_mem carries m2_texel, which runs at 100 MHz inside this module.
