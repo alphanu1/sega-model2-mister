@@ -24472,3 +24472,29 @@ build/m2frames (f1000..f9000), build/m2sim, build/m2scripts (cachesim.py,
 diff3d3.py), tb_m2_raster3d M2_R3D_R107 / M2_R3D_TEXLAT / answers.txt.
 Dropped on-screen bands = bands with MAME texture and no fetch of ours
 (not dbg_bands, R634).
+
+**R636 -- 100/70/40 MEASURED AND DROPPED: THE ASYNC BRIDGE COSTS MORE THAN
+THE CLOCK GIVES.** Ben: "we need to speed up the whole game ... the TGP is
+always waiting on the CPU". s412 at 80/40: clk_i960 has NO path failing at
+40 (every CPU path >= 3.57 ns of slack at 35); clk_sys has 837 endpoints in
+~16 families at 80, worst -1.075 (fill swapf -> span_ooz; Z80 A -> firmware
+RAM; TGP S_DST_W -> fin rp; geometry FP adder; band S_PAINT -> span_tex
+mask MLAB). The i960 core's own worst path is 23.4 ns (insn -> fpadd), so
+45 MHz is ~30 endpoints to 1.2 ns and 50 MHz ~200 endpoints to 3.4 ns
+including ip and write-back -- a re-pipelining of the CPU.
+
+100/70/40 keeps clk_sys and needs m2_cpu_bridge ASYNC (R576), the i960 in
+its own clock group, and the IRQ levels and CPU reset release
+synchronised -- written, then reverted, because tb_m2_cpu_real (i960 +
+bridge + SDRAM on the real ROM, clocks as the board's off a 1,400 MHz
+tick) said:
+
+    35/70/100, sync bridge    7.32 CPI   14.63 M cycles   0.418 s / 2 M insns
+    40/70/100, ASYNC bridge   8.98 CPI   17.96 M cycles   0.449 s  (7% SLOWER)
+    35 with the async bridge  8.88 CPI
+    trace hash f6953e5d9c861c63 in all three -- functionally identical.
+
+The two-flop handshake costs 21% of CPI, more than 40/35 gives. What the
+number really says: 7.32 cycles an instruction -- the CPU spends most of
+its time waiting on memory through the bridge. That, not the clock, is the
+lever (next).
