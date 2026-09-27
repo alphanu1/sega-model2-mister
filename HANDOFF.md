@@ -1,5 +1,30 @@
 # Handoff
 
+## 2026-09-27 (17:35): main = 298d511 (s424) PUSHED. Branch r639-beta. s429-s431 BUILDING.
+
+origin/main fast-forwarded 591e148 -> 298d511 (137 commits, s424's RTL: R638
+push queue + R638b fill register). Work continues on `r639-beta`.
+
+s426-s428 (R639: OSD defaults + CPU counters P/Q on telemetry lite) DID NOT
+FIT: 4,211 LABs of 4,191 (41,637-41,671 ALM; the counters ~270 ALM). Not
+deployable. s429-s431 = the beta keeper: telemetry lite OFF (qsf), OSD
+defaults (Texture brightness 100%, Gamma Off), port 3 (glyph cache = the
+tile fetch) in the SDRAM priority class for the tile overruns Ben reports
+(repeated scanlines, "text jumps up and down"; m2_video Q_RUN).
+
+Open, from Ben on the board:
+- tile overruns (above) -- judge s429-s431 by eye; no counter in the keeper.
+- select screens: a red (course) and yellow (car) box drawn OVER the chosen
+  item -- a 3D polygon sorted in front; compare MAME's poly list there.
+- car select: car textures noisy, wheels partly missing.
+- game speed: 1.93 vblanks a frame (52%); the i960's own work is ~1.5
+  vblanks a frame -> needs CPI ~1.5x lower (pipelining, R103). The CPU
+  counters need area freed before they can be measured on the board.
+- DDR3 framebuffer: branch `ddr3` (42 commits, forked 304 back at 64bd446)
+  has most of it (R347-R380); its open fault R380 "the copro dies when the
+  DDR3 reader starts" was also seen on main then and may be fixed since.
+  Ben: frame-buffer both 3D and 2D and show a frame only when both are done.
+
 ## 2026-09-27 (17:05): `build/seeds/s424` ON THE BOARD (R638, telemetry lite).
 
 s424 clean on every core clock (clk_mem +0.276, clk_sys +0.312, clk_i960
