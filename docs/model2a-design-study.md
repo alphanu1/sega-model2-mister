@@ -24709,3 +24709,34 @@ every sweep. s443-s445: all fit, **38,993-39,029 ALM (93%), 503/553 M10K** --
 s445 CLOSED EVERY CLOCK: clk_mem +0.713, clk_sys +0.613, clk_i960 +3.112,
 **HDMI +0.100**, holds +0.242..+0.274. On the board 18:40 (s431 is .prev).
 s443/s444: cores clean, HDMI -0.996/-0.995.
+
+**R642 -- THE PROJECTION FROM THE WINDOW COMMAND.** (R641 found it; this
+builds it.) MAME, logged with p13c: crtc_xoffset 0 and crtc_yoffset 128 on
+every frame, so MAME's projected y is (384 - cy) + 128 - y/z = 242 - y/z at
+the usual cy = 270: its horizon sits on row 242 and its frustum shows +242
+.. -142 of y/z. R174's constants put it on row 192 with +-192. MAME's
+renderer draws rows straight from that y (its viewport rectangle is
+(384 - vp[3]) + yoffs .. (384 - vp[1]) + yoffs = 0 .. 384), so there is no
+second offset to cancel it. Unless this core offsets elsewhere, its 3D has
+sat 50 rows above MAME's relative to the 2D -- the board decides.
+
+  - m2_geo reads op 0x03 like the matrix (CAP_WIN, six words) instead of
+    stepping over it: viewport start, end and centre 0 go out (win_vp_s,
+    win_vp_e, win_c0), win_cnt steps once. Power-up values are MAME's frame 0
+    window, (0,128)-(496,512) centre (248,320), which reproduce R174's
+    constants exactly -- nothing moves until the game sends a window.
+  - m2_geo_view: xc = CRTC_X + cx, yc = 384 - cy + CRTC_Y, and the four
+    slopes -(cx - vp0), vp2 - cx, vp3 - cy, -(cy - vp1), each converted exactly
+    to float in two registered stages. CRTC_X/Y = 0/128 as parameters: this
+    core does not decode the CRTC registers.
+
+tb_m2_geo_view 37 checks (reset, the power-up window, cy 270 and 312,
+vanishing point 2, negative corners and a -2048 centre). tb_m2_geo 94: a
+window command read, counted once, the walk in step (the matrix write after
+it lands, three opcodes, none unknown). tb_m2_geometry, lint, Quartus parse:
+clean. Built as s446-s448.
+
+Also here, the tile overruns (Ben: "massively reduced but still there"): the
+glyph cache is 32 KB (R313 halved it for block RAM; R313/R320 measured the
+halving at 14 -> 53 overruns a frame). The framebuffer returned ~50 M10K, so
+64 KB (IDX_BITS 13, ~26 M10K) is next.
