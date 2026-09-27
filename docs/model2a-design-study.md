@@ -24393,3 +24393,13 @@ where it matters; s407 is back on the board.
     bench is the FTB test.
 Rule, sharpened from R629: "benign" needs the bit's meaning, not its
 position.
+
+**R632 -- s412 ON THE BOARD: CLEAN, AND "OVERALL GOOD".** s412 (R626 + R627
++ R630 + R631): every core clock clean (clk_mem +0.736, clk_sys +0.711,
+clk_i960 +3.615, holds positive). Ben: "only a couple of band drops on the
+heavy scene, but overall good". R627's late fallback carries most of it; the
+remaining drops are the regime where even point sampling runs out of lines
+in flight (R627/R628: latency past ~60 core cycles in the bench). The
+remaining levers, in cost order: TXLATE earlier (a parameter; the bench
+showed no gain from 3 to 5 at latency 60, so probably small), then R628
+(4 slots x 8-deep queue, +637 ALM plus two SDRAM ports -- area first).
