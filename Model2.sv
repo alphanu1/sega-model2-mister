@@ -5629,7 +5629,10 @@ always_ff @(posedge clk_mem or negedge cc_rst_n_s) begin
 	else             cwr_s <= {cwr_s[0], cpu_char_wr};
 end
 
-m2_char_cache #(.IDX_BITS(12)) u_char_cache (   // R313: 32 KB, an ALM/M10K trade -- see the module
+// R644: BACK TO 64 KB. R313 halved it for block RAM; the framebuffer (R640)
+// returned ~50 M10K, and R313/R320 measured the halving at 14 -> 53 scanline
+// overruns a frame -- the tile rows Ben still sees repeat.
+m2_char_cache #(.IDX_BITS(13)) u_char_cache (
 	.clk(clk_mem), .rst_n(cc_rst_n_s),
 	.v_req(ccf_req), .v_addr(ccf_addr),
 	.v_ack(ccf_ack), .v_data(ccf_data),
@@ -5639,7 +5642,7 @@ m2_char_cache #(.IDX_BITS(12)) u_char_cache (   // R313: 32 KB, an ALM/M10K trad
 	// IDX_BITS: [14:2] for 13 bits, not [15:2]. A stale width here invalidates
 	// the wrong line on a CPU character write, which shows up as glyphs that
 	// are correct until the game rewrites one and then stay stale.
-	.inval(cwr_s[1]), .inval_idx(cpu_char_wr_addr[13:2]),   // R313: IDX_BITS 13 -> 12; R564: synchronised
+	.inval(cwr_s[1]), .inval_idx(cpu_char_wr_addr[14:2]),   // R644: IDX_BITS 13 again; R564: synchronised
 	.dbg_hits(char_hits), .dbg_misses(char_misses), .dbg_fills(char_fills)
 );
 
