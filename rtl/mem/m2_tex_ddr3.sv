@@ -127,11 +127,25 @@ module m2_tex_ddr3 #(
 
   // =============================================================== writes
   typedef struct packed { logic [24:0] a; logic [1:0] lane; logic [15:0] d; logic [1:0] be; } w_t;
-  w_t                        wq [QD];
-  logic [$clog2(QD):0]       wq_wp, wq_rp;
-  wire                       wq_empty = (wq_wp == wq_rp);
+  // R645: IN BLOCK RAM. As registers the 64 x 47-bit queue cost ~2,000 ALM
+  // and took the build past the device (s452-s454: 42,152-42,262 ALM). Its own
+  // process, no reset, a registered read: the head is `wq_head`, valid once
+  // it has been read from the current read pointer (hrp == wq_rp) and was
+  // written at least a cycle before (hrp != wp_q) -- so no read-during-write.
+  (* ramstyle = "M10K, no_rw_check" *) w_t wq [QD];
+  logic [$clog2(QD):0]       wq_wp, wq_rp, hrp, wp_q;
+  w_t                        wq_head;
+  logic                      wq_we;
+  w_t                        wq_din;
   wire                       wq_full  = ((wq_wp - wq_rp) == ($clog2(QD)+1)'(QD));
+  wire                       head_ok  = (hrp == wq_rp) && (hrp != wp_q);
   wire  [AW:1]               w_off    = w_addr - SBASE;
+  always_ff @(posedge clk) begin
+    if (wq_we) wq[wq_wp[$clog2(QD)-1:0]] <= wq_din;
+    wq_head <= wq[wq_rp[$clog2(QD)-1:0]];
+    hrp     <= wq_rp;
+    wp_q    <= wq_wp;
+  end
 
   // ============================================================= issuer
   typedef enum logic [1:0] { I_IDLE, I_RD, I_WR } ist_t;
@@ -142,7 +156,7 @@ module m2_tex_ddr3 #(
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       for (int k = 0; k < 2; k++) begin q_sync[k] <= 3'd0; a_tog[k] <= 1'b0; a_data[k] <= '0; want[k] <= 1'b0; end
-      wq_wp <= '0; wq_rp <= '0;
+      wq_wp <= '0; wq_rp <= '0; wq_we <= 1'b0; wq_din <= '0;
       ist <= I_IDLE; ip <= 1'b0; wd_sent <= 1'b0;
       d_req <= 1'b0; d_we <= 1'b0; d_addr <= '0; d_blen <= 8'd1; d_din <= '0; d_be <= '0;
       dbg_reads <= '0; dbg_writes <= '0; dbg_wr_lost <= '0; dbg_rd_dropped <= '0;
@@ -153,12 +167,14 @@ module m2_tex_ddr3 #(
       end
 
       // the write queue: a completed CPU write into either sheet
+      wq_we <= 1'b0;
       if (w_valid && w_addr >= SBASE && w_off < AW'(32'h100000)) begin
         if (!wq_full) begin
-          wq[wq_wp[$clog2(QD)-1:0]] <= '{a: dword_of(w_addr), lane: w_off[2:1], d: w_data, be: w_be};
-          wq_wp <= wq_wp + 1'd1;
+          wq_we  <= 1'b1;
+          wq_din <= '{a: dword_of(w_addr), lane: w_off[2:1], d: w_data, be: w_be};
         end else if (!(&dbg_wr_lost)) dbg_wr_lost <= dbg_wr_lost + 16'd1;
       end
+      if (wq_we) wq_wp <= wq_wp + 1'd1;   // the entry lands this cycle
 
       case (ist)
         // Reads before writes: a read has a renderer waiting on it.
@@ -168,12 +184,11 @@ module m2_tex_ddr3 #(
             d_req  <= 1'b1; d_we <= 1'b0; d_blen <= 8'd1; d_be <= 8'hFF;
             d_addr <= dword_of(want[0] ? q_addr[0] : q_addr[1]);   // stable: held on clk_mem
             ist    <= I_RD;
-          end else if (!wq_empty) begin
+          end else if (head_ok) begin
             d_req  <= 1'b1; d_we <= 1'b1; d_blen <= 8'd1;
-            d_addr <= wq[wq_rp[$clog2(QD)-1:0]].a;
-            d_din  <= {4{wq[wq_rp[$clog2(QD)-1:0]].d}};
-            d_be   <= 8'({wq[wq_rp[$clog2(QD)-1:0]].be[1], wq[wq_rp[$clog2(QD)-1:0]].be[0]})
-                      << (2 * wq[wq_rp[$clog2(QD)-1:0]].lane);
+            d_addr <= wq_head.a;
+            d_din  <= {4{wq_head.d}};
+            d_be   <= 8'({wq_head.be[1], wq_head.be[0]}) << (2 * wq_head.lane);
             wd_sent <= 1'b0;
             ist    <= I_WR;
           end
