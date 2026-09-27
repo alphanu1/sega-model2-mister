@@ -371,6 +371,20 @@ module m2_raster_fill #(
   wire signed [15:0] pf_o2 = 16'(qoz[fc]) - 16'(qoz[fa]);
   wire signed [15:0] pf_v2 = 16'({3'd0, qv[fc]}) - 16'({3'd0, qv[fa]});
 
+  // R638: THE SCREEN DIFFERENCES, REGISTERED FOR THE NUMERATORS. R626's
+  // quarter-pixel positions put p4() and the fb/fc select in front of the
+  // multiply, and s420-s422 failed clk_sys by 0.68-0.80 ns on exactly that:
+  //   m2_raster_fill|sx -> m2_raster_fill|nxu
+  // (s412 met it by luck). Loaded every cycle. The numerators are formed in
+  // S_PF_N at the earliest; pf_second last changes in S_PF_N and S_PF_D
+  // follows, and qu/qv/qoz last change in the final S_OZ cycle, so every
+  // operand has been stable for a cycle by then and the registers hold the
+  // same values the wires do. det_r, in S_PF_D, keeps the wires.
+  logic signed [15:0] pr_ax, pr_ay, pr_bx, pr_by;
+  always_ff @(posedge clk) begin
+    pr_ax <= pf_ax; pr_ay <= pf_ay; pr_bx <= pf_bx; pr_by <= pf_by;
+  end
+
   // A DIVIDE THAT KEEPS ITS BITS. The gradient is a fraction -- texels per
   // pixel, usually between 1/16 and 16 -- and an integer divider returns zero
   // for all of it. So the numerator is normalised UP until its top bit is at
@@ -1002,12 +1016,12 @@ module m2_raster_fill #(
           end else if (pfn_wait == 2'd0) begin
             pfn_wait  <= 2'd1;
             det_abs_r <= det_abs;        // R594: magnitude, and only magnitude
-            nxu <= 32'(pf_u1) * 32'(pf_by) - 32'(pf_u2) * 32'(pf_ay);
-            nyu <= 32'(pf_ax) * 32'(pf_u2) - 32'(pf_bx) * 32'(pf_u1);
-            nxv <= 32'(pf_v1) * 32'(pf_by) - 32'(pf_v2) * 32'(pf_ay);
-            nyv <= 32'(pf_ax) * 32'(pf_v2) - 32'(pf_bx) * 32'(pf_v1);
-            nxo <= 32'(pf_o1) * 32'(pf_by) - 32'(pf_o2) * 32'(pf_ay);   // R337
-            nyo <= 32'(pf_ax) * 32'(pf_o2) - 32'(pf_bx) * 32'(pf_o1);
+            nxu <= 32'(pf_u1) * 32'(pr_by) - 32'(pf_u2) * 32'(pr_ay);   // R638: pr_*
+            nyu <= 32'(pr_ax) * 32'(pf_u2) - 32'(pr_bx) * 32'(pf_u1);
+            nxv <= 32'(pf_v1) * 32'(pr_by) - 32'(pf_v2) * 32'(pr_ay);
+            nyv <= 32'(pr_ax) * 32'(pf_v2) - 32'(pr_bx) * 32'(pf_v1);
+            nxo <= 32'(pf_o1) * 32'(pr_by) - 32'(pf_o2) * 32'(pr_ay);   // R337
+            nyo <= 32'(pr_ax) * 32'(pf_o2) - 32'(pr_bx) * 32'(pf_o1);
           end else if (pfn_wait == 2'd1) begin
             pfn_wait <= 2'd2;
             den_sh <= den_sh_c;          // R289/R461: encode, and only encode
