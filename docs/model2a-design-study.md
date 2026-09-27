@@ -24335,3 +24335,31 @@ slots cannot issue them. +637 ALM, plus two SDRAM ports, against ~500 free:
 it does not fit without freeing area -- a study-level decision. PARKED until
 the board says whether R627 (TXLATE) alone keeps the bands: if it does, the
 board's miss latency is inside the range the 2 x 4 cache covers.
+
+**R629 -- s409 LOST BANDS ON THE BOARD; s410, THE SAME RTL, DID NOT. A
+66-PICOSECOND MISS, IN THE WRONG PLACE.** s409 on the board: a fixed set of
+bands never drawn in the attract scene (Ben: "the bands never draw, but they
+did before the latest change"; OSD Point made no difference). s407 back on:
+fine. s410 -- identical RTL, another seed -- on: "that one works".
+
+    s409  clk_sys -0.066: ONE path, m2_span_tex sh_x[4][5] -> sh_m
+    s410  clk_sys -0.230: m2_raster_fill mul_sl[3] -> xa/xb[28..31]
+
+sh_m is the FTB fill mask's "this group is already painted -- skip it"
+(R607), decided for every textured group; a wrong answer skips painting
+outright. s410's paths end in the top bits of the edge accumulators, which
+move only for very large values. Neither the cache nor TXLATE was at fault
+(tb_m2_texel_bl 1,000,000 exact; frame 2000 every band).
+
+RULE, from this: a seed with a failing core-clock setup path goes on the
+board only when the failing endpoints are listed and shown benign -- the
+slow-corner model's margin is not a licence. s386 (m2_sdram inflight ->
+rr_mask), s395 (m2_sdram rd_ok -> cmd) and s398 (m2_texel_bl axis) ran;
+s409 is the counter-example. Next: sh_x -> sh_m gets margin by design (it
+should not be at the edge of 70 MHz at all), and so do the edge
+accumulators' top bits.
+
+Also this session: the build machine rebooted at 09:51 and /tmp went with
+it -- the scratch MAME tree (with the M2DIFF/M2COL patches, which lived only
+there), the frame dumps and the helper scripts. The instruments of R615,
+R624 and R626 have to be rebuilt before they are used again.

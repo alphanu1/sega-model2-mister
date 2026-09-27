@@ -1,5 +1,18 @@
 # Handoff
 
+## 2026-09-27 (10:10): `build/seeds/s410` IS ON THE BOARD, AND WORKS.
+
+s410 = the s409 RTL (R627 bilinear-unless-late, point one line, cache
+timing) on another seed. clk_mem +0.586, clk_i960 +3.633, clk_sys -0.230
+(m2_raster_fill mul_sl -> xa/xb[28..31], edge accumulators' top bits --
+benign), HDMI -0.684. s409 LOST A FIXED SET OF BANDS on the board: its one
+failing path (-0.066) was m2_span_tex sh_x -> sh_m, the fill mask's skip
+decision (study R629). Rule now: list failing endpoints before deploying.
+s407 is Model2.rbf.prev.
+
+The machine rebooted 09:51: /tmp (scratchpad) wiped -- MAME tree + patches,
+frame dumps, helper scripts. Helpers recreated; MAME differential not yet.
+
 ## 2026-09-27 (00:45): `build/seeds/s409` IS ON THE BOARD. BILINEAR UNLESS LATE.
 
 s409 = s407 + R627: texel requests point-sampled while the fill is within 3
