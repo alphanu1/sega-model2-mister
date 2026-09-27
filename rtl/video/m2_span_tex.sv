@@ -436,21 +436,39 @@ module m2_span_tex #(
   // no_rw_check: see m2_raster3d mk_a. A stale answer here only costs a fetch.
   (* ramstyle = "MLAB, no_rw_check" *) logic [31:0] mk [MDEP];
   always_ff @(posedge clk) if (mk_we) mk[mk_waddr] <= mk_wdata;
-  logic mq_full;
+  // R631: THE QUERY IN TWO HALVES (s409: one path through all of it --
+  // clamp, index multiply, the MLAB read, two variable shifts, the compare
+  // -- missed 70 MHz by 66 ps, and a wrong answer skips painting: bands never
+  // drawn on the board). The index, the pixels the group needs and the two
+  // early answers depend only on the group's x and its span, which are in
+  // the shadow a stage sooner and do not change as it shifts, so they are
+  // worked out from sh_*[PIPE_D-3] and registered with the shift; the mask
+  // word is still read at PIPE_D-2, when it was before. Same answers.
+  logic               mq_f1, mq_f0;     // answer "full" / "not full" outright
+  logic [MAW-1:0]     mq_wi;
+  logic [31:0]        mq_need;
+  logic               mp_f1, mp_f0;
+  logic [MAW-1:0]     mp_wi;
+  logic [31:0]        mp_need;
   always_comb begin
-    automatic logic               qp   = sh_p[PIPE_D-2];
-    automatic logic signed [31:0] qx   = sh_x[PIPE_D-2];
+    automatic logic               qp   = sh_p[PIPE_D-3];
+    automatic logic signed [31:0] qx   = sh_x[PIPE_D-3];
     automatic logic signed [31:0] qe   = qx + 32'(PIXSTEP) - 32'sd1;
     automatic logic signed [31:0] qxe  = (qe > x1_p[qp]) ? x1_p[qp] : qe;
     automatic logic signed [31:0] qrow = y_p[qp] - 32'(mk_band_y0);
     automatic logic signed [31:0] xa   = (qx  < 0) ? 32'sd0 : qx;
     automatic logic signed [31:0] xb   = (qxe > $signed(32'(SCR_W - 1))) ? $signed(32'(SCR_W - 1)) : qxe;
-    automatic logic [MAW-1:0]     wi   = MAW'(qrow) * MAW'(MROW) + MAW'(xa >>> 5);
-    automatic logic [31:0]        w    = mk_valid[wi] ? mk[wi] : 32'd0;
-    automatic logic [31:0]        need = (32'hFFFF_FFFF << xa[4:0]) & (32'hFFFF_FFFF >> (5'd31 - xb[4:0]));
-    if ((qrow < 0) || (qrow >= $signed(32'(BAND_H))) || (xb < xa)) mq_full = 1'b1;
-    else if (xa[31:5] != xb[31:5])                                 mq_full = 1'b0;
-    else                                                           mq_full = ((w & need) == need);
+    mp_wi   = MAW'(qrow) * MAW'(MROW) + MAW'(xa >>> 5);
+    mp_need = (32'hFFFF_FFFF << xa[4:0]) & (32'hFFFF_FFFF >> (5'd31 - xb[4:0]));
+    mp_f1   = (qrow < 0) || (qrow >= $signed(32'(BAND_H))) || (xb < xa);
+    mp_f0   = !mp_f1 && (xa[31:5] != xb[31:5]);
+  end
+  logic mq_full;
+  always_comb begin
+    automatic logic [31:0] w = mk_valid[mq_wi] ? mk[mq_wi] : 32'd0;
+    if (mq_f1)      mq_full = 1'b1;
+    else if (mq_f0) mq_full = 1'b0;
+    else            mq_full = ((w & mq_need) == mq_need);
   end
   /* verilator lint_off UNUSEDSIGNAL */   // R553: only [15:0] is queued
   wire signed [31:0]  res_x     = sh_x[PIPE_D-1];
@@ -587,6 +605,7 @@ module m2_span_tex #(
       d4a_pu <= '0; d4a_pv <= '0; d4a_sh <= '0;   // R468
       u_h1 <= '0; v_h1 <= '0; u_h2 <= '0; v_h2 <= '0; u_h3 <= '0; v_h3 <= '0;
       u_h4 <= '0; v_h4 <= '0; sh_m <= 1'b0;   // R607
+      mq_f1 <= 1'b0; mq_f0 <= 1'b1; mq_wi <= '0; mq_need <= '0;   // R631
       iss_u <= '0; iss_v <= '0; iss_ooz <= '0; iss_x <= '0; iss_run <= 1'b0;
       for (int k = 0; k < PIPE_D; k++) begin
         sh_v[k] <= 1'b0; sh_x[k] <= '0; sh_last[k] <= 1'b0; sh_p[k] <= 1'b0;
@@ -613,6 +632,7 @@ module m2_span_tex #(
           sh_v[k] <= 1'b0; sh_x[k] <= '0; sh_last[k] <= 1'b0; sh_p[k] <= 1'b0;
         end
         sh_m <= 1'b0;   // R607
+        mq_f1 <= 1'b0; mq_f0 <= 1'b1; mq_wi <= '0; mq_need <= '0;   // R631
       end
     end else if (pipe_en) begin
       // R476: THE WHOLE PIPELINE STALLS TOGETHER. When the consumer cannot take
@@ -646,6 +666,7 @@ module m2_span_tex #(
       sh_last[0] <= iss_run && iss_last;
       sh_p[0]    <= sp_iss;                 // R490
       sh_m       <= mq_full;                // R607: follows sh_*[PIPE_D-1]
+      mq_f1 <= mp_f1; mq_f0 <= mp_f0; mq_wi <= mp_wi; mq_need <= mp_need;   // R631
       for (int k = 1; k < PIPE_D; k++) begin
         sh_v[k]    <= sh_v[k-1];
         sh_x[k]    <= sh_x[k-1];

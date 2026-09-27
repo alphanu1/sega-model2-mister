@@ -100,6 +100,7 @@ module m2_geometry (
   input  logic [7:0]  tp_diffuse, tp_ambient,
   input  logic        col_inval,
   input  logic [1:0]  tex_lum,           // R239
+  input  logic [1:0]  gamma_sel,         // R630
   output logic [1:0]  mem_space,
   output logic [15:0] dbg_col_miss,
 
@@ -180,7 +181,7 @@ module m2_geometry (
   m2_geo_engine u_engine (
     .tha(tha), .lit_x(lit_x), .lit_y(lit_y), .lit_z(lit_z),
     .tp_we(tp_we), .tp_idx(tp_idx), .tp_diffuse(tp_diffuse), .tp_ambient(tp_ambient),
-    .col_inval(col_inval), .tex_lum(tex_lum), .mem_space(mem_space),
+    .col_inval(col_inval), .tex_lum(tex_lum), .gamma_sel(gamma_sel), .mem_space(mem_space),
     .poly_col(poly_col), .poly_zmode(poly_zmode), .poly_luma(dbg_lum), .dbg_col_miss(dbg_col_miss),
     // R268: the per-vertex texture coordinates, read beside the header
     .tpa(tpa), .poly_uv0(poly_uv0), .poly_uv1(poly_uv1),

@@ -131,6 +131,7 @@ module m2_geo_engine #(
   // texels: full was judged too bright on the board, half was never judged, and
   // a build per guess is the wrong instrument. The board decides.
   input  logic [1:0]  tex_lum,
+  input  logic [1:0]  gamma_sel,           // R630: 0 MAME, 1 mild, 2/3 off (m2_palette's)
   // Which memory the read is for: 0 polygon memory (as ever), 1 texture
   // (mem_addr[23]: texture RAM rather than ROM), 2 the palette mirror, 3 the
   // translation table mirror. All dword-addressed; the top level owns the bases.
@@ -318,7 +319,8 @@ module m2_geo_engine #(
   // always resolves to the same grey and the cache stays consistent.
   localparam logic [14:0] TEX_GREY = 15'h4210;
   logic [7:0] lum_x;         // the luminance the table is read at, chosen at E_PAL
-  logic [1:0] tex_lum_d;     // R239: the mode last used; a change empties the cache
+  logic [1:0] tex_lum_d;
+  logic [1:0] gam_d;          // R630     // R239: the mode last used; a change empties the cache
   // R259: HALF IS THE DEFAULT, so it is selector 0. An OSD bit reads as zero
   // until someone moves it, and the user judged the textured placeholder's
   // brightness by eye on the board and asked for half; ordering the cases to
@@ -355,11 +357,14 @@ module m2_geo_engine #(
     end
   endfunction
   // The gamma curve, m2_palette's: max((v - 64) * 255 / 191, 0), truncated.
-  function automatic logic [7:0] gam(input logic [7:0] v);
+  // R630: the curve is an OSD choice, exactly as m2_palette's
+  function automatic logic [7:0] gam(input logic [7:0] v, input logic [1:0] sel);
     logic [24:0] p;
+    logic [7:0]  bias;
     begin
-      p = ({17'd0, (v - 8'd64)} * 25'd87496);
-      gam = (v <= 8'd64) ? 8'd0 : (p[24:16] > 9'd255) ? 8'd255 : p[23:16];
+      bias = sel[0] ? 8'd32 : 8'd64;
+      p = ({17'd0, (v - bias)} * (sel[0] ? 25'd74941 : 25'd87496));
+      gam = sel[1] ? v : (v <= bias) ? 8'd0 : (p[24:16] > 9'd255) ? 8'd255 : p[23:16];
     end
   endfunction
   // A header word's dword address in the texture space: RAM indexes 64 K
@@ -448,7 +453,7 @@ module m2_geo_engine #(
       hdr1 <= 16'd0; hdr2 <= 16'd0; poly_tex <= 32'd0;
       rgb[0] <= 8'd0; rgb[1] <= 8'd0; rgb[2] <= 8'd0;
       xaddr <= 24'd0; xhalf <= 1'b0; xspace <= 2'd0; cc_wait <= 1'b0; cc_idx <= 8'd0;
-      cc_valid <= '0; poly_col <= 24'd0; dbg_col_miss <= 16'd0; tex_flat <= 1'b0; lum_x <= 8'd0; tex_lum_d <= 2'd0;
+      cc_valid <= '0; poly_col <= 24'd0; dbg_col_miss <= 16'd0; tex_flat <= 1'b0; lum_x <= 8'd0; tex_lum_d <= 2'd0; gam_d <= 2'd0;
       for (int k = 0; k < 3; k++) begin
         p0prev[k] <= 32'd0; p1prev[k] <= 32'd0;
         p0cur[k]  <= 32'd0; p1cur[k]  <= 32'd0; xyz[k] <= 32'd0;
@@ -807,7 +812,7 @@ module m2_geo_engine #(
           st    <= E_XL;
         end
         E_XL: if (mem_go) begin
-          rgb[xi] <= gam(xhalf ? mem_data[23:16] : mem_data[7:0]);
+          rgb[xi] <= gam(xhalf ? mem_data[23:16] : mem_data[7:0], gamma_sel);
           if (xi == 2'd2) st <= E_CW;
           else begin xi <= xi + 2'd1; xaddr <= xl_dw(xi + 2'd1, c555, lum_x); end
         end
@@ -865,6 +870,8 @@ module m2_geo_engine #(
       if (col_inval) cc_valid <= '0;                 // R222: the CPU rewrote the colours
       tex_lum_d <= tex_lum;
       if (tex_lum != tex_lum_d) cc_valid <= '0;      // R239: the placeholder changed; the cached colours are stale
+      gam_d <= gamma_sel;
+      if (gamma_sel != gam_d) cc_valid <= '0;        // R630: so did the curve
     end
   end
 

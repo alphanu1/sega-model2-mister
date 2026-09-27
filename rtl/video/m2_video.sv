@@ -67,6 +67,7 @@ module m2_video #(
   // MLAB whose write port takes its own clock and whose read is asynchronous,
   // so the memory is the crossing. A read of an entry being written returns
   // the old or the new value, for one pixel.
+  input  logic  [1:0] gamma_sel,   // R630: the palette's curve (OSD), on clk
   input  logic        xlat_clk,
   input  logic        xlat_we,
   input  logic  [6:0] xlat_addr,
@@ -847,7 +848,7 @@ module m2_video #(
     .entry(pal_data_q),                  // R570: registered, see pal_addr
     .x_r5(x_r5), .x_g5(x_g5), .x_b5(x_b5),
     .x_r(x_r),   .x_g(x_g),   .x_b(x_b),
-    .r(pr), .g(pg), .b(pb)
+    .r(pr), .g(pg), .b(pb), .gsel(gamma_sel)   // R630
   );
 
   // The colour for column hcnt is not ready in the same pixel it is addressed:

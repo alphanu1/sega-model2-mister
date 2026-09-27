@@ -24363,3 +24363,33 @@ Also this session: the build machine rebooted at 09:51 and /tmp went with
 it -- the scratch MAME tree (with the M2DIFF/M2COL patches, which lived only
 there), the frame dumps and the helper scripts. The instruments of R615,
 R624 and R626 have to be rebuilt before they are used again.
+
+**R630 -- THE GAMMA SWITCH (R624's next step; Ben: "we were meant to have a
+gamma option").** OSD "Gamma: MAME / Mild / Off" (status[33:32]), applied
+where gamma is applied: m2_palette (2D, per pixel) and m2_geo_engine's gam()
+(3D polygon colour; its colour cache flushes when the choice changes, as it
+does for the texture-brightness control). MAME is max((v - 64) * 255/191,
+0); Mild max((v - 32) * 255/223, 0); Off the colour table's raw value.
+16.16 constants 87,496 and 74,941 reproduce the integer formulas exactly at
+all 256 inputs (checked exhaustively). MAME's is entry zero: the reference
+stays the default, and the choice is Ben's, by eye, on his screen.
+
+**R631 -- s410 WAS NOT BENIGN EITHER: THE TWO PATHS GET MARGIN.** s410 on
+the board: bands fine, "the textures are broken" -- horizontal white streaks
+across the grandstand and white blocks on the car. R629 called its failing
+endpoints (xa/xb[28..31]) benign because top bits rarely move; bit 31 is
+the SIGN, and it moves on every edge that starts left of the screen
+(clipped vertices sit at x = -1). Wrong. Both seeds of the R627 RTL failed
+where it matters; s407 is back on the board.
+  - m2_raster_fill S_FS_MULA / S_FS_MULB: the 17 x 32 product is registered
+    (mul_pr) and added the next cycle (mul_w) -- two cycles each, twice a
+    clipped segment. tb_m2_raster_fill 152,369 checks, 0 fails (FRB 0, 2).
+  - m2_span_tex: the FTB skip query's index, needed-pixel mask and early
+    answers are worked out from sh_*[PIPE_D-3] and registered with the shift;
+    the mask word is read at PIPE_D-2 as before. tb_m2_raster3d pixel hashes
+    identical to the previous span_tex in three modes (textured; overlap,
+    where the skip fires; random depth). tb_m2_span_tex does not drive the
+    mask (FTB=1 fails 128/170 on the committed version too) -- the renderer
+    bench is the FTB test.
+Rule, sharpened from R629: "benign" needs the bit's meaning, not its
+position.

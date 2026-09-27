@@ -729,6 +729,13 @@ module m2_raster_fill #(
   logic signed [31:0] mul_sl;
   logic signed [48:0] mul_prod;
   always_comb mul_prod = mul_delta * mul_sl;
+  // R631: THE PRODUCT IS REGISTERED BEFORE IT IS ADDED. 17 x 32 then a 32-bit
+  // add in one 70 MHz cycle was s410's failing path (mul_sl -> xa/xb[28..31],
+  // -0.230), and bit 31 is the sign of every edge that starts left of the
+  // screen: on the board, streaks across the picture. S_FS_MULA and
+  // S_FS_MULB each take two cycles now (mul_w), twice per clipped segment.
+  logic signed [31:0] mul_pr;
+  logic               mul_w;
 
   // ------------------------------------------------------- vertex selection
   // Tournaments, arranged so the lowest index wins every tie. MAME scans
@@ -869,6 +876,7 @@ module m2_raster_fill #(
       moire      <= 1'b0;
       mul_delta  <= 17'sd0;
       mul_sl     <= 32'sd0;
+      mul_pr     <= 32'sd0; mul_w <= 1'b0;   // R631
       div_start  <= 1'b0;
       div_num    <= 32'sd0;
       div_den    <= 32'sd0;
@@ -1346,14 +1354,22 @@ module m2_raster_fill #(
           end
         end
 
-        S_FS_MULA: begin
-          xa     <= xa + mul_prod[31:0];
+        S_FS_MULA: if (!mul_w) begin
+          mul_pr <= mul_prod[31:0];
+          mul_w  <= 1'b1;
+        end else begin
+          xa     <= xa + mul_pr;
           mul_sl <= slb;
+          mul_w  <= 1'b0;
           state  <= S_FS_MULB;
         end
 
-        S_FS_MULB: begin
-          xb    <= xb + mul_prod[31:0];
+        S_FS_MULB: if (!mul_w) begin
+          mul_pr <= mul_prod[31:0];
+          mul_w  <= 1'b1;
+        end else begin
+          xb    <= xb + mul_pr;
+          mul_w <= 1'b0;
           state <= skip_only ? S_FS_END : S_FS_SWAP;
         end
 

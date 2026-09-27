@@ -86,27 +86,33 @@ module m2_palette #(
 
   output logic [7:0]  r,
   output logic [7:0]  g,
-  output logic [7:0]  b
+  output logic [7:0]  b,
+  input  logic [1:0]  gsel       // R630: 0 MAME, 1 mild, 2/3 off (quasi-static)
 );
 
   assign x_r5 = entry[4:0];
   assign x_g5 = entry[9:5];
   assign x_b5 = entry[14:10];
 
-  // gamma: max((i - 64) * 255 / 191, 0), truncated. 255/191 in 16.16 is 87496,
-  // which reproduces MAME's table exactly at every point that matters -- 255
+  // gamma: max((i - bias) * 255 / (255 - bias), 0), truncated. R630: THE
+  // CURVE IS AN OSD CHOICE (gsel) -- 0 MAME's (bias 64, 255/191 as 16.16 =
+  // 87496), 1 milder (bias 32, 74941), 2/3 none. Both constants reproduce the
+  // integer formula exactly at all 256 inputs (checked exhaustively), 255
   // included, where a coarser multiplier gives 254.
-  function automatic logic [7:0] gam(input logic [7:0] v);
+  function automatic logic [7:0] gam(input logic [7:0] v, input logic [1:0] sel);
     // Only [24:16] is read -- the fractional half of the 16.16 product is
     // the rounding that MAME's (u8) cast discards, so discarding it here is
     // the behaviour, not an oversight.
     /* verilator lint_off UNUSEDSIGNAL */
     logic [24:0] p;
     /* verilator lint_on UNUSEDSIGNAL */
+    logic [7:0]  bias;
     begin
-      if (v <= 8'd64) gam = 8'd0;
+      bias = sel[0] ? 8'd32 : 8'd64;
+      if (sel[1]) gam = v;
+      else if (v <= bias) gam = 8'd0;
       else begin
-        p = ({17'd0, (v - 8'd64)} * 25'd87496);
+        p = ({17'd0, (v - bias)} * (sel[0] ? 25'd74941 : 25'd87496));
         // The bits above 7 of the shifted product ARE meaningful: the curve
         // reaches exactly 255 at input 255, so a truncation to eight bits is a
         // wrap, not a rounding. Saturate.
@@ -115,8 +121,8 @@ module m2_palette #(
     end
   endfunction
 
-  assign r = GAMMA ? gam(x_r) : x_r;
-  assign g = GAMMA ? gam(x_g) : x_g;
-  assign b = GAMMA ? gam(x_b) : x_b;
+  assign r = GAMMA ? gam(x_r, gsel) : x_r;
+  assign g = GAMMA ? gam(x_g, gsel) : x_g;
+  assign b = GAMMA ? gam(x_b, gsel) : x_b;
 
 endmodule

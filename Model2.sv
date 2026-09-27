@@ -172,6 +172,11 @@ localparam CONF_STR = {
 	// R620: BILINEAR, WITH AN OFF SWITCH, for the same reason. Point is the
 	// nearest of the same four texels -- this core's picture before R620.
 	"O[31],Texture filter,Bilinear,Point;",
+	// R630: GAMMA, because MAME's curve is MAME's guess at cabinet
+	// calibration (m2_palette) and the board is judged on Ben's own screen.
+	// MAME's is entry zero, the reference; Mild lifts the darks; Off is the
+	// colour table's raw values. 2D and 3D follow it together.
+	"O[33:32],Gamma,MAME,Mild,Off;",
 	// Which half of the right stick's Y is the throttle. Axis polarity is not
 	// standardised across pads, so this is a setting rather than a rebuild.
 	"O[28],Pedals,Normal,Swapped;",
@@ -553,6 +558,9 @@ reg [2:0] wrate_s;   // R256/R229: the OSD bit reaches the datapath through thre
 always_ff @(posedge clk_sys) wrate_s <= {wrate_s[1:0], status[26]};
 reg [2:0] texoff_s;  // R275: the same, for the texture switch
 always_ff @(posedge clk_sys) texoff_s <= {texoff_s[1:0], status[27]};
+reg [1:0] gam_m1, gam_m2, gam_s1, gam_s2;   // R630: the gamma choice, to both clocks
+always_ff @(posedge clk_mem) begin gam_m1 <= status[33:32]; gam_m2 <= gam_m1; end
+always_ff @(posedge clk_sys) begin gam_s1 <= status[33:32]; gam_s2 <= gam_s1; end
 reg [2:0] texpt_s;   // R620: the filter switch, on clk_mem where the texel cache runs
 always_ff @(posedge clk_mem) texpt_s <= {texpt_s[1:0], status[31]};
 // R265: THE WALK TRIGGER WAS THE ONE OSD BIT TAKEN RAW. Every other option in
@@ -3055,7 +3063,7 @@ m2_geometry u_geometry (
 	// walker; the colour data through the engine's own port, by space.
 	.tha(geo_obj_tha), .tpa(geo_obj_tpa), .lit_x(geo_lit_x), .lit_y(geo_lit_y), .lit_z(geo_lit_z),
 	.tp_we(geo_tp_we), .tp_idx(geo_tp_idx), .tp_diffuse(geo_tp_diffuse), .tp_ambient(geo_tp_ambient),
-	.col_inval(cpu_col_inval), .tex_lum(tex_lum_s2), .mem_space(eng_mem_space), .dbg_col_miss(),
+	.col_inval(cpu_col_inval), .tex_lum(tex_lum_s2), .gamma_sel(gam_s2), .mem_space(eng_mem_space), .dbg_col_miss(),
 	.q_valid(q3d_valid), .q_ready(q3d_ready),
 	.q_x0(q3d_x0), .q_y0(q3d_y0), .q_x1(q3d_x1), .q_y1(q3d_y1),
 	.q_x2(q3d_x2), .q_y2(q3d_y2), .q_x3(q3d_x3), .q_y3(q3d_y3),
@@ -5885,6 +5893,7 @@ m2_video u_tilemap (
 	// than a latched copy, so it corrected itself -- but it is the last reader
 	// that was not waiting, and "it fixes itself" is not a reason to leave one.
 	.clk(clk_mem), .ce_pix(ce_pix), .rst_n(vid_rst_n_s),   // R564: the memory clock, as Model 1's video
+	.gamma_sel(gam_m2),                                    // R630
 	.tile_mask(14'h3FFF),
 	// Colour translation table not loaded yet: it powers up holding pal5bit,
 	// which is exactly what this rendered before the table existed, so the
