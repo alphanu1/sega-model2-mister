@@ -24837,3 +24837,31 @@ framebuffer's own traffic, which the bench does not, so dbg_wr_lost stays.
 Built WITH telemetry lite (the framebuffer freed the ALM): the same capture
 with the switch on SDRAM and then on DDR3 is the A/B -- frames per vblank,
 the i960's bus wait (Q), tile overruns (G).
+
+**R646 -- THE SELECT SCREENS THROUGH THE GEOMETRY DIFFERENTIAL: EXACT.**
+p14b (M2GEO_TRIG: a Lua script touches a file, the next walk dumps) and
+build/dasm/select3.lua (three coins -- Daytona is 3 a credit -- start, dumps
+and snapshots at frames 3,300..4,500). MAME's snapshots are the reference
+pictures: circuit select's RED box is a frame around the SELECTED course's
+panel, behind the 2D text; car select's YELLOW box sits behind the selected
+"Automatic" panel; both cars have their wheels.
+
+    circuit select (walk 3,301)   12 of 12 polygons, 9 textured, u/v exact, z exact
+    car select     (walk 4,201)   1,339 of 1,339, 607 textured, u/v exact, z exact
+    w4000 / w2500                 z exact on 252 / 1,762 of 1,763
+
+The sort key (q_z against MAME's float_to_zval) now checked too. The select
+screens use centre (248,320) -- the power-up window -- so R642 changes
+nothing there. The circuit-select box is three untextured polygons at
+x 13..177, y 66..166, z 40 (pz 0.04); the maps are y 167..279, z 8704: they
+do not overlap. Ben's photo (s431, band renderer) had the box ~75 rows lower,
+over the map. The geometry is exact for this frame, so that came from past
+the geometry or from a state MAME's drive did not reach -- s451 (framebuffer)
+is on the board to look.
+
+MAME'S ORDER, for the record (model2_v.cpp render loop): z ascending, NEAREST
+FIRST, and a fill map so the first write wins -- front to back with a mask,
+which is this core's FTB (R607). Within a z bucket the list is LIFO (newest
+submitted drawn first, so it wins). FB_DDR3 runs FTB = 0, back to front,
+last write wins: the same picture provided equal-z polygons come out oldest
+first -- to check against the store's sort.
