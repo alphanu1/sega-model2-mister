@@ -24865,3 +24865,44 @@ which is this core's FTB (R607). Within a z bucket the list is LIFO (newest
 submitted drawn first, so it wins). FB_DDR3 runs FTB = 0, back to front,
 last write wins: the same picture provided equal-z polygons come out oldest
 first -- to check against the store's sort.
+
+**R647 -- THE TEST SCREEN'S BROKEN LETTERS: A GLYPH-CACHE INVALIDATE THAT
+COVERED HALF THE WRITE. FOUND BY BISECTING ON THE BOARD.**
+
+Ben: the test-mode text is wrong ("NORMAL" reads "HORMAL", "COUNTRY"
+"COUHTRY", I without serifs), and the car liveries blotchy -- on every build
+tried tonight, s456 back to s377, including after a cold boot. Ruled out on
+the way: the scaler filters (reset to defaults, same), the SDRAM (MiSTer
+memtest: 0 errors at 150 MHz), the ROM (zip MD5 equals ours), the MiSTer
+software (unchanged since 15 August), the display chain (Virtua Racing on
+the Model 1 core, same 496x384 path, clean). Bisect by Ben's eye:
+
+    09-09 release   text fine (locks up)
+    s283 09-25 18:14   fine        s315 09-26 03:46   fine
+    s339 09-26 08:28   fine        s347 09-26 12:29   fine
+    s351 09-26 15:51   BROKEN      s377 .. s456       broken
+    (s294: black screen)
+
+s347 -> s351 changes nothing but a debug counter (R608). So the fault was
+already in the RTL and a build's timing decided whether it showed. The
+mechanism: m2_cpu_bridge's char_wr -- the glyph cache's invalidate -- was
+asserted only in S_LO, the LOW word of a 32-bit store. The HIGH word lands
+in the same four-word cache line a few states later with no invalidate, so a
+tile fetch that refilled the line in between cached the old high half, and
+nothing ever dropped it: half a glyph row left over from the previous
+character until the game rewrote that glyph. The test screen is a screen of
+freshly rewritten glyphs.
+
+The fix: char_wr through S_LO, S_LO_W, S_HI and S_HI_W; and on clk_mem the
+invalidate held 16 cycles past the level (a write that lands after its
+acknowledge). The same shape on the textures: tex_inval swept the texel
+cache when a sheet write BEGAN, before its data was in SDRAM; a line refilled
+in between held old texels -- which could be the "always bad" car liveries.
+A second pulse now fires when the write completes (S_HI_W, and S_LO_W's
+half-word path). tb_m2_cpu_bridge, tb_m2_cpu_sdram, tb_m2_char_cache pass;
+the race itself needs the real SDRAM interleaving, so the board is the test.
+Built as s458-s460.
+
+Also recorded, because it was believed for an hour: tonight's "the textures
+look horrible" was NOT a regression from R640-R645 -- s431 and s377 show the
+same. s456 was withdrawn for it wrongly; it may be fine.
