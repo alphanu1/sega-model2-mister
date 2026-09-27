@@ -24906,3 +24906,17 @@ Built as s458-s460.
 Also recorded, because it was believed for an hour: tonight's "the textures
 look horrible" was NOT a regression from R640-R645 -- s431 and s377 show the
 same. s456 was withdrawn for it wrongly; it may be fine.
+
+**R647, ON THE BOARD: WRONG, AND WORSE.** s458-s460 fit (s460: clk_mem
++0.594, clk_sys +1.056, i960 +3.582, HDMI -0.163). Ben: "test screen still
+wrong and no 3d!" Two findings, both against this entry:
+  - The glyph invalidate through both halves did NOT fix the letters. The
+    half-line race is real in the RTL but it is not what breaks them. Kept
+    (it is more correct and harmless); the cause is still open.
+  - The second tex_inval KILLED THE 3D. Every sheet write sweeps the whole
+    texel cache (inval_pend -> sweep); two sweeps per write, with the game
+    uploading continuously, left the cache sweeping nearly all the time, the
+    fill starved of texels and the framebuffer -- which shows only complete
+    frames -- never completed one. Removed. A texel-cache fix, if the race
+    matters, must invalidate the LINE written, not sweep the cache.
+s451 back on the board.

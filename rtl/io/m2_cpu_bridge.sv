@@ -964,7 +964,6 @@ module m2_cpu_bridge #(
           if (r_we && (r_addr[1] || half_only)) begin
             ack_mem <= 1'b1;
             st      <= S_DONE;
-            tex_inval <= tex_region;   // R647: again, once landed
           end else begin
             half    <= 1'b1;
             oc_pal_we <= r_we && pal_mirror && hi_be;      // R222: the palette RAM's high word
@@ -1088,11 +1087,6 @@ module m2_cpu_bridge #(
         S_HI_W: if (!sd_ack) begin
           ack_mem <= 1'b1;
           st      <= S_DONE;
-          // R647: and again once the write has LANDED. The pulse at the start
-          // of the request sweeps the texel cache before the data is in SDRAM;
-          // a line refilled between that sweep and this point held old
-          // texels. This second sweep catches it.
-          tex_inval <= r_we && tex_region;
         end
 
         // Hold ack until the requester has seen it and dropped req. Without
