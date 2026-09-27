@@ -24498,3 +24498,23 @@ The two-flop handshake costs 21% of CPI, more than 40/35 gives. What the
 number really says: 7.32 cycles an instruction -- the CPU spends most of
 its time waiting on memory through the bridge. That, not the clock, is the
 lever (next).
+
+**R637 -- WHAT PACES THE GAME: MEASURE ON THE BOARD, WITH A TELEMETRY THAT
+FITS.** Ben: "try step 3 [the i960's memory stalls] but I think we have
+visited this before". We have: R78 (CPI ~21, 66% waiting on memory), R16
+(71-73% of Daytona's instruction stream is two poll loops), R311 (the game
+is vblank-locked at 57.52 Hz and the core shows a new picture every second
+or third frame -- about a third of hardware speed; a faster i960 only lets
+it finish a frame's work it is missing). CE_NUM is 16 (full 57.52 Hz) --
+the half-speed beam of R-era perspective work is not in the build.
+R636's 7.32 CPI is from the boot's first 2 M instructions, not gameplay, so
+it does not say what a gameplay frame waits on. That needs the board, and
+the full stream does not fit (R612: ~850 ALM).
+
+M2_DEBUG_LITE (Model2.sv g_nodbg): m2_dbg_stream alone, fed two records --
+'C' at ~270 Hz, the i960's IP | {copro_stall, TGP pc}; 'F' every vblank,
+{game flips (0x803008 writes), vblanks} | {TGP instructions retired, words
+the i960 pushed to the TGP}. build/m2scripts/decode_lite.py. The
+questions it answers: frames per vblank (the game's real rate), whether the
+i960 sits in a poll loop and which, whether the TGP is idle (few retires)
+while the i960 works, or the i960 held by the TGP (copro_stall).
