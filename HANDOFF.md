@@ -1,6 +1,16 @@
 # Handoff
 
-## 2026-09-27 (10:10): `build/seeds/s410` IS ON THE BOARD, AND WORKS.
+## 2026-09-27 (10:40): `build/seeds/s407` IS BACK ON THE BOARD. s411-s413 BUILDING.
+
+s410 drew the bands but broke textures (streaks, white blocks): its failing
+endpoints were the edge accumulators' SIGN bits -- not benign (R631). Both
+seeds of the R627 RTL failed where it matters, so s407 (last all-good) is
+back. s411-s413 = R627 + R631 (margin on the fill's edge step and the
+skip-mask query, both proven exact in simulation) + R630 (OSD Gamma:
+MAME / Mild / Off). Deploy only a seed whose core clocks are ALL clean, or
+whose failing endpoints are understood bit by bit.
+
+## 2026-09-27 (10:10): `build/seeds/s410` WAS ON THE BOARD (bands yes, textures no).
 
 s410 = the s409 RTL (R627 bilinear-unless-late, point one line, cache
 timing) on another seed. clk_mem +0.586, clk_i960 +3.633, clk_sys -0.230
