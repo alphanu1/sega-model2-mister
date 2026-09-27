@@ -109,7 +109,10 @@ localparam CONF_STR = {
 	"O[16:14],Probe,bootIP,chr 3,chr 1,chr #,chr A,row2,bndry,chr0;",
 	"-;",
 	"O[24:23],Walk trigger,After flip,Vblank,Flip,Write ptr;",
-	"O[22:21],Texture brightness,50%,75%,100%,25%;",
+	// R639: 100% FIRST, so it is the power-up default (an OSD field is 0 until
+	// set). The menu index is XORed with 2 below to keep scale_lum's encoding
+	// (0 50%, 1 75%, 2 100%, 3 25%). A saved config from before reads shifted.
+	"O[22:21],Texture brightness,100%,25%,50%,75%;",
 	"R[17],Save settings (NVRAM);",
 	// OFF BY DEFAULT. The overlay is 24 rows of hex painted over the top-left
 	// of the picture, which is exactly where the game puts its own text. It
@@ -176,7 +179,9 @@ localparam CONF_STR = {
 	// calibration (m2_palette) and the board is judged on Ben's own screen.
 	// MAME's is entry zero, the reference; Mild lifts the darks; Off is the
 	// colour table's raw values. 2D and 3D follow it together.
-	"O[33:32],Gamma,MAME,Mild,Off;",
+	// R639: Off first -- the power-up default. Menu 0 Off, 1 MAME, 2 Mild,
+	// mapped below to the palette's encoding (0 MAME, 1 mild, 2/3 off).
+	"O[33:32],Gamma,Off,MAME,Mild;",
 	// Which half of the right stick's Y is the throttle. Axis polarity is not
 	// standardised across pads, so this is a setting rather than a rebuild.
 	"O[28],Pedals,Normal,Swapped;",
@@ -552,15 +557,19 @@ always_ff @(posedge clk_sys) begin
 	tl0_s <= {tl0_s[1:0], status[21]};
 	tl1_s <= {tl1_s[1:0], status[22]};
 end
-wire [1:0] tex_lum_s2 = {tl1_s[2], tl0_s[2]};
+wire [1:0] tex_lum_s2 = {~tl1_s[2], tl0_s[2]};   // R639: menu index ^ 2
 always_ff @(posedge clk_sys) nowalk_s <= {nowalk_s[1:0], status[20]};
 reg [2:0] wrate_s;   // R256/R229: the OSD bit reaches the datapath through three flops
 always_ff @(posedge clk_sys) wrate_s <= {wrate_s[1:0], status[26]};
 reg [2:0] texoff_s;  // R275: the same, for the texture switch
 always_ff @(posedge clk_sys) texoff_s <= {texoff_s[1:0], status[27]};
 reg [1:0] gam_m1, gam_m2, gam_s1, gam_s2;   // R630: the gamma choice, to both clocks
-always_ff @(posedge clk_mem) begin gam_m1 <= status[33:32]; gam_m2 <= gam_m1; end
-always_ff @(posedge clk_sys) begin gam_s1 <= status[33:32]; gam_s2 <= gam_s1; end
+// R639: menu 0 Off -> 2, 1 MAME -> 0, 2 Mild -> 1, 3 (unused) -> off.
+wire [1:0] gam_menu = (status[33:32] == 2'd0) ? 2'd2 :
+                      (status[33:32] == 2'd1) ? 2'd0 :
+                      (status[33:32] == 2'd2) ? 2'd1 : 2'd2;
+always_ff @(posedge clk_mem) begin gam_m1 <= gam_menu; gam_m2 <= gam_m1; end
+always_ff @(posedge clk_sys) begin gam_s1 <= gam_menu; gam_s2 <= gam_s1; end
 reg [2:0] texpt_s;   // R620: the filter switch, on clk_mem where the texel cache runs
 always_ff @(posedge clk_mem) texpt_s <= {texpt_s[1:0], status[31]};
 // R265: THE WALK TRIGGER WAS THE ONE OSD BIT TAKEN RAW. Every other option in
@@ -1176,7 +1185,11 @@ end
 // At 100/60/30 the band sequencer's critical time is 78% texel wait (R573)
 // and port 10 alone spends 8.2% of every frame queued for the bus.
 m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(781),
-           .PRI(11'b100_0000_0100), .PRI_CAP(2)) u_sdram (
+           // R639: port 3 (the glyph cache -- the tile fetch) joins the class.
+           // It is the one reader with a per-scanline deadline: a line it does
+           // not finish is the previous line shown again (m2_video Q_RUN), and
+           // behind two texel grants at a time it missed that on heavy scenes.
+           .PRI(11'b100_0000_1100), .PRI_CAP(2)) u_sdram (
 	.clk(clk_mem), .rst_n(mem_rst_n), .ready(mem_ready),
 	// CL+2, FIXED, NO OSD OVERRIDE (R411). Only one capture depth can ever be
 	// right -- CL+1 samples the previous word of the burst, CL+3 the next -- so
@@ -3126,6 +3139,7 @@ wire [31:0] copro_rdata;
 wire        copro_stall;
 wire [31:0] copro_dbg_ctl;
 wire [15:0] copro_prog_words, copro_in_pushed, copro_out_popped;
+wire [15:0] vid_ovr_frame;   // tilemap overruns in the LAST FRAME (declared ahead of its readers)
 wire [31:0] copro_fctl_reads;
 // THE COPRO'S ACCEPTANCE COUNTERS, ON THE UART. Layer 2's hscr stays zero
 // while the TGP returns nothing (R106, R120), and these say which half is at
@@ -4521,37 +4535,56 @@ end else begin : g_nodbg
 	//       {TGP instructions retired, words the i960 pushed to the TGP} for
 	//       that frame
 	// Decoder: build/m2scripts/decode_lite.py.
-	logic [1:0]  lt_div;
+	// R639: the a channel also carries the CPU's own rate, as running totals
+	// (the decoder differences them, so a dropped record costs nothing):
+	//   'P' {instructions retired} | {data-cache hits}
+	//   'Q' {data-cache misses}    | {i960 cycles waiting on the bus}
+	// C, P and Q in turn at ~135 Hz each (~460 records/s with F, ~80% of the
+	// UART).
+	logic [2:0]  lt_div;
+	logic [1:0]  lt_asel;
+	logic [31:0] lt_cwait;
+	always_ff @(posedge clk_i960 or negedge cpu_rst_n) begin
+		if (!cpu_rst_n)             lt_cwait <= 32'd0;
+		else if (cpu_req && !cpu_ack) lt_cwait <= lt_cwait + 32'd1;
+	end
 	logic        lt_a_valid;
-	logic [15:0] lt_flips, lt_vbl, lt_tgp0, lt_push0;
+	// R639: the tilemap's scanline overruns in the last frame (m2_video's
+	// dbg_ovr_frame, clk_mem; latched at vblank so stable for a frame), sampled
+	// across the asynchronous clock groups by two flops.
+	logic [15:0] lt_ovr_s1, lt_ovr_s2;
+	always_ff @(posedge clk_sys) begin lt_ovr_s1 <= vid_ovr_frame; lt_ovr_s2 <= lt_ovr_s1; end
+	logic [15:0] lt_flips, lt_vbl, lt_tgp0;
 	logic        lt_b_valid;
 	logic [31:0] lt_b_addr, lt_b_data;
 	always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		if (!mem_rst_n) begin
-			lt_div <= 2'd0; lt_a_valid <= 1'b0; lt_flips <= 16'd0; lt_vbl <= 16'd0;
-			lt_tgp0 <= 16'd0; lt_push0 <= 16'd0; lt_b_valid <= 1'b0; lt_b_addr <= '0; lt_b_data <= '0;
+			lt_div <= 3'd0; lt_asel <= 2'd0; lt_a_valid <= 1'b0; lt_flips <= 16'd0; lt_vbl <= 16'd0;
+			lt_tgp0 <= 16'd0; lt_b_valid <= 1'b0; lt_b_addr <= '0; lt_b_data <= '0;
 		end else begin
 			lt_a_valid <= 1'b0; lt_b_valid <= 1'b0;
 			if (prof_tick) begin
-				lt_div <= lt_div + 2'd1;
-				lt_a_valid <= (lt_div == 2'd0);
+				lt_div <= lt_div + 3'd1;
+				lt_a_valid <= (lt_div == 3'd0) || (lt_div == 3'd3) || (lt_div == 3'd6);
+				lt_asel    <= (lt_div == 3'd3) ? 2'd1 : (lt_div == 3'd6) ? 2'd2 : 2'd0;
 			end
 			if (geo_wr_setrp) lt_flips <= lt_flips + 16'd1;
 			if (vbl_d && !vbl_dd) begin
 				lt_vbl     <= lt_vbl + 16'd1;
 				lt_b_valid <= 1'b1;
 				lt_b_addr  <= {lt_flips, lt_vbl};
-				lt_b_data  <= {tgp_retires - lt_tgp0, copro_in_pushed - lt_push0};
+				lt_b_data  <= {tgp_retires - lt_tgp0, lt_ovr_s2};   // R639: 'G', tile overruns
 				lt_tgp0    <= tgp_retires;
-				lt_push0   <= copro_in_pushed;
 			end
 		end
 	end
 	m2_dbg_stream #(.DIVISOR((SYS_MHZ * 1_000_000 + 57_600) / 115_200), .BUDGET_CYC(200_000)) u_dbg_lite (
 		.clk(clk_sys), .rst_n(mem_rst_n),
-		.a_valid(lt_a_valid), .a_addr(cpu_dbg_ip), .a_data({copro_stall, 15'd0, tgp_pc}),
+		.a_valid(lt_a_valid),
+		.a_addr((lt_asel == 2'd1) ? cpu_dbg_acc : (lt_asel == 2'd2) ? dc_miss : cpu_dbg_ip),
+		.a_data((lt_asel == 2'd1) ? dc_hits : (lt_asel == 2'd2) ? lt_cwait : {copro_stall, 15'd0, tgp_pc}),
 		.b_valid(lt_b_valid), .b_addr(lt_b_addr), .b_data(lt_b_data),
-		.a_tag(8'h43), .b_tag(8'h46),     // 'C', 'F'
+		.a_tag((lt_asel == 2'd1) ? 8'h50 : (lt_asel == 2'd2) ? 8'h51 : 8'h43), .b_tag(8'h47),   // 'P','Q','C'; 'G' (was 'F': R639)
 		.enable(1'b1),
 		.tx(UART_TXD), .dbg_dropped(uart_dropped)
 	);
@@ -5731,7 +5764,6 @@ wire [11:0] vid_layer_have [4];
 wire  [7:0] vid_fetches;
 wire [15:0] vid_hscr [4], vid_vscr [4];
 wire [15:0] vid_overruns;
-wire [15:0] vid_ovr_frame;   // overruns in the LAST FRAME
 
 wire [7:0] tile_r, tile_g, tile_b;
 wire [9:0] vid_x, vid_y;
