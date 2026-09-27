@@ -740,6 +740,14 @@ obj_texel_cdc/Vm2_texel_cdc: rtl/video/m2_texel_cdc.sv rtl/video/m2_texel_addr.s
 	$(VBUILD) --top-module m2_texel_cdc --Mdir obj_texel_cdc -o Vm2_texel_cdc -CFLAGS "-O2" \
 	  rtl/video/m2_texel_cdc.sv rtl/video/m2_texel_addr.sv sim/video/tb_m2_texel_cdc.cpp
 
+test_m2_geo_view: obj_geoview/Vm2_geo_view
+	@echo "== test m2_geo_view (the projection from the window command)"
+	@./obj_geoview/Vm2_geo_view $(TEST_ARGS)
+
+obj_geoview/Vm2_geo_view: rtl/video/m2_geo_view.sv sim/video/tb_m2_geo_view.cpp
+	$(VBUILD) --top-module m2_geo_view -Wno-TIMESCALEMOD --Mdir obj_geoview -o Vm2_geo_view -CFLAGS "-O2" \
+	  rtl/video/m2_geo_view.sv sim/video/tb_m2_geo_view.cpp
+
 test_m2_fb_read: obj_fbr/Vm2_fb_read
 	@echo "== test m2_fb_read (the framebuffer, a line at a time)"
 	@./obj_fbr/Vm2_fb_read $(TEST_ARGS)

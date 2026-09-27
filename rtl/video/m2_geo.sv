@@ -130,6 +130,12 @@ module m2_geo #(
   // is dot(normal, light) against dot(normal, point), so this is half of what
   // the luminance needs and the polygon's own normal is the other half.
   output logic  [7:0]   zadj_e,      // R246: op 0x08's operand, exponent byte -- the z-sort bias
+  // R642: geo_window_data (0x03), READ rather than stepped over. Its words are
+  // {x[27:16], y[11:0]}, twelve-bit signed each: the viewport's start and end
+  // corners and the projection centre for eye mode 0 (the only one Daytona
+  // selects, R641). win_cnt steps once per command, after all six are in.
+  output logic [31:0]   win_vp_s, win_vp_e, win_c0,
+  output logic  [7:0]   win_cnt,
   output logic [31:0]   lit_x, lit_y, lit_z,
   output logic [15:0]   dbg_lit_n,
   // R255: NOPS DECODED THIS FRAME. A well-formed list holds none; a walk that
@@ -609,7 +615,8 @@ module m2_geo #(
   logic [15:0] tp_n, tp_c;
   logic [15:0] nops_f;                   // R255: nops decoded in the frame being walked
   localparam logic [2:0] CAP_MTX = 3'd1, CAP_FOC = 3'd2, CAP_OBJ = 3'd3,
-                         CAP_TRA = 3'd4, CAP_LIT = 3'd5, CAP_ZAD = 3'd6;   // R246
+                         CAP_TRA = 3'd4, CAP_LIT = 3'd5, CAP_ZAD = 3'd6,   // R246
+                         CAP_WIN = 3'd7;                                   // R642
 
   assign mtx0 = mtx[0]; assign mtx4 = mtx[4]; assign mtx8 = mtx[8]; assign mtx11 = mtx[11];
 
@@ -639,11 +646,13 @@ module m2_geo #(
   // walker used to step over it.
   wire is_zad = (w_op == 5'h08) || (w_op == 5'h18);
   wire is_tp  = (w_op == 5'h06);                     // texture_parameters
+  wire is_win = (w_op == 5'h03) || (w_op == 5'h13);  // R642: window_data
   wire [3:0] cap_last = (w_cap == CAP_MTX) ? 4'd11
                       : (w_cap == CAP_FOC) ? 4'd1
                       : (w_cap == CAP_TRA) ? 4'd2
                       : (w_cap == CAP_LIT) ? 4'd2
                       : (w_cap == CAP_ZAD) ? 4'd0
+                      : (w_cap == CAP_WIN) ? 4'd5      // R642: six words
                                            : 4'd3;
 
   // THE ACKNOWLEDGE IS TAKEN ON ITS RISING EDGE, AND THE REQUEST DROPS FOR
@@ -685,6 +694,11 @@ module m2_geo #(
       lit_x <= 32'd0; lit_y <= 32'd0; lit_z <= 32'd0; dbg_lit_n <= 16'd0;
       dbg_nops <= 16'd0; nops_f <= 16'd0;
       zadj_e <= 8'd0;   // raster->z_adjust starts at zero in the reference
+      // R642: until the game sends one, the window MAME's first frame carries
+      // -- viewport (0,128)-(496,512), centre (248,320) -- which is exactly the
+      // projection this core used as constants (R174).
+      win_vp_s <= 32'h0000_0080; win_vp_e <= 32'h01F0_0200; win_c0 <= 32'h00F8_0140;
+      win_cnt  <= 8'd0;
       tp_i <= 5'd0; tp_n <= 16'd0; tp_c <= 16'd0; dbg_tp_n <= 16'd0;
       tp_we <= 1'b0; tp_idx <= 5'd0; tp_diffuse <= 8'd0; tp_ambient <= 8'd0;
       obj_tpa <= 32'd0; obj_tha <= 32'd0; obj_oba <= 32'd0; obj_obc <= 32'd0;
@@ -814,7 +828,7 @@ module m2_geo #(
             // operand before it.
             if (!is_cnt3) w_ip <= w_ip + 19'd1;
             wst  <= W_CNT;
-          end else if (is_mtx || is_foc || is_obj || is_tra || is_lit || is_zad) begin
+          end else if (is_mtx || is_foc || is_obj || is_tra || is_lit || is_zad || is_win) begin
             // READ THESE OPERANDS RATHER THAN STEPPING OVER THEM. They carry
             // the transform's state -- the matrix, its translation row, the
             // projection, and the object's address and count. Everything else
@@ -822,7 +836,7 @@ module m2_geo #(
             // was only counting.
             w_cap <= is_mtx ? CAP_MTX : is_foc ? CAP_FOC
                    : is_tra ? CAP_TRA : is_lit ? CAP_LIT
-                   : is_zad ? CAP_ZAD : CAP_OBJ;
+                   : is_zad ? CAP_ZAD : is_win ? CAP_WIN : CAP_OBJ;
             w_ci  <= 4'd0;
             wst   <= W_OPRD;
           end else if (oplen(w_op) == 16'hffff) begin
@@ -849,6 +863,12 @@ module m2_geo #(
                      endcase
             CAP_FOC: if (w_ci == 4'd0) foc_x <= rd_data; else foc_y <= rd_data;
             CAP_ZAD: zadj_e <= rd_data[30:23];        // R246
+            CAP_WIN: case (w_ci)                      // R642: vanishing points 1-3 unused
+                       4'd0: win_vp_s <= rd_data;
+                       4'd1: win_vp_e <= rd_data;
+                       4'd2: win_c0   <= rd_data;
+                       default: ;
+                     endcase
             default: case (w_ci)
                        4'd0: obj_tpa <= rd_data;
                        4'd1: obj_tha <= rd_data;
@@ -861,6 +881,7 @@ module m2_geo #(
             if (w_cap == CAP_MTX) dbg_mtx_n <= dbg_mtx_n + 16'd1;
             if (w_cap == CAP_FOC) dbg_foc_n <= dbg_foc_n + 16'd1;
             if (w_cap == CAP_LIT) dbg_lit_n <= dbg_lit_n + 16'd1;
+            if (w_cap == CAP_WIN) win_cnt <= win_cnt + 8'd1;   // R642
             // The object is announced only once its four words are in, and
             // the walk then STOPS until the engine reports the object drawn.
             if (w_cap == CAP_OBJ) begin

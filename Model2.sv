@@ -2865,6 +2865,16 @@ wire [15:0] geo_sd_din;
 
 wire [19:0] geo_dbg_rp, geo_dbg_wp;
 
+// R642: the window command's words, and the projection made from them.
+wire [31:0] geo_win_vp_s, geo_win_vp_e, geo_win_c0;
+wire [31:0] gv_xc, gv_yc, gv_a_left, gv_a_right, gv_a_bottom, gv_a_top;
+m2_geo_view #(.CRTC_X(0), .CRTC_Y(128)) u_geo_view (
+	.clk(clk_sys), .rst_n(mem_rst_n),
+	.win_vp_s(geo_win_vp_s), .win_vp_e(geo_win_vp_e), .win_c0(geo_win_c0),
+	.xc(gv_xc), .yc(gv_yc), .a_left(gv_a_left), .a_right(gv_a_right),
+	.a_bottom(gv_a_bottom), .a_top(gv_a_top)
+);
+
 m2_geo #(.AW(SDR_AW), .DEPTH(128)) u_geo (
 	.clk(clk_sys), .rst_n(mem_rst_n),
 	.wr_ctl(geo_wr_ctl), .wr_setwp(geo_wr_setwp), .wr_setrp(geo_wr_setrp),
@@ -2897,6 +2907,7 @@ m2_geo #(.AW(SDR_AW), .DEPTH(128)) u_geo (
 	// The light vector, for the luminance stage. Captured but not yet consumed:
 	// the dot products and the diffuse/ambient scale are still to come.
 	.zadj_e(geo_zadj_e),
+	.win_vp_s(geo_win_vp_s), .win_vp_e(geo_win_vp_e), .win_c0(geo_win_c0), .win_cnt(),   // R642
 	.lit_x(geo_lit_x), .lit_y(geo_lit_y), .lit_z(geo_lit_z),
 	.dbg_lit_n(geo_lit_n), .dbg_nops(geo_nops),
 	.dbg_walk_flip(geo_walk_flip), .dbg_walk_fallback(geo_walk_fb), .push_stall(geo_push_stall),
@@ -3065,13 +3076,12 @@ m2_geometry u_geometry (
 	// viewport and centre (model2_v.cpp:882); for a 496x384 screen centred at
 	// (248,192) they come out as -248, +248, +192, -192.
 	//
-	// STILL CONSTANT, AND THAT IS THE REMAINING GAP HERE. Model 2 sets the
-	// centre and viewport with rasterizer commands the core does not capture
-	// yet, and the CRTC sync registers offset them further. A game that moves
-	// its viewport draws to the wrong place -- visibly, rather than silently.
-	.xc(32'h43780000), .yc(32'h43400000),               // 248.0, 192.0
-	.a_left(32'hC3780000), .a_right(32'h43780000),      // -248.0, +248.0
-	.a_bottom(32'h43400000), .a_top(32'hC3400000),      // +192.0, -192.0
+	// R642: NO LONGER CONSTANT. The walker reads geo_window_data and
+	// m2_geo_view turns its viewport and centre into these, as MAME does; the
+	// CRTC offsets (0, 128 on Daytona, logged from MAME) are its parameters.
+	.xc(gv_xc), .yc(gv_yc),
+	.a_left(gv_a_left), .a_right(gv_a_right),
+	.a_bottom(gv_a_bottom), .a_top(gv_a_top),
 	// R222: the light, the texture parameters and the header address from the
 	// walker; the colour data through the engine's own port, by space.
 	.tha(geo_obj_tha), .tpa(geo_obj_tpa), .lit_x(geo_lit_x), .lit_y(geo_lit_y), .lit_z(geo_lit_z),
