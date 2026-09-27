@@ -24789,3 +24789,10 @@ preloaded (so lighting is not compared yet -- state.txt has it).
 **R644 -- THE GLYPH CACHE BACK TO 64 KB.** IDX_BITS 13, invalidate index
 [14:2] as the module's own note says. tb_m2_char_cache at 13 bits: 10,393
 checks, 0 fail. Built with R643's fix as the next sweep.
+
+**R642, built.** s446-s448 (framebuffer + the window-driven projection): all
+fit, 39,381-39,541 ALM, 503/553 M10K. s447 clean everywhere but clk_sys
++0.022; s448 clk_mem +0.805, clk_sys +0.912, clk_i960 +3.269, holds
++0.164..+0.259, HDMI -0.194 (framework) -- deployed 20:02 (s445 is .prev).
+s446 HDMI -1.200. The geometry differential (R643) already shows this
+projection landing on MAME's pixels; the board shows it against the 2D.
