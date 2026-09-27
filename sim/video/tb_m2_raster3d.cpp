@@ -21,6 +21,18 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstdint>
+#include <map>
+
+// R640: M2_R3D_FB -- the DDR3 side of FB_DDR3 (build with -GFB_DDR3=1 -GFTB=0).
+// From the ddr3 branch's tb_m2_raster3d_fb: one command at a time, bursts of
+// fb_blen beats, reads LAT cycles out, writes a cycle after the command (as
+// m2_ddr3), the address and burst count checked constant for every beat
+// (Avalon), and UNWRITTEN MEMORY READS 0xFFFF... -- whose bit 24 is the
+// painted flag, so the first-frame gate is exercised.
+static std::map<uint32_t, uint64_t> g_ddr;
+static int g_ddr_cd = 0, g_ddr_left = 0, g_ddr_wr = 0;
+static uint32_t g_ddr_a = 0, g_ddr_a0 = 0; static unsigned g_ddr_b0 = 0;
+static long g_ddr_wbeats = 0, g_ddr_rbeats = 0, g_ddr_proto = 0;
 #include <vector>
 
 static int checks = 0, fails = 0;
@@ -158,7 +170,31 @@ int main(int argc, char **argv) {
                           ? atol(std::getenv("M2_R3D_SWEEP")) : 0;
   long sweep_ctr = 0;
   int tex_wait = -1, tex2_wait = -1, tex3_wait = -1, tex4_wait = -1;
+  static const bool FBM = std::getenv("M2_R3D_FB") != nullptr;
   auto tick = [&]() {
+    if (FBM) {   // R640
+      const int LAT = 20;
+      d->fb_wnext = 0; d->fb_rvalid = 0; d->fb_ack = 0;
+      if (g_ddr_left == 0 && d->fb_req) {
+        g_ddr_a = g_ddr_a0 = d->fb_addr; g_ddr_b0 = d->fb_blen;
+        g_ddr_left = d->fb_blen ? d->fb_blen : 256; g_ddr_wr = d->fb_we;
+        g_ddr_cd = g_ddr_wr ? 1 : LAT;
+      } else if (g_ddr_left > 0) {
+        if (d->fb_addr != g_ddr_a0 || d->fb_blen != g_ddr_b0) g_ddr_proto++;
+        if (g_ddr_cd > 0) g_ddr_cd--;
+        else if (g_ddr_wr) {
+          uint64_t old = g_ddr.count(g_ddr_a) ? g_ddr[g_ddr_a] : ~0ull, m = 0;
+          for (int b = 0; b < 8; b++) if (d->fb_be & (1 << b)) m |= 0xffull << (b * 8);
+          g_ddr[g_ddr_a] = (d->fb_din & m) | (old & ~m);
+          d->fb_wnext = 1; g_ddr_a++; g_ddr_left--; g_ddr_wbeats++;
+          if (g_ddr_left == 0) d->fb_ack = 1;
+        } else {
+          d->fb_dout = g_ddr.count(g_ddr_a) ? g_ddr[g_ddr_a] : ~0ull;
+          d->fb_rvalid = 1; g_ddr_a++; g_ddr_left--; g_ddr_rbeats++;
+          if (g_ddr_left == 0) d->fb_ack = 1;
+        }
+      }
+    }
     if (SWEEP) {
       if (++sweep_ctr >= SWEEP) { sweep_ctr = 0; d->tex_inval = 1; }
       else                        d->tex_inval = 0;
@@ -557,8 +593,25 @@ int main(int argc, char **argv) {
     std::printf("  R615: %ld quads pushed\n", nq);
     long hits = 0;
     video_frame(false, &hits);           // the list is collected, then swapped in
+    // R640: with the framebuffer, the list swapped in above is drawn once and
+    // PUBLISHED at the next frame_start -- one frame later than the bands.
+    if (FBM) {   // until the whole list has been drawn and published
+      const int pre = std::getenv("M2_R3D_FBPRE") ? std::atoi(std::getenv("M2_R3D_FBPRE")) : 2;
+      for (int k = 0; k < pre; k++) video_frame(false, &hits);
+    }
     g_rec = true;
+    px_dump = std::getenv("M2_R3D_PXDUMP") != nullptr;
     video_frame(true, &hits);            // the frame that displays it
+    px_dump = false;
+    if (FBM) std::printf("  R640 FB state: complete %d shown_ok %d show %d draw %d busy %d fill_band %d cst %d pixels %u clear_req %d clear_busy %d dvalid %d pst %d\n",
+      (int)d->rootp->m2_raster3d__DOT__fb_complete, (int)d->rootp->m2_raster3d__DOT__fb_shown_ok,
+      (int)d->rootp->m2_raster3d__DOT__fb_show, (int)d->rootp->m2_raster3d__DOT__fb_draw,
+      (int)d->rootp->m2_raster3d__DOT__fb_busy, (int)d->rootp->m2_raster3d__DOT__fill_band,
+      (int)d->rootp->m2_raster3d__DOT__cst, (unsigned)d->dbg_fb_pixels,
+      (int)d->rootp->m2_raster3d__DOT__fb_clear_req, (int)d->rootp->m2_raster3d__DOT__fb_clear_busy,
+      (int)d->rootp->m2_raster3d__DOT__dvalid, (int)d->rootp->m2_raster3d__DOT__pst);
+    if (FBM) std::printf("  R640 FB: %ld write beats, %ld read beats, %ld Avalon violations, published %u dropped %u\n",
+                         g_ddr_wbeats, g_ddr_rbeats, g_ddr_proto, (unsigned)d->dbg_fb_pub, (unsigned)d->dbg_fb_drop);
     g_rec = false;
     FILE *fo = std::fopen((dir + "/fetch.txt").c_str(), "w");
     for (const Fetch &f : g_fetch) std::fprintf(fo, "%d %d %u %u %u %u\n", f.y, f.x, f.u, f.v, f.t, f.c);

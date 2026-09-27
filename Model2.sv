@@ -31,7 +31,7 @@ assign {UART_RTS, UART_DTR} = 0;
 // UART_TXD is driven by the debug streamer at the bottom of this file. The
 // core's own printf -- see rtl/dbg/m2_dbg_stream.sv for why it exists.
 assign {SD_SCK, SD_MOSI, SD_CS} = 'Z;
-assign {DDRAM_CLK, DDRAM_BURSTCNT, DDRAM_ADDR, DDRAM_DIN, DDRAM_BE, DDRAM_RD, DDRAM_WE} = '0;
+// R640: DDRAM is driven by m2_ddr3, beside m2_raster3d below.
 
 assign VGA_SL  = 0;
 assign VGA_F1  = 0;
@@ -5831,7 +5831,39 @@ wire        tex_m2_ack  = p2_tex_f & p_ack[2];
 wire [63:0] tex_m2_data = p_dout[2];
 
 // R543: back to 8x6 -- R542's 16x3 won in the bench and not on the board.
-m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1),   // R607
+// R640: THE DDR3 MASTER, DRIVING THE 3D FRAMEBUFFER (from branch ddr3, R358).
+//
+// ON clk_sys, THE CLOCK ITS CONSUMERS RUN ON (R377): m2_ddr3 hands out
+// single-cycle ack/rvalid/wnext, and on clk_mem half of them were lost to
+// m2_raster3d on clk_sys. DDRAM_CLK is ours to drive, so the bridge runs at 70.
+//
+// AND IT WAITS FOR THE BOOT (R380, never tried on that branch). Four builds
+// there showed the coprocessor dying exactly when the framebuffer reader began
+// to work -- the reader was the one master that did not wait for the ROM and
+// TGP microcode to finish crossing the HPS bridge. It is held in reset until
+// cp_done, the same condition the rest of the core's late masters wait on.
+wire        ddr_req, ddr_we, ddr_ack, ddr_wnext, ddr_rvalid;
+wire [24:0] ddr_addr;
+wire [7:0]  ddr_blen, ddr_be;
+wire [63:0] ddr_din, ddr_dout;
+logic       ddr_go;
+always_ff @(posedge clk_sys or negedge mem_rst_n)
+	if (!mem_rst_n) ddr_go <= 1'b0; else ddr_go <= cp_done;
+m2_ddr3 u_ddr3 (
+	.clk(clk_sys), .rst_n(mem_rst_n & ddr_go),
+	.req(ddr_req), .we(ddr_we), .addr(ddr_addr), .blen(ddr_blen), .din(ddr_din), .be(ddr_be),
+	.wnext(ddr_wnext), .rvalid(ddr_rvalid), .ack(ddr_ack), .dout(ddr_dout),
+	.DDRAM_CLK(DDRAM_CLK), .DDRAM_BUSY(DDRAM_BUSY),
+	.DDRAM_BURSTCNT(DDRAM_BURSTCNT), .DDRAM_ADDR(DDRAM_ADDR),
+	.DDRAM_DIN(DDRAM_DIN), .DDRAM_BE(DDRAM_BE),
+	.DDRAM_WE(DDRAM_WE), .DDRAM_RD(DDRAM_RD),
+	.DDRAM_DOUT(DDRAM_DOUT), .DDRAM_DOUT_READY(DDRAM_DOUT_READY),
+	.dbg_lat_last(), .dbg_lat_max(), .dbg_inflight_max(), .dbg_stuck_wr(), .dbg_acks()
+);
+
+// R640: FB_DDR3 -- the 3D layer is drawn into DDR3 and shown only when whole.
+// FTB off: its mask is fed by the band buffers, which are not built.
+m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b0), .FB_DDR3(1'b1),
               .PXC(1'b1), .PIXSTEP(4), .FRB(2),   // R626: quarter-pixel plane fit
               .TXLATE(3),   // R627: point-sample while the fill is within 3 bands of the beam
               .TXREUSE(1'b0),   // R633: every other group while late -- REJECTED by eye (R634)
@@ -5888,7 +5920,12 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1),   // R
 	.dbg_late_frames(r3d_late_frames), .dbg_qend_frames(r3d_qend_frames),
 	.dbg_collect_cyc(r3d_collect_cyc), .dbg_hold(r3d_hold), .dbg_missed(r3d_missed),
 	.dbg_miss_map(r3d_miss_map), .dbg_miss_lines(r3d_miss_lines),
-	.dbg_seq_a(r3d_seq_a), .dbg_seq_b(r3d_seq_b)   // R536, R547
+	.dbg_seq_a(r3d_seq_a), .dbg_seq_b(r3d_seq_b),   // R536, R547
+	// R640: the framebuffer's DDR3 side
+	.fb_req(ddr_req), .fb_we(ddr_we), .fb_addr(ddr_addr), .fb_blen(ddr_blen),
+	.fb_din(ddr_din), .fb_be(ddr_be),
+	.fb_wnext(ddr_wnext), .fb_rvalid(ddr_rvalid), .fb_ack(ddr_ack), .fb_dout(ddr_dout),
+	.dbg_fb_lines(), .dbg_fb_late(), .dbg_fb_pub(), .dbg_fb_drop(), .dbg_fb_pixels()
 );
 
 // The 3D layer sits OVER the tilemap where it painted, and shows the tilemap
