@@ -24796,3 +24796,44 @@ fit, 39,381-39,541 ALM, 503/553 M10K. s447 clean everywhere but clk_sys
 +0.164..+0.259, HDMI -0.194 (framework) -- deployed 20:02 (s445 is .prev).
 s446 HDMI -1.200. The geometry differential (R643) already shows this
 projection landing on MAME's pixels; the board shows it against the 2D.
+
+**R645 -- THE TEXTURE SHEETS MIRRORED INTO DDR3, BEHIND A SWITCH.**
+
+Ben: keep the 2D where it is (with R644's cache); for the CPU and TGP, "hold
+them [the textures] in SDRAM and push them into the frame buffer". The
+renderer's textured OUTPUT is already in DDR3 (R640); what competes with the
+CPU on SDRAM is the texel cache READING the sheets on every miss -- R362 on
+the ddr3 branch: the CPU's port waiting 24.5% of the frame with the band
+renderer running, 0% without. So SDRAM stays the master copy and nothing in
+the CPU's path changes; DDR3 gets a copy, and the texel cache can read it.
+
+m2_tex_ddr3:
+  - WRITES: every CPU write the bridge completes into the sheets (port 1,
+    clk_sys: cpu_sd_req && cpu_sd_we && p_ack[1], words 0x1760000..
+    0x185FFFF) queues (64) and goes to DDR3 as one byte-enabled beat. Four
+    SDRAM words to a DDR3 word, word k in bits 16k+15:16k -- m2_sdram's own
+    burst packing ({dq_r, cap[2], cap[1], cap[0]}); misses are always four-
+    word aligned (base + {rp, cg, 2'b00}), so a DDR3 answer is bit for bit an
+    SDRAM one. Mirror at DDR3 word 0x80000 (4 MB above the framebuffer).
+  - READS: the two miss ports (clk_mem) each get one read in flight, crossed
+    by a toggle each way (R377: no pulse crosses); the address is latched on
+    clk_mem and held to the answer, the data held on clk_sys to the next
+    request. A slot that timed out and asked for another line is not handed
+    the old one (the acknowledge needs the address to still match).
+  - ARBITRATION: m2_ddr3_arb u_ddr_top, the renderer's port (reader first,
+    then writer, inside) over the mirror.
+  - OSD "Texture memory: SDRAM / DDR3" (status[34], three flops into clk_mem)
+    moves ports 10 and 2's requests to the mirror. Default SDRAM. Mirror
+    writes always run, so the switch can be flipped any time.
+
+tb_m2_tex_ddr3, two clocks at 100:70 and a DDR3 model with 8-48 cycle reads:
+4,000 writes into both sheets (all lanes, partial byte enables) all mirrored,
+a write below sheet 0 not; 3,000 line reads on two ports all equal to the
+SDRAM burst's four words from a reference image; the moved-on slot answered
+with the NEW line. Stressed to a write every 6 clk_sys cycles (faster than
+the bridge can issue them) with none lost -- but the board adds the
+framebuffer's own traffic, which the bench does not, so dbg_wr_lost stays.
+
+Built WITH telemetry lite (the framebuffer freed the ALM): the same capture
+with the switch on SDRAM and then on DDR3 is the A/B -- frames per vblank,
+the i960's bus wait (Q), tile overruns (G).
