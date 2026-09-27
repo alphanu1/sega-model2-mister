@@ -24700,3 +24700,12 @@ a vblank it would drop lists (held frames). THE FIX WHEN IT MATTERS: keep ONE
 band buffer as a write-combining tile -- render the band on chip (and FTB's
 mask with it), then flush it to DDR3 in eight 248-beat bursts (~2,000 cycles
 a band, ~100 k a frame), with no separate clear pass.
+
+**R640, built.** s440-s442 died in quartus_map: `for (genvar k ...)` inside
+a generate, which Verilator accepts and Quartus 17.0 does not -- the parse
+check (quartus_map --analyze_file on each changed file) is now run before
+every sweep. s443-s445: all fit, **38,993-39,029 ALM (93%), 503/553 M10K** --
+~2,350 ALM and 45 block RAMs back from the band buffers and the FTB mask.
+s445 CLOSED EVERY CLOCK: clk_mem +0.713, clk_sys +0.613, clk_i960 +3.112,
+**HDMI +0.100**, holds +0.242..+0.274. On the board 18:40 (s431 is .prev).
+s443/s444: cores clean, HDMI -0.996/-0.995.
