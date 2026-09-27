@@ -1,5 +1,10 @@
 # Handoff
 
+## 2026-09-27 (18:15): s431 CONFIRMED GOOD BY BEN ("currently good") -- main.
+
+main fast-forwarded to r639-beta (s431's RTL). Framebuffer build s440-s442
+in progress in ../sega-model2-fb3d (branch fb3d, R640).
+
 ## 2026-09-27 (18:01): `build/seeds/s431` ON THE BOARD -- the beta candidate.
 
 s431 = s424 + R639 (Texture brightness 100% / Gamma Off by default; the tile
