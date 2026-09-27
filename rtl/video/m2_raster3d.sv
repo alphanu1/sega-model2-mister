@@ -826,15 +826,15 @@ module m2_raster3d #(
   logic [3:0]                         bd_pg_wr     [NBUF];
   logic [3:0]                         bd_pg_filled [NBUF];
 
-  genvar b;
+  genvar b, nb;
   generate
     // R640: no band buffers with the framebuffer -- their outputs still need
     // driving, because the sequencer and the mixer reference them.
     if (FB_DDR3) begin : g_noband
       assign bd_rd_col = '0; assign bd_rd_hit = '0; assign bd_painted = '0;
       assign bd_span_ready = '0; assign bd_clear_busy = '0; assign bd_pg_active = '0;
-      for (genvar k = 0; k < NBUF; k++) begin : g_nopg
-        assign bd_pg_row[k] = '0; assign bd_pg_x0[k] = '0; assign bd_pg_wr[k] = '0;
+      for (nb = 0; nb < NBUF; nb++) begin : g_nopg   // Quartus 17: genvar declared outside
+        assign bd_pg_row[nb] = '0; assign bd_pg_x0[nb] = '0; assign bd_pg_wr[nb] = '0;
       end
     end
     for (b = 0; b < (FB_DDR3 ? 0 : NBUF); b++) begin : g_band
