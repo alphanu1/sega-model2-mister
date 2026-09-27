@@ -24740,3 +24740,52 @@ Also here, the tile overruns (Ben: "massively reduced but still there"): the
 glyph cache is 32 KB (R313 halved it for block RAM; R313/R320 measured the
 halving at 14 -> 53 overruns a frame). The framebuffer returned ~50 M10K, so
 64 KB (IDX_BITS 13, ~26 M10K) is next.
+
+**R643 -- THE GEOMETRY DIFFERENTIAL, AND WHAT IT FOUND FIRST: TEXTURE
+COORDINATES CLAMPED ONE BINADE EARLY.**
+
+The instrument R641 asked for. MAME patch p14 (M2GEO_WALK=N, M2GEO_OUT=dir)
+dumps, at the start of the Nth geo_parse, everything a walk reads -- the
+display list, both polygon RAMs, the polygon and texture ROMs, texture and
+log RAM, palette, colour translation, luma -- and the state it inherits
+(matrix, focus, light, coefficients, the 32 texture parameters, z_adjust,
+polygon_z, viewport, centre, the CRTC offsets); then, during that walk, every
+polygon MAME keeps, post-clip, projected exactly as model2_3d_project will
+(geopolys.txt). `make geodiff` (sim/video/geodiff_top.sv: m2_geo + m2_geo_view
++ m2_geometry wired as Model2.sv wires them; the memories laid out at the
+GAME_* bases and served through Model2.sv's own engine-port arithmetic)
+replays the walk; build/m2scripts/geodiff.py sets our quads against MAME's
+polygons -- in order, then aligned per polygon allowing for a fan split
+differently or rotated, then with look-ahead so a polygon one side drops
+does not shift the rest; and, on the aligned polygons, each unambiguous
+vertex's u/v against MAME's.
+
+Attract walks 4,000 (255 polygons) and 2,500 (1,775):
+
+    w4000   252 within 1 px, 3 off, 0 missing, 2 quads extra
+    w2500   1,747 within 1 px, 18 off, 10 missing, 7 quads extra
+
+  - POSITIONS: this core's geometry and projection agree with MAME polygon
+    for polygon -- with R642's window centre (the old constant would have put
+    every y 50 rows off here).
+  - THE OFF ONES are edge clipping of big polygons: clipped vertices a few
+    pixels from MAME's (x = 0 where MAME has -1; y 370.25 against 373.35),
+    and sometimes a spurious vertex and a degenerate quad (w4000 253/254,
+    w2500 700). Open -- the clipper.
+  - THE MISSING are sub-pixel slivers (0.4 px tall) of distant objects:
+    R216's tiny cull, by design.
+  - TEXTURE COORDINATES: w4000 had five polygons (a close-up surface, h0
+    4409) whose v came out 511 at every vertex where MAME has 16,399..16,466
+    texels -- the texture squashed flat, which is what "orientation not quite
+    right" looks like. m2_geometry's f2uvw makes a 15-bit f/2, which holds f
+    up to 65,535, but it clamped at e >= 127+15, i.e. f >= 32,768 -- half the
+    range R609 made room for. Clamp moved to e >= 127+16. After: 188 and
+    1,578 textured polygons checked, 0 with a vertex's u/v off.
+
+The tiny-polygon aliasing in the check (vertices within half a pixel of each
+other) is excluded rather than counted; the texture-parameter table is not
+preloaded (so lighting is not compared yet -- state.txt has it).
+
+**R644 -- THE GLYPH CACHE BACK TO 64 KB.** IDX_BITS 13, invalidate index
+[14:2] as the module's own note says. tb_m2_char_cache at 13 bits: 10,393
+checks, 0 fail. Built with R643's fix as the next sweep.
