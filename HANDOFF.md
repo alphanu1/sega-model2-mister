@@ -1,6 +1,14 @@
 # Handoff
 
-## 2026-09-27 (10:40): `build/seeds/s407` IS BACK ON THE BOARD. s411-s413 BUILDING.
+## 2026-09-27 (11:00): `build/seeds/s412` IS ON THE BOARD. EVERY CORE CLOCK CLEAN.
+
+s412 = R627 (bilinear unless late, point one line) + R631 (fill edge step and
+skip-mask query given margin) + R630 (OSD Gamma) + R626 (quarter-pixel
+vertices). clk_mem +0.736, clk_sys +0.711, clk_i960 +3.615, holds all
+positive, HDMI -0.156 (framework), 41,464 ALM. s411 clk_mem -0.531, s413
+clk_mem -2.319 -- not used. s407 is Model2.rbf.prev.
+
+## 2026-09-27 (10:40): `build/seeds/s407` WAS BACK ON THE BOARD; s411-s413 built.
 
 s410 drew the bands but broke textures (streaks, white blocks): its failing
 endpoints were the edge accumulators' SIGN bits -- not benign (R631). Both
