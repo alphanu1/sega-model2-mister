@@ -149,7 +149,8 @@ module m2_geo #(
   output logic [15:0]   dbg_walk_flip,
   output logic [15:0]   dbg_walk_fallback,
   // R608: list words the game wrote AT OR AHEAD of the walk while it was
-  // walking -- the single-buffered list overwritten before it was read.
+  // walking -- the walked list overwritten before it was read. Since R638,
+  // only words into the walk's hold window count: zero is the answer.
   // Wraps; the stream takes deltas.
   output logic [15:0]   dbg_overtake,
   // R260: BACKPRESSURE, DONE PROPERLY. The queue between the i960 and SDRAM
@@ -329,7 +330,8 @@ module m2_geo #(
                            : (pd_wbase + AW'({pd_widx, 1'b0}));
 
   assign sd_busy = (dst != D_IDLE);
-  // R610: THE QUEUE DOES NOT DRAIN WHILE A WALK RUNS. Daytona's list is
+  // R610: THE QUEUE DOES NOT DRAIN WHILE A WALK RUNS (narrowed by R638,
+  // below: the premise was wrong). Daytona's list is
   // single-buffered at address 0 and the next one is pushed while this walk
   // is still reading it; R608 counted 3,795+ words written ahead of the walk
   // in 152 s and caught walks retiring 3 opcodes (the scenery dropout). Held
@@ -338,7 +340,29 @@ module m2_geo #(
   // does -- and the walk always reads the list it was started on. The walk's
   // own polygon-data writes (pd_req) are not held.
   logic walk_active;
-  assign q_pop   = (dst == D_IDLE) && !pd_req && q_valid && !walk_active;
+  // R638: ONLY THE WALK'S OWN LIST IS HELD. R610 held every pushed word for
+  // the whole walk. But Daytona DOUBLE-buffers -- MAME 0.289, 180 s of attract:
+  // 10,355 walks alternating between dword 0x0000 and 0x4000 every frame, no
+  // jumps, lists at most 2,057 dwords -- so while one list is walked the CPU
+  // (the loop at 0x19f58) is writing the OTHER buffer, which the walk never
+  // reads. Holding those filled the queue and stalled the CPU until the walk
+  // ended, so every game frame took two vblanks (telemetry lite: 2.03; MAME
+  // 1.00). R211's "single-buffered at 0, a list every second frame" was read
+  // off this core while it was already running at half speed.
+  //
+  // A word is held only if it lands in [w_ip, w_ip + HOLD_WIN): at or ahead
+  // of the walk and close enough to be its list. The walk reads only at w_ip
+  // and moves forward, so a word below w_ip has been read. HOLD_WIN is 12,288
+  // dwords, six times the longest list, and still short of the other buffer.
+  // A jump breaks "below = read", so after one the hold is total again for the
+  // rest of that walk (Daytona never jumps; a word let through before a jump
+  // back is the case this does not cover).
+  localparam logic [18:0] HOLD_WIN = 19'h3000;
+  logic walk_jumped;
+  wire [18:0] q_dw     = 19'(q_data[48:34]);
+  wire        q_in_win = (q_dw >= w_ip) && (q_dw < w_ip + HOLD_WIN);
+  wire        pop_ok   = !walk_active || (!walk_jumped && !q_in_win);
+  assign q_pop   = (dst == D_IDLE) && !pd_req && q_valid && pop_ok;
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -370,7 +394,7 @@ module m2_geo #(
           sd_wr_din  <= pd_wdata[15:0];
           sd_wr_req  <= 1'b1;
           dst        <= D_LO;
-        end else if (q_valid && !walk_active) begin   // R610: as q_pop
+        end else if (q_valid && pop_ok) begin   // R610/R638: as q_pop
           pd_active  <= 1'b0;
           wr_ptr     <= q_data[51:32];
           dw_hi      <= q_data[31:16];
@@ -541,6 +565,9 @@ module m2_geo #(
   // on the reference: Daytona writes it 492 times in 600 frames -- every second
   // frame, right after it sets the write pointer -- and the address is always 0,
   // so the game single-buffers and uses the WRITE ITSELF as "the list is ready".
+  // R638 CORRECTS THIS: MAME 0.289 walks 57.5 lists a second, alternating
+  // dword 0x0000 / 0x4000 -- one flip a frame, double-buffered. The write IS
+  // still "the list is ready"; "every second frame" was this core's own rate.
   //
   // frame_pend stays as the fallback for a list that has not flipped, which is
   // what a bench or a game that never writes rp needs, and it is held off while
@@ -561,7 +588,8 @@ module m2_geo #(
   wire         no_flips = fs_since_flip[2];
   // The reference says the 0x803008 write IS "the list is ready" -- Daytona
   // writes it every second frame right after the write pointer, always to
-  // address 0, single-buffered. So mode 0 should be the correct one and the
+  // address 0, single-buffered (R638: double-buffered, every frame -- see
+  // above). So mode 0 should be the correct one and the
   // others exist to prove that rather than to be believed.
   logic        setwp_q;
   logic        wp_pend;
@@ -641,6 +669,7 @@ module m2_geo #(
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       wst <= W_IDLE; w_ip <= 19'd0; w_ops <= 16'd0; w_skip <= 16'd0; w_op <= 5'd0;
+      walk_jumped <= 1'b0;
       dbg_walk_ops <= 16'd0; dbg_walk_objs <= 16'd0;
       dbg_walk_frames <= 16'd0; dbg_walk_unknown <= 8'd0;
       w_cap <= 3'd0; w_ci <= 4'd0; obj_valid <= 1'b0; eng_seen <= 1'b0;
@@ -665,7 +694,11 @@ module m2_geo #(
       // Remember the vblank; clear it when the walk actually starts.
       if (frame_start) begin frame_pend <= 1'b1; drain_wait <= 10'd0;
                              dbg_nops <= nops_f; nops_f <= 16'd0; end   // R255: latch per frame
-      else if ((frame_pend || flip_pend) && !(&drain_wait)) drain_wait <= drain_wait + 10'd1;
+      // R638: the grace counts only while no walk runs. Counted during a walk,
+      // it had long expired when that walk ended, so the next walk started at
+      // once over its own list's tail still queued -- and then held it.
+      else if ((frame_pend || flip_pend) && !(&drain_wait) && (wst == W_IDLE))
+        drain_wait <= drain_wait + 10'd1;
       // The flip. Counted like Model 1's fs_since_flip so the vblank fallback
       // only applies to a list that has not flipped in four frames.
       setrp_q <= wr_setrp;
@@ -718,6 +751,7 @@ module m2_geo #(
           // no unknown to explain it. That is what the board reported --
           // ops=1, objs=0, frames frozen, unknown clear.
           w_ip  <= 19'(geo_rp[16:2]);       // the read pointer is a BYTE address
+          walk_jumped <= 1'b0;             // R638
           w_ops <= 16'd0;
           wst   <= W_FETCH;
         end
@@ -736,6 +770,7 @@ module m2_geo #(
             wst <= W_IDLE;
           end else if (rd_data[31]) begin              // a jump
             w_ip <= 19'(rd_data[16:2]);
+            walk_jumped <= 1'b1;                       // R638
             wst  <= W_FETCH;
           end else begin
             w_op  <= rd_data[27:23];
@@ -1000,16 +1035,14 @@ module m2_geo #(
     end
   end
 
-  // R608: THE OVERWRITE RACE, COUNTED. Daytona's list is single-buffered at
-  // address 0 (R211) and the next one is pushed while the walk may still be
-  // reading this one. A pushed dword that lands at or beyond the walk's read
-  // pointer, while a walk is running, replaces a word the walk has not read.
-  // Counted as it drains to memory -- the moment it becomes visible to the
-  // walk. A jump can move w_ip backwards, so this over-counts on a list that
-  // jumps; zero is the answer that matters.
+  // R608: THE OVERWRITE RACE, COUNTED. A pushed dword that drains into the
+  // walk's hold window while a walk runs replaces a word the walk may not have
+  // read. Counted as it drains to memory -- the moment it becomes visible to
+  // the walk. R638 lets words ahead of w_ip but beyond the window go (the other
+  // buffer), so this counts the window only; zero is the answer that matters.
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) dbg_overtake <= 16'd0;
-    else if (q_pop && (wst != W_IDLE) && (19'(q_data[48:34]) >= w_ip))
+    else if (q_pop && (wst != W_IDLE) && q_in_win)
       dbg_overtake <= dbg_overtake + 16'd1;
   end
 

@@ -41,7 +41,15 @@ static const uint32_t BASE = 0x16f0000;
 // keep every push out of memory -- a bench artefact, since the board always
 // answers.
 static bool auto_end = true;
+// R638: a walker served from `mem` itself, one read every rd_slow cycles, so a
+// pushed word that drains ahead of the walk is one the walk really reads.
+static int rd_slow = 0, rd_cnt = 0;
+static uint16_t rdm(uint32_t a){ auto it = mem.find(a); return it == mem.end() ? 0xFFFF : it->second; }
 static void tick() {
+  if (rd_slow) { d->rd_ack = 0;
+    if (d->rd_req && ++rd_cnt >= rd_slow) { rd_cnt = 0;
+      uint32_t a = BASE + (uint32_t(d->rd_addr) << 1);
+      d->rd_data = uint32_t(rdm(a)) | (uint32_t(rdm(a + 1)) << 16); d->rd_ack = 1; } }
   if (auto_end) { d->rd_ack = 0; if (d->rd_req) { d->rd_data = 0x07800f0fu; d->rd_ack = 1; } }
   // the shared write port: ack a request the cycle after it is seen
   static bool pend = false; static uint32_t pa; static uint16_t pd;
@@ -574,6 +582,64 @@ int main(int argc,char**argv){
     // and it must not have written the OTHER memory at the same index
     ck("slow pram untouched at 0x10", rd32(PRAM0, 0x10), 0xFFFFFFFFu);
     ck("the walk still finished", d->dbg_walk_frames ? 1u : 0u, 1u);
+  }
+
+  // ---- 8. R638: ONLY THE WALK'S OWN LIST IS HELD.
+  //
+  // Daytona double-buffers (dword 0x0000 / 0x4000, alternating every frame in
+  // MAME) and pushes the next list into the other buffer while this one is
+  // walked. R610 held all of it, so the CPU stalled until the walk ended. Here
+  // a slow walk of list A runs while the pusher (a) writes list B, 300 dwords,
+  // into the other buffer -- it must land during the walk, the pusher not held
+  // to the walk's end; (b) rewrites words of A the walk has read -- they land
+  // too; (c) writes `end` into A ahead of the walk -- held until the walk ends,
+  // or the walk stops short. Then B, flipped during A, is walked in full.
+  {
+    d->rst_n = 0; for (int i = 0; i < 4; i++) tick(); d->rst_n = 1; idle(2);
+    mem.clear();
+    auto put = [&](uint32_t dw, uint32_t v){ uint32_t a = BASE + (dw << 1);
+                                             mem[a] = v & 0xFFFF; mem[a + 1] = v >> 16; };
+    auto get = [&](uint32_t dw) -> uint32_t { uint32_t a = BASE + (dw << 1);
+                                              return uint32_t(rdm(a)) | (uint32_t(rdm(a + 1)) << 16); };
+    const uint32_t A = 0x100, N = 64, B = 0x4100, NB = 299, END = 0x0fu << 23;
+    for (uint32_t i = 0; i < N; i++) put(A + i, 0);          // nops
+    put(A + N, END);
+    rd_slow = 200;
+    w(2, A * 4);                                            // flip: walk A
+    for (int i = 0; i < 24 * 200; i++) tick();              // ~24 ops in
+    // (a) list B into the other buffer, more than the queue holds
+    w(1, B * 4);
+    for (uint32_t i = 0; i < NB; i++) w(3, 0);
+    w(3, END);
+    for (int i = 0; i < 1500; i++) tick();                  // the queue drains
+    bool b_ok = true;
+    for (uint32_t i = 0; i < NB; i++) if (get(B + i) != 0) b_ok = false;
+    if (get(B + NB) != END) b_ok = false;
+    ck("other buffer landed during the walk", b_ok ? 1u : 0u, 1u);
+    ck("walk A still running after list B", d->dbg_walk_frames, 0);
+    w(2, B * 4);                                            // flip B, pending
+    // (b) rewrite what the walk has read
+    w(1, A * 4);
+    for (int i = 0; i < 8; i++) w(3, END);
+    for (int i = 0; i < 64; i++) tick();
+    ck("words behind the walk landed", get(A + 7), END);
+    // (c) `end` ahead of the walk, inside its list
+    w(1, (A + N - 8) * 4);
+    for (int i = 0; i < 4; i++) w(3, END);
+    for (int i = 0; i < 64; i++) tick();
+    ck("words ahead of the walk held", get(A + N - 8), 0);
+    ck("walk A still running", d->dbg_walk_frames, 0);
+    uint32_t ops_a = 0;
+    for (int i = 0; i < 400000 && d->dbg_walk_frames < 1; i++) tick();
+    ops_a = d->dbg_walk_ops;
+    ck("words ahead landed once the walk ended", (tick(), tick(), get(A + N - 8)), END);
+    for (int i = 0; i < 400000 && d->dbg_walk_frames < 2; i++) tick();
+    std::printf("test: R638 walk A %u ops, walk B %u ops, overtakes %u\n",
+                ops_a, d->dbg_walk_ops, d->dbg_overtake);
+    ck("walk A read its whole list", ops_a, N + 1);
+    ck("walk B read its whole list", d->dbg_walk_ops, NB + 1);
+    ck("no word drained into a walk's window", d->dbg_overtake, 0);
+    rd_slow = 0;
   }
 
   std::printf("m2_geo: checks=%d fails=%d\n", checks, fails);
