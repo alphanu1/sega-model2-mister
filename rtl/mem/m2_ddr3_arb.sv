@@ -43,6 +43,9 @@ module m2_ddr3_arb (
 
   // ---- port 1: the span writer
   input  logic        b_req,
+  // R655: b is not GRANTED while b_hold (the framebuffer writer waits while
+  // the scanout reader has a line to fetch). A grant already made runs out.
+  input  logic        b_hold,
   input  logic        b_we,
   input  logic [24:0] b_addr,
   input  logic [7:0]  b_blen,
@@ -90,9 +93,10 @@ module m2_ddr3_arb (
   // removed, because the other mechanism was silently carrying it. Two guards
   // for one rule means a mutation test cannot tell you which one works.
   logic       cool;
+  wire        b_ok = b_req && !b_hold;   // R655
 
   assign m_req  = cool ? 1'b0
-                : busy ? (owner ? b_req  : a_req)  : (a_req | b_req);
+                : busy ? (owner ? b_req  : a_req)  : (a_req | b_ok);
   assign m_we   = busy ? (owner ? b_we   : a_we)   : (a_req ? a_we   : b_we);
   assign m_addr = busy ? (owner ? b_addr : a_addr) : (a_req ? a_addr : b_addr);
   assign m_blen = busy ? (owner ? b_blen : a_blen) : (a_req ? a_blen : b_blen);
@@ -167,7 +171,7 @@ module m2_ddr3_arb (
         // the first with the old routing and black-screened; R374 tried the
         // second with the old busy rule and wedged sooner. This is the pair.
         if (a_req)      begin owner <= 1'b0; busy <= 1'b1; end
-        else if (b_req) begin owner <= 1'b1; busy <= 1'b1; end
+        else if (b_ok)  begin owner <= 1'b1; busy <= 1'b1; end
       end else if (busy && m_ack) begin
         busy <= 1'b0;
         cool <= 1'b1;

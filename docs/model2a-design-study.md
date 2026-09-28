@@ -25216,3 +25216,49 @@ against a foreign writer in our region (it would damage a frozen frame too);
 the switch is kept because it costs nothing to compare. The self-test (R653)
 writes one buffer continuously while the scanout checks the other -- the
 running game's situation exactly.
+
+**R655 -- THE REPEATED SCANLINES, FOUND BY THE SELF-TEST: SCANOUT LINES
+LANDING LATE BEHIND THE WRITER. FETCHED THREE AHEAD, NEVER DROPPED, AND THE
+WRITER GIVES WAY.**
+
+s554 on the board, FB self-test on (Ben: "broken rows on both" addresses): 120 s
+of UART, 3,300 frames, EVERY one with bad pixels -- 55-71 rows a frame,
+11,000-16,000 pixels, each bad row holding the data of the row TWO ABOVE it
+(row 2 held row 0, 3 held 1, 8 held 6; row 1 held 383, the previous frame's
+last), starting at column 0, clustered at the TOP of the frame. Two line
+buffers, one line ahead: a line shown before its fetch lands shows the buffer's
+last contents, the line two above. The top of the frame is where the writer
+floods DDR3 (the self-test generator; in the game the list-clear and the start
+of a new draw), and a read queues behind those writes inside the HPS
+controller -- the renderer's arbiter orders requests on the FPGA side only.
+It fits all of Ben's observations: the top of the screen; worse at texel step
+1 (a DDR3 write per pixel); gone in a frozen frame (nothing written); the same
+at both FB addresses (R654's theory is out).
+
+The old late count missed it: it counted a request arriving while a fetch was
+still running, not a line landing part way through its own display. And R362's
+rule DROPPED a request that arrived during a fetch -- a stale row outright.
+
+THE FIX. m2_fb_read: four line buffers (one even/odd pair of 1,024-deep
+memories, the buffer in the top address bits, ~2 more M10K); lines requested
+three ahead (m2_raster3d, targets in the blanking skipped, so a frame's first
+lines are fetched in the blanking before it); requests queued, never dropped --
+the newest line asked for is remembered and lines are fetched in order until
+caught up; `hungry` while a line is being fetched or waits; late now means
+landed with its display due or past. m2_ddr3_arb b_hold: the writer is not
+GRANTED while the reader is hungry (a grant made runs out), so a read only
+ever queues behind writes issued while the scanout was fully caught up.
+
+Proved in tb_m2_raster3d's HPS-queue model (M2_R3D_WQ, 30% scaler load), FB
+self-test, bad rows per frame:
+
+    write drain (cycles/beat)   2     4     8          16
+    old reader                  0     0     238-255    339-344
+    new reader                  0     0     0          fails (the bus cannot
+                                                       carry the scanout alone)
+
+The board's 55-71 lies between the old reader's 4 and 8; the new one holds at
+twice that. Frame 9000 drawn normally: identical to the clean frame, draw time
+1.36 video frames (1.38 before). tb_m2_fb_read updated: a request arriving
+during a fetch is now queued and both lines land right (24 checks);
+tb_m2_ddr3_arb 26 checks.

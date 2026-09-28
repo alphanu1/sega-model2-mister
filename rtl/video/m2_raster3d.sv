@@ -809,6 +809,7 @@ module m2_raster3d #(
       logic [24:0] r_addr;
       logic [7:0]  r_blen;
       logic        fbr_hit;
+      logic        fbr_hungry;   // R655: the scanout has a line to fetch; the writer waits
 
       m2_fb_write #(.SCR_W(SCR_W), .SCR_H(SCR_H), .STRIDE(512)) u_fbw (
         .clk(clk), .rst_n(rst_n),
@@ -829,13 +830,19 @@ module m2_raster3d #(
       // so line 0 is fetched fresh before the beam reaches it), and a toggle.
       logic [9:0] fl_sy_q;
       logic [8:0] fl_line;
+      localparam int unsigned FB_LA = 3, V_TOT = 424;   // R655
+      wire  [9:0] fl_tgt = (scan_y + 10'(FB_LA) >= 10'(V_TOT)) ? scan_y + 10'(FB_LA) - 10'(V_TOT)
+                                                              : scan_y + 10'(FB_LA);
       logic       fl_tog;
       always_ff @(posedge scan_clk or negedge rst_n) begin
         if (!rst_n) begin fl_sy_q <= 10'd0; fl_line <= 9'd0; fl_tog <= 1'b0; end
         else begin
           fl_sy_q <= scan_y;
-          if (scan_y != fl_sy_q) begin
-            fl_line <= (scan_y >= 10'(SCR_H - 1)) ? 9'd0 : 9'(scan_y + 10'd1);
+          // R655: THREE LINES AHEAD. The target is (scan_y + 3) mod V_TOTAL;
+          // a target in the blanking is not fetched, so the first lines of a
+          // frame are fetched during the last blanking lines before it.
+          if (scan_y != fl_sy_q && fl_tgt < 10'(SCR_H)) begin
+            fl_line <= 9'(fl_tgt);
             fl_tog  <= ~fl_tog;
           end
         end
@@ -854,13 +861,13 @@ module m2_raster3d #(
         end
       end
 
-      m2_fb_read #(.WIDTH(SCR_W), .STRIDE(512)) u_fbr (
+      m2_fb_read #(.WIDTH(SCR_W), .STRIDE(512), .LA(FB_LA), .V_TOTAL(V_TOT)) u_fbr (
         .clk(clk), .rd_clk(scan_clk), .rst_n(rst_n),
         .fb_sel(fb_show),
-        .line_req(line_pulse), .line_y(fl_line_c), .line_ready(),
+        .line_req(line_pulse), .line_y(fl_line_c), .line_ready(), .hungry(fbr_hungry),   // R655
         .m_req(r_req), .m_we(r_we), .m_addr(r_addr), .m_blen(r_blen),
         .m_rvalid(r_rvalid), .m_dout(fb_dout), .m_ack(r_ack),
-        .rd_parity(scan_y[0]), .rd_x(scan_x[$clog2(SCR_W)-1:0]),
+        .rd_buf(scan_y[1:0]), .rd_x(scan_x[$clog2(SCR_W)-1:0]),   // R655
         .rd_col(fb_rd_col), .rd_hit(fbr_hit),
         .dbg_lines(dbg_fb_lines), .dbg_late(dbg_fb_late),
         .dbg_st(), .dbg_busy(), .dbg_acks_seen()
@@ -942,7 +949,7 @@ module m2_raster3d #(
         .a_req(r_req), .a_we(r_we), .a_addr(r_addr), .a_blen(r_blen),
         .a_din(64'd0), .a_be(8'hFF),
         .a_wnext(), .a_rvalid(r_rvalid), .a_ack(r_ack),
-        .b_req(w_req), .b_we(w_we), .b_addr(w_addr), .b_blen(w_blen),
+        .b_req(w_req), .b_hold(fbr_hungry), .b_we(w_we), .b_addr(w_addr), .b_blen(w_blen),   // R655
         .b_din(w_din), .b_be(w_be),
         .b_wnext(w_wnext), .b_rvalid(), .b_ack(w_ack),
         .m_req(fb_req), .m_we(fb_we), .m_addr(fb_addr), .m_blen(fb_blen),

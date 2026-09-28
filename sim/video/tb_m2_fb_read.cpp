@@ -59,7 +59,7 @@ int main(int argc, char **argv) {
   Verilated::commandArgs(argc, argv);
   d = new Vm2_fb_read;
   d->clk = 0; d->rd_clk = 0; d->rst_n = 0; d->line_req = 0; d->fb_sel = 0;
-  d->rd_x = 0; d->rd_parity = 0;
+  d->rd_x = 0; d->rd_buf = 0;
   d->m_rvalid = 0; d->m_ack = 0; d->m_dout = 0;
   for (int i = 0; i < 4; i++) tick();
   d->rst_n = 1; tick();
@@ -82,7 +82,7 @@ int main(int argc, char **argv) {
     ck("248 beats served (the visible line)", beats_served, BEATS);
 
     long wrong = 0;
-    d->rd_parity = y & 1;              // R354: buffer chosen by line parity
+    d->rd_buf = y & 3;                 // R354, R655: buffer chosen by the line mod 4
     for (int x = 0; x < 496; x++) {
       d->rd_x = x; tick(); tick();
       uint32_t got = ((uint32_t)d->rd_hit << 24) | (d->rd_col & 0xffffff);
@@ -96,7 +96,7 @@ int main(int argc, char **argv) {
   {
     std::printf("test: the ping-pong does not hand back the wrong buffer\n");
     long wrong = 0;
-    d->rd_parity = 3 & 1;
+    d->rd_buf = 3 & 3;
     for (int x = 0; x < 496; x++) {
       d->rd_x = x; tick(); tick();
       uint32_t got = ((uint32_t)d->rd_hit << 24) | (d->rd_col & 0xffffff);
@@ -105,14 +105,31 @@ int main(int argc, char **argv) {
     ck("still the last line fetched", wrong, 0);
   }
 
-  // a line asked for before the previous landed is COUNTED, not silently late
+  // R655: a line asked for before the previous landed is QUEUED, not dropped:
+  // both lines are fetched, in order, and each is right. (R362 dropped the
+  // second; on the board that was a stale row at the top of every frame.)
   {
-    std::printf("test: asking early is counted, not silent\n");
-    uint32_t before = d->dbg_late;
-    d->line_y = 1; d->line_req = 1; tick(); d->line_req = 0;
-    d->line_y = 2; d->line_req = 1; tick(); d->line_req = 0;   // too soon
-    for (int i = 0; i < 40000 && !d->line_ready; i++) tick();
-    ck("the early request was counted", (long)(d->dbg_late > before), 1);
+    std::printf("test: asking early is queued, both lines land\n");
+    for (int x = 0; x < STRIDE; x += 2)
+      for (int y = 4; y < 6; y++) {
+        uint32_t a = (uint32_t)y * (STRIDE / 2) + (uint32_t)(x >> 1);
+        mem[a] = ((uint64_t)want_px(y, x + 1) << 32) | want_px(y, x);
+      }
+    commands = 0;
+    d->line_y = 4; d->line_req = 1; tick(); d->line_req = 0;
+    d->line_y = 5; d->line_req = 1; tick(); d->line_req = 0;   // before 4 landed
+    for (int i = 0; i < 80000 && (d->dbg_busy || commands < 2); i++) tick();
+    for (int i = 0; i < 20; i++) tick();
+    ck("both lines were fetched", commands, 2);
+    for (int y = 4; y < 6; y++) {
+      long wrong = 0; d->rd_buf = y & 3;
+      for (int x = 0; x < 496; x++) {
+        d->rd_x = x; tick(); tick();
+        uint32_t got = ((uint32_t)d->rd_hit << 24) | (d->rd_col & 0xffffff);
+        if (got != want_px(y, x)) wrong++;
+      }
+      ck("and each is right", wrong, 0);
+    }
   }
 
   // ---- R368: AN ACKNOWLEDGE THAT ARRIVES IN R_REQ MUST NOT BE LOST.
