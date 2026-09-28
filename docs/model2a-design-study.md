@@ -25294,3 +25294,26 @@ Ben on the architecture: a MISTER_FB design -- the scaler reading our frame on
 its own vbuf port, as screen_rotate does -- would end BOTH the 3D rows and the
 2D glyph overruns (nothing would be raced against the beam any more), at the
 price of drawing the 2D into DDR3 as well. Pacing is tried first.
+
+**R657 -- WHICH KIND OF WRONG, AND THE TOP OF THE FRAME FETCHED EARLY.**
+
+s560 (R656) on the board. Ben: every pace, even 1/16, "still has the same
+issue but the game gets slower"; in the game, repeated lines over "half the
+screen". Self-test, 30 s: every frame 32-57 bad rows (mean 39), from row 0 to
+~370, ~250 of 496 pixels each; row 0 held row 380 in every frame. In normal
+play the late count (a line landing with its display due) read 2 in total --
+so the counter and the picture disagree, and the checker (which reads the
+scanout's output, before any mix with the 2D) says the line buffer is wrong
+at display time. Pacing to 35 MB/s changing nothing says our own write volume
+is not the cause.
+
+Two stories fit a bad row: it holds ANOTHER line (the buffer not refreshed in
+time, or refreshed with the wrong line), or it holds its OWN line from the
+WRONG frame (the scanout reading a buffer other than the one published --
+which would also be "half the screen" in the game, and invisible in a frozen
+scene, where every frame is the same). The checker now counts rows of each
+kind per frame and keeps the first bad pixel below row 4 as {row, row held,
+frame number right, x}. And lines 0-3 are fetched on scan lines 385-388,
+just after the flip, not 421-423 after the writer has had the whole blanking
+(row 0's staleness). Bench: 0/0 at drains 4, 8, 12; the row-200 fault reads as
+one wrong-line row holding unpainted memory; frame 9000 identical.

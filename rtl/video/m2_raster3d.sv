@@ -856,8 +856,17 @@ module m2_raster3d #(
       logic [9:0] fl_sy_q;
       logic [8:0] fl_line;
       localparam int unsigned FB_LA = 3, V_TOT = 424;   // R655
-      wire  [9:0] fl_tgt = (scan_y + 10'(FB_LA) >= 10'(V_TOT)) ? scan_y + 10'(FB_LA) - 10'(V_TOT)
-                                                              : scan_y + 10'(FB_LA);
+      // R657: THE TOP OF THE FRAME IS FETCHED EARLY. Lines 0-3 go into the
+      // buffers lines 380-383 used, free once those are shown, so they are
+      // fetched on scan lines 385-388 -- after the flip at the start of the
+      // blanking (frame_start is the vblank edge), with ~36 lines to land --
+      // not on 421-423, after the writer has had the whole blanking to fill the
+      // HPS queue (R656: row 0 held row 380 in every frame of the self-test).
+      // A second request for line 3 at scan line 0 finds it fetched already.
+      localparam int unsigned TOP0 = SCR_H + 1;   // 385
+      wire  [9:0] fl_tgt = (scan_y >= 10'(TOP0) && scan_y < 10'(TOP0 + FB_LA + 1)) ? scan_y - 10'(TOP0)
+                         : (scan_y + 10'(FB_LA) < 10'(SCR_H))                      ? scan_y + 10'(FB_LA)
+                         : 10'(SCR_H);   // nothing
       logic       fl_tog;
       always_ff @(posedge scan_clk or negedge rst_n) begin
         if (!rst_n) begin fl_sy_q <= 10'd0; fl_line <= 9'd0; fl_tog <= 1'b0; end
@@ -914,7 +923,7 @@ module m2_raster3d #(
       logic [2:0]  tst_s;
       logic [9:0]  ck_x1, ck_x2, ck_y1;
       logic [15:0] ck_bad, ck_rows;
-      logic        ck_rowbad, ck_have;
+      logic        ck_rowbad, ck_rowwf, ck_have;   // R657: this row has a wrong-line / wrong-frame pixel
       logic [26:0] ck_first;
       logic [15:0] ck_bad_f, ck_rows_f;
       logic [26:0] ck_first_f;
@@ -935,26 +944,34 @@ module m2_raster3d #(
           tst_s <= '0; ck_x1 <= '0; ck_x2 <= '0; ck_y1 <= '0;
           ck_bad <= '0; ck_rows <= '0; ck_rowbad <= 1'b0; ck_have <= 1'b0; ck_first <= '0;
           ck_bad_f <= '0; ck_rows_f <= '0; ck_first_f <= '0; ck_tog <= 1'b0;
-          ck_sfid1 <= '0; ck_sfid2 <= '0; ck_last <= '0;
+          ck_sfid1 <= '0; ck_sfid2 <= '0; ck_last <= '0; ck_rowwf <= 1'b0;
         end else begin
           tst_s <= {tst_s[1:0], fb_test};
           ck_x1 <= scan_x; ck_x2 <= ck_x1; ck_y1 <= scan_y;
-          if (scan_y != ck_y1) ck_rowbad <= 1'b0;
+          if (scan_y != ck_y1) begin ck_rowbad <= 1'b0; ck_rowwf <= 1'b0; end
           ck_sfid1 <= tp_show_fid; ck_sfid2 <= ck_sfid1;
-          if (ck_look && ck_isbad) ck_last <= ck_ey;   // R656: the last bad row
+          // R657: WHICH KIND OF WRONG. A bad pixel holding ANOTHER line's data
+          // (or none) is a line-buffer fault; one holding its OWN line with the
+          // wrong frame number is a frame fault -- the scanout reading a buffer
+          // other than the one published. Rows of each kind are counted, and the
+          // first bad pixel below row 4 (row 0's known staleness aside) is kept:
+          // {row, the row it held, its frame number right, x/2}.
           if (ck_look && ck_isbad) begin
-            if (!(&ck_bad)) ck_bad <= ck_bad + 16'd1;
-            if (!ck_rowbad && !(&ck_rows)) ck_rows <= ck_rows + 16'd1;
-            ck_rowbad <= 1'b1;
-            if (!ck_have) begin
+            automatic logic [8:0] held = fbr_hit ? fb_rd_col[23:15] : 9'h1FF;
+            automatic logic       wl   = (held != ck_ey);
+            if (wl  && !ck_rowbad && !(&ck_bad))  ck_bad  <= ck_bad + 16'd1;    // rows: wrong line
+            if (!wl && !ck_rowwf && !(&ck_rows)) ck_rows <= ck_rows + 16'd1;   // rows: wrong frame
+            if (wl)  ck_rowbad <= 1'b1;
+            if (!wl) ck_rowwf  <= 1'b1;
+            if (!ck_have && ck_ey >= 9'd4) begin
               ck_have  <= 1'b1;
-              ck_first <= {ck_ey, 9'd0, fbr_hit ? fb_rd_col[23:15] : 9'h1FF};   // R656: x -> last row, below
+              ck_first <= {ck_ey, held, (fb_rd_col[8:6] == ck_sfid2), ck_x1[8:1]};
             end
           end
           // the frame's totals, at the first line past the picture
           if (scan_y == 10'(SCR_H) && ck_y1 != 10'(SCR_H)) begin
             ck_bad_f <= ck_bad; ck_rows_f <= ck_rows;
-            ck_first_f <= {ck_first[26:18], ck_have ? ck_last : 9'd0, ck_first[8:0]};   // {first, last, first held}
+            ck_first_f <= ck_first;   // R657
             ck_bad <= '0; ck_rows <= '0; ck_have <= 1'b0; ck_first <= '0;
             ck_tog <= ~ck_tog;
           end

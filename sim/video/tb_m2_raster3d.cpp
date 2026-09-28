@@ -576,8 +576,8 @@ int main(int argc, char **argv) {
     for (int f = 0; f < NF; f++) {
       video_frame(false, &hits);
       const unsigned fr = (unsigned)d->dbg_tp_first;
-      std::printf("  R653 self-test frame %d: bad pixels %u, bad rows %u, first bad row %u, last bad row %u, first held row %u\n",
-                  f, (unsigned)d->dbg_tp_bad, (unsigned)d->dbg_tp_rows, (fr >> 18) & 0x1ff, (fr >> 9) & 0x1ff, fr & 0x1ff);
+      std::printf("  R657 self-test frame %d: rows wrong-line %u, rows wrong-frame %u; first below row 4: row %u held %u frame-ok %u x %u\n",
+                  f, (unsigned)d->dbg_tp_bad, (unsigned)d->dbg_tp_rows, (fr >> 18) & 0x1ff, (fr >> 9) & 0x1ff, (fr >> 8) & 1, (fr & 0xff) * 2);
     }
     delete d;
     return 0;
@@ -695,6 +695,24 @@ int main(int argc, char **argv) {
     }
     push_all(polys);
     std::printf("  R615: %ld quads pushed, %ld REFUSED by the store (lost)\n", nq, nq_refused);
+    // R657: M2_R3D_DUMPA -- THE FRAME DRAWN WHILE THE NEXT LIST IS COLLECTED.
+    // On the board every frame is drawn while the walker fills the store's
+    // other bank and the sort reorders it; a frozen frame (the walk off) is the
+    // one drawn with nothing collected alongside, and it is always clean. This
+    // dumps the frame that SHOWS list A -- drawn while B was pushed and sorted
+    // above -- to compare with a clean draw of A alone.
+    if (std::getenv("M2_R3D_LIST2") && std::getenv("M2_R3D_DUMPA")) {
+      const int s0 = d->rootp->m2_raster3d__DOT__fb_show;
+      int k = 0;
+      for (; k < 16 && d->rootp->m2_raster3d__DOT__fb_show == s0; k++) video_frame(false, &hits);
+      std::printf("  R657 list A published after %d more video frames (fb_show %d -> %d)\n",
+                  k, s0, (int)d->rootp->m2_raster3d__DOT__fb_show);
+      px_dump = true;
+      video_frame(true, &hits);          // the frame that shows A
+      px_dump = false;
+      delete d;
+      return 0;
+    }
     g_fbrec = FBM;                       // R650: record the draw this swap starts
     video_frame(false, &hits);           // the list is collected, then swapped in
     // R640: with the framebuffer, the list swapped in above is drawn once and
