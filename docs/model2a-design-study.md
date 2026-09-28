@@ -25010,3 +25010,52 @@ at least s377 (Ben: "my sdram image is as earlier still broken"): trees in
 blocky solid squares with horizontal streaks. That is the next work item,
 not a regression from R645-R648 -- with texddr = 0 the texel ports were a
 plain mux onto the SDRAM ports as before.
+
+**R650 -- THE TEXTURES: WHAT IS RIGHT, MEASURED ONE LINK AT A TIME.**
+
+Ben: textures bad on every build (R647's note: s377 and s431 alike). The bench
+frame differential (R615) draws MAME's own list from MAME's texture RAM at a
+fixed latency; the board draws the game's list from the game's uploads through
+the real controller. Every link between the two was tested separately.
+
+  1. PIXSTEP. The framebuffer's draw time, board clock ratio, texel latency 60
+     (tb_m2_raster3d now times the draw from the swap to fb_complete; its R647
+     probe printed 0 -- it looked for the draw after it had finished):
+
+         frame   PIXSTEP 4   PIXSTEP 2   PIXSTEP 1   (video frames; a list
+         2000    1.88        3.13        5.22         arrives every 2.09)
+         9000    1.38        2.17        3.48
+
+     At PIXSTEP 1 the bench's trees match MAME texel for texel. s536 (PIXSTEP
+     1) on the board: cars right in some frames -- liveries, numbers, logos --
+     and horizontal streaks in others (Ben: "sometimes the textures look great
+     for a couple of frames"). So PIXSTEP is a sharpness cost, not the fault.
+  2. THE UPLOAD. tb_m2_boot (the real i960, bridge and memory map, C++ SDRAM)
+     now dumps both sheets (M2_TEXDUMP): after 14 M instructions all
+     1,048,576 words equal MAME's texture RAM at frames 1000 and 2000.
+     Daytona re-uploads ~200 K dwords at each course change of the attract
+     (f2000->3000, 5000->6000, 8000->9000) and nothing between.
+  3. SDRAM ON THE BOARD. m2_texview (OSD "Texture view"): the sheets as SDRAM
+     holds them, read through the texel cache's own port 10. s538: a clean
+     page (the Dinosaur Canyon set, not in MAME's frame-2000 sheets -- item 2).
+     Its bench passes 52,377,600 pixel checks to a latency of 100+20.
+  4. THE CACHE UNDER THE REAL HANDSHAKE. tb_m2_texel_bl M2_TBL_SDRAM: requests
+     dispatched on their rising edge, acknowledge and data held two cycles
+     (m2_sdram's ACK_HOLD), latency 2-31 / 2-121 / 2-401: 300,000 checks,
+     0 fails, 0 lost each.
+  5. A LIST REPLACING A DRAW IN FLIGHT. tb_m2_raster3d M2_R3D_LIST2/INTR: it
+     cannot happen -- P_SORTW holds until the store's sort is done, and the
+     swap waited for list A to finish (0 pixels differ from a clean draw). The
+     code path it would take is still wrong and is recorded so it is not
+     rediscovered: a swap mid-band resets fill_band to 0 but lets the band
+     finish, whose C_DONE then advances to band 1 (band 0 never drawn), and
+     the list-clear starts while that band still writes.
+
+The bench's own blind spot on the way: it pushed quads without looking at
+q_ready, so a list pushed while the store was READY vanished (now counted).
+
+Left, and only on the board: the clock crossing (m2_texel_cdc is a textbook
+Gray-pointer FIFO; its local timeout answers 0x0FF -- opaque full white), the
+texel slots' 1,023-cycle give-up (answers 0), and the framebuffer on the real
+DDR3. Telemetry 'T' (s539-s541) counts the first two and the framebuffer's
+published and dropped lists.
