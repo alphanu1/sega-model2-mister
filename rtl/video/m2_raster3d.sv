@@ -130,6 +130,17 @@ module m2_raster3d #(
   // top level holds the GAME on it -- no vblank interrupt, no frame count, no
   // walk -- so the 2D the game writes keeps the 3D's pace.
   output logic            list_hold,
+  // R653: THE FRAMEBUFFER SELF-TEST (FB_DDR3). fb_test (clk, quasi-static)
+  // replaces the fill with a generator that writes a pattern each pixel of
+  // which names its own place -- {row, 8-pixel cell, check} -- and a checker
+  // on the scanout verifies every pixel it reads against the place it is
+  // shown. Per video frame (scan_clk, latched at the end of the visible
+  // lines, carried to clk on a toggle): bad pixels, bad rows, and the first
+  // bad one's {row, column, the row its data named}.
+  input  logic            fb_test,
+  output logic [15:0]     dbg_tp_bad,
+  output logic [15:0]     dbg_tp_rows,
+  output logic [26:0]     dbg_tp_first,
   output logic            tex_m_req,
   output logic [TEX_AW:1] tex_m_addr,
   input  logic            tex_m_ack,
@@ -689,11 +700,19 @@ module m2_raster3d #(
   // published is one list drawn start to finish.
   logic fb_draw, fb_show, fb_shown_ok, fb_complete, fb_busy;
   wire swap = frame_start && (pst == P_READY) && !(FB_DDR3 && fb_busy);
-  assign list_hold = FB_DDR3 && (pst == P_READY) && fb_busy;   // R652
+  assign list_hold = FB_DDR3 && (pst == P_READY) && fb_busy && !fb_test;   // R652; R653
+  logic tp_done;   // R653: the self-test generator's frame is whole
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       fb_draw <= 1'b0; fb_show <= 1'b1; fb_shown_ok <= 1'b0; fb_busy <= 1'b0;
       dbg_fb_pub <= 16'd0; dbg_fb_drop <= 16'd0;
+    end else if (FB_DDR3 && fb_test) begin
+      // R653: the generator's frames, published whole at the frame edge; the
+      // lists go on swapping (the walk must not stall) and draw nothing.
+      fb_busy <= 1'b0;
+      if (frame_start && tp_done) begin
+        fb_show <= fb_draw; fb_shown_ok <= 1'b1; fb_draw <= ~fb_draw;
+      end
     end else if (FB_DDR3) begin
       if (frame_start && fb_complete) begin
         fb_show     <= fb_draw;
@@ -714,11 +733,66 @@ module m2_raster3d #(
   logic [23:0] fb_rd_col;
   logic        fb_rd_hit;
   logic        fbw_ready;
+  logic        fbw_in_ready;   // R653: the writer's own ready; the fill sees it only outside the self-test
+  assign fbw_ready = fbw_in_ready && !fb_test;
+
+  // ---------------------------------------------------------------- R653
+  // THE SELF-TEST'S GENERATOR (clk). Every visible row, in bit-reversed order
+  // (so consecutive writes are not consecutive rows), every 8-pixel cell, in
+  // two spans split at w = (cell + row) & 7 -- odd starts, single-pixel heads
+  // and tails and whole-word bodies all get written, with their byte enables.
+  // A pixel's colour is {row[8:0], cell[5:0], frame[2:0], row[5:0] ^ cell}:
+  // it names its own place, so the checker needs nothing but the colour it
+  // reads, and the frame number catches a row that was never rewritten (the
+  // pattern is otherwise the same every frame, and a stale row would pass).
+  logic        tp_valid, tp_active, tp_half;
+  logic [8:0]  tp_r;             // row counter; the row is its bit reversal
+  logic [5:0]  tp_i;             // cell
+  logic [15:0] tp_y, tp_x0, tp_x1;
+  logic [23:0] tp_col;
+  function automatic logic [8:0] rev9(input logic [8:0] v);
+    for (int b = 0; b < 9; b++) rev9[b] = v[8 - b];
+  endfunction
+  wire  [8:0]  tp_row = rev9(tp_r);
+  wire  [2:0]  tp_w   = 3'(tp_i) + tp_row[2:0];
+  wire  [5:0]  tp_chk = tp_row[5:0] ^ tp_i;
+  logic [2:0]  tp_fid;           // the generated frame's number
+  always_comb begin
+    tp_y   = 16'(tp_row);
+    tp_col = {tp_row, tp_i, tp_fid, tp_chk};
+    tp_x0  = 16'({tp_i, 3'b000}) + ((tp_half) ? 16'(tp_w) : 16'd0);
+    tp_x1  = (!tp_half && tp_w != 3'd0) ? 16'({tp_i, 3'b000}) + 16'(tp_w) - 16'd1
+                                        : 16'({tp_i, 3'b111});
+  end
+  assign tp_valid = FB_DDR3 && fb_test && tp_active && (tp_row < 9'(SCR_H));
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      tp_active <= 1'b0; tp_done <= 1'b0; tp_half <= 1'b0; tp_r <= '0; tp_i <= '0; tp_fid <= '0;
+    end else if (!fb_test) begin
+      tp_active <= 1'b0; tp_done <= 1'b0; tp_half <= 1'b0; tp_r <= '0; tp_i <= '0;
+    end else begin
+      if (!tp_active && !tp_done) tp_active <= 1'b1;
+      // a restart when the finished frame is published
+      if (tp_done && frame_start) begin tp_done <= 1'b0; tp_active <= 1'b1; tp_fid <= tp_fid + 3'd1; end
+      // a row off the screen is skipped; a span taken advances
+      if (tp_active && ((tp_row >= 9'(SCR_H)) || fbw_in_ready)) begin
+        // the second span of a cell exists only when the split is inside it
+        if (tp_row >= 9'(SCR_H) || tp_half || tp_w == 3'd0) begin
+          tp_half <= 1'b0;
+          if (tp_row >= 9'(SCR_H) || tp_i == 6'(SCR_W / 8 - 1)) begin
+            tp_i <= '0;
+            if (&tp_r) begin tp_r <= '0; tp_active <= 1'b0; tp_done <= 1'b1; end
+            else tp_r <= tp_r + 9'd1;
+          end else tp_i <= tp_i + 6'd1;
+        end else tp_half <= 1'b1;
+      end
+    end
+  end
   logic        fb_clear_req, fb_clear_busy;
   // Cleared when a NEW LIST arrives, not every frame (R359).
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n)                 fb_clear_req <= 1'b0;
-    else if (FB_DDR3 && swap)   fb_clear_req <= 1'b1;
+    else if (FB_DDR3 && swap && !fb_test) fb_clear_req <= 1'b1;   // R653: not under the self-test
     else if (fb_clear_busy)     fb_clear_req <= 1'b0;
   end
 
@@ -740,9 +814,11 @@ module m2_raster3d #(
         .clk(clk), .rst_n(rst_n),
         .fb_sel(fb_draw),
         .clear_req(fb_clear_req), .clear_busy(fb_clear_busy),
-        .in_valid(tx_span_valid), .in_ready(fbw_ready),
-        .in_y(tx_span_y[15:0]), .in_x0(tx_span_x0[15:0]), .in_x1(tx_span_x1[15:0]),
-        .in_col(tx_span_col), .in_painted(1'b1), .in_moire(tx_span_moire),   // R640
+        .in_valid(fb_test ? tp_valid : tx_span_valid), .in_ready(fbw_in_ready),   // R653
+        .in_y(fb_test ? tp_y : tx_span_y[15:0]), .in_x0(fb_test ? tp_x0 : tx_span_x0[15:0]),
+        .in_x1(fb_test ? tp_x1 : tx_span_x1[15:0]),
+        .in_col(fb_test ? tp_col : tx_span_col), .in_painted(1'b1),
+        .in_moire(fb_test ? 1'b0 : tx_span_moire),   // R640
         .m_req(w_req), .m_we(w_we), .m_addr(w_addr), .m_blen(w_blen),
         .m_din(w_din), .m_be(w_be), .m_wnext(w_wnext), .m_ack(w_ack),
         .dbg_pixels(dbg_fb_pixels), .dbg_clears(), .dbg_st()
@@ -799,6 +875,67 @@ module m2_raster3d #(
       end
       assign fb_rd_hit = fbr_hit && sok_s2;
 
+      // R653: THE SELF-TEST'S CHECKER (scan_clk). u_fbr registers its read
+      // address on this clock, so the colour standing after an edge is the
+      // pixel whose x was presented at it -- ck_x1. Each pixel is checked once,
+      // on the cycle its x first stands.
+      logic [2:0]  tst_s;
+      logic [9:0]  ck_x1, ck_x2, ck_y1;
+      logic [15:0] ck_bad, ck_rows;
+      logic        ck_rowbad, ck_have;
+      logic [26:0] ck_first;
+      logic [15:0] ck_bad_f, ck_rows_f;
+      logic [26:0] ck_first_f;
+      logic        ck_tog;
+      wire  [8:0]  ck_ey   = ck_y1[8:0];
+      wire  [5:0]  ck_ei   = ck_x1[8:3];
+      logic [2:0]  ck_fid;       // the frame number of the frame's first pixel
+      logic        ck_fid_ok;
+      wire  [23:0] ck_exp  = {ck_ey, ck_ei, ck_fid_ok ? ck_fid : fb_rd_col[8:6], ck_ey[5:0] ^ ck_ei};
+      wire         ck_look = tst_s[2] && sok_s2 && (ck_x1 != ck_x2)
+                          && (ck_x1 < 10'(SCR_W)) && (ck_y1 < 10'(SCR_H));
+      wire         ck_isbad = !fbr_hit || (fb_rd_col != ck_exp);
+      always_ff @(posedge scan_clk or negedge rst_n) begin
+        if (!rst_n) begin
+          tst_s <= '0; ck_x1 <= '0; ck_x2 <= '0; ck_y1 <= '0;
+          ck_bad <= '0; ck_rows <= '0; ck_rowbad <= 1'b0; ck_have <= 1'b0; ck_first <= '0;
+          ck_bad_f <= '0; ck_rows_f <= '0; ck_first_f <= '0; ck_tog <= 1'b0;
+          ck_fid <= '0; ck_fid_ok <= 1'b0;
+        end else begin
+          tst_s <= {tst_s[1:0], fb_test};
+          ck_x1 <= scan_x; ck_x2 <= ck_x1; ck_y1 <= scan_y;
+          if (scan_y != ck_y1) ck_rowbad <= 1'b0;
+          if (ck_look && !ck_fid_ok && fbr_hit) begin ck_fid <= fb_rd_col[8:6]; ck_fid_ok <= 1'b1; end
+          if (ck_look && ck_isbad) begin
+            if (!(&ck_bad)) ck_bad <= ck_bad + 16'd1;
+            if (!ck_rowbad && !(&ck_rows)) ck_rows <= ck_rows + 16'd1;
+            ck_rowbad <= 1'b1;
+            if (!ck_have) begin
+              ck_have  <= 1'b1;
+              ck_first <= {ck_ey, ck_x1[8:0], fbr_hit ? fb_rd_col[23:15] : 9'h1FF};
+            end
+          end
+          // the frame's totals, at the first line past the picture
+          if (scan_y == 10'(SCR_H) && ck_y1 != 10'(SCR_H)) begin
+            ck_bad_f <= ck_bad; ck_rows_f <= ck_rows; ck_first_f <= ck_first;
+            ck_bad <= '0; ck_rows <= '0; ck_have <= 1'b0; ck_first <= '0;
+            ck_fid_ok <= 1'b0;
+            ck_tog <= ~ck_tog;
+          end
+        end
+      end
+      // to clk: the totals hold for a frame; taken once the toggle has crossed
+      logic [2:0] ck_tog_s;
+      always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin ck_tog_s <= '0; dbg_tp_bad <= '0; dbg_tp_rows <= '0; dbg_tp_first <= '0; end
+        else begin
+          ck_tog_s <= {ck_tog_s[1:0], ck_tog};
+          if (ck_tog_s[2] ^ ck_tog_s[1]) begin
+            dbg_tp_bad <= ck_bad_f; dbg_tp_rows <= ck_rows_f; dbg_tp_first <= ck_first_f;
+          end
+        end
+      end
+
       // The reader wins: it has the beam deadline and the writer has not.
       m2_ddr3_arb u_arb (
         .clk(clk), .rst_n(rst_n),
@@ -819,7 +956,8 @@ module m2_raster3d #(
       assign fb_req = 1'b0; assign fb_we = 1'b0; assign fb_addr = 25'd0;
       assign fb_blen = 8'd0; assign fb_din = 64'd0; assign fb_be = 8'd0;
       assign fb_rd_col = 24'd0; assign fb_rd_hit = 1'b0;
-      assign fbw_ready = 1'b0;
+      assign fbw_in_ready = 1'b0;
+      assign dbg_tp_bad = '0; assign dbg_tp_rows = '0; assign dbg_tp_first = '0;   // R653
       assign fb_clear_busy = 1'b0;
       assign dbg_fb_lines = 16'd0; assign dbg_fb_late = 16'd0;
       assign dbg_fb_pixels = 32'd0;
@@ -1399,7 +1537,7 @@ module m2_raster3d #(
         // only the once-a-list clear, and a list already drawn (fb_complete)
         // is not drawn again (R358/R359).
         C_IDLE: if (FB_DDR3) begin
-          if (dvalid && !fb_complete && !fb_clear_req && !fb_clear_busy) begin
+          if (dvalid && !fb_complete && !fb_clear_req && !fb_clear_busy && !fb_test) begin   // R653
             bd_y0[fill_buf]   <= 16'sd0 + 16'(fill_band) * 16'(BAND_H);
             bd_band[fill_buf] <= fill_band;
             cst <= C_REPLAY;

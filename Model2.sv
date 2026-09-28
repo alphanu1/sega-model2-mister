@@ -186,6 +186,10 @@ localparam CONF_STR = {
 	// 2D keeps the 3D's pace: arcade slowdown. FREE lets the game run on and
 	// the 3D fall behind the HUD.
 	"O[36],3D pacing,Hold game,Free;",
+	// R653: THE FRAMEBUFFER SELF-TEST. The 3D is replaced by a pattern each
+	// pixel of which names its own row and cell; the scanout checks every one
+	// before the mix with the 2D, and the UART reports bad pixels and rows.
+	"O[37],FB self-test,Off,On;",
 	// R630: GAMMA, because MAME's curve is MAME's guess at cabinet
 	// calibration (m2_palette) and the board is judged on Ben's own screen.
 	// MAME's is entry zero, the reference; Mild lifts the darks; Off is the
@@ -596,6 +600,12 @@ wire        r3d_list_hold;
 reg  [2:0]  pace_free_s;
 always_ff @(posedge clk_sys) pace_free_s <= {pace_free_s[1:0], status[36]};
 wire        r3d_game_hold = r3d_list_hold && !pace_free_s[2];
+// R653: the framebuffer self-test's switch and its per-frame results (clk_sys)
+reg  [2:0]  fbt_s;
+always_ff @(posedge clk_sys) fbt_s <= {fbt_s[1:0], status[37]};
+wire        fb_test = fbt_s[2];
+wire [15:0] tp_bad, tp_rows;
+wire [26:0] tp_first;
 // R265: THE WALK TRIGGER WAS THE ONE OSD BIT TAKEN RAW. Every other option in
 // this core reaches the datapath through three flops (R229) and this one went
 // straight from `status` into the geometrizer's mode select. The board showed
@@ -4633,10 +4643,10 @@ end else begin : g_nodbg
 	m2_dbg_stream #(.DIVISOR((SYS_MHZ * 1_000_000 + 57_600) / 115_200), .BUDGET_CYC(200_000)) u_dbg_lite (
 		.clk(clk_sys), .rst_n(mem_rst_n),
 		.a_valid(lt_a_valid),
-		.a_addr((lt_asel == 2'd1) ? cpu_dbg_acc : (lt_asel == 2'd2) ? dc_miss : (lt_asel == 2'd3) ? {fb_pub, fb_drop} : cpu_dbg_ip),
-		.a_data((lt_asel == 2'd1) ? dc_hits : (lt_asel == 2'd2) ? lt_cwait : (lt_asel == 2'd3) ? {fb_lines, fb_late} : {copro_stall, 15'd0, tgp_pc}),
+		.a_addr((lt_asel == 2'd1) ? cpu_dbg_acc : (lt_asel == 2'd2) ? dc_miss : (lt_asel == 2'd3) ? (fb_test ? {tp_bad, tp_rows} : {fb_pub, fb_drop}) : cpu_dbg_ip),
+		.a_data((lt_asel == 2'd1) ? dc_hits : (lt_asel == 2'd2) ? lt_cwait : (lt_asel == 2'd3) ? (fb_test ? {5'd0, tp_first} : {fb_lines, fb_late}) : {copro_stall, 15'd0, tgp_pc}),
 		.b_valid(lt_b_valid), .b_addr(lt_b_addr), .b_data(lt_b_data),
-		.a_tag((lt_asel == 2'd1) ? 8'h50 : (lt_asel == 2'd2) ? 8'h51 : (lt_asel == 2'd3) ? 8'h54 : 8'h43), .b_tag(8'h47),   // 'P','Q','T','C'; 'G' (was 'F': R639)
+		.a_tag((lt_asel == 2'd1) ? 8'h50 : (lt_asel == 2'd2) ? 8'h51 : (lt_asel == 2'd3) ? (fb_test ? 8'h55 : 8'h54) : 8'h43), .b_tag(8'h47),   // 'P','Q','T','C'; 'G' (was 'F': R639)
 		.enable(1'b1),
 		.tx(UART_TXD), .dbg_dropped(uart_dropped)
 	);
@@ -5990,6 +6000,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b0), .FB_DD
 	.tex_bilinear(!texpt_s[2]),   // R620
 	.tex_pxk(pxk_s3),             // R650: the OSD's texel step
 	.list_hold(r3d_list_hold),    // R652
+	.fb_test(fb_test), .dbg_tp_bad(tp_bad), .dbg_tp_rows(tp_rows), .dbg_tp_first(tp_first),   // R653
 	.tex_m2_en(tex_m2_en), .tex_m2_req(tex_m2_req), .tex_m2_addr(tex_m2_addr),
 	// R628: the texel cache's third and fourth ports, unused at TXNS = 2
 	.tex_m3_en(1'b0), .tex_m3_req(), .tex_m3_addr(), .tex_m3_ack(1'b0), .tex_m3_data(64'd0),

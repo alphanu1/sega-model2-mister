@@ -25161,3 +25161,41 @@ Hold game / Free" (status[36]) keeps the other behaviour to compare.
 
 Quartus 17's parser caught what Verilator's lint did not: `r3d_hold` already
 named R213's frames-held counter in Model2.sv; the new one is r3d_game_hold.
+
+**R653 -- THE REPEATED SCANLINES ARE THE FRAMEBUFFER'S: A SELF-TEST FOR IT.**
+
+On s550 (R651 + R652, 0 drops) Ben: repeated scanlines on the textures, still;
+with textures OFF "it still does it but a lot less" -- a repeated row in a
+flat area looks like the row above it, so it is all of the 3D, seen where
+rows differ. Bisected on the board with the bitstreams on disk: s451, s448
+and s445 (the first framebuffer build) all show it today; s431, the band
+renderer, "much better ... hardly any texel overruns". The same s445/s448/
+s451 files had looked right to Ben before, so something outside the
+bitstream differs -- not the saved OSD (the MiSTer holds none for this core,
+only a volume file) and not a stuck bridge (a full power-off did not clear
+it). Everything in the path that can be simulated is exact:
+  - the telemetry: 0 lists dropped, 0 late scanout lines (s542, s550);
+  - the scanout's line request crossing: the number is stable two clk edges
+    before it is taken;
+  - m2_span_tex's slots: a slot is reused only after its last group leaves;
+  - tb_m2_raster3d M2_R3D_JIT: each DDR3 beat withheld with probability
+    10/30/60%, bursts delayed 0-63 cycles, at texel step 4 and 1 -- the
+    frame published is identical to the clean one (the draw only slows:
+    4.4-10 video frames).
+
+So the board is asked directly. OSD "FB self-test": the fill is replaced by
+a generator (rows in bit-reversed order; each 8-pixel cell in two spans split
+at (cell + row) & 7, so single-pixel heads, tails and whole-word bodies all
+go through m2_fb_write with their byte enables), each pixel's colour naming
+{row, cell, frame number, check}; a checker on the scanout, BEFORE the mix
+with the 2D layers, verifies every pixel and reports per video frame (UART
+'U'): bad pixels, bad rows, the first bad row and column and the row its
+data named (511: unpainted). Bench: clean 0; with 30% of beats stalled 0;
+with a fault injected (M2_R3D_FAULTROW=200: row 200's writes land on 199)
+row 200 is caught in every frame.
+
+Reading it: the checker bad while the screen is bad = the rows are wrong
+coming out of DDR3; the checker clean while the screen shows repeated rows =
+the fault is after the framebuffer, in the mix with the 2D or the path to the
+screen (Ben's reading: "where you are muxing the 3D layer in between the 2D
+layers").

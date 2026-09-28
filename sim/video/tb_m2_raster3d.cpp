@@ -125,6 +125,7 @@ int main(int argc, char **argv) {
   d->tex_bilinear = std::getenv("M2_R3D_POINT") ? 0 : 1;
   // R650: the texel step, log2 (0-3 for 1/2/4/8); default 2, PIXSTEP 4
   d->tex_pxk = std::getenv("M2_R3D_PXK") ? std::atoi(std::getenv("M2_R3D_PXK")) : 2;
+  d->fb_test = 0;   // R653: set by M2_R3D_FBTEST below
   d->tex_base0 = 0x1760000; d->tex_base1 = 0x17E0000;
   // R555: 1/z FOR EVERY VERTEX, WHICH THIS BENCH NEVER DROVE. q_oz0..3 (R334,
   // a minifloat: 8-bit exponent, top 8 mantissa bits) were left at zero, so the
@@ -211,21 +212,41 @@ int main(int argc, char **argv) {
         const bool stolen = SCALER && int((srng >> 33) % 1000) < SCALER;
         if (!stolen && backlog > 0 && ++drain >= WQ) { drain = 0; --backlog; }
       }
+      // R653: M2_R3D_JIT=<per mille> -- THE BUS AS THE BOARD'S IS. Each beat,
+      // write or read, is withheld with this probability (the HPS bridge's
+      // waitrequest and its gaps between read beats), and a burst's first beat
+      // waits a random 0-63 cycles. The model above answered every burst at
+      // one beat a cycle after a fixed delay, which is not a bus that exists.
+      static const int JIT = std::getenv("M2_R3D_JIT") ? std::atoi(std::getenv("M2_R3D_JIT")) : 0;
+      static uint64_t jrng = 4242;
+      bool jstall = false;
+      if (JIT) { jrng = jrng * 6364136223846793005ull + 1442695040888963407ull;
+                 jstall = int((jrng >> 33) % 1000) < JIT; }
       d->fb_wnext = 0; d->fb_rvalid = 0; d->fb_ack = 0;
       if (g_ddr_left == 0 && d->fb_req) {
         g_ddr_a = g_ddr_a0 = d->fb_addr; g_ddr_b0 = d->fb_blen;
         g_ddr_left = d->fb_blen ? d->fb_blen : 256; g_ddr_wr = d->fb_we;
         g_ddr_cd = g_ddr_wr ? 1 : LAT;
+        if (JIT) g_ddr_cd += int((jrng >> 40) % 64);
       } else if (g_ddr_left > 0) {
         if (d->fb_addr != g_ddr_a0 || d->fb_blen != g_ddr_b0) g_ddr_proto++;
-        if (WQ && !g_ddr_wr && g_ddr_cd > 0 && backlog > 0) { /* behind the queued writes */ }
+        if (jstall && g_ddr_cd == 0) { /* R653: this beat is withheld */ }
+        else if (WQ && !g_ddr_wr && g_ddr_cd > 0 && backlog > 0) { /* behind the queued writes */ }
         else if (WQ && g_ddr_wr && backlog >= WQMAX) { /* the queue is full: the write waits */ }
         else if (g_ddr_cd > 0) g_ddr_cd--;
         else if (g_ddr_wr) {
           if (WQ) ++backlog;
           uint64_t old = g_ddr.count(g_ddr_a) ? g_ddr[g_ddr_a] : ~0ull, m = 0;
           for (int b = 0; b < 8; b++) if (d->fb_be & (1 << b)) m |= 0xffull << (b * 8);
-          g_ddr[g_ddr_a] = (d->fb_din & m) | (old & ~m);
+          // R653: M2_R3D_FAULTROW=R -- a write aimed at row R lands on row R-1
+          // (512-pixel stride, two pixels a word: a row is 256 words). The
+          // self-test's checker must see it; a bench it cannot fail proves nothing.
+          static const int FROW = std::getenv("M2_R3D_FAULTROW") ? std::atoi(std::getenv("M2_R3D_FAULTROW")) : -1;
+          uint32_t wa = g_ddr_a;
+          if (FROW > 0 && int((wa >> 8) & 0x1ff) == FROW) {
+            wa -= 256; old = g_ddr.count(wa) ? g_ddr[wa] : ~0ull;
+          }
+          g_ddr[wa] = (d->fb_din & m) | (old & ~m);
           d->fb_wnext = 1; g_ddr_a++; g_ddr_left--; g_ddr_wbeats++;
           if (g_ddr_left == 0) d->fb_ack = 1;
         } else {
@@ -545,6 +566,21 @@ int main(int argc, char **argv) {
   // the instrumented MAME, turned into this rasteriser's quad interface exactly
   // as m2_geometry would present them, fed in submission order, and every
   // texel fetch of the frame that displays them written to fetch.txt.
+  // R653: THE FRAMEBUFFER SELF-TEST. The generator writes, the checker reads,
+  // and each video frame's totals are printed as the board's telemetry has them.
+  if (FBM && std::getenv("M2_R3D_FBTEST")) {
+    d->fb_test = 1;
+    const int NF = std::getenv("M2_R3D_FBTEST_N") ? std::atoi(std::getenv("M2_R3D_FBTEST_N")) : 8;
+    long hits = 0;
+    for (int f = 0; f < NF; f++) {
+      video_frame(false, &hits);
+      const unsigned fr = (unsigned)d->dbg_tp_first;
+      std::printf("  R653 self-test frame %d: bad pixels %u, bad rows %u, first bad row %u col %u named row %u\n",
+                  f, (unsigned)d->dbg_tp_bad, (unsigned)d->dbg_tp_rows, (fr >> 18) & 0x1ff, (fr >> 9) & 0x1ff, fr & 0x1ff);
+    }
+    delete d;
+    return 0;
+  }
   if (const char *lp = std::getenv("M2_R3D_LIST")) {
     const std::string dir(lp);
     for (int k = 0; k < 2; k++) {
