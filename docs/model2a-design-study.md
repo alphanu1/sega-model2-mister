@@ -25099,3 +25099,27 @@ bench, recorded, not a fault in the change.
 
 The texture view (R650, m2_texview) is removed with its OSD entries (Ben);
 it is in git at f4945bf.
+
+**R652 -- THE 2D KEEPS THE 3D'S PACE: THE GAME WAITS FOR THE DRAW.**
+
+R651 makes a finished list wait for the draw in progress. On the board that
+alone had two faults. (1) The 2D would run ahead: the tilemap is drawn live
+from tile RAM, which the game rewrites every frame, so at texel step 1 on a
+heavy scene the HUD would run up to ~5 video frames ahead of the 3D (Ben:
+"we need them in time. if 3d is slower 2d has to have the same pace"). (2) The
+renderer's frame_start is geo_walk_start (every other vblank in 30 Hz mode),
+so the next walk still started, stalled on q_ready, and read a display list
+the game was free to go on rewriting -- R256's hazard, by another route.
+s545-s547 (R651 alone) were stopped before they reached the board.
+
+THE HOLD, as an overloaded arcade board slows: m2_raster3d list_hold (FB_DDR3,
+pst == P_READY and fb_busy) holds the game. While it is high a vblank raises
+no interrupt, does not advance io_framenum (whose parity the game reads, and
+the walk trigger uses) and starts no walk. The game waits; its tile RAM and
+its next list stay as they are; the draw finishes; the next vblank proceeds
+as normal -- interrupt, count, walk and swap together, as before R651. When
+the draw keeps up the hold never rises and nothing changes. OSD "3D pacing:
+Hold game / Free" (status[36]) keeps the other behaviour to compare.
+
+Quartus 17's parser caught what Verilator's lint did not: `r3d_hold` already
+named R213's frames-held counter in Model2.sv; the new one is r3d_game_hold.

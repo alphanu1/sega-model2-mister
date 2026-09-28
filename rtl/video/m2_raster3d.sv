@@ -126,6 +126,10 @@ module m2_raster3d #(
   input  logic            tex_inval,
   input  logic            tex_bilinear,   // R620: on clk_mem, quasi-static (OSD)
   input  logic [1:0]      tex_pxk,        // R650: texel step 1/2/4/8 as log2, on clk (OSD)
+  // R652: a finished list is waiting for the draw in progress (FB_DDR3). The
+  // top level holds the GAME on it -- no vblank interrupt, no frame count, no
+  // walk -- so the 2D the game writes keeps the 3D's pace.
+  output logic            list_hold,
   output logic            tex_m_req,
   output logic [TEX_AW:1] tex_m_addr,
   input  logic            tex_m_ack,
@@ -685,6 +689,7 @@ module m2_raster3d #(
   // published is one list drawn start to finish.
   logic fb_draw, fb_show, fb_shown_ok, fb_complete, fb_busy;
   wire swap = frame_start && (pst == P_READY) && !(FB_DDR3 && fb_busy);
+  assign list_hold = FB_DDR3 && (pst == P_READY) && fb_busy;   // R652
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       fb_draw <= 1'b0; fb_show <= 1'b1; fb_shown_ok <= 1'b0; fb_busy <= 1'b0;

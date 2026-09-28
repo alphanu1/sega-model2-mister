@@ -181,6 +181,11 @@ localparam CONF_STR = {
 	// updates at whichever is slower, the game or the draw. Latched per span:
 	// it changes cleanly at any time. (Bits 35:34 were the texture view's.)
 	"O[35:34],Texel step,1,2,4,8;",
+	// R652: HOLD GAME -- when the 3D draw is slower than the game, the game
+	// waits for it (no vblank interrupt while a finished list waits), so the
+	// 2D keeps the 3D's pace: arcade slowdown. FREE lets the game run on and
+	// the 3D fall behind the HUD.
+	"O[36],3D pacing,Hold game,Free;",
 	// R630: GAMMA, because MAME's curve is MAME's guess at cabinet
 	// calibration (m2_palette) and the board is judged on Ben's own screen.
 	// MAME's is entry zero, the reference; Mild lifts the darks; Off is the
@@ -585,6 +590,12 @@ always_ff @(posedge clk_sys) begin pxk_s1 <= status[35:34]; pxk_s2 <= pxk_s1; px
 // R650: the renderer's texture and framebuffer counters, read by telemetry 'T'
 // (declared here, ahead of their first use in the telemetry block)
 wire [15:0] tex_lost, tex_to, fb_pub, fb_drop, fb_lines, fb_late;
+// R652: the renderer holds the game while a finished list waits for its draw
+// (m2_raster3d list_hold, clk_sys) -- unless the OSD says Free.
+wire        r3d_list_hold;
+reg  [2:0]  pace_free_s;
+always_ff @(posedge clk_sys) pace_free_s <= {pace_free_s[1:0], status[36]};
+wire        r3d_game_hold = r3d_list_hold && !pace_free_s[2];
 // R265: THE WALK TRIGGER WAS THE ONE OSD BIT TAKEN RAW. Every other option in
 // this core reaches the datapath through three flops (R229) and this one went
 // straight from `status` into the geometrizer's mode select. The board showed
@@ -2276,7 +2287,13 @@ always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
 		vbl_s  <= tile_vb;
 		vbl_d  <= vbl_s;
 		vbl_dd <= vbl_d;
-		if (vbl_d && !vbl_dd) begin
+		// R652: NOT WHILE THE 3D IS BEHIND. A vblank the game does not see is
+		// a frame it waits out: its 2D (tile RAM) and its next display list
+		// stay as they are until the draw in progress is whole, and the next
+		// vblank after that proceeds as normal -- interrupt, count and walk
+		// together. The hold is at most one draw (~5 video frames at texel
+		// step 1 on the heaviest scenes).
+		if (vbl_d && !vbl_dd && !r3d_game_hold) begin
 			io_framenum <= io_framenum + 32'd1;
 			if (io_intena[0]) io_intreq[0] <= 1'b1;
 		end
@@ -2625,7 +2642,10 @@ assign cpu_irq = { |(io_intreq & 12'hc00), |(io_intreq & 12'h3fc),
 // io_framenum counts the same vblanks the reference's frame_number does, and
 // the game reads its parity back through 0x98000c, so the parity here is the
 // parity the game sees.
-assign geo_walk_start = vbl_d && !vbl_dd && !nowalk_s[2]
+// R652: and no walk while the 3D holds the game -- the store is not taking
+// quads, and a walk that stalled would be reading a list the game might be
+// rewriting (R256's hazard). The walk and the frame count move together.
+assign geo_walk_start = vbl_d && !vbl_dd && !nowalk_s[2] && !r3d_game_hold
                           && (wrate_s[2] || !io_videoctl[0] || !io_framenum[0]);
 
 assign cpu_io_rdata =
@@ -5969,6 +5989,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b0), .FB_DD
 	.tex_base0(GAME_TEXS0), .tex_base1(GAME_TEXS1), .tex_inval(cpu_tex_inval),
 	.tex_bilinear(!texpt_s[2]),   // R620
 	.tex_pxk(pxk_s3),             // R650: the OSD's texel step
+	.list_hold(r3d_list_hold),    // R652
 	.tex_m2_en(tex_m2_en), .tex_m2_req(tex_m2_req), .tex_m2_addr(tex_m2_addr),
 	// R628: the texel cache's third and fourth ports, unused at TXNS = 2
 	.tex_m3_en(1'b0), .tex_m3_req(), .tex_m3_addr(), .tex_m3_ack(1'b0), .tex_m3_data(64'd0),
