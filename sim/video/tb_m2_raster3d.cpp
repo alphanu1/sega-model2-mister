@@ -536,8 +536,9 @@ int main(int argc, char **argv) {
     g_tbase1 = d->tex_base1;
     struct V { double x, y, z, pu, pv; };
     struct P { int idx; unsigned z, h0, h1, h2, h3; std::vector<V> v; };
+    auto load_polys = [&](const std::string &pdir) {
     std::vector<P> polys;
-    { FILE *f = std::fopen((dir + "/polys.txt").c_str(), "r"); char line[8192];
+    { FILE *f = std::fopen((pdir + "/polys.txt").c_str(), "r"); char line[8192];
       while (f && std::fgets(line, sizeof line, f)) {
         P p; int win, n, vp[4]; unsigned luma; char *q = line;
         if (std::sscanf(q, "P %d z=%u win=%d h=%x,%x,%x,%x luma=%u vp=%d,%d,%d,%d n=%d",
@@ -548,10 +549,13 @@ int main(int argc, char **argv) {
       }
       if (f) std::fclose(f); }
     std::sort(polys.begin(), polys.end(), [](const P &a, const P &b) { return a.idx < b.idx; });
-    std::printf("  R615 list mode: %zu polygons from %s\n", polys.size(), lp);
+    std::printf("  R615 list mode: %zu polygons from %s\n", polys.size(), pdir.c_str());
+    return polys;
+    };
+    const std::vector<P> polys = load_polys(dir);
     auto mf16 = [](double x) -> uint16_t { union { float f; uint32_t b; } u; u.f = (float)x; return (uint16_t)(((u.b >> 23) & 0xff) << 8 | ((u.b >> 15) & 0xff)); };
     auto wide = [](double pu) -> uint32_t { if (!(pu >= 2.0)) return 0; double w = std::floor(pu / 2.0); return w > 32767 ? 32767u : (uint32_t)w; };
-    long nq = 0;
+    long nq = 0, nq_refused = 0;
     auto push_quad = [&](const P &p, int a, int b, int c, int e, bool last) {
       const int ix[4] = {a, b, c, e};
       int32_t X[4], Y[4]; uint16_t OZ[4]; uint32_t U[4], Vv[4];
@@ -595,22 +599,44 @@ int main(int argc, char **argv) {
       d->q_tex = tex & 0xffffff; d->q_col = ((uint32_t(p.idx) & 31) << 19) | (((uint32_t(p.idx) >> 5) & 63) << 10); d->q_moire = (tex >> 11) & 1;   // R623
       d->q_z = 0x3F800000u | (p.z & 0xffff);
       d->q_end = last;
+      if (!d->q_ready) ++nq_refused;   // R650: a quad the store did not take is LOST
       tick(); ++nq;
       d->q_valid = 0; d->q_end = 0;
     };
     d->frame_start = 0;
-    for (size_t i = 0; i < polys.size(); i++) {
-      const P &p = polys[i]; const int n = (int)p.v.size();
+    auto push_all = [&](const std::vector<P> &pl) {
+    for (size_t i = 0; i < pl.size(); i++) {
+      const P &p = pl[i]; const int n = (int)p.v.size();
       if (n < 3) continue;
-      const bool lastp = (i + 1 == polys.size());
+      const bool lastp = (i + 1 == pl.size());
       // a fan: (0,1,2,3), (0,3,4,5), ...; a triangle repeats its last vertex
       for (int k = 1; k < n - 1; k += 2) {
         const int c = k + 1, e = (k + 2 < n) ? k + 2 : k + 1;
         push_quad(p, 0, k, c, e, lastp && (k + 2 >= n - 1));
       }
     }
-    std::printf("  R615: %ld quads pushed\n", nq);
+    };
     long hits = 0;
+    // R650: A DRAW INTERRUPTED BY THE NEXT LIST. On the board a list arrives
+    // every ~2.09 video frames and a heavy draw takes longer, so the list being
+    // drawn is replaced part way through -- a case this bench had never run.
+    // M2_R3D_LIST2=<dir> is drawn first; M2_R3D_INTR core cycles into its draw
+    // the main list arrives and is swapped in over it. The frame finally shown
+    // must be the main list's, exactly as a clean draw of it (PXDUMP both).
+    if (const char *l2 = std::getenv("M2_R3D_LIST2")) {
+      const std::vector<P> pa = load_polys(l2);
+      push_all(pa);
+      // list A is swapped in at the frame_start after its last quad is stored
+      for (int k = 0; k < 4 && !d->rootp->m2_raster3d__DOT__fb_busy; k++) video_frame(false, &hits);
+      const long intr = std::getenv("M2_R3D_INTR") ? atol(std::getenv("M2_R3D_INTR")) : 500000;
+      for (long k = 0; k < intr; k++) { d->scan_x = 0; d->scan_y = (k / TPL) % V_TOTAL; tick(); }
+      std::printf("  R650 interrupt: list A (%zu polygons) drawn for %ld cycles, fb_busy %d fb_complete %d fill_band %d\n",
+                  pa.size(), intr, (int)d->rootp->m2_raster3d__DOT__fb_busy,
+                  (int)d->rootp->m2_raster3d__DOT__fb_complete, (int)d->rootp->m2_raster3d__DOT__fill_band);
+      g_draws.clear();
+    }
+    push_all(polys);
+    std::printf("  R615: %ld quads pushed, %ld REFUSED by the store (lost)\n", nq, nq_refused);
     g_fbrec = FBM;                       // R650: record the draw this swap starts
     video_frame(false, &hits);           // the list is collected, then swapped in
     // R640: with the framebuffer, the list swapped in above is drawn once and

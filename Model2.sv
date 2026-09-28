@@ -585,6 +585,9 @@ wire        tv_on    = (tv_m2[1:0] == 2'd1) || (tv_m2[1:0] == 2'd2);
 wire        tv_sheet = (tv_m2[1:0] == 2'd2);
 wire [4:0]  tv_page  = (tv_m2[6:2] > 5'd21) ? 5'd0 : tv_m2[6:2];
 logic       tv_req, tv_own;
+// R650: the renderer's texture and framebuffer counters, read by telemetry 'T'
+// (declared here, ahead of their first use in the telemetry block)
+wire [15:0] tex_lost, tex_to, fb_pub, fb_drop;
 logic [SDR_AW:1] tv_addr;
 logic [3:0] tv_texel;
 // R265: THE WALK TRIGGER WAS THE ONE OSD BIT TAKEN RAW. Every other option in
@@ -4569,6 +4572,19 @@ end else begin : g_nodbg
 	// UART).
 	logic [2:0]  lt_div;
 	logic [1:0]  lt_asel;
+	// R650: 'T' takes every other 'C' slot (the UART is ~80% full):
+	//   {framebuffer frames published, lists dropped} |
+	//   {texel misses the SDRAM never answered (m2_texel_bl, painted 0),
+	//    fetches the crossing answered itself (m2_texel_cdc, painted 0x0FF)}
+	// all running totals. The last two count on clk_mem and cross on two flops
+	// -- a counter read mid-change is off by one bit for one record, and the
+	// decoder differences them.
+	logic        lt_ct;
+	logic [15:0] lt_lost_s1, lt_lost_s2, lt_to_s1, lt_to_s2;
+	always_ff @(posedge clk_sys) begin
+		lt_lost_s1 <= tex_lost; lt_lost_s2 <= lt_lost_s1;
+		lt_to_s1   <= tex_to;   lt_to_s2   <= lt_to_s1;
+	end
 	logic [31:0] lt_cwait;
 	always_ff @(posedge clk_i960 or negedge cpu_rst_n) begin
 		if (!cpu_rst_n)             lt_cwait <= 32'd0;
@@ -4585,14 +4601,15 @@ end else begin : g_nodbg
 	logic [31:0] lt_b_addr, lt_b_data;
 	always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		if (!mem_rst_n) begin
-			lt_div <= 3'd0; lt_asel <= 2'd0; lt_a_valid <= 1'b0; lt_flips <= 16'd0; lt_vbl <= 16'd0;
+			lt_div <= 3'd0; lt_asel <= 2'd0; lt_a_valid <= 1'b0; lt_flips <= 16'd0; lt_vbl <= 16'd0; lt_ct <= 1'b0;
 			lt_tgp0 <= 16'd0; lt_b_valid <= 1'b0; lt_b_addr <= '0; lt_b_data <= '0;
 		end else begin
 			lt_a_valid <= 1'b0; lt_b_valid <= 1'b0;
 			if (prof_tick) begin
 				lt_div <= lt_div + 3'd1;
 				lt_a_valid <= (lt_div == 3'd0) || (lt_div == 3'd3) || (lt_div == 3'd6);
-				lt_asel    <= (lt_div == 3'd3) ? 2'd1 : (lt_div == 3'd6) ? 2'd2 : 2'd0;
+				lt_asel    <= (lt_div == 3'd3) ? 2'd1 : (lt_div == 3'd6) ? 2'd2 : (lt_ct ? 2'd3 : 2'd0);
+				if (lt_div == 3'd0) lt_ct <= ~lt_ct;
 			end
 			if (geo_wr_setrp) lt_flips <= lt_flips + 16'd1;
 			if (vbl_d && !vbl_dd) begin
@@ -4607,10 +4624,10 @@ end else begin : g_nodbg
 	m2_dbg_stream #(.DIVISOR((SYS_MHZ * 1_000_000 + 57_600) / 115_200), .BUDGET_CYC(200_000)) u_dbg_lite (
 		.clk(clk_sys), .rst_n(mem_rst_n),
 		.a_valid(lt_a_valid),
-		.a_addr((lt_asel == 2'd1) ? cpu_dbg_acc : (lt_asel == 2'd2) ? dc_miss : cpu_dbg_ip),
-		.a_data((lt_asel == 2'd1) ? dc_hits : (lt_asel == 2'd2) ? lt_cwait : {copro_stall, 15'd0, tgp_pc}),
+		.a_addr((lt_asel == 2'd1) ? cpu_dbg_acc : (lt_asel == 2'd2) ? dc_miss : (lt_asel == 2'd3) ? {fb_pub, fb_drop} : cpu_dbg_ip),
+		.a_data((lt_asel == 2'd1) ? dc_hits : (lt_asel == 2'd2) ? lt_cwait : (lt_asel == 2'd3) ? {lt_lost_s2, lt_to_s2} : {copro_stall, 15'd0, tgp_pc}),
 		.b_valid(lt_b_valid), .b_addr(lt_b_addr), .b_data(lt_b_data),
-		.a_tag((lt_asel == 2'd1) ? 8'h50 : (lt_asel == 2'd2) ? 8'h51 : 8'h43), .b_tag(8'h47),   // 'P','Q','C'; 'G' (was 'F': R639)
+		.a_tag((lt_asel == 2'd1) ? 8'h50 : (lt_asel == 2'd2) ? 8'h51 : (lt_asel == 2'd3) ? 8'h54 : 8'h43), .b_tag(8'h47),   // 'P','Q','T','C'; 'G' (was 'F': R639)
 		.enable(1'b1),
 		.tx(UART_TXD), .dbg_dropped(uart_dropped)
 	);
@@ -5853,7 +5870,7 @@ wire [31:0] tex_pixels, tex_hits, tex_misses, tex_nz;
 
 // R292: port 3 is the glyph cache's alone again; the ownership lock that
 // shared it is in git, one commit back.
-wire [15:0] tex_lost;
+// R650: tex_lost, tex_to, fb_pub, fb_drop are declared above the telemetry.
 wire [15:0] tex_sweep;
 wire [15:0] oz_d0, oz_d1, oz_d2, oz_d3;   // R334: 1/z off the quad store   // R310: whole-cache clears, to separate cold starts from thrash
 
@@ -5978,7 +5995,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b0), .FB_DD
 	.tex_m_req(tex_m_req), .tex_m_addr(tex_m_addr),
 	.tex_m_ack(tex_m_ack), .tex_m_data(tex_m_data),
 	.dbg_texpix(tex_pixels), .dbg_texhit(tex_hits), .dbg_texmiss(tex_misses),
-	.dbg_texlost(tex_lost), .dbg_oz0(oz_d0), .dbg_oz1(oz_d1), .dbg_oz2(oz_d2), .dbg_oz3(oz_d3),
+	.dbg_texlost(tex_lost), .dbg_texto(tex_to), .dbg_oz0(oz_d0), .dbg_oz1(oz_d1), .dbg_oz2(oz_d2), .dbg_oz3(oz_d3),
 	.dbg_texsweep(tex_sweep), .dbg_texnz(tex_nz),
 	.dbg_fill_hot(r3d_fill_hot), .dbg_fill_hotcyc(r3d_fill_hotcyc),   // R436
 	.dbg_walk_hot(r3d_walk_hot), .dbg_walk_hotcyc(r3d_walk_hotcyc),
@@ -6003,7 +6020,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b0), .FB_DD
 	.fb_req(ddr_req), .fb_we(ddr_we), .fb_addr(ddr_addr), .fb_blen(ddr_blen),
 	.fb_din(ddr_din), .fb_be(ddr_be),
 	.fb_wnext(ddr_wnext), .fb_rvalid(ddr_rvalid), .fb_ack(ddr_ack), .fb_dout(ddr_dout),
-	.dbg_fb_lines(), .dbg_fb_late(), .dbg_fb_pub(), .dbg_fb_drop(), .dbg_fb_pixels()
+	.dbg_fb_lines(), .dbg_fb_late(), .dbg_fb_pub(fb_pub), .dbg_fb_drop(fb_drop), .dbg_fb_pixels()
 );
 
 // The 3D layer sits OVER the tilemap where it painted, and shows the tilemap

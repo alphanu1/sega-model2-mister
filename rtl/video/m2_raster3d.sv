@@ -144,6 +144,7 @@ module m2_raster3d #(
   input  logic [63:0]     tex_m3_data, tex_m4_data,
   output logic [31:0]     dbg_texpix, dbg_texhit, dbg_texmiss, dbg_texnz,
   output logic [15:0]     dbg_texlost,
+  output logic [15:0]     dbg_texto,      // R650: m2_texel_cdc's local answers (clk_mem)
   output logic [15:0] dbg_oz0, dbg_oz1, dbg_oz2, dbg_oz3,   // R334
   output logic [15:0] dbg_texsweep,
   // R436: the fill's and the walk's longest-dwelt states
@@ -603,7 +604,7 @@ module m2_raster3d #(
     .s_u(tex_u), .s_v(tex_v), .s_texel(tex_texel), .s_take(tex_take),
     .f_req(txf_req), .f_rdy(txf_rdy), .f_ack(txf_ack), .f_tex(txf_tex),
     .f_u(txf_u), .f_v(txf_v), .f_texel(txf_texel),
-    .f_waddr(), .f_sheet(), .f_x2p(), .f_y2p()
+    .f_waddr(), .f_sheet(), .f_x2p(), .f_y2p(), .dbg_to(dbg_texto)   // R650
   );
 
   // R328: IDX_BITS 11 -- 2048 lines / 16 KB, SET HERE AND NOT IN THE MODULE.
