@@ -5986,7 +5986,7 @@ m2_ddr3 u_ddr3 (
 // R640: FB_DDR3 -- the 3D layer is drawn into DDR3 and shown only when whole.
 // FTB off: its mask is fed by the band buffers, which are not built.
 m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b0), .FB_DDR3(1'b1),
-              .PXC(1'b1), .PIXSTEP(4), .FRB(2), .M2COV(1'b1),   // R658: Model 2's pixel-centre coverage
+              .PXC(1'b1), .PIXSTEP(4), .FRB(2), .M2COV(1'b0),   // R658 off: it draws nothing on the board (s572)
                 // R626: quarter-pixel plane fit
               .TXLATE(3),   // R627: point-sample while the fill is within 3 bands of the beam
               .TXREUSE(1'b0),   // R633: every other group while late -- REJECTED by eye (R634)
