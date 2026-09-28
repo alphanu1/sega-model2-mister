@@ -5963,7 +5963,7 @@ wire [63:0] tex_m2_data = p_dout[2];
 // to work -- the reader was the one master that did not wait for the ROM and
 // TGP microcode to finish crossing the HPS bridge. It is held in reset until
 // cp_done, the same condition the rest of the core's late masters wait on.
-wire        ddr_req, ddr_we, ddr_ack, ddr_wnext, ddr_rvalid;
+wire        ddr_req, ddr_we, ddr_ack, ddr_wnext, ddr_wacc, ddr_rvalid;
 wire [24:0] ddr_addr;
 wire [7:0]  ddr_blen, ddr_be;
 wire [63:0] ddr_din, ddr_dout;
@@ -5974,7 +5974,7 @@ m2_ddr3 u_ddr3 (
 	.base(fb_base),   // R654
 	.clk(clk_sys), .rst_n(mem_rst_n & ddr_go),
 	.req(ddr_req), .we(ddr_we), .addr(ddr_addr), .blen(ddr_blen), .din(ddr_din), .be(ddr_be),
-	.wnext(ddr_wnext), .rvalid(ddr_rvalid), .ack(ddr_ack), .dout(ddr_dout),
+	.wnext(ddr_wnext), .wacc(ddr_wacc), .rvalid(ddr_rvalid), .ack(ddr_ack), .dout(ddr_dout),
 	.DDRAM_CLK(DDRAM_CLK), .DDRAM_BUSY(DDRAM_BUSY),
 	.DDRAM_BURSTCNT(DDRAM_BURSTCNT), .DDRAM_ADDR(DDRAM_ADDR),
 	.DDRAM_DIN(DDRAM_DIN), .DDRAM_BE(DDRAM_BE),
@@ -6051,7 +6051,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b0), .FB_DD
 	// R640: the framebuffer's DDR3 side
 	.fb_req(ddr_req), .fb_we(ddr_we), .fb_addr(ddr_addr), .fb_blen(ddr_blen),
 	.fb_din(ddr_din), .fb_be(ddr_be),
-	.fb_wnext(ddr_wnext), .fb_rvalid(ddr_rvalid), .fb_ack(ddr_ack), .fb_dout(ddr_dout),
+	.fb_wnext(ddr_wnext), .fb_wacc(ddr_wacc), .fb_rvalid(ddr_rvalid), .fb_ack(ddr_ack), .fb_dout(ddr_dout),
 	.dbg_fb_lines(fb_lines), .dbg_fb_late(fb_late), .dbg_fb_pub(fb_pub), .dbg_fb_drop(fb_drop), .dbg_fb_pixels()
 );
 

@@ -246,6 +246,7 @@ module m2_raster3d #(
   output logic [63:0] fb_din,
   output logic [7:0]  fb_be,
   input  logic        fb_wnext,
+  input  logic        fb_wacc,     // R660: m2_ddr3's same-cycle beat accept
   input  logic        fb_rvalid,
   input  logic        fb_ack,
   input  logic [63:0] fb_dout,
@@ -719,7 +720,7 @@ module m2_raster3d #(
       // R653: the generator's frames, published whole at the frame edge; the
       // lists go on swapping (the walk must not stall) and draw nothing.
       fb_busy <= 1'b0;
-      if (frame_start && tp_done) begin
+      if (frame_start && tp_done && fbw_empty) begin   // R660
         tp_show_fid <= tp_fid;   // R656: the frame published is the one just finished
         fb_show <= fb_draw; fb_shown_ok <= 1'b1; fb_draw <= ~fb_draw;
       end
@@ -744,6 +745,7 @@ module m2_raster3d #(
   logic        fb_rd_hit;
   logic        fbw_ready;
   logic        fbw_in_ready;   // R653: the writer's own ready; the fill sees it only outside the self-test
+  logic        fbw_empty;      // R660: nothing held in the writer, nothing in flight
   assign fbw_ready = fbw_in_ready && !fb_test;
 
   // ---------------------------------------------------------------- R653
@@ -811,7 +813,7 @@ module m2_raster3d #(
       FB_DDR3_requires_FTB_0 u_error ();   // no such module: elaboration stops here
     end
     if (FB_DDR3) begin : g_fb
-      logic        w_req, w_we, w_wnext, w_ack;
+      logic        w_req, w_we, w_wnext, w_wacc, w_ack;
       logic [24:0] w_addr;
       logic [7:0]  w_blen, w_be;
       logic [63:0] w_din;
@@ -848,7 +850,8 @@ module m2_raster3d #(
         .in_col(fb_test ? tp_col : tx_span_col), .in_painted(1'b1),
         .in_moire(fb_test ? 1'b0 : tx_span_moire),   // R640
         .m_req(w_req), .m_we(w_we), .m_addr(w_addr), .m_blen(w_blen),
-        .m_din(w_din), .m_be(w_be), .m_wnext(w_wnext), .m_ack(w_ack),
+        .m_din(w_din), .m_be(w_be), .m_wnext(w_wnext), .m_wacc(w_wacc), .m_ack(w_ack),
+        .empty(fbw_empty),
         .dbg_pixels(dbg_fb_pixels), .dbg_clears(), .dbg_st()
       );
 
@@ -996,13 +999,13 @@ module m2_raster3d #(
         .clk(clk), .rst_n(rst_n),
         .a_req(r_req), .a_we(r_we), .a_addr(r_addr), .a_blen(r_blen),
         .a_din(64'd0), .a_be(8'hFF),
-        .a_wnext(), .a_rvalid(r_rvalid), .a_ack(r_ack),
+        .a_wnext(), .a_wacc(), .a_rvalid(r_rvalid), .a_ack(r_ack),
         .b_req(w_req), .b_hold(fbr_hungry || pace_hold), .b_we(w_we), .b_addr(w_addr), .b_blen(w_blen),   // R655, R656
         .b_din(w_din), .b_be(w_be),
-        .b_wnext(w_wnext), .b_rvalid(), .b_ack(w_ack),
+        .b_wnext(w_wnext), .b_wacc(w_wacc), .b_rvalid(), .b_ack(w_ack),
         .m_req(fb_req), .m_we(fb_we), .m_addr(fb_addr), .m_blen(fb_blen),
         .m_din(fb_din), .m_be(fb_be),
-        .m_wnext(fb_wnext), .m_rvalid(fb_rvalid), .m_ack(fb_ack),
+        .m_wnext(fb_wnext), .m_wacc(fb_wacc), .m_rvalid(fb_rvalid), .m_ack(fb_ack),
         .m_dout(fb_dout), .dout(),
         .dbg_a_waits(), .dbg_b_waits(),
         .dbg_busy(), .dbg_owner()
@@ -1012,6 +1015,7 @@ module m2_raster3d #(
       assign fb_blen = 8'd0; assign fb_din = 64'd0; assign fb_be = 8'd0;
       assign fb_rd_col = 24'd0; assign fb_rd_hit = 1'b0;
       assign fbw_in_ready = 1'b0;
+      assign fbw_empty    = 1'b1;
       assign dbg_tp_bad = '0; assign dbg_tp_rows = '0; assign dbg_tp_first = '0;   // R653
       assign fb_clear_busy = 1'b0;
       assign dbg_fb_lines = 16'd0; assign dbg_fb_late = 16'd0;
@@ -1625,7 +1629,7 @@ module m2_raster3d #(
           // as "a frame with no new list painted 2214, the previous 2009".
           else if (!qs_out_valid && !qs_replay_busy
                    && !sq_busy && !spantex_busy
-                   && tx_span_ready) cst <= C_DONE;   // and the band has painted the last one
+                   && tx_span_ready && fbw_empty) cst <= C_DONE;   // and the band has painted the last one (R660: and written it)
         end
         C_FILLW: if (fl_quad_done) cst <= C_FILL;
         C_DONE: begin

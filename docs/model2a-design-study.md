@@ -25374,3 +25374,88 @@ MAME, textures off, opaque pixels on the wrong polygon:
 What is left is our quarter-pixel vertices against MAME's floats and z ties.
 Frame 9000 textured: draws whole, 1.31 video frames (1.38 before; 4% fewer
 texel fetches -- the double-drawn last row is gone).
+
+**R659 -- M2COV'S ROUNDING WAS AN ADDER IN FRONT OF THE SPAN MULTIPLY.**
+
+c2dc045 (R658, M2COV on) fitted at ~41.3K ALM in s566-s568 and failed clk_sys
+setup by -3.445 / -3.656 / -4.120 ns (TNS -832). s564, the build before it,
+closed clk_sys at +0.951. quartus_sta on s568, the 3,000 worst clk_sys paths:
+all but 41 run xa/xb -> span_v / span_ooz inside m2_raster_fill. The chain
+was a 32-bit sort (xa < xb), then round = (x + 0x7FFF) >>> 16 -- a 32-bit
+carry chain -- then the viewport clamp, then uv_at's gx * emit_cl multiply
+into span_u/v/ooz. In Model 1 mode the rounding is a bit slice, which is why
+the same path had slack before.
+
+Fix: shadow accumulators xah/xbh = xa/xb + 0x7FFF. Every write to xa/xb is
+either a reload from px[] (the shadow takes px + 0x7FFF) or xa + delta (the
+shadow takes xah + the same delta: S_OFF, the skip multiply, the walk), so the
+offset holds exactly and round(x) is xah[31:16]. Rounding is monotonic, so
+the per-row sort moves after it and becomes 16 bits. Bit-identical to R658:
+tb_m2_fill_m2cov 20,007 quads 0 fails (4,311 ties, as before); tb_m2_raster_fill
+152,369 checks 0 fails; frames 1000/4000/9000 textures-off pixel dumps
+byte-identical to c2dc045's.
+
+The other 41 failing paths were m2_geometry wu -> ru (min4w, mask, subtract,
+sat13): five logic levels, but routed X57_Y35 -> X50_Y48 -> X57_Y35 and back.
+That is placement pressure from the fill's cluster, not depth. It is left
+alone until a build without the fill's paths shows whether it still fails.
+
+**R660 -- EVERY SINGLE-BEAT FRAMEBUFFER WRITE WENT TO DDR3 TWICE. THE SECOND
+COPY CARRIED THE NEXT SPAN'S COLOUR AND ENDED OTHER TRANSFERS EARLY.**
+
+Found while designing the write combiner Ben asked for ("higher bursts on the
+write to ddr3"). m2_ddr3 finishes a transfer by registering ack and returning
+to D_IDLE on the same edge. The requester sees ack the cycle after and drops
+req on the edge after that; the arbiter is still `busy` with the same owner
+through that cycle. So in the cycle ack is out, D_IDLE sees the OLD request
+still asserted and takes it again. The writer drops m_req on the first
+wnext, which for a multi-beat burst is long before the end -- so bursts were
+safe, and every one-beat write (a span's odd head or odd tail) was issued
+twice. The reader drops m_req on its first beat of 248 and was never hit
+directly.
+
+What the second copy did depends on BUSY, which is why nothing idle ever
+showed it:
+  - DDRAM_DIN is din, combinational, and BE is latched. A copy stalled by
+    BUSY writes the latched byte enable with whatever the writer is driving
+    by then -- the NEXT span's colour -- into the previous span's pixel. At
+    PIXSTEP 1 a textured polygon is mostly one- and two-pixel runs, so most of
+    its writes were single beats: colours smeared along rows.
+  - Its wnext/ack were delivered to whoever owned the arbiter by then: the
+    writer's next request (retired before it was written -- pixels never
+    painted, the cleared tilemap shows through) or the scanout reader, whose
+    248-beat line then ENDED EARLY, leaving the rest of the line buffer
+    holding an older line (R653-R657's "row N holds row N-4").
+  - Worse with more writes in flight, absent in a held frame (nothing is
+    written), heavier at PIXSTEP 1 than 4 (more one-pixel runs): every
+    property of the streaks as Ben reported them. The board has not yet
+    confirmed it is THE cause; it is at least A cause of exactly that shape.
+
+How it was found: no bench had ever run the writer against the real m2_ddr3.
+tb_m2_raster3d's DDR3 model and tb_m2_fb_write's both answer a beat and say
+so in the same cycle, and tb_m2_ddr3 pulses req for one cycle. New:
+tb_m2_fbw_chain -- m2_fb_write -> m2_ddr3_arb -> m2_ddr3 as built, a DDRAM
+that says BUSY on a set share of cycles, a stand-in reader fetching 248-beat
+lines, 20,000 spans (mostly 1-8 px runs along rows, some long, 10% stippled);
+the framebuffer checked pixel by pixel against the spans in order, DDRAM
+write COMMANDS counted against the writer's own requests. Before (BUSY 30%):
+65,080 commands for 44,549 requests, 811 pixels wrong (each holding the
+colour of the span after it), 22,816 of 127,720 read beats never delivered.
+At BUSY 0: 66,850 for 42,900, 51 wrong.
+
+Fix: m2_ddr3 takes a request in D_IDLE only when ack is not out
+(`req && !ack`). After: commands == requests, 0 wrong pixels, every read
+beat delivered, at BUSY 0 / 30% / 90% and two seeds. tb_m2_ddr3 changed to
+wait out the ack cycle before its one-cycle request pulses (a real requester
+holds req, and the arbiter's cool cycle keeps a new grant out of that cycle).
+Also found by the chain bench and fixed in m2_fb_write: a stippled head or
+tail whose stipple keeps neither half was written as a beat with NO byte
+enable (977 in 20,000 spans; Avalon leaves that to the slave) -- now skipped;
+and dbg_pixels counted a stippled beat as two pixels. Frames 1000/4000/9000
+textures-off pixel dumps byte-identical; the self-test in the bench 0 bad
+rows, with and without bus jitter.
+
+Also added for the combiner: m2_ddr3 `wacc` (a write beat taken THIS cycle;
+wnext says so a cycle late, too late for a source whose data changes beat to
+beat) routed through the arbiter; m2_fb_write `empty`, which C_FILL -> C_DONE
+and the self-test's publish now also wait for.

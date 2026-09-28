@@ -232,7 +232,7 @@ int main(int argc, char **argv) {
       bool jstall = false;
       if (JIT) { jrng = jrng * 6364136223846793005ull + 1442695040888963407ull;
                  jstall = int((jrng >> 33) % 1000) < JIT; }
-      d->fb_wnext = 0; d->fb_rvalid = 0; d->fb_ack = 0;
+      d->fb_wnext = 0; d->fb_wacc = 0; d->fb_rvalid = 0; d->fb_ack = 0;
       if (g_ddr_left == 0 && d->fb_req) {
         g_ddr_a = g_ddr_a0 = d->fb_addr; g_ddr_b0 = d->fb_blen;
         g_ddr_left = d->fb_blen ? d->fb_blen : 256; g_ddr_wr = d->fb_we;
@@ -257,7 +257,9 @@ int main(int argc, char **argv) {
             wa -= 256; old = g_ddr.count(wa) ? g_ddr[wa] : ~0ull;
           }
           g_ddr[wa] = (d->fb_din & m) | (old & ~m);
-          d->fb_wnext = 1; g_ddr_a++; g_ddr_left--; g_ddr_wbeats++;
+          // R660: this model takes a beat and says so in one cycle, so its
+          // wnext IS the same-cycle accept
+          d->fb_wnext = 1; d->fb_wacc = 1; g_ddr_a++; g_ddr_left--; g_ddr_wbeats++;
           if (g_ddr_left == 0) d->fb_ack = 1;
         } else {
           d->fb_dout = g_ddr.count(g_ddr_a) ? g_ddr[g_ddr_a] : ~0ull;

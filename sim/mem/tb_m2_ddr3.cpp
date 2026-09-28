@@ -79,6 +79,9 @@ static void tick() {
 }
 
 static bool do_req(bool we, uint32_t a, uint64_t v, uint8_t be, uint64_t *out, int budget = 400) {
+  // R660: not in the cycle the previous ack is out -- m2_ddr3 ignores a request
+  // there, because a requester that saw the ack is still asserting its old one
+  while (d->ack) tick();
   d->req = 1; d->we = we; d->addr = a; d->din = v; d->be = be; d->blen = 1;
   tick();
   d->req = 0;
@@ -181,6 +184,7 @@ int main(int argc, char **argv) {
     busy_for = 4; read_lat = 20;          // ~200 ns at 100 MHz
     long r0 = accepted_reads, w0 = accepted_writes;
     // write eight ascending words as one burst
+    while (d->ack) tick();   // R660
     d->req = 1; d->we = 1; d->addr = 0x2000; d->be = 0xFF; d->blen = 8;
     d->din = 0x7000000000000000ull;
     tick(); d->req = 0;
@@ -192,6 +196,7 @@ int main(int argc, char **argv) {
     ck("the write burst finished",      (long)(beat >= 8), 1);
     ck("ONE command, eight beats",      accepted_writes - w0, 8);
     // read them back as one burst
+    while (d->ack) tick();   // R660
     d->req = 1; d->we = 0; d->addr = 0x2000; d->be = 0xFF; d->blen = 8;
     tick(); d->req = 0;
     long words = 0, wrong = 0;

@@ -87,7 +87,11 @@ module m2_fb_write #(
   output logic [63:0] m_din,
   output logic [7:0]  m_be,
   input  logic        m_wnext,
+  /* verilator lint_off UNUSEDSIGNAL */
+  input  logic        m_wacc,
+  /* verilator lint_on UNUSEDSIGNAL */
   input  logic        m_ack,
+  output logic        empty,
 
   output logic [31:0] dbg_pixels,
   // R364: THE CLEAR IS THE GATE ON EVERYTHING ELSE. in_ready is low while it
@@ -129,6 +133,7 @@ module m2_fb_write #(
   wire [7:0]         bcap   = (pairs > 9'(WBURST)) ? 8'(WBURST) : 8'(pairs);
 
   assign in_ready  = (st == W_IDLE) && !clear_req;
+  assign empty     = (st == W_IDLE);
   assign clear_busy = (st == W_CLR) || (st == W_CLRW);
   // R348: A REQUEST IS HELD, NOT PULSED. m_req was asserted for one cycle, so a
   // memory that was busy that cycle never saw it -- the same fault m2_ddr3
@@ -171,11 +176,17 @@ module m2_fb_write #(
         end
 
         // An odd first pixel: one word, upper half only.
+        // R660: one the stipple leaves no byte of is not written at all -- it
+        // was a beat with no byte enable (977 in 20,000 spans), which Avalon
+        // leaves to the slave to interpret.
         W_HEAD: begin
-          m_req  <= 1'b1; m_blen <= 8'd1; m_be <= 8'hF0 & mo_be; body_r <= 1'b0;
-          addr_r <= row_r + 25'(x_r >> 1);
-          x_r    <= x_r + 16'sd1;
-          st     <= W_WAIT;
+          x_r <= x_r + 16'sd1;
+          if ((8'hF0 & mo_be) == 8'h00) st <= W_DONE;
+          else begin
+            m_req  <= 1'b1; m_blen <= 8'd1; m_be <= 8'hF0 & mo_be; body_r <= 1'b0;
+            addr_r <= row_r + 25'(x_r >> 1);
+            st     <= W_WAIT;
+          end
         end
 
         // The aligned middle, as one burst of whole words.
@@ -191,10 +202,13 @@ module m2_fb_write #(
 
         // An odd last pixel: one word, lower half only.
         W_TAIL: begin
-          m_req  <= 1'b1; m_blen <= 8'd1; m_be <= 8'h0F & mo_be; body_r <= 1'b0;
-          addr_r <= row_r + 25'(x_r >> 1);
-          x_r    <= x_r + 16'sd1;
-          st     <= W_WAIT;
+          x_r <= x_r + 16'sd1;
+          if ((8'h0F & mo_be) == 8'h00) st <= W_DONE;   // R660
+          else begin
+            m_req  <= 1'b1; m_blen <= 8'd1; m_be <= 8'h0F & mo_be; body_r <= 1'b0;
+            addr_r <= row_r + 25'(x_r >> 1);
+            st     <= W_WAIT;
+          end
         end
 
         W_WAIT: begin
@@ -209,7 +223,8 @@ module m2_fb_write #(
             // point of this counter is to compare the two.
             if (body_r) begin   // R640: a body beat, whole word, stippled or not
               x_r <= x_r + 16'sd2;
-              if (!(&dbg_pixels)) dbg_pixels <= dbg_pixels + 32'd2;
+              // R660: a stippled beat paints one of its two pixels
+              if (!(&dbg_pixels)) dbg_pixels <= dbg_pixels + ((m_be == 8'hFF) ? 32'd2 : 32'd1);
             end else if (!(&dbg_pixels)) dbg_pixels <= dbg_pixels + 32'd1;
           end
           if (m_ack) begin

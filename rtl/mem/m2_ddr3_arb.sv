@@ -38,6 +38,7 @@ module m2_ddr3_arb (
   input  logic [63:0] a_din,
   input  logic [7:0]  a_be,
   output logic        a_wnext,
+  output logic        a_wacc,      // R660: m_wacc, routed like wnext
   output logic        a_rvalid,
   output logic        a_ack,
 
@@ -52,6 +53,7 @@ module m2_ddr3_arb (
   input  logic [63:0] b_din,
   input  logic [7:0]  b_be,
   output logic        b_wnext,
+  output logic        b_wacc,
   output logic        b_rvalid,
   output logic        b_ack,
 
@@ -63,6 +65,7 @@ module m2_ddr3_arb (
   output logic [63:0] m_din,
   output logic [7:0]  m_be,
   input  logic        m_wnext,
+  input  logic        m_wacc,
   input  logic        m_rvalid,
   input  logic        m_ack,
   input  logic [63:0] m_dout,
@@ -128,9 +131,11 @@ module m2_ddr3_arb (
   wire sel_b = owner;
 
   assign a_wnext  = m_wnext  && !sel_b;
+  assign a_wacc   = m_wacc   && !sel_b;
   assign a_rvalid = m_rvalid && !sel_b;
   assign a_ack    = m_ack    && !sel_b;
   assign b_wnext  = m_wnext  &&  sel_b;
+  assign b_wacc   = m_wacc   &&  sel_b;
   assign b_rvalid = m_rvalid &&  sel_b;
   assign b_ack    = m_ack    &&  sel_b;
 

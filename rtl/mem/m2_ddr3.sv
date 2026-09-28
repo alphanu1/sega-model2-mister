@@ -86,6 +86,11 @@ module m2_ddr3 #(
   // `din`. A read burst returns one word per `rvalid`. `ack` is the whole
   // transaction finishing, so a single-word caller can ignore the other two.
   output logic        wnext,
+  // R660: a write beat is taken THIS cycle. wnext says so a cycle later, which
+  // is too late for a source whose data changes beat to beat: DDRAM_DIN is
+  // din, combinationally, so the next beat's word must be there the cycle
+  // after this one.
+  output logic        wacc,
   output logic        rvalid,
   output logic        ack,
   output logic [63:0] dout,
@@ -161,6 +166,7 @@ module m2_ddr3 #(
 
   assign DDRAM_WE = (st == D_ISSUE) &&  is_wr;
   assign DDRAM_RD = (st == D_ISSUE) && !is_wr;
+  assign wacc     = DDRAM_WE && !DDRAM_BUSY;   // R660
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -179,7 +185,17 @@ module m2_ddr3 #(
         dbg_stuck_wr     <= is_wr;
       end
       case (st)
-        D_IDLE: if (req) begin
+        // R660: NOT IN THE CYCLE THE LAST ONE'S ACK IS OUT. A requester drops req
+        // on the edge that shows it ack, and the arbiter still grants it that
+        // cycle -- so a request was taken TWICE. Every single-beat write went to
+        // DDRAM twice; the second copy, a BUSY stall later, carried whatever din
+        // had become (the writer's NEXT span's colour) and its wnext/ack went to
+        // whoever owned the arbiter by then -- a later write, or the scanout
+        // reader, whose line burst it ended early. tb_m2_fbw_chain, the real
+        // writer/arbiter/master against a DDRAM that says BUSY: 65,080 write
+        // commands for 44,549 requests, 811 pixels in the next span's colour,
+        // 22,816 read beats never delivered.
+        D_IDLE: if (req && !ack) begin
           is_wr  <= we;
           blen_r <= (blen == 8'd0) ? 8'd1 : blen;
           beats  <= (blen == 8'd0) ? 8'd1 : blen;
