@@ -3286,6 +3286,25 @@ int main(int argc, char **argv) {
   else
     std::printf("TEXTURE SHEETS (R275): NOTHING UPLOADED in this run -- every texel would read 0xF "
                 "and a textured polygon would come out flat\n");
+  // R650: M2_TEXDUMP=<dir> -- both texture sheets as this SDRAM holds them at
+  // the end of the run, in MAME's tex0.bin/tex1.bin layout (u32 array, word i =
+  // halfword i), so the CPU's upload path can be compared with MAME's texture
+  // RAM word for word. The renderer benches load MAME's sheets directly and
+  // never exercise the upload.
+  if (const char *td = std::getenv("M2_TEXDUMP")) {
+    const uint32_t base[2] = {0x1760000u, 0x17E0000u};
+    for (int k = 0; k < 2; k++) {
+      std::string pth = std::string(td) + (k ? "/ours_tex1.bin" : "/ours_tex0.bin");
+      FILE *f = std::fopen(pth.c_str(), "wb");
+      for (uint32_t w = 0; w < 0x80000u && f; w++) {
+        const uint32_t a = base[k] + w;
+        const uint16_t v = a < mem.size() ? mem[a] : 0xFFFF;
+        std::fwrite(&v, 2, 1, f);
+      }
+      if (f) std::fclose(f);
+    }
+    std::printf("R650: texture sheets written to %s\n", td);
+  }
   std::printf("%s\n", fail ? "FAIL" : "PASS");
   delete d;
   return fail;

@@ -171,7 +171,26 @@ int main(int argc, char **argv) {
   long sweep_ctr = 0;
   int tex_wait = -1, tex2_wait = -1, tex3_wait = -1, tex4_wait = -1;
   static const bool FBM = std::getenv("M2_R3D_FB") != nullptr;
+  // R650: THE FRAMEBUFFER'S DRAW, WATCHED WHERE IT HAPPENS. A draw starts at
+  // the swap (a new list) and ends when fb_complete rises. Each
+  // draw's length is kept, and in list mode the fetches of the LAST complete
+  // draw are the ones written to fetch.txt -- the R647 probe looked for the
+  // draw after it had already finished and printed 0.
+  static long g_cyc = 0, g_draw_c0 = -1; static bool g_fc_prev = false, g_fbrec = false;
+  static std::vector<long> g_draws;
   auto tick = [&]() {
+    ++g_cyc;
+    if (FBM) {
+      const bool fc = d->rootp->m2_raster3d__DOT__fb_complete;
+      // the swap starts it, marked by fb_busy rising (a register; `swap` is a
+      // wire and reads stale here, before the tick's eval)
+      static bool g_fb_busy_prev = false;
+      const bool fbb = d->rootp->m2_raster3d__DOT__fb_busy;
+      if (fbb && !g_fb_busy_prev) { g_draw_c0 = g_cyc; if (g_fbrec) { g_fetch.clear(); g_rec = true; } }
+      g_fb_busy_prev = fbb;
+      if (!g_fc_prev && fc && g_draw_c0 >= 0) { g_draws.push_back(g_cyc - g_draw_c0); if (g_fbrec) g_rec = false; }
+      g_fc_prev = fc;
+    }
     if (FBM) {   // R640
       const int LAT = 20;
       d->fb_wnext = 0; d->fb_rvalid = 0; d->fb_ack = 0;
@@ -592,24 +611,18 @@ int main(int argc, char **argv) {
     }
     std::printf("  R615: %ld quads pushed\n", nq);
     long hits = 0;
+    g_fbrec = FBM;                       // R650: record the draw this swap starts
     video_frame(false, &hits);           // the list is collected, then swapped in
     // R640: with the framebuffer, the list swapped in above is drawn once and
     // PUBLISHED at the next frame_start -- one frame later than the bands.
-    if (FBM) {   // R647: how long the list takes to draw, in core cycles from its swap
-      long c0 = -1, c1 = -1;
-      for (long k = 0; k < 20000000 && c1 < 0; k++) {
-        tick();
-        if (c0 < 0 && d->rootp->m2_raster3d__DOT__fb_busy) c0 = k;
-        if (c0 >= 0 && d->rootp->m2_raster3d__DOT__fb_complete) c1 = k;
-        if ((k % 3000) == 0) { d->scan_y = (d->scan_y + 1) % 424; }
-      }
-      std::printf("  R647 FB draw: %ld core cycles (%.2f video frames at 70 MHz / 57.5 Hz)\n", c1 - c0, (c1 - c0) / 1217391.0);
-    }
     if (FBM) {   // until the whole list has been drawn and published
       const int pre = std::getenv("M2_R3D_FBPRE") ? std::atoi(std::getenv("M2_R3D_FBPRE")) : 2;
       for (int k = 0; k < pre; k++) video_frame(false, &hits);
+      // R650: the draw's own length, in core cycles and in video frames
+      for (long w : g_draws) std::printf("  R650 FB draw: %ld core cycles (%.2f video frames at 70 MHz / 57.5 Hz)\n", w, w / 1217391.0);
+      if (g_draws.empty()) std::printf("  R650 FB draw: NOT COMPLETE after %d frames\n", pre);
     }
-    g_rec = true;
+    g_rec = !FBM;   // R650: with the framebuffer the draw above was recorded
     px_dump = std::getenv("M2_R3D_PXDUMP") != nullptr;
     video_frame(true, &hits);            // the frame that displays it
     px_dump = false;

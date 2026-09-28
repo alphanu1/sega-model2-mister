@@ -175,6 +175,11 @@ localparam CONF_STR = {
 	// R620: BILINEAR, WITH AN OFF SWITCH, for the same reason. Point is the
 	// nearest of the same four texels -- this core's picture before R620.
 	"O[31],Texture filter,Bilinear,Point;",
+	// R650: THE TEXTURE SHEETS AS SDRAM HOLDS THEM, one texel a pixel (each
+	// texel row on two scanlines), in place of the picture -- m2_texview.
+	// Page: low bit the half across, the rest a 192-row band down the sheet.
+	"O[35:34],Texture view,Off,Sheet 0,Sheet 1;",
+	"O[40:36],Texture page,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21;",
 	// R630: GAMMA, because MAME's curve is MAME's guess at cabinet
 	// calibration (m2_palette) and the board is judged on Ben's own screen.
 	// MAME's is entry zero, the reference; Mild lifts the darks; Off is the
@@ -572,6 +577,16 @@ always_ff @(posedge clk_mem) begin gam_m1 <= gam_menu; gam_m2 <= gam_m1; end
 always_ff @(posedge clk_sys) begin gam_s1 <= gam_menu; gam_s2 <= gam_s1; end
 reg [2:0] texpt_s;   // R620: the filter switch, on clk_mem where the texel cache runs
 always_ff @(posedge clk_mem) texpt_s <= {texpt_s[1:0], status[31]};
+// R650: the texture view's switches, into clk_mem (quasi-static: a page change
+// shows as one torn frame at most), and its claim on SDRAM port 10.
+reg [6:0] tv_m1, tv_m2;
+always_ff @(posedge clk_mem) begin tv_m1 <= status[40:34]; tv_m2 <= tv_m1; end
+wire        tv_on    = (tv_m2[1:0] == 2'd1) || (tv_m2[1:0] == 2'd2);
+wire        tv_sheet = (tv_m2[1:0] == 2'd2);
+wire [4:0]  tv_page  = (tv_m2[6:2] > 5'd21) ? 5'd0 : tv_m2[6:2];
+logic       tv_req, tv_own;
+logic [SDR_AW:1] tv_addr;
+logic [3:0] tv_texel;
 // R265: THE WALK TRIGGER WAS THE ONE OSD BIT TAKEN RAW. Every other option in
 // this core reaches the datapath through three flops (R229) and this one went
 // straight from `status` into the geometrizer's mode select. The board showed
@@ -1018,8 +1033,9 @@ always_comb begin
 	// glyph prefetch (R291), not the port count. Eleven ports close timing --
 	// build/tex1 did it at +0.131 ns.
 	p_req[3]  = cache_m_req;
-	p_req[10] = tex_m_req;
-	p_addr[10] = tex_m_addr;
+	// R650: the texture view borrows the texel cache's port while it is on
+	p_req[10] = tv_own ? tv_req  : tex_m_req;
+	p_addr[10] = tv_own ? tv_addr : tex_m_addr;
 	p_addr[3] = char_base + SDR_AW'(cache_m_addr);
 	// PORT 0 IS THE CPU'S, and it is the single-word port on purpose: the
 	// bridge issues one 16-bit access at a time, and ports 1-3 burst four.
@@ -5553,7 +5569,15 @@ wire [63:0] cache_m_data;
 // The answer side of port 3, straight back to the cache. m2_sdram_x2 holds the
 // acknowledge while the request stands and bypasses s_dout on the acknowledge
 // cycle, so both are valid on the edge m2_char_cache captures them.
-assign tex_m_ack    = p_ack[10];          // R292
+assign tex_m_ack    = p_ack[10] & ~tv_own;   // R292; R650
+// R650: the port changes hands only between transactions. Both owners hold
+// their request until its acknowledge, so a port with no request and no
+// acknowledge has nothing in flight. (A texel miss that timed out drops its
+// request early; its late answer may then feed the view one wrong burst --
+// a glitch in a debug picture, never in the game's.)
+always_ff @(posedge clk_mem or negedge mem_rst_n)
+	if (!mem_rst_n) tv_own <= 1'b0;
+	else if (!p_req[10] && !p_ack[10]) tv_own <= tv_on;
 assign tex_m_data   = p_dout[10];
 assign cache_m_ack  = p_ack[3];
 assign cache_m_data = p_dout[3];
@@ -5991,9 +6015,19 @@ wire [7:0] r3d_g8 = {r3d_col[10:5],  r3d_col[10:9]};
 wire [7:0] r3d_b8 = {r3d_col[4:0],   r3d_col[4:2]};
 // Priority-bit tiles (the UI) stay over the 3D; everything else goes under it (R213).
 wire       tile_cat1;
-wire [7:0] mix_r  = (r3d_hit && !tile_cat1) ? r3d_r8 : tile_r;
-wire [7:0] mix_g  = (r3d_hit && !tile_cat1) ? r3d_g8 : tile_g;
-wire [7:0] mix_b  = (r3d_hit && !tile_cat1) ? r3d_b8 : tile_b;
+// R650: with the texture view on, the picture is the sheet, grey (texel x 17)
+wire [7:0] tv_grey = {tv_texel, tv_texel};
+wire [7:0] mix_r  = tv_own ? tv_grey : (r3d_hit && !tile_cat1) ? r3d_r8 : tile_r;
+wire [7:0] mix_g  = tv_own ? tv_grey : (r3d_hit && !tile_cat1) ? r3d_g8 : tile_g;
+wire [7:0] mix_b  = tv_own ? tv_grey : (r3d_hit && !tile_cat1) ? r3d_b8 : tile_b;
+m2_texview #(.AW(SDR_AW)) u_texview (
+	.clk(clk_mem), .rst_n(mem_rst_n),
+	.en(tv_own), .sheet(tv_sheet), .page(tv_page),
+	.base0(GAME_TEXS0), .base1(GAME_TEXS1),
+	.vid_x(vid_x[8:0]), .vid_y(vid_y),
+	.m_req(tv_req), .m_addr(tv_addr), .m_ack(p_ack[10] & tv_own), .m_data(p_dout[10]),
+	.texel(tv_texel)
+);
 wire       tile_hs, tile_vs, tile_hb, tile_vb;
 
 // THE VIDEO DOMAIN'S RESET, ASYNC ASSERT AND SYNCHRONOUS RELEASE.

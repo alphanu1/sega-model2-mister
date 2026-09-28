@@ -770,6 +770,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/mem/m2_ddr3_arb.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_fb_write.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_fb_read.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_geo_view.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_texview.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/mem/m2_sdram.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/mem/m2_sdram_cdc.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/mem/m2_wr_arb.sv
