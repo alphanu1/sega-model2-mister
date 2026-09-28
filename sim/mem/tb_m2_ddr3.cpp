@@ -92,6 +92,7 @@ static bool do_req(bool we, uint32_t a, uint64_t v, uint8_t be, uint64_t *out, i
 int main(int argc, char **argv) {
   Verilated::commandArgs(argc, argv);
   d = new Vm2_ddr3;
+  d->base = 0x04C00000;   // R654: the base is an input now; the bench keeps R351's
   d->clk = 0; d->rst_n = 0; d->req = 0;
   d->DDRAM_BUSY = 0; d->DDRAM_DOUT_READY = 0; d->DDRAM_DOUT = 0;
   for (int i = 0; i < 4; i++) tick();

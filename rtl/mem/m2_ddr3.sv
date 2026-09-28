@@ -68,7 +68,12 @@ module m2_ddr3 #(
   // ---- the consumer side, shaped like m2_sdram's ports
   input  logic        req,
   input  logic        we,
-  input  logic [24:0] addr,        // 64-bit words, relative to BASE
+  // R654: THE BASE AT RUN TIME. 0x26000000 (BASE, R351) sits in the 0x2xxxxxxx
+  // region the framework hands out at run time (the Linux framebuffer and the
+  // ALSA buffer are placed there by the ARM side); cores own 0x30000000 up.
+  // The top level picks, so the two can be compared on one build.
+  input  logic [28:0] base,
+  input  logic [24:0] addr,        // 64-bit words, relative to base
   // R347: WORDS IN THIS TRANSACTION. MiSTer's own guidance is that DDR3 here
   // is ~200 ns typical and UNBOUNDED in the worst case, because the bridge is
   // shared with the HPS, and that a core must use high burst counts or heavy
@@ -141,8 +146,9 @@ module m2_ddr3 #(
   // DIN IS NOT LATCHED, and must not be: a write burst takes a new word every
   // `wnext` and that is exactly what the consumer is being asked for.
   logic [24:0] addr_r;
+  logic [28:0] base_r;
   logic [7:0]  be_r;
-  assign DDRAM_ADDR     = BASE + 29'(addr_r);
+  assign DDRAM_ADDR     = base_r + 29'(addr_r);
   assign DDRAM_DIN      = din;
   assign DDRAM_BE       = be_r;
 
@@ -159,7 +165,7 @@ module m2_ddr3 #(
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       st <= D_IDLE; is_wr <= 1'b0; ack <= 1'b0; dout <= '0;
-      addr_r <= '0; be_r <= 8'hFF;
+      addr_r <= '0; be_r <= 8'hFF; base_r <= BASE;
       blen_r <= 8'd1; beats <= 8'd1; wnext <= 1'b0; rvalid <= 1'b0;
       lat <= '0; dbg_lat_last <= '0; dbg_lat_max <= '0;
       dbg_inflight_max <= '0; dbg_stuck_wr <= 1'b0; dbg_acks <= 16'd0;
@@ -178,6 +184,7 @@ module m2_ddr3 #(
           blen_r <= (blen == 8'd0) ? 8'd1 : blen;
           beats  <= (blen == 8'd0) ? 8'd1 : blen;
           addr_r <= addr;                 // R362: held for the whole burst
+          base_r <= base;                 // R654: and the base with it
           be_r   <= be;
           lat    <= '0;
           st     <= D_ISSUE;

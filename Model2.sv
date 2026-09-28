@@ -190,6 +190,10 @@ localparam CONF_STR = {
 	// pixel of which names its own row and cell; the scanout checks every one
 	// before the mix with the 2D, and the UART reports bad pixels and rows.
 	"O[37],FB self-test,Off,On;",
+	// R654: WHERE THE 3D FRAMEBUFFER LIVES IN DDR3. 0x30000000 is the cores'
+	// own region; 0x26000000 (R351's choice) is in the 0x2xxxxxxx region the
+	// framework hands out at run time. Kept selectable to compare on the board.
+	"O[38],FB address,0x30000000,0x26000000;",
 	// R630: GAMMA, because MAME's curve is MAME's guess at cabinet
 	// calibration (m2_palette) and the board is judged on Ben's own screen.
 	// MAME's is entry zero, the reference; Mild lifts the darks; Off is the
@@ -606,6 +610,10 @@ always_ff @(posedge clk_sys) fbt_s <= {fbt_s[1:0], status[37]};
 wire        fb_test = fbt_s[2];
 wire [15:0] tp_bad, tp_rows;
 wire [26:0] tp_first;
+// R654: the framebuffer's DDR3 base (64-bit word address), from the OSD
+reg  [2:0]  fba_s;
+always_ff @(posedge clk_sys) fba_s <= {fba_s[1:0], status[38]};
+wire [28:0] fb_base = fba_s[2] ? 29'h04C0_0000 : 29'h0600_0000;   // byte 0x26000000 : 0x30000000
 // R265: THE WALK TRIGGER WAS THE ONE OSD BIT TAKEN RAW. Every other option in
 // this core reaches the datapath through three flops (R229) and this one went
 // straight from `status` into the geometrizer's mode select. The board showed
@@ -5956,6 +5964,7 @@ logic       ddr_go;
 always_ff @(posedge clk_sys or negedge mem_rst_n)
 	if (!mem_rst_n) ddr_go <= 1'b0; else ddr_go <= cp_done;
 m2_ddr3 u_ddr3 (
+	.base(fb_base),   // R654
 	.clk(clk_sys), .rst_n(mem_rst_n & ddr_go),
 	.req(ddr_req), .we(ddr_we), .addr(ddr_addr), .blen(ddr_blen), .din(ddr_din), .be(ddr_be),
 	.wnext(ddr_wnext), .rvalid(ddr_rvalid), .ack(ddr_ack), .dout(ddr_dout),

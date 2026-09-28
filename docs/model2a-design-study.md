@@ -25199,3 +25199,20 @@ coming out of DDR3; the checker clean while the screen shows repeated rows =
 the fault is after the framebuffer, in the mix with the 2D or the path to the
 screen (Ben's reading: "where you are muxing the 3D layer in between the 2D
 layers").
+
+**R654 -- THE FRAMEBUFFER'S DDR3 BASE IS AN OSD CHOICE; AND THE FROZEN FRAME
+IS CLEAN.** m2_ddr3 takes its base as an input (BASE stays as the reset value
+and the bench's). OSD "FB address": 0x30000000 (default; the cores' region,
+where every other core that uses DDRAM puts its data) or 0x26000000 (R351's,
+next to screen_rotate, in the 0x2xxxxxxx region the framework hands out at run
+time -- LFB_BASE and ALSA's buf_addr are set there by the ARM side).
+
+Ben, the same session: with the geometry walk OFF the frame freezes -- the
+last complete frame shown again and again, nothing written to DDR3 -- and it
+is CLEAN; the repeated scanlines are only there while frames are being drawn.
+That frame was drawn under normal running, so what is stored is right and the
+damage is in showing one buffer while the other is written. It also argues
+against a foreign writer in our region (it would damage a frozen frame too);
+the switch is kept because it costs nothing to compare. The self-test (R653)
+writes one buffer continuously while the scanout checks the other -- the
+running game's situation exactly.
