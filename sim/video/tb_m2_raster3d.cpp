@@ -184,6 +184,15 @@ int main(int argc, char **argv) {
   static std::vector<long> g_draws;
   auto tick = [&]() {
     ++g_cyc;
+    // R658: M2_R3D_SPANLOG=<poly> -- every span the writer takes for that polygon
+    // (the colour carries the polygon number in list mode)
+    { static const int SPL = std::getenv("M2_R3D_SPANLOG") ? std::atoi(std::getenv("M2_R3D_SPANLOG")) : -1;
+      if (SPL >= 0 && d->rootp->m2_raster3d__DOT__tx_span_valid && d->rootp->m2_raster3d__DOT__tx_span_ready) {
+        const uint32_t c = d->rootp->m2_raster3d__DOT__tx_span_col;
+        const int p = int(((c >> 16) & 0xff) >> 3) | (int(((c >> 8) & 0xff) >> 2) << 5);
+        if (p == SPL) std::printf("SPAN p%d y %d x0 %d x1 %d\n", p, (int)d->rootp->m2_raster3d__DOT__tx_span_y,
+                                  (int)d->rootp->m2_raster3d__DOT__tx_span_x0, (int)d->rootp->m2_raster3d__DOT__tx_span_x1);
+      } }
     if (FBM) {
       const bool fc = d->rootp->m2_raster3d__DOT__fb_complete;
       // the swap starts it, marked by fb_busy rising (a register; `swap` is a
@@ -576,8 +585,8 @@ int main(int argc, char **argv) {
     for (int f = 0; f < NF; f++) {
       video_frame(false, &hits);
       const unsigned fr = (unsigned)d->dbg_tp_first;
-      std::printf("  R657 self-test frame %d: rows wrong-line %u, rows wrong-frame %u; first below row 4: row %u held %u frame-ok %u x %u\n",
-                  f, (unsigned)d->dbg_tp_bad, (unsigned)d->dbg_tp_rows, (fr >> 18) & 0x1ff, (fr >> 9) & 0x1ff, (fr >> 8) & 1, (fr & 0xff) * 2);
+      std::printf("  R657 self-test frame %d: rows wrong-line %u, rows wrong-frame %u; first below row 4: row %u held %u frame-ok %u x %u; late lines so far %u\n",
+                  f, (unsigned)d->dbg_tp_bad, (unsigned)d->dbg_tp_rows, (fr >> 18) & 0x1ff, (fr >> 9) & 0x1ff, (fr >> 8) & 1, (fr & 0xff) * 2, (unsigned)d->dbg_fb_late);
     }
     delete d;
     return 0;
@@ -654,7 +663,10 @@ int main(int argc, char **argv) {
       d->q_u2 = sat13(U[2] - um); d->q_v2 = sat13(Vv[2] - vm); d->q_u3 = sat13(U[3] - um); d->q_v3 = sat13(Vv[3] - vm);
       // colour = MAME's index, in the bits that survive RGB565: idx[4:0] in R[7:3], idx[10:5] in G[7:2]
       d->q_frac = frac;   // R626
-      d->q_tex = tex & 0xffffff; d->q_col = ((uint32_t(p.idx) & 31) << 19) | (((uint32_t(p.idx) >> 5) & 63) << 10); d->q_moire = (tex >> 11) & 1;   // R623
+      // R658: M2_R3D_NOTEX -- every polygon flat, so every pixel's colour is
+      // exactly its polygon's number (a texel scales it otherwise)
+      static const bool NOTEX = std::getenv("M2_R3D_NOTEX") != nullptr;
+      d->q_tex = NOTEX ? 0u : (tex & 0xffffff); d->q_col = ((uint32_t(p.idx) & 31) << 19) | (((uint32_t(p.idx) >> 5) & 63) << 10); d->q_moire = (tex >> 11) & 1;   // R623
       d->q_z = 0x3F800000u | (p.z & 0xffff);
       d->q_end = last;
       if (!d->q_ready) ++nq_refused;   // R650: a quad the store did not take is LOST

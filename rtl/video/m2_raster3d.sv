@@ -56,6 +56,8 @@ module m2_raster3d #(
   // R626: quarter-pixel vertices for the texture plane fit (m2_quad_store,
   // m2_raster_fill); 0 is the integer-only fit
   parameter int unsigned FRB = 0,
+  // R658: Model 2's pixel-centre coverage in the fill (requires FRB 2)
+  parameter bit          M2COV = 1'b0,
   // R627: BILINEAR UNLESS LATE. A texel request issued while the fill is
   // within TXLATE bands of the beam (the frame on screen, the beam in the
   // picture) is point-sampled -- one cache line, not up to four -- so a heavy
@@ -462,7 +464,7 @@ module m2_raster3d #(
   wire signed [15:0] band_y1 = 16'(fill_band) * 16'(BAND_H);
   wire signed [15:0] band_y2 = band_y1 + 16'(BAND_H) - 16'sd1;
 
-  m2_raster_fill #(.PXC(PXC), .FRB(FRB)) u_fill (   // R616, R626
+  m2_raster_fill #(.PXC(PXC), .FRB(FRB), .M2COV(M2COV)) u_fill (   // R616, R626, R658
     .clk(clk), .rst_n(rst_n),
     .in_valid(fl_in_valid), .in_ready(fl_in_ready),
     // R327: no sign extension. m2_quad_store already saturates these to 13

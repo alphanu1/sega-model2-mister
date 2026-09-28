@@ -25317,3 +25317,60 @@ frame number right, x}. And lines 0-3 are fetched on scan lines 385-388,
 just after the flip, not 421-423 after the writer has had the whole blanking
 (row 0's staleness). Bench: 0/0 at drains 4, 8, 12; the row-200 fault reads as
 one wrong-line row holding unpainted memory; frame 9000 identical.
+
+**R658 -- THE STREAKS: THE FILL WAS MODEL 1'S. MODEL 2'S PIXEL-CENTRE COVERAGE.**
+
+s564's self-test (R657) on the board, 1,977 frames: wrong-FRAME rows 0 every
+frame (the double buffer is right); wrong-LINE rows ~38 a frame, "row N held
+row N-4" -- under the self-test's writer the scanout lines land late. But the
+game's own counter (s560/s564, self-test off): 2 late lines since boot, and the
+bench shows the counter does count a late line (hundreds at a swamped queue).
+So the game's streaks were looked for in the drawing, with the one comparison
+that cannot be fooled: tb_m2_raster3d M2_R3D_NOTEX draws every polygon flat,
+so each pixel's colour IS its polygon's number, set against MAME's owners with
+translucent (h0 bit 13) and stippled (bit 15) polygons set aside. (Two earlier
+readings in this session were wrong for want of that: fetch logs cannot see
+flat polygons, and a textured pixel's colour is scaled by its texel.)
+
+Frames 1000/4000/9000: 3.05 / 1.34 / 1.82% of opaque pixels on the wrong
+polygon, including whole-row runs -- frame 1000, row 212, 59 pixels given to
+749 where MAME gives them to 752. Their shared edge runs from (-1, 212.8727)
+to (204.6349, 211.5943); row 212's centres lie above it for x < 59, so MAME
+gives them to 752. This fill is MAME's model1_v.cpp (fill_quad/fill_slope/
+fill_line): integer vertices, [floor(xl), floor(xr)], a separate last row --
+R626 added quarter pixels to the plane fit and left the edges on the integers
+("EDGES AND COVERAGE STILL USE THE INTEGERS"). 212.87 -> 212 and 211.59 -> 211
+put the edge above row 212's centres. Every near-horizontal edge between
+polygons is a row that can go the wrong way, and as the scene moves the wrong
+rows move: the "repeated scanlines", worse in motion, invisible in a freeze.
+Model 2 is not Model 1 here: model2_v.cpp draws with poly.h.
+
+THE FIX, m2_raster_fill M2COV (FRB 2 required): the edges walk the quarter-
+pixel vertices; rows round(ymin) .. round(ymax)-1 sampled at their centres
+(round in quarters is (y+1)>>2); a reloaded edge starts at its first row's
+centre (S_OFF, x + slope*d/4, d = 0..3 quarters); a row covers [round(lo),
+round(hi)) sorted per row, round(x) = (x + 0x7FFF) >> 16; no fill_line last
+row, nothing for a polygon of no height, and no Model 1 wireframe case (a
+sliver with two distinct INTEGER corners has four distinct quarter ones --
+tb case 4552, drawn by MAME, dropped by us until this). Two bugs on the way,
+both found by the new bench: a mixed signed/unsigned sum zero-extended a
+vertex at x = -1, and Model 1's whole-quad reject still ran after the new one,
+comparing quarters with pixels.
+
+Proof. tb_m2_fill_m2cov: MAME's rule in C (row centre against each edge,
+[y_top, y_bottom), pixels [round(min), round(max))) on directed quads -- the
+frame-1000 pair among them -- and 20,000 random convex quads and triangles:
+0 differing rows beyond 4,311 that differ by one pixel where the exact edge is
+within 0.01 px of a half pixel (a rounding tie that 16.16 slopes and MAME's
+floats land either side of; below our quarter-pixel vertex precision). Model 1
+mode untouched: tb_m2_raster_fill 152,369 checks, 0 fails. Frames against
+MAME, textures off, opaque pixels on the wrong polygon:
+
+    frame    before    after    whole-row runs >= 10 px
+    1000     3.05%     1.25%    13 -> 6
+    4000     1.34%     0.57%     0 -> 0
+    9000     1.82%     0.71%     2 -> 1
+
+What is left is our quarter-pixel vertices against MAME's floats and z ties.
+Frame 9000 textured: draws whole, 1.31 video frames (1.38 before; 4% fewer
+texel fetches -- the double-drawn last row is gone).

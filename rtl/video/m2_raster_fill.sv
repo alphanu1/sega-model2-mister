@@ -94,7 +94,19 @@ module m2_raster_fill #(
   // normalisation keeps the same significant bits, and the undo shifts two
   // more. With every quarter zero the gradients and bases are bit-identical
   // to FRB = 0. The edges -- coverage -- still use the integers.
-  parameter int unsigned FRB = 0
+  parameter int unsigned FRB = 0,
+  // R658: MODEL 2'S COVERAGE, NOT MODEL 1'S. Model 1 (fill_quad/fill_slope/
+  // fill_line) walks integer vertices, covers [floor(xl), floor(xr)] and draws
+  // the last row separately. Model 2 in MAME is poly.h: rows round(ymin) ..
+  // round(ymax)-1, each sampled at its CENTRE, pixels [round(xl), round(xr)),
+  // round(v) = floor(v) + (frac > 1/2), no special last row, nothing for a
+  // polygon of no height. With whole-pixel vertices a near-horizontal edge
+  // shared by two polygons lands a row off, and that whole row goes to the
+  // wrong polygon -- a line of the neighbour's texture, moving every frame
+  // (frame 1000: 59 pixels of row 212 to the wrong one; 1.3-3.1% of opaque
+  // pixels across frames 1000/4000/9000). 1 walks the edges on the quarter-
+  // pixel vertices (FRB 2, which it requires) by MAME's rule. 0 is Model 1.
+  parameter bit M2COV = 1'b0
 ) (
   input  logic               clk,
   input  logic               rst_n,
@@ -174,7 +186,7 @@ module m2_raster_fill #(
   localparam logic [4:0] S_LOADX    = 5'd5;
   localparam logic [4:0] S_DIVA     = 5'd6;
   localparam logic [4:0] S_DIVAW    = 5'd7;
-  localparam logic [4:0] S_DIVB     = 5'd8;
+  localparam logic [4:0] S_OFF      = 5'd8;    // R658: a reloaded edge to its first row's centre
   localparam logic [4:0] S_DIVBW    = 5'd9;
   localparam logic [4:0] S_DECIDE   = 5'd10;
   localparam logic [4:0] S_FS_ENTER = 5'd11;
@@ -237,9 +249,21 @@ module m2_raster_fill #(
   // 16.16 x, exactly as fill_quad forms it: an int32 left shift that discards
   // everything above bit 15.
   logic signed [31:0] px [0:3];
+  // R658: the EDGE y of each vertex -- in quarters with M2COV, else the integer
+  logic signed [15:0] sye [0:3];
   always_comb begin
-    for (int i = 0; i < 4; i++) px[i] = $signed({sx[i], 16'h0000});
+    for (int i = 0; i < 4; i++) begin
+      // signed throughout: a clipped vertex sits at x = -1
+      px[i]  = M2COV ? (32'(signed'((sx[i] <<< 2) + $signed({14'd0, sf[i][1:0]}))) <<< 14)   // 16.16 of the quarter position
+                     : $signed({sx[i], 16'h0000});
+      sye[i] = M2COV ? ((sy[i] <<< 2) + $signed({14'd0, sf[i][3:2]})) : sy[i];
+    end
   end
+  // R658: a quarter-unit y to the first row whose centre is at or below it:
+  // round(y) = floor(y) + (frac > 1/2), which in quarters is (y + 1) >> 2
+  function automatic logic signed [15:0] rq(input logic signed [15:0] yq);
+    rq = (yq + 16'sd1) >>> 2;
+  endfunction
 
   // Chain state. Edge A walks ps1 downward, edge B walks ps2 upward, both from
   // the top vertex. The doubled 8-entry array in MAME exists to let them run in
@@ -674,8 +698,8 @@ module m2_raster_fill #(
   always_comb begin
     ps1m1   = ps1 - 3'd1;
     ps2p1   = ps2 + 3'd1;
-    ya_next = sy[ps1m1[1:0]];
-    yb_next = sy[ps2p1[1:0]];
+    ya_next = sye[ps1m1[1:0]];   // R658
+    yb_next = sye[ps2p1[1:0]];
   end
 
   // ---------------------------------------------------------------- dividers
@@ -757,12 +781,12 @@ module m2_raster_fill #(
   // rule decides which vertex a degenerate quad starts from.
   logic [1:0] pmin01, pmin23, pmin_c, pmax01, pmax23, pmax_c;
   always_comb begin
-    pmin01 = (sy[1] < sy[0]) ? 2'd1 : 2'd0;
-    pmin23 = (sy[3] < sy[2]) ? 2'd3 : 2'd2;
-    pmin_c = (sy[pmin23] < sy[pmin01]) ? pmin23 : pmin01;
-    pmax01 = (sy[1] > sy[0]) ? 2'd1 : 2'd0;
-    pmax23 = (sy[3] > sy[2]) ? 2'd3 : 2'd2;
-    pmax_c = (sy[pmax23] > sy[pmax01]) ? pmax23 : pmax01;
+    pmin01 = (sye[1] < sye[0]) ? 2'd1 : 2'd0;   // R658: on the edge y
+    pmin23 = (sye[3] < sye[2]) ? 2'd3 : 2'd2;
+    pmin_c = (sye[pmin23] < sye[pmin01]) ? pmin23 : pmin01;
+    pmax01 = (sye[1] > sye[0]) ? 2'd1 : 2'd0;
+    pmax23 = (sye[3] > sye[2]) ? 2'd3 : 2'd2;
+    pmax_c = (sye[pmax23] > sye[pmax01]) ? pmax23 : pmax01;
   end
 
   // R301: THE TOURNAMENT'S ANSWER, LATCHED. Measured on build/perf2/s12, the
@@ -830,8 +854,16 @@ module m2_raster_fill #(
       default: begin emit_l = swapf ? xb : xa;      emit_r = swapf ? xa : xb;      end
     endcase
 
-    emit_xl = 16'(emit_l >>> 16);
-    emit_xr = 16'(emit_r >>> 16);
+    if (M2COV) begin
+      // R658: sorted per row as MAME does, [round(lo), round(hi)) inclusive-ended
+      automatic logic signed [31:0] lo = (xa < xb) ? xa : xb;
+      automatic logic signed [31:0] hi = (xa < xb) ? xb : xa;
+      emit_xl = 16'((lo + 32'sh7FFF) >>> 16);
+      emit_xr = 16'((hi + 32'sh7FFF) >>> 16) - 16'sd1;
+    end else begin
+      emit_xl = 16'(emit_l >>> 16);
+      emit_xr = 16'(emit_r >>> 16);
+    end
     emit_cl = (emit_xl < view_x1) ? view_x1 : emit_xl;
     emit_cr = (emit_xr > view_x2) ? view_x2 : emit_xr;
     emit_ok = (emit_cl <= emit_cr);
@@ -1226,16 +1258,24 @@ module m2_raster_fill #(
           // One cycle of pure comparison, and now the ONLY cycle that does it.
           td_r   <= two_distinct;
           pmin_r <= pmin_c;
-          symin  <= sy[pmin_c];
-          symax  <= sy[pmax_c];
+          symin  <= sye[pmin_c];   // R658: quarters with M2COV
+          symax  <= sye[pmax_c];
           xlo_r  <= xlo_c;
           xhi_r  <= xhi_c;
           state  <= S_CLASSIFY;
         end
 
         S_CLASSIFY: begin
-          if (td_r) begin
+          // R658: Model 1's wireframe case is judged on INTEGER vertices; with
+          // quarter pixels a thin sliver has four distinct corners and Model 2
+          // (poly.h) fills it. A polygon of truly no area covers no centre.
+          if (td_r && !M2COV) begin
             line_case <= 1'b1;
+            quad_done <= 1'b1;
+            state     <= S_IDLE;
+          end else if (M2COV && ((symin == symax) || (rq(symin) >= rq(symax))
+                                 || (rq(symin) > view_y2) || (rq(symax) <= view_y1))) begin
+            // R658: no row's centre inside it, or none on the screen
             quad_done <= 1'b1;
             state     <= S_IDLE;
           end else if (symin == symax) begin
@@ -1244,12 +1284,12 @@ module m2_raster_fill #(
             cury      <= symin;
             emit_mode <= EM_FLAT;
             state     <= S_FLAT;
-          end else if ((symin > view_y2) || (symax <= view_y1)) begin
+          end else if (!M2COV && ((symin > view_y2) || (symax <= view_y1))) begin   // R658: M2COV tested above, in rows
             quad_done <= 1'b1;
             state     <= S_IDLE;
           end else begin
             cury   <= symin;
-            limy   <= (symax > view_y2) ? view_y2 : symax;
+            limy   <= M2COV ? symax : ((symax > view_y2) ? view_y2 : symax);   // R658: quarters
             ps1    <= {1'b1, pmin_r};      // pmin + 4
             ps2    <= {1'b0, pmin_r};
             need_a <= 1'b1;
@@ -1302,12 +1342,12 @@ module m2_raster_fill #(
         S_DIVA: begin
           if (div_ready && !div_start && divb_ready && !divb_start) begin
             if (need_a) begin
-              div_num   <= xa - px[ps1m1[1:0]];
+              div_num   <= M2COV ? ((xa - px[ps1m1[1:0]]) <<< 2) : (xa - px[ps1m1[1:0]]);   // R658: den in quarters
               div_den   <= 32'(cury - ya_next);
               div_start <= 1'b1;
             end
             if (need_b) begin
-              divb_num   <= xb - px[ps2p1[1:0]];
+              divb_num   <= M2COV ? ((xb - px[ps2p1[1:0]]) <<< 2) : (xb - px[ps2p1[1:0]]);
               divb_den   <= 32'(cury - yb_next);
               divb_start <= 1'b1;
             end
@@ -1320,7 +1360,19 @@ module m2_raster_fill #(
         S_DIVAW: begin
           if (div_valid)  begin sla <= div_quo;  got_a <= 1'b1; end
           if (divb_valid) begin slb <= divb_quo; got_b <= 1'b1; end
-          if ((got_a || div_valid) && (got_b || divb_valid)) state <= S_DECIDE;
+          if ((got_a || div_valid) && (got_b || divb_valid)) state <= M2COV ? S_OFF : S_DECIDE;   // R658
+        end
+
+        // R658: A RELOADED EDGE STARTS AT ITS FIRST ROW'S CENTRE. It was loaded
+        // at its vertex (x exact, y = cury in quarters); the first row it
+        // covers is rq(cury), whose centre is d = 4*rq(cury) + 2 - cury
+        // quarters below -- 0 to 3 -- so it moves by slope * d / 4. The other
+        // edge is already at that row's centre: it was walked there.
+        S_OFF: begin
+          automatic logic [1:0] d = 2'((rq(cury) <<< 2) + 16'sd2 - cury);
+          if (need_a) xa <= xa + (((d[1] ? (sla <<< 1) : 32'sd0) + (d[0] ? sla : 32'sd0)) >>> 2);
+          if (need_b) xb <= xb + (((d[1] ? (slb <<< 1) : 32'sd0) + (d[0] ? slb : 32'sd0)) >>> 2);
+          state <= S_DECIDE;
         end
 
         // Which chain reaches its next vertex first decides how far this
@@ -1345,7 +1397,29 @@ module m2_raster_fill #(
         // fill_slope, pre-clip. Note the first case returns without touching
         // the accumulators at all, which is why the caller's edges survive a
         // segment that starts below the viewport.
-        S_FS_ENTER: begin
+        S_FS_ENTER: if (M2COV) begin
+          // R658: the segment covers rows rq(cury) .. rq(seg_y1)-1
+          if (rq(cury) > view_y2) begin
+            state <= S_FS_END;
+          end else if (rq(seg_y1) <= view_y1) begin
+            mul_delta <= 17'(rq(seg_y1) - rq(cury));
+            mul_sl    <= sla;
+            skip_only <= 1'b1;
+            state     <= S_FS_MULA;
+          end else begin
+            walk_end <= (rq(seg_y1) > view_y2) ? (view_y2 + 16'sd1) : rq(seg_y1);
+            if (rq(cury) < view_y1) begin
+              mul_delta <= 17'(view_y1 - rq(cury));
+              mul_sl    <= sla;
+              skip_only <= 1'b0;
+              walk_y    <= view_y1;
+              state     <= S_FS_MULA;
+            end else begin
+              walk_y <= rq(cury);
+              state  <= S_FS_SWAP;
+            end
+          end
+        end else begin
           if (cury > view_y2) begin
             state <= S_FS_END;
           end else if (seg_y1 <= view_y1) begin
@@ -1420,7 +1494,7 @@ module m2_raster_fill #(
           skip_only <= 1'b0;
           if (seg_y1 >= limy) begin
             emit_mode <= EM_RAW;
-            state     <= S_FINAL;
+            state     <= M2COV ? S_DONE : S_FINAL;   // R658: Model 2 has no separate last row
           end else begin
             if (need_a) ps1 <= ps1 - 3'd1;
             if (need_b) ps2 <= ps2 + 3'd1;
