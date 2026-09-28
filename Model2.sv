@@ -587,7 +587,7 @@ wire [4:0]  tv_page  = (tv_m2[6:2] > 5'd21) ? 5'd0 : tv_m2[6:2];
 logic       tv_req, tv_own;
 // R650: the renderer's texture and framebuffer counters, read by telemetry 'T'
 // (declared here, ahead of their first use in the telemetry block)
-wire [15:0] tex_lost, tex_to, fb_pub, fb_drop;
+wire [15:0] tex_lost, tex_to, fb_pub, fb_drop, fb_lines, fb_late;
 logic [SDR_AW:1] tv_addr;
 logic [3:0] tv_texel;
 // R265: THE WALK TRIGGER WAS THE ONE OSD BIT TAKEN RAW. Every other option in
@@ -4574,17 +4574,12 @@ end else begin : g_nodbg
 	logic [1:0]  lt_asel;
 	// R650: 'T' takes every other 'C' slot (the UART is ~80% full):
 	//   {framebuffer frames published, lists dropped} |
-	//   {texel misses the SDRAM never answered (m2_texel_bl, painted 0),
-	//    fetches the crossing answered itself (m2_texel_cdc, painted 0x0FF)}
-	// all running totals. The last two count on clk_mem and cross on two flops
-	// -- a counter read mid-change is off by one bit for one record, and the
-	// decoder differences them.
+	//   {scanout lines read from DDR3, lines asked for before the last landed}
+	// all running totals (m2_raster3d, clk_sys). s540 carried the texel misses
+	// SDRAM never answered and the crossing's own answers here instead: 0 and 0
+	// over 7,474 vblanks of attract, so they gave their place up.
 	logic        lt_ct;
-	logic [15:0] lt_lost_s1, lt_lost_s2, lt_to_s1, lt_to_s2;
-	always_ff @(posedge clk_sys) begin
-		lt_lost_s1 <= tex_lost; lt_lost_s2 <= lt_lost_s1;
-		lt_to_s1   <= tex_to;   lt_to_s2   <= lt_to_s1;
-	end
+
 	logic [31:0] lt_cwait;
 	always_ff @(posedge clk_i960 or negedge cpu_rst_n) begin
 		if (!cpu_rst_n)             lt_cwait <= 32'd0;
@@ -4625,7 +4620,7 @@ end else begin : g_nodbg
 		.clk(clk_sys), .rst_n(mem_rst_n),
 		.a_valid(lt_a_valid),
 		.a_addr((lt_asel == 2'd1) ? cpu_dbg_acc : (lt_asel == 2'd2) ? dc_miss : (lt_asel == 2'd3) ? {fb_pub, fb_drop} : cpu_dbg_ip),
-		.a_data((lt_asel == 2'd1) ? dc_hits : (lt_asel == 2'd2) ? lt_cwait : (lt_asel == 2'd3) ? {lt_lost_s2, lt_to_s2} : {copro_stall, 15'd0, tgp_pc}),
+		.a_data((lt_asel == 2'd1) ? dc_hits : (lt_asel == 2'd2) ? lt_cwait : (lt_asel == 2'd3) ? {fb_lines, fb_late} : {copro_stall, 15'd0, tgp_pc}),
 		.b_valid(lt_b_valid), .b_addr(lt_b_addr), .b_data(lt_b_data),
 		.a_tag((lt_asel == 2'd1) ? 8'h50 : (lt_asel == 2'd2) ? 8'h51 : (lt_asel == 2'd3) ? 8'h54 : 8'h43), .b_tag(8'h47),   // 'P','Q','T','C'; 'G' (was 'F': R639)
 		.enable(1'b1),
@@ -6020,7 +6015,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b0), .FB_DD
 	.fb_req(ddr_req), .fb_we(ddr_we), .fb_addr(ddr_addr), .fb_blen(ddr_blen),
 	.fb_din(ddr_din), .fb_be(ddr_be),
 	.fb_wnext(ddr_wnext), .fb_rvalid(ddr_rvalid), .fb_ack(ddr_ack), .fb_dout(ddr_dout),
-	.dbg_fb_lines(), .dbg_fb_late(), .dbg_fb_pub(fb_pub), .dbg_fb_drop(fb_drop), .dbg_fb_pixels()
+	.dbg_fb_lines(fb_lines), .dbg_fb_late(fb_late), .dbg_fb_pub(fb_pub), .dbg_fb_drop(fb_drop), .dbg_fb_pixels()
 );
 
 // The 3D layer sits OVER the tilemap where it painted, and shows the tilemap
