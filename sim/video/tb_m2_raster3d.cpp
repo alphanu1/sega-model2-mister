@@ -126,6 +126,7 @@ int main(int argc, char **argv) {
   // R650: the texel step, log2 (0-3 for 1/2/4/8); default 2, PIXSTEP 4
   d->tex_pxk = std::getenv("M2_R3D_PXK") ? std::atoi(std::getenv("M2_R3D_PXK")) : 2;
   d->fb_test = 0;   // R653: set by M2_R3D_FBTEST below
+  d->fb_pace = std::getenv("M2_R3D_PACE") ? std::atoi(std::getenv("M2_R3D_PACE")) : 0;   // R656
   d->tex_base0 = 0x1760000; d->tex_base1 = 0x17E0000;
   // R555: 1/z FOR EVERY VERTEX, WHICH THIS BENCH NEVER DROVE. q_oz0..3 (R334,
   // a minifloat: 8-bit exponent, top 8 mantissa bits) were left at zero, so the
@@ -575,7 +576,7 @@ int main(int argc, char **argv) {
     for (int f = 0; f < NF; f++) {
       video_frame(false, &hits);
       const unsigned fr = (unsigned)d->dbg_tp_first;
-      std::printf("  R653 self-test frame %d: bad pixels %u, bad rows %u, first bad row %u col %u named row %u\n",
+      std::printf("  R653 self-test frame %d: bad pixels %u, bad rows %u, first bad row %u, last bad row %u, first held row %u\n",
                   f, (unsigned)d->dbg_tp_bad, (unsigned)d->dbg_tp_rows, (fr >> 18) & 0x1ff, (fr >> 9) & 0x1ff, fr & 0x1ff);
     }
     delete d;

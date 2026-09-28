@@ -25262,3 +25262,35 @@ twice that. Frame 9000 drawn normally: identical to the clean frame, draw time
 1.36 video frames (1.38 before). tb_m2_fb_read updated: a request arriving
 during a fetch is now queued and both lines land right (24 checks);
 tb_m2_ddr3_arb 26 checks.
+
+**R656 -- THE WRITER PACED; THE CHECKER'S FRAME FROM THE PUBLISHED FRAME.**
+
+s559 (R655) on the board, self-test: every row of every frame bad, the first
+always "row 0 held row 380". Two things in that. (1) The checker took the
+expected frame number from the frame's first pixel; one stale row poisoned the
+whole frame's count. It now takes the published frame's number (tp_show_fid)
+and reports the first and LAST bad row. (2) Row 0 stale every frame: in the
+blanking the scanout has nothing to fetch, so R655's hold never engages and the
+writer fills the HPS port's queue unchecked; line 0, asked for at scan line
+421, waits behind it. The framework cannot give the core a second DDR3 port
+(ram1 is the core's, ram2 is ddr_svc's -- ALSA and the palette -- vbuf is the
+scaler's, and a new f2sdram port would need sysmem and the HPS side to release
+it: Ben, no framework changes), so the queue must be kept shallow instead.
+
+OSD "FB write pace": Off, 1, 1/2, 1/4, 1/8, 1/16 beats a cycle -- a credit
+refilled at that rate, up to 64 in hand, a beat spent per write beat; a burst
+is not granted without credit for its length. Bench (HPS-queue model, 30%
+scaler load), bad rows a frame:
+
+    drain (cycles/beat)   pace off   1/2   1/4   1/8
+    12                    0          0     0     0
+    16 (the bus can       59-61      59-61 59-61 2
+       barely carry the scanout)
+
+Cost, frame 9000's draw: off 1.36 video frames, 1/2 1.43, 1/4 1.60, 1/8 2.13;
+the frame identical at every pace. The fault check still catches row 200 alone.
+
+Ben on the architecture: a MISTER_FB design -- the scaler reading our frame on
+its own vbuf port, as screen_rotate does -- would end BOTH the 3D rows and the
+2D glyph overruns (nothing would be raced against the beam any more), at the
+price of drawing the 2D into DDR3 as well. Pacing is tried first.

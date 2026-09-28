@@ -138,6 +138,12 @@ module m2_raster3d #(
   // lines, carried to clk on a toggle): bad pixels, bad rows, and the first
   // bad one's {row, column, the row its data named}.
   input  logic            fb_test,
+  // R656: THE WRITER'S PACE (clk, quasi-static): 0 off, else a write beat's
+  // credit refills every 2^(fb_pace-1) cycles (1, 1/2, 1/4, 1/8, 1/16 beats a
+  // cycle), up to 64 in hand. A write burst is not granted without credit for
+  // its beats, so the HPS port's queue -- which our scanout reads wait behind
+  // (R655) -- is filled no faster than that.
+  input  logic [2:0]      fb_pace,
   output logic [15:0]     dbg_tp_bad,
   output logic [15:0]     dbg_tp_rows,
   output logic [26:0]     dbg_tp_first,
@@ -702,15 +708,17 @@ module m2_raster3d #(
   wire swap = frame_start && (pst == P_READY) && !(FB_DDR3 && fb_busy);
   assign list_hold = FB_DDR3 && (pst == P_READY) && fb_busy && !fb_test;   // R652; R653
   logic tp_done;   // R653: the self-test generator's frame is whole
+  logic [2:0] tp_show_fid;   // R656: the frame number of the frame on show
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      fb_draw <= 1'b0; fb_show <= 1'b1; fb_shown_ok <= 1'b0; fb_busy <= 1'b0;
+      fb_draw <= 1'b0; fb_show <= 1'b1; fb_shown_ok <= 1'b0; fb_busy <= 1'b0; tp_show_fid <= '0;
       dbg_fb_pub <= 16'd0; dbg_fb_drop <= 16'd0;
     end else if (FB_DDR3 && fb_test) begin
       // R653: the generator's frames, published whole at the frame edge; the
       // lists go on swapping (the walk must not stall) and draw nothing.
       fb_busy <= 1'b0;
       if (frame_start && tp_done) begin
+        tp_show_fid <= tp_fid;   // R656: the frame published is the one just finished
         fb_show <= fb_draw; fb_shown_ok <= 1'b1; fb_draw <= ~fb_draw;
       end
     end else if (FB_DDR3) begin
@@ -810,6 +818,23 @@ module m2_raster3d #(
       logic [7:0]  r_blen;
       logic        fbr_hit;
       logic        fbr_hungry;   // R655: the scanout has a line to fetch; the writer waits
+      // R656: the writer's credit, in beats; refilled at the OSD's pace,
+      // spent a beat per write beat taken (w_wnext)
+      logic signed [8:0] wcred;
+      logic [3:0]        pace_ctr;
+      wire  [3:0]        pace_div = (fb_pace == 3'd0) ? 4'd0 : (4'd1 << (fb_pace - 3'd1)) - 4'd1;
+      wire               pace_hold = (fb_pace != 3'd0) && (wcred < $signed({1'b0, w_blen}));
+      always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin wcred <= 9'sd64; pace_ctr <= '0; end
+        else begin
+          automatic logic signed [8:0] c = wcred;
+          if (fb_pace == 3'd0) c = 9'sd64;
+          else if (pace_ctr >= pace_div) begin if (c < 9'sd64) c = c + 9'sd1; end
+          if (w_wnext) c = c - 9'sd1;
+          wcred    <= c;
+          pace_ctr <= (fb_pace == 3'd0 || pace_ctr >= pace_div) ? 4'd0 : pace_ctr + 4'd1;
+        end
+      end
 
       m2_fb_write #(.SCR_W(SCR_W), .SCR_H(SCR_H), .STRIDE(512)) u_fbw (
         .clk(clk), .rst_n(rst_n),
@@ -896,9 +921,12 @@ module m2_raster3d #(
       logic        ck_tog;
       wire  [8:0]  ck_ey   = ck_y1[8:0];
       wire  [5:0]  ck_ei   = ck_x1[8:3];
-      logic [2:0]  ck_fid;       // the frame number of the frame's first pixel
-      logic        ck_fid_ok;
-      wire  [23:0] ck_exp  = {ck_ey, ck_ei, ck_fid_ok ? ck_fid : fb_rd_col[8:6], ck_ey[5:0] ^ ck_ei};
+      // R656: the frame number expected is the frame PUBLISHED (tp_show_fid,
+      // stable for a frame, carried on two flops), not the frame's first pixel:
+      // a stale first row made every row of the frame count as bad.
+      logic [2:0]  ck_sfid1, ck_sfid2;
+      wire  [23:0] ck_exp  = {ck_ey, ck_ei, ck_sfid2, ck_ey[5:0] ^ ck_ei};
+      logic [8:0]  ck_last;
       wire         ck_look = tst_s[2] && sok_s2 && (ck_x1 != ck_x2)
                           && (ck_x1 < 10'(SCR_W)) && (ck_y1 < 10'(SCR_H));
       wire         ck_isbad = !fbr_hit || (fb_rd_col != ck_exp);
@@ -907,26 +935,27 @@ module m2_raster3d #(
           tst_s <= '0; ck_x1 <= '0; ck_x2 <= '0; ck_y1 <= '0;
           ck_bad <= '0; ck_rows <= '0; ck_rowbad <= 1'b0; ck_have <= 1'b0; ck_first <= '0;
           ck_bad_f <= '0; ck_rows_f <= '0; ck_first_f <= '0; ck_tog <= 1'b0;
-          ck_fid <= '0; ck_fid_ok <= 1'b0;
+          ck_sfid1 <= '0; ck_sfid2 <= '0; ck_last <= '0;
         end else begin
           tst_s <= {tst_s[1:0], fb_test};
           ck_x1 <= scan_x; ck_x2 <= ck_x1; ck_y1 <= scan_y;
           if (scan_y != ck_y1) ck_rowbad <= 1'b0;
-          if (ck_look && !ck_fid_ok && fbr_hit) begin ck_fid <= fb_rd_col[8:6]; ck_fid_ok <= 1'b1; end
+          ck_sfid1 <= tp_show_fid; ck_sfid2 <= ck_sfid1;
+          if (ck_look && ck_isbad) ck_last <= ck_ey;   // R656: the last bad row
           if (ck_look && ck_isbad) begin
             if (!(&ck_bad)) ck_bad <= ck_bad + 16'd1;
             if (!ck_rowbad && !(&ck_rows)) ck_rows <= ck_rows + 16'd1;
             ck_rowbad <= 1'b1;
             if (!ck_have) begin
               ck_have  <= 1'b1;
-              ck_first <= {ck_ey, ck_x1[8:0], fbr_hit ? fb_rd_col[23:15] : 9'h1FF};
+              ck_first <= {ck_ey, 9'd0, fbr_hit ? fb_rd_col[23:15] : 9'h1FF};   // R656: x -> last row, below
             end
           end
           // the frame's totals, at the first line past the picture
           if (scan_y == 10'(SCR_H) && ck_y1 != 10'(SCR_H)) begin
-            ck_bad_f <= ck_bad; ck_rows_f <= ck_rows; ck_first_f <= ck_first;
+            ck_bad_f <= ck_bad; ck_rows_f <= ck_rows;
+            ck_first_f <= {ck_first[26:18], ck_have ? ck_last : 9'd0, ck_first[8:0]};   // {first, last, first held}
             ck_bad <= '0; ck_rows <= '0; ck_have <= 1'b0; ck_first <= '0;
-            ck_fid_ok <= 1'b0;
             ck_tog <= ~ck_tog;
           end
         end
@@ -949,7 +978,7 @@ module m2_raster3d #(
         .a_req(r_req), .a_we(r_we), .a_addr(r_addr), .a_blen(r_blen),
         .a_din(64'd0), .a_be(8'hFF),
         .a_wnext(), .a_rvalid(r_rvalid), .a_ack(r_ack),
-        .b_req(w_req), .b_hold(fbr_hungry), .b_we(w_we), .b_addr(w_addr), .b_blen(w_blen),   // R655
+        .b_req(w_req), .b_hold(fbr_hungry || pace_hold), .b_we(w_we), .b_addr(w_addr), .b_blen(w_blen),   // R655, R656
         .b_din(w_din), .b_be(w_be),
         .b_wnext(w_wnext), .b_rvalid(), .b_ack(w_ack),
         .m_req(fb_req), .m_we(fb_we), .m_addr(fb_addr), .m_blen(fb_blen),

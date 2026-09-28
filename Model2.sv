@@ -194,6 +194,9 @@ localparam CONF_STR = {
 	// own region; 0x26000000 (R351's choice) is in the 0x2xxxxxxx region the
 	// framework hands out at run time. Kept selectable to compare on the board.
 	"O[38],FB address,0x30000000,0x26000000;",
+	// R656: the framebuffer writer's pace, beats a cycle -- so the HPS port's
+	// queue, which our scanout reads wait behind, fills no faster than this.
+	"O[41:39],FB write pace,Off,1,1/2,1/4,1/8,1/16;",
 	// R630: GAMMA, because MAME's curve is MAME's guess at cabinet
 	// calibration (m2_palette) and the board is judged on Ben's own screen.
 	// MAME's is entry zero, the reference; Mild lifts the darks; Off is the
@@ -614,6 +617,10 @@ wire [26:0] tp_first;
 reg  [2:0]  fba_s;
 always_ff @(posedge clk_sys) fba_s <= {fba_s[1:0], status[38]};
 wire [28:0] fb_base = fba_s[2] ? 29'h04C0_0000 : 29'h0600_0000;   // byte 0x26000000 : 0x30000000
+// R656: the writer's pace, into clk_sys
+reg  [2:0]  fbp_1, fbp_2;
+always_ff @(posedge clk_sys) begin fbp_1 <= status[41:39]; fbp_2 <= fbp_1; end
+wire [2:0]  fb_pace = (fbp_2 > 3'd5) ? 3'd0 : fbp_2;
 // R265: THE WALK TRIGGER WAS THE ONE OSD BIT TAKEN RAW. Every other option in
 // this core reaches the datapath through three flops (R229) and this one went
 // straight from `status` into the geometrizer's mode select. The board showed
@@ -6010,6 +6017,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b0), .FB_DD
 	.tex_pxk(pxk_s3),             // R650: the OSD's texel step
 	.list_hold(r3d_list_hold),    // R652
 	.fb_test(fb_test), .dbg_tp_bad(tp_bad), .dbg_tp_rows(tp_rows), .dbg_tp_first(tp_first),   // R653
+	.fb_pace(fb_pace),   // R656
 	.tex_m2_en(tex_m2_en), .tex_m2_req(tex_m2_req), .tex_m2_addr(tex_m2_addr),
 	// R628: the texel cache's third and fourth ports, unused at TXNS = 2
 	.tex_m3_en(1'b0), .tex_m3_req(), .tex_m3_addr(), .tex_m3_ack(1'b0), .tex_m3_data(64'd0),
