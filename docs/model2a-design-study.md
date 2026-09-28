@@ -25510,3 +25510,14 @@ Cost, Quartus 17 synthesis of the module alone: 303 -> 525 ALM (+222), 172 ->
 altdpram). A 16-word window would save only 40 ALM (485), so 32. Timing: the
 beat path is ridx -> MLAB read -> arbiter -> DDRAM_DIN on clk_sys; wacc ->
 ridx is one adder.
+
+**R661, built: IT DOES NOT FIT.** s575-s577 (30ccded): 41,579-41,660 ALM,
+and the fitter needs 4,199 / 4,204 / 4,208 LABs of 4,191 -- the same wall as
+the telemetry build that needed 4,211. s572 (7086388, R659 + R660, the old
+writer) placed at 41,268 ALM; the combiner's +222 ALM (the module synthesised
+alone) became ~+330 in place, 8-17 LABs over. To land it, ~200 ALM must come
+out elsewhere first -- the FB self-test generator and checker (R653-R657)
+are the obvious candidates once the board has said whether R660 cured the
+streaks -- or the window shrinks (16 words saves only 40 ALM, not enough on
+its own). s572 closed every core clock: clk_sys +0.138, clk_mem +0.300,
+clk_i960 +2.932, holds +0.241..+0.404, HDMI -0.370; on the board 20:01.
