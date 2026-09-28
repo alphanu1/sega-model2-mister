@@ -125,6 +125,7 @@ module m2_raster3d #(
   input  logic [TEX_AW:1] tex_base0, tex_base1,
   input  logic            tex_inval,
   input  logic            tex_bilinear,   // R620: on clk_mem, quasi-static (OSD)
+  input  logic [1:0]      tex_pxk,        // R650: texel step 1/2/4/8 as log2, on clk (OSD)
   output logic            tex_m_req,
   output logic [TEX_AW:1] tex_m_addr,
   input  logic            tex_m_ack,
@@ -519,6 +520,7 @@ module m2_raster3d #(
   m2_span_tex #(.PIXSTEP(PIXSTEP), .TXK(8), .FTB(FTB), .GC(PXC), .SCR_W(SCR_W), .BAND_H(BAND_H),
                 .REUSE(TXREUSE)) u_spantex (   // R633
     .clk(clk), .rst_n(rst_n),
+    .pxk(tex_pxk),   // R650
     .mk_valid(mk_valid), .mk_we(mk_we), .mk_waddr(mk_pwi), .mk_wdata(mk_wd),   // R607
     .mk_band_y0(mk_y0),
     .in_valid(sq_qv), .in_ready(sq_rdy), .busy(spantex_busy),
@@ -669,8 +671,20 @@ module m2_raster3d #(
   // buffer part way down the screen. A list that arrives while the previous is
   // still being drawn replaces it in place (counted as a drop) -- the display
   // keeps the last complete frame, which is what the hardware does.
-  wire swap = frame_start && (pst == P_READY);
+  // R650: AND NOT WHILE A DRAW IS IN FLIGHT. A list swapped in over a draw
+  // restarted it in place (R359's "replaces it in place"), and that restart
+  // was wrong three ways: the band being filled finished with the NEW list's
+  // quads at the old band's place, C_DONE then advanced the just-reset
+  // fill_band to 1 so band 0 was never drawn, and the list-clear ran under the
+  // band still writing. The frame still reached fb_complete and was shown.
+  // s540 counted 7 such drops in 150 s at PIXSTEP 4; at PIXSTEP 1 (a draw of
+  // 3.5-5 video frames against a list every 2.09) nearly every draw was one --
+  // tb_m2_raster3d M2_R3D_LIST2 reproduced it, rows 0-7 wrong across the whole
+  // width. Now the new list waits, sorted, until the draw is whole; the store
+  // stops collecting meanwhile and the geometry waits on q_ready. Every frame
+  // published is one list drawn start to finish.
   logic fb_draw, fb_show, fb_shown_ok, fb_complete, fb_busy;
+  wire swap = frame_start && (pst == P_READY) && !(FB_DDR3 && fb_busy);
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       fb_draw <= 1'b0; fb_show <= 1'b1; fb_shown_ok <= 1'b0; fb_busy <= 1'b0;
@@ -1315,7 +1329,7 @@ module m2_raster3d #(
         P_COLLECT: if (q_end) pst <= P_SORT;
         P_SORT:    pst <= P_SORTW;
         P_SORTW:   if (!qs_sort_busy) pst <= P_READY;
-        P_READY:   if (frame_start) begin pst <= P_COLLECT; bank <= ~bank; dvalid <= 1'b1;
+        P_READY:   if (swap) begin pst <= P_COLLECT; bank <= ~bank; dvalid <= 1'b1;   // R650: swap, not frame_start
                                           dbg_hold <= hold_cnt; hold_cnt <= 8'd0; end
       endcase
 

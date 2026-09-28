@@ -51,7 +51,11 @@ module m2_span_tex #(
   // costs, and on this screen it is barely visible -- Daytona's textures are
   // magnified far more often than minified, so adjacent pixels usually share a
   // texel anyway. Set to 1 to fetch per pixel.
+  // R650: UNUSED -- the step is the run-time `pxk` input. Kept so existing
+  // instantiations and build scripts still elaborate.
+  /* verilator lint_off UNUSEDPARAM */
   parameter int unsigned PIXSTEP = 2,
+  /* verilator lint_on UNUSEDPARAM */
   // R539: texel fetches in flight; must equal m2_texel_x2's K.
   parameter int unsigned TXK = 4,
   // R607: FRONT TO BACK. A group whose pixels are all already painted this
@@ -90,6 +94,10 @@ module m2_span_tex #(
   input  logic signed [15:0] mk_band_y0,
 
   // ---- span in, from m2_raster_fill
+  // R650: THE TEXEL STEP AT RUN TIME (OSD), log2 of the pixels one texel
+  // serves: 0-3 for 1, 2, 4, 8. Latched with each span, so a change lands on
+  // the next span and never inside one. PIXSTEP above is now unused.
+  input  logic [1:0]         pxk,
   input  logic               in_valid,
   output logic               in_ready,
   input  logic signed [31:0] in_y, in_x0, in_x1,
@@ -169,6 +177,10 @@ module m2_span_tex #(
   // marks each span's final group -- the output advances sp_out when it sees
   // one leave.
   logic signed [31:0] y_p [2], x1_p [2];
+  logic [1:0]         k_p [2];      // R650: each span's pxk, latched with it
+  function automatic logic signed [31:0] stp(input logic [1:0] k);
+    stp = 32'sd1 <<< k;
+  endfunction
   logic        sp_iss, sp_out;
   logic  [1:0] sp_n;
   logic [23:0]        col_p [2];
@@ -401,7 +413,8 @@ module m2_span_tex #(
   logic signed [31:0] iss_u, iss_v, iss_ooz;
   logic signed [31:0] iss_x;
   logic               iss_run;      // still issuing groups for this span
-  wire                iss_last  = (iss_x + 32'(PIXSTEP) - 32'sd1) >= x1_p[sp_iss];
+  logic [3:0]         iss_step;     // R650: the issuing span's step, 1-8
+  wire                iss_last  = (iss_x + 32'(iss_step) - 32'sd1) >= x1_p[sp_iss];
 
   wire signed [31:0] dv_o    = iss_ooz;
   wire signed [31:0] dv_u    = iss_u;
@@ -467,7 +480,7 @@ module m2_span_tex #(
   always_comb begin
     automatic logic               qp   = sh_p[PIPE_D-3];
     automatic logic signed [31:0] qx   = sh_x[PIPE_D-3];
-    automatic logic signed [31:0] qe   = qx + 32'(PIXSTEP) - 32'sd1;
+    automatic logic signed [31:0] qe   = qx + stp(k_p[qp]) - 32'sd1;   // R650
     automatic logic signed [31:0] qxe  = (qe > x1_p[qp]) ? x1_p[qp] : qe;
     automatic logic signed [31:0] qrow = y_p[qp] - 32'(mk_band_y0);
     automatic logic signed [31:0] xa   = (qx  < 0) ? 32'sd0 : qx;
@@ -534,9 +547,10 @@ module m2_span_tex #(
                 && pipe_en;
   wire ld_span   = ld_cold || ld_over;
   // R616: (PIXSTEP-1)/2 pixels of each gradient, 16.16 (gradients are 8.8).
-  wire signed [31:0] gc_du = GC ? ((32'(in_dudx)   * 32'(PIXSTEP - 1)) <<< 7) : 32'sd0;
-  wire signed [31:0] gc_dv = GC ? ((32'(in_dvdx)   * 32'(PIXSTEP - 1)) <<< 7) : 32'sd0;
-  wire signed [31:0] gc_do = GC ? ((32'(in_doozdx) * 32'(PIXSTEP - 1)) <<< 7) : 32'sd0;
+  // R650: x (2^pxk - 1) as a shift and a subtract.
+  wire signed [31:0] gc_du = GC ? (((32'(in_dudx)   <<< pxk) - 32'(in_dudx))   <<< 7) : 32'sd0;
+  wire signed [31:0] gc_dv = GC ? (((32'(in_dvdx)   <<< pxk) - 32'(in_dvdx))   <<< 7) : 32'sd0;
+  wire signed [31:0] gc_do = GC ? (((32'(in_doozdx) <<< pxk) - 32'(in_doozdx)) <<< 7) : 32'sd0;
   // R478: the retire slot only has to be free by the NEXT edge, not this one.
   // Requiring !rt_valid outright cost a whole cycle a group (2.36 -> 3.36):
   // the emit that frees it happens on the same edge the fetch would start.
@@ -625,7 +639,7 @@ module m2_span_tex #(
       u_h1 <= '0; v_h1 <= '0; u_h2 <= '0; v_h2 <= '0; u_h3 <= '0; v_h3 <= '0;
       u_h4 <= '0; v_h4 <= '0; sh_m <= 1'b0;   // R607
       mq_f1 <= 1'b0; mq_f0 <= 1'b1; mq_wi <= '0; mq_need <= '0;   // R631
-      iss_u <= '0; iss_v <= '0; iss_ooz <= '0; iss_x <= '0; iss_run <= 1'b0;
+      iss_u <= '0; iss_v <= '0; iss_ooz <= '0; iss_x <= '0; iss_run <= 1'b0; iss_step <= 4'd1;
       for (int k = 0; k < PIPE_D; k++) begin
         sh_v[k] <= 1'b0; sh_x[k] <= '0; sh_last[k] <= 1'b0; sh_p[k] <= 1'b0;
       end
@@ -645,6 +659,7 @@ module m2_span_tex #(
       iss_v   <= in_v   + gc_dv;
       iss_ooz <= in_ooz + gc_do;
       iss_x   <= in_x0;
+      iss_step <= 4'd1 << pxk;       // R650
       iss_run <= 1'b1;
       if (ld_cold) begin
         for (int k = 0; k < PIPE_D; k++) begin
@@ -672,12 +687,15 @@ module m2_span_tex #(
         iss_v   <= in_v   + gc_dv;
         iss_ooz <= in_ooz + gc_do;
         iss_x   <= in_x0;
+        iss_step <= 4'd1 << pxk;     // R650
         iss_run <= 1'b1;
       end else if (iss_run) begin
-        iss_u   <= iss_u   + (du_r  <<< $clog2(PIXSTEP));
-        iss_v   <= iss_v   + (dv_r  <<< $clog2(PIXSTEP));
-        iss_ooz <= iss_ooz + (doz_r <<< $clog2(PIXSTEP));
-        iss_x   <= iss_x   + 32'(PIXSTEP);
+        // R650: du_r/dv_r/doz_r are the per-GROUP steps, shifted by the
+        // span's pxk as they were loaded, so this add has nothing in front
+        iss_u   <= iss_u   + du_r;
+        iss_v   <= iss_v   + dv_r;
+        iss_ooz <= iss_ooz + doz_r;
+        iss_x   <= iss_x   + 32'(iss_step);
         if (iss_last) iss_run <= 1'b0;
       end
       sh_v[0]    <= iss_run;
@@ -749,7 +767,7 @@ module m2_span_tex #(
       st <= T_IDLE; dv_age <= 3'd0; of_wp <= '0; of_rp <= '0;   // R539
       rt_valid <= 1'b0; rt_texel <= 9'd0; rt_x <= '0; rt_last <= 1'b0;   // R478
       for (int k = 0; k < 2; k++) begin
-        y_p[k] <= '0; x1_p[k] <= '0; col_p[k] <= '0;
+        y_p[k] <= '0; x1_p[k] <= '0; col_p[k] <= '0; k_p[k] <= '0;
         moire_p[k] <= 1'b0; tex_p[k] <= '0;
       end
       sp_iss <= 1'b0; sp_out <= 1'b0; sp_n <= 2'd0; e_last <= 1'b0;   // R490
@@ -793,9 +811,10 @@ module m2_span_tex #(
           col_p[slot]   <= in_col;
           moire_p[slot] <= in_moire;
           tex_p[slot]   <= in_tex;
-          du_r          <= 32'(in_dudx)   <<< 8;
-          dv_r          <= 32'(in_dvdx)   <<< 8;
-          doz_r         <= 32'(in_doozdx) <<< 8;
+          du_r          <= (32'(in_dudx)   <<< 8) <<< pxk;   // R650: a group's step
+          dv_r          <= (32'(in_dvdx)   <<< 8) <<< pxk;
+          doz_r         <= (32'(in_doozdx) <<< 8) <<< pxk;
+          k_p[slot]     <= pxk;
           sp_iss        <= slot;
         end
         sp_n <= n_next[1:0];
@@ -835,7 +854,7 @@ module m2_span_tex #(
             // so fetches and reuses alternate
             lf_v <= !res_skip && !res_reuse;
             lf_p <= res_p;
-            lf_xn <= res_x[15:0] + 16'(PIXSTEP);
+            lf_xn <= res_x[15:0] + 16'(stp(k_p[res_p]));   // R650
           end
 
           // R539: retire. The oldest answer joins the oldest pixel. The retire
@@ -862,13 +881,13 @@ module m2_span_tex #(
             e_valid <= !skip;                     // R326: transparent texel
             e_last  <= rt_last;                   // R490
             e_x     <= rt_x;
-            e_x1    <= ((rt_x + 32'(PIXSTEP) - 32'sd1) > x1_p[rt_p])
-                         ? x1_p[rt_p] : (rt_x + 32'(PIXSTEP) - 32'sd1);
+            e_x1    <= ((rt_x + stp(k_p[rt_p]) - 32'sd1) > x1_p[rt_p])
+                         ? x1_p[rt_p] : (rt_x + stp(k_p[rt_p]) - 32'sd1);   // R650
             e_col   <= {scale(col_p[rt_p][23:16], iv),
                         scale(col_p[rt_p][15:8],  iv),
                         scale(col_p[rt_p][7:0],   iv)};
             e_p     <= rt_p;                      // R490
-            if (!skip) dbg_texpix <= dbg_texpix + 32'(PIXSTEP);   // R484: wraps
+            if (!skip) dbg_texpix <= dbg_texpix + stp(k_p[rt_p]);   // R484: wraps
           end
         end
 

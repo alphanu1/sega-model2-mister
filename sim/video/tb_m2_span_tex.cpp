@@ -118,6 +118,8 @@ int main(int argc, char **argv) {
   Verilated::commandArgs(argc, argv);
   d = new Vm2_span_tex;
   d->rst_n = 0; d->in_valid = 0; d->out_ready = 1; d->tx_ack = 0;
+  // R650: the step is a run-time input now; drive it to the value under test
+  d->pxk = (STEP == 8) ? 3 : (STEP == 4) ? 2 : (STEP == 2) ? 1 : 0;
   for (int i = 0; i < 4; ++i) tick();
   d->rst_n = 1; tick();
 

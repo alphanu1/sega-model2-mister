@@ -25059,3 +25059,43 @@ Gray-pointer FIFO; its local timeout answers 0x0FF -- opaque full white), the
 texel slots' 1,023-cycle give-up (answers 0), and the framebuffer on the real
 DDR3. Telemetry 'T' (s539-s541) counts the first two and the framebuffer's
 published and dropped lists.
+
+**R651 -- THE STREAKS: A LIST SWAPPED IN OVER A DRAW. FIXED; AND THE TEXEL
+STEP IS AN OSD OPTION.**
+
+s540's telemetry 'T' (R650) over 7,474 vblanks of attract at PIXSTEP 4:
+texel misses SDRAM never answered 0, fetches the crossing answered itself 0,
+framebuffer frames published 3,758 against 3,799 game flips -- and 7 lists
+DROPPED: a new list swapped in while the previous was still being drawn. R650
+item 5 had concluded from the bench that this could not happen; the board says
+it does, and the bench agrees once the draw is slow enough: at PIXSTEP 1
+(3.5-5.2 video frames a draw against a list every 2.09) M2_R3D_LIST2 drops a
+list every time, and the frame then published differs from a clean draw of
+the same list in rows 0-7, all 496 pixels -- band 0 never drawn, exactly the
+restart fault R650 recorded from reading the code. Ben's report fits the
+counts: at PIXSTEP 4 the fault is rare and mostly masked; at PIXSTEP 1 nearly
+every frame is one ("the textures look great for a couple of frames").
+
+THE FIX (m2_raster3d): `swap` also requires !fb_busy, and the store's
+P_READY -> P_COLLECT follows `swap`, not frame_start. A new list waits,
+sorted, until the draw is whole; the store does not collect meanwhile and
+the geometry waits on q_ready. Every published frame is one list drawn start
+to finish. Bench: interrupted at 200 K, 1 M and 3 M cycles into list A's
+draw, the frame published is IDENTICAL to a clean draw of list B (0 pixels
+differ, 0 dropped); a plain draw unchanged.
+
+THE TEXEL STEP AT RUN TIME (Ben: "a menu ... set PIXSTEP on the fly"). OSD
+"Texel step" 1/2/4/8 (status[35:34], default 1), into clk_sys on three flops,
+into m2_span_tex as `pxk` (log2). Latched per span with x1/y, so a change
+lands between spans, never inside one. The per-group gradient steps are
+shifted as the span is loaded (the group add has nothing in front of it, as
+before); the centring term is (g << k) - g. Powers of two only: 3, 5-7 would
+need multipliers on the group path at 98% ALM. Bench, one binary: step 4 at
+run time vs PIXSTEP 4 built in, and step 1 vs PIXSTEP 1, 0 pixels differ;
+draw of frame 9000 at 1/2/4/8: 3.48 / 2.17 / 1.38 / 0.92 video frames.
+tb_m2_span_tex passes at 2 and fails identically before and after at 1, 4
+and 8 (1,601 / 134 / 131): the bench only models step 2 -- a gap in the
+bench, recorded, not a fault in the change.
+
+The texture view (R650, m2_texview) is removed with its OSD entries (Ben);
+it is in git at f4945bf.

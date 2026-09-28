@@ -123,6 +123,8 @@ int main(int argc, char **argv) {
   // R620: M2_R3D_POINT selects the nearest-texel mode; bilinear otherwise,
   // as the OSD's default is.
   d->tex_bilinear = std::getenv("M2_R3D_POINT") ? 0 : 1;
+  // R650: the texel step, log2 (0-3 for 1/2/4/8); default 2, PIXSTEP 4
+  d->tex_pxk = std::getenv("M2_R3D_PXK") ? std::atoi(std::getenv("M2_R3D_PXK")) : 2;
   d->tex_base0 = 0x1760000; d->tex_base1 = 0x17E0000;
   // R555: 1/z FOR EVERY VERTEX, WHICH THIS BENCH NEVER DROVE. q_oz0..3 (R334,
   // a minifloat: 8-bit exponent, top 8 mantissa bits) were left at zero, so the
@@ -193,6 +195,22 @@ int main(int argc, char **argv) {
     }
     if (FBM) {   // R640
       const int LAT = 20;
+      // R650: THE HPS'S OWN QUEUE (M2_R3D_WQ=<cycles to retire a write beat>).
+      // On the board a write is accepted into the memory controller's queue
+      // long before it reaches DDR3, and a read issued after it waits for it
+      // -- the renderer's arbiter orders requests on the FPGA side only. The
+      // queue holds WQMAX beats (writes stall beyond it); SCALER per mille of
+      // the memory's time goes to the framework's scaler. A read's first beat
+      // comes LAT cycles after the writes queued ahead of it have drained.
+      static const int WQ = std::getenv("M2_R3D_WQ") ? std::atoi(std::getenv("M2_R3D_WQ")) : 0;
+      static const long WQMAX = std::getenv("M2_R3D_WQMAX") ? atol(std::getenv("M2_R3D_WQMAX")) : 512;
+      static const int SCALER = std::getenv("M2_R3D_SCALER") ? std::atoi(std::getenv("M2_R3D_SCALER")) : 0;
+      static long backlog = 0, drain = 0; static uint64_t srng = 99;
+      if (WQ) {
+        srng = srng * 6364136223846793005ull + 1442695040888963407ull;
+        const bool stolen = SCALER && int((srng >> 33) % 1000) < SCALER;
+        if (!stolen && backlog > 0 && ++drain >= WQ) { drain = 0; --backlog; }
+      }
       d->fb_wnext = 0; d->fb_rvalid = 0; d->fb_ack = 0;
       if (g_ddr_left == 0 && d->fb_req) {
         g_ddr_a = g_ddr_a0 = d->fb_addr; g_ddr_b0 = d->fb_blen;
@@ -200,8 +218,11 @@ int main(int argc, char **argv) {
         g_ddr_cd = g_ddr_wr ? 1 : LAT;
       } else if (g_ddr_left > 0) {
         if (d->fb_addr != g_ddr_a0 || d->fb_blen != g_ddr_b0) g_ddr_proto++;
-        if (g_ddr_cd > 0) g_ddr_cd--;
+        if (WQ && !g_ddr_wr && g_ddr_cd > 0 && backlog > 0) { /* behind the queued writes */ }
+        else if (WQ && g_ddr_wr && backlog >= WQMAX) { /* the queue is full: the write waits */ }
+        else if (g_ddr_cd > 0) g_ddr_cd--;
         else if (g_ddr_wr) {
+          if (WQ) ++backlog;
           uint64_t old = g_ddr.count(g_ddr_a) ? g_ddr[g_ddr_a] : ~0ull, m = 0;
           for (int b = 0; b < 8; b++) if (d->fb_be & (1 << b)) m |= 0xffull << (b * 8);
           g_ddr[g_ddr_a] = (d->fb_din & m) | (old & ~m);
@@ -659,8 +680,9 @@ int main(int argc, char **argv) {
       (int)d->rootp->m2_raster3d__DOT__cst, (unsigned)d->dbg_fb_pixels,
       (int)d->rootp->m2_raster3d__DOT__fb_clear_req, (int)d->rootp->m2_raster3d__DOT__fb_clear_busy,
       (int)d->rootp->m2_raster3d__DOT__dvalid, (int)d->rootp->m2_raster3d__DOT__pst);
-    if (FBM) std::printf("  R640 FB: %ld write beats, %ld read beats, %ld Avalon violations, published %u dropped %u\n",
-                         g_ddr_wbeats, g_ddr_rbeats, g_ddr_proto, (unsigned)d->dbg_fb_pub, (unsigned)d->dbg_fb_drop);
+    if (FBM) std::printf("  R640 FB: %ld write beats, %ld read beats, %ld Avalon violations, published %u dropped %u; R650 scanout lines %u LATE %u\n",
+                         g_ddr_wbeats, g_ddr_rbeats, g_ddr_proto, (unsigned)d->dbg_fb_pub, (unsigned)d->dbg_fb_drop,
+                         (unsigned)d->dbg_fb_lines, (unsigned)d->dbg_fb_late);
     g_rec = false;
     FILE *fo = std::fopen((dir + "/fetch.txt").c_str(), "w");
     for (const Fetch &f : g_fetch) std::fprintf(fo, "%d %d %u %u %u %u\n", f.y, f.x, f.u, f.v, f.t, f.c);

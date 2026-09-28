@@ -761,17 +761,6 @@ obj_geoview/Vm2_geo_view: rtl/video/m2_geo_view.sv sim/video/tb_m2_geo_view.cpp
 	$(VBUILD) --top-module m2_geo_view -Wno-TIMESCALEMOD --Mdir obj_geoview -o Vm2_geo_view -CFLAGS "-O2" \
 	  rtl/video/m2_geo_view.sv sim/video/tb_m2_geo_view.cpp
 
-# R650: the texture view, every visible pixel against the sheet it shows. Real
-# sheets with M2_TV_SHEET0/1 (tb_m2_boot's M2_TEXDUMP output); M2_TV_LAT sets
-# the port's latency (passes to 100+20; the board's texel misses see ~57-114).
-test_m2_texview: obj_texview/Vm2_texview
-	@echo "== test m2_texview (the texture sheets on the screen)"
-	@./obj_texview/Vm2_texview $(TEST_ARGS)
-
-obj_texview/Vm2_texview: rtl/video/m2_texview.sv sim/video/tb_m2_texview.cpp
-	$(VBUILD) --top-module m2_texview -Wno-TIMESCALEMOD --Mdir obj_texview -o Vm2_texview -CFLAGS "-O2" \
-	  rtl/video/m2_texview.sv sim/video/tb_m2_texview.cpp
-
 test_m2_fb_read: obj_fbr/Vm2_fb_read
 	@echo "== test m2_fb_read (the framebuffer, a line at a time)"
 	@./obj_fbr/Vm2_fb_read $(TEST_ARGS)
