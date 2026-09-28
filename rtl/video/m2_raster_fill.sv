@@ -271,6 +271,10 @@ module m2_raster_fill #(
   // the array read masks to 2.
   logic [2:0]         ps1, ps2;
   logic signed [31:0] xa, xb;     // 16.16 accumulators
+  // R659: xa/xb + 0x7FFF, kept in step with them (every later write is +delta),
+  // so M2COV's round-to-nearest is a bit slice and not an adder in front of
+  // uv_at's multiply -- that adder cost s566-s568 4 ns on clk_sys.
+  logic signed [31:0] xah, xbh;
   logic signed [31:0] sla, slb;   // 16.16 per scanline
   logic signed [15:0] cury, limy;
   logic               need_a, need_b;
@@ -856,10 +860,11 @@ module m2_raster_fill #(
 
     if (M2COV) begin
       // R658: sorted per row as MAME does, [round(lo), round(hi)) inclusive-ended
-      automatic logic signed [31:0] lo = (xa < xb) ? xa : xb;
-      automatic logic signed [31:0] hi = (xa < xb) ? xb : xa;
-      emit_xl = 16'((lo + 32'sh7FFF) >>> 16);
-      emit_xr = 16'((hi + 32'sh7FFF) >>> 16) - 16'sd1;
+      // rounding is monotonic, so sorting the rounded values is the same thing
+      automatic logic signed [15:0] rxa = xah[31:16];
+      automatic logic signed [15:0] rxb = xbh[31:16];
+      emit_xl = (rxa < rxb) ? rxa : rxb;
+      emit_xr = ((rxa < rxb) ? rxb : rxa) - 16'sd1;
     end else begin
       emit_xl = 16'(emit_l >>> 16);
       emit_xr = 16'(emit_r >>> 16);
@@ -904,6 +909,8 @@ module m2_raster_fill #(
       ps2        <= 3'd0;
       xa         <= 32'sd0;
       xb         <= 32'sd0;
+      xah        <= 32'sh7FFF;
+      xbh        <= 32'sh7FFF;
       sla        <= 32'sd0;
       slb        <= 32'sd0;
       cury       <= 16'sd0;
@@ -1331,8 +1338,8 @@ module m2_raster_fill #(
         // Reloading x from the vertex rather than keeping the walked value is
         // what snaps an edge back onto the polygon at each vertex event.
         S_LOADX: begin
-          if (need_a) xa <= px[ps1[1:0]];
-          if (need_b) xb <= px[ps2[1:0]];
+          if (need_a) begin xa <= px[ps1[1:0]]; xah <= px[ps1[1:0]] + 32'sh7FFF; end
+          if (need_b) begin xb <= px[ps2[1:0]]; xbh <= px[ps2[1:0]] + 32'sh7FFF; end
           state <= S_DIVA;
         end
 
@@ -1370,8 +1377,10 @@ module m2_raster_fill #(
         // edge is already at that row's centre: it was walked there.
         S_OFF: begin
           automatic logic [1:0] d = 2'((rq(cury) <<< 2) + 16'sd2 - cury);
-          if (need_a) xa <= xa + (((d[1] ? (sla <<< 1) : 32'sd0) + (d[0] ? sla : 32'sd0)) >>> 2);
-          if (need_b) xb <= xb + (((d[1] ? (slb <<< 1) : 32'sd0) + (d[0] ? slb : 32'sd0)) >>> 2);
+          automatic logic signed [31:0] da = ((d[1] ? (sla <<< 1) : 32'sd0) + (d[0] ? sla : 32'sd0)) >>> 2;
+          automatic logic signed [31:0] db = ((d[1] ? (slb <<< 1) : 32'sd0) + (d[0] ? slb : 32'sd0)) >>> 2;
+          if (need_a) begin xa <= xa + da; xah <= xah + da; end
+          if (need_b) begin xb <= xb + db; xbh <= xbh + db; end
           state <= S_DECIDE;
         end
 
@@ -1447,6 +1456,7 @@ module m2_raster_fill #(
           mul_w  <= 1'b1;
         end else begin
           xa     <= xa + mul_pr;
+          xah    <= xah + mul_pr;
           mul_sl <= slb;
           mul_w  <= 1'b0;
           state  <= S_FS_MULB;
@@ -1457,6 +1467,7 @@ module m2_raster_fill #(
           mul_w  <= 1'b1;
         end else begin
           xb    <= xb + mul_pr;
+          xbh   <= xbh + mul_pr;
           mul_w <= 1'b0;
           state <= skip_only ? S_FS_END : S_FS_SWAP;
         end
@@ -1485,6 +1496,8 @@ module m2_raster_fill #(
             end
             xa     <= xa + sla;
             xb     <= xb + slb;
+            xah    <= xah + sla;
+            xbh    <= xbh + slb;
             walk_y <= walk_y + 16'sd1;
           end
         end
