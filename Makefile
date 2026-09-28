@@ -387,7 +387,7 @@ SDR_RTL := rtl/mem/m2_sdram.sv rtl/mem/bw_monitor.sv sim/mem/sdram_model.sv sim/
 RLD_RTL := rtl/mem/m2_sdram.sv rtl/io/m2_rom_loader.sv sim/mem/sdram_model.sv sim/mem/m2_romload_harness.sv
 
 
-.PHONY: test test_m2_backup test_m2_fbw_chain test_m2_sndboard test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram test_fx68k test_m2_ioboard
+.PHONY: test test_m2_backup test_m2_fb_wcomb test_m2_fbw_chain test_m2_sndboard test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram test_fx68k test_m2_ioboard
 test: test_m2_handshake_cdc test_m2_texel test_m2_texel_cdc test_m2_span_tex test_m2_geo test_m2_wr_arb test_m2_pair_cache test_m2_raster3d test_m2_backup test_m2_sndlink test_fx68k test_m2_sndboard test_m2_ioboard test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_sdram_cdc test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
 
 test_i960_dec: obj_i960_dec/Vi960_dec
@@ -777,15 +777,27 @@ obj_fbw/Vm2_fb_write: rtl/video/m2_fb_write.sv sim/video/tb_m2_fb_write.cpp
 	$(VBUILD) --top-module m2_fb_write -Wno-TIMESCALEMOD --Mdir obj_fbw -o Vm2_fb_write -CFLAGS "-O2" \
 	  rtl/video/m2_fb_write.sv sim/video/tb_m2_fb_write.cpp
 
+# R661: the combining writer, through the same bench (32-word bursts)
+test_m2_fb_wcomb: obj_fbwc/Vm2_fb_write
+	@echo "== test m2_fb_wcomb (the combining framebuffer writer)"
+	@./obj_fbwc/Vm2_fb_write $(TEST_ARGS)
+
+obj_fbwc/Vm2_fb_write: rtl/video/m2_fb_wcomb.sv sim/video/tb_m2_fb_write.cpp
+	$(VBUILD) --top-module m2_fb_wcomb --prefix Vm2_fb_write -Wno-TIMESCALEMOD --Mdir obj_fbwc -o Vm2_fb_write -CFLAGS "-O2 -DTB_WBURST=32" \
+	  rtl/video/m2_fb_wcomb.sv sim/video/tb_m2_fb_write.cpp
+
 # R660: the write path END TO END -- writer, arbiter and m2_ddr3 as built,
 # against a DDRAM that says BUSY at random and a reader competing for it.
 test_m2_fbw_chain: obj_fbw_chain/Vm2_fbw_chain
 	@echo "== test m2_fbw_chain (framebuffer writes through the real DDR3 master)"
-	@for b in 0 300 900; do CHAIN_BUSY=$$b ./obj_fbw_chain/Vm2_fbw_chain $(TEST_ARGS) || exit 1; done
+	@for w in obj_fbw_chain obj_fbw_chain_c; do for b in 0 300 900; do echo "-- $$w BUSY $$b"; CHAIN_BUSY=$$b ./$$w/Vm2_fbw_chain $(TEST_ARGS) || exit 1; done; done
 
-obj_fbw_chain/Vm2_fbw_chain: sim/video/m2_fbw_chain.sv rtl/video/m2_fb_write.sv rtl/mem/m2_ddr3_arb.sv rtl/mem/m2_ddr3.sv sim/video/tb_m2_fbw_chain.cpp
-	$(VBUILD) --top-module m2_fbw_chain -Wno-TIMESCALEMOD -Wno-UNUSEDSIGNAL -Wno-PINCONNECTEMPTY --Mdir obj_fbw_chain -o Vm2_fbw_chain -CFLAGS "-O2" \
-	  sim/video/m2_fbw_chain.sv rtl/video/m2_fb_write.sv rtl/mem/m2_ddr3_arb.sv rtl/mem/m2_ddr3.sv sim/video/tb_m2_fbw_chain.cpp
+CHAIN_SRC := sim/video/m2_fbw_chain.sv rtl/video/m2_fb_write.sv rtl/video/m2_fb_wcomb.sv rtl/mem/m2_ddr3_arb.sv rtl/mem/m2_ddr3.sv sim/video/tb_m2_fbw_chain.cpp
+test_m2_fbw_chain: obj_fbw_chain_c/Vm2_fbw_chain
+obj_fbw_chain/Vm2_fbw_chain: $(CHAIN_SRC)
+	$(VBUILD) --top-module m2_fbw_chain -Wno-TIMESCALEMOD -Wno-UNUSEDSIGNAL -Wno-PINCONNECTEMPTY -GWCOMB=0 --Mdir obj_fbw_chain -o Vm2_fbw_chain -CFLAGS "-O2" $(CHAIN_SRC)
+obj_fbw_chain_c/Vm2_fbw_chain: $(CHAIN_SRC)
+	$(VBUILD) --top-module m2_fbw_chain -Wno-TIMESCALEMOD -Wno-UNUSEDSIGNAL -Wno-PINCONNECTEMPTY -GWCOMB=1 --Mdir obj_fbw_chain_c -o Vm2_fbw_chain -CFLAGS "-O2" $(CHAIN_SRC)
 
 test_m2_ddr3_arb: obj_ddr3arb/Vm2_ddr3_arb
 	@echo "== test m2_ddr3_arb (two framebuffer masters, one DDRAM port)"

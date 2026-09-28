@@ -25521,3 +25521,45 @@ are the obvious candidates once the board has said whether R660 cured the
 streaks -- or the window shrinks (16 words saves only 40 ALM, not enough on
 its own). s572 closed every core clock: clk_sys +0.138, clk_mem +0.300,
 clk_i960 +2.932, holds +0.241..+0.404, HDMI -0.370; on the board 20:01.
+
+**R662 -- s572 DREW NO 3D: QUARTUS 17.0 MISCOMPILES signed'() AROUND A SUM
+HOLDING $signed({..}). THE SCANOUT FAULT IS GONE (R660, ON THE BOARD).**
+
+s572 (7086388: R658 M2COV on, R659, R660) on the board: glyphs and tilemap,
+no 3D at all. Telemetry: every list published (the 16-bit counter saturated
+at 65,535 in ~40 minutes at 28.6 fps), scanout lines read -- so frames were
+drawn and shown, with nothing painted in them. The FB self-test switched on:
+**1,976 of 1,976 frames clean, 0 wrong-line and 0 wrong-frame rows**, where
+s564 had ~38 wrong-line rows EVERY frame (R657). The DDR3 write and read paths
+are right, and R660 (a request taken twice) was the scanout fault. So the
+empty frames were the fill: M2COV had never been on the board (s566-s568
+failed timing).
+
+Found without a board build: Quartus folds constant inputs, and a module whose
+outputs are constant reports each output pin "stuck at GND/VCC", which spells
+the value Quartus computed. The fill's M2COV expressions, fed constants:
+`px = 32'(signed'((sx <<< 2) + $signed({14'd0, sf[1:0]}))) <<< 14` gave
+0x00000000 for x = 100.5 (0x00648000 expected) and 0xFFFFC000 for x = -0.75
+(0xFFFF4000) -- every positive x zero, every negative x -1: every polygon
+zero wide, no spans. sye, rq(), the classify compares and S_OFF's d all folded
+correctly. Narrowed: `signed'(A + $signed({..}))` is wrong; `signed'(x + 3)`,
+`signed'(x <<< 2)`, `signed'(ident)`, `16'(signed'(v) >>> 2)` (m2_quad_store),
+`14'(signed'(5'(..) - 5'(..)))`, `10'(signed'({1'b0, l}))` and both of
+m2_texel_bl's `9'(signed'(19'({..})) + ...)` forms are right. The other
+signed'() uses in the design (m2_quad_store, m2_geo_view, m2_texel_bl) are
+of the forms that fold correctly. Verilator computes all of them as written,
+so no bench could see it.
+
+Fix: `px = $signed({sx, sf[1:0], 14'd0})` -- the 16.16 quarter position as a
+concatenation, folded correctly by Quartus. Bit-identical in simulation:
+tb_m2_fill_m2cov 20,007 quads 0 fails, tb_m2_raster_fill 152,369 0 fails,
+frames 1000/4000/9000 textures-off byte-identical.
+
+RULE: a new arithmetic idiom goes through the Quartus constant fold before it
+goes to the fitter. Seconds per check; this one cost a board build.
+
+Also: the combining writer (R661) did not fit, so it is now m2_fb_wcomb,
+selected by m2_raster3d's FB_WCOMB (default 0); m2_fb_write is the per-span
+writer again (as in 7086388). tb_m2_fbw_chain runs both (WCOMB 0/1) at BUSY
+0/30/90%, all pass -- the per-span writer included against m2_ddr3's per-beat
+BE (R661), which it holds steady through a request.

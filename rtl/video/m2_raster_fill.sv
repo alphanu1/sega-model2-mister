@@ -254,7 +254,12 @@ module m2_raster_fill #(
   always_comb begin
     for (int i = 0; i < 4; i++) begin
       // signed throughout: a clipped vertex sits at x = -1
-      px[i]  = M2COV ? (32'(signed'((sx[i] <<< 2) + $signed({14'd0, sf[i][1:0]}))) <<< 14)   // 16.16 of the quarter position
+      // R662: 16.16 of the quarter position is a CONCATENATION -- the integer,
+      // the two quarter bits, zeros. It was 32'(signed'(4x + f)) <<< 14, and
+      // Quartus 17.0 folds signed'() around a sum holding $signed({..}) to
+      // nothing: every x came out 0 (or -1), every polygon zero wide, and s572
+      // drew no 3D at all. Verilator computes it as written.
+      px[i]  = M2COV ? $signed({sx[i], sf[i][1:0], 14'd0})
                      : $signed({sx[i], 16'h0000});
       sye[i] = M2COV ? ((sy[i] <<< 2) + $signed({14'd0, sf[i][3:2]})) : sy[i];
     end

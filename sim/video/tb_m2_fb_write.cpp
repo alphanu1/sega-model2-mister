@@ -37,7 +37,11 @@ static std::map<uint32_t, uint64_t> mem;
 static std::map<uint32_t, uint8_t> valid;
 static int busy_for = 0, busy_ctr = 0;
 static long beats = 0, commands = 0, max_blen = 0;
-static const int WBURST = 32;   // must match m2_fb_write's parameter (R661)
+// must match the writer's parameter: m2_fb_write 16, m2_fb_wcomb 32 (R661)
+#ifndef TB_WBURST
+#define TB_WBURST 16
+#endif
+static const int WBURST = TB_WBURST;
 static uint32_t burst_addr = 0; static int burst_left = 0;
 
 static void tick() {

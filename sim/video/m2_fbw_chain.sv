@@ -10,7 +10,9 @@
 
 `timescale 1ns/1ps
 
-module m2_fbw_chain (
+module m2_fbw_chain #(
+  parameter bit WCOMB = 1'b0   // R661: the combining writer
+) (
   input  logic        clk,
   input  logic        rst_n,
 
@@ -51,17 +53,31 @@ module m2_fbw_chain (
   logic [7:0]  w_blen, w_be;
   logic [63:0] w_din;
 
-  m2_fb_write #(.SCR_W(496), .SCR_H(384), .STRIDE(512)) u_fbw (
-    .clk(clk), .rst_n(rst_n), .fb_sel(fb_sel),
-    .clear_req(clear_req), .clear_busy(clear_busy),
-    .in_valid(in_valid), .in_ready(in_ready),
-    .in_y(in_y), .in_x0(in_x0), .in_x1(in_x1), .in_col(in_col),
-    .in_painted(1'b1), .in_moire(in_moire),
-    .m_req(w_req), .m_we(w_we), .m_addr(w_addr), .m_blen(w_blen),
-    .m_din(w_din), .m_be(w_be), .m_wnext(w_wnext), .m_wacc(w_wacc), .m_ack(w_ack),
-    .empty(w_empty),
-    .dbg_pixels(dbg_pixels), .dbg_clears(), .dbg_st()
-  );
+  if (WCOMB) begin : g_wcomb
+    m2_fb_wcomb #(.SCR_W(496), .SCR_H(384), .STRIDE(512)) u_fbw (
+      .clk(clk), .rst_n(rst_n), .fb_sel(fb_sel),
+      .clear_req(clear_req), .clear_busy(clear_busy),
+      .in_valid(in_valid), .in_ready(in_ready),
+      .in_y(in_y), .in_x0(in_x0), .in_x1(in_x1), .in_col(in_col),
+      .in_painted(1'b1), .in_moire(in_moire),
+      .m_req(w_req), .m_we(w_we), .m_addr(w_addr), .m_blen(w_blen),
+      .m_din(w_din), .m_be(w_be), .m_wnext(w_wnext), .m_wacc(w_wacc), .m_ack(w_ack),
+      .empty(w_empty),
+      .dbg_pixels(dbg_pixels), .dbg_clears(), .dbg_st()
+    );
+  end else begin : g_wone
+    m2_fb_write #(.SCR_W(496), .SCR_H(384), .STRIDE(512)) u_fbw (
+      .clk(clk), .rst_n(rst_n), .fb_sel(fb_sel),
+      .clear_req(clear_req), .clear_busy(clear_busy),
+      .in_valid(in_valid), .in_ready(in_ready),
+      .in_y(in_y), .in_x0(in_x0), .in_x1(in_x1), .in_col(in_col),
+      .in_painted(1'b1), .in_moire(in_moire),
+      .m_req(w_req), .m_we(w_we), .m_addr(w_addr), .m_blen(w_blen),
+      .m_din(w_din), .m_be(w_be), .m_wnext(w_wnext), .m_wacc(w_wacc), .m_ack(w_ack),
+      .empty(w_empty),
+      .dbg_pixels(dbg_pixels), .dbg_clears(), .dbg_st()
+    );
+  end
 
   logic        m_req, m_we, m_wnext, m_wacc, m_rvalid, m_ack;
   logic [24:0] m_addr;

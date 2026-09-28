@@ -87,6 +87,10 @@ module m2_raster3d #(
   // line ahead. Requires FTB = 0: the front-to-back mask is fed by the
   // painting band, and there are no bands.
   parameter bit FB_DDR3 = 1'b0,
+  // R661: the framebuffer writer that combines spans into 64-pixel windows
+  // (m2_fb_wcomb) instead of a DDR3 command per span (m2_fb_write). ~+330 ALM
+  // in place: it does not fit beside everything else yet (s575-s577).
+  parameter bit FB_WCOMB = 1'b0,
   // R275: the SDRAM address width the texel fetch drives.
   parameter int unsigned TEX_AW = 25
 ) (
@@ -840,20 +844,37 @@ module m2_raster3d #(
         end
       end
 
-      m2_fb_write #(.SCR_W(SCR_W), .SCR_H(SCR_H), .STRIDE(512)) u_fbw (
-        .clk(clk), .rst_n(rst_n),
-        .fb_sel(fb_draw),
-        .clear_req(fb_clear_req), .clear_busy(fb_clear_busy),
-        .in_valid(fb_test ? tp_valid : tx_span_valid), .in_ready(fbw_in_ready),   // R653
-        .in_y(fb_test ? tp_y : tx_span_y[15:0]), .in_x0(fb_test ? tp_x0 : tx_span_x0[15:0]),
-        .in_x1(fb_test ? tp_x1 : tx_span_x1[15:0]),
-        .in_col(fb_test ? tp_col : tx_span_col), .in_painted(1'b1),
-        .in_moire(fb_test ? 1'b0 : tx_span_moire),   // R640
-        .m_req(w_req), .m_we(w_we), .m_addr(w_addr), .m_blen(w_blen),
-        .m_din(w_din), .m_be(w_be), .m_wnext(w_wnext), .m_wacc(w_wacc), .m_ack(w_ack),
-        .empty(fbw_empty),
-        .dbg_pixels(dbg_fb_pixels), .dbg_clears(), .dbg_st()
-      );
+      if (FB_WCOMB) begin : g_wcomb
+        m2_fb_wcomb #(.SCR_W(SCR_W), .SCR_H(SCR_H), .STRIDE(512)) u_fbw (
+          .clk(clk), .rst_n(rst_n),
+          .fb_sel(fb_draw),
+          .clear_req(fb_clear_req), .clear_busy(fb_clear_busy),
+          .in_valid(fb_test ? tp_valid : tx_span_valid), .in_ready(fbw_in_ready),   // R653
+          .in_y(fb_test ? tp_y : tx_span_y[15:0]), .in_x0(fb_test ? tp_x0 : tx_span_x0[15:0]),
+          .in_x1(fb_test ? tp_x1 : tx_span_x1[15:0]),
+          .in_col(fb_test ? tp_col : tx_span_col), .in_painted(1'b1),
+          .in_moire(fb_test ? 1'b0 : tx_span_moire),   // R640
+          .m_req(w_req), .m_we(w_we), .m_addr(w_addr), .m_blen(w_blen),
+          .m_din(w_din), .m_be(w_be), .m_wnext(w_wnext), .m_wacc(w_wacc), .m_ack(w_ack),
+          .empty(fbw_empty),
+          .dbg_pixels(dbg_fb_pixels), .dbg_clears(), .dbg_st()
+        );
+      end else begin : g_wone
+        m2_fb_write #(.SCR_W(SCR_W), .SCR_H(SCR_H), .STRIDE(512)) u_fbw (
+          .clk(clk), .rst_n(rst_n),
+          .fb_sel(fb_draw),
+          .clear_req(fb_clear_req), .clear_busy(fb_clear_busy),
+          .in_valid(fb_test ? tp_valid : tx_span_valid), .in_ready(fbw_in_ready),   // R653
+          .in_y(fb_test ? tp_y : tx_span_y[15:0]), .in_x0(fb_test ? tp_x0 : tx_span_x0[15:0]),
+          .in_x1(fb_test ? tp_x1 : tx_span_x1[15:0]),
+          .in_col(fb_test ? tp_col : tx_span_col), .in_painted(1'b1),
+          .in_moire(fb_test ? 1'b0 : tx_span_moire),   // R640
+          .m_req(w_req), .m_we(w_we), .m_addr(w_addr), .m_blen(w_blen),
+          .m_din(w_din), .m_be(w_be), .m_wnext(w_wnext), .m_wacc(w_wacc), .m_ack(w_ack),
+          .empty(fbw_empty),
+          .dbg_pixels(dbg_fb_pixels), .dbg_clears(), .dbg_st()
+        );
+      end
 
       // The line ahead of the beam, requested when the beam starts a line.
       // scan_clk side: which line to fetch (R360: wraps to 0 through blanking,
