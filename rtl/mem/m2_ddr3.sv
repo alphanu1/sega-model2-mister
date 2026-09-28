@@ -155,7 +155,10 @@ module m2_ddr3 #(
   logic [7:0]  be_r;
   assign DDRAM_ADDR     = base_r + 29'(addr_r);
   assign DDRAM_DIN      = din;
-  assign DDRAM_BE       = be_r;
+  // R661: a write's byte enables are the source's, beat by beat -- the
+  // combining writer sends a different pair of halves in every word. A read's
+  // are latched with the request, as before.
+  assign DDRAM_BE       = is_wr ? be : be_r;
 
   typedef enum logic [1:0] { D_IDLE, D_ISSUE, D_WAIT } st_t;
   st_t st;

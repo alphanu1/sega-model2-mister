@@ -25459,3 +25459,54 @@ Also added for the combiner: m2_ddr3 `wacc` (a write beat taken THIS cycle;
 wnext says so a cycle late, too late for a source whose data changes beat to
 beat) routed through the arbiter; m2_fb_write `empty`, which C_FILL -> C_DONE
 and the self-test's publish now also wait for.
+
+**R661 -- THE FRAMEBUFFER WRITER COMBINES: 64-PIXEL WINDOWS, ONE BURST EACH.**
+
+Ben: "higher bursts on the write to ddr3 and optimise". R640 recorded the
+cost and named the fix: every span was its own DDR3 command (head, body,
+tail), and a textured span is one texel's run -- at PIXSTEP 1 mostly one or
+two pixels. R640's own fix (a band buffer as a write-combining tile, ~26
+M10K) does not fit: s568 has 13 M10K and ~630 ALM spare. This is the small
+version.
+
+m2_fb_write now takes a span a word a cycle into a WINDOW: 32 words (64
+pixels) of one row, in MLAB, each half-word with its own valid bit. A window
+goes out as ONE burst of the contiguous words it holds, each beat with its own
+byte enables (so m2_ddr3 now passes a write's BE through per beat; a read's
+is still latched), when the next word does not belong (another row or window,
+or not adjacent), after IDLE_T = 16 idle input cycles, or before a clear. Two
+windows: one fills while the other is written; a window is closed only when
+the other is empty, so writes reach DDR3 in drawing order. The data changes
+beat to beat, so the beat index moves on m2_ddr3's same-cycle `wacc` (R660);
+the words are read from MLAB without a clock at that index. No beat is ever
+sent without a byte enable. `empty` (R660) holds C_DONE and the self-test's
+publish until the last window is written. Addresses are concatenations
+({buffer, line, window, word}; STRIDE/2 is a power of two), so a window is a
+13-bit key, not a base address.
+
+Proof. tb_m2_fbw_chain (writer, arbiter, m2_ddr3; R660): 20,000 spans, BUSY
+0 / 30% / 90%, seeds 1 / 7 / 99 -- framebuffer exact, commands == requests,
+every read beat delivered. DDRAM write commands for the same 20,000 spans
+fall from ~42,000 to ~15,700; the bench's run 22% shorter at BUSY 0 (its
+spans are only 70% sequential; a textured row is more). Two mutations must
+fail it and do: m2_ddr3 latching BE per burst (6,702 wrong pixels), the
+writer advancing on wnext instead of wacc (3,060). tb_m2_fb_write 38 checks
+(waits for `empty` now; WBURST 32). MAME frame 9000 textured through the
+whole renderer, pixels byte-identical to the old writer (190,459) at PIXSTEP
+1 and 4; self-test 0 bad rows. Draw time, frame 9000:
+
+    bus model                               PIXSTEP 1        PIXSTEP 4
+    jitter (30% beats withheld,             8.83 -> 1.34     4.26 -> 0.92
+      0-63 cycles before a first beat)
+    + HPS write queue (WQ 24, scaler 30%)   12.04 -> 7.45    8.27 -> 7.36
+
+(video frames at 70 MHz / 57.5 Hz). The first model charges a round trip
+per command, which is what the old writer paid per pixel pair; the second
+retires one write beat per 24 cycles and is bound by beats, which combining
+cannot reduce. The board lies between them.
+
+Cost, Quartus 17 synthesis of the module alone: 303 -> 525 ALM (+222), 172 ->
+348 registers, 100 MLAB ALUTs, 0 block RAM bits (both windows inferred
+altdpram). A 16-word window would save only 40 ALM (485), so 32. Timing: the
+beat path is ridx -> MLAB read -> arbiter -> DDRAM_DIN on clk_sys; wacc ->
+ridx is one adder.

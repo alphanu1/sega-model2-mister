@@ -37,7 +37,7 @@ static std::map<uint32_t, uint64_t> mem;
 static std::map<uint32_t, uint8_t> valid;
 static int busy_for = 0, busy_ctr = 0;
 static long beats = 0, commands = 0, max_blen = 0;
-static const int WBURST = 16;   // must match m2_fb_write's parameter
+static const int WBURST = 32;   // must match m2_fb_write's parameter (R661)
 static uint32_t burst_addr = 0; static int burst_left = 0;
 
 static void tick() {
@@ -45,7 +45,7 @@ static void tick() {
   bool busy = (asking && busy_ctr < busy_for);
   busy_ctr = asking ? busy_ctr + 1 : 0;
 
-  d->m_wnext = 0; d->m_ack = 0;
+  d->m_wnext = 0; d->m_wacc = 0; d->m_ack = 0;
   if (!busy) {
     if (burst_left == 0 && d->m_req) {
       burst_addr = d->m_addr; burst_left = d->m_blen ? d->m_blen : 1;
@@ -59,7 +59,9 @@ static void tick() {
       mem[burst_addr] = (prev & ~msk) | (d->m_din & msk);
       valid[burst_addr] |= d->m_be;
       burst_addr++; burst_left--; beats++;
-      d->m_wnext = 1;
+      // R660: this model takes a beat and says so in one cycle, so its wnext
+      // IS the same-cycle accept
+      d->m_wnext = 1; d->m_wacc = 1;
       if (burst_left == 0) d->m_ack = 1;
       busy_ctr = 0;
     }
@@ -91,7 +93,9 @@ static bool span(int y, int x0, int x1, uint32_t col, int painted) {
   d->in_col = col; d->in_painted = painted; d->in_moire = g_moire;
   tick();
   d->in_valid = 0;
-  for (i = 0; i < 20000 && !d->in_ready; i++) tick();
+  // R661: ready again is not written -- the writer combines, so wait until
+  // it holds nothing
+  for (i = 0; i < 20000 && !(d->in_ready && d->empty); i++) tick();
   if (i >= 20000) { stalls++; return false; }
   return true;
 }
@@ -112,7 +116,7 @@ int main(int argc, char **argv) {
   Verilated::commandArgs(argc, argv);
   d = new Vm2_fb_write;
   d->clk = 0; d->rst_n = 0; d->in_valid = 0; d->fb_sel = 0; d->clear_req = 0;
-  d->m_wnext = 0; d->m_ack = 0;
+  d->m_wnext = 0; d->m_wacc = 0; d->m_ack = 0;
   for (int i = 0; i < 4; i++) tick();
   d->rst_n = 1; tick();
 
