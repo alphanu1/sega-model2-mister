@@ -872,12 +872,12 @@ module m2_video #(
   // its own blanking, which blanked the first visible column of every line and
   // left the rest correct: a single black column down the left edge.
   // R582: declared before the output block that reads them.
-  logic ce_d, vis_q, cat1_q, hb_q, vb_q, hs_q, vs_q;
+  logic ce_d, ce_dd, vis_q, cat1_q, hb_q, vb_q, hs_q, vs_q;
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       vid_cat1 <= 1'b0;
       vid_hb <= 1'b1; vid_vb <= 1'b1; vid_hs <= 1'b0; vid_vs <= 1'b0;
-    end else if (ce_d) begin
+    end else if (ce_dd) begin   // R648: with the colour, two cycles after ce
       // R582: ALL OUTPUTS MOVE TOGETHER, on ce_d, from values latched on ce.
       // Every sync and blank is delayed with the data, not just `visible`.
       // Exposing undelayed blanking beside delayed colour puts the picture one
@@ -902,13 +902,24 @@ module m2_video #(
   // visibility gate latched on ce itself, keeps colour and flags on the same
   // pixel; both settle inside the pixel period and the framework samples on
   // the next enable.
+  //
+  // R648: AND NOW TWO CYCLES AFTER IT. R605 (rd_qq) added a stage and counted
+  // the palette RAM as if it answered in the cycle its address register was
+  // written; an M10K registers that address itself, so it answers a cycle
+  // later. The colour is in pr_q from E+7 (line buffer E+1, rd_qq E+2,
+  // pal_addr_q E+3, palette RAM E+4, pal_data_q E+5, xlat E+6, gamma E+7), and
+  // a capture at ce_d is E+7 after a six-cycle gap -- the previous pixel. That
+  // dropped single-pixel strokes on the test screen (N drawn as H) on every
+  // build from cb8bb60 on. ce_dd is E+8 at the earliest and E+9 at the latest,
+  // and pr_q holds until the next pixel's E'+7 >= E+13. The flags move with it.
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      ce_d <= 1'b0; vis_q <= 1'b0;
+      ce_d <= 1'b0; ce_dd <= 1'b0; vis_q <= 1'b0;
       cat1_q <= 1'b0; hb_q <= 1'b1; vb_q <= 1'b1; hs_q <= 1'b0; vs_q <= 1'b0;
       vid_r <= '0; vid_g <= '0; vid_b <= '0;
     end else begin
-      ce_d <= ce_pix;
+      ce_d  <= ce_pix;
+      ce_dd <= ce_d;
       if (ce_pix) begin
         vis_q  <= visible;
         cat1_q <= visible && !mix_src[3] && !mix_src[2];   // sources 0-3
@@ -917,7 +928,7 @@ module m2_video #(
         hs_q   <= hsync_i;
         vs_q   <= vsync_i;
       end
-      if (ce_d) begin
+      if (ce_dd) begin
         vid_r <= vis_q ? pr_q : 8'd0;
         vid_g <= vis_q ? pg_q : 8'd0;
         vid_b <= vis_q ? pb_q : 8'd0;

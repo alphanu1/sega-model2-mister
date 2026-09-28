@@ -5945,11 +5945,20 @@ assign td_raddr[0] = tex_m_addr;
 assign td_raddr[1] = tex_m2_addr;
 // R645: THE TEXTURE SHEETS' DDR3 MIRROR. Writes: every CPU write the bridge
 // completes into the sheets (clk_sys, where the bridge's SDRAM port lives).
+//
+// R648: AND ONLY WHEN THE MENU SELECTS IT. With the switch on SDRAM only the
+// reads were off; every texture upload was still copied into DDR3 through the
+// arbiter the 3D framebuffer uses. Now the default leaves the mirror wholly
+// idle -- no DDR3 traffic at all. The cost: switching to DDR3 mid-game shows
+// stale texels until the game uploads them again (select the option, then
+// reset).
+logic [2:0] texddr_s;
+always_ff @(posedge clk_sys) texddr_s <= {texddr_s[1:0], status[34]};
 m2_tex_ddr3 #(.AW(SDR_AW), .SBASE(GAME_TEXS0), .TBASE(25'h080000)) u_tex_ddr3 (
 	.clk_mem(clk_mem), .clk(clk_sys), .rst_n(mem_rst_n),
 	.r_req(td_rreq), .r_addr(td_raddr),
 	.r_ack(td_ack), .r_data(td_data),
-	.w_valid(cpu_sd_req && cpu_sd_we && p_ack[1]),
+	.w_valid(cpu_sd_req && cpu_sd_we && p_ack[1] && texddr_s[2]),   // R648: idle unless selected
 	.w_addr(cpu_sd_addr), .w_data(cpu_sd_din), .w_be(cpu_sd_be),
 	.d_req(tdd_req), .d_we(tdd_we), .d_addr(tdd_addr), .d_blen(tdd_blen), .d_din(tdd_din), .d_be(tdd_be),
 	.d_wnext(tdd_wnext), .d_rvalid(tdd_rvalid), .d_ack(tdd_ack), .d_dout(ddr_dout),

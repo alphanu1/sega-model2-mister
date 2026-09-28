@@ -205,14 +205,23 @@ int main(int argc, char **argv) {
       dut->xlat_din  = uint8_t(idx < xlat.size() ? (xlat[idx] & 0xff) : 0);
     }
 
+    // R648: THE RAMS REGISTER THEIR OWN ADDRESS, as m2_tdp_ram2c does
+    // (b_q <= mem[b_addr] on b_clk): the address the DUT presents BEFORE this
+    // edge is what the RAM captures AT it, and the data appears after it. This
+    // bench used to read with the address as updated BY the edge -- a RAM one
+    // cycle faster than the M10K on the board -- and so passed a pixel
+    // pipeline one stage too long for the pixel enable (R648).
+    static const bool RAMFAST = std::getenv("M2_VF_RAMFAST") != nullptr;   // the old model, for A/B
+    const uint32_t tram_a_pre = dut->tram_addr, pal_a_pre = dut->pal_addr;
     half(0);
     half(1);
     ++cyc;
     if (cyc == 128) dut->rst_n = 1;
 
-    // Registered reads land after the edge, addressed by what the DUT drove.
-    tram_q = (dut->tram_addr < tram.size()) ? tram[dut->tram_addr] : 0;
-    pal_q  = (dut->pal_addr  < pal.size())  ? pal[dut->pal_addr]   : 0;
+    const uint32_t ta = RAMFAST ? dut->tram_addr : tram_a_pre;
+    const uint32_t pa = RAMFAST ? dut->pal_addr  : pal_a_pre;
+    tram_q = (ta < tram.size()) ? tram[ta] : 0;
+    pal_q  = (pa < pal.size())  ? pal[pa]  : 0;
 
     if (!dut->ce_pix) continue;          // one pixel per ce_pix
 

@@ -595,6 +595,16 @@ int main(int argc, char **argv) {
     video_frame(false, &hits);           // the list is collected, then swapped in
     // R640: with the framebuffer, the list swapped in above is drawn once and
     // PUBLISHED at the next frame_start -- one frame later than the bands.
+    if (FBM) {   // R647: how long the list takes to draw, in core cycles from its swap
+      long c0 = -1, c1 = -1;
+      for (long k = 0; k < 20000000 && c1 < 0; k++) {
+        tick();
+        if (c0 < 0 && d->rootp->m2_raster3d__DOT__fb_busy) c0 = k;
+        if (c0 >= 0 && d->rootp->m2_raster3d__DOT__fb_complete) c1 = k;
+        if ((k % 3000) == 0) { d->scan_y = (d->scan_y + 1) % 424; }
+      }
+      std::printf("  R647 FB draw: %ld core cycles (%.2f video frames at 70 MHz / 57.5 Hz)\n", c1 - c0, (c1 - c0) / 1217391.0);
+    }
     if (FBM) {   // until the whole list has been drawn and published
       const int pre = std::getenv("M2_R3D_FBPRE") ? std::atoi(std::getenv("M2_R3D_FBPRE")) : 2;
       for (int k = 0; k < pre; k++) video_frame(false, &hits);

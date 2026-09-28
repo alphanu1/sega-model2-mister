@@ -24920,3 +24920,61 @@ wrong and no 3d!" Two findings, both against this entry:
     frames -- never completed one. Removed. A texel-cache fix, if the race
     matters, must invalidate the LINE written, not sweep the cache.
 s451 back on the board.
+
+**R648 -- THE TEST SCREEN'S BROKEN LETTERS: THE PIXEL PIPELINE WAS ONE STAGE
+LONGER THAN THE PIXEL ENABLE, AND THE BENCH'S PALETTE RAM WAS ONE CYCLE TOO
+FAST TO SEE IT. R647's CAUSE WAS WRONG.**
+
+Ben's bisect on the board, continued past R647: s522 (a rebuild of cb8bb60,
+R605) is "not quite right but better than the newest"; s511 (c94aa16) and
+s501 (fabba23) broken; s339 and earlier fine. cb8bb60 is the only commit in
+the range touching the 2D colour path: it registered the four line-buffer
+lanes before the mixer (rd_qq) to recover -0.074 ns (s340), and its comment
+counted the chain as reaching the palette data at E+5 "exactly in time" --
+without the xlat and gamma registers after it (R572, R582).
+
+The chain as built, hcnt moving at a ce_pix edge E: line buffer E+1, rd_qq
+E+2, pal_addr_q E+3, the palette M10K E+4, pal_data_q E+5, xlat E+6, gamma
+(pr_q) E+7. vid_r took pr_q at ce_d, one cycle after the next ce -- and ce
+is 16 per 100 clk_mem cycles, six or seven apart, so after a six-cycle gap
+ce_d is E+7 and takes the PREVIOUS pixel. A one-pixel-wide stroke followed by
+a one-pixel gap is lost wherever a six-cycle gap falls on it: N's diagonal
+becomes H, I loses its serifs. The seven-cycle gaps were right, which is why
+most of the screen looked fine.
+
+WHY tb_m2_video_frame PASSED IT, EXACT, FOR A MONTH. The bench answered a RAM
+read with the address the DUT drove AFTER the clock edge -- a RAM that
+registers its output but not its address, one cycle faster than the M10K
+(m2_tdp_ram2c: b_q <= mem[b_addr] on b_clk, where b_addr is pal_addr_q, itself
+a register). The bench now reads with the address presented before the edge;
+M2_VF_RAMFAST=1 restores the old model for comparison. Settings screen,
+frame 120, 190,464 pixels:
+
+    HEAD (5d544b8), hardware RAM model     1,568 differ -- the text rows only
+    HEAD, old fast RAM model               exact (the month of false passes)
+    HEAD minus rd_qq, hardware model       exact  -- cb8bb60 is the cause
+    HEAD, colour and flags on ce_dd        exact under BOTH models
+
+The fix keeps every register (the timing they bought is kept) and takes the
+outputs two cycles after ce instead of one: ce_dd is E+8 at the earliest and
+E+9 at the latest, pr_q holds until the next pixel's E'+7 >= E+13, and the
+flags move on ce_dd with the colour (R582's rule). The 3D mix in Model2.sv is
+selected after mix_r_q and sampled by the framework on the next ce, so it is
+unaffected by a one-cycle move of tile_r.
+
+What this corrects: R647 blamed the glyph cache's invalidate covering half a
+32-bit store. That RTL race is real and its fix is kept, but it was not the
+letters. And R647's "s347 -> s351 changes nothing but a debug counter" was a
+build-to-commit attribution that Ben disputed at the time; this mechanism is
+deterministic in the RTL, not seed-dependent, so it sides with him.
+
+Lesson for the bench: a RAM model must register the ADDRESS the RTL presents
+before the edge. A model that is one cycle faster than the silicon passes any
+pipeline that is one cycle too long -- exactly the fault it exists to catch.
+
+Also in this change: the DDR3 texture mirror (R645) is now wholly idle unless
+the menu selects it. With the switch on SDRAM only its reads were off; every
+texture upload was still copied into DDR3 through the arbiter the 3D
+framebuffer uses. Ben reports the newest builds' video as bugged since the
+mirror went in. Gating it removes that variable; switching to DDR3 mid-game
+now shows stale texels until the game uploads again.
