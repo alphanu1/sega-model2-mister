@@ -21,6 +21,18 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstdint>
+#include <map>
+
+// R640: M2_R3D_FB -- the DDR3 side of FB_DDR3 (build with -GFB_DDR3=1 -GFTB=0).
+// From the ddr3 branch's tb_m2_raster3d_fb: one command at a time, bursts of
+// fb_blen beats, reads LAT cycles out, writes a cycle after the command (as
+// m2_ddr3), the address and burst count checked constant for every beat
+// (Avalon), and UNWRITTEN MEMORY READS 0xFFFF... -- whose bit 24 is the
+// painted flag, so the first-frame gate is exercised.
+static std::map<uint32_t, uint64_t> g_ddr;
+static int g_ddr_cd = 0, g_ddr_left = 0, g_ddr_wr = 0;
+static uint32_t g_ddr_a = 0, g_ddr_a0 = 0; static unsigned g_ddr_b0 = 0;
+static long g_ddr_wbeats = 0, g_ddr_rbeats = 0, g_ddr_proto = 0;
 #include <vector>
 
 static int checks = 0, fails = 0;
@@ -111,6 +123,8 @@ int main(int argc, char **argv) {
   // R620: M2_R3D_POINT selects the nearest-texel mode; bilinear otherwise,
   // as the OSD's default is.
   d->tex_bilinear = std::getenv("M2_R3D_POINT") ? 0 : 1;
+  // R650: the texel step, log2 (0-3 for 1/2/4/8); default 2, PIXSTEP 4
+  d->tex_pxk = std::getenv("M2_R3D_PXK") ? std::atoi(std::getenv("M2_R3D_PXK")) : 2;
   d->tex_base0 = 0x1760000; d->tex_base1 = 0x17E0000;
   // R555: 1/z FOR EVERY VERTEX, WHICH THIS BENCH NEVER DROVE. q_oz0..3 (R334,
   // a minifloat: 8-bit exponent, top 8 mantissa bits) were left at zero, so the
@@ -158,7 +172,69 @@ int main(int argc, char **argv) {
                           ? atol(std::getenv("M2_R3D_SWEEP")) : 0;
   long sweep_ctr = 0;
   int tex_wait = -1, tex2_wait = -1, tex3_wait = -1, tex4_wait = -1;
+  static const bool FBM = std::getenv("M2_R3D_FB") != nullptr;
+  // R650: THE FRAMEBUFFER'S DRAW, WATCHED WHERE IT HAPPENS. A draw starts at
+  // the swap (a new list) and ends when fb_complete rises. Each
+  // draw's length is kept, and in list mode the fetches of the LAST complete
+  // draw are the ones written to fetch.txt -- the R647 probe looked for the
+  // draw after it had already finished and printed 0.
+  static long g_cyc = 0, g_draw_c0 = -1; static bool g_fc_prev = false, g_fbrec = false;
+  static std::vector<long> g_draws;
   auto tick = [&]() {
+    ++g_cyc;
+    if (FBM) {
+      const bool fc = d->rootp->m2_raster3d__DOT__fb_complete;
+      // the swap starts it, marked by fb_busy rising (a register; `swap` is a
+      // wire and reads stale here, before the tick's eval)
+      static bool g_fb_busy_prev = false;
+      const bool fbb = d->rootp->m2_raster3d__DOT__fb_busy;
+      if (fbb && !g_fb_busy_prev) { g_draw_c0 = g_cyc; if (g_fbrec) { g_fetch.clear(); g_rec = true; } }
+      g_fb_busy_prev = fbb;
+      if (!g_fc_prev && fc && g_draw_c0 >= 0) { g_draws.push_back(g_cyc - g_draw_c0); if (g_fbrec) g_rec = false; }
+      g_fc_prev = fc;
+    }
+    if (FBM) {   // R640
+      const int LAT = 20;
+      // R650: THE HPS'S OWN QUEUE (M2_R3D_WQ=<cycles to retire a write beat>).
+      // On the board a write is accepted into the memory controller's queue
+      // long before it reaches DDR3, and a read issued after it waits for it
+      // -- the renderer's arbiter orders requests on the FPGA side only. The
+      // queue holds WQMAX beats (writes stall beyond it); SCALER per mille of
+      // the memory's time goes to the framework's scaler. A read's first beat
+      // comes LAT cycles after the writes queued ahead of it have drained.
+      static const int WQ = std::getenv("M2_R3D_WQ") ? std::atoi(std::getenv("M2_R3D_WQ")) : 0;
+      static const long WQMAX = std::getenv("M2_R3D_WQMAX") ? atol(std::getenv("M2_R3D_WQMAX")) : 512;
+      static const int SCALER = std::getenv("M2_R3D_SCALER") ? std::atoi(std::getenv("M2_R3D_SCALER")) : 0;
+      static long backlog = 0, drain = 0; static uint64_t srng = 99;
+      if (WQ) {
+        srng = srng * 6364136223846793005ull + 1442695040888963407ull;
+        const bool stolen = SCALER && int((srng >> 33) % 1000) < SCALER;
+        if (!stolen && backlog > 0 && ++drain >= WQ) { drain = 0; --backlog; }
+      }
+      d->fb_wnext = 0; d->fb_rvalid = 0; d->fb_ack = 0;
+      if (g_ddr_left == 0 && d->fb_req) {
+        g_ddr_a = g_ddr_a0 = d->fb_addr; g_ddr_b0 = d->fb_blen;
+        g_ddr_left = d->fb_blen ? d->fb_blen : 256; g_ddr_wr = d->fb_we;
+        g_ddr_cd = g_ddr_wr ? 1 : LAT;
+      } else if (g_ddr_left > 0) {
+        if (d->fb_addr != g_ddr_a0 || d->fb_blen != g_ddr_b0) g_ddr_proto++;
+        if (WQ && !g_ddr_wr && g_ddr_cd > 0 && backlog > 0) { /* behind the queued writes */ }
+        else if (WQ && g_ddr_wr && backlog >= WQMAX) { /* the queue is full: the write waits */ }
+        else if (g_ddr_cd > 0) g_ddr_cd--;
+        else if (g_ddr_wr) {
+          if (WQ) ++backlog;
+          uint64_t old = g_ddr.count(g_ddr_a) ? g_ddr[g_ddr_a] : ~0ull, m = 0;
+          for (int b = 0; b < 8; b++) if (d->fb_be & (1 << b)) m |= 0xffull << (b * 8);
+          g_ddr[g_ddr_a] = (d->fb_din & m) | (old & ~m);
+          d->fb_wnext = 1; g_ddr_a++; g_ddr_left--; g_ddr_wbeats++;
+          if (g_ddr_left == 0) d->fb_ack = 1;
+        } else {
+          d->fb_dout = g_ddr.count(g_ddr_a) ? g_ddr[g_ddr_a] : ~0ull;
+          d->fb_rvalid = 1; g_ddr_a++; g_ddr_left--; g_ddr_rbeats++;
+          if (g_ddr_left == 0) d->fb_ack = 1;
+        }
+      }
+    }
     if (SWEEP) {
       if (++sweep_ctr >= SWEEP) { sweep_ctr = 0; d->tex_inval = 1; }
       else                        d->tex_inval = 0;
@@ -481,8 +557,9 @@ int main(int argc, char **argv) {
     g_tbase1 = d->tex_base1;
     struct V { double x, y, z, pu, pv; };
     struct P { int idx; unsigned z, h0, h1, h2, h3; std::vector<V> v; };
+    auto load_polys = [&](const std::string &pdir) {
     std::vector<P> polys;
-    { FILE *f = std::fopen((dir + "/polys.txt").c_str(), "r"); char line[8192];
+    { FILE *f = std::fopen((pdir + "/polys.txt").c_str(), "r"); char line[8192];
       while (f && std::fgets(line, sizeof line, f)) {
         P p; int win, n, vp[4]; unsigned luma; char *q = line;
         if (std::sscanf(q, "P %d z=%u win=%d h=%x,%x,%x,%x luma=%u vp=%d,%d,%d,%d n=%d",
@@ -493,10 +570,13 @@ int main(int argc, char **argv) {
       }
       if (f) std::fclose(f); }
     std::sort(polys.begin(), polys.end(), [](const P &a, const P &b) { return a.idx < b.idx; });
-    std::printf("  R615 list mode: %zu polygons from %s\n", polys.size(), lp);
+    std::printf("  R615 list mode: %zu polygons from %s\n", polys.size(), pdir.c_str());
+    return polys;
+    };
+    const std::vector<P> polys = load_polys(dir);
     auto mf16 = [](double x) -> uint16_t { union { float f; uint32_t b; } u; u.f = (float)x; return (uint16_t)(((u.b >> 23) & 0xff) << 8 | ((u.b >> 15) & 0xff)); };
     auto wide = [](double pu) -> uint32_t { if (!(pu >= 2.0)) return 0; double w = std::floor(pu / 2.0); return w > 32767 ? 32767u : (uint32_t)w; };
-    long nq = 0;
+    long nq = 0, nq_refused = 0;
     auto push_quad = [&](const P &p, int a, int b, int c, int e, bool last) {
       const int ix[4] = {a, b, c, e};
       int32_t X[4], Y[4]; uint16_t OZ[4]; uint32_t U[4], Vv[4];
@@ -540,25 +620,69 @@ int main(int argc, char **argv) {
       d->q_tex = tex & 0xffffff; d->q_col = ((uint32_t(p.idx) & 31) << 19) | (((uint32_t(p.idx) >> 5) & 63) << 10); d->q_moire = (tex >> 11) & 1;   // R623
       d->q_z = 0x3F800000u | (p.z & 0xffff);
       d->q_end = last;
+      if (!d->q_ready) ++nq_refused;   // R650: a quad the store did not take is LOST
       tick(); ++nq;
       d->q_valid = 0; d->q_end = 0;
     };
     d->frame_start = 0;
-    for (size_t i = 0; i < polys.size(); i++) {
-      const P &p = polys[i]; const int n = (int)p.v.size();
+    auto push_all = [&](const std::vector<P> &pl) {
+    for (size_t i = 0; i < pl.size(); i++) {
+      const P &p = pl[i]; const int n = (int)p.v.size();
       if (n < 3) continue;
-      const bool lastp = (i + 1 == polys.size());
+      const bool lastp = (i + 1 == pl.size());
       // a fan: (0,1,2,3), (0,3,4,5), ...; a triangle repeats its last vertex
       for (int k = 1; k < n - 1; k += 2) {
         const int c = k + 1, e = (k + 2 < n) ? k + 2 : k + 1;
         push_quad(p, 0, k, c, e, lastp && (k + 2 >= n - 1));
       }
     }
-    std::printf("  R615: %ld quads pushed\n", nq);
+    };
     long hits = 0;
+    // R650: A DRAW INTERRUPTED BY THE NEXT LIST. On the board a list arrives
+    // every ~2.09 video frames and a heavy draw takes longer, so the list being
+    // drawn is replaced part way through -- a case this bench had never run.
+    // M2_R3D_LIST2=<dir> is drawn first; M2_R3D_INTR core cycles into its draw
+    // the main list arrives and is swapped in over it. The frame finally shown
+    // must be the main list's, exactly as a clean draw of it (PXDUMP both).
+    if (const char *l2 = std::getenv("M2_R3D_LIST2")) {
+      const std::vector<P> pa = load_polys(l2);
+      push_all(pa);
+      // list A is swapped in at the frame_start after its last quad is stored
+      for (int k = 0; k < 4 && !d->rootp->m2_raster3d__DOT__fb_busy; k++) video_frame(false, &hits);
+      const long intr = std::getenv("M2_R3D_INTR") ? atol(std::getenv("M2_R3D_INTR")) : 500000;
+      for (long k = 0; k < intr; k++) { d->scan_x = 0; d->scan_y = (k / TPL) % V_TOTAL; tick(); }
+      std::printf("  R650 interrupt: list A (%zu polygons) drawn for %ld cycles, fb_busy %d fb_complete %d fill_band %d\n",
+                  pa.size(), intr, (int)d->rootp->m2_raster3d__DOT__fb_busy,
+                  (int)d->rootp->m2_raster3d__DOT__fb_complete, (int)d->rootp->m2_raster3d__DOT__fill_band);
+      g_draws.clear();
+    }
+    push_all(polys);
+    std::printf("  R615: %ld quads pushed, %ld REFUSED by the store (lost)\n", nq, nq_refused);
+    g_fbrec = FBM;                       // R650: record the draw this swap starts
     video_frame(false, &hits);           // the list is collected, then swapped in
-    g_rec = true;
+    // R640: with the framebuffer, the list swapped in above is drawn once and
+    // PUBLISHED at the next frame_start -- one frame later than the bands.
+    if (FBM) {   // until the whole list has been drawn and published
+      const int pre = std::getenv("M2_R3D_FBPRE") ? std::atoi(std::getenv("M2_R3D_FBPRE")) : 2;
+      for (int k = 0; k < pre; k++) video_frame(false, &hits);
+      // R650: the draw's own length, in core cycles and in video frames
+      for (long w : g_draws) std::printf("  R650 FB draw: %ld core cycles (%.2f video frames at 70 MHz / 57.5 Hz)\n", w, w / 1217391.0);
+      if (g_draws.empty()) std::printf("  R650 FB draw: NOT COMPLETE after %d frames\n", pre);
+    }
+    g_rec = !FBM;   // R650: with the framebuffer the draw above was recorded
+    px_dump = std::getenv("M2_R3D_PXDUMP") != nullptr;
     video_frame(true, &hits);            // the frame that displays it
+    px_dump = false;
+    if (FBM) std::printf("  R640 FB state: complete %d shown_ok %d show %d draw %d busy %d fill_band %d cst %d pixels %u clear_req %d clear_busy %d dvalid %d pst %d\n",
+      (int)d->rootp->m2_raster3d__DOT__fb_complete, (int)d->rootp->m2_raster3d__DOT__fb_shown_ok,
+      (int)d->rootp->m2_raster3d__DOT__fb_show, (int)d->rootp->m2_raster3d__DOT__fb_draw,
+      (int)d->rootp->m2_raster3d__DOT__fb_busy, (int)d->rootp->m2_raster3d__DOT__fill_band,
+      (int)d->rootp->m2_raster3d__DOT__cst, (unsigned)d->dbg_fb_pixels,
+      (int)d->rootp->m2_raster3d__DOT__fb_clear_req, (int)d->rootp->m2_raster3d__DOT__fb_clear_busy,
+      (int)d->rootp->m2_raster3d__DOT__dvalid, (int)d->rootp->m2_raster3d__DOT__pst);
+    if (FBM) std::printf("  R640 FB: %ld write beats, %ld read beats, %ld Avalon violations, published %u dropped %u; R650 scanout lines %u LATE %u\n",
+                         g_ddr_wbeats, g_ddr_rbeats, g_ddr_proto, (unsigned)d->dbg_fb_pub, (unsigned)d->dbg_fb_drop,
+                         (unsigned)d->dbg_fb_lines, (unsigned)d->dbg_fb_late);
     g_rec = false;
     FILE *fo = std::fopen((dir + "/fetch.txt").c_str(), "w");
     for (const Fetch &f : g_fetch) std::fprintf(fo, "%d %d %u %u %u %u\n", f.y, f.x, f.u, f.v, f.t, f.c);

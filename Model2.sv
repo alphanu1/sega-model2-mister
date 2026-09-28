@@ -31,7 +31,7 @@ assign {UART_RTS, UART_DTR} = 0;
 // UART_TXD is driven by the debug streamer at the bottom of this file. The
 // core's own printf -- see rtl/dbg/m2_dbg_stream.sv for why it exists.
 assign {SD_SCK, SD_MOSI, SD_CS} = 'Z;
-assign {DDRAM_CLK, DDRAM_BURSTCNT, DDRAM_ADDR, DDRAM_DIN, DDRAM_BE, DDRAM_RD, DDRAM_WE} = '0;
+// R640: DDRAM is driven by m2_ddr3, beside m2_raster3d below.
 
 assign VGA_SL  = 0;
 assign VGA_F1  = 0;
@@ -175,6 +175,17 @@ localparam CONF_STR = {
 	// R620: BILINEAR, WITH AN OFF SWITCH, for the same reason. Point is the
 	// nearest of the same four texels -- this core's picture before R620.
 	"O[31],Texture filter,Bilinear,Point;",
+	// R650: THE TEXEL STEP -- pixels one texel fetch serves. 1 is MAME's
+	// sharpness; 2, 4 and 8 draw faster (a heavy list draws in ~5.2, 3.1,
+	// 1.9 video frames at 1, 2, 4 -- a list comes every ~2.1) and the 3D
+	// updates at whichever is slower, the game or the draw. Latched per span:
+	// it changes cleanly at any time. (Bits 35:34 were the texture view's.)
+	"O[35:34],Texel step,1,2,4,8;",
+	// R652: HOLD GAME -- when the 3D draw is slower than the game, the game
+	// waits for it (no vblank interrupt while a finished list waits), so the
+	// 2D keeps the 3D's pace: arcade slowdown. FREE lets the game run on and
+	// the 3D fall behind the HUD.
+	"O[36],3D pacing,Hold game,Free;",
 	// R630: GAMMA, because MAME's curve is MAME's guess at cabinet
 	// calibration (m2_palette) and the board is judged on Ben's own screen.
 	// MAME's is entry zero, the reference; Mild lifts the darks; Off is the
@@ -572,6 +583,19 @@ always_ff @(posedge clk_mem) begin gam_m1 <= gam_menu; gam_m2 <= gam_m1; end
 always_ff @(posedge clk_sys) begin gam_s1 <= gam_menu; gam_s2 <= gam_s1; end
 reg [2:0] texpt_s;   // R620: the filter switch, on clk_mem where the texel cache runs
 always_ff @(posedge clk_mem) texpt_s <= {texpt_s[1:0], status[31]};
+// R650: the texel step, into clk_sys where m2_span_tex runs (three flops,
+// R229). Quasi-static, and each span latches it whole.
+reg [1:0] pxk_s1, pxk_s2, pxk_s3;
+always_ff @(posedge clk_sys) begin pxk_s1 <= status[35:34]; pxk_s2 <= pxk_s1; pxk_s3 <= pxk_s2; end
+// R650: the renderer's texture and framebuffer counters, read by telemetry 'T'
+// (declared here, ahead of their first use in the telemetry block)
+wire [15:0] tex_lost, tex_to, fb_pub, fb_drop, fb_lines, fb_late;
+// R652: the renderer holds the game while a finished list waits for its draw
+// (m2_raster3d list_hold, clk_sys) -- unless the OSD says Free.
+wire        r3d_list_hold;
+reg  [2:0]  pace_free_s;
+always_ff @(posedge clk_sys) pace_free_s <= {pace_free_s[1:0], status[36]};
+wire        r3d_game_hold = r3d_list_hold && !pace_free_s[2];
 // R265: THE WALK TRIGGER WAS THE ONE OSD BIT TAKEN RAW. Every other option in
 // this core reaches the datapath through three flops (R229) and this one went
 // straight from `status` into the geometrizer's mode select. The board showed
@@ -2263,7 +2287,13 @@ always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
 		vbl_s  <= tile_vb;
 		vbl_d  <= vbl_s;
 		vbl_dd <= vbl_d;
-		if (vbl_d && !vbl_dd) begin
+		// R652: NOT WHILE THE 3D IS BEHIND. A vblank the game does not see is
+		// a frame it waits out: its 2D (tile RAM) and its next display list
+		// stay as they are until the draw in progress is whole, and the next
+		// vblank after that proceeds as normal -- interrupt, count and walk
+		// together. The hold is at most one draw (~5 video frames at texel
+		// step 1 on the heaviest scenes).
+		if (vbl_d && !vbl_dd && !r3d_game_hold) begin
 			io_framenum <= io_framenum + 32'd1;
 			if (io_intena[0]) io_intreq[0] <= 1'b1;
 		end
@@ -2612,7 +2642,10 @@ assign cpu_irq = { |(io_intreq & 12'hc00), |(io_intreq & 12'h3fc),
 // io_framenum counts the same vblanks the reference's frame_number does, and
 // the game reads its parity back through 0x98000c, so the parity here is the
 // parity the game sees.
-assign geo_walk_start = vbl_d && !vbl_dd && !nowalk_s[2]
+// R652: and no walk while the 3D holds the game -- the store is not taking
+// quads, and a walk that stalled would be reading a list the game might be
+// rewriting (R256's hazard). The walk and the frame count move together.
+assign geo_walk_start = vbl_d && !vbl_dd && !nowalk_s[2] && !r3d_game_hold
                           && (wrate_s[2] || !io_videoctl[0] || !io_framenum[0]);
 
 assign cpu_io_rdata =
@@ -2865,6 +2898,16 @@ wire [15:0] geo_sd_din;
 
 wire [19:0] geo_dbg_rp, geo_dbg_wp;
 
+// R642: the window command's words, and the projection made from them.
+wire [31:0] geo_win_vp_s, geo_win_vp_e, geo_win_c0;
+wire [31:0] gv_xc, gv_yc, gv_a_left, gv_a_right, gv_a_bottom, gv_a_top;
+m2_geo_view #(.CRTC_X(0), .CRTC_Y(128)) u_geo_view (
+	.clk(clk_sys), .rst_n(mem_rst_n),
+	.win_vp_s(geo_win_vp_s), .win_vp_e(geo_win_vp_e), .win_c0(geo_win_c0),
+	.xc(gv_xc), .yc(gv_yc), .a_left(gv_a_left), .a_right(gv_a_right),
+	.a_bottom(gv_a_bottom), .a_top(gv_a_top)
+);
+
 m2_geo #(.AW(SDR_AW), .DEPTH(128)) u_geo (
 	.clk(clk_sys), .rst_n(mem_rst_n),
 	.wr_ctl(geo_wr_ctl), .wr_setwp(geo_wr_setwp), .wr_setrp(geo_wr_setrp),
@@ -2897,6 +2940,7 @@ m2_geo #(.AW(SDR_AW), .DEPTH(128)) u_geo (
 	// The light vector, for the luminance stage. Captured but not yet consumed:
 	// the dot products and the diffuse/ambient scale are still to come.
 	.zadj_e(geo_zadj_e),
+	.win_vp_s(geo_win_vp_s), .win_vp_e(geo_win_vp_e), .win_c0(geo_win_c0), .win_cnt(),   // R642
 	.lit_x(geo_lit_x), .lit_y(geo_lit_y), .lit_z(geo_lit_z),
 	.dbg_lit_n(geo_lit_n), .dbg_nops(geo_nops),
 	.dbg_walk_flip(geo_walk_flip), .dbg_walk_fallback(geo_walk_fb), .push_stall(geo_push_stall),
@@ -3065,13 +3109,12 @@ m2_geometry u_geometry (
 	// viewport and centre (model2_v.cpp:882); for a 496x384 screen centred at
 	// (248,192) they come out as -248, +248, +192, -192.
 	//
-	// STILL CONSTANT, AND THAT IS THE REMAINING GAP HERE. Model 2 sets the
-	// centre and viewport with rasterizer commands the core does not capture
-	// yet, and the CRTC sync registers offset them further. A game that moves
-	// its viewport draws to the wrong place -- visibly, rather than silently.
-	.xc(32'h43780000), .yc(32'h43400000),               // 248.0, 192.0
-	.a_left(32'hC3780000), .a_right(32'h43780000),      // -248.0, +248.0
-	.a_bottom(32'h43400000), .a_top(32'hC3400000),      // +192.0, -192.0
+	// R642: NO LONGER CONSTANT. The walker reads geo_window_data and
+	// m2_geo_view turns its viewport and centre into these, as MAME does; the
+	// CRTC offsets (0, 128 on Daytona, logged from MAME) are its parameters.
+	.xc(gv_xc), .yc(gv_yc),
+	.a_left(gv_a_left), .a_right(gv_a_right),
+	.a_bottom(gv_a_bottom), .a_top(gv_a_top),
 	// R222: the light, the texture parameters and the header address from the
 	// walker; the colour data through the engine's own port, by space.
 	.tha(geo_obj_tha), .tpa(geo_obj_tpa), .lit_x(geo_lit_x), .lit_y(geo_lit_y), .lit_z(geo_lit_z),
@@ -4543,6 +4586,14 @@ end else begin : g_nodbg
 	// UART).
 	logic [2:0]  lt_div;
 	logic [1:0]  lt_asel;
+	// R650: 'T' takes every other 'C' slot (the UART is ~80% full):
+	//   {framebuffer frames published, lists dropped} |
+	//   {scanout lines read from DDR3, lines asked for before the last landed}
+	// all running totals (m2_raster3d, clk_sys). s540 carried the texel misses
+	// SDRAM never answered and the crossing's own answers here instead: 0 and 0
+	// over 7,474 vblanks of attract, so they gave their place up.
+	logic        lt_ct;
+
 	logic [31:0] lt_cwait;
 	always_ff @(posedge clk_i960 or negedge cpu_rst_n) begin
 		if (!cpu_rst_n)             lt_cwait <= 32'd0;
@@ -4559,14 +4610,15 @@ end else begin : g_nodbg
 	logic [31:0] lt_b_addr, lt_b_data;
 	always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		if (!mem_rst_n) begin
-			lt_div <= 3'd0; lt_asel <= 2'd0; lt_a_valid <= 1'b0; lt_flips <= 16'd0; lt_vbl <= 16'd0;
+			lt_div <= 3'd0; lt_asel <= 2'd0; lt_a_valid <= 1'b0; lt_flips <= 16'd0; lt_vbl <= 16'd0; lt_ct <= 1'b0;
 			lt_tgp0 <= 16'd0; lt_b_valid <= 1'b0; lt_b_addr <= '0; lt_b_data <= '0;
 		end else begin
 			lt_a_valid <= 1'b0; lt_b_valid <= 1'b0;
 			if (prof_tick) begin
 				lt_div <= lt_div + 3'd1;
 				lt_a_valid <= (lt_div == 3'd0) || (lt_div == 3'd3) || (lt_div == 3'd6);
-				lt_asel    <= (lt_div == 3'd3) ? 2'd1 : (lt_div == 3'd6) ? 2'd2 : 2'd0;
+				lt_asel    <= (lt_div == 3'd3) ? 2'd1 : (lt_div == 3'd6) ? 2'd2 : (lt_ct ? 2'd3 : 2'd0);
+				if (lt_div == 3'd0) lt_ct <= ~lt_ct;
 			end
 			if (geo_wr_setrp) lt_flips <= lt_flips + 16'd1;
 			if (vbl_d && !vbl_dd) begin
@@ -4581,10 +4633,10 @@ end else begin : g_nodbg
 	m2_dbg_stream #(.DIVISOR((SYS_MHZ * 1_000_000 + 57_600) / 115_200), .BUDGET_CYC(200_000)) u_dbg_lite (
 		.clk(clk_sys), .rst_n(mem_rst_n),
 		.a_valid(lt_a_valid),
-		.a_addr((lt_asel == 2'd1) ? cpu_dbg_acc : (lt_asel == 2'd2) ? dc_miss : cpu_dbg_ip),
-		.a_data((lt_asel == 2'd1) ? dc_hits : (lt_asel == 2'd2) ? lt_cwait : {copro_stall, 15'd0, tgp_pc}),
+		.a_addr((lt_asel == 2'd1) ? cpu_dbg_acc : (lt_asel == 2'd2) ? dc_miss : (lt_asel == 2'd3) ? {fb_pub, fb_drop} : cpu_dbg_ip),
+		.a_data((lt_asel == 2'd1) ? dc_hits : (lt_asel == 2'd2) ? lt_cwait : (lt_asel == 2'd3) ? {fb_lines, fb_late} : {copro_stall, 15'd0, tgp_pc}),
 		.b_valid(lt_b_valid), .b_addr(lt_b_addr), .b_data(lt_b_data),
-		.a_tag((lt_asel == 2'd1) ? 8'h50 : (lt_asel == 2'd2) ? 8'h51 : 8'h43), .b_tag(8'h47),   // 'P','Q','C'; 'G' (was 'F': R639)
+		.a_tag((lt_asel == 2'd1) ? 8'h50 : (lt_asel == 2'd2) ? 8'h51 : (lt_asel == 2'd3) ? 8'h54 : 8'h43), .b_tag(8'h47),   // 'P','Q','T','C'; 'G' (was 'F': R639)
 		.enable(1'b1),
 		.tx(UART_TXD), .dbg_dropped(uart_dropped)
 	);
@@ -5614,12 +5666,24 @@ assign char_data = ccf_data;
 // level are enough and the index crosses as it is. The last invalidate lands
 // after the SDRAM write has completed, as it did at 2:1.
 logic [1:0] cwr_s;
+logic [3:0] cwr_tail;   // R647: go on invalidating 16 cycles after the write's level drops
 always_ff @(posedge clk_mem or negedge cc_rst_n_s) begin
-	if (!cc_rst_n_s) cwr_s <= 2'b00;
-	else             cwr_s <= {cwr_s[0], cpu_char_wr};
+	if (!cc_rst_n_s) begin cwr_s <= 2'b00; cwr_tail <= 4'd0; end
+	else begin
+		cwr_s <= {cwr_s[0], cpu_char_wr};
+		if (cwr_s[1])              cwr_tail <= 4'hF;
+		else if (cwr_tail != 4'd0) cwr_tail <= cwr_tail - 4'd1;
+	end
 end
+// R647: the index is the bridge's latched address, which holds until its next
+// request -- several states after the write -- so it is still this write's
+// line through the tail.
+wire cwr_inval = cwr_s[1] || (cwr_tail != 4'd0);
 
-m2_char_cache #(.IDX_BITS(12)) u_char_cache (   // R313: 32 KB, an ALM/M10K trade -- see the module
+// R644: BACK TO 64 KB. R313 halved it for block RAM; the framebuffer (R640)
+// returned ~50 M10K, and R313/R320 measured the halving at 14 -> 53 scanline
+// overruns a frame -- the tile rows Ben still sees repeat.
+m2_char_cache #(.IDX_BITS(13)) u_char_cache (
 	.clk(clk_mem), .rst_n(cc_rst_n_s),
 	.v_req(ccf_req), .v_addr(ccf_addr),
 	.v_ack(ccf_ack), .v_data(ccf_data),
@@ -5629,7 +5693,7 @@ m2_char_cache #(.IDX_BITS(12)) u_char_cache (   // R313: 32 KB, an ALM/M10K trad
 	// IDX_BITS: [14:2] for 13 bits, not [15:2]. A stale width here invalidates
 	// the wrong line on a CPU character write, which shows up as glyphs that
 	// are correct until the game rewrites one and then stay stale.
-	.inval(cwr_s[1]), .inval_idx(cpu_char_wr_addr[13:2]),   // R313: IDX_BITS 13 -> 12; R564: synchronised
+	.inval(cwr_inval), .inval_idx(cpu_char_wr_addr[14:2]),   // R644: IDX_BITS 13 again; R564: synchronised
 	.dbg_hits(char_hits), .dbg_misses(char_misses), .dbg_fills(char_fills)
 );
 
@@ -5807,7 +5871,7 @@ wire [31:0] tex_pixels, tex_hits, tex_misses, tex_nz;
 
 // R292: port 3 is the glyph cache's alone again; the ownership lock that
 // shared it is in git, one commit back.
-wire [15:0] tex_lost;
+// R650: tex_lost, tex_to, fb_pub, fb_drop are declared above the telemetry.
 wire [15:0] tex_sweep;
 wire [15:0] oz_d0, oz_d1, oz_d2, oz_d3;   // R334: 1/z off the quad store   // R310: whole-cache clears, to separate cold starts from thrash
 
@@ -5863,7 +5927,39 @@ wire        tex_m2_ack  = p2_tex_f & p_ack[2];
 wire [63:0] tex_m2_data = p_dout[2];
 
 // R543: back to 8x6 -- R542's 16x3 won in the bench and not on the board.
-m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1),   // R607
+// R640: THE DDR3 MASTER, DRIVING THE 3D FRAMEBUFFER (from branch ddr3, R358).
+//
+// ON clk_sys, THE CLOCK ITS CONSUMERS RUN ON (R377): m2_ddr3 hands out
+// single-cycle ack/rvalid/wnext, and on clk_mem half of them were lost to
+// m2_raster3d on clk_sys. DDRAM_CLK is ours to drive, so the bridge runs at 70.
+//
+// AND IT WAITS FOR THE BOOT (R380, never tried on that branch). Four builds
+// there showed the coprocessor dying exactly when the framebuffer reader began
+// to work -- the reader was the one master that did not wait for the ROM and
+// TGP microcode to finish crossing the HPS bridge. It is held in reset until
+// cp_done, the same condition the rest of the core's late masters wait on.
+wire        ddr_req, ddr_we, ddr_ack, ddr_wnext, ddr_rvalid;
+wire [24:0] ddr_addr;
+wire [7:0]  ddr_blen, ddr_be;
+wire [63:0] ddr_din, ddr_dout;
+logic       ddr_go;
+always_ff @(posedge clk_sys or negedge mem_rst_n)
+	if (!mem_rst_n) ddr_go <= 1'b0; else ddr_go <= cp_done;
+m2_ddr3 u_ddr3 (
+	.clk(clk_sys), .rst_n(mem_rst_n & ddr_go),
+	.req(ddr_req), .we(ddr_we), .addr(ddr_addr), .blen(ddr_blen), .din(ddr_din), .be(ddr_be),
+	.wnext(ddr_wnext), .rvalid(ddr_rvalid), .ack(ddr_ack), .dout(ddr_dout),
+	.DDRAM_CLK(DDRAM_CLK), .DDRAM_BUSY(DDRAM_BUSY),
+	.DDRAM_BURSTCNT(DDRAM_BURSTCNT), .DDRAM_ADDR(DDRAM_ADDR),
+	.DDRAM_DIN(DDRAM_DIN), .DDRAM_BE(DDRAM_BE),
+	.DDRAM_WE(DDRAM_WE), .DDRAM_RD(DDRAM_RD),
+	.DDRAM_DOUT(DDRAM_DOUT), .DDRAM_DOUT_READY(DDRAM_DOUT_READY),
+	.dbg_lat_last(), .dbg_lat_max(), .dbg_inflight_max(), .dbg_stuck_wr(), .dbg_acks()
+);
+
+// R640: FB_DDR3 -- the 3D layer is drawn into DDR3 and shown only when whole.
+// FTB off: its mask is fed by the band buffers, which are not built.
+m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b0), .FB_DDR3(1'b1),
               .PXC(1'b1), .PIXSTEP(4), .FRB(2),   // R626: quarter-pixel plane fit
               .TXLATE(3),   // R627: point-sample while the fill is within 3 bands of the beam
               .TXREUSE(1'b0),   // R633: every other group while late -- REJECTED by eye (R634)
@@ -5892,6 +5988,8 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1),   // R
 	.q_tex({q3d_tex[23:1], q3d_tex[0] && !texoff_s[2]}),
 	.tex_base0(GAME_TEXS0), .tex_base1(GAME_TEXS1), .tex_inval(cpu_tex_inval),
 	.tex_bilinear(!texpt_s[2]),   // R620
+	.tex_pxk(pxk_s3),             // R650: the OSD's texel step
+	.list_hold(r3d_list_hold),    // R652
 	.tex_m2_en(tex_m2_en), .tex_m2_req(tex_m2_req), .tex_m2_addr(tex_m2_addr),
 	// R628: the texel cache's third and fourth ports, unused at TXNS = 2
 	.tex_m3_en(1'b0), .tex_m3_req(), .tex_m3_addr(), .tex_m3_ack(1'b0), .tex_m3_data(64'd0),
@@ -5900,7 +5998,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1),   // R
 	.tex_m_req(tex_m_req), .tex_m_addr(tex_m_addr),
 	.tex_m_ack(tex_m_ack), .tex_m_data(tex_m_data),
 	.dbg_texpix(tex_pixels), .dbg_texhit(tex_hits), .dbg_texmiss(tex_misses),
-	.dbg_texlost(tex_lost), .dbg_oz0(oz_d0), .dbg_oz1(oz_d1), .dbg_oz2(oz_d2), .dbg_oz3(oz_d3),
+	.dbg_texlost(tex_lost), .dbg_texto(tex_to), .dbg_oz0(oz_d0), .dbg_oz1(oz_d1), .dbg_oz2(oz_d2), .dbg_oz3(oz_d3),
 	.dbg_texsweep(tex_sweep), .dbg_texnz(tex_nz),
 	.dbg_fill_hot(r3d_fill_hot), .dbg_fill_hotcyc(r3d_fill_hotcyc),   // R436
 	.dbg_walk_hot(r3d_walk_hot), .dbg_walk_hotcyc(r3d_walk_hotcyc),
@@ -5920,7 +6018,12 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1),   // R
 	.dbg_late_frames(r3d_late_frames), .dbg_qend_frames(r3d_qend_frames),
 	.dbg_collect_cyc(r3d_collect_cyc), .dbg_hold(r3d_hold), .dbg_missed(r3d_missed),
 	.dbg_miss_map(r3d_miss_map), .dbg_miss_lines(r3d_miss_lines),
-	.dbg_seq_a(r3d_seq_a), .dbg_seq_b(r3d_seq_b)   // R536, R547
+	.dbg_seq_a(r3d_seq_a), .dbg_seq_b(r3d_seq_b),   // R536, R547
+	// R640: the framebuffer's DDR3 side
+	.fb_req(ddr_req), .fb_we(ddr_we), .fb_addr(ddr_addr), .fb_blen(ddr_blen),
+	.fb_din(ddr_din), .fb_be(ddr_be),
+	.fb_wnext(ddr_wnext), .fb_rvalid(ddr_rvalid), .fb_ack(ddr_ack), .fb_dout(ddr_dout),
+	.dbg_fb_lines(fb_lines), .dbg_fb_late(fb_late), .dbg_fb_pub(fb_pub), .dbg_fb_drop(fb_drop), .dbg_fb_pixels()
 );
 
 // The 3D layer sits OVER the tilemap where it painted, and shows the tilemap

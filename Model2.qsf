@@ -479,7 +479,9 @@ set_global_assignment -name VERILOG_MACRO "M2_NO_OVERLAY=1"
 set_global_assignment -name VERILOG_MACRO "M2_NO_DEBUG=1"
 # R637: telemetry lite (UART C/F records, ~230 ALM) -- a measurement build; see Model2.sv g_nodbg
 # R639: off for the beta keeper -- with the CPU counters it needs 4,211 LABs of 4,191.
-# set_global_assignment -name VERILOG_MACRO "M2_DEBUG_LITE=1"
+# R645: ON for the measurement build (the framebuffer freed the room).
+# R649: kept on with the texture mirror removed -- the texture work needs it.
+set_global_assignment -name VERILOG_MACRO "M2_DEBUG_LITE=1"
 
 # Disable ALSA audio output to save some resources.
 # ENABLED, 251.5 ALM. ALSA is the HPS/Linux audio channel INTO audio_out's
@@ -763,6 +765,11 @@ set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to SD_SPI*
 set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to USER_IO[*]
 set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to VGA_EN
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_diag.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/mem/m2_ddr3.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/mem/m2_ddr3_arb.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_fb_write.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_fb_read.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_geo_view.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/mem/m2_sdram.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/mem/m2_sdram_cdc.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/mem/m2_wr_arb.sv

@@ -74,7 +74,10 @@ module m2_texel_cdc #(
   output logic [18:0] f_waddr,
   output logic        f_sheet,
   output logic        f_x2p,
-  output logic        f_y2p
+  output logic        f_y2p,
+  // R650: fetches answered HERE (TO_VAL) because the cache took none for
+  // TO_CYC cycles -- on clk_fast, saturating. Each one paints TO_VAL.
+  output logic [15:0] dbg_to
 );
 
   localparam int unsigned PW = $clog2(K) + 1;   // one spare bit: full vs empty
@@ -208,5 +211,9 @@ module m2_texel_cdc #(
   end
 
   assign f_req = f_valid;
+
+  always_ff @(posedge clk_fast or negedge f_rst_n)
+    if (!f_rst_n)                       dbg_to <= 16'd0;
+    else if (f_timeout && !(&dbg_to))   dbg_to <= dbg_to + 16'd1;
 
 endmodule

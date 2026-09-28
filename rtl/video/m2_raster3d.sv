@@ -79,6 +79,12 @@ module m2_raster3d #(
   // memory clock. The logic is kept rather than deleted precisely because that
   // move is planned and R199 records what it costs to rediscover.
   parameter bit TWO_CLOCKS = 1'b0,   // R545: what Model2.sv builds (R508's lesson)
+  // R640: THE DDR3 FRAMEBUFFER (ported from branch ddr3, R355-R380). At 1 the
+  // band buffers are not built, the fill is not beam-paced, a list is drawn
+  // ONCE into DDR3 and shown only when complete, and the scanout reads it a
+  // line ahead. Requires FTB = 0: the front-to-back mask is fed by the
+  // painting band, and there are no bands.
+  parameter bit FB_DDR3 = 1'b0,
   // R275: the SDRAM address width the texel fetch drives.
   parameter int unsigned TEX_AW = 25
 ) (
@@ -119,6 +125,11 @@ module m2_raster3d #(
   input  logic [TEX_AW:1] tex_base0, tex_base1,
   input  logic            tex_inval,
   input  logic            tex_bilinear,   // R620: on clk_mem, quasi-static (OSD)
+  input  logic [1:0]      tex_pxk,        // R650: texel step 1/2/4/8 as log2, on clk (OSD)
+  // R652: a finished list is waiting for the draw in progress (FB_DDR3). The
+  // top level holds the GAME on it -- no vblank interrupt, no frame count, no
+  // walk -- so the 2D the game writes keeps the 3D's pace.
+  output logic            list_hold,
   output logic            tex_m_req,
   output logic [TEX_AW:1] tex_m_addr,
   input  logic            tex_m_ack,
@@ -138,6 +149,7 @@ module m2_raster3d #(
   input  logic [63:0]     tex_m3_data, tex_m4_data,
   output logic [31:0]     dbg_texpix, dbg_texhit, dbg_texmiss, dbg_texnz,
   output logic [15:0]     dbg_texlost,
+  output logic [15:0]     dbg_texto,      // R650: m2_texel_cdc's local answers (clk_mem)
   output logic [15:0] dbg_oz0, dbg_oz1, dbg_oz2, dbg_oz3,   // R334
   output logic [15:0] dbg_texsweep,
   // R436: the fill's and the walk's longest-dwelt states
@@ -205,7 +217,24 @@ module m2_raster3d #(
   // fetch credits, span walk stalled by the painter} (R554).
   // b is zero (R547's first form had eight counters and did not fit).
   output logic [31:0] dbg_seq_a,
-  output logic [31:0] dbg_seq_b
+  output logic [31:0] dbg_seq_b,
+
+  // ---- R640: the DDR3 side (m2_ddr3's consumer port, on `clk`)
+  output logic        fb_req,
+  output logic        fb_we,
+  output logic [24:0] fb_addr,
+  output logic [7:0]  fb_blen,
+  output logic [63:0] fb_din,
+  output logic [7:0]  fb_be,
+  input  logic        fb_wnext,
+  input  logic        fb_rvalid,
+  input  logic        fb_ack,
+  input  logic [63:0] fb_dout,
+  output logic [15:0] dbg_fb_lines,
+  output logic [15:0] dbg_fb_late,
+  output logic [15:0] dbg_fb_pub,    // frames published
+  output logic [15:0] dbg_fb_drop,   // lists replaced before they were drawn
+  output logic [31:0] dbg_fb_pixels
 );
 
   localparam int unsigned NBANDS = (SCR_H + BAND_H - 1) / BAND_H;
@@ -495,6 +524,7 @@ module m2_raster3d #(
   m2_span_tex #(.PIXSTEP(PIXSTEP), .TXK(8), .FTB(FTB), .GC(PXC), .SCR_W(SCR_W), .BAND_H(BAND_H),
                 .REUSE(TXREUSE)) u_spantex (   // R633
     .clk(clk), .rst_n(rst_n),
+    .pxk(tex_pxk),   // R650
     .mk_valid(mk_valid), .mk_we(mk_we), .mk_waddr(mk_pwi), .mk_wdata(mk_wd),   // R607
     .mk_band_y0(mk_y0),
     .in_valid(sq_qv), .in_ready(sq_rdy), .busy(spantex_busy),
@@ -580,7 +610,7 @@ module m2_raster3d #(
     .s_u(tex_u), .s_v(tex_v), .s_texel(tex_texel), .s_take(tex_take),
     .f_req(txf_req), .f_rdy(txf_rdy), .f_ack(txf_ack), .f_tex(txf_tex),
     .f_u(txf_u), .f_v(txf_v), .f_texel(txf_texel),
-    .f_waddr(), .f_sheet(), .f_x2p(), .f_y2p()
+    .f_waddr(), .f_sheet(), .f_x2p(), .f_y2p(), .dbg_to(dbg_texto)   // R650
   );
 
   // R328: IDX_BITS 11 -- 2048 lines / 16 KB, SET HERE AND NOT IN THE MODULE.
@@ -633,6 +663,169 @@ module m2_raster3d #(
   // already quantised upstream, so this costs less than it looks.
   wire [15:0] span_565 = {tx_span_col[23:19], tx_span_col[15:10], tx_span_col[7:3]};
 
+  // ------------------------------------------------ R640: the DDR3 framebuffer
+  //
+  // From branch ddr3 (R355-R360), with two changes for today's clocks. The
+  // branch ran the scanout on `clk`; since R564 it is on clk_mem (TWO_CLOCKS),
+  // so the line-ahead request crosses by a toggle and two flops, and the line
+  // number is read only after the toggle has arrived (it changes once a line).
+  //
+  // WHICH BUFFER IS WHICH (R359). `fb_draw` is drawn into; `fb_show` is the
+  // last COMPLETE frame, taken at a frame_start so the reader never changes
+  // buffer part way down the screen. A list that arrives while the previous is
+  // still being drawn replaces it in place (counted as a drop) -- the display
+  // keeps the last complete frame, which is what the hardware does.
+  // R650: AND NOT WHILE A DRAW IS IN FLIGHT. A list swapped in over a draw
+  // restarted it in place (R359's "replaces it in place"), and that restart
+  // was wrong three ways: the band being filled finished with the NEW list's
+  // quads at the old band's place, C_DONE then advanced the just-reset
+  // fill_band to 1 so band 0 was never drawn, and the list-clear ran under the
+  // band still writing. The frame still reached fb_complete and was shown.
+  // s540 counted 7 such drops in 150 s at PIXSTEP 4; at PIXSTEP 1 (a draw of
+  // 3.5-5 video frames against a list every 2.09) nearly every draw was one --
+  // tb_m2_raster3d M2_R3D_LIST2 reproduced it, rows 0-7 wrong across the whole
+  // width. Now the new list waits, sorted, until the draw is whole; the store
+  // stops collecting meanwhile and the geometry waits on q_ready. Every frame
+  // published is one list drawn start to finish.
+  logic fb_draw, fb_show, fb_shown_ok, fb_complete, fb_busy;
+  wire swap = frame_start && (pst == P_READY) && !(FB_DDR3 && fb_busy);
+  assign list_hold = FB_DDR3 && (pst == P_READY) && fb_busy;   // R652
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      fb_draw <= 1'b0; fb_show <= 1'b1; fb_shown_ok <= 1'b0; fb_busy <= 1'b0;
+      dbg_fb_pub <= 16'd0; dbg_fb_drop <= 16'd0;
+    end else if (FB_DDR3) begin
+      if (frame_start && fb_complete) begin
+        fb_show     <= fb_draw;
+        fb_shown_ok <= 1'b1;
+      end
+      if (swap) begin
+        fb_busy <= 1'b1;
+        if (fb_busy) begin
+          if (!(&dbg_fb_drop)) dbg_fb_drop <= dbg_fb_drop + 16'd1;
+        end else if (fb_complete) begin
+          fb_draw <= ~fb_draw;
+          if (!(&dbg_fb_pub)) dbg_fb_pub <= dbg_fb_pub + 16'd1;
+        end
+      end else if (fb_complete) fb_busy <= 1'b0;
+    end
+  end
+
+  logic [23:0] fb_rd_col;
+  logic        fb_rd_hit;
+  logic        fbw_ready;
+  logic        fb_clear_req, fb_clear_busy;
+  // Cleared when a NEW LIST arrives, not every frame (R359).
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n)                 fb_clear_req <= 1'b0;
+    else if (FB_DDR3 && swap)   fb_clear_req <= 1'b1;
+    else if (fb_clear_busy)     fb_clear_req <= 1'b0;
+  end
+
+  generate
+    if (FB_DDR3 && FTB) begin : g_fb_needs_ftb0
+      FB_DDR3_requires_FTB_0 u_error ();   // no such module: elaboration stops here
+    end
+    if (FB_DDR3) begin : g_fb
+      logic        w_req, w_we, w_wnext, w_ack;
+      logic [24:0] w_addr;
+      logic [7:0]  w_blen, w_be;
+      logic [63:0] w_din;
+      logic        r_req, r_we, r_rvalid, r_ack;
+      logic [24:0] r_addr;
+      logic [7:0]  r_blen;
+      logic        fbr_hit;
+
+      m2_fb_write #(.SCR_W(SCR_W), .SCR_H(SCR_H), .STRIDE(512)) u_fbw (
+        .clk(clk), .rst_n(rst_n),
+        .fb_sel(fb_draw),
+        .clear_req(fb_clear_req), .clear_busy(fb_clear_busy),
+        .in_valid(tx_span_valid), .in_ready(fbw_ready),
+        .in_y(tx_span_y[15:0]), .in_x0(tx_span_x0[15:0]), .in_x1(tx_span_x1[15:0]),
+        .in_col(tx_span_col), .in_painted(1'b1), .in_moire(tx_span_moire),   // R640
+        .m_req(w_req), .m_we(w_we), .m_addr(w_addr), .m_blen(w_blen),
+        .m_din(w_din), .m_be(w_be), .m_wnext(w_wnext), .m_ack(w_ack),
+        .dbg_pixels(dbg_fb_pixels), .dbg_clears(), .dbg_st()
+      );
+
+      // The line ahead of the beam, requested when the beam starts a line.
+      // scan_clk side: which line to fetch (R360: wraps to 0 through blanking,
+      // so line 0 is fetched fresh before the beam reaches it), and a toggle.
+      logic [9:0] fl_sy_q;
+      logic [8:0] fl_line;
+      logic       fl_tog;
+      always_ff @(posedge scan_clk or negedge rst_n) begin
+        if (!rst_n) begin fl_sy_q <= 10'd0; fl_line <= 9'd0; fl_tog <= 1'b0; end
+        else begin
+          fl_sy_q <= scan_y;
+          if (scan_y != fl_sy_q) begin
+            fl_line <= (scan_y >= 10'(SCR_H - 1)) ? 9'd0 : 9'(scan_y + 10'd1);
+            fl_tog  <= ~fl_tog;
+          end
+        end
+      end
+      // clk side: two flops on the toggle; the line number, stable for a whole
+      // line, is sampled only once the toggle has arrived.
+      logic [2:0] fl_tog_s;
+      logic [8:0] fl_line_c;
+      logic       line_pulse;
+      always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin fl_tog_s <= 3'd0; fl_line_c <= 9'd0; line_pulse <= 1'b0; end
+        else begin
+          fl_tog_s   <= {fl_tog_s[1:0], fl_tog};
+          line_pulse <= fl_tog_s[2] ^ fl_tog_s[1];
+          if (fl_tog_s[2] ^ fl_tog_s[1]) fl_line_c <= fl_line;
+        end
+      end
+
+      m2_fb_read #(.WIDTH(SCR_W), .STRIDE(512)) u_fbr (
+        .clk(clk), .rd_clk(scan_clk), .rst_n(rst_n),
+        .fb_sel(fb_show),
+        .line_req(line_pulse), .line_y(fl_line_c), .line_ready(),
+        .m_req(r_req), .m_we(r_we), .m_addr(r_addr), .m_blen(r_blen),
+        .m_rvalid(r_rvalid), .m_dout(fb_dout), .m_ack(r_ack),
+        .rd_parity(scan_y[0]), .rd_x(scan_x[$clog2(SCR_W)-1:0]),
+        .rd_col(fb_rd_col), .rd_hit(fbr_hit),
+        .dbg_lines(dbg_fb_lines), .dbg_late(dbg_fb_late),
+        .dbg_st(), .dbg_busy(), .dbg_acks_seen()
+      );
+
+      // Nothing is shown until a frame has been drawn (R359): DDR3 powers up
+      // with garbage, and bit 24 of it is the painted flag.
+      logic sok_s1, sok_s2;
+      always_ff @(posedge scan_clk or negedge rst_n) begin
+        if (!rst_n) begin sok_s1 <= 1'b0; sok_s2 <= 1'b0; end
+        else begin sok_s1 <= fb_shown_ok; sok_s2 <= sok_s1; end
+      end
+      assign fb_rd_hit = fbr_hit && sok_s2;
+
+      // The reader wins: it has the beam deadline and the writer has not.
+      m2_ddr3_arb u_arb (
+        .clk(clk), .rst_n(rst_n),
+        .a_req(r_req), .a_we(r_we), .a_addr(r_addr), .a_blen(r_blen),
+        .a_din(64'd0), .a_be(8'hFF),
+        .a_wnext(), .a_rvalid(r_rvalid), .a_ack(r_ack),
+        .b_req(w_req), .b_we(w_we), .b_addr(w_addr), .b_blen(w_blen),
+        .b_din(w_din), .b_be(w_be),
+        .b_wnext(w_wnext), .b_rvalid(), .b_ack(w_ack),
+        .m_req(fb_req), .m_we(fb_we), .m_addr(fb_addr), .m_blen(fb_blen),
+        .m_din(fb_din), .m_be(fb_be),
+        .m_wnext(fb_wnext), .m_rvalid(fb_rvalid), .m_ack(fb_ack),
+        .m_dout(fb_dout), .dout(),
+        .dbg_a_waits(), .dbg_b_waits(),
+        .dbg_busy(), .dbg_owner()
+      );
+    end else begin : g_nofb
+      assign fb_req = 1'b0; assign fb_we = 1'b0; assign fb_addr = 25'd0;
+      assign fb_blen = 8'd0; assign fb_din = 64'd0; assign fb_be = 8'd0;
+      assign fb_rd_col = 24'd0; assign fb_rd_hit = 1'b0;
+      assign fbw_ready = 1'b0;
+      assign fb_clear_busy = 1'b0;
+      assign dbg_fb_lines = 16'd0; assign dbg_fb_late = 16'd0;
+      assign dbg_fb_pixels = 32'd0;
+    end
+  endgenerate
+
   // --------------------------------------------------------- band buffers
   logic [NBUF-1:0]       bd_clear_req, bd_clear_busy;
   logic [NBUF-1:0]       bd_span_valid, bd_span_ready;
@@ -653,9 +846,18 @@ module m2_raster3d #(
   logic [3:0]                         bd_pg_wr     [NBUF];
   logic [3:0]                         bd_pg_filled [NBUF];
 
-  genvar b;
+  genvar b, nb;
   generate
-    for (b = 0; b < NBUF; b++) begin : g_band
+    // R640: no band buffers with the framebuffer -- their outputs still need
+    // driving, because the sequencer and the mixer reference them.
+    if (FB_DDR3) begin : g_noband
+      assign bd_rd_col = '0; assign bd_rd_hit = '0; assign bd_painted = '0;
+      assign bd_span_ready = '0; assign bd_clear_busy = '0; assign bd_pg_active = '0;
+      for (nb = 0; nb < NBUF; nb++) begin : g_nopg   // Quartus 17: genvar declared outside
+        assign bd_pg_row[nb] = '0; assign bd_pg_x0[nb] = '0; assign bd_pg_wr[nb] = '0;
+      end
+    end
+    for (b = 0; b < (FB_DDR3 ? 0 : NBUF); b++) begin : g_band
       m2_raster_band #(.WIDTH(SCR_W), .HEIGHT(BAND_H), .FTB(FTB)) u_band (
         .clk(clk), .rd_clk(scan_clk), .rst_n(rst_n),
         .band_y0(bd_y0[b]),
@@ -919,17 +1121,22 @@ module m2_raster3d #(
   always_comb begin
     scan_col = 16'd0;
     scan_hit = 1'b0;
-    for (int i = 0; i < NBUF; i++)
-      if (rdy_s2[i] && (band_s2[i] == scan_band_q)) begin
-        scan_col = bd_rd_col[i];
-        scan_hit = bd_rd_hit[i];
-      end
+    if (FB_DDR3) begin   // R640: the line is already fetched; nothing to choose
+      scan_col = {fb_rd_col[23:19], fb_rd_col[15:10], fb_rd_col[7:3]};
+      scan_hit = fb_rd_hit;
+    end else
+      for (int i = 0; i < NBUF; i++)
+        if (rdy_s2[i] && (band_s2[i] == scan_band_q)) begin
+          scan_col = bd_rd_col[i];
+          scan_hit = bd_rd_hit[i];
+        end
   end
 
-  assign tx_span_ready = bd_span_ready[fill_buf];
+  // R640: the span walk feeds the framebuffer or the bands, never both.
+  assign tx_span_ready = FB_DDR3 ? fbw_ready : bd_span_ready[fill_buf];
   always_comb begin
     bd_span_valid = '0;
-    bd_span_valid[fill_buf] = tx_span_valid;
+    if (!FB_DDR3) bd_span_valid[fill_buf] = tx_span_valid;
   end
 
   // ------------------------------------------------------------ sequencing
@@ -988,7 +1195,7 @@ module m2_raster3d #(
   // the top of every geo_parse, unconditionally.
   // R211: cleared only when the banks swap -- the new collect bank is the
   // one that was on display, and it is emptied before the walk's first quad.
-  wire swap = frame_start && (pst == P_READY);
+  // (`swap` is declared with the framebuffer above, R640.)
   // The store clears count[wbank]. On the swap cycle `bank` has not flipped
   // yet, so the clear is delayed one cycle to land on the new collect bank
   // (the one coming off display). The walk's first quad is many cycles away.
@@ -1028,7 +1235,7 @@ module m2_raster3d #(
   // texel request (always 0 from m2_span_tex, unread by the cache before)
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) tex_late <= 1'b0;
-    else        tex_late <= (TXLATE != 0) && dvalid && (fill_frame == disp_frame) && sq_vis_s[1]
+    else        tex_late <= !FB_DDR3 && (TXLATE != 0) && dvalid && (fill_frame == disp_frame) && sq_vis_s[1]
                             && ((BW+1)'(fill_band) <= (BW+1)'(scan_band_f) + (BW+1)'(TXLATE));
   end
   function automatic logic [7:0] sq8(input logic [17:0] c);
@@ -1058,7 +1265,7 @@ module m2_raster3d #(
     if (!rst_n) begin
       pst <= P_COLLECT; cst <= C_IDLE;
       bank <= 1'b0; dvalid <= 1'b0;
-      fill_band <= '0; fill_buf <= '0; bd_ready <= '0;
+      fill_band <= '0; fill_buf <= '0; bd_ready <= '0; fb_complete <= 1'b0;
       fill_frame <= 1'b0; disp_frame <= 1'b0;   // R506: the re-phase guard
       bd_clear_req <= '0; dbg_bands <= 16'd0;
       bd_clean <= '0; bd_clr_pend <= '0; bd_clr_run <= '0;   // R540
@@ -1127,7 +1334,7 @@ module m2_raster3d #(
         P_COLLECT: if (q_end) pst <= P_SORT;
         P_SORT:    pst <= P_SORTW;
         P_SORTW:   if (!qs_sort_busy) pst <= P_READY;
-        P_READY:   if (frame_start) begin pst <= P_COLLECT; bank <= ~bank; dvalid <= 1'b1;
+        P_READY:   if (swap) begin pst <= P_COLLECT; bank <= ~bank; dvalid <= 1'b1;   // R650: swap, not frame_start
                                           dbg_hold <= hold_cnt; hold_cnt <= 8'd0; end
       endcase
 
@@ -1188,7 +1395,16 @@ module m2_raster3d #(
         // erratic healthy case (10824, 902, 902, 10824, 902). fill_frame says
         // which frame the fill is working on, so the skip applies only while
         // it is still on the one being displayed.
-        C_IDLE: if (dvalid && (fill_frame == disp_frame)
+        // R640: WITH A FRAMEBUFFER THERE IS NO BEAM TO CATCH OR WAIT FOR --
+        // only the once-a-list clear, and a list already drawn (fb_complete)
+        // is not drawn again (R358/R359).
+        C_IDLE: if (FB_DDR3) begin
+          if (dvalid && !fb_complete && !fb_clear_req && !fb_clear_busy) begin
+            bd_y0[fill_buf]   <= 16'sd0 + 16'(fill_band) * 16'(BAND_H);
+            bd_band[fill_buf] <= fill_band;
+            cst <= C_REPLAY;
+          end
+        end else if (dvalid && (fill_frame == disp_frame)
                            && (scan_band_f > fill_band)) begin
           fill_band <= (scan_band_f == BW'(NBANDS-1)) ? '0 : scan_band_f + BW'(1);
         end else if (dvalid && !bd_ready[fill_buf] && bd_settled[fill_buf]
@@ -1220,7 +1436,8 @@ module m2_raster3d #(
         end
         C_FILLW: if (fl_quad_done) cst <= C_FILL;
         C_DONE: begin
-          bd_ready[fill_buf] <= 1'b1;
+          if (!FB_DDR3) bd_ready[fill_buf] <= 1'b1;
+          if (FB_DDR3 && fill_band == BW'(NBANDS-1)) fb_complete <= 1'b1;   // R640: the frame is whole
           dbg_bands  <= dbg_bands + 16'd1;
           if (!(&bands_this)) bands_this <= bands_this + 8'd1;
           // R485: dbg_pixels is gone. It summed the five bands' 32-bit pixel
@@ -1252,6 +1469,10 @@ module m2_raster3d #(
       if (fl_in_valid && fl_in_ready && !(&fillpass_this))
         fillpass_this <= fillpass_this + 16'd1;
 
+      // R640: with the framebuffer the band walk restarts when a NEW LIST
+      // arrives; restarting it every frame_start is what redrew a held list.
+      if (FB_DDR3 && swap) begin fb_complete <= 1'b0; fill_band <= '0; fill_buf <= '0; end
+
       if (frame_start) begin
         // R502: the frame being displayed advances, which makes the bands the
         // fill built ahead CURRENT rather than discarding them. Buffers still
@@ -1261,7 +1482,8 @@ module m2_raster3d #(
         // R506: the frame being displayed advances with the fill, which is
         // what the re-phase guard tests against.
         disp_frame <= fill_frame;
-        fill_band <= '0; bd_ready <= '0;
+        if (!FB_DDR3) fill_band <= '0;
+        bd_ready <= '0;
         dbg_bands_done <= bands_this; bands_this <= 8'd0;
         dbg_bands_painted <= painted_this; painted_this <= 8'd0;   // R452
         dbg_fillpass <= fillpass_this; fillpass_this <= 16'd0;      // R455

@@ -584,6 +584,40 @@ int main(int argc,char**argv){
     ck("the walk still finished", d->dbg_walk_frames ? 1u : 0u, 1u);
   }
 
+  // ---- R642: geo_window_data is READ, not stepped over. Six words; the
+  // first three -- viewport start, end, centre 0 -- reach the outputs, the
+  // walk stays in step (the matrix write after it still lands), and win_cnt
+  // steps once.
+  {
+    std::vector<uint32_t> list(0x8000, 0);
+    size_t n = 0;
+    list[n++] = 0x03u << 23;
+    const uint32_t ww[6] = {0xffff0080u, 0x01f00200u, 0x00f8010eu, 0x00f8013cu, 0x01600098u, 0x00f8013cu};
+    for (int i = 0; i < 6; i++) list[n++] = ww[i];
+    list[n++] = 0x0bu << 23;                       // matrix write, 12 words
+    for (int i = 0; i < 12; i++) list[n++] = 0x3f800000u + i;
+    list[n++] = 0x0fu << 23;                       // end
+    d->rst_n = 0; for (int i = 0; i < 4; i++) tick(); d->rst_n = 1; idle(2);
+    ck("power-up window: viewport start", d->win_vp_s, 0x00000080u);
+    ck("power-up window: centre 0",       d->win_c0,   0x00f80140u);
+    const unsigned c0 = d->win_cnt;
+    d->frame_start = 1; tick(); d->frame_start = 0;
+    for (int i = 0; i < 200000; i++) {
+      d->rd_ack = 0;
+      if (d->rd_req) { d->rd_data = (d->rd_addr < list.size()) ? list[d->rd_addr] : 0; d->rd_ack = 1; }
+      tick();
+      if (d->dbg_walk_frames) break;
+    }
+    std::printf("test: R642 window_data captured -- %u ops, win_cnt +%u\n", d->dbg_walk_ops, (unsigned)(uint8_t)(d->win_cnt - c0));
+    ck("window: viewport start", d->win_vp_s, ww[0]);
+    ck("window: viewport end",   d->win_vp_e, ww[1]);
+    ck("window: centre 0",       d->win_c0,   ww[2]);
+    ck("window: counted once",   (uint8_t)(d->win_cnt - c0), 1);
+    ck("walk in step: three opcodes", d->dbg_walk_ops, 3);
+    ck("walk in step: matrix landed", d->dbg_mtx_n, 1);
+    ck("no unknown opcode", d->dbg_walk_unknown, 0);
+  }
+
   // ---- 8. R638: ONLY THE WALK'S OWN LIST IS HELD.
   //
   // Daytona double-buffers (dword 0x0000 / 0x4000, alternating every frame in

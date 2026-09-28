@@ -24642,6 +24642,74 @@ priority class): all fit (41,334-41,407 ALM). s431: clk_mem +0.201, clk_sys
 deployed 18:01. s429 clk_mem -0.151, s430 clk_sys -0.551: not used. The
 tile overruns are judged by eye on this one (no counter in the keeper).
 
+**R640 -- THE 3D LAYER INTO A DDR3 FRAMEBUFFER: THE ddr3 BRANCH, PORTED.**
+
+Ben: "just use this for 3D as its mostly done. check it works then plan to
+push 2D there too". Branch `ddr3` (R345-R380 in its own numbering, forked
+304 commits back at 64bd446) had the pieces -- m2_ddr3 (the DDRAM master,
+BURSTCNT/BUSY honoured, BASE 29'h04C0_0000 in 64-bit words), m2_ddr3_arb
+(reader first), m2_fb_write (spans to DDR3, a clear per list), m2_fb_read (a
+line ahead of the beam into a two-line buffer), and R358/R359's sequencing (a
+list drawn ONCE, shown only when complete). Its board record: the read path
+proven (65,535 lines, 0 late, R377); the write path never run against a
+working reader; the coprocessor dying the moment the reader worked (R380).
+
+Ported rather than rebased (Model2.sv and m2_raster3d have moved too far):
+the four modules and their benches as they were (89 checks, pass unchanged),
+and m2_raster3d's FB_DDR3 path re-applied to today's renderer with:
+
+  - THE LINE-AHEAD REQUEST CROSSES A CLOCK NOW. The branch sampled scan_y on
+    `clk` and said itself it was safe only while the scan shared that clock;
+    since R564 the scan is on clk_mem. A toggle in scan_clk's domain, two
+    flops into clk, and the line number sampled once the toggle has arrived
+    (it changes once a line, ~4,000 cycles).
+  - FTB = 0 WITH THE FRAMEBUFFER (a generate refuses the combination): R607's
+    front-to-back mask is fed by the painting band, and there are no bands.
+    The store sorts back to front, as before R607.
+  - TXLATE is inert (tex_late forced 0): nothing is ever late, so bilinear
+    always.
+  - MOIRE in m2_fb_write: the stipple !((x^y)&1) keeps one half of every
+    two-pixel word on a line -- a byte enable, no extra traffic. Bench: 16
+    stippled spans over both line parities and every alignment; with the
+    stipple forced off 14 fail (the 2 that pass are single pixels that sit on
+    the stipple).
+  - R380, NEVER TRIED ON THE BRANCH: m2_ddr3 is held in reset until cp_done,
+    so the reader no longer competes with the ROM and TGP microcode crossing
+    the HPS bridge at boot. m2_ddr3 on clk_sys (R377), DDRAM_CLK = clk_sys.
+
+tb_m2_raster3d, M2_R3D_FB (the branch's DDR3 model: bursts, 20-cycle reads,
+Avalon address/count checked every beat, unwritten = 0xFFFF...), MAME frames
+at TPL 3000, TEXLAT 60, both builds FTB 0 / TXLATE 0:
+
+    frame   MAME 3D px   bands: px in MAME   framebuffer: px in MAME / extra
+    2000    172,319      108,485             171,707 / 690
+    9000    190,464      144,832             190,460 / 0
+
+Every pixel the band path draws, the framebuffer draws identically; the
+band path loses whole rows to late bands even here -- the drops -- and the
+framebuffer draws the list whole. 0 Avalon violations. First-frame gate:
+nothing shown until a list is complete.
+
+THE COST, MEASURED: the first draw of f2000 took ~1.6 video frames of bench
+time (2.0 M core cycles): the fill waits on the writer ~20% of its time
+("painter-stall"), because every span is its own DDR3 command and a textured
+span is one four-pixel texel group -- up to three commands (head, body, tail)
+where the band buffer took four cycles. With no beam deadline that is a
+slower draw, not a broken picture, while lists come every ~2 vblanks; at one
+a vblank it would drop lists (held frames). THE FIX WHEN IT MATTERS: keep ONE
+band buffer as a write-combining tile -- render the band on chip (and FTB's
+mask with it), then flush it to DDR3 in eight 248-beat bursts (~2,000 cycles
+a band, ~100 k a frame), with no separate clear pass.
+
+**R640, built.** s440-s442 died in quartus_map: `for (genvar k ...)` inside
+a generate, which Verilator accepts and Quartus 17.0 does not -- the parse
+check (quartus_map --analyze_file on each changed file) is now run before
+every sweep. s443-s445: all fit, **38,993-39,029 ALM (93%), 503/553 M10K** --
+~2,350 ALM and 45 block RAMs back from the band buffers and the FTB mask.
+s445 CLOSED EVERY CLOCK: clk_mem +0.713, clk_sys +0.613, clk_i960 +3.112,
+**HDMI +0.100**, holds +0.242..+0.274. On the board 18:40 (s431 is .prev).
+s443/s444: cores clean, HDMI -0.996/-0.995.
+
 **R641 -- THE PROJECTION CENTRE IS THE GAME'S, AND IT MOVES. R174 ASSUMED IT.**
 
 Ben on s445: "running great ... still some texture overruns or just missing
@@ -24679,3 +24747,417 @@ differential skips.
 The select-screen drive (build/dasm/select.lua) needs three coins a credit
 (CREDIT 1/3); its snapshots are MAME's reference pictures of the attract
 close-ups.
+
+**R642 -- THE PROJECTION FROM THE WINDOW COMMAND.** (R641 found it; this
+builds it.) MAME, logged with p13c: crtc_xoffset 0 and crtc_yoffset 128 on
+every frame, so MAME's projected y is (384 - cy) + 128 - y/z = 242 - y/z at
+the usual cy = 270: its horizon sits on row 242 and its frustum shows +242
+.. -142 of y/z. R174's constants put it on row 192 with +-192. MAME's
+renderer draws rows straight from that y (its viewport rectangle is
+(384 - vp[3]) + yoffs .. (384 - vp[1]) + yoffs = 0 .. 384), so there is no
+second offset to cancel it. Unless this core offsets elsewhere, its 3D has
+sat 50 rows above MAME's relative to the 2D -- the board decides.
+
+  - m2_geo reads op 0x03 like the matrix (CAP_WIN, six words) instead of
+    stepping over it: viewport start, end and centre 0 go out (win_vp_s,
+    win_vp_e, win_c0), win_cnt steps once. Power-up values are MAME's frame 0
+    window, (0,128)-(496,512) centre (248,320), which reproduce R174's
+    constants exactly -- nothing moves until the game sends a window.
+  - m2_geo_view: xc = CRTC_X + cx, yc = 384 - cy + CRTC_Y, and the four
+    slopes -(cx - vp0), vp2 - cx, vp3 - cy, -(cy - vp1), each converted exactly
+    to float in two registered stages. CRTC_X/Y = 0/128 as parameters: this
+    core does not decode the CRTC registers.
+
+tb_m2_geo_view 37 checks (reset, the power-up window, cy 270 and 312,
+vanishing point 2, negative corners and a -2048 centre). tb_m2_geo 94: a
+window command read, counted once, the walk in step (the matrix write after
+it lands, three opcodes, none unknown). tb_m2_geometry, lint, Quartus parse:
+clean. Built as s446-s448.
+
+Also here, the tile overruns (Ben: "massively reduced but still there"): the
+glyph cache is 32 KB (R313 halved it for block RAM; R313/R320 measured the
+halving at 14 -> 53 overruns a frame). The framebuffer returned ~50 M10K, so
+64 KB (IDX_BITS 13, ~26 M10K) is next.
+
+**R643 -- THE GEOMETRY DIFFERENTIAL, AND WHAT IT FOUND FIRST: TEXTURE
+COORDINATES CLAMPED ONE BINADE EARLY.**
+
+The instrument R641 asked for. MAME patch p14 (M2GEO_WALK=N, M2GEO_OUT=dir)
+dumps, at the start of the Nth geo_parse, everything a walk reads -- the
+display list, both polygon RAMs, the polygon and texture ROMs, texture and
+log RAM, palette, colour translation, luma -- and the state it inherits
+(matrix, focus, light, coefficients, the 32 texture parameters, z_adjust,
+polygon_z, viewport, centre, the CRTC offsets); then, during that walk, every
+polygon MAME keeps, post-clip, projected exactly as model2_3d_project will
+(geopolys.txt). `make geodiff` (sim/video/geodiff_top.sv: m2_geo + m2_geo_view
++ m2_geometry wired as Model2.sv wires them; the memories laid out at the
+GAME_* bases and served through Model2.sv's own engine-port arithmetic)
+replays the walk; build/m2scripts/geodiff.py sets our quads against MAME's
+polygons -- in order, then aligned per polygon allowing for a fan split
+differently or rotated, then with look-ahead so a polygon one side drops
+does not shift the rest; and, on the aligned polygons, each unambiguous
+vertex's u/v against MAME's.
+
+Attract walks 4,000 (255 polygons) and 2,500 (1,775):
+
+    w4000   252 within 1 px, 3 off, 0 missing, 2 quads extra
+    w2500   1,747 within 1 px, 18 off, 10 missing, 7 quads extra
+
+  - POSITIONS: this core's geometry and projection agree with MAME polygon
+    for polygon -- with R642's window centre (the old constant would have put
+    every y 50 rows off here).
+  - THE OFF ONES are edge clipping of big polygons: clipped vertices a few
+    pixels from MAME's (x = 0 where MAME has -1; y 370.25 against 373.35),
+    and sometimes a spurious vertex and a degenerate quad (w4000 253/254,
+    w2500 700). Open -- the clipper.
+  - THE MISSING are sub-pixel slivers (0.4 px tall) of distant objects:
+    R216's tiny cull, by design.
+  - TEXTURE COORDINATES: w4000 had five polygons (a close-up surface, h0
+    4409) whose v came out 511 at every vertex where MAME has 16,399..16,466
+    texels -- the texture squashed flat, which is what "orientation not quite
+    right" looks like. m2_geometry's f2uvw makes a 15-bit f/2, which holds f
+    up to 65,535, but it clamped at e >= 127+15, i.e. f >= 32,768 -- half the
+    range R609 made room for. Clamp moved to e >= 127+16. After: 188 and
+    1,578 textured polygons checked, 0 with a vertex's u/v off.
+
+The tiny-polygon aliasing in the check (vertices within half a pixel of each
+other) is excluded rather than counted; the texture-parameter table is not
+preloaded (so lighting is not compared yet -- state.txt has it).
+
+**R644 -- THE GLYPH CACHE BACK TO 64 KB.** IDX_BITS 13, invalidate index
+[14:2] as the module's own note says. tb_m2_char_cache at 13 bits: 10,393
+checks, 0 fail. Built with R643's fix as the next sweep.
+
+**R642, built.** s446-s448 (framebuffer + the window-driven projection): all
+fit, 39,381-39,541 ALM, 503/553 M10K. s447 clean everywhere but clk_sys
++0.022; s448 clk_mem +0.805, clk_sys +0.912, clk_i960 +3.269, holds
++0.164..+0.259, HDMI -0.194 (framework) -- deployed 20:02 (s445 is .prev).
+s446 HDMI -1.200. The geometry differential (R643) already shows this
+projection landing on MAME's pixels; the board shows it against the 2D.
+
+**R645 -- THE TEXTURE SHEETS MIRRORED INTO DDR3, BEHIND A SWITCH.**
+
+Ben: keep the 2D where it is (with R644's cache); for the CPU and TGP, "hold
+them [the textures] in SDRAM and push them into the frame buffer". The
+renderer's textured OUTPUT is already in DDR3 (R640); what competes with the
+CPU on SDRAM is the texel cache READING the sheets on every miss -- R362 on
+the ddr3 branch: the CPU's port waiting 24.5% of the frame with the band
+renderer running, 0% without. So SDRAM stays the master copy and nothing in
+the CPU's path changes; DDR3 gets a copy, and the texel cache can read it.
+
+m2_tex_ddr3:
+  - WRITES: every CPU write the bridge completes into the sheets (port 1,
+    clk_sys: cpu_sd_req && cpu_sd_we && p_ack[1], words 0x1760000..
+    0x185FFFF) queues (64) and goes to DDR3 as one byte-enabled beat. Four
+    SDRAM words to a DDR3 word, word k in bits 16k+15:16k -- m2_sdram's own
+    burst packing ({dq_r, cap[2], cap[1], cap[0]}); misses are always four-
+    word aligned (base + {rp, cg, 2'b00}), so a DDR3 answer is bit for bit an
+    SDRAM one. Mirror at DDR3 word 0x80000 (4 MB above the framebuffer).
+  - READS: the two miss ports (clk_mem) each get one read in flight, crossed
+    by a toggle each way (R377: no pulse crosses); the address is latched on
+    clk_mem and held to the answer, the data held on clk_sys to the next
+    request. A slot that timed out and asked for another line is not handed
+    the old one (the acknowledge needs the address to still match).
+  - ARBITRATION: m2_ddr3_arb u_ddr_top, the renderer's port (reader first,
+    then writer, inside) over the mirror.
+  - OSD "Texture memory: SDRAM / DDR3" (status[34], three flops into clk_mem)
+    moves ports 10 and 2's requests to the mirror. Default SDRAM. Mirror
+    writes always run, so the switch can be flipped any time.
+
+tb_m2_tex_ddr3, two clocks at 100:70 and a DDR3 model with 8-48 cycle reads:
+4,000 writes into both sheets (all lanes, partial byte enables) all mirrored,
+a write below sheet 0 not; 3,000 line reads on two ports all equal to the
+SDRAM burst's four words from a reference image; the moved-on slot answered
+with the NEW line. Stressed to a write every 6 clk_sys cycles (faster than
+the bridge can issue them) with none lost -- but the board adds the
+framebuffer's own traffic, which the bench does not, so dbg_wr_lost stays.
+
+Built WITH telemetry lite (the framebuffer freed the ALM): the same capture
+with the switch on SDRAM and then on DDR3 is the A/B -- frames per vblank,
+the i960's bus wait (Q), tile overruns (G).
+
+**R646 -- THE SELECT SCREENS THROUGH THE GEOMETRY DIFFERENTIAL: EXACT.**
+p14b (M2GEO_TRIG: a Lua script touches a file, the next walk dumps) and
+build/dasm/select3.lua (three coins -- Daytona is 3 a credit -- start, dumps
+and snapshots at frames 3,300..4,500). MAME's snapshots are the reference
+pictures: circuit select's RED box is a frame around the SELECTED course's
+panel, behind the 2D text; car select's YELLOW box sits behind the selected
+"Automatic" panel; both cars have their wheels.
+
+    circuit select (walk 3,301)   12 of 12 polygons, 9 textured, u/v exact, z exact
+    car select     (walk 4,201)   1,339 of 1,339, 607 textured, u/v exact, z exact
+    w4000 / w2500                 z exact on 252 / 1,762 of 1,763
+
+The sort key (q_z against MAME's float_to_zval) now checked too. The select
+screens use centre (248,320) -- the power-up window -- so R642 changes
+nothing there. The circuit-select box is three untextured polygons at
+x 13..177, y 66..166, z 40 (pz 0.04); the maps are y 167..279, z 8704: they
+do not overlap. Ben's photo (s431, band renderer) had the box ~75 rows lower,
+over the map. The geometry is exact for this frame, so that came from past
+the geometry or from a state MAME's drive did not reach -- s451 (framebuffer)
+is on the board to look.
+
+MAME'S ORDER, for the record (model2_v.cpp render loop): z ascending, NEAREST
+FIRST, and a fill map so the first write wins -- front to back with a mask,
+which is this core's FTB (R607). Within a z bucket the list is LIFO (newest
+submitted drawn first, so it wins). FB_DDR3 runs FTB = 0, back to front,
+last write wins: the same picture provided equal-z polygons come out oldest
+first -- to check against the store's sort.
+
+**R647 -- THE TEST SCREEN'S BROKEN LETTERS: A GLYPH-CACHE INVALIDATE THAT
+COVERED HALF THE WRITE. FOUND BY BISECTING ON THE BOARD.**
+
+Ben: the test-mode text is wrong ("NORMAL" reads "HORMAL", "COUNTRY"
+"COUHTRY", I without serifs), and the car liveries blotchy -- on every build
+tried tonight, s456 back to s377, including after a cold boot. Ruled out on
+the way: the scaler filters (reset to defaults, same), the SDRAM (MiSTer
+memtest: 0 errors at 150 MHz), the ROM (zip MD5 equals ours), the MiSTer
+software (unchanged since 15 August), the display chain (Virtua Racing on
+the Model 1 core, same 496x384 path, clean). Bisect by Ben's eye:
+
+    09-09 release   text fine (locks up)
+    s283 09-25 18:14   fine        s315 09-26 03:46   fine
+    s339 09-26 08:28   fine        s347 09-26 12:29   fine
+    s351 09-26 15:51   BROKEN      s377 .. s456       broken
+    (s294: black screen)
+
+s347 -> s351 changes nothing but a debug counter (R608). So the fault was
+already in the RTL and a build's timing decided whether it showed. The
+mechanism: m2_cpu_bridge's char_wr -- the glyph cache's invalidate -- was
+asserted only in S_LO, the LOW word of a 32-bit store. The HIGH word lands
+in the same four-word cache line a few states later with no invalidate, so a
+tile fetch that refilled the line in between cached the old high half, and
+nothing ever dropped it: half a glyph row left over from the previous
+character until the game rewrote that glyph. The test screen is a screen of
+freshly rewritten glyphs.
+
+The fix: char_wr through S_LO, S_LO_W, S_HI and S_HI_W; and on clk_mem the
+invalidate held 16 cycles past the level (a write that lands after its
+acknowledge). The same shape on the textures: tex_inval swept the texel
+cache when a sheet write BEGAN, before its data was in SDRAM; a line refilled
+in between held old texels -- which could be the "always bad" car liveries.
+A second pulse now fires when the write completes (S_HI_W, and S_LO_W's
+half-word path). tb_m2_cpu_bridge, tb_m2_cpu_sdram, tb_m2_char_cache pass;
+the race itself needs the real SDRAM interleaving, so the board is the test.
+Built as s458-s460.
+
+Also recorded, because it was believed for an hour: tonight's "the textures
+look horrible" was NOT a regression from R640-R645 -- s431 and s377 show the
+same. s456 was withdrawn for it wrongly; it may be fine.
+
+**R647, ON THE BOARD: WRONG, AND WORSE.** s458-s460 fit (s460: clk_mem
++0.594, clk_sys +1.056, i960 +3.582, HDMI -0.163). Ben: "test screen still
+wrong and no 3d!" Two findings, both against this entry:
+  - The glyph invalidate through both halves did NOT fix the letters. The
+    half-line race is real in the RTL but it is not what breaks them. Kept
+    (it is more correct and harmless); the cause is still open.
+  - The second tex_inval KILLED THE 3D. Every sheet write sweeps the whole
+    texel cache (inval_pend -> sweep); two sweeps per write, with the game
+    uploading continuously, left the cache sweeping nearly all the time, the
+    fill starved of texels and the framebuffer -- which shows only complete
+    frames -- never completed one. Removed. A texel-cache fix, if the race
+    matters, must invalidate the LINE written, not sweep the cache.
+s451 back on the board.
+
+**R648 -- THE TEST SCREEN'S BROKEN LETTERS: THE PIXEL PIPELINE WAS ONE STAGE
+LONGER THAN THE PIXEL ENABLE, AND THE BENCH'S PALETTE RAM WAS ONE CYCLE TOO
+FAST TO SEE IT. R647's CAUSE WAS WRONG.**
+
+Ben's bisect on the board, continued past R647: s522 (a rebuild of cb8bb60,
+R605) is "not quite right but better than the newest"; s511 (c94aa16) and
+s501 (fabba23) broken; s339 and earlier fine. cb8bb60 is the only commit in
+the range touching the 2D colour path: it registered the four line-buffer
+lanes before the mixer (rd_qq) to recover -0.074 ns (s340), and its comment
+counted the chain as reaching the palette data at E+5 "exactly in time" --
+without the xlat and gamma registers after it (R572, R582).
+
+The chain as built, hcnt moving at a ce_pix edge E: line buffer E+1, rd_qq
+E+2, pal_addr_q E+3, the palette M10K E+4, pal_data_q E+5, xlat E+6, gamma
+(pr_q) E+7. vid_r took pr_q at ce_d, one cycle after the next ce -- and ce
+is 16 per 100 clk_mem cycles, six or seven apart, so after a six-cycle gap
+ce_d is E+7 and takes the PREVIOUS pixel. A one-pixel-wide stroke followed by
+a one-pixel gap is lost wherever a six-cycle gap falls on it: N's diagonal
+becomes H, I loses its serifs. The seven-cycle gaps were right, which is why
+most of the screen looked fine.
+
+WHY tb_m2_video_frame PASSED IT, EXACT, FOR A MONTH. The bench answered a RAM
+read with the address the DUT drove AFTER the clock edge -- a RAM that
+registers its output but not its address, one cycle faster than the M10K
+(m2_tdp_ram2c: b_q <= mem[b_addr] on b_clk, where b_addr is pal_addr_q, itself
+a register). The bench now reads with the address presented before the edge;
+M2_VF_RAMFAST=1 restores the old model for comparison. Settings screen,
+frame 120, 190,464 pixels:
+
+    HEAD (5d544b8), hardware RAM model     1,568 differ -- the text rows only
+    HEAD, old fast RAM model               exact (the month of false passes)
+    HEAD minus rd_qq, hardware model       exact  -- cb8bb60 is the cause
+    HEAD, colour and flags on ce_dd        exact under BOTH models
+
+The fix keeps every register (the timing they bought is kept) and takes the
+outputs two cycles after ce instead of one: ce_dd is E+8 at the earliest and
+E+9 at the latest, pr_q holds until the next pixel's E'+7 >= E+13, and the
+flags move on ce_dd with the colour (R582's rule). The 3D mix in Model2.sv is
+selected after mix_r_q and sampled by the framework on the next ce, so it is
+unaffected by a one-cycle move of tile_r.
+
+What this corrects: R647 blamed the glyph cache's invalidate covering half a
+32-bit store. That RTL race is real and its fix is kept, but it was not the
+letters. And R647's "s347 -> s351 changes nothing but a debug counter" was a
+build-to-commit attribution that Ben disputed at the time; this mechanism is
+deterministic in the RTL, not seed-dependent, so it sides with him.
+
+Lesson for the bench: a RAM model must register the ADDRESS the RTL presents
+before the edge. A model that is one cycle faster than the silicon passes any
+pipeline that is one cycle too long -- exactly the fault it exists to catch.
+
+Also in this change: the DDR3 texture mirror (R645) is now wholly idle unless
+the menu selects it. With the switch on SDRAM only its reads were off; every
+texture upload was still copied into DDR3 through the arbiter the 3D
+framebuffer uses. Ben reports the newest builds' video as bugged since the
+mirror went in. Gating it removes that variable; switching to DDR3 mid-game
+now shows stale texels until the game uploads again.
+
+**R648, ON THE BOARD: CONFIRMED.** s531 (cbeea32; clk_mem +0.526, clk_sys
++0.740, i960 +2.115, HDMI -0.532). Ben: "test text is now correct". s530 and
+s532 died in quartus_fit (Segment Violation in register packing -- the tool,
+not the design); s531's fit completed and crashed on exit, and was assembled
+from its database.
+
+**R649 -- THE DDR3 TEXTURE MIRROR (R645) REMOVED. IT WEDGED THE DDR3 BUS.**
+
+s531 on the board with the menu's Texture memory on DDR3: the textures are
+garbage (texels from the wrong lines), and the 3D frame then STAYS STUCK --
+through a core reset, until the MRA is reloaded. m2_ddr3, the arbiter and the
+mirror are reset by mem_rst_n & ddr_go, which comes up on PLL lock and stays
+up (the standing memory-reset rule), so a hang anywhere on that bus lasts
+until the FPGA is reconfigured. The framebuffer never gets another
+transaction and never publishes another frame. Not diagnosed further: the
+case for the mirror was already weak (the CPU waits on the bus 13.6% of its
+cycles, CPI 18.9 -- R645), and Ben: "getting the textures right is more
+important".
+
+Reverted: b3b6d8c and 4b444c4 (the module, its bench, the arbiter in front of
+m2_ddr3, the OSD switch and the texel-port muxes). Kept: telemetry lite on
+(qsf), R647's glyph invalidate, R648. To bring the mirror back, restore
+rtl/mem/m2_tex_ddr3.sv from 4b444c4 -- and find the wedge first: the
+arbiter's b-side (blen 1 reads and byte-enabled writes) had never run on
+the board before s531.
+
+With the switch on SDRAM, s531's textures are as bad as every build since
+at least s377 (Ben: "my sdram image is as earlier still broken"): trees in
+blocky solid squares with horizontal streaks. That is the next work item,
+not a regression from R645-R648 -- with texddr = 0 the texel ports were a
+plain mux onto the SDRAM ports as before.
+
+**R650 -- THE TEXTURES: WHAT IS RIGHT, MEASURED ONE LINK AT A TIME.**
+
+Ben: textures bad on every build (R647's note: s377 and s431 alike). The bench
+frame differential (R615) draws MAME's own list from MAME's texture RAM at a
+fixed latency; the board draws the game's list from the game's uploads through
+the real controller. Every link between the two was tested separately.
+
+  1. PIXSTEP. The framebuffer's draw time, board clock ratio, texel latency 60
+     (tb_m2_raster3d now times the draw from the swap to fb_complete; its R647
+     probe printed 0 -- it looked for the draw after it had finished):
+
+         frame   PIXSTEP 4   PIXSTEP 2   PIXSTEP 1   (video frames; a list
+         2000    1.88        3.13        5.22         arrives every 2.09)
+         9000    1.38        2.17        3.48
+
+     At PIXSTEP 1 the bench's trees match MAME texel for texel. s536 (PIXSTEP
+     1) on the board: cars right in some frames -- liveries, numbers, logos --
+     and horizontal streaks in others (Ben: "sometimes the textures look great
+     for a couple of frames"). So PIXSTEP is a sharpness cost, not the fault.
+  2. THE UPLOAD. tb_m2_boot (the real i960, bridge and memory map, C++ SDRAM)
+     now dumps both sheets (M2_TEXDUMP): after 14 M instructions all
+     1,048,576 words equal MAME's texture RAM at frames 1000 and 2000.
+     Daytona re-uploads ~200 K dwords at each course change of the attract
+     (f2000->3000, 5000->6000, 8000->9000) and nothing between.
+  3. SDRAM ON THE BOARD. m2_texview (OSD "Texture view"): the sheets as SDRAM
+     holds them, read through the texel cache's own port 10. s538: a clean
+     page (the Dinosaur Canyon set, not in MAME's frame-2000 sheets -- item 2).
+     Its bench passes 52,377,600 pixel checks to a latency of 100+20.
+  4. THE CACHE UNDER THE REAL HANDSHAKE. tb_m2_texel_bl M2_TBL_SDRAM: requests
+     dispatched on their rising edge, acknowledge and data held two cycles
+     (m2_sdram's ACK_HOLD), latency 2-31 / 2-121 / 2-401: 300,000 checks,
+     0 fails, 0 lost each.
+  5. A LIST REPLACING A DRAW IN FLIGHT. tb_m2_raster3d M2_R3D_LIST2/INTR: it
+     cannot happen -- P_SORTW holds until the store's sort is done, and the
+     swap waited for list A to finish (0 pixels differ from a clean draw). The
+     code path it would take is still wrong and is recorded so it is not
+     rediscovered: a swap mid-band resets fill_band to 0 but lets the band
+     finish, whose C_DONE then advances to band 1 (band 0 never drawn), and
+     the list-clear starts while that band still writes.
+
+The bench's own blind spot on the way: it pushed quads without looking at
+q_ready, so a list pushed while the store was READY vanished (now counted).
+
+Left, and only on the board: the clock crossing (m2_texel_cdc is a textbook
+Gray-pointer FIFO; its local timeout answers 0x0FF -- opaque full white), the
+texel slots' 1,023-cycle give-up (answers 0), and the framebuffer on the real
+DDR3. Telemetry 'T' (s539-s541) counts the first two and the framebuffer's
+published and dropped lists.
+
+**R651 -- THE STREAKS: A LIST SWAPPED IN OVER A DRAW. FIXED; AND THE TEXEL
+STEP IS AN OSD OPTION.**
+
+s540's telemetry 'T' (R650) over 7,474 vblanks of attract at PIXSTEP 4:
+texel misses SDRAM never answered 0, fetches the crossing answered itself 0,
+framebuffer frames published 3,758 against 3,799 game flips -- and 7 lists
+DROPPED: a new list swapped in while the previous was still being drawn. R650
+item 5 had concluded from the bench that this could not happen; the board says
+it does, and the bench agrees once the draw is slow enough: at PIXSTEP 1
+(3.5-5.2 video frames a draw against a list every 2.09) M2_R3D_LIST2 drops a
+list every time, and the frame then published differs from a clean draw of
+the same list in rows 0-7, all 496 pixels -- band 0 never drawn, exactly the
+restart fault R650 recorded from reading the code. Ben's report fits the
+counts: at PIXSTEP 4 the fault is rare and mostly masked; at PIXSTEP 1 nearly
+every frame is one ("the textures look great for a couple of frames").
+
+THE FIX (m2_raster3d): `swap` also requires !fb_busy, and the store's
+P_READY -> P_COLLECT follows `swap`, not frame_start. A new list waits,
+sorted, until the draw is whole; the store does not collect meanwhile and
+the geometry waits on q_ready. Every published frame is one list drawn start
+to finish. Bench: interrupted at 200 K, 1 M and 3 M cycles into list A's
+draw, the frame published is IDENTICAL to a clean draw of list B (0 pixels
+differ, 0 dropped); a plain draw unchanged.
+
+THE TEXEL STEP AT RUN TIME (Ben: "a menu ... set PIXSTEP on the fly"). OSD
+"Texel step" 1/2/4/8 (status[35:34], default 1), into clk_sys on three flops,
+into m2_span_tex as `pxk` (log2). Latched per span with x1/y, so a change
+lands between spans, never inside one. The per-group gradient steps are
+shifted as the span is loaded (the group add has nothing in front of it, as
+before); the centring term is (g << k) - g. Powers of two only: 3, 5-7 would
+need multipliers on the group path at 98% ALM. Bench, one binary: step 4 at
+run time vs PIXSTEP 4 built in, and step 1 vs PIXSTEP 1, 0 pixels differ;
+draw of frame 9000 at 1/2/4/8: 3.48 / 2.17 / 1.38 / 0.92 video frames.
+tb_m2_span_tex passes at 2 and fails identically before and after at 1, 4
+and 8 (1,601 / 134 / 131): the bench only models step 2 -- a gap in the
+bench, recorded, not a fault in the change.
+
+The texture view (R650, m2_texview) is removed with its OSD entries (Ben);
+it is in git at f4945bf.
+
+**R652 -- THE 2D KEEPS THE 3D'S PACE: THE GAME WAITS FOR THE DRAW.**
+
+R651 makes a finished list wait for the draw in progress. On the board that
+alone had two faults. (1) The 2D would run ahead: the tilemap is drawn live
+from tile RAM, which the game rewrites every frame, so at texel step 1 on a
+heavy scene the HUD would run up to ~5 video frames ahead of the 3D (Ben:
+"we need them in time. if 3d is slower 2d has to have the same pace"). (2) The
+renderer's frame_start is geo_walk_start (every other vblank in 30 Hz mode),
+so the next walk still started, stalled on q_ready, and read a display list
+the game was free to go on rewriting -- R256's hazard, by another route.
+s545-s547 (R651 alone) were stopped before they reached the board.
+
+THE HOLD, as an overloaded arcade board slows: m2_raster3d list_hold (FB_DDR3,
+pst == P_READY and fb_busy) holds the game. While it is high a vblank raises
+no interrupt, does not advance io_framenum (whose parity the game reads, and
+the walk trigger uses) and starts no walk. The game waits; its tile RAM and
+its next list stay as they are; the draw finishes; the next vblank proceeds
+as normal -- interrupt, count, walk and swap together, as before R651. When
+the draw keeps up the hold never rises and nothing changes. OSD "3D pacing:
+Hold game / Free" (status[36]) keeps the other behaviour to compare.
+
+Quartus 17's parser caught what Verilator's lint did not: `r3d_hold` already
+named R213's frames-held counter in Model2.sv; the new one is r3d_game_hold.

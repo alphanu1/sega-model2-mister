@@ -1108,8 +1108,16 @@ module m2_cpu_bridge #(
 
   // r_we/r_addr are the LATCHED request, so this is registered by construction
   // rather than a tap on a live bus.
+  // R647: THROUGH BOTH HALVES, NOT THE LOW WORD ONLY. A 32-bit store is two
+  // SDRAM writes into ONE four-word glyph-cache line. Invalidating only while
+  // the low word was written left a window: the tile fetch could refill the
+  // line after the low word and before the high one, and cache the OLD high
+  // half -- which nothing invalidated again, so half of a glyph row stayed
+  // from the previous character until the game rewrote it (the test screen's
+  // N drawn as H, I without its serifs). Whether the refill fell in the window
+  // was timing, so it came and went with the build: s347 clean, s351 on not.
   assign char_wr = r_we && (r_addr >= 32'h0108_0000) && (r_addr < 32'h0110_0000)
-                   && (st == S_LO);
+                   && (st == S_LO || st == S_LO_W || st == S_HI || st == S_HI_W);
   assign char_wr_addr = r_addr[18:1];
 
   assign dbg_mstate = {2'd0, sd_ack, ack_mem, req_mem, st[2:0]};

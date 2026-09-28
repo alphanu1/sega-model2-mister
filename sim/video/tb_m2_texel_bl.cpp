@@ -116,6 +116,12 @@ int main(int argc, char **argv) {
   std::deque<Req> sent;
   long issued = 0, answered = 0, cyc = 0;
   int lat[4] = {-1, -1, -1, -1}; uint32_t ad[4] = {0, 0, 0, 0};
+  // R650: M2_TBL_SDRAM=1 -- the port as m2_sdram really is: a request is
+  // dispatched on its RISING edge only, one at a time, and the acknowledge and
+  // data are HELD for ACK_HOLD (2) cycles; M2_TBL_LMAX the latency's range.
+  static const bool SDR = std::getenv("M2_TBL_SDRAM") != nullptr;
+  static const int LMAX = std::getenv("M2_TBL_LMAX") ? std::atoi(std::getenv("M2_TBL_LMAX")) : 30;
+  bool rq_d[4] = {false, false, false, false}; int hold[4] = {0, 0, 0, 0}; uint64_t hd[4] = {0, 0, 0, 0};
   Req cur{}; bool have = false;
   const int pat = 0;
   while (answered < N && cyc < N * 60) {
@@ -126,6 +132,21 @@ int main(int argc, char **argv) {
       const bool rq[4] = {(bool)d->m_req, (bool)d->m2_req, (bool)d->m3_req, (bool)d->m4_req};
       const uint32_t aa[4] = {d->m_addr, d->m2_addr, d->m3_addr, d->m4_addr};
       for (int p = 0; p < 4; p++) {
+        if (SDR) {
+          bool ack = false; uint64_t l = hd[p];
+          if (hold[p] > 0) { ack = true; --hold[p]; }
+          if (lat[p] == 0) { l = hd[p] = line_at(ad[p]); ack = true; hold[p] = 1; }
+          if (lat[p] >= 0) --lat[p];
+          if (rq[p] && !rq_d[p] && lat[p] < 0) { lat[p] = 2 + rng() % LMAX; ad[p] = aa[p]; }
+          rq_d[p] = rq[p];
+          if (ack) {
+            if (p == 0) { d->m_ack = 1; d->m_data = l; }
+            if (p == 1) { d->m2_ack = 1; d->m2_data = l; }
+            if (p == 2) { d->m3_ack = 1; d->m3_data = l; }
+            if (p == 3) { d->m4_ack = 1; d->m4_data = l; }
+          }
+          continue;
+        }
         if (rq[p] && lat[p] < 0) { lat[p] = 2 + rng() % 30; ad[p] = aa[p]; }
         if (lat[p] == 0) {
           const uint64_t l = line_at(ad[p]);

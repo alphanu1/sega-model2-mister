@@ -740,6 +740,59 @@ obj_texel_cdc/Vm2_texel_cdc: rtl/video/m2_texel_cdc.sv rtl/video/m2_texel_addr.s
 	$(VBUILD) --top-module m2_texel_cdc --Mdir obj_texel_cdc -o Vm2_texel_cdc -CFLAGS "-O2" \
 	  rtl/video/m2_texel_cdc.sv rtl/video/m2_texel_addr.sv sim/video/tb_m2_texel_cdc.cpp
 
+# R643: THE GEOMETRY DIFFERENTIAL -- one MAME walk (patch p14) through the
+# walker, projection and geometry. M2GD_DIR=<dump dir>; then
+# build/m2scripts/geodiff.py <dump dir>.
+geodiff: obj_geodiff/Vgeodiff_top
+	@./obj_geodiff/Vgeodiff_top $(TEST_ARGS)
+
+obj_geodiff/Vgeodiff_top: sim/video/geodiff_top.sv sim/video/tb_m2_geodiff.cpp rtl/video/m2_geo.sv rtl/video/m2_geo_view.sv \
+    rtl/video/m2_geometry.sv rtl/video/m2_geo_engine.sv rtl/video/m2_geo_xform.sv rtl/video/m2_geo_clip.sv rtl/video/m2_geo_project.sv $(GEO_RTL)
+	$(VBUILD) --top-module geodiff_top -CFLAGS "-O2" $(TGPFLAGS) -Wno-WIDTHTRUNC -Irtl/tgp -Irtl/video --public-flat-rw \
+	  --Mdir obj_geodiff -o Vgeodiff_top sim/video/geodiff_top.sv rtl/video/m2_geo.sv rtl/video/m2_geo_view.sv rtl/tgp/m2_fifo_m10k.sv \
+	  rtl/video/m2_geometry.sv rtl/video/m2_geo_engine.sv rtl/video/m2_geo_xform.sv \
+	  rtl/video/m2_geo_clip.sv rtl/video/m2_geo_project.sv $(GEO_RTL) sim/video/tb_m2_geodiff.cpp
+
+test_m2_geo_view: obj_geoview/Vm2_geo_view
+	@echo "== test m2_geo_view (the projection from the window command)"
+	@./obj_geoview/Vm2_geo_view $(TEST_ARGS)
+
+obj_geoview/Vm2_geo_view: rtl/video/m2_geo_view.sv sim/video/tb_m2_geo_view.cpp
+	$(VBUILD) --top-module m2_geo_view -Wno-TIMESCALEMOD --Mdir obj_geoview -o Vm2_geo_view -CFLAGS "-O2" \
+	  rtl/video/m2_geo_view.sv sim/video/tb_m2_geo_view.cpp
+
+test_m2_fb_read: obj_fbr/Vm2_fb_read
+	@echo "== test m2_fb_read (the framebuffer, a line at a time)"
+	@./obj_fbr/Vm2_fb_read $(TEST_ARGS)
+
+obj_fbr/Vm2_fb_read: rtl/video/m2_fb_read.sv sim/video/tb_m2_fb_read.cpp
+	$(VBUILD) --top-module m2_fb_read -Wno-TIMESCALEMOD --Mdir obj_fbr -o Vm2_fb_read -CFLAGS "-O2" \
+	  rtl/video/m2_fb_read.sv sim/video/tb_m2_fb_read.cpp
+
+test_m2_fb_write: obj_fbw/Vm2_fb_write
+	@echo "== test m2_fb_write (spans into the DDR3 framebuffer)"
+	@./obj_fbw/Vm2_fb_write $(TEST_ARGS)
+
+obj_fbw/Vm2_fb_write: rtl/video/m2_fb_write.sv sim/video/tb_m2_fb_write.cpp
+	$(VBUILD) --top-module m2_fb_write -Wno-TIMESCALEMOD --Mdir obj_fbw -o Vm2_fb_write -CFLAGS "-O2" \
+	  rtl/video/m2_fb_write.sv sim/video/tb_m2_fb_write.cpp
+
+test_m2_ddr3_arb: obj_ddr3arb/Vm2_ddr3_arb
+	@echo "== test m2_ddr3_arb (two framebuffer masters, one DDRAM port)"
+	@./obj_ddr3arb/Vm2_ddr3_arb $(TEST_ARGS)
+
+obj_ddr3arb/Vm2_ddr3_arb: rtl/mem/m2_ddr3_arb.sv sim/mem/tb_m2_ddr3_arb.cpp
+	$(VBUILD) --top-module m2_ddr3_arb -Wno-TIMESCALEMOD --Mdir obj_ddr3arb -o Vm2_ddr3_arb -CFLAGS "-O2" \
+	  rtl/mem/m2_ddr3_arb.sv sim/mem/tb_m2_ddr3_arb.cpp
+
+test_m2_ddr3: obj_ddr3/Vm2_ddr3
+	@echo "== test m2_ddr3 (the DDR3 master, and that it honours BUSY)"
+	@./obj_ddr3/Vm2_ddr3 $(TEST_ARGS)
+
+obj_ddr3/Vm2_ddr3: rtl/mem/m2_ddr3.sv sim/mem/tb_m2_ddr3.cpp
+	$(VBUILD) --top-module m2_ddr3 -Wno-TIMESCALEMOD --Mdir obj_ddr3 -o Vm2_ddr3 -CFLAGS "-O2" \
+	  rtl/mem/m2_ddr3.sv sim/mem/tb_m2_ddr3.cpp
+
 test_m2_tile_fetch: obj_tile_fetch/Vm2_tile_fetch
 	@echo "== test m2_tile_fetch (the 2D tile word and glyph fetch)"
 	@./obj_tile_fetch/Vm2_tile_fetch $(TEST_ARGS)
