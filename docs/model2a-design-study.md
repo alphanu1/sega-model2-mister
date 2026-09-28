@@ -24978,3 +24978,35 @@ texture upload was still copied into DDR3 through the arbiter the 3D
 framebuffer uses. Ben reports the newest builds' video as bugged since the
 mirror went in. Gating it removes that variable; switching to DDR3 mid-game
 now shows stale texels until the game uploads again.
+
+**R648, ON THE BOARD: CONFIRMED.** s531 (cbeea32; clk_mem +0.526, clk_sys
++0.740, i960 +2.115, HDMI -0.532). Ben: "test text is now correct". s530 and
+s532 died in quartus_fit (Segment Violation in register packing -- the tool,
+not the design); s531's fit completed and crashed on exit, and was assembled
+from its database.
+
+**R649 -- THE DDR3 TEXTURE MIRROR (R645) REMOVED. IT WEDGED THE DDR3 BUS.**
+
+s531 on the board with the menu's Texture memory on DDR3: the textures are
+garbage (texels from the wrong lines), and the 3D frame then STAYS STUCK --
+through a core reset, until the MRA is reloaded. m2_ddr3, the arbiter and the
+mirror are reset by mem_rst_n & ddr_go, which comes up on PLL lock and stays
+up (the standing memory-reset rule), so a hang anywhere on that bus lasts
+until the FPGA is reconfigured. The framebuffer never gets another
+transaction and never publishes another frame. Not diagnosed further: the
+case for the mirror was already weak (the CPU waits on the bus 13.6% of its
+cycles, CPI 18.9 -- R645), and Ben: "getting the textures right is more
+important".
+
+Reverted: b3b6d8c and 4b444c4 (the module, its bench, the arbiter in front of
+m2_ddr3, the OSD switch and the texel-port muxes). Kept: telemetry lite on
+(qsf), R647's glyph invalidate, R648. To bring the mirror back, restore
+rtl/mem/m2_tex_ddr3.sv from 4b444c4 -- and find the wedge first: the
+arbiter's b-side (blen 1 reads and byte-enabled writes) had never run on
+the board before s531.
+
+With the switch on SDRAM, s531's textures are as bad as every build since
+at least s377 (Ben: "my sdram image is as earlier still broken"): trees in
+blocky solid squares with horizontal streaks. That is the next work item,
+not a regression from R645-R648 -- with texddr = 0 the texel ports were a
+plain mux onto the SDRAM ports as before.

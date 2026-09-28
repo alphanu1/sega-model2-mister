@@ -182,11 +182,6 @@ localparam CONF_STR = {
 	// R639: Off first -- the power-up default. Menu 0 Off, 1 MAME, 2 Mild,
 	// mapped below to the palette's encoding (0 MAME, 1 mild, 2/3 off).
 	"O[33:32],Gamma,Off,MAME,Mild;",
-	// R645: where the texel cache reads the texture sheets. SDRAM is the
-	// master copy (the CPU writes it as ever); DDR3 is the mirror, written
-	// alongside every CPU texture write, and reading it takes the renderer's
-	// heaviest traffic off the SDRAM the CPU and TGP share. An A/B, live.
-	"O[34],Texture memory,SDRAM,DDR3;",
 	// Which half of the right stick's Y is the throttle. Axis polarity is not
 	// standardised across pads, so this is a setting rather than a rebuild.
 	"O[28],Pedals,Normal,Swapped;",
@@ -574,13 +569,6 @@ wire [1:0] gam_menu = (status[33:32] == 2'd0) ? 2'd2 :
                       (status[33:32] == 2'd1) ? 2'd0 :
                       (status[33:32] == 2'd2) ? 2'd1 : 2'd2;
 always_ff @(posedge clk_mem) begin gam_m1 <= gam_menu; gam_m2 <= gam_m1; end
-// R645: the texture-memory switch, three flops into clk_mem (R229), and the
-// DDR3 mirror's answers to the two miss ports (m2_tex_ddr3, below).
-logic [2:0] txd_s;
-always_ff @(posedge clk_mem) txd_s <= {txd_s[1:0], status[34]};
-wire        texddr = txd_s[2];
-logic        td_ack  [2];
-logic [63:0] td_data [2];
 always_ff @(posedge clk_sys) begin gam_s1 <= gam_menu; gam_s2 <= gam_s1; end
 reg [2:0] texpt_s;   // R620: the filter switch, on clk_mem where the texel cache runs
 always_ff @(posedge clk_mem) texpt_s <= {texpt_s[1:0], status[31]};
@@ -852,7 +840,7 @@ always_comb begin
 	// port through u_p2s. The mux itself is on the clk_mem side.
 	p2s_req   = !p2_tex && (cp_req || st_rd_req || sw_req);
 	p2s_addr  = cp_req ? cp_addr : st_rd_req ? st_rd_addr : sw_addr;
-	p_req[2]  = p2_tex_f ? (tex_m2_req & ~texddr) : p2s_freq;   // R645
+	p_req[2]  = p2_tex_f ? tex_m2_req  : p2s_freq;
 	p_addr[2] = p2_tex_f ? tex_m2_addr : p2s_addr;
 	// PORT 1, NOT PORT 0. m2_sdram's blen() gives ports 1-3 a four-word burst and
 	// ports 0 and 4 a single word, and the copy engine was the ONLY consumer of a
@@ -1030,7 +1018,7 @@ always_comb begin
 	// glyph prefetch (R291), not the port count. Eleven ports close timing --
 	// build/tex1 did it at +0.131 ns.
 	p_req[3]  = cache_m_req;
-	p_req[10] = tex_m_req & ~texddr;   // R645: or the DDR3 mirror
+	p_req[10] = tex_m_req;
 	p_addr[10] = tex_m_addr;
 	p_addr[3] = char_base + SDR_AW'(cache_m_addr);
 	// PORT 0 IS THE CPU'S, and it is the single-word port on purpose: the
@@ -5565,8 +5553,8 @@ wire [63:0] cache_m_data;
 // The answer side of port 3, straight back to the cache. m2_sdram_x2 holds the
 // acknowledge while the request stands and bypasses s_dout on the acknowledge
 // cycle, so both are valid on the edge m2_char_cache captures them.
-assign tex_m_ack    = texddr ? td_ack[0]  : p_ack[10];    // R292; R645
-assign tex_m_data   = texddr ? td_data[0] : p_dout[10];
+assign tex_m_ack    = p_ack[10];          // R292
+assign tex_m_data   = p_dout[10];
 assign cache_m_ack  = p_ack[3];
 assign cache_m_data = p_dout[3];
 wire [31:0] char_hits, char_misses, char_fills;
@@ -5893,8 +5881,8 @@ end
 wire        tex_m2_en = p2_tex_f;
 wire        tex_m2_req;
 wire [SDR_AW:1] tex_m2_addr;
-wire        tex_m2_ack  = texddr ? td_ack[1]  : (p2_tex_f & p_ack[2]);   // R645
-wire [63:0] tex_m2_data = texddr ? td_data[1] : p_dout[2];
+wire        tex_m2_ack  = p2_tex_f & p_ack[2];
+wire [63:0] tex_m2_data = p_dout[2];
 
 // R543: back to 8x6 -- R542's 16x3 won in the bench and not on the board.
 // R640: THE DDR3 MASTER, DRIVING THE 3D FRAMEBUFFER (from branch ddr3, R358).
@@ -5908,62 +5896,13 @@ wire [63:0] tex_m2_data = texddr ? td_data[1] : p_dout[2];
 // to work -- the reader was the one master that did not wait for the ROM and
 // TGP microcode to finish crossing the HPS bridge. It is held in reset until
 // cp_done, the same condition the rest of the core's late masters wait on.
-logic       ddr_go;
-always_ff @(posedge clk_sys or negedge mem_rst_n)
-	if (!mem_rst_n) ddr_go <= 1'b0; else ddr_go <= cp_done;
 wire        ddr_req, ddr_we, ddr_ack, ddr_wnext, ddr_rvalid;
 wire [24:0] ddr_addr;
 wire [7:0]  ddr_blen, ddr_be;
 wire [63:0] ddr_din, ddr_dout;
-// R645: two clients now. The renderer's port (its own arbiter puts the
-// scanout reader first, then the span writer) keeps priority; the texture
-// mirror takes the bus when it is idle. Same arbiter, same rule: the one with
-// the beam deadline wins, and a granted transaction runs to its acknowledge.
-wire        rfb_req, rfb_we, rfb_ack, rfb_wnext, rfb_rvalid;
-wire [24:0] rfb_addr;
-wire [7:0]  rfb_blen, rfb_be;
-wire [63:0] rfb_din;
-wire        tdd_req, tdd_we, tdd_ack, tdd_wnext, tdd_rvalid;
-wire [24:0] tdd_addr;
-wire [7:0]  tdd_blen, tdd_be;
-wire [63:0] tdd_din;
-m2_ddr3_arb u_ddr_top (
-	.clk(clk_sys), .rst_n(mem_rst_n & ddr_go),
-	.a_req(rfb_req), .a_we(rfb_we), .a_addr(rfb_addr), .a_blen(rfb_blen), .a_din(rfb_din), .a_be(rfb_be),
-	.a_wnext(rfb_wnext), .a_rvalid(rfb_rvalid), .a_ack(rfb_ack),
-	.b_req(tdd_req), .b_we(tdd_we), .b_addr(tdd_addr), .b_blen(tdd_blen), .b_din(tdd_din), .b_be(tdd_be),
-	.b_wnext(tdd_wnext), .b_rvalid(tdd_rvalid), .b_ack(tdd_ack),
-	.m_req(ddr_req), .m_we(ddr_we), .m_addr(ddr_addr), .m_blen(ddr_blen), .m_din(ddr_din), .m_be(ddr_be),
-	.m_wnext(ddr_wnext), .m_rvalid(ddr_rvalid), .m_ack(ddr_ack), .m_dout(ddr_dout), .dout(),
-	.dbg_a_waits(), .dbg_b_waits(), .dbg_busy(), .dbg_owner()
-);
-logic        td_rreq  [2];
-logic [SDR_AW:1] td_raddr [2];
-assign td_rreq[0]  = tex_m_req & texddr;
-assign td_rreq[1]  = tex_m2_req & texddr & p2_tex_f;
-assign td_raddr[0] = tex_m_addr;
-assign td_raddr[1] = tex_m2_addr;
-// R645: THE TEXTURE SHEETS' DDR3 MIRROR. Writes: every CPU write the bridge
-// completes into the sheets (clk_sys, where the bridge's SDRAM port lives).
-//
-// R648: AND ONLY WHEN THE MENU SELECTS IT. With the switch on SDRAM only the
-// reads were off; every texture upload was still copied into DDR3 through the
-// arbiter the 3D framebuffer uses. Now the default leaves the mirror wholly
-// idle -- no DDR3 traffic at all. The cost: switching to DDR3 mid-game shows
-// stale texels until the game uploads them again (select the option, then
-// reset).
-logic [2:0] texddr_s;
-always_ff @(posedge clk_sys) texddr_s <= {texddr_s[1:0], status[34]};
-m2_tex_ddr3 #(.AW(SDR_AW), .SBASE(GAME_TEXS0), .TBASE(25'h080000)) u_tex_ddr3 (
-	.clk_mem(clk_mem), .clk(clk_sys), .rst_n(mem_rst_n),
-	.r_req(td_rreq), .r_addr(td_raddr),
-	.r_ack(td_ack), .r_data(td_data),
-	.w_valid(cpu_sd_req && cpu_sd_we && p_ack[1] && texddr_s[2]),   // R648: idle unless selected
-	.w_addr(cpu_sd_addr), .w_data(cpu_sd_din), .w_be(cpu_sd_be),
-	.d_req(tdd_req), .d_we(tdd_we), .d_addr(tdd_addr), .d_blen(tdd_blen), .d_din(tdd_din), .d_be(tdd_be),
-	.d_wnext(tdd_wnext), .d_rvalid(tdd_rvalid), .d_ack(tdd_ack), .d_dout(ddr_dout),
-	.dbg_reads(), .dbg_writes(), .dbg_wr_lost(), .dbg_rd_dropped()
-);
+logic       ddr_go;
+always_ff @(posedge clk_sys or negedge mem_rst_n)
+	if (!mem_rst_n) ddr_go <= 1'b0; else ddr_go <= cp_done;
 m2_ddr3 u_ddr3 (
 	.clk(clk_sys), .rst_n(mem_rst_n & ddr_go),
 	.req(ddr_req), .we(ddr_we), .addr(ddr_addr), .blen(ddr_blen), .din(ddr_din), .be(ddr_be),
@@ -6037,9 +5976,9 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b0), .FB_DD
 	.dbg_miss_map(r3d_miss_map), .dbg_miss_lines(r3d_miss_lines),
 	.dbg_seq_a(r3d_seq_a), .dbg_seq_b(r3d_seq_b),   // R536, R547
 	// R640: the framebuffer's DDR3 side
-	.fb_req(rfb_req), .fb_we(rfb_we), .fb_addr(rfb_addr), .fb_blen(rfb_blen),   // R645: through u_ddr_top
-	.fb_din(rfb_din), .fb_be(rfb_be),
-	.fb_wnext(rfb_wnext), .fb_rvalid(rfb_rvalid), .fb_ack(rfb_ack), .fb_dout(ddr_dout),
+	.fb_req(ddr_req), .fb_we(ddr_we), .fb_addr(ddr_addr), .fb_blen(ddr_blen),
+	.fb_din(ddr_din), .fb_be(ddr_be),
+	.fb_wnext(ddr_wnext), .fb_rvalid(ddr_rvalid), .fb_ack(ddr_ack), .fb_dout(ddr_dout),
 	.dbg_fb_lines(), .dbg_fb_late(), .dbg_fb_pub(), .dbg_fb_drop(), .dbg_fb_pixels()
 );
 
