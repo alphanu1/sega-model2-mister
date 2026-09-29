@@ -25563,3 +25563,21 @@ selected by m2_raster3d's FB_WCOMB (default 0); m2_fb_write is the per-span
 writer again (as in 7086388). tb_m2_fbw_chain runs both (WCOMB 0/1) at BUSY
 0/30/90%, all pass -- the per-span writer included against m2_ddr3's per-beat
 BE (R661), which it holds steady through a request.
+
+**R663 -- s578 ON THE BOARD: THE STREAKS ARE GONE. R660 WAS THEIR CAUSE.**
+
+s578 (branch m2cov-off, 3dcf49e: 7086388 with M2COV off -- R660's DDR3 fix
+on the Model 1 coverage rule s564 drew with; clk_mem +0.084, clk_sys +0.769,
+clk_i960 +3.744, holds >= +0.177, HDMI -0.830). Ben, in play: "Look good ...
+no overruns, no tearing. Overall good." -- a couple of quads with bad
+textures, the open texture item. Still the DDR3 framebuffer (R640): the
+repeated scanlines and texel streaks of s451-s564 were the DDR3 master taking
+single-beat writes twice (R660), not the framebuffer design, the pacing, or
+the coverage rule. R651-R657's hunt (swap, hold, scanout look-ahead, pacing)
+remains right on its own terms but was not the cure.
+
+ed6cf17 (M2COV fixed per R662) built as s581-s583: s581/s582 did not route
+at 41,356/41,452 ALM; s583 fits, clk_sys +0.094, clk_i960 +2.848, holds
++0.146, HDMI -1.551, clk_mem -0.015 on 15 paths all into the self-test
+checker's ck_first (m2_fb_read line buffer -> g_fb.ck_first), a telemetry
+register. Not yet on the board.
