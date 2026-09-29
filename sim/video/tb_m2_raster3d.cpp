@@ -67,6 +67,25 @@ static int TPL = 400;
 // sheets, 16-bit words, word i = the i-th halfword of MAME's u32 array).
 static std::vector<uint32_t> g_tex[2];
 static uint32_t g_tbase1 = 0;
+// R669: M2_R3D_TEXSWAP=<core cycle> -- A TEXTURE UPLOAD, as the game makes at a
+// scene change (MAME: ~420 K words of sheet 0 at once). From that cycle, over
+// M2_R3D_TEXSWAPLEN cycles, each word of both sheets changes from A (MAME's) to
+// B (A ^ 0x5555), lowest address first, with tex_inval raised every cycle of it
+// as the bridge raises it per write. M2_R3D_TEXB=1 serves B from the start --
+// the reference a later draw must equal.
+static long g_now = 0;
+static uint32_t texword(int sh, uint32_t w, uint32_t v) {
+  static const long T = std::getenv("M2_R3D_TEXSWAP") ? atol(std::getenv("M2_R3D_TEXSWAP")) : -1;
+  static const long L = std::getenv("M2_R3D_TEXSWAPLEN") ? atol(std::getenv("M2_R3D_TEXSWAPLEN")) : 20000;
+  static const bool B = std::getenv("M2_R3D_TEXB") != nullptr;
+  bool isb = B;
+  if (!isb && T >= 0 && !g_tex[sh].empty()) {
+    const double n = double(g_tex[0].size() + g_tex[1].size()) * 2.0;
+    const double pos = double(sh ? g_tex[0].size() * 2 + w : w) / n;
+    isb = g_now >= T + long(pos * double(L));
+  }
+  return isb ? (v ^ 0x5555u) : v;
+}
 static uint64_t texpat_line(uint32_t addr, uint32_t base) {
   if (!g_tex[0].empty()) {
     const int sh = (addr >= g_tbase1) ? 1 : 0;
@@ -75,7 +94,7 @@ static uint64_t texpat_line(uint32_t addr, uint32_t base) {
     for (int k = 0; k < 4; ++k) {
       const uint32_t w = w0 + k;
       const uint32_t dw = (w >> 1) < g_tex[sh].size() ? g_tex[sh][w >> 1] : 0xffffffffu;
-      line |= uint64_t((w & 1) ? (dw >> 16) : (dw & 0xffff)) << (16 * k);
+      line |= uint64_t(texword(sh, w, (w & 1) ? (dw >> 16) : (dw & 0xffff))) << (16 * k);
     }
     return line;
   }
@@ -184,7 +203,7 @@ int main(int argc, char **argv) {
   static long g_cyc = 0, g_draw_c0 = -1; static bool g_fc_prev = false, g_fbrec = false;
   static std::vector<long> g_draws;
   auto tick = [&]() {
-    ++g_cyc;
+    ++g_cyc; g_now = g_cyc;   // R669
     // R658: M2_R3D_SPANLOG=<poly> -- every span the writer takes for that polygon
     // (the colour carries the polygon number in list mode)
     { static const int SPL = std::getenv("M2_R3D_SPANLOG") ? std::atoi(std::getenv("M2_R3D_SPANLOG")) : -1;
@@ -273,6 +292,12 @@ int main(int argc, char **argv) {
       if (++sweep_ctr >= SWEEP) { sweep_ctr = 0; d->tex_inval = 1; }
       else                        d->tex_inval = 0;
     }
+    { // R669: the upload's writes each raise the invalidate
+      static const long T = std::getenv("M2_R3D_TEXSWAP") ? atol(std::getenv("M2_R3D_TEXSWAP")) : -1;
+      static const long L = std::getenv("M2_R3D_TEXSWAPLEN") ? atol(std::getenv("M2_R3D_TEXSWAPLEN")) : 20000;
+      static const bool NOINV = std::getenv("M2_R3D_TEXSWAPNOINV") != nullptr;   // the control: stale texels must show
+      if (T >= 0) d->tex_inval = (!NOINV && g_now >= T && g_now < T + L) ? 1 : 0;
+    }
     // R553: M2_R3D_TEXLAT sets the texel memory's latency in core cycles; the
     // default 8 is far quicker than the board's contended SDRAM.
     static const int TEXLAT = std::getenv("M2_R3D_TEXLAT") ? std::atoi(std::getenv("M2_R3D_TEXLAT")) : 8;
@@ -337,7 +362,7 @@ int main(int argc, char **argv) {
       static const int TL = std::getenv("M2_R3D_TEXLAT") ? std::atoi(std::getenv("M2_R3D_TEXLAT")) : 12;
       static const int TJ = std::getenv("M2_R3D_TEXJIT") ? std::atoi(std::getenv("M2_R3D_TEXJIT")) : 0;
       static uint64_t mr = 777;
-      struct Pt { bool req_d = false, busy = false; int cnt = 0, ackc = 0; uint32_t a = 0; };
+      struct Pt { bool req_d = false, busy = false; int cnt = 0, ackc = 0; uint32_t a = 0; uint64_t dat = 0; };
       static Pt pt[2];
       for (int k = 0; k < 2; k++) {
         Pt &q = pt[k];
@@ -346,7 +371,7 @@ int main(int argc, char **argv) {
         if (q.ackc > 0 && --q.ackc == 0) { if (k) d->tex_m2_ack = 0; else d->tex_m_ack = 0; }
         if (req && !q.req_d) {
           if (q.busy) ++g_texmem_viol;
-          q.busy = true; q.a = addr;
+          q.busy = true; q.a = addr; q.dat = texpat_line(addr, d->tex_base0);   // R669: read as issued
           mr = mr * 6364136223846793005ull + 1442695040888963407ull;
           q.cnt = TL + (TJ ? int((mr >> 33) % uint64_t(TJ + 1)) : 0);
         }
@@ -355,8 +380,8 @@ int main(int argc, char **argv) {
           if (q.cnt > 0) --q.cnt;
           else {
             q.busy = false; q.ackc = 2;
-            if (k) { d->tex_m2_ack = 1; d->tex_m2_data = texpat_line(q.a, d->tex_base0); }
-            else   { d->tex_m_ack = 1;  d->tex_m_data  = texpat_line(q.a, d->tex_base0); }
+            if (k) { d->tex_m2_ack = 1; d->tex_m2_data = q.dat; }
+            else   { d->tex_m_ack = 1;  d->tex_m_data  = q.dat; }
           }
         }
       }

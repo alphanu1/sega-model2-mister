@@ -25693,3 +25693,27 @@ The board's configuration (M2COV 0, FB_WCOMB 1, TXLATE 3, two texel ports
 texels however slow or ragged the memory. What the bench still does not
 model: the texture DATA -- it reads MAME's sheets (tex0/tex1.bin); on the
 board the sheets are whatever reached SDRAM.
+
+**R669 -- TEXTURE UPLOADS AND THE TEXEL CACHE: A STALE LINE CANNOT PERSIST.
+NOT THE CAUSE EITHER.**
+
+MAME, a Lua write tap on 0x12000000-0x127FFFFF through 150 s of attract:
+the game writes both sheets at boot (~500 K words each), then rewrites them
+only at scene changes -- s50 and s103: 419,430 words of sheet 0 (all in
+0x12200000-0x123FFFFF, the mirror) and 104,858 of sheet 1 -- and nothing in
+139 of 143 seconds. The bridge raises tex_inval for every write to either
+sheet and its mirror (m2_cpu_bridge R264/R278); m2_raster3d sweeps the cache
+at the frame start after (R280). The race that could leave a stale line --
+a fill read before a write lands, installed after the sweep -- was modelled:
+M2_R3D_TEXSWAP (the sheets change A -> B word by word, tex_inval every cycle
+of it), with TEXMEM reads returning the data as it was when the request
+edge came. The CONTROL, invalidation suppressed entirely
+(M2_R3D_TEXSWAPNOINV), gives a later full draw IDENTICAL to texture B from
+the start: the 1,024-line cache is recycled so fast that every pre-upload
+line is evicted long before the frame is redrawn. A coherence fault could
+flicker, never hold a quad wrong. Ruled out as the wrong-texture quads.
+
+Left: the texture DATA reaching SDRAM (the upload's CPU writes), and the
+per-polygon texture PARAMETERS (origin, size, sheet, mirror -- q_tex) from
+the geometry, which R643/R646 did not compare (they checked positions, u/v
+and z).
