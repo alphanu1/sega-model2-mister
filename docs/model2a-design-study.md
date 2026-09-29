@@ -25641,3 +25641,24 @@ status CFG (only daytona93_volume.cfg), so every load starts at 0 -- After
 flip, On, On, Reference, region 0, bootIP. The RTL behind them stays; the bits
 stay reserved. The menu: Aspect ratio, Texture brightness, Save settings,
 Textures, Texture filter, Texel step, 3D pacing, Gamma, Pedals, Steering.
+
+**R667 -- M2COV ON THE BOARD (s583): THE ROAD SEAM UNCHANGED, AND "IT LOOKS
+WORSE". THE BENCH'S FIX DID NOT TRANSFER. M2COV STAYS OFF.**
+
+Ben's photo of s578 (R663): a seam across the road in front of the car, and
+a grass strip on the left mountain. In the bench, MAME frames 2000 and 5000
+textured at texel step 1: with M2COV off a seam crosses the road (a dark row,
+the texture misaligned across it) where MAME has none; with M2COV on the road
+is continuous. On the board, s583 (ed6cf17: s578's RTL with M2COV on and
+R662's fix): "no different, still the same issues -- actually it looks
+worse". So the seam is not (only) the coverage rule, and what the bench
+feeds the fill -- MAME's vertices, truncated and given quarter fractions as
+the hardware is modelled to (M2_R3D_HWXY/FRAC) -- is not what the board's
+geometry feeds it. The next place to look is the vertices themselves (the
+geometry differential, R643/R646, on a race frame), not the fill.
+
+s584-s586 (d61d55d: the combining writer on, the diagnostics parked, M2COV
+off): s585 died in Quartus (Internal Error, DYN dyn_enum.cpp). s584 closed
+EVERY clock, HDMI included: clk_mem +0.060, clk_sys +0.602, clk_i960 +2.994,
+HDMI +0.248, holds >= +0.163; 41,423 ALM. s586: cores clean, HDMI -0.959.
+s584 on the board 08:29 (s578 as .prev).
