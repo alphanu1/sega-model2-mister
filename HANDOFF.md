@@ -1,5 +1,54 @@
 # Handoff
 
+## 2026-09-29: main = b111c5d, s578's RTL. THE STREAKS ARE GONE (R660, R663).
+
+s578 on the board (branch m2cov-off merged): Ben -- "Look good ... no
+overruns, no tearing. Overall good ... as good as it's been, maybe better."
+Still the DDR3 framebuffer (R640). clk_mem +0.084, clk_sys +0.769, clk_i960
++3.744, holds >= +0.177, HDMI -0.830. rbf: ../sm2-m2cov0/build/seeds/s578.
+main's tree differs from s578's only in things that are off or inert by
+construction (M2COV fill fix, the combining writer behind FB_WCOMB = 0,
+m2_ddr3 passing a write's BE per beat); a rebuild of main has not been run.
+
+What fixed it, and what did not:
+- R660: m2_ddr3 took a request a second time in the cycle its ack was out
+  (the requester drops req only on the edge after). Every single-beat
+  framebuffer write went to DDR3 twice; under BUSY the copy carried the NEXT
+  span's colour, and its wnext/ack landed on whoever owned the arbiter next
+  -- ending the scanout reader's line bursts early (the repeated scanlines)
+  or retiring a later write unwritten. Found by the first bench with the real
+  writer -> arbiter -> m2_ddr3 chain (tb_m2_fbw_chain, `make
+  test_m2_fbw_chain`): 65,080 DDRAM commands for 44,549 requests before, equal
+  after. On the board: FB self-test 1,976/1,976 frames clean (s564: ~38 bad
+  rows every frame). Fix: `D_IDLE: if (req && !ack)`.
+- Wrong turns, recorded: R651-R657 (swap waits for the draw, game hold,
+  scanout look-ahead, writer pacing) are sound but were not the cure; R658's
+  reading that the streaks were the coverage rule was also not the cure --
+  s578 runs Model 1's rule and is clean.
+- R659: M2COV's rounding was a 32-bit adder in front of the span multiply
+  (clk_sys -4.1 ns, s566-s568); now shadow accumulators xah/xbh.
+- R662: s572 (M2COV on) drew NO 3D. Quartus 17.0 folds
+  `signed'(A + $signed({..}))` to 0/-1; Verilator computes it. Found by
+  constant-folding expressions in a toy module and reading the "stuck at"
+  pins. Fixed with a concatenation (ed6cf17). Other signed'() uses in the
+  design checked the same way: correct. New rule in R662: constant-fold any
+  new arithmetic idiom in Quartus before a sweep.
+
+Open:
+- M2COV (Model 2's pixel-centre coverage, R658, fixed R662): built as s583
+  (fits; clk_mem -0.015 on the self-test's ck_first only, HDMI -1.551), NOT
+  judged on the board. Bench: wrong-polygon pixels 1.25/0.57/0.71% vs
+  3.05/1.34/1.82% for Model 1's rule. Enable: Model2.sv .M2COV(1'b1).
+- The combining writer (R661, m2_fb_wcomb, FB_WCOMB): 64-pixel windows, one
+  burst each; draw of frame 9000 at PIXSTEP 1 1.34 vs 8.83 video frames under
+  bus jitter, pixels identical. Does NOT fit (s575-s577: 4,199-4,208 LABs of
+  4,191; ~+330 ALM in place). Needs ~200 ALM freed -- the FB self-test
+  (R653-R657) is the candidate now that it has done its job.
+- A couple of quads with bad textures (Ben) -- the texture item: mip /
+  minification (rock walls, the top of the "8").
+- Chip: 41.3-41.5K ALM, 540/553 M10K. s581/s582 did not route at 41.4K.
+
+
 ## 2026-09-27 (18:15): s431 CONFIRMED GOOD BY BEN ("currently good") -- main.
 
 main fast-forwarded to r639-beta (s431's RTL). Framebuffer build s440-s442
