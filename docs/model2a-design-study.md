@@ -25794,3 +25794,16 @@ trimmed, M2COV off).** s588 closed every clock, HDMI included: clk_mem
 +0.118, clk_sys +0.561, clk_i960 +2.920, HDMI +0.035, holds >= +0.171;
 41,344 ALM. s587 HDMI -0.843, s589 HDMI -0.142, cores clean. s588 on the
 board 09:50 (s584 as .prev).
+
+**R673 -- s588 ON THE BOARD, AND M2COV TO BE RE-TESTED.** Ben: the bridge is
+right now (stone towers, teal cables -- R671 confirmed). Still open: dark
+bands across the road reaching to the edge (bridge, first track); car windows
+with no texture (s578: see-through to the stippled shadow; s588: quads there,
+untextured -- so not the combining writer, which s578 lacks); tree and
+mountain textures that flicker. The road bands fit a row that neither of two
+road quads claims -- Model 1's integer-vertex rule leaves such rows between
+quads sharing a near-horizontal edge, and what lies behind shows through
+(R658's bench: M2COV removes the road seam of frames 2000/5000). s583's board
+test of M2COV ("no different, looks worse", R667) was made BEFORE R671, with
+every second-ROM-pair object textured from the wrong ROM -- it could not
+judge the edges. Rebuilt: s588's RTL with M2COV on.

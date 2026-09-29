@@ -213,6 +213,28 @@ int main(int argc, char **argv) {
         if (p == SPL) std::printf("SPAN p%d y %d x0 %d x1 %d\n", p, (int)d->rootp->m2_raster3d__DOT__tx_span_y,
                                   (int)d->rootp->m2_raster3d__DOT__tx_span_x0, (int)d->rootp->m2_raster3d__DOT__tx_span_x1);
       } }
+    // R672: M2_R3D_FILLLOG=<poly> -- the FILL's spans for that polygon. With
+    // textures on, the writer's colour is the texel's, so SPANLOG cannot name a
+    // polygon; the fill's output still carries the flat, index-coded colour.
+    { static const int FLL = std::getenv("M2_R3D_FILLLOG") ? std::atoi(std::getenv("M2_R3D_FILLLOG")) : -1;
+      auto *r = d->rootp;
+      if (FLL >= 0 && r->m2_raster3d__DOT__u_fill__DOT__span_valid && r->m2_raster3d__DOT__u_fill__DOT__span_ready) {
+        const uint32_t c = r->m2_raster3d__DOT__u_fill__DOT__span_col;
+        const int p = int(((c >> 16) & 0xff) >> 3) | (int(((c >> 8) & 0xff) >> 2) << 5);
+        if (p == FLL) std::printf("FILL p%d y %d x0 %d x1 %d\n", p, (int)r->m2_raster3d__DOT__u_fill__DOT__span_y,
+                                  (int)r->m2_raster3d__DOT__u_fill__DOT__span_x0, (int)r->m2_raster3d__DOT__u_fill__DOT__span_x1);
+      } }
+    // R672: M2_R3D_FILLLOG=<poly> -- the FILL's spans for that polygon. With
+    // textures on, the writer's colour is the texel's, so SPANLOG cannot name a
+    // polygon; the fill's output still carries the flat, index-coded colour.
+    { static const int FLL = std::getenv("M2_R3D_FILLLOG") ? std::atoi(std::getenv("M2_R3D_FILLLOG")) : -1;
+      auto *r = d->rootp;
+      if (FLL >= 0 && r->m2_raster3d__DOT__u_fill__DOT__span_valid && r->m2_raster3d__DOT__u_fill__DOT__span_ready) {
+        const uint32_t c = r->m2_raster3d__DOT__u_fill__DOT__span_col;
+        const int p = int(((c >> 16) & 0xff) >> 3) | (int(((c >> 8) & 0xff) >> 2) << 5);
+        if (p == FLL) std::printf("FILL p%d y %d x0 %d x1 %d\n", p, (int)r->m2_raster3d__DOT__u_fill__DOT__span_y,
+                                  (int)r->m2_raster3d__DOT__u_fill__DOT__span_x0, (int)r->m2_raster3d__DOT__u_fill__DOT__span_x1);
+      } }
     if (FBM) {
       const bool fc = d->rootp->m2_raster3d__DOT__fb_complete;
       // the swap starts it, marked by fb_busy rising (a register; `swap` is a
