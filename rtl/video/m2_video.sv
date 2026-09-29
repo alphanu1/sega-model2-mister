@@ -195,7 +195,11 @@ module m2_video #(
   // by pixel and row, so the renderer needs the same counters the tilemap
   // fetch uses rather than a second set that could drift from them.
   output logic  [9:0] vid_x,
-  output logic  [9:0] vid_y
+  output logic  [9:0] vid_y,
+  // R682: 15 kHz interlaced (clk domain, held): vid_y is then the displayed
+  // line of field vid_field, and the render-ahead line steps by two
+  input  logic        interlace,
+  output logic        vid_field
 );
 
   // ------------------------------------------------------------- timing
@@ -213,7 +217,8 @@ module m2_video #(
     .hblank(hblank), .vblank(vblank),
     .hsync(hsync_i), .vsync(vsync_i), .visible(visible),
     .line_start(line_start), .line_number(line_number),
-    .vblank_start(vblank_start)
+    .vblank_start(vblank_start),
+    .interlace(interlace), .field(vid_field), .ypos()   // R682
   );
 
   assign vblank_irq  = vblank_start;

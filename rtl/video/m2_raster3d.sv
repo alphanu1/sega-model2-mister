@@ -132,6 +132,10 @@ module m2_raster3d #(
   input  logic        scan_clk,
   input  logic [9:0]  scan_x,
   input  logic [9:0]  scan_y,
+  // R682: 15 kHz interlaced (scan_clk): scan_y is then the displayed line of
+  // the field scan_field, 192 a field
+  input  logic        scan_il,
+  input  logic        scan_field,
   output logic [15:0] scan_col,
   output logic        scan_hit,             // 0 = nothing painted, show the 2D
 
@@ -917,20 +921,25 @@ module m2_raster3d #(
       // not on 421-423, after the writer has had the whole blanking to fill the
       // HPS queue (R656: row 0 held row 380 in every frame of the self-test).
       // A second request for line 3 at scan line 0 finds it fetched already.
-      localparam int unsigned TOP0 = SCR_H + 1;   // 385
-      wire  [9:0] fl_tgt = (scan_y >= 10'(TOP0) && scan_y < 10'(TOP0 + FB_LA + 1)) ? scan_y - 10'(TOP0)
-                         : (scan_y + 10'(FB_LA) < 10'(SCR_H))                      ? scan_y + 10'(FB_LA)
-                         : 10'(SCR_H);   // nothing
-      logic       fl_tog;
+      // R682: interlaced, the same rules on a field's 192 displayed lines; the
+      // early top fetch is the NEXT field's (field flips at the wrap)
+      wire  [9:0] scrh_e = scan_il ? 10'(SCR_H / 2) : 10'(SCR_H);
+      wire  [9:0] top0_e = scrh_e + 10'd1;                 // 385, or 193
+      wire        fl_top = (scan_y >= top0_e) && (scan_y < top0_e + 10'(FB_LA + 1));
+      wire  [9:0] fl_tgt = fl_top                                ? scan_y - top0_e
+                         : (scan_y + 10'(FB_LA) < scrh_e)        ? scan_y + 10'(FB_LA)
+                         : scrh_e;   // nothing
+      logic       fl_tog, fl_fld;
       always_ff @(posedge scan_clk or negedge rst_n) begin
-        if (!rst_n) begin fl_sy_q <= 10'd0; fl_line <= 9'd0; fl_tog <= 1'b0; end
+        if (!rst_n) begin fl_sy_q <= 10'd0; fl_line <= 9'd0; fl_tog <= 1'b0; fl_fld <= 1'b0; end
         else begin
           fl_sy_q <= scan_y;
           // R655: THREE LINES AHEAD. The target is (scan_y + 3) mod V_TOTAL;
           // a target in the blanking is not fetched, so the first lines of a
           // frame are fetched during the last blanking lines before it.
-          if (scan_y != fl_sy_q && fl_tgt < 10'(SCR_H)) begin
+          if (scan_y != fl_sy_q && fl_tgt < scrh_e) begin
             fl_line <= 9'(fl_tgt);
+            fl_fld  <= scan_il && (scan_field ^ fl_top);   // R682
             fl_tog  <= ~fl_tog;
           end
         end
@@ -939,13 +948,16 @@ module m2_raster3d #(
       // line, is sampled only once the toggle has arrived.
       logic [2:0] fl_tog_s;
       logic [8:0] fl_line_c;
+      logic       fl_fld_c;
       logic       line_pulse;
+      logic [2:0] il_s;                                  // R682: the OSD bit, into clk
       always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin fl_tog_s <= 3'd0; fl_line_c <= 9'd0; line_pulse <= 1'b0; end
+        if (!rst_n) begin fl_tog_s <= 3'd0; fl_line_c <= 9'd0; fl_fld_c <= 1'b0; line_pulse <= 1'b0; il_s <= 3'd0; end
         else begin
+          il_s       <= {il_s[1:0], scan_il};
           fl_tog_s   <= {fl_tog_s[1:0], fl_tog};
           line_pulse <= fl_tog_s[2] ^ fl_tog_s[1];
-          if (fl_tog_s[2] ^ fl_tog_s[1]) fl_line_c <= fl_line;
+          if (fl_tog_s[2] ^ fl_tog_s[1]) begin fl_line_c <= fl_line; fl_fld_c <= fl_fld; end
         end
       end
 
@@ -953,6 +965,7 @@ module m2_raster3d #(
         .clk(clk), .rd_clk(scan_clk), .rst_n(rst_n),
         .fb_sel(fb_show),
         .line_req(line_pulse), .line_y(fl_line_c), .line_ready(), .hungry(fbr_hungry),   // R655
+        .il(il_s[2]), .line_f(fl_fld_c),                                                  // R682
         .m_req(r_req), .m_we(r_we), .m_addr(r_addr), .m_blen(r_blen),
         .m_rvalid(r_rvalid), .m_dout(fb_dout), .m_ack(r_ack),
         .rd_buf(scan_y[1:0]), .rd_x(scan_x[$clog2(SCR_W)-1:0]),   // R655

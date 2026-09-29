@@ -34,7 +34,7 @@ assign {SD_SCK, SD_MOSI, SD_CS} = 'Z;
 // R640: DDRAM is driven by m2_ddr3, beside m2_raster3d below.
 
 assign VGA_SL  = 0;
-assign VGA_F1  = 0;
+assign VGA_F1  = vid_field;   // R682: the interlaced field
 assign VGA_SCALER  = 0;
 assign VGA_DISABLE = 0;
 assign HDMI_FREEZE   = 0;
@@ -72,6 +72,9 @@ localparam CONF_STR = {
 	"Model2;;",
 	"-;",
 	"O[122:121],Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
+	// R682: 15 kHz INTERLACED for a 15 kHz CRT -- 57.52 fields a second (the
+	// game's rate), 15,733 Hz lines, all 384 lines as two fields of 192.
+	"O[42],Video,Native 24kHz,15kHz interlaced;",
 	"-;",
 	// The read capture phase is an OSD option rather than a constant because the
 	// Model 1 core found its board returned every burst shifted right by one
@@ -377,14 +380,25 @@ pll pll
 // apart, still exactly 16 MHz on average and still 57.5242 Hz a frame.
 localparam int unsigned CE_NUM = 16;      // 16 MHz
 localparam int unsigned CE_DEN = 100;     // clk_mem
-reg [6:0] ce_acc;
-reg       ce_pix;
+// R682: 15 kHz INTERLACED is the same 656-pixel line at 547/5300 of 100 MHz,
+// 10.3208 MHz: 547 lines a frame of two fields at the game's 57.5242 Hz. The
+// ratio is 16/100 native and 547/5,300 interlaced, over one 13-bit accumulator.
+localparam int unsigned CEI_NUM = 547;
+localparam int unsigned CEI_DEN = 5300;
+reg [2:0]  vil_s;                         // the OSD bit, into clk_mem
+always @(posedge clk_mem) vil_s <= {vil_s[1:0], status[42]};
+wire       vid_il = vil_s[2];
+reg [12:0] ce_acc;
+reg        ce_pix;
+wire [12:0] ce_num = vid_il ? 13'(CEI_NUM) : 13'(CE_NUM);
+wire [12:0] ce_den = vid_il ? 13'(CEI_DEN) : 13'(CE_DEN);
 always @(posedge clk_mem) begin
-	if (ce_acc + CE_NUM >= CE_DEN) begin
-		ce_acc <= ce_acc + 7'(CE_NUM) - 7'(CE_DEN);
+	if (ce_acc >= ce_den) ce_acc <= 13'd0;             // a mode change: start clean
+	else if (ce_acc + ce_num >= ce_den) begin
+		ce_acc <= ce_acc + ce_num - ce_den;
 		ce_pix <= 1'b1;
 	end else begin
-		ce_acc <= ce_acc + 7'(CE_NUM);
+		ce_acc <= ce_acc + ce_num;
 		ce_pix <= 1'b0;
 	end
 end
@@ -5845,6 +5859,7 @@ wire [15:0] vid_overruns;
 
 wire [7:0] tile_r, tile_g, tile_b;
 wire [9:0] vid_x, vid_y;
+wire       vid_field;   // R682
 
 // ------------------------------------------------------------ THE 3D LAYER
 //
@@ -6029,6 +6044,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b0), .FB_DD
 	// fed a constant 0, so every checker polygon came out solid.
 	.q_moire(q3d_tex[11]), .q_end(q3d_end),
 	.scan_clk(clk_mem), .scan_x(vid_x), .scan_y(vid_y),   // R564: the video's clock
+	.scan_il(vid_il), .scan_field(vid_field),               // R682
 	.scan_col(r3d_col), .scan_hit(r3d_hit),
 	.dbg_quads(r3d_quads), .dbg_dropped(r3d_dropped), .dbg_tiny(r3d_tiny),
 	.dbg_bands(r3d_bands),
@@ -6119,6 +6135,7 @@ m2_video u_tilemap (
 	.dbg_hscr(vid_hscr), .dbg_vscr(vid_vscr),
 	.dbg_ovr_frame(vid_ovr_frame),
 	.vid_x(vid_x), .vid_y(vid_y),
+	.interlace(vid_il), .vid_field(vid_field),   // R682
 	.dbg_layer_px(vid_layer_px), .dbg_ctrl(vid_ctrl),
 	.dbg_layer_have(vid_layer_have)
 );

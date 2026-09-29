@@ -54,6 +54,11 @@ module m2_fb_read #(
   // ---- fetch control: "the beam is about to need line N"
   input  logic        line_req,           // one pulse per scanline
   input  logic [8:0]  line_y,
+  // R682: 15 kHz INTERLACED. line_y is then a DISPLAYED line of a field (0-191)
+  // and line_f that field; the buffers, the order and the look-ahead all run in
+  // displayed lines, and only the DDR3 address is {line, field}.
+  input  logic        il,
+  input  logic        line_f,
   output logic        line_ready,         // that line is in the buffer
   output logic        hungry,             // R655: a line is being fetched or is waiting to be
 
@@ -159,7 +164,8 @@ module m2_fb_read #(
   // was not double, and the scanout read the frame being drawn. The line
   // number is nine bits because a buffer is 512 lines, so the select belongs
   // at bit 9 before the shift and bit 17 after it.
-  assign m_addr = {fb_sel, 9'(y_r)} * 25'(STRIDE / 2);
+  logic       f_r, tgt_f;               // R682: the field of y_r, of tgt_y
+  assign m_addr = {fb_sel, il ? {y_r[7:0], f_r} : 9'(y_r)} * 25'(STRIDE / 2);
   assign m_blen = 8'(BEATS);
   assign line_ready = have;
 
@@ -168,14 +174,21 @@ module m2_fb_read #(
   // newest request is LA or more past it is being shown already. (The old
   // count -- a request arriving while busy -- missed every line that landed
   // part way through its own display, which is what the board was doing.)
+  // R682: interlaced, the wrap is a field's lines (274 -- the longer field;
+  // one line of slack on the shorter never makes a late line look early by 3)
+  wire [9:0] vtot_e = il ? 10'd274 : 10'(V_TOTAL);
   wire [9:0] ahead = (10'(line_y) >= 10'(y_r)) ? 10'(line_y) - 10'(y_r)
-                                               : 10'(line_y) + 10'(V_TOTAL) - 10'(y_r);
+                                               : 10'(line_y) + vtot_e - 10'(y_r);
   wire       landed_late = (ahead >= 10'(LA));
   // R655: the next line to fetch and the newest asked for; lines are the
   // visible ones, 0..SCR_LINES-1, in order and wrapping.
   localparam int unsigned SCR_LINES = 384;
   logic [8:0] next_y, tgt_y;
-  wire  [8:0] tgt_n = (tgt_y == 9'(SCR_LINES - 1)) ? 9'd0 : tgt_y + 9'd1;
+  wire  [8:0] last  = il ? 9'(SCR_LINES / 2 - 1) : 9'(SCR_LINES - 1);   // R682
+  // >= , not ==: the reset target (383) is past a field's last line (191), and
+  // chasing it fetched a whole field of lines after every switch into
+  // interlace (tb_m2_raster3d M2_R3D_IL: 192 lines landed late at start)
+  wire  [8:0] tgt_n = (tgt_y >= last) ? 9'd0 : tgt_y + 9'd1;
   wire        pend  = (next_y != tgt_n);
   assign hungry = pend || busy;
   typedef enum logic [1:0] { R_IDLE, R_REQ, R_FILL } st_t;
@@ -187,7 +200,7 @@ module m2_fb_read #(
     if (!rst_n) begin
       st <= R_IDLE; m_req <= 1'b0; wp <= 9'd0; y_r <= 9'd0;
       busy <= 1'b0; have <= 1'b0;
-      next_y <= 9'd0; tgt_y <= 9'(SCR_LINES - 1);
+      next_y <= 9'd0; tgt_y <= 9'(SCR_LINES - 1); f_r <= 1'b0; tgt_f <= 1'b0;
       dbg_lines <= '0; dbg_late <= '0; dbg_acks_seen <= 16'd0;
     end else begin
       if (m_ack && !(&dbg_acks_seen)) dbg_acks_seen <= dbg_acks_seen + 16'd1;   // R370
@@ -206,11 +219,14 @@ module m2_fb_read #(
       // in order until the fetches catch up with it. (R362's drop lost the
       // line outright -- on the board the first lines of every frame, whose
       // requests come one a line while the writer is flooding the bridge.)
-      if (line_req) begin tgt_y <= line_y; have <= 1'b0; end
+      if (line_req) begin tgt_y <= line_y; tgt_f <= line_f; have <= 1'b0; end
 
       case (st)
         R_IDLE: if (pend) begin
           y_r  <= next_y;
+          // R682: a line up to the target is the target's field; past it (the
+          // order wraps to reach the target) the field before
+          f_r  <= il && ((next_y <= tgt_y) ? tgt_f : ~tgt_f);
           have <= 1'b0;
           m_req <= 1'b1; wp <= 9'd0; busy <= 1'b1; st <= R_REQ;
         end
@@ -249,7 +265,7 @@ module m2_fb_read #(
             have  <= 1'b1;
             if (!(&dbg_lines)) dbg_lines <= dbg_lines + 16'd1;
             if (landed_late && !(&dbg_late)) dbg_late <= dbg_late + 16'd1;   // R655
-            next_y <= (y_r == 9'(SCR_LINES - 1)) ? 9'd0 : y_r + 9'd1;   // R655
+            next_y <= (y_r == last) ? 9'd0 : y_r + 9'd1;   // R655
             st    <= R_IDLE;
           end
         end
@@ -266,7 +282,7 @@ module m2_fb_read #(
             have <= 1'b1;
             if (!(&dbg_lines)) dbg_lines <= dbg_lines + 16'd1;
             if (landed_late && !(&dbg_late)) dbg_late <= dbg_late + 16'd1;   // R655
-            next_y <= (y_r == 9'(SCR_LINES - 1)) ? 9'd0 : y_r + 9'd1;   // R655
+            next_y <= (y_r == last) ? 9'd0 : y_r + 9'd1;   // R655
             st       <= R_IDLE;
           end
         end

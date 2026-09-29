@@ -25928,3 +25928,35 @@ the MultiPCM rates (m2_pcm_rate, CE_DEN = TICK_DEN), the sound link
 (320 x SYS_MHZ), the I/O Z80 and the backup timers all follow SYS_MHZ and were
 right. Restored R227's accumulator: 25/(3 x 70) of 70 MHz = 8.333 MHz.
 test_m2_sndboard passes (at its default 50 MHz the ratio is the same 1/6).
+
+**R682 -- 15 kHz INTERLACED, BUILT (OSD "Video", O[42]).** Ben: "is there a
+chance of adding 15 kHz interlaced -- it just needs 15 kHz for 480i". The
+native timing (MAME set_raw: 16 MHz, 656 x 424, 57.52 Hz, 24.39 kHz lines) is
+kept exactly; the new mode is the same 656-pixel line at 547/5300 of 100 MHz
+(10.3208 MHz): fields of 274 and 273 lines -- 547 a frame, 15,732.9 Hz lines,
+57.524 Hz fields, the game's own rate (true 480i's 59.94 would run the game 4%
+fast) -- each showing 192 of the 384 lines, field 0 the even and field 1 the
+odd; field 1's vsync starts half a line in; VGA_F1 carries the field. Model 1
+has no such mode (VGA_F1 tied 0), so nothing to copy.
+
+  m2_video_timing: interlace input, field and ypos outputs; line_number (the
+  2D render-ahead) is the line shown two lines later, across the field wrap.
+  tb_m2_video_timing: native 13 checks unchanged; 11 interlaced (lines a
+  field, 192 visible, one vblank a field, every line 0-383 once a frame, a
+  field steps by two, render-ahead, field 1's vsync at H_TOTAL/2, hsync count,
+  field rate) -- all pass; a mutation (the field bit at the wrap) is caught.
+  m2_fb_read / m2_raster3d: everything in DISPLAYED lines of a field --
+  buffers, order, look-ahead, the early top fetch (now the next field's) --
+  and only the DDR3 address is {line, field}; a fetched line's field is the
+  target's if it is at or before it, the previous field's past it (so it
+  needs no state across a mode switch). tb_m2_raster3d M2_R3D_IL (a call is
+  one field, pixels dumped at 2y + field): MAME frame 9000's two fields are
+  pixel-identical to the progressive frame (190,459), with and without bus
+  jitter, 0 late lines -- after one fix the bench found: the reader's reset
+  target (383) lies past a field's last line (191) and it fetched a whole
+  field chasing it after every switch into interlace; now >= , not ==.
+  Model2: the OSD bit into clk_mem, the pixel-enable ratio, VGA_F1.
+
+Not benched: the 2D frame (tb_m2_video_frame needs i960 dumps /tmp lost); its
+one interlace-dependent input, line_number, is proven by the timing bench.
+Area unmeasured until the next build.

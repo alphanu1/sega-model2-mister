@@ -204,6 +204,14 @@ int main(int argc, char **argv) {
   static std::vector<long> g_draws;
   auto tick = [&]() {
     ++g_cyc; g_now = g_cyc;   // R669
+    { static const bool LT = std::getenv("M2_R3D_LATETRACE") != nullptr; static unsigned prev = 0; static int n = 0;
+      auto *r = d->rootp;
+      if (LT && FBM) { unsigned L = d->dbg_fb_late; if (L != prev && n < 12) { n++;
+        std::printf("LATE #%u: landed y %d f %d, target y %d f %d, scan_y %d field %d\n", L,
+          (int)r->m2_raster3d__DOT__g_fb__DOT__u_fbr__DOT__y_r, (int)r->m2_raster3d__DOT__g_fb__DOT__u_fbr__DOT__f_r,
+          (int)r->m2_raster3d__DOT__g_fb__DOT__u_fbr__DOT__tgt_y, (int)r->m2_raster3d__DOT__g_fb__DOT__u_fbr__DOT__tgt_f,
+          (int)d->scan_y, (int)d->scan_field); }
+        prev = L; } }
     // R658: M2_R3D_SPANLOG=<poly> -- every span the writer takes for that polygon
     // (the colour carries the polygon number in list mode)
     { static const int SPL = std::getenv("M2_R3D_SPANLOG") ? std::atoi(std::getenv("M2_R3D_SPANLOG")) : -1;
@@ -588,27 +596,37 @@ int main(int argc, char **argv) {
     // compares the two -- which is the natural way to ask "is the fill behind
     // the beam" -- fired spuriously for that tick. R489 was reverted on exactly
     // that, reported as "the top band painted nothing".
-    d->scan_y = SCR_H; d->scan_x = 0; tick();
+    // R682: M2_R3D_IL -- 15 kHz interlaced: one call is one FIELD. The
+    // blanking lines are this field's (192 .. 273 or 272), then the field
+    // flips and its 192 displayed lines follow; a pixel is dumped at its
+    // logical row 2y + field.
+    static const bool IL = std::getenv("M2_R3D_IL") != nullptr;
+    static int ilf = 0;
+    const int VIS = IL ? SCR_H / 2 : SCR_H, VT = IL ? (ilf ? 273 : 274) : V_TOTAL;
+    d->scan_il = IL; d->scan_field = ilf;
+    d->scan_y = VIS; d->scan_x = 0; tick();
     d->frame_start = 1; tick(); d->frame_start = 0;
     long hits = 0;
     top_hits = 0;
     const unsigned bands_at_fs = d->dbg_bands;
-    for (int y = SCR_H; y < V_TOTAL; y++)
+    for (int y = VIS; y < VT; y++)
       for (int t = 0; t < TPL; t++) { d->scan_y = y; d->scan_x = 0; tick(); }
+    if (IL) { ilf ^= 1; d->scan_field = ilf; }
     // R225: how many bands the fill finished during blanking, and how many of
     // them it still holds. Held < finished means the release threw them away.
     vbl_bands = d->dbg_bands - bands_at_fs;
-    for (int y = 0; y < SCR_H; y++) {
+    for (int y = 0; y < VIS; y++) {
       for (int t = 0; t < TPL; t++) {
         d->scan_y = y; d->scan_x = (t < SCR_W) ? t : SCR_W - 1;
         tick();
+        const int ly = IL ? 2 * y + ilf : y;   // R682: the logical row
         if (count_pixels && t < SCR_W && d->scan_hit) {
           ++hits; if (y < BAND_H) ++top_hits;
           // R539: WHAT was painted, not only how much -- a change to WHEN
           // texels arrive must leave this identical.
           pix_hash = (pix_hash ^ (uint64_t(y) << 40 ^ uint64_t(t) << 20 ^ d->scan_col)) * 1099511628211ull;
           frame_hash = (frame_hash ^ (uint64_t(y) << 40 ^ uint64_t(t) << 20 ^ d->scan_col)) * 1099511628211ull;
-          if (px_dump) std::printf("PX %d %d %04x\n", y, t, (unsigned)d->scan_col);   // R542
+          if (px_dump) std::printf("PX %d %d %04x\n", ly, t, (unsigned)d->scan_col);   // R542, R682
         }
       }
     }
@@ -839,6 +857,7 @@ int main(int argc, char **argv) {
     g_rec = !FBM;   // R650: with the framebuffer the draw above was recorded
     px_dump = std::getenv("M2_R3D_PXDUMP") != nullptr;
     video_frame(true, &hits);            // the frame that displays it
+    if (std::getenv("M2_R3D_IL")) video_frame(true, &hits);   // R682: and its other field
     px_dump = false;
     if (FBM) std::printf("  R640 FB state: complete %d shown_ok %d show %d draw %d busy %d fill_band %d cst %d pixels %u clear_req %d clear_busy %d dvalid %d pst %d\n",
       (int)d->rootp->m2_raster3d__DOT__fb_complete, (int)d->rootp->m2_raster3d__DOT__fb_shown_ok,
