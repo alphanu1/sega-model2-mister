@@ -25960,3 +25960,35 @@ has no such mode (VGA_F1 tied 0), so nothing to copy.
 Not benched: the 2D frame (tb_m2_video_frame needs i960 dumps /tmp lost); its
 one interlace-dependent input, line_number, is proven by the timing bench.
 Area unmeasured until the next build.
+
+**R681 -- MEASURED: THE CPU IS NOT THE LIMIT, AND SDRAM IS NOT WHAT IT WAITS
+ON. THE GAME WAITS FOR THE 3D DRAW.** (Ben: "is it not time to clock up ... the
+CPU has the slack"; and "will moving textures help the CPU bottleneck?")
+
+Measurement build s632 (branch cpu-waits: telemetry lite on, the triangle split,
+combiner and M2COV off for room; s629-s631 with the combiner and M2COV on did not
+close). New W/X records charge every cycle the i960's SDRAM port waits to the
+port in flight. 60 s of attract, 3,441 vblanks:
+
+    i960: 18.5 CPI, "waiting on the bus" 71% of its cycles (the bridge's count)
+    at the SDRAM controller, a frame:     waiting 36,139 clk_mem (2.1%)
+                                          own transfers 81,919 (4.7%)
+       of the wait: behind texels 85.8%, sound 5.0%, idle 4.6%, tiles 3.7%,
+                    geometry 2.0%, TGP 0.0%
+
+The SDRAM is a tenth of the bus wait. The rest is where the i960 IS: 0x12B0/
+0x12B8 (26% of IP samples) is the frame-sync spin on 0x500000 (S5793/S6986) --
+idle, waiting for the vblank interrupt, which R652 holds while the 3D draws; and
+0x17A8C-0x17AF8 (22%) is the loop pushing display-list records to the geometry
+(st rX,(g10)[g12]) -- stalled on stores because the walker drains only when the
+renderer takes the next list, which also waits for the draw. The i960 spends
+about half its time waiting for the 3D renderer.
+
+So: clocking the CPU up would buy little now, and moving the textures to DDR3
+would free ~2% of a frame of CPU wait. The lever is the DRAW's speed. R606 named
+the biggest one measured: front to back with a fill mask (35% of pixels are
+behind something already drawn and never fetch their texels) -- R607 built it
+for the band renderer; the framebuffer path runs FTB = 0 because the mask was fed
+by the band buffers (R640). A mask for the framebuffer path is the next study
+item. This measurement build ran at 3.02 vblanks a frame (no combiner); s626,
+with it, ~2.4.
