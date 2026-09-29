@@ -477,8 +477,18 @@ module m2_geo_engine #(
           dbg_polys <= 16'd0;
           busy   <= 1'b1;
           widx   <= 2'd0; dst <= 2'd0;
-          th_w   <= tha[21:0]; th_ram <= tha[23]; dsel <= 1'b0;   // R222
-          tp_w   <= tpa[21:0]; tp_ram <= tpa[23];                 // R268
+          // R671: THE TEXTURE ROM HAS A GAP, AND THE MRA CLOSES IT. The
+          // reference's region is 16 MB -- its two ROM pairs at 0x000000 and
+          // 0x800000, nothing between -- masked with (bytes/2 - 1): a WORD
+          // address of 23 bits, bit 22 choosing the pair. The MRA packs the
+          // pairs back to back into 8 MB, so the packed word is {a[22], a[20:0]}
+          // (a[21] would land in the gap, which nothing addresses). Taking
+          // a[21:0] read every object textured from the SECOND pair -- tha
+          // 0x489EA0 for Daytona's bridge -- from the first: its headers and its
+          // u/v from another texture's data. Texture RAM (a[23]) uses a[15:0]
+          // and is untouched.
+          th_w   <= {tha[22], tha[20:0]}; th_ram <= tha[23]; dsel <= 1'b0;   // R222; R671
+          tp_w   <= {tpa[22], tpa[20:0]}; tp_ram <= tpa[23];                 // R268; R671
           st     <= E_RD; ret <= E_RD;
         end
 

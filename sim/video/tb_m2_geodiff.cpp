@@ -92,7 +92,12 @@ int main(int argc, char **argv) {
   if (load(dir + "/pram0.bin", v)) put_dwords(GAME_PRAM0, v, 0x8000);
   if (load(dir + "/pram1.bin", v)) put_dwords(GAME_PRAM1, v, 0x8000);
   if (load(dir + "/polyrom.bin", v)) put_dwords(GAME_POLY, v, 0x400000);
-  if (load(dir + "/texrom.bin", v)) put_words(GAME_TEX, v, 0, 0x400000);     // this core's 8 MB
+  // R671: packed as the MRA packs it -- MAME's 16 MB region holds its two ROM
+  // pairs at words 0 and 0x400000; the board's 8 MB holds them back to back
+  if (load(dir + "/texrom.bin", v)) {
+    put_words(GAME_TEX, v, 0, 0x200000);                     // pair one: words 0..0x1FFFFF
+    put_words(GAME_TEX + 0x200000, v, 0x400000, 0x200000);   // pair two: MAME's word 0x400000 -> packed 0x200000
+  }
   if (load(dir + "/texram.bin", v)) put_words(GAME_TEXRAM, v, 0, 0x10000);
   if (load(dir + "/palram.bin", v)) put_words(GAME_PAL3D, v, 0x1000, 0x400);
   if (load(dir + "/colorxlat.bin", v)) put_words(GAME_XLAT3D, v, 0, 0x6000);
@@ -111,12 +116,29 @@ int main(int argc, char **argv) {
   // The game's flip: the read pointer is a BYTE address.
   d->wdata = start * 4; d->wr_setrp = 1; tick(); d->wr_setrp = 0;   // one pulse: a held write re-arms the flip
   long quiet = 0, t = 0;
+  // R671: M2GD_HDR=1 -- every texture header the engine reads: the address it
+  // read from (th_w, RAM or ROM), words 0 and 2, and the attr whose tho steps it
+  FILE *fh = std::getenv("M2GD_HDR") ? std::fopen((dir + "/hdr.txt").c_str(), "w") : nullptr;
+  uint32_t thw_prev = 0xffffffffu;
   for (t = 0; t < 400000000L; t++) {
     const long before = nq;
     tick();
+    if (fh) {
+      auto *r = d->rootp;
+      const uint32_t thw = r->geodiff_top__DOT__u_geometry__DOT__u_engine__DOT__th_w;
+      if (thw != thw_prev) {
+        std::fprintf(fh, "H thw=%06x ram=%d h0=%04x h1=%04x h2=%04x attr=%08x\n", thw_prev,
+                     (int)r->geodiff_top__DOT__u_geometry__DOT__u_engine__DOT__th_ram,
+                     (unsigned)r->geodiff_top__DOT__u_geometry__DOT__u_engine__DOT__hdr0,
+                     (unsigned)r->geodiff_top__DOT__u_geometry__DOT__u_engine__DOT__hdr1,
+                     (unsigned)r->geodiff_top__DOT__u_geometry__DOT__u_engine__DOT__hdr2,
+                     (unsigned)r->geodiff_top__DOT__u_geometry__DOT__u_engine__DOT__attr);
+        thw_prev = thw;
+      }
+    }
     if (d->walk_frames >= 1) { quiet = (nq == before) ? quiet + 1 : 0; if (quiet > 200000) break; }
   }
-  std::fclose(fo);
+  std::fclose(fo); if (fh) std::fclose(fh);
   std::printf("geodiff %s: start %05x, %ld cycles\n", dp, start, t);
   std::printf("  walk: ops %u objects %u frames %u unknown %u | captured mtx %u foc %u lit %u tp %u\n",
     d->walk_ops, d->walk_objs, d->walk_frames, d->walk_unknown, d->mtx_n, d->foc_n, d->lit_n, d->tp_n);

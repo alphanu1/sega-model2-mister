@@ -25729,3 +25729,37 @@ frames. What no bench sees is the texture DATA in the board's SDRAM (the
 game rewrites ~420 K words at every scene change). Next discriminator, on
 the board: the Textures Off OSD in the scene -- flat bars mean geometry or
 fill; none mean texture data.
+
+**R671 -- THE BRIDGE: THE TEXTURE ROM'S SECOND PAIR WAS READ FROM THE FIRST.
+EVERY OBJECT TEXTURED FROM IT HAD ANOTHER TEXTURE'S HEADER AND u/v.**
+
+Ben (s584): "the bridge has never been correct" -- towers in grey noise and
+white stripes where MAME has stone and teal cables; textures off, every quad
+is there. MAME walks 8000 and 8100 (the bridge, p14 dumps) replayed through
+this core's geometry (make geodiff): w8000 188 of 599 quads with the wrong
+texture parameters and 106 polygons with wrong u/v; w8100 279 with wrong u/v
+-- where w2500/w4000 had 0. A header trace in the replay (M2GD_HDR, hdr.txt)
+put the parting at one object: display list 0x800000, tpa 0x4BFD22, tha
+0x489EA0, oba 0xA3D9D6, obc 0x1388 -- both texture addresses with BIT 22 set.
+m2_geo_engine took tha[21:0] / tpa[21:0]: word 0x089EA0 in place of 0x489EA0.
+
+The cause is the ROM layout. MAME's texture region for daytona93 is 16 MB,
+its two ROM pairs at 0x000000 (16522/16521) and 0x800000 (16517/16516),
+nothing between, addressed with mask bytes/2 - 1: a 23-bit WORD address, bit
+22 choosing the pair. The MRA packs the pairs back to back into 8 MB. So the
+board's word is {a[22], a[20:0]} (a[21] would land in the gap). The polygon
+ROM (4 MB pieces at 4 MB strides) is packed as MAME lays it and is right.
+The replay had the same blind spot: it loaded only MAME's first 8 MB (pair
+one and the gap) -- it could not see pair two where the board has it.
+
+Fix: th_w <= {tha[22], tha[20:0]}, tp_w <= {tpa[22], tpa[20:0]}; the replay
+loads the dump packed as the MRA packs it. After, every walk: texture
+parameters 0 differ (w2500 1,774 / w4000 252 / w8000 599 / w8100 1,349
+quads), u/v 0 off (1,578 / 188 / 480 / 1,172 textured polygons).
+test_m2_geo, test_m2_geometry pass.
+
+Open, found on the way and NOT this change (the pre-fix engine gives the
+same): geodiff's aligned position check now reports 1,005 of 1,775 w2500
+polygons > 1 px (R643 recorded 18 off) and 590 of 1,347 on w8100 -- to be
+explained; the board's positions look right, so the aligner or the replay's
+state is the first suspect.
