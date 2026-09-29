@@ -259,15 +259,15 @@ module m2_sound_board #(
   // for exactly one enable. The payload is latched with the edge that raises
   // the strobe -- gating a capture by the same condition that raises it is a
   // rule this project has already paid for twice.
-  // THE YM3438's 8.333 MHz IS A DIVIDE BY SIX WHILE clk_sys IS 50 MHz, and a
-  // RATIO the moment it is not: at 60 it would be 10 MHz, the music a fifth
-  // sharp. R227 built that ratio -- 25/(3 x TICK_DEN), which is 1/6 here --
-  // and it is in git; it is not carried on the tree because the phase of the
-  // enable inside the six cycles differs and the mixed-output byte oracle is
-  // worth more today than a generalisation nothing yet uses. Whoever moves the
-  // core clock restores it AND regenerates the baseline.
-  logic [2:0] ym_div;
-  wire        ym_cen = (ym_div == 3'd0);
+  // THE YM3438's 8.333 MHz IS A RATIO OF clk_sys: 25/(3 x TICK_DEN) -- R227's,
+  // restored (R680). It was a fixed divide by six, right at 50 MHz only, and
+  // the note here said whoever moved the core clock must restore the ratio;
+  // R573 (60) and R580 (70) moved it and did not. At 70 the chip ran at
+  // 11.67 MHz: every FM note 40% sharp and the music 40% fast.
+  localparam int unsigned YM_NUM = 25;
+  localparam int unsigned YM_DEN = 3 * TICK_DEN;
+  logic [$clog2(YM_DEN):0] ym_acc;
+  logic       ym_cen;
   logic       ym_wr_pend, ym_bus_d;
   logic [1:0] ym_a_r;
   logic [7:0] ym_d_r;
@@ -275,10 +275,16 @@ module m2_sound_board #(
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      ym_div <= 3'd0; ym_wr_pend <= 1'b0; ym_bus_d <= 1'b0;
+      ym_acc <= '0; ym_cen <= 1'b0; ym_wr_pend <= 1'b0; ym_bus_d <= 1'b0;
       ym_a_r <= 2'd0; ym_d_r <= 8'd0;
     end else begin
-      ym_div   <= (ym_div == 3'd5) ? 3'd0 : ym_div + 3'd1;
+      if (ym_acc + YM_NUM >= YM_DEN) begin
+        ym_acc <= ym_acc + ($clog2(YM_DEN)+1)'(YM_NUM) - ($clog2(YM_DEN)+1)'(YM_DEN);
+        ym_cen <= 1'b1;
+      end else begin
+        ym_acc <= ym_acc + ($clog2(YM_DEN)+1)'(YM_NUM);
+        ym_cen <= 1'b0;
+      end
       ym_bus_d <= ym_bus;
       if (ym_bus && !ym_bus_d) begin
         ym_a_r     <= addr[2:1];

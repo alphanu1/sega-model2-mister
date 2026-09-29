@@ -25917,3 +25917,14 @@ the clock. Next measurement: the CPU's waits by the port it queues behind.
 The DDR3 texture mirror (R645, wedged the bus, R649) predates R660's
 request-taken-twice fault, a plausible cause of that wedge; revisit if texels
 dominate the CPU's waits.
+
+**R680 -- THE SOUND RAN FAST: THE YM3438's CLOCK WAS STILL A DIVIDE BY SIX.**
+Ben: "sound issue, it's running too fast". m2_sound_board clocked the FM chip
+with a fixed /6 of clk_sys -- 8.333 MHz at 50 MHz, the chip's own clock. Its
+note said whoever moved the core clock must restore R227's ratio
+25/(3 x TICK_DEN); R573 (60 MHz) and R580 (70) moved it and did not. At 70 the
+YM3438 ran at 11.67 MHz: FM 40% sharp and fast. The 68000 (TICK_NUM/TICK_DEN),
+the MultiPCM rates (m2_pcm_rate, CE_DEN = TICK_DEN), the sound link
+(320 x SYS_MHZ), the I/O Z80 and the backup timers all follow SYS_MHZ and were
+right. Restored R227's accumulator: 25/(3 x 70) of 70 MHz = 8.333 MHz.
+test_m2_sndboard passes (at its default 50 MHz the ratio is the same 1/6).
