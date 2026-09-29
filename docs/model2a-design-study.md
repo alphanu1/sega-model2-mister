@@ -25662,3 +25662,34 @@ off): s585 died in Quartus (Internal Error, DYN dyn_enum.cpp). s584 closed
 EVERY clock, HDMI included: clk_mem +0.060, clk_sys +0.602, clk_i960 +2.994,
 HDMI +0.248, holds >= +0.163; 41,423 ALM. s586: cores clean, HDMI -0.959.
 s584 on the board 08:29 (s578 as .prev).
+
+**R668 -- THE TEXEL PATH UNDER THE BOARD'S SDRAM BEHAVIOUR: EXACT. NOT THE
+CAUSE OF THE WRONG-TEXTURE QUADS.**
+
+Ben's photo of s584 (the banked oval, attract): dark bars reaching to the
+screen edge under the cars -- "the road as at a distance, under the car" --
+and road rows whose texture is "wrong rotation". Both are a quad showing
+texels from the wrong place. R643/R646 had already found the geometry's u/v
+exact per vertex on two attract walks and both select screens, so the first
+suspect was the path only the board exercises: the texel cache against real
+SDRAM timing. tb_m2_raster3d's texel memory answered per core tick and read
+the address when it answered -- forgiving a request whose address moves
+while it waits, and giving an ack that can span two clk_mem edges.
+
+M2_R3D_TEXMEM (new): the ports as m2_sdram serves them -- on clk_mem, a
+transaction per RISING EDGE of req, the address captured at that edge, the
+data M2_R3D_TEXLAT + 0..M2_R3D_TEXJIT cycles later with p_ack held 2 cycles
+(ACK_HOLD), and a count of request edges arriving while that port is busy.
+The board's configuration (M2COV 0, FB_WCOMB 1, TXLATE 3, two texel ports
+-- M2_R3D_NS2 -- texel step 1), MAME frames 9000 and 2000 textured:
+
+    memory model                        f9000 draw   f2000 draw   pixels vs reference
+    reference (per-tick, TEXLAT 8)      1.04         1.55         --
+    TEXMEM, latency 12                  0.93         1.36         identical
+    TEXMEM, 12 + 0..60                  1.72         2.69         identical
+    TEXMEM, 30 + 0..200                 4.03         6.55         identical
+
+0 request edges while busy in every run. The texel cache returns the right
+texels however slow or ragged the memory. What the bench still does not
+model: the texture DATA -- it reads MAME's sheets (tex0/tex1.bin); on the
+board the sheets are whatever reached SDRAM.

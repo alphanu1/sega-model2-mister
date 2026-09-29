@@ -44,6 +44,7 @@ static const int SCR_W = 496, SCR_H = 384;
 // R538: BAND_H follows the build (-GBAND_H=...) through M2_R3D_BAND_H.
 static const int V_TOTAL = 424;
 static int BAND_H = 8;    // the shipped band height
+static long g_texmem_viol = 0;   // R668: a request edge while that port was busy
 static bool px_dump = false;   // R542: M2_R3D_PXDUMP, every painted pixel of the last frame
 static uint64_t frame_hash = 1469598103934665603ull;   // R542: this frame only
 static uint64_t pix_hash = 1469598103934665603ull;   // R539: every painted pixel, all frames
@@ -275,8 +276,9 @@ int main(int argc, char **argv) {
     // R553: M2_R3D_TEXLAT sets the texel memory's latency in core cycles; the
     // default 8 is far quicker than the board's contended SDRAM.
     static const int TEXLAT = std::getenv("M2_R3D_TEXLAT") ? std::atoi(std::getenv("M2_R3D_TEXLAT")) : 8;
-    if (d->tex_m_req && tex_wait < 0) tex_wait = TEXLAT;
-    if (tex_wait == 0) {
+    static const bool TEXMEM0 = std::getenv("M2_R3D_TEXMEM") != nullptr;   // R668
+    if (!TEXMEM0 && d->tex_m_req && tex_wait < 0) tex_wait = TEXLAT;
+    if (!TEXMEM0 && tex_wait == 0) {
       d->tex_m_ack = 1;
       d->tex_m_data = texpat_line(d->tex_m_addr, d->tex_base0);
     }
@@ -285,8 +287,8 @@ int main(int argc, char **argv) {
     if (tex3_wait == 0) { d->tex_m3_ack = 1; d->tex_m3_data = texpat_line(d->tex_m3_addr, d->tex_base0); }
     if (d->tex_m4_req && tex4_wait < 0) tex4_wait = TEXLAT + 6;
     if (tex4_wait == 0) { d->tex_m4_ack = 1; d->tex_m4_data = texpat_line(d->tex_m4_addr, d->tex_base0); }
-    if (d->tex_m2_req && tex2_wait < 0) tex2_wait = TEXLAT + 6;
-    if (tex2_wait == 0) {
+    if (!TEXMEM0 && d->tex_m2_req && tex2_wait < 0) tex2_wait = TEXLAT + 6;
+    if (!TEXMEM0 && tex2_wait == 0) {
       d->tex_m2_ack = 1;
       d->tex_m2_data = texpat_line(d->tex_m2_addr, d->tex_base0);
     }
@@ -323,6 +325,43 @@ int main(int argc, char **argv) {
     // is never exercised, and a PASS here says nothing about the change.
     // R564: M2_R3D_SCANMEM puts the scan side on clk_mem, as Model2.sv now
     // does (build the bench with -GTWO_CLOCKS=1 for it).
+    // R668: M2_R3D_TEXMEM -- THE TEXEL PORTS AS m2_sdram SERVES THEM ON THE
+    // BOARD, on clk_mem: a transaction per RISING EDGE of req, the address
+    // captured at that edge, the answer M2_R3D_TEXLAT + 0..M2_R3D_TEXJIT
+    // clk_mem cycles later, p_ack held ACK_HOLD = 2 cycles with the data. The
+    // model above answers per core tick and reads the address when it answers,
+    // which forgives a request whose address moves while it waits.
+    static const bool TEXMEM = std::getenv("M2_R3D_TEXMEM") != nullptr;
+    auto memedge = [&]() {
+      if (!TEXMEM) return;
+      static const int TL = std::getenv("M2_R3D_TEXLAT") ? std::atoi(std::getenv("M2_R3D_TEXLAT")) : 12;
+      static const int TJ = std::getenv("M2_R3D_TEXJIT") ? std::atoi(std::getenv("M2_R3D_TEXJIT")) : 0;
+      static uint64_t mr = 777;
+      struct Pt { bool req_d = false, busy = false; int cnt = 0, ackc = 0; uint32_t a = 0; };
+      static Pt pt[2];
+      for (int k = 0; k < 2; k++) {
+        Pt &q = pt[k];
+        const bool req = k ? d->tex_m2_req : d->tex_m_req;
+        const uint32_t addr = k ? d->tex_m2_addr : d->tex_m_addr;
+        if (q.ackc > 0 && --q.ackc == 0) { if (k) d->tex_m2_ack = 0; else d->tex_m_ack = 0; }
+        if (req && !q.req_d) {
+          if (q.busy) ++g_texmem_viol;
+          q.busy = true; q.a = addr;
+          mr = mr * 6364136223846793005ull + 1442695040888963407ull;
+          q.cnt = TL + (TJ ? int((mr >> 33) % uint64_t(TJ + 1)) : 0);
+        }
+        q.req_d = req;
+        if (q.busy && q.ackc == 0) {
+          if (q.cnt > 0) --q.cnt;
+          else {
+            q.busy = false; q.ackc = 2;
+            if (k) { d->tex_m2_ack = 1; d->tex_m2_data = texpat_line(q.a, d->tex_base0); }
+            else   { d->tex_m_ack = 1;  d->tex_m_data  = texpat_line(q.a, d->tex_base0); }
+          }
+        }
+      }
+      d->eval();
+    };
     static const bool SCANMEM = std::getenv("M2_R3D_SCANMEM") != nullptr;
     if (SCANMEM) {
       d->clk_mem = 1; d->scan_clk = 1; d->eval(); d->clk_mem = 0; d->scan_clk = 0; d->eval();
@@ -335,21 +374,24 @@ int main(int argc, char **argv) {
       // a third faster here than it is.
       static int acc = 0;
       acc += 10;
-      if (acc >= 7) { acc -= 7; d->clk_mem = 1; d->eval(); d->clk_mem = 0; d->eval(); }
+      if (acc >= 7) { acc -= 7; memedge(); d->clk_mem = 1; d->eval(); d->clk_mem = 0; d->eval(); }
       d->clk = 1; d->scan_clk = 1; d->eval(); d->clk = 0; d->scan_clk = 0; d->eval();
-      if (acc >= 7) { acc -= 7; d->clk_mem = 1; d->eval(); d->clk_mem = 0; d->eval(); }
+      if (acc >= 7) { acc -= 7; memedge(); d->clk_mem = 1; d->eval(); d->clk_mem = 0; d->eval(); }
     } else {
     d->clk_mem = 1; d->eval(); d->clk_mem = 0; d->eval();
     d->clk = 1; d->scan_clk = 1; d->eval(); d->clk = 0; d->scan_clk = 0; d->eval();
     d->clk_mem = 1; d->eval(); d->clk_mem = 0; d->eval();
     }
-    if (d->tex_m_ack) { d->tex_m_ack = 0; tex_wait = -1; }
+    static const bool TEXMEM1 = std::getenv("M2_R3D_TEXMEM") != nullptr;   // R668
+    if (TEXMEM1) {}
+    else if (d->tex_m_ack) { d->tex_m_ack = 0; tex_wait = -1; }
     else if (tex_wait > 0) --tex_wait;
     if (d->tex_m3_ack) { d->tex_m3_ack = 0; tex3_wait = -1; }
     else if (tex3_wait > 0) --tex3_wait;
     if (d->tex_m4_ack) { d->tex_m4_ack = 0; tex4_wait = -1; }
     else if (tex4_wait > 0) --tex4_wait;
-    if (d->tex_m2_ack) { d->tex_m2_ack = 0; tex2_wait = -1; }
+    if (TEXMEM1) {}
+    else if (d->tex_m2_ack) { d->tex_m2_ack = 0; tex2_wait = -1; }
     else if (tex2_wait > 0) --tex2_wait;    // R539: where the fill's time goes, a cycle at a time.
     ++fill_hist[d->dbg_fill_hot & 31];
     ++cst_hist[d->rootp->m2_raster3d__DOT__cst & 7];
@@ -737,6 +779,7 @@ int main(int argc, char **argv) {
       // R650: the draw's own length, in core cycles and in video frames
       for (long w : g_draws) std::printf("  R650 FB draw: %ld core cycles (%.2f video frames at 70 MHz / 57.5 Hz)\n", w, w / 1217391.0);
       if (g_draws.empty()) std::printf("  R650 FB draw: NOT COMPLETE after %d frames\n", pre);
+      if (std::getenv("M2_R3D_TEXMEM")) std::printf("  R668 texel ports: request edges while busy %ld\n", g_texmem_viol);
     }
     g_rec = !FBM;   // R650: with the framebuffer the draw above was recorded
     px_dump = std::getenv("M2_R3D_PXDUMP") != nullptr;
