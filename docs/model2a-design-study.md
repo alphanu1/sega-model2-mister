@@ -25597,3 +25597,37 @@ fb_base 0x30000000 -- s578's settings) and their OSD entries removed; the RTL
 behind them stays, and Quartus strips it. FB_WCOMB = 1. quartus_map's
 estimate: 40,770 ALM, against s578's 40,776 (fitted, 41,348 placed) and
 s575's 41,000 (did not fit).
+
+**R665 -- MIP-MAPPING: WHAT IT WOULD TAKE. DAYTONA'S "LOG RAM" IS NOT A LOG
+TABLE.** (Ben: "this and mipmapping please".)
+
+MAME's level (model2rd.ipp): level = clamp((-texlod + fast_log2(z)) >> 7, 0,
+max_level), max_level from min(texwidth, texheight) down to 2x2; at a level
+the texture's origin, size and u/v all shift right by it and the sheet is
+texsheet[level & 1]; then a blend with level + 1 (a second bilinear fetch)
+when mml > 0, or with the microtexture when mml < 0. texlod is per polygon
+(model2_v.cpp:436): ((cb[10] >> 8) & 0x7f80) - 0x3f80 + log_ram[cb[10] &
+0x7fff], where cb[10] = f2u(coef * |dotp| * geo->lod) >> 8 -- the
+geometrizer's per-polygon distance, which this core does not compute.
+
+MEASURED (MAME 0.289 + p15, which logs every log RAM write; Daytona, 60
+emulated seconds): 1,014,632 writes. Boot fills all 32 K entries; the final
+table is 0xFFFF in 32,488 of them; one 280-word block at 0x50F8 is rewritten
+2,863 times (every frame). No 128-entry block is a rising curve. So texlod is
+driven by game data rewritten each frame, not a fixed log function, and
+cannot be generated in logic.
+
+What mip would need, none of which exists: (1) the geometry's per-polygon
+distance (a float multiply chain per polygon, cb[10]); (2) log RAM captured
+from op 0x04 writes with address bit 23 clear -- the live 280-word block at
+least (~1 M10K), the whole 32 K x 16 is ~52 M10K and 13 are free; (3) per
+pixel, log2 of z (a 128-entry table on the 1/z minifloat) and the level; (4)
+m2_texel_addr at a level (four shifters, the sheet select); (5) for MAME's
+blend, a second fetch per minified pixel -- doubling texel traffic exactly
+where R606 found the fill memory-bound. Pixels it changes: R606, 5% (levels
+1+: 2.9 / 1.3 / 0.5 / 0.3%). Room: after R664 ~560 ALM of placement slack;
+(1)-(4) alone are estimated well past that.
+
+Not built. Open question for Ben: are the "couple of quads with bad
+textures" (R663) distant/minified at all? If they are near, mip is not
+their cause.
