@@ -25860,3 +25860,8 @@ data this core draws the windows. On the board they are missing (s578:
 see-through; s588: flat) -- candidates: R675 (windows are small textured
 quads, often right after a rejected one) or the sheet data the game
 uploaded. s596 (R674 + R675) is the test.
+
+**s596-s598 (fd95916: M2COV on, R674, R675, with R671, the combining writer,
+the OSD trimmed).** s596: clk_mem +0.781, clk_sys +0.768, clk_i960 +3.223,
+holds >= +0.241, HDMI -0.123; 41,438 ALM. s597 clk_sys -0.155 and a hold
+-0.312; s598 clk_sys -0.402. s596 on the board 11:14 (s588 as .prev).
