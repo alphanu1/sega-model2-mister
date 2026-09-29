@@ -101,14 +101,13 @@ localparam CONF_STR = {
 	// 43.62 MB takes more than one probe. Region N covers word N*0x100000 for
 	// 0x100000 words; tools/rom_csum.py --region N folds the same span of the
 	// image. Changing this restarts the sweep, so it costs a menu click.
-	"O[13:9],Sweep region (2MB),0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31;",
+	// R666: O[13:9] Sweep region, parked (sw_sel_i tied to 0 below).
 	// ROW 2'S ADDRESS, SELECTABLE. The menu's missing glyphs are the only ones
 	// whose character data lives in GAME_CHAR's first SDRAM row; these presets
 	// read the exact words (sim-verified expected values in the comment at the
 	// readback) so the board can say whether that data is THERE and READABLE.
-	"O[16:14],Probe,bootIP,chr 3,chr 1,chr #,chr A,row2,bndry,chr0;",
-	"-;",
-	"O[24:23],Walk trigger,After flip,Vblank,Flip,Write ptr;",
+	// R666: O[16:14] Probe, parked (probe select tied to 0 below).
+	// R666: O[24:23] Walk trigger, parked at its default, After flip.
 	// R639: 100% FIRST, so it is the power-up default (an OSD field is 0 until
 	// set). The menu index is XORed with 2 below to keep scale_lum's encoding
 	// (0 50%, 1 75%, 2 100%, 3 25%). A saved config from before reads shifted.
@@ -120,7 +119,7 @@ localparam CONF_STR = {
 	// buses instead of adding memory ports -- but it should not be in the way
 	// of looking at the game.
 	// Off at power-up: an OSD bit is 0 until the user sets it.
-	"O[20],Geometrizer walk,On,Off;",
+	// R666: O[20] Geometrizer walk, parked at its default, On.
 	// WHICH MOMENT THE WALK STARTS ON. The reference says the 0x803008 write
 	// is the game saying "the list is ready", so Flip should be right -- but
 	// on hardware it walks a list that decodes one to three opcodes, and the
@@ -151,7 +150,7 @@ localparam CONF_STR = {
 	// stale when the CPU or the TGP rewrites the dword between two reads --
 	// is behind the scenery and the flashing is a question the board can
 	// answer in seconds with this off, and only in 25 minutes without it.
-	"O[25],Pair cache,On,Off;",
+	// R666: O[25] Pair cache, parked at its default, On.
 	// R256: HOW OFTEN THE WALK RUNS. model2.cpp's screen_vblank walks the list
 	// only on even frames when the game is in 30 Hz mode -- "if 60 Hz mode or
 	// frame number is even" -- and this core has always walked every vblank. If
@@ -165,7 +164,7 @@ localparam CONF_STR = {
 	// reference and it's great, only 1 or 2 scenery drop outs every 5 or so
 	// seconds" -- so this is the DEFAULT now and the switch selects the old
 	// behaviour, which is what an OSD bit reads as when nobody has touched it.
-	"O[26],Walk rate,Reference,Every frame;",
+	// R666: O[26] Walk rate, parked at its default, Reference.
 	// R275: TEXTURES, WITH AN OFF SWITCH, because the first build that has them
 	// needs an A/B a person can make by eye in one second. Off restores the
 	// flat placeholder exactly: the plane fit is skipped and the span walk
@@ -573,9 +572,9 @@ always_ff @(posedge clk_sys) begin
 	tl1_s <= {tl1_s[1:0], status[22]};
 end
 wire [1:0] tex_lum_s2 = {~tl1_s[2], tl0_s[2]};   // R639: menu index ^ 2
-always_ff @(posedge clk_sys) nowalk_s <= {nowalk_s[1:0], status[20]};
+always_ff @(posedge clk_sys) nowalk_s <= {nowalk_s[1:0], 1'b0};   // R666: parked, On
 reg [2:0] wrate_s;   // R256/R229: the OSD bit reaches the datapath through three flops
-always_ff @(posedge clk_sys) wrate_s <= {wrate_s[1:0], status[26]};
+always_ff @(posedge clk_sys) wrate_s <= {wrate_s[1:0], 1'b0};   // R666: parked, Reference
 reg [2:0] texoff_s;  // R275: the same, for the texture switch
 always_ff @(posedge clk_sys) texoff_s <= {texoff_s[1:0], status[27]};
 reg [1:0] gam_m1, gam_m2, gam_s1, gam_s2;   // R630: the gamma choice, to both clocks
@@ -619,8 +618,8 @@ wire [2:0]  fb_pace = 3'd0;
 // fallback, the same ratio as the mode it was switched from.
 reg [2:0] wtrig0_s, wtrig1_s;
 always_ff @(posedge clk_sys) begin
-	wtrig0_s <= {wtrig0_s[1:0], status[23]};
-	wtrig1_s <= {wtrig1_s[1:0], status[24]};
+	wtrig0_s <= {wtrig0_s[1:0], 1'b0};   // R666: parked, After flip
+	wtrig1_s <= {wtrig1_s[1:0], 1'b0};
 end
 // R294: the menu's order is not the RTL's encoding -- 0 and 2 are swapped so
 // that the default lands on "After flip". Vblank (1) and Write ptr (3) keep
@@ -1896,7 +1895,7 @@ assign cpu_pal_q  = pal_q_cpu;
 // Wrong value = the CPU's write did not land on the board.
 logic [14:0] tp_cell;
 logic [15:0] tp_q;
-always_comb case (status[16:14])
+always_comb case (3'd0)   // R666: Probe parked at bootIP
 	3'd0: tp_cell = 15'd1129;  3'd1: tp_cell = 15'd1130;
 	3'd2: tp_cell = 15'd1131;  3'd3: tp_cell = 15'd1132;
 	3'd4: tp_cell = 15'd1368;  3'd5: tp_cell = 15'd1385;
@@ -3000,7 +2999,7 @@ wire [23:0] eng_mem_idx  = (eng_mem_space == 2'd1) ? (eng_mem_addr[23] ? {9'd0, 
 // R229: an OSD bit reaches the datapath through three flops, never raw.
 reg pair_off_s0, pair_off_s1, pair_off_s2;
 always @(posedge clk_sys) begin
-	pair_off_s0 <= status[25];
+	pair_off_s0 <= 1'b0;   // R666: parked, On
 	pair_off_s1 <= pair_off_s0;
 	pair_off_s2 <= pair_off_s1;
 end
@@ -3581,7 +3580,7 @@ m2_backup u_backup (
 	.wdata(cpu_io_wdata),
 	.rdata(bak_rdata),
 	.dbg_word(nv_word_r),
-	.dbg_rd_sel({1'b0, status[16:14]}),   // R411: probe page removed
+	.dbg_rd_sel(4'd0),   // R411: probe page removed; R666: Probe parked
 	.dbg_q(bak_dbg_q), .dbg_first(bak_first),
 	.dbg_w0(bak_w0), .dbg_writes(bak_writes)
 );
@@ -5034,7 +5033,7 @@ logic  [7:0]     sw_runs;
 // OSD, so it is many orders of magnitude slower than clk_sys and is read
 // directly -- the same treatment status[5:4] already gets on the controller's
 // capture phase.
-wire   [4:0]     sw_sel_i = status[13:9];
+wire   [4:0]     sw_sel_i = 5'd0;   // R666: Sweep region parked
 
 function automatic logic [23:0] sw_fold(input logic [23:0] a, input logic [15:0] w);
   logic [23:0] t;

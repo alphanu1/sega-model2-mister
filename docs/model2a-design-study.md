@@ -25631,3 +25631,13 @@ where R606 found the fill memory-bound. Pixels it changes: R606, 5% (levels
 Not built. Open question for Ben: are the "couple of quads with bad
 textures" (R663) distant/minified at all? If they are near, mip is not
 their cause.
+
+**R666 -- THE OSD: DEVELOPER OPTIONS PARKED.** Ben: "strip loads from the menu
+that users do not need" -- Walk trigger (O[24:23]), Geometrizer walk (O[20]),
+Pair cache (O[25]), Walk rate (O[26]); and with them Sweep region (O[13:9],
+the ROM checksum sweep) and Probe (O[16:14], R411's glyph probe). Each input is
+tied to its menu default -- the values the board has run with: it has no saved
+status CFG (only daytona93_volume.cfg), so every load starts at 0 -- After
+flip, On, On, Reference, region 0, bootIP. The RTL behind them stays; the bits
+stay reserved. The menu: Aspect ratio, Texture brightness, Save settings,
+Textures, Texture filter, Texel step, 3D pacing, Gamma, Pedals, Steering.
