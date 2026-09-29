@@ -25788,3 +25788,9 @@ Much of the second pair holds road and scenery textures resembling the
 first's, which is why it looked nearly right. The position counts are now
 PROVEN independent of the fix (identical both ways on every walk) -- that
 item stays open.
+
+**s587-s589 (b99dfa8: R671's texture ROM fix, the combining writer, the OSD
+trimmed, M2COV off).** s588 closed every clock, HDMI included: clk_mem
++0.118, clk_sys +0.561, clk_i960 +2.920, HDMI +0.035, holds >= +0.171;
+41,344 ALM. s587 HDMI -0.843, s589 HDMI -0.142, cores clean. s588 on the
+board 09:50 (s584 as .prev).
