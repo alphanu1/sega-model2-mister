@@ -25763,3 +25763,28 @@ same): geodiff's aligned position check now reports 1,005 of 1,775 w2500
 polygons > 1 px (R643 recorded 18 off) and 590 of 1,347 on w8100 -- to be
 explained; the board's positions look right, so the aligner or the replay's
 state is the first suspect.
+
+**R671, CORRECTED AND EXTENDED: THE OTHER TRACKS TOO.** R671's "the pre-fix
+engine gives the same" rested on a replay that NEVER RAN: the pre-fix binary
+was built from `make -n` output, which is empty when the target is up to
+date, so the "build" was an empty command returning 0, and geodiff.py read an
+ours.txt copied in from the FIXED replay. Redone with the pre-fix engine
+built for real (make -n -B; engine from 65898d7, still tha[21:0]), fresh
+dumps of walks 1000, 5000 and 9000 added (Ben: "the road on the other
+tracks ... and wrong orientation?"). Texture parameters / u/v wrong, pre-fix
+-> fixed:
+
+    walk    tex params            u/v (orientation)     position > 1 px
+    1000    0 / 1,158 -> 0        0 / 835 -> 0          273 = 273
+    2500    0 / 1,774 -> 0        0 / 1,578 -> 0        1,005 = 1,005
+    5000    36 / 1,468 -> 0       0 / 1,290 -> 0        810 = 810
+    8000    188 / 599 -> 0        106 / 480 -> 0        6 = 6
+    8100    800 / 1,349 -> 0      279 / 1,172 -> 0      590 = 590
+    9000    810 / 1,055 -> 0      254 / 969 -> 0        551 = 551
+
+Walk 9000 is the banked oval of Ben's photo (dark bars under the cars, road
+rows "wrong rotation"): 77% of its quads had another texture's parameters.
+Much of the second pair holds road and scenery textures resembling the
+first's, which is why it looked nearly right. The position counts are now
+PROVEN independent of the fix (identical both ways on every walk) -- that
+item stays open.
