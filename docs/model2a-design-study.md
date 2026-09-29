@@ -25581,3 +25581,19 @@ at 41,356/41,452 ALM; s583 fits, clk_sys +0.094, clk_i960 +2.848, holds
 +0.146, HDMI -1.551, clk_mem -0.015 on 15 paths all into the self-test
 checker's ck_first (m2_fb_read line buffer -> g_fb.ck_first), a telemetry
 register. Not yet on the board.
+
+**R664 -- ROOM FOR THE COMBINING WRITER: THE SCANLINE HUNT'S DIAGNOSTICS
+PARKED; AND WHY IT IS WORTH HAVING.**
+
+Measured on the board, telemetry: s578 makes a game frame every 2.46 vblanks
+(23.3 fps); s572, which drew no 3D at all (R662), every 2.01 (28.6 fps). The
+draw costs the game ~0.45 vblank a frame (R652's hold makes the game wait for
+it), so the write path is on the game's critical path -- R661's combiner is
+aimed exactly there.
+
+Room: the FB self-test (R653-R657), the FB write pace (R656) and the FB
+address switch (R654) are tied off in Model2.sv (fb_test 0, fb_pace 0,
+fb_base 0x30000000 -- s578's settings) and their OSD entries removed; the RTL
+behind them stays, and Quartus strips it. FB_WCOMB = 1. quartus_map's
+estimate: 40,770 ALM, against s578's 40,776 (fitted, 41,348 placed) and
+s575's 41,000 (did not fit).

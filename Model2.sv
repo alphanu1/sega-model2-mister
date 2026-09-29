@@ -186,17 +186,10 @@ localparam CONF_STR = {
 	// 2D keeps the 3D's pace: arcade slowdown. FREE lets the game run on and
 	// the 3D fall behind the HUD.
 	"O[36],3D pacing,Hold game,Free;",
-	// R653: THE FRAMEBUFFER SELF-TEST. The 3D is replaced by a pattern each
-	// pixel of which names its own row and cell; the scanout checks every one
-	// before the mix with the 2D, and the UART reports bad pixels and rows.
-	"O[37],FB self-test,Off,On;",
-	// R654: WHERE THE 3D FRAMEBUFFER LIVES IN DDR3. 0x30000000 is the cores'
-	// own region; 0x26000000 (R351's choice) is in the 0x2xxxxxxx region the
-	// framework hands out at run time. Kept selectable to compare on the board.
-	"O[38],FB address,0x30000000,0x26000000;",
-	// R656: the framebuffer writer's pace, beats a cycle -- so the HPS port's
-	// queue, which our scanout reads wait behind, fills no faster than this.
-	"O[41:39],FB write pace,Off,1,1/2,1/4,1/8,1/16;",
+	// R664: O[37] (FB self-test, R653), O[38] (FB address, R654) and O[41:39]
+	// (FB write pace, R656) are parked -- diagnostics of the scanline hunt that
+	// R660 ended -- to make room for the combining writer (R661). The bits stay
+	// reserved; the RTL behind them is tied off below, not removed.
 	// R630: GAMMA, because MAME's curve is MAME's guess at cabinet
 	// calibration (m2_palette) and the board is judged on Ben's own screen.
 	// MAME's is entry zero, the reference; Mild lifts the darks; Off is the
@@ -608,19 +601,16 @@ reg  [2:0]  pace_free_s;
 always_ff @(posedge clk_sys) pace_free_s <= {pace_free_s[1:0], status[36]};
 wire        r3d_game_hold = r3d_list_hold && !pace_free_s[2];
 // R653: the framebuffer self-test's switch and its per-frame results (clk_sys)
-reg  [2:0]  fbt_s;
-always_ff @(posedge clk_sys) fbt_s <= {fbt_s[1:0], status[37]};
-wire        fb_test = fbt_s[2];
+// R664: parked -- tied off, so Quartus removes the generator and checker
+wire        fb_test = 1'b0;
 wire [15:0] tp_bad, tp_rows;
 wire [26:0] tp_first;
 // R654: the framebuffer's DDR3 base (64-bit word address), from the OSD
-reg  [2:0]  fba_s;
-always_ff @(posedge clk_sys) fba_s <= {fba_s[1:0], status[38]};
-wire [28:0] fb_base = fba_s[2] ? 29'h04C0_0000 : 29'h0600_0000;   // byte 0x26000000 : 0x30000000
+// R664: fixed at 0x30000000, the cores' own region (s578's setting)
+wire [28:0] fb_base = 29'h0600_0000;
 // R656: the writer's pace, into clk_sys
-reg  [2:0]  fbp_1, fbp_2;
-always_ff @(posedge clk_sys) begin fbp_1 <= status[41:39]; fbp_2 <= fbp_1; end
-wire [2:0]  fb_pace = (fbp_2 > 3'd5) ? 3'd0 : fbp_2;
+// R664: parked -- off
+wire [2:0]  fb_pace = 3'd0;
 // R265: THE WALK TRIGGER WAS THE ONE OSD BIT TAKEN RAW. Every other option in
 // this core reaches the datapath through three flops (R229) and this one went
 // straight from `status` into the geometrizer's mode select. The board showed
@@ -5986,6 +5976,7 @@ m2_ddr3 u_ddr3 (
 // R640: FB_DDR3 -- the 3D layer is drawn into DDR3 and shown only when whole.
 // FTB off: its mask is fed by the band buffers, which are not built.
 m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b0), .FB_DDR3(1'b1),
+              .FB_WCOMB(1'b1),   // R661: the combining writer (room from R664)
               .PXC(1'b1), .PIXSTEP(4), .FRB(2), .M2COV(1'b0),   // R658 off, as s578 (R663); on is R662-fixed (s583) but not yet judged on the board
                 // R626: quarter-pixel plane fit
               .TXLATE(3),   // R627: point-sample while the fill is within 3 bands of the beam
