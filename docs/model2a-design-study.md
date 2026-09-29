@@ -25888,3 +25888,14 @@ overflow risk). M2COV's pixel-centre rule shares the diagonal: no gap, no
 pixel twice. RTL against the bench-level split: identical accuracy; 20 / 30
 of ~180 K pixels differ (the store's tiny cull sees the bench's halves as
 entries of their own).
+
+**R678 -- s596: THE WINDOWS BACK "MOSTLY ALL THE TIME" (R675 confirmed); FLAT
+IN SOME SCREENS. AND AN OPEN LIMIT: u/v SATURATE AT 2,048 TEXELS.** Ben's photo
+(attract, the car from above): the windscreen panes flat grey and green, no
+reflection. Not saturation: across walks 1000/2500/5000/8000/8100/9000 no
+window quad has a u/v corner at the 8191 ceiling. Candidate: the panes of a
+curved windscreen are twisted quads (R677), which s620 draws as triangles;
+if not, dump that scene from MAME and trace it. The ceiling IS hit elsewhere
+-- tex 0x408025, u 0..8191 across a long strip (w8000 4 quads, w8100 9,
+w9000 15), and one road piece on w2500 -- the store's 13-bit u/v (R609) spans
+2,048 texels after the per-quad offset; MAME has no limit. Open.
