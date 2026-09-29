@@ -135,6 +135,12 @@ int main(int argc, char **argv) {
                      (unsigned)r->geodiff_top__DOT__u_geometry__DOT__u_engine__DOT__attr);
         thw_prev = thw;
       }
+      static uint32_t tpw_prev = 0xffffffffu;   // R671: the u/v pointer too
+      const uint32_t tpw = r->geodiff_top__DOT__u_geometry__DOT__u_engine__DOT__tp_w;
+      if (tpw != tpw_prev) {
+        std::fprintf(fh, "T tpw=%06x ram=%d\n", tpw, (int)r->geodiff_top__DOT__u_geometry__DOT__u_engine__DOT__tp_ram);
+        tpw_prev = tpw;
+      }
     }
     if (d->walk_frames >= 1) { quiet = (nq == before) ? quiet + 1 : 0; if (quiet > 200000) break; }
   }
