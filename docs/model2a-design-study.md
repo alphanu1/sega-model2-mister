@@ -25865,3 +25865,26 @@ uploaded. s596 (R674 + R675) is the test.
 the OSD trimmed).** s596: clk_mem +0.781, clk_sys +0.768, clk_i960 +3.223,
 holds >= +0.241, HDMI -0.123; 41,438 ALM. s597 clk_sys -0.155 and a hold
 -0.312; s598 clk_sys -0.402. s596 on the board 11:14 (s588 as .prev).
+
+**R677 -- CORNERS: THE BANKED ROAD IS TWISTED; TEXTURED QUADS GO TO THE FILL
+AS TWO TRIANGLES.** s596 on the board (Ben): "mostly looking really good, no
+more wrong placements" -- R675 confirmed -- "but some position/orientation is
+not good on corners". MAME frame 9000 (the banked oval) after R674/R675: 0.7%
+of textured pixels > 16 texels off, 2.8% 5-16; the worst are one strip of
+banked road on the corner (h0 441B, polys 933-955), 40-60% of each polygon
+9-14 texels off. They are TWISTED: the plane through three corners' u/z,
+v/z, 1/z misses the fourth by up to u 126 / v 333 texels (poly 941; 953: u
+86, v 182); an ordinary polygon (600) misses by 0. One plane cannot follow a
+twisted quad; MAME's poly.h interpolates along the edges and does.
+
+Measured before building (M2_R3D_SPLIT pushes every textured quad as (0,1,2)
+and (0,2,3)): f9000 > 16 texels 0.7% -> 0.0%, 5-16 2.8% -> 1.6%, within 1
+77.6% -> 79.2%; draw 0.98 -> 1.00 video frames. f2000 unchanged in accuracy,
+1.45 -> 1.53. Built as m2_raster3d SPLIT_TRI: between the store and the fill,
+a textured quad not already a triangle is handed over twice -- (0,1,2,2) then
+(0,2,3,3), corners, u/v, 1/z and the frac nibbles remapped -- and the store's
+entry popped only after the second. Nothing is added to the store (no
+overflow risk). M2COV's pixel-centre rule shares the diagonal: no gap, no
+pixel twice. RTL against the bench-level split: identical accuracy; 20 / 30
+of ~180 K pixels differ (the store's tiny cull sees the bench's halves as
+entries of their own).

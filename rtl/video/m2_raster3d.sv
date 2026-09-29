@@ -91,6 +91,14 @@ module m2_raster3d #(
   // (m2_fb_wcomb) instead of a DDR3 command per span (m2_fb_write). ~+330 ALM
   // in place: it does not fit beside everything else yet (s575-s577).
   parameter bit FB_WCOMB = 1'b0,
+  // R677: a textured quad goes to the fill as two triangles, (0,1,2) and
+  // (0,2,3), each fitted through its own corners. A banked road on a corner
+  // is TWISTED -- its four corners' u/z, v/z, 1/z lie on no one plane (MAME
+  // frame 9000: the plane through three misses the fourth by up to 333
+  // texels) -- and the fill's single plane cannot follow it; MAME interpolates
+  // along the edges. Needs M2COV, whose pixel-centre rule shares the diagonal
+  // without a gap or a pixel drawn twice.
+  parameter bit SPLIT_TRI = 1'b0,
   // R275: the SDRAM address width the texel fetch drives.
   parameter int unsigned TEX_AW = 25
 ) (
@@ -357,6 +365,26 @@ module m2_raster3d #(
 
   // ------------------------------------------------------------- the filler
   logic        fl_in_valid, fl_in_ready, fl_quad_done, fl_line_case;
+  // R677: the triangle splitter. sp_b: 0 = the first triangle (0,1,2) is next,
+  // 1 = the second (0,2,3). The store's entry is held until the second is
+  // taken. A quad already a triangle (corner 3 on corner 2) goes whole.
+  logic        sp_b;
+  wire         sp_tri = (qo_x3 == qo_x2) && (qo_y3 == qo_y2) && (qo_frac[15:12] == qo_frac[11:8]);
+  wire         sp_on  = SPLIT_TRI && qo_tex[0] && !sp_tri;
+  wire         sp_2nd = sp_on && sp_b;
+  wire         sp_1st = sp_on && !sp_b;
+  wire signed [15:0] sp_x1 = sp_2nd ? qo_x2 : qo_x1,  sp_y1 = sp_2nd ? qo_y2 : qo_y1;
+  wire signed [15:0] sp_x2 = sp_2nd ? qo_x3 : qo_x2,  sp_y2 = sp_2nd ? qo_y3 : qo_y2;
+  wire signed [15:0] sp_x3 = sp_1st ? qo_x2 : qo_x3,  sp_y3 = sp_1st ? qo_y2 : qo_y3;
+  wire [12:0]  sp_u1 = sp_2nd ? qo_u2 : qo_u1,  sp_v1 = sp_2nd ? qo_v2 : qo_v1;
+  wire [12:0]  sp_u2 = sp_2nd ? qo_u3 : qo_u2,  sp_v2 = sp_2nd ? qo_v3 : qo_v2;
+  wire [12:0]  sp_u3 = sp_1st ? qo_u2 : qo_u3,  sp_v3 = sp_1st ? qo_v2 : qo_v3;
+  wire [15:0]  sp_oz1 = sp_2nd ? qo_oz2 : qo_oz1;
+  wire [15:0]  sp_oz2 = sp_2nd ? qo_oz3 : qo_oz2;
+  wire [15:0]  sp_oz3 = sp_1st ? qo_oz2 : qo_oz3;
+  wire [15:0]  sp_frac = sp_2nd ? {qo_frac[15:12], qo_frac[15:12], qo_frac[11:8], qo_frac[3:0]}
+                       : sp_1st ? {qo_frac[11:8],  qo_frac[11:8],  qo_frac[7:4],  qo_frac[3:0]}
+                       : qo_frac;
   logic        fl_span_valid, fl_span_ready, fl_span_moire;
   logic signed [15:0] fl_span_y, fl_span_x0, fl_span_x1;
   logic signed [31:0] fl_span_ooz;                          // R337: 1/z at the span start
@@ -475,14 +503,14 @@ module m2_raster3d #(
     // R327: no sign extension. m2_quad_store already saturates these to 13
     // bits and hands them over as 16, and the fill now takes them as 16.
     .in_x0(qo_x0), .in_y0(qo_y0),
-    .in_x1(qo_x1), .in_y1(qo_y1),
-    .in_x2(qo_x2), .in_y2(qo_y2),
-    .in_x3(qo_x3), .in_y3(qo_y3),
+    .in_x1(sp_x1), .in_y1(sp_y1),                                        // R677
+    .in_x2(sp_x2), .in_y2(sp_y2),
+    .in_x3(sp_x3), .in_y3(sp_y3),
     .in_col(qo_col), .in_moire(qo_moire),
-    .in_u0(qo_u0), .in_v0(qo_v0), .in_u1(qo_u1), .in_v1(qo_v1),
-    .in_u2(qo_u2), .in_v2(qo_v2), .in_u3(qo_u3), .in_v3(qo_v3),
-    .in_oz0(qo_oz0), .in_oz1(qo_oz1), .in_oz2(qo_oz2), .in_oz3(qo_oz3),  // R337
-    .in_frac(qo_frac),                                                    // R626
+    .in_u0(qo_u0), .in_v0(qo_v0), .in_u1(sp_u1), .in_v1(sp_v1),
+    .in_u2(sp_u2), .in_v2(sp_v2), .in_u3(sp_u3), .in_v3(sp_v3),
+    .in_oz0(qo_oz0), .in_oz1(sp_oz1), .in_oz2(sp_oz2), .in_oz3(sp_oz3),  // R337
+    .in_frac(sp_frac),                                                    // R626
     .in_tex(qo_tex),
     .view_x1(16'sd0), .view_x2(16'(SCR_W) - 16'sd1),
     .view_y1(band_y1), .view_y2(band_y2),
@@ -1476,7 +1504,11 @@ module m2_raster3d #(
     end
   end
   assign dbg_seq_b = '0;
-  assign qs_out_ready    = (cst == C_FILL) && fl_in_ready;
+  assign qs_out_ready    = (cst == C_FILL) && fl_in_ready && !sp_1st;   // R677: held for the second triangle
+  always_ff @(posedge clk or negedge rst_n) begin   // R677: which triangle is next
+    if (!rst_n)                                 sp_b <= 1'b0;
+    else if (fl_in_valid && fl_in_ready && sp_on) sp_b <= ~sp_b;
+  end
   assign fl_in_valid     = (cst == C_FILL) && qs_out_valid;
 
   always_ff @(posedge clk or negedge rst_n) begin

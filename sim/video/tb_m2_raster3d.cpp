@@ -773,6 +773,14 @@ int main(int argc, char **argv) {
       // a fan: (0,1,2,3), (0,3,4,5), ...; a triangle repeats its last vertex
       for (int k = 1; k < n - 1; k += 2) {
         const int c = k + 1, e = (k + 2 < n) ? k + 2 : k + 1;
+        // R677: M2_R3D_SPLIT -- a textured quad as two triangles (0,k,c) and
+        // (0,c,e), each fitted through its own corners: what the fill would
+        // do for a twisted quad. Measures the gain and the draw-time cost.
+        static const bool SPLIT = std::getenv("M2_R3D_SPLIT") != nullptr;
+        if (SPLIT && ((p.h0 >> 14) & 1) && e != c) {
+          push_quad(p, 0, k, c, c, false);
+          push_quad(p, 0, c, e, e, lastp && (k + 2 >= n - 1));
+        } else
         push_quad(p, 0, k, c, e, lastp && (k + 2 >= n - 1));
       }
     }

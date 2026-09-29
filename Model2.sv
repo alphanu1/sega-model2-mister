@@ -5976,6 +5976,7 @@ m2_ddr3 u_ddr3 (
 // FTB off: its mask is fed by the band buffers, which are not built.
 m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b0), .FB_DDR3(1'b1),
               .FB_WCOMB(1'b1),   // R661: the combining writer (room from R664)
+              .SPLIT_TRI(1'b1),  // R677: textured quads as two triangles
               .PXC(1'b1), .PIXSTEP(4), .FRB(2), .M2COV(1'b1),   // R658/R662; R673: re-tested on top of R671 (s583's test had the texture ROM bug)
                 // R626: quarter-pixel plane fit
               .TXLATE(3),   // R627: point-sample while the fill is within 3 bands of the beam
