@@ -365,6 +365,18 @@ module m2_raster_fill #(
   // with 550 ALMs free.
   logic signed [23:0] dudx, dudy, dvdx, dvdy;   // R618
   logic signed [31:0] det_r;
+  // R674: THE FIT TAKES THE BETTER OF ITS TWO TRIANGLES. It fitted on vertices
+  // 0,1,2 and fell back to 0,2,3 only when that determinant was exactly zero.
+  // A flat quad's u/z, v/z and 1/z ARE planes in screen space, so any three
+  // corners give the same plane -- but the corners are quantised (quarter
+  // pixels, 13-bit u/v, the 1/z minifloat), and a small triangle magnifies
+  // that into the gradients. A thin road strip or a quad with two near-
+  // coincident corners (MAME frame 2000's poly 484: det 690 on 0,1,2 against
+  // 1,802 on 0,2,3) came out with every pixel's texel wrong -- the "wrong
+  // orientation" on the road. Both determinants are now taken, the larger
+  // magnitude kept; a triangle (its last corner repeated) gives 0 for 0,2,3.
+  logic [31:0]        det_first_abs;
+  logic [1:0]         pf_ph;             // 0: 0,1,2 taken  1: 0,2,3 taken  2: chosen
   logic signed [31:0] nxu, nyu, nxv, nyv;
   // R418: THE NORMALISE, SPLIT IN TWO. pf_norm is a 32-bit negate, then clz32,
   // then a 32-bit variable shift -- all in one cycle, and it was the worst path
@@ -945,7 +957,7 @@ module m2_raster_fill #(
       got_b      <= 1'b0;
       span_u <= '0; span_v <= '0; base_u <= '0; base_v <= '0; span_ooz <= '0;
       pf_a <= 1'b0; pf_b <= 1'b0;
-      tex_ok <= 1'b0; pf_second <= 1'b0; tex_r <= '0;
+      tex_ok <= 1'b0; pf_second <= 1'b0; tex_r <= '0; pf_ph <= 2'd0; det_first_abs <= '0;
       det_r <= '0; den_sh <= 6'd0; nxu <= '0; nyu <= '0; nxv <= '0; nyv <= '0;
       q_num_a <= '0; q_num_b <= '0; q_z_a <= '0; q_z_b <= '0;
       nxu_z <= '0; nyu_z <= '0; nxv_z <= '0; nyv_z <= '0;
@@ -1028,7 +1040,18 @@ module m2_raster_fill #(
         end
 
         S_PF_N: begin
-          if (det_r == 32'sd0) begin
+          if (pf_ph == 2'd0) begin            // R674: now the other triangle
+            det_first_abs <= det_abs;
+            pf_second     <= 1'b1;
+            pf_ph         <= 2'd1;
+            pf_st         <= S_PF_D;
+          end else if (pf_ph == 2'd1) begin   // R674: keep the larger
+            // and back through S_PF_D: pr_* (R638) follow pf_second a cycle
+            // late, and the numerators rely on S_PF_D coming between
+            pf_ph <= 2'd2;
+            if (det_first_abs >= det_abs) pf_second <= 1'b0;
+            pf_st <= S_PF_D;
+          end else if (det_r == 32'sd0) begin
             if (!pf_second) begin
               pf_second <= 1'b1;
               pf_st     <= S_PF_D;
@@ -1250,16 +1273,25 @@ module m2_raster_fill #(
             tex_r     <= in_tex;
             tex_ok    <= 1'b0;
             pf_second <= 1'b0;
+            pf_ph     <= 2'd0;                // R674
             dudx <= '0; dudy <= '0; dvdx <= '0; dvdy <= '0;
             // An untextured quad pays nothing for any of this.
             // R337: normalise 1/z before the plane fit, because the fit runs
             // on u/z and v/z and those do not exist until it has.
             state <= S_MINMAX;                       // R544: the edges start at once
             pf_st <= in_tex[0] ? S_OZ : S_IDLE;      // and the fit beside them
+            // R675: AND THE NORMALISE PIPELINE STARTS EMPTY. A fit abandoned
+            // below while S_OZ was part way left oz_w_v set, and the next
+            // textured quad's first S_OZ cycle wrote the abandoned quad's
+            // normalised 1/z and u/z, v/z into ITS corner oz_w -- a wrong
+            // texture plane on the quad after any textured quad rejected before
+            // its first span. Timing decided whether it struck.
+            oz_w_v <= 1'b0; oz_last <= 1'b0;
           end else if (pf_st != S_IDLE) begin
             // R544: the quad ended before its first span (a line, or
             // rejected whole): its fit is not wanted.
-            pf_st <= S_IDLE;
+            pf_st  <= S_IDLE;
+            oz_w_v <= 1'b0; oz_last <= 1'b0;         // R675
           end
         end
 

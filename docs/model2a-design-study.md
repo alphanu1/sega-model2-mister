@@ -25807,3 +25807,41 @@ quads sharing a near-horizontal edge, and what lies behind shows through
 test of M2COV ("no different, looks worse", R667) was made BEFORE R671, with
 every second-ROM-pair object textured from the wrong ROM -- it could not
 judge the edges. Rebuilt: s588's RTL with M2COV on.
+
+**R674 / R675 -- THE WRONG ROAD TEXTURES: A STALE WRITE INTO THE NEXT QUAD'S
+CORNER, AND A FIT ON THE WORSE TRIANGLE.** (Ben: "look closer above the seam
+at the wrong texture orientation on the road".)
+
+Measured, not guessed: diff3d3.py (R615) -- every textured MAME pixel's texel
+against the texel this core fetched -- on MAME frames 2000 and 9000 at texel
+step 1 with the board's configuration: 4.4% and 3.4% of textured pixels more
+than 16 texels off. By polygon they are few and whole: f2000 poly 484 wrong on
+659 of 659 pixels, 520 on 263/264, 613 122/123, 519 65/65 -- thin distant road
+strips and quads with near-coincident corners -- and the near road (522) in a
+band under its top edge.
+
+R674: the plane fit used vertices 0,1,2 and retried 0,2,3 only on a zero
+determinant; poly 484's 0,1,2 is nearly collinear (det 690, 0,2,3: 1,802).
+Now both determinants are taken and the larger magnitude kept, then S_PF_D
+once more (pr_*, R638, follow pf_second a cycle late -- the first attempt
+chose correctly and formed the numerators from the other triangle's
+differences, which tb_m2_raster_fill caught). The bench's reference applies
+the same rule (test_plane's corners are arbitrary, not a plane).
+
+R675, found BY that bench and the real cause of most of it: a textured quad
+rejected before its first span (a line, off screen) abandons its fit
+(pf_st <= S_IDLE) wherever it is -- and part way through S_OZ it left
+oz_w_v set. The next textured quad's first S_OZ cycle then wrote the
+abandoned quad's normalised 1/z and u/z, v/z into ITS corner oz_w: a wrong
+texture plane, skewed or pointing elsewhere, on the quad after any rejected
+textured quad, decided by cycle timing -- scene-dependent, flickering, on the
+board. Now the pipeline is emptied when a fit starts and when it is
+abandoned. Texels more than 16 off / more than 4 off, frames 2000 and 9000:
+
+    as the board (s588)      4.4% / 6.3%     3.4% / 6.5%
+    + R675                   0.1% / 2.0%     1.0% / 4.3%
+    + R675 + R674            0.1% / 1.1%     0.7% / 3.4%
+
+tb_m2_raster_fill 152,369 checks 0 fails; tb_m2_fill_m2cov 20,007 0 fails.
+(The 40% / 15% "different polygon" in diff3d3's output is its own decode and
+unchanged by either.)

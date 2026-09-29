@@ -32,6 +32,7 @@
 // duplicated span fails even where it would paint the same pixels.
 
 #include "Vm2_raster_fill.h"
+#include "Vm2_raster_fill___024root.h"
 // R618: the gradients are 24-bit signed (16.8) now.
 static inline int32_t sx24(uint32_t v) { return int32_t(v << 8) >> 8; }
 #include "verilated.h"
@@ -378,7 +379,20 @@ static void one(Dut& dut, const int32_t* vx, const int32_t* vy, const char* what
 static long tex_checks = 0, tex_fails = 0;
 
 static void test_plane(Vm2_raster_fill* d) {
-  auto tickf = [&]() { d->clk = 0; d->eval(); d->clk = 1; d->eval(); };
+  if (std::getenv("M2_FILL_PFTRACE")) { auto *r = d->rootp;
+    std::printf("  at test_plane: pf_st %d oz_w_v %d oz_w %d oz_last %d oz_i %d state %d\n", (int)r->m2_raster_fill__DOT__pf_st,
+      (int)r->m2_raster_fill__DOT__oz_w_v, (int)r->m2_raster_fill__DOT__oz_w, (int)r->m2_raster_fill__DOT__oz_last,
+      (int)r->m2_raster_fill__DOT__oz_i, (int)r->m2_raster_fill__DOT__state); }
+
+  auto tickf = [&]() {
+    d->clk = 0; d->eval(); d->clk = 1; d->eval();
+    static const bool DBG = std::getenv("M2_FILL_PFTRACE") != nullptr; static int n = 0;
+    if (DBG && n < 60) { auto *r = d->rootp; n++;
+      std::printf("   pf_st %2d ph %d second %d det %d nxu %d pr_ax %d pr_by %d\n", (int)r->m2_raster_fill__DOT__pf_st,
+        0, (int)r->m2_raster_fill__DOT__pf_second, (int)r->m2_raster_fill__DOT__det_r,
+        (int)r->m2_raster_fill__DOT__nxu, (int)r->m2_raster_fill__DOT__pr_ax, (int)r->m2_raster_fill__DOT__pr_by);
+      std::printf("      qu %d %d %d %d qoz %x %x %x %x emax %d state %d in_valid %d\n", (int)r->m2_raster_fill__DOT__qu[0], (int)r->m2_raster_fill__DOT__qu[1], (int)r->m2_raster_fill__DOT__qu[2], (int)r->m2_raster_fill__DOT__qu[3], (int)r->m2_raster_fill__DOT__qoz[0], (int)r->m2_raster_fill__DOT__qoz[1], (int)r->m2_raster_fill__DOT__qoz[2], (int)r->m2_raster_fill__DOT__qoz[3], (int)r->m2_raster_fill__DOT__oz_emax, (int)r->m2_raster_fill__DOT__state, (int)d->in_valid); }
+  };
   const int32_t VX[4] = {10, 130, 118,   4};
   const int32_t VY[4] = { 5,  19,  71,  58};
   const int32_t U[4]  = {37, 501, 640, 122};     // quarter-texels, all different
@@ -408,14 +422,28 @@ static void test_plane(Vm2_raster_fill* d) {
   }
 
   // The plane through vertices 0,1,2 -- fitted to u/z and v/z now, not u and v.
-  const double ax = VX[1] - VX[0], ay = VY[1] - VY[0];
-  const double bx = VX[2] - VX[0], by = VY[2] - VY[0];
+  // R674: or through 0,2,3, whichever triangle has the larger |det| (a tie
+  // keeps 0,1,2) -- the RTL's rule. This quad's corners are arbitrary, not a
+  // plane, so the two triangles give different planes and the choice shows.
+  const double d012 = (VX[1]-VX[0]) * (VY[2]-VY[0]) - (VX[2]-VX[0]) * (VY[1]-VY[0]);
+  const double d023 = (VX[2]-VX[0]) * (VY[3]-VY[0]) - (VX[3]-VX[0]) * (VY[2]-VY[0]);
+  const int kb = (std::fabs(d012) >= std::fabs(d023)) ? 1 : 2, kc = kb + 1;
+  if (std::getenv("M2_FILL_PLANEDBG")) {
+    std::printf("  plane: det012 %.1f det023 %.1f -> %d,%d,%d\n", d012, d023, 0, kb, kc);
+    for (int t = 1; t <= 2; t++) {
+      const double ax_ = VX[t]-VX[0], ay_ = VY[t]-VY[0], bx_ = VX[t+1]-VX[0], by_ = VY[t+1]-VY[0], de = ax_*by_-bx_*ay_;
+      const double ou = UZ[t]-UZ[0], ou2 = UZ[t+1]-UZ[0], oo = OZ[t]-OZ[0], oo2 = OZ[t+1]-OZ[0];
+      std::printf("    triangle 0,%d,%d: du/dx %.5f  d(1/z)/dx %.5f\n", t, t+1, (ou*by_-ou2*ay_)/de, (oo*by_-oo2*ay_)/de);
+    }
+  }
+  const double ax = VX[kb] - VX[0], ay = VY[kb] - VY[0];
+  const double bx = VX[kc] - VX[0], by = VY[kc] - VY[0];
   const double det = ax * by - bx * ay;
-  const double u1 = UZ[1] - UZ[0], u2 = UZ[2] - UZ[0];
-  const double v1 = VZ[1] - VZ[0], v2 = VZ[2] - VZ[0];
+  const double u1 = UZ[kb] - UZ[0], u2 = UZ[kc] - UZ[0];
+  const double v1 = VZ[kb] - VZ[0], v2 = VZ[kc] - VZ[0];
   const double dudx = (u1 * by - u2 * ay) / det, dudy = (ax * u2 - bx * u1) / det;
   const double dvdx = (v1 * by - v2 * ay) / det, dvdy = (ax * v2 - bx * v1) / det;
-  const double o1 = OZ[1] - OZ[0], o2 = OZ[2] - OZ[0];
+  const double o1 = OZ[kb] - OZ[0], o2 = OZ[kc] - OZ[0];
   const double doodx = (o1 * by - o2 * ay) / det, doody = (ax * o2 - bx * o1) / det;
 
   d->view_x1 = 0; d->view_x2 = 495; d->view_y1 = 0; d->view_y2 = 383;
