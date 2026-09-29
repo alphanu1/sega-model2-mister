@@ -25717,3 +25717,15 @@ Left: the texture DATA reaching SDRAM (the upload's CPU writes), and the
 per-polygon texture PARAMETERS (origin, size, sheet, mirror -- q_tex) from
 the geometry, which R643/R646 did not compare (they checked positions, u/v
 and z).
+
+**R670 -- THE GEOMETRY'S TEXTURE PARAMETERS AGAINST MAME'S: EXACT.**
+geodiff.py now also sets each aligned quad's q_tex against the word MAME's
+texture header makes (push_quad's mapping: textured, width/height log,
+translucent, both mirrors, checker, sheet, origin x/32 and y/32). Attract
+walks w2500 (a race, 1,774 quads) and w4000 (252): 0 differ. With R643/R646
+(positions, u/v, z) and R668/R669 (the texel path, the cache), everything
+between the display list and the pixel matches the reference on these
+frames. What no bench sees is the texture DATA in the board's SDRAM (the
+game rewrites ~420 K words at every scene change). Next discriminator, on
+the board: the Textures Off OSD in the scene -- flat bars mean geometry or
+fill; none mean texture data.
