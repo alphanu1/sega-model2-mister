@@ -25845,3 +25845,18 @@ abandoned. Texels more than 16 off / more than 4 off, frames 2000 and 9000:
 tb_m2_raster_fill 152,369 checks 0 fails; tb_m2_fill_m2cov 20,007 0 fails.
 (The 40% / 15% "different polygon" in diff3d3's output is its own decode and
 unchanged by either.)
+
+**R676 -- THE CAR WINDOWS IN THE BENCH: DRAWN.** The windows are two co-planar
+layers with identical corners and z (MAME frame 1000: poly 21, h0 4400, the
+tinted glass; poly 109, h0 6400, the transparent-textured sky reflection,
+z 5301 both). MAME: front to back, a z bucket LIFO, first write wins -> the
+newer reflection wins where its texels are opaque. m2_quad_store's radix sort
+is stable on a complemented key (z descending, ties in submission order), so
+the painter paints the glass then the reflection, which wins -- the same.
+Measured: our fetches for poly 109 on MAME's poly-109 pixels are within one
+texel on 119 of 120; the final frame shows the reflection (its green-tagged
+colour) on most of those pixels, black texels aside. So with MAME's texture
+data this core draws the windows. On the board they are missing (s578:
+see-through; s588: flat) -- candidates: R675 (windows are small textured
+quads, often right after a rejected one) or the sheet data the game
+uploaded. s596 (R674 + R675) is the test.
