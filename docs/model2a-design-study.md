@@ -25899,3 +25899,21 @@ if not, dump that scene from MAME and trace it. The ceiling IS hit elsewhere
 -- tex 0x408025, u 0..8191 across a long strip (w8000 4 quads, w8100 9,
 w9000 15), and one road piece on w2500 -- the store's 13-bit u/v (R609) spans
 2,048 texels after the per-quad offset; MAME has no limit. Open.
+
+**R679 -- s620-s622 (R677): TWO LABs OVER; TELEMETRY LITE OFF FOR THE NORMAL
+BUILD.** s620/s621: 4,193 LABs of 4,191; s622 fitted (41,471 ALM) with clk_sys
+-0.807. The largest block the picture does not need is telemetry lite
+(M2_DEBUG_LITE: m2_dbg_stream 374 ALUTs, m2_uart_tx 98, and every counter that
+only feeds it) -- the switch R637 made for exactly this. Off in Model2.qsf;
+a measurement build turns it back on.
+
+CLOCKS, asked again (Ben: "is it not time to clock up; the CPU has the slack --
+what about the TGP?"): R636 stands. clk_i960 is exactly clk_sys/2 and clk_sys
+has ~0.5-0.8 ns left at 70; the async bridge that would free it cost 21% of CPI
+(7% slower at 40 than sync at 35). The TGP holds the CPU 7.8% of the time
+(s572) -- not the limit. The board's i960: 17 CPI, 69% of cycles waiting on the
+bus, against 7.3 CPI on the bench with the same ROM: SDRAM contention, not
+the clock. Next measurement: the CPU's waits by the port it queues behind.
+The DDR3 texture mirror (R645, wedged the bus, R649) predates R660's
+request-taken-twice fault, a plausible cause of that wedge; revisit if texels
+dominate the CPU's waits.
