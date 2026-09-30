@@ -26169,3 +26169,19 @@ overstated: three seconds read 68-97, lists far closer than a vblank at a
 scene change (gaps down to 1.3 ms), which are real clears of near-empty
 lists, not the steady rate. For scale: R637 s422 28.3 fps; R681 s626 ~2.4
 vblanks a frame (~24 fps). Not yet an A/B on the same attract loop.
+
+**R688 -- TALLER BANDS BUY 1-4%: THE BAND-END DRAIN IS TEXEL WORK, NOT IDLE.**
+R551's "band-end drain" was 15% of the bench's cycles on f2000, so BAND_H 16
+and 32 were measured (FB path, R685 RTL, pictures and fetch counts identical):
+
+    frame   BAND_H 8     16                 32
+    2000    1,181,666    1,144,555 (-3%)    1,128,718 (-4.5%)
+    3450      889,504      880,999 (-1%)      877,625 (-1.3%)
+    9000    1,011,795      994,680 (-2%)      986,282 (-2.5%)
+
+The drain is the band's last texel fetches, which are paid anyway; halving
+the band count removes only the pipeline's refill. Not worth a mask twice
+the size (two MLAB copies, +16 LABs) at 550/553 M10K and ~99% ALM. The draw
+is texel-bound: ~5 cycles a fetch (f2000: 225,770 fetches, 1.18 M cycles).
+Next question is on the board: in the scenes that run at 2-3 vblanks, is the
+draw the limit or the CPU/geometry? OSD Textures off removes the fetches.
