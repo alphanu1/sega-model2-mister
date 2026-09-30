@@ -26436,3 +26436,17 @@ invalidate removed, KEEP_LAST 1 fails (stale words) at once.
 
 Tests: test_m2_geo, _geo_view, _geo_xform, _geo_engine (68), _geo_clip
 (2,003), _geometry, _pair_cache pass. Build s674-s676 (with R693).
+
+s674-s676 (a7e1266: R693 + R696): **s675 CLOSES EVERY CLOCK, HDMI TOO: clk_mem
++0.465, clk_sys +0.241, clk_i960 +3.552, HDMI +0.049, holds >= +0.243**;
+41,240 ALM. On the board 18:20 (s648 as .prev). tools/m2-fps.py, 60 s of
+attract: 30.0 fps -- 9% of frames in one vblank, 90% in two. NO CHANGE from
+s648 (30.7). The geometry cuts are real in the bench (the heavy lists 25%
+shorter at a 12-cycle port) but the frame stays at two vblanks: either the
+board's engine latency is far above 12, or the pipeline holds two vblanks
+for a reason the walk's length does not set. R695's walk sample had the
+engine holding a quad the renderer would not take 21.8% of the walk: a store
+that accepts a new list only after it swaps at a vblank would do exactly
+this. s677-s679 sample the store (pst), the sequencer (cst), fb_busy, the
+game hold and the frame's phase beside the walk and the engine (now by a
+port -- the hierarchical u_engine.st read 0).
