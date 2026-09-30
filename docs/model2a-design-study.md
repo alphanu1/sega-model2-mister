@@ -26612,3 +26612,30 @@ tools/m2-fbcheck.py 300 s: black-fault frames 0 (darkest painted frame 155, a
 dark scene). The next release candidate, pending Ben's CRT test of R701.
 (s703, the same without R701, read 23.3 / 24.2 / 26.0 3D pictures a second at
 texel step 1 / 2 / 4 -- the geometry waits on SDRAM behind the texels, R702.)
+
+**R703 -- THREE FAULTS REPORTED FROM PLAY (Ben, on the released builds),
+recorded before diagnosis.**
+
+  1. "THE CONDITION ON THE RIGHT IS IN THE WRONG PLACE" -- a 2D element on the
+     right of the screen drawn at the wrong position. (No photo yet; which
+     element to be confirmed.)
+  2. AT THE START, THE CAR AND THE "ROLLING START" TEXT SHOULD SCROLL ACROSS
+     THE SCREEN, AND DO NOT.
+  3. THE BACKGROUND MUSIC AND THE GAME-OVER SAMPLES ARE TOO QUIET.
+
+First reading, not a diagnosis:
+  - 1 and 2 are both 2D placement and motion. Whole-layer scroll is applied
+    (m2_tile_decode: map_x = x - hscr, map_y = y + vscr, as segaic24) and the
+    tilemap was pixel-exact against MAME on ten ATTRACT frames -- none of them
+    a race start. The candidate is the per-pair WINDOW / SPLIT-SCROLL control
+    register m2_video latches (segaic24's window: a layer drawn in two parts
+    with different scroll), or a scroll register the game rewrites mid-frame.
+    Oracle: MAME frames of the rolling start and of the right-hand HUD element,
+    through tools/m2-framediff.sh.
+  - 3: the mix is NOT the suspect. R267 matched the board's sum to MAME's
+    attract peaks (17,140 against 18,496) and its FM:sample balance (0.55
+    against segam1audio.cpp's 0.30:0.5 = 0.60). Attract peaks do not exercise
+    the music or the game-over speech, though: the suspect is a PER-VOICE
+    level inside m2_multipcm (total level, pan law, or the envelope) against
+    MAME's multipcm.cpp. Oracle: MAME's rendering of the same passage, peak
+    and RMS per source, as R267 measured the attract.
