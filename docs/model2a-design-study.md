@@ -26213,3 +26213,30 @@ frames in one vblank, 72% in two, 6% in three -- the same as Textures OFF
 The texel path no longer sets the frame rate; the game runs at half rate
 with or without it. The limit is upstream of the draw: the CPU or the
 geometry.
+
+**R690 -- MEASURED ON s651 (s648 + telemetry lite, triangle split parked): THE
+GAME IS NOW CPU-BOUND.** 240 s of attract, 12,645 vblanks: a new frame every
+1.94 vblanks (29.7 fps), 0 lists dropped. i960 IP samples (15,834):
+
+    game logic (everything else)                        30.8%
+    display-list push loop, 0x178E0-0x17AFF             29.1%
+    frame-sync wait, 0x12B0/0x12B8 (idle)               22.7%
+    store loop to 0x804000, 0x19F40-0x19F80              8.9%
+    IP 0                                                 8.4%
+
+i960: 32,609 instructions a vblank, 18.66 CPI (1.88 M instr/s); waiting on
+the bus 71.9% of cycles (13.42 CPI), own sequencing 5.24 CPI; data cache
+86.4% hit, 0.09 misses an instruction. (decode_lite.py read 13.3% until now:
+the 32-bit wait total wraps in ~2 minutes and was taken first to last; now
+summed record to record. R681's 71% was a shorter capture and right.)
+
+What changed since R681: the draw no longer holds the game (Textures on/off
+make no difference to the rate, R689), and the push loops are not waiting on
+the geometry -- m2_geo queues pushes and never stalls the i960 (R681's "stalled
+because the walker drains only when the renderer takes the next list" was the
+draw's hold, now gone). The i960 is busy ~77% of the time: ~0.91 M of its
+cycles a game frame, ~1.5 vblanks, which rounds every frame up to two. The
+game's rate needs ~1.5x the CPU's throughput, and ~72% of its cycles are
+spent waiting on memory -- R681: only a tenth of that wait is at the SDRAM
+controller. The rest is the path between the i960 and it (bridge, crossing,
+arbitration turnaround, I/O accesses). That path is the next study item.
