@@ -94,9 +94,9 @@ This list describes the RBF named above. **The heading carries the RBF's name so
 that if the two disagree, you trust neither and check.**
 
 - **Not quite full speed yet.** With `Draw method: Single buffered` (the
-  default) the game averages about 47 frames a second of the arcade's 57.5,
-  measured over attract on hardware: full speed in lighter scenes, down to
-  about 38 in the heaviest. The limit is the geometry stage, which is being
+  default) the game averages about 50 frames a second of the arcade's 57.5,
+  measured over two minutes of attract on hardware: full speed in three
+  frames out of four, down to about 38 in the heaviest scenes. The limit is the geometry stage, which is being
   worked on. `Double Buffered` runs at about half speed.
 - **15 kHz interlaced: fixed in this build, not yet confirmed on a CRT.** The
   previous build had four faults on a real set — a large border at the top,
