@@ -18,6 +18,9 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include <map>
+#include <set>
+#include <algorithm>
 
 static Vgeodiff_top *d;
 static std::vector<uint16_t> mem(1u << 25, 0xFFFF);   // unwritten reads 0xFFFF (docs/mister-integration.md)
@@ -44,6 +47,8 @@ static void put_words(uint32_t base, const std::vector<uint8_t> &v, size_t first
   }
 }
 
+// R696: the 16-bit SDRAM word address eng_read reads from.
+static uint32_t eng_wordaddr(uint32_t space, uint32_t a, uint32_t oba);
 // Model2.sv's engine port: which memory, and which dword in it.
 static uint32_t eng_read(uint32_t space, uint32_t a, uint32_t oba) {
   uint32_t base, idx;
@@ -58,14 +63,56 @@ static uint32_t eng_read(uint32_t space, uint32_t a, uint32_t oba) {
   return uint32_t(mem[wa]) | (uint32_t(mem[(wa + 1) & ((1u << 25) - 1)]) << 16);
 }
 
+static long g_memreqs = 0, g_repeat = 0, g_porttrips = 0;   // R696
+static std::map<int, long> g_rd_by;
+static std::set<uint64_t> g_seen;
+static uint32_t eng_wordaddr(uint32_t space, uint32_t a, uint32_t oba) {
+  uint32_t base, idx;
+  if (space == 1)      { base = (a & 0x800000) ? GAME_TEXRAM : GAME_TEX; idx = (a & 0x800000) ? (a & 0x7fff) : (a & 0x1fffff); }
+  else if (space == 2) { base = GAME_PAL3D;  idx = a & 0x1ff; }
+  else if (space == 3) { base = GAME_XLAT3D; idx = a & 0x3fff; }
+  else {
+    base = (oba & 0x1000000) ? GAME_PRAM1 : (oba & 0x800000) ? GAME_POLY : GAME_PRAM0;
+    idx  = ((oba & 0x1000000) || !(oba & 0x800000)) ? (a & 0x7fff) : (a & 0x3fffff);
+  }
+  return (base + 2 * idx) & ((1u << 25) - 1);
+}
 static bool wr_pend = false; static uint32_t wr_a; static uint16_t wr_d;
 static long nq = 0; static FILE *fo = nullptr;
 
 static void tick() {
   d->rd_ack = 0;
   if (d->rd_req) { d->rd_data = (d->rd_addr < buf.size()) ? buf[d->rd_addr] : 0xFFFFFFFFu; d->rd_ack = 1; }
-  d->mem_ack = d->mem_req;
-  if (d->mem_req) d->mem_data = eng_read(d->mem_space, d->mem_addr, d->obj_oba_r);
+  // R696: M2GD_LAT -- the engine's memory answers N cycles after the request
+  // (0, the default, is the same-cycle answer this bench always gave). The
+  // board's engine port goes through the pair cache to a one-word SDRAM port.
+  static const int LAT = std::getenv("M2GD_LAT") ? std::atoi(std::getenv("M2GD_LAT")) : 0;
+  static int lat_left = -1;
+  // R696: M2GD_PC models the cache in front of the engine port (Model2.sv's
+  // m2_pair_cache) so only real port trips pay LAT: 0 none, 1 today's (the
+  // next dword, used once), 2 the whole last answer {N, N+1} kept until replaced.
+  static const int PC = std::getenv("M2GD_PC") ? std::atoi(std::getenv("M2GD_PC")) : 0;
+  static bool pc_v = false; static uint32_t pc_n = 0;
+  d->mem_ack = 0;
+  if (d->mem_req) {
+    if (lat_left < 0) {
+      // the SDRAM dword this read lands on, as the port sees it
+      const uint32_t dw = eng_wordaddr(d->mem_space, d->mem_addr, d->obj_oba_r) >> 1;
+      bool hit = false;
+      if (PC == 1) { hit = pc_v && dw == pc_n; pc_v = !hit && ((dw & 511) != 511); pc_n = dw + 1; }
+      else if (PC == 2) { hit = pc_v && (dw == pc_n || dw == pc_n + 1); if (!hit) { pc_v = ((dw & 511) != 511) || true; pc_n = dw; } }
+      if (!hit) ++g_porttrips;
+      lat_left = hit ? 0 : LAT; ++g_memreqs;
+      // R696: which memory, which engine state, and whether this exact word was read before in this list
+      const int est = d->rootp->geodiff_top__DOT__u_geometry__DOT__u_engine__DOT__st;
+      g_rd_by[(d->mem_space << 8) | est]++;
+      const uint64_t key = (uint64_t(d->mem_space) << 40) | (uint64_t(d->obj_oba_r & 0x1800000) << 8) | d->mem_addr;
+      if (!g_seen.insert(key).second) ++g_repeat;
+    }
+    if (lat_left == 0) {
+      d->mem_ack = 1; d->mem_data = eng_read(d->mem_space, d->mem_addr, d->obj_oba_r); lat_left = -1;
+    } else --lat_left;
+  } else lat_left = -1;
   d->sd_wr_ack = 0;
   if (wr_pend) { mem[wr_a] = wr_d; d->sd_wr_ack = 1; wr_pend = false; }
   else if (d->sd_wr_req) { wr_a = d->sd_wr_addr & ((1u << 25) - 1); wr_d = d->sd_wr_din; wr_pend = true; }
@@ -145,7 +192,16 @@ int main(int argc, char **argv) {
     if (d->walk_frames >= 1) { quiet = (nq == before) ? quiet + 1 : 0; if (quiet > 200000) break; }
   }
   std::fclose(fo); if (fh) std::fclose(fh);
-  std::printf("geodiff %s: start %05x, %ld cycles\n", dp, start, t);
+  std::printf("geodiff %s: start %05x, %ld cycles, %ld engine memory reads\n", dp, start, t, g_memreqs);
+  if (std::getenv("M2GD_RDS")) {
+    static const char *SP[4] = {"polygon", "texture", "palette", "xlat"};
+    std::printf("  port trips %ld (M2GD_PC=%s)\n", g_porttrips, std::getenv("M2GD_PC") ? std::getenv("M2GD_PC") : "0");
+    std::printf("  engine reads %ld, of which repeats of a word already read this list %ld (%.1f%%)\n", g_memreqs, g_repeat, 100.0 * g_repeat / std::max(g_memreqs, 1L));
+    std::vector<std::pair<long,int>> v; for (auto &k : g_rd_by) v.push_back({k.second, k.first});
+    std::sort(v.rbegin(), v.rend());
+    for (size_t i = 0; i < v.size() && i < 16; i++)
+      std::printf("    %-8s engine state %2d: %7ld (%.1f%%)\n", SP[(v[i].second >> 8) & 3], v[i].second & 0xff, v[i].first, 100.0 * v[i].first / g_memreqs);
+  }
   std::printf("  walk: ops %u objects %u frames %u unknown %u | captured mtx %u foc %u lit %u tp %u\n",
     d->walk_ops, d->walk_objs, d->walk_frames, d->walk_unknown, d->mtx_n, d->foc_n, d->lit_n, d->tp_n);
   std::printf("  geometry: polys %u objects %u culled %u clip in %u out %u dropped %u nonfinite %u behind %u | quads %ld\n",

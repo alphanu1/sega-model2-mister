@@ -26382,3 +26382,57 @@ the walk lasts longer than a frame, the hold (R610) is right to stop the
 overwrite, and the i960 waits the rest of the walk out. The CPU number was
 the walk's. What the walk waits on -- its own geometry work, SDRAM, or the
 quad store not taking quads until the renderer swaps -- is the next sample.
+
+**R696 -- THE GEOMETRY IS BOUND BY ITS MEMORY LATENCY; TWO CUTS.** s673
+(meas-lite 163e16b: the walk's, engine's, clipper's and quad handoff's states
+in each sample), 240 s of attract: the walk running 92.2% of the time, and
+in W_OBJW -- waiting for the engine to finish an object -- 99.5% of it; the
+engine holding a quad the renderer is not taking 21.8% of the walk. (The
+engine and clipper states read idle throughout: m2_geometry exports them by
+hierarchical reference, u_engine.st, which Quartus does not synthesise --
+a dead instrument, not an idle engine.)
+
+tb_m2_geodiff answered its engine port in the SAME cycle, so its 0.3-0.9
+vblank a list (R690) was the geometry with free memory. M2GD_LAT=N now delays
+each answer N cycles:
+
+    list     reads   LAT 0   LAT 8   LAT 16   LAT 32  (vblanks)
+    w1000   91,211   0.91    1.48    2.07     3.26
+    w5000   90,746   0.89    1.44    2.03     3.21
+
+~0.07 vblank for every cycle of latency: ~77 reads a quad. The board's walk
+(~1.8 vblanks a frame) fits an effective 10-16. By engine state (w1000):
+E_UV 35.4%, E_RD 26.6%, E_TH0-3 18.0%, E_NORM 13.5%, E_ATTR 4.6%; 35% of
+reads are of a word already read in the list.
+
+CUT 1 (m2_geo_engine): A POLYGON E_EMIT WILL CULL SKIPS STRAIGHT TO IT. The
+cull (link type 0, or the back of a single-sided polygon) is known after the
+first dot product, before the light, the texture header, the coordinates and
+the colour -- none of which a culled polygon uses. R268 read the coordinates
+for every polygon to keep the pointer in step with the reference; the step
+depends on attr alone, so both pointers are stepped without the reads.
+1,752 of w1000's 4,092 polygons are culled. Reads 91,211 -> 70,215 (w1000),
+90,746 -> 65,404 (w5000); ALL SEVEN saved lists emit IDENTICAL quads.
+
+CUT 2 (m2_pair_cache KEEP_LAST, the engine's instance only): the engine
+reads 16-bit halves one at a time, so it asks for the same dword twice in a
+row; the cache kept only N+1, for one request. It now keeps the whole last
+answer {N, N+1} until a miss replaces it. Modelled in geodiff (M2GD_PC) at
+LAT 12:
+
+    policy                    w1000 trips  time     w5000 trips  time
+    none                        70,215     1.48       65,404     1.37
+    N+1 once (R214, today)      40,411     1.20       37,099     1.10
+    {N, N+1} kept               28,800     1.09       27,684     1.02
+
+(Before cut 1, today's cache at LAT 12 ~1.45.) The walker's instance keeps
+R214's rule: the game patches the list behind it (R266). A kept copy can
+outlive the engine's idle time between objects, so its invalidate now also
+takes the CPU's colour writes (col_inval: the 3D palette and the colour table,
+the only things the engine reads that the CPU writes). tb_m2_pair_cache gains
+the engine's pattern -- halves, jumps, a dword rewritten and inval pulsed
+every 97 reads -- 18,841 checks pass with KEEP_LAST 0 and 1; with the
+invalidate removed, KEEP_LAST 1 fails (stale words) at once.
+
+Tests: test_m2_geo, _geo_view, _geo_xform, _geo_engine (68), _geo_clip
+(2,003), _geometry, _pair_cache pass. Build s674-s676 (with R693).

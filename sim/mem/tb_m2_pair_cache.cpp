@@ -123,6 +123,34 @@ int main(int argc, char **argv) {
     CHECK(trips - t2 == 1, "the word after an invalidate was still served from the copy");
   }
 
+  // R696: THE ENGINE'S PATTERN, with KEEP_LAST on or off. It reads 16-bit
+  // halves, so a dword comes twice in a row (N, N, N+1, N+1, ...), and jumps
+  // between objects. Every 97 reads another master rewrites a dword and
+  // pulses inval, as Model2.sv does on the geometrizer's writes. Every word
+  // read must be the memory's word as it stands NOW -- a copy that outlived
+  // a write fails here, whichever rule the build keeps.
+  {
+    std::srand(696);
+    std::vector<uint32_t> run; uint32_t at = 9000; long nreads = 0;
+    long t0 = trips;
+    for (int k = 0; k < 3000; k++) {
+      int r = std::rand() % 100;
+      if (r < 70)      { run.push_back(at); run.push_back(at); at++; }          // a dword's two halves
+      else if (r < 85) { run.push_back(at); at++; }
+      else if (r < 95) { at = 9000 + (std::rand() & 0x3ff); }                   // the next object
+      else             { run.push_back(at - 1); }                              // back one
+      if (run.size() >= 97) {
+        nreads += run.size();
+        read_stream(run, "engine pattern");
+        run.clear();
+        const uint32_t w = at - (std::rand() & 3);                           // near where it reads
+        mem[w & 0xffff] ^= 0x5A5A5A5Au;
+        d->inval = 1; d->eval(); tick(); d->inval = 0; tick();
+      }
+    }
+    std::printf("  engine pattern: %ld reads, %ld port trips\n", nreads, trips - t0);
+  }
+
   std::printf("m2_pair_cache: checks=%d fails=%d\n", checks, fails);
   std::printf(fails ? "FAIL\n" : "PASS\n");
   delete d;

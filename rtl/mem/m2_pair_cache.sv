@@ -36,7 +36,11 @@
 `timescale 1ns/1ps
 module m2_pair_cache #(
   parameter int unsigned AW       = 24,
-  parameter int unsigned COL_BITS = 10     // m2_sdram's, in 16-bit words: a row is 2^(COL_BITS-1) dwords
+  parameter int unsigned COL_BITS = 10,    // m2_sdram's, in 16-bit words: a row is 2^(COL_BITS-1) dwords
+  // R696: 1 keeps the whole last answer {N, N+1} until a miss replaces it
+  // (the engine); 0 is R214's rule, N+1 for one request (the walker, whose
+  // list the game patches behind it -- R266).
+  parameter bit          KEEP_LAST = 1'b0
 )(
   input  logic          clk,
   input  logic          rst_n,
@@ -63,9 +67,18 @@ module m2_pair_cache #(
   input  logic [63:0]   p_dout
 );
 
-  logic          have;      // the copy is valid
-  logic [AW-1:0] have_idx;
-  logic [31:0]   have_data;
+  // R696: THE WHOLE LAST ANSWER IS KEPT, BOTH DWORDS, until a miss replaces it.
+  // It used to keep only N+1 and drop it after one use; but the engine reads
+  // 16-bit halves one at a time -- a texture header's four words, a vertex's
+  // eight coordinates -- so it asks for the SAME dword twice in a row, and
+  // each second ask was a port trip. tb_m2_geodiff (w1000, 12-cycle port):
+  // port trips 40,411 -> 28,800, the list 1.20 -> 1.09 vblanks. The copy is
+  // still dropped on a write by another master (inval, R266) and never kept
+  // in bypass; a stale word can now live until the next miss rather than
+  // the next read -- a few reads in a stream that never pauses.
+  logic          have_lo, have_hi;   // dword N, dword N+1 valid
+  logic [AW-1:0] have_idx;           // N
+  logic [31:0]   have_lo_d, have_hi_d;
   logic          hit_pend;  // a hit waiting for the acknowledge line to be clear
   logic          hit_ack;   // the one-cycle acknowledge of a hit
   logic          pass;      // this request is the port's
@@ -73,7 +86,9 @@ module m2_pair_cache #(
   logic          req_d, p_ack_d;
 
   wire new_req = req && !req_d;
-  wire match   = have && (idx == have_idx);
+  wire match_lo = have_lo && (idx == have_idx);
+  wire match_hi = have_hi && (idx == have_idx + 1'b1);
+  wire match    = match_lo || match_hi;
   // A HIT IS ACKNOWLEDGED ONLY ONCE THE PREVIOUS ACKNOWLEDGE HAS FALLEN. The
   // adapter holds its acknowledge until the request drops and the copy here
   // adds a register, so a hit that follows a miss by one cycle would raise
@@ -84,7 +99,7 @@ module m2_pair_cache #(
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      have <= 1'b0; have_idx <= '0; have_data <= '0;
+      have_lo <= 1'b0; have_hi <= 1'b0; have_idx <= '0; have_lo_d <= '0; have_hi_d <= '0;
       hit_pend <= 1'b0; hit_ack <= 1'b0; pass <= 1'b0; pass_ack <= 1'b0;
       req_d <= 1'b0; p_ack_d <= 1'b0; data <= '0;
     end else begin
@@ -94,20 +109,21 @@ module m2_pair_cache #(
       hit_ack  <= fire;
       if (fire) hit_pend <= 1'b0;
       if (!req) pass <= 1'b0;
-      if (inval) have <= 1'b0;                 // R266: another master wrote the memory
+      if (inval) begin have_lo <= 1'b0; have_hi <= 1'b0; end   // R266: another master wrote the memory
       if (new_req) begin
-        have <= 1'b0;                          // the copy serves one request, or none
-        if (match) begin hit_pend <= 1'b1; data <= have_data; end
+        if (!KEEP_LAST) have_hi <= 1'b0;       // R214: the copy serves one request, or none
+        if (match) begin hit_pend <= 1'b1; data <= match_lo ? have_lo_d : have_hi_d; end
         else       pass <= 1'b1;
       end
       // The port's answer, on the rising edge of its acknowledge: the low
-      // half for the requester, the high half kept as the next index.
+      // half for the requester, and both halves kept as N and N+1.
       if (p_ack && !p_ack_d) begin
         data      <= p_dout[31:0];
-        have      <= ~&idx[COL_BITS-2:0] && !bypass && !inval;   // the last dword of a row: its pair wrapped
-
-        have_idx  <= idx + 1'b1;
-        have_data <= p_dout[63:32];
+        have_lo   <= KEEP_LAST && !bypass && !inval;
+        have_hi   <= ~&idx[COL_BITS-2:0] && !bypass && !inval;   // the last dword of a row: its pair wrapped
+        have_idx  <= idx;
+        have_lo_d <= p_dout[31:0];
+        have_hi_d <= p_dout[63:32];
       end
     end
   end
