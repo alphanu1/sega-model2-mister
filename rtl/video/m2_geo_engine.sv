@@ -651,7 +651,21 @@ module m2_geo_engine #(
             else if (!dsel) begin
               dot_neg   <= fadd_res[31] && (fadd_res[30:0] != 31'd0);
               dotp_zero <= (fadd_res[30:0] == 31'd0);
-              dsel <= 1'b1; dstep <= 2'd0; dgot <= 2'd0; st <= E_DOT;   // R222: now the light
+              if ((attr[9:8] == 2'd0) || (fadd_res[31] && (fadd_res[30:0] != 31'd0) && !attr[17])) begin
+                // R696: E_EMIT WILL CULL THIS POLYGON (the same test, on the same
+                // dot), so nothing between here and there is used: not the light,
+                // not the texture header, not the coordinates, not the colour --
+                // eleven or twelve of the engine's memory reads, which set the
+                // geometry's speed (R696: ~91 k reads a list, 0.07 vblank for
+                // every cycle of latency). The two pointers still step exactly
+                // as E_TH3 and E_UV step them, from attr alone, so the list
+                // stays in step (R268's reason for reading them at all).
+                th_w <= th_w + {{15{attr[16]}}, attr[16:12], 2'b00};
+                tp_w <= tp_w + (attr[0] ? 22'd8 : 22'd6);
+                dstep <= 2'd0; dgot <= 2'd0; st <= E_EMIT;
+              end else begin
+                dsel <= 1'b1; dstep <= 2'd0; dgot <= 2'd0; st <= E_DOT;   // R222: now the light
+              end
             end else begin
               dotl <= fadd_res; dsel <= 1'b0; st <= E_LUMM;
             end
