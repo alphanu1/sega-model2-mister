@@ -1,5 +1,25 @@
 # Handoff
 
+## 2026-09-30 (later): RELEASED Model2_20260930b.rbf = s705. main = this.
+
+Branch fskip-648: the first release (s648, 787bf97's RTL) + R699 Draw method
+(OSD "Draw method: Single buffered / Double Buffered / Every 3rd frame", Single
+buffered by default -- only every second list is walked and drawn, the game
+never waits on a walk it does not need) + R701 (15 kHz: field 1's vsync half a
+line EARLY so both fields are 273.5 lines; vsync at 229-232, centring the
+picture). s705 closes every clock, HDMI too (clk_mem +0.873, clk_sys +0.523,
+clk_i960 +2.672, HDMI +0.129); md5 7c5daa8ad47e183ac7d2139c70695798, pulled
+from the board. tools/m2-fbcheck.py: lit throughout. tools/m2-fps.py at texel
+step 1: 23.3 pictures a second = ~47 game frames (58% of frames at full speed,
+heavy scenes ~38). 15 kHz fix NOT yet confirmed on Ben's CRT.
+
+In flight: bisect builds from prio-A (s705 + geometry port 4 in the SDRAM
+priority class, R702): A s707 alone; B s708 + R696's engine cull-skip; C s709
++ R696's pair-cache keep-last. One of B/C holds the black-screen fault (s675,
+s681, s686 all went black at the first scene change); the other, with A, is
+the route to 50+ fps. R693 (bridge) and R697/R698 stay on r639-beta.
+
+
 ## 2026-09-30: RELEASED Model2_20260930.rbf = s648 (787bf97's RTL). main = this.
 
 `releases/` is published for the first time (the .gitignore block that held it

@@ -26579,6 +26579,12 @@ First reading against R682's timing (m2_video_timing, not yet tested):
 The release README says 15 kHz "has not yet been confirmed on a real CRT";
 the next release notes it as working with these four faults.
 
+
+R699 ON s648's RTL (branch fskip-648, from the release b0f4363): frame skip
+alone, without R693 and R696-R698 -- s681 and s686 carry R696 and both went
+black at the first scene change (s686: lit to 74 s, mean brightness 0 from
+83 s, the check reverted it). Ben: "frame skip on s648".
+
 **R701 -- WHY IT DID NOT INTERLACE, AND THE BORDER: R682'S FIELD 1 VSYNC WAS A
 LINE LATE.** With fields of 274 and 273 lines, the two vsync-to-vsync
 intervals are equal (273.5, what a set needs to interleave the fields half a
