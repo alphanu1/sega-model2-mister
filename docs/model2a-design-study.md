@@ -26542,3 +26542,6 @@ rather than hold the game.
 tb_m2_geo: six lists flipped one a frame -- walked 6 / 3 / 2 at skip 0 / 1 / 2,
 in the flip trigger and in After flip (what the board runs); 100 checks. With
 the gate forced open, the four skip cases fail.
+s686-s688 (ae17de9: R693 + R696-R699): s686 closes every core clock -- clk_mem
++0.294, clk_sys +0.286, clk_i960 +3.036, holds >= +0.242; HDMI -0.422;
+41,396 ALM. Supersedes s685 for the board check (it carries frame skip too).
