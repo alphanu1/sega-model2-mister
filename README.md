@@ -7,11 +7,15 @@ An FPGA implementation of Sega's Model 2A-CRX arcade board for the
 [MiSTer](https://mister-devel.github.io/MkDocs_MiSTer/) platform, targeting the
 DE10-Nano's Cyclone V `5CSEBA6U23I7`.
 
-**This is a work in progress and does not play games yet.** **Daytona USA
-(Deluxe '93)** boots, runs its attract mode and makes sound. What it does not do
-is draw 3D. It is the only game here — `mra/` holds its MRA and a 2D tilemap
+**This is a work in progress, released as a beta.** **Daytona USA (Deluxe
+'93)** boots and runs its attract mode with the full picture — textured, lit 3D
+over the 2D layers — and with sound, at about 50 frames a second of the
+arcade's 57.5. It is the only game here — `mra/` holds its MRA and a 2D tilemap
 test pattern, nothing else. What follows is what is built and measured, not a
 plan.
+
+**To run it, see [`releases/`](releases/)** — a dated `.rbf`, the MRA, and a
+README with the ROMs you need, the settings, and what is not finished.
 
 ## State
 
@@ -23,17 +27,20 @@ plan.
 | **I/O board** | Working. The board answers, the exchange completes and the game runs. It needs the I/O board's Z80 ROM, taken from either `model1io.zip` or `daytona93.zip` — both sets carry all three revisions (`epr-14869.25`, `epr-14869b.25`, `epr-14869c.25`) and this core uses **revision C**. The Model 1 core is the same physical board and selects the base revision; both work, and the difference is a revision, not a disagreement. |
 | **Sound board** | Working on hardware — the board's own 68000 (fx68k), its FM (jt12) and its MultiPCM samples. |
 | **TGP coprocessor** | Implemented. The MB86233 runs, and Daytona's 2,024-word microcode uploads and executes — verified on hardware, not only in simulation. The microcode is **not a separate download**: it lives inside the game's own data ROM and `tools/extract_tgp_microcode.py` locates it. |
-| **3D renderer** | Every stage is written and simulated — display-list walker, matrix transform, projection, clipping, quad store and rasteriser. **Nothing reaches the screen yet.** |
+| **3D renderer** | **Working on hardware.** Display-list walker, geometry (transform, lighting, clipping, projection), quad store and a textured rasteriser drawing **front to back** into a **DDR3 framebuffer**, shown only when a frame is complete. Checked against MAME frame by frame in simulation, and by eye on the board. |
+| **Speed** | About **50 game frames a second** of 57.5 over two minutes of attract (`tools/m2-fps.py`), with `Draw method: Single buffered`, the default: full speed in three frames out of four. The limit is the geometry stage's memory latency (design study R694-R696). |
+| **Video** | Native 24 kHz, and 15 kHz interlaced for CRTs (field timing corrected in the latest release, awaiting confirmation on a set). |
 
-### The open problem
+### What is open
 
-The display-list walker runs at frame rate and retires **three opcodes** per
-walk, while the game writes **16 kB of list per frame**. The walk is aimed at
-the right address in the right memory, the read port is not contended
-(`dbg_p4_clash` reads zero on hardware) and it stops on a valid terminator
-rather than an unknown opcode. Either the pushes are not landing where the walk
-reads, or the game is not emitting geometry. That is the whole remaining
-question, and `HANDOFF.md` carries the measurements.
+- **Full speed in the heaviest scenes.** The geometry is bound by its SDRAM
+  latency (about 91,000 reads a list). Two changes that take it to 99% of full
+  speed exist, but one of them turns the lighting black after the first scene
+  change; which one is being isolated.
+- **Car windows** sometimes lose their glass after a few minutes of attract.
+- **Some textures flicker**, and there is no mip-mapping.
+
+`HANDOFF.md` carries the current state and the measurements behind it.
 
 ## Milestones
 
@@ -47,30 +54,26 @@ fail criteria each phase was accepted against. Status as of this commit:
 | **P1.5** | 2D on hardware | **Done.** Renders correctly on hardware, pixel-exact against MAME. |
 | **P4** | TGP coprocessor | **Done.** The MB86233 runs on hardware and the game's own microcode uploads and executes. |
 | **P5** | Sound | **Done.** Audible on hardware — the sound board's 68000, FM and MultiPCM. |
-| **P2** | 3D renderer | **Written, not visible.** Every stage simulates; nothing reaches the screen. |
+| **P2** | 3D renderer | **Done.** Textured, lit 3D on hardware, front to back into a DDR3 framebuffer. |
 | **P3** | The fit verdict | **Answered, and it is tight.** Everything fits the device together, with essentially no headroom — which is why debug instruments now have to replace each other rather than accumulate. |
-| **P6** | Integration | **In progress.** The game boots, runs attract and plays sound. 3D is the gap. |
+| **P6** | Integration | **Released as a beta.** Daytona runs attract with 3D and sound at about 50 fps; speed and the open items above remain. |
 
 The phases are listed here in the order they were completed, not numerically:
 P4 and P5 were finished before P2, because the coprocessor and the sound board
 each had a working reference to follow and the renderer did not.
 
-### Building this core is not deterministic
+### Building this core: timing varies by seed
 
-On identical source, **three of four fitter seeds produce a bitstream that does
-not boot** — the i960 traps at reset and the screen stays black — and static
-timing analysis does not predict which. The two best-timed builds of a recent
-four-seed set both failed; the one that boots has negative hold slack. This is a
-startup race on a path nothing constrains, not lost margin, and it is unsolved.
+The design fills about 99% of the part's logic, so whether a build meets timing
+depends on the fitter seed. Every release is a seed that closes every core
+clock, checked on hardware. Earlier in the project three of four seeds did not
+boot at all (an unconstrained startup race); the builds tested on hardware
+since late September have all booted, but if you build this yourself and the
+screen stays black, try another `SEED` in `Model2.qsf` before suspecting your
+setup, and see `tools/seed-pair.sh` below.
 
-If you build this yourself and the screen stays black, the build is the first
-suspect, not your setup — try another `SEED` in `Model2.qsf`, and see
-`tools/seed-pair.sh` below.
-
-**There is no release yet.** No bitstream is published, because a core that
-boots, plays sound and draws no 3D is not something to hand anybody as a
-release. When there is one it will be a dated `.rbf` and the MRAs, in the layout
-MiSTer expects.
+**Releases** are in [`releases/`](releases/): one dated `.rbf` and the MRA, in
+the layout MiSTer expects, with a README of what works and what does not.
 
 ## Building
 
@@ -176,6 +179,7 @@ changed:
 - **[jt12](https://github.com/jotego/jt12)** — the FM chip, GPL-3.0, by Jose
   Tejada.
 - **[meathax/s32](https://github.com/meathax/s32)** — the MultiPCM, GPL-3.0.
+- **tv80**, by Guy Hutchison after Daniel Wallner's T80 — the I/O board's Z80.
 - **[MAME](https://www.mamedev.org/)** — a reference for what the silicon
   computes. Not linked or distributed.
 
