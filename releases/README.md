@@ -113,6 +113,11 @@ that if the two disagree, you trust neither and check.**
   picture. Reports from CRT owners are welcome.
 - **Car windows drop out.** After a few minutes of attract the glass or its sky
   reflection can disappear from some cars, so you see into the car.
+- **2D placement at the race start.** The car and the "ROLLING START" text
+  should scroll across the screen and do not, and an element on the right of
+  the screen sits in the wrong place.
+- **Background music and the game-over speech are too quiet** against the
+  rest of the sound.
 - **Some textures flicker** on trees and hillsides.
 - **No mip-mapping**, so distant textures shimmer.
 - **Attract mode is what this build has been checked against.** Play it and
