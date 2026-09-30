@@ -29,7 +29,7 @@ def stats(buf, b):
                 if s < 40: dark += 1
     return painted, lum // max(painted, 1), 100 * dark // max(painted, 1)
 
-t0 = time.monotonic(); n = 0; worst = 999
+t0 = time.monotonic(); n = 0; worst = 999; faults = 0
 while time.monotonic() - t0 < secs:
     snap = mm[:2 << 20]
     open('/tmp/fbcheck_%02d.bin' % n, 'wb').write(snap)
@@ -38,7 +38,11 @@ while time.monotonic() - t0 < secs:
         p, m, dk = stats(snap, b)
         line.append('buf%d painted %5d mean %3d dark %2d%%' % (b, p, m, dk))
         if p > 2000: worst = min(worst, m)
+        if p > 2000 and dk >= 95: faults += 1      # the black fault: painted, and nearly all of it black
     print('%3d  %5.0fs  %s' % (n, time.monotonic() - t0, '   '.join(line)), flush=True)
     n += 1
     time.sleep(step)
-print('lowest mean brightness of a painted frame: %d  (lit attract ~300-400; black fault near 0)' % worst)
+print('lowest mean brightness of a painted frame: %d  (lit attract ~300-400; dark scenes ~100-200)' % worst)
+# THE VERDICT IS THE BLACK FAULT'S SIGNATURE, not a low mean: a tunnel or a
+# night scene reads 100-200 and is lit; the fault reads 0 with 95-100% black.
+print('black-fault frames: %d  %s' % (faults, 'FAIL' if faults else 'PASS'))
