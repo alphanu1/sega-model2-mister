@@ -26323,3 +26323,38 @@ where accesses are spaced; the gain is on runs of back-to-back accesses (the
 copy loop's 8.7%, and in the game the push loops). It does not shorten the
 time to data. Whether it moves the board is measured by s659-s661 (meas-lite:
 s655 + this + every CPU transaction timed by class, accept to completion).
+
+**R694 -- THE CPU IS STUCK ON THE GEOMETRY PUSH QUEUE, NOT ON MEMORY.**
+Counters for eight transaction classes did not fit (s659-s664: 4,205-4,223
+LABs; +405 registers). SAMPLED instead: the C record (~135 Hz) carries the
+i960's sequencer state beside its IP, and the bridge's transaction in flight
+{cph, owner, target, write, went-to-SDRAM, state}. s665 (meas-lite 91d8b63:
+s648 + R693's two-phase bridge + sampling; triangle split and M2COV parked),
+240 s of attract, 12,667 samples after boot: 1.94 vblanks a frame (29.7 fps;
+s655 1.86 on another stretch -- R693 does not move it, as R693's bench said).
+
+    frame-sync spin 26.3%; working 73.7%, and of the working time:
+      sequencer: T_MEM_W 69.7%, T_FETCH_W 18.1%, T_FRAME 4.7%, T_FETCH 2.7%,
+                 T_EXEC 2.5%, T_FETCH2_W 1.9%
+      stalled, the bridge holding:
+        LSU I/O WRITE (posted, not completing)   57.5%
+        nothing (between accesses)                8.3%
+        LSU I/O read                              7.5%
+        icache: SDRAM hit 4.4%, miss 4.0%
+        LSU SDRAM: read miss 3.4%, write 3.3%, read hit 1.1%
+      TGP holding the i960 (copro_stall) 7.3%
+    stalled IPs: 0x17AE4 13.1%, 0x17A8C 7.5%, 0x19F70 4.5%, 0x17940 3.9%,
+                 0x19F58 3.8%, 0x19F44 3.7% ... -- the display-list push loops
+
+An I/O write completes unless io_stall = copro_stall | geo_push_stall is up;
+the TGP is 7.3%, so the geometry front door's push queue (m2_geo, 128 deep)
+holds the i960 for ~50% of its working time. R681 said this ("stalled on
+stores because the walker drains only when the renderer takes the next
+list"); R690 wrongly overruled it from m2_geo's own header ("never stalls
+the i960"), which R610 had made untrue. SDRAM, the caches and the handshake
+are each single-digit percents. At ~800 pushes a frame even a slow drain is
+~1 ms, so the drain must be BLOCKED for long stretches -- by the hold
+(R610/R638: words in the walk's own list window wait for the walk) or by the
+walk's own polygon-data writes, which take the DMA first. s668-s670 sample
+the queue itself: full, walk running, word held, walk DMA request, drain
+busy, and the queued word's and the walk's dword[14:11].
