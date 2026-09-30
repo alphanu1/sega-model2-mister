@@ -26240,3 +26240,23 @@ game's rate needs ~1.5x the CPU's throughput, and ~72% of its cycles are
 spent waiting on memory -- R681: only a tenth of that wait is at the SDRAM
 controller. The rest is the path between the i960 and it (bridge, crossing,
 arbitration turnaround, I/O accesses). That path is the next study item.
+
+**R691 -- THE INSTRUCTION CACHE IS NOT THE CPU'S LIMIT; SIZE BUYS NOTHING.**
+tb_m2_boot, 40 M instructions (boot and the game code the bench reaches; it
+never gets to the 3D in 60 M, so not the attract loop), CPU cycles an
+instruction:
+
+    icache   M2_BOOT_LAT   CPI    T_FETCH_W   T_MEM_W   prefetch hit
+    512 B         6        6.29     1.22        2.55       42.6%
+    1 KB          6        6.28     1.21        2.55       42.6%
+    2 KB          6        6.28     1.20        2.55       42.6%
+    512 B        16        7.09     1.19        3.38       45.4%
+    2 KB         16        7.06     1.17        3.38       45.3%
+
+The fetch stall is the redirect, not the miss: prefetch hits 43% and its
+misses are almost all mispredicted branches, which cost the same whatever the
+cache holds. SDRAM latency 6 -> 16 adds 0.83 CPI, all load/store. And every
+instruction pays T_FETCH + T_EXEC, two cycles, before any stall: the core
+does not overlap them. So the CPU levers are, in order of likely size: the
+load/store path's latency (T_MEM_W), branch redirect cost, and fetch/execute
+overlap -- not cache size. The board's own split is s653-s655.
