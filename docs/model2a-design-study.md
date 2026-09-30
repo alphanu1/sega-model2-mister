@@ -26545,3 +26545,36 @@ the gate forced open, the four skip cases fail.
 s686-s688 (ae17de9: R693 + R696-R699): s686 closes every core clock -- clk_mem
 +0.294, clk_sys +0.286, clk_i960 +3.036, holds >= +0.242; HDMI -0.422;
 41,396 ALM. Supersedes s685 for the board check (it carries frame skip too).
+
+**R700 -- 15 kHz INTERLACED ON A REAL CRT: IT WORKS, AND IT IS BUGGY.** First
+test on Ben's CRT (s686, Video: 15kHz interlaced), attract. A picture: Daytona's
+tunnel scene, stable enough to photograph, 3D and 2D both present. Reported:
+
+  1. A BIG BORDER AT THE TOP -- the picture sits low; the photo shows a wide
+     black band above it and the image reaching the bottom edge.
+  2. THE VIDEO DROPS OUT EVERY FEW SECONDS (the set loses the picture).
+  3. THE TOP 2D LAYER'S SCANLINES ARE MISALIGNED (the HUD/tile layer).
+  4. IT DOES NOT LOOK INTERLACED -- "just using either even or odd": 192
+     distinct lines, not 384 interleaved.
+
+First reading against R682's timing (m2_video_timing, not yet tested):
+  1. Fields of 274/273 lines, 192 visible at the top, vsync at lines 220-223:
+     28 lines of front porch and 51 of back porch. 51 is far more than a TV
+     expects after vsync, so the picture starts late -- the top border. Move
+     the vsync later (roughly 235-240) to split the 82 blanking lines evenly.
+  4. Field 1's vsync starts half a line late (vs_i1, H_TOTAL/2), which is
+     what makes a set interlace -- and tb_m2_video_timing checks it. So
+     either the half-line offset does not survive to the analog output (the
+     MiSTer video path re-timing sync, or the scandoubler/mixer route taken
+     for 15 kHz), or the two fields carry the same lines (the framebuffer
+     reader's field select, fb_read f_r). Needs the analog output's own sync
+     looked at, not the timing module's.
+  2. Unknown. Candidates: the set losing vertical lock on the 274/273
+     alternation or on the vsync position; the pixel clock enable's
+     547/5300 accumulator jitter; the scanout falling late in DDR3 at the
+     field rate. Measure before choosing.
+  3. The tilemap's line_number in interlace is {dln[7:0], field ^ wrapl}
+     (R682); a top-of-field off-by-one would misalign exactly the top layer.
+
+The release README says 15 kHz "has not yet been confirmed on a real CRT";
+the next release notes it as working with these four faults.
