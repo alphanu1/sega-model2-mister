@@ -477,18 +477,31 @@ module m2_span_tex #(
   logic               mp_f1, mp_f0;
   logic [MAW-1:0]     mp_wi;
   logic [31:0]        mp_need;
+  // R684: SIXTEEN BITS, not 32. Every value here is a screen x or y -- the
+  // band and the writer already take [15:0] (R553) -- and the 32-bit clamps,
+  // compares and subtracts were most of the +416 LUTs R683's build measured
+  // for this query, on a device 28 LABs short. Taken as bit slices into
+  // signed variables, no casts (R662).
+  localparam logic signed [15:0] QXMAX = 16'(SCR_W - 1);
+  localparam logic signed [15:0] QBH   = 16'(BAND_H);
   always_comb begin
     automatic logic               qp   = sh_p[PIPE_D-3];
-    automatic logic signed [31:0] qx   = sh_x[PIPE_D-3];
-    automatic logic signed [31:0] qe   = qx + stp(k_p[qp]) - 32'sd1;   // R650
-    automatic logic signed [31:0] qxe  = (qe > x1_p[qp]) ? x1_p[qp] : qe;
-    automatic logic signed [31:0] qrow = y_p[qp] - 32'(mk_band_y0);
-    automatic logic signed [31:0] xa   = (qx  < 0) ? 32'sd0 : qx;
-    automatic logic signed [31:0] xb   = (qxe > $signed(32'(SCR_W - 1))) ? $signed(32'(SCR_W - 1)) : qxe;
-    mp_wi   = MAW'(qrow) * MAW'(MROW) + MAW'(xa >>> 5);
+    /* verilator lint_off UNUSEDSIGNAL */
+    automatic logic signed [31:0] qs32 = stp(k_p[qp]);   // a step of 1-8
+    /* verilator lint_on UNUSEDSIGNAL */
+    automatic logic signed [15:0] qs   = qs32[15:0];
+    automatic logic signed [15:0] qx   = sh_x[PIPE_D-3][15:0];
+    automatic logic signed [15:0] qx1  = x1_p[qp][15:0];
+    automatic logic signed [15:0] qy   = y_p[qp][15:0];
+    automatic logic signed [15:0] qe   = qx + qs - 16'sd1;   // R650
+    automatic logic signed [15:0] qxe  = (qe > qx1) ? qx1 : qe;
+    automatic logic signed [15:0] qrow = qy - mk_band_y0;
+    automatic logic signed [15:0] xa   = (qx  < 16'sd0) ? 16'sd0 : qx;
+    automatic logic signed [15:0] xb   = (qxe > QXMAX) ? QXMAX : qxe;
+    mp_wi   = MAW'(qrow) * MAW'(MROW) + MAW'(xa[15:5]);
     mp_need = (32'hFFFF_FFFF << xa[4:0]) & (32'hFFFF_FFFF >> (5'd31 - xb[4:0]));
-    mp_f1   = (qrow < 0) || (qrow >= $signed(32'(BAND_H))) || (xb < xa);
-    mp_f0   = !mp_f1 && (xa[31:5] != xb[31:5]);
+    mp_f1   = (qrow < 16'sd0) || (qrow >= QBH) || (xb < xa);
+    mp_f0   = !mp_f1 && (xa[15:5] != xb[15:5]);
   end
   logic mq_full;
   always_comb begin

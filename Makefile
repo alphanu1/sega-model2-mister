@@ -790,14 +790,16 @@ obj_fbwc/Vm2_fb_write: rtl/video/m2_fb_wcomb.sv sim/video/tb_m2_fb_write.cpp
 # against a DDRAM that says BUSY at random and a reader competing for it.
 test_m2_fbw_chain: obj_fbw_chain/Vm2_fbw_chain
 	@echo "== test m2_fbw_chain (framebuffer writes through the real DDR3 master)"
-	@for w in obj_fbw_chain obj_fbw_chain_c; do for b in 0 300 900; do echo "-- $$w BUSY $$b"; CHAIN_BUSY=$$b ./$$w/Vm2_fbw_chain $(TEST_ARGS) || exit 1; done; done
+	@for w in obj_fbw_chain obj_fbw_chain_c obj_fbw_chain_f; do for b in 0 300 900; do echo "-- $$w BUSY $$b"; CHAIN_BUSY=$$b ./$$w/Vm2_fbw_chain $(TEST_ARGS) || exit 1; done; done
 
 CHAIN_SRC := sim/video/m2_fbw_chain.sv rtl/video/m2_fb_write.sv rtl/video/m2_fb_wcomb.sv rtl/mem/m2_ddr3_arb.sv rtl/mem/m2_ddr3.sv sim/video/tb_m2_fbw_chain.cpp
-test_m2_fbw_chain: obj_fbw_chain_c/Vm2_fbw_chain
+test_m2_fbw_chain: obj_fbw_chain_c/Vm2_fbw_chain obj_fbw_chain_f/Vm2_fbw_chain
 obj_fbw_chain/Vm2_fbw_chain: $(CHAIN_SRC)
 	$(VBUILD) --top-module m2_fbw_chain -Wno-TIMESCALEMOD -Wno-UNUSEDSIGNAL -Wno-PINCONNECTEMPTY -GWCOMB=0 --Mdir obj_fbw_chain -o Vm2_fbw_chain -CFLAGS "-O2" $(CHAIN_SRC)
 obj_fbw_chain_c/Vm2_fbw_chain: $(CHAIN_SRC)
 	$(VBUILD) --top-module m2_fbw_chain -Wno-TIMESCALEMOD -Wno-UNUSEDSIGNAL -Wno-PINCONNECTEMPTY -GWCOMB=1 --Mdir obj_fbw_chain_c -o Vm2_fbw_chain -CFLAGS "-O2" $(CHAIN_SRC)
+obj_fbw_chain_f/Vm2_fbw_chain: $(CHAIN_SRC)
+	$(VBUILD) --top-module m2_fbw_chain -Wno-TIMESCALEMOD -Wno-UNUSEDSIGNAL -Wno-PINCONNECTEMPTY -GWCOMB=1 -GFTB=1 --Mdir obj_fbw_chain_f -o Vm2_fbw_chain -CFLAGS "-O2 -DCHAIN_FTB" $(CHAIN_SRC)
 
 test_m2_ddr3_arb: obj_ddr3arb/Vm2_ddr3_arb
 	@echo "== test m2_ddr3_arb (two framebuffer masters, one DDRAM port)"

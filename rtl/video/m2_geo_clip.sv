@@ -216,7 +216,9 @@ module m2_geo_clip (
   // R270: {px, id, v, u, z, y, x}. The texture coordinates have to ride with
   // the position: a child quad is popped levels later and its vertices are
   // whatever the stack kept.
-  (* ramstyle = "MLAB" *) logic [162:0] sk_mem [NSTK*4];
+  // R684: M10K (5 blocks), not MLAB: its read is registered already, and the
+  // 8 LABs it held are logic the fitter is short of (R683, s638-s640).
+  (* ramstyle = "M10K" *) logic [162:0] sk_mem [NSTK*4];
   logic [162:0]       sk_rd;
   logic [2:0]         pcnt;                     // the pop's vertex counter, 0..4
   // The read address: vertex 0 of the top level in K_POP, vertex pcnt after.

@@ -25996,4 +25996,164 @@ with it, ~2.4.
 **s635-s637 (73440c8: R682's 15 kHz interlaced on top of s626's RTL).** s637:
 clk_mem >= +0.245, clk_sys +0.016, clk_i960 +3.889, holds >= +0.245, HDMI
 -0.887; 41,349 ALM (s626: 41,296 -- the interlace mode placed in ~50 ALM).
-s635 clk_sys -0.097, s636 -1.166. s637 on the board (s626 as .prev).
+s635 clk_sys -0.097, s636 -1.166. s637 NOT yet on the board: the copy
+was made while the board was off the network (no route to host), so s626 is
+still what it runs.
+
+**R683 -- FRONT TO BACK ON THE FRAMEBUFFER PATH: THE WRITER BECOMES THE PAINTING
+GROUP (design, before the RTL).**
+
+R681 put the lever in the draw; R606 measured it (35% of pixels behind something
+already drawn); R607 built it for the bands, and R640 dropped it with them
+("the mask is fed by the painting band, and there are no bands"). But the
+framebuffer path still draws BAND BY BAND -- fill_band, C_REPLAY .. C_DONE, the
+fill clipped to band_y1..band_y2 -- so R607's one-band mask (8 rows x 16 words x
+32 bits, MLAB, 128 valid flops cleared at C_REPLAY, two writes bypassed) fits
+it unchanged. Only its WRITER is missing. The reference, re-read for this
+(model2rd.ipp draw_scanline_solid/_tex): a pixel is drawn only if `fill[x] ==
+0`, and a drawn pixel sets it; the checker's kept pixels set it, its holes and
+a discarded (transparent) texel do not. R607's band did exactly that.
+
+  - THE GATE IS IN m2_fb_wcomb's I_RUN, the one place a pixel is committed.
+    It walks a span a 64-bit word -- two pixels -- a cycle; it asks the mask
+    about those two (pg_y, pg_x0 even, answered pg_filled[1:0]), drops the
+    filled ones from lo_on/hi_on, and reports what it took (pg_wr) only on the
+    cycle the word is taken. A word with both pixels hidden writes nothing and
+    opens no window -- DDR3 traffic falls with the texels.
+  - THE STALL DOES NOT READ THE MASK: c_go uses the ungated c_any, so the
+    MLAB read feeds only the window bookkeeping and the mask's own write, as
+    it fed the band's -- no longer path than R607's, which closed timing.
+  - NO BAND ENDS WITH A WRITE OUTSTANDING: C_FILL -> C_DONE already waits for
+    fbw_empty (R660), so the mask is never cleared under the writer.
+  - span_tex's skip (R607's second copy) is fed the same mk_we/mk_waddr/
+    mk_wdata, so a group whose four pixels are all painted fetches no texel.
+    That is the speed; the writer gate is the correctness.
+  - The store sorts nearest first with ties last-submitted-first (R607's
+    FTB), so a tie still goes to the last submitted polygon -- the car
+    windows' glass and reflection (equal z) keep the painter's result.
+  - m2_fb_write (FB_WCOMB = 0) has no gate: FB_DDR3 && FTB && !FB_WCOMB is
+    refused at elaboration, as FB_DDR3 && FTB was.
+
+COST, ESTIMATED: R607 measured +541 ALM for the mask, span_tex's skip and six
+bands' gates; with one writer's gate instead of six, ~350-450 ALM. s637 has
+561 free (41,349 / 41,910), so this is at the edge; if it does not fit, the
+first thing parked is named in the build entry, not chosen after the fact.
+
+TEST: the chain bench with a C model of the mask (first write wins, per band,
+checked pixel for pixel against the DDRAM); tb_m2_raster3d in FB mode, FTB 0
+against FTB 1 on the MAME frames -- pictures identical, texel fetches down.
+
+BENCH (R683, built):
+
+  - Chain bench (m2_fb_wcomb -> m2_ddr3_arb -> m2_ddr3), a third build at
+    FTB=1 with the mask modelled in C: first write wins, cleared every
+    CHAIN_BAND spans after the writer empties. Pixel for pixel against the
+    DDRAM, plus "never painted over a filled pixel" and "the mask marked
+    exactly the pixels painted" -- 15 checks at BUSY 0/300/900, and at band
+    lengths 150 and 15,000 over 200,000 spans. MUTATION: the gate ignoring
+    the mask on the even pixel fails 4 of 15.
+  - tb_m2_raster3d, Model2.sv's parameters (FB_DDR3, FB_WCOMB, SPLIT_TRI,
+    M2COV, PIXSTEP 4, FRB 2), FTB 0 against FTB 1, MAME frames, TPL 3000:
+
+    frame   draw, core cycles          texel fetches        DDR3 write beats
+    2000    1,842,593 -> 1,181,666     406,655 -> 225,770   255,121 -> 186,863
+    3450    1,049,566 ->   889,507     378,407 -> 254,580   294,116 -> 194,410
+    5000    1,068,702 ->   869,654     216,329 -> 161,688   209,025 -> 175,718
+    9000    1,207,101 -> 1,013,588     254,362 -> 199,962   232,042 -> 201,896
+
+    Draws 15-36% shorter, fetches 21-44% fewer. f2000 was 1.51 video frames a
+    draw and is now 0.97. Pictures pixel-identical except ONE pixel of
+    f5000's 190,464 (y 281 x 312): MAME gives it to polygon 120, a one-pixel
+    sliver, and neither build draws that (FTB 0 0x0800, FTB 1 0x1840) -- two
+    of our spans overlap at an edge and the order picks between them. Not a
+    regression against the reference; recorded in case a seam shows there.
+    f2000 paints 172,267 pixels at FTB 1 against 292,164 at FTB 0: overdraw
+    gone, every pixel written once.
+
+**R684 -- R683 DID NOT FIT; THE ROOM, AND WHERE IT CAME FROM.**
+
+s638-s640 (R683 on s637's RTL): NO FIT, 4,214-4,219 LABs of 4,191 (s639
+41,706 ALM placed, s637 41,349). Synthesis: m2_raster3d +716 LUTs -- span_tex
++416 (the skip query), the mask and its read mux ~+300 (mk_a: 64 ALM of MLAB
++ 29 of mux). R683's estimate (350-450 ALM) was right in ALMs and wrong about
+what binds: the fitter ran out of LABs, and an MLAB takes a whole LAB.
+
+Taken back, nothing the picture uses:
+  - u_span_q to M10K (7 blocks, ~13 MLAB LABs). R332 put it in MLAB to give
+    the quad store five blocks; the store has had them since, and s637 used
+    538 of 553.
+  - m2_geo_clip sk_mem to M10K (5 blocks, ~8 LABs). Its read was registered
+    already; the attribute is the only change.
+  - span_tex's skip query in 16 bits instead of 32: every value is a screen
+    coordinate (the band and writer take [15:0], R553). Slices into signed
+    variables, no casts (R662).
+M10K 538 -> ~550 of 553: block RAM is now nearly as tight as logic.
+
+Bench: tb_m2_raster3d FTB 1 before and after the narrowing, f2000/f3450/
+f5000/f9000 -- pixels, the fetch list and the draw's cycle count all
+IDENTICAL. span_tex 7,207 checks, m2_geo 94, lint clean, parse clean.
+
+**R685 -- R684 FITS; THE GATE MISSED 70 MHz, AND IS NOW TWO STAGES.**
+
+s641-s643 (R684): s641 and s643 FIT (41,340 / 41,440 ALM, 550/553 M10K),
+s642 six LABs short. clk_sys s641 -0.317, s643 -1.860; clk_mem, clk_i960 and
+every hold pass. s641's worst 40 clk_sys paths: mostly the old near-misses
+(m2_pair_cache data -> m2_geo_engine rgb -0.317; m2_raster_fill a_nyu ->
+nyu_z -0.256, xbh -> span_u -0.236 -- the paths s637 passed by +0.016), and
+R683's own: m2_fb_wcomb x_r -> mk_b1_v -0.163, x_r -> vhi -0.139. That is
+the path R683 claimed was "no longer than R607's": the MLAB read, its
+two-write bypass and the pair select ran into the window's valid bits and
+the mask's write enable in one cycle. R607's band path closed at a
+different clock and placement; the claim was an argument, not a measurement.
+
+The fix: the writer walks a word (A) and reads its mask word, and the word
+is gated and written a cycle later (B) from that registered mask word. B is
+the only writer of the mask, so the one write A's read can miss is B's in
+the same cycle, merged as the word moves when both name the same mask word.
+The write is the whole word (b_mk | painted), so m2_raster3d's mask has a
+read index and a write index on the framebuffer path; the band path is
+unchanged. Throughput is unchanged (a word a cycle), latency +1.
+
+Chain bench, the mask now a word array: every write must be exactly the
+current word plus the pixels painted in that word's pair. MUTATIONS: no
+same-cycle merge -> 4 of 15 fail (4,273 pixels wrong); gate ignoring the mask
+-> 3 of 15.
+tb_m2_raster3d, the four MAME frames: pictures identical to R683's (so to
+FTB 0 but for f5000's one pixel); fetches within 2 (f5000 161,690 vs
+161,688, f9000 199,963 vs 199,962 -- span_tex's copy of the mask is written
+a cycle later); draws equal or a little shorter (f5000 867,683, f9000
+1,011,795). Seeds s644-s646.
+
+**s644-s646 (R685): s644 and s646 NO FIT (4,201 / 4,196 LABs of 4,191); s645
+fits (41,468 ALM, 550 M10K) with clk_sys -2.645 and clk_mem -0.917.** Three
+rounds of three seeds: the design with R683 is at the device edge in LABs and
+the seed decides whether it fits at all, never mind closes. Seeds will not
+converge this; area has to come back first. Next measured: how much of the
+speed is the writer's gate alone, without span_tex's skip query (the query
+is ~250 ALM and an MLAB).
+
+**R686 -- THE SPEED IS THE SKIP, NOT THE GATE; ROOM FROM THE PCM TAGS.**
+
+Measured first, because it decides what may be given up: tb_m2_raster3d with
+span_tex's skip query off and the writer's gate on (FTB everywhere else).
+
+    frame   draw FTB 0     writer gate only    gate + skip (R685)
+    2000    1,842,593      1,770,719 (-4%)     1,181,666 (-36%)
+    3450    1,049,566      1,020,892 (-3%)       889,504 (-15%)
+    5000    1,068,702      1,032,410 (-3%)       867,683 (-19%)
+    9000    1,207,101      1,194,932 (-1%)     1,011,795 (-16%)
+
+Pictures identical in all three. The fill is bound on texels (R551's
+texel-wait), so a hidden pixel costs its fetch, not its write: without the
+skip, R683 buys 1-4%. The skip stays; area comes from elsewhere.
+
+Found: m2_pcm_fetch (x2, 420 ALM each at s645) kept its 32 tags in
+registers -- 608 flip-flops and a 19-bit 32:1 read mux each -- while its line
+data went to MLAB in R221. 32 x 19 is one MLAB. Now read registered exactly
+as the line is (the slot address stands for the whole request). Sound bench
+on the real ROM, cache on: 103,110 sample reads, 0 wrong. Seeds s647-s649.
+s647-s649 (R686): ALL FIT (41,319-41,443 ALM, 550/553 M10K). **s648 CLOSES
+EVERY CORE CLOCK: clk_mem +0.447, clk_sys +0.320, clk_i960 +3.511, holds
+>= +0.192, HDMI -0.210** (s637 -0.887). s647 clk_sys +0.116 (HDMI -0.346);
+s649 clk_sys -0.074. The PCM tags were the room: s637 without R683 had
+clk_sys +0.016; s648 with it has +0.320.

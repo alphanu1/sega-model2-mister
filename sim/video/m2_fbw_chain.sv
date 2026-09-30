@@ -11,7 +11,8 @@
 `timescale 1ns/1ps
 
 module m2_fbw_chain #(
-  parameter bit WCOMB = 1'b0   // R661: the combining writer
+  parameter bit WCOMB = 1'b0,  // R661: the combining writer
+  parameter bit FTB   = 1'b0   // R683: first write wins, the mask modelled by the bench
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -25,6 +26,11 @@ module m2_fbw_chain #(
   input  logic [23:0] in_col,
   input  logic        in_moire,
   output logic        w_empty,
+  output logic [8:0]  pg_ry, pg_rx0,
+  input  logic [31:0] pg_rword,
+  output logic        pg_we,
+  output logic [8:0]  pg_wy, pg_wx0,
+  output logic [31:0] pg_wd,
 
   input  logic        b_hold,
 
@@ -54,7 +60,7 @@ module m2_fbw_chain #(
   logic [63:0] w_din;
 
   if (WCOMB) begin : g_wcomb
-    m2_fb_wcomb #(.SCR_W(496), .SCR_H(384), .STRIDE(512)) u_fbw (
+    m2_fb_wcomb #(.SCR_W(496), .SCR_H(384), .STRIDE(512), .FTB(FTB)) u_fbw (
       .clk(clk), .rst_n(rst_n), .fb_sel(fb_sel),
       .clear_req(clear_req), .clear_busy(clear_busy),
       .in_valid(in_valid), .in_ready(in_ready),
@@ -63,9 +69,13 @@ module m2_fbw_chain #(
       .m_req(w_req), .m_we(w_we), .m_addr(w_addr), .m_blen(w_blen),
       .m_din(w_din), .m_be(w_be), .m_wnext(w_wnext), .m_wacc(w_wacc), .m_ack(w_ack),
       .empty(w_empty),
+      .pg_ry(pg_ry), .pg_rx0(pg_rx0), .pg_rword(pg_rword),
+      .pg_we(pg_we), .pg_wy(pg_wy), .pg_wx0(pg_wx0), .pg_wd(pg_wd),
       .dbg_pixels(dbg_pixels), .dbg_clears(), .dbg_st()
     );
   end else begin : g_wone
+    assign pg_ry = '0; assign pg_rx0 = '0; assign pg_we = 1'b0;
+    assign pg_wy = '0; assign pg_wx0 = '0; assign pg_wd = '0;
     m2_fb_write #(.SCR_W(496), .SCR_H(384), .STRIDE(512)) u_fbw (
       .clk(clk), .rst_n(rst_n), .fb_sel(fb_sel),
       .clear_req(clear_req), .clear_busy(clear_busy),

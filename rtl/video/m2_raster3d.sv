@@ -84,8 +84,8 @@ module m2_raster3d #(
   // R640: THE DDR3 FRAMEBUFFER (ported from branch ddr3, R355-R380). At 1 the
   // band buffers are not built, the fill is not beam-paced, a list is drawn
   // ONCE into DDR3 and shown only when complete, and the scanout reads it a
-  // line ahead. Requires FTB = 0: the front-to-back mask is fed by the
-  // painting band, and there are no bands.
+  // line ahead. With FTB the front-to-back mask is fed by the combining
+  // writer, the one place a pixel is committed (R683), so FTB needs FB_WCOMB.
   parameter bit FB_DDR3 = 1'b0,
   // R661: the framebuffer writer that combines spans into 64-pixel windows
   // (m2_fb_wcomb) instead of a DDR3 command per span (m2_fb_write). ~+330 ALM
@@ -460,7 +460,10 @@ module m2_raster3d #(
   // R332: MLAB, not M10K. DEPTH 32 is exactly an MLAB's native depth, and the
   // 5 block-RAM tiles this releases are what R331's quad store is short by.
   // Verify it took: the fit report's RAM Summary must say MLAB for this array.
-  m2_fifo_m10k #(.DW(SQ_DW), .DEPTH(32), .RAMSTYLE("MLAB")) u_span_q (
+  // R684: BACK TO M10K (7 blocks). R332's reason -- the quad store short of
+  // block RAM -- is gone (538 of 553 used at s637), and these 13 MLAB LABs are
+  // what R683's fill mask needs: s638-s640 were 23-28 LABs short.
+  m2_fifo_m10k #(.DW(SQ_DW), .DEPTH(32), .RAMSTYLE("M10K")) u_span_q (
     .clk(clk), .rst_n(rst_n),
     .push(fl_span_valid && sq_in_rdy), .din(sq_din),
     .pop(sq_qv && sq_rdy), .q(sq_q), .q_valid(sq_qv),
@@ -782,6 +785,11 @@ module m2_raster3d #(
   logic        fbw_ready;
   logic        fbw_in_ready;   // R653: the writer's own ready; the fill sees it only outside the self-test
   logic        fbw_empty;      // R660: nothing held in the writer, nothing in flight
+  // R683: the writer as the fill mask's painting group (see mk_a); R685: it
+  // reads one word and writes another a stage later
+  logic [8:0]  fbw_ry, fbw_rx0, fbw_wy, fbw_wx0;
+  logic [31:0] fbw_rword, fbw_wd;
+  logic        fbw_we;
   assign fbw_ready = fbw_in_ready && !fb_test;
 
   // ---------------------------------------------------------------- R653
@@ -845,8 +853,8 @@ module m2_raster3d #(
   end
 
   generate
-    if (FB_DDR3 && FTB) begin : g_fb_needs_ftb0
-      FB_DDR3_requires_FTB_0 u_error ();   // no such module: elaboration stops here
+    if (FB_DDR3 && FTB && !FB_WCOMB) begin : g_fb_ftb_needs_wcomb
+      FB_DDR3_FTB_requires_FB_WCOMB u_error ();   // no such module: elaboration stops here (R683)
     end
     if (FB_DDR3) begin : g_fb
       logic        w_req, w_we, w_wnext, w_wacc, w_ack;
@@ -877,7 +885,7 @@ module m2_raster3d #(
       end
 
       if (FB_WCOMB) begin : g_wcomb
-        m2_fb_wcomb #(.SCR_W(SCR_W), .SCR_H(SCR_H), .STRIDE(512)) u_fbw (
+        m2_fb_wcomb #(.SCR_W(SCR_W), .SCR_H(SCR_H), .STRIDE(512), .FTB(FTB)) u_fbw (
           .clk(clk), .rst_n(rst_n),
           .fb_sel(fb_draw),
           .clear_req(fb_clear_req), .clear_busy(fb_clear_busy),
@@ -889,9 +897,13 @@ module m2_raster3d #(
           .m_req(w_req), .m_we(w_we), .m_addr(w_addr), .m_blen(w_blen),
           .m_din(w_din), .m_be(w_be), .m_wnext(w_wnext), .m_wacc(w_wacc), .m_ack(w_ack),
           .empty(fbw_empty),
+          .pg_ry(fbw_ry), .pg_rx0(fbw_rx0), .pg_rword(fbw_rword),   // R683, R685
+          .pg_we(fbw_we), .pg_wy(fbw_wy), .pg_wx0(fbw_wx0), .pg_wd(fbw_wd),
           .dbg_pixels(dbg_fb_pixels), .dbg_clears(), .dbg_st()
         );
       end else begin : g_wone
+        assign fbw_ry = '0; assign fbw_rx0 = '0; assign fbw_we = 1'b0;
+        assign fbw_wy = '0; assign fbw_wx0 = '0; assign fbw_wd = '0;
         m2_fb_write #(.SCR_W(SCR_W), .SCR_H(SCR_H), .STRIDE(512)) u_fbw (
           .clk(clk), .rst_n(rst_n),
           .fb_sel(fb_draw),
@@ -1078,6 +1090,8 @@ module m2_raster3d #(
       assign fb_rd_col = 24'd0; assign fb_rd_hit = 1'b0;
       assign fbw_in_ready = 1'b0;
       assign fbw_empty    = 1'b1;
+      assign fbw_ry = '0; assign fbw_rx0 = '0; assign fbw_we = 1'b0;
+      assign fbw_wy = '0; assign fbw_wx0 = '0; assign fbw_wd = '0;
       assign dbg_tp_bad = '0; assign dbg_tp_rows = '0; assign dbg_tp_first = '0;   // R653
       assign fb_clear_busy = 1'b0;
       assign dbg_fb_lines = 16'd0; assign dbg_fb_late = 16'd0;
@@ -1162,29 +1176,42 @@ module m2_raster3d #(
   logic                      mk_pact;
   always_comb begin
     mk_prow = '0; mk_px0 = '0; mk_pwr = '0; mk_pact = 1'b0;
-    for (int k = 0; k < NBUF; k++) begin
-      mk_prow = mk_prow | bd_pg_row[k];
-      mk_px0  = mk_px0  | bd_pg_x0[k];
-      mk_pwr  = mk_pwr  | bd_pg_wr[k];
-      mk_pact = mk_pact | bd_pg_active[k];
-    end
+    if (FB_DDR3) begin
+      // R683: the framebuffer writer; the write side here, its read below.
+      // The self-test (fb_test) draws its own pattern and never marks.
+      mk_prow = ($clog2(BAND_H))'(fbw_wy - 9'(mk_y0));
+      mk_px0  = ($clog2(SCR_W))'(fbw_wx0);
+      mk_pact = fbw_we && !fb_test;
+    end else
+      for (int k = 0; k < NBUF; k++) begin
+        mk_prow = mk_prow | bd_pg_row[k];
+        mk_px0  = mk_px0  | bd_pg_x0[k];
+        mk_pwr  = mk_pwr  | bd_pg_wr[k];
+        mk_pact = mk_pact | bd_pg_active[k];
+      end
   end
   wire  [4:0]                mk_poff = mk_px0[4:0];            // a multiple of 4
   assign mk_pwi = MAW'(mk_prow) * MAW'(MROW) + MAW'(mk_px0 >> 5);
+  // R685: the word READ is the band's own (read-modify-write in one cycle),
+  // or on the framebuffer the word the writer is walking, a stage ahead of
+  // the one it writes.
+  wire [$clog2(BAND_H)-1:0] mk_rrow = ($clog2(BAND_H))'(fbw_ry - 9'(mk_y0));
+  wire [MAW-1:0] mk_rdi = FB_DDR3 ? (MAW'(mk_rrow) * MAW'(MROW) + MAW'(fbw_rx0 >> 5)) : mk_pwi;
   logic [31:0] mk_pword;
   always_comb begin
-    if      (mk_b1_v && (mk_b1_a == mk_pwi)) mk_pword = mk_b1_d;
-    else if (mk_b2_v && (mk_b2_a == mk_pwi)) mk_pword = mk_b2_d;
-    else if (mk_valid[mk_pwi])               mk_pword = mk_a[mk_pwi];
+    if      (mk_b1_v && (mk_b1_a == mk_rdi)) mk_pword = mk_b1_d;
+    else if (mk_b2_v && (mk_b2_a == mk_rdi)) mk_pword = mk_b2_d;
+    else if (mk_valid[mk_rdi])               mk_pword = mk_a[mk_rdi];
     else                                     mk_pword = 32'd0;
   end
+  assign fbw_rword = mk_pword;
   wire [3:0] mk_pfill = 4'(mk_pword >> mk_poff);
   // R611: the answer goes to every band; only the painting one uses it.
   always_comb
     for (int k = 0; k < NBUF; k++)
       bd_pg_filled[k] = FTB ? mk_pfill : 4'd0;
-  assign mk_we = FTB && mk_pact && (mk_pwr != 4'd0);
-  assign mk_wd = mk_pword | (32'(mk_pwr) << mk_poff);
+  assign mk_we = FTB && mk_pact && (FB_DDR3 || (mk_pwr != 4'd0));
+  assign mk_wd = FB_DDR3 ? fbw_wd : (mk_pword | (32'(mk_pwr) << mk_poff));
   // R611: registered. bd_y0[fill_buf] is set in C_IDLE and fill_buf moves at
   // C_DONE; the span walk first queries at least two cycles after either.
   always_ff @(posedge clk) mk_y0 <= bd_y0[fill_buf];

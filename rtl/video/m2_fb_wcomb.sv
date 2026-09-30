@@ -55,8 +55,12 @@ module m2_fb_wcomb #(
   parameter int unsigned IDLE_T = 16,      // idle input cycles before a partial window is written
   parameter int unsigned SCR_W  = 496,     // visible pixels a line
   parameter int unsigned SCR_H  = 384,     // lines to clear
-  parameter int unsigned STRIDE = 512      // pixels per line, a power of two so
+  parameter int unsigned STRIDE = 512,     // pixels per line, a power of two so
                                            // the row address is a shift
+  // R683: FRONT TO BACK. The word being written asks the fill mask about its
+  // two pixels (pg_*) and writes only the ones not yet painted -- first write
+  // wins, model2rd.ipp's `if (fill[x] == 0)`. 0: every pixel is written.
+  parameter bit          FTB    = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -99,6 +103,19 @@ module m2_fb_wcomb #(
   input  logic        m_ack,
   output logic        empty,          // R660: nothing held, nothing in flight
 
+  // ---- R683: the fill mask, 32 pixels a word. R685: read and written a
+  // stage apart -- the word being walked (pg_ry/pg_rx0) reads its mask word,
+  // answered combinationally on pg_rword; the word being written a cycle
+  // later writes it back whole (pg_we/pg_wy/pg_wx0/pg_wd), with the pixels it
+  // painted set. x0 is even: the word's first pixel.
+  output logic [8:0]  pg_ry,
+  output logic [8:0]  pg_rx0,
+  input  logic [31:0] pg_rword,
+  output logic        pg_we,
+  output logic [8:0]  pg_wy,
+  output logic [8:0]  pg_wx0,
+  output logic [31:0] pg_wd,
+
   output logic [31:0] dbg_pixels,
   // R364: clears that COMPLETED -- a clear that never finishes stops the
   // whole 3D path, and "pixels 0" cannot tell that from "no spans".
@@ -136,14 +153,36 @@ module m2_fb_wcomb #(
   logic [8:0]         clr_y, clr_x;
   logic [$clog2(IDLE_T+1)-1:0] idle_n;
 
-  // This cycle's word. x_r is its first pixel still to write, even or odd.
-  wire [RW-1:0]  cw    = RW'(x_r >>> 1);
-  wire [LW-1:0]  cidx  = cw[LW-1:0];
-  wire [KW-1:0]  ckey  = {sel_r, y_r, cw[RW-1:LW]};
-  wire           lo_on = !x_r[0] && s0_r;
-  wire           hi_on = (x_r[0] || (x_r < x1_r)) && s1_r;
-  wire           c_any = lo_on || hi_on;
+  // R685: TWO STAGES. The walk (A: x_r, y_r) makes a word a cycle and reads
+  // its mask word; the word then waits one cycle in B with that mask word,
+  // and B is what is gated and written into a window. R683 did both in one
+  // cycle -- the mask's MLAB read, its bypass and the pixel select ran
+  // straight into the window's valid bits and the mask's own write enable,
+  // and s641 missed 70 MHz on exactly that path (-0.163). Only B writes the
+  // mask, so the one write A's read can miss is B's in the same cycle, and
+  // that is merged as the word moves (a_same).
+  wire [RW-1:0]  a_cw  = RW'(x_r >>> 1);
+  wire           a_lo  = !x_r[0] && s0_r;
+  wire           a_hi  = (x_r[0] || (x_r < x1_r)) && s1_r;
   wire signed [15:0] x_nx = {x_r[15:1], 1'b0} + 16'sd2;
+
+  logic          b_v;                      // B holds a word
+  logic [KW-1:0] b_key;
+  logic [LW-1:0] b_idx;
+  logic          b_lo, b_hi;               // the pixels the span covers
+  logic [31:0]   b_px;
+  logic [8:0]    b_y;
+  logic [3:0]    b_mw, b_off;              // mask word in the row; pair within it
+  logic [31:0]   b_mk;                     // the mask word, current
+  wire  [KW-1:0] ckey  = b_key;
+  wire  [LW-1:0] cidx  = b_idx;
+  wire           lo_in = b_lo;
+  wire           hi_in = b_hi;
+  wire  [1:0]    b_fill = 2'(b_mk >> {b_off, 1'b0});
+  // R683: a pixel something nearer has already painted is not written
+  wire           lo_on = lo_in && !(FTB && b_fill[0]);
+  wire           hi_on = hi_in && !(FTB && b_fill[1]);
+  wire           c_any = lo_on || hi_on;
   // Belongs in window ib: the same window, and on or beside the words it holds.
   wire           c_fits = !dirty[ib] ||
                           ((wkey[ib] == ckey) &&
@@ -152,8 +191,16 @@ module m2_fb_wcomb #(
   wire           other_free = !pend[~ib];
   // The window this word is written to: ib, or the other one once ib is closed.
   wire           c_wb  = c_fits ? ib : ~ib;
-  wire           c_go  = (ist == I_RUN) && (!c_any || c_fits || other_free);
+  // R683: the stall is decided on the UNGATED word, so the mask's read feeds
+  // only what is written, never whether the walk moves -- no longer a path
+  // than R607's band. A hidden word that waits here for a window costs a stall.
+  wire           c_go  = b_v && (!(lo_in || hi_in) || c_fits || other_free);
   wire           c_wr  = c_go && c_any;
+  wire  [1:0]    b_wr  = c_go ? {hi_on, lo_on} : 2'b00;
+  wire  [31:0]   b_wd  = b_mk | (32'(b_wr) << {b_off, 1'b0});
+  // A moves a word into B when B is empty or is emptying this cycle
+  wire           a_go   = (ist == I_RUN) && (!b_v || c_go);
+  wire           a_same = b_v && c_go && (y_r == b_y) && (x_r[8:5] == b_mw);
 
   // ------------------------------------------------------------ the burst out
   typedef enum logic { F_IDLE, F_RUN } fst_t;
@@ -164,8 +211,8 @@ module m2_fb_wcomb #(
   // there the following cycle.
   logic [LW-1:0] ridx;
   always_ff @(posedge clk) begin
-    if (c_wr && lo_on) mlo[{c_wb, cidx}] <= px_r;
-    if (c_wr && hi_on) mhi[{c_wb, cidx}] <= px_r;
+    if (c_wr && lo_on) mlo[{c_wb, cidx}] <= b_px;
+    if (c_wr && hi_on) mhi[{c_wb, cidx}] <= b_px;
   end
   wire  [31:0]   q_lo = mlo[{fk, ridx}];
   wire  [31:0]   q_hi = mhi[{fk, ridx}];
@@ -180,8 +227,14 @@ module m2_fb_wcomb #(
 
   assign in_ready   = (ist == I_IDLE) && !clear_req;
   assign clear_busy = clearing;
-  assign empty      = (ist == I_IDLE) && (dirty == 2'b00) && (pend == 2'b00) && (fst == F_IDLE);
+  assign empty      = (ist == I_IDLE) && !b_v && (dirty == 2'b00) && (pend == 2'b00) && (fst == F_IDLE);
   assign dbg_st     = {1'b0, fst, ist};
+  assign pg_ry      = y_r;
+  assign pg_rx0     = {x_r[8:1], 1'b0};
+  assign pg_we      = FTB && (b_wr != 2'b00);
+  assign pg_wy      = b_y;
+  assign pg_wx0     = {b_mw, b_off, 1'b0};
+  assign pg_wd      = b_wd;
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -194,15 +247,18 @@ module m2_fb_wcomb #(
         vlo[k] <= '0; vhi[k] <= '0; wlo[k] <= '0; whi[k] <= '0; wkey[k] <= '0;
       end
       dbg_pixels <= '0; dbg_clears <= 16'd0;
+      b_v <= 1'b0; b_key <= '0; b_idx <= '0; b_lo <= 1'b0; b_hi <= 1'b0; b_px <= '0;
+      b_y <= '0; b_mw <= '0; b_off <= '0; b_mk <= '0;
     end else begin
       // ---- intake
       case (ist)
         I_IDLE: begin
-          idle_n <= (in_valid || !dirty[ib]) ? '0
+          idle_n <= (in_valid || b_v || !dirty[ib]) ? '0
                   : (idle_n == ($clog2(IDLE_T+1))'(IDLE_T)) ? idle_n : idle_n + 1'b1;
           if (clear_req) begin
-            // the clear goes out after everything drawn before it
-            if (dirty[ib] && other_free) begin pend[ib] <= 1'b1; ib <= ~ib; end
+            // the clear goes out after everything drawn before it (B first)
+            if (b_v) begin end
+            else if (dirty[ib] && other_free) begin pend[ib] <= 1'b1; ib <= ~ib; end
             else if (!dirty[ib] && pend == 2'b00 && fst == F_IDLE) begin
               clr_y <= 9'd0; clr_x <= 9'd0; ist <= I_CLR;
             end
@@ -216,31 +272,13 @@ module m2_fb_wcomb #(
             s0_r  <= !in_moire || !in_y[0];   // (x ^ y) & 1 with x even
             s1_r  <= !in_moire ||  in_y[0];
             ist   <= (in_x0 > in_x1) ? I_IDLE : I_RUN;
-          end else if (dirty[ib] && other_free &&
+          end else if (!b_v && dirty[ib] && other_free &&
                        idle_n == ($clog2(IDLE_T+1))'(IDLE_T)) begin
             pend[ib] <= 1'b1; ib <= ~ib;       // idle: write what is held
           end
         end
 
-        I_RUN: if (c_go) begin
-          if (c_wr) begin
-            if (!c_fits) begin pend[ib] <= 1'b1; ib <= ~ib; end
-            if (!c_fits || !dirty[ib]) begin
-              // a fresh window
-              dirty[c_wb] <= 1'b1;
-              wkey[c_wb]  <= ckey;
-              wlo[c_wb]   <= cidx;
-              whi[c_wb]   <= cidx;
-            end else begin
-              if (cidx < wlo[ib]) wlo[ib] <= cidx;
-              if (cidx > whi[ib]) whi[ib] <= cidx;
-            end
-            if (lo_on) vlo[c_wb][cidx] <= 1'b1;
-            if (hi_on) vhi[c_wb][cidx] <= 1'b1;
-            // R358: PIXELS PAINTED, counted as they are taken -- a pixel painted
-            // twice inside one window reaches DDR3 once but was drawn twice
-            if (!(&dbg_pixels)) dbg_pixels <= dbg_pixels + 32'(lo_on) + 32'(hi_on);
-          end
+        I_RUN: if (a_go) begin
           x_r <= x_nx;
           if (x_nx > x1_r) ist <= I_IDLE;
         end
@@ -272,6 +310,38 @@ module m2_fb_wcomb #(
 
         default: ist <= I_IDLE;
       endcase
+
+      // ---- R685: stage B, the word into a window
+      if (c_wr) begin
+        if (!c_fits) begin pend[ib] <= 1'b1; ib <= ~ib; end
+        if (!c_fits || !dirty[ib]) begin
+          // a fresh window
+          dirty[c_wb] <= 1'b1;
+          wkey[c_wb]  <= ckey;
+          wlo[c_wb]   <= cidx;
+          whi[c_wb]   <= cidx;
+        end else begin
+          if (cidx < wlo[ib]) wlo[ib] <= cidx;
+          if (cidx > whi[ib]) whi[ib] <= cidx;
+        end
+        if (lo_on) vlo[c_wb][cidx] <= 1'b1;
+        if (hi_on) vhi[c_wb][cidx] <= 1'b1;
+        // R358: PIXELS PAINTED, counted as they are taken -- a pixel painted
+        // twice inside one window reaches DDR3 once but was drawn twice
+        if (!(&dbg_pixels)) dbg_pixels <= dbg_pixels + 32'(lo_on) + 32'(hi_on);
+      end
+      if (a_go) begin
+        b_v   <= 1'b1;
+        b_key <= {sel_r, y_r, a_cw[RW-1:LW]};
+        b_idx <= a_cw[LW-1:0];
+        b_lo  <= a_lo;
+        b_hi  <= a_hi;
+        b_px  <= px_r;
+        b_y   <= y_r;
+        b_mw  <= x_r[8:5];
+        b_off <= x_r[4:1];
+        b_mk  <= a_same ? b_wd : pg_rword;
+      end else if (c_go) b_v <= 1'b0;
 
       // ---- a closed window, out as one burst
       case (fst)

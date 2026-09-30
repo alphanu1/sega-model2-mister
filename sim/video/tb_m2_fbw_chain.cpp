@@ -17,6 +17,15 @@
 // Environment: CHAIN_N spans (default 20000), CHAIN_BUSY per mille of cycles
 // BUSY (default 300), CHAIN_RD cycles between reads (default 900, 0 = none),
 // CHAIN_SEED.
+//
+// R683: built with FTB=1 (make test_m2_fbw_chain_ftb), the writer asks this
+// bench's fill mask about each word and the first write to a pixel wins. The
+// mask is cleared every CHAIN_BAND spans (default 1500) once the writer is
+// empty -- m2_raster3d's C_REPLAY, which C_DONE reaches only through
+// fbw_empty. The mask is answered and written here and nowhere else, a word
+// of 32 pixels as m2_raster3d keeps it (R685: read a stage before it is
+// written), so what is checked is that the writer reads the right word, obeys
+// it, and writes back exactly the old word plus the two pixels it painted.
 
 #include "Vm2_fbw_chain.h"
 #include "verilated.h"
@@ -49,6 +58,8 @@ static uint32_t wr_a = 0, wr_a0 = 0; static int wr_left = 0, wr_b0 = 0;
 struct RB { int cd; uint64_t v; };
 static std::deque<RB> rq;
 static long rd_beats_got = 0;
+static std::vector<uint32_t> fmask(512 * 16, 0);   // R683: a word = 32 pixels
+static long pg_marked = 0, pg_bad = 0;
 
 static void tick() {
   // the DDRAM: BUSY at random; a read's words come back after a latency, with gaps
@@ -59,6 +70,24 @@ static void tick() {
     else if (rnd() % 4) { d->DDRAM_DOUT = rq.front().v; d->DDRAM_DOUT_READY = 1; rq.pop_front(); }
   }
   d->eval();
+  // R683: the mask answers for the word on pg_y/pg_x0 and records what the
+  // writer says it painted on this edge
+  // R685: the read is answered combinationally; the write lands on this edge
+  d->pg_rword = fmask[(d->pg_ry & 511) * 16 + ((d->pg_rx0 >> 5) & 15)];
+  d->eval();
+#ifdef CHAIN_FTB
+  if (d->pg_we) {
+    uint32_t &w = fmask[(d->pg_wy & 511) * 16 + ((d->pg_wx0 >> 5) & 15)];
+    const uint32_t nw = d->pg_wd, pair = 3u << (d->pg_wx0 & 31);
+    if ((nw & w) != w) pg_bad++;              // a painted pixel lost: a stale word
+    if ((nw & ~w) & ~pair) pg_bad++;          // set outside the word it painted
+    if (((nw & ~w) & pair) == 0) pg_bad++;    // a write that painted nothing
+    pg_marked += __builtin_popcount(nw & ~w);
+    w = nw;
+  }
+#else
+  if (d->pg_we) pg_bad++;
+#endif
   if (!d->DDRAM_BUSY) {
     if (d->DDRAM_WE) {
       if (wr_left == 0) {
@@ -106,6 +135,14 @@ int main(int argc, char **argv) {
   const long RDP = std::getenv("CHAIN_RD")   ? atol(std::getenv("CHAIN_RD"))   : 900;
   TRACE          = std::getenv("CHAIN_TRACE") ? atoi(std::getenv("CHAIN_TRACE")) : 0;
   rng            = std::getenv("CHAIN_SEED") ? strtoull(std::getenv("CHAIN_SEED"), 0, 0) : 1;
+  const long BAND = std::getenv("CHAIN_BAND") ? atol(std::getenv("CHAIN_BAND")) : 1500;
+#ifdef CHAIN_FTB
+  const bool FTBM = true;
+#else
+  const bool FTBM = false;
+#endif
+  std::vector<uint8_t> rmask(512 * 512, 0);   // the reference's own mask
+  long bands = 0;
 
   d = new Vm2_fbw_chain;
   d->clk = 0; d->rst_n = 0; d->fb_sel = 0; d->clear_req = 0; d->in_valid = 0;
@@ -133,6 +170,12 @@ int main(int argc, char **argv) {
   int ry = 0, rx = 0;
   long pixels_want = 0;
   for (long n = 0; n < N; n++) {
+    if (FTBM && n && (n % BAND) == 0) {
+      // a band ends: wait for the writer to empty, then clear both masks
+      int j = 0;
+      while (!d->w_empty && j++ < 200000) { reader(); tick(); reader_after(); }
+      std::fill(fmask.begin(), fmask.end(), 0); std::fill(rmask.begin(), rmask.end(), 0); bands++;
+    }
     int y, x0, x1;
     const uint32_t k = rnd() % 100;
     if (k < 70) {                       // the next run along the same row
@@ -152,7 +195,10 @@ int main(int argc, char **argv) {
     reader(); tick(); reader_after();
     d->in_valid = 0;
     for (int x = x0; x <= x1; x++)
-      if (!moire || !((x ^ y) & 1)) { ref[y * 512 + x] = 0x01000000u | col; pixels_want++; }
+      if (!moire || !((x ^ y) & 1)) {
+        if (FTBM) { if (rmask[y * 512 + x]) continue; rmask[y * 512 + x] = 1; }   // first write wins
+        ref[y * 512 + x] = 0x01000000u | col; pixels_want++;
+      }
     // a gap now and then, as the texel path leaves them
     if ((rnd() % 8) == 0) for (int g = rnd() % 40; g > 0; g--) { reader(); tick(); reader_after(); }
   }
@@ -184,6 +230,11 @@ int main(int argc, char **argv) {
   ck("every read came back", rd_done, rd_issued);
   ck("every read beat came back", rd_beats_got, rd_beats_want);
   ck("dbg_pixels counts what was painted", (long)d->dbg_pixels, pixels_want);
+  if (FTBM) {
+    std::printf("FTB: %ld bands, %ld pixels marked in the mask\n", bands + 1, pg_marked);
+    ck("FTB: every mask write = the current word + only the pixels painted", pg_bad, 0);
+    ck("FTB: the mask marked exactly the pixels painted", pg_marked, pixels_want);
+  }
 
   // the clear, through the same chain
   {

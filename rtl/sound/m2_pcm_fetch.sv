@@ -70,11 +70,18 @@ module m2_pcm_fetch #(
   // in registers: 32 x 20 bits, and the valid bits must clear at reset.
   (* ramstyle = "MLAB" *) logic [63:0] buf_q [32];
   logic [63:0] buf_rd;
-  logic [21:3] tag_q [32];
+  // R686: THE TAGS TOO. 32 x 19 bits is one MLAB (32 x 20); as registers they
+  // were 608 flip-flops and a 19-bit 32:1 read mux in each of two fetchers,
+  // ~500 ALM on a device R683 needs it on. Read registered exactly as the line
+  // is -- the slot address stands for the whole request, so the tag for it is
+  // on tag_rd by F_LOOK -- and a miss writes it long before the next request
+  // for that slot reads it.
+  (* ramstyle = "MLAB" *) logic [21:3] tag_q [32];
+  logic [21:3] tag_rd;
   logic [31:0] val_q;
   logic        m_req_r, c_ack_r;
 
-  wire hit = val_q[c_slot] && (tag_q[c_slot] == c_addr[21:3]);
+  wire hit = val_q[c_slot] && (tag_rd == c_addr[21:3]);
 
   typedef enum logic [2:0] { F_IDLE, F_LOOK, F_FETCH, F_ARM, F_ACK } fst_t;
   fst_t st;
@@ -91,6 +98,8 @@ module m2_pcm_fetch #(
                          : buf_rd[{3'd0, c_addr[2:0]} * 8 +: 8];
   // The registered read, every cycle at the requesting slot.
   always_ff @(posedge clk) buf_rd <= buf_q[c_slot];
+  always_ff @(posedge clk) tag_rd <= tag_q[c_slot];
+  always_ff @(posedge clk) if (st == F_FETCH && m_ack) tag_q[c_slot] <= c_addr[21:3];
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -127,7 +136,6 @@ module m2_pcm_fetch #(
           if (m_ack) begin
             lat_acc       <= lat_acc + {10'd0, lat_now};
             buf_q[c_slot] <= m_data;
-            tag_q[c_slot] <= c_addr[21:3];
             val_q[c_slot] <= 1'b1;
             m_req_r       <= 1'b0;
             st            <= F_ARM;
