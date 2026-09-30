@@ -26199,3 +26199,11 @@ s648, Textures OFF, 60 s of attract (fixed counter): mean 30.9 fps; 25% of
 frames in one vblank, 64% in two, 10% in three. With the texel path all but
 removed the game still runs mostly at half rate, so the texel path is not
 what holds it at 2 vblanks. Textures ON with the fixed counter: next.
+Geometry, for scale (geodiff on the saved walk dumps, bench memory, 70 MHz;
+cycles to the last quad): w1000 0.91 vblank, w5000 0.89, w2500 0.84, w2300
+0.81, w3910 0.41, w4000 0.33, w7900 0.32. A list goes CPU (built during a
+frame) -> geometry (walked the next) -> draw (the next, into the buffer that
+comes off display at the swap), so each stage must fit in one vblank for the
+game's rate. The draw now does on every MAME frame measured (0.71-0.97); the
+heavy walks are at 0.8-0.9 on bench memory, and the CPU is unmeasured since
+R681. Which stage holds the 2-vblank scenes needs the board's telemetry.
