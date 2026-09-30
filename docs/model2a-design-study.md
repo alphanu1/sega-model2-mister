@@ -26260,3 +26260,27 @@ instruction pays T_FETCH + T_EXEC, two cycles, before any stall: the core
 does not overlap them. So the CPU levers are, in order of likely size: the
 load/store path's latency (T_MEM_W), branch redirect cost, and fetch/execute
 overlap -- not cache size. The board's own split is s653-s655.
+
+**R692 -- ON THE BOARD, 90% OF THE i960's CYCLES ARE STALLS.** s655 (branch
+meas-lite: s648 + telemetry lite + i960_top's sequencer state counted on
+clk_i960; triangle split parked), 240 s of attract, 10,123 vblanks after boot:
+1.86 vblanks a frame (30.8 fps), 36,823 instructions a vblank.
+
+    load/store stall (T_MEM_W)          62.6% of cycles   10.34 an instruction
+      ... with a write on the bus       19.9%              3.29
+    fetch stall (T_FETCH_W, FETCH2_W)   30.3%              5.01
+    frame-sync spin (IP 0x12A0-0x12C0)  29.3%  (overlaps: the spin is loads)
+
+(The rows are running totals sampled at different moments; they overlap by a
+few percent and sum past 100.) Against the bench's game code (R691: T_MEM_W
+2.55-3.38, T_FETCH_W 1.2) the board is 3-4x worse on both: the per-access cost
+through bridge and SDRAM under the renderer's traffic, and the game's working
+set (R691's "icache size buys nothing" was the bench's small loops). The CPU
+is busy ~71% of the time: ~1.32 vblanks of work a game frame against the 1.0
+the game's rate needs.
+
+Levers, largest first: (1) the fetch stall -- test a bigger icache ON THE
+BOARD; (2) writes, 20% of all cycles stalled behind a posted write's handshake
+-- a write buffer; (3) every access, hit or miss, pays the four-phase handshake
+(S_DONE ~4.5 bridge cycles a transaction) -- a two-phase toggle, as Model 1's
+m1_cdc_port. Next build: (1), icache 2 KB (LINES 128, one M10K more).
