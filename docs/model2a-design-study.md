@@ -26669,3 +26669,15 @@ adds nothing measurable on top of the cull-skip and the priority (its gain
 overlapped theirs). s686's 28.4 was a lighter 60 s window. Recommended for
 the next release: B (s708) -- same speed, simpler (no keep-last, which needed
 R698's guards), every clock closed including HDMI +0.108, and checked by eye.
+
+**R705 -- THE CAR WINDOWS ON D: INTACT AFTER 10 MINUTES, NOT YET A FIX.**
+Believed: the window dropout (glass or its sky reflection vanishing after a few
+minutes of attract) was unaffected by the speed work -- A (R702 alone), B (+
+the cull-skip) and C (+ the keep-last) each showed it in Ben's run. Now seen:
+D (s712, all three, released as Model2_20260930c) kept the glass for 10
+minutes of attract on the board (Ben, by eye, 2026-10-01). D contains nothing
+A-C did not, and the dropout has always been time-dependent, so one clean
+10-minute run does not establish anything yet. To establish: a much longer run
+on D, repeated; then the same run on B, which measured the same speed. If D
+holds and B does not, the keep-last is involved; if both hold, the earlier
+A-C runs need repeating.
