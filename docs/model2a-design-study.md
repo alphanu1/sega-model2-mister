@@ -26478,3 +26478,8 @@ out of SDRAM for 300 cycles and lands when it drops; a work-RAM store is not
 held. 134 checks pass; with the stall term removed, 2 fail. test_m2_cpu_sdram,
 test_m2_geo, test_i960_top pass; tb_m2_cpu_real trace hash a95ee045a6c3424b
 unchanged.
+s680-s682 (f128d4b: R693 + R696 + R697): s681 CLOSES EVERY CLOCK -- clk_mem
++0.533, clk_sys +0.463, clk_i960 +2.926, HDMI +0.019; holds >= +0.025
+(clk_sys, thin); 41,132 ALM. Held off the board at Ben's request (a video in
+progress); to be checked with tools/m2-fbcheck.py before it is left on
+(s648 baseline: painted frames' mean brightness 305-358, 0-5% dark).
