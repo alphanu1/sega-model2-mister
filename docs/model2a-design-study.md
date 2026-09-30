@@ -26158,3 +26158,14 @@ EVERY CORE CLOCK: clk_mem +0.447, clk_sys +0.320, clk_i960 +3.511, holds
 s649 clk_sys -0.074. The PCM tags were the room: s637 without R683 had
 clk_sys +0.016; s648 with it has +0.320.
 s648 on the board 11:23 (the board moved to 192.168.1.65), s626 as .prev.
+
+**R687 -- THE 3D FRAME RATE, MEASURED FROM LINUX (tools/m2-fps.py).** No
+core change: an unpainted marker word (bit 24 clear) in three lines of each
+DDR3 buffer; the core clears a buffer at each new list, so wiped markers are
+3D frames. s648 in attract, 60 s: seconds at 57-58 fps (the game's rate,
+R637) for long stretches, 28-29 (2 vblanks) and 19 (3 vblanks) in heavy
+scenes; frame gaps 52% one vblank, 35% two, 11% three. Mean 42.8 fps --
+overstated: three seconds read 68-97, lists far closer than a vblank at a
+scene change (gaps down to 1.3 ms), which are real clears of near-empty
+lists, not the steady rate. For scale: R637 s422 28.3 fps; R681 s626 ~2.4
+vblanks a frame (~24 fps). Not yet an A/B on the same attract loop.
