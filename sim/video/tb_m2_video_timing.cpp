@@ -135,6 +135,33 @@ int main(int argc, char **argv) {
     for (auto &p : ln_at) { size_t k = p.first + 2; if (k < shownG.size() && shownG[k] >= 0) { ++ahead_n; if (shownG[k] != p.second) ++ahead_bad; } }
     ck(ahead_n > 300 && ahead_bad == 0, "interlaced: line_number is the line shown next", ahead_bad, 0);
     ck(vs_start_h[0] == 0 && vs_start_h[1] == 656 / 2, "interlaced: field 1's vsync starts half a line in", vs_start_h[1], 328);
+    // R701: WHAT MAKES A SET INTERLACE -- both fields the same length from
+    // vsync to vsync (273.5 lines, 179,416 pixels), and field 1's picture
+    // starting half a line later after its vsync than field 0's does, so the
+    // odd lines fall between the even ones. R682 had field 1's vsync a whole
+    // line late: 274.5 / 272.5, and field 1 a line and a half down.
+    {
+      long pix = 0, last_vs = -1, first_vis_after = -1; int pvs = dut->vsync, vs_field = -1;
+      std::vector<long> ivl; long d_after[2] = {-1, -1};
+      bool pvis = false;
+      for (long g = 0; g < 2000000 && ivl.size() < 6; ++g) {
+        if (dut->vsync && !pvs) {
+          if (last_vs >= 0) ivl.push_back(pix - last_vs);
+          last_vs = pix; vs_field = dut->field; first_vis_after = -1;
+        }
+        pvs = dut->vsync;
+        if (dut->visible && !pvis && first_vis_after < 0 && last_vs >= 0 && dut->ypos <= 1) {
+          first_vis_after = pix - last_vs;
+          d_after[vs_field] = first_vis_after;   // the picture that follows field vs_field's vsync
+        }
+        pvis = dut->visible;
+        ++pix; tick();
+      }
+      long bad = 0; for (long v : ivl) if (v != 179416) ++bad;
+      ck(ivl.size() >= 6 && bad == 0, "R701 interlaced: every vsync-to-vsync is 273.5 lines", bad, 0);
+      // after field 0's vsync comes field 1's picture (odd lines): half a line later than after field 1's
+      ck(d_after[0] - d_after[1] == 656 / 2, "R701 interlaced: field 1 sits half a line below field 0", d_after[0] - d_after[1], 328);
+    }
     ck(hs2 == (584 - 520) * 547, "interlaced: hsync cycles a frame", hs2, (584 - 520) * 547);
     const double pixclk = 100.0e6 * 547.0 / 5300.0;
     std::printf("  interlaced at %.4f MHz: line %.1f Hz, field %.3f Hz\n", pixclk / 1e6, pixclk / 656.0, pixclk / (656.0 * 273.5));

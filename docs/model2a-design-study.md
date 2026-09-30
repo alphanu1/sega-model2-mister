@@ -26578,3 +26578,22 @@ First reading against R682's timing (m2_video_timing, not yet tested):
 
 The release README says 15 kHz "has not yet been confirmed on a real CRT";
 the next release notes it as working with these four faults.
+
+**R701 -- WHY IT DID NOT INTERLACE, AND THE BORDER: R682'S FIELD 1 VSYNC WAS A
+LINE LATE.** With fields of 274 and 273 lines, the two vsync-to-vsync
+intervals are equal (273.5, what a set needs to interleave the fields half a
+line apart) only if field 1's vsync starts half a line BEFORE field 0's line.
+R682 started it half a line AFTER: intervals 274.5 / 272.5, and field 1's
+picture a line and a half below field 0's instead of half a line. That is
+R700's "does not look like it's interlacing", and alternating field lengths
+are a plausible cause of its dropouts too (a set losing vertical lock);
+the 2D misalignment may be the same one-line shift. tb_m2_video_timing had
+checked where field 1's vsync starts WITHIN its line, never the intervals.
+
+Now: field 0's vsync at lines 229-232 (was 220-223: 51 lines between vsync and
+the picture made R700's top border; 229 centres the 192 lines in a TV's 240),
+field 1's from the middle of 228 to the middle of 231. The bench gains the
+two checks that decide interlace -- every vsync-to-vsync 179,416 pixels (273.5
+lines), and field 1's picture exactly half a line (328 pixels) lower after
+its vsync than field 0's. On R682's timing both FAIL (all six intervals
+wrong; offset 984 pixels = 1.5 lines); on R701's, 26 of 26 pass.
