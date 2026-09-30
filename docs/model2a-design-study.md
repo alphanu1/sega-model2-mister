@@ -26662,3 +26662,10 @@ what in it breaks a table write is open (r639-beta keeps it for the study).
 
 Next: D = A + B + C, the whole of R696 with R702 and without R693 -- s686's
 speed recipe (56.8 fps) minus the fault.
+D s712 (A + B + C; s710-s712, s712 closes every core clock, HDMI -0.885):
+lit (tools/m2-fbcheck.py 150 s, 0 black-fault frames); 27.3 3D/s = ~55 game
+fps, 92% of frames at full speed -- the SAME as B. The pair-cache keep-last
+adds nothing measurable on top of the cull-skip and the priority (its gain
+overlapped theirs). s686's 28.4 was a lighter 60 s window. Recommended for
+the next release: B (s708) -- same speed, simpler (no keep-last, which needed
+R698's guards), every clock closed including HDMI +0.108, and checked by eye.
