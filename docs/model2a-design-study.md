@@ -26597,3 +26597,12 @@ two checks that decide interlace -- every vsync-to-vsync 179,416 pixels (273.5
 lines), and field 1's picture exactly half a line (328 pixels) lower after
 its vsync than field 0's. On R682's timing both FAIL (all six intervals
 wrong; offset 984 pixels = 1.5 lines); on R701's, 26 of 26 pass.
+
+s704-s706 (branch fskip-648 0face1d: the release s648 + R699 Draw method,
+Single buffered by default + R701's 15 kHz timing): **s705 closes every clock,
+HDMI too -- clk_mem +0.873, clk_sys +0.523, clk_i960 +2.672, HDMI +0.129, holds
+>= +0.173**; 41,304 ALM. On the board 22:35, md5 7c5daa8ad47e183ac7d2139c70695798;
+tools/m2-fbcheck.py 300 s: black-fault frames 0 (darkest painted frame 155, a
+dark scene). The next release candidate, pending Ben's CRT test of R701.
+(s703, the same without R701, read 23.3 / 24.2 / 26.0 3D pictures a second at
+texel step 1 / 2 / 4 -- the geometry waits on SDRAM behind the texels, R702.)
