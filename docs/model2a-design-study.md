@@ -26639,3 +26639,26 @@ First reading, not a diagnosis:
     level inside m2_multipcm (total level, pan law, or the envelope) against
     MAME's multipcm.cpp. Oracle: MAME's rendering of the same passage, peak
     and RMS per source, as R267 measured the attract.
+
+**R704 -- THE BISECT: NEITHER HALF OF R696 TURNS THE LIGHTING BLACK; R693 IS
+THE SUSPECT. AND R702'S PRIORITY IS WORTH ~3 fps ON ITS OWN.** Three builds on
+the release branch (s705: s648 + R699 + R701), one seed each, all closing every
+core clock; each loaded, tools/m2-fbcheck.py 150 s (past two scene changes),
+tools/m2-fps.py 120 s, texel step 1, Draw method Single buffered:
+
+    build                                3D/s   game fps   full-speed frames   lighting
+    s705 (release)                       25.2     ~50            75%            lit
+    A s707: + R702 geometry priority     26.4     ~53            84%            lit
+    B s708: A + R696 engine cull-skip    27.3     ~55            92%            lit
+    C s709: A + R696 pair-cache keep     26.7     ~53            88%            lit
+
+Ben, by eye: "A, B, C good -- no black 3D". Every black build (s675, s681,
+s686) carried R693, the two-phase bridge handshake; none of A-C does. R693
+changed how the i960's writes complete, and a scene change is when the game
+rewrites its colour and lighting tables through exactly those writes (the
+luma table's byte stores go through the read-modify-write). R693 measured no
+frame-rate gain on the board (R694), so it is dropped from the release line;
+what in it breaks a table write is open (r639-beta keeps it for the study).
+
+Next: D = A + B + C, the whole of R696 with R702 and without R693 -- s686's
+speed recipe (56.8 fps) minus the fault.
