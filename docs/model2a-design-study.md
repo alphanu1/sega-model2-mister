@@ -25992,3 +25992,8 @@ for the band renderer; the framebuffer path runs FTB = 0 because the mask was fe
 by the band buffers (R640). A mask for the framebuffer path is the next study
 item. This measurement build ran at 3.02 vblanks a frame (no combiner); s626,
 with it, ~2.4.
+
+**s635-s637 (73440c8: R682's 15 kHz interlaced on top of s626's RTL).** s637:
+clk_mem >= +0.245, clk_sys +0.016, clk_i960 +3.889, holds >= +0.245, HDMI
+-0.887; 41,349 ALM (s626: 41,296 -- the interlace mode placed in ~50 ALM).
+s635 clk_sys -0.097, s636 -1.166. s637 on the board (s626 as .prev).
