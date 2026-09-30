@@ -26185,3 +26185,17 @@ the size (two MLAB copies, +16 LABs) at 550/553 M10K and ~99% ALM. The draw
 is texel-bound: ~5 cycles a fetch (f2000: 225,770 fetches, 1.18 M cycles).
 Next question is on the board: in the scenes that run at 2-3 vblanks, is the
 draw the limit or the CPU/geometry? OSD Textures off removes the fetches.
+
+**R689 -- R687 WAS WRONG: THE COUNTER COUNTED PAINTED MARKERS AS CLEARS.**
+A 3D pixel painted over a marker wipes it as surely as the clear, so a scene
+that painted all three counted each frame twice: R687's "57-58 fps for long
+stretches" was 29 fps, and its 1.3 ms gaps were a clear and a paint of one
+frame. Found when OSD Textures off read 94-116 fps (2 x 57.5). Fixed: the
+buffers are drawn in turn, so only the one due to be cleared is watched, and
+the other is re-marked the moment it is found cleared -- it has just gone on
+display and nothing draws into it. Minimum gap now 16.7 ms, one vblank.
+
+s648, Textures OFF, 60 s of attract (fixed counter): mean 30.9 fps; 25% of
+frames in one vblank, 64% in two, 10% in three. With the texel path all but
+removed the game still runs mostly at half rate, so the texel path is not
+what holds it at 2 vblanks. Textures ON with the fixed counter: next.

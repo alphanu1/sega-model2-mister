@@ -12,6 +12,12 @@
 # that buffer has been cleared for a new frame. Clears per second, both
 # buffers together, is the 3D frame rate. The markers are unpainted pixels, so
 # the tilemap shows through them, as it does through any pixel the 3D misses.
+#
+# PAINTING ALSO WIPES A MARKER, so only the buffer due to be cleared next is
+# watched: the core draws into the two buffers in turn, and when one is found
+# cleared the OTHER is re-marked -- it has just gone on display, and nothing
+# draws into it until its own clear. A marker the 3D paints over in the
+# buffer being drawn is never looked at.
 import mmap, os, struct, sys, time
 
 BASE, SPAN = 0x30000000, 2 << 20
@@ -28,12 +34,14 @@ def plant(b):
 secs = float(sys.argv[1]) if len(sys.argv) > 1 else 20
 plant(0); plant(1)
 t0 = time.monotonic(); last = t0; n = 0; per = []; stamps = []
+watch = (0, 1)                          # until the first clear says which is next
 while True:
     now = time.monotonic()
     if now - t0 >= secs: break
-    for b in (0, 1):
+    for b in watch:
         if all(rd(off(b, y)) != MARK for y in LINES):
-            n += 1; stamps.append(now); plant(b)
+            n += 1; stamps.append(now); plant(b ^ 1); watch = (b ^ 1,)
+            break
     if now - last >= 1.0:
         per.append(n); n = 0; last += 1.0
     time.sleep(0.0005)
