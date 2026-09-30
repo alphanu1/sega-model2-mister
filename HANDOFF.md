@@ -22,6 +22,12 @@ same 27.3 / 92% as D, so the keep-last adds nothing measurable on top of the
 cull-skip and the priority. B was recommended (simpler, HDMI +0.108); Ben
 chose D, which is what was on his board.
 
+Car windows on D (Ben, 2026-10-01): glass intact after 10 minutes of attract,
+still being watched. Before this, A, B and C each showed the window dropout
+in Ben's run, and D is only those three combined, so this is NOT yet a fix:
+the dropout has always been time-dependent. If it holds over a much longer
+run, the lead is that the combination matters, not any one change.
+
 Still open: R703's three (2D element on the right misplaced, rolling start
 not scrolling, quiet music/game-over samples); car windows dropping out; 15
 kHz not yet confirmed on Ben's CRT; mip-mapping; R693's actual bug.
