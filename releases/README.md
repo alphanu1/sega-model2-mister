@@ -59,6 +59,12 @@ textured, lit polygons over the 2D layers, with sound.
 - **Polygon edges use pixel-centre coverage**, which removed the streaks and
   overlaps along the seams.
 - **Sound runs at the right speed.**
+- **`Draw method`, new: the game at up to arcade speed.** With `Single
+  buffered` (the default) the 3D is drawn every second frame and the game no
+  longer waits on it: about 50 frames a second on average over two minutes of
+  attract, full speed in three frames out of four.
+- **15 kHz interlaced for CRTs**, with its field timing corrected in this build
+  so the two fields are equal and the picture is centred.
 
 ## OSD settings
 
