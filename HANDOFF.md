@@ -1,5 +1,31 @@
 # Handoff
 
+## 2026-09-30 (night): RELEASED Model2_20260930c.rbf = s712 (build D). main = this.
+
+main = the 20260930b release (s705) + prio-D merged: R702 (the geometry's
+SDRAM port 4 joins the priority class, PRI 11'b100_0001_1100) + R696's engine
+cull-skip (back-facing polygons skip their vertex reads) + R696's pair-cache
+keep-last (u_eng_pc KEEP_LAST=1). NOT R693/R697/R698 -- those stay on
+r639-beta, and R693 (the bridge's toggle handshake) is the suspect for the
+black-3D fault (R704, on r639-beta's study).
+
+s712 (seeds s710-s712; only s712 closed): clk_sys +0.165, clk_mem +0.740,
+clk_i960 +2.322, holds >= +0.184, HDMI -0.885 (HDMI is the one negative; it
+has run on Ben's HDMI without a fault -- watch for it). md5
+60d53a2a7e8c898e94f42f7245ba561f, 4,641,796 bytes, pulled from the board.
+tools/m2-fbcheck.py 150 s: 0 black-fault frames (lowest mean 109, a dark
+scene). tools/m2-fps.py 120 s at texel step 1: 27.3 pictures a second = ~55
+game frames, 92% of frames at 2 vblanks (full speed), 5% at 3, 1% at 4.
+
+Bisect by eye (Ben): A, B and C all lit, no black 3D. B (s708) measured the
+same 27.3 / 92% as D, so the keep-last adds nothing measurable on top of the
+cull-skip and the priority. B was recommended (simpler, HDMI +0.108); Ben
+chose D, which is what was on his board.
+
+Still open: R703's three (2D element on the right misplaced, rolling start
+not scrolling, quiet music/game-over samples); car windows dropping out; 15
+kHz not yet confirmed on Ben's CRT; mip-mapping; R693's actual bug.
+
 ## 2026-09-30 (later): RELEASED Model2_20260930b.rbf = s705. main = this.
 
 Branch fskip-648: the first release (s648, 787bf97's RTL) + R699 Draw method
