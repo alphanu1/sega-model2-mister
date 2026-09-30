@@ -64,12 +64,13 @@ textured, lit polygons over the 2D layers, with sound.
 
 | setting | what it does |
 |---|---|
-| `Video` | `Native 24kHz`, or `15kHz interlaced` for a CRT (57.5 Hz fields of 192 lines). The 15 kHz mode is new and **has not yet been confirmed on a real CRT**. |
+| `Video` | `Native 24kHz`, or `15kHz interlaced` for a CRT (57.5 Hz fields of 192 lines). The 15 kHz mode **works on a real CRT but has known faults** — see below. |
 | `Aspect ratio` | as MiSTer's other cores. |
 | `Textures` | `On`, or `Off` to draw every polygon flat. |
 | `Texture filter` | `Bilinear` or `Point`. |
 | `Texel step` | how many pixels share one texture read. `1` is the most detailed. |
 | `Texture brightness` | brightness of textured polygons. |
+| `Draw method` | **`Single buffered` (the default): the game runs at arcade speed** and the 3D is drawn every second frame, 28.75 pictures a second — which is also how the arcade board updates its 3D. `Double Buffered` draws every frame the core can, and the whole game slows to about 30 frames a second. `Every 3rd frame` draws one in three. |
 | `3D pacing` | `Hold game` keeps the game in step with the 3D, as an overloaded arcade board slows down; `Free` lets the game run ahead of the picture. |
 | `Gamma` | `Off`, `MAME` or `Mild`. Applies to 2D and 3D together. |
 | `Pedals` | swaps throttle and brake on the right stick — axis direction differs between pads. |
@@ -92,10 +93,15 @@ textured, lit polygons over the 2D layers, with sound.
 This list describes the RBF named above. **The heading carries the RBF's name so
 that if the two disagree, you trust neither and check.**
 
-- **It runs at about half the arcade's speed.** The game advances about 30
-  frames a second against the arcade's 57.5 (measured over attract on
-  hardware). The 3D drawing is no longer what limits it — turning textures off
-  changes nothing. The limit is the geometry stage, which is being worked on.
+- **Full speed needs `Draw method: Single buffered`** (the default). Measured
+  on hardware: the game at 56.8 frames a second of the arcade's 57.5, the 3D
+  at 28.4 pictures a second. `Double Buffered` draws every frame the core can,
+  and then the game runs at about half speed: the geometry stage cannot yet
+  finish a scene within one frame, and that is being worked on.
+- **15 kHz interlaced has four known faults** on a real CRT: a large border
+  at the top of the picture; the picture dropping out every few seconds; the
+  top 2D layer's scanlines misaligned; and the set not truly interlacing —
+  it shows 192 lines rather than 384 interleaved.
 - **Car windows drop out.** After a few minutes of attract the glass or its sky
   reflection can disappear from some cars, so you see into the car.
 - **Some textures flicker** on trees and hillsides.
