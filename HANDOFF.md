@@ -1,5 +1,50 @@
 # Handoff
 
+## 2026-09-30: RELEASED Model2_20260930.rbf = s648 (787bf97's RTL). main = this.
+
+`releases/` is published for the first time (the .gitignore block that held it
+back is replaced by the negations, last in the file). The RBF was pulled from
+Ben's board, md5 42c000294bffcedebc88d6fc5289db1c, 4,639,724 bytes, and is s648:
+front to back on the framebuffer path (R683-R686), 15 kHz interlaced (R682),
+sound clock fixed (R680), the triangle split for twisted corners (R677). s648
+closes every core clock (clk_mem +0.447, clk_sys +0.320, clk_i960 +3.511, holds
+>= +0.192; HDMI -0.210). Measured on the board with tools/m2-fps.py (fixed
+counter, R689): 30.7 fps in attract, textures on or off alike.
+
+NOT in this release -- on branch r639-beta, unverified or broken on the board:
+- R693 two-phase CPU bridge handshake (bench: same trace, -8.7% CPI on the
+  copy loop; no board effect on its own).
+- R696 geometry: culled polygons skip their unused reads, the engine's pair
+  cache keeps {N, N+1}. Real speed on the board (Ben: "running quite fast"),
+  but s675/s681 went BLACK after the first scene change.
+- R697 buffer-RAM stores wait for the push queue (the count patch could
+  overtake its placeholder -- a real race, not the black screen's cause).
+- R698 the colour invalidates: a read across a write not kept, col_inval also
+  on landing, no colour-cache fill across an invalidate. Built as s683-s685,
+  NOT yet run on the board. tools/m2-fbcheck.py decides (s681 failed it:
+  lit 75 s, then mean brightness 0 for good).
+
+Findings this session, including the wrong ones:
+- R687 was WRONG: the fps counter counted painted markers as frames (57 fps
+  was 29). R689 fixed it by watching only the buffer due to be cleared.
+- R690/R692/R694: the game is CPU-bound, and the CPU is held by the geometry
+  push queue (57% of its working time), not by memory. R690 overruled R681
+  from m2_geo's header ("never stalls the i960"), which R610 had made untrue.
+- R695: MAME flips EVERY frame, alternating buffers dword 0/0x4000 (R638 was
+  right); our walk outlasts the frame, so the CPU overtakes it and is held.
+  videoctl is written once, 0 -- R256's "30 Hz mode" does not hold.
+- R696: the geometry is bound by its memory latency (~91 k reads a list,
+  0.07 vblank per cycle of latency); geodiff answered in the same cycle, so
+  its 0.3-0.9 vblank was free memory.
+- R684/R686: area came from the span queue and clip stack to M10K, span_tex's
+  query in 16 bits, the PCM fetchers' tags in MLAB. M10K is 550/553.
+- R691: icache size buys nothing in the bench; 2 KB does not fit (+400 ALM).
+- Lua taps in MAME must be held in globals or the collector removes them.
+
+Next: board-check s683-s685 with tools/m2-fbcheck.py and tools/m2-fps.py; if
+lit, the geometry speed-up can ship. If not, bisect R693/R696/R697/R698.
+
+
 ## 2026-09-29: main = b111c5d, s578's RTL. THE STREAKS ARE GONE (R660, R663).
 
 s578 on the board (branch m2cov-off merged): Ben -- "Look good ... no

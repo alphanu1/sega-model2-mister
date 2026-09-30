@@ -118,20 +118,10 @@ cr_ie_info.json
 fit-*.blocks
 fit-*.summary
 
-# ---- releases/ IS NOT PUBLISHED YET ----
-#
-# The folder is staged locally in the layout MiSTer expects -- one dated .rbf,
-# the MRAs, and a README -- but nothing in it is committed, because the core is
-# not ready to be released: Daytona boots and has sound, and draws no 3D.
-#
-# WHEN IT IS READY, the way to publish it is to replace this block with
-# negations that MUST COME LAST in this file, because gitignore takes the last
-# matching rule and there is a blanket `*.rbf` above for Quartus output:
-#
-#     !/releases/
-#     !/releases/*.rbf
-#
-# Without them `git add releases/` succeeds, stages NOTHING, and the push lands
-# upstream with a README promising a core that is not there. The Kaneko16
-# project shipped exactly that and recorded it.
-/releases/
+# ---- releases/ IS PUBLISHED ----
+# One dated .rbf, the MRA and a README, in the layout MiSTer expects. These
+# negations MUST STAY LAST: gitignore takes the last matching rule, and the
+# blanket `*.rbf` above (Quartus output) would otherwise swallow the release --
+# `git add releases/` succeeds and stages nothing.
+!/releases/
+!/releases/*.rbf
