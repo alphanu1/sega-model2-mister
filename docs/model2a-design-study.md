@@ -26284,3 +26284,42 @@ BOARD; (2) writes, 20% of all cycles stalled behind a posted write's handshake
 -- a write buffer; (3) every access, hit or miss, pays the four-phase handshake
 (S_DONE ~4.5 bridge cycles a transaction) -- a two-phase toggle, as Model 1's
 m1_cdc_port. Next build: (1), icache 2 KB (LINES 128, one M10K more).
+
+**R693 -- THE CPU BRIDGE'S HANDSHAKE IS TWO-PHASE (MODEL 1'S m1_cdc_port).**
+R692's third lever. Every i960 access -- a data-cache hit included, since the
+cache is on the bridge's memory side -- paid a four-phase handshake: request
+up, acknowledge up, request down, acknowledge down, each through a flop, and
+only then could the next access start (S_DONE, then C_CLR). The bench put
+that tail at ~4.5 bridge cycles of every transaction (tb_m2_boot, 30-60 M
+instructions: S_DONE 4.35 of ~13).
+
+Now req_cpu toggles once per access and ack_mem once per completion
+(m1_cdc_port's scheme; its two-flop synchronisers are not needed at the exact
+2:1, so the one settling flop and the payload rule stay as they were). A
+completion returns the memory side to S_IDLE at once; the CPU side is free on
+the next cycle. Two things the four-phase round trip had been hiding:
+  - THE CYCLE AFTER OUR OWN ACK. The i960 moves bus_addr at the end of the
+    cycle it sees bus_ack, so a request sampled in that cycle carries the old
+    address: C_IDLE does not accept while bus_ack is up (m1_cdc_port's
+    duplicate-transaction fault, measured there on back-to-back reads).
+  - THE READ-MODIFY-WRITE re-dispatches the same request as its write half
+    from S_IDLE; it now enters on rmw_done as well as on a new toggle.
+
+Bench: test_m2_cpu_bridge 129 checks 0 mismatches; test_m2_cpu_sdram,
+test_i960_top/_irq/_rom, test_m2_romload, test_m2_sdram pass. tb_m2_cpu_real
+(real ROM, 100,000 instructions): trace hash a95ee045a6c3424b IDENTICAL to
+the four-phase bridge, copy folds 14b8/d791 identical, CPU cycles 1,398,959
+-> 1,277,189 (13.99 -> 12.77 CPI, -8.7%).
+
+s656-s658 (meas-lite + icache 2 KB, LINES 128): NO FIT -- 4,230-4,232 LABs of
+4,191; s657 stopped after map. i960_icache 190 -> 592 ALM (per-line logic
+170 -> 525, the tag MLAB 20 -> 65). A bigger icache is not affordable on this
+device as the cache is built; the fetch stall has to come down another way
+(redirect cost, or fewer cycles a fill).
+tb_m2_boot, 40 M instructions (R691's runs, four-phase -> two-phase): CPU CPI
+6.29 -> 6.27 at M2_BOOT_LAT 6, 7.09 -> 7.06 at 16; S_DONE 4.35 cycles a
+transaction -> 0. So the tail was mostly hidden behind the core's own cycles
+where accesses are spaced; the gain is on runs of back-to-back accesses (the
+copy loop's 8.7%, and in the game the push loops). It does not shorten the
+time to data. Whether it moves the board is measured by s659-s661 (meas-lite:
+s655 + this + every CPU transaction timed by class, accept to completion).
