@@ -65,8 +65,12 @@ module m2_video_timing #(
   parameter int unsigned VI_TOTAL0     = 274,
   parameter int unsigned VI_TOTAL1     = 273,
   parameter int unsigned VI_VISIBLE    = 192,
-  parameter int unsigned VI_SYNC_START = 220,
-  parameter int unsigned VI_SYNC_END   = 223
+  // R701: 229-232, not 220-223: 220 left 51 lines between vsync and the top
+  // of the picture, far more than a TV expects, and Ben's CRT showed the big
+  // border at the top that follows. 229 splits the 82 blanking lines so the
+  // 192 visible sit centred in a TV's 240.
+  parameter int unsigned VI_SYNC_START = 229,
+  parameter int unsigned VI_SYNC_END   = 232
 ) (
   input  logic       clk,        // 16 MHz pixel clock enable domain
   input  logic       ce_pix,
@@ -127,11 +131,15 @@ module m2_video_timing #(
   assign visible = !hblank && !vblank;
 
   assign hsync = (hcnt >= 10'(H_SYNC_START)) && (hcnt < 10'(H_SYNC_END));
-  // R682: field 1's vsync runs from the MIDDLE of line VI_SYNC_START to the
-  // middle of VI_SYNC_END -- half a line late, the interlace offset
+  // R701: FIELD 1'S VSYNC RUNS FROM THE MIDDLE OF THE LINE BEFORE -- half a
+  // line EARLY, not late. With fields of 274 and 273 lines the two vsync-to-
+  // vsync intervals are equal (273.5) only if field 1's vsync sits at
+  // VI_SYNC_START - 0.5; R682 put it at + 0.5, which made them 274.5 and 272.5
+  // and set field 1's lines a line and a half below field 0's instead of half
+  // a line -- on Ben's CRT, "does not look like it's interlacing".
   wire [19:0] vpos  = {vcnt, hcnt};
   wire        vs_i0 = (vcnt >= 10'(VI_SYNC_START)) && (vcnt < 10'(VI_SYNC_END));
-  wire        vs_i1 = (vpos >= {10'(VI_SYNC_START), 10'(H_TOTAL / 2)}) && (vpos < {10'(VI_SYNC_END), 10'(H_TOTAL / 2)});
+  wire        vs_i1 = (vpos >= {10'(VI_SYNC_START - 1), 10'(H_TOTAL / 2)}) && (vpos < {10'(VI_SYNC_END - 1), 10'(H_TOTAL / 2)});
   assign vsync = !interlace ? ((vcnt >= 10'(V_SYNC_START)) && (vcnt < 10'(V_SYNC_END)))
                             : (field ? vs_i1 : vs_i0);
 
