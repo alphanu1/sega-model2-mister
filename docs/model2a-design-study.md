@@ -26518,3 +26518,7 @@ fail. geodiff (rebuilt: geodiff_top lacked R697's push_busy pin, and the first
 comparison ran a stale binary) -- all seven lists identical; tb_m2_cpu_real
 trace hash unchanged. Build s683-s685; tools/m2-fbcheck.py decides whether it
 stays on the board.
+s683-s685 (d0815ef: R693 + R696 + R697 + R698): s685 closes every core clock --
+clk_mem +0.734, clk_sys +0.214, clk_i960 +3.039, holds >= +0.228; HDMI -0.441;
+41,322 ALM. s683 clk_sys -0.265, s684 -0.075. Awaiting the board check
+(tools/m2-fbcheck.py + tools/m2-fps.py) before it is left on.
