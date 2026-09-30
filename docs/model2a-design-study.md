@@ -26207,3 +26207,9 @@ comes off display at the swap), so each stage must fit in one vblank for the
 game's rate. The draw now does on every MAME frame measured (0.71-0.97); the
 heavy walks are at 0.8-0.9 on bench memory, and the CPU is unmeasured since
 R681. Which stage holds the 2-vblank scenes needs the board's telemetry.
+s648, Textures ON, fixed counter, 60 s of attract: mean 30.7 fps; 21% of
+frames in one vblank, 72% in two, 6% in three -- the same as Textures OFF
+(30.9; 25/64/10) within the difference between two stretches of attract.
+The texel path no longer sets the frame rate; the game runs at half rate
+with or without it. The limit is upstream of the draw: the CPU or the
+geometry.
