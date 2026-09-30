@@ -193,7 +193,7 @@ localparam CONF_STR = {
 	// and drawn, and the screen keeps the last drawn picture between them. For
 	// players who would rather have arcade pace than every frame. O[44:43] had
 	// never been used, so no saved setting of an older build can land in it.
-	"O[44:43],Frame skip,Double Buffered,Single buffered,2;",
+	"O[44:43],Draw method,Double Buffered,Single buffered,Every 3rd frame;",
 	// R664: O[37] (FB self-test, R653), O[38] (FB address, R654) and O[41:39]
 	// (FB write pace, R656) are parked -- diagnostics of the scanline hunt that
 	// R660 ended -- to make room for the combining writer (R661). The bits stay
