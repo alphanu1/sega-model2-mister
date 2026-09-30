@@ -84,6 +84,7 @@ module m2_pair_cache #(
   logic          pass;      // this request is the port's
   logic          pass_ack;  // the port's acknowledge, registered beside its data
   logic          req_d, p_ack_d;
+  logic          inval_pend;   // R698: an invalidate arrived while the port read was out
 
   wire new_req = req && !req_d;
   wire match_lo = have_lo && (idx == have_idx);
@@ -101,7 +102,7 @@ module m2_pair_cache #(
     if (!rst_n) begin
       have_lo <= 1'b0; have_hi <= 1'b0; have_idx <= '0; have_lo_d <= '0; have_hi_d <= '0;
       hit_pend <= 1'b0; hit_ack <= 1'b0; pass <= 1'b0; pass_ack <= 1'b0;
-      req_d <= 1'b0; p_ack_d <= 1'b0; data <= '0;
+      req_d <= 1'b0; p_ack_d <= 1'b0; data <= '0; inval_pend <= 1'b0;
     end else begin
       req_d    <= req;
       p_ack_d  <= p_ack;
@@ -110,6 +111,10 @@ module m2_pair_cache #(
       if (fire) hit_pend <= 1'b0;
       if (!req) pass <= 1'b0;
       if (inval) begin have_lo <= 1'b0; have_hi <= 1'b0; end   // R266: another master wrote the memory
+      // R698: A READ IN FLIGHT ACROSS AN INVALIDATE may carry the old words, and a
+      // kept copy (KEEP_LAST) would serve them long after; its answer is used
+      // for the request that asked, and not kept.
+      if (inval && pass) inval_pend <= 1'b1;
       if (new_req) begin
         if (!KEEP_LAST) have_hi <= 1'b0;       // R214: the copy serves one request, or none
         if (match) begin hit_pend <= 1'b1; data <= match_lo ? have_lo_d : have_hi_d; end
@@ -119,8 +124,9 @@ module m2_pair_cache #(
       // half for the requester, and both halves kept as N and N+1.
       if (p_ack && !p_ack_d) begin
         data      <= p_dout[31:0];
-        have_lo   <= KEEP_LAST && !bypass && !inval;
-        have_hi   <= ~&idx[COL_BITS-2:0] && !bypass && !inval;   // the last dword of a row: its pair wrapped
+        have_lo   <= KEEP_LAST && !bypass && !inval && !inval_pend;
+        have_hi   <= ~&idx[COL_BITS-2:0] && !bypass && !inval && !inval_pend;   // the last dword of a row: its pair wrapped
+        inval_pend <= 1'b0;
         have_idx  <= idx;
         have_lo_d <= p_dout[31:0];
         have_hi_d <= p_dout[63:32];

@@ -12,7 +12,8 @@
 #include <vector>
 
 static int checks = 0, fails = 0;
-#define CHECK(c, ...) do { ++checks; if (!(c)) { ++fails; if (fails <= 12) { std::printf("  FAIL: " __VA_ARGS__); std::printf("\n"); } } } while (0)
+static bool quiet = false;   // R698: a read whose old answer is expected
+#define CHECK(c, ...) do { ++checks; if (!(c) && !quiet) { ++fails; if (fails <= 12) { std::printf("  FAIL: " __VA_ARGS__); std::printf("\n"); } } } while (0)
 
 int main(int argc, char **argv) {
   Verilated::commandArgs(argc, argv);
@@ -27,6 +28,10 @@ int main(int argc, char **argv) {
   // The port model: rising-edge request, LAT cycles, then ack held while the
   // request stands; `done` clears when it falls (m2_sdram_x2).
   int p_req_d = 0, cnt = -1, done = 0; uint32_t p_idx_l = 0; long trips = 0;
+  // R698: inject a write DURING a port read of inj_idx: the port answers with
+  // the words as they were when it read them, another master rewrites the
+  // dword and pulses inval halfway through the latency.
+  bool inj = false; uint32_t inj_idx = 0; uint64_t inj_snap = 0; bool inj_armed = false;
   // The reader: R208. go = ack rising edge; drop req for a cycle after.
   int ack_d = 0, go_d = 0;
 
@@ -40,7 +45,13 @@ int main(int argc, char **argv) {
         d->eval();
         // port model, on this cycle's outputs
         int pr = d->p_req;
-        if (pr && !p_req_d && cnt < 0 && !done) { cnt = LAT; p_idx_l = d->p_idx; ++trips; }
+        if (pr && !p_req_d && cnt < 0 && !done) {
+          cnt = LAT; p_idx_l = d->p_idx; ++trips;
+          if (inj && p_idx_l == inj_idx) {
+            inj_snap = (uint64_t(mem[((p_idx_l & ~511u) | ((p_idx_l + 1) & 511u)) & 0xffff]) << 32) | mem[p_idx_l & 0xffff];
+            inj_armed = true;
+          }
+        }
         p_req_d = pr;
         int go = d->ack && !ack_d;
         ack_d = d->ack;
@@ -51,7 +62,12 @@ int main(int argc, char **argv) {
         go_d = go;
         tick();
         // registered port state
-        if (cnt > 0) { if (--cnt == 0) { done = 1; d->p_dout = (uint64_t(mem[((p_idx_l & ~511u) | ((p_idx_l + 1) & 511u)) & 0xffff]) << 32) | mem[p_idx_l & 0xffff]; cnt = -1; } }  // the pair wraps inside the 512-dword row, as m2_sdram's burst does
+        d->inval = 0;
+        if (inj_armed && cnt == LAT / 2) { mem[inj_idx & 0xffff] ^= 0x0F0F0F0Fu; d->inval = 1; }
+        if (cnt > 0) { if (--cnt == 0) {
+          done = 1;
+          d->p_dout = inj_armed ? inj_snap : (uint64_t(mem[((p_idx_l & ~511u) | ((p_idx_l + 1) & 511u)) & 0xffff]) << 32) | mem[p_idx_l & 0xffff];
+          inj_armed = false; cnt = -1; } }  // the pair wraps inside the 512-dword row, as m2_sdram's burst does
         if (!d->p_req) done = 0;
         d->p_ack = done;
         d->eval();
@@ -149,6 +165,23 @@ int main(int argc, char **argv) {
       }
     }
     std::printf("  engine pattern: %ld reads, %ld port trips\n", nreads, trips - t0);
+  }
+
+  // R698: THE READ THAT OVERLAPPED THE WRITE MUST NOT BE KEPT. Its own answer
+  // is the old word (the request was issued before the write, so that is
+  // legitimate), but the next read of the same dword must see the new one.
+  {
+    const uint32_t N = 20000;
+    std::vector<uint32_t> first{N};
+    // the injected read returns the pre-write word, which the check inside
+    // read_stream would call wrong: take it without checking
+    inj = true; inj_idx = N;
+    const uint32_t before = mem[N];
+    quiet = true; read_stream(first, "R698 read across a write"); quiet = false;
+    inj = false;
+    CHECK(mem[N] != before, "R698: the injected write did not happen");
+    std::vector<uint32_t> again{N, N};
+    read_stream(again, "R698 the same dword after the write");
   }
 
   std::printf("m2_pair_cache: checks=%d fails=%d\n", checks, fails);

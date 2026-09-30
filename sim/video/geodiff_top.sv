@@ -99,7 +99,7 @@ module geodiff_top #(
     .win_vp_s(win_vp_s), .win_vp_e(win_vp_e), .win_c0(win_c0), .win_cnt(),
     .lit_x(lit_x), .lit_y(lit_y), .lit_z(lit_z),
     .dbg_lit_n(lit_n), .dbg_nops(),
-    .dbg_walk_flip(), .dbg_walk_fallback(), .push_stall(),
+    .dbg_walk_flip(), .dbg_walk_fallback(), .push_stall(), .push_busy(),   // R697
     .dbg_overtake(),
     .tp_we(tp_we), .tp_idx(tp_idx),
     .tp_diffuse(tp_diffuse), .tp_ambient(tp_ambient),

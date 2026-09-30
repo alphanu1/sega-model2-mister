@@ -266,6 +266,7 @@ module m2_cpu_bridge #(
   logic        req_cpu;
   logic        ack_seen;         // the completion toggle last consumed (CPU side)
   logic        req_seen;         // the request toggle last taken (memory side)
+  logic        ack_mem_d;        // R698: ack_mem a cycle ago, to see a completion
   typedef enum logic [1:0] { C_IDLE, C_WAIT, C_CLR, C_POST } cph_e;
   cph_e cph;
   logic        req_mem, ack_mem;
@@ -742,7 +743,7 @@ module m2_cpu_bridge #(
 
   always_ff @(posedge clk_mem or negedge rst_n_mem) begin
     if (!rst_n_mem) begin
-      st <= S_IDLE; ack_mem <= 1'b0; half <= 1'b0; req_seen <= 1'b0;
+      st <= S_IDLE; ack_mem <= 1'b0; half <= 1'b0; req_seen <= 1'b0; ack_mem_d <= 1'b0;
       sd_req <= 1'b0; sd_we <= 1'b0; sd_addr <= '0; sd_din <= 16'd0; sd_be <= 2'b11;
       oc_tram_we <= 1'b0; oc_pal_we <= 1'b0; oc_xlat_we <= 1'b0; col_inval <= 1'b0; buf_inval <= 1'b0; tex_inval <= 1'b0;
       io_sel <= 1'b0; io_we <= 1'b0;
@@ -758,6 +759,12 @@ module m2_cpu_bridge #(
     end else begin
       oc_tram_we <= 1'b0; oc_pal_we <= 1'b0; oc_xlat_we <= 1'b0; col_inval <= 1'b0; buf_inval <= 1'b0; tex_inval <= 1'b0;
       io_sel     <= 1'b0;
+      // R698: AND AGAIN WHEN A COLOUR WRITE HAS LANDED. The pulse at dispatch
+      // comes before the SDRAM holds the new word, so a reader in between took
+      // the old one; this one follows the completion (ack_mem toggles on it,
+      // and r_* stand until the CPU side takes the next access).
+      ack_mem_d <= ack_mem;
+      if ((ack_mem != ack_mem_d) && r_we && (pal_mirror || xlat_mirror)) col_inval <= 1'b1;
 
       // The cache's own housekeeping, before any state runs.
       dc_inval <= 1'b0;

@@ -26483,3 +26483,38 @@ s680-s682 (f128d4b: R693 + R696 + R697): s681 CLOSES EVERY CLOCK -- clk_mem
 (clk_sys, thin); 41,132 ALM. Held off the board at Ben's request (a video in
 progress); to be checked with tools/m2-fbcheck.py before it is left on
 (s648 baseline: painted frames' mean brightness 305-358, 0-5% dark).
+
+**R698 -- s681 ON THE BOARD: LIT FOR 75 s, THEN BLACK FOR GOOD; THE COLOUR
+PATH'S INVALIDATES LEAKED, AND KEEP_LAST MADE THE LEAK LAST.** tools/m2-fbcheck.py
+on s681 (R697 in it), every 8 s: painted frames' mean brightness 243-326 for
+74 s; one frame with nothing painted at 83 s (a scene change); from 92 s to
+the end every painted pixel exactly black (mean 0, 100% dark). Reverted to
+s648 by the check itself. So R697 was not it -- or not all of it -- and the
+failure is a state that goes bad once and stays: at a scene change the game
+rewrites the 3D palette and the colour table.
+
+Three leaks, each old, each made lasting by R696's KEEP_LAST:
+  - m2_pair_cache: an invalidate that arrives while a port read is OUT is
+    lost; the answer, read before the write landed, was kept. Under R214's
+    use-once rule that cost one read; kept, it serves the old word until a
+    miss replaces it. Now an answer whose read overlapped an invalidate is
+    used by its own request and not kept (inval_pend).
+  - m2_cpu_bridge: col_inval pulsed when a colour write was DISPATCHED, before
+    the SDRAM held the new word; a reader in between took the old one. It
+    now pulses again when the write COMPLETES (ack_mem toggles on it).
+  - m2_geo_engine: a colour-cache entry computed across an invalidate was
+    written VALID with the old colour and served to every later polygon with
+    that key until the next colour write -- black for every polygon, for the
+    rest of the scene. An entry now is not validated if the colours changed
+    during its reads (cc_dirty); the polygon still uses what it computed.
+
+Benches: tb_m2_pair_cache gains a read across a write (the port answers with
+the pre-write words, the memory is rewritten and inval pulsed mid-latency; the
+next reads must see the new word) -- 18,851 checks pass with KEEP_LAST 0 and 1;
+with inval_pend removed KEEP_LAST 1 serves the stale word and fails.
+tb_m2_cpu_bridge: a palette write pulses col_inval at least twice, the last
+after the SDRAM write lands -- 136 checks; with the landing pulse removed, 2
+fail. geodiff (rebuilt: geodiff_top lacked R697's push_busy pin, and the first
+comparison ran a stale binary) -- all seven lists identical; tb_m2_cpu_real
+trace hash unchanged. Build s683-s685; tools/m2-fbcheck.py decides whether it
+stays on the board.

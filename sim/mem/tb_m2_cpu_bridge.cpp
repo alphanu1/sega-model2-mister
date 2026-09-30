@@ -46,6 +46,8 @@ static uint64_t fails = 0, checks = 0;
 static const int CPU_DIV = 8, MEM_DIV = 5;
 static uint64_t tk = 0;
 
+// R698: every col_inval pulse, and every colour word landing in SDRAM
+static long g_colinv = 0, g_colinv_tk = -1, g_colwr_tk = -1;
 static void step() {
   const bool cpu_edge = (tk % CPU_DIV) == 0;
   const bool mem_edge = (tk % MEM_DIV) == 0;
@@ -70,6 +72,7 @@ static void step() {
         if (pb & 1) cur = uint16_t((cur & 0xff00) | (pd & 0x00ff));
         if (pb & 2) cur = uint16_t((cur & 0x00ff) | (pd & 0xff00));
         sdram[pa] = cur;
+        if (pa >= 0x50000u && pa < 0x52000u) g_colwr_tk = long(tk);   // the 3D palette and xlat mirrors
       } else {
         // A FOUR-WORD BURST, because that is what port 0 now does -- blen()
         // gives ports 0 to 3 four words. Returning one and zero-filling the
@@ -94,6 +97,7 @@ static void step() {
         std::printf("      SD %s addr=%08x din=%04x be=%x\n",
                     pw ? "WR" : "rd", pa, pd, pb);
     }
+    if (dut->col_inval) { ++g_colinv; g_colinv_tk = long(tk); }
     // On-chip arrays: REGISTERED reads, as M10K is.
     dut->oc_tram_q = tram[dut->oc_addr & 0x7fff];
     dut->oc_pal_q  = pal[dut->oc_addr & 0x1fff];
@@ -407,7 +411,13 @@ int main(int argc, char **argv) {
   // ---- R222: palette entries 0x1000-0x13ff land on chip AND in the mirror ----
   {
     const uint32_t PB = 0x01800000u;
+    g_colinv = 0; g_colinv_tk = -1; g_colwr_tk = -1;
     access(true, PB + 0x2000u, 0x7fff03e0u, 0xf, nullptr);     // entries 0x1000, 0x1001
+    for (int i = 0; i < 64; ++i) step();
+    // R698: the colours are invalidated when the write STARTS and again once it
+    // has LANDED -- a reader between the two took the old word
+    expect("R698 col_inval pulses for one palette write (at least 2)", g_colinv >= 2, 1);
+    expect("R698 the last col_inval follows the SDRAM write", g_colinv_tk > g_colwr_tk && g_colwr_tk >= 0, 1);
     expect("3D palette entry 0x1000 on chip", pal[0x1000], 0x03e0u);
     expect("3D palette entry 0x1001 on chip", pal[0x1001], 0x7fffu);
     expect("3D palette entry 0x1000 mirrored", sdram[0x50000u + 0x000u], 0x03e0u);
