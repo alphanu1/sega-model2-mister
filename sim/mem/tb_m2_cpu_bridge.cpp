@@ -212,6 +212,32 @@ int main(int argc, char **argv) {
     expect("work RAM readback", v, 0xdeadbeefu);
   }
 
+  // ---- R697: a store into buffer RAM waits while the push queue holds words ----
+  // Daytona patches a count with a direct store after pushing its placeholder
+  // through the geometrizer's queue (R254); the store must not reach SDRAM
+  // while buf_wr_stall says the queue still holds words, or the placeholder
+  // lands on top of it. The CPU is acknowledged at once (posted), so the store
+  // is checked in SDRAM, not on the bus.
+  {
+    const uint32_t a = 0x00900020u, w = 0x40000 + ((a & 0x1ffffu) >> 1);
+    sdram[w] = 0xAAAA; sdram[w + 1] = 0xAAAA;
+    dut->buf_wr_stall = 1;
+    access(true, a, 0x13572468u, 0xf, nullptr);
+    for (int i = 0; i < 300; ++i) step();
+    expect("R697 buffer store held while the queue is busy (low)",  sdram[w],     0xAAAA);
+    expect("R697 buffer store held while the queue is busy (high)", sdram[w + 1], 0xAAAA);
+    dut->buf_wr_stall = 0;
+    for (int i = 0; i < 100; ++i) step();
+    expect("R697 buffer store lands once the queue is empty (low)",  sdram[w],     0x2468);
+    expect("R697 buffer store lands once the queue is empty (high)", sdram[w + 1], 0x1357);
+    // and a store elsewhere is not held by it
+    dut->buf_wr_stall = 1;
+    access(true, 0x00500020u, 0x0badcafeu, 0xf, nullptr);
+    for (int i = 0; i < 100; ++i) step();
+    expect("R697 work RAM store not held", sdram[0x20000 + ((0x00500020u & 0xfffffu) >> 1)], 0xcafe);
+    dut->buf_wr_stall = 0;
+  }
+
   // ---- the shared buffer RAM at 0x00900000, 128 KB, mirrored to 0x0097ffff ----
   //
   // Mapping this region made the machine WORSE on hardware: the i960's clear

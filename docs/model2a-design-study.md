@@ -26450,3 +26450,31 @@ that accepts a new list only after it swaps at a vblank would do exactly
 this. s677-s679 sample the store (pst), the sequencer (cst), fb_busy, the
 game hold and the frame's phase beside the walk and the engine (now by a
 port -- the hierarchical u_engine.st read 0).
+
+**R697 -- "NO LIGHT ON TEXTURES IS BACK": THE COUNT PATCH COULD OVERTAKE ITS
+PLACEHOLDER.** Ben on s675: "no light on textures is back ... it comes and goes
+but mostly looking good". That is R254's picture -- the light table filled with
+0/0 or 255/255 because the walker read a texture_data count as zero -- and its
+mechanism was never closed, only made rare: Daytona pushes a ZERO placeholder
+through the front door, pushes the payload, then patches the count with a
+DIRECT store into buffer RAM (0x19FA0: st r3,0x900000(r10)). The placeholder
+travels through m2_geo's queue; the patch goes straight to SDRAM through the
+bridge. Nothing ordered the two. A long payload (280 words) forces the
+placeholder through a 128-deep queue before the patch; a short one does not,
+and while the queue is HOLDING words (R610 -- 56% of the i960's working time,
+R695) the placeholder can still be queued when the patch lands, and then
+drains over it. It comes and goes with the queue's state, and R696 moved that.
+
+The fix is the smallest that keeps every other behaviour: a CPU store into
+buffer RAM waits in the bridge's S_IDLE while m2_geo's push_busy (a word
+queued, or the drain writing one) is up. Pushes and patch come from one CPU
+in program order, so the placeholder has always landed first. No deadlock: the
+queue drains as the walk advances, and the walk never waits for the CPU.
+(Routing the patch through the queue instead would have changed what CPU
+READS of buffer RAM see; this does not.)
+
+tb_m2_cpu_bridge gains the case: a store to 0x900020 under buf_wr_stall stays
+out of SDRAM for 300 cycles and lands when it drops; a work-RAM store is not
+held. 134 checks pass; with the stall term removed, 2 fail. test_m2_cpu_sdram,
+test_m2_geo, test_i960_top pass; tb_m2_cpu_real trace hash a95ee045a6c3424b
+unchanged.

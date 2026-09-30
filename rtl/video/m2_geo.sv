@@ -169,6 +169,9 @@ module m2_geo #(
   // drop counter climbs continuously. The reference cannot drop -- it has no
   // queue -- and real hardware holds the CPU off instead.
   output logic          push_stall,
+  // R697: words pushed and not yet in buffer RAM -- the queue holds one, or the
+  // drain is writing one. The CPU's own buffer-RAM stores wait on this.
+  output logic          push_busy,
   // geo_texture_parameters (0x06) as a WRITE STREAM, the same shape as the
   // matrix's. Model 2's luminance is
   //     luminance * texparam->diffuse + texparam->ambient
@@ -293,6 +296,7 @@ module m2_geo #(
   // by r_addr[1], so an EVEN word index must hold bits 15:0.
   typedef enum logic [1:0] { D_IDLE, D_LO, D_HI, D_NEXT } dstate_t;
   dstate_t dst;
+  assign push_busy = q_valid || (dst != D_IDLE);   // R697
   logic [19:0] wr_ptr;
   logic [15:0] dw_hi;
 

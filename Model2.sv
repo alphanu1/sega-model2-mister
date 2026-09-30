@@ -2272,6 +2272,7 @@ m2_cpu_bridge #(.BUFFERRAM(1'b1), .BUFFERRAM_WRONLY(1'b0)
 
 	.io_rdata(cpu_io_rdata), .io_sel(cpu_io_sel), .io_we(cpu_io_we),
 	.io_stall(cpu_io_stall),
+	.buf_wr_stall(geo_push_busy),   // R697: the count patch waits for the placeholder
 	.io_addr(cpu_io_addr), .io_wdata(cpu_io_wdata), .io_be(cpu_io_be),
 
 	.dbg_cpu_reads(cpu_dbg_rd), .dbg_cpu_writes(cpu_dbg_wr),
@@ -2971,7 +2972,7 @@ m2_geo #(.AW(SDR_AW), .DEPTH(128)) u_geo (
 	.win_vp_s(geo_win_vp_s), .win_vp_e(geo_win_vp_e), .win_c0(geo_win_c0), .win_cnt(),   // R642
 	.lit_x(geo_lit_x), .lit_y(geo_lit_y), .lit_z(geo_lit_z),
 	.dbg_lit_n(geo_lit_n), .dbg_nops(geo_nops),
-	.dbg_walk_flip(geo_walk_flip), .dbg_walk_fallback(geo_walk_fb), .push_stall(geo_push_stall),
+	.dbg_walk_flip(geo_walk_flip), .dbg_walk_fallback(geo_walk_fb), .push_stall(geo_push_stall), .push_busy(geo_push_busy),   // R697
 	.dbg_overtake(geo_overtake),   // R608
 	// The diffuse/ambient table, streamed. Captured but not yet consumed -- the
 	// luminance stage that reads it is the next piece.
@@ -3075,6 +3076,7 @@ wire [15:0] r3d_fillpass;        // R455: quads handed to the fill, per frame
 wire [15:0] geo_walk_flip, geo_walk_fb;   // R263: walks started by the list-ready write, and by the fallback
 wire [15:0] geo_overtake;                 // R608: list words overwritten ahead of the walk
 wire        geo_push_stall;  // R260: the push queue is full and the CPU waits
+wire        geo_push_busy;   // R697: pushed words not yet in buffer RAM
 wire        cpu_buf_inval;   // R266: the CPU wrote the display list
 wire        cpu_tex_inval;   // R275: the CPU wrote a texture sheet
 

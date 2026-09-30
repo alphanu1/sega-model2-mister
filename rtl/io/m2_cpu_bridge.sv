@@ -193,6 +193,11 @@ module m2_cpu_bridge #(
   // acknowledge is returned, and the i960 waits exactly as it would on a real
   // bus that is not ready. It costs nothing when nothing stalls.
   input  logic        io_stall,
+  // R697: the geometrizer's push queue still holds words for buffer RAM. A
+  // store INTO buffer RAM waits for it: Daytona pushes a zero placeholder
+  // through the queue and then patches the count with a direct store (R254),
+  // and a store that overtook a queued placeholder was overwritten by it.
+  input  logic        buf_wr_stall,
   output logic        io_sel,
   output logic        io_we,
   output logic [31:0] io_addr,
@@ -767,7 +772,8 @@ module m2_cpu_bridge #(
         // the same effect as issuing into it below.
         // R693: a NEW request is a toggle not yet taken; rmw_done re-dispatches
         // the same one as its write half (S_RMW_W returns here with it set).
-        S_IDLE: if ((req_mem != req_seen || rmw_done) && !sd_ack && !dc_sweeping) begin
+        S_IDLE: if ((req_mem != req_seen || rmw_done) && !sd_ack && !dc_sweeping
+                    && !(r_we && buf_region && buf_wr_stall)) begin   // R697
           req_seen <= req_mem;
           if (r_we) dbg_cpu_writes <= dbg_cpu_writes + 32'd1;
           else      dbg_cpu_reads  <= dbg_cpu_reads  + 32'd1;
