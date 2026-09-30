@@ -13,6 +13,11 @@ from the board. tools/m2-fbcheck.py: lit throughout. tools/m2-fps.py at texel
 step 1: 23.3 pictures a second = ~47 game frames (58% of frames at full speed,
 heavy scenes ~38). 15 kHz fix NOT yet confirmed on Ben's CRT.
 
+Reported from play (R703), not yet diagnosed: a 2D element on the right of the
+screen in the wrong place; the car and "ROLLING START" text not scrolling at
+the race start (suspect: segaic24's window/split-scroll); music and game-over
+samples too quiet (suspect: a per-voice level in m2_multipcm, not the mix).
+
 In flight: bisect builds from prio-A (s705 + geometry port 4 in the SDRAM
 priority class, R702): A s707 alone; B s708 + R696's engine cull-skip; C s709
 + R696's pair-cache keep-last. One of B/C holds the black-screen fault (s675,
