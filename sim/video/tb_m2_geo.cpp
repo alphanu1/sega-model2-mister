@@ -675,6 +675,28 @@ int main(int argc,char**argv){
     ck("no word drained into a walk's window", d->dbg_overtake, 0);
     rd_slow = 0;
   }
+  // ---- R699: FRAME SKIP. Six lists flipped, one a frame; skip 0 walks all
+  // six, 1 walks every second, 2 every third -- in the flip trigger (mode 0)
+  // and After flip (mode 2, what the board runs). A list of just `end`.
+  for (int mode : {0, 2}) for (int sk = 0; sk <= 2; ++sk) {
+    d->rst_n = 0; for (int i = 0; i < 4; i++) tick(); d->rst_n = 1; idle(2);
+    d->trig_mode = mode; d->skip = sk; d->eng_busy = 0;
+    unsigned walks = 0, last = d->dbg_walk_frames;
+    for (int f = 0; f < 6; ++f) {
+      w(2, 0x00000000);                                // the flip: the list is at 0
+      d->frame_start = 1; tick(); d->frame_start = 0;
+      for (int i = 0; i < 3000; i++) {
+        d->rd_ack = 0;
+        if (d->rd_req) { d->rd_data = 0x07800000u; d->rd_ack = 1; }   // op 0x0f, end
+        tick();
+      }
+      if (d->dbg_walk_frames != last) { walks += (d->dbg_walk_frames - last) & 0xffff; last = d->dbg_walk_frames; }
+    }
+    char nm[64]; std::snprintf(nm, sizeof nm, "R699 mode %d skip %d: lists walked of 6", mode, sk);
+    ck(nm, walks, sk == 0 ? 6 : sk == 1 ? 3 : 2);
+  }
+  d->skip = 0; d->trig_mode = 0;
+
 
   std::printf("m2_geo: checks=%d fails=%d\n", checks, fails);
   std::printf("%s\n", fails?"FAIL":"PASS");

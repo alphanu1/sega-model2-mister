@@ -872,6 +872,7 @@ module m2_boot_harness #(
 
   m2_geo #(.AW(AW), .DEPTH(128)) u_geo (
     .clk(clk_mem), .rst_n(rst_n),
+    .skip(2'd0),   // R699
     .wr_ctl(geo_wr_ctl), .wr_setwp(geo_wr_setwp), .wr_setrp(geo_wr_setrp),
     .wr_push(geo_wr_push), .wdata(geo_push_word),
     .rd_wp(geo_wp_o), .rd_rp(geo_rp_o),

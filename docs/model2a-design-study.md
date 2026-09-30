@@ -26522,3 +26522,23 @@ s683-s685 (d0815ef: R693 + R696 + R697 + R698): s685 closes every core clock --
 clk_mem +0.734, clk_sys +0.214, clk_i960 +3.039, holds >= +0.228; HDMI -0.441;
 41,322 ALM. s683 clk_sys -0.265, s684 -0.075. Awaiting the board check
 (tools/m2-fbcheck.py + tools/m2-fps.py) before it is left on.
+
+**R699 -- FRAME SKIP: None / 1 / 2 (OSD).** Ben: "a frame skip option for users
+who want full speed now and don't care about all the frames" -- "None, 1, 2".
+The game writes and flips every list as always, so its own logic runs at its
+own pace; only every second (1) or third (2) flip arms a walk, and the screen
+keeps the last drawn 3D picture between. A skipped flip still moves the read
+pointer and still resets the no-flip fallback. O[44:43], which no build has
+ever used, so no saved setting can land in it.
+
+What it can and cannot buy, from R694-R696: a walked list must still be read
+before the game rewrites its buffer two flips later -- the same deadline at
+skip 1 and 2. What skipping buys is an idle renderer (the walk waited on it
+21.8% of its time, R695) and walks that no longer overlap the previous draw;
+with R696's faster geometry the deadline may be met. If the i960 still waits,
+the next step is letting a skipping mode ABANDON a walk it cannot finish
+rather than hold the game.
+
+tb_m2_geo: six lists flipped one a frame -- walked 6 / 3 / 2 at skip 0 / 1 / 2,
+in the flip trigger and in After flip (what the board runs); 100 checks. With
+the gate forced open, the four skip cases fail.

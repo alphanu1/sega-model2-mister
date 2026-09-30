@@ -59,6 +59,10 @@ module m2_geo #(
   // fragile. 0 flip (the 0x803008 write), 1 vblank (what this was before),
   // 2 the vblank AFTER a flip, 3 the write-pointer write at 0x801008.
   input  logic [1:0]    trig_mode,
+  // R699: FRAME SKIP -- 0 walks every flipped list, 1 every second, 2 every
+  // third (3 as 2). A skipped flip still moves the read pointer and still
+  // counts as a flip for the no-flip fallback; it just does not arm a walk.
+  input  logic [1:0]    skip,
   input  logic          wr_push,         // 0x00800000-0fff and 0x00804000-7fff
   input  logic [31:0]   wdata,
 
@@ -604,6 +608,7 @@ module m2_geo #(
   logic        setwp_q;
   logic        wp_pend;
   logic        flip_seen;                // a flip has happened since the last walk
+  logic  [1:0] skip_cnt;                 // R699: flips skipped since the last walked one
   wire         trig_flip   = flip_pend || (frame_pend && no_flips);
   wire         trig_vblank = frame_pend;
   wire         trig_after  = frame_pend && flip_seen;
@@ -689,7 +694,7 @@ module m2_geo #(
       frame_pend <= 1'b0; drain_wait <= 10'd0;
       flip_pend <= 1'b0; fs_since_flip <= 3'd7; setrp_q <= 1'b0;
       dbg_walk_flip <= 16'd0; dbg_walk_fallback <= 16'd0;
-      setwp_q <= 1'b0; wp_pend <= 1'b0; flip_seen <= 1'b0;
+      setwp_q <= 1'b0; wp_pend <= 1'b0; flip_seen <= 1'b0; skip_cnt <= 2'd0;   // R699
       pd_addr <= 32'd0; pd_n <= 16'd0; pd_i <= 16'd0;
       pd_req <= 1'b0; pd_wdata <= 32'd0;
       dbg_pd_words <= 16'd0; dbg_pd_cmds <= 16'd0; dbg_td_words <= 16'd0; pd_tex <= 1'b0;
@@ -722,8 +727,12 @@ module m2_geo #(
       setrp_q <= wr_setrp;
       setwp_q <= wr_setwp;
       if (setrp_q) begin
-        flip_pend <= 1'b1; flip_seen <= 1'b1;
-        drain_wait <= 10'd0; fs_since_flip <= 3'd0;
+        fs_since_flip <= 3'd0;
+        // R699: only every (skip+1)th flip arms a walk
+        if (skip_cnt >= ((skip == 2'd3) ? 2'd2 : skip)) begin
+          flip_pend <= 1'b1; flip_seen <= 1'b1;
+          drain_wait <= 10'd0; skip_cnt <= 2'd0;
+        end else skip_cnt <= skip_cnt + 2'd1;
       end
       else if (frame_start && !no_flips) fs_since_flip <= fs_since_flip + 3'd1;
       if (setwp_q) begin wp_pend <= 1'b1; drain_wait <= 10'd0; end

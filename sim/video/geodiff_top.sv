@@ -100,6 +100,7 @@ module geodiff_top #(
     .lit_x(lit_x), .lit_y(lit_y), .lit_z(lit_z),
     .dbg_lit_n(lit_n), .dbg_nops(),
     .dbg_walk_flip(), .dbg_walk_fallback(), .push_stall(), .push_busy(),   // R697
+    .skip(2'd0),   // R699
     .dbg_overtake(),
     .tp_we(tp_we), .tp_idx(tp_idx),
     .tp_diffuse(tp_diffuse), .tp_ambient(tp_ambient),
