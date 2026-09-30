@@ -26157,3 +26157,4 @@ EVERY CORE CLOCK: clk_mem +0.447, clk_sys +0.320, clk_i960 +3.511, holds
 >= +0.192, HDMI -0.210** (s637 -0.887). s647 clk_sys +0.116 (HDMI -0.346);
 s649 clk_sys -0.074. The PCM tags were the room: s637 without R683 had
 clk_sys +0.016; s648 with it has +0.320.
+s648 on the board 11:23 (the board moved to 192.168.1.65), s626 as .prev.
