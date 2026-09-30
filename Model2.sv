@@ -1253,7 +1253,12 @@ m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(781),
            // It is the one reader with a per-scanline deadline: a line it does
            // not finish is the previous line shown again (m2_video Q_RUN), and
            // behind two texel grants at a time it missed that on heavy scenes.
-           .PRI(11'b100_0000_1100), .PRI_CAP(2)) u_sdram (
+           // R702: port 4 (the geometry walker and engine) joins the class. The
+           // engine is bound by its memory latency (R696), and on the board the
+           // frame rate rose as the texel step cut texel traffic -- step 1, 2, 4:
+           // 3D 23.3, 24.2, 26.0 pictures a second (s703, Single buffered). Behind
+           // port 2 and the glyph fetch (3, a per-scanline deadline), ahead of 10.
+           .PRI(11'b100_0001_1100), .PRI_CAP(2)) u_sdram (
 	.clk(clk_mem), .rst_n(mem_rst_n), .ready(mem_ready),
 	// CL+2, FIXED, NO OSD OVERRIDE (R411). Only one capture depth can ever be
 	// right -- CL+1 samples the previous word of the burst, CL+3 the next -- so
@@ -3048,8 +3053,13 @@ m2_pair_cache #(.AW(SDR_AW-1), .COL_BITS(SDR_COL)) u_geo_pc (
 );
 // The engine reads polygon RAM, which the geometrizer's own DMA writes, so its
 // copy is dropped on those writes for the same reason.
-m2_pair_cache #(.AW(SDR_AW-1), .COL_BITS(SDR_COL)) u_eng_pc (
-	.clk(clk_sys), .rst_n(mem_rst_n), .bypass(pair_off_s2), .inval(geo_sd_req & wr_ack_geo),
+// R696: and it now KEEPS its copy until a miss replaces it (KEEP_LAST), which
+// can outlast the engine's idle time between objects -- so the CPU's writes to
+// the two things it reads that the CPU writes, the 3D palette and the colour
+// table (col_inval), drop it too. Everything else the engine reads is ROM or
+// is written by the geometrizer's DMA.
+m2_pair_cache #(.AW(SDR_AW-1), .COL_BITS(SDR_COL), .KEEP_LAST(1'b1)) u_eng_pc (   // R696
+	.clk(clk_sys), .rst_n(mem_rst_n), .bypass(pair_off_s2), .inval((geo_sd_req & wr_ack_geo) | cpu_col_inval),
 	.req(eng_mem_req), .idx(eng_wa[SDR_AW:2]), .ack(eng_mem_ack_c), .data(eng_mem_data_c),
 	.p_req(ec_req), .p_idx(ec_idx), .p_ack(eng_mem_ack_r), .p_dout(p4_dout_r)
 );     // 4M-dword ROM window
