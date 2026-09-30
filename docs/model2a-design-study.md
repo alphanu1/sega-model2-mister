@@ -26157,3 +26157,28 @@ EVERY CORE CLOCK: clk_mem +0.447, clk_sys +0.320, clk_i960 +3.511, holds
 >= +0.192, HDMI -0.210** (s637 -0.887). s647 clk_sys +0.116 (HDMI -0.346);
 s649 clk_sys -0.074. The PCM tags were the room: s637 without R683 had
 clk_sys +0.016; s648 with it has +0.320.
+
+**R699 -- FRAME SKIP: None / 1 / 2 (OSD).** Ben: "a frame skip option for users
+who want full speed now and don't care about all the frames" -- "None, 1, 2".
+The game writes and flips every list as always, so its own logic runs at its
+own pace; only every second (1) or third (2) flip arms a walk, and the screen
+keeps the last drawn 3D picture between. A skipped flip still moves the read
+pointer and still resets the no-flip fallback. O[44:43], which no build has
+ever used, so no saved setting can land in it.
+
+What it can and cannot buy, from R694-R696: a walked list must still be read
+before the game rewrites its buffer two flips later -- the same deadline at
+skip 1 and 2. What skipping buys is an idle renderer (the walk waited on it
+21.8% of its time, R695) and walks that no longer overlap the previous draw;
+with R696's faster geometry the deadline may be met. If the i960 still waits,
+the next step is letting a skipping mode ABANDON a walk it cannot finish
+rather than hold the game.
+
+tb_m2_geo: six lists flipped one a frame -- walked 6 / 3 / 2 at skip 0 / 1 / 2,
+in the flip trigger and in After flip (what the board runs); 100 checks. With
+the gate forced open, the four skip cases fail.
+
+R699 ON s648's RTL (branch fskip-648, from the release b0f4363): frame skip
+alone, without R693 and R696-R698 -- s681 and s686 carry R696 and both went
+black at the first scene change (s686: lit to 74 s, mean brightness 0 from
+83 s, the check reverted it). Ben: "frame skip on s648".

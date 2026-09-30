@@ -188,6 +188,12 @@ localparam CONF_STR = {
 	// 2D keeps the 3D's pace: arcade slowdown. FREE lets the game run on and
 	// the 3D fall behind the HUD.
 	"O[36],3D pacing,Hold game,Free;",
+	// R699: FRAME SKIP. The game writes and flips every list as always, so its
+	// own speed is untouched; only every second (1) or third (2) list is walked
+	// and drawn, and the screen keeps the last drawn picture between them. For
+	// players who would rather have arcade pace than every frame. O[44:43] had
+	// never been used, so no saved setting of an older build can land in it.
+	"O[44:43],Frame skip,None,1,2;",
 	// R664: O[37] (FB self-test, R653), O[38] (FB address, R654) and O[41:39]
 	// (FB write pace, R656) are parked -- diagnostics of the scanline hunt that
 	// R660 ended -- to make room for the combining writer (R661). The bits stay
@@ -613,6 +619,8 @@ wire        r3d_list_hold;
 reg  [2:0]  pace_free_s;
 always_ff @(posedge clk_sys) pace_free_s <= {pace_free_s[1:0], status[36]};
 wire        r3d_game_hold = r3d_list_hold && !pace_free_s[2];
+reg  [1:0]  fskip_s1, fskip_s2, fskip_s3;   // R699: the OSD bits reach the walk through three flops
+always_ff @(posedge clk_sys) begin fskip_s1 <= status[44:43]; fskip_s2 <= fskip_s1; fskip_s3 <= fskip_s2; end
 // R653: the framebuffer self-test's switch and its per-frame results (clk_sys)
 // R664: parked -- tied off, so Quartus removes the generator and checker
 wire        fb_test = 1'b0;
@@ -2940,6 +2948,7 @@ m2_geo #(.AW(SDR_AW), .DEPTH(128)) u_geo (
 	.clk(clk_sys), .rst_n(mem_rst_n),
 	.wr_ctl(geo_wr_ctl), .wr_setwp(geo_wr_setwp), .wr_setrp(geo_wr_setrp),
 	.trig_mode(wtrig_s2),
+	.skip(fskip_s3),   // R699
 	.wr_push(geo_wr_push), .wdata(geo_push_word),
 	.rd_wp(geo_rd_wp), .rd_rp(geo_rd_rp),
 	.base_buffer(GAME_BUFFER),
