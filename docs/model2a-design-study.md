@@ -26358,3 +26358,27 @@ are each single-digit percents. At ~800 pushes a frame even a slow drain is
 walk's own polygon-data writes, which take the DMA first. s668-s670 sample
 the queue itself: full, walk running, word held, walk DMA request, drain
 busy, and the queued word's and the walk's dword[14:11].
+
+**R695 -- THE HELD WORDS ARE IN THE LIST THE WALK IS STILL READING; THE WALK
+OUTLASTS THE FRAME.** s669 (meas-lite 6a50c60: the push queue's state in each
+sample), 240 s of attract. While the i960 was stalled on an I/O write (57.1%
+of its working time), the queue was, in 56.2% of working time: FULL, a walk
+RUNNING, the head word HELD, in the walk's window -- the queued word and the
+walk both in dwords 0x0000-0x07FF. The walk was running in 97.6% of all
+samples.
+
+MAME 0.289 (build/mame289/m2lod), Daytona attract, 9,000 frames, write taps
+on 0x803008 and 0x804000-0x807fff: a flip EVERY frame (600 in each 600 but
+at scene changes), the read pointer alternating byte 0x00000 (4,394) and
+0x10000 (4,447) -- dwords 0 and 0x4000, R638 right -- and 600-950 pushes a
+frame. (The Lua taps must be held in globals; in locals the collector
+removed them after ~600 frames and the counts read 0 -- the first two runs.)
+Also: videoctl is written once, 0 -- 60 Hz mode; R256's "Daytona sets bit 0"
+does not hold for daytona93 in 0.289.
+
+So the game double-buffers on the board as in MAME, but our walk of list A
+is still running when the game has built B, flipped, and begun rewriting A:
+the walk lasts longer than a frame, the hold (R610) is right to stop the
+overwrite, and the i960 waits the rest of the walk out. The CPU number was
+the walk's. What the walk waits on -- its own geometry work, SDRAM, or the
+quad store not taking quads until the renderer swaps -- is the next sample.
