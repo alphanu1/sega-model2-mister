@@ -27227,3 +27227,38 @@ Nothing else in the core is tied to '93: the TGP's microcode is transcribed
 into the RTL, and the 0x12B0 frame-wait address feeds only logic_frames,
 which nothing reads. (tools/m2-decode-race.py / m2-decode-cpu.py use 0x12B0
 for '93's wait; the '94 program's may differ.) Untested on the board yet.
+
+**R726 -- VIRTUA COP (vcopa), ROM LAYOUT ONLY; AND R306'S REASON CORRECTED.**
+R306 recorded R299's revert as "nothing could verify it". Ben, 2026-10-08:
+it was reverted because the shared layout MOVED DAYTONA '93's regions and
+'93 broke. That is the rule this entry and R725 follow: the '93 layout stays
+byte for byte, and anything another set needs goes past its end or behind a
+switch only that set throws.
+Virtua Cop against the '93 slots (MAME 0.289 ROM_START(vcopa)): every region
+fits at the '93 offset, zero-padded (MAME's unloaded space reads 0; copro
+data and comms are ROMREGION_ERASE00); the samples keep MAME's gaps (MPCM1 is
+a 1 MB ROM in each 2 MB half). The one that does not fit is the i960 PROGRAM:
+512 KB to Daytona's 256. Its second half (epr-17160a / 17161a, CPU
+0x40000-0x7FFFF) is appended after 0x2BE0000 and lands at GAME_POLYX through
+R725's loader remap (each set uses that region for its own overflow).
+The bridge's program decode reads 0x40000-0x7FFFF from base_progx = GAME_POLYX
+only under prog_ext -- `is_vcop`, from a GAME ID: Model 1's scheme (its
+Model1.sv game_id), a byte on download index 4, cleared on PLL lock
+(mem_rst_n is pll_locked here, as there). The Daytona MRAs send no index 4,
+so game_id is 0 and the core is exactly the core they always ran -- no
+Daytona MRA changes. Index 4 is outside the loader's stream_ok and the NVRAM
+and I/O-firmware selects, which match 2 and 3 exactly.
+Checked: all 22 of the set's files match MAME's CRCs; the MRA's image (an
+independent builder honouring repeat / offset / length) is 0x2C20000 bytes,
+every region at its slot with the right contents, the TGP tables identical to
+'93's image, the program's second half at 0x2BE0000; the sound program's
+reset vector is Daytona's (00F0FFFE 00000300), so the sound scan finds it.
+tb_m2_cpu_bridge: with prog_ext a program read at 0x40010 comes from
+base_progx, 0x80030 (outside the range) from base_prog, and without prog_ext
+0x40020 from base_prog -- 654 checks, 0 mismatches. lint_top, Quartus clean.
+NOT PLAYABLE, by design for now: Virtua Cop's I/O board is the Model 1 I/O
+board type 2 (MAME model1io2, BIOS epr-17181: light guns, an HD44780 LCD),
+which the core does not model, and there is no light-gun input. The MRA
+loads the type-1 firmware (epr-14869c) the core's I/O model runs; whether the
+game boots on it is the board test. Ben: probably no room for a new I/O
+board at 99%.

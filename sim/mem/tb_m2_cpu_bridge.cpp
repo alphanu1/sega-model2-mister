@@ -625,6 +625,24 @@ int main(int argc, char **argv) {
 
   std::printf("  probe6=%08x probe2=%08x (EEEEEEEE = never read)\n",
               dut->dbg_probe6, dut->dbg_probe2);
+  // ---- R726: VIRTUA COP'S PROGRAM EXTENSION ----
+  // With prog_ext set, program reads at 0x40000-0x7FFFF come from base_progx;
+  // clear, or outside that range, from base_prog as before. Distinct lines
+  // each, because the data cache tags by CPU address.
+  {
+    dut->base_progx = 0xA0000;
+    auto put32 = [&](uint32_t word, uint32_t v) { sdram[word] = v & 0xffff; sdram[word + 1] = v >> 16; };
+    put32(0xA0000 + (0x00010u >> 1), 0xC0FFEE01u);   // ext region, CPU 0x40010
+    put32(0x00000 + (0x40020u >> 1), 0x5EED0002u);   // normal map,  CPU 0x40020
+    put32(0x00000 + (0x80030u >> 1), 0x5EED0003u);   // normal map,  CPU 0x80030 (outside the range)
+    uint32_t v = 0;
+    dut->prog_ext = 1;
+    access(false, 0x00040010u, 0, 0xf, &v); expect("R726 ext on: 0x40010 from base_progx", v, 0xC0FFEE01u);
+    access(false, 0x00080030u, 0, 0xf, &v); expect("R726 ext on: 0x80030 stays on base_prog", v, 0x5EED0003u);
+    dut->prog_ext = 0;
+    access(false, 0x00040020u, 0, 0xf, &v); expect("R726 ext off: 0x40020 from base_prog", v, 0x5EED0002u);
+  }
+
   // ---- R724: INSTRUCTION FETCHES THROUGH THE LINE BUFFER ----
   // Every word of 64 ROM lines, fetched as instructions in a scrambled order
   // within each line (word 2, 0, 3, 1), must equal a plain data read of the

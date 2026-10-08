@@ -642,6 +642,7 @@ module m2_boot_harness #(
     // The top level's own bases for a game image (Model2.sv GAME_*), so the
     // address arithmetic under test is the arithmetic that runs on the board.
     .base_prog (AW'(32'h0000000)), .base_data (AW'(32'h0020000)),
+    .prog_ext(1'b0), .base_progx('0),   // R726
     .base_work (AW'(32'h1600000)), .base_board(AW'(32'h1680000)),
     // R257: THE SAME BUFFER BASE THE WALKER USES. This said 0x16d0000 while
     // the geometrizer below says 0x16f0000, so at the desk the CPU wrote the

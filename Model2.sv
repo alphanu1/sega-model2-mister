@@ -2171,6 +2171,17 @@ wire [31:0] cpu_dbg_tramwr, cpu_dbg_palwr;
 wire        cpu_trap, cpu_halted;
 wire [7:0]  cpu_trap_op;
 
+// R726: THE GAME, AS THE MRA SAYS -- Model 1's scheme (its Model1.sv game_id):
+// a byte on download index 4, sent ahead of the ROMs. 0, the default and what
+// the Daytona MRAs leave it at (they send no index 4), is Daytona; 1 is
+// Virtua Cop. Only things that differ by game look at it, so a Daytona MRA
+// sees exactly the core it always did.
+localparam logic [15:0] GAMEID_INDEX = 16'd4;
+logic [7:0] game_id;
+always_ff @(posedge clk_sys or negedge mem_rst_n)   // cleared on PLL lock, as Model 1 does
+	if (!mem_rst_n) game_id <= 8'd0;
+	else if (ioctl_download && ioctl_wr && (ioctl_index == GAMEID_INDEX)) game_id <= ioctl_dout[7:0];
+wire is_vcop = (game_id == 8'd1);
 wire        cpu_ifetch;      // R724: the i960's request is an instruction fetch
 wire  [4:0] cpu_dbg_ts;      // R721: the i960's sequencer state, for telemetry
 wire [16:0] cpu_br_sample;   // R721: the bridge's transaction in flight, for telemetry
@@ -2279,6 +2290,7 @@ m2_cpu_bridge #(.BUFFERRAM(1'b1), .BUFFERRAM_WRONLY(1'b0)
 
 	.clk_mem(clk_sys), .rst_n_mem(cpu_rst_n),
 	.base_prog(GAME_PROG), .base_data(GAME_DATA), .base_work(GAME_WORK),
+	.prog_ext(is_vcop), .base_progx(GAME_POLYX),   // R726
 	.base_board(GAME_BOARD), .base_char(char_base), .base_buffer(GAME_BUFFER),
 	.base_pal3d(GAME_PAL3D), .base_xlat3d(GAME_XLAT3D),
 	.base_texs0(GAME_TEXS0), .base_texs1(GAME_TEXS1), .base_luma(GAME_LUMA), .col_inval(cpu_col_inval),

@@ -94,6 +94,12 @@ module m2_cpu_bridge #(
 
   // Where the ROM images live in SDRAM, in 16-bit words.
   input  logic [AW:1] base_prog,         // program ROM,   0x00000000
+  // R726: VIRTUA COP'S PROGRAM IS 512 KB, Daytona's 256. Its second half
+  // (0x40000-0x7FFFF) is appended after the '93 image and lands at base_progx;
+  // prog_ext (the core's game ID says Virtua Cop) is the ONLY thing that sends
+  // reads there, so Daytona's view of the program region is unchanged.
+  input  logic        prog_ext,
+  input  logic [AW:1] base_progx,
   input  logic [AW:1] base_data,         // main_data,     0x02000000
   input  logic [AW:1] base_work,         // work RAM,      0x00500000
   input  logic [AW:1] base_board,        // board RAM,     0x00200000
@@ -514,7 +520,10 @@ module m2_cpu_bridge #(
     tex_region  = 1'b0;
     if (r_addr < 32'h0020_0000) begin                       // program ROM
       tgt = T_SDRAM; is_rom = 1'b1;
-      sd_word = base_prog + AW'(ra[20:1]);
+      if (prog_ext && (r_addr[20:18] == 3'b001))            // R726: Virtua Cop, 0x40000-0x7FFFF
+        sd_word = base_progx + AW'(ra[17:1]);
+      else
+        sd_word = base_prog + AW'(ra[20:1]);
     end else if (!BOARD_2A && r_addr >= 32'h0022_0000 && r_addr < 32'h0024_0000) begin
       // model2o's ROM mirror of the program ROM's second 128 KB.
       tgt = T_SDRAM; is_rom = 1'b1;

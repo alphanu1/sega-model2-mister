@@ -134,6 +134,7 @@ module m2_cpu_sdram_harness #(
     .clk_mem(clk_mem), .rst_n_mem(br_rst),
     // The game map, same bases Model2.sv uses.
     .base_prog(AW'(32'h0000000)), .base_data(AW'(32'h0020000)),
+    .prog_ext(1'b0), .base_progx('0),   // R726
     .base_work(AW'(32'h1600000)), .base_board(AW'(32'h1680000)),
     .base_char(AW'(32'h1690000)),
     .base_pal3d(AW'(32'h1730000)), .base_xlat3d(AW'(32'h1731000)), .col_inval(),
