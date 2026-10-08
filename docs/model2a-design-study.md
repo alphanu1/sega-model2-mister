@@ -26733,3 +26733,22 @@ Costs not yet sized: area (four streams x four pairs x 64 bits + tags, against
 98% ALM), and staleness -- the walk's DMA writes and the CPU's colour writes
 must invalidate the streams as R698 does the pair cache. A 19% faster walk is
 not 19% more frames: whether the geometry holds a race (R706) is unmeasured.
+
+**R708 -- D GOES BLACK TOO. R704 WAS WRONG: THE SUSPECT IS R696'S KEEP-LAST,
+NOT R693.** Believed (R704): R693, the bridge's two-phase handshake, turns the
+3D black, because every black build (s675, s681, s686) carried it and A, B and
+C did not go black. Now seen (Ben, 2026-10-08): D -- s712, the 20260930c
+release, A + B + C with NO R693 -- shows the 3D black, textured but unlit:
+the same fault. The factor common to every black build is R696's pair-cache
+keep-last (u_eng_pc KEEP_LAST=1): s675, s681, s686 and s712 all carry it; B
+(s708) and A (s707) never did. C (s709, keep-last alone) passed a 150 s
+tools/m2-fbcheck.py and a short look by eye -- the same check D passed at
+first, so that check is too short for this fault and C's pass is not an
+acquittal. s686 carried R698's in-flight invalidate guard and still went
+black, so R698 does not close the hole. Mechanism, unproven: the engine's kept
+copy serves a light/colour-table word the CPU has since rewritten (a scene
+change rewrites those tables), outside what col_inval covers.
+Consequences: development restarts from B; R693 is no longer convicted (it
+may still be innocent); and R707's read-ahead is a kept copy of the same kind,
+so its invalidation must be designed against this fault, and its check on the
+board must run far longer than 150 s.
