@@ -86,7 +86,11 @@ module m2_eng_ra #(
   logic [2:0]    s_fill [2];             // slots allocated, 0..DEPTH, the last may be in flight
   logic [3:0]    s_arr  [2];             // physical slots whose pair has arrived
 
-  (* ramstyle = "MLAB" *) logic [63:0] pairs [8];   // {stream, physical slot}
+  // {stream, physical slot}. READ IN ITS OWN RESET-FREE BLOCK, addressed on
+  // the hit cycle: read inside the async-reset block, Quartus 17 would not
+  // infer it ("uninferred due to asynchronous read logic") and built 512
+  // flip-flops and their mux instead -- 424 ALM for the module in s717.
+  (* ramstyle = "MLAB, no_rw_check" *) logic [63:0] pairs [8];
 
   // ------------------------------------------------------------ the request
   logic req_d, pend;
@@ -175,8 +179,11 @@ module m2_eng_ra #(
   end
 
   logic        rd_half;
-  logic [2:0]  rd_a;
   logic        hit_q;
+  logic [63:0] rd_q;
+  // a hit's pair, read on the hit cycle; never the slot being written (the
+  // one in flight is never the one hit)
+  always_ff @(posedge clk) if (hit) rd_q <= pairs[{sid, hph}];
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -186,7 +193,7 @@ module m2_eng_ra #(
       req_d <= 1'b0; pend <= 1'b0; ack <= 1'b0; data <= '0;
       pst <= P_IDLE; p_req <= 1'b0; p_idx <= '0; p_ack_d <= 1'b0;
       f_pass <= 1'b0; f_s <= 1'b0; f_ph <= '0; f_keep <= 1'b0; f_dem <= 1'b0;
-      rd_half <= 1'b0; rd_a <= '0; hit_q <= 1'b0;
+      rd_half <= 1'b0; hit_q <= 1'b0;
     end else begin
       req_d   <= req;
       p_ack_d <= p_ack;
@@ -195,7 +202,7 @@ module m2_eng_ra #(
 
       // a hit's answer, the cycle after
       if (hit_q) begin
-        data <= rd_half ? pairs[rd_a][63:32] : pairs[rd_a][31:0];
+        data <= rd_half ? rd_q[63:32] : rd_q[31:0];
         ack  <= 1'b1;
       end
 
@@ -230,7 +237,6 @@ module m2_eng_ra #(
       if (hit) begin
         pend    <= 1'b0;
         hit_q   <= 1'b1;
-        rd_a    <= {sid, hph};
         rd_half <= idx[0];
         s_head[sid] <= s_head[sid] + AW'({hj, 1'b0});
         s_rp[sid]   <= hph;

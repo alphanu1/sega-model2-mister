@@ -26859,3 +26859,10 @@ the engine and frame ends are 6/3/2. 118 checks pass; the old walker fails
 exactly the four skipped-light checks (3 of 6, 2 of 6). Cost not yet
 measured: a skipped list's walk reads the whole list and performs its
 uploads, where R699 did nothing.
+MLAB fix (R709 follow-up): the pair store is read in its own reset-free
+block, addressed on the hit cycle. Quartus 17 alone on the module: "pairs" is
+an MLAB, simple dual port 8 x 64; logic estimate 259 ALM (s717 placed the
+module at 424 with the store in flip-flops). Hit timing unchanged:
+tb_m2_eng_ra gives the same cycle count to the cycle (234,439 at LAT 12),
+13,539,977 checks clean; the RTL geodiff runs give identical quads and the
+same times on all four lists.
