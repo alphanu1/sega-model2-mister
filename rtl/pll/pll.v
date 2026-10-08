@@ -188,7 +188,9 @@ module pll_core (
     .output_clock_frequency0("100.000000 MHz"),
     .phase_shift0("0 ps"),
     .duty_cycle0(50),
-    .output_clock_frequency1("70.000000 MHz"),   // R580: clk_sys 70 (was 60, R573); VCO 1,400
+    // R713: clk_sys 80 (was 70, R580). VCO 1,200 again: 100 /12, 80 /15,
+    // 50 /24, 40 /30 -- every output an integer divide.
+    .output_clock_frequency1("80.000000 MHz"),
     .phase_shift1("0 ps"),
     .duty_cycle1(50),
     // R460: 60 MHz, THE 3D DOMAIN. Was 32 MHz and drove nothing -- the
@@ -233,7 +235,7 @@ module pll_core (
     // that is 3:5 -- the edges realign every 50 ns and the closest approach is
     // 3.333 ns -- so the bridge needs them back and general[3] needs its own
     // clock group.
-    .output_clock_frequency3("35.000000 MHz"),   // R580: clk_i960 35, still exactly clk_sys / 2
+    .output_clock_frequency3("40.000000 MHz"),   // R713: clk_i960 40 (was 35, R580), still exactly clk_sys / 2
     .phase_shift3("0 ps"),
     .duty_cycle3(50),
     // 180 degrees at 100 MHz is half a 10 ns period: 5000 ps exactly. It was

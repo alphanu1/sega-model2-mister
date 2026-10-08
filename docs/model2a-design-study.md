@@ -26906,3 +26906,32 @@ clk_sys +0.596, clk_mem +0.462, clk_i960 +2.808, holds clean, HDMI -1.750
 (the scaler's paths; the largest miss yet). RBFs: s727
 118cee644c0a613b50e224374e1506f4 (4,628,608), s726
 f4ce102f8d298bfb0f93363b06c48e50 (4,625,988).
+
+**R713 -- 80 / 40: clk_sys 70 -> 80 MHz, clk_i960 35 -> 40, STILL 2:1.** Why:
+in a race the game runs at half speed with 3D pacing Free -- the 2D timer
+takes two seconds a second (Ben, s727) -- so the i960 cannot finish a race
+frame in one vblank; tools/m2-fps.py: 14-15 3D/s, 4 vblanks a picture at
+Single buffered (~29 game fps), unchanged by pacing Free and Textures Off.
+Scoped on s727 (quartus_sta, slow 1100 mV 85C):
+  * The i960's OWN logic is not the limit at 40. Every path to clk_i960 with
+    under 3.571 ns of slack at 35 (344 of them) is launched from clk_sys --
+    the loader into the register file (ldr_top -> glb) and the interrupt
+    request -- whose window is one clk_sys period; at 80/40 their worst goes
+    from +2.808 to ~+1.02. R464's 27.31 MHz Fmax was the pre-R580 core.
+  * 40 cannot be a 2:1 of 70; a cut domain costs ~6 cycles an access in the
+    bridge (R464). So clk_sys goes to 80.
+  * clk_sys at 80: 327 endpoints (one worst path each) have under 1.786 ns of
+    slack at 70; deficits 128 < 0.25 ns, 75 0.25-0.5, 72 0.5-0.75, 48
+    0.75-1.0, 4 1.0-1.25. Where: the 3D fill 141, the geometry FP pool and
+    engine ~63, the sound board ~38, span texturing / FB writer ~30, the TGP
+    15, the Z80 12, the read-ahead 8. All launched inside clk_sys.
+  * The PLL: VCO 1,200 (50 MHz ref x 24) gives 100 /12, 80 /15, 50 /24,
+    40 /30, 100@180. The SDC is frequency-free: clk_mem and clk_sys are
+    asynchronous groups, clk_sys/clk_i960 a timed pair.
+  * SYS_MHZ 70 -> 80: the sound board, the Z80 (4 MHz exactly), the sound
+    link and the debug UARTs take their rates from it (R573). No other
+    clock-rate constant in Model2.sv. The TGP, geometry and renderer simply
+    run faster.
+First build: the PLL and SYS_MHZ only -- the 70 MHz fit placed those 327
+paths with no pressure on them, and an 80 MHz target may close much of a
+sub-0.5 ns deficit by placement. What still fails is the redesign list.
