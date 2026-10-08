@@ -27145,3 +27145,17 @@ as ONE bridge transaction (the SDRAM port already answers 64 bits; three
 round trips of four saved per miss); (3) R693's two-phase handshake, which
 shortens every transaction (R704 blamed it for the black fault; R708, R710
 and R712 found other causes, so it is unconvicted).
+
+**R723 -- R703's TWO 2D/HUD FAULTS, DESCRIBED PRECISELY (Ben, s741, a race
+start).** (1) The car-CONDITION indicator's shaded texture and the MINI-MAP
+are 3D objects, and they are drawn too LOW: the shaded texture belongs inside
+the CONDITION frame and the map just beneath it; both sit lower than that.
+They are drawn in a viewport of their own (a window_data command of their
+own in the list), so the first suspect is the walker's window handling --
+R642 captures window_data into win_vp_s / win_vp_e / win_c0 and the
+projection uses whatever is current, which is right only if every object is
+projected with the window in force when IT was listed. (2) "ROLLING START!!"
+should enter from the right and scroll right-to-left across the screen; it
+sits still in the middle. A 2D layer whose scroll is not applied (R703's
+suspect: segaic24's window / split-scroll registers). Both queued behind the
+CPU work (R722).
