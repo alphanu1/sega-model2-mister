@@ -297,6 +297,7 @@ module m2_geo_engine #(
   logic        cc_wait;
   logic [7:0]  cc_idx;
   logic [255:0] cc_valid;
+  logic         cc_dirty;   // R698: the colours changed while this entry's reads were in flight
   // The texture parameters as floats, converted once when the walker streams
   // them; the colour cache: 256 entries direct-mapped on {colorbase, luma6}.
   (* ramstyle = "MLAB" *) logic [63:0] tp_tab [32];    // {ambient, diffuse}
@@ -456,7 +457,7 @@ module m2_geo_engine #(
       hdr1 <= 16'd0; hdr2 <= 16'd0; poly_tex <= 32'd0;
       rgb[0] <= 8'd0; rgb[1] <= 8'd0; rgb[2] <= 8'd0;
       xaddr <= 24'd0; xhalf <= 1'b0; xspace <= 2'd0; cc_wait <= 1'b0; cc_idx <= 8'd0;
-      cc_valid <= '0; poly_col <= 24'd0; dbg_col_miss <= 16'd0; tex_flat <= 1'b0; lum_x <= 8'd0; tex_lum_d <= 2'd0; gam_d <= 2'd0;
+      cc_valid <= '0; cc_dirty <= 1'b0; poly_col <= 24'd0; dbg_col_miss <= 16'd0; tex_flat <= 1'b0; lum_x <= 8'd0; tex_lum_d <= 2'd0; gam_d <= 2'd0;
       for (int k = 0; k < 3; k++) begin
         p0prev[k] <= 32'd0; p1prev[k] <= 32'd0;
         p0cur[k]  <= 32'd0; p1cur[k]  <= 32'd0; xyz[k] <= 32'd0;
@@ -812,6 +813,7 @@ module m2_geo_engine #(
           st <= E_EMIT;
         end else begin
           dbg_col_miss <= dbg_col_miss + 16'd1;
+          cc_dirty <= 1'b0;                           // R698: this entry's reads start clean
           xaddr <= {15'd0, cbase[9:1]}; xhalf <= cbase[0]; xspace <= 2'd2;
           st <= E_PAL;
         end
@@ -844,7 +846,12 @@ module m2_geo_engine #(
           else begin xi <= xi + 2'd1; xaddr <= xl_dw(xi + 2'd1, c555, lum_x); end
         end
         E_CW: begin
-          cc_valid[cc_idx] <= 1'b1;                   // cc_we writes the entry this cycle
+          // R698: NOT CACHED IF THE COLOURS CHANGED UNDER ITS READS. The polygon
+          // still takes the colour it computed; the next one asks again. Without
+          // this a colour read across the CPU's palette write -- a scene change
+          // rewrites them all -- was cached with the old value until the next
+          // write: black for every polygon (R698).
+          if (!cc_dirty) cc_valid[cc_idx] <= 1'b1;   // cc_we writes the entry this cycle
           poly_col <= {rgb[0], rgb[1], rgb[2]};
           st <= E_EMIT;
         end
@@ -894,9 +901,9 @@ module m2_geo_engine #(
 
         default: st <= E_IDLE;
       endcase
-      if (col_inval) cc_valid <= '0;                 // R222: the CPU rewrote the colours
+      if (col_inval) begin cc_valid <= '0; cc_dirty <= 1'b1; end   // R222: the CPU rewrote the colours (R698: and any fill in flight is stale)
       tex_lum_d <= tex_lum;
-      if (tex_lum != tex_lum_d) cc_valid <= '0;      // R239: the placeholder changed; the cached colours are stale
+      if (tex_lum != tex_lum_d) begin cc_valid <= '0; cc_dirty <= 1'b1; end   // R239: the placeholder changed; the cached colours are stale
       gam_d <= gamma_sel;
       if (gamma_sel != gam_d) cc_valid <= '0;        // R630: so did the curve
     end

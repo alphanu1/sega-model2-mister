@@ -193,6 +193,11 @@ module m2_cpu_bridge #(
   // acknowledge is returned, and the i960 waits exactly as it would on a real
   // bus that is not ready. It costs nothing when nothing stalls.
   input  logic        io_stall,
+  // R697: the geometrizer's push queue still holds words for buffer RAM. A
+  // store INTO buffer RAM waits for it: Daytona pushes a zero placeholder
+  // through the queue and then patches the count with a direct store (R254),
+  // and a store that overtook a queued placeholder was overwritten by it.
+  input  logic        buf_wr_stall,
   output logic        io_sel,
   output logic        io_we,
   output logic [31:0] io_addr,
@@ -254,6 +259,7 @@ module m2_cpu_bridge #(
   typedef enum logic [1:0] { C_IDLE, C_WAIT, C_CLR, C_POST } cph_e;
   cph_e cph;
   logic        req_mem, ack_mem;
+  logic        ack_mem_d;        // R698: ack_mem a cycle ago, to see a completion
   logic        ack_cpu;          // ack_mem, one CPU flop later
   logic  [1:0] ack_cpu_s;        // R576: its synchroniser when ASYNC
   logic        posted;
@@ -721,7 +727,7 @@ module m2_cpu_bridge #(
 
   always_ff @(posedge clk_mem or negedge rst_n_mem) begin
     if (!rst_n_mem) begin
-      st <= S_IDLE; ack_mem <= 1'b0; half <= 1'b0;
+      st <= S_IDLE; ack_mem <= 1'b0; half <= 1'b0; ack_mem_d <= 1'b0;
       sd_req <= 1'b0; sd_we <= 1'b0; sd_addr <= '0; sd_din <= 16'd0; sd_be <= 2'b11;
       oc_tram_we <= 1'b0; oc_pal_we <= 1'b0; oc_xlat_we <= 1'b0; col_inval <= 1'b0; buf_inval <= 1'b0; tex_inval <= 1'b0;
       io_sel <= 1'b0; io_we <= 1'b0;
@@ -737,6 +743,14 @@ module m2_cpu_bridge #(
     end else begin
       oc_tram_we <= 1'b0; oc_pal_we <= 1'b0; oc_xlat_we <= 1'b0; col_inval <= 1'b0; buf_inval <= 1'b0; tex_inval <= 1'b0;
       io_sel     <= 1'b0;
+      // R698: AND AGAIN WHEN A COLOUR WRITE HAS LANDED. The pulse at dispatch
+      // comes before the SDRAM holds the new word -- and since R702 the
+      // geometry's port outranks this one, so an engine read can overtake the
+      // queued write and take the old colour. ack_mem rises on the completion
+      // (a write's SDRAM acknowledge has been seen), and r_* stand until the
+      // CPU side drops its request.
+      ack_mem_d <= ack_mem;
+      if (ack_mem && !ack_mem_d && r_we && (pal_mirror || xlat_mirror)) col_inval <= 1'b1;
 
       // The cache's own housekeeping, before any state runs.
       dc_inval <= 1'b0;
@@ -749,7 +763,8 @@ module m2_cpu_bridge #(
         // !sd_ack as well as req_mem: the previous access's ack may still be
         // held when the next request arrives, and issuing into it has exactly
         // the same effect as issuing into it below.
-        S_IDLE: if (req_mem && !ack_mem && !sd_ack && !dc_sweeping) begin
+        S_IDLE: if (req_mem && !ack_mem && !sd_ack && !dc_sweeping
+                    && !(r_we && buf_region && buf_wr_stall)) begin   // R697
           if (r_we) dbg_cpu_writes <= dbg_cpu_writes + 32'd1;
           else      dbg_cpu_reads  <= dbg_cpu_reads  + 32'd1;
           half <= 1'b0;

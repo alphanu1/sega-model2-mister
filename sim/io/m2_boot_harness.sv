@@ -629,6 +629,7 @@ module m2_boot_harness #(
     end
   end
 
+  wire        geo_push_busy;   // R697: pushed words not yet in buffer RAM; the CPU's buffer stores wait
   m2_cpu_bridge #(.AW(AW), .BOARD_2A(1'b0), .BUFFERRAM(BUFFERRAM_EN)) u_bridge (
     .dbg_dc_hits(obs_dc_hits), .dbg_dc_miss(obs_dc_miss),
     .char_wr(), .char_wr_addr(),
@@ -664,6 +665,7 @@ module m2_boot_harness #(
 // the VALUES, and a table whose R and B ramps are wrong renders white as green.
     .io_rdata(cpu_io_rdata), .io_sel(cpu_io_sel), .io_we(cpu_io_we),
     .io_stall(copro_stall),
+    .buf_wr_stall(geo_push_busy),   // R697: as Model2.sv
     .io_addr(cpu_io_addr), .io_wdata(cpu_io_wdata), .io_be(cpu_io_be),
     .dbg_cpu_reads(), .dbg_cpu_writes(), .dbg_unmapped(),
     .dbg_last_addr(), .dbg_last_dout(), .dbg_probe6(), .dbg_probe2(),
@@ -873,6 +875,7 @@ module m2_boot_harness #(
   m2_geo #(.AW(AW), .DEPTH(128)) u_geo (
     .clk(clk_mem), .rst_n(rst_n),
     .skip(2'd0),   // R699
+    .push_busy(geo_push_busy),   // R697
     .wr_ctl(geo_wr_ctl), .wr_setwp(geo_wr_setwp), .wr_setrp(geo_wr_setrp),
     .wr_push(geo_wr_push), .wdata(geo_push_word),
     .rd_wp(geo_wp_o), .rd_rp(geo_rp_o),

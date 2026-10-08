@@ -123,6 +123,7 @@ module m2_cpu_sdram_harness #(
 
   m2_cpu_bridge #(.AW(AW), .BOARD_2A(1'b0), .DCACHE_EN(DCACHE_EN_TOP), .ASYNC(CPU_ASYNC)) u_bridge (
     .io_stall(io_stall),   // R530: the bench's device model may stall
+    .buf_wr_stall(1'b0),   // R697: no push queue here
     .dbg_dc_hits(), .dbg_dc_miss(),
     .char_wr(), .char_wr_addr(),
     .clk_cpu(clk_cpu), .rst_n_cpu(br_rst),

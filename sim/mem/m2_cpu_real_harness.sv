@@ -144,7 +144,7 @@ module m2_cpu_real_harness #(
     .p2_req(p2_req), .p2_addr(p2_addr), .p2_ack(p2_ack), .p2_dout(),
     .p3_req(p3_req), .p3_addr(p3_addr), .p3_ack(p3_ack), .p3_dout(),
     .io_sel(io_sel), .io_we(io_we), .io_addr(io_addr), .io_wdata(io_wdata),
-    .io_be(io_be), .io_rdata(io_rdata), .io_stall(io_stall),
+    .io_be(io_be), .io_rdata(io_rdata), .io_stall(io_stall), .buf_wr_stall(1'b0),   // R697: no push queue here
     .mem_ready(mem_ready),
     .dbg_last_addr(), .dbg_last_dout(), .dbg_reads()
   );

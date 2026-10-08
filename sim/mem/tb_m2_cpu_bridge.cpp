@@ -46,6 +46,8 @@ static uint64_t fails = 0, checks = 0;
 static const int CPU_DIV = 8, MEM_DIV = 5;
 static uint64_t tk = 0;
 
+// R698: every col_inval pulse, and every colour word landing in SDRAM
+static long g_colinv = 0, g_colinv_tk = -1, g_colwr_tk = -1;
 static void step() {
   const bool cpu_edge = (tk % CPU_DIV) == 0;
   const bool mem_edge = (tk % MEM_DIV) == 0;
@@ -70,6 +72,7 @@ static void step() {
         if (pb & 1) cur = uint16_t((cur & 0xff00) | (pd & 0x00ff));
         if (pb & 2) cur = uint16_t((cur & 0x00ff) | (pd & 0xff00));
         sdram[pa] = cur;
+        if (pa >= 0x50000u && pa < 0x52000u) g_colwr_tk = long(tk);   // the 3D palette and xlat mirrors
       } else {
         // A FOUR-WORD BURST, because that is what port 0 now does -- blen()
         // gives ports 0 to 3 four words. Returning one and zero-filling the
@@ -94,6 +97,7 @@ static void step() {
         std::printf("      SD %s addr=%08x din=%04x be=%x\n",
                     pw ? "WR" : "rd", pa, pd, pb);
     }
+    if (dut->col_inval) { ++g_colinv; g_colinv_tk = long(tk); }
     // On-chip arrays: REGISTERED reads, as M10K is.
     dut->oc_tram_q = tram[dut->oc_addr & 0x7fff];
     dut->oc_pal_q  = pal[dut->oc_addr & 0x1fff];
@@ -210,6 +214,32 @@ int main(int argc, char **argv) {
     expect("work RAM high word", sdram[0x20000 + ((0x00500010u & 0xfffffu) >> 1) + 1], 0xdead);
     access(false, 0x00500010u, 0, 0xf, &v);
     expect("work RAM readback", v, 0xdeadbeefu);
+  }
+
+  // ---- R697: a store into buffer RAM waits while the push queue holds words ----
+  // Daytona patches a count with a direct store after pushing its placeholder
+  // through the geometrizer's queue (R254); the store must not reach SDRAM
+  // while buf_wr_stall says the queue still holds words, or the placeholder
+  // lands on top of it. The CPU is acknowledged at once (posted), so the store
+  // is checked in SDRAM, not on the bus.
+  {
+    const uint32_t a = 0x00900020u, w = 0x40000 + ((a & 0x1ffffu) >> 1);
+    sdram[w] = 0xAAAA; sdram[w + 1] = 0xAAAA;
+    dut->buf_wr_stall = 1;
+    access(true, a, 0x13572468u, 0xf, nullptr);
+    for (int i = 0; i < 300; ++i) step();
+    expect("R697 buffer store held while the queue is busy (low)",  sdram[w],     0xAAAA);
+    expect("R697 buffer store held while the queue is busy (high)", sdram[w + 1], 0xAAAA);
+    dut->buf_wr_stall = 0;
+    for (int i = 0; i < 100; ++i) step();
+    expect("R697 buffer store lands once the queue is empty (low)",  sdram[w],     0x2468);
+    expect("R697 buffer store lands once the queue is empty (high)", sdram[w + 1], 0x1357);
+    // and a store elsewhere is not held by it
+    dut->buf_wr_stall = 1;
+    access(true, 0x00500020u, 0x0badcafeu, 0xf, nullptr);
+    for (int i = 0; i < 100; ++i) step();
+    expect("R697 work RAM store not held", sdram[0x20000 + ((0x00500020u & 0xfffffu) >> 1)], 0xcafe);
+    dut->buf_wr_stall = 0;
   }
 
   // ---- the shared buffer RAM at 0x00900000, 128 KB, mirrored to 0x0097ffff ----
@@ -381,7 +411,13 @@ int main(int argc, char **argv) {
   // ---- R222: palette entries 0x1000-0x13ff land on chip AND in the mirror ----
   {
     const uint32_t PB = 0x01800000u;
+    g_colinv = 0; g_colinv_tk = -1; g_colwr_tk = -1;
     access(true, PB + 0x2000u, 0x7fff03e0u, 0xf, nullptr);     // entries 0x1000, 0x1001
+    for (int i = 0; i < 64; ++i) step();
+    // R698: the colours are invalidated when the write STARTS and again once it
+    // has LANDED -- a reader between the two took the old word
+    expect("R698 col_inval pulses for one palette write (at least 2)", g_colinv >= 2, 1);
+    expect("R698 the last col_inval follows the SDRAM write", g_colinv_tk > g_colwr_tk && g_colwr_tk >= 0, 1);
     expect("3D palette entry 0x1000 on chip", pal[0x1000], 0x03e0u);
     expect("3D palette entry 0x1001 on chip", pal[0x1001], 0x7fffu);
     expect("3D palette entry 0x1000 mirrored", sdram[0x50000u + 0x000u], 0x03e0u);

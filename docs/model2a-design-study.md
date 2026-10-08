@@ -26872,3 +26872,27 @@ clk_i960 +2.595, holds clean -- and misses HDMI by -0.343 (the scaler, as
 R-D's -0.885); s719 -6.732 clk_sys, s720 -0.137/-0.024. m2_eng_ra placed at
 240 ALM (s717: 424) -- the MLAB fix holds; the design total is 41,467 (99%).
 s721 RBF md5 b96c2dc68115a45f7f9fa8fba703bd27, 4,649,480 bytes.
+
+**R712 -- THE WHOLE-SCENE BLACK ON s721: R697 AND R698 WERE NEVER IN THE
+RELEASE LINE.** Ben on s721 (read-ahead + R711): "after a few minutes all 3D
+goes black -- a long-standing issue". That is R254/R697/R698's fault: lit,
+then black for good after a scene change. Both known mechanisms were fixed
+only on r639-beta (on top of R693's two-phase bridge) and never reached B,
+D or this branch:
+  * R697 -- the texture_data count placeholder, pushed through m2_geo's
+    queue, could drain over the CPU's direct count patch; the walker then
+    read a zero count and the light table filled with 0/0. A CPU store into
+    buffer RAM now waits in S_IDLE while m2_geo's push_busy is up.
+  * R698 -- colour invalidates fired at dispatch, before the SDRAM held the
+    new word, and since R702 port 4 outranks the CPU's port: the engine could
+    re-read the old colour and cache it until the next colour write. col_inval
+    now also pulses when the write completes (ack_mem's rising edge, the
+    four-phase bridge's completion here -- R693's toggle is not on this
+    branch), and the engine's colour cache does not keep an entry whose reads
+    crossed an invalidate (cc_dirty). R698's pair-cache half is moot: the
+    engine's reads no longer pass through a pair cache, and the read-ahead
+    copies nothing the CPU writes (R709).
+tb_m2_cpu_bridge: 136 checks, 0 mismatches; forcing either fix off gives 2
+mismatches each. test_m2_cpu_sdram, test_m2_geo (118), test_m2_eng_ra pass;
+lint_top and Quartus --analyze_file clean. R710/R711's lost state commands
+are a third, separate mechanism and stay fixed.
