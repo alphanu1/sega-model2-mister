@@ -830,19 +830,30 @@ module m2_geometry (
   // now hold THIS quad's values. Everything else the store takes (x, y, z,
   // 1/z, texture, colour) comes straight off the held clipper outputs.
   logic c_valid, c_ready, c_seen;
-  logic [1:0] c_age;   // R614: cycles this quad has been held, to 2
+  logic [1:0] c_age;   // R614: cycles this quad has been held, to 2; R718: to 3
   logic [12:0] ru [4], rv [4];
-  always_ff @(posedge clk) for (int k = 0; k < 4; k++) begin
-    ru[k] <= sat13(wu[k] - uoff);
-    rv[k] <= sat13(wv[k] - voff);
+  // R718: AND THE MINIMUM IS ITS OWN STAGE TOO. At 75 and 80 MHz the four-way
+  // minimum, the mask, the subtract and the saturate missed (s737: wu -> ru
+  // -0.330 at 75; s735: wv -> rv -0.591 at 80). uoff/voff are registered
+  // beside a one-cycle copy of wu/wv, and the subtract runs from both.
+  logic [14:0] uoff_r, voff_r;
+  logic [14:0] wu_d [4], wv_d [4];
+  always_ff @(posedge clk) begin
+    uoff_r <= uoff;
+    voff_r <= voff;
+    for (int k = 0; k < 4; k++) begin wu_d[k] <= wu[k]; wv_d[k] <= wv[k]; end
   end
-  // R614: two register stages now (wu/wv, then ru/rv), so the quad is shown
-  // once it has been held two cycles.
+  always_ff @(posedge clk) for (int k = 0; k < 4; k++) begin
+    ru[k] <= sat13(wu_d[k] - uoff_r);
+    rv[k] <= sat13(wv_d[k] - voff_r);
+  end
+  // R614: two register stages (wu/wv, then ru/rv); R718: three (the minimum),
+  // so the quad is shown once it has been held three cycles.
   always_ff @(posedge clk or negedge rst_n)
     if (!rst_n)                  c_age <= 2'd0;
     else if (!c_valid || c_ready) c_age <= 2'd0;   // gone, or taken this cycle
-    else if (c_age != 2'd2)       c_age <= c_age + 2'd1;
-  assign c_seen = (c_age == 2'd2);
+    else if (c_age != 2'd3)       c_age <= c_age + 2'd1;
+  assign c_seen = (c_age == 2'd3);
   assign q_valid = c_valid && c_seen;
   assign c_ready = q_ready && c_seen;
   assign q_u0 = ru[0]; assign q_v0 = rv[0];

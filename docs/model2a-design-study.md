@@ -27018,3 +27018,30 @@ and the route into the DSP are one path again.
 (100 /12, 75 /16, 50 /24, 37.5 /32), still 2:1. SYS_MHZ 75. A build now, to
 put a faster CPU on the board and see whether a race moves before the rest
 of 80 is paid for.
+
+**R718 -- THREE MORE STAGES FOR 75 / 80 MHz.** 75/37.5 (079d803), seeds
+s737-s739: s737 clk_sys -0.330 (TNS -3.8, 52 endpoints), HDMI -0.593; s738
+clk_sys -0.653, clk_mem -0.324; s739 a Quartus internal error ("Sub-system:
+DYN"). clk_i960 at 37.5 +2.75. At the looser target the fitter relaxed too.
+s737 and s738 failing: the geometry's UV wrap wu -> ru -0.330 (and wv -> rv
+-0.591 at 80), span_tex d0_o -> d1_r -0.653, the FB writer's window match
+ib -> vhi -0.190, the engine's data -> rgb -0.171, the fill's sx -> det_r
+-0.030. Three fixed here, each a register stage:
+  * m2_geometry: the four-way minimum and mask (uoff/voff) are registered
+    beside a copy of wu/wv; the subtract and saturate follow. c_seen at age
+    3, one cycle a quad. test_m2_geometry 42; tb_m2_geodiff identical quads,
+    four lists.
+  * m2_span_tex: stage 1b split again, the variable shift (d1a_m) and then
+    the rcp_tab read; PIPE_D 6 -> 7 and u_h5/v_h5, so the x and u/v that
+    arrive with a result are still its own. test_m2_span_tex 7,207 checks.
+    Pixel dumps (R715's recipe) on f2000/f3450/f5000/f9000: every pixel
+    identical; the texel fetch sets identical but for 1-2 FEWER of ~160-226 k
+    a frame (the FTB mask consulted a cycle later); draw +0.05..+0.6%.
+  * m2_geo_engine: E_XL registers the translation byte; gam() lands in rgb
+    a cycle later, and a new one-cycle state E_XLG lets the third channel's
+    gamma land before E_CW reads rgb. test_m2_geo_engine 68, test_m2_geo
+    118; geodiff quads (colours included) identical with and without the
+    read-ahead in the loop.
+Left for later: the FB writer's window match (-0.19) and the fill's det_r
+(-0.03) at 75; at 80 also the span queue, the geometry FP adder, the fill's
+plane fit and R715's register absorbed into the DSP.

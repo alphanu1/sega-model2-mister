@@ -241,7 +241,7 @@ module m2_geo_engine #(
     E_NXF, E_NXFW, E_SKIP,
     E_EMIT, E_LINK, E_DONE, E_DOT, E_DOTA,
     // R222: the luminance, the texture header, the colour
-    E_LUMM, E_LUMMW, E_LUMA, E_LUMAW, E_TH0, E_TH1, E_TH2, E_TH3, E_CC, E_PAL, E_XL, E_CW,
+    E_LUMM, E_LUMMW, E_LUMA, E_LUMAW, E_TH0, E_TH1, E_TH2, E_TH3, E_CC, E_PAL, E_XL, E_XLG, E_CW,   // R718: E_XLG
     E_UV                                        // R268: the per-vertex texture coordinates
   } estate_t;
   estate_t st, ret;
@@ -298,6 +298,9 @@ module m2_geo_engine #(
   logic [7:0]  cc_idx;
   logic [255:0] cc_valid;
   logic         cc_dirty;   // R698: the colours changed while this entry's reads were in flight
+  logic [7:0]   xl_raw;     // R718: a translation byte, before its gamma
+  logic [1:0]   xl_i;
+  logic         xl_go;
   // The texture parameters as floats, converted once when the walker streams
   // them; the colour cache: 256 entries direct-mapped on {colorbase, luma6}.
   (* ramstyle = "MLAB" *) logic [63:0] tp_tab [32];    // {ambient, diffuse}
@@ -456,6 +459,7 @@ module m2_geo_engine #(
       lum <= 32'd0; luma8 <= 8'd0; hdr0 <= 16'd0; cbase <= 10'd0; c555 <= 15'd0; xi <= 2'd0;
       hdr1 <= 16'd0; hdr2 <= 16'd0; poly_tex <= 32'd0;
       rgb[0] <= 8'd0; rgb[1] <= 8'd0; rgb[2] <= 8'd0;
+      xl_raw <= 8'd0; xl_i <= 2'd0; xl_go <= 1'b0;   // R718
       xaddr <= 24'd0; xhalf <= 1'b0; xspace <= 2'd0; cc_wait <= 1'b0; cc_idx <= 8'd0;
       cc_valid <= '0; cc_dirty <= 1'b0; poly_col <= 24'd0; dbg_col_miss <= 16'd0; tex_flat <= 1'b0; lum_x <= 8'd0; tex_lum_d <= 2'd0; gam_d <= 2'd0;
       for (int k = 0; k < 3; k++) begin
@@ -464,6 +468,7 @@ module m2_geo_engine #(
       end
     end else begin
       xf_in_valid <= 1'b0;
+      xl_go       <= 1'b0;   // R718: one cycle, set by E_XL
 
       case (st)
         E_IDLE: if (start) begin
@@ -840,11 +845,18 @@ module m2_geo_engine #(
           xhalf <= lu[2]; xspace <= 2'd3;
           st    <= E_XL;
         end
+        // R718: THE BYTE IS REGISTERED, THE GAMMA APPLIED A CYCLE LATER. At 75
+        // and 80 MHz the read's data, the half select and gam() into rgb
+        // missed (s738: data -> rgb -0.171). E_XLG gives the third channel's
+        // gamma its cycle before E_CW reads rgb.
         E_XL: if (mem_go) begin
-          rgb[xi] <= gam(xhalf ? mem_data[23:16] : mem_data[7:0], gamma_sel);
-          if (xi == 2'd2) st <= E_CW;
+          xl_raw <= xhalf ? mem_data[23:16] : mem_data[7:0];
+          xl_i   <= xi;
+          xl_go  <= 1'b1;
+          if (xi == 2'd2) st <= E_XLG;
           else begin xi <= xi + 2'd1; xaddr <= xl_dw(xi + 2'd1, c555, lum_x); end
         end
+        E_XLG: st <= E_CW;
         E_CW: begin
           // R698: NOT CACHED IF THE COLOURS CHANGED UNDER ITS READS. The polygon
           // still takes the colour it computed; the next one asks again. Without
@@ -901,6 +913,7 @@ module m2_geo_engine #(
 
         default: st <= E_IDLE;
       endcase
+      if (xl_go) rgb[xl_i] <= gam(xl_raw, gamma_sel);   // R718
       if (col_inval) begin cc_valid <= '0; cc_dirty <= 1'b1; end   // R222: the CPU rewrote the colours (R698: and any fill in flight is stale)
       tex_lum_d <= tex_lum;
       if (tex_lum != tex_lum_d) begin cc_valid <= '0; cc_dirty <= 1'b1; end   // R239: the placeholder changed; the cached colours are stale

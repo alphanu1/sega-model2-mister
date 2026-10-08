@@ -425,7 +425,7 @@ module m2_span_tex #(
   // wrong pairs a group's coordinates with another group's position, which
   // draws a span whose texture slides along it -- and every arithmetic check
   // still passes.
-  localparam int unsigned PIPE_D = 6;
+  localparam int unsigned PIPE_D = 7;   // R718: d0, d1a, d1, d2, d3, d4a, d4
   logic                    sh_v    [PIPE_D];
   logic signed [31:0]      sh_x    [PIPE_D];
   logic                    sh_last [PIPE_D];
@@ -604,6 +604,7 @@ module m2_span_tex #(
   wire pipe_en   = !res_valid || cons_take;
   logic signed [31:0] d0_o;   logic [5:0] d0_e;   // R448: stage 1a
   logic [5:0]  d1_e;   logic [31:0] d1_m;  logic [24:0] d1_r;
+  logic [5:0]  d1a_e;  logic [31:0] d1a_m;   // R718: stage 1b's shift, before the table
   logic [31:0] d2_nd;  logic [5:0]  d2_e;  logic [24:0] d2_r;
   logic [24:0] d3_r1;  logic [5:0]  d3_e;
   logic signed [31:0] d4_u, d4_v;
@@ -613,7 +614,7 @@ module m2_span_tex #(
   // delayed three cycles to match. Getting this wrong pairs a texel coordinate
   // with the wrong pixel's depth, which is the whole fault this change exists
   // to avoid introducing.
-  logic signed [31:0] u_h1, v_h1, u_h2, v_h2, u_h3, v_h3, u_h4, v_h4;
+  logic signed [31:0] u_h1, v_h1, u_h2, v_h2, u_h3, v_h3, u_h4, v_h4, u_h5, v_h5;
 
   // R539: the register R496 asked for now lives in m2_texel_x2, which loads
   // each request into f_tex/f_u/f_v before the cache's adders see it. Here the
@@ -645,12 +646,12 @@ module m2_span_tex #(
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       d0_o <= '0; d0_e <= '0;
-      d1_e <= '0; d1_m <= '0; d1_r <= '0;
+      d1_e <= '0; d1_m <= '0; d1_r <= '0; d1a_e <= '0; d1a_m <= '0;
       d2_nd <= '0; d2_e <= '0; d2_r <= '0;
       d3_r1 <= '0; d3_e <= '0; d4_u <= '0; d4_v <= '0;
       d4a_pu <= '0; d4a_pv <= '0; d4a_sh <= '0;   // R468
       u_h1 <= '0; v_h1 <= '0; u_h2 <= '0; v_h2 <= '0; u_h3 <= '0; v_h3 <= '0;
-      u_h4 <= '0; v_h4 <= '0; sh_m <= 1'b0;   // R607
+      u_h4 <= '0; v_h4 <= '0; u_h5 <= '0; v_h5 <= '0; sh_m <= 1'b0;   // R607
       mq_f1 <= 1'b0; mq_f0 <= 1'b1; mq_wi <= '0; mq_need <= '0;   // R631
       iss_u <= '0; iss_v <= '0; iss_ooz <= '0; iss_x <= '0; iss_run <= 1'b0; iss_step <= 4'd1;
       for (int k = 0; k < PIPE_D; k++) begin
@@ -734,11 +735,12 @@ module m2_span_tex #(
       // 1a: the add and the encode. 1b: the shift and the table read.
       d0_o <= dv_o;
       d0_e <= top_bit(dv_o);
-      begin
-        automatic logic [31:0] m = (d0_e >= 6'd23) ? (d0_o >> (d0_e - 6'd23))
-                                                   : (d0_o << (6'd23 - d0_e));
-        d1_e <= d0_e; d1_m <= m; d1_r <= rcp_tab[m[22:16]];
-      end
+      // R718: 1b SPLIT AGAIN -- the variable shift, then the table read. At
+      // 75 MHz the shift into rcp_tab missed (s738: d0_o -> d1_r -0.653).
+      d1a_e <= d0_e;
+      d1a_m <= (d0_e >= 6'd23) ? (d0_o >> (d0_e - 6'd23))
+                               : (d0_o << (6'd23 - d0_e));
+      d1_e <= d1a_e; d1_m <= d1a_m; d1_r <= rcp_tab[d1a_m[22:16]];
       // stage 2: the Newton residual
       d2_nd <= 32'((((64'd1 <<< 48) - (64'(d1_m) * 64'(d1_r))) >> 24));
       d2_e  <= d1_e; d2_r <= d1_r;
@@ -761,8 +763,8 @@ module m2_span_tex #(
       // state walk -- group N+1's coordinates are computed while group N's
       // texel is in flight -- so one more stage means dv_age reaches six
       // instead of five, and nothing issues any slower.
-      d4a_pu <= 64'(u_h4) * 64'(d3_r1);
-      d4a_pv <= 64'(v_h4) * 64'(d3_r1);
+      d4a_pu <= 64'(u_h5) * 64'(d3_r1);   // R718: one deeper, to match
+      d4a_pv <= 64'(v_h5) * 64'(d3_r1);
       d4a_sh <= (d3_e < 6'd23) ? 5'd16 : 5'(d3_e - 6'd7);
 
       // stage 4b: the un-normalise and the clamp, on the registered product.
@@ -772,6 +774,7 @@ module m2_span_tex #(
       u_h2 <= u_h1;  v_h2 <= v_h1;
       u_h3 <= u_h2;  v_h3 <= v_h2;
       u_h4 <= u_h3;  v_h4 <= v_h3;   // R448: one deeper, to match
+      u_h5 <= u_h4;  v_h5 <= v_h4;   // R718: and one more
     end
   end
 
