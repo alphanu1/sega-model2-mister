@@ -360,7 +360,17 @@ module m2_ioz80 #(
   // defaults, and writes them back -- so WRITE/ERASE/EWEN are implemented, not
   // just READ. Contents are volatile here; persistence can ride the NVRAM
   // mechanism later if board-local settings turn out to matter.
-  logic [15:0] ee  [64];
+  // R716: A RAM, NOT 1,024 FLIP-FLOPS. Read combinationally inside the reset
+  // block, Quartus left the array in registers ("uninferred due to
+  // asynchronous read logic"): ~1,200 of this module's registers. It is now
+  // one write port and one registered read, in its own reset-free block. The
+  // firmware bit-bangs the part at a few hundred clk_sys cycles a bit, so a
+  // read answering two cycles after its command is invisible to it.
+  (* ramstyle = "MLAB, no_rw_check" *) logic [15:0] ee [64];
+  logic        ee_we;          // one write port: WRITE and ERASE share it
+  logic  [5:0] ee_wa, ee_ra;
+  logic [15:0] ee_wd, ee_q;
+  logic  [1:0] ee_ld;          // a READ's word: address registered, then data, then ee_out
   logic        ee_do;
   logic  [8:0] ee_sh;         // start + opcode + address collector
   logic  [3:0] ee_nbits;
@@ -376,13 +386,22 @@ module m2_ioz80 #(
   wire ee_di  = port_out[0][5];
   logic ee_clk_d;
   initial for (int i = 0; i < 64; i++) ee[i] = 16'hffff;
+  always_ff @(posedge clk) begin
+    if (ee_we) ee[ee_wa] <= ee_wd;
+    ee_q <= ee[ee_ra];
+  end
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       ee_do <= 1'b1; ee_sh <= 9'd0; ee_nbits <= 4'd0; ee_out <= 17'd0;
       ee_in <= 16'd0; ee_wcnt <= 5'd0; ee_ewen <= 1'b0; ee_addr <= 6'd0;
       ee_st <= EE_CMD; ee_clk_d <= 1'b0;
+      ee_we <= 1'b0; ee_wa <= 6'd0; ee_wd <= 16'd0; ee_ra <= 6'd0; ee_ld <= 2'd0;
     end else begin
       ee_clk_d <= ee_clk;
+      ee_we    <= 1'b0;
+      // R716: the READ's word lands two cycles after its address
+      ee_ld    <= {ee_ld[0], 1'b0};
+      if (ee_ld[1]) ee_out <= {1'b0, ee_q};
       if (!ee_cs) begin
         ee_st <= EE_CMD; ee_nbits <= 4'd0; ee_sh <= 9'd0; ee_do <= 1'b1;
       end else if (ee_clk && !ee_clk_d) begin
@@ -398,9 +417,9 @@ module m2_ioz80 #(
                 ee_addr <= {ee_sh[4:0], ee_di};
                 case (ee_sh[6:5])
                   2'b10: begin ee_st <= EE_READ;
-                               ee_out <= {1'b0, ee[{ee_sh[4:0], ee_di}]}; end
+                               ee_ra <= {ee_sh[4:0], ee_di}; ee_ld <= 2'b01; end
                   2'b01: begin ee_st <= EE_WRITE; ee_wcnt <= 5'd0; end
-                  2'b11: begin if (ee_ewen) ee[{ee_sh[4:0], ee_di}] <= 16'hffff;
+                  2'b11: begin if (ee_ewen) begin ee_we <= 1'b1; ee_wa <= {ee_sh[4:0], ee_di}; ee_wd <= 16'hffff; end
                                ee_st <= EE_DONE; end
                   2'b00: begin ee_ewen <= (ee_sh[4:3] == 2'b11);
                                ee_st <= EE_DONE; end
@@ -416,7 +435,7 @@ module m2_ioz80 #(
             ee_in   <= {ee_in[14:0], ee_di};
             ee_wcnt <= ee_wcnt + 5'd1;
             if (ee_wcnt == 5'd15) begin
-              if (ee_ewen) ee[ee_addr] <= {ee_in[14:0], ee_di};
+              if (ee_ewen) begin ee_we <= 1'b1; ee_wa <= ee_addr; ee_wd <= {ee_in[14:0], ee_di}; end
               ee_st <= EE_DONE;
             end
           end

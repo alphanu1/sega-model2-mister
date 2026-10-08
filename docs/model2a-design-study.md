@@ -26978,3 +26978,28 @@ lacked m2_texel_bl.sv and --public-flat-rw, and the bench referred to the
 framebuffer reader's internals unconditionally, which exist only in an
 FB_DDR3 build. The trace is now under #ifdef R3D_FB; `make test_m2_raster3d`
 (band mode) passes, 8 checks.
+
+**R716 -- ~500 ALM FROM THE I/O BOARD'S EEPROM.** 80/40 no longer routes:
+s731-s733 (R714 + R715) all "Can't fit design in device" at 41,574-41,684
+ALM, so area has to come out of our own modules. Ranked from s726's fit
+(own ALMs / ALUTs / registers), the register-heavy ones are m2_quad_store
+(1,646 / 1,903 / 2,676), m2_geo_clip (1,500 / 1,298 / 2,055), the engine
+(1,163 / 1,562 / 1,872), m2_geo_xform (384 / 100 / 1,288) and m2_ioz80
+(703 / 656 / 1,200). Quartus's "uninferred RAM" list named m2_ioz80's `ee`:
+the 93C46 model's 64 x 16 array, read combinationally inside the reset block.
+It is now one write port (WRITE and ERASE share it) and a registered read in
+a reset-free block, tagged MLAB, powering up all-ones as before; a READ loads
+ee_out two cycles after its command -- the firmware bit-bangs at hundreds of
+cycles a bit. m2_ioz80 alone (quartus_map): 1,559 -> 1,061 ALM, registers
+1,618 -> 641, `ee` an MLAB. tb_m2_ioz80 (M2_IOFW=epr-14869c.25) fails on
+main and here alike -- 0 DPRAM writes, the same loop at 0x0833 -- but the
+two runs are identical to the cycle over 39.8 M cycles and 18,790 PA writes
+(the EEPROM's bit-bang), so the firmware saw the same answers. Its build also
+needed -Wno-SIMILARNAME (Verilator 5.052 on the third-party tv80).
+test_m2_ioboard: 14 checks pass. The board's controls are the real check:
+the I/O firmware must boot for them.
+Not RAM-able as they stand: the clipper's and the geometry's per-vertex
+arrays (qx/qy/qz/qu/qv[4], tx..tv[4], hx/hy/hz[4]) are read in parallel by
+their datapaths; the quad store's hq_* are 4 deep; the sort's hist/base are
+16 buckets (RADIX 4). rcache_frame_addr and the fill's recip ROMs are
+deliberately ramstyle "logic".

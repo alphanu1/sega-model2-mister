@@ -1219,7 +1219,7 @@ test_m2_ioz80: obj_ioz80/Vm2_ioz80_harness
 
 obj_ioz80/Vm2_ioz80_harness: sim/io/m2_ioz80_harness.sv rtl/io/m2_ioz80.sv \
                              $(wildcard rtl/cpu/tv80/*.v) sim/io/tb_m2_ioz80.cpp
-	$(VBUILD) --top-module m2_ioz80_harness -Wno-PINCONNECTEMPTY -Wno-UNUSEDPARAM \
+	$(VBUILD) --top-module m2_ioz80_harness -Wno-SIMILARNAME -Wno-PINCONNECTEMPTY -Wno-UNUSEDPARAM \
 	  -Wno-WIDTHEXPAND -Wno-UNUSEDSIGNAL -Wno-DECLFILENAME \
 	  --Mdir obj_ioz80 -o Vm2_ioz80_harness -CFLAGS "-O2" \
 	  sim/io/m2_ioz80_harness.sv rtl/io/m2_ioz80.sv rtl/cpu/tv80/tv80s.v \
