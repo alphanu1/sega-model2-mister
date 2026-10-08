@@ -64,10 +64,9 @@ textured, lit polygons over the 2D layers, with sound.
 - **New in this build: Daytona USA 1994 (Revision A)** has its own MRA. Its
   larger polygon ROM's extra 3 MB are loaded into free SDRAM; the '93 MRA and
   its layout are unchanged.
-- **New in this build: a faster main CPU.** The i960 runs at 37.5 MHz (was
-  35) and the core at 75 (was 70), the CPU fetches a whole instruction-cache
-  line in one memory transaction instead of four, and the geometry stage
-  reads its polygon data ahead.
+- **New in this build: a faster main CPU.** The CPU fetches a whole
+  instruction-cache line in one memory transaction instead of four, and the
+  geometry stage reads its polygon data ahead.
 - **Fixed in this build: black polygons with `Single buffered`.** Scattered
   polygons, and sometimes long spikes, could draw black. The frames that
   `Single buffered` does not draw are now still read by the geometry stage,
