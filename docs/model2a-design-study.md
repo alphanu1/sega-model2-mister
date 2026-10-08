@@ -26896,3 +26896,13 @@ tb_m2_cpu_bridge: 136 checks, 0 mismatches; forcing either fix off gives 2
 mismatches each. test_m2_cpu_sdram, test_m2_geo (118), test_m2_eng_ra pass;
 lint_top and Quartus --analyze_file clean. R710/R711's lost state commands
 are a third, separate mechanism and stay fixed.
+Build 118919b (R709 + R711 + R697/R698), seeds s725-s727: s725 DID NOT
+ROUTE ("Can't fit design in device", peak interconnect 60%; 41,460 ALM) --
+the first no-fit of this line, a sign the part is now full. s726 closes the
+core clocks (clk_sys +0.016, clk_mem +0.769, clk_i960 +2.487), HDMI -0.965.
+s727's fitter segfaulted in Quartus's Tcl teardown AFTER "Fitter Status:
+Successful" (the seed-sweep's known Quartus 17 crash); its timing ran:
+clk_sys +0.596, clk_mem +0.462, clk_i960 +2.808, holds clean, HDMI -1.750
+(the scaler's paths; the largest miss yet). RBFs: s727
+118cee644c0a613b50e224374e1506f4 (4,628,608), s726
+f4ce102f8d298bfb0f93363b06c48e50 (4,625,988).
