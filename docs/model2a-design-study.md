@@ -26866,3 +26866,9 @@ module at 424 with the store in flip-flops). Hit timing unchanged:
 tb_m2_eng_ra gives the same cycle count to the cycle (234,439 at LAT 12),
 13,539,977 checks clean; the RTL geodiff runs give identical quads and the
 same times on all four lists.
+Build 6e09290 (R709 read-ahead + MLAB + R711), seeds s719-s721: none closes
+everything. s721 closes every core clock -- clk_sys +0.376, clk_mem +0.714,
+clk_i960 +2.595, holds clean -- and misses HDMI by -0.343 (the scaler, as
+R-D's -0.885); s719 -6.732 clk_sys, s720 -0.137/-0.024. m2_eng_ra placed at
+240 ALM (s717: 424) -- the MLAB fix holds; the design total is 41,467 (99%).
+s721 RBF md5 b96c2dc68115a45f7f9fa8fba703bd27, 4,649,480 bytes.
