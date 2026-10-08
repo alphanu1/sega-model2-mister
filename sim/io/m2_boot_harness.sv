@@ -413,6 +413,7 @@ module m2_boot_harness #(
 );
 
   logic        bus_req, bus_we, bus_ack;
+  logic        bus_ifetch;   // R724
   logic [31:0] bus_addr, bus_wdata, bus_rdata;
   logic  [3:0] bus_be;
 
@@ -553,7 +554,7 @@ module m2_boot_harness #(
 
   i960_top u_cpu (
     .clk(clk_cpu), .rst_n(rst_n & ~cpu_hold),
-    .bus_req(bus_req), .bus_we(bus_we), .bus_addr(bus_addr), .bus_be(bus_be),
+    .bus_req(bus_req), .bus_ifetch(bus_ifetch), .bus_we(bus_we), .bus_addr(bus_addr), .bus_be(bus_be),
     .bus_wdata(bus_wdata), .bus_rdata(bus_rdata), .bus_ack(bus_ack),
     .irq(irq),
     .dbg_pc(dbg_pc), .dbg_sat(), .dbg_prcb(obs_prcb), .dbg_icr(),
@@ -634,7 +635,7 @@ module m2_boot_harness #(
     .dbg_dc_hits(obs_dc_hits), .dbg_dc_miss(obs_dc_miss),
     .char_wr(), .char_wr_addr(),
     .clk_cpu(clk_cpu), .rst_n_cpu(rst_n),
-    .bus_req(bus_req), .bus_we(bus_we), .bus_addr(bus_addr), .bus_be(bus_be),
+    .bus_req(bus_req), .bus_ifetch(bus_ifetch), .bus_we(bus_we), .bus_addr(bus_addr), .bus_be(bus_be),
     .bus_wdata(bus_wdata), .bus_rdata(bus_rdata), .bus_ack(bus_ack),
     .clk_mem(clk_m), .rst_n_mem(rst_n),
     // The bases the top level uses for a game image.

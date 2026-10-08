@@ -78,6 +78,9 @@ module m2_cpu_bridge #(
   input  logic        rst_n_cpu,
 
   input  logic        bus_req,
+  // R724: this request is an INSTRUCTION fetch (i960_top's G_IC grant). Such
+  // reads are served a 16-byte line at a time through `lb` below.
+  input  logic        bus_ifetch,
   input  logic        bus_we,
   input  logic [31:0] bus_addr,
   input  logic  [3:0] bus_be,
@@ -271,10 +274,25 @@ module m2_cpu_bridge #(
   logic [31:0] r_addr, r_wdata;
   logic  [3:0] r_be;
   logic [31:0] r_rdata;
+  // R724: THE INSTRUCTION LINE BUFFER (CPU side). A race's i960 spent 27.8% of
+  // its time on instruction fetches and only a sixth of that at the SDRAM
+  // (R722): i960_icache fills a 16-byte line as four requests, each a full
+  // four-phase round trip. An instruction fetch that misses `lb` now asks the
+  // memory side for the whole line in ONE transaction; the line's other words
+  // are answered from `lb` on the CPU side with no crossing at all. Code runs
+  // from ROM (i960_icache's premise too), but a CPU write into the buffered
+  // line still drops it.
+  logic         r_line;        // the request in flight wants the whole line
+  logic         lb_v, lb_gap;  // lb_gap: the cycle after a buffer answer, when bus_addr has not moved yet
+  logic [27:0]  lb_tag;        // bus_addr[31:4] of the buffered line
+  logic [127:0] lb;
+  logic         l_ok;          // memory side: l_data holds this request's line
+  logic [127:0] l_data;
 
   always_ff @(posedge clk_cpu or negedge rst_n_cpu) begin
     if (!rst_n_cpu) begin
       req_cpu <= 1'b0; bus_ack <= 1'b0; cph <= C_IDLE; ack_cpu <= 1'b0;
+      r_line <= 1'b0; lb_v <= 1'b0; lb_gap <= 1'b0; lb_tag <= '0;   // R724
       ack_cpu_s <= 2'b00;                                   // R576
       posted <= 1'b0;
       r_we <= 1'b0; r_addr <= 32'd0; r_wdata <= 32'd0; r_be <= 4'd0;
@@ -299,18 +317,47 @@ module m2_cpu_bridge #(
       //
       // On hardware this read word 0 three times: SAT was right by luck, PRCB
       // came back 0 and the boot took a zero IP.
+      lb_gap <= 1'b0;
       case (cph)
-        C_IDLE: if (bus_req && !ack_cpu) begin
+        C_IDLE: if (lb_gap) begin
+          // R724: the cycle after a buffer answer. The requester moves its
+          // address on the acknowledge, a cycle after it, so this cycle still
+          // shows the word just answered; serving it would answer it twice.
+        end else if (bus_req && !ack_cpu && !bus_we && bus_ifetch && lb_v && (bus_addr[31:4] == lb_tag)) begin
+          // R724: an instruction word from the buffered line -- no crossing
+          case (bus_addr[3:2])
+            2'd0: bus_rdata <= lb[31:0];
+            2'd1: bus_rdata <= lb[63:32];
+            2'd2: bus_rdata <= lb[95:64];
+            default: bus_rdata <= lb[127:96];
+          endcase
+          bus_ack <= 1'b1;
+          lb_gap  <= 1'b1;
+        end else if (bus_req && !ack_cpu) begin
           r_we    <= bus_we;
           r_addr  <= bus_addr;
           r_wdata <= bus_wdata;
           r_be    <= bus_be;
+          r_line  <= bus_ifetch && !bus_we;                              // R724
+          if (bus_we && (bus_addr[31:4] == lb_tag)) lb_v <= 1'b0;        // R724: a write into the line
           req_cpu <= 1'b1;
           cph     <= bus_we ? C_POST : C_WAIT;
         end
         C_WAIT: if (ack_cpu) begin
           req_cpu   <= 1'b0;
-          bus_rdata <= r_rdata;
+          // R724: a line came back -- keep it, and answer the word asked for
+          if (r_line && l_ok) begin
+            lb     <= l_data;
+            lb_tag <= r_addr[31:4];
+            lb_v   <= 1'b1;
+            case (r_addr[3:2])
+              2'd0: bus_rdata <= l_data[31:0];
+              2'd1: bus_rdata <= l_data[63:32];
+              2'd2: bus_rdata <= l_data[95:64];
+              default: bus_rdata <= l_data[127:96];
+            endcase
+          end else
+            bus_rdata <= r_rdata;
           bus_ack   <= 1'b1;       // one cycle, which is what the i960 expects
           cph       <= C_CLR;
         end
@@ -437,6 +484,14 @@ module m2_cpu_bridge #(
   // the line is simply never written back into the cache, so every read
   // misses and refetches. Slower, coherent, and one variable against the
   // livelocked build.
+  // R724: THE ADDRESS A LINE READ IS AT. A line is two data-cache lines (8 B
+  // each); bit 3 picks the half being read (lhalf), and only bit 3 differs from
+  // r_addr. The region decode below still keys on r_addr, so lmode (which needs
+  // the target) and ra (which needs lmode) form no loop; only sd_word and the
+  // cache index take ra.
+  logic         lhalf;
+  wire          lmode = r_line && !r_we && DCACHE_EN && (tgt == T_SDRAM);
+  wire  [24:1]  ra    = {r_addr[24:4], lmode ? lhalf : r_addr[3], r_addr[2:1]};   // the bits sd_word and dc_idx read
   logic nocache;
   logic pal_mirror, xlat_mirror;   // R222: an SDRAM write that also lands on chip
   // R264: this store owns ONE 16-bit word, not a dword's two. The texture
@@ -459,21 +514,21 @@ module m2_cpu_bridge #(
     tex_region  = 1'b0;
     if (r_addr < 32'h0020_0000) begin                       // program ROM
       tgt = T_SDRAM; is_rom = 1'b1;
-      sd_word = base_prog + AW'(r_addr[20:1]);
+      sd_word = base_prog + AW'(ra[20:1]);
     end else if (!BOARD_2A && r_addr >= 32'h0022_0000 && r_addr < 32'h0024_0000) begin
       // model2o's ROM mirror of the program ROM's second 128 KB.
       tgt = T_SDRAM; is_rom = 1'b1;
-      sd_word = base_prog + AW'(20'h10000) + AW'(r_addr[16:1]);
+      sd_word = base_prog + AW'(20'h10000) + AW'(ra[16:1]);
     end else if (r_addr >= 32'h0020_0000 && r_addr < (BOARD_2A ? 32'h0024_0000
                                                               : 32'h0022_0000)) begin
       tgt = T_SDRAM;
-      sd_word = base_board + AW'(r_addr[17:1]);
+      sd_word = base_board + AW'(ra[17:1]);
     end else if (r_addr >= 32'h0050_0000 && r_addr < 32'h0060_0000) begin
       tgt = T_SDRAM;
-      sd_word = base_work + AW'(r_addr[19:1]);
+      sd_word = base_work + AW'(ra[19:1]);
     end else if (r_addr >= 32'h0108_0000 && r_addr < 32'h0110_0000) begin
       tgt = T_SDRAM;                                        // char RAM, 512 KB
-      sd_word = base_char + AW'(r_addr[18:1]);
+      sd_word = base_char + AW'(ra[18:1]);
     // BISECTED: writes only. This region does TWO things when it is enabled --
     // writes start landing where they used to vanish, and reads start
     // returning real data where they used to return the T_IO default of 0.
@@ -486,18 +541,18 @@ module m2_cpu_bridge #(
       // 128 KB, and the mirror is free: [16:1] simply ignores the repeat.
       tgt = T_SDRAM; buf_region = 1'b1;   // R266
       nocache = BUFFER_NOCACHE;
-      sd_word = base_buffer + AW'(r_addr[16:1]);
+      sd_word = base_buffer + AW'(ra[16:1]);
     end else if (r_addr >= 32'h0200_0000 && r_addr < 32'h0400_0000) begin
       tgt = T_SDRAM; is_rom = 1'b1;                         // main_data
-      sd_word = base_data + AW'(r_addr[24:1]);
+      sd_word = base_data + AW'(ra[24:1]);
     end else if (r_addr >= 32'h0600_0000 && r_addr < 32'h0700_0000) begin
       tgt = T_SDRAM; is_rom = 1'b1;                         // the +0x1000000 alias
-      sd_word = base_data + AW'(24'h800000) + AW'(r_addr[23:1]);
+      sd_word = base_data + AW'(24'h800000) + AW'(ra[23:1]);
     end else if (r_addr >= 32'h0100_0000 && r_addr < 32'h0102_0000) begin
       tgt = T_TRAM;                                         // tile RAM
     end else if (r_addr >= 32'h0180_2000 && r_addr < 32'h0180_2800) begin
       tgt = T_SDRAM; pal_mirror = 1'b1;                     // R222: 3D palette, mirrored
-      sd_word = base_pal3d + AW'(r_addr[10:1]);
+      sd_word = base_pal3d + AW'(ra[10:1]);
     end else if (r_addr >= 32'h0180_0000 && r_addr < 32'h0180_4000) begin
       tgt = T_PAL;
     end else if (r_addr >= 32'h1200_0000 && r_addr < 32'h1240_0000) begin
@@ -516,10 +571,10 @@ module m2_cpu_bridge #(
       // arriving at the luma base and none at either sheet -- so every texture
       // this core has ever been given went into the wrong memory.
       tgt = T_SDRAM; half_only = 1'b1; tex_region = 1'b1;
-      sd_word = base_texs0 + AW'(r_addr[20:2]);
+      sd_word = base_texs0 + AW'(ra[20:2]);
     end else if (r_addr >= 32'h1240_0000 && r_addr < 32'h1280_0000) begin
       tgt = T_SDRAM; half_only = 1'b1; tex_region = 1'b1;
-      sd_word = base_texs1 + AW'(r_addr[20:2]);   // R278: the mirror is bit 21
+      sd_word = base_texs1 + AW'(ra[20:2]);   // R278: the mirror is bit 21
     end else if (r_addr >= 32'h1280_0000 && r_addr < 32'h1282_0000) begin
       // R264: the polygon luma table, 32 K BYTES -- the reference maps it
       // umask32 0x000000ff, so one byte per dword. ONE BYTE PER 16-BIT WORD
@@ -527,10 +582,10 @@ module m2_cpu_bridge #(
       // between this bridge and the silicon, so a packed table would need the
       // one mechanism this design knows it cannot trust.
       tgt = T_SDRAM; half_only = 1'b1;
-      sd_word = base_luma + AW'(r_addr[16:2]);
+      sd_word = base_luma + AW'(ra[16:2]);
     end else if (r_addr >= 32'h0181_0000 && r_addr < 32'h0181_c000) begin
       tgt = T_SDRAM; xlat_mirror = 1'b1;                    // R222: colorxlat, mirrored
-      sd_word = base_xlat3d + AW'(r_addr[15:1]);
+      sd_word = base_xlat3d + AW'(ra[15:1]);
     end else if (r_addr >= 32'h0080_0000 && r_addr < 32'h0100_0000) begin
       tgt = T_IO;                                           // geo, copro, video, irq
     end else if (r_addr >= 32'h0102_0000 && r_addr < 32'h0108_0000) begin
@@ -605,7 +660,8 @@ module m2_cpu_bridge #(
   // holds 0x00000860 -- the low half right, the high half not.
   // S_DCK joins them, so the encoding needs a fourth bit.
   typedef enum logic [3:0] { S_IDLE, S_LO, S_LO_W, S_HI, S_HI_W, S_RDB, S_IOW, S_DONE,
-                             S_DCK, S_RMW, S_RMW_W } st_e;
+                             S_DCK, S_RMW, S_RMW_W,
+                             S_DCN } st_e;   // R724: a line read's second half, addressed
 
   // READ-MODIFY-WRITE FOR SUB-WORD WRITES, because byte enables do not reach
   // the memory on this board.
@@ -690,7 +746,7 @@ module m2_cpu_bridge #(
   logic [63:0]        dc_din;
   logic [DC_TAGW:0]   dc_tin;
 
-  wire [DC_IDXW-1:0] dc_idx  = r_addr[DC_IDXW+2:3];
+  wire [DC_IDXW-1:0] dc_idx  = ra[DC_IDXW+2:3];   // R724: ra -- a line read's second half
   wire [DC_TAGW-1:0] dc_tagv = r_addr[31:DC_IDXW+3];
   logic [DC_TAGW-1:0] dc_tag_r;
   logic               dc_sweeping;
@@ -739,6 +795,7 @@ module m2_cpu_bridge #(
       // Nothing may be served from valid bits that were never initialised.
       dc_sweeping <= 1'b1; dc_sweep <= '0; dc_inval <= 1'b0; dc_tag_r <= '0;
       rmw_dat <= 32'd0; rmw_done <= 1'b0;
+      lhalf <= 1'b0; l_ok <= 1'b0; l_data <= '0;   // R724
       dbg_dc_hits <= 32'd0; dbg_dc_miss <= 32'd0;
       dbg_last_addr <= 32'd0; dbg_last_dout <= 32'd0;
       dbg_probe6 <= 32'hEEEE_EEEE; dbg_probe2 <= 32'hEEEE_EEEE;
@@ -771,6 +828,7 @@ module m2_cpu_bridge #(
           if (r_we) dbg_cpu_writes <= dbg_cpu_writes + 32'd1;
           else      dbg_cpu_reads  <= dbg_cpu_reads  + 32'd1;
           half <= 1'b0;
+          l_ok <= 1'b0;   // R724
           case (tgt)
             T_SDRAM: begin
               if (r_we && is_rom) begin
@@ -1012,8 +1070,15 @@ module m2_cpu_bridge #(
         // registered -- see the note on the storage above for why that trade is
         // not close.
         S_DCK: begin
-          if (dc_hit) begin
+          if (dc_hit && lmode && !lhalf) begin
+            // R724: the line's first half; now the second
+            l_data[63:0] <= dc_q;
+            lhalf        <= 1'b1;
+            dbg_dc_hits  <= dbg_dc_hits + 32'd1;
+            st           <= S_DCN;
+          end else if (dc_hit) begin
             r_rdata <= r_addr[2] ? dc_q[63:32] : dc_q[31:0];
+            if (lmode) begin l_data[127:64] <= dc_q; l_ok <= 1'b1; end   // R724
             ack_mem <= 1'b1;
             dbg_dc_hits <= dbg_dc_hits + 32'd1;
             st      <= S_DONE;
@@ -1059,7 +1124,7 @@ module m2_cpu_bridge #(
           // THE BURST STARTS AT THE REQUESTED WORD, WHICH IS NOT ALWAYS THE
           // DWORD'S LOW HALF.
           //
-          // sd_addr is sd_word = r_addr[..:1], so sd_dout[15:0] holds the bytes
+          // sd_addr is sd_word = ra[..:1], so sd_dout[15:0] holds the bytes
           // at r_addr itself. For an aligned access those are the dword's bytes
           // 0 and 1 and this is right. When r_addr[1] is set they are bytes 2
           // and 3, and the i960 looks for them in the HIGH half -- the LSU's
@@ -1084,6 +1149,10 @@ module m2_cpu_bridge #(
           r_rdata       <= DCACHE_EN ? (r_addr[2] ? sd_dout[63:32] : sd_dout[31:0])
                                      : (r_addr[1] ? {sd_dout[15:0], 16'd0}
                                                   : sd_dout[31:0]);
+          if (lmode) begin   // R724: this half of the line
+            if (lhalf) l_data[127:64] <= sd_dout[63:0];
+            else       l_data[63:0]   <= sd_dout[63:0];
+          end
           dbg_last_addr <= {7'd0, sd_addr};
           dbg_last_dout <= sd_dout[31:0];
           // EEEEEEEE means the address was never read at all, which is a
@@ -1103,8 +1172,22 @@ module m2_cpu_bridge #(
         // length is a clock ratio rather than a guarantee, and this is the
         // exact hazard that put a wrong boot vector on the board.
         S_HI_W: if (!sd_ack) begin
-          ack_mem <= 1'b1;
-          st      <= S_DONE;
+          if (lmode && !lhalf) begin
+            lhalf <= 1'b1;          // R724: the line's second half
+            st    <= S_DCN;
+          end else begin
+            if (lmode) l_ok <= 1'b1;   // R724: both halves are in
+            ack_mem <= 1'b1;
+            st      <= S_DONE;
+          end
+        end
+
+        // R724: the second half's address (lhalf now 1) is on the cache's port
+        // this cycle, so its tag and data are registered for S_DCK next cycle --
+        // exactly what S_IDLE does for a first lookup.
+        S_DCN: begin
+          dc_tag_r <= dc_tagv;
+          st       <= S_DCK;
         end
 
         // Hold ack until the requester has seen it and dropped req. Without
@@ -1113,6 +1196,7 @@ module m2_cpu_bridge #(
         S_DONE: if (!req_mem) begin
           ack_mem  <= 1'b0;
           rmw_done <= 1'b0;
+          lhalf    <= 1'b0;   // R724
           st      <= S_IDLE;
         end
 

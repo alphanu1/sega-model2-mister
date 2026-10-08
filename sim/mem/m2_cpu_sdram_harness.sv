@@ -57,6 +57,7 @@ module m2_cpu_sdram_harness #(
 
   // The CPU side, driven exactly as i960_top drives it.
   input  logic        bus_req,
+  input  logic        bus_ifetch,   // R724: 0 unless the bench drives a line read
   input  logic        bus_we,
   input  logic [31:0] bus_addr,
   input  logic  [3:0] bus_be,
@@ -127,7 +128,7 @@ module m2_cpu_sdram_harness #(
     .dbg_dc_hits(), .dbg_dc_miss(),
     .char_wr(), .char_wr_addr(),
     .clk_cpu(clk_cpu), .rst_n_cpu(br_rst),
-    .bus_req(bus_req), .bus_we(bus_we), .bus_addr(bus_addr), .bus_be(bus_be),
+    .bus_req(bus_req), .bus_ifetch(bus_ifetch), .bus_we(bus_we), .bus_addr(bus_addr), .bus_be(bus_be),
     .bus_wdata(bus_wdata), .bus_rdata(bus_rdata), .bus_ack(bus_ack),
 
     .clk_mem(clk_mem), .rst_n_mem(br_rst),

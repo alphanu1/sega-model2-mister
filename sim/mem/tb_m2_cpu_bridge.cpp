@@ -131,9 +131,11 @@ static void step() {
   if ((tk % MEM_DIV) == 0) { dut->clk_mem = 1; dut->eval(); }
 }
 
+// R724: set while the access is an instruction fetch (i960_top's G_IC grant)
+static bool g_ifetch = false;
 // One CPU access, driven the way i960_top drives it: raise req, hold until ack.
 static bool access(bool we, uint32_t addr, uint32_t wdata, uint8_t be, uint32_t *out) {
-  dut->bus_req = 1; dut->bus_we = we; dut->bus_addr = addr;
+  dut->bus_req = 1; dut->bus_we = we; dut->bus_addr = addr; dut->bus_ifetch = g_ifetch && !we;
   dut->bus_wdata = wdata; dut->bus_be = be;
   for (int g = 0; g < 4000; ++g) {
     step();
@@ -623,6 +625,38 @@ int main(int argc, char **argv) {
 
   std::printf("  probe6=%08x probe2=%08x (EEEEEEEE = never read)\n",
               dut->dbg_probe6, dut->dbg_probe2);
+  // ---- R724: INSTRUCTION FETCHES THROUGH THE LINE BUFFER ----
+  // Every word of 64 ROM lines, fetched as instructions in a scrambled order
+  // within each line (word 2, 0, 3, 1), must equal a plain data read of the
+  // same address; the data read between the fetches also moves the bridge on.
+  {
+    static const int ord[4] = {2, 0, 3, 1};
+    for (uint32_t ln = 0; ln < 64; ++ln) {
+      const uint32_t base = 0x00001000u + ln * 16u;
+      for (int k = 0; k < 4; ++k) {
+        const uint32_t a = base + 4u * ord[k];
+        uint32_t want = 0, got = 0;
+        g_ifetch = false; access(false, a, 0, 0xf, &want);
+        g_ifetch = true;  bool ok = access(false, a, 0, 0xf, &got); g_ifetch = false;
+        ++checks; if (!ok) { ++fails; std::printf("  R724 fetch %08x never acknowledged\n", a); continue; }
+        char nm[64]; std::snprintf(nm, sizeof nm, "R724 fetch %08x", a);
+        expect(nm, got, want);
+      }
+    }
+    // A CPU write into the buffered line drops it: fetch a work-RAM line,
+    // store into it, fetch it again.
+    uint32_t v = 0;
+    access(true, 0x00500100u, 0x11111111u, 0xf, nullptr);
+    access(true, 0x00500104u, 0x22222222u, 0xf, nullptr);
+    g_ifetch = true;  access(false, 0x00500104u, 0, 0xf, &v); g_ifetch = false;
+    expect("R724 fetch work RAM before the store", v, 0x22222222u);
+    access(true, 0x00500104u, 0x33333333u, 0xf, nullptr);
+    g_ifetch = true;  access(false, 0x00500104u, 0, 0xf, &v); g_ifetch = false;
+    expect("R724 fetch work RAM after the store", v, 0x33333333u);
+    g_ifetch = true;  access(false, 0x00500100u, 0, 0xf, &v); g_ifetch = false;
+    expect("R724 fetch the store's neighbour", v, 0x11111111u);
+  }
+
   std::printf("  %llu checks, %llu mismatches, %llu unmapped seen\n",
               (unsigned long long)checks, (unsigned long long)fails,
               (unsigned long long)dut->dbg_unmapped);

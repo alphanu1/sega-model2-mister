@@ -40,6 +40,7 @@ module i960_top (
 
   // One 32-bit bus port, arbitrated between instruction fetch and data.
   output logic        bus_req,
+  output logic        bus_ifetch,   // R724: the granted request is an instruction fetch
   output logic        bus_we,
   output logic [31:0] bus_addr,
   output logic [3:0]  bus_be,
@@ -866,6 +867,7 @@ module i960_top (
   // A locked grant wins; otherwise this cycle's pick, so a transaction can
   // still start in the cycle its requester raises the request.
   assign gsel = (grant_q != G_NONE) ? grant_q : sel_next;
+  assign bus_ifetch = (gsel == G_IC);   // R724: the bridge serves these a line at a time
 
   always_comb begin
     bus_req   = 1'b0;

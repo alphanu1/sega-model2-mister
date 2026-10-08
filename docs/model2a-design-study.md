@@ -27159,3 +27159,41 @@ should enter from the right and scroll right-to-left across the screen; it
 sits still in the middle. A 2D layer whose scroll is not applied (R703's
 suspect: segaic24's window / split-scroll registers). Both queued behind the
 CPU work (R722).
+
+**R724 -- INSTRUCTION LINES IN ONE TRANSACTION.** R722: in a race the i960
+waits on instruction fetches 27.8% of its time, a sixth of that at the SDRAM;
+i960_icache fills a 16-byte line as four four-phase round trips. Now:
+  * i960_top exports bus_ifetch (gsel == G_IC).
+  * m2_cpu_bridge, CPU side: a one-line buffer `lb` (16 B, tag
+    bus_addr[31:4]). An instruction read that hits it is answered from it the
+    next cycle with no crossing, then one quiet cycle (lb_gap: the requester
+    moves its address on the ack, a cycle later). A miss goes to the memory
+    side as ONE request flagged r_line; its answer fills `lb`. A CPU write into
+    the buffered line drops it.
+  * Memory side: a line read (lmode = r_line, a read, DCACHE_EN, T_SDRAM) is
+    the two data-cache lines that make it up -- S_DCK (hit, or S_RDB's burst,
+    which fills the cache as before) for the first, a new state S_DCN steps
+    bit 3 (lhalf) and re-addresses the cache, the same for the second -- and
+    acknowledges once with l_data (128 b) and l_ok. Only sd_word and the cache
+    index use the stepped address `ra`; the region decode keys on r_addr, so
+    lmode (which needs the target) and ra form no loop. Other targets, and
+    DCACHE_EN 0, are untouched (l_ok stays 0 and the word path answers).
+tb_m2_cpu_real (the real i960 on the real program ROM through the bridge and
+m2_sdram), 100,000 instructions:
+                         cycles      CPI    icache waiting   trace hash
+    before             1,398,959   13.99      182,660        a95ee045a6c3424b
+    with R724          1,310,260   13.10      103,708        a95ee045a6c3424b
+Identical retired-IP hash; instruction-fetch waiting -43%; -6.3% overall on
+boot code, where data waits dominate. In a race fetches were 42% of the
+CPU's busy time, so -43% of them is ~-18% of it -- most of the 20-25% R720
+says a race frame needs.
+tb_m2_cpu_bridge gains the line path: 64 ROM lines fetched as instructions in
+a scrambled word order against data reads of the same words, and a work-RAM
+line fetched, stored into and fetched again: 651 checks, 0 mismatches; with
+the write-invalidate forced off the store is missed, with lhalf forced to 0
+the second half is wrong -- both caught. test_m2_cpu_sdram, test_i960_top
+pass; lint_top and Quartus clean.
+Found on the way: since R712 the real-CPU harness had R697's buf_wr_stall
+wired onto m2_cpu_sdram_harness, which has no such port (the bridge inside it
+is wired already), so tb_m2_cpu_real did not build; it is not in `make test`.
+Fixed.

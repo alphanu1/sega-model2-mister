@@ -2166,11 +2166,12 @@ wire [31:0] cpu_dbg_tramwr, cpu_dbg_palwr;
 wire        cpu_trap, cpu_halted;
 wire [7:0]  cpu_trap_op;
 
+wire        cpu_ifetch;      // R724: the i960's request is an instruction fetch
 wire  [4:0] cpu_dbg_ts;      // R721: the i960's sequencer state, for telemetry
 wire [16:0] cpu_br_sample;   // R721: the bridge's transaction in flight, for telemetry
 i960_top u_i960 (
 	.clk(clk_i960), .rst_n(cpu_rst_n),
-	.bus_req(cpu_req), .bus_we(cpu_we), .bus_addr(cpu_addr), .bus_be(cpu_be),
+	.bus_req(cpu_req), .bus_ifetch(cpu_ifetch), .bus_we(cpu_we), .bus_addr(cpu_addr), .bus_be(cpu_be),
 	.bus_wdata(cpu_wdata), .bus_rdata(cpu_rdata), .bus_ack(cpu_ack),
 	.irq(cpu_irq),
 	.dbg_pc(cpu_dbg_pc), .dbg_sat(cpu_dbg_sat), .dbg_prcb(cpu_dbg_prcb),
@@ -2268,7 +2269,7 @@ m2_cpu_bridge #(.BUFFERRAM(1'b1), .BUFFERRAM_WRONLY(1'b0)
 	.dbg_dc_hits(dc_hits), .dbg_dc_miss(dc_miss),
 	.char_wr(cpu_char_wr), .char_wr_addr(cpu_char_wr_addr),
 	.clk_cpu(clk_i960), .rst_n_cpu(cpu_rst_n),
-	.bus_req(cpu_req), .bus_we(cpu_we), .bus_addr(cpu_addr), .bus_be(cpu_be),
+	.bus_req(cpu_req), .bus_ifetch(cpu_ifetch), .bus_we(cpu_we), .bus_addr(cpu_addr), .bus_be(cpu_be),
 	.bus_wdata(cpu_wdata), .bus_rdata(cpu_rdata), .bus_ack(cpu_ack),
 
 	.clk_mem(clk_sys), .rst_n_mem(cpu_rst_n),

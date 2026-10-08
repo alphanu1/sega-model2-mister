@@ -55,6 +55,7 @@ module m2_cpu_real_harness #(
   output logic        trap,
   output logic        halted,
   output logic        bus_req,
+  output logic        bus_ifetch,   // R724
   output logic        bus_we,
   output logic        bus_ack,
   output logic [31:0] bus_addr,
@@ -120,7 +121,7 @@ module m2_cpu_real_harness #(
 
   i960_top u_cpu (
     .clk(clk_cpu), .rst_n(cpu_rst_n),
-    .bus_req(bus_req), .bus_we(bus_we), .bus_addr(bus_addr), .bus_be(bus_be),
+    .bus_req(bus_req), .bus_ifetch(bus_ifetch), .bus_we(bus_we), .bus_addr(bus_addr), .bus_be(bus_be),
     .bus_wdata(bus_wdata), .bus_rdata(bus_rdata), .bus_ack(bus_ack),
     .irq(irq),
     .dbg_pc(dbg_pc), .dbg_ip(dbg_ip), .dbg_acc_cnt(dbg_acc_cnt),
@@ -138,13 +139,13 @@ module m2_cpu_real_harness #(
   m2_cpu_sdram_harness #(.COL_BITS(COL_BITS), .DCACHE_EN_TOP(DCACHE_EN_TOP),
                          .BR_OWN_RST(1'b1), .XMODE(XMODE), .CPU_ASYNC(CPU_ASYNC)) u_mem (
     .clk_cpu(clk_cpu), .clk_mem(clk_mem), .clk_sd(clk_sd), .rst_n(rst_n), .br_rst_n(cpu_rst_n),
-    .bus_req(bus_req), .bus_we(bus_we), .bus_addr(bus_addr), .bus_be(bus_be),
+    .bus_req(bus_req), .bus_ifetch(bus_ifetch), .bus_we(bus_we), .bus_addr(bus_addr), .bus_be(bus_be),
     .bus_wdata(bus_wdata), .bus_rdata(bus_rdata), .bus_ack(bus_ack),
     .wr_req(wr_req), .wr_addr(wr_addr), .wr_din(wr_din), .wr_ack(wr_ack),
     .p2_req(p2_req), .p2_addr(p2_addr), .p2_ack(p2_ack), .p2_dout(),
     .p3_req(p3_req), .p3_addr(p3_addr), .p3_ack(p3_ack), .p3_dout(),
     .io_sel(io_sel), .io_we(io_we), .io_addr(io_addr), .io_wdata(io_wdata),
-    .io_be(io_be), .io_rdata(io_rdata), .io_stall(io_stall), .buf_wr_stall(1'b0),   // R697: no push queue here
+    .io_be(io_be), .io_rdata(io_rdata), .io_stall(io_stall),
     .mem_ready(mem_ready),
     .dbg_last_addr(), .dbg_last_dout(), .dbg_reads()
   );
