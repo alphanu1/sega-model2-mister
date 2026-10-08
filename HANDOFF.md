@@ -1,6 +1,6 @@
 # Handoff
 
-## 2026-10-08 (night): BRANCH readahead -- 75/37.5, the instruction line buffer, two new sets; building s755-s757
+## 2026-10-08 (night): BRANCH readahead -- 75/37.5, the instruction line buffer, two new sets; s759 built
 
 On Ben's board: s741 (75/37.5 + R709 read-ahead + R711 + R697/R698/R712 +
 R714-R718), RBF md5 483cbd27c84867935e49fb1e1afc88ab. Ben: ~40 fps by eye;
@@ -31,9 +31,14 @@ In the branch since s741, not yet on the board:
   plane fit; determinant, numerators and saturate now from registers.
   Pixel-identical on four frames, +0.2-0.4% draw cycles.
 
-Building now: s755-s757 (80747ef). Remaining seed-dependent paths, not fixed:
-clip cs -> engine st through the pool's combinational grant (-0.43 on s754),
-clip qsy -> quad store a_band (-0.38 on s752).
+BUILT: s759 (d08ba0a = R724-R727) closes every core clock: clk_sys +0.213,
+clk_mem +0.738, clk_i960 +2.227, holds >= +0.194, HDMI -0.185 (s741: -0.678).
+RBF md5 73e11496cba339a002205ba7a178ed05 in build/seeds/s759. Not yet loaded.
+s755-s757 and s758/s760 did not close (R727). Seed-dependent paths still in
+the design at 75: span_tex's mask query sh_p -> mq_f (-0.15..-0.25, the R631
+path; fixing it means R490's two-slot overlap), clip cs -> engine st through
+the pool's combinational grant (-0.43 on s754), clip qsy -> quad store a_band
+(-0.06..-0.38).
 
 When one closes, and only when Ben says: load it; a race with
 tools/m2-fps.py and the lap timer; the controls (R716 moved the EEPROM);

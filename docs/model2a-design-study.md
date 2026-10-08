@@ -27299,3 +27299,8 @@ index in the top half plus one; 0 when clear) -- the same number without the
 including every power of two and 2^n-1; the four frames identical in pixels,
 fetches and cycles. span_tex's mask query is left: changing it means the
 two-slot overlap (R490), and a wrong answer there skips painting (R631).
+s758-s760 (d08ba0a, 75/37.5): s759 CLOSES every core clock -- clk_sys
++0.213, clk_mem +0.738, clk_i960 +2.227, holds >= +0.194; HDMI -0.185
+(s741, on the board, is -0.678). 41,279 ALM. RBF md5
+73e11496cba339a002205ba7a178ed05, 4,635,532 bytes. s758 clk_sys -0.629 /
+HDMI -0.914, s760 clk_sys -0.679 / HDMI -0.315 -- not examined.
