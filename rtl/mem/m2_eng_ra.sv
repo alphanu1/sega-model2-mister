@@ -50,8 +50,13 @@
 // the acknowledge taken on its rising edge, the request dropped for a cycle
 // after; `idx` is stable while `req` is up. The port's: a level request held
 // until its acknowledge rises, the acknowledge held until the request falls
-// (R162), `p_dout` valid with it. A hit is acknowledged two cycles after the
-// request, as m2_pair_cache's is.
+// (R162), `p_dout` valid with it.
+//
+// R714: THE REQUEST IS REGISTERED ON THE WAY IN. At 80 MHz the path from the
+// engine's state register through its address select, Model2.sv's base add
+// and the window subtraction into the stream registers missed by 0.71 ns
+// (s728); everything here now runs from req_q / idx_q / sen_q / sid_q, a cycle
+// behind the engine. A hit is acknowledged three cycles after the request.
 `timescale 1ns/1ps
 module m2_eng_ra #(
   parameter int unsigned AW    = 24,
@@ -93,22 +98,31 @@ module m2_eng_ra #(
   (* ramstyle = "MLAB, no_rw_check" *) logic [63:0] pairs [8];
 
   // ------------------------------------------------------------ the request
+  // R714: registered as it arrives; the engine holds idx, stream_en and sid
+  // steady while req is up, so the copies are that request's.
+  logic          req_q, sen_q, sid_q;
+  logic [AW-1:0] idx_q;
+  always_ff @(posedge clk or negedge rst_n)
+    if (!rst_n) req_q <= 1'b0;
+    else        req_q <= req;
+  always_ff @(posedge clk) begin idx_q <= idx; sen_q <= stream_en; sid_q <= sid; end
+
   logic req_d, pend;
-  wire  new_req = req && !req_d;
+  wire  new_req = req_q && !req_d;
   wire  want    = new_req || pend;
-  wire  strm    = stream_en && active && !bypass;
+  wire  strm    = sen_q && active && !bypass;
 
   // The window test runs on `idx` directly, as m2_pair_cache's match does, so
   // a hit costs what a hit there costs.
-  wire [AW-1:0] off    = idx - s_head[sid];
-  wire          in_win = s_act[sid] && (off < AW'({s_fill[sid], 1'b0}));
+  wire [AW-1:0] off    = idx_q - s_head[sid_q];
+  wire          in_win = s_act[sid_q] && (off < AW'({s_fill[sid_q], 1'b0}));
   wire [1:0]    hj     = off[2:1];                  // logical slot
-  wire [1:0]    hph    = s_rp[sid] + hj;            // physical slot
+  wire [1:0]    hph    = s_rp[sid_q] + hj;          // physical slot
   wire          flush  = !active || inval || bypass;
-  wire          hit    = want && strm && !flush && in_win && s_arr[sid][hph];
+  wire          hit    = want && strm && !flush && in_win && s_arr[sid_q][hph];
   // A stream just restarted here holds nothing until its first fetch issues;
   // that is not another miss, or it would restart every cycle and never issue.
-  wire          fresh  = s_act[sid] && (s_fill[sid] == 3'd0) && (s_head[sid] == {idx[AW-1:1], 1'b0});
+  wire          fresh  = s_act[sid_q] && (s_fill[sid_q] == 3'd0) && (s_head[sid_q] == {idx_q[AW-1:1], 1'b0});
   wire          miss   = want && strm && !flush && !in_win && !fresh;
   // the physical slots a hit drops: the hj logical slots before it, rotated
   // to where logical slot 0 sits
@@ -120,7 +134,7 @@ module m2_eng_ra #(
       2'd2: drop_l = 4'b0011;
       default: drop_l = 4'b0111;
     endcase
-    case (s_rp[sid])
+    case (s_rp[sid_q])
       2'd0: drop = drop_l;
       2'd1: drop = {drop_l[2:0], drop_l[3]};
       2'd2: drop = {drop_l[1:0], drop_l[3:2]};
@@ -152,12 +166,12 @@ module m2_eng_ra #(
   wire        can_issue = (pst == P_IDLE) && !miss && !flush;
   wire        cand0     = s_act[0] && (s_fill[0] < DEPTH3);
   wire        cand1     = s_act[1] && (s_fill[1] < DEPTH3);
-  wire        pref      = (want && strm) ? sid : 1'b0;
+  wire        pref      = (want && strm) ? sid_q : 1'b0;
   wire        go_strm   = can_issue && !go_pass && (cand0 || cand1);
   wire        g_s       = (pref ? cand1 : !cand0) ? 1'b1 : 1'b0;   // pref if it can, else the other
   wire [AW-1:0] g_idx   = s_head[g_s] + AW'({s_fill[g_s], 1'b0});
   wire [1:0]  g_ph      = s_rp[g_s] + s_fill[g_s][1:0];
-  wire        g_dem     = want && strm && (g_s == sid) && (g_idx == {idx[AW-1:1], 1'b0});
+  wire        g_dem     = want && strm && (g_s == sid_q) && (g_idx == {idx_q[AW-1:1], 1'b0});
 
   always_ff @(posedge clk) if (pst == P_REQ && p_rise && !f_pass && f_keep && !flush) pairs[{f_s, f_ph}] <= p_dout;
 
@@ -172,8 +186,8 @@ module m2_eng_ra #(
       arr_n[s] = s_arr[s];
       if (go_strm && (g_s == s[0])) arr_n[s][g_ph] = 1'b0;   // allocated: nothing has arrived
       if (arrive && (f_s == s[0])) arr_n[s][f_ph] = 1'b1;
-      if (hit  && (sid == s[0]))   arr_n[s] = arr_n[s] & ~drop;
-      if (miss && (sid == s[0]))   arr_n[s] = 4'b0000;
+      if (hit  && (sid_q == s[0])) arr_n[s] = arr_n[s] & ~drop;
+      if (miss && (sid_q == s[0])) arr_n[s] = 4'b0000;
       if (flush)                   arr_n[s] = 4'b0000;
     end
   end
@@ -183,7 +197,7 @@ module m2_eng_ra #(
   logic [63:0] rd_q;
   // a hit's pair, read on the hit cycle; never the slot being written (the
   // one in flight is never the one hit)
-  always_ff @(posedge clk) if (hit) rd_q <= pairs[{sid, hph}];
+  always_ff @(posedge clk) if (hit) rd_q <= pairs[{sid_q, hph}];
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -195,7 +209,7 @@ module m2_eng_ra #(
       f_pass <= 1'b0; f_s <= 1'b0; f_ph <= '0; f_keep <= 1'b0; f_dem <= 1'b0;
       rd_half <= 1'b0; hit_q <= 1'b0;
     end else begin
-      req_d   <= req;
+      req_d   <= req_q;
       p_ack_d <= p_ack;
       ack     <= 1'b0;
       hit_q   <= 1'b0;
@@ -212,7 +226,7 @@ module m2_eng_ra #(
       case (pst)
         P_IDLE: begin
           if (go_pass) begin
-            p_idx <= idx; p_req <= 1'b1; f_pass <= 1'b1; f_keep <= 1'b0; f_dem <= 1'b0; pst <= P_REQ;
+            p_idx <= idx_q; p_req <= 1'b1; f_pass <= 1'b1; f_keep <= 1'b0; f_dem <= 1'b0; pst <= P_REQ;
           end else if (go_strm) begin
             p_idx <= g_idx; p_req <= 1'b1; f_pass <= 1'b0; f_s <= g_s; f_ph <= g_ph; f_keep <= 1'b1;
             f_dem <= g_dem;
@@ -225,7 +239,7 @@ module m2_eng_ra #(
           if (f_pass) begin
             data <= p_dout[31:0]; ack <= 1'b1; pend <= 1'b0;
           end else if (f_dem && pend) begin
-            data <= idx[0] ? p_dout[63:32] : p_dout[31:0]; ack <= 1'b1; pend <= 1'b0;
+            data <= idx_q[0] ? p_dout[63:32] : p_dout[31:0]; ack <= 1'b1; pend <= 1'b0;
           end
         end
         P_DROP: if (!p_ack) pst <= P_GAP;      // the adapter has seen the request fall
@@ -237,9 +251,9 @@ module m2_eng_ra #(
       if (hit) begin
         pend    <= 1'b0;
         hit_q   <= 1'b1;
-        rd_half <= idx[0];
-        s_head[sid] <= s_head[sid] + AW'({hj, 1'b0});
-        s_rp[sid]   <= hph;
+        rd_half <= idx_q[0];
+        s_head[sid_q] <= s_head[sid_q] + AW'({hj, 1'b0});
+        s_rp[sid_q]   <= hph;
       end
 
       s_arr[0] <= arr_n[0];
@@ -248,16 +262,16 @@ module m2_eng_ra #(
       // fill: a hit drops hj slots, an issue allocates one -- in the same cycle
       // on the same stream both apply. g_idx and g_ph do not move with a hit:
       // head + 2*fill and rp + fill are the same pair either side of it.
-      s_fill[0] <= s_fill[0] - ((hit && !sid) ? {1'b0, hj} : 3'd0) + ((go_strm && !g_s) ? 3'd1 : 3'd0);
-      s_fill[1] <= s_fill[1] - ((hit &&  sid) ? {1'b0, hj} : 3'd0) + ((go_strm &&  g_s) ? 3'd1 : 3'd0);
+      s_fill[0] <= s_fill[0] - ((hit && !sid_q) ? {1'b0, hj} : 3'd0) + ((go_strm && !g_s) ? 3'd1 : 3'd0);
+      s_fill[1] <= s_fill[1] - ((hit &&  sid_q) ? {1'b0, hj} : 3'd0) + ((go_strm &&  g_s) ? 3'd1 : 3'd0);
 
       // ---- a read outside its stream's window starts the stream over there
       if (miss) begin
-        s_act[sid]  <= 1'b1;
-        s_head[sid] <= {idx[AW-1:1], 1'b0};
-        s_rp[sid]   <= '0;
-        s_fill[sid] <= '0;
-        if (pst != P_IDLE && !f_pass && f_s == sid) f_keep <= 1'b0;   // in flight for the old window
+        s_act[sid_q]  <= 1'b1;
+        s_head[sid_q] <= {idx_q[AW-1:1], 1'b0};
+        s_rp[sid_q]   <= '0;
+        s_fill[sid_q] <= '0;
+        if (pst != P_IDLE && !f_pass && f_s == sid_q) f_keep <= 1'b0;   // in flight for the old window
       end
 
       // ---- dropped: the engine idle, a write landed, or bypassed. LAST, so it

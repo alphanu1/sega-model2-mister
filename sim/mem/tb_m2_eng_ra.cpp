@@ -93,7 +93,9 @@ struct Sim {
     d->idx = ix; d->stream_en = sen; d->sid = sid;
     const long t0 = cyc;
     bool got = false;
-    for (int guard = 0; !got && guard < 400; guard++) {
+    // a read can wait behind one fetch in flight and then make its own two
+    // (R709's answer-from-own-fetch); allow that at any latency, not 400
+    for (int guard = 0; !got && guard < 400 + 6 * LAT; guard++) {
       d->req = 1;
       d->eval();
       const int go = d->ack && !ack_d; ack_d = d->ack;

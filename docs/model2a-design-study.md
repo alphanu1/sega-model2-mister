@@ -26935,3 +26935,23 @@ Scoped on s727 (quartus_sta, slow 1100 mV 85C):
 First build: the PLL and SYS_MHZ only -- the 70 MHz fit placed those 327
 paths with no pressure on them, and an 80 MHz target may close much of a
 sub-0.5 ns deficit by placement. What still fails is the redesign list.
+
+**R714 -- THE READ-AHEAD'S REQUEST IS REGISTERED ON THE WAY IN (for 80 MHz).**
+s728 (80/40, R713): 411 clk_sys endpoints fail, TNS -203.0; by module the
+fill 213 (worst -1.696, 83% of the TNS), u_eng_ra 71 (-0.712), span_tex 46
+(-0.668), the engine 55 (-0.478), the YM, TGP and store under 0.44. s729 and
+s730 did not route. clk_i960 at 40: +1.311, clk_mem +0.684, HDMI -0.316.
+Every u_eng_ra path began at the ENGINE's state register (st.E_TH2) and ran
+through its address select, Model2.sv's base add and the window subtraction
+into s_arr / s_fill / s_head / p_idx. m2_eng_ra now registers req, idx,
+stream_en and sid as they arrive and decides from the copies: one cycle more
+a read. RTL geodiff at port latency 10, against B's pair cache: 14% off the
+walk in CYCLES (was 19-20%); at 80 MHz a cycle is 12.5% shorter, so ~25% off
+B-at-70 in time. Identical quads on all four lists.
+tb_m2_eng_ra: the bench gave a read 400 cycles and then dropped it; at the x5
+pass's latency (300+) a read waiting behind a fetch and making its own two
+outlived that, and the module's answer to the abandoned read reached the next
+one -- "never acknowledged" and wrong data, an artifact (hardware never
+abandons a request; the old module failed it identically). Patience is now
+400 + 6 x LAT: 13,878,373 checks at LAT 12 (and 60), 188,359,623 at 150,
+0 fails, old and new modules alike.
