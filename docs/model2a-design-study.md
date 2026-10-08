@@ -27071,3 +27071,9 @@ fb_complete, the quad hand-off stalled, and the read-ahead busy:
    q3d_valid && !q3d_ready, eng_ra_busy, 2'b0, tgp_pc[15:0]}
 (m2_geo_engine dbg_st and m2_raster3d dbg_pipe ported from meas-lite
 87c2331.) A normal build compiles them away.
+Telemetry build (40cc6f6 + M2_DEBUG_LITE in the seeds' qsf only), s743-s745:
+~+300 ALM (41,403-41,445); clk_sys at 75 -1.183 / -1.063 / -0.460. s745's
+failures are not the telemetry: MiSTer's LFB_BASE (gp_outr -> LFB_BASE,
+-0.460; a static HPS config register, MISTER_FB is off) and the fill's
+determinant sf -> det_r (-0.247, 33 endpoints, once a quad) -- acceptable for a
+MEASUREMENT build only. s745 RBF assembled for the race capture.
