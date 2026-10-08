@@ -318,12 +318,19 @@ module m2_raster_fill #(
   logic [15:0]        qoz [0:3];
   logic [1:0]         oz_i;              // which vertex the normaliser is on
   logic [7:0]         oz_emax;           // largest exponent of the four, latched
+  // R731: S_OZ's first cycle only computes oz_emax, from the latched qoz --
+  // off the INPUTS at acceptance it was m2_quad_store|vtx_r -> oz_emax, 0.735
+  // ns at 75 MHz (s759), short of 80. Every 5-bit pf_st is taken, so a flag
+  // rather than a state; one cycle per textured quad.
+  logic               oz_pre;
 
   // R337: the four exponents and the largest, combinational off the INPUTS
   // because emax has to be known before the first vertex is rewritten.
-  wire [7:0] oze01_c = (in_oz1[15:8] > in_oz0[15:8]) ? in_oz1[15:8] : in_oz0[15:8];
-  wire [7:0] oze23_c = (in_oz3[15:8] > in_oz2[15:8]) ? in_oz3[15:8] : in_oz2[15:8];
-  wire [7:0] oz_emax_c = (oze23_c > oze01_c) ? oze23_c : oze01_c;
+  // R731: now off the latched copies, in S_OZ's first cycle (oz_pre). They
+  // are qoz exactly as accepted: nothing rewrites qoz before stage two.
+  wire [7:0] oze01_q = (qoz[1][15:8] > qoz[0][15:8]) ? qoz[1][15:8] : qoz[0][15:8];
+  wire [7:0] oze23_q = (qoz[3][15:8] > qoz[2][15:8]) ? qoz[3][15:8] : qoz[2][15:8];
+  wire [7:0] oz_emax_q = (oze23_q > oze01_q) ? oze23_q : oze01_q;
 
   // One minifloat to the quad's common fixed scale. The implicit 1 is restored,
   // the mantissa shifted up so the largest lands on bit 15, and the difference
@@ -583,7 +590,7 @@ module m2_raster_fill #(
   logic signed [31:0] bh_u, bh_v, bh_o;   // R616: half a pixel of each plane, both axes
   logic [12:0]        bq_u, bq_v;
   logic [15:0]        bq_o;
-  logic         [1:0] nrm_wait;   // R466/R599: four cycles, the recip takes four
+  logic         [2:0] nrm_wait;   // R466/R599/R731: five cycles, the recip takes five
   logic [1:0] pfn_wait;   // R461/R594: S_PF_N takes three cycles: abs, encode, shift
   logic signed [31:0] mul_n;
   logic        [5:0]  mul_z;
@@ -1003,7 +1010,7 @@ module m2_raster_fill #(
       nxu_z <= '0; nyu_z <= '0; nxv_z <= '0; nyv_z <= '0;
       nxo_z <= '0; nyo_z <= '0; mul_n <= '0; mul_z <= 6'd0;   // R441/R442
       net_r <= 9'sd0; zbig_r <= 1'b0;   // R459
-      den_a <= 16'd1; nrm_wait <= 2'd0; pfn_wait <= 2'd0; det_abs_r <= '0;    // R449/R461/R466/R594
+      den_a <= 16'd1; nrm_wait <= 3'd0; pfn_wait <= 2'd0; det_abs_r <= '0;    // R449/R461/R466/R594
       // R451: these were initialised in the prime step and NOT in reset. A
       // register that only gets a value once the state machine reaches a
       // particular state is undefined for every cycle before it, and b_wait
@@ -1012,7 +1019,7 @@ module m2_raster_fill #(
       mul_q_r <= '0; mul_zr <= 6'd0; b_wait <= 1'b0; b_w2 <= 1'b0; b_w3 <= 1'b0; sc_r <= '0; sc_s <= '0; oz_w_v <= 1'b0; oz_last <= 1'b0; oz_w <= 2'd0; b_prod <= 1'b0;
       dudx <= '0; dudy <= '0; dvdx <= '0; dvdy <= '0;
       for (int k = 0; k < 4; k++) begin qu[k] <= '0; qv[k] <= '0; qoz[k] <= '0; end
-      oz_i <= 2'd0; oz_emax <= 8'd0; dodx <= '0; dody <= '0;
+      oz_i <= 2'd0; oz_emax <= 8'd0; oz_pre <= 1'b0; dodx <= '0; dody <= '0;
       base_o <= '0; nxo <= '0; nyo <= '0; pf_c <= 1'b0;
       span_valid <= 1'b0;
       s1_valid   <= 1'b0;   // R715
@@ -1066,7 +1073,10 @@ module m2_raster_fill #(
         // -- the raw coordinate is not wanted again. The shift is a constant
         // 16 because normalisation puts the largest 1/z in [2^15, 2^16), so
         // the product lands back in the 13 bits u already occupied.
-        S_OZ: begin
+        S_OZ: if (oz_pre) begin
+          oz_pre  <= 1'b0;   // R731
+          oz_emax <= oz_emax_q;
+        end else begin
           // R566: stage one -- select vertex oz_i and normalise its 1/z.
           if (!oz_last) begin
             oz_n   <= oz_norm(qoz[oz_i], oz_emax);
@@ -1188,8 +1198,8 @@ module m2_raster_fill #(
         // the worst clk_3d path at 60 MHz), so it answers a cycle later and
         // this state waits one more before S_PF_Q1 reads den_rcp. One cycle of
         // about 130 to retire a quad.
-        S_PF_NRM: if (nrm_wait != 2'd3) begin   // R599: was 2
-          nrm_wait <= nrm_wait + 2'd1;
+        S_PF_NRM: if (nrm_wait != 3'd4) begin   // R599: was 2; R731: 4
+          nrm_wait <= nrm_wait + 3'd1;
           // The counts still land on the FIRST cycle only -- repeating them on
           // the new third cycle would be harmless but would re-time six
           // priority encoders for nothing.
@@ -1199,18 +1209,18 @@ module m2_raster_fill #(
           // registered on the first cycle and counted on the second; the
           // first reader is the third cycle's mul_n, so no cycle is added and
           // the counts are the same numbers.
-          if (nrm_wait == 2'd0) begin
+          if (nrm_wait == 3'd0) begin
             a_nxu <= pf_abs(nxu); a_nyu <= pf_abs(nyu);
             a_nxv <= pf_abs(nxv); a_nyv <= pf_abs(nyv);
             a_nxo <= pf_abs(nxo); a_nyo <= pf_abs(nyo);
           end
-          if (nrm_wait == 2'd1) begin
+          if (nrm_wait == 3'd1) begin
             nxu_z <= clz32(a_nxu); nyu_z <= clz32(a_nyu);
             nxv_z <= clz32(a_nxv); nyv_z <= clz32(a_nyv);
             nxo_z <= clz32(a_nxo); nyo_z <= clz32(a_nyo);   // R441
           end
         end else begin
-          nrm_wait <= 2'd0;
+          nrm_wait <= 3'd0;
           mul_n <= mul_n_c;   // R457/R458: registered count, one shared shifter
           mul_z <= zsel_c;
           mul_q_r <= '0; mul_zr <= 6'd0; b_wait <= 1'b0; b_w2 <= 1'b0; b_w3 <= 1'b0;   // R450/R594/R727
@@ -1328,7 +1338,7 @@ module m2_raster_fill #(
             qu[2] <= in_u2; qv[2] <= in_v2; qu[3] <= in_u3; qv[3] <= in_v3;
             qoz[0] <= in_oz0; qoz[1] <= in_oz1;            // R337: still minifloats here
             qoz[2] <= in_oz2; qoz[3] <= in_oz3;
-            oz_emax <= oz_emax_c;
+            oz_pre  <= 1'b1;                        // R731: emax in S_OZ's first cycle
             oz_i    <= 2'd0;
             tex_r     <= in_tex;
             tex_ok    <= 1'b0;

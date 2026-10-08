@@ -304,16 +304,20 @@ module m2_quad_store #(
   function automatic logic signed [15:0] smax(input logic signed [15:0] p, q);
     smax = (q > p) ? q : p;
   endfunction
-  function automatic [2*BW-1:0] band_range(input logic signed [15:0] a, b, c, d);
+  // R731: IN TWO HALVES. The min/max tree is registered with the quad (a_lo,
+  // a_hi) and the clamp and divide happen in the cycle that writes att_* --
+  // as one cycle from the clipper's registers it was m2_geo_clip|qsy ->
+  // a_band, 0.462 ns at 75 MHz (s759), short of 80. The same band.
+  function automatic [2*BW-1:0] band_of(input logic signed [15:0] lo_in, hi_in);
     logic signed [15:0] lo, hi2;
     begin
-      lo  = smin(smin(a, b), smin(c, d));    // R579: balanced, as tiny_quad
-      hi2 = smax(smax(a, b), smax(c, d));
-      if (hi2 < 0 || lo > $signed(16'(SCR_H - 1))) band_range = {BW'(0), BW'(NBANDS-1)};   // lo > hi: never
+      lo  = lo_in;
+      hi2 = hi_in;
+      if (hi2 < 0 || lo > $signed(16'(SCR_H - 1))) band_of = {BW'(0), BW'(NBANDS-1)};   // lo > hi: never
       else begin
         if (lo  < 0)                        lo  = 16'sd0;
         if (hi2 > $signed(16'(SCR_H - 1)))  hi2 = $signed(16'(SCR_H - 1));
-        band_range = {BW'(int'(hi2) / int'(BAND_H)), BW'(int'(lo) / int'(BAND_H))};
+        band_of = {BW'(int'(hi2) / int'(BAND_H)), BW'(int'(lo) / int'(BAND_H))};
       end
     end
   endfunction
@@ -386,19 +390,20 @@ module m2_quad_store #(
   // always was. `clear` wins over a pending increment, as it did over in_valid.
   logic                a_moire;
   logic [IW-1:0]       a_slot;
-  logic [2*BW-1:0]     a_band;
+  logic signed [15:0] a_lo, a_hi;   // R731: band_of() at the write
   logic [CW-1:0]       a_col;
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       a_v <= 1'b0; a_room <= 1'b0; a_tiny <= 1'b0; a_bank <= 1'b0; a_moire <= 1'b0;
-      a_slot <= '0; a_band <= '0; a_col <= '0;
+      a_slot <= '0; a_lo <= '0; a_hi <= '0; a_col <= '0;
     end else begin
       a_v     <= in_valid && !clear;
       a_room  <= has_room;
       a_tiny  <= is_tiny;
       a_bank  <= wbank;
       a_slot  <= wcount[IW-1:0];
-      a_band  <= band_range(in_y0, in_y1, in_y2, in_y3);
+      a_lo    <= smin(smin(in_y0, in_y1), smin(in_y2, in_y3));   // R579: balanced, as tiny_quad
+      a_hi    <= smax(smax(in_y0, in_y1), smax(in_y2, in_y3));
       a_moire <= in_moire;
       a_col   <= c565(in_col);
     end
@@ -443,8 +448,8 @@ module m2_quad_store #(
       // R566: a cycle later, from the registered comparators.
       if (a_v) begin
         if (a_room) begin
-          if (a_bank) att_1[a_slot] <= {a_band, a_moire, a_col};
-          else        att_0[a_slot] <= {a_band, a_moire, a_col};
+          if (a_bank) att_1[a_slot] <= {band_of(a_lo, a_hi), a_moire, a_col};   // R731
+          else        att_0[a_slot] <= {band_of(a_lo, a_hi), a_moire, a_col};
         end
         if (a_tiny) begin
           if (dbg_tiny != 16'hffff) dbg_tiny <= dbg_tiny + 16'd1;

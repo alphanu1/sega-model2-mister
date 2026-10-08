@@ -543,6 +543,15 @@ module m2_span_tex #(
   logic               rt_last;
   logic               rt_p, e_p;   // R490
   logic               rt_skip;     // R607
+  // R731: the retiring group's span parameters, taken from its slot as the
+  // group ENTERS the retire stage rather than through rt_p as it leaves. At
+  // 80 MHz rt_p -> the slot select -> scale's multiply -> e_col was the path
+  // (s759: 0.493 ns at 75, 12 endpoints; rt_p -> e_x1 0.845, 16). The same
+  // values: a slot is not reloaded while a group of its span is in flight
+  // (R490), which the emit-time read below always relied on.
+  logic [23:0]        rt_col;
+  logic [1:0]         rt_k;
+  logic signed [31:0] rt_x1;
   logic [8:0]         lt_texel;    // R633: the last fetched answer, for a reuse
 
   // Take a result when there is one, no fetch is outstanding, and the emit
@@ -788,6 +797,7 @@ module m2_span_tex #(
       end
       sp_iss <= 1'b0; sp_out <= 1'b0; sp_n <= 2'd0; e_last <= 1'b0;   // R490
       rt_p <= 1'b0; e_p <= 1'b0; rt_skip <= 1'b0;                     // R490, R607
+      rt_col <= '0; rt_k <= 2'd0; rt_x1 <= '0;                        // R731
       lf_v <= 1'b0; lf_p <= 1'b0; lf_xn <= '0; lt_texel <= 9'd0;      // R633
       du_r <= '0; dv_r <= '0;
       doz_r <= '0;
@@ -883,6 +893,9 @@ module m2_span_tex #(
             rt_x     <= 32'(of_x[of_rp[OW-2:0]]);   // sign-extended
             rt_last  <= of_last[of_rp[OW-2:0]];
             rt_p     <= of_p   [of_rp[OW-2:0]];
+            rt_col   <= col_p[of_p[of_rp[OW-2:0]]];   // R731
+            rt_k     <= k_p  [of_p[of_rp[OW-2:0]]];
+            rt_x1    <= x1_p [of_p[of_rp[OW-2:0]]];
             rt_skip  <= head_skip;                  // R607
             of_rp    <= of_rp + 1'd1;
             // R484: WRAPS, DOES NOT SATURATE (see the history in git).
@@ -897,13 +910,13 @@ module m2_span_tex #(
             e_valid <= !skip;                     // R326: transparent texel
             e_last  <= rt_last;                   // R490
             e_x     <= rt_x;
-            e_x1    <= ((rt_x + stp(k_p[rt_p]) - 32'sd1) > x1_p[rt_p])
-                         ? x1_p[rt_p] : (rt_x + stp(k_p[rt_p]) - 32'sd1);   // R650
-            e_col   <= {scale(col_p[rt_p][23:16], iv),
-                        scale(col_p[rt_p][15:8],  iv),
-                        scale(col_p[rt_p][7:0],   iv)};
+            e_x1    <= ((rt_x + stp(rt_k) - 32'sd1) > rt_x1)
+                         ? rt_x1 : (rt_x + stp(rt_k) - 32'sd1);   // R650, R731
+            e_col   <= {scale(rt_col[23:16], iv),
+                        scale(rt_col[15:8],  iv),
+                        scale(rt_col[7:0],   iv)};
             e_p     <= rt_p;                      // R490
-            if (!skip) dbg_texpix <= dbg_texpix + stp(k_p[rt_p]);   // R484: wraps
+            if (!skip) dbg_texpix <= dbg_texpix + stp(rt_k);   // R484: wraps
           end
         end
 

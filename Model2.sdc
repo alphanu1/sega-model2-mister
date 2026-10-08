@@ -359,3 +359,20 @@ if {[llength $sdram_clk_src] == 0 || [llength $sdram_clk_prt] == 0} {
 }
 
 }
+
+
+# ---- R731: THE GAMMA CHOICE IS AN OSD SETTING, NOT A DATA PATH.
+#
+# gam_s2 (and gam_m2 for the other clock) are the two-flop copies of the OSD's
+# Gamma menu. They change when the menu does and at no other time, so the
+# engine's gam() -- the bias and constant selected by them, a multiply, a
+# compare -- is not a one-cycle path from them: s759 timed it at 0.677 ns at
+# 75 MHz, short of 80. A menu change landing mid-colour gives one colour the
+# old curve, once. The data path into gam() (xl_raw) stays timed.
+set gam_from [get_registers -nowarn {*gam_s2[*] *gam_m2[*]}]
+if {[get_collection_size $gam_from] == 0} {
+    post_message -type critical_warning \
+      "Model2.sdc: the gamma-select registers did not match -- R731's false path is not applied."
+} else {
+    set_false_path -from $gam_from
+}

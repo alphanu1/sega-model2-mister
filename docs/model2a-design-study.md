@@ -27391,3 +27391,37 @@ test_i960_top, test_m2_boot pass; lint_top and Quartus parse clean.
 The TGP (copro_stall, 10.2%) is the remaining non-bus cost; ours is Model 1's
 FSM MB86233, which §4.2/M2-F put at 2.3x short of the real MB86234 at 50 MHz
 (less at 75). Pipelining it is M2-F, not a night's change.
+
+**R731 -- TOWARDS 80 / 40: OUR OWN clk_sys PATHS UNDER 0.9 ns AT 75.** 80 MHz
+takes 0.833 ns off the period, so every clk_sys path with less slack than
+that at 75 fails. s759 (75 MHz, closed) has 101 such endpoints, ~45 distinct
+paths: the TGP (core|x_src_bank / pre_d / x_dst_reg ...), the I/O board's
+Z80 (its firmware RAM -> IR / TmpAddr, 0.21-0.85), the sound board (fx68k
+Ir -> nanoAddr 0.507, jt12 cur_ch -> phinc_II 0.300, MultiPCM 0.793), and
+these of ours, now each given a register:
+  * m2_span_tex rt_p -> e_col (0.493, 12) / e_x1 (0.845, 16): the retiring
+    group's colour, step and span end are taken from its slot as it ENTERS
+    the retire stage (rt_col / rt_k / rt_x1), not through rt_p as it leaves;
+    a slot is not reloaded while its span's groups are in flight (R490).
+  * m2_quad_store qsy -> a_band (0.462): the min/max tree registered with the
+    quad (a_lo / a_hi), the clamp and divide (band_of) at the att_* write.
+  * m2_wr_arb last -> held (0.514): the round-robin pick registered (any_r /
+    pick_r); `last` changes only on a release, which is always followed by
+    the gap cycle, so the registered pick is current. One cycle when a write
+    reaches an idle port.
+  * m2_persp_recip s2_r0 -> out_q (0.663): the second multiply and the
+    un-normalise in separate stages; valid five cycles after in_d, not four,
+    and m2_raster_fill's S_PF_NRM waits five (nrm_wait 3 bits).
+  * m2_raster_fill vtx_r -> oz_emax (0.735): emax from the latched qoz in
+    S_OZ's first cycle (oz_pre; every 5-bit pf_st value is in use).
+  * gam_s2 / gam_m2 -> gam() (0.677): the OSD's gamma choice, a static
+    two-flop copy -- a guarded set_false_path in Model2.sdc.
+Measured: the four saved frames identical in every pixel; draw cycles
++0.00..+0.17% (f2000 1,190,666 -> 1,192,683). test_m2_raster3d 8/8,
+test_m2_wr_arb 4,933/0, lint_top and Quartus parses clean.
+test_m2_raster_fill reports failures and DID BEFORE THIS: HEAD (ea27445) 655
+of 152,369, this 625 -- the bench is out of step with the fill, not new.
+Not yet: fp_add's add_a_q -> sA_small (0.708; shared with the TGP, its
+latency hard-coded in consumers), m2_fill xah -> the DSP's input register
+(0.788, R715's stage absorbed again), clip cs -> engine st (0.838), and the
+sound board and Z80 paths above.
