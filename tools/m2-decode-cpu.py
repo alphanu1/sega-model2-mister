@@ -17,7 +17,8 @@ import sys, collections
 TS = ["T_FETCH", "T_FETCH_W", "T_FETCH2", "T_FETCH2_W", "T_DECODE", "T_EXEC", "T_MEM", "T_MEM_W",
       "T_MULDIV", "T_MULTI", "T_PAIR", "T_FP", "T_WB", "T_FRAME", "T_TRAP", "T_BOOT",
       "T_SYNMOV_RD", "T_SYNMOV_WR", "T_INTR", "T_RET7", "T_MODPC", "T_SYNQ"]
-ST = ["S_IDLE", "S_LO", "S_LO_W", "S_HI", "S_HI_W", "S_RDB", "S_IOW", "S_DONE", "S_DCK", "S_RMW", "S_RMW_W"]
+ST = ["S_IDLE", "S_LO", "S_LO_W", "S_HI", "S_HI_W", "S_RDB", "S_IOW", "S_DONE", "S_DCK", "S_RMW", "S_RMW_W",
+      "S_DCN"]   # R724: a line read's second half
 TGT = ["SDRAM", "TRAM", "PAL", "XLAT", "IO", "NONE", "?6", "?7"]
 SYNC = range(0x12B0, 0x12C0)
 WAITS = {"T_FETCH_W", "T_FETCH2_W", "T_MEM_W", "T_SYNMOV_RD", "T_SYNMOV_WR"}
@@ -61,7 +62,7 @@ for ip, d in C:
     elif TGT[tgt] == "IO":
         why[kind + ": I/O %s %s %s" % ("write" if we else "read", io_name(ad), stn)] += 1
     elif TGT[tgt] == "SDRAM":
-        what = ("write" if we else ("cache check" if stn == "S_DCK" else
+        what = ("write" if we else ("cache check" if stn in ("S_DCK", "S_DCN") else
                 ("read miss" if stn == "S_RDB" else "read")))
         why[kind + ": SDRAM %s (%s)" % (what, stn)] += 1
     else:
