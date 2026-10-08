@@ -18,6 +18,10 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include <map>
+#include <set>
+#include <deque>
+#include <algorithm>
 
 static Vgeodiff_top *d;
 static std::vector<uint16_t> mem(1u << 25, 0xFFFF);   // unwritten reads 0xFFFF (docs/mister-integration.md)
@@ -44,6 +48,8 @@ static void put_words(uint32_t base, const std::vector<uint8_t> &v, size_t first
   }
 }
 
+// R696: the 16-bit SDRAM word address eng_read reads from.
+static uint32_t eng_wordaddr(uint32_t space, uint32_t a, uint32_t oba);
 // Model2.sv's engine port: which memory, and which dword in it.
 static uint32_t eng_read(uint32_t space, uint32_t a, uint32_t oba) {
   uint32_t base, idx;
@@ -58,16 +64,124 @@ static uint32_t eng_read(uint32_t space, uint32_t a, uint32_t oba) {
   return uint32_t(mem[wa]) | (uint32_t(mem[(wa + 1) & ((1u << 25) - 1)]) << 16);
 }
 
+static long g_memreqs = 0, g_repeat = 0, g_porttrips = 0;   // R696
+static std::map<int, long> g_rd_by;
+static std::set<uint64_t> g_seen;
+static uint32_t eng_wordaddr(uint32_t space, uint32_t a, uint32_t oba) {
+  uint32_t base, idx;
+  if (space == 1)      { base = (a & 0x800000) ? GAME_TEXRAM : GAME_TEX; idx = (a & 0x800000) ? (a & 0x7fff) : (a & 0x1fffff); }
+  else if (space == 2) { base = GAME_PAL3D;  idx = a & 0x1ff; }
+  else if (space == 3) { base = GAME_XLAT3D; idx = a & 0x3fff; }
+  else {
+    base = (oba & 0x1000000) ? GAME_PRAM1 : (oba & 0x800000) ? GAME_POLY : GAME_PRAM0;
+    idx  = ((oba & 0x1000000) || !(oba & 0x800000)) ? (a & 0x7fff) : (a & 0x3fffff);
+  }
+  return (base + 2 * idx) & ((1u << 25) - 1);
+}
+// R707: M2GD_PC=3/4 -- READ-AHEAD. A stream per memory space (3), or one
+// shared (4), fetches the pairs after the engine's last miss before they are
+// asked for: M2GD_RA pairs ahead (default 4). One port: a fetch occupies it
+// M2GD_OCC cycles (default LAT, one in flight; less is a pipelined port) and
+// answers LAT after it issues. A read of a pair the stream holds or has in
+// flight waits only for its arrival; anything else is a miss and restarts the
+// stream there. The whole last pair is kept, as PC=2. Writes are ignored: a
+// best case, so the copies are never made stale.
+// R709: the safe design's limits. M2GD_RAMASK: the memory spaces that get a
+// stream (bit per space, default all); the others make a port trip for every
+// read. M2GD_RAFLUSH=1: every stream is dropped when the engine starts an
+// object, so no copy outlives one. M2GD_RAALIGN=1: a stream starts at the even
+// dword at or below the miss, as the RTL's pairs {2k, 2k+1} do. M2GD_RANOTR=1:
+// no stream for texture headers in texture RAM, which the CPU writes.
+static long g_cyc = 0, g_pf = 0, g_rahit = 0, g_wrflush = 0;
+struct RaStream { bool act = false; uint32_t next = 0, last = ~0u; std::deque<std::pair<uint32_t, long>> q; };
+static RaStream g_ra[4]; static long g_port_free = 0; static int g_ra_rr = 0;
+static int g_ra_align = 0;
+static int ra_trip(uint32_t dw, int lat, int occ) {
+  const long issue = std::max(g_cyc, g_port_free);
+  g_port_free = issue + occ; ++g_porttrips;
+  return int(issue + lat - g_cyc);
+}
+static int ra_read(RaStream &S, uint32_t dw, int lat, int occ) {
+  while (!S.q.empty() && dw > S.q.front().first + 1 && dw - S.q.front().first < 4096) S.q.pop_front();
+  for (auto &e : S.q)
+    if (dw >= e.first && dw <= e.first + 1) { S.last = e.first; ++g_rahit; return int(std::max(0L, e.second - g_cyc)); }
+  if (S.last != ~0u && dw >= S.last && dw <= S.last + 1) return 0;
+  const long issue = std::max(g_cyc, g_port_free);
+  g_port_free = issue + occ; ++g_porttrips;
+  const uint32_t b = g_ra_align ? (dw & ~1u) : dw;
+  S.q.clear(); S.q.push_back({b, issue + lat}); S.next = b + 2; S.last = b; S.act = true;
+  return int(issue + lat - g_cyc);
+}
+static void ra_tick(int ra, int lat, int occ) {
+  if (g_cyc < g_port_free) return;
+  for (int k = 0; k < 4; k++) {
+    RaStream &S = g_ra[(g_ra_rr + k) & 3];
+    if (S.act && int(S.q.size()) < ra) {
+      S.q.push_back({S.next, g_cyc + lat}); S.next += 2;
+      g_port_free = g_cyc + occ; ++g_porttrips; ++g_pf; g_ra_rr = (g_ra_rr + k + 1) & 3;
+      return;
+    }
+  }
+}
+
 static bool wr_pend = false; static uint32_t wr_a; static uint16_t wr_d;
 static long nq = 0; static FILE *fo = nullptr;
 
 static void tick() {
   d->rd_ack = 0;
   if (d->rd_req) { d->rd_data = (d->rd_addr < buf.size()) ? buf[d->rd_addr] : 0xFFFFFFFFu; d->rd_ack = 1; }
-  d->mem_ack = d->mem_req;
-  if (d->mem_req) d->mem_data = eng_read(d->mem_space, d->mem_addr, d->obj_oba_r);
+  // R696: M2GD_LAT -- the engine's memory answers N cycles after the request
+  // (0, the default, is the same-cycle answer this bench always gave). The
+  // board's engine port goes through the pair cache to a one-word SDRAM port.
+  static const int LAT = std::getenv("M2GD_LAT") ? std::atoi(std::getenv("M2GD_LAT")) : 0;
+  static int lat_left = -1;
+  // R696: M2GD_PC models the cache in front of the engine port (Model2.sv's
+  // m2_pair_cache) so only real port trips pay LAT: 0 none, 1 today's (the
+  // next dword, used once), 2 the whole last answer {N, N+1} kept until replaced.
+  static const int PC = std::getenv("M2GD_PC") ? std::atoi(std::getenv("M2GD_PC")) : 0;
+  static bool pc_v = false; static uint32_t pc_n = 0;
+  static const int RA  = std::getenv("M2GD_RA")  ? std::atoi(std::getenv("M2GD_RA"))  : 4;
+  static const int OCC = std::getenv("M2GD_OCC") ? std::atoi(std::getenv("M2GD_OCC")) : std::max(LAT, 1);
+  static const int RAMASK  = std::getenv("M2GD_RAMASK")  ? std::atoi(std::getenv("M2GD_RAMASK")) : 15;
+  static const int RAFLUSH = std::getenv("M2GD_RAFLUSH") ? std::atoi(std::getenv("M2GD_RAFLUSH")) : 0;
+  g_ra_align = std::getenv("M2GD_RAALIGN") ? std::atoi(std::getenv("M2GD_RAALIGN")) : 0;
+  static bool busy_d = false;
+  const bool busy = d->rootp->geodiff_top__DOT__eng_busy;
+  if (RAFLUSH && busy && !busy_d) for (auto &S : g_ra) { S.act = false; S.q.clear(); S.last = ~0u; }
+  busy_d = busy;
+  ++g_cyc;
+  if (PC >= 3) ra_tick(RA, LAT, OCC);
+  d->mem_ack = 0;
+  if (d->mem_req) {
+    if (lat_left < 0) {
+      // the SDRAM dword this read lands on, as the port sees it
+      const uint32_t dw = eng_wordaddr(d->mem_space, d->mem_addr, d->obj_oba_r) >> 1;
+      bool hit = false;
+      if (PC == 1) { hit = pc_v && dw == pc_n; pc_v = !hit && ((dw & 511) != 511); pc_n = dw + 1; }
+      else if (PC == 2) { hit = pc_v && (dw == pc_n || dw == pc_n + 1); if (!hit) { pc_v = ((dw & 511) != 511) || true; pc_n = dw; } }
+      // M2GD_RANOTR=1: texture headers in texture RAM (addr[23]) -- the half the CPU writes -- get no stream
+      static const int RANOTR = std::getenv("M2GD_RANOTR") ? std::atoi(std::getenv("M2GD_RANOTR")) : 0;
+      if (PC >= 3 && (!((RAMASK >> (d->mem_space & 3)) & 1) || (RANOTR && d->mem_space == 1 && (d->mem_addr & 0x800000))))
+        lat_left = ra_trip(dw, LAT, OCC);
+      else if (PC >= 3) lat_left = ra_read(g_ra[PC == 3 ? (d->mem_space & 3) : 0], dw, LAT, OCC);
+      else { if (!hit) ++g_porttrips; lat_left = hit ? 0 : LAT; }
+      ++g_memreqs;
+      // R696: which memory, which engine state, and whether this exact word was read before in this list
+      const int est = d->rootp->geodiff_top__DOT__u_geometry__DOT__u_engine__DOT__st;
+      g_rd_by[(d->mem_space << 8) | est]++;
+      const uint64_t key = (uint64_t(d->mem_space) << 40) | (uint64_t(d->obj_oba_r & 0x1800000) << 8) | d->mem_addr;
+      if (!g_seen.insert(key).second) ++g_repeat;
+    }
+    if (lat_left == 0) {
+      d->mem_ack = 1; d->mem_data = eng_read(d->mem_space, d->mem_addr, d->obj_oba_r); lat_left = -1;
+    } else --lat_left;
+  } else lat_left = -1;
   d->sd_wr_ack = 0;
-  if (wr_pend) { mem[wr_a] = wr_d; d->sd_wr_ack = 1; wr_pend = false; }
+  if (wr_pend) {
+    mem[wr_a] = wr_d; d->sd_wr_ack = 1; wr_pend = false;
+    // R709: the geometrizer's write landing drops every stream (the RTL's inval)
+    if (std::getenv("M2GD_RAFLUSH")) { ++g_wrflush; for (auto &S : g_ra) { S.act = false; S.q.clear(); S.last = ~0u; } }
+  }
   else if (d->sd_wr_req) { wr_a = d->sd_wr_addr & ((1u << 25) - 1); wr_d = d->sd_wr_din; wr_pend = true; }
   d->clk = 0; d->eval(); d->clk = 1; d->eval();
   if (d->q_valid && d->q_ready) {
@@ -145,7 +259,17 @@ int main(int argc, char **argv) {
     if (d->walk_frames >= 1) { quiet = (nq == before) ? quiet + 1 : 0; if (quiet > 200000) break; }
   }
   std::fclose(fo); if (fh) std::fclose(fh);
-  std::printf("geodiff %s: start %05x, %ld cycles\n", dp, start, t);
+  std::printf("geodiff %s: start %05x, %ld cycles, %ld engine memory reads\n", dp, start, t, g_memreqs);
+  if (std::getenv("M2GD_RDS")) {
+    static const char *SP[4] = {"polygon", "texture", "palette", "xlat"};
+    std::printf("  port trips %ld (M2GD_PC=%s)\n", g_porttrips, std::getenv("M2GD_PC") ? std::getenv("M2GD_PC") : "0");
+    if (g_pf) std::printf("  read-ahead: %ld fetched ahead, %ld reads served from them, %ld write flushes\n", g_pf, g_rahit, g_wrflush);
+    std::printf("  engine reads %ld, of which repeats of a word already read this list %ld (%.1f%%)\n", g_memreqs, g_repeat, 100.0 * g_repeat / std::max(g_memreqs, 1L));
+    std::vector<std::pair<long,int>> v; for (auto &k : g_rd_by) v.push_back({k.second, k.first});
+    std::sort(v.rbegin(), v.rend());
+    for (size_t i = 0; i < v.size() && i < 16; i++)
+      std::printf("    %-8s engine state %2d: %7ld (%.1f%%)\n", SP[(v[i].second >> 8) & 3], v[i].second & 0xff, v[i].first, 100.0 * v[i].first / g_memreqs);
+  }
   std::printf("  walk: ops %u objects %u frames %u unknown %u | captured mtx %u foc %u lit %u tp %u\n",
     d->walk_ops, d->walk_objs, d->walk_frames, d->walk_unknown, d->mtx_n, d->foc_n, d->lit_n, d->tp_n);
   std::printf("  geometry: polys %u objects %u culled %u clip in %u out %u dropped %u nonfinite %u behind %u | quads %ld\n",
