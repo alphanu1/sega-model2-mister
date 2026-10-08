@@ -128,6 +128,30 @@ static bool wr_pend = false; static uint32_t wr_a; static uint16_t wr_d;
 static long nq = 0; static FILE *fo = nullptr;
 
 static void tick() {
+#ifdef GD_RA
+  // R709: the RTL read-ahead's port, answered as m2_sdram_x2 does: a request
+  // taken on its rising edge, the pair {idx, idx+1} (wrapping inside its
+  // 512-dword row) M2GD_LAT cycles later, the acknowledge held while the
+  // request stands. M2GD_RABYPASS=1 keeps no copy: every read a port trip.
+  {
+    static const int PLAT = std::getenv("M2GD_LAT") ? std::atoi(std::getenv("M2GD_LAT")) : 10;
+    static int preq_d = 0, pcnt = -1, pdone = 0; static uint32_t pidx = 0;
+    d->ra_bypass = std::getenv("M2GD_RABYPASS") ? 1 : 0;
+    if (d->p_req && !preq_d && pcnt < 0 && !pdone) { pcnt = PLAT; pidx = d->p_idx; ++g_porttrips; }
+    preq_d = d->p_req;
+    if (pcnt > 0 && --pcnt == 0) {
+      const uint32_t row = pidx & ~511u, hi = row | ((pidx + 1) & 511u);
+      const uint32_t w0 = (2 * pidx) & ((1u << 25) - 1), w1 = (2 * hi) & ((1u << 25) - 1);
+      d->p_dout = (uint64_t(mem[w1 + 1]) << 48) | (uint64_t(mem[w1]) << 32) | (uint64_t(mem[w0 + 1]) << 16) | mem[w0];
+      pdone = 1; pcnt = -1;
+    }
+    if (!d->p_req) pdone = 0;
+    d->p_ack = pdone;
+    static int mreq_d = 0;
+    if (d->mem_req && !mreq_d) ++g_memreqs;   // engine reads, on the request's rising edge
+    mreq_d = d->mem_req;
+  }
+#endif
   d->rd_ack = 0;
   if (d->rd_req) { d->rd_data = (d->rd_addr < buf.size()) ? buf[d->rd_addr] : 0xFFFFFFFFu; d->rd_ack = 1; }
   // R696: M2GD_LAT -- the engine's memory answers N cycles after the request
@@ -152,7 +176,11 @@ static void tick() {
   ++g_cyc;
   if (PC >= 3) ra_tick(RA, LAT, OCC);
   d->mem_ack = 0;
+#ifdef GD_RA
+  if (false) {
+#else
   if (d->mem_req) {
+#endif
     if (lat_left < 0) {
       // the SDRAM dword this read lands on, as the port sees it
       const uint32_t dw = eng_wordaddr(d->mem_space, d->mem_addr, d->obj_oba_r) >> 1;

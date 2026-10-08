@@ -38,6 +38,15 @@ module geodiff_top #(
   output logic [31:0] obj_oba_r,
   input  logic [31:0] mem_data,
   input  logic        mem_ack,
+`ifdef GD_RA
+  // R709: with GD_RA the engine's reads go through m2_eng_ra, as Model2.sv's
+  // do, and the bench answers its port instead of the engine.
+  input  logic          ra_bypass,
+  output logic          p_req,
+  output logic [AW-2:0] p_idx,
+  input  logic          p_ack,
+  input  logic [63:0]   p_dout,
+`endif
   // quads out
   output logic        q_valid,
   input  logic        q_ready,
@@ -59,11 +68,16 @@ module geodiff_top #(
   localparam logic [AW:1] GAME_PRAM0  = AW'(32'h1710000);
   localparam logic [AW:1] GAME_PRAM1  = AW'(32'h1720000);
   localparam logic [AW:1] GAME_TEXRAM = AW'(32'h1740000);
+  localparam logic [AW:1] GAME_PAL3D  = AW'(32'h1730000);
+  localparam logic [AW:1] GAME_XLAT3D = AW'(32'h1731000);
+  localparam logic [AW:1] GAME_TEX    = AW'(32'h0720000);
+  localparam logic [AW:1] GAME_POLY   = AW'(32'h0b20000);
 
   logic        mat_we;
   logic [3:0]  mat_idx;
   logic [31:0] mat_data, foc_x, foc_y, obj_oba, obj_obc, obj_tha, obj_tpa;
   logic        obj_valid, eng_busy;
+  logic        geo_eng_busy;   // what the walker waits on (R709: and the read-ahead)
   logic [31:0] lit_x, lit_y, lit_z;
   logic        tp_we;
   logic [4:0]  tp_idx;
@@ -90,7 +104,7 @@ module geodiff_top #(
     .dbg_rp(), .dbg_wp(),
     .mtx0(), .mtx4(), .mtx8(), .mtx11(),
     .mat_we(mat_we), .mat_idx(mat_idx), .mat_data(mat_data),
-    .eng_busy(eng_busy),
+    .eng_busy(geo_eng_busy),
     .base_pram0(GAME_PRAM0), .base_pram1(GAME_PRAM1),
     .base_texram(GAME_TEXRAM), .dbg_td_words(),
     .dbg_pd_words(), .dbg_pd_cmds(),
@@ -119,13 +133,56 @@ module geodiff_top #(
 
   always_ff @(posedge clk) if (obj_valid) obj_oba_r <= obj_oba;
 
+  logic        eng_ack_w;
+  logic [31:0] eng_data_w;
+`ifdef GD_RA
+  // Model2.sv's engine port arithmetic, word for word
+  wire [AW:1] eng_base = (mem_space == 2'd1) ? (mem_addr[23] ? GAME_TEXRAM : GAME_TEX)
+                       : (mem_space == 2'd2) ? GAME_PAL3D
+                       : (mem_space == 2'd3) ? GAME_XLAT3D
+                       : obj_oba_r[24] ? GAME_PRAM1
+                       : obj_oba_r[23] ? GAME_POLY
+                                       : GAME_PRAM0;
+  wire [23:0] eng_mem_idx = (mem_space == 2'd1) ? (mem_addr[23] ? {9'd0, mem_addr[14:0]} : {3'd0, mem_addr[20:0]})
+                          : (mem_space == 2'd2) ? {15'd0, mem_addr[8:0]}
+                          : (mem_space == 2'd3) ? {10'd0, mem_addr[13:0]}
+                          : (obj_oba_r[24] || !obj_oba_r[23]) ? {9'd0, mem_addr[14:0]}
+                          : {2'd0, mem_addr[21:0]};
+  wire [AW:1] eng_wa = eng_base + AW'({eng_mem_idx, 1'b0});
+  logic ra_busy;
+`ifdef GD_PC
+  // B's engine path, for the baseline: R214's pair cache, no read-ahead
+  m2_pair_cache #(.AW(AW-1), .COL_BITS(10)) u_pc (
+    .clk(clk), .rst_n(rst_n), .bypass(ra_bypass), .inval(sd_wr_req & sd_wr_ack),
+    .req(mem_req), .idx(eng_wa[AW:2]), .ack(eng_ack_w), .data(eng_data_w),
+    .p_req(p_req), .p_idx(p_idx), .p_ack(p_ack), .p_dout(p_dout)
+  );
+  assign ra_busy = 1'b0;
+`else
+  m2_eng_ra #(.AW(AW-1)) u_ra (
+    .clk(clk), .rst_n(rst_n), .bypass(ra_bypass), .active(eng_busy),
+    .inval(sd_wr_req & sd_wr_ack),
+    .req(mem_req), .idx(eng_wa[AW:2]),
+    .stream_en((mem_space == 2'd0) || ((mem_space == 2'd1) && !mem_addr[23])),
+    .sid(mem_space[0]),
+    .ack(eng_ack_w), .data(eng_data_w),
+    .p_req(p_req), .p_idx(p_idx), .p_ack(p_ack), .p_dout(p_dout), .busy(ra_busy)
+  );
+`endif
+  assign geo_eng_busy = eng_busy | ra_busy;
+`else
+  assign eng_ack_w  = mem_ack;
+  assign eng_data_w = mem_data;
+  assign geo_eng_busy = eng_busy;
+`endif
+
   m2_geometry u_geometry (
     .clk(clk), .rst_n(rst_n),
     .start(obj_valid), .oba(obj_oba), .obc(obj_obc), .busy(eng_busy),
     .mat_we(mat_we), .mat_idx(mat_idx), .mat_data(mat_data),
     .foc_x(foc_x), .foc_y(foc_y),
     .mem_req(mem_req), .mem_addr(mem_addr),
-    .mem_data(mem_data), .mem_ack(mem_ack),
+    .mem_data(eng_data_w), .mem_ack(eng_ack_w),
     .xc(xc), .yc(yc),
     .a_left(a_left), .a_right(a_right),
     .a_bottom(a_bottom), .a_top(a_top),

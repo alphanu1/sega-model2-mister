@@ -388,7 +388,7 @@ RLD_RTL := rtl/mem/m2_sdram.sv rtl/io/m2_rom_loader.sv sim/mem/sdram_model.sv si
 
 
 .PHONY: test test_m2_backup test_m2_fb_wcomb test_m2_fbw_chain test_m2_sndboard test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram test_fx68k test_m2_ioboard
-test: test_m2_handshake_cdc test_m2_texel test_m2_texel_cdc test_m2_span_tex test_m2_geo test_m2_wr_arb test_m2_pair_cache test_m2_raster3d test_m2_backup test_m2_sndlink test_fx68k test_m2_sndboard test_m2_ioboard test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_sdram_cdc test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
+test: test_m2_handshake_cdc test_m2_texel test_m2_texel_cdc test_m2_span_tex test_m2_geo test_m2_wr_arb test_m2_pair_cache test_m2_eng_ra test_m2_raster3d test_m2_backup test_m2_sndlink test_fx68k test_m2_sndboard test_m2_ioboard test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_sdram_cdc test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
 
 test_i960_dec: obj_i960_dec/Vi960_dec
 	@echo "== test i960_dec"
@@ -753,6 +753,28 @@ obj_geodiff/Vgeodiff_top: sim/video/geodiff_top.sv sim/video/tb_m2_geodiff.cpp r
 	  rtl/video/m2_geometry.sv rtl/video/m2_geo_engine.sv rtl/video/m2_geo_xform.sv \
 	  rtl/video/m2_geo_clip.sv rtl/video/m2_geo_project.sv $(GEO_RTL) sim/video/tb_m2_geodiff.cpp
 
+# R709: the same bench with the engine's reads through the RTL read-ahead
+# (m2_eng_ra) and the bench answering its port. M2GD_LAT=<port latency>,
+# M2GD_RABYPASS=1 for no copies at all.
+geodiff_ra: obj_geodiff_ra/Vgeodiff_top
+	@./obj_geodiff_ra/Vgeodiff_top $(TEST_ARGS)
+
+obj_geodiff_ra/Vgeodiff_top: sim/video/geodiff_top.sv sim/video/tb_m2_geodiff.cpp rtl/mem/m2_eng_ra.sv rtl/video/m2_geo.sv rtl/video/m2_geo_view.sv \
+    rtl/video/m2_geometry.sv rtl/video/m2_geo_engine.sv rtl/video/m2_geo_xform.sv rtl/video/m2_geo_clip.sv rtl/video/m2_geo_project.sv $(GEO_RTL)
+	$(VBUILD) --top-module geodiff_top -CFLAGS "-O2 -DGD_RA" $(TGPFLAGS) -DGD_RA -Wno-WIDTHTRUNC -Wno-UNUSEDSIGNAL -Irtl/tgp -Irtl/video --public-flat-rw \
+	  --Mdir obj_geodiff_ra -o Vgeodiff_top sim/video/geodiff_top.sv rtl/mem/m2_eng_ra.sv rtl/video/m2_geo.sv rtl/video/m2_geo_view.sv rtl/tgp/m2_fifo_m10k.sv \
+	  rtl/video/m2_geometry.sv rtl/video/m2_geo_engine.sv rtl/video/m2_geo_xform.sv \
+	  rtl/video/m2_geo_clip.sv rtl/video/m2_geo_project.sv $(GEO_RTL) sim/video/tb_m2_geodiff.cpp
+
+# ...and with B's engine path (R214's pair cache) in the same place, for the
+# baseline the read-ahead is measured against.
+obj_geodiff_pc/Vgeodiff_top: sim/video/geodiff_top.sv sim/video/tb_m2_geodiff.cpp rtl/mem/m2_pair_cache.sv rtl/video/m2_geo.sv rtl/video/m2_geo_view.sv \
+    rtl/video/m2_geometry.sv rtl/video/m2_geo_engine.sv rtl/video/m2_geo_xform.sv rtl/video/m2_geo_clip.sv rtl/video/m2_geo_project.sv $(GEO_RTL)
+	$(VBUILD) --top-module geodiff_top -CFLAGS "-O2 -DGD_RA" $(TGPFLAGS) -DGD_RA -DGD_PC -Wno-WIDTHTRUNC -Wno-UNUSEDSIGNAL -Irtl/tgp -Irtl/video --public-flat-rw \
+	  --Mdir obj_geodiff_pc -o Vgeodiff_top sim/video/geodiff_top.sv rtl/mem/m2_pair_cache.sv rtl/video/m2_geo.sv rtl/video/m2_geo_view.sv rtl/tgp/m2_fifo_m10k.sv \
+	  rtl/video/m2_geometry.sv rtl/video/m2_geo_engine.sv rtl/video/m2_geo_xform.sv \
+	  rtl/video/m2_geo_clip.sv rtl/video/m2_geo_project.sv $(GEO_RTL) sim/video/tb_m2_geodiff.cpp
+
 test_m2_geo_view: obj_geoview/Vm2_geo_view
 	@echo "== test m2_geo_view (the projection from the window command)"
 	@./obj_geoview/Vm2_geo_view $(TEST_ARGS)
@@ -838,11 +860,11 @@ test_m2_raster3d: obj_raster3d/Vm2_raster3d
 	@./obj_raster3d/Vm2_raster3d $(TEST_ARGS)
 
 obj_raster3d/Vm2_raster3d: rtl/video/m2_raster3d.sv rtl/video/m2_quad_store.sv rtl/video/m2_raster_fill.sv \
-                           rtl/video/m2_raster_div.sv rtl/video/m2_recip_rom.sv rtl/video/m2_persp_recip.sv rtl/video/m2_raster_band.sv rtl/video/m2_span_tex.sv rtl/video/m2_texel.sv rtl/video/m2_texel_addr.sv rtl/video/m2_texel_x2.sv rtl/video/m2_texel_cdc.sv rtl/video/m2_char_x2.sv rtl/tgp/m2_fifo_m10k.sv sim/video/tb_m2_raster3d.cpp
+                           rtl/video/m2_raster_div.sv rtl/video/m2_recip_rom.sv rtl/video/m2_persp_recip.sv rtl/video/m2_raster_band.sv rtl/video/m2_span_tex.sv rtl/video/m2_texel.sv rtl/video/m2_texel_bl.sv rtl/video/m2_texel_addr.sv rtl/video/m2_texel_x2.sv rtl/video/m2_texel_cdc.sv rtl/video/m2_char_x2.sv rtl/tgp/m2_fifo_m10k.sv sim/video/tb_m2_raster3d.cpp
 	$(VBUILD) --top-module m2_raster3d -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-WIDTHEXPAND -Wno-PINCONNECTEMPTY -Wno-VARHIDDEN -Wno-WIDTHTRUNC \
 	  --Mdir obj_raster3d -o Vm2_raster3d -CFLAGS "-O2" \
 	  rtl/video/m2_raster3d.sv rtl/video/m2_quad_store.sv rtl/video/m2_raster_fill.sv \
-	  rtl/video/m2_raster_div.sv rtl/video/m2_recip_rom.sv rtl/video/m2_persp_recip.sv rtl/video/m2_raster_band.sv rtl/video/m2_span_tex.sv rtl/video/m2_texel.sv rtl/video/m2_texel_addr.sv rtl/video/m2_texel_x2.sv rtl/video/m2_texel_cdc.sv rtl/video/m2_char_x2.sv rtl/tgp/m2_fifo_m10k.sv sim/video/tb_m2_raster3d.cpp
+	  rtl/video/m2_raster_div.sv rtl/video/m2_recip_rom.sv rtl/video/m2_persp_recip.sv rtl/video/m2_raster_band.sv rtl/video/m2_span_tex.sv rtl/video/m2_texel.sv rtl/video/m2_texel_bl.sv rtl/video/m2_texel_addr.sv rtl/video/m2_texel_x2.sv rtl/video/m2_texel_cdc.sv rtl/video/m2_char_x2.sv rtl/tgp/m2_fifo_m10k.sv sim/video/tb_m2_raster3d.cpp
 
 test_m2_pair_cache: obj_pair_cache/Vm2_pair_cache
 	@echo "== test m2_pair_cache (the port's second dword serves the next read)"
@@ -851,6 +873,14 @@ test_m2_pair_cache: obj_pair_cache/Vm2_pair_cache
 obj_pair_cache/Vm2_pair_cache: rtl/mem/m2_pair_cache.sv sim/mem/tb_m2_pair_cache.cpp
 	$(VBUILD) --top-module m2_pair_cache -Wno-UNUSEDSIGNAL --Mdir obj_pair_cache -o Vm2_pair_cache -CFLAGS "-O2" \
 	  rtl/mem/m2_pair_cache.sv sim/mem/tb_m2_pair_cache.cpp
+
+test_m2_eng_ra: obj_eng_ra/Vm2_eng_ra
+	@echo "== test m2_eng_ra (the geometry engine's read-ahead, R709)"
+	@./obj_eng_ra/Vm2_eng_ra $(TEST_ARGS)
+
+obj_eng_ra/Vm2_eng_ra: rtl/mem/m2_eng_ra.sv sim/mem/tb_m2_eng_ra.cpp
+	$(VBUILD) --top-module m2_eng_ra --Mdir obj_eng_ra -o Vm2_eng_ra -CFLAGS "-O2" \
+	  rtl/mem/m2_eng_ra.sv sim/mem/tb_m2_eng_ra.cpp
 
 test_m2_wr_arb: obj_wr_arb/Vm2_wr_arb
 	@echo "== test m2_wr_arb (one owner at a time on the shared write port)"

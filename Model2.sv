@@ -2974,7 +2974,7 @@ m2_geo #(.AW(SDR_AW), .DEPTH(128)) u_geo (
 	.dbg_rp(geo_dbg_rp), .dbg_wp(geo_dbg_wp),
 	.mtx0(), .mtx4(), .mtx8(), .mtx11(),
 	.mat_we(geo_mat_we), .mat_idx(geo_mat_idx), .mat_data(geo_mat_data),
-	.eng_busy(eng_busy),
+	.eng_busy(eng_busy | eng_ra_busy),   // R709: and the read-ahead's last fetch off port 4
 	// THESE FOUR WERE LEFT DANGLING AND IT REACHED HARDWARE. An unconnected
 	// input ties to zero, so geo_polygon_data would have written the game's
 	// polygon data at word 0 of SDRAM -- GAME_PROG, the i960's program ROM.
@@ -3051,12 +3051,23 @@ m2_pair_cache #(.AW(SDR_AW-1), .COL_BITS(SDR_COL)) u_geo_pc (
 	.req(geo_rd_req), .idx(geo_wa[SDR_AW:2]), .ack(geo_rd_ack_c), .data(geo_rd_data_c),
 	.p_req(gc_req), .p_idx(gc_idx), .p_ack(geo_rd_ack_r), .p_dout(p4_dout_r)
 );
-// The engine reads polygon RAM, which the geometrizer's own DMA writes, so its
-// copy is dropped on those writes for the same reason.
-m2_pair_cache #(.AW(SDR_AW-1), .COL_BITS(SDR_COL)) u_eng_pc (
-	.clk(clk_sys), .rst_n(mem_rst_n), .bypass(pair_off_s2), .inval(geo_sd_req & wr_ack_geo),
-	.req(eng_mem_req), .idx(eng_wa[SDR_AW:2]), .ack(eng_mem_ack_c), .data(eng_mem_data_c),
-	.p_req(ec_req), .p_idx(ec_idx), .p_ack(eng_mem_ack_r), .p_dout(p4_dout_r)
+// R709: THE ENGINE'S READS GO THROUGH A READ-AHEAD, not a pair cache. Two
+// streams fetch the pairs after the engine's last miss while it works: the
+// polygon data (RAM or ROM) and the texture headers in texture ROM -- nothing
+// the CPU writes (R708). Everything else goes straight to the port with no
+// copy. The polygon RAM's only writer is the geometrizer's DMA, and its
+// write's acknowledge -- the write has landed -- drops both streams; no copy
+// outlives an object (`active`). tb_m2_geodiff: 25-26% off a heavy list's walk.
+wire eng_ra_busy;
+m2_eng_ra #(.AW(SDR_AW-1)) u_eng_ra (
+	.clk(clk_sys), .rst_n(mem_rst_n), .bypass(pair_off_s2), .active(eng_busy),
+	.inval(geo_sd_req & wr_ack_geo),
+	.req(eng_mem_req), .idx(eng_wa[SDR_AW:2]),
+	.stream_en((eng_mem_space == 2'd0) || ((eng_mem_space == 2'd1) && !eng_mem_addr[23])),
+	.sid(eng_mem_space[0]),
+	.ack(eng_mem_ack_c), .data(eng_mem_data_c),
+	.p_req(ec_req), .p_idx(ec_idx), .p_ack(eng_mem_ack_r), .p_dout(p4_dout_r),
+	.busy(eng_ra_busy)
 );     // 4M-dword ROM window
 logic [31:0] geo_obj_oba_r;
 always_ff @(posedge clk_sys) if (geo_obj_valid) geo_obj_oba_r <= geo_obj_oba;

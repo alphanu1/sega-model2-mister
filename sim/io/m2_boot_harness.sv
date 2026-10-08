@@ -915,6 +915,8 @@ module m2_boot_harness #(
 
   // ---- the geometry pipeline, so object_data is actually consumed
   wire        geo_mat_we, geo_obj_valid, geo_eng_busy;
+  wire        eng_busy_raw, eng_ra_busy;   // R709: the engine, and the read-ahead's last fetch
+  assign geo_eng_busy = eng_busy_raw | eng_ra_busy;
   wire [3:0]  geo_mat_idx;
   wire [31:0] geo_mat_data, geo_foc_x, geo_foc_y, geo_obj_oba, geo_obj_obc;
   wire [31:0] geo_obj_tha, geo_obj_tpa;
@@ -947,22 +949,29 @@ module m2_boot_harness #(
         .clk(clk_mem), .rst_n(rst_n),
         .req(geo_rd_req), .idx(geo_dw), .ack(geo_rd_ack_i), .data(geo_rd_data_i),
         .p_req(geo_p_req), .p_idx(geo_p_idx), .p_ack(geo_p_ack), .p_dout(geo_p_dout));
-      m2_pair_cache #(.AW(24), .COL_BITS(10)) u_eng_pc (
-        .clk(clk_mem), .rst_n(rst_n),
-        .req(eng_mem_req), .idx(eng_dw), .ack(eng_mem_ack_i), .data(eng_mem_data_i),
-        .p_req(eng_p_req), .p_idx(eng_p_idx), .p_ack(eng_p_ack), .p_dout(eng_p_dout));
+      // R709: the engine reads through the read-ahead, as Model2.sv's do
+      m2_eng_ra #(.AW(24)) u_eng_ra (
+        .clk(clk_mem), .rst_n(rst_n), .bypass(1'b0), .active(eng_busy_raw),
+        .inval(geo_sd_req & geo_sd_ack),
+        .req(eng_mem_req), .idx(eng_dw),
+        .stream_en((eng_mem_space == 2'd0) || ((eng_mem_space == 2'd1) && !eng_mem_addr[23])),
+        .sid(eng_mem_space[0]),
+        .ack(eng_mem_ack_i), .data(eng_mem_data_i),
+        .p_req(eng_p_req), .p_idx(eng_p_idx), .p_ack(eng_p_ack), .p_dout(eng_p_dout),
+        .busy(eng_ra_busy));
     end else begin : g_direct
       assign geo_rd_data_i = geo_rd_data;  assign geo_rd_ack_i = geo_rd_ack;
       assign eng_mem_data_i = eng_mem_data; assign eng_mem_ack_i = eng_mem_ack;
       assign geo_p_req = 1'b0; assign geo_p_idx = '0;
       assign eng_p_req = 1'b0; assign eng_p_idx = '0;
+      assign eng_ra_busy = 1'b0;
     end
   endgenerate
 
   m2_geometry u_geometry (
     .clk(clk_mem), .rst_n(rst_n),
     .start(geo_obj_valid), .oba(geo_obj_oba), .obc(geo_obj_obc),
-    .busy(geo_eng_busy),
+    .busy(eng_busy_raw),
     .mat_we(geo_mat_we), .mat_idx(geo_mat_idx), .mat_data(geo_mat_data),
     .foc_x(geo_foc_x), .foc_y(geo_foc_y),
     .mem_req(eng_mem_req), .mem_addr(eng_mem_addr),

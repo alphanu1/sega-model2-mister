@@ -26752,3 +26752,67 @@ Consequences: development restarts from B; R693 is no longer convicted (it
 may still be innocent); and R707's read-ahead is a kept copy of the same kind,
 so its invalidation must be designed against this fault, and its check on the
 board must run far longer than 150 s.
+
+**R709 -- THE ENGINE'S READ-AHEAD (rtl/mem/m2_eng_ra.sv), DESIGNED AGAINST
+R708.** Replaces u_eng_pc (R214's pair cache) on the engine's side of port 4.
+Built on B (main 46f7347), not D.
+
+Design, each limit measured before it was adopted (tb_m2_geodiff's C++
+model, M2GD_PC=3 with the R709 knobs, LAT 12, against B's cache PC=1):
+  * Two streams of four pairs: the polygon data (RAM or ROM) and the texture
+    headers in texture ROM. Streaming the palette and translation mirrors as
+    well bought nothing (the engine's colour cache already holds them);
+    streaming the texture headers in texture RAM bought nothing either.
+    Everything the CPU writes goes straight to the port with NO copy, not
+    even R214's next dword: the bridge's col_inval/tex_inval fire when a
+    write is ISSUED, not when it lands, and since R702 port 4 outranks the
+    CPU's port, so an engine read can overtake a queued colour write.
+  * The polygon RAM's one writer is the geometrizer's DMA; its write
+    acknowledge (landed) drops both streams, and a fetch in flight across it
+    is discarded on arrival (R698's hole). Measured: 280 such flushes a
+    heavy list, no cost.
+  * No copy outlives an object: both streams drop while the engine is idle.
+    No cost.
+  * A fetch issued FOR a waiting read answers it even when it cannot be kept
+    -- found by sweeping the unit bench's latency to 150: from 24 cycles up,
+    with a write landing during every fetch, every fetch was discarded and
+    reads starved. With it, a read finishes within two fetches.
+  * The walker shares port 4 and may ask only while the engine is idle; a
+    read-ahead fetch can still be in flight when the engine finishes, so the
+    walker's W_OBJW now waits on eng_busy | the read-ahead's busy.
+Model: 25-26% off the walk on four saved lists (w1000, w5000, w2500, w3910),
+identical quads, 280 write flushes each.
+
+Verification:
+  * tb_m2_eng_ra (new, in `make test`): engine-like reads with re-reads,
+    steps back, jumps, header runs and straight-through reads; DMA rewrites
+    landing with inval and CPU rewrites of straight-through memory with
+    none; every answer must be memory's value or the value before a write
+    that landed after the read was asked; the port's request never rises
+    under its acknowledge; busy covers every fetch and clears within a fetch
+    of the engine going idle. 13,539,977 checks, 0 fails, at LAT 12 and 60;
+    swept 1-150 clean. 48% of bypass's time at LAT 12.
+  * Mutations: invalidate ignored -> stale reads caught; no restart guard ->
+    deadlock caught; drop mask unrotated -> hang caught; no answer from the
+    read's own fetch -> starvation caught (at LAT 60). Keeping a fetch across
+    an invalidate is NOT caught, and is harmless: a restart also discards it
+    and an inactive stream cannot hit; the slot's arrived flag is now also
+    cleared on allocation, so the invariant is explicit.
+  * tb_m2_geodiff with the RTL in the loop (make obj_geodiff_ra; the bench
+    answers the module's port as m2_sdram_x2 does) against B's own
+    m2_pair_cache in the same place (obj_geodiff_pc), four saved lists, all
+    quads identical to the C++ reference:
+
+        port latency     B (pair cache)    read-ahead
+         8 cycles        1.16 vblank       0.98   -16%     (w1000; the
+        10               1.21              0.98   -19%      other three
+        14               1.33              1.01   -24%      within 1 pt)
+
+    The board's effective latency was put at 10-16 (R696): expect ~19-24%
+    off the geometry walk. The read-ahead is no longer latency-bound (8 and
+    10 cycles give the same time); what remains is the engine's own
+    sequencing, and ~0.1 vblank of two-cycle hits.
+  * Quartus 17 --analyze_file: m2_eng_ra.sv and Model2.sv parse clean (the
+    one 10259 warning in Model2.sv is on main too). lint_top clean.
+Not proven by any bench: R708's mechanism, which no bench reproduces. The
+board check must run far past tools/m2-fbcheck.py's 150 s, which D passed.
