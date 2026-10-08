@@ -27119,3 +27119,29 @@ and s748 did not route and s746 died in Quartus (Internal Error, Sub-system
 STA, sta_report_metastability.cpp); s749-s751 all routed -- s751 clk_sys
 -0.021, clk_mem -0.072, clk_i960 +3.419, holds clean, HDMI -0.520: a
 measurement build. RBF assembled for the race capture.
+
+**R722 -- WHAT THE i960 WAITS ON IN A RACE: INSTRUCTION FETCHES, AND MOSTLY
+THE ROUND TRIP, NOT THE SDRAM.** s751 (R721's sampler), 180 s of a race,
+12,800 samples; the game 5,895 flips in 10,351 vblanks = 32.8 fps; 12.65 CPI,
+57.8% of cycles on the bus, data cache 83.4%.
+    frame-sync wait (idle)               34.2%
+    waiting on an INSTRUCTION FETCH      27.8%   (T_FETCH_W 24.7, T_FETCH2_W 3.1)
+    waiting on a data access             16.2%
+    working                              11.6%
+    the TGP holding the i960             10.2%
+The instruction-fetch waits by what the bridge was doing: nothing yet --
+req_mem not raised, so the icache's miss and the crossing -- 11.0%; S_DONE
+(the access finished, the handshake back still running) 8.0%; reading SDRAM
+(S_RDB) 4.3%; just arrived (S_IDLE, req up) 2.6%. Data: SDRAM read miss 5.2%,
+writes ~3%, TGP FIFO reads and writes ~1.2%, nothing in the bridge yet 3.0%.
+So of the i960's busy time instruction fetches are 42%, the SDRAM's own share
+of them a sixth. i960_icache is the i960KB's own: 512 B, direct-mapped,
+16-byte lines, and a line fill is FOUR bridge transactions, one a word, each a
+full four-phase round trip. R691 found size bought nothing -- in the boot
+bench; a race's working set evidently does not fit 512 B.
+Levers, by what they cut: (1) a larger instruction cache (fewer fills; M10K
+has 3 blocks free, so 2 KB of data, tags out of flip-flops); (2) a line fill
+as ONE bridge transaction (the SDRAM port already answers 64 bits; three
+round trips of four saved per miss); (3) R693's two-phase handshake, which
+shortens every transaction (R704 blamed it for the black fault; R708, R710
+and R712 found other causes, so it is unconvicted).
