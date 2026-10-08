@@ -26157,6 +26157,371 @@ EVERY CORE CLOCK: clk_mem +0.447, clk_sys +0.320, clk_i960 +3.511, holds
 >= +0.192, HDMI -0.210** (s637 -0.887). s647 clk_sys +0.116 (HDMI -0.346);
 s649 clk_sys -0.074. The PCM tags were the room: s637 without R683 had
 clk_sys +0.016; s648 with it has +0.320.
+s648 on the board 11:23 (the board moved to 192.168.1.65), s626 as .prev.
+
+**R687 -- THE 3D FRAME RATE, MEASURED FROM LINUX (tools/m2-fps.py).** No
+core change: an unpainted marker word (bit 24 clear) in three lines of each
+DDR3 buffer; the core clears a buffer at each new list, so wiped markers are
+3D frames. s648 in attract, 60 s: seconds at 57-58 fps (the game's rate,
+R637) for long stretches, 28-29 (2 vblanks) and 19 (3 vblanks) in heavy
+scenes; frame gaps 52% one vblank, 35% two, 11% three. Mean 42.8 fps --
+overstated: three seconds read 68-97, lists far closer than a vblank at a
+scene change (gaps down to 1.3 ms), which are real clears of near-empty
+lists, not the steady rate. For scale: R637 s422 28.3 fps; R681 s626 ~2.4
+vblanks a frame (~24 fps). Not yet an A/B on the same attract loop.
+
+**R688 -- TALLER BANDS BUY 1-4%: THE BAND-END DRAIN IS TEXEL WORK, NOT IDLE.**
+R551's "band-end drain" was 15% of the bench's cycles on f2000, so BAND_H 16
+and 32 were measured (FB path, R685 RTL, pictures and fetch counts identical):
+
+    frame   BAND_H 8     16                 32
+    2000    1,181,666    1,144,555 (-3%)    1,128,718 (-4.5%)
+    3450      889,504      880,999 (-1%)      877,625 (-1.3%)
+    9000    1,011,795      994,680 (-2%)      986,282 (-2.5%)
+
+The drain is the band's last texel fetches, which are paid anyway; halving
+the band count removes only the pipeline's refill. Not worth a mask twice
+the size (two MLAB copies, +16 LABs) at 550/553 M10K and ~99% ALM. The draw
+is texel-bound: ~5 cycles a fetch (f2000: 225,770 fetches, 1.18 M cycles).
+Next question is on the board: in the scenes that run at 2-3 vblanks, is the
+draw the limit or the CPU/geometry? OSD Textures off removes the fetches.
+
+**R689 -- R687 WAS WRONG: THE COUNTER COUNTED PAINTED MARKERS AS CLEARS.**
+A 3D pixel painted over a marker wipes it as surely as the clear, so a scene
+that painted all three counted each frame twice: R687's "57-58 fps for long
+stretches" was 29 fps, and its 1.3 ms gaps were a clear and a paint of one
+frame. Found when OSD Textures off read 94-116 fps (2 x 57.5). Fixed: the
+buffers are drawn in turn, so only the one due to be cleared is watched, and
+the other is re-marked the moment it is found cleared -- it has just gone on
+display and nothing draws into it. Minimum gap now 16.7 ms, one vblank.
+
+s648, Textures OFF, 60 s of attract (fixed counter): mean 30.9 fps; 25% of
+frames in one vblank, 64% in two, 10% in three. With the texel path all but
+removed the game still runs mostly at half rate, so the texel path is not
+what holds it at 2 vblanks. Textures ON with the fixed counter: next.
+Geometry, for scale (geodiff on the saved walk dumps, bench memory, 70 MHz;
+cycles to the last quad): w1000 0.91 vblank, w5000 0.89, w2500 0.84, w2300
+0.81, w3910 0.41, w4000 0.33, w7900 0.32. A list goes CPU (built during a
+frame) -> geometry (walked the next) -> draw (the next, into the buffer that
+comes off display at the swap), so each stage must fit in one vblank for the
+game's rate. The draw now does on every MAME frame measured (0.71-0.97); the
+heavy walks are at 0.8-0.9 on bench memory, and the CPU is unmeasured since
+R681. Which stage holds the 2-vblank scenes needs the board's telemetry.
+s648, Textures ON, fixed counter, 60 s of attract: mean 30.7 fps; 21% of
+frames in one vblank, 72% in two, 6% in three -- the same as Textures OFF
+(30.9; 25/64/10) within the difference between two stretches of attract.
+The texel path no longer sets the frame rate; the game runs at half rate
+with or without it. The limit is upstream of the draw: the CPU or the
+geometry.
+
+**R690 -- MEASURED ON s651 (s648 + telemetry lite, triangle split parked): THE
+GAME IS NOW CPU-BOUND.** 240 s of attract, 12,645 vblanks: a new frame every
+1.94 vblanks (29.7 fps), 0 lists dropped. i960 IP samples (15,834):
+
+    game logic (everything else)                        30.8%
+    display-list push loop, 0x178E0-0x17AFF             29.1%
+    frame-sync wait, 0x12B0/0x12B8 (idle)               22.7%
+    store loop to 0x804000, 0x19F40-0x19F80              8.9%
+    IP 0                                                 8.4%
+
+i960: 32,609 instructions a vblank, 18.66 CPI (1.88 M instr/s); waiting on
+the bus 71.9% of cycles (13.42 CPI), own sequencing 5.24 CPI; data cache
+86.4% hit, 0.09 misses an instruction. (decode_lite.py read 13.3% until now:
+the 32-bit wait total wraps in ~2 minutes and was taken first to last; now
+summed record to record. R681's 71% was a shorter capture and right.)
+
+What changed since R681: the draw no longer holds the game (Textures on/off
+make no difference to the rate, R689), and the push loops are not waiting on
+the geometry -- m2_geo queues pushes and never stalls the i960 (R681's "stalled
+because the walker drains only when the renderer takes the next list" was the
+draw's hold, now gone). The i960 is busy ~77% of the time: ~0.91 M of its
+cycles a game frame, ~1.5 vblanks, which rounds every frame up to two. The
+game's rate needs ~1.5x the CPU's throughput, and ~72% of its cycles are
+spent waiting on memory -- R681: only a tenth of that wait is at the SDRAM
+controller. The rest is the path between the i960 and it (bridge, crossing,
+arbitration turnaround, I/O accesses). That path is the next study item.
+
+**R691 -- THE INSTRUCTION CACHE IS NOT THE CPU'S LIMIT; SIZE BUYS NOTHING.**
+tb_m2_boot, 40 M instructions (boot and the game code the bench reaches; it
+never gets to the 3D in 60 M, so not the attract loop), CPU cycles an
+instruction:
+
+    icache   M2_BOOT_LAT   CPI    T_FETCH_W   T_MEM_W   prefetch hit
+    512 B         6        6.29     1.22        2.55       42.6%
+    1 KB          6        6.28     1.21        2.55       42.6%
+    2 KB          6        6.28     1.20        2.55       42.6%
+    512 B        16        7.09     1.19        3.38       45.4%
+    2 KB         16        7.06     1.17        3.38       45.3%
+
+The fetch stall is the redirect, not the miss: prefetch hits 43% and its
+misses are almost all mispredicted branches, which cost the same whatever the
+cache holds. SDRAM latency 6 -> 16 adds 0.83 CPI, all load/store. And every
+instruction pays T_FETCH + T_EXEC, two cycles, before any stall: the core
+does not overlap them. So the CPU levers are, in order of likely size: the
+load/store path's latency (T_MEM_W), branch redirect cost, and fetch/execute
+overlap -- not cache size. The board's own split is s653-s655.
+
+**R692 -- ON THE BOARD, 90% OF THE i960's CYCLES ARE STALLS.** s655 (branch
+meas-lite: s648 + telemetry lite + i960_top's sequencer state counted on
+clk_i960; triangle split parked), 240 s of attract, 10,123 vblanks after boot:
+1.86 vblanks a frame (30.8 fps), 36,823 instructions a vblank.
+
+    load/store stall (T_MEM_W)          62.6% of cycles   10.34 an instruction
+      ... with a write on the bus       19.9%              3.29
+    fetch stall (T_FETCH_W, FETCH2_W)   30.3%              5.01
+    frame-sync spin (IP 0x12A0-0x12C0)  29.3%  (overlaps: the spin is loads)
+
+(The rows are running totals sampled at different moments; they overlap by a
+few percent and sum past 100.) Against the bench's game code (R691: T_MEM_W
+2.55-3.38, T_FETCH_W 1.2) the board is 3-4x worse on both: the per-access cost
+through bridge and SDRAM under the renderer's traffic, and the game's working
+set (R691's "icache size buys nothing" was the bench's small loops). The CPU
+is busy ~71% of the time: ~1.32 vblanks of work a game frame against the 1.0
+the game's rate needs.
+
+Levers, largest first: (1) the fetch stall -- test a bigger icache ON THE
+BOARD; (2) writes, 20% of all cycles stalled behind a posted write's handshake
+-- a write buffer; (3) every access, hit or miss, pays the four-phase handshake
+(S_DONE ~4.5 bridge cycles a transaction) -- a two-phase toggle, as Model 1's
+m1_cdc_port. Next build: (1), icache 2 KB (LINES 128, one M10K more).
+
+**R693 -- THE CPU BRIDGE'S HANDSHAKE IS TWO-PHASE (MODEL 1'S m1_cdc_port).**
+R692's third lever. Every i960 access -- a data-cache hit included, since the
+cache is on the bridge's memory side -- paid a four-phase handshake: request
+up, acknowledge up, request down, acknowledge down, each through a flop, and
+only then could the next access start (S_DONE, then C_CLR). The bench put
+that tail at ~4.5 bridge cycles of every transaction (tb_m2_boot, 30-60 M
+instructions: S_DONE 4.35 of ~13).
+
+Now req_cpu toggles once per access and ack_mem once per completion
+(m1_cdc_port's scheme; its two-flop synchronisers are not needed at the exact
+2:1, so the one settling flop and the payload rule stay as they were). A
+completion returns the memory side to S_IDLE at once; the CPU side is free on
+the next cycle. Two things the four-phase round trip had been hiding:
+  - THE CYCLE AFTER OUR OWN ACK. The i960 moves bus_addr at the end of the
+    cycle it sees bus_ack, so a request sampled in that cycle carries the old
+    address: C_IDLE does not accept while bus_ack is up (m1_cdc_port's
+    duplicate-transaction fault, measured there on back-to-back reads).
+  - THE READ-MODIFY-WRITE re-dispatches the same request as its write half
+    from S_IDLE; it now enters on rmw_done as well as on a new toggle.
+
+Bench: test_m2_cpu_bridge 129 checks 0 mismatches; test_m2_cpu_sdram,
+test_i960_top/_irq/_rom, test_m2_romload, test_m2_sdram pass. tb_m2_cpu_real
+(real ROM, 100,000 instructions): trace hash a95ee045a6c3424b IDENTICAL to
+the four-phase bridge, copy folds 14b8/d791 identical, CPU cycles 1,398,959
+-> 1,277,189 (13.99 -> 12.77 CPI, -8.7%).
+
+s656-s658 (meas-lite + icache 2 KB, LINES 128): NO FIT -- 4,230-4,232 LABs of
+4,191; s657 stopped after map. i960_icache 190 -> 592 ALM (per-line logic
+170 -> 525, the tag MLAB 20 -> 65). A bigger icache is not affordable on this
+device as the cache is built; the fetch stall has to come down another way
+(redirect cost, or fewer cycles a fill).
+tb_m2_boot, 40 M instructions (R691's runs, four-phase -> two-phase): CPU CPI
+6.29 -> 6.27 at M2_BOOT_LAT 6, 7.09 -> 7.06 at 16; S_DONE 4.35 cycles a
+transaction -> 0. So the tail was mostly hidden behind the core's own cycles
+where accesses are spaced; the gain is on runs of back-to-back accesses (the
+copy loop's 8.7%, and in the game the push loops). It does not shorten the
+time to data. Whether it moves the board is measured by s659-s661 (meas-lite:
+s655 + this + every CPU transaction timed by class, accept to completion).
+
+**R694 -- THE CPU IS STUCK ON THE GEOMETRY PUSH QUEUE, NOT ON MEMORY.**
+Counters for eight transaction classes did not fit (s659-s664: 4,205-4,223
+LABs; +405 registers). SAMPLED instead: the C record (~135 Hz) carries the
+i960's sequencer state beside its IP, and the bridge's transaction in flight
+{cph, owner, target, write, went-to-SDRAM, state}. s665 (meas-lite 91d8b63:
+s648 + R693's two-phase bridge + sampling; triangle split and M2COV parked),
+240 s of attract, 12,667 samples after boot: 1.94 vblanks a frame (29.7 fps;
+s655 1.86 on another stretch -- R693 does not move it, as R693's bench said).
+
+    frame-sync spin 26.3%; working 73.7%, and of the working time:
+      sequencer: T_MEM_W 69.7%, T_FETCH_W 18.1%, T_FRAME 4.7%, T_FETCH 2.7%,
+                 T_EXEC 2.5%, T_FETCH2_W 1.9%
+      stalled, the bridge holding:
+        LSU I/O WRITE (posted, not completing)   57.5%
+        nothing (between accesses)                8.3%
+        LSU I/O read                              7.5%
+        icache: SDRAM hit 4.4%, miss 4.0%
+        LSU SDRAM: read miss 3.4%, write 3.3%, read hit 1.1%
+      TGP holding the i960 (copro_stall) 7.3%
+    stalled IPs: 0x17AE4 13.1%, 0x17A8C 7.5%, 0x19F70 4.5%, 0x17940 3.9%,
+                 0x19F58 3.8%, 0x19F44 3.7% ... -- the display-list push loops
+
+An I/O write completes unless io_stall = copro_stall | geo_push_stall is up;
+the TGP is 7.3%, so the geometry front door's push queue (m2_geo, 128 deep)
+holds the i960 for ~50% of its working time. R681 said this ("stalled on
+stores because the walker drains only when the renderer takes the next
+list"); R690 wrongly overruled it from m2_geo's own header ("never stalls
+the i960"), which R610 had made untrue. SDRAM, the caches and the handshake
+are each single-digit percents. At ~800 pushes a frame even a slow drain is
+~1 ms, so the drain must be BLOCKED for long stretches -- by the hold
+(R610/R638: words in the walk's own list window wait for the walk) or by the
+walk's own polygon-data writes, which take the DMA first. s668-s670 sample
+the queue itself: full, walk running, word held, walk DMA request, drain
+busy, and the queued word's and the walk's dword[14:11].
+
+**R695 -- THE HELD WORDS ARE IN THE LIST THE WALK IS STILL READING; THE WALK
+OUTLASTS THE FRAME.** s669 (meas-lite 6a50c60: the push queue's state in each
+sample), 240 s of attract. While the i960 was stalled on an I/O write (57.1%
+of its working time), the queue was, in 56.2% of working time: FULL, a walk
+RUNNING, the head word HELD, in the walk's window -- the queued word and the
+walk both in dwords 0x0000-0x07FF. The walk was running in 97.6% of all
+samples.
+
+MAME 0.289 (build/mame289/m2lod), Daytona attract, 9,000 frames, write taps
+on 0x803008 and 0x804000-0x807fff: a flip EVERY frame (600 in each 600 but
+at scene changes), the read pointer alternating byte 0x00000 (4,394) and
+0x10000 (4,447) -- dwords 0 and 0x4000, R638 right -- and 600-950 pushes a
+frame. (The Lua taps must be held in globals; in locals the collector
+removed them after ~600 frames and the counts read 0 -- the first two runs.)
+Also: videoctl is written once, 0 -- 60 Hz mode; R256's "Daytona sets bit 0"
+does not hold for daytona93 in 0.289.
+
+So the game double-buffers on the board as in MAME, but our walk of list A
+is still running when the game has built B, flipped, and begun rewriting A:
+the walk lasts longer than a frame, the hold (R610) is right to stop the
+overwrite, and the i960 waits the rest of the walk out. The CPU number was
+the walk's. What the walk waits on -- its own geometry work, SDRAM, or the
+quad store not taking quads until the renderer swaps -- is the next sample.
+
+**R696 -- THE GEOMETRY IS BOUND BY ITS MEMORY LATENCY; TWO CUTS.** s673
+(meas-lite 163e16b: the walk's, engine's, clipper's and quad handoff's states
+in each sample), 240 s of attract: the walk running 92.2% of the time, and
+in W_OBJW -- waiting for the engine to finish an object -- 99.5% of it; the
+engine holding a quad the renderer is not taking 21.8% of the walk. (The
+engine and clipper states read idle throughout: m2_geometry exports them by
+hierarchical reference, u_engine.st, which Quartus does not synthesise --
+a dead instrument, not an idle engine.)
+
+tb_m2_geodiff answered its engine port in the SAME cycle, so its 0.3-0.9
+vblank a list (R690) was the geometry with free memory. M2GD_LAT=N now delays
+each answer N cycles:
+
+    list     reads   LAT 0   LAT 8   LAT 16   LAT 32  (vblanks)
+    w1000   91,211   0.91    1.48    2.07     3.26
+    w5000   90,746   0.89    1.44    2.03     3.21
+
+~0.07 vblank for every cycle of latency: ~77 reads a quad. The board's walk
+(~1.8 vblanks a frame) fits an effective 10-16. By engine state (w1000):
+E_UV 35.4%, E_RD 26.6%, E_TH0-3 18.0%, E_NORM 13.5%, E_ATTR 4.6%; 35% of
+reads are of a word already read in the list.
+
+CUT 1 (m2_geo_engine): A POLYGON E_EMIT WILL CULL SKIPS STRAIGHT TO IT. The
+cull (link type 0, or the back of a single-sided polygon) is known after the
+first dot product, before the light, the texture header, the coordinates and
+the colour -- none of which a culled polygon uses. R268 read the coordinates
+for every polygon to keep the pointer in step with the reference; the step
+depends on attr alone, so both pointers are stepped without the reads.
+1,752 of w1000's 4,092 polygons are culled. Reads 91,211 -> 70,215 (w1000),
+90,746 -> 65,404 (w5000); ALL SEVEN saved lists emit IDENTICAL quads.
+
+CUT 2 (m2_pair_cache KEEP_LAST, the engine's instance only): the engine
+reads 16-bit halves one at a time, so it asks for the same dword twice in a
+row; the cache kept only N+1, for one request. It now keeps the whole last
+answer {N, N+1} until a miss replaces it. Modelled in geodiff (M2GD_PC) at
+LAT 12:
+
+    policy                    w1000 trips  time     w5000 trips  time
+    none                        70,215     1.48       65,404     1.37
+    N+1 once (R214, today)      40,411     1.20       37,099     1.10
+    {N, N+1} kept               28,800     1.09       27,684     1.02
+
+(Before cut 1, today's cache at LAT 12 ~1.45.) The walker's instance keeps
+R214's rule: the game patches the list behind it (R266). A kept copy can
+outlive the engine's idle time between objects, so its invalidate now also
+takes the CPU's colour writes (col_inval: the 3D palette and the colour table,
+the only things the engine reads that the CPU writes). tb_m2_pair_cache gains
+the engine's pattern -- halves, jumps, a dword rewritten and inval pulsed
+every 97 reads -- 18,841 checks pass with KEEP_LAST 0 and 1; with the
+invalidate removed, KEEP_LAST 1 fails (stale words) at once.
+
+Tests: test_m2_geo, _geo_view, _geo_xform, _geo_engine (68), _geo_clip
+(2,003), _geometry, _pair_cache pass. Build s674-s676 (with R693).
+
+s674-s676 (a7e1266: R693 + R696): **s675 CLOSES EVERY CLOCK, HDMI TOO: clk_mem
++0.465, clk_sys +0.241, clk_i960 +3.552, HDMI +0.049, holds >= +0.243**;
+41,240 ALM. On the board 18:20 (s648 as .prev). tools/m2-fps.py, 60 s of
+attract: 30.0 fps -- 9% of frames in one vblank, 90% in two. NO CHANGE from
+s648 (30.7). The geometry cuts are real in the bench (the heavy lists 25%
+shorter at a 12-cycle port) but the frame stays at two vblanks: either the
+board's engine latency is far above 12, or the pipeline holds two vblanks
+for a reason the walk's length does not set. R695's walk sample had the
+engine holding a quad the renderer would not take 21.8% of the walk: a store
+that accepts a new list only after it swaps at a vblank would do exactly
+this. s677-s679 sample the store (pst), the sequencer (cst), fb_busy, the
+game hold and the frame's phase beside the walk and the engine (now by a
+port -- the hierarchical u_engine.st read 0).
+
+**R697 -- "NO LIGHT ON TEXTURES IS BACK": THE COUNT PATCH COULD OVERTAKE ITS
+PLACEHOLDER.** Ben on s675: "no light on textures is back ... it comes and goes
+but mostly looking good". That is R254's picture -- the light table filled with
+0/0 or 255/255 because the walker read a texture_data count as zero -- and its
+mechanism was never closed, only made rare: Daytona pushes a ZERO placeholder
+through the front door, pushes the payload, then patches the count with a
+DIRECT store into buffer RAM (0x19FA0: st r3,0x900000(r10)). The placeholder
+travels through m2_geo's queue; the patch goes straight to SDRAM through the
+bridge. Nothing ordered the two. A long payload (280 words) forces the
+placeholder through a 128-deep queue before the patch; a short one does not,
+and while the queue is HOLDING words (R610 -- 56% of the i960's working time,
+R695) the placeholder can still be queued when the patch lands, and then
+drains over it. It comes and goes with the queue's state, and R696 moved that.
+
+The fix is the smallest that keeps every other behaviour: a CPU store into
+buffer RAM waits in the bridge's S_IDLE while m2_geo's push_busy (a word
+queued, or the drain writing one) is up. Pushes and patch come from one CPU
+in program order, so the placeholder has always landed first. No deadlock: the
+queue drains as the walk advances, and the walk never waits for the CPU.
+(Routing the patch through the queue instead would have changed what CPU
+READS of buffer RAM see; this does not.)
+
+tb_m2_cpu_bridge gains the case: a store to 0x900020 under buf_wr_stall stays
+out of SDRAM for 300 cycles and lands when it drops; a work-RAM store is not
+held. 134 checks pass; with the stall term removed, 2 fail. test_m2_cpu_sdram,
+test_m2_geo, test_i960_top pass; tb_m2_cpu_real trace hash a95ee045a6c3424b
+unchanged.
+s680-s682 (f128d4b: R693 + R696 + R697): s681 CLOSES EVERY CLOCK -- clk_mem
++0.533, clk_sys +0.463, clk_i960 +2.926, HDMI +0.019; holds >= +0.025
+(clk_sys, thin); 41,132 ALM. Held off the board at Ben's request (a video in
+progress); to be checked with tools/m2-fbcheck.py before it is left on
+(s648 baseline: painted frames' mean brightness 305-358, 0-5% dark).
+
+**R698 -- s681 ON THE BOARD: LIT FOR 75 s, THEN BLACK FOR GOOD; THE COLOUR
+PATH'S INVALIDATES LEAKED, AND KEEP_LAST MADE THE LEAK LAST.** tools/m2-fbcheck.py
+on s681 (R697 in it), every 8 s: painted frames' mean brightness 243-326 for
+74 s; one frame with nothing painted at 83 s (a scene change); from 92 s to
+the end every painted pixel exactly black (mean 0, 100% dark). Reverted to
+s648 by the check itself. So R697 was not it -- or not all of it -- and the
+failure is a state that goes bad once and stays: at a scene change the game
+rewrites the 3D palette and the colour table.
+
+Three leaks, each old, each made lasting by R696's KEEP_LAST:
+  - m2_pair_cache: an invalidate that arrives while a port read is OUT is
+    lost; the answer, read before the write landed, was kept. Under R214's
+    use-once rule that cost one read; kept, it serves the old word until a
+    miss replaces it. Now an answer whose read overlapped an invalidate is
+    used by its own request and not kept (inval_pend).
+  - m2_cpu_bridge: col_inval pulsed when a colour write was DISPATCHED, before
+    the SDRAM held the new word; a reader in between took the old one. It
+    now pulses again when the write COMPLETES (ack_mem toggles on it).
+  - m2_geo_engine: a colour-cache entry computed across an invalidate was
+    written VALID with the old colour and served to every later polygon with
+    that key until the next colour write -- black for every polygon, for the
+    rest of the scene. An entry now is not validated if the colours changed
+    during its reads (cc_dirty); the polygon still uses what it computed.
+
+Benches: tb_m2_pair_cache gains a read across a write (the port answers with
+the pre-write words, the memory is rewritten and inval pulsed mid-latency; the
+next reads must see the new word) -- 18,851 checks pass with KEEP_LAST 0 and 1;
+with inval_pend removed KEEP_LAST 1 serves the stale word and fails.
+tb_m2_cpu_bridge: a palette write pulses col_inval at least twice, the last
+after the SDRAM write lands -- 136 checks; with the landing pulse removed, 2
+fail. geodiff (rebuilt: geodiff_top lacked R697's push_busy pin, and the first
+comparison ran a stale binary) -- all seven lists identical; tb_m2_cpu_real
+trace hash unchanged. Build s683-s685; tools/m2-fbcheck.py decides whether it
+stays on the board.
+s683-s685 (d0815ef: R693 + R696 + R697 + R698): s685 closes every core clock --
+clk_mem +0.734, clk_sys +0.214, clk_i960 +3.039, holds >= +0.228; HDMI -0.441;
+41,322 ALM. s683 clk_sys -0.265, s684 -0.075. Awaiting the board check
+(tools/m2-fbcheck.py + tools/m2-fps.py) before it is left on.
 
 **R699 -- FRAME SKIP: None / 1 / 2 (OSD).** Ben: "a frame skip option for users
 who want full speed now and don't care about all the frames" -- "None, 1, 2".
@@ -26177,6 +26542,43 @@ rather than hold the game.
 tb_m2_geo: six lists flipped one a frame -- walked 6 / 3 / 2 at skip 0 / 1 / 2,
 in the flip trigger and in After flip (what the board runs); 100 checks. With
 the gate forced open, the four skip cases fail.
+s686-s688 (ae17de9: R693 + R696-R699): s686 closes every core clock -- clk_mem
++0.294, clk_sys +0.286, clk_i960 +3.036, holds >= +0.242; HDMI -0.422;
+41,396 ALM. Supersedes s685 for the board check (it carries frame skip too).
+
+**R700 -- 15 kHz INTERLACED ON A REAL CRT: IT WORKS, AND IT IS BUGGY.** First
+test on Ben's CRT (s686, Video: 15kHz interlaced), attract. A picture: Daytona's
+tunnel scene, stable enough to photograph, 3D and 2D both present. Reported:
+
+  1. A BIG BORDER AT THE TOP -- the picture sits low; the photo shows a wide
+     black band above it and the image reaching the bottom edge.
+  2. THE VIDEO DROPS OUT EVERY FEW SECONDS (the set loses the picture).
+  3. THE TOP 2D LAYER'S SCANLINES ARE MISALIGNED (the HUD/tile layer).
+  4. IT DOES NOT LOOK INTERLACED -- "just using either even or odd": 192
+     distinct lines, not 384 interleaved.
+
+First reading against R682's timing (m2_video_timing, not yet tested):
+  1. Fields of 274/273 lines, 192 visible at the top, vsync at lines 220-223:
+     28 lines of front porch and 51 of back porch. 51 is far more than a TV
+     expects after vsync, so the picture starts late -- the top border. Move
+     the vsync later (roughly 235-240) to split the 82 blanking lines evenly.
+  4. Field 1's vsync starts half a line late (vs_i1, H_TOTAL/2), which is
+     what makes a set interlace -- and tb_m2_video_timing checks it. So
+     either the half-line offset does not survive to the analog output (the
+     MiSTer video path re-timing sync, or the scandoubler/mixer route taken
+     for 15 kHz), or the two fields carry the same lines (the framebuffer
+     reader's field select, fb_read f_r). Needs the analog output's own sync
+     looked at, not the timing module's.
+  2. Unknown. Candidates: the set losing vertical lock on the 274/273
+     alternation or on the vsync position; the pixel clock enable's
+     547/5300 accumulator jitter; the scanout falling late in DDR3 at the
+     field rate. Measure before choosing.
+  3. The tilemap's line_number in interlace is {dln[7:0], field ^ wrapl}
+     (R682); a top-of-field off-by-one would misalign exactly the top layer.
+
+The release README says 15 kHz "has not yet been confirmed on a real CRT";
+the next release notes it as working with these four faults.
+
 
 R699 ON s648's RTL (branch fskip-648, from the release b0f4363): frame skip
 alone, without R693 and R696-R698 -- s681 and s686 carry R696 and both went
@@ -26201,3 +26603,152 @@ two checks that decide interlace -- every vsync-to-vsync 179,416 pixels (273.5
 lines), and field 1's picture exactly half a line (328 pixels) lower after
 its vsync than field 0's. On R682's timing both FAIL (all six intervals
 wrong; offset 984 pixels = 1.5 lines); on R701's, 26 of 26 pass.
+
+s704-s706 (branch fskip-648 0face1d: the release s648 + R699 Draw method,
+Single buffered by default + R701's 15 kHz timing): **s705 closes every clock,
+HDMI too -- clk_mem +0.873, clk_sys +0.523, clk_i960 +2.672, HDMI +0.129, holds
+>= +0.173**; 41,304 ALM. On the board 22:35, md5 7c5daa8ad47e183ac7d2139c70695798;
+tools/m2-fbcheck.py 300 s: black-fault frames 0 (darkest painted frame 155, a
+dark scene). The next release candidate, pending Ben's CRT test of R701.
+(s703, the same without R701, read 23.3 / 24.2 / 26.0 3D pictures a second at
+texel step 1 / 2 / 4 -- the geometry waits on SDRAM behind the texels, R702.)
+
+**R703 -- THREE FAULTS REPORTED FROM PLAY (Ben, on the released builds),
+recorded before diagnosis.**
+
+  1. "THE CONDITION ON THE RIGHT IS IN THE WRONG PLACE" -- a 2D element on the
+     right of the screen drawn at the wrong position. (No photo yet; which
+     element to be confirmed.)
+  2. AT THE START, THE CAR AND THE "ROLLING START" TEXT SHOULD SCROLL ACROSS
+     THE SCREEN, AND DO NOT.
+  3. THE BACKGROUND MUSIC AND THE GAME-OVER SAMPLES ARE TOO QUIET.
+
+First reading, not a diagnosis:
+  - 1 and 2 are both 2D placement and motion. Whole-layer scroll is applied
+    (m2_tile_decode: map_x = x - hscr, map_y = y + vscr, as segaic24) and the
+    tilemap was pixel-exact against MAME on ten ATTRACT frames -- none of them
+    a race start. The candidate is the per-pair WINDOW / SPLIT-SCROLL control
+    register m2_video latches (segaic24's window: a layer drawn in two parts
+    with different scroll), or a scroll register the game rewrites mid-frame.
+    Oracle: MAME frames of the rolling start and of the right-hand HUD element,
+    through tools/m2-framediff.sh.
+  - 3: the mix is NOT the suspect. R267 matched the board's sum to MAME's
+    attract peaks (17,140 against 18,496) and its FM:sample balance (0.55
+    against segam1audio.cpp's 0.30:0.5 = 0.60). Attract peaks do not exercise
+    the music or the game-over speech, though: the suspect is a PER-VOICE
+    level inside m2_multipcm (total level, pan law, or the envelope) against
+    MAME's multipcm.cpp. Oracle: MAME's rendering of the same passage, peak
+    and RMS per source, as R267 measured the attract.
+
+**R704 -- THE BISECT: NEITHER HALF OF R696 TURNS THE LIGHTING BLACK; R693 IS
+THE SUSPECT. AND R702'S PRIORITY IS WORTH ~3 fps ON ITS OWN.** Three builds on
+the release branch (s705: s648 + R699 + R701), one seed each, all closing every
+core clock; each loaded, tools/m2-fbcheck.py 150 s (past two scene changes),
+tools/m2-fps.py 120 s, texel step 1, Draw method Single buffered:
+
+    build                                3D/s   game fps   full-speed frames   lighting
+    s705 (release)                       25.2     ~50            75%            lit
+    A s707: + R702 geometry priority     26.4     ~53            84%            lit
+    B s708: A + R696 engine cull-skip    27.3     ~55            92%            lit
+    C s709: A + R696 pair-cache keep     26.7     ~53            88%            lit
+
+Ben, by eye: "A, B, C good -- no black 3D". Every black build (s675, s681,
+s686) carried R693, the two-phase bridge handshake; none of A-C does. R693
+changed how the i960's writes complete, and a scene change is when the game
+rewrites its colour and lighting tables through exactly those writes (the
+luma table's byte stores go through the read-modify-write). R693 measured no
+frame-rate gain on the board (R694), so it is dropped from the release line;
+what in it breaks a table write is open (r639-beta keeps it for the study).
+
+Next: D = A + B + C, the whole of R696 with R702 and without R693 -- s686's
+speed recipe (56.8 fps) minus the fault.
+D s712 (A + B + C; s710-s712, s712 closes every core clock, HDMI -0.885):
+lit (tools/m2-fbcheck.py 150 s, 0 black-fault frames); 27.3 3D/s = ~55 game
+fps, 92% of frames at full speed -- the SAME as B. The pair-cache keep-last
+adds nothing measurable on top of the cull-skip and the priority (its gain
+overlapped theirs). s686's 28.4 was a lighter 60 s window. Recommended for
+the next release: B (s708) -- same speed, simpler (no keep-last, which needed
+R698's guards), every clock closed including HDMI +0.108, and checked by eye.
+
+**R705 -- THE CAR WINDOWS ON D: INTACT AFTER 10 MINUTES, NOT YET A FIX.**
+Believed: the window dropout (glass or its sky reflection vanishing after a few
+minutes of attract) was unaffected by the speed work -- A (R702 alone), B (+
+the cull-skip) and C (+ the keep-last) each showed it in Ben's run. Now seen:
+D (s712, all three, released as Model2_20260930c) kept the glass for 10
+minutes of attract on the board (Ben, by eye, 2026-10-01). D contains nothing
+A-C did not, and the dropout has always been time-dependent, so one clean
+10-minute run does not establish anything yet. To establish: a much longer run
+on D, repeated; then the same run on B, which measured the same speed. If D
+holds and B does not, the keep-last is involved; if both hold, the earlier
+A-C runs need repeating.
+
+**R706 -- IN A RACE THE GAME RUNS AT ~25-30 fps, NOT ~55. EVERY SPEED FIGURE
+SO FAR WAS ATTRACT.** Believed: D (s712) runs the game at ~55 of 57.5 fps,
+full speed in 92% of frames, so the remaining headroom is ~2.5 fps and a
+second SDRAM (or any further memory work) can buy at most that. Now known
+(Ben, playing D on the board, 2026-10-08, by eye): in-game it drops to ~30
+fps, ~25 on busy frames. tools/m2-fps.py, R689's Textures on/off comparison
+and R704's bisect were all taken in attract, which is lighter than a race (one
+car on screen for much of it). The ceiling argument is void for play; the
+latency argument (R681/R690: ~a tenth of the CPU's memory wait is at the SDRAM
+controller, the rest is the path to it; R696: the geometry waits on its round
+trip, ~10 clk_sys cycles unloaded, 10-16 effective) still stands, but whether
+contention matters IN A RACE is unmeasured. Next: tools/m2-fps.py during play
+on D, Textures On then Off (R689's test, in a race) -- if Off is much faster,
+the texture traffic's contention is the in-race cost and a second SDRAM is a
+real lever; then a telemetry-lite build of D to see which stage (CPU, walk,
+draw) holds a race.
+
+**R707 -- READ-AHEAD FOR THE GEOMETRY ENGINE, MODELLED: ~19% OFF THE WALK, OF
+A 25% CEILING. A SECOND SDRAM COULD ADD AT MOST THE OTHER ~6%.** Question
+(Ben): if the geometry waits on its memory round trip (R696), why not read
+ahead, and would a second SDRAM shorten the trip? tb_m2_geodiff gains
+M2GD_PC=3/4: a read-ahead stream per memory space (3) or one shared (4),
+M2GD_RA pairs ahead of the engine's last miss, on ONE port (M2GD_OCC cycles a
+fetch, default LAT: one in flight); a read of a pair held or in flight waits
+only for its arrival, anything else restarts the stream; the last pair is kept
+as PC=2. Writes are not modelled (a best case: copies never go stale). Saved
+attract walks, cycles to the last quad in vblanks at 70 MHz:
+
+    config                              w1000         w5000
+    today (PC=2, LAT 12)                1.09          1.02      (R696's, reproduced)
+    free memory (LAT 0) -- the ceiling  0.82  -25%    0.78  -24%
+    one shared stream, 4 pairs          0.94  -13%    0.86  -16%
+    per space, 2 pairs                  0.94  -13%    0.87  -14%
+    per space, 4 pairs                  0.89  -19%    0.82  -19%
+    per space, 8 pairs                  0.89  -19%    0.82  -19%
+    per space, 4, pipelined (OCC 4)     0.87  -20%    0.81  -21%
+    today at LAT 16                     1.17          1.10
+    per space, 4 pairs, LAT 16          0.92  -21%*   0.84  -24%*   (* against LAT 16)
+
+All 22 runs emit identical quads. Findings: (1) with memory FREE the walk
+still takes ~0.8 vblank a heavy list -- after R696's cuts the engine's own
+sequencing is three quarters of its time, memory a quarter; (2) four pairs
+ahead per space recovers ~19 of those 25 points on today's single port, with
+no pipelining; more depth or a pipelined port adds 1-2; (3) a second SDRAM
+(no crossing, no arbiter, open rows) can only shorten the trip, and even a
+zero-cycle trip is the LAT 0 row -- at most ~6 points beyond read-ahead, for
+owners of the board only. Read-ahead first; the second SDRAM is not the lever.
+Costs not yet sized: area (four streams x four pairs x 64 bits + tags, against
+98% ALM), and staleness -- the walk's DMA writes and the CPU's colour writes
+must invalidate the streams as R698 does the pair cache. A 19% faster walk is
+not 19% more frames: whether the geometry holds a race (R706) is unmeasured.
+
+**R708 -- D GOES BLACK TOO. R704 WAS WRONG: THE SUSPECT IS R696'S KEEP-LAST,
+NOT R693.** Believed (R704): R693, the bridge's two-phase handshake, turns the
+3D black, because every black build (s675, s681, s686) carried it and A, B and
+C did not go black. Now seen (Ben, 2026-10-08): D -- s712, the 20260930c
+release, A + B + C with NO R693 -- shows the 3D black, textured but unlit:
+the same fault. The factor common to every black build is R696's pair-cache
+keep-last (u_eng_pc KEEP_LAST=1): s675, s681, s686 and s712 all carry it; B
+(s708) and A (s707) never did. C (s709, keep-last alone) passed a 150 s
+tools/m2-fbcheck.py and a short look by eye -- the same check D passed at
+first, so that check is too short for this fault and C's pass is not an
+acquittal. s686 carried R698's in-flight invalidate guard and still went
+black, so R698 does not close the hole. Mechanism, unproven: the engine's kept
+copy serves a light/colour-table word the CPU has since rewritten (a scene
+change rewrites those tables), outside what col_inval covers.
+Consequences: development restarts from B; R693 is no longer convicted (it
+may still be innocent); and R707's read-ahead is a kept copy of the same kind,
+so its invalidation must be designed against this fault, and its check on the
+board must run far longer than 150 s.
