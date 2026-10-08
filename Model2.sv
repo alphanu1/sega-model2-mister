@@ -3131,7 +3131,8 @@ wire [23:0] q3d_col;
 wire [31:0] q3d_z;
 wire [15:0] geo_polys, geo_objs_done, geo_capped, geo_culled;
 wire [15:0] geo_clip_in, geo_clip_out, geo_clip_drop, geo_nonfinite;
-wire  [3:0] geo_eng_state, geo_clip_state;
+wire  [4:0] geo_eng_state;   // R719: 5 bits, a real port
+wire  [3:0] geo_clip_state;
 wire [15:0] geo_pj_lost;
 wire  [1:0] geo_qst;
 
@@ -3251,6 +3252,7 @@ wire [31:0] copro_fctl_reads;
 wire [31:0] copro_out_data, copro_out_pushed, copro_in_dropped, copro_out_dropped;
 wire        copro_ram_req;
 wire [15:0] tgp_retires, tgp_pc;
+wire  [7:0] r3d_dbg_pipe;   // R719: the renderer's producer and consumer states, for telemetry
 // WHY THE TGP STOPPED. It halts at pc 0x0481 after exactly 21,325 retires,
 // byte-identical across two builds whose outbound FIFO differed 16x -- so it
 // is not a handshake race, it is one instruction failing the same way. op is
@@ -4693,7 +4695,7 @@ end else begin : g_nodbg
 		.clk(clk_sys), .rst_n(mem_rst_n),
 		.a_valid(lt_a_valid),
 		.a_addr((lt_asel == 2'd1) ? cpu_dbg_acc : (lt_asel == 2'd2) ? dc_miss : (lt_asel == 2'd3) ? (fb_test ? {tp_bad, tp_rows} : {fb_pub, fb_drop}) : cpu_dbg_ip),
-		.a_data((lt_asel == 2'd1) ? dc_hits : (lt_asel == 2'd2) ? lt_cwait : (lt_asel == 2'd3) ? (fb_test ? {5'd0, tp_first} : {fb_lines, fb_late}) : {copro_stall, 15'd0, tgp_pc}),
+		.a_data((lt_asel == 2'd1) ? dc_hits : (lt_asel == 2'd2) ? lt_cwait : (lt_asel == 2'd3) ? (fb_test ? {5'd0, tp_first} : {fb_lines, fb_late}) : {copro_stall, geo_walk_state, geo_eng_state, r3d_dbg_pipe[2:1], q3d_valid && !q3d_ready, eng_ra_busy, 2'd0, tgp_pc}),   // R719
 		.b_valid(lt_b_valid), .b_addr(lt_b_addr), .b_data(lt_b_data),
 		.a_tag((lt_asel == 2'd1) ? 8'h50 : (lt_asel == 2'd2) ? 8'h51 : (lt_asel == 2'd3) ? (fb_test ? 8'h55 : 8'h54) : 8'h43), .b_tag(8'h47),   // 'P','Q','T','C'; 'G' (was 'F': R639)
 		.enable(1'b1),
@@ -6090,7 +6092,8 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1), .FB_DD
 	.fb_req(ddr_req), .fb_we(ddr_we), .fb_addr(ddr_addr), .fb_blen(ddr_blen),
 	.fb_din(ddr_din), .fb_be(ddr_be),
 	.fb_wnext(ddr_wnext), .fb_wacc(ddr_wacc), .fb_rvalid(ddr_rvalid), .fb_ack(ddr_ack), .fb_dout(ddr_dout),
-	.dbg_fb_lines(fb_lines), .dbg_fb_late(fb_late), .dbg_fb_pub(fb_pub), .dbg_fb_drop(fb_drop), .dbg_fb_pixels()
+	.dbg_fb_lines(fb_lines), .dbg_fb_late(fb_late), .dbg_fb_pub(fb_pub), .dbg_fb_drop(fb_drop), .dbg_fb_pixels(),
+	.dbg_pipe(r3d_dbg_pipe)   // R719: {pst, cst, fb_busy, fb_complete, 0}
 );
 
 // The 3D layer sits OVER the tilemap where it painted, and shows the tilemap

@@ -270,7 +270,8 @@ module m2_raster3d #(
   output logic [15:0] dbg_fb_late,
   output logic [15:0] dbg_fb_pub,    // frames published
   output logic [15:0] dbg_fb_drop,   // lists replaced before they were drawn
-  output logic [31:0] dbg_fb_pixels
+  output logic [31:0] dbg_fb_pixels,
+  output logic  [7:0] dbg_pipe       // measurement build: {pst, cst, fb_busy, fb_complete, 0}
 );
 
   localparam int unsigned NBANDS = (SCR_H + BAND_H - 1) / BAND_H;
@@ -1430,6 +1431,7 @@ module m2_raster3d #(
   typedef enum logic [2:0] { C_IDLE, C_CLR, C_CLRW, C_REPLAY, C_FILL, C_FILLW, C_DONE } cstate_t;
   pstate_t pst;
   cstate_t cst /*verilator public_flat_rd*/;   // R539: the bench histograms it
+  assign dbg_pipe = {pst, cst, fb_busy, fb_complete, 1'b0};   // measurement build
   // R607: the fill mask's valid bits and bypass (declared with it, above).
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin

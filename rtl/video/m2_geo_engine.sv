@@ -194,7 +194,8 @@ module m2_geo_engine #(
   output logic [15:0] dbg_polys,      // emitted this object
   output logic [15:0] dbg_objects,    // objects completed
   output logic [15:0] dbg_capped,     // objects that ran into MAX_POLYS
-  output logic [15:0] dbg_culled      // R219: polygons the reference would not render
+  output logic [15:0] dbg_culled,     // R219: polygons the reference would not render
+  output logic  [4:0] dbg_st          // measurement build: the state, as a port (not u_engine.st)
 );
 
   // ---------------------------------------------------------------- transform
@@ -245,6 +246,7 @@ module m2_geo_engine #(
     E_UV                                        // R268: the per-vertex texture coordinates
   } estate_t;
   estate_t st, ret;
+  assign dbg_st = st;
 
   logic [1:0] widx;                 // which of x,y,z is being read
   logic [31:0] xyz [3];

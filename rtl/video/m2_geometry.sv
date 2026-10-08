@@ -141,7 +141,7 @@ module m2_geometry (
   // which says only "the engine never finished". These say which stage.
   // Guessing at it has cost two wrong hypotheses already -- a NaN (refused
   // correctly, nonfinite counts it) and a z of zero (drains fine, tested).
-  output logic  [3:0] dbg_eng_state,
+  output logic  [4:0] dbg_eng_state,   // R719: 5 bits, from the engine's port
   output logic  [1:0] dbg_qst,
   output logic  [3:0] dbg_clip_state
 );
@@ -178,6 +178,7 @@ module m2_geometry (
   logic [31:0] poly_uv0, poly_uv1, poly_uv2, poly_uv3;   // R268
   logic [31:0] poly_tex;                                 // R271
 
+  logic [4:0] eng_dbg_st;   // R719: telemetry
   m2_geo_engine u_engine (
     .tha(tha), .lit_x(lit_x), .lit_y(lit_y), .lit_z(lit_z),
     .tp_we(tp_we), .tp_idx(tp_idx), .tp_diffuse(tp_diffuse), .tp_ambient(tp_ambient),
@@ -206,7 +207,7 @@ module m2_geometry (
     .poly_attr(poly_attr), .nrm_x(nrm_x), .nrm_y(nrm_y), .nrm_z(nrm_z),
     .poly_prev_link(poly_prev_link), .poly_chain_ok(poly_chain_ok),
     .dbg_polys(dbg_polys), .dbg_objects(dbg_objects), .dbg_capped(dbg_capped),
-    .dbg_culled(dbg_culled)
+    .dbg_culled(dbg_culled), .dbg_st(eng_dbg_st)
   );
   // add slot 1 is the engine's face test (R219), below.
   assign add_sub[1] = 1'b0;
@@ -734,7 +735,7 @@ module m2_geometry (
   // so these three terms cover every stage between object_data and q_*.
   assign busy = eng_busy || (qst != Q_IDLE) || !clip_in_ready;
 
-  assign dbg_eng_state  = 4'(u_engine.st);
+  assign dbg_eng_state  = eng_dbg_st;   // R719: a port, which Quartus synthesises (u_engine.st read 0)
   assign dbg_qst        = 2'(qst);
   assign dbg_clip_state = 4'(u_clip.kst);
 

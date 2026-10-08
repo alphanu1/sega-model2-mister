@@ -27050,3 +27050,24 @@ CORE CLOCK at 75 / 37.5 -- s740 clk_sys +0.038, clk_mem +0.342, clk_i960
 +2.916, HDMI -0.281; s741 clk_sys +0.139, clk_mem +0.572, clk_i960 +2.568,
 HDMI -0.678; holds clean. s742 clk_sys -0.734. 41,088-41,123 ALM. s741 is
 the candidate (the most core margin).
+
+**R719 -- TELEMETRY FOR A RACE: THE GAME IS CPU-BOUND, THE PICTURES ARE NOT
+KEEPING UP.** s741 (75/37.5, R718) on the board, in a race: the lap timer
+runs at ~0.85 of real time (Ben) -- ~49 game fps, up from ~0.5 on s727 at
+35 MHz -- and it is THE SAME with textures on or off and with 3D pacing Hold
+or Free, so nothing in the 3D holds the game: a race frame is CPU work, and
+at 37.5 MHz most now fit one vblank (the game is vblank-locked: one vblank or
+two, nothing between -- which is why +7% looked like nothing on the 3D
+meter and a lot on the timer). tools/m2-fps.py meanwhile: 14-15 DRAWN
+pictures a second, 4 vblanks each 80-83%, unchanged from s727 and by pacing
+or textures. Two questions, then: how far over a vblank the spilling race
+frames are (the CPU's margin), and why a race picture takes 4 vblanks.
+The telemetry-lite C record's 15 spare bits now carry, beside the IP and
+the TGP pc: the walk's state (m2_geo wst), the engine's state (a 5-bit PORT
+-- dbg_eng_state used the hierarchical u_engine.st, which Quartus does not
+synthesise and which read 0 on the board), the renderer's fb_busy and
+fb_complete, the quad hand-off stalled, and the read-ahead busy:
+  {copro_stall, wst[3:0], eng_st[4:0], fb_busy, fb_complete,
+   q3d_valid && !q3d_ready, eng_ra_busy, 2'b0, tgp_pc[15:0]}
+(m2_geo_engine dbg_st and m2_raster3d dbg_pipe ported from meas-lite
+87c2331.) A normal build compiles them away.
