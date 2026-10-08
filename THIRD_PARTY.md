@@ -80,6 +80,13 @@ decode paths. `mb86233_xfer` is exhaustive at 256.
 `m1_copro_if.sv` and `m1_tgp.sv` are Model 1's wrappers and will need Model 2
 equivalents; the `mb86233_*` core and the `fp_*` units are the portable part.
 
+*Later, by hand (study R732, 2026-10-09):* `rtl/tgp/mb86233_mem.sv` and
+`sim/tgp/tb_mb86233_mem.cpp` carry upstream **`9b72de7`** ("Register the TGP
+memory stall's select"), ported rather than copied because our copy has
+diverged (R596, R601, R602). Upstream `9705a10` and `b66b10f`'s TGP half are
+already here as our R577. Upstream `deb6642` (a register-sourced `rep` reads the
+wrong register) is NOT yet ported.
+
 **Speed is the open problem, not correctness.** 9.83 CPI at 72.17 MHz is
 7.3 M instr/s against the ~16.7 M a 50 MHz MB86234 delivers — 44%. Clocking
 alone cannot close it: 164 MHz would be needed at this CPI, and Fmax is 72.

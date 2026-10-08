@@ -297,14 +297,34 @@ module mb86233_alu #(
     endcase
   end
 
+  // R731: THE CONVERT IS SPLIT ACROSS THE FIRST TWO PIPELINE STAGES, as R588
+  // split cxfd. From pre_d this was an exponent add, a 64-bit barrel shift, a
+  // 32-bit OR for the sticky fraction, the rounding add and a 32-bit negate
+  // into the delay line's first entry in one cycle -- the deepest thing the
+  // ALU computes from D alone, and so the likeliest route of the pre_d ->
+  // pint path failing at 80 MHz (the report names the endpoints, not the
+  // opcode; the shifts and addd/subd are shallower). Stage 1 now
+  // registers the integer part, the rounding decision, the sign and the zero
+  // test; the add and the negate happen from those, and the result joins the
+  // delay line at stage 2. The line is ALU_LAT deep either way, so the op's
+  // latency is unchanged.
+  logic [31:0] f1_int;
+  logic        f1_bump, f1_sign, f1_zero;
+  always_ff @(posedge clk) begin
+    f1_int  <= cfx_int;
+    f1_bump <= cfx_bump;
+    f1_sign <= cfx_sign;
+    f1_zero <= (cfx_exp == 8'd0);
+  end
+
   logic [31:0] cfx_mag, cfx_result;
-  assign cfx_mag = cfx_int + {31'd0, cfx_bump};
+  assign cfx_mag = f1_int + {31'd0, f1_bump};               // R731: stage 2
 
   // exp==0 covers zero and denormals. Denormals are out of scope for the same
   // reason they are in fp_add/fp_mul, and are skipped by the harness.
   always_comb begin
-    if (cfx_exp == 8'd0) cfx_result = 32'd0;
-    else                 cfx_result = cfx_sign ? (~cfx_mag + 32'd1) : cfx_mag;
+    if (f1_zero) cfx_result = 32'd0;
+    else         cfx_result = f1_sign ? (~cfx_mag + 32'd1) : cfx_mag;
   end
 
   // ------------------------------------------------------------------
@@ -333,7 +353,7 @@ module mb86233_alu #(
       mb86233_pkg::ALU_ASLD: int_result = reg_d << shamt;
       mb86233_pkg::ALU_ASRD: int_result = 32'($signed(reg_d) >>> shamt);
       mb86233_pkg::ALU_CXFD: int_result = 32'd0;      // R588: finished at stage 2
-      mb86233_pkg::ALU_CFXD: int_result = cfx_result;
+      mb86233_pkg::ALU_CFXD: int_result = 32'd0;      // R731: finished at stage 2
       default:  int_result = 32'd0;
     endcase
   end
@@ -400,8 +420,10 @@ module mb86233_alu #(
       for (pi = 2; pi <= ALU_LAT; pi = pi + 1) begin
         pv[pi]   <= pv[pi-1];   pop[pi]  <= pop[pi-1];
         // R588: cxfd's result, finished from stage 1's registers, enters here.
-        if (pi == 2 && pop[1] == mb86233_pkg::ALU_CXFD) pint[pi] <= cxf_result;
-        else                                            pint[pi] <= pint[pi-1];
+        // R731: and cfxd's, the same way.
+        if      (pi == 2 && pop[1] == mb86233_pkg::ALU_CXFD) pint[pi] <= cxf_result;
+        else if (pi == 2 && pop[1] == mb86233_pkg::ALU_CFXD) pint[pi] <= cfx_result;
+        else                                                 pint[pi] <= pint[pi-1];
         pbit[pi] <= pbit[pi-1];
         pst[pi]  <= pst[pi-1];  psrc[pi] <= psrc[pi-1];
         pxv[pi]  <= pxv[pi-1];  pxd[pi]  <= pxd[pi-1];

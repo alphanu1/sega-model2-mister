@@ -27425,3 +27425,40 @@ Not yet: fp_add's add_a_q -> sA_small (0.708; shared with the TGP, its
 latency hard-coded in consumers), m2_fill xah -> the DSP's input register
 (0.788, R715's stage absorbed again), clip cs -> engine st (0.838), and the
 sound board and Z80 paths above.
+
+**R732 -- THE TGP'S PATHS TOWARD 80 MHz, AND MODEL 1'S THREE FIXES.** Model 1
+has three TGP timing commits since our copy (4e7dee6). 9705a10 (register the
+whole decode, from prog_rdata) and b66b10f's TGP half (d_lab_q, which 9705a10
+removes again) are ALREADY HERE as our R577 -- which goes further, registering
+u_xfer's outputs too. 9b72de7 (mb86233_mem's stall select registered) is
+ported with its bench; on Model 2 nothing reads that output (mem_stall comes
+from the core's own registered decode, R596/R601), so it moves no path here.
+Two changes of our own for s759's 80 MHz list, no cycle count changed:
+  * mb86233_mem: req / we / addr registered and the bank selects decoded
+    after the flop, not decoded and then registered -- the same function at
+    every port; the AGU now ends at a flop (x_src_bank -> sel_ram0_q /
+    sel_ram1_q / sel_fifo_in_q). The bench now drives a fresh random request
+    after the edge before checking rdata; without that, a select decoded from
+    the LIVE address passed it (111,476 fails with the bench sharpened).
+  * mb86233_alu: cfxd split across ALU stages 1 and 2 as R588 split cxfd
+    (integer part, round decision, sign and zero test registered; the add and
+    negate in stage 2); ALU_LAT unchanged. pre_d -> pint names no opcode, and
+    cfxd is the deepest D-only computation, so this is the likely route, not a
+    proven one.
+make test_tgp unchanged: fp_mul / fp_add / fp_div, mb86233_alu (2,170,388),
+agu, dec, seq (3,000,000 each), xfer (256, exhaustive), core lockstep 8,000
+retires 0 diverged, m2_geo_xform 7,813 -- 0 fails; mb86233_mem 179,399 / 0.
+mb86233_regs fails 46,966 of 3,000,000 BEFORE AND AFTER: the bench treats rf
+0x21 as storage, on Model 2 it is the FIFO (0e49c54). Planted faults caught:
+stall back to combinational (249), live-address selects (111,476), cfxd's
+stage-2 entry removed (19,582). test_m2_boot passes (the TGP retires only 83
+instructions there). lint_top and Quartus parses clean.
+STILL OPEN for 80: x_src_bank -> mem_fout_q (the data-space FIFO at
+0x100/0x400 is Model 1's; MAME's Model 2 copro_tgp_data_map has RAM only, the
+FIFOs are rf 1/2 -- a parameter could remove that route, a behaviour change);
+x_dst_reg -> state.S_LABB / S_DST (inferred: the S_DST write strobe reaches
+m2_tgp's fifo_ack and the S_SRC wait's next state); state.S_DST -> u_seq|pc
+(inferred: brul's target read through the register file into next_pc; a
+brul_reg_q read in S_ALU would cost no cycle, but the lockstep never emits
+brul). And Model 1's deb6642 (a register-sourced `rep` reads b0; Virtua
+Fighter froze on it) is not ported.

@@ -61,6 +61,10 @@ int main(int argc, char** argv) {
   long checked = 0, fails = 0;
   long hit_ram0 = 0, hit_ram1 = 0, hit_fin = 0, hit_fout = 0, hit_unmap = 0;
 
+  // R731: previous cycle's external select, because stall is registered --
+  // see the check below for why that is the contract now.
+  bool sel_ext_prev = false;
+
   for (long n = 0; n < N; n++) {
     uint32_t a = (n < NE) ? edges[n] : (dist(rng) & 0x1ffff);
     // Weight the mapped regions so most cycles do useful work.
@@ -91,7 +95,18 @@ int main(int argc, char** argv) {
     if ((bool)dut->unmapped != unmap)         bad = true;
     if ((bool)dut->ext_rd != (rq && fin_sel)) bad = true;
     if ((bool)dut->ext_wr != (rq && fout_sel))bad = true;
-    if ((bool)dut->stall != (rq && (fin_sel || fout_sel) && !ack)) bad = true;
+    // R731: STALL IS REGISTERED (Model 1's 9b72de7), so the model tracks the
+    // PREVIOUS cycle's select rather than this one's. It used to be
+    //   stall == rq && (fin_sel || fout_sel) && !ack
+    // which put the combinational address decode inside the core's
+    // next-state logic (Model 1, clk_3d 57.143 MHz: state.S_DST_W ->
+    // u_mem|sel_ram1 -> u_mem|stall -> state.S_DST, -1.256 ns).
+    //
+    // The contract is weaker and the core still holds it: stall is only read
+    // in a _W state, and every one is the SECOND cycle of a held access at the
+    // same address, so the select it needs was computed a cycle earlier.
+    // mb86233_core on Model 2 does not read this port at all (R596, R601).
+    if ((bool)dut->stall != (sel_ext_prev && !ack)) bad = true;
 
     if (bad) {
       if (fails < 20)
@@ -113,7 +128,23 @@ int main(int argc, char** argv) {
       else               expect = xr;
     }
 
+    // Across the edge, exactly as the DUT registers it.
+    bool sel_ext_now = rq && (fin_sel || fout_sel);
+
     tick();
+
+    sel_ext_prev = sel_ext_now;
+
+    // R731: MOVE THE ADDRESS BEFORE LOOKING AT rdata. The core changes its
+    // address on the very edge the read data comes back on, so rdata must
+    // depend only on what was registered at the edge. Checked with the inputs
+    // still holding the old access, a select decoded from the LIVE address
+    // passes unnoticed -- measured: it did, 0 fails. ext_rdata is NOT moved:
+    // the FIFO's word is the caller's to hold until it has been taken.
+    dut->req = dist(rng) & 1; dut->we = dist(rng) & 1;
+    dut->addr = (dist(rng) & 1) ? (dist(rng) & 0x7ff) : (dist(rng) & 0x1ffff);
+    dut->wdata = dist(rng);
+    dut->eval();
 
     if (do_check) {
       checked++;

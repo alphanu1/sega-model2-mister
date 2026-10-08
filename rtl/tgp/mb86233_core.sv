@@ -484,6 +484,13 @@ module mb86233_core (
   // (s312: ir[20] -> x0 / isqrt_base / mem_cnt, -1.86 ns at 70). The decode is
   // ready in S_DECODE exactly as before -- ir is loaded on the same edge -- so
   // no state gains a cycle; every later state now starts from registers.
+  //
+  // R731: this IS Model 1's 9705a10 ("register the TGP's whole decode"),
+  // reached independently and one step further -- u_xfer's outputs are
+  // registered here too, which 9705a10 does not do. Model 1's b66b10f
+  // registered d_lab alone for the S_LABB transitions and 9705a10 removed it
+  // again as a second register on an already-registered signal; there is
+  // nothing of either left to port.
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       d_lab <= '0;

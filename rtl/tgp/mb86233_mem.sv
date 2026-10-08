@@ -166,25 +166,68 @@ module mb86233_mem #(
   // MAME models this as m_stall plus `goto do_stall`, which re-executes the
   // whole instruction. Here the access simply is not complete until ext_ack,
   // and the core holds the instruction.
-  assign stall = req & (sel_fifo_in | sel_fifo_out) & ~ext_ack;
+  //
+  // R731: THE SELECT IS REGISTERED -- Model 1's 9b72de7, ported. This was
+  // `req & (sel_fifo_in | sel_fifo_out) & ~ext_ack`, which puts the
+  // combinational address decode inside whatever next-state logic reads it:
+  // the FSM drives an address, the address decodes to a bank select, the
+  // select makes stall, and stall decides the next state, all in one cycle.
+  // On Model 1 that was the whole clk_3d critical path at 57.143 MHz,
+  //   state.S_DST_W -> u_mem|sel_ram1 -> u_mem|stall -> state.S_DST, -1.256 ns.
+  //
+  // Registering it is safe because of how the core holds an access: each _W
+  // state presents the SAME request at the SAME address as its partner state,
+  // and stall is only ever CHECKED in the _W states. So the select needed was
+  // computed a cycle earlier. A first-cycle stall is behaviour nothing reads.
+  // If a state ever issues an external access and tests stall in the same
+  // cycle, this must go back to combinational.
+  //
+  // In this core the port is NOT CONNECTED to anything that reads it:
+  // mb86233_core takes mem_stall from its own registered FIFO decode (R596,
+  // R601) and leaves this output on mem_stall_c. So this changes no timing
+  // path on Model 2 -- it keeps the module, and its bench's contract, the
+  // same as the reference's.
+  logic sel_ext_q;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) sel_ext_q <= 1'b0;
+    else        sel_ext_q <= req & (sel_fifo_in | sel_fifo_out);
+  end
+  assign stall = sel_ext_q & ~ext_ack;
 
   // ------------------------------------------------------------- read mux
   //
   // RAM reads are registered, so the select must be too or the mux picks the
   // new address's bank while the data is still the old address's.
-
-  logic sel_ram0_q, sel_ram1_q, sel_fifo_in_q;
+  //
+  // R731: THE ADDRESS IS REGISTERED, AND THE SELECT DECODED AFTER IT. This
+  // registered the three selects -- `sel_ram0_q <= req & sel_ram0` and so on
+  // -- which hangs the bank compares off the end of the core's address
+  // generator: x_src_bank -> AGU -> +0x200 -> address mux -> compare ->
+  // sel_ram0_q / sel_ram1_q / sel_fifo_in_q, failing at 80 MHz. Registering
+  // req, we and addr instead and decoding them on the far side of the flop is
+  // the same function at every port, cycle for cycle (a select registered
+  // from a decode equals the decode of the registered inputs), so the bench
+  // is unchanged. The compares now run in parallel with the M10K's own
+  // clock-to-out, and the AGU ends at a flop exactly as it already ends at
+  // the RAM's address register.
+  logic        req_q, we_q;
+  logic [16:0] addr_q;
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      sel_ram0_q    <= 1'b0;
-      sel_ram1_q    <= 1'b0;
-      sel_fifo_in_q <= 1'b0;
+      req_q  <= 1'b0;
+      we_q   <= 1'b0;
+      addr_q <= 17'd0;
     end else begin
-      sel_ram0_q    <= req & sel_ram0;
-      sel_ram1_q    <= req & sel_ram1;
-      sel_fifo_in_q <= req & sel_fifo_in;
+      req_q  <= req;
+      we_q   <= we;
+      addr_q <= addr;
     end
   end
+
+  logic sel_ram0_q, sel_ram1_q, sel_fifo_in_q;
+  assign sel_ram0_q    = req_q && (addr_q <= 17'h000ff);
+  assign sel_ram1_q    = req_q && (addr_q >= 17'h00200) && (addr_q <= 17'h003ff);
+  assign sel_fifo_in_q = req_q && (addr_q == 17'h00100) && !we_q;
 
   always_comb begin
     if      (sel_fifo_in_q) rdata = ext_rdata;
