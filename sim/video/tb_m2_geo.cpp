@@ -695,6 +695,38 @@ int main(int argc,char**argv){
     char nm[64]; std::snprintf(nm, sizeof nm, "R699 mode %d skip %d: lists walked of 6", mode, sk);
     ck(nm, walks, sk == 0 ? 6 : sk == 1 ? 3 : 2);
   }
+  // ---- R711: A SKIPPED LIST STILL RUNS ITS STATE. Each list sets the light
+  // to a value of its own, then one object, then ends. Every list's light
+  // must land -- skipped or not -- while objects reach the engine, and frame
+  // ends reach the renderer, only from the lists that draw.
+  for (int mode : {0, 2}) for (int sk = 0; sk <= 2; ++sk) {
+    d->rst_n = 0; for (int i = 0; i < 4; i++) tick(); d->rst_n = 1; idle(2);
+    d->trig_mode = mode; d->skip = sk; d->eng_busy = 0;
+    unsigned lit_ok = 0, objs = 0, frames = 0, last = d->dbg_walk_frames;
+    int busy_left = 0;
+    for (int f = 0; f < 6; ++f) {
+      const uint32_t lx = 0x3f800000u + uint32_t(f) * 0x100u;
+      const uint32_t list[10] = { 0x05000000u, lx, 0x40000000u, 0x40400000u,      // light (op 0x0a)
+                                  0x00800000u, 0, 0, 0x00800000u, 0,              // object_data (op 0x01)
+                                  0x07800000u };                                   // end
+      w(2, 0x00000000);
+      d->frame_start = 1; tick(); d->frame_start = 0;
+      for (int i = 0; i < 4000; i++) {
+        d->rd_ack = 0;
+        if (d->rd_req) { d->rd_data = list[d->rd_addr < 10 ? d->rd_addr : 9]; d->rd_ack = 1; }
+        if (d->obj_valid) { ++objs; busy_left = 30; }
+        d->eng_busy = busy_left > 0; if (busy_left > 0) --busy_left;
+        tick();
+      }
+      if (d->lit_x == lx) ++lit_ok;
+      if (d->dbg_walk_frames != last) { frames += (d->dbg_walk_frames - last) & 0xffff; last = d->dbg_walk_frames; }
+    }
+    const unsigned draws = sk == 0 ? 6 : sk == 1 ? 3 : 2;
+    char nm[96];
+    std::snprintf(nm, sizeof nm, "R711 mode %d skip %d: lights applied of 6", mode, sk);  ck(nm, lit_ok, 6);
+    std::snprintf(nm, sizeof nm, "R711 mode %d skip %d: objects to the engine", mode, sk); ck(nm, objs, draws);
+    std::snprintf(nm, sizeof nm, "R711 mode %d skip %d: frame ends", mode, sk);            ck(nm, frames, draws);
+  }
   d->skip = 0; d->trig_mode = 0;
 
 

@@ -26839,3 +26839,23 @@ tested what they were meant to. (Whether D's whole-scene unlit 3D is the
 same fault is not yet known.) Mechanism unknown. What R699 changes: m2_geo
 walks only every (skip+1)th flipped list; the lists in between are never
 walked, but the game still writes them and still flips.
+
+**R711 -- A SKIPPED LIST IS STILL WALKED; IT JUST DRAWS NOTHING.** R710's
+mechanism, confirmed in m2_geo.sv: R699 did not arm a walk for a skipped
+flip at all, so every command in that list was lost -- polygon_data and
+texture_data uploads, the light (CAP_LIT), the texture parameters (W_TPP),
+the window, z-adjust. MAME runs all of them for every list. Whether a given
+upload or lighting change lands in a skipped list is a coin toss per scene
+(Ben: the fault came and went, and "now not happening on single buffered"
+after a switch to Double and back), which fits: one lost upload spoils a
+scene until the next. Now every flip arms a walk; a skipped one sets
+`nodraw`, under which object_data is read but not announced to the engine,
+and its end does not count in dbg_walk_frames, so Model2.sv's q3d_end -- the
+renderer's frame end -- never sees it. Direct data was never drawn and needs
+nothing. A vblank-fallback walk always draws.
+tb_m2_geo: each of six lists sets its own light, one object, end; at skip
+0/1/2 and trigger modes 0 and 2, all six lights must land while objects to
+the engine and frame ends are 6/3/2. 118 checks pass; the old walker fails
+exactly the four skipped-light checks (3 of 6, 2 of 6). Cost not yet
+measured: a skipped list's walk reads the whole list and performs its
+uploads, where R699 did nothing.

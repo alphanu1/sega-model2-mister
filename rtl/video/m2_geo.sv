@@ -59,9 +59,15 @@ module m2_geo #(
   // fragile. 0 flip (the 0x803008 write), 1 vblank (what this was before),
   // 2 the vblank AFTER a flip, 3 the write-pointer write at 0x801008.
   input  logic [1:0]    trig_mode,
-  // R699: FRAME SKIP -- 0 walks every flipped list, 1 every second, 2 every
-  // third (3 as 2). A skipped flip still moves the read pointer and still
-  // counts as a flip for the no-flip fallback; it just does not arm a walk.
+  // R699: FRAME SKIP -- 0 draws every flipped list, 1 every second, 2 every
+  // third (3 as 2). R711: A SKIPPED LIST IS STILL WALKED, BUT DRAWS NOTHING.
+  // A list is not only polygons: it uploads polygon and texture data, sets
+  // the light, the texture parameters, the window -- state every later list
+  // draws with. R699 did not walk skipped lists at all, so an upload or a
+  // lighting change that landed in one was simply lost: black spikes from
+  // polygon RAM never written, and scenes drawn unlit (R710). A skipped list
+  // now runs every command except object_data, which is announced to nobody,
+  // and its end is not a frame end -- the renderer never sees it.
   input  logic [1:0]    skip,
   input  logic          wr_push,         // 0x00800000-0fff and 0x00804000-7fff
   input  logic [31:0]   wdata,
@@ -605,6 +611,8 @@ module m2_geo #(
   logic        wp_pend;
   logic        flip_seen;                // a flip has happened since the last walk
   logic  [1:0] skip_cnt;                 // R699: flips skipped since the last walked one
+  logic        nd_pend;                  // R711: the pending flip is a skipped list
+  logic        nodraw;                   // R711: this walk runs state only
   wire         trig_flip   = flip_pend || (frame_pend && no_flips);
   wire         trig_vblank = frame_pend;
   wire         trig_after  = frame_pend && flip_seen;
@@ -691,6 +699,7 @@ module m2_geo #(
       flip_pend <= 1'b0; fs_since_flip <= 3'd7; setrp_q <= 1'b0;
       dbg_walk_flip <= 16'd0; dbg_walk_fallback <= 16'd0;
       setwp_q <= 1'b0; wp_pend <= 1'b0; flip_seen <= 1'b0; skip_cnt <= 2'd0;   // R699
+      nd_pend <= 1'b0; nodraw <= 1'b0;                                          // R711
       pd_addr <= 32'd0; pd_n <= 16'd0; pd_i <= 16'd0;
       pd_req <= 1'b0; pd_wdata <= 32'd0;
       dbg_pd_words <= 16'd0; dbg_pd_cmds <= 16'd0; dbg_td_words <= 16'd0; pd_tex <= 1'b0;
@@ -724,16 +733,20 @@ module m2_geo #(
       setwp_q <= wr_setwp;
       if (setrp_q) begin
         fs_since_flip <= 3'd0;
-        // R699: only every (skip+1)th flip arms a walk
+        // R699: only every (skip+1)th flip DRAWS; R711: every flip walks
+        flip_pend <= 1'b1; flip_seen <= 1'b1; drain_wait <= 10'd0;
         if (skip_cnt >= ((skip == 2'd3) ? 2'd2 : skip)) begin
-          flip_pend <= 1'b1; flip_seen <= 1'b1;
-          drain_wait <= 10'd0; skip_cnt <= 2'd0;
-        end else skip_cnt <= skip_cnt + 2'd1;
+          skip_cnt <= 2'd0; nd_pend <= 1'b0;
+        end else begin
+          skip_cnt <= skip_cnt + 2'd1; nd_pend <= 1'b1;
+        end
       end
       else if (frame_start && !no_flips) fs_since_flip <= fs_since_flip + 3'd1;
       if (setwp_q) begin wp_pend <= 1'b1; drain_wait <= 10'd0; end
       if (walk_go && (wst == W_IDLE)) begin
         frame_pend <= 1'b0; flip_pend <= 1'b0; wp_pend <= 1'b0; flip_seen <= 1'b0;
+        nodraw <= flip_pend && nd_pend;   // R711: a fallback walk always draws
+        nd_pend <= 1'b0;
         // R263: the game's own list-ready write, or the vblank fallback.
         if (flip_pend) begin
           if (!(&dbg_walk_flip)) dbg_walk_flip <= dbg_walk_flip + 16'd1;
@@ -807,7 +820,9 @@ module m2_geo #(
           if (w_op == 5'h00 && !(&nops_f)) nops_f <= nops_f + 16'd1;   // R255
           if (is_end) begin
             dbg_walk_ops    <= w_ops;
-            dbg_walk_frames <= dbg_walk_frames + 16'd1;
+            // the walk's end is the renderer's frame end (Model2.sv q3d_end);
+            // a skipped list's is not one (R711)
+            if (!nodraw) dbg_walk_frames <= dbg_walk_frames + 16'd1;
             wst <= W_IDLE;
           end else if (is_dd) begin
             // tpa, tha and two xyz points, then the attribute loop.
@@ -893,11 +908,11 @@ module m2_geo #(
             if (w_cap == CAP_WIN) win_cnt <= win_cnt + 8'd1;   // R642
             // The object is announced only once its four words are in, and
             // the walk then STOPS until the engine reports the object drawn.
-            if (w_cap == CAP_OBJ) begin
+            if (w_cap == CAP_OBJ && !nodraw) begin
               obj_valid <= 1'b1;
               eng_seen  <= 1'b0;
               wst       <= W_OBJW;
-            end else begin
+            end else begin                 // R711: a skipped list's object goes nowhere
               wst <= W_FETCH;
             end
           end else begin
