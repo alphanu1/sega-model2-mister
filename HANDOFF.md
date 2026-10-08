@@ -1,5 +1,59 @@
 # Handoff
 
+## 2026-10-08 (night): BRANCH readahead -- 75/37.5, the instruction line buffer, two new sets; building s755-s757
+
+On Ben's board: s741 (75/37.5 + R709 read-ahead + R711 + R697/R698/R712 +
+R714-R718), RBF md5 483cbd27c84867935e49fb1e1afc88ab. Ben: ~40 fps by eye;
+lap timer ~0.85 of real time, the same with textures off and with pacing Hold
+or Free. The black polygons are gone: they were Single buffered (R710),
+fixed by walking a skipped list without drawing it (R711).
+
+What the board measured (telemetry builds s745, s751 -- measurement only):
+a race is 31-33 game fps (list flips; NOT the ~49 the lap timer suggested,
+R720), the i960 working 65% of the time and waiting on the bus 57% of its
+cycles; the 3D ~80% idle. The waits (R722): instruction fetches 27.8% of all
+samples, data 16.2%, the TGP 10.2%; of the fetch waits only a sixth is the
+SDRAM -- the rest is round trips.
+
+In the branch since s741, not yet on the board:
+* R724 (af59b62): a 16-byte line buffer in the bridge; an icache line fill
+  is ONE bridge transaction. Real-CPU bench: same retired-IP hash, fetch
+  waits -43%, -6.3% overall on boot code.
+* R725 (8bdc3cf): Daytona USA 1994 (Revision A) MRA. The 16 MB polygon ROM's
+  last 3 MB are appended after the '93 image's end and the loader remaps them
+  to GAME_POLYX. The '93 MRA is unchanged.
+* R726 (7dcd3a1): Virtua Cop (Revision A) MRA, ROM layout only. A game ID on
+  index 4 (Model 1's scheme) switches the program's second 256 KB to
+  GAME_POLYX for that game only; Daytona MRAs send none. Not playable: its
+  I/O board is type 2 (light guns, LCD), the type-2 ROM is 32 KB and M10K is
+  550/553 -- no room.
+* R727 (80747ef): s752-s754 (R724 alone) failed clk_sys at 75 in the fill's
+  plane fit; determinant, numerators and saturate now from registers.
+  Pixel-identical on four frames, +0.2-0.4% draw cycles.
+
+Building now: s755-s757 (80747ef). Remaining seed-dependent paths, not fixed:
+clip cs -> engine st through the pool's combinational grant (-0.43 on s754),
+clip qsy -> quad store a_band (-0.38 on s752).
+
+When one closes, and only when Ben says: load it; a race with
+tools/m2-fps.py and the lap timer; the controls (R716 moved the EEPROM);
+Daytona 1994 boots; Virtua Cop boots (on the type-1 I/O firmware -- if it
+refuses, that is the I/O board).
+
+After that: 80/40 (R717/R718's remaining path list); a larger icache
+(R722's lever 1, M10K-limited); R693's two-phase handshake (lever 3).
+R723's two HUD faults (the 3D condition/mini-map drawn too low -- suspect
+the walker's window handling; ROLLING START not scrolling -- suspect
+segaic24's scroll). Car windows; 15 kHz on Ben's CRT.
+
+Found and corrected this session (see R-entries): the black polygons were
+not the speed work (R710); R306's reason for reverting R299 was wrong (R726:
+the shared layout moved '93's regions); the lap timer is not the game rate
+(R720); a hierarchical u_engine.st reads 0 on hardware (R719, now a port);
+Quartus absorbed R715's stage register into the DSP (R717); the telemetry
+builds route only on some seeds and once crashed Quartus' STA (R721).
+test_m2_raster3d builds again (R715); tb_m2_cpu_real builds again (R724).
+
 ## 2026-10-08 (later): BRANCH readahead -- the geometry read-ahead (R709), built, NOT yet on the board
 
 readahead = main (B, 46f7347) + rtl/mem/m2_eng_ra.sv in place of the
