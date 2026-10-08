@@ -26955,3 +26955,26 @@ one -- "never acknowledged" and wrong data, an artifact (hardware never
 abandons a request; the old module failed it identically). Patience is now
 400 + 6 x LAT: 13,878,373 checks at LAT 12 (and 60), 188,359,623 at 150,
 0 fails, old and new modules alike.
+
+**R715 -- THE FILL'S SPAN EMIT IS TWO STAGES (for 80 MHz).** s728's worst
+clk_sys path (-1.696 at 80, 213 of the 411 failing endpoints, 83% of the
+TNS): xah/xbh -> the M2COV sort and the viewport clamp (emit_cl) -> the
+plane's DSP multiply (3.9 ns alone) -> the add into span_v, 22.5 ns in one
+cycle. An emit now fills stage 1 (s1_y, s1_cl, s1_cr, s1_col, s1_moire); the
+next cycle moves it to the span output and evaluates the three planes (u, v,
+1/z) at the registered s1_cl / s1_y. The three emit sites gate on s1_free;
+a new quad (and so new gradients) is accepted only with stage 1 empty --
+the quad-accept condition and in_ready both gain !s1_valid.
+Checked pixel for pixel in the core's configuration (build: verilator
+--public-flat-rw -GFTB=1 -GPXC=1 -GPIXSTEP=4 -GFRB=2 -GM2COV=1 -GTXLATE=3
+-GTXNS=2 -GTWO_CLOCKS=1 -GFB_DDR3=1 -GFB_WCOMB=1 -GSPLIT_TRI=1, plus
+m2_fb_wcomb, m2_fb_read, m2_ddr3_arb and -DR3D_FB; run: M2_R3D_PXDUMP=1
+M2_R3D_NS2=1 M2_R3D_PXK=0 M2_R3D_FB=1 M2_R3D_FBPRE=12 M2_R3D_R107=1
+M2_R3D_FRAC=1 M2_R3D_LIST=<build/m2frames/fNNNN copy> M2_R3D_TPL=3000) on
+f2000, f3450, f5000 and f9000: every PX line and every texel fetch
+identical; draw time identical on three, +28 cycles of 867,683 on f5000.
+TEST_M2_RASTER3D WAS NOT BUILDING (since before this branch): the Makefile
+lacked m2_texel_bl.sv and --public-flat-rw, and the bench referred to the
+framebuffer reader's internals unconditionally, which exist only in an
+FB_DDR3 build. The trace is now under #ifdef R3D_FB; `make test_m2_raster3d`
+(band mode) passes, 8 checks.

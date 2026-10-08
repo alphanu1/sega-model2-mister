@@ -684,10 +684,21 @@ module m2_raster_fill #(
   // at a y that is either cury or walk_y, so one expression serves them all.
   // Written out at each site it was six multiply-add pairs instead of two, and
   // this module is what put the design over the device.
-  wire signed [15:0] emit_y  = (state == S_FS_WALK) ? walk_y : cury;
-  wire signed [31:0] emit_u  = uv_at(base_u, dudx, dudy, emit_cl, emit_y);
-  wire signed [31:0] emit_v  = uv_at(base_v, dvdx, dvdy, emit_cl, emit_y);
-  wire signed [31:0] emit_o  = uv_at(base_o, dodx, dody, emit_cl, emit_y);   // R337
+  // R715: AND ONE CYCLE LATER, FROM REGISTERS. At 80 MHz the emit cycle --
+  // the edge x, the sort and viewport clamp into emit_cl, the plane's DSP
+  // multiply and the add into span_v -- was 22.5 ns against 12.5 (s728,
+  // -1.696). An emit now fills stage 1 (s1_*: the row, the clamped ends, the
+  // colour); the next cycle moves it to the span output and evaluates the
+  // plane at s1_cl / s1_y. A new quad is not accepted until stage 1 is empty,
+  // so the gradients the plane uses are still this span's quad's.
+  logic               s1_valid, s1_moire;
+  logic signed [15:0] s1_y, s1_cl, s1_cr;
+  logic [23:0]        s1_col;
+  wire                s1_adv  = s1_valid && (!span_valid || span_ready);
+  wire                s1_free = !s1_valid || s1_adv;
+  wire signed [31:0] emit_u  = uv_at(base_u, dudx, dudy, s1_cl, s1_y);
+  wire signed [31:0] emit_v  = uv_at(base_v, dvdx, dvdy, s1_cl, s1_y);
+  wire signed [31:0] emit_o  = uv_at(base_o, dodx, dody, s1_cl, s1_y);   // R337
 
   logic               pf_a, pf_b;        // the two plane-fit divides, back
 
@@ -975,6 +986,7 @@ module m2_raster_fill #(
       oz_i <= 2'd0; oz_emax <= 8'd0; dodx <= '0; dody <= '0;
       base_o <= '0; nxo <= '0; nyo <= '0; pf_c <= 1'b0;
       span_valid <= 1'b0;
+      s1_valid   <= 1'b0;   // R715
       span_y     <= 16'sd0;
       span_x0    <= 16'sd0;
       span_x1    <= 16'sd0;
@@ -996,6 +1008,19 @@ module m2_raster_fill #(
       sc_r      <= pf_gshift(mul_q_r, net_r, zbig_r);   // R594: every cycle
       line_case <= 1'b0;
       if (span_valid && span_ready) span_valid <= 1'b0;
+      // R715: stage 1 to the output, the plane evaluated from registers
+      if (s1_adv) begin
+        span_valid <= 1'b1;
+        span_y     <= s1_y;
+        span_x0    <= s1_cl;
+        span_x1    <= s1_cr;
+        span_col   <= s1_col;
+        span_moire <= s1_moire;
+        span_u     <= emit_u;
+        span_v     <= emit_v;
+        span_ooz   <= emit_o;        // R337
+        s1_valid   <= 1'b0;
+      end
 
       // ---- R544: the plane fit's own machine (states moved, bodies unchanged
       // except that the fit ends in S_IDLE rather than handing to S_MINMAX).
@@ -1255,7 +1280,7 @@ module m2_raster_fill #(
 
       case (state)
         S_IDLE: begin
-          if (in_valid && pf_st == S_IDLE && !span_valid) begin   // R544: see in_ready
+          if (in_valid && pf_st == S_IDLE && !span_valid && !s1_valid) begin   // R544: see in_ready; R715
             sx[0] <= in_x0; sy[0] <= in_y0;
             sx[1] <= in_x1; sy[1] <= in_y1;
             sx[2] <= in_x2; sy[2] <= in_y2;
@@ -1343,17 +1368,14 @@ module m2_raster_fill #(
         end
 
         S_FLAT: begin
-          if ((!span_valid || span_ready) && pf_st == S_IDLE) begin   // R544
+          if (s1_free && pf_st == S_IDLE) begin   // R544; R715
             if ((cury <= view_y2) && (cury >= view_y1) && emit_ok) begin
-              span_valid <= 1'b1;
-              span_y     <= cury;
-              span_x0    <= emit_cl;
-              span_x1    <= emit_cr;
-              span_col   <= col;
-              span_moire <= moire;
-              span_u     <= emit_u;
-              span_ooz    <= emit_o;        // R337
-              span_v     <= emit_v;
+              s1_valid   <= 1'b1;        // R715: stage 1; the plane next cycle
+              s1_y       <= cury;
+              s1_cl      <= emit_cl;
+              s1_cr      <= emit_cr;
+              s1_col     <= col;
+              s1_moire   <= moire;
             end
             quad_done <= 1'b1;
             state     <= S_IDLE;
@@ -1519,17 +1541,14 @@ module m2_raster_fill #(
         S_FS_WALK: begin
           if (walk_y >= walk_end) begin
             state <= S_FS_END;
-          end else if ((!span_valid || span_ready) && pf_st == S_IDLE) begin   // R544
+          end else if (s1_free && pf_st == S_IDLE) begin   // R544; R715
             if (emit_ok) begin
-              span_valid <= 1'b1;
-              span_y     <= walk_y;
-              span_x0    <= emit_cl;
-              span_x1    <= emit_cr;
-              span_col   <= col;
-              span_moire <= moire;
-              span_u     <= emit_u;
-              span_ooz    <= emit_o;        // R337
-              span_v     <= emit_v;
+              s1_valid   <= 1'b1;        // R715: stage 1; the plane next cycle
+              s1_y       <= walk_y;
+              s1_cl      <= emit_cl;
+              s1_cr      <= emit_cr;
+              s1_col     <= col;
+              s1_moire   <= moire;
             end
             xa     <= xa + sla;
             xb     <= xb + slb;
@@ -1555,17 +1574,14 @@ module m2_raster_fill #(
         // The last scanline of the quad, drawn unordered: fill_line does not
         // sort its two x values, so a crossed pair emits nothing.
         S_FINAL: begin
-          if ((!span_valid || span_ready) && pf_st == S_IDLE) begin   // R544
+          if (s1_free && pf_st == S_IDLE) begin   // R544; R715
             if ((cury == limy) && (cury <= view_y2) && (cury >= view_y1) && emit_ok) begin
-              span_valid <= 1'b1;
-              span_y     <= cury;
-              span_x0    <= emit_cl;
-              span_x1    <= emit_cr;
-              span_col   <= col;
-              span_moire <= moire;
-              span_u     <= emit_u;
-              span_ooz    <= emit_o;        // R337
-              span_v     <= emit_v;
+              s1_valid   <= 1'b1;        // R715: stage 1; the plane next cycle
+              s1_y       <= cury;
+              s1_cl      <= emit_cl;
+              s1_cr      <= emit_cr;
+              s1_col     <= col;
+              s1_moire   <= moire;
             end
             state <= S_DONE;
           end
@@ -1595,7 +1611,7 @@ module m2_raster_fill #(
   // under it, and that span goes out with the next quad's texture state (flat
   // white, in the bench). The slower fill never let the span queue back up;
   // the faster one does. Nothing can be emitted while a span is held anyway.
-  always_comb in_ready = (state == S_IDLE) && (pf_st == S_IDLE) && !span_valid;
+  always_comb in_ready = (state == S_IDLE) && (pf_st == S_IDLE) && !span_valid && !s1_valid;   // R715
   assign dbg_hot    = state;   // R449: free, no counter behind it
   assign dbg_hotcyc = 16'd0;
 

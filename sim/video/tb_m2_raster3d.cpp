@@ -206,12 +206,17 @@ int main(int argc, char **argv) {
     ++g_cyc; g_now = g_cyc;   // R669
     { static const bool LT = std::getenv("M2_R3D_LATETRACE") != nullptr; static unsigned prev = 0; static int n = 0;
       auto *r = d->rootp;
+#ifdef R3D_FB   // the framebuffer's reader exists only in an FB_DDR3=1 build
       if (LT && FBM) { unsigned L = d->dbg_fb_late; if (L != prev && n < 12) { n++;
         std::printf("LATE #%u: landed y %d f %d, target y %d f %d, scan_y %d field %d\n", L,
           (int)r->m2_raster3d__DOT__g_fb__DOT__u_fbr__DOT__y_r, (int)r->m2_raster3d__DOT__g_fb__DOT__u_fbr__DOT__f_r,
           (int)r->m2_raster3d__DOT__g_fb__DOT__u_fbr__DOT__tgt_y, (int)r->m2_raster3d__DOT__g_fb__DOT__u_fbr__DOT__tgt_f,
           (int)d->scan_y, (int)d->scan_field); }
-        prev = L; } }
+        prev = L; }
+#else
+      (void)LT; (void)r; (void)prev; (void)n;
+#endif
+    }
     // R658: M2_R3D_SPANLOG=<poly> -- every span the writer takes for that polygon
     // (the colour carries the polygon number in list mode)
     { static const int SPL = std::getenv("M2_R3D_SPANLOG") ? std::atoi(std::getenv("M2_R3D_SPANLOG")) : -1;
