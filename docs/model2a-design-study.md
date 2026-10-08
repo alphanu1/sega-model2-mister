@@ -26825,3 +26825,17 @@ due to asynchronous read logic" (the read sits in the async-reset block).
 Reading it in a reset-free block, addressed on the hit cycle, keeps the hit
 at two cycles and should give back ~250-300 ALM; not done yet, the build
 fits without it. Not yet on the board.
+
+**R710 -- THE BLACK POLYGONS ARE "DRAW METHOD: SINGLE BUFFERED" (R699), NOT
+THE SPEED WORK.** Ben, 2026-10-08, on the board: s717 (read-ahead) showed
+scattered black polygons -- a long black spike across the attract scene,
+"loads of black all the time on different areas". So did B (s708, the
+20261008 release) and A (s707: s705 + R702 only, no cull-skip, no
+read-ahead). With Draw method switched to Double Buffered: fine. The fault
+is in R699's frame skip, shipped in s705 (20260930b) and every build since;
+R704's bisect, R708's conviction of the keep-last and Ben's own suspicion of
+the cull-skip were all run at the default, Single buffered, so none of them
+tested what they were meant to. (Whether D's whole-scene unlit 3D is the
+same fault is not yet known.) Mechanism unknown. What R699 changes: m2_geo
+walks only every (skip+1)th flipped list; the lists in between are never
+walked, but the game still writes them and still flips.
