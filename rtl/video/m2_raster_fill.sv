@@ -215,6 +215,8 @@ module m2_raster_fill #(
   localparam logic [4:0] S_OZ       = 5'd28;
   localparam logic [4:0] S_PF_Q3    = 5'd29;   // R337: the 1/z plane's divides
   localparam logic [4:0] S_PF_Q3W   = 5'd30;
+  // R727: one cycle for pr_* to follow pf_second before S_PF_D reads them
+  localparam logic [4:0] S_PF_DW    = 5'd31;
 
   localparam logic [1:0] EM_WALK = 2'd0;   // swapf-ordered edge pair
   localparam logic [1:0] EM_RAW  = 2'd1;   // xa, xb in chain order (fill_line tail)
@@ -424,10 +426,21 @@ module m2_raster_fill #(
   // S_PF_N at the earliest; pf_second last changes in S_PF_N and S_PF_D
   // follows, and qu/qv/qoz last change in the final S_OZ cycle, so every
   // operand has been stable for a cycle by then and the registers hold the
-  // same values the wires do. det_r, in S_PF_D, keeps the wires.
+  // same values the wires do.
+  // R727: det_r reads them too. At 75 MHz the vertex select, p4() and the
+  // subtract in front of the determinant's multiply failed clk_sys (s752,
+  // qu -> det_r -0.523). S_PF_D is entered from S_OZ with pf_second unchanged
+  // for many cycles, and through S_PF_DW whenever S_PF_N may have changed it,
+  // so pr_* always hold what the wires would.
   logic signed [15:0] pr_ax, pr_ay, pr_bx, pr_by;
+  // R727: and the texture differences, for the same reason (s752: qu -> nxu
+  // -0.519 at 75 MHz). Same argument: qu/qv/qoz last change in the final
+  // S_OZ cycle and pf_second two states before S_PF_N reads these.
+  logic signed [15:0] pr_u1, pr_u2, pr_v1, pr_v2, pr_o1, pr_o2;
   always_ff @(posedge clk) begin
     pr_ax <= pf_ax; pr_ay <= pf_ay; pr_bx <= pf_bx; pr_by <= pf_by;
+    pr_u1 <= pf_u1; pr_u2 <= pf_u2; pr_v1 <= pf_v1; pr_v2 <= pf_v2;
+    pr_o1 <= pf_o1; pr_o2 <= pf_o2;
   end
 
   // A DIVIDE THAT KEEPS ITS BITS. The gradient is a fraction -- texels per
@@ -536,7 +549,11 @@ module m2_raster_fill #(
   // dody. Same values: sc_r is the shift of exactly the operands the old
   // single-cycle form read, taken one state earlier.
   logic signed [39:0] sc_r;
-  logic               b_w2;
+  // R727: and the saturate registered too, every cycle (s754: sc_r -> dudy
+  // -0.539 at 75 MHz). Each gradient lands one more state later again, and
+  // S_PF_B gains a third cycle for dody.
+  logic signed [23:0] sc_s;
+  logic               b_w2, b_w3;
   logic               b_wait;
   // R566: 60 MHz. The normaliser and the plane's base each did too much in one
   // cycle (s297: oz_i -> qv +2.601, sx -> base_u +2.700 at 50 MHz). Each now
@@ -980,7 +997,7 @@ module m2_raster_fill #(
       // particular state is undefined for every cycle before it, and b_wait
       // powering up set would make S_PF_B compute its bases from a gradient
       // that had not been latched yet.
-      mul_q_r <= '0; mul_zr <= 6'd0; b_wait <= 1'b0; b_w2 <= 1'b0; sc_r <= '0; oz_w_v <= 1'b0; oz_last <= 1'b0; oz_w <= 2'd0; b_prod <= 1'b0;
+      mul_q_r <= '0; mul_zr <= 6'd0; b_wait <= 1'b0; b_w2 <= 1'b0; b_w3 <= 1'b0; sc_r <= '0; sc_s <= '0; oz_w_v <= 1'b0; oz_last <= 1'b0; oz_w <= 2'd0; b_prod <= 1'b0;
       dudx <= '0; dudy <= '0; dvdx <= '0; dvdy <= '0;
       for (int k = 0; k < 4; k++) begin qu[k] <= '0; qv[k] <= '0; qoz[k] <= '0; end
       oz_i <= 2'd0; oz_emax <= 8'd0; dodx <= '0; dody <= '0;
@@ -1006,6 +1023,7 @@ module m2_raster_fill #(
       divb_start <= 1'b0;
       quad_done  <= 1'b0;
       sc_r      <= pf_gshift(mul_q_r, net_r, zbig_r);   // R594: every cycle
+      sc_s      <= pf_sat(sc_r);                         // R727: every cycle
       line_case <= 1'b0;
       if (span_valid && span_ready) span_valid <= 1'b0;
       // R715: stage 1 to the output, the plane evaluated from registers
@@ -1059,8 +1077,10 @@ module m2_raster_fill #(
           end
         end
 
+        S_PF_DW: pf_st <= S_PF_D;   // R727
+
         S_PF_D: begin
-          det_r <= 32'(pf_ax) * 32'(pf_by) - 32'(pf_bx) * 32'(pf_ay);
+          det_r <= 32'(pr_ax) * 32'(pr_by) - 32'(pr_bx) * 32'(pr_ay);   // R727: pr_*
           pf_st <= S_PF_N;
         end
 
@@ -1069,17 +1089,17 @@ module m2_raster_fill #(
             det_first_abs <= det_abs;
             pf_second     <= 1'b1;
             pf_ph         <= 2'd1;
-            pf_st         <= S_PF_D;
+            pf_st         <= S_PF_DW;
           end else if (pf_ph == 2'd1) begin   // R674: keep the larger
             // and back through S_PF_D: pr_* (R638) follow pf_second a cycle
             // late, and the numerators rely on S_PF_D coming between
             pf_ph <= 2'd2;
             if (det_first_abs >= det_abs) pf_second <= 1'b0;
-            pf_st <= S_PF_D;
+            pf_st <= S_PF_DW;
           end else if (det_r == 32'sd0) begin
             if (!pf_second) begin
               pf_second <= 1'b1;
-              pf_st     <= S_PF_D;
+              pf_st     <= S_PF_DW;
             end else begin
               // No plane through these three points: draw it flat.
               tex_ok <= 1'b0;
@@ -1108,12 +1128,12 @@ module m2_raster_fill #(
           end else if (pfn_wait == 2'd0) begin
             pfn_wait  <= 2'd1;
             det_abs_r <= det_abs;        // R594: magnitude, and only magnitude
-            nxu <= 32'(pf_u1) * 32'(pr_by) - 32'(pf_u2) * 32'(pr_ay);   // R638: pr_*
-            nyu <= 32'(pr_ax) * 32'(pf_u2) - 32'(pr_bx) * 32'(pf_u1);
-            nxv <= 32'(pf_v1) * 32'(pr_by) - 32'(pf_v2) * 32'(pr_ay);
-            nyv <= 32'(pr_ax) * 32'(pf_v2) - 32'(pr_bx) * 32'(pf_v1);
-            nxo <= 32'(pf_o1) * 32'(pr_by) - 32'(pf_o2) * 32'(pr_ay);   // R337
-            nyo <= 32'(pr_ax) * 32'(pf_o2) - 32'(pr_bx) * 32'(pf_o1);
+            nxu <= 32'(pr_u1) * 32'(pr_by) - 32'(pr_u2) * 32'(pr_ay);   // R638, R727: pr_*
+            nyu <= 32'(pr_ax) * 32'(pr_u2) - 32'(pr_bx) * 32'(pr_u1);
+            nxv <= 32'(pr_v1) * 32'(pr_by) - 32'(pr_v2) * 32'(pr_ay);
+            nyv <= 32'(pr_ax) * 32'(pr_v2) - 32'(pr_bx) * 32'(pr_v1);
+            nxo <= 32'(pr_o1) * 32'(pr_by) - 32'(pr_o2) * 32'(pr_ay);   // R337
+            nyo <= 32'(pr_ax) * 32'(pr_o2) - 32'(pr_bx) * 32'(pr_o1);
           end else if (pfn_wait == 2'd1) begin
             pfn_wait <= 2'd2;
             den_sh <= den_sh_c;          // R289/R461: encode, and only encode
@@ -1181,7 +1201,7 @@ module m2_raster_fill #(
           nrm_wait <= 2'd0;
           mul_n <= mul_n_c;   // R457/R458: registered count, one shared shifter
           mul_z <= zsel_c;
-          mul_q_r <= '0; mul_zr <= 6'd0; b_wait <= 1'b0; b_w2 <= 1'b0;   // R450/R594
+          mul_q_r <= '0; mul_zr <= 6'd0; b_wait <= 1'b0; b_w2 <= 1'b0; b_w3 <= 1'b0;   // R450/R594/R727
           oz_w_v <= 1'b0; oz_last <= 1'b0; b_prod <= 1'b0; // R566
           pf_st <= S_PF_Q1;
         end
@@ -1207,7 +1227,6 @@ module m2_raster_fill #(
           mul_n <= mul_n_c; mul_z <= zsel_c;
           mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
           net_r <= NET0 - 9'(mul_z) - 9'(den_sh); zbig_r <= (mul_z >= 6'd32);   // R459, R626
-          dudx  <= pf_sat(sc_r);   // R594
           pf_st <= S_PF_Q2W;
         end
 
@@ -1215,7 +1234,7 @@ module m2_raster_fill #(
           mul_n <= mul_n_c; mul_z <= zsel_c;
           mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
           net_r <= NET0 - 9'(mul_z) - 9'(den_sh); zbig_r <= (mul_z >= 6'd32);   // R459, R626
-          dudy  <= pf_sat(sc_r);
+          dudx  <= sc_s;   // R594, R727
           pf_st <= S_PF_Q3;
         end
 
@@ -1230,25 +1249,28 @@ module m2_raster_fill #(
           mul_n <= mul_n_c; mul_z <= zsel_c;
           mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
           net_r <= NET0 - 9'(mul_z) - 9'(den_sh); zbig_r <= (mul_z >= 6'd32);   // R459, R626
-          dvdx  <= pf_sat(sc_r);
+          dudy  <= sc_s;
           pf_st <= S_PF_Q3W;
         end
 
         S_PF_Q3W: begin
           mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
           net_r <= NET0 - 9'(mul_z) - 9'(den_sh); zbig_r <= (mul_z >= 6'd32);   // R459, R626
-          dvdy  <= pf_sat(sc_r);
+          dvdx  <= sc_s;
           pf_st <= S_PF_B;
         end
 
         // The plane is held as its value at screen (0,0) plus two gradients,
         // so a span costs two multiplies and no state.
         S_PF_B: if (!b_wait) begin
-          dodx   <= pf_sat(sc_r);   // R594: one state later than R450 put it
+          dvdy   <= sc_s;   // R727
           b_wait <= 1'b1;
         end else if (!b_w2) begin
-          dody   <= pf_sat(sc_r);   // the last gradient
+          dodx   <= sc_s;   // R594: one state later than R450 put it, R727 one more
           b_w2   <= 1'b1;
+        end else if (!b_w3) begin
+          dody   <= sc_s;   // the last gradient
+          b_w3   <= 1'b1;
         end else if (!b_prod) begin
           // R566: the six products and the corner, registered.
           // R626: at the vertex's quarter-pixel position when FRB (the <<< 8
@@ -1265,6 +1287,7 @@ module m2_raster_fill #(
         end else begin
           b_wait <= 1'b0;
           b_w2   <= 1'b0;
+          b_w3   <= 1'b0;
           b_prod <= 1'b0;
           base_u <= 32'({19'd0, bq_u} <<< 16) - (bp_ux <<< BPS) - (bp_uy <<< BPS) + bh_u;   // R616, R626
           base_v <= 32'({19'd0, bq_v} <<< 16) - (bp_vx <<< BPS) - (bp_vy <<< BPS) + bh_v;

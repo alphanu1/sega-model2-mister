@@ -27262,3 +27262,29 @@ which the core does not model, and there is no light-gun input. The MRA
 loads the type-1 firmware (epr-14869c) the core's I/O model runs; whether the
 game boots on it is the board test. Ben: probably no room for a new I/O
 board at 99%.
+
+**R727 -- THE FILL'S PLANE FIT, THREE MORE REGISTERS FOR 75 MHz.** The line-
+buffer build (R724; s752-s754, 75/37.5) routed on every seed and failed
+clk_sys on all of them, mostly in m2_raster_fill's plane fit:
+  s752  qu -> det_r -0.523 (32 paths), qu -> nxu -0.519 (32)
+  s754  sc_r -> dudy -0.539, sc_r -> dodx -0.361, sx -> nxu -0.260 (32)
+Three changes, all once per quad, none per pixel:
+* det_r reads pr_* (R638's registered vertex differences), not the wires. pr_*
+  follow pf_second a cycle late, so S_PF_N now returns through a new one-cycle
+  state, S_PF_DW, wherever it may change pf_second; the entry from S_OZ goes
+  straight to S_PF_D (pf_second has not moved for many cycles there).
+* The numerators read registered texture differences (pr_u1..pr_o2), loaded
+  every cycle like pr_*. qu/qv/qoz last change in the final S_OZ cycle and
+  pf_second two states before S_PF_N reads them -- no cycle added.
+* pf_sat is registered every cycle into sc_s (R594 did the shift the same
+  way). Each gradient lands one state later again; S_PF_B gains a third
+  cycle (b_w3) for dody.
+Measured: the four saved frames (f2000/f3450/f5000/f9000) on the core's
+raster configuration against HEAD -- every pixel identical; draw +0.2-0.4%
+cycles (f2000 1,185,717 -> 1,190,666). The texel fetch list changes by one or
+two of ~225,000 entries on two frames: texel-cache timing, pictures equal.
+test_m2_raster3d 8/8, lint_top clean, Quartus 17.0 parse clean.
+NOT FIXED here, seed-dependent: m2_geo_clip cs -> m2_geo_engine st (-0.430
+s754, -0.03 s752) -- clip's pool request -> the round-robin grant -> the
+engine's next state, all combinational (m2_fp_pool grants are by design);
+and clip qsy -> quad store a_band (-0.378, s752 only).
