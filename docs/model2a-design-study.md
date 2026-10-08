@@ -27003,3 +27003,18 @@ arrays (qx/qy/qz/qu/qv[4], tx..tv[4], hx/hy/hz[4]) are read in parallel by
 their datapaths; the quad store's hq_* are 4 deep; the sort's hist/base are
 16 buckets (RADIX 4). rcache_frame_addr and the fill's recip ROMs are
 deliberately ramstyle "logic".
+
+**R717 -- 75 / 37.5, THE STEP TO 80 / 40.** e867797 (R714 + R715 + R716) at
+80/40, seeds s734-s736: all three ROUTE now (41,266-41,372 ALM; R716's ~500
+ALM did it), clk_sys -0.908 / -0.642 / -0.956 (TNS -95.1 / -16.4 / -12.8),
+clk_i960 at 40 +2.413 / +2.565 / +1.998, clk_mem +0.35..+0.63, HDMI
+-0.22..-0.26. The tail, s735 and s736: the span queue s_ip -> rp -0.642; the
+geometry FP adder -0.635; the geometry's UV wrap wv -> rv -0.591; the fill's
+plane fit vtx_r -> oz_emax (81 endpoints) -0.537; span_tex d0_e -> d1_r
+-0.394; the TGP -0.47; and R715's stage-1 register ABSORBED into the DSP's
+input register (xbh -> ...|Mult5~8 ENA_DFF0, -0.956 on s736), so the clamp
+and the route into the DSP are one path again.
+75 MHz gives 0.833 ns more than 80, past s735's worst; the VCO stays 1,200
+(100 /12, 75 /16, 50 /24, 37.5 /32), still 2:1. SYS_MHZ 75. A build now, to
+put a faster CPU on the board and see whether a race moves before the rest
+of 80 is paid for.
