@@ -27099,3 +27099,18 @@ MEASUREMENT build only. s745 RBF assembled for the race capture.
     second list of 31. In a race Double Buffered should therefore show ~31
     pictures a second at the same game speed -- Single buffered only pays
     where the 3D is the limit (attract).
+
+**R721 -- THE CPU-WAIT SAMPLER, PORTED.** R720 says the race is the i960 at
+57.5% of its cycles waiting on the bus, not what on. R694's sampler (91d8b63,
+on the two-phase bridge of R693, not on this branch) is re-made on the
+four-phase bridge: i960_top exports its sequencer state (dbg_ts), the bridge
+its transaction in flight (dbg_sample = {req_mem, tgt, r_we, st, r_addr[23:16]}),
+and the telemetry C record's data word carries
+  {copro_stall, ts[4:0], req_mem, tgt[2:0], r_we, st[3:0], r_addr[23:16], 9'b0}
+in place of R719's 3D fields (their question is answered: the 3D is ~80%
+idle in a race, R720). tools/m2-decode-cpu.py books each sample as the
+frame-sync wait, working, or a wait -- instruction fetch or data -- by target,
+direction, bridge state and address (geometrizer 0x80, TGP FIFO 0x884000,
+TGP control 0x98, interrupts 0xe8). Normal builds compile it away.
+lint_top and the telemetry lint clean; Quartus parses both; test_m2_cpu_bridge
+136 checks, test_m2_cpu_sdram and test_i960_top (258,520 checks) pass.

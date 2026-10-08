@@ -2166,6 +2166,8 @@ wire [31:0] cpu_dbg_tramwr, cpu_dbg_palwr;
 wire        cpu_trap, cpu_halted;
 wire [7:0]  cpu_trap_op;
 
+wire  [4:0] cpu_dbg_ts;      // R721: the i960's sequencer state, for telemetry
+wire [16:0] cpu_br_sample;   // R721: the bridge's transaction in flight, for telemetry
 i960_top u_i960 (
 	.clk(clk_i960), .rst_n(cpu_rst_n),
 	.bus_req(cpu_req), .bus_we(cpu_we), .bus_addr(cpu_addr), .bus_be(cpu_be),
@@ -2174,7 +2176,7 @@ i960_top u_i960 (
 	.dbg_pc(cpu_dbg_pc), .dbg_sat(cpu_dbg_sat), .dbg_prcb(cpu_dbg_prcb),
 	.dbg_icr(cpu_dbg_icr),
 	.dbg_intr_cnt(cpu_dbg_intr), .dbg_intr_work(), .dbg_acc_cnt(cpu_dbg_acc),
-	.dbg_ip(cpu_dbg_ip), .dbg_insn(cpu_dbg_insn),
+	.dbg_ip(cpu_dbg_ip), .dbg_insn(cpu_dbg_insn), .dbg_ts(cpu_dbg_ts),   // R721
 	.trap(cpu_trap), .trap_op(cpu_trap_op), .halted(cpu_halted)
 );
 
@@ -2296,7 +2298,8 @@ m2_cpu_bridge #(.BUFFERRAM(1'b1), .BUFFERRAM_WRONLY(1'b0)
 	.dbg_unmapped(cpu_dbg_unmapped),
 	.dbg_last_addr(cpu_dbg_laddr), .dbg_last_dout(cpu_dbg_ldout),
 	.dbg_probe6(cpu_dbg_p6), .dbg_probe2(cpu_dbg_p2),
-	.dbg_tram_wr(cpu_dbg_tramwr), .dbg_pal_wr(cpu_dbg_palwr)
+	.dbg_tram_wr(cpu_dbg_tramwr), .dbg_pal_wr(cpu_dbg_palwr),
+	.dbg_sample(cpu_br_sample)   // R721
 );
 
 // ------------------------------------------------------------ the I/O the
@@ -4695,7 +4698,7 @@ end else begin : g_nodbg
 		.clk(clk_sys), .rst_n(mem_rst_n),
 		.a_valid(lt_a_valid),
 		.a_addr((lt_asel == 2'd1) ? cpu_dbg_acc : (lt_asel == 2'd2) ? dc_miss : (lt_asel == 2'd3) ? (fb_test ? {tp_bad, tp_rows} : {fb_pub, fb_drop}) : cpu_dbg_ip),
-		.a_data((lt_asel == 2'd1) ? dc_hits : (lt_asel == 2'd2) ? lt_cwait : (lt_asel == 2'd3) ? (fb_test ? {5'd0, tp_first} : {fb_lines, fb_late}) : {copro_stall, geo_walk_state, geo_eng_state, r3d_dbg_pipe[2:1], q3d_valid && !q3d_ready, eng_ra_busy, 2'd0, tgp_pc}),   // R719
+		.a_data((lt_asel == 2'd1) ? dc_hits : (lt_asel == 2'd2) ? lt_cwait : (lt_asel == 2'd3) ? (fb_test ? {5'd0, tp_first} : {fb_lines, fb_late}) : {copro_stall, cpu_dbg_ts, cpu_br_sample, 9'd0}),   // R721 (R719's 3D layout answered its question, R720)
 		.b_valid(lt_b_valid), .b_addr(lt_b_addr), .b_data(lt_b_data),
 		.a_tag((lt_asel == 2'd1) ? 8'h50 : (lt_asel == 2'd2) ? 8'h51 : (lt_asel == 2'd3) ? (fb_test ? 8'h55 : 8'h54) : 8'h43), .b_tag(8'h47),   // 'P','Q','T','C'; 'G' (was 'F': R639)
 		.enable(1'b1),

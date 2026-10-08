@@ -240,6 +240,9 @@ module m2_cpu_bridge #(
   // handshake turns on. Inferring these from the CPU side is what has been
   // failing.
   output logic  [7:0] dbg_mstate,
+  // R721: the transaction in flight, sampled by the telemetry beside the IP:
+  //   {req_mem, tgt[2:0], r_we, st[3:0], r_addr[23:16]}
+  output logic [16:0] dbg_sample,
   // The data cache's own telemetry. Modelled at 97.86% before it was built;
   // the board must be able to say whether it agrees, because a simulated hit
   // rate that hardware did not share is exactly what the glyph cache did
@@ -1136,6 +1139,7 @@ module m2_cpu_bridge #(
   assign char_wr_addr = r_addr[18:1];
 
   assign dbg_mstate = {2'd0, sd_ack, ack_mem, req_mem, st[2:0]};
+  assign dbg_sample = {req_mem, 3'(tgt), r_we, 4'(st), r_addr[23:16]};   // R721
 
   assign io_addr  = r_addr;
   assign io_wdata = r_wdata;

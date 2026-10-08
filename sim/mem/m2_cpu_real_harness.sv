@@ -126,7 +126,7 @@ module m2_cpu_real_harness #(
     .dbg_pc(dbg_pc), .dbg_ip(dbg_ip), .dbg_acc_cnt(dbg_acc_cnt),
     .trap(trap), .halted(halted),
     .dbg_sat(), .dbg_prcb(), .dbg_icr(), .dbg_intr_cnt(), .dbg_intr_work(),
-    .dbg_insn(), .trap_op(), .dbg_rip(), .dbg_pfp(), .dbg_rcache_pos(),
+    .dbg_insn(), .trap_op(), .dbg_rip(), .dbg_pfp(), .dbg_ts(), .dbg_rcache_pos(),
     .dbg_to_memory(), .dbg_rf_req(), .dbg_rf_ack(), .dbg_rf_addr(),
     .dbg_rf_we(), .dbg_rf_wdata()
   );

@@ -560,7 +560,7 @@ module m2_boot_harness #(
     .dbg_intr_cnt(), .dbg_intr_work(), .dbg_acc_cnt(dbg_acc),
     .dbg_ip(dbg_ip), .dbg_insn(),
     .trap(cpu_trap), .trap_op(), .halted(cpu_halt),
-    .dbg_rip(dbg_rip), .dbg_pfp(dbg_pfp),
+    .dbg_rip(dbg_rip), .dbg_pfp(dbg_pfp), .dbg_ts(),
     .dbg_rcache_pos(dbg_rcache_pos), .dbg_to_memory(dbg_to_memory),
     .dbg_rf_req(dbg_rf_req), .dbg_rf_ack(dbg_rf_ack), .dbg_rf_addr(dbg_rf_addr),
     .dbg_rf_we(dbg_rf_we), .dbg_rf_wdata(dbg_rf_wdata)
@@ -669,7 +669,7 @@ module m2_boot_harness #(
     .io_addr(cpu_io_addr), .io_wdata(cpu_io_wdata), .io_be(cpu_io_be),
     .dbg_cpu_reads(), .dbg_cpu_writes(), .dbg_unmapped(),
     .dbg_last_addr(), .dbg_last_dout(), .dbg_probe6(), .dbg_probe2(),
-    .dbg_tram_wr(dbg_tram_wr), .dbg_pal_wr(), .dbg_mstate(obs_mstate)
+    .dbg_tram_wr(dbg_tram_wr), .dbg_pal_wr(), .dbg_mstate(obs_mstate), .dbg_sample()
   );
 
   // ---- the peripherals, real

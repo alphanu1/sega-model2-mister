@@ -91,6 +91,7 @@ module i960_top (
   // Frame state, so a `ret` that lands on an impossible address can be traced
   // to what the frame held rather than inferred from where it went.
   output logic [31:0] dbg_rip,
+  output logic  [4:0] dbg_ts,      // R721: the sequencer state, for telemetry
   output logic [31:0] dbg_pfp,
   output logic signed [31:0] dbg_rcache_pos,
   output logic        dbg_to_memory,
@@ -344,6 +345,7 @@ module i960_top (
   } tstate_e;
 
   tstate_e ts;
+  assign dbg_ts = 5'(ts);   // R721
 
   // One decoder reads the word ARRIVING during a fetch state (u_dec_in), the
   // other reads the latched word (u_dec). This is what removes T_DECODE: the
