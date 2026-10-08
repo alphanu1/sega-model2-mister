@@ -10,7 +10,7 @@ DE10-Nano's Cyclone V `5CSEBA6U23I7`.
 **This is a work in progress, released as a beta.** **Daytona USA (Deluxe
 '93)** boots and runs its attract mode with the full picture — textured, lit 3D
 over the 2D layers — and with sound, at about 55 frames a second of the
-arcade's 57.5. It is the only game here — `mra/` holds its MRA and a 2D tilemap
+arcade's 57.5 in attract and about 30 in a race. It is the only game here — `mra/` holds its MRA and a 2D tilemap
 test pattern, nothing else. What follows is what is built and measured, not a
 plan.
 
@@ -28,7 +28,7 @@ README with the ROMs you need, the settings, and what is not finished.
 | **Sound board** | Working on hardware — the board's own 68000 (fx68k), its FM (jt12) and its MultiPCM samples. |
 | **TGP coprocessor** | Implemented. The MB86233 runs, and Daytona's 2,024-word microcode uploads and executes — verified on hardware, not only in simulation. The microcode is **not a separate download**: it lives inside the game's own data ROM and `tools/extract_tgp_microcode.py` locates it. |
 | **3D renderer** | **Working on hardware.** Display-list walker, geometry (transform, lighting, clipping, projection), quad store and a textured rasteriser drawing **front to back** into a **DDR3 framebuffer**, shown only when a frame is complete. Checked against MAME frame by frame in simulation, and by eye on the board. |
-| **Speed** | About **55 game frames a second** of 57.5 over two minutes of attract (`tools/m2-fps.py`), with `Draw method: Single buffered`, the default: full speed in 92% of frames. The limit is the geometry stage's memory latency (design study R694-R696, R702). |
+| **Speed** | About **55 game frames a second** of 57.5 over two minutes of attract (`tools/m2-fps.py`), with `Draw method: Single buffered`, the default: full speed in 92% of frames. **A race is slower: about 30, and 25 in busy scenes.** The limit is the geometry stage's memory latency (design study R694-R696, R702). |
 | **Video** | Native 24 kHz, and 15 kHz interlaced for CRTs (field timing corrected in the latest release, awaiting confirmation on a set). |
 
 ### What is open
@@ -56,7 +56,7 @@ fail criteria each phase was accepted against. Status as of this commit:
 | **P5** | Sound | **Done.** Audible on hardware — the sound board's 68000, FM and MultiPCM. |
 | **P2** | 3D renderer | **Done.** Textured, lit 3D on hardware, front to back into a DDR3 framebuffer. |
 | **P3** | The fit verdict | **Answered, and it is tight.** Everything fits the device together, with essentially no headroom — which is why debug instruments now have to replace each other rather than accumulate. |
-| **P6** | Integration | **Released as a beta.** Daytona runs attract with 3D and sound at about 55 fps; speed and the open items above remain. |
+| **P6** | Integration | **Released as a beta.** Daytona runs with 3D and sound at about 55 fps in attract, ~30 in a race; speed and the open items above remain. |
 
 The phases are listed here in the order they were completed, not numerically:
 P4 and P5 were finished before P2, because the coprocessor and the sound board
