@@ -71,7 +71,9 @@ module m2_cpu_bridge #(
   // R576: 1 when clk_cpu is NOT an exact /2 of clk_mem (the i960 at 35.3 MHz
   // against a 60 MHz core): R460's two synchroniser flops each way, as the
   // i960 at 30 against 50 had. 0 keeps R464's single flop, sound only at 2:1.
-  parameter bit          ASYNC    = 0
+  parameter bit          ASYNC    = 0,
+  // R728: the CPU-side code cache (program ROM lines, 8 KB). 0 = R724 alone.
+  parameter bit          CC_EN    = 1'b1
 ) (
   // ------------------------------------------------- CPU domain (25 MHz)
   input  logic        clk_cpu,
@@ -268,7 +270,7 @@ module m2_cpu_bridge #(
   // the standard condition for not synchronising a data bus, and it is the
   // reason this is a handshake rather than a FIFO.
   logic        req_cpu;
-  typedef enum logic [1:0] { C_IDLE, C_WAIT, C_CLR, C_POST } cph_e;
+  typedef enum logic [2:0] { C_IDLE, C_WAIT, C_CLR, C_POST, C_CC } cph_e;   // R728: C_CC
   cph_e cph;
   logic        req_mem, ack_mem;
   logic        ack_mem_d;        // R698: ack_mem a cycle ago, to see a completion
@@ -295,10 +297,43 @@ module m2_cpu_bridge #(
   logic         l_ok;          // memory side: l_data holds this request's line
   logic [127:0] l_data;
 
+  // R728: A CODE CACHE ON THE CPU SIDE. R724 made a line fill one round trip;
+  // the round trip itself stayed, and in a race the code does not fit the
+  // i960's 512 B instruction cache: half the race's time is in ~1.8 KB of
+  // program ROM, three quarters in ~5 KB (s751's IP samples; 98% of it below
+  // 0x200000). So the lines an instruction fetch brings back are KEPT here,
+  // in the CPU's own clock, and a later miss in i960_icache that finds its
+  // line here is answered in two cycles with no crossing at all.
+  //
+  // Program ROM only, so there is nothing to keep coherent: no master writes
+  // it after the load, and the load holds the CPU -- and this bridge -- in
+  // reset, after which the sweep below clears every entry. Direct-mapped,
+  // 512 lines of 16 B, {valid, addr[20:13], line} in one M10K array (7 blocks
+  // at 512 x 20); the blocks are the memory side's data cache halved.
+  localparam int unsigned CC_LINES = 512;
+  localparam logic [31:0] CC_TOP   = 32'h0020_0000;      // the program ROM decode
+  (* ramstyle = "M10K, no_rw_check" *) logic [136:0] cc_mem [CC_LINES];
+  logic [136:0] cc_q;
+  logic         cc_we;
+  logic [8:0]   cc_wa;
+  logic [136:0] cc_wd;
+  logic         cc_sweeping;
+  logic [8:0]   cc_sweep;
+  // A fetch the cache may answer: decided from the request as presented, so
+  // the array's address is bus_addr itself and the answer is there next cycle.
+  wire cc_can = CC_EN && !cc_sweeping && bus_ifetch && !bus_we && (bus_addr < CC_TOP);
+  wire cc_hit = cc_q[136] && (cc_q[135:128] == r_addr[20:13]);
+  always_ff @(posedge clk_cpu) begin
+    cc_q <= cc_mem[bus_addr[12:4]];
+    if (cc_we) cc_mem[cc_wa] <= cc_wd;
+  end
+
   always_ff @(posedge clk_cpu or negedge rst_n_cpu) begin
     if (!rst_n_cpu) begin
       req_cpu <= 1'b0; bus_ack <= 1'b0; cph <= C_IDLE; ack_cpu <= 1'b0;
       r_line <= 1'b0; lb_v <= 1'b0; lb_gap <= 1'b0; lb_tag <= '0;   // R724
+      cc_we <= 1'b0; cc_wa <= '0; cc_wd <= '0;                    // R728
+      cc_sweeping <= CC_EN; cc_sweep <= '0;
       ack_cpu_s <= 2'b00;                                   // R576
       posted <= 1'b0;
       r_we <= 1'b0; r_addr <= 32'd0; r_wdata <= 32'd0; r_be <= 4'd0;
@@ -324,6 +359,13 @@ module m2_cpu_bridge #(
       // On hardware this read word 0 three times: SAT was right by luck, PRCB
       // came back 0 and the boot took a zero IP.
       lb_gap <= 1'b0;
+      // R728: the reset sweep, one entry a cycle through the write port
+      cc_we <= 1'b0;
+      if (cc_sweeping) begin
+        cc_we <= 1'b1; cc_wa <= cc_sweep; cc_wd <= '0;
+        cc_sweep <= cc_sweep + 9'd1;
+        if (cc_sweep == 9'(CC_LINES - 1)) cc_sweeping <= 1'b0;
+      end
       case (cph)
         C_IDLE: if (lb_gap) begin
           // R724: the cycle after a buffer answer. The requester moves its
@@ -346,8 +388,31 @@ module m2_cpu_bridge #(
           r_be    <= bus_be;
           r_line  <= bus_ifetch && !bus_we;                              // R724
           if (bus_we && (bus_addr[31:4] == lb_tag)) lb_v <= 1'b0;        // R724: a write into the line
+          if (cc_can) cph <= C_CC;                                       // R728: look first
+          else begin
+            req_cpu <= 1'b1;
+            cph     <= bus_we ? C_POST : C_WAIT;
+          end
+        end
+        // R728: the code cache's answer, read on the way in. A hit fills the
+        // line buffer from it and answers as the buffer does; a miss goes to
+        // memory exactly as it would have, one cycle later.
+        C_CC: if (cc_hit) begin
+          lb     <= cc_q[127:0];
+          lb_tag <= r_addr[31:4];
+          lb_v   <= 1'b1;
+          case (r_addr[3:2])
+            2'd0: bus_rdata <= cc_q[31:0];
+            2'd1: bus_rdata <= cc_q[63:32];
+            2'd2: bus_rdata <= cc_q[95:64];
+            default: bus_rdata <= cc_q[127:96];
+          endcase
+          bus_ack <= 1'b1;
+          lb_gap  <= 1'b1;
+          cph     <= C_IDLE;
+        end else begin
           req_cpu <= 1'b1;
-          cph     <= bus_we ? C_POST : C_WAIT;
+          cph     <= C_WAIT;
         end
         C_WAIT: if (ack_cpu) begin
           req_cpu   <= 1'b0;
@@ -356,6 +421,10 @@ module m2_cpu_bridge #(
             lb     <= l_data;
             lb_tag <= r_addr[31:4];
             lb_v   <= 1'b1;
+            // R728: and keep it, if it is program ROM
+            if (CC_EN && !cc_sweeping && r_addr < CC_TOP) begin
+              cc_we <= 1'b1; cc_wa <= r_addr[12:4]; cc_wd <= {1'b1, r_addr[20:13], l_data};
+            end
             case (r_addr[3:2])
               2'd0: bus_rdata <= l_data[31:0];
               2'd1: bus_rdata <= l_data[63:32];
@@ -741,9 +810,11 @@ module m2_cpu_bridge #(
   // 2048 lines x 8 B = 16 KB, eight times the size, which is affordable now
   // that R96 and R97 returned 95 M10K blocks. The tag narrows by three bits as
   // the index widens, so the tag array barely grows.
-  localparam int unsigned DC_LINES = 2048;                // x 8 B = 16 KB
-  localparam int unsigned DC_IDXW  = $clog2(DC_LINES);    // 11
-  localparam int unsigned DC_TAGW  = 32 - DC_IDXW - 3;    // 18
+  // R728: 1024 lines, 8 KB -- the other 8 blocks went to the CPU side's code
+  // cache, which now holds what most of the code lines here were for.
+  localparam int unsigned DC_LINES = CC_EN ? 1024 : 2048; // x 8 B
+  localparam int unsigned DC_IDXW  = $clog2(DC_LINES);    // 10 (11)
+  localparam int unsigned DC_TAGW  = 32 - DC_IDXW - 3;    // 19 (18)
 
   (* ramstyle = "M10K" *) logic [63:0]          dc_data [DC_LINES];
   (* ramstyle = "M10K" *) logic [DC_TAGW:0]     dc_tag  [DC_LINES];   // {valid,tag}

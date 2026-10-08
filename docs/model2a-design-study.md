@@ -27304,3 +27304,35 @@ s758-s760 (d08ba0a, 75/37.5): s759 CLOSES every core clock -- clk_sys
 (s741, on the board, is -0.678). 41,279 ALM. RBF md5
 73e11496cba339a002205ba7a178ed05, 4,635,532 bytes. s758 clk_sys -0.629 /
 HDMI -0.914, s760 clk_sys -0.679 / HDMI -0.315 -- not examined.
+
+**R728 -- A CODE CACHE ON THE CPU SIDE OF THE BRIDGE (8 KB).** s759 on the
+board (Ben, 2026-10-08): a race runs ~29 game fps with either draw method --
+the line buffer (R724) did not move frames under one vblank. R724 cut each
+instruction line fill to one round trip; the round trip itself remained, and
+the race's code does not fit i960_icache's 512 B. From s751's IP samples
+(8,427 outside the frame-sync wait): 98% in program ROM (< 0x200000); half
+the time in 1,840 B of it, 75% in 4,960 B, 90% in 11,216 B. Data-read waits
+are work RAM (0x50xxxx, 4.3% of samples) and the display-list buffer (0x91,
+2.2%); data reads of ROM are negligible.
+So m2_cpu_bridge keeps instruction lines on the CPU side: 512 lines x 16 B,
+direct-mapped, {valid, addr[20:13], line} in one M10K array (137 bits, 7
+blocks at 512 x 20), clk_cpu. A fetch below 0x200000 that misses the line
+buffer reads the array on the way in (its address is bus_addr) and is
+answered from it the next cycle on a hit (C_CC) -- the line goes into `lb`
+as R724's would, no crossing; a miss crosses as before, one cycle later, and
+its line is written into the array when it comes back. Program ROM only, so
+no coherence: the load holds the CPU and the bridge in reset, and a sweep
+through the write port clears every entry after reset (512 cycles; nothing
+is looked up or filled until it ends). M10K: the memory side's data cache
+goes 16 KB -> 8 KB (DC_LINES 1024; 17 blocks -> 9), which is where most of
+its code lines were. CC_EN = 0 restores R724 exactly.
+tb_m2_cpu_bridge 923 checks, 0 mismatches: a refetched line answered in <= 3
+CPU cycles (39 steps against 79 for a miss), two lines 8 KB apart sharing an
+entry, every word of 64 cached lines, work RAM never kept, and a ROM changed
+under a cached line across a reset. Planted faults all caught: the tag
+compare weakened to 6 bits (2 mismatches), no reset sweep (the stale line
+after reset), CC_EN = 0 (3). tb_m2_cpu_real: retired-IP hash a95ee045a6c3424b,
+unchanged; 1,309,792 cycles against R724's 1,310,260 -- boot code is a copy
+loop whose one refetched line the line buffer already answers, so this bench
+cannot show the gain; only a race can. lint_top, test_m2_cpu_sdram, Quartus
+parse clean.

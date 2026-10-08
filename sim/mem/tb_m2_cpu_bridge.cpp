@@ -133,6 +133,8 @@ static void step() {
 
 // R724: set while the access is an instruction fetch (i960_top's G_IC grant)
 static bool g_ifetch = false;
+// R728: how many steps the last access took to be acknowledged
+static int g_steps = 0;
 // One CPU access, driven the way i960_top drives it: raise req, hold until ack.
 static bool access(bool we, uint32_t addr, uint32_t wdata, uint8_t be, uint32_t *out) {
   dut->bus_req = 1; dut->bus_we = we; dut->bus_addr = addr; dut->bus_ifetch = g_ifetch && !we;
@@ -140,6 +142,7 @@ static bool access(bool we, uint32_t addr, uint32_t wdata, uint8_t be, uint32_t 
   for (int g = 0; g < 4000; ++g) {
     step();
     if (dut->bus_ack) {
+      g_steps = g;
       if (std::getenv("M2_TRACE_SD"))
         std::printf("      ACK %s addr=%08x after %d steps rdata=%08x\n",
                     we ? "wr" : "RD", addr, g, dut->bus_rdata);
@@ -673,6 +676,69 @@ int main(int argc, char **argv) {
     expect("R724 fetch work RAM after the store", v, 0x33333333u);
     g_ifetch = true;  access(false, 0x00500100u, 0, 0xf, &v); g_ifetch = false;
     expect("R724 fetch the store's neighbour", v, 0x11111111u);
+  }
+
+  // ---- R728: THE CODE CACHE ----
+  // A line fetched once is answered again from the CPU side with no crossing:
+  // fast (a crossing alone is well over 4 CPU cycles), and with the data the
+  // memory holds. Lines 8 KB apart share an entry and must not answer for
+  // each other; work RAM is never kept; a reset forgets everything, so a
+  // reloaded ROM is read afresh.
+  {
+    auto fetch = [&](uint32_t a, uint32_t *v) {
+      g_ifetch = true; bool ok = access(false, a, 0, 0xf, v); g_ifetch = false; return ok;
+    };
+    auto plain = [&](uint32_t a) { uint32_t v = 0; access(false, a, 0, 0xf, &v); return v; };
+    // distinct contents for two lines that share an entry (index bits 12:4)
+    for (uint32_t w = 0; w < 8; ++w) {
+      sdram[(0x00002800u >> 1) + w] = uint16_t(0xA000 + w);
+      sdram[(0x00004800u >> 1) + w] = uint16_t(0xB000 + w);
+      sdram[(0x00006810u >> 1) + w] = uint16_t(0xC000 + w);
+    }
+    uint32_t v = 0;
+    fetch(0x00002804u, &v); expect("R728 first fetch, line A", v, 0xA003A002u);
+    fetch(0x00006810u, &v);                         // another line into the buffer
+    const int miss_steps = g_steps;
+    fetch(0x00002808u, &v); expect("R728 line A again", v, 0xA005A004u);
+    const int hit_steps = g_steps;
+    ++checks;
+    if (!(hit_steps <= 3 * CPU_DIV && hit_steps < miss_steps)) {
+      ++fails; std::printf("  R728 line A was not answered from the cache: %d steps (miss %d)\n", hit_steps, miss_steps);
+    }
+    fetch(0x00004808u, &v); expect("R728 line B, A's entry", v, 0xB005B004u);
+    fetch(0x00006814u, &v);
+    fetch(0x0000280cu, &v); expect("R728 line A after B evicted it", v, 0xA007A006u);
+    fetch(0x00006818u, &v);
+    fetch(0x00004800u, &v); expect("R728 line B after A evicted it", v, 0xB001B000u);
+    // every word of the 64 R724 lines, now from the cache, still the memory's
+    {
+      int slow = 0;
+      for (uint32_t a = 0x00001000u; a < 0x00001400u; a += 4) {
+        uint32_t want = plain(a), got = 0;
+        fetch(a + 0x1000u * 0 , &got);   // same address
+        char nm[64]; std::snprintf(nm, sizeof nm, "R728 refetch %08x", a); expect(nm, got, want);
+        if ((a & 15) == 0 && g_steps > 3 * CPU_DIV) ++slow;
+      }
+      ++checks; if (slow) { ++fails; std::printf("  R728 %d of 64 cached lines went to memory\n", slow); }
+    }
+    // work RAM: fetched twice, it crosses both times
+    access(true, 0x00500200u, 0x44444444u, 0xf, nullptr);
+    fetch(0x00500200u, &v); expect("R728 work RAM fetch", v, 0x44444444u);
+    fetch(0x00006800u, &v);
+    fetch(0x00500200u, &v); expect("R728 work RAM fetch again", v, 0x44444444u);
+    ++checks; if (g_steps <= 3 * CPU_DIV) { ++fails; std::printf("  R728 work RAM answered without a crossing (%d steps)\n", g_steps); }
+    // a reset, then the ROM changes under the cached line -- which is cached
+    // at the moment of the reset (fetch it, then move the line buffer off it)
+    fetch(0x00002804u, &v); fetch(0x00006814u, &v);
+    fetch(0x00002808u, &v); expect("R728 line A cached before the reset", v, 0xA005A004u);
+    ++checks; if (g_steps > 3 * CPU_DIV) { ++fails; std::printf("  R728 line A not cached before the reset\n"); }
+    fetch(0x00006814u, &v);
+    dut->rst_n_cpu = 0; dut->rst_n_mem = 0;
+    for (int i = 0; i < 200; ++i) step();
+    dut->rst_n_cpu = 1; dut->rst_n_mem = 1;
+    for (int i = 0; i < 2048 * MEM_DIV * 2 + 4096; ++i) step();
+    for (uint32_t w = 0; w < 8; ++w) sdram[(0x00002800u >> 1) + w] = uint16_t(0xD000 + w);
+    fetch(0x00002804u, &v); expect("R728 after a reset, the new ROM", v, 0xD003D002u);
   }
 
   std::printf("  %llu checks, %llu mismatches, %llu unmapped seen\n",
