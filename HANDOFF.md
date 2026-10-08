@@ -1,5 +1,33 @@
 # Handoff
 
+## 2026-10-08 (late): RELEASED Model2_20261008b.rbf = s759. main = readahead.
+
+s759 (d08ba0a: R709 read-ahead, R711, R697/R698/R712, R714-R718 at 75/37.5,
+R724 line buffer, R725 Daytona 1994, R726 Virtua Cop layout, R727) on Ben's
+board: md5 73e11496cba339a002205ba7a178ed05, 4,635,532 bytes; every core
+clock closes, HDMI -0.185. Released with `Daytona USA (Revision A).mra`
+(Ben: works on the board; daytona.zip and model1io.zip now on the card).
+Virtua Cop does not start -- expected, its I/O board is type 2 -- so its MRA
+stays in mra/ and is not in releases/.
+
+Board, tools/m2-fps.py, a race: Single buffered 14-15 drawn pictures a second
+(4 vblanks 74%); Double Buffered 28-29 (2 vblanks 77%, 1 vblank 21%). Ben:
+the SAME game speed either way -- R720 confirmed on the board: in a race the
+CPU is the limit and Double Buffered is free. Ben felt s759 slower than s741;
+not settled -- s741 was never measured with this tool on Double Buffered (its
+31-33 is list flips from telemetry). The line buffer's predicted gain (-18%
+of the CPU's busy time) is NOT visible as frames moving to one vblank.
+
+New fault, Single buffered (Ben): in the option screens the flashing yellow
+and red boxes do not flash, and a selected one disappears. Double Buffered is
+right but slow in the menus. Most likely aliasing: the flash alternates per
+frame and Single buffered draws only one phase. Proposed: an Auto draw
+method -- draw every list when the renderer is free, skip only when it is
+behind.
+
+Building: s761-s763, the telemetry build of d08ba0a (+ the decoder's S_DCN),
+to see where a race's CPU time goes now that line fills are one transaction.
+
 ## 2026-10-08 (night): BRANCH readahead -- 75/37.5, the instruction line buffer, two new sets; s759 built
 
 On Ben's board: s741 (75/37.5 + R709 read-ahead + R711 + R697/R698/R712 +

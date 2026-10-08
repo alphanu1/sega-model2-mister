@@ -4,8 +4,9 @@ Copy to the SD card:
 
 | from | to |
 |---|---|
-| `Model2_20261008.rbf` | `/media/fat/_Arcade/cores/` — **rename to `Model2.rbf` on the card** |
+| `Model2_20261008b.rbf` | `/media/fat/_Arcade/cores/` — **rename to `Model2.rbf` on the card** |
 | `Daytona USA (Deluxe 93).mra` | `/media/fat/_Arcade/` |
+| `Daytona USA (Revision A).mra` | `/media/fat/_Arcade/` — **new**: the 1994 revision |
 
 **One core, deliberately.** If you need an older build, it is in the git
 history of this repository.
@@ -17,10 +18,11 @@ names them. Nothing here contains ROM data.
 
 | zip | what for |
 |---|---|
-| `daytona93.zip` | the game itself — program, data, polygons, textures, tiles, samples |
-| `model1io.zip` **or** `daytona93.zip` | the I/O board's Z80 ROM, `epr-14869c.25` |
+| `daytona93.zip` | `Daytona USA (Deluxe 93)` — program, data, polygons, textures, tiles, samples |
+| `daytona.zip` | `Daytona USA (Revision A)`, the 1994 set (MAME's `daytona`) — the whole set |
+| `model1io.zip` **or** the game's zip | the I/O board's Z80 ROM, `epr-14869c.25` |
 
-The I/O board ROM is searched for in **both** zips, so whichever of the two your
+The I/O board ROM is searched for in `model1io.zip` **and** the game's own zip, so whichever of the two your
 ROM set puts it in will be found. **Without it the core has no controls** — the
 I/O board is what the game reads coins, start and steering through, so a missing
 `epr-14869c.25` looks like a machine that runs and ignores you.
@@ -28,8 +30,8 @@ I/O board is what the game reads coins, start and steering through, so a missing
 The TGP coprocessor's microcode needs no separate download. It lives inside the
 game's own data ROM and the core extracts it.
 
-**Check what you are running.** `Model2_20261008.rbf` is
-`d0b7ff36e3cc0de94ec16ffbf07e8814`, 4,642,156 bytes. If the core on your card
+**Check what you are running.** `Model2_20261008b.rbf` is
+`73e11496cba339a002205ba7a178ed05`, 4,635,532 bytes. If the core on your card
 does not have that md5, you are not running this build — and the usual reason is
 a second file: MiSTer keeps the lexicographically greatest name beginning
 `Model2` followed by `.` or `_`, and `_` sorts after `.`, so a spare
@@ -59,20 +61,27 @@ textured, lit polygons over the 2D layers, with sound.
 - **Polygon edges use pixel-centre coverage**, which removed the streaks and
   overlaps along the seams.
 - **Sound runs at the right speed.**
-- **`Draw method`, new: the game at up to arcade speed.** With `Single
-  buffered` (the default) the 3D is drawn every second frame and the game no
-  longer waits on it.
-- **Faster geometry: about 55 frames a second on average in attract**, of the
-  arcade's 57.5 — full speed in more than nine frames out of ten. The
+- **New in this build: Daytona USA 1994 (Revision A)** has its own MRA. Its
+  larger polygon ROM's extra 3 MB are loaded into free SDRAM; the '93 MRA and
+  its layout are unchanged.
+- **New in this build: a faster main CPU.** The i960 runs at 37.5 MHz (was
+  35) and the core at 75 (was 70), the CPU fetches a whole instruction-cache
+  line in one memory transaction instead of four, and the geometry stage
+  reads its polygon data ahead.
+- **Fixed in this build: black polygons with `Single buffered`.** Scattered
+  polygons, and sometimes long spikes, could draw black. The frames that
+  `Single buffered` does not draw are now still read by the geometry stage,
+  so nothing the game sets in them is lost.
+- **`Draw method`.** With `Single buffered` (the default) the 3D is drawn
+  every second frame and the game does not wait on it, which keeps attract
+  and the menus near arcade speed. **In a race both settings run the game at
+  the same speed, about 29 frames a second** — there the main CPU is the
+  limit, not the 3D — so `Double Buffered` gives twice the pictures for
+  nothing; switch to it for racing.
+- **Fast geometry in attract**, of the arcade's 57.5 frames a second: the
   geometry stage's memory reads go ahead of other traffic, and polygons
   facing away from the camera are dropped before their vertices are read.
-  **In a race it is slower: about 30 frames a second, 25 in busy scenes.**
-- **Fixed in this build: the 3D going black.** The previous build
-  (`Model2_20260930c`) could, after a scene change, draw the 3D textured but
-  unlit — black. It carried a geometry memory shortcut that this build
-  removes, at no measurable cost in speed.
-- **15 kHz interlaced for CRTs**, with its field timing corrected in this build
-  so the two fields are equal and the picture is centred.
+- **15 kHz interlaced for CRTs**, with equal fields and a centred picture.
 
 ## OSD settings
 
@@ -102,35 +111,34 @@ textured, lit polygons over the 2D layers, with sound.
 | Start, Coin | `Start`, `Coin` |
 | Test, Service | available to map in MiSTer's input settings |
 
-## Not finished, as of `Model2_20261008.rbf`
+## Not finished, as of `Model2_20261008b.rbf`
 
 This list describes the RBF named above. **The heading carries the RBF's name so
 that if the two disagree, you trust neither and check.**
 
-- **Not full speed in a race.** With `Draw method: Single buffered` (the
-  default) attract runs at about 55 frames a second of the arcade's 57.5, but
-  a race runs at about 30, and 25 in busy scenes. The limit is being worked
-  on: the geometry stage waits on its memory, and reading ahead takes about
-  a fifth off its time in simulation. `Double Buffered` runs at about half
-  speed.
-- **15 kHz interlaced: fixed in this build, not yet confirmed on a CRT.** The
-  previous build had four faults on a real set — a large border at the top,
-  the picture dropping out every few seconds, the top 2D layer's scanlines
-  misaligned, and no real interlacing (192 lines rather than 384 interleaved).
-  They trace to the two fields being different lengths and the vertical sync
-  sitting too early; this build makes the fields equal and centres the
-  picture. Reports from CRT owners are welcome.
+- **Not full speed in a race: about 29 frames a second** of the arcade's
+  57.5, with either `Draw method`. The main CPU is the limit — measured on
+  the board, it spends much of a race waiting on memory — and that is what
+  is being worked on.
+- **Flashing menu items with `Single buffered`.** The yellow and red boxes
+  in the option screens may not flash, and a selected one can vanish:
+  drawing every second frame only ever shows one half of a flash that
+  alternates frame by frame. `Double Buffered` shows them correctly but
+  makes the menus slow.
+- **15 kHz interlaced: not yet confirmed on a CRT.** Reports from CRT owners
+  are welcome.
 - **Car windows drop out.** After a few minutes of attract the glass or its sky
   reflection can disappear from some cars, so you see into the car.
-- **2D placement at the race start.** The car and the "ROLLING START" text
-  should scroll across the screen and do not, and an element on the right of
-  the screen sits in the wrong place.
+- **The race start and the HUD.** "ROLLING START" should scroll across the
+  screen from the right and sits still in the middle, and the 3D condition
+  indicator and mini-map are drawn too low.
 - **Background music and the game-over speech are too quiet** against the
   rest of the sound.
 - **Some textures flicker** on trees and hillsides.
 - **No mip-mapping**, so distant textures shimmer.
-- **Attract mode is what this build has been checked against.** Play it and
-  report what you find.
+- **Virtua Cop is not supported yet.** Its I/O board (light guns, an LCD) is
+  a different one and is not in the core.
+- **Play it and report what you find.**
 
 ## Credits
 
