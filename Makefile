@@ -967,7 +967,7 @@ obj_boot/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cpp \
                            rtl/io/m2_ioz80.sv rtl/mem/m2_tdp_ram.sv $(wildcard rtl/tgp/*.sv) $(wildcard rtl/cpu/tv80/*.v) \
                            rtl/mem/m2_char_cdc.sv $(wildcard rtl/video/*.sv) \
                            $(wildcard rtl/cpu/i960/*.sv)
-	$(VBUILD) --top-module m2_boot_harness -Wno-PINCONNECTEMPTY -Wno-UNUSEDPARAM \
+	$(VBUILD) --top-module m2_boot_harness -Wno-SIMILARNAME -Wno-PINCONNECTEMPTY -Wno-UNUSEDPARAM \
 	  -Wno-WIDTHEXPAND -Wno-UNUSEDSIGNAL -Wno-PINMISSING --Mdir obj_boot -o Vm2_boot_harness \
 	  -GBUFFERRAM_EN=$(BOOT_BUFFERRAM) \
 	  -CFLAGS "-O2" sim/io/m2_boot_harness.sv rtl/io/m2_cpu_bridge.sv \

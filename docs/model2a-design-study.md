@@ -27336,3 +27336,25 @@ unchanged; 1,309,792 cycles against R724's 1,310,260 -- boot code is a copy
 loop whose one refetched line the line buffer already answers, so this bench
 cannot show the gain; only a race can. lint_top, test_m2_cpu_sdram, Quartus
 parse clean.
+
+**R729 -- R693'S TWO-PHASE HANDSHAKE, PORTED ONTO THE CURRENT BRIDGE.** R722's
+third lever. R693 (172730a, r639-beta) was never on main: R704 suspected it
+of the black 3D, and R708, R710 and R712 then found that fault's real causes
+(the keep-last, Single buffered's lost lists, R697/R698), so it is
+unconvicted. Re-made by hand on the bridge as it is now (R697, R698, R724,
+R726, R728 are all newer than it): req_cpu toggles once per access and
+ack_mem once per completion; every completion (seven sites) toggles ack_mem,
+clears rmw_done and lhalf (S_DONE's old work) and returns to S_IDLE; S_IDLE
+takes a toggle not yet seen (req_seen) or rmw_done's re-dispatch; R698's
+landed-colour pulse fires on the ack's toggle; the CPU side completes on
+ack_cpu != ack_seen and goes straight back to C_IDLE, and does not accept in
+the cycle its own bus_ack is up (the i960 still shows the old address then --
+m1_cdc_port's duplicate transaction, R693). C_CLR and S_DONE are
+unreachable. The telemetry's request bit is now `pending` (req_mem !=
+req_seen), not the raw toggle.
+tb_m2_cpu_real (real ROM, 100,000 instructions): hash a95ee045a6c3424b
+unchanged; 1,309,792 -> 1,202,195 CPU cycles (13.10 -> 12.02 CPI, -8.2%);
+icache waiting 103,804 -> 83,213, LSU 797,807 -> 710,811.
+tb_m2_cpu_bridge 923/0, test_m2_cpu_sdram, test_i960_top, test_m2_boot pass;
+lint_top and Quartus parse clean. (test_m2_boot did not build: tv80's
+SIMILARNAME warnings, the same as test_m2_ioz80's; waived the same way.)

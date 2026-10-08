@@ -273,6 +273,14 @@ module m2_cpu_bridge #(
   typedef enum logic [2:0] { C_IDLE, C_WAIT, C_CLR, C_POST, C_CC } cph_e;   // R728: C_CC
   cph_e cph;
   logic        req_mem, ack_mem;
+  // R729: A TWO-PHASE (TOGGLE) HANDSHAKE, as Model 1's m1_cdc_port and R693.
+  // req_cpu flips once per access and ack_mem once per completion; there is
+  // no return-to-zero, so an access ends at its acknowledge instead of two
+  // more crossings later. The flops and the payload rule are unchanged: r_*
+  // are written with the toggle and cannot change until the completion
+  // toggle is back.
+  logic        ack_seen;         // the completion toggle last consumed (CPU side)
+  logic        req_seen;         // the request toggle last taken (memory side)
   logic        ack_mem_d;        // R698: ack_mem a cycle ago, to see a completion
   logic        ack_cpu;          // ack_mem, one CPU flop later
   logic  [1:0] ack_cpu_s;        // R576: its synchroniser when ASYNC
@@ -330,7 +338,7 @@ module m2_cpu_bridge #(
 
   always_ff @(posedge clk_cpu or negedge rst_n_cpu) begin
     if (!rst_n_cpu) begin
-      req_cpu <= 1'b0; bus_ack <= 1'b0; cph <= C_IDLE; ack_cpu <= 1'b0;
+      req_cpu <= 1'b0; bus_ack <= 1'b0; cph <= C_IDLE; ack_cpu <= 1'b0; ack_seen <= 1'b0;   // R729
       r_line <= 1'b0; lb_v <= 1'b0; lb_gap <= 1'b0; lb_tag <= '0;   // R724
       cc_we <= 1'b0; cc_wa <= '0; cc_wd <= '0;                    // R728
       cc_sweeping <= CC_EN; cc_sweep <= '0;
@@ -371,7 +379,11 @@ module m2_cpu_bridge #(
           // R724: the cycle after a buffer answer. The requester moves its
           // address on the acknowledge, a cycle after it, so this cycle still
           // shows the word just answered; serving it would answer it twice.
-        end else if (bus_req && !ack_cpu && !bus_we && bus_ifetch && lb_v && (bus_addr[31:4] == lb_tag)) begin
+        // R729: NOT ON THE CYCLE OUR OWN ACK IS UP. The i960 moves bus_addr at
+        // the end of the cycle it sees bus_ack, so a request seen then still
+        // carries the OLD address (m1_cdc_port's duplicate transaction; R693).
+        // The four-phase C_CLR used to hide it.
+        end else if (bus_req && !bus_ack && !bus_we && bus_ifetch && lb_v && (bus_addr[31:4] == lb_tag)) begin
           // R724: an instruction word from the buffered line -- no crossing
           case (bus_addr[3:2])
             2'd0: bus_rdata <= lb[31:0];
@@ -381,7 +393,7 @@ module m2_cpu_bridge #(
           endcase
           bus_ack <= 1'b1;
           lb_gap  <= 1'b1;
-        end else if (bus_req && !ack_cpu) begin
+        end else if (bus_req && !bus_ack) begin
           r_we    <= bus_we;
           r_addr  <= bus_addr;
           r_wdata <= bus_wdata;
@@ -390,7 +402,7 @@ module m2_cpu_bridge #(
           if (bus_we && (bus_addr[31:4] == lb_tag)) lb_v <= 1'b0;        // R724: a write into the line
           if (cc_can) cph <= C_CC;                                       // R728: look first
           else begin
-            req_cpu <= 1'b1;
+            req_cpu <= ~req_cpu;                                         // R729
             cph     <= bus_we ? C_POST : C_WAIT;
           end
         end
@@ -411,11 +423,11 @@ module m2_cpu_bridge #(
           lb_gap  <= 1'b1;
           cph     <= C_IDLE;
         end else begin
-          req_cpu <= 1'b1;
+          req_cpu <= ~req_cpu;   // R729
           cph     <= C_WAIT;
         end
-        C_WAIT: if (ack_cpu) begin
-          req_cpu   <= 1'b0;
+        C_WAIT: if (ack_cpu != ack_seen) begin   // R729
+          ack_seen  <= ack_cpu;
           // R724: a line came back -- keep it, and answer the word asked for
           if (r_line && l_ok) begin
             lb     <= l_data;
@@ -434,15 +446,15 @@ module m2_cpu_bridge #(
           end else
             bus_rdata <= r_rdata;
           bus_ack   <= 1'b1;       // one cycle, which is what the i960 expects
-          cph       <= C_CLR;
+          cph       <= C_IDLE;     // R729: no return-to-zero
         end
 
         C_POST: begin
           if (!posted) begin posted <= 1'b1; bus_ack <= 1'b1; end
-          if (ack_cpu) begin req_cpu <= 1'b0; posted <= 1'b0; cph <= C_CLR; end
+          if (ack_cpu != ack_seen) begin ack_seen <= ack_cpu; posted <= 1'b0; cph <= C_IDLE; end   // R729
         end
         // The fourth phase. Nothing starts until the acknowledge has gone away.
-        default: if (!ack_cpu) cph <= C_IDLE;
+        default: cph <= C_IDLE;   // R729: C_CLR is unreachable
       endcase
     end
   end
@@ -866,7 +878,7 @@ module m2_cpu_bridge #(
 
   always_ff @(posedge clk_mem or negedge rst_n_mem) begin
     if (!rst_n_mem) begin
-      st <= S_IDLE; ack_mem <= 1'b0; half <= 1'b0; ack_mem_d <= 1'b0;
+      st <= S_IDLE; ack_mem <= 1'b0; half <= 1'b0; ack_mem_d <= 1'b0; req_seen <= 1'b0;   // R729
       sd_req <= 1'b0; sd_we <= 1'b0; sd_addr <= '0; sd_din <= 16'd0; sd_be <= 2'b11;
       oc_tram_we <= 1'b0; oc_pal_we <= 1'b0; oc_xlat_we <= 1'b0; col_inval <= 1'b0; buf_inval <= 1'b0; tex_inval <= 1'b0;
       io_sel <= 1'b0; io_we <= 1'b0;
@@ -890,7 +902,7 @@ module m2_cpu_bridge #(
       // (a write's SDRAM acknowledge has been seen), and r_* stand until the
       // CPU side drops its request.
       ack_mem_d <= ack_mem;
-      if (ack_mem && !ack_mem_d && r_we && (pal_mirror || xlat_mirror)) col_inval <= 1'b1;
+      if ((ack_mem != ack_mem_d) && r_we && (pal_mirror || xlat_mirror)) col_inval <= 1'b1;   // R729: a toggle
 
       // The cache's own housekeeping, before any state runs.
       dc_inval <= 1'b0;
@@ -903,8 +915,11 @@ module m2_cpu_bridge #(
         // !sd_ack as well as req_mem: the previous access's ack may still be
         // held when the next request arrives, and issuing into it has exactly
         // the same effect as issuing into it below.
-        S_IDLE: if (req_mem && !ack_mem && !sd_ack && !dc_sweeping
+        // R729: a NEW request is a toggle not yet taken; rmw_done re-dispatches
+        // the same one as its write half (S_RMW_W returns here with it set).
+        S_IDLE: if ((req_mem != req_seen || rmw_done) && !sd_ack && !dc_sweeping
                     && !(r_we && buf_region && buf_wr_stall)) begin   // R697
+          req_seen <= req_mem;
           if (r_we) dbg_cpu_writes <= dbg_cpu_writes + 32'd1;
           else      dbg_cpu_reads  <= dbg_cpu_reads  + 32'd1;
           half <= 1'b0;
@@ -912,7 +927,7 @@ module m2_cpu_bridge #(
           case (tgt)
             T_SDRAM: begin
               if (r_we && is_rom) begin
-                ack_mem <= 1'b1; st <= S_DONE;    // .rom().nopw()
+                ack_mem <= ~ack_mem; rmw_done <= 1'b0; lhalf <= 1'b0;   // R729 st <= S_IDLE;   // R729: complete    // .rom().nopw()
               end else if (!r_we && DCACHE_EN) begin
                 // ASK THE CACHE FIRST. The arrays were addressed with dc_idx
                 // combinationally this cycle, so S_DCK can compare next cycle.
@@ -1037,8 +1052,8 @@ module m2_cpu_bridge #(
             default: begin
               dbg_unmapped <= dbg_unmapped + 32'd1;
               r_rdata      <= 32'd0;
-              ack_mem      <= 1'b1;
-              st           <= S_DONE;
+              ack_mem      <= ~ack_mem; rmw_done <= 1'b0; lhalf <= 1'b0;   // R729
+              st           <= S_IDLE;   // R729: complete
             end
           endcase
         end
@@ -1056,8 +1071,8 @@ module m2_cpu_bridge #(
             io_we  <= r_we;
           end else begin
             r_rdata <= io_rdata;
-            ack_mem <= 1'b1;
-            st      <= S_DONE;
+            ack_mem <= ~ack_mem; rmw_done <= 1'b0; lhalf <= 1'b0;   // R729
+            st      <= S_IDLE;   // R729: complete
           end
         end
 
@@ -1118,8 +1133,8 @@ module m2_cpu_bridge #(
           // So an upper-half write is complete after its one real word. Reads
           // are unchanged: the cache-bypass read path still fetches both.
           if (r_we && (r_addr[1] || half_only)) begin
-            ack_mem <= 1'b1;
-            st      <= S_DONE;
+            ack_mem <= ~ack_mem; rmw_done <= 1'b0; lhalf <= 1'b0;   // R729
+            st      <= S_IDLE;   // R729: complete
           end else begin
             half    <= 1'b1;
             oc_pal_we <= r_we && pal_mirror && hi_be;      // R222: the palette RAM's high word
@@ -1141,8 +1156,8 @@ module m2_cpu_bridge #(
             end
           end else begin
             r_rdata[31:16] <= (tgt == T_TRAM) ? oc_tram_q : oc_pal_q;
-            ack_mem        <= 1'b1;
-            st             <= S_DONE;
+            ack_mem        <= ~ack_mem; rmw_done <= 1'b0; lhalf <= 1'b0;   // R729
+            st             <= S_IDLE;   // R729: complete
           end
         end
 
@@ -1159,9 +1174,9 @@ module m2_cpu_bridge #(
           end else if (dc_hit) begin
             r_rdata <= r_addr[2] ? dc_q[63:32] : dc_q[31:0];
             if (lmode) begin l_data[127:64] <= dc_q; l_ok <= 1'b1; end   // R724
-            ack_mem <= 1'b1;
+            ack_mem <= ~ack_mem; rmw_done <= 1'b0; lhalf <= 1'b0;   // R729
             dbg_dc_hits <= dbg_dc_hits + 32'd1;
-            st      <= S_DONE;
+            st      <= S_IDLE;   // R729: complete
           end else begin
             // LINE-ALIGNED, so one four-word burst fills the whole line and
             // nothing is discarded. It also restores natural dword alignment:
@@ -1257,8 +1272,8 @@ module m2_cpu_bridge #(
             st    <= S_DCN;
           end else begin
             if (lmode) l_ok <= 1'b1;   // R724: both halves are in
-            ack_mem <= 1'b1;
-            st      <= S_DONE;
+            ack_mem <= ~ack_mem; rmw_done <= 1'b0; lhalf <= 1'b0;   // R729
+            st      <= S_IDLE;   // R729: complete
           end
         end
 
@@ -1273,12 +1288,9 @@ module m2_cpu_bridge #(
         // Hold ack until the requester has seen it and dropped req. Without
         // this the crossing can fire twice for one access, which is the
         // req-versus-req-and-ack fault named at the top.
-        S_DONE: if (!req_mem) begin
-          ack_mem  <= 1'b0;
-          rmw_done <= 1'b0;
-          lhalf    <= 1'b0;   // R724
-          st      <= S_IDLE;
-        end
+        // R729: unreachable -- a completion toggles ack_mem and returns to
+        // S_IDLE directly. Kept as a state so a glitch into it recovers.
+        S_DONE: st <= S_IDLE;
 
         // Six named states in a three-bit type leaves two unreachable
         // encodings. Naming them costs nothing and means a glitch into one is
@@ -1302,8 +1314,8 @@ module m2_cpu_bridge #(
                    && (st == S_LO || st == S_LO_W || st == S_HI || st == S_HI_W);
   assign char_wr_addr = r_addr[18:1];
 
-  assign dbg_mstate = {2'd0, sd_ack, ack_mem, req_mem, st[2:0]};
-  assign dbg_sample = {req_mem, 3'(tgt), r_we, 4'(st), r_addr[23:16]};   // R721
+  assign dbg_mstate = {2'd0, sd_ack, ack_mem, (req_mem != req_seen), st[2:0]};   // R729: pending, not the toggle
+  assign dbg_sample = {(req_mem != req_seen), 3'(tgt), r_we, 4'(st), r_addr[23:16]};   // R721; R729: pending
 
   assign io_addr  = r_addr;
   assign io_wdata = r_wdata;
