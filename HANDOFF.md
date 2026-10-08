@@ -1,5 +1,30 @@
 # Handoff
 
+## 2026-10-08: RELEASED Model2_20261008.rbf = s708 (build B). main = this.
+
+D (20260930c, s712) went black on Ben's board -- the 3D textured but unlit,
+the fault R704 had pinned on R693, which D does not carry. The one change in
+every black build (s675, s681, s686, s712) is R696's engine keep-last
+(u_eng_pc KEEP_LAST=1); B never had it (R708). main reverts it (8cb3f39), so
+main's RTL is B's exactly (c40b334: s705 + R702 geometry priority + R696
+engine cull-skip). s708: every clock closes, HDMI +0.108, clk_sys +0.432;
+md5 d0b7ff36e3cc0de94ec16ffbf07e8814, 4,642,156 bytes -- taken from the build
+output, NOT pulled from the board (the board was down); it is the file loaded
+for the A/B/C test on 2026-09-30. Compare against the card when the board is up.
+Attract 27.3 3D/s = ~55 game fps, 92% full speed; IN A RACE ~30 fps, ~25 in
+busy scenes (Ben, by eye, R706) -- every earlier figure was attract.
+
+Next: read-ahead for the geometry engine, on a branch from this main. R707
+(tb_m2_geodiff M2GD_PC=3): four pairs ahead per memory space takes ~19% off
+a heavy list's walk, of a 25% ceiling (memory free). A second SDRAM can add
+at most the other ~6%. The read-ahead is a kept copy like the keep-last: its
+invalidation is designed against R708, and its board check runs far longer
+than tools/m2-fbcheck.py's 150 s, which D and C both passed.
+
+Still open: R703's three (2D element on the right, rolling start not
+scrolling, quiet music/samples); car windows (D seemed to keep them, R705 --
+moot now); 15 kHz on Ben's CRT; mip-mapping; whether R693 is innocent.
+
 ## 2026-09-30 (night): RELEASED Model2_20260930c.rbf = s712 (build D). main = this.
 
 main = the 20260930b release (s705) + prio-D merged: R702 (the geometry's

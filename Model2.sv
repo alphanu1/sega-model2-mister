@@ -3054,13 +3054,8 @@ m2_pair_cache #(.AW(SDR_AW-1), .COL_BITS(SDR_COL)) u_geo_pc (
 );
 // The engine reads polygon RAM, which the geometrizer's own DMA writes, so its
 // copy is dropped on those writes for the same reason.
-// R696: and it now KEEPS its copy until a miss replaces it (KEEP_LAST), which
-// can outlast the engine's idle time between objects -- so the CPU's writes to
-// the two things it reads that the CPU writes, the 3D palette and the colour
-// table (col_inval), drop it too. Everything else the engine reads is ROM or
-// is written by the geometrizer's DMA.
-m2_pair_cache #(.AW(SDR_AW-1), .COL_BITS(SDR_COL), .KEEP_LAST(1'b1)) u_eng_pc (   // R696
-	.clk(clk_sys), .rst_n(mem_rst_n), .bypass(pair_off_s2), .inval((geo_sd_req & wr_ack_geo) | cpu_col_inval),
+m2_pair_cache #(.AW(SDR_AW-1), .COL_BITS(SDR_COL)) u_eng_pc (
+	.clk(clk_sys), .rst_n(mem_rst_n), .bypass(pair_off_s2), .inval(geo_sd_req & wr_ack_geo),
 	.req(eng_mem_req), .idx(eng_wa[SDR_AW:2]), .ack(eng_mem_ack_c), .data(eng_mem_data_c),
 	.p_req(ec_req), .p_idx(ec_idx), .p_ack(eng_mem_ack_r), .p_dout(p4_dout_r)
 );     // 4M-dword ROM window

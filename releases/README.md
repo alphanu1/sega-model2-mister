@@ -4,7 +4,7 @@ Copy to the SD card:
 
 | from | to |
 |---|---|
-| `Model2_20260930c.rbf` | `/media/fat/_Arcade/cores/` — **rename to `Model2.rbf` on the card** |
+| `Model2_20261008.rbf` | `/media/fat/_Arcade/cores/` — **rename to `Model2.rbf` on the card** |
 | `Daytona USA (Deluxe 93).mra` | `/media/fat/_Arcade/` |
 
 **One core, deliberately.** If you need an older build, it is in the git
@@ -28,8 +28,8 @@ I/O board is what the game reads coins, start and steering through, so a missing
 The TGP coprocessor's microcode needs no separate download. It lives inside the
 game's own data ROM and the core extracts it.
 
-**Check what you are running.** `Model2_20260930c.rbf` is
-`60d53a2a7e8c898e94f42f7245ba561f`, 4,641,796 bytes. If the core on your card
+**Check what you are running.** `Model2_20261008.rbf` is
+`d0b7ff36e3cc0de94ec16ffbf07e8814`, 4,642,156 bytes. If the core on your card
 does not have that md5, you are not running this build — and the usual reason is
 a second file: MiSTer keeps the lexicographically greatest name beginning
 `Model2` followed by `.` or `_`, and `_` sorts after `.`, so a spare
@@ -62,12 +62,15 @@ textured, lit polygons over the 2D layers, with sound.
 - **`Draw method`, new: the game at up to arcade speed.** With `Single
   buffered` (the default) the 3D is drawn every second frame and the game no
   longer waits on it.
-- **Faster geometry, new in this build: about 55 frames a second on average**
-  over two minutes of attract, of the arcade's 57.5 — full speed in more than
-  nine frames out of ten. The geometry stage's memory reads now go ahead of
-  other traffic, polygons facing away from the camera are dropped before
-  their vertices are read, and the last words read are kept for the next
-  polygon.
+- **Faster geometry: about 55 frames a second on average in attract**, of the
+  arcade's 57.5 — full speed in more than nine frames out of ten. The
+  geometry stage's memory reads go ahead of other traffic, and polygons
+  facing away from the camera are dropped before their vertices are read.
+  **In a race it is slower: about 30 frames a second, 25 in busy scenes.**
+- **Fixed in this build: the 3D going black.** The previous build
+  (`Model2_20260930c`) could, after a scene change, draw the 3D textured but
+  unlit — black. It carried a geometry memory shortcut that this build
+  removes, at no measurable cost in speed.
 - **15 kHz interlaced for CRTs**, with its field timing corrected in this build
   so the two fields are equal and the picture is centred.
 
@@ -99,16 +102,17 @@ textured, lit polygons over the 2D layers, with sound.
 | Start, Coin | `Start`, `Coin` |
 | Test, Service | available to map in MiSTer's input settings |
 
-## Not finished, as of `Model2_20260930c.rbf`
+## Not finished, as of `Model2_20261008.rbf`
 
 This list describes the RBF named above. **The heading carries the RBF's name so
 that if the two disagree, you trust neither and check.**
 
-- **Nearly full speed.** With `Draw method: Single buffered` (the default)
-  the game averages about 55 frames a second of the arcade's 57.5, measured
-  over two minutes of attract on hardware: full speed in 92% of frames,
-  slowing only in the heaviest scenes. The limit is the geometry stage.
-  `Double Buffered` runs at about half speed.
+- **Not full speed in a race.** With `Draw method: Single buffered` (the
+  default) attract runs at about 55 frames a second of the arcade's 57.5, but
+  a race runs at about 30, and 25 in busy scenes. The limit is being worked
+  on: the geometry stage waits on its memory, and reading ahead takes about
+  a fifth off its time in simulation. `Double Buffered` runs at about half
+  speed.
 - **15 kHz interlaced: fixed in this build, not yet confirmed on a CRT.** The
   previous build had four faults on a real set — a large border at the top,
   the picture dropping out every few seconds, the top 2D layer's scanlines
