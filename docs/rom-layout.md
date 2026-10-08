@@ -244,3 +244,24 @@ R299 was not needed by anything — not the clock work, not the M10K work, not t
 texel cache. It landed on a day with five other changes and cost a board cycle
 the speed work needed. Multi-game is a clean, self-contained project for a day
 when the renderer is not mid-surgery.
+
+## Daytona USA 1994 (MAME `daytona`, Revision A) -- study R725
+
+`mra/Daytona USA (Revision A).mra` keeps this layout to its last byte, with
+two differences:
+
+- **main_data 8 MB+ is 1 MB** (epr-16724a / epr-16725a), loaded twice so that
+  0x900000 mirrors 0x800000 as MAME's ROM_COPY does. The image size of the
+  data section is unchanged.
+- **The polygon ROM is 16 MB.** Its last pair (mpr-16772 / mpr-16771) gives
+  the first 1 MB in the usual place (polygons 12-13 MB) and the remaining
+  3 MB are appended after the TGP tables:
+
+```
+byte 0x2be0000 -> 0x2ee0000   polygons 13-16 MB (index 0, after the TGP tables)
+  m2_rom_loader XTRA_FROM 0x2be0000 -> SDRAM word 0x1880000 (GAME_POLYX,
+  byte 0x3100000), free SDRAM above GAME_LUMA
+```
+
+The engine reads polygon-ROM dwords 0x340000 and up from GAME_POLYX. The
+'93 set never reads past 13 MB and loads nothing there.
