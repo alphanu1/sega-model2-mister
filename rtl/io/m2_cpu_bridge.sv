@@ -284,7 +284,6 @@ module m2_cpu_bridge #(
   logic        ack_mem_d;        // R698: ack_mem a cycle ago, to see a completion
   logic        ack_cpu;          // ack_mem, one CPU flop later
   logic  [1:0] ack_cpu_s;        // R576: its synchroniser when ASYNC
-  logic        posted;
 
   logic        r_we;
   logic [31:0] r_addr, r_wdata;
@@ -299,7 +298,7 @@ module m2_cpu_bridge #(
   // from ROM (i960_icache's premise too), but a CPU write into the buffered
   // line still drops it.
   logic         r_line;        // the request in flight wants the whole line
-  logic         lb_v, lb_gap;  // lb_gap: the cycle after a buffer answer, when bus_addr has not moved yet
+  logic         lb_v;
   logic [27:0]  lb_tag;        // bus_addr[31:4] of the buffered line
   logic [127:0] lb;
   logic         l_ok;          // memory side: l_data holds this request's line
@@ -336,37 +335,61 @@ module m2_cpu_bridge #(
     if (cc_we) cc_mem[cc_wa] <= cc_wd;
   end
 
+  // R730: THE ANSWER LEAVES IN THE CYCLE IT EXISTS. bus_ack and bus_rdata were
+  // registered, so every answer reached the i960 a cycle after the bridge had
+  // it -- and the cycle after THAT was lost too, because the requester moves
+  // its address on the ack and the bridge had to sit out the cycle the old
+  // address was still showing (R724's lb_gap, R729's own-ack guard). They are
+  // now combinational from the state that holds the answer:
+  //   lb_fast  an instruction word from the line buffer (R724), from bus_addr
+  //   cc_fast  the code cache's hit (R728), in C_CC
+  //   rd_fast  a completed crossing, in C_WAIT (r_rdata, or the line)
+  //   wr_fast  a write, posted in the cycle it is presented (C_IDLE)
+  // The requester sees the ack in the same cycle and moves at that edge, so
+  // the next cycle always carries the next request: there is no stale cycle
+  // left to guard. No loop: every i960 master drives bus_req and bus_addr
+  // from registers (i960_lsu S_XFER and cur_addr, i960_icache fill_base and
+  // fill_word, i960_top grant_q), and grant_q already takes an ack in the
+  // cycle a request first appears.
+  function automatic logic [31:0] word_of(input logic [127:0] l, input logic [1:0] w);
+    case (w)
+      2'd0: word_of = l[31:0];
+      2'd1: word_of = l[63:32];
+      2'd2: word_of = l[95:64];
+      default: word_of = l[127:96];
+    endcase
+  endfunction
+  wire lb_fast = (cph == C_IDLE) && bus_req && !bus_we && bus_ifetch && lb_v
+                 && (bus_addr[31:4] == lb_tag);
+  wire wr_fast = (cph == C_IDLE) && bus_req && bus_we;
+  wire cc_fast = (cph == C_CC) && cc_hit;
+  wire rd_fast = (cph == C_WAIT) && (ack_cpu != ack_seen);
+  assign bus_ack   = lb_fast || wr_fast || cc_fast || rd_fast;
+  assign bus_rdata = lb_fast ? word_of(lb, bus_addr[3:2])
+                   : cc_fast ? word_of(cc_q[127:0], r_addr[3:2])
+                   : (r_line && l_ok) ? word_of(l_data, r_addr[3:2])
+                   : r_rdata;
+
   always_ff @(posedge clk_cpu or negedge rst_n_cpu) begin
     if (!rst_n_cpu) begin
-      req_cpu <= 1'b0; bus_ack <= 1'b0; cph <= C_IDLE; ack_cpu <= 1'b0; ack_seen <= 1'b0;   // R729
-      r_line <= 1'b0; lb_v <= 1'b0; lb_gap <= 1'b0; lb_tag <= '0;   // R724
+      req_cpu <= 1'b0; cph <= C_IDLE; ack_cpu <= 1'b0; ack_seen <= 1'b0;   // R729
+      r_line <= 1'b0; lb_v <= 1'b0; lb_tag <= '0;                 // R724
       cc_we <= 1'b0; cc_wa <= '0; cc_wd <= '0;                    // R728
       cc_sweeping <= CC_EN; cc_sweep <= '0;
       ack_cpu_s <= 2'b00;                                   // R576
-      posted <= 1'b0;
+
       r_we <= 1'b0; r_addr <= 32'd0; r_wdata <= 32'd0; r_be <= 4'd0;
     end else begin
       // The same single flop in the other direction, for the same reason: one
       // stage of settling, not two of synchronising. R576: two more when ASYNC.
       ack_cpu_s <= {ack_cpu_s[0], ack_mem};
       ack_cpu   <= ASYNC ? ack_cpu_s[1] : ack_mem;
-      bus_ack  <= 1'b0;
-      // AN EXPLICIT FOUR-PHASE HANDSHAKE, because the condition-by-condition
-      // version kept racing. The phases are req-up, ack-up, req-down, ACK-DOWN,
-      // and the last one is the one that is easy to leave out: without it the
-      // next access starts while the previous acknowledge is still working its
-      // way back through the synchroniser and completes IMMEDIATELY on stale
-      // data, having never reached memory at all.
-      //
-      // The i960 makes this unforgiving. It HOLDS bus_req high across a run of
-      // accesses and moves bus_addr ON THE ACK -- its boot walk reads mem[0],
-      // mem[4] and mem[12] without ever dropping the request -- so "a new
-      // request is present" is true continuously and cannot be used to separate
-      // one access from the next. Only the acknowledge can.
-      //
-      // On hardware this read word 0 three times: SAT was right by luck, PRCB
-      // came back 0 and the boot took a zero IP.
-      lb_gap <= 1'b0;
+      // The i960 HOLDS bus_req high across a run of accesses and moves bus_addr
+      // ON THE ACK -- its boot walk reads mem[0], mem[4] and mem[12] without
+      // ever dropping the request -- so "a new request is present" is true
+      // continuously and cannot be used to separate one access from the next.
+      // Only the acknowledge can. (On hardware the four-phase version that
+      // forgot this read word 0 three times and booted from a zero IP.)
       // R728: the reset sweep, one entry a cycle through the write port
       cc_we <= 1'b0;
       if (cc_sweeping) begin
@@ -375,25 +398,9 @@ module m2_cpu_bridge #(
         if (cc_sweep == 9'(CC_LINES - 1)) cc_sweeping <= 1'b0;
       end
       case (cph)
-        C_IDLE: if (lb_gap) begin
-          // R724: the cycle after a buffer answer. The requester moves its
-          // address on the acknowledge, a cycle after it, so this cycle still
-          // shows the word just answered; serving it would answer it twice.
-        // R729: NOT ON THE CYCLE OUR OWN ACK IS UP. The i960 moves bus_addr at
-        // the end of the cycle it sees bus_ack, so a request seen then still
-        // carries the OLD address (m1_cdc_port's duplicate transaction; R693).
-        // The four-phase C_CLR used to hide it.
-        end else if (bus_req && !bus_ack && !bus_we && bus_ifetch && lb_v && (bus_addr[31:4] == lb_tag)) begin
-          // R724: an instruction word from the buffered line -- no crossing
-          case (bus_addr[3:2])
-            2'd0: bus_rdata <= lb[31:0];
-            2'd1: bus_rdata <= lb[63:32];
-            2'd2: bus_rdata <= lb[95:64];
-            default: bus_rdata <= lb[127:96];
-          endcase
-          bus_ack <= 1'b1;
-          lb_gap  <= 1'b1;
-        end else if (bus_req && !bus_ack) begin
+        // R724: an instruction word from the buffered line is answered by
+        // lb_fast with no crossing and nothing to record here.
+        C_IDLE: if (bus_req && !lb_fast) begin
           r_we    <= bus_we;
           r_addr  <= bus_addr;
           r_wdata <= bus_wdata;
@@ -404,31 +411,24 @@ module m2_cpu_bridge #(
           else begin
             req_cpu <= ~req_cpu;                                         // R729
             cph     <= bus_we ? C_POST : C_WAIT;
+
           end
         end
-        // R728: the code cache's answer, read on the way in. A hit fills the
-        // line buffer from it and answers as the buffer does; a miss goes to
-        // memory exactly as it would have, one cycle later.
+        // R728: the code cache's answer, read on the way in. A hit (cc_fast)
+        // fills the line buffer from it; a miss goes to memory exactly as it
+        // would have, one cycle later.
         C_CC: if (cc_hit) begin
           lb     <= cc_q[127:0];
           lb_tag <= r_addr[31:4];
           lb_v   <= 1'b1;
-          case (r_addr[3:2])
-            2'd0: bus_rdata <= cc_q[31:0];
-            2'd1: bus_rdata <= cc_q[63:32];
-            2'd2: bus_rdata <= cc_q[95:64];
-            default: bus_rdata <= cc_q[127:96];
-          endcase
-          bus_ack <= 1'b1;
-          lb_gap  <= 1'b1;
-          cph     <= C_IDLE;
+          cph    <= C_IDLE;
         end else begin
           req_cpu <= ~req_cpu;   // R729
           cph     <= C_WAIT;
         end
+        // The crossing has answered (rd_fast); keep a line that came back.
         C_WAIT: if (ack_cpu != ack_seen) begin   // R729
           ack_seen  <= ack_cpu;
-          // R724: a line came back -- keep it, and answer the word asked for
           if (r_line && l_ok) begin
             lb     <= l_data;
             lb_tag <= r_addr[31:4];
@@ -437,23 +437,13 @@ module m2_cpu_bridge #(
             if (CC_EN && !cc_sweeping && r_addr < CC_TOP) begin
               cc_we <= 1'b1; cc_wa <= r_addr[12:4]; cc_wd <= {1'b1, r_addr[20:13], l_data};
             end
-            case (r_addr[3:2])
-              2'd0: bus_rdata <= l_data[31:0];
-              2'd1: bus_rdata <= l_data[63:32];
-              2'd2: bus_rdata <= l_data[95:64];
-              default: bus_rdata <= l_data[127:96];
-            endcase
-          end else
-            bus_rdata <= r_rdata;
-          bus_ack   <= 1'b1;       // one cycle, which is what the i960 expects
+          end
           cph       <= C_IDLE;     // R729: no return-to-zero
         end
 
-        C_POST: begin
-          if (!posted) begin posted <= 1'b1; bus_ack <= 1'b1; end
-          if (ack_cpu != ack_seen) begin ack_seen <= ack_cpu; posted <= 1'b0; cph <= C_IDLE; end   // R729
-        end
-        // The fourth phase. Nothing starts until the acknowledge has gone away.
+        // A write was acknowledged as it was presented; the next access still
+        // waits for it to complete, so accesses stay in order.
+        C_POST: if (ack_cpu != ack_seen) begin ack_seen <= ack_cpu; cph <= C_IDLE; end   // R729
         default: cph <= C_IDLE;   // R729: C_CLR is unreachable
       endcase
     end

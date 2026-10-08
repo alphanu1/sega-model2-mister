@@ -27358,3 +27358,36 @@ icache waiting 103,804 -> 83,213, LSU 797,807 -> 710,811.
 tb_m2_cpu_bridge 923/0, test_m2_cpu_sdram, test_i960_top, test_m2_boot pass;
 lint_top and Quartus parse clean. (test_m2_boot did not build: tv80's
 SIMILARNAME warnings, the same as test_m2_ioz80's; waived the same way.)
+
+**R730 -- THE BRIDGE ANSWERS IN THE CYCLE IT HAS THE ANSWER.** The night's
+stage 4 was to be the i960's own sequencing (R722's "~5 CPI"), and s751's
+race capture says otherwise: outside the frame-sync wait the core is working
+in 11.6% of samples (T_FETCH 3.4, T_EXEC 3.3), against 44% waiting on the bus
+and 10.2% held by the TGP; and i960_top already prefetches the next word
+during execute. What the fetch waits ARE: T_FETCH_W 24.7% of samples, 11.0%
+of all with nothing yet in the bridge -- the icache's own miss handling and
+the hand-off. Every bridge answer reached the i960 a cycle late (bus_ack and
+bus_rdata registered) and cost a second dead cycle after it (the requester
+moves its address on the ack, so the bridge sat out the stale cycle: R724's
+lb_gap, R729's own-ack guard). An icache line fill from the line buffer took
+two cycles a word.
+Now bus_ack / bus_rdata are combinational from the state that holds the
+answer: lb_fast (a line-buffer word, from bus_addr), cc_fast (the code
+cache's hit, in C_CC), rd_fast (a completed crossing, in C_WAIT), wr_fast (a
+write posted as it is presented). The requester takes the ack at its edge and
+moves at that edge, so no stale cycle remains and lb_gap and the guard are
+gone. No combinational loop: i960_lsu (state S_XFER, cur_addr), i960_icache
+(fill_base + fill_word) and i960_top (grant_q) drive bus_req/bus_addr from
+registers, and grant_q already took an ack in a request's first cycle.
+tb_m2_cpu_real: hash a95ee045a6c3424b unchanged; 1,202,195 -> 1,108,127 CPU
+cycles (12.02 -> 11.08 CPI, -7.8%); from R724 alone 13.10 -> 11.08, -15.4%.
+TWO BENCHES MODELLED A REQUESTER THAT NO CPU IS: tb_m2_cpu_bridge's
+held-request loops and tb_m2_cpu_sdram's helpers moved the address, or
+dropped the request, the instant an ack was visible between clock edges --
+with a combinational write ack that changed the write under the edge that
+captures it (2 byte-store and 1 held-write mismatches). They now take the ack
+at the CPU edge, as i960_top does. tb_m2_cpu_bridge 923/0, test_m2_cpu_sdram,
+test_i960_top, test_m2_boot pass; lint_top and Quartus parse clean.
+The TGP (copro_stall, 10.2%) is the remaining non-bus cost; ours is Model 1's
+FSM MB86233, which §4.2/M2-F put at 2.3x short of the real MB86234 at 50 MHz
+(less at 75). Pipelining it is M2-F, not a night's change.

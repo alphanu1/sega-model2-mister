@@ -147,6 +147,12 @@ static bool access(bool we, uint32_t addr, uint32_t wdata, uint8_t be, uint32_t 
         std::printf("      ACK %s addr=%08x after %d steps rdata=%08x\n",
                     we ? "wr" : "RD", addr, g, dut->bus_rdata);
       if (out) *out = dut->bus_rdata;
+      // R730: THE ACK IS COMBINATIONAL, AND A REQUESTER TAKES IT AT ITS NEXT
+      // EDGE. The i960 samples bus_ack and bus_rdata at its clock edge and only
+      // then moves on, so the request stands until that edge -- a write, in
+      // particular, is captured by the bridge on it. Dropping the request the
+      // instant an ack is visible between edges is something no requester does.
+      do { step(); } while ((tk % CPU_DIV) != 0);
       dut->bus_req = 0;
       for (int k = 0; k < CPU_DIV * 3; ++k) step();
       // R522: A POSTED WRITE IS ACKNOWLEDGED AT DISPATCH, SO THE ACK NO LONGER
@@ -516,18 +522,24 @@ int main(int argc, char **argv) {
     bool ack_prev = false;
     dut->bus_req = 1; dut->bus_we = 1; dut->bus_be = 0xf;
     dut->bus_addr = base; dut->bus_wdata = 0xa000u;
+    // R730: the ack is taken AT A CPU EDGE -- the value it had just before
+    // the edge -- and the address moves after it, as i960_top's do. Watching
+    // for an ack between edges and moving at once is not something the i960
+    // can do, and with a combinational ack it changes the write under the
+    // edge that captures it.
+    (void)ack_prev;
+    bool pre_ack = false;
     for (int g = 0; g < 200000 && idx < N; ++g) {
       step();
-      const bool ack_now = dut->bus_ack;
-      const bool ack_rise = ack_now && !ack_prev;
-      ack_prev = ack_now;
-      if (ack_rise) {
+      if ((tk % CPU_DIV) == 0 && pre_ack) {
         ++idx;
         if (idx < N) {                       // move BOTH on the ack, req held
           dut->bus_addr  = base + uint32_t(idx * 4);
           dut->bus_wdata = 0xa000u + uint32_t(idx);
         }
+        dut->eval();
       }
+      pre_ack = dut->bus_ack;
     }
     dut->bus_req = 0;
     for (int k = 0; k < CPU_DIV * 400; ++k) step();
@@ -565,12 +577,14 @@ int main(int argc, char **argv) {
     bool ack_prev = false;
     dut->bus_req = 1; dut->bus_we = 0; dut->bus_be = 0xf;
     dut->bus_addr = seq[0];
+    (void)ack_prev;
+    bool pre_ack = false; uint32_t pre_data = 0;   // R730: taken at the edge
     for (int g = 0; g < 200000 && idx < 3; ++g) {
       step();
-      const bool ack_now = dut->bus_ack;
-      const bool ack_rise = ack_now && !ack_prev;
-      ack_prev = ack_now;
-      if (ack_rise) {
+      const bool taken = (tk % CPU_DIV) == 0 && pre_ack;
+      if (!taken) { pre_ack = dut->bus_ack; pre_data = dut->bus_rdata; }
+      if (taken) {
+        dut->bus_rdata = pre_data;   // what the edge took (the bench reads it below)
         std::printf("    boot read %d: asked %2u fetched %u got %08x accesses=%u  "
                     "mstate=%02x (sd_ack=%d ack_mem=%d req_mem=%d st=%d)\n",
                     idx, seq[idx], dut->dbg_last_addr, dut->bus_rdata, dut->dbg_cpu_reads,
@@ -584,6 +598,8 @@ int main(int argc, char **argv) {
         // The address moves ON the ack, exactly as i960_top's T_BOOT does, and
         // the request is NOT dropped.
         if (idx < 3) dut->bus_addr = seq[idx];
+        dut->eval();
+        pre_ack = dut->bus_ack; pre_data = dut->bus_rdata;
       }
     }
     if (idx < 3) { std::printf("  boot walk did not complete (%d of 3)\n", idx); ++fails; }
