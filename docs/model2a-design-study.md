@@ -27045,3 +27045,8 @@ ib -> vhi -0.190, the engine's data -> rgb -0.171, the fill's sx -> det_r
 Left for later: the FB writer's window match (-0.19) and the fill's det_r
 (-0.03) at 75; at 80 also the span queue, the geometry FP adder, the fill's
 plane fit and R715's register absorbed into the DSP.
+Build 560c746 (75/37.5 + R718), seeds s740-s742: s740 and s741 CLOSE EVERY
+CORE CLOCK at 75 / 37.5 -- s740 clk_sys +0.038, clk_mem +0.342, clk_i960
++2.916, HDMI -0.281; s741 clk_sys +0.139, clk_mem +0.572, clk_i960 +2.568,
+HDMI -0.678; holds clean. s742 clk_sys -0.734. 41,088-41,123 ALM. s741 is
+the candidate (the most core margin).
