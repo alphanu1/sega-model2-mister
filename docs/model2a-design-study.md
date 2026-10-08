@@ -26698,3 +26698,38 @@ on D, Textures On then Off (R689's test, in a race) -- if Off is much faster,
 the texture traffic's contention is the in-race cost and a second SDRAM is a
 real lever; then a telemetry-lite build of D to see which stage (CPU, walk,
 draw) holds a race.
+
+**R707 -- READ-AHEAD FOR THE GEOMETRY ENGINE, MODELLED: ~19% OFF THE WALK, OF
+A 25% CEILING. A SECOND SDRAM COULD ADD AT MOST THE OTHER ~6%.** Question
+(Ben): if the geometry waits on its memory round trip (R696), why not read
+ahead, and would a second SDRAM shorten the trip? tb_m2_geodiff gains
+M2GD_PC=3/4: a read-ahead stream per memory space (3) or one shared (4),
+M2GD_RA pairs ahead of the engine's last miss, on ONE port (M2GD_OCC cycles a
+fetch, default LAT: one in flight); a read of a pair held or in flight waits
+only for its arrival, anything else restarts the stream; the last pair is kept
+as PC=2. Writes are not modelled (a best case: copies never go stale). Saved
+attract walks, cycles to the last quad in vblanks at 70 MHz:
+
+    config                              w1000         w5000
+    today (PC=2, LAT 12)                1.09          1.02      (R696's, reproduced)
+    free memory (LAT 0) -- the ceiling  0.82  -25%    0.78  -24%
+    one shared stream, 4 pairs          0.94  -13%    0.86  -16%
+    per space, 2 pairs                  0.94  -13%    0.87  -14%
+    per space, 4 pairs                  0.89  -19%    0.82  -19%
+    per space, 8 pairs                  0.89  -19%    0.82  -19%
+    per space, 4, pipelined (OCC 4)     0.87  -20%    0.81  -21%
+    today at LAT 16                     1.17          1.10
+    per space, 4 pairs, LAT 16          0.92  -21%*   0.84  -24%*   (* against LAT 16)
+
+All 22 runs emit identical quads. Findings: (1) with memory FREE the walk
+still takes ~0.8 vblank a heavy list -- after R696's cuts the engine's own
+sequencing is three quarters of its time, memory a quarter; (2) four pairs
+ahead per space recovers ~19 of those 25 points on today's single port, with
+no pipelining; more depth or a pipelined port adds 1-2; (3) a second SDRAM
+(no crossing, no arbiter, open rows) can only shorten the trip, and even a
+zero-cycle trip is the LAT 0 row -- at most ~6 points beyond read-ahead, for
+owners of the board only. Read-ahead first; the second SDRAM is not the lever.
+Costs not yet sized: area (four streams x four pairs x 64 bits + tags, against
+98% ALM), and staleness -- the walk's DMA writes and the CPU's colour writes
+must invalidate the streams as R698 does the pair cache. A 19% faster walk is
+not 19% more frames: whether the geometry holds a race (R706) is unmeasured.

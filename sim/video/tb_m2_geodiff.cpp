@@ -20,6 +20,7 @@
 #include <vector>
 #include <map>
 #include <set>
+#include <deque>
 #include <algorithm>
 
 static Vgeodiff_top *d;
@@ -77,6 +78,39 @@ static uint32_t eng_wordaddr(uint32_t space, uint32_t a, uint32_t oba) {
   }
   return (base + 2 * idx) & ((1u << 25) - 1);
 }
+// R707: M2GD_PC=3/4 -- READ-AHEAD. A stream per memory space (3), or one
+// shared (4), fetches the pairs after the engine's last miss before they are
+// asked for: M2GD_RA pairs ahead (default 4). One port: a fetch occupies it
+// M2GD_OCC cycles (default LAT, one in flight; less is a pipelined port) and
+// answers LAT after it issues. A read of a pair the stream holds or has in
+// flight waits only for its arrival; anything else is a miss and restarts the
+// stream there. The whole last pair is kept, as PC=2. Writes are ignored: a
+// best case, so the copies are never made stale.
+static long g_cyc = 0, g_pf = 0, g_rahit = 0;
+struct RaStream { bool act = false; uint32_t next = 0, last = ~0u; std::deque<std::pair<uint32_t, long>> q; };
+static RaStream g_ra[4]; static long g_port_free = 0; static int g_ra_rr = 0;
+static int ra_read(RaStream &S, uint32_t dw, int lat, int occ) {
+  while (!S.q.empty() && dw > S.q.front().first + 1 && dw - S.q.front().first < 4096) S.q.pop_front();
+  for (auto &e : S.q)
+    if (dw >= e.first && dw <= e.first + 1) { S.last = e.first; ++g_rahit; return int(std::max(0L, e.second - g_cyc)); }
+  if (S.last != ~0u && dw >= S.last && dw <= S.last + 1) return 0;
+  const long issue = std::max(g_cyc, g_port_free);
+  g_port_free = issue + occ; ++g_porttrips;
+  S.q.clear(); S.q.push_back({dw, issue + lat}); S.next = dw + 2; S.last = dw; S.act = true;
+  return int(issue + lat - g_cyc);
+}
+static void ra_tick(int ra, int lat, int occ) {
+  if (g_cyc < g_port_free) return;
+  for (int k = 0; k < 4; k++) {
+    RaStream &S = g_ra[(g_ra_rr + k) & 3];
+    if (S.act && int(S.q.size()) < ra) {
+      S.q.push_back({S.next, g_cyc + lat}); S.next += 2;
+      g_port_free = g_cyc + occ; ++g_porttrips; ++g_pf; g_ra_rr = (g_ra_rr + k + 1) & 3;
+      return;
+    }
+  }
+}
+
 static bool wr_pend = false; static uint32_t wr_a; static uint16_t wr_d;
 static long nq = 0; static FILE *fo = nullptr;
 
@@ -93,6 +127,10 @@ static void tick() {
   // next dword, used once), 2 the whole last answer {N, N+1} kept until replaced.
   static const int PC = std::getenv("M2GD_PC") ? std::atoi(std::getenv("M2GD_PC")) : 0;
   static bool pc_v = false; static uint32_t pc_n = 0;
+  static const int RA  = std::getenv("M2GD_RA")  ? std::atoi(std::getenv("M2GD_RA"))  : 4;
+  static const int OCC = std::getenv("M2GD_OCC") ? std::atoi(std::getenv("M2GD_OCC")) : std::max(LAT, 1);
+  ++g_cyc;
+  if (PC >= 3) ra_tick(RA, LAT, OCC);
   d->mem_ack = 0;
   if (d->mem_req) {
     if (lat_left < 0) {
@@ -101,8 +139,9 @@ static void tick() {
       bool hit = false;
       if (PC == 1) { hit = pc_v && dw == pc_n; pc_v = !hit && ((dw & 511) != 511); pc_n = dw + 1; }
       else if (PC == 2) { hit = pc_v && (dw == pc_n || dw == pc_n + 1); if (!hit) { pc_v = ((dw & 511) != 511) || true; pc_n = dw; } }
-      if (!hit) ++g_porttrips;
-      lat_left = hit ? 0 : LAT; ++g_memreqs;
+      if (PC >= 3) lat_left = ra_read(g_ra[PC == 3 ? (d->mem_space & 3) : 0], dw, LAT, OCC);
+      else { if (!hit) ++g_porttrips; lat_left = hit ? 0 : LAT; }
+      ++g_memreqs;
       // R696: which memory, which engine state, and whether this exact word was read before in this list
       const int est = d->rootp->geodiff_top__DOT__u_geometry__DOT__u_engine__DOT__st;
       g_rd_by[(d->mem_space << 8) | est]++;
@@ -196,6 +235,7 @@ int main(int argc, char **argv) {
   if (std::getenv("M2GD_RDS")) {
     static const char *SP[4] = {"polygon", "texture", "palette", "xlat"};
     std::printf("  port trips %ld (M2GD_PC=%s)\n", g_porttrips, std::getenv("M2GD_PC") ? std::getenv("M2GD_PC") : "0");
+    if (g_pf) std::printf("  read-ahead: %ld fetched ahead, %ld reads served from them\n", g_pf, g_rahit);
     std::printf("  engine reads %ld, of which repeats of a word already read this list %ld (%.1f%%)\n", g_memreqs, g_repeat, 100.0 * g_repeat / std::max(g_memreqs, 1L));
     std::vector<std::pair<long,int>> v; for (auto &k : g_rd_by) v.push_back({k.second, k.first});
     std::sort(v.rbegin(), v.rend());
