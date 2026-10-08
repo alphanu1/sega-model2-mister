@@ -27288,3 +27288,14 @@ NOT FIXED here, seed-dependent: m2_geo_clip cs -> m2_geo_engine st (-0.430
 s754, -0.03 s752) -- clip's pool request -> the round-robin grant -> the
 engine's next state, all combinational (m2_fp_pool grants are by design);
 and clip qsy -> quad store a_band (-0.378, s752 only).
+s755-s757 (80747ef): the plane fit's paths are gone. s755 clk_sys -0.181
+(det_abs_r -> den_sh, 3 endpoints; clip qsy -> a_band -0.058), clk_mem
++0.766, HDMI -0.592; s757 clk_sys -0.152 (span_tex sh_p -> mq_f1/mq_f0, the
+R631 mask query), clk_mem -0.025, HDMI -0.531; s756 Quartus Internal Error
+(STA), as s746. 41,277 / 41,310 ALM. den_sh is now a 16-bit encode of
+det_abs_r[31:16] (top bit p >= 16 gives clz 31-p, so 16-clz = p-15 = its
+index in the top half plus one; 0 when clear) -- the same number without the
+32-bit encode and subtract. Checked against the old form over 200,070 values
+including every power of two and 2^n-1; the four frames identical in pixels,
+fetches and cycles. span_tex's mask query is left: changing it means the
+two-slot overlap (R490), and a wrong answer there skips painting (R631).

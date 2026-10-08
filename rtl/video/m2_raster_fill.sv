@@ -464,9 +464,21 @@ module m2_raster_fill #(
   // R594: 70 MHz. The negate and the encode were still one cycle (s319:
   // det_r -> den_sh, -0.14 ns); the magnitude is registered first.
   logic [31:0] det_abs_r;
-  wire [5:0]  det_clz = clz32(det_abs_r);
-  // Bits the denominator must lose to fit in sixteen.
-  wire [5:0]  den_sh_c = (det_clz >= 6'd16) ? 6'd0 : (6'd16 - det_clz);
+  // Bits the denominator must lose to fit in sixteen: 16 - clz32 when that is
+  // positive. R727: computed from the top half alone -- a top bit at p >= 16
+  // gives clz 31 - p, so the answer is p - 15, which is that bit's index in
+  // det_abs_r[31:16] plus one, and 0 when the top half is clear. The same
+  // number without the 32-bit encode and the subtract behind it (s755:
+  // det_abs_r -> den_sh -0.181 at 75 MHz).
+  function automatic logic [5:0] den_shift(input logic [15:0] h);
+    logic [5:0] n;
+    begin
+      n = 6'd0;
+      for (int i = 0; i < 16; i++) if (h[i]) n = 6'(i + 1);
+      den_shift = n;
+    end
+  endfunction
+  wire [5:0]  den_sh_c = den_shift(det_abs_r[31:16]);
   // REGISTERED, AND THAT IS THE WORST PATH IN THE DESIGN (R289). `den_sh` is a
   // 32-bit priority encode of the determinant, and `pf_scale` uses it to work
   // out how far to shift the quotient back. Left combinational, the path runs
