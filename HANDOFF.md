@@ -1,5 +1,44 @@
 # Handoff
 
+## 2026-10-09 (night): BRANCH readahead -- Ben's five, one commit each (bisectable)
+
+Ben, 2026-10-08: "get 1-5 done through the night, commit at each stage, test
+after each one". main is unchanged (the 20261008b release, s759).
+
+  stage  commit   what                                             bench (tb_m2_cpu_real, 100 k instr)
+  1      0f1f6ce  s761 telemetry of s759 (attract): 10.41 CPI,     --
+                  47.7% frame-sync idle, game 56.7 fps (R-entry
+                  pending with the stage results)
+  2      5feba69  R728 CPU-side 8 KB code cache (program ROM);     13.10 (unchanged: boot loop)
+                  data cache 16 -> 8 KB for the M10K
+  3      46ab126  R729 two-phase toggle handshake (R693 re-made)   13.10 -> 12.02
+  4      ea27445  R730 the bridge answers in the cycle it can      12.02 -> 11.08
+                  (combinational bus_ack / bus_rdata)
+  5      0555f60  R731 six 80 MHz paths of ours registered         pixels identical
+         5a1efab  R732 TGP paths; Model 1's 9b72de7; R577 = 9705a10
+Every CPU stage keeps the retired-IP hash a95ee045a6c3424b.
+
+Stage 4 is NOT what was planned (the i960's own sequencing): s751's race says
+the core works only ~12% of samples and already prefetches; the waits are
+the bridge's hand-off (R730).
+
+Board plan: stage 2 alone (s764-s766, worktree sm2-bis-5feba69) for a
+sanity run; stages 3 and 4 as TELEMETRY builds (worktrees sm2-bis-46ab126,
+sm2-bis-ea27445, M2_DEBUG_LITE on in their own qsf) so attract CPI can be
+compared with s761's 10.41 -- attract fps cannot show a CPU gain (the game is
+already at 56.7 fps there; only a race can).
+
+80 / 40: ~45 distinct clk_sys paths under 0.9 ns at 75 on s759. Ours and
+the TGP's are in R731/R732. NOT addressed: the I/O board Z80's firmware RAM
+-> IR (0.21-0.85), fx68k Ir -> nanoAddr (0.51), jt12 (0.30), MultiPCM (0.79),
+fp_add (0.71, shared with the TGP, latency hard-coded), xah -> DSP enable
+(0.79). Model 1 has no exceptions for fx68k / tv80 / jt12 to borrow.
+
+Found: test_m2_raster_fill fails on HEAD too (655 of 152,369); tb_mb86233_regs
+fails 46,966 before and after (rf 0x21 is the FIFO on Model 2); two bridge
+benches modelled a requester that drops its request between clock edges
+(fixed, R730); Model 1's deb6642 (register-sourced rep) is not ported.
+
 ## 2026-10-08 (late): RELEASED Model2_20261008b.rbf = s759. main = readahead.
 
 s759 (d08ba0a: R709 read-ahead, R711, R697/R698/R712, R714-R718 at 75/37.5,
