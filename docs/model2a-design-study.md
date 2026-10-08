@@ -27114,3 +27114,8 @@ direction, bridge state and address (geometrizer 0x80, TGP FIFO 0x884000,
 TGP control 0x98, interrupts 0xe8). Normal builds compile it away.
 lint_top and the telemetry lint clean; Quartus parses both; test_m2_cpu_bridge
 136 checks, test_m2_cpu_sdram and test_i960_top (258,520 checks) pass.
+CPU-wait telemetry builds (020a098 + M2_DEBUG_LITE in the seeds' qsf): s747
+and s748 did not route and s746 died in Quartus (Internal Error, Sub-system
+STA, sta_report_metastability.cpp); s749-s751 all routed -- s751 clk_sys
+-0.021, clk_mem -0.072, clk_i960 +3.419, holds clean, HDMI -0.520: a
+measurement build. RBF assembled for the race capture.
