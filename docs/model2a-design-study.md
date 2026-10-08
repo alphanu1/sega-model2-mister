@@ -27077,3 +27077,25 @@ failures are not the telemetry: MiSTer's LFB_BASE (gp_outr -> LFB_BASE,
 -0.460; a static HPS config register, MISTER_FB is off) and the fill's
 determinant sf -> det_r (-0.247, 33 endpoints, once a quad) -- acceptable for a
 MEASUREMENT build only. s745 RBF assembled for the race capture.
+
+**R720 -- A RACE, MEASURED (s745, telemetry, 180 s of play, 10,347 vblanks).**
+  * The game: 5,569 list flips (0x803008 writes) -> 31.0 a second, a new list
+    every 1.86 vblanks. NOT ~49: the lap-timer reading (~0.85, R719) does not
+    match the flips; the timer may count vblanks rather than frames. The flips
+    are the measured rate of the game's 3D lists.
+  * The i960: in the frame-sync wait (IP 0x12B0-0x12BF) 34.8% of samples,
+    working 65.2% -> ~1.2 vblanks of work a race frame at 37.5 MHz; a frame
+    fits one vblank only with ~20-25% more effective CPU. 12.57 CPI (2.98 M
+    instr/s, 51,884 instructions a vblank); WAITING ON THE BUS 57.5% of its
+    cycles (7.22 of the 12.57 CPI), its own sequencing 5.34 CPI; data cache
+    83.3% hit (0.12 misses an instruction); the TGP holding it (copro_stall)
+    in 10.5% of samples. 80/40 is +7% on the clock and cannot close a ~20%
+    gap alone; the bus waiting is the bigger lever (R690 and R681 said so in
+    attract; it holds in a race).
+  * The 3D is NOT the limit: the walk idle 79.4% (W_OBJW, waiting on the
+    engine, 19.8%), the engine idle 80.4%, the renderer drawing 21.5% of the
+    time, the quad hand-off never stalled, the read-ahead busy 13.1%. Frames
+    published 0.27 a vblank = 15.5 a second: Single buffered draws every
+    second list of 31. In a race Double Buffered should therefore show ~31
+    pictures a second at the same game speed -- Single buffered only pays
+    where the 3D is the limit (attract).
