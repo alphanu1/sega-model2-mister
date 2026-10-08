@@ -26816,3 +26816,12 @@ Verification:
     one 10259 warning in Model2.sv is on main too). lint_top clean.
 Not proven by any bench: R708's mechanism, which no bench reproduces. The
 board check must run far past tools/m2-fbcheck.py's 150 s, which D passed.
+Build (ae58595), seeds s716-s718: s717 CLOSES EVERY CLOCK, HDMI too --
+clk_sys +0.073, clk_mem +0.446, clk_i960 +3.128, HDMI +0.019, holds >= +0.179;
+41,436 ALM (99%). s716 and s718 miss HDMI only (-1.215, -1.359). RBF md5
+73b8b6baf61c39dd4dce362dabaa1ccf, 4,640,172 bytes. m2_eng_ra is 424 ALM: its
+pair store did NOT land in MLAB -- Quartus 17: "RAM logic pairs is uninferred
+due to asynchronous read logic" (the read sits in the async-reset block).
+Reading it in a reset-free block, addressed on the hit cycle, keeps the hit
+at two cycles and should give back ~250-300 ALM; not done yet, the build
+fits without it. Not yet on the board.

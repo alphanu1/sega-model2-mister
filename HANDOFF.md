@@ -1,5 +1,27 @@
 # Handoff
 
+## 2026-10-08 (later): BRANCH readahead -- the geometry read-ahead (R709), built, NOT yet on the board
+
+readahead = main (B, 46f7347) + rtl/mem/m2_eng_ra.sv in place of the
+engine's pair cache. Two read-ahead streams (polygon data; texture headers
+in ROM), nothing the CPU writes is copied, flushed per object and on the
+geometrizer's landed writes (R708's lessons). Bench: identical quads on four
+saved lists, 19-24% off the geometry walk against B's real cache at port
+latency 10-14; tb_m2_eng_ra 13.5 M checks clean, latency swept 1-150, four
+planted bugs caught. s717 closes every clock (HDMI +0.019, clk_sys +0.073);
+RBF md5 73b8b6baf61c39dd4dce362dabaa1ccf in build/seeds/s717.
+
+To do on the board when Ben says: load s717; tools/m2-fps.py in attract AND
+in a race (R706: a race is ~30 fps on B); tools/m2-fbcheck.py, and a LONG run
+for the black fault (D passed 150 s and still went black). Then the MLAB fix
+(~250-300 ALM back) and, if the geometry no longer holds a race, telemetry to
+find what does.
+
+Also found: test_m2_raster3d does not build on main either -- its Makefile
+list lacked m2_texel_bl.sv (fixed here) and the bench reads internal signals
+that have since been renamed (not fixed). The working branch is now always
+checked out in /home/ben/source/sega-model2-mister.
+
 ## 2026-10-08: RELEASED Model2_20261008.rbf = s708 (build B). main = this.
 
 D (20260930c, s712) went black on Ben's board -- the 3D textured but unlit,
