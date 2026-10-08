@@ -27197,3 +27197,33 @@ Found on the way: since R712 the real-CPU harness had R697's buf_wr_stall
 wired onto m2_cpu_sdram_harness, which has no such port (the bridge inside it
 is wired already), so tb_m2_cpu_real did not build; it is not in `make test`.
 Fixed.
+
+**R725 -- DAYTONA USA 1994 (MAME `daytona`, "Revision A").** Asked for by Ben
+(his PC recompilation already runs it; "the sound ROM data slightly moved").
+MAME 0.289's two sets, part by part: the i960 program (epr-16722a/16723a),
+data 4-8 MB (mpr-16808/16809), the second texture pair (mpr-16770/16769) and
+the 68000 program (epr-16720/16721) are this revision's in the same places;
+copro data, three polygon pairs, the first texture pair, the samples, comms
+and TGP tables are '93's. Two LAYOUT differences:
+  * main_data 8 MB+: 1 MB (epr-16724a/16725a) against '93's 2, mirrored by
+    MAME from 0x800000 (not 0x900000). The MRA loads it twice, so the core's
+    existing mirror of 0x900000 is right for both sets.
+  * The polygon ROM is 16 MB (mpr-16772/16771, 2 MB each) against 13 -- in a
+    flat image everything after it moves 3 MB, the sound program first, which
+    is what Ben saw. The MRA keeps '93's layout to its last byte (0x2BE0000)
+    and appends the pair's last 3 MB; m2_rom_loader (XTRA_FROM / XTRA_TO,
+    default off) sends those to GAME_POLYX, word 0x1880000 (byte 0x3100000,
+    free SDRAM above GAME_LUMA's end at word 0x1868000); the engine reads
+    polygon-ROM dwords 0x340000 (13 MB) and up from GAME_POLYXB = GAME_POLYX -
+    0x680000. Before this, an oba past 13 MB read the sound program.
+Checked: the local set matches MAME's CRCs for every revision-specific file;
+an independent MRA builder (offset / length honoured) makes the '94 image
+0x2EE0000 bytes, '93's 0x2BE0000; every region shared with '93 identical at
+the same offset; data 0x900000 == 0x800000; polygons 12-16 MB (in place +
+appended) == ROM_LOAD32_WORD(mpr-16772, mpr-16771); the same method gives
+'93's own last pair. tb_m2_rom_xtra (new, in `make test`): bytes below
+0x2BE0000 land at their own word, bytes from it at 0x1880000 on; 7 checks.
+Nothing else in the core is tied to '93: the TGP's microcode is transcribed
+into the RTL, and the 0x12B0 frame-wait address feeds only logic_frames,
+which nothing reads. (tools/m2-decode-race.py / m2-decode-cpu.py use 0x12B0
+for '93's wait; the '94 program's may differ.) Untested on the board yet.

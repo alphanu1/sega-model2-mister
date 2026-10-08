@@ -387,7 +387,7 @@ SDR_RTL := rtl/mem/m2_sdram.sv rtl/mem/bw_monitor.sv sim/mem/sdram_model.sv sim/
 RLD_RTL := rtl/mem/m2_sdram.sv rtl/io/m2_rom_loader.sv sim/mem/sdram_model.sv sim/mem/m2_romload_harness.sv
 
 
-.PHONY: test test_m2_backup test_m2_fb_wcomb test_m2_fbw_chain test_m2_sndboard test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram test_fx68k test_m2_ioboard
+.PHONY: test test_m2_backup test_m2_fb_wcomb test_m2_fbw_chain test_m2_sndboard test_m2_romload test_m2_rom_xtra test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram test_fx68k test_m2_ioboard
 test: test_m2_handshake_cdc test_m2_texel test_m2_texel_cdc test_m2_span_tex test_m2_geo test_m2_wr_arb test_m2_pair_cache test_m2_eng_ra test_m2_raster3d test_m2_backup test_m2_sndlink test_fx68k test_m2_sndboard test_m2_ioboard test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_sdram_cdc test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
 
 test_i960_dec: obj_i960_dec/Vi960_dec
@@ -534,6 +534,16 @@ obj_m2_sdram128/Vm2_sdram_harness: $(SDR_RTL) sim/mem/tb_m2_sdram.cpp
 	  -CFLAGS "-O2 -I../sim/mem -DTB_COL_BITS=11" \
 	  -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-WIDTHEXPAND -Wno-SYNCASYNCNET \
 	  --Mdir obj_m2_sdram128 -o Vm2_sdram_harness $(SDR_RTL) sim/mem/tb_m2_sdram.cpp
+
+# R725: the loader's remap of the '94 set's extra polygon ROM, with Model2.sv's parameters
+test_m2_rom_xtra: obj_m2_rom_xtra/Vm2_rom_loader
+	@echo "== test m2_rom_xtra (the loader's XTRA remap, R725)"
+	@./obj_m2_rom_xtra/Vm2_rom_loader $(TEST_ARGS)
+
+obj_m2_rom_xtra/Vm2_rom_loader: rtl/io/m2_rom_loader.sv sim/mem/tb_m2_rom_xtra.cpp
+	$(VBUILD) --top-module m2_rom_loader -GSDR_AW=25 -GXTRA_FROM=27\'h2BE0000 -GXTRA_TO=25\'h1880000 \
+	  -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM --Mdir obj_m2_rom_xtra -o Vm2_rom_loader -CFLAGS "-O2" \
+	  rtl/io/m2_rom_loader.sv sim/mem/tb_m2_rom_xtra.cpp
 
 test_m2_romload: obj_m2_romload/Vm2_romload_harness
 	@echo "== test m2_romload (ioctl -> loader -> sdram -> readback)"

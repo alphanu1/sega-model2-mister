@@ -554,11 +554,16 @@ localparam logic [SDR_AW:1] GAME_TGPTBL = SDR_AW'(32'h15d0000);
 // `oba` is a DWORD INDEX, not a byte address: the reference reads
 // polygon_rom[oba & mask] out of a u32 array, with mask = bytes/4 - 1. The
 // engine masks to 22 bits, which is that mask for a region padded to 16 MB.
-// An oba past the real 13 MB therefore reads the sound program rather than
-// wrapping the way MAME's non-power-of-two mask would. Left as is: it can only
-// happen for an object address the game never issues, and a wrong picture is
-// preferable to a mask that quietly disagrees with the reference.
+// R725: DAYTONA '94 (MAME `daytona`, Revision A) HAS 16 MB OF POLYGON ROM,
+// '93 13 -- its ic19/ic23 pair is 4 MB to '93's 1. The first 13 MB stay here;
+// the last 3 are appended to the MRA after the TGP tables, and the loader
+// (XTRA_FROM / XTRA_TO) puts them at GAME_POLYX in free SDRAM above the RAMs.
+// The engine reads polygon ROM at dword 0x340000 (13 MB) and up from there.
+// '93 never reads past 13 MB; before this an oba there read the sound program.
 localparam logic [SDR_AW:1] GAME_POLY   = SDR_AW'(32'h0b20000);   // byte 0x1640000, 13 MB
+localparam logic [SDR_AW:1] GAME_POLYX  = SDR_AW'(32'h1880000);   // byte 0x3100000, 3 MB: polygon ROM 13-16 MB
+localparam logic [SDR_AW:1] GAME_POLYXB = GAME_POLYX - SDR_AW'(32'h0680000);   // so that + 2 x dword lands in it
+localparam logic [26:0]     MRA_END_93  = 27'h2BE0000;            // the '93 image's last byte + 1 (the TGP tables' end)
 
 wire        snd_rom_req;
 wire [17:1] snd_rom_addr;
@@ -1299,7 +1304,7 @@ wire mem_ready_s = mem_ready_sy[1];
 // `ioctl_wait` STALLS THE HPS ITSELF, so the loader gates it on `ioctl_download`
 // internally — and it ASKS the host to stop rather than stopping it, which is why
 // it buffers into a FIFO with margin instead of trusting the wait to take effect.
-m2_rom_loader #(.SDR_AW(SDR_AW)) u_loader (
+m2_rom_loader #(.SDR_AW(SDR_AW), .XTRA_FROM(MRA_END_93), .XTRA_TO(GAME_POLYX[SDR_AW:1])) u_loader (   // R725
 	.clk(clk_sys), .rst(~mem_rst_n),
 	.mem_ready(mem_ready_s),   // R571: synchronised -- see below
 	.ioctl_download(ioctl_download), .ioctl_index(ioctl_index),
@@ -3023,7 +3028,7 @@ wire [SDR_AW:1] eng_base = (eng_mem_space == 2'd1) ? (eng_mem_addr[23] ? GAME_TE
                          : (eng_mem_space == 2'd2) ? GAME_PAL3D
                          : (eng_mem_space == 2'd3) ? GAME_XLAT3D
                          : geo_obj_oba_r[24] ? GAME_PRAM1
-                         : geo_obj_oba_r[23] ? GAME_POLY
+                         : geo_obj_oba_r[23] ? ((eng_mem_addr[21:0] >= 22'h340000) ? GAME_POLYXB : GAME_POLY)   // R725
                                              : GAME_PRAM0;
 wire [23:0] eng_mem_idx  = (eng_mem_space == 2'd1) ? (eng_mem_addr[23] ? {9'd0, eng_mem_addr[14:0]}   // 64 K words
                                                                        : {3'd0, eng_mem_addr[20:0]})  // 4 M words

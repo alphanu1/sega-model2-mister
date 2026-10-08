@@ -115,7 +115,14 @@ module m2_rom_loader #(
   // the stream over its own start, which is a black screen with no error and is
   // exactly what a 43.62 MB set did on hardware against a 24-bit address.
   parameter int unsigned SDR_AW = 24,
-  parameter logic [15:0] ROM_INDEX = 16'd0
+  parameter logic [15:0] ROM_INDEX = 16'd0,
+  // R725: BYTES FROM XTRA_FROM ON GO TO XTRA_TO (a word address), not to their
+  // own offset. Daytona's 1994 set has 16 MB of polygon ROM where '93 has 13;
+  // its MRA appends the extra 3 MB after the '93 image, and this puts them in
+  // free SDRAM instead of over the regions the core keeps above the ROMs.
+  // XTRA_FROM all-ones (the default) leaves every address as it was.
+  parameter logic [26:0] XTRA_FROM = 27'h7FF_FFFF,
+  parameter logic [SDR_AW-1:0] XTRA_TO = '0
 ) (
   input  logic        clk,
   input  logic        rst,
@@ -240,6 +247,11 @@ module m2_rom_loader #(
   logic dl_done;    // stream has ended, waiting for the buffer to drain
   logic [15:0] tgp_lo;
 
+  // R725: where this byte's word goes
+  wire [26:0]       ld_rel  = ioctl_addr - XTRA_FROM;
+  wire [SDR_AW-1:0] ld_word = (ioctl_addr >= XTRA_FROM) ? (XTRA_TO + SDR_AW'(ld_rel[26:1]))
+                                                        : ioctl_addr[SDR_AW:1];
+
   always_ff @(posedge clk or posedge rst) begin
     if (rst) begin
       wptr <= '0; rptr <= '0; rd_armed <= 1'b0;
@@ -266,7 +278,7 @@ module m2_rom_loader #(
           if (fifo_full) begin
             overflow <= 1'b1;
           end else begin
-            fifo_addr[wptr[AW-1:0]] <= ioctl_addr[SDR_AW:1];
+            fifo_addr[wptr[AW-1:0]] <= ld_word;   // R725
             fifo_data_lo[wptr[AW-1:0]] <= ioctl_dout[7:0];
             fifo_data_hi[wptr[AW-1:0]] <= ioctl_dout[15:8];
             wptr <= wptr + 1'b1;
