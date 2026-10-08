@@ -26681,3 +26681,20 @@ A-C did not, and the dropout has always been time-dependent, so one clean
 on D, repeated; then the same run on B, which measured the same speed. If D
 holds and B does not, the keep-last is involved; if both hold, the earlier
 A-C runs need repeating.
+
+**R706 -- IN A RACE THE GAME RUNS AT ~25-30 fps, NOT ~55. EVERY SPEED FIGURE
+SO FAR WAS ATTRACT.** Believed: D (s712) runs the game at ~55 of 57.5 fps,
+full speed in 92% of frames, so the remaining headroom is ~2.5 fps and a
+second SDRAM (or any further memory work) can buy at most that. Now known
+(Ben, playing D on the board, 2026-10-08, by eye): in-game it drops to ~30
+fps, ~25 on busy frames. tools/m2-fps.py, R689's Textures on/off comparison
+and R704's bisect were all taken in attract, which is lighter than a race (one
+car on screen for much of it). The ceiling argument is void for play; the
+latency argument (R681/R690: ~a tenth of the CPU's memory wait is at the SDRAM
+controller, the rest is the path to it; R696: the geometry waits on its round
+trip, ~10 clk_sys cycles unloaded, 10-16 effective) still stands, but whether
+contention matters IN A RACE is unmeasured. Next: tools/m2-fps.py during play
+on D, Textures On then Off (R689's test, in a race) -- if Off is much faster,
+the texture traffic's contention is the in-race cost and a second SDRAM is a
+real lever; then a telemetry-lite build of D to see which stage (CPU, walk,
+draw) holds a race.
