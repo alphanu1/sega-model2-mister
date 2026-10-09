@@ -27753,3 +27753,15 @@ engine cc_idx -> cc_dirty -0.051. s799: store vtx_r -> fill hi01_v -0.489
     cycle more per quad).
 Four frames identical in pixels (draw +0.0..+0.27% cycles); test_m2_raster3d;
 lint_top, the SDC under tclsh, Quartus parses clean.
+
+**R744 -- 80 / 40 CLOSES (clk_sys), HDMI DOES NOT YET.** 1de95f2 (R727-R742)
+at 80 / 40, s810-s812: clk_sys **+0.093** / **+0.065** / -0.040, clk_mem
++0.61 / +1.06 / +0.91, clk_i960 at 40 +1.73 / +2.03 / +1.47, holds >= +0.148
+(s810, s811); HDMI -1.071 / -1.044 / -0.282 (TNS -21.2 / -35.8 / -0.32);
+~41,010-41,022 ALM. RBFs: s810 0639cb6b143f04a6d524b84f07bf3190, s811
+6a9ecca940d99c136201c4c055b5900f. HDMI is MiSTer's ascal (framework) and has
+always been seed-dependent; the board has run builds at -0.678 (s741) and
+-0.885 (D) without a fault -- -1.07 is past both. The clock change itself
+(SYS_MHZ 80; pll outclk1 80, outclk3 40) is committed with this entry, on top
+of R743; s810/s811 are 1de95f2 + exactly this change. s813-s815 (a3f055c +
+it) are building for a seed that closes HDMI as well.

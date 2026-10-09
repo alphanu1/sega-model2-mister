@@ -307,7 +307,7 @@ wire clk_mem;        // 100 MHz, m2_sdram ONLY
 wire clk_sdram_pin;  // 100 MHz at 180 deg, drives SDRAM_CLK
 // R573: THE CORE CLOCK IN MHz, and every rate that hangs off it derives from
 // this one number (R227's list). 60: the clock plan's target; clk_i960 is half.
-localparam int unsigned SYS_MHZ = 75;    // R717: 75 / 37.5 on the way to R713's 80 / 40 (was 70 / 35, R580)
+localparam int unsigned SYS_MHZ = 80;    // R744: 80 / 40 (R713's target; R717 had stepped to 75 / 37.5)
 wire clk_sys;   // 60 MHz (R573), the core domain, and the COPROCESSOR's clock.
                 // Exactly the real MB86234's 50 MHz, and an exact 2x clk_i960 --
                 // the board's own ratio. Model 1 had to retrofit 2:1 onto a
