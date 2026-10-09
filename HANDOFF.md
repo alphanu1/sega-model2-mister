@@ -1,8 +1,8 @@
 # Handoff
 
-## 2026-10-09 (day): 80/40 CLOSED; NO FASTER; BLACK 3D AND THE LOCK BEING BISECTED
+## 2026-10-09 (day): 80/40 CLOSED; NO FASTER; BLACK 3D FOUND (R752); LOCK POINTS AT R730
 
-Branch readahead, HEAD fd3637b (R744-R750). main is still the 20261008b
+Branch readahead, HEAD 4202dbb (R744-R752). main is still the 20261008b
 release (s759).
 
 80 / 40 closes every clock, HDMI too: s814 (a3f055c + R744's clocks),
@@ -15,24 +15,30 @@ s819-s821 (trimmed telemetry, read-ahead on) all failed clk_sys (-0.59 best),
 so that measurement is still owed.
 
 BLACK 3D (Ben: "never been fixed; the fix just made it take longer"): the
-32-entry light table goes all (0, 0) -- R697's zero-count race. Two holes
-found: push_busy dropped for a cycle while the M10K queue still held words
-(R747, e82e57e), and the walker's pair cache re-read the old count before the
-CPU's patch landed (R749, 473437f). R747 alone still went black at 4 minutes
-(s833). R749 is NOT YET ON THE BOARD.
+32-entry light table goes all (0, 0) and never comes back until reset. R747
+(push_busy holes) and R749 (walker pair cache) chased the count-patch race of
+R697 -- THE WRONG MECHANISM: s841 (both in) still went black at 5 min.
+R752 (4202dbb) is the measured one. s845's capture from power-on: the genuine
+0x06 at boot, a PHANTOM 0x06 at 3.8 min (black from that frame), another at
+9 min; the phantom frame has 1 nop (not a zero count's 280), and 170 records
+show 1-3 nops -- the walk slips a word or two, often. Cause: a flip's walk
+started on a 1,023-cycle timeout (or q_valid's hole) with its own list's
+tail still queued; held in its window (R638), the walk read the previous
+frame's words. Now a flip's walk waits until every word pushed before the
+flip has landed. Bench: old rule reads 19 of 41 opcodes, new reads 41.
+NOT YET ON THE BOARD: s846-s848 (4202dbb + FAST_ACK 0 + the black records,
+75/37.5, worktree sm2-black-4202dbb) are building. PASS = nops 0 and the
+0x06 count stays at 1 over a long soak (tools: scratchpad decode_black.py,
+records G/P/Q as in R752).
 
 THE LOCK: in attract after minutes to ~45 the i960 traps at 0x1868 (three
 captures, 75 and 80 MHz); an OSD reset recovers it. R750: the callx at 0x1860
 went to r5 = 0x1868, loaded by `ld 12(g13), r5` at 0x185C -- a task pointer
-that is wrong DATA (bad load, or the word was overwritten). Prime suspect
-R730's same-cycle answers. R748 adds m2_cpu_bridge FAST_ACK (1 = R730, the
-branch default; 0 = R729's registered answers).
-
-IN FLIGHT: worktree sm2-trap-473437f = 473437f + trap telemetry + FAST_ACK 0.
-At 80/40 it did not close (s837 no fit by 2 LABs, s838 clk_sys -0.898, s839
--0.786), so it is rebuilding at 75/37.5 as s840-s842 (the lock occurs at 75
-too). One attract soak (tools/m2-fps.py + m2-fbcheck.py) answers both: black
-frames -> R749 is not enough; a lock -> R730 is not the cause.
+that is wrong DATA (bad load, or the word was overwritten). R748 adds
+m2_cpu_bridge FAST_ACK (1 = R730, the branch default; 0 = R729's registered
+answers). With FAST_ACK 0: s841 ran 50 min with no lock (replaced, not
+failed), s845 soaking. If it holds, FAST_ACK 0 becomes the default (and R730
+needs its own fault found); not yet changed.
 
 Still owed: the valid 80/40 race measurement; a fix for the code cache (R733);
 the menu's flashing boxes under Single buffered (an "Auto" draw method).
