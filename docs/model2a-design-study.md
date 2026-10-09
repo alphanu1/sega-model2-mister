@@ -28239,3 +28239,32 @@ as s870); s877 every core clock -- clk_sys +0.111, clk_mem +0.479, clk_i960
 s877 RBF 43ea4abe13900c92abb04f58120e3445, 41,072 ALM, on the board
 2026-10-09 19:59. (s859, R752-R756, ran 111 min of attract with no lock and
 no black frame before it was replaced.)
+
+**R763 -- MEASURED AT 80/40 ON THE BOARD: A RACE IS CPU-BOUND, ATTRACT IS
+GEOMETRY-BOUND IN HEAVY SCENES.** Ben on s877 (R752-R762): Double Buffered
+menus still not 60 (the boxes flash at half rate), attract and race both
+speed up and slow down, the race less; rolling start scrolls; the HUD is in
+place. Measurement build s886 (ae5dabd + one 'G' record a vblank: cycles the
+walk ran, the renderer was busy (fb_busy), the CPU was held on the push
+queue, >>13; the store's state and fb_busy at the vblank; a picture
+published. The 'C' samples did not fit: s879-s884 needed 4,192-4,202 LABs of
+4,191; s886 clk_sys +0.011, HDMI -0.971, RBF 67e1040970416a861844d273efa30752).
+Ben, Double Buffered, 180 s: attract, then a race.
+  * every list is drawn: 6,021 flips, 6,023 pictures published.
+  * attract (0-55 s): 28.7-49.5 lists/s; the walk active the whole vblank on
+    23-90% of vblanks, the renderer on 14-50%.
+  * race (60-180 s): 28.4-28.7 lists/s -- every second vblank, steady; the
+    walk median 0-6 ms, p90 10-12 ms, NEVER the whole vblank; the renderer
+    p90 15-17 ms; the CPU's push stall ~0.
+So in a race neither the geometry nor the renderer is the limit: the game
+hands over a list every second vblank, and the walk and the draw both fit in
+one. The CPU's work per race frame is over one vblank (R745/R746's
+estimate), which is why R754-R759 moved the race 2-5% and attract more.
+In attract the walk spans whole vblanks often, but "walk active" includes
+waiting for the store (q_ready = P_COLLECT) while a READY list waits for the
+vblank swap -- not separated by this record. The classification of a missed
+vblank from the flags is unreliable: they are sampled at vbl_d, before the
+renderer's own frame_start swap.
+Next for the race: the CPU (R746 at 80/40, read-ahead off: data access 40%,
+instruction fetch 19%, working 17%, TGP 12%) -- the code cache (R728/R733),
+R730's fault (R753), the CPU's SDRAM read latency.
