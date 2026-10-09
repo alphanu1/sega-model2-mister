@@ -28348,3 +28348,13 @@ grants at a time. Ben: "keep hammering at the speed".
 Expected if the theory is right: Double Buffered menus at 60 (10 s
 countdowns), the race and attract faster. If not, the CPU is waiting
 elsewhere (the copro sync read before each flip, 0x884000).
+R766 on the board: s888 (894004b = R752-R766, 80/40; clk_sys +0.233, clk_mem
++0.846, clk_i960 +2.595, holds >= +0.188, HDMI -0.097; RBF
+eed72e2d05db23cac7f78701525583cc), Ben: "it's the same" -- Double Buffered
+menus still 30 (20 s countdowns), attract still varies, the race still slow.
+So the i960's place in the SDRAM arbitration is not what costs the menu its
+vblank. Next: the full CPU profile (M2_DEBUG_LITE's 'C' samples: IP, the
+sequencer state, the bridge's transaction, copro_stall) in a Double
+Buffered menu and a race -- built at 75/37.5 because at 80 it does not fit
+beside the design (R762, s879-s884); a question of where the time goes, not
+a speed figure.
