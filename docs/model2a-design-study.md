@@ -27591,3 +27591,39 @@ From R735/R736's lists:
 The four saved frames identical in pixels, fetches and cycles to before R735;
 test_m2_raster3d 8/8, test_m2_geometry / geo / geo_clip / geo_engine pass;
 lint_top and every Quartus parse clean.
+
+**R737 -- THE TGP SEQUENCER'S 80 MHz PATHS, NO CYCLE ADDED.** For R736's
+state.S_LABB_W -> u_seq pc (-0.497) / rep / src_val, state.S_DST -> pc, and
+x_dst_reg -> state.S_LABB / S_DST. Routes found in the RTL (mb86233_core):
+the state bit picked agu_r through use_lab_b / use_dst_side into
+rf_rd_addr -- itself a mux over the state -- then u_regs' ~40-way read mux,
+then seq_branch_val -> pc_exec -> next_pc, seq_rep_count -> next_rep, and
+src_val; and x_dst_reg -> rf_wr_en/rf_wr_addr -> u_regs' 0x22 compare ->
+fifo_wr -> m2_tgp's fifo_ack -> the S_SRC hold -> state (the read side the
+same shape through 0x21). Not R735's mem_stall compare: pc and rep have no
+mem_stall in their cone.
+  * The read address is a register: rd_addr_q, loaded in S_DECODE with the one
+    register an instruction can read (the ld/mov source, brul/bsul's
+    register, else 0).
+  * S_RETIRE's read moves to S_ALU (rd_hold); next_pc and next_rep start from
+    it. Nothing the read can name is written between S_ALU and S_RETIRE.
+  * The FIFO strobes come from four flags registered in S_DECODE
+    (src_fifo_q, brul_fifo_q, dst_fifo_q, ldi_fifo_q), one LUT each.
+One timing difference: a brul/bsul through rf 0x21 (the input FIFO) pops in
+S_ALU, a cycle earlier, with the same data; no known microcode does it.
+tb_mb86233_core extended: brul/bsul register forms, rep register and
+immediate forms, rtif, a PC compare on every retire, and a directed test on
+an m2_tgp-exact FIFO model -- 64 checks, 8,000 register and 8,000 PC compares,
+0 diverged (200,000 at 25x trials); the old core passes it too. Planted
+faults all caught (rd_hold never captured, brul index bit, rep ignoring its
+register, the ldi push, the FIFO flag's compare, the ld/mov source, the
+unimplemented gate). Sim-only per-cycle assertions against the old formulas:
+0 mismatches over the lockstep and test_m2_boot's real microcode. make
+test_tgp otherwise unchanged; lint_top, test_m2_boot, Quartus parse clean.
+Found, NOT fixed: (1) an FP ALU op inside the 0x0f group (e.g. op 0x0d with
+clr1) updates ST here; MAME's alu_post_1 leaves it -- st_next is not gated by
+fp_post_en; ST was never compared until this generator. Check against Model
+1. (2) The lockstep's FP-value filter skips most 24-bit integers (they look
+like denormals/NaNs), so most register values go unchecked -- the new PC
+compare is not subject to it. (3) Model 1's deb6642 (register-form rep reads
+opcode[5:0], not b0) is still not ported; now a one-line rd_addr_q change.

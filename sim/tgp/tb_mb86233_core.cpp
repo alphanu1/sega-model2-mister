@@ -31,6 +31,7 @@
 #include <vector>
 #include <cstdlib>
 #include <random>
+#include <deque>
 
 static Vmb86233_core* dut;
 static std::vector<uint32_t> prog(2048, 0);
@@ -494,6 +495,127 @@ int main(int argc, char** argv) {
   if (!run_instrs(4)) { printf("  FAIL timeout\n"); fails++; }
   ck("store/load round trip", dut->dbg_a, 0x00123456);
 
+  // ------------------------------------------- Model 2's register FIFOs
+  //
+  // R737. rf 0x21 pops the input FIFO and rf 0x22 pushes the output FIFO
+  // (R112), and the strobes that do it are the core's own, decoded from flags
+  // registered in S_DECODE rather than from the read address and the write
+  // mux. step_cycle ties fifo_ack high and fifo_rdata to zero, so nothing
+  // above sees them. This models m2_tgp's side exactly -- the combinational
+  // ack, `popped` (one pop per access, latched on the first cycle the FIFO
+  // has a word), `pushed`, and the Model 2 setting that an empty read WAITS
+  // (EMPTY_FIFO_READS_ZERO = 0) -- and counts what the core asked for: a
+  // strobe that rises early, late, twice or in the wrong instruction changes
+  // the rise count, the pop count or the data.
+  printf("test: rf 0x21 / 0x22 -- one pop, one push, the wait, brul through 0x21\n");
+  {
+    struct {
+      std::deque<uint32_t> in; std::vector<uint32_t> out;
+      bool popped = false, pushed = false; uint32_t pop_data = 0;
+      int pops = 0, rd_rises = 0, wr_rises = 0; bool rd_prev = false, wr_prev = false;
+      long cyc = 0, arrive_at = -1; uint32_t arrive_val = 0;
+      long unimpl = 0, retires = 0; std::vector<uint32_t> pcs;
+    } f;
+    auto fstep = [&]() {
+      if (f.arrive_at >= 0 && f.cyc == f.arrive_at) f.in.push_back(f.arrive_val);
+      const bool valid = !f.in.empty();
+      const bool rd = dut->fifo_rd, wr = dut->fifo_wr;
+      if (rd && !f.rd_prev) f.rd_rises++;
+      if (wr && !f.wr_prev) f.wr_rises++;
+      f.rd_prev = rd; f.wr_prev = wr;
+      dut->prog_rdata = prog[dut->prog_addr & 0x7ff];
+      dut->io_ack = 1; dut->io_rdata = io_read(dut->io_addr);
+      dut->fifo_ack   = rd ? (valid || f.popped) : wr ? 1 : 0;
+      dut->fifo_rdata = f.popped ? f.pop_data : valid ? f.in.front() : 0;
+      if (dut->unimplemented) f.unimpl++;
+      const bool push_now = wr && !f.pushed;
+      const uint32_t wd = dut->fifo_wdata;
+      tick();
+      if (!rd) f.popped = false;
+      else if (!f.popped && valid) {
+        f.popped = true; f.pop_data = f.in.front(); f.in.pop_front(); f.pops++;
+      }
+      if (push_now) f.out.push_back(wd);
+      f.pushed = wr;
+      if (dut->retire) { f.retires++; f.pcs.push_back(dut->retire_pc); }
+      f.cyc++;
+    };
+    auto frun = [&](int n) {
+      long budget = 4000;
+      while (f.retires < n && budget-- > 0) fstep();
+      for (int i = 0; i < 8; i++) fstep();
+      return f.retires >= n;
+    };
+    auto freset = [&]() {
+      f.in.clear(); f.out.clear(); f.popped = f.pushed = false;
+      f.pops = f.rd_rises = f.wr_rises = 0; f.rd_prev = f.wr_prev = false;
+      f.cyc = 0; f.arrive_at = -1; f.unimpl = 0; f.retires = 0; f.pcs.clear();
+      reset();
+    };
+
+    // Two pops, the first from an EMPTY FIFO that fills at cycle 40: the core
+    // must hold in S_SRC, take the word that arrives, and pop exactly once.
+    for (auto& w : prog) w = enc_nop();
+    prog[0] = enc_ldmov7(6, 0x21, 0x10);      // A <- rf 0x21
+    prog[1] = enc_ldmov7(6, 0x21, 0x13);      // B <- rf 0x21
+    freset();
+    f.arrive_at = 40; f.arrive_val = 0x3f8ccccdu;
+    f.in.clear();
+    if (!frun(1)) { printf("  FAIL timeout\n"); fails++; }
+    f.in.push_back(0x40490fdbu);
+    if (!frun(2)) { printf("  FAIL timeout\n"); fails++; }
+    ck("rf21 pop after the wait -> A", dut->dbg_a, 0x3f8ccccdu);
+    ck("rf21 second pop -> B",         dut->dbg_b, 0x40490fdbu);
+    ck("rf21 two accesses, two pops",  f.pops, 2);
+    ck("rf21 two fifo_rd rises",       f.rd_rises, 2);
+    ck("rf21 the wait was counted",    dut->dbg_fifo_hold > 0, 1);
+    ck("rf21 no push",                 f.wr_rises, 0);
+
+    // Pushes: ldi to 0x22 (S_RETIRE's write) and mov A -> 0x22 (S_DST's).
+    for (auto& w : prog) w = enc_nop();
+    prog[0] = enc_ldi(0x22, 0x800001);        // sign-extends
+    prog[1] = enc_ldi(0x10, 0x123456);
+    prog[2] = enc_ldmov7(6, 0x10, 0x22);      // rf 0x22 <- A
+    prog[3] = enc_ldmov7(6, 0x10, 0x23);      // rf 0x23: storage, no push
+    freset();
+    if (!frun(4)) { printf("  FAIL timeout\n"); fails++; }
+    ck("rf22 two pushes",        f.out.size(), 2);
+    ck("rf22 ldi push data",     f.out.size() > 0 ? f.out[0] : 0xdead, 0xff800001u);
+    ck("rf22 mov push data",     f.out.size() > 1 ? f.out[1] : 0xdead, 0x00123456u);
+    ck("rf22 two fifo_wr rises", f.wr_rises, 2);
+    ck("rf22 no pop",            f.rd_rises, 0);
+
+    // brul alw rf 0x21: the target is POPPED. Slots 1-6 would write A=0x111;
+    // landing at 7 writes 0x777. One pop, and the next retire is at 7.
+    for (auto& w : prog) w = enc_nop();
+    prog[0] = (0x2fu << 26) | (0x16u << 20) | (1u << 17) | 0x4000u | 0x21u;
+    for (int k = 1; k < 7; k++) prog[k] = enc_ldi(0x10, 0x111);
+    prog[7] = enc_ldi(0x10, 0x777);
+    freset();
+    f.in.push_back(0xabcd0007u);              // [15:0] = 7
+    if (!frun(2)) { printf("  FAIL timeout\n"); fails++; }
+    ck("brul rf21 lands at 7",  f.pcs.size() > 1 ? f.pcs[1] : 0xdead, 7);
+    ck("brul rf21 -> A",        dut->dbg_a, 0x777);
+    ck("brul rf21 one pop",     f.pops, 1);
+    ck("brul rf21 one rise",    f.rd_rises, 1);
+
+    // The read index is held for the whole instruction now, so an unknown
+    // one must still raise unimplemented only in the cycle it is read, and a
+    // register read that is not 0x21 must not touch the FIFO.
+    for (auto& w : prog) w = enc_nop();
+    prog[0] = enc_ldmov7(6, 0x04, 0x10);      // A <- reg 0x04: read_reg logs
+    prog[1] = enc_ldi(0x19, 0x000005);
+    prog[2] = (0x2fu << 26) | (0x16u << 20) | (1u << 17) | 0x4000u | 0x19u;  // brul d
+    prog[5] = enc_ldi(0x13, 0x555);
+    freset();
+    f.in.push_back(0x11111111u);
+    if (!frun(4)) { printf("  FAIL timeout\n"); fails++; }
+    ck("unknown reg: one unimplemented cycle", f.unimpl, 1);
+    ck("brul d lands at 5 -> B",  dut->dbg_b, 0x555);
+    ck("no FIFO access, no pop",  f.pops, 0);
+    ck("no FIFO access, no rise", f.rd_rises, 0);
+  }
+
   // ------------------------------------------------------------ LOCKSTEP
   //
   // The reference model steps beside the DUT and every architecturally visible
@@ -506,7 +628,8 @@ int main(int argc, char** argv) {
   // Hoisted out of the block so the final summary can report them. A summary
   // that understates what ran is a real defect: it tells the next reader the
   // lockstep is still owed when it has been running clean for some time.
-  long diverged = 0, compared = 0;
+  long diverged = 0, compared = 0, pcs_compared = 0;
+  long n_brul_reg = 0, n_rep_reg = 0, n_rep_imm = 0;   // R737: what ran
   printf("test: lockstep against the reference model\n");
   {
     std::mt19937 rng(20260814u);
@@ -530,7 +653,10 @@ int main(int argc, char** argv) {
     ref.io_read  = io_read;
     ref.io_write = io_write;
 
-    for (int trial = 0; trial < 200 && diverged == 0; trial++) {
+    // R737: MB86233_LOCKSTEP_TRIALS sweeps further than the default 200.
+    const int trials = getenv("MB86233_LOCKSTEP_TRIALS")
+                     ? atoi(getenv("MB86233_LOCKSTEP_TRIALS")) : 200;
+    for (int trial = 0; trial < trials && diverged == 0; trial++) {
       // Match what rst_n actually does: architectural registers only.
       ref.a = ref.b = ref.d = ref.p = 0;
       ref.pc = ref.ppc = 0; ref.sp = 0;
@@ -545,7 +671,7 @@ int main(int argc, char** argv) {
       // A short program of forms with no memory traffic, so the comparison is
       // about sequencing and the ALU rather than the untested transfer paths.
       for (int i = 0; i < 24; i++) {
-        uint32_t pick = rnd() % 7;
+        uint32_t pick = rnd() % 10;
         uint32_t w;
         switch (pick) {
           case 0: w = enc_ldi(rnd() % 0x20, rnd() & 0xffffff); break;
@@ -600,6 +726,50 @@ int main(int argc, char** argv) {
             w = enc_ldmov7(form, form == 6 ? src : addr, reg);
             break;
           }
+          case 7: {
+            // R737: brul / bsul, REGISTER form -- the target is read_reg(op &
+            // 0x3f). Never generated before, so the register file's read into
+            // next_pc had no lockstep at all. An ldi in the slot before loads
+            // a bounded target (bits 23:16 random, so the [15:0] truncation is
+            // exercised too); a branch landing on the brul directly takes
+            // whatever the register holds, which both sides agree on. Sources
+            // span the read mux: b0/b1/x0/x1, A/B/D/P, and the general file
+            // (0x21 / 0x22 are Model 2's FIFOs, so not here).
+            static const uint32_t SRC[] = {0x00, 0x01, 0x02, 0x03, 0x10, 0x13,
+                                           0x19, 0x1c, 0x20, 0x24, 0x2f};
+            uint32_t reg = SRC[rnd() % 11];
+            uint32_t tgt = 1 + (rnd() % 20);
+            if (i < 23) prog[i++] = enc_ldi(reg, (rnd() & 0xff0000) | tgt);
+            uint32_t sub = (rnd() & 1) ? 3u : 1u;           // bsul : brul
+            // Always, and one in four `!alw` (never taken), so the not-taken
+            // path is compared too. NOT the ZRD / SGD conditions: ST is not
+            // compared here and does not match -- an FP ALU op in the 0x0f
+            // group updates ST in this core, where MAME's alu_post_1 leaves it
+            // alone (found by this generator; trial 126, op 0x0d via clr1).
+            uint32_t inv = (rnd() % 4) ? 0u : 1u;
+            w = ((inv ? 0x3fu : 0x2fu) << 26) | (0x16u << 20) | (sub << 17)
+              | 0x4000u | (rnd() & 0x3fc0u) | reg;
+            break;
+          }
+          case 8: {
+            // R737: rep, both forms. The register form reads index 0 (b0) on
+            // both sides here -- opcode[5:0] = 0 -- because this core still
+            // reads b0 for every register form (Model 1's deb6642, not
+            // ported); bits 7:6 random so the immediate is visibly ignored.
+            // Counts are kept 1..4 so a trial is not one instruction repeated
+            // 255 times; the ldi before it loads b0.
+            bool from_reg = rnd() & 1;
+            uint32_t cnt = 1 + (rnd() % 4);
+            if (from_reg && i < 23) prog[i++] = enc_ldi(0x00, cnt);
+            w = (0x0fu << 26) | (2u << 17)
+              | (from_reg ? (0x8000u | (rnd() & 0xc0u)) : cnt);
+            break;
+          }
+          case 9: {
+            // rtif: returns through the PC stack bsul pushes.
+            w = (0x2fu << 26) | (0x16u << 20) | (5u << 17);
+            break;
+          }
           default: {
             // Always-branch to a bounded target, so programs terminate.
             uint32_t tgt = 1 + (rnd() % 20);
@@ -620,6 +790,7 @@ int main(int argc, char** argv) {
         // Capture the DUT's data-memory writes for this instruction.
         uint32_t dut_wa = 0xffffffff, dut_wd = 0; int dut_nw = 0;
         uint32_t dut_ra = 0xffffffff, dut_rd = 0; bool dut_rd_pend = false;
+        uint32_t dut_pc = 0xffffffff;   // R737: the retiring instruction's PC
         {
           int seen = 0; long budget = 4000; uint32_t last = 0xffffffff;
           uint32_t last_r = 0xffffffff;
@@ -637,7 +808,7 @@ int main(int argc, char** argv) {
               if (dut->dbg_mem_addr != last) { dut_nw++; last = dut->dbg_mem_addr; }
               dut_wa = dut->dbg_mem_addr; dut_wd = dut->dbg_mem_wdata;
             }
-            if (dut->retire) seen++;
+            if (dut->retire) { seen++; dut_pc = dut->retire_pc; }
           }
           step_cycle();
           if (seen != 1) break;
@@ -647,6 +818,27 @@ int main(int argc, char** argv) {
         ref.writes.clear(); ref.reads.clear();
         ref.step();
         compared++;
+
+        // R737: WHICH instruction retired, not only what it left behind. A
+        // wrong indirect-branch target is otherwise only seen if the code it
+        // lands in happens to write a register differently.
+        pcs_compared++;
+        {
+          const uint32_t op = ref.prog[ref.ppc & 0x7ff];
+          const uint32_t top = op >> 26;
+          if ((top == 0x2f || top == 0x3f) && (op & 0x4000)
+              && (((op >> 17) & 7) == 1 || ((op >> 17) & 7) == 3)) n_brul_reg++;
+          if (top == 0x0f && ((op >> 17) & 7) == 2) {
+            if (op & 0x8000) n_rep_reg++; else n_rep_imm++;
+          }
+        }
+        if (dut_pc != ref.ppc) {
+          if (diverged < 3)
+            printf("  PC trial=%d instr=%d dut retired %04x | ref %04x op=%08x\n",
+                   trial, n, dut_pc, ref.ppc, ref.prog[ref.ppc & 0x7ff]);
+          diverged++;
+          break;
+        }
 
         // Compare the write STREAM, not the resulting arrays.
         // The same FP exclusions apply to values in FLIGHT, not just values
@@ -787,8 +979,10 @@ int main(int argc, char** argv) {
       }
     }
     checks++;
-    printf("  lockstep: compared=%ld registers-per-retire=7 diverged=%ld\n",
-           compared, diverged);
+    printf("  lockstep: compared=%ld registers-per-retire=7 pcs=%ld diverged=%ld\n",
+           compared, pcs_compared, diverged);
+    printf("  lockstep: brul/bsul register form %ld, rep register %ld, rep immediate %ld\n",
+           n_brul_reg, n_rep_reg, n_rep_imm);
     if (diverged) fails++;
   }
 

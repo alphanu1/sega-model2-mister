@@ -224,16 +224,23 @@ module mb86233_core (
   // Model 1 the register indices are ordinary storage and never fire.
   logic        mem_fifo_rd, mem_fifo_wr;
   logic [31:0] mem_fifo_wdata;
-  logic        rf_fifo_rd, rf_fifo_wr;
   logic [31:0] rf_fifo_wdata;
   logic        mem_fifo_rd_w, mem_fifo_wr_w;   // R601
-  assign fifo_rd    = mem_fifo_rd_w | rf_fifo_rd;
-  assign fifo_wr    = mem_fifo_wr_w | rf_fifo_wr;
-  assign fifo_wdata = rf_fifo_wr ? rf_fifo_wdata : mem_fifo_wdata;
+  // R737: the register-file FIFO strobes are the core's own, decoded from
+  // flags registered in S_DECODE (see the read address below); u_regs' copies
+  // are decoded from the read address, which is now a register held for the
+  // whole instruction, and from the write mux.
+  logic        rf_fifo_rd_c, rf_fifo_wr_c;
+  logic        rf_fifo_rd_u, rf_fifo_wr_u;
+  logic        src_fifo_q, brul_fifo_q, dst_fifo_q, ldi_fifo_q;
+  assign fifo_rd    = mem_fifo_rd_w | rf_fifo_rd_c;
+  assign fifo_wr    = mem_fifo_wr_w | rf_fifo_wr_c;
+  assign fifo_wdata = rf_fifo_wr_c ? rf_fifo_wdata : mem_fifo_wdata;
 
   logic [5:0]  rf_rd_addr;
   logic [31:0] rf_rd_data;
   logic        rf_rd_unimpl, rf_wr_unimpl;
+  logic        rf_rd_unimpl_u;                // R737: u_regs', ungated
   logic        c0_we, c1_we;
   logic [7:0]  c0_wd, c1_wd;
 
@@ -245,9 +252,9 @@ module mb86233_core (
 
   mb86233_regs u_regs (
     .clk(clk), .rst_n(rst_n),
-    .rd_addr(rf_rd_addr), .rd_data(rf_rd_data), .rd_unimpl(rf_rd_unimpl),
-    .rf_fifo_rd(rf_fifo_rd), .rf_fifo_rdata(fifo_rdata),
-    .rf_fifo_wr(rf_fifo_wr), .rf_fifo_wdata(rf_fifo_wdata),
+    .rd_addr(rf_rd_addr), .rd_data(rf_rd_data), .rd_unimpl(rf_rd_unimpl_u),
+    .rf_fifo_rd(rf_fifo_rd_u), .rf_fifo_rdata(fifo_rdata),
+    .rf_fifo_wr(rf_fifo_wr_u), .rf_fifo_wdata(rf_fifo_wdata),
     .wr_en(rf_wr_en), .wr_addr(rf_wr_addr), .wr_data(rf_wr_data),
     .wr_unimpl(rf_wr_unimpl),
     .alu_d_we(alu_d_we), .alu_d(alu_d_val),
@@ -707,7 +714,7 @@ module mb86233_core (
   assign dbg_mem_wdata = mem_wdata;
   always_ff @(posedge clk or negedge rst_n)
     if (!rst_n) dbg_fifo_hold <= 32'd0;
-    else if ((state == S_SRC) && x_src_reg && rf_fifo_rd && !fifo_ack
+    else if ((state == S_SRC) && src_fifo_q && !fifo_ack
              && !(&dbg_fifo_hold)) dbg_fifo_hold <= dbg_fifo_hold + 32'd1;
 
   assign dbg_mem_we    = mem_req & mem_we;
@@ -730,6 +737,71 @@ module mb86233_core (
 
   // The target word, read from data memory before the branch can resolve.
   logic [15:0] brul_target;
+
+  // R737: THE REGISTER-FILE READ ADDRESS IS A REGISTER, AND THE TWO READS
+  // S_RETIRE CONSUMES ARE TAKEN IN S_ALU. At 80 MHz the read address was a
+  // mux over the FSM state -- agu_r[5:0] in S_SRC, agu_r itself a mux on
+  // use_lab_b / use_dst_side -- so every state bit reached u_regs' 40-way
+  // read mux, and from it brul's target into next_pc, a register rep count
+  // into next_rep, and the transfer into src_val (s787: state.S_LABB_W ->
+  // u_seq pc -0.497, -> rep -0.175, -> src_val -0.078; state.S_DST -> pc
+  // the same route). Static timing cannot see that S_LABB_W and S_SRC never
+  // coexist; only removing the state from the address removes the path.
+  //
+  // At most one register is read per instruction, and which one is fixed by
+  // the decode: the ld/mov source (u_xfer sets x_src_reg for ld/mov only;
+  // agu_r[5:0] in S_SRC is exactly this index) or brul/bsul's register.
+  // Everything else read index 0 (b0) -- including a register-sourced rep,
+  // still: Model 1's deb6642 reads opcode[5:0] there (MAME), not ported
+  // (R732), and that is now the 6'd0 below. Loaded in S_DECODE, held to the
+  // next S_DECODE, so the read mux is driven from a flop in every state.
+  //
+  // A read has side effects (rf 0x21 pops the input FIFO, an unknown index
+  // raises unimplemented), so those are gated by state here -- in exactly the
+  // cycles the old address carried the index -- and u_regs' own, ungated
+  // copies are unused. The FIFO WRITE strobe is registered the same way: it
+  // was the write mux (x_dst_reg -> rf_wr_en / rf_wr_addr) -> 0x22 compare ->
+  // fifo_wr -> m2_tgp's fifo_ack -> the S_SRC hold and mem_stall -> state
+  // (x_dst_reg -> state.S_LABB / S_DST, +0.58 ns at 75 MHz).
+  logic [5:0] rd_addr_q;
+  wire  [5:0] src_rd_idx = x_src_r2 ? d_r2[5:0] : d_r1[5:0];
+  always_ff @(posedge clk or negedge rst_n)
+    if (!rst_n) begin
+      rd_addr_q <= 6'd0;
+      src_fifo_q <= 1'b0; brul_fifo_q <= 1'b0;
+      dst_fifo_q <= 1'b0; ldi_fifo_q <= 1'b0;
+    end else if (state == S_DECODE) begin
+      rd_addr_q   <= brul_regform ? d_bdata[5:0]
+                   : x_src_reg    ? src_rd_idx : 6'd0;
+      src_fifo_q  <= x_src_reg    && (src_rd_idx   == 6'h21);
+      brul_fifo_q <= brul_regform && (d_bdata[5:0] == 6'h21);
+      dst_fifo_q  <= x_dst_reg    && (d_r2[5:0]    == 6'h22);   // S_DST's write
+      ldi_fifo_q  <= d_ldi        && (d_ldireg     == 6'h22);   // S_RETIRE's
+    end
+  assign rf_rd_addr = rd_addr_q;
+  // The pop is in S_ALU for brul/bsul, where the target is now captured (one
+  // cycle before the S_RETIRE it used to be in); in S_SRC for ld/mov as before.
+  // lab's writes (0x10 / 0x13) and lipl's (0x10 / 0x13 / 0x19 / 0x1c) never
+  // reach 0x22, so these two are every write the old strobe could see.
+  assign rf_fifo_rd_c = ((state == S_SRC) & src_fifo_q)
+                      | ((state == S_ALU) & brul_fifo_q);
+  assign rf_fifo_wr_c = ((state == S_DST) & dst_fifo_q)
+                      | ((state == S_RETIRE) & ldi_fifo_q);
+  assign rf_rd_unimpl = rf_rd_unimpl_u
+                      & (((state == S_SRC) & x_src_reg)
+                       | ((state == S_RETIRE) & brul_regform));
+  wire unused_rf_u = rf_fifo_rd_u | rf_fifo_wr_u;
+
+  // R737: the one register S_RETIRE reads (brul/bsul's target, or the rep
+  // count from b0), read in S_ALU, which is the state before S_RETIRE for
+  // both: a branch goes S_DECODE -> S_ALU (one cycle, no ALU op) -> S_RETIRE
+  // and the rep group waits in S_ALU for its ALU op. Between the last S_ALU
+  // cycle and S_RETIRE nothing writes a register this can name: write_reg is
+  // idle in S_ALU, the index registers move only in the _W states, a branch
+  // launches no ALU op, and the rep group's ALU writes only D / P, never b0.
+  // So the value is the one S_RETIRE read. next_pc and next_rep now start
+  // from this flop instead of the read mux. No cycle is added.
+  logic [15:0] rd_hold;
 
   // THE MEMORY FORM IS NOT IMPLEMENTED and says so out loud rather than jumping
   // somewhere plausible. Resolving it needs a data-memory read before the branch,
@@ -799,7 +871,7 @@ module mb86233_core (
           // its hottest data reads are 070/07f/068 (handler addresses) and
           // 0x14 -- which the loop's `lab` reads every iteration -- does not
           // appear at all.
-          if (x_src_reg && rf_fifo_rd && !fifo_ack) begin
+          if (src_fifo_q && !fifo_ack) begin   // R737: was x_src_reg && rf_fifo_rd
             // hold: the FIFO has nothing and this read must not complete
           end else if (x_src_reg) begin
             src_val <= rf_rd_data; state <= d_lab ? S_LABB : S_DST;
@@ -845,6 +917,7 @@ module mb86233_core (
         end
 
         S_ALU: begin
+          rd_hold      <= rf_rd_data[15:0];   // R737
           alu_launched <= 1'b1;
           // out_valid already accounts for the divide: it is div_done for
           // fdvd and the pipeline for everything else. Do NOT also gate on
@@ -900,7 +973,7 @@ module mb86233_core (
 
     mem_req   = 1'b0; mem_we = 1'b0; mem_addr = 17'd0; mem_wdata = 32'd0;
     io_rd     = 1'b0; io_wr  = 1'b0; io_addr  = io_addr_q; io_wdata  = 32'd0;   // R600
-    rf_rd_addr = 6'd0; rf_wr_en = 1'b0; rf_wr_addr = 6'd0; rf_wr_data = 32'd0;
+    rf_wr_en = 1'b0; rf_wr_addr = 6'd0; rf_wr_data = 32'd0;   // R737: no rf_rd_addr
     alu_in_valid = 1'b0;
     xfer_d_valid = 1'b0; xfer_d_data = 32'd0;
     seq_valid = 1'b0; seq_stall = 1'b0;
@@ -919,8 +992,9 @@ module mb86233_core (
         // Taking only [2:0] silently reads register 0 for every target above
         // 7 — every transfer out of A (0x10), B (0x13), D (0x19) or P (0x1c)
         // read the wrong register and no directed test noticed.
-        if (x_src_reg) rf_rd_addr = agu_r[5:0];
-        else if (x_src_sp == mb86233_pkg::EP_DATA) begin
+        if (x_src_reg) begin
+          // R737: that index is rd_addr_q now, registered in S_DECODE.
+        end else if (x_src_sp == mb86233_pkg::EP_DATA) begin
           mem_req = 1'b1; mem_addr = ea_src;
         end else if (x_src_sp == mb86233_pkg::EP_IO) begin
           io_rd = (state == S_SRC_W);   // R600
@@ -969,7 +1043,7 @@ module mb86233_core (
       S_RETIRE: begin
         seq_valid     = 1'b1;
         seq_is_rep    = d_repgrp & (d_fsub == 3'd2);
-        seq_rep_count = d_repreg ? rf_rd_data[7:0] : d_repimm;
+        seq_rep_count = d_repreg ? rd_hold[7:0] : d_repimm;   // R737
         // brul/bsul TAKE THEIR TARGET FROM A REGISTER OR FROM DATA MEMORY, not
         // from the immediate field. This was `seq_branch_val = d_bdata` for every
         // subtype, so the register- and memory-indirect branches jumped to their
@@ -992,8 +1066,7 @@ module mb86233_core (
         // data read before the branch resolves, which means another FSM state, and
         // is not built yet — see the warning below.
         if (brul_regform) begin
-          rf_rd_addr     = d_bdata[5:0];
-          seq_branch_val = rf_rd_data[15:0];
+          seq_branch_val = rd_hold;   // R737: read in S_ALU from d_bdata[5:0]
         end else if (brul_memform && brul_ea_simple) begin
           seq_branch_val = brul_target;
         end else begin
