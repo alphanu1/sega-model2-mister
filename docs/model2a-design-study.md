@@ -27800,3 +27800,35 @@ R709), which is exactly the new push stall (6%, was ~0) and SDRAM misses
 taking three times as long. So a CPU measurement must keep the read-ahead.
 Next: the same build with the read-ahead on and the telemetry trimmed instead
 (no 'T' framebuffer record, no tile-overrun count), s819-s821.
+
+**R747 -- THE BLACK 3D, CAUGHT: THE LIGHT TABLE IS ALL ZEROS, AND R697'S GATE
+HAD HOLES.** Ben, 2026-10-09: "after a while we still get black 3D, no
+lighting -- this has never been fixed; the fix just made it take longer".
+Board, s814 (80/40): every 3D pixel mean 0 after ~25-30 min of attract, the
+game running; an OSD game RESET brings the lighting back (mean 338) -- and
+the geometry, the engine (its colour cache), the read-ahead and the renderer
+reset only on mem_rst_n, so the bad state is something the game rebuilds.
+A lighting telemetry build (s827, 75/37.5, records: light vector, the
+32-entry light table one entry a record, per-vblank mean luminance and
+zero-luminance share) went black after 4 minutes of attract: luminance 0
+on 100% of polygons, the light vector sane and moving, the TGP running --
+and ALL 32 LIGHT-TABLE ENTRIES (diffuse, ambient) = (0, 0).
+That is R697's mechanism: the texture_data count placeholder pushed through
+m2_geo's queue landing after the CPU's direct count patch, the walker reading
+a zero count, the table filled with 0/0. R697 gated the CPU's buffer-RAM
+store on push_busy = q_valid || dst != D_IDLE -- but the queue is an M10K
+FIFO (m2_fifo_m10k) and a pushed word reaches its head TWO cycles after the
+push (the array, then the read in flight), and while it drains the head is
+empty for a cycle with words behind it. q_valid was 0 in every one of those
+cycles. R729/R730 (the toggle handshake, posted writes acknowledged at
+presentation) let the CPU's next store arrive within a cycle or two of an
+I/O push completing, which is why s814/s827 go black in minutes rather than
+the half hour before.
+  * m2_fifo_m10k gains `held` = a word in the array, a read in flight, or a
+    word at the head; push_busy = q_held || dst != D_IDLE.
+  * tb_m2_geo: three words pushed back to back, push_busy checked every cycle
+    until all six halves are in memory -- 121 checks, 0 fails; with R697's
+    q_valid form planted back, 2 cycles with a word queued and push_busy low.
+Other users of the FIFO (the span queue, the copro's two) leave `held`
+unconnected; make test_tgp unchanged; test_m2_raster3d, test_m2_cpu_bridge,
+lint_top and Quartus parses clean. Board verification: the next build.

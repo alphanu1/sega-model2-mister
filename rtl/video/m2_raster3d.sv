@@ -468,7 +468,7 @@ module m2_raster3d #(
     .clk(clk), .rst_n(rst_n),
     .push(fl_span_valid && sq_in_rdy), .din(sq_din),
     .pop(sq_qv && sq_rdy), .q(sq_q), .q_valid(sq_qv),
-    .full(sq_full), .count(sq_cnt16), .dropped(sq_dropped)
+    .full(sq_full), .count(sq_cnt16), .dropped(sq_dropped), .held()
   );
   assign sq_in_rdy = !sq_full;
   assign sq_busy   = sq_qv || (sq_cnt16 != 16'd0);

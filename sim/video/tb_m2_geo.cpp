@@ -730,6 +730,41 @@ int main(int argc,char**argv){
   d->skip = 0; d->trig_mode = 0;
 
 
+  // ---- R747: push_busy covers EVERY cycle a pushed word is not yet in memory.
+  // It is what holds the CPU's count patch (R697); a cycle with a word still
+  // queued and push_busy low is a cycle the patch can overtake the placeholder.
+  // q_valid alone left two such cycles after each push and one between words.
+  {
+    idle(200);
+    w(1, 0x00000300); idle(4);
+    const uint32_t v[3] = {0x11112222u, 0x33334444u, 0x55556666u};
+    for (int k = 0; k < 3; ++k) { mem.erase(BASE + 0x180 + 2*k); mem.erase(BASE + 0x181 + 2*k); }
+    auto landed = [&]() {
+      for (int k = 0; k < 3; ++k) {
+        auto lo = mem.find(BASE + 0x180 + 2*k), hi = mem.find(BASE + 0x181 + 2*k);
+        if (lo == mem.end() || hi == mem.end() || lo->second != (v[k] & 0xffff) || hi->second != (v[k] >> 16)) return false;
+      }
+      return true;
+    };
+    int holes = 0, seen_busy = 0;
+    for (int k = 0; k < 3; ++k) {
+      d->wr_ctl = d->wr_setwp = d->wr_setrp = 0; d->wr_push = 1; d->wdata = v[k]; d->eval();
+      for (int g = 0; d->push_stall && g < 4096; ++g) tick();
+      tick();                                   // taken on this edge
+      d->wr_push = 0; d->eval();
+      if (!landed() && !d->push_busy) ++holes;
+      if (d->push_busy) ++seen_busy;
+    }
+    for (int c = 0; c < 400 && !landed(); ++c) {
+      tick();
+      if (!landed() && !d->push_busy) ++holes;
+      if (d->push_busy) ++seen_busy;
+    }
+    ck("R747 the three pushed words landed", landed() ? 1u : 0u, 1u);
+    ck("R747 push_busy never low with a word queued", uint32_t(holes), 0u);
+    ++checks; if (!seen_busy) { std::printf("  FAIL R747 push_busy never rose\n"); ++fails; }
+  }
+
   std::printf("m2_geo: checks=%d fails=%d\n", checks, fails);
   std::printf("%s\n", fails?"FAIL":"PASS");
   delete d; return fails?1:0;

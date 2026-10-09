@@ -265,12 +265,14 @@ module m2_geo #(
   logic        q_pop;
   logic [15:0] q_count;
   logic        q_full;
+  logic        q_held;   // R747: a pushed word anywhere in the queue
 
   m2_fifo_m10k #(.DW(52), .DEPTH(DEPTH)) u_pushq (
     .clk(clk), .rst_n(rst_n),
     .push(push_fire), .din({geo_wp, wdata}),
     .pop(q_pop), .q(q_data), .q_valid(q_valid),
-    .full(q_full), .count(q_count), .dropped(dbg_dropped)
+    .full(q_full), .count(q_count), .dropped(dbg_dropped),
+    .held(q_held)   // R747
   );
 
   always_ff @(posedge clk or negedge rst_n) begin
@@ -306,7 +308,14 @@ module m2_geo #(
   // by r_addr[1], so an EVEN word index must hold bits 15:0.
   typedef enum logic [1:0] { D_IDLE, D_LO, D_HI, D_NEXT } dstate_t;
   dstate_t dst;
-  assign push_busy = q_valid || (dst != D_IDLE);   // R697
+  // R747: q_held, not q_valid. The queue is an M10K FIFO and a pushed word
+  // reaches its head two cycles after the push (array, then the read in
+  // flight), and between words while it drains the head is empty for a cycle
+  // with words still behind it. q_valid was 0 in all of those cycles, so the
+  // CPU's count patch could pass R697's gate with the placeholder still
+  // queued -- the walker then read a zero count and the light table filled
+  // with 0/0 (board, s827: every entry (0,0), every polygon luminance 0).
+  assign push_busy = q_held || (dst != D_IDLE);   // R697, R747
   logic [19:0] wr_ptr;
   logic [15:0] dw_hi;
 
