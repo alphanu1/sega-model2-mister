@@ -1023,8 +1023,8 @@ module m2_boot_harness #(
   assign obs_foc_x = geo_foc_x; assign obs_foc_y = geo_foc_y;
   assign obs_eng_busy = geo_eng_busy;
   assign obs_eng_state = u_geometry.u_engine.st;
-  assign obs_pj_busy = u_geometry.pj_busy;
-  assign obs_pj_owner = u_geometry.pj_owner;
+  assign obs_pj_busy = (u_geometry.pj_n != 3'd0);   // R758: the owner queue
+  assign obs_pj_owner = u_geometry.pj_own[0];
   assign obs_w_granted = u_geometry.w_granted;
   assign obs_pj_hit = (u_geometry.qst == 2'd1) && u_geometry.skip_here;
   assign obs_k_granted = u_geometry.k_granted;
@@ -1064,6 +1064,7 @@ module m2_boot_harness #(
   // level rather than quietly diverging from it.
   /* verilator lint_off UNUSEDSIGNAL */
   logic [31:0] io_videoctl;
+  logic        io_render_mode;   // R765, as Model2.sv
   logic [31:0] io_framenum;
   /* verilator lint_on UNUSEDSIGNAL */
 
@@ -1089,20 +1090,20 @@ module m2_boot_harness #(
     bak_sel                           ? bak_rdata :
     (cpu_io_addr[23:4] == 20'h98003)  ? {4{tgpid_b}} :
     copro_sel                         ? copro_rdata :
-    (cpu_io_addr[23:0] == 24'h98000c) ? (io_videoctl[0]
-                                          ? {29'd0, io_framenum[0], io_videoctl[1:0]}
-                                          : {28'd0, io_framenum[1], 1'b0, io_videoctl[1:0]}) :
+    (cpu_io_addr[23:0] == 24'h98000c) ? {29'd0, (io_render_mode ? io_framenum[0] : io_framenum[1]),
+                                         io_videoctl[1:0]} :   // R765
     (cpu_io_addr[23:0] == 24'he80000) ? {20'd0, io_intreq} :
     (cpu_io_addr[23:0] == 24'he80004) ? {20'd0, io_intena} :
     32'd0;
 
   always_ff @(posedge clk_m or negedge rst_n) begin
     if (!rst_n) begin
-      io_intreq <= '0; io_intena <= '0; io_videoctl <= '0; io_framenum <= '0;
+      io_intreq <= '0; io_intena <= '0; io_videoctl <= '0; io_framenum <= '0; io_render_mode <= 1'b0;
     end else if (cpu_io_sel && cpu_io_we) begin
       if (cpu_io_addr[23:0] == 24'he80000) io_intreq   <= io_intreq & cpu_io_wdata[11:0];
       if (cpu_io_addr[23:0] == 24'he80004) io_intena   <= cpu_io_wdata[11:0];
       if (cpu_io_addr[23:0] == 24'h98000c) io_videoctl <= cpu_io_wdata;
+      if (cpu_io_addr[31:21] == 11'h080)   io_render_mode <= cpu_io_wdata[2];   // R765
     end
   end
 

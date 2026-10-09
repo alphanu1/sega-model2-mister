@@ -2325,6 +2325,9 @@ m2_cpu_bridge #(.BUFFERRAM(1'b1), .BUFFERRAM_WRONLY(1'b0)
 // logging the address a poll loop was reading, not by reasoning about it.
 logic [11:0] io_intreq, io_intena;
 logic [31:0] io_videoctl;
+// R765: render_mode_w, 0x10000000-0x101fffff bit 2 -- 1 = 60 Hz mode (Daytona
+// writes 4 at frame 0), 0 = 30 Hz. It chooses which frame bit 0x98000c shows.
+logic        io_render_mode;
 logic [31:0] io_framenum;
 logic        vbl_s, vbl_d, vbl_dd;   // R564: vbl_s is the first synchroniser stage
 
@@ -2335,7 +2338,7 @@ wire  uart_irq_rx, uart_irq_tx;   // the halves; the i960 takes the OR, the 6800
 logic uart_irq_d;
 always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
 	if (!cpu_rst_n) begin
-		io_intreq <= 12'd0; io_intena <= 12'd0; io_videoctl <= 32'd0;
+		io_intreq <= 12'd0; io_intena <= 12'd0; io_videoctl <= 32'd0; io_render_mode <= 1'b0;   // R765
 		uart_irq_d <= 1'b0;
 		io_framenum <= 32'd0; vbl_s <= 1'b0; vbl_d <= 1'b0; vbl_dd <= 1'b0;
 	end else begin
@@ -2370,6 +2373,7 @@ always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
 			if (cpu_io_addr[23:0] == 24'he80000) io_intreq  <= io_intreq  & cpu_io_wdata[11:0];
 			if (cpu_io_addr[23:0] == 24'he80004) io_intena  <= cpu_io_wdata[11:0];
 			if (cpu_io_addr[23:0] == 24'h98000c) io_videoctl <= cpu_io_wdata;
+			if (cpu_io_addr[31:21] == 11'h080)   io_render_mode <= cpu_io_wdata[2];   // R765
 		end
 
 		// ---- THE SOUND INTERRUPT, WHICH IS WHAT ACTUALLY SENDS THE BYTES.
@@ -2765,9 +2769,14 @@ assign cpu_io_rdata =
 	// reads the ID. It is here because it is known-wrong and costs four LUTs,
 	// not because anything is waiting on it.
 	(cpu_io_addr[23:4] == 20'h98003) ? tgpid :
-	(cpu_io_addr[23:0] == 24'h98000c) ? (io_videoctl[0]
-	                                      ? {29'd0, io_framenum[0], io_videoctl[1:0]}
-	                                      : {28'd0, io_framenum[1], 1'b0, io_videoctl[1:0]}) :
+	// R765: MAME's videoctl_r exactly -- the frame bit ALWAYS in bit 2, frame
+	// bit 0 in 60 Hz render mode and bit 1 in 30 Hz. This was keyed on
+	// videocontrol bit 0 and put frame bit 1 in bit 3 when it was clear; Daytona
+	// writes videocontrol 0 and render mode 1, reads bit 2 once a frame (0x17cb8)
+	// to pick the list buffer -- and so always got 0: single-buffered at dword 0
+	// on the board (R211, R608, R610), where MAME alternates 0 / 0x10000 (R638).
+	(cpu_io_addr[23:0] == 24'h98000c) ? {29'd0, (io_render_mode ? io_framenum[0] : io_framenum[1]),
+	                                     io_videoctl[1:0]} :
 	(cpu_io_addr[23:0] == 24'he80000) ? {20'd0, io_intreq} :
 	(cpu_io_addr[23:0] == 24'he80004) ? {20'd0, io_intena} :
 	32'd0;

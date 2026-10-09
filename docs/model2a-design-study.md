@@ -28295,3 +28295,36 @@ frame bit always in bit 2, chosen by render_mode (0x10000000 bit 2: 1 = 60 Hz
 -> frame bit 0, 0 = 30 Hz -> frame bit 1); ours chooses by videocontrol bit 0
 and in the bit-0-clear case returns frame bit 1 in bit 3, and does not decode
 0x10000000 at all.
+
+**R765 -- 0x98000c IS MAME's videoctl_r: THE FRAME BIT IN BIT 2, CHOSEN BY
+render_mode. DAYTONA DOUBLE-BUFFERS ON THE BOARD AT LAST.** MAME 0.289
+(headless, Lua): Daytona writes 0x10000000 once, value 4, at frame 0
+(render_mode = 1, 60 Hz), and 0x98000c once, value 0, at frame 24. It reads
+0x98000c once a frame at 0x17cb8 (`ld 0x98000c,r7 ; bbs 2,r7`) and takes
+bit 2 to choose its list buffer -- r3 = 0x10000 or 0 into 0x501368 and the
+write start 0x801008, flipped next iteration at 0x17c78. MAME returns
+((render_mode ? framenum & 1 : framenum & 2) << ...) always in bit 2: 0/4
+alternating, one flip a frame in attract, both menus and the race, lists
+alternating 0x00000 / 0x10000. Ours chose by videocontrol bit 0 and, with it
+clear, returned frame bit 1 in BIT 3 -- bit 2 never set, so on the board
+Daytona always wrote buffer 0. That is R211's / R608's / R610's "single-
+buffered at address 0"; R638's double buffering (from MAME) was never true on
+the board. Forcing our value into MAME: still one flip a frame, CPU time per
+frame unchanged (0.90 ms menu, 6.56 ms race) -- the game does not WAIT on the
+bit, so this is not by itself the menus' half rate.
+  * Model2.sv: io_render_mode latched from bit 2 of writes to 0x10000000-
+    0x101fffff (reset 0, as MAME); 0x98000c = {29'd0, render_mode ?
+    framenum[0] : framenum[1], videocontrol[1:0]}. Mirrored in
+    sim/io/m2_boot_harness.sv.
+  * m2_boot_harness had not built since R758 (it observed pj_busy / pj_owner,
+    replaced by the owner queue); repaired. tb_m2_boot 30 M instructions:
+    PASS, 368 walks, 2,042 opcodes, no unknown (340 before R758-R765).
+  * lint_top, Quartus parse clean.
+CORRECTION to R764: Daytona writes videocontrol 0, so the 30 Hz gate R764
+removed never applied to Daytona -- R764 does not change the menus. It stays
+(no game should be stepped at 30 by the core's own frame_start), but the
+menus' half rate is still open. The menu loop (0x1240) waits only on the
+vblank tick at 0x500000, the copro sync read (0x884000) before each flip,
+and memory; in MAME a menu frame is ~0.9 ms of CPU. Ben: Double Buffered
+menus ran at 60 on an older build -- a regression, being bisected on the
+board's saved RBFs.
