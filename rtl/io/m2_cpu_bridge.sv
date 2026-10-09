@@ -72,6 +72,8 @@ module m2_cpu_bridge #(
   // against a 60 MHz core): R460's two synchroniser flops each way, as the
   // i960 at 30 against 50 had. 0 keeps R464's single flop, sound only at 2:1.
   parameter bit          ASYNC    = 0,
+  // R748: 1 = R730's same-cycle answers; 0 = R729's registered ones.
+  parameter bit          FAST_ACK = 1'b1,
   // R728: the CPU-side code cache (program ROM lines, 8 KB). 0 = R724 alone.
   // R733: OFF. On the board it stops Daytona on its boot settings screen
   // (s764), which no bench reproduces; with it off the data cache is 16 KB
@@ -338,6 +340,10 @@ module m2_cpu_bridge #(
     if (cc_we) cc_mem[cc_wa] <= cc_wd;
   end
 
+  // R748: R730's combinational answers are FAST_ACK = 1; 0 is R729's registered
+  // answers, verbatim (lb_gap, the own-ack guard, posted) -- the board's
+  // T_TRAP at 0x1868 (R747/R748) is being bisected between them.
+  generate if (FAST_ACK) begin : g_fast
   // R730: THE ANSWER LEAVES IN THE CYCLE IT EXISTS. bus_ack and bus_rdata were
   // registered, so every answer reached the i960 a cycle after the bridge had
   // it -- and the cycle after THAT was lost too, because the requester moves
@@ -451,6 +457,132 @@ module m2_cpu_bridge #(
       endcase
     end
   end
+  end else begin : g_reg
+  logic        posted;
+  logic        lb_gap;  // lb_gap: the cycle after a buffer answer, when bus_addr has not moved yet
+  always_ff @(posedge clk_cpu or negedge rst_n_cpu) begin
+    if (!rst_n_cpu) begin
+      req_cpu <= 1'b0; bus_ack <= 1'b0; cph <= C_IDLE; ack_cpu <= 1'b0; ack_seen <= 1'b0;   // R729
+      r_line <= 1'b0; lb_v <= 1'b0; lb_gap <= 1'b0; lb_tag <= '0;   // R724
+      cc_we <= 1'b0; cc_wa <= '0; cc_wd <= '0;                    // R728
+      cc_sweeping <= CC_EN; cc_sweep <= '0;
+      ack_cpu_s <= 2'b00;                                   // R576
+      posted <= 1'b0;
+      r_we <= 1'b0; r_addr <= 32'd0; r_wdata <= 32'd0; r_be <= 4'd0;
+    end else begin
+      // The same single flop in the other direction, for the same reason: one
+      // stage of settling, not two of synchronising. R576: two more when ASYNC.
+      ack_cpu_s <= {ack_cpu_s[0], ack_mem};
+      ack_cpu   <= ASYNC ? ack_cpu_s[1] : ack_mem;
+      bus_ack  <= 1'b0;
+      // AN EXPLICIT FOUR-PHASE HANDSHAKE, because the condition-by-condition
+      // version kept racing. The phases are req-up, ack-up, req-down, ACK-DOWN,
+      // and the last one is the one that is easy to leave out: without it the
+      // next access starts while the previous acknowledge is still working its
+      // way back through the synchroniser and completes IMMEDIATELY on stale
+      // data, having never reached memory at all.
+      //
+      // The i960 makes this unforgiving. It HOLDS bus_req high across a run of
+      // accesses and moves bus_addr ON THE ACK -- its boot walk reads mem[0],
+      // mem[4] and mem[12] without ever dropping the request -- so "a new
+      // request is present" is true continuously and cannot be used to separate
+      // one access from the next. Only the acknowledge can.
+      //
+      // On hardware this read word 0 three times: SAT was right by luck, PRCB
+      // came back 0 and the boot took a zero IP.
+      lb_gap <= 1'b0;
+      // R728: the reset sweep, one entry a cycle through the write port
+      cc_we <= 1'b0;
+      if (cc_sweeping) begin
+        cc_we <= 1'b1; cc_wa <= cc_sweep; cc_wd <= '0;
+        cc_sweep <= cc_sweep + 9'd1;
+        if (cc_sweep == 9'(CC_LINES - 1)) cc_sweeping <= 1'b0;
+      end
+      case (cph)
+        C_IDLE: if (lb_gap) begin
+          // R724: the cycle after a buffer answer. The requester moves its
+          // address on the acknowledge, a cycle after it, so this cycle still
+          // shows the word just answered; serving it would answer it twice.
+        // R729: NOT ON THE CYCLE OUR OWN ACK IS UP. The i960 moves bus_addr at
+        // the end of the cycle it sees bus_ack, so a request seen then still
+        // carries the OLD address (m1_cdc_port's duplicate transaction; R693).
+        // The four-phase C_CLR used to hide it.
+        end else if (bus_req && !bus_ack && !bus_we && bus_ifetch && lb_v && (bus_addr[31:4] == lb_tag)) begin
+          // R724: an instruction word from the buffered line -- no crossing
+          case (bus_addr[3:2])
+            2'd0: bus_rdata <= lb[31:0];
+            2'd1: bus_rdata <= lb[63:32];
+            2'd2: bus_rdata <= lb[95:64];
+            default: bus_rdata <= lb[127:96];
+          endcase
+          bus_ack <= 1'b1;
+          lb_gap  <= 1'b1;
+        end else if (bus_req && !bus_ack) begin
+          r_we    <= bus_we;
+          r_addr  <= bus_addr;
+          r_wdata <= bus_wdata;
+          r_be    <= bus_be;
+          r_line  <= bus_ifetch && !bus_we;                              // R724
+          if (bus_we && (bus_addr[31:4] == lb_tag)) lb_v <= 1'b0;        // R724: a write into the line
+          if (cc_can) cph <= C_CC;                                       // R728: look first
+          else begin
+            req_cpu <= ~req_cpu;                                         // R729
+            cph     <= bus_we ? C_POST : C_WAIT;
+          end
+        end
+        // R728: the code cache's answer, read on the way in. A hit fills the
+        // line buffer from it and answers as the buffer does; a miss goes to
+        // memory exactly as it would have, one cycle later.
+        C_CC: if (cc_hit) begin
+          lb     <= cc_q[127:0];
+          lb_tag <= r_addr[31:4];
+          lb_v   <= 1'b1;
+          case (r_addr[3:2])
+            2'd0: bus_rdata <= cc_q[31:0];
+            2'd1: bus_rdata <= cc_q[63:32];
+            2'd2: bus_rdata <= cc_q[95:64];
+            default: bus_rdata <= cc_q[127:96];
+          endcase
+          bus_ack <= 1'b1;
+          lb_gap  <= 1'b1;
+          cph     <= C_IDLE;
+        end else begin
+          req_cpu <= ~req_cpu;   // R729
+          cph     <= C_WAIT;
+        end
+        C_WAIT: if (ack_cpu != ack_seen) begin   // R729
+          ack_seen  <= ack_cpu;
+          // R724: a line came back -- keep it, and answer the word asked for
+          if (r_line && l_ok) begin
+            lb     <= l_data;
+            lb_tag <= r_addr[31:4];
+            lb_v   <= 1'b1;
+            // R728: and keep it, if it is program ROM
+            if (CC_EN && !cc_sweeping && r_addr < CC_TOP) begin
+              cc_we <= 1'b1; cc_wa <= r_addr[12:4]; cc_wd <= {1'b1, r_addr[20:13], l_data};
+            end
+            case (r_addr[3:2])
+              2'd0: bus_rdata <= l_data[31:0];
+              2'd1: bus_rdata <= l_data[63:32];
+              2'd2: bus_rdata <= l_data[95:64];
+              default: bus_rdata <= l_data[127:96];
+            endcase
+          end else
+            bus_rdata <= r_rdata;
+          bus_ack   <= 1'b1;       // one cycle, which is what the i960 expects
+          cph       <= C_IDLE;     // R729: no return-to-zero
+        end
+
+        C_POST: begin
+          if (!posted) begin posted <= 1'b1; bus_ack <= 1'b1; end
+          if (ack_cpu != ack_seen) begin ack_seen <= ack_cpu; posted <= 1'b0; cph <= C_IDLE; end   // R729
+        end
+        // The fourth phase. Nothing starts until the acknowledge has gone away.
+        default: cph <= C_IDLE;   // R729: C_CLR is unreachable
+      endcase
+    end
+  end
+  end endgenerate
 
   // NOT A CLOCK-DOMAIN CROSSING, AND THE DISTINCTION IS WORTH ~7 CYCLES AN
   // ACCESS.

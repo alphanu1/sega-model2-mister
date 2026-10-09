@@ -27832,3 +27832,25 @@ the half hour before.
 Other users of the FIFO (the span queue, the copro's two) leave `held`
 unconnected; make test_tgp unchanged; test_m2_raster3d, test_m2_cpu_bridge,
 lint_top and Quartus parses clean. Board verification: the next build.
+
+**R748 -- THE LOCK: T_TRAP AT 0x1868, THREE TIMES, AND A SWITCH FOR R730.**
+Ben, 2026-10-09: in attract the game locks after a while (minutes to ~45);
+an OSD reset recovers it, and it locks again later. Telemetry on three locks
+(s816 at 80/40 read-ahead off; s827 at 75/37.5; s814 by its picture): the
+i960 halted in T_TRAP, dbg_ip 0x1868, the bridge idle, the TGP and the 3D
+stopped because the CPU did. Daytona's program at 0x1860: `callx (r5)`
+(86015000, MEMB mode 4, one word); 0x1864: `ld` with an absolute 32-bit
+displacement (90303000, two words); 0x1868: that displacement, 0x005011FC
+(work RAM) -- not an instruction. The CPU executed the operand: most likely
+it was handed a ONE-word instruction for 0x1864 (a neighbouring word) on
+returning from the call into the middle of the line, stepped to 0x1868 and
+trapped. Not 80 MHz (it happens at 75). Prime suspect R730: a return into a
+half-filled line is the i960_icache's redirect case (R45), which handles a
+same-cycle acknowledge and a later one in separate branches, and R730 mixes
+the two (line-buffer words now answer combinationally, crossings later).
+m2_cpu_bridge FAST_ACK (default 1 = R730): 0 compiles R729's CPU side
+verbatim -- registered bus_ack / bus_rdata, lb_gap, the own-ack guard,
+posted. FAST_ACK 0: tb_m2_cpu_bridge 923 / 0; tb_m2_cpu_real hash
+a95ee045a6c3424b, 12.03 CPI (R729 measured 12.02). Quartus parse clean.
+s833 (e82e57e = R747 + trap telemetry: after a trap 'C' carries the trapped
+instruction word and 'G' the restored RIP and PFP) is soaking in attract.
