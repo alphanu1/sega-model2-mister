@@ -624,6 +624,23 @@ module m2_raster_fill #(
     pf_abs = n[31] ? (~n + 32'd1) : n;
   endfunction
   logic [31:0] a_nxu, a_nyu, a_nxv, a_nyv, a_nxo, a_nyo;   // R584
+  // R735: AND THE COUNT IN TWO HALVES. clz32 was one cycle (s784 at 80 MHz:
+  // a_nyu -> nyu_z -0.737, a_nyo -> nyo_z). Each 16-bit half is counted on
+  // nrm_wait 1 and the two combined on 2; the first reader is the state's
+  // last cycle (4), so no cycle is added and the counts are the same numbers.
+  function automatic logic [4:0] clz16(input logic [15:0] x);
+    logic [4:0] n;
+    begin
+      n = 5'd16;
+      for (int i = 15; i >= 0; i--) if (x[i] && n == 5'd16) n = 5'(15 - i);
+      clz16 = n;
+    end
+  endfunction
+  // {top half's count, bottom half's count}, each 0..16
+  logic [4:0] h_nxu, l_nxu, h_nyu, l_nyu, h_nxv, l_nxv, h_nyv, l_nyv, h_nxo, l_nxo, h_nyo, l_nyo;
+  function automatic logic [5:0] clz_join(input logic [4:0] h, input logic [4:0] l);
+    clz_join = (h == 5'd16) ? 6'(6'd16 + 6'(l)) : 6'(h);
+  endfunction
 
   function automatic logic [5:0] pf_clz(input logic signed [31:0] n);
     logic [31:0] a;
@@ -848,12 +865,24 @@ module m2_raster_fill #(
   // linearly with a strict comparison, which has the same effect, and the tie
   // rule decides which vertex a degenerate quad starts from.
   logic [1:0] pmin01, pmin23, pmin_c, pmax01, pmax23, pmax_c;
+  // R735: THE FIRST ROUND AT ACCEPTANCE. At 80 MHz sy -> the two rounds ->
+  // symin failed (s784: -0.647, 8 endpoints; sy -> pmin_r -0.189). The four
+  // first-round comparisons are made from the INPUTS as the quad is latched
+  // (they are the same y the registers then hold), so S_MINMAX does the final
+  // round only. Nothing changes sy/sf between acceptance and S_MINMAX, which
+  // is entered from acceptance alone. The extended y is a concatenation,
+  // {y[13:0], fy}, which is what (y <<< 2) + fy is in sixteen bits -- no
+  // signed'() around a sum (R662).
+  logic m01_r, m23_r, x01_r, x23_r;
+  function automatic logic signed [15:0] ye_in(input logic signed [15:0] y, input logic [1:0] f);
+    ye_in = M2COV ? $signed({y[13:0], f}) : y;
+  endfunction
   always_comb begin
-    pmin01 = (sye[1] < sye[0]) ? 2'd1 : 2'd0;   // R658: on the edge y
-    pmin23 = (sye[3] < sye[2]) ? 2'd3 : 2'd2;
+    pmin01 = m01_r ? 2'd1 : 2'd0;   // R658: on the edge y
+    pmin23 = m23_r ? 2'd3 : 2'd2;
     pmin_c = (sye[pmin23] < sye[pmin01]) ? pmin23 : pmin01;
-    pmax01 = (sye[1] > sye[0]) ? 2'd1 : 2'd0;
-    pmax23 = (sye[3] > sye[2]) ? 2'd3 : 2'd2;
+    pmax01 = x01_r ? 2'd1 : 2'd0;
+    pmax23 = x23_r ? 2'd3 : 2'd2;
     pmax_c = (sye[pmax23] > sye[pmax01]) ? pmax23 : pmax01;
   end
 
@@ -1033,6 +1062,7 @@ module m2_raster_fill #(
       symin <= 16'sd0; symax <= 16'sd0;
       xlo_r <= 32'sd0; xhi_r <= 32'sd0;
       pmin_r <= 2'd0;  td_r  <= 1'b0;
+      m01_r <= 1'b0; m23_r <= 1'b0; x01_r <= 1'b0; x23_r <= 1'b0;   // R735
       for (int i = 0; i < 4; i++) begin
         sx[i] <= 16'sd0;
         sy[i] <= 16'sd0;
@@ -1214,10 +1244,18 @@ module m2_raster_fill #(
             a_nxv <= pf_abs(nxv); a_nyv <= pf_abs(nyv);
             a_nxo <= pf_abs(nxo); a_nyo <= pf_abs(nyo);
           end
-          if (nrm_wait == 3'd1) begin
-            nxu_z <= clz32(a_nxu); nyu_z <= clz32(a_nyu);
-            nxv_z <= clz32(a_nxv); nyv_z <= clz32(a_nyv);
-            nxo_z <= clz32(a_nxo); nyo_z <= clz32(a_nyo);   // R441
+          if (nrm_wait == 3'd1) begin   // R735: the halves
+            h_nxu <= clz16(a_nxu[31:16]); l_nxu <= clz16(a_nxu[15:0]);
+            h_nyu <= clz16(a_nyu[31:16]); l_nyu <= clz16(a_nyu[15:0]);
+            h_nxv <= clz16(a_nxv[31:16]); l_nxv <= clz16(a_nxv[15:0]);
+            h_nyv <= clz16(a_nyv[31:16]); l_nyv <= clz16(a_nyv[15:0]);
+            h_nxo <= clz16(a_nxo[31:16]); l_nxo <= clz16(a_nxo[15:0]);
+            h_nyo <= clz16(a_nyo[31:16]); l_nyo <= clz16(a_nyo[15:0]);
+          end
+          if (nrm_wait == 3'd2) begin   // R735: joined -- clz32's numbers
+            nxu_z <= clz_join(h_nxu, l_nxu); nyu_z <= clz_join(h_nyu, l_nyu);
+            nxv_z <= clz_join(h_nxv, l_nxv); nyv_z <= clz_join(h_nyv, l_nyv);
+            nxo_z <= clz_join(h_nxo, l_nxo); nyo_z <= clz_join(h_nyo, l_nyo);   // R441
           end
         end else begin
           nrm_wait <= 3'd0;
@@ -1332,6 +1370,11 @@ module m2_raster_fill #(
             sx[3] <= in_x3; sy[3] <= in_y3;
             sf[0] <= in_frac[3:0];  sf[1] <= in_frac[7:4];     // R626
             sf[2] <= in_frac[11:8]; sf[3] <= in_frac[15:12];
+            // R735: the tournament's first round, from the same values
+            m01_r <= ye_in(in_y1, in_frac[7:6])   < ye_in(in_y0, in_frac[3:2]);
+            m23_r <= ye_in(in_y3, in_frac[15:14]) < ye_in(in_y2, in_frac[11:10]);
+            x01_r <= ye_in(in_y1, in_frac[7:6])   > ye_in(in_y0, in_frac[3:2]);
+            x23_r <= ye_in(in_y3, in_frac[15:14]) > ye_in(in_y2, in_frac[11:10]);
             col   <= in_col;
             moire <= in_moire;
             qu[0] <= in_u0; qv[0] <= in_v0; qu[1] <= in_u1; qv[1] <= in_v1;

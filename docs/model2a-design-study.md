@@ -27512,3 +27512,28 @@ On the board, attract: boots to 3D (screenshot at 60 s); tools/m2-fps.py
 28.5 pictures a second, 2 vblanks 99% (Single buffered); m2-fbcheck 300 s,
 0 black-fault frames, lowest painted mean 233. CPU speed in a race is Ben's
 test: attract runs at full speed already (R733's s761).
+
+**R735 -- 80 / 40, ROUND ONE: WHAT IS LEFT, AND THREE MORE.** 8fb82e4 at 80 /
+40 (pll outclk1 80, outclk3 40, SYS_MHZ 80; worktree only, not committed),
+s782-s784: clk_sys -0.935 / -0.589 / -0.737, clk_i960 at 40 +1.0..+1.9,
+clk_mem +0.28..+0.86, HDMI -0.08 / -0.91 / +0.08. The list is SHORT -- none
+of the Z80, fx68k or MultiPCM paths R731 feared; at 80:
+  s784  fill a_nyu -> nyu_z -0.737 (6), a_nyo -> nyo_z; fill sy -> symin
+        -0.647 (8), sy -> pmin_r -0.189; TGP x_src_r2 -> mem_fout_q / mem_fin_q
+        -0.17; TGP ALU opr_add_b -> sA_small -0.14; span_tex rt_col -> e_col
+        -0.13; MLAB writes ~-0.1
+  s783  gp_outr -> vs_wait -0.589 and cnt -> cfg_custom_p2 -0.319 (MiSTer's
+        framework, this seed only); fill a_nyu -> nyu_z -0.254; TGP state.S_DST
+        -> mem_fin_q -0.205; jt12 cur_ch -> phinc_II -0.193; span_tex k_p ->
+        mq_f0 -0.113; clip cs -> engine -0.053
+Three fixed, all cycle-free:
+  * fill: clz32 in two halves -- clz16 of each half on nrm_wait 1, joined on 2
+    (the first reader is nrm_wait 4). Equal to clz32 over 300,005 values.
+  * fill: the vertex tournament's first round (four compares) registered at
+    acceptance from the inputs, the final round in S_MINMAX; the extended y as
+    the concatenation {y[13:0], fy} (= (y <<< 2) + fy in 16 bits; no signed'()
+    around a sum, R662).
+  * TGP core: mem_req / mem_we / mem_addr registered, the FIFO selects
+    (0x100 read, 0x400 write) decoded after the flop -- R732's u_mem shape.
+The four frames identical in pixels, fetches AND cycles; make test_tgp
+unchanged (mb86233_regs' 46,966 as before); lint_top, Quartus parses clean.

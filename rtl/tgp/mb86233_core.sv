@@ -465,13 +465,24 @@ module mb86233_core (
   // the strobes are raised only in the _W states -- the one place the core
   // reads the ack. One cycle more per memory-mapped FIFO access; a FIFO
   // access was never completed outside a _W state.
-  logic mem_fin_q, mem_fout_q;
+  // R735: THE REQUEST REGISTERED, THE SELECT DECODED AFTER IT -- R732's
+  // treatment of u_mem, here. At 80 MHz the AGU -> address -> FIFO compare ->
+  // mem_fin_q / mem_fout_q was the path (s783: state.S_DST -> mem_fin_q
+  // -0.205; s784: x_src_r2 -> mem_fout_q -0.168). The decode of a registered
+  // request equals the registered decode of the request, cycle for cycle;
+  // these are u_mem's sel_fifo_in / sel_fifo_out (0x100 read, 0x400 write).
+  logic        mreq_q, mwe_q;
+  logic [16:0] maddr_q;
   always_ff @(posedge clk or negedge rst_n)
-    if (!rst_n) begin mem_fin_q <= 1'b0; mem_fout_q <= 1'b0; end
+    if (!rst_n) begin mreq_q <= 1'b0; mwe_q <= 1'b0; maddr_q <= 17'd0; end
     else begin
-      mem_fin_q  <= mem_req & mem_sel_fin;
-      mem_fout_q <= mem_req & mem_sel_fout;
+      mreq_q  <= mem_req;
+      mwe_q   <= mem_we;
+      maddr_q <= mem_addr;
     end
+  wire mem_fin_q  = mreq_q && (maddr_q == 17'h00100) && !mwe_q;
+  wire mem_fout_q = mreq_q && (maddr_q == 17'h00400) &&  mwe_q;
+  wire unused_mem_sel = mem_sel_fin | mem_sel_fout;
   wire mem_in_w = (state == S_SRC_W) || (state == S_LABB_W)
                || (state == S_DST_W) || (state == S_BRUL_W);
   assign mem_fifo_rd_w = mem_in_w & mem_fin_q;
