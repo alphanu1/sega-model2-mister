@@ -73,7 +73,9 @@ module m2_cpu_bridge #(
   // i960 at 30 against 50 had. 0 keeps R464's single flop, sound only at 2:1.
   parameter bit          ASYNC    = 0,
   // R748: 1 = R730's same-cycle answers; 0 = R729's registered ones.
-  parameter bit          FAST_ACK = 1'b1,
+  // R753: 0. With R730 the game traps at 0x1868 in attract after 4-45 min
+  // (four locks); with it off two soaks ran 50 and 48 min without one.
+  parameter bit          FAST_ACK = 1'b0,
   // R728: the CPU-side code cache (program ROM lines, 8 KB). 0 = R724 alone.
   // R733: OFF. On the board it stops Daytona on its boot settings screen
   // (s764), which no bench reproduces; with it off the data cache is 16 KB

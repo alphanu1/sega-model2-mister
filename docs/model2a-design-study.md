@@ -27942,3 +27942,18 @@ grace counter only made it rarer.
     2,042 opcodes, identical. lint_top clean; Quartus parse clean.
 Not established: that nothing else slips the walk. The measure is the nop
 count and the 0x06 count over a long soak -- zero and one.
+
+**R753 -- FAST_ACK 0 BY DEFAULT: R730'S SAME-CYCLE ANSWERS CAUSE THE LOCK.**
+Four locks with R730 in (T_TRAP at 0x1868, R748/R750: at 4, 29, 43 and ~45
+minutes of attract, 75 and 80 MHz). With FAST_ACK 0 (R729's registered
+answers, everything else the same): s841 ran 50 minutes and s845 48 minutes
+of attract without one, both replaced for the next build rather than
+failed. Not proof -- the lock's period is long and irregular -- but the
+evidence now points one way, and a game that locks is worse than one 8%
+slower on boot code (tb_m2_cpu_real: 11.08 -> 12.03 CPI; hash a95ee045a6c3424b
+either way). R730 is not removed: FAST_ACK 1 still builds it. What is wrong
+with it is NOT KNOWN -- R750 says the task pointer loaded at 0x185C was
+wrong, i.e. a load returned the wrong word or a store landed wrong; a
+same-cycle answer handed to the i960 while the bridge's line buffer or the
+posted-write path is mid-update is where to look. tb_m2_cpu_bridge 925 / 0,
+test_m2_cpu_sdram PASS with the new default.
