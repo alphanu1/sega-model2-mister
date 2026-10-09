@@ -28065,3 +28065,10 @@ grant paths (project S_M1 -> engine E_LINK -1.98, clip lvl -> pool mul_b_q
 path. Split: S_RND registers only trunc(8|x|), a shift by the exponent less
 124 with no adder or negate, and S_OUT does the increment and the one negate.
 The eleven walks give byte-identical quads to the one-cycle form.
+d78f059 (R752-R756) at 80/40: s855 / s856 one path each at -0.12 (clip cs ->
+pool mul_b_q; jt12 phinc_II -> eg shift taps), s857 -0.645; s858-s860 from
+the same RTL: s859 CLOSES EVERY CLOCK -- clk_sys +0.128, clk_mem +0.666,
+clk_i960 +2.009, HDMI +0.085, holds >= +0.243; 41,020 ALM; RBF
+4027f4e672717968d0f9da67ed5f928c. On the board 2026-10-09 18:07. (s847, the
+R752 build with FAST_ACK 0, ran ~2 h of attract with no lock and no black
+frame before it was replaced: the third clean soak without R730.)

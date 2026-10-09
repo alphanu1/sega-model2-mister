@@ -1,10 +1,12 @@
 # Handoff
 
-## 2026-10-09 (late): BLACK 3D FIXED ON THE BOARD; SPEED FIX AND SKY BAND FIX BUILDING
+## 2026-10-09 (late): ON THE BOARD -- s859 (R752-R756, 80/40). BEN TO CHECK.
 
-HEAD 7642296 on readahead (R752-R755). Building: s849-s851 (worktree
-sm2-rel-7642296) = HEAD at 80/40, no telemetry -- the first build with all
-four. On the board now: s847 (R752 + FAST_ACK 0 + black records, 75/37.5).
+HEAD on readahead has R752-R756. s859 (d78f059, worktree sm2-rel-d78f059)
+closes every clock incl. HDMI; RBF 4027f4e672717968d0f9da67ed5f928c, loaded
+18:07, soak running. To check: Double Buffered attract/menus at 60 (R754),
+the road's edges / left-edge seam (R756), the sky on hills (R755), the menu
+boxes. s847 (previous) ran ~2 h with no lock and no black frame.
 
   R752 black 3D: CONFIRMED on s847 -- 15 min from power-on, 0 frames with
        nops (s845: 170), one 0x06 all session, never black.
@@ -21,11 +23,13 @@ four. On the board now: s847 (R752 + FAST_ACK 0 + black records, 75/37.5).
        fixed render matches MAME.
 
 OPEN:
-  * Road seams / shaking. Seam agent: the fill rule is exact; dotted gaps are
-    T-junctions and clipped vertices quantised separately (Model 1's
-    floor-inclusive rule closes them in the bench). Ben: the road also SHAKES
-    by a couple of pixels -- not a quarter-pixel matter; being measured
-    (clipper vs MAME, R643's few-pixel offsets).
+  R756 road shake: the screen snap, not the geometry (3D points match MAME
+       to 0.002 px). Round to the nearest quarter; clip every edge from its
+       inside end. Duplicate points split by a pixel 90 -> 0; worst corner
+       error 1.0 -> 0.125 px. Two stages in the projector for 80 MHz.
+  * Still open on the road: the quarter-pixel step on shallow edges (needs
+    sixteenth-pixel vertices, a bigger change); T-junction hairline gaps
+    (Model 1's floor-inclusive span rule closes them, not yet applied).
   * Race speed at 80/40 with the read-ahead ON: owed.
   * R730's fault; the code cache (R733); menu flashing boxes (Single buffered).
 
