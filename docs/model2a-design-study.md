@@ -27537,3 +27537,24 @@ Three fixed, all cycle-free:
     (0x100 read, 0x400 write) decoded after the flop -- R732's u_mem shape.
 The four frames identical in pixels, fetches AND cycles; make test_tgp
 unchanged (mb86233_regs' 46,966 as before); lint_top, Quartus parses clean.
+
+**R736 -- 80 / 40, ROUND TWO: STILL SHORT, AND NOW IT MOVES WITH THE SEED.**
+07eccf7 at 80 / 40 (worktree only), s785-s787: clk_sys -0.782 / -0.637 /
+-0.497 (TNS -22.5 / -5.9 / -7.6), clk_i960 +1.06..+2.01, clk_mem +0.76 /
++0.94 / -0.053, HDMI +0.025 / -1.072 / -0.617. R735's three paths are gone;
+what fails is a different set on each seed, every one within ~0.8 ns:
+  s785  fill xbh -> the DSP's enable (Mult1/3/5 ENA_DFF0, -0.782: R715's
+        stage-1 register absorbed into the DSP again, as R717 saw) and xbh ->
+        s1_col / s1_cr / s1_cl; geometry wv -> voff_r -0.695, wu -> uoff_r
+        (R718's UV wrap); xform comp -> pool mul_a_q -0.548; fp_add's
+        sA_small from the pool (-0.499, 11) and the TGP ALU (-0.514)
+  s786  gp_outr -> vs_wait -0.637 (framework); the MultiPCM's oct_ram ->
+        pos_ram MLAB write ports (-0.18..-0.62, ten); qsy -> a_lo -0.273
+  s787  TGP state.S_LABB_W -> u_seq pc / rep / src_val -0.497; jt12 cur_ch
+        -> phinc_II -0.309; span_tex k_p -> mq_f1 -0.280; raster div n_mag ->
+        rq -0.206 (32); engine cc_idx -> poly_col -0.025
+At 99% of the device every path near half a nanosecond is a candidate and the
+placement picks which ones fail. 80 / 40 is several more rounds, and the
+deep ones are shared or inherited: fp_add (latency hard-coded in the pool and
+the TGP), the DSP-absorbed stage (needs a keep or a different structure), the
+MultiPCM (third-party). Stopped here for the night; 75 / 37.5 stays.

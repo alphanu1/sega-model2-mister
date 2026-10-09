@@ -16,8 +16,13 @@ boots. No bench reproduces it -- tb_m2_boot never leaves that screen with any
 bridge, even s759's, in 150 M instructions. CC_EN defaults to 0 now (R733).
 Telemetry no longer fits beside stage 2+ (4,192-4,201 LABs of 4,191).
 
-80 / 40 (stage 5): an exploratory build of 8fb82e4 at 80/40 is running
-(worktree sm2-bis-80-8fb82e4, not committed) to measure what is left.
+80 / 40 (stage 5): NOT closed. Two rounds (R735, R736): s782-s784 clk_sys
+-0.59..-0.94, then after R735's three fixes s785-s787 -0.50..-0.78 on a
+different set each seed (fill's DSP-absorbed stage, fp_add, UV wrap, the
+MultiPCM's MLABs, the TGP sequencer, jt12...). Several more rounds; 75/37.5
+stays. R731/R732/R735 are committed and are cycle-free at 75 too (they made
+s779 the first build to close HDMI as well). Worktrees sm2-bis-80-* hold the
+80/40 clock edit (pll.v outclk1/3, SYS_MHZ) uncommitted.
 
 ## 2026-10-09 (night): BRANCH readahead -- Ben's five, one commit each (bisectable)
 
