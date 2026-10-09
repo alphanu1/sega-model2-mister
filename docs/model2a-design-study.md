@@ -28358,3 +28358,32 @@ sequencer state, the bridge's transaction, copro_stall) in a Double
 Buffered menu and a race -- built at 75/37.5 because at 80 it does not fit
 beside the design (R762, s879-s884); a question of where the time goes, not
 a speed figure.
+
+**R767 -- THE MENU AND THE RACE ARE CPU-BOUND BY A SMALL MARGIN, AND THE CPU
+IS ALMOST ALL WAITING.** The profile build s892 (894004b + M2_DEBUG_LITE,
+75/37.5 because the full telemetry does not fit at 80; core clocks clean,
+HDMI -0.751; RBF f7f2fd8a4ab2eb1fb09e24b246fcbb90), Ben, Double Buffered,
+120 s: about a minute in the circuit-select menu, then a race. 'C' samples,
+tools/m2-decode-cpu.py, by half:
+                         menu     race
+    frame-sync wait     47.5%    38.6%   (idle: the work is done)
+    instruction fetch   15.3%    20.7%
+    data access         15.5%    16.2%
+    TGP (copro_stall)    9.6%    13.7%
+    working             12.1%    10.8%
+Ben: "I don't think it's the CPU" -- and the CPU executes only ~12% of the
+time. But a game running at two vblanks a frame idles (2 - W)/2 of the time
+for W vblanks of work: W = 1.05 in the menu, 1.23 in the race (R720's ~1.2).
+A frame that needs a vblank and 5% takes two: the menu misses 60 by ~5%,
+which is also why attract speeds up and slows down (scenes either side of
+one vblank). And of the busy time, instruction fetch is ~29% (menu) / ~34%
+(race), data ~29% / ~26%, the TGP ~18% / ~22%, execution only ~23% / ~18%.
+The biggest single class, as R694 found: instruction fetch with "nothing in
+the bridge yet" -- the i960's 512 B icache missing, a line fill being four
+bridge round trips. Levers: a larger icache (R693's 2 KB did not fit: 190
+-> 592 ALM, the per-line valid flops and their mux; tags and valid in block
+RAM read beside the data would not scale that way), a line fill as one bridge
+transaction (R694), R730's same-cycle answers (-8% CPI, R753 found them
+behind the lock), the code cache (R728/R733). Being measured first: the
+icache size's hit rate on MAME's instruction stream in a menu, attract and a
+race.
