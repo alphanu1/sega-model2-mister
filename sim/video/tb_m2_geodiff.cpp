@@ -262,9 +262,23 @@ int main(int argc, char **argv) {
   // read from (th_w, RAM or ROM), words 0 and 2, and the attr whose tho steps it
   FILE *fh = std::getenv("M2GD_HDR") ? std::fopen((dir + "/hdr.txt").c_str(), "w") : nullptr;
   uint32_t thw_prev = 0xffffffffu;
+  // M2GD_PROF=1: where the cycles go -- per cycle, the engine's state, the
+  // quad projector's and the clipper's, counted up to the last quad out (the
+  // run itself goes on 200,000 quiet cycles past it before stopping).
+  const bool prof = std::getenv("M2GD_PROF") != nullptr;
+  std::map<int,long> h_eng, h_q, h_k, h_eq; long t_last = 0;
+  std::map<int,long> s_eng, s_q, s_k, s_eq;   // snapshots at the last quad
   for (t = 0; t < 400000000L; t++) {
     const long before = nq;
     tick();
+    if (prof) {
+      auto *r = d->rootp;
+      const int es = r->geodiff_top__DOT__u_geometry__DOT__u_engine__DOT__st;
+      const int qs = r->geodiff_top__DOT__u_geometry__DOT__qst;
+      const int ks = r->geodiff_top__DOT__u_geometry__DOT__u_clip__DOT__kst;
+      ++h_eng[es]; ++h_q[qs]; ++h_k[ks]; ++h_eq[(es << 8) | (qs << 4) | ks];
+      if (nq != before) { t_last = t; s_eng = h_eng; s_q = h_q; s_k = h_k; s_eq = h_eq; }
+    }
     if (fh) {
       auto *r = d->rootp;
       const uint32_t thw = r->geodiff_top__DOT__u_geometry__DOT__u_engine__DOT__th_w;
@@ -297,6 +311,31 @@ int main(int argc, char **argv) {
     std::sort(v.rbegin(), v.rend());
     for (size_t i = 0; i < v.size() && i < 16; i++)
       std::printf("    %-8s engine state %2d: %7ld (%.1f%%)\n", SP[(v[i].second >> 8) & 3], v[i].second & 0xff, v[i].first, 100.0 * v[i].first / g_memreqs);
+  }
+  if (prof) {
+    static const char *EN[] = {"E_IDLE","E_RD","E_XF","E_XFW","E_FOC","E_FOCW","E_STORE","E_ATTR","E_NORM",
+      "E_NXF","E_NXFW","E_SKIP","E_EMIT","E_LINK","E_DONE","E_DOT","E_DOTA","E_LUMM","E_LUMMW","E_LUMA",
+      "E_LUMAW","E_TH0","E_TH1","E_TH2","E_TH3","E_CC","E_PAL","E_XL","E_XLG","E_CW","E_UV","E_FQ"};
+    static const char *QN[] = {"Q_IDLE","Q_ISS","Q_WAIT","Q_OUT","Q_CHK","Q_MM","Q_MM2","Q7"};
+    static const char *KN[] = {"K_IDLE","K_POP","K_TEST","K_TESTW","K_ROT","K_SET","K_CLIP","K_CLIPW",
+      "K_CHILD","K_EPROJ","K_EPROJW","K_EMIT","K_POPR","K13","K14","K15"};
+    std::printf("  PROFILE to the last quad: %ld cycles\n", t_last);
+    auto show = [&](const char *nm, std::map<int,long> &h, const char *const *names, int nn) {
+      std::vector<std::pair<long,int>> v; for (auto &k : h) v.push_back({k.second, k.first});
+      std::sort(v.rbegin(), v.rend());
+      std::printf("   %s:", nm);
+      for (size_t i = 0; i < v.size() && i < 10; i++)
+        std::printf(" %s %.1f%%", v[i].second < nn ? names[v[i].second] : "?", 100.0 * v[i].first / std::max(t_last, 1L));
+      std::printf("\n");
+    };
+    show("engine", s_eng, EN, 32); show("projector", s_q, QN, 8); show("clipper", s_k, KN, 16);
+    std::vector<std::pair<long,int>> v; for (auto &k : s_eq) v.push_back({k.second, k.first});
+    std::sort(v.rbegin(), v.rend());
+    std::printf("   together (engine/projector/clipper):\n");
+    for (size_t i = 0; i < v.size() && i < 14; i++) {
+      const int e = v[i].second >> 8, q = (v[i].second >> 4) & 15, k = v[i].second & 15;
+      std::printf("     %-8s %-7s %-9s %5.1f%%\n", e < 32 ? EN[e] : "?", QN[q & 7], KN[k], 100.0 * v[i].first / std::max(t_last, 1L));
+    }
   }
   std::printf("  walk: ops %u objects %u frames %u unknown %u | captured mtx %u foc %u lit %u tp %u\n",
     d->walk_ops, d->walk_objs, d->walk_frames, d->walk_unknown, d->mtx_n, d->foc_n, d->lit_n, d->tp_n);

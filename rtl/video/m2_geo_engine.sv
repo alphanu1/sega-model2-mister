@@ -243,7 +243,8 @@ module m2_geo_engine #(
     E_EMIT, E_LINK, E_DONE, E_DOT, E_DOTA,
     // R222: the luminance, the texture header, the colour
     E_LUMM, E_LUMMW, E_LUMA, E_LUMAW, E_TH0, E_TH1, E_TH2, E_TH3, E_CC, E_PAL, E_XL, E_XLG, E_CW,   // R718: E_XLG
-    E_UV                                        // R268: the per-vertex texture coordinates
+    E_UV,                                       // R268: the per-vertex texture coordinates
+    E_FQ                                        // R754: focus the next transformed point
   } estate_t;
   estate_t st, ret;
   assign dbg_st = st;
@@ -253,6 +254,21 @@ module m2_geo_engine #(
   logic [1:0] dst;                  // 0=p0prev 1=p1prev 2=p0cur 3=p1cur
   logic [1:0] skipn;
   logic [31:0] fx, fy, fz;   // the point, between transform and focus
+  // R754: TRANSFORMS ARE ISSUED WITHOUT WAITING FOR THEM. The engine used to
+  // issue a point and sit in E_XFW for its result before reading the next one
+  // -- 37% of its cycles on the heaviest attract list (E_XFW + E_NXFW), while
+  // m2_geo_xform was built to stream (two product banks, an adder behind
+  // them). Now the normal, then each point, is issued as soon as its words
+  // are in, and the reads of the next run while it computes. Results come back
+  // in issue order; tq names each one's destination and they are captured
+  // whatever state the engine is in. E_FQ then focuses the points in order.
+  // Same operands, same order, same pool: the same bits.
+  logic [2:0]  tq [4];        // per transform in flight: {normal, dst}
+  logic [1:0]  tq_wr, tq_rd;
+  logic [31:0] raw_x [2], raw_y [2], raw_z [2];   // transformed, not yet focused; [dst[0]]
+  logic [1:0]  raw_v;
+  logic        fq_cur;        // E_FQ: 0 = p0prev / p1prev, 1 = p0cur / p1cur
+  logic        fq_slot;       // ...which of the two
   // R219: THE REFERENCE CULLS WHAT WE EMITTED. model2_v.cpp check_culling:
   // a single-sided polygon (attr bit 17 clear) whose face is the back
   // (normal . point < 0, the point being the polygon's first new vertex
@@ -457,6 +473,9 @@ module m2_geo_engine #(
       attr <= 32'd0; xf_in_valid <= 1'b0;
       fmul_req <= 1'b0; fmul_a <= 32'd0; fmul_b <= 32'd0;
       fx <= 32'd0; fy <= 32'd0; fz <= 32'd0; fsel <= 1'b0;
+      tq_wr <= 2'd0; tq_rd <= 2'd0; raw_v <= 2'b00; fq_cur <= 1'b0; fq_slot <= 1'b0;   // R754
+      for (int k = 0; k < 4; k++) tq[k] <= 3'd0;
+      for (int k = 0; k < 2; k++) begin raw_x[k] <= 32'd0; raw_y[k] <= 32'd0; raw_z[k] <= 32'd0; end
       dbg_polys <= 16'd0; dbg_objects <= 16'd0;
       th_w <= 22'd0; th_ram <= 1'b0; dsel <= 1'b0; dotp_zero <= 1'b0; dotl <= 32'd0;
       tp_w <= 22'd0; tp_ram <= 1'b0; uv_i <= 3'd0; uv_cull <= 1'b0; uv_last <= 1'b0;
@@ -519,19 +538,29 @@ module m2_geo_engine #(
         // even been accepted. The bench caught it as every vertex being the
         // previous vertex's value, an exact one-place shift through all three
         // polygons: v2 read 200 where 400 was due, v3 read 400 where 500 was.
+        // R754: issued, and on to the next read at once; the result is
+        // captured below the case when it comes back. A vertex is not a
+        // screen coordinate until focus has been applied (E_FQ).
         E_XF: begin
           xf_in_x <= xyz[0]; xf_in_y <= xyz[1]; xf_in_z <= xyz[2];
           if (xf_in_ready) begin
-            xf_in_valid <= 1'b1;
-            st <= E_XFW;
+            xf_in_valid  <= 1'b1;
+            xf_translate <= 1'b1;
+            tq[tq_wr] <= {1'b0, dst}; tq_wr <= tq_wr + 2'd1;
+            case (dst)
+              2'd0: begin dst <= 2'd1; widx <= 2'd0; st <= E_RD; end
+              2'd1: begin fq_cur <= 1'b0; fq_slot <= 1'b0; st <= E_FQ; end
+              2'd2: if (attr[0]) begin dst <= 2'd3; widx <= 2'd0; st <= E_RD; end
+                    else begin skipn <= 2'd3; st <= E_SKIP; end   // TRIANGLE: consume P1's words
+              default: begin fq_cur <= 1'b1; fq_slot <= 1'b0; st <= E_FQ; end
+            endcase
           end
         end
 
-        // The transform's result goes to the focus stage, not to a slot: a
-        // vertex is not a screen coordinate until focus has been applied.
-        E_XFW: if (xf_out_valid) begin
-          fx <= xf_out_x; fy <= xf_out_y; fz <= xf_out_z;
-          if (dst == 2'd2) begin dpx <= xf_out_x; dpy <= xf_out_y; dpz <= xf_out_z; end   // R219
+        // R754: the next point to focus, once its transform has come back.
+        E_FQ: if (raw_v[fq_slot]) begin
+          fx <= raw_x[fq_slot]; fy <= raw_y[fq_slot]; fz <= raw_z[fq_slot];
+          raw_v[fq_slot] <= 1'b0;
           fsel <= 1'b0;
           st <= E_FOC;
         end
@@ -551,19 +580,19 @@ module m2_geo_engine #(
         end
 
         E_STORE: begin
-          case (dst)
-            2'd0: begin p0prev[0] <= fx; p0prev[1] <= fy; p0prev[2] <= fz;
-                        dst <= 2'd1; widx <= 2'd0; st <= E_RD; end
-            2'd1: begin p1prev[0] <= fx; p1prev[1] <= fy; p1prev[2] <= fz;
-                        st <= E_ATTR; end
-            2'd2: begin p0cur[0] <= fx; p0cur[1] <= fy; p0cur[2] <= fz;
-                        if (attr[0]) begin dst <= 2'd3; widx <= 2'd0; st <= E_RD; end
-                        else begin
-                          // TRIANGLE: rope P1(n) = P0(n), and still CONSUME the
-                          // three words of the point we do not use.
-                          p1cur[0] <= fx; p1cur[1] <= fy; p1cur[2] <= fz;
-                          skipn <= 2'd3; st <= E_SKIP;
-                        end end
+          case ({fq_cur, fq_slot})   // R754: the point E_FQ took
+            2'b00: begin p0prev[0] <= fx; p0prev[1] <= fy; p0prev[2] <= fz;
+                         fq_slot <= 1'b1; st <= E_FQ; end
+            2'b01: begin p1prev[0] <= fx; p1prev[1] <= fy; p1prev[2] <= fz;
+                         st <= E_ATTR; end
+            2'b10: begin p0cur[0] <= fx; p0cur[1] <= fy; p0cur[2] <= fz;
+                         if (attr[0]) begin fq_slot <= 1'b1; st <= E_FQ; end
+                         else begin
+                           // TRIANGLE: rope P1(n) = P0(n). Its three unused
+                           // words were consumed in E_SKIP before this.
+                           p1cur[0] <= fx; p1cur[1] <= fy; p1cur[2] <= fz;
+                           dstep <= 2'd0; dgot <= 2'd0; st <= E_DOT;
+                         end end
             default: begin p1cur[0] <= fx; p1cur[1] <= fy; p1cur[2] <= fz;
                            dstep <= 2'd0; dgot <= 2'd0; st <= E_DOT; end
           endcase
@@ -609,20 +638,15 @@ module m2_geo_engine #(
 
         // transform_vector: the same matrix, the translation row suppressed.
         // Issue and wait are separate states for the reason E_XF/E_XFW are.
+        // R754: issued, and straight on to P0(n)'s words; the rotated normal
+        // replaces nrm when it comes back, before P0(n)'s point does.
         E_NXF: begin
           xf_in_x <= nrm[0]; xf_in_y <= nrm[1];
           xf_in_z <= (skipn == 2'd1) ? mem_data : nrm[2];
-          xf_translate <= 1'b0;
           if (xf_in_ready) begin
-            xf_in_valid <= 1'b1;
-            st <= E_NXFW;
-          end
-        end
-        E_NXFW: begin
-          xf_in_valid <= 1'b0;
-          if (xf_out_valid) begin
-            nrm[0] <= xf_out_x; nrm[1] <= xf_out_y; nrm[2] <= xf_out_z;
-            xf_translate <= 1'b1;          // back to points
+            xf_in_valid  <= 1'b1;
+            xf_translate <= 1'b0;
+            tq[tq_wr] <= 3'd4; tq_wr <= tq_wr + 2'd1;
             widx <= 2'd0; dst <= 2'd2; st <= E_RD;
           end
         end
@@ -630,7 +654,7 @@ module m2_geo_engine #(
         // ---- the unused triangle point, consumed
         E_SKIP: if (mem_go) begin
           ptr <= ptr + 24'd1;
-          if (skipn == 2'd1) begin dstep <= 2'd0; dgot <= 2'd0; st <= E_DOT; end
+          if (skipn == 2'd1) begin fq_cur <= 1'b1; fq_slot <= 1'b0; st <= E_FQ; end   // R754
           else skipn <= skipn - 2'd1;
         end
         // ---- R219: normal . point, three multiplies then two adds; R222 runs
@@ -920,6 +944,17 @@ module m2_geo_engine #(
 
         default: st <= E_IDLE;
       endcase
+      // R754: a transform's result, wherever the engine is. In issue order.
+      if (xf_out_valid) begin
+        tq_rd <= tq_rd + 2'd1;
+        if (tq[tq_rd][2]) begin
+          nrm[0] <= xf_out_x; nrm[1] <= xf_out_y; nrm[2] <= xf_out_z;
+        end else begin
+          raw_x[tq[tq_rd][0]] <= xf_out_x; raw_y[tq[tq_rd][0]] <= xf_out_y; raw_z[tq[tq_rd][0]] <= xf_out_z;
+          raw_v[tq[tq_rd][0]] <= 1'b1;
+          if (tq[tq_rd][1:0] == 2'd2) begin dpx <= xf_out_x; dpy <= xf_out_y; dpz <= xf_out_z; end   // R219
+        end
+      end
       if (xl_go) rgb[xl_i] <= gam(xl_raw, gamma_sel);   // R718
       if (col_inval) begin cc_valid <= '0; cc_dirty <= 1'b1; end   // R222: the CPU rewrote the colours (R698: and any fill in flight is stale)
       tex_lum_d <= tex_lum;

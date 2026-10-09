@@ -27989,3 +27989,31 @@ seen in Daytona's data: in non-window mode draw_rect's OPAQUE draws pen-0
 pixels of category-1 tiles too, where m2_tile_mixer's hit_cat0 requires
 !prio; and a disabled tilemap 2/3 (vscr bit 15) would still draw in the
 opaque pass. The comment at m2_video.sv ~308 has the v = 0 case backwards.
+
+**R754 -- THE GEOMETRY ENGINE ISSUES ITS TRANSFORMS WITHOUT WAITING: -17 TO
+-24% A LIST, SAME BITS.** Ben, 2026-10-09: with Double Buffered the 2D and
+the attract run at ~30 fps, with Single buffered at full speed. Single
+buffered walks every second list (R699 skip 1), so each has two frames;
+Double Buffered walks every list in one, and a list that overruns holds the
+game (R610/R638: its next list's words are held, the queue fills, the CPU
+stalls) -- every frame two vblanks. tb_m2_geodiff with a cycle profile
+(M2GD_PROF, new, counted to the last quad): w2500 1.21 M cycles at port
+latency 10 through the read-ahead, 15.2 ms at 80 MHz before the renderer
+and the CPU's SDRAM traffic -- over a frame on the board. By engine state
+(w1000): E_XFW 25.8%, E_NXFW 10.9%, E_UV 10.8%, E_RD 8.7%, E_DOT/E_DOTA
+13.1%, E_FOC/E_FOCW 8.6%; projector idle 53%, clipper 79%. The engine waited
+for every transform before reading the next point, though m2_geo_xform
+streams (two product banks, the adder behind them).
+  * m2_geo_engine: the normal and each point are issued as soon as their
+    words are in and the engine reads on; tq (four 3-bit tags) names each
+    result's destination, results are captured in issue order in any state,
+    and a new E_FQ focuses the points in order. E_XFW / E_NXFW are no longer
+    entered. Same operands, same order, same pool.
+  * tb_m2_geodiff, all eleven saved lists at latency 10: -21 to -24% to the
+    last quad (w2500 1,214,722 -> 954,251), quads byte-identical. Old against
+    new engine, w1000 / w3910 / w8100 / w2500 at latency 3, 10, 20, 40:
+    identical quads in all sixteen; -17 to -21% at 3-20, -2% at 40 (the
+    memory then dominates). tb_m2_geo_engine 68 / 0; lint_top and Quartus
+    parse clean. (The read-ahead bench never finishes at latency 0, old
+    engine or new -- a bench limit, not a result.)
+Cost: tq, two raw points (192 bits), a few control bits; no arithmetic.
