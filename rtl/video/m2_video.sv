@@ -613,7 +613,15 @@ module m2_video #(
           // missing text: `INSERT COIN(S)`, `CREDIT 0` and the ranking table live
           // there, tile RAM held them all along, and the census showed tilemap 0
           // winning zero pixels for 640 consecutive frames.
-          mask_r[{mask_i, 4'd0} +: 16] <= cur_layer[0] ? ~tram_data : tram_data;
+          // R755: AND NOT AT ALL IN WINDOW MODE. MAME's window branch
+          // (segaic24.cpp draw_common, ctrl & 0x6000) draws through the plain
+          // tilemap draw and never reaches draw_rect, the only place the mask
+          // exists. Daytona runs pair 2/3 in mode 1 with the 0x6800 table all
+          // zero, so tilemap 3 -- the sky above tilemap 2's picture, rows
+          // 0..v-1 -- read the table inverted, all ones, masked on every
+          // pixel: a black band (palette entry 0) that grows on hills.
+          mask_r[{mask_i, 4'd0} +: 16] <= win_mode ? 16'h0000
+                                         : (cur_layer[0] ? ~tram_data : tram_data);
           if (mask_i == 2'd3) begin
             seq_owns_tram <= 1'b0;
             f_start       <= 1'b1;

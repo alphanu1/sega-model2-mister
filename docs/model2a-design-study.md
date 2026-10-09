@@ -27957,3 +27957,35 @@ wrong, i.e. a load returned the wrong word or a store landed wrong; a
 same-cycle answer handed to the i960 while the bridge's line buffer or the
 posted-write path is mid-update is where to look. tb_m2_cpu_bridge 925 / 0,
 test_m2_cpu_sdram PASS with the new default.
+
+**R755 -- THE BLACK BAND ABOVE THE SKY: THE ROW MASK WAS APPLIED IN WINDOW
+MODE, AND MAME DOES NOT APPLY IT THERE.** Ben, 2026-10-09: driving up a hill
+the sky tilemap moves down and the strip it leaves at the top is black; the
+arcade shows it blue. MAME 0.289 headless, 4,000 frames of Daytona (Lua
+logger): pair 2/3 is in window mode 1 on 3,088 frames (vscr2 0x2Fxx/0x20xx,
+bits 14:13 = 01), the 0x6800 mask table is all zero on every frame, pal[0]
+= 0x0000. segaic24.cpp draw_common's window branch (ctrl & 0x6000, hscr bit
+15 clear, case 1): v = (-vscr) & 0x1ff, rows 0..v-1 draw `layer`, v.. draw
+`layer^1`, with `layer` swapped to 3 when bit 9 of -vscr is clear -- for
+0x2Fxx, TILEMAP 3 ABOVE v (sky: colour 0x60, pen 1, blue) and tilemap 2
+below. That branch draws through tile_layer[]->draw() and never calls
+draw_rect, the only place the mask (`if (win) m = ~m`) exists. Ours applied
+it unconditionally (m2_video Q_MASK_W): tilemap 3 took the zero table
+inverted, all ones, and was masked on every pixel; win_suppress correctly
+removed tilemap 2 from those rows, so they fell to the backdrop, pal[0],
+black. v grows on hills (0x2fad: v = 83).
+  * m2_video: the mask is zero in window mode (any of modes 1-3).
+  * Reproduced with tb_m2_video_frame fed MAME's tile / char / palette /
+    xlat memory: frame 3700 (v 83) rows 0-82 black before, 0 black rows
+    after, row 0 = (0,68,174) as MAME; frame 1663 (v 83) and 2000 (v 17)
+    likewise; rows below v unchanged. lint_top clean, Quartus parse clean.
+Model 1 has the same line (m1_video.sv:666) and never shows it: Virtua
+Racing's ctrl 0x2000 gives v = 0, the even map, unmasked by a zero table.
+Also affects pair 0/1 in window mode (ctrl 0x4000, mode 2, 408 of 4,000
+frames): tilemap 1 was masked there too -- possibly part of the HUD issue,
+not tested. Not covered by a committed bench (the frame dumps are game
+memory and stay out of the repository). Inferred from MAME source and NOT
+seen in Daytona's data: in non-window mode draw_rect's OPAQUE draws pen-0
+pixels of category-1 tiles too, where m2_tile_mixer's hit_cat0 requires
+!prio; and a disabled tilemap 2/3 (vscr bit 15) would still draw in the
+opaque pass. The comment at m2_video.sv ~308 has the v = 0 case backwards.
