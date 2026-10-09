@@ -28233,3 +28233,9 @@ quad store's index RAM (-0.118).
     3.4 ns are gone.
 Not addressed: the clipper's operand mux into the pool (kst / cs / lvl ->
 mul_b_q), which also appeared at -0.12 (s855) and -1.55 (s852, dragged).
+ae5dabd (R752-R762) at 80/40: s876 Quartus internal error (Sub-system DYN,
+as s870); s877 every core clock -- clk_sys +0.111, clk_mem +0.479, clk_i960
++1.700, holds >= +0.208, HDMI -0.114; s878 clk_sys +0.271, HDMI -0.417.
+s877 RBF 43ea4abe13900c92abb04f58120e3445, 41,072 ALM, on the board
+2026-10-09 19:59. (s859, R752-R756, ran 111 min of attract with no lock and
+no black frame before it was replaced.)

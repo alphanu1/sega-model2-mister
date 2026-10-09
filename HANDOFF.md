@@ -1,8 +1,11 @@
 # Handoff
 
-## 2026-10-09 (evening): BUILDING s870-s872 = faee952 (R752-R761, 80/40)
+## 2026-10-09 (evening): ON THE BOARD -- s877 = ae5dabd (R752-R762, 80/40)
 
-Worktree sm2-rel-faee952. Next on the board after s859 (R752-R756). Adds:
+Worktree sm2-builds/sm2-rel-ae5dabd (build worktrees now live in sm2-builds/,
+git-ignored). faee952 did not close on six seeds; R762 (Z80 RAM and YM LFO
+multicycles, the texel crossing's ready from a flop) did: s877 every core
+clock, HDMI -0.114, RBF 43ea4abe..., loaded 19:59. Over s859 it adds:
   R757-R759 geometry engine/projector overlap -- with R754, the heaviest
        attract list -36% in the bench (w2500 1.21 M -> 775 K cycles at
        latency 10, 9.7 ms at 80 MHz), quads byte-identical throughout.
@@ -12,7 +15,7 @@ Worktree sm2-rel-faee952. Next on the board after s859 (R752-R756). Adds:
   R761 rolling start: the per-line H-scroll table (hscr bit 15).
 Ben on s859: sky right; road seams good, some shake on corners; Double
 Buffered attract "speeds up and slows down"; race 2-5% faster.
-TO CHECK on s870-872: Double Buffered attract and menus at 60? menu boxes
+TO CHECK on s877: Double Buffered attract and menus at 60? menu boxes
 flash there? HUD position; rolling start scrolls; race speed.
 Menu boxes (Single buffered): 3D, drawn in every second list; skip 1 always
 draws the same phase (R711 locked it). Ben chose: test Double Buffered on the
