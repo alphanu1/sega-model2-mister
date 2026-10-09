@@ -1263,7 +1263,16 @@ m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(781),
            // frame rate rose as the texel step cut texel traffic -- step 1, 2, 4:
            // 3D 23.3, 24.2, 26.0 pictures a second (s703, Single buffered). Behind
            // port 2 and the glyph fetch (3, a per-scanline deadline), ahead of 10.
-           .PRI(11'b100_0001_1100), .PRI_CAP(2)) u_sdram (
+           // R766: port 1 (the i960) joins the class, AHEAD of every other
+           // member -- the class grants the lowest set port. On the board a
+           // Double Buffered menu walks and draws in alternate vblanks and the
+           // game flips every second one, though its frame is ~1 ms of CPU in
+           // MAME; the CPU's SDRAM wait was measured 86% behind texels (R606),
+           // and round-robin behind four class ports gave it the bus only in
+           // their gaps. The CPU blocks on each access (one outstanding), so it
+           // cannot hold the bus: the most it costs a texel, glyph or walker
+           // read is one transaction.
+           .PRI(11'b100_0001_1110), .PRI_CAP(2)) u_sdram (
 	.clk(clk_mem), .rst_n(mem_rst_n), .ready(mem_ready),
 	// CL+2, FIXED, NO OSD OVERRIDE (R411). Only one capture depth can ever be
 	// right -- CL+1 samples the previous word of the burst, CL+3 the next -- so

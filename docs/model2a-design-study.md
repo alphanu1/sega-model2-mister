@@ -28328,3 +28328,23 @@ vblank tick at 0x500000, the copro sync read (0x884000) before each flip,
 and memory; in MAME a menu frame is ~0.9 ms of CPU. Ben: Double Buffered
 menus ran at 60 on an older build -- a regression, being bisected on the
 board's saved RBFs.
+
+**R766 -- THE i960 FIRST IN THE SDRAM PRIORITY CLASS.** The menu measurement
+(R764): a ~100-dword list walks for 9.9 ms, the draw takes 15 ms in the next
+vblank, the walk and the draw never overlap, and the game flips only every
+second vblank although a menu frame is ~0.9 ms of CPU in MAME (R765). The
+CPU's code (the code cache is off, R733), work RAM and the display list all
+live in the SDRAM the renderer reads texels from; its bus wait was measured
+85.8% behind texels (R606), and PRI (R574 / R639 / R702: ports 2, 3, 4, 10)
+put four ports ahead of it -- port 1 got the bus in their gaps, two class
+grants at a time. Ben: "keep hammering at the speed".
+  * Model2.sv: PRI 11'b100_0001_1100 -> 11'b100_0001_1110. The class grants
+    the lowest set port, so the i960 now goes first. It blocks on each access
+    (one outstanding), so it cannot hold the bus; a texel, glyph or walker
+    read waits at most one CPU transaction.
+  * lint_top clean; tb_m2_sdram 1,796,727 / 0 (its own PRI; no bench drives
+    Model2.sv's arbitration with the CPU and the renderer together -- the
+    board decides).
+Expected if the theory is right: Double Buffered menus at 60 (10 s
+countdowns), the race and attract faster. If not, the CPU is waiting
+elsewhere (the copro sync read before each flip, 0x884000).
