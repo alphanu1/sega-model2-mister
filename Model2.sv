@@ -2712,8 +2712,17 @@ assign cpu_irq = { |(io_intreq & 12'hc00), |(io_intreq & 12'h3fc),
 // R652: and no walk while the 3D holds the game -- the store is not taking
 // quads, and a walk that stalled would be reading a list the game might be
 // rewriting (R256's hazard). The walk and the frame count move together.
-assign geo_walk_start = vbl_d && !vbl_dd && !nowalk_s[2] && !r3d_game_hold
-                          && (wrate_s[2] || !io_videoctl[0] || !io_framenum[0]);
+// R764: EVERY VBLANK, WHATEVER THE GAME'S 30 Hz BIT SAYS. This gated the
+// walk start and the renderer's swap to even frames when videocontrol bit 0
+// was set -- MAME's screen_vblank rule for when geo_parse runs. Here it is
+// also the renderer's frame_start, so it capped the whole 3D pipeline at 30,
+// and the menus ran their game loop every other vblank (Ben: countdowns take
+// 20 s, not 10). R256 adopted the rule when walks were vblank-triggered and
+// could read a list still being built; since R294/R666 the walk starts only
+// after the game's flip ("After flip"), a list it has finished, so a vblank
+// after any flip is safe. wrate_s (Walk rate, parked) no longer selects.
+assign geo_walk_start = vbl_d && !vbl_dd && !nowalk_s[2] && !r3d_game_hold;
+wire   _unused_wrate  = &{1'b0, wrate_s};
 
 assign cpu_io_rdata =
 	// geo_r: the game sets these and READS THEM BACK to find where it is.

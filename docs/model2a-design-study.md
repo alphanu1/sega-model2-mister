@@ -28268,3 +28268,30 @@ renderer's own frame_start swap.
 Next for the race: the CPU (R746 at 80/40, read-ahead off: data access 40%,
 instruction fetch 19%, working 17%, TGP 12%) -- the code cache (R728/R733),
 R730's fault (R753), the CPU's SDRAM read latency.
+
+**R764 -- NEVER CAPPED AT 30: THE WALK START AND THE RENDERER'S SWAP RUN
+EVERY VBLANK, WHATEVER THE GAME'S 30 Hz BIT.** Ben, 2026-10-09, s877/s886,
+Double Buffered: the menus run at 30 -- each 10 s countdown takes 20 s, the
+boxes flash at half rate; "3D pacing: Free" changes nothing; Single
+buffered runs them at full speed. "We should never be capped at 30 Hz."
+s886 in the circuit-select menu (30 s): the game flips (0x803008) every
+SECOND vblank; vblank A walk 9.9 ms, renderer idle; vblank B renderer
+14-16 ms, no walk, no flip; push stall 0 -- the walk and the draw never
+overlap, and the game waits a whole vblank between lists.
+geo_walk_start carried MAME's screen_vblank rule -- geo_parse only when
+(videocontrol & 1) == 0 or the frame is even -- and geo_walk_start is also
+m2_raster3d's frame_start (the swap) and m2_geo's frame_start, so with the
+bit set the whole 3D pipeline stepped every other vblank. In MAME the rule
+only decides when the list is parsed; the game loop runs every frame. R256
+adopted it when walks were vblank-triggered (a walk on an odd frame read a
+list still being built: scenery dropouts); since R294 / R666 the trigger is
+"After flip", a list the game has finished, so the rule's reason is gone.
+  * Model2.sv: geo_walk_start = vblank && !nowalk && !r3d_game_hold. wrate_s
+    (Walk rate, parked since R666) no longer selects anything.
+  * lint_top, Quartus parse clean. No bench covers Model2.sv's walk start
+    (tb_m2_boot has its own top); the board decides.
+Being checked alongside (agent, MAME): 0x98000c videoctl_r. MAME returns the
+frame bit always in bit 2, chosen by render_mode (0x10000000 bit 2: 1 = 60 Hz
+-> frame bit 0, 0 = 30 Hz -> frame bit 1); ours chooses by videocontrol bit 0
+and in the bit-0-clear case returns frame bit 1 in bit 3, and does not decode
+0x10000000 at all.
