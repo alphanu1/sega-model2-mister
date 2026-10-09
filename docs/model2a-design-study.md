@@ -27487,3 +27487,15 @@ NOT.** The night's board results (Ben asleep; the game in attract):
     needs 4,192-4,201 LABs of 4,191 (stage 3 + it, 4,195-4,198).
 Stage 3 and 4 (R729, R730) are being built WITHOUT the code cache (CC_EN 0,
 data cache back to 16 KB) so they can be judged on the board on their own.
+R733, continued. tb_m2_boot at 150 M instructions (2,506-2,511 vblanks, ~44
+s of game time): s759's bridge and s764's (R728 on the four-phase bridge)
+both still in the settings-screen loop (IP 0x116xx 72%), no 3D -- the bench
+never leaves that screen with ANY bridge, so something the board supplies is
+missing there and it cannot find this fault. CC_EN now defaults to 0 (the
+data cache back to 16 KB); tb_m2_cpu_bridge builds the bridge with -GCC_EN=1
+so the cache stays tested (923/0). With it off tb_m2_cpu_real: hash
+unchanged, 11.09 CPI (11.08 with it on: boot code barely uses it).
+Candidates for the board-only fault, unproven: the M10K's mixed-port
+read-during-write (no_rw_check) -- though in the four-phase bridge a fill's
+write cycle is always C_CLR and no lookup is taken then; and anything the
+real board does to program ROM that no bench models.

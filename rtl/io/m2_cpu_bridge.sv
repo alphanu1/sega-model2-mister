@@ -73,7 +73,10 @@ module m2_cpu_bridge #(
   // i960 at 30 against 50 had. 0 keeps R464's single flop, sound only at 2:1.
   parameter bit          ASYNC    = 0,
   // R728: the CPU-side code cache (program ROM lines, 8 KB). 0 = R724 alone.
-  parameter bit          CC_EN    = 1'b1
+  // R733: OFF. On the board it stops Daytona on its boot settings screen
+  // (s764), which no bench reproduces; with it off the data cache is 16 KB
+  // again and the bridge is R724 + R729 + R730.
+  parameter bit          CC_EN    = 1'b0
 ) (
   // ------------------------------------------------- CPU domain (25 MHz)
   input  logic        clk_cpu,
