@@ -27499,3 +27499,16 @@ Candidates for the board-only fault, unproven: the M10K's mixed-port
 read-during-write (no_rw_check) -- though in the four-phase bridge a fill's
 write cycle is always C_CLR and no lookup is taken then; and anything the
 real board does to program ROM that no bench models.
+
+**R734 -- STAGES 3 + 4 ON THE BOARD (s779), WITHOUT THE CODE CACHE.** e766474
+with CC_EN 0 (= 8fb82e4's RTL: R724 + R729 + R730 + R731 + R732, data cache 16
+KB), seeds s779-s781: s779 CLOSES EVERY CLOCK, HDMI INCLUDED -- clk_sys
++0.143, clk_mem +0.271, clk_i960 +2.627, HDMI +0.463, holds >= +0.172; 41,242
+ALM. (s780 clk_sys -0.438; s781 Quartus Internal Error, PDB.) RBF md5
+2a4dd429e0881bb6c12decd0df346356. Before it, 46ab126/ea27445-era builds
+without R731/R732 missed on single endpoints (s776 span_q -> col_p -0.677;
+s777 the TGP S_DST_W -> sel_fifo_in_q -0.437, which R732 retimes).
+On the board, attract: boots to 3D (screenshot at 60 s); tools/m2-fps.py
+28.5 pictures a second, 2 vblanks 99% (Single buffered); m2-fbcheck 300 s,
+0 black-fault frames, lowest painted mean 233. CPU speed in a race is Ben's
+test: attract runs at full speed already (R733's s761).

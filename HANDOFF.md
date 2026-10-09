@@ -1,5 +1,24 @@
 # Handoff
 
+## 2026-10-09 (early): ON THE BOARD NOW -- s779, stages 3+4 without the code cache. RACE IT.
+
+s779 = 8fb82e4's RTL (R724 line buffer + R729 two-phase handshake + R730
+same-cycle answers + R731/R732 timing fixes; code cache OFF, data cache 16
+KB). Every clock closes, HDMI +0.463. md5 2a4dd429e0881bb6c12decd0df346356,
+kept on the card as cores/Model2.rbf.s779 (s759 is cores/Model2.rbf.s759).
+Attract: 3D, no black frames in 300 s. The bench says -15% CPI against s759's
+bridge (13.10 -> 11.09 on boot code). WHAT IT NEEDS: a race, Double
+Buffered, with tools/m2-fps.py and the lap timer -- s759 raced at ~29.
+
+STAGE 2 (R728, the 8 KB code cache) HANGS DAYTONA ON ITS BOOT SETTINGS SCREEN
+on the board (s764), every time; with only the data cache halved (s775) it
+boots. No bench reproduces it -- tb_m2_boot never leaves that screen with any
+bridge, even s759's, in 150 M instructions. CC_EN defaults to 0 now (R733).
+Telemetry no longer fits beside stage 2+ (4,192-4,201 LABs of 4,191).
+
+80 / 40 (stage 5): an exploratory build of 8fb82e4 at 80/40 is running
+(worktree sm2-bis-80-8fb82e4, not committed) to measure what is left.
+
 ## 2026-10-09 (night): BRANCH readahead -- Ben's five, one commit each (bisectable)
 
 Ben, 2026-10-08: "get 1-5 done through the night, commit at each stage, test
