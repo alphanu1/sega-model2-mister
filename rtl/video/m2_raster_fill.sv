@@ -1011,19 +1011,39 @@ module m2_raster_fill #(
   // Exactly equivalent: in each state the mux selects that state's own
   // operands, so the shifter sees what it saw before. Only one state fires per
   // cycle, which is what makes one shifter sufficient.
-  logic signed [31:0] nsel_c;
-  logic [5:0]         zsel_c;
+  // R742: THE OPERAND ONE STATE AHEAD. The state's six-way numerator select,
+  // the count's -1 and its range test were in front of the barrel shift
+  // (s795 at 80 MHz: nyu -> mul_n -0.739). Each state's operand is known the
+  // state before, so it is registered then (sn_r, sz_r) with z - 1 and the
+  // pass-through test; the shift starts from flops. pf_shift's arithmetic,
+  // the same values in the same states:
+  //   NRM (wait 0-3) loads nxu for NRM's last cycle; NRM's last loads nyu for
+  //   Q1; Q1 -> nxv; Q1W -> nyv; Q2 -> nxo; Q2W -> nyo (Q3 presents nothing).
+  // The counts are joined on nrm_wait 2 (R735), so wait 3's load has them.
+  logic signed [31:0] nn_c;
+  logic [5:0]         nz_c;
   always_comb begin
     case (pf_st)   // R544: the fit's own state
-      S_PF_Q1:  begin nsel_c = nyu; zsel_c = nyu_z; end
-      S_PF_Q1W: begin nsel_c = nxv; zsel_c = nxv_z; end
-      S_PF_Q2:  begin nsel_c = nyv; zsel_c = nyv_z; end
-      S_PF_Q2W: begin nsel_c = nxo; zsel_c = nxo_z; end
-      S_PF_Q3:  begin nsel_c = nyo; zsel_c = nyo_z; end
-      default:  begin nsel_c = nxu; zsel_c = nxu_z; end   // S_PF_NRM, priming
+      S_PF_NRM: if (nrm_wait == 3'd4) begin nn_c = nyu; nz_c = nyu_z; end
+                else                  begin nn_c = nxu; nz_c = nxu_z; end
+      S_PF_Q1:  begin nn_c = nxv; nz_c = nxv_z; end
+      S_PF_Q1W: begin nn_c = nyv; nz_c = nyv_z; end
+      S_PF_Q2:  begin nn_c = nxo; nz_c = nxo_z; end
+      S_PF_Q2W: begin nn_c = nyo; nz_c = nyo_z; end
+      default:  begin nn_c = nxu; nz_c = nxu_z; end
     endcase
   end
-  wire signed [31:0] mul_n_c = pf_shift(nsel_c, zsel_c);
+  logic signed [31:0] sn_r;
+  logic [5:0]         sz_r;
+  logic [4:0]         szm1_r;
+  logic               spass_r;
+  always_ff @(posedge clk) begin
+    sn_r    <= nn_c;
+    sz_r    <= nz_c;
+    szm1_r  <= 5'(nz_c - 6'd1);
+    spass_r <= (nz_c >= 6'd32) || (nz_c == 6'd0);
+  end
+  wire signed [31:0] mul_n_c = spass_r ? sn_r : (sn_r <<< szm1_r);
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -1293,7 +1313,7 @@ module m2_raster_fill #(
         end else begin
           nrm_wait <= 3'd0;
           mul_n <= mul_n_c;   // R457/R458: registered count, one shared shifter
-          mul_z <= zsel_c;
+          mul_z <= sz_r;
           mul_q_r <= '0; mul_zr <= 6'd0; b_wait <= 1'b0; b_w2 <= 1'b0; b_w3 <= 1'b0;   // R450/R594/R727
           oz_w_v <= 1'b0; oz_last <= 1'b0; b_prod <= 1'b0; // R566
           pf_st <= S_PF_Q1;
@@ -1303,28 +1323,28 @@ module m2_raster_fill #(
         // is ready the cycle after the operands are.
         // R442: present the next numerator, latch the previous gradient.
         S_PF_Q1: begin
-          mul_n <= mul_n_c; mul_z <= zsel_c;
+          mul_n <= mul_n_c; mul_z <= sz_r;
           mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
           net_r <= NET0 - 9'(mul_z) - 9'(den_sh); zbig_r <= (mul_z >= 6'd32);   // R459, R626
           pf_st <= S_PF_Q1W;
         end
 
         S_PF_Q1W: begin
-          mul_n <= mul_n_c; mul_z <= zsel_c;
+          mul_n <= mul_n_c; mul_z <= sz_r;
           mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
           net_r <= NET0 - 9'(mul_z) - 9'(den_sh); zbig_r <= (mul_z >= 6'd32);   // R459, R626
           pf_st <= S_PF_Q2;
         end
 
         S_PF_Q2: begin
-          mul_n <= mul_n_c; mul_z <= zsel_c;
+          mul_n <= mul_n_c; mul_z <= sz_r;
           mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
           net_r <= NET0 - 9'(mul_z) - 9'(den_sh); zbig_r <= (mul_z >= 6'd32);   // R459, R626
           pf_st <= S_PF_Q2W;
         end
 
         S_PF_Q2W: begin
-          mul_n <= mul_n_c; mul_z <= zsel_c;
+          mul_n <= mul_n_c; mul_z <= sz_r;
           mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
           net_r <= NET0 - 9'(mul_z) - 9'(den_sh); zbig_r <= (mul_z >= 6'd32);   // R459, R626
           dudx  <= sc_s;   // R594, R727
@@ -1339,7 +1359,7 @@ module m2_raster_fill #(
         // the same cycle as the shift, which is R418's fix applied to the round
         // R337 wrote before R418 existed.
         S_PF_Q3: begin
-          mul_n <= mul_n_c; mul_z <= zsel_c;
+          mul_n <= mul_n_c; mul_z <= sz_r;
           mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
           net_r <= NET0 - 9'(mul_z) - 9'(den_sh); zbig_r <= (mul_z >= 6'd32);   // R459, R626
           dudy  <= sc_s;

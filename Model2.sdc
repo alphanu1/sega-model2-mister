@@ -407,3 +407,24 @@ if {[get_collection_size $gam_from] == 0} {
 } else {
     set_false_path -from $gam_from
 }
+
+
+# ---- R742: THE YM3438 PHASE INCREMENT INTO ITS PHASE SHIFT REGISTER, TWO CYCLES.
+#
+# jt12_pg's phinc_II / keycode_II / detune_mod_II load only on clk_en
+# (jt12_pg.v: `always @(posedge clk) if(clk_en)`), and what they feed here
+# does too: u_phsh (jt12_sh_rst, `if(clk_en)`) and jt12_eg's eg_V
+# (jt12_eg.v line 142, `if(clk_en)`) -- both of which Quartus maps to M10K
+# shift-tap RAMs. It is the same jt12 clk_en R738 proves is never high on two
+# consecutive clk_sys cycles, so the data has at least two cycles (s795 at 80
+# MHz: u_pg|phinc_II -> u_eg eg_V_rtl_0's porta_datain_reg -0.307). Paths
+# inside the shift registers (their own outputs fed back) are not covered.
+set yp_from [get_registers -nowarn {*u_ym|u_jt12|u_pg|phinc_II* *u_ym|u_jt12|u_pg|keycode_II* *u_ym|u_jt12|u_pg|detune_mod_II*}]
+set yp_to   [get_keepers   -nowarn {*u_ym|u_jt12|u_pg|u_phsh|* *u_ym|u_jt12|u_eg|eg_V*}]
+if {[get_collection_size $yp_from] == 0 || [get_collection_size $yp_to] == 0} {
+    post_message -type critical_warning \
+      "Model2.sdc: the YM3438 phase registers or u_phsh did not match -- R742's exception is not applied."
+} else {
+    set_multicycle_path -setup -end 2 -from $yp_from -to $yp_to
+    set_multicycle_path -hold  -end 1 -from $yp_from -to $yp_to
+}

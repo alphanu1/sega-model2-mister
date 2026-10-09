@@ -27711,3 +27711,25 @@ clip cs -> pool mul_a_q -0.089; fx68k Ir -> nanoAddr -0.066; and three new:
     latched beside the texel (rt_i1); equal for all 65,536 (c, i).
 The four frames identical in pixels, fetches and cycles; test_m2_raster3d
 8/8; lint_top and Quartus parses clean.
+
+**R742 -- 80 / 40, ROUND FIVE'S RESULT AND ROUND SEVEN'S FIXES.** b19c4fe
+(R737-R740) at 80 / 40, s794-s796: clk_sys -1.119 / -0.739 / **-0.065** (TNS
+-44.9 / -2.7 / -0.086), HDMI -0.446 / +0.198 / -0.218; 40,906-41,058 ALM.
+s796 missed by one geometry path (project sst.S_M1 -> engine st.E_XFW
+-0.065, the pool's combinational grant) and one TGP path (S_LABB_W ->
+maddr_q -0.021). The other seeds: framework gp_outr -> acx -1.119 (s794
+only), fb write-combiner b_idx -> its MLAB -0.97 (s794 only), engine uv_i ->
+st -0.70, fill nyu -> mul_n -0.739, jt12 phinc_II -> eg_V's shift-tap RAM
+-0.31, span_tex q_k -> mq_f0 -0.236. Fixed here, no cycle added:
+  * fill normaliser: the next state's numerator, count, count-1 and the
+    pass-through test registered a state early (sn_r / sz_r / szm1_r /
+    spass_r); the shift starts from flops. mul_z takes sz_r.
+  * engine: uv_last kept beside uv_i (the run's last word, 5 or 7).
+  * span_tex: stp(k) - 1 latched with the slot's other values (q_sm1).
+  * Model2.sdc: jt12 phinc_II / keycode_II / detune_mod_II -> u_pg u_phsh and
+    u_eg eg_V (M10K shift-tap RAMs, both `if(clk_en)`) two cycles -- R738's
+    proof (clk_en never on consecutive cycles). Patterns evaluated on s795's
+    netlist: 28 sources, 102 destinations including the failing eg_V ports.
+Four frames identical in pixels, fetches and cycles; test_m2_geo_engine /
+geometry / geo pass; geodiff's three lists identical; test_m2_raster3d;
+lint_top, the SDC under tclsh, and Quartus parses clean.

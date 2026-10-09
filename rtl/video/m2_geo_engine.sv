@@ -274,6 +274,9 @@ module m2_geo_engine #(
   logic [21:0] tp_w;         // R268: texture point address, in 16-bit words
   logic        tp_ram;       // ...in texture RAM (tpa bit 23), else the ROM
   logic  [2:0] uv_i;         // which 16-bit word of the run is in hand
+  // R742: uv_i == the run's last word, kept beside uv_i rather than compared
+  // in the next-state logic (s794 at 80 MHz: uv_i -> st.E_TH0 -0.701, E_XF).
+  logic        uv_last;
   logic        uv_cull;      // the cull decision, held while the run finishes
   logic [21:0] th_w;         // texture header address, in 16-bit words
   logic        th_ram;       // ...in texture RAM (tha bit 23), else the ROM
@@ -456,7 +459,7 @@ module m2_geo_engine #(
       fx <= 32'd0; fy <= 32'd0; fz <= 32'd0; fsel <= 1'b0;
       dbg_polys <= 16'd0; dbg_objects <= 16'd0;
       th_w <= 22'd0; th_ram <= 1'b0; dsel <= 1'b0; dotp_zero <= 1'b0; dotl <= 32'd0;
-      tp_w <= 22'd0; tp_ram <= 1'b0; uv_i <= 3'd0; uv_cull <= 1'b0;
+      tp_w <= 22'd0; tp_ram <= 1'b0; uv_i <= 3'd0; uv_cull <= 1'b0; uv_last <= 1'b0;
       poly_uv0 <= 32'd0; poly_uv1 <= 32'd0; poly_uv2 <= 32'd0; poly_uv3 <= 32'd0;
       lum <= 32'd0; luma8 <= 8'd0; hdr0 <= 16'd0; cbase <= 10'd0; c555 <= 15'd0; xi <= 2'd0;
       hdr1 <= 16'd0; hdr2 <= 16'd0; poly_tex <= 32'd0;
@@ -760,6 +763,7 @@ module m2_geo_engine #(
                        hdr0[9], hdr0[8], hdr0[13], hdr0[6],
                        hdr0[5:3], hdr0[2:0], hdr0[14]};
           uv_i    <= 3'd0;
+          uv_last <= 1'b0;   // R742: the last word is 5 or 7, never 0
           xaddr   <= th_dw(tp_w, tp_ram); xhalf <= tp_w[0]; xspace <= 2'd1;
           st      <= E_UV;
         end
@@ -793,7 +797,7 @@ module m2_geo_engine #(
             3'd6: poly_uv3[31:16] <= w;
             default: poly_uv3[15:0] <= w;
           endcase
-          if (uv_i == (attr[0] ? 3'd7 : 3'd5)) begin
+          if (uv_last) begin   // R742: uv_i == (attr[0] ? 7 : 5)
             tp_w <= tp_w + (attr[0] ? 22'd8 : 22'd6);
             if (uv_cull) begin
               // UNTEXTURED AND TRANSLUCENT, WHICH IS THE ONE CASE THE
@@ -807,6 +811,7 @@ module m2_geo_engine #(
             end else st <= E_CC;
           end else begin
             uv_i  <= uv_i + 3'd1;
+            uv_last <= ((uv_i + 3'd1) == (attr[0] ? 3'd7 : 3'd5));   // R742
             xaddr <= th_dw(nxt, tp_ram);
             xhalf <= nxt[0];
           end
