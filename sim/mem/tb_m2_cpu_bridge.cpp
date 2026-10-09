@@ -48,6 +48,8 @@ static uint64_t tk = 0;
 
 // R698: every col_inval pulse, and every colour word landing in SDRAM
 static long g_colinv = 0, g_colinv_tk = -1, g_colwr_tk = -1;
+// R749: every buf_inval pulse, and every word landing in the buffer RAM's slot
+static long g_bufinv = 0, g_bufinv_tk = -1, g_bufwr_tk = -1;
 static void step() {
   const bool cpu_edge = (tk % CPU_DIV) == 0;
   const bool mem_edge = (tk % MEM_DIV) == 0;
@@ -73,6 +75,7 @@ static void step() {
         if (pb & 2) cur = uint16_t((cur & 0x00ff) | (pd & 0xff00));
         sdram[pa] = cur;
         if (pa >= 0x50000u && pa < 0x52000u) g_colwr_tk = long(tk);   // the 3D palette and xlat mirrors
+        if (pa >= 0x40000u && pa < 0x50000u) g_bufwr_tk = long(tk);   // R749: buffer RAM
       } else {
         // A FOUR-WORD BURST, because that is what port 0 now does -- blen()
         // gives ports 0 to 3 four words. Returning one and zero-filling the
@@ -98,6 +101,7 @@ static void step() {
                     pw ? "WR" : "rd", pa, pd, pb);
     }
     if (dut->col_inval) { ++g_colinv; g_colinv_tk = long(tk); }
+    if (dut->buf_inval) { ++g_bufinv; g_bufinv_tk = long(tk); }   // R749
     // On-chip arrays: REGISTERED reads, as M10K is.
     dut->oc_tram_q = tram[dut->oc_addr & 0x7fff];
     dut->oc_pal_q  = pal[dut->oc_addr & 0x1fff];
@@ -262,7 +266,12 @@ int main(int argc, char **argv) {
   // alias rather than address new storage.
   {
     uint32_t v = 0;
+    g_bufinv = 0; g_bufinv_tk = -1; g_bufwr_tk = -1;
     access(true,  0x00900010u, 0xcafef00du, 0xf, nullptr);
+    // R749: the walker's copy is dropped when the write starts AND once it has
+    // landed -- a walker read between the two took the old word
+    expect("R749 buf_inval pulses for one list write (at least 2)", g_bufinv >= 2, 1);
+    expect("R749 the last buf_inval follows the SDRAM write", g_bufinv_tk > g_bufwr_tk && g_bufwr_tk >= 0, 1);
     expect("buffer low word",  sdram[0x40000 + ((0x00900010u & 0x1ffffu) >> 1)],     0xf00d);
     expect("buffer high word", sdram[0x40000 + ((0x00900010u & 0x1ffffu) >> 1) + 1], 0xcafe);
     access(false, 0x00900010u, 0, 0xf, &v);

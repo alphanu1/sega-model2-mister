@@ -1028,6 +1028,15 @@ module m2_cpu_bridge #(
       // CPU side drops its request.
       ack_mem_d <= ack_mem;
       if ((ack_mem != ack_mem_d) && r_we && (pal_mirror || xlat_mirror)) col_inval <= 1'b1;   // R729: a toggle
+      // R749: AND THE DISPLAY LIST AND THE TEXTURES THE SAME WAY. buf_inval and
+      // tex_inval fired only at dispatch, so the walker's pair cache (port 4,
+      // which outranks this port since R702) could re-read the OLD word -- a
+      // command's placeholder count -- while the CPU's patch was still queued,
+      // and keep it until the next list write: a zero count, the light table
+      // filled with 0/0 (R747's black 3D, still there with R747 on s833). R698
+      // closed exactly this for colours and left the walker's cache out.
+      if ((ack_mem != ack_mem_d) && r_we && buf_region) buf_inval <= 1'b1;
+      if ((ack_mem != ack_mem_d) && r_we && tex_region) tex_inval <= 1'b1;
 
       // The cache's own housekeeping, before any state runs.
       dc_inval <= 1'b0;

@@ -27854,3 +27854,21 @@ posted. FAST_ACK 0: tb_m2_cpu_bridge 923 / 0; tb_m2_cpu_real hash
 a95ee045a6c3424b, 12.03 CPI (R729 measured 12.02). Quartus parse clean.
 s833 (e82e57e = R747 + trap telemetry: after a trap 'C' carries the trapped
 instruction word and 'G' the restored RIP and PFP) is soaking in attract.
+
+**R749 -- R747 WAS NOT ENOUGH: THE WALKER'S PAIR CACHE TAKES THE OLD COUNT.**
+s833 (e82e57e, R747 in) went black after 4 minutes of attract (Ben; the
+soak's m2-fbcheck agrees: black-fault frames from +4m), the game running.
+So a second route to the zero count is open. buf_inval (and tex_inval)
+fired only when the CPU's write was DISPATCHED, and the walker reads the
+list through u_geo_pc on port 4, which outranks the CPU's port (R702): it
+could re-read the old word -- the command's placeholder count -- while the
+patch was still queued, and keep it until the next list write. R698 closed
+exactly this for the colours and the engine and recorded the walker's cache
+as "moot", which it is not: the engine's reads lost their pair cache, the
+walker's did not.
+  * m2_cpu_bridge: buf_inval and tex_inval also pulse when the write lands
+    (the completion toggle, as R698's col_inval); r_* still hold then.
+  * tb_m2_cpu_bridge: a buffer write gives >= 2 buf_inval pulses, the last
+    after the SDRAM write -- 925 checks, 0 mismatches; with the landed pulse
+    planted off, both checks fail.
+test_m2_cpu_sdram, lint_top, Quartus parse clean. Board: next build.
