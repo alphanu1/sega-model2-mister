@@ -28057,3 +28057,11 @@ floor-inclusive span rule (hides sub-pixel seams; does nothing for a shake).
 The fill rule itself is exact (seam bench: 0 gaps and 0 overlaps over 2.3 M
 rows when the shared edge's data is identical); R677's "without a gap" holds
 only for that case.
+R756 on the fitter: s852-s854 (d42a8e2, 80/40) missed clk_sys by 2.76 /
+3.07 / 3.21 ns -- the rounding in one cycle (sx_f -> times8 -> fp_to_int's
+shift and negate -> abs, increment, negate -> qx_r, -2.757), with the pool's
+grant paths (project S_M1 -> engine E_LINK -1.98, clip lvl -> pool mul_b_q
+-1.55) and the raster behind it, most likely dragged by the one hopeless
+path. Split: S_RND registers only trunc(8|x|), a shift by the exponent less
+124 with no adder or negate, and S_OUT does the increment and the one negate.
+The eleven walks give byte-identical quads to the one-cycle form.
