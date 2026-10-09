@@ -1,5 +1,27 @@
 # Handoff
 
+## 2026-10-09 (evening): BUILDING s870-s872 = faee952 (R752-R761, 80/40)
+
+Worktree sm2-rel-faee952. Next on the board after s859 (R752-R756). Adds:
+  R757-R759 geometry engine/projector overlap -- with R754, the heaviest
+       attract list -36% in the bench (w2500 1.21 M -> 775 K cycles at
+       latency 10, 9.7 ms at 80 MHz), quads byte-identical throughout.
+  R760 HUD: each object projects about the centre it selects (opcode bits
+       30:29); the mini-map, CONDITION panel and rev needle were 46 rows low.
+       MAME race dumps kept as build/geodiff/r5701, r6601.
+  R761 rolling start: the per-line H-scroll table (hscr bit 15).
+Ben on s859: sky right; road seams good, some shake on corners; Double
+Buffered attract "speeds up and slows down"; race 2-5% faster.
+TO CHECK on s870-872: Double Buffered attract and menus at 60? menu boxes
+flash there? HUD position; rolling start scrolls; race speed.
+Menu boxes (Single buffered): 3D, drawn in every second list; skip 1 always
+draws the same phase (R711 locked it). Ben chose: test Double Buffered on the
+new build first; options if not enough -- an Auto draw method, or a phase
+shift every 8 drawn lists (-6% pictures).
+OPEN: race speed (likely CPU; the 80/40 read-ahead-on measurement is owed);
+the corner shake (sixteenth-pixel vertices); vscr bit 15 on tilemaps 2/3
+not honoured in the opaque pass (Daytona never sets it).
+
 ## 2026-10-09 (late): ON THE BOARD -- s859 (R752-R756, 80/40). BEN TO CHECK.
 
 HEAD on readahead has R752-R756. s859 (d78f059, worktree sm2-rel-d78f059)
