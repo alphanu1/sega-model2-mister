@@ -887,6 +887,11 @@ module m2_raster_fill #(
   // compare and a 2:1 select (s788 at 80 MHz: m01_r -> symin -0.367, 11):
   // lo01_v == sye[pmin01] and so on, the same y as accepted.
   logic signed [15:0] lo01_v, lo23_v, hi01_v, hi23_v;
+  // R743: and those values formed in S_MINMAX's first cycle (mm_pre) from the
+  // latched sye and the acceptance's compare bits, not at acceptance -- there
+  // they lengthened the store's output -> fill path (s799 at 80 MHz: vtx_r ->
+  // hi01_v -0.489). One cycle more per quad.
+  logic               mm_pre;
   wire  m_fin = lo23_v < lo01_v;   // pmin23 strictly lower: the tie goes to 0/1
   wire  x_fin = hi23_v > hi01_v;
   function automatic logic signed [15:0] ye_in(input logic signed [15:0] y, input logic [1:0] f);
@@ -1116,6 +1121,7 @@ module m2_raster_fill #(
       pmin_r <= 2'd0;  td_r  <= 1'b0;
       m01_r <= 1'b0; m23_r <= 1'b0; x01_r <= 1'b0; x23_r <= 1'b0;   // R735
       lo01_v <= '0; lo23_v <= '0; hi01_v <= '0; hi23_v <= '0;          // R740
+      mm_pre <= 1'b0;                                                  // R743
       for (int i = 0; i < 4; i++) begin
         sx[i] <= 16'sd0;
         sy[i] <= 16'sd0;
@@ -1428,15 +1434,7 @@ module m2_raster_fill #(
             m23_r <= ye_in(in_y3, in_frac[15:14]) < ye_in(in_y2, in_frac[11:10]);
             x01_r <= ye_in(in_y1, in_frac[7:6])   > ye_in(in_y0, in_frac[3:2]);
             x23_r <= ye_in(in_y3, in_frac[15:14]) > ye_in(in_y2, in_frac[11:10]);
-            // R740: the pairs' values, by the same compares
-            lo01_v <= (ye_in(in_y1, in_frac[7:6])   < ye_in(in_y0, in_frac[3:2]))
-                      ? ye_in(in_y1, in_frac[7:6])   : ye_in(in_y0, in_frac[3:2]);
-            lo23_v <= (ye_in(in_y3, in_frac[15:14]) < ye_in(in_y2, in_frac[11:10]))
-                      ? ye_in(in_y3, in_frac[15:14]) : ye_in(in_y2, in_frac[11:10]);
-            hi01_v <= (ye_in(in_y1, in_frac[7:6])   > ye_in(in_y0, in_frac[3:2]))
-                      ? ye_in(in_y1, in_frac[7:6])   : ye_in(in_y0, in_frac[3:2]);
-            hi23_v <= (ye_in(in_y3, in_frac[15:14]) > ye_in(in_y2, in_frac[11:10]))
-                      ? ye_in(in_y3, in_frac[15:14]) : ye_in(in_y2, in_frac[11:10]);
+            mm_pre <= 1'b1;   // R743: the pairs' values in S_MINMAX's first cycle
             col   <= in_col;
             moire <= in_moire;
             qu[0] <= in_u0; qv[0] <= in_v0; qu[1] <= in_u1; qv[1] <= in_v1;
@@ -1473,7 +1471,12 @@ module m2_raster_fill #(
         // One cycle of pure comparison: wireframe, top and bottom vertices, and
         // the three whole-quad rejects. Order matters — the flat case is taken
         // before the viewport rejects, because fill_line does its own y test.
-        S_MINMAX: begin
+        S_MINMAX: if (mm_pre) begin
+          // R743: sye[] is the accepted y, the bits the acceptance's compares
+          mm_pre <= 1'b0;
+          lo01_v <= m01_r ? sye[1] : sye[0];  lo23_v <= m23_r ? sye[3] : sye[2];
+          hi01_v <= x01_r ? sye[1] : sye[0];  hi23_v <= x23_r ? sye[3] : sye[2];
+        end else begin
           // One cycle of pure comparison, and now the ONLY cycle that does it.
           td_r   <= two_distinct;
           pmin_r <= pmin_c;

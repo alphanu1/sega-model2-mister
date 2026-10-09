@@ -428,3 +428,25 @@ if {[get_collection_size $yp_from] == 0 || [get_collection_size $yp_to] == 0} {
     set_multicycle_path -setup -end 2 -from $yp_from -to $yp_to
     set_multicycle_path -hold  -end 1 -from $yp_from -to $yp_to
 }
+
+
+# ---- R743: THE SOUND 68000'S IR INTO ITS MICRO/NANO ADDRESS, TWO CYCLES.
+#
+# fx68k loads Ir (`if (enT1) ... Ir <= Irc`) and microAddr / nanoAddr
+# (`else if (enT1) begin microAddr <= nma; nanoAddr <= orgAddr;`) only on
+# enT1 = enPhi1 & (tState == T4) & ~wClk (fx68k.sv:178), once every four phase
+# enables. m2_sound_board makes enPhi1/enPhi2 from an accumulator that adds
+# TICK_NUM = 20 a cycle against TICK_DEN = SYS_MHZ (Model2.sv) and drops below
+# 20 after each pulse, so two enables are never on consecutive cycles at any
+# SYS_MHZ >= 40, and enT1s are far further apart. Ir -> the PLA -> nanoAddr
+# (s798 at 80 MHz: -0.146) therefore has at least two cycles. nanoAddr's
+# pwrUp load is a constant, not a path from Ir.
+set sk_from [get_registers -nowarn {*u_sndboard|u_cpu|Ir[*]}]
+set sk_to   [get_registers -nowarn {*u_sndboard|u_cpu|nanoAddr[*] *u_sndboard|u_cpu|microAddr[*]}]
+if {[get_collection_size $sk_from] == 0 || [get_collection_size $sk_to] == 0} {
+    post_message -type critical_warning \
+      "Model2.sdc: the sound 68000's Ir / nanoAddr registers did not match -- R743's exception is not applied."
+} else {
+    set_multicycle_path -setup -end 2 -from $sk_from -to $sk_to
+    set_multicycle_path -hold  -end 1 -from $sk_from -to $sk_to
+}

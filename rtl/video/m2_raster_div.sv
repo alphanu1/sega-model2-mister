@@ -102,6 +102,7 @@ module m2_raster_div #(
   localparam logic [2:0] S_MUL  = 3'd4;   // fast path: the reciprocal multiply
   localparam logic [2:0] S_COR  = 3'd5;   // fast path: q x d, registered (R585)
   localparam logic [2:0] S_COR2 = 3'd6;   // fast path: the single correction
+  localparam logic [2:0] S_CORS = 3'd7;   // R743: q x d's two halves summed
 
   // ceil(2^32/d) for d in 1..511. Entry 0 is unused (den == 0 is trapped) and
   // entry 1 would be 2^32, so d == 1 takes the quotient straight from the
@@ -132,7 +133,11 @@ module m2_raster_div #(
   // correction's compare. Both are DSP work, which this design has spare.
   wire [63:0] mul_full = {32'd0, n_mag} * {32'd0, recip_q};
   wire [31:0] mul_hi   = mul_full[63:32];
-  wire [42:0] q_times_d = {11'd0, q_fast} * {32'd0, d_mag[10:0]};
+  // R743: q x d as two 16 x 11 halves, registered, then summed in S_CORS
+  // (s797 at 80 MHz: q_fast -> qd_q -0.280). One cycle more on the fast path.
+  wire [26:0] qd_lo_c = {11'd0, q_fast[15:0]}  * {16'd0, d_mag[10:0]};
+  wire [26:0] qd_hi_c = {11'd0, q_fast[31:16]} * {16'd0, d_mag[10:0]};
+  logic [26:0] qd_lo, qd_hi;
   logic [42:0] qd_q;       // R585: q_times_d, registered
   logic [31:0] q_fast;
   logic [31:0] q_fm1;      // R739: q_fast - 1, formed in S_COR beside the product
@@ -166,6 +171,7 @@ module m2_raster_div #(
       rq        <= 32'd0;
       q_fast    <= 32'd0;
       q_fm1     <= 32'd0;
+      qd_lo     <= '0; qd_hi <= '0;
       n_mag     <= 32'd0;
       d_mag     <= 32'd0;
       rem       <= 32'd0;
@@ -217,8 +223,13 @@ module m2_raster_div #(
         // later (s312: q_fast -> rq, -1.13 ns at 70 MHz: a 32 x 11 multiply, a
         // 43-bit compare and a decrement-select in one cycle).
         S_COR: begin
-          qd_q  <= q_times_d;
+          qd_lo <= qd_lo_c;   // R743
+          qd_hi <= qd_hi_c;
           q_fm1 <= q_fast - 32'd1;   // R739: off the compare's path (s787 at 80 MHz: n_mag -> rq -0.206)
+          state <= S_CORS;
+        end
+        S_CORS: begin
+          qd_q  <= {16'd0, qd_lo} + {qd_hi, 16'd0};   // R743: = q_fast x d[10:0]
           state <= S_COR2;
         end
         S_COR2: begin

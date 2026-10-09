@@ -27733,3 +27733,23 @@ st -0.70, fill nyu -> mul_n -0.739, jt12 phinc_II -> eg_V's shift-tap RAM
 Four frames identical in pixels, fetches and cycles; test_m2_geo_engine /
 geometry / geo pass; geodiff's three lists identical; test_m2_raster3d;
 lint_top, the SDC under tclsh, and Quartus parses clean.
+
+**R743 -- 80 / 40, ROUND SIX'S RESULT: 0.15 ns OFF.** 8ee315d (R741) at 80 /
+40, s797-s799: clk_sys -0.280 / **-0.146** / -0.489 (TNS -0.62 / -0.24 /
+-1.06), HDMI -0.166 / **+0.291** / -1.063; ~41,100 ALM. s798's only real
+failure: the sound 68000's Ir -> nanoAddr (-0.146) and the Z80 firmware RAM
+-> IR (-0.011). s797: divb q_fast -> qd_q -0.280, the Z80 -0.161, jt12 effect
+-> phinc_II -0.107 (effect is CPU-written, not clk_en-gated: no exception),
+engine cc_idx -> cc_dirty -0.051. s799: store vtx_r -> fill hi01_v -0.489
+(R740's pair values made the acceptance path longer), s1_y -> span_v -0.085.
+  * Model2.sdc: fx68k Ir -> nanoAddr / microAddr two cycles. Both load only
+    on enT1 = enPhi1 & (tState == T4) & ~wClk; the phase accumulator (+20 a
+    cycle against TICK_DEN = SYS_MHZ) never pulses on adjacent cycles at
+    SYS_MHZ >= 40. Patterns on s798's netlist: 16 sources, 17 destinations.
+  * m2_raster_div: q x d as two 16 x 11 halves, summed in a new S_CORS (one
+    cycle more on the fast path).
+  * fill: the tournament's pair values formed in S_MINMAX's first cycle
+    (mm_pre) from the latched sye and the acceptance's compare bits (one
+    cycle more per quad).
+Four frames identical in pixels (draw +0.0..+0.27% cycles); test_m2_raster3d;
+lint_top, the SDC under tclsh, Quartus parses clean.
