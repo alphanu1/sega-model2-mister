@@ -613,7 +613,9 @@ int main(int argc,char**argv){
     std::printf("test: R642 window_data captured -- %u ops, win_cnt +%u\n", d->dbg_walk_ops, (unsigned)(uint8_t)(d->win_cnt - c0));
     ck("window: viewport start", d->win_vp_s, ww[0]);
     ck("window: viewport end",   d->win_vp_e, ww[1]);
-    ck("window: centre 0",       d->win_c0,   ww[2]);
+    // R760: the centre is applied per OBJECT (its select, opcode bits 30:29);
+    // a list with no object leaves win_c0 where it was.
+    ck("window: centre held until an object", d->win_c0, 0x00f80140u);
     ck("window: counted once",   (uint8_t)(d->win_cnt - c0), 1);
     ck("walk in step: three opcodes", d->dbg_walk_ops, 3);
     ck("walk in step: matrix landed", d->dbg_mtx_n, 1);
@@ -804,6 +806,43 @@ int main(int argc,char**argv){
     ck("R752 walk A read its whole list", d->dbg_walk_ops, N + 1);
     ck("R752 B's words did not hold the walk", walked ? 1u : 0u, 1u);
     rd_slow = 0; wr_slow = 0;
+  }
+
+  // ---- R760: EACH OBJECT PROJECTS ABOUT THE CENTRE IT SELECTS. A window
+  // with four different centres, then four objects selecting 0, 1, 2, 3 (opcode
+  // bits 30:29) and then 1 again: win_c0 must carry the selected centre when
+  // each object is announced. MAME: center_sel = (opcode >> 29) & 3.
+  {
+    std::vector<uint32_t> list(0x8000, 0);
+    size_t n = 0;
+    list[n++] = 0x03u << 23;
+    const uint32_t ww[6] = {0xffff0080u, 0x01f00200u, 0x00f8010eu, 0x00f8013cu, 0x01600098u, 0x0123045cu};
+    for (int i = 0; i < 6; i++) list[n++] = ww[i];
+    const int sel[5] = {0, 1, 2, 3, 1};
+    for (int k = 0; k < 5; k++) {
+      list[n++] = (0x01u << 23) | (uint32_t(sel[k]) << 29);   // object_data
+      for (int i = 0; i < 4; i++) list[n++] = 0;
+    }
+    list[n++] = 0x0fu << 23;                                   // end
+    d->rst_n = 0; for (int i = 0; i < 4; i++) tick(); d->rst_n = 1; idle(2);
+    d->trig_mode = 0; d->skip = 0; d->eng_busy = 0;
+    w(2, 0x00000000);
+    int seen = 0, busy_left = 0;
+    for (int i = 0; i < 200000 && !d->dbg_walk_frames; i++) {
+      d->rd_ack = 0;
+      if (d->rd_req) { d->rd_data = (d->rd_addr < list.size()) ? list[d->rd_addr] : 0; d->rd_ack = 1; }
+      if (d->obj_valid && seen < 5) {
+        const uint32_t c = ww[2 + sel[seen]] & 0x0fff0fffu;
+        char nm[64]; std::snprintf(nm, sizeof nm, "R760 object %d (centre %d)", seen, sel[seen]);
+        ck(nm, d->win_c0, c);
+        ++seen; busy_left = 30;
+      }
+      d->eng_busy = busy_left > 0; if (busy_left > 0) --busy_left;
+      tick();
+    }
+    std::printf("test: R760 centre select -- %d objects announced\n", seen);
+    ck("R760 five objects announced", uint32_t(seen), 5u);
+    d->eng_busy = 0;
   }
 
   std::printf("m2_geo: checks=%d fails=%d\n", checks, fails);

@@ -666,6 +666,16 @@ module m2_geo #(
   wire         walk_go  = trig_sel && (flip_pend ? flip_landed               // R752
                                                  : (q_idle || (&drain_wait)));
   logic [31:0] pd_addr;                  // geo_polygon_data's destination
+  // R760: THE OBJECT'S CENTRE IS ONE OF FOUR. MAME (model2_v.cpp):
+  // center_sel = (opcode >> 29) & 3, the polygons clipped against
+  // clip_plane[center_sel] and projected about center[center_sel], the four
+  // read from the window command's words 2-5. R641 measured attract only,
+  // where every object uses centre 0; in a race the mini-map, the CONDITION
+  // panel and the rev needle use centre 1, which Daytona sets 46 rows below
+  // centre 0 -- so they were drawn 46 rows low (R703, R723). win_c0 now
+  // carries the selected centre for each object; m2_geo_view is unchanged.
+  logic [23:0] win_cen [4];              // {x[27:16], y[11:0]} of each centre
+  logic [1:0]  w_csel;                   // this opcode's centre select
   logic        pd_tex;                   // R222: this transfer is texture data
   logic [15:0] pd_n, pd_i;               // dwords to copy, and the one in hand
   logic  [4:0] tp_i;                     // texture_parameters index, wraps at 32
@@ -757,6 +767,8 @@ module m2_geo #(
       // -- viewport (0,128)-(496,512), centre (248,320) -- which is exactly the
       // projection this core used as constants (R174).
       win_vp_s <= 32'h0000_0080; win_vp_e <= 32'h01F0_0200; win_c0 <= 32'h00F8_0140;
+      for (int k = 0; k < 4; k++) win_cen[k] <= 24'h0F8_140;   // R760
+      w_csel <= 2'd0;
       win_cnt  <= 8'd0;
       tp_i <= 5'd0; tp_n <= 16'd0; tp_c <= 16'd0; dbg_tp_n <= 16'd0;
       tp_we <= 1'b0; tp_idx <= 5'd0; tp_diffuse <= 8'd0; tp_ambient <= 8'd0;
@@ -856,6 +868,7 @@ module m2_geo #(
             wst  <= W_FETCH;
           end else begin
             w_op  <= rd_data[27:23];
+            w_csel <= rd_data[30:29];          // R760: center_sel
             w_ip  <= w_ip + 19'd1;
             wst   <= W_DECODE;
           end
@@ -933,11 +946,13 @@ module m2_geo #(
                      endcase
             CAP_FOC: if (w_ci == 4'd0) foc_x <= rd_data; else foc_y <= rd_data;
             CAP_ZAD: zadj_e <= rd_data[30:23];        // R246
-            CAP_WIN: case (w_ci)                      // R642: vanishing points 1-3 unused
+            CAP_WIN: case (w_ci)                      // R642; R760: all four centres
                        4'd0: win_vp_s <= rd_data;
                        4'd1: win_vp_e <= rd_data;
-                       4'd2: win_c0   <= rd_data;
-                       default: ;
+                       4'd2: win_cen[0] <= {rd_data[27:16], rd_data[11:0]};
+                       4'd3: win_cen[1] <= {rd_data[27:16], rd_data[11:0]};
+                       4'd4: win_cen[2] <= {rd_data[27:16], rd_data[11:0]};
+                       default: win_cen[3] <= {rd_data[27:16], rd_data[11:0]};
                      endcase
             default: case (w_ci)
                        4'd0: obj_tpa <= rd_data;
@@ -956,6 +971,11 @@ module m2_geo #(
             // the walk then STOPS until the engine reports the object drawn.
             if (w_cap == CAP_OBJ && !nodraw) begin
               obj_valid <= 1'b1;
+              // R760: this object's centre. The walk waits for the whole
+              // geometry (engine, projector, clipper) to go idle before the
+              // next object, so the view's few cycles of conversion are done
+              // long before this object's first vertex is projected.
+              win_c0    <= {4'd0, win_cen[w_csel][23:12], 4'd0, win_cen[w_csel][11:0]};
               eng_seen  <= 1'b0;
               wst       <= W_OBJW;
             end else begin                 // R711: a skipped list's object goes nowhere

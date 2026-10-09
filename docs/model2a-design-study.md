@@ -28138,3 +28138,43 @@ P0(n)'s store.
 Today on w2500 at latency 10: 1,214,722 -> 775,284 (-36%), 9.7 ms at 80 MHz.
 Profile now: E_FQ 13.7%, E_RD 13.4%, E_DOTA 12.6%, E_FW 11.7%, E_DOT 8.6%,
 E_FOC 8.5%, E_NORM 7.4%, E_EMIT 6.9%.
+
+**R760 -- THE MINI-MAP, THE CONDITION PANEL AND THE REV NEEDLE ARE DRAWN
+ABOUT CENTRE 1: EACH OBJECT SELECTS ITS CENTRE.** Ben, 2026-10-09: the mini-
+map and the condition textures are in the wrong place (R703, R723). MAME
+0.289 race dumps (headless, Lua coin + start; build/m2lod p14b; walks 5701 and
+6601, kept as build/geodiff/r5701, r6601): one window a frame with c0 =
+(248,270), c1 = (248,316), c2 = (352,152), c3 = (248,316); 7 of 33 objects
+carry opcode 0x20800000 -- center_sel 1 -- 57 of 849 polygons: the map's
+track lines, the CONDITION panel (h0 8000, the checker) and its car dots,
+the rev needle. model2_v.cpp: center_sel = (opcode >> 29) & 3 (:969),
+clip_plane[center_sel] (:468), poly->center = center[center_sel] (:507),
+the projection about it (:661), all four centres from the window command
+(:860-874). Ours kept word 2 (centre 0) and dropped 3-5, and never read
+bits 30:29 -- every object about centre 0, so those 57 polygons sat 46 rows
+(316 - 270) low. A position error, not a texture one: all 57 are untextured
+(h0 0000 / 8000). R641 ruled the select out from ATTRACT, where every object
+uses centre 0.
+  * m2_geo: the window command keeps all four centres (24 bits each); W_FETCH
+    latches bits 30:29 beside the opcode; announcing an object sets win_c0
+    to the selected centre. The walk waits for the whole geometry to go idle
+    before the next object, so m2_geo_view's conversion is long done before
+    the first vertex. m2_geo_view and Model2.sv unchanged; reset centre as
+    win_c0's (248, 320).
+  * tb_m2_geodiff against MAME: r6601 848 / 849 polygons match (u/v 0 off of
+    665 textured, texture parameters 0 differ), r5701 1737 / 1740 (the rest
+    the R643 left-edge clip class); w1000 1148, unchanged. All eleven attract
+    lists byte-identical to d2d61dd (every attract object uses centre 0).
+  * tb_m2_geo: a window of four centres, objects selecting 0,1,2,3,1 -- win_c0
+    is the selected centre at each announcement (130 / 0); with the select
+    forced to 0 four checks fail. The R642 check now holds win_c0 until an
+    object. lint_top and Quartus parse clean.
+Cost ~74 flops and a 24-bit 4:1 mux. Not modelled: the reverse bit (opcode
+bit 27), 0 in every list seen.
+CORRECTION to R222 / R223 / R248 ("Daytona never writes texture RAM"): it
+does. At boot, 32 texture_data commands (op 0x04, 2048 words each, 0x800000-
+0x80F800, one a walk over walks 96-160) fill it -- headers at 0x0000-0x0FFF,
+u/v tables from 0x5000. In a race, one op 0x04 of 280 words a frame at
+0x8050F8: a road piece's u/v (tpa 0x8050F8, tha 0x800078, centre 0). The
+walker's op 0x04 path handles both; whether the board's texture RAM holds
+the boot upload after R223's zero sweep is not verified.
