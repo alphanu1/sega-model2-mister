@@ -28209,3 +28209,27 @@ Side finding, not acted on: vscr bit 15 (layer disable) is folded into
 transparency, but the mixer's opaque pass draws transparent pixels of
 tilemaps 2/3 -- a disabled 2/3 still paints; MAME returns early (:352).
 Daytona never sets it (0 of 7,000 frames).
+
+**R762 -- faee952 (R752-R761) DID NOT CLOSE ON SIX SEEDS: TWO MULTICYCLES AND
+THE TEXEL CROSSING'S READY FROM A FLOP.** s870 Quartus internal error;
+s871-s875 clk_sys -0.593 / -0.514 / -0.214 / -0.480 / -0.751, each on a
+different set, none in the RTL changed by R757-R761. Recurring across the
+five: the I/O Z80's fw_rtl_0 / ram_rtl_0 -> tv80 IR (3 of 5, to -0.379),
+m2_texel_cdc s_ip -> u_span_q rp (2, to -0.593), span_tex internal (2), jt12
+lfo_mod -> u_pg phinc_II (2, -0.260); once each the clipper's kst -> pool
+mul_b_q (-0.751), hps_io byte_cnt -> status (-0.514), raster bank -> the
+quad store's index RAM (-0.118).
+  * Model2.sdc: the Z80's RAMs into its core, two cycles (R590's argument
+    from the other end: the core loads only on cen, one in 20 at 80 MHz); the
+    YM's lfo_mod into phinc_II / keycode_II / detune_mod_II, two cycles
+    (lfo_mod changes only on clk_en && zero; R738's clk_en). Patterns match
+    1,080 RAM keepers / 335 core registers and 7 / 28. Re-timed with the
+    placement fixed: s873 -0.214 -> -0.118 (left: raster bank -> idx_a1).
+  * m2_texel_cdc: s_rdy from a flop. The credit count s_ip - s_rp is kept as
+    s_cr, and "full" (s_cr's next value == K) registered; s_rdy = !s_full is
+    the same value every cycle (simulation: 200,000 cycles, ~180,000 full,
+    0 mismatches against the old formula). tb_m2_texel_cdc 40,804 / 0. The
+    s874 path was 12.4 ns over 8 levels across four LAB regions; its first
+    3.4 ns are gone.
+Not addressed: the clipper's operand mux into the pool (kst / cs / lvl ->
+mul_b_q), which also appeared at -0.12 (s855) and -1.55 (s852, dragged).

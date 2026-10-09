@@ -101,6 +101,17 @@ module m2_texel_cdc #(
   logic [PW-1:0] s_ip;                 // requests issued
   logic [PW-1:0] s_ip_g;               // ... in Gray code, the value that crosses
   logic [PW-1:0] s_rp;                 // answers taken
+  // R762: CREDITS IN USE AND "FULL", KEPT IN REGISTERS. s_rdy was
+  // (s_ip - s_rp) != K, combinational, and it heads a path through span_tex's
+  // take and the span queue's ready into u_span_q's read pointer (s871 -0.593,
+  // s874 -0.480 at 80 MHz). s_cr is s_ip - s_rp maintained, s_full its
+  // next value compared with K and registered, so s_rdy leaves a flop with
+  // the same value it always had, cycle for cycle.
+  logic [PW-1:0] s_cr;
+  logic          s_full;
+  wire           s_issue = s_req && s_rdy;
+  wire           s_tookr = s_ack && s_take;
+  wire [PW-1:0]  s_cr_n  = s_cr + PW'(s_issue) - PW'(s_tookr);
   (* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
   logic [PW-1:0] s_wp_g1;
   logic [PW-1:0] s_wp_g2;              // answers written, synchronised
@@ -110,7 +121,10 @@ module m2_texel_cdc #(
   always_ff @(posedge clk_slow or negedge s_rst_n) begin
     if (!s_rst_n) begin
       s_ip <= '0; s_ip_g <= '0; s_rp <= '0; s_wp_g1 <= '0; s_wp_g2 <= '0;
+      s_cr <= '0; s_full <= 1'b0;   // R762
     end else begin
+      s_cr   <= s_cr_n;
+      s_full <= (s_cr_n == PW'(K));
       s_wp_g1 <= f_wp_g;
       s_wp_g2 <= s_wp_g1;
       if (s_req && s_rdy) begin
@@ -134,7 +148,7 @@ module m2_texel_cdc #(
   wire [PW-1:0] s_wp = gray2bin(s_wp_g2);
   // Credits count from issue to TAKE, so an answer still waiting in the
   // response queue holds its slot and the queue cannot be overrun.
-  assign s_rdy   = ((s_ip - s_rp) != PW'(K));
+  assign s_rdy   = !s_full;   // R762: was ((s_ip - s_rp) != PW'(K)), the same value
   assign s_ack   = (s_wp != s_rp);
   assign s_texel = r_tex[s_rp[PW-2:0]];
 

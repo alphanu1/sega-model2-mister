@@ -197,6 +197,24 @@ if {[get_collection_size $z80_core] == 0} {
     set_multicycle_path -hold  -end 1 -from $z80_core -to $z80_core
 }
 
+# ---- R762: AND FROM THE Z80'S OWN RAMS INTO ITS CORE, TWO CYCLES.
+#
+# The same argument from the other end: every core register loads only on
+# ClkEn (cen && !BusAck), and cen -- TICK_NUM 4 against TICK_DEN = SYS_MHZ --
+# is one pulse in 20 cycles at 80 MHz, never two in a row. The firmware and
+# work RAMs' outputs follow an address the core set on a cen edge, so what
+# they present has many cycles before the core next loads (3 of 5 seeds of
+# faee952 failed fw_rtl_0 / ram_rtl_0 -> IR, -0.21 .. -0.38 ns). Only paths
+# ENDING in the core are covered; the RAMs' write side is not.
+set z80_ram [get_keepers -nowarn {*u_ioz80|fw_rtl_0|* *u_ioz80|ram_rtl_0|*}]
+if {[get_collection_size $z80_ram] == 0 || [get_collection_size $z80_core] == 0} {
+    post_message -type critical_warning \
+      "Model2.sdc: the Z80's RAMs or core did not match -- R762's exception is not applied."
+} else {
+    set_multicycle_path -setup -end 2 -from $z80_ram -to $z80_core
+    set_multicycle_path -hold  -end 1 -from $z80_ram -to $z80_core
+}
+
 
 # ---- R738: THE YM3438's OPERATOR COUNTER INTO ITS PHASE INCREMENT, TWO CYCLES.
 #
@@ -226,6 +244,21 @@ if {[get_collection_size $ym_from] == 0 || [get_collection_size $ym_to] == 0} {
 } else {
     set_multicycle_path -setup -end 2 -from $ym_from -to $ym_to
     set_multicycle_path -hold  -end 1 -from $ym_from -to $ym_to
+}
+
+# ---- R762: THE YM3438's LFO INTO ITS PHASE INCREMENT, TWO CYCLES.
+#
+# jt12_lfo.v: lfo_mod changes only `else if (clk_en && zero)` (or on rst,
+# which is not this path), and phinc_II / keycode_II / detune_mod_II load only
+# on clk_en -- R738's clk_en, never high on two consecutive cycles. (faee952:
+# u_lfo|lfo_mod -> u_pg|phinc_II -0.26 ns on 2 of 5 seeds at 80 MHz.)
+set yl_from [get_registers -nowarn {*u_ym|u_jt12|*u_lfo|lfo_mod*}]
+if {[get_collection_size $yl_from] == 0 || [get_collection_size $ym_to] == 0} {
+    post_message -type critical_warning \
+      "Model2.sdc: the YM3438 LFO or phase registers did not match -- R762's exception is not applied."
+} else {
+    set_multicycle_path -setup -end 2 -from $yl_from -to $ym_to
+    set_multicycle_path -hold  -end 1 -from $yl_from -to $ym_to
 }
 
 
