@@ -4,6 +4,10 @@
 // Register, descriptor, pitch and PCM semantics follow MAME multipcm.cpp and
 // gew.cpp.  Envelope curves, interpolation and LFO modulation remain bounded
 // approximations; the sample-selection/playback path is cycle deterministic.
+//
+// Modified for the Sega Model 2 core from meathax/s32 s32_multipcm.sv @ 7905361
+// (GPL-3.0); every change is listed in THIRD_PARTY.md, the latest R738
+// (2026-10-09), which retimes the position write and the sample add.
 //============================================================================
 
 module m2_multipcm (
@@ -107,7 +111,41 @@ wire [16:0] s_end_cur   = desc_cur[54:38];
 wire [54:0] desc_word   = {17'h10000 - {1'b0, df_buf[5], df_buf[6]},
                            {df_buf[3], df_buf[4]},
                            {df_buf[0][5:0], df_buf[1], df_buf[2]}};
+
+// R738: THE POSITION WRITE IS ONE CYCLE BEHIND THE STEP. At 80 MHz the step's
+// whole computation in one cycle -- oct_ram's registered output, the forward
+// mux, pitch_step's barrel shift, the 38-bit add, the end compare and the loop
+// subtract -- missed pos_ram's MLAB write-data register by up to 0.62 ns
+// (s786). The step's operands are captured on its own edge, exactly as the
+// step saw them, and the add/compare/subtract is done from those registers on
+// the next edge. Nothing reads the delayed word inside that cycle: the step
+// raises rom_req and moves tick to 1, so `slot` is not stepped again before 7
+// more enables, and the next read of pos_ram[slot] is a full 28-slot pass
+// later. pos_zero still clears on the step's edge, which is safe for the same
+// reason, and a key-on's pos_zero set always wins over the written word.
+reg        pv_we;
+reg  [4:0] pv_slot;
+reg [37:0] pv_pos;
+reg [24:0] pv_step;
+reg [16:0] pv_end;
+reg [15:0] pv_loop;
+
+// The step's arithmetic, verbatim from where it was inline (R738 moved it).
+function automatic [37:0] step_pos(input [37:0] pos, input [24:0] step,
+                                   input [16:0] s_end, input [15:0] s_loop);
+    reg [37:0] next_pos;
+    reg [33:0] loop_span;
+begin
+    next_pos = pos + {13'd0, step};
+    loop_span = ({17'd0, s_end} - {18'd0, s_loop}) << 16;
+    if (next_pos >= ({21'd0, s_end} << 16) && loop_span != 0)
+        next_pos = next_pos - {4'd0, loop_span};
+    step_pos = next_pos;
+end
+endfunction
+
 always @(posedge clk) begin
+    if (pv_we) pos_ram[pv_slot] <= step_pos(pv_pos, pv_step, pv_end, pv_loop);  // R738
     desc_rd <= desc_ram[st_rd_addr];
     pos_rd  <= pos_ram[st_rd_addr];
     pan_rd  <= pan_ram[play_slot];
@@ -150,6 +188,20 @@ reg [4:0] slot;
 reg [4:0] play_slot;
 reg       rom_is_desc;
 reg signed [21:0] acc_l, acc_r;
+
+// R738: THE SAMPLE IS ACCUMULATED ONE CYCLE AFTER IT IS ACKNOWLEDGED. The
+// fetcher's line MLAB, its byte select, the level shift, the pan and the
+// 22-bit add were one cycle, 0.79 ns short of 13.33 at 75 and short at 80
+// (s759: u_p2fetch buf_q -> u_pcm2 acc_r). The acknowledge edge now takes the
+// byte with the level and pan it would have used, and the next edge adds it.
+// The sum is read only when the slot counter wraps, which needs tick to go
+// from 1 (where the fetching step left it) to 7 and one more enable -- seven
+// enables after the acknowledge at the least -- so out_l and out_r latch the
+// same sums on the same edges as before.
+reg        ac_v;
+reg  [7:0] ac_byte;
+reg  [6:0] ac_tl;
+reg  [3:0] ac_pan;
 
 integer ri;
 integer rj;
@@ -252,6 +304,8 @@ always @(posedge clk) begin
         acc_r <= 0;
         out_l <= 0;
         out_r <= 0;
+        pv_we <= 1'b0;                    // R738
+        ac_v  <= 1'b0;                    // R738
         for (ri = 0; ri < 28; ri = ri + 1) begin
             s_fmt12[ri] <= 0;
             s_active[ri] <= 0;
@@ -264,6 +318,8 @@ always @(posedge clk) begin
     end
     else begin
         desc_fwd <= 1'b0;                 // R221: the forwarded word lives one cycle
+        pv_we    <= 1'b0;                 // R738: one write per step
+        ac_v     <= 1'b0;                 // R738: one add per acknowledge
         // Register writes are on the Z80 clock domain represented by clk and
         // must not be dropped merely because the audio sample CE is low.
         if (cs && we) begin
@@ -332,21 +388,29 @@ always @(posedge clk) begin
                 end
             end
             else begin
-                reg signed [15:0] sample;
-                reg signed [15:0] attenuated;
-                reg signed [15:0] panned_l;
-                reg signed [15:0] panned_r;
-                reg [6:0] tl;
-                // MultiPCM 8-bit samples are signed two's-complement, not
-                // unsigned/offset-binary.  Byte 80h therefore means -32768.
-                sample = {rom_data, 8'h00};
-                tl = lvl_cur;
-                attenuated = sample >>> (tl >> 4);
-                panned_l = pan_sample(attenuated, pan_cur, 1'b1);
-                panned_r = pan_sample(attenuated, pan_cur, 1'b0);
-                acc_l <= acc_l + {{6{panned_l[15]}}, panned_l};
-                acc_r <= acc_r + {{6{panned_r[15]}}, panned_r};
+                // R738: taken now, added on the next edge (below).
+                ac_v    <= 1'b1;
+                ac_byte <= rom_data;
+                ac_tl   <= lvl_cur;
+                ac_pan  <= pan_cur;
             end
+        end
+
+        if (ac_v) begin                   // R738: the acknowledge one edge ago
+            reg signed [15:0] sample;
+            reg signed [15:0] attenuated;
+            reg signed [15:0] panned_l;
+            reg signed [15:0] panned_r;
+            reg [6:0] tl;
+            // MultiPCM 8-bit samples are signed two's-complement, not
+            // unsigned/offset-binary.  Byte 80h therefore means -32768.
+            sample = {ac_byte, 8'h00};
+            tl = ac_tl;
+            attenuated = sample >>> (tl >> 4);
+            panned_l = pan_sample(attenuated, ac_pan, 1'b1);
+            panned_r = pan_sample(attenuated, ac_pan, 1'b0);
+            acc_l <= acc_l + {{6{panned_l[15]}}, panned_l};
+            acc_r <= acc_r + {{6{panned_r[15]}}, panned_r};
         end
 
         sample_stb <= 1'b0;
@@ -393,15 +457,15 @@ always @(posedge clk) begin
                 if (tick == 0 && s_active[slot]) begin
                     reg [9:0] pitch;
                     reg [24:0] step;
-                    reg [37:0] next_pos;
-                    reg [33:0] loop_span;
                     pitch = {oct_cur[3:0], pit_cur};
                     step = pitch_step(oct_cur[7:4], pitch);
-                    next_pos = s_pos_cur + {13'd0, step};
-                    loop_span = ({17'd0, s_end_cur} - {18'd0, s_loop_cur}) << 16;
-                    if (next_pos >= ({21'd0, s_end_cur} << 16) && loop_span != 0)
-                        next_pos = next_pos - {4'd0, loop_span};
-                    pos_ram[slot]  <= next_pos;                     // R221
+                    // R738: the operands, for step_pos() on the next edge
+                    pv_we   <= 1'b1;
+                    pv_slot <= slot;
+                    pv_pos  <= s_pos_cur;
+                    pv_step <= step;
+                    pv_end  <= s_end_cur;
+                    pv_loop <= s_loop_cur;
                     pos_zero[slot] <= 1'b0;
                     play_slot <= slot;
                     rom_req <= 1'b1;

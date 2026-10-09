@@ -198,6 +198,37 @@ if {[get_collection_size $z80_core] == 0} {
 }
 
 
+# ---- R738: THE YM3438's OPERATOR COUNTER INTO ITS PHASE INCREMENT, TWO CYCLES.
+#
+# s783/s785/s787 at 80 MHz: u_reg|cur_ch -> u_pg|phinc_II, -0.010 .. -0.309 ns
+# (cur_ch -> the CH3 fnum mux -> jt12_pg_comb -> phinc_II). jt12 is jotego's
+# and unmodified, so this is an exception rather than a register.
+#
+# Both ends load on jt12's internal clk_en and nothing else:
+#   jt12_reg.v  up_counter  `if( clk_en ) { cur_op, cur_ch } <= ...`  (no reset)
+#   jt12_pg.v   `always @(posedge clk) if(clk_en)` keycode_II, detune_mod_II,
+#               phinc_II -- the only assignments to them.
+# clk_en is jt12_div's `clk_en <= cen & cen_int`, a NEGEDGE register sampling
+# jt12_top's cen_reg, which is m2_sound_board's ym_cen one posedge late. So
+# clk_en is high across exactly the posedge after each cen_reg pulse, or not at
+# all (cen_int is the 1/6 FM prescaler at reset, 1/3 or 1/2 if programmed;
+# jt12_div's FASTDIV, which would hold clk_en high, is defined nowhere here).
+# ym_cen is the 25-in-(3 x TICK_DEN) accumulator, TICK_DEN = SYS_MHZ: it pulses
+# when ym_acc + 25 >= 3*SYS_MHZ and leaves ym_acc <= 24, so the next cycle's
+# sum is <= 49 and cannot pulse. Never two in a row for any SYS_MHZ >= 17; at
+# 80 MHz one in 9.6 cycles, at least 9 apart. Every value cur_ch/cur_op launch
+# therefore has at least nine clk_sys cycles before these registers next load.
+set ym_from [get_registers -nowarn {*u_ym|u_jt12|u_mmr|u_reg|cur_ch* *u_ym|u_jt12|u_mmr|u_reg|cur_op*}]
+set ym_to   [get_registers -nowarn {*u_ym|u_jt12|u_pg|phinc_II* *u_ym|u_jt12|u_pg|keycode_II* *u_ym|u_jt12|u_pg|detune_mod_II*}]
+if {[get_collection_size $ym_from] == 0 || [get_collection_size $ym_to] == 0} {
+    post_message -type critical_warning \
+      "Model2.sdc: the YM3438 operator counter or phase registers did not match -- R738's exception is not applied."
+} else {
+    set_multicycle_path -setup -end 2 -from $ym_from -to $ym_to
+    set_multicycle_path -hold  -end 1 -from $ym_from -to $ym_to
+}
+
+
 # ---- THE CHARACTER-FETCH CROSSING, CONSTRAINED (third time; the story is the
 # point -- study R57/R58)
 #

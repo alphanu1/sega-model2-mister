@@ -27627,3 +27627,37 @@ fp_post_en; ST was never compared until this generator. Check against Model
 like denormals/NaNs), so most register values go unchecked -- the new PC
 compare is not subject to it. (3) Model 1's deb6642 (register-form rep reads
 opcode[5:0], not b0) is still not ported; now a one-line rd_addr_q change.
+
+**R738 -- THE SOUND BOARD'S 80 MHz PATHS: TWO RETIMES AND ONE PROVEN
+MULTICYCLE.** From R736's list and s759's margins:
+  * MultiPCM oct_ram/pit_ram read -> pos_ram's write-data register (s786,
+    -0.62, ten endpoints; u_pcm2's pos_zero leg the same path): the step's
+    operands are captured on its own edge (pv_pos, pv_step, pv_end, pv_loop,
+    pv_slot) and pos_ram is written from them on the next (step_pos(), the old
+    arithmetic moved verbatim). That slot's position is not read again until
+    the next pass over all 28 slots; pos_zero still clears on the step edge
+    and a key-on still wins.
+  * MultiPCM fetch line -> u_pcm2 acc_r (s759 0.79 at 75): the acknowledge
+    edge captures the byte, level and pan; the shift, pan and add happen on
+    the next edge. acc_l/acc_r are read only on a slot wrap, at least seven
+    enables after an acknowledge.
+  * jt12 cur_ch / cur_op -> phinc_II / keycode_II / detune_mod_II (s783/785/
+    787, -0.01..-0.31): set_multicycle_path -setup -end 2 / -hold -end 1 in
+    Model2.sdc, jt12 itself unmodified. Proof (in the SDC comment): both ends
+    load only on jt12's clk_en; clk_en is one posedge after each cen_reg
+    pulse; cen_reg is ym_cen delayed a cycle; ym_cen's accumulator (+25 a
+    cycle, modulus 3 x SYS_MHZ) leaves 24 after a pulse, so two pulses are
+    never adjacent for SYS_MHZ >= 17 (at 80: one per ~9.6 cycles, never
+    closer than 9). FASTDIV is defined nowhere. Guarded collections, as
+    R590's; the patterns checked against the s759 / s783-s787 register names.
+Audio unchanged, bit for bit: tb_m2_sndboard gained an output hash (the mix,
+YM L/R, both chips raw and rate-stage, every cycle); old vs new RTL identical
+in 15 pairs -- TICK_DEN 50 and 80, sample latency 1/6/60, cache and rate
+stage each bypassed, a 1-cycle ack, and 150 M cycles at 80 (83,720 samples a
+chip); a one-LSB mutant and a step+1 mutant change the hash. test_m2_sndboard
+PASS, hash e7c8a2faf7c44eb9 before and after. ~244 flip-flops. THIRD_PARTY.md
+records the s32 change and jt12's named-register exception. Licences: s32 and
+jt12 both GPL-3.0. Noted, not fixed: fx68k Ir -> nanoAddr (0.507 at 75) has
+not appeared at 80 yet; with PCM_CACHE=0 at TICK_DEN 80 / latency 6 the
+bench's cache check reports 33 wrong bytes on old and new RTL alike (the
+shipping PCM_CACHE=1 is clean).
