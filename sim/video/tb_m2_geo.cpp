@@ -44,6 +44,7 @@ static bool auto_end = true;
 // R638: a walker served from `mem` itself, one read every rd_slow cycles, so a
 // pushed word that drains ahead of the walk is one the walk really reads.
 static int rd_slow = 0, rd_cnt = 0;
+static int wr_slow = 0, wr_cnt = 0;   // R752
 static uint16_t rdm(uint32_t a){ auto it = mem.find(a); return it == mem.end() ? 0xFFFF : it->second; }
 static void tick() {
   if (rd_slow) { d->rd_ack = 0;
@@ -51,10 +52,11 @@ static void tick() {
       uint32_t a = BASE + (uint32_t(d->rd_addr) << 1);
       d->rd_data = uint32_t(rdm(a)) | (uint32_t(rdm(a + 1)) << 16); d->rd_ack = 1; } }
   if (auto_end) { d->rd_ack = 0; if (d->rd_req) { d->rd_data = 0x07800f0fu; d->rd_ack = 1; } }
-  // the shared write port: ack a request the cycle after it is seen
+  // the shared write port: ack a request the cycle after it is seen, or
+  // wr_slow cycles after (R752: a port busy with other owners)
   static bool pend = false; static uint32_t pa; static uint16_t pd;
   d->sd_wr_ack = 0;
-  if (pend) { mem[pa] = pd; d->sd_wr_ack = 1; pend = false;
+  if (pend && ++wr_cnt >= wr_slow) { wr_cnt = 0; mem[pa] = pd; d->sd_wr_ack = 1; pend = false;
               if (trace_wr) std::printf("    WR %08x <= %04x\n", pa, pd); }
   else if (d->sd_wr_req) { pa = d->sd_wr_addr; pd = d->sd_wr_din; pend = true; }
   d->clk = 0; d->eval(); d->clk = 1; d->eval();
@@ -763,6 +765,45 @@ int main(int argc,char**argv){
     ck("R747 the three pushed words landed", landed() ? 1u : 0u, 1u);
     ck("R747 push_busy never low with a word queued", uint32_t(holes), 0u);
     ++checks; if (!seen_busy) { std::printf("  FAIL R747 push_busy never rose\n"); ++fails; }
+  }
+
+  // ---- R752: A FLIP'S WALK WAITS FOR EVERY WORD PUSHED BEFORE THE FLIP.
+  // The board: after a flip the game pushes its next list into the other
+  // buffer at once, so the queue is never idle and the walk started on
+  // drain_wait's 1,023-cycle timeout with its own list's tail still queued --
+  // held in its window, the walk read the previous frame's words there. Here
+  // list A (40 nops and an end) is pushed over an old list of ends through a
+  // slow write port (~2,500 cycles to land), flipped, and list B is pushed
+  // into the other buffer without pause. The walk must read all 41 opcodes,
+  // and must start before B has finished landing (B does not hold it).
+  {
+    d->rst_n = 0; for (int i = 0; i < 4; i++) tick(); d->rst_n = 1; idle(2);
+    d->trig_mode = 0; d->skip = 0; d->eng_busy = 0;
+    mem.clear();
+    auto put = [&](uint32_t dw, uint32_t v){ uint32_t a = BASE + (dw << 1);
+                                             mem[a] = v & 0xFFFF; mem[a + 1] = v >> 16; };
+    const uint32_t A = 0x200, N = 40, B = 0x4200, END = 0x0fu << 23;
+    for (uint32_t i = 0; i <= N; i++) put(A + i, END);      // the old list: ends
+    rd_slow = 1; wr_slow = 30;
+    w(1, A * 4);
+    for (uint32_t i = 0; i < N; i++) w(3, 0);               // nops
+    w(3, END);
+    w(2, A * 4);                                            // flip A, its tail queued
+    w(1, B * 4);
+    unsigned b_pushed = 0, b_at_walk = 0;
+    const unsigned f0 = d->dbg_walk_frames;
+    bool walked = false;
+    for (int k = 0; k < 600 && !walked; ++k) {
+      w(3, 0); ++b_pushed;                                  // the next list, no pause
+      if (d->dbg_walk_frames != f0) { walked = true; b_at_walk = b_pushed; }
+    }
+    for (int i = 0; i < 200000 && d->dbg_walk_frames == f0; i++) tick();
+    std::printf("test: R752 walk of A: %u ops; %u words of B pushed when it ended\n",
+                d->dbg_walk_ops, b_at_walk);
+    ck("R752 walk A ran", d->dbg_walk_frames != f0 ? 1u : 0u, 1u);
+    ck("R752 walk A read its whole list", d->dbg_walk_ops, N + 1);
+    ck("R752 B's words did not hold the walk", walked ? 1u : 0u, 1u);
+    rd_slow = 0; wr_slow = 0;
   }
 
   std::printf("m2_geo: checks=%d fails=%d\n", checks, fails);

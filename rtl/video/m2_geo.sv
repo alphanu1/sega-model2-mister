@@ -461,6 +461,19 @@ module m2_geo #(
     end
   end
 
+  logic [15:0] push_seq, land_seq, flip_seq;   // R752: flip_seq is the walk's
+  // R752: words pushed, and pushed words landed (the queue's own, not the
+  // walk's polygon-data writes). The walk compares the second with the first
+  // as it stood at the flip.
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      push_seq <= 16'd0; land_seq <= 16'd0;
+    end else begin
+      if (push_fire) push_seq <= push_seq + 16'd1;
+      if ((dst == D_NEXT) && sd_wr_ack && !pd_active) land_seq <= land_seq + 16'd1;
+    end
+  end
+
   // ======================================================================
   // THE DISPLAY-LIST WALK
   //
@@ -613,7 +626,24 @@ module m2_geo #(
   // domain, so a single flop cannot miss it.
   logic        setrp_q;
   logic [9:0]  drain_wait;
-  wire         q_idle   = !q_valid && (dst == D_IDLE);
+  // R752: q_held, as R747 made push_busy -- q_valid is 0 between words while
+  // the M10K queue drains.
+  wire         q_idle   = !q_held && (dst == D_IDLE);
+  // R752: A FLIP'S WALK WAITS FOR ITS OWN WORDS, AND ONLY THOSE. The walk
+  // started on q_idle or after drain_wait's 1,023 cycles. But after a flip the
+  // game at once pushes its next list into the other buffer, so the queue is
+  // rarely idle and the walk started on the timeout -- with this list's tail
+  // possibly still queued. Those words then sat in the walk's own hold window
+  // (R638) for the whole walk, which read the previous frame's words there:
+  // a desync, decoded as a nop or two, and now and then as a phantom
+  // texture_parameters that zeroes the light table for good (board, s845:
+  // the genuine 0x06 at boot, a second one at 3.8 minutes, black from that
+  // frame). Every word pushed before the flip is counted at the flip; the
+  // walk starts when that many have landed. Pushes after it are the next
+  // list's and do not hold it.
+  wire  [15:0] land_less   = land_seq - flip_seq;   // wraps; the queue is 128 deep
+  wire         flip_landed = !land_less[15];
+  wire         _unused_r752 = &{1'b0, land_less[14:0]};   // only the sign is asked
   wire         no_flips = fs_since_flip[2];
   // The reference says the 0x803008 write IS "the list is ready" -- Daytona
   // writes it every second frame right after the write pointer, always to
@@ -633,7 +663,8 @@ module m2_geo #(
   wire         trig_sel    = (trig_mode == 2'd0) ? trig_flip   :
                              (trig_mode == 2'd1) ? trig_vblank :
                              (trig_mode == 2'd2) ? trig_after  : trig_setwp;
-  wire         walk_go  = trig_sel && (q_idle || (&drain_wait));
+  wire         walk_go  = trig_sel && (flip_pend ? flip_landed               // R752
+                                                 : (q_idle || (&drain_wait)));
   logic [31:0] pd_addr;                  // geo_polygon_data's destination
   logic        pd_tex;                   // R222: this transfer is texture data
   logic [15:0] pd_n, pd_i;               // dwords to copy, and the one in hand
@@ -710,6 +741,7 @@ module m2_geo #(
       w_cap <= 3'd0; w_ci <= 4'd0; obj_valid <= 1'b0; eng_seen <= 1'b0;
       frame_pend <= 1'b0; drain_wait <= 10'd0;
       flip_pend <= 1'b0; fs_since_flip <= 3'd7; setrp_q <= 1'b0;
+      flip_seq <= 16'd0;   // R752
       dbg_walk_flip <= 16'd0; dbg_walk_fallback <= 16'd0;
       setwp_q <= 1'b0; wp_pend <= 1'b0; flip_seen <= 1'b0; skip_cnt <= 2'd0;   // R699
       nd_pend <= 1'b0; nodraw <= 1'b0;                                          // R711
@@ -748,6 +780,7 @@ module m2_geo #(
         fs_since_flip <= 3'd0;
         // R699: only every (skip+1)th flip DRAWS; R711: every flip walks
         flip_pend <= 1'b1; flip_seen <= 1'b1; drain_wait <= 10'd0;
+        flip_seq  <= push_seq;   // R752: every word pushed before this flip
         if (skip_cnt >= ((skip == 2'd3) ? 2'd2 : skip)) begin
           skip_cnt <= 2'd0; nd_pend <= 1'b0;
         end else begin

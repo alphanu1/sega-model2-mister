@@ -27897,3 +27897,48 @@ happens at 75 / 37.5 as well (R748), the bisect does not need 80: the same
 RTL at 75 / 37.5 is building, s840-s842. The read-ahead-on measurement at
 80 / 40 is still owed, and has to give up something other than the
 read-ahead to fit.
+
+**R752 -- THE BLACK 3D IS A WALK THAT STARTS OVER ITS OWN LIST'S TAIL; R697,
+R747 AND R749 WERE THE WRONG MECHANISM.** Two board results first. s841
+(473437f = R747 + R749, FAST_ACK 0, trap telemetry, 75/37.5; clk_sys +0.362,
+HDMI -0.661; RBF d45cde90431d40a73995e24797779c25) went black 5 minutes into
+attract (screenshot: every 3D pixel black, 2D intact) -- so R749 did not fix
+it -- and ran 50 minutes without a lock before it was replaced (previous
+locks: 4, 29, 43, ~45 min). s845 (fa47c80 + FAST_ACK 0 + a black-3D record
+set, 75/37.5; clk_sys +0.409, HDMI -0.300; RBF 7cdca63fefff4d51de8c876601de50b6),
+UART from power-on, 660 s: the genuine texture_parameters (0x06) at vblank
+98 writes all 32 entries; at vblank 13,052 (3.8 min) a SECOND 0x06 runs and
+the table reads 0/32 non-zero from that frame, luminance 0 on every polygon;
+a third at 32,146. The reference issues 0x06 at boot only (R263), so each
+later one is a phantom -- R333's mechanism, as the study had it. But the
+phantom's frame shows ONE nop, not R254's 280-nop run of a zero count, and
+170 records show 1-3 nops (a well-formed list holds none; one frame had 346).
+The walk is slipping a word or two, often, and the count race was never it.
+s827's capture is re-read the same way: geo_tp_n is a total since reset, and
+its "2" was the boot command plus the phantom.
+
+The slip: a walk started on walk_go = trig && (q_idle || &drain_wait).
+After a flip the game at once pushes its next list into the other buffer,
+so the queue is rarely idle and the walk started on drain_wait's 1,023
+cycles (14 us) -- with this list's tail possibly still queued, or on
+q_idle's q_valid, which has R747's hole between words. Those words then lie
+in the walk's own hold window (R638) and are held for the whole walk, which
+reads the PREVIOUS frame's words there. R638 recorded exactly this ("started
+at once over its own list's tail still queued -- and then held it") and the
+grace counter only made it rarer.
+  * m2_geo: words pushed (push_seq) and queue words landed (land_seq) are
+    counted; a flip records push_seq; a flip's walk starts when land_seq has
+    reached it. Words pushed after the flip are the next list's and do not
+    hold it. q_idle uses q_held (R747) for the vblank fallback, which keeps
+    its timeout.
+  * tb_m2_geo: list A (40 nops + end) pushed over an old list of ends through
+    a write port acknowledging every 30 cycles, flipped with its tail queued,
+    list B pushed without pause: the walk reads all 41 opcodes and starts
+    while B is still being pushed; 124 checks, 0 fail. With the old walk_go
+    planted the walk reads 19 -- the board's slip. Write latency 3 and 300:
+    41 both times.
+  * tb_m2_geodiff w1000 / w4000 / w7900: identical to HEAD, cycle counts too
+    (1,245,923 / 572,707 / 554,319). tb_m2_boot, 30 M instructions: 340 walks,
+    2,042 opcodes, identical. lint_top clean; Quartus parse clean.
+Not established: that nothing else slips the walk. The measure is the nop
+count and the 0x06 count over a long soak -- zero and one.
