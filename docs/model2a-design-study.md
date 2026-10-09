@@ -27462,3 +27462,28 @@ m2_tgp's fifo_ack and the S_SRC wait's next state); state.S_DST -> u_seq|pc
 brul_reg_q read in S_ALU would cost no cycle, but the lockstep never emits
 brul). And Model 1's deb6642 (a register-sourced `rep` reads b0; Virtua
 Fighter froze on it) is not ported.
+
+**R733 -- R728'S CODE CACHE HANGS THE BOARD AT BOOT; THE REST OF STAGE 2 DOES
+NOT.** The night's board results (Ben asleep; the game in attract):
+  * s761 = s759 + telemetry, attract: 10.41 CPI, frame-sync idle 47.7%, the
+    game 56.7 fps (a new frame every 1.01 vblanks) -- attract is not CPU-bound,
+    so only CPI (telemetry) or a race can show a CPU gain.
+  * s764 = 5feba69 (R728, four-phase bridge): every core clock closes (clk_sys
+    +0.329, HDMI -0.161), cc_mem in M10K (512x137, 7 blocks), data cache 1024
+    lines. On the board it STOPS ON THE BOOT SETTINGS SCREEN (advertise sound
+    / country / cabinet / difficulty / credit) for 6+ minutes: list flips 28.8
+    a second at exactly 2 vblanks, no 3D painted. Two screenshots minutes apart
+    identical.
+  * Control, the same session: s759 loaded again reaches attract with 3D
+    inside 45 s. The board and its NVRAM are fine.
+  * s775 = 5feba69 with CC_EN 0 and the data cache still halved (1024 lines):
+    attract with 3D at 60 s. So the halving is innocent; the code cache is not.
+  * Simulation does NOT reproduce it (yet): tb_m2_boot, 40 M instructions
+    (562 vblanks), HEAD's bridge with the code cache on and off -- identical IP
+    profiles (0x116xx 50%, 0x12xx 18%), no 3D objects in either, and s759's
+    bridge the same at 601 vblanks. That run never leaves the settings screen
+    in any version, so it cannot discriminate; 150 M-instruction runs are
+    under way. tb_m2_boot also fits no telemetry build: stage 2 + M2_DEBUG_LITE
+    needs 4,192-4,201 LABs of 4,191 (stage 3 + it, 4,195-4,198).
+Stage 3 and 4 (R729, R730) are being built WITHOUT the code cache (CC_EN 0,
+data cache back to 16 KB) so they can be judged on the board on their own.
