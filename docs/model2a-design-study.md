@@ -27765,3 +27765,18 @@ always been seed-dependent; the board has run builds at -0.678 (s741) and
 (SYS_MHZ 80; pll outclk1 80, outclk3 40) is committed with this entry, on top
 of R743; s810/s811 are 1de95f2 + exactly this change. s813-s815 (a3f055c +
 it) are building for a seed that closes HDMI as well.
+
+**R745 -- s814: 80 / 40 CLOSES EVERY CLOCK, HDMI INCLUDED; THE GAME IS NO
+FASTER.** a3f055c (R743) + R744's clocks, s813-s815: s814 clk_sys +0.177,
+clk_mem +0.061, clk_i960 +2.023, HDMI +0.301, holds >= +0.224; 41,121 ALM;
+RBF md5 8d096e92e0225eaebb44e06a5d3b60e3. (s813 HDMI -0.908; s815 Quartus
+STA internal error.) s810 (clk_sys only) on the board, Ben, 2026-10-09: "seems
+like it's the same speed". tools/m2-fps.py, 90 s of a race, Single buffered:
+15.9 pictures a second, 4 vblanks 72% / 3 14% / 2 11% -- s759 measured 4
+vblanks 74%. Neither 80/40 (+6.7%) nor R729/R730 (-15% CPI on boot code)
+moved the frame rate. Expected from R720/R722 if a race frame needs ~1.2
+vblanks of CPU at 37.5: ~20% less work leaves it at ~1.0, and a frame over
+one vblank by any margin still takes two. Not yet measured how close it now
+is, or what the time is: the telemetry no longer fits (R733), so a
+measurement-only build (ca54485 + M2_DEBUG_LITE, the engine read-ahead tied
+to bypass for room) is building, s816-s818.
