@@ -954,17 +954,33 @@ module m2_raster_fill #(
     if (M2COV) begin
       // R658: sorted per row as MAME does, [round(lo), round(hi)) inclusive-ended
       // rounding is monotonic, so sorting the rounded values is the same thing
+      // R739: AND THE CLAMPS BESIDE THE SORT, NOT AFTER IT. In series --
+      // compare, select, -1, clamp, compare -- this was the 80 MHz path into
+      // stage 1 and the DSP's enable (s785: xbh -> Mult1 ENA_DFF0 -0.782, ->
+      // s1_col / s1_cr / s1_cl). Each clamp is monotonic, so clamping both
+      // candidates and selecting with the sort is the same value, and so is
+      // the emptiness test made on each pairing: two levels shorter.
       automatic logic signed [15:0] rxa = xah[31:16];
       automatic logic signed [15:0] rxb = xbh[31:16];
-      emit_xl = (rxa < rxb) ? rxa : rxb;
-      emit_xr = ((rxa < rxb) ? rxb : rxa) - 16'sd1;
+      automatic logic               sab = (rxa < rxb);
+      automatic logic signed [15:0] ra1 = rxa - 16'sd1;
+      automatic logic signed [15:0] rb1 = rxb - 16'sd1;
+      automatic logic signed [15:0] cla = (rxa < view_x1) ? view_x1 : rxa;
+      automatic logic signed [15:0] clb = (rxb < view_x1) ? view_x1 : rxb;
+      automatic logic signed [15:0] cra = (ra1 > view_x2) ? view_x2 : ra1;
+      automatic logic signed [15:0] crb = (rb1 > view_x2) ? view_x2 : rb1;
+      emit_xl = sab ? rxa : rxb;
+      emit_xr = sab ? rb1 : ra1;
+      emit_cl = sab ? cla : clb;
+      emit_cr = sab ? crb : cra;
+      emit_ok = sab ? (cla <= crb) : (clb <= cra);
     end else begin
       emit_xl = 16'(emit_l >>> 16);
       emit_xr = 16'(emit_r >>> 16);
+      emit_cl = (emit_xl < view_x1) ? view_x1 : emit_xl;
+      emit_cr = (emit_xr > view_x2) ? view_x2 : emit_xr;
+      emit_ok = (emit_cl <= emit_cr);
     end
-    emit_cl = (emit_xl < view_x1) ? view_x1 : emit_xl;
-    emit_cr = (emit_xr > view_x2) ? view_x2 : emit_xr;
-    emit_ok = (emit_cl <= emit_cr);
   end
 
   // ------------------------------------------------------------------- FSM

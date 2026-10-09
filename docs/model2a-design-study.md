@@ -27558,3 +27558,36 @@ placement picks which ones fail. 80 / 40 is several more rounds, and the
 deep ones are shared or inherited: fp_add (latency hard-coded in the pool and
 the TGP), the DSP-absorbed stage (needs a keep or a different structure), the
 MultiPCM (third-party). Stopped here for the night; 75 / 37.5 stays.
+
+**R739 -- 80 / 40, ROUND THREE (ours): SEVEN MORE PATHS, NONE ADDING A CYCLE
+BUT ONE.** Ben, 2026-10-09: s779 "still feels no different" -- the clock.
+From R735/R736's lists:
+  * fp_add (geometry pool AND TGP ALU; s785: add_a_q / opr_add_a -> sA_small
+    -0.50 / -0.51): the align shift no longer waits for the 24-bit
+    significand compare. The shift amount needs only the exponents (0 when
+    they are equal), so the shifter is fed by an exponent-only compare, both
+    differences are formed in parallel, and the significand compare decides
+    -- with a 2:1 mux after the shifter -- only the equal-exponent case.
+    Latency unchanged. tb_fp_add 1,968,564 / 0; old vs new on 20,000,000
+    vectors (5,000,000 with equal exponents, plus near-equal and denormal
+    mixes): 0 differences.
+  * fill emit (s785: xbh -> Mult ENA / s1_col / s1_cr / s1_cl -0.78): with
+    M2COV both candidates are clamped beside the sort and selected after it;
+    the emptiness test is made on each pairing. Same values (the clamps are
+    monotonic).
+  * geometry UV wrap (s785: wv -> voff_r -0.695): the four-way minimum in two
+    rounds a stage apart; c_age counts to 4 -- ONE CYCLE MORE PER QUAD HANDED
+    TO THE STORE. geodiff on w1000 / w4000 / w7900: the quad lists (1,181 /
+    259 / 40) identical to before.
+  * m2_geo_xform (s785: comp -> pool mul_a_q -0.548): m_sel kept in a flop
+    beside term/comp, not formed as term*3+comp each cycle. test_m2_geo_xform
+    7,813 / 0; with the increment planted wrong, 7,810 fails.
+  * m2_raster_div (s787: n_mag -> rq -0.206, 32): q_fast - 1 formed in S_COR.
+  * span_tex (s787: k_p -> mq_f1 -0.280): the mask query's step, span end and
+    row selected from the slot one stage early (sh_p[PIPE_D-4]), moving with
+    the pipe (R490).
+  * quad store (s786: qsy -> a_lo -0.273): the min/max pairs at stage a, the
+    second round with the clamp at the write.
+The four saved frames identical in pixels, fetches and cycles to before R735;
+test_m2_raster3d 8/8, test_m2_geometry / geo / geo_clip / geo_engine pass;
+lint_top and every Quartus parse clean.

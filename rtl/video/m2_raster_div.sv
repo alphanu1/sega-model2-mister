@@ -135,6 +135,7 @@ module m2_raster_div #(
   wire [42:0] q_times_d = {11'd0, q_fast} * {32'd0, d_mag[10:0]};
   logic [42:0] qd_q;       // R585: q_times_d, registered
   logic [31:0] q_fast;
+  logic [31:0] q_fm1;      // R739: q_fast - 1, formed in S_COR beside the product
   logic [2:0]  state;
   logic [31:0] n_mag;    // dividend magnitude, shifted out MSB first
   logic [31:0] d_mag;    // divisor magnitude
@@ -164,6 +165,7 @@ module m2_raster_div #(
       state     <= S_IDLE;
       rq        <= 32'd0;
       q_fast    <= 32'd0;
+      q_fm1     <= 32'd0;
       n_mag     <= 32'd0;
       d_mag     <= 32'd0;
       rem       <= 32'd0;
@@ -216,10 +218,11 @@ module m2_raster_div #(
         // 43-bit compare and a decrement-select in one cycle).
         S_COR: begin
           qd_q  <= q_times_d;
+          q_fm1 <= q_fast - 32'd1;   // R739: off the compare's path (s787 at 80 MHz: n_mag -> rq -0.206)
           state <= S_COR2;
         end
         S_COR2: begin
-          rq    <= (qd_q > {11'd0, n_mag}) ? (q_fast - 32'd1) : q_fast;
+          rq    <= (qd_q > {11'd0, n_mag}) ? q_fm1 : q_fast;
           state <= S_FIN;
         end
 

@@ -391,19 +391,25 @@ module m2_quad_store #(
   logic                a_moire;
   logic [IW-1:0]       a_slot;
   logic signed [15:0] a_lo, a_hi;   // R731: band_of() at the write
+  // R739: and only the first round of the min/max tree here -- the pairs --
+  // the second at the write with the clamp (s786 at 80 MHz: qsy -> a_lo
+  // -0.273, 7 endpoints). a_lo/a_hi above are now the write side's wires.
+  logic signed [15:0] a_lo01, a_lo23, a_hi01, a_hi23;
+  assign a_lo = smin(a_lo01, a_lo23);
+  assign a_hi = smax(a_hi01, a_hi23);
   logic [CW-1:0]       a_col;
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       a_v <= 1'b0; a_room <= 1'b0; a_tiny <= 1'b0; a_bank <= 1'b0; a_moire <= 1'b0;
-      a_slot <= '0; a_lo <= '0; a_hi <= '0; a_col <= '0;
+      a_slot <= '0; a_lo01 <= '0; a_lo23 <= '0; a_hi01 <= '0; a_hi23 <= '0; a_col <= '0;
     end else begin
       a_v     <= in_valid && !clear;
       a_room  <= has_room;
       a_tiny  <= is_tiny;
       a_bank  <= wbank;
       a_slot  <= wcount[IW-1:0];
-      a_lo    <= smin(smin(in_y0, in_y1), smin(in_y2, in_y3));   // R579: balanced, as tiny_quad
-      a_hi    <= smax(smax(in_y0, in_y1), smax(in_y2, in_y3));
+      a_lo01  <= smin(in_y0, in_y1);  a_lo23 <= smin(in_y2, in_y3);   // R579 balanced; R739 split
+      a_hi01  <= smax(in_y0, in_y1);  a_hi23 <= smax(in_y2, in_y3);
       a_moire <= in_moire;
       a_col   <= c565(in_col);
     end

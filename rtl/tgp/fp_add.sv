@@ -85,16 +85,28 @@ module fp_add #(
 
   // -------------------------------------------------- order by magnitude
 
-  logic a_ge;
-  assign a_ge = (a_e_eff > b_e_eff) ||
-                ((a_e_eff == b_e_eff) && (a_sig >= b_sig));
+  // R739: THE SHIFT DOES NOT WAIT FOR THE SIGNIFICAND COMPARE. a_ge -- an
+  // exponent compare AND a 24-bit significand compare -- selected the operand
+  // to shift and the subtraction that made the shift amount, so both sat in
+  // front of the 27-bit barrel shifter (s785 at 80 MHz: m2_fp_pool add_a_q ->
+  // sA_small -0.499, the TGP ALU's opr_add_a -> sA_small -0.514). But the
+  // amount depends on the exponents alone, and when they are equal it is 0:
+  // so the shifter is fed by the exponent compare (e_gt), both differences
+  // are formed in parallel, the significand compare runs beside the shifter,
+  // and the one case it decides -- equal exponents, a >= b -- swaps the
+  // unshifted operands with a 2:1 mux after it. Every value below is the
+  // same as before, bit for bit.
+  logic e_gt, e_eq, sig_ge, a_ge;
+  assign e_gt   = (a_e_eff >  b_e_eff);
+  assign e_eq   = (a_e_eff == b_e_eff);
+  assign sig_ge = (a_sig >= b_sig);
+  assign a_ge   = e_gt || (e_eq && sig_ge);
 
-  logic [23:0] big_sig, small_sig;
+  logic [23:0] big_sig;
   logic [7:0]  big_exp;
   logic        big_sign, small_sign;
 
   assign big_sig    = a_ge ? a_sig   : b_sig;
-  assign small_sig  = a_ge ? b_sig   : a_sig;
   assign big_exp    = a_ge ? a_e_eff : b_e_eff;
   assign big_sign   = a_ge ? a_sign  : b_sign;
   assign small_sign = a_ge ? b_sign  : a_sign;
@@ -103,8 +115,11 @@ module fp_add #(
   logic [4:0] shamt;
   logic       shift_saturated;
 
-  assign exp_diff_full   = {1'b0, a_ge ? a_e_eff : b_e_eff}
-                         - {1'b0, a_ge ? b_e_eff : a_e_eff};
+  // R739: e_gt, not a_ge -- with equal exponents both differences are 0
+  logic [8:0] d_ab, d_ba;
+  assign d_ab            = {1'b0, a_e_eff} - {1'b0, b_e_eff};
+  assign d_ba            = {1'b0, b_e_eff} - {1'b0, a_e_eff};
+  assign exp_diff_full   = e_gt ? d_ab : d_ba;
   assign shift_saturated = (exp_diff_full > 9'd26);
   assign shamt           = shift_saturated ? 5'd26 : exp_diff_full[4:0];
 
@@ -112,8 +127,13 @@ module fp_add #(
   logic [26:0] small_ext, small_aligned;
   logic        sticky_lost;
 
-  assign small_ext     = {small_sig, 3'b000};
-  assign small_aligned = small_ext >> shamt;
+  // R739: the shifted operand is the one with the smaller exponent (b when
+  // they are equal); with equal exponents shamt is 0, so the significand
+  // compare only chooses between the two unshifted operands, after the shift.
+  logic [23:0] sh_sig;
+  assign sh_sig        = e_gt ? b_sig : a_sig;
+  assign small_ext     = {sh_sig, 3'b000};
+  assign small_aligned = (e_eq && sig_ge) ? {b_sig, 3'b000} : (small_ext >> shamt);
   // R512: THE STICKY MASK IS A THERMOMETER, NOT A SHIFT AND A SUBTRACT.
   //
   //   m2_geo_xform|sum_bank -> m2_fp_pool|fp_add|sA_sticky    -0.515 on clk_sys

@@ -164,7 +164,11 @@ module m2_geo_xform #(
   // every site that touches `issue`.
   logic [1:0] term;      // which of x, y, z      == issue % 3
   logic [1:0] comp;      // which output component == issue / 3
-  wire [3:0]  m_sel = 4'({2'd0, term} * 4'd3 + {2'd0, comp});
+  // R739: KEPT IN A FLOP BESIDE term AND comp, not formed from them every
+  // cycle -- term*3+comp in front of the 12-way matrix mux and the pool's
+  // operand mux was 80 MHz's m2_geo_xform comp -> m2_fp_pool mul_a_q (s785,
+  // -0.548). The same invariant, m_sel == term*3 + comp, at every site.
+  logic [3:0] m_sel;
 
   assign mul_a = mat[m_sel];
   assign mul_b = (term == 2'd0) ? px : (term == 2'd1) ? py : pz;
@@ -249,6 +253,7 @@ module m2_geo_xform #(
       mst <= M_IDLE; ast <= A_IDLE;
       issue <= '0; got <= '0; ac <= '0; a_got <= '0; a_total <= '0;
       term <= '0; comp <= '0; a_round <= '0; a_comp <= '0;   // R408
+      m_sel <= 4'd0;                                         // R739
       fill_bank <= 1'b0; sum_bank <= 1'b0; bank_full <= 1'b0;
       bank_trans <= 1'b0; atrans <= 1'b0;
       px <= '0; py <= '0; pz <= '0; ptrans <= 1'b0;
@@ -277,6 +282,7 @@ module m2_geo_xform #(
             px <= in_x; py <= in_y; pz <= in_z; ptrans <= in_translate;
             issue <= '0; got <= '0;
             term  <= '0; comp <= '0;                              // R408
+            m_sel <= 4'd0;                                        // R739
             mst <= M_ISSUE;
           end
         end
@@ -291,8 +297,8 @@ module m2_geo_xform #(
               issue <= issue + 4'd1;
               // R408: term wraps 0,1,2 and carries into comp -- issue % 3 and
               // issue / 3 without the divider.
-              if (term == 2'd2) begin term <= 2'd0; comp <= comp + 2'd1; end
-              else                    term <= term + 2'd1;
+              if (term == 2'd2) begin term <= 2'd0; comp <= comp + 2'd1; m_sel <= 4'({2'd0, comp} + 4'd1); end
+              else                    begin term <= term + 2'd1; m_sel <= m_sel + 4'd3; end   // R739
             end
           end
         end

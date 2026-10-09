@@ -484,15 +484,21 @@ module m2_span_tex #(
   // signed variables, no casts (R662).
   localparam logic signed [15:0] QXMAX = 16'(SCR_W - 1);
   localparam logic signed [15:0] QBH   = 16'(BAND_H);
+  // R739: the group's span parameters, selected from its slot one stage
+  // EARLIER (sh_p[PIPE_D-4]) and registered as it moves to PIPE_D-3, so the
+  // query no longer starts with the slot mux (s787 at 80 MHz: k_p -> mq_f1
+  // -0.280, -> mq_f0). The same values: a slot is not reloaded while a group
+  // of its span is in flight (R490), and these move only with the pipe.
+  logic [1:0]         q_k;
+  logic signed [15:0] q_x1, q_y;
   always_comb begin
-    automatic logic               qp   = sh_p[PIPE_D-3];
     /* verilator lint_off UNUSEDSIGNAL */
-    automatic logic signed [31:0] qs32 = stp(k_p[qp]);   // a step of 1-8
+    automatic logic signed [31:0] qs32 = stp(q_k);   // a step of 1-8
     /* verilator lint_on UNUSEDSIGNAL */
     automatic logic signed [15:0] qs   = qs32[15:0];
     automatic logic signed [15:0] qx   = sh_x[PIPE_D-3][15:0];
-    automatic logic signed [15:0] qx1  = x1_p[qp][15:0];
-    automatic logic signed [15:0] qy   = y_p[qp][15:0];
+    automatic logic signed [15:0] qx1  = q_x1;
+    automatic logic signed [15:0] qy   = q_y;
     automatic logic signed [15:0] qe   = qx + qs - 16'sd1;   // R650
     automatic logic signed [15:0] qxe  = (qe > qx1) ? qx1 : qe;
     automatic logic signed [15:0] qrow = qy - mk_band_y0;
@@ -662,6 +668,7 @@ module m2_span_tex #(
       u_h1 <= '0; v_h1 <= '0; u_h2 <= '0; v_h2 <= '0; u_h3 <= '0; v_h3 <= '0;
       u_h4 <= '0; v_h4 <= '0; u_h5 <= '0; v_h5 <= '0; sh_m <= 1'b0;   // R607
       mq_f1 <= 1'b0; mq_f0 <= 1'b1; mq_wi <= '0; mq_need <= '0;   // R631
+      q_k <= 2'd0; q_x1 <= '0; q_y <= '0;                           // R739
       iss_u <= '0; iss_v <= '0; iss_ooz <= '0; iss_x <= '0; iss_run <= 1'b0; iss_step <= 4'd1;
       for (int k = 0; k < PIPE_D; k++) begin
         sh_v[k] <= 1'b0; sh_x[k] <= '0; sh_last[k] <= 1'b0; sh_p[k] <= 1'b0;
@@ -721,6 +728,9 @@ module m2_span_tex #(
         iss_x   <= iss_x   + 32'(iss_step);
         if (iss_last) iss_run <= 1'b0;
       end
+      q_k  <= k_p [sh_p[PIPE_D-4]];           // R739: for PIPE_D-3, a stage early
+      q_x1 <= x1_p[sh_p[PIPE_D-4]][15:0];
+      q_y  <= y_p [sh_p[PIPE_D-4]][15:0];
       sh_v[0]    <= iss_run;
       sh_x[0]    <= iss_x;
       sh_last[0] <= iss_run && iss_last;
