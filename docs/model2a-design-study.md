@@ -27688,3 +27688,8 @@ symin -0.367 (R735's final round), geo_view ib -> a_top -0.395. Fixed here:
 The four frames identical in pixels (draw +0.0..+0.25% cycles); geodiff's
 three lists identical; test_m2_geo_xform / clip / engine / geometry / geo /
 geo_view and test_m2_raster3d pass; lint_top and Quartus parses clean.
+R740, continued -- m2_geo_view ib -> a_top (s788, -0.395): i2f split into
+sign/magnitude (stage 1b) and encode/shift (stage 2); left and bottom stored
+negated in stage 1 so no negate precedes them. A window change reaches the
+projection one cycle later. test_m2_geo_view 37/0, test_m2_geo 118/0, geodiff
+w1000 / w4000 / w7900 quad lists identical.
