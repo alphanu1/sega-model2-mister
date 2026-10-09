@@ -234,12 +234,12 @@ module m2_geometry (
   // is told separately whether IT was granted. Priority goes downstream
   // because draining the clipper is what frees the pipeline; the other way
   // round can wedge.
-  wire pj_valid   = (w_pj_valid || k_pj_valid) && !pj_busy;
+  wire pj_valid   = (w_pj_valid || k_pj_valid) && !pj_full;   // R758
   wire [31:0] pj_x = k_pj_valid ? k_pj_x : w_pj_x;
   wire [31:0] pj_y = k_pj_valid ? k_pj_y : w_pj_y;
   wire [31:0] pj_z = k_pj_valid ? k_pj_z : w_pj_z;
-  wire w_granted  = pj_ready && w_pj_valid && !k_pj_valid && !pj_busy;
-  wire k_granted  = pj_ready && k_pj_valid && !pj_busy;
+  wire w_granted  = pj_ready && w_pj_valid && !k_pj_valid && !pj_full;   // R758
+  wire k_granted  = pj_ready && k_pj_valid && !pj_full;
 
   // ONE OPERATION IN FLIGHT AT A TIME, BECAUSE THERE IS ONLY ONE OWNER BIT.
   //
@@ -261,21 +261,36 @@ module m2_geometry (
   // pj_busy serialises the port: no new request is presented until the previous
   // result has been delivered. m2_geo_project's reciprocal is 29 cycles and does
   // not pipeline anyway, so this costs nothing that was not already being paid.
-  logic pj_owner;                          // 0 = quad projector, 1 = clipper
-  logic pj_busy;                           // a projection is in flight
+  // R758: AN OWNER PER PROJECTION IN FLIGHT, NOT ONE OWNER BIT. pj_busy
+  // allowed one projection at a time, so the quad projector's four vertices
+  // went through one after another at the projector's full latency (~65
+  // cycles each) although m2_geo_project overlaps two -- the next point's
+  // reciprocal during this one's scaling, 33 cycles a point streamed. The
+  // quad projector held the engine in E_EMIT 10% and sat in Q_WAIT 64% of the
+  // heaviest list. Results come back in grant order, so a queue of owners
+  // routes each to its requester; R217's wrong-delivery fault cannot recur.
+  logic [3:0] pj_own;                      // owners in flight, oldest in [0]
+  logic [2:0] pj_n;                        // how many
+  wire        pj_full = (pj_n == 3'd4);
+  wire        pj_push = pj_valid && pj_ready;
+  wire        pj_pop  = pj_out_valid && (pj_n != 3'd0);
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      pj_owner <= 1'b0; pj_busy <= 1'b0;
+      pj_own <= 4'd0; pj_n <= 3'd0;
     end else begin
-      if (pj_valid && pj_ready && !pj_busy) begin
-        pj_owner <= k_pj_valid;
-        pj_busy  <= 1'b1;
-      end
-      if (pj_out_valid) pj_busy <= 1'b0;
+      case ({pj_push, pj_pop})
+        2'b10: begin pj_own[pj_n[1:0]] <= k_pj_valid; pj_n <= pj_n + 3'd1; end
+        2'b01: begin pj_own <= {1'b0, pj_own[3:1]}; pj_n <= pj_n - 3'd1; end
+        2'b11: begin
+          pj_own <= {1'b0, pj_own[3:1]};
+          pj_own[pj_n[1:0] - 2'd1] <= k_pj_valid;
+        end
+        default: ;
+      endcase
     end
   end
-  wire w_pj_out_valid = pj_out_valid && !pj_owner;
-  wire k_pj_out_valid = pj_out_valid &&  pj_owner;
+  wire w_pj_out_valid = pj_pop && !pj_own[0];
+  wire k_pj_out_valid = pj_pop &&  pj_own[0];
 
   m2_geo_project u_project (
     .clk(clk), .rst_n(rst_n),
@@ -427,7 +442,14 @@ module m2_geometry (
 
   assign poly_ready = (qst == Q_IDLE);
   assign dbg_lum_go = poly_valid && poly_ready;   // R249
-  assign w_pj_valid = (qst == Q_ISS);
+  assign w_pj_valid = (qst == Q_ISS) && !skip_here;   // R758: a cached vertex is not sent
+  // R758: the vertices issued and not yet answered, in issue order, and the
+  // answers to throw away after a timeout gave up on their polygon.
+  logic [1:0] wq [4];
+  logic [2:0] wq_n;
+  logic [2:0] w_drop;
+  wire        w_push = (qst == Q_ISS) && !skip_here && w_granted;
+  wire        w_take = w_pj_out_valid && (w_drop == 3'd0) && (wq_n != 3'd0);
   assign w_pj_x = hx[qi]; assign w_pj_y = hy[qi]; assign w_pj_z = hz[qi];
 
   // THE SORT KEY IS THE SMALLEST z, as geo_parse computes min_z over the
@@ -604,6 +626,8 @@ module m2_geometry (
       c_bad <= 1'b0; c_zmode <= 2'd0;
       zprev <= 32'h5011B5EA; hzkey <= 16'd0; hzpre <= '0;   // 1e10, as render_frame_start sets it
       dbg_nonfinite <= 16'd0; dbg_behind <= 16'd0; pj_wait <= 10'd0; dbg_pj_lost <= 16'd0;
+      wq_n <= 3'd0; w_drop <= 3'd0;                                   // R758
+      for (int k = 0; k < 4; k++) wq[k] <= 2'd0;
       cvalid <= 1'b0;
       for (int k = 0; k < 4; k++) begin csx[k] <= 16'sd0; csy[k] <= 16'sd0; csf[k] <= 4'd0; end
       for (int k = 0; k < 4; k++) begin
@@ -688,46 +712,30 @@ module m2_geometry (
           sy[qi] <= csy[hit_i[qi[0]]];
           sf[qi] <= csf[hit_i[qi[0]]];
           qi <= qi + 2'd1;                       // qi < 2 here, so never the last
-          end else if (w_granted) qst <= Q_WAIT;
+          end else if (w_granted) begin
+            // R758: on to the next vertex at once; the answers are taken below
+            // the case as they come back.
+            if (qi == 2'd3) qst <= Q_WAIT;
+            else            qi  <= qi + 2'd1;
+          end
         end
 
         // A PROJECTION THAT NEVER RETURNS MUST NOT STOP THE WORLD.
         //
-        // The board wedges exactly here: engine idle, clipper idle, qst stuck
-        // in Q_WAIT, and m2_geometry.busy therefore high forever, which holds
-        // the display-list walk in W_OBJW and stops all 3D for the rest of the
-        // session. One vertex that the projector never answers costs every
-        // frame after it.
-        //
-        // m2_geo_project's reciprocal is 29 cycles and the pool can make it
-        // wait for a grant, so a legitimate projection is tens of cycles, not
-        // hundreds. 1023 is far past any honest latency and far short of a
-        // frame. On expiry the vertex keeps whatever screen position it already
-        // had and the pipeline moves on, counted rather than silent -- the same
-        // principle as the non-finite gate, which is that bad data degrades the
-        // picture and never stalls the machine.
+        // The board wedged here once: engine idle, clipper idle, qst stuck in
+        // Q_WAIT, m2_geometry.busy high forever, the walk held in W_OBJW. A
+        // legitimate projection is tens of cycles; 1023 is far past any honest
+        // latency and far short of a frame. On expiry the vertices still owed
+        // keep whatever position they had, the pipeline moves on, and (R758)
+        // their answers, if they ever come, are counted off and dropped rather
+        // than given to the next polygon.
         Q_WAIT: if (pj_timeout) begin
-          dbg_pj_lost <= dbg_pj_lost + 16'd1;
-          if (qi == 2'd3) begin clip_in_valid <= 1'b1; qst <= Q_OUT; end
-          else begin qi <= qi + 2'd1; qst <= Q_ISS; end
-        end else if (w_pj_out_valid) begin
-          sx[qi] <= pj_out_sx[15:0];
-          sy[qi] <= pj_out_sy[15:0];
-          sf[qi] <= {pj_out_fy, pj_out_fx};   // R626
-          // R334: THE RECIPROCAL, KEPT. m2_geo_project computes 1/z for every
-          // vertex it projects and used to discard it. As a 16-bit minifloat
-          // -- the 8-bit IEEE exponent and the top 8 mantissa bits, the sign
-          // dropped because a vertex in front of the eye has positive 1/z --
-          // it is within 0.67 texels of the float answer (measured, R331),
-          // where 7 mantissa bits is 3.85 and would show.
-          soz[qi] <= mf16(pj_out_invz);
-          if (qi == 2'd3) begin
-            clip_in_valid <= 1'b1;
-            qst <= Q_OUT;
-          end else begin
-            qi  <= qi + 2'd1;
-            qst <= Q_ISS;
-          end
+          dbg_pj_lost   <= dbg_pj_lost + 16'd1;
+          clip_in_valid <= 1'b1;
+          qst           <= Q_OUT;
+        end else if (w_take && (wq_n == 3'd1)) begin   // R758: the last answer
+          clip_in_valid <= 1'b1;
+          qst           <= Q_OUT;
         end
 
         Q_OUT: if (clip_in_ready) begin
@@ -740,6 +748,32 @@ module m2_geometry (
 
         default: qst <= Q_IDLE;
       endcase
+
+      // R758: THE ANSWERS, in issue order, whatever state the projector is in.
+      if (w_take) begin
+        sx[wq[0]]  <= pj_out_sx[15:0];
+        sy[wq[0]]  <= pj_out_sy[15:0];
+        sf[wq[0]]  <= {pj_out_fy, pj_out_fx};   // R626
+        // R334: THE RECIPROCAL, KEPT, as a 16-bit minifloat -- the 8-bit IEEE
+        // exponent and the top 8 mantissa bits, within 0.67 texels (R331).
+        soz[wq[0]] <= mf16(pj_out_invz);
+      end
+      if (w_pj_out_valid && (w_drop != 3'd0)) w_drop <= w_drop - 3'd1;
+      if ((qst == Q_WAIT) && pj_timeout) begin
+        // an answer this cycle is either taken (w_drop 0) or dropped: one fewer owed
+        w_drop <= w_drop + wq_n - (w_pj_out_valid ? 3'd1 : 3'd0);
+        wq_n   <= 3'd0;
+      end else begin
+        case ({w_push, w_take})
+          2'b10: begin wq[wq_n[1:0]] <= qi; wq_n <= wq_n + 3'd1; end
+          2'b01: begin wq[0] <= wq[1]; wq[1] <= wq[2]; wq[2] <= wq[3]; wq_n <= wq_n - 3'd1; end
+          2'b11: begin
+            wq[0] <= wq[1]; wq[1] <= wq[2]; wq[2] <= wq[3];
+            wq[wq_n[1:0] - 2'd1] <= qi;
+          end
+          default: ;
+        endcase
+      end
     end
   end
 

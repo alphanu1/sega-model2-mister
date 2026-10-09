@@ -28096,3 +28096,28 @@ E_FQ 17.2%, E_FW 12.6%, E_RD 11.7%, E_DOTA 11.0%, E_EMIT 10.2% -- the
 engine holding a finished polygon the projector has not taken -- and the
 quad projector in Q_WAIT 63.7% (its one projection in flight, a 29-cycle
 reciprocal, R217's pj_busy). The projector is the next limit.
+
+**R758 -- THE QUAD PROJECTOR ISSUES ITS FOUR VERTICES BACK TO BACK: -2 TO
+-6% MORE, SAME BITS.** After R757 the heaviest list held the engine in
+E_EMIT 10% and the quad projector in Q_WAIT 64%: R217's single owner bit
+(pj_busy) allowed one projection in flight, so each polygon's four vertices
+(R230 switched the strip cache off -- every vertex is projected) went
+through at m2_geo_project's full latency, ~65 cycles each, though it
+overlaps two (33 a point streamed).
+  * m2_geometry: a queue of owners (four deep) replaces pj_owner / pj_busy;
+    results come back in grant order and are routed by it. The quad projector
+    issues each vertex as soon as the projector takes it, records the vertex
+    index in issue order, and takes the answers below the case in any state;
+    Q_WAIT ends on the last. The 1023-cycle timeout stays; answers it gave up
+    on are counted (w_drop) and dropped if they ever arrive, never handed to
+    the next polygon. w_pj_valid is gated by skip_here so a cached vertex is
+    not sent (moot while R230 holds the cache off).
+  * tb_m2_geodiff, d6e9bce against this, eleven lists at latency 10:
+    byte-identical, -2 to -6% (w2500 889,263 -> 846,527); w2500 at 3 -8%, at
+    20 0%, w1000 at 40 0% -- at long latency the engine's reads dominate.
+    tb_m2_geometry 42 / 0, tb_m2_geo_engine 68 / 0, lint_top and Quartus
+    parse clean.
+Today's total on w2500 at latency 10: 1,214,722 -> 846,527 (-30%), 10.6 ms
+at 80 MHz. The projector is now idle 49%; the engine again: E_FQ 19.1%
+(transform latency), E_FW 13.3% + E_RD 12.3% + E_NORM 6.7% (reads),
+E_DOT/E_DOTA 19.4%.
