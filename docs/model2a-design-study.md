@@ -28072,3 +28072,27 @@ clk_i960 +2.009, HDMI +0.085, holds >= +0.243; 41,020 ALM; RBF
 4027f4e672717968d0f9da67ed5f928c. On the board 2026-10-09 18:07. (s847, the
 R752 build with FAST_ACK 0, ran ~2 h of attract with no lock and no black
 frame before it was replaced: the third clean soak without R730.)
+
+**R757 -- THE TEXTURE READS BESIDE THE LIGHTING, THE FOCUS MULTIPLIES BACK
+TO BACK: -5 TO -8% MORE, SAME BITS.** Ben on s859 (R752-R756): the sky is
+right, the road's seams look good with some shaking left on the corners,
+Double Buffered attract "speeds up and slows down -- we must be close",
+the race 2-5% faster. After R754 the profile (w2500, 954 k cycles to the last
+quad at latency 10) was E_UV 14.7%, E_FQ 14.2%, E_RD 10.9%, E_DOT/E_DOTA
+17.2%, E_FOC/E_FOCW 9.6%.
+  * m2_geo_engine: once the cull passes a polygon, a fetcher (fs: F_TH0..
+    F_TH3, F_UV) reads the texture header and coordinates while the main
+    machine does the light dot product and the luminance; E_FW (in E_XFW's
+    old slot) waits for it, forms cc_idx from header word 3 and luma8, and
+    applies the translucent-untextured cull. The two focus multiplies of a
+    point are issued back to back and collected in order (E_FOCW no longer
+    entered).
+  * tb_m2_geodiff, HEAD (672bb15) against this, all eleven lists at latency
+    10: byte-identical quads, -5 to -8% (w2500 958,263 -> 889,263; w1000
+    933,364 -> 868,458); w2500 at 3 and 20 and w1000 at 40 identical too.
+    tb_m2_geo_engine 68 / 0; lint_top and Quartus parse clean.
+Less than estimated (10-15%): the profile has moved downstream. w2500 now:
+E_FQ 17.2%, E_FW 12.6%, E_RD 11.7%, E_DOTA 11.0%, E_EMIT 10.2% -- the
+engine holding a finished polygon the projector has not taken -- and the
+quad projector in Q_WAIT 63.7% (its one projection in flight, a 29-cycle
+reciprocal, R217's pj_busy). The projector is the next limit.

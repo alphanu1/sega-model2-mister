@@ -313,7 +313,7 @@ int main(int argc, char **argv) {
       std::printf("    %-8s engine state %2d: %7ld (%.1f%%)\n", SP[(v[i].second >> 8) & 3], v[i].second & 0xff, v[i].first, 100.0 * v[i].first / g_memreqs);
   }
   if (prof) {
-    static const char *EN[] = {"E_IDLE","E_RD","E_XF","E_XFW","E_FOC","E_FOCW","E_STORE","E_ATTR","E_NORM",
+    static const char *EN[] = {"E_IDLE","E_RD","E_XF","E_FW","E_FOC","E_FOCW","E_STORE","E_ATTR","E_NORM",
       "E_NXF","E_NXFW","E_SKIP","E_EMIT","E_LINK","E_DONE","E_DOT","E_DOTA","E_LUMM","E_LUMMW","E_LUMA",
       "E_LUMAW","E_TH0","E_TH1","E_TH2","E_TH3","E_CC","E_PAL","E_XL","E_XLG","E_CW","E_UV","E_FQ"};
     static const char *QN[] = {"Q_IDLE","Q_ISS","Q_WAIT","Q_OUT","Q_CHK","Q_MM","Q_MM2","Q7"};
