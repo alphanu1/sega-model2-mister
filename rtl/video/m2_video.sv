@@ -281,7 +281,7 @@ module m2_video #(
   // ---------------------------------------------------------- sequencer
   typedef enum logic [3:0] {
     Q_IDLE, Q_HSCR, Q_HSCR_W, Q_VSCR, Q_VSCR_W,
-    Q_CTRL, Q_CTRL_W, Q_HCTRL, Q_HCTRL_W, Q_MASK, Q_MASK_W, Q_RUN, Q_NEXT
+    Q_CTRL, Q_CTRL_W, Q_HCTRL, Q_HCTRL_W, Q_HTAB, Q_HTAB_W, Q_MASK, Q_MASK_W, Q_RUN, Q_NEXT
   } qstate_t;
   qstate_t q;
 
@@ -316,6 +316,8 @@ module m2_video #(
   // through the even map's draw call, so it is the even map's hscr bit 15 that
   // decides for both. Reading each map's own would let the odd one disagree.
   logic [15:0] hctrl_r;
+  // This line's word of the per-line H-scroll table, 0x4000 + 0x200*map + y.
+  logic [15:0] htab_r;
 
   // Mode 1, the vertical split, from draw_common's per-line loop:
   //
@@ -406,6 +408,12 @@ module m2_video #(
   //      Affects the scroll VALUE, not which map draws, so mode 1 is already right
   //      about the split without it. Nothing measured reaches it.
   wire        win_hs       = hctrl_r[15];
+  // hscr bit 15: the scroll VALUE comes from the per-line table instead
+  // (segaic24.cpp draw_common: window branch reads the even map's table and
+  // uses it for the split position and both maps' scroll; plain branch reads
+  // the layer's own table). htab_r was read from the right table already.
+  wire [15:0] hctrl_eff    = win_hs ? htab_r : hctrl_r;
+  wire [15:0] hscr_eff     = hscr_r[15] ? htab_r : hscr_r;
   wire        win_vsplit   = (ctrl_r[14:13] == 2'b01);   // mode 1
   wire        win_hsplit   = win_mode && !win_vsplit;    // modes 2 and 3
 
@@ -418,8 +426,8 @@ module m2_video #(
   // So the low bit of the map that owns the LEFT side is !(hscr & 0x200), and
   // any layer that is not that one owns the right. Per pixel, not per scanline,
   // so m2_tile_fetch applies it — see its split_en/split_x/split_right.
-  wire [8:0]  win_h         = hctrl_r[8:0];
-  wire        win_left_pick = ~hctrl_r[9];
+  wire [8:0]  win_h         = hctrl_eff[8:0];
+  wire        win_left_pick = ~hctrl_eff[9];
   wire        win_right     = (cur_layer[0] != win_left_pick);
 
   // Mode 1 only. Modes 2/3 no longer blank the pair — that was the placeholder
@@ -445,7 +453,7 @@ module m2_video #(
   //
   // Invisible in attract today — ctrl = 0x2000 gives v = 0, so only the even map
   // draws and the odd map's scroll never matters. It matters as soon as v != 0.
-  wire [15:0] f_hscr = win_mode ? hctrl_r : hscr_r;
+  wire [15:0] f_hscr = win_mode ? hctrl_eff : hscr_eff;
   wire [15:0] f_vscr = win_mode ? ctrl_r  : vscr_r;
 
   // R595: 70/35, clk_mem. ctrl_r ran a 16-bit negate, the compare against
@@ -580,6 +588,16 @@ module m2_video #(
         Q_HCTRL: q <= Q_HCTRL_W;
         Q_HCTRL_W: begin
           hctrl_r       <= tram_data;
+          // Per-line H-scroll word, read unconditionally (used only when the
+          // governing hscr has bit 15 set). Window mode: the pair's EVEN table;
+          // otherwise this map's own. ctrl_r is already latched here.
+          seq_tram_addr <= {2'b10, 2'b00, (win_mode ? {cur_layer[1], 1'b0} : cur_layer), cur_line};
+          q             <= Q_HTAB;
+        end
+
+        Q_HTAB: q <= Q_HTAB_W;
+        Q_HTAB_W: begin
+          htab_r        <= tram_data;
           seq_tram_addr <= mask_base + {13'd0, 2'd0};
           mask_i        <= 2'd0;
           q             <= Q_MASK;

@@ -28178,3 +28178,34 @@ u/v tables from 0x5000. In a race, one op 0x04 of 280 words a frame at
 0x8050F8: a road piece's u/v (tpa 0x8050F8, tha 0x800078, centre 0). The
 walker's op 0x04 path handles both; whether the board's texture RAM holds
 the boot upload after R223's zero sweep is not verified.
+
+**R761 -- ROLLING START: THE PER-LINE H-SCROLL TABLE (hscr BIT 15) IS READ.**
+Ben, 2026-10-09: the ROLLING START banner does not scroll. MAME 0.289,
+headless, coin at frame 1500 and start at 1600 (deterministic): the banner
+runs ~3326-3800 with 0x5000 (hscr0) = 0x8000 -- bit 15, the per-line table
+-- and 0x5004 (ctrl 0/1) = 0x4000, window mode 2. Table 0x4000 (map 0) is 0
+except lines 184-239 (0xfc24 at f3330, 0xfc20 f3331, 0xff0c f3400 ...): -4 a
+frame, bits 8:0 the split and the scroll, bit 9 which map is left -- the two
+512-px maps one 1024-px strip moving right to left at 4 px a frame (R723's
+"enters from the right"). Bit 15 is set on 2,405 of 7,000 frames (every race
+frame). segaic24.cpp draw_common: window mode with bit 15 takes the pair's
+EVEN map's table (0x4000 + 0x200*layer, :364) for the split and both maps'
+scroll (:397-413); plain mode, the layer's own (:465-481). Ours computed
+win_hs = hctrl_r[15] and used it nowhere -- the comment called the table
+"still owed ... nothing measured reaches it" -- so map 0 drew at scroll 0
+over the whole screen and the text stood still. Model 1 has the same gap.
+  * m2_video: Q_HTAB / Q_HTAB_W after Q_HCTRL_W read this line's table word
+    (window mode: the even map's; otherwise the map's own) into htab_r;
+    hctrl_eff / hscr_eff take it when the governing bit 15 is set, and the
+    split, the left pick and f_hscr use them. 8 more tile-RAM reads a line
+    against ~3,936 cycles; one 16-bit register and a mux.
+  * tb_m2_video_frame on MAME's memory: f3330 / f3400 / f3500 / f3600 / f3700 /
+    f3800, the pixels maps 0/1 paint match MAME 100% (HEAD 5-56%); frames with
+    bit 15 clear or the table zero render byte-identical (R755's f1663, f2000,
+    f3700 among them). lint_top and Quartus parse clean. Not covered by a
+    committed bench (the dumps are game memory); a synthetic fixture sweeping
+    the table's bits 9:0 is owed.
+Side finding, not acted on: vscr bit 15 (layer disable) is folded into
+transparency, but the mixer's opaque pass draws transparent pixels of
+tilemaps 2/3 -- a disabled 2/3 still paints; MAME returns early (:352).
+Daytona never sets it (0 of 7,000 frames).
