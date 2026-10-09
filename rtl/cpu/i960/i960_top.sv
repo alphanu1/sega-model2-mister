@@ -779,7 +779,12 @@ module i960_top (
   /* verilator lint_on UNUSEDSIGNAL */
   logic [31:0] ic_data, ic_baddr;
 
-  i960_icache u_icache (
+  // R768: 8 KB (512 lines), not the i960KB's 512 B. The board's fetch path is
+  // a clock crossing and SDRAM, not the real board's fast ROM, so a miss costs
+  // many cycles; instruction fetch is ~30% of the i960's busy time in a menu
+  // and a race (R767). The valid bits now live in the tag LUT-RAM, so size no
+  // longer costs per-line logic (R693's 2 KB attempt: 190 -> 592 ALM).
+  i960_icache #(.LINES(512)) u_icache (
     .clk(clk), .rst_n(rst_n), .inval(1'b0),
     .req(ic_req), .req_demand(1'b1), .addr(fetch_addr[31:2]), .data(ic_data),
     .valid(ic_valid), .vaddr(ic_vaddr), .busy(ic_busy),

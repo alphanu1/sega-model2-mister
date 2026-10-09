@@ -104,8 +104,17 @@ module i960_icache #(
   // read is asynchronous and is. The fit report must show this array in MLAB
   // (it is checked, R552) -- if Quartus ever puts it in an M10K again, pin it
   // back to "logic".
-  (* ramstyle = "MLAB, no_rw_check" *) logic [TAG_W-1:0] ctag  [0:LINES-1];
-  logic             cvalid[0:LINES-1];
+  // R768: AND THE VALID BIT LIVES IN IT TOO. cvalid was a flip-flop per line
+  // with its own write enable and a LINES-way read mux -- the "per-line logic"
+  // that took a 2 KB cache from 190 to 592 ALM and out of the device (R693).
+  // As bit TAG_W of the same LUT-RAM word it is read with the tag, in the same
+  // cycle, so `hit` is exactly as combinational as before. A RAM cannot be
+  // cleared all at once, so reset (and inval) SWEEP it, one line a cycle,
+  // with the cache busy -- the bridge's data cache does the same (dc_sweep).
+  // Each place that cleared cvalid[x] is now a write of {invalid} to line x;
+  // they are mutually exclusive with each other and with the completed fill's
+  // tag write, so one write port serves them all.
+  (* ramstyle = "MLAB, no_rw_check" *) logic [TAG_W:0] ctag  [0:LINES-1];
 
   logic [IDX_W-1:0] idx;
   logic [1:0]       word;
@@ -116,9 +125,10 @@ module i960_icache #(
   assign tag  = addr[31:IDX_W+4];
 
   logic hit;
-  assign hit = cvalid[idx] && (ctag[idx] == tag);
+  wire [TAG_W:0] ctag_rd = ctag[idx];
+  assign hit = ctag_rd[TAG_W] && (ctag_rd[TAG_W-1:0] == tag);
 
-  typedef enum logic [1:0] { S_IDLE, S_FILL, S_DONE } state_e;
+  typedef enum logic [1:0] { S_IDLE, S_FILL, S_DONE, S_SWEEP } state_e;   // R768: S_SWEEP
   state_e state;
 
   logic [1:0]       fill_word;
@@ -193,12 +203,26 @@ module i960_icache #(
   // word acknowledged with no redirect standing.
   wire tag_we = (state == S_FILL) && bus_ack && !redir_now && !redir_q
              && (fill_word == 2'd3);
-  always_ff @(posedge clk) if (tag_we) ctag[fill_idx] <= fill_tag;
+  // R768: the invalidates, from the same conditions the FSM below acts on.
+  logic [IDX_W-1:0] sweep_idx;
+  // A request arriving during a sweep is REMEMBERED and served when it ends:
+  // a requester may present an address for one cycle only (tb_i960_icache
+  // does), and dropping it would stall it forever.
+  logic             sw_pend;
+  logic [31:2]      sw_addr;
+  wire inv_idle  = ((state == S_IDLE) || (state == S_DONE)) && req && !hit;
+  wire inv_redir = (state == S_FILL) && bus_ack && (redir_now || redir_q)
+                && !((redir_now && hit) || (!redir_now && redir_q && redir_hit));
+  wire inv_sweep = (state == S_SWEEP);
+  wire [IDX_W-1:0] inv_idx = inv_sweep ? sweep_idx
+                           : inv_redir ? (redir_now ? idx : redir_idx) : idx;
+  always_ff @(posedge clk) begin
+    if (tag_we)                                 ctag[fill_idx] <= {1'b1, fill_tag};
+    else if (inv_idle || inv_redir || inv_sweep) ctag[inv_idx]  <= '0;
+  end
 
-  integer i;
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      state      <= S_IDLE;
       bus_req    <= 1'b0;
       valid      <= 1'b0;
       req_addr_q <= '0;
@@ -211,13 +235,19 @@ module i960_icache #(
       redir_idx  <= '0;
       redir_tag  <= '0;
       redir_addr <= '0;
-      for (i = 0; i < LINES; i = i + 1) cvalid[i] <= 1'b0;
+      sweep_idx  <= '0;
+      sw_pend    <= 1'b0;
+      sw_addr    <= '0;
+      state      <= S_SWEEP;   // R768: clear every line's valid bit
     end else begin
       valid <= 1'b0;
 
-      if (inval) begin
-        for (i = 0; i < LINES; i = i + 1) cvalid[i] <= 1'b0;
-      end
+      if (inval) begin   // R768: a sweep, as at reset
+        sweep_idx <= '0;
+        sw_pend   <= 1'b0;
+        bus_req   <= 1'b0;
+        state     <= S_SWEEP;
+      end else
 
       case (state)
         S_IDLE: begin
@@ -237,8 +267,7 @@ module i960_icache #(
               // a line valid under a different tag has its data destroyed while
               // still advertising a hit. Harmless while fills always completed;
               // required once they can be abandoned.
-              cvalid[idx] <= 1'b0;
-              state     <= S_FILL;
+              state     <= S_FILL;   // R768: invalidated by inv_idle
             end
           end
         end
@@ -318,7 +347,7 @@ module i960_icache #(
             fill_base   <= redir_now ? {addr[31:4], 4'd0}
                                      : {redir_addr[31:4], 4'd0};
             fill_word   <= 2'd0;
-            cvalid[redir_now ? idx : redir_idx] <= 1'b0;
+            // R768: invalidated by inv_redir
             req_addr_q  <= redir_now ? addr : redir_addr;
           end else if (redir_now) begin
             // A fetch is outstanding. Remember where we are going and keep the
@@ -331,7 +360,7 @@ module i960_icache #(
           end else if (bus_ack) begin
             if (fill_word == 2'd3) begin
               bus_req          <= 1'b0;
-              cvalid[fill_idx] <= 1'b1;   // R552: ctag is written below
+              // R552 / R768: ctag (tag and valid) is written by tag_we
               state            <= S_DONE;
             end else begin
               fill_word <= fill_word + 2'd1;
@@ -350,11 +379,29 @@ module i960_icache #(
             fill_tag    <= tag;
             fill_word   <= 2'd0;
             fill_base   <= {addr[31:4], 4'd0};
-            cvalid[idx] <= 1'b0;
-            state       <= S_FILL;
+            state       <= S_FILL;   // R768: invalidated by inv_idle
           end else begin
             valid <= 1'b1;
             state <= S_IDLE;
+          end
+        end
+
+        // R768: one line's valid bit a cycle; requests wait (busy, no accept).
+        S_SWEEP: begin
+          if (req) begin sw_pend <= 1'b1; sw_addr <= addr; end
+          sweep_idx <= sweep_idx + 1'b1;
+          if (sweep_idx == IDX_W'(LINES - 1)) begin
+            // Everything is invalid now, so a remembered request is a miss.
+            if (sw_pend || req) begin
+              req_addr_q <= req ? addr : sw_addr;
+              fill_idx   <= req ? idx : sw_addr[IDX_W+3:4];
+              fill_tag   <= req ? tag : sw_addr[31:IDX_W+4];
+              fill_word  <= 2'd0;
+              fill_base  <= req ? {addr[31:4], 4'd0} : {sw_addr[31:4], 4'd0};
+              sw_pend    <= 1'b0;
+              state      <= S_FILL;
+            end else
+              state      <= S_IDLE;
           end
         end
 

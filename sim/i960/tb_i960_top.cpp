@@ -869,6 +869,11 @@ int main(int argc, char **argv) {
     dut->rst_n = 1; tick();
     // Let the three boot reads complete before the reference is started.
     for (int g = 0; g < 200 && dip() != PROG_BASE; ++g) tick();
+    // R768: and the I-cache's reset sweep (LINES cycles: the valid bits live in
+    // its tag RAM now). The core issues its first fetch -- the acceptance the
+    // windows below count from -- only once the cache is free; starting the
+    // reference before that closed window 0 on the first acceptance itself.
+    for (int g = 0; g < 4000 && dut->rootp->i960_top__DOT__u_icache__DOT__state == 3; ++g) tick();
     // CHECK THE BOOT ACTUALLY HAPPENED. Arriving at PROG_BASE proves only that
     // the IP is right, and it would be right by accident if the walk had not run
     // at all and something else had set it. SAT and PRCB have distinctive values

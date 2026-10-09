@@ -148,10 +148,16 @@ bool spec_during_fill(uint32_t line, uint32_t spec, int delay, const char *why) 
   return ok;
 }
 
+// R768: a reset or an invalidate SWEEPS the valid bits, one line a cycle,
+// with the cache busy. Wait it out; a request made during it is tested apart.
+void settle() {
+  for (int g = 0; dut->busy && g < 100000; g++) tick();
+}
 void reset() {
   dut->rst_n = 0; dut->req = 0; dut->req_demand = 1; dut->inval = 0; dut->bus_ack = 0;
   for (int i = 0; i < 4; i++) tick();
   dut->rst_n = 1; tick();
+  settle();
 }
 } // namespace
 
@@ -244,8 +250,30 @@ int main(int argc, char **argv) {
   // Invalidate mid-stream and confirm the data is still right afterwards.
   for (uint32_t a = 0; a < 0x200; a += 4) fetch(a, "pre-inval");
   dut->inval = 1; tick(); dut->inval = 0; tick();
+  settle();
   for (uint32_t a = 0; a < 0x200; a += 4) fetch(a, "post-inval");
   std::printf("  invalidate mid-stream, refetch\n");
+
+  // R768: a request presented for ONE cycle while the reset sweep runs is
+  // remembered and answered when it ends -- with the right word.
+  {
+    dut->rst_n = 0; dut->req = 0; dut->inval = 0; dut->bus_ack = 0;
+    for (int i = 0; i < 4; i++) tick();
+    dut->rst_n = 1; tick();
+    const uint32_t a = 0x0124;
+    dut->addr = a >> 2; dut->req = 1; tick(); dut->req = 0;
+    bool got = false; uint32_t d = 0;
+    for (int g = 0; g < 200000 && !got; g++) {
+      if (dut->valid && (uint32_t(dut->vaddr) << 2) == a) { got = true; d = dut->data; break; }
+      tick();
+    }
+    if (!got)               { std::printf("  FAIL a request during the sweep was never answered\n"); ++fails; }
+    else if (d != peek(a))  { std::printf("  FAIL a request during the sweep got %08x, memory %08x\n", d, peek(a)); ++fails; }
+    else std::printf("  request during the reset sweep     : answered after it\n");
+    // ...and the fetches that follow straight away, as the core makes them.
+    for (uint32_t b2 = 0x0128; b2 < 0x0180; b2 += 4) fetch(b2, "after-sweep");
+    settle();
+  }
 
   std::mt19937_64 rng(seed);
   for (uint64_t k = 0; k < rounds && fails == 0; ++k)

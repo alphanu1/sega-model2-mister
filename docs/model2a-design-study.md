@@ -28387,3 +28387,40 @@ transaction (R694), R730's same-cycle answers (-8% CPI, R753 found them
 behind the lock), the code cache (R728/R733). Being measured first: the
 icache size's hit rate on MAME's instruction stream in a menu, attract and a
 race.
+
+**R768 -- THE i960's INSTRUCTION CACHE 512 B -> 8 KB, ITS VALID BITS IN THE
+TAG RAM.** R767: instruction fetch is ~29% of the i960's busy time in a menu,
+~34% in a race; the menu misses 60 by ~5%. MAME 0.289 PC trace, daytona93,
+20 frames a phase, 16-byte lines, warm misses a frame (share of 512 B):
+                 attract      menu         race A        race C
+    512 B DM     5,410        538          10,384        8,657
+    2 KB DM      3,382 (63%)  473 (88%)    8,011 (77%)   6,306 (73%)
+    4 KB DM      2,046 (38%)  393 (73%)    4,990 (48%)   3,565 (41%)
+    8 KB DM      1,621 (30%)  279 (52%)    3,506 (34%)   3,126 (36%)
+    16 KB DM     1,130        162          2,791         2,649
+    4 KB 2-way   1,692        426          5,017         3,611
+Busy instructions a frame: attract 26,741, menu 9,070, race 47,371; distinct
+lines a frame 22.5 / 7.3 / 37.8 KB. The menu's hot code is 0x18c00 (45%) and
+0x1800 (16%) plus ~1,000 instructions a frame from the 0x220000 ROM mirror.
+~80% of misses at every size are fall-through (line N+1 after N): a next-
+line prefetch is the following lever.
+R693 found 2 KB unaffordable (190 -> 592 ALM): cvalid, a flip-flop per line
+with its own write enable and a LINES-way mux. Now:
+  * i960_icache: the valid bit is bit TAG_W of the tag LUT-RAM word, read
+    asynchronously with the tag -- `hit` as combinational as before. Reset
+    and inval SWEEP it (S_SWEEP, a line a cycle, busy); a request presented
+    during the sweep is remembered and filled when it ends. The places that
+    cleared cvalid[x] are writes of {invalid} to line x (inv_idle, inv_redir,
+    inv_sweep), exclusive with each other and with the completed fill's tag
+    write.
+  * i960_top: LINES 512 (8 KB): data 8 M10K, tags 512 x 20 in MLAB.
+  * tb_i960_icache: 0 mismatches at LINES 32 / 128 / 256 / 512 (201,328
+    fetches); waits out the sweep after reset and inval (its 100-cycle fetch
+    watchdog was shorter than a 128+ line sweep), and tests a one-cycle
+    request during the sweep and the fetches straight after it.
+  * tb_i960_top: waits out the sweep before starting the reference -- the
+    core issues its first fetch only when the cache is free, and window 0
+    closed on that acceptance (IP 0x100 against 0x108). test_i960_top, _irq,
+    +loops, test_i960_rom pass; tb_m2_cpu_real hash a95ee045a6c3424b, 12.03
+    CPI (its boot loop fits any cache); tb_m2_boot PASS, CPI 11.85 -> 11.79.
+    lint_top, Quartus parse clean. The fit report must show ctag in MLAB.
