@@ -93,7 +93,7 @@ module m2_geo_xform #(
   // operand mux. MUST MATCH the pool: the add schedule below is spaced from it,
   // and a stride built for latency 4 reads results not yet written (Model 1:
   // 7,806 fails of 7,813 before that was found).
-  parameter int FP_ADD_LAT = 5
+  parameter int FP_ADD_LAT = 6   // R740: m2_fp_pool's ADD_A2 (was 5)
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -180,7 +180,7 @@ module m2_geo_xform #(
   typedef enum logic [1:0] { A_IDLE, A_RUN, A_OUT } astate_t;
   astate_t ast;
 
-  logic [3:0]  ac;             // position in the add schedule, 0..12
+  logic [4:0]  ac;             // position in the add schedule, 0..16 (R740: 5 bits)
   logic [1:0]  a_got;          // results captured within the current round
   logic [3:0]  a_total;        // results captured overall, 0..9
   logic [31:0] t [3];
@@ -229,7 +229,7 @@ module m2_geo_xform #(
   // The last round is skipped for a vector: a direction has no origin.
   // Two full strides plus three adds for a 3-round transform, one stride plus
   // three for a 2-round one (12 / 7 at stride 5, 14 / 8 at 6).
-  wire [3:0] ac_last  = atrans ? 4'(2*A_STRIDE + 2) : 4'(A_STRIDE + 2);
+  wire [4:0] ac_last  = atrans ? 5'(2*A_STRIDE + 2) : 5'(A_STRIDE + 2);
   wire [3:0] want_res = atrans ? 4'd9  : 4'd6;
 
   assign mul_req = (mst == M_ISSUE);
@@ -335,7 +335,7 @@ module m2_geo_xform #(
           if (!a_slot || add_gnt) begin
             if (ac == ac_last) ast <= A_OUT;
             else begin
-              ac <= ac + 4'd1;
+              ac <= ac + 5'd1;
               // R408: a_comp wraps 0..S-1 and carries into a_round.
               if (a_comp == 3'(A_STRIDE - 1)) begin a_comp <= 3'd0; a_round <= a_round + 2'd1; end
               else                      a_comp <= a_comp + 3'd1;

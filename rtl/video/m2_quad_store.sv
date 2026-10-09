@@ -398,10 +398,21 @@ module m2_quad_store #(
   assign a_lo = smin(a_lo01, a_lo23);
   assign a_hi = smax(a_hi01, a_hi23);
   logic [CW-1:0]       a_col;
+  // R740: THE ATTRIBUTE WORD A STAGE LATER STILL. R739's split left the band's
+  // second round, clamp and divide in front of the att RAM's data port (s789
+  // at 80 MHz: a_lo23 -> att_1 PORT_A_DATA_IN -0.498). The word is finished
+  // into b_* and written the cycle after the count: nothing reads att_* for a
+  // slot until the band pass, long after the sort (R566 (2)), and the count
+  // itself does not move. `clear` still wins over a pending write.
+  logic                b_v, b_bank, b_moire;
+  logic [IW-1:0]       b_slot;
+  logic [2*BW-1:0]     b_band;
+  logic [CW-1:0]       b_col;
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       a_v <= 1'b0; a_room <= 1'b0; a_tiny <= 1'b0; a_bank <= 1'b0; a_moire <= 1'b0;
       a_slot <= '0; a_lo01 <= '0; a_lo23 <= '0; a_hi01 <= '0; a_hi23 <= '0; a_col <= '0;
+      b_v <= 1'b0; b_bank <= 1'b0; b_moire <= 1'b0; b_slot <= '0; b_band <= '0; b_col <= '0;   // R740
     end else begin
       a_v     <= in_valid && !clear;
       a_room  <= has_room;
@@ -409,6 +420,9 @@ module m2_quad_store #(
       a_bank  <= wbank;
       a_slot  <= wcount[IW-1:0];
       a_lo01  <= smin(in_y0, in_y1);  a_lo23 <= smin(in_y2, in_y3);   // R579 balanced; R739 split
+      b_v     <= a_v && a_room;                                   // R740: the att word, finished
+      b_bank  <= a_bank;  b_slot <= a_slot;  b_moire <= a_moire;  b_col <= a_col;
+      b_band  <= band_of(a_lo, a_hi);
       a_hi01  <= smax(in_y0, in_y1);  a_hi23 <= smax(in_y2, in_y3);
       a_moire <= in_moire;
       a_col   <= c565(in_col);
@@ -452,11 +466,11 @@ module m2_quad_store #(
         key[wcount[IW-1:0]] <= FTB ? in_z[KW-1:0] : ~in_z[KW-1:0];
       end
       // R566: a cycle later, from the registered comparators.
+      if (b_v) begin   // R740: a cycle after the count
+        if (b_bank) att_1[b_slot] <= {b_band, b_moire, b_col};
+        else        att_0[b_slot] <= {b_band, b_moire, b_col};
+      end
       if (a_v) begin
-        if (a_room) begin
-          if (a_bank) att_1[a_slot] <= {band_of(a_lo, a_hi), a_moire, a_col};   // R731
-          else        att_0[a_slot] <= {band_of(a_lo, a_hi), a_moire, a_col};
-        end
         if (a_tiny) begin
           if (dbg_tiny != 16'hffff) dbg_tiny <= dbg_tiny + 16'd1;
         end else if (a_room) begin

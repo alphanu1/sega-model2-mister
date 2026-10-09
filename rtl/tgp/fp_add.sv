@@ -38,7 +38,11 @@
 `timescale 1ns/1ps
 
 module fp_add #(
-  parameter bit FLUSH_DENORM_IN = 1'b0
+  parameter bit FLUSH_DENORM_IN = 1'b0,
+  // R740: 1 = a register between the compare and the align shift -- LATENCY
+  // 5, not 4. For m2_fp_pool only (80 MHz: add_b_q -> sA_small -0.462 even
+  // after R739); mb86233_alu's alignment depends on 4 and keeps 0.
+  parameter bit PIPE_A2 = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -132,8 +136,14 @@ module fp_add #(
   // compare only chooses between the two unshifted operands, after the shift.
   logic [23:0] sh_sig;
   assign sh_sig        = e_gt ? b_sig : a_sig;
-  assign small_ext     = {sh_sig, 3'b000};
-  assign small_aligned = (e_eq && sig_ge) ? {b_sig, 3'b000} : (small_ext >> shamt);
+  // R740: everything the shift and the stage-A register need, at the point
+  // PIPE_A2 cuts (p_*): passed straight through when it is 0.
+  logic        p_valid, p_sign, p_eff_sub, p_swap, p_sat, p_nan, p_inf, p_both_zero, p_zero_sign;
+  logic [7:0]  p_exp;
+  logic [4:0]  p_shamt;
+  logic [26:0] p_big, p_sh, p_b;
+  assign small_ext     = p_sh;
+  assign small_aligned = p_swap ? p_b : (p_sh >> p_shamt);
   // R512: THE STICKY MASK IS A THERMOMETER, NOT A SHIFT AND A SUBTRACT.
   //
   //   m2_geo_xform|sum_bank -> m2_fp_pool|fp_add|sA_sticky    -0.515 on clk_sys
@@ -154,16 +164,40 @@ module fp_add #(
   // Spike: Fmax 93.23 -> 98.09, 0.54 ns, +15 ALM. tb_fp_add 1,968,564 checks.
   logic [26:0] sticky_mask;
   always_comb
-    for (int i = 0; i < 27; i++) sticky_mask[i] = (5'(i) < shamt);
+    for (int i = 0; i < 27; i++) sticky_mask[i] = (5'(i) < p_shamt);
 
-  assign sticky_lost   = shift_saturated ? (|small_ext)
-                                         : (|(small_ext & sticky_mask));
+  assign sticky_lost   = p_sat ? (|small_ext)
+                               : (|(small_ext & sticky_mask));
 
   logic [26:0] big_ext;
   assign big_ext = {big_sig, 3'b000};
 
   logic eff_sub;
   assign eff_sub = big_sign ^ small_sign;
+
+  // R740: the cut.
+  wire pre_nan  = (a_is_nan | b_is_nan) | (a_is_inf & b_is_inf & (a_sign ^ b_sign));
+  wire pre_inf  = (a_is_inf | b_is_inf) & ~(a_is_inf & b_is_inf & (a_sign ^ b_sign));
+  generate if (PIPE_A2) begin : g_a2
+    always_ff @(posedge clk or negedge rst_n) begin
+      if (!rst_n) p_valid <= 1'b0;
+      else begin
+        p_valid <= in_valid;
+        p_sign <= big_sign;  p_exp <= big_exp;  p_big <= big_ext;  p_eff_sub <= eff_sub;
+        p_sh <= {sh_sig, 3'b000};  p_b <= {b_sig, 3'b000};  p_swap <= e_eq && sig_ge;
+        p_shamt <= shamt;  p_sat <= shift_saturated;
+        p_nan <= pre_nan;  p_inf <= pre_inf;
+        p_both_zero <= a_is_zero & b_is_zero;  p_zero_sign <= a_sign & b_sign;
+      end
+    end
+  end else begin : g_a1
+    assign p_valid = in_valid;
+    assign p_sign = big_sign;  assign p_exp = big_exp;  assign p_big = big_ext;  assign p_eff_sub = eff_sub;
+    assign p_sh = {sh_sig, 3'b000};  assign p_b = {b_sig, 3'b000};  assign p_swap = e_eq && sig_ge;
+    assign p_shamt = shamt;  assign p_sat = shift_saturated;
+    assign p_nan = pre_nan;  assign p_inf = pre_inf;
+    assign p_both_zero = a_is_zero & b_is_zero;  assign p_zero_sign = a_sign & b_sign;
+  end endgenerate
 
   // ------------------------------------------------- stage A: align only
   //
@@ -180,19 +214,19 @@ module fp_add #(
     if (!rst_n) begin
       sA_valid <= 1'b0;
     end else begin
-      sA_valid   <= in_valid;
-      sA_sign    <= big_sign;
-      sA_exp     <= big_exp;
-      sA_big     <= big_ext;
+      sA_valid   <= p_valid;   // R740: p_* (the inputs themselves when PIPE_A2 is 0)
+      sA_sign    <= p_sign;
+      sA_exp     <= p_exp;
+      sA_big     <= p_big;
       sA_small   <= small_aligned;
       sA_sticky  <= sticky_lost;
-      sA_eff_sub <= eff_sub;
-      sA_invalid <= (a_is_nan | b_is_nan) | (a_is_inf & b_is_inf & (a_sign ^ b_sign));
-      sA_nan     <= (a_is_nan | b_is_nan) | (a_is_inf & b_is_inf & (a_sign ^ b_sign));
-      sA_inf     <= (a_is_inf | b_is_inf) & ~(a_is_inf & b_is_inf & (a_sign ^ b_sign));
-      sA_both_zero <= a_is_zero & b_is_zero;
+      sA_eff_sub <= p_eff_sub;
+      sA_invalid <= p_nan;
+      sA_nan     <= p_nan;
+      sA_inf     <= p_inf;
+      sA_both_zero <= p_both_zero;
       // -0 + -0 = -0; every other zero pairing gives +0 under round-to-nearest.
-      sA_zero_sign <= a_sign & b_sign;
+      sA_zero_sign <= p_zero_sign;
     end
   end
 

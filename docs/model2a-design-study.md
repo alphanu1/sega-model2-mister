@@ -27661,3 +27661,30 @@ jt12 both GPL-3.0. Noted, not fixed: fx68k Ir -> nanoAddr (0.507 at 75) has
 not appeared at 80 yet; with PCM_CACHE=0 at TICK_DEN 80 / latency 6 the
 bench's cache check reports 33 wrong bytes on old and new RTL alike (the
 shipping PCM_CACHE=1 is clean).
+
+**R740 -- 80 / 40, ROUND FIVE: WHAT ROUND THREE MOVED.** 1a238c2 (R739) at
+80 / 40, s788-s790: clk_sys -0.808 / -1.158, s790 did not fit; 41,036-41,144
+ALM. Fixing paths moved the failures rather than removing them at 98-99%:
+the MultiPCM (R738 not yet in), geometry hz -> hzmin -1.158 (new), fill
+mul_sl -> mul_pr -0.745, pool add_b_q -> sA_small -0.462 (after R739), store
+a_lo23 -> att RAM data -0.498 (R739's split moved it there), fill m01_r ->
+symin -0.367 (R735's final round), geo_view ib -> a_top -0.395. Fixed here:
+  * geometry z min/max: the six compares registered in Q_MM, the one-hot
+    pick in a new Q_MM2 -- one cycle more per polygon.
+  * fill tournament: the pairs' min/max VALUES registered at acceptance with
+    the select bits, so S_MINMAX is one compare and a 2:1 select.
+  * fill edge skip: 17 x 32 as two 17 x 16 halves registered, then summed
+    (low 32 bits = d*sl[15:0] + (d*sl[31:16]) << 16; 1,000,000 pairs) -- one
+    cycle more on each of S_FS_MULA / MULB. Operands as declared signed wires,
+    not $signed({..}) inline (R662).
+  * quad store: the attribute word finished into b_* and written the cycle
+    after the count; the count does not move (R566 (2) still holds).
+  * fp_add PIPE_A2: an optional register between the compare and the align
+    shift (latency 5). m2_fp_pool sets it (ADD_A2, add tags six deep) and
+    m2_geo_xform's FP_ADD_LAT defaults to 6 (ac 5 bits); the TGP's adder
+    keeps latency 4. Old vs PIPE_A2 on 17,498,119 results in order (gaps,
+    equal/near/denormal exponents): 0 differences. With FP_ADD_LAT left at 5
+    test_m2_geo_xform fails 7,806 of 7,813 -- the mismatch is caught.
+The four frames identical in pixels (draw +0.0..+0.25% cycles); geodiff's
+three lists identical; test_m2_geo_xform / clip / engine / geometry / geo /
+geo_view and test_m2_raster3d pass; lint_top and Quartus parses clean.

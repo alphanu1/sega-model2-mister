@@ -850,15 +850,24 @@ module m2_raster_fill #(
   // accumulate (s319: -> xa, -0.04 ns). The low 32 bits are unchanged.
   logic signed [16:0] mul_delta;
   logic signed [31:0] mul_sl;
-  logic signed [48:0] mul_prod;
-  always_comb mul_prod = mul_delta * mul_sl;
   // R631: THE PRODUCT IS REGISTERED BEFORE IT IS ADDED. 17 x 32 then a 32-bit
   // add in one 70 MHz cycle was s410's failing path (mul_sl -> xa/xb[28..31],
   // -0.230), and bit 31 is the sign of every edge that starts left of the
   // screen: on the board, streaks across the picture. S_FS_MULA and
   // S_FS_MULB each take two cycles now (mul_w), twice per clipped segment.
   logic signed [31:0] mul_pr;
-  logic               mul_w;
+  logic [1:0]         mul_w;   // R740: three cycles a multiply, not two
+  // R740: AND THE MULTIPLY IN TWO HALVES. A 17 x 32 product is two DSPs and
+  // an adder in one cycle (s788 at 80 MHz: mul_sl -> mul_pr -0.745). The
+  // halves are 17 x 16 each -- one DSP apiece -- registered, then summed into
+  // mul_pr: the low 32 bits of delta * sl are delta * sl[15:0] (unsigned) plus
+  // (delta * sl[31:16] (signed)) << 16; checked on 1,000,000 pairs with every
+  // extreme. One cycle more on each of S_FS_MULA / MULB.
+  logic signed [33:0] mul_plo;
+  logic signed [32:0] mul_phi;
+  // declared operands, not $signed({..}) inline (R662's Quartus 17.0 fold)
+  wire  signed [16:0] mul_sl_lo = {1'b0, mul_sl[15:0]};
+  wire  signed [15:0] mul_sl_hi = mul_sl[31:16];
 
   // ------------------------------------------------------- vertex selection
   // Tournaments, arranged so the lowest index wins every tie. MAME scans
@@ -874,16 +883,22 @@ module m2_raster_fill #(
   // {y[13:0], fy}, which is what (y <<< 2) + fy is in sixteen bits -- no
   // signed'() around a sum (R662).
   logic m01_r, m23_r, x01_r, x23_r;
+  // R740: and the pairs' winning VALUES with them, so the final round is one
+  // compare and a 2:1 select (s788 at 80 MHz: m01_r -> symin -0.367, 11):
+  // lo01_v == sye[pmin01] and so on, the same y as accepted.
+  logic signed [15:0] lo01_v, lo23_v, hi01_v, hi23_v;
+  wire  m_fin = lo23_v < lo01_v;   // pmin23 strictly lower: the tie goes to 0/1
+  wire  x_fin = hi23_v > hi01_v;
   function automatic logic signed [15:0] ye_in(input logic signed [15:0] y, input logic [1:0] f);
     ye_in = M2COV ? $signed({y[13:0], f}) : y;
   endfunction
   always_comb begin
     pmin01 = m01_r ? 2'd1 : 2'd0;   // R658: on the edge y
     pmin23 = m23_r ? 2'd3 : 2'd2;
-    pmin_c = (sye[pmin23] < sye[pmin01]) ? pmin23 : pmin01;
+    pmin_c = m_fin ? pmin23 : pmin01;   // R740
     pmax01 = x01_r ? 2'd1 : 2'd0;
     pmax23 = x23_r ? 2'd3 : 2'd2;
-    pmax_c = (sye[pmax23] > sye[pmax01]) ? pmax23 : pmax01;
+    pmax_c = x_fin ? pmax23 : pmax01;   // R740
   end
 
   // R301: THE TOURNAMENT'S ANSWER, LATCHED. Measured on build/perf2/s12, the
@@ -1038,7 +1053,8 @@ module m2_raster_fill #(
       moire      <= 1'b0;
       mul_delta  <= 17'sd0;
       mul_sl     <= 32'sd0;
-      mul_pr     <= 32'sd0; mul_w <= 1'b0;   // R631
+      mul_pr     <= 32'sd0; mul_w <= 2'd0;   // R631
+      mul_plo    <= '0; mul_phi <= '0;      // R740
       div_start  <= 1'b0;
       div_num    <= 32'sd0;
       div_den    <= 32'sd0;
@@ -1079,6 +1095,7 @@ module m2_raster_fill #(
       xlo_r <= 32'sd0; xhi_r <= 32'sd0;
       pmin_r <= 2'd0;  td_r  <= 1'b0;
       m01_r <= 1'b0; m23_r <= 1'b0; x01_r <= 1'b0; x23_r <= 1'b0;   // R735
+      lo01_v <= '0; lo23_v <= '0; hi01_v <= '0; hi23_v <= '0;          // R740
       for (int i = 0; i < 4; i++) begin
         sx[i] <= 16'sd0;
         sy[i] <= 16'sd0;
@@ -1391,6 +1408,15 @@ module m2_raster_fill #(
             m23_r <= ye_in(in_y3, in_frac[15:14]) < ye_in(in_y2, in_frac[11:10]);
             x01_r <= ye_in(in_y1, in_frac[7:6])   > ye_in(in_y0, in_frac[3:2]);
             x23_r <= ye_in(in_y3, in_frac[15:14]) > ye_in(in_y2, in_frac[11:10]);
+            // R740: the pairs' values, by the same compares
+            lo01_v <= (ye_in(in_y1, in_frac[7:6])   < ye_in(in_y0, in_frac[3:2]))
+                      ? ye_in(in_y1, in_frac[7:6])   : ye_in(in_y0, in_frac[3:2]);
+            lo23_v <= (ye_in(in_y3, in_frac[15:14]) < ye_in(in_y2, in_frac[11:10]))
+                      ? ye_in(in_y3, in_frac[15:14]) : ye_in(in_y2, in_frac[11:10]);
+            hi01_v <= (ye_in(in_y1, in_frac[7:6])   > ye_in(in_y0, in_frac[3:2]))
+                      ? ye_in(in_y1, in_frac[7:6])   : ye_in(in_y0, in_frac[3:2]);
+            hi23_v <= (ye_in(in_y3, in_frac[15:14]) > ye_in(in_y2, in_frac[11:10]))
+                      ? ye_in(in_y3, in_frac[15:14]) : ye_in(in_y2, in_frac[11:10]);
             col   <= in_col;
             moire <= in_moire;
             qu[0] <= in_u0; qv[0] <= in_v0; qu[1] <= in_u1; qv[1] <= in_v1;
@@ -1431,8 +1457,8 @@ module m2_raster_fill #(
           // One cycle of pure comparison, and now the ONLY cycle that does it.
           td_r   <= two_distinct;
           pmin_r <= pmin_c;
-          symin  <= sye[pmin_c];   // R658: quarters with M2COV
-          symax  <= sye[pmax_c];
+          symin  <= m_fin ? lo23_v : lo01_v;   // R658: quarters with M2COV; R740: = sye[pmin_c]
+          symax  <= x_fin ? hi23_v : hi01_v;
           xlo_r  <= xlo_c;
           xhi_r  <= xhi_c;
           state  <= S_CLASSIFY;
@@ -1614,24 +1640,32 @@ module m2_raster_fill #(
           end
         end
 
-        S_FS_MULA: if (!mul_w) begin
-          mul_pr <= mul_prod[31:0];
-          mul_w  <= 1'b1;
+        S_FS_MULA: if (mul_w == 2'd0) begin
+          mul_plo <= mul_delta * mul_sl_lo;   // R740
+          mul_phi <= mul_delta * mul_sl_hi;
+          mul_w   <= 2'd1;
+        end else if (mul_w == 2'd1) begin
+          mul_pr <= mul_plo[31:0] + {mul_phi[15:0], 16'd0};
+          mul_w  <= 2'd2;
         end else begin
           xa     <= xa + mul_pr;
           xah    <= xah + mul_pr;
           mul_sl <= slb;
-          mul_w  <= 1'b0;
+          mul_w  <= 2'd0;
           state  <= S_FS_MULB;
         end
 
-        S_FS_MULB: if (!mul_w) begin
-          mul_pr <= mul_prod[31:0];
-          mul_w  <= 1'b1;
+        S_FS_MULB: if (mul_w == 2'd0) begin
+          mul_plo <= mul_delta * mul_sl_lo;   // R740
+          mul_phi <= mul_delta * mul_sl_hi;
+          mul_w   <= 2'd1;
+        end else if (mul_w == 2'd1) begin
+          mul_pr <= mul_plo[31:0] + {mul_phi[15:0], 16'd0};
+          mul_w  <= 2'd2;
         end else begin
           xb    <= xb + mul_pr;
           xbh   <= xbh + mul_pr;
-          mul_w <= 1'b0;
+          mul_w <= 2'd0;
           state <= skip_only ? S_FS_END : S_FS_SWAP;
         end
 

@@ -307,7 +307,7 @@ module m2_geometry (
   // 120 cycles. At 50 MHz that is 2,700 polygons in a 60 Hz frame before this
   // stage is the limit, and the display lists measured here are far short of it.
   // R566: Q_CHK added -- the cull is decided a cycle after the polygon is taken.
-  typedef enum logic [2:0] { Q_IDLE, Q_ISS, Q_WAIT, Q_OUT, Q_CHK, Q_MM } qst_t;   // R589: Q_MM
+  typedef enum logic [2:0] { Q_IDLE, Q_ISS, Q_WAIT, Q_OUT, Q_CHK, Q_MM, Q_MM2 } qst_t;   // R589: Q_MM; R740: Q_MM2
   qst_t qst;
   logic [1:0]  qi;
   logic [31:0] hx [4], hy [4], hz [4];
@@ -474,11 +474,22 @@ module m2_geometry (
   logic        mm_le01, mm_le02, mm_le03, mm_le12, mm_le13, mm_le23;   // k_i <= k_j, i < j
   logic [3:0]  mm_lo, mm_hi;
   logic [31:0] mm_min, mm_max;
+  // R740: THE SIX COMPARES REGISTERED, THE PICK A CYCLE LATER. fkey, six
+  // 32-bit compares, the one-hot terms and the AND-OR were one cycle into
+  // hzmin / hzmax (s789 at 80 MHz: hz -> hzmin -1.158). Q_MM now registers
+  // the compares and Q_MM2 picks: one cycle more per polygon. hz does not
+  // change between them (it is loaded only on taking a polygon).
+  logic mm_r01, mm_r02, mm_r03, mm_r12, mm_r13, mm_r23;
+  always_ff @(posedge clk) begin
+    mm_r01 <= mm_k[0] <= mm_k[1];  mm_r02 <= mm_k[0] <= mm_k[2];
+    mm_r03 <= mm_k[0] <= mm_k[3];  mm_r12 <= mm_k[1] <= mm_k[2];
+    mm_r13 <= mm_k[1] <= mm_k[3];  mm_r23 <= mm_k[2] <= mm_k[3];
+  end
   always_comb begin
     for (int i = 0; i < 4; i++) mm_k[i] = fkey(hz[i]);
-    mm_le01 = mm_k[0] <= mm_k[1];  mm_le02 = mm_k[0] <= mm_k[2];
-    mm_le03 = mm_k[0] <= mm_k[3];  mm_le12 = mm_k[1] <= mm_k[2];
-    mm_le13 = mm_k[1] <= mm_k[3];  mm_le23 = mm_k[2] <= mm_k[3];
+    mm_le01 = mm_r01;  mm_le02 = mm_r02;
+    mm_le03 = mm_r03;  mm_le12 = mm_r12;
+    mm_le13 = mm_r13;  mm_le23 = mm_r23;
     // i comes before j: k_i <= k_j when i < j, k_i < k_j when i > j.
     mm_lo[0] =  mm_le01 &  mm_le02 &  mm_le03;
     mm_lo[1] = ~mm_le01 &  mm_le12 &  mm_le13;
@@ -640,7 +651,8 @@ module m2_geometry (
         // R589: the four-way float min and max, from the z values latched a
         // cycle ago rather than from the engine's registers in the latch cycle
         // (s317: p1cur -> hzmax, -0.322 ns at 70 MHz).
-        Q_MM: begin
+        Q_MM:  qst <= Q_MM2;   // R740: the compares are registered on this edge
+        Q_MM2: begin
           hzmin <= mm_min;   // R597
           hzmax <= mm_max;
           qst   <= Q_CHK;
