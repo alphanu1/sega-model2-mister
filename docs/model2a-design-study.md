@@ -28121,3 +28121,20 @@ Today's total on w2500 at latency 10: 1,214,722 -> 846,527 (-30%), 10.6 ms
 at 80 MHz. The projector is now idle 49%; the engine again: E_FQ 19.1%
 (transform latency), E_FW 13.3% + E_RD 12.3% + E_NORM 6.7% (reads),
 E_DOT/E_DOTA 19.4%.
+
+**R759 -- P1(n)'S FOCUS AFTER THE CULL AND THE LIGHT: -6 TO -9% MORE, SAME
+BITS.** After R758 the engine waited in E_FQ 19% -- mostly for P1(n)'s
+transform, which it needed only to focus P1(n) before the cull dot product.
+The cull reads P0(n)'s transformed point (dpx..dpz) and the normal; the
+light dot product and the luminance read neither P1(n) nor its focus. Now
+P0(n) is focused, the cull decided, and P1(n) focused last: before E_EMIT
+when culled (the strip carry needs it), after the luminance when kept
+(cull_q picks E_STORE's exit). A triangle still ropes P1(n) = P0(n) at
+P0(n)'s store.
+  * tb_m2_geodiff, 28a576c against this, eleven lists at latency 10: byte-
+    identical, -6 to -9% (w2500 846,527 -> 775,284); w2500 at 3 -9%, at 20
+    -8%, w1000 at 40 -4%. tb_m2_geo_engine 68 / 0, tb_m2_geometry 42 / 0,
+    lint_top and Quartus parse clean.
+Today on w2500 at latency 10: 1,214,722 -> 775,284 (-36%), 9.7 ms at 80 MHz.
+Profile now: E_FQ 13.7%, E_RD 13.4%, E_DOTA 12.6%, E_FW 11.7%, E_DOT 8.6%,
+E_FOC 8.5%, E_NORM 7.4%, E_EMIT 6.9%.

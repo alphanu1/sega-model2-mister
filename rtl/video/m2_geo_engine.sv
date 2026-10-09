@@ -281,6 +281,13 @@ module m2_geo_engine #(
   wire         f_act = (fs != F_IDLE) && (fs != F_DONE);
   // R757: the two focus multiplies of a point are issued back to back.
   logic        fiss_done, fgot;
+  // R759: P1(n)'s focus waits until it is needed. The cull test reads P0(n)'s
+  // transformed point and the normal; the light and the luminance read
+  // neither P1(n) nor its focus. So P0(n) is focused, the cull is decided,
+  // and P1(n) is focused only then (culled: before E_EMIT, which the strip
+  // carry needs; kept: after the luminance) -- its transform's latency hides
+  // behind the dot products instead of being waited out in E_FQ.
+  logic        cull_q;        // the cull decided in E_DOTA, for E_STORE's exit
   // R219: THE REFERENCE CULLS WHAT WE EMITTED. model2_v.cpp check_culling:
   // a single-sided polygon (attr bit 17 clear) whose face is the back
   // (normal . point < 0, the point being the polygon's first new vertex
@@ -486,6 +493,7 @@ module m2_geo_engine #(
       fx <= 32'd0; fy <= 32'd0; fz <= 32'd0; fsel <= 1'b0;
       tq_wr <= 2'd0; tq_rd <= 2'd0; raw_v <= 2'b00; fq_cur <= 1'b0; fq_slot <= 1'b0;   // R754
       fs <= F_IDLE; h3w <= 16'd0; fiss_done <= 1'b0; fgot <= 1'b0;                     // R757
+      cull_q <= 1'b0;                                                                  // R759
       for (int k = 0; k < 4; k++) tq[k] <= 3'd0;
       for (int k = 0; k < 2; k++) begin raw_x[k] <= 32'd0; raw_y[k] <= 32'd0; raw_z[k] <= 32'd0; end
       dbg_polys <= 16'd0; dbg_objects <= 16'd0;
@@ -604,15 +612,13 @@ module m2_geo_engine #(
             2'b01: begin p1prev[0] <= fx; p1prev[1] <= fy; p1prev[2] <= fz;
                          st <= E_ATTR; end
             2'b10: begin p0cur[0] <= fx; p0cur[1] <= fy; p0cur[2] <= fz;
-                         if (attr[0]) begin fq_slot <= 1'b1; st <= E_FQ; end
-                         else begin
-                           // TRIANGLE: rope P1(n) = P0(n). Its three unused
-                           // words were consumed in E_SKIP before this.
-                           p1cur[0] <= fx; p1cur[1] <= fy; p1cur[2] <= fz;
-                           dstep <= 2'd0; dgot <= 2'd0; st <= E_DOT;
-                         end end
-            default: begin p1cur[0] <= fx; p1cur[1] <= fy; p1cur[2] <= fz;
-                           dstep <= 2'd0; dgot <= 2'd0; st <= E_DOT; end
+                         // TRIANGLE: rope P1(n) = P0(n). Its three unused words
+                         // were consumed in E_SKIP before this.
+                         if (!attr[0]) begin p1cur[0] <= fx; p1cur[1] <= fy; p1cur[2] <= fz; end
+                         dstep <= 2'd0; dgot <= 2'd0; st <= E_DOT;   // R759: the cull, now
+                       end
+            default: begin p1cur[0] <= fx; p1cur[1] <= fy; p1cur[2] <= fz;   // R759: P1(n), last
+                           st <= cull_q ? E_EMIT : E_FW; end
           endcase
         end
 
@@ -715,9 +721,13 @@ module m2_geo_engine #(
                 // stays in step (R268's reason for reading them at all).
                 th_w <= th_w + {{15{attr[16]}}, attr[16:12], 2'b00};
                 tp_w <= tp_w + (attr[0] ? 22'd8 : 22'd6);
-                dstep <= 2'd0; dgot <= 2'd0; st <= E_EMIT;
+                dstep <= 2'd0; dgot <= 2'd0;
+                cull_q <= 1'b1;                                     // R759: P1(n) is still to focus
+                if (attr[0]) begin fq_slot <= 1'b1; st <= E_FQ; end
+                else st <= E_EMIT;
               end else begin
                 dsel <= 1'b1; dstep <= 2'd0; dgot <= 2'd0; st <= E_DOT;   // R222: now the light
+                cull_q <= 1'b0;                                                  // R759
                 xaddr <= th_dw(th_w, th_ram); xhalf <= th_w[0]; xspace <= 2'd1;   // R757: and the
                 fs    <= F_TH0;                                                  // texture, beside it
               end
@@ -742,7 +752,9 @@ module m2_geo_engine #(
         end
         E_LUMAW: if (fadd_rsp) begin
           luma8  <= f2i8(fadd_res);
-          st     <= E_FW;                 // R757: the fetcher has been reading meanwhile
+          // R757: the fetcher has been reading meanwhile; R759: P1(n) first
+          if (attr[0]) begin fq_slot <= 1'b1; st <= E_FQ; end
+          else st <= E_FW;
         end
 
         // R757: the header and coordinates are in; the colour-cache index takes
