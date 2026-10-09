@@ -138,7 +138,7 @@ module m2_geo_project (
   assign div_req = (rst_st == R_BUSY) && !div_started && !r_behind;
 
   // ------------------------------------------------------------ scale stage
-  typedef enum logic [2:0] { S_IDLE, S_M0, S_M1, S_A0, S_A1, S_OUT } sstate_t;
+  typedef enum logic [2:0] { S_IDLE, S_M0, S_M1, S_A0, S_A1, S_OUT, S_RND } sstate_t;   // R756: S_RND
   sstate_t sst;
 
   logic [31:0] sx_f, sy_f, sxx, syy, sr, sx_in, sy_in;
@@ -156,19 +156,32 @@ module m2_geo_project (
   // shift and a negate, so a second instance is cheaper than the state it would
   // take to reuse the first, and muxing one between sx_f and sy_f is how the
   // first version of this module ended up never assigning out_sy at all.
-  logic signed [31:0] sx_i, sy_i;
-  fp_to_int u_f2i_x (.f(sx_f), .i(sx_i));
-  fp_to_int u_f2i_y (.f(sy_f), .i(sy_i));
-  // R626: the same floats times four -- the exponent plus two -- truncated; the
-  // low two bits are the quarters. Zero, denormal and near-infinite exponents
-  // are passed as they are (the quarters of those are not wanted).
-  function automatic logic [31:0] times4(input logic [31:0] f);
-    times4 = (f[30:23] != 8'd0 && f[30:23] < 8'd253) ? {f[31], f[30:23] + 8'd2, f[22:0]} : f;
+  // R756: ROUNDED TO THE NEAREST QUARTER, NOT TRUNCATED. R626 truncated the
+  // pixel and the quarter separately toward zero, and gave a negative x no
+  // quarter at all. The clipper makes the same left-edge point more than once,
+  // a few ulp apart (x = -0.99999 and -1.00001), and truncation put one copy
+  // at 0 and the other at -1: a whole pixel, chosen by float noise, so it
+  // flipped as the camera moved -- a seam from the left edge and a flicker
+  // (Ben: the road shakes). Now one count of quarters, q = round(4x), half
+  // away from zero, from the float times eight truncated: |q| =
+  // (trunc(8|x|) + 1) >> 1. The pixel is q >>> 2 (floor) and the quarter
+  // q[1:0], so a vertex is still sx + fx/4 exactly, negative or not, and
+  // copies within an eighth of a pixel of a quarter land on it together.
+  function automatic logic [31:0] times8(input logic [31:0] f);
+    times8 = (f[30:23] != 8'd0 && f[30:23] < 8'd252) ? {f[31], f[30:23] + 8'd3, f[22:0]} : f;
   endfunction
-  logic signed [31:0] sx4_i, sy4_i;
-  wire [31:0] sx_f4 = times4(sx_f), sy_f4 = times4(sy_f);
-  fp_to_int u_f2i_x4 (.f(sx_f4), .i(sx4_i));
-  fp_to_int u_f2i_y4 (.f(sy_f4), .i(sy4_i));
+  logic signed [31:0] sx8_i, sy8_i;
+  wire [31:0] sx_f8 = times8(sx_f), sy_f8 = times8(sy_f);
+  fp_to_int u_f2i_x8 (.f(sx_f8), .i(sx8_i));
+  fp_to_int u_f2i_y8 (.f(sy_f8), .i(sy8_i));
+  function automatic logic signed [31:0] rnd8(input logic signed [31:0] t);
+    logic [31:0] m;
+    m = t[31] ? 32'(-t) : 32'(t);
+    m = (m + 32'd1) >> 1;
+    rnd8 = t[31] ? -$signed(m) : $signed(m);
+  endfunction
+  logic signed [31:0] qx_r, qy_r;   // quarters, registered in S_RND
+  logic               qx_bad, qy_bad;   // the converter's indefinite (NaN, overflow)
 
   assign in_ready = (rst_st == R_IDLE);
 
@@ -211,6 +224,7 @@ module m2_geo_project (
       rx <= '0; ry <= '0; rz <= '0; recip <= '0; r_behind <= 1'b0;
       div_started <= 1'b0;
       sx_in <= '0; sy_in <= '0; sr <= '0; sxx <= '0; syy <= '0;
+      qx_r <= '0; qy_r <= '0; qx_bad <= 1'b0; qy_bad <= 1'b0;   // R756
       sx_f <= '0; sy_f <= '0; s_behind <= 1'b0; s_z <= '0;
       step <= '0; n_got <= '0;
       out_valid <= 1'b0; out_sx <= '0; out_sy <= '0; out_z <= '0; out_invz <= '0;
@@ -288,18 +302,26 @@ module m2_geo_project (
             if (n_got == 2'd1) begin
               step  <= '0;
               n_got <= '0;
-              sst   <= (sst == S_A0) ? S_A1 : S_OUT;
+              sst   <= (sst == S_A0) ? S_A1 : S_RND;   // R756
             end
           end
+        end
+
+        // R756: the rounding's own cycle -- an increment and a negate behind
+        // the converter's shifter, at 80 MHz.
+        S_RND: begin
+          qx_r   <= rnd8(sx8_i);  qx_bad <= (sx8_i == 32'sh80000000);
+          qy_r   <= rnd8(sy8_i);  qy_bad <= (sy8_i == 32'sh80000000);
+          sst    <= S_OUT;
         end
 
         S_OUT: begin
           // Behind the eye is a literal (0,0), as MAME assigns - not a converted
           // one, because the float chain was never run for it.
-          out_sx     <= s_behind ? 32'sd0 : sx_i;
-          out_sy     <= s_behind ? 32'sd0 : sy_i;
-          out_fx     <= (s_behind || sx_f[31]) ? 2'd0 : sx4_i[1:0];   // R626
-          out_fy     <= (s_behind || sy_f[31]) ? 2'd0 : sy4_i[1:0];
+          out_sx     <= s_behind ? 32'sd0 : qx_bad ? 32'sh80000000 : (qx_r >>> 2);   // R756
+          out_sy     <= s_behind ? 32'sd0 : qy_bad ? 32'sh80000000 : (qy_r >>> 2);
+          out_fx     <= (s_behind || qx_bad) ? 2'd0 : qx_r[1:0];
+          out_fy     <= (s_behind || qy_bad) ? 2'd0 : qy_r[1:0];
           out_z      <= s_z;
           out_invz   <= sr;                  // R331: 1/z, alongside z
           out_behind <= s_behind;

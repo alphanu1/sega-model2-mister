@@ -524,9 +524,20 @@ module m2_geo_clip (
           end
         end
 
+        // R756: THE INSIDE ENDPOINT FIRST, ALWAYS. One plane cuts each child
+        // of a polygon separately, and the endpoints came in polygon order, so
+        // the same edge cut twice gave points a few ulp apart -- which the
+        // screen snap then split by a whole pixel at the left edge (a seam
+        // and a flicker). Ordered by side, an edge cut twice gives the same
+        // bits. The formula is symmetric in its endpoints.
         K_SET: begin
-          cp_a   <= edge_a(ccase, cn);
-          cp_b   <= edge_b(ccase, cn);
+          if (is_out[edge_a(ccase, cn)]) begin
+            cp_a <= edge_b(ccase, cn);
+            cp_b <= edge_a(ccase, cn);
+          end else begin
+            cp_a <= edge_a(ccase, cn);
+            cp_b <= edge_b(ccase, cn);
+          end
           cp_dst <= cn;
           cs     <= '0;
           c_axis <= 3'd0;

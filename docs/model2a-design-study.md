@@ -28017,3 +28017,43 @@ streams (two product banks, the adder behind them).
     parse clean. (The read-ahead bench never finishes at latency 0, old
     engine or new -- a bench limit, not a result.)
 Cost: tq, two raw points (192 bits), a few control bits; no arithmetic.
+
+**R756 -- THE ROAD'S SHAKE: TRUNCATED SNAPS OF DUPLICATED CLIP POINTS. ROUND
+TO THE NEAREST QUARTER, AND CUT EVERY EDGE FROM ITS INSIDE END.** Ben,
+2026-10-09: the road seams move and are not always joined, and in places the
+road shakes by a couple of pixels continuously. Measured (tb_m2_geodiff with
+each vertex's view-space floats, all eleven saved walks, ~45,100 vertices):
+our 3D points match MAME's to ~0.002 px before the screen snap (p99 0.004 on
+the road's clipped corners at z 1.4-4) -- the geometry is right. The error is
+the snap. R626 truncated the pixel and the quarter toward zero separately
+and gave negative x no quarter; and the clipper computes one point several
+times (one plane cuts each child of a polygon separately, endpoints in
+polygon order), a few ulp apart. At the left edge, x = -0.99999 and -1.00001
+truncated to 0 and -1: 70 of 126 left-edge points computed more than once
+split by A WHOLE PIXEL (w4000: quads 253 and 255 share c471376c/c471376f,
+3 ulp, drawn at x 0 and -1), and which way each copy falls is float noise,
+so it changes as the camera moves -- a seam from the left edge and a 1-px
+flicker. On shallow edges the quarter step itself moves the edge sideways
+0.25 x dx/dy (1-2 px on a bob at dx/dy 8-16); only finer vertices shrink that.
+R643's "y 370.25 vs 373.35" was a different split of the same area, not a
+3-pixel error.
+  * m2_geo_project: q = round(4x), half away from zero, from the float times
+    eight truncated (|q| = (trunc(8|x|) + 1) >> 1); pixel q >>> 2, quarter
+    q[1:0], so a vertex is still sx + fx/4 for negative x too. A new S_RND
+    state registers it (the increment and negate behind the shifter, at 80
+    MHz); two fp_to_int instead of four. Streamed throughput unchanged
+    (tb_m2_geo_project 33.1 cycles a point); reference updated to the rule.
+  * m2_geo_clip K_SET: the endpoint inside the plane is cp_a, always, so an
+    edge cut twice gives the same bits.
+  * Walks: points computed more than once with different bits 305 -> 69;
+    copies landing on different positions 90 -> 0 (left edge 70 -> 0).
+    Corner vs the exact projection of our own point: median 0.176 -> 0.087,
+    p90 0.238 -> 0.118, max 1.000 -> 0.125 px. Quad counts identical on all
+    eleven walks. tb_m2_geo_clip 2003 / 0, tb_m2_geometry 42 / 0,
+    tb_m2_geo_engine 68 / 0, lint_top and Quartus parse clean.
+Not done: sixteenth-pixel vertices (the shallow-edge step, ~4x; touches the
+projector, the fraction bus, the store packing and the fill), and Model 1's
+floor-inclusive span rule (hides sub-pixel seams; does nothing for a shake).
+The fill rule itself is exact (seam bench: 0 gaps and 0 overlaps over 2.3 M
+rows when the shared edge's data is identical); R677's "without a gap" holds
+only for that case.
