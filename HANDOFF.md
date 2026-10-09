@@ -1,5 +1,34 @@
 # Handoff
 
+## 2026-10-09 (late): BLACK 3D FIXED ON THE BOARD; SPEED FIX AND SKY BAND FIX BUILDING
+
+HEAD 7642296 on readahead (R752-R755). Building: s849-s851 (worktree
+sm2-rel-7642296) = HEAD at 80/40, no telemetry -- the first build with all
+four. On the board now: s847 (R752 + FAST_ACK 0 + black records, 75/37.5).
+
+  R752 black 3D: CONFIRMED on s847 -- 15 min from power-on, 0 frames with
+       nops (s845: 170), one 0x06 all session, never black.
+  R753 lock: FAST_ACK 0 is the default (R730's same-cycle answers off).
+       Soaks with it off: 50, 48, 20+ min clean; with it on, locks at 4-45.
+       Costs ~8% CPI on boot code. R730's actual fault is not found.
+  R754 speed: the geometry engine issues its transforms without waiting.
+       Ben: Double Buffered drops attract/2D to ~30, Single runs full speed
+       -> a drawn list overran its frame. Bench: -17 to -24% a list, quads
+       byte-identical (11 lists; 4 lists x 4 latencies old vs new).
+       EXPECT: Double Buffered attract/menus at 60. Races not yet measured.
+  R755 black band above the sky on hills: row mask applied in window mode
+       (MAME never does). Reproduced from MAME's memory in tb_m2_video_frame,
+       fixed render matches MAME.
+
+OPEN:
+  * Road seams / shaking. Seam agent: the fill rule is exact; dotted gaps are
+    T-junctions and clipped vertices quantised separately (Model 1's
+    floor-inclusive rule closes them in the bench). Ben: the road also SHAKES
+    by a couple of pixels -- not a quarter-pixel matter; being measured
+    (clipper vs MAME, R643's few-pixel offsets).
+  * Race speed at 80/40 with the read-ahead ON: owed.
+  * R730's fault; the code cache (R733); menu flashing boxes (Single buffered).
+
 ## 2026-10-09 (day): 80/40 CLOSED; NO FASTER; BLACK 3D FOUND (R752); LOCK POINTS AT R730
 
 Branch readahead, HEAD 4202dbb (R744-R752). main is still the 20261008b
