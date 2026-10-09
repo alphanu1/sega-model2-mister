@@ -27872,3 +27872,16 @@ walker's did not.
     after the SDRAM write -- 925 checks, 0 mismatches; with the landed pulse
     planted off, both checks fail.
 test_m2_cpu_sdram, lint_top, Quartus parse clean. Board: next build.
+
+**R750 -- THE LOCK'S TRAP, READ: A FUNCTION POINTER OF 0x1868.** s833 (R747 +
+trap telemetry, 80/40, FAST_ACK 1) locked after 29 minutes of attract (black
+from 4 minutes, R749 not yet in). After the trap: dbg_ip 0x1868, the trapped
+word 0x005011FC (the 0x1864 load's displacement, as R748 read it), the saved
+return IP 0x1864, the frame pointer 0x0053F500. The return IP rules out a bad
+RETURN: the callx at 0x1860 ran correctly, saved 0x1864 and went to the
+address in r5 -- and r5 was 0x1868. r5 comes from 0x185C, `ld 12(g13), r5`
+(902F600C: MEMA, offset 12, abase g13): the game's dispatcher calling a task
+through a pointer in its record. So the wrong value is DATA: either that load
+returned the wrong word or the word in memory had been overwritten with
+0x1868. Next: R749 with FAST_ACK 0 (R729's registered answers) and the trap
+telemetry, s837-s839 -- if it does not lock, R730 caused it.
