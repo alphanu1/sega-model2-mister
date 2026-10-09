@@ -27780,3 +27780,23 @@ one vblank by any margin still takes two. Not yet measured how close it now
 is, or what the time is: the telemetry no longer fits (R733), so a
 measurement-only build (ca54485 + M2_DEBUG_LITE, the engine read-ahead tied
 to bypass for room) is building, s816-s818.
+
+**R746 -- A RACE AT 80 / 40 WITH THE READ-AHEAD OFF: NOT COMPARABLE, AND WHY.**
+s816 (ca54485 + M2_DEBUG_LITE, the engine read-ahead tied to bypass so the
+telemetry fits; clk_sys +0.053, HDMI -1.148; RBF dc5262b703e7d61d55e3ee3727b35067),
+Ben racing 180 s, Double Buffered: 29.0 fps (1.98 vblanks a frame); 11.56
+CPI (3.24 M instr/s), 60.1% of cycles on the bus; data cache 80.0%. By
+sample (633): data access 40.3% (SDRAM read miss 16.4%, write 7.4%, the
+geometrizer push 0x804000 6.0%), instruction fetch 19.4%, working 17.4%,
+TGP 12.2%, frame-sync idle 10.7%. Against s751 (37.5, read-ahead on, 34.2%
+idle -> ~1.2 vblanks of CPU a frame) this reads ~1.75 -- Ben: "but we were at
+1.2 vblanks before".
+NOT the 80 MHz work: tb_m2_geodiff w1000 / w4000 / w7900 take 1,198,494 /
+555,350 / 537,863 cycles through d08ba0a's geometry and 1,245,923 / 572,707
+/ 554,319 through HEAD's (+3-4%, R739/R740's extra cycles), quads identical
+-- at 80 MHz against 75 that is 2-3% LESS time. The measurement build is the
+difference: without the read-ahead the walk takes ~20-25% longer (R707,
+R709), which is exactly the new push stall (6%, was ~0) and SDRAM misses
+taking three times as long. So a CPU measurement must keep the read-ahead.
+Next: the same build with the read-ahead on and the telemetry trimmed instead
+(no 'T' framebuffer record, no tile-overrun count), s819-s821.
