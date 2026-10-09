@@ -1499,14 +1499,16 @@ module m2_raster_fill #(
 
         S_FLAT: begin
           if (s1_free && pf_st == S_IDLE) begin   // R544; R715
-            if ((cury <= view_y2) && (cury >= view_y1) && emit_ok) begin
-              s1_valid   <= 1'b1;        // R715: stage 1; the plane next cycle
-              s1_y       <= cury;
-              s1_cl      <= emit_cl;
-              s1_cr      <= emit_cr;
-              s1_col     <= col;
-              s1_moire   <= moire;
-            end
+            // R741: the data loads whenever stage 1 is free and only the
+            // VALID depends on the emit test -- it was the enable of every
+            // stage-1 flop (s792 at 80 MHz: xah -> s1_col -0.519, s1_moire).
+            // Stage 1's data is read only while s1_valid.
+            s1_valid   <= (cury <= view_y2) && (cury >= view_y1) && emit_ok;   // R715: stage 1; the plane next cycle
+            s1_y       <= cury;
+            s1_cl      <= emit_cl;
+            s1_cr      <= emit_cr;
+            s1_col     <= col;
+            s1_moire   <= moire;
             quad_done <= 1'b1;
             state     <= S_IDLE;
           end
@@ -1680,14 +1682,16 @@ module m2_raster_fill #(
           if (walk_y >= walk_end) begin
             state <= S_FS_END;
           end else if (s1_free && pf_st == S_IDLE) begin   // R544; R715
-            if (emit_ok) begin
-              s1_valid   <= 1'b1;        // R715: stage 1; the plane next cycle
-              s1_y       <= walk_y;
-              s1_cl      <= emit_cl;
-              s1_cr      <= emit_cr;
-              s1_col     <= col;
-              s1_moire   <= moire;
-            end
+            // R741: the data loads whenever stage 1 is free and only the
+            // VALID depends on the emit test -- it was the enable of every
+            // stage-1 flop (s792 at 80 MHz: xah -> s1_col -0.519, s1_moire).
+            // Stage 1's data is read only while s1_valid.
+            s1_valid   <= emit_ok;   // R715: stage 1; the plane next cycle
+            s1_y       <= walk_y;
+            s1_cl      <= emit_cl;
+            s1_cr      <= emit_cr;
+            s1_col     <= col;
+            s1_moire   <= moire;
             xa     <= xa + sla;
             xb     <= xb + slb;
             xah    <= xah + sla;
@@ -1713,14 +1717,16 @@ module m2_raster_fill #(
         // sort its two x values, so a crossed pair emits nothing.
         S_FINAL: begin
           if (s1_free && pf_st == S_IDLE) begin   // R544; R715
-            if ((cury == limy) && (cury <= view_y2) && (cury >= view_y1) && emit_ok) begin
-              s1_valid   <= 1'b1;        // R715: stage 1; the plane next cycle
-              s1_y       <= cury;
-              s1_cl      <= emit_cl;
-              s1_cr      <= emit_cr;
-              s1_col     <= col;
-              s1_moire   <= moire;
-            end
+            // R741: the data loads whenever stage 1 is free and only the
+            // VALID depends on the emit test -- it was the enable of every
+            // stage-1 flop (s792 at 80 MHz: xah -> s1_col -0.519, s1_moire).
+            // Stage 1's data is read only while s1_valid.
+            s1_valid   <= (cury == limy) && (cury <= view_y2) && (cury >= view_y1) && emit_ok;   // R715: stage 1; the plane next cycle
+            s1_y       <= cury;
+            s1_cl      <= emit_cl;
+            s1_cr      <= emit_cr;
+            s1_col     <= col;
+            s1_moire   <= moire;
             state <= S_DONE;
           end
         end

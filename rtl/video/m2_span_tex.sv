@@ -280,6 +280,16 @@ module m2_span_tex #(
   // R476: the emit computes its own intensity from the texel that has just
   // arrived, so there is no registered copy to derive one from.
   /* verilator lint_off UNUSEDSIGNAL */
+  // R741: the same product as c * (i + 1) >> 8 with i + 1 latched beside the
+  // texel (rt_i1), so the emit is one 8 x 9 multiply and no add after it
+  // (s791 at 80 MHz: rt_col -> e_col -0.281). Equal for all 65,536 (c, i).
+  function automatic logic [7:0] scale1(input logic [7:0] c, input logic [8:0] i1);
+    logic [16:0] p;
+    begin
+      p = 17'(c) * 17'(i1);
+      scale1 = p[15:8];
+    end
+  endfunction
   function automatic logic [7:0] scale(input logic [7:0] c, input logic [7:0] i);
     logic [15:0] p;
     begin
@@ -556,6 +566,7 @@ module m2_span_tex #(
   // values: a slot is not reloaded while a group of its span is in flight
   // (R490), which the emit-time read below always relied on.
   logic [23:0]        rt_col;
+  logic [8:0]         rt_i1;   // R741: the texel's intensity plus one
   logic [1:0]         rt_k;
   logic signed [31:0] rt_x1;
   logic [8:0]         lt_texel;    // R633: the last fetched answer, for a reuse
@@ -801,6 +812,7 @@ module m2_span_tex #(
     if (!rst_n) begin
       st <= T_IDLE; dv_age <= 3'd0; of_wp <= '0; of_rp <= '0;   // R539
       rt_valid <= 1'b0; rt_texel <= 9'd0; rt_x <= '0; rt_last <= 1'b0;   // R478
+      rt_i1 <= 9'd1;                                                    // R741
       for (int k = 0; k < 2; k++) begin
         y_p[k] <= '0; x1_p[k] <= '0; col_p[k] <= '0; k_p[k] <= '0;
         moire_p[k] <= 1'b0; tex_p[k] <= '0;
@@ -899,6 +911,7 @@ module m2_span_tex #(
           if (rt_take) begin
             rt_valid <= 1'b1;
             rt_texel <= head_reuse ? lt_texel : tx_texel;   // R633
+            rt_i1    <= {1'b0, (head_reuse ? lt_texel[7:0] : tx_texel[7:0])} + 9'd1;   // R741
             if (!head_skip && !head_reuse) lt_texel <= tx_texel;
             rt_x     <= 32'(of_x[of_rp[OW-2:0]]);   // sign-extended
             rt_last  <= of_last[of_rp[OW-2:0]];
@@ -922,9 +935,9 @@ module m2_span_tex #(
             e_x     <= rt_x;
             e_x1    <= ((rt_x + stp(rt_k) - 32'sd1) > rt_x1)
                          ? rt_x1 : (rt_x + stp(rt_k) - 32'sd1);   // R650, R731
-            e_col   <= {scale(rt_col[23:16], iv),
-                        scale(rt_col[15:8],  iv),
-                        scale(rt_col[7:0],   iv)};
+            e_col   <= {scale1(rt_col[23:16], rt_i1),   // R741: = scale(c, iv)
+                        scale1(rt_col[15:8],  rt_i1),
+                        scale1(rt_col[7:0],   rt_i1)};
             e_p     <= rt_p;                      // R490
             if (!skip) dbg_texpix <= dbg_texpix + stp(rt_k);   // R484: wraps
           end

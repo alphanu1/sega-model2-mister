@@ -27693,3 +27693,21 @@ sign/magnitude (stage 1b) and encode/shift (stage 2); left and bottom stored
 negated in stage 1 so no negate precedes them. A window change reaches the
 projection one cycle later. test_m2_geo_view 37/0, test_m2_geo 118/0, geodiff
 w1000 / w4000 / w7900 quad lists identical.
+
+**R741 -- 80 / 40, ROUND FOUR'S RESULT AND THREE MORE.** 86bdae5 (R737 + R738
++ R739) at 80 / 40, s791-s793: clk_sys -0.467 / -0.519 / -0.353 (TNS -1.7 /
+-4.9 / -3.4) -- from -0.8..-1.2 in round three; HDMI -0.146 / -0.365 /
++0.086; 40,949-41,169 ALM. What was left: the store a_hi23 -> att RAM, hz ->
+hzmin, mul_delta -> mul_pr, pool sA_small (all R740, not in that build);
+clip cs -> pool mul_a_q -0.089; fx68k Ir -> nanoAddr -0.066; and three new:
+  * raster3d fill_band -> the list RAMs' PORT_B_ADDRESS_STALL (-0.467): the
+    replay's hit test was in the read enable. adv now stalls whenever stage
+    two holds a quad and the queue is full, hit or not -- a miss waits a cycle
+    only while the queue is full; nothing is reordered.
+  * fill xah -> s1_col / s1_moire (-0.519): the emit test was the enable of
+    every stage-1 flop. The data now loads whenever stage 1 is free and only
+    s1_valid takes the test (three sites); stage 1 is read only while valid.
+  * span_tex rt_col -> e_col (-0.281): (c*i + c) >> 8 as c*(i+1) >> 8 with i+1
+    latched beside the texel (rt_i1); equal for all 65,536 (c, i).
+The four frames identical in pixels, fetches and cycles; test_m2_raster3d
+8/8; lint_top and Quartus parses clean.

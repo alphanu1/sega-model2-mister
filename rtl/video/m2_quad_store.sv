@@ -735,7 +735,12 @@ module m2_quad_store #(
   wire [BW-1:0] q_band_lo = att_rd[AT_W-BW-1:CW+1];
   wire          hit = v2 && (replay_band >= q_band_lo) && (replay_band <= q_band_hi);
   // The pipeline moves unless a hit is standing with nowhere to go.
-  wire          adv = sc_run && !(hit && hq_full);
+  // R741: unless ANY quad is standing in stage two with the queue full -- hit
+  // or not. The hit test (replay_band against the att word just read) was in
+  // the list RAMs' read enable (s791 at 80 MHz: raster3d fill_band -> the
+  // RAM's PORT_B_ADDRESS_STALL -0.467). A miss now waits for a queue slot it
+  // does not need, a cycle, only while the queue is full; nothing is reordered.
+  wire          adv = sc_run && !(v2 && hq_full);
 
   typedef enum logic [1:0] { E_IDLE, E_READ, E_OUT } estate_t;
   estate_t e_st;
