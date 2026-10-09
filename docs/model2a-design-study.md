@@ -27885,3 +27885,15 @@ through a pointer in its record. So the wrong value is DATA: either that load
 returned the wrong word or the word in memory had been overwritten with
 0x1868. Next: R749 with FAST_ACK 0 (R729's registered answers) and the trap
 telemetry, s837-s839 -- if it does not lock, R730 caused it.
+
+**R751 -- TELEMETRY AT 80 / 40 DOES NOT CLOSE; THE LOCK BISECT DROPS TO 75.**
+Two attempts, both failed. (1) The read-ahead-on CPU measurement R746 called
+for (ca54485 + M2_DEBUG_LITE, 'T' record and tile-overrun count trimmed),
+s819-s821: clk_sys -0.592 / -2.234 / -2.243. (2) R750's bisect build
+(473437f + trap telemetry + FAST_ACK 0) at 80/40, s837-s839: s837 does not
+fit (4,193 LABs of 4,191), s838 clk_sys -0.898 (HDMI -0.120), s839 -0.786
+(HDMI -0.389). The telemetry costs what 80 MHz has left. Since the lock
+happens at 75 / 37.5 as well (R748), the bisect does not need 80: the same
+RTL at 75 / 37.5 is building, s840-s842. The read-ahead-on measurement at
+80 / 40 is still owed, and has to give up something other than the
+read-ahead to fit.

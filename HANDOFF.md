@@ -1,5 +1,42 @@
 # Handoff
 
+## 2026-10-09 (day): 80/40 CLOSED; NO FASTER; BLACK 3D AND THE LOCK BEING BISECTED
+
+Branch readahead, HEAD fd3637b (R744-R750). main is still the 20261008b
+release (s759).
+
+80 / 40 closes every clock, HDMI too: s814 (a3f055c + R744's clocks),
+clk_sys +0.177, HDMI +0.301, RBF md5 8d096e92e0225eaebb44e06a5d3b60e3. Ben:
+"seems like it's the same speed". Measured: a race still takes ~2 vblanks a
+frame (R745). The read-ahead-off telemetry build (s816) read ~1.75 vblanks of
+CPU a frame, but that is NOT comparable -- without the read-ahead the walk
+is 20-25% slower (R746). Ben wants the 80/40 number with the read-ahead ON;
+s819-s821 (trimmed telemetry, read-ahead on) all failed clk_sys (-0.59 best),
+so that measurement is still owed.
+
+BLACK 3D (Ben: "never been fixed; the fix just made it take longer"): the
+32-entry light table goes all (0, 0) -- R697's zero-count race. Two holes
+found: push_busy dropped for a cycle while the M10K queue still held words
+(R747, e82e57e), and the walker's pair cache re-read the old count before the
+CPU's patch landed (R749, 473437f). R747 alone still went black at 4 minutes
+(s833). R749 is NOT YET ON THE BOARD.
+
+THE LOCK: in attract after minutes to ~45 the i960 traps at 0x1868 (three
+captures, 75 and 80 MHz); an OSD reset recovers it. R750: the callx at 0x1860
+went to r5 = 0x1868, loaded by `ld 12(g13), r5` at 0x185C -- a task pointer
+that is wrong DATA (bad load, or the word was overwritten). Prime suspect
+R730's same-cycle answers. R748 adds m2_cpu_bridge FAST_ACK (1 = R730, the
+branch default; 0 = R729's registered answers).
+
+IN FLIGHT: worktree sm2-trap-473437f = 473437f + trap telemetry + FAST_ACK 0.
+At 80/40 it did not close (s837 no fit by 2 LABs, s838 clk_sys -0.898, s839
+-0.786), so it is rebuilding at 75/37.5 as s840-s842 (the lock occurs at 75
+too). One attract soak (tools/m2-fps.py + m2-fbcheck.py) answers both: black
+frames -> R749 is not enough; a lock -> R730 is not the cause.
+
+Still owed: the valid 80/40 race measurement; a fix for the code cache (R733);
+the menu's flashing boxes under Single buffered (an "Auto" draw method).
+
 ## 2026-10-09 (early): ON THE BOARD NOW -- s779, stages 3+4 without the code cache. RACE IT.
 
 s779 = 8fb82e4's RTL (R724 line buffer + R729 two-phase handshake + R730
