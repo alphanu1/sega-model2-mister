@@ -28598,3 +28598,18 @@ lock against a period of 4-45; it was not enough. FAST_ACK stays 0 (it costs
 nothing known to be needed). Next: a 75 MHz build with R748's trap record and
 a watch on every i960 store and load of 0x00001868 (address, IP), soaked
 until it locks.
+
+**R778 -- THE 80 MHz SWEEPS OF R771-R776, AND S_DST_W NO LONGER RETIRES.**
+757ede8 (R769-R774), s903-s905: clk_sys -0.316 / -0.810 / +0.032, clk_mem
++0.558 / +0.369 / -0.230 (m2_sdram inflight -> rr_mask), HDMI -0.353 /
+-0.647 / -0.249; 41,396 ALM (99%). No TGP path in any failing list --
+span_tex, YM, geometry pj_n, texel_bl: placement. s905 not offered: a clk_mem
+miss in the memory controller while a data-corruption lock is open (R777).
+492b9da (+ R775, R776), s906-s908: s906 Quartus internal error (TDB); s907
+clk_sys -1.420 (geo_engine xl_raw -> rgb), s908 -0.488 (eng_ra -> poly_uv2),
+and one TGP path in s908, the one R773 named as a risk: x_dst_sp -> u_seq c1
+-0.132 -- io_ack / mem_stall through ret_dstw into the sequencer's in_valid.
+  * mb86233_core: ld/mov with a memory or io destination retires in
+    S_RETIRE again (ret_dstw removed). Replay 9,464,927 -> 9,726,730 cycles
+    (CPI 5.02), stream IDENTICAL; test_mb86233_core 67 / 0, lockstep 8,000;
+    test_m2_boot PASS.

@@ -864,18 +864,19 @@ module mb86233_core (
   // R773: AN INSTRUCTION RETIRES IN THE STATE IT FINISHES IN. S_RETIRE does
   // nothing for ld/mov or lab but step the sequencer and load the next word,
   // so they retire where they end: ld/mov in S_DST (a register destination,
-  // no ALU op), at S_DST_W's completion (no ALU op) or on the ALU's result;
-  // lab in S_LAB_WB. Not S_DST after a program-space source read: the word on
+  // no ALU op) or on the ALU's result; lab in S_LAB_WB.
+  // R778: NOT at S_DST_W's completion. That put io_ack and mem_stall in front
+  // of the sequencer's in_valid -- its pc, stack and loop counters (s908:
+  // x_dst_sp -> u_seq c1, -0.132 ns at 80 MHz) -- for ~2% of the TGP's
+  // cycles. A memory or io destination goes on to S_RETIRE. Not S_DST after a program-space source read: the word on
   // prog_rdata there is the operand, not pc + 1. ldi, lipl, stm, the 0x0f
   // group and the branches keep S_RETIRE, which is where their writes and the
   // sequencer's branch inputs are -- but a branch, ldi, lipl or stm with
   // nothing to read in S_ALU goes to it straight from S_DECODE.
   wire ret_dst   = (state == S_DST) && d_ldmov && d_noalu && x_dst_reg && !src_prog;
-  wire ret_dstw  = (state == S_DST_W) && d_ldmov && d_noalu
-                && !mem_stall && !(x_dst_sp == mb86233_pkg::EP_IO && !io_ack);
   wire ret_alu   = (state == S_ALU) && d_ldmov && alu_out_valid;
   wire ret_labwb = (state == S_LAB_WB);
-  assign ret_now = (state == S_RETIRE) || ret_dst || ret_dstw || ret_alu || ret_labwb;
+  assign ret_now = (state == S_RETIRE) || ret_dst || ret_alu || ret_labwb;
   state_e nxt_ret;
   assign nxt_ret = pf_load ? S_DECODE : pf_same ? S_DECODE : S_FETCH;
   wire dec_ret   = !(d_lab | d_ldmov) && !alu_active && !brul_regform
@@ -986,7 +987,7 @@ module mb86233_core (
                         : skip_alu  ? S_RETIRE : S_ALU;   // R771, R773
         S_DST_W: begin
           if (!mem_stall && !(x_dst_sp == mb86233_pkg::EP_IO && !io_ack))
-            state <= ret_dstw ? nxt_ret : skip_alu ? S_RETIRE : S_ALU;
+            state <= skip_alu ? S_RETIRE : S_ALU;   // R778
         end
 
         S_ALU: begin
