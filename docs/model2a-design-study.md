@@ -28424,3 +28424,11 @@ with its own write enable and a LINES-way mux. Now:
     +loops, test_i960_rom pass; tb_m2_cpu_real hash a95ee045a6c3424b, 12.03
     CPI (its boot loop fits any cache); tb_m2_boot PASS, CPI 11.85 -> 11.79.
     lint_top, Quartus parse clean. The fit report must show ctag in MLAB.
+R768 on the board: s894 (da3ea13, 80/40; clk_sys +0.402, clk_mem +0.150,
+clk_i960 +1.687, holds >= +0.232, HDMI -0.149; 41,401 ALM; ctag in MLAB, 267
+ALM with its read mux, cdata 7 M10K; RBF 5e050fb1d0f2817086b568f723b5d8dd).
+Ben: menus still slow (20 s countdowns), attract unchanged, the race "maybe a
+little faster, mostly 30". So R767's reading -- a menu frame ~5% over one
+vblank of CPU -- does not hold as stated: a ~half cut in its fetch misses did
+not bring it under. Next: a timeline record (flip, walk start, walk end, TGP
+hold, per vblank) instead of a further guess.
