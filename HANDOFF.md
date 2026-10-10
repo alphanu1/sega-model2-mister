@@ -1,5 +1,39 @@
 # Handoff
 
+## 2026-10-10: TGP 2.3x FASTER (R771-R775), TYRES BACK (R769). BUILDING.
+
+Branch readahead. Commits today: 9d3e1b1 (R769 + R770), 757ede8 (R771-R774),
+9dd8ee6 (R775). On the board: s901 (timeline, 75/37.5) -- s894 (8 KB icache,
+80/40) is saved on the SD card as Model2.rbf.s894.
+  R770 the timeline (s901): the MENU IS AT 60 -- the slow-flashing boxes were
+       Ben's capture card ("Menu is fine"). R767/R768's premise was wrong.
+       Race: flip 15.4-16.8 ms after vblank, the i960 held 4.8-5.5 ms a frame
+       on the TGP, walk ~12 ms -- the frame just fits, so it alternates 1 and
+       2 vblanks (the speed-up / slow-down). The TGP is the lever.
+  R769 car-select tyres: rings of 2-3 px quads, all culled by TINY = 4. The
+       store now culls at 2 px unless the previous list needed 4 (>= 1,792
+       quads passing 2). Bench: 1,338 of 1,340 stored, wheels whole; attract
+       unchanged or better. New tb_m2_quad_store (make test_m2_quad_store).
+  R771-R774 TGP: new race replay bench (make tgp_replay / tgp_replay_check;
+       capture under build/tgpcap, ROM-derived, git-ignored; `make
+       tgp_capture` remakes it). 30 race frames: 21.63 M -> 9.46 M cycles,
+       CPI 11.17 -> 4.89, ~9.0 -> ~3.9 ms of TGP a frame at 80 MHz, result
+       stream bit-identical at every step. nop skips the ALU; next word
+       prefetched; retire in the finishing state; integer ALU ops 3 cycles.
+  R775 ldif loads its register (MAME case 6; a no-op here and in Model 1).
+       The replay now PASSES against MAME except NaN encoding.
+BUILD: sm2-builds/sm2-rel-757ede8, seeds s903-s905 (R769-R774, not R775).
+Watch the new paths at 80 MHz: seq_cond_passed / io_ack / mem_stall into the
+sequencer's in_valid and the decode-register enable; seq_pc + 1 into the
+program RAM address.
+TO CHECK on the board: race and attract at a steady 60? car-select tyres.
+NOT ACTED ON: i960 16-bit st.s FIFO stores are sent {2{half}} where MAME
+zero-extends (only the sincos base sees them); MAME resets M to 1, we to 0.
+test_mb86233_regs fails 46,966 / 3 M at HEAD (stale rf 0x21 model, old).
+NEXT TGP STEPS if still short: S_DECODE 20.5%, S_ALU 21.3% (FP ops 6
+cycles), S_SRC 15.3%, S_DST 13.7%, S_SRC_W 10.3% -- the decode overlapped
+with the previous instruction, operand reads issued from S_DECODE.
+
 ## 2026-10-09 (evening): ON THE BOARD -- s877 = ae5dabd (R752-R762, 80/40)
 
 Worktree sm2-builds/sm2-rel-ae5dabd (build worktrees now live in sm2-builds/,
