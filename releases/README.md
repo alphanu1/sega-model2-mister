@@ -99,10 +99,9 @@ textured, lit polygons over the 2D layers, with sound.
 | `Steering` | how much stick gives full lock: `3/4`, `Full`, `5/4` or `Half`. |
 | `Save settings (NVRAM)` | writes the game's backup memory to the SD card. |
 
-## MiSTer's audio filter is switched off (from the next release)
+## MiSTer's audio filter is switched off
 
-**Builds after `Model2_20261008b.rbf` turn off MiSTer's built-in audio filter for
-this core.** The game's sound is unchanged: the same sound board, the same
+**This core turns off MiSTer's built-in audio filter.** The game's sound is unchanged: the same sound board, the same
 mix and the same output on HDMI, the 3.5 mm jack and S/PDIF. What stops working
 is MiSTer's own audio filter setting (the filter presets in the MiSTer menu and
 `MiSTer.ini`). It has no effect on this core.
