@@ -29477,3 +29477,16 @@ s958 41,207 ALM / s959 41,134 (98% -- R798's shrink worked); clk_mem -1.515 /
 address -> async read -> zero flag -> 16:1 nibble select in one 10 ns cycle);
 clk_sys -0.105 / -0.113 (geo_project -> geo_clip, noise). The read is being
 registered (R804) before the next build.
+
+**R805 -- THE LOCK IS TIED TO ONE ATTRACT SCENE.** s945, Daytona Revision A
+(setname daytona), attract only: two locks (~45-60 min, then 35 min after a
+reset, the second under the soak watch: 57.4 fps at +32 min, 0.0 at +33 and
++35) froze on almost the same frame -- the "V.R. button" demo (chase view,
+"V.R. ボタン搭載！4つの視点が楽しめます", SEGA 1994, CREDIT 0/1). The two
+screenshots' top 172 rows are identical and 12,941 of 190,464 pixels differ,
+all in the road below. So the trigger is something that scene does -- it
+cycles the four camera views -- firing on some passes but not all; the
+20-60 minutes is the number of attract loops until it fires. s931's lock
+(Deluxe '93) froze on the attract backdrop instead. The hunt now has a
+target: MAME's view of that scene (copro commands, the 0x185C dispatcher's
+task records, display lists, rare opcodes) to drive the benches.
