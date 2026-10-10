@@ -197,7 +197,7 @@ localparam CONF_STR = {
 	// speed (measured on s686: 28.4 pictures a second, every one two game
 	// frames apart -- 56.8 of 57.5). The menu order is mapped back to the skip
 	// count below: menu 0 -> skip 1, menu 1 -> skip 0, menu 2 -> skip 2.
-	"O[44:43],Draw method,Single buffered,Double Buffered,Every 3rd frame;",
+	"O[44:43],Draw method,Double Buffered,Single buffered,Every 3rd frame;",   // R781: Double first, the default
 	// R664: O[37] (FB self-test, R653), O[38] (FB address, R654) and O[41:39]
 	// (FB write pace, R656) are parked -- diagnostics of the scanline hunt that
 	// R660 ended -- to make room for the combining writer (R661). The bits stay
@@ -3006,7 +3006,7 @@ m2_geo #(.AW(SDR_AW), .DEPTH(128)) u_geo (
 	.clk(clk_sys), .rst_n(mem_rst_n),
 	.wr_ctl(geo_wr_ctl), .wr_setwp(geo_wr_setwp), .wr_setrp(geo_wr_setrp),
 	.trig_mode(wtrig_s2),
-	.skip((fskip_s3 == 2'd0) ? 2'd1 : (fskip_s3 == 2'd1) ? 2'd0 : 2'd2),   // R699: menu order -> skip count
+	.skip((fskip_s3 == 2'd0) ? 2'd0 : (fskip_s3 == 2'd1) ? 2'd1 : 2'd2),   // R699: menu order -> skip count; R781: Double (skip 0) is 0
 	.wr_push(geo_wr_push), .wdata(geo_push_word),
 	.rd_wp(geo_rd_wp), .rd_rp(geo_rd_rp),
 	.base_buffer(GAME_BUFFER),

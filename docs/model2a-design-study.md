@@ -28658,3 +28658,10 @@ owner z_r57 17,772 -> 12,936, z_r66 21,697 -> 17,550, z_apk 26,316 ->
 already MAME's. lint_top, Quartus parse clean; the fb / band / raster3d /
 quad-store benches pass. Bench pitfall: tb_m2_raster3d list mode samples x <
 400 unless M2_R3D_TPL=656. Board: next build.
+
+**R781 -- DOUBLE BUFFERED IS THE DEFAULT.** Ben: the core always starts in
+Single buffered, and every speed judgement since R654 has needed a trip to
+the OSD first. O[44:43]'s menu now lists Double Buffered first (0, the value
+a fresh or absent config gives); the skip map follows the labels (Double ->
+skip 0, Single -> skip 1, Every 3rd -> skip 2), so each option does what it
+did. A saved config that held Single (0) now opens as Double.
