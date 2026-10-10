@@ -28613,3 +28613,10 @@ and one TGP path in s908, the one R773 named as a risk: x_dst_sp -> u_seq c1
     S_RETIRE again (ret_dstw removed). Replay 9,464,927 -> 9,726,730 cycles
     (CPI 5.02), stream IDENTICAL; test_mb86233_core 67 / 0, lockstep 8,000;
     test_m2_boot PASS.
+R778 on the fitter: e75a2cd at 80/40, s915 does not fit (44 min), s916
+clk_sys -0.160, s917 -1.762 (geo_clip / fp_pool -- placement), s919 CLOSES:
+clk_sys +0.105, clk_mem +0.759, clk_i960 +1.518, holds >= +0.169, HDMI
+-0.145; 41,494 ALM. Lock hunt (492b9da + W/L/K telemetry, 75/37.5): did not
+fit with the 8 KB icache (4,203 LABs of 4,191, s909-s911); with LINES 32
+(the pre-R768 512 B, which locked before) s913 closes: clk_sys +0.185,
+clk_mem +0.422, HDMI -0.145; RBF 3339456b631df18eae5c09e623b97d4c.
