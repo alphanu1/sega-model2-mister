@@ -112,6 +112,9 @@ that room now goes to the 3D renderer's texture fetching, which is what holds
 races below full speed. Your MiSTer setup is not touched; this applies only
 while the Model 2 core is running.
 
+**It is not meant to be permanent.** If room in the FPGA can be freed up
+elsewhere later, the audio filter will be switched back on.
+
 **For anyone building the core:** this is one small, switchable change to the
 MiSTer framework file `sys/audio_out.sv`. It is kept as a patch in
 `docs/framework-patches/audio-filter-disable.patch`, explained in the README

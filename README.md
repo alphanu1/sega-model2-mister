@@ -104,7 +104,9 @@ MiSTer's built-in audio filter (about 430 ALM) when
 `MISTER_DISABLE_AUDIO_FILTER` is set, and `Model2.qsf` sets it. The design
 is about 99% of the FPGA, and that room goes to the 3D renderer's texture
 fetching (study R788). The game's sound is unaffected; MiSTer's audio filter
-presets do nothing on this core.
+presets do nothing on this core. **This is meant to be temporary:** if room
+can be freed elsewhere, the filter goes back on (drop the macro from
+`Model2.qsf`; the patched file then builds as upstream).
 
 **When updating `sys/` from Template_MiSTer, re-apply it:**
 

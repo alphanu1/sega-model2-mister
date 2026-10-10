@@ -29,6 +29,12 @@ unconditionally (checked 2026-10-10). The other framework switches
 `filter` options) stop having any effect on this core. Sound still plays,
 unfiltered.
 
+**Temporary by intent.** The filter is off only because the FPGA is full.
+If room is freed elsewhere, switch it back on: remove
+`MISTER_DISABLE_AUDIO_FILTER` from `Model2.qsf`. The patched file then builds
+exactly as upstream does. Update the release README and THIRD_PARTY.md to
+match.
+
 **How to apply** (from the repository root):
 
 ```
