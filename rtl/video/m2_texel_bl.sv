@@ -274,11 +274,30 @@ module m2_texel_bl #(
     if (wr1) begin cdata1[wa] <= wd; ctag1[wa] <= wt; end
   end
 
+  // R782: THE INDEX IS FOLDED, NOT SLICED. {rp[4:1], cg} maps a 1,024-texel
+  // by 32-row-pair footprint of the sheet onto the sets, so a 256-texel-wide
+  // texture used a quarter of them and every texture 64 rows below another
+  // fought it for the same lines (texel trace of MAME's race and attract lists,
+  // a cache model within 3-4% of the RTL's own miss count). Folded: the index
+  // is a 256 x 128-texel tile, the next tile's bits XORed in, the sheet bit
+  // too; the tag keeps what the index cannot recover, so (index, tag) still
+  // names exactly one line -- 11 + 6 bits for {sheet, rp[9:1], cg[6:0]}.
+  // Misses -24..-32% (r57 40.1k -> 29.4k, apk 63.6k -> 42.8k, rpk 28.7k ->
+  // 20.1k); every texel answer common to both runs identical. 2- and 4-way
+  // associativity gained nothing in the same model. IB = 11 only (the core);
+  // any other IB keeps the slice.
   function automatic logic [IB-1:0] idx_of(input tx_t t);
-    idx_of = {t.rp[RB:1], t.cg};
+    if (IB == 11)
+      idx_of = IB'({t.rp[6:1], t.cg[4:0]} ^ {t.cg[6:5], 9'd0}
+                   ^ {6'd0, t.rp[9:7], 2'd0} ^ {t.sheet, 10'd0});
+    else
+      idx_of = {t.rp[RB:1], t.cg};
   endfunction
   function automatic logic [TB-1:0] tag_of(input tx_t t);
-    tag_of = {t.sheet, t.rp[9:RB+1]};
+    if (IB == 11)
+      tag_of = TB'({t.sheet, t.rp[9:7], t.cg[6:5]});
+    else
+      tag_of = {t.sheet, t.rp[9:RB+1]};
   endfunction
   function automatic logic same_line(input tx_t a, input tx_t b);
     same_line = (a.sheet == b.sheet) && (a.rp == b.rp) && (a.cg == b.cg);

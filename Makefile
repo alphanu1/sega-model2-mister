@@ -1060,6 +1060,17 @@ obj_hscdc/Vm2_handshake_cdc: rtl/video/m2_handshake_cdc.sv sim/video/tb_m2_hands
 	  --Mdir obj_hscdc -o Vm2_handshake_cdc -CFLAGS "-O2" \
 	  rtl/video/m2_handshake_cdc.sv sim/video/tb_m2_handshake_cdc.cpp
 
+# R620's bilinear texel cache against model2rd.ipp's fetch (random sheets,
+# headers, u/v, latencies, sweeps; every answer checked). R782: given a target.
+test_m2_texel_bl: obj_texel_bl/Vm2_texel_bl
+	@echo "== test m2_texel_bl (the bilinear texel cache, against model2rd.ipp)"
+	@./obj_texel_bl/Vm2_texel_bl
+
+obj_texel_bl/Vm2_texel_bl: rtl/video/m2_texel_bl.sv rtl/video/m2_texel_addr.sv sim/video/tb_m2_texel_bl.cpp
+	$(VERILATOR) --cc --exe --build -j 0 -Wno-fatal -Wno-UNUSEDSIGNAL -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC \
+	  --top-module m2_texel_bl --Mdir obj_texel_bl -o Vm2_texel_bl -CFLAGS -O2 \
+	  rtl/video/m2_texel_bl.sv rtl/video/m2_texel_addr.sv sim/video/tb_m2_texel_bl.cpp
+
 test_m2_texel: obj_texel/Vm2_texel
 	@echo "== test m2_texel (the texel fetch, against model2rd.ipp)"
 	@./obj_texel/Vm2_texel

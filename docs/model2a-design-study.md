@@ -28665,3 +28665,46 @@ the OSD first. O[44:43]'s menu now lists Double Buffered first (0, the value
 a fresh or absent config gives); the skip map follows the labels (Double ->
 skip 0, Single -> skip 1, Every 3rd -> skip 2), so each option does what it
 did. A saved config that held Single (0) now opens as Double.
+
+**R780 -- ON THE BOARD, THE DRAW IS THE LIMIT, AND ITS SLOW TENTH IS ~25%
+OVER.** s926 (6f19629 + 'S' SDRAM / 'D' draw-time telemetry, 75/37.5; clk_sys
++0.703, clk_mem +0.742, holds >= +0.124, HDMI -0.017; RBF
+b066e40120067bb9797f214087e5f5d8; a first try with R777's lock records as
+well did not fit, s921/s922, or held -0.268, s923). Per frame, 30 s each:
+                  attract Single  attract Double  race Double
+  draw median     19.9 ms         15.6            16.3
+  draw p90        22.4            21.9            21.5
+  draw max        25.6            25.2            23.9
+  SDRAM busy      74% (p90 82%)   63% (83%)       52% (80%)
+  texel-port wait 7.3%            6.3% (p90 3.1 ms) 1.5% (p90 2.4 ms)
+  i960 wait       2.1%            1.8%            0.5%
+  flips / vblank  0.64            0.68            0.73
+The game (CPU + TGP, R771-R775) is no longer the limit; the draw's slow tenth
+is 21.5-25 ms against 17.39 (at 80 MHz ~6% less) -- far more than "4% over".
+The texel port's QUEUE wait is small, so priority (R766's lever) is not it;
+the cost is the misses' round trip with two in flight. Ben: texel step 4
+makes attract smooth, step 8 races. Bench (tb_m2_raster3d, MAME's lists, at
+80 MHz): heavy lists 12.6-16.5 ms idle SDRAM, 19.8-27.2 contended; 1-cycle
+memory 9.9-13.6; textures off 5.7-7.4.
+
+**R782 -- THE TEXEL CACHE'S INDEX FOLDED: -24..-32% MISSES, SAME ANSWERS.**
+A cache model driven by the bench's texel traces (within 3-4% of the RTL's
+own miss count): the direct-mapped index {rp[4:1], cg} maps a 1,024 x
+64-texel footprint onto the sets, so a 256-wide texture uses a quarter of
+them; 2- and 4-way associativity gained nothing, fully associative -33..-44%.
+Folded (256 x 128-texel tile, the next tile's bits and the sheet XORed in,
+tag {sheet, rp[9:7], cg[6:5]}): misses -24..-32% in the model; the RTL
+counter on MAME's lists r57 40.1k -> 29.4k, apk 63.6k -> 42.8k, rpk 28.7k ->
+20.1k; every texel answer common to both runs identical. Draw at 80 MHz,
+contended model: r57 19.8 -> 17.2 ms, r66 20.3 -> 18.1, apk 27.2 -> 22.3, rpk
+22.7 -> 20.4; idle: -4..-8%. This is R556's XOR idea, measured at last.
+  * m2_texel_bl idx_of / tag_of, IB = 11 only. 0 M10K; the XORs sit in front
+    of the cache read address (timing to watch at clk_mem).
+  * test_m2_texel_bl (new target; the exact-answer bench against
+    model2rd.ipp): 200,000 checks, 0 fails. test_m2_texel, test_m2_raster3d
+    pass. Quartus parse clean. (test_m2_span_tex does not build at HEAD: an
+    unused 'iv' at m2_span_tex.sv:929 is fatal under -Wall -- older.)
+Not enough alone: remap + 16 credits + R628's 4 miss slots leaves rpk at
+16.6 ms contended (bench). Further levers, ranked: credits 16 (-5..-7%),
+more lines in flight (R628, +637 ALM), 128-bit lines (-44..-57% line misses,
+modelled), the walk/writer on rpk-class frames.
