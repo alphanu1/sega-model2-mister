@@ -28432,3 +28432,56 @@ little faster, mostly 30". So R767's reading -- a menu frame ~5% over one
 vblank of CPU -- does not hold as stated: a ~half cut in its fetch misses did
 not bring it under. Next: a timeline record (flip, walk start, walk end, TGP
 hold, per vblank) instead of a further guess.
+
+**R769 -- SMALL IS NOT FAR: THE TINY CULL TOOK THE CAR-SELECT TYRES. THE
+STORE NOW TESTS AT 2 PX WHILE THE PREVIOUS LIST FITTED, 4 ONLY WHEN IT DID
+NOT.** Ben: the car-select wheels are missing or see-through. MAME walk 4251
+(car select, both #41 cars): geodiff 1,340 polys -> 1,340 quads, 0 off by
+more than 1 px, u/v, z and texture parameters exact -- not geometry. The
+quad store (R233, TINY = 4) refused 621 of them (46%): each tyre is a ring
+of ~32 untextured quads 2-3 px across (h3=1e80) plus small rim quads, and
+those owned 1,884 of MAME's 45,350 3D pixels (4.15%), every one at the
+wheels -- a farther wheel-well poly showed through, or nothing. MAME
+(model2_v.cpp:563-614) and Model 1 have no size cull at all.
+R233's premises, re-measured: "small is far" is false for close-ups; its
+~3,900-quad frames predate R219 and the exact geometry -- MAME's own attract
+peak is now 2,368 polys (median 1,154, p99 2,128 over 3,959 frames), and
+"the extra 17% cover at most 0.24% of pixels" was an attract figure (car
+select: 4.15%).
+  * m2_quad_store: parameter TINY_FINE. `need` counts the list's quads that
+    pass the fine test (saturating); at `clear`, fine <= need < NQ - NQ/8
+    (1,792); reset fine. a_tiny <= fine ? is_tiny_f : is_tiny -- `fine` is a
+    register, so it folds into the last LUT of the two pairwise trees.
+  * m2_raster3d: .TINY(4), .TINY_FINE(2).
+Bench (tb_m2_raster3d, core parameters, MAME's lists): car select 1,338 of
+1,340 stored, wheel-box misses 197/200/223/153 -> 9/7/3/7 px, unpainted MAME
+pixels 2.35% -> 0.70%, draw 337k -> 406k cycles (0.28 -> 0.33 of a video
+frame). Attract f1000/f2000/f5000/f9000: 0 dropped, unpainted pixels equal or
+fewer, draw +0% / +1.2% / +0.3% / +0.9%. f1000 has 1,921 fine-passing quads,
+over 1,792, so a scene that busy stays at 4 -- as before. The cost: the first
+heavy list after a light run is collected fine and can drop its tail (a
+synthetic 3,383-quad list: 1,211 dropped against ~467 coarse); MAME's peak
+makes the realistic figure ~140 quads for one list (estimated, not
+measured), then coarse. New tb_m2_quad_store (23 checks: threshold sweeps
+0-40 px, the tyre ring, the 1,791/1,792 switch, saturation at 50,000) and an
+R769 phase in tb_m2_raster3d (19 checks); TINY_FINE = 0 fails 7 and 4 of
+them.
+
+**R770 -- THE TIMELINE: THE MENU IS AT 60, AND THE RACE'S FRAME IS THE CPU
+PLUS ~5 ms OF TGP HOLD AGAINST 16.7 ms.** s901 (sm2-tl-da3ea13, a timeline
+record per vblank -- flip, walk start, walk end, TGP hold -- built at 75/37.5
+because the full record does not fit at 80; the times below are structural,
+not 80/40 speeds). Menu: 57.1 pictures/s at 75 MHz, the flip 2.08 ms after
+vblank, the walk 0.1 ms, the TGP held 0.2 ms -- the menu is not slow. The
+"slow flashing boxes" Ben saw after R764-R768 were his capture card; on the
+monitor the menu is right ("Menu is fine"). R767's and R768's premise -- a
+menu ~5% over one vblank -- was therefore never true on s877 onwards, and
+R768 measured nothing about it. Race: the flip lands 15.4-16.8 ms after
+vblank, the i960 is held 4.8-5.5 ms a frame waiting on the TGP (the 0x884000
+output FIFO read), the walk ~12 ms from the flip into the next frame, ~40
+lists/s. The game's frame just fits, so it alternates between one and two
+vblanks -- the speed-up and slow-down Ben sees in attract and the race, and
+why fewer cars and less scenery runs faster: less TGP work. The TGP is the
+lever: our MB86234 core is a multi-cycle FSM (fetch, decode, operand reads,
+ALU wait, retire: ~5-11 cycles an instruction, FP latency not overlapped);
+Model 1's is the same design, so there is nothing to port.

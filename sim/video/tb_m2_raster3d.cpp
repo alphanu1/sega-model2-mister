@@ -50,6 +50,9 @@ static uint64_t frame_hash = 1469598103934665603ull;   // R542: this frame only
 static uint64_t pix_hash = 1469598103934665603ull;   // R539: every painted pixel, all frames
 static long fill_hist[32], walk_busy = 0, cst_hist[8], why_hist[8], fw_hist[32], sw_hist[8];   // R539: fill state per cycle, per frame
 static long top_hits = 0;
+// R769: the colour of every pixel of a captured frame, -1 where the 3D is empty
+static std::vector<int> g_pix;
+static bool g_cap = false;
 static unsigned vbl_bands = 0;
 // CLOCKS PER SCANLINE, AND IT IS A TEST PARAMETER BECAUSE THE FAULT LIVES IN
 // THE RATIO (R225). At 400 the fill is ten times faster than the beam and
@@ -632,6 +635,7 @@ int main(int argc, char **argv) {
           pix_hash = (pix_hash ^ (uint64_t(y) << 40 ^ uint64_t(t) << 20 ^ d->scan_col)) * 1099511628211ull;
           frame_hash = (frame_hash ^ (uint64_t(y) << 40 ^ uint64_t(t) << 20 ^ d->scan_col)) * 1099511628211ull;
           if (px_dump) std::printf("PX %d %d %04x\n", ly, t, (unsigned)d->scan_col);   // R542, R682
+          if (g_cap && ly < SCR_H) g_pix[ly * SCR_W + t] = (int)d->scan_col;            // R769
         }
       }
     }
@@ -960,6 +964,118 @@ int main(int argc, char **argv) {
   CHECK(near(px[3], px[1]), "the frame during which the next list was collected painted %ld, not %ld -- the picture flashes", px[3], px[1]);
   CHECK(near(px[4], px[1]) && near(px[5], px[4]), "list B not drawn steadily: %ld %ld", px[4], px[5]);
   CHECK(d->dbg_dropped == 0, "quads dropped: %d", (int)d->dbg_dropped);
+
+  // R769: THE TYRE. On car select each tyre is a ring of ~32 quads 2-3 px
+  // across over the black wheel well; TINY = 4 refused every one of them and
+  // the background showed through the arch. A ring of 32 such quads in front
+  // of a background square must paint the ring -- every pixel whose centre
+  // (taken at x + 0.5 and at x, either convention) lies inside a ring quad --
+  // at the store's fine threshold. After a list of more than NQ - NQ/8 quads
+  // the next list is tested at TINY = 4: there the ring is refused and the
+  // square shows through (the control: the check can see the fault). The list
+  // after that is fine again. Synthetic quads only.
+  {
+    struct RQ { int x[4], y[4]; uint32_t col, z; };
+    const uint32_t RING = 0xF80000, BACK = 0x0000F8;          // 565: F800, 001F
+    const int RING565 = 0xF800, BACK565 = 0x001F;
+    const int CX = 200, CY = 150;
+    std::vector<RQ> tyre;
+    tyre.push_back(RQ{{CX - 20, CX + 20, CX + 20, CX - 20}, {CY - 20, CY - 20, CY + 20, CY + 20}, BACK, 3000});
+    for (int i = 0; i < 32; i++) {
+      const double a0 = 2 * M_PI * i / 32, a1 = 2 * M_PI * (i + 1) / 32, ri = 9.0, ro = 11.0;
+      RQ q; q.col = RING; q.z = 1000;
+      const double px[4] = {CX + ri * std::cos(a0), CX + ro * std::cos(a0), CX + ro * std::cos(a1), CX + ri * std::cos(a1)};
+      const double py[4] = {CY + ri * std::sin(a0), CY + ro * std::sin(a0), CY + ro * std::sin(a1), CY + ri * std::sin(a1)};
+      for (int k = 0; k < 4; k++) { q.x[k] = (int)std::lround(px[k]); q.y[k] = (int)std::lround(py[k]); }
+      tyre.push_back(q);
+    }
+    auto push_quads = [&](const std::vector<RQ> &qs) {
+      for (size_t i = 0; i < qs.size(); i++) {
+        { int g = 0; d->q_valid = 0; d->eval(); while (!d->q_ready && g++ < 4000000) tick(); }
+        const RQ &q = qs[i];
+        d->q_valid = 1;
+        d->q_x0 = q.x[0]; d->q_y0 = q.y[0]; d->q_x1 = q.x[1]; d->q_y1 = q.y[1];
+        d->q_x2 = q.x[2]; d->q_y2 = q.y[2]; d->q_x3 = q.x[3]; d->q_y3 = q.y[3];
+        d->q_col = q.col; d->q_z = 0x3F800000u | q.z; d->q_moire = 0; d->q_tex = 0; d->q_frac = 0;
+        d->q_u0 = d->q_v0 = d->q_u1 = d->q_v1 = d->q_u2 = d->q_v2 = d->q_u3 = d->q_v3 = 0;
+        d->q_end = (i + 1 == qs.size());
+        tick();
+      }
+      d->q_valid = 0; d->q_end = 0;
+      for (int k = 0; k < 4; k++) tick();
+    };
+    // the pixels the ring must own: centre inside a ring quad at both conventions
+    auto inside = [](const RQ &q, double x, double y) {
+      int sgn = 0;
+      for (int k = 0; k < 4; k++) {
+        const double x0 = q.x[k], y0 = q.y[k], x1 = q.x[(k + 1) & 3], y1 = q.y[(k + 1) & 3];
+        const double c = (x1 - x0) * (y - y0) - (y1 - y0) * (x - x0);
+        if (c == 0) return false;
+        const int s2 = c > 0 ? 1 : -1;
+        if (sgn && s2 != sgn) return false;
+        sgn = s2;
+      }
+      return true;
+    };
+    std::vector<int> must;
+    for (int y = CY - 20; y < CY + 20; y++) for (int x = CX - 20; x < CX + 20; x++)
+      for (size_t i = 1; i < tyre.size(); i++)
+        if (inside(tyre[i], x + 0.5, y + 0.5) && inside(tyre[i], x, y)) { must.push_back(y * SCR_W + x); break; }
+    int qlo = 99, qhi = 0;
+    for (size_t i = 1; i < tyre.size(); i++) {
+      const RQ &q = tyre[i];
+      const int sx = std::max({q.x[0], q.x[1], q.x[2], q.x[3]}) - std::min({q.x[0], q.x[1], q.x[2], q.x[3]});
+      const int sy = std::max({q.y[0], q.y[1], q.y[2], q.y[3]}) - std::min({q.y[0], q.y[1], q.y[2], q.y[3]});
+      qlo = std::min(qlo, std::max(sx, sy)); qhi = std::max(qhi, std::max(sx, sy));
+    }
+    CHECK(qlo >= 2 && qhi < 4, "the ring's quads span %d..%d px, not between the thresholds 2 and 4", qlo, qhi);
+    // draw a list, then show it: returns {ring pixels where they must be, ring pixels anywhere}
+    auto show = [&](const std::vector<RQ> &qs, int *tiny, int *dropped) {
+      push_quads(qs);
+      *tiny = (int)d->dbg_tiny; *dropped = (int)d->dbg_dropped;
+      long h = 0;
+      video_frame(false, &h); video_frame(false, &h);
+      g_pix.assign(SCR_W * SCR_H, -1); g_cap = true;
+      video_frame(true, &h);
+      g_cap = false;
+      int ok = 0, any = 0, back_in_ring = 0;
+      for (int k : must) { if (g_pix[k] == RING565) ++ok; else if (g_pix[k] == BACK565) ++back_in_ring; }
+      for (int v : g_pix) if (v == RING565) ++any;
+      return std::make_pair(ok, std::make_pair(any, back_in_ring));
+    };
+    std::vector<RQ> heavy;   // 2,100 quads of 2 px off the bottom of the screen
+    for (int i = 0; i < 2100; i++) {
+      const int x = (i % 200) * 2, y = 400 + (i / 200) * 3;
+      heavy.push_back(RQ{{x, x + 2, x + 2, x}, {y, y, y + 2, y + 2}, 0xFFFFFF, 500});
+    }
+    auto fine_now = [&]() { return (int)d->rootp->m2_raster3d__DOT__u_store__DOT__fine; };
+    int tiny = 0, drop = 0;
+    const int f1 = fine_now();
+    auto r1 = show(tyre, &tiny, &drop);
+    std::printf("  R769 tyre (fine=%d): %d of %d ring pixels painted by the ring, %d show the background; %d ring-coloured in all; tiny %d\n",
+                f1, r1.first, (int)must.size(), r1.second.second, r1.second.first, tiny);
+    CHECK(f1 == 1, "the store is not at the fine threshold before the tyre");
+    // the annulus is pi (11^2 - 9^2) = 126 px; the rounded vertices and the
+    // both-conventions rule leave a core of about half that which no fill
+    // rule can argue with
+    CHECK(must.size() >= 40, "only %zu pixels are surely inside the ring", must.size());
+    CHECK(r1.second.first >= 100, "the ring painted %d pixels, the annulus is ~126", r1.second.first);
+    CHECK(tiny == 0 && r1.first == (int)must.size(), "tyre at fine: tiny %d, %d of %zu ring pixels painted", tiny, r1.first, must.size());
+    const int f2 = fine_now();
+    auto rh = show(heavy, &tiny, &drop);
+    std::printf("  R769 heavy list of %zu (fine=%d): dropped %d tiny %d; next list fine=%d\n", heavy.size(), f2, drop, tiny, fine_now());
+    CHECK(drop == (int)heavy.size() - 2048, "heavy list at fine: dropped %d, want %d", drop, (int)heavy.size() - 2048);
+    CHECK(rh.second.first == 0, "the heavy list painted ring colour");
+    CHECK(fine_now() == 0, "the list after a heavy one is not coarse");
+    auto r2 = show(tyre, &tiny, &drop);
+    std::printf("  R769 tyre after the heavy list (coarse): tiny %d, ring pixels %d, background inside the ring %d\n",
+                tiny, r2.second.first, r2.second.second);
+    CHECK(tiny == 32 && r2.second.first == 0 && r2.second.second == (int)must.size(),
+          "tyre at coarse (the control): tiny %d, ring pixels %d, background in the ring %d of %zu", tiny, r2.second.first, r2.second.second, must.size());
+    CHECK(fine_now() == 1, "a light list after the heavy one did not return to fine");
+    auto r3 = show(tyre, &tiny, &drop);
+    CHECK(tiny == 0 && r3.first == (int)must.size(), "tyre fine again: tiny %d, %d of %zu ring pixels painted", tiny, r3.first, must.size());
+  }
   std::printf("m2_raster3d: checks=%d fails=%d\n", checks, fails);
   std::printf(fails ? "FAIL\n" : "PASS\n");
   delete d;

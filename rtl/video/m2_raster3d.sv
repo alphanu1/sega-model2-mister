@@ -341,7 +341,12 @@ module m2_raster3d #(
   // every one of them distant detail under four pixels across. Small is far,
   // so this drops the right things first, and it is a parameter so the number
   // can move when the store can grow.
-  m2_quad_store #(.BAND_H(BAND_H), .NBANDS(NBANDS), .BW(BW), .SCR_H(SCR_H), .TINY(4),
+  // R769: NOT ALWAYS. Small is not far on car select: each tyre is a ring of
+  // ~32 quads 2-3 px across, and TINY = 4 refused 621 of 1,340 quads there
+  // (4.15% of the picture, every pixel at the wheels). The store now tests
+  // at 2 while the previous list fitted under it with an eighth to spare,
+  // and at 4 only for the lists that would not.
+  m2_quad_store #(.BAND_H(BAND_H), .NBANDS(NBANDS), .BW(BW), .SCR_H(SCR_H), .TINY(4), .TINY_FINE(2),   // R769
                   .FTB(FTB), .FRB(FRB)) u_store (   // R607, R626
     .clk(clk), .rst_n(rst_n),
     .clear(qs_clear), .wbank(bank), .rbank(~bank),
