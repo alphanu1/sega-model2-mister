@@ -2,6 +2,11 @@
 
 ## 2026-10-10: TGP 2.3x FASTER (R771-R775), TYRES BACK (R769). BUILDING.
 
+READY (15:00): s919 = e75a2cd at 80/40 (all of today: R769-R778), closes
+(clk_sys +0.105, HDMI -0.145), RBF 7ac1360a33d72e8d2696a0689776d7cb, in
+sm2-builds/sm2-rel-e75a2cd/build/seeds/s919. s913 = the lock hunt at 75/37.5,
+RBF 3339456b..., soak script scratchpad locksoak913.sh. Neither loaded yet.
+
 LATER (12:55): s901 LOCKED (R777) -- flips frozen, vblanks on, 0 TGP hold:
 the i960 stopped, FAST_ACK 0 notwithstanding. Board left locked for Ben.
 R776 (492b9da): the coarse 4 px cull only for quads at zval >= 0x3000 (z 16).
