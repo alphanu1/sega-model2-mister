@@ -182,7 +182,7 @@ module m2_raster_band #(
     for (int b = 0; b < NBANK; b++) begin
       automatic logic signed [15:0] px = 16'(grp_x0) + 16'(b);
       grp_en[b] = (px >= cur_x) && (px <= cur_x1)
-               && (!cur_moire || !((px[0] ^ cur_y[0])));
+               && (!cur_moire || (px[0] ^ cur_y[0]));   // R779: MAME paints (x ^ y) & 1
     end
   end
 

@@ -195,7 +195,7 @@ int main(int argc, char **argv) {
     reader(); tick(); reader_after();
     d->in_valid = 0;
     for (int x = x0; x <= x1; x++)
-      if (!moire || !((x ^ y) & 1)) {
+      if (!moire || ((x ^ y) & 1)) {
         if (FTBM) { if (rmask[y * 512 + x]) continue; rmask[y * 512 + x] = 1; }   // first write wins
         ref[y * 512 + x] = 0x01000000u | col; pixels_want++;
       }

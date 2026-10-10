@@ -28620,3 +28620,41 @@ clk_sys +0.105, clk_mem +0.759, clk_i960 +1.518, holds >= +0.169, HDMI
 fit with the 8 KB icache (4,203 LABs of 4,191, s909-s911); with LINES 32
 (the pre-R768 512 B, which locked before) s913 closes: clk_sys +0.185,
 clk_mem +0.422, HDMI -0.145; RBF 3339456b631df18eae5c09e623b97d4c.
+
+**R779 -- THE 3D WAS READ ONE COLUMN AHEAD OF THE 2D; AND THE CHECKER
+PARITY WAS MAME's OPPOSITE, HIDDEN BY IT.** Ben, 2026-10-10 (race capture):
+the rightmost column shows the 2D layers (sky, grass) the whole height where
+the 3D wall is. MAME: viewport -1,128,496,512 in every dump (z_r57, z_r66,
+z_rpk, z_apk; OFFS 0 128) -> clip edges at x -1.0 / 496.0, y 0.0 / 384.0;
+poly.h covers a pixel when startx <= x + 0.5 < stopx, so column 495 is
+painted (MAME's 3D non-zero at x 495 in 384/384 rows of z_r57). Ours paints
+it too: the geodiff dumps put right-edge vertices at 496.0, the fill's spans
+reach 495, and tb_m2_raster3d (FB_DDR3 + wcomb, R756 rounding, z_r57) paints
+column 495 in 384/384 rows with MAME's owner. The loss is at SCANOUT:
+Model2.sv fed m2_raster3d scan_x = m2_video's hcnt, but m2_video's colour and
+blanking are column hcnt-1 (latched on ce_dd from pr_q/hb_q, R582/R648), and
+m2_fb_read answers for rd_x a clk_mem later -- displayed column N showed 3D
+column N+1. Column 495 read 3D x 496, line-buffer entry 248, which the
+248-beat line fetch never writes: rd_hit 0, the tilemap showed.
+And the checker: MAME paints (x ^ scanline) & 1 == 1 (model2rd.ipp:89,
+:281; R623's text is right), ours painted !((x ^ y) & 1) -- Model 1's rule --
+in m2_fb_wcomb, m2_fb_write and m2_raster_band. The one-column shift flips
+the parity, so the board matched MAME by accident; fixing the scanout alone
+makes it worse (z_r57 wrong owner 17,772 -> 32,100), the two together better
+on every list.
+  * Model2.sv: scan_x = vid_x_d, vid_x registered on ce_pix (a flop, so
+    nothing added in front of the mix).
+  * m2_fb_wcomb (s0_r / s1_r swapped), m2_fb_write (mo_be), m2_raster_band
+    (grp_en): MAME's parity. tb_m2_fbw_chain, tb_m2_fb_write,
+    tb_m2_raster_band references flipped; with the old parity the RTL fails
+    them (the benches see parity).
+Evidence: a scanout alignment bench (real m2_video + m2_fb_read with
+preloaded lines, the ce generator, the mix; scratch, not committed): 3D from
+the wrong column 310,860 px -> 0, column 495 painted in every row, at both
+pixel-enable rates. Against MAME's owners (A = board today, C = R779): wrong
+owner z_r57 17,772 -> 12,936, z_r66 21,697 -> 17,550, z_apk 26,316 ->
+21,649, z_rpk 46,939 -> 42,870; MAME-only coverage z_r57 841 -> 237; column
+495 0/384 -> 384/384; no new overdraw. Rows 0 / 383 and column 0 were
+already MAME's. lint_top, Quartus parse clean; the fb / band / raster3d /
+quad-store benches pass. Bench pitfall: tb_m2_raster3d list mode samples x <
+400 unless M2_R3D_TPL=656. Board: next build.

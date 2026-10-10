@@ -5940,6 +5940,15 @@ wire [15:0] vid_overruns;
 
 wire [7:0] tile_r, tile_g, tile_b;
 wire [9:0] vid_x, vid_y;
+// R779: THE 3D IS READ AT THE COLUMN THE 2D IS SHOWING. m2_video's colour and
+// blanking leave one pixel behind its counter (vid_r is column hcnt-1, latched
+// on ce_dd with hb_q), while m2_fb_read answers for scan_x one clk_mem later.
+// Fed hcnt directly the 3D sat one column LEFT of the 2D and of DE: displayed
+// column 495 showed 3D column 496, which the line fetch (248 beats) never
+// writes -- the tilemap showed down the whole right edge. Held on ce_pix, x is
+// the previous column for the whole pixel period, as the colour is.
+logic [9:0] vid_x_d;
+always_ff @(posedge clk_mem) if (ce_pix) vid_x_d <= vid_x;
 wire       vid_field;   // R682
 
 // ------------------------------------------------------------ THE 3D LAYER
@@ -6124,7 +6133,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1), .FB_DD
 	// shadow and the minimap panel. The band has stippled since R225; it was
 	// fed a constant 0, so every checker polygon came out solid.
 	.q_moire(q3d_tex[11]), .q_end(q3d_end),
-	.scan_clk(clk_mem), .scan_x(vid_x), .scan_y(vid_y),   // R564: the video's clock
+	.scan_clk(clk_mem), .scan_x(vid_x_d), .scan_y(vid_y),   // R564: the video's clock; R779: x one pixel behind
 	.scan_il(vid_il), .scan_field(vid_field),               // R682
 	.scan_col(r3d_col), .scan_hit(r3d_hit),
 	.dbg_quads(r3d_quads), .dbg_dropped(r3d_dropped), .dbg_tiny(r3d_tiny),

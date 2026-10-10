@@ -269,8 +269,8 @@ module m2_fb_wcomb #(
             x_r   <= in_x0;
             x1_r  <= in_x1;
             px_r  <= px;
-            s0_r  <= !in_moire || !in_y[0];   // (x ^ y) & 1 with x even
-            s1_r  <= !in_moire ||  in_y[0];
+            s0_r  <= !in_moire ||  in_y[0];   // MAME's checker: (x ^ y) & 1 == 1 is painted (x even here)
+            s1_r  <= !in_moire || !in_y[0];
             ist   <= (in_x0 > in_x1) ? I_IDLE : I_RUN;
           end else if (!b_v && dirty[ib] && other_free &&
                        idle_n == ($clog2(IDLE_T+1))'(IDLE_T)) begin
