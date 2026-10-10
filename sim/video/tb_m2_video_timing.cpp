@@ -93,8 +93,11 @@ int main(int argc, char **argv) {
   ck(hz > 57.4 && hz < 57.6, "frame rate in range", long(hz * 100), 5752);
 
   // ---- R682: 15 kHz INTERLACED. Two fields from a field-0 boundary.
-  {
-    dut->interlace = 1;
+  // R783: and again with NTSC's line count (262.5-line fields, 525 a frame).
+  for (int nl = 0; nl < 2; ++nl) {
+    dut->interlace = 1; dut->ntsc_lines = nl;
+    const long FT = nl ? 525 : 547;            // lines a frame
+    if (nl) std::printf("  -- R783: 262.5-line fields\n");
     // settle: run until a vblank_start in field 0 (so the next field is 1)
     int settle = 0;
     for (long g = 0; g < 4000000 && settle < 3; ++g) { tick(); if (dut->vblank_start) ++settle; }
@@ -121,8 +124,8 @@ int main(int argc, char **argv) {
       if (dut->vcnt != prev_v) { ++lines[fld]; if (prev_v < 192) ++visl[fld]; prev_v = dut->vcnt; ++G; shownG.push_back(-1); }
       if (dut->vblank_start) { ++vbs2; if (vbs2 == 2) break; }
     }
-    ck(lines[1] == 273 || lines[1] == 274, "interlaced: field 1 lines", lines[1], 273);
-    ck(lines[0] + lines[1] == 547, "interlaced: lines a frame (two fields)", lines[0] + lines[1], 547);
+    ck(lines[1] == FT / 2 || lines[1] == FT / 2 + 1, "interlaced: field 1 lines", lines[1], 273);
+    ck(lines[0] + lines[1] == FT, "interlaced: lines a frame (two fields)", lines[0] + lines[1], FT);
     ck(visl[0] == 192 && visl[1] == 192, "interlaced: 192 visible lines a field", visl[0] + visl[1], 384);
     ck(vbs2 == 2, "interlaced: one vblank_start a field", vbs2, 2);
     long dup = 0, miss = 0; for (int y = 0; y < 384; ++y) { if (seen[y] == 0) ++miss; if (seen[y] > 1) ++dup; }
@@ -157,15 +160,15 @@ int main(int argc, char **argv) {
         pvis = dut->visible;
         ++pix; tick();
       }
-      long bad = 0; for (long v : ivl) if (v != 179416) ++bad;
+      long bad = 0; for (long v : ivl) if (v != FT * 656 / 2) ++bad;
       ck(ivl.size() >= 6 && bad == 0, "R701 interlaced: every vsync-to-vsync is 273.5 lines", bad, 0);
       // after field 0's vsync comes field 1's picture (odd lines): half a line later than after field 1's
       ck(d_after[0] - d_after[1] == 656 / 2, "R701 interlaced: field 1 sits half a line below field 0", d_after[0] - d_after[1], 328);
     }
-    ck(hs2 == (584 - 520) * 547, "interlaced: hsync cycles a frame", hs2, (584 - 520) * 547);
-    const double pixclk = 100.0e6 * 547.0 / 5300.0;
-    std::printf("  interlaced at %.4f MHz: line %.1f Hz, field %.3f Hz\n", pixclk / 1e6, pixclk / 656.0, pixclk / (656.0 * 273.5));
-    ck(pixclk / (656.0 * 273.5) > 57.50 && pixclk / (656.0 * 273.5) < 57.55, "interlaced: field rate is the game's", 0, 0);
+    ck(hs2 == (584 - 520) * FT, "interlaced: hsync cycles a frame", hs2, (584 - 520) * FT);
+    const double pixclk = nl ? 100.0e6 * 861.0 / 8692.0 : 100.0e6 * 547.0 / 5300.0;
+    std::printf("  interlaced at %.4f MHz: line %.1f Hz, field %.3f Hz\n", pixclk / 1e6, pixclk / 656.0, pixclk / (656.0 * FT / 2.0));
+    ck(pixclk / (656.0 * FT / 2.0) > 57.50 && pixclk / (656.0 * FT / 2.0) < 57.55, "interlaced: field rate is the game's", 0, 0);
   }
 
   std::printf("  %llu checks, %llu mismatches\n",

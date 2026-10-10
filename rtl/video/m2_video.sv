@@ -199,6 +199,7 @@ module m2_video #(
   // R682: 15 kHz interlaced (clk domain, held): vid_y is then the displayed
   // line of field vid_field, and the render-ahead line steps by two
   input  logic        interlace,
+  input  logic        ntsc_lines,   // R783: 262.5-line fields when interlaced
   output logic        vid_field
 );
 
@@ -218,7 +219,7 @@ module m2_video #(
     .hsync(hsync_i), .vsync(vsync_i), .visible(visible),
     .line_start(line_start), .line_number(line_number),
     .vblank_start(vblank_start),
-    .interlace(interlace), .field(vid_field), .ypos()   // R682
+    .interlace(interlace), .ntsc_lines(ntsc_lines), .field(vid_field), .ypos()   // R682, R783
   );
 
   assign vblank_irq  = vblank_start;

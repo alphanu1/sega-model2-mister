@@ -28708,3 +28708,32 @@ Not enough alone: remap + 16 credits + R628's 4 miss slots leaves rpk at
 16.6 ms contended (bench). Further levers, ranked: credits 16 (-5..-7%),
 more lines in flight (R628, +637 ALM), 128-bit lines (-44..-57% line misses,
 modelled), the walk/writer on rpk-class frames.
+
+**R783 -- 15 kHz WITH NTSC's LINE COUNT, AS AN OPTION.** Ben, 2026-10-10: on
+a 15 kHz TV the picture loses sync every few seconds. A bench of the whole
+chain as Model2.sv and sys_top.v wire it (the ce accumulator, real
+m2_video, sync_fix, scanlines, osd, csync, vga_out, direct video,
+hps_io's video_calc; scratch sync15/) ran 2,000 frames interlaced: 0 of
+3,993 fields differ -- HS 656 px, every vsync-to-vsync exactly 273.5 lines,
+field 1's vsync half a line in, F1 alternating, video_calc reporting one
+resolution. Native 24 kHz the same. Nothing in the core changes the timing
+at run time (m2_video_timing takes clk_mem, ce_pix, rst_n, interlace only;
+its vblank_irq is unconnected, so R652's hold cannot reach it). Not seen by
+the bench: the set. Our 15 kHz field is 273.5 lines (192 shown, 81.5
+blanking) at 57.52 Hz against NTSC's 262.5 at 59.94; sets that class a
+field by its line count re-lock on it. Ben's ask, kept at the game's rate:
+  * m2_video_timing ntsc_lines: fields of 263 / 262, vsync 223-226 (field
+    1's half a line early, R701's rule), the 192 visible centred in 70.5.
+  * Model2.sv: OSD O[45] "15kHz lines: 273.5 (15.7kHz) / 262.5 (15.1kHz)";
+    with it, ce = 861/8692 of 100 MHz (9.9057 MHz, 525 x 656 pixels in
+    1,738,400 clk_mem): line 15,100 Hz (-4% of NTSC's), field 57.524 Hz --
+    the game's speed and the 656-pixel line unchanged, so nothing that
+    counts pixels moves. The ce accumulator is 14 bits (8,692).
+  * tb_m2_video_timing: the interlaced checks run for both counts -- 525 a
+    frame, 262 / 263 a field, every vsync 262.5 lines apart, field 1 half a
+    line below, each of 384 lines once a frame: 39 checks, 0 fail.
+    test_m2_boot PASS, test_m2_raster3d PASS, lint_top and Quartus parse
+    clean. Also noted by the bench: switching into interlace while vcnt is
+    past 274 runs it round to 1023 (one 861-line field per OSD change).
+If the dropouts stop at 262.5 the cause is the set's tolerance; if they do
+not, the connection or the framework.

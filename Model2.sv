@@ -75,6 +75,10 @@ localparam CONF_STR = {
 	// R682: 15 kHz INTERLACED for a 15 kHz CRT -- 57.52 fields a second (the
 	// game's rate), 15,733 Hz lines, all 384 lines as two fields of 192.
 	"O[42],Video,Native 24kHz,15kHz interlaced;",
+	// R783: the 15 kHz field's line count. 273.5 keeps the 15.73 kHz line;
+	// 262.5 is NTSC's count at a 15.10 kHz line, for sets that lose sync on
+	// 273.5. Game speed and picture are the same either way.
+	"O[45],15kHz lines,273.5 (15.7kHz),262.5 (15.1kHz);",
 	"-;",
 	// The read capture phase is an OSD option rather than a constant because the
 	// Model 1 core found its board returned every burst shifted right by one
@@ -395,15 +399,23 @@ localparam int unsigned CE_DEN = 100;     // clk_mem
 // ratio is 16/100 native and 547/5,300 interlaced, over one 13-bit accumulator.
 localparam int unsigned CEI_NUM = 547;
 localparam int unsigned CEI_DEN = 5300;
+// R783: 262.5-line fields, the same 656-pixel line and the same 57.5242 Hz:
+// 525 x 656 pixels a frame in 1,738,400 clk_mem = 861/8692 (9.9057 MHz,
+// 15,100 Hz a line). 8692 needs the accumulator's fourteenth bit.
+localparam int unsigned CEN_NUM = 861;
+localparam int unsigned CEN_DEN = 8692;
 reg [2:0]  vil_s;                         // the OSD bit, into clk_mem
 always @(posedge clk_mem) vil_s <= {vil_s[1:0], status[42]};
 wire       vid_il = vil_s[2];
-reg [12:0] ce_acc;
+reg [2:0]  vnl_s;                         // R783: the line-count bit, into clk_mem
+always @(posedge clk_mem) vnl_s <= {vnl_s[1:0], status[45]};
+wire       vid_nl = vnl_s[2];
+reg [13:0] ce_acc;
 reg        ce_pix;
-wire [12:0] ce_num = vid_il ? 13'(CEI_NUM) : 13'(CE_NUM);
-wire [12:0] ce_den = vid_il ? 13'(CEI_DEN) : 13'(CE_DEN);
+wire [13:0] ce_num = !vid_il ? 14'(CE_NUM) : vid_nl ? 14'(CEN_NUM) : 14'(CEI_NUM);
+wire [13:0] ce_den = !vid_il ? 14'(CE_DEN) : vid_nl ? 14'(CEN_DEN) : 14'(CEI_DEN);
 always @(posedge clk_mem) begin
-	if (ce_acc >= ce_den) ce_acc <= 13'd0;             // a mode change: start clean
+	if (ce_acc >= ce_den) ce_acc <= 14'd0;             // a mode change: start clean
 	else if (ce_acc + ce_num >= ce_den) begin
 		ce_acc <= ce_acc + ce_num - ce_den;
 		ce_pix <= 1'b1;
@@ -6226,7 +6238,7 @@ m2_video u_tilemap (
 	.dbg_hscr(vid_hscr), .dbg_vscr(vid_vscr),
 	.dbg_ovr_frame(vid_ovr_frame),
 	.vid_x(vid_x), .vid_y(vid_y),
-	.interlace(vid_il), .vid_field(vid_field),   // R682
+	.interlace(vid_il), .ntsc_lines(vid_nl), .vid_field(vid_field),   // R682, R783
 	.dbg_layer_px(vid_layer_px), .dbg_ctrl(vid_ctrl),
 	.dbg_layer_have(vid_layer_have)
 );
