@@ -974,6 +974,8 @@ int main(int argc, char **argv) {
   // the next list is tested at TINY = 4: there the ring is refused and the
   // square shows through (the control: the check can see the fault). The list
   // after that is fine again. Synthetic quads only.
+  // R776: at coarse only FAR small quads are refused, so the control is a far
+  // copy of the ring; the near ring survives a coarse list.
   {
     struct RQ { int x[4], y[4]; uint32_t col, z; };
     const uint32_t RING = 0xF80000, BACK = 0x0000F8;          // 565: F800, 001F
@@ -1067,11 +1069,28 @@ int main(int argc, char **argv) {
     CHECK(drop == (int)heavy.size() - 2048, "heavy list at fine: dropped %d, want %d", drop, (int)heavy.size() - 2048);
     CHECK(rh.second.first == 0, "the heavy list painted ring colour");
     CHECK(fine_now() == 0, "the list after a heavy one is not coarse");
+    // R776: at coarse a 2-4 px quad is refused only when it is FAR (zval >=
+    // 0x3000). The near tyre (z 1000) keeps every quad after a heavy list...
     auto r2 = show(tyre, &tiny, &drop);
-    std::printf("  R769 tyre after the heavy list (coarse): tiny %d, ring pixels %d, background inside the ring %d\n",
+    std::printf("  R776 near tyre after the heavy list (coarse): tiny %d, ring pixels %d, background inside the ring %d\n",
                 tiny, r2.second.first, r2.second.second);
-    CHECK(tiny == 32 && r2.second.first == 0 && r2.second.second == (int)must.size(),
-          "tyre at coarse (the control): tiny %d, ring pixels %d, background in the ring %d of %zu", tiny, r2.second.first, r2.second.second, must.size());
+    CHECK(tiny == 0 && r2.first == (int)must.size(),
+          "near tyre at coarse: tiny %d, %d of %zu ring pixels painted", tiny, r2.first, must.size());
+    CHECK(fine_now() == 1, "a light list after the heavy one did not return to fine");
+    // ...and the same ring far away is refused at coarse (the control: the
+    // check can see the cull), and kept again at fine.
+    std::vector<RQ> far_tyre = tyre;
+    far_tyre[0].z = 0x5000;
+    for (size_t i = 1; i < far_tyre.size(); i++) far_tyre[i].z = 0x3000;
+    show(heavy, &tiny, &drop);
+    CHECK(fine_now() == 0, "the list after the second heavy one is not coarse");
+    auto r4 = show(far_tyre, &tiny, &drop);
+    std::printf("  R776 far tyre (coarse): tiny %d, ring pixels %d, background inside the ring %d\n",
+                tiny, r4.second.first, r4.second.second);
+    CHECK(tiny == 32 && r4.second.first == 0 && r4.second.second == (int)must.size(),
+          "far tyre at coarse (the control): tiny %d, ring pixels %d, background in the ring %d of %zu", tiny, r4.second.first, r4.second.second, must.size());
+    auto r5 = show(far_tyre, &tiny, &drop);
+    CHECK(tiny == 0 && r5.first == (int)must.size(), "far tyre at fine: tiny %d, %d of %zu ring pixels painted", tiny, r5.first, must.size());
     CHECK(fine_now() == 1, "a light list after the heavy one did not return to fine");
     auto r3 = show(tyre, &tiny, &drop);
     CHECK(tiny == 0 && r3.first == (int)must.size(), "tyre fine again: tiny %d, %d of %zu ring pixels painted", tiny, r3.first, must.size());

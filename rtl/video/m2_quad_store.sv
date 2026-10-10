@@ -117,6 +117,13 @@ module m2_quad_store #(
   // left an eighth of the store free, the next list is tested at TINY_FINE,
   // else at TINY. 0 disables it (TINY always).
   parameter int unsigned TINY_FINE = 0,
+  // R776: AND THE COARSE TEST ONLY FOR FAR QUADS. In a list tested coarse, a
+  // quad between TINY_FINE and TINY pixels is refused only when its z value
+  // (in_z[15:0], the reference's float_to_zval: 4-bit octave, 12-bit
+  // mantissa, larger is farther) is at least TINY_FAR. 0x3000 is z = 16 at
+  // Daytona's z_adjust of 4.0: car-select tyres sit at 6,510-8,442, the busy
+  // scenes' small quads at p5 >= ~12,000. 0 makes every quad far (R769).
+  parameter logic [15:0] TINY_FAR = 16'h0000,
   parameter int unsigned SCR_H  = 384,
   // R607: FRONT TO BACK, the reference's order (model2_v.cpp render_polygons:
   // z buckets from min_z up, each bucket a LIFO -- the last polygon submitted
@@ -385,7 +392,10 @@ module m2_quad_store #(
   // the two trees rather than lengthening either.
   logic          fine;
   logic [IW:0]   need;        // this list's quads that pass the fine test, saturating
-  wire           tiny_sel = (TINY_FINE != 0 && fine) ? is_tiny_f : is_tiny;
+  wire           far_q    = (TINY_FAR == 16'h0000) || (in_z[15:0] >= TINY_FAR);   // R776
+  wire           tiny_sel = (TINY_FINE != 0 && fine) ? is_tiny_f
+                          : (TINY_FINE != 0) ? (is_tiny_f | (is_tiny & far_q))
+                          : is_tiny;
 
   // R566: THE COUNT AND THE ATTRIBUTE WORD LAND ONE CYCLE AFTER THE QUAD.
   //

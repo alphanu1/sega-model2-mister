@@ -28561,3 +28561,40 @@ baseline stream is re-recorded from this RTL. tb_mb86233_core: an ldif alw /
 !alw test (67 checks; with the fix removed, "ldif alw -> B" fails);
 lockstep 8,000 clean; test_m2_boot PASS. Model 1 has the same gap
 (tools/model1-ref mb86233_seq.sv subtype 6).
+
+**R776 -- THE COARSE CULL ONLY FOR FAR QUADS.** Ben: control the distance
+of the culled quads so they are surely far away. In a list tested at TINY = 4
+(R769: the previous list had >= 1,792 quads passing 2 px), a 2-4 px quad is
+now refused only when its z value is >= 0x3000; under 2 px is refused as
+before. zval is MAME's float_to_zval (model2_v.cpp:171): z / z_adjust as a
+4-bit octave and a 12-bit mantissa, larger farther; z_adjust is 4.0 in every
+dump (car select, attract, race), so 0x1000 / 0x2000 / 0x3000 are z = 4 / 8
+/ 16. Measured on MAME's lists (per-quad size class and zval, pixels charged
+to MAME's owning quad): car-select tyres zval 6,510-8,442, rims 6,529-7,004;
+the race player car 1,804-12,978 but with 1-2 quads of 2-3 px owning 0 px;
+the race HUD at 0 and 1,536; the 2-3 px quads of busy scenes p5 12,055-17,362,
+p50 ~25,000. Sweep of the coarse-with-far rule (stored / MAME px lost): the
+window is bounded below by zval ~8,443 (a coarse car-select list loses the
+tyres) and above by 16,384 (the attract peak, 2,357 quads, overflows: 2,048
+stored, 11 dropped at 18,432, 165 with no coarse cull at all). At 0x3000: car
+select 1,338 even when coarse; attract peak 1,983 stored, 135 px lost (142
+at plain TINY 4); f1000 1,799 / 43; race lists unchanged (all fine). A
+single constant holds while z_adjust stays 4.0 (inferred for scenes not
+dumped; a change would shift zval by whole octaves).
+  * m2_quad_store: parameter TINY_FAR (0 = every quad far, R769);
+    a_tiny <= fine ? tiny2 : tiny2 | (tiny4 & zval >= TINY_FAR).
+  * m2_raster3d: .TINY_FAR(16'h3000).
+  * tb_m2_raster3d: the near ring now survives a coarse list (R769's control
+    failed under R776, as it should); a far copy (z 0x3000, background
+    0x5000) is refused at coarse and kept at fine. 23 checks pass.
+    test_m2_quad_store (TINY_FAR 0) unchanged, 23 pass.
+
+**R777 -- THE LOCK IS NOT CURED BY FAST_ACK 0.** s901 (da3ea13 + timeline,
+75/37.5; FAST_ACK 0 since R753) locked, 2026-10-10: vblanks count on, the
+flip count frozen at 62,814, no walk, 0 TGP hold, 0.0 fps -- the i960
+stopped, as in R748/R750 (there a callx through a task pointer of 0x1868,
+the CPU trapped). R753's "evidence points one way" was 50 + 48 minutes of no
+lock against a period of 4-45; it was not enough. FAST_ACK stays 0 (it costs
+nothing known to be needed). Next: a 75 MHz build with R748's trap record and
+a watch on every i960 store and load of 0x00001868 (address, IP), soaked
+until it locks.

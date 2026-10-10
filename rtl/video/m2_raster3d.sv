@@ -346,7 +346,9 @@ module m2_raster3d #(
   // (4.15% of the picture, every pixel at the wheels). The store now tests
   // at 2 while the previous list fitted under it with an eighth to spare,
   // and at 4 only for the lists that would not.
-  m2_quad_store #(.BAND_H(BAND_H), .NBANDS(NBANDS), .BW(BW), .SCR_H(SCR_H), .TINY(4), .TINY_FINE(2),   // R769
+  // R776: and at 4 only for quads at z >= 16 (zval 0x3000): close-up detail
+  // keeps every quad of 2 px or more whatever the list's size.
+  m2_quad_store #(.BAND_H(BAND_H), .NBANDS(NBANDS), .BW(BW), .SCR_H(SCR_H), .TINY(4), .TINY_FINE(2), .TINY_FAR(16'h3000),   // R769, R776
                   .FTB(FTB), .FRB(FRB)) u_store (   // R607, R626
     .clk(clk), .rst_n(rst_n),
     .clear(qs_clear), .wbank(bank), .rbank(~bank),
