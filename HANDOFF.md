@@ -2,6 +2,16 @@
 
 ## 2026-10-10: TGP 2.3x FASTER (R771-R775), TYRES BACK (R769). BUILDING.
 
+LATER (12:55): s901 LOCKED (R777) -- flips frozen, vblanks on, 0 TGP hold:
+the i960 stopped, FAST_ACK 0 notwithstanding. Board left locked for Ben.
+R776 (492b9da): the coarse 4 px cull only for quads at zval >= 0x3000 (z 16).
+80 MHz sweeps all failed on placement (s903-s908, R778); the one TGP path
+(io_ack -> seq via S_DST_W retire) removed in e75a2cd (R778). Next release
+sweep from e75a2cd. LOCK HUNT: sm2-builds/sm2-lock-492b9da, 75/37.5,
+M2_DEBUG_LITE with W/L/K records (stores/loads of 0x1868, the 0x185x task
+load) + trap RIP/PFP; patch build/worktree_patches/lock-hunt-492b9da.patch;
+seeds s909-s911; decoder scratchpad decode_lock.py.
+
 Branch readahead. Commits today: 9d3e1b1 (R769 + R770), 757ede8 (R771-R774),
 9dd8ee6 (R775). On the board: s901 (timeline, 75/37.5) -- s894 (8 KB icache,
 80/40) is saved on the SD card as Model2.rbf.s894.
