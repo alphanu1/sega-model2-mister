@@ -122,6 +122,31 @@ beside it, and turned on by `MISTER_DISABLE_AUDIO_FILTER` in `Model2.qsf`. When
 the framework is updated, re-apply the patch. If it no longer applies cleanly,
 the README shows how to make the three-line change by hand.
 
+## On a 15 kHz CRT
+
+The game's own video is 24 kHz, which a 15 kHz TV cannot show. The core has
+a 15 kHz interlaced mode for CRTs, at the game's own speed, with all 384
+lines shown as two fields.
+
+**It switches itself on.** The OSD `Video` setting defaults to **Auto**. Auto
+uses 15 kHz when your MiSTer is set up for a CRT: `direct_video=1`,
+`composite_sync=1` or `ypbpr=1` in `MiSTer.ini`, with `forced_scandoubler`
+and `vga_scaler` off. Otherwise it uses the native 24 kHz mode, as an HDMI
+setup will.
+
+**If your setup isn't detected**, pick the **`[15kHz CRT]`** version of the
+game from the MiSTer menu (for example
+`Daytona USA (Deluxe 93) [15kHz CRT].mra`). It starts in 15 kHz whatever
+`MiSTer.ini` says. From there you can set `Video` by hand in the OSD.
+
+**If your TV loses sync every few seconds**, set `15kHz lines` to
+**262.5 (15.1kHz)**. That gives the TV the line count it expects from NTSC
+while the game keeps its normal speed. Some sets are picky about the default
+273.5-line fields.
+
+CRT reports are very welcome: which TV, how it's connected, and which
+settings work.
+
 ## Controls
 
 | | |

@@ -109,6 +109,11 @@ module hps_io #(parameter CONF_STR, CONF_STR_BRAM=0, PS2DIV=0, WIDE=0, VDNUM=1, 
 	output      [1:0] buttons,
 	output            forced_scandoubler,
 	output            direct_video,
+	// sega-model2-mister: three more MiSTer.ini video settings, so a core can
+	// tell a CRT setup (docs/framework-patches/README.md). Unconnected = unused.
+	output            cfg_csync,       // composite_sync
+	output            cfg_ypbpr,       // ypbpr
+	output            cfg_vga_scaler,  // vga_scaler
 	input             video_rotated,
 
 	//toggle to force notify of video mode change
@@ -200,6 +205,9 @@ assign buttons = cfg[1:0];
 assign forced_scandoubler = cfg[4];
 //cfg[5] - ypbpr handled in sys_top
 assign direct_video = cfg[10];
+assign cfg_csync      = cfg[3];   // sega-model2-mister
+assign cfg_ypbpr      = cfg[5];   // sega-model2-mister
+assign cfg_vga_scaler = cfg[2];   // sega-model2-mister
 
 reg [3:0] sdn;
 reg [3:0] sd_rrb = 0;

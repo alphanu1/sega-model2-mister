@@ -29161,3 +29161,35 @@ jumps) is mostly the quarter-texel u, v at the clipper's corners (the store's
 13-bit field, M10K) and SPLIT_TRI's fan of triangles against MAME's edge
 walk on these non-planar clipped polygons (up to 17 texels off the plane at
 a far corner in frame 8778) -- 0.18 px with every input exact.
+
+**R793 -- VIDEO "AUTO": THE CORE STARTS IN 15 kHz ON A CRT SETUP.** Ben: a CRT
+owner without a PC boots the core at 24 kHz, which a 15 kHz set cannot show,
+so the OSD that would switch it is out of reach. A core cannot read
+MiSTer.ini, but hps_io holds its video settings in `cfg` and exported only
+forced_scandoubler (cfg[4]) and direct_video (cfg[10]); composite_sync
+(cfg[3]), ypbpr (cfg[5]) and vga_scaler (cfg[2]) were used inside sys_top
+alone. The Model 1 reference (0b5d04f, current) connects forced_scandoubler
+and uses none of them -- its native mode is 24 kHz too.
+  * docs/framework-patches/hps-io-video-cfg.patch (applied; the second sys/
+    patch, R788's README/THIRD_PARTY/README.md updated): hps_io outputs
+    cfg_csync, cfg_ypbpr, cfg_vga_scaler. No logic; unconnected = upstream.
+  * Model2.sv: O[42] "Video" becomes O[47:46] "Auto / Native 24kHz / 15kHz
+    interlaced", Auto first. Auto = 15 kHz interlaced when game_id[7] (the
+    CRT MRA) or (direct_video | composite_sync | ypbpr) & !forced_scandoubler
+    & !vga_scaler; else native. Decided on clk_sys into vid_il_r, crossed to
+    clk_mem by vil_s as status[42] was. is_vcop reads game_id[6:0].
+  * mra/Daytona USA (Deluxe 93) [15kHz CRT].mra and (Revision A) [15kHz CRT]:
+    the same set with <rom index="4"><part>80 00</part></rom> ahead of the
+    ROMs (Virtua Cop's game-ID word is 01 00).
+  * releases/README.md: a standing "On a 15 kHz CRT" section.
+lint_top clean; Quartus parses Model2.sv and sys/hps_io.sv. Not verified: a
+CRT on the board; whether any HDMI-only ini sets composite_sync or ypbpr
+(such a setup would get 15 kHz on HDMI under Auto, and can set Native).
+
+**R794 -- s939 RUNS LONG WITHOUT A LOCK, AND THE CAR WINDOWS STAY.** Ben,
+2026-10-10 evening: s939 "has been running a long time, no crash", and the
+car-window textures no longer disappear (the release README's "Car windows
+drop out" item, open since the 20261008b release). Since that release:
+R752's walk fix, R784's luma table (windows were drawn with the wrong
+table), R789's texel path. Which one closed the windows is not isolated.
+The lock (R777, R785) is not seen on s939 so far -- not yet a cause found.
