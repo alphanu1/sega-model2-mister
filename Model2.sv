@@ -3186,6 +3186,7 @@ wire [15:0] q3d_oz0, q3d_oz1, q3d_oz2, q3d_oz3;   // R334: 1/z per vertex
 wire [7:0] q3d_lum;                       // R271: for the exact colour path, not yet built
 /* verilator lint_on UNUSEDSIGNAL */
 wire [23:0] q3d_tex;
+wire        q3d_tlinv;                      // R784: the polygon's luma table is row 1 (inverse)
 /* verilator lint_on UNUSEDSIGNAL */
 wire [23:0] q3d_col;
 wire [31:0] q3d_z;
@@ -3255,6 +3256,7 @@ m2_geometry u_geometry (
 	// simply never driven. That is what this line said for one build, and the
 	// board drew ZERO textured pixels because of it.
 	.q_tex(q3d_tex), .q_lum(q3d_lum),                                 // R271
+	.q_tlinv(q3d_tlinv),                                              // R784
 	.q_frac(q3d_frac),                                                // R626
 	.q_col(q3d_col), .q_z(q3d_z),
 	.dbg_polys(geo_polys), .dbg_objects(geo_objs_done), .dbg_capped(geo_capped),
@@ -6120,10 +6122,13 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1), .FB_DD
 	// The OSD's Off clears the textured bit, which is the one thing every
 	// stage below tests -- the plane fit, the span walk and the texel fetch all
 	// fall back to what they did before in one place.
-	.q_tex({q3d_tex[23:1], q3d_tex[0] && !texoff_s[2]}),
+	// R784: bit 11 (the checker, taken below as q_moire) carries the luma
+	// table's row-1 flag into the rasteriser -- no wider store or queue.
+	.q_tex({q3d_tex[23:12], q3d_tlinv, q3d_tex[10:1], q3d_tex[0] && !texoff_s[2]}),
 	.tex_base0(GAME_TEXS0), .tex_base1(GAME_TEXS1), .tex_inval(cpu_tex_inval),
 	.tex_bilinear(!texpt_s[2]),   // R620
 	.tex_pxk(pxk_s3),             // R650: the OSD's texel step
+	.tex_gamma(gam_s2),           // R784: the curve, for a textured pixel's pedestal
 	.list_hold(r3d_list_hold),    // R652
 	.fb_test(fb_test), .dbg_tp_bad(tp_bad), .dbg_tp_rows(tp_rows), .dbg_tp_first(tp_first),   // R653
 	.fb_pace(fb_pace),   // R656

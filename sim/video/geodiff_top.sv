@@ -196,6 +196,7 @@ module geodiff_top #(
     .q_u0(q_u0), .q_v0(q_v0), .q_u1(q_u1), .q_v1(q_v1),
     .q_u2(q_u2), .q_v2(q_v2), .q_u3(q_u3), .q_v3(q_v3),
     .q_tex(q_tex), .q_lum(q_lum),
+    .q_tlinv(),   // R784
     .q_frac(q_frac),
     .q_col(q_col), .q_z(q_z),
     .dbg_polys(polys), .dbg_objects(objects), .dbg_capped(),

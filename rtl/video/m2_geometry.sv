@@ -117,6 +117,10 @@ module m2_geometry (
   output logic [12:0] q_u0, q_v0, q_u1, q_v1,
   output logic [12:0] q_u2, q_v2, q_u3, q_v3,
   output logic [23:0] q_tex,           // R271: the polygon's texture state
+  // R784: the polygon's luma table is row 1 (texture header word 1's low byte,
+  // poly_tex[31:24], which q_tex does not carry). Daytona's row 1 is the
+  // inverse ramp its decals use; m2_raster3d takes it in q_tex[11].
+  output logic        q_tlinv,
   output logic  [7:0] q_lum,
   // R626: each vertex's quarter pixel below q_x/q_y, {fy3,fx3,...,fy0,fx0}.
   // For the texture plane fit only (m2_geo_project says why).
@@ -920,6 +924,7 @@ module m2_geometry (
   assign q_u2 = ru[2]; assign q_v2 = rv[2];
   assign q_u3 = ru[3]; assign q_v3 = rv[3];
   assign q_tex = ctex[23:0];
+  assign q_tlinv = (ctex[31:24] == 8'd1);   // R784
   assign q_oz0 = coz[0]; assign q_oz1 = coz[1];      // R334
   assign q_oz2 = coz[2]; assign q_oz3 = coz[3];
 

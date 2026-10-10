@@ -341,6 +341,26 @@ module m2_geo_engine #(
   logic [7:0]   xl_raw;     // R718: a translation byte, before its gamma
   logic [1:0]   xl_i;
   logic         xl_go;
+  // R784: A TEXTURED POLYGON'S COLOUR IS A SLOPE, NOT A SHADE. The reference
+  // colours each texel at its own luma, l6 = lumaram[lumabase + (t >> 1)] *
+  // luma / 256, through the translation table and the gamma curve; R275 took
+  // the colour at the polygon's luma and scaled it by the texel, which keeps
+  // one hue for the whole polygon and loses every saturating channel (the
+  // windows' sky, the decals' yellow). Daytona's table is a pedestal of 64 plus
+  // a slope in luma, clipped at 255, so after MAME's gamma (which removes the
+  // pedestal) a channel is min(255, S * l6) with S fixed per polygon. This
+  // engine reads the table ONCE per channel at luma 32 -- below the knee for
+  // every component -- applies MAME's curve, and folds the polygon's luma in:
+  //     poly_col = gam_MAME(xlat[comp][32]) * L / 256   (x B/256 for Off, Mild)
+  // and m2_span_tex makes min(255, A + poly_col * lum(t) / 32) per pixel.
+  // The read stays one per channel and the colour stays one 565 word a quad.
+  logic [7:0]   g_raw;      // R784: the byte after its curve, a cycle later
+  logic [1:0]   g_i;
+  logic         g_go;
+  logic         g_wait;     // R784: E_XLG holds a second cycle for the scale stage
+  logic         tx_c;       // R784: this resolution is a textured polygon's
+  logic [7:0]   lm;         // R784: the luma the slope is scaled by (the key's, midpoint)
+  logic [7:0]   lt;         // R784: ... and by the output curve's gain (Off, Mild)
   // The texture parameters as floats, converted once when the walker streams
   // them; the colour cache: 256 entries direct-mapped on {colorbase, luma6}.
   (* ramstyle = "MLAB" *) logic [63:0] tp_tab [32];    // {ambient, diffuse}
@@ -381,6 +401,26 @@ module m2_geo_engine #(
     endcase
   endfunction
   wire         cc_we  = (st == E_CW);
+  // R784: the slope, g * lt / 256. Stored as 565 (m2_quad_store), so a
+  // non-zero component under Off or Mild keeps at least one LSB: the pedestal
+  // m2_span_tex adds is only right where the table is not zero, and a slope
+  // that truncated to zero would draw a black channel where the table has 64+.
+  /* verilator lint_off UNUSEDSIGNAL */   // m[7:0], below the slope's LSB
+  function automatic logic [7:0] tslope(input logic [7:0] g, input logic [7:0] l,
+                                        input logic [1:0] ch, input logic [14:0] p,
+                                        input logic floor_en);
+    logic [15:0] m;
+    logic [4:0]  c5;
+    logic [7:0]  v, lo;
+    begin
+      m  = 16'(g) * 16'(l);
+      v  = m[15:8];
+      c5 = (ch == 2'd0) ? p[4:0] : (ch == 2'd1) ? p[9:5] : p[14:10];
+      lo = (ch == 2'd1) ? 8'd4 : 8'd8;
+      tslope = (floor_en && (c5 != 5'd0) && (v < lo)) ? lo : v;
+    end
+  endfunction
+  /* verilator lint_on UNUSEDSIGNAL */
 
   // An 8-bit integer as an IEEE single.
   function automatic logic [31:0] i8f(input logic [7:0] v);
@@ -504,6 +544,7 @@ module m2_geo_engine #(
       hdr1 <= 16'd0; hdr2 <= 16'd0; poly_tex <= 32'd0;
       rgb[0] <= 8'd0; rgb[1] <= 8'd0; rgb[2] <= 8'd0;
       xl_raw <= 8'd0; xl_i <= 2'd0; xl_go <= 1'b0;   // R718
+      g_raw <= 8'd0; g_i <= 2'd0; g_go <= 1'b0; g_wait <= 1'b0; tx_c <= 1'b0; lm <= 8'd0; lt <= 8'd0;   // R784
       xaddr <= 24'd0; xhalf <= 1'b0; xspace <= 2'd0; cc_wait <= 1'b0; cc_idx <= 8'd0;
       cc_valid <= '0; cc_dirty <= 1'b0; poly_col <= 24'd0; dbg_col_miss <= 16'd0; tex_flat <= 1'b0; lum_x <= 8'd0; tex_lum_d <= 2'd0; gam_d <= 2'd0;
       for (int k = 0; k < 3; k++) begin
@@ -801,10 +842,14 @@ module m2_geo_engine #(
           // polygons are still untouched -- that path is the reference's own
           // colour and is not a preference.
           lu   = tex_flat ? scale_lum(luma8, tex_lum) : luma8;
-          c555  <= pe; lum_x <= lu;
+          // R784: a textured polygon's table is read at luma 32 (128 >> 2) and
+          // its own luma, the key's six bits at their midpoint so a cached
+          // entry is the same whichever polygon filled it, scales the slope.
+          c555  <= pe; lum_x <= tex_flat ? 8'd128 : lu;
+          tx_c  <= tex_flat; lm <= {lu[7:2], 2'b10};
           xi    <= 2'd0;
-          xaddr <= xl_dw(2'd0, pe, lu);
-          xhalf <= lu[2]; xspace <= 2'd3;
+          xaddr <= xl_dw(2'd0, pe, tex_flat ? 8'd128 : lu);
+          xhalf <= tex_flat ? 1'b0 : lu[2]; xspace <= 2'd3;
           st    <= E_XL;
         end
         // R718: THE BYTE IS REGISTERED, THE GAMMA APPLIED A CYCLE LATER. At 75
@@ -818,7 +863,9 @@ module m2_geo_engine #(
           if (xi == 2'd2) st <= E_XLG;
           else begin xi <= xi + 2'd1; xaddr <= xl_dw(xi + 2'd1, c555, lum_x); end
         end
-        E_XLG: st <= E_CW;
+        // R784: and a second cycle for the scale stage after the curve
+        E_XLG: if (g_wait) begin g_wait <= 1'b0; st <= E_CW; end
+               else g_wait <= 1'b1;
         E_CW: begin
           // R698: NOT CACHED IF THE COLOURS CHANGED UNDER ITS READS. The polygon
           // still takes the colour it computed; the next one asks again. Without
@@ -997,7 +1044,15 @@ module m2_geo_engine #(
           if (tq[tq_rd][1:0] == 2'd2) begin dpx <= xf_out_x; dpy <= xf_out_y; dpz <= xf_out_z; end   // R219
         end
       end
-      if (xl_go) rgb[xl_i] <= gam(xl_raw, gamma_sel);   // R718
+      // R718: the curve a cycle after the read. R784: textured, always
+      // MAME's curve (the pedestal off), then the slope scaled by the luma
+      // a cycle later still -- the multiply never follows the curve's.
+      if (xl_go) begin g_raw <= gam(xl_raw, tx_c ? 2'd0 : gamma_sel); g_i <= xl_i; end
+      g_go <= xl_go;
+      if (g_go) rgb[g_i] <= tx_c ? tslope(g_raw, lt, g_i, c555, gamma_sel != 2'd0) : g_raw;
+      // R784: Off and Mild re-apply their own curve per pixel as A + B x lin
+      // (m2_span_tex); B is folded in here, once per polygon.
+      lt <= (gamma_sel == 2'd0) ? lm : 8'((16'(lm) * (gamma_sel[1] ? 16'd191 : 16'd219)) >> 8);
       if (col_inval) begin cc_valid <= '0; cc_dirty <= 1'b1; end   // R222: the CPU rewrote the colours (R698: and any fill in flight is stale)
       tex_lum_d <= tex_lum;
       if (tex_lum != tex_lum_d) begin cc_valid <= '0; cc_dirty <= 1'b1; end   // R239: the placeholder changed; the cached colours are stale

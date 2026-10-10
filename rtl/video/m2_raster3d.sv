@@ -144,6 +144,11 @@ module m2_raster3d #(
   input  logic            tex_inval,
   input  logic            tex_bilinear,   // R620: on clk_mem, quasi-static (OSD)
   input  logic [1:0]      tex_pxk,        // R650: texel step 1/2/4/8 as log2, on clk (OSD)
+  // R784: the OSD's output curve on clk (m2_geo_engine's encoding), for the
+  // pedestal m2_span_tex adds to a textured pixel. q_tex[11] carries "luma
+  // table row 1" from here on: the checker bit that sat there is taken from
+  // q_moire, and nothing in this module read tex[11].
+  input  logic [1:0]      tex_gamma,
   // R652: a finished list is waiting for the draw in progress (FB_DDR3). The
   // top level holds the GAME on it -- no vblank interrupt, no frame count, no
   // walk -- so the 2D the game writes keeps the 3D's pace.
@@ -592,6 +597,7 @@ module m2_raster3d #(
                 .REUSE(TXREUSE)) u_spantex (   // R633
     .clk(clk), .rst_n(rst_n),
     .pxk(tex_pxk),   // R650
+    .gamma_sel(tex_gamma),   // R784
     .mk_valid(mk_valid), .mk_we(mk_we), .mk_waddr(mk_pwi), .mk_wdata(mk_wd),   // R607
     .mk_band_y0(mk_y0),
     .in_valid(sq_qv), .in_ready(sq_rdy), .busy(spantex_busy),

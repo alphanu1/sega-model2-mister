@@ -28737,3 +28737,103 @@ field by its line count re-lock on it. Ben's ask, kept at the game's rate:
     past 274 runs it round to 1023 (one 861-line field per OSD change).
 If the dropouts stop at 262.5 the cause is the set's tolerance; if they do
 not, the connection or the framework.
+
+**R784 -- THE TEXTURED COLOUR: THE LUMA TABLE'S ROW, AND A SLOPE CLIPPED AT
+255, NOT THE POLYGON'S COLOUR SCALED BY THE TEXEL.** Ben: "huge quality
+difference" against a PC version of the attract. MAME 0.289 (daytona93, our
+set) rendered the same scenes natively (machine frames 2373 and 17880; a
+scratch patch dumps a list by machine frame and every pixel's mip level).
+
+*Believed (R275, R281, R624):* scaling the polygon's finished colour by the
+texel is the reference's colour ramp "approximated as linear", and R624's
+frame-mean RGB agreeing with MAME to 1% confirmed it.
+
+*Now known:* the TEXEL SAMPLING was never the problem. Our fetch log, put
+through MAME's colour arithmetic, gives MAME's picture: the decal clean, the
+red "RACING" bar, the windows' sky. The COLOUR stage is what goes wrong:
+  1. The luma table's row was dropped. poly_tex[31:24] (texture header word
+     1, the luma base) never left m2_geometry (q_tex is 24 bits). Daytona's
+     lumaram row 0 is i/2 and row 1 is 63 - i/2 (dumped; rows 2-65 are effect
+     ramps no measured pixel uses). Its decals use row 1, so 2.5-4.2% of
+     textured pixels a frame came out with INVERTED brightness: Gallop's
+     yellow (247,207,0) drew as (33,30,0), its outline black.
+  2. The colour table is a pedestal (~64-86 for any non-zero component, 0 at
+     luma 0) plus a slope in luma, CLIPPED at 255. A per-pixel lookup changes
+     hue as channels clip (the windows go from blue to white, reds stay red);
+     one colour scaled by the texel cannot. R624's mean hid it.
+  3. Mip level is not a cause: f2200, 97.8% of textured pixels at level 0,
+     4.3% blended with the next; q1's hood decal (polys 100-104, a minified
+     128x128 translucent decal, row 1) is level 0 in MAME too, and MAME draws
+     it as a garbled green band as well.
+
+*The change (the texture colour only; the OSD Gamma option and its default,
+Off, unchanged):*
+  * m2_geo_engine: a textured polygon reads the translation table at luma
+    32 (one read per channel, as before), applies MAME's curve, and scales by
+    the polygon's (selected) luma at its 6-bit key's midpoint and by the
+    output curve's gain -- 191/256 Off, 219/256 Mild, 1 MAME. Under Off/Mild a
+    non-zero component keeps one 565 LSB (a slope that truncated to 0 would
+    lose the pedestal). One scale stage after the curve; E_XLG holds a second
+    cycle for it (no new state: the enum is full at 32). Flat polygons are
+    untouched.
+  * m2_span_tex: lum = (t - t/16) / 4 (m2_texel_bl's x17 scale back to the
+    reference's x16), complemented for row 1; per channel
+    min(255, A + c * lum / 32), 0 where c or lum is 0; A = 0 MAME, 64 Off, 37
+    Mild. The emit registers the bare product (R741's c * (i+1) path, which
+    closes at 80 MHz); the pedestal, clamp and zero are applied on the way out
+    to m2_fb_wcomb's intake register. rt_i1 (9 bits) -> rt_lum (6), rt_texel
+    9 -> 1 bit.
+  * m2_geometry: q_tlinv = (luma base == 1). Model2.sv puts it in q_tex[11]
+    -- the checker bit, which the rasteriser takes from q_moire and nothing
+    else read -- so the quad store and the span queue carry NO new bits: no
+    M10K moves. m2_raster3d gains tex_gamma (clk_sys, gam_s2) for A.
+
+*Measured.* Colour stage alone (MAME's own filtered texel and luma, MAME's
+colour path as the reference, the same curve on both sides), max channel
+error of 255, mean / share over 32, before -> after:
+
+    curve   f2200            f17880           r57              rpk
+    Off     42.6/74.5% ->    54.3/87.0% ->    38.3/51.4% ->    50.1/79.3% ->
+             5.8/0.7%         3.4/0.7%         5.8/0.1%         5.2/0.2%
+    MAME    13.0/8.7% ->     30.5/56.7% ->    16.1/9.5% ->     23.2/25.2% ->
+             4.0/0.0%         4.8/0.0%         6.8/0.0%         3.8/0.0%
+    Mild    28.9/20.7% ->    43.6/80.5% ->    28.1/40.2% ->    37.8/49.7% ->
+             4.4/0.7%         3.6/0.7%         5.3/0.1%         3.4/0.2%
+
+The residual 0.1-0.7% over 32 under Off/Mild is the darkest texels, where the
+reference's luma rounds to 0 (table 0) and ours adds the pedestal.
+
+Whole renderer (tb_m2_raster3d M2_R3D_REALCOL, MAME's lists, step 1,
+bilinear, every textured pixel MAME drew and we painted, both cut to 565 --
+so the sampling's own differences are in these):
+
+    curve   f2200             f17880            r57
+    Off     45.0/65.9% ->     54.7/85.6% ->     39.5/48.2% ->
+            11.3/5.1%          8.9/3.0%         10.8/3.5%
+    MAME    19.7/13.0% ->     34.0/50.3% ->     20.3/14.8% ->
+            12.0/5.4%         12.1/3.7%         12.9/4.8%
+
+(The sampling alone, MAME's colour on our fetches, was 8.0-9.3 / 3.6-5.6%.)
+The RTL equals the model pixel for pixel: 0 of 76,631 (f17880), 1 of 135,650
+(r57), 78 of 166,488 (f2200) differ, every one a pixel fetched more than
+once (a checker or translucent overlap the check's first-fetch rule misreads).
+
+*Cost.* quartus_map alone, at the design's parameters: m2_span_tex +27 ALM
+(estimate), +5 registers, DSP unchanged (15); m2_geo_engine +19 ALM, +28
+registers, +2 DSP; m2_geometry one 8-bit compare. ~+50 ALM before placement
+(R661: placement adds ~50%), 0 M10K, +2 DSP. Quartus 17 constant-folds every
+new expression to the bench's value (tcol/tfin, tlum, tslope, the gain).
+
+*Benches.* tb_m2_span_tex: a new section, every (curve, row, colour, nibble)
+against the model, 768 cases; 7,211 checks, 0 fail (it builds again: the
+unused 'iv' is gone); four mutations (no pedestal, no row, no 16/17, no
+clamp) each fail it. tb_m2_geo_engine: the textured expectation is the slope,
+plus Off and Mild; 70 / 0 (geo_engine_top's gamma_sel is an input now).
+tb_m2_raster3d: M2_R3D_REALCOL / M2_R3D_GAMMA as above (-DR784_OLD models the
+old path). test_m2_raster3d, test_m2_quad_store, test_m2_texel_bl,
+test_m2_geo, test_m2_geometry, test_m2_boot pass; lint_top and Quartus parse
+clean.
+
+*Not verified:* timing (no fit); the board; lumaram rows other than 0 and 1
+(taken as row 0); Mild's reference is our own curve applied to the table
+(MAME has no Mild).

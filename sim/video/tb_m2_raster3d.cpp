@@ -46,6 +46,13 @@ static const int V_TOTAL = 424;
 static int BAND_H = 8;    // the shipped band height
 static long g_texmem_viol = 0;   // R668: a request edge while that port was busy
 static bool px_dump = false;   // R542: M2_R3D_PXDUMP, every painted pixel of the last frame
+// R784: M2_R3D_REALCOL -- list mode with the polygons' REAL colours (the
+// engine's, modelled from MAME's palette and translation-table dumps) instead
+// of their numbers, and every textured pixel of the displayed frame compared
+// against MAME's own colour path (colour.txt: its filtered texel's final luma)
+// through the curve M2_R3D_GAMMA selects (0 MAME, 1 Mild, 2 Off). Build with
+// -DR784_OLD to model the engine and the rasteriser as they were before R784.
+static std::vector<uint32_t> g_pxcap;   // 0x10000 | RGB565 per displayed pixel
 static uint64_t frame_hash = 1469598103934665603ull;   // R542: this frame only
 static uint64_t pix_hash = 1469598103934665603ull;   // R539: every painted pixel, all frames
 static long fill_hist[32], walk_busy = 0, cst_hist[8], why_hist[8], fw_hist[32], sw_hist[8];   // R539: fill state per cycle, per frame
@@ -635,6 +642,8 @@ int main(int argc, char **argv) {
           pix_hash = (pix_hash ^ (uint64_t(y) << 40 ^ uint64_t(t) << 20 ^ d->scan_col)) * 1099511628211ull;
           frame_hash = (frame_hash ^ (uint64_t(y) << 40 ^ uint64_t(t) << 20 ^ d->scan_col)) * 1099511628211ull;
           if (px_dump) std::printf("PX %d %d %04x\n", ly, t, (unsigned)d->scan_col);   // R542, R682
+          if (px_dump && !g_pxcap.empty() && ly >= 0 && ly < 384 && t >= 0 && t < 496)
+            g_pxcap[ly * 496 + t] = 0x10000u | (unsigned)d->scan_col;   // R784
           if (g_cap && ly < SCR_H) g_pix[ly * SCR_W + t] = (int)d->scan_col;            // R769
         }
       }
@@ -720,7 +729,7 @@ int main(int argc, char **argv) {
     }
     g_tbase1 = d->tex_base1;
     struct V { double x, y, z, pu, pv; };
-    struct P { int idx; unsigned z, h0, h1, h2, h3; std::vector<V> v; };
+    struct P { int idx; unsigned z, h0, h1, h2, h3, luma; std::vector<V> v; };
     auto load_polys = [&](const std::string &pdir) {
     std::vector<P> polys;
     { FILE *f = std::fopen((pdir + "/polys.txt").c_str(), "r"); char line[8192];
@@ -728,6 +737,7 @@ int main(int argc, char **argv) {
         P p; int win, n, vp[4]; unsigned luma; char *q = line;
         if (std::sscanf(q, "P %d z=%u win=%d h=%x,%x,%x,%x luma=%u vp=%d,%d,%d,%d n=%d",
                         &p.idx, &p.z, &win, &p.h0, &p.h1, &p.h2, &p.h3, &luma, &vp[0], &vp[1], &vp[2], &vp[3], &n) != 13) continue;
+        p.luma = luma;   // R784
         q = std::strstr(q, " n="); q = std::strchr(q + 1, ' ');
         for (int i = 0; i < n && q; i++) { V v; if (std::sscanf(q, " %lf,%lf,%lf,%lf,%lf", &v.x, &v.y, &v.z, &v.pu, &v.pv) != 5) break; p.v.push_back(v); q = std::strchr(q + 1, ' '); }
         polys.push_back(p);
@@ -738,6 +748,57 @@ int main(int argc, char **argv) {
     return polys;
     };
     const std::vector<P> polys = load_polys(dir);
+    // R784: the colour path's tables, and the models of the two ends of it
+    static const bool REALCOL = std::getenv("M2_R3D_REALCOL") != nullptr;
+    static const int GSEL = std::getenv("M2_R3D_GAMMA") ? std::atoi(std::getenv("M2_R3D_GAMMA")) : 0;
+    std::vector<uint16_t> pal, xl; std::vector<uint8_t> lram;
+    auto loadv = [&](const char *name, size_t esz, void *dst, size_t n) {
+      FILE *f = std::fopen((dir + name).c_str(), "rb"); size_t r = 0;
+      if (f) { r = std::fread(dst, esz, n, f); std::fclose(f); }
+      return r == n;
+    };
+    if (REALCOL) {
+      pal.resize(0x2000); xl.resize(0x6000); lram.resize(0x8000);
+      if (!loadv("/palram.bin", 2, pal.data(), pal.size()) || !loadv("/colorxlat.bin", 2, xl.data(), xl.size())
+          || !loadv("/lumaram.bin", 1, lram.data(), lram.size())) { std::printf("  R784: palram/colorxlat/lumaram missing\n"); return 1; }
+      g_pxcap.assign(384 * 496, 0);
+#ifndef R784_OLD
+      d->tex_gamma = GSEL;
+#endif
+    }
+    // m2_geo_engine's gam(): sel 0 MAME (bias 64), 1 Mild (bias 32), 2/3 Off
+    auto gam_rtl = [](int v, int sel) -> int {
+      if (sel & 2) return v;
+      const int bias = (sel & 1) ? 32 : 64;
+      if (v <= bias) return 0;
+      const long p = long(v - bias) * ((sel & 1) ? 74941 : 87496);
+      return (p >> 16) > 255 ? 255 : int(p >> 16);
+    };
+    auto X = [&](int ch, int comp, int l6) { return int(xl[ch * 0x2000 + (comp << 8) + l6] & 0xff); };
+    // the polygon colour the engine emits (RGB888, before the store's 565)
+    auto eng_col = [&](const P &p) -> uint32_t {
+      uint32_t pe = pal[((p.h3 >> 6) & 0x3ff) + 0x1000] & 0x7fff;
+      const bool tx = (p.h0 >> 14) & 1;
+      if (tx && pe == 0) pe = 0x4210;                               // R234's grey
+      const int L = int(p.luma) & 0xff;                             // Texture brightness 100%
+      uint32_t r = 0;
+      for (int ch = 0; ch < 3; ch++) {
+        const int c5 = int(pe >> (5 * ch)) & 0x1f;
+        int v;
+#ifndef R784_OLD
+        if (tx) {
+          const int lm = (L & 0xfc) | 2;
+          const int lt = GSEL == 0 ? lm : (lm * ((GSEL & 2) ? 191 : 219)) >> 8;
+          v = (gam_rtl(X(ch, c5, 32), 0) * lt) >> 8;
+          const int lo = ch == 1 ? 4 : 8;
+          if (GSEL != 0 && c5 != 0 && v < lo) v = lo;
+        } else
+#endif
+          v = gam_rtl(X(ch, c5, L >> 2), GSEL);
+        r |= uint32_t(v) << (8 * (2 - ch));
+      }
+      return r;
+    };
     auto mf16 = [](double x) -> uint16_t { union { float f; uint32_t b; } u; u.f = (float)x; return (uint16_t)(((u.b >> 23) & 0xff) << 8 | ((u.b >> 15) & 0xff)); };
     auto wide = [](double pu) -> uint32_t { if (!(pu >= 2.0)) return 0; double w = std::floor(pu / 2.0); return w > 32767 ? 32767u : (uint32_t)w; };
     long nq = 0, nq_refused = 0;
@@ -785,6 +846,12 @@ int main(int argc, char **argv) {
       // exactly its polygon's number (a texel scales it otherwise)
       static const bool NOTEX = std::getenv("M2_R3D_NOTEX") != nullptr;
       d->q_tex = NOTEX ? 0u : (tex & 0xffffff); d->q_col = ((uint32_t(p.idx) & 31) << 19) | (((uint32_t(p.idx) >> 5) & 63) << 10); d->q_moire = (tex >> 11) & 1;   // R623
+      if (REALCOL) {   // R784: the real colour, and bit 11 as Model2.sv packs it
+        d->q_col = eng_col(p);
+#ifndef R784_OLD
+        if (!NOTEX) d->q_tex = (tex & 0xfff7ffu) | (((p.h1 & 0xff) == 1) ? 0x800u : 0u);
+#endif
+      }
       d->q_z = 0x3F800000u | (p.z & 0xffff);
       d->q_end = last;
       if (!d->q_ready) ++nq_refused;   // R650: a quad the store did not take is LOST
@@ -887,6 +954,42 @@ int main(int argc, char **argv) {
       std::fclose(fa); }
     std::fclose(fo);
     std::printf("  R615: %zu fetches recorded, %ld pixels painted\n", g_fetch.size(), hits);
+    // R784: every textured pixel MAME drew AND this frame painted, against
+    // MAME's colour path through the selected curve, both cut to 565.
+    if (REALCOL) {
+      std::vector<int> own(512 * 512, -1);
+      { FILE *f = std::fopen((dir + "/owners.txt").c_str(), "r"); char ln[256];
+        while (f && std::fgets(ln, sizeof ln, f)) { int y, x, o, tu, tv; if (std::sscanf(ln, "%d %d %d %d %d", &y, &x, &o, &tu, &tv) == 5 && y < 512 && x < 512) own[y * 512 + x] = o; }
+        if (f) std::fclose(f); }
+      std::vector<const P *> byidx;
+      for (const P &p : polys) { if ((int)byidx.size() <= p.idx) byidx.resize(p.idx + 1, nullptr); byidx[p.idx] = &p; }
+      auto curve = [&](int v) -> int {
+        if (GSEL == 0) { const double r = (v - 64.0) * 255.0 / 191.0; return r < 0 ? 0 : int(r); }   // MAME's table
+        return gam_rtl(v, GSEL);
+      };
+      long n = 0, gt16 = 0, gt32 = 0, miss = 0; double sum = 0; int worst = 0;
+      FILE *f = std::fopen((dir + "/colour.txt").c_str(), "r"); char ln[256];
+      while (f && std::fgets(ln, sizeof ln, f)) {
+        int y, x, t, l6, raw;
+        if (std::sscanf(ln, "%d %d %d %d %d", &y, &x, &t, &l6, &raw) != 5 || y >= 384 || x >= 496) continue;
+        const int o = own[y * 512 + x];
+        if (o < 0 || o >= (int)byidx.size() || !byidx[o]) continue;
+        const uint32_t px = g_pxcap[y * 496 + x];
+        if (!(px & 0x10000)) { ++miss; continue; }
+        const uint32_t pe = pal[((byidx[o]->h3 >> 6) & 0x3ff) + 0x1000] & 0x7fff;
+        const int got[3] = { int((px >> 11) & 0x1f) << 3, int((px >> 5) & 0x3f) << 2, int(px & 0x1f) << 3 };
+        int e = 0;
+        for (int ch = 0; ch < 3; ch++) {
+          int ref = curve(X(ch, int(pe >> (5 * ch)) & 0x1f, l6));
+          ref &= (ch == 1) ? 0xfc : 0xf8;
+          e = std::max(e, std::abs(got[ch] - ref));
+        }
+        ++n; sum += e; gt16 += e > 16; gt32 += e > 32; worst = std::max(worst, e);
+      }
+      if (f) std::fclose(f);
+      std::printf("  R784 colour vs MAME (curve %d): %ld textured px, mean %.2f, >16 %.2f%%, >32 %.2f%%, worst %d; %ld MAME px not painted here\n",
+                  GSEL, n, n ? sum / n : 0.0, n ? 100.0 * gt16 / n : 0.0, n ? 100.0 * gt32 / n : 0.0, worst, miss);
+    }
     delete d;
     return 0;
   }
