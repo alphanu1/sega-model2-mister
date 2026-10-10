@@ -29299,3 +29299,22 @@ a read on average; the bench has no CPU traffic to measure it -- the board's
 'S' record would.
 
 *Not verified:* the fit and timing; the board.
+
+**R797 -- THE CRT MRA SETS THE OSD'S VIDEO OPTION TOO.** s945 (5efcc72, 80/40:
+clk_sys +0.260, clk_mem +0.103, holds >= +0.243, HDMI -0.518; RBF
+999f177ff333c35f6d44add73059f728; s946 HDMI -0.883, s947 clk_mem -0.083) on
+the board: the [15kHz CRT] MRA boots the core in 15 kHz (R795 works), but
+the OSD still reads "Native 24kHz". Ben, same build: attract ~98% of full
+speed (slows under the first bridge and on the zoom into the car at the first
+corner), in game slows with many cars -- s939's texel path, before R796.
+s939 ran 79 min under the watch with no lock before it was replaced.
+  * Model2.sv: hps_io's status_in / status_set (upstream ports): once the
+    downloads are done, a CRT load with O[42] clear sets it (status_in =
+    status | 1 << 42, one status_set edge). 15 kHz = status[42] | (game_id[7]
+    & !crt_seen), crt_seen set when status[42] reads back -- so the flag
+    holds 15 kHz until the menu has it, and afterwards the OSD alone decides.
+lint_top clean; Quartus parses Model2.sv. Board checks owed: the OSD reads
+15 kHz on the CRT MRA; choosing Native there gives native; and whether
+Main_MiSTer saves the core-set bit into the config both MRAs share (setname
+daytona93) -- if a later normal-MRA load comes up 15 kHz, the CRT MRAs need
+their own setname.
