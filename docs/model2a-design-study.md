@@ -29004,3 +29004,17 @@ measures -11..-14% idle, -13..-22% contended (r57 17.19 -> 14.04, r66 18.10
 80 MHz), ~+470 ALM placed. test_m2_texel_bl4 now builds NS 4 / RSP_D 4 (the
 core's shape); lint_top, test_m2_texel_bl, _texel, _texel_cdc, _span_tex,
 _raster3d, _sdram pass on the merged tree.
+
+**R792 -- s939 ON THE BOARD: SINGLE BUFFERED FULL SPEED ALL DAY, DOUBLE
+BUFFERED "MUCH LESS" SLOWDOWN.** s939 = 8636c1b (R784 + R786 + R788 + R789 +
+R790) at 80/40: clk_sys +0.008, clk_mem +0.457, HDMI -0.039, holds >=
++0.185; 41,300 ALM; RBF dc0694b7e2f7c98cad63a90c4e298615 (s940 Quartus
+internal error STA, s941 TDC). s936 (d8c2457) before it: decal / window
+colours right (R784 confirmed on the board), sound fine with the framework
+filter off (R788 confirmed). Ben on s939: "Audio is fine, visuals are great.
+Double buffered still has some slowdowns but much less. Single buffered is
+full speed all day long." R789's four texel misses moved the board as the
+bench said they would, in the right direction; the draw's slow tail is now
+the last of it. Remaining levers, measured: R787's 128-bit lines (-7..-11%
+contended, +236 ALM -- room is ~600 below s939's 41,300 of 41,910), R789's
+queue of 8 (1-4%, ~+200).
