@@ -28895,3 +28895,12 @@ test_m2_texel_bl8 200,000 / 0; m2_sdram with 8-word texel bursts 2,111,407 /
 18.40); +236 ALM pre-placement. Against R628's four miss slots (-18..-26%
 contended with R782, +637 ALM measured) -- the room freed holds one, not
 both. Ben's call.
+
+**R790 -- GAMMA DEFAULTS TO MAME.** Ben, 2026-10-10. O[33:32]'s menu lists
+MAME first (0, the fresh-config value), then Off, then Mild; gam_menu maps
+menu 0 -> 0 (MAME), 1 -> 2 (Off), 2 -> 1 (Mild), 3 -> off, so each label
+selects the curve it did. R784's texture colour path follows gam_s2 (the
+mapped encoding) and needs no change. A saved config that held Off (0) now
+opens as MAME. The release README's OSD table (Gamma, and Draw method's
+default after R781) is the released build's and is updated at the next
+release.

@@ -212,7 +212,8 @@ localparam CONF_STR = {
 	// colour table's raw values. 2D and 3D follow it together.
 	// R639: Off first -- the power-up default. Menu 0 Off, 1 MAME, 2 Mild,
 	// mapped below to the palette's encoding (0 MAME, 1 mild, 2/3 off).
-	"O[33:32],Gamma,Off,MAME,Mild;",
+	// R790: MAME first now -- Ben's default. Menu 0 MAME, 1 Off, 2 Mild.
+	"O[33:32],Gamma,MAME,Off,Mild;",
 	// Which half of the right stick's Y is the throttle. Axis polarity is not
 	// standardised across pads, so this is a setting rather than a rebuild.
 	"O[28],Pedals,Normal,Swapped;",
@@ -620,8 +621,9 @@ reg [2:0] texoff_s;  // R275: the same, for the texture switch
 always_ff @(posedge clk_sys) texoff_s <= {texoff_s[1:0], status[27]};
 reg [1:0] gam_m1, gam_m2, gam_s1, gam_s2;   // R630: the gamma choice, to both clocks
 // R639: menu 0 Off -> 2, 1 MAME -> 0, 2 Mild -> 1, 3 (unused) -> off.
-wire [1:0] gam_menu = (status[33:32] == 2'd0) ? 2'd2 :
-                      (status[33:32] == 2'd1) ? 2'd0 :
+// R790: menu 0 MAME -> 0, 1 Off -> 2, 2 Mild -> 1, 3 (unused) -> off.
+wire [1:0] gam_menu = (status[33:32] == 2'd0) ? 2'd0 :
+                      (status[33:32] == 2'd1) ? 2'd2 :
                       (status[33:32] == 2'd2) ? 2'd1 : 2'd2;
 always_ff @(posedge clk_mem) begin gam_m1 <= gam_menu; gam_m2 <= gam_m1; end
 always_ff @(posedge clk_sys) begin gam_s1 <= gam_menu; gam_s2 <= gam_s1; end
