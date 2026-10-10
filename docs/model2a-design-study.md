@@ -29461,3 +29461,11 @@ seeming more frequent lately (s945: 45-60 min, then 20 min). Not yet a cause:
 a stress bench (real m2_sdram, CDCs and bridge, CPU traffic checked against a
 shadow under maximum texel traffic) and cheap on-chip checks for the
 lock-hunt build are under way.
+
+**R803 -- R802 NOT REPRODUCED: TEXTURES OFF STILL LOCKS.** Ben, 2026-10-11, on
+s945 (5efcc72, 80/40): with the OSD "Textures Off" the lock still comes,
+after the same ~30-45 minutes. The tester's no-lock run was a lucky stretch
+of a random fault; the texel path is not established as the cause. The hunt
+widens to every SDRAM master and to the CPU side (the bridge's cache /
+posted writes / line buffer, the i960 core's call/ret frame handling under
+interrupts, R652's IRQ hold, the copro FIFO stall with R771's faster TGP).
