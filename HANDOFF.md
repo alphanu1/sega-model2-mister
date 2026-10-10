@@ -2,6 +2,16 @@
 
 ## 2026-10-10: TGP 2.3x FASTER (R771-R775), TYRES BACK (R769). BUILDING.
 
+16:30: s919 (80/40) FROZE at the first 3D frame of attract (2D only, 0 fps);
+the boot harness at 30 M insns and the replay at latency 1/12/40 are clean,
+map warnings identical to s894 -- not reproduced; retry it once to see if it
+is repeatable. s913 (75, lock hunt) RUNS: attract 81% of full speed, races
+mostly 30 -- the 3D DRAW is now the limit (bench: heavy lists 15.4-16.5 ms
+idle SDRAM, 21-25 ms contended; 37-68% of the span walker waiting on texel
+misses; walk ~11-12 ms fits). Try OSD texel step 2. R779 (6f19629): the
+right-edge column (3D read one column ahead of the 2D) + MAME's checker
+parity. Lock watch on s913: scratchpad watch913.sh.
+
 READY (15:00): s919 = e75a2cd at 80/40 (all of today: R769-R778), closes
 (clk_sys +0.105, HDMI -0.145), RBF 7ac1360a33d72e8d2696a0689776d7cb, in
 sm2-builds/sm2-rel-e75a2cd/build/seeds/s919. s913 = the lock hunt at 75/37.5,
