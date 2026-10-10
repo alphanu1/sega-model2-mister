@@ -24,7 +24,10 @@
 
 module m2_sdram_harness #(
   // R574: the controller's priority class; the default leaves it off.
-  parameter logic [10:0] PRI     = '0,
+  // R789: NPP -- 11 (the bench as ever) or 13 (Model2.sv's ports since the
+  // texel cache's third and fourth miss ports, 11 and 12)
+  parameter int unsigned NPP     = 11,
+  parameter logic [12:0] PRI     = '0,
   parameter int unsigned PRI_CAP = 2,
   // Set with -GCOL_BITS at build time. 9 = 32 MB module, 11 = 128 MB. The
   // device model follows the same number, so a geometry the controller decodes
@@ -52,16 +55,19 @@ module m2_sdram_harness #(
   // that drives 0..4 cannot see that no matter how long it runs.
   input  logic        p0_req, p1_req, p2_req, p3_req, p4_req,
                       p5_req, p6_req, p7_req, p8_req, p9_req, p10_req,
+                      p11_req, p12_req,                    // R789 (NPP 13)
   input  logic        p0_we,
   input  logic [COL_BITS+15:1] p0_addr, p1_addr, p2_addr, p3_addr, p4_addr,
                                p5_addr, p6_addr, p7_addr, p8_addr, p9_addr,
-                               p10_addr,
+                               p10_addr, p11_addr, p12_addr,
   input  logic [15:0] p0_din,
   input  logic [1:0]  p0_be,
   output logic [63:0] p0_dout, p1_dout, p2_dout, p3_dout, p4_dout,
                       p5_dout, p6_dout, p7_dout, p8_dout, p9_dout, p10_dout,
+                      p11_dout, p12_dout,
   output logic        p0_ack, p1_ack, p2_ack, p3_ack, p4_ack,
                       p5_ack, p6_ack, p7_ack, p8_ack, p9_ack, p10_ack,
+                      p11_ack, p12_ack,
 
   // Device model observability
   output int unsigned violations,
@@ -89,7 +95,7 @@ module m2_sdram_harness #(
   output logic [23:0] mon_total
 );
 
-  localparam int unsigned NP    = 11;   // ELEVEN STILL: the core shares port 3 now
+  localparam int unsigned NP    = NPP;  // R789: 11 or 13. ELEVEN by default STILL: the core shares port 3 now
                                       // (R290), but a bench that stops at the
                                       // number the core uses cannot catch the
                                       // next port's burst length (R277).
@@ -104,11 +110,12 @@ module m2_sdram_harness #(
   // not pay 100 us of NOPs; the sequence exercised is identical.
   localparam int unsigned INIT_NOP = 600;
 
-  logic [NP-1:0]       p_req, p_we, p_ack;
-  logic [NP-1:0][COL_BITS+15:1] p_addr;
-  logic [NP-1:0][15:0] p_din;
-  logic [NP-1:0][1:0]  p_be;
-  logic [NP-1:0][63:0] p_dout;
+  // R789: thirteen wide; the controller takes the first NP
+  logic [12:0]       p_req, p_we, p_ack;
+  logic [12:0][COL_BITS+15:1] p_addr;
+  logic [12:0][15:0] p_din;
+  logic [12:0][1:0]  p_be;
+  logic [12:0][63:0] p_dout;
   logic [NP-1:0]       dbg_req, dbg_grant;
 
   // Indexed rather than concatenated: a concatenation silently renumbers every
@@ -119,10 +126,12 @@ module m2_sdram_harness #(
     p_req[0] = p0_req; p_req[1] = p1_req; p_req[2] = p2_req; p_req[3] = p3_req;
     p_req[4] = p4_req; p_req[5] = p5_req; p_req[6] = p6_req; p_req[7] = p7_req;
     p_req[8] = p8_req; p_req[9] = p9_req; p_req[10] = p10_req;
+    p_req[11] = p11_req; p_req[12] = p12_req;   // R789
     p_addr[0] = p0_addr; p_addr[1] = p1_addr; p_addr[2] = p2_addr;
     p_addr[3] = p3_addr; p_addr[4] = p4_addr; p_addr[5] = p5_addr;
     p_addr[6] = p6_addr; p_addr[7] = p7_addr; p_addr[8] = p8_addr;
     p_addr[9] = p9_addr; p_addr[10] = p10_addr;
+    p_addr[11] = p11_addr; p_addr[12] = p12_addr;
     p_we[0]  = p0_we;
     p_din[0] = p0_din;
     p_be[0]  = p0_be;
@@ -133,6 +142,11 @@ module m2_sdram_harness #(
   assign p6_ack = p_ack[6]; assign p7_ack = p_ack[7]; assign p8_ack = p_ack[8];
   assign p9_ack = p_ack[9];
   assign p10_ack = p_ack[10];
+  assign p11_ack = p_ack[11]; assign p12_ack = p_ack[12];   // R789
+  generate if (NP < 13) begin : g_tie   // R789: the ports this build has not got
+    assign p_ack[12:NP]  = '0;
+    assign p_dout[12:NP] = '0;
+  end endgenerate
   assign p0_dout = p_dout[0];
   assign p1_dout = p_dout[1];
   assign p2_dout = p_dout[2];
@@ -144,6 +158,7 @@ module m2_sdram_harness #(
   assign p8_dout = p_dout[8];
   assign p9_dout = p_dout[9];
   assign p10_dout = p_dout[10];
+  assign p11_dout = p_dout[11]; assign p12_dout = p_dout[12];
 
   logic        cke, cs_n, ras_n, cas_n, we_n;
   logic [1:0]  ba, dqm;
@@ -155,7 +170,7 @@ module m2_sdram_harness #(
     .COL_BITS(COL_BITS),
     .NP(NP), .T_RCD(T_RCD), .T_RP(T_RP), .T_RC(T_RC), .T_RAS(T_RAS),
     .T_WR(T_WR), .CL(CL), .T_REFI(T_REFI), .INIT_NOP(INIT_NOP), .ACK_HOLD(2),
-    .PRI(PRI), .PRI_CAP(PRI_CAP)                                     // R574
+    .PRI(PRI[NP-1:0]), .PRI_CAP(PRI_CAP)                             // R574
   ) dut (
     .clk(clk), .rst_n(rst_n), .ready(ready),
     // CL+3, what the device MODEL needs, and after the selector range moved
@@ -168,8 +183,9 @@ module m2_sdram_harness #(
     .sd_dq_o(dq_c2m), .sd_dq_oe(dq_oe_c), .sd_dq_i(dq_m2c),
     .wr_req(wr_req), .wr_addr(wr_addr), .wr_din(wr_din), .wr_be(wr_be),
     .wr_ack(wr_ack),
-    .p_req(p_req), .p_we(p_we), .p_addr(p_addr), .p_din(p_din), .p_be(p_be),
-    .p_dout(p_dout), .p_ack(p_ack),
+    .p_req(p_req[NP-1:0]), .p_we(p_we[NP-1:0]), .p_addr(p_addr[NP-1:0]),
+    .p_din(p_din[NP-1:0]), .p_be(p_be[NP-1:0]),
+    .p_dout(p_dout[NP-1:0]), .p_ack(p_ack[NP-1:0]),
     .dbg_req(dbg_req), .dbg_grant(dbg_grant)
   );
 

@@ -267,7 +267,10 @@ module m2_sdram #(
       // 10 IS THE TEXEL FETCH AND KEEPS FOUR: `tex_m_data = p_dout[10]` uses
       // all 64 bits, one cache line, eight texels.
       8, 9:  blen = 4'd2;
-      10:    blen = 4'd4;
+      // R789: 11 AND 12 ARE THE TEXEL CACHE'S THIRD AND FOURTH MISS PORTS --
+      // one line each, four words, as 10 and 2 are. The default arm below
+      // would read them ONE word.
+      10, 11, 12: blen = 4'd4;
       default: blen = 4'd1;
     endcase
   endfunction

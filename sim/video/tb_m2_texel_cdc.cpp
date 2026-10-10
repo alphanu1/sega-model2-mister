@@ -33,6 +33,9 @@ static long checks = 0, fails = 0;
 static uint32_t seed = 1;
 static uint32_t rnd() { seed = seed * 1103515245u + 12345u; return seed >> 8; }
 static long envl(const char *n, long def) { const char *s = std::getenv(n); return s ? atol(s) : def; }
+#ifndef TB_K
+#define TB_K 4   // R789: the K the module is built with (-GK, -DTB_K)
+#endif
 #define CHECK(c, ...) do { ++checks; if (!(c)) { if (fails < 12) { std::printf("  FAIL: " __VA_ARGS__); std::printf("  t=%lld ps\n", t_now); } ++fails; } } while (0)
 
 static long long t_now = 0, TF, TS, JIT, nf, ns;
@@ -166,7 +169,7 @@ int main(int argc, char **argv) {
   CHECK(local_f > 0, "the stall produced no local answers");
   std::printf("  phase 2: a stalled cache, %ld answered locally as 0xF\n", local_f);
 
-  CHECK(max_out <= 4, "the cache held %ld unanswered, more than K", max_out);
+  CHECK(max_out <= TB_K, "the cache held %ld unanswered, more than K", max_out);   // R789: TB_K
   std::printf("  m2_texel_cdc: checks=%ld fails=%ld\n%s\n", checks, fails, fails ? "FAIL" : "PASS");
   delete d;
   return fails ? 1 : 0;

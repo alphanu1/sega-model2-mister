@@ -495,7 +495,8 @@ wire  [1:0] ldr_wr_be;
 // the four unused ports are tied off instead -- synthesis removes what they
 // drive, and the alternative is forking from the reference over an arbiter
 // detail. Port 0 is the readback; 1-4 become the CPU, tilemap and renderer.
-localparam int unsigned NPORTS = 11;  // 5 = sound ROM, 6/7 = samples, 8/9 = TGP, 10 = texels
+localparam int unsigned NPORTS = 13;  // 5 = sound ROM, 6/7 = samples, 8/9 = TGP, 10 = texels
+                                      // R789: 11, 12 = the texel cache's third and fourth miss ports
                                       // (9 is SHARED with the display-list walk)
 
 // THE 68000 SOUND PROGRAM, 256 KB, at MRA byte offset 0x2350000 -- and the MRA's
@@ -871,6 +872,9 @@ logic             p2s_req;
 logic [SDR_AW:1]  p2s_addr;
 wire              p2s_freq, p2s_ack;
 logic             p2_tex_f;
+// R789: the texel cache's third and fourth miss ports (11, 12), driven below
+wire              tex_m3_req, tex_m4_req;
+wire [SDR_AW:1]   tex_m3_addr, tex_m4_addr;
 
 always_comb begin
 	p_req  = '0;
@@ -1103,6 +1107,11 @@ always_comb begin
 	p_req[3]  = cache_m_req;
 	p_req[10] = tex_m_req;
 	p_addr[10] = tex_m_addr;
+	// R789: the texel cache's third and fourth miss slots, on clk_mem as 10 is
+	p_req[11]  = tex_m3_req;
+	p_addr[11] = tex_m3_addr;
+	p_req[12]  = tex_m4_req;
+	p_addr[12] = tex_m4_addr;
 	p_addr[3] = char_base + SDR_AW'(cache_m_addr);
 	// PORT 0 IS THE CPU'S, and it is the single-word port on purpose: the
 	// bridge issues one 16-bit access at a time, and ports 1-3 burst four.
@@ -1185,7 +1194,7 @@ m2_wr_arb #(.N(5), .AW(SDR_AW)) u_wr_arb (
 // of clk_mem; this crosses at any ratio with the same slow-side contract, so no
 // requester changes. Ports 2, 3 and 10 are the caches on clk_mem and pass
 // straight through; port 2's boot owners cross on u_p2s below.
-m2_sdram_cdc #(.NP(NPORTS), .AW(SDR_AW), .FAST(11'b100_0000_1100)) u_sdram_x2 (
+m2_sdram_cdc #(.NP(NPORTS), .AW(SDR_AW), .FAST(13'b1_1100_0000_1100)) u_sdram_x2 (   // R789: 11, 12 on clk_mem
 	.clk_slow(clk_sys), .s_rst_n(mem_rst_n),
 	.clk_fast(clk_mem), .f_rst_n(mem_rst_n),
 	.s_req(p_req), .s_addr(p_addr), .s_ack(p_ack), .s_dout(p_dout),
@@ -1286,7 +1295,12 @@ m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(781),
            // their gaps. The CPU blocks on each access (one outstanding), so it
            // cannot hold the bus: the most it costs a texel, glyph or walker
            // read is one transaction.
-           .PRI(11'b100_0001_1110), .PRI_CAP(2)) u_sdram (
+           // R789: 11 and 12 (texel misses 3 and 4) join the class BEHIND every
+           // other member -- it grants the lowest set port, so the i960 (1), the
+           // texel port 2, the glyph fetch (3, R639's per-scanline deadline) and
+           // the walker (4) still go first; the cap (2) still lets one
+           // round-robin grant through after two class grants.
+           .PRI(13'b1_1100_0001_1110), .PRI_CAP(2)) u_sdram (
 	.clk(clk_mem), .rst_n(mem_rst_n), .ready(mem_ready),
 	// CL+2, FIXED, NO OSD OVERRIDE (R411). Only one capture depth can ever be
 	// right -- CL+1 samples the previous word of the burst, CL+3 the next -- so
@@ -6101,6 +6115,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1), .FB_DD
               .PXC(1'b1), .PIXSTEP(4), .FRB(2), .M2COV(1'b1),   // R658/R662; R673: re-tested on top of R671 (s583's test had the texture ROM bug)
                 // R626: quarter-pixel plane fit
               .TXLATE(3),   // R627: point-sample while the fill is within 3 bands of the beam
+              .TXNS(4), .TXRSP(4), .TXK(16),   // R789: R628's four misses in flight and 16 credits; the queue stays 4 (8 cost ~200 ALM for 1-4%)
               .TXREUSE(1'b0),   // R633: every other group while late -- REJECTED by eye (R634)
                 // R616: pixel-centre planes; R626: bilinear, a texel per four pixels (PIXSTEP 2 drops bands on the board)
               .TWO_CLOCKS(1'b1), .TEX_AW(SDR_AW)) u_raster3d (   // R564: scan on clk_mem
@@ -6136,8 +6151,9 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1), .FB_DD
 	.fb_pace(fb_pace),   // R656
 	.tex_m2_en(tex_m2_en), .tex_m2_req(tex_m2_req), .tex_m2_addr(tex_m2_addr),
 	// R628: the texel cache's third and fourth ports, unused at TXNS = 2
-	.tex_m3_en(1'b0), .tex_m3_req(), .tex_m3_addr(), .tex_m3_ack(1'b0), .tex_m3_data(64'd0),
-	.tex_m4_en(1'b0), .tex_m4_req(), .tex_m4_addr(), .tex_m4_ack(1'b0), .tex_m4_data(64'd0),
+	// R789: and the third and fourth (TXNS 4), on ports 11 and 12
+	.tex_m3_en(1'b1), .tex_m3_req(tex_m3_req), .tex_m3_addr(tex_m3_addr), .tex_m3_ack(p_ack[11]), .tex_m3_data(p_dout[11]),
+	.tex_m4_en(1'b1), .tex_m4_req(tex_m4_req), .tex_m4_addr(tex_m4_addr), .tex_m4_ack(p_ack[12]), .tex_m4_data(p_dout[12]),
 	.tex_m2_ack(tex_m2_ack), .tex_m2_data(tex_m2_data),
 	.tex_m_req(tex_m_req), .tex_m_addr(tex_m_addr),
 	.tex_m_ack(tex_m_ack), .tex_m_data(tex_m_data),

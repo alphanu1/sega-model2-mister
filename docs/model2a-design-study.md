@@ -28904,3 +28904,103 @@ mapped encoding) and needs no change. A saved config that held Off (0) now
 opens as MAME. The release README's OSD table (Gamma, and Draw method's
 default after R781) is the released build's and is updated at the next
 release.
+
+**R789 -- FOUR TEXEL MISSES IN FLIGHT (R628, UN-PARKED), WITH THE ROOM R786 /
+R788 FREED.** Ben chose this over R787's 128-bit lines. R628 measured it
+(+637 ALM for slots x queue 4 x 8, plus two SDRAM ports) and parked it on area
+until the board said whether TXLATE alone kept the bands; R780 since showed
+the draw's slow tenth ~25% over a frame, the cost being the misses' round
+trip with two in flight. R553's eight credits scrambled textures through the
+old 2:1 adapter (R558: its wider queues missed timing across the 2:1);
+R561/R563's asynchronous m2_texel_cdc replaced it, R762 registered its
+credit count, and eight have run since.
+
+THE CHANGE -- everything already parameterised (m2_texel_bl NS, RSP_D; the
+cdc's K; m2_span_tex TXK); m2_raster3d now passes TXK and TXRSP through
+beside TXNS:
+  * Model2.sv: TXNS 4, TXRSP 4 (8 in the measured B; merged at 4, below), TXK 16. NPORTS 11 -> 13: ports 11 and 12 are
+    the cache's third and fourth miss slots, on clk_mem, passed straight
+    through m2_sdram_cdc (FAST 13'b1_1100_0000_1100) as 10 is.
+  * Priority class 13'b1_1100_0001_1110, cap 2 unchanged: 11 and 12 join it
+    BEHIND every other member (the class grants the lowest set port), so the
+    i960 (1), texel 2, the glyph fetch (3, R639's per-scanline deadline) and
+    the walker (4) still go first, and two class grants still let one
+    round-robin grant through.
+  * m2_sdram blen(): 11 and 12 burst four, as 10 does (the default arm would
+    have read them ONE word).
+
+*Measured* (tb_m2_raster3d, MAME's lists, step 1, 100:80, FB + wcomb, R782 in;
+idle = TEXMEM 12, contended = 30 + 0..30 jitter; draw at 80 MHz, ms):
+
+                        r57    r66    apk    rpk    f2200
+  idle  HEAD           11.93  12.78  14.19  15.98  14.23
+        credits 16     11.34  11.76  13.36  14.71  12.91
+        NS4            11.26  12.15  13.15  15.60  13.74
+        NS4 + queue 8  11.20  12.03  13.04  15.47  13.64
+        NS4 + cr 16    10.66  11.03  12.17  14.27  12.40
+        all three (B)  10.47  10.84  11.98  13.96  12.12
+  cont. HEAD           17.19  18.10  22.27  20.36  19.12
+        credits 16     16.57  16.98  21.32  18.97  17.71
+        NS4            14.76  15.95  18.41  19.00  17.50
+        NS4 + queue 8  14.35  15.47  17.79  18.23  16.89
+        NS4 + cr 16    14.04  14.72  17.33  17.63  16.10
+        all three (B)  13.48  14.01  16.50  16.59  15.27
+
+B: -12..-16% idle, -19..-26% contended. NS4 + credits 16 (queue 4) keeps
+-11..-14% / -13..-22% of it. Every texel answer common to HEAD and each
+variant identical, all five lists, both memory models (1.99 M fetches each;
+the lists differ by a few fetches, the FTB mask's timing as in R782), and the
+displayed frame's hash identical in all ten runs of every variant. The bench's
+four ports have no shared bus; the board's one controller serialises them.
+
+*SDRAM* (tb_m2_sdram -DTB_NP=13 -GNPP=13 with Model2.sv's class, new
+test_m2_sdram13): 2,057,341 checks, 0 fail, 0 device-model violations
+(its refresh-interval check included), 0 tag faults. Worst latency, the
+saturating concurrent phase, 13 ports against today's 11 with today's class:
+port 3 (glyphs) 271 vs 320 cycles, 1 72 vs 68, 2 82 vs 80; outside the class
+422-442 vs 361-376 (+18%). A scanline is ~6,600 clk_mem cycles. Default
+test_m2_sdram unchanged to the check (1,796,727).
+
+*Benches.* test_m2_texel_bl4 (new): NS 4, RSP_D 8, both memory models,
+200,000 / 0 each; ports 3 and 4's data swapped fails 88,379, their
+acknowledges swapped 73,785. test_m2_texel_cdc16 (new; the bench's K was a
+literal 4): 40,804 / 0, the cache held at most 16. m2_span_tex at TXK 16 with
+16 outstanding: 7,211 / 0, and at 26% misses. test_m2_texel_bl, _texel,
+_texel_cdc, _span_tex, _raster3d, _sdram, _sdram128, _sdram_x2, _sdram_cdc,
+_romload, _cpu_sdram, _boot pass; lint_top and Quartus parse clean.
+
+*Cost.* quartus_map alone at design parameters, and scaled by s936's placed /
+standalone ratio for each entity (texel_bl 1,008 / 1,221, span_tex 1,297 /
+1,462, cdc 85 / 163, m2_sdram 744 / 1,098):
+
+                        standalone   placed (est.)
+  m2_texel_bl NS4/RSP4     +407        ~+340
+  ... NS4/RSP8             +652        ~+540
+  m2_texel_cdc K16          +11         ~+6
+  m2_span_tex TXK16         +36         ~+32
+  m2_sdram 13 ports        +133         ~+90
+  B total                               ~+670   (room: ~620, R788)
+  NS4 + credits 16                      ~+470
+M10K: none -- the cdc's queues stay in their blocks at depth 16 (s936: 2 + 1
+M10K at depth 8), the cache's RAMs are unchanged.
+
+*Timing, by construction:* clk_mem -- the cache's join compare, free-slot
+pick and head nibble select widen from 2 to 4 slots and the response queue
+from 4 to 8 entries (one more mux level each); the controller's arbiter
+rotates 13 bits (its inflight -> rr_mask path has failed by 0.23 ns on some
+seeds before). clk_sys -- m2_span_tex's retire selects of_p/of_x from 16
+entries (R731's rt_col path gains a level); the cdc's Gray pointers are 5 bits
+and its credit compare still a register (R762). s936 had clk_mem +0.738,
+clk_sys +0.215.
+
+*Not verified:* the fit (B may not fit: ~+670 placed against ~620); timing
+closure; the board. If B does not fit, TXRSP 4 (one parameter in Model2.sv)
+is the measured next step down.
+MERGED AS NS4 + 16 CREDITS, THE QUEUE LEFT AT 4 (TXRSP 4). B in full is
+~+670 ALM placed against ~620 freed; the queue of 8 is ~+200 of it for 1-4%
+(contended apk 17.33 -> 16.50 ms, rpk 17.63 -> 16.59). At TXRSP 4 the bench
+measures -11..-14% idle, -13..-22% contended (r57 17.19 -> 14.04, r66 18.10
+-> 14.72, apk 22.27 -> 17.33, rpk 20.36 -> 17.63, f2200 19.12 -> 16.10 ms at
+80 MHz), ~+470 ALM placed. test_m2_texel_bl4 now builds NS 4 / RSP_D 4 (the
+core's shape); lint_top, test_m2_texel_bl, _texel, _texel_cdc, _span_tex,
+_raster3d, _sdram pass on the merged tree.

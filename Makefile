@@ -387,8 +387,8 @@ SDR_RTL := rtl/mem/m2_sdram.sv rtl/mem/bw_monitor.sv sim/mem/sdram_model.sv sim/
 RLD_RTL := rtl/mem/m2_sdram.sv rtl/io/m2_rom_loader.sv sim/mem/sdram_model.sv sim/mem/m2_romload_harness.sv
 
 
-.PHONY: test test_m2_backup test_m2_fb_wcomb test_m2_fbw_chain test_m2_sndboard test_m2_romload test_m2_rom_xtra test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram test_fx68k test_m2_ioboard
-test: test_m2_handshake_cdc test_m2_texel test_m2_texel_cdc test_m2_span_tex test_m2_geo test_m2_wr_arb test_m2_pair_cache test_m2_eng_ra test_m2_quad_store test_m2_raster3d test_m2_backup test_m2_sndlink test_fx68k test_m2_sndboard test_m2_ioboard test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_sdram_cdc test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
+.PHONY: test test_m2_backup test_m2_fb_wcomb test_m2_fbw_chain test_m2_sndboard test_m2_romload test_m2_rom_xtra test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram test_fx68k test_m2_ioboard
+test: test_m2_handshake_cdc test_m2_texel test_m2_texel_bl4 test_m2_texel_cdc test_m2_texel_cdc16 test_m2_span_tex test_m2_geo test_m2_wr_arb test_m2_pair_cache test_m2_eng_ra test_m2_quad_store test_m2_raster3d test_m2_backup test_m2_sndlink test_fx68k test_m2_sndboard test_m2_ioboard test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_sdram_cdc test_m2_romload test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
 
 test_i960_dec: obj_i960_dec/Vi960_dec
 	@echo "== test i960_dec"
@@ -520,6 +520,18 @@ obj_m2_sdram/Vm2_sdram_harness: $(SDR_RTL) sim/mem/tb_m2_sdram.cpp
 	$(VBUILD) --top-module m2_sdram_harness -CFLAGS "-O2 -I../sim/mem" \
 	  -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-WIDTHEXPAND -Wno-SYNCASYNCNET \
 	  --Mdir obj_m2_sdram -o Vm2_sdram_harness $(SDR_RTL) sim/mem/tb_m2_sdram.cpp
+
+# R789: Model2.sv's thirteen ports and its priority class (1, 2, 3, 4, 10, 11, 12;
+# cap 2) -- the texel cache's four miss ports with the glyph fetch's deadline
+test_m2_sdram13: obj_m2_sdram13/Vm2_sdram_harness
+	@echo "== test m2_sdram, Model2.sv's 13 ports and priority class (R789)"
+	./obj_m2_sdram13/Vm2_sdram_harness
+
+obj_m2_sdram13/Vm2_sdram_harness: $(SDR_RTL) sim/mem/tb_m2_sdram.cpp
+	$(VBUILD) --top-module m2_sdram_harness -CFLAGS "-O2 -I../sim/mem -DTB_NP=13" \
+	  -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-WIDTHEXPAND -Wno-SYNCASYNCNET \
+	  -GNPP=13 -GPRI=13\'b1110000011110 \
+	  --Mdir obj_m2_sdram13 -o Vm2_sdram_harness $(SDR_RTL) sim/mem/tb_m2_sdram.cpp
 
 # The SAME suite at the 128 MB geometry: 11 column bits, which is the only
 # decomposition reaching 64M words on the connector's 13 address and 2 bank pins.
@@ -748,6 +760,15 @@ test_m2_texel_cdc: obj_texel_cdc/Vm2_texel_cdc
 
 obj_texel_cdc/Vm2_texel_cdc: rtl/video/m2_texel_cdc.sv rtl/video/m2_texel_addr.sv sim/video/tb_m2_texel_cdc.cpp
 	$(VBUILD) --top-module m2_texel_cdc --Mdir obj_texel_cdc -o Vm2_texel_cdc -CFLAGS "-O2" \
+	  rtl/video/m2_texel_cdc.sv rtl/video/m2_texel_addr.sv sim/video/tb_m2_texel_cdc.cpp
+
+# R789: the core's K (16 credits since R789)
+test_m2_texel_cdc16: obj_texel_cdc16/Vm2_texel_cdc
+	@echo "== test m2_texel_cdc at K = 16 (R789)"
+	@./obj_texel_cdc16/Vm2_texel_cdc $(TEST_ARGS)
+
+obj_texel_cdc16/Vm2_texel_cdc: rtl/video/m2_texel_cdc.sv rtl/video/m2_texel_addr.sv sim/video/tb_m2_texel_cdc.cpp
+	$(VBUILD) --top-module m2_texel_cdc -GK=16 --Mdir obj_texel_cdc16 -o Vm2_texel_cdc -CFLAGS "-O2 -DTB_K=16" \
 	  rtl/video/m2_texel_cdc.sv rtl/video/m2_texel_addr.sv sim/video/tb_m2_texel_cdc.cpp
 
 # R643: THE GEOMETRY DIFFERENTIAL -- one MAME walk (patch p14) through the
@@ -1069,6 +1090,18 @@ test_m2_texel_bl: obj_texel_bl/Vm2_texel_bl
 obj_texel_bl/Vm2_texel_bl: rtl/video/m2_texel_bl.sv rtl/video/m2_texel_addr.sv sim/video/tb_m2_texel_bl.cpp
 	$(VERILATOR) --cc --exe --build -j 0 -Wno-fatal -Wno-UNUSEDSIGNAL -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC \
 	  --top-module m2_texel_bl --Mdir obj_texel_bl -o Vm2_texel_bl -CFLAGS -O2 \
+	  rtl/video/m2_texel_bl.sv rtl/video/m2_texel_addr.sv sim/video/tb_m2_texel_bl.cpp
+
+# R789: the core's shape -- four miss slots (ports 1-4 of the bench), four
+# response entries (eight also builds: -GRSP_D=8) -- with the second, third and fourth ports switched off at times
+test_m2_texel_bl4: obj_texel_bl4/Vm2_texel_bl
+	@echo "== test m2_texel_bl, four miss slots, four responses (R789)"
+	@./obj_texel_bl4/Vm2_texel_bl
+	@M2_TBL_SDRAM=1 ./obj_texel_bl4/Vm2_texel_bl
+
+obj_texel_bl4/Vm2_texel_bl: rtl/video/m2_texel_bl.sv rtl/video/m2_texel_addr.sv sim/video/tb_m2_texel_bl.cpp
+	$(VERILATOR) --cc --exe --build -j 0 -Wno-fatal -Wno-UNUSEDSIGNAL -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC \
+	  --top-module m2_texel_bl -GNS=4 -GRSP_D=4 --Mdir obj_texel_bl4 -o Vm2_texel_bl -CFLAGS -O2 \
 	  rtl/video/m2_texel_bl.sv rtl/video/m2_texel_addr.sv sim/video/tb_m2_texel_bl.cpp
 
 test_m2_texel: obj_texel/Vm2_texel

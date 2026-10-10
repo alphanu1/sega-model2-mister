@@ -65,6 +65,13 @@ module m2_raster3d #(
   parameter int unsigned TXLATE = 0,
   // R628: texel miss slots -- 2 (tex_m, tex_m2) or 4 (+ tex_m3, tex_m4)
   parameter int unsigned TXNS = 2,
+  // R789: texel fetches in flight across the crossing (m2_span_tex TXK =
+  // m2_texel_cdc K; R539 4, R553 8 -- R558's scramble was the old 2:1
+  // adapter's timing, R561 replaced it) and the cache's response queue
+  // (m2_texel_bl RSP_D; R622 4). R628: four miss slots only pay with a deeper
+  // queue to discover the misses and more credits to issue them.
+  parameter int unsigned TXK = 8,
+  parameter int unsigned TXRSP = 4,
   // R633: while tex_late, every other group reuses its neighbour's texel
   parameter bit          TXREUSE = 1'b0,
 
@@ -593,7 +600,7 @@ module m2_raster3d #(
   logic [31:0]           mk_wd;
   logic signed [15:0]    mk_y0;
 
-  m2_span_tex #(.PIXSTEP(PIXSTEP), .TXK(8), .FTB(FTB), .GC(PXC), .SCR_W(SCR_W), .BAND_H(BAND_H),
+  m2_span_tex #(.PIXSTEP(PIXSTEP), .TXK(TXK), .FTB(FTB), .GC(PXC), .SCR_W(SCR_W), .BAND_H(BAND_H),
                 .REUSE(TXREUSE)) u_spantex (   // R633
     .clk(clk), .rst_n(rst_n),
     .pxk(tex_pxk),   // R650
@@ -677,7 +684,7 @@ module m2_raster3d #(
   // R620: nine bits back; a timed-out fetch answers opaque and full (0x0FF).
   // f_waddr and friends (R583) are m2_texel's precomputed address and are
   // left open: m2_texel_bl places four texels of its own.
-  m2_texel_cdc #(.K(8), .TW(9), .TO_VAL(255)) u_texel_x2 (
+  m2_texel_cdc #(.K(TXK), .TW(9), .TO_VAL(255)) u_texel_x2 (
     .clk_slow(clk), .s_rst_n(rst_n), .clk_fast(clk_mem), .f_rst_n(rst_n),
     .s_req(tex_req), .s_rdy(tex_rdy), .s_ack(tex_ack), .s_tex({tex_late, tex_state[30:0]}),   // R627
     .s_u(tex_u), .s_v(tex_v), .s_texel(tex_texel), .s_take(tex_take),
@@ -714,7 +721,7 @@ module m2_raster3d #(
   // R620: m2_texel_bl, the bilinear fetch -- the same 4,096 lines as two
   // 2,048-line banks by row-pair parity (IB 11), so a 2x2 block comes back in
   // one access 87.5% of the time. Point mode is the old picture.
-  m2_texel_bl #(.AW(TEX_AW), .IB(11), .RSP_D(4), .NS(TXNS)) u_texel (   // R622: 4 entries, measured equal
+  m2_texel_bl #(.AW(TEX_AW), .IB(11), .RSP_D(TXRSP), .NS(TXNS)) u_texel (   // R622: 4 entries, measured equal; R789: TXRSP
     .clk(clk_mem), .rst_n(rst_n),
     .base_s0(tex_base0), .base_s1(tex_base1), .bilinear(tex_bilinear),
     .req(txf_req), .rdy(txf_rdy), .ack(txf_ack), .tex(txf_tex),

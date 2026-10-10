@@ -35,7 +35,10 @@
 #include <random>
 #include <vector>
 
-static const int NP = 11;   // R275: the texel fetch made eleven
+#ifndef TB_NP
+#define TB_NP 11
+#endif
+static const int NP = TB_NP;   // R275: the texel fetch made eleven; R789: -DTB_NP=13, Model2.sv's thirteen
 
 // Burst length per port, mirroring blen() in m2_sdram.sv.
 // MIRRORS blen() IN m2_sdram.sv, and it did not: it said ports 1 and 2 burst
@@ -106,6 +109,7 @@ struct Harness {
   uint16_t wr_data = 0;
 
   long fails = 0, checks = 0, max_latency = 0;
+  long max_lat_p[16] = {0};   // R789: per port, for the deadline readers (port 3)
 
   Harness() {
     d = new Vm2_sdram_harness;
@@ -126,6 +130,7 @@ struct Harness {
       case 4: d->p4_req = v; break; case 5: d->p5_req = v; break;
       case 6: d->p6_req = v; break; case 7: d->p7_req = v; break;
       case 8: d->p8_req = v; break; case 9: d->p9_req = v; break;
+      case 11: d->p11_req = v; break; case 12: d->p12_req = v; break;   // R789
       default: d->p10_req = v; break;
     }
   }
@@ -136,6 +141,7 @@ struct Harness {
       case 4: d->p4_addr = a; break; case 5: d->p5_addr = a; break;
       case 6: d->p6_addr = a; break; case 7: d->p7_addr = a; break;
       case 8: d->p8_addr = a; break; case 9: d->p9_addr = a; break;
+      case 11: d->p11_addr = a; break; case 12: d->p12_addr = a; break;
       default: d->p10_addr = a; break;
     }
   }
@@ -146,6 +152,7 @@ struct Harness {
       case 4: return d->p4_ack; case 5: return d->p5_ack;
       case 6: return d->p6_ack; case 7: return d->p7_ack;
       case 8: return d->p8_ack; case 9: return d->p9_ack;
+      case 11: return d->p11_ack; case 12: return d->p12_ack;
       default: return d->p10_ack;
     }
   }
@@ -156,6 +163,7 @@ struct Harness {
       case 4: return d->p4_dout; case 5: return d->p5_dout;
       case 6: return d->p6_dout; case 7: return d->p7_dout;
       case 8: return d->p8_dout; case 9: return d->p9_dout;
+      case 11: return d->p11_dout; case 12: return d->p12_dout;
       default: return d->p10_dout;
     }
   }
@@ -186,6 +194,7 @@ struct Harness {
       if (ack && !port[p].ack_prev) {
         long lat = cyc - port[p].issued_at;
         if (lat > max_latency) max_latency = lat;
+        if (lat > max_lat_p[p]) max_lat_p[p] = lat;
         if (!port[p].write) {
           uint64_t got = getDout(p);
           for (int w = 0; w < port[p].words; w++) {
@@ -346,6 +355,9 @@ int main(int argc, char** argv) {
     h.drain();
     printf("  concurrent: %ld checks, %ld fails, %u violations, max latency %ld\n",
            h.checks - start_checks, h.fails, h.d->violations, h.max_latency);
+    printf("  worst latency by port (cycles):");   // R789
+    for (int p = 0; p < NP; p++) printf(" p%d %ld", p, h.max_lat_p[p]);
+    printf("\n");
     printf("  reads accepted as raced (returned the legal pre-write value): %ld\n",
            h.raced);
   }
