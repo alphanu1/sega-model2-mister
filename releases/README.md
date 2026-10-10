@@ -99,6 +99,27 @@ textured, lit polygons over the 2D layers, with sound.
 | `Steering` | how much stick gives full lock: `3/4`, `Full`, `5/4` or `Half`. |
 | `Save settings (NVRAM)` | writes the game's backup memory to the SD card. |
 
+## MiSTer's audio filter is switched off (from the next release)
+
+**Builds after `Model2_20261008b.rbf` turn off MiSTer's built-in audio filter for
+this core.** The game's sound is unchanged: the same sound board, the same
+mix and the same output on HDMI, the 3.5 mm jack and S/PDIF. What stops working
+is MiSTer's own audio filter setting (the filter presets in the MiSTer menu and
+`MiSTer.ini`). It has no effect on this core.
+
+**Why.** The Model 2 board barely fits in the DE10-Nano's FPGA; it is about 99%
+full. MiSTer's audio filter costs about 430 of the FPGA's logic blocks, and
+that room now goes to the 3D renderer's texture fetching, which is what holds
+races below full speed. Your MiSTer setup is not touched; this applies only
+while the Model 2 core is running.
+
+**For anyone building the core:** this is one small, switchable change to the
+MiSTer framework file `sys/audio_out.sv`. It is kept as a patch in
+`docs/framework-patches/audio-filter-disable.patch`, explained in the README
+beside it, and turned on by `MISTER_DISABLE_AUDIO_FILTER` in `Model2.qsf`. When
+the framework is updated, re-apply the patch. If it no longer applies cleanly,
+the README shows how to make the three-line change by hand.
+
 ## Controls
 
 | | |
