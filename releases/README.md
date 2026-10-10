@@ -133,10 +133,10 @@ example `Daytona USA (Deluxe 93) [15kHz CRT].mra`. It starts the core in
 15 kHz straight away, so you never need to see the 24 kHz picture. With the
 normal MRA, set `Video` to `15kHz interlaced` in the OSD.
 
-**If your TV loses sync every few seconds**, set `15kHz lines` to
-**262.5 (15.1kHz)**. That gives the TV the line count it expects from NTSC
-while the game keeps its normal speed. Some sets are picky about the default
-273.5-line fields.
+**`15kHz lines`** defaults to **262/263 (15.1kHz)**: fields of 262 and 263
+lines, NTSC's count, at the game's own speed. That keeps most TVs locked and
+the picture aligned. If yours prefers it, `273/274 (15.7kHz)` keeps the
+standard line rate instead.
 
 CRT reports are very welcome: which TV, how it's connected, and which
 settings work.

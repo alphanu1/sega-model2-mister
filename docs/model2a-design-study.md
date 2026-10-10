@@ -29318,3 +29318,12 @@ lint_top clean; Quartus parses Model2.sv. Board checks owed: the OSD reads
 Main_MiSTer saves the core-set bit into the config both MRAs share (setname
 daytona93) -- if a later normal-MRA load comes up 15 kHz, the CRT MRAs need
 their own setname.
+
+**R799 -- 262/263-LINE FIELDS ARE THE 15 kHz DEFAULT.** Ben, on his CRT with
+R783's option: the 262.5-line mode "fixes alignment and other bugs". O[45]'s
+menu now lists "262/263 (15.1kHz)" first (0, the fresh-config value), then
+"273/274 (15.7kHz)" -- labelled by the two fields' own line counts, since an
+interlaced frame of 525 or 547 lines has no half-line field; vid_nl =
+~status[45]. A saved config that held 273.5 (0) now opens as 262/263.
+tb_m2_video_timing (both counts, R783) PASS; lint_top, Quartus parse clean.
+The release README's CRT section says so.

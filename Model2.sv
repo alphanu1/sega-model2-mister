@@ -80,7 +80,9 @@ localparam CONF_STR = {
 	// R783: the 15 kHz field's line count. 273.5 keeps the 15.73 kHz line;
 	// 262.5 is NTSC's count at a 15.10 kHz line, for sets that lose sync on
 	// 273.5. Game speed and picture are the same either way.
-	"O[45],15kHz lines,273.5 (15.7kHz),262.5 (15.1kHz);",
+	// R799: 262/263 first, the default (Ben: it fixes the alignment on his
+	// set); labelled by the fields' own line counts, no half line.
+	"O[45],15kHz lines,262/263 (15.1kHz),273/274 (15.7kHz);",
 	"-;",
 	// The read capture phase is an OSD option rather than a constant because the
 	// Model 1 core found its board returned every burst shifted right by one
@@ -415,7 +417,7 @@ wire       vid_il_sel;                    // R795: the OSD bit or the CRT MRA's 
 always @(posedge clk_mem) vil_s <= {vil_s[1:0], vid_il_sel};
 wire       vid_il = vil_s[2];
 reg [2:0]  vnl_s;                         // R783: the line-count bit, into clk_mem
-always @(posedge clk_mem) vnl_s <= {vnl_s[1:0], status[45]};
+always @(posedge clk_mem) vnl_s <= {vnl_s[1:0], ~status[45]};   // R799: 0 = 262/263
 wire       vid_nl = vnl_s[2];
 reg [13:0] ce_acc;
 reg        ce_pix;
