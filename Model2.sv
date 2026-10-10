@@ -1156,6 +1156,7 @@ logic [NPORTS-1:0][SDR_AW:1] f_addr;
 logic [NPORTS-1:0][15:0]     f_din;
 logic [NPORTS-1:0][1:0]      f_be;
 logic [NPORTS-1:0][63:0]     f_dout;
+wire  [NPORTS-1:0]           sdr_lo;   // R787: an eight-word read's first half (clk_mem)
 logic                        f_wr_req, f_wr_ack;
 logic [SDR_AW:1]             f_wr_addr;
 logic [15:0]                 f_wr_din;
@@ -1321,6 +1322,10 @@ m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(781),
 	.wr_be(f_wr_be),   .wr_ack(f_wr_ack),
 	.p_req(f_req), .p_we(f_we), .p_addr(f_addr), .p_din(f_din), .p_be(f_be),
 	.p_dout(f_dout), .p_ack(f_ack),
+	// R787/R796: the texel cache's four miss ports read 128-bit lines as
+	// eight-word bursts -- 10, 11 and 12 always, 2 once the texel cache owns
+	// it (its boot owners keep four) -- and take the first half on sdr_lo.
+	.p_long(NPORTS'({3'b111, 7'd0, p2_tex_f, 2'd0})), .p_lo(sdr_lo),
 	.dbg_req(sdr_pend), .dbg_grant(sdr_infl)
 );
 
@@ -6130,6 +6135,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1), .FB_DD
                 // R626: quarter-pixel plane fit
               .TXLATE(3),   // R627: point-sample while the fill is within 3 bands of the beam
               .TXNS(4), .TXRSP(4), .TXK(16),   // R789: R628's four misses in flight and 16 credits; the queue stays 4 (8 cost ~200 ALM for 1-4%)
+              .TXLW8(1'b1), // R787/R796: 128-bit texel lines, eight-word reads on all four miss ports
               .TXREUSE(1'b0),   // R633: every other group while late -- REJECTED by eye (R634)
                 // R616: pixel-centre planes; R626: bilinear, a texel per four pixels (PIXSTEP 2 drops bands on the board)
               .TWO_CLOCKS(1'b1), .TEX_AW(SDR_AW)) u_raster3d (   // R564: scan on clk_mem
@@ -6166,11 +6172,12 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1), .FB_DD
 	.tex_m2_en(tex_m2_en), .tex_m2_req(tex_m2_req), .tex_m2_addr(tex_m2_addr),
 	// R628: the texel cache's third and fourth ports, unused at TXNS = 2
 	// R789: and the third and fourth (TXNS 4), on ports 11 and 12
-	.tex_m3_en(1'b1), .tex_m3_req(tex_m3_req), .tex_m3_addr(tex_m3_addr), .tex_m3_ack(p_ack[11]), .tex_m3_data(p_dout[11]),
-	.tex_m4_en(1'b1), .tex_m4_req(tex_m4_req), .tex_m4_addr(tex_m4_addr), .tex_m4_ack(p_ack[12]), .tex_m4_data(p_dout[12]),
-	.tex_m2_ack(tex_m2_ack), .tex_m2_data(tex_m2_data),
+	// R796: each with its eight-word read's first half (sdr_lo)
+	.tex_m3_en(1'b1), .tex_m3_req(tex_m3_req), .tex_m3_addr(tex_m3_addr), .tex_m3_ack(p_ack[11]), .tex_m3_data(p_dout[11]), .tex_m3_lo(sdr_lo[11]),
+	.tex_m4_en(1'b1), .tex_m4_req(tex_m4_req), .tex_m4_addr(tex_m4_addr), .tex_m4_ack(p_ack[12]), .tex_m4_data(p_dout[12]), .tex_m4_lo(sdr_lo[12]),
+	.tex_m2_ack(tex_m2_ack), .tex_m2_data(tex_m2_data), .tex_m2_lo(p2_tex_f & sdr_lo[2]),   // R787
 	.tex_m_req(tex_m_req), .tex_m_addr(tex_m_addr),
-	.tex_m_ack(tex_m_ack), .tex_m_data(tex_m_data),
+	.tex_m_ack(tex_m_ack), .tex_m_data(tex_m_data), .tex_m_lo(sdr_lo[10]),   // R787
 	.dbg_texpix(tex_pixels), .dbg_texhit(tex_hits), .dbg_texmiss(tex_misses),
 	.dbg_texlost(tex_lost), .dbg_texto(tex_to), .dbg_oz0(oz_d0), .dbg_oz1(oz_d1), .dbg_oz2(oz_d2), .dbg_oz3(oz_d3),
 	.dbg_texsweep(tex_sweep), .dbg_texnz(tex_nz),

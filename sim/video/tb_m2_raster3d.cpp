@@ -45,6 +45,7 @@ static const int SCR_W = 496, SCR_H = 384;
 static const int V_TOTAL = 424;
 static int BAND_H = 8;    // the shipped band height
 static long g_texmem_viol = 0;   // R668: a request edge while that port was busy
+static long g_texmem_reads = 0;   // R787: line reads the texel ports made (TEXMEM)
 static bool px_dump = false;   // R542: M2_R3D_PXDUMP, every painted pixel of the last frame
 // R784: M2_R3D_REALCOL -- list mode with the polygons' REAL colours (the
 // engine's, modelled from MAME's palette and translation-table dumps) instead
@@ -96,6 +97,16 @@ static uint32_t texword(int sh, uint32_t w, uint32_t v) {
   }
   return isb ? (v ^ 0x5555u) : v;
 }
+// R787: built with -DR3D_LW8 (and -GTXLW8=1) a texel line is eight words: the
+// memory models answer its first four with a one-cycle tex_m*_lo, four
+// clk_mem cycles before the acknowledge that carries the last four -- as
+// m2_sdram's eight-word read does -- so a line's last word lands four cycles
+// after a four-word line's would have.
+#ifdef R3D_LW8
+static const bool LW8 = true;
+#else
+static const bool LW8 = false;
+#endif
 static uint64_t texpat_line(uint32_t addr, uint32_t base) {
   if (!g_tex[0].empty()) {
     const int sh = (addr >= g_tbase1) ? 1 : 0;
@@ -347,20 +358,33 @@ int main(int argc, char **argv) {
     // default 8 is far quicker than the board's contended SDRAM.
     static const int TEXLAT = std::getenv("M2_R3D_TEXLAT") ? std::atoi(std::getenv("M2_R3D_TEXLAT")) : 8;
     static const bool TEXMEM0 = std::getenv("M2_R3D_TEXMEM") != nullptr;   // R668
-    if (!TEXMEM0 && d->tex_m_req && tex_wait < 0) tex_wait = TEXLAT;
+    if (!TEXMEM0 && d->tex_m_req && tex_wait < 0) tex_wait = TEXLAT + (LW8 ? 4 : 0);
+    if (!TEXMEM0) {   // R787: the first half, four cycles ahead
+      d->tex_m_lo  = LW8 && tex_wait == 4;
+      d->tex_m2_lo = LW8 && tex2_wait == 4;
+      if (d->tex_m_lo)  d->tex_m_data  = texpat_line(d->tex_m_addr,  d->tex_base0);
+      if (d->tex_m2_lo) d->tex_m2_data = texpat_line(d->tex_m2_addr, d->tex_base0);
+    }
     if (!TEXMEM0 && tex_wait == 0) {
       d->tex_m_ack = 1;
-      d->tex_m_data = texpat_line(d->tex_m_addr, d->tex_base0);
+      d->tex_m_data = texpat_line(d->tex_m_addr + (LW8 ? 4 : 0), d->tex_base0);
     }
-    // R628: ports 3 and 4 answer like port 2 (their own round trip)
-    if (d->tex_m3_req && tex3_wait < 0) tex3_wait = TEXLAT + 6;
-    if (tex3_wait == 0) { d->tex_m3_ack = 1; d->tex_m3_data = texpat_line(d->tex_m3_addr, d->tex_base0); }
-    if (d->tex_m4_req && tex4_wait < 0) tex4_wait = TEXLAT + 6;
-    if (tex4_wait == 0) { d->tex_m4_ack = 1; d->tex_m4_data = texpat_line(d->tex_m4_addr, d->tex_base0); }
-    if (!TEXMEM0 && d->tex_m2_req && tex2_wait < 0) tex2_wait = TEXLAT + 6;
+    // R628: ports 3 and 4 answer like port 2 (their own round trip).
+    // R796: not under TEXMEM, which serves all four; eight-word lines as 1 and 2.
+    if (!TEXMEM0) {
+      d->tex_m3_lo = LW8 && tex3_wait == 4;
+      d->tex_m4_lo = LW8 && tex4_wait == 4;
+      if (d->tex_m3_lo) d->tex_m3_data = texpat_line(d->tex_m3_addr, d->tex_base0);
+      if (d->tex_m4_lo) d->tex_m4_data = texpat_line(d->tex_m4_addr, d->tex_base0);
+    }
+    if (!TEXMEM0 && d->tex_m3_req && tex3_wait < 0) tex3_wait = TEXLAT + 6 + (LW8 ? 4 : 0);
+    if (!TEXMEM0 && tex3_wait == 0) { d->tex_m3_ack = 1; d->tex_m3_data = texpat_line(d->tex_m3_addr + (LW8 ? 4 : 0), d->tex_base0); }
+    if (!TEXMEM0 && d->tex_m4_req && tex4_wait < 0) tex4_wait = TEXLAT + 6 + (LW8 ? 4 : 0);
+    if (!TEXMEM0 && tex4_wait == 0) { d->tex_m4_ack = 1; d->tex_m4_data = texpat_line(d->tex_m4_addr + (LW8 ? 4 : 0), d->tex_base0); }
+    if (!TEXMEM0 && d->tex_m2_req && tex2_wait < 0) tex2_wait = TEXLAT + 6 + (LW8 ? 4 : 0);
     if (!TEXMEM0 && tex2_wait == 0) {
       d->tex_m2_ack = 1;
-      d->tex_m2_data = texpat_line(d->tex_m2_addr, d->tex_base0);
+      d->tex_m2_data = texpat_line(d->tex_m2_addr + (LW8 ? 4 : 0), d->tex_base0);
     }
     d->eval();
     // R615: every real fetch, for the frame differential
@@ -407,26 +431,34 @@ int main(int argc, char **argv) {
       static const int TL = std::getenv("M2_R3D_TEXLAT") ? std::atoi(std::getenv("M2_R3D_TEXLAT")) : 12;
       static const int TJ = std::getenv("M2_R3D_TEXJIT") ? std::atoi(std::getenv("M2_R3D_TEXJIT")) : 0;
       static uint64_t mr = 777;
-      struct Pt { bool req_d = false, busy = false; int cnt = 0, ackc = 0; uint32_t a = 0; uint64_t dat = 0; };
-      static Pt pt[2];
-      for (int k = 0; k < 2; k++) {
+      struct Pt { bool req_d = false, busy = false; int cnt = 0, ackc = 0; uint32_t a = 0; uint64_t dat = 0, dat2 = 0; };
+      // R796: ALL FOUR miss ports (R789's TXNS 4), each its own round trip --
+      // the bench's memory has no shared bus
+      static Pt pt[4];
+      d->tex_m_lo = 0; d->tex_m2_lo = 0; d->tex_m3_lo = 0; d->tex_m4_lo = 0;   // R787: a one-cycle strobe
+      auto setack = [&](int k, int v) { if (k == 3) d->tex_m4_ack = v; else if (k == 2) d->tex_m3_ack = v; else if (k) d->tex_m2_ack = v; else d->tex_m_ack = v; };
+      auto setdat = [&](int k, uint64_t v) { if (k == 3) d->tex_m4_data = v; else if (k == 2) d->tex_m3_data = v; else if (k) d->tex_m2_data = v; else d->tex_m_data = v; };
+      auto setlo  = [&](int k) { if (k == 3) d->tex_m4_lo = 1; else if (k == 2) d->tex_m3_lo = 1; else if (k) d->tex_m2_lo = 1; else d->tex_m_lo = 1; };
+      for (int k = 0; k < 4; k++) {
         Pt &q = pt[k];
-        const bool req = k ? d->tex_m2_req : d->tex_m_req;
-        const uint32_t addr = k ? d->tex_m2_addr : d->tex_m_addr;
-        if (q.ackc > 0 && --q.ackc == 0) { if (k) d->tex_m2_ack = 0; else d->tex_m_ack = 0; }
+        const bool req = k == 3 ? d->tex_m4_req : k == 2 ? d->tex_m3_req : k ? d->tex_m2_req : d->tex_m_req;
+        const uint32_t addr = k == 3 ? d->tex_m4_addr : k == 2 ? d->tex_m3_addr : k ? d->tex_m2_addr : d->tex_m_addr;
+        if (q.ackc > 0 && --q.ackc == 0) setack(k, 0);
         if (req && !q.req_d) {
           if (q.busy) ++g_texmem_viol;
+          ++g_texmem_reads;   // R787
           q.busy = true; q.a = addr; q.dat = texpat_line(addr, d->tex_base0);   // R669: read as issued
+          q.dat2 = texpat_line(addr + 4, d->tex_base0);                          // R787: words 4-7
           mr = mr * 6364136223846793005ull + 1442695040888963407ull;
-          q.cnt = TL + (TJ ? int((mr >> 33) % uint64_t(TJ + 1)) : 0);
+          q.cnt = TL + (TJ ? int((mr >> 33) % uint64_t(TJ + 1)) : 0) + (LW8 ? 4 : 0);
         }
         q.req_d = req;
         if (q.busy && q.ackc == 0) {
+          if (LW8 && q.cnt == 4) { setlo(k); setdat(k, q.dat); }   // R787: the first half, no acknowledge
           if (q.cnt > 0) --q.cnt;
           else {
             q.busy = false; q.ackc = 2;
-            if (k) { d->tex_m2_ack = 1; d->tex_m2_data = q.dat; }
-            else   { d->tex_m_ack = 1;  d->tex_m_data  = q.dat; }
+            setack(k, 1); setdat(k, LW8 ? q.dat2 : q.dat);
           }
         }
       }
@@ -442,11 +474,15 @@ int main(int argc, char **argv) {
       // 10 to every 7 core edges; at 2:1 each clk_mem cycle of latency costs
       // half a core cycle, on the board 0.7 -- and a latency-bound path looks
       // a third faster here than it is.
+      // R787: M2_R3D_RN / M2_R3D_RD set the ratio (clk_mem : core); 10 : 8
+      // is the board's 100 / 80 since R745, the default 10 : 7 its 100 / 70.
       static int acc = 0;
-      acc += 10;
-      if (acc >= 7) { acc -= 7; memedge(); d->clk_mem = 1; d->eval(); d->clk_mem = 0; d->eval(); }
+      static const int RN = std::getenv("M2_R3D_RN") ? std::atoi(std::getenv("M2_R3D_RN")) : 10;
+      static const int RD = std::getenv("M2_R3D_RD") ? std::atoi(std::getenv("M2_R3D_RD")) : 7;
+      acc += RN;
+      if (acc >= RD) { acc -= RD; memedge(); d->clk_mem = 1; d->eval(); d->clk_mem = 0; d->eval(); }
       d->clk = 1; d->scan_clk = 1; d->eval(); d->clk = 0; d->scan_clk = 0; d->eval();
-      if (acc >= 7) { acc -= 7; memedge(); d->clk_mem = 1; d->eval(); d->clk_mem = 0; d->eval(); }
+      if (acc >= RD) { acc -= RD; memedge(); d->clk_mem = 1; d->eval(); d->clk_mem = 0; d->eval(); }
     } else {
     d->clk_mem = 1; d->eval(); d->clk_mem = 0; d->eval();
     d->clk = 1; d->scan_clk = 1; d->eval(); d->clk = 0; d->scan_clk = 0; d->eval();
@@ -456,9 +492,11 @@ int main(int argc, char **argv) {
     if (TEXMEM1) {}
     else if (d->tex_m_ack) { d->tex_m_ack = 0; tex_wait = -1; }
     else if (tex_wait > 0) --tex_wait;
-    if (d->tex_m3_ack) { d->tex_m3_ack = 0; tex3_wait = -1; }
+    if (TEXMEM1) {}   // R796: TEXMEM serves ports 3 and 4 too
+    else if (d->tex_m3_ack) { d->tex_m3_ack = 0; tex3_wait = -1; }
     else if (tex3_wait > 0) --tex3_wait;
-    if (d->tex_m4_ack) { d->tex_m4_ack = 0; tex4_wait = -1; }
+    if (TEXMEM1) {}
+    else if (d->tex_m4_ack) { d->tex_m4_ack = 0; tex4_wait = -1; }
     else if (tex4_wait > 0) --tex4_wait;
     if (TEXMEM1) {}
     else if (d->tex_m2_ack) { d->tex_m2_ack = 0; tex2_wait = -1; }
@@ -940,7 +978,7 @@ int main(int argc, char **argv) {
       // R650: the draw's own length, in core cycles and in video frames
       for (long w : g_draws) std::printf("  R650 FB draw: %ld core cycles (%.2f video frames at 70 MHz / 57.5 Hz)\n", w, w / 1217391.0);
       if (g_draws.empty()) std::printf("  R650 FB draw: NOT COMPLETE after %d frames\n", pre);
-      if (std::getenv("M2_R3D_TEXMEM")) std::printf("  R668 texel ports: request edges while busy %ld\n", g_texmem_viol);
+      if (std::getenv("M2_R3D_TEXMEM")) std::printf("  R668 texel ports: request edges while busy %ld; R787 line reads %ld\n", g_texmem_viol, g_texmem_reads);
     }
     g_rec = !FBM;   // R650: with the framebuffer the draw above was recorded
     px_dump = std::getenv("M2_R3D_PXDUMP") != nullptr;

@@ -29207,3 +29207,95 @@ second sys/ patch to maintain for setups the CRT MRA already covers.
   * The two [15kHz CRT] MRAs (R793) are unchanged but for their comment.
 R793's build (2a79949, s942-s944) was stopped mid-fit. lint_top clean;
 Quartus parses Model2.sv.
+
+**R796 -- R787's 128-BIT TEXEL LINES ON R789's FOUR MISS SLOTS, AND A HEAD
+SELECT THAT COSTS LESS THAN THE ONE IT REPLACES.** Ben approved R787 on top of
+R789 (TXNS 4, TXRSP 4, TXK 16, 13 ports) and R791.
+
+PORTED UNCHANGED from R787 (sm2-builds/sm2-tl128-99386df): m2_sdram's p_long
+/ p_lo eight-word reads (the first four words with p_lo, four cycles before
+p_ack; tag_w three bits; long_p latched with the request, selected by
+arb_sel); m2_texel_bl LW8 (a 128-bit LINE -- what a miss fetches, a tag
+names, a slot holds -- read from the unchanged 2 x 2048 x 64 data RAMs a half
+at a time; 1,024 tags a bank; the fill's two halves on consecutive cycles
+straight from the held slot, the tag invalid then valid; the early answer
+from a first half). m2_sdram's blen() already reads 11 and 12 four (R789).
+
+WHAT CHANGED IN THE PORT:
+  * p_long on all four texel miss ports: 10, 11, 12, and 2 once p2_tex_f
+    (13'b111_0000000_p2_00); m2_raster3d's tex_m3_lo / tex_m4_lo from
+    sdr_lo[11] / [12]. TXLW8 1 in Model2.sv.
+  * THE HEAD'S NIBBLE SELECT. R787's per-texel select out of every slot's 128
+    bits measured ~130 ALM at two slots; at four it is ~300 (standalone,
+    1,989 against 1,685 without the half select). Now ONE 64-bit view a cycle:
+    the first waiting head texel that can be answered names a (slot, half),
+    that half is selected once, and every waiting texel in the same (slot,
+    half) is answered from it with a 16:1 nibble select; a texel in another
+    slot or half is answered the next cycle (a request's four texels almost
+    always share one line). LW8 only -- LW8 = 0 is cycle-identical to HEAD at
+    NS 2 (783,895 bench cycles) and NS 4 (766,218).
+  * Benches: tb_m2_raster3d's TEXMEM model serves all four ports (it served
+    two; R789 was measured on a scratch copy that served four); tb_m2_sdram's
+    harness carries the eight-word strobes on 13 ports.
+
+*Measured* (tb_m2_raster3d, MAME's lists, step 1, UZF 4, 100:80, FB + wcomb,
+TXNS 4 / TXRSP 4 / TXK 16; draw at 80 MHz, ms; HEAD = the same build at
+TXLW8 0):
+
+                     r57           r66           apk           rpk           f2200
+  idle   HEAD -> R796  10.65 10.63   11.04 10.95   12.17 12.08   14.28 14.11   12.47 12.27
+  cont.  HEAD -> R796  14.03 13.28   14.73 13.61   17.36 15.84   17.71 16.26   16.11 14.62
+  line reads           30,534 -> 22,929  28,743 -> 20,000  44,538 -> 31,276  21,105 -> 13,010  24,412 -> 15,458
+
+-0.2..-1.6% idle, -5..-9% contended (R787 alone at two slots: -1..-2 / -7..
+-11%; the four slots already hide part of what fewer misses saves), SDRAM
+line reads -25..-38%. Every texel answer common to HEAD and R796 identical:
+1,993,993 fetches over the five lists and both memory models, 0 differ; the
+displayed frame's hash identical in all ten runs.
+
+*SDRAM* (test_m2_sdram13, Model2.sv's 13 ports and class, the four texel
+ports reading eight words -- now in the target): 2,748,894 checks, 0 fail, 0
+device-model violations (refresh included), 0 tag faults. Worst latency in
+the saturating concurrent phase, four-word -> eight-word texel reads: glyph
+fetch (3) 271 -> 398 cycles (a scanline is ~6,600); i960 (1) 72 -> 79; texel
+2 82 -> 105; outside the class 422-442 -> 472-507. A read overtaking another
+port's still-outstanding write of the same word (port 0, outside the class,
+waited ~470 cycles) failed the bench's ordering rule once; the controller
+never ordered independent ports (the bench's own note), so the rule now also
+accepts the pre-write value while that write is outstanding (WriteRec.done).
+test_m2_sdram (11 ports, with and without 2 + 10 eight) and sdram128 (2 + 10
+eight: 1,923,823 / 0) unchanged.
+
+*Benches.* test_m2_texel_bl48 (new; NS 4, RSP_D 4, LW8): 200,000 / 0, both
+memory models; mutations: answering across halves 1,592 fails, across slots
+16,056, no first-half capture 107,612, ports 3 / 4 data swapped 61,987.
+test_m2_texel_bl, _bl4, _bl8, _texel, _texel_cdc, _cdc16, _raster3d,
+_raster_fill, _span_tex, _sdram, _sdram13, _sdram128, _sdram_x2, _sdram_cdc,
+_cpu_sdram, _romload, _boot pass; lint_top and Quartus parse clean.
+
+*Cost* (quartus_map alone at design parameters, placed by s936's ratios):
+m2_texel_bl NS 4 1,628 -> 1,541 (-87; ~-72 placed: the single view is
+cheaper than HEAD's per-texel select even with the upper halves), m2_sdram
+13 ports 1,231 -> 1,252 (+21; ~+14). Net ~-58 ALM. M10K: data RAMs
+unchanged, tags 2 x 2048 x 7 -> 2 x 1024 x 7.
+
+*Timing, by construction:* clk_mem -- the head view is a priority pick over
+four registered texels, a 4:1 x 2:1 select of 64 bits and a 16:1 nibble into
+rs_nib (HEAD: a 4:1 of 64 bits and a 16:1, per texel); the rest as R787.
+clk_sys unchanged.
+
+*Next lever, estimated (no RTL):* the texel line reads' own row locality (a
+cache model on the same traces, within 0.1% of the RTL's read counts): 23-40%
+of 128-bit reads fall in the same 1,024-word row as the texel read before
+(27-46% at 64-bit), 33-53% if the four banks were interleaved by row. The
+sheets sit in bank 2 (78-81% of reads) and 3 with i960 work RAM, so any
+other bank-2 access between two texel reads closes the row. A row hit saves
+PRE + tRP + ACT + tRCD, ~5 of ~13-19 clk_mem cycles. Two ways: move
+GAME_TEXS0/1 to a bank the CPU does not use (address map only; every bank
+has a hot master today), or permute bank bits with low row bits in m2_sdram
+(tbank ^= row[1:0], applied to every port so the data layout stays
+consistent; registered in the prefetch stage). Effect bounded at ~1-2 cycles
+a read on average; the bench has no CPU traffic to measure it -- the board's
+'S' record would.
+
+*Not verified:* the fit and timing; the board.

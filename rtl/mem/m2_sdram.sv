@@ -154,6 +154,13 @@ module m2_sdram #(
   input  logic [NP-1:0][1:0]   p_be,
   output logic [NP-1:0][63:0]  p_dout,
   output logic [NP-1:0]        p_ack,
+  // R787: EIGHT-WORD READS. A port with p_long set (quasi-static, sampled as
+  // its request is arbitrated) bursts eight words instead of blen()'s length.
+  // The first four are delivered on p_dout with a one-cycle p_lo -- no ack --
+  // and the last four replace them with p_ack, as any burst ends. Only the
+  // texel cache's miss ports use it (Model2.sv); tie to 0 elsewhere.
+  input  logic [NP-1:0]        p_long,
+  output logic [NP-1:0]        p_lo,
 
   // Telemetry taps for bw_monitor. `dbg_req` is the latched pending state
   // rather than the raw input, because demand is "asking and not yet served",
@@ -395,6 +402,7 @@ module m2_sdram #(
   logic [NP-1:0][15:0]  din_p;
   logic [NP-1:0][1:0]   be_p;
   logic [NP-1:0]        we_p;
+  logic [NP-1:0]        long_p;   // R787: p_long, latched with the request as we_p is
   logic                 wr_pend;
   logic [AW:1]          wr_addr_p;
   logic [15:0]          wr_din_p;
@@ -410,7 +418,7 @@ module m2_sdram #(
     if (!rst_n) begin
       pend <= '0; wr_pend <= 1'b0;
       req_d <= '0; ack_d <= '0; wr_req_d <= 1'b0; wr_ack_d <= 1'b0;
-      addr_p <= '0; din_p <= '0; be_p <= '0; we_p <= '0;
+      addr_p <= '0; din_p <= '0; be_p <= '0; we_p <= '0; long_p <= '0;
       wr_addr_p <= '0; wr_din_p <= '0; wr_be_p <= '0;
     end else begin
       req_d    <= p_req;
@@ -431,6 +439,7 @@ module m2_sdram #(
           din_p[i]  <= p_din[i];
           be_p[i]   <= p_be[i];
           we_p[i]   <= p_we[i];
+          long_p[i] <= p_long[i];   // R787
         end
       end
       if (wr_req && !wr_req_d) begin
@@ -604,6 +613,9 @@ module m2_sdram #(
   // R498: the granted port is already in real coordinates, so selecting its
   // write flag is one AND and one OR -- no second barrel rotate of we_p.
   wire           we_gr     = |(arb_sel & we_p);     // == we_p[rr_grant]
+  // R787: the same one AND and one OR for the eight-word flag, so the burst
+  // length adds nothing to the arbiter's path but a 2:1 in front of blen().
+  wire           long_gr   = |(arb_sel & long_p);   // == long_p[rr_grant]
 
   always_comb begin
     rr_valid = |arb_ready;                          // R421: no rotate needed
@@ -732,11 +744,12 @@ module m2_sdram #(
   // the symptom would have been random CPU data corruption with a perfectly
   // healthy-looking coprocessor.
   logic [RD_LAT-1:0][PW-1:0] tag_p;      // port index
-  logic [RD_LAT-1:0][1:0]   tag_w;      // word index within the burst
+  logic [RD_LAT-1:0][2:0]   tag_w;      // word index within the burst (R787: 0-7)
   // R557: the read-data stage between the pin register and the ports.
   logic                     dl_v;
   logic [PW-1:0]            dl_p;
   logic [63:0]              dl_data;
+  logic                     dl_lo;      // R787: the stage holds an eight-word read's first half
   logic [RD_LAT-1:0]        tag_last;
   // ONE SET OF CAPTURE SLOTS, NOT ONE PER PORT, because two ports' words can
   // never interleave in this pipeline and the per-port index was costing both
@@ -912,6 +925,7 @@ module m2_sdram #(
       for (int b = 0; b < 4; b++) rd_bank_cnt[b] <= '0;
       p_ack <= '0; wr_ack <= 1'b0; p_dout <= '0;
       dl_v <= 1'b0; dl_p <= '0; dl_data <= '0;   // R557
+      dl_lo <= 1'b0; p_lo <= '0;                  // R787
       grant <= '0; grant_is_wr <= 1'b0; rr_mask <= '1;                  // R498
       pri_run <= '0;                                                    // R574
       rd_total <= 4'd1; rd_issued <= '0; rd_captured <= '0;
@@ -995,7 +1009,7 @@ module m2_sdram #(
         // Read capture, driven entirely by the tag that travelled with the CAS.
         tag_v    <= {1'b0, tag_v[RD_LAT-1:1]};
         tag_p    <= {PW'(0), tag_p[RD_LAT-1:1]};
-        tag_w    <= {2'd0, tag_w[RD_LAT-1:1]};
+        tag_w    <= {3'd0, tag_w[RD_LAT-1:1]};
         tag_last <= {1'b0, tag_last[RD_LAT-1:1]};
         if (tag_v[0]) begin
           cap[tag_w[0]] <= dq_r;
@@ -1023,23 +1037,41 @@ module m2_sdram #(
             // which is a stripe that stays -- Ben's grey and green lines. Now
             // dq_r reaches one 64-bit stage; the port gets it a cycle later,
             // data and acknowledge still together.
-            case (tag_w[0])
+            // R787: index 7 ends an eight-word read; its low two bits are 3,
+            // so it takes the four-word arm with words 4-7 (cap is indexed by
+            // the low two bits, and words 4-6 land where 0-2 were).
+            case (tag_w[0][1:0])
               2'd0:    dl_data <= {48'd0, dq_r};
               2'd1:    dl_data <= {32'd0, dq_r, cap[0]};
               default: dl_data <= {dq_r, cap[2], cap[1], cap[0]};
             endcase
-            dl_p <= tag_p[0];
-            dl_v <= 1'b1;
+            dl_p  <= tag_p[0];
+            dl_v  <= 1'b1;
+            dl_lo <= 1'b0;
+          end else if (tag_w[0] == 3'd3) begin
+            // R787: WORD 3 OF AN EIGHT-WORD READ (a four-word read's word 3 is
+            // its last). Words 0-3 go to the stage now, before words 4-6
+            // overwrite cap[0..2]; the stage is free -- the previous burst's
+            // last word was at least S_IDLE..S_RD ago -- and the second half
+            // reaches it four cycles from now.
+            dl_data <= {dq_r, cap[2], cap[1], cap[0]};
+            dl_p    <= tag_p[0];
+            dl_v    <= 1'b1;
+            dl_lo   <= 1'b1;
           end
         end
         // R557: the stage's delivery. Bursts complete several cycles apart
         // (S_IDLE -> S_SEL -> S_DISPATCH -> S_RD between one's last tag and
         // the next's first), so the stage is never overwritten undelivered.
+        p_lo <= '0;                                   // R787: one cycle
         if (dl_v) begin
           dl_v            <= 1'b0;
           p_dout[dl_p]    <= dl_data;
-          p_ack[dl_p]     <= 1'b1;
-          ack_cnt[dl_p]   <= 2'(ACK_HOLD - 1);
+          if (dl_lo) p_lo[dl_p] <= 1'b1;              // R787: the first half, no ack
+          else begin
+            p_ack[dl_p]   <= 1'b1;
+            ack_cnt[dl_p] <= 2'(ACK_HOLD - 1);
+          end
         end
 
         // ------------------------------------------------- PREFETCH (R387)
@@ -1067,7 +1099,7 @@ module m2_sdram #(
           // re-arbitrating; inflight[] stops it being selected twice.
           nxt_grant          <= rr_grant;
           nxt_is_write       <= we_p[rr_grant];
-          nxt_total          <= we_p[rr_grant] ? 4'd1 : blen(rr_grant);
+          nxt_total          <= we_p[rr_grant] ? 4'd1 : long_gr ? 4'd8 : blen(rr_grant);   // R787
           inflight[rr_grant] <= 1'b1;
           // R574: a priority grant leaves the rotation where it was, so the
           // other ports keep their order; it counts toward the cap only while
@@ -1329,7 +1361,7 @@ module m2_sdram #(
             // port. Widening the tag's DECLARATION is not enough; this is the
             // assignment that did the truncating.
             tag_p[cap_depth-1]    <= PW'(grant);
-            tag_w[cap_depth-1]    <= rd_issued[1:0];
+            tag_w[cap_depth-1]    <= rd_issued[2:0];   // R787: three bits
             tag_last[cap_depth-1] <= (rd_issued + 1'b1 == rd_total);
             rd_bank_cnt[tbank]    <= cap_depth;
             rd_ok[tbank]          <= 1'b0;   // R410

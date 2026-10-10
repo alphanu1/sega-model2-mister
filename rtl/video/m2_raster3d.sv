@@ -72,6 +72,9 @@ module m2_raster3d #(
   // queue to discover the misses and more credits to issue them.
   parameter int unsigned TXK = 8,
   parameter int unsigned TXRSP = 4,
+  // R787: 128-bit texel cache lines -- eight-word SDRAM reads, the first half
+  // on tex_m*_lo; the same 32 KB, read in 64-bit halves (m2_texel_bl LW8)
+  parameter bit          TXLW8 = 1'b0,
   // R633: while tex_late, every other group reuses its neighbour's texel
   parameter bit          TXREUSE = 1'b0,
 
@@ -185,6 +188,7 @@ module m2_raster3d #(
   output logic [TEX_AW:1] tex_m_addr,
   input  logic            tex_m_ack,
   input  logic [63:0]     tex_m_data,
+  input  logic            tex_m_lo,       // R787: an eight-word line's first half (TXLW8)
   // R480: a second texel port -- one transaction per SDRAM port at a time,
   // so a single port serialises every miss.
   input  logic            tex_m2_en,
@@ -192,11 +196,13 @@ module m2_raster3d #(
   output logic [TEX_AW:1] tex_m2_addr,
   input  logic            tex_m2_ack,
   input  logic [63:0]     tex_m2_data,
+  input  logic            tex_m2_lo,      // R787
   // R628: slots 2 and 3's ports (TXNS = 4); tie en low otherwise
   input  logic            tex_m3_en, tex_m4_en,
   output logic            tex_m3_req, tex_m4_req,
   output logic [TEX_AW:1] tex_m3_addr, tex_m4_addr,
   input  logic            tex_m3_ack, tex_m4_ack,
+  input  logic            tex_m3_lo, tex_m4_lo,   // R787
   input  logic [63:0]     tex_m3_data, tex_m4_data,
   output logic [31:0]     dbg_texpix, dbg_texhit, dbg_texmiss, dbg_texnz,
   output logic [15:0]     dbg_texlost,
@@ -725,19 +731,19 @@ module m2_raster3d #(
   // R620: m2_texel_bl, the bilinear fetch -- the same 4,096 lines as two
   // 2,048-line banks by row-pair parity (IB 11), so a 2x2 block comes back in
   // one access 87.5% of the time. Point mode is the old picture.
-  m2_texel_bl #(.AW(TEX_AW), .IB(11), .RSP_D(TXRSP), .NS(TXNS)) u_texel (   // R622: 4 entries, measured equal; R789: TXRSP
+  m2_texel_bl #(.AW(TEX_AW), .IB(11), .RSP_D(TXRSP), .NS(TXNS), .LW8(TXLW8)) u_texel (   // R622: 4 entries, measured equal; R789: TXRSP; R787: LW8
     .clk(clk_mem), .rst_n(rst_n),
     .base_s0(tex_base0), .base_s1(tex_base1), .bilinear(tex_bilinear),
     .req(txf_req), .rdy(txf_rdy), .ack(txf_ack), .tex(txf_tex),
     .u(txf_u), .v(txf_v), .texel(txf_texel),
-    .m_req(tex_m_req), .m_addr(tex_m_addr), .m_ack(tex_m_ack), .m_data(tex_m_data),
+    .m_req(tex_m_req), .m_addr(tex_m_addr), .m_ack(tex_m_ack), .m_data(tex_m_data), .m_lo(tex_m_lo),
     // R480: the second SDRAM port, so two fills can be in flight.
     .m2_en(tex_m2_en), .m2_req(tex_m2_req), .m2_addr(tex_m2_addr),
-    .m2_ack(tex_m2_ack), .m2_data(tex_m2_data),
+    .m2_ack(tex_m2_ack), .m2_data(tex_m2_data), .m2_lo(tex_m2_lo),
     .m3_en(tex_m3_en), .m3_req(tex_m3_req), .m3_addr(tex_m3_addr),     // R628
-    .m3_ack(tex_m3_ack), .m3_data(tex_m3_data),
+    .m3_ack(tex_m3_ack), .m3_data(tex_m3_data), .m3_lo(tex_m3_lo),
     .m4_en(tex_m4_en), .m4_req(tex_m4_req), .m4_addr(tex_m4_addr),
-    .m4_ack(tex_m4_ack), .m4_data(tex_m4_data),
+    .m4_ack(tex_m4_ack), .m4_data(tex_m4_data), .m4_lo(tex_m4_lo),
     .inval(tex_sweep_f),                          // R561: crossed
     .dbg_hits(dbg_texhit), .dbg_misses(dbg_texmiss), .dbg_lost(dbg_texlost),
     .dbg_sweeps(dbg_texsweep)

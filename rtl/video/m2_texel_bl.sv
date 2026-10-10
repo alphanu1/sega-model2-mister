@@ -59,8 +59,19 @@ module m2_texel_bl #(
   // Two lines in flight was the limit on the board (R627: D blocked with both
   // ports busy 97% of its stalls).
   parameter int unsigned NS = 2,
-  parameter int unsigned IB = 11      // index bits a bank, 8..11: 2048 lines is
+  parameter int unsigned IB = 11,     // index bits a bank, 8..11: 2048 lines is
                                       // m2_texel's IDX_BITS 12 (R453) in two halves
+  // R787: 128-BIT LINES, READ AS TWO 64-BIT HALVES. With LW8 a cache LINE --
+  // what a miss fetches, a tag names and a slot holds -- is eight words,
+  // sixteen texels by two (one eight-word SDRAM burst: m2_sdram p_long, the
+  // first four words on m*_lo four cycles before the acknowledge). The data
+  // RAMs stay 2^IB x 64 and are READ a half at a time, so a lookup, its
+  // nibble selects and the bilinear access count are exactly the 64-bit
+  // cache's; only the tags halve (2^(IB-1) of them) and a fill writes its two
+  // halves on consecutive cycles. Texel trace of MAME's lists: SDRAM line
+  // reads -24..-39% on top of R782's fold (bench: r57 30.8k -> 23.3k, rpk
+  // 21.4k -> 13.1k). LW8 needs IB = 11 (the fold below).
+  parameter bit          LW8 = 1'b0
 ) (
   input  logic             clk,
   input  logic             rst_n,
@@ -80,15 +91,18 @@ module m2_texel_bl #(
   output logic [AW:1]      m_addr,
   input  logic             m_ack,
   input  logic [63:0]      m_data,
+  input  logic             m_lo,       // R787: an eight-word line's first half (LW8)
   input  logic             m2_en,
   output logic             m2_req,
   output logic [AW:1]      m2_addr,
   input  logic             m2_ack,
   input  logic [63:0]      m2_data,
+  input  logic             m2_lo,      // R787
   input  logic             m3_en, m4_en,   // R628: slots 2 and 3 (NS = 4)
   output logic             m3_req, m4_req,
   output logic [AW:1]      m3_addr, m4_addr,
   input  logic             m3_ack, m4_ack,
+  input  logic             m3_lo, m4_lo,   // R787
   input  logic [63:0]      m3_data, m4_data,
 
   input  logic             inval,
@@ -100,6 +114,10 @@ module m2_texel_bl #(
   localparam int unsigned LINES = 1 << IB;
   localparam int unsigned RB = IB - 7;        // row-pair bits in the index, above the bank bit
   localparam int unsigned TB = 17 - IB;       // {sheet, rowpair[9:RB+1]}
+  // R787: the tags (and the miss slots) are per LINE: half as many with LW8
+  localparam int unsigned IBT = LW8 ? IB - 1 : IB;
+  localparam int unsigned LINES_T = 1 << IBT;
+  localparam int unsigned LD  = LW8 ? 128 : 64;   // a slot's line
   localparam int unsigned RW = $clog2(RSP_D);
 
   // ------------------------------------------------------------ the four texels
@@ -255,23 +273,28 @@ module m2_texel_bl #(
   // ------------------------------------------------------------ the banks
   (* ramstyle = "M10K" *) logic [63:0]  cdata0 [LINES];
   (* ramstyle = "M10K" *) logic [63:0]  cdata1 [LINES];
-  (* ramstyle = "M10K" *) logic [TB:0]  ctag0  [LINES];   // {valid, tag}
-  (* ramstyle = "M10K" *) logic [TB:0]  ctag1  [LINES];
+  (* ramstyle = "M10K" *) logic [TB:0]  ctag0  [LINES_T];   // {valid, tag} (R787: a line's)
+  (* ramstyle = "M10K" *) logic [TB:0]  ctag1  [LINES_T];
   logic [IB-1:0] ra0, ra1;          // read index this cycle
+  logic [IBT-1:0] rt0, rt1;         // R787: ... and its line's tag index
   logic          re0, re1;          // a read is wanted in this bank
   logic [63:0]   cd0_q, cd1_q;
   logic [TB:0]   ct0_q, ct1_q;
   logic          wr0, wr1;
+  logic          wt0, wt1;          // R787: tag write enables (a data write's, but for LW8's two-cycle fill)
   logic [IB-1:0] wa;
+  logic [IBT-1:0] wat;              // R787: the tag written
   logic [63:0]   wd;
   logic [TB:0]   wt;
-  logic [IB-1:0] sweep;
+  logic [IBT-1:0] sweep;
   logic          sweeping;
   always_ff @(posedge clk) begin
-    cd0_q <= cdata0[ra0]; ct0_q <= ctag0[ra0];
-    cd1_q <= cdata1[ra1]; ct1_q <= ctag1[ra1];
-    if (wr0) begin cdata0[wa] <= wd; ctag0[wa] <= wt; end
-    if (wr1) begin cdata1[wa] <= wd; ctag1[wa] <= wt; end
+    cd0_q <= cdata0[ra0]; ct0_q <= ctag0[rt0];
+    cd1_q <= cdata1[ra1]; ct1_q <= ctag1[rt1];
+    if (wr0) cdata0[wa] <= wd;
+    if (wr1) cdata1[wa] <= wd;
+    if (wt0) ctag0[wat] <= wt;   // R787: its own address and enable
+    if (wt1) ctag1[wat] <= wt;
   end
 
   // R782: THE INDEX IS FOLDED, NOT SLICED. {rp[4:1], cg} maps a 1,024-texel
@@ -286,12 +309,25 @@ module m2_texel_bl #(
   // 20.1k); every texel answer common to both runs identical. 2- and 4-way
   // associativity gained nothing in the same model. IB = 11 only (the core);
   // any other IB keeps the slice.
+  // R787: THE SAME FOLD ON THE 128-BIT LINE (cg[6:1]): a line's index is
+  // 10 bits and its two halves sit at {line, cg[0]} -- the tile and the tag
+  // ({sheet, rp[9:7], cg[6:5]}) unchanged.
+  function automatic logic [9:0] lidx(input tx_t t);
+    lidx = {t.rp[6:1], t.cg[4:1]} ^ {t.cg[6:5], 8'd0} ^ {6'd0, t.rp[9:7], 1'd0} ^ {t.sheet, 9'd0};
+  endfunction
   function automatic logic [IB-1:0] idx_of(input tx_t t);
-    if (IB == 11)
+    if (LW8 && IB == 11)
+      idx_of = IB'({lidx(t), t.cg[0]});
+    else if (IB == 11)
       idx_of = IB'({t.rp[6:1], t.cg[4:0]} ^ {t.cg[6:5], 9'd0}
                    ^ {6'd0, t.rp[9:7], 2'd0} ^ {t.sheet, 10'd0});
     else
       idx_of = {t.rp[RB:1], t.cg};
+  endfunction
+  // R787: where a line's tag sits -- the data index without the half
+  function automatic logic [IBT-1:0] tidx_of(input tx_t t);
+    if (LW8) tidx_of = IBT'(lidx(t));
+    else     tidx_of = IBT'(idx_of(t));
   endfunction
   function automatic logic [TB-1:0] tag_of(input tx_t t);
     if (IB == 11)
@@ -302,9 +338,21 @@ module m2_texel_bl #(
   function automatic logic same_line(input tx_t a, input tx_t b);
     same_line = (a.sheet == b.sheet) && (a.rp == b.rp) && (a.cg == b.cg);
   endfunction
+  // R787: the same 128-bit line (what a miss fetches and a slot holds)
+  function automatic logic same_lline(input tx_t a, input tx_t b);
+    same_lline = (a.sheet == b.sheet) && (a.rp == b.rp)
+              && (LW8 ? (a.cg[6:1] == b.cg[6:1]) : (a.cg == b.cg));
+  endfunction
   // where a texel's nibble sits in its line: {wsel, px, py}
   function automatic logic [3:0] sel_of(input tx_t t);
     sel_of = {t.wsel, t.px, t.py};
+  endfunction
+  // R787: ... and in a slot's 128-bit line: the half first
+  function automatic logic [4:0] sel5_of(input tx_t t);
+    sel5_of = {LW8 ? t.cg[0] : 1'b0, t.wsel, t.px, t.py};
+  endfunction
+  function automatic logic [3:0] nib5(input logic [LD-1:0] line, input logic [4:0] t);
+    nib5 = nib(LW8 ? (t[4] ? line[LD-1 -: 64] : line[63:0]) : line[63:0], t[3:0]);
   endfunction
   function automatic logic [3:0] nib(input logic [63:0] line, input logic [3:0] t);
     logic [15:0] w;
@@ -328,7 +376,8 @@ module m2_texel_bl #(
   localparam int unsigned SW = (NS > 2) ? 2 : 1;       // slot index width
   logic          ms_busy [NS], ms_done [NS], ms_filled [NS];
   tx_t           ms_line [NS];
-  logic [63:0]   ms_dat  [NS];
+  logic [LD-1:0] ms_dat  [NS];   // R787: a whole line, 128 bits with LW8
+  logic          ms_half [NS];   // R787: ... whose first half is in (LW8)
   logic [9:0]    ms_to   [NS];
   // the ports, as arrays: slot s asks port s
   logic          mq_req  [NS];
@@ -340,6 +389,7 @@ module m2_texel_bl #(
   logic [63:0]   mq_data [4];
   assign mq_data[0] = m_data;  assign mq_data[1] = m2_data;
   assign mq_data[2] = m3_data; assign mq_data[3] = m4_data;
+  wire [3:0]     mq_lo  = {m4_lo, m3_lo, m2_lo, m_lo};   // R787
   assign m_req  = mq_req[0];   assign m_addr  = mq_addr[0];
   assign m2_req = mq_req[1];   assign m2_addr = mq_addr[1];
   generate if (NS > 2) begin : g_p34
@@ -355,8 +405,9 @@ module m2_texel_bl #(
   // The line, index and tag are copied here, so the slot may be released
   // behind it; a lookup of the line in between misses and joins or refetches.
   logic          fl_v, fl_b;
+  logic          fl_h;               // R787: LW8's second write, the line's upper half
   logic [SW-1:0] fl_s;               // the slot being written
-  logic [IB-1:0] fl_i;
+  logic [IBT-1:0] fl_i;              // R787: the line's (tag) index
   logic [63:0]   fl_d;
   logic [TB:0]   fl_t;
 
@@ -366,7 +417,7 @@ module m2_texel_bl #(
   logic [3:0]    rs_nib  [RSP_D][4];
   logic [3:0]    rs_pend [RSP_D];     // waiting on a miss
   logic [SW-1:0] rs_slot [RSP_D][4];  // which miss
-  logic [3:0]    rs_sel  [RSP_D][4];  // sel_of() -- all the head needs
+  logic [4:0]    rs_sel  [RSP_D][4];  // sel5_of() -- all the head needs (R787: + the half)
   logic [8:0]    rs_uf   [RSP_D], rs_vf [RSP_D];
   logic          rs_tl   [RSP_D], rs_bl [RSP_D];
   logic [RW:0]   rs_wp, rs_rp;
@@ -517,9 +568,9 @@ module m2_texel_bl #(
   logic [RW-1:0] c_ent;
   tx_t           c_t0, c_t1;
   logic [3:0]    c_sel [4];
-  logic [IB-1:0] ra0_d, ra1_d;    // what the RAM was asked for last cycle
+  logic [IBT-1:0] rt0_d, rt1_d;   // the tags the RAM was asked for last cycle (R787: line index)
   logic          fw_v, fw_b;      // ... and what it was written with
-  logic [IB-1:0] fw_i;
+  logic [IBT-1:0] fw_i;
 
   logic          d_v;
   logic [3:0]    d_k0, d_k1;
@@ -567,7 +618,8 @@ module m2_texel_bl #(
     for (int k = NS - 1; k >= 0; k--)
       if (ms_busy[k] && ms_done[k] && !ms_filled[k]) begin fill_s = SW'(k); fill_any = 1'b1; end
   end
-  assign fill_now = !sweeping && fill_any;
+  // R787: not while LW8's first half is being written (its second follows)
+  assign fill_now = !sweeping && fill_any && !(LW8 && fl_v && !fl_h);
   // texels waiting on each slot
   logic [NS-1:0] ms_ref;
   always_comb begin
@@ -623,30 +675,44 @@ module m2_texel_bl #(
     // a held C1 re-reads its own lines, so its data is still its own
     ra0 = d_stall ? idx_of(c_t0) : idx_of(pl0);
     ra1 = d_stall ? idx_of(c_t1) : idx_of(pl1);
+    rt0 = d_stall ? tidx_of(c_t0) : tidx_of(pl0);   // R787
+    rt1 = d_stall ? tidx_of(c_t1) : tidx_of(pl1);
     re0 = ph0; re1 = ph1;
-    wr0 = 1'b0; wr1 = 1'b0; wa = '0; wd = '0; wt = '0;
+    wr0 = 1'b0; wr1 = 1'b0; wt0 = 1'b0; wt1 = 1'b0; wa = '0; wat = '0; wd = '0; wt = '0;
     if (sweeping) begin
-      wr0 = 1'b1; wr1 = 1'b1; wa = sweep; wd = '0; wt = '0;
+      // R787: with LW8 only the tags are swept (a line is valid by its tag)
+      wr0 = !LW8; wr1 = !LW8; wt0 = 1'b1; wt1 = 1'b1;
+      wa = IB'(sweep); wat = sweep; wd = '0; wt = '0;
     end else if (fl_v) begin
-      wa = fl_i; wd = fl_d; wt = fl_t;
-      if (fl_b) wr1 = 1'b1; else wr0 = 1'b1;
+      // R787: LW8 writes the line in two halves, {line, 0} then {line, 1},
+      // the tag INVALID with the first and valid with the second, so no
+      // lookup in between can hit a line that is half written.
+      // R787: LW8's data comes straight from the slot, which is held until
+      // both halves are in (fl_s, fl_h and the slot are all registers)
+      wa  = LW8 ? IB'({fl_i, fl_h}) : IB'(fl_i);
+      wat = fl_i;
+      wd  = LW8 ? (fl_h ? ms_dat[fl_s][LD-1 -: 64] : ms_dat[fl_s][63:0]) : fl_d;
+      wt  = (LW8 && !fl_h) ? '0 : fl_t;
+      if (fl_b) begin wr1 = 1'b1; wt1 = 1'b1; end
+      else      begin wr0 = 1'b1; wt0 = 1'b1; end
     end
   end
 
   // ------------------------------------------------------------ C1's compare
   // A READ AND A FILL OF THE SAME LINE ON THE SAME EDGE: the M10K's answer is
   // not defined, so it is taken as a miss (which then joins the held slot).
-  wire rdw0 = fw_v && !fw_b && (fw_i == ra0_d);
-  wire rdw1 = fw_v &&  fw_b && (fw_i == ra1_d);
+  wire rdw0 = fw_v && !fw_b && (fw_i == rt0_d);   // R787: by the line's tag index
+  wire rdw1 = fw_v &&  fw_b && (fw_i == rt1_d);
   wire c_hit0 = ct0_q[TB] && (ct0_q[TB-1:0] == tag_of(c_t0)) && !rdw0;
   wire c_hit1 = ct1_q[TB] && (ct1_q[TB-1:0] == tag_of(c_t1)) && !rdw1;
   function automatic logic [SW:0] join_of(input tx_t t);
     // {found, slot}: a slot fetching this line, or one D allocates for it now
     join_of = '0;
-    if      (fa0 && same_line(d_t0, t)) join_of = {1'b1, d_s0};
-    else if (fa1 && same_line(d_t1, t)) join_of = {1'b1, d_s1};
+    // R787: a slot holds a whole (128-bit) line, so either half joins it
+    if      (fa0 && same_lline(d_t0, t)) join_of = {1'b1, d_s0};
+    else if (fa1 && same_lline(d_t1, t)) join_of = {1'b1, d_s1};
     for (int k = NS - 1; k >= 0; k--)
-      if (ms_busy[k] && same_line(ms_line[k], t)) join_of = {1'b1, SW'(k)};
+      if (ms_busy[k] && same_lline(ms_line[k], t)) join_of = {1'b1, SW'(k)};
   endfunction
   wire [SW:0] c_j0 = join_of(c_t0), c_j1 = join_of(c_t1);
   // slots that must not be released this cycle: named by C1 as it moves to
@@ -671,6 +737,27 @@ module m2_texel_bl #(
 
   // the head's answer, registered once all four texels are in
   wire hd_ready = !rs_empty && (rs_rdy[rs_hd] == 4'hF);
+  // R796: ONE (slot, half) A CYCLE FOR THE HEAD'S WAITING TEXELS (LW8). Each
+  // texel picking its nibble out of every slot's 128 bits was a 512:4 select
+  // per texel -- ~300 ALM at four slots. Instead the first waiting texel that
+  // can be answered names a slot and a half, ONE 64-bit view of it is taken,
+  // and every waiting texel in that same (slot, half) is answered from the
+  // view; a texel in another slot or half waits a cycle. The four texels of a
+  // request nearly always share one line.
+  logic [3:0]    hv_ok;            // texel k can be answered now
+  logic          hv_any;
+  logic [SW-1:0] hv_s;             // the view's slot
+  logic          hv_h;             // ... and half
+  logic [63:0]   hv_d;             // the view
+  always_comb begin
+    hv_any = 1'b0; hv_s = '0; hv_h = 1'b0;
+    for (int k = 0; k < 4; k++)
+      hv_ok[k] = rs_pend[rs_hd][k] && (ms_done[rs_slot[rs_hd][k]]
+                 || (LW8 && ms_half[rs_slot[rs_hd][k]] && !rs_sel[rs_hd][k][4]));
+    for (int k = 3; k >= 0; k--)
+      if (hv_ok[k]) begin hv_any = 1'b1; hv_s = rs_slot[rs_hd][k]; hv_h = rs_sel[rs_hd][k][4]; end
+    hv_d = (LW8 && hv_h) ? ms_dat[hv_s][LD-1 -: 64] : ms_dat[hv_s][63:0];
+  end
   o_t  o_q;
   h1_t h1_q;
   h2_t h2_q;
@@ -688,14 +775,14 @@ module m2_texel_bl #(
       c_v <= 1'b0; c_k0 <= '0; c_k1 <= '0; c_has0 <= 1'b0; c_has1 <= 1'b0;
       c_ent <= '0; c_t0 <= '0; c_t1 <= '0;
       for (int k = 0; k < 4; k++) c_sel[k] <= '0;
-      ra0_d <= '0; ra1_d <= '0; fw_v <= 1'b0; fw_b <= 1'b0; fw_i <= '0;
-      fl_v <= 1'b0; fl_b <= 1'b0; fl_s <= '0; fl_i <= '0; fl_d <= '0; fl_t <= '0;
+      rt0_d <= '0; rt1_d <= '0; fw_v <= 1'b0; fw_b <= 1'b0; fw_i <= '0;
+      fl_v <= 1'b0; fl_b <= 1'b0; fl_s <= '0; fl_i <= '0; fl_d <= '0; fl_t <= '0; fl_h <= 1'b0;
       d_v <= 1'b0; d_k0 <= '0; d_k1 <= '0; d_has0 <= 1'b0; d_has1 <= 1'b0;
       d_ent <= '0; d_t0 <= '0; d_t1 <= '0; d_hit0 <= 1'b0; d_hit1 <= 1'b0;
       d_j0 <= '0; d_j1 <= '0;
       for (int k = 0; k < 4; k++) begin d_nb0[k] <= '0; d_nb1[k] <= '0; end
       for (int k = 0; k < NS; k++) begin
-        ms_busy[k] <= 1'b0; ms_done[k] <= 1'b0; ms_filled[k] <= 1'b0; ms_line[k] <= '0;
+        ms_busy[k] <= 1'b0; ms_done[k] <= 1'b0; ms_filled[k] <= 1'b0; ms_line[k] <= '0; ms_half[k] <= 1'b0;
         ms_dat[k] <= '0; ms_to[k] <= '0; mq_req[k] <= 1'b0; mq_addr[k] <= '0;
       end
       rs_wp <= '0; rs_rp <= '0;
@@ -714,7 +801,7 @@ module m2_texel_bl #(
       // ---- the tag sweep: out of reset, and on an invalidate once idle
       if (sweeping) begin
         sweep <= sweep + 1'd1;
-        if (sweep == IB'(LINES - 1)) begin sweeping <= 1'b0; inval_pend <= 1'b0; end
+        if (sweep == IBT'(LINES_T - 1)) begin sweeping <= 1'b0; inval_pend <= 1'b0; end
       end else if (inval_pend && !k_v[0] && !a_v && !p_v && !b_v && !c_v && !d_v && rs_empty
                    && !ms_busy_any) begin
         sweep <= '0; sweeping <= 1'b1;
@@ -779,7 +866,7 @@ module m2_texel_bl #(
         rs_pend[rs_wp[RW-1:0]] <= 4'd0;
         rs_uf  [rs_wp[RW-1:0]] <= p_uf; rs_vf[rs_wp[RW-1:0]] <= p_vf;
         rs_tl  [rs_wp[RW-1:0]] <= p_tl; rs_bl[rs_wp[RW-1:0]] <= p_bl;
-        for (int k = 0; k < 4; k++) rs_sel[rs_wp[RW-1:0]][k] <= sel_of(p_tx[k]);
+        for (int k = 0; k < 4; k++) rs_sel[rs_wp[RW-1:0]][k] <= sel5_of(p_tx[k]);   // R787
         rs_wp  <= rs_wp + 1'd1;
       end else if (b_adv) begin
         b_v <= 1'b0;
@@ -798,15 +885,20 @@ module m2_texel_bl #(
       end
 
       // ---- L -> C1 (the RAM is read this cycle; C1 sees it next)
-      ra0_d <= ra0; ra1_d <= ra1;
-      fw_v  <= fl_v && !sweeping; fw_b <= wr1; fw_i <= wa;   // what was written
-      fl_v  <= fill_now;
-      if (fill_now) begin
-        fl_b <= ms_line[fill_s].rp[0];
-        fl_s <= fill_s;
-        fl_i <= idx_of(ms_line[fill_s]);
-        fl_d <= ms_dat[fill_s];
-        fl_t <= {1'b1, tag_of(ms_line[fill_s])};
+      rt0_d <= rt0; rt1_d <= rt1;
+      fw_v  <= fl_v && !sweeping; fw_b <= wr1; fw_i <= wat;   // what was written
+      if (LW8 && fl_v && !fl_h) begin
+        fl_h <= 1'b1;   // R787: the second write, the upper half
+      end else begin
+        fl_v <= fill_now;
+        fl_h <= 1'b0;
+        if (fill_now) begin
+          fl_b <= ms_line[fill_s].rp[0];
+          fl_s <= fill_s;
+          fl_i <= tidx_of(ms_line[fill_s]);
+          if (!LW8) fl_d <= ms_dat[fill_s][63:0];   // R787: LW8 writes from the slot
+          fl_t <= {1'b1, tag_of(ms_line[fill_s])};
+        end
       end
       if (!d_stall) begin
         c_v <= l_go;
@@ -850,12 +942,12 @@ module m2_texel_bl #(
           end
         end
         if (d_need0) begin
-          ms_busy[d_s0] <= 1'b1; ms_done[d_s0] <= 1'b0; ms_filled[d_s0] <= 1'b0; ms_to[d_s0] <= '0; ms_line[d_s0] <= d_t0;
-          mq_req[d_s0] <= 1'b1; mq_addr[d_s0] <= (d_t0.sheet ? base_s1 : base_s0) + AW'({d_t0.rp, d_t0.cg, 2'b00});
+          ms_busy[d_s0] <= 1'b1; ms_done[d_s0] <= 1'b0; ms_filled[d_s0] <= 1'b0; ms_half[d_s0] <= 1'b0; ms_to[d_s0] <= '0; ms_line[d_s0] <= d_t0;
+          mq_req[d_s0] <= 1'b1; mq_addr[d_s0] <= (d_t0.sheet ? base_s1 : base_s0) + (LW8 ? AW'({d_t0.rp, d_t0.cg[6:1], 3'b000}) : AW'({d_t0.rp, d_t0.cg, 2'b00}));   // R787
         end
         if (d_need1 && d_do1) begin
-          ms_busy[d_s1] <= 1'b1; ms_done[d_s1] <= 1'b0; ms_filled[d_s1] <= 1'b0; ms_to[d_s1] <= '0; ms_line[d_s1] <= d_t1;
-          mq_req[d_s1] <= 1'b1; mq_addr[d_s1] <= (d_t1.sheet ? base_s1 : base_s0) + AW'({d_t1.rp, d_t1.cg, 2'b00});
+          ms_busy[d_s1] <= 1'b1; ms_done[d_s1] <= 1'b0; ms_filled[d_s1] <= 1'b0; ms_half[d_s1] <= 1'b0; ms_to[d_s1] <= '0; ms_line[d_s1] <= d_t1;
+          mq_req[d_s1] <= 1'b1; mq_addr[d_s1] <= (d_t1.sheet ? base_s1 : base_s0) + (LW8 ? AW'({d_t1.rp, d_t1.cg[6:1], 3'b000}) : AW'({d_t1.rp, d_t1.cg, 2'b00}));
         end
         if (d_need0 || (d_need1 && d_do1)) begin if (!(&dbg_misses)) dbg_misses <= dbg_misses + 1'd1; end
         else if (!(&dbg_hits)) dbg_hits <= dbg_hits + 1'd1;
@@ -874,15 +966,32 @@ module m2_texel_bl #(
           end
         end
       end
+      // R787: an eight-word line's first four words come four cycles ahead
+      // of the acknowledge, on their own strobe (m2_sdram p_lo)
+      for (int s = 0; s < NS; s++)
+        if (LW8 && mq_lo[s] && ms_busy[s] && !ms_done[s]) begin
+          ms_dat[s][63:0] <= mq_data[s]; ms_half[s] <= 1'b1;
+        end
       for (int s = 0; s < NS; s++)
         if (mq_ack[s] && ms_busy[s] && !ms_done[s]) begin
-          ms_dat[s] <= mq_data[s]; ms_done[s] <= 1'b1; mq_req[s] <= 1'b0;
+          // R787: with LW8 the acknowledge carries the line's last four words
+          if (LW8) ms_dat[s][LD-1 -: 64] <= mq_data[s];
+          else     ms_dat[s][63:0]       <= mq_data[s];
+          ms_done[s] <= 1'b1; mq_req[s] <= 1'b0;
         end
       // the head's waiting texels take their nibble once their miss is done
+      // R787: a texel in the first half of an eight-word line is answered
+      // from it, four cycles before the line is whole
       if (!rs_empty)
         for (int k = 0; k < 4; k++)
-          if (rs_pend[rs_hd][k] && ms_done[rs_slot[rs_hd][k]]) begin
-            rs_nib[rs_hd][k] <= nib(ms_dat[rs_slot[rs_hd][k]], rs_sel[rs_hd][k]);
+          if (LW8) begin
+            // R796: from the one view this cycle (above)
+            if (hv_ok[k] && hv_any && rs_slot[rs_hd][k] == hv_s && rs_sel[rs_hd][k][4] == hv_h) begin
+              rs_nib[rs_hd][k] <= nib(hv_d, rs_sel[rs_hd][k][3:0]);
+              rs_rdy[rs_hd][k] <= 1'b1; rs_pend[rs_hd][k] <= 1'b0;
+            end
+          end else if (hv_ok[k]) begin
+            rs_nib[rs_hd][k] <= nib5(ms_dat[rs_slot[rs_hd][k]], rs_sel[rs_hd][k]);
             rs_rdy[rs_hd][k] <= 1'b1; rs_pend[rs_hd][k] <= 1'b0;
           end
       if (fill_now) ms_filled[fill_s] <= 1'b1;   // written this cycle

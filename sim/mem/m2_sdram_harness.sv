@@ -68,6 +68,9 @@ module m2_sdram_harness #(
   output logic        p0_ack, p1_ack, p2_ack, p3_ack, p4_ack,
                       p5_ack, p6_ack, p7_ack, p8_ack, p9_ack, p10_ack,
                       p11_ack, p12_ack,
+  // R787: eight-word reads per port (bit p), and their first-half strobes
+  input  logic [12:0] long_mask,
+  output logic [12:0] lo_strobe,
 
   // Device model observability
   output int unsigned violations,
@@ -146,6 +149,7 @@ module m2_sdram_harness #(
   generate if (NP < 13) begin : g_tie   // R789: the ports this build has not got
     assign p_ack[12:NP]  = '0;
     assign p_dout[12:NP] = '0;
+    assign lo_strobe[12:NP] = '0;   // R796
   end endgenerate
   assign p0_dout = p_dout[0];
   assign p1_dout = p_dout[1];
@@ -186,6 +190,7 @@ module m2_sdram_harness #(
     .p_req(p_req[NP-1:0]), .p_we(p_we[NP-1:0]), .p_addr(p_addr[NP-1:0]),
     .p_din(p_din[NP-1:0]), .p_be(p_be[NP-1:0]),
     .p_dout(p_dout[NP-1:0]), .p_ack(p_ack[NP-1:0]),
+    .p_long(long_mask[NP-1:0]), .p_lo(lo_strobe[NP-1:0]),   // R787
     .dbg_req(dbg_req), .dbg_grant(dbg_grant)
   );
 

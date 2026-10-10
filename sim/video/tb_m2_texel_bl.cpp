@@ -38,6 +38,20 @@ static uint64_t line_at(uint32_t a) {
   for (int k = 0; k < 4; k++) l |= uint64_t(word_at(a + k)) << (16 * k);
   return l;
 }
+// R787: built with -DTB_LW8 (and -GLW8=1 -GIB=10) a line is EIGHT words, as
+// m2_sdram delivers an eight-word read: words 0-3 with a one-cycle m*_lo four
+// cycles before the acknowledge, words 4-7 with it.
+#ifdef TB_LW8
+static const bool LW8 = true;
+#else
+static const bool LW8 = false;
+#endif
+static void set_lo(int p, uint64_t l) {
+  if (p == 0) { d->m_lo = 1; d->m_data = l; }
+  if (p == 1) { d->m2_lo = 1; d->m2_data = l; }
+  if (p == 2) { d->m3_lo = 1; d->m3_data = l; }
+  if (p == 3) { d->m4_lo = 1; d->m4_data = l; }
+}
 
 struct Req { uint32_t tex, u, v; int bl; };
 
@@ -110,6 +124,7 @@ int main(int argc, char **argv) {
   d->clk = 0; d->rst_n = 0; d->base_s0 = BASE0; d->base_s1 = BASE1; d->bilinear = 1;
   d->req = 0; d->m_ack = 0; d->m2_ack = 0; d->m2_en = 1; d->inval = 0;
   d->m3_ack = 0; d->m4_ack = 0; d->m3_en = 1; d->m4_en = 1;   // R628: used when built NS=4
+  d->m_lo = 0; d->m2_lo = 0; d->m3_lo = 0; d->m4_lo = 0;       // R787
   auto tick = [&]() { d->clk = 0; d->eval(); d->clk = 1; d->eval(); };
   for (int i = 0; i < 8; i++) tick();
   d->rst_n = 1;
@@ -128,6 +143,9 @@ int main(int argc, char **argv) {
     ++cyc;
     // memory: random latency on each port
     d->m_ack = 0; d->m2_ack = 0; d->m3_ack = 0; d->m4_ack = 0;
+    d->m_lo = 0; d->m2_lo = 0; d->m3_lo = 0; d->m4_lo = 0;       // R787
+    // R787: the line's second half rides the acknowledge
+    const int HALF = LW8 ? 4 : 0;
     {
       const bool rq[4] = {(bool)d->m_req, (bool)d->m2_req, (bool)d->m3_req, (bool)d->m4_req};
       const uint32_t aa[4] = {d->m_addr, d->m2_addr, d->m3_addr, d->m4_addr};
@@ -135,9 +153,10 @@ int main(int argc, char **argv) {
         if (SDR) {
           bool ack = false; uint64_t l = hd[p];
           if (hold[p] > 0) { ack = true; --hold[p]; }
-          if (lat[p] == 0) { l = hd[p] = line_at(ad[p]); ack = true; hold[p] = 1; }
+          if (LW8 && lat[p] == 4) set_lo(p, line_at(ad[p]));            // R787
+          if (lat[p] == 0) { l = hd[p] = line_at(ad[p] + HALF); ack = true; hold[p] = 1; }
           if (lat[p] >= 0) --lat[p];
-          if (rq[p] && !rq_d[p] && lat[p] < 0) { lat[p] = 2 + rng() % LMAX; ad[p] = aa[p]; }
+          if (rq[p] && !rq_d[p] && lat[p] < 0) { lat[p] = (LW8 ? 5 : 2) + rng() % LMAX; ad[p] = aa[p]; }
           rq_d[p] = rq[p];
           if (ack) {
             if (p == 0) { d->m_ack = 1; d->m_data = l; }
@@ -147,9 +166,10 @@ int main(int argc, char **argv) {
           }
           continue;
         }
-        if (rq[p] && lat[p] < 0) { lat[p] = 2 + rng() % 30; ad[p] = aa[p]; }
+        if (rq[p] && lat[p] < 0) { lat[p] = (LW8 ? 5 : 2) + rng() % 30; ad[p] = aa[p]; }
+        if (LW8 && lat[p] == 4) set_lo(p, line_at(ad[p]));              // R787
         if (lat[p] == 0) {
-          const uint64_t l = line_at(ad[p]);
+          const uint64_t l = line_at(ad[p] + HALF);
           if (p == 0) { d->m_ack = 1; d->m_data = l; }
           if (p == 1) { d->m2_ack = 1; d->m2_data = l; }
           if (p == 2) { d->m3_ack = 1; d->m3_data = l; }
