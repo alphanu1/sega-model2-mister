@@ -2,6 +2,17 @@
 
 ## 2026-10-10: TGP 2.3x FASTER (R771-R775), TYRES BACK (R769). BUILDING.
 
+EVENING: R780 board draw times (s926, 75 MHz: draw p90 21.5-22 ms, SDRAM
+busy 80%+ on slow frames; texel misses' round trip is the cost); R781
+Double Buffered default; R782 texel cache index folded (-24..-32% misses);
+R783 15 kHz 262.5-line option (core timing proven clean; the set's
+tolerance suspected); R784 texture colour path (luma table base + MAME's
+ramp with clip; decals/windows now match MAME under every gamma; Gamma
+default unchanged at Ben's request). Ben: board step 1 was A/B-proven --
+the remaining board-vs-bench blockiness is open; MiSTer's non-integer
+nearest scaler suspected. Builds: 9d3448f sweeping s930-s932 (s927-929
+failed on placement); next: HEAD with R784.
+
 16:30: s919 (80/40) FROZE at the first 3D frame of attract (2D only, 0 fps);
 the boot harness at 30 M insns and the replay at latency 1/12/40 are clean,
 map warnings identical to s894 -- not reproduced; retry it once to see if it
