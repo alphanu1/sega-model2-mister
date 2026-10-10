@@ -28837,3 +28837,19 @@ clean.
 *Not verified:* timing (no fit); the board; lumaram rows other than 0 and 1
 (taken as row 0); Mild's reference is our own curve applied to the table
 (MAME has no Mild).
+
+**R785 -- s931 ON THE BOARD: PAST FRAME 1, RIGHT EDGE AND TYRES RIGHT, THE
+LOCK AGAIN.** s931 = 9d3448f (R769-R783, no R784) at 80/40: clk_sys +0.100,
+clk_mem +0.503, holds >= +0.128, HDMI -0.404; RBF
+486b5c980a9115630e91a6f44c92992d (s927 clk_sys -0.520, s928 Quartus error,
+s929 -0.864, s930 hold -0.336, s932 stopped). Ben:
+  * It gets past the first 3D frame (52.8 fps a minute in): s919's
+    frame-1 freeze (R778's sweep) did not recur on the same clocks and TGP --
+    a placement-specific fault or the lock striking early; unexplained.
+  * The right edge is drawn (R779). Car select is right (R769/R776).
+  * In game "about 50% full speed"; attract still slows with all the cars and
+    the long view down the straight.
+  * The LOCK, minutes in: the attract backdrop with CREDITS 2/3 (coins in),
+    no 3D, 0.0 fps -- the game stopped, as R777. s913 (75 MHz, 512 B icache,
+    lock telemetry) ran ~100 min of attract without one. Whether coin / start
+    is the trigger is asked.
