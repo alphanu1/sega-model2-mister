@@ -439,6 +439,11 @@ int main(int argc, char **argv) {
       auto setack = [&](int k, int v) { if (k == 3) d->tex_m4_ack = v; else if (k == 2) d->tex_m3_ack = v; else if (k) d->tex_m2_ack = v; else d->tex_m_ack = v; };
       auto setdat = [&](int k, uint64_t v) { if (k == 3) d->tex_m4_data = v; else if (k == 2) d->tex_m3_data = v; else if (k) d->tex_m2_data = v; else d->tex_m_data = v; };
       auto setlo  = [&](int k) { if (k == 3) d->tex_m4_lo = 1; else if (k == 2) d->tex_m3_lo = 1; else if (k) d->tex_m2_lo = 1; else d->tex_m_lo = 1; };
+      // R798: ONE DELIVERY A CYCLE ACROSS THE PORTS (LW8), as m2_sdram's
+      // single R557 stage makes them; m2_texel_bl's slot store (one LUT-RAM
+      // write port) relies on it. A port whose half or line is due while
+      // another's is delivered waits a cycle.
+      bool ev_used = false;
       for (int k = 0; k < 4; k++) {
         Pt &q = pt[k];
         const bool req = k == 3 ? d->tex_m4_req : k == 2 ? d->tex_m3_req : k ? d->tex_m2_req : d->tex_m_req;
@@ -453,7 +458,10 @@ int main(int argc, char **argv) {
           q.cnt = TL + (TJ ? int((mr >> 33) % uint64_t(TJ + 1)) : 0) + (LW8 ? 4 : 0);
         }
         q.req_d = req;
-        if (q.busy && q.ackc == 0) {
+        const bool ev_due = q.busy && q.ackc == 0 && ((LW8 && q.cnt == 4) || q.cnt == 0);
+        const bool ev_stall = LW8 && ev_due && ev_used;
+        if (ev_due && !ev_stall) ev_used = true;
+        if (q.busy && q.ackc == 0 && !ev_stall) {
           if (LW8 && q.cnt == 4) { setlo(k); setdat(k, q.dat); }   // R787: the first half, no acknowledge
           if (q.cnt > 0) --q.cnt;
           else {

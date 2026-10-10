@@ -149,10 +149,28 @@ int main(int argc, char **argv) {
     {
       const bool rq[4] = {(bool)d->m_req, (bool)d->m2_req, (bool)d->m3_req, (bool)d->m4_req};
       const uint32_t aa[4] = {d->m_addr, d->m2_addr, d->m3_addr, d->m4_addr};
+      // R798: ONE DELIVERY A CYCLE ACROSS THE PORTS (LW8), as m2_sdram makes
+      // them -- its single R557 stage hands out one port's half or line per
+      // cycle -- and m2_texel_bl's slot store relies on it. A port whose half
+      // or line is due while another's is delivered waits a cycle.
+      bool ev_used = false;
       for (int p = 0; p < 4; p++) {
+        const bool ev_due = (LW8 && lat[p] == 4) || lat[p] == 0;
+        const bool ev_stall = LW8 && ev_due && ev_used;
+        if (ev_due && !ev_stall) ev_used = true;
         if (SDR) {
           bool ack = false; uint64_t l = hd[p];
           if (hold[p] > 0) { ack = true; --hold[p]; }
+          if (ev_stall) {   // R798: next cycle
+            rq_d[p] = rq[p];
+            if (ack) {
+              if (p == 0) { d->m_ack = 1; d->m_data = l; }
+              if (p == 1) { d->m2_ack = 1; d->m2_data = l; }
+              if (p == 2) { d->m3_ack = 1; d->m3_data = l; }
+              if (p == 3) { d->m4_ack = 1; d->m4_data = l; }
+            }
+            continue;
+          }
           if (LW8 && lat[p] == 4) set_lo(p, line_at(ad[p]));            // R787
           if (lat[p] == 0) { l = hd[p] = line_at(ad[p] + HALF); ack = true; hold[p] = 1; }
           if (lat[p] >= 0) --lat[p];
@@ -166,6 +184,7 @@ int main(int argc, char **argv) {
           }
           continue;
         }
+        if (ev_stall) continue;   // R798: next cycle
         if (rq[p] && lat[p] < 0) { lat[p] = (LW8 ? 5 : 2) + rng() % 30; ad[p] = aa[p]; }
         if (LW8 && lat[p] == 4) set_lo(p, line_at(ad[p]));              // R787
         if (lat[p] == 0) {

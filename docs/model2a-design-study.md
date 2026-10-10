@@ -29327,3 +29327,92 @@ interlaced frame of 525 or 547 lines has no half-line field; vid_nl =
 ~status[45]. A saved config that held 273.5 (0) now opens as 262/263.
 tb_m2_video_timing (both counts, R783) PASS; lint_top, Quartus parse clean.
 The release README's CRT section says so.
+
+**R798 -- R796 MADE TO FIT: THE SLOTS' 128-BIT LINES IN LUT RAM, NOT FLOPS.**
+R796 (aeb323e) did not fit: s948-s950 need 4,195-4,202 LABs of 4,191
+(41,498-41,574 ALM) where 5efcc72 fitted at 41,267 (s947) and 41,399 (s945).
+
+*Why R796's "-58 ALM" was wrong.* It came from quartus_map of the modules
+ALONE, scaled by s936's placed / standalone ratios. In context the synthesis
+said otherwise: m2_texel_bl +64 ALUT and +194 registers (s947 -> s950 map
+reports), where the standalone map had +28 ALUT and an "ALMs needed" estimate
+of -87 -- a standalone module has every input live, so 5efcc72's per-texel
+select was costed far above what the design synthesises, and the estimate is
+not additive. At 99% the fitter has no slack to absorb registers, so R796's
++86 whole-design map estimate became ~+210 ALM placed (three seeds against
+two). m2_sdram's +37 in the fit comes with -4 ALUT / +12 registers in
+synthesis; s945 and s947 (identical RTL) differ by 16 there, so much of it is
+placement. Entity numbers in one map also move by hundreds of ALUT where
+nothing changed (m2_geometry +352 s947 -> s950). Calibration is now against
+the whole design's map, not modules alone.
+
+THE CHANGE (m2_texel_bl, LW8 only; LW8 = 0 is unchanged and cycle-identical):
+  * A slot's line was 128 flops per slot (512 at four) read by two 8:1 x 64
+    selects (the head's view, R796, and the fill's half). Now it is LUT RAM,
+    {slot, half} x 64 (8 x 64, MLAB): halves are written as they arrive --
+    m2_sdram hands out one port's half or line a cycle (its single R557
+    stage), so one write port serves the four ports -- and ONE read port
+    serves both readers: the fill while it writes (two cycles a line), the
+    head's view otherwise (the head waits those cycles). A timed-out slot
+    reads as zeros by a flag (ms_z), as the zeroed register did.
+  * The benches deliver one port's half or line a cycle when LW8, as the
+    controller does (tb_m2_texel_bl, tb_m2_raster3d's TEXMEM; LW8 = 0 runs
+    unchanged).
+
+Evaluated and NOT kept:
+  * p_long as a per-port PARAMETER (10-12 constant, 2 at run time): the full
+    design's synthesis of m2_sdram is identical with and without it (895 ALUT,
+    1,664 registers) -- the constant inputs already propagate.
+  * Dropping the early first-half answer: ~9 ALM (standalone) for +1.1..+1.6%
+    idle and +0.7..+1.5% contended draw time.
+  * Two LUT-RAM copies (one per reader): R796's draw time exactly, ~32 ALM
+    (one 8 x 64 MLAB) more.
+
+*Area* (full-design quartus_map, the core's configuration, against the seed
+maps):
+                         5efcc72 (s947)   R796 (s950)   R798
+  m2_texel_bl ALUT          1,797           1,861        1,677
+             registers      1,584           1,778        1,270
+             LUT RAM            -               -        64 memory ALUTs (one 8 x 64)
+  m2_sdram ALUT / regs     923 / 1,652     919 / 1,664   895 / 1,664 (RTL as R796)
+  design ALMs-needed est.  40,507          40,593       40,398
+R798 against 5efcc72: m2_texel_bl -120 ALUT, -314 registers, + ~32-40 ALM of
+LUT RAM. Calibrated by R796 (+64 ALUT / +194 registers -> +20..+40 ALM placed
+for the entity), the texel cache lands ~-40..-80 ALM below 5efcc72 and the
+whole design ~-5..-45 with m2_sdram's ~+37 kept; the whole-design map
+estimate is -109 against 5efcc72's (which fitted twice) and -195 against
+R796's. M10K unchanged from R796.
+
+*Draw time* (tb_m2_raster3d, MAME's lists, step 1, UZF 4, 100:80, TXNS 4 /
+TXRSP 4 / TXK 16; ms at 80 MHz):
+                      r57    r66    apk    rpk    f2200
+  idle   5efcc72     10.65  11.04  12.17  14.28  12.47
+         R796        10.63  10.95  12.08  14.11  12.27
+         R798        10.73  11.01  12.20  14.17  12.35
+  cont.  5efcc72     14.03  14.73  17.36  17.71  16.11
+         R796        13.28  13.61  15.85  16.26  14.61
+         R798        13.32  13.65  15.91  16.29  14.64
+The shared read port costs +0.4..+1.0% idle and +0.2..+0.4% contended against
+R796; against 5efcc72 R798 is -1.0..+0.8% idle and -5..-9% contended.
+
+*Verified.* Every texel answer common to 5efcc72's configuration and R798
+identical: 1,993,992 fetches over r57/r66/apk/rpk/f2200 x both memory models,
+0 differ; the displayed frame's hash identical in all ten.
+test_m2_texel_bl48 (NS 4, RSP_D 4, LW8): 200,000 / 0 both memory models;
+mutations -- the head reading during a fill 12,233 fails, the first half not
+written 107,185, every half written to half 0 186,261, answering across
+halves 1,629, the fill reading half 0 twice 83,780. test_m2_texel_bl, _bl4,
+_bl8, _texel, _texel_cdc, _cdc16, _raster3d, _raster_fill, _span_tex,
+_sdram (+ eight-word), _sdram13 (+ eight-word: 2,748,894 / 0, 0 violations
+incl. refresh, 0 tag faults; worst latency port 3 398, i960 79, others
+472-507 as R796), _sdram128, _sdram_x2, _sdram_cdc, _cpu_sdram, _romload,
+_boot pass; lint_top clean; the full design's synthesis infers the slot
+store as MLAB (altdpram ms_ma) and no new uninferred RAM.
+
+*Timing, by construction:* clk_mem -- the head's view: the priority pick
+(registers) -> a 2:1 on the LUT RAM's read address (fill or view) -> the
+asynchronous read -> the zero flag -> a 16:1 nibble -> rs_nib; the fill:
+fl_s / fl_h registers -> the same 2:1 -> the read -> the M10K's write data.
+Writes are registered.
+
+*Not verified:* the fit and its timing; the board.
