@@ -96,6 +96,27 @@ session**: `build_id.v` is stamped per build, so two bitstreams built on
 different days differ by more than the seed, and that mistake invalidated a
 whole measurement once.
 
+### The MiSTer framework carries one patch
+
+`sys/` is MiSTer-devel's framework, unmodified except for **one switchable
+patch**, `docs/framework-patches/audio-filter-disable.patch`. It turns off
+MiSTer's built-in audio filter (about 430 ALM) when
+`MISTER_DISABLE_AUDIO_FILTER` is set, and `Model2.qsf` sets it. The design
+is about 99% of the FPGA, and that room goes to the 3D renderer's texture
+fetching (study R788). The game's sound is unaffected; MiSTer's audio filter
+presets do nothing on this core.
+
+**When updating `sys/` from Template_MiSTer, re-apply it:**
+
+```
+git apply docs/framework-patches/audio-filter-disable.patch
+```
+
+If it no longer applies cleanly, `docs/framework-patches/README.md` describes
+the three-line change to make by hand. Without the patch the build still
+compiles, because the macro is then unused, but the filter comes back and the
+design loses that room.
+
 ## Testing
 
 Everything is simulated before it reaches the fitter. Verilator 5.050 and
