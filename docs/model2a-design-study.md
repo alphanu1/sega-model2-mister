@@ -29469,3 +29469,11 @@ of a random fault; the texel path is not established as the cause. The hunt
 widens to every SDRAM master and to the CPU side (the bridge's cache /
 posted writes / line buffer, the i960 core's call/ret frame handling under
 interrupts, R652's IRQ hold, the copro FIFO stall with R771's faster TGP).
+
+**R798 on the fitter: it FITS, and its head path misses clk_mem.** e6af63c
+(R796 + R798 + R799 + R801) at 80/40: s957 Quartus internal error (TDB),
+s958 41,207 ALM / s959 41,134 (98% -- R798's shrink worked); clk_mem -1.515 /
+-1.028 ns, 163 paths all u_texel rs_rp -> rs_nib (R798's pick -> MLAB read
+address -> async read -> zero flag -> 16:1 nibble select in one 10 ns cycle);
+clk_sys -0.105 / -0.113 (geo_project -> geo_clip, noise). The read is being
+registered (R804) before the next build.
