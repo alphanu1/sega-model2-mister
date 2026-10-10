@@ -113,6 +113,7 @@ module mb86233_core (
   logic        d_lab, d_ldmov, d_stm, d_lipl, d_repgrp, d_ldi, d_branch, d_unimpl;
   logic        d_noalu;            // R771
   logic        ret_now;            // R773: an instruction retires this cycle
+  logic        ldif_go;            // R775: this ldif's condition passed; it reads
   logic [8:0]  d_r1, d_r2;
   logic [4:0]  d_alu;
   logic [2:0]  d_sub, d_op7;
@@ -664,11 +665,14 @@ module mb86233_core (
   // later in the same trace.
   logic        use_dst_side;
   wire         use_lab_b = (state == S_LABB) || (state == S_LABB_W);
+  // R775: ldif addresses with its own low nine bits, bank 0 (ea_pre_0).
   assign agu_r    = use_lab_b    ? d_r2
                   : use_dst_side ? (x_dst_r2 ? d_r2 : d_r1)
+                  : ldif_go      ? d_bdata[8:0]
                                  : (x_src_r2 ? d_r2 : d_r1);
   assign agu_bank = use_lab_b ? 1'b1
-                  : use_dst_side ? x_dst_bank : x_src_bank;
+                  : use_dst_side ? x_dst_bank
+                  : ldif_go ? 1'b0 : x_src_bank;
 
   // +0x200 is applied outside the AGU because it is per-instruction-form, not
   // an addressing mode. See mb86233_agu's header.
@@ -891,6 +895,7 @@ module mb86233_core (
       lab_a_val    <= 32'd0;
       lab_b_val    <= 32'd0;
       alu_launched <= 1'b0;
+      ldif_go      <= 1'b0;
       alu_op_r     <= 5'd0;
       fp_post_r    <= 1'b0;
     end else begin
@@ -900,12 +905,21 @@ module mb86233_core (
         S_FETCH_W: begin ir <= prog_rdata; state <= S_DECODE; end
 
         S_DECODE: begin
+          // R775: ldif (branch subtype 6). MAME, mb86233.cpp case 6: when the
+          // condition passes, `v = m_data.read_dword(ea_pre_0(opcode));
+          // ea_post_0(opcode); write_reg(opcode >> 9, v)`. It was a no-op here
+          // and in Model 1. The read takes the source states; the register is
+          // written in S_RETIRE with the immediate forms. ST and the loop
+          // counters cannot move between here and S_RETIRE (nothing in
+          // between writes them), so the condition is the sequencer's.
+          ldif_go   <= d_branch && (d_bsub == 3'd6) && seq_cond_passed;
           alu_op_r  <= d_alu;
           fp_post_r <= d_lab | d_ldmov;
           // brul/bsul memory form needs its target FETCHED before the branch can
           // resolve, so it takes the read states like any other source operand.
           if (brul_memform && brul_ea_simple) state <= S_BRUL_RD;
           else if (d_lab || d_ldmov) state <= S_SRC;
+          else if (d_branch && (d_bsub == 3'd6) && seq_cond_passed) state <= S_SRC;   // R775
           else if (dec_ret)     state <= S_RETIRE;   // R773
           else                  state <= S_ALU;
         end
@@ -940,7 +954,7 @@ module mb86233_core (
             src_val <= (x_src_sp == mb86233_pkg::EP_PROG) ? prog_rdata
                      : (x_src_sp == mb86233_pkg::EP_IO)   ? io_rdata
                                                           : mem_rdata;
-            state   <= d_lab ? S_LABB : S_DST;
+            state   <= ldif_go ? S_RETIRE : d_lab ? S_LABB : S_DST;   // R775
           end
         end
 
@@ -1051,7 +1065,9 @@ module mb86233_core (
         // Taking only [2:0] silently reads register 0 for every target above
         // 7 — every transfer out of A (0x10), B (0x13), D (0x19) or P (0x1c)
         // read the wrong register and no directed test noticed.
-        if (x_src_reg) begin
+        if (ldif_go) begin
+          mem_req = 1'b1; mem_addr = agu_ea;   // R775: no +0x200 form
+        end else if (x_src_reg) begin
           // R737: that index is rd_addr_q now, registered in S_DECODE.
         end else if (x_src_sp == mb86233_pkg::EP_DATA) begin
           mem_req = 1'b1; mem_addr = ea_src;
@@ -1132,7 +1148,9 @@ module mb86233_core (
         end
 
         // Immediate-form writes all land here, after any transfer.
-        if (d_ldi) begin
+        if (ldif_go) begin   // R775: write_reg(opcode >> 9), six bits
+          rf_wr_en = 1'b1; rf_wr_addr = d_bdata[14:9]; rf_wr_data = src_val;
+        end else if (d_ldi) begin
           rf_wr_en = 1'b1; rf_wr_addr = d_ldireg; rf_wr_data = d_ldival;
         end else if (d_lipl) begin
           rf_wr_en = 1'b1;

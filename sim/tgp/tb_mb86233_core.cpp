@@ -614,6 +614,23 @@ int main(int argc, char** argv) {
     ck("brul d lands at 5 -> B",  dut->dbg_b, 0x555);
     ck("no FIFO access, no pop",  f.pops, 0);
     ck("no FIFO access, no rise", f.rd_rises, 0);
+
+    // R775: ldif (branch subtype 6) loads a register from data memory when
+    // its condition passes -- MAME case 6, write_reg(opcode >> 9) -- and does
+    // nothing when it fails. It was a no-op, so the passing case caught it.
+    for (auto& w : prog) w = enc_nop();
+    prog[0] = enc_ldi(0x10, 0x123456);
+    prog[1] = enc_ldmov7(0, 0x20, 0x10);      // data[0x20] <- A
+    prog[2] = enc_ldi(0x13, 0x000111);        // B = 0x111
+    prog[3] = enc_ldi(0x19, 0x000555);        // D = 0x555
+    prog[4] = (0x2fu << 26) | (0x16u << 20) | (6u << 17) | (0x13u << 9) | 0x20u;  // ldif alw  data[0x20], b
+    prog[5] = (0x3fu << 26) | (0x16u << 20) | (6u << 17) | (0x19u << 9) | 0x20u;  // ldif !alw data[0x20], d
+    prog[6] = enc_ldi(0x1c, 0x000777);        // P: the instruction after retires
+    freset();
+    if (!frun(7)) { printf("  FAIL timeout\n"); fails++; }
+    ck("ldif alw -> B",            dut->dbg_b, 0x123456);
+    ck("ldif !alw leaves D",       dut->dbg_d, 0x555);
+    ck("ldif falls through",       dut->dbg_p, 0x777);
   }
 
   // ------------------------------------------------------------ LOCKSTEP

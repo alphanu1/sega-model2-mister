@@ -28545,3 +28545,19 @@ this window. (2) The game sends 18 `st.s` (16-bit) FIFO stores a frame;
 MAME pushes them zero-extended, our i960_lsu sends {2{half}} and m2_copro
 takes 32 bits -- they reach only the sincos base, harmless here. (3) MAME
 resets M to 1, mb86233_core to 0 -- not exercised.
+
+**R775 -- ldif LOADS A REGISTER.** R771-R774's bench finding (1): branch
+subtype 6 was a no-op here and in Model 1. MAME (mb86233.cpp case 6), inside
+the passed-condition block: `v = m_data.read_dword(ea_pre_0(opcode));
+ea_post_0(opcode); write_reg(opcode >> 9, v)`; sim/tgp/mb86233_ref.cpp
+already had it. Now: S_DECODE registers ldif_go (subtype 6 and the
+sequencer's condition -- nothing between S_DECODE and S_RETIRE writes ST or
+the loop counters); the read takes S_SRC / S_SRC_W with the AGU on
+opcode[8:0], bank 0, post-incremented there; S_RETIRE writes rf
+opcode[14:9]. A failing condition retires from S_DECODE as before. Race
+replay: VERDICT vs MAME PASS (bit-exact except NaN encoding) -- the 30
+sign-of-zero atan-base writes are gone; cycles 9,464,567 -> 9,464,927. The
+baseline stream is re-recorded from this RTL. tb_mb86233_core: an ldif alw /
+!alw test (67 checks; with the fix removed, "ldif alw -> B" fails);
+lockstep 8,000 clean; test_m2_boot PASS. Model 1 has the same gap
+(tools/model1-ref mb86233_seq.sv subtype 6).
