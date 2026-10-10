@@ -1119,6 +1119,49 @@ $(eval $(call TGP_UNIT,fp_add,$(TGP)/fp_add.sv))
 $(eval $(call TGP_UNIT,fp_div,$(TGP)/fp_div.sv))
 $(eval $(call TGP_UNIT,mb86233_alu,$(TGP_PKG) $(TGP_FP) $(TGP)/mb86233_alu.sv))
 $(eval $(call TGP_UNIT,mb86233_agu,$(TGP)/mb86233_agu.sv))
+# R771-R774: THE RACE REPLAY. A Daytona race captured from MAME 0.289
+# (sim/tgp/tgp_capture.lua: program, data RAM, tables and every word across the
+# TGP's boundary for 30 frames) replayed through m2_copro, every output and io
+# access checked against MAME. The capture is ROM-derived and lives under
+# build/ (git-ignored); `make tgp_capture` makes it.
+#   make tgp_replay           replay, check against MAME, profile the TGP
+#   make tgp_replay_baseline  record this RTL's own result stream
+#   make tgp_replay_check     require the result stream IDENTICAL to that baseline:
+#                             the exact test for a faster TGP (MAME and the RTL
+#                             legitimately differ on NaN encoding and ldif)
+TGPCAP     ?= build/tgpcap/race5400
+TGPCAP_RUN ?= build/tgpcap/run
+TGP_LAT    ?= 6
+TGP_REPLAY_RTL := $(TGP_CORE) $(TGP)/m2_tgp.sv $(TGP)/m2_fifo_m10k.sv $(TGP)/m2_copro.sv
+obj_tgp_replay/Vm2_copro: $(TGP_REPLAY_RTL) sim/tgp/tb_tgp_replay.cpp sim/tgp/tgp_replay.vlt
+	verilator --cc --exe --build -j 0 -Wall $(TGPFLAGS) --timing -Wno-WIDTHTRUNC --top-module m2_copro \
+	  -CFLAGS "-O2" -O3 -LDFLAGS "-lz" --Mdir obj_tgp_replay -o Vm2_copro sim/tgp/tgp_replay.vlt \
+	  $(TGP_REPLAY_RTL) $(abspath sim/tgp/tb_tgp_replay.cpp)
+tgp_replay: obj_tgp_replay/Vm2_copro
+	./obj_tgp_replay/Vm2_copro $(TGPCAP) --lat $(TGP_LAT) --wlat $(TGP_LAT) $(TEST_ARGS)
+tgp_replay_baseline: obj_tgp_replay/Vm2_copro
+	mkdir -p $(TGPCAP_RUN)
+	./obj_tgp_replay/Vm2_copro $(TGPCAP) --lat $(TGP_LAT) --wlat $(TGP_LAT) --profile 0 \
+	  --dump-rtl $(TGPCAP_RUN)/rtl_baseline.bin || true
+tgp_replay_check: obj_tgp_replay/Vm2_copro
+	./obj_tgp_replay/Vm2_copro $(TGPCAP) --lat $(TGP_LAT) --wlat $(TGP_LAT) \
+	  --vs-rtl $(TGPCAP_RUN)/rtl_baseline.bin $(TEST_ARGS)
+tgp_capture:
+	rm -rf $(TGPCAP_RUN)/cfg $(TGPCAP_RUN)/nvram $(TGPCAP_RUN)/snap && mkdir -p $(TGPCAP) $(TGPCAP_RUN)
+	cd $(TGPCAP_RUN) && TGPCAP_DIR=$(abspath $(TGPCAP)) TGPCAP_START=5400 TGPCAP_FRAMES=30 \
+	  mame daytona93 -rompath $(HOME)/roms/Model2 -video none -sound none -nothrottle \
+	  -skip_gameinfo -cfg_directory cfg -nvram_directory nvram -snapshot_directory snap \
+	  -autoboot_script $(abspath sim/tgp/tgp_capture.lua) | grep TGPCAP
+	gzip -9f $(TGPCAP)/events.bin $(TGPCAP)/cdata.bin
+.PHONY: tgp_replay tgp_replay_baseline tgp_replay_check tgp_capture
+
+# R774: the ALU as the core builds it (SHORT=1), issued one op at a time.
+obj_mb86233_alu_short/Vmb86233_alu: $(TGP_PKG) $(TGP_FP) $(TGP)/mb86233_alu.sv sim/tgp/tb_mb86233_alu.cpp
+	$(VBUILD) --top-module mb86233_alu -GSHORT=1 -CFLAGS "-O2 -I../sim/tgp -DALU_SHORT" $(TGPFLAGS) \
+	  --Mdir obj_mb86233_alu_short -o Vmb86233_alu $(TGP_PKG) $(TGP_FP) $(TGP)/mb86233_alu.sv sim/tgp/tb_mb86233_alu.cpp
+test_mb86233_alu_short: obj_mb86233_alu_short/Vmb86233_alu
+	@echo "== test mb86233_alu (SHORT=1, serial)"
+	@./obj_mb86233_alu_short/Vmb86233_alu
 $(eval $(call TGP_UNIT,mb86233_regs,$(TGP_PKG) $(TGP)/mb86233_regs.sv))
 $(eval $(call TGP_UNIT,mb86233_mem,$(TGP)/mb86233_mem.sv))
 $(eval $(call TGP_UNIT,mb86233_dec,$(TGP)/mb86233_dec.sv))
@@ -1219,7 +1262,7 @@ test_mb86233_core: obj_mb86233_core/Vmb86233_core
 	@./obj_mb86233_core/Vmb86233_core
 
 .PHONY: test_tgp
-test_tgp: test_fp_mul test_fp_add test_fp_div test_mb86233_alu test_mb86233_agu \
+test_tgp: test_fp_mul test_fp_add test_fp_div test_mb86233_alu test_mb86233_alu_short test_mb86233_agu \
           test_mb86233_regs test_mb86233_mem test_mb86233_dec test_mb86233_xfer \
           test_mb86233_seq test_mb86233_core test_m2_geo_xform
 

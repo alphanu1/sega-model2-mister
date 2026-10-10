@@ -28485,3 +28485,63 @@ why fewer cars and less scenery runs faster: less TGP work. The TGP is the
 lever: our MB86234 core is a multi-cycle FSM (fetch, decode, operand reads,
 ALU wait, retire: ~5-11 cycles an instruction, FP latency not overlapped);
 Model 1's is the same design, so there is nothing to port.
+
+**R771-R774 -- THE TGP 2.3x FASTER, MEASURED ON A REPLAYED RACE, BIT-
+IDENTICAL.** R770 made the TGP the lever. Before touching it, a bench:
+`make tgp_replay` (sim/tgp/tb_tgp_replay.cpp, capture by
+sim/tgp/tgp_capture.lua in MAME 0.289, git-ignored under build/tgpcap/). 30
+race frames from 5400 (the "GO!" start, 40 cars): the program, data RAM,
+tables and every word across the TGP's boundary, replayed through m2_copro
+with the bench as an infinitely fast, causally exact i960. Against MAME:
+54,655 outputs, 15 differ, all NaN-vs-NaN encoding; 67,146 io reads exact;
+30 io writes differ in the sign of zero (ldif, below). `make
+tgp_replay_check` requires the RTL's whole result stream (192,746 words)
+IDENTICAL to a recorded baseline -- the test for a faster TGP.
+Baseline: 21.63 M clk_sys cycles, 1,935,951 instructions, CPI 11.17, ~721k
+cycles = 9.0 ms a frame at 80 MHz. S_ALU 43.5% of all cycles: every op with
+an ALU field, nop included, waited ALU_LAT + 1 = 6 cycles -- 1.08 M nops,
+30% of the TGP's time. Fetch, fetch-wait, decode and retire, 4 fixed cycles
+an instruction, another 36%. The command dispatch loop (pc 0x04c-0x057, 12
+instructions a command) was 41.7%.
+  * R771: an op that writes no D, no P and no ST (nop, and MAME's alu_pre
+    default 0x12/0x15/0x1c-0x1f) does not run the ALU. lab and ld/mov skip
+    S_ALU altogether; a transfer to D is already written in S_DST.
+    21.63 M -> 15.23 M, CPI 7.87.
+  * R772: the next word is read while the instruction executes (every state
+    after S_DECODE presents pc + 1). S_RETIRE loads ir and the decode from it
+    when the sequencer goes to pc + 1 (not a taken branch, not a held
+    repeat), and keeps them when an active rep re-runs the instruction.
+    -> 11.84 M, CPI 6.12.
+  * R773: an instruction retires in the state it finishes in -- ld/mov in
+    S_DST (register destination, no ALU op; not after a program-space
+    source), at S_DST_W's completion, or on the ALU's out_valid; lab in
+    S_LAB_WB. A branch, ldi, lipl or stm with nothing to read in S_ALU goes
+    from S_DECODE to S_RETIRE. `retire` is the new ret_now. -> 10.01 M, CPI
+    5.17.
+  * R774: mb86233_alu SHORT: the integer, shift and convert ops, fabd and
+    fned jump from stage 1 to the last stage and answer in 3 cycles, not 6.
+    Valid only for a caller that issues one op and waits (the core does);
+    the streaming ALU bench keeps SHORT = 0 and test_mb86233_alu_short runs
+    it serially and checks the latency (SHORT = 0 under that bench fails
+    1,120,000). -> 9.46 M, CPI 4.89: ~315k cycles = 3.9 ms a frame at 80 MHz.
+All four: tgp_replay_check IDENTICAL; test_mb86233_core (8,000-step lockstep)
+pass; test_mb86233_alu, _alu_short, _mem, _dec, _xfer, _seq, test_m2_geo_xform
+pass; test_m2_boot PASS. test_mb86233_regs fails 46,966 of 3,000,000 at HEAD
+too (rd=21, the input-FIFO register since 0e49c54): a stale model, not this.
+A trap found on the way: tb_mb86233_core's program memory answers in the
+SAME cycle, where the M10K answers the next; R773 presented pc + 1 in
+S_FETCH_W and only that bench broke. S_FETCH_W keeps pc.
+What is left, by state: S_DECODE 20.5%, S_ALU 21.3% (FP ops still 6), S_SRC
+15.3%, S_DST 13.7%, S_SRC_W 10.3%. The next steps are deeper: the decode
+pipelined into the previous instruction, operand reads issued from S_DECODE.
+New timing paths to watch at 80 MHz: seq_cond_passed and io_ack/mem_stall
+now reach the sequencer's in_valid and the decode registers' enable
+(pf_load); seq_pc + 1 reaches the program RAM address.
+Bench findings not acted on: (1) ldif (branch subtype 6) is a no-op here and
+in Model 1; MAME (case 6) loads a register from data memory when the
+condition passes -- true 180 times in 30 frames, leaving P at -0 where MAME
+has +0, written to the atan base (io 0x27, pc 0x7aa); no output differs in
+this window. (2) The game sends 18 `st.s` (16-bit) FIFO stores a frame;
+MAME pushes them zero-extended, our i960_lsu sends {2{half}} and m2_copro
+takes 32 bits -- they reach only the sincos base, harmless here. (3) MAME
+resets M to 1, mb86233_core to 0 -- not exercised.
