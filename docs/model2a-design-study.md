@@ -28853,3 +28853,18 @@ s929 -0.864, s930 hold -0.336, s932 stopped). Ben:
     no 3D, 0.0 fps -- the game stopped, as R777. s913 (75 MHz, 512 B icache,
     lock telemetry) ran ~100 min of attract without one. Whether coin / start
     is the trigger is asked.
+
+**R786 -- THE i960 INSTRUCTION CACHE BACK TO 512 B, FOR THE TEXEL PATH.** The
+3D draw is the limit (R780) and every texel lever costs ALM at 99% (R782's
+list). s927's fit by entity: emu 35,272 of 41,452; i960 7,788 (u_icache 378,
+of it the 8 KB tag RAM ctag 264), raster3d 8,036, geometry 6,022, sound
+board 4,454, TGP 2,473, ascal 2,008, audio_out 920 (IIR filter 432), the two
+OSDs 930, pll_hdmi_adj 479, ioz80 989. R768's 8 KB cache moved nothing on
+the board (R768, R770), and the CPU is no longer what the frame waits for.
+Ben approved: LINES 512 -> 32 (the pre-R768 size, which ran since R45; the
+valid-bit-in-tag design stays). test_i960_icache, test_i960_top, _irq,
+test_i960_rom, test_m2_boot PASS; Quartus parse clean. Held in reserve,
+Ben's call: the framework's audio IIR filter (432 ALM) has no switch
+upstream (Template_MiSTer sys/audio_out.sv instantiates it unconditionally),
+so dropping it would be our own patch to sys/, to be kept as a tracked
+patch file. Next with the room: 128-bit texel lines (R782's lever 4).

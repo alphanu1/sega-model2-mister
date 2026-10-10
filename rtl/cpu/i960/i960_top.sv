@@ -784,7 +784,11 @@ module i960_top (
   // many cycles; instruction fetch is ~30% of the i960's busy time in a menu
   // and a race (R767). The valid bits now live in the tag LUT-RAM, so size no
   // longer costs per-line logic (R693's 2 KB attempt: 190 -> 592 ALM).
-  i960_icache #(.LINES(512)) u_icache (
+  // R786: BACK TO 512 B (32 lines). The 8 KB cache changed nothing on the
+  // board (R768: the menus' trouble was the capture card, R770), the game
+  // now keeps up and the 3D draw is the limit (R780), and its tag RAM was
+  // ~264 ALM the texel path needs. The valid-bit-in-tag design stays.
+  i960_icache #(.LINES(32)) u_icache (
     .clk(clk), .rst_n(rst_n), .inval(1'b0),
     .req(ic_req), .req_demand(1'b1), .addr(fetch_addr[31:2]), .data(ic_data),
     .valid(ic_valid), .vaddr(ic_vaddr), .busy(ic_busy),
