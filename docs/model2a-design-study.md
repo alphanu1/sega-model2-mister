@@ -29429,3 +29429,20 @@ scripts looked only in daytona93/: R785's and this entry's first capture
 were the stale 18:06 file. Next: a lock-hunt build on current code
 (5bec24b + R777's trap and 0x185x-load records, 75/37.5; patch
 build/worktree_patches/lock-hunt-5bec24b.patch), left overnight.
+
+**R801 -- THE CRT STATE SHOWN BY THE MENU MASK, NOT WRITTEN BACK; R797
+WITHDRAWN.** R797's build (5efcc72 + R797 + R799, s951-s953) missed clk_sys
+by 1.17 / 0.94 / 0.70 ns at 41,412-41,466 ALM: status_set made hps_io's
+128-bit status_req (and its read-out mux) live, ~+240 registers on a full
+part. Ben (the tester has the CRT MRA working on s945): ship the label fix
+alone -- 5efcc72 + R799 is building (s954-s956).
+  * Model2.sv: the Video line is "H0O[42],Video,Native 24kHz,15kHz
+    interlaced" -- hidden when status_menumask[0] (crt_mra = game_id[7]) is
+    set -- and "h0O[42],Video,15kHz (CRT MRA),15kHz (CRT MRA)" is shown only
+    then, on the same bit. 15 kHz is status[42] | game_id[7] (R795). No
+    status write-back; status_menumask is a 16-bit read-only input.
+  * crt_mra is a wire declared ahead of hps_io and assigned after game_id,
+    so no forward reference reaches a port connection.
+lint_top clean; Quartus parses Model2.sv. Owed: the board (the menu-mask
+H/h prefixes are MiSTer's documented CONF_STR syntax, not used in this core
+before).

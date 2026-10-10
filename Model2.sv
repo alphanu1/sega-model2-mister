@@ -76,7 +76,11 @@ localparam CONF_STR = {
 	// game's rate), 15,733 Hz lines, all 384 lines as two fields of 192.
 	// R795: the [15kHz CRT] MRAs force 15 kHz interlaced whatever this says
 	// (a CRT owner cannot see a 24 kHz OSD to set it).
-	"O[42],Video,Native 24kHz,15kHz interlaced;",
+	// R801: and then this line is hidden (status_menumask[0], the CRT flag)
+	// and the next one -- the same bit, both values labelled 15 kHz -- is
+	// shown instead, so the OSD tells the truth without writing status back.
+	"H0O[42],Video,Native 24kHz,15kHz interlaced;",
+	"h0O[42],Video,15kHz (CRT MRA),15kHz (CRT MRA);",
 	// R783: the 15 kHz field's line count. 273.5 keeps the 15.73 kHz line;
 	// 262.5 is NTSC's count at a 15.10 kHz line, for sets that lose sync on
 	// 273.5. Game speed and picture are the same either way.
@@ -240,8 +244,8 @@ localparam CONF_STR = {
 wire        forced_scandoubler;
 wire  [1:0] buttons;
 wire [127:0] status;
-wire [127:0] crt_status_in;   // R797
-wire         crt_status_set;
+wire         crt_mra;   // R801: game_id[7], declared ahead of hps_io (assigned below)
+
 wire [10:0] ps2_key;
 
 // WIDE(1) IS NOT OPTIONAL. It makes ioctl_dout 16 bits and ioctl_addr advance by
@@ -274,7 +278,7 @@ hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
 	.forced_scandoubler(forced_scandoubler),
 	.buttons(buttons),
 	.status(status),
-	.status_in(crt_status_in), .status_set(crt_status_set),   // R797: the CRT MRA shows in the OSD
+	.status_menumask({15'd0, crt_mra}),   // R801: the CRT MRA's own Video line
 	.ps2_key(ps2_key),
 
 	.ioctl_download(ioctl_download),
@@ -2234,35 +2238,19 @@ always_ff @(posedge clk_sys or negedge mem_rst_n)   // cleared on PLL lock, as M
 // R795: bit 7 is the CRT MRA's flag ("Daytona USA ... [15kHz CRT].mra"
 // sends 80); bits 6:0 are the game.
 wire is_vcop = (game_id[6:0] == 7'd1);
+assign crt_mra = game_id[7];   // R801
 // R795: THE CRT MRA FORCES 15 kHz. A CRT owner cannot see a 24 kHz OSD to
 // switch it, so the "[15kHz CRT]" MRAs set game_id[7] and the core starts
 // in 15 kHz interlaced whatever O[42] holds; the normal MRAs leave it to the
 // OSD. (R793's MiSTer.ini detection, which needed a second sys/ patch, is
 // not used -- the MRA is the whole mechanism.) Quasi-static: game_id is set
 // once per load; vil_s crosses it as it crossed status[42].
-// R797: AND THE OSD SAYS SO. Ben: the CRT MRA booted 15 kHz but the menu
-// still read "Native 24kHz". Once the downloads are done, a CRT load with
-// O[42] clear asks hps_io to set it (status_set loads status_in into the
-// menu's copy); from the moment status[42] reads back set, the OSD alone
-// decides -- so Native chosen in the OSD afterwards means native, and what
-// the menu shows is what the core outputs. Until then the flag holds 15 kHz,
-// so the picture does not drop to 24 kHz while the request travels.
-reg  crt_asked, crt_seen, crt_set_r;
-always_ff @(posedge clk_sys or negedge mem_rst_n)
-	if (!mem_rst_n) begin
-		crt_asked <= 1'b0; crt_seen <= 1'b0; crt_set_r <= 1'b0;
-	end else begin
-		crt_set_r <= 1'b0;
-		if (game_id[7] && !ioctl_download && !crt_asked) begin
-			crt_asked <= 1'b1;
-			crt_set_r <= !status[42];
-		end
-		if (crt_asked && status[42]) crt_seen <= 1'b1;
-	end
-assign crt_status_in  = status | (128'd1 << 42);
-assign crt_status_set = crt_set_r;
+// R801: 15 kHz is the OSD bit or the CRT MRA's flag (R795). R797 wrote the
+// bit back through hps_io's status_set, which keeps its 128-bit status_req
+// live (~+240 registers) and cost the 80 MHz fit (s951-s953); the menu mask
+// above shows the CRT state instead, for 16 bits of read-only mux.
 reg  vid_il_r;
-always_ff @(posedge clk_sys) vid_il_r <= status[42] | (game_id[7] & ~crt_seen);
+always_ff @(posedge clk_sys) vid_il_r <= status[42] | game_id[7];
 assign vid_il_sel = vid_il_r;
 wire        cpu_ifetch;      // R724: the i960's request is an instruction fetch
 wire  [4:0] cpu_dbg_ts;      // R721: the i960's sequencer state, for telemetry
