@@ -29193,3 +29193,17 @@ drop out" item, open since the 20261008b release). Since that release:
 R752's walk fix, R784's luma table (windows were drawn with the wrong
 table), R789's texel path. Which one closed the windows is not isolated.
 The lock (R777, R785) is not seen on s939 so far -- not yet a cause found.
+
+**R795 -- THE CRT MRA ALONE SETS 15 kHz; R793's "AUTO" IS WITHDRAWN.** Ben:
+"if it's passed as a param to the core, Auto is not needed." Right: the CRT
+MRA's flag is the whole mechanism, and R793's MiSTer.ini detection cost a
+second sys/ patch to maintain for setups the CRT MRA already covers.
+  * Model2.sv: Video is O[42] again ("Native 24kHz / 15kHz interlaced",
+    native the default -- saved configs keep their meaning); 15 kHz is
+    status[42] | game_id[7]. No hps_io outputs are used beyond upstream's.
+  * sys/hps_io.sv reverted to upstream; docs/framework-patches/
+    hps-io-video-cfg.patch removed; the READMEs, THIRD_PARTY.md and the
+    release README's CRT section say "load the [15kHz CRT] MRA".
+  * The two [15kHz CRT] MRAs (R793) are unchanged but for their comment.
+R793's build (2a79949, s942-s944) was stopped mid-fit. lint_top clean;
+Quartus parses Model2.sv.

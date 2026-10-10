@@ -35,9 +35,9 @@
     <setname>daytona</setname>
     <rbf>Model2</rbf>
     <nvram index="2" size="16384"/>
-    <!-- 15 kHz CRT (study R793): the game-ID byte's bit 7 tells the core this
-         is a CRT, so OSD Video "Auto" (the default) starts in 15 kHz interlaced
-         even where the MiSTer.ini cannot say so. Bits 6:0 stay 0 (Daytona). -->
+    <!-- 15 kHz CRT (study R795): the game-ID byte's bit 7 tells the core this
+         is a CRT, and it starts in 15 kHz interlaced whatever the OSD's Video
+         setting says. Bits 6:0 stay 0 (Daytona). -->
     <rom index="4" md5="none">
         <part>80 00</part>
     </rom>

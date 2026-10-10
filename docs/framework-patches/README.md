@@ -7,18 +7,9 @@ Patches to the MiSTer framework (`sys/`, from
 actually needed. Each one is small and switchable by
 a macro, so after a framework update it can be re-applied with one command.
 
-**Applied:**
-
-- `audio-filter-disable.patch`, since 2026-10-10 (study R788), with
-  `MISTER_DISABLE_AUDIO_FILTER=1` in `Model2.qsf`.
-- `hps-io-video-cfg.patch`, since 2026-10-10 (study R793).
-
-After a framework update, re-apply both before building:
-
-```
-git apply docs/framework-patches/audio-filter-disable.patch
-git apply docs/framework-patches/hps-io-video-cfg.patch
-```
+**Applied:** `audio-filter-disable.patch`, since 2026-10-10 (study R788), with
+`MISTER_DISABLE_AUDIO_FILTER=1` in `Model2.qsf`. After a framework update,
+re-apply it before building.
 
 ## audio-filter-disable.patch
 
@@ -77,38 +68,3 @@ patch is three hunks and easy to redo by hand:
 
 Both are due before it ships in a release.
 
-## hps-io-video-cfg.patch
-
-**What it does.** It adds three outputs to `sys/hps_io.sv`: `cfg_csync`,
-`cfg_ypbpr` and `cfg_vga_scaler`. They carry the MiSTer.ini settings
-`composite_sync`, `ypbpr` and `vga_scaler`. `hps_io` already receives all
-three in its `cfg` word but exported only `forced_scandoubler` and
-`direct_video`. Nothing else changes, and a core that leaves the new outputs
-unconnected builds exactly as before. It costs no logic.
-
-**Why.** The core's OSD `Video` option defaults to **Auto**. Auto starts the
-core in 15 kHz interlaced when the setup looks like a CRT: `direct_video`,
-`composite_sync` or `ypbpr` set, and neither `forced_scandoubler` nor
-`vga_scaler` (study R793). Without this patch only `direct_video` users
-could be detected. A SCART or component user on the analog board would boot
-at 24 kHz, which their TV cannot show, and so could not see the OSD to
-change it.
-
-**How to apply** (from the repository root):
-
-```
-git apply docs/framework-patches/hps-io-video-cfg.patch
-```
-
-No macro is needed, because `Model2.sv` connects the outputs.
-
-**After a framework update:** if it no longer applies, the change is three
-`output` lines after `direct_video` in the port list and three `assign`s
-(`cfg[3]`, `cfg[5]`, `cfg[2]`) after `assign direct_video = cfg[10];`. If
-upstream ever exports these itself, drop the patch and connect upstream's
-ports.
-
-**Checked:** applies cleanly to the current `sys/`; Verilator lint of the
-whole core and the Quartus parse of both files.
-
-**Not checked:** a CRT on the board.

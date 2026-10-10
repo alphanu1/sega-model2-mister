@@ -128,16 +128,10 @@ The game's own video is 24 kHz, which a 15 kHz TV cannot show. The core has
 a 15 kHz interlaced mode for CRTs, at the game's own speed, with all 384
 lines shown as two fields.
 
-**It switches itself on.** The OSD `Video` setting defaults to **Auto**. Auto
-uses 15 kHz when your MiSTer is set up for a CRT: `direct_video=1`,
-`composite_sync=1` or `ypbpr=1` in `MiSTer.ini`, with `forced_scandoubler`
-and `vga_scaler` off. Otherwise it uses the native 24 kHz mode, as an HDMI
-setup will.
-
-**If your setup isn't detected**, pick the **`[15kHz CRT]`** version of the
-game from the MiSTer menu (for example
-`Daytona USA (Deluxe 93) [15kHz CRT].mra`). It starts in 15 kHz whatever
-`MiSTer.ini` says. From there you can set `Video` by hand in the OSD.
+**Load the `[15kHz CRT]` version of the game** from the MiSTer menu, for
+example `Daytona USA (Deluxe 93) [15kHz CRT].mra`. It starts the core in
+15 kHz straight away, so you never need to see the 24 kHz picture. With the
+normal MRA, set `Video` to `15kHz interlaced` in the OSD.
 
 **If your TV loses sync every few seconds**, set `15kHz lines` to
 **262.5 (15.1kHz)**. That gives the TV the line count it expects from NTSC

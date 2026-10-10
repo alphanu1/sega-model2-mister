@@ -48,8 +48,8 @@ recorded rather than referenced in place.
 
 | Copied | To | Note |
 |---|---|---|
-| `sys/` framework | `sys/` | Unmodified except `sys/audio_out.sv` (the audio-filter switch, R788) and `sys/hps_io.sv` (three video-setting outputs, R793) -- both from the patches below. GPL-2.0-**or-later**, so it is used here under GPL-3. This is the 6,630 ALM row in the budget (§5.5), measured via M2-E. |
-| `sys/` patches | `docs/framework-patches/` | Macro-switched patches for FPGA room, to re-apply after a framework update: `audio-filter-disable.patch` (`MISTER_DISABLE_AUDIO_FILTER`, ~430 ALM) -- APPLIED (R788), the macro set in `Model2.qsf`; `hps-io-video-cfg.patch` (exports composite_sync / ypbpr / vga_scaler for Video Auto) -- APPLIED (R793). See the README there. |
+| `sys/` framework | `sys/` | Unmodified except `sys/audio_out.sv` (the audio-filter switch below, applied R788). GPL-2.0-**or-later**, so it is used here under GPL-3. This is the 6,630 ALM row in the budget (§5.5), measured via M2-E. |
+| `sys/` patches | `docs/framework-patches/` | Macro-switched patches for FPGA room, to re-apply after a framework update: `audio-filter-disable.patch` (`MISTER_DISABLE_AUDIO_FILTER`, ~430 ALM) -- APPLIED (R788), the macro set in `Model2.qsf` See the README there. |
 | `Template.qsf`, `Template.qpf` | `Model2.qsf`, `Model2.qpf` | Renamed only. `sys/sys.tcl` supplies FAMILY and DEVICE (5CSEBA6U23I7), and `PRE_FLOW_SCRIPT_FILE` generates `build_id.v` — which `quartus_map` alone does not run, so a direct map invocation needs it generated first. |
 | `Template.sv` structure | `Model2.sv` | Port list via `sys/emu_ports.vh`; the unused-output assignments and `hps_io` instantiation follow the template. The core logic is ours. |
 

@@ -96,13 +96,10 @@ session**: `build_id.v` is stamped per build, so two bitstreams built on
 different days differ by more than the seed, and that mistake invalidated a
 whole measurement once.
 
-### The MiSTer framework carries two patches
+### The MiSTer framework carries one patch
 
-`sys/` is MiSTer-devel's framework, unmodified except for **two small
-patches** in `docs/framework-patches/`. The second,
-`hps-io-video-cfg.patch`, exports three MiSTer.ini video settings so the
-`Video` option's **Auto** default can detect a CRT (study R793). The first,
-`audio-filter-disable.patch`, is described below. It turns off
+`sys/` is MiSTer-devel's framework, unmodified except for **one switchable
+patch**, `docs/framework-patches/audio-filter-disable.patch`. It turns off
 MiSTer's built-in audio filter (about 430 ALM) when
 `MISTER_DISABLE_AUDIO_FILTER` is set, and `Model2.qsf` sets it. The design
 is about 99% of the FPGA, and that room goes to the 3D renderer's texture
@@ -111,19 +108,16 @@ presets do nothing on this core. **This is meant to be temporary:** if room
 can be freed elsewhere, the filter goes back on (drop the macro from
 `Model2.qsf`; the patched file then builds as upstream).
 
-**When updating `sys/` from Template_MiSTer, re-apply both:**
+**When updating `sys/` from Template_MiSTer, re-apply it:**
 
 ```
 git apply docs/framework-patches/audio-filter-disable.patch
-git apply docs/framework-patches/hps-io-video-cfg.patch
 ```
 
-If either no longer applies cleanly, `docs/framework-patches/README.md` describes
-the few lines to change by hand. Without the audio patch the build still
+If it no longer applies cleanly, `docs/framework-patches/README.md` describes
+the three-line change to make by hand. Without the patch the build still
 compiles, because the macro is then unused, but the filter comes back and the
-design loses that room. Without the hps_io patch the build **fails**:
-`Model2.sv` connects `cfg_csync`, `cfg_ypbpr` and `cfg_vga_scaler`, which
-upstream `hps_io` does not have.
+design loses that room.
 
 ## Testing
 

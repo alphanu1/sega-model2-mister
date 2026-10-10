@@ -74,11 +74,9 @@ localparam CONF_STR = {
 	"O[122:121],Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
 	// R682: 15 kHz INTERLACED for a 15 kHz CRT -- 57.52 fields a second (the
 	// game's rate), 15,733 Hz lines, all 384 lines as two fields of 192.
-	// R793: Auto first, the default -- 15 kHz interlaced when the MiSTer.ini
-	// looks like a CRT (direct_video, composite_sync or ypbpr, without
-	// forced_scandoubler or vga_scaler) or the MRA says CRT; else native.
-	// Replaces O[42] (a CRT owner could not see the OSD to set it).
-	"O[47:46],Video,Auto,Native 24kHz,15kHz interlaced;",
+	// R795: the [15kHz CRT] MRAs force 15 kHz interlaced whatever this says
+	// (a CRT owner cannot see a 24 kHz OSD to set it).
+	"O[42],Video,Native 24kHz,15kHz interlaced;",
 	// R783: the 15 kHz field's line count. 273.5 keeps the 15.73 kHz line;
 	// 262.5 is NTSC's count at a 15.10 kHz line, for sets that lose sync on
 	// 273.5. Game speed and picture are the same either way.
@@ -238,7 +236,6 @@ localparam CONF_STR = {
 };
 
 wire        forced_scandoubler;
-wire        direct_video, cfg_csync, cfg_ypbpr, cfg_vga_scaler;   // R793: MiSTer.ini, via hps_io
 wire  [1:0] buttons;
 wire [127:0] status;
 wire [10:0] ps2_key;
@@ -271,10 +268,6 @@ hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
 	.EXT_BUS(),
 	.gamma_bus(),
 	.forced_scandoubler(forced_scandoubler),
-	// R793: the rest of the video setup (docs/framework-patches/
-	// hps-io-video-cfg.patch exports the last three).
-	.direct_video(direct_video), .cfg_csync(cfg_csync), .cfg_ypbpr(cfg_ypbpr),
-	.cfg_vga_scaler(cfg_vga_scaler),
 	.buttons(buttons),
 	.status(status),
 	.ps2_key(ps2_key),
@@ -415,7 +408,7 @@ localparam int unsigned CEI_DEN = 5300;
 localparam int unsigned CEN_NUM = 861;
 localparam int unsigned CEN_DEN = 8692;
 reg [2:0]  vil_s;                         // the OSD bit, into clk_mem
-wire       vid_il_sel;                    // R793: Auto / Native / 15 kHz, decided on clk_sys below
+wire       vid_il_sel;                    // R795: the OSD bit or the CRT MRA's flag, on clk_sys below
 always @(posedge clk_mem) vil_s <= {vil_s[1:0], vid_il_sel};
 wire       vid_il = vil_s[2];
 reg [2:0]  vnl_s;                         // R783: the line-count bit, into clk_mem
@@ -2228,20 +2221,17 @@ logic [7:0] game_id;
 always_ff @(posedge clk_sys or negedge mem_rst_n)   // cleared on PLL lock, as Model 1 does
 	if (!mem_rst_n) game_id <= 8'd0;
 	else if (ioctl_download && ioctl_wr && (ioctl_index == GAMEID_INDEX)) game_id <= ioctl_dout[7:0];
-// R793: bit 7 is the CRT MRA's flag ("Daytona USA ... [15kHz CRT].mra"
+// R795: bit 7 is the CRT MRA's flag ("Daytona USA ... [15kHz CRT].mra"
 // sends 80); bits 6:0 are the game.
 wire is_vcop = (game_id[6:0] == 7'd1);
-// R793: VIDEO "AUTO". A CRT owner cannot see a 24 kHz OSD to switch it, so
-// the core picks 15 kHz interlaced itself when the setup says CRT: the CRT
-// MRA's flag, or a MiSTer.ini with direct_video, composite_sync or ypbpr
-// and neither forced_scandoubler (31 kHz wanted on the analog port) nor
-// vga_scaler (the analog port shows the scaler's picture). An HDMI-only
-// setup sets none of those and stays native. Quasi-static: the ini bits
-// change only at a core load, and vil_s crosses it as it crossed status[42].
-wire crt_ini = (direct_video | cfg_csync | cfg_ypbpr) & ~forced_scandoubler & ~cfg_vga_scaler;
+// R795: THE CRT MRA FORCES 15 kHz. A CRT owner cannot see a 24 kHz OSD to
+// switch it, so the "[15kHz CRT]" MRAs set game_id[7] and the core starts
+// in 15 kHz interlaced whatever O[42] holds; the normal MRAs leave it to the
+// OSD. (R793's MiSTer.ini detection, which needed a second sys/ patch, is
+// not used -- the MRA is the whole mechanism.) Quasi-static: game_id is set
+// once per load; vil_s crosses it as it crossed status[42].
 reg  vid_il_r;
-always_ff @(posedge clk_sys)
-	vid_il_r <= (status[47:46] == 2'd0) ? (game_id[7] | crt_ini) : (status[47:46] == 2'd2);
+always_ff @(posedge clk_sys) vid_il_r <= status[42] | game_id[7];
 assign vid_il_sel = vid_il_r;
 wire        cpu_ifetch;      // R724: the i960's request is an instruction fetch
 wire  [4:0] cpu_dbg_ts;      // R721: the i960's sequencer state, for telemetry
