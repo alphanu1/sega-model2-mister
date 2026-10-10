@@ -29416,3 +29416,16 @@ fl_s / fl_h registers -> the same 2:1 -> the read -> the M10K's write data.
 Writes are registered.
 
 *Not verified:* the fit and its timing; the board.
+
+**R800 -- THE LOCK ON s945, 45-60 MINUTES INTO ATTRACT.** s945 (5efcc72,
+80/40), Daytona Revision A MRA, attract left running: the 3D froze on the
+"V.R." chase view at ~45-60 min, CREDIT 0/1 (no coin), 0.0 fps; a core reset
+clears it (Ben). So it is not coin- or start-triggered (R785's CREDITS 2/3
+was coincidence or irrelevant) and it survives R786-R791. s939 ran 79 min
+and s913 ~100 min without one -- rare and random, needing a long unattended
+run under telemetry. MiSTer now writes screenshots per set name
+(screenshots/daytona/ for Revision A, daytona93/ for Deluxe), and the soak
+scripts looked only in daytona93/: R785's and this entry's first capture
+were the stale 18:06 file. Next: a lock-hunt build on current code
+(5bec24b + R777's trap and 0x185x-load records, 75/37.5; patch
+build/worktree_patches/lock-hunt-5bec24b.patch), left overnight.
