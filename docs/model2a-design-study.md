@@ -28879,3 +28879,19 @@ presets have no effect on this core. sys/ is otherwise unmodified;
 THIRD_PARTY.md and the README there say so, and how to re-apply it after a
 framework update. lint_top clean; Quartus parses sys/audio_out.sv with the
 macro. Owed: the fit's ALM, and the sound on the board.
+R786 + R788 on the fitter: d8c2457 (R784 + R786 + R788) at 80/40 -- 40,812 /
+40,756 / 40,920 ALM (97-98%) against s933-s935's 41,442-41,486 (R784 alone):
+~620 ALM freed; no IIR_filter in the map. s936 closes: clk_sys +0.215,
+clk_mem +0.738, holds >= +0.141, HDMI -0.304; s937 clk_sys +0.494 but HDMI
+-0.716; s938 clk_sys -0.105. Two of three seeds close where the last six
+sweeps closed one in three or none. RBF (s936)
+ee54bd91d4c477d446e384a808df7e93. R784 alone (8d03e84): s933 -0.682, s934
+-0.803, s935 +0.036 with HDMI -1.088 -- not offered.
+R787 (128-bit texel lines) built in sm2-builds/sm2-tl128-99386df, not merged:
+every texel answer identical (r57/r66/apk/rpk/f2200, both memory models;
+test_m2_texel_bl8 200,000 / 0; m2_sdram with 8-word texel bursts 2,111,407 /
+0, all 11 ports 8-word 3,304,967 / 0); line reads -24..-39%, draw at 80 MHz
+-1..-2% idle, -7..-11% contended (apk 22.27 -> 19.73 ms, rpk 20.36 ->
+18.40); +236 ALM pre-placement. Against R628's four miss slots (-18..-26%
+contended with R782, +637 ALM measured) -- the room freed holds one, not
+both. Ben's call.
