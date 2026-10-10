@@ -198,6 +198,13 @@ always @(posedge clk, posedge reset) begin
 end
 
 wire [15:0] acl, acr;
+`ifdef MISTER_DISABLE_AUDIO_FILTER
+// sega-model2-mister: the MiSTer audio filter (IIR, ~430 ALM) removed for
+// FPGA room. The filter's input passes through unchanged; the DC blocker and
+// mixer below are untouched. See docs/framework-patches/README.md.
+assign acl = {~is_signed ^ cl[15], cl[14:0]};
+assign acr = {~is_signed ^ cr[15], cr[14:0]};
+`else
 IIR_filter #(.use_params(0)) IIR_filter
 (
 	.clk(clk),
@@ -219,6 +226,7 @@ IIR_filter #(.use_params(0)) IIR_filter
 	.output_l(acl),
 	.output_r(acr)
 );
+`endif
 
 wire [15:0] adl;
 DC_blocker dcb_l

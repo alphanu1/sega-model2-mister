@@ -28868,3 +28868,14 @@ Ben's call: the framework's audio IIR filter (432 ALM) has no switch
 upstream (Template_MiSTer sys/audio_out.sv instantiates it unconditionally),
 so dropping it would be our own patch to sys/, to be kept as a tracked
 patch file. Next with the room: 128-bit texel lines (R782's lever 4).
+
+**R788 -- THE FRAMEWORK'S AUDIO FILTER SWITCHED OFF, ~430 ALM FOR THE TEXEL
+PATH.** Ben approved (R786's reserve). docs/framework-patches/audio-filter-
+disable.patch applied to sys/audio_out.sv: under MISTER_DISABLE_AUDIO_FILTER
+(now set in Model2.qsf) the IIR filter (432 ALM in s927) is not built and
+its input -- {~is_signed ^ c[15], c[14:0]}, the same signed 16-bit word --
+goes straight to the DC blockers and mixer. The MiSTer menu's audio filter
+presets have no effect on this core. sys/ is otherwise unmodified;
+THIRD_PARTY.md and the README there say so, and how to re-apply it after a
+framework update. lint_top clean; Quartus parses sys/audio_out.sv with the
+macro. Owed: the fit's ALM, and the sound on the board.

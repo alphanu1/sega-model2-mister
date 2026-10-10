@@ -6,7 +6,9 @@ Patches to the MiSTer framework (`sys/`, from
 when the room it frees is actually needed. Each one is small and switchable by
 a macro, so after a framework update it can be re-applied with one command.
 
-Nothing in this folder is applied today.
+**Applied:** `audio-filter-disable.patch`, since 2026-10-10 (study R788), with
+`MISTER_DISABLE_AUDIO_FILTER=1` in `Model2.qsf`. After a framework update,
+re-apply it before building.
 
 ## audio-filter-disable.patch
 
