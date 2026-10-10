@@ -29494,3 +29494,37 @@ R805, Ben: on Deluxe '93 the lock comes at a different fixed place -- the
 attract backdrop (blue, AM2 logo; s931's capture) -- so each set locks at its
 own point in attract: a transition or mode change is the likelier trigger
 than steady traffic.
+
+**R806 -- NO MEMORY-SIDE FAULT FOUND; THE TRAP ADDRESSES WERE THE WRONG SET'S;
+R750 DOES NOT PIN r5.** A stress bench (sm2-builds/sm2-lockbench-e6af63c, not
+merged: sim/mem/m2_lockbench_harness.sv, tb_m2_lockbench.cpp, `make
+test_m2_lockbench`): the real m2_sdram (13 ports, Model2's PRI, 8-word texel
+reads with p_lo), m2_sdram_cdc (Model2's FAST mask), m2_wr_arb and
+m2_cpu_bridge (FAST_ACK 0 and 1) on port 1, the device model with its timing
+checks; the i960 side driven as i960_top drives the bus, every read checked
+against a byte shadow, written regions swept twice at the end; every other
+port a checked generator at full rate. 27 runs x ~306 M clk_mem cycles
+(100/80/40, 100/75/37.5, random phases, +-200-300 ps jitter, 60-95 MHz,
+texels off, CPU alone, back-to-back) plus 16 scene-change block-copy runs:
+0 data errors, 0 protocol errors, 0 monitor hits, 0 device violations.
+Planted faults (a row comparator ignoring high bits, a store skipping the
+data-cache invalidate, level-for-toggle completion in the crossing) are
+caught. Not seen by it: the real i960 core; the clk_sys -> clk_mem paths cut
+by set_clock_groups -asynchronous (unconstrained on hardware).
+CORRECTIONS. (1) R748/R750's addresses are daytona93's (epr-16530a/16531a:
+dispatcher 0x183C, task load 0x185C, callx 0x1860, two-word ld at 0x1864,
+operand 0x1868). Revision A (epr-16722a/16723a, s945's set) has them at
+0x1904 / 0x1924 (ld r5,12(g13)) / 0x1928 (callx) / 0x192C (two-word ld,
+operand 0x1930). (2) dbg_rip is loc[R_RIP] (i960_regs.sv:307) -- r2 of the
+current frame, 0x1864 after ANY task returns to the dispatcher -- so "trap at
+0x1868, RIP 0x1864" fits a wrong instruction word or length at 0x1864 after
+the return, or a return to 0x1868, as well as a bad r5. In both sets the trap
+is at the two-word instruction's operand after callx: return point + 4.
+MAME 0.289, 10 min of attract each: the texture sheets are re-uploaded every
+3,167 frames (~55 s, 524,288 stores over 20 frames, Textures Off or not);
+scene starts rewrite 135-170 task pointers in a frame (all 32-bit stores;
+task code in the 0x220000 ROM mirror); Revision A's V.R. demo runs copro
+functions 0x2A/0x30/0x36 in 99.9% of its frames (20-37% elsewhere).
+Next: a lock-hunt build that records the PREVIOUS instruction (IP, word,
+length) at the trap, the task load for both sets, and the last store to that
+task record.
