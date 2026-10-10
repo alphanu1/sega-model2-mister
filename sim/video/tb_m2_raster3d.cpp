@@ -800,24 +800,36 @@ int main(int argc, char **argv) {
       return r;
     };
     auto mf16 = [](double x) -> uint16_t { union { float f; uint32_t b; } u; u.f = (float)x; return (uint16_t)(((u.b >> 23) & 0xff) << 8 | ((u.b >> 15) & 0xff)); };
-    auto wide = [](double pu) -> uint32_t { if (!(pu >= 2.0)) return 0; double w = std::floor(pu / 2.0); return w > 32767 ? 32767u : (uint32_t)w; };
+    // R791: m2_geometry rounds u, v to the NEAREST quarter (half up); the R609
+    // offset is taken from the truncated quarter, which is what it compares
+    auto wide = [](double pu) -> uint32_t { if (!(pu >= 1.0)) return 0; double w = std::floor(pu / 2.0 + 0.5); return w > 32767 ? 32767u : (uint32_t)w; };
+    auto widet = [](double pu) -> uint32_t { if (!(pu >= 2.0)) return 0; double w = std::floor(pu / 2.0); return w > 32767 ? 32767u : (uint32_t)w; };
     long nq = 0, nq_refused = 0;
     auto push_quad = [&](const P &p, int a, int b, int c, int e, bool last) {
       const int ix[4] = {a, b, c, e};
       int32_t X[4], Y[4]; uint16_t OZ[4]; uint32_t U[4], Vv[4];
-      // R626: M2_R3D_HWXY takes the vertex as the hardware does -- trunc(x),
-      // m2_geo_project's fp_to_int -- and M2_R3D_FRAC adds the quarter pixel
-      // below it (the low two bits of trunc(4x), 0 for x < 0); build with FRB=2
-      static const bool HWXY = std::getenv("M2_R3D_HWXY") || std::getenv("M2_R3D_FRAC");
+      // R626: M2_R3D_HWXY takes the vertex as the hardware did before R756 --
+      // trunc(x), and no quarter. R791: M2_R3D_FRAC is the projector as it
+      // is NOW (R756): q = round(4x) half away from zero, the pixel q >> 2 and
+      // the quarter q & 3, negative x included; build with FRB=2. (It was the
+      // low two bits of trunc(4x), 0 for x < 0, which R756 replaced.)
+      static const bool HWXY = std::getenv("M2_R3D_HWXY") != nullptr;
       static const bool FRAC = std::getenv("M2_R3D_FRAC") != nullptr;
       uint32_t frac = 0;
+      uint32_t Ut[4], Vt[4];
       for (int k = 0; k < 4; k++) {
         const V &v = p.v[ix[k]];
-        if (HWXY) {
+        Ut[k] = widet(v.pu); Vt[k] = widet(v.pv);
+        if (FRAC) {
+          auto q4 = [](double c) -> int32_t {
+            const int64_t a = (int64_t)std::trunc(8.0 * std::fabs(c)); const int32_t m = (int32_t)((a + 1) >> 1);
+            return c < 0 ? -m : m;
+          };
+          const int32_t qx = q4(v.x), qy = q4(v.y);
+          X[k] = qx >> 2; Y[k] = qy >> 2;
+          frac |= ((uint32_t(qy & 3) << 2) | uint32_t(qx & 3)) << (4 * k);
+        } else if (HWXY) {
           X[k] = (int32_t)std::trunc(v.x); Y[k] = (int32_t)std::trunc(v.y);
-          const uint32_t fx = (FRAC && v.x >= 0) ? (uint32_t)(int64_t)std::trunc(v.x * 4.0) & 3u : 0u;
-          const uint32_t fy = (FRAC && v.y >= 0) ? (uint32_t)(int64_t)std::trunc(v.y * 4.0) & 3u : 0u;
-          frac |= ((fy << 2) | fx) << (4 * k);
         } else {
           X[k] = (int32_t)std::lround(v.x); Y[k] = (int32_t)std::lround(v.y);
         }
@@ -825,8 +837,8 @@ int main(int argc, char **argv) {
       }
       // R609: move by a whole number of TWICE the texture's size
       const uint32_t uper = (256u << (p.h0 & 7)) - 1, vper = (256u << ((p.h0 >> 3) & 7)) - 1;
-      uint32_t um = std::min(std::min(U[0], U[1]), std::min(U[2], U[3])) & ~uper & 0x7fff;
-      uint32_t vm = std::min(std::min(Vv[0], Vv[1]), std::min(Vv[2], Vv[3])) & ~vper & 0x7fff;
+      uint32_t um = std::min(std::min(Ut[0], Ut[1]), std::min(Ut[2], Ut[3])) & ~uper & 0x7fff;   // R791: truncated
+      uint32_t vm = std::min(std::min(Vt[0], Vt[1]), std::min(Vt[2], Vt[3])) & ~vper & 0x7fff;
       auto sat13 = [](uint32_t x) { return x > 8191 ? 8191u : x; };
       const uint32_t h0 = p.h0, h1 = p.h1, h2 = p.h2;
       const uint32_t tex = ((h0 >> 14) & 1) | ((h0 & 7) << 1) | (((h0 >> 3) & 7) << 4) | (((h0 >> 6) & 1) << 7)

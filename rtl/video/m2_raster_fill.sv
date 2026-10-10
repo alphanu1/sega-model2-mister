@@ -106,7 +106,24 @@ module m2_raster_fill #(
   // (frame 1000: 59 pixels of row 212 to the wrong one; 1.3-3.1% of opaque
   // pixels across frames 1000/4000/9000). 1 walks the edges on the quarter-
   // pixel vertices (FRB 2, which it requires) by MAME's rule. 0 is Model 1.
-  parameter bit M2COV = 1'b0
+  parameter bit M2COV = 1'b0,
+  // R791: FRACTION BITS OF u/z AND v/z. qu/qv held u/z as a 13-bit INTEGER
+  // of quarter-texels, (u * ooz) >> 15 truncated, and one unit of that is
+  // 2^15 / ooz quarter-texels at a pixel -- at the far corner of a road
+  // polygon 5.7x deeper than its near one (attract, MAME frame 8780), 1.4 to
+  // 2.8 TEXELS a unit. The plane through the truncated corners tilts the near
+  // end of the road by a fraction of a texel, which at ~2.6 pixels a texel is
+  // several pixels -- and the residue is new every frame, so the road's
+  // texture judders (measured on 24 consecutive MAME frames: 6.8 px mean
+  // displacement, 2.6 px mean frame-to-frame jump; 1.7 px / 0.8 px at 4).
+  // UZF carries u/z and v/z with this many more bits, in registers: qu/qv are
+  // 13 + UZF wide. The gradients come out of the same divide in the scaled
+  // units, so they gain UZF fraction bits too (8.8 was R286's choice, sized in
+  // TEXELS -- the 2^15 / ooz factor and the magnification were not in it).
+  // The u/v span values are (u/z) << 18 for every UZF: 18 - UZF fraction bits
+  // over 13 + UZF integer ones, so a 32-bit signed value always holds them.
+  // 0 is the old precision (the representation differs; the values do not).
+  parameter int unsigned UZF = 4
 ) (
   input  logic               clk,
   input  logic               rst_n,
@@ -145,10 +162,12 @@ module m2_raster_fill #(
   output logic signed [15:0] span_x1,
   output logic [23:0]        span_col,
   output logic               span_moire,
-  // R274: the span's texture, as a starting coordinate and a per-pixel step,
-  // both 16.16 in texels. The consumer walks u += span_dudx a pixel.
+  // R274: the span's texture, as a starting coordinate and a per-pixel step.
+  // R791: u/z and v/z (quarter-texels, scaled as below) times 2^18: (13 +
+  // UZF).(18 - UZF) in units of 2^-UZF. The consumer walks u += span_dudx.
   output logic signed [31:0] span_u, span_v,
-  // 8.8 texels a pixel; the span walk shifts it up to its own 16.16.
+  // 16.8 in units of 2^-UZF of u/z; the span walk shifts it up to its own
+  // (18 - UZF) fraction bits.
   output logic signed [23:0] span_dudx, span_dvdx,     // R618: 16.8, was 8.8
   // R337: the perspective span. u and v above are u/z and v/z now; these carry
   // 1/z and its gradient, and `span_oshift` is the per-quad scale that
@@ -244,6 +263,8 @@ module m2_raster_fill #(
   endfunction
   localparam logic signed [8:0] NET0 = (FRB == 0) ? 9'sd9 : 9'sd11;   // 8.8, and the 4 undone
   localparam int unsigned BPS = (FRB == 0) ? 8 : 6;
+  // R791: the same products into the u/v planes' UVS fraction bits
+  localparam int unsigned BPS_UV = BPS + (18 - UZF) - 16;
   logic signed [15:0] sy [0:3];
   logic [23:0]        col;
   logic               moire;
@@ -313,7 +334,11 @@ module m2_raster_fill #(
   // R337: AFTER NORMALISATION qu AND qv HOLD u/z AND v/z, not u and v. The raw
   // coordinate is never wanted again, so reusing these arrays costs nothing
   // where keeping both would be ~200 ALM of registers.
-  logic [12:0]        qu [0:3], qv [0:3];
+  // R791: 13 + UZF bits once rewritten as u/z (the raw u in the low 13 first).
+  localparam int unsigned UW  = 13 + UZF;
+  localparam int unsigned UW1 = UW + 1;            // a signed difference of two
+  localparam int unsigned UVS = 18 - UZF;          // the u/v plane values' fraction bits
+  logic [UW-1:0]      qu [0:3], qv [0:3];
   // 1/z on a scale common to the quad: the largest of the four fills bit 15.
   logic [15:0]        qoz [0:3];
   logic [1:0]         oz_i;              // which vertex the normaliser is on
@@ -417,13 +442,13 @@ module m2_raster_fill #(
   wire signed [15:0] pf_ay = p4(sy[fb], sf[fb][3:2]) - p4(sy[fa], sf[fa][3:2]);
   wire signed [15:0] pf_bx = p4(sx[fc], sf[fc][1:0]) - p4(sx[fa], sf[fa][1:0]);
   wire signed [15:0] pf_by = p4(sy[fc], sf[fc][3:2]) - p4(sy[fa], sf[fa][3:2]);
-  wire signed [15:0] pf_u1 = 16'({3'd0, qu[fb]}) - 16'({3'd0, qu[fa]});
-  wire signed [15:0] pf_u2 = 16'({3'd0, qu[fc]}) - 16'({3'd0, qu[fa]});
-  wire signed [15:0] pf_v1 = 16'({3'd0, qv[fb]}) - 16'({3'd0, qv[fa]});
+  wire signed [UW:0] pf_u1 = UW1'({1'b0, qu[fb]}) - UW1'({1'b0, qu[fa]});
+  wire signed [UW:0] pf_u2 = UW1'({1'b0, qu[fc]}) - UW1'({1'b0, qu[fa]});
+  wire signed [UW:0] pf_v1 = UW1'({1'b0, qv[fb]}) - UW1'({1'b0, qv[fa]});
   // R337: 1/z's, which fit 16-bit signed because oz_norm caps them at bit 14.
   wire signed [15:0] pf_o1 = 16'(qoz[fb]) - 16'(qoz[fa]);
   wire signed [15:0] pf_o2 = 16'(qoz[fc]) - 16'(qoz[fa]);
-  wire signed [15:0] pf_v2 = 16'({3'd0, qv[fc]}) - 16'({3'd0, qv[fa]});
+  wire signed [UW:0] pf_v2 = UW1'({1'b0, qv[fc]}) - UW1'({1'b0, qv[fa]});
 
   // R638: THE SCREEN DIFFERENCES, REGISTERED FOR THE NUMERATORS. R626's
   // quarter-pixel positions put p4() and the fb/fc select in front of the
@@ -443,7 +468,9 @@ module m2_raster_fill #(
   // R727: and the texture differences, for the same reason (s752: qu -> nxu
   // -0.519 at 75 MHz). Same argument: qu/qv/qoz last change in the final
   // S_OZ cycle and pf_second two states before S_PF_N reads these.
-  logic signed [15:0] pr_u1, pr_u2, pr_v1, pr_v2, pr_o1, pr_o2;
+  // R791: UW + 1 bits signed (18 at UZF 4) -- still an 18x19 DSP operand.
+  logic signed [UW:0] pr_u1, pr_u2, pr_v1, pr_v2;
+  logic signed [15:0] pr_o1, pr_o2;
   always_ff @(posedge clk) begin
     pr_ax <= pf_ax; pr_ay <= pf_ay; pr_bx <= pf_bx; pr_by <= pf_by;
     pr_u1 <= pf_u1; pr_u2 <= pf_u2; pr_v1 <= pf_v1; pr_v2 <= pf_v2;
@@ -585,10 +612,10 @@ module m2_raster_fill #(
   logic               oz_w_v, oz_last, b_prod;
   logic [1:0]         oz_w;
   logic [15:0]        oz_n;
-  logic [12:0]        oz_u, oz_v;
+  logic [12:0]        oz_u, oz_v;   // the raw u, v: 13 bits
   logic signed [31:0] bp_ux, bp_uy, bp_vx, bp_vy, bp_ox, bp_oy;
   logic signed [31:0] bh_u, bh_v, bh_o;   // R616: half a pixel of each plane, both axes
-  logic [12:0]        bq_u, bq_v;
+  logic [UW-1:0]      bq_u, bq_v;   // R791
   logic [15:0]        bq_o;
   logic         [2:0] nrm_wait;   // R466/R599/R731: five cycles, the recip takes five
   logic [1:0] pfn_wait;   // R461/R594: S_PF_N takes three cycles: abs, encode, shift
@@ -749,8 +776,8 @@ module m2_raster_fill #(
   logic [23:0]        s1_col;
   wire                s1_adv  = s1_valid && (!span_valid || span_ready);
   wire                s1_free = !s1_valid || s1_adv;
-  wire signed [31:0] emit_u  = uv_at(base_u, dudx, dudy, s1_cl, s1_y);
-  wire signed [31:0] emit_v  = uv_at(base_v, dvdx, dvdy, s1_cl, s1_y);
+  wire signed [31:0] emit_u  = uv_at_uv(base_u, dudx, dudy, s1_cl, s1_y);   // R791
+  wire signed [31:0] emit_v  = uv_at_uv(base_v, dvdx, dvdy, s1_cl, s1_y);
   wire signed [31:0] emit_o  = uv_at(base_o, dodx, dody, s1_cl, s1_y);   // R337
 
   logic               pf_a, pf_b;        // the two plane-fit divides, back
@@ -776,6 +803,20 @@ module m2_raster_fill #(
       gxp = gx * x;
       gyp = gy * y;
       uv_at = base + (gxp <<< 8) + (gyp <<< 8);
+    end
+  endfunction
+  // R791: the same for u/z and v/z, whose values carry UVS fraction bits
+  // rather than 16 -- the 8-fraction-bit products shift up by UVS - 8.
+  function automatic logic signed [31:0] uv_at_uv(input logic signed [31:0] base,
+                                                  input logic signed [23:0] gx,
+                                                  input logic signed [23:0] gy,
+                                                  input logic signed [15:0] x,
+                                                  input logic signed [15:0] y);
+    logic signed [31:0] gxp, gyp;
+    begin
+      gxp = gx * x;
+      gyp = gy * y;
+      uv_at_uv = base + (gxp <<< (UVS - 8)) + (gyp <<< (UVS - 8));
     end
   endfunction
   logic [2:0]         ps1m1, ps2p1;
@@ -1169,8 +1210,8 @@ module m2_raster_fill #(
           // R566: stage one -- select vertex oz_i and normalise its 1/z.
           if (!oz_last) begin
             oz_n   <= oz_norm(qoz[oz_i], oz_emax);
-            oz_u   <= qu[oz_i];
-            oz_v   <= qv[oz_i];
+            oz_u   <= qu[oz_i][12:0];   // R791: the raw u, before the rewrite
+            oz_v   <= qv[oz_i][12:0];
             oz_w   <= oz_i;
             oz_w_v <= 1'b1;
             if (oz_i == 2'd3) oz_last <= 1'b1;
@@ -1182,8 +1223,9 @@ module m2_raster_fill #(
           // cycle. It is never the one stage one is reading this cycle.
           if (oz_w_v) begin
             qoz[oz_w] <= oz_n;
-            qu[oz_w]  <= 13'((29'(oz_u) * 29'(oz_n)) >> 15);
-            qv[oz_w]  <= 13'((29'(oz_v) * 29'(oz_n)) >> 15);
+            // R791: UZF more bits of the same product (u < 2^13, oz_n < 2^15)
+            qu[oz_w]  <= UW'((29'(oz_u) * 29'(oz_n)) >> (15 - UZF));
+            qv[oz_w]  <= UW'((29'(oz_v) * 29'(oz_n)) >> (15 - UZF));
             if (oz_last) begin oz_last <= 1'b0; pf_st <= S_PF_D; end
           end
         end
@@ -1399,8 +1441,9 @@ module m2_raster_fill #(
           bp_ox <= 32'(dodx * p4(sx[fa], sf[fa][1:0]));  bp_oy <= 32'(dody * p4(sy[fa], sf[fa][3:2]));
           bq_u  <= qu[fa]; bq_v <= qv[fa]; bq_o <= qoz[fa];
           // R616: (gx + gy) / 2 in 16.16 -- the gradients are 8.8, so << 7.
-          bh_u  <= PXC ? ((32'(dudx) + 32'(dudy)) <<< 7) : 32'sd0;
-          bh_v  <= PXC ? ((32'(dvdx) + 32'(dvdy)) <<< 7) : 32'sd0;
+          // R791: u/v at UVS fraction bits, so half a gradient is << UVS - 9
+          bh_u  <= PXC ? ((32'(dudx) + 32'(dudy)) <<< (UVS - 9)) : 32'sd0;
+          bh_v  <= PXC ? ((32'(dvdx) + 32'(dvdy)) <<< (UVS - 9)) : 32'sd0;
           bh_o  <= PXC ? ((32'(dodx) + 32'(dody)) <<< 7) : 32'sd0;
           b_prod <= 1'b1;
         end else begin
@@ -1408,8 +1451,10 @@ module m2_raster_fill #(
           b_w2   <= 1'b0;
           b_w3   <= 1'b0;
           b_prod <= 1'b0;
-          base_u <= 32'({19'd0, bq_u} <<< 16) - (bp_ux <<< BPS) - (bp_uy <<< BPS) + bh_u;   // R616, R626
-          base_v <= 32'({19'd0, bq_v} <<< 16) - (bp_vx <<< BPS) - (bp_vy <<< BPS) + bh_v;
+          // R791: at UVS fraction bits, not 16 -- the products' shift is two
+          // (UZF - 2) less, and (13 + UZF) + UVS = 31 bits, always in range.
+          base_u <= (32'(bq_u) <<< UVS) - (bp_ux <<< BPS_UV) - (bp_uy <<< BPS_UV) + bh_u;   // R616, R626
+          base_v <= (32'(bq_v) <<< UVS) - (bp_vx <<< BPS_UV) - (bp_vy <<< BPS_UV) + bh_v;
           // R337: 1/z's own plane. qoz is 15 bits, so it shifts up by 16 the
           // same way, and the span walk divides by what this yields.
           base_o <= 32'({16'd0, bq_o} <<< 16) - (bp_ox <<< BPS) - (bp_oy <<< BPS) + bh_o;
@@ -1437,8 +1482,9 @@ module m2_raster_fill #(
             mm_pre <= 1'b1;   // R743: the pairs' values in S_MINMAX's first cycle
             col   <= in_col;
             moire <= in_moire;
-            qu[0] <= in_u0; qv[0] <= in_v0; qu[1] <= in_u1; qv[1] <= in_v1;
-            qu[2] <= in_u2; qv[2] <= in_v2; qu[3] <= in_u3; qv[3] <= in_v3;
+            // R791: the raw 13-bit u, v in the low bits until S_OZ rewrites them
+            qu[0] <= UW'(in_u0); qv[0] <= UW'(in_v0); qu[1] <= UW'(in_u1); qv[1] <= UW'(in_v1);
+            qu[2] <= UW'(in_u2); qv[2] <= UW'(in_v2); qu[3] <= UW'(in_u3); qv[3] <= UW'(in_v3);
             qoz[0] <= in_oz0; qoz[1] <= in_oz1;            // R337: still minifloats here
             qoz[2] <= in_oz2; qoz[3] <= in_oz3;
             oz_pre  <= 1'b1;                        // R731: emax in S_OZ's first cycle

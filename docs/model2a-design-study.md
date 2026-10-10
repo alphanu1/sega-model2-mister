@@ -29018,3 +29018,146 @@ bench said they would, in the right direction; the draw's slow tail is now
 the last of it. Remaining levers, measured: R787's 128-bit lines (-7..-11%
 contended, +236 ALM -- room is ~600 below s939's 41,300 of 41,910), R789's
 queue of 8 (1-4%, ~+200).
+
+**R791 -- THE ROAD'S JUDDER: u/z TRUNCATED TO A WHOLE QUARTER-TEXEL UNIT, AND
+u, v TRUNCATED AT THE CLIPPER. FOUR MORE BITS OF u/z, AND ROUND TO THE
+NEAREST QUARTER.** Board (s936, d8c2457, 80/40, 2026-10-10): the road texture
+close to the camera judders in motion (attract, the chase view at the
+"sao paulo" banner). R756 had already taken the corner wobble out of the
+snaps; this is the texture INSIDE the polygon.
+
+*Believed:*
+  * R286: gradients at 8.8 are enough -- "1/256 of a texel accumulates to
+    under half a texel across the widest span".
+  * R331: u/z at 13 bits costs 0.017-0.63 texels; 1/z needs 16 bits.
+  * R338: qu/qv are rewritten in place as (u * ooz) >> 15, which "lands in
+    [u/2, u) and fits the 13 bits u already occupied" -- the precision cost
+    "no difference that a picture can show".
+  * R626: the texel error is vertex x, y (13-58 texels median on the worst
+    polygons); the 1/z minifloat and quarter-texel u, v are 0-1 texel each.
+
+*Now known:* every one of those budgets was in TEXELS, and two things were
+missing from them.
+  1. The u/z plane is in units of 2^15 / ooz quarter-texels AT THE PIXEL, so
+     a fixed-point error in u/z is multiplied by the depth ratio where it
+     lands. MAME frame 8780's near road is ONE clipped polygon of five
+     corners, x -1..496, z 1.28..7.27: at its far corners one unit of the
+     13-bit u/z is 1.4-2.8 texels, and the plane through those truncated
+     corners tilts the near end.
+  2. Near the camera the road is magnified (~2.6 px a texel, and far more
+     along the road), so a fraction of a texel is SEVERAL PIXELS -- and the
+     truncation residue is new every frame as 1/z changes. That is the
+     judder: not a wrong texel, a texture position that jumps.
+
+*How established* (MAME 0.289 daytona93; 24 consecutive frames, render
+8770-8793 = machine 10160-10183, the board's scene; tb_m2_raster3d in the
+core's configuration -- FTB, FB_DDR3 + wcomb, SPLIT_TRI, FRB 2, M2COV, PXC,
+step 1, bilinear, TXNS 4 / TXK 16 (R789), R756's vertex rounding; reference
+MAME's own edge-walk interpolation at pixel centres, which reproduces MAME's
+dumped texel on 99.94% of pixels; error as screen displacement J^-1 e; near
+road y 250-383, x 0-299, road polygons, ~28,000 px a frame):
+
+                                    mean displacement   frame-to-frame jump of
+                                    vs MAME (frames)    a 16x16 tile's mean
+                                                        mean / p90 / max
+    HEAD (8636c1b)                  6.77 (4.2-9.6) px   2.59 / 5.42 / 15.9 px
+    rounded u, v only (UZF 0)       5.60 (3.4-9.4)      2.44 / 5.00 / 13.3
+    UZF 4 only (d8c2457 base)       1.73 (0.9-2.7)      0.81 / 1.85 / 5.4
+    UZF 4 + rounded u, v (this)     0.60 (0.2-1.3)      0.63 / 1.37 / 3.2
+    every input exact (model)       0.18                0.25 / --   / --
+
+  Whole frame, every textured fetch of the 24 (4.22 M): texel error p50 / p90
+  0.56 / 1.29 -> 0.11 / 0.61 texels, > 1 texel 18.4% -> 6.0%, > 4 texels
+  1.70% -> 1.66%; displacement p90 9.3 -> 1.0 px; pixels painted
+  3,902,198 -> 3,902,314. Nothing regressed.
+
+  Which stage, by a model of store -> normalise -> plane fit -> divide that
+  matches the RTL to 0.009 texel (mean, p99 0.036), each input made exact on
+  its own: vertex x, y 6.79 px (no change -- not R756's step); 1/z (no
+  minifloat) 7.21 (no help); u, v 5.68; gradients 4.85; u/z 3.44; u/z +
+  gradients 1.44. The 1/z minifloat is not a cause: u/z is formed from the
+  same quantised 1/z, so the vertex reproduces its own u. In the model, plain
+  rounding at today's widths gets the mean to 1.87 px but leaves 1.80 px
+  frame-to-frame jumps -- it is the resolution, not only the bias.
+
+*The change* (0 M10K, 0 DSP):
+  * m2_raster_fill UZF = 4: qu/qv 13 -> 17 bits, (u * ooz) >> (15 - UZF);
+    the u/z differences 18-bit signed (still an 18x19 DSP operand: 13 + 4
+    bits, max (8191 * 32704) >> 11 = 130,800 < 2^17); the gradients come out
+    of the same divide in units of 2^-UZF, so 12 fraction bits in u/z terms
+    (range +-2^15 units, +-512 texels a pixel of u/z -- only degenerate
+    slivers reach it); the u/v plane values (u/z) << 18 for every UZF,
+    (13 + UZF).(18 - UZF), always inside 32 bits signed -- base, half-pixel
+    (PXC) and the emit's products shift by UVS = 18 - UZF instead of 16.
+    1/z's plane is unchanged. UZF 0 is the old precision.
+  * m2_span_tex UZF: du/dv (and the group-centre offsets) shift into the
+    values' 18 - UZF fraction bits; the un-normalise shifts two more (18, or
+    d3_e - 5), so its answer is the same 16.16 quarter-texel coordinate.
+  * m2_raster3d passes UZF (default 4) to both.
+  * m2_geometry: f2uvw returns floor(f) in eighths (one bit more); R739's
+    plain copy stage rounds it, (x + 1) >> 1 = round-half-up of f/2; the
+    R609 minimum reads the truncated quarter (never above the rounded one).
+
+*Cost* (quartus_map 17.0, each module alone, Aggressive Area, the core's
+parameters): m2_raster_fill 3,265 -> 3,291 ALMs needed (+26), registers
+3,628 -> 3,700, DSP 39 -> 39; m2_span_tex 1,404 -> 1,404, +4 registers,
+DSP 15 -> 15; m2_geometry 6,322 -> 6,342 (+20), +16 registers, DSP 4 -> 4,
+block memory unchanged. ~+46 ALM at synthesis, ~+70 placed by R661's ~50%.
+No quad-store or span-queue width moves. Timing, by structure (no fit): the
+u/z subtract into pr_u* is two bits longer ahead of a register; the S_OZ
+product and the DSP mode are unchanged; base and walk shifts are constants;
+d4a_sh's constant moved (16/-7 -> 18/-5); the geometry's rounding is a
+17-bit increment in a stage that was a register copy (R739), beside no other
+logic. Quartus 17.0 folds every new idiom (UW'(), UW1'({1'b0, ..}),
+rnd8's 17'(w) + 1 >> 1, the shifted base, the 18/-5 select, the >> 11) to
+the bench's values (a constant-input quartus_map, R662's method).
+
+*Benches* (references model the new widths; no tolerance loosened):
+  * tb_m2_raster_fill: test_plane fits to (u * n) >> (15 - UZF) and reads the
+    span in units of 2^-UZF -- the same 0.5 / 0.02 numbers are 16x tighter
+    in u/z; the plane tolerance is now sized from the fit (one gradient LSB a
+    pixel of distance, floor 0.5 -- the old fixed 0.5 was under that bound by
+    luck, 0.64 at the far corner). NEW test_judder: a synthetic road (no ROM
+    data) -- focus 300, camera height 1, z 1.57..9.0, u, v to the nearest
+    quarter -- 24 frames with v scrolling 0.37 texel a frame; the near
+    third's v, divided exactly, against the exact mapping of the presented
+    quad, in pixels along the road. UZF 4: |mean| 0.24 px, worst 0.65,
+    frame-to-frame jump 0.57; bounds 0.50 / 1.00 / 0.75; UZF 0 (-GUZF=0
+    -DTB_UZF=0): 0.86 / 1.97 / 1.09 -- FAILS all three. -GUZF=0 against the
+    UZF 4 reference fails test_plane (u, v, du/dx, dv/dx).
+  * tb_m2_raster_fill ALSO: test_m2_raster_fill has failed on HEAD since
+    R715 (625-655 of 152,369; R731 noted it, "the bench is out of step").
+    Cause: R715 put a stage (s1) in front of the span output, so a quad's
+    last span can still be inside the fill for a cycle after quad_done and
+    !span_valid; the bench stopped collecting there and the span was read as
+    the NEXT quad's. Every drain now waits for two quiet cycles. 152,373 / 0.
+  * tb_m2_span_tex: inputs presented in the fill's format (the bench's own
+    16.16 / 8.8 numbers times 4 and times 2^UZF -- the expected texels are
+    the same physical quantities). NEW 2f: a gradient of 5 units (5/16 of
+    the old LSB) over 40 groups -- every fetch within one 1/256-texel step
+    of V * 2^29 / ooz, and u must move. 7,214 / 0. -GUZF=0 fails (texels);
+    reverting the 18/-5 un-normalise fails.
+  * tb_m2_geometry: NEW test 6 -- a quad cut by the left plane, u, v affine
+    in x from texture-point words in space 1: cut corners 76.67 / 47.56
+    quarters must give 77 / 48, kept corners at exact halves 229.5 / 205.5
+    must give 230 / 206. 53 / 0; HEAD's m2_geometry fails 8 of them (76, 47,
+    229, 205). A 2,000,000-float Verilator test of the conversion: 0 differ
+    from round-half-up(f / 2).
+  * tb_m2_raster3d: list mode rounds u, v as m2_geometry now does (the R609
+    offset from the truncated quarter, as the RTL compares), and
+    M2_R3D_FRAC is R756's projector (round(4x), negative x too) where it was
+    the pre-R756 trunc(4x).
+  * make lint_top, test_m2_raster_fill, test_m2_span_tex, test_m2_geometry,
+    test_m2_geo, test_m2_geo_engine, test_m2_raster3d, test_m2_quad_store,
+    test_m2_texel_bl, test_m2_boot: all pass. Verilator -Wall on the changed
+    modules: the same warnings as HEAD. quartus_map --analyze_file clean on
+    the four.
+
+*Not verified:* the board; timing at 80/40 (no fit); area in context. The
+bench's input geometry is MAME's float clip quantised as the board does
+(R756: the board's corners match MAME to ~0.002 px), so the board is
+expected to show the same, not measured. What is left (0.6 px, 0.63 px
+jumps) is mostly the quarter-texel u, v at the clipper's corners (the store's
+13-bit field, M10K) and SPLIT_TRI's fan of triangles against MAME's edge
+walk on these non-planar clipped polygons (up to 17 texels off the plane at
+a far corner in frame 8778) -- 0.18 px with every input exact.

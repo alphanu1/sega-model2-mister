@@ -98,6 +98,10 @@ module m2_raster3d #(
   // (m2_fb_wcomb) instead of a DDR3 command per span (m2_fb_write). ~+330 ALM
   // in place: it does not fit beside everything else yet (s575-s577).
   parameter bit FB_WCOMB = 1'b0,
+  // R791: u/z and v/z fraction bits in the fill and the span walk (see
+  // m2_raster_fill). 4 takes the road's judder from 6.8 px to 1.7 px mean on
+  // MAME's attract; 0 is the old precision.
+  parameter int unsigned UZF = 4,
   // R677: a textured quad goes to the fill as two triangles, (0,1,2) and
   // (0,2,3), each fitted through its own corners. A banked road on a corner
   // is TWISTED -- its four corners' u/z, v/z, 1/z lie on no one plane (MAME
@@ -524,7 +528,7 @@ module m2_raster3d #(
   wire signed [15:0] band_y1 = 16'(fill_band) * 16'(BAND_H);
   wire signed [15:0] band_y2 = band_y1 + 16'(BAND_H) - 16'sd1;
 
-  m2_raster_fill #(.PXC(PXC), .FRB(FRB), .M2COV(M2COV)) u_fill (   // R616, R626, R658
+  m2_raster_fill #(.PXC(PXC), .FRB(FRB), .M2COV(M2COV), .UZF(UZF)) u_fill (   // R616, R626, R658, R791
     .clk(clk), .rst_n(rst_n),
     .in_valid(fl_in_valid), .in_ready(fl_in_ready),
     // R327: no sign extension. m2_quad_store already saturates these to 13
@@ -601,7 +605,7 @@ module m2_raster3d #(
   logic signed [15:0]    mk_y0;
 
   m2_span_tex #(.PIXSTEP(PIXSTEP), .TXK(TXK), .FTB(FTB), .GC(PXC), .SCR_W(SCR_W), .BAND_H(BAND_H),
-                .REUSE(TXREUSE)) u_spantex (   // R633
+                .REUSE(TXREUSE), .UZF(UZF)) u_spantex (   // R633, R791
     .clk(clk), .rst_n(rst_n),
     .pxk(tex_pxk),   // R650
     .gamma_sel(tex_gamma),   // R784

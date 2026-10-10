@@ -82,6 +82,11 @@ module m2_span_tex #(
   // pixels of gradient. 1 starts the walk (PIXSTEP-1)/2 pixels in, for u/z,
   // v/z and 1/z alike so the divide still pairs them at one point.
   parameter bit          GC     = 1'b0,
+  // R791: m2_raster_fill's UZF -- u/z and v/z arrive with UZF more bits, as
+  // (u/z) << 18 (18 - UZF fraction bits) with gradients in units of 2^-UZF.
+  // Must equal the fill's. The divide's answer is the same 16.16 quarter-
+  // texel coordinate for every UZF: the un-normalise shifts two more.
+  parameter int unsigned UZF    = 4,
   parameter int unsigned SCR_W  = 496,
   parameter int unsigned BAND_H = 8,
   // Derived -- never overridden. PARAMETERS, not localparams: Quartus 17.0
@@ -109,8 +114,10 @@ module m2_span_tex #(
   input  logic signed [31:0] in_y, in_x0, in_x1,
   input  logic [23:0]        in_col,
   input  logic               in_moire,
-  input  logic signed [31:0] in_u, in_v,          // quarter-texels, 16 fractional bits
-  // 8.8 texels a pixel (R286), shifted up to this unit's 16.16 on the way in.
+  // R791: u/z, v/z in quarter-texels times 2^18 -- 18 - UZF fraction bits of
+  // a value scaled by 2^UZF (was 16.16 unscaled, i.e. times 2^16).
+  input  logic signed [31:0] in_u, in_v,
+  // 16.8 in units of 2^-UZF, shifted up to the values' fraction bits on the way in.
   input  logic signed [23:0] in_dudx, in_dvdx,     // R618: 16.8
   // R339: 1/z at the span's start and its gradient along x. u and v above are
   // u/z and v/z, and the texel coordinate is u = (uoz << 15) / ooz -- the
@@ -456,6 +463,7 @@ module m2_span_tex #(
   // draws a span whose texture slides along it -- and every arithmetic check
   // still passes.
   localparam int unsigned PIPE_D = 7;   // R718: d0, d1a, d1, d2, d3, d4a, d4
+  localparam int unsigned UVS = 18 - UZF;   // R791: the u/v values' fraction bits
   logic                    sh_v    [PIPE_D];
   logic signed [31:0]      sh_x    [PIPE_D];
   logic                    sh_last [PIPE_D];
@@ -605,8 +613,8 @@ module m2_span_tex #(
   wire ld_span   = ld_cold || ld_over;
   // R616: (PIXSTEP-1)/2 pixels of each gradient, 16.16 (gradients are 8.8).
   // R650: x (2^pxk - 1) as a shift and a subtract.
-  wire signed [31:0] gc_du = GC ? (((32'(in_dudx)   <<< pxk) - 32'(in_dudx))   <<< 7) : 32'sd0;
-  wire signed [31:0] gc_dv = GC ? (((32'(in_dvdx)   <<< pxk) - 32'(in_dvdx))   <<< 7) : 32'sd0;
+  wire signed [31:0] gc_du = GC ? (((32'(in_dudx)   <<< pxk) - 32'(in_dudx))   <<< (UVS - 9)) : 32'sd0;   // R791
+  wire signed [31:0] gc_dv = GC ? (((32'(in_dvdx)   <<< pxk) - 32'(in_dvdx))   <<< (UVS - 9)) : 32'sd0;
   wire signed [31:0] gc_do = GC ? (((32'(in_doozdx) <<< pxk) - 32'(in_doozdx)) <<< 7) : 32'sd0;
   // R478: the retire slot only has to be free by the NEXT edge, not this one.
   // Requiring !rt_valid outright cost a whole cycle a group (2.36 -> 3.36):
@@ -814,7 +822,9 @@ module m2_span_tex #(
       // instead of five, and nothing issues any slower.
       d4a_pu <= 64'(u_h5) * 64'(d3_r1);   // R718: one deeper, to match
       d4a_pv <= 64'(v_h5) * 64'(d3_r1);
-      d4a_sh <= (d3_e < 6'd23) ? 5'd16 : 5'(d3_e - 6'd7);
+      // R791: u/z is times 2^18 now, not 2^16 -- two more, so the answer is
+      // still 16.16 quarter-texels. 18..26, inside the five bits.
+      d4a_sh <= (d3_e < 6'd23) ? 5'd18 : 5'(d3_e - 6'd5);
 
       // stage 4b: the un-normalise and the clamp, on the registered product.
       d4_u <= sat32(d4a_pu >> d4a_sh);
@@ -884,8 +894,8 @@ module m2_span_tex #(
           col_p[slot]   <= in_col;
           moire_p[slot] <= in_moire;
           tex_p[slot]   <= in_tex;
-          du_r          <= (32'(in_dudx)   <<< 8) <<< pxk;   // R650: a group's step
-          dv_r          <= (32'(in_dvdx)   <<< 8) <<< pxk;
+          du_r          <= (32'(in_dudx)   <<< (UVS - 8)) <<< pxk;   // R650: a group's step; R791
+          dv_r          <= (32'(in_dvdx)   <<< (UVS - 8)) <<< pxk;
           doz_r         <= (32'(in_doozdx) <<< 8) <<< pxk;
           k_p[slot]     <= pxk;
           sp_iss        <= slot;

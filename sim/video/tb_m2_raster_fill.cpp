@@ -35,6 +35,15 @@
 #include "Vm2_raster_fill___024root.h"
 // R618: the gradients are 24-bit signed (16.8) now.
 static inline int32_t sx24(uint32_t v) { return int32_t(v << 8) >> 8; }
+// R791: u/z and v/z carry TB_UZF more fraction bits in the fill (its UZF
+// parameter; build with -DTB_UZF=n beside -GUZF=n to model another). A span's
+// u/v is (u/z) * 2^18 for every UZF, its gradient (u/z per pixel) * 2^(8+UZF),
+// and the per-vertex u/z the plane is fitted through is (u * n) >> (15 - UZF).
+#ifndef TB_UZF
+#define TB_UZF 4
+#endif
+static const double UV_SC = 262144.0;                    // span_u / span_v per unit of u/z
+static const double UG_SC = 256.0 * (1 << TB_UZF);       // span_dudx / span_dvdx per unit
 #include "verilated.h"
 #include <cstdio>
 #include <cstring>
@@ -285,7 +294,7 @@ struct Dut {
     // spans became 31,658,020 with nothing wrong. A moved total here is not a
     // regression on its own; a nonzero `fails` is.
     long guard = 0;
-    bool accepted = false, retired = false;
+    bool accepted = false, retired = false; int quiet = 0;
     for (;;) {
       d->span_ready = (retired || !stall_pct)
                         ? 1
@@ -296,7 +305,7 @@ struct Dut {
       if (d->quad_done && accepted) retired = true;
       if (d->in_ready && d->in_valid) accepted = true;
 
-      bool drained = retired && !d->span_valid;
+      bool drained = retired && !d->span_valid && ++quiet >= 2;   // R791: R715's stage
       tick();
       if (accepted) { d->in_valid = 0; d->eval(); }
       if (drained) break;
@@ -416,9 +425,10 @@ static void test_plane(Vm2_raster_fill* d) {
     uint32_t full = 0x100u | (MF[i] & 0xff);
     uint32_t n = (e == 0 || d0 >= 16) ? 0u : ((full << 6) >> d0);
     OZ[i] = (double)n;
-    // qu is rewritten in place as (u * ooz) >> 15, truncating, as the RTL does
-    UZ[i] = (double)(((uint32_t)U[i] * n) >> 15);
-    VZ[i] = (double)(((uint32_t)V[i] * n) >> 15);
+    // qu is rewritten in place as (u * ooz) >> (15 - UZF), truncating, as the
+    // RTL does (R791) -- in units of 2^-UZF, so the plane below is too
+    UZ[i] = (double)(((uint32_t)U[i] * n) >> (15 - TB_UZF));
+    VZ[i] = (double)(((uint32_t)V[i] * n) >> (15 - TB_UZF));
   }
 
   // The plane through vertices 0,1,2 -- fitted to u/z and v/z now, not u and v.
@@ -462,15 +472,16 @@ static void test_plane(Vm2_raster_fill* d) {
   d->in_valid = 1; d->span_ready = 1;
   d->eval();
 
-  bool accepted = false, retired = false;
+  bool accepted = false, retired = false; int quiet = 0;
   long guard = 0, spans_seen = 0;
   for (;;) {
     d->eval();
     if (d->span_valid && d->span_ready) {
       const int32_t y  = (int32_t)d->span_y;
       const int32_t x0 = (int32_t)d->span_x0;
-      const double u  = (double)(int32_t)d->span_u / 65536.0;
-      const double v  = (double)(int32_t)d->span_v / 65536.0;
+      // R791: in units of 2^-UZF of u/z, the units UZ/VZ above are in
+      const double u  = (double)(int32_t)d->span_u / UV_SC * (1 << TB_UZF);
+      const double v  = (double)(int32_t)d->span_v / UV_SC * (1 << TB_UZF);
       // R286: the gradient is 8.8, not 16.16 -- sixteen bits of it, signed.
       const double du = (double)sx24(d->span_dudx) / 256.0;
       const double dv = (double)sx24(d->span_dvdx) / 256.0;
@@ -483,11 +494,17 @@ static void test_plane(Vm2_raster_fill* d) {
       // A quarter of a texel of slack: the gradients are a fixed-point divide
       // and the span is up to 130 pixels from the vertex the plane is anchored
       // at, so a bit of the quotient is a fraction of a texel by the far end.
-      if (fabs(u - wu) > 0.5) {
+      // R791: now in units of 2^-UZF of u/z, so 16x tighter in u/z itself at
+      // UZF 4, and sized from what the fit can do rather than a round number:
+      // each gradient is a truncated 8-fraction-bit quotient, up to one LSB
+      // short per pixel of distance from vertex 0 on each axis. (The old 0.5
+      // was under that bound by luck: 0.64 at this test's far corner.)
+      const double ptol = std::max(0.5, (std::fabs(double(x0 - VX[0])) + std::fabs(double(y - VY[0])) + 1.0) / 256.0);
+      if (fabs(u - wu) > ptol) {
         if (tex_fails < 6) printf("  FAIL plane u at (%d,%d): %.3f want %.3f\n", x0, y, u, wu);
         ++tex_fails;
       }
-      if (fabs(v - wv) > 0.5) {
+      if (fabs(v - wv) > ptol) {
         if (tex_fails < 6) printf("  FAIL plane v at (%d,%d): %.3f want %.3f\n", x0, y, v, wv);
         ++tex_fails;
       }
@@ -512,7 +529,7 @@ static void test_plane(Vm2_raster_fill* d) {
     }
     if (d->quad_done && accepted) retired = true;
     if (d->in_ready && d->in_valid) accepted = true;
-    const bool drained = retired && !d->span_valid;
+    const bool drained = retired && !d->span_valid && ++quiet >= 2;   // R791: R715's stage
     tickf();
     if (accepted) { d->in_valid = 0; d->eval(); }
     if (drained) break;
@@ -534,14 +551,14 @@ static void test_plane(Vm2_raster_fill* d) {
     d->in_u0 = 100; d->in_v0 = 200; d->in_u1 = 100; d->in_v1 = 200;
     d->in_u2 = 400; d->in_v2 = 220; d->in_u3 = 180; d->in_v3 = 700;
     d->in_valid = 1; d->eval();
-    accepted = false; retired = false; guard = 0;
+    accepted = false; retired = false; guard = 0; quiet = 0;
     long tri_spans = 0;
     for (;;) {
       d->eval();
       if (d->span_valid && d->span_ready) ++tri_spans;
       if (d->quad_done && accepted) retired = true;
       if (d->in_ready && d->in_valid) accepted = true;
-      const bool drained = retired && !d->span_valid;
+      const bool drained = retired && !d->span_valid && ++quiet >= 2;   // R791: R715's stage
       tickf();
       if (accepted) { d->in_valid = 0; d->eval(); }
       if (drained) break;
@@ -556,6 +573,116 @@ static void test_plane(Vm2_raster_fill* d) {
       printf("  triangle: the fit retried on 0,2,3 and took (%ld spans)\n", tri_spans);
     }
   }
+  d->in_tex = 0;
+}
+
+
+// ---------------------------------------------------------------- R791
+// THE NEAR ROAD, FRAME AFTER FRAME. Board (s936): the road under the camera
+// judders in motion. A road polygon runs 5.7:1 in depth from the bottom of
+// the screen, so a u/z truncated to whole quarter-texel units at its far
+// corners is worth texels there, the plane through those corners tilts the
+// near end by a fraction of a texel -- several PIXELS at that magnification --
+// and the truncation residue is new every frame. Nothing in this bench measured
+// it, because every tolerance here was in texels or in u/z units.
+//
+// Synthetic, no ROM data: a flat road (camera height 1, focus 300) from
+// z 1.57 (the bottom row) to z 9.0, 2.5 wide, 64 texels across and 24 along a
+// unit, presented as m2_geometry presents it (whole-pixel corners at FRB 0,
+// 1/z as the minifloat, u and v to the NEAREST quarter -- R791), for 24
+// frames with v scrolling 0.37 texel a frame as if the camera were moving.
+// The near third's texture position (v, divided exactly as m2_span_tex
+// divides) is compared with the exact perspective mapping of the same
+// presented quad and expressed in PIXELS along the road (dv/dy). Measured,
+// RTL: UZF 0 (the old precision, -GUZF=0 -DTB_UZF=0) |mean| 0.86 px, worst
+// 1.97 px, the mean jumping 1.09 px between frames; UZF 4 0.24 / 0.65 / 0.57.
+// The bounds sit between. (What is left at UZF 4 is mostly v's quarter-texel
+// step at the vertices, which the 13-bit store fixes.)
+static void test_judder(Vm2_raster_fill* d) {
+  auto tickf = [&]() { d->clk = 0; d->eval(); d->clk = 1; d->eval(); };
+  auto mf16 = [](double x) -> uint16_t {
+    union { float f; uint32_t b; } u; u.f = (float)x;
+    return (uint16_t)(((u.b >> 23) & 0xff) << 8 | ((u.b >> 15) & 0xff));
+  };
+  const double FOC = 300.0, CH = 1.0, ZN = 1.57, ZF = 9.0, XW = 1.25, KU = 64.0, KV = 24.0, SCROLL = 0.37;
+  const int NF = 24;
+  const double XS[4] = {-XW, XW, XW, -XW}, ZS[4] = {ZN, ZN, ZF, ZF};
+  double worst = 0, sum_abs_mean = 0, worst_jump = 0, prev = 0; long n_all = 0;
+  d->view_x1 = 0; d->view_x2 = 495; d->view_y1 = 0; d->view_y2 = 383;
+  for (int t = 0; t < NF; t++) {
+    int32_t X[4], Y[4]; uint32_t U[4], V[4]; uint16_t MF[4]; double OZ[4], VZ[4];
+    for (int i = 0; i < 4; i++) {
+      X[i] = (int32_t)std::lround(248.0 + FOC * XS[i] / ZS[i]);
+      Y[i] = std::min((int32_t)std::lround(192.0 + FOC * CH / ZS[i]), 383);
+      const double u = (XS[i] + XW) * KU + 3.3, v = ZS[i] * KV + t * SCROLL + 5.0;   // texels
+      U[i] = (uint32_t)std::floor(u * 4.0 + 0.5); V[i] = (uint32_t)std::floor(v * 4.0 + 0.5);
+      MF[i] = mf16(1.0 / ZS[i]);
+      OZ[i] = 1.0 / ZS[i]; VZ[i] = v / ZS[i];                 // exact, texels
+    }
+    // the exact mapping of the PRESENTED quad: v/z and 1/z planes through the
+    // triangle the fill fits (R674: the larger |det| of 0,1,2 and 0,2,3)
+    const double d012 = double(X[1]-X[0]) * (Y[2]-Y[0]) - double(X[2]-X[0]) * (Y[1]-Y[0]);
+    const double d023 = double(X[2]-X[0]) * (Y[3]-Y[0]) - double(X[3]-X[0]) * (Y[2]-Y[0]);
+    const int kb = (std::fabs(d012) >= std::fabs(d023)) ? 1 : 2, kc = kb + 1;
+    const double ax = X[kb]-X[0], ay = Y[kb]-Y[0], bx = X[kc]-X[0], by = Y[kc]-Y[0], det = ax*by - bx*ay;
+    auto pl = [&](const double *P, double *r) {
+      const double p1 = P[kb]-P[0], p2 = P[kc]-P[0];
+      r[0] = P[0]; r[1] = (p1*by - p2*ay) / det; r[2] = (ax*p2 - bx*p1) / det;
+    };
+    double Po[3], Pv[3]; pl(OZ, Po); pl(VZ, Pv);
+    auto vex = [&](double x, double y) {
+      const double cx = x - X[0], cy = y - Y[0];
+      return (Pv[0] + Pv[1]*cx + Pv[2]*cy) / (Po[0] + Po[1]*cx + Po[2]*cy);
+    };
+    d->in_x0 = X[0]; d->in_y0 = Y[0]; d->in_x1 = X[1]; d->in_y1 = Y[1];
+    d->in_x2 = X[2]; d->in_y2 = Y[2]; d->in_x3 = X[3]; d->in_y3 = Y[3];
+    d->in_u0 = U[0]; d->in_v0 = V[0]; d->in_u1 = U[1]; d->in_v1 = V[1];
+    d->in_u2 = U[2]; d->in_v2 = V[2]; d->in_u3 = U[3]; d->in_v3 = V[3];
+    d->in_oz0 = MF[0]; d->in_oz1 = MF[1]; d->in_oz2 = MF[2]; d->in_oz3 = MF[3];
+    d->in_col = 0xffffff; d->in_moire = 0; d->in_tex = 1;
+    d->in_valid = 1; d->span_ready = 1; d->eval();
+    double sum = 0; long n = 0;
+    bool acc = false, ret = false; int quiet = 0; long g = 0;
+    for (;;) {
+      d->eval();
+      if (d->span_valid && d->span_ready && d->span_tex_en) {
+        const int y = (int16_t)d->span_y, xa = (int16_t)d->span_x0, xb = (int16_t)d->span_x1;
+        if (y >= 330 && y <= 381) {
+          const double sv = (double)(int32_t)d->span_v / UV_SC, dv = (double)sx24(d->span_dvdx) / UG_SC;
+          const double so = (double)(int32_t)d->span_ooz / 65536.0, doo = (double)sx24(d->span_doozdx) / 256.0;
+          for (int x = xa; x <= xb; x += 9) {
+            const int k = x - xa;
+            const double rv = 32768.0 * (sv + k*dv) / (so + k*doo) / 4.0;   // texels, as m2_span_tex divides
+            const double e = vex(x, y), dvdy = vex(x, y + 1) - e;
+            const double px = (rv - e) / dvdy;                             // pixels along the road
+            worst = std::max(worst, std::fabs(px)); sum += px; ++n;
+          }
+        }
+      }
+      if (d->quad_done && acc) ret = true;
+      if (d->in_ready && d->in_valid) acc = true;
+      const bool drained = ret && !d->span_valid && ++quiet >= 2;
+      tickf();
+      if (acc) { d->in_valid = 0; d->eval(); }
+      if (drained) break;
+      if (++g > 400000) { std::printf("  FAIL R791 road frame %d timeout\n", t); ++tex_fails; break; }
+    }
+    d->in_valid = 0; d->eval();
+    for (int k = 0; k < 40; k++) tickf();
+    const double m = n ? sum / n : 0.0;
+    sum_abs_mean += std::fabs(m); n_all += n;
+    if (t) worst_jump = std::max(worst_jump, std::fabs(m - prev));
+    prev = m;
+  }
+  const double mean_abs = sum_abs_mean / NF;
+  std::printf("  R791 near road, %d frames, %ld samples: |mean| %.2f px, worst %.2f px, "
+              "frame-to-frame jump of the mean %.2f px (bounds 0.50 / 1.00 / 0.75)\n",
+              NF, n_all, mean_abs, worst, worst_jump);
+  tex_checks += 4;
+  if (n_all < NF * 100) { std::printf("  FAIL R791: only %ld samples\n", n_all); ++tex_fails; }
+  if (mean_abs > 0.50)  { std::printf("  FAIL R791: the near road sits %.2f px off on average\n", mean_abs); ++tex_fails; }
+  if (worst > 1.00)     { std::printf("  FAIL R791: a near-road texel %.2f px from where it belongs\n", worst); ++tex_fails; }
+  if (worst_jump > 0.75){ std::printf("  FAIL R791: the near road jumps %.2f px between frames\n", worst_jump); ++tex_fails; }
   d->in_tex = 0;
 }
 
@@ -699,13 +826,13 @@ int main(int argc, char** argv) {
       d->in_oz2 = OZ[c][2]; d->in_oz3 = OZ[c][3];
       d->in_col = 0xffffff; d->in_moire = 0; d->in_tex = 1;
       d->in_valid = 1; d->span_ready = 1; d->eval();
-      bool acc = false, ret = false;
+      bool acc = false, ret = false; int quiet = 0;
       long g = 0;
       for (;;) {
         d->eval();
         if (d->quad_done && acc) ret = true;
         if (d->in_ready && d->in_valid) acc = true;
-        const bool drained = ret && !d->span_valid;
+        const bool drained = ret && !d->span_valid && ++quiet >= 2;   // R791: R715's stage
         tickf();
         if (acc) { d->in_valid = 0; d->eval(); }
         if (drained) break;
@@ -781,14 +908,14 @@ int main(int argc, char** argv) {
       d->in_valid = 1; d->span_ready = 1; d->eval();
       // error per band of rows: [0] far third .. [2] near third
       double emax[3] = {0,0,0}, esum[3] = {0,0,0}; long en[3] = {0,0,0};
-      bool acc = false, ret = false; long g = 0;
+      bool acc = false, ret = false; int quiet = 0; long g = 0;
       for (;;) {
         d->eval();
         if (d->span_valid && d->span_ready && d->span_tex_en) {
           const int y = (int16_t)d->span_y, xa = (int16_t)d->span_x0, xb = (int16_t)d->span_x1;
-          const double su = (double)(int32_t)d->span_u / 65536.0, sv = (double)(int32_t)d->span_v / 65536.0;
+          const double su = (double)(int32_t)d->span_u / UV_SC, sv = (double)(int32_t)d->span_v / UV_SC;   // R791
           const double so = (double)(int32_t)d->span_ooz / 65536.0;
-          const double du = (double)sx24(d->span_dudx) / 256.0, dv = (double)sx24(d->span_dvdx) / 256.0;
+          const double du = (double)sx24(d->span_dudx) / UG_SC, dv = (double)sx24(d->span_dvdx) / UG_SC;
           const double doo = (double)sx24(d->span_doozdx) / 256.0;
           for (int x = xa; x <= xb; x += 7) {
             const int k = x - xa;
@@ -806,7 +933,7 @@ int main(int argc, char** argv) {
         }
         if (d->quad_done && acc) ret = true;
         if (d->in_ready && d->in_valid) acc = true;
-        const bool drained = ret && !d->span_valid;
+        const bool drained = ret && !d->span_valid && ++quiet >= 2;   // R791: R715's stage
         tickf();
         if (acc) { d->in_valid = 0; d->eval(); }
         if (drained) break;
@@ -834,7 +961,8 @@ int main(int argc, char** argv) {
     const unsigned wcode = std::getenv("M2_FILL_WCODE") ? std::atoi(std::getenv("M2_FILL_WCODE")) : 3;
     const unsigned hcode = std::getenv("M2_FILL_HCODE") ? std::atoi(std::getenv("M2_FILL_HCODE")) : 3;
     auto mf16r = [](double x) -> uint16_t { union { float f; uint32_t b; } u; u.f = (float)x; return (uint16_t)(((u.b >> 23) & 0xff) << 8 | ((u.b >> 15) & 0xff)); };
-    auto wide = [](double pu) -> uint32_t { if (!(pu >= 2.0)) return 0; double w = std::floor(pu / 2.0); return w > 32767 ? 32767u : (uint32_t)w; };
+    // R791: m2_geometry rounds to the nearest quarter (half up), not down
+    auto wide = [](double pu) -> uint32_t { if (!(pu >= 1.0)) return 0; double w = std::floor(pu / 2.0 + 0.5); return w > 32767 ? 32767u : (uint32_t)w; };
     int32_t X[4], Y[4]; uint32_t U[4], V[4]; uint16_t MF[4];
     for (int i = 0; i < 4; i++) { X[i] = (int32_t)std::lround(FX[i]); Y[i] = (int32_t)std::lround(FY[i]); U[i] = wide(FU[i]); V[i] = wide(FV[i]); MF[i] = mf16r(1.0 / FZ[i]); }
     const uint32_t um = std::min(std::min(U[0],U[1]),std::min(U[2],U[3])) & ~((256u << wcode) - 1) & 0x7fff;
@@ -853,14 +981,14 @@ int main(int argc, char** argv) {
     d->in_oz0 = MF[0]; d->in_oz1 = MF[1]; d->in_oz2 = MF[2]; d->in_oz3 = MF[3];
     d->in_col = 0xffffff; d->in_moire = 0; d->in_tex = 1;
     d->in_valid = 1; d->span_ready = 1; d->eval();
-    bool acc = false, ret = false; long g = 0; int shown = 0;
+    bool acc = false, ret = false; int quiet = 0; long g = 0; int shown = 0;
     for (;;) {
       d->eval();
       if (d->span_valid && d->span_ready && d->span_tex_en && shown < 12) {
         const int y = (int16_t)d->span_y, xa = (int16_t)d->span_x0, xb = (int16_t)d->span_x1;
-        const double su = (double)(int32_t)d->span_u / 65536.0, sv = (double)(int32_t)d->span_v / 65536.0;
+        const double su = (double)(int32_t)d->span_u / UV_SC, sv = (double)(int32_t)d->span_v / UV_SC;   // R791
         const double so = (double)(int32_t)d->span_ooz / 65536.0;
-        const double du = (double)sx24(d->span_dudx) / 256.0, doo = (double)sx24(d->span_doozdx) / 256.0;
+        const double du = (double)sx24(d->span_dudx) / UG_SC, doo = (double)sx24(d->span_doozdx) / 256.0;
         for (int x : {xa, (xa + xb) / 2, xb}) {
           const int k = x - xa; const double ro = so + k*doo;
           const double ru = 32768.0 * (su + k*du) / ro / 4.0;   // texels
@@ -872,7 +1000,7 @@ int main(int argc, char** argv) {
       }
       if (d->quad_done && acc) ret = true;
       if (d->in_ready && d->in_valid) acc = true;
-      const bool drained = ret && !d->span_valid;
+      const bool drained = ret && !d->span_valid && ++quiet >= 2;   // R791: R715's stage
       tickf();
       if (acc) { d->in_valid = 0; d->eval(); }
       if (drained) break;
@@ -928,6 +1056,7 @@ int main(int argc, char** argv) {
   }
 
   test_plane(dut.d);
+  test_judder(dut.d);   // R791
   checks += tex_checks; fails += tex_fails;
 
   printf("m2_raster_fill: checks=%ld fails=%ld spans=%ld lines=%ld empty=%ld\n",

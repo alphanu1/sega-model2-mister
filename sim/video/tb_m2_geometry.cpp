@@ -36,6 +36,7 @@
 #include "Vm2_geometry.h"
 #include "verilated.h"
 #include <cstdio>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <vector>
@@ -43,12 +44,17 @@
 static Vm2_geometry* d;
 static std::vector<uint32_t> obj(4096, 0);
 static long checks = 0, fails = 0;
+// R791: space 1 (texture header / texture-point words) as 16-bit words, served
+// as the dword pair at the requested dword address -- zero everywhere, as this
+// bench always answered, except where a test puts texture coordinates.
+static std::vector<uint16_t> thdr(0x1000, 0);
 
 static void tick() {
   d->mem_ack = d->mem_req;
   // R222: the colour spaces answer with a flat header, a white palette entry
   // (five ones per component) and a translation table of 0xff -> gamma 255.
-  if (d->mem_req) d->mem_data = (d->mem_space == 1) ? 0u
+  if (d->mem_req) d->mem_data = (d->mem_space == 1)
+                                ? (uint32_t(thdr[(2 * d->mem_addr) & 0xfff]) | (uint32_t(thdr[(2 * d->mem_addr + 1) & 0xfff]) << 16))
                               : (d->mem_space == 2) ? 0x7fff7fffu
                               : (d->mem_space == 3) ? 0x00ff00ffu
                               : obj[d->mem_addr & 0xfff];
@@ -74,7 +80,7 @@ static void load_identity() {
   d->mat_we = 0; tick();
 }
 
-struct Quad { int32_t x0,y0,x1,y1,x2,y2,x3,y3; uint32_t col; };
+struct Quad { int32_t x0,y0,x1,y1,x2,y2,x3,y3; uint32_t col; uint32_t u[4], v[4]; };
 
 static std::vector<Quad> run_object() {
   d->start = 1; tick(); d->start = 0;
@@ -89,7 +95,8 @@ static std::vector<Quad> run_object() {
     if (d->q_valid && d->q_ready)
       got.push_back({(int16_t)d->q_x0,(int16_t)d->q_y0,(int16_t)d->q_x1,(int16_t)d->q_y1,
                      (int16_t)d->q_x2,(int16_t)d->q_y2,(int16_t)d->q_x3,(int16_t)d->q_y3,
-                     d->q_col});
+                     d->q_col,
+                     {d->q_u0, d->q_u1, d->q_u2, d->q_u3}, {d->q_v0, d->q_v1, d->q_v2, d->q_v3}});
   }
   std::printf("  [engine polys=%u objects=%u busy=%d]\n",
               d->dbg_polys, d->dbg_objects, (int)d->busy);
@@ -513,6 +520,58 @@ int main(int argc, char** argv) {
       ck("never reached the clipper", (int32_t)(d->dbg_clip_in - cin), 0);
       ck("no quad came out", (int32_t)got.size(), 0);
     }
+  }
+
+  // ---- test 6, R791: A CLIPPED VERTEX'S u, v GO TO THE NEAREST QUARTER.
+  //
+  // m2_geometry took each u, v (raw 13.3) to a quarter-texel by f/2 TRUNCATED.
+  // A vertex the clipper made has an arbitrary u, so every such corner sat up
+  // to a quarter-texel low, -1/8 on average -- on the near road, after R791's
+  // finer u/z, the largest error left (1.7 -> 0.6 px over 24 MAME frames).
+  // This quad crosses the LEFT plane (view x -300 .. 50, z = 1, a_left -248),
+  // with u, v affine in x, so the cut corners' coordinates are known exactly:
+  // at x = -248, t = 52/350 -- pu 153.337 (quarter 76.67: round 77, floor 76),
+  // pv 95.12 (47.56: 48 / 47). The kept right corners are pu 459, pv 411:
+  // EXACT HALVES, 229.5 and 205.5, which round half up to 230 and 206 (floor
+  // 229, 205). The header is zero (texture code 0), so the R609 offset is 0.
+  {
+    d->rst_n = 0; for (int i = 0; i < 4; i++) tick(); d->rst_n = 1; tick();
+    load_identity();
+    d->foc_x = f2u(1.0f); d->foc_y = f2u(1.0f);
+    const uint32_t TP = 0x80;
+    // two words a vertex, v then u; vertex 0 = P1(n-1), 1 = P0(n-1) (left),
+    // 2 = P0(n), 3 = P1(n) (right)
+    const uint16_t UL = 100, VL = 40, UR = 459, VR = 411;
+    const uint16_t W[8] = {VL, UL, VL, UL, VR, UR, VR, UR};
+    for (int i = 0; i < 8; i++) thdr[TP + i] = W[i];
+    d->tpa = TP;
+    size_t w = 0;
+    w = put_v(w, -300.0f,  50.0f, 1.0f);   // P0(n-1) outside the left plane
+    w = put_v(w, -300.0f, -50.0f, 1.0f);   // P1(n-1)
+    obj[w++] = 0x00020201u;
+    w = put_v(w, 0.0f, 0.0f, 1.0f);
+    w = put_v(w,   50.0f,  50.0f, 1.0f);   // P0(n)   inside
+    w = put_v(w,   50.0f, -50.0f, 1.0f);   // P1(n)
+    obj[w++] = 0x00000000u;
+    auto got = run_object();
+    std::printf("test: R791, a clipped vertex's u and v to the nearest quarter-texel\n");
+    ck("R791: the clipper cut it", (int32_t)(got.size() > 0), 1);
+    const double t = 52.0 / 350.0;
+    const int32_t ucut = (int32_t)std::floor((UL + (UR - UL) * t) / 2.0 + 0.5);   // 77
+    const int32_t vcut = (int32_t)std::floor((VL + (VR - VL) * t) / 2.0 + 0.5);   // 48
+    const int32_t ukeep = (UR + 1) / 2, vkeep = (VR + 1) / 2;                    // 230, 206
+    int cut = 0, kept = 0;
+    for (auto &q : got) {
+      const int32_t xs[4] = {q.x0, q.x1, q.x2, q.x3};
+      for (int k = 0; k < 4; k++) {
+        if (xs[k] <= 1)        { ck("R791: cut corner u", (int32_t)q.u[k], ucut);  ck("R791: cut corner v", (int32_t)q.v[k], vcut);  ++cut; }
+        else if (xs[k] >= 297) { ck("R791: kept corner u", (int32_t)q.u[k], ukeep); ck("R791: kept corner v", (int32_t)q.v[k], vkeep); ++kept; }
+      }
+    }
+    ck("R791: cut corners seen", (int32_t)(cut >= 2), 1);
+    ck("R791: kept corners seen", (int32_t)(kept >= 2), 1);
+    d->tpa = 0;
+    for (int i = 0; i < 8; i++) thdr[TP + i] = 0;
   }
 
   std::printf("m2_geometry: checks=%ld fails=%ld\n", checks, fails);

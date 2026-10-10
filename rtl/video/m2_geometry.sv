@@ -837,7 +837,16 @@ module m2_geometry (
   // 32,767), the smallest of the four rounded down to 256 << code quarter-
   // texels (2 x (32 << code) texels), subtracted from all four. Only a polygon
   // that itself spans more than 2,048 texels still clamps.
-  function automatic logic [14:0] f2uvw(input logic [31:0] f);
+  //
+  // R791: TO THE NEAREST QUARTER, NOT DOWN. A vertex the clipper made has an
+  // arbitrary u, and truncating it to the quarter below biased every such
+  // corner by -1/8 texel on average -- with R791's finer u/z, the largest
+  // error left on the near road (1.7 -> 0.6 px mean displacement over 24
+  // MAME frames). This returns floor(f) in EIGHTHS, one bit more than f/2;
+  // the copy stage two registers on rounds it, (x + 1) >> 1, which is
+  // round-half-up of f/2. The minimum below reads the truncated quarter,
+  // which is never above the rounded one, so the subtract cannot go negative.
+  function automatic logic [15:0] f2uvw(input logic [31:0] f);
     logic [7:0]  e;
     logic [23:0] m;
     begin
@@ -849,9 +858,9 @@ module m2_geometry (
       // range R609 made room for. The geometry differential found it: MAME
       // raw v 32,798..32,932 on a close-up textured surface came out 32,767
       // at every vertex, reduced to 511, the texture squashed flat.
-      if (f[31] || e < 8'd127)      f2uvw = 15'd0;
-      else if (e >= 8'd127 + 8'd16) f2uvw = 15'h7fff;
-      else                          f2uvw = 15'(m >> (5'(8'd24 - (e - 8'd127))));
+      if (f[31] || e < 8'd127)      f2uvw = 16'd0;
+      else if (e >= 8'd127 + 8'd16) f2uvw = 16'hffff;
+      else                          f2uvw = 16'(m >> (5'(8'd23 - (e - 8'd127))));   // R791
     end
   endfunction
   function automatic logic [14:0] min4w(input logic [14:0] a, b, c, d);
@@ -864,7 +873,7 @@ module m2_geometry (
   endfunction
   // R614: the conversion is its own stage -- s368 still had clipper -> ru/rv
   // at -0.796 with conversion, minimum, subtract and clamp in one cycle.
-  logic [14:0] wu [4], wv [4];
+  logic [15:0] wu [4], wv [4];   // R791: eighths
   always_ff @(posedge clk) for (int k = 0; k < 4; k++) begin wu[k] <= f2uvw(cu[k]); wv[k] <= f2uvw(cv[k]); end
   wire  [15:0] uper = (16'd256 << ctex[3:1]) - 16'd1;   // 2 x width, quarter-texels, less one
   wire  [15:0] vper = (16'd256 << ctex[6:4]) - 16'd1;
@@ -873,8 +882,11 @@ module m2_geometry (
   // wv -> voff_r -0.695, wu -> uoff_r -0.272).
   logic [14:0] pu_r, qu_r, pv_r, qv_r;
   always_ff @(posedge clk) begin
-    pu_r <= (wu[0] < wu[1]) ? wu[0] : wu[1];  qu_r <= (wu[2] < wu[3]) ? wu[2] : wu[3];
-    pv_r <= (wv[0] < wv[1]) ? wv[0] : wv[1];  qv_r <= (wv[2] < wv[3]) ? wv[2] : wv[3];
+    // R791: on the truncated quarter, wu[15:1] -- the same bits as before
+    pu_r <= (wu[0][15:1] < wu[1][15:1]) ? wu[0][15:1] : wu[1][15:1];
+    qu_r <= (wu[2][15:1] < wu[3][15:1]) ? wu[2][15:1] : wu[3][15:1];
+    pv_r <= (wv[0][15:1] < wv[1][15:1]) ? wv[0][15:1] : wv[1][15:1];
+    qv_r <= (wv[2][15:1] < wv[3][15:1]) ? wv[2][15:1] : wv[3][15:1];
   end
   wire  [14:0] uoff = ((pu_r < qu_r) ? pu_r : qu_r) & ~uper[14:0];
   wire  [14:0] voff = ((pv_r < qv_r) ? pv_r : qv_r) & ~vper[14:0];
@@ -896,14 +908,20 @@ module m2_geometry (
   // -0.330 at 75; s735: wv -> rv -0.591 at 80). uoff/voff are registered
   // beside a one-cycle copy of wu/wv, and the subtract runs from both.
   logic [14:0] uoff_r, voff_r;
-  logic [14:0] wu_d [4], wv_d [4];
+  // R791: eighths to the nearest quarter, half up
+  function automatic logic [14:0] rnd8(input logic [15:0] w);
+    rnd8 = (&w) ? 15'h7fff : 15'((17'(w) + 17'd1) >> 1);
+  endfunction
+  logic [15:0] wu_d [4], wv_d [4];   // R791: eighths
   logic [14:0] wu_dd [4], wv_dd [4];   // R739: a stage more, beside the minimum's
   always_ff @(posedge clk) begin
     uoff_r <= uoff;
     voff_r <= voff;
     for (int k = 0; k < 4; k++) begin
       wu_d[k] <= wu[k];     wv_d[k] <= wv[k];
-      wu_dd[k] <= wu_d[k];  wv_dd[k] <= wv_d[k];
+      // R791: the rounding, in a stage that was a plain copy. 0xffff (the
+      // clamp) stays at the top of the 15-bit range rather than wrapping.
+      wu_dd[k] <= rnd8(wu_d[k]);  wv_dd[k] <= rnd8(wv_d[k]);
     end
   end
   always_ff @(posedge clk) for (int k = 0; k < 4; k++) begin
