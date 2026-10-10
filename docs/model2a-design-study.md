@@ -29490,3 +29490,7 @@ cycles the four camera views -- firing on some passes but not all; the
 (Deluxe '93) froze on the attract backdrop instead. The hunt now has a
 target: MAME's view of that scene (copro commands, the 0x185C dispatcher's
 task records, display lists, rare opcodes) to drive the benches.
+R805, Ben: on Deluxe '93 the lock comes at a different fixed place -- the
+attract backdrop (blue, AM2 logo; s931's capture) -- so each set locks at its
+own point in attract: a transition or mode change is the likelier trigger
+than steady traffic.
