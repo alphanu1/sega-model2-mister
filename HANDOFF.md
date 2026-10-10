@@ -2,6 +2,14 @@
 
 ## 2026-10-10: TGP 2.3x FASTER (R771-R775), TYRES BACK (R769). BUILDING.
 
+LATE: s931 (9d3448f, 80/40) on the board -- past frame 1, right edge and car
+select right, in game ~50% speed, then the LOCK at 4 min (attract backdrop,
+CREDITS 2/3; R785). R784 colour build fitting (8d03e84, s933-s935). Room for
+the texel path: R786 i960 icache back to 512 B (~264 ALM), R788 the
+framework audio filter off (~430 ALM; sys/audio_out.sv patched -- see
+docs/framework-patches/, re-apply after a framework update). 128-bit texel
+lines being implemented in sm2-builds/sm2-tl128-99386df (R787 to merge).
+
 EVENING: R780 board draw times (s926, 75 MHz: draw p90 21.5-22 ms, SDRAM
 busy 80%+ on slow frames; texel misses' round trip is the cost); R781
 Double Buffered default; R782 texel cache index folded (-24..-32% misses);

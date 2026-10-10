@@ -2,8 +2,9 @@
 
 Patches to the MiSTer framework (`sys/`, from
 [MiSTer-devel/Template_MiSTer](https://github.com/MiSTer-devel/Template_MiSTer)).
-`sys/` is kept **unmodified** (THIRD_PARTY.md). A patch here is applied only
-when the room it frees is actually needed. Each one is small and switchable by
+`sys/` is kept unmodified except for the patches marked **Applied** below
+(THIRD_PARTY.md). A patch here is applied only when the room it frees is
+actually needed. Each one is small and switchable by
 a macro, so after a framework update it can be re-applied with one command.
 
 **Applied:** `audio-filter-disable.patch`, since 2026-10-10 (study R788), with
