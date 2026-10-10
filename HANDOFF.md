@@ -2,6 +2,14 @@
 
 ## 2026-10-10: TGP 2.3x FASTER (R771-R775), TYRES BACK (R769). BUILDING.
 
+NIGHT: s936 (d8c2457 = R784 + R786 + R788, 80/40) ON THE BOARD, RBF
+ee54bd91...; ~620 ALM freed (40.8k). R790 Gamma default MAME (next build).
+Option B (R628's four texel misses in flight) being implemented in
+sm2-builds/sm2-ns4-80f6e82 (R789 to merge). R787 (128-bit lines) parked in
+sm2-builds/sm2-tl128-99386df. AT NEXT RELEASE: update releases/README.md's
+OSD table (Draw method default Double -- R781; Gamma default MAME -- R790;
+15kHz lines option -- R783) and "Not finished" list.
+
 LATE: s931 (9d3448f, 80/40) on the board -- past frame 1, right edge and car
 select right, in game ~50% speed, then the LOCK at 4 min (attract backdrop,
 CREDITS 2/3; R785). R784 colour build fitting (8d03e84, s933-s935). Room for
