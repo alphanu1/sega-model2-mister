@@ -743,7 +743,7 @@ module m2_texel_bl #(
   end
 
   // the head's answer, registered once all four texels are in
-  wire hd_ready = !rs_empty && (rs_rdy[rs_hd] == 4'hF);
+  logic hd_ready;   // R804: assigned below, with the second cycle's bypass
   // R798: the slot store's one write: the half that arrived this cycle (an
   // eight-word read's first half on m*_lo, its second with the acknowledge).
   // At most one port delivers a cycle (m2_sdram's single stage); the lowest
@@ -766,23 +766,54 @@ module m2_texel_bl #(
   // and every waiting texel in that same (slot, half) is answered from the
   // view; a texel in another slot or half waits a cycle. The four texels of a
   // request nearly always share one line.
+  //
+  // R804: IN TWO CYCLES. As one (R798) the pick, the LUT RAM's read address,
+  // its asynchronous read, the zero flag and the nibble select into rs_nib
+  // missed clk_mem by 1.0-1.5 ns (s958/s959, rs_rp -> rs_nib). Now the pick
+  // is REGISTERED (hq_*: slot, half, which texels, their nibble selects) and
+  // the next cycle reads the LUT RAM at that registered address and writes
+  // the nibbles. Texels picked and not yet written are kept out of the next
+  // pick (hq_m); a fill using the read port in the second cycle drops the
+  // pick, and its texels are picked again.
   logic [3:0]    hv_ok;            // texel k can be answered now
   logic          hv_any;
   logic [SW-1:0] hv_s;             // the view's slot
   logic          hv_h;             // ... and half
+  logic [3:0]    hv_m;             // R804: the texels in that (slot, half)
   logic [63:0]   hv_d;             // the view
+  logic          hq_v;             // R804: a pick waiting for its read
+  logic [SW-1:0] hq_s;
+  logic          hq_h;
+  logic [3:0]    hq_m;
+  logic [3:0]    hq_sel [4];       // ... and its texels' nibble selects
   always_comb begin
     hv_any = 1'b0; hv_s = '0; hv_h = 1'b0;
     for (int k = 0; k < 4; k++)
       hv_ok[k] = rs_pend[rs_hd][k] && (ms_done[rs_slot[rs_hd][k]]
-                 || (LW8 && ms_half[rs_slot[rs_hd][k]] && !rs_sel[rs_hd][k][4]));
+                 || (LW8 && ms_half[rs_slot[rs_hd][k]] && !rs_sel[rs_hd][k][4]))
+                 && !(LW8 && hq_v && hq_m[k]);   // R804: not one already picked
     for (int k = 3; k >= 0; k--)
       if (hv_ok[k]) begin hv_any = 1'b1; hv_s = rs_slot[rs_hd][k]; hv_h = rs_sel[rs_hd][k][4]; end
+    for (int k = 0; k < 4; k++)
+      hv_m[k] = hv_ok[k] && rs_slot[rs_hd][k] == hv_s && rs_sel[rs_hd][k][4] == hv_h;
   end
-  // R798: the slot store's one read: the fill's half while it writes, else the head's view
-  wire [SW:0]  mr_a = (LW8 && fl_v) ? {fl_s, fl_h} : {hv_s, hv_h};
+  // R798: the slot store's one read: the fill's half while it writes, else the
+  // head's view -- R804: at the pick's REGISTERED address
+  wire [SW:0]  mr_a = (LW8 && fl_v) ? {fl_s, fl_h} : {hq_s, hq_h};
   wire [63:0]  mr_d = ms_ma[mr_a];
-  assign hv_d = ms_z[hv_s] ? 64'd0 : mr_d;
+  assign hv_d = ms_z[hq_s] ? 64'd0 : mr_d;
+  wire hq_go = LW8 && hq_v && !fl_v;   // R804: the pick's read happens this cycle
+  // R804: AND THE HEAD MAY LEAVE IN THAT SAME CYCLE. Its last texels are
+  // answered from the view straight into o_q, so the second cycle costs the
+  // head nothing when it completes it (the bypass starts at registers: hq_*,
+  // the LUT RAM read, the nibble).
+  // The pick is always the head's: the head cannot leave while a texel it
+  // picked is unanswered, and a head that leaves with the bypass leaves none.
+  wire [3:0] hq_now = hq_go ? hq_m : 4'd0;
+  assign hd_ready = !rs_empty && ((rs_rdy[rs_hd] | hq_now) == 4'hF);
+  function automatic logic [3:0] hd_nib(input int k);
+    hd_nib = hq_now[k] ? nib(hv_d, hq_sel[k]) : rs_nib[rs_hd][k];
+  endfunction
   o_t  o_q;
   h1_t h1_q;
   h2_t h2_q;
@@ -817,6 +848,8 @@ module m2_texel_bl #(
         for (int k = 0; k < 4; k++) begin rs_nib[e][k] <= '0; rs_slot[e][k] <= '0; rs_sel[e][k] <= '0; end
       end
       ack <= 1'b0; texel <= '0; o_q <= '0; h1_q <= '0; h2_q <= '0; v1_q <= '0;
+      hq_v <= 1'b0; hq_s <= '0; hq_h <= 1'b0; hq_m <= '0;   // R804
+      for (int k = 0; k < 4; k++) hq_sel[k] <= '0;
       sweep <= '0; sweeping <= 1'b1; inval_d <= 1'b0; inval_pend <= 1'b0;
       dbg_hits <= '0; dbg_misses <= '0; dbg_lost <= '0; dbg_sweeps <= '0;
     end else begin
@@ -1004,14 +1037,23 @@ module m2_texel_bl #(
       // the head's waiting texels take their nibble once their miss is done
       // R787: a texel in the first half of an eight-word line is answered
       // from it, four cycles before the line is whole
+      // R804: the pick, registered (LW8)
+      if (LW8) begin
+        hq_v <= !rs_empty && hv_any;
+        hq_s <= hv_s; hq_h <= hv_h; hq_m <= hv_m;
+        for (int k = 0; k < 4; k++) hq_sel[k] <= rs_sel[rs_hd][k][3:0];
+      end
+      // R804: ... answered the cycle after, from the registered address
+      if (hq_go)
+        for (int k = 0; k < 4; k++)
+          if (hq_m[k]) begin
+            rs_nib[rs_hd][k] <= nib(hv_d, hq_sel[k]);
+            rs_rdy[rs_hd][k] <= 1'b1; rs_pend[rs_hd][k] <= 1'b0;
+          end
       if (!rs_empty)
         for (int k = 0; k < 4; k++)
           if (LW8) begin
-            // R796: from the one view this cycle (above)
-            if (hv_ok[k] && hv_any && !fl_v && rs_slot[rs_hd][k] == hv_s && rs_sel[rs_hd][k][4] == hv_h) begin   // R798: not while the fill reads
-              rs_nib[rs_hd][k] <= nib(hv_d, rs_sel[rs_hd][k][3:0]);
-              rs_rdy[rs_hd][k] <= 1'b1; rs_pend[rs_hd][k] <= 1'b0;
-            end
+            // R796/R804: from the one view, a cycle after the pick (above)
           end else if (hv_ok[k]) begin
             rs_nib[rs_hd][k] <= nib(ms_dat[rs_slot[rs_hd][k]], rs_sel[rs_hd][k][3:0]);
             rs_rdy[rs_hd][k] <= 1'b1; rs_pend[rs_hd][k] <= 1'b0;
@@ -1031,8 +1073,8 @@ module m2_texel_bl #(
       // ---- answer the head
       o_q.v <= hd_ready;
       if (hd_ready) begin
-        o_q.t00 <= rs_nib[rs_hd][0]; o_q.t01 <= rs_nib[rs_hd][1];
-        o_q.t10 <= rs_nib[rs_hd][2]; o_q.t11 <= rs_nib[rs_hd][3];
+        o_q.t00 <= hd_nib(0); o_q.t01 <= hd_nib(1);   // R804: or straight from the view
+        o_q.t10 <= hd_nib(2); o_q.t11 <= hd_nib(3);
         o_q.uf  <= rs_uf[rs_hd]; o_q.vf <= rs_vf[rs_hd];
         o_q.tl  <= rs_tl[rs_hd]; o_q.bl <= rs_bl[rs_hd];
         rs_used[rs_hd] <= 1'b0; rs_rdy[rs_hd] <= '0;

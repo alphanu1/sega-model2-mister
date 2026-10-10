@@ -29528,3 +29528,106 @@ functions 0x2A/0x30/0x36 in 99.9% of its frames (20-37% elsewhere).
 Next: a lock-hunt build that records the PREVIOUS instruction (IP, word,
 length) at the trap, the task load for both sets, and the last store to that
 task record.
+
+R804 -- The texel cache's head view, in two cycles (clk_mem timing)
+
+Believed (R798): the slot store in LUT RAM could be read and answered in the
+cycle that picked it. R798's own note flagged the path as long and left it to
+the fit.
+
+Known: s958/s959 FIT (41,207 / 41,134 ALM, 98%) but clk_mem (100 MHz) misses
+by 1.515 / 1.028 ns. All 163 failing paths are in m2_texel_bl's head path,
+e.g. u_texel|rs_rp[1] -> u_texel|rs_nib[1][1][1] (-1.515 ns). In one clk_mem
+cycle that path ran: rs_rp -> entry selects -> ms_done/ms_half by slot -> the
+priority pick -> the LUT RAM's 2:1 read address -> asynchronous MLAB read ->
+zero-flag mux -> 16:1 nibble select -> rs_nib. clk_sys's -0.105 ns
+(geo_project -> geo_clip) is a separate path and is not affected here.
+
+Change (rtl/video/m2_texel_bl.sv, LW8 only; LW8=0 is unchanged):
+ - The pick is REGISTERED: hq_v, hq_s, hq_h (slot, half), hq_m (which of
+   the head's four texels), hq_sel[4] (their nibble selects).
+ - In the next cycle the LUT RAM is read at {hq_s, hq_h}, with the zero flag
+   ms_z[hq_s], and the picked texels' nibbles are written to rs_nib/rs_rdy.
+ - Texels picked but not yet written are masked from the next pick
+   (hv_ok &= !(hq_v && hq_m)).
+ - The fill still has priority on the one read port (mr_a = fl_v ? fill :
+   pick). A pick whose second cycle meets a fill is dropped (hq_go = hq_v &&
+   !fl_v), and its texels are picked again.
+ - Bypass: the head may leave in the same cycle as the read.
+   hd_ready = (rs_rdy | hq_now) == 4'hF, and o_q takes the nibble straight
+   from the view for the texels in hq_now. The bypass starts from registers
+   (hq_*, the MLAB read, the nibble select), not from the pick.
+ - No entry tag is needed on the pick. The pick is always the head's: the
+   head cannot leave while one of its picked texels is unanswered, and a head
+   that leaves through the bypass leaves no picked texels behind. Mutation m4
+   confirmed this (removing the entry compare: 0 fails), so the tag was
+   dropped.
+
+Depth of the new worst clk_mem paths, by structure (LUT levels, not timed):
+ - Stage 1, from rs_rp to hq_m/hq_s. Path: entry 4:1 (1) -> ms_done/ms_half
+   by slot 4:1 (1) -> hv_ok AND with the mask (1) -> priority pick hv_s/hv_h
+   (1-2) -> slot/half compare into hv_m (1-2). About 5-7 levels, all LUTs.
+   No MLAB and no nibble select.
+ - Stage 2, from hq_s/hq_h/fl_v to rs_nib or o_q. Path: 2:1 address (1) ->
+   MLAB asynchronous read -> zero flag (merges with the next level) -> 16:1
+   nibble select (2) -> hd_nib 2:1 (1, can merge). About 4 levels plus the
+   MLAB read.
+ - hd_ready: rs_rdy 4:1 by rs_hd, OR hq_now (hq_v && !fl_v && hq_m), then
+   AND4. About 3 levels, then the fan-out to o_q and the queue pointers.
+ - The fill's path (fl_s -> MLAB -> zero -> M10K write data) is unchanged
+   from R798.
+R798's single path was the sum of stage 1 and stage 2. Each half is now at
+most the length of the stage-1 part of it.
+
+Draw time. tb_m2_raster3d on the MAME lists, NS4 RSP4 LW8 TXK16, 80 MHz, in
+ms. L12 = idle texture memory; L30 = contended (30 cycles + 0..30 jitter).
+                      r57    r66    apk    rpk   f2200
+  R798         L12  10.73  11.01  12.20  14.17  12.35
+  R804         L12  10.79  11.06  12.32  14.24  12.37   +0.2..+1.0%
+  R798         L30  13.32  13.65  15.91  16.29  14.64
+  R804         L30  13.41  13.72  16.00  16.32  14.68   +0.2..+0.7%
+  64-bit lines L30  14.03  14.73  17.36  17.71  16.11   (5efcc72, for scale)
+The worst case is apk at L12: +0.12 ms. Without the bypass the cost was
++1.0..+1.6% (measured, then the bypass was added). The R796/R798 gain over
+64-bit lines at L30 (4-9%) is kept.
+Unit bench test_m2_texel_bl48: 670,445 -> 678,497 cycles (+1.2%); with
+M2_TBL_SDRAM, 686,569 -> 694,139 (+1.1%).
+
+Area. Full-design quartus_map (17.0) at this HEAD, with and without the
+change:
+  u_texel            1673 -> 1688 ALUT (+15), 1270 -> 1286 registers (+16)
+  whole design est.  40,431 -> 40,319 ALM (-112: map-to-map noise, not a
+                     saving), 48,732 -> 48,749 registers (+17)
+  MLAB ms_ma         unchanged (8 x 64, simple dual port)
+  M10K bits          unchanged
+R798's calibration was that a map-estimate delta can grow about 2.5x in a
+98% fit. On that basis, budget about +40 ALM against s958/s959's 41,207 /
+41,134.
+
+Answers. Every texel answer and pixel is identical to the pre-R796 64-bit
+design: 1,993,998 common fetches, 0 differ, frame hash identical in 10 of 10
+(5 lists x 2 memory models).
+
+Mutations (test_m2_texel_bl48 fails, plain / M2_TBL_SDRAM):
+  m1  address from the combinational pick (the new register removed)
+                                         52,400 / 52,283
+  m2  second cycle not dropped for a fill (hq_go without !fl_v)
+                                         10,966 / 10,988
+  m3  bypass removed from o_q (stale rs_nib)
+                                         70,932 / 71,064
+  m4  entry compare on the pick (pre-simplification)
+                                         0 -> the compare is redundant,
+                                              removed
+  m5  zero flag indexed by the combinational pick
+                                         0 / 0 -> the zero flag is NOT
+                                              exercised: no timeouts occur
+                                              in the bench
+Benches: lint_top; test_m2_texel_bl, _bl4, _bl8, _bl48 (LW8=0 cycles
+unchanged: 783,895 NS2, 766,218 NS4); test_m2_texel, _texel_cdc,
+_texel_cdc16, _raster3d, _raster_fill, _span_tex, _sdram, _sdram13,
+_sdram128, _sdram_x2, _sdram_cdc, _cpu_sdram, _romload, _boot -- all PASS.
+quartus_map --analyze_file passes.
+
+Not established: the fit and its timing (the structural depth above is not
+a timing result), and the board. The zero-flag path (ms_z[hq_s]) is correct
+by construction but is not tested by any bench.
