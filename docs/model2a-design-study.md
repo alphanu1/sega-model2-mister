@@ -29446,3 +29446,18 @@ alone -- 5efcc72 + R799 is building (s954-s956).
 lint_top clean; Quartus parses Model2.sv. Owed: the board (the menu-mask
 H/h prefixes are MiSTer's documented CONF_STR syntax, not used in this core
 before).
+
+**R802 -- THE LOCK DOES NOT HAPPEN WITH TEXTURES OFF.** A tester, 2026-10-10:
+with the OSD "Textures Off" (status[27] -> q_tex[0] forced 0, so no texel
+fetch at all -- SDRAM ports 2, 10, 11, 12 idle, the texel cache and
+m2_texel_cdc quiet) the random lock (R748/R750/R777/R785/R800) does not
+occur. R750's mechanism is a CPU load from work RAM returning a code address
+(0x1868) or the word in memory being overwritten; the texel path never
+writes SDRAM, so the leading suspect is a CPU read (or write) corrupted under
+texel traffic -- completion routing, a crossing, port 2's boot/texel
+handover, or ordering under class-port contention. R789 (4 slots, 13 ports)
+and R796/R798 (8-word bursts) multiplied that traffic, which fits the lock
+seeming more frequent lately (s945: 45-60 min, then 20 min). Not yet a cause:
+a stress bench (real m2_sdram, CDCs and bridge, CPU traffic checked against a
+shadow under maximum texel traffic) and cheap on-chip checks for the
+lock-hunt build are under way.
