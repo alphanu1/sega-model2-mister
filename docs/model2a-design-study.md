@@ -30071,3 +30071,8 @@ HUD frame: 2D sky/sea and timer live, 3D 0 fps, lap/position digits gone).
 Consistent with R812 being the fix: the build without it still locks, and
 sooner in a race at the higher draw rate. Not a telemetry build, so the
 mechanism is not confirmed for this one.
+
+**R810 ON THE BOARD.** s994 (c02b233, released as Model2_20261011.rbf,
+232ce658) -- Ben, 2026-10-11: "game over is now working as it should". The G
+is drawn. Confirms the inferred half of R810: the board's results-screen
+walks do start before their swap.
