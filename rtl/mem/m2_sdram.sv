@@ -1012,7 +1012,7 @@ module m2_sdram #(
         tag_w    <= {3'd0, tag_w[RD_LAT-1:1]};
         tag_last <= {1'b0, tag_last[RD_LAT-1:1]};
         if (tag_v[0]) begin
-          cap[tag_w[0]] <= dq_r;
+          cap[tag_w[0][1:0]] <= dq_r;   // R807: explicit [1:0]; Quartus drops out-of-range writes (words 4-6 of an 8-word burst)
           if (tag_last[0]) begin
             // The final word and its buffer write share an edge, so deliver
             // the staged word directly rather than reading back a stale slot.

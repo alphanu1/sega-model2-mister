@@ -29649,3 +29649,17 @@ internal errors, none in the last batch after /tmp was cleared). The
 lock-hunt v2 build (5efcc72 + P/L/X records, 75/37.5) closed on all three
 seeds; s980: clk_sys +0.905, clk_mem +0.188, holds >= +0.140, HDMI -0.220,
 RBF 604e22481fbdb5b43121db8acf177751.
+
+**R807 -- s983's TEXTURES WERE BROKEN BY AN OUT-OF-RANGE INDEX THAT ONLY
+VERILATOR WRAPPED.** s983 (2a7b338) on the board: speed "not that much
+different", textures broken -- garbled car decals, speckle on the hills and
+on the V.R. sign. m2_sdram.sv:1015 `cap[tag_w[0]] <= dq_r`: tag_w is 3 bits
+(R787: word 0-7 of an 8-word burst), cap is [3:0][15:0]. Verilator wraps the
+index (4 -> 0 ...), which is what R787 intended, so every bench passed;
+Quartus follows the standard and drops an out-of-range write, so words 4-6
+never reach cap and the second half of every 8-word texel line is
+{word 7, words 2, 1, 0} -- garbage in half of every line. Verilator -Wall
+gives no warning for a variable index past the end. Fix: cap[tag_w[0][1:0]].
+The same assumption must not hide elsewhere in R787/R796/R798/R804's code
+(being audited). The speed reading on s983 stands as a fetch-pattern
+measure only (the line data was wrong, the traffic was not).
