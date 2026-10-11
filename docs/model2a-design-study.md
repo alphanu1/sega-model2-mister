@@ -29631,3 +29631,13 @@ quartus_map --analyze_file passes.
 Not established: the fit and its timing (the structural depth above is not
 a timing result), and the board. The zero-flag path (ms_z[hq_s]) is correct
 by construction but is not tested by any bench.
+R804 on the fitter: 2a7b338 (R796 + R798 + R804 + R799 + R801) at 80/40,
+nine seeds, none closed. s966/s967/s971/s973 Quartus internal errors (TDC,
+STA, DYN, STA) -- with the 16 GB tmpfs /tmp holding 12 GB of scratch on a
+31 GB machine running three fits; 6 GB cleared after s968. s968 clk_sys
++0.137, clk_mem +0.650 (R804's head path closed), HDMI -0.974, hold -0.294
+on clk_i960. s969 clk_mem -0.133 (u_texel fl_h -> rs_nib / o_q: the fill
+half through the shared MLAB read into the bypass), s970 clk_mem -0.017
+(m2_sdram rr_mask). s972 clk_sys -0.835 (m2_fb_wcomb wlo -> mk_valid), s974
+-0.324 (mb86233_core state.S_LABB_W -> maddr_q). 41,085-41,211 ALM (98%):
+scattered paths, placement at 98%. More seeds (s975-s977).
