@@ -27,7 +27,9 @@ and frames identical. s989-s991 = 7b41994 (s985) + R808 only
 hold), HDMI -1.302 (all in ascal's polyphase filter -- the worst HDMI miss
 yet, report-only by the rule); 98% ALM. RBF
 build/Model2_20261011_s991_fbwhold.rbf 933a21aed8d21c7d0e0d67dda7f30165.
-s989/s990 missed core clocks. s987 ON THE BOARD (Rev A soak from 12:06). Next levers measured in R808 (4 span sets
+s989/s990 missed core clocks. s987 ON THE BOARD: Rev A 156 min attract, NO LOCK (was 20-60 min). Deluxe soak next.
+NOTE: s991 does NOT carry the lock fix (7b41994 predates 27943dd) -- a release
+build must come from HEAD (R808 + R810 + R812 together). Next levers measured in R808 (4 span sets
 -5..-9% more, ~+300 ALM).
 WATCH NOTE: watch980.sh misses a lock on debug builds -- after a trap 'G'
 carries RIP/PFP, so its flip/vbl count reads 0 and was treated as no data.

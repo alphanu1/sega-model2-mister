@@ -30048,3 +30048,10 @@ touched. Not timed: no fit.
     1.3 ms of every frame, textures on or off.
 
 *Not verified:* the fit, timing at 80 MHz, the board.
+
+**R812 ON THE BOARD.** s987 (5efcc72 = s945 + the R812 fix only, 80/40, RBF
+82ef63d4) in Revision A attract from 12:06: no lock in 156 min of fps
+readings (89 readings at ~100 s, every one 36-58 fps after boot; Ben: "nearly
+3 hours, no lockup"). The lock it targets came at 20-60 min on every earlier
+build (s980: ~35 min, same set and scene). Deluxe (whose lock showed at the
+attract backdrop) not yet soaked.
