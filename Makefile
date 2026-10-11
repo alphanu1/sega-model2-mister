@@ -151,6 +151,17 @@ syn_check:
 # its own. This is R94's lesson for the third time -- a guard that cannot see
 # the class of bug it is standing in front of is worse than no guard, because
 # it is believed.
+# R809: VARIABLE INDEXES PAST AN ARRAY'S END. Verilator wraps them for packed
+# and power-of-2 arrays; Quartus (the LRM) drops the write and reads X -- R807's
+# broken textures, which every bench passed. This reads Verilator's elaborated
+# tree (real parameters) and flags any variable select whose range can exceed
+# its array. Candidates are listed for review; most are bounded by the logic.
+lint_idx:
+	@echo "== variable selects past an array's end (R807 class)"
+	@rm -rf obj_idx && verilator --json-only -Wno-fatal -Wno-lint -Wno-style -Wno-PROCASSWIRE --top-module emu \
+	  -Irtl/sound/jt12 -Isys $(LINTTOP_RTL) sys/hps_io.sv rtl/pll/pll.v sim/lint/altera_pll_stub.v Model2.sv --Mdir obj_idx >/dev/null 2>&1
+	@python3 sim/lint/idxcheck.py obj_idx/Vemu.tree.json obj_idx/Vemu.tree.meta.json
+
 lint_top:
 	@echo "== lint Model2.sv and everything it instantiates"
 	@verilator --lint-only -Wall -Wno-DECLFILENAME -Wno-fatal --top-module emu \

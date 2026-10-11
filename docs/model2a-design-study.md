@@ -29673,3 +29673,25 @@ textures off, R789), the dominant cost is the span pipeline's per-lookup
 overhead, whatever the filter reads. Suspect, from m2_span_tex's own comment:
 four cycles of perspective divide serialised ahead of every texel fetch at
 step 1. Being profiled per lookup (sm2-builds/sm2-spanprof-7b41994).
+
+**R809 -- A CHECK FOR R807's CLASS, AND THE AUDIT: NO OTHER REACHABLE CASE.**
+Verilator 5.052 and the LRM (iverilog; what Quartus follows), tested: an
+out-of-range write at index 5 / read at 6 -- Verilator WRAPS for every packed
+array and every power-of-2 unpacked array (logic [3:0][15:0] p4, u4[4], and
+even packed [2:0][15:0], whose bit offset it truncates to 6 bits), and drops
+/ reads 0 only for non-power-of-2 unpacked arrays; the LRM drops the write
+and reads X in every case. Verilator -Wall warns for some shapes
+(WIDTHTRUNC on bit extraction) but not for packed element selects (R807's
+shape); iverilog would have caught R807.
+  * sim/lint/idxcheck.py + `make lint_idx`: reads Verilator's --json-only
+    elaborated tree of emu (real parameters), computes each variable select's
+    index range and compares it with the declared range, seeing through the
+    truncations Verilator inserts. Validated on 19 planted cases and on the
+    pre-fix m2_sdram.sv:1015. Candidates are listed for review.
+  * The audit (all 98 project candidates read by hand; m2_texel_bl, cdc and
+    span_tex swept over NS/RSP_D/LW8/IB/K/TXK): R807 was the only reachable
+    one. Latent, not reachable: m2_geo_clip.sv:226 (sk_rd_addr at sp == 0,
+    read unused), m2_geo_xform.sv:220 (t[3] when a_comp == 3, don't-care),
+    m2_raster3d.sv:1317 (an unselected ?: arm), m2_texel_bl.sv:372 (SW
+    aliases slots only for NS > 4). unique/priority cases complete; no signed
+    indexes. Run `make lint_idx` on changed RTL before a seed sweep.
