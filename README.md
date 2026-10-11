@@ -1,11 +1,16 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later
      Sega Model 2 core for MiSTer FPGA — Copyright (C) 2026 alphanu1 -->
 
-# Sega Model 2A-CRX for MiSTer
+# Sega Model 2 for MiSTer
 
-An FPGA implementation of Sega's Model 2A-CRX arcade board for the
+An FPGA implementation of Sega's Model 2 arcade board, the original Model 2
+that Daytona USA runs on, for the
 [MiSTer](https://mister-devel.github.io/MkDocs_MiSTer/) platform, targeting the
 DE10-Nano's Cyclone V `5CSEBA6U23I7`.
+
+**Only Model 2 for now.** The later boards (Model 2A-CRX, 2B-CRX and 2C-CRX)
+use different hardware. Each will need its own branch, with the parts that
+differ swapped in, before its games can run.
 
 **This is a work in progress, released as a beta.** **Daytona USA (Deluxe
 '93)** boots and runs its attract mode with the full picture — textured, lit 3D
