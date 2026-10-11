@@ -1,5 +1,16 @@
 # Handoff
 
+## 2026-10-11 (afternoon): RELEASED Model2_20261011.rbf = s994 (c02b233)
+
+releases/: Model2_20261011.rbf (232ce65807684c4b676d584b133ea385), the two
+plain MRAs and the two [15kHz CRT] MRAs; README with the speed (attract 57
+solid, race 57 for 80-90% -- Ben on s991, same RTL as s994 minus R810/R812),
+the changes since 20261008b, defaults (Double Buffered, Gamma MAME), the CRT
+section, and a new "Not finished" list. Top-level README speed/video rows
+updated. Merged to main by PR (merge commit). s994 on the board with a 4 h
+fps/lock watch from 14:51. NEXT: speed -- the remaining 10-20% of race frames
+(an agent is measuring R808's levers per ALM in sm2-builds/sm2-speed2-5bc60fb).
+
 ## 2026-10-11 (late morning): THE LOCK FOUND AND FIXED IN SIM (R811/R812)
 
 CAUGHT: s980 (lock hunt v2) locked at ~35 min on Revision A. 0x192C executed
