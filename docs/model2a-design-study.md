@@ -30076,3 +30076,214 @@ mechanism is not confirmed for this one.
 232ce658) -- Ben, 2026-10-11: "game over is now working as it should". The G
 is drawn. Confirms the inferred half of R810: the board's results-screen
 walks do start before their swap.
+
+**R813 -- THE DRAW'S NEXT TWO COSTS WERE NOT THE TEXEL PATH: THE CLEAR RAN
+ALONE BEFORE EVERY DRAW, AND HIDDEN SPANS WERE WALKED A GROUP A CYCLE. THE
+CLEAR NOW RUNS UNDER THE DRAW AND A HIDDEN SPAN IS DROPPED: -16..-25% (L12).**
+
+After R808 (s991) the board holds 57 fps in attract and 80-90% of the time in
+game. R808's profile and its list of measured levers set the order of the
+search; the ALM budget (98%, LAB-limited, ~+150 placed without a saving, R798)
+set the measure: draw time saved per ALM.
+
+*Believed:*
+  1. The 1.32 ms framebuffer clear before every draw (R808's last lever) was a
+     fixed cost of the double buffer: the buffer drawn next is the one shown
+     until the swap, so it cannot be cleared early, and the draw cannot start
+     on a line the clear has not reached.
+  2. Hidden (FTB) groups, 0.96 cycles a lookup, needed "hidden-group runs":
+     the mask read at issue time, skipping painted runs 8 groups a cycle --
+     an upper bound of 1.0-3.2 ms a draw, at the cost of a second read before
+     the divide pipeline.
+  3. Loading a span on its predecessor's last issue was worth ~3% (R808: one
+     bubble a span, 0.15 a lookup).
+
+*Now known:*
+  1. THE CLEAR CAN RUN UNDER THE DRAW. The clear is the writer's own burst
+     source on the same DDR3 port, so ORDER, not the buffer swap, is the
+     constraint: a pixel must not be cleared after it is drawn. A window
+     (m2_fb_wcomb's write burst) goes out only once the clear has passed its
+     line -- clr_y moves on a line's last ack and the port writes in order --
+     so the first band starts at once and waits only for its own 8 lines. The
+     port has the room: during a draw the writer's own beats are ~100k against
+     ~700k cycles (r57 L12).
+  2. WHEN the clear takes the port matters more than whether it does. Issued
+     at any free cycle, its 32-word chunks hid only 0.86 ms of the 1.32 (r57
+     L12): a chunk holds the port ~34 cycles while a textured span a few
+     pixels long closes a window every few cycles, and with both windows full
+     the walk stalls (writer refusals 73.9k -> 116.7k cycles). Shorter chunks
+     helped (16 words: 1.13 ms, 8: 1.20). Issuing a chunk only while the
+     writer is QUIET (no span held or walking, no word in B, no window open)
+     -- or when a window is waiting on the clear -- hid 1.28 ms (r57) and
+     1.31 ms (rpk) with the original 32-word chunks (refusals 77.8k, as HEAD).
+     The clear then ends ~200k cycles into the draw (r57), not at 105k.
+  3. MOST HIDDEN GROUPS ARE WHOLE HIDDEN SPANS, not runs inside visible ones.
+     Of the skipped groups a draw: r57 103,535 of 142k in 8,707 fully hidden
+     spans; rpk 291,911 of 321k (32,277 spans); r66 123k of 200k; f2200 108k
+     of 176k; apk 62k of 114k. A hidden span costs a group a cycle AND holds a
+     span slot until its last group has passed the in-flight queue -- the
+     slot every visible span behind it waits for (R808 item 3).
+  4. SO THE LEVER IS A SPAN CULL AT THE INPUT, not a faster skip. A span that
+     WAITS at m2_span_tex's input (and most do: two spans in flight) is
+     checked against the fill mask a word a cycle; all painted, it is taken
+     and dropped. It reads the mask through the walk's own query port, first:
+     that cycle the query's group is answered "not full" -- fetched instead of
+     skipped, never a wrong pixel, since the writer's mask test keeps the
+     picture exact. +2..+6% fetches (rpk 226,759 -> 239,978), all answered
+     identically. Its own mask copy was ~1% faster and +52 ALM standalone;
+     reading only when the port was free lost half the gain. A coarse check
+     (4 pixels a bit, a span's ends rounded out) costs 0.2% of the draw
+     against an exact one (r57 609.8k vs 608.8k cycles, own-copy builds).
+  5. Loading the next span on the last issue: <= 0.5% even with the timing
+     ignored (iss_last combinational into ld_over). With two span sets a slot
+     is almost never free at that moment. Dropped.
+  6. FOUR SPAN SETS (R808's NSP 4) still pays on top: -5..-9% more (L12),
+     -22..-30% against HEAD. With the slot values narrowed (below) its cost is
+     +21 ALUT / +192 registers in the full map -- registers, not logic.
+  7. The span walk carried y, x1 and its own x in 32 bits from a 16-bit queue,
+     and every consumer takes [15:0]. Narrowed (iss_x 17 bits, so x1 + 7
+     cannot wrap), the same answers: -54 ALUT / -15 registers in the full map
+     (-69 ALM, -111 registers standalone), which pays most of the cull.
+
+*The change* (m2_fb_wcomb, m2_raster3d, m2_span_tex):
+  * m2_fb_wcomb: I_CLR/I_CLRW leave the intake. The clear (cl_on, clr_y,
+    clr_x) is a second source for the burst FSM: F_IDLE sends a window if one
+    is pending and its line is below clr_y (f_win), else a clear chunk if the
+    writer is quiet or a window waits. The clear starts, as before, only once
+    what was drawn before the request is flushed; in_ready is low only between
+    the request and that start. clear_busy = cl_on until the last line's ack.
+    `empty` does not include the clear. m_din/m_be select on the register
+    f_cl (was the ist decode).
+  * m2_raster3d: C_IDLE waits for the clear to be TAKEN (fb_clear_req low),
+    not done (FB_WCOMB only); the LAST band's C_DONE (fb_complete) also waits
+    for !fb_clear_busy, so a frame is never published half-cleared.
+  * m2_span_tex: SPCULL (default 1, active with FTB) and CULLG 4. A span that
+    stood one cycle starts the check from bit slices of its own x0, x1, y
+    (first word {y[2:0], x0[8:5]}, words after it x1[8:5] - x0[8:5]); one word
+    a cycle through the query's port; culled only while the same span still
+    stands. A span off the left/right edge is never culled; a row outside the
+    band is not checked (the walk's own query counts it painted, mp_f1).
+    The cull's take: in_ready ORs `cull`, and ld_cold / ld_over / the flat
+    pass-through use in_valid && !cull.
+  * m2_span_tex: y_p, x1_p, rt_x, rt_x1, e_x, e_x1 16 bits, iss_x 17; the
+    outputs sign-extend.
+
+*Measured* (tb_m2_raster3d, the core's configuration as R808 -- FTB, PXC, FRB
+2, M2COV, SPLIT_TRI, FB_DDR3 + wcomb, TXLATE 3, TXNS 4 / TXRSP 4 / TXK 16,
+TXLW8, UZF 4, step 1, bilinear, R107 RN 10 RD 8; MAME's lists r57, r66, apk,
+rpk, f2200; L1 / L12 / L30 as R808. HEAD 5bc60fb reproduces R808's numbers to
+the 0.01 ms. Draw at 80 MHz, ms):
+
+                          r57    r66    apk    rpk  f2200
+  L1   HEAD              9.08   9.33  10.22  12.58  10.37
+       clear under draw  7.81   8.02   8.91  11.27   9.02   -10.4..-14.1%
+       cull only         8.34   8.23   9.84  11.42   9.87    -3.7..-11.8%
+       clear + cull      7.09   6.89   8.49  10.11   8.52   -16.9..-26.2%
+       + NSP 4           6.66   6.40   7.73   9.62   7.96   -23.3..-31.5%
+  L12  HEAD              9.75  10.01  11.16  13.16  11.00
+       clear under draw  8.48   8.66   9.81  11.85   9.65   -10.0..-13.5%
+       cull only         8.95   8.90  10.78  12.09  10.51    -3.4..-11.1%
+       clear + cull      7.71   7.55   9.43  10.73   9.16   -15.5..-24.6%
+       + NSP 4           7.11   6.96   8.55  10.20   8.57   -22.1..-30.4%
+  L30  HEAD             12.31  12.66  14.89  15.32  13.38
+       clear under draw 11.08  11.33  13.54  14.00  12.01    -8.6..-10.5%
+       cull only        11.52  11.58  14.59  14.35  12.98    -2.0..-8.6%
+       clear + cull     10.27  10.26  13.22  13.02  11.63   -11.2..-18.9%
+       + NSP 4           9.43   9.53  12.17  12.43  10.99   -17.8..-24.7%
+  Bus jitter (M2_R3D_JIT 200, L12): HEAD 15.24 15.88 17.18 18.20 16.28;
+       clear 13.04 13.42 14.71 15.57 13.58; clear + cull 12.96 13.49 14.76
+       14.50 13.11 (r66 / apk +0.05 against the clear alone).
+  HPS write queue (WQ 4, scaler 30%): r57 / rpk 18.09 / 20.47 -> clear 15.93 /
+       16.58 -> clear + cull 15.46 / 15.71.
+
+Profile (cycles a real lookup, mean of five lists, L12): the clear moved
+"queue empty" 0.80 -> 0.27; the cull moved "group skipped" 0.96 -> 0.39.
+What is left: issue 1.00, pipe refill 0.42, two spans in flight 0.51 (NSP 4's
+two), queue empty 0.38 (the fill not keeping up -- now visible), credit stalls
+0.36, in-flight queue full 0.17.
+
+*Answers.* Against HEAD, every texel answer common to both is identical and the
+displayed frame's hash is identical: clear + cull 2,991,040 common fetches,
+0 differ, hash 15 of 15 (5 lists x L1/L12/L30); clear alone 2,991,072 / 0 /
+15; with NSP 4 2,991,024 / 0 / 15; the bus-jitter and write-queue runs, hash 7
+of 7, 0 Avalon violations.
+
+*Benches* (the worktree): test_m2_fb_wcomb 43/0 and test_m2_fb_write 42/0
+(new: spans sent while the clear runs survive it, every pixel of 384 x 496
+checked; m2_fb_write passes it by refusing them); test_m2_fbw_chain all 9 pass;
+test_m2_span_tex 7,214/0; new test_m2_span_tex_ftb 17/0 (the cull: one-word and
+multi-word hidden spans culled; open first pixel / last word / coarse group,
+off-edge and empty row not culled; a span taken at once not held);
+test_m2_raster3d 40/0; test_m2_raster_fill 152,373/0; lint_top clean; lint_idx
+the same 147 candidates as HEAD. Mutations:
+  writer bench:  no line block (f_win = pend)  1 fail (987 px wrong); also the
+                 whole renderer, r57 hash 1149a338 -> 43468163
+                 block on > not >=                1 fail (966 px)
+                 clear at any free cycle          0 (speed only, as meant)
+  cull, test_m2_span_tex_ftb / whole renderer (r57, rpk hash):
+                 last word not checked            2 / both differ
+                 first word's start off by one    3 / both differ
+                 query answers "full" on a steal  - / both differ
+                 a word not painted ignored       8 / -
+                 coarse bit = OR, not AND         7 / -
+                 off-edge check removed           1 / -
+                 stage-1 alignment (cs1_v = 1)    1 / -
+                 answer kept across a take        - / not caught: the queue's
+                                                  bubble after a pop resets it
+                                                  (unreachable in the core)
+
+*Cost.* Full-design quartus_map (17.0, Model2.qsf), HEAD -> this change:
+  m2_fb_wcomb       484 -> 499 ALUT (+15), 448 -> 449 registers
+  m2_span_tex     1,578 -> 1,669 ALUT (+91), 1,467 -> 1,475 registers (+8)
+                  (the cull +148 / +23, the narrowing -54 / -15)
+  m2_raster3d    11,343 -> 11,440 ALUT (+97), 10,466 -> 10,476 registers
+  design estimate 40,319 -> 40,398 ALM (+79, with +71 i960_top / -58
+                  m2_geometry of map noise in untouched modules), 48,831 ->
+                  48,843 registers; DSP 87, block bits, the 10 uninferred-RAM
+                  instances unchanged; span_tex's mask still an MLAB
+  standalone      m2_fb_wcomb 429 -> 439 ALM; m2_span_tex 1,404 -> 1,375 ALM
+                  (cull alone 1,444, +40)
+Budget: +97 ALUT / +10 registers, ~+68 ALM at the design's 1.43 ALUT/ALM,
+<= ~+170 placed by R798's 2.5x; the standalone maps sum to -19. 0 M10K, 0 DSP.
+NSP 4 on top: m2_span_tex +21 ALUT / +192 registers, design estimate +96,
+standalone +77 ALM: ~+100..+240 placed -- still a study-level decision.
+
+*Timing, by construction* (80 MHz; no fit):
+  * Writer: f_win is pend[fk] and a 9-bit compare of wkey[fk]'s line (fk a
+    register) against clr_y -- ~4 LUT levels into the F_IDLE enables (addr_r,
+    m_blen, ridx, f_cl, fst); the clear's address arithmetic is the one I_CLR
+    had, on the same addr_r. w_quiet, m_din/m_be's select (f_cl) and in_ready
+    (n_v, clear_req, cl_on) are registers. The known near-miss s972 wlo ->
+    mk_valid (c_go -> pg_we) is not touched.
+  * Span walk: the query's MLAB address gains a 2:1 select (cs_run, a
+    register, between two registers) -- one LUT before mk[] and the 128:1
+    mk_valid select; mq_full gains one priority term (a register). The cull's
+    path is register -> address select -> MLAB -> 4-input AND -> 8-bit
+    compare -> its own state: about the query's own second half. Stage one
+    is bit slices and a 4-bit subtract from the queue's head. `cull` is
+    registers AND in_valid (a register), so in_ready / ld_over's late input
+    (pipe_en) is unchanged; ld_cold, ld_over and the flat pass-through gain
+    one register-driven input.
+  * The narrowing only shortens adders and compares (iss_last 32 -> 17 bits,
+    e_x1 32 -> 17).
+
+*Model 1* has no framebuffer, no texture walk and no fill mask: its band
+painter clears each band in the fill path (1,984 cycles, four banks) and gave
+up its background clear because it wrote a DISPLAYED buffer behind the beam --
+a dual-clock M10K read during write (m1_raster_band). Here the clear writes the
+DDR3 buffer the scanout is not reading (fb_draw != fb_show from the swap), so
+that hazard does not arise; the hazard that does -- a pixel cleared after it
+is drawn -- is what the line block closes.
+
+*Not verified:* the fit, timing at 80 MHz, the board. The bench's DDR3 takes a
+beat a cycle; on the board the clear's chunks and the draw's windows share the
+HPS bridge with the scanout (which keeps its priority), so the clear's hiding
+is bench-measured only. The bus-jitter and write-queue runs say the gain
+survives a slower bus; they do not say how much of the 1.3 ms the board's
+clear really costs.
+
+*Next levers, measured* (on top of this): four span sets -5..-9% (L12,
++~100..+240 placed; regs, so moving col_p / tex_p's single-reader fields to
+MLAB is the place to look for its saving); the fill's supply (queue empty 0.38
+a lookup, m2_raster_fill's per-quad setup) is now visible; the rest is the
+texel round trip.

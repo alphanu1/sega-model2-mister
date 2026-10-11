@@ -212,6 +212,49 @@ int main(int argc, char **argv) {
     ck("and takes spans again", (long)d->in_ready, 1);
   }
 
+  // ---- R813: SPANS SENT WHILE THE CLEAR RUNS. m2_fb_wcomb takes them and
+  // writes a window only once the clear has passed its line; m2_fb_write
+  // refuses them until the clear is done. Either way every one must survive
+  // the clear: a window written ahead of its line's clear is wiped. Lines at
+  // both ends of the buffer, the clear's first line straight away, and one
+  // line twice (the later span wins where they overlap).
+  {
+    mem.clear(); valid.clear(); busy_for = 1;
+    std::printf("test: spans drawn while the clear runs survive it\n");
+    struct S { int y, x0, x1; uint32_t col; };
+    const S ss[] = { {0, 0, 495, 0x102030}, {1, 3, 9, 0x405060}, {7, 100, 130, 0x708090},
+                     {383, 0, 495, 0xA0B0C0}, {382, 17, 17, 0xD0E0F0}, {200, 250, 251, 0x123456},
+                     {0, 40, 44, 0x654321}, {191, 480, 495, 0x0F0F0F}, {192, 0, 1, 0xF0F0F0} };
+    d->clear_req = 1;
+    int i = 0; for (; i < 400000 && !d->clear_busy; i++) tick();
+    ck("the clear started", (long)(i < 400000), 1);
+    d->clear_req = 0;                          // as m2_raster3d does: dropped once busy
+    long under = 0, lost = 0;
+    for (const S &q : ss) {
+      for (i = 0; i < 4000000 && !d->in_ready; i++) tick();
+      if (i >= 4000000) { lost++; continue; }
+      if (d->clear_busy) under++;
+      d->in_valid = 1; d->in_y = q.y; d->in_x0 = q.x0; d->in_x1 = q.x1;
+      d->in_col = q.col; d->in_painted = 1; d->in_moire = 0;
+      tick();
+      d->in_valid = 0;
+    }
+    ck("every span taken", lost, 0);
+    for (i = 0; i < 4000000 && (d->clear_busy || !(d->in_ready && d->empty)); i++) tick();
+    ck("the clear and the spans finished", (long)(i < 4000000), 1);
+#if TB_WBURST == 32
+    ck("m2_fb_wcomb took spans under the clear", (long)(under > 0), 1);
+#endif
+    long wrong = 0;
+    for (int y = 0; y < 384; y++)
+      for (int x = 0; x < 496; x++) {
+        uint32_t want = 0;
+        for (const S &q : ss) if (q.y == y && x >= q.x0 && x <= q.x1) want = 0x01000000u | q.col;
+        if (pix(0, y, x) != want) { if (wrong < 4) std::printf("    y %d x %d got %08x want %08x\n", y, x, pix(0, y, x), want); wrong++; }
+      }
+    ck("each pixel the last span's, or cleared", wrong, 0);
+  }
+
   // ---- R640: MOIRE. Only !((x ^ y) & 1) is written: the lower half of every
   // word on an even line, the upper on an odd one. Every alignment, both line
   // parities, and a single-word body burst (the case a BE test would loop on).
