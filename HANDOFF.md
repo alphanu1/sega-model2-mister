@@ -1,5 +1,23 @@
 # Handoff
 
+## 2026-10-11 (early hours): LOCK HUNT v2 READY; SPEED BUILD STILL SEEDING
+
+ON THE BOARD: s945 (5efcc72, 80/40) -- judder fix + CRT MRA flag; tester has
+it with the [15kHz CRT] MRAs. Backups: build/Model2_20261010_s945_crt.rbf,
+_s939.rbf; on the card Model2.rbf.s945/.s939/.s936.
+READY TO LOAD: s980 = lock-hunt v2 (5efcc72 + trap C/G, previous-instruction
+P, task-load L at 0x185x AND 0x192x, last-store-to-record X; 75/37.5), RBF
+604e22481fbdb5b43121db8acf177751 (build/Model2_20261011_s980_lockhunt.rbf).
+Load, leave in attract (Rev A locks at the V.R. demo, Deluxe at the backdrop,
+20-60 min), watch: scratchpad watch980.sh, decode: decode_lock.py.
+LOCK FACTS: R800-R806 -- not coin/texture triggered (textures off still
+locks), tied to one attract scene per set; stress bench found no memory-side
+fault; R750's 0x1868 evidence fits a CPU-side cause as well.
+SPEED: HEAD 2a7b338 (R796/R798/R804 128-bit texel lines, R799, R801) fits at
+98% but 12 seeds have not closed (scattered misses 0.02-0.8 ns; Quartus
+internal errors on 5 -- /tmp is a RAM tmpfs, keep scratch small). s981-s983
+running. R797 withdrawn (R801: menu mask instead).
+
 ## 2026-10-10: TGP 2.3x FASTER (R771-R775), TYRES BACK (R769). BUILDING.
 
 NIGHT: s936 (d8c2457 = R784 + R786 + R788, 80/40) ON THE BOARD, RBF
