@@ -79,6 +79,24 @@ static uint32_t ref_colour(uint16_t c555, int luma) {
   return (uint32_t(c[0]) << 16) | (uint32_t(c[1]) << 8) | c[2];
 }
 
+// R784: a TEXTURED polygon's colour is the slope m2_span_tex scales per texel:
+// the table read at luma 32, MAME's curve, times the polygon's (selected)
+// luma at its 6-bit key's midpoint, times the output curve's gain (Off 191,
+// Mild 219, MAME none); a non-zero component keeps one 565 LSB under Off/Mild.
+static uint32_t tex_colour(uint16_t c555, int lu, int sel) {
+  const int lm = (lu & 0xfc) | 2;
+  const int lt = sel == 0 ? lm : (lm * ((sel & 2) ? 191 : 219)) >> 8;
+  uint8_t c[3];
+  for (int i = 0; i < 3; i++) {
+    const uint32_t c5 = (c555 >> (5 * i)) & 0x1f;
+    int v = (gam(xlat[i * 0x2000 + ((c5 << 8) | 32)] & 0xff) * lt) >> 8;
+    const int lo = (i == 1) ? 4 : 8;
+    if (sel != 0 && c5 != 0 && v < lo) v = lo;
+    c[i] = uint8_t(v);
+  }
+  return (uint32_t(c[0]) << 16) | (uint32_t(c[1]) << 8) | c[2];
+}
+
 static void ck(const char* w, uint32_t got, uint32_t want) {
   checks++;
   if (got != want) { std::printf("  FAIL %-30s got=%08x want=%08x\n", w, got, want); fails++; }
@@ -123,7 +141,7 @@ int main(int argc, char** argv) {
   pal3d[0x155] = C555;
   for (int c = 0; c < 3; c++) for (int i = 0; i < 0x2000; i++)
     xlat[c * 0x2000 + i] = uint16_t(0xA500 | ((((i >> 8) & 0x1f) * 7 + (i & 0x3f) * 3 + c * 11) & 0xff));
-  d->col_inval = 0; d->tex_lum = 0;
+  d->col_inval = 0; d->tex_lum = 0; d->gamma_sel = 0;
 
   // ---- build one object: three polygons exercising all three link types
   size_t w = 0;
@@ -312,7 +330,25 @@ int main(int argc, char** argv) {
     // that is what the user judged right on the board, so the expectation here
     // scales with it rather than assuming full.
     ck("textured polygon keeps its palette colour, at the selected brightness",
-       col0, ref_colour(C555, (int)luma0 >> 1));
+       col0, tex_colour(C555, (int)luma0 >> 1, 0));   // R784: the slope
+    // R784: under Off the slope carries the curve's gain; the colour cache
+    // must not hand back the MAME-curve entry (R630 empties it on a change).
+    d->gamma_sel = 2; tick();
+    d->start = 1; tick(); d->start = 0;
+    uint32_t colo = 0, lumao = 0;
+    for (int budget = 0; budget < 60000 && (d->busy || budget < 10); budget++) {
+      tick();
+      if (d->poly_valid && d->poly_ready) { colo = d->poly_col; lumao = d->poly_luma; }
+    }
+    ck("R784: textured, Gamma Off: the slope x 191/256", colo, tex_colour(C555, (int)lumao >> 1, 2));
+    d->gamma_sel = 1; tick();
+    d->start = 1; tick(); d->start = 0;
+    for (int budget = 0; budget < 60000 && (d->busy || budget < 10); budget++) {
+      tick();
+      if (d->poly_valid && d->poly_ready) { colo = d->poly_col; lumao = d->poly_luma; }
+    }
+    ck("R784: textured, Gamma Mild: the slope x 219/256", colo, tex_colour(C555, (int)lumao >> 1, 1));
+    d->gamma_sel = 0; tick();
     ck("three polygons emitted", n, 3);
     thdr[0x100 + 0] = 0x0000;
   }
@@ -333,7 +369,7 @@ int main(int argc, char** argv) {
     // R261: the placeholder follows the brightness selector like any other
     // textured polygon. Selector 0 is half, which is what this expects; the
     // check below proves the control reaches it at all by moving the selector.
-    ck("grey at the selected brightness", col0, ref_colour(0x4210, (int)luma0 >> 1));
+    ck("grey at the selected brightness", col0, tex_colour(0x4210, (int)luma0 >> 1, 0));   // R784
     // R261: move the selector to FULL (2) and the same polygon must come back
     // at full luminance. Before R261 the placeholder was pinned at half and
     // this check would fail whatever the selector said.
@@ -344,7 +380,7 @@ int main(int argc, char** argv) {
       tick();
       if (d->poly_valid && d->poly_ready) { col2 = d->poly_col; luma2 = d->poly_luma; }
     }
-    ck("grey follows the selector to full", col2, ref_colour(0x4210, (int)luma2));
+    ck("grey follows the selector to full", col2, tex_colour(0x4210, (int)luma2, 0));   // R784
     d->tex_lum = 0; tick();
     thdr[0x100 + 0] = 0x0000; pal3d[0x155] = C555;
   }

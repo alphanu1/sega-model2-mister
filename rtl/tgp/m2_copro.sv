@@ -320,14 +320,14 @@ module m2_copro (
     .clk(clk), .rst_n(rst_n),
     .push(fin_push), .din(fin_din),
     .pop(tgp_in_pop), .q(fin_q), .q_valid(fin_valid),
-    .full(fin_full), .count(fin_count), .dropped(dbg_in_dropped)
+    .full(fin_full), .count(fin_count), .dropped(dbg_in_dropped), .held()
   );
 
   m2_fifo_m10k #(.DW(32), .DEPTH(FD_OUT)) u_fout (
     .clk(clk), .rst_n(rst_n),
     .push(tgp_out_push), .din(tgp_out_data),
     .pop(fout_pop), .q(fout_q), .q_valid(fout_valid),
-    .full(fout_full), .count(fout_count), .dropped(dbg_out_dropped)
+    .full(fout_full), .count(fout_count), .dropped(dbg_out_dropped), .held()
   );
 
   always_ff @(posedge clk or negedge rst_n) begin

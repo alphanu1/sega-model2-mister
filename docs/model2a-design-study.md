@@ -27304,3 +27304,2770 @@ s758-s760 (d08ba0a, 75/37.5): s759 CLOSES every core clock -- clk_sys
 (s741, on the board, is -0.678). 41,279 ALM. RBF md5
 73e11496cba339a002205ba7a178ed05, 4,635,532 bytes. s758 clk_sys -0.629 /
 HDMI -0.914, s760 clk_sys -0.679 / HDMI -0.315 -- not examined.
+
+**R728 -- A CODE CACHE ON THE CPU SIDE OF THE BRIDGE (8 KB).** s759 on the
+board (Ben, 2026-10-08): a race runs ~29 game fps with either draw method --
+the line buffer (R724) did not move frames under one vblank. R724 cut each
+instruction line fill to one round trip; the round trip itself remained, and
+the race's code does not fit i960_icache's 512 B. From s751's IP samples
+(8,427 outside the frame-sync wait): 98% in program ROM (< 0x200000); half
+the time in 1,840 B of it, 75% in 4,960 B, 90% in 11,216 B. Data-read waits
+are work RAM (0x50xxxx, 4.3% of samples) and the display-list buffer (0x91,
+2.2%); data reads of ROM are negligible.
+So m2_cpu_bridge keeps instruction lines on the CPU side: 512 lines x 16 B,
+direct-mapped, {valid, addr[20:13], line} in one M10K array (137 bits, 7
+blocks at 512 x 20), clk_cpu. A fetch below 0x200000 that misses the line
+buffer reads the array on the way in (its address is bus_addr) and is
+answered from it the next cycle on a hit (C_CC) -- the line goes into `lb`
+as R724's would, no crossing; a miss crosses as before, one cycle later, and
+its line is written into the array when it comes back. Program ROM only, so
+no coherence: the load holds the CPU and the bridge in reset, and a sweep
+through the write port clears every entry after reset (512 cycles; nothing
+is looked up or filled until it ends). M10K: the memory side's data cache
+goes 16 KB -> 8 KB (DC_LINES 1024; 17 blocks -> 9), which is where most of
+its code lines were. CC_EN = 0 restores R724 exactly.
+tb_m2_cpu_bridge 923 checks, 0 mismatches: a refetched line answered in <= 3
+CPU cycles (39 steps against 79 for a miss), two lines 8 KB apart sharing an
+entry, every word of 64 cached lines, work RAM never kept, and a ROM changed
+under a cached line across a reset. Planted faults all caught: the tag
+compare weakened to 6 bits (2 mismatches), no reset sweep (the stale line
+after reset), CC_EN = 0 (3). tb_m2_cpu_real: retired-IP hash a95ee045a6c3424b,
+unchanged; 1,309,792 cycles against R724's 1,310,260 -- boot code is a copy
+loop whose one refetched line the line buffer already answers, so this bench
+cannot show the gain; only a race can. lint_top, test_m2_cpu_sdram, Quartus
+parse clean.
+
+**R729 -- R693'S TWO-PHASE HANDSHAKE, PORTED ONTO THE CURRENT BRIDGE.** R722's
+third lever. R693 (172730a, r639-beta) was never on main: R704 suspected it
+of the black 3D, and R708, R710 and R712 then found that fault's real causes
+(the keep-last, Single buffered's lost lists, R697/R698), so it is
+unconvicted. Re-made by hand on the bridge as it is now (R697, R698, R724,
+R726, R728 are all newer than it): req_cpu toggles once per access and
+ack_mem once per completion; every completion (seven sites) toggles ack_mem,
+clears rmw_done and lhalf (S_DONE's old work) and returns to S_IDLE; S_IDLE
+takes a toggle not yet seen (req_seen) or rmw_done's re-dispatch; R698's
+landed-colour pulse fires on the ack's toggle; the CPU side completes on
+ack_cpu != ack_seen and goes straight back to C_IDLE, and does not accept in
+the cycle its own bus_ack is up (the i960 still shows the old address then --
+m1_cdc_port's duplicate transaction, R693). C_CLR and S_DONE are
+unreachable. The telemetry's request bit is now `pending` (req_mem !=
+req_seen), not the raw toggle.
+tb_m2_cpu_real (real ROM, 100,000 instructions): hash a95ee045a6c3424b
+unchanged; 1,309,792 -> 1,202,195 CPU cycles (13.10 -> 12.02 CPI, -8.2%);
+icache waiting 103,804 -> 83,213, LSU 797,807 -> 710,811.
+tb_m2_cpu_bridge 923/0, test_m2_cpu_sdram, test_i960_top, test_m2_boot pass;
+lint_top and Quartus parse clean. (test_m2_boot did not build: tv80's
+SIMILARNAME warnings, the same as test_m2_ioz80's; waived the same way.)
+
+**R730 -- THE BRIDGE ANSWERS IN THE CYCLE IT HAS THE ANSWER.** The night's
+stage 4 was to be the i960's own sequencing (R722's "~5 CPI"), and s751's
+race capture says otherwise: outside the frame-sync wait the core is working
+in 11.6% of samples (T_FETCH 3.4, T_EXEC 3.3), against 44% waiting on the bus
+and 10.2% held by the TGP; and i960_top already prefetches the next word
+during execute. What the fetch waits ARE: T_FETCH_W 24.7% of samples, 11.0%
+of all with nothing yet in the bridge -- the icache's own miss handling and
+the hand-off. Every bridge answer reached the i960 a cycle late (bus_ack and
+bus_rdata registered) and cost a second dead cycle after it (the requester
+moves its address on the ack, so the bridge sat out the stale cycle: R724's
+lb_gap, R729's own-ack guard). An icache line fill from the line buffer took
+two cycles a word.
+Now bus_ack / bus_rdata are combinational from the state that holds the
+answer: lb_fast (a line-buffer word, from bus_addr), cc_fast (the code
+cache's hit, in C_CC), rd_fast (a completed crossing, in C_WAIT), wr_fast (a
+write posted as it is presented). The requester takes the ack at its edge and
+moves at that edge, so no stale cycle remains and lb_gap and the guard are
+gone. No combinational loop: i960_lsu (state S_XFER, cur_addr), i960_icache
+(fill_base + fill_word) and i960_top (grant_q) drive bus_req/bus_addr from
+registers, and grant_q already took an ack in a request's first cycle.
+tb_m2_cpu_real: hash a95ee045a6c3424b unchanged; 1,202,195 -> 1,108,127 CPU
+cycles (12.02 -> 11.08 CPI, -7.8%); from R724 alone 13.10 -> 11.08, -15.4%.
+TWO BENCHES MODELLED A REQUESTER THAT NO CPU IS: tb_m2_cpu_bridge's
+held-request loops and tb_m2_cpu_sdram's helpers moved the address, or
+dropped the request, the instant an ack was visible between clock edges --
+with a combinational write ack that changed the write under the edge that
+captures it (2 byte-store and 1 held-write mismatches). They now take the ack
+at the CPU edge, as i960_top does. tb_m2_cpu_bridge 923/0, test_m2_cpu_sdram,
+test_i960_top, test_m2_boot pass; lint_top and Quartus parse clean.
+The TGP (copro_stall, 10.2%) is the remaining non-bus cost; ours is Model 1's
+FSM MB86233, which §4.2/M2-F put at 2.3x short of the real MB86234 at 50 MHz
+(less at 75). Pipelining it is M2-F, not a night's change.
+
+**R731 -- TOWARDS 80 / 40: OUR OWN clk_sys PATHS UNDER 0.9 ns AT 75.** 80 MHz
+takes 0.833 ns off the period, so every clk_sys path with less slack than
+that at 75 fails. s759 (75 MHz, closed) has 101 such endpoints, ~45 distinct
+paths: the TGP (core|x_src_bank / pre_d / x_dst_reg ...), the I/O board's
+Z80 (its firmware RAM -> IR / TmpAddr, 0.21-0.85), the sound board (fx68k
+Ir -> nanoAddr 0.507, jt12 cur_ch -> phinc_II 0.300, MultiPCM 0.793), and
+these of ours, now each given a register:
+  * m2_span_tex rt_p -> e_col (0.493, 12) / e_x1 (0.845, 16): the retiring
+    group's colour, step and span end are taken from its slot as it ENTERS
+    the retire stage (rt_col / rt_k / rt_x1), not through rt_p as it leaves;
+    a slot is not reloaded while its span's groups are in flight (R490).
+  * m2_quad_store qsy -> a_band (0.462): the min/max tree registered with the
+    quad (a_lo / a_hi), the clamp and divide (band_of) at the att_* write.
+  * m2_wr_arb last -> held (0.514): the round-robin pick registered (any_r /
+    pick_r); `last` changes only on a release, which is always followed by
+    the gap cycle, so the registered pick is current. One cycle when a write
+    reaches an idle port.
+  * m2_persp_recip s2_r0 -> out_q (0.663): the second multiply and the
+    un-normalise in separate stages; valid five cycles after in_d, not four,
+    and m2_raster_fill's S_PF_NRM waits five (nrm_wait 3 bits).
+  * m2_raster_fill vtx_r -> oz_emax (0.735): emax from the latched qoz in
+    S_OZ's first cycle (oz_pre; every 5-bit pf_st value is in use).
+  * gam_s2 / gam_m2 -> gam() (0.677): the OSD's gamma choice, a static
+    two-flop copy -- a guarded set_false_path in Model2.sdc.
+Measured: the four saved frames identical in every pixel; draw cycles
++0.00..+0.17% (f2000 1,190,666 -> 1,192,683). test_m2_raster3d 8/8,
+test_m2_wr_arb 4,933/0, lint_top and Quartus parses clean.
+test_m2_raster_fill reports failures and DID BEFORE THIS: HEAD (ea27445) 655
+of 152,369, this 625 -- the bench is out of step with the fill, not new.
+Not yet: fp_add's add_a_q -> sA_small (0.708; shared with the TGP, its
+latency hard-coded in consumers), m2_fill xah -> the DSP's input register
+(0.788, R715's stage absorbed again), clip cs -> engine st (0.838), and the
+sound board and Z80 paths above.
+
+**R732 -- THE TGP'S PATHS TOWARD 80 MHz, AND MODEL 1'S THREE FIXES.** Model 1
+has three TGP timing commits since our copy (4e7dee6). 9705a10 (register the
+whole decode, from prog_rdata) and b66b10f's TGP half (d_lab_q, which 9705a10
+removes again) are ALREADY HERE as our R577 -- which goes further, registering
+u_xfer's outputs too. 9b72de7 (mb86233_mem's stall select registered) is
+ported with its bench; on Model 2 nothing reads that output (mem_stall comes
+from the core's own registered decode, R596/R601), so it moves no path here.
+Two changes of our own for s759's 80 MHz list, no cycle count changed:
+  * mb86233_mem: req / we / addr registered and the bank selects decoded
+    after the flop, not decoded and then registered -- the same function at
+    every port; the AGU now ends at a flop (x_src_bank -> sel_ram0_q /
+    sel_ram1_q / sel_fifo_in_q). The bench now drives a fresh random request
+    after the edge before checking rdata; without that, a select decoded from
+    the LIVE address passed it (111,476 fails with the bench sharpened).
+  * mb86233_alu: cfxd split across ALU stages 1 and 2 as R588 split cxfd
+    (integer part, round decision, sign and zero test registered; the add and
+    negate in stage 2); ALU_LAT unchanged. pre_d -> pint names no opcode, and
+    cfxd is the deepest D-only computation, so this is the likely route, not a
+    proven one.
+make test_tgp unchanged: fp_mul / fp_add / fp_div, mb86233_alu (2,170,388),
+agu, dec, seq (3,000,000 each), xfer (256, exhaustive), core lockstep 8,000
+retires 0 diverged, m2_geo_xform 7,813 -- 0 fails; mb86233_mem 179,399 / 0.
+mb86233_regs fails 46,966 of 3,000,000 BEFORE AND AFTER: the bench treats rf
+0x21 as storage, on Model 2 it is the FIFO (0e49c54). Planted faults caught:
+stall back to combinational (249), live-address selects (111,476), cfxd's
+stage-2 entry removed (19,582). test_m2_boot passes (the TGP retires only 83
+instructions there). lint_top and Quartus parses clean.
+STILL OPEN for 80: x_src_bank -> mem_fout_q (the data-space FIFO at
+0x100/0x400 is Model 1's; MAME's Model 2 copro_tgp_data_map has RAM only, the
+FIFOs are rf 1/2 -- a parameter could remove that route, a behaviour change);
+x_dst_reg -> state.S_LABB / S_DST (inferred: the S_DST write strobe reaches
+m2_tgp's fifo_ack and the S_SRC wait's next state); state.S_DST -> u_seq|pc
+(inferred: brul's target read through the register file into next_pc; a
+brul_reg_q read in S_ALU would cost no cycle, but the lockstep never emits
+brul). And Model 1's deb6642 (a register-sourced `rep` reads b0; Virtua
+Fighter froze on it) is not ported.
+
+**R733 -- R728'S CODE CACHE HANGS THE BOARD AT BOOT; THE REST OF STAGE 2 DOES
+NOT.** The night's board results (Ben asleep; the game in attract):
+  * s761 = s759 + telemetry, attract: 10.41 CPI, frame-sync idle 47.7%, the
+    game 56.7 fps (a new frame every 1.01 vblanks) -- attract is not CPU-bound,
+    so only CPI (telemetry) or a race can show a CPU gain.
+  * s764 = 5feba69 (R728, four-phase bridge): every core clock closes (clk_sys
+    +0.329, HDMI -0.161), cc_mem in M10K (512x137, 7 blocks), data cache 1024
+    lines. On the board it STOPS ON THE BOOT SETTINGS SCREEN (advertise sound
+    / country / cabinet / difficulty / credit) for 6+ minutes: list flips 28.8
+    a second at exactly 2 vblanks, no 3D painted. Two screenshots minutes apart
+    identical.
+  * Control, the same session: s759 loaded again reaches attract with 3D
+    inside 45 s. The board and its NVRAM are fine.
+  * s775 = 5feba69 with CC_EN 0 and the data cache still halved (1024 lines):
+    attract with 3D at 60 s. So the halving is innocent; the code cache is not.
+  * Simulation does NOT reproduce it (yet): tb_m2_boot, 40 M instructions
+    (562 vblanks), HEAD's bridge with the code cache on and off -- identical IP
+    profiles (0x116xx 50%, 0x12xx 18%), no 3D objects in either, and s759's
+    bridge the same at 601 vblanks. That run never leaves the settings screen
+    in any version, so it cannot discriminate; 150 M-instruction runs are
+    under way. tb_m2_boot also fits no telemetry build: stage 2 + M2_DEBUG_LITE
+    needs 4,192-4,201 LABs of 4,191 (stage 3 + it, 4,195-4,198).
+Stage 3 and 4 (R729, R730) are being built WITHOUT the code cache (CC_EN 0,
+data cache back to 16 KB) so they can be judged on the board on their own.
+R733, continued. tb_m2_boot at 150 M instructions (2,506-2,511 vblanks, ~44
+s of game time): s759's bridge and s764's (R728 on the four-phase bridge)
+both still in the settings-screen loop (IP 0x116xx 72%), no 3D -- the bench
+never leaves that screen with ANY bridge, so something the board supplies is
+missing there and it cannot find this fault. CC_EN now defaults to 0 (the
+data cache back to 16 KB); tb_m2_cpu_bridge builds the bridge with -GCC_EN=1
+so the cache stays tested (923/0). With it off tb_m2_cpu_real: hash
+unchanged, 11.09 CPI (11.08 with it on: boot code barely uses it).
+Candidates for the board-only fault, unproven: the M10K's mixed-port
+read-during-write (no_rw_check) -- though in the four-phase bridge a fill's
+write cycle is always C_CLR and no lookup is taken then; and anything the
+real board does to program ROM that no bench models.
+
+**R734 -- STAGES 3 + 4 ON THE BOARD (s779), WITHOUT THE CODE CACHE.** e766474
+with CC_EN 0 (= 8fb82e4's RTL: R724 + R729 + R730 + R731 + R732, data cache 16
+KB), seeds s779-s781: s779 CLOSES EVERY CLOCK, HDMI INCLUDED -- clk_sys
++0.143, clk_mem +0.271, clk_i960 +2.627, HDMI +0.463, holds >= +0.172; 41,242
+ALM. (s780 clk_sys -0.438; s781 Quartus Internal Error, PDB.) RBF md5
+2a4dd429e0881bb6c12decd0df346356. Before it, 46ab126/ea27445-era builds
+without R731/R732 missed on single endpoints (s776 span_q -> col_p -0.677;
+s777 the TGP S_DST_W -> sel_fifo_in_q -0.437, which R732 retimes).
+On the board, attract: boots to 3D (screenshot at 60 s); tools/m2-fps.py
+28.5 pictures a second, 2 vblanks 99% (Single buffered); m2-fbcheck 300 s,
+0 black-fault frames, lowest painted mean 233. CPU speed in a race is Ben's
+test: attract runs at full speed already (R733's s761).
+
+**R735 -- 80 / 40, ROUND ONE: WHAT IS LEFT, AND THREE MORE.** 8fb82e4 at 80 /
+40 (pll outclk1 80, outclk3 40, SYS_MHZ 80; worktree only, not committed),
+s782-s784: clk_sys -0.935 / -0.589 / -0.737, clk_i960 at 40 +1.0..+1.9,
+clk_mem +0.28..+0.86, HDMI -0.08 / -0.91 / +0.08. The list is SHORT -- none
+of the Z80, fx68k or MultiPCM paths R731 feared; at 80:
+  s784  fill a_nyu -> nyu_z -0.737 (6), a_nyo -> nyo_z; fill sy -> symin
+        -0.647 (8), sy -> pmin_r -0.189; TGP x_src_r2 -> mem_fout_q / mem_fin_q
+        -0.17; TGP ALU opr_add_b -> sA_small -0.14; span_tex rt_col -> e_col
+        -0.13; MLAB writes ~-0.1
+  s783  gp_outr -> vs_wait -0.589 and cnt -> cfg_custom_p2 -0.319 (MiSTer's
+        framework, this seed only); fill a_nyu -> nyu_z -0.254; TGP state.S_DST
+        -> mem_fin_q -0.205; jt12 cur_ch -> phinc_II -0.193; span_tex k_p ->
+        mq_f0 -0.113; clip cs -> engine -0.053
+Three fixed, all cycle-free:
+  * fill: clz32 in two halves -- clz16 of each half on nrm_wait 1, joined on 2
+    (the first reader is nrm_wait 4). Equal to clz32 over 300,005 values.
+  * fill: the vertex tournament's first round (four compares) registered at
+    acceptance from the inputs, the final round in S_MINMAX; the extended y as
+    the concatenation {y[13:0], fy} (= (y <<< 2) + fy in 16 bits; no signed'()
+    around a sum, R662).
+  * TGP core: mem_req / mem_we / mem_addr registered, the FIFO selects
+    (0x100 read, 0x400 write) decoded after the flop -- R732's u_mem shape.
+The four frames identical in pixels, fetches AND cycles; make test_tgp
+unchanged (mb86233_regs' 46,966 as before); lint_top, Quartus parses clean.
+
+**R736 -- 80 / 40, ROUND TWO: STILL SHORT, AND NOW IT MOVES WITH THE SEED.**
+07eccf7 at 80 / 40 (worktree only), s785-s787: clk_sys -0.782 / -0.637 /
+-0.497 (TNS -22.5 / -5.9 / -7.6), clk_i960 +1.06..+2.01, clk_mem +0.76 /
++0.94 / -0.053, HDMI +0.025 / -1.072 / -0.617. R735's three paths are gone;
+what fails is a different set on each seed, every one within ~0.8 ns:
+  s785  fill xbh -> the DSP's enable (Mult1/3/5 ENA_DFF0, -0.782: R715's
+        stage-1 register absorbed into the DSP again, as R717 saw) and xbh ->
+        s1_col / s1_cr / s1_cl; geometry wv -> voff_r -0.695, wu -> uoff_r
+        (R718's UV wrap); xform comp -> pool mul_a_q -0.548; fp_add's
+        sA_small from the pool (-0.499, 11) and the TGP ALU (-0.514)
+  s786  gp_outr -> vs_wait -0.637 (framework); the MultiPCM's oct_ram ->
+        pos_ram MLAB write ports (-0.18..-0.62, ten); qsy -> a_lo -0.273
+  s787  TGP state.S_LABB_W -> u_seq pc / rep / src_val -0.497; jt12 cur_ch
+        -> phinc_II -0.309; span_tex k_p -> mq_f1 -0.280; raster div n_mag ->
+        rq -0.206 (32); engine cc_idx -> poly_col -0.025
+At 99% of the device every path near half a nanosecond is a candidate and the
+placement picks which ones fail. 80 / 40 is several more rounds, and the
+deep ones are shared or inherited: fp_add (latency hard-coded in the pool and
+the TGP), the DSP-absorbed stage (needs a keep or a different structure), the
+MultiPCM (third-party). Stopped here for the night; 75 / 37.5 stays.
+
+**R739 -- 80 / 40, ROUND THREE (ours): SEVEN MORE PATHS, NONE ADDING A CYCLE
+BUT ONE.** Ben, 2026-10-09: s779 "still feels no different" -- the clock.
+From R735/R736's lists:
+  * fp_add (geometry pool AND TGP ALU; s785: add_a_q / opr_add_a -> sA_small
+    -0.50 / -0.51): the align shift no longer waits for the 24-bit
+    significand compare. The shift amount needs only the exponents (0 when
+    they are equal), so the shifter is fed by an exponent-only compare, both
+    differences are formed in parallel, and the significand compare decides
+    -- with a 2:1 mux after the shifter -- only the equal-exponent case.
+    Latency unchanged. tb_fp_add 1,968,564 / 0; old vs new on 20,000,000
+    vectors (5,000,000 with equal exponents, plus near-equal and denormal
+    mixes): 0 differences.
+  * fill emit (s785: xbh -> Mult ENA / s1_col / s1_cr / s1_cl -0.78): with
+    M2COV both candidates are clamped beside the sort and selected after it;
+    the emptiness test is made on each pairing. Same values (the clamps are
+    monotonic).
+  * geometry UV wrap (s785: wv -> voff_r -0.695): the four-way minimum in two
+    rounds a stage apart; c_age counts to 4 -- ONE CYCLE MORE PER QUAD HANDED
+    TO THE STORE. geodiff on w1000 / w4000 / w7900: the quad lists (1,181 /
+    259 / 40) identical to before.
+  * m2_geo_xform (s785: comp -> pool mul_a_q -0.548): m_sel kept in a flop
+    beside term/comp, not formed as term*3+comp each cycle. test_m2_geo_xform
+    7,813 / 0; with the increment planted wrong, 7,810 fails.
+  * m2_raster_div (s787: n_mag -> rq -0.206, 32): q_fast - 1 formed in S_COR.
+  * span_tex (s787: k_p -> mq_f1 -0.280): the mask query's step, span end and
+    row selected from the slot one stage early (sh_p[PIPE_D-4]), moving with
+    the pipe (R490).
+  * quad store (s786: qsy -> a_lo -0.273): the min/max pairs at stage a, the
+    second round with the clamp at the write.
+The four saved frames identical in pixels, fetches and cycles to before R735;
+test_m2_raster3d 8/8, test_m2_geometry / geo / geo_clip / geo_engine pass;
+lint_top and every Quartus parse clean.
+
+**R737 -- THE TGP SEQUENCER'S 80 MHz PATHS, NO CYCLE ADDED.** For R736's
+state.S_LABB_W -> u_seq pc (-0.497) / rep / src_val, state.S_DST -> pc, and
+x_dst_reg -> state.S_LABB / S_DST. Routes found in the RTL (mb86233_core):
+the state bit picked agu_r through use_lab_b / use_dst_side into
+rf_rd_addr -- itself a mux over the state -- then u_regs' ~40-way read mux,
+then seq_branch_val -> pc_exec -> next_pc, seq_rep_count -> next_rep, and
+src_val; and x_dst_reg -> rf_wr_en/rf_wr_addr -> u_regs' 0x22 compare ->
+fifo_wr -> m2_tgp's fifo_ack -> the S_SRC hold -> state (the read side the
+same shape through 0x21). Not R735's mem_stall compare: pc and rep have no
+mem_stall in their cone.
+  * The read address is a register: rd_addr_q, loaded in S_DECODE with the one
+    register an instruction can read (the ld/mov source, brul/bsul's
+    register, else 0).
+  * S_RETIRE's read moves to S_ALU (rd_hold); next_pc and next_rep start from
+    it. Nothing the read can name is written between S_ALU and S_RETIRE.
+  * The FIFO strobes come from four flags registered in S_DECODE
+    (src_fifo_q, brul_fifo_q, dst_fifo_q, ldi_fifo_q), one LUT each.
+One timing difference: a brul/bsul through rf 0x21 (the input FIFO) pops in
+S_ALU, a cycle earlier, with the same data; no known microcode does it.
+tb_mb86233_core extended: brul/bsul register forms, rep register and
+immediate forms, rtif, a PC compare on every retire, and a directed test on
+an m2_tgp-exact FIFO model -- 64 checks, 8,000 register and 8,000 PC compares,
+0 diverged (200,000 at 25x trials); the old core passes it too. Planted
+faults all caught (rd_hold never captured, brul index bit, rep ignoring its
+register, the ldi push, the FIFO flag's compare, the ld/mov source, the
+unimplemented gate). Sim-only per-cycle assertions against the old formulas:
+0 mismatches over the lockstep and test_m2_boot's real microcode. make
+test_tgp otherwise unchanged; lint_top, test_m2_boot, Quartus parse clean.
+Found, NOT fixed: (1) an FP ALU op inside the 0x0f group (e.g. op 0x0d with
+clr1) updates ST here; MAME's alu_post_1 leaves it -- st_next is not gated by
+fp_post_en; ST was never compared until this generator. Check against Model
+1. (2) The lockstep's FP-value filter skips most 24-bit integers (they look
+like denormals/NaNs), so most register values go unchecked -- the new PC
+compare is not subject to it. (3) Model 1's deb6642 (register-form rep reads
+opcode[5:0], not b0) is still not ported; now a one-line rd_addr_q change.
+
+**R738 -- THE SOUND BOARD'S 80 MHz PATHS: TWO RETIMES AND ONE PROVEN
+MULTICYCLE.** From R736's list and s759's margins:
+  * MultiPCM oct_ram/pit_ram read -> pos_ram's write-data register (s786,
+    -0.62, ten endpoints; u_pcm2's pos_zero leg the same path): the step's
+    operands are captured on its own edge (pv_pos, pv_step, pv_end, pv_loop,
+    pv_slot) and pos_ram is written from them on the next (step_pos(), the old
+    arithmetic moved verbatim). That slot's position is not read again until
+    the next pass over all 28 slots; pos_zero still clears on the step edge
+    and a key-on still wins.
+  * MultiPCM fetch line -> u_pcm2 acc_r (s759 0.79 at 75): the acknowledge
+    edge captures the byte, level and pan; the shift, pan and add happen on
+    the next edge. acc_l/acc_r are read only on a slot wrap, at least seven
+    enables after an acknowledge.
+  * jt12 cur_ch / cur_op -> phinc_II / keycode_II / detune_mod_II (s783/785/
+    787, -0.01..-0.31): set_multicycle_path -setup -end 2 / -hold -end 1 in
+    Model2.sdc, jt12 itself unmodified. Proof (in the SDC comment): both ends
+    load only on jt12's clk_en; clk_en is one posedge after each cen_reg
+    pulse; cen_reg is ym_cen delayed a cycle; ym_cen's accumulator (+25 a
+    cycle, modulus 3 x SYS_MHZ) leaves 24 after a pulse, so two pulses are
+    never adjacent for SYS_MHZ >= 17 (at 80: one per ~9.6 cycles, never
+    closer than 9). FASTDIV is defined nowhere. Guarded collections, as
+    R590's; the patterns checked against the s759 / s783-s787 register names.
+Audio unchanged, bit for bit: tb_m2_sndboard gained an output hash (the mix,
+YM L/R, both chips raw and rate-stage, every cycle); old vs new RTL identical
+in 15 pairs -- TICK_DEN 50 and 80, sample latency 1/6/60, cache and rate
+stage each bypassed, a 1-cycle ack, and 150 M cycles at 80 (83,720 samples a
+chip); a one-LSB mutant and a step+1 mutant change the hash. test_m2_sndboard
+PASS, hash e7c8a2faf7c44eb9 before and after. ~244 flip-flops. THIRD_PARTY.md
+records the s32 change and jt12's named-register exception. Licences: s32 and
+jt12 both GPL-3.0. Noted, not fixed: fx68k Ir -> nanoAddr (0.507 at 75) has
+not appeared at 80 yet; with PCM_CACHE=0 at TICK_DEN 80 / latency 6 the
+bench's cache check reports 33 wrong bytes on old and new RTL alike (the
+shipping PCM_CACHE=1 is clean).
+
+**R740 -- 80 / 40, ROUND FIVE: WHAT ROUND THREE MOVED.** 1a238c2 (R739) at
+80 / 40, s788-s790: clk_sys -0.808 / -1.158, s790 did not fit; 41,036-41,144
+ALM. Fixing paths moved the failures rather than removing them at 98-99%:
+the MultiPCM (R738 not yet in), geometry hz -> hzmin -1.158 (new), fill
+mul_sl -> mul_pr -0.745, pool add_b_q -> sA_small -0.462 (after R739), store
+a_lo23 -> att RAM data -0.498 (R739's split moved it there), fill m01_r ->
+symin -0.367 (R735's final round), geo_view ib -> a_top -0.395. Fixed here:
+  * geometry z min/max: the six compares registered in Q_MM, the one-hot
+    pick in a new Q_MM2 -- one cycle more per polygon.
+  * fill tournament: the pairs' min/max VALUES registered at acceptance with
+    the select bits, so S_MINMAX is one compare and a 2:1 select.
+  * fill edge skip: 17 x 32 as two 17 x 16 halves registered, then summed
+    (low 32 bits = d*sl[15:0] + (d*sl[31:16]) << 16; 1,000,000 pairs) -- one
+    cycle more on each of S_FS_MULA / MULB. Operands as declared signed wires,
+    not $signed({..}) inline (R662).
+  * quad store: the attribute word finished into b_* and written the cycle
+    after the count; the count does not move (R566 (2) still holds).
+  * fp_add PIPE_A2: an optional register between the compare and the align
+    shift (latency 5). m2_fp_pool sets it (ADD_A2, add tags six deep) and
+    m2_geo_xform's FP_ADD_LAT defaults to 6 (ac 5 bits); the TGP's adder
+    keeps latency 4. Old vs PIPE_A2 on 17,498,119 results in order (gaps,
+    equal/near/denormal exponents): 0 differences. With FP_ADD_LAT left at 5
+    test_m2_geo_xform fails 7,806 of 7,813 -- the mismatch is caught.
+The four frames identical in pixels (draw +0.0..+0.25% cycles); geodiff's
+three lists identical; test_m2_geo_xform / clip / engine / geometry / geo /
+geo_view and test_m2_raster3d pass; lint_top and Quartus parses clean.
+R740, continued -- m2_geo_view ib -> a_top (s788, -0.395): i2f split into
+sign/magnitude (stage 1b) and encode/shift (stage 2); left and bottom stored
+negated in stage 1 so no negate precedes them. A window change reaches the
+projection one cycle later. test_m2_geo_view 37/0, test_m2_geo 118/0, geodiff
+w1000 / w4000 / w7900 quad lists identical.
+
+**R741 -- 80 / 40, ROUND FOUR'S RESULT AND THREE MORE.** 86bdae5 (R737 + R738
++ R739) at 80 / 40, s791-s793: clk_sys -0.467 / -0.519 / -0.353 (TNS -1.7 /
+-4.9 / -3.4) -- from -0.8..-1.2 in round three; HDMI -0.146 / -0.365 /
++0.086; 40,949-41,169 ALM. What was left: the store a_hi23 -> att RAM, hz ->
+hzmin, mul_delta -> mul_pr, pool sA_small (all R740, not in that build);
+clip cs -> pool mul_a_q -0.089; fx68k Ir -> nanoAddr -0.066; and three new:
+  * raster3d fill_band -> the list RAMs' PORT_B_ADDRESS_STALL (-0.467): the
+    replay's hit test was in the read enable. adv now stalls whenever stage
+    two holds a quad and the queue is full, hit or not -- a miss waits a cycle
+    only while the queue is full; nothing is reordered.
+  * fill xah -> s1_col / s1_moire (-0.519): the emit test was the enable of
+    every stage-1 flop. The data now loads whenever stage 1 is free and only
+    s1_valid takes the test (three sites); stage 1 is read only while valid.
+  * span_tex rt_col -> e_col (-0.281): (c*i + c) >> 8 as c*(i+1) >> 8 with i+1
+    latched beside the texel (rt_i1); equal for all 65,536 (c, i).
+The four frames identical in pixels, fetches and cycles; test_m2_raster3d
+8/8; lint_top and Quartus parses clean.
+
+**R742 -- 80 / 40, ROUND FIVE'S RESULT AND ROUND SEVEN'S FIXES.** b19c4fe
+(R737-R740) at 80 / 40, s794-s796: clk_sys -1.119 / -0.739 / **-0.065** (TNS
+-44.9 / -2.7 / -0.086), HDMI -0.446 / +0.198 / -0.218; 40,906-41,058 ALM.
+s796 missed by one geometry path (project sst.S_M1 -> engine st.E_XFW
+-0.065, the pool's combinational grant) and one TGP path (S_LABB_W ->
+maddr_q -0.021). The other seeds: framework gp_outr -> acx -1.119 (s794
+only), fb write-combiner b_idx -> its MLAB -0.97 (s794 only), engine uv_i ->
+st -0.70, fill nyu -> mul_n -0.739, jt12 phinc_II -> eg_V's shift-tap RAM
+-0.31, span_tex q_k -> mq_f0 -0.236. Fixed here, no cycle added:
+  * fill normaliser: the next state's numerator, count, count-1 and the
+    pass-through test registered a state early (sn_r / sz_r / szm1_r /
+    spass_r); the shift starts from flops. mul_z takes sz_r.
+  * engine: uv_last kept beside uv_i (the run's last word, 5 or 7).
+  * span_tex: stp(k) - 1 latched with the slot's other values (q_sm1).
+  * Model2.sdc: jt12 phinc_II / keycode_II / detune_mod_II -> u_pg u_phsh and
+    u_eg eg_V (M10K shift-tap RAMs, both `if(clk_en)`) two cycles -- R738's
+    proof (clk_en never on consecutive cycles). Patterns evaluated on s795's
+    netlist: 28 sources, 102 destinations including the failing eg_V ports.
+Four frames identical in pixels, fetches and cycles; test_m2_geo_engine /
+geometry / geo pass; geodiff's three lists identical; test_m2_raster3d;
+lint_top, the SDC under tclsh, and Quartus parses clean.
+
+**R743 -- 80 / 40, ROUND SIX'S RESULT: 0.15 ns OFF.** 8ee315d (R741) at 80 /
+40, s797-s799: clk_sys -0.280 / **-0.146** / -0.489 (TNS -0.62 / -0.24 /
+-1.06), HDMI -0.166 / **+0.291** / -1.063; ~41,100 ALM. s798's only real
+failure: the sound 68000's Ir -> nanoAddr (-0.146) and the Z80 firmware RAM
+-> IR (-0.011). s797: divb q_fast -> qd_q -0.280, the Z80 -0.161, jt12 effect
+-> phinc_II -0.107 (effect is CPU-written, not clk_en-gated: no exception),
+engine cc_idx -> cc_dirty -0.051. s799: store vtx_r -> fill hi01_v -0.489
+(R740's pair values made the acceptance path longer), s1_y -> span_v -0.085.
+  * Model2.sdc: fx68k Ir -> nanoAddr / microAddr two cycles. Both load only
+    on enT1 = enPhi1 & (tState == T4) & ~wClk; the phase accumulator (+20 a
+    cycle against TICK_DEN = SYS_MHZ) never pulses on adjacent cycles at
+    SYS_MHZ >= 40. Patterns on s798's netlist: 16 sources, 17 destinations.
+  * m2_raster_div: q x d as two 16 x 11 halves, summed in a new S_CORS (one
+    cycle more on the fast path).
+  * fill: the tournament's pair values formed in S_MINMAX's first cycle
+    (mm_pre) from the latched sye and the acceptance's compare bits (one
+    cycle more per quad).
+Four frames identical in pixels (draw +0.0..+0.27% cycles); test_m2_raster3d;
+lint_top, the SDC under tclsh, Quartus parses clean.
+
+**R744 -- 80 / 40 CLOSES (clk_sys), HDMI DOES NOT YET.** 1de95f2 (R727-R742)
+at 80 / 40, s810-s812: clk_sys **+0.093** / **+0.065** / -0.040, clk_mem
++0.61 / +1.06 / +0.91, clk_i960 at 40 +1.73 / +2.03 / +1.47, holds >= +0.148
+(s810, s811); HDMI -1.071 / -1.044 / -0.282 (TNS -21.2 / -35.8 / -0.32);
+~41,010-41,022 ALM. RBFs: s810 0639cb6b143f04a6d524b84f07bf3190, s811
+6a9ecca940d99c136201c4c055b5900f. HDMI is MiSTer's ascal (framework) and has
+always been seed-dependent; the board has run builds at -0.678 (s741) and
+-0.885 (D) without a fault -- -1.07 is past both. The clock change itself
+(SYS_MHZ 80; pll outclk1 80, outclk3 40) is committed with this entry, on top
+of R743; s810/s811 are 1de95f2 + exactly this change. s813-s815 (a3f055c +
+it) are building for a seed that closes HDMI as well.
+
+**R745 -- s814: 80 / 40 CLOSES EVERY CLOCK, HDMI INCLUDED; THE GAME IS NO
+FASTER.** a3f055c (R743) + R744's clocks, s813-s815: s814 clk_sys +0.177,
+clk_mem +0.061, clk_i960 +2.023, HDMI +0.301, holds >= +0.224; 41,121 ALM;
+RBF md5 8d096e92e0225eaebb44e06a5d3b60e3. (s813 HDMI -0.908; s815 Quartus
+STA internal error.) s810 (clk_sys only) on the board, Ben, 2026-10-09: "seems
+like it's the same speed". tools/m2-fps.py, 90 s of a race, Single buffered:
+15.9 pictures a second, 4 vblanks 72% / 3 14% / 2 11% -- s759 measured 4
+vblanks 74%. Neither 80/40 (+6.7%) nor R729/R730 (-15% CPI on boot code)
+moved the frame rate. Expected from R720/R722 if a race frame needs ~1.2
+vblanks of CPU at 37.5: ~20% less work leaves it at ~1.0, and a frame over
+one vblank by any margin still takes two. Not yet measured how close it now
+is, or what the time is: the telemetry no longer fits (R733), so a
+measurement-only build (ca54485 + M2_DEBUG_LITE, the engine read-ahead tied
+to bypass for room) is building, s816-s818.
+
+**R746 -- A RACE AT 80 / 40 WITH THE READ-AHEAD OFF: NOT COMPARABLE, AND WHY.**
+s816 (ca54485 + M2_DEBUG_LITE, the engine read-ahead tied to bypass so the
+telemetry fits; clk_sys +0.053, HDMI -1.148; RBF dc5262b703e7d61d55e3ee3727b35067),
+Ben racing 180 s, Double Buffered: 29.0 fps (1.98 vblanks a frame); 11.56
+CPI (3.24 M instr/s), 60.1% of cycles on the bus; data cache 80.0%. By
+sample (633): data access 40.3% (SDRAM read miss 16.4%, write 7.4%, the
+geometrizer push 0x804000 6.0%), instruction fetch 19.4%, working 17.4%,
+TGP 12.2%, frame-sync idle 10.7%. Against s751 (37.5, read-ahead on, 34.2%
+idle -> ~1.2 vblanks of CPU a frame) this reads ~1.75 -- Ben: "but we were at
+1.2 vblanks before".
+NOT the 80 MHz work: tb_m2_geodiff w1000 / w4000 / w7900 take 1,198,494 /
+555,350 / 537,863 cycles through d08ba0a's geometry and 1,245,923 / 572,707
+/ 554,319 through HEAD's (+3-4%, R739/R740's extra cycles), quads identical
+-- at 80 MHz against 75 that is 2-3% LESS time. The measurement build is the
+difference: without the read-ahead the walk takes ~20-25% longer (R707,
+R709), which is exactly the new push stall (6%, was ~0) and SDRAM misses
+taking three times as long. So a CPU measurement must keep the read-ahead.
+Next: the same build with the read-ahead on and the telemetry trimmed instead
+(no 'T' framebuffer record, no tile-overrun count), s819-s821.
+
+**R747 -- THE BLACK 3D, CAUGHT: THE LIGHT TABLE IS ALL ZEROS, AND R697'S GATE
+HAD HOLES.** Ben, 2026-10-09: "after a while we still get black 3D, no
+lighting -- this has never been fixed; the fix just made it take longer".
+Board, s814 (80/40): every 3D pixel mean 0 after ~25-30 min of attract, the
+game running; an OSD game RESET brings the lighting back (mean 338) -- and
+the geometry, the engine (its colour cache), the read-ahead and the renderer
+reset only on mem_rst_n, so the bad state is something the game rebuilds.
+A lighting telemetry build (s827, 75/37.5, records: light vector, the
+32-entry light table one entry a record, per-vblank mean luminance and
+zero-luminance share) went black after 4 minutes of attract: luminance 0
+on 100% of polygons, the light vector sane and moving, the TGP running --
+and ALL 32 LIGHT-TABLE ENTRIES (diffuse, ambient) = (0, 0).
+That is R697's mechanism: the texture_data count placeholder pushed through
+m2_geo's queue landing after the CPU's direct count patch, the walker reading
+a zero count, the table filled with 0/0. R697 gated the CPU's buffer-RAM
+store on push_busy = q_valid || dst != D_IDLE -- but the queue is an M10K
+FIFO (m2_fifo_m10k) and a pushed word reaches its head TWO cycles after the
+push (the array, then the read in flight), and while it drains the head is
+empty for a cycle with words behind it. q_valid was 0 in every one of those
+cycles. R729/R730 (the toggle handshake, posted writes acknowledged at
+presentation) let the CPU's next store arrive within a cycle or two of an
+I/O push completing, which is why s814/s827 go black in minutes rather than
+the half hour before.
+  * m2_fifo_m10k gains `held` = a word in the array, a read in flight, or a
+    word at the head; push_busy = q_held || dst != D_IDLE.
+  * tb_m2_geo: three words pushed back to back, push_busy checked every cycle
+    until all six halves are in memory -- 121 checks, 0 fails; with R697's
+    q_valid form planted back, 2 cycles with a word queued and push_busy low.
+Other users of the FIFO (the span queue, the copro's two) leave `held`
+unconnected; make test_tgp unchanged; test_m2_raster3d, test_m2_cpu_bridge,
+lint_top and Quartus parses clean. Board verification: the next build.
+
+**R748 -- THE LOCK: T_TRAP AT 0x1868, THREE TIMES, AND A SWITCH FOR R730.**
+Ben, 2026-10-09: in attract the game locks after a while (minutes to ~45);
+an OSD reset recovers it, and it locks again later. Telemetry on three locks
+(s816 at 80/40 read-ahead off; s827 at 75/37.5; s814 by its picture): the
+i960 halted in T_TRAP, dbg_ip 0x1868, the bridge idle, the TGP and the 3D
+stopped because the CPU did. Daytona's program at 0x1860: `callx (r5)`
+(86015000, MEMB mode 4, one word); 0x1864: `ld` with an absolute 32-bit
+displacement (90303000, two words); 0x1868: that displacement, 0x005011FC
+(work RAM) -- not an instruction. The CPU executed the operand: most likely
+it was handed a ONE-word instruction for 0x1864 (a neighbouring word) on
+returning from the call into the middle of the line, stepped to 0x1868 and
+trapped. Not 80 MHz (it happens at 75). Prime suspect R730: a return into a
+half-filled line is the i960_icache's redirect case (R45), which handles a
+same-cycle acknowledge and a later one in separate branches, and R730 mixes
+the two (line-buffer words now answer combinationally, crossings later).
+m2_cpu_bridge FAST_ACK (default 1 = R730): 0 compiles R729's CPU side
+verbatim -- registered bus_ack / bus_rdata, lb_gap, the own-ack guard,
+posted. FAST_ACK 0: tb_m2_cpu_bridge 923 / 0; tb_m2_cpu_real hash
+a95ee045a6c3424b, 12.03 CPI (R729 measured 12.02). Quartus parse clean.
+s833 (e82e57e = R747 + trap telemetry: after a trap 'C' carries the trapped
+instruction word and 'G' the restored RIP and PFP) is soaking in attract.
+
+**R749 -- R747 WAS NOT ENOUGH: THE WALKER'S PAIR CACHE TAKES THE OLD COUNT.**
+s833 (e82e57e, R747 in) went black after 4 minutes of attract (Ben; the
+soak's m2-fbcheck agrees: black-fault frames from +4m), the game running.
+So a second route to the zero count is open. buf_inval (and tex_inval)
+fired only when the CPU's write was DISPATCHED, and the walker reads the
+list through u_geo_pc on port 4, which outranks the CPU's port (R702): it
+could re-read the old word -- the command's placeholder count -- while the
+patch was still queued, and keep it until the next list write. R698 closed
+exactly this for the colours and the engine and recorded the walker's cache
+as "moot", which it is not: the engine's reads lost their pair cache, the
+walker's did not.
+  * m2_cpu_bridge: buf_inval and tex_inval also pulse when the write lands
+    (the completion toggle, as R698's col_inval); r_* still hold then.
+  * tb_m2_cpu_bridge: a buffer write gives >= 2 buf_inval pulses, the last
+    after the SDRAM write -- 925 checks, 0 mismatches; with the landed pulse
+    planted off, both checks fail.
+test_m2_cpu_sdram, lint_top, Quartus parse clean. Board: next build.
+
+**R750 -- THE LOCK'S TRAP, READ: A FUNCTION POINTER OF 0x1868.** s833 (R747 +
+trap telemetry, 80/40, FAST_ACK 1) locked after 29 minutes of attract (black
+from 4 minutes, R749 not yet in). After the trap: dbg_ip 0x1868, the trapped
+word 0x005011FC (the 0x1864 load's displacement, as R748 read it), the saved
+return IP 0x1864, the frame pointer 0x0053F500. The return IP rules out a bad
+RETURN: the callx at 0x1860 ran correctly, saved 0x1864 and went to the
+address in r5 -- and r5 was 0x1868. r5 comes from 0x185C, `ld 12(g13), r5`
+(902F600C: MEMA, offset 12, abase g13): the game's dispatcher calling a task
+through a pointer in its record. So the wrong value is DATA: either that load
+returned the wrong word or the word in memory had been overwritten with
+0x1868. Next: R749 with FAST_ACK 0 (R729's registered answers) and the trap
+telemetry, s837-s839 -- if it does not lock, R730 caused it.
+
+**R751 -- TELEMETRY AT 80 / 40 DOES NOT CLOSE; THE LOCK BISECT DROPS TO 75.**
+Two attempts, both failed. (1) The read-ahead-on CPU measurement R746 called
+for (ca54485 + M2_DEBUG_LITE, 'T' record and tile-overrun count trimmed),
+s819-s821: clk_sys -0.592 / -2.234 / -2.243. (2) R750's bisect build
+(473437f + trap telemetry + FAST_ACK 0) at 80/40, s837-s839: s837 does not
+fit (4,193 LABs of 4,191), s838 clk_sys -0.898 (HDMI -0.120), s839 -0.786
+(HDMI -0.389). The telemetry costs what 80 MHz has left. Since the lock
+happens at 75 / 37.5 as well (R748), the bisect does not need 80: the same
+RTL at 75 / 37.5 is building, s840-s842. The read-ahead-on measurement at
+80 / 40 is still owed, and has to give up something other than the
+read-ahead to fit.
+
+**R752 -- THE BLACK 3D IS A WALK THAT STARTS OVER ITS OWN LIST'S TAIL; R697,
+R747 AND R749 WERE THE WRONG MECHANISM.** Two board results first. s841
+(473437f = R747 + R749, FAST_ACK 0, trap telemetry, 75/37.5; clk_sys +0.362,
+HDMI -0.661; RBF d45cde90431d40a73995e24797779c25) went black 5 minutes into
+attract (screenshot: every 3D pixel black, 2D intact) -- so R749 did not fix
+it -- and ran 50 minutes without a lock before it was replaced (previous
+locks: 4, 29, 43, ~45 min). s845 (fa47c80 + FAST_ACK 0 + a black-3D record
+set, 75/37.5; clk_sys +0.409, HDMI -0.300; RBF 7cdca63fefff4d51de8c876601de50b6),
+UART from power-on, 660 s: the genuine texture_parameters (0x06) at vblank
+98 writes all 32 entries; at vblank 13,052 (3.8 min) a SECOND 0x06 runs and
+the table reads 0/32 non-zero from that frame, luminance 0 on every polygon;
+a third at 32,146. The reference issues 0x06 at boot only (R263), so each
+later one is a phantom -- R333's mechanism, as the study had it. But the
+phantom's frame shows ONE nop, not R254's 280-nop run of a zero count, and
+170 records show 1-3 nops (a well-formed list holds none; one frame had 346).
+The walk is slipping a word or two, often, and the count race was never it.
+s827's capture is re-read the same way: geo_tp_n is a total since reset, and
+its "2" was the boot command plus the phantom.
+
+The slip: a walk started on walk_go = trig && (q_idle || &drain_wait).
+After a flip the game at once pushes its next list into the other buffer,
+so the queue is rarely idle and the walk started on drain_wait's 1,023
+cycles (14 us) -- with this list's tail possibly still queued, or on
+q_idle's q_valid, which has R747's hole between words. Those words then lie
+in the walk's own hold window (R638) and are held for the whole walk, which
+reads the PREVIOUS frame's words there. R638 recorded exactly this ("started
+at once over its own list's tail still queued -- and then held it") and the
+grace counter only made it rarer.
+  * m2_geo: words pushed (push_seq) and queue words landed (land_seq) are
+    counted; a flip records push_seq; a flip's walk starts when land_seq has
+    reached it. Words pushed after the flip are the next list's and do not
+    hold it. q_idle uses q_held (R747) for the vblank fallback, which keeps
+    its timeout.
+  * tb_m2_geo: list A (40 nops + end) pushed over an old list of ends through
+    a write port acknowledging every 30 cycles, flipped with its tail queued,
+    list B pushed without pause: the walk reads all 41 opcodes and starts
+    while B is still being pushed; 124 checks, 0 fail. With the old walk_go
+    planted the walk reads 19 -- the board's slip. Write latency 3 and 300:
+    41 both times.
+  * tb_m2_geodiff w1000 / w4000 / w7900: identical to HEAD, cycle counts too
+    (1,245,923 / 572,707 / 554,319). tb_m2_boot, 30 M instructions: 340 walks,
+    2,042 opcodes, identical. lint_top clean; Quartus parse clean.
+Not established: that nothing else slips the walk. The measure is the nop
+count and the 0x06 count over a long soak -- zero and one.
+
+**R753 -- FAST_ACK 0 BY DEFAULT: R730'S SAME-CYCLE ANSWERS CAUSE THE LOCK.**
+Four locks with R730 in (T_TRAP at 0x1868, R748/R750: at 4, 29, 43 and ~45
+minutes of attract, 75 and 80 MHz). With FAST_ACK 0 (R729's registered
+answers, everything else the same): s841 ran 50 minutes and s845 48 minutes
+of attract without one, both replaced for the next build rather than
+failed. Not proof -- the lock's period is long and irregular -- but the
+evidence now points one way, and a game that locks is worse than one 8%
+slower on boot code (tb_m2_cpu_real: 11.08 -> 12.03 CPI; hash a95ee045a6c3424b
+either way). R730 is not removed: FAST_ACK 1 still builds it. What is wrong
+with it is NOT KNOWN -- R750 says the task pointer loaded at 0x185C was
+wrong, i.e. a load returned the wrong word or a store landed wrong; a
+same-cycle answer handed to the i960 while the bridge's line buffer or the
+posted-write path is mid-update is where to look. tb_m2_cpu_bridge 925 / 0,
+test_m2_cpu_sdram PASS with the new default.
+
+**R755 -- THE BLACK BAND ABOVE THE SKY: THE ROW MASK WAS APPLIED IN WINDOW
+MODE, AND MAME DOES NOT APPLY IT THERE.** Ben, 2026-10-09: driving up a hill
+the sky tilemap moves down and the strip it leaves at the top is black; the
+arcade shows it blue. MAME 0.289 headless, 4,000 frames of Daytona (Lua
+logger): pair 2/3 is in window mode 1 on 3,088 frames (vscr2 0x2Fxx/0x20xx,
+bits 14:13 = 01), the 0x6800 mask table is all zero on every frame, pal[0]
+= 0x0000. segaic24.cpp draw_common's window branch (ctrl & 0x6000, hscr bit
+15 clear, case 1): v = (-vscr) & 0x1ff, rows 0..v-1 draw `layer`, v.. draw
+`layer^1`, with `layer` swapped to 3 when bit 9 of -vscr is clear -- for
+0x2Fxx, TILEMAP 3 ABOVE v (sky: colour 0x60, pen 1, blue) and tilemap 2
+below. That branch draws through tile_layer[]->draw() and never calls
+draw_rect, the only place the mask (`if (win) m = ~m`) exists. Ours applied
+it unconditionally (m2_video Q_MASK_W): tilemap 3 took the zero table
+inverted, all ones, and was masked on every pixel; win_suppress correctly
+removed tilemap 2 from those rows, so they fell to the backdrop, pal[0],
+black. v grows on hills (0x2fad: v = 83).
+  * m2_video: the mask is zero in window mode (any of modes 1-3).
+  * Reproduced with tb_m2_video_frame fed MAME's tile / char / palette /
+    xlat memory: frame 3700 (v 83) rows 0-82 black before, 0 black rows
+    after, row 0 = (0,68,174) as MAME; frame 1663 (v 83) and 2000 (v 17)
+    likewise; rows below v unchanged. lint_top clean, Quartus parse clean.
+Model 1 has the same line (m1_video.sv:666) and never shows it: Virtua
+Racing's ctrl 0x2000 gives v = 0, the even map, unmasked by a zero table.
+Also affects pair 0/1 in window mode (ctrl 0x4000, mode 2, 408 of 4,000
+frames): tilemap 1 was masked there too -- possibly part of the HUD issue,
+not tested. Not covered by a committed bench (the frame dumps are game
+memory and stay out of the repository). Inferred from MAME source and NOT
+seen in Daytona's data: in non-window mode draw_rect's OPAQUE draws pen-0
+pixels of category-1 tiles too, where m2_tile_mixer's hit_cat0 requires
+!prio; and a disabled tilemap 2/3 (vscr bit 15) would still draw in the
+opaque pass. The comment at m2_video.sv ~308 has the v = 0 case backwards.
+
+**R754 -- THE GEOMETRY ENGINE ISSUES ITS TRANSFORMS WITHOUT WAITING: -17 TO
+-24% A LIST, SAME BITS.** Ben, 2026-10-09: with Double Buffered the 2D and
+the attract run at ~30 fps, with Single buffered at full speed. Single
+buffered walks every second list (R699 skip 1), so each has two frames;
+Double Buffered walks every list in one, and a list that overruns holds the
+game (R610/R638: its next list's words are held, the queue fills, the CPU
+stalls) -- every frame two vblanks. tb_m2_geodiff with a cycle profile
+(M2GD_PROF, new, counted to the last quad): w2500 1.21 M cycles at port
+latency 10 through the read-ahead, 15.2 ms at 80 MHz before the renderer
+and the CPU's SDRAM traffic -- over a frame on the board. By engine state
+(w1000): E_XFW 25.8%, E_NXFW 10.9%, E_UV 10.8%, E_RD 8.7%, E_DOT/E_DOTA
+13.1%, E_FOC/E_FOCW 8.6%; projector idle 53%, clipper 79%. The engine waited
+for every transform before reading the next point, though m2_geo_xform
+streams (two product banks, the adder behind them).
+  * m2_geo_engine: the normal and each point are issued as soon as their
+    words are in and the engine reads on; tq (four 3-bit tags) names each
+    result's destination, results are captured in issue order in any state,
+    and a new E_FQ focuses the points in order. E_XFW / E_NXFW are no longer
+    entered. Same operands, same order, same pool.
+  * tb_m2_geodiff, all eleven saved lists at latency 10: -21 to -24% to the
+    last quad (w2500 1,214,722 -> 954,251), quads byte-identical. Old against
+    new engine, w1000 / w3910 / w8100 / w2500 at latency 3, 10, 20, 40:
+    identical quads in all sixteen; -17 to -21% at 3-20, -2% at 40 (the
+    memory then dominates). tb_m2_geo_engine 68 / 0; lint_top and Quartus
+    parse clean. (The read-ahead bench never finishes at latency 0, old
+    engine or new -- a bench limit, not a result.)
+Cost: tq, two raw points (192 bits), a few control bits; no arithmetic.
+
+**R756 -- THE ROAD'S SHAKE: TRUNCATED SNAPS OF DUPLICATED CLIP POINTS. ROUND
+TO THE NEAREST QUARTER, AND CUT EVERY EDGE FROM ITS INSIDE END.** Ben,
+2026-10-09: the road seams move and are not always joined, and in places the
+road shakes by a couple of pixels continuously. Measured (tb_m2_geodiff with
+each vertex's view-space floats, all eleven saved walks, ~45,100 vertices):
+our 3D points match MAME's to ~0.002 px before the screen snap (p99 0.004 on
+the road's clipped corners at z 1.4-4) -- the geometry is right. The error is
+the snap. R626 truncated the pixel and the quarter toward zero separately
+and gave negative x no quarter; and the clipper computes one point several
+times (one plane cuts each child of a polygon separately, endpoints in
+polygon order), a few ulp apart. At the left edge, x = -0.99999 and -1.00001
+truncated to 0 and -1: 70 of 126 left-edge points computed more than once
+split by A WHOLE PIXEL (w4000: quads 253 and 255 share c471376c/c471376f,
+3 ulp, drawn at x 0 and -1), and which way each copy falls is float noise,
+so it changes as the camera moves -- a seam from the left edge and a 1-px
+flicker. On shallow edges the quarter step itself moves the edge sideways
+0.25 x dx/dy (1-2 px on a bob at dx/dy 8-16); only finer vertices shrink that.
+R643's "y 370.25 vs 373.35" was a different split of the same area, not a
+3-pixel error.
+  * m2_geo_project: q = round(4x), half away from zero, from the float times
+    eight truncated (|q| = (trunc(8|x|) + 1) >> 1); pixel q >>> 2, quarter
+    q[1:0], so a vertex is still sx + fx/4 for negative x too. A new S_RND
+    state registers it (the increment and negate behind the shifter, at 80
+    MHz); two fp_to_int instead of four. Streamed throughput unchanged
+    (tb_m2_geo_project 33.1 cycles a point); reference updated to the rule.
+  * m2_geo_clip K_SET: the endpoint inside the plane is cp_a, always, so an
+    edge cut twice gives the same bits.
+  * Walks: points computed more than once with different bits 305 -> 69;
+    copies landing on different positions 90 -> 0 (left edge 70 -> 0).
+    Corner vs the exact projection of our own point: median 0.176 -> 0.087,
+    p90 0.238 -> 0.118, max 1.000 -> 0.125 px. Quad counts identical on all
+    eleven walks. tb_m2_geo_clip 2003 / 0, tb_m2_geometry 42 / 0,
+    tb_m2_geo_engine 68 / 0, lint_top and Quartus parse clean.
+Not done: sixteenth-pixel vertices (the shallow-edge step, ~4x; touches the
+projector, the fraction bus, the store packing and the fill), and Model 1's
+floor-inclusive span rule (hides sub-pixel seams; does nothing for a shake).
+The fill rule itself is exact (seam bench: 0 gaps and 0 overlaps over 2.3 M
+rows when the shared edge's data is identical); R677's "without a gap" holds
+only for that case.
+R756 on the fitter: s852-s854 (d42a8e2, 80/40) missed clk_sys by 2.76 /
+3.07 / 3.21 ns -- the rounding in one cycle (sx_f -> times8 -> fp_to_int's
+shift and negate -> abs, increment, negate -> qx_r, -2.757), with the pool's
+grant paths (project S_M1 -> engine E_LINK -1.98, clip lvl -> pool mul_b_q
+-1.55) and the raster behind it, most likely dragged by the one hopeless
+path. Split: S_RND registers only trunc(8|x|), a shift by the exponent less
+124 with no adder or negate, and S_OUT does the increment and the one negate.
+The eleven walks give byte-identical quads to the one-cycle form.
+d78f059 (R752-R756) at 80/40: s855 / s856 one path each at -0.12 (clip cs ->
+pool mul_b_q; jt12 phinc_II -> eg shift taps), s857 -0.645; s858-s860 from
+the same RTL: s859 CLOSES EVERY CLOCK -- clk_sys +0.128, clk_mem +0.666,
+clk_i960 +2.009, HDMI +0.085, holds >= +0.243; 41,020 ALM; RBF
+4027f4e672717968d0f9da67ed5f928c. On the board 2026-10-09 18:07. (s847, the
+R752 build with FAST_ACK 0, ran ~2 h of attract with no lock and no black
+frame before it was replaced: the third clean soak without R730.)
+
+**R757 -- THE TEXTURE READS BESIDE THE LIGHTING, THE FOCUS MULTIPLIES BACK
+TO BACK: -5 TO -8% MORE, SAME BITS.** Ben on s859 (R752-R756): the sky is
+right, the road's seams look good with some shaking left on the corners,
+Double Buffered attract "speeds up and slows down -- we must be close",
+the race 2-5% faster. After R754 the profile (w2500, 954 k cycles to the last
+quad at latency 10) was E_UV 14.7%, E_FQ 14.2%, E_RD 10.9%, E_DOT/E_DOTA
+17.2%, E_FOC/E_FOCW 9.6%.
+  * m2_geo_engine: once the cull passes a polygon, a fetcher (fs: F_TH0..
+    F_TH3, F_UV) reads the texture header and coordinates while the main
+    machine does the light dot product and the luminance; E_FW (in E_XFW's
+    old slot) waits for it, forms cc_idx from header word 3 and luma8, and
+    applies the translucent-untextured cull. The two focus multiplies of a
+    point are issued back to back and collected in order (E_FOCW no longer
+    entered).
+  * tb_m2_geodiff, HEAD (672bb15) against this, all eleven lists at latency
+    10: byte-identical quads, -5 to -8% (w2500 958,263 -> 889,263; w1000
+    933,364 -> 868,458); w2500 at 3 and 20 and w1000 at 40 identical too.
+    tb_m2_geo_engine 68 / 0; lint_top and Quartus parse clean.
+Less than estimated (10-15%): the profile has moved downstream. w2500 now:
+E_FQ 17.2%, E_FW 12.6%, E_RD 11.7%, E_DOTA 11.0%, E_EMIT 10.2% -- the
+engine holding a finished polygon the projector has not taken -- and the
+quad projector in Q_WAIT 63.7% (its one projection in flight, a 29-cycle
+reciprocal, R217's pj_busy). The projector is the next limit.
+
+**R758 -- THE QUAD PROJECTOR ISSUES ITS FOUR VERTICES BACK TO BACK: -2 TO
+-6% MORE, SAME BITS.** After R757 the heaviest list held the engine in
+E_EMIT 10% and the quad projector in Q_WAIT 64%: R217's single owner bit
+(pj_busy) allowed one projection in flight, so each polygon's four vertices
+(R230 switched the strip cache off -- every vertex is projected) went
+through at m2_geo_project's full latency, ~65 cycles each, though it
+overlaps two (33 a point streamed).
+  * m2_geometry: a queue of owners (four deep) replaces pj_owner / pj_busy;
+    results come back in grant order and are routed by it. The quad projector
+    issues each vertex as soon as the projector takes it, records the vertex
+    index in issue order, and takes the answers below the case in any state;
+    Q_WAIT ends on the last. The 1023-cycle timeout stays; answers it gave up
+    on are counted (w_drop) and dropped if they ever arrive, never handed to
+    the next polygon. w_pj_valid is gated by skip_here so a cached vertex is
+    not sent (moot while R230 holds the cache off).
+  * tb_m2_geodiff, d6e9bce against this, eleven lists at latency 10:
+    byte-identical, -2 to -6% (w2500 889,263 -> 846,527); w2500 at 3 -8%, at
+    20 0%, w1000 at 40 0% -- at long latency the engine's reads dominate.
+    tb_m2_geometry 42 / 0, tb_m2_geo_engine 68 / 0, lint_top and Quartus
+    parse clean.
+Today's total on w2500 at latency 10: 1,214,722 -> 846,527 (-30%), 10.6 ms
+at 80 MHz. The projector is now idle 49%; the engine again: E_FQ 19.1%
+(transform latency), E_FW 13.3% + E_RD 12.3% + E_NORM 6.7% (reads),
+E_DOT/E_DOTA 19.4%.
+
+**R759 -- P1(n)'S FOCUS AFTER THE CULL AND THE LIGHT: -6 TO -9% MORE, SAME
+BITS.** After R758 the engine waited in E_FQ 19% -- mostly for P1(n)'s
+transform, which it needed only to focus P1(n) before the cull dot product.
+The cull reads P0(n)'s transformed point (dpx..dpz) and the normal; the
+light dot product and the luminance read neither P1(n) nor its focus. Now
+P0(n) is focused, the cull decided, and P1(n) focused last: before E_EMIT
+when culled (the strip carry needs it), after the luminance when kept
+(cull_q picks E_STORE's exit). A triangle still ropes P1(n) = P0(n) at
+P0(n)'s store.
+  * tb_m2_geodiff, 28a576c against this, eleven lists at latency 10: byte-
+    identical, -6 to -9% (w2500 846,527 -> 775,284); w2500 at 3 -9%, at 20
+    -8%, w1000 at 40 -4%. tb_m2_geo_engine 68 / 0, tb_m2_geometry 42 / 0,
+    lint_top and Quartus parse clean.
+Today on w2500 at latency 10: 1,214,722 -> 775,284 (-36%), 9.7 ms at 80 MHz.
+Profile now: E_FQ 13.7%, E_RD 13.4%, E_DOTA 12.6%, E_FW 11.7%, E_DOT 8.6%,
+E_FOC 8.5%, E_NORM 7.4%, E_EMIT 6.9%.
+
+**R760 -- THE MINI-MAP, THE CONDITION PANEL AND THE REV NEEDLE ARE DRAWN
+ABOUT CENTRE 1: EACH OBJECT SELECTS ITS CENTRE.** Ben, 2026-10-09: the mini-
+map and the condition textures are in the wrong place (R703, R723). MAME
+0.289 race dumps (headless, Lua coin + start; build/m2lod p14b; walks 5701 and
+6601, kept as build/geodiff/r5701, r6601): one window a frame with c0 =
+(248,270), c1 = (248,316), c2 = (352,152), c3 = (248,316); 7 of 33 objects
+carry opcode 0x20800000 -- center_sel 1 -- 57 of 849 polygons: the map's
+track lines, the CONDITION panel (h0 8000, the checker) and its car dots,
+the rev needle. model2_v.cpp: center_sel = (opcode >> 29) & 3 (:969),
+clip_plane[center_sel] (:468), poly->center = center[center_sel] (:507),
+the projection about it (:661), all four centres from the window command
+(:860-874). Ours kept word 2 (centre 0) and dropped 3-5, and never read
+bits 30:29 -- every object about centre 0, so those 57 polygons sat 46 rows
+(316 - 270) low. A position error, not a texture one: all 57 are untextured
+(h0 0000 / 8000). R641 ruled the select out from ATTRACT, where every object
+uses centre 0.
+  * m2_geo: the window command keeps all four centres (24 bits each); W_FETCH
+    latches bits 30:29 beside the opcode; announcing an object sets win_c0
+    to the selected centre. The walk waits for the whole geometry to go idle
+    before the next object, so m2_geo_view's conversion is long done before
+    the first vertex. m2_geo_view and Model2.sv unchanged; reset centre as
+    win_c0's (248, 320).
+  * tb_m2_geodiff against MAME: r6601 848 / 849 polygons match (u/v 0 off of
+    665 textured, texture parameters 0 differ), r5701 1737 / 1740 (the rest
+    the R643 left-edge clip class); w1000 1148, unchanged. All eleven attract
+    lists byte-identical to d2d61dd (every attract object uses centre 0).
+  * tb_m2_geo: a window of four centres, objects selecting 0,1,2,3,1 -- win_c0
+    is the selected centre at each announcement (130 / 0); with the select
+    forced to 0 four checks fail. The R642 check now holds win_c0 until an
+    object. lint_top and Quartus parse clean.
+Cost ~74 flops and a 24-bit 4:1 mux. Not modelled: the reverse bit (opcode
+bit 27), 0 in every list seen.
+CORRECTION to R222 / R223 / R248 ("Daytona never writes texture RAM"): it
+does. At boot, 32 texture_data commands (op 0x04, 2048 words each, 0x800000-
+0x80F800, one a walk over walks 96-160) fill it -- headers at 0x0000-0x0FFF,
+u/v tables from 0x5000. In a race, one op 0x04 of 280 words a frame at
+0x8050F8: a road piece's u/v (tpa 0x8050F8, tha 0x800078, centre 0). The
+walker's op 0x04 path handles both; whether the board's texture RAM holds
+the boot upload after R223's zero sweep is not verified.
+
+**R761 -- ROLLING START: THE PER-LINE H-SCROLL TABLE (hscr BIT 15) IS READ.**
+Ben, 2026-10-09: the ROLLING START banner does not scroll. MAME 0.289,
+headless, coin at frame 1500 and start at 1600 (deterministic): the banner
+runs ~3326-3800 with 0x5000 (hscr0) = 0x8000 -- bit 15, the per-line table
+-- and 0x5004 (ctrl 0/1) = 0x4000, window mode 2. Table 0x4000 (map 0) is 0
+except lines 184-239 (0xfc24 at f3330, 0xfc20 f3331, 0xff0c f3400 ...): -4 a
+frame, bits 8:0 the split and the scroll, bit 9 which map is left -- the two
+512-px maps one 1024-px strip moving right to left at 4 px a frame (R723's
+"enters from the right"). Bit 15 is set on 2,405 of 7,000 frames (every race
+frame). segaic24.cpp draw_common: window mode with bit 15 takes the pair's
+EVEN map's table (0x4000 + 0x200*layer, :364) for the split and both maps'
+scroll (:397-413); plain mode, the layer's own (:465-481). Ours computed
+win_hs = hctrl_r[15] and used it nowhere -- the comment called the table
+"still owed ... nothing measured reaches it" -- so map 0 drew at scroll 0
+over the whole screen and the text stood still. Model 1 has the same gap.
+  * m2_video: Q_HTAB / Q_HTAB_W after Q_HCTRL_W read this line's table word
+    (window mode: the even map's; otherwise the map's own) into htab_r;
+    hctrl_eff / hscr_eff take it when the governing bit 15 is set, and the
+    split, the left pick and f_hscr use them. 8 more tile-RAM reads a line
+    against ~3,936 cycles; one 16-bit register and a mux.
+  * tb_m2_video_frame on MAME's memory: f3330 / f3400 / f3500 / f3600 / f3700 /
+    f3800, the pixels maps 0/1 paint match MAME 100% (HEAD 5-56%); frames with
+    bit 15 clear or the table zero render byte-identical (R755's f1663, f2000,
+    f3700 among them). lint_top and Quartus parse clean. Not covered by a
+    committed bench (the dumps are game memory); a synthetic fixture sweeping
+    the table's bits 9:0 is owed.
+Side finding, not acted on: vscr bit 15 (layer disable) is folded into
+transparency, but the mixer's opaque pass draws transparent pixels of
+tilemaps 2/3 -- a disabled 2/3 still paints; MAME returns early (:352).
+Daytona never sets it (0 of 7,000 frames).
+
+**R762 -- faee952 (R752-R761) DID NOT CLOSE ON SIX SEEDS: TWO MULTICYCLES AND
+THE TEXEL CROSSING'S READY FROM A FLOP.** s870 Quartus internal error;
+s871-s875 clk_sys -0.593 / -0.514 / -0.214 / -0.480 / -0.751, each on a
+different set, none in the RTL changed by R757-R761. Recurring across the
+five: the I/O Z80's fw_rtl_0 / ram_rtl_0 -> tv80 IR (3 of 5, to -0.379),
+m2_texel_cdc s_ip -> u_span_q rp (2, to -0.593), span_tex internal (2), jt12
+lfo_mod -> u_pg phinc_II (2, -0.260); once each the clipper's kst -> pool
+mul_b_q (-0.751), hps_io byte_cnt -> status (-0.514), raster bank -> the
+quad store's index RAM (-0.118).
+  * Model2.sdc: the Z80's RAMs into its core, two cycles (R590's argument
+    from the other end: the core loads only on cen, one in 20 at 80 MHz); the
+    YM's lfo_mod into phinc_II / keycode_II / detune_mod_II, two cycles
+    (lfo_mod changes only on clk_en && zero; R738's clk_en). Patterns match
+    1,080 RAM keepers / 335 core registers and 7 / 28. Re-timed with the
+    placement fixed: s873 -0.214 -> -0.118 (left: raster bank -> idx_a1).
+  * m2_texel_cdc: s_rdy from a flop. The credit count s_ip - s_rp is kept as
+    s_cr, and "full" (s_cr's next value == K) registered; s_rdy = !s_full is
+    the same value every cycle (simulation: 200,000 cycles, ~180,000 full,
+    0 mismatches against the old formula). tb_m2_texel_cdc 40,804 / 0. The
+    s874 path was 12.4 ns over 8 levels across four LAB regions; its first
+    3.4 ns are gone.
+Not addressed: the clipper's operand mux into the pool (kst / cs / lvl ->
+mul_b_q), which also appeared at -0.12 (s855) and -1.55 (s852, dragged).
+ae5dabd (R752-R762) at 80/40: s876 Quartus internal error (Sub-system DYN,
+as s870); s877 every core clock -- clk_sys +0.111, clk_mem +0.479, clk_i960
++1.700, holds >= +0.208, HDMI -0.114; s878 clk_sys +0.271, HDMI -0.417.
+s877 RBF 43ea4abe13900c92abb04f58120e3445, 41,072 ALM, on the board
+2026-10-09 19:59. (s859, R752-R756, ran 111 min of attract with no lock and
+no black frame before it was replaced.)
+
+**R763 -- MEASURED AT 80/40 ON THE BOARD: A RACE IS CPU-BOUND, ATTRACT IS
+GEOMETRY-BOUND IN HEAVY SCENES.** Ben on s877 (R752-R762): Double Buffered
+menus still not 60 (the boxes flash at half rate), attract and race both
+speed up and slow down, the race less; rolling start scrolls; the HUD is in
+place. Measurement build s886 (ae5dabd + one 'G' record a vblank: cycles the
+walk ran, the renderer was busy (fb_busy), the CPU was held on the push
+queue, >>13; the store's state and fb_busy at the vblank; a picture
+published. The 'C' samples did not fit: s879-s884 needed 4,192-4,202 LABs of
+4,191; s886 clk_sys +0.011, HDMI -0.971, RBF 67e1040970416a861844d273efa30752).
+Ben, Double Buffered, 180 s: attract, then a race.
+  * every list is drawn: 6,021 flips, 6,023 pictures published.
+  * attract (0-55 s): 28.7-49.5 lists/s; the walk active the whole vblank on
+    23-90% of vblanks, the renderer on 14-50%.
+  * race (60-180 s): 28.4-28.7 lists/s -- every second vblank, steady; the
+    walk median 0-6 ms, p90 10-12 ms, NEVER the whole vblank; the renderer
+    p90 15-17 ms; the CPU's push stall ~0.
+So in a race neither the geometry nor the renderer is the limit: the game
+hands over a list every second vblank, and the walk and the draw both fit in
+one. The CPU's work per race frame is over one vblank (R745/R746's
+estimate), which is why R754-R759 moved the race 2-5% and attract more.
+In attract the walk spans whole vblanks often, but "walk active" includes
+waiting for the store (q_ready = P_COLLECT) while a READY list waits for the
+vblank swap -- not separated by this record. The classification of a missed
+vblank from the flags is unreliable: they are sampled at vbl_d, before the
+renderer's own frame_start swap.
+Next for the race: the CPU (R746 at 80/40, read-ahead off: data access 40%,
+instruction fetch 19%, working 17%, TGP 12%) -- the code cache (R728/R733),
+R730's fault (R753), the CPU's SDRAM read latency.
+
+**R764 -- NEVER CAPPED AT 30: THE WALK START AND THE RENDERER'S SWAP RUN
+EVERY VBLANK, WHATEVER THE GAME'S 30 Hz BIT.** Ben, 2026-10-09, s877/s886,
+Double Buffered: the menus run at 30 -- each 10 s countdown takes 20 s, the
+boxes flash at half rate; "3D pacing: Free" changes nothing; Single
+buffered runs them at full speed. "We should never be capped at 30 Hz."
+s886 in the circuit-select menu (30 s): the game flips (0x803008) every
+SECOND vblank; vblank A walk 9.9 ms, renderer idle; vblank B renderer
+14-16 ms, no walk, no flip; push stall 0 -- the walk and the draw never
+overlap, and the game waits a whole vblank between lists.
+geo_walk_start carried MAME's screen_vblank rule -- geo_parse only when
+(videocontrol & 1) == 0 or the frame is even -- and geo_walk_start is also
+m2_raster3d's frame_start (the swap) and m2_geo's frame_start, so with the
+bit set the whole 3D pipeline stepped every other vblank. In MAME the rule
+only decides when the list is parsed; the game loop runs every frame. R256
+adopted it when walks were vblank-triggered (a walk on an odd frame read a
+list still being built: scenery dropouts); since R294 / R666 the trigger is
+"After flip", a list the game has finished, so the rule's reason is gone.
+  * Model2.sv: geo_walk_start = vblank && !nowalk && !r3d_game_hold. wrate_s
+    (Walk rate, parked since R666) no longer selects anything.
+  * lint_top, Quartus parse clean. No bench covers Model2.sv's walk start
+    (tb_m2_boot has its own top); the board decides.
+Being checked alongside (agent, MAME): 0x98000c videoctl_r. MAME returns the
+frame bit always in bit 2, chosen by render_mode (0x10000000 bit 2: 1 = 60 Hz
+-> frame bit 0, 0 = 30 Hz -> frame bit 1); ours chooses by videocontrol bit 0
+and in the bit-0-clear case returns frame bit 1 in bit 3, and does not decode
+0x10000000 at all.
+
+**R765 -- 0x98000c IS MAME's videoctl_r: THE FRAME BIT IN BIT 2, CHOSEN BY
+render_mode. DAYTONA DOUBLE-BUFFERS ON THE BOARD AT LAST.** MAME 0.289
+(headless, Lua): Daytona writes 0x10000000 once, value 4, at frame 0
+(render_mode = 1, 60 Hz), and 0x98000c once, value 0, at frame 24. It reads
+0x98000c once a frame at 0x17cb8 (`ld 0x98000c,r7 ; bbs 2,r7`) and takes
+bit 2 to choose its list buffer -- r3 = 0x10000 or 0 into 0x501368 and the
+write start 0x801008, flipped next iteration at 0x17c78. MAME returns
+((render_mode ? framenum & 1 : framenum & 2) << ...) always in bit 2: 0/4
+alternating, one flip a frame in attract, both menus and the race, lists
+alternating 0x00000 / 0x10000. Ours chose by videocontrol bit 0 and, with it
+clear, returned frame bit 1 in BIT 3 -- bit 2 never set, so on the board
+Daytona always wrote buffer 0. That is R211's / R608's / R610's "single-
+buffered at address 0"; R638's double buffering (from MAME) was never true on
+the board. Forcing our value into MAME: still one flip a frame, CPU time per
+frame unchanged (0.90 ms menu, 6.56 ms race) -- the game does not WAIT on the
+bit, so this is not by itself the menus' half rate.
+  * Model2.sv: io_render_mode latched from bit 2 of writes to 0x10000000-
+    0x101fffff (reset 0, as MAME); 0x98000c = {29'd0, render_mode ?
+    framenum[0] : framenum[1], videocontrol[1:0]}. Mirrored in
+    sim/io/m2_boot_harness.sv.
+  * m2_boot_harness had not built since R758 (it observed pj_busy / pj_owner,
+    replaced by the owner queue); repaired. tb_m2_boot 30 M instructions:
+    PASS, 368 walks, 2,042 opcodes, no unknown (340 before R758-R765).
+  * lint_top, Quartus parse clean.
+CORRECTION to R764: Daytona writes videocontrol 0, so the 30 Hz gate R764
+removed never applied to Daytona -- R764 does not change the menus. It stays
+(no game should be stepped at 30 by the core's own frame_start), but the
+menus' half rate is still open. The menu loop (0x1240) waits only on the
+vblank tick at 0x500000, the copro sync read (0x884000) before each flip,
+and memory; in MAME a menu frame is ~0.9 ms of CPU. Ben: Double Buffered
+menus ran at 60 on an older build -- a regression, being bisected on the
+board's saved RBFs.
+
+**R766 -- THE i960 FIRST IN THE SDRAM PRIORITY CLASS.** The menu measurement
+(R764): a ~100-dword list walks for 9.9 ms, the draw takes 15 ms in the next
+vblank, the walk and the draw never overlap, and the game flips only every
+second vblank although a menu frame is ~0.9 ms of CPU in MAME (R765). The
+CPU's code (the code cache is off, R733), work RAM and the display list all
+live in the SDRAM the renderer reads texels from; its bus wait was measured
+85.8% behind texels (R606), and PRI (R574 / R639 / R702: ports 2, 3, 4, 10)
+put four ports ahead of it -- port 1 got the bus in their gaps, two class
+grants at a time. Ben: "keep hammering at the speed".
+  * Model2.sv: PRI 11'b100_0001_1100 -> 11'b100_0001_1110. The class grants
+    the lowest set port, so the i960 now goes first. It blocks on each access
+    (one outstanding), so it cannot hold the bus; a texel, glyph or walker
+    read waits at most one CPU transaction.
+  * lint_top clean; tb_m2_sdram 1,796,727 / 0 (its own PRI; no bench drives
+    Model2.sv's arbitration with the CPU and the renderer together -- the
+    board decides).
+Expected if the theory is right: Double Buffered menus at 60 (10 s
+countdowns), the race and attract faster. If not, the CPU is waiting
+elsewhere (the copro sync read before each flip, 0x884000).
+R766 on the board: s888 (894004b = R752-R766, 80/40; clk_sys +0.233, clk_mem
++0.846, clk_i960 +2.595, holds >= +0.188, HDMI -0.097; RBF
+eed72e2d05db23cac7f78701525583cc), Ben: "it's the same" -- Double Buffered
+menus still 30 (20 s countdowns), attract still varies, the race still slow.
+So the i960's place in the SDRAM arbitration is not what costs the menu its
+vblank. Next: the full CPU profile (M2_DEBUG_LITE's 'C' samples: IP, the
+sequencer state, the bridge's transaction, copro_stall) in a Double
+Buffered menu and a race -- built at 75/37.5 because at 80 it does not fit
+beside the design (R762, s879-s884); a question of where the time goes, not
+a speed figure.
+
+**R767 -- THE MENU AND THE RACE ARE CPU-BOUND BY A SMALL MARGIN, AND THE CPU
+IS ALMOST ALL WAITING.** The profile build s892 (894004b + M2_DEBUG_LITE,
+75/37.5 because the full telemetry does not fit at 80; core clocks clean,
+HDMI -0.751; RBF f7f2fd8a4ab2eb1fb09e24b246fcbb90), Ben, Double Buffered,
+120 s: about a minute in the circuit-select menu, then a race. 'C' samples,
+tools/m2-decode-cpu.py, by half:
+                         menu     race
+    frame-sync wait     47.5%    38.6%   (idle: the work is done)
+    instruction fetch   15.3%    20.7%
+    data access         15.5%    16.2%
+    TGP (copro_stall)    9.6%    13.7%
+    working             12.1%    10.8%
+Ben: "I don't think it's the CPU" -- and the CPU executes only ~12% of the
+time. But a game running at two vblanks a frame idles (2 - W)/2 of the time
+for W vblanks of work: W = 1.05 in the menu, 1.23 in the race (R720's ~1.2).
+A frame that needs a vblank and 5% takes two: the menu misses 60 by ~5%,
+which is also why attract speeds up and slows down (scenes either side of
+one vblank). And of the busy time, instruction fetch is ~29% (menu) / ~34%
+(race), data ~29% / ~26%, the TGP ~18% / ~22%, execution only ~23% / ~18%.
+The biggest single class, as R694 found: instruction fetch with "nothing in
+the bridge yet" -- the i960's 512 B icache missing, a line fill being four
+bridge round trips. Levers: a larger icache (R693's 2 KB did not fit: 190
+-> 592 ALM, the per-line valid flops and their mux; tags and valid in block
+RAM read beside the data would not scale that way), a line fill as one bridge
+transaction (R694), R730's same-cycle answers (-8% CPI, R753 found them
+behind the lock), the code cache (R728/R733). Being measured first: the
+icache size's hit rate on MAME's instruction stream in a menu, attract and a
+race.
+
+**R768 -- THE i960's INSTRUCTION CACHE 512 B -> 8 KB, ITS VALID BITS IN THE
+TAG RAM.** R767: instruction fetch is ~29% of the i960's busy time in a menu,
+~34% in a race; the menu misses 60 by ~5%. MAME 0.289 PC trace, daytona93,
+20 frames a phase, 16-byte lines, warm misses a frame (share of 512 B):
+                 attract      menu         race A        race C
+    512 B DM     5,410        538          10,384        8,657
+    2 KB DM      3,382 (63%)  473 (88%)    8,011 (77%)   6,306 (73%)
+    4 KB DM      2,046 (38%)  393 (73%)    4,990 (48%)   3,565 (41%)
+    8 KB DM      1,621 (30%)  279 (52%)    3,506 (34%)   3,126 (36%)
+    16 KB DM     1,130        162          2,791         2,649
+    4 KB 2-way   1,692        426          5,017         3,611
+Busy instructions a frame: attract 26,741, menu 9,070, race 47,371; distinct
+lines a frame 22.5 / 7.3 / 37.8 KB. The menu's hot code is 0x18c00 (45%) and
+0x1800 (16%) plus ~1,000 instructions a frame from the 0x220000 ROM mirror.
+~80% of misses at every size are fall-through (line N+1 after N): a next-
+line prefetch is the following lever.
+R693 found 2 KB unaffordable (190 -> 592 ALM): cvalid, a flip-flop per line
+with its own write enable and a LINES-way mux. Now:
+  * i960_icache: the valid bit is bit TAG_W of the tag LUT-RAM word, read
+    asynchronously with the tag -- `hit` as combinational as before. Reset
+    and inval SWEEP it (S_SWEEP, a line a cycle, busy); a request presented
+    during the sweep is remembered and filled when it ends. The places that
+    cleared cvalid[x] are writes of {invalid} to line x (inv_idle, inv_redir,
+    inv_sweep), exclusive with each other and with the completed fill's tag
+    write.
+  * i960_top: LINES 512 (8 KB): data 8 M10K, tags 512 x 20 in MLAB.
+  * tb_i960_icache: 0 mismatches at LINES 32 / 128 / 256 / 512 (201,328
+    fetches); waits out the sweep after reset and inval (its 100-cycle fetch
+    watchdog was shorter than a 128+ line sweep), and tests a one-cycle
+    request during the sweep and the fetches straight after it.
+  * tb_i960_top: waits out the sweep before starting the reference -- the
+    core issues its first fetch only when the cache is free, and window 0
+    closed on that acceptance (IP 0x100 against 0x108). test_i960_top, _irq,
+    +loops, test_i960_rom pass; tb_m2_cpu_real hash a95ee045a6c3424b, 12.03
+    CPI (its boot loop fits any cache); tb_m2_boot PASS, CPI 11.85 -> 11.79.
+    lint_top, Quartus parse clean. The fit report must show ctag in MLAB.
+R768 on the board: s894 (da3ea13, 80/40; clk_sys +0.402, clk_mem +0.150,
+clk_i960 +1.687, holds >= +0.232, HDMI -0.149; 41,401 ALM; ctag in MLAB, 267
+ALM with its read mux, cdata 7 M10K; RBF 5e050fb1d0f2817086b568f723b5d8dd).
+Ben: menus still slow (20 s countdowns), attract unchanged, the race "maybe a
+little faster, mostly 30". So R767's reading -- a menu frame ~5% over one
+vblank of CPU -- does not hold as stated: a ~half cut in its fetch misses did
+not bring it under. Next: a timeline record (flip, walk start, walk end, TGP
+hold, per vblank) instead of a further guess.
+
+**R769 -- SMALL IS NOT FAR: THE TINY CULL TOOK THE CAR-SELECT TYRES. THE
+STORE NOW TESTS AT 2 PX WHILE THE PREVIOUS LIST FITTED, 4 ONLY WHEN IT DID
+NOT.** Ben: the car-select wheels are missing or see-through. MAME walk 4251
+(car select, both #41 cars): geodiff 1,340 polys -> 1,340 quads, 0 off by
+more than 1 px, u/v, z and texture parameters exact -- not geometry. The
+quad store (R233, TINY = 4) refused 621 of them (46%): each tyre is a ring
+of ~32 untextured quads 2-3 px across (h3=1e80) plus small rim quads, and
+those owned 1,884 of MAME's 45,350 3D pixels (4.15%), every one at the
+wheels -- a farther wheel-well poly showed through, or nothing. MAME
+(model2_v.cpp:563-614) and Model 1 have no size cull at all.
+R233's premises, re-measured: "small is far" is false for close-ups; its
+~3,900-quad frames predate R219 and the exact geometry -- MAME's own attract
+peak is now 2,368 polys (median 1,154, p99 2,128 over 3,959 frames), and
+"the extra 17% cover at most 0.24% of pixels" was an attract figure (car
+select: 4.15%).
+  * m2_quad_store: parameter TINY_FINE. `need` counts the list's quads that
+    pass the fine test (saturating); at `clear`, fine <= need < NQ - NQ/8
+    (1,792); reset fine. a_tiny <= fine ? is_tiny_f : is_tiny -- `fine` is a
+    register, so it folds into the last LUT of the two pairwise trees.
+  * m2_raster3d: .TINY(4), .TINY_FINE(2).
+Bench (tb_m2_raster3d, core parameters, MAME's lists): car select 1,338 of
+1,340 stored, wheel-box misses 197/200/223/153 -> 9/7/3/7 px, unpainted MAME
+pixels 2.35% -> 0.70%, draw 337k -> 406k cycles (0.28 -> 0.33 of a video
+frame). Attract f1000/f2000/f5000/f9000: 0 dropped, unpainted pixels equal or
+fewer, draw +0% / +1.2% / +0.3% / +0.9%. f1000 has 1,921 fine-passing quads,
+over 1,792, so a scene that busy stays at 4 -- as before. The cost: the first
+heavy list after a light run is collected fine and can drop its tail (a
+synthetic 3,383-quad list: 1,211 dropped against ~467 coarse); MAME's peak
+makes the realistic figure ~140 quads for one list (estimated, not
+measured), then coarse. New tb_m2_quad_store (23 checks: threshold sweeps
+0-40 px, the tyre ring, the 1,791/1,792 switch, saturation at 50,000) and an
+R769 phase in tb_m2_raster3d (19 checks); TINY_FINE = 0 fails 7 and 4 of
+them.
+
+**R770 -- THE TIMELINE: THE MENU IS AT 60, AND THE RACE'S FRAME IS THE CPU
+PLUS ~5 ms OF TGP HOLD AGAINST 16.7 ms.** s901 (sm2-tl-da3ea13, a timeline
+record per vblank -- flip, walk start, walk end, TGP hold -- built at 75/37.5
+because the full record does not fit at 80; the times below are structural,
+not 80/40 speeds). Menu: 57.1 pictures/s at 75 MHz, the flip 2.08 ms after
+vblank, the walk 0.1 ms, the TGP held 0.2 ms -- the menu is not slow. The
+"slow flashing boxes" Ben saw after R764-R768 were his capture card; on the
+monitor the menu is right ("Menu is fine"). R767's and R768's premise -- a
+menu ~5% over one vblank -- was therefore never true on s877 onwards, and
+R768 measured nothing about it. Race: the flip lands 15.4-16.8 ms after
+vblank, the i960 is held 4.8-5.5 ms a frame waiting on the TGP (the 0x884000
+output FIFO read), the walk ~12 ms from the flip into the next frame, ~40
+lists/s. The game's frame just fits, so it alternates between one and two
+vblanks -- the speed-up and slow-down Ben sees in attract and the race, and
+why fewer cars and less scenery runs faster: less TGP work. The TGP is the
+lever: our MB86234 core is a multi-cycle FSM (fetch, decode, operand reads,
+ALU wait, retire: ~5-11 cycles an instruction, FP latency not overlapped);
+Model 1's is the same design, so there is nothing to port.
+
+**R771-R774 -- THE TGP 2.3x FASTER, MEASURED ON A REPLAYED RACE, BIT-
+IDENTICAL.** R770 made the TGP the lever. Before touching it, a bench:
+`make tgp_replay` (sim/tgp/tb_tgp_replay.cpp, capture by
+sim/tgp/tgp_capture.lua in MAME 0.289, git-ignored under build/tgpcap/). 30
+race frames from 5400 (the "GO!" start, 40 cars): the program, data RAM,
+tables and every word across the TGP's boundary, replayed through m2_copro
+with the bench as an infinitely fast, causally exact i960. Against MAME:
+54,655 outputs, 15 differ, all NaN-vs-NaN encoding; 67,146 io reads exact;
+30 io writes differ in the sign of zero (ldif, below). `make
+tgp_replay_check` requires the RTL's whole result stream (192,746 words)
+IDENTICAL to a recorded baseline -- the test for a faster TGP.
+Baseline: 21.63 M clk_sys cycles, 1,935,951 instructions, CPI 11.17, ~721k
+cycles = 9.0 ms a frame at 80 MHz. S_ALU 43.5% of all cycles: every op with
+an ALU field, nop included, waited ALU_LAT + 1 = 6 cycles -- 1.08 M nops,
+30% of the TGP's time. Fetch, fetch-wait, decode and retire, 4 fixed cycles
+an instruction, another 36%. The command dispatch loop (pc 0x04c-0x057, 12
+instructions a command) was 41.7%.
+  * R771: an op that writes no D, no P and no ST (nop, and MAME's alu_pre
+    default 0x12/0x15/0x1c-0x1f) does not run the ALU. lab and ld/mov skip
+    S_ALU altogether; a transfer to D is already written in S_DST.
+    21.63 M -> 15.23 M, CPI 7.87.
+  * R772: the next word is read while the instruction executes (every state
+    after S_DECODE presents pc + 1). S_RETIRE loads ir and the decode from it
+    when the sequencer goes to pc + 1 (not a taken branch, not a held
+    repeat), and keeps them when an active rep re-runs the instruction.
+    -> 11.84 M, CPI 6.12.
+  * R773: an instruction retires in the state it finishes in -- ld/mov in
+    S_DST (register destination, no ALU op; not after a program-space
+    source), at S_DST_W's completion, or on the ALU's out_valid; lab in
+    S_LAB_WB. A branch, ldi, lipl or stm with nothing to read in S_ALU goes
+    from S_DECODE to S_RETIRE. `retire` is the new ret_now. -> 10.01 M, CPI
+    5.17.
+  * R774: mb86233_alu SHORT: the integer, shift and convert ops, fabd and
+    fned jump from stage 1 to the last stage and answer in 3 cycles, not 6.
+    Valid only for a caller that issues one op and waits (the core does);
+    the streaming ALU bench keeps SHORT = 0 and test_mb86233_alu_short runs
+    it serially and checks the latency (SHORT = 0 under that bench fails
+    1,120,000). -> 9.46 M, CPI 4.89: ~315k cycles = 3.9 ms a frame at 80 MHz.
+All four: tgp_replay_check IDENTICAL; test_mb86233_core (8,000-step lockstep)
+pass; test_mb86233_alu, _alu_short, _mem, _dec, _xfer, _seq, test_m2_geo_xform
+pass; test_m2_boot PASS. test_mb86233_regs fails 46,966 of 3,000,000 at HEAD
+too (rd=21, the input-FIFO register since 0e49c54): a stale model, not this.
+A trap found on the way: tb_mb86233_core's program memory answers in the
+SAME cycle, where the M10K answers the next; R773 presented pc + 1 in
+S_FETCH_W and only that bench broke. S_FETCH_W keeps pc.
+What is left, by state: S_DECODE 20.5%, S_ALU 21.3% (FP ops still 6), S_SRC
+15.3%, S_DST 13.7%, S_SRC_W 10.3%. The next steps are deeper: the decode
+pipelined into the previous instruction, operand reads issued from S_DECODE.
+New timing paths to watch at 80 MHz: seq_cond_passed and io_ack/mem_stall
+now reach the sequencer's in_valid and the decode registers' enable
+(pf_load); seq_pc + 1 reaches the program RAM address.
+Bench findings not acted on: (1) ldif (branch subtype 6) is a no-op here and
+in Model 1; MAME (case 6) loads a register from data memory when the
+condition passes -- true 180 times in 30 frames, leaving P at -0 where MAME
+has +0, written to the atan base (io 0x27, pc 0x7aa); no output differs in
+this window. (2) The game sends 18 `st.s` (16-bit) FIFO stores a frame;
+MAME pushes them zero-extended, our i960_lsu sends {2{half}} and m2_copro
+takes 32 bits -- they reach only the sincos base, harmless here. (3) MAME
+resets M to 1, mb86233_core to 0 -- not exercised.
+
+**R775 -- ldif LOADS A REGISTER.** R771-R774's bench finding (1): branch
+subtype 6 was a no-op here and in Model 1. MAME (mb86233.cpp case 6), inside
+the passed-condition block: `v = m_data.read_dword(ea_pre_0(opcode));
+ea_post_0(opcode); write_reg(opcode >> 9, v)`; sim/tgp/mb86233_ref.cpp
+already had it. Now: S_DECODE registers ldif_go (subtype 6 and the
+sequencer's condition -- nothing between S_DECODE and S_RETIRE writes ST or
+the loop counters); the read takes S_SRC / S_SRC_W with the AGU on
+opcode[8:0], bank 0, post-incremented there; S_RETIRE writes rf
+opcode[14:9]. A failing condition retires from S_DECODE as before. Race
+replay: VERDICT vs MAME PASS (bit-exact except NaN encoding) -- the 30
+sign-of-zero atan-base writes are gone; cycles 9,464,567 -> 9,464,927. The
+baseline stream is re-recorded from this RTL. tb_mb86233_core: an ldif alw /
+!alw test (67 checks; with the fix removed, "ldif alw -> B" fails);
+lockstep 8,000 clean; test_m2_boot PASS. Model 1 has the same gap
+(tools/model1-ref mb86233_seq.sv subtype 6).
+
+**R776 -- THE COARSE CULL ONLY FOR FAR QUADS.** Ben: control the distance
+of the culled quads so they are surely far away. In a list tested at TINY = 4
+(R769: the previous list had >= 1,792 quads passing 2 px), a 2-4 px quad is
+now refused only when its z value is >= 0x3000; under 2 px is refused as
+before. zval is MAME's float_to_zval (model2_v.cpp:171): z / z_adjust as a
+4-bit octave and a 12-bit mantissa, larger farther; z_adjust is 4.0 in every
+dump (car select, attract, race), so 0x1000 / 0x2000 / 0x3000 are z = 4 / 8
+/ 16. Measured on MAME's lists (per-quad size class and zval, pixels charged
+to MAME's owning quad): car-select tyres zval 6,510-8,442, rims 6,529-7,004;
+the race player car 1,804-12,978 but with 1-2 quads of 2-3 px owning 0 px;
+the race HUD at 0 and 1,536; the 2-3 px quads of busy scenes p5 12,055-17,362,
+p50 ~25,000. Sweep of the coarse-with-far rule (stored / MAME px lost): the
+window is bounded below by zval ~8,443 (a coarse car-select list loses the
+tyres) and above by 16,384 (the attract peak, 2,357 quads, overflows: 2,048
+stored, 11 dropped at 18,432, 165 with no coarse cull at all). At 0x3000: car
+select 1,338 even when coarse; attract peak 1,983 stored, 135 px lost (142
+at plain TINY 4); f1000 1,799 / 43; race lists unchanged (all fine). A
+single constant holds while z_adjust stays 4.0 (inferred for scenes not
+dumped; a change would shift zval by whole octaves).
+  * m2_quad_store: parameter TINY_FAR (0 = every quad far, R769);
+    a_tiny <= fine ? tiny2 : tiny2 | (tiny4 & zval >= TINY_FAR).
+  * m2_raster3d: .TINY_FAR(16'h3000).
+  * tb_m2_raster3d: the near ring now survives a coarse list (R769's control
+    failed under R776, as it should); a far copy (z 0x3000, background
+    0x5000) is refused at coarse and kept at fine. 23 checks pass.
+    test_m2_quad_store (TINY_FAR 0) unchanged, 23 pass.
+
+**R777 -- THE LOCK IS NOT CURED BY FAST_ACK 0.** s901 (da3ea13 + timeline,
+75/37.5; FAST_ACK 0 since R753) locked, 2026-10-10: vblanks count on, the
+flip count frozen at 62,814, no walk, 0 TGP hold, 0.0 fps -- the i960
+stopped, as in R748/R750 (there a callx through a task pointer of 0x1868,
+the CPU trapped). R753's "evidence points one way" was 50 + 48 minutes of no
+lock against a period of 4-45; it was not enough. FAST_ACK stays 0 (it costs
+nothing known to be needed). Next: a 75 MHz build with R748's trap record and
+a watch on every i960 store and load of 0x00001868 (address, IP), soaked
+until it locks.
+
+**R778 -- THE 80 MHz SWEEPS OF R771-R776, AND S_DST_W NO LONGER RETIRES.**
+757ede8 (R769-R774), s903-s905: clk_sys -0.316 / -0.810 / +0.032, clk_mem
++0.558 / +0.369 / -0.230 (m2_sdram inflight -> rr_mask), HDMI -0.353 /
+-0.647 / -0.249; 41,396 ALM (99%). No TGP path in any failing list --
+span_tex, YM, geometry pj_n, texel_bl: placement. s905 not offered: a clk_mem
+miss in the memory controller while a data-corruption lock is open (R777).
+492b9da (+ R775, R776), s906-s908: s906 Quartus internal error (TDB); s907
+clk_sys -1.420 (geo_engine xl_raw -> rgb), s908 -0.488 (eng_ra -> poly_uv2),
+and one TGP path in s908, the one R773 named as a risk: x_dst_sp -> u_seq c1
+-0.132 -- io_ack / mem_stall through ret_dstw into the sequencer's in_valid.
+  * mb86233_core: ld/mov with a memory or io destination retires in
+    S_RETIRE again (ret_dstw removed). Replay 9,464,927 -> 9,726,730 cycles
+    (CPI 5.02), stream IDENTICAL; test_mb86233_core 67 / 0, lockstep 8,000;
+    test_m2_boot PASS.
+R778 on the fitter: e75a2cd at 80/40, s915 does not fit (44 min), s916
+clk_sys -0.160, s917 -1.762 (geo_clip / fp_pool -- placement), s919 CLOSES:
+clk_sys +0.105, clk_mem +0.759, clk_i960 +1.518, holds >= +0.169, HDMI
+-0.145; 41,494 ALM. Lock hunt (492b9da + W/L/K telemetry, 75/37.5): did not
+fit with the 8 KB icache (4,203 LABs of 4,191, s909-s911); with LINES 32
+(the pre-R768 512 B, which locked before) s913 closes: clk_sys +0.185,
+clk_mem +0.422, HDMI -0.145; RBF 3339456b631df18eae5c09e623b97d4c.
+
+**R779 -- THE 3D WAS READ ONE COLUMN AHEAD OF THE 2D; AND THE CHECKER
+PARITY WAS MAME's OPPOSITE, HIDDEN BY IT.** Ben, 2026-10-10 (race capture):
+the rightmost column shows the 2D layers (sky, grass) the whole height where
+the 3D wall is. MAME: viewport -1,128,496,512 in every dump (z_r57, z_r66,
+z_rpk, z_apk; OFFS 0 128) -> clip edges at x -1.0 / 496.0, y 0.0 / 384.0;
+poly.h covers a pixel when startx <= x + 0.5 < stopx, so column 495 is
+painted (MAME's 3D non-zero at x 495 in 384/384 rows of z_r57). Ours paints
+it too: the geodiff dumps put right-edge vertices at 496.0, the fill's spans
+reach 495, and tb_m2_raster3d (FB_DDR3 + wcomb, R756 rounding, z_r57) paints
+column 495 in 384/384 rows with MAME's owner. The loss is at SCANOUT:
+Model2.sv fed m2_raster3d scan_x = m2_video's hcnt, but m2_video's colour and
+blanking are column hcnt-1 (latched on ce_dd from pr_q/hb_q, R582/R648), and
+m2_fb_read answers for rd_x a clk_mem later -- displayed column N showed 3D
+column N+1. Column 495 read 3D x 496, line-buffer entry 248, which the
+248-beat line fetch never writes: rd_hit 0, the tilemap showed.
+And the checker: MAME paints (x ^ scanline) & 1 == 1 (model2rd.ipp:89,
+:281; R623's text is right), ours painted !((x ^ y) & 1) -- Model 1's rule --
+in m2_fb_wcomb, m2_fb_write and m2_raster_band. The one-column shift flips
+the parity, so the board matched MAME by accident; fixing the scanout alone
+makes it worse (z_r57 wrong owner 17,772 -> 32,100), the two together better
+on every list.
+  * Model2.sv: scan_x = vid_x_d, vid_x registered on ce_pix (a flop, so
+    nothing added in front of the mix).
+  * m2_fb_wcomb (s0_r / s1_r swapped), m2_fb_write (mo_be), m2_raster_band
+    (grp_en): MAME's parity. tb_m2_fbw_chain, tb_m2_fb_write,
+    tb_m2_raster_band references flipped; with the old parity the RTL fails
+    them (the benches see parity).
+Evidence: a scanout alignment bench (real m2_video + m2_fb_read with
+preloaded lines, the ce generator, the mix; scratch, not committed): 3D from
+the wrong column 310,860 px -> 0, column 495 painted in every row, at both
+pixel-enable rates. Against MAME's owners (A = board today, C = R779): wrong
+owner z_r57 17,772 -> 12,936, z_r66 21,697 -> 17,550, z_apk 26,316 ->
+21,649, z_rpk 46,939 -> 42,870; MAME-only coverage z_r57 841 -> 237; column
+495 0/384 -> 384/384; no new overdraw. Rows 0 / 383 and column 0 were
+already MAME's. lint_top, Quartus parse clean; the fb / band / raster3d /
+quad-store benches pass. Bench pitfall: tb_m2_raster3d list mode samples x <
+400 unless M2_R3D_TPL=656. Board: next build.
+
+**R781 -- DOUBLE BUFFERED IS THE DEFAULT.** Ben: the core always starts in
+Single buffered, and every speed judgement since R654 has needed a trip to
+the OSD first. O[44:43]'s menu now lists Double Buffered first (0, the value
+a fresh or absent config gives); the skip map follows the labels (Double ->
+skip 0, Single -> skip 1, Every 3rd -> skip 2), so each option does what it
+did. A saved config that held Single (0) now opens as Double.
+
+**R780 -- ON THE BOARD, THE DRAW IS THE LIMIT, AND ITS SLOW TENTH IS ~25%
+OVER.** s926 (6f19629 + 'S' SDRAM / 'D' draw-time telemetry, 75/37.5; clk_sys
++0.703, clk_mem +0.742, holds >= +0.124, HDMI -0.017; RBF
+b066e40120067bb9797f214087e5f5d8; a first try with R777's lock records as
+well did not fit, s921/s922, or held -0.268, s923). Per frame, 30 s each:
+                  attract Single  attract Double  race Double
+  draw median     19.9 ms         15.6            16.3
+  draw p90        22.4            21.9            21.5
+  draw max        25.6            25.2            23.9
+  SDRAM busy      74% (p90 82%)   63% (83%)       52% (80%)
+  texel-port wait 7.3%            6.3% (p90 3.1 ms) 1.5% (p90 2.4 ms)
+  i960 wait       2.1%            1.8%            0.5%
+  flips / vblank  0.64            0.68            0.73
+The game (CPU + TGP, R771-R775) is no longer the limit; the draw's slow tenth
+is 21.5-25 ms against 17.39 (at 80 MHz ~6% less) -- far more than "4% over".
+The texel port's QUEUE wait is small, so priority (R766's lever) is not it;
+the cost is the misses' round trip with two in flight. Ben: texel step 4
+makes attract smooth, step 8 races. Bench (tb_m2_raster3d, MAME's lists, at
+80 MHz): heavy lists 12.6-16.5 ms idle SDRAM, 19.8-27.2 contended; 1-cycle
+memory 9.9-13.6; textures off 5.7-7.4.
+
+**R782 -- THE TEXEL CACHE'S INDEX FOLDED: -24..-32% MISSES, SAME ANSWERS.**
+A cache model driven by the bench's texel traces (within 3-4% of the RTL's
+own miss count): the direct-mapped index {rp[4:1], cg} maps a 1,024 x
+64-texel footprint onto the sets, so a 256-wide texture uses a quarter of
+them; 2- and 4-way associativity gained nothing, fully associative -33..-44%.
+Folded (256 x 128-texel tile, the next tile's bits and the sheet XORed in,
+tag {sheet, rp[9:7], cg[6:5]}): misses -24..-32% in the model; the RTL
+counter on MAME's lists r57 40.1k -> 29.4k, apk 63.6k -> 42.8k, rpk 28.7k ->
+20.1k; every texel answer common to both runs identical. Draw at 80 MHz,
+contended model: r57 19.8 -> 17.2 ms, r66 20.3 -> 18.1, apk 27.2 -> 22.3, rpk
+22.7 -> 20.4; idle: -4..-8%. This is R556's XOR idea, measured at last.
+  * m2_texel_bl idx_of / tag_of, IB = 11 only. 0 M10K; the XORs sit in front
+    of the cache read address (timing to watch at clk_mem).
+  * test_m2_texel_bl (new target; the exact-answer bench against
+    model2rd.ipp): 200,000 checks, 0 fails. test_m2_texel, test_m2_raster3d
+    pass. Quartus parse clean. (test_m2_span_tex does not build at HEAD: an
+    unused 'iv' at m2_span_tex.sv:929 is fatal under -Wall -- older.)
+Not enough alone: remap + 16 credits + R628's 4 miss slots leaves rpk at
+16.6 ms contended (bench). Further levers, ranked: credits 16 (-5..-7%),
+more lines in flight (R628, +637 ALM), 128-bit lines (-44..-57% line misses,
+modelled), the walk/writer on rpk-class frames.
+
+**R783 -- 15 kHz WITH NTSC's LINE COUNT, AS AN OPTION.** Ben, 2026-10-10: on
+a 15 kHz TV the picture loses sync every few seconds. A bench of the whole
+chain as Model2.sv and sys_top.v wire it (the ce accumulator, real
+m2_video, sync_fix, scanlines, osd, csync, vga_out, direct video,
+hps_io's video_calc; scratch sync15/) ran 2,000 frames interlaced: 0 of
+3,993 fields differ -- HS 656 px, every vsync-to-vsync exactly 273.5 lines,
+field 1's vsync half a line in, F1 alternating, video_calc reporting one
+resolution. Native 24 kHz the same. Nothing in the core changes the timing
+at run time (m2_video_timing takes clk_mem, ce_pix, rst_n, interlace only;
+its vblank_irq is unconnected, so R652's hold cannot reach it). Not seen by
+the bench: the set. Our 15 kHz field is 273.5 lines (192 shown, 81.5
+blanking) at 57.52 Hz against NTSC's 262.5 at 59.94; sets that class a
+field by its line count re-lock on it. Ben's ask, kept at the game's rate:
+  * m2_video_timing ntsc_lines: fields of 263 / 262, vsync 223-226 (field
+    1's half a line early, R701's rule), the 192 visible centred in 70.5.
+  * Model2.sv: OSD O[45] "15kHz lines: 273.5 (15.7kHz) / 262.5 (15.1kHz)";
+    with it, ce = 861/8692 of 100 MHz (9.9057 MHz, 525 x 656 pixels in
+    1,738,400 clk_mem): line 15,100 Hz (-4% of NTSC's), field 57.524 Hz --
+    the game's speed and the 656-pixel line unchanged, so nothing that
+    counts pixels moves. The ce accumulator is 14 bits (8,692).
+  * tb_m2_video_timing: the interlaced checks run for both counts -- 525 a
+    frame, 262 / 263 a field, every vsync 262.5 lines apart, field 1 half a
+    line below, each of 384 lines once a frame: 39 checks, 0 fail.
+    test_m2_boot PASS, test_m2_raster3d PASS, lint_top and Quartus parse
+    clean. Also noted by the bench: switching into interlace while vcnt is
+    past 274 runs it round to 1023 (one 861-line field per OSD change).
+If the dropouts stop at 262.5 the cause is the set's tolerance; if they do
+not, the connection or the framework.
+
+**R784 -- THE TEXTURED COLOUR: THE LUMA TABLE'S ROW, AND A SLOPE CLIPPED AT
+255, NOT THE POLYGON'S COLOUR SCALED BY THE TEXEL.** Ben: "huge quality
+difference" against a PC version of the attract. MAME 0.289 (daytona93, our
+set) rendered the same scenes natively (machine frames 2373 and 17880; a
+scratch patch dumps a list by machine frame and every pixel's mip level).
+
+*Believed (R275, R281, R624):* scaling the polygon's finished colour by the
+texel is the reference's colour ramp "approximated as linear", and R624's
+frame-mean RGB agreeing with MAME to 1% confirmed it.
+
+*Now known:* the TEXEL SAMPLING was never the problem. Our fetch log, put
+through MAME's colour arithmetic, gives MAME's picture: the decal clean, the
+red "RACING" bar, the windows' sky. The COLOUR stage is what goes wrong:
+  1. The luma table's row was dropped. poly_tex[31:24] (texture header word
+     1, the luma base) never left m2_geometry (q_tex is 24 bits). Daytona's
+     lumaram row 0 is i/2 and row 1 is 63 - i/2 (dumped; rows 2-65 are effect
+     ramps no measured pixel uses). Its decals use row 1, so 2.5-4.2% of
+     textured pixels a frame came out with INVERTED brightness: Gallop's
+     yellow (247,207,0) drew as (33,30,0), its outline black.
+  2. The colour table is a pedestal (~64-86 for any non-zero component, 0 at
+     luma 0) plus a slope in luma, CLIPPED at 255. A per-pixel lookup changes
+     hue as channels clip (the windows go from blue to white, reds stay red);
+     one colour scaled by the texel cannot. R624's mean hid it.
+  3. Mip level is not a cause: f2200, 97.8% of textured pixels at level 0,
+     4.3% blended with the next; q1's hood decal (polys 100-104, a minified
+     128x128 translucent decal, row 1) is level 0 in MAME too, and MAME draws
+     it as a garbled green band as well.
+
+*The change (the texture colour only; the OSD Gamma option and its default,
+Off, unchanged):*
+  * m2_geo_engine: a textured polygon reads the translation table at luma
+    32 (one read per channel, as before), applies MAME's curve, and scales by
+    the polygon's (selected) luma at its 6-bit key's midpoint and by the
+    output curve's gain -- 191/256 Off, 219/256 Mild, 1 MAME. Under Off/Mild a
+    non-zero component keeps one 565 LSB (a slope that truncated to 0 would
+    lose the pedestal). One scale stage after the curve; E_XLG holds a second
+    cycle for it (no new state: the enum is full at 32). Flat polygons are
+    untouched.
+  * m2_span_tex: lum = (t - t/16) / 4 (m2_texel_bl's x17 scale back to the
+    reference's x16), complemented for row 1; per channel
+    min(255, A + c * lum / 32), 0 where c or lum is 0; A = 0 MAME, 64 Off, 37
+    Mild. The emit registers the bare product (R741's c * (i+1) path, which
+    closes at 80 MHz); the pedestal, clamp and zero are applied on the way out
+    to m2_fb_wcomb's intake register. rt_i1 (9 bits) -> rt_lum (6), rt_texel
+    9 -> 1 bit.
+  * m2_geometry: q_tlinv = (luma base == 1). Model2.sv puts it in q_tex[11]
+    -- the checker bit, which the rasteriser takes from q_moire and nothing
+    else read -- so the quad store and the span queue carry NO new bits: no
+    M10K moves. m2_raster3d gains tex_gamma (clk_sys, gam_s2) for A.
+
+*Measured.* Colour stage alone (MAME's own filtered texel and luma, MAME's
+colour path as the reference, the same curve on both sides), max channel
+error of 255, mean / share over 32, before -> after:
+
+    curve   f2200            f17880           r57              rpk
+    Off     42.6/74.5% ->    54.3/87.0% ->    38.3/51.4% ->    50.1/79.3% ->
+             5.8/0.7%         3.4/0.7%         5.8/0.1%         5.2/0.2%
+    MAME    13.0/8.7% ->     30.5/56.7% ->    16.1/9.5% ->     23.2/25.2% ->
+             4.0/0.0%         4.8/0.0%         6.8/0.0%         3.8/0.0%
+    Mild    28.9/20.7% ->    43.6/80.5% ->    28.1/40.2% ->    37.8/49.7% ->
+             4.4/0.7%         3.6/0.7%         5.3/0.1%         3.4/0.2%
+
+The residual 0.1-0.7% over 32 under Off/Mild is the darkest texels, where the
+reference's luma rounds to 0 (table 0) and ours adds the pedestal.
+
+Whole renderer (tb_m2_raster3d M2_R3D_REALCOL, MAME's lists, step 1,
+bilinear, every textured pixel MAME drew and we painted, both cut to 565 --
+so the sampling's own differences are in these):
+
+    curve   f2200             f17880            r57
+    Off     45.0/65.9% ->     54.7/85.6% ->     39.5/48.2% ->
+            11.3/5.1%          8.9/3.0%         10.8/3.5%
+    MAME    19.7/13.0% ->     34.0/50.3% ->     20.3/14.8% ->
+            12.0/5.4%         12.1/3.7%         12.9/4.8%
+
+(The sampling alone, MAME's colour on our fetches, was 8.0-9.3 / 3.6-5.6%.)
+The RTL equals the model pixel for pixel: 0 of 76,631 (f17880), 1 of 135,650
+(r57), 78 of 166,488 (f2200) differ, every one a pixel fetched more than
+once (a checker or translucent overlap the check's first-fetch rule misreads).
+
+*Cost.* quartus_map alone, at the design's parameters: m2_span_tex +27 ALM
+(estimate), +5 registers, DSP unchanged (15); m2_geo_engine +19 ALM, +28
+registers, +2 DSP; m2_geometry one 8-bit compare. ~+50 ALM before placement
+(R661: placement adds ~50%), 0 M10K, +2 DSP. Quartus 17 constant-folds every
+new expression to the bench's value (tcol/tfin, tlum, tslope, the gain).
+
+*Benches.* tb_m2_span_tex: a new section, every (curve, row, colour, nibble)
+against the model, 768 cases; 7,211 checks, 0 fail (it builds again: the
+unused 'iv' is gone); four mutations (no pedestal, no row, no 16/17, no
+clamp) each fail it. tb_m2_geo_engine: the textured expectation is the slope,
+plus Off and Mild; 70 / 0 (geo_engine_top's gamma_sel is an input now).
+tb_m2_raster3d: M2_R3D_REALCOL / M2_R3D_GAMMA as above (-DR784_OLD models the
+old path). test_m2_raster3d, test_m2_quad_store, test_m2_texel_bl,
+test_m2_geo, test_m2_geometry, test_m2_boot pass; lint_top and Quartus parse
+clean.
+
+*Not verified:* timing (no fit); the board; lumaram rows other than 0 and 1
+(taken as row 0); Mild's reference is our own curve applied to the table
+(MAME has no Mild).
+
+**R785 -- s931 ON THE BOARD: PAST FRAME 1, RIGHT EDGE AND TYRES RIGHT, THE
+LOCK AGAIN.** s931 = 9d3448f (R769-R783, no R784) at 80/40: clk_sys +0.100,
+clk_mem +0.503, holds >= +0.128, HDMI -0.404; RBF
+486b5c980a9115630e91a6f44c92992d (s927 clk_sys -0.520, s928 Quartus error,
+s929 -0.864, s930 hold -0.336, s932 stopped). Ben:
+  * It gets past the first 3D frame (52.8 fps a minute in): s919's
+    frame-1 freeze (R778's sweep) did not recur on the same clocks and TGP --
+    a placement-specific fault or the lock striking early; unexplained.
+  * The right edge is drawn (R779). Car select is right (R769/R776).
+  * In game "about 50% full speed"; attract still slows with all the cars and
+    the long view down the straight.
+  * The LOCK, minutes in: the attract backdrop with CREDITS 2/3 (coins in),
+    no 3D, 0.0 fps -- the game stopped, as R777. s913 (75 MHz, 512 B icache,
+    lock telemetry) ran ~100 min of attract without one. Whether coin / start
+    is the trigger is asked.
+
+**R786 -- THE i960 INSTRUCTION CACHE BACK TO 512 B, FOR THE TEXEL PATH.** The
+3D draw is the limit (R780) and every texel lever costs ALM at 99% (R782's
+list). s927's fit by entity: emu 35,272 of 41,452; i960 7,788 (u_icache 378,
+of it the 8 KB tag RAM ctag 264), raster3d 8,036, geometry 6,022, sound
+board 4,454, TGP 2,473, ascal 2,008, audio_out 920 (IIR filter 432), the two
+OSDs 930, pll_hdmi_adj 479, ioz80 989. R768's 8 KB cache moved nothing on
+the board (R768, R770), and the CPU is no longer what the frame waits for.
+Ben approved: LINES 512 -> 32 (the pre-R768 size, which ran since R45; the
+valid-bit-in-tag design stays). test_i960_icache, test_i960_top, _irq,
+test_i960_rom, test_m2_boot PASS; Quartus parse clean. Held in reserve,
+Ben's call: the framework's audio IIR filter (432 ALM) has no switch
+upstream (Template_MiSTer sys/audio_out.sv instantiates it unconditionally),
+so dropping it would be our own patch to sys/, to be kept as a tracked
+patch file. Next with the room: 128-bit texel lines (R782's lever 4).
+
+**R788 -- THE FRAMEWORK'S AUDIO FILTER SWITCHED OFF, ~430 ALM FOR THE TEXEL
+PATH.** Ben approved (R786's reserve). docs/framework-patches/audio-filter-
+disable.patch applied to sys/audio_out.sv: under MISTER_DISABLE_AUDIO_FILTER
+(now set in Model2.qsf) the IIR filter (432 ALM in s927) is not built and
+its input -- {~is_signed ^ c[15], c[14:0]}, the same signed 16-bit word --
+goes straight to the DC blockers and mixer. The MiSTer menu's audio filter
+presets have no effect on this core. sys/ is otherwise unmodified;
+THIRD_PARTY.md and the README there say so, and how to re-apply it after a
+framework update. lint_top clean; Quartus parses sys/audio_out.sv with the
+macro. Owed: the fit's ALM, and the sound on the board.
+R786 + R788 on the fitter: d8c2457 (R784 + R786 + R788) at 80/40 -- 40,812 /
+40,756 / 40,920 ALM (97-98%) against s933-s935's 41,442-41,486 (R784 alone):
+~620 ALM freed; no IIR_filter in the map. s936 closes: clk_sys +0.215,
+clk_mem +0.738, holds >= +0.141, HDMI -0.304; s937 clk_sys +0.494 but HDMI
+-0.716; s938 clk_sys -0.105. Two of three seeds close where the last six
+sweeps closed one in three or none. RBF (s936)
+ee54bd91d4c477d446e384a808df7e93. R784 alone (8d03e84): s933 -0.682, s934
+-0.803, s935 +0.036 with HDMI -1.088 -- not offered.
+R787 (128-bit texel lines) built in sm2-builds/sm2-tl128-99386df, not merged:
+every texel answer identical (r57/r66/apk/rpk/f2200, both memory models;
+test_m2_texel_bl8 200,000 / 0; m2_sdram with 8-word texel bursts 2,111,407 /
+0, all 11 ports 8-word 3,304,967 / 0); line reads -24..-39%, draw at 80 MHz
+-1..-2% idle, -7..-11% contended (apk 22.27 -> 19.73 ms, rpk 20.36 ->
+18.40); +236 ALM pre-placement. Against R628's four miss slots (-18..-26%
+contended with R782, +637 ALM measured) -- the room freed holds one, not
+both. Ben's call.
+
+**R790 -- GAMMA DEFAULTS TO MAME.** Ben, 2026-10-10. O[33:32]'s menu lists
+MAME first (0, the fresh-config value), then Off, then Mild; gam_menu maps
+menu 0 -> 0 (MAME), 1 -> 2 (Off), 2 -> 1 (Mild), 3 -> off, so each label
+selects the curve it did. R784's texture colour path follows gam_s2 (the
+mapped encoding) and needs no change. A saved config that held Off (0) now
+opens as MAME. The release README's OSD table (Gamma, and Draw method's
+default after R781) is the released build's and is updated at the next
+release.
+
+**R789 -- FOUR TEXEL MISSES IN FLIGHT (R628, UN-PARKED), WITH THE ROOM R786 /
+R788 FREED.** Ben chose this over R787's 128-bit lines. R628 measured it
+(+637 ALM for slots x queue 4 x 8, plus two SDRAM ports) and parked it on area
+until the board said whether TXLATE alone kept the bands; R780 since showed
+the draw's slow tenth ~25% over a frame, the cost being the misses' round
+trip with two in flight. R553's eight credits scrambled textures through the
+old 2:1 adapter (R558: its wider queues missed timing across the 2:1);
+R561/R563's asynchronous m2_texel_cdc replaced it, R762 registered its
+credit count, and eight have run since.
+
+THE CHANGE -- everything already parameterised (m2_texel_bl NS, RSP_D; the
+cdc's K; m2_span_tex TXK); m2_raster3d now passes TXK and TXRSP through
+beside TXNS:
+  * Model2.sv: TXNS 4, TXRSP 4 (8 in the measured B; merged at 4, below), TXK 16. NPORTS 11 -> 13: ports 11 and 12 are
+    the cache's third and fourth miss slots, on clk_mem, passed straight
+    through m2_sdram_cdc (FAST 13'b1_1100_0000_1100) as 10 is.
+  * Priority class 13'b1_1100_0001_1110, cap 2 unchanged: 11 and 12 join it
+    BEHIND every other member (the class grants the lowest set port), so the
+    i960 (1), texel 2, the glyph fetch (3, R639's per-scanline deadline) and
+    the walker (4) still go first, and two class grants still let one
+    round-robin grant through.
+  * m2_sdram blen(): 11 and 12 burst four, as 10 does (the default arm would
+    have read them ONE word).
+
+*Measured* (tb_m2_raster3d, MAME's lists, step 1, 100:80, FB + wcomb, R782 in;
+idle = TEXMEM 12, contended = 30 + 0..30 jitter; draw at 80 MHz, ms):
+
+                        r57    r66    apk    rpk    f2200
+  idle  HEAD           11.93  12.78  14.19  15.98  14.23
+        credits 16     11.34  11.76  13.36  14.71  12.91
+        NS4            11.26  12.15  13.15  15.60  13.74
+        NS4 + queue 8  11.20  12.03  13.04  15.47  13.64
+        NS4 + cr 16    10.66  11.03  12.17  14.27  12.40
+        all three (B)  10.47  10.84  11.98  13.96  12.12
+  cont. HEAD           17.19  18.10  22.27  20.36  19.12
+        credits 16     16.57  16.98  21.32  18.97  17.71
+        NS4            14.76  15.95  18.41  19.00  17.50
+        NS4 + queue 8  14.35  15.47  17.79  18.23  16.89
+        NS4 + cr 16    14.04  14.72  17.33  17.63  16.10
+        all three (B)  13.48  14.01  16.50  16.59  15.27
+
+B: -12..-16% idle, -19..-26% contended. NS4 + credits 16 (queue 4) keeps
+-11..-14% / -13..-22% of it. Every texel answer common to HEAD and each
+variant identical, all five lists, both memory models (1.99 M fetches each;
+the lists differ by a few fetches, the FTB mask's timing as in R782), and the
+displayed frame's hash identical in all ten runs of every variant. The bench's
+four ports have no shared bus; the board's one controller serialises them.
+
+*SDRAM* (tb_m2_sdram -DTB_NP=13 -GNPP=13 with Model2.sv's class, new
+test_m2_sdram13): 2,057,341 checks, 0 fail, 0 device-model violations
+(its refresh-interval check included), 0 tag faults. Worst latency, the
+saturating concurrent phase, 13 ports against today's 11 with today's class:
+port 3 (glyphs) 271 vs 320 cycles, 1 72 vs 68, 2 82 vs 80; outside the class
+422-442 vs 361-376 (+18%). A scanline is ~6,600 clk_mem cycles. Default
+test_m2_sdram unchanged to the check (1,796,727).
+
+*Benches.* test_m2_texel_bl4 (new): NS 4, RSP_D 8, both memory models,
+200,000 / 0 each; ports 3 and 4's data swapped fails 88,379, their
+acknowledges swapped 73,785. test_m2_texel_cdc16 (new; the bench's K was a
+literal 4): 40,804 / 0, the cache held at most 16. m2_span_tex at TXK 16 with
+16 outstanding: 7,211 / 0, and at 26% misses. test_m2_texel_bl, _texel,
+_texel_cdc, _span_tex, _raster3d, _sdram, _sdram128, _sdram_x2, _sdram_cdc,
+_romload, _cpu_sdram, _boot pass; lint_top and Quartus parse clean.
+
+*Cost.* quartus_map alone at design parameters, and scaled by s936's placed /
+standalone ratio for each entity (texel_bl 1,008 / 1,221, span_tex 1,297 /
+1,462, cdc 85 / 163, m2_sdram 744 / 1,098):
+
+                        standalone   placed (est.)
+  m2_texel_bl NS4/RSP4     +407        ~+340
+  ... NS4/RSP8             +652        ~+540
+  m2_texel_cdc K16          +11         ~+6
+  m2_span_tex TXK16         +36         ~+32
+  m2_sdram 13 ports        +133         ~+90
+  B total                               ~+670   (room: ~620, R788)
+  NS4 + credits 16                      ~+470
+M10K: none -- the cdc's queues stay in their blocks at depth 16 (s936: 2 + 1
+M10K at depth 8), the cache's RAMs are unchanged.
+
+*Timing, by construction:* clk_mem -- the cache's join compare, free-slot
+pick and head nibble select widen from 2 to 4 slots and the response queue
+from 4 to 8 entries (one more mux level each); the controller's arbiter
+rotates 13 bits (its inflight -> rr_mask path has failed by 0.23 ns on some
+seeds before). clk_sys -- m2_span_tex's retire selects of_p/of_x from 16
+entries (R731's rt_col path gains a level); the cdc's Gray pointers are 5 bits
+and its credit compare still a register (R762). s936 had clk_mem +0.738,
+clk_sys +0.215.
+
+*Not verified:* the fit (B may not fit: ~+670 placed against ~620); timing
+closure; the board. If B does not fit, TXRSP 4 (one parameter in Model2.sv)
+is the measured next step down.
+MERGED AS NS4 + 16 CREDITS, THE QUEUE LEFT AT 4 (TXRSP 4). B in full is
+~+670 ALM placed against ~620 freed; the queue of 8 is ~+200 of it for 1-4%
+(contended apk 17.33 -> 16.50 ms, rpk 17.63 -> 16.59). At TXRSP 4 the bench
+measures -11..-14% idle, -13..-22% contended (r57 17.19 -> 14.04, r66 18.10
+-> 14.72, apk 22.27 -> 17.33, rpk 20.36 -> 17.63, f2200 19.12 -> 16.10 ms at
+80 MHz), ~+470 ALM placed. test_m2_texel_bl4 now builds NS 4 / RSP_D 4 (the
+core's shape); lint_top, test_m2_texel_bl, _texel, _texel_cdc, _span_tex,
+_raster3d, _sdram pass on the merged tree.
+
+**R792 -- s939 ON THE BOARD: SINGLE BUFFERED FULL SPEED ALL DAY, DOUBLE
+BUFFERED "MUCH LESS" SLOWDOWN.** s939 = 8636c1b (R784 + R786 + R788 + R789 +
+R790) at 80/40: clk_sys +0.008, clk_mem +0.457, HDMI -0.039, holds >=
++0.185; 41,300 ALM; RBF dc0694b7e2f7c98cad63a90c4e298615 (s940 Quartus
+internal error STA, s941 TDC). s936 (d8c2457) before it: decal / window
+colours right (R784 confirmed on the board), sound fine with the framework
+filter off (R788 confirmed). Ben on s939: "Audio is fine, visuals are great.
+Double buffered still has some slowdowns but much less. Single buffered is
+full speed all day long." R789's four texel misses moved the board as the
+bench said they would, in the right direction; the draw's slow tail is now
+the last of it. Remaining levers, measured: R787's 128-bit lines (-7..-11%
+contended, +236 ALM -- room is ~600 below s939's 41,300 of 41,910), R789's
+queue of 8 (1-4%, ~+200).
+
+**R791 -- THE ROAD'S JUDDER: u/z TRUNCATED TO A WHOLE QUARTER-TEXEL UNIT, AND
+u, v TRUNCATED AT THE CLIPPER. FOUR MORE BITS OF u/z, AND ROUND TO THE
+NEAREST QUARTER.** Board (s936, d8c2457, 80/40, 2026-10-10): the road texture
+close to the camera judders in motion (attract, the chase view at the
+"sao paulo" banner). R756 had already taken the corner wobble out of the
+snaps; this is the texture INSIDE the polygon.
+
+*Believed:*
+  * R286: gradients at 8.8 are enough -- "1/256 of a texel accumulates to
+    under half a texel across the widest span".
+  * R331: u/z at 13 bits costs 0.017-0.63 texels; 1/z needs 16 bits.
+  * R338: qu/qv are rewritten in place as (u * ooz) >> 15, which "lands in
+    [u/2, u) and fits the 13 bits u already occupied" -- the precision cost
+    "no difference that a picture can show".
+  * R626: the texel error is vertex x, y (13-58 texels median on the worst
+    polygons); the 1/z minifloat and quarter-texel u, v are 0-1 texel each.
+
+*Now known:* every one of those budgets was in TEXELS, and two things were
+missing from them.
+  1. The u/z plane is in units of 2^15 / ooz quarter-texels AT THE PIXEL, so
+     a fixed-point error in u/z is multiplied by the depth ratio where it
+     lands. MAME frame 8780's near road is ONE clipped polygon of five
+     corners, x -1..496, z 1.28..7.27: at its far corners one unit of the
+     13-bit u/z is 1.4-2.8 texels, and the plane through those truncated
+     corners tilts the near end.
+  2. Near the camera the road is magnified (~2.6 px a texel, and far more
+     along the road), so a fraction of a texel is SEVERAL PIXELS -- and the
+     truncation residue is new every frame as 1/z changes. That is the
+     judder: not a wrong texel, a texture position that jumps.
+
+*How established* (MAME 0.289 daytona93; 24 consecutive frames, render
+8770-8793 = machine 10160-10183, the board's scene; tb_m2_raster3d in the
+core's configuration -- FTB, FB_DDR3 + wcomb, SPLIT_TRI, FRB 2, M2COV, PXC,
+step 1, bilinear, TXNS 4 / TXK 16 (R789), R756's vertex rounding; reference
+MAME's own edge-walk interpolation at pixel centres, which reproduces MAME's
+dumped texel on 99.94% of pixels; error as screen displacement J^-1 e; near
+road y 250-383, x 0-299, road polygons, ~28,000 px a frame):
+
+                                    mean displacement   frame-to-frame jump of
+                                    vs MAME (frames)    a 16x16 tile's mean
+                                                        mean / p90 / max
+    HEAD (8636c1b)                  6.77 (4.2-9.6) px   2.59 / 5.42 / 15.9 px
+    rounded u, v only (UZF 0)       5.60 (3.4-9.4)      2.44 / 5.00 / 13.3
+    UZF 4 only (d8c2457 base)       1.73 (0.9-2.7)      0.81 / 1.85 / 5.4
+    UZF 4 + rounded u, v (this)     0.60 (0.2-1.3)      0.63 / 1.37 / 3.2
+    every input exact (model)       0.18                0.25 / --   / --
+
+  Whole frame, every textured fetch of the 24 (4.22 M): texel error p50 / p90
+  0.56 / 1.29 -> 0.11 / 0.61 texels, > 1 texel 18.4% -> 6.0%, > 4 texels
+  1.70% -> 1.66%; displacement p90 9.3 -> 1.0 px; pixels painted
+  3,902,198 -> 3,902,314. Nothing regressed.
+
+  Which stage, by a model of store -> normalise -> plane fit -> divide that
+  matches the RTL to 0.009 texel (mean, p99 0.036), each input made exact on
+  its own: vertex x, y 6.79 px (no change -- not R756's step); 1/z (no
+  minifloat) 7.21 (no help); u, v 5.68; gradients 4.85; u/z 3.44; u/z +
+  gradients 1.44. The 1/z minifloat is not a cause: u/z is formed from the
+  same quantised 1/z, so the vertex reproduces its own u. In the model, plain
+  rounding at today's widths gets the mean to 1.87 px but leaves 1.80 px
+  frame-to-frame jumps -- it is the resolution, not only the bias.
+
+*The change* (0 M10K, 0 DSP):
+  * m2_raster_fill UZF = 4: qu/qv 13 -> 17 bits, (u * ooz) >> (15 - UZF);
+    the u/z differences 18-bit signed (still an 18x19 DSP operand: 13 + 4
+    bits, max (8191 * 32704) >> 11 = 130,800 < 2^17); the gradients come out
+    of the same divide in units of 2^-UZF, so 12 fraction bits in u/z terms
+    (range +-2^15 units, +-512 texels a pixel of u/z -- only degenerate
+    slivers reach it); the u/v plane values (u/z) << 18 for every UZF,
+    (13 + UZF).(18 - UZF), always inside 32 bits signed -- base, half-pixel
+    (PXC) and the emit's products shift by UVS = 18 - UZF instead of 16.
+    1/z's plane is unchanged. UZF 0 is the old precision.
+  * m2_span_tex UZF: du/dv (and the group-centre offsets) shift into the
+    values' 18 - UZF fraction bits; the un-normalise shifts two more (18, or
+    d3_e - 5), so its answer is the same 16.16 quarter-texel coordinate.
+  * m2_raster3d passes UZF (default 4) to both.
+  * m2_geometry: f2uvw returns floor(f) in eighths (one bit more); R739's
+    plain copy stage rounds it, (x + 1) >> 1 = round-half-up of f/2; the
+    R609 minimum reads the truncated quarter (never above the rounded one).
+
+*Cost* (quartus_map 17.0, each module alone, Aggressive Area, the core's
+parameters): m2_raster_fill 3,265 -> 3,291 ALMs needed (+26), registers
+3,628 -> 3,700, DSP 39 -> 39; m2_span_tex 1,404 -> 1,404, +4 registers,
+DSP 15 -> 15; m2_geometry 6,322 -> 6,342 (+20), +16 registers, DSP 4 -> 4,
+block memory unchanged. ~+46 ALM at synthesis, ~+70 placed by R661's ~50%.
+No quad-store or span-queue width moves. Timing, by structure (no fit): the
+u/z subtract into pr_u* is two bits longer ahead of a register; the S_OZ
+product and the DSP mode are unchanged; base and walk shifts are constants;
+d4a_sh's constant moved (16/-7 -> 18/-5); the geometry's rounding is a
+17-bit increment in a stage that was a register copy (R739), beside no other
+logic. Quartus 17.0 folds every new idiom (UW'(), UW1'({1'b0, ..}),
+rnd8's 17'(w) + 1 >> 1, the shifted base, the 18/-5 select, the >> 11) to
+the bench's values (a constant-input quartus_map, R662's method).
+
+*Benches* (references model the new widths; no tolerance loosened):
+  * tb_m2_raster_fill: test_plane fits to (u * n) >> (15 - UZF) and reads the
+    span in units of 2^-UZF -- the same 0.5 / 0.02 numbers are 16x tighter
+    in u/z; the plane tolerance is now sized from the fit (one gradient LSB a
+    pixel of distance, floor 0.5 -- the old fixed 0.5 was under that bound by
+    luck, 0.64 at the far corner). NEW test_judder: a synthetic road (no ROM
+    data) -- focus 300, camera height 1, z 1.57..9.0, u, v to the nearest
+    quarter -- 24 frames with v scrolling 0.37 texel a frame; the near
+    third's v, divided exactly, against the exact mapping of the presented
+    quad, in pixels along the road. UZF 4: |mean| 0.24 px, worst 0.65,
+    frame-to-frame jump 0.57; bounds 0.50 / 1.00 / 0.75; UZF 0 (-GUZF=0
+    -DTB_UZF=0): 0.86 / 1.97 / 1.09 -- FAILS all three. -GUZF=0 against the
+    UZF 4 reference fails test_plane (u, v, du/dx, dv/dx).
+  * tb_m2_raster_fill ALSO: test_m2_raster_fill has failed on HEAD since
+    R715 (625-655 of 152,369; R731 noted it, "the bench is out of step").
+    Cause: R715 put a stage (s1) in front of the span output, so a quad's
+    last span can still be inside the fill for a cycle after quad_done and
+    !span_valid; the bench stopped collecting there and the span was read as
+    the NEXT quad's. Every drain now waits for two quiet cycles. 152,373 / 0.
+  * tb_m2_span_tex: inputs presented in the fill's format (the bench's own
+    16.16 / 8.8 numbers times 4 and times 2^UZF -- the expected texels are
+    the same physical quantities). NEW 2f: a gradient of 5 units (5/16 of
+    the old LSB) over 40 groups -- every fetch within one 1/256-texel step
+    of V * 2^29 / ooz, and u must move. 7,214 / 0. -GUZF=0 fails (texels);
+    reverting the 18/-5 un-normalise fails.
+  * tb_m2_geometry: NEW test 6 -- a quad cut by the left plane, u, v affine
+    in x from texture-point words in space 1: cut corners 76.67 / 47.56
+    quarters must give 77 / 48, kept corners at exact halves 229.5 / 205.5
+    must give 230 / 206. 53 / 0; HEAD's m2_geometry fails 8 of them (76, 47,
+    229, 205). A 2,000,000-float Verilator test of the conversion: 0 differ
+    from round-half-up(f / 2).
+  * tb_m2_raster3d: list mode rounds u, v as m2_geometry now does (the R609
+    offset from the truncated quarter, as the RTL compares), and
+    M2_R3D_FRAC is R756's projector (round(4x), negative x too) where it was
+    the pre-R756 trunc(4x).
+  * make lint_top, test_m2_raster_fill, test_m2_span_tex, test_m2_geometry,
+    test_m2_geo, test_m2_geo_engine, test_m2_raster3d, test_m2_quad_store,
+    test_m2_texel_bl, test_m2_boot: all pass. Verilator -Wall on the changed
+    modules: the same warnings as HEAD. quartus_map --analyze_file clean on
+    the four.
+
+*Not verified:* the board; timing at 80/40 (no fit); area in context. The
+bench's input geometry is MAME's float clip quantised as the board does
+(R756: the board's corners match MAME to ~0.002 px), so the board is
+expected to show the same, not measured. What is left (0.6 px, 0.63 px
+jumps) is mostly the quarter-texel u, v at the clipper's corners (the store's
+13-bit field, M10K) and SPLIT_TRI's fan of triangles against MAME's edge
+walk on these non-planar clipped polygons (up to 17 texels off the plane at
+a far corner in frame 8778) -- 0.18 px with every input exact.
+
+**R793 -- VIDEO "AUTO": THE CORE STARTS IN 15 kHz ON A CRT SETUP.** Ben: a CRT
+owner without a PC boots the core at 24 kHz, which a 15 kHz set cannot show,
+so the OSD that would switch it is out of reach. A core cannot read
+MiSTer.ini, but hps_io holds its video settings in `cfg` and exported only
+forced_scandoubler (cfg[4]) and direct_video (cfg[10]); composite_sync
+(cfg[3]), ypbpr (cfg[5]) and vga_scaler (cfg[2]) were used inside sys_top
+alone. The Model 1 reference (0b5d04f, current) connects forced_scandoubler
+and uses none of them -- its native mode is 24 kHz too.
+  * docs/framework-patches/hps-io-video-cfg.patch (applied; the second sys/
+    patch, R788's README/THIRD_PARTY/README.md updated): hps_io outputs
+    cfg_csync, cfg_ypbpr, cfg_vga_scaler. No logic; unconnected = upstream.
+  * Model2.sv: O[42] "Video" becomes O[47:46] "Auto / Native 24kHz / 15kHz
+    interlaced", Auto first. Auto = 15 kHz interlaced when game_id[7] (the
+    CRT MRA) or (direct_video | composite_sync | ypbpr) & !forced_scandoubler
+    & !vga_scaler; else native. Decided on clk_sys into vid_il_r, crossed to
+    clk_mem by vil_s as status[42] was. is_vcop reads game_id[6:0].
+  * mra/Daytona USA (Deluxe 93) [15kHz CRT].mra and (Revision A) [15kHz CRT]:
+    the same set with <rom index="4"><part>80 00</part></rom> ahead of the
+    ROMs (Virtua Cop's game-ID word is 01 00).
+  * releases/README.md: a standing "On a 15 kHz CRT" section.
+lint_top clean; Quartus parses Model2.sv and sys/hps_io.sv. Not verified: a
+CRT on the board; whether any HDMI-only ini sets composite_sync or ypbpr
+(such a setup would get 15 kHz on HDMI under Auto, and can set Native).
+
+**R794 -- s939 RUNS LONG WITHOUT A LOCK, AND THE CAR WINDOWS STAY.** Ben,
+2026-10-10 evening: s939 "has been running a long time, no crash", and the
+car-window textures no longer disappear (the release README's "Car windows
+drop out" item, open since the 20261008b release). Since that release:
+R752's walk fix, R784's luma table (windows were drawn with the wrong
+table), R789's texel path. Which one closed the windows is not isolated.
+The lock (R777, R785) is not seen on s939 so far -- not yet a cause found.
+
+**R795 -- THE CRT MRA ALONE SETS 15 kHz; R793's "AUTO" IS WITHDRAWN.** Ben:
+"if it's passed as a param to the core, Auto is not needed." Right: the CRT
+MRA's flag is the whole mechanism, and R793's MiSTer.ini detection cost a
+second sys/ patch to maintain for setups the CRT MRA already covers.
+  * Model2.sv: Video is O[42] again ("Native 24kHz / 15kHz interlaced",
+    native the default -- saved configs keep their meaning); 15 kHz is
+    status[42] | game_id[7]. No hps_io outputs are used beyond upstream's.
+  * sys/hps_io.sv reverted to upstream; docs/framework-patches/
+    hps-io-video-cfg.patch removed; the READMEs, THIRD_PARTY.md and the
+    release README's CRT section say "load the [15kHz CRT] MRA".
+  * The two [15kHz CRT] MRAs (R793) are unchanged but for their comment.
+R793's build (2a79949, s942-s944) was stopped mid-fit. lint_top clean;
+Quartus parses Model2.sv.
+
+**R796 -- R787's 128-BIT TEXEL LINES ON R789's FOUR MISS SLOTS, AND A HEAD
+SELECT THAT COSTS LESS THAN THE ONE IT REPLACES.** Ben approved R787 on top of
+R789 (TXNS 4, TXRSP 4, TXK 16, 13 ports) and R791.
+
+PORTED UNCHANGED from R787 (sm2-builds/sm2-tl128-99386df): m2_sdram's p_long
+/ p_lo eight-word reads (the first four words with p_lo, four cycles before
+p_ack; tag_w three bits; long_p latched with the request, selected by
+arb_sel); m2_texel_bl LW8 (a 128-bit LINE -- what a miss fetches, a tag
+names, a slot holds -- read from the unchanged 2 x 2048 x 64 data RAMs a half
+at a time; 1,024 tags a bank; the fill's two halves on consecutive cycles
+straight from the held slot, the tag invalid then valid; the early answer
+from a first half). m2_sdram's blen() already reads 11 and 12 four (R789).
+
+WHAT CHANGED IN THE PORT:
+  * p_long on all four texel miss ports: 10, 11, 12, and 2 once p2_tex_f
+    (13'b111_0000000_p2_00); m2_raster3d's tex_m3_lo / tex_m4_lo from
+    sdr_lo[11] / [12]. TXLW8 1 in Model2.sv.
+  * THE HEAD'S NIBBLE SELECT. R787's per-texel select out of every slot's 128
+    bits measured ~130 ALM at two slots; at four it is ~300 (standalone,
+    1,989 against 1,685 without the half select). Now ONE 64-bit view a cycle:
+    the first waiting head texel that can be answered names a (slot, half),
+    that half is selected once, and every waiting texel in the same (slot,
+    half) is answered from it with a 16:1 nibble select; a texel in another
+    slot or half is answered the next cycle (a request's four texels almost
+    always share one line). LW8 only -- LW8 = 0 is cycle-identical to HEAD at
+    NS 2 (783,895 bench cycles) and NS 4 (766,218).
+  * Benches: tb_m2_raster3d's TEXMEM model serves all four ports (it served
+    two; R789 was measured on a scratch copy that served four); tb_m2_sdram's
+    harness carries the eight-word strobes on 13 ports.
+
+*Measured* (tb_m2_raster3d, MAME's lists, step 1, UZF 4, 100:80, FB + wcomb,
+TXNS 4 / TXRSP 4 / TXK 16; draw at 80 MHz, ms; HEAD = the same build at
+TXLW8 0):
+
+                     r57           r66           apk           rpk           f2200
+  idle   HEAD -> R796  10.65 10.63   11.04 10.95   12.17 12.08   14.28 14.11   12.47 12.27
+  cont.  HEAD -> R796  14.03 13.28   14.73 13.61   17.36 15.84   17.71 16.26   16.11 14.62
+  line reads           30,534 -> 22,929  28,743 -> 20,000  44,538 -> 31,276  21,105 -> 13,010  24,412 -> 15,458
+
+-0.2..-1.6% idle, -5..-9% contended (R787 alone at two slots: -1..-2 / -7..
+-11%; the four slots already hide part of what fewer misses saves), SDRAM
+line reads -25..-38%. Every texel answer common to HEAD and R796 identical:
+1,993,993 fetches over the five lists and both memory models, 0 differ; the
+displayed frame's hash identical in all ten runs.
+
+*SDRAM* (test_m2_sdram13, Model2.sv's 13 ports and class, the four texel
+ports reading eight words -- now in the target): 2,748,894 checks, 0 fail, 0
+device-model violations (refresh included), 0 tag faults. Worst latency in
+the saturating concurrent phase, four-word -> eight-word texel reads: glyph
+fetch (3) 271 -> 398 cycles (a scanline is ~6,600); i960 (1) 72 -> 79; texel
+2 82 -> 105; outside the class 422-442 -> 472-507. A read overtaking another
+port's still-outstanding write of the same word (port 0, outside the class,
+waited ~470 cycles) failed the bench's ordering rule once; the controller
+never ordered independent ports (the bench's own note), so the rule now also
+accepts the pre-write value while that write is outstanding (WriteRec.done).
+test_m2_sdram (11 ports, with and without 2 + 10 eight) and sdram128 (2 + 10
+eight: 1,923,823 / 0) unchanged.
+
+*Benches.* test_m2_texel_bl48 (new; NS 4, RSP_D 4, LW8): 200,000 / 0, both
+memory models; mutations: answering across halves 1,592 fails, across slots
+16,056, no first-half capture 107,612, ports 3 / 4 data swapped 61,987.
+test_m2_texel_bl, _bl4, _bl8, _texel, _texel_cdc, _cdc16, _raster3d,
+_raster_fill, _span_tex, _sdram, _sdram13, _sdram128, _sdram_x2, _sdram_cdc,
+_cpu_sdram, _romload, _boot pass; lint_top and Quartus parse clean.
+
+*Cost* (quartus_map alone at design parameters, placed by s936's ratios):
+m2_texel_bl NS 4 1,628 -> 1,541 (-87; ~-72 placed: the single view is
+cheaper than HEAD's per-texel select even with the upper halves), m2_sdram
+13 ports 1,231 -> 1,252 (+21; ~+14). Net ~-58 ALM. M10K: data RAMs
+unchanged, tags 2 x 2048 x 7 -> 2 x 1024 x 7.
+
+*Timing, by construction:* clk_mem -- the head view is a priority pick over
+four registered texels, a 4:1 x 2:1 select of 64 bits and a 16:1 nibble into
+rs_nib (HEAD: a 4:1 of 64 bits and a 16:1, per texel); the rest as R787.
+clk_sys unchanged.
+
+*Next lever, estimated (no RTL):* the texel line reads' own row locality (a
+cache model on the same traces, within 0.1% of the RTL's read counts): 23-40%
+of 128-bit reads fall in the same 1,024-word row as the texel read before
+(27-46% at 64-bit), 33-53% if the four banks were interleaved by row. The
+sheets sit in bank 2 (78-81% of reads) and 3 with i960 work RAM, so any
+other bank-2 access between two texel reads closes the row. A row hit saves
+PRE + tRP + ACT + tRCD, ~5 of ~13-19 clk_mem cycles. Two ways: move
+GAME_TEXS0/1 to a bank the CPU does not use (address map only; every bank
+has a hot master today), or permute bank bits with low row bits in m2_sdram
+(tbank ^= row[1:0], applied to every port so the data layout stays
+consistent; registered in the prefetch stage). Effect bounded at ~1-2 cycles
+a read on average; the bench has no CPU traffic to measure it -- the board's
+'S' record would.
+
+*Not verified:* the fit and timing; the board.
+
+**R797 -- THE CRT MRA SETS THE OSD'S VIDEO OPTION TOO.** s945 (5efcc72, 80/40:
+clk_sys +0.260, clk_mem +0.103, holds >= +0.243, HDMI -0.518; RBF
+999f177ff333c35f6d44add73059f728; s946 HDMI -0.883, s947 clk_mem -0.083) on
+the board: the [15kHz CRT] MRA boots the core in 15 kHz (R795 works), but
+the OSD still reads "Native 24kHz". Ben, same build: attract ~98% of full
+speed (slows under the first bridge and on the zoom into the car at the first
+corner), in game slows with many cars -- s939's texel path, before R796.
+s939 ran 79 min under the watch with no lock before it was replaced.
+  * Model2.sv: hps_io's status_in / status_set (upstream ports): once the
+    downloads are done, a CRT load with O[42] clear sets it (status_in =
+    status | 1 << 42, one status_set edge). 15 kHz = status[42] | (game_id[7]
+    & !crt_seen), crt_seen set when status[42] reads back -- so the flag
+    holds 15 kHz until the menu has it, and afterwards the OSD alone decides.
+lint_top clean; Quartus parses Model2.sv. Board checks owed: the OSD reads
+15 kHz on the CRT MRA; choosing Native there gives native; and whether
+Main_MiSTer saves the core-set bit into the config both MRAs share (setname
+daytona93) -- if a later normal-MRA load comes up 15 kHz, the CRT MRAs need
+their own setname.
+
+**R799 -- 262/263-LINE FIELDS ARE THE 15 kHz DEFAULT.** Ben, on his CRT with
+R783's option: the 262.5-line mode "fixes alignment and other bugs". O[45]'s
+menu now lists "262/263 (15.1kHz)" first (0, the fresh-config value), then
+"273/274 (15.7kHz)" -- labelled by the two fields' own line counts, since an
+interlaced frame of 525 or 547 lines has no half-line field; vid_nl =
+~status[45]. A saved config that held 273.5 (0) now opens as 262/263.
+tb_m2_video_timing (both counts, R783) PASS; lint_top, Quartus parse clean.
+The release README's CRT section says so.
+
+**R798 -- R796 MADE TO FIT: THE SLOTS' 128-BIT LINES IN LUT RAM, NOT FLOPS.**
+R796 (aeb323e) did not fit: s948-s950 need 4,195-4,202 LABs of 4,191
+(41,498-41,574 ALM) where 5efcc72 fitted at 41,267 (s947) and 41,399 (s945).
+
+*Why R796's "-58 ALM" was wrong.* It came from quartus_map of the modules
+ALONE, scaled by s936's placed / standalone ratios. In context the synthesis
+said otherwise: m2_texel_bl +64 ALUT and +194 registers (s947 -> s950 map
+reports), where the standalone map had +28 ALUT and an "ALMs needed" estimate
+of -87 -- a standalone module has every input live, so 5efcc72's per-texel
+select was costed far above what the design synthesises, and the estimate is
+not additive. At 99% the fitter has no slack to absorb registers, so R796's
++86 whole-design map estimate became ~+210 ALM placed (three seeds against
+two). m2_sdram's +37 in the fit comes with -4 ALUT / +12 registers in
+synthesis; s945 and s947 (identical RTL) differ by 16 there, so much of it is
+placement. Entity numbers in one map also move by hundreds of ALUT where
+nothing changed (m2_geometry +352 s947 -> s950). Calibration is now against
+the whole design's map, not modules alone.
+
+THE CHANGE (m2_texel_bl, LW8 only; LW8 = 0 is unchanged and cycle-identical):
+  * A slot's line was 128 flops per slot (512 at four) read by two 8:1 x 64
+    selects (the head's view, R796, and the fill's half). Now it is LUT RAM,
+    {slot, half} x 64 (8 x 64, MLAB): halves are written as they arrive --
+    m2_sdram hands out one port's half or line a cycle (its single R557
+    stage), so one write port serves the four ports -- and ONE read port
+    serves both readers: the fill while it writes (two cycles a line), the
+    head's view otherwise (the head waits those cycles). A timed-out slot
+    reads as zeros by a flag (ms_z), as the zeroed register did.
+  * The benches deliver one port's half or line a cycle when LW8, as the
+    controller does (tb_m2_texel_bl, tb_m2_raster3d's TEXMEM; LW8 = 0 runs
+    unchanged).
+
+Evaluated and NOT kept:
+  * p_long as a per-port PARAMETER (10-12 constant, 2 at run time): the full
+    design's synthesis of m2_sdram is identical with and without it (895 ALUT,
+    1,664 registers) -- the constant inputs already propagate.
+  * Dropping the early first-half answer: ~9 ALM (standalone) for +1.1..+1.6%
+    idle and +0.7..+1.5% contended draw time.
+  * Two LUT-RAM copies (one per reader): R796's draw time exactly, ~32 ALM
+    (one 8 x 64 MLAB) more.
+
+*Area* (full-design quartus_map, the core's configuration, against the seed
+maps):
+                         5efcc72 (s947)   R796 (s950)   R798
+  m2_texel_bl ALUT          1,797           1,861        1,677
+             registers      1,584           1,778        1,270
+             LUT RAM            -               -        64 memory ALUTs (one 8 x 64)
+  m2_sdram ALUT / regs     923 / 1,652     919 / 1,664   895 / 1,664 (RTL as R796)
+  design ALMs-needed est.  40,507          40,593       40,398
+R798 against 5efcc72: m2_texel_bl -120 ALUT, -314 registers, + ~32-40 ALM of
+LUT RAM. Calibrated by R796 (+64 ALUT / +194 registers -> +20..+40 ALM placed
+for the entity), the texel cache lands ~-40..-80 ALM below 5efcc72 and the
+whole design ~-5..-45 with m2_sdram's ~+37 kept; the whole-design map
+estimate is -109 against 5efcc72's (which fitted twice) and -195 against
+R796's. M10K unchanged from R796.
+
+*Draw time* (tb_m2_raster3d, MAME's lists, step 1, UZF 4, 100:80, TXNS 4 /
+TXRSP 4 / TXK 16; ms at 80 MHz):
+                      r57    r66    apk    rpk    f2200
+  idle   5efcc72     10.65  11.04  12.17  14.28  12.47
+         R796        10.63  10.95  12.08  14.11  12.27
+         R798        10.73  11.01  12.20  14.17  12.35
+  cont.  5efcc72     14.03  14.73  17.36  17.71  16.11
+         R796        13.28  13.61  15.85  16.26  14.61
+         R798        13.32  13.65  15.91  16.29  14.64
+The shared read port costs +0.4..+1.0% idle and +0.2..+0.4% contended against
+R796; against 5efcc72 R798 is -1.0..+0.8% idle and -5..-9% contended.
+
+*Verified.* Every texel answer common to 5efcc72's configuration and R798
+identical: 1,993,992 fetches over r57/r66/apk/rpk/f2200 x both memory models,
+0 differ; the displayed frame's hash identical in all ten.
+test_m2_texel_bl48 (NS 4, RSP_D 4, LW8): 200,000 / 0 both memory models;
+mutations -- the head reading during a fill 12,233 fails, the first half not
+written 107,185, every half written to half 0 186,261, answering across
+halves 1,629, the fill reading half 0 twice 83,780. test_m2_texel_bl, _bl4,
+_bl8, _texel, _texel_cdc, _cdc16, _raster3d, _raster_fill, _span_tex,
+_sdram (+ eight-word), _sdram13 (+ eight-word: 2,748,894 / 0, 0 violations
+incl. refresh, 0 tag faults; worst latency port 3 398, i960 79, others
+472-507 as R796), _sdram128, _sdram_x2, _sdram_cdc, _cpu_sdram, _romload,
+_boot pass; lint_top clean; the full design's synthesis infers the slot
+store as MLAB (altdpram ms_ma) and no new uninferred RAM.
+
+*Timing, by construction:* clk_mem -- the head's view: the priority pick
+(registers) -> a 2:1 on the LUT RAM's read address (fill or view) -> the
+asynchronous read -> the zero flag -> a 16:1 nibble -> rs_nib; the fill:
+fl_s / fl_h registers -> the same 2:1 -> the read -> the M10K's write data.
+Writes are registered.
+
+*Not verified:* the fit and its timing; the board.
+
+**R800 -- THE LOCK ON s945, 45-60 MINUTES INTO ATTRACT.** s945 (5efcc72,
+80/40), Daytona Revision A MRA, attract left running: the 3D froze on the
+"V.R." chase view at ~45-60 min, CREDIT 0/1 (no coin), 0.0 fps; a core reset
+clears it (Ben). So it is not coin- or start-triggered (R785's CREDITS 2/3
+was coincidence or irrelevant) and it survives R786-R791. s939 ran 79 min
+and s913 ~100 min without one -- rare and random, needing a long unattended
+run under telemetry. MiSTer now writes screenshots per set name
+(screenshots/daytona/ for Revision A, daytona93/ for Deluxe), and the soak
+scripts looked only in daytona93/: R785's and this entry's first capture
+were the stale 18:06 file. Next: a lock-hunt build on current code
+(5bec24b + R777's trap and 0x185x-load records, 75/37.5; patch
+build/worktree_patches/lock-hunt-5bec24b.patch), left overnight.
+
+**R801 -- THE CRT STATE SHOWN BY THE MENU MASK, NOT WRITTEN BACK; R797
+WITHDRAWN.** R797's build (5efcc72 + R797 + R799, s951-s953) missed clk_sys
+by 1.17 / 0.94 / 0.70 ns at 41,412-41,466 ALM: status_set made hps_io's
+128-bit status_req (and its read-out mux) live, ~+240 registers on a full
+part. Ben (the tester has the CRT MRA working on s945): ship the label fix
+alone -- 5efcc72 + R799 is building (s954-s956).
+  * Model2.sv: the Video line is "H0O[42],Video,Native 24kHz,15kHz
+    interlaced" -- hidden when status_menumask[0] (crt_mra = game_id[7]) is
+    set -- and "h0O[42],Video,15kHz (CRT MRA),15kHz (CRT MRA)" is shown only
+    then, on the same bit. 15 kHz is status[42] | game_id[7] (R795). No
+    status write-back; status_menumask is a 16-bit read-only input.
+  * crt_mra is a wire declared ahead of hps_io and assigned after game_id,
+    so no forward reference reaches a port connection.
+lint_top clean; Quartus parses Model2.sv. Owed: the board (the menu-mask
+H/h prefixes are MiSTer's documented CONF_STR syntax, not used in this core
+before).
+
+**R802 -- THE LOCK DOES NOT HAPPEN WITH TEXTURES OFF.** A tester, 2026-10-10:
+with the OSD "Textures Off" (status[27] -> q_tex[0] forced 0, so no texel
+fetch at all -- SDRAM ports 2, 10, 11, 12 idle, the texel cache and
+m2_texel_cdc quiet) the random lock (R748/R750/R777/R785/R800) does not
+occur. R750's mechanism is a CPU load from work RAM returning a code address
+(0x1868) or the word in memory being overwritten; the texel path never
+writes SDRAM, so the leading suspect is a CPU read (or write) corrupted under
+texel traffic -- completion routing, a crossing, port 2's boot/texel
+handover, or ordering under class-port contention. R789 (4 slots, 13 ports)
+and R796/R798 (8-word bursts) multiplied that traffic, which fits the lock
+seeming more frequent lately (s945: 45-60 min, then 20 min). Not yet a cause:
+a stress bench (real m2_sdram, CDCs and bridge, CPU traffic checked against a
+shadow under maximum texel traffic) and cheap on-chip checks for the
+lock-hunt build are under way.
+
+**R803 -- R802 NOT REPRODUCED: TEXTURES OFF STILL LOCKS.** Ben, 2026-10-11, on
+s945 (5efcc72, 80/40): with the OSD "Textures Off" the lock still comes,
+after the same ~30-45 minutes. The tester's no-lock run was a lucky stretch
+of a random fault; the texel path is not established as the cause. The hunt
+widens to every SDRAM master and to the CPU side (the bridge's cache /
+posted writes / line buffer, the i960 core's call/ret frame handling under
+interrupts, R652's IRQ hold, the copro FIFO stall with R771's faster TGP).
+
+**R798 on the fitter: it FITS, and its head path misses clk_mem.** e6af63c
+(R796 + R798 + R799 + R801) at 80/40: s957 Quartus internal error (TDB),
+s958 41,207 ALM / s959 41,134 (98% -- R798's shrink worked); clk_mem -1.515 /
+-1.028 ns, 163 paths all u_texel rs_rp -> rs_nib (R798's pick -> MLAB read
+address -> async read -> zero flag -> 16:1 nibble select in one 10 ns cycle);
+clk_sys -0.105 / -0.113 (geo_project -> geo_clip, noise). The read is being
+registered (R804) before the next build.
+
+**R805 -- THE LOCK IS TIED TO ONE ATTRACT SCENE.** s945, Daytona Revision A
+(setname daytona), attract only: two locks (~45-60 min, then 35 min after a
+reset, the second under the soak watch: 57.4 fps at +32 min, 0.0 at +33 and
++35) froze on almost the same frame -- the "V.R. button" demo (chase view,
+"V.R. ボタン搭載！4つの視点が楽しめます", SEGA 1994, CREDIT 0/1). The two
+screenshots' top 172 rows are identical and 12,941 of 190,464 pixels differ,
+all in the road below. So the trigger is something that scene does -- it
+cycles the four camera views -- firing on some passes but not all; the
+20-60 minutes is the number of attract loops until it fires. s931's lock
+(Deluxe '93) froze on the attract backdrop instead. The hunt now has a
+target: MAME's view of that scene (copro commands, the 0x185C dispatcher's
+task records, display lists, rare opcodes) to drive the benches.
+R805, Ben: on Deluxe '93 the lock comes at a different fixed place -- the
+attract backdrop (blue, AM2 logo; s931's capture) -- so each set locks at its
+own point in attract: a transition or mode change is the likelier trigger
+than steady traffic.
+
+**R806 -- NO MEMORY-SIDE FAULT FOUND; THE TRAP ADDRESSES WERE THE WRONG SET'S;
+R750 DOES NOT PIN r5.** A stress bench (sm2-builds/sm2-lockbench-e6af63c, not
+merged: sim/mem/m2_lockbench_harness.sv, tb_m2_lockbench.cpp, `make
+test_m2_lockbench`): the real m2_sdram (13 ports, Model2's PRI, 8-word texel
+reads with p_lo), m2_sdram_cdc (Model2's FAST mask), m2_wr_arb and
+m2_cpu_bridge (FAST_ACK 0 and 1) on port 1, the device model with its timing
+checks; the i960 side driven as i960_top drives the bus, every read checked
+against a byte shadow, written regions swept twice at the end; every other
+port a checked generator at full rate. 27 runs x ~306 M clk_mem cycles
+(100/80/40, 100/75/37.5, random phases, +-200-300 ps jitter, 60-95 MHz,
+texels off, CPU alone, back-to-back) plus 16 scene-change block-copy runs:
+0 data errors, 0 protocol errors, 0 monitor hits, 0 device violations.
+Planted faults (a row comparator ignoring high bits, a store skipping the
+data-cache invalidate, level-for-toggle completion in the crossing) are
+caught. Not seen by it: the real i960 core; the clk_sys -> clk_mem paths cut
+by set_clock_groups -asynchronous (unconstrained on hardware).
+CORRECTIONS. (1) R748/R750's addresses are daytona93's (epr-16530a/16531a:
+dispatcher 0x183C, task load 0x185C, callx 0x1860, two-word ld at 0x1864,
+operand 0x1868). Revision A (epr-16722a/16723a, s945's set) has them at
+0x1904 / 0x1924 (ld r5,12(g13)) / 0x1928 (callx) / 0x192C (two-word ld,
+operand 0x1930). (2) dbg_rip is loc[R_RIP] (i960_regs.sv:307) -- r2 of the
+current frame, 0x1864 after ANY task returns to the dispatcher -- so "trap at
+0x1868, RIP 0x1864" fits a wrong instruction word or length at 0x1864 after
+the return, or a return to 0x1868, as well as a bad r5. In both sets the trap
+is at the two-word instruction's operand after callx: return point + 4.
+MAME 0.289, 10 min of attract each: the texture sheets are re-uploaded every
+3,167 frames (~55 s, 524,288 stores over 20 frames, Textures Off or not);
+scene starts rewrite 135-170 task pointers in a frame (all 32-bit stores;
+task code in the 0x220000 ROM mirror); Revision A's V.R. demo runs copro
+functions 0x2A/0x30/0x36 in 99.9% of its frames (20-37% elsewhere).
+Next: a lock-hunt build that records the PREVIOUS instruction (IP, word,
+length) at the trap, the task load for both sets, and the last store to that
+task record.
+
+R804 -- The texel cache's head view, in two cycles (clk_mem timing)
+
+Believed (R798): the slot store in LUT RAM could be read and answered in the
+cycle that picked it. R798's own note flagged the path as long and left it to
+the fit.
+
+Known: s958/s959 FIT (41,207 / 41,134 ALM, 98%) but clk_mem (100 MHz) misses
+by 1.515 / 1.028 ns. All 163 failing paths are in m2_texel_bl's head path,
+e.g. u_texel|rs_rp[1] -> u_texel|rs_nib[1][1][1] (-1.515 ns). In one clk_mem
+cycle that path ran: rs_rp -> entry selects -> ms_done/ms_half by slot -> the
+priority pick -> the LUT RAM's 2:1 read address -> asynchronous MLAB read ->
+zero-flag mux -> 16:1 nibble select -> rs_nib. clk_sys's -0.105 ns
+(geo_project -> geo_clip) is a separate path and is not affected here.
+
+Change (rtl/video/m2_texel_bl.sv, LW8 only; LW8=0 is unchanged):
+ - The pick is REGISTERED: hq_v, hq_s, hq_h (slot, half), hq_m (which of
+   the head's four texels), hq_sel[4] (their nibble selects).
+ - In the next cycle the LUT RAM is read at {hq_s, hq_h}, with the zero flag
+   ms_z[hq_s], and the picked texels' nibbles are written to rs_nib/rs_rdy.
+ - Texels picked but not yet written are masked from the next pick
+   (hv_ok &= !(hq_v && hq_m)).
+ - The fill still has priority on the one read port (mr_a = fl_v ? fill :
+   pick). A pick whose second cycle meets a fill is dropped (hq_go = hq_v &&
+   !fl_v), and its texels are picked again.
+ - Bypass: the head may leave in the same cycle as the read.
+   hd_ready = (rs_rdy | hq_now) == 4'hF, and o_q takes the nibble straight
+   from the view for the texels in hq_now. The bypass starts from registers
+   (hq_*, the MLAB read, the nibble select), not from the pick.
+ - No entry tag is needed on the pick. The pick is always the head's: the
+   head cannot leave while one of its picked texels is unanswered, and a head
+   that leaves through the bypass leaves no picked texels behind. Mutation m4
+   confirmed this (removing the entry compare: 0 fails), so the tag was
+   dropped.
+
+Depth of the new worst clk_mem paths, by structure (LUT levels, not timed):
+ - Stage 1, from rs_rp to hq_m/hq_s. Path: entry 4:1 (1) -> ms_done/ms_half
+   by slot 4:1 (1) -> hv_ok AND with the mask (1) -> priority pick hv_s/hv_h
+   (1-2) -> slot/half compare into hv_m (1-2). About 5-7 levels, all LUTs.
+   No MLAB and no nibble select.
+ - Stage 2, from hq_s/hq_h/fl_v to rs_nib or o_q. Path: 2:1 address (1) ->
+   MLAB asynchronous read -> zero flag (merges with the next level) -> 16:1
+   nibble select (2) -> hd_nib 2:1 (1, can merge). About 4 levels plus the
+   MLAB read.
+ - hd_ready: rs_rdy 4:1 by rs_hd, OR hq_now (hq_v && !fl_v && hq_m), then
+   AND4. About 3 levels, then the fan-out to o_q and the queue pointers.
+ - The fill's path (fl_s -> MLAB -> zero -> M10K write data) is unchanged
+   from R798.
+R798's single path was the sum of stage 1 and stage 2. Each half is now at
+most the length of the stage-1 part of it.
+
+Draw time. tb_m2_raster3d on the MAME lists, NS4 RSP4 LW8 TXK16, 80 MHz, in
+ms. L12 = idle texture memory; L30 = contended (30 cycles + 0..30 jitter).
+                      r57    r66    apk    rpk   f2200
+  R798         L12  10.73  11.01  12.20  14.17  12.35
+  R804         L12  10.79  11.06  12.32  14.24  12.37   +0.2..+1.0%
+  R798         L30  13.32  13.65  15.91  16.29  14.64
+  R804         L30  13.41  13.72  16.00  16.32  14.68   +0.2..+0.7%
+  64-bit lines L30  14.03  14.73  17.36  17.71  16.11   (5efcc72, for scale)
+The worst case is apk at L12: +0.12 ms. Without the bypass the cost was
++1.0..+1.6% (measured, then the bypass was added). The R796/R798 gain over
+64-bit lines at L30 (4-9%) is kept.
+Unit bench test_m2_texel_bl48: 670,445 -> 678,497 cycles (+1.2%); with
+M2_TBL_SDRAM, 686,569 -> 694,139 (+1.1%).
+
+Area. Full-design quartus_map (17.0) at this HEAD, with and without the
+change:
+  u_texel            1673 -> 1688 ALUT (+15), 1270 -> 1286 registers (+16)
+  whole design est.  40,431 -> 40,319 ALM (-112: map-to-map noise, not a
+                     saving), 48,732 -> 48,749 registers (+17)
+  MLAB ms_ma         unchanged (8 x 64, simple dual port)
+  M10K bits          unchanged
+R798's calibration was that a map-estimate delta can grow about 2.5x in a
+98% fit. On that basis, budget about +40 ALM against s958/s959's 41,207 /
+41,134.
+
+Answers. Every texel answer and pixel is identical to the pre-R796 64-bit
+design: 1,993,998 common fetches, 0 differ, frame hash identical in 10 of 10
+(5 lists x 2 memory models).
+
+Mutations (test_m2_texel_bl48 fails, plain / M2_TBL_SDRAM):
+  m1  address from the combinational pick (the new register removed)
+                                         52,400 / 52,283
+  m2  second cycle not dropped for a fill (hq_go without !fl_v)
+                                         10,966 / 10,988
+  m3  bypass removed from o_q (stale rs_nib)
+                                         70,932 / 71,064
+  m4  entry compare on the pick (pre-simplification)
+                                         0 -> the compare is redundant,
+                                              removed
+  m5  zero flag indexed by the combinational pick
+                                         0 / 0 -> the zero flag is NOT
+                                              exercised: no timeouts occur
+                                              in the bench
+Benches: lint_top; test_m2_texel_bl, _bl4, _bl8, _bl48 (LW8=0 cycles
+unchanged: 783,895 NS2, 766,218 NS4); test_m2_texel, _texel_cdc,
+_texel_cdc16, _raster3d, _raster_fill, _span_tex, _sdram, _sdram13,
+_sdram128, _sdram_x2, _sdram_cdc, _cpu_sdram, _romload, _boot -- all PASS.
+quartus_map --analyze_file passes.
+
+Not established: the fit and its timing (the structural depth above is not
+a timing result), and the board. The zero-flag path (ms_z[hq_s]) is correct
+by construction but is not tested by any bench.
+R804 on the fitter: 2a7b338 (R796 + R798 + R804 + R799 + R801) at 80/40,
+nine seeds, none closed. s966/s967/s971/s973 Quartus internal errors (TDC,
+STA, DYN, STA) -- with the 16 GB tmpfs /tmp holding 12 GB of scratch on a
+31 GB machine running three fits; 6 GB cleared after s968. s968 clk_sys
++0.137, clk_mem +0.650 (R804's head path closed), HDMI -0.974, hold -0.294
+on clk_i960. s969 clk_mem -0.133 (u_texel fl_h -> rs_nib / o_q: the fill
+half through the shared MLAB read into the bypass), s970 clk_mem -0.017
+(m2_sdram rr_mask). s972 clk_sys -0.835 (m2_fb_wcomb wlo -> mk_valid), s974
+-0.324 (mb86233_core state.S_LABB_W -> maddr_q). 41,085-41,211 ALM (98%):
+scattered paths, placement at 98%. More seeds (s975-s977).
+R804 closes at last: s983 (2a7b338, 80/40) clk_sys +0.094, clk_mem +0.433,
+clk_i960 +2.370, holds >= +0.161, HDMI -0.236; RBF in
+build/Model2_20261011_s983_speed.rbf. s981 clk_sys -0.014, s982 all core
+clocks positive but HDMI -1.675. Fifteen seeds for one closing (six Quartus
+internal errors, none in the last batch after /tmp was cleared). The
+lock-hunt v2 build (5efcc72 + P/L/X records, 75/37.5) closed on all three
+seeds; s980: clk_sys +0.905, clk_mem +0.188, holds >= +0.140, HDMI -0.220,
+RBF 604e22481fbdb5b43121db8acf177751.
+
+**R807 -- s983's TEXTURES WERE BROKEN BY AN OUT-OF-RANGE INDEX THAT ONLY
+VERILATOR WRAPPED.** s983 (2a7b338) on the board: speed "not that much
+different", textures broken -- garbled car decals, speckle on the hills and
+on the V.R. sign. m2_sdram.sv:1015 `cap[tag_w[0]] <= dq_r`: tag_w is 3 bits
+(R787: word 0-7 of an 8-word burst), cap is [3:0][15:0]. Verilator wraps the
+index (4 -> 0 ...), which is what R787 intended, so every bench passed;
+Quartus follows the standard and drops an out-of-range write, so words 4-6
+never reach cap and the second half of every 8-word texel line is
+{word 7, words 2, 1, 0} -- garbage in half of every line. Verilator -Wall
+gives no warning for a variable index past the end. Fix: cap[tag_w[0][1:0]].
+The same assumption must not hide elsewhere in R787/R796/R798/R804's code
+(being audited). The speed reading on s983 stands as a fetch-pattern
+measure only (the line data was wrong, the traffic was not).
+
+**R808a -- THE DRAW'S COST IS PER TEXEL LOOKUP, NOT PER TEXEL.** Ben, s983 and
+s980 on the board: Textures Off -> full 60 throughout; texel step 8 -> full
+speed; Texture filter Point vs Bilinear -> no noticeable difference;
+R796-R807's fewer misses -> no change (R789's four misses in flight did
+help). With the bench's perfect-memory floor (9.9-13.6 ms against 5.7-7.4
+textures off, R789), the dominant cost is the span pipeline's per-lookup
+overhead, whatever the filter reads. Suspect, from m2_span_tex's own comment:
+four cycles of perspective divide serialised ahead of every texel fetch at
+step 1. Being profiled per lookup (sm2-builds/sm2-spanprof-7b41994).
+
+**R809 -- A CHECK FOR R807's CLASS, AND THE AUDIT: NO OTHER REACHABLE CASE.**
+Verilator 5.052 and the LRM (iverilog; what Quartus follows), tested: an
+out-of-range write at index 5 / read at 6 -- Verilator WRAPS for every packed
+array and every power-of-2 unpacked array (logic [3:0][15:0] p4, u4[4], and
+even packed [2:0][15:0], whose bit offset it truncates to 6 bits), and drops
+/ reads 0 only for non-power-of-2 unpacked arrays; the LRM drops the write
+and reads X in every case. Verilator -Wall warns for some shapes
+(WIDTHTRUNC on bit extraction) but not for packed element selects (R807's
+shape); iverilog would have caught R807.
+  * sim/lint/idxcheck.py + `make lint_idx`: reads Verilator's --json-only
+    elaborated tree of emu (real parameters), computes each variable select's
+    index range and compares it with the declared range, seeing through the
+    truncations Verilator inserts. Validated on 19 planted cases and on the
+    pre-fix m2_sdram.sv:1015. Candidates are listed for review.
+  * The audit (all 98 project candidates read by hand; m2_texel_bl, cdc and
+    span_tex swept over NS/RSP_D/LW8/IB/K/TXK): R807 was the only reachable
+    one. Latent, not reachable: m2_geo_clip.sv:226 (sk_rd_addr at sp == 0,
+    read unused), m2_geo_xform.sv:220 (t[3] when a_comp == 3, don't-care),
+    m2_raster3d.sv:1317 (an unselected ?: arm), m2_texel_bl.sv:372 (SW
+    aliases slots only for NS > 4). unique/priority cases complete; no signed
+    indexes. Run `make lint_idx` on changed RTL before a seed sweep.
+
+**R811 -- THE LOCK CAUGHT: THE i960 WAS HANDED THE WRONG INSTRUCTION WORD.**
+s980 (lock hunt v2, 5efcc72 at 75/37.5), Revision A attract, locked at ~35
+min (the watch missed it: after a trap 'G' carries RIP/PFP, so its flip
+count stops moving and read as "no data" -- fixed in the next watch).
+Captured by hand at the lock:
+  C   trap at IP 0x00001930, trapped word 0x005011FC
+  G   RIP 0x0000192C, PFP 0x005FF500
+  P   previous instruction: IP 0x0000192C, word 0x881F602E
+  L   last task load (IP 0x1924): from 0x0051072C returned 0x00D50000
+  X   last store into that record: by IP 0x00222610, data 0x00222630
+Revision A's ROM (epr-16722a/16723a, lo/hi 16-bit interleave) holds
+0x90303000 at 0x192C -- the two-word `ld 0x5011FC`, operand 0x005011FC at
+0x1930. The CPU executed 0x881F602E at 0x192C instead: a one-word
+instruction, so it stepped to 0x1930 and executed the operand -> trap.
+0x881F602E occurs at 19 ROM addresses; the ONLY 16-byte line with i-cache
+index 0x12 (the index of 0x192C, 32 lines x 16 B) that contains it is
+0x22120 = {5cf01e00, 0a000000, 881f602e, 5c181603} -- word 2, where 0x192C
+is word 3 of line 0x1920 = {30f9200c, 902f600c, 86015000, 90303000}. Task
+code runs from the 0x220000 mirror (X: IP 0x222610), so 0x222120 and the
+dispatcher's 0x1920 share a cache line. So the fetch returned another line's
+word from the same cache slot, one word position off. The task pointer and
+memory data are not the fault (R750's reading, and R806's "CPU-side"
+alternative, now settled). Suspects: an i-cache tag/data race on refill
+(R768's valid-in-tag / S_SWEEP design, the fill vs lookup timing) or the
+prefetch path (pf_insn / pf_ip / pf_armed in i960_top: a prefetched word
+tagged with the wrong IP -- the off-by-one word fits this). R777's lock
+outlives FAST_ACK because it is not in the bridge.
+
+**R812 -- THE LOCK'S MECHANISM: A LATE I-CACHE ANSWER TAKEN FOR THE NEXT FETCH.**
+R811's wrong word is the word after a `ret`: line 0x222120 holds
+{mov, ret 0x0A000000, 0x881F602E, ...}, so the task returns from 0x222124 and
+the front end, predicting sequential, prefetched 0x222128 as it accepted the
+`ret`. That prefetch's answer is normally back two cycles later and absorbed
+into pf_insn (pf_armed). But if the cache was busy on a fill when the request
+arrived, it is answered later, through S_FILL's redirect-hit path and S_DONE.
+`ret` from the register cache takes a few cycles; the sequencer reached
+T_FETCH for 0x192C, dropped pf_armed, issued 0x192C and entered T_FETCH_W --
+and T_FETCH_W accepted ANY `ic_valid`. The delayed answer for 0x222128 landed
+in that first cycle and was executed as 0x192C. Then 0x1930 was prefetched
+into the line now filling for 0x192C, renamed onto it, and answered with the
+operand 0x005011FC -> trap. Every word in R811's capture follows.
+Why rare: the answer has to land in exactly the cycle after T_FETCH, which
+needs the cache busy when the prefetch went out and a particular bus delay --
+which is why it tracks busy scenes (SDRAM contention) and took 20-60 min.
+Why no bench saw it: every i960 bench acked the bus in the cycle it was asked,
+so the cache was never busy at a prefetch and no answer was ever late.
+FIX: the cache already reports which address a `valid` answers (vaddr, written
+for a prefetch queue and never read). All four consumers -- T_FETCH's landing
+prefetch, T_FETCH_W, T_FETCH2_W, the pf_insn capture -- now take
+`ic_ok = ic_valid && vaddr == fetch_addr[31:2]` (every request goes out on
+fetch_addr). And the cache's S_DONE now renames vaddr when a hit is taken
+there, which it already answered at the new address but labelled with the
+old (harmless until vaddr was read; it would hang the fetch now).
+BENCH: tb_i960_top +lat=N holds every bus access 0..N cycles, latching the
+address at the request. Without the fix: PREFETCH-invariant failures at lat=1
+and lat=3 (wrong word at the IP, pf_ip one fetch behind -- the board's
+signature). With it: 3,000 random programs pass at lat 0,1,2,3,5,12,40,100,
+loops mode at 0/3/40. `make test_i960_top_lat`. Interrupt runs stay at lat 0:
+the harness raises IRQs on cycle counts, which latency shifts against the
+reference. Cost: m2_cpu_real (real bridge + SDRAM) 12.03 CPI before and after
+-- the check rejects only answers nobody was waiting for.
+Not yet measured on the board; the soak is the test (R811's lock at ~35 min,
+earlier ones 20-60 min, so >= 2 h clean before calling it).
+
+**R810 -- THE GAME OVER "G": A WALK'S FIRST QUAD, HELD WHILE THE PREVIOUS
+LIST WAITED FOR ITS SWAP, WAS TAKEN IN THE CYCLE THE STORE'S CLEAR LANDED,
+AND LOST.** Ben, 2026-10-11: on the results screen after a race the "G" of
+GAME OVER is missing -- "a missing 3D quad with transparent texture". First
+recorded at s377 (2026-09-26, the open issues under R614), apparently gone
+for a while, now back.
+
+MAME (0.289 m2lod, daytona93, coin + start, the car left standing until the
+timer runs out): RESULTS / 40th from machine frame ~8,640, GAME OVER from
+~8,860 to ~9,300 -- the letters fly in one at a time, turn about their
+vertical axis (mirrored at ~9,240) and turn back. Walk dumps at 8,881,
+8,941, 9,001 ... 9,301 (eight walks): the G is POLYGON 0 OF EVERY ONE.
+h=6400,0000,1e9b,00c0 -- textured, translucent (h0 bit 13), 32x32, sheet 1
+at (0x1b*32, 0x1a*32); luma 255; z 599-633, the nearest polygon in the
+list; on frame 9,000 a 45 x 45 px square at x 15.6-60.4, y 224.3-269.1,
+owning 1,517 of MAME's pixels. The other letters are polygons 1-5 with the
+same header word 0.
+
+NOT THE STAGES THE BRIEF SUSPECTED. Each was run on MAME's data at 821b47e:
+  * the walk, engine, clipper and projector (geodiff_ra, walk 9,001): 805
+    polygons -> 818 quads; the G is quad 0, vertices exact, texture word
+    d37101 exactly as tb_m2_raster3d packs it from MAME's header. (Polygon
+    266, the near road, is split differently -- covered by two quads of
+    ours instead of one; a pre-existing difference, not a loss.)
+  * the store, sort, fill, span walk and texels in the core configuration
+    (FTB, FB_DDR3, SPLIT_TRI, R769/R776 cull, R784 colour, R791 UZF,
+    R789/R796 texel; tb_m2_raster3d M2_R3D_LIST + REALCOL, frame 9,000):
+    816 quads pushed, 0 refused, 0 culled as tiny; the G drawn; 41 of
+    MAME's textured pixels unpainted in the frame. Not the tiny cull, not
+    the fill mask, not the translucent texel test.
+Both halves draw the G. What neither bench had ever done is join them the
+way the board does.
+
+THE JUNCTION. R220 made q_ready = (pst == P_COLLECT): a walk that starts
+before the swap is held by the clipper (valid/ready, out_valid kept) with
+its first quad on q_valid until the store collects again. R211's clear is
+swap_d, one cycle after the swap, "the walk's first quad is many cycles
+away". The two contradict each other. At the swap pst becomes P_COLLECT, so
+q_ready rises in the very cycle swap_d is high; the held quad is taken
+(q_take, and the clipper pops it) while m2_quad_store drops it --
+`a_v <= in_valid && !clear` (m2_quad_store.sv:444) and the clear branch
+(:466) skips the RAM write and the count. The list is then drawn without
+its polygon 0. MAME has no such gap: geo_parse calls render_frame_start(),
+which resets poly_list_index, before the walk's first polygon, and every
+polygon walked is in the list. Model 1 has no counterpart to compare: its
+store takes q_valid directly, with no q_ready -- the backpressure is R220's
+own design.
+
+When it happens: any frame_start that does NOT swap -- the walk still
+collecting at the vblank (R763 measured on the board that attract walks
+span vblanks and include waiting for the swap) -- leaves frame_pend set,
+so with "After flip" the next walk starts at the game's next flip, while
+the previous list is P_SORT/P_READY; it is held, and loses its first quad
+at the next swap. Once a walk runs late, every list can start that way.
+
+  * m2_raster3d.sv:361: q_ready = (pst == P_COLLECT) && !swap_d. The held
+    quad waits one more cycle and lands in slot 0 after the clear. No
+    area; q_ready gains one register input. swap_d is declared before both
+    uses. quartus_map --analyze_file: 0 errors.
+
+Bench:
+  * tb_m2_raster3d, new R810 phase: list A (a background square) READY; list
+    B's first quad (a red square in the G's box) presented and HELD with
+    q_ready low, for 0, 3 and 30 video frames with no frame_start, then
+    across the frame_start that swaps; the control pushes it the ordinary
+    way after the swap. 821b47e: all three held cases fail -- count 0 after
+    the quad, 0 of 1,640 px; the control draws 1,640. Fixed: 1,640 of 1,640
+    every case. Default build 40 checks, 0 fail (23 + 17 new). Core
+    configuration (FB_DDR3 ..., M2_R3D_FB=1): 821b47e 18 fail, fixed 12 --
+    the same 12 pre-existing failures in both (the older phases expect the
+    non-framebuffer build's publish latency).
+  * M2_R3D_HOLDFIRST=1 (list mode): a copy of the list is collected first
+    and left READY, then the list's first quad is held across the swap.
+    MAME frame 9,000, core configuration: 821b47e draws "AMEOV" -- 1,520
+    pixels differ from the clean draw, every one inside the G's box (x
+    17-58, y 226-267), the road behind showing through. Fixed: the PX dump
+    is identical to the clean draw (and the clean draw is unchanged by the
+    fix).
+  * test_m2_quad_store 23/0, test_m2_geo 130/0, test_m2_geometry 53/0,
+    test_m2_span_tex 7,214/0, test_m2_eng_ra 0 fail; lint_top clean;
+    lint_idx: no new candidates in m2_raster3d.
+
+Verified: the G is MAME's polygon 0 on every GAME OVER walk dumped; our
+walk/geometry emits it and our renderer draws it given the list; a quad
+held across the swap is lost at 821b47e and stored with the fix, in both
+the bench build and the core configuration, on MAME's own GAME OVER list.
+Inferred, not measured: that the board's GAME OVER walks start before
+their swap (R763's attract measurement shows the condition exists; the
+results screen's walk timing was not measured), and so that this is the
+board's fault -- the board is the test. Also inferred: why it came and
+went (the trigger mode and walk timing set how often a walk starts before
+its swap; under R220's original flip trigger, mid-frame starts were the
+rule). In a race polygon 0 is a HUD quad (centre 1, z 0, untextured; the
+race walks of the HUD work), so races may have lost it too -- not checked.
+
+**R808 -- THE COST PER TEXEL LOOKUP IS NOT THE DIVIDE. THE FRAMEBUFFER WRITER
+TOOK A SPAN EVERY TWO CYCLES, AND AT STEP 1 A TEXTURED SPAN IS ONE PIXEL --
+R551's FAULT, BACK IN THE WRITER THAT REPLACED THE BAND PAINTER.**
+
+Ben, 2026-10-11, on the board: race and attract slow down on busy frames.
+Textures Off runs at a full 60; texel step 8 runs at full speed; Point and
+Bilinear look the same; R789's four misses in flight helped, and R796-R807's
+128-bit lines (fewer misses) did not. The bench agreed: the heavy lists draw in
+9.9-13.6 ms even with a 1-cycle texel memory, against 5.7-7.4 ms with textures
+off (R780). So the cost is per LOOKUP, it does not depend on the filter, and
+misses explain only a little of it.
+
+*Believed:* the per-lookup cost was the perspective divide. m2_span_tex's own
+comment (lines 211-222) says "four cycles of divide serialised ahead of every
+texel fetch". The other suspects were the texel_cdc round trip, m2_texel_bl's
+hit pipeline (R804 added a cycle to it), the span walker's issue rate, and the
+handoff from the fill to the span walk.
+
+*Now known:*
+  1. THE DIVIDE IS NOT SERIAL, and has not been since R446/R476. That comment
+     describes the walk before R446. Since then u/z, v/z and 1/z go through a
+     7-stage pipeline (d0..d4, R718), one group a cycle, and an issue pointer
+     walks the span. The divide costs nothing per lookup. It costs only a
+     refill at the start of a span when the next span loads late:
+     0.51 clk_sys a lookup (~3.6 a span), and nearly all of that comes from
+     the two span parameter sets (item 3 below). The floor is one bubble a
+     span (0.15 a lookup).
+  2. THE WRITER SET THE PACE. m2_fb_wcomb accepted a span only in I_IDLE,
+     then spent a cycle in I_RUN walking its word, then went back to I_IDLE.
+     That is two cycles a span however short the span is. At texel step 1 a
+     textured span from m2_span_tex is one pixel, so the writer took at most
+     0.5 pixels a cycle. The 16 credits then filled: answers queued in the
+     cdc behind a take every second cycle. Measured issue->take latency was
+     31 clk_sys for 46% of lookups (16 credits / 0.5 a cycle). R551 found and
+     fixed exactly this fault in m2_raster_band ("the band painter took one
+     textured group every two cycles"). When the framebuffer writer replaced
+     the band path (R640, R661, R683, R685), the same intake came back.
+  3. Next behind it: span slots. m2_span_tex holds TWO span parameter sets
+     (R490). A span averages 6.8 lookups + 6.5 hidden groups. A new span
+     cannot load until the span two back has emitted its last pixel, which
+     is ~30 clk_sys after that span's last issue (7 pipe stages + ~24
+     issue->take). Spans end-to-end wait on
+     this (0.45-0.91 a lookup) and the divide refill after it (0.51).
+  4. Hidden groups (FTB) cost a cycle each. A group whose pixels are already
+     painted takes the issue slot and the retire slot like a lookup does:
+     0.96 skipped groups per real lookup on these lists (953k against 997k).
+  5. Misses matter only at the margin. At L12 the cache's accept->answer is
+     14.0 clk_sys on average and 10 (12.5 clk_mem) for a hit. At L30 it is
+     21.9. With 16 credits the walk can hide about 16 cycles of it.
+
+*How established* (tb_m2_raster3d, the core's configuration -- FTB, PXC,
+FRB 2, M2COV, SPLIT_TRI, FB_DDR3 + wcomb, TXLATE 3, TXNS 4 / TXRSP 4 / TXK 16,
+TXLW8, UZF 4, step 1, bilinear, 100:80 (R107 RN 10 RD 8). MAME's lists r57,
+r66, apk, rpk and f2200 (L_m2200). Memory: L1 = TEXMEM latency 1 (the near-
+perfect memory), L12 = idle (TEXMEM 12), L30 = contended (30 + 0..30
+jitter). Baseline 7b41994 reproduces R804's numbers to the 0.01 ms.) The
+bench was instrumented in a scratch copy only, with no RTL change. During
+the draw (fb_busy rising to fb_complete), every clk_sys cycle of m2_span_tex
+was put in one class: issue, skip, no credit (split three ways: the head's
+answer not back, the writer stalling the emit, or answers standing queued),
+in-flight queue full, divide pipe refilling, span end (another span waiting
+with no free slot, or the queue empty, or the next span flat), or idle (flat
+pass-through, flat blocked, queue empty). Every clk_mem cycle of the cdc and
+the cache was classified too. Each lookup was time-stamped at issue, at cache
+accept, at the cache's answer, at reaching the head and at the take.
+Cycles per real lookup, mean of the five lists (clk_sys):
+
+                                         L12                    L30
+                                 HEAD   R808  +NSP4     HEAD   R808  +NSP4
+  lookup issued                  1.000  1.000  1.000    1.000  1.000  1.000
+  hidden (FTB) group skipped     0.957  0.957  0.957    0.957  0.957  0.956
+  credit: head texel not back    0.127  0.182  0.249    0.555  0.614  0.821
+  credit: writer stalling emit   0.103  0.100  0.109    0.112  0.102  0.121
+  credit: answers queued (take)  0.467  0.077  0.092    0.464  0.078  0.092
+  in-flight queue (16) full      0.198  0.142  0.203    0.415  0.361  0.523
+  divide pipe refill             0.531  0.513  0.295    0.526  0.507  0.293
+  span end: two spans in flight  0.470  0.445  0.118    0.929  0.911  0.305
+  span end: other                0.090  0.084  0.088    0.097  0.093  0.095
+  idle: flat span / writer       0.133  0.112  0.112    0.134  0.114  0.114
+  idle: queue empty              0.800  0.806  0.890    0.760  0.766  0.827
+    (of which the FB clear: 105,577 cycles every draw, 0.53 a lookup)
+  TOTAL                          4.877  4.420  4.112    5.948  5.501  5.149
+  latency issue->cache accept    5.16   5.70   6.46     9.66  10.21  12.25
+          accept->cache answer  14.00  14.29  14.75    21.94  22.20  23.31
+          answer->head of queue 10.98   4.17   4.36    10.86   4.15   4.42
+  issue gap of 1 cycle (% gaps)  36.6   78.7   77.0     36.8   78.5   76.9
+
+HEAD's issue gaps: 2 cycles 48-60% of the time and 1 cycle 29-45%. Take gaps:
+2 cycles 59-72%. The bench also reproduces the board's three facts. Step 8:
+7.60 / 8.73 / 10.08 ms (r57 / apk / rpk, L12), against textures off at
+5.68 / 6.06 / 7.41. Point: 10.59 / 12.05 / 14.08, against bilinear's
+10.79 / 12.32 / 14.24 -- 1-2%.
+
+*The change* (m2_fb_wcomb only):
+  * One span is held at the intake (n_v + 68 payload bits). in_ready =
+    !n_v && !clear_req && !clearing, all registers (was ist == I_IDLE &&
+    !clear_req), so no cross-module path gets longer.
+  * A takes its next span when idle, as before, OR in I_RUN as the
+    current span's last word moves to B (a_go && x_nx > x1_r). It takes the
+    held span if there is one, else the input directly. If A is not free,
+    the input goes into the hold. The data source is chosen by the register
+    n_v. Only the load ENABLE waits on a_go. The hold's payload is written
+    on every take, with no a_go in its enable.
+  * A span held when a clear is asked for is drawn before the clear starts.
+    By construction this never happens in the core: the writer is empty at
+    the swap. `empty` includes !n_v.
+  * Throughput: a one-word span costs one cycle (was two). Long spans are
+    unchanged (a word a cycle). Flat spans save a cycle each too.
+  * tb_m2_fbw_chain: once a span is taken, the bench now changes the
+    payload, as m2_span_tex does (the next pixel). Held steady, it let a
+    writer that read the input after the handshake pass (mutations f1 / f6
+    below passed before this).
+
+*Measured* (draw at 80 MHz, ms):
+
+                      r57    r66    apk    rpk    f2200
+  L1   HEAD          10.19  10.50  11.44  13.81  11.82
+       R808           9.08   9.33  10.22  12.58  10.37   -8.9..-12.2%
+  L12  HEAD          10.79  11.06  12.32  14.24  12.37
+       R808           9.75  10.01  11.16  13.16  11.00   -7.6..-11.0%
+  L30  HEAD          13.41  13.72  16.00  16.32  14.68
+       R808          12.31  12.66  14.89  15.32  13.38   -6.2..-8.8%
+  (step 8, L12: r57 7.60 -> 7.42, apk 8.73 -> 8.48, rpk 10.08 -> 9.88)
+
+Under the bench's HPS write-queue model (M2_R3D_WQ 4, scaler 30%), where the
+draw is bound by DDR3 write beats (18-21 ms), the gain is only 1-3%. The
+board is NOT in that regime: step 8 writes the same pixels in the same
+bursts and runs at full speed there.
+
+*Answers.* Every texel answer common to HEAD and R808 is identical:
+2,990,995 fetches over five lists x L1/L12/L30, 0 differ. The displayed
+frame's hash is identical in 15 of 15 runs. The fetch counts differ by a
+few, from the FTB mask's timing, as in R782.
+
+*Benches* (the worktree): test_m2_fb_wcomb 38/0; test_m2_fbw_chain
+(WCOMB 0 / 1 / 1+FTB x BUSY 0/300/900, with the stronger payload) all pass;
+test_m2_fb_write, test_m2_span_tex 7,214/0, test_m2_raster_fill
+152,373/0, test_m2_raster3d 23/0 pass; lint_top clean; quartus_map
+--analyze_file clean. Mutations against the chain bench (fails out of
+13 / 15 checks, at every BUSY):
+  f1 y from the input instead of the hold        1 / 3
+  f2 the hold never released                     5 / 4
+  f3 in_ready ignoring the hold                  2 / 3
+  f4 A reloaded on any a_go (mid-span)           2 / 3
+  f5 no a_same merge (now also across spans)     0 / 4 (FTB only, as R685)
+  f6 px from the input                           1 / 1
+  f7 x0 from the input                           2 / 3
+  f8 a span never held                           2 / 3
+  f9 a clear before the held span                0 / 0 -- not exercised
+                                                 (cannot occur in the core)
+f6 in the whole renderer (r57 L12): frame hash 1149a338... -> ad65b4fd...
+
+*Cost.* Full-design quartus_map (17.0, Model2.qsf), HEAD -> R808:
+  m2_fb_wcomb       449 -> 483 ALUT (+34), 378 -> 448 registers (+70)
+  m2_raster3d     11,299 -> 11,353 ALUT (+54), 10,406 -> 10,466 regs (+60)
+  design estimate   40,409 -> 40,401 ALM (-8: map noise), 48,749 -> 48,808
+                    registers (+59); DSP 87 and block bits unchanged; the
+                    same 10 uninferred-RAM notices
+  standalone        m2_fb_wcomb 385 -> 429 ALM (+44), 426 -> 496 registers
+Budget, by R798's calibration (+64 ALUT / +194 regs -> +20..+40 placed) and
+the 2.5x standalone rule: ~+50..+110 ALM placed. 0 M10K, 0 DSP.
+
+*Timing, by construction:* in_ready is now a register (n_v, ist, clear_req),
+so m2_span_tex's out_ready -> rt_take / tx_take / span-queue pop paths are
+unchanged. Inside the writer, the A registers' enable becomes c_fits -> c_go
+-> a_go -> a_free -> ld_a. That is one or two LUT levels more than the old
+a_go -> x_r enable, and more fanout (~70 registers). Their data gains one 2:1
+selected by the register n_v, and tfin's product reaches px_r through it.
+The writer's known near-miss, s972 wlo -> mk_valid (c_go -> pg_we), is not
+touched. Not timed: no fit.
+
+*Next levers, measured on the bench* (on top of R808; ms at 80 MHz):
+  * FOUR SPAN PARAMETER SETS (NSP 4; a ring in place of sp_iss / sp_out's
+    toggle, 2-bit slot tags; scratch RTL, not in this change): L12 r57 9.01,
+    r66 9.29, apk 10.19, rpk 12.47, f2200 10.30. That is -5..-9% more
+    (-12..-17% against HEAD). L30 -5..-8% more. Answers identical, hash
+    15/15. Full-map delta against R808: m2_raster3d +104 ALUT / +193 regs,
+    design estimate +87 ALM. ~+300 ALM placed by the 2.5x rule. A
+    study-level ALM decision.
+  * Hidden groups in runs: 0.96 cycles a lookup. If a fully painted run went
+    8 groups a cycle (iss_u += du << 3 is the same sum, bit for bit), the
+    upper bound is 80k-257k cycles a draw (1.0-3.2 ms, L12). Needs the
+    mask read at issue time, before the divide pipeline. Not built.
+  * Loading a span on its predecessor's last issue (ld_over on iss_last)
+    saves one bubble a span: <= 0.15 a lookup, ~3%. It puts iss_last on
+    in_ready, so it needs a registered next-iss_last.
+  * Credits 32: -0.8..-1.2%; the cache's response queue 8: -1.4..-4.2%
+    (r57 / apk / rpk, L12 and L30). Both with NSP 4: L30 apk 13.72 -> 12.94 (RSP 8).
+  * The framebuffer clear is SERIAL with every draw: 105,577 clk_sys (1.32 ms)
+    before the first band, the same for every list. Not texture cost, but
+    1.3 ms of every frame, textures on or off.
+
+*Not verified:* the fit, timing at 80 MHz, the board.
+
+**R812 ON THE BOARD.** s987 (5efcc72 = s945 + the R812 fix only, 80/40, RBF
+82ef63d4) in Revision A attract from 12:06: no lock in 156 min of fps
+readings (89 readings at ~100 s, every one 36-58 fps after boot; Ben: "nearly
+3 hours, no lockup"). The lock it targets came at 20-60 min on every earlier
+build (s980: ~35 min, same set and scene). Deluxe (whose lock showed at the
+attract backdrop) not yet soaked.
+
+**R808 ON THE BOARD.** s991 (7b41994 = s985 + the R808 writer hold only,
+80/40, RBF 933a21ae), Revision A, texel step 1. Ben: "Attract is solid
+57fps. Ingame is 57fps 80-90% of the time". Before it, on s945/s985 at step
+1: attract ~98% of full speed with visible dips, in game "mostly 30" with
+slowdowns, and only step 8 reached full speed (R808a). So the writer's
+two-cycle intake was the main per-lookup cost, as the bench said; the
+remaining 10-20% in game is the next target (R808's measured levers: four
+span sets -5..-9%, hidden-group runs, next span on the last issue).
+Also this build's first board run of R807 (s983's broken textures): no
+texture fault reported.
+s991 (s985 + R808, WITHOUT R812) locked IN A RACE at ~10 min (Rev A, lap 1
+HUD frame: 2D sky/sea and timer live, 3D 0 fps, lap/position digits gone).
+Consistent with R812 being the fix: the build without it still locks, and
+sooner in a race at the higher draw rate. Not a telemetry build, so the
+mechanism is not confirmed for this one.

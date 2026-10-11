@@ -64,6 +64,21 @@ module m2_geo_view #(
       i2f = f;
     end
   endfunction
+  // R740: i2f in two halves a stage apart -- the sign and magnitude, then the
+  // encode and the shift (s788 at 80 MHz: ib -> a_top -0.395). The same float.
+  function automatic logic [16:0] i2f_sm(input logic signed [15:0] v);
+    i2f_sm = {v[15], v[15] ? 16'(-v) : 16'(v)};
+  endfunction
+  function automatic logic [31:0] i2f_pk(input logic [16:0] sm);
+    logic [15:0] m;
+    int          e;
+    begin
+      m = sm[15:0];
+      e = 0;
+      for (int i = 0; i < 16; i++) if (m[i]) e = i;
+      i2f_pk = (m == 16'd0) ? 32'd0 : {sm[16], 8'(127 + e), 23'({m, 23'd0} >> e)};
+    end
+  endfunction
 
   wire signed [15:0] vx0 = s12(win_vp_s[27:16]), vy0 = s12(win_vp_s[11:0]);
   wire signed [15:0] vx1 = s12(win_vp_e[27:16]), vy1 = s12(win_vp_e[11:0]);
@@ -79,14 +94,28 @@ module m2_geo_view #(
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       ixc <= 16'sd248; iyc <= 16'sd192;
-      il  <= 16'sd248; ir  <= 16'sd248; it <= 16'sd192; ib <= 16'sd192;
+      il  <= -16'sd248; ir  <= 16'sd248; it <= 16'sd192; ib <= -16'sd192;   // R740: negated
     end else begin
       ixc <= 16'(CRTC_X) + cx;
       iyc <= 16'sd384 - cy + 16'(CRTC_Y);
-      il  <= cx - vx0;
+      il  <= vx0 - cx;   // R740: stored negated (a_left = -left)
       ir  <= vx1 - cx;
       it  <= vy1 - cy;
-      ib  <= cy - vy0;
+      ib  <= vy0 - cy;   // R740: stored negated (a_top = -bottom)
+    end
+  end
+
+  // R740: stage 1b, sign and magnitude.
+  logic [16:0] sm_xc, sm_yc, sm_l, sm_r, sm_b, sm_t;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      sm_xc <= {1'b0, 16'd248}; sm_yc <= {1'b0, 16'd192};
+      sm_l  <= {1'b1, 16'd248}; sm_r  <= {1'b0, 16'd248};
+      sm_b  <= {1'b0, 16'd192}; sm_t  <= {1'b1, 16'd192};
+    end else begin
+      sm_xc <= i2f_sm(ixc); sm_yc <= i2f_sm(iyc);
+      sm_l  <= i2f_sm(il);  sm_r  <= i2f_sm(ir);
+      sm_b  <= i2f_sm(it);  sm_t  <= i2f_sm(ib);
     end
   end
 
@@ -98,12 +127,12 @@ module m2_geo_view #(
       a_left <= 32'hC378_0000; a_right <= 32'h4378_0000;    // -248, +248
       a_bottom <= 32'h4340_0000; a_top <= 32'hC340_0000;    // +192, -192
     end else begin
-      xc       <= i2f(ixc);
-      yc       <= i2f(iyc);
-      a_left   <= i2f(-il);
-      a_right  <= i2f(ir);
-      a_bottom <= i2f(it);
-      a_top    <= i2f(-ib);
+      xc       <= i2f_pk(sm_xc);   // R740: = i2f(ixc), a stage on
+      yc       <= i2f_pk(sm_yc);
+      a_left   <= i2f_pk(sm_l);    // = i2f(-left)
+      a_right  <= i2f_pk(sm_r);
+      a_bottom <= i2f_pk(sm_b);
+      a_top    <= i2f_pk(sm_t);    // = i2f(-bottom)
     end
   end
 

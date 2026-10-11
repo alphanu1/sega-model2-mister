@@ -227,7 +227,7 @@ int main(int argc, char **argv) {
         long wrong = 0;
         for (int x = c.x0 - 2; x <= c.x1 + 2; x++) {
           uint32_t got = pix(0, y, x);
-          bool on = (x >= c.x0 && x <= c.x1) && !((x ^ y) & 1);
+          bool on = (x >= c.x0 && x <= c.x1) && ((x ^ y) & 1);
           if (on ? (got != 0x017799BBu) : (got != 0xFFFFFFFFu)) wrong++;
         }
         char nm[80]; std::snprintf(nm, sizeof nm, "moire y%d %d..%d", y, c.x0, c.x1);

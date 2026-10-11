@@ -238,12 +238,13 @@ module m2_geo_engine #(
   assign nrm_x = nrm[0]; assign nrm_y = nrm[1]; assign nrm_z = nrm[2];
 
   typedef enum logic [4:0] {
-    E_IDLE, E_RD, E_XF, E_XFW, E_FOC, E_FOCW, E_STORE, E_ATTR, E_NORM,
+    E_IDLE, E_RD, E_XF, E_FW, E_FOC, E_FOCW, E_STORE, E_ATTR, E_NORM,   // R757: E_FW in E_XFW's slot (unused since R754)
     E_NXF, E_NXFW, E_SKIP,
     E_EMIT, E_LINK, E_DONE, E_DOT, E_DOTA,
     // R222: the luminance, the texture header, the colour
     E_LUMM, E_LUMMW, E_LUMA, E_LUMAW, E_TH0, E_TH1, E_TH2, E_TH3, E_CC, E_PAL, E_XL, E_XLG, E_CW,   // R718: E_XLG
-    E_UV                                        // R268: the per-vertex texture coordinates
+    E_UV,                                       // R268: the per-vertex texture coordinates
+    E_FQ                                        // R754: focus the next transformed point
   } estate_t;
   estate_t st, ret;
   assign dbg_st = st;
@@ -253,6 +254,40 @@ module m2_geo_engine #(
   logic [1:0] dst;                  // 0=p0prev 1=p1prev 2=p0cur 3=p1cur
   logic [1:0] skipn;
   logic [31:0] fx, fy, fz;   // the point, between transform and focus
+  // R754: TRANSFORMS ARE ISSUED WITHOUT WAITING FOR THEM. The engine used to
+  // issue a point and sit in E_XFW for its result before reading the next one
+  // -- 37% of its cycles on the heaviest attract list (E_XFW + E_NXFW), while
+  // m2_geo_xform was built to stream (two product banks, an adder behind
+  // them). Now the normal, then each point, is issued as soon as its words
+  // are in, and the reads of the next run while it computes. Results come back
+  // in issue order; tq names each one's destination and they are captured
+  // whatever state the engine is in. E_FQ then focuses the points in order.
+  // Same operands, same order, same pool: the same bits.
+  logic [2:0]  tq [4];        // per transform in flight: {normal, dst}
+  logic [1:0]  tq_wr, tq_rd;
+  logic [31:0] raw_x [2], raw_y [2], raw_z [2];   // transformed, not yet focused; [dst[0]]
+  logic [1:0]  raw_v;
+  logic        fq_cur;        // E_FQ: 0 = p0prev / p1prev, 1 = p0cur / p1cur
+  logic        fq_slot;       // ...which of the two
+  // R757: THE TEXTURE READS RUN BESIDE THE LIGHTING. Once the cull has passed
+  // a polygon, its texture header (4 reads) and coordinates (6 or 8) need
+  // nothing from the light dot product or the luminance, and those need no
+  // memory: the fetcher below owns the port while the main machine does the
+  // arithmetic, then E_FW waits for it. The colour-cache index wants both
+  // (header word 3 and luma8), so it is formed in E_FW.
+  typedef enum logic [2:0] { F_IDLE, F_TH0, F_TH1, F_TH2, F_TH3, F_UV, F_DONE } fstate_t;
+  fstate_t     fs;
+  logic [15:0] h3w;           // texture header word 3, for cc_idx in E_FW
+  wire         f_act = (fs != F_IDLE) && (fs != F_DONE);
+  // R757: the two focus multiplies of a point are issued back to back.
+  logic        fiss_done, fgot;
+  // R759: P1(n)'s focus waits until it is needed. The cull test reads P0(n)'s
+  // transformed point and the normal; the light and the luminance read
+  // neither P1(n) nor its focus. So P0(n) is focused, the cull is decided,
+  // and P1(n) is focused only then (culled: before E_EMIT, which the strip
+  // carry needs; kept: after the luminance) -- its transform's latency hides
+  // behind the dot products instead of being waited out in E_FQ.
+  logic        cull_q;        // the cull decided in E_DOTA, for E_STORE's exit
   // R219: THE REFERENCE CULLS WHAT WE EMITTED. model2_v.cpp check_culling:
   // a single-sided polygon (attr bit 17 clear) whose face is the back
   // (normal . point < 0, the point being the polygon's first new vertex
@@ -274,6 +309,9 @@ module m2_geo_engine #(
   logic [21:0] tp_w;         // R268: texture point address, in 16-bit words
   logic        tp_ram;       // ...in texture RAM (tpa bit 23), else the ROM
   logic  [2:0] uv_i;         // which 16-bit word of the run is in hand
+  // R742: uv_i == the run's last word, kept beside uv_i rather than compared
+  // in the next-state logic (s794 at 80 MHz: uv_i -> st.E_TH0 -0.701, E_XF).
+  logic        uv_last;
   logic        uv_cull;      // the cull decision, held while the run finishes
   logic [21:0] th_w;         // texture header address, in 16-bit words
   logic        th_ram;       // ...in texture RAM (tha bit 23), else the ROM
@@ -303,6 +341,26 @@ module m2_geo_engine #(
   logic [7:0]   xl_raw;     // R718: a translation byte, before its gamma
   logic [1:0]   xl_i;
   logic         xl_go;
+  // R784: A TEXTURED POLYGON'S COLOUR IS A SLOPE, NOT A SHADE. The reference
+  // colours each texel at its own luma, l6 = lumaram[lumabase + (t >> 1)] *
+  // luma / 256, through the translation table and the gamma curve; R275 took
+  // the colour at the polygon's luma and scaled it by the texel, which keeps
+  // one hue for the whole polygon and loses every saturating channel (the
+  // windows' sky, the decals' yellow). Daytona's table is a pedestal of 64 plus
+  // a slope in luma, clipped at 255, so after MAME's gamma (which removes the
+  // pedestal) a channel is min(255, S * l6) with S fixed per polygon. This
+  // engine reads the table ONCE per channel at luma 32 -- below the knee for
+  // every component -- applies MAME's curve, and folds the polygon's luma in:
+  //     poly_col = gam_MAME(xlat[comp][32]) * L / 256   (x B/256 for Off, Mild)
+  // and m2_span_tex makes min(255, A + poly_col * lum(t) / 32) per pixel.
+  // The read stays one per channel and the colour stays one 565 word a quad.
+  logic [7:0]   g_raw;      // R784: the byte after its curve, a cycle later
+  logic [1:0]   g_i;
+  logic         g_go;
+  logic         g_wait;     // R784: E_XLG holds a second cycle for the scale stage
+  logic         tx_c;       // R784: this resolution is a textured polygon's
+  logic [7:0]   lm;         // R784: the luma the slope is scaled by (the key's, midpoint)
+  logic [7:0]   lt;         // R784: ... and by the output curve's gain (Off, Mild)
   // The texture parameters as floats, converted once when the walker streams
   // them; the colour cache: 256 entries direct-mapped on {colorbase, luma6}.
   (* ramstyle = "MLAB" *) logic [63:0] tp_tab [32];    // {ambient, diffuse}
@@ -343,6 +401,26 @@ module m2_geo_engine #(
     endcase
   endfunction
   wire         cc_we  = (st == E_CW);
+  // R784: the slope, g * lt / 256. Stored as 565 (m2_quad_store), so a
+  // non-zero component under Off or Mild keeps at least one LSB: the pedestal
+  // m2_span_tex adds is only right where the table is not zero, and a slope
+  // that truncated to zero would draw a black channel where the table has 64+.
+  /* verilator lint_off UNUSEDSIGNAL */   // m[7:0], below the slope's LSB
+  function automatic logic [7:0] tslope(input logic [7:0] g, input logic [7:0] l,
+                                        input logic [1:0] ch, input logic [14:0] p,
+                                        input logic floor_en);
+    logic [15:0] m;
+    logic [4:0]  c5;
+    logic [7:0]  v, lo;
+    begin
+      m  = 16'(g) * 16'(l);
+      v  = m[15:8];
+      c5 = (ch == 2'd0) ? p[4:0] : (ch == 2'd1) ? p[9:5] : p[14:10];
+      lo = (ch == 2'd1) ? 8'd4 : 8'd8;
+      tslope = (floor_en && (c5 != 5'd0) && (v < lo)) ? lo : v;
+    end
+  endfunction
+  /* verilator lint_on UNUSEDSIGNAL */
 
   // An 8-bit integer as an IEEE single.
   function automatic logic [31:0] i8f(input logic [7:0] v);
@@ -395,9 +473,8 @@ module m2_geo_engine #(
   // belongs in this list -- without it the coordinate reads went out on the
   // polygon pointer instead and the engine stopped emitting anything, which is
   // how tb_m2_geo_engine reported 13 of 14 checks failing.
-  wire xrd = (st == E_TH0) || (st == E_TH1) || (st == E_TH2) || (st == E_TH3)
-           || (st == E_PAL) || (st == E_XL)
-          || (st == E_UV);
+  wire xrd = (st == E_PAL) || (st == E_XL)
+          || f_act;                                  // R757: the fetcher's header and u/v reads
   assign mem_addr  = xrd ? xaddr  : ptr;
   assign mem_space = xrd ? xspace : 2'd0;
   // R271, CORRECTED: THE TEXTURE'S LUMA IS THE LIGHTING LUMINANCE THIS ENGINE
@@ -434,7 +511,7 @@ module m2_geo_engine #(
     if (!rst_n) begin mem_ack_d <= 1'b0; mem_go_d <= 1'b0; end
     else begin mem_ack_d <= mem_ack; mem_go_d <= mem_go; end
   end
-  assign mem_req  = ~mem_go_d & ((st == E_RD) || (st == E_ATTR) || (st == E_NORM) || (st == E_SKIP) || xrd);
+  assign mem_req  = ~mem_go_d & ((st == E_RD) || (st == E_ATTR) || (st == E_NORM) || (st == E_SKIP) || xrd);   // xrd carries f_act (R757)
 
   assign v0x = p1prev[0]; assign v0y = p1prev[1]; assign v0z = p1prev[2];
   assign v1x = p0prev[0]; assign v1y = p0prev[1]; assign v1z = p0prev[2];
@@ -454,14 +531,20 @@ module m2_geo_engine #(
       attr <= 32'd0; xf_in_valid <= 1'b0;
       fmul_req <= 1'b0; fmul_a <= 32'd0; fmul_b <= 32'd0;
       fx <= 32'd0; fy <= 32'd0; fz <= 32'd0; fsel <= 1'b0;
+      tq_wr <= 2'd0; tq_rd <= 2'd0; raw_v <= 2'b00; fq_cur <= 1'b0; fq_slot <= 1'b0;   // R754
+      fs <= F_IDLE; h3w <= 16'd0; fiss_done <= 1'b0; fgot <= 1'b0;                     // R757
+      cull_q <= 1'b0;                                                                  // R759
+      for (int k = 0; k < 4; k++) tq[k] <= 3'd0;
+      for (int k = 0; k < 2; k++) begin raw_x[k] <= 32'd0; raw_y[k] <= 32'd0; raw_z[k] <= 32'd0; end
       dbg_polys <= 16'd0; dbg_objects <= 16'd0;
       th_w <= 22'd0; th_ram <= 1'b0; dsel <= 1'b0; dotp_zero <= 1'b0; dotl <= 32'd0;
-      tp_w <= 22'd0; tp_ram <= 1'b0; uv_i <= 3'd0; uv_cull <= 1'b0;
+      tp_w <= 22'd0; tp_ram <= 1'b0; uv_i <= 3'd0; uv_cull <= 1'b0; uv_last <= 1'b0;
       poly_uv0 <= 32'd0; poly_uv1 <= 32'd0; poly_uv2 <= 32'd0; poly_uv3 <= 32'd0;
       lum <= 32'd0; luma8 <= 8'd0; hdr0 <= 16'd0; cbase <= 10'd0; c555 <= 15'd0; xi <= 2'd0;
       hdr1 <= 16'd0; hdr2 <= 16'd0; poly_tex <= 32'd0;
       rgb[0] <= 8'd0; rgb[1] <= 8'd0; rgb[2] <= 8'd0;
       xl_raw <= 8'd0; xl_i <= 2'd0; xl_go <= 1'b0;   // R718
+      g_raw <= 8'd0; g_i <= 2'd0; g_go <= 1'b0; g_wait <= 1'b0; tx_c <= 1'b0; lm <= 8'd0; lt <= 8'd0;   // R784
       xaddr <= 24'd0; xhalf <= 1'b0; xspace <= 2'd0; cc_wait <= 1'b0; cc_idx <= 8'd0;
       cc_valid <= '0; cc_dirty <= 1'b0; poly_col <= 24'd0; dbg_col_miss <= 16'd0; tex_flat <= 1'b0; lum_x <= 8'd0; tex_lum_d <= 2'd0; gam_d <= 2'd0;
       for (int k = 0; k < 3; k++) begin
@@ -516,53 +599,67 @@ module m2_geo_engine #(
         // even been accepted. The bench caught it as every vertex being the
         // previous vertex's value, an exact one-place shift through all three
         // polygons: v2 read 200 where 400 was due, v3 read 400 where 500 was.
+        // R754: issued, and on to the next read at once; the result is
+        // captured below the case when it comes back. A vertex is not a
+        // screen coordinate until focus has been applied (E_FQ).
         E_XF: begin
           xf_in_x <= xyz[0]; xf_in_y <= xyz[1]; xf_in_z <= xyz[2];
           if (xf_in_ready) begin
-            xf_in_valid <= 1'b1;
-            st <= E_XFW;
+            xf_in_valid  <= 1'b1;
+            xf_translate <= 1'b1;
+            tq[tq_wr] <= {1'b0, dst}; tq_wr <= tq_wr + 2'd1;
+            case (dst)
+              2'd0: begin dst <= 2'd1; widx <= 2'd0; st <= E_RD; end
+              2'd1: begin fq_cur <= 1'b0; fq_slot <= 1'b0; st <= E_FQ; end
+              2'd2: if (attr[0]) begin dst <= 2'd3; widx <= 2'd0; st <= E_RD; end
+                    else begin skipn <= 2'd3; st <= E_SKIP; end   // TRIANGLE: consume P1's words
+              default: begin fq_cur <= 1'b1; fq_slot <= 1'b0; st <= E_FQ; end
+            endcase
           end
         end
 
-        // The transform's result goes to the focus stage, not to a slot: a
-        // vertex is not a screen coordinate until focus has been applied.
-        E_XFW: if (xf_out_valid) begin
-          fx <= xf_out_x; fy <= xf_out_y; fz <= xf_out_z;
-          if (dst == 2'd2) begin dpx <= xf_out_x; dpy <= xf_out_y; dpz <= xf_out_z; end   // R219
-          fsel <= 1'b0;
+        // R754: the next point to focus, once its transform has come back.
+        E_FQ: if (raw_v[fq_slot]) begin
+          fx <= raw_x[fq_slot]; fy <= raw_y[fq_slot]; fz <= raw_z[fq_slot];
+          raw_v[fq_slot] <= 1'b0;
+          fsel <= 1'b0; fiss_done <= 1'b0; fgot <= 1'b0;   // R757
           st <= E_FOC;
         end
 
         // x *= focus.x, then y *= focus.y. z is untouched -- apply_focus does
         // not scale it, and the sort key downstream wants camera-space z.
+        // R757: x then y issued back to back (fsel names the one being
+        // issued), the results collected in order; E_FOCW is no longer entered.
         E_FOC: begin
-          fmul_req <= 1'b1;
-          fmul_a   <= fsel ? fy : fx;
-          fmul_b   <= fsel ? foc_y : foc_x;
-          if (fmul_gnt) begin fmul_req <= 1'b0; st <= E_FOCW; end
-        end
-
-        E_FOCW: if (fmul_rsp) begin
-          if (!fsel) begin fx <= fmul_res; fsel <= 1'b1; st <= E_FOC; end
-          else       begin fy <= fmul_res; st <= E_STORE; end
+          if (!fiss_done) begin
+            fmul_req <= 1'b1;
+            fmul_a   <= fsel ? fy : fx;
+            fmul_b   <= fsel ? foc_y : foc_x;
+            if (fmul_gnt) begin
+              fmul_req <= 1'b0;
+              if (fsel) fiss_done <= 1'b1; else fsel <= 1'b1;
+            end
+          end
+          if (fmul_rsp) begin
+            if (!fgot) begin fx <= fmul_res; fgot <= 1'b1; end
+            else       begin fy <= fmul_res; fgot <= 1'b0; st <= E_STORE; end
+          end
         end
 
         E_STORE: begin
-          case (dst)
-            2'd0: begin p0prev[0] <= fx; p0prev[1] <= fy; p0prev[2] <= fz;
-                        dst <= 2'd1; widx <= 2'd0; st <= E_RD; end
-            2'd1: begin p1prev[0] <= fx; p1prev[1] <= fy; p1prev[2] <= fz;
-                        st <= E_ATTR; end
-            2'd2: begin p0cur[0] <= fx; p0cur[1] <= fy; p0cur[2] <= fz;
-                        if (attr[0]) begin dst <= 2'd3; widx <= 2'd0; st <= E_RD; end
-                        else begin
-                          // TRIANGLE: rope P1(n) = P0(n), and still CONSUME the
-                          // three words of the point we do not use.
-                          p1cur[0] <= fx; p1cur[1] <= fy; p1cur[2] <= fz;
-                          skipn <= 2'd3; st <= E_SKIP;
-                        end end
-            default: begin p1cur[0] <= fx; p1cur[1] <= fy; p1cur[2] <= fz;
-                           dstep <= 2'd0; dgot <= 2'd0; st <= E_DOT; end
+          case ({fq_cur, fq_slot})   // R754: the point E_FQ took
+            2'b00: begin p0prev[0] <= fx; p0prev[1] <= fy; p0prev[2] <= fz;
+                         fq_slot <= 1'b1; st <= E_FQ; end
+            2'b01: begin p1prev[0] <= fx; p1prev[1] <= fy; p1prev[2] <= fz;
+                         st <= E_ATTR; end
+            2'b10: begin p0cur[0] <= fx; p0cur[1] <= fy; p0cur[2] <= fz;
+                         // TRIANGLE: rope P1(n) = P0(n). Its three unused words
+                         // were consumed in E_SKIP before this.
+                         if (!attr[0]) begin p1cur[0] <= fx; p1cur[1] <= fy; p1cur[2] <= fz; end
+                         dstep <= 2'd0; dgot <= 2'd0; st <= E_DOT;   // R759: the cull, now
+                       end
+            default: begin p1cur[0] <= fx; p1cur[1] <= fy; p1cur[2] <= fz;   // R759: P1(n), last
+                           st <= cull_q ? E_EMIT : E_FW; end
           endcase
         end
 
@@ -606,20 +703,15 @@ module m2_geo_engine #(
 
         // transform_vector: the same matrix, the translation row suppressed.
         // Issue and wait are separate states for the reason E_XF/E_XFW are.
+        // R754: issued, and straight on to P0(n)'s words; the rotated normal
+        // replaces nrm when it comes back, before P0(n)'s point does.
         E_NXF: begin
           xf_in_x <= nrm[0]; xf_in_y <= nrm[1];
           xf_in_z <= (skipn == 2'd1) ? mem_data : nrm[2];
-          xf_translate <= 1'b0;
           if (xf_in_ready) begin
-            xf_in_valid <= 1'b1;
-            st <= E_NXFW;
-          end
-        end
-        E_NXFW: begin
-          xf_in_valid <= 1'b0;
-          if (xf_out_valid) begin
-            nrm[0] <= xf_out_x; nrm[1] <= xf_out_y; nrm[2] <= xf_out_z;
-            xf_translate <= 1'b1;          // back to points
+            xf_in_valid  <= 1'b1;
+            xf_translate <= 1'b0;
+            tq[tq_wr] <= 3'd4; tq_wr <= tq_wr + 2'd1;
             widx <= 2'd0; dst <= 2'd2; st <= E_RD;
           end
         end
@@ -627,7 +719,7 @@ module m2_geo_engine #(
         // ---- the unused triangle point, consumed
         E_SKIP: if (mem_go) begin
           ptr <= ptr + 24'd1;
-          if (skipn == 2'd1) begin dstep <= 2'd0; dgot <= 2'd0; st <= E_DOT; end
+          if (skipn == 2'd1) begin fq_cur <= 1'b1; fq_slot <= 1'b0; st <= E_FQ; end   // R754
           else skipn <= skipn - 2'd1;
         end
         // ---- R219: normal . point, three multiplies then two adds; R222 runs
@@ -670,9 +762,15 @@ module m2_geo_engine #(
                 // stays in step (R268's reason for reading them at all).
                 th_w <= th_w + {{15{attr[16]}}, attr[16:12], 2'b00};
                 tp_w <= tp_w + (attr[0] ? 22'd8 : 22'd6);
-                dstep <= 2'd0; dgot <= 2'd0; st <= E_EMIT;
+                dstep <= 2'd0; dgot <= 2'd0;
+                cull_q <= 1'b1;                                     // R759: P1(n) is still to focus
+                if (attr[0]) begin fq_slot <= 1'b1; st <= E_FQ; end
+                else st <= E_EMIT;
               end else begin
                 dsel <= 1'b1; dstep <= 2'd0; dgot <= 2'd0; st <= E_DOT;   // R222: now the light
+                cull_q <= 1'b0;                                                  // R759
+                xaddr <= th_dw(th_w, th_ram); xhalf <= th_w[0]; xspace <= 2'd1;   // R757: and the
+                fs    <= F_TH0;                                                  // texture, beside it
               end
             end else begin
               dotl <= fadd_res; dsel <= 1'b0; st <= E_LUMM;
@@ -695,121 +793,24 @@ module m2_geo_engine #(
         end
         E_LUMAW: if (fadd_rsp) begin
           luma8  <= f2i8(fadd_res);
-          xaddr  <= th_dw(th_w, th_ram); xhalf <= th_w[0]; xspace <= 2'd1;
-          st     <= E_TH0;
+          // R757: the fetcher has been reading meanwhile; R759: P1(n) first
+          if (attr[0]) begin fq_slot <= 1'b1; st <= E_FQ; end
+          else st <= E_FW;
         end
 
-        // ---- R222: the texture header, words 0 (renderer) and 3 (colorbase);
-        //      then the address steps by tho * 4, tho the signed attr[16:12].
-        E_TH0: if (mem_go) begin
-          hdr0  <= xhalf ? mem_data[31:16] : mem_data[15:0];
-          xaddr <= th_dw(th_w + 22'd1, th_ram); xhalf <= ~th_w[0];
-          st    <= E_TH1;
-        end
-        // R271: word 1's low byte is the luma base, word 2 the sheet and the
-        // texture's place on it. The address alternates halves as it steps, so
-        // each is the previous one's complement.
-        E_TH1: if (mem_go) begin
-          hdr1  <= xhalf ? mem_data[31:16] : mem_data[15:0];
-          xaddr <= th_dw(th_w + 22'd2, th_ram); xhalf <= th_w[0];
-          st    <= E_TH2;
-        end
-        E_TH2: if (mem_go) begin
-          hdr2  <= xhalf ? mem_data[31:16] : mem_data[15:0];
-          xaddr <= th_dw(th_w + 22'd3, th_ram); xhalf <= ~th_w[0];
-          st    <= E_TH3;
-        end
-        E_TH3: if (mem_go) begin
-          cbase   <= xhalf ? mem_data[31:22] : mem_data[15:6];
-          tex_flat <= hdr0[14];
-          cc_idx  <= (xhalf ? mem_data[29:22] : mem_data[13:6])
-                   ^ {(xhalf ? mem_data[31:30] : mem_data[15:14]), luma8[7:2]};
+        // R757: the header and coordinates are in; the colour-cache index takes
+        // header word 3 and luma8, and the translucent-untextured cull (R326)
+        // acts here, where E_UV used to.
+        E_FW: if (fs == F_DONE) begin
+          fs      <= F_IDLE;
+          cc_idx  <= h3w[13:6] ^ {h3w[15:14], luma8[7:2]};
           cc_wait <= 1'b0;
-          th_w    <= th_w + {{15{attr[16]}}, attr[16:12], 2'b00};
-          // R268: THE TEXTURE COORDINATES ARE READ FOR EVERY POLYGON, CULLED OR
-          // NOT. The reference reads its pairs and advances the pointer at the
-          // top of model2_3d_process_polygon, before it decides to cull, so a
-          // culled polygon still consumes its pairs and the pointer stays in
-          // step with the list. The translucent cull below is therefore held in
-          // uv_cull and acted on when the run finishes.
-          // R326: ONLY AN UNTEXTURED TRANSLUCENT POLYGON DRAWS NOTHING.
-          // R231 culled on bit 13 alone and the note below claimed both
-          // translucent callbacks return on their first line. Only ONE does.
-          // model2.h's table is m_render_callbacks[(h0>>13)&3] =
-          //   0 solid<false>  1 solid<true>  2 tex<false>  3 tex<true>
-          // and model2rd.ipp's draw_scanline_solid<true> is the only one with
-          // "if it's translucent, there's nothing to render; return".
-          // draw_scanline_tex<true> DRAWS: it sets an alpha bit on every texel
-          // except 0xF and discards only the ones without it. So every
-          // TEXTURED translucent polygon in the game was being thrown away
-          // here -- which is the "some textures are just missing" the board has
-          // shown since R231. The discard itself lives in m2_span_tex.
-          uv_cull <= hdr0[13] && !hdr0[14];
-          // R271: the whole texture state, assembled where its last word lands.
-          // R326: BIT 8 CARRIES TRANSLUCENT, NOT texwrapy. The packed word is
-          // exactly 32 bits with nothing spare, and widening it widens the
-          // quad store and the span queue -- M10K this part does not have to
-          // spend. hdr0[7] (texwrapy) rode all the way to m2_texel and was
-          // read by NOBODY: grep finds no reader of bits 7 or 8 anywhere, and
-          // m2_texel says why -- the wrap bits only choose how a BILINEAR
-          // fetch treats the seam, and there is no bilinear fetch here.
-          // So wrapy's slot carries the flag that is actually used.
-          // IF BILINEAR IS EVER ADDED, texwrapx/texwrapy must come back and
-          // this word has to grow; do not quietly drop them a second time.
-          poly_tex <= {hdr1[7:0], hdr2[10:6], hdr2[5:0], hdr2[12], hdr0[15],
-                       hdr0[9], hdr0[8], hdr0[13], hdr0[6],
-                       hdr0[5:3], hdr0[2:0], hdr0[14]};
-          uv_i    <= 3'd0;
-          xaddr   <= th_dw(tp_w, tp_ram); xhalf <= tp_w[0]; xspace <= 2'd1;
-          st      <= E_UV;
-        end
-
-        // ---- R268: two 16-bit words a vertex, v THEN u, three vertices or
-        //      four, from texture RAM or the texture ROM exactly as the header
-        //      is read. The pointer then advances by the words consumed.
-        E_UV: if (mem_go) begin
-          logic [15:0] w;
-          logic [21:0] nxt;
-          w   = xhalf ? mem_data[31:16] : mem_data[15:0];
-          nxt = tp_w + 22'(uv_i) + 22'd1;
-          case (uv_i)
-            3'd0: poly_uv0[31:16] <= w;
-            3'd1: poly_uv0[15:0]  <= w;
-            3'd2: poly_uv1[31:16] <= w;
-            3'd3: poly_uv1[15:0]  <= w;
-            3'd4: poly_uv2[31:16] <= w;
-            // R270: A TRIANGLE'S FOURTH VERTEX TAKES THE THIRD'S PAIR. The
-            // reference ropes P1(n) = P0(n) for a triangle and never touches
-            // v[3]'s pu/pv, because render_triangle does not read them -- but
-            // this pipeline carries every polygon as a four-vertex quad, and a
-            // duplicated POSITION with a stale texture coordinate is not a
-            // duplicated vertex: it fits a different parameter plane and slews
-            // the texture across the triangle. poly_uv2[31:16] landed last
-            // cycle, so the pair is complete here.
-            3'd5: begin
-              poly_uv2[15:0] <= w;
-              if (!attr[0]) poly_uv3 <= {poly_uv2[31:16], w};
-            end
-            3'd6: poly_uv3[31:16] <= w;
-            default: poly_uv3[15:0] <= w;
-          endcase
-          if (uv_i == (attr[0] ? 3'd7 : 3'd5)) begin
-            tp_w <= tp_w + (attr[0] ? 22'd8 : 22'd6);
-            if (uv_cull) begin
-              // UNTEXTURED AND TRANSLUCENT, WHICH IS THE ONE CASE THE
-              // REFERENCE DRAWS NOTHING FOR (R231, corrected by R326). The
-              // claim here used to be that BOTH translucent entries return on
-              // their first line. They do not -- see the uv_cull assignment.
-              remain <= remain - 32'd1;
-              dbg_culled <= dbg_culled + 16'd1;
-              emitted_last <= 1'b0;
-              st <= E_LINK;
-            end else st <= E_CC;
-          end else begin
-            uv_i  <= uv_i + 3'd1;
-            xaddr <= th_dw(nxt, tp_ram);
-            xhalf <= nxt[0];
-          end
+          if (uv_cull) begin
+            remain <= remain - 32'd1;
+            dbg_culled <= dbg_culled + 16'd1;
+            emitted_last <= 1'b0;
+            st <= E_LINK;
+          end else st <= E_CC;
         end
 
         // ---- R222: the colour cache, then the palette and the three
@@ -841,10 +842,14 @@ module m2_geo_engine #(
           // polygons are still untouched -- that path is the reference's own
           // colour and is not a preference.
           lu   = tex_flat ? scale_lum(luma8, tex_lum) : luma8;
-          c555  <= pe; lum_x <= lu;
+          // R784: a textured polygon's table is read at luma 32 (128 >> 2) and
+          // its own luma, the key's six bits at their midpoint so a cached
+          // entry is the same whichever polygon filled it, scales the slope.
+          c555  <= pe; lum_x <= tex_flat ? 8'd128 : lu;
+          tx_c  <= tex_flat; lm <= {lu[7:2], 2'b10};
           xi    <= 2'd0;
-          xaddr <= xl_dw(2'd0, pe, lu);
-          xhalf <= lu[2]; xspace <= 2'd3;
+          xaddr <= xl_dw(2'd0, pe, tex_flat ? 8'd128 : lu);
+          xhalf <= tex_flat ? 1'b0 : lu[2]; xspace <= 2'd3;
           st    <= E_XL;
         end
         // R718: THE BYTE IS REGISTERED, THE GAMMA APPLIED A CYCLE LATER. At 75
@@ -858,7 +863,9 @@ module m2_geo_engine #(
           if (xi == 2'd2) st <= E_XLG;
           else begin xi <= xi + 2'd1; xaddr <= xl_dw(xi + 2'd1, c555, lum_x); end
         end
-        E_XLG: st <= E_CW;
+        // R784: and a second cycle for the scale stage after the curve
+        E_XLG: if (g_wait) begin g_wait <= 1'b0; st <= E_CW; end
+               else g_wait <= 1'b1;
         E_CW: begin
           // R698: NOT CACHED IF THE COLOURS CHANGED UNDER ITS READS. The polygon
           // still takes the colour it computed; the next one asks again. Without
@@ -915,7 +922,137 @@ module m2_geo_engine #(
 
         default: st <= E_IDLE;
       endcase
-      if (xl_go) rgb[xl_i] <= gam(xl_raw, gamma_sel);   // R718
+      // ---- R757: THE FETCHER -- the texture header and the coordinates, read
+      //      while the main machine computes the light and the luminance.
+      case (fs)
+        // ---- R222: the texture header, words 0 (renderer) and 3 (colorbase);
+        //      then the address steps by tho * 4, tho the signed attr[16:12].
+        F_TH0: if (mem_go) begin
+          hdr0  <= xhalf ? mem_data[31:16] : mem_data[15:0];
+          xaddr <= th_dw(th_w + 22'd1, th_ram); xhalf <= ~th_w[0];
+          fs    <= F_TH1;
+        end
+        // R271: word 1's low byte is the luma base, word 2 the sheet and the
+        // texture's place on it. The address alternates halves as it steps, so
+        // each is the previous one's complement.
+        F_TH1: if (mem_go) begin
+          hdr1  <= xhalf ? mem_data[31:16] : mem_data[15:0];
+          xaddr <= th_dw(th_w + 22'd2, th_ram); xhalf <= th_w[0];
+          fs    <= F_TH2;
+        end
+        F_TH2: if (mem_go) begin
+          hdr2  <= xhalf ? mem_data[31:16] : mem_data[15:0];
+          xaddr <= th_dw(th_w + 22'd3, th_ram); xhalf <= ~th_w[0];
+          fs    <= F_TH3;
+        end
+        F_TH3: if (mem_go) begin
+          cbase   <= xhalf ? mem_data[31:22] : mem_data[15:6];
+          tex_flat <= hdr0[14];
+          h3w     <= xhalf ? mem_data[31:16] : mem_data[15:0];   // R757: cc_idx in E_FW
+          th_w    <= th_w + {{15{attr[16]}}, attr[16:12], 2'b00};
+          // R268: THE TEXTURE COORDINATES ARE READ FOR EVERY POLYGON, CULLED OR
+          // NOT. The reference reads its pairs and advances the pointer at the
+          // top of model2_3d_process_polygon, before it decides to cull, so a
+          // culled polygon still consumes its pairs and the pointer stays in
+          // step with the list. The translucent cull below is therefore held in
+          // uv_cull and acted on when the run finishes.
+          // R326: ONLY AN UNTEXTURED TRANSLUCENT POLYGON DRAWS NOTHING.
+          // R231 culled on bit 13 alone and the note below claimed both
+          // translucent callbacks return on their first line. Only ONE does.
+          // model2.h's table is m_render_callbacks[(h0>>13)&3] =
+          //   0 solid<false>  1 solid<true>  2 tex<false>  3 tex<true>
+          // and model2rd.ipp's draw_scanline_solid<true> is the only one with
+          // "if it's translucent, there's nothing to render; return".
+          // draw_scanline_tex<true> DRAWS: it sets an alpha bit on every texel
+          // except 0xF and discards only the ones without it. So every
+          // TEXTURED translucent polygon in the game was being thrown away
+          // here -- which is the "some textures are just missing" the board has
+          // shown since R231. The discard itself lives in m2_span_tex.
+          uv_cull <= hdr0[13] && !hdr0[14];
+          // R271: the whole texture state, assembled where its last word lands.
+          // R326: BIT 8 CARRIES TRANSLUCENT, NOT texwrapy. The packed word is
+          // exactly 32 bits with nothing spare, and widening it widens the
+          // quad store and the span queue -- M10K this part does not have to
+          // spend. hdr0[7] (texwrapy) rode all the way to m2_texel and was
+          // read by NOBODY: grep finds no reader of bits 7 or 8 anywhere, and
+          // m2_texel says why -- the wrap bits only choose how a BILINEAR
+          // fetch treats the seam, and there is no bilinear fetch here.
+          // So wrapy's slot carries the flag that is actually used.
+          // IF BILINEAR IS EVER ADDED, texwrapx/texwrapy must come back and
+          // this word has to grow; do not quietly drop them a second time.
+          poly_tex <= {hdr1[7:0], hdr2[10:6], hdr2[5:0], hdr2[12], hdr0[15],
+                       hdr0[9], hdr0[8], hdr0[13], hdr0[6],
+                       hdr0[5:3], hdr0[2:0], hdr0[14]};
+          uv_i    <= 3'd0;
+          uv_last <= 1'b0;   // R742: the last word is 5 or 7, never 0
+          xaddr   <= th_dw(tp_w, tp_ram); xhalf <= tp_w[0]; xspace <= 2'd1;
+          fs      <= F_UV;
+        end
+
+        // ---- R268: two 16-bit words a vertex, v THEN u, three vertices or
+        //      four, from texture RAM or the texture ROM exactly as the header
+        //      is read. The pointer then advances by the words consumed.
+        F_UV: if (mem_go) begin
+          logic [15:0] w;
+          logic [21:0] nxt;
+          w   = xhalf ? mem_data[31:16] : mem_data[15:0];
+          nxt = tp_w + 22'(uv_i) + 22'd1;
+          case (uv_i)
+            3'd0: poly_uv0[31:16] <= w;
+            3'd1: poly_uv0[15:0]  <= w;
+            3'd2: poly_uv1[31:16] <= w;
+            3'd3: poly_uv1[15:0]  <= w;
+            3'd4: poly_uv2[31:16] <= w;
+            // R270: A TRIANGLE'S FOURTH VERTEX TAKES THE THIRD'S PAIR. The
+            // reference ropes P1(n) = P0(n) for a triangle and never touches
+            // v[3]'s pu/pv, because render_triangle does not read them -- but
+            // this pipeline carries every polygon as a four-vertex quad, and a
+            // duplicated POSITION with a stale texture coordinate is not a
+            // duplicated vertex: it fits a different parameter plane and slews
+            // the texture across the triangle. poly_uv2[31:16] landed last
+            // cycle, so the pair is complete here.
+            3'd5: begin
+              poly_uv2[15:0] <= w;
+              if (!attr[0]) poly_uv3 <= {poly_uv2[31:16], w};
+            end
+            3'd6: poly_uv3[31:16] <= w;
+            default: poly_uv3[15:0] <= w;
+          endcase
+          if (uv_last) begin   // R742: uv_i == (attr[0] ? 7 : 5)
+            tp_w <= tp_w + (attr[0] ? 22'd8 : 22'd6);
+            // UNTEXTURED AND TRANSLUCENT, WHICH IS THE ONE CASE THE REFERENCE
+            // DRAWS NOTHING FOR (R231, corrected by R326) -- acted on in E_FW.
+            fs <= F_DONE;
+          end else begin
+            uv_i  <= uv_i + 3'd1;
+            uv_last <= ((uv_i + 3'd1) == (attr[0] ? 3'd7 : 3'd5));   // R742
+            xaddr <= th_dw(nxt, tp_ram);
+            xhalf <= nxt[0];
+          end
+        end
+        default: ;
+      endcase
+
+      // R754: a transform's result, wherever the engine is. In issue order.
+      if (xf_out_valid) begin
+        tq_rd <= tq_rd + 2'd1;
+        if (tq[tq_rd][2]) begin
+          nrm[0] <= xf_out_x; nrm[1] <= xf_out_y; nrm[2] <= xf_out_z;
+        end else begin
+          raw_x[tq[tq_rd][0]] <= xf_out_x; raw_y[tq[tq_rd][0]] <= xf_out_y; raw_z[tq[tq_rd][0]] <= xf_out_z;
+          raw_v[tq[tq_rd][0]] <= 1'b1;
+          if (tq[tq_rd][1:0] == 2'd2) begin dpx <= xf_out_x; dpy <= xf_out_y; dpz <= xf_out_z; end   // R219
+        end
+      end
+      // R718: the curve a cycle after the read. R784: textured, always
+      // MAME's curve (the pedestal off), then the slope scaled by the luma
+      // a cycle later still -- the multiply never follows the curve's.
+      if (xl_go) begin g_raw <= gam(xl_raw, tx_c ? 2'd0 : gamma_sel); g_i <= xl_i; end
+      g_go <= xl_go;
+      if (g_go) rgb[g_i] <= tx_c ? tslope(g_raw, lt, g_i, c555, gamma_sel != 2'd0) : g_raw;
+      // R784: Off and Mild re-apply their own curve per pixel as A + B x lin
+      // (m2_span_tex); B is folded in here, once per polygon.
+      lt <= (gamma_sel == 2'd0) ? lm : 8'((16'(lm) * (gamma_sel[1] ? 16'd191 : 16'd219)) >> 8);
       if (col_inval) begin cc_valid <= '0; cc_dirty <= 1'b1; end   // R222: the CPU rewrote the colours (R698: and any fill in flight is stale)
       tex_lum_d <= tex_lum;
       if (tex_lum != tex_lum_d) begin cc_valid <= '0; cc_dirty <= 1'b1; end   // R239: the placeholder changed; the cached colours are stale

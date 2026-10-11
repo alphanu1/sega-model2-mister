@@ -267,6 +267,26 @@ int main(int argc, char** argv) {
 
     tick();
 
+#ifdef ALU_SHORT
+    // R774: SERIAL, as mb86233_core issues -- one op, then wait for its
+    // result. Built with SHORT=1, a non-FP op must answer after 2 edges and
+    // every other after ALU_LAT = 5; anything else is a failure, so the bench
+    // checks the speed-up as well as the result.
+    if (!feed) continue;
+    dut->in_valid = 0;
+    int lat = 1;
+    while (!dut->out_valid && lat < 12) { tick(); lat++; }
+    {
+      const bool sh = is_int_d(op) || op == FABD || op == FNED;
+      const int want = sh ? 2 : 5;
+      if (lat != want) {
+        if (fails < 20) printf("LATENCY op=%02x got=%d want=%d\n", op, lat, want);
+        fails++;
+        continue;
+      }
+    }
+    const Pend& q = pipe[0];
+#else
     // Latency 2. After the shift and this tick, pipe[0] holds the operands
     // just applied and pipe[1] holds the pair whose result out_valid is
     // presenting now. Indexing pipe[2] here instead produces a 100% failure
@@ -274,6 +294,7 @@ int main(int argc, char** argv) {
     if (!dut->out_valid || !pipe[4].live) continue;
 
     const Pend& q = pipe[4];
+#endif
     Ref ref = model(q.op, q.r, q.xv, q.xd);
 
     // fcpd writes no register, so ref.d_out holds whatever the arbitration

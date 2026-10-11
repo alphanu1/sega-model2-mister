@@ -25,7 +25,7 @@ module m2_persp_recip (
   input  logic        clk,
   input  logic        rst_n,
   input  logic [15:0] in_d,        // 1..65535; zero returns the maximum
-  output logic [31:0] out_q        // ~= 2^30 / in_d, valid FOUR cycles later (R466, R599)
+  output logic [31:0] out_q        // ~= 2^30 / in_d, valid FIVE cycles later (R466, R599, R731)
 );
 
   // ---- stage 0: normalise, and look the leading byte up
@@ -89,12 +89,19 @@ module m2_persp_recip (
   logic [16:0] s2_r0;
   logic [3:0]  s2_s;
   logic        s2_zero;
+  // R731: the second multiply registered before the un-normalise and round
+  // (s759: s2_r0 -> out_q 0.663 ns at 75 MHz, short of 80). One cycle more;
+  // m2_raster_fill's S_PF_NRM waits it out.
+  logic [18:0] s3_r1;
+  logic [3:0]  s3_s;
+  logic        s3_zero;
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       sa_dn <= 16'd0; sa_s <= 4'd0; sa_zero <= 1'b0;   // R599
       s1_dn <= 16'd0; s1_r0 <= 17'd0; s1_s <= 4'd0; s1_zero <= 1'b0;
       s2_e  <= 18'd0; s2_r0 <= 17'd0; s2_s <= 4'd0; s2_zero <= 1'b0;   // R466
+      s3_r1 <= 19'd0; s3_s <= 4'd0; s3_zero <= 1'b0;                     // R731
       out_q <= 32'd0;
     end else begin
       sa_dn   <= s0_dn;                    // R599
@@ -137,27 +144,35 @@ module m2_persp_recip (
       s2_s    <= s1_s;
       s2_zero <= s1_zero;
 
-      // ---- stage 2: the second multiply, the un-normalise and the round.
-      out_q <= s2_zero ? 32'hffff_ffff : persp_q2(s2_r0, s2_e, s2_s);
+      // ---- stage 2: the second multiply. R731: then stage 3, the
+      // un-normalise and the round.
+      s3_r1   <= persp_r1(s2_r0, s2_e);
+      s3_s    <= s2_s;
+      s3_zero <= s2_zero;
+      out_q   <= s3_zero ? 32'hffff_ffff : persp_q3(s3_r1, s3_s);
     end
   end
 
   // R466: THE SECOND HALF ONLY. `e` now arrives already computed, so this is
   // r0*e, the un-normalise and the round -- the same expressions persp_q used,
   // with the first multiply and the subtract moved a cycle earlier.
-  function automatic logic [31:0] persp_q2(input logic [16:0] r0,
-                                           input logic [17:0] e,
-                                           input logic [3:0]  s);
+  // R731: persp_q2 in two halves, one a stage -- the same expressions.
+  function automatic logic [18:0] persp_r1(input logic [16:0] r0,
+                                           input logic [17:0] e);
     logic [35:0] c;
-    logic [18:0] r1;
-    logic [32:0] q;
     begin
       c  = 36'(r0) * 36'(e);
-      r1 = 19'(c >> 16);
+      persp_r1 = 19'(c >> 16);
+    end
+  endfunction
+  function automatic logic [31:0] persp_q3(input logic [18:0] r1,
+                                           input logic [3:0]  s);
+    logic [32:0] q;
+    begin
       // r1 ~= 2^31/dn and dn == d << s, so 2^30/d == r1 << s >> 1. The +1
       // rounds that last shift instead of always truncating downwards.
       q  = (33'(r1) << s) + 33'd1;
-      persp_q2 = 32'(q >> 1);
+      persp_q3 = 32'(q >> 1);
     end
   endfunction
 endmodule

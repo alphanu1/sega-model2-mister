@@ -151,6 +151,17 @@ syn_check:
 # its own. This is R94's lesson for the third time -- a guard that cannot see
 # the class of bug it is standing in front of is worse than no guard, because
 # it is believed.
+# R809: VARIABLE INDEXES PAST AN ARRAY'S END. Verilator wraps them for packed
+# and power-of-2 arrays; Quartus (the LRM) drops the write and reads X -- R807's
+# broken textures, which every bench passed. This reads Verilator's elaborated
+# tree (real parameters) and flags any variable select whose range can exceed
+# its array. Candidates are listed for review; most are bounded by the logic.
+lint_idx:
+	@echo "== variable selects past an array's end (R807 class)"
+	@rm -rf obj_idx && verilator --json-only -Wno-fatal -Wno-lint -Wno-style -Wno-PROCASSWIRE --top-module emu \
+	  -Irtl/sound/jt12 -Isys $(LINTTOP_RTL) sys/hps_io.sv rtl/pll/pll.v sim/lint/altera_pll_stub.v Model2.sv --Mdir obj_idx >/dev/null 2>&1
+	@python3 sim/lint/idxcheck.py obj_idx/Vemu.tree.json obj_idx/Vemu.tree.meta.json
+
 lint_top:
 	@echo "== lint Model2.sv and everything it instantiates"
 	@verilator --lint-only -Wall -Wno-DECLFILENAME -Wno-fatal --top-module emu \
@@ -387,8 +398,8 @@ SDR_RTL := rtl/mem/m2_sdram.sv rtl/mem/bw_monitor.sv sim/mem/sdram_model.sv sim/
 RLD_RTL := rtl/mem/m2_sdram.sv rtl/io/m2_rom_loader.sv sim/mem/sdram_model.sv sim/mem/m2_romload_harness.sv
 
 
-.PHONY: test test_m2_backup test_m2_fb_wcomb test_m2_fbw_chain test_m2_sndboard test_m2_romload test_m2_rom_xtra test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram test_fx68k test_m2_ioboard
-test: test_m2_handshake_cdc test_m2_texel test_m2_texel_cdc test_m2_span_tex test_m2_geo test_m2_wr_arb test_m2_pair_cache test_m2_eng_ra test_m2_raster3d test_m2_backup test_m2_sndlink test_fx68k test_m2_sndboard test_m2_ioboard test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_sdram_cdc test_m2_romload test_m2_sdram test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
+.PHONY: test test_m2_backup test_m2_fb_wcomb test_m2_fbw_chain test_m2_sndboard test_m2_romload test_m2_rom_xtra test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram test_fx68k test_m2_ioboard
+test: test_m2_handshake_cdc test_m2_texel test_m2_texel_bl4 test_m2_texel_bl8 test_m2_texel_bl48 test_m2_texel_cdc test_m2_texel_cdc16 test_m2_span_tex test_m2_geo test_m2_wr_arb test_m2_pair_cache test_m2_eng_ra test_m2_quad_store test_m2_raster3d test_m2_backup test_m2_sndlink test_fx68k test_m2_sndboard test_m2_ioboard test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_sdram_cdc test_m2_romload test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
 
 test_i960_dec: obj_i960_dec/Vi960_dec
 	@echo "== test i960_dec"
@@ -515,11 +526,27 @@ obj_i960_fpcvt/Vi960_fpcvt: $(FPC_RTL) $(TB)/tb_i960_fpcvt.cpp
 test_m2_sdram: obj_m2_sdram/Vm2_sdram_harness
 	@echo "== test m2_sdram (controller against the device model)"
 	./obj_m2_sdram/Vm2_sdram_harness
+	@echo "== test m2_sdram, ports 2 and 10 reading eight words (R787)"
+	M2_SDRAM_LONG=404 ./obj_m2_sdram/Vm2_sdram_harness
 
 obj_m2_sdram/Vm2_sdram_harness: $(SDR_RTL) sim/mem/tb_m2_sdram.cpp
 	$(VBUILD) --top-module m2_sdram_harness -CFLAGS "-O2 -I../sim/mem" \
 	  -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-WIDTHEXPAND -Wno-SYNCASYNCNET \
 	  --Mdir obj_m2_sdram -o Vm2_sdram_harness $(SDR_RTL) sim/mem/tb_m2_sdram.cpp
+
+# R789: Model2.sv's thirteen ports and its priority class (1, 2, 3, 4, 10, 11, 12;
+# cap 2) -- the texel cache's four miss ports with the glyph fetch's deadline
+test_m2_sdram13: obj_m2_sdram13/Vm2_sdram_harness
+	@echo "== test m2_sdram, Model2.sv's 13 ports and priority class (R789)"
+	./obj_m2_sdram13/Vm2_sdram_harness
+	@echo "== ... with the four texel miss ports (2, 10, 11, 12) reading eight words (R796)"
+	M2_SDRAM_LONG=1c04 ./obj_m2_sdram13/Vm2_sdram_harness
+
+obj_m2_sdram13/Vm2_sdram_harness: $(SDR_RTL) sim/mem/tb_m2_sdram.cpp
+	$(VBUILD) --top-module m2_sdram_harness -CFLAGS "-O2 -I../sim/mem -DTB_NP=13" \
+	  -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-WIDTHEXPAND -Wno-SYNCASYNCNET \
+	  -GNPP=13 -GPRI=13\'b1110000011110 \
+	  --Mdir obj_m2_sdram13 -o Vm2_sdram_harness $(SDR_RTL) sim/mem/tb_m2_sdram.cpp
 
 # The SAME suite at the 128 MB geometry: 11 column bits, which is the only
 # decomposition reaching 64M words on the connector's 13 address and 2 bank pins.
@@ -624,6 +651,21 @@ test_i960_top_irq: obj_i960_top/Vi960_top
 	@echo "== test i960_top (interrupt soak)"
 	./obj_i960_top/Vi960_top +steps=400 +seed=7 +strictcov
 
+# The same lockstep with every bus access held 0..N cycles (+lat=N). Every
+# other run acks in the cycle it is asked, so the I-cache is never busy when
+# the front end issues and a LATE answer -- one arriving after the sequencer has
+# moved to another address -- cannot happen. On the board it did (R811/R812):
+# without the vaddr check this fails at lat=1 and lat=3. Interrupts off: the
+# harness raises them on cycle counts, which latency moves relative to the
+# reference. 7 is about the board's fill latency; 100 is past it.
+test_i960_top_lat: obj_i960_top/Vi960_top
+	@echo "== test i960_top (random bus latency)"
+	./obj_i960_top/Vi960_top +noirq +lat=1 +random=3000
+	./obj_i960_top/Vi960_top +noirq +lat=3 +random=3000
+	./obj_i960_top/Vi960_top +noirq +lat=7 +seed=3 +random=3000
+	./obj_i960_top/Vi960_top +noirq +lat=100 +random=1000
+	./obj_i960_top/Vi960_top +noirq +loops +steps=400 +lat=40 +random=300
+
 # --public-flat-rw exposes the register file so lockstep can read architectural
 # state without adding debug ports that would change what is measured.
 obj_i960_top/Vi960_top: $(TOP_RTL) $(TB)/tb_i960_top.cpp $(TB)/i960_cpu_ref.h
@@ -659,7 +701,7 @@ test_m2_cpu_bridge: obj_m2_bridge/Vm2_cpu_bridge
 	@./obj_m2_bridge/Vm2_cpu_bridge $(TEST_ARGS)
 
 obj_m2_bridge/Vm2_cpu_bridge: rtl/io/m2_cpu_bridge.sv sim/mem/tb_m2_cpu_bridge.cpp
-	$(VBUILD) --top-module m2_cpu_bridge -GBUFFERRAM=1 -CFLAGS "-O2" \
+	$(VBUILD) --top-module m2_cpu_bridge -GBUFFERRAM=1 -GCC_EN=1 -CFLAGS "-O2" \
 	  --Mdir obj_m2_bridge -o Vm2_cpu_bridge rtl/io/m2_cpu_bridge.sv sim/mem/tb_m2_cpu_bridge.cpp
 
 # The bridge against the REAL controller. Both pass their own tests; this is the
@@ -748,6 +790,15 @@ test_m2_texel_cdc: obj_texel_cdc/Vm2_texel_cdc
 
 obj_texel_cdc/Vm2_texel_cdc: rtl/video/m2_texel_cdc.sv rtl/video/m2_texel_addr.sv sim/video/tb_m2_texel_cdc.cpp
 	$(VBUILD) --top-module m2_texel_cdc --Mdir obj_texel_cdc -o Vm2_texel_cdc -CFLAGS "-O2" \
+	  rtl/video/m2_texel_cdc.sv rtl/video/m2_texel_addr.sv sim/video/tb_m2_texel_cdc.cpp
+
+# R789: the core's K (16 credits since R789)
+test_m2_texel_cdc16: obj_texel_cdc16/Vm2_texel_cdc
+	@echo "== test m2_texel_cdc at K = 16 (R789)"
+	@./obj_texel_cdc16/Vm2_texel_cdc $(TEST_ARGS)
+
+obj_texel_cdc16/Vm2_texel_cdc: rtl/video/m2_texel_cdc.sv rtl/video/m2_texel_addr.sv sim/video/tb_m2_texel_cdc.cpp
+	$(VBUILD) --top-module m2_texel_cdc -GK=16 --Mdir obj_texel_cdc16 -o Vm2_texel_cdc -CFLAGS "-O2 -DTB_K=16" \
 	  rtl/video/m2_texel_cdc.sv rtl/video/m2_texel_addr.sv sim/video/tb_m2_texel_cdc.cpp
 
 # R643: THE GEOMETRY DIFFERENTIAL -- one MAME walk (patch p14) through the
@@ -865,6 +916,16 @@ obj_raster_band/Vm2_raster_band: rtl/video/m2_raster_band.sv sim/video/tb_m2_ras
 	$(VBUILD) --top-module m2_raster_band -Wno-UNUSEDSIGNAL -Wno-TIMESCALEMOD -Wno-UNUSEDPARAM --Mdir obj_raster_band -o Vm2_raster_band -CFLAGS "-O2" \
 	  rtl/video/m2_raster_band.sv sim/video/tb_m2_raster_band.cpp
 
+# R769: the store's tiny-quad test at both thresholds and the switch between them.
+test_m2_quad_store: obj_quad_store/Vm2_quad_store
+	@echo "== test m2_quad_store (the tiny-quad test, fine and coarse, R769)"
+	@./obj_quad_store/Vm2_quad_store $(TEST_ARGS)
+
+obj_quad_store/Vm2_quad_store: $(QUAD_STORE_RTL) sim/video/tb_m2_quad_store.cpp
+	$(VBUILD) --top-module m2_quad_store --public-flat-rw -GTINY=4 -GTINY_FINE=2 -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-PINCONNECTEMPTY -Wno-VARHIDDEN \
+	  --Mdir obj_quad_store -o Vm2_quad_store -CFLAGS "-O2" \
+	  $(QUAD_STORE_RTL) sim/video/tb_m2_quad_store.cpp
+
 test_m2_raster3d: obj_raster3d/Vm2_raster3d
 	@echo "== test m2_raster3d (a list every second frame is drawn every frame)"
 	@./obj_raster3d/Vm2_raster3d $(TEST_ARGS)
@@ -967,7 +1028,7 @@ obj_boot/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cpp \
                            rtl/io/m2_ioz80.sv rtl/mem/m2_tdp_ram.sv $(wildcard rtl/tgp/*.sv) $(wildcard rtl/cpu/tv80/*.v) \
                            rtl/mem/m2_char_cdc.sv $(wildcard rtl/video/*.sv) \
                            $(wildcard rtl/cpu/i960/*.sv)
-	$(VBUILD) --top-module m2_boot_harness -Wno-PINCONNECTEMPTY -Wno-UNUSEDPARAM \
+	$(VBUILD) --top-module m2_boot_harness -Wno-SIMILARNAME -Wno-PINCONNECTEMPTY -Wno-UNUSEDPARAM \
 	  -Wno-WIDTHEXPAND -Wno-UNUSEDSIGNAL -Wno-PINMISSING --Mdir obj_boot -o Vm2_boot_harness \
 	  -GBUFFERRAM_EN=$(BOOT_BUFFERRAM) \
 	  -CFLAGS "-O2" sim/io/m2_boot_harness.sv rtl/io/m2_cpu_bridge.sv \
@@ -1050,6 +1111,52 @@ obj_hscdc/Vm2_handshake_cdc: rtl/video/m2_handshake_cdc.sv sim/video/tb_m2_hands
 	  --Mdir obj_hscdc -o Vm2_handshake_cdc -CFLAGS "-O2" \
 	  rtl/video/m2_handshake_cdc.sv sim/video/tb_m2_handshake_cdc.cpp
 
+# R620's bilinear texel cache against model2rd.ipp's fetch (random sheets,
+# headers, u/v, latencies, sweeps; every answer checked). R782: given a target.
+test_m2_texel_bl: obj_texel_bl/Vm2_texel_bl
+	@echo "== test m2_texel_bl (the bilinear texel cache, against model2rd.ipp)"
+	@./obj_texel_bl/Vm2_texel_bl
+
+obj_texel_bl/Vm2_texel_bl: rtl/video/m2_texel_bl.sv rtl/video/m2_texel_addr.sv sim/video/tb_m2_texel_bl.cpp
+	$(VERILATOR) --cc --exe --build -j 0 -Wno-fatal -Wno-UNUSEDSIGNAL -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC \
+	  --top-module m2_texel_bl --Mdir obj_texel_bl -o Vm2_texel_bl -CFLAGS -O2 \
+	  rtl/video/m2_texel_bl.sv rtl/video/m2_texel_addr.sv sim/video/tb_m2_texel_bl.cpp
+
+# R789: the core's shape -- four miss slots (ports 1-4 of the bench), four
+# response entries (eight also builds: -GRSP_D=8) -- with the second, third and fourth ports switched off at times
+test_m2_texel_bl4: obj_texel_bl4/Vm2_texel_bl
+	@echo "== test m2_texel_bl, four miss slots, four responses (R789)"
+	@./obj_texel_bl4/Vm2_texel_bl
+	@M2_TBL_SDRAM=1 ./obj_texel_bl4/Vm2_texel_bl
+
+obj_texel_bl4/Vm2_texel_bl: rtl/video/m2_texel_bl.sv rtl/video/m2_texel_addr.sv sim/video/tb_m2_texel_bl.cpp
+	$(VERILATOR) --cc --exe --build -j 0 -Wno-fatal -Wno-UNUSEDSIGNAL -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC \
+	  --top-module m2_texel_bl -GNS=4 -GRSP_D=4 --Mdir obj_texel_bl4 -o Vm2_texel_bl -CFLAGS -O2 \
+	  rtl/video/m2_texel_bl.sv rtl/video/m2_texel_addr.sv sim/video/tb_m2_texel_bl.cpp
+
+# R787: the same bench at 128-bit lines (eight-word reads), the core's shape
+test_m2_texel_bl8: obj_texel_bl8/Vm2_texel_bl
+	@echo "== test m2_texel_bl, 128-bit lines (R787)"
+	@./obj_texel_bl8/Vm2_texel_bl
+	@M2_TBL_SDRAM=1 ./obj_texel_bl8/Vm2_texel_bl
+
+obj_texel_bl8/Vm2_texel_bl: rtl/video/m2_texel_bl.sv rtl/video/m2_texel_addr.sv sim/video/tb_m2_texel_bl.cpp
+	$(VERILATOR) --cc --exe --build -j 0 -Wno-fatal -Wno-UNUSEDSIGNAL -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC \
+	  --top-module m2_texel_bl -GLW8=1 --Mdir obj_texel_bl8 -o Vm2_texel_bl -CFLAGS "-O2 -DTB_LW8" \
+	  rtl/video/m2_texel_bl.sv rtl/video/m2_texel_addr.sv sim/video/tb_m2_texel_bl.cpp
+
+# R796: the core's shape since R789 at 128-bit lines -- four miss slots, four
+# response entries, eight-word reads
+test_m2_texel_bl48: obj_texel_bl48/Vm2_texel_bl
+	@echo "== test m2_texel_bl, four miss slots, 128-bit lines (R796)"
+	@./obj_texel_bl48/Vm2_texel_bl
+	@M2_TBL_SDRAM=1 ./obj_texel_bl48/Vm2_texel_bl
+
+obj_texel_bl48/Vm2_texel_bl: rtl/video/m2_texel_bl.sv rtl/video/m2_texel_addr.sv sim/video/tb_m2_texel_bl.cpp
+	$(VERILATOR) --cc --exe --build -j 0 -Wno-fatal -Wno-UNUSEDSIGNAL -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC \
+	  --top-module m2_texel_bl -GNS=4 -GRSP_D=4 -GLW8=1 --Mdir obj_texel_bl48 -o Vm2_texel_bl -CFLAGS "-O2 -DTB_LW8" \
+	  rtl/video/m2_texel_bl.sv rtl/video/m2_texel_addr.sv sim/video/tb_m2_texel_bl.cpp
+
 test_m2_texel: obj_texel/Vm2_texel
 	@echo "== test m2_texel (the texel fetch, against model2rd.ipp)"
 	@./obj_texel/Vm2_texel
@@ -1109,6 +1216,49 @@ $(eval $(call TGP_UNIT,fp_add,$(TGP)/fp_add.sv))
 $(eval $(call TGP_UNIT,fp_div,$(TGP)/fp_div.sv))
 $(eval $(call TGP_UNIT,mb86233_alu,$(TGP_PKG) $(TGP_FP) $(TGP)/mb86233_alu.sv))
 $(eval $(call TGP_UNIT,mb86233_agu,$(TGP)/mb86233_agu.sv))
+# R771-R774: THE RACE REPLAY. A Daytona race captured from MAME 0.289
+# (sim/tgp/tgp_capture.lua: program, data RAM, tables and every word across the
+# TGP's boundary for 30 frames) replayed through m2_copro, every output and io
+# access checked against MAME. The capture is ROM-derived and lives under
+# build/ (git-ignored); `make tgp_capture` makes it.
+#   make tgp_replay           replay, check against MAME, profile the TGP
+#   make tgp_replay_baseline  record this RTL's own result stream
+#   make tgp_replay_check     require the result stream IDENTICAL to that baseline:
+#                             the exact test for a faster TGP (MAME and the RTL
+#                             legitimately differ on NaN encoding and ldif)
+TGPCAP     ?= build/tgpcap/race5400
+TGPCAP_RUN ?= build/tgpcap/run
+TGP_LAT    ?= 6
+TGP_REPLAY_RTL := $(TGP_CORE) $(TGP)/m2_tgp.sv $(TGP)/m2_fifo_m10k.sv $(TGP)/m2_copro.sv
+obj_tgp_replay/Vm2_copro: $(TGP_REPLAY_RTL) sim/tgp/tb_tgp_replay.cpp sim/tgp/tgp_replay.vlt
+	verilator --cc --exe --build -j 0 -Wall $(TGPFLAGS) --timing -Wno-WIDTHTRUNC --top-module m2_copro \
+	  -CFLAGS "-O2" -O3 -LDFLAGS "-lz" --Mdir obj_tgp_replay -o Vm2_copro sim/tgp/tgp_replay.vlt \
+	  $(TGP_REPLAY_RTL) $(abspath sim/tgp/tb_tgp_replay.cpp)
+tgp_replay: obj_tgp_replay/Vm2_copro
+	./obj_tgp_replay/Vm2_copro $(TGPCAP) --lat $(TGP_LAT) --wlat $(TGP_LAT) $(TEST_ARGS)
+tgp_replay_baseline: obj_tgp_replay/Vm2_copro
+	mkdir -p $(TGPCAP_RUN)
+	./obj_tgp_replay/Vm2_copro $(TGPCAP) --lat $(TGP_LAT) --wlat $(TGP_LAT) --profile 0 \
+	  --dump-rtl $(TGPCAP_RUN)/rtl_baseline.bin || true
+tgp_replay_check: obj_tgp_replay/Vm2_copro
+	./obj_tgp_replay/Vm2_copro $(TGPCAP) --lat $(TGP_LAT) --wlat $(TGP_LAT) \
+	  --vs-rtl $(TGPCAP_RUN)/rtl_baseline.bin $(TEST_ARGS)
+tgp_capture:
+	rm -rf $(TGPCAP_RUN)/cfg $(TGPCAP_RUN)/nvram $(TGPCAP_RUN)/snap && mkdir -p $(TGPCAP) $(TGPCAP_RUN)
+	cd $(TGPCAP_RUN) && TGPCAP_DIR=$(abspath $(TGPCAP)) TGPCAP_START=5400 TGPCAP_FRAMES=30 \
+	  mame daytona93 -rompath $(HOME)/roms/Model2 -video none -sound none -nothrottle \
+	  -skip_gameinfo -cfg_directory cfg -nvram_directory nvram -snapshot_directory snap \
+	  -autoboot_script $(abspath sim/tgp/tgp_capture.lua) | grep TGPCAP
+	gzip -9f $(TGPCAP)/events.bin $(TGPCAP)/cdata.bin
+.PHONY: tgp_replay tgp_replay_baseline tgp_replay_check tgp_capture
+
+# R774: the ALU as the core builds it (SHORT=1), issued one op at a time.
+obj_mb86233_alu_short/Vmb86233_alu: $(TGP_PKG) $(TGP_FP) $(TGP)/mb86233_alu.sv sim/tgp/tb_mb86233_alu.cpp
+	$(VBUILD) --top-module mb86233_alu -GSHORT=1 -CFLAGS "-O2 -I../sim/tgp -DALU_SHORT" $(TGPFLAGS) \
+	  --Mdir obj_mb86233_alu_short -o Vmb86233_alu $(TGP_PKG) $(TGP_FP) $(TGP)/mb86233_alu.sv sim/tgp/tb_mb86233_alu.cpp
+test_mb86233_alu_short: obj_mb86233_alu_short/Vmb86233_alu
+	@echo "== test mb86233_alu (SHORT=1, serial)"
+	@./obj_mb86233_alu_short/Vmb86233_alu
 $(eval $(call TGP_UNIT,mb86233_regs,$(TGP_PKG) $(TGP)/mb86233_regs.sv))
 $(eval $(call TGP_UNIT,mb86233_mem,$(TGP)/mb86233_mem.sv))
 $(eval $(call TGP_UNIT,mb86233_dec,$(TGP)/mb86233_dec.sv))
@@ -1209,7 +1359,7 @@ test_mb86233_core: obj_mb86233_core/Vmb86233_core
 	@./obj_mb86233_core/Vmb86233_core
 
 .PHONY: test_tgp
-test_tgp: test_fp_mul test_fp_add test_fp_div test_mb86233_alu test_mb86233_agu \
+test_tgp: test_fp_mul test_fp_add test_fp_div test_mb86233_alu test_mb86233_alu_short test_mb86233_agu \
           test_mb86233_regs test_mb86233_mem test_mb86233_dec test_mb86233_xfer \
           test_mb86233_seq test_mb86233_core test_m2_geo_xform
 

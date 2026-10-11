@@ -265,12 +265,14 @@ module m2_geo #(
   logic        q_pop;
   logic [15:0] q_count;
   logic        q_full;
+  logic        q_held;   // R747: a pushed word anywhere in the queue
 
   m2_fifo_m10k #(.DW(52), .DEPTH(DEPTH)) u_pushq (
     .clk(clk), .rst_n(rst_n),
     .push(push_fire), .din({geo_wp, wdata}),
     .pop(q_pop), .q(q_data), .q_valid(q_valid),
-    .full(q_full), .count(q_count), .dropped(dbg_dropped)
+    .full(q_full), .count(q_count), .dropped(dbg_dropped),
+    .held(q_held)   // R747
   );
 
   always_ff @(posedge clk or negedge rst_n) begin
@@ -306,7 +308,14 @@ module m2_geo #(
   // by r_addr[1], so an EVEN word index must hold bits 15:0.
   typedef enum logic [1:0] { D_IDLE, D_LO, D_HI, D_NEXT } dstate_t;
   dstate_t dst;
-  assign push_busy = q_valid || (dst != D_IDLE);   // R697
+  // R747: q_held, not q_valid. The queue is an M10K FIFO and a pushed word
+  // reaches its head two cycles after the push (array, then the read in
+  // flight), and between words while it drains the head is empty for a cycle
+  // with words still behind it. q_valid was 0 in all of those cycles, so the
+  // CPU's count patch could pass R697's gate with the placeholder still
+  // queued -- the walker then read a zero count and the light table filled
+  // with 0/0 (board, s827: every entry (0,0), every polygon luminance 0).
+  assign push_busy = q_held || (dst != D_IDLE);   // R697, R747
   logic [19:0] wr_ptr;
   logic [15:0] dw_hi;
 
@@ -449,6 +458,19 @@ module m2_geo #(
         end
         default: dst <= D_IDLE;
       endcase
+    end
+  end
+
+  logic [15:0] push_seq, land_seq, flip_seq;   // R752: flip_seq is the walk's
+  // R752: words pushed, and pushed words landed (the queue's own, not the
+  // walk's polygon-data writes). The walk compares the second with the first
+  // as it stood at the flip.
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      push_seq <= 16'd0; land_seq <= 16'd0;
+    end else begin
+      if (push_fire) push_seq <= push_seq + 16'd1;
+      if ((dst == D_NEXT) && sd_wr_ack && !pd_active) land_seq <= land_seq + 16'd1;
     end
   end
 
@@ -604,7 +626,24 @@ module m2_geo #(
   // domain, so a single flop cannot miss it.
   logic        setrp_q;
   logic [9:0]  drain_wait;
-  wire         q_idle   = !q_valid && (dst == D_IDLE);
+  // R752: q_held, as R747 made push_busy -- q_valid is 0 between words while
+  // the M10K queue drains.
+  wire         q_idle   = !q_held && (dst == D_IDLE);
+  // R752: A FLIP'S WALK WAITS FOR ITS OWN WORDS, AND ONLY THOSE. The walk
+  // started on q_idle or after drain_wait's 1,023 cycles. But after a flip the
+  // game at once pushes its next list into the other buffer, so the queue is
+  // rarely idle and the walk started on the timeout -- with this list's tail
+  // possibly still queued. Those words then sat in the walk's own hold window
+  // (R638) for the whole walk, which read the previous frame's words there:
+  // a desync, decoded as a nop or two, and now and then as a phantom
+  // texture_parameters that zeroes the light table for good (board, s845:
+  // the genuine 0x06 at boot, a second one at 3.8 minutes, black from that
+  // frame). Every word pushed before the flip is counted at the flip; the
+  // walk starts when that many have landed. Pushes after it are the next
+  // list's and do not hold it.
+  wire  [15:0] land_less   = land_seq - flip_seq;   // wraps; the queue is 128 deep
+  wire         flip_landed = !land_less[15];
+  wire         _unused_r752 = &{1'b0, land_less[14:0]};   // only the sign is asked
   wire         no_flips = fs_since_flip[2];
   // The reference says the 0x803008 write IS "the list is ready" -- Daytona
   // writes it every second frame right after the write pointer, always to
@@ -624,8 +663,19 @@ module m2_geo #(
   wire         trig_sel    = (trig_mode == 2'd0) ? trig_flip   :
                              (trig_mode == 2'd1) ? trig_vblank :
                              (trig_mode == 2'd2) ? trig_after  : trig_setwp;
-  wire         walk_go  = trig_sel && (q_idle || (&drain_wait));
+  wire         walk_go  = trig_sel && (flip_pend ? flip_landed               // R752
+                                                 : (q_idle || (&drain_wait)));
   logic [31:0] pd_addr;                  // geo_polygon_data's destination
+  // R760: THE OBJECT'S CENTRE IS ONE OF FOUR. MAME (model2_v.cpp):
+  // center_sel = (opcode >> 29) & 3, the polygons clipped against
+  // clip_plane[center_sel] and projected about center[center_sel], the four
+  // read from the window command's words 2-5. R641 measured attract only,
+  // where every object uses centre 0; in a race the mini-map, the CONDITION
+  // panel and the rev needle use centre 1, which Daytona sets 46 rows below
+  // centre 0 -- so they were drawn 46 rows low (R703, R723). win_c0 now
+  // carries the selected centre for each object; m2_geo_view is unchanged.
+  logic [23:0] win_cen [4];              // {x[27:16], y[11:0]} of each centre
+  logic [1:0]  w_csel;                   // this opcode's centre select
   logic        pd_tex;                   // R222: this transfer is texture data
   logic [15:0] pd_n, pd_i;               // dwords to copy, and the one in hand
   logic  [4:0] tp_i;                     // texture_parameters index, wraps at 32
@@ -701,6 +751,7 @@ module m2_geo #(
       w_cap <= 3'd0; w_ci <= 4'd0; obj_valid <= 1'b0; eng_seen <= 1'b0;
       frame_pend <= 1'b0; drain_wait <= 10'd0;
       flip_pend <= 1'b0; fs_since_flip <= 3'd7; setrp_q <= 1'b0;
+      flip_seq <= 16'd0;   // R752
       dbg_walk_flip <= 16'd0; dbg_walk_fallback <= 16'd0;
       setwp_q <= 1'b0; wp_pend <= 1'b0; flip_seen <= 1'b0; skip_cnt <= 2'd0;   // R699
       nd_pend <= 1'b0; nodraw <= 1'b0;                                          // R711
@@ -716,6 +767,8 @@ module m2_geo #(
       // -- viewport (0,128)-(496,512), centre (248,320) -- which is exactly the
       // projection this core used as constants (R174).
       win_vp_s <= 32'h0000_0080; win_vp_e <= 32'h01F0_0200; win_c0 <= 32'h00F8_0140;
+      for (int k = 0; k < 4; k++) win_cen[k] <= 24'h0F8_140;   // R760
+      w_csel <= 2'd0;
       win_cnt  <= 8'd0;
       tp_i <= 5'd0; tp_n <= 16'd0; tp_c <= 16'd0; dbg_tp_n <= 16'd0;
       tp_we <= 1'b0; tp_idx <= 5'd0; tp_diffuse <= 8'd0; tp_ambient <= 8'd0;
@@ -739,6 +792,7 @@ module m2_geo #(
         fs_since_flip <= 3'd0;
         // R699: only every (skip+1)th flip DRAWS; R711: every flip walks
         flip_pend <= 1'b1; flip_seen <= 1'b1; drain_wait <= 10'd0;
+        flip_seq  <= push_seq;   // R752: every word pushed before this flip
         if (skip_cnt >= ((skip == 2'd3) ? 2'd2 : skip)) begin
           skip_cnt <= 2'd0; nd_pend <= 1'b0;
         end else begin
@@ -814,6 +868,7 @@ module m2_geo #(
             wst  <= W_FETCH;
           end else begin
             w_op  <= rd_data[27:23];
+            w_csel <= rd_data[30:29];          // R760: center_sel
             w_ip  <= w_ip + 19'd1;
             wst   <= W_DECODE;
           end
@@ -891,11 +946,13 @@ module m2_geo #(
                      endcase
             CAP_FOC: if (w_ci == 4'd0) foc_x <= rd_data; else foc_y <= rd_data;
             CAP_ZAD: zadj_e <= rd_data[30:23];        // R246
-            CAP_WIN: case (w_ci)                      // R642: vanishing points 1-3 unused
+            CAP_WIN: case (w_ci)                      // R642; R760: all four centres
                        4'd0: win_vp_s <= rd_data;
                        4'd1: win_vp_e <= rd_data;
-                       4'd2: win_c0   <= rd_data;
-                       default: ;
+                       4'd2: win_cen[0] <= {rd_data[27:16], rd_data[11:0]};
+                       4'd3: win_cen[1] <= {rd_data[27:16], rd_data[11:0]};
+                       4'd4: win_cen[2] <= {rd_data[27:16], rd_data[11:0]};
+                       default: win_cen[3] <= {rd_data[27:16], rd_data[11:0]};
                      endcase
             default: case (w_ci)
                        4'd0: obj_tpa <= rd_data;
@@ -914,6 +971,11 @@ module m2_geo #(
             // the walk then STOPS until the engine reports the object drawn.
             if (w_cap == CAP_OBJ && !nodraw) begin
               obj_valid <= 1'b1;
+              // R760: this object's centre. The walk waits for the whole
+              // geometry (engine, projector, clipper) to go idle before the
+              // next object, so the view's few cycles of conversion are done
+              // long before this object's first vertex is projected.
+              win_c0    <= {4'd0, win_cen[w_csel][23:12], 4'd0, win_cen[w_csel][11:0]};
               eng_seen  <= 1'b0;
               wst       <= W_OBJW;
             end else begin                 // R711: a skipped list's object goes nowhere

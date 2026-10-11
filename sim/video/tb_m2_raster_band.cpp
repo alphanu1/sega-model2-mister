@@ -98,7 +98,7 @@ struct Dut {
         int cx0 = x0 < 0 ? 0 : x0;
         int cx1 = x1 > W - 1 ? W - 1 : x1;
         for (int x = cx0; x <= cx1; x++) {
-            if (moire && ((x ^ y) & 1)) continue;   // stipple: screen x and y
+            if (moire && !((x ^ y) & 1)) continue;   // stipple: screen x and y
             mem[y_rel * W + x] = 0x10000u | col;
         }
     }

@@ -290,6 +290,15 @@ int main(int argc, char **argv) {
   long fm_n = 0, fm_nz = 0, fm_tail_n = 0, fm_tail_nz = 0;
   uint32_t stuck_at = 0;
   long stuck_since = 0;
+  // R738: EVERY OUTPUT, EVERY CYCLE, FOLDED INTO ONE NUMBER. Nothing above
+  // compares audio against anything bit for bit, so a retiming that moved a
+  // sample by one cycle or one LSB would pass every check here. Two builds that
+  // print the same hash produced the same values on the same cycles.
+  uint64_t out_hash = 1469598103934665603ULL;
+  long p1_stbs = 0, p2_stbs = 0;
+  auto fold = [&](uint32_t v) {
+    for (int k = 0; k < 4; ++k) { out_hash ^= (v >> (8 * k)) & 0xff; out_hash *= 1099511628211ULL; }
+  };
   long c = 0;
   for (; c < MAXC; ++c) {
     // Offer the next byte when the wire is free and its line time has passed.
@@ -303,6 +312,14 @@ int main(int argc, char **argv) {
       link_next = c + BYTE_CYC;
     }
     tick();
+    fold((uint32_t(uint16_t(d->snd_l)) << 16) | uint16_t(d->snd_r));
+    fold((uint32_t(uint16_t(d->obs_ym_l)) << 16) | uint16_t(d->obs_ym_r));
+    fold((uint32_t(uint16_t(d->obs_p1_l)) << 16) | uint16_t(d->obs_p1_r));
+    fold((uint32_t(uint16_t(d->obs_p2_l)) << 16) | uint16_t(d->obs_p2_r));
+    fold((uint32_t(uint16_t(d->obs_p1_raw_l)) << 16) | uint16_t(d->obs_p1_raw_r));
+    fold((uint32_t(uint16_t(d->obs_p2_raw_l)) << 16) | uint16_t(d->obs_p2_raw_r));
+    fold((uint32_t(d->obs_p1_stb) << 1) | d->obs_p2_stb);
+    p1_stbs += d->obs_p1_stb; p2_stbs += d->obs_p2_stb;
     if (d->obs_as && !prev_as) {
       uint32_t ad = d->obs_addr;
       if (!d->obs_we && ad < 0x100000) {
@@ -426,6 +443,8 @@ int main(int argc, char **argv) {
 
   std::printf("  ran %ld cycles, %u bus cycles, first ROM read at %06X\n",
               c, (unsigned)d->dbg_insns, first_pc);
+  std::printf("  output hash: %016llx (mix, YM, both chips raw and rated, every cycle; %ld + %ld chip samples)\n",
+              (unsigned long long)out_hash, p1_stbs, p2_stbs);
 
   // THE FM OUTPUT ITSELF. A CPU that follows MAME's path and emits silence has
   // not made sound, and that is the whole point of the exercise. Reported as

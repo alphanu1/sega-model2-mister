@@ -1,5 +1,335 @@
 # Handoff
 
+## 2026-10-11 (afternoon): RELEASED Model2_20261011.rbf = s994 (c02b233)
+
+releases/: Model2_20261011.rbf (232ce65807684c4b676d584b133ea385), the two
+plain MRAs and the two [15kHz CRT] MRAs; README with the speed (attract 57
+solid, race 57 for 80-90% -- Ben on s991, same RTL as s994 minus R810/R812),
+the changes since 20261008b, defaults (Double Buffered, Gamma MAME), the CRT
+section, and a new "Not finished" list. Top-level README speed/video rows
+updated. Merged to main by PR (merge commit). s994 on the board with a 4 h
+fps/lock watch from 14:51. NEXT: speed -- the remaining 10-20% of race frames
+(an agent is measuring R808's levers per ALM in sm2-builds/sm2-speed2-5bc60fb).
+
+## 2026-10-11 (late morning): THE LOCK FOUND AND FIXED IN SIM (R811/R812)
+
+CAUGHT: s980 (lock hunt v2) locked at ~35 min on Revision A. 0x192C executed
+0x881F602E -- the word after `ret` at 0x222124 (line 0x222120, same i-cache
+index) -- then trapped on the operand at 0x1930. R811.
+CAUSE (R812): a prefetch's late I-cache answer (cache busy on a fill when it
+went out, answered via S_DONE) landed in the first cycle of T_FETCH_W for the
+return target, and T_FETCH_W took any ic_valid. FIX 27943dd: consumers take
+only `ic_valid && vaddr == fetch_addr`; S_DONE renames vaddr on a hit.
+BENCH: tb_i960_top +lat=N (random bus latency) fails without the fix at
+lat 1/3 with the board's signature, passes with it at 0..100 and loops;
+`make test_i960_top_lat` (in `make test`). m2_cpu_real CPI 12.03 both ways.
+READY: s987 = 5efcc72 (s945, 80/40) + the lock fix ONLY
+(build/worktree_patches/lockfix-r812.patch), core clocks >= +0.142, holds
+>= +0.22, HDMI -0.258 (framework, reported only); 99% ALM. RBF
+build/Model2_20261011_s987_lockfix.rbf 82ef63d4dcece338c122671e61df118d.
+(s988 closed core clocks at +0.016, HDMI -0.727; not used.) Soak >= 2 h in
+attract on BOTH sets (Rev A V.R. demo, Deluxe backdrop) before calling it
+fixed.
+SPEED (R808, 3078de0): the per-lookup cost was the FB WRITER taking a span
+every 2 cycles (R551's fault again); at step 1 a textured span is 1 px. A
+one-span hold at m2_fb_wcomb's intake: bench draw -6..-12%, texel answers
+and frames identical. s989-s991 = 7b41994 (s985) + R808 only
+(sm2-builds/sm2-fbw-7b41994): s991 closes core clocks (+0.161 setup, +0.184
+hold), HDMI -1.302 (all in ascal's polyphase filter -- the worst HDMI miss
+yet, report-only by the rule); 98% ALM. RBF
+build/Model2_20261011_s991_fbwhold.rbf 933a21aed8d21c7d0e0d67dda7f30165.
+s989/s990 missed core clocks. s987 ON THE BOARD: Rev A 156 min attract, NO LOCK (was 20-60 min). Deluxe soak next.
+s991 ON THE BOARD (speed): attract solid 57 fps, in game 57 fps 80-90% of
+the time (was mostly 30) -- R808 confirmed.
+READY: s994 = c02b233 (HEAD: R812 lock + R810 GAME OVER + R808 writer +
+R807/128-bit lines), 80/40, core setup >= +0.224, hold >= +0.147, HDMI
+-0.866 (report-only); 99% ALM. RBF build/Model2_20261011_s994_combined.rbf
+232ce65807684c4b676d584b133ea385. The release candidate.
+s991 LOCKED in a race at ~10-14 min (no R812 in it -- expected).
+NOTE: s991 does NOT carry the lock fix (7b41994 predates 27943dd) -- a release
+build must come from HEAD (R808 + R810 + R812 together). Next levers measured in R808 (4 span sets
+-5..-9% more, ~+300 ALM).
+WATCH NOTE: watch980.sh misses a lock on debug builds -- after a trap 'G'
+carries RIP/PFP, so its flip/vbl count reads 0 and was treated as no data.
+A debug-build watch must count "all G records identical" as a lock.
+soak2.sh (fps) is the watch for release builds and is fine.
+PENDING: s985 (HEAD 7b41994 R807 fix, 128-bit lines) awaits Ben's texture +
+speed test; if textures right but speed = s945, drop R796/R798/R804.
+GAME OVER "G" (R810, 00b06aa): the G is polygon 0 of every GAME OVER list;
+a walk held waiting for the swap had its first quad taken in the store's
+clear cycle (swap_d) and lost. Fix: q_ready low during swap_d. Bench proves
+it on MAME's own list (HEAD draws "AMEOV"); board timing inferred, not
+measured. NOT in s987/s988 -- its own build after the lock soak, one change
+at a time. Races may lose polygon 0 too (a HUD quad) -- unchecked.
+
+## 2026-10-11 (early hours): LOCK HUNT v2 READY; SPEED BUILD STILL SEEDING
+
+ON THE BOARD: s945 (5efcc72, 80/40) -- judder fix + CRT MRA flag; tester has
+it with the [15kHz CRT] MRAs. Backups: build/Model2_20261010_s945_crt.rbf,
+_s939.rbf; on the card Model2.rbf.s945/.s939/.s936.
+READY TO LOAD: s980 = lock-hunt v2 (5efcc72 + trap C/G, previous-instruction
+P, task-load L at 0x185x AND 0x192x, last-store-to-record X; 75/37.5), RBF
+604e22481fbdb5b43121db8acf177751 (build/Model2_20261011_s980_lockhunt.rbf).
+Load, leave in attract (Rev A locks at the V.R. demo, Deluxe at the backdrop,
+20-60 min), watch: scratchpad watch980.sh, decode: decode_lock.py.
+LOCK FACTS: R800-R806 -- not coin/texture triggered (textures off still
+locks), tied to one attract scene per set; stress bench found no memory-side
+fault; R750's 0x1868 evidence fits a CPU-side cause as well.
+SPEED: HEAD 2a7b338 (R796/R798/R804 128-bit texel lines, R799, R801) fits at
+98% but 12 seeds have not closed (scattered misses 0.02-0.8 ns; Quartus
+internal errors on 5 -- /tmp is a RAM tmpfs, keep scratch small). s981-s983
+running. R797 withdrawn (R801: menu mask instead).
+
+## 2026-10-10: TGP 2.3x FASTER (R771-R775), TYRES BACK (R769). BUILDING.
+
+NIGHT: s936 (d8c2457 = R784 + R786 + R788, 80/40) ON THE BOARD, RBF
+ee54bd91...; ~620 ALM freed (40.8k). R790 Gamma default MAME (next build).
+Option B (R628's four texel misses in flight) being implemented in
+sm2-builds/sm2-ns4-80f6e82 (R789 to merge). R787 (128-bit lines) parked in
+sm2-builds/sm2-tl128-99386df. AT NEXT RELEASE: update releases/README.md's
+OSD table (Draw method default Double -- R781; Gamma default MAME -- R790;
+15kHz lines option -- R783) and "Not finished" list.
+
+LATE: s931 (9d3448f, 80/40) on the board -- past frame 1, right edge and car
+select right, in game ~50% speed, then the LOCK at 4 min (attract backdrop,
+CREDITS 2/3; R785). R784 colour build fitting (8d03e84, s933-s935). Room for
+the texel path: R786 i960 icache back to 512 B (~264 ALM), R788 the
+framework audio filter off (~430 ALM; sys/audio_out.sv patched -- see
+docs/framework-patches/, re-apply after a framework update). 128-bit texel
+lines being implemented in sm2-builds/sm2-tl128-99386df (R787 to merge).
+
+EVENING: R780 board draw times (s926, 75 MHz: draw p90 21.5-22 ms, SDRAM
+busy 80%+ on slow frames; texel misses' round trip is the cost); R781
+Double Buffered default; R782 texel cache index folded (-24..-32% misses);
+R783 15 kHz 262.5-line option (core timing proven clean; the set's
+tolerance suspected); R784 texture colour path (luma table base + MAME's
+ramp with clip; decals/windows now match MAME under every gamma; Gamma
+default unchanged at Ben's request). Ben: board step 1 was A/B-proven --
+the remaining board-vs-bench blockiness is open; MiSTer's non-integer
+nearest scaler suspected. Builds: 9d3448f sweeping s930-s932 (s927-929
+failed on placement); next: HEAD with R784.
+
+16:30: s919 (80/40) FROZE at the first 3D frame of attract (2D only, 0 fps);
+the boot harness at 30 M insns and the replay at latency 1/12/40 are clean,
+map warnings identical to s894 -- not reproduced; retry it once to see if it
+is repeatable. s913 (75, lock hunt) RUNS: attract 81% of full speed, races
+mostly 30 -- the 3D DRAW is now the limit (bench: heavy lists 15.4-16.5 ms
+idle SDRAM, 21-25 ms contended; 37-68% of the span walker waiting on texel
+misses; walk ~11-12 ms fits). Try OSD texel step 2. R779 (6f19629): the
+right-edge column (3D read one column ahead of the 2D) + MAME's checker
+parity. Lock watch on s913: scratchpad watch913.sh.
+
+READY (15:00): s919 = e75a2cd at 80/40 (all of today: R769-R778), closes
+(clk_sys +0.105, HDMI -0.145), RBF 7ac1360a33d72e8d2696a0689776d7cb, in
+sm2-builds/sm2-rel-e75a2cd/build/seeds/s919. s913 = the lock hunt at 75/37.5,
+RBF 3339456b..., soak script scratchpad locksoak913.sh. Neither loaded yet.
+
+LATER (12:55): s901 LOCKED (R777) -- flips frozen, vblanks on, 0 TGP hold:
+the i960 stopped, FAST_ACK 0 notwithstanding. Board left locked for Ben.
+R776 (492b9da): the coarse 4 px cull only for quads at zval >= 0x3000 (z 16).
+80 MHz sweeps all failed on placement (s903-s908, R778); the one TGP path
+(io_ack -> seq via S_DST_W retire) removed in e75a2cd (R778). Next release
+sweep from e75a2cd. LOCK HUNT: sm2-builds/sm2-lock-492b9da, 75/37.5,
+M2_DEBUG_LITE with W/L/K records (stores/loads of 0x1868, the 0x185x task
+load) + trap RIP/PFP; patch build/worktree_patches/lock-hunt-492b9da.patch;
+seeds s909-s911; decoder scratchpad decode_lock.py.
+
+Branch readahead. Commits today: 9d3e1b1 (R769 + R770), 757ede8 (R771-R774),
+9dd8ee6 (R775). On the board: s901 (timeline, 75/37.5) -- s894 (8 KB icache,
+80/40) is saved on the SD card as Model2.rbf.s894.
+  R770 the timeline (s901): the MENU IS AT 60 -- the slow-flashing boxes were
+       Ben's capture card ("Menu is fine"). R767/R768's premise was wrong.
+       Race: flip 15.4-16.8 ms after vblank, the i960 held 4.8-5.5 ms a frame
+       on the TGP, walk ~12 ms -- the frame just fits, so it alternates 1 and
+       2 vblanks (the speed-up / slow-down). The TGP is the lever.
+  R769 car-select tyres: rings of 2-3 px quads, all culled by TINY = 4. The
+       store now culls at 2 px unless the previous list needed 4 (>= 1,792
+       quads passing 2). Bench: 1,338 of 1,340 stored, wheels whole; attract
+       unchanged or better. New tb_m2_quad_store (make test_m2_quad_store).
+  R771-R774 TGP: new race replay bench (make tgp_replay / tgp_replay_check;
+       capture under build/tgpcap, ROM-derived, git-ignored; `make
+       tgp_capture` remakes it). 30 race frames: 21.63 M -> 9.46 M cycles,
+       CPI 11.17 -> 4.89, ~9.0 -> ~3.9 ms of TGP a frame at 80 MHz, result
+       stream bit-identical at every step. nop skips the ALU; next word
+       prefetched; retire in the finishing state; integer ALU ops 3 cycles.
+  R775 ldif loads its register (MAME case 6; a no-op here and in Model 1).
+       The replay now PASSES against MAME except NaN encoding.
+BUILD: sm2-builds/sm2-rel-757ede8, seeds s903-s905 (R769-R774, not R775).
+Watch the new paths at 80 MHz: seq_cond_passed / io_ack / mem_stall into the
+sequencer's in_valid and the decode-register enable; seq_pc + 1 into the
+program RAM address.
+TO CHECK on the board: race and attract at a steady 60? car-select tyres.
+NOT ACTED ON: i960 16-bit st.s FIFO stores are sent {2{half}} where MAME
+zero-extends (only the sincos base sees them); MAME resets M to 1, we to 0.
+test_mb86233_regs fails 46,966 / 3 M at HEAD (stale rf 0x21 model, old).
+NEXT TGP STEPS if still short: S_DECODE 20.5%, S_ALU 21.3% (FP ops 6
+cycles), S_SRC 15.3%, S_DST 13.7%, S_SRC_W 10.3% -- the decode overlapped
+with the previous instruction, operand reads issued from S_DECODE.
+
+## 2026-10-09 (evening): ON THE BOARD -- s877 = ae5dabd (R752-R762, 80/40)
+
+Worktree sm2-builds/sm2-rel-ae5dabd (build worktrees now live in sm2-builds/,
+git-ignored). faee952 did not close on six seeds; R762 (Z80 RAM and YM LFO
+multicycles, the texel crossing's ready from a flop) did: s877 every core
+clock, HDMI -0.114, RBF 43ea4abe..., loaded 19:59. Over s859 it adds:
+  R757-R759 geometry engine/projector overlap -- with R754, the heaviest
+       attract list -36% in the bench (w2500 1.21 M -> 775 K cycles at
+       latency 10, 9.7 ms at 80 MHz), quads byte-identical throughout.
+  R760 HUD: each object projects about the centre it selects (opcode bits
+       30:29); the mini-map, CONDITION panel and rev needle were 46 rows low.
+       MAME race dumps kept as build/geodiff/r5701, r6601.
+  R761 rolling start: the per-line H-scroll table (hscr bit 15).
+Ben on s859: sky right; road seams good, some shake on corners; Double
+Buffered attract "speeds up and slows down"; race 2-5% faster.
+TO CHECK on s877: Double Buffered attract and menus at 60? menu boxes
+flash there? HUD position; rolling start scrolls; race speed.
+Menu boxes (Single buffered): 3D, drawn in every second list; skip 1 always
+draws the same phase (R711 locked it). Ben chose: test Double Buffered on the
+new build first; options if not enough -- an Auto draw method, or a phase
+shift every 8 drawn lists (-6% pictures).
+OPEN: race speed (likely CPU; the 80/40 read-ahead-on measurement is owed);
+the corner shake (sixteenth-pixel vertices); vscr bit 15 on tilemaps 2/3
+not honoured in the opaque pass (Daytona never sets it).
+
+## 2026-10-09 (late): ON THE BOARD -- s859 (R752-R756, 80/40). BEN TO CHECK.
+
+HEAD on readahead has R752-R756. s859 (d78f059, worktree sm2-rel-d78f059)
+closes every clock incl. HDMI; RBF 4027f4e672717968d0f9da67ed5f928c, loaded
+18:07, soak running. To check: Double Buffered attract/menus at 60 (R754),
+the road's edges / left-edge seam (R756), the sky on hills (R755), the menu
+boxes. s847 (previous) ran ~2 h with no lock and no black frame.
+
+  R752 black 3D: CONFIRMED on s847 -- 15 min from power-on, 0 frames with
+       nops (s845: 170), one 0x06 all session, never black.
+  R753 lock: FAST_ACK 0 is the default (R730's same-cycle answers off).
+       Soaks with it off: 50, 48, 20+ min clean; with it on, locks at 4-45.
+       Costs ~8% CPI on boot code. R730's actual fault is not found.
+  R754 speed: the geometry engine issues its transforms without waiting.
+       Ben: Double Buffered drops attract/2D to ~30, Single runs full speed
+       -> a drawn list overran its frame. Bench: -17 to -24% a list, quads
+       byte-identical (11 lists; 4 lists x 4 latencies old vs new).
+       EXPECT: Double Buffered attract/menus at 60. Races not yet measured.
+  R755 black band above the sky on hills: row mask applied in window mode
+       (MAME never does). Reproduced from MAME's memory in tb_m2_video_frame,
+       fixed render matches MAME.
+
+OPEN:
+  R756 road shake: the screen snap, not the geometry (3D points match MAME
+       to 0.002 px). Round to the nearest quarter; clip every edge from its
+       inside end. Duplicate points split by a pixel 90 -> 0; worst corner
+       error 1.0 -> 0.125 px. Two stages in the projector for 80 MHz.
+  * Still open on the road: the quarter-pixel step on shallow edges (needs
+    sixteenth-pixel vertices, a bigger change); T-junction hairline gaps
+    (Model 1's floor-inclusive span rule closes them, not yet applied).
+  * Race speed at 80/40 with the read-ahead ON: owed.
+  * R730's fault; the code cache (R733); menu flashing boxes (Single buffered).
+
+## 2026-10-09 (day): 80/40 CLOSED; NO FASTER; BLACK 3D FOUND (R752); LOCK POINTS AT R730
+
+Branch readahead, HEAD 4202dbb (R744-R752). main is still the 20261008b
+release (s759).
+
+80 / 40 closes every clock, HDMI too: s814 (a3f055c + R744's clocks),
+clk_sys +0.177, HDMI +0.301, RBF md5 8d096e92e0225eaebb44e06a5d3b60e3. Ben:
+"seems like it's the same speed". Measured: a race still takes ~2 vblanks a
+frame (R745). The read-ahead-off telemetry build (s816) read ~1.75 vblanks of
+CPU a frame, but that is NOT comparable -- without the read-ahead the walk
+is 20-25% slower (R746). Ben wants the 80/40 number with the read-ahead ON;
+s819-s821 (trimmed telemetry, read-ahead on) all failed clk_sys (-0.59 best),
+so that measurement is still owed.
+
+BLACK 3D (Ben: "never been fixed; the fix just made it take longer"): the
+32-entry light table goes all (0, 0) and never comes back until reset. R747
+(push_busy holes) and R749 (walker pair cache) chased the count-patch race of
+R697 -- THE WRONG MECHANISM: s841 (both in) still went black at 5 min.
+R752 (4202dbb) is the measured one. s845's capture from power-on: the genuine
+0x06 at boot, a PHANTOM 0x06 at 3.8 min (black from that frame), another at
+9 min; the phantom frame has 1 nop (not a zero count's 280), and 170 records
+show 1-3 nops -- the walk slips a word or two, often. Cause: a flip's walk
+started on a 1,023-cycle timeout (or q_valid's hole) with its own list's
+tail still queued; held in its window (R638), the walk read the previous
+frame's words. Now a flip's walk waits until every word pushed before the
+flip has landed. Bench: old rule reads 19 of 41 opcodes, new reads 41.
+NOT YET ON THE BOARD: s846-s848 (4202dbb + FAST_ACK 0 + the black records,
+75/37.5, worktree sm2-black-4202dbb) are building. PASS = nops 0 and the
+0x06 count stays at 1 over a long soak (tools: scratchpad decode_black.py,
+records G/P/Q as in R752).
+
+THE LOCK: in attract after minutes to ~45 the i960 traps at 0x1868 (three
+captures, 75 and 80 MHz); an OSD reset recovers it. R750: the callx at 0x1860
+went to r5 = 0x1868, loaded by `ld 12(g13), r5` at 0x185C -- a task pointer
+that is wrong DATA (bad load, or the word was overwritten). R748 adds
+m2_cpu_bridge FAST_ACK (1 = R730, the branch default; 0 = R729's registered
+answers). With FAST_ACK 0: s841 ran 50 min with no lock (replaced, not
+failed), s845 soaking. If it holds, FAST_ACK 0 becomes the default (and R730
+needs its own fault found); not yet changed.
+
+Still owed: the valid 80/40 race measurement; a fix for the code cache (R733);
+the menu's flashing boxes under Single buffered (an "Auto" draw method).
+
+## 2026-10-09 (early): ON THE BOARD NOW -- s779, stages 3+4 without the code cache. RACE IT.
+
+s779 = 8fb82e4's RTL (R724 line buffer + R729 two-phase handshake + R730
+same-cycle answers + R731/R732 timing fixes; code cache OFF, data cache 16
+KB). Every clock closes, HDMI +0.463. md5 2a4dd429e0881bb6c12decd0df346356,
+kept on the card as cores/Model2.rbf.s779 (s759 is cores/Model2.rbf.s759).
+Attract: 3D, no black frames in 300 s. The bench says -15% CPI against s759's
+bridge (13.10 -> 11.09 on boot code). WHAT IT NEEDS: a race, Double
+Buffered, with tools/m2-fps.py and the lap timer -- s759 raced at ~29.
+
+STAGE 2 (R728, the 8 KB code cache) HANGS DAYTONA ON ITS BOOT SETTINGS SCREEN
+on the board (s764), every time; with only the data cache halved (s775) it
+boots. No bench reproduces it -- tb_m2_boot never leaves that screen with any
+bridge, even s759's, in 150 M instructions. CC_EN defaults to 0 now (R733).
+Telemetry no longer fits beside stage 2+ (4,192-4,201 LABs of 4,191).
+
+80 / 40 (stage 5): NOT closed. Two rounds (R735, R736): s782-s784 clk_sys
+-0.59..-0.94, then after R735's three fixes s785-s787 -0.50..-0.78 on a
+different set each seed (fill's DSP-absorbed stage, fp_add, UV wrap, the
+MultiPCM's MLABs, the TGP sequencer, jt12...). Several more rounds; 75/37.5
+stays. R731/R732/R735 are committed and are cycle-free at 75 too (they made
+s779 the first build to close HDMI as well). Worktrees sm2-bis-80-* hold the
+80/40 clock edit (pll.v outclk1/3, SYS_MHZ) uncommitted.
+
+## 2026-10-09 (night): BRANCH readahead -- Ben's five, one commit each (bisectable)
+
+Ben, 2026-10-08: "get 1-5 done through the night, commit at each stage, test
+after each one". main is unchanged (the 20261008b release, s759).
+
+  stage  commit   what                                             bench (tb_m2_cpu_real, 100 k instr)
+  1      0f1f6ce  s761 telemetry of s759 (attract): 10.41 CPI,     --
+                  47.7% frame-sync idle, game 56.7 fps (R-entry
+                  pending with the stage results)
+  2      5feba69  R728 CPU-side 8 KB code cache (program ROM);     13.10 (unchanged: boot loop)
+                  data cache 16 -> 8 KB for the M10K
+  3      46ab126  R729 two-phase toggle handshake (R693 re-made)   13.10 -> 12.02
+  4      ea27445  R730 the bridge answers in the cycle it can      12.02 -> 11.08
+                  (combinational bus_ack / bus_rdata)
+  5      0555f60  R731 six 80 MHz paths of ours registered         pixels identical
+         5a1efab  R732 TGP paths; Model 1's 9b72de7; R577 = 9705a10
+Every CPU stage keeps the retired-IP hash a95ee045a6c3424b.
+
+Stage 4 is NOT what was planned (the i960's own sequencing): s751's race says
+the core works only ~12% of samples and already prefetches; the waits are
+the bridge's hand-off (R730).
+
+Board plan: stage 2 alone (s764-s766, worktree sm2-bis-5feba69) for a
+sanity run; stages 3 and 4 as TELEMETRY builds (worktrees sm2-bis-46ab126,
+sm2-bis-ea27445, M2_DEBUG_LITE on in their own qsf) so attract CPI can be
+compared with s761's 10.41 -- attract fps cannot show a CPU gain (the game is
+already at 56.7 fps there; only a race can).
+
+80 / 40: ~45 distinct clk_sys paths under 0.9 ns at 75 on s759. Ours and
+the TGP's are in R731/R732. NOT addressed: the I/O board Z80's firmware RAM
+-> IR (0.21-0.85), fx68k Ir -> nanoAddr (0.51), jt12 (0.30), MultiPCM (0.79),
+fp_add (0.71, shared with the TGP, latency hard-coded), xah -> DSP enable
+(0.79). Model 1 has no exceptions for fx68k / tv80 / jt12 to borrow.
+
+Found: test_m2_raster_fill fails on HEAD too (655 of 152,369); tb_mb86233_regs
+fails 46,966 before and after (rf 0x21 is the FIFO on Model 2); two bridge
+benches modelled a requester that drops its request between clock edges
+(fixed, R730); Model 1's deb6642 (register-sourced rep) is not ported.
+
 ## 2026-10-08 (late): RELEASED Model2_20261008b.rbf = s759. main = readahead.
 
 s759 (d08ba0a: R709 read-ahead, R711, R697/R698/R712, R714-R718 at 75/37.5,

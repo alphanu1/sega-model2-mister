@@ -45,11 +45,22 @@ static const int SCR_W = 496, SCR_H = 384;
 static const int V_TOTAL = 424;
 static int BAND_H = 8;    // the shipped band height
 static long g_texmem_viol = 0;   // R668: a request edge while that port was busy
+static long g_texmem_reads = 0;   // R787: line reads the texel ports made (TEXMEM)
 static bool px_dump = false;   // R542: M2_R3D_PXDUMP, every painted pixel of the last frame
+// R784: M2_R3D_REALCOL -- list mode with the polygons' REAL colours (the
+// engine's, modelled from MAME's palette and translation-table dumps) instead
+// of their numbers, and every textured pixel of the displayed frame compared
+// against MAME's own colour path (colour.txt: its filtered texel's final luma)
+// through the curve M2_R3D_GAMMA selects (0 MAME, 1 Mild, 2 Off). Build with
+// -DR784_OLD to model the engine and the rasteriser as they were before R784.
+static std::vector<uint32_t> g_pxcap;   // 0x10000 | RGB565 per displayed pixel
 static uint64_t frame_hash = 1469598103934665603ull;   // R542: this frame only
 static uint64_t pix_hash = 1469598103934665603ull;   // R539: every painted pixel, all frames
 static long fill_hist[32], walk_busy = 0, cst_hist[8], why_hist[8], fw_hist[32], sw_hist[8];   // R539: fill state per cycle, per frame
 static long top_hits = 0;
+// R769: the colour of every pixel of a captured frame, -1 where the 3D is empty
+static std::vector<int> g_pix;
+static bool g_cap = false;
 static unsigned vbl_bands = 0;
 // CLOCKS PER SCANLINE, AND IT IS A TEST PARAMETER BECAUSE THE FAULT LIVES IN
 // THE RATIO (R225). At 400 the fill is ten times faster than the beam and
@@ -86,6 +97,16 @@ static uint32_t texword(int sh, uint32_t w, uint32_t v) {
   }
   return isb ? (v ^ 0x5555u) : v;
 }
+// R787: built with -DR3D_LW8 (and -GTXLW8=1) a texel line is eight words: the
+// memory models answer its first four with a one-cycle tex_m*_lo, four
+// clk_mem cycles before the acknowledge that carries the last four -- as
+// m2_sdram's eight-word read does -- so a line's last word lands four cycles
+// after a four-word line's would have.
+#ifdef R3D_LW8
+static const bool LW8 = true;
+#else
+static const bool LW8 = false;
+#endif
 static uint64_t texpat_line(uint32_t addr, uint32_t base) {
   if (!g_tex[0].empty()) {
     const int sh = (addr >= g_tbase1) ? 1 : 0;
@@ -337,20 +358,33 @@ int main(int argc, char **argv) {
     // default 8 is far quicker than the board's contended SDRAM.
     static const int TEXLAT = std::getenv("M2_R3D_TEXLAT") ? std::atoi(std::getenv("M2_R3D_TEXLAT")) : 8;
     static const bool TEXMEM0 = std::getenv("M2_R3D_TEXMEM") != nullptr;   // R668
-    if (!TEXMEM0 && d->tex_m_req && tex_wait < 0) tex_wait = TEXLAT;
+    if (!TEXMEM0 && d->tex_m_req && tex_wait < 0) tex_wait = TEXLAT + (LW8 ? 4 : 0);
+    if (!TEXMEM0) {   // R787: the first half, four cycles ahead
+      d->tex_m_lo  = LW8 && tex_wait == 4;
+      d->tex_m2_lo = LW8 && tex2_wait == 4;
+      if (d->tex_m_lo)  d->tex_m_data  = texpat_line(d->tex_m_addr,  d->tex_base0);
+      if (d->tex_m2_lo) d->tex_m2_data = texpat_line(d->tex_m2_addr, d->tex_base0);
+    }
     if (!TEXMEM0 && tex_wait == 0) {
       d->tex_m_ack = 1;
-      d->tex_m_data = texpat_line(d->tex_m_addr, d->tex_base0);
+      d->tex_m_data = texpat_line(d->tex_m_addr + (LW8 ? 4 : 0), d->tex_base0);
     }
-    // R628: ports 3 and 4 answer like port 2 (their own round trip)
-    if (d->tex_m3_req && tex3_wait < 0) tex3_wait = TEXLAT + 6;
-    if (tex3_wait == 0) { d->tex_m3_ack = 1; d->tex_m3_data = texpat_line(d->tex_m3_addr, d->tex_base0); }
-    if (d->tex_m4_req && tex4_wait < 0) tex4_wait = TEXLAT + 6;
-    if (tex4_wait == 0) { d->tex_m4_ack = 1; d->tex_m4_data = texpat_line(d->tex_m4_addr, d->tex_base0); }
-    if (!TEXMEM0 && d->tex_m2_req && tex2_wait < 0) tex2_wait = TEXLAT + 6;
+    // R628: ports 3 and 4 answer like port 2 (their own round trip).
+    // R796: not under TEXMEM, which serves all four; eight-word lines as 1 and 2.
+    if (!TEXMEM0) {
+      d->tex_m3_lo = LW8 && tex3_wait == 4;
+      d->tex_m4_lo = LW8 && tex4_wait == 4;
+      if (d->tex_m3_lo) d->tex_m3_data = texpat_line(d->tex_m3_addr, d->tex_base0);
+      if (d->tex_m4_lo) d->tex_m4_data = texpat_line(d->tex_m4_addr, d->tex_base0);
+    }
+    if (!TEXMEM0 && d->tex_m3_req && tex3_wait < 0) tex3_wait = TEXLAT + 6 + (LW8 ? 4 : 0);
+    if (!TEXMEM0 && tex3_wait == 0) { d->tex_m3_ack = 1; d->tex_m3_data = texpat_line(d->tex_m3_addr + (LW8 ? 4 : 0), d->tex_base0); }
+    if (!TEXMEM0 && d->tex_m4_req && tex4_wait < 0) tex4_wait = TEXLAT + 6 + (LW8 ? 4 : 0);
+    if (!TEXMEM0 && tex4_wait == 0) { d->tex_m4_ack = 1; d->tex_m4_data = texpat_line(d->tex_m4_addr + (LW8 ? 4 : 0), d->tex_base0); }
+    if (!TEXMEM0 && d->tex_m2_req && tex2_wait < 0) tex2_wait = TEXLAT + 6 + (LW8 ? 4 : 0);
     if (!TEXMEM0 && tex2_wait == 0) {
       d->tex_m2_ack = 1;
-      d->tex_m2_data = texpat_line(d->tex_m2_addr, d->tex_base0);
+      d->tex_m2_data = texpat_line(d->tex_m2_addr + (LW8 ? 4 : 0), d->tex_base0);
     }
     d->eval();
     // R615: every real fetch, for the frame differential
@@ -397,26 +431,42 @@ int main(int argc, char **argv) {
       static const int TL = std::getenv("M2_R3D_TEXLAT") ? std::atoi(std::getenv("M2_R3D_TEXLAT")) : 12;
       static const int TJ = std::getenv("M2_R3D_TEXJIT") ? std::atoi(std::getenv("M2_R3D_TEXJIT")) : 0;
       static uint64_t mr = 777;
-      struct Pt { bool req_d = false, busy = false; int cnt = 0, ackc = 0; uint32_t a = 0; uint64_t dat = 0; };
-      static Pt pt[2];
-      for (int k = 0; k < 2; k++) {
+      struct Pt { bool req_d = false, busy = false; int cnt = 0, ackc = 0; uint32_t a = 0; uint64_t dat = 0, dat2 = 0; };
+      // R796: ALL FOUR miss ports (R789's TXNS 4), each its own round trip --
+      // the bench's memory has no shared bus
+      static Pt pt[4];
+      d->tex_m_lo = 0; d->tex_m2_lo = 0; d->tex_m3_lo = 0; d->tex_m4_lo = 0;   // R787: a one-cycle strobe
+      auto setack = [&](int k, int v) { if (k == 3) d->tex_m4_ack = v; else if (k == 2) d->tex_m3_ack = v; else if (k) d->tex_m2_ack = v; else d->tex_m_ack = v; };
+      auto setdat = [&](int k, uint64_t v) { if (k == 3) d->tex_m4_data = v; else if (k == 2) d->tex_m3_data = v; else if (k) d->tex_m2_data = v; else d->tex_m_data = v; };
+      auto setlo  = [&](int k) { if (k == 3) d->tex_m4_lo = 1; else if (k == 2) d->tex_m3_lo = 1; else if (k) d->tex_m2_lo = 1; else d->tex_m_lo = 1; };
+      // R798: ONE DELIVERY A CYCLE ACROSS THE PORTS (LW8), as m2_sdram's
+      // single R557 stage makes them; m2_texel_bl's slot store (one LUT-RAM
+      // write port) relies on it. A port whose half or line is due while
+      // another's is delivered waits a cycle.
+      bool ev_used = false;
+      for (int k = 0; k < 4; k++) {
         Pt &q = pt[k];
-        const bool req = k ? d->tex_m2_req : d->tex_m_req;
-        const uint32_t addr = k ? d->tex_m2_addr : d->tex_m_addr;
-        if (q.ackc > 0 && --q.ackc == 0) { if (k) d->tex_m2_ack = 0; else d->tex_m_ack = 0; }
+        const bool req = k == 3 ? d->tex_m4_req : k == 2 ? d->tex_m3_req : k ? d->tex_m2_req : d->tex_m_req;
+        const uint32_t addr = k == 3 ? d->tex_m4_addr : k == 2 ? d->tex_m3_addr : k ? d->tex_m2_addr : d->tex_m_addr;
+        if (q.ackc > 0 && --q.ackc == 0) setack(k, 0);
         if (req && !q.req_d) {
           if (q.busy) ++g_texmem_viol;
+          ++g_texmem_reads;   // R787
           q.busy = true; q.a = addr; q.dat = texpat_line(addr, d->tex_base0);   // R669: read as issued
+          q.dat2 = texpat_line(addr + 4, d->tex_base0);                          // R787: words 4-7
           mr = mr * 6364136223846793005ull + 1442695040888963407ull;
-          q.cnt = TL + (TJ ? int((mr >> 33) % uint64_t(TJ + 1)) : 0);
+          q.cnt = TL + (TJ ? int((mr >> 33) % uint64_t(TJ + 1)) : 0) + (LW8 ? 4 : 0);
         }
         q.req_d = req;
-        if (q.busy && q.ackc == 0) {
+        const bool ev_due = q.busy && q.ackc == 0 && ((LW8 && q.cnt == 4) || q.cnt == 0);
+        const bool ev_stall = LW8 && ev_due && ev_used;
+        if (ev_due && !ev_stall) ev_used = true;
+        if (q.busy && q.ackc == 0 && !ev_stall) {
+          if (LW8 && q.cnt == 4) { setlo(k); setdat(k, q.dat); }   // R787: the first half, no acknowledge
           if (q.cnt > 0) --q.cnt;
           else {
             q.busy = false; q.ackc = 2;
-            if (k) { d->tex_m2_ack = 1; d->tex_m2_data = q.dat; }
-            else   { d->tex_m_ack = 1;  d->tex_m_data  = q.dat; }
+            setack(k, 1); setdat(k, LW8 ? q.dat2 : q.dat);
           }
         }
       }
@@ -432,11 +482,15 @@ int main(int argc, char **argv) {
       // 10 to every 7 core edges; at 2:1 each clk_mem cycle of latency costs
       // half a core cycle, on the board 0.7 -- and a latency-bound path looks
       // a third faster here than it is.
+      // R787: M2_R3D_RN / M2_R3D_RD set the ratio (clk_mem : core); 10 : 8
+      // is the board's 100 / 80 since R745, the default 10 : 7 its 100 / 70.
       static int acc = 0;
-      acc += 10;
-      if (acc >= 7) { acc -= 7; memedge(); d->clk_mem = 1; d->eval(); d->clk_mem = 0; d->eval(); }
+      static const int RN = std::getenv("M2_R3D_RN") ? std::atoi(std::getenv("M2_R3D_RN")) : 10;
+      static const int RD = std::getenv("M2_R3D_RD") ? std::atoi(std::getenv("M2_R3D_RD")) : 7;
+      acc += RN;
+      if (acc >= RD) { acc -= RD; memedge(); d->clk_mem = 1; d->eval(); d->clk_mem = 0; d->eval(); }
       d->clk = 1; d->scan_clk = 1; d->eval(); d->clk = 0; d->scan_clk = 0; d->eval();
-      if (acc >= 7) { acc -= 7; memedge(); d->clk_mem = 1; d->eval(); d->clk_mem = 0; d->eval(); }
+      if (acc >= RD) { acc -= RD; memedge(); d->clk_mem = 1; d->eval(); d->clk_mem = 0; d->eval(); }
     } else {
     d->clk_mem = 1; d->eval(); d->clk_mem = 0; d->eval();
     d->clk = 1; d->scan_clk = 1; d->eval(); d->clk = 0; d->scan_clk = 0; d->eval();
@@ -446,9 +500,11 @@ int main(int argc, char **argv) {
     if (TEXMEM1) {}
     else if (d->tex_m_ack) { d->tex_m_ack = 0; tex_wait = -1; }
     else if (tex_wait > 0) --tex_wait;
-    if (d->tex_m3_ack) { d->tex_m3_ack = 0; tex3_wait = -1; }
+    if (TEXMEM1) {}   // R796: TEXMEM serves ports 3 and 4 too
+    else if (d->tex_m3_ack) { d->tex_m3_ack = 0; tex3_wait = -1; }
     else if (tex3_wait > 0) --tex3_wait;
-    if (d->tex_m4_ack) { d->tex_m4_ack = 0; tex4_wait = -1; }
+    if (TEXMEM1) {}
+    else if (d->tex_m4_ack) { d->tex_m4_ack = 0; tex4_wait = -1; }
     else if (tex4_wait > 0) --tex4_wait;
     if (TEXMEM1) {}
     else if (d->tex_m2_ack) { d->tex_m2_ack = 0; tex2_wait = -1; }
@@ -632,6 +688,9 @@ int main(int argc, char **argv) {
           pix_hash = (pix_hash ^ (uint64_t(y) << 40 ^ uint64_t(t) << 20 ^ d->scan_col)) * 1099511628211ull;
           frame_hash = (frame_hash ^ (uint64_t(y) << 40 ^ uint64_t(t) << 20 ^ d->scan_col)) * 1099511628211ull;
           if (px_dump) std::printf("PX %d %d %04x\n", ly, t, (unsigned)d->scan_col);   // R542, R682
+          if (px_dump && !g_pxcap.empty() && ly >= 0 && ly < 384 && t >= 0 && t < 496)
+            g_pxcap[ly * 496 + t] = 0x10000u | (unsigned)d->scan_col;   // R784
+          if (g_cap && ly < SCR_H) g_pix[ly * SCR_W + t] = (int)d->scan_col;            // R769
         }
       }
     }
@@ -716,7 +775,7 @@ int main(int argc, char **argv) {
     }
     g_tbase1 = d->tex_base1;
     struct V { double x, y, z, pu, pv; };
-    struct P { int idx; unsigned z, h0, h1, h2, h3; std::vector<V> v; };
+    struct P { int idx; unsigned z, h0, h1, h2, h3, luma; std::vector<V> v; };
     auto load_polys = [&](const std::string &pdir) {
     std::vector<P> polys;
     { FILE *f = std::fopen((pdir + "/polys.txt").c_str(), "r"); char line[8192];
@@ -724,6 +783,7 @@ int main(int argc, char **argv) {
         P p; int win, n, vp[4]; unsigned luma; char *q = line;
         if (std::sscanf(q, "P %d z=%u win=%d h=%x,%x,%x,%x luma=%u vp=%d,%d,%d,%d n=%d",
                         &p.idx, &p.z, &win, &p.h0, &p.h1, &p.h2, &p.h3, &luma, &vp[0], &vp[1], &vp[2], &vp[3], &n) != 13) continue;
+        p.luma = luma;   // R784
         q = std::strstr(q, " n="); q = std::strchr(q + 1, ' ');
         for (int i = 0; i < n && q; i++) { V v; if (std::sscanf(q, " %lf,%lf,%lf,%lf,%lf", &v.x, &v.y, &v.z, &v.pu, &v.pv) != 5) break; p.v.push_back(v); q = std::strchr(q + 1, ' '); }
         polys.push_back(p);
@@ -734,25 +794,94 @@ int main(int argc, char **argv) {
     return polys;
     };
     const std::vector<P> polys = load_polys(dir);
+    // R784: the colour path's tables, and the models of the two ends of it
+    static const bool REALCOL = std::getenv("M2_R3D_REALCOL") != nullptr;
+    static const int GSEL = std::getenv("M2_R3D_GAMMA") ? std::atoi(std::getenv("M2_R3D_GAMMA")) : 0;
+    std::vector<uint16_t> pal, xl; std::vector<uint8_t> lram;
+    auto loadv = [&](const char *name, size_t esz, void *dst, size_t n) {
+      FILE *f = std::fopen((dir + name).c_str(), "rb"); size_t r = 0;
+      if (f) { r = std::fread(dst, esz, n, f); std::fclose(f); }
+      return r == n;
+    };
+    if (REALCOL) {
+      pal.resize(0x2000); xl.resize(0x6000); lram.resize(0x8000);
+      if (!loadv("/palram.bin", 2, pal.data(), pal.size()) || !loadv("/colorxlat.bin", 2, xl.data(), xl.size())
+          || !loadv("/lumaram.bin", 1, lram.data(), lram.size())) { std::printf("  R784: palram/colorxlat/lumaram missing\n"); return 1; }
+      g_pxcap.assign(384 * 496, 0);
+#ifndef R784_OLD
+      d->tex_gamma = GSEL;
+#endif
+    }
+    // m2_geo_engine's gam(): sel 0 MAME (bias 64), 1 Mild (bias 32), 2/3 Off
+    auto gam_rtl = [](int v, int sel) -> int {
+      if (sel & 2) return v;
+      const int bias = (sel & 1) ? 32 : 64;
+      if (v <= bias) return 0;
+      const long p = long(v - bias) * ((sel & 1) ? 74941 : 87496);
+      return (p >> 16) > 255 ? 255 : int(p >> 16);
+    };
+    auto X = [&](int ch, int comp, int l6) { return int(xl[ch * 0x2000 + (comp << 8) + l6] & 0xff); };
+    // the polygon colour the engine emits (RGB888, before the store's 565)
+    auto eng_col = [&](const P &p) -> uint32_t {
+      uint32_t pe = pal[((p.h3 >> 6) & 0x3ff) + 0x1000] & 0x7fff;
+      const bool tx = (p.h0 >> 14) & 1;
+      if (tx && pe == 0) pe = 0x4210;                               // R234's grey
+      const int L = int(p.luma) & 0xff;                             // Texture brightness 100%
+      uint32_t r = 0;
+      for (int ch = 0; ch < 3; ch++) {
+        const int c5 = int(pe >> (5 * ch)) & 0x1f;
+        int v;
+#ifndef R784_OLD
+        if (tx) {
+          const int lm = (L & 0xfc) | 2;
+          const int lt = GSEL == 0 ? lm : (lm * ((GSEL & 2) ? 191 : 219)) >> 8;
+          v = (gam_rtl(X(ch, c5, 32), 0) * lt) >> 8;
+          const int lo = ch == 1 ? 4 : 8;
+          if (GSEL != 0 && c5 != 0 && v < lo) v = lo;
+        } else
+#endif
+          v = gam_rtl(X(ch, c5, L >> 2), GSEL);
+        r |= uint32_t(v) << (8 * (2 - ch));
+      }
+      return r;
+    };
     auto mf16 = [](double x) -> uint16_t { union { float f; uint32_t b; } u; u.f = (float)x; return (uint16_t)(((u.b >> 23) & 0xff) << 8 | ((u.b >> 15) & 0xff)); };
-    auto wide = [](double pu) -> uint32_t { if (!(pu >= 2.0)) return 0; double w = std::floor(pu / 2.0); return w > 32767 ? 32767u : (uint32_t)w; };
+    // R791: m2_geometry rounds u, v to the NEAREST quarter (half up); the R609
+    // offset is taken from the truncated quarter, which is what it compares
+    auto wide = [](double pu) -> uint32_t { if (!(pu >= 1.0)) return 0; double w = std::floor(pu / 2.0 + 0.5); return w > 32767 ? 32767u : (uint32_t)w; };
+    auto widet = [](double pu) -> uint32_t { if (!(pu >= 2.0)) return 0; double w = std::floor(pu / 2.0); return w > 32767 ? 32767u : (uint32_t)w; };
     long nq = 0, nq_refused = 0;
+    // R810: M2_R3D_HOLDFIRST -- the list's FIRST quad is presented while the
+    // store is not collecting (the previous list READY, waiting for its swap)
+    // and HELD, as the clipper holds it, across the frame_start that swaps;
+    // the board's case when a walk overran a vblank (R763). A copy of the
+    // list is collected first to be that READY list.
+    bool hold_next = false; long held_ticks = 0;
     auto push_quad = [&](const P &p, int a, int b, int c, int e, bool last) {
       const int ix[4] = {a, b, c, e};
       int32_t X[4], Y[4]; uint16_t OZ[4]; uint32_t U[4], Vv[4];
-      // R626: M2_R3D_HWXY takes the vertex as the hardware does -- trunc(x),
-      // m2_geo_project's fp_to_int -- and M2_R3D_FRAC adds the quarter pixel
-      // below it (the low two bits of trunc(4x), 0 for x < 0); build with FRB=2
-      static const bool HWXY = std::getenv("M2_R3D_HWXY") || std::getenv("M2_R3D_FRAC");
+      // R626: M2_R3D_HWXY takes the vertex as the hardware did before R756 --
+      // trunc(x), and no quarter. R791: M2_R3D_FRAC is the projector as it
+      // is NOW (R756): q = round(4x) half away from zero, the pixel q >> 2 and
+      // the quarter q & 3, negative x included; build with FRB=2. (It was the
+      // low two bits of trunc(4x), 0 for x < 0, which R756 replaced.)
+      static const bool HWXY = std::getenv("M2_R3D_HWXY") != nullptr;
       static const bool FRAC = std::getenv("M2_R3D_FRAC") != nullptr;
       uint32_t frac = 0;
+      uint32_t Ut[4], Vt[4];
       for (int k = 0; k < 4; k++) {
         const V &v = p.v[ix[k]];
-        if (HWXY) {
+        Ut[k] = widet(v.pu); Vt[k] = widet(v.pv);
+        if (FRAC) {
+          auto q4 = [](double c) -> int32_t {
+            const int64_t a = (int64_t)std::trunc(8.0 * std::fabs(c)); const int32_t m = (int32_t)((a + 1) >> 1);
+            return c < 0 ? -m : m;
+          };
+          const int32_t qx = q4(v.x), qy = q4(v.y);
+          X[k] = qx >> 2; Y[k] = qy >> 2;
+          frac |= ((uint32_t(qy & 3) << 2) | uint32_t(qx & 3)) << (4 * k);
+        } else if (HWXY) {
           X[k] = (int32_t)std::trunc(v.x); Y[k] = (int32_t)std::trunc(v.y);
-          const uint32_t fx = (FRAC && v.x >= 0) ? (uint32_t)(int64_t)std::trunc(v.x * 4.0) & 3u : 0u;
-          const uint32_t fy = (FRAC && v.y >= 0) ? (uint32_t)(int64_t)std::trunc(v.y * 4.0) & 3u : 0u;
-          frac |= ((fy << 2) | fx) << (4 * k);
         } else {
           X[k] = (int32_t)std::lround(v.x); Y[k] = (int32_t)std::lround(v.y);
         }
@@ -760,15 +889,15 @@ int main(int argc, char **argv) {
       }
       // R609: move by a whole number of TWICE the texture's size
       const uint32_t uper = (256u << (p.h0 & 7)) - 1, vper = (256u << ((p.h0 >> 3) & 7)) - 1;
-      uint32_t um = std::min(std::min(U[0], U[1]), std::min(U[2], U[3])) & ~uper & 0x7fff;
-      uint32_t vm = std::min(std::min(Vv[0], Vv[1]), std::min(Vv[2], Vv[3])) & ~vper & 0x7fff;
+      uint32_t um = std::min(std::min(Ut[0], Ut[1]), std::min(Ut[2], Ut[3])) & ~uper & 0x7fff;   // R791: truncated
+      uint32_t vm = std::min(std::min(Vt[0], Vt[1]), std::min(Vt[2], Vt[3])) & ~vper & 0x7fff;
       auto sat13 = [](uint32_t x) { return x > 8191 ? 8191u : x; };
       const uint32_t h0 = p.h0, h1 = p.h1, h2 = p.h2;
       const uint32_t tex = ((h0 >> 14) & 1) | ((h0 & 7) << 1) | (((h0 >> 3) & 7) << 4) | (((h0 >> 6) & 1) << 7)
                          | (((h0 >> 13) & 1) << 8) | (((h0 >> 8) & 1) << 9) | (((h0 >> 9) & 1) << 10) | (((h0 >> 15) & 1) << 11)
                          | (((h2 >> 12) & 1) << 12) | ((h2 & 0x3f) << 13) | (((h2 >> 6) & 0x1f) << 19);
       (void)h1;
-      { int g = 0; d->q_valid = 0; d->eval(); while (!d->q_ready && g++ < 200000) tick(); }
+      if (!hold_next) { int g = 0; d->q_valid = 0; d->eval(); while (!d->q_ready && g++ < 200000) tick(); }
       d->q_valid = 1;
       d->q_x0 = X[0]; d->q_y0 = Y[0]; d->q_x1 = X[1]; d->q_y1 = Y[1];
       d->q_x2 = X[2]; d->q_y2 = Y[2]; d->q_x3 = X[3]; d->q_y3 = Y[3];
@@ -781,8 +910,30 @@ int main(int argc, char **argv) {
       // exactly its polygon's number (a texel scales it otherwise)
       static const bool NOTEX = std::getenv("M2_R3D_NOTEX") != nullptr;
       d->q_tex = NOTEX ? 0u : (tex & 0xffffff); d->q_col = ((uint32_t(p.idx) & 31) << 19) | (((uint32_t(p.idx) >> 5) & 63) << 10); d->q_moire = (tex >> 11) & 1;   // R623
+      if (REALCOL) {   // R784: the real colour, and bit 11 as Model2.sv packs it
+        d->q_col = eng_col(p);
+#ifndef R784_OLD
+        if (!NOTEX) d->q_tex = (tex & 0xfff7ffu) | (((p.h1 & 0xff) == 1) ? 0x800u : 0u);
+#endif
+      }
       d->q_z = 0x3F800000u | (p.z & 0xffff);
       d->q_end = last;
+      if (hold_next) {   // R810: held across the swap, taken on the first edge that sees q_ready
+        hold_next = false;
+        bool taken = false;
+        auto ht = [&]() { if (!taken) { d->eval(); if (d->q_ready) { tick(); taken = true; d->q_valid = 0; return; } ++held_ticks; } tick(); };
+        for (int f = 0; f < 16 && !taken; f++) {
+          d->scan_y = SCR_H; d->scan_x = 0; ht();
+          d->frame_start = 1; ht(); d->frame_start = 0;
+          for (int y = SCR_H; y < V_TOTAL; y++) for (int t = 0; t < TPL; t++) { d->scan_y = y; d->scan_x = 0; ht(); }
+          for (int y = 0; y < SCR_H; y++) for (int t = 0; t < TPL; t++) { d->scan_y = y; d->scan_x = (t < SCR_W) ? t : SCR_W - 1; ht(); }
+        }
+        std::printf("  R810 HOLDFIRST: the first quad held %ld ticks, %s; store count after it %d\n", held_ticks,
+                    taken ? "taken" : "NEVER TAKEN", (int)d->dbg_quads);
+        ++nq;
+        d->q_valid = 0; d->q_end = 0;
+        return;
+      }
       if (!d->q_ready) ++nq_refused;   // R650: a quad the store did not take is LOST
       tick(); ++nq;
       d->q_valid = 0; d->q_end = 0;
@@ -827,6 +978,13 @@ int main(int argc, char **argv) {
                   (int)d->rootp->m2_raster3d__DOT__fb_complete, (int)d->rootp->m2_raster3d__DOT__fill_band);
       g_draws.clear();
     }
+    if (std::getenv("M2_R3D_HOLDFIRST")) {   // R810
+      push_all(polys);
+      { int g = 0; while (d->rootp->m2_raster3d__DOT__pst != 3 && g++ < 2000000) tick(); }
+      std::printf("  R810 HOLDFIRST: the first copy READY (pst %d, q_ready %d)\n", (int)d->rootp->m2_raster3d__DOT__pst, (int)d->q_ready);
+      g_draws.clear();
+      hold_next = true;
+    }
     push_all(polys);
     std::printf("  R615: %ld quads pushed, %ld REFUSED by the store (lost)\n", nq, nq_refused);
     // R657: M2_R3D_DUMPA -- THE FRAME DRAWN WHILE THE NEXT LIST IS COLLECTED.
@@ -857,7 +1015,7 @@ int main(int argc, char **argv) {
       // R650: the draw's own length, in core cycles and in video frames
       for (long w : g_draws) std::printf("  R650 FB draw: %ld core cycles (%.2f video frames at 70 MHz / 57.5 Hz)\n", w, w / 1217391.0);
       if (g_draws.empty()) std::printf("  R650 FB draw: NOT COMPLETE after %d frames\n", pre);
-      if (std::getenv("M2_R3D_TEXMEM")) std::printf("  R668 texel ports: request edges while busy %ld\n", g_texmem_viol);
+      if (std::getenv("M2_R3D_TEXMEM")) std::printf("  R668 texel ports: request edges while busy %ld; R787 line reads %ld\n", g_texmem_viol, g_texmem_reads);
     }
     g_rec = !FBM;   // R650: with the framebuffer the draw above was recorded
     px_dump = std::getenv("M2_R3D_PXDUMP") != nullptr;
@@ -883,6 +1041,42 @@ int main(int argc, char **argv) {
       std::fclose(fa); }
     std::fclose(fo);
     std::printf("  R615: %zu fetches recorded, %ld pixels painted\n", g_fetch.size(), hits);
+    // R784: every textured pixel MAME drew AND this frame painted, against
+    // MAME's colour path through the selected curve, both cut to 565.
+    if (REALCOL) {
+      std::vector<int> own(512 * 512, -1);
+      { FILE *f = std::fopen((dir + "/owners.txt").c_str(), "r"); char ln[256];
+        while (f && std::fgets(ln, sizeof ln, f)) { int y, x, o, tu, tv; if (std::sscanf(ln, "%d %d %d %d %d", &y, &x, &o, &tu, &tv) == 5 && y < 512 && x < 512) own[y * 512 + x] = o; }
+        if (f) std::fclose(f); }
+      std::vector<const P *> byidx;
+      for (const P &p : polys) { if ((int)byidx.size() <= p.idx) byidx.resize(p.idx + 1, nullptr); byidx[p.idx] = &p; }
+      auto curve = [&](int v) -> int {
+        if (GSEL == 0) { const double r = (v - 64.0) * 255.0 / 191.0; return r < 0 ? 0 : int(r); }   // MAME's table
+        return gam_rtl(v, GSEL);
+      };
+      long n = 0, gt16 = 0, gt32 = 0, miss = 0; double sum = 0; int worst = 0;
+      FILE *f = std::fopen((dir + "/colour.txt").c_str(), "r"); char ln[256];
+      while (f && std::fgets(ln, sizeof ln, f)) {
+        int y, x, t, l6, raw;
+        if (std::sscanf(ln, "%d %d %d %d %d", &y, &x, &t, &l6, &raw) != 5 || y >= 384 || x >= 496) continue;
+        const int o = own[y * 512 + x];
+        if (o < 0 || o >= (int)byidx.size() || !byidx[o]) continue;
+        const uint32_t px = g_pxcap[y * 496 + x];
+        if (!(px & 0x10000)) { ++miss; continue; }
+        const uint32_t pe = pal[((byidx[o]->h3 >> 6) & 0x3ff) + 0x1000] & 0x7fff;
+        const int got[3] = { int((px >> 11) & 0x1f) << 3, int((px >> 5) & 0x3f) << 2, int(px & 0x1f) << 3 };
+        int e = 0;
+        for (int ch = 0; ch < 3; ch++) {
+          int ref = curve(X(ch, int(pe >> (5 * ch)) & 0x1f, l6));
+          ref &= (ch == 1) ? 0xfc : 0xf8;
+          e = std::max(e, std::abs(got[ch] - ref));
+        }
+        ++n; sum += e; gt16 += e > 16; gt32 += e > 32; worst = std::max(worst, e);
+      }
+      if (f) std::fclose(f);
+      std::printf("  R784 colour vs MAME (curve %d): %ld textured px, mean %.2f, >16 %.2f%%, >32 %.2f%%, worst %d; %ld MAME px not painted here\n",
+                  GSEL, n, n ? sum / n : 0.0, n ? 100.0 * gt16 / n : 0.0, n ? 100.0 * gt32 / n : 0.0, worst, miss);
+    }
     delete d;
     return 0;
   }
@@ -960,6 +1154,221 @@ int main(int argc, char **argv) {
   CHECK(near(px[3], px[1]), "the frame during which the next list was collected painted %ld, not %ld -- the picture flashes", px[3], px[1]);
   CHECK(near(px[4], px[1]) && near(px[5], px[4]), "list B not drawn steadily: %ld %ld", px[4], px[5]);
   CHECK(d->dbg_dropped == 0, "quads dropped: %d", (int)d->dbg_dropped);
+
+  // R769: THE TYRE. On car select each tyre is a ring of ~32 quads 2-3 px
+  // across over the black wheel well; TINY = 4 refused every one of them and
+  // the background showed through the arch. A ring of 32 such quads in front
+  // of a background square must paint the ring -- every pixel whose centre
+  // (taken at x + 0.5 and at x, either convention) lies inside a ring quad --
+  // at the store's fine threshold. After a list of more than NQ - NQ/8 quads
+  // the next list is tested at TINY = 4: there the ring is refused and the
+  // square shows through (the control: the check can see the fault). The list
+  // after that is fine again. Synthetic quads only.
+  // R776: at coarse only FAR small quads are refused, so the control is a far
+  // copy of the ring; the near ring survives a coarse list.
+  {
+    struct RQ { int x[4], y[4]; uint32_t col, z; };
+    const uint32_t RING = 0xF80000, BACK = 0x0000F8;          // 565: F800, 001F
+    const int RING565 = 0xF800, BACK565 = 0x001F;
+    const int CX = 200, CY = 150;
+    std::vector<RQ> tyre;
+    tyre.push_back(RQ{{CX - 20, CX + 20, CX + 20, CX - 20}, {CY - 20, CY - 20, CY + 20, CY + 20}, BACK, 3000});
+    for (int i = 0; i < 32; i++) {
+      const double a0 = 2 * M_PI * i / 32, a1 = 2 * M_PI * (i + 1) / 32, ri = 9.0, ro = 11.0;
+      RQ q; q.col = RING; q.z = 1000;
+      const double px[4] = {CX + ri * std::cos(a0), CX + ro * std::cos(a0), CX + ro * std::cos(a1), CX + ri * std::cos(a1)};
+      const double py[4] = {CY + ri * std::sin(a0), CY + ro * std::sin(a0), CY + ro * std::sin(a1), CY + ri * std::sin(a1)};
+      for (int k = 0; k < 4; k++) { q.x[k] = (int)std::lround(px[k]); q.y[k] = (int)std::lround(py[k]); }
+      tyre.push_back(q);
+    }
+    auto push_quads = [&](const std::vector<RQ> &qs) {
+      for (size_t i = 0; i < qs.size(); i++) {
+        { int g = 0; d->q_valid = 0; d->eval(); while (!d->q_ready && g++ < 4000000) tick(); }
+        const RQ &q = qs[i];
+        d->q_valid = 1;
+        d->q_x0 = q.x[0]; d->q_y0 = q.y[0]; d->q_x1 = q.x[1]; d->q_y1 = q.y[1];
+        d->q_x2 = q.x[2]; d->q_y2 = q.y[2]; d->q_x3 = q.x[3]; d->q_y3 = q.y[3];
+        d->q_col = q.col; d->q_z = 0x3F800000u | q.z; d->q_moire = 0; d->q_tex = 0; d->q_frac = 0;
+        d->q_u0 = d->q_v0 = d->q_u1 = d->q_v1 = d->q_u2 = d->q_v2 = d->q_u3 = d->q_v3 = 0;
+        d->q_end = (i + 1 == qs.size());
+        tick();
+      }
+      d->q_valid = 0; d->q_end = 0;
+      for (int k = 0; k < 4; k++) tick();
+    };
+    // the pixels the ring must own: centre inside a ring quad at both conventions
+    auto inside = [](const RQ &q, double x, double y) {
+      int sgn = 0;
+      for (int k = 0; k < 4; k++) {
+        const double x0 = q.x[k], y0 = q.y[k], x1 = q.x[(k + 1) & 3], y1 = q.y[(k + 1) & 3];
+        const double c = (x1 - x0) * (y - y0) - (y1 - y0) * (x - x0);
+        if (c == 0) return false;
+        const int s2 = c > 0 ? 1 : -1;
+        if (sgn && s2 != sgn) return false;
+        sgn = s2;
+      }
+      return true;
+    };
+    std::vector<int> must;
+    for (int y = CY - 20; y < CY + 20; y++) for (int x = CX - 20; x < CX + 20; x++)
+      for (size_t i = 1; i < tyre.size(); i++)
+        if (inside(tyre[i], x + 0.5, y + 0.5) && inside(tyre[i], x, y)) { must.push_back(y * SCR_W + x); break; }
+    int qlo = 99, qhi = 0;
+    for (size_t i = 1; i < tyre.size(); i++) {
+      const RQ &q = tyre[i];
+      const int sx = std::max({q.x[0], q.x[1], q.x[2], q.x[3]}) - std::min({q.x[0], q.x[1], q.x[2], q.x[3]});
+      const int sy = std::max({q.y[0], q.y[1], q.y[2], q.y[3]}) - std::min({q.y[0], q.y[1], q.y[2], q.y[3]});
+      qlo = std::min(qlo, std::max(sx, sy)); qhi = std::max(qhi, std::max(sx, sy));
+    }
+    CHECK(qlo >= 2 && qhi < 4, "the ring's quads span %d..%d px, not between the thresholds 2 and 4", qlo, qhi);
+    // draw a list, then show it: returns {ring pixels where they must be, ring pixels anywhere}
+    auto show = [&](const std::vector<RQ> &qs, int *tiny, int *dropped) {
+      push_quads(qs);
+      *tiny = (int)d->dbg_tiny; *dropped = (int)d->dbg_dropped;
+      long h = 0;
+      video_frame(false, &h); video_frame(false, &h);
+      g_pix.assign(SCR_W * SCR_H, -1); g_cap = true;
+      video_frame(true, &h);
+      g_cap = false;
+      int ok = 0, any = 0, back_in_ring = 0;
+      for (int k : must) { if (g_pix[k] == RING565) ++ok; else if (g_pix[k] == BACK565) ++back_in_ring; }
+      for (int v : g_pix) if (v == RING565) ++any;
+      return std::make_pair(ok, std::make_pair(any, back_in_ring));
+    };
+    std::vector<RQ> heavy;   // 2,100 quads of 2 px off the bottom of the screen
+    for (int i = 0; i < 2100; i++) {
+      const int x = (i % 200) * 2, y = 400 + (i / 200) * 3;
+      heavy.push_back(RQ{{x, x + 2, x + 2, x}, {y, y, y + 2, y + 2}, 0xFFFFFF, 500});
+    }
+    auto fine_now = [&]() { return (int)d->rootp->m2_raster3d__DOT__u_store__DOT__fine; };
+    int tiny = 0, drop = 0;
+    const int f1 = fine_now();
+    auto r1 = show(tyre, &tiny, &drop);
+    std::printf("  R769 tyre (fine=%d): %d of %d ring pixels painted by the ring, %d show the background; %d ring-coloured in all; tiny %d\n",
+                f1, r1.first, (int)must.size(), r1.second.second, r1.second.first, tiny);
+    CHECK(f1 == 1, "the store is not at the fine threshold before the tyre");
+    // the annulus is pi (11^2 - 9^2) = 126 px; the rounded vertices and the
+    // both-conventions rule leave a core of about half that which no fill
+    // rule can argue with
+    CHECK(must.size() >= 40, "only %zu pixels are surely inside the ring", must.size());
+    CHECK(r1.second.first >= 100, "the ring painted %d pixels, the annulus is ~126", r1.second.first);
+    CHECK(tiny == 0 && r1.first == (int)must.size(), "tyre at fine: tiny %d, %d of %zu ring pixels painted", tiny, r1.first, must.size());
+    const int f2 = fine_now();
+    auto rh = show(heavy, &tiny, &drop);
+    std::printf("  R769 heavy list of %zu (fine=%d): dropped %d tiny %d; next list fine=%d\n", heavy.size(), f2, drop, tiny, fine_now());
+    CHECK(drop == (int)heavy.size() - 2048, "heavy list at fine: dropped %d, want %d", drop, (int)heavy.size() - 2048);
+    CHECK(rh.second.first == 0, "the heavy list painted ring colour");
+    CHECK(fine_now() == 0, "the list after a heavy one is not coarse");
+    // R776: at coarse a 2-4 px quad is refused only when it is FAR (zval >=
+    // 0x3000). The near tyre (z 1000) keeps every quad after a heavy list...
+    auto r2 = show(tyre, &tiny, &drop);
+    std::printf("  R776 near tyre after the heavy list (coarse): tiny %d, ring pixels %d, background inside the ring %d\n",
+                tiny, r2.second.first, r2.second.second);
+    CHECK(tiny == 0 && r2.first == (int)must.size(),
+          "near tyre at coarse: tiny %d, %d of %zu ring pixels painted", tiny, r2.first, must.size());
+    CHECK(fine_now() == 1, "a light list after the heavy one did not return to fine");
+    // ...and the same ring far away is refused at coarse (the control: the
+    // check can see the cull), and kept again at fine.
+    std::vector<RQ> far_tyre = tyre;
+    far_tyre[0].z = 0x5000;
+    for (size_t i = 1; i < far_tyre.size(); i++) far_tyre[i].z = 0x3000;
+    show(heavy, &tiny, &drop);
+    CHECK(fine_now() == 0, "the list after the second heavy one is not coarse");
+    auto r4 = show(far_tyre, &tiny, &drop);
+    std::printf("  R776 far tyre (coarse): tiny %d, ring pixels %d, background inside the ring %d\n",
+                tiny, r4.second.first, r4.second.second);
+    CHECK(tiny == 32 && r4.second.first == 0 && r4.second.second == (int)must.size(),
+          "far tyre at coarse (the control): tiny %d, ring pixels %d, background in the ring %d of %zu", tiny, r4.second.first, r4.second.second, must.size());
+    auto r5 = show(far_tyre, &tiny, &drop);
+    CHECK(tiny == 0 && r5.first == (int)must.size(), "far tyre at fine: tiny %d, %d of %zu ring pixels painted", tiny, r5.first, must.size());
+    CHECK(fine_now() == 1, "a light list after the heavy one did not return to fine");
+    auto r3 = show(tyre, &tiny, &drop);
+    CHECK(tiny == 0 && r3.first == (int)must.size(), "tyre fine again: tiny %d, %d of %zu ring pixels painted", tiny, r3.first, must.size());
+  }
+
+  // R810: THE WALK'S FIRST QUAD, HELD AT THE STORE WHILE A READY LIST WAITS
+  // FOR ITS SWAP. Every push above waits for q_ready BEFORE raising q_valid,
+  // so no bench had ever presented a quad to a store that was not collecting.
+  // The board does: a walk that starts while the previous list is P_READY
+  // (it overran a vblank, R763) is held by the clipper with its first quad on
+  // q_valid, and q_ready rises in the cycle after the swap -- the cycle the
+  // store's clear lands (swap_d). That quad was taken and cleared: Daytona's
+  // GAME OVER draws its "G" as polygon 0 of every list (MAME walks 8881-9301),
+  // and the board showed GAME OVER without it. List A is a background square;
+  // list B is a red quad (presented and HELD before the swap, as the clipper
+  // holds it) then the same square. The red quad must be drawn. The control
+  // (the last phase) pushes the red quad the ordinary way, after the swap.
+  {
+    struct HQ { int x0, y0, x1, y1; uint32_t col, z; };
+    const HQ back = {100, 200, 300, 300, 0x0000F8, 3000};    // 565 001F
+    const HQ red  = {16, 224, 60, 269, 0xF80000, 600};       // 565 F800, the G's box, nearest
+    auto setq = [&](const HQ &q, bool end) {
+      d->q_x0 = q.x0; d->q_y0 = q.y1; d->q_x1 = q.x0; d->q_y1 = q.y0;
+      d->q_x2 = q.x1; d->q_y2 = q.y0; d->q_x3 = q.x1; d->q_y3 = q.y1;
+      d->q_col = q.col; d->q_z = 0x3F800000u | q.z; d->q_moire = 0; d->q_tex = 0; d->q_frac = 0;
+      d->q_u0 = d->q_v0 = d->q_u1 = d->q_v1 = d->q_u2 = d->q_v2 = d->q_u3 = d->q_v3 = 0;
+      d->q_end = end;
+    };
+    auto push1 = [&](const HQ &q, bool end) {
+      { int g = 0; d->q_valid = 0; d->eval(); while (!d->q_ready && g++ < 4000000) tick(); }
+      setq(q, end); d->q_valid = 1; tick();
+      d->q_valid = 0; d->q_end = 0;
+    };
+    // one video frame whose ticks complete a HELD quad's handshake: taken on
+    // the first edge that sees q_ready, then q_valid drops (the clipper's pop)
+    bool held = false; long held_ticks = 0;
+    auto htick = [&]() {
+      if (held) { d->eval(); if (d->q_ready) { tick(); held = false; d->q_valid = 0; return; } ++held_ticks; }
+      tick();
+    };
+    auto held_frame = [&](bool fs) {
+      d->scan_y = SCR_H; d->scan_x = 0; htick();
+      d->frame_start = fs; htick(); d->frame_start = 0;
+      for (int y = SCR_H; y < V_TOTAL; y++) for (int t = 0; t < TPL; t++) { d->scan_y = y; d->scan_x = 0; htick(); }
+      for (int y = 0; y < SCR_H; y++) for (int t = 0; t < TPL; t++) { d->scan_y = y; d->scan_x = (t < SCR_W) ? t : SCR_W - 1; htick(); }
+    };
+    auto red_px = [&]() {
+      long h = 0;
+      for (int k = 0; k < 4; k++) video_frame(false, &h);   // B swapped in, drawn and (FB) published
+      g_pix.assign(SCR_W * SCR_H, -1); g_cap = true;
+      video_frame(true, &h);
+      g_cap = false;
+      int n = 0;
+      for (int y = red.y0 + 2; y < red.y1 - 2; y++) for (int x = red.x0 + 2; x < red.x1 - 2; x++) n += g_pix[y * SCR_W + x] == 0xF800;
+      return n;
+    };
+    const int want = (red.y1 - red.y0 - 4) * (red.x1 - red.x0 - 4);
+    // phases 0-2: held across the swap after 0, 3 and 30 video frames with
+    // no frame_start (the walk waits that long, as under R652's hold);
+    // phase 3: the control
+    const int hold_frames[3] = {0, 3, 30};
+    for (int phase = 0; phase < 4; phase++) {
+      const bool ctl = (phase == 3);
+      push1(back, true);                      // list A
+      { int g = 0; while (d->rootp->m2_raster3d__DOT__pst != 3 && g++ < 200000) tick(); }   // P_READY
+      const bool ready_wait = d->rootp->m2_raster3d__DOT__pst == 3 && !d->q_ready;
+      if (!ctl) {
+        CHECK(ready_wait, "R810: list A is not READY, or the store is collecting (pst %d q_ready %d)",
+              (int)d->rootp->m2_raster3d__DOT__pst, (int)d->q_ready);
+        setq(red, false); d->q_valid = 1; held = true; held_ticks = 0;   // B's first quad, HELD
+        for (int f = 0; f < hold_frames[phase]; f++) held_frame(false);
+        CHECK(held, "R810: the held quad was taken with no frame_start");
+        for (int f = 0; f < 8 && held; f++) held_frame(true);
+        CHECK(!held, "R810: the held quad was never taken");
+      } else {
+        long h = 0;
+        for (int f = 0; f < 8 && d->rootp->m2_raster3d__DOT__pst != 0; f++) video_frame(false, &h);
+        push1(red, false);                    // the control: B's first quad after the swap
+      }
+      const int c0 = (int)d->dbg_quads;
+      push1(back, true);
+      const int n = red_px();
+      std::printf("  R810 %s: held %ld ticks, list B's count after its first quad %d (want 1), red quad %d of %d px\n",
+                  ctl ? "control (pushed after the swap)" : "first quad held across the swap", ctl ? 0L : held_ticks, c0, n, want);
+      CHECK(c0 == 1, "R810 %s: list B's count after its first quad is %d", ctl ? "control" : "held", c0);
+      CHECK(n == want, "R810 %s: the first quad of list B painted %d of %d px", ctl ? "control" : "held", n, want);
+    }
+  }
   std::printf("m2_raster3d: checks=%d fails=%d\n", checks, fails);
   std::printf(fails ? "FAIL\n" : "PASS\n");
   delete d;

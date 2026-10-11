@@ -39,8 +39,23 @@
     "**/obj_*/**": true,
     "**/db/**": true,
     "**/incremental_db/**": true,
-    "**/output_files/**": true
+    "**/output_files/**": true,
+    "**/build/**": true,
+    "**/sm2-builds/**": true
   },
+
+  // sm2-builds/ holds one git worktree per seed sweep or measurement build:
+  // 25+ checkouts of the same RTL plus their Quartus databases. Kept out of
+  // search (every hit would appear 25 times) and out of the repository scan
+  // (each worktree would show up in Source Control as a repository of its own).
+  "search.exclude": {
+    "**/sm2-builds/**": true
+  },
+  "git.repositoryScanIgnoredFolders": [
+    "node_modules",
+    "sm2-builds",
+    "build"
+  ],
 
   "[systemverilog]": {
     "editor.insertSpaces": true,

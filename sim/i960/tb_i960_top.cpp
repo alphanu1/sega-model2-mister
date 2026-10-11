@@ -35,6 +35,11 @@ std::map<uint32_t,uint32_t> mem;
 uint64_t fpwrites = 0, fpany = 0;
 uint32_t exec_ip = 0, exec_insn = 0;   // the instruction just retired
 uint64_t checks = 0, fails = 0, ticks = 0, retires = 0;
+int lat_max = 0, lat_wait = 0;                // +lat=N, see tick()
+bool lat_busy = false;
+uint32_t lat_addr = 0;
+uint64_t lat_moved = 0;
+std::mt19937 lat_rng(7);
 const int MAX_REPORT = 10;
 
 // Cycles spent in each sequencer state. Measuring before optimising, because
@@ -200,7 +205,30 @@ void tick() {
     if (ts_now == 1)                 ++ic_fill_cyc;          // waiting on a fill
     ts_prev = ts_now;
   }
-  if (dut->bus_req) {
+  // +lat=N: hold each bus access 0..N cycles before acknowledging it. Every
+  // other mode acks in the cycle it is asked, so the I-cache is never busy
+  // when the front end issues -- and a cache answer that arrives LATE, after
+  // the sequencer has moved on to another address, never happens here. On the
+  // board it does: the lock R811 caught was a prefetch's delayed answer taken
+  // as the return target's instruction. The address is latched at the first
+  // cycle of a request and must not move before the ack (the bridge latches it).
+  bool ack_now = dut->bus_req;
+  if (!dut->rst_n) lat_busy = false;   // a reset abandons any access
+  if (lat_max && dut->bus_req && dut->rst_n) {
+    if (!lat_busy) {
+      lat_busy = true;
+      lat_wait = int(lat_rng() % uint32_t(lat_max + 1));
+      lat_addr = dut->bus_addr & ~3u;
+    } else if ((dut->bus_addr & ~3u) != lat_addr && lat_moved++ < 4) {
+      std::printf("  [LAT] bus address moved %08x -> %08x before its ack\n",
+                  lat_addr, dut->bus_addr & ~3u);
+      ++fails;
+    }
+    ack_now = (lat_wait == 0);
+    if (lat_wait) --lat_wait;
+    if (ack_now) lat_busy = false;
+  } else if (!dut->bus_req) lat_busy = false;
+  if (ack_now) {
     const uint32_t a = dut->bus_addr & ~3u;
     if (bus_probe && a >= 0x800) {
       auto i2 = mem.find(a);
@@ -458,6 +486,7 @@ int main(int argc, char **argv) {
     if (!std::strcmp (argv[i], "+itrace"))     itrace      = true;
     if (!std::strcmp (argv[i], "+strictcov"))  strictcov   = true;
     if (!std::strncmp(argv[i], "+seed=", 6))   seed  = std::strtoull(argv[i]+6, nullptr, 10);
+    if (!std::strncmp(argv[i], "+lat=", 5))    lat_max = std::atoi(argv[i]+5);
     // Program length is the WORKING SET, and the working set is what decides
     // whether cache size matters. At the 60-instruction default the footprint
     // is 240 bytes and fits in any cache, which is why an 8x LINES sweep
@@ -868,7 +897,12 @@ int main(int argc, char **argv) {
     // record down, which it did above.
     dut->rst_n = 1; tick();
     // Let the three boot reads complete before the reference is started.
-    for (int g = 0; g < 200 && dip() != PROG_BASE; ++g) tick();
+    for (int g = 0; g < 200 + 64 * lat_max && dip() != PROG_BASE; ++g) tick();
+    // R768: and the I-cache's reset sweep (LINES cycles: the valid bits live in
+    // its tag RAM now). The core issues its first fetch -- the acceptance the
+    // windows below count from -- only once the cache is free; starting the
+    // reference before that closed window 0 on the first acceptance itself.
+    for (int g = 0; g < 4000 && dut->rootp->i960_top__DOT__u_icache__DOT__state == 3; ++g) tick();
     // CHECK THE BOOT ACTUALLY HAPPENED. Arriving at PROG_BASE proves only that
     // the IP is right, and it would be right by accident if the walk had not run
     // at all and something else had set it. SAT and PRCB have distinctive values
@@ -1042,7 +1076,7 @@ int main(int argc, char **argv) {
     // nothing accepted. Then window 0 ended at instruction 0's ACCEPTANCE
     // rather than after it executed, and the module read one instruction
     // behind the reference. Wait for the acceptance itself.
-    for (int g = 0; g < 200 && dut->dbg_acc_cnt == 0; ++g) tick();
+    for (int g = 0; g < 200 + 64 * lat_max && dut->dbg_acc_cnt == 0; ++g) tick();
     checking = true; ++gate_arms;
 
   // Self-test of the FP-register plumbing, once. Write a known value into the
@@ -1151,7 +1185,7 @@ int main(int argc, char **argv) {
       // module leaves T_FETCH in the same cycle it accepts, so the boundary
       // test was false exactly when the count said stop.
       const uint32_t acc_before = dut->dbg_acc_cnt;
-      while (guard++ < 400 && !dut->trap && dut->dbg_acc_cnt == acc_before) {
+      while (guard++ < 400 + 64 * lat_max && !dut->trap && dut->dbg_acc_cnt == acc_before) {
         if (probe)
           std::printf("        ts=%2d req=%d done=%d busy=%d fp_a=%016llx "
                       "sqrt=%d valid=%d dstlit=%d fpr2=%016llx\n",
@@ -1167,7 +1201,7 @@ int main(int argc, char **argv) {
         tick();
       }
       if (dut->trap) break;
-      if (guard >= 400) { std::printf("STALL at IP %08x\n", ip_before); ++fails; break; }
+      if (guard >= 400 + 64 * lat_max) { std::printf("STALL at IP %08x\n", ip_before); ++fails; break; }
       // NO EXTRA TICK. It used to be needed because the window closed when the
       // IP changed, which is the execute state's own edge -- `we` is registered
       // there, so the register write had not landed yet and one more tick was

@@ -106,7 +106,24 @@ module m2_raster_fill #(
   // (frame 1000: 59 pixels of row 212 to the wrong one; 1.3-3.1% of opaque
   // pixels across frames 1000/4000/9000). 1 walks the edges on the quarter-
   // pixel vertices (FRB 2, which it requires) by MAME's rule. 0 is Model 1.
-  parameter bit M2COV = 1'b0
+  parameter bit M2COV = 1'b0,
+  // R791: FRACTION BITS OF u/z AND v/z. qu/qv held u/z as a 13-bit INTEGER
+  // of quarter-texels, (u * ooz) >> 15 truncated, and one unit of that is
+  // 2^15 / ooz quarter-texels at a pixel -- at the far corner of a road
+  // polygon 5.7x deeper than its near one (attract, MAME frame 8780), 1.4 to
+  // 2.8 TEXELS a unit. The plane through the truncated corners tilts the near
+  // end of the road by a fraction of a texel, which at ~2.6 pixels a texel is
+  // several pixels -- and the residue is new every frame, so the road's
+  // texture judders (measured on 24 consecutive MAME frames: 6.8 px mean
+  // displacement, 2.6 px mean frame-to-frame jump; 1.7 px / 0.8 px at 4).
+  // UZF carries u/z and v/z with this many more bits, in registers: qu/qv are
+  // 13 + UZF wide. The gradients come out of the same divide in the scaled
+  // units, so they gain UZF fraction bits too (8.8 was R286's choice, sized in
+  // TEXELS -- the 2^15 / ooz factor and the magnification were not in it).
+  // The u/v span values are (u/z) << 18 for every UZF: 18 - UZF fraction bits
+  // over 13 + UZF integer ones, so a 32-bit signed value always holds them.
+  // 0 is the old precision (the representation differs; the values do not).
+  parameter int unsigned UZF = 4
 ) (
   input  logic               clk,
   input  logic               rst_n,
@@ -145,10 +162,12 @@ module m2_raster_fill #(
   output logic signed [15:0] span_x1,
   output logic [23:0]        span_col,
   output logic               span_moire,
-  // R274: the span's texture, as a starting coordinate and a per-pixel step,
-  // both 16.16 in texels. The consumer walks u += span_dudx a pixel.
+  // R274: the span's texture, as a starting coordinate and a per-pixel step.
+  // R791: u/z and v/z (quarter-texels, scaled as below) times 2^18: (13 +
+  // UZF).(18 - UZF) in units of 2^-UZF. The consumer walks u += span_dudx.
   output logic signed [31:0] span_u, span_v,
-  // 8.8 texels a pixel; the span walk shifts it up to its own 16.16.
+  // 16.8 in units of 2^-UZF of u/z; the span walk shifts it up to its own
+  // (18 - UZF) fraction bits.
   output logic signed [23:0] span_dudx, span_dvdx,     // R618: 16.8, was 8.8
   // R337: the perspective span. u and v above are u/z and v/z now; these carry
   // 1/z and its gradient, and `span_oshift` is the per-quad scale that
@@ -244,6 +263,8 @@ module m2_raster_fill #(
   endfunction
   localparam logic signed [8:0] NET0 = (FRB == 0) ? 9'sd9 : 9'sd11;   // 8.8, and the 4 undone
   localparam int unsigned BPS = (FRB == 0) ? 8 : 6;
+  // R791: the same products into the u/v planes' UVS fraction bits
+  localparam int unsigned BPS_UV = BPS + (18 - UZF) - 16;
   logic signed [15:0] sy [0:3];
   logic [23:0]        col;
   logic               moire;
@@ -313,17 +334,28 @@ module m2_raster_fill #(
   // R337: AFTER NORMALISATION qu AND qv HOLD u/z AND v/z, not u and v. The raw
   // coordinate is never wanted again, so reusing these arrays costs nothing
   // where keeping both would be ~200 ALM of registers.
-  logic [12:0]        qu [0:3], qv [0:3];
+  // R791: 13 + UZF bits once rewritten as u/z (the raw u in the low 13 first).
+  localparam int unsigned UW  = 13 + UZF;
+  localparam int unsigned UW1 = UW + 1;            // a signed difference of two
+  localparam int unsigned UVS = 18 - UZF;          // the u/v plane values' fraction bits
+  logic [UW-1:0]      qu [0:3], qv [0:3];
   // 1/z on a scale common to the quad: the largest of the four fills bit 15.
   logic [15:0]        qoz [0:3];
   logic [1:0]         oz_i;              // which vertex the normaliser is on
   logic [7:0]         oz_emax;           // largest exponent of the four, latched
+  // R731: S_OZ's first cycle only computes oz_emax, from the latched qoz --
+  // off the INPUTS at acceptance it was m2_quad_store|vtx_r -> oz_emax, 0.735
+  // ns at 75 MHz (s759), short of 80. Every 5-bit pf_st is taken, so a flag
+  // rather than a state; one cycle per textured quad.
+  logic               oz_pre;
 
   // R337: the four exponents and the largest, combinational off the INPUTS
   // because emax has to be known before the first vertex is rewritten.
-  wire [7:0] oze01_c = (in_oz1[15:8] > in_oz0[15:8]) ? in_oz1[15:8] : in_oz0[15:8];
-  wire [7:0] oze23_c = (in_oz3[15:8] > in_oz2[15:8]) ? in_oz3[15:8] : in_oz2[15:8];
-  wire [7:0] oz_emax_c = (oze23_c > oze01_c) ? oze23_c : oze01_c;
+  // R731: now off the latched copies, in S_OZ's first cycle (oz_pre). They
+  // are qoz exactly as accepted: nothing rewrites qoz before stage two.
+  wire [7:0] oze01_q = (qoz[1][15:8] > qoz[0][15:8]) ? qoz[1][15:8] : qoz[0][15:8];
+  wire [7:0] oze23_q = (qoz[3][15:8] > qoz[2][15:8]) ? qoz[3][15:8] : qoz[2][15:8];
+  wire [7:0] oz_emax_q = (oze23_q > oze01_q) ? oze23_q : oze01_q;
 
   // One minifloat to the quad's common fixed scale. The implicit 1 is restored,
   // the mantissa shifted up so the largest lands on bit 15, and the difference
@@ -410,13 +442,13 @@ module m2_raster_fill #(
   wire signed [15:0] pf_ay = p4(sy[fb], sf[fb][3:2]) - p4(sy[fa], sf[fa][3:2]);
   wire signed [15:0] pf_bx = p4(sx[fc], sf[fc][1:0]) - p4(sx[fa], sf[fa][1:0]);
   wire signed [15:0] pf_by = p4(sy[fc], sf[fc][3:2]) - p4(sy[fa], sf[fa][3:2]);
-  wire signed [15:0] pf_u1 = 16'({3'd0, qu[fb]}) - 16'({3'd0, qu[fa]});
-  wire signed [15:0] pf_u2 = 16'({3'd0, qu[fc]}) - 16'({3'd0, qu[fa]});
-  wire signed [15:0] pf_v1 = 16'({3'd0, qv[fb]}) - 16'({3'd0, qv[fa]});
+  wire signed [UW:0] pf_u1 = UW1'({1'b0, qu[fb]}) - UW1'({1'b0, qu[fa]});
+  wire signed [UW:0] pf_u2 = UW1'({1'b0, qu[fc]}) - UW1'({1'b0, qu[fa]});
+  wire signed [UW:0] pf_v1 = UW1'({1'b0, qv[fb]}) - UW1'({1'b0, qv[fa]});
   // R337: 1/z's, which fit 16-bit signed because oz_norm caps them at bit 14.
   wire signed [15:0] pf_o1 = 16'(qoz[fb]) - 16'(qoz[fa]);
   wire signed [15:0] pf_o2 = 16'(qoz[fc]) - 16'(qoz[fa]);
-  wire signed [15:0] pf_v2 = 16'({3'd0, qv[fc]}) - 16'({3'd0, qv[fa]});
+  wire signed [UW:0] pf_v2 = UW1'({1'b0, qv[fc]}) - UW1'({1'b0, qv[fa]});
 
   // R638: THE SCREEN DIFFERENCES, REGISTERED FOR THE NUMERATORS. R626's
   // quarter-pixel positions put p4() and the fb/fc select in front of the
@@ -436,7 +468,9 @@ module m2_raster_fill #(
   // R727: and the texture differences, for the same reason (s752: qu -> nxu
   // -0.519 at 75 MHz). Same argument: qu/qv/qoz last change in the final
   // S_OZ cycle and pf_second two states before S_PF_N reads these.
-  logic signed [15:0] pr_u1, pr_u2, pr_v1, pr_v2, pr_o1, pr_o2;
+  // R791: UW + 1 bits signed (18 at UZF 4) -- still an 18x19 DSP operand.
+  logic signed [UW:0] pr_u1, pr_u2, pr_v1, pr_v2;
+  logic signed [15:0] pr_o1, pr_o2;
   always_ff @(posedge clk) begin
     pr_ax <= pf_ax; pr_ay <= pf_ay; pr_bx <= pf_bx; pr_by <= pf_by;
     pr_u1 <= pf_u1; pr_u2 <= pf_u2; pr_v1 <= pf_v1; pr_v2 <= pf_v2;
@@ -578,12 +612,12 @@ module m2_raster_fill #(
   logic               oz_w_v, oz_last, b_prod;
   logic [1:0]         oz_w;
   logic [15:0]        oz_n;
-  logic [12:0]        oz_u, oz_v;
+  logic [12:0]        oz_u, oz_v;   // the raw u, v: 13 bits
   logic signed [31:0] bp_ux, bp_uy, bp_vx, bp_vy, bp_ox, bp_oy;
   logic signed [31:0] bh_u, bh_v, bh_o;   // R616: half a pixel of each plane, both axes
-  logic [12:0]        bq_u, bq_v;
+  logic [UW-1:0]      bq_u, bq_v;   // R791
   logic [15:0]        bq_o;
-  logic         [1:0] nrm_wait;   // R466/R599: four cycles, the recip takes four
+  logic         [2:0] nrm_wait;   // R466/R599/R731: five cycles, the recip takes five
   logic [1:0] pfn_wait;   // R461/R594: S_PF_N takes three cycles: abs, encode, shift
   logic signed [31:0] mul_n;
   logic        [5:0]  mul_z;
@@ -617,6 +651,23 @@ module m2_raster_fill #(
     pf_abs = n[31] ? (~n + 32'd1) : n;
   endfunction
   logic [31:0] a_nxu, a_nyu, a_nxv, a_nyv, a_nxo, a_nyo;   // R584
+  // R735: AND THE COUNT IN TWO HALVES. clz32 was one cycle (s784 at 80 MHz:
+  // a_nyu -> nyu_z -0.737, a_nyo -> nyo_z). Each 16-bit half is counted on
+  // nrm_wait 1 and the two combined on 2; the first reader is the state's
+  // last cycle (4), so no cycle is added and the counts are the same numbers.
+  function automatic logic [4:0] clz16(input logic [15:0] x);
+    logic [4:0] n;
+    begin
+      n = 5'd16;
+      for (int i = 15; i >= 0; i--) if (x[i] && n == 5'd16) n = 5'(15 - i);
+      clz16 = n;
+    end
+  endfunction
+  // {top half's count, bottom half's count}, each 0..16
+  logic [4:0] h_nxu, l_nxu, h_nyu, l_nyu, h_nxv, l_nxv, h_nyv, l_nyv, h_nxo, l_nxo, h_nyo, l_nyo;
+  function automatic logic [5:0] clz_join(input logic [4:0] h, input logic [4:0] l);
+    clz_join = (h == 5'd16) ? 6'(6'd16 + 6'(l)) : 6'(h);
+  endfunction
 
   function automatic logic [5:0] pf_clz(input logic signed [31:0] n);
     logic [31:0] a;
@@ -725,8 +776,8 @@ module m2_raster_fill #(
   logic [23:0]        s1_col;
   wire                s1_adv  = s1_valid && (!span_valid || span_ready);
   wire                s1_free = !s1_valid || s1_adv;
-  wire signed [31:0] emit_u  = uv_at(base_u, dudx, dudy, s1_cl, s1_y);
-  wire signed [31:0] emit_v  = uv_at(base_v, dvdx, dvdy, s1_cl, s1_y);
+  wire signed [31:0] emit_u  = uv_at_uv(base_u, dudx, dudy, s1_cl, s1_y);   // R791
+  wire signed [31:0] emit_v  = uv_at_uv(base_v, dvdx, dvdy, s1_cl, s1_y);
   wire signed [31:0] emit_o  = uv_at(base_o, dodx, dody, s1_cl, s1_y);   // R337
 
   logic               pf_a, pf_b;        // the two plane-fit divides, back
@@ -752,6 +803,20 @@ module m2_raster_fill #(
       gxp = gx * x;
       gyp = gy * y;
       uv_at = base + (gxp <<< 8) + (gyp <<< 8);
+    end
+  endfunction
+  // R791: the same for u/z and v/z, whose values carry UVS fraction bits
+  // rather than 16 -- the 8-fraction-bit products shift up by UVS - 8.
+  function automatic logic signed [31:0] uv_at_uv(input logic signed [31:0] base,
+                                                  input logic signed [23:0] gx,
+                                                  input logic signed [23:0] gy,
+                                                  input logic signed [15:0] x,
+                                                  input logic signed [15:0] y);
+    logic signed [31:0] gxp, gyp;
+    begin
+      gxp = gx * x;
+      gyp = gy * y;
+      uv_at_uv = base + (gxp <<< (UVS - 8)) + (gyp <<< (UVS - 8));
     end
   endfunction
   logic [2:0]         ps1m1, ps2p1;
@@ -826,28 +891,60 @@ module m2_raster_fill #(
   // accumulate (s319: -> xa, -0.04 ns). The low 32 bits are unchanged.
   logic signed [16:0] mul_delta;
   logic signed [31:0] mul_sl;
-  logic signed [48:0] mul_prod;
-  always_comb mul_prod = mul_delta * mul_sl;
   // R631: THE PRODUCT IS REGISTERED BEFORE IT IS ADDED. 17 x 32 then a 32-bit
   // add in one 70 MHz cycle was s410's failing path (mul_sl -> xa/xb[28..31],
   // -0.230), and bit 31 is the sign of every edge that starts left of the
   // screen: on the board, streaks across the picture. S_FS_MULA and
   // S_FS_MULB each take two cycles now (mul_w), twice per clipped segment.
   logic signed [31:0] mul_pr;
-  logic               mul_w;
+  logic [1:0]         mul_w;   // R740: three cycles a multiply, not two
+  // R740: AND THE MULTIPLY IN TWO HALVES. A 17 x 32 product is two DSPs and
+  // an adder in one cycle (s788 at 80 MHz: mul_sl -> mul_pr -0.745). The
+  // halves are 17 x 16 each -- one DSP apiece -- registered, then summed into
+  // mul_pr: the low 32 bits of delta * sl are delta * sl[15:0] (unsigned) plus
+  // (delta * sl[31:16] (signed)) << 16; checked on 1,000,000 pairs with every
+  // extreme. One cycle more on each of S_FS_MULA / MULB.
+  logic signed [33:0] mul_plo;
+  logic signed [32:0] mul_phi;
+  // declared operands, not $signed({..}) inline (R662's Quartus 17.0 fold)
+  wire  signed [16:0] mul_sl_lo = {1'b0, mul_sl[15:0]};
+  wire  signed [15:0] mul_sl_hi = mul_sl[31:16];
 
   // ------------------------------------------------------- vertex selection
   // Tournaments, arranged so the lowest index wins every tie. MAME scans
   // linearly with a strict comparison, which has the same effect, and the tie
   // rule decides which vertex a degenerate quad starts from.
   logic [1:0] pmin01, pmin23, pmin_c, pmax01, pmax23, pmax_c;
+  // R735: THE FIRST ROUND AT ACCEPTANCE. At 80 MHz sy -> the two rounds ->
+  // symin failed (s784: -0.647, 8 endpoints; sy -> pmin_r -0.189). The four
+  // first-round comparisons are made from the INPUTS as the quad is latched
+  // (they are the same y the registers then hold), so S_MINMAX does the final
+  // round only. Nothing changes sy/sf between acceptance and S_MINMAX, which
+  // is entered from acceptance alone. The extended y is a concatenation,
+  // {y[13:0], fy}, which is what (y <<< 2) + fy is in sixteen bits -- no
+  // signed'() around a sum (R662).
+  logic m01_r, m23_r, x01_r, x23_r;
+  // R740: and the pairs' winning VALUES with them, so the final round is one
+  // compare and a 2:1 select (s788 at 80 MHz: m01_r -> symin -0.367, 11):
+  // lo01_v == sye[pmin01] and so on, the same y as accepted.
+  logic signed [15:0] lo01_v, lo23_v, hi01_v, hi23_v;
+  // R743: and those values formed in S_MINMAX's first cycle (mm_pre) from the
+  // latched sye and the acceptance's compare bits, not at acceptance -- there
+  // they lengthened the store's output -> fill path (s799 at 80 MHz: vtx_r ->
+  // hi01_v -0.489). One cycle more per quad.
+  logic               mm_pre;
+  wire  m_fin = lo23_v < lo01_v;   // pmin23 strictly lower: the tie goes to 0/1
+  wire  x_fin = hi23_v > hi01_v;
+  function automatic logic signed [15:0] ye_in(input logic signed [15:0] y, input logic [1:0] f);
+    ye_in = M2COV ? $signed({y[13:0], f}) : y;
+  endfunction
   always_comb begin
-    pmin01 = (sye[1] < sye[0]) ? 2'd1 : 2'd0;   // R658: on the edge y
-    pmin23 = (sye[3] < sye[2]) ? 2'd3 : 2'd2;
-    pmin_c = (sye[pmin23] < sye[pmin01]) ? pmin23 : pmin01;
-    pmax01 = (sye[1] > sye[0]) ? 2'd1 : 2'd0;
-    pmax23 = (sye[3] > sye[2]) ? 2'd3 : 2'd2;
-    pmax_c = (sye[pmax23] > sye[pmax01]) ? pmax23 : pmax01;
+    pmin01 = m01_r ? 2'd1 : 2'd0;   // R658: on the edge y
+    pmin23 = m23_r ? 2'd3 : 2'd2;
+    pmin_c = m_fin ? pmin23 : pmin01;   // R740
+    pmax01 = x01_r ? 2'd1 : 2'd0;
+    pmax23 = x23_r ? 2'd3 : 2'd2;
+    pmax_c = x_fin ? pmax23 : pmax01;   // R740
   end
 
   // R301: THE TOURNAMENT'S ANSWER, LATCHED. Measured on build/perf2/s12, the
@@ -918,17 +1015,33 @@ module m2_raster_fill #(
     if (M2COV) begin
       // R658: sorted per row as MAME does, [round(lo), round(hi)) inclusive-ended
       // rounding is monotonic, so sorting the rounded values is the same thing
+      // R739: AND THE CLAMPS BESIDE THE SORT, NOT AFTER IT. In series --
+      // compare, select, -1, clamp, compare -- this was the 80 MHz path into
+      // stage 1 and the DSP's enable (s785: xbh -> Mult1 ENA_DFF0 -0.782, ->
+      // s1_col / s1_cr / s1_cl). Each clamp is monotonic, so clamping both
+      // candidates and selecting with the sort is the same value, and so is
+      // the emptiness test made on each pairing: two levels shorter.
       automatic logic signed [15:0] rxa = xah[31:16];
       automatic logic signed [15:0] rxb = xbh[31:16];
-      emit_xl = (rxa < rxb) ? rxa : rxb;
-      emit_xr = ((rxa < rxb) ? rxb : rxa) - 16'sd1;
+      automatic logic               sab = (rxa < rxb);
+      automatic logic signed [15:0] ra1 = rxa - 16'sd1;
+      automatic logic signed [15:0] rb1 = rxb - 16'sd1;
+      automatic logic signed [15:0] cla = (rxa < view_x1) ? view_x1 : rxa;
+      automatic logic signed [15:0] clb = (rxb < view_x1) ? view_x1 : rxb;
+      automatic logic signed [15:0] cra = (ra1 > view_x2) ? view_x2 : ra1;
+      automatic logic signed [15:0] crb = (rb1 > view_x2) ? view_x2 : rb1;
+      emit_xl = sab ? rxa : rxb;
+      emit_xr = sab ? rb1 : ra1;
+      emit_cl = sab ? cla : clb;
+      emit_cr = sab ? crb : cra;
+      emit_ok = sab ? (cla <= crb) : (clb <= cra);
     end else begin
       emit_xl = 16'(emit_l >>> 16);
       emit_xr = 16'(emit_r >>> 16);
+      emit_cl = (emit_xl < view_x1) ? view_x1 : emit_xl;
+      emit_cr = (emit_xr > view_x2) ? view_x2 : emit_xr;
+      emit_ok = (emit_cl <= emit_cr);
     end
-    emit_cl = (emit_xl < view_x1) ? view_x1 : emit_xl;
-    emit_cr = (emit_xr > view_x2) ? view_x2 : emit_xr;
-    emit_ok = (emit_cl <= emit_cr);
   end
 
   // ------------------------------------------------------------------- FSM
@@ -944,19 +1057,39 @@ module m2_raster_fill #(
   // Exactly equivalent: in each state the mux selects that state's own
   // operands, so the shifter sees what it saw before. Only one state fires per
   // cycle, which is what makes one shifter sufficient.
-  logic signed [31:0] nsel_c;
-  logic [5:0]         zsel_c;
+  // R742: THE OPERAND ONE STATE AHEAD. The state's six-way numerator select,
+  // the count's -1 and its range test were in front of the barrel shift
+  // (s795 at 80 MHz: nyu -> mul_n -0.739). Each state's operand is known the
+  // state before, so it is registered then (sn_r, sz_r) with z - 1 and the
+  // pass-through test; the shift starts from flops. pf_shift's arithmetic,
+  // the same values in the same states:
+  //   NRM (wait 0-3) loads nxu for NRM's last cycle; NRM's last loads nyu for
+  //   Q1; Q1 -> nxv; Q1W -> nyv; Q2 -> nxo; Q2W -> nyo (Q3 presents nothing).
+  // The counts are joined on nrm_wait 2 (R735), so wait 3's load has them.
+  logic signed [31:0] nn_c;
+  logic [5:0]         nz_c;
   always_comb begin
     case (pf_st)   // R544: the fit's own state
-      S_PF_Q1:  begin nsel_c = nyu; zsel_c = nyu_z; end
-      S_PF_Q1W: begin nsel_c = nxv; zsel_c = nxv_z; end
-      S_PF_Q2:  begin nsel_c = nyv; zsel_c = nyv_z; end
-      S_PF_Q2W: begin nsel_c = nxo; zsel_c = nxo_z; end
-      S_PF_Q3:  begin nsel_c = nyo; zsel_c = nyo_z; end
-      default:  begin nsel_c = nxu; zsel_c = nxu_z; end   // S_PF_NRM, priming
+      S_PF_NRM: if (nrm_wait == 3'd4) begin nn_c = nyu; nz_c = nyu_z; end
+                else                  begin nn_c = nxu; nz_c = nxu_z; end
+      S_PF_Q1:  begin nn_c = nxv; nz_c = nxv_z; end
+      S_PF_Q1W: begin nn_c = nyv; nz_c = nyv_z; end
+      S_PF_Q2:  begin nn_c = nxo; nz_c = nxo_z; end
+      S_PF_Q2W: begin nn_c = nyo; nz_c = nyo_z; end
+      default:  begin nn_c = nxu; nz_c = nxu_z; end
     endcase
   end
-  wire signed [31:0] mul_n_c = pf_shift(nsel_c, zsel_c);
+  logic signed [31:0] sn_r;
+  logic [5:0]         sz_r;
+  logic [4:0]         szm1_r;
+  logic               spass_r;
+  always_ff @(posedge clk) begin
+    sn_r    <= nn_c;
+    sz_r    <= nz_c;
+    szm1_r  <= 5'(nz_c - 6'd1);
+    spass_r <= (nz_c >= 6'd32) || (nz_c == 6'd0);
+  end
+  wire signed [31:0] mul_n_c = spass_r ? sn_r : (sn_r <<< szm1_r);
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -986,7 +1119,8 @@ module m2_raster_fill #(
       moire      <= 1'b0;
       mul_delta  <= 17'sd0;
       mul_sl     <= 32'sd0;
-      mul_pr     <= 32'sd0; mul_w <= 1'b0;   // R631
+      mul_pr     <= 32'sd0; mul_w <= 2'd0;   // R631
+      mul_plo    <= '0; mul_phi <= '0;      // R740
       div_start  <= 1'b0;
       div_num    <= 32'sd0;
       div_den    <= 32'sd0;
@@ -1003,7 +1137,7 @@ module m2_raster_fill #(
       nxu_z <= '0; nyu_z <= '0; nxv_z <= '0; nyv_z <= '0;
       nxo_z <= '0; nyo_z <= '0; mul_n <= '0; mul_z <= 6'd0;   // R441/R442
       net_r <= 9'sd0; zbig_r <= 1'b0;   // R459
-      den_a <= 16'd1; nrm_wait <= 2'd0; pfn_wait <= 2'd0; det_abs_r <= '0;    // R449/R461/R466/R594
+      den_a <= 16'd1; nrm_wait <= 3'd0; pfn_wait <= 2'd0; det_abs_r <= '0;    // R449/R461/R466/R594
       // R451: these were initialised in the prime step and NOT in reset. A
       // register that only gets a value once the state machine reaches a
       // particular state is undefined for every cycle before it, and b_wait
@@ -1012,7 +1146,7 @@ module m2_raster_fill #(
       mul_q_r <= '0; mul_zr <= 6'd0; b_wait <= 1'b0; b_w2 <= 1'b0; b_w3 <= 1'b0; sc_r <= '0; sc_s <= '0; oz_w_v <= 1'b0; oz_last <= 1'b0; oz_w <= 2'd0; b_prod <= 1'b0;
       dudx <= '0; dudy <= '0; dvdx <= '0; dvdy <= '0;
       for (int k = 0; k < 4; k++) begin qu[k] <= '0; qv[k] <= '0; qoz[k] <= '0; end
-      oz_i <= 2'd0; oz_emax <= 8'd0; dodx <= '0; dody <= '0;
+      oz_i <= 2'd0; oz_emax <= 8'd0; oz_pre <= 1'b0; dodx <= '0; dody <= '0;
       base_o <= '0; nxo <= '0; nyo <= '0; pf_c <= 1'b0;
       span_valid <= 1'b0;
       s1_valid   <= 1'b0;   // R715
@@ -1026,6 +1160,9 @@ module m2_raster_fill #(
       symin <= 16'sd0; symax <= 16'sd0;
       xlo_r <= 32'sd0; xhi_r <= 32'sd0;
       pmin_r <= 2'd0;  td_r  <= 1'b0;
+      m01_r <= 1'b0; m23_r <= 1'b0; x01_r <= 1'b0; x23_r <= 1'b0;   // R735
+      lo01_v <= '0; lo23_v <= '0; hi01_v <= '0; hi23_v <= '0;          // R740
+      mm_pre <= 1'b0;                                                  // R743
       for (int i = 0; i < 4; i++) begin
         sx[i] <= 16'sd0;
         sy[i] <= 16'sd0;
@@ -1066,12 +1203,15 @@ module m2_raster_fill #(
         // -- the raw coordinate is not wanted again. The shift is a constant
         // 16 because normalisation puts the largest 1/z in [2^15, 2^16), so
         // the product lands back in the 13 bits u already occupied.
-        S_OZ: begin
+        S_OZ: if (oz_pre) begin
+          oz_pre  <= 1'b0;   // R731
+          oz_emax <= oz_emax_q;
+        end else begin
           // R566: stage one -- select vertex oz_i and normalise its 1/z.
           if (!oz_last) begin
             oz_n   <= oz_norm(qoz[oz_i], oz_emax);
-            oz_u   <= qu[oz_i];
-            oz_v   <= qv[oz_i];
+            oz_u   <= qu[oz_i][12:0];   // R791: the raw u, before the rewrite
+            oz_v   <= qv[oz_i][12:0];
             oz_w   <= oz_i;
             oz_w_v <= 1'b1;
             if (oz_i == 2'd3) oz_last <= 1'b1;
@@ -1083,8 +1223,9 @@ module m2_raster_fill #(
           // cycle. It is never the one stage one is reading this cycle.
           if (oz_w_v) begin
             qoz[oz_w] <= oz_n;
-            qu[oz_w]  <= 13'((29'(oz_u) * 29'(oz_n)) >> 15);
-            qv[oz_w]  <= 13'((29'(oz_v) * 29'(oz_n)) >> 15);
+            // R791: UZF more bits of the same product (u < 2^13, oz_n < 2^15)
+            qu[oz_w]  <= UW'((29'(oz_u) * 29'(oz_n)) >> (15 - UZF));
+            qv[oz_w]  <= UW'((29'(oz_v) * 29'(oz_n)) >> (15 - UZF));
             if (oz_last) begin oz_last <= 1'b0; pf_st <= S_PF_D; end
           end
         end
@@ -1188,8 +1329,8 @@ module m2_raster_fill #(
         // the worst clk_3d path at 60 MHz), so it answers a cycle later and
         // this state waits one more before S_PF_Q1 reads den_rcp. One cycle of
         // about 130 to retire a quad.
-        S_PF_NRM: if (nrm_wait != 2'd3) begin   // R599: was 2
-          nrm_wait <= nrm_wait + 2'd1;
+        S_PF_NRM: if (nrm_wait != 3'd4) begin   // R599: was 2; R731: 4
+          nrm_wait <= nrm_wait + 3'd1;
           // The counts still land on the FIRST cycle only -- repeating them on
           // the new third cycle would be harmless but would re-time six
           // priority encoders for nothing.
@@ -1199,20 +1340,28 @@ module m2_raster_fill #(
           // registered on the first cycle and counted on the second; the
           // first reader is the third cycle's mul_n, so no cycle is added and
           // the counts are the same numbers.
-          if (nrm_wait == 2'd0) begin
+          if (nrm_wait == 3'd0) begin
             a_nxu <= pf_abs(nxu); a_nyu <= pf_abs(nyu);
             a_nxv <= pf_abs(nxv); a_nyv <= pf_abs(nyv);
             a_nxo <= pf_abs(nxo); a_nyo <= pf_abs(nyo);
           end
-          if (nrm_wait == 2'd1) begin
-            nxu_z <= clz32(a_nxu); nyu_z <= clz32(a_nyu);
-            nxv_z <= clz32(a_nxv); nyv_z <= clz32(a_nyv);
-            nxo_z <= clz32(a_nxo); nyo_z <= clz32(a_nyo);   // R441
+          if (nrm_wait == 3'd1) begin   // R735: the halves
+            h_nxu <= clz16(a_nxu[31:16]); l_nxu <= clz16(a_nxu[15:0]);
+            h_nyu <= clz16(a_nyu[31:16]); l_nyu <= clz16(a_nyu[15:0]);
+            h_nxv <= clz16(a_nxv[31:16]); l_nxv <= clz16(a_nxv[15:0]);
+            h_nyv <= clz16(a_nyv[31:16]); l_nyv <= clz16(a_nyv[15:0]);
+            h_nxo <= clz16(a_nxo[31:16]); l_nxo <= clz16(a_nxo[15:0]);
+            h_nyo <= clz16(a_nyo[31:16]); l_nyo <= clz16(a_nyo[15:0]);
+          end
+          if (nrm_wait == 3'd2) begin   // R735: joined -- clz32's numbers
+            nxu_z <= clz_join(h_nxu, l_nxu); nyu_z <= clz_join(h_nyu, l_nyu);
+            nxv_z <= clz_join(h_nxv, l_nxv); nyv_z <= clz_join(h_nyv, l_nyv);
+            nxo_z <= clz_join(h_nxo, l_nxo); nyo_z <= clz_join(h_nyo, l_nyo);   // R441
           end
         end else begin
-          nrm_wait <= 2'd0;
+          nrm_wait <= 3'd0;
           mul_n <= mul_n_c;   // R457/R458: registered count, one shared shifter
-          mul_z <= zsel_c;
+          mul_z <= sz_r;
           mul_q_r <= '0; mul_zr <= 6'd0; b_wait <= 1'b0; b_w2 <= 1'b0; b_w3 <= 1'b0;   // R450/R594/R727
           oz_w_v <= 1'b0; oz_last <= 1'b0; b_prod <= 1'b0; // R566
           pf_st <= S_PF_Q1;
@@ -1222,28 +1371,28 @@ module m2_raster_fill #(
         // is ready the cycle after the operands are.
         // R442: present the next numerator, latch the previous gradient.
         S_PF_Q1: begin
-          mul_n <= mul_n_c; mul_z <= zsel_c;
+          mul_n <= mul_n_c; mul_z <= sz_r;
           mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
           net_r <= NET0 - 9'(mul_z) - 9'(den_sh); zbig_r <= (mul_z >= 6'd32);   // R459, R626
           pf_st <= S_PF_Q1W;
         end
 
         S_PF_Q1W: begin
-          mul_n <= mul_n_c; mul_z <= zsel_c;
+          mul_n <= mul_n_c; mul_z <= sz_r;
           mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
           net_r <= NET0 - 9'(mul_z) - 9'(den_sh); zbig_r <= (mul_z >= 6'd32);   // R459, R626
           pf_st <= S_PF_Q2;
         end
 
         S_PF_Q2: begin
-          mul_n <= mul_n_c; mul_z <= zsel_c;
+          mul_n <= mul_n_c; mul_z <= sz_r;
           mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
           net_r <= NET0 - 9'(mul_z) - 9'(den_sh); zbig_r <= (mul_z >= 6'd32);   // R459, R626
           pf_st <= S_PF_Q2W;
         end
 
         S_PF_Q2W: begin
-          mul_n <= mul_n_c; mul_z <= zsel_c;
+          mul_n <= mul_n_c; mul_z <= sz_r;
           mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
           net_r <= NET0 - 9'(mul_z) - 9'(den_sh); zbig_r <= (mul_z >= 6'd32);   // R459, R626
           dudx  <= sc_s;   // R594, R727
@@ -1258,7 +1407,7 @@ module m2_raster_fill #(
         // the same cycle as the shift, which is R418's fix applied to the round
         // R337 wrote before R418 existed.
         S_PF_Q3: begin
-          mul_n <= mul_n_c; mul_z <= zsel_c;
+          mul_n <= mul_n_c; mul_z <= sz_r;
           mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
           net_r <= NET0 - 9'(mul_z) - 9'(den_sh); zbig_r <= (mul_z >= 6'd32);   // R459, R626
           dudy  <= sc_s;
@@ -1292,8 +1441,9 @@ module m2_raster_fill #(
           bp_ox <= 32'(dodx * p4(sx[fa], sf[fa][1:0]));  bp_oy <= 32'(dody * p4(sy[fa], sf[fa][3:2]));
           bq_u  <= qu[fa]; bq_v <= qv[fa]; bq_o <= qoz[fa];
           // R616: (gx + gy) / 2 in 16.16 -- the gradients are 8.8, so << 7.
-          bh_u  <= PXC ? ((32'(dudx) + 32'(dudy)) <<< 7) : 32'sd0;
-          bh_v  <= PXC ? ((32'(dvdx) + 32'(dvdy)) <<< 7) : 32'sd0;
+          // R791: u/v at UVS fraction bits, so half a gradient is << UVS - 9
+          bh_u  <= PXC ? ((32'(dudx) + 32'(dudy)) <<< (UVS - 9)) : 32'sd0;
+          bh_v  <= PXC ? ((32'(dvdx) + 32'(dvdy)) <<< (UVS - 9)) : 32'sd0;
           bh_o  <= PXC ? ((32'(dodx) + 32'(dody)) <<< 7) : 32'sd0;
           b_prod <= 1'b1;
         end else begin
@@ -1301,8 +1451,10 @@ module m2_raster_fill #(
           b_w2   <= 1'b0;
           b_w3   <= 1'b0;
           b_prod <= 1'b0;
-          base_u <= 32'({19'd0, bq_u} <<< 16) - (bp_ux <<< BPS) - (bp_uy <<< BPS) + bh_u;   // R616, R626
-          base_v <= 32'({19'd0, bq_v} <<< 16) - (bp_vx <<< BPS) - (bp_vy <<< BPS) + bh_v;
+          // R791: at UVS fraction bits, not 16 -- the products' shift is two
+          // (UZF - 2) less, and (13 + UZF) + UVS = 31 bits, always in range.
+          base_u <= (32'(bq_u) <<< UVS) - (bp_ux <<< BPS_UV) - (bp_uy <<< BPS_UV) + bh_u;   // R616, R626
+          base_v <= (32'(bq_v) <<< UVS) - (bp_vx <<< BPS_UV) - (bp_vy <<< BPS_UV) + bh_v;
           // R337: 1/z's own plane. qoz is 15 bits, so it shifts up by 16 the
           // same way, and the span walk divides by what this yields.
           base_o <= 32'({16'd0, bq_o} <<< 16) - (bp_ox <<< BPS) - (bp_oy <<< BPS) + bh_o;
@@ -1322,13 +1474,20 @@ module m2_raster_fill #(
             sx[3] <= in_x3; sy[3] <= in_y3;
             sf[0] <= in_frac[3:0];  sf[1] <= in_frac[7:4];     // R626
             sf[2] <= in_frac[11:8]; sf[3] <= in_frac[15:12];
+            // R735: the tournament's first round, from the same values
+            m01_r <= ye_in(in_y1, in_frac[7:6])   < ye_in(in_y0, in_frac[3:2]);
+            m23_r <= ye_in(in_y3, in_frac[15:14]) < ye_in(in_y2, in_frac[11:10]);
+            x01_r <= ye_in(in_y1, in_frac[7:6])   > ye_in(in_y0, in_frac[3:2]);
+            x23_r <= ye_in(in_y3, in_frac[15:14]) > ye_in(in_y2, in_frac[11:10]);
+            mm_pre <= 1'b1;   // R743: the pairs' values in S_MINMAX's first cycle
             col   <= in_col;
             moire <= in_moire;
-            qu[0] <= in_u0; qv[0] <= in_v0; qu[1] <= in_u1; qv[1] <= in_v1;
-            qu[2] <= in_u2; qv[2] <= in_v2; qu[3] <= in_u3; qv[3] <= in_v3;
+            // R791: the raw 13-bit u, v in the low bits until S_OZ rewrites them
+            qu[0] <= UW'(in_u0); qv[0] <= UW'(in_v0); qu[1] <= UW'(in_u1); qv[1] <= UW'(in_v1);
+            qu[2] <= UW'(in_u2); qv[2] <= UW'(in_v2); qu[3] <= UW'(in_u3); qv[3] <= UW'(in_v3);
             qoz[0] <= in_oz0; qoz[1] <= in_oz1;            // R337: still minifloats here
             qoz[2] <= in_oz2; qoz[3] <= in_oz3;
-            oz_emax <= oz_emax_c;
+            oz_pre  <= 1'b1;                        // R731: emax in S_OZ's first cycle
             oz_i    <= 2'd0;
             tex_r     <= in_tex;
             tex_ok    <= 1'b0;
@@ -1358,12 +1517,17 @@ module m2_raster_fill #(
         // One cycle of pure comparison: wireframe, top and bottom vertices, and
         // the three whole-quad rejects. Order matters — the flat case is taken
         // before the viewport rejects, because fill_line does its own y test.
-        S_MINMAX: begin
+        S_MINMAX: if (mm_pre) begin
+          // R743: sye[] is the accepted y, the bits the acceptance's compares
+          mm_pre <= 1'b0;
+          lo01_v <= m01_r ? sye[1] : sye[0];  lo23_v <= m23_r ? sye[3] : sye[2];
+          hi01_v <= x01_r ? sye[1] : sye[0];  hi23_v <= x23_r ? sye[3] : sye[2];
+        end else begin
           // One cycle of pure comparison, and now the ONLY cycle that does it.
           td_r   <= two_distinct;
           pmin_r <= pmin_c;
-          symin  <= sye[pmin_c];   // R658: quarters with M2COV
-          symax  <= sye[pmax_c];
+          symin  <= m_fin ? lo23_v : lo01_v;   // R658: quarters with M2COV; R740: = sye[pmin_c]
+          symax  <= x_fin ? hi23_v : hi01_v;
           xlo_r  <= xlo_c;
           xhi_r  <= xhi_c;
           state  <= S_CLASSIFY;
@@ -1404,14 +1568,16 @@ module m2_raster_fill #(
 
         S_FLAT: begin
           if (s1_free && pf_st == S_IDLE) begin   // R544; R715
-            if ((cury <= view_y2) && (cury >= view_y1) && emit_ok) begin
-              s1_valid   <= 1'b1;        // R715: stage 1; the plane next cycle
-              s1_y       <= cury;
-              s1_cl      <= emit_cl;
-              s1_cr      <= emit_cr;
-              s1_col     <= col;
-              s1_moire   <= moire;
-            end
+            // R741: the data loads whenever stage 1 is free and only the
+            // VALID depends on the emit test -- it was the enable of every
+            // stage-1 flop (s792 at 80 MHz: xah -> s1_col -0.519, s1_moire).
+            // Stage 1's data is read only while s1_valid.
+            s1_valid   <= (cury <= view_y2) && (cury >= view_y1) && emit_ok;   // R715: stage 1; the plane next cycle
+            s1_y       <= cury;
+            s1_cl      <= emit_cl;
+            s1_cr      <= emit_cr;
+            s1_col     <= col;
+            s1_moire   <= moire;
             quad_done <= 1'b1;
             state     <= S_IDLE;
           end
@@ -1545,24 +1711,32 @@ module m2_raster_fill #(
           end
         end
 
-        S_FS_MULA: if (!mul_w) begin
-          mul_pr <= mul_prod[31:0];
-          mul_w  <= 1'b1;
+        S_FS_MULA: if (mul_w == 2'd0) begin
+          mul_plo <= mul_delta * mul_sl_lo;   // R740
+          mul_phi <= mul_delta * mul_sl_hi;
+          mul_w   <= 2'd1;
+        end else if (mul_w == 2'd1) begin
+          mul_pr <= mul_plo[31:0] + {mul_phi[15:0], 16'd0};
+          mul_w  <= 2'd2;
         end else begin
           xa     <= xa + mul_pr;
           xah    <= xah + mul_pr;
           mul_sl <= slb;
-          mul_w  <= 1'b0;
+          mul_w  <= 2'd0;
           state  <= S_FS_MULB;
         end
 
-        S_FS_MULB: if (!mul_w) begin
-          mul_pr <= mul_prod[31:0];
-          mul_w  <= 1'b1;
+        S_FS_MULB: if (mul_w == 2'd0) begin
+          mul_plo <= mul_delta * mul_sl_lo;   // R740
+          mul_phi <= mul_delta * mul_sl_hi;
+          mul_w   <= 2'd1;
+        end else if (mul_w == 2'd1) begin
+          mul_pr <= mul_plo[31:0] + {mul_phi[15:0], 16'd0};
+          mul_w  <= 2'd2;
         end else begin
           xb    <= xb + mul_pr;
           xbh   <= xbh + mul_pr;
-          mul_w <= 1'b0;
+          mul_w <= 2'd0;
           state <= skip_only ? S_FS_END : S_FS_SWAP;
         end
 
@@ -1577,14 +1751,16 @@ module m2_raster_fill #(
           if (walk_y >= walk_end) begin
             state <= S_FS_END;
           end else if (s1_free && pf_st == S_IDLE) begin   // R544; R715
-            if (emit_ok) begin
-              s1_valid   <= 1'b1;        // R715: stage 1; the plane next cycle
-              s1_y       <= walk_y;
-              s1_cl      <= emit_cl;
-              s1_cr      <= emit_cr;
-              s1_col     <= col;
-              s1_moire   <= moire;
-            end
+            // R741: the data loads whenever stage 1 is free and only the
+            // VALID depends on the emit test -- it was the enable of every
+            // stage-1 flop (s792 at 80 MHz: xah -> s1_col -0.519, s1_moire).
+            // Stage 1's data is read only while s1_valid.
+            s1_valid   <= emit_ok;   // R715: stage 1; the plane next cycle
+            s1_y       <= walk_y;
+            s1_cl      <= emit_cl;
+            s1_cr      <= emit_cr;
+            s1_col     <= col;
+            s1_moire   <= moire;
             xa     <= xa + sla;
             xb     <= xb + slb;
             xah    <= xah + sla;
@@ -1610,14 +1786,16 @@ module m2_raster_fill #(
         // sort its two x values, so a crossed pair emits nothing.
         S_FINAL: begin
           if (s1_free && pf_st == S_IDLE) begin   // R544; R715
-            if ((cury == limy) && (cury <= view_y2) && (cury >= view_y1) && emit_ok) begin
-              s1_valid   <= 1'b1;        // R715: stage 1; the plane next cycle
-              s1_y       <= cury;
-              s1_cl      <= emit_cl;
-              s1_cr      <= emit_cr;
-              s1_col     <= col;
-              s1_moire   <= moire;
-            end
+            // R741: the data loads whenever stage 1 is free and only the
+            // VALID depends on the emit test -- it was the enable of every
+            // stage-1 flop (s792 at 80 MHz: xah -> s1_col -0.519, s1_moire).
+            // Stage 1's data is read only while s1_valid.
+            s1_valid   <= (cury == limy) && (cury <= view_y2) && (cury >= view_y1) && emit_ok;   // R715: stage 1; the plane next cycle
+            s1_y       <= cury;
+            s1_cl      <= emit_cl;
+            s1_cr      <= emit_cr;
+            s1_col     <= col;
+            s1_moire   <= moire;
             state <= S_DONE;
           end
         end

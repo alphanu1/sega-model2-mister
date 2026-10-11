@@ -65,6 +65,16 @@ module m2_raster3d #(
   parameter int unsigned TXLATE = 0,
   // R628: texel miss slots -- 2 (tex_m, tex_m2) or 4 (+ tex_m3, tex_m4)
   parameter int unsigned TXNS = 2,
+  // R789: texel fetches in flight across the crossing (m2_span_tex TXK =
+  // m2_texel_cdc K; R539 4, R553 8 -- R558's scramble was the old 2:1
+  // adapter's timing, R561 replaced it) and the cache's response queue
+  // (m2_texel_bl RSP_D; R622 4). R628: four miss slots only pay with a deeper
+  // queue to discover the misses and more credits to issue them.
+  parameter int unsigned TXK = 8,
+  parameter int unsigned TXRSP = 4,
+  // R787: 128-bit texel cache lines -- eight-word SDRAM reads, the first half
+  // on tex_m*_lo; the same 32 KB, read in 64-bit halves (m2_texel_bl LW8)
+  parameter bit          TXLW8 = 1'b0,
   // R633: while tex_late, every other group reuses its neighbour's texel
   parameter bit          TXREUSE = 1'b0,
 
@@ -91,6 +101,10 @@ module m2_raster3d #(
   // (m2_fb_wcomb) instead of a DDR3 command per span (m2_fb_write). ~+330 ALM
   // in place: it does not fit beside everything else yet (s575-s577).
   parameter bit FB_WCOMB = 1'b0,
+  // R791: u/z and v/z fraction bits in the fill and the span walk (see
+  // m2_raster_fill). 4 takes the road's judder from 6.8 px to 1.7 px mean on
+  // MAME's attract; 0 is the old precision.
+  parameter int unsigned UZF = 4,
   // R677: a textured quad goes to the fill as two triangles, (0,1,2) and
   // (0,2,3), each fitted through its own corners. A banked road on a corner
   // is TWISTED -- its four corners' u/z, v/z, 1/z lie on no one plane (MAME
@@ -144,6 +158,11 @@ module m2_raster3d #(
   input  logic            tex_inval,
   input  logic            tex_bilinear,   // R620: on clk_mem, quasi-static (OSD)
   input  logic [1:0]      tex_pxk,        // R650: texel step 1/2/4/8 as log2, on clk (OSD)
+  // R784: the OSD's output curve on clk (m2_geo_engine's encoding), for the
+  // pedestal m2_span_tex adds to a textured pixel. q_tex[11] carries "luma
+  // table row 1" from here on: the checker bit that sat there is taken from
+  // q_moire, and nothing in this module read tex[11].
+  input  logic [1:0]      tex_gamma,
   // R652: a finished list is waiting for the draw in progress (FB_DDR3). The
   // top level holds the GAME on it -- no vblank interrupt, no frame count, no
   // walk -- so the 2D the game writes keeps the 3D's pace.
@@ -169,6 +188,7 @@ module m2_raster3d #(
   output logic [TEX_AW:1] tex_m_addr,
   input  logic            tex_m_ack,
   input  logic [63:0]     tex_m_data,
+  input  logic            tex_m_lo,       // R787: an eight-word line's first half (TXLW8)
   // R480: a second texel port -- one transaction per SDRAM port at a time,
   // so a single port serialises every miss.
   input  logic            tex_m2_en,
@@ -176,11 +196,13 @@ module m2_raster3d #(
   output logic [TEX_AW:1] tex_m2_addr,
   input  logic            tex_m2_ack,
   input  logic [63:0]     tex_m2_data,
+  input  logic            tex_m2_lo,      // R787
   // R628: slots 2 and 3's ports (TXNS = 4); tie en low otherwise
   input  logic            tex_m3_en, tex_m4_en,
   output logic            tex_m3_req, tex_m4_req,
   output logic [TEX_AW:1] tex_m3_addr, tex_m4_addr,
   input  logic            tex_m3_ack, tex_m4_ack,
+  input  logic            tex_m3_lo, tex_m4_lo,   // R787
   input  logic [63:0]     tex_m3_data, tex_m4_data,
   output logic [31:0]     dbg_texpix, dbg_texhit, dbg_texmiss, dbg_texnz,
   output logic [15:0]     dbg_texlost,
@@ -326,7 +348,17 @@ module m2_raster3d #(
   // seen as wrong wedges and an on-off flicker (dbuf13 s15). The geometry
   // pipeline honours this line (the clipper holds out_valid), so the walk
   // waits for the swap, which is the frame's own cadence.
-  assign q_ready = (pst == P_COLLECT);
+  // R810: AND NOT IN THE CYCLE THE CLEAR LANDS. A walk that starts while the
+  // previous list is P_READY (it overran a vblank, R763) is held here with its
+  // FIRST quad on q_valid; q_ready rose the cycle after the swap -- the cycle
+  // of swap_d, the store's clear, which wins over in_valid -- so that quad was
+  // taken and thrown away, and the geometry moved on. Daytona's GAME OVER
+  // draws its "G" as polygon 0 of every list: the board showed GAME OVER
+  // without it. MAME's list has no such gap (render_frame_start() resets
+  // poly_list_index before the walk's first polygon). One cycle later the
+  // clear is done and the quad lands in slot 0.
+  logic swap_d;   // the store's clear (below)
+  assign q_ready = (pst == P_COLLECT) && !swap_d;
   wire   q_take  = q_valid && q_ready;
 
   // One two-bank store: collect into `bank`, replay `~bank` (R213 shares the
@@ -341,7 +373,14 @@ module m2_raster3d #(
   // every one of them distant detail under four pixels across. Small is far,
   // so this drops the right things first, and it is a parameter so the number
   // can move when the store can grow.
-  m2_quad_store #(.BAND_H(BAND_H), .NBANDS(NBANDS), .BW(BW), .SCR_H(SCR_H), .TINY(4),
+  // R769: NOT ALWAYS. Small is not far on car select: each tyre is a ring of
+  // ~32 quads 2-3 px across, and TINY = 4 refused 621 of 1,340 quads there
+  // (4.15% of the picture, every pixel at the wheels). The store now tests
+  // at 2 while the previous list fitted under it with an eighth to spare,
+  // and at 4 only for the lists that would not.
+  // R776: and at 4 only for quads at z >= 16 (zval 0x3000): close-up detail
+  // keeps every quad of 2 px or more whatever the list's size.
+  m2_quad_store #(.BAND_H(BAND_H), .NBANDS(NBANDS), .BW(BW), .SCR_H(SCR_H), .TINY(4), .TINY_FINE(2), .TINY_FAR(16'h3000),   // R769, R776
                   .FTB(FTB), .FRB(FRB)) u_store (   // R607, R626
     .clk(clk), .rst_n(rst_n),
     .clear(qs_clear), .wbank(bank), .rbank(~bank),
@@ -468,7 +507,7 @@ module m2_raster3d #(
     .clk(clk), .rst_n(rst_n),
     .push(fl_span_valid && sq_in_rdy), .din(sq_din),
     .pop(sq_qv && sq_rdy), .q(sq_q), .q_valid(sq_qv),
-    .full(sq_full), .count(sq_cnt16), .dropped(sq_dropped)
+    .full(sq_full), .count(sq_cnt16), .dropped(sq_dropped), .held()
   );
   assign sq_in_rdy = !sq_full;
   assign sq_busy   = sq_qv || (sq_cnt16 != 16'd0);
@@ -505,7 +544,7 @@ module m2_raster3d #(
   wire signed [15:0] band_y1 = 16'(fill_band) * 16'(BAND_H);
   wire signed [15:0] band_y2 = band_y1 + 16'(BAND_H) - 16'sd1;
 
-  m2_raster_fill #(.PXC(PXC), .FRB(FRB), .M2COV(M2COV)) u_fill (   // R616, R626, R658
+  m2_raster_fill #(.PXC(PXC), .FRB(FRB), .M2COV(M2COV), .UZF(UZF)) u_fill (   // R616, R626, R658, R791
     .clk(clk), .rst_n(rst_n),
     .in_valid(fl_in_valid), .in_ready(fl_in_ready),
     // R327: no sign extension. m2_quad_store already saturates these to 13
@@ -581,10 +620,11 @@ module m2_raster3d #(
   logic [31:0]           mk_wd;
   logic signed [15:0]    mk_y0;
 
-  m2_span_tex #(.PIXSTEP(PIXSTEP), .TXK(8), .FTB(FTB), .GC(PXC), .SCR_W(SCR_W), .BAND_H(BAND_H),
-                .REUSE(TXREUSE)) u_spantex (   // R633
+  m2_span_tex #(.PIXSTEP(PIXSTEP), .TXK(TXK), .FTB(FTB), .GC(PXC), .SCR_W(SCR_W), .BAND_H(BAND_H),
+                .REUSE(TXREUSE), .UZF(UZF)) u_spantex (   // R633, R791
     .clk(clk), .rst_n(rst_n),
     .pxk(tex_pxk),   // R650
+    .gamma_sel(tex_gamma),   // R784
     .mk_valid(mk_valid), .mk_we(mk_we), .mk_waddr(mk_pwi), .mk_wdata(mk_wd),   // R607
     .mk_band_y0(mk_y0),
     .in_valid(sq_qv), .in_ready(sq_rdy), .busy(spantex_busy),
@@ -664,7 +704,7 @@ module m2_raster3d #(
   // R620: nine bits back; a timed-out fetch answers opaque and full (0x0FF).
   // f_waddr and friends (R583) are m2_texel's precomputed address and are
   // left open: m2_texel_bl places four texels of its own.
-  m2_texel_cdc #(.K(8), .TW(9), .TO_VAL(255)) u_texel_x2 (
+  m2_texel_cdc #(.K(TXK), .TW(9), .TO_VAL(255)) u_texel_x2 (
     .clk_slow(clk), .s_rst_n(rst_n), .clk_fast(clk_mem), .f_rst_n(rst_n),
     .s_req(tex_req), .s_rdy(tex_rdy), .s_ack(tex_ack), .s_tex({tex_late, tex_state[30:0]}),   // R627
     .s_u(tex_u), .s_v(tex_v), .s_texel(tex_texel), .s_take(tex_take),
@@ -701,19 +741,19 @@ module m2_raster3d #(
   // R620: m2_texel_bl, the bilinear fetch -- the same 4,096 lines as two
   // 2,048-line banks by row-pair parity (IB 11), so a 2x2 block comes back in
   // one access 87.5% of the time. Point mode is the old picture.
-  m2_texel_bl #(.AW(TEX_AW), .IB(11), .RSP_D(4), .NS(TXNS)) u_texel (   // R622: 4 entries, measured equal
+  m2_texel_bl #(.AW(TEX_AW), .IB(11), .RSP_D(TXRSP), .NS(TXNS), .LW8(TXLW8)) u_texel (   // R622: 4 entries, measured equal; R789: TXRSP; R787: LW8
     .clk(clk_mem), .rst_n(rst_n),
     .base_s0(tex_base0), .base_s1(tex_base1), .bilinear(tex_bilinear),
     .req(txf_req), .rdy(txf_rdy), .ack(txf_ack), .tex(txf_tex),
     .u(txf_u), .v(txf_v), .texel(txf_texel),
-    .m_req(tex_m_req), .m_addr(tex_m_addr), .m_ack(tex_m_ack), .m_data(tex_m_data),
+    .m_req(tex_m_req), .m_addr(tex_m_addr), .m_ack(tex_m_ack), .m_data(tex_m_data), .m_lo(tex_m_lo),
     // R480: the second SDRAM port, so two fills can be in flight.
     .m2_en(tex_m2_en), .m2_req(tex_m2_req), .m2_addr(tex_m2_addr),
-    .m2_ack(tex_m2_ack), .m2_data(tex_m2_data),
+    .m2_ack(tex_m2_ack), .m2_data(tex_m2_data), .m2_lo(tex_m2_lo),
     .m3_en(tex_m3_en), .m3_req(tex_m3_req), .m3_addr(tex_m3_addr),     // R628
-    .m3_ack(tex_m3_ack), .m3_data(tex_m3_data),
+    .m3_ack(tex_m3_ack), .m3_data(tex_m3_data), .m3_lo(tex_m3_lo),
     .m4_en(tex_m4_en), .m4_req(tex_m4_req), .m4_addr(tex_m4_addr),
-    .m4_ack(tex_m4_ack), .m4_data(tex_m4_data),
+    .m4_ack(tex_m4_ack), .m4_data(tex_m4_data), .m4_lo(tex_m4_lo),
     .inval(tex_sweep_f),                          // R561: crossed
     .dbg_hits(dbg_texhit), .dbg_misses(dbg_texmiss), .dbg_lost(dbg_texlost),
     .dbg_sweeps(dbg_texsweep)
@@ -1486,8 +1526,9 @@ module m2_raster3d #(
   // (`swap` is declared with the framebuffer above, R640.)
   // The store clears count[wbank]. On the swap cycle `bank` has not flipped
   // yet, so the clear is delayed one cycle to land on the new collect bank
-  // (the one coming off display). The walk's first quad is many cycles away.
-  logic swap_d;
+  // (the one coming off display). The walk's first quad is many cycles away
+  // -- unless the walk was held waiting for this swap (R810: q_ready is low
+  // in the clear's cycle, above).
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) swap_d <= 1'b0; else swap_d <= swap;
   end

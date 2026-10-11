@@ -117,6 +117,10 @@ module m2_geometry (
   output logic [12:0] q_u0, q_v0, q_u1, q_v1,
   output logic [12:0] q_u2, q_v2, q_u3, q_v3,
   output logic [23:0] q_tex,           // R271: the polygon's texture state
+  // R784: the polygon's luma table is row 1 (texture header word 1's low byte,
+  // poly_tex[31:24], which q_tex does not carry). Daytona's row 1 is the
+  // inverse ramp its decals use; m2_raster3d takes it in q_tex[11].
+  output logic        q_tlinv,
   output logic  [7:0] q_lum,
   // R626: each vertex's quarter pixel below q_x/q_y, {fy3,fx3,...,fy0,fx0}.
   // For the texture plane fit only (m2_geo_project says why).
@@ -234,12 +238,12 @@ module m2_geometry (
   // is told separately whether IT was granted. Priority goes downstream
   // because draining the clipper is what frees the pipeline; the other way
   // round can wedge.
-  wire pj_valid   = (w_pj_valid || k_pj_valid) && !pj_busy;
+  wire pj_valid   = (w_pj_valid || k_pj_valid) && !pj_full;   // R758
   wire [31:0] pj_x = k_pj_valid ? k_pj_x : w_pj_x;
   wire [31:0] pj_y = k_pj_valid ? k_pj_y : w_pj_y;
   wire [31:0] pj_z = k_pj_valid ? k_pj_z : w_pj_z;
-  wire w_granted  = pj_ready && w_pj_valid && !k_pj_valid && !pj_busy;
-  wire k_granted  = pj_ready && k_pj_valid && !pj_busy;
+  wire w_granted  = pj_ready && w_pj_valid && !k_pj_valid && !pj_full;   // R758
+  wire k_granted  = pj_ready && k_pj_valid && !pj_full;
 
   // ONE OPERATION IN FLIGHT AT A TIME, BECAUSE THERE IS ONLY ONE OWNER BIT.
   //
@@ -261,21 +265,36 @@ module m2_geometry (
   // pj_busy serialises the port: no new request is presented until the previous
   // result has been delivered. m2_geo_project's reciprocal is 29 cycles and does
   // not pipeline anyway, so this costs nothing that was not already being paid.
-  logic pj_owner;                          // 0 = quad projector, 1 = clipper
-  logic pj_busy;                           // a projection is in flight
+  // R758: AN OWNER PER PROJECTION IN FLIGHT, NOT ONE OWNER BIT. pj_busy
+  // allowed one projection at a time, so the quad projector's four vertices
+  // went through one after another at the projector's full latency (~65
+  // cycles each) although m2_geo_project overlaps two -- the next point's
+  // reciprocal during this one's scaling, 33 cycles a point streamed. The
+  // quad projector held the engine in E_EMIT 10% and sat in Q_WAIT 64% of the
+  // heaviest list. Results come back in grant order, so a queue of owners
+  // routes each to its requester; R217's wrong-delivery fault cannot recur.
+  logic [3:0] pj_own;                      // owners in flight, oldest in [0]
+  logic [2:0] pj_n;                        // how many
+  wire        pj_full = (pj_n == 3'd4);
+  wire        pj_push = pj_valid && pj_ready;
+  wire        pj_pop  = pj_out_valid && (pj_n != 3'd0);
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      pj_owner <= 1'b0; pj_busy <= 1'b0;
+      pj_own <= 4'd0; pj_n <= 3'd0;
     end else begin
-      if (pj_valid && pj_ready && !pj_busy) begin
-        pj_owner <= k_pj_valid;
-        pj_busy  <= 1'b1;
-      end
-      if (pj_out_valid) pj_busy <= 1'b0;
+      case ({pj_push, pj_pop})
+        2'b10: begin pj_own[pj_n[1:0]] <= k_pj_valid; pj_n <= pj_n + 3'd1; end
+        2'b01: begin pj_own <= {1'b0, pj_own[3:1]}; pj_n <= pj_n - 3'd1; end
+        2'b11: begin
+          pj_own <= {1'b0, pj_own[3:1]};
+          pj_own[pj_n[1:0] - 2'd1] <= k_pj_valid;
+        end
+        default: ;
+      endcase
     end
   end
-  wire w_pj_out_valid = pj_out_valid && !pj_owner;
-  wire k_pj_out_valid = pj_out_valid &&  pj_owner;
+  wire w_pj_out_valid = pj_pop && !pj_own[0];
+  wire k_pj_out_valid = pj_pop &&  pj_own[0];
 
   m2_geo_project u_project (
     .clk(clk), .rst_n(rst_n),
@@ -307,7 +326,7 @@ module m2_geometry (
   // 120 cycles. At 50 MHz that is 2,700 polygons in a 60 Hz frame before this
   // stage is the limit, and the display lists measured here are far short of it.
   // R566: Q_CHK added -- the cull is decided a cycle after the polygon is taken.
-  typedef enum logic [2:0] { Q_IDLE, Q_ISS, Q_WAIT, Q_OUT, Q_CHK, Q_MM } qst_t;   // R589: Q_MM
+  typedef enum logic [2:0] { Q_IDLE, Q_ISS, Q_WAIT, Q_OUT, Q_CHK, Q_MM, Q_MM2 } qst_t;   // R589: Q_MM; R740: Q_MM2
   qst_t qst;
   logic [1:0]  qi;
   logic [31:0] hx [4], hy [4], hz [4];
@@ -427,7 +446,14 @@ module m2_geometry (
 
   assign poly_ready = (qst == Q_IDLE);
   assign dbg_lum_go = poly_valid && poly_ready;   // R249
-  assign w_pj_valid = (qst == Q_ISS);
+  assign w_pj_valid = (qst == Q_ISS) && !skip_here;   // R758: a cached vertex is not sent
+  // R758: the vertices issued and not yet answered, in issue order, and the
+  // answers to throw away after a timeout gave up on their polygon.
+  logic [1:0] wq [4];
+  logic [2:0] wq_n;
+  logic [2:0] w_drop;
+  wire        w_push = (qst == Q_ISS) && !skip_here && w_granted;
+  wire        w_take = w_pj_out_valid && (w_drop == 3'd0) && (wq_n != 3'd0);
   assign w_pj_x = hx[qi]; assign w_pj_y = hy[qi]; assign w_pj_z = hz[qi];
 
   // THE SORT KEY IS THE SMALLEST z, as geo_parse computes min_z over the
@@ -474,11 +500,22 @@ module m2_geometry (
   logic        mm_le01, mm_le02, mm_le03, mm_le12, mm_le13, mm_le23;   // k_i <= k_j, i < j
   logic [3:0]  mm_lo, mm_hi;
   logic [31:0] mm_min, mm_max;
+  // R740: THE SIX COMPARES REGISTERED, THE PICK A CYCLE LATER. fkey, six
+  // 32-bit compares, the one-hot terms and the AND-OR were one cycle into
+  // hzmin / hzmax (s789 at 80 MHz: hz -> hzmin -1.158). Q_MM now registers
+  // the compares and Q_MM2 picks: one cycle more per polygon. hz does not
+  // change between them (it is loaded only on taking a polygon).
+  logic mm_r01, mm_r02, mm_r03, mm_r12, mm_r13, mm_r23;
+  always_ff @(posedge clk) begin
+    mm_r01 <= mm_k[0] <= mm_k[1];  mm_r02 <= mm_k[0] <= mm_k[2];
+    mm_r03 <= mm_k[0] <= mm_k[3];  mm_r12 <= mm_k[1] <= mm_k[2];
+    mm_r13 <= mm_k[1] <= mm_k[3];  mm_r23 <= mm_k[2] <= mm_k[3];
+  end
   always_comb begin
     for (int i = 0; i < 4; i++) mm_k[i] = fkey(hz[i]);
-    mm_le01 = mm_k[0] <= mm_k[1];  mm_le02 = mm_k[0] <= mm_k[2];
-    mm_le03 = mm_k[0] <= mm_k[3];  mm_le12 = mm_k[1] <= mm_k[2];
-    mm_le13 = mm_k[1] <= mm_k[3];  mm_le23 = mm_k[2] <= mm_k[3];
+    mm_le01 = mm_r01;  mm_le02 = mm_r02;
+    mm_le03 = mm_r03;  mm_le12 = mm_r12;
+    mm_le13 = mm_r13;  mm_le23 = mm_r23;
     // i comes before j: k_i <= k_j when i < j, k_i < k_j when i > j.
     mm_lo[0] =  mm_le01 &  mm_le02 &  mm_le03;
     mm_lo[1] = ~mm_le01 &  mm_le12 &  mm_le13;
@@ -593,6 +630,8 @@ module m2_geometry (
       c_bad <= 1'b0; c_zmode <= 2'd0;
       zprev <= 32'h5011B5EA; hzkey <= 16'd0; hzpre <= '0;   // 1e10, as render_frame_start sets it
       dbg_nonfinite <= 16'd0; dbg_behind <= 16'd0; pj_wait <= 10'd0; dbg_pj_lost <= 16'd0;
+      wq_n <= 3'd0; w_drop <= 3'd0;                                   // R758
+      for (int k = 0; k < 4; k++) wq[k] <= 2'd0;
       cvalid <= 1'b0;
       for (int k = 0; k < 4; k++) begin csx[k] <= 16'sd0; csy[k] <= 16'sd0; csf[k] <= 4'd0; end
       for (int k = 0; k < 4; k++) begin
@@ -640,7 +679,8 @@ module m2_geometry (
         // R589: the four-way float min and max, from the z values latched a
         // cycle ago rather than from the engine's registers in the latch cycle
         // (s317: p1cur -> hzmax, -0.322 ns at 70 MHz).
-        Q_MM: begin
+        Q_MM:  qst <= Q_MM2;   // R740: the compares are registered on this edge
+        Q_MM2: begin
           hzmin <= mm_min;   // R597
           hzmax <= mm_max;
           qst   <= Q_CHK;
@@ -676,46 +716,30 @@ module m2_geometry (
           sy[qi] <= csy[hit_i[qi[0]]];
           sf[qi] <= csf[hit_i[qi[0]]];
           qi <= qi + 2'd1;                       // qi < 2 here, so never the last
-          end else if (w_granted) qst <= Q_WAIT;
+          end else if (w_granted) begin
+            // R758: on to the next vertex at once; the answers are taken below
+            // the case as they come back.
+            if (qi == 2'd3) qst <= Q_WAIT;
+            else            qi  <= qi + 2'd1;
+          end
         end
 
         // A PROJECTION THAT NEVER RETURNS MUST NOT STOP THE WORLD.
         //
-        // The board wedges exactly here: engine idle, clipper idle, qst stuck
-        // in Q_WAIT, and m2_geometry.busy therefore high forever, which holds
-        // the display-list walk in W_OBJW and stops all 3D for the rest of the
-        // session. One vertex that the projector never answers costs every
-        // frame after it.
-        //
-        // m2_geo_project's reciprocal is 29 cycles and the pool can make it
-        // wait for a grant, so a legitimate projection is tens of cycles, not
-        // hundreds. 1023 is far past any honest latency and far short of a
-        // frame. On expiry the vertex keeps whatever screen position it already
-        // had and the pipeline moves on, counted rather than silent -- the same
-        // principle as the non-finite gate, which is that bad data degrades the
-        // picture and never stalls the machine.
+        // The board wedged here once: engine idle, clipper idle, qst stuck in
+        // Q_WAIT, m2_geometry.busy high forever, the walk held in W_OBJW. A
+        // legitimate projection is tens of cycles; 1023 is far past any honest
+        // latency and far short of a frame. On expiry the vertices still owed
+        // keep whatever position they had, the pipeline moves on, and (R758)
+        // their answers, if they ever come, are counted off and dropped rather
+        // than given to the next polygon.
         Q_WAIT: if (pj_timeout) begin
-          dbg_pj_lost <= dbg_pj_lost + 16'd1;
-          if (qi == 2'd3) begin clip_in_valid <= 1'b1; qst <= Q_OUT; end
-          else begin qi <= qi + 2'd1; qst <= Q_ISS; end
-        end else if (w_pj_out_valid) begin
-          sx[qi] <= pj_out_sx[15:0];
-          sy[qi] <= pj_out_sy[15:0];
-          sf[qi] <= {pj_out_fy, pj_out_fx};   // R626
-          // R334: THE RECIPROCAL, KEPT. m2_geo_project computes 1/z for every
-          // vertex it projects and used to discard it. As a 16-bit minifloat
-          // -- the 8-bit IEEE exponent and the top 8 mantissa bits, the sign
-          // dropped because a vertex in front of the eye has positive 1/z --
-          // it is within 0.67 texels of the float answer (measured, R331),
-          // where 7 mantissa bits is 3.85 and would show.
-          soz[qi] <= mf16(pj_out_invz);
-          if (qi == 2'd3) begin
-            clip_in_valid <= 1'b1;
-            qst <= Q_OUT;
-          end else begin
-            qi  <= qi + 2'd1;
-            qst <= Q_ISS;
-          end
+          dbg_pj_lost   <= dbg_pj_lost + 16'd1;
+          clip_in_valid <= 1'b1;
+          qst           <= Q_OUT;
+        end else if (w_take && (wq_n == 3'd1)) begin   // R758: the last answer
+          clip_in_valid <= 1'b1;
+          qst           <= Q_OUT;
         end
 
         Q_OUT: if (clip_in_ready) begin
@@ -728,6 +752,32 @@ module m2_geometry (
 
         default: qst <= Q_IDLE;
       endcase
+
+      // R758: THE ANSWERS, in issue order, whatever state the projector is in.
+      if (w_take) begin
+        sx[wq[0]]  <= pj_out_sx[15:0];
+        sy[wq[0]]  <= pj_out_sy[15:0];
+        sf[wq[0]]  <= {pj_out_fy, pj_out_fx};   // R626
+        // R334: THE RECIPROCAL, KEPT, as a 16-bit minifloat -- the 8-bit IEEE
+        // exponent and the top 8 mantissa bits, within 0.67 texels (R331).
+        soz[wq[0]] <= mf16(pj_out_invz);
+      end
+      if (w_pj_out_valid && (w_drop != 3'd0)) w_drop <= w_drop - 3'd1;
+      if ((qst == Q_WAIT) && pj_timeout) begin
+        // an answer this cycle is either taken (w_drop 0) or dropped: one fewer owed
+        w_drop <= w_drop + wq_n - (w_pj_out_valid ? 3'd1 : 3'd0);
+        wq_n   <= 3'd0;
+      end else begin
+        case ({w_push, w_take})
+          2'b10: begin wq[wq_n[1:0]] <= qi; wq_n <= wq_n + 3'd1; end
+          2'b01: begin wq[0] <= wq[1]; wq[1] <= wq[2]; wq[2] <= wq[3]; wq_n <= wq_n - 3'd1; end
+          2'b11: begin
+            wq[0] <= wq[1]; wq[1] <= wq[2]; wq[2] <= wq[3];
+            wq[wq_n[1:0] - 2'd1] <= qi;
+          end
+          default: ;
+        endcase
+      end
     end
   end
 
@@ -787,7 +837,16 @@ module m2_geometry (
   // 32,767), the smallest of the four rounded down to 256 << code quarter-
   // texels (2 x (32 << code) texels), subtracted from all four. Only a polygon
   // that itself spans more than 2,048 texels still clamps.
-  function automatic logic [14:0] f2uvw(input logic [31:0] f);
+  //
+  // R791: TO THE NEAREST QUARTER, NOT DOWN. A vertex the clipper made has an
+  // arbitrary u, and truncating it to the quarter below biased every such
+  // corner by -1/8 texel on average -- with R791's finer u/z, the largest
+  // error left on the near road (1.7 -> 0.6 px mean displacement over 24
+  // MAME frames). This returns floor(f) in EIGHTHS, one bit more than f/2;
+  // the copy stage two registers on rounds it, (x + 1) >> 1, which is
+  // round-half-up of f/2. The minimum below reads the truncated quarter,
+  // which is never above the rounded one, so the subtract cannot go negative.
+  function automatic logic [15:0] f2uvw(input logic [31:0] f);
     logic [7:0]  e;
     logic [23:0] m;
     begin
@@ -799,9 +858,9 @@ module m2_geometry (
       // range R609 made room for. The geometry differential found it: MAME
       // raw v 32,798..32,932 on a close-up textured surface came out 32,767
       // at every vertex, reduced to 511, the texture squashed flat.
-      if (f[31] || e < 8'd127)      f2uvw = 15'd0;
-      else if (e >= 8'd127 + 8'd16) f2uvw = 15'h7fff;
-      else                          f2uvw = 15'(m >> (5'(8'd24 - (e - 8'd127))));
+      if (f[31] || e < 8'd127)      f2uvw = 16'd0;
+      else if (e >= 8'd127 + 8'd16) f2uvw = 16'hffff;
+      else                          f2uvw = 16'(m >> (5'(8'd23 - (e - 8'd127))));   // R791
     end
   endfunction
   function automatic logic [14:0] min4w(input logic [14:0] a, b, c, d);
@@ -814,12 +873,23 @@ module m2_geometry (
   endfunction
   // R614: the conversion is its own stage -- s368 still had clipper -> ru/rv
   // at -0.796 with conversion, minimum, subtract and clamp in one cycle.
-  logic [14:0] wu [4], wv [4];
+  logic [15:0] wu [4], wv [4];   // R791: eighths
   always_ff @(posedge clk) for (int k = 0; k < 4; k++) begin wu[k] <= f2uvw(cu[k]); wv[k] <= f2uvw(cv[k]); end
   wire  [15:0] uper = (16'd256 << ctex[3:1]) - 16'd1;   // 2 x width, quarter-texels, less one
   wire  [15:0] vper = (16'd256 << ctex[6:4]) - 16'd1;
-  wire  [14:0] uoff = min4w(wu[0], wu[1], wu[2], wu[3]) & ~uper[14:0];
-  wire  [14:0] voff = min4w(wv[0], wv[1], wv[2], wv[3]) & ~vper[14:0];
+  // R739: the minimum in two rounds a stage apart -- the pairs registered
+  // (pu/qu, pv/qv), then the pair of pairs and the mask (s785 at 80 MHz:
+  // wv -> voff_r -0.695, wu -> uoff_r -0.272).
+  logic [14:0] pu_r, qu_r, pv_r, qv_r;
+  always_ff @(posedge clk) begin
+    // R791: on the truncated quarter, wu[15:1] -- the same bits as before
+    pu_r <= (wu[0][15:1] < wu[1][15:1]) ? wu[0][15:1] : wu[1][15:1];
+    qu_r <= (wu[2][15:1] < wu[3][15:1]) ? wu[2][15:1] : wu[3][15:1];
+    pv_r <= (wv[0][15:1] < wv[1][15:1]) ? wv[0][15:1] : wv[1][15:1];
+    qv_r <= (wv[2][15:1] < wv[3][15:1]) ? wv[2][15:1] : wv[3][15:1];
+  end
+  wire  [14:0] uoff = ((pu_r < qu_r) ? pu_r : qu_r) & ~uper[14:0];
+  wire  [14:0] voff = ((pv_r < qv_r) ? pv_r : qv_r) & ~vper[14:0];
   function automatic logic [12:0] sat13(input logic [14:0] x);
     sat13 = (x > 15'd8191) ? 13'h1fff : x[12:0];
   endfunction
@@ -831,30 +901,40 @@ module m2_geometry (
   // now hold THIS quad's values. Everything else the store takes (x, y, z,
   // 1/z, texture, colour) comes straight off the held clipper outputs.
   logic c_valid, c_ready, c_seen;
-  logic [1:0] c_age;   // R614: cycles this quad has been held, to 2; R718: to 3
+  logic [2:0] c_age;   // R614: cycles this quad has been held, to 2; R718: to 3; R739: to 4
   logic [12:0] ru [4], rv [4];
   // R718: AND THE MINIMUM IS ITS OWN STAGE TOO. At 75 and 80 MHz the four-way
   // minimum, the mask, the subtract and the saturate missed (s737: wu -> ru
   // -0.330 at 75; s735: wv -> rv -0.591 at 80). uoff/voff are registered
   // beside a one-cycle copy of wu/wv, and the subtract runs from both.
   logic [14:0] uoff_r, voff_r;
-  logic [14:0] wu_d [4], wv_d [4];
+  // R791: eighths to the nearest quarter, half up
+  function automatic logic [14:0] rnd8(input logic [15:0] w);
+    rnd8 = (&w) ? 15'h7fff : 15'((17'(w) + 17'd1) >> 1);
+  endfunction
+  logic [15:0] wu_d [4], wv_d [4];   // R791: eighths
+  logic [14:0] wu_dd [4], wv_dd [4];   // R739: a stage more, beside the minimum's
   always_ff @(posedge clk) begin
     uoff_r <= uoff;
     voff_r <= voff;
-    for (int k = 0; k < 4; k++) begin wu_d[k] <= wu[k]; wv_d[k] <= wv[k]; end
+    for (int k = 0; k < 4; k++) begin
+      wu_d[k] <= wu[k];     wv_d[k] <= wv[k];
+      // R791: the rounding, in a stage that was a plain copy. 0xffff (the
+      // clamp) stays at the top of the 15-bit range rather than wrapping.
+      wu_dd[k] <= rnd8(wu_d[k]);  wv_dd[k] <= rnd8(wv_d[k]);
+    end
   end
   always_ff @(posedge clk) for (int k = 0; k < 4; k++) begin
-    ru[k] <= sat13(wu_d[k] - uoff_r);
-    rv[k] <= sat13(wv_d[k] - voff_r);
+    ru[k] <= sat13(wu_dd[k] - uoff_r);
+    rv[k] <= sat13(wv_dd[k] - voff_r);
   end
   // R614: two register stages (wu/wv, then ru/rv); R718: three (the minimum),
-  // so the quad is shown once it has been held three cycles.
+  // so the quad is shown once it has been held three cycles. R739: four.
   always_ff @(posedge clk or negedge rst_n)
-    if (!rst_n)                  c_age <= 2'd0;
-    else if (!c_valid || c_ready) c_age <= 2'd0;   // gone, or taken this cycle
-    else if (c_age != 2'd3)       c_age <= c_age + 2'd1;
-  assign c_seen = (c_age == 2'd3);
+    if (!rst_n)                  c_age <= 3'd0;
+    else if (!c_valid || c_ready) c_age <= 3'd0;   // gone, or taken this cycle
+    else if (c_age != 3'd4)       c_age <= c_age + 3'd1;
+  assign c_seen = (c_age == 3'd4);   // R739: four stages now
   assign q_valid = c_valid && c_seen;
   assign c_ready = q_ready && c_seen;
   assign q_u0 = ru[0]; assign q_v0 = rv[0];
@@ -862,6 +942,7 @@ module m2_geometry (
   assign q_u2 = ru[2]; assign q_v2 = rv[2];
   assign q_u3 = ru[3]; assign q_v3 = rv[3];
   assign q_tex = ctex[23:0];
+  assign q_tlinv = (ctex[31:24] == 8'd1);   // R784
   assign q_oz0 = coz[0]; assign q_oz1 = coz[1];      // R334
   assign q_oz2 = coz[2]; assign q_oz3 = coz[3];
 

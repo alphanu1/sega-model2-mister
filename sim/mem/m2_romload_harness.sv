@@ -119,7 +119,7 @@ module m2_romload_harness #(
     .wr_req(ldr_wr_req), .wr_addr(ldr_wr_addr), .wr_din(ldr_wr_din),
     .wr_be(ldr_wr_be), .wr_ack(ldr_wr_ack),
     .p_req(p_req), .p_we('0), .p_addr(p_addr), .p_din('0), .p_be('1),
-    .p_dout(p_dout), .p_ack(p_ack),
+    .p_dout(p_dout), .p_ack(p_ack), .p_long('0), .p_lo(),   // R787
     .dbg_req(), .dbg_grant()
   );
 

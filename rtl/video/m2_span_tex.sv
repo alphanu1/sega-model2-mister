@@ -27,20 +27,26 @@
 // part of the picture missing. The bands are beam-paced, so latency in this
 // path is not free and a flat span must cost what it always did.
 //
-// THE COLOUR IS THE POLYGON'S, SCALED BY THE TEXEL. The reference maps the
-// texel through the luma table and then through the colour table:
+// THE COLOUR. The reference maps the texel through the luma table and then
+// through the colour table:
 //
 //     luma = lumaram[lumabase + (t >> 1)] * object.luma / 256;
 //     colour = gamma(colortable_{r,g,b}[(colorbase_ch << 8) | luma])
 //
-// which is the SAME colour ramp the flat path uses, read at an index the
-// texture supplies instead of one the lighting supplies. Scaling the polygon's
-// finished colour by the texel is that ramp approximated as linear. It puts
-// the texture's detail and its shape on the screen with the polygon's own hue
-// and lighting; what it does not reproduce is the curve of the ramp or a luma
-// table that is not the identity. The exact path needs sixteen colours
-// resolved per polygon -- a four-bit texel can only take sixteen values -- and
-// that is a table and an allocator, not a change to this walk.
+// R275 scaled the polygon's finished colour by the texel. R784: that kept one
+// hue per polygon and lost every channel the table saturates, and it ignored
+// the luma table, which Daytona uses inverted (row 1) on its decals -- their
+// yellow came out black. Now, with the table read once per polygon at luma 32
+// by m2_geo_engine (in_col, the slope: gam_MAME(xlat[comp][32]) * L / 256):
+//
+//     lum   = lumabase row 1 ? 63 - t/4 : t/4        (t on the reference's
+//             0..240 scale; in_tex[11] carries "row 1", see m2_raster3d)
+//     pixel = (col == 0 || lum == 0) ? 0 : min(255, A + col * lum / 32)
+//
+// A is the output curve's pedestal: 0 for MAME's, 64 Off, 37 Mild (their
+// gain is folded into col). Measured on MAME's lists against the exact path:
+// mean error 4-7 of 255 and no pixel over 32 (MAME's curve), where R275's
+// model was 13-31 and 8-57% over 32 (study R784).
 
 `timescale 1ns/1ps
 
@@ -76,6 +82,11 @@ module m2_span_tex #(
   // pixels of gradient. 1 starts the walk (PIXSTEP-1)/2 pixels in, for u/z,
   // v/z and 1/z alike so the divide still pairs them at one point.
   parameter bit          GC     = 1'b0,
+  // R791: m2_raster_fill's UZF -- u/z and v/z arrive with UZF more bits, as
+  // (u/z) << 18 (18 - UZF fraction bits) with gradients in units of 2^-UZF.
+  // Must equal the fill's. The divide's answer is the same 16.16 quarter-
+  // texel coordinate for every UZF: the un-normalise shifts two more.
+  parameter int unsigned UZF    = 4,
   parameter int unsigned SCR_W  = 496,
   parameter int unsigned BAND_H = 8,
   // Derived -- never overridden. PARAMETERS, not localparams: Quartus 17.0
@@ -103,8 +114,10 @@ module m2_span_tex #(
   input  logic signed [31:0] in_y, in_x0, in_x1,
   input  logic [23:0]        in_col,
   input  logic               in_moire,
-  input  logic signed [31:0] in_u, in_v,          // quarter-texels, 16 fractional bits
-  // 8.8 texels a pixel (R286), shifted up to this unit's 16.16 on the way in.
+  // R791: u/z, v/z in quarter-texels times 2^18 -- 18 - UZF fraction bits of
+  // a value scaled by 2^UZF (was 16.16 unscaled, i.e. times 2^16).
+  input  logic signed [31:0] in_u, in_v,
+  // 16.8 in units of 2^-UZF, shifted up to the values' fraction bits on the way in.
   input  logic signed [23:0] in_dudx, in_dvdx,     // R618: 16.8
   // R339: 1/z at the span's start and its gradient along x. u and v above are
   // u/z and v/z, and the texel coordinate is u = (uoz << 15) / ooz -- the
@@ -139,6 +152,9 @@ module m2_span_tex #(
   input  logic [8:0]         tx_texel,
   output logic               tx_take,
   input  logic               late,            // R633: m2_raster3d's tex_late
+  // R784: the OSD's output curve (m2_geo_engine's encoding: 0 MAME, 1 Mild,
+  // 2/3 Off), for the pedestal a textured pixel adds. Quasi-static.
+  input  logic [1:0]         gamma_sel,
 
   output logic [31:0]        dbg_texpix,      // textured pixels emitted
   // TEXELS THAT ARE NOT 0xF, which is the question "did the game upload its
@@ -280,14 +296,32 @@ module m2_span_tex #(
   // R476: the emit computes its own intensity from the texel that has just
   // arrived, so there is no registered copy to derive one from.
   /* verilator lint_off UNUSEDSIGNAL */
-  function automatic logic [7:0] scale(input logic [7:0] c, input logic [7:0] i);
-    logic [15:0] p;
+  // R784: a channel of a textured pixel, min(255, A + c * lum / 32), and 0
+  // where the reference's table is 0 (no component, or luma 0). IN TWO
+  // HALVES, because R741 measured a multiply with an add after it at -0.13 /
+  // -0.281 ns into e_col at 80 MHz and fixed it by taking the add away: the
+  // emit registers the bare product (e_pr, as R741's c * (i + 1) did) and the
+  // pedestal, the clamp and the zero are applied on the way OUT, where the
+  // writer's own intake register (m2_fb_wcomb px_r) is the next flop.
+  function automatic logic [7:0] tfin(input logic [13:0] p, input logic z,
+                                      input logic [6:0] a);
+    logic [9:0] q;
     begin
-      // (c * i + c) >> 8, so a full texel -- i = 255 -- returns c EXACTLY
-      // rather than c * 255/256. Without the +c, turning textures on darkens
-      // every pixel by a step even where the texture is solid.
-      p = 16'(c) * 16'(i) + 16'(c);
-      scale = p[15:8];
+      q    = {1'b0, p[13:5]} + {3'd0, a};
+      tfin = z ? 8'd0 : (q[9:8] != 2'd0) ? 8'hff : q[7:0];
+    end
+  endfunction
+  // R784: the texel's luma. m2_texel_bl answers t on a 0..255 scale (a nibble
+  // replicated, x * 17); the reference's is 0..240 (x << 4), so t - t/16 puts
+  // it back exactly for every unfiltered texel and within a step between. The
+  // luma table: Daytona's row 0 is i/2 and row 1 is 63 - i/2 (dumped, MAME
+  // 0.289; rows 2-65 are effects ramps no measured pixel used), so with t >> 1
+  // as the index the luma is t/4 or its complement.
+  function automatic logic [5:0] tlum(input logic [7:0] t, input logic inv);
+    logic [7:0] tm;
+    begin
+      tm   = t - {4'd0, t[7:4]};
+      tlum = inv ? ~tm[7:2] : tm[7:2];
     end
   endfunction
   /* verilator lint_on UNUSEDSIGNAL */
@@ -319,7 +353,8 @@ module m2_span_tex #(
 
   // The registered half, used only while a textured span is being walked.
   logic               e_valid;
-  logic [23:0]        e_col;
+  logic [13:0]        e_pr [3];   // R784: c * lum per channel (R, G, B), the emit's product
+  logic [2:0]         e_z;        // R784: ... and whether the table is 0 there
   // THE PIXEL'S OWN x, LATCHED WITH ITS COLOUR. Taking it from the walking
   // register instead puts every pixel one to the right of where its texel came
   // from: the walk advances in the same cycle the pixel is offered, so the
@@ -344,7 +379,9 @@ module m2_span_tex #(
   // PIXSTEP wide, clipped at the span's end -- computed when the pixel is
   // formed, not when it is offered.
   assign out_x1    = idle ? in_x1 : e_x1;
-  assign out_col   = idle ? in_col   : e_col;
+  assign out_col   = idle ? in_col   : {tfin(e_pr[0], e_z[0], ped),   // R784
+                                          tfin(e_pr[1], e_z[1], ped),
+                                          tfin(e_pr[2], e_z[2], ped)};
   assign out_moire = idle ? in_moire : moire_p[e_p];
 
   // A flat span is accepted only when the band takes it, which is the handshake
@@ -426,6 +463,7 @@ module m2_span_tex #(
   // draws a span whose texture slides along it -- and every arithmetic check
   // still passes.
   localparam int unsigned PIPE_D = 7;   // R718: d0, d1a, d1, d2, d3, d4a, d4
+  localparam int unsigned UVS = 18 - UZF;   // R791: the u/v values' fraction bits
   logic                    sh_v    [PIPE_D];
   logic signed [31:0]      sh_x    [PIPE_D];
   logic                    sh_last [PIPE_D];
@@ -484,16 +522,19 @@ module m2_span_tex #(
   // signed variables, no casts (R662).
   localparam logic signed [15:0] QXMAX = 16'(SCR_W - 1);
   localparam logic signed [15:0] QBH   = 16'(BAND_H);
+  // R739: the group's span parameters, selected from its slot one stage
+  // EARLIER (sh_p[PIPE_D-4]) and registered as it moves to PIPE_D-3, so the
+  // query no longer starts with the slot mux (s787 at 80 MHz: k_p -> mq_f1
+  // -0.280, -> mq_f0). The same values: a slot is not reloaded while a group
+  // of its span is in flight (R490), and these move only with the pipe.
+  logic signed [15:0] q_x1, q_y;
+  logic signed [15:0] q_sm1;   // R742: stp(k) - 1, latched with k (s795: q_k -> mq_f0 -0.236)
   always_comb begin
-    automatic logic               qp   = sh_p[PIPE_D-3];
-    /* verilator lint_off UNUSEDSIGNAL */
-    automatic logic signed [31:0] qs32 = stp(k_p[qp]);   // a step of 1-8
-    /* verilator lint_on UNUSEDSIGNAL */
-    automatic logic signed [15:0] qs   = qs32[15:0];
+    // R742: the step less one comes latched (q_sm1)
     automatic logic signed [15:0] qx   = sh_x[PIPE_D-3][15:0];
-    automatic logic signed [15:0] qx1  = x1_p[qp][15:0];
-    automatic logic signed [15:0] qy   = y_p[qp][15:0];
-    automatic logic signed [15:0] qe   = qx + qs - 16'sd1;   // R650
+    automatic logic signed [15:0] qx1  = q_x1;
+    automatic logic signed [15:0] qy   = q_y;
+    automatic logic signed [15:0] qe   = qx + q_sm1;   // R650: qx + step - 1
     automatic logic signed [15:0] qxe  = (qe > qx1) ? qx1 : qe;
     automatic logic signed [15:0] qrow = qy - mk_band_y0;
     automatic logic signed [15:0] xa   = (qx  < 16'sd0) ? 16'sd0 : qx;
@@ -538,11 +579,22 @@ module m2_span_tex #(
   // walk removed that stage by accident. Putting it back costs a stage but not
   // a cycle per group, because the next fetch is issued on the same edge.
   logic               rt_valid;
-  logic [8:0]         rt_texel;   // R620: {discard, t}
+  logic               rt_texel;    // R784: the discard bit only (R620 held {discard, t})
   logic signed [31:0] rt_x;
   logic               rt_last;
   logic               rt_p, e_p;   // R490
   logic               rt_skip;     // R607
+  // R731: the retiring group's span parameters, taken from its slot as the
+  // group ENTERS the retire stage rather than through rt_p as it leaves. At
+  // 80 MHz rt_p -> the slot select -> scale's multiply -> e_col was the path
+  // (s759: 0.493 ns at 75, 12 endpoints; rt_p -> e_x1 0.845, 16). The same
+  // values: a slot is not reloaded while a group of its span is in flight
+  // (R490), which the emit-time read below always relied on.
+  logic [23:0]        rt_col;
+  logic [5:0]         rt_lum;  // R784: the texel's luma, 0..63 (was R741's rt_i1)
+  logic [6:0]         ped;     // R784: the output curve's pedestal, from gamma_sel
+  logic [1:0]         rt_k;
+  logic signed [31:0] rt_x1;
   logic [8:0]         lt_texel;    // R633: the last fetched answer, for a reuse
 
   // Take a result when there is one, no fetch is outstanding, and the emit
@@ -561,8 +613,8 @@ module m2_span_tex #(
   wire ld_span   = ld_cold || ld_over;
   // R616: (PIXSTEP-1)/2 pixels of each gradient, 16.16 (gradients are 8.8).
   // R650: x (2^pxk - 1) as a shift and a subtract.
-  wire signed [31:0] gc_du = GC ? (((32'(in_dudx)   <<< pxk) - 32'(in_dudx))   <<< 7) : 32'sd0;
-  wire signed [31:0] gc_dv = GC ? (((32'(in_dvdx)   <<< pxk) - 32'(in_dvdx))   <<< 7) : 32'sd0;
+  wire signed [31:0] gc_du = GC ? (((32'(in_dudx)   <<< pxk) - 32'(in_dudx))   <<< (UVS - 9)) : 32'sd0;   // R791
+  wire signed [31:0] gc_dv = GC ? (((32'(in_dvdx)   <<< pxk) - 32'(in_dvdx))   <<< (UVS - 9)) : 32'sd0;
   wire signed [31:0] gc_do = GC ? (((32'(in_doozdx) <<< pxk) - 32'(in_doozdx)) <<< 7) : 32'sd0;
   // R478: the retire slot only has to be free by the NEXT edge, not this one.
   // Requiring !rt_valid outright cost a whole cycle a group (2.36 -> 3.36):
@@ -653,6 +705,7 @@ module m2_span_tex #(
       u_h1 <= '0; v_h1 <= '0; u_h2 <= '0; v_h2 <= '0; u_h3 <= '0; v_h3 <= '0;
       u_h4 <= '0; v_h4 <= '0; u_h5 <= '0; v_h5 <= '0; sh_m <= 1'b0;   // R607
       mq_f1 <= 1'b0; mq_f0 <= 1'b1; mq_wi <= '0; mq_need <= '0;   // R631
+      q_x1 <= '0; q_y <= '0; q_sm1 <= '0;                           // R739, R742
       iss_u <= '0; iss_v <= '0; iss_ooz <= '0; iss_x <= '0; iss_run <= 1'b0; iss_step <= 4'd1;
       for (int k = 0; k < PIPE_D; k++) begin
         sh_v[k] <= 1'b0; sh_x[k] <= '0; sh_last[k] <= 1'b0; sh_p[k] <= 1'b0;
@@ -712,6 +765,10 @@ module m2_span_tex #(
         iss_x   <= iss_x   + 32'(iss_step);
         if (iss_last) iss_run <= 1'b0;
       end
+      // R739: for PIPE_D-3, a stage early
+      q_sm1 <= 16'(stp(k_p[sh_p[PIPE_D-4]]) - 32'sd1);   // R742
+      q_x1 <= x1_p[sh_p[PIPE_D-4]][15:0];
+      q_y  <= y_p [sh_p[PIPE_D-4]][15:0];
       sh_v[0]    <= iss_run;
       sh_x[0]    <= iss_x;
       sh_last[0] <= iss_run && iss_last;
@@ -765,7 +822,9 @@ module m2_span_tex #(
       // instead of five, and nothing issues any slower.
       d4a_pu <= 64'(u_h5) * 64'(d3_r1);   // R718: one deeper, to match
       d4a_pv <= 64'(v_h5) * 64'(d3_r1);
-      d4a_sh <= (d3_e < 6'd23) ? 5'd16 : 5'(d3_e - 6'd7);
+      // R791: u/z is times 2^18 now, not 2^16 -- two more, so the answer is
+      // still 16.16 quarter-texels. 18..26, inside the five bits.
+      d4a_sh <= (d3_e < 6'd23) ? 5'd18 : 5'(d3_e - 6'd5);
 
       // stage 4b: the un-normalise and the clamp, on the registered product.
       d4_u <= sat32(d4a_pu >> d4a_sh);
@@ -781,21 +840,29 @@ module m2_span_tex #(
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       st <= T_IDLE; dv_age <= 3'd0; of_wp <= '0; of_rp <= '0;   // R539
-      rt_valid <= 1'b0; rt_texel <= 9'd0; rt_x <= '0; rt_last <= 1'b0;   // R478
+      rt_valid <= 1'b0; rt_texel <= 1'b0; rt_x <= '0; rt_last <= 1'b0;   // R478
+      rt_lum <= 6'd0; ped <= 7'd0;                                      // R784
       for (int k = 0; k < 2; k++) begin
         y_p[k] <= '0; x1_p[k] <= '0; col_p[k] <= '0; k_p[k] <= '0;
         moire_p[k] <= 1'b0; tex_p[k] <= '0;
       end
       sp_iss <= 1'b0; sp_out <= 1'b0; sp_n <= 2'd0; e_last <= 1'b0;   // R490
       rt_p <= 1'b0; e_p <= 1'b0; rt_skip <= 1'b0;                     // R490, R607
+      rt_col <= '0; rt_k <= 2'd0; rt_x1 <= '0;                        // R731
       lf_v <= 1'b0; lf_p <= 1'b0; lf_xn <= '0; lt_texel <= 9'd0;      // R633
       du_r <= '0; dv_r <= '0;
       doz_r <= '0;
       // R433
-      e_valid <= 1'b0; e_col <= '0; e_x <= '0; e_x1 <= '0;
+      e_valid <= 1'b0; e_x <= '0; e_x1 <= '0;
+      for (int k = 0; k < 3; k++) e_pr[k] <= '0;
+      e_z <= '0;   // R784
       dbg_texpix <= '0; dbg_texnz <= '0;
     end else begin
       if (e_valid && out_ready) e_valid <= 1'b0;
+      // R784: Off keeps the table's pedestal (64), Mild its own curve's
+      // (32 x 1.14 = 37); MAME's curve removes it. Registered, so tfin's
+      // add reads a flop.
+      ped <= gamma_sel[1] ? 7'd64 : gamma_sel[0] ? 7'd37 : 7'd0;
 
       // R490: A SPAN IS FINISHED when its last pixel has been taken -- or, if
       // that pixel was a transparent texel the emit skipped, at the skip. The
@@ -815,7 +882,7 @@ module m2_span_tex #(
       begin
         automatic logic done_e  = e_valid && out_ready && e_last;
         automatic logic done_rt = rt_valid && (!e_valid || out_ready) && rt_last
-                                  && (rt_skip || rt_texel[8]);   // R607, R620
+                                  && (rt_skip || rt_texel);   // R607, R620
         automatic logic [2:0] n_next = 3'(sp_n) + 3'(ld_span)
                                      - 3'(done_e) - 3'(done_rt);
         automatic logic slot = ld_cold ? sp_out : ~sp_iss;
@@ -827,8 +894,8 @@ module m2_span_tex #(
           col_p[slot]   <= in_col;
           moire_p[slot] <= in_moire;
           tex_p[slot]   <= in_tex;
-          du_r          <= (32'(in_dudx)   <<< 8) <<< pxk;   // R650: a group's step
-          dv_r          <= (32'(in_dvdx)   <<< 8) <<< pxk;
+          du_r          <= (32'(in_dudx)   <<< (UVS - 8)) <<< pxk;   // R650: a group's step; R791
+          dv_r          <= (32'(in_dvdx)   <<< (UVS - 8)) <<< pxk;
           doz_r         <= (32'(in_doozdx) <<< 8) <<< pxk;
           k_p[slot]     <= pxk;
           sp_iss        <= slot;
@@ -878,11 +945,16 @@ module m2_span_tex #(
           // on the same edge, so the emptying must not undo the loading.
           if (rt_take) begin
             rt_valid <= 1'b1;
-            rt_texel <= head_reuse ? lt_texel : tx_texel;   // R633
+            rt_texel <= head_reuse ? lt_texel[8] : tx_texel[8];   // R633, R784
+            rt_lum   <= tlum(head_reuse ? lt_texel[7:0] : tx_texel[7:0],
+                             tex_p[of_p[of_rp[OW-2:0]]][11]);   // R784
             if (!head_skip && !head_reuse) lt_texel <= tx_texel;
             rt_x     <= 32'(of_x[of_rp[OW-2:0]]);   // sign-extended
             rt_last  <= of_last[of_rp[OW-2:0]];
             rt_p     <= of_p   [of_rp[OW-2:0]];
+            rt_col   <= col_p[of_p[of_rp[OW-2:0]]];   // R731
+            rt_k     <= k_p  [of_p[of_rp[OW-2:0]]];
+            rt_x1    <= x1_p [of_p[of_rp[OW-2:0]]];
             rt_skip  <= head_skip;                  // R607
             of_rp    <= of_rp + 1'd1;
             // R484: WRAPS, DOES NOT SATURATE (see the history in git).
@@ -891,19 +963,20 @@ module m2_span_tex #(
 
           // Colour and emit the retired group.
           if (rt_valid && (!e_valid || out_ready)) begin
-            automatic logic       skip = rt_skip || rt_texel[8];   // R607, R620
-            automatic logic [7:0] iv   = rt_texel[7:0];            // R620: already 8 bits
+            automatic logic       skip = rt_skip || rt_texel;   // R607, R620
             if (!rt_take) rt_valid <= 1'b0;       // R539: a take refills it
             e_valid <= !skip;                     // R326: transparent texel
             e_last  <= rt_last;                   // R490
             e_x     <= rt_x;
-            e_x1    <= ((rt_x + stp(k_p[rt_p]) - 32'sd1) > x1_p[rt_p])
-                         ? x1_p[rt_p] : (rt_x + stp(k_p[rt_p]) - 32'sd1);   // R650
-            e_col   <= {scale(col_p[rt_p][23:16], iv),
-                        scale(col_p[rt_p][15:8],  iv),
-                        scale(col_p[rt_p][7:0],   iv)};
+            e_x1    <= ((rt_x + stp(rt_k) - 32'sd1) > rt_x1)
+                         ? rt_x1 : (rt_x + stp(rt_k) - 32'sd1);   // R650, R731
+            // R784: the product alone here (R741's path); tfin finishes it
+            for (int k = 0; k < 3; k++) begin
+              e_pr[k] <= 14'(rt_col[23 - 8 * k -: 8]) * 14'(rt_lum);
+              e_z[k] <= (rt_col[23 - 8 * k -: 8] == 8'd0) || (rt_lum == 6'd0);
+            end
             e_p     <= rt_p;                      // R490
-            if (!skip) dbg_texpix <= dbg_texpix + stp(k_p[rt_p]);   // R484: wraps
+            if (!skip) dbg_texpix <= dbg_texpix + stp(rt_k);   // R484: wraps
           end
         end
 

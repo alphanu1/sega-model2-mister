@@ -72,7 +72,15 @@ struct Dut {
     }
 };
 
-// MAME's project_point plus push_object's guard.
+// R756: the screen position as a count of quarter pixels, rounded to the
+// nearest (half away from zero): |q| = (trunc(8|x|) + 1) >> 1. The pixel is
+// q >> 2 (floor) and the quarter q & 3, so a vertex is sx + fx/4.
+static int64_t qround(float f) {
+    int64_t m = (int64_t)std::trunc(std::fabs((double)f) * 8.0);
+    m = (m + 1) >> 1;
+    return f < 0.0f ? -m : m;
+}
+// MAME's project_point plus push_object's guard -- R756: snapped as ours is.
 static void model(const View& v, float x, float y, float z,
                   int32_t* sx, int32_t* sy, int* behind) {
     if (!(z > 0.0f)) { *sx = 0; *sy = 0; *behind = 1; return; }
@@ -80,13 +88,14 @@ static void model(const View& v, float x, float y, float z,
     volatile float xx = x / z, yy = y / z;
     volatile float fx = v.xc + (xx * v.zoomx + v.viewx);
     volatile float fy = v.yc - (yy * v.zoomy + v.viewy);
-    *sx = (int32_t)fx; *sy = (int32_t)fy;
+    *sx = (int32_t)(qround(fx) >> 2); *sy = (int32_t)(qround(fy) >> 2);   // R756
 }
-// R626: the quarter pixel below trunc(x), 0 for x < 0 -- out_fx's contract
+// R756: the quarter of q = round(4x), half away from zero -- out_fx's contract
+// (R626's was the quarter below trunc(x), 0 for x < 0)
 static int model_q(const View& v, float x, float z) {
     volatile float xx = x / z;
     volatile float fx = v.xc + (xx * v.zoomx + v.viewx);
-    return fx < 0.0f ? 0 : (int)((int64_t)std::trunc((double)fx * 4.0) & 3);
+    return (int)(qround(fx) & 3);
 }
 
 int main(int argc, char** argv) {

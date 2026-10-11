@@ -100,6 +100,20 @@ module m2_wr_arb #(
     end
   end
 
+  // R731: THE PICK, REGISTERED. last -> the rotate modulo N -> any -> held
+  // was 0.514 ns at 75 MHz (s759), short of 80. `last` changes only on a
+  // release, and a release is always followed by the dead `gap` cycle, so a
+  // pick registered during that cycle already sees the new `last`. A request
+  // that sees its pick a cycle later: pend/want hold a request until its
+  // acknowledge, so a registered pick cannot name an owner with nothing to
+  // write. Costs one cycle only when a write arrives at an idle port.
+  logic          any_r;
+  logic [OW-1:0] pick_r;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin any_r <= 1'b0; pick_r <= '0; end
+    else        begin any_r <= any && !held; pick_r <= pick; end
+  end
+
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       held <= 1'b0; own <= '0; gap <= 1'b0; last <= OW'(N - 1);
@@ -109,7 +123,7 @@ module m2_wr_arb #(
       if (s_ack) begin held <= 1'b0; gap <= 1'b1; last <= own; end
     end else begin
       gap <= 1'b0;
-      if (!gap && any) begin held <= 1'b1; own <= pick; end
+      if (!gap && any_r) begin held <= 1'b1; own <= pick_r; end   // R731
     end
   end
 

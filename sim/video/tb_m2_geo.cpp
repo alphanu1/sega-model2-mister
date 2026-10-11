@@ -44,6 +44,7 @@ static bool auto_end = true;
 // R638: a walker served from `mem` itself, one read every rd_slow cycles, so a
 // pushed word that drains ahead of the walk is one the walk really reads.
 static int rd_slow = 0, rd_cnt = 0;
+static int wr_slow = 0, wr_cnt = 0;   // R752
 static uint16_t rdm(uint32_t a){ auto it = mem.find(a); return it == mem.end() ? 0xFFFF : it->second; }
 static void tick() {
   if (rd_slow) { d->rd_ack = 0;
@@ -51,10 +52,11 @@ static void tick() {
       uint32_t a = BASE + (uint32_t(d->rd_addr) << 1);
       d->rd_data = uint32_t(rdm(a)) | (uint32_t(rdm(a + 1)) << 16); d->rd_ack = 1; } }
   if (auto_end) { d->rd_ack = 0; if (d->rd_req) { d->rd_data = 0x07800f0fu; d->rd_ack = 1; } }
-  // the shared write port: ack a request the cycle after it is seen
+  // the shared write port: ack a request the cycle after it is seen, or
+  // wr_slow cycles after (R752: a port busy with other owners)
   static bool pend = false; static uint32_t pa; static uint16_t pd;
   d->sd_wr_ack = 0;
-  if (pend) { mem[pa] = pd; d->sd_wr_ack = 1; pend = false;
+  if (pend && ++wr_cnt >= wr_slow) { wr_cnt = 0; mem[pa] = pd; d->sd_wr_ack = 1; pend = false;
               if (trace_wr) std::printf("    WR %08x <= %04x\n", pa, pd); }
   else if (d->sd_wr_req) { pa = d->sd_wr_addr; pd = d->sd_wr_din; pend = true; }
   d->clk = 0; d->eval(); d->clk = 1; d->eval();
@@ -611,7 +613,9 @@ int main(int argc,char**argv){
     std::printf("test: R642 window_data captured -- %u ops, win_cnt +%u\n", d->dbg_walk_ops, (unsigned)(uint8_t)(d->win_cnt - c0));
     ck("window: viewport start", d->win_vp_s, ww[0]);
     ck("window: viewport end",   d->win_vp_e, ww[1]);
-    ck("window: centre 0",       d->win_c0,   ww[2]);
+    // R760: the centre is applied per OBJECT (its select, opcode bits 30:29);
+    // a list with no object leaves win_c0 where it was.
+    ck("window: centre held until an object", d->win_c0, 0x00f80140u);
     ck("window: counted once",   (uint8_t)(d->win_cnt - c0), 1);
     ck("walk in step: three opcodes", d->dbg_walk_ops, 3);
     ck("walk in step: matrix landed", d->dbg_mtx_n, 1);
@@ -729,6 +733,117 @@ int main(int argc,char**argv){
   }
   d->skip = 0; d->trig_mode = 0;
 
+
+  // ---- R747: push_busy covers EVERY cycle a pushed word is not yet in memory.
+  // It is what holds the CPU's count patch (R697); a cycle with a word still
+  // queued and push_busy low is a cycle the patch can overtake the placeholder.
+  // q_valid alone left two such cycles after each push and one between words.
+  {
+    idle(200);
+    w(1, 0x00000300); idle(4);
+    const uint32_t v[3] = {0x11112222u, 0x33334444u, 0x55556666u};
+    for (int k = 0; k < 3; ++k) { mem.erase(BASE + 0x180 + 2*k); mem.erase(BASE + 0x181 + 2*k); }
+    auto landed = [&]() {
+      for (int k = 0; k < 3; ++k) {
+        auto lo = mem.find(BASE + 0x180 + 2*k), hi = mem.find(BASE + 0x181 + 2*k);
+        if (lo == mem.end() || hi == mem.end() || lo->second != (v[k] & 0xffff) || hi->second != (v[k] >> 16)) return false;
+      }
+      return true;
+    };
+    int holes = 0, seen_busy = 0;
+    for (int k = 0; k < 3; ++k) {
+      d->wr_ctl = d->wr_setwp = d->wr_setrp = 0; d->wr_push = 1; d->wdata = v[k]; d->eval();
+      for (int g = 0; d->push_stall && g < 4096; ++g) tick();
+      tick();                                   // taken on this edge
+      d->wr_push = 0; d->eval();
+      if (!landed() && !d->push_busy) ++holes;
+      if (d->push_busy) ++seen_busy;
+    }
+    for (int c = 0; c < 400 && !landed(); ++c) {
+      tick();
+      if (!landed() && !d->push_busy) ++holes;
+      if (d->push_busy) ++seen_busy;
+    }
+    ck("R747 the three pushed words landed", landed() ? 1u : 0u, 1u);
+    ck("R747 push_busy never low with a word queued", uint32_t(holes), 0u);
+    ++checks; if (!seen_busy) { std::printf("  FAIL R747 push_busy never rose\n"); ++fails; }
+  }
+
+  // ---- R752: A FLIP'S WALK WAITS FOR EVERY WORD PUSHED BEFORE THE FLIP.
+  // The board: after a flip the game pushes its next list into the other
+  // buffer at once, so the queue is never idle and the walk started on
+  // drain_wait's 1,023-cycle timeout with its own list's tail still queued --
+  // held in its window, the walk read the previous frame's words there. Here
+  // list A (40 nops and an end) is pushed over an old list of ends through a
+  // slow write port (~2,500 cycles to land), flipped, and list B is pushed
+  // into the other buffer without pause. The walk must read all 41 opcodes,
+  // and must start before B has finished landing (B does not hold it).
+  {
+    d->rst_n = 0; for (int i = 0; i < 4; i++) tick(); d->rst_n = 1; idle(2);
+    d->trig_mode = 0; d->skip = 0; d->eng_busy = 0;
+    mem.clear();
+    auto put = [&](uint32_t dw, uint32_t v){ uint32_t a = BASE + (dw << 1);
+                                             mem[a] = v & 0xFFFF; mem[a + 1] = v >> 16; };
+    const uint32_t A = 0x200, N = 40, B = 0x4200, END = 0x0fu << 23;
+    for (uint32_t i = 0; i <= N; i++) put(A + i, END);      // the old list: ends
+    rd_slow = 1; wr_slow = 30;
+    w(1, A * 4);
+    for (uint32_t i = 0; i < N; i++) w(3, 0);               // nops
+    w(3, END);
+    w(2, A * 4);                                            // flip A, its tail queued
+    w(1, B * 4);
+    unsigned b_pushed = 0, b_at_walk = 0;
+    const unsigned f0 = d->dbg_walk_frames;
+    bool walked = false;
+    for (int k = 0; k < 600 && !walked; ++k) {
+      w(3, 0); ++b_pushed;                                  // the next list, no pause
+      if (d->dbg_walk_frames != f0) { walked = true; b_at_walk = b_pushed; }
+    }
+    for (int i = 0; i < 200000 && d->dbg_walk_frames == f0; i++) tick();
+    std::printf("test: R752 walk of A: %u ops; %u words of B pushed when it ended\n",
+                d->dbg_walk_ops, b_at_walk);
+    ck("R752 walk A ran", d->dbg_walk_frames != f0 ? 1u : 0u, 1u);
+    ck("R752 walk A read its whole list", d->dbg_walk_ops, N + 1);
+    ck("R752 B's words did not hold the walk", walked ? 1u : 0u, 1u);
+    rd_slow = 0; wr_slow = 0;
+  }
+
+  // ---- R760: EACH OBJECT PROJECTS ABOUT THE CENTRE IT SELECTS. A window
+  // with four different centres, then four objects selecting 0, 1, 2, 3 (opcode
+  // bits 30:29) and then 1 again: win_c0 must carry the selected centre when
+  // each object is announced. MAME: center_sel = (opcode >> 29) & 3.
+  {
+    std::vector<uint32_t> list(0x8000, 0);
+    size_t n = 0;
+    list[n++] = 0x03u << 23;
+    const uint32_t ww[6] = {0xffff0080u, 0x01f00200u, 0x00f8010eu, 0x00f8013cu, 0x01600098u, 0x0123045cu};
+    for (int i = 0; i < 6; i++) list[n++] = ww[i];
+    const int sel[5] = {0, 1, 2, 3, 1};
+    for (int k = 0; k < 5; k++) {
+      list[n++] = (0x01u << 23) | (uint32_t(sel[k]) << 29);   // object_data
+      for (int i = 0; i < 4; i++) list[n++] = 0;
+    }
+    list[n++] = 0x0fu << 23;                                   // end
+    d->rst_n = 0; for (int i = 0; i < 4; i++) tick(); d->rst_n = 1; idle(2);
+    d->trig_mode = 0; d->skip = 0; d->eng_busy = 0;
+    w(2, 0x00000000);
+    int seen = 0, busy_left = 0;
+    for (int i = 0; i < 200000 && !d->dbg_walk_frames; i++) {
+      d->rd_ack = 0;
+      if (d->rd_req) { d->rd_data = (d->rd_addr < list.size()) ? list[d->rd_addr] : 0; d->rd_ack = 1; }
+      if (d->obj_valid && seen < 5) {
+        const uint32_t c = ww[2 + sel[seen]] & 0x0fff0fffu;
+        char nm[64]; std::snprintf(nm, sizeof nm, "R760 object %d (centre %d)", seen, sel[seen]);
+        ck(nm, d->win_c0, c);
+        ++seen; busy_left = 30;
+      }
+      d->eng_busy = busy_left > 0; if (busy_left > 0) --busy_left;
+      tick();
+    }
+    std::printf("test: R760 centre select -- %d objects announced\n", seen);
+    ck("R760 five objects announced", uint32_t(seen), 5u);
+    d->eng_busy = 0;
+  }
 
   std::printf("m2_geo: checks=%d fails=%d\n", checks, fails);
   std::printf("%s\n", fails?"FAIL":"PASS");

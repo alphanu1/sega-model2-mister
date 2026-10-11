@@ -493,6 +493,11 @@ set_global_assignment -name VERILOG_MACRO "M2_NO_DEBUG=1"
 # Model 2 has no CD or HPS-streamed audio, so nothing here ever fed it.
 set_global_assignment -name VERILOG_MACRO "MISTER_DISABLE_ALSA=1"
 
+# R788: the framework's audio IIR filter switched off, ~430 ALM for the texel
+# path. sys/audio_out.sv carries docs/framework-patches/audio-filter-disable.patch
+# (applied); the MiSTer menu's audio filter presets have no effect on this core.
+set_global_assignment -name VERILOG_MACRO "MISTER_DISABLE_AUDIO_FILTER=1"
+
 # EXPERIMENT, NOT A FIX -- remove once it has answered.
 # Keeps BUFFERRAM on and takes away ONLY the coprocessor's writes into shared
 # buffer RAM. If 2D returns, the copro is corrupting the game's display list

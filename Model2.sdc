@@ -197,6 +197,70 @@ if {[get_collection_size $z80_core] == 0} {
     set_multicycle_path -hold  -end 1 -from $z80_core -to $z80_core
 }
 
+# ---- R762: AND FROM THE Z80'S OWN RAMS INTO ITS CORE, TWO CYCLES.
+#
+# The same argument from the other end: every core register loads only on
+# ClkEn (cen && !BusAck), and cen -- TICK_NUM 4 against TICK_DEN = SYS_MHZ --
+# is one pulse in 20 cycles at 80 MHz, never two in a row. The firmware and
+# work RAMs' outputs follow an address the core set on a cen edge, so what
+# they present has many cycles before the core next loads (3 of 5 seeds of
+# faee952 failed fw_rtl_0 / ram_rtl_0 -> IR, -0.21 .. -0.38 ns). Only paths
+# ENDING in the core are covered; the RAMs' write side is not.
+set z80_ram [get_keepers -nowarn {*u_ioz80|fw_rtl_0|* *u_ioz80|ram_rtl_0|*}]
+if {[get_collection_size $z80_ram] == 0 || [get_collection_size $z80_core] == 0} {
+    post_message -type critical_warning \
+      "Model2.sdc: the Z80's RAMs or core did not match -- R762's exception is not applied."
+} else {
+    set_multicycle_path -setup -end 2 -from $z80_ram -to $z80_core
+    set_multicycle_path -hold  -end 1 -from $z80_ram -to $z80_core
+}
+
+
+# ---- R738: THE YM3438's OPERATOR COUNTER INTO ITS PHASE INCREMENT, TWO CYCLES.
+#
+# s783/s785/s787 at 80 MHz: u_reg|cur_ch -> u_pg|phinc_II, -0.010 .. -0.309 ns
+# (cur_ch -> the CH3 fnum mux -> jt12_pg_comb -> phinc_II). jt12 is jotego's
+# and unmodified, so this is an exception rather than a register.
+#
+# Both ends load on jt12's internal clk_en and nothing else:
+#   jt12_reg.v  up_counter  `if( clk_en ) { cur_op, cur_ch } <= ...`  (no reset)
+#   jt12_pg.v   `always @(posedge clk) if(clk_en)` keycode_II, detune_mod_II,
+#               phinc_II -- the only assignments to them.
+# clk_en is jt12_div's `clk_en <= cen & cen_int`, a NEGEDGE register sampling
+# jt12_top's cen_reg, which is m2_sound_board's ym_cen one posedge late. So
+# clk_en is high across exactly the posedge after each cen_reg pulse, or not at
+# all (cen_int is the 1/6 FM prescaler at reset, 1/3 or 1/2 if programmed;
+# jt12_div's FASTDIV, which would hold clk_en high, is defined nowhere here).
+# ym_cen is the 25-in-(3 x TICK_DEN) accumulator, TICK_DEN = SYS_MHZ: it pulses
+# when ym_acc + 25 >= 3*SYS_MHZ and leaves ym_acc <= 24, so the next cycle's
+# sum is <= 49 and cannot pulse. Never two in a row for any SYS_MHZ >= 17; at
+# 80 MHz one in 9.6 cycles, at least 9 apart. Every value cur_ch/cur_op launch
+# therefore has at least nine clk_sys cycles before these registers next load.
+set ym_from [get_registers -nowarn {*u_ym|u_jt12|u_mmr|u_reg|cur_ch* *u_ym|u_jt12|u_mmr|u_reg|cur_op*}]
+set ym_to   [get_registers -nowarn {*u_ym|u_jt12|u_pg|phinc_II* *u_ym|u_jt12|u_pg|keycode_II* *u_ym|u_jt12|u_pg|detune_mod_II*}]
+if {[get_collection_size $ym_from] == 0 || [get_collection_size $ym_to] == 0} {
+    post_message -type critical_warning \
+      "Model2.sdc: the YM3438 operator counter or phase registers did not match -- R738's exception is not applied."
+} else {
+    set_multicycle_path -setup -end 2 -from $ym_from -to $ym_to
+    set_multicycle_path -hold  -end 1 -from $ym_from -to $ym_to
+}
+
+# ---- R762: THE YM3438's LFO INTO ITS PHASE INCREMENT, TWO CYCLES.
+#
+# jt12_lfo.v: lfo_mod changes only `else if (clk_en && zero)` (or on rst,
+# which is not this path), and phinc_II / keycode_II / detune_mod_II load only
+# on clk_en -- R738's clk_en, never high on two consecutive cycles. (faee952:
+# u_lfo|lfo_mod -> u_pg|phinc_II -0.26 ns on 2 of 5 seeds at 80 MHz.)
+set yl_from [get_registers -nowarn {*u_ym|u_jt12|*u_lfo|lfo_mod*}]
+if {[get_collection_size $yl_from] == 0 || [get_collection_size $ym_to] == 0} {
+    post_message -type critical_warning \
+      "Model2.sdc: the YM3438 LFO or phase registers did not match -- R762's exception is not applied."
+} else {
+    set_multicycle_path -setup -end 2 -from $yl_from -to $ym_to
+    set_multicycle_path -hold  -end 1 -from $yl_from -to $ym_to
+}
+
 
 # ---- THE CHARACTER-FETCH CROSSING, CONSTRAINED (third time; the story is the
 # point -- study R57/R58)
@@ -358,4 +422,64 @@ if {[llength $sdram_clk_src] == 0 || [llength $sdram_clk_prt] == 0} {
       -to   [get_clocks SDRAM_CLK_pin]
 }
 
+}
+
+
+# ---- R731: THE GAMMA CHOICE IS AN OSD SETTING, NOT A DATA PATH.
+#
+# gam_s2 (and gam_m2 for the other clock) are the two-flop copies of the OSD's
+# Gamma menu. They change when the menu does and at no other time, so the
+# engine's gam() -- the bias and constant selected by them, a multiply, a
+# compare -- is not a one-cycle path from them: s759 timed it at 0.677 ns at
+# 75 MHz, short of 80. A menu change landing mid-colour gives one colour the
+# old curve, once. The data path into gam() (xl_raw) stays timed.
+set gam_from [get_registers -nowarn {*gam_s2[*] *gam_m2[*]}]
+if {[get_collection_size $gam_from] == 0} {
+    post_message -type critical_warning \
+      "Model2.sdc: the gamma-select registers did not match -- R731's false path is not applied."
+} else {
+    set_false_path -from $gam_from
+}
+
+
+# ---- R742: THE YM3438 PHASE INCREMENT INTO ITS PHASE SHIFT REGISTER, TWO CYCLES.
+#
+# jt12_pg's phinc_II / keycode_II / detune_mod_II load only on clk_en
+# (jt12_pg.v: `always @(posedge clk) if(clk_en)`), and what they feed here
+# does too: u_phsh (jt12_sh_rst, `if(clk_en)`) and jt12_eg's eg_V
+# (jt12_eg.v line 142, `if(clk_en)`) -- both of which Quartus maps to M10K
+# shift-tap RAMs. It is the same jt12 clk_en R738 proves is never high on two
+# consecutive clk_sys cycles, so the data has at least two cycles (s795 at 80
+# MHz: u_pg|phinc_II -> u_eg eg_V_rtl_0's porta_datain_reg -0.307). Paths
+# inside the shift registers (their own outputs fed back) are not covered.
+set yp_from [get_registers -nowarn {*u_ym|u_jt12|u_pg|phinc_II* *u_ym|u_jt12|u_pg|keycode_II* *u_ym|u_jt12|u_pg|detune_mod_II*}]
+set yp_to   [get_keepers   -nowarn {*u_ym|u_jt12|u_pg|u_phsh|* *u_ym|u_jt12|u_eg|eg_V*}]
+if {[get_collection_size $yp_from] == 0 || [get_collection_size $yp_to] == 0} {
+    post_message -type critical_warning \
+      "Model2.sdc: the YM3438 phase registers or u_phsh did not match -- R742's exception is not applied."
+} else {
+    set_multicycle_path -setup -end 2 -from $yp_from -to $yp_to
+    set_multicycle_path -hold  -end 1 -from $yp_from -to $yp_to
+}
+
+
+# ---- R743: THE SOUND 68000'S IR INTO ITS MICRO/NANO ADDRESS, TWO CYCLES.
+#
+# fx68k loads Ir (`if (enT1) ... Ir <= Irc`) and microAddr / nanoAddr
+# (`else if (enT1) begin microAddr <= nma; nanoAddr <= orgAddr;`) only on
+# enT1 = enPhi1 & (tState == T4) & ~wClk (fx68k.sv:178), once every four phase
+# enables. m2_sound_board makes enPhi1/enPhi2 from an accumulator that adds
+# TICK_NUM = 20 a cycle against TICK_DEN = SYS_MHZ (Model2.sv) and drops below
+# 20 after each pulse, so two enables are never on consecutive cycles at any
+# SYS_MHZ >= 40, and enT1s are far further apart. Ir -> the PLA -> nanoAddr
+# (s798 at 80 MHz: -0.146) therefore has at least two cycles. nanoAddr's
+# pwrUp load is a constant, not a path from Ir.
+set sk_from [get_registers -nowarn {*u_sndboard|u_cpu|Ir[*]}]
+set sk_to   [get_registers -nowarn {*u_sndboard|u_cpu|nanoAddr[*] *u_sndboard|u_cpu|microAddr[*]}]
+if {[get_collection_size $sk_from] == 0 || [get_collection_size $sk_to] == 0} {
+    post_message -type critical_warning \
+      "Model2.sdc: the sound 68000's Ir / nanoAddr registers did not match -- R743's exception is not applied."
+} else {
+    set_multicycle_path -setup -end 2 -from $sk_from -to $sk_to
+    set_multicycle_path -hold  -end 1 -from $sk_from -to $sk_to
 }

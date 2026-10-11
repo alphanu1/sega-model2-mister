@@ -152,6 +152,18 @@ module m2_fb_wcomb #(
   logic               s0_r, s1_r;          // the stipple keeps the even / odd pixel
   logic [8:0]         clr_y, clr_x;
   logic [$clog2(IDLE_T+1)-1:0] idle_n;
+  // R808: ONE SPAN HELD AT THE INTAKE, so a span is taken while the walk is
+  // on the previous one's last word. A span was accepted only in I_IDLE, and
+  // the walk went to I_RUN for its words and back: two cycles a span however
+  // short. At texel step 1 a textured span IS one pixel, so the writer took
+  // half a pixel a cycle and the whole texel path ran at its pace (R808: the
+  // take gap was two cycles 72% of the time). With this, a one-word span
+  // costs one cycle. in_ready stays a register (n_v, ist, clear_req).
+  logic               n_v;                 // the held span, in A's terms
+  logic               n_sel, n_s0, n_s1;
+  logic [8:0]         n_y;
+  logic signed [15:0] n_x0, n_x1;
+  logic [31:0]        n_px;
 
   // R685: TWO STAGES. The walk (A: x_r, y_r) makes a word a cycle and reads
   // its mask word; the word then waits one cycle in B with that mask word,
@@ -200,6 +212,18 @@ module m2_fb_wcomb #(
   wire  [31:0]   b_wd  = b_mk | (32'(b_wr) << {b_off, 1'b0});
   // A moves a word into B when B is empty or is emptying this cycle
   wire           a_go   = (ist == I_RUN) && (!b_v || c_go);
+  // R808: A takes its next span when idle, or as its last word leaves --
+  // from the held span if there is one, else straight from the input.
+  wire           in_take = in_valid && in_ready;
+  wire           a_free  = (ist == I_IDLE) || (a_go && (x_nx > x1_r));
+  wire           ld_n    = n_v && a_free;
+  wire           ld_in   = in_take && a_free;   // in_ready implies !n_v
+  wire           ld_a    = ld_n || ld_in;
+  // The source is chosen by n_v, a register: with a span held nothing is
+  // taken, so a load with n_v set is the held span's. Only the ENABLE (ld_a)
+  // waits on the walk's a_go.
+  wire signed [15:0] ld_x0 = n_v ? n_x0 : in_x0;
+  wire signed [15:0] ld_x1 = n_v ? n_x1 : in_x1;
   wire           a_same = b_v && c_go && (y_r == b_y) && (x_r[8:5] == b_mw);
 
   // ------------------------------------------------------------ the burst out
@@ -225,9 +249,10 @@ module m2_fb_wcomb #(
   logic [24:0] addr_r;
   assign m_addr  = addr_r;
 
-  assign in_ready   = (ist == I_IDLE) && !clear_req;
+  // R808: not only in I_IDLE -- the held span is the room (was ist == I_IDLE)
+  assign in_ready   = !n_v && !clear_req && !clearing;
   assign clear_busy = clearing;
-  assign empty      = (ist == I_IDLE) && !b_v && (dirty == 2'b00) && (pend == 2'b00) && (fst == F_IDLE);
+  assign empty      = (ist == I_IDLE) && !n_v && !b_v && (dirty == 2'b00) && (pend == 2'b00) && (fst == F_IDLE);
   assign dbg_st     = {1'b0, fst, ist};
   assign pg_ry      = y_r;
   assign pg_rx0     = {x_r[8:1], 1'b0};
@@ -241,6 +266,8 @@ module m2_fb_wcomb #(
       ist <= I_IDLE; fst <= F_IDLE; ib <= 1'b0;
       x_r <= '0; x1_r <= '0; sel_r <= 1'b0; y_r <= '0; px_r <= '0; s0_r <= 1'b1; s1_r <= 1'b1;
       clr_y <= 9'd0; clr_x <= 9'd0; idle_n <= '0;
+      n_v <= 1'b0; n_sel <= 1'b0; n_s0 <= 1'b1; n_s1 <= 1'b1; n_y <= '0;   // R808
+      n_x0 <= '0; n_x1 <= '0; n_px <= '0;
       dirty <= 2'b00; pend <= 2'b00; ridx <= '0; addr_r <= '0;
       m_req <= 1'b0; m_blen <= 8'd1;
       for (int k = 0; k < 2; k++) begin
@@ -250,12 +277,28 @@ module m2_fb_wcomb #(
       b_v <= 1'b0; b_key <= '0; b_idx <= '0; b_lo <= 1'b0; b_hi <= 1'b0; b_px <= '0;
       b_y <= '0; b_mw <= '0; b_off <= '0; b_mk <= '0;
     end else begin
+      // ---- R808: the held span. Its payload is written on every take (no
+      // a_go in its enable); it is HELD only when A did not take it at once.
+      if (in_take) begin
+        n_sel <= fb_sel;
+        n_y   <= 9'(in_y);
+        n_x0  <= in_x0;
+        n_x1  <= in_x1;
+        n_px  <= px;
+        n_s0  <= !in_moire ||  in_y[0];
+        n_s1  <= !in_moire || !in_y[0];
+      end
+      if (in_take && !a_free) n_v <= 1'b1;
+      else if (ld_n)          n_v <= 1'b0;
+
       // ---- intake
       case (ist)
         I_IDLE: begin
-          idle_n <= (in_valid || b_v || !dirty[ib]) ? '0
+          idle_n <= (in_valid || n_v || b_v || !dirty[ib]) ? '0
                   : (idle_n == ($clog2(IDLE_T+1))'(IDLE_T)) ? idle_n : idle_n + 1'b1;
-          if (clear_req) begin
+          if (ld_n) begin
+            // R808: a span held before a clear was asked for is drawn first
+          end else if (clear_req) begin
             // the clear goes out after everything drawn before it (B first)
             if (b_v) begin end
             else if (dirty[ib] && other_free) begin pend[ib] <= 1'b1; ib <= ~ib; end
@@ -263,15 +306,7 @@ module m2_fb_wcomb #(
               clr_y <= 9'd0; clr_x <= 9'd0; ist <= I_CLR;
             end
           end else if (in_valid) begin
-            // R360: nine bits of line, and the buffer select above them.
-            sel_r <= fb_sel;
-            y_r   <= 9'(in_y);
-            x_r   <= in_x0;
-            x1_r  <= in_x1;
-            px_r  <= px;
-            s0_r  <= !in_moire || !in_y[0];   // (x ^ y) & 1 with x even
-            s1_r  <= !in_moire ||  in_y[0];
-            ist   <= (in_x0 > in_x1) ? I_IDLE : I_RUN;
+            // R808: loaded below (ld_in)
           end else if (!b_v && dirty[ib] && other_free &&
                        idle_n == ($clog2(IDLE_T+1))'(IDLE_T)) begin
             pend[ib] <= 1'b1; ib <= ~ib;       // idle: write what is held
@@ -280,7 +315,7 @@ module m2_fb_wcomb #(
 
         I_RUN: if (a_go) begin
           x_r <= x_nx;
-          if (x_nx > x1_r) ist <= I_IDLE;
+          if (x_nx > x1_r) ist <= I_IDLE;   // unless the next span loads (below)
         end
 
         I_CLR: begin
@@ -310,6 +345,20 @@ module m2_fb_wcomb #(
 
         default: ist <= I_IDLE;
       endcase
+
+      // ---- R808: A takes a span -- from I_IDLE as before, or from I_RUN as
+      // its last word moves to B. Overrides the walk's own x_r / ist above.
+      if (ld_a) begin
+        // R360: nine bits of line, and the buffer select above them.
+        sel_r <= n_v ? n_sel : fb_sel;
+        y_r   <= n_v ? n_y   : 9'(in_y);
+        x_r   <= ld_x0;
+        x1_r  <= ld_x1;
+        px_r  <= n_v ? n_px  : px;
+        s0_r  <= n_v ? n_s0  : (!in_moire ||  in_y[0]);   // MAME's checker: (x ^ y) & 1 == 1 is painted (x even here)
+        s1_r  <= n_v ? n_s1  : (!in_moire || !in_y[0]);
+        ist   <= (ld_x0 > ld_x1) ? I_IDLE : I_RUN;
+      end
 
       // ---- R685: stage B, the word into a window
       if (c_wr) begin

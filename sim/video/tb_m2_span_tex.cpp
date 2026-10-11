@@ -26,6 +26,18 @@
 #include <deque>
 
 static Vm2_span_tex *d;
+// R791: THE FILL'S u/z FORMAT. This bench's coordinates are written in the
+// units it always used -- u/z in quarter-texels with 16 fraction bits, its
+// gradient with 8 -- and every expected texel below is worked out in them,
+// because that is the physical quantity the walk must reproduce. m2_span_tex
+// takes them as m2_raster_fill now delivers them (UZF): the value times 2^18
+// (four times the old 16.16) and the gradient in units of 2^-UZF (times 2^UZF).
+// Build with -DTB_UZF=n beside -GUZF=n to model another.
+#ifndef TB_UZF
+#define TB_UZF 4
+#endif
+static inline uint32_t UZ(int64_t v16) { return uint32_t(v16 * 4); }
+static inline uint32_t GZ(int64_t g8)  { return uint32_t(g8 * (1 << TB_UZF)) & 0xffffffu; }
 // THE BENCH MUST RUN THE PIXSTEP THE CORE SHIPS. This file hardcoded STEP = 2
 // and m2_span_tex defaults to 2, while m2_raster3d instantiates PIXSTEP(8) --
 // so every assertion here proved a configuration the core does not build. That
@@ -45,7 +57,33 @@ static void ck(const char *what, long got, long want) {
 }
 
 struct Out { int y, x0, x1; uint32_t col; };
+
+// R784: THE TEXTURED COLOUR, written from model2rd.ipp's arithmetic as the
+// RTL reduces it (m2_span_tex tcol/tlum): the texel's luma on the reference's
+// 0..240 scale, the luma table's row 0 (i/2) or row 1 (63 - i/2), and per
+// channel min(255, A + c * lum / 32), 0 where c or lum is 0. A is the curve's
+// pedestal: 0 MAME (gamma_sel 0), 37 Mild (1), 64 Off (2, 3).
+static int lum_of(int t8, bool inv) {
+  const int tm = t8 - (t8 >> 4);
+  return inv ? 63 - (tm >> 2) : (tm >> 2);
+}
+static int ped_of(int sel) { return (sel & 2) ? 64 : (sel & 1) ? 37 : 0; }
+static uint32_t tcol(uint32_t col, int t8, bool inv, int sel) {
+  const int lum = lum_of(t8, inv), a = ped_of(sel);
+  uint32_t r = 0;
+  for (int k = 0; k < 3; ++k) {
+    const int c = int((col >> (8 * k)) & 0xff);
+    const int v = (c == 0 || lum == 0) ? 0 : std::min(255, a + ((c * lum) >> 5));
+    r |= uint32_t(v) << (8 * k);
+  }
+  return r;
+}
+// the colour of nibble t on an opaque, row-0 span of colour col under MAME's curve
+static uint32_t tcolN(uint32_t col, int t) { return tcol(col, t * 0x11, false, 0); }
+// R784: 0x404040 makes a texel readable back from the colour: 64 * 4t / 32 = 8t
 static std::vector<Out> got;
+static bool rec_issue = false;                 // R791: record every fetch's u
+static std::vector<uint32_t> issued_u;
 
 // The texel the fetch returns: a function of the coordinate, so a wrong step
 // shows up as a wrong colour.
@@ -111,6 +149,7 @@ static void tick(bool stall = false) {
     long at = ticks_done + lat;
     if (!tq.empty() && tq.back().ready_at > at) at = tq.back().ready_at;
     tq.push_back({iu, iv, at, itex});
+    if (rec_issue) issued_u.push_back(iu);
   }
 }
 
@@ -171,7 +210,7 @@ int main(int argc, char **argv) {
     const int32_t OOZ = 1 << 30;            // 1/z = 2^14 in 16.16
     d->in_valid = 1; d->in_y = 5; d->in_x0 = X0; d->in_x1 = X1;
     d->in_col = 0xffffff; d->in_moire = 0;
-    d->in_u = U0; d->in_v = V0; d->in_dudx = DU; d->in_dvdx = DV;
+    d->in_u = UZ(U0); d->in_v = UZ(V0); d->in_dudx = GZ(DU); d->in_dvdx = GZ(DV);
     d->in_tex = 0x000001; d->in_tex_en = 1;        // bit 0 = textured
     d->in_ooz = OOZ; d->in_doozdx = 0;             // R339
     tick();                                        // accepted
@@ -192,7 +231,7 @@ int main(int argc, char **argv) {
       const uint32_t u = uint32_t((2 * (U0 + (DU << 8) * int32_t(i) * STEP)) >> 10);
       const uint32_t v = uint32_t((2 * (V0 + (DV << 8) * int32_t(i) * STEP)) >> 10);
       const int t = texel_of(u, v);
-      const uint32_t want = uint32_t((0xff * ((t << 4) | t) + 0xff) >> 8) * 0x010101u;
+      const uint32_t want = tcolN(0xffffff, t);   // R784
       ck("group colour is the texel at its first pixel", got[i].col, want);
     }
     ck("textured pixels counted", d->dbg_texpix, groups * STEP);
@@ -218,7 +257,7 @@ int main(int argc, char **argv) {
       force_texel = forced;
       d->in_valid = 1; d->in_y = 7; d->in_x0 = X0; d->in_x1 = X1;
       d->in_col = 0xffffff; d->in_moire = 0;
-      d->in_u = U0; d->in_v = V0; d->in_dudx = DU; d->in_dvdx = DV;
+      d->in_u = UZ(U0); d->in_v = UZ(V0); d->in_dudx = GZ(DU); d->in_dvdx = GZ(DV);
       d->in_tex = tex; d->in_tex_en = 1;
       d->in_ooz = 1 << 30; d->in_doozdx = 0;   // R339
       tick();
@@ -263,8 +302,8 @@ int main(int argc, char **argv) {
     const int32_t DOZ = -26000;
     got.clear(); force_texel = -1;
     d->in_valid = 1; d->in_y = 11; d->in_x0 = X0; d->in_x1 = X1;
-    d->in_col = 0xffffff; d->in_moire = 0;
-    d->in_u = U0; d->in_v = V0; d->in_dudx = DU; d->in_dvdx = DV;
+    d->in_col = 0x404040; d->in_moire = 0;   // R784: texel = colour / 8
+    d->in_u = UZ(U0); d->in_v = UZ(V0); d->in_dudx = GZ(DU); d->in_dvdx = GZ(DV);
     d->in_tex = 0x000001; d->in_tex_en = 1;
     d->in_ooz = OOZ; d->in_doozdx = DOZ;
     tick(); d->in_valid = 0;
@@ -289,7 +328,7 @@ int main(int argc, char **argv) {
       const uint32_t want = uint32_t((0xff * ((t << 4) | t) + 0xff) >> 8) * 0x010101u;
       // The reciprocal is a seed plus one Newton step (6.1e-5 relative), so a
       // texel index may land one either side at a boundary.
-      const int tg = (int)((got[i].col & 0xff) >> 4);
+      const int tg = (int)((got[i].col & 0xff) >> 3);   // R784: 0x404040
       if (abs(tg - t) > 1 && abs(tg - t) < 15) {
         checks++; fails++;
         if (fails < 6) std::printf("  FAIL group %zu texel got=%x want=%x\n", i, tg, t);
@@ -304,6 +343,38 @@ int main(int argc, char **argv) {
         d2 = std::max(d2, fabs((ux[i] - ux[i-1]) - (ux[i-1] - ux[i-2])));
       ck("the coordinate is non-linear, as only a divide makes it", d2 > 1000.0, 1);
     }
+  }
+
+  // 2f. R791: THE BITS BELOW THE OLD FORMAT ARRIVE. A gradient of 5 in the
+  //     fill's units is 5/16 of the old 8.8 LSB -- not representable before
+  //     R791, and the reason the near road judders without it. Over 40 groups
+  //     it moves u by ~12 of the fetch's 1/256-texel steps, and every fetch
+  //     must land within one step of the exact quotient (the reciprocal's own
+  //     error), in the RAW format: V * 2^29 / ooz, V = (u/z) * 2^18.
+  {
+    std::printf("test: R791, u/z below the old 16.16 -- every fetch's coordinate\n");
+    const int G = 40, X0 = 10, X1 = X0 + G * STEP - 1;
+    const int64_t VN = 0x1234567, GN = 5, OOZI = int64_t(1) << 30;
+    const int UVS = 18 - TB_UZF;
+    got.clear(); force_texel = -1; issued_u.clear(); rec_issue = true;
+    d->in_valid = 1; d->in_y = 13; d->in_x0 = X0; d->in_x1 = X1;
+    d->in_col = 0x404040; d->in_moire = 0;
+    d->in_u = uint32_t(VN); d->in_v = uint32_t(VN); d->in_dudx = uint32_t(GN); d->in_dvdx = uint32_t(GN);
+    d->in_tex = 0x000001; d->in_tex_en = 1;
+    d->in_ooz = uint32_t(OOZI); d->in_doozdx = 0;
+    tick(); d->in_valid = 0;
+    for (int i = 0; i < 4000 && int(got.size()) < G; ++i) tick();
+    rec_issue = false;
+    ck("R791: one fetch per group", long(issued_u.size()), G);
+    long worst = 0;
+    for (size_t i = 0; i < issued_u.size(); ++i) {
+      const int64_t vi = VN + ((GN << (UVS - 8)) * STEP) * int64_t(i);
+      const int64_t want = ((vi << 29) / OOZI) >> 10;     // 1/256 texel
+      worst = std::max(worst, long(std::llabs(int64_t(issued_u[i]) - want)));
+    }
+    ck("R791: every fetch within one 1/256-texel step of V * 2^29 / ooz", worst <= 1, 1);
+    if (!issued_u.empty())
+      ck("R791: and the walk moved u by the sub-LSB gradient", long(issued_u.back() - issued_u.front()) >= 10, 1);
   }
 
   // 2e. R472: MANY SPANS, EVERY GROUP'S TEXEL CHECKED, AND THE ORDER TOO.
@@ -365,8 +436,8 @@ int main(int argc, char **argv) {
       got.clear(); force_texel = -1;
       d->in_valid = 1; d->in_y = 11 + int(roll(40));
       d->in_x0 = X0; d->in_x1 = X1;
-      d->in_col = 0xffffff; d->in_moire = 0;
-      d->in_u = U0; d->in_v = V0; d->in_dudx = DU; d->in_dvdx = DV;
+      d->in_col = 0x404040; d->in_moire = 0;   // R784: texel = colour / 8
+      d->in_u = UZ(U0); d->in_v = UZ(V0); d->in_dudx = GZ(DU); d->in_dvdx = GZ(DV);
       d->in_tex = 0x000001; d->in_tex_en = 1;
       d->in_ooz = OOZ; d->in_doozdx = DOZ;
       tick(); d->in_valid = 0;
@@ -387,7 +458,7 @@ int main(int argc, char **argv) {
         const int64_t uq = (ur << 31) / oz;
         const int64_t vq = (vr << 31) / oz;
         const int t  = texel_of((uint32_t)(uq >> 10), (uint32_t)(vq >> 10));
-        const int tg = (int)((got[i].col & 0xff) >> 4);
+        const int tg = (int)((got[i].col & 0xff) >> 3);   // R784: 0x404040
         ++checks; ++groups_checked;
         // Same one-index tolerance 2d uses: the reciprocal is a seed plus one
         // Newton step, so a texel may land either side at a boundary.
@@ -464,13 +535,16 @@ int main(int argc, char **argv) {
     size_t next = 0;
     d->in_tex = 0x000001; d->in_tex_en = 1; d->in_col = 0xffffff; d->in_moire = 0;
     const int saved_force = force_texel;
-    force_texel = 0xf;   // R555: texel 0xF scales a colour to itself exactly
+    // R555: a texel that leaves the colour exactly itself. R784: that is
+    // nibble 8 now -- 136 on m2_texel_bl's scale, 128 on the reference's, luma
+    // 32, c * 32 / 32 -- where it was 0xF under R275's c * t.
+    force_texel = 0x8;
     for (long guard = 0; guard < 200000; ++guard) {
       if (next < sp.size()) {
         const S &q = sp[next];
         d->in_valid = 1;
         d->in_y = q.y; d->in_x0 = q.x0; d->in_x1 = q.x1;
-        d->in_u = q.u; d->in_v = q.v; d->in_dudx = q.du; d->in_dvdx = q.dv;
+        d->in_u = UZ(q.u); d->in_v = UZ(q.v); d->in_dudx = GZ(q.du); d->in_dvdx = GZ(q.dv);
         d->in_ooz = q.ooz; d->in_doozdx = q.doz;
         d->in_col = q.col;
       } else {
@@ -587,7 +661,7 @@ int main(int argc, char **argv) {
       d->in_valid = 1;
       d->in_y = q.y; d->in_x0 = q.x0; d->in_x1 = q.x1;
       d->in_col = 0xffffff; d->in_moire = 0;
-      d->in_u = 0x40000; d->in_v = 0x40000; d->in_dudx = 0x40; d->in_dvdx = 0x40;
+      d->in_u = UZ(0x40000); d->in_v = UZ(0x40000); d->in_dudx = GZ(0x40); d->in_dvdx = GZ(0x40);
       d->in_ooz = 0x4000000; d->in_doozdx = -100;
       d->in_tex = q.tex ? 0x000001 : 0x000000; d->in_tex_en = q.tex ? 1 : 0;
       d->out_ready = (roll(4) != 0) ? 1 : 0;
@@ -691,8 +765,8 @@ int main(int argc, char **argv) {
       d->in_valid = 1;
       d->in_y = 11 + int(roll(60)); d->in_x0 = x0; d->in_x1 = x1;
       d->in_col = 0xffffff; d->in_moire = (roll(8) == 0);
-      d->in_u = int32_t(roll(64) << 16); d->in_v = int32_t(roll(64) << 16);
-      d->in_dudx = int32_t(roll(0x200)); d->in_dvdx = int32_t(roll(0x200));
+      d->in_u = UZ(int32_t(roll(64) << 16)); d->in_v = UZ(int32_t(roll(64) << 16));
+      d->in_dudx = GZ(int32_t(roll(0x200))); d->in_dvdx = GZ(int32_t(roll(0x200)));
       d->in_ooz = 0x1000000 + int32_t(roll(0x3000000));
       d->in_doozdx = -int32_t(roll(30000));
       // R535: TRANSLUCENT SPANS TOO. A translucent 0xF texel is SKIPPED at the
@@ -753,7 +827,7 @@ int main(int argc, char **argv) {
     const int X0 = 0, X1 = 3 * STEP;
     d->in_valid = 1; d->in_y = 9; d->in_x0 = X0; d->in_x1 = X1;
     d->in_col = 0x808080;
-    d->in_u = 0; d->in_v = 0; d->in_dudx = 0x400; d->in_dvdx = 0;   // 4 texels a pixel, 8.8
+    d->in_u = UZ(0); d->in_v = UZ(0); d->in_dudx = GZ(0x400); d->in_dvdx = GZ(0);   // 4 texels a pixel, 8.8
     d->in_tex = 0x000001; d->in_tex_en = 1;
     d->in_ooz = 1 << 30; d->in_doozdx = 0;   // R339
     tick();
@@ -774,8 +848,8 @@ int main(int argc, char **argv) {
   {
     got.clear(); force_texel = 0x3;
     d->in_valid = 1; d->in_y = 40; d->in_x0 = 2; d->in_x1 = 2 + 3 * 4;
-    d->in_col = 0xffffff; d->in_u = 0; d->in_v = 0;
-    d->in_dudx = 0; d->in_dvdx = 0;
+    d->in_col = 0xffffff; d->in_u = UZ(0); d->in_v = UZ(0);
+    d->in_dudx = GZ(0); d->in_dvdx = GZ(0);
     d->in_tex = 0x000001; d->in_tex_en = 1;
     d->in_ooz = 1 << 30; d->in_doozdx = 0;   // R339
     tex_dead = true;
@@ -791,10 +865,49 @@ int main(int argc, char **argv) {
     ck("every group once the answers come", long(got.size()), (12 / step) + 1);
     bool ord = step > 0;
     for (size_t i = 0; i < got.size(); ++i)
-      if (got[i].x0 != 2 + int(i) * step || got[i].col != 0x333333) ord = false;
+      if (got[i].x0 != 2 + int(i) * step || got[i].col != tcolN(0xffffff, 3)) ord = false;   // R784
     ck("in order, each with its own texel", ord, 1);
     ck("never took an answer that was not there", take_without_ack, 0);
     force_texel = -1;
+  }
+
+  // 5. R784: THE COLOUR, every nibble x luma-table row x output curve, on
+  //    colours with zero, small, mid and full channels -- against tcol(),
+  //    which is model2rd.ipp's luma and colour-table path as the RTL reduces it.
+  {
+    std::printf("test: R784, the textured colour: luma table row, curve, clip\n");
+    const uint32_t cols[] = {0xffffff, 0x000000, 0x08ff40, 0x80c010, 0x201008, 0xf00080};
+    long bad = 0, n = 0;
+    for (int sel = 0; sel < 4; ++sel) {
+      d->gamma_sel = sel;
+      for (int i = 0; i < 3; ++i) tick();                    // ped is a register
+      for (int inv = 0; inv < 2; ++inv)
+        for (uint32_t col : cols)
+          for (int t = 0; t < 16; ++t) {
+            got.clear(); force_texel = t;
+            d->in_valid = 1; d->in_y = 20; d->in_x0 = 30; d->in_x1 = 30;
+            d->in_col = col; d->in_moire = 0;
+            d->in_u = UZ(0); d->in_v = UZ(0); d->in_dudx = GZ(0); d->in_dvdx = GZ(0);
+            d->in_tex = 0x000001u | (uint32_t(inv) << 11); d->in_tex_en = 1;
+            d->in_ooz = 1 << 30; d->in_doozdx = 0;
+            tick(); d->in_valid = 0;
+            for (int k = 0; k < 100 && d->busy; ++k) tick();
+            for (int k = 0; k < 4; ++k) tick();
+            const uint32_t want = tcol(col, t * 0x11, inv != 0, sel);
+            ++n;
+            if (got.size() != 1 || got[0].col != want) {
+              if (bad < 6) std::printf("  FAIL sel %d inv %d col %06x t %x: got %06x want %06x (%zu out)\n",
+                                       sel, inv, col, t, got.empty() ? 0u : got[0].col, want, got.size());
+              ++bad;
+            }
+          }
+    }
+    d->gamma_sel = 0; force_texel = -1;
+    ck("R784: every (curve, row, colour, nibble) as the model", bad, 0);
+    ck("R784: cases run", n, 4 * 2 * 6 * 16);
+    // the two anchors the model rests on, checked on the model itself
+    ck("R784: nibble 8, row 0, MAME: the colour itself", tcol(0x80c010, 0x88, false, 0), 0x80c010);
+    ck("R784: nibble F, row 1: luma 3", lum_of(0xff, true), 3);
   }
 
   std::printf("m2_span_tex: checks=%ld fails=%ld\n", checks, fails);

@@ -137,7 +137,7 @@ module m2_sdram_x2_harness #(
     .wr_req(f_wr_req), .wr_addr(f_wr_addr), .wr_din(f_wr_din),
     .wr_be(f_wr_be), .wr_ack(f_wr_ack),
     .p_req(f_req), .p_we(f_we), .p_addr(f_addr), .p_din(f_din), .p_be(f_be),
-    .p_dout(f_dout), .p_ack(f_ack),
+    .p_dout(f_dout), .p_ack(f_ack), .p_long('0), .p_lo(),   // R787
     .dbg_req(), .dbg_grant()
   );
 

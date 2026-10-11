@@ -188,9 +188,10 @@ module pll_core (
     .output_clock_frequency0("100.000000 MHz"),
     .phase_shift0("0 ps"),
     .duty_cycle0(50),
-    // R717: clk_sys 75 -- the step to R713's 80, which still misses by
+    // R744: clk_sys 80 again -- closed after R727-R743 (s810 / s811). R717's
+    // note: clk_sys 75 -- the step to R713's 80, which still missed by
     // 0.64 ns (s735). VCO 1,200: 100 /12, 75 /16, 50 /24, 37.5 /32.
-    .output_clock_frequency1("75.000000 MHz"),
+    .output_clock_frequency1("80.000000 MHz"),
     .phase_shift1("0 ps"),
     .duty_cycle1(50),
     // R460: 60 MHz, THE 3D DOMAIN. Was 32 MHz and drove nothing -- the
@@ -235,7 +236,7 @@ module pll_core (
     // that is 3:5 -- the edges realign every 50 ns and the closest approach is
     // 3.333 ns -- so the bridge needs them back and general[3] needs its own
     // clock group.
-    .output_clock_frequency3("37.500000 MHz"),   // R717: clk_i960 37.5 (R713's 40 waits on clk_sys at 80), still exactly clk_sys / 2
+    .output_clock_frequency3("40.000000 MHz"),   // R744: clk_i960 40, exactly clk_sys / 2 (R717 had 37.5)
     .phase_shift3("0 ps"),
     .duty_cycle3(50),
     // 180 degrees at 100 MHz is half a 10 ns period: 5000 ps exactly. It was

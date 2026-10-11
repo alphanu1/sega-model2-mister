@@ -110,6 +110,20 @@ module m2_quad_store #(
   // not with screen size.
   parameter int unsigned OZW    = 16,
   parameter int unsigned TINY   = 2,
+  // R769: THE FINE THRESHOLD, USED WHILE THE PREVIOUS LIST FITTED UNDER IT.
+  // Close-ups are built from small quads -- a car-select tyre is a ring of
+  // 2-3 px quads -- so TINY = 4 is kept only for the lists that need it. The
+  // store counts, per list, the quads that pass THIS test; when that count
+  // left an eighth of the store free, the next list is tested at TINY_FINE,
+  // else at TINY. 0 disables it (TINY always).
+  parameter int unsigned TINY_FINE = 0,
+  // R776: AND THE COARSE TEST ONLY FOR FAR QUADS. In a list tested coarse, a
+  // quad between TINY_FINE and TINY pixels is refused only when its z value
+  // (in_z[15:0], the reference's float_to_zval: 4-bit octave, 12-bit
+  // mantissa, larger is farther) is at least TINY_FAR. 0x3000 is z = 16 at
+  // Daytona's z_adjust of 4.0: car-select tyres sit at 6,510-8,442, the busy
+  // scenes' small quads at p5 >= ~12,000. 0 makes every quad far (R769).
+  parameter logic [15:0] TINY_FAR = 16'h0000,
   parameter int unsigned SCR_H  = 384,
   // R607: FRONT TO BACK, the reference's order (model2_v.cpp render_polygons:
   // z buckets from min_z up, each bucket a LIFO -- the last polygon submitted
@@ -285,7 +299,7 @@ module m2_quad_store #(
   // stage below has been counted -- so a quad arriving the very next cycle
   // takes the next slot rather than the pending one's. Every term is a
   // register, so this does not bring the comparator trees back into the path.
-  logic          a_v, a_room, a_tiny, a_bank;
+  logic          a_v, a_room, a_tiny, a_bank, a_need;
   wire           a_inc  = a_v && a_room && !a_tiny && (a_bank == wbank);
   wire  [IW:0]  wcount = count[wbank] + {{IW{1'b0}}, a_inc};
   wire  [IW:0]  rcount = count[rbank];
@@ -304,16 +318,20 @@ module m2_quad_store #(
   function automatic logic signed [15:0] smax(input logic signed [15:0] p, q);
     smax = (q > p) ? q : p;
   endfunction
-  function automatic [2*BW-1:0] band_range(input logic signed [15:0] a, b, c, d);
+  // R731: IN TWO HALVES. The min/max tree is registered with the quad (a_lo,
+  // a_hi) and the clamp and divide happen in the cycle that writes att_* --
+  // as one cycle from the clipper's registers it was m2_geo_clip|qsy ->
+  // a_band, 0.462 ns at 75 MHz (s759), short of 80. The same band.
+  function automatic [2*BW-1:0] band_of(input logic signed [15:0] lo_in, hi_in);
     logic signed [15:0] lo, hi2;
     begin
-      lo  = smin(smin(a, b), smin(c, d));    // R579: balanced, as tiny_quad
-      hi2 = smax(smax(a, b), smax(c, d));
-      if (hi2 < 0 || lo > $signed(16'(SCR_H - 1))) band_range = {BW'(0), BW'(NBANDS-1)};   // lo > hi: never
+      lo  = lo_in;
+      hi2 = hi_in;
+      if (hi2 < 0 || lo > $signed(16'(SCR_H - 1))) band_of = {BW'(0), BW'(NBANDS-1)};   // lo > hi: never
       else begin
         if (lo  < 0)                        lo  = 16'sd0;
         if (hi2 > $signed(16'(SCR_H - 1)))  hi2 = $signed(16'(SCR_H - 1));
-        band_range = {BW'(int'(hi2) / int'(BAND_H)), BW'(int'(lo) / int'(BAND_H))};
+        band_of = {BW'(int'(hi2) / int'(BAND_H)), BW'(int'(lo) / int'(BAND_H))};
       end
     end
   endfunction
@@ -353,18 +371,31 @@ module m2_quad_store #(
   // that is d <= T-1 or d >= 2^16 - (T-1), two constant compares. At T = 2 it
   // is R592's near1. Checked against the tree form for T = 2, 4 and 8, 300,000
   // quads each with spreads from 1 to 3,000: 0 disagree.
-  function automatic logic near_t(input logic signed [15:0] a, input logic signed [15:0] b);
+  function automatic logic near_t(input logic signed [15:0] a, input logic signed [15:0] b,
+                                  input int unsigned t);
     logic [15:0] d;
     begin
       d = 16'(a - b);
-      near_t = (d <= 16'(TINY - 1)) || (d >= 16'(32'h1_0000 - (TINY - 1)));
+      near_t = (d <= 16'(t - 1)) || (d >= 16'(32'h1_0000 - (t - 1)));
     end
   endfunction
-  wire tiny_pw = near_t(in_x0, in_x1) && near_t(in_x0, in_x2) && near_t(in_x0, in_x3)
-              && near_t(in_x1, in_x2) && near_t(in_x1, in_x3) && near_t(in_x2, in_x3)
-              && near_t(in_y0, in_y1) && near_t(in_y0, in_y2) && near_t(in_y0, in_y3)
-              && near_t(in_y1, in_y2) && near_t(in_y1, in_y3) && near_t(in_y2, in_y3);
-  wire is_tiny = (TINY != 0) && tiny_pw;
+  function automatic logic tiny_t(input int unsigned t);
+    tiny_t = (t != 0)
+          && near_t(in_x0, in_x1, t) && near_t(in_x0, in_x2, t) && near_t(in_x0, in_x3, t)
+          && near_t(in_x1, in_x2, t) && near_t(in_x1, in_x3, t) && near_t(in_x2, in_x3, t)
+          && near_t(in_y0, in_y1, t) && near_t(in_y0, in_y2, t) && near_t(in_y0, in_y3, t)
+          && near_t(in_y1, in_y2, t) && near_t(in_y1, in_y3, t) && near_t(in_y2, in_y3, t);
+  endfunction
+  wire is_tiny   = tiny_t(TINY);
+  wire is_tiny_f = tiny_t(TINY_FINE);
+  // R769: `fine` is a register, so the select folds into the last LUT of
+  // the two trees rather than lengthening either.
+  logic          fine;
+  logic [IW:0]   need;        // this list's quads that pass the fine test, saturating
+  wire           far_q    = (TINY_FAR == 16'h0000) || (in_z[15:0] >= TINY_FAR);   // R776
+  wire           tiny_sel = (TINY_FINE != 0 && fine) ? is_tiny_f
+                          : (TINY_FINE != 0) ? (is_tiny_f | (is_tiny & far_q))
+                          : is_tiny;
 
   // R566: THE COUNT AND THE ATTRIBUTE WORD LAND ONE CYCLE AFTER THE QUAD.
   //
@@ -386,19 +417,41 @@ module m2_quad_store #(
   // always was. `clear` wins over a pending increment, as it did over in_valid.
   logic                a_moire;
   logic [IW-1:0]       a_slot;
-  logic [2*BW-1:0]     a_band;
+  logic signed [15:0] a_lo, a_hi;   // R731: band_of() at the write
+  // R739: and only the first round of the min/max tree here -- the pairs --
+  // the second at the write with the clamp (s786 at 80 MHz: qsy -> a_lo
+  // -0.273, 7 endpoints). a_lo/a_hi above are now the write side's wires.
+  logic signed [15:0] a_lo01, a_lo23, a_hi01, a_hi23;
+  assign a_lo = smin(a_lo01, a_lo23);
+  assign a_hi = smax(a_hi01, a_hi23);
   logic [CW-1:0]       a_col;
+  // R740: THE ATTRIBUTE WORD A STAGE LATER STILL. R739's split left the band's
+  // second round, clamp and divide in front of the att RAM's data port (s789
+  // at 80 MHz: a_lo23 -> att_1 PORT_A_DATA_IN -0.498). The word is finished
+  // into b_* and written the cycle after the count: nothing reads att_* for a
+  // slot until the band pass, long after the sort (R566 (2)), and the count
+  // itself does not move. `clear` still wins over a pending write.
+  logic                b_v, b_bank, b_moire;
+  logic [IW-1:0]       b_slot;
+  logic [2*BW-1:0]     b_band;
+  logic [CW-1:0]       b_col;
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      a_v <= 1'b0; a_room <= 1'b0; a_tiny <= 1'b0; a_bank <= 1'b0; a_moire <= 1'b0;
-      a_slot <= '0; a_band <= '0; a_col <= '0;
+      a_v <= 1'b0; a_room <= 1'b0; a_tiny <= 1'b0; a_bank <= 1'b0; a_moire <= 1'b0; a_need <= 1'b0;
+      a_slot <= '0; a_lo01 <= '0; a_lo23 <= '0; a_hi01 <= '0; a_hi23 <= '0; a_col <= '0;
+      b_v <= 1'b0; b_bank <= 1'b0; b_moire <= 1'b0; b_slot <= '0; b_band <= '0; b_col <= '0;   // R740
     end else begin
       a_v     <= in_valid && !clear;
       a_room  <= has_room;
-      a_tiny  <= is_tiny;
+      a_tiny  <= tiny_sel;
+      a_need  <= !is_tiny_f;
       a_bank  <= wbank;
       a_slot  <= wcount[IW-1:0];
-      a_band  <= band_range(in_y0, in_y1, in_y2, in_y3);
+      a_lo01  <= smin(in_y0, in_y1);  a_lo23 <= smin(in_y2, in_y3);   // R579 balanced; R739 split
+      b_v     <= a_v && a_room;                                   // R740: the att word, finished
+      b_bank  <= a_bank;  b_slot <= a_slot;  b_moire <= a_moire;  b_col <= a_col;
+      b_band  <= band_of(a_lo, a_hi);
+      a_hi01  <= smax(in_y0, in_y1);  a_hi23 <= smax(in_y2, in_y3);
       a_moire <= in_moire;
       a_col   <= c565(in_col);
     end
@@ -409,9 +462,14 @@ module m2_quad_store #(
     if (!rst_n) begin
       for (int b = 0; b < int'(NBANK); b++) count[b] <= '0;
       wi <= '0; dbg_dropped <= '0; dbg_tiny <= '0;
+      fine <= 1'b1; need <= '0;
     end else if (clear) begin
       count[wbank] <= '0; wi <= '0; dbg_dropped <= '0; dbg_tiny <= '0;
+      // R769: the list just ended decides the next one's threshold.
+      fine <= (need < (IW+1)'(NQ - NQ/8));
+      need <= '0;
     end else begin
+      if (a_v && a_need && !(&need)) need <= need + 1'b1;
       // THE VERTEX RAMs' WRITE ENABLE DOES NOT WAIT FOR THE TINY TEST (R222).
       // Every accepted quad is WRITTEN at slot wcount and only the COUNT is
       // withheld when it is tiny: the slot is simply reused by the next quad.
@@ -441,11 +499,11 @@ module m2_quad_store #(
         key[wcount[IW-1:0]] <= FTB ? in_z[KW-1:0] : ~in_z[KW-1:0];
       end
       // R566: a cycle later, from the registered comparators.
+      if (b_v) begin   // R740: a cycle after the count
+        if (b_bank) att_1[b_slot] <= {b_band, b_moire, b_col};
+        else        att_0[b_slot] <= {b_band, b_moire, b_col};
+      end
       if (a_v) begin
-        if (a_room) begin
-          if (a_bank) att_1[a_slot] <= {a_band, a_moire, a_col};
-          else        att_0[a_slot] <= {a_band, a_moire, a_col};
-        end
         if (a_tiny) begin
           if (dbg_tiny != 16'hffff) dbg_tiny <= dbg_tiny + 16'd1;
         end else if (a_room) begin
@@ -710,7 +768,12 @@ module m2_quad_store #(
   wire [BW-1:0] q_band_lo = att_rd[AT_W-BW-1:CW+1];
   wire          hit = v2 && (replay_band >= q_band_lo) && (replay_band <= q_band_hi);
   // The pipeline moves unless a hit is standing with nowhere to go.
-  wire          adv = sc_run && !(hit && hq_full);
+  // R741: unless ANY quad is standing in stage two with the queue full -- hit
+  // or not. The hit test (replay_band against the att word just read) was in
+  // the list RAMs' read enable (s791 at 80 MHz: raster3d fill_band -> the
+  // RAM's PORT_B_ADDRESS_STALL -0.467). A miss now waits for a queue slot it
+  // does not need, a cycle, only while the queue is full; nothing is reordered.
+  wire          adv = sc_run && !(v2 && hq_full);
 
   typedef enum logic [1:0] { E_IDLE, E_READ, E_OUT } estate_t;
   estate_t e_st;

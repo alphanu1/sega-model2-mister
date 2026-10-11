@@ -74,7 +74,19 @@ localparam CONF_STR = {
 	"O[122:121],Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
 	// R682: 15 kHz INTERLACED for a 15 kHz CRT -- 57.52 fields a second (the
 	// game's rate), 15,733 Hz lines, all 384 lines as two fields of 192.
-	"O[42],Video,Native 24kHz,15kHz interlaced;",
+	// R795: the [15kHz CRT] MRAs force 15 kHz interlaced whatever this says
+	// (a CRT owner cannot see a 24 kHz OSD to set it).
+	// R801: and then this line is hidden (status_menumask[0], the CRT flag)
+	// and the next one -- the same bit, both values labelled 15 kHz -- is
+	// shown instead, so the OSD tells the truth without writing status back.
+	"H0O[42],Video,Native 24kHz,15kHz interlaced;",
+	"h0O[42],Video,15kHz (CRT MRA),15kHz (CRT MRA);",
+	// R783: the 15 kHz field's line count. 273.5 keeps the 15.73 kHz line;
+	// 262.5 is NTSC's count at a 15.10 kHz line, for sets that lose sync on
+	// 273.5. Game speed and picture are the same either way.
+	// R799: 262/263 first, the default (Ben: it fixes the alignment on his
+	// set); labelled by the fields' own line counts, no half line.
+	"O[45],15kHz lines,262/263 (15.1kHz),273/274 (15.7kHz);",
 	"-;",
 	// The read capture phase is an OSD option rather than a constant because the
 	// Model 1 core found its board returned every burst shifted right by one
@@ -197,7 +209,7 @@ localparam CONF_STR = {
 	// speed (measured on s686: 28.4 pictures a second, every one two game
 	// frames apart -- 56.8 of 57.5). The menu order is mapped back to the skip
 	// count below: menu 0 -> skip 1, menu 1 -> skip 0, menu 2 -> skip 2.
-	"O[44:43],Draw method,Single buffered,Double Buffered,Every 3rd frame;",
+	"O[44:43],Draw method,Double Buffered,Single buffered,Every 3rd frame;",   // R781: Double first, the default
 	// R664: O[37] (FB self-test, R653), O[38] (FB address, R654) and O[41:39]
 	// (FB write pace, R656) are parked -- diagnostics of the scanline hunt that
 	// R660 ended -- to make room for the combining writer (R661). The bits stay
@@ -208,7 +220,8 @@ localparam CONF_STR = {
 	// colour table's raw values. 2D and 3D follow it together.
 	// R639: Off first -- the power-up default. Menu 0 Off, 1 MAME, 2 Mild,
 	// mapped below to the palette's encoding (0 MAME, 1 mild, 2/3 off).
-	"O[33:32],Gamma,Off,MAME,Mild;",
+	// R790: MAME first now -- Ben's default. Menu 0 MAME, 1 Off, 2 Mild.
+	"O[33:32],Gamma,MAME,Off,Mild;",
 	// Which half of the right stick's Y is the throttle. Axis polarity is not
 	// standardised across pads, so this is a setting rather than a rebuild.
 	"O[28],Pedals,Normal,Swapped;",
@@ -231,6 +244,8 @@ localparam CONF_STR = {
 wire        forced_scandoubler;
 wire  [1:0] buttons;
 wire [127:0] status;
+wire         crt_mra;   // R801: game_id[7], declared ahead of hps_io (assigned below)
+
 wire [10:0] ps2_key;
 
 // WIDE(1) IS NOT OPTIONAL. It makes ioctl_dout 16 bits and ioctl_addr advance by
@@ -263,6 +278,7 @@ hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
 	.forced_scandoubler(forced_scandoubler),
 	.buttons(buttons),
 	.status(status),
+	.status_menumask({15'd0, crt_mra}),   // R801: the CRT MRA's own Video line
 	.ps2_key(ps2_key),
 
 	.ioctl_download(ioctl_download),
@@ -307,7 +323,7 @@ wire clk_mem;        // 100 MHz, m2_sdram ONLY
 wire clk_sdram_pin;  // 100 MHz at 180 deg, drives SDRAM_CLK
 // R573: THE CORE CLOCK IN MHz, and every rate that hangs off it derives from
 // this one number (R227's list). 60: the clock plan's target; clk_i960 is half.
-localparam int unsigned SYS_MHZ = 75;    // R717: 75 / 37.5 on the way to R713's 80 / 40 (was 70 / 35, R580)
+localparam int unsigned SYS_MHZ = 80;    // R744: 80 / 40 (R713's target; R717 had stepped to 75 / 37.5)
 wire clk_sys;   // 60 MHz (R573), the core domain, and the COPROCESSOR's clock.
                 // Exactly the real MB86234's 50 MHz, and an exact 2x clk_i960 --
                 // the board's own ratio. Model 1 had to retrofit 2:1 onto a
@@ -395,15 +411,24 @@ localparam int unsigned CE_DEN = 100;     // clk_mem
 // ratio is 16/100 native and 547/5,300 interlaced, over one 13-bit accumulator.
 localparam int unsigned CEI_NUM = 547;
 localparam int unsigned CEI_DEN = 5300;
+// R783: 262.5-line fields, the same 656-pixel line and the same 57.5242 Hz:
+// 525 x 656 pixels a frame in 1,738,400 clk_mem = 861/8692 (9.9057 MHz,
+// 15,100 Hz a line). 8692 needs the accumulator's fourteenth bit.
+localparam int unsigned CEN_NUM = 861;
+localparam int unsigned CEN_DEN = 8692;
 reg [2:0]  vil_s;                         // the OSD bit, into clk_mem
-always @(posedge clk_mem) vil_s <= {vil_s[1:0], status[42]};
+wire       vid_il_sel;                    // R795: the OSD bit or the CRT MRA's flag, on clk_sys below
+always @(posedge clk_mem) vil_s <= {vil_s[1:0], vid_il_sel};
 wire       vid_il = vil_s[2];
-reg [12:0] ce_acc;
+reg [2:0]  vnl_s;                         // R783: the line-count bit, into clk_mem
+always @(posedge clk_mem) vnl_s <= {vnl_s[1:0], ~status[45]};   // R799: 0 = 262/263
+wire       vid_nl = vnl_s[2];
+reg [13:0] ce_acc;
 reg        ce_pix;
-wire [12:0] ce_num = vid_il ? 13'(CEI_NUM) : 13'(CE_NUM);
-wire [12:0] ce_den = vid_il ? 13'(CEI_DEN) : 13'(CE_DEN);
+wire [13:0] ce_num = !vid_il ? 14'(CE_NUM) : vid_nl ? 14'(CEN_NUM) : 14'(CEI_NUM);
+wire [13:0] ce_den = !vid_il ? 14'(CE_DEN) : vid_nl ? 14'(CEN_DEN) : 14'(CEI_DEN);
 always @(posedge clk_mem) begin
-	if (ce_acc >= ce_den) ce_acc <= 13'd0;             // a mode change: start clean
+	if (ce_acc >= ce_den) ce_acc <= 14'd0;             // a mode change: start clean
 	else if (ce_acc + ce_num >= ce_den) begin
 		ce_acc <= ce_acc + ce_num - ce_den;
 		ce_pix <= 1'b1;
@@ -482,7 +507,8 @@ wire  [1:0] ldr_wr_be;
 // the four unused ports are tied off instead -- synthesis removes what they
 // drive, and the alternative is forking from the reference over an arbiter
 // detail. Port 0 is the readback; 1-4 become the CPU, tilemap and renderer.
-localparam int unsigned NPORTS = 11;  // 5 = sound ROM, 6/7 = samples, 8/9 = TGP, 10 = texels
+localparam int unsigned NPORTS = 13;  // 5 = sound ROM, 6/7 = samples, 8/9 = TGP, 10 = texels
+                                      // R789: 11, 12 = the texel cache's third and fourth miss ports
                                       // (9 is SHARED with the display-list walk)
 
 // THE 68000 SOUND PROGRAM, 256 KB, at MRA byte offset 0x2350000 -- and the MRA's
@@ -608,8 +634,9 @@ reg [2:0] texoff_s;  // R275: the same, for the texture switch
 always_ff @(posedge clk_sys) texoff_s <= {texoff_s[1:0], status[27]};
 reg [1:0] gam_m1, gam_m2, gam_s1, gam_s2;   // R630: the gamma choice, to both clocks
 // R639: menu 0 Off -> 2, 1 MAME -> 0, 2 Mild -> 1, 3 (unused) -> off.
-wire [1:0] gam_menu = (status[33:32] == 2'd0) ? 2'd2 :
-                      (status[33:32] == 2'd1) ? 2'd0 :
+// R790: menu 0 MAME -> 0, 1 Off -> 2, 2 Mild -> 1, 3 (unused) -> off.
+wire [1:0] gam_menu = (status[33:32] == 2'd0) ? 2'd0 :
+                      (status[33:32] == 2'd1) ? 2'd2 :
                       (status[33:32] == 2'd2) ? 2'd1 : 2'd2;
 always_ff @(posedge clk_mem) begin gam_m1 <= gam_menu; gam_m2 <= gam_m1; end
 always_ff @(posedge clk_sys) begin gam_s1 <= gam_menu; gam_s2 <= gam_s1; end
@@ -857,6 +884,9 @@ logic             p2s_req;
 logic [SDR_AW:1]  p2s_addr;
 wire              p2s_freq, p2s_ack;
 logic             p2_tex_f;
+// R789: the texel cache's third and fourth miss ports (11, 12), driven below
+wire              tex_m3_req, tex_m4_req;
+wire [SDR_AW:1]   tex_m3_addr, tex_m4_addr;
 
 always_comb begin
 	p_req  = '0;
@@ -1089,6 +1119,11 @@ always_comb begin
 	p_req[3]  = cache_m_req;
 	p_req[10] = tex_m_req;
 	p_addr[10] = tex_m_addr;
+	// R789: the texel cache's third and fourth miss slots, on clk_mem as 10 is
+	p_req[11]  = tex_m3_req;
+	p_addr[11] = tex_m3_addr;
+	p_req[12]  = tex_m4_req;
+	p_addr[12] = tex_m4_addr;
 	p_addr[3] = char_base + SDR_AW'(cache_m_addr);
 	// PORT 0 IS THE CPU'S, and it is the single-word port on purpose: the
 	// bridge issues one 16-bit access at a time, and ports 1-3 burst four.
@@ -1130,6 +1165,7 @@ logic [NPORTS-1:0][SDR_AW:1] f_addr;
 logic [NPORTS-1:0][15:0]     f_din;
 logic [NPORTS-1:0][1:0]      f_be;
 logic [NPORTS-1:0][63:0]     f_dout;
+wire  [NPORTS-1:0]           sdr_lo;   // R787: an eight-word read's first half (clk_mem)
 logic                        f_wr_req, f_wr_ack;
 logic [SDR_AW:1]             f_wr_addr;
 logic [15:0]                 f_wr_din;
@@ -1171,7 +1207,7 @@ m2_wr_arb #(.N(5), .AW(SDR_AW)) u_wr_arb (
 // of clk_mem; this crosses at any ratio with the same slow-side contract, so no
 // requester changes. Ports 2, 3 and 10 are the caches on clk_mem and pass
 // straight through; port 2's boot owners cross on u_p2s below.
-m2_sdram_cdc #(.NP(NPORTS), .AW(SDR_AW), .FAST(11'b100_0000_1100)) u_sdram_x2 (
+m2_sdram_cdc #(.NP(NPORTS), .AW(SDR_AW), .FAST(13'b1_1100_0000_1100)) u_sdram_x2 (   // R789: 11, 12 on clk_mem
 	.clk_slow(clk_sys), .s_rst_n(mem_rst_n),
 	.clk_fast(clk_mem), .f_rst_n(mem_rst_n),
 	.s_req(p_req), .s_addr(p_addr), .s_ack(p_ack), .s_dout(p_dout),
@@ -1263,7 +1299,21 @@ m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(781),
            // frame rate rose as the texel step cut texel traffic -- step 1, 2, 4:
            // 3D 23.3, 24.2, 26.0 pictures a second (s703, Single buffered). Behind
            // port 2 and the glyph fetch (3, a per-scanline deadline), ahead of 10.
-           .PRI(11'b100_0001_1100), .PRI_CAP(2)) u_sdram (
+           // R766: port 1 (the i960) joins the class, AHEAD of every other
+           // member -- the class grants the lowest set port. On the board a
+           // Double Buffered menu walks and draws in alternate vblanks and the
+           // game flips every second one, though its frame is ~1 ms of CPU in
+           // MAME; the CPU's SDRAM wait was measured 86% behind texels (R606),
+           // and round-robin behind four class ports gave it the bus only in
+           // their gaps. The CPU blocks on each access (one outstanding), so it
+           // cannot hold the bus: the most it costs a texel, glyph or walker
+           // read is one transaction.
+           // R789: 11 and 12 (texel misses 3 and 4) join the class BEHIND every
+           // other member -- it grants the lowest set port, so the i960 (1), the
+           // texel port 2, the glyph fetch (3, R639's per-scanline deadline) and
+           // the walker (4) still go first; the cap (2) still lets one
+           // round-robin grant through after two class grants.
+           .PRI(13'b1_1100_0001_1110), .PRI_CAP(2)) u_sdram (
 	.clk(clk_mem), .rst_n(mem_rst_n), .ready(mem_ready),
 	// CL+2, FIXED, NO OSD OVERRIDE (R411). Only one capture depth can ever be
 	// right -- CL+1 samples the previous word of the burst, CL+3 the next -- so
@@ -1281,6 +1331,10 @@ m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(781),
 	.wr_be(f_wr_be),   .wr_ack(f_wr_ack),
 	.p_req(f_req), .p_we(f_we), .p_addr(f_addr), .p_din(f_din), .p_be(f_be),
 	.p_dout(f_dout), .p_ack(f_ack),
+	// R787/R796: the texel cache's four miss ports read 128-bit lines as
+	// eight-word bursts -- 10, 11 and 12 always, 2 once the texel cache owns
+	// it (its boot owners keep four) -- and take the first half on sdr_lo.
+	.p_long(NPORTS'({3'b111, 7'd0, p2_tex_f, 2'd0})), .p_lo(sdr_lo),
 	.dbg_req(sdr_pend), .dbg_grant(sdr_infl)
 );
 
@@ -2181,7 +2235,23 @@ logic [7:0] game_id;
 always_ff @(posedge clk_sys or negedge mem_rst_n)   // cleared on PLL lock, as Model 1 does
 	if (!mem_rst_n) game_id <= 8'd0;
 	else if (ioctl_download && ioctl_wr && (ioctl_index == GAMEID_INDEX)) game_id <= ioctl_dout[7:0];
-wire is_vcop = (game_id == 8'd1);
+// R795: bit 7 is the CRT MRA's flag ("Daytona USA ... [15kHz CRT].mra"
+// sends 80); bits 6:0 are the game.
+wire is_vcop = (game_id[6:0] == 7'd1);
+assign crt_mra = game_id[7];   // R801
+// R795: THE CRT MRA FORCES 15 kHz. A CRT owner cannot see a 24 kHz OSD to
+// switch it, so the "[15kHz CRT]" MRAs set game_id[7] and the core starts
+// in 15 kHz interlaced whatever O[42] holds; the normal MRAs leave it to the
+// OSD. (R793's MiSTer.ini detection, which needed a second sys/ patch, is
+// not used -- the MRA is the whole mechanism.) Quasi-static: game_id is set
+// once per load; vil_s crosses it as it crossed status[42].
+// R801: 15 kHz is the OSD bit or the CRT MRA's flag (R795). R797 wrote the
+// bit back through hps_io's status_set, which keeps its 128-bit status_req
+// live (~+240 registers) and cost the 80 MHz fit (s951-s953); the menu mask
+// above shows the CRT state instead, for 16 bits of read-only mux.
+reg  vid_il_r;
+always_ff @(posedge clk_sys) vid_il_r <= status[42] | game_id[7];
+assign vid_il_sel = vid_il_r;
 wire        cpu_ifetch;      // R724: the i960's request is an instruction fetch
 wire  [4:0] cpu_dbg_ts;      // R721: the i960's sequencer state, for telemetry
 wire [16:0] cpu_br_sample;   // R721: the bridge's transaction in flight, for telemetry
@@ -2325,6 +2395,9 @@ m2_cpu_bridge #(.BUFFERRAM(1'b1), .BUFFERRAM_WRONLY(1'b0)
 // logging the address a poll loop was reading, not by reasoning about it.
 logic [11:0] io_intreq, io_intena;
 logic [31:0] io_videoctl;
+// R765: render_mode_w, 0x10000000-0x101fffff bit 2 -- 1 = 60 Hz mode (Daytona
+// writes 4 at frame 0), 0 = 30 Hz. It chooses which frame bit 0x98000c shows.
+logic        io_render_mode;
 logic [31:0] io_framenum;
 logic        vbl_s, vbl_d, vbl_dd;   // R564: vbl_s is the first synchroniser stage
 
@@ -2335,7 +2408,7 @@ wire  uart_irq_rx, uart_irq_tx;   // the halves; the i960 takes the OR, the 6800
 logic uart_irq_d;
 always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
 	if (!cpu_rst_n) begin
-		io_intreq <= 12'd0; io_intena <= 12'd0; io_videoctl <= 32'd0;
+		io_intreq <= 12'd0; io_intena <= 12'd0; io_videoctl <= 32'd0; io_render_mode <= 1'b0;   // R765
 		uart_irq_d <= 1'b0;
 		io_framenum <= 32'd0; vbl_s <= 1'b0; vbl_d <= 1'b0; vbl_dd <= 1'b0;
 	end else begin
@@ -2370,6 +2443,7 @@ always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
 			if (cpu_io_addr[23:0] == 24'he80000) io_intreq  <= io_intreq  & cpu_io_wdata[11:0];
 			if (cpu_io_addr[23:0] == 24'he80004) io_intena  <= cpu_io_wdata[11:0];
 			if (cpu_io_addr[23:0] == 24'h98000c) io_videoctl <= cpu_io_wdata;
+			if (cpu_io_addr[31:21] == 11'h080)   io_render_mode <= cpu_io_wdata[2];   // R765
 		end
 
 		// ---- THE SOUND INTERRUPT, WHICH IS WHAT ACTUALLY SENDS THE BYTES.
@@ -2712,8 +2786,17 @@ assign cpu_irq = { |(io_intreq & 12'hc00), |(io_intreq & 12'h3fc),
 // R652: and no walk while the 3D holds the game -- the store is not taking
 // quads, and a walk that stalled would be reading a list the game might be
 // rewriting (R256's hazard). The walk and the frame count move together.
-assign geo_walk_start = vbl_d && !vbl_dd && !nowalk_s[2] && !r3d_game_hold
-                          && (wrate_s[2] || !io_videoctl[0] || !io_framenum[0]);
+// R764: EVERY VBLANK, WHATEVER THE GAME'S 30 Hz BIT SAYS. This gated the
+// walk start and the renderer's swap to even frames when videocontrol bit 0
+// was set -- MAME's screen_vblank rule for when geo_parse runs. Here it is
+// also the renderer's frame_start, so it capped the whole 3D pipeline at 30,
+// and the menus ran their game loop every other vblank (Ben: countdowns take
+// 20 s, not 10). R256 adopted the rule when walks were vblank-triggered and
+// could read a list still being built; since R294/R666 the walk starts only
+// after the game's flip ("After flip"), a list it has finished, so a vblank
+// after any flip is safe. wrate_s (Walk rate, parked) no longer selects.
+assign geo_walk_start = vbl_d && !vbl_dd && !nowalk_s[2] && !r3d_game_hold;
+wire   _unused_wrate  = &{1'b0, wrate_s};
 
 assign cpu_io_rdata =
 	// geo_r: the game sets these and READS THEM BACK to find where it is.
@@ -2756,9 +2839,14 @@ assign cpu_io_rdata =
 	// reads the ID. It is here because it is known-wrong and costs four LUTs,
 	// not because anything is waiting on it.
 	(cpu_io_addr[23:4] == 20'h98003) ? tgpid :
-	(cpu_io_addr[23:0] == 24'h98000c) ? (io_videoctl[0]
-	                                      ? {29'd0, io_framenum[0], io_videoctl[1:0]}
-	                                      : {28'd0, io_framenum[1], 1'b0, io_videoctl[1:0]}) :
+	// R765: MAME's videoctl_r exactly -- the frame bit ALWAYS in bit 2, frame
+	// bit 0 in 60 Hz render mode and bit 1 in 30 Hz. This was keyed on
+	// videocontrol bit 0 and put frame bit 1 in bit 3 when it was clear; Daytona
+	// writes videocontrol 0 and render mode 1, reads bit 2 once a frame (0x17cb8)
+	// to pick the list buffer -- and so always got 0: single-buffered at dword 0
+	// on the board (R211, R608, R610), where MAME alternates 0 / 0x10000 (R638).
+	(cpu_io_addr[23:0] == 24'h98000c) ? {29'd0, (io_render_mode ? io_framenum[0] : io_framenum[1]),
+	                                     io_videoctl[1:0]} :
 	(cpu_io_addr[23:0] == 24'he80000) ? {20'd0, io_intreq} :
 	(cpu_io_addr[23:0] == 24'he80004) ? {20'd0, io_intena} :
 	32'd0;
@@ -2979,7 +3067,7 @@ m2_geo #(.AW(SDR_AW), .DEPTH(128)) u_geo (
 	.clk(clk_sys), .rst_n(mem_rst_n),
 	.wr_ctl(geo_wr_ctl), .wr_setwp(geo_wr_setwp), .wr_setrp(geo_wr_setrp),
 	.trig_mode(wtrig_s2),
-	.skip((fskip_s3 == 2'd0) ? 2'd1 : (fskip_s3 == 2'd1) ? 2'd0 : 2'd2),   // R699: menu order -> skip count
+	.skip((fskip_s3 == 2'd0) ? 2'd0 : (fskip_s3 == 2'd1) ? 2'd1 : 2'd2),   // R699: menu order -> skip count; R781: Double (skip 0) is 0
 	.wr_push(geo_wr_push), .wdata(geo_push_word),
 	.rd_wp(geo_rd_wp), .rd_rp(geo_rd_rp),
 	.base_buffer(GAME_BUFFER),
@@ -3147,6 +3235,7 @@ wire [15:0] q3d_oz0, q3d_oz1, q3d_oz2, q3d_oz3;   // R334: 1/z per vertex
 wire [7:0] q3d_lum;                       // R271: for the exact colour path, not yet built
 /* verilator lint_on UNUSEDSIGNAL */
 wire [23:0] q3d_tex;
+wire        q3d_tlinv;                      // R784: the polygon's luma table is row 1 (inverse)
 /* verilator lint_on UNUSEDSIGNAL */
 wire [23:0] q3d_col;
 wire [31:0] q3d_z;
@@ -3216,6 +3305,7 @@ m2_geometry u_geometry (
 	// simply never driven. That is what this line said for one build, and the
 	// board drew ZERO textured pixels because of it.
 	.q_tex(q3d_tex), .q_lum(q3d_lum),                                 // R271
+	.q_tlinv(q3d_tlinv),                                              // R784
 	.q_frac(q3d_frac),                                                // R626
 	.q_col(q3d_col), .q_z(q3d_z),
 	.dbg_polys(geo_polys), .dbg_objects(geo_objs_done), .dbg_capped(geo_capped),
@@ -5913,6 +6003,15 @@ wire [15:0] vid_overruns;
 
 wire [7:0] tile_r, tile_g, tile_b;
 wire [9:0] vid_x, vid_y;
+// R779: THE 3D IS READ AT THE COLUMN THE 2D IS SHOWING. m2_video's colour and
+// blanking leave one pixel behind its counter (vid_r is column hcnt-1, latched
+// on ce_dd with hb_q), while m2_fb_read answers for scan_x one clk_mem later.
+// Fed hcnt directly the 3D sat one column LEFT of the 2D and of DE: displayed
+// column 495 showed 3D column 496, which the line fetch (248 beats) never
+// writes -- the tilemap showed down the whole right edge. Held on ce_pix, x is
+// the previous column for the whole pixel period, as the colour is.
+logic [9:0] vid_x_d;
+always_ff @(posedge clk_mem) if (ce_pix) vid_x_d <= vid_x;
 wire       vid_field;   // R682
 
 // ------------------------------------------------------------ THE 3D LAYER
@@ -6049,6 +6148,8 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1), .FB_DD
               .PXC(1'b1), .PIXSTEP(4), .FRB(2), .M2COV(1'b1),   // R658/R662; R673: re-tested on top of R671 (s583's test had the texture ROM bug)
                 // R626: quarter-pixel plane fit
               .TXLATE(3),   // R627: point-sample while the fill is within 3 bands of the beam
+              .TXNS(4), .TXRSP(4), .TXK(16),   // R789: R628's four misses in flight and 16 credits; the queue stays 4 (8 cost ~200 ALM for 1-4%)
+              .TXLW8(1'b1), // R787/R796: 128-bit texel lines, eight-word reads on all four miss ports
               .TXREUSE(1'b0),   // R633: every other group while late -- REJECTED by eye (R634)
                 // R616: pixel-centre planes; R626: bilinear, a texel per four pixels (PIXSTEP 2 drops bands on the board)
               .TWO_CLOCKS(1'b1), .TEX_AW(SDR_AW)) u_raster3d (   // R564: scan on clk_mem
@@ -6072,20 +6173,25 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1), .FB_DD
 	// The OSD's Off clears the textured bit, which is the one thing every
 	// stage below tests -- the plane fit, the span walk and the texel fetch all
 	// fall back to what they did before in one place.
-	.q_tex({q3d_tex[23:1], q3d_tex[0] && !texoff_s[2]}),
+	// R784: bit 11 (the checker, taken below as q_moire) carries the luma
+	// table's row-1 flag into the rasteriser -- no wider store or queue.
+	.q_tex({q3d_tex[23:12], q3d_tlinv, q3d_tex[10:1], q3d_tex[0] && !texoff_s[2]}),
 	.tex_base0(GAME_TEXS0), .tex_base1(GAME_TEXS1), .tex_inval(cpu_tex_inval),
 	.tex_bilinear(!texpt_s[2]),   // R620
 	.tex_pxk(pxk_s3),             // R650: the OSD's texel step
+	.tex_gamma(gam_s2),           // R784: the curve, for a textured pixel's pedestal
 	.list_hold(r3d_list_hold),    // R652
 	.fb_test(fb_test), .dbg_tp_bad(tp_bad), .dbg_tp_rows(tp_rows), .dbg_tp_first(tp_first),   // R653
 	.fb_pace(fb_pace),   // R656
 	.tex_m2_en(tex_m2_en), .tex_m2_req(tex_m2_req), .tex_m2_addr(tex_m2_addr),
 	// R628: the texel cache's third and fourth ports, unused at TXNS = 2
-	.tex_m3_en(1'b0), .tex_m3_req(), .tex_m3_addr(), .tex_m3_ack(1'b0), .tex_m3_data(64'd0),
-	.tex_m4_en(1'b0), .tex_m4_req(), .tex_m4_addr(), .tex_m4_ack(1'b0), .tex_m4_data(64'd0),
-	.tex_m2_ack(tex_m2_ack), .tex_m2_data(tex_m2_data),
+	// R789: and the third and fourth (TXNS 4), on ports 11 and 12
+	// R796: each with its eight-word read's first half (sdr_lo)
+	.tex_m3_en(1'b1), .tex_m3_req(tex_m3_req), .tex_m3_addr(tex_m3_addr), .tex_m3_ack(p_ack[11]), .tex_m3_data(p_dout[11]), .tex_m3_lo(sdr_lo[11]),
+	.tex_m4_en(1'b1), .tex_m4_req(tex_m4_req), .tex_m4_addr(tex_m4_addr), .tex_m4_ack(p_ack[12]), .tex_m4_data(p_dout[12]), .tex_m4_lo(sdr_lo[12]),
+	.tex_m2_ack(tex_m2_ack), .tex_m2_data(tex_m2_data), .tex_m2_lo(p2_tex_f & sdr_lo[2]),   // R787
 	.tex_m_req(tex_m_req), .tex_m_addr(tex_m_addr),
-	.tex_m_ack(tex_m_ack), .tex_m_data(tex_m_data),
+	.tex_m_ack(tex_m_ack), .tex_m_data(tex_m_data), .tex_m_lo(sdr_lo[10]),   // R787
 	.dbg_texpix(tex_pixels), .dbg_texhit(tex_hits), .dbg_texmiss(tex_misses),
 	.dbg_texlost(tex_lost), .dbg_texto(tex_to), .dbg_oz0(oz_d0), .dbg_oz1(oz_d1), .dbg_oz2(oz_d2), .dbg_oz3(oz_d3),
 	.dbg_texsweep(tex_sweep), .dbg_texnz(tex_nz),
@@ -6097,7 +6203,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1), .FB_DD
 	// shadow and the minimap panel. The band has stippled since R225; it was
 	// fed a constant 0, so every checker polygon came out solid.
 	.q_moire(q3d_tex[11]), .q_end(q3d_end),
-	.scan_clk(clk_mem), .scan_x(vid_x), .scan_y(vid_y),   // R564: the video's clock
+	.scan_clk(clk_mem), .scan_x(vid_x_d), .scan_y(vid_y),   // R564: the video's clock; R779: x one pixel behind
 	.scan_il(vid_il), .scan_field(vid_field),               // R682
 	.scan_col(r3d_col), .scan_hit(r3d_hit),
 	.dbg_quads(r3d_quads), .dbg_dropped(r3d_dropped), .dbg_tiny(r3d_tiny),
@@ -6190,7 +6296,7 @@ m2_video u_tilemap (
 	.dbg_hscr(vid_hscr), .dbg_vscr(vid_vscr),
 	.dbg_ovr_frame(vid_ovr_frame),
 	.vid_x(vid_x), .vid_y(vid_y),
-	.interlace(vid_il), .vid_field(vid_field),   // R682
+	.interlace(vid_il), .ntsc_lines(vid_nl), .vid_field(vid_field),   // R682, R783
 	.dbg_layer_px(vid_layer_px), .dbg_ctrl(vid_ctrl),
 	.dbg_layer_have(vid_layer_have)
 );

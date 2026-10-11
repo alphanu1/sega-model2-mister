@@ -68,6 +68,11 @@ module m2_fifo_m10k #(
 
   output logic          full,
   output logic [15:0]   count,                 // words held, head included
+  // R747: ANY word held -- in the array, in the read in flight, or at the
+  // head. `count` misses the in-flight read for a cycle, and q_valid alone
+  // misses both the array and the flight: a word pushed this cycle reaches
+  // the head two cycles later.
+  output logic          held,
   output logic [31:0]   dropped                // pushes refused while full
 );
 
@@ -86,6 +91,7 @@ module m2_fifo_m10k #(
   // so the usable depth is DEPTH+1 and `full` means what the caller thinks.
   assign full    = mem_full;
   assign count   = 16'(mem_cnt) + 16'(q_valid);
+  assign held    = mem_avail || rd_pending || q_valid;   // R747
 
   // The head slot frees this cycle if it is empty or being popped.
   wire head_free = !q_valid || pop;

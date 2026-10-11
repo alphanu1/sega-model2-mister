@@ -60,7 +60,10 @@
 `timescale 1ns/1ps
 
 module m2_fp_pool #(
-  parameter int unsigned NC = 3          // clients
+  parameter int unsigned NC = 3,         // clients
+  // R740: the adder's mid-stage register (fp_add PIPE_A2) -- the add latency
+  // is 6 with it, and m2_geo_xform's FP_ADD_LAT must say so (its default does).
+  parameter bit          ADD_A2 = 1'b1
 ) (
   input  logic                clk,
   input  logic                rst_n,
@@ -255,7 +258,7 @@ module m2_fp_pool #(
     .overflow(m_ovf), .underflow(m_unf), .invalid(m_inv)
   );
 
-  fp_add u_add (
+  fp_add #(.PIPE_A2(ADD_A2)) u_add (
     .clk(clk), .rst_n(rst_n),
     .in_valid(add_v_q), .a(add_a_q), .b(add_b_q),
     .sub(add_sub_q),
@@ -291,8 +294,10 @@ module m2_fp_pool #(
   // units, so a tag travels one more cycle before its result appears.
   logic [CW-1:0] mtag [5];
   logic [4:0]    mtag_v;
-  logic [CW-1:0] atag [5];
-  logic [4:0]    atag_v;
+  // R740: SIX for the add when ADD_A2 -- the tag must travel as long as fp_add.
+  localparam int AD = ADD_A2 ? 6 : 5;
+  logic [CW-1:0] atag [AD];
+  logic [AD-1:0] atag_v;
   logic [CW-1:0] dtag;
 
   assign mul_res = m_res;
@@ -304,7 +309,7 @@ module m2_fp_pool #(
     add_rsp = '0;
     div_rsp = '0;
     if (m_valid && mtag_v[4]) mul_rsp[mtag[4]] = 1'b1;
-    if (a_valid && atag_v[4]) add_rsp[atag[4]] = 1'b1;
+    if (a_valid && atag_v[AD-1]) add_rsp[atag[AD-1]] = 1'b1;
     if (d_valid && div_outstanding) div_rsp[dtag] = 1'b1;
   end
 
@@ -313,15 +318,14 @@ module m2_fp_pool #(
       mul_rr <= '0; add_rr <= '0; div_rr <= '0;
       mtag_v <= '0; atag_v <= '0; dtag <= '0;
       div_outstanding <= 1'b0;
-      for (int i = 0; i < 5; i++) begin mtag[i] <= '0; atag[i] <= '0; end
+      for (int i = 0; i < 5; i++) mtag[i] <= '0;
+      for (int i = 0; i < AD; i++) atag[i] <= '0;
     end else begin
       // Shift the tags along with the operands.
-      for (int i = 4; i > 0; i--) begin
-        mtag[i]   <= mtag[i-1];
-        atag[i]   <= atag[i-1];
-      end
+      for (int i = 4; i > 0; i--) mtag[i] <= mtag[i-1];
+      for (int i = AD-1; i > 0; i--) atag[i] <= atag[i-1];
       mtag_v <= {mtag_v[3:0], mul_any};
-      atag_v <= {atag_v[3:0], add_any};
+      atag_v <= {atag_v[AD-2:0], add_any};
       mtag[0] <= mul_win;
       atag[0] <= add_win;
 

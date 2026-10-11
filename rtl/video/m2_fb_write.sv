@@ -171,7 +171,7 @@ module m2_fb_write #(
           x_r   <= in_x0;
           x1_r  <= in_x1;
           px_r  <= px;
-          mo_be <= !in_moire ? 8'hFF : (in_y[0] ? 8'hF0 : 8'h0F);
+          mo_be <= !in_moire ? 8'hFF : (in_y[0] ? 8'h0F : 8'hF0);   // R779: MAME paints (x ^ y) & 1
           st    <= (in_x0[0]) ? W_HEAD : W_BODY;
         end
 

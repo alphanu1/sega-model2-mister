@@ -779,7 +779,16 @@ module i960_top (
   /* verilator lint_on UNUSEDSIGNAL */
   logic [31:0] ic_data, ic_baddr;
 
-  i960_icache u_icache (
+  // R768: 8 KB (512 lines), not the i960KB's 512 B. The board's fetch path is
+  // a clock crossing and SDRAM, not the real board's fast ROM, so a miss costs
+  // many cycles; instruction fetch is ~30% of the i960's busy time in a menu
+  // and a race (R767). The valid bits now live in the tag LUT-RAM, so size no
+  // longer costs per-line logic (R693's 2 KB attempt: 190 -> 592 ALM).
+  // R786: BACK TO 512 B (32 lines). The 8 KB cache changed nothing on the
+  // board (R768: the menus' trouble was the capture card, R770), the game
+  // now keeps up and the 3D draw is the limit (R780), and its tag RAM was
+  // ~264 ALM the texel path needs. The valid-bit-in-tag design stays.
+  i960_icache #(.LINES(32)) u_icache (
     .clk(clk), .rst_n(rst_n), .inval(1'b0),
     .req(ic_req), .req_demand(1'b1), .addr(fetch_addr[31:2]), .data(ic_data),
     .valid(ic_valid), .vaddr(ic_vaddr), .busy(ic_busy),
@@ -953,6 +962,16 @@ module i960_top (
   logic [31:0] pf_insn, pf_ip;
   logic        pf_valid, pf_armed, pf_issued;
 
+  // R812: A CACHE ANSWER COUNTS ONLY FOR THE ADDRESS IT ANSWERS. `ic_valid` was
+  // taken on its own in T_FETCH_W, so a prefetch whose answer was delayed --
+  // the cache busy on a fill when it was issued, then answering from S_DONE --
+  // could land in the first cycle of the NEXT fetch and be executed as that
+  // address's word. The board lock (R811): `ret` at 0x222124 prefetched
+  // 0x222128, returned to 0x192C, and 0x192C executed 0x222128's word. Every
+  // request goes out on fetch_addr, so one compare covers every consumer.
+  logic        ic_ok;
+  assign ic_ok = ic_valid && (ic_vaddr == fetch_addr[31:2]);
+
   // ------------------------------------------------------------- sequencer
 
 
@@ -975,11 +994,11 @@ module i960_top (
         if (pf_valid && (pf_ip == ip)) begin
           fetch_word_ok = 1'b1;
           fetch_word    = pf_insn;
-        end else if (pf_armed && ic_valid && (pf_ip == ip)) begin
+        end else if (pf_armed && ic_ok && (pf_ip == ip)) begin
           fetch_word_ok = 1'b1;
         end
       end
-      T_FETCH_W: fetch_word_ok = ic_valid;
+      T_FETCH_W: fetch_word_ok = ic_ok;
       default: ;
     endcase
   end
@@ -1125,7 +1144,7 @@ module i960_top (
       pf_armed  <= pf_issued;
       pf_issued <= 1'b0;
 
-      if (pf_armed && ic_valid) begin
+      if (pf_armed && ic_ok) begin
         pf_insn  <= ic_data;
         pf_valid <= 1'b1;
         pf_armed <= 1'b0;
@@ -1304,7 +1323,7 @@ module i960_top (
           end
         end
 
-        T_FETCH2_W: if (ic_valid) begin
+        T_FETCH2_W: if (ic_ok) begin
           disp_word <= ic_data;
           ts        <= T_EXEC;
         end

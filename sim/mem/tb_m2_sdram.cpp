@@ -35,7 +35,10 @@
 #include <random>
 #include <vector>
 
-static const int NP = 11;   // R275: the texel fetch made eleven
+#ifndef TB_NP
+#define TB_NP 11
+#endif
+static const int NP = TB_NP;   // R275: the texel fetch made eleven; R789: -DTB_NP=13, Model2.sv's thirteen
 
 // Burst length per port, mirroring blen() in m2_sdram.sv.
 // MIRRORS blen() IN m2_sdram.sv, and it did not: it said ports 1 and 2 burst
@@ -55,7 +58,11 @@ static const int NP = 11;   // R275: the texel fetch made eleven
 // stale -- every one on word 2 or 3 of port 8 or 9, and no other port touched.
 // A mirror that does not track blen() reports the bench as broken instead of
 // the RTL, which is how a correct change got reverted once already.
-static int burst_of(int p) { return (p == 8 || p == 9) ? 2 : 4; }
+// R787: M2_SDRAM_LONG=<hex port mask> makes those ports read EIGHT words (the
+// texel cache's lines): the first four arrive with p_lo, the last four with the
+// acknowledge. Default 0 -- the controller exactly as before.
+static const unsigned g_long = std::getenv("M2_SDRAM_LONG") ? unsigned(std::strtoul(std::getenv("M2_SDRAM_LONG"), nullptr, 16)) : 0u;
+static int burst_of(int p) { return ((g_long >> p) & 1) ? 8 : (p == 8 || p == 9) ? 2 : 4; }
 
 struct Harness {
   Vm2_sdram_harness* d;
@@ -83,7 +90,12 @@ struct Harness {
   //
   // The count is REPORTED, not absorbed. A run showing zero here would mean the
   // test had quietly stopped covering the case this exists for.
-  struct WriteRec { uint16_t prev; long cyc; };
+  // R796: `done` -- when the write was acknowledged (-1 while it is still
+  // outstanding). A write ISSUED before the read but not yet DONE when the
+  // read was issued is just as unordered against it: with eight-word texel
+  // bursts and thirteen ports, port 0 (outside the priority class) can wait
+  // ~470 cycles, and a class port's read of the same word overtakes it.
+  struct WriteRec { uint16_t prev; long cyc; long done = -1; };
   std::map<uint32_t, WriteRec> last_write;
   long raced = 0;
 
@@ -99,6 +111,8 @@ struct Harness {
     bool     ack_prev = false;
     long     issued_at = 0;
     long     n_done = 0;
+    uint64_t lo_data = 0;   // R787: an eight-word read's first half
+    int      lo_n = 0;      // ... and how many p_lo strobes it got (must be 1)
   } port[NP];
 
   bool wr_busy = false, wr_req_held = false, wr_ack_prev = false;
@@ -106,6 +120,7 @@ struct Harness {
   uint16_t wr_data = 0;
 
   long fails = 0, checks = 0, max_latency = 0;
+  long max_lat_p[16] = {0};   // R789: per port, for the deadline readers (port 3)
 
   Harness() {
     d = new Vm2_sdram_harness;
@@ -115,6 +130,7 @@ struct Harness {
     d->p0_we = 0; d->p0_din = 0; d->p0_be = 3;
     d->p0_addr = d->p1_addr = d->p2_addr = d->p3_addr = d->p4_addr = 0;
     d->mon_sel = 0; d->mon_snap = 0;
+    d->long_mask = g_long;   // R787
     d->eval();
   }
   ~Harness() { delete d; }
@@ -126,6 +142,7 @@ struct Harness {
       case 4: d->p4_req = v; break; case 5: d->p5_req = v; break;
       case 6: d->p6_req = v; break; case 7: d->p7_req = v; break;
       case 8: d->p8_req = v; break; case 9: d->p9_req = v; break;
+      case 11: d->p11_req = v; break; case 12: d->p12_req = v; break;   // R789
       default: d->p10_req = v; break;
     }
   }
@@ -136,6 +153,7 @@ struct Harness {
       case 4: d->p4_addr = a; break; case 5: d->p5_addr = a; break;
       case 6: d->p6_addr = a; break; case 7: d->p7_addr = a; break;
       case 8: d->p8_addr = a; break; case 9: d->p9_addr = a; break;
+      case 11: d->p11_addr = a; break; case 12: d->p12_addr = a; break;
       default: d->p10_addr = a; break;
     }
   }
@@ -146,6 +164,7 @@ struct Harness {
       case 4: return d->p4_ack; case 5: return d->p5_ack;
       case 6: return d->p6_ack; case 7: return d->p7_ack;
       case 8: return d->p8_ack; case 9: return d->p9_ack;
+      case 11: return d->p11_ack; case 12: return d->p12_ack;
       default: return d->p10_ack;
     }
   }
@@ -156,6 +175,7 @@ struct Harness {
       case 4: return d->p4_dout; case 5: return d->p5_dout;
       case 6: return d->p6_dout; case 7: return d->p7_dout;
       case 8: return d->p8_dout; case 9: return d->p9_dout;
+      case 11: return d->p11_dout; case 12: return d->p12_dout;
       default: return d->p10_dout;
     }
   }
@@ -182,16 +202,29 @@ struct Harness {
       // what a real single-outstanding master does.
       if (port[p].req_held) { setReq(p, 0); port[p].req_held = false; }
 
+      if ((d->lo_strobe >> p) & 1) {   // R787: the first half, before the ack
+        port[p].lo_data = getDout(p); port[p].lo_n++;
+        if (port[p].words != 8 || port[p].write) {
+          if (fails < 20) printf("  FAIL p%d: p_lo on a %d-word %s\n", p, port[p].words, port[p].write ? "write" : "read");
+          fails++;
+        }
+      }
       bool ack = getAck(p);
       if (ack && !port[p].ack_prev) {
         long lat = cyc - port[p].issued_at;
         if (lat > max_latency) max_latency = lat;
+        if (lat > max_lat_p[p]) max_lat_p[p] = lat;
         if (!port[p].write) {
           uint64_t got = getDout(p);
+          if (port[p].words == 8) {   // R787: exactly one first half, then the second
+            checks++;
+            if (port[p].lo_n != 1) { if (fails < 20) printf("  FAIL p%d: %d p_lo strobes for one read\n", p, port[p].lo_n); fails++; }
+          }
           for (int w = 0; w < port[p].words; w++) {
             uint32_t a = port[p].addr + w;
             uint16_t want = shadow.count(a) ? shadow[a] : 0;
-            uint16_t g = (uint16_t)((got >> (16 * w)) & 0xffff);
+            const uint64_t src = (port[p].words == 8 && w < 4) ? port[p].lo_data : got;
+            uint16_t g = (uint16_t)((src >> (16 * (w & 3))) & 0xffff);
             checks++;
             if (g != want) {
               // Was this address written while THIS read was already in
@@ -199,7 +232,8 @@ struct Harness {
               // legal and the harness was wrong to insist on the later one.
               auto it = last_write.find(a);
               const bool raced_ok = it != last_write.end()
-                                 && it->second.cyc >= port[p].issued_at
+                                 && (it->second.cyc >= port[p].issued_at
+                                     || it->second.done < 0 || it->second.done > port[p].issued_at)   // R796
                                  && g == it->second.prev;
               if (raced_ok) {
                 raced++;
@@ -213,15 +247,22 @@ struct Harness {
             }
           }
         }
+        if (port[p].write) { auto w = last_write.find(port[p].addr);   // R796: the write is done
+          if (w != last_write.end() && w->second.cyc == port[p].issued_at) w->second.done = cyc; }
         port[p].busy = false;
         port[p].n_done++;
+        port[p].lo_n = 0;   // R787
       }
       port[p].ack_prev = ack;
     }
 
     if (wr_req_held) { d->wr_req = 0; wr_req_held = false; }
     bool wack = d->wr_ack;
-    if (wack && !wr_ack_prev) wr_busy = false;
+    if (wack && !wr_ack_prev) {
+      wr_busy = false;
+      auto w = last_write.find(wr_addr);   // R796
+      if (w != last_write.end() && w->second.done < 0) w->second.done = cyc;
+    }
     wr_ack_prev = wack;
   }
 
@@ -236,7 +277,7 @@ struct Harness {
     setReq(p, 1);
     port[p].req_held = true;
     if (write) {
-      last_write[addr] = { uint16_t(shadow.count(addr) ? shadow[addr] : 0), cyc };
+      last_write[addr] = { uint16_t(shadow.count(addr) ? shadow[addr] : 0), cyc, -1 };
       uint16_t cur = shadow.count(addr) ? shadow[addr] : 0;
       if (be & 1) cur = (cur & 0xff00) | (data & 0x00ff);
       if (be & 2) cur = (cur & 0x00ff) | (data & 0xff00);
@@ -248,7 +289,7 @@ struct Harness {
     wr_busy = true; wr_addr = addr; wr_data = data;
     d->wr_addr = addr; d->wr_din = data; d->wr_be = 3; d->wr_req = 1;
     wr_req_held = true;
-    last_write[addr] = { uint16_t(shadow.count(addr) ? shadow[addr] : 0), cyc };
+    last_write[addr] = { uint16_t(shadow.count(addr) ? shadow[addr] : 0), cyc, -1 };
     shadow[addr] = data;
   }
 
@@ -346,6 +387,9 @@ int main(int argc, char** argv) {
     h.drain();
     printf("  concurrent: %ld checks, %ld fails, %u violations, max latency %ld\n",
            h.checks - start_checks, h.fails, h.d->violations, h.max_latency);
+    printf("  worst latency by port (cycles):");   // R789
+    for (int p = 0; p < NP; p++) printf(" p%d %ld", p, h.max_lat_p[p]);
+    printf("\n");
     printf("  reads accepted as raced (returned the legal pre-write value): %ld\n",
            h.raced);
   }

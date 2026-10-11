@@ -84,6 +84,10 @@ verilator.log
 # Quartus spike output
 build/
 
+# Build worktrees: one checkout per seed sweep, bisect point or measurement
+# build, so a 25-minute fit runs without touching this working tree.
+sm2-builds/
+
 # MAME output. It writes these into the working directory on every run.
 #
 # `nvram/` is the reason this section is not merely tidiness: it holds EEPROM

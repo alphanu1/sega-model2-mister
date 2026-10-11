@@ -48,7 +48,8 @@ recorded rather than referenced in place.
 
 | Copied | To | Note |
 |---|---|---|
-| `sys/` framework | `sys/` | Unmodified. GPL-2.0-**or-later**, so it is used here under GPL-3. This is the 6,630 ALM row in the budget (§5.5), measured via M2-E. |
+| `sys/` framework | `sys/` | Unmodified except `sys/audio_out.sv` (the audio-filter switch below, applied R788). GPL-2.0-**or-later**, so it is used here under GPL-3. This is the 6,630 ALM row in the budget (§5.5), measured via M2-E. |
+| `sys/` patches | `docs/framework-patches/` | Macro-switched patches for FPGA room, to re-apply after a framework update: `audio-filter-disable.patch` (`MISTER_DISABLE_AUDIO_FILTER`, ~430 ALM) -- APPLIED (R788), the macro set in `Model2.qsf` See the README there. |
 | `Template.qsf`, `Template.qpf` | `Model2.qsf`, `Model2.qpf` | Renamed only. `sys/sys.tcl` supplies FAMILY and DEVICE (5CSEBA6U23I7), and `PRE_FLOW_SCRIPT_FILE` generates `build_id.v` — which `quartus_map` alone does not run, so a direct map invocation needs it generated first. |
 | `Template.sv` structure | `Model2.sv` | Port list via `sys/emu_ports.vh`; the unused-output assignments and `hps_io` instantiation follow the template. The core logic is ours. |
 
@@ -79,6 +80,13 @@ decode paths. `mb86233_xfer` is exhaustive at 256.
 
 `m1_copro_if.sv` and `m1_tgp.sv` are Model 1's wrappers and will need Model 2
 equivalents; the `mb86233_*` core and the `fp_*` units are the portable part.
+
+*Later, by hand (study R732, 2026-10-09):* `rtl/tgp/mb86233_mem.sv` and
+`sim/tgp/tb_mb86233_mem.cpp` carry upstream **`9b72de7`** ("Register the TGP
+memory stall's select"), ported rather than copied because our copy has
+diverged (R596, R601, R602). Upstream `9705a10` and `b66b10f`'s TGP half are
+already here as our R577. Upstream `deb6642` (a register-sourced `rep` reads the
+wrong register) is NOT yet ported.
 
 **Speed is the open problem, not correctness.** 9.83 CPI at 72.17 MHz is
 7.3 M instr/s against the ~16.7 M a 50 MHz MB86234 delivers — 44%. Clocking
@@ -126,6 +134,32 @@ rate can be measured.
 Banking follows the reference's own field split — high bank in bits 5:3, low in
 2:0 — written to 0xC50000 for the first chip and 0xC70000 for the second.
 
+**CHANGED (R738, 2026-10-09): two retimings for 80 MHz, same output.** Both
+failed setup at clk_sys = 80 MHz (12.5 ns), and both now take one extra
+register stage:
+
+- **The position write.** The step computed the next position and wrote it to
+  `pos_ram` in one cycle: `oct_ram`'s registered read, pitch_step's barrel
+  shift, a 38-bit add, the end compare and the loop subtract into the MLAB's
+  write-data register, -0.62 ns (s786). Now the step's edge captures its operands
+  (position, step, end, loop, slot) and `step_pos()` -- the old inline code,
+  verbatim, moved into a function -- writes them on the next edge. Nothing reads
+  that slot's position again before the 28-slot pass comes back round.
+- **The sample add.** The acknowledge edge took the fetched byte through the
+  level shift and the pan into `acc_l`/`acc_r`; from `m2_pcm_fetch`'s line MLAB
+  that was 0.79 ns short of 13.33 ns at 75 MHz (s759). Now the acknowledge edge
+  captures the byte, level and pan it would have used and the next edge adds.
+  The sums are read only on a slot wrap, at least seven enables later.
+
+Proven by output hash, not by argument alone: `tb_m2_sndboard` now folds the
+mix, the YM and both chips' raw and rate-stage outputs into one number every
+cycle, and the old and new file give identical hashes over 30 M cycles at
+TICK_DEN 50 and 80, with the cache on and bypassed, the rate stage on and
+bypassed, and sample latencies of 1, 6 and 60 cycles, and over 150 M cycles at
+80. Mutants (one LSB on the sample, one on the step) change the hash while the
+bench's own checks still pass; a mutant in the loop wrap changes only the
+150 M-cycle hash, so that run is the one that reaches a sample loop.
+
 ### jotego/jt12 — GPL-3.0
 *IN USE 2026-08-29 · `rtl/sound/jt12/` @ **`4cf1c5b`** · UNMODIFIED*
 
@@ -150,6 +184,14 @@ holds the strobe for exactly one enable.
 Verilator waivers are upstream's own: EOFNEWLINE, PROCASSINIT, GENUNNAMED, and
 the width family. Held in the target's flags, not in VFLAGS, so our RTL stays at
 -Wall.
+
+**Still unmodified at R738 -- but timed by an exception that names its
+registers.** `Model2.sdc` gives `u_reg|cur_ch`/`cur_op` -> `u_pg|phinc_II`,
+`keycode_II`, `detune_mod_II` two cycles, because every one of them loads only
+on jt12's internal `clk_en`, which is never high on two consecutive clk_sys
+edges (the proof is in the SDC). An upstream bump that renames any of them, or
+adds a load outside `clk_en`, must revisit that block; a rename shows as its
+critical warning.
 
 ### ijor/fx68k — GPL-3.0
 *IN USE 2026-08-29 · `rtl/sound/fx68k/` @ **`0602ee4`** · UNMODIFIED*

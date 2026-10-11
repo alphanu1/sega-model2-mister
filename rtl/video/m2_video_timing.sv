@@ -70,12 +70,24 @@ module m2_video_timing #(
   // border at the top that follows. 229 splits the 82 blanking lines so the
   // 192 visible sit centred in a TV's 240.
   parameter int unsigned VI_SYNC_START = 229,
-  parameter int unsigned VI_SYNC_END   = 232
+  parameter int unsigned VI_SYNC_END   = 232,
+  // R783: 15 kHz WITH NTSC's LINE COUNT. Some TVs class a field by its lines
+  // and re-lock on 273.5 (Ben's set loses sync every few seconds; the timing
+  // bench finds every field identical, R783). Same 656-pixel line, the pixel
+  // clock 861/8692 of 100 MHz (9.9057 MHz): 262.5 lines a field at the game's
+  // 57.5242 Hz, 15,100 Hz a line -- 4% below NTSC's, which most sets take.
+  // Fields of 263 and 262, the 192 visible centred in the 70.5 blanking lines
+  // as R701 centred them in 81.5.
+  parameter int unsigned VN_TOTAL0     = 263,
+  parameter int unsigned VN_TOTAL1     = 262,
+  parameter int unsigned VN_SYNC_START = 223,
+  parameter int unsigned VN_SYNC_END   = 226
 ) (
   input  logic       clk,        // 16 MHz pixel clock enable domain
   input  logic       ce_pix,
   input  logic       rst_n,
   input  logic       interlace,  // R682: held; changed only by the OSD (resync is expected)
+  input  logic       ntsc_lines, // R783: with interlace, 262.5-line fields (held, OSD)
 
   output logic [9:0] hcnt,
   output logic [9:0] vcnt,
@@ -105,7 +117,11 @@ module m2_video_timing #(
 );
 
   // this field's line count and visible lines
-  wire [9:0] vt  = !interlace ? 10'(V_TOTAL) : (field ? 10'(VI_TOTAL1) : 10'(VI_TOTAL0));
+  wire [9:0] vt  = !interlace ? 10'(V_TOTAL)
+                 : ntsc_lines ? (field ? 10'(VN_TOTAL1) : 10'(VN_TOTAL0))   // R783
+                 :              (field ? 10'(VI_TOTAL1) : 10'(VI_TOTAL0));
+  wire [9:0] vss = ntsc_lines ? 10'(VN_SYNC_START) : 10'(VI_SYNC_START);   // R783
+  wire [9:0] vse = ntsc_lines ? 10'(VN_SYNC_END)   : 10'(VI_SYNC_END);
   wire [9:0] vv  = !interlace ? 10'(V_VISIBLE) : 10'(VI_VISIBLE);
 
   always_ff @(posedge clk or negedge rst_n) begin
@@ -138,8 +154,8 @@ module m2_video_timing #(
   // and set field 1's lines a line and a half below field 0's instead of half
   // a line -- on Ben's CRT, "does not look like it's interlacing".
   wire [19:0] vpos  = {vcnt, hcnt};
-  wire        vs_i0 = (vcnt >= 10'(VI_SYNC_START)) && (vcnt < 10'(VI_SYNC_END));
-  wire        vs_i1 = (vpos >= {10'(VI_SYNC_START - 1), 10'(H_TOTAL / 2)}) && (vpos < {10'(VI_SYNC_END - 1), 10'(H_TOTAL / 2)});
+  wire        vs_i0 = (vcnt >= vss) && (vcnt < vse);
+  wire        vs_i1 = (vpos >= {vss - 10'd1, 10'(H_TOTAL / 2)}) && (vpos < {vse - 10'd1, 10'(H_TOTAL / 2)});
   assign vsync = !interlace ? ((vcnt >= 10'(V_SYNC_START)) && (vcnt < 10'(V_SYNC_END)))
                             : (field ? vs_i1 : vs_i0);
 

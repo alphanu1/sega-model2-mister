@@ -52,12 +52,18 @@ static void step() {
   if ((tk % MEM_DIV) == 0) { dut->clk_mem = 1; dut->eval(); }
 }
 
+// R730: the bridge's ack is combinational and a requester takes it at its next
+// clock edge; a write in particular is captured by the bridge on that edge. So
+// the request is held until the edge after the ack is seen, as i960_top holds it.
+static void take_ack() { do { step(); } while ((tk % CPU_DIV) != 0); }
+
 static bool cpu_read(uint32_t addr, uint32_t *out) {
   dut->bus_req = 1; dut->bus_we = 0; dut->bus_addr = addr; dut->bus_be = 0xf;
   for (int g = 0; g < 200000; ++g) {
     step();
     if (dut->bus_ack) {
       *out = dut->bus_rdata;
+      take_ack();
       dut->bus_req = 0;
       for (int k = 0; k < CPU_DIV * 4; ++k) step();
       return true;
@@ -112,7 +118,7 @@ int main(int argc, char **argv) {
   {
     dut->bus_req = 1; dut->bus_we = 1; dut->bus_addr = 0x00500010u;
     dut->bus_wdata = 0xdeadbeefu; dut->bus_be = 0xf;
-    for (int g = 0; g < 200000; ++g) { step(); if (dut->bus_ack) break; }
+    for (int g = 0; g < 200000; ++g) { step(); if (dut->bus_ack) { take_ack(); break; } }
     dut->bus_req = 0;
     for (int k = 0; k < CPU_DIV * 4; ++k) step();
     uint32_t back = 0;
@@ -144,13 +150,13 @@ int main(int argc, char **argv) {
       // Zero the whole word first, exactly as the game does.
       dut->bus_req = 1; dut->bus_we = 1; dut->bus_addr = A;
       dut->bus_wdata = 0; dut->bus_be = 0xf;
-      for (int g = 0; g < 200000; ++g) { step(); if (dut->bus_ack) break; }
+      for (int g = 0; g < 200000; ++g) { step(); if (dut->bus_ack) { take_ack(); break; } }
       dut->bus_req = 0;
       for (int k = 0; k < CPU_DIV * 4; ++k) step();
       // Then the byte store.
       dut->bus_req = 1; dut->bus_we = 1; dut->bus_addr = A;
       dut->bus_wdata = b.wdat; dut->bus_be = b.be;
-      for (int g = 0; g < 200000; ++g) { step(); if (dut->bus_ack) break; }
+      for (int g = 0; g < 200000; ++g) { step(); if (dut->bus_ack) { take_ack(); break; } }
       dut->bus_req = 0;
       for (int k = 0; k < CPU_DIV * 4; ++k) step();
       uint32_t back = 0;
@@ -187,12 +193,12 @@ int main(int argc, char **argv) {
     for (auto &b : BP) {
       dut->bus_req = 1; dut->bus_we = 1; dut->bus_addr = A;
       dut->bus_wdata = 0xAABBCCDDu; dut->bus_be = 0xf;
-      for (int g = 0; g < 200000; ++g) { step(); if (dut->bus_ack) break; }
+      for (int g = 0; g < 200000; ++g) { step(); if (dut->bus_ack) { take_ack(); break; } }
       dut->bus_req = 0;
       for (int k = 0; k < CPU_DIV * 4; ++k) step();
       dut->bus_req = 1; dut->bus_we = 1; dut->bus_addr = A;
       dut->bus_wdata = b.wdat; dut->bus_be = b.be;
-      for (int g = 0; g < 200000; ++g) { step(); if (dut->bus_ack) break; }
+      for (int g = 0; g < 200000; ++g) { step(); if (dut->bus_ack) { take_ack(); break; } }
       dut->bus_req = 0;
       for (int k = 0; k < CPU_DIV * 4; ++k) step();
       uint32_t back = 0;
