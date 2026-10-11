@@ -22,8 +22,12 @@ fixed.
 SPEED (R808, 3078de0): the per-lookup cost was the FB WRITER taking a span
 every 2 cycles (R551's fault again); at step 1 a textured span is 1 px. A
 one-span hold at m2_fb_wcomb's intake: bench draw -6..-12%, texel answers
-and frames identical. BUILDING s989-s991 = 7b41994 (s985) + R808 only
-(sm2-builds/sm2-fbw-7b41994). Next levers measured in R808 (4 span sets
+and frames identical. s989-s991 = 7b41994 (s985) + R808 only
+(sm2-builds/sm2-fbw-7b41994): s991 closes core clocks (+0.161 setup, +0.184
+hold), HDMI -1.302 (all in ascal's polyphase filter -- the worst HDMI miss
+yet, report-only by the rule); 98% ALM. RBF
+build/Model2_20261011_s991_fbwhold.rbf 933a21aed8d21c7d0e0d67dda7f30165.
+s989/s990 missed core clocks. s987 ON THE BOARD (Rev A soak from 12:06). Next levers measured in R808 (4 span sets
 -5..-9% more, ~+300 ALM).
 WATCH NOTE: watch980.sh misses a lock on debug builds -- after a trap 'G'
 carries RIP/PFP, so its flip/vbl count reads 0 and was treated as no data.
