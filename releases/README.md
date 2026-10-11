@@ -80,6 +80,8 @@ The last release ran races at about 29.
   instruction when a delayed memory answer arrived at the wrong moment.
   Revision A has since run 2.5 hours of attract without a lock.
 - **The 3D no longer goes black** after a while in attract.
+- **Car windows stay**: the glass and its sky reflection no longer drop out
+  after a few minutes.
 - **Textures look like the arcade's.** Textured surfaces take their colour
   the way the real board does, so decals, windows and signs are no longer
   washed out or too dark.
@@ -176,14 +178,8 @@ that if the two disagree, you trust neither and check.**
 - **Races are not quite full speed all the time.** About 10-20% of the time,
   in the busiest moments, the frame rate dips. That is what is being worked
   on next.
-- **Flashing menu items with `Single buffered`.** The yellow and red boxes
-  in the option screens may not flash, and a selected one can vanish.
-  `Double Buffered`, now the default, shows them correctly.
-- **Car windows drop out.** After a few minutes of attract the glass or its sky
-  reflection can disappear from some cars, so you see into the car.
 - **Background music and the game-over speech are too quiet** against the
   rest of the sound.
-- **Some textures flicker** on trees and hillsides.
 - **No mip-mapping**, so distant textures shimmer.
 - **Virtua Cop is not supported yet.** Its I/O board (light guns, an LCD) is
   a different one and is not in the core.

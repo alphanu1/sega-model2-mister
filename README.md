@@ -42,8 +42,8 @@ README with the ROMs you need, the settings, and what is not finished.
 
 - **Full speed in the heaviest race scenes.** About 10-20% of race time dips
   below 57; the 3D draw's per-texture-lookup cost is what is left (R808).
-- **Car windows** sometimes lose their glass after a few minutes of attract.
-- **Some textures flicker**, and there is no mip-mapping.
+- **Background music and the game-over speech** are too quiet.
+- **No mip-mapping**, so distant textures shimmer.
 
 `HANDOFF.md` carries the current state and the measurements behind it.
 
