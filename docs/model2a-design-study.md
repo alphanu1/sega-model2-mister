@@ -30066,3 +30066,8 @@ remaining 10-20% in game is the next target (R808's measured levers: four
 span sets -5..-9%, hidden-group runs, next span on the last issue).
 Also this build's first board run of R807 (s983's broken textures): no
 texture fault reported.
+s991 (s985 + R808, WITHOUT R812) locked IN A RACE at ~10 min (Rev A, lap 1
+HUD frame: 2D sky/sea and timer live, 3D 0 fps, lap/position digits gone).
+Consistent with R812 being the fix: the build without it still locks, and
+sooner in a race at the higher draw rate. Not a telemetry build, so the
+mechanism is not confirmed for this one.
