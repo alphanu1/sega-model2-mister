@@ -29663,3 +29663,13 @@ gives no warning for a variable index past the end. Fix: cap[tag_w[0][1:0]].
 The same assumption must not hide elsewhere in R787/R796/R798/R804's code
 (being audited). The speed reading on s983 stands as a fetch-pattern
 measure only (the line data was wrong, the traffic was not).
+
+**R808a -- THE DRAW'S COST IS PER TEXEL LOOKUP, NOT PER TEXEL.** Ben, s983 and
+s980 on the board: Textures Off -> full 60 throughout; texel step 8 -> full
+speed; Texture filter Point vs Bilinear -> no noticeable difference;
+R796-R807's fewer misses -> no change (R789's four misses in flight did
+help). With the bench's perfect-memory floor (9.9-13.6 ms against 5.7-7.4
+textures off, R789), the dominant cost is the span pipeline's per-lookup
+overhead, whatever the filter reads. Suspect, from m2_span_tex's own comment:
+four cycles of perspective divide serialised ahead of every texel fetch at
+step 1. Being profiled per lookup (sm2-builds/sm2-spanprof-7b41994).
