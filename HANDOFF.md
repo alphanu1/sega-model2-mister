@@ -30,6 +30,11 @@ build/Model2_20261011_s991_fbwhold.rbf 933a21aed8d21c7d0e0d67dda7f30165.
 s989/s990 missed core clocks. s987 ON THE BOARD: Rev A 156 min attract, NO LOCK (was 20-60 min). Deluxe soak next.
 s991 ON THE BOARD (speed): attract solid 57 fps, in game 57 fps 80-90% of
 the time (was mostly 30) -- R808 confirmed.
+READY: s994 = c02b233 (HEAD: R812 lock + R810 GAME OVER + R808 writer +
+R807/128-bit lines), 80/40, core setup >= +0.224, hold >= +0.147, HDMI
+-0.866 (report-only); 99% ALM. RBF build/Model2_20261011_s994_combined.rbf
+232ce65807684c4b676d584b133ea385. The release candidate.
+s991 LOCKED in a race at ~10-14 min (no R812 in it -- expected).
 NOTE: s991 does NOT carry the lock fix (7b41994 predates 27943dd) -- a release
 build must come from HEAD (R808 + R810 + R812 together). Next levers measured in R808 (4 span sets
 -5..-9% more, ~+300 ALM).
