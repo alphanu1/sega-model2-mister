@@ -29641,3 +29641,11 @@ half through the shared MLAB read into the bypass), s970 clk_mem -0.017
 (m2_sdram rr_mask). s972 clk_sys -0.835 (m2_fb_wcomb wlo -> mk_valid), s974
 -0.324 (mb86233_core state.S_LABB_W -> maddr_q). 41,085-41,211 ALM (98%):
 scattered paths, placement at 98%. More seeds (s975-s977).
+R804 closes at last: s983 (2a7b338, 80/40) clk_sys +0.094, clk_mem +0.433,
+clk_i960 +2.370, holds >= +0.161, HDMI -0.236; RBF in
+build/Model2_20261011_s983_speed.rbf. s981 clk_sys -0.014, s982 all core
+clocks positive but HDMI -1.675. Fifteen seeds for one closing (six Quartus
+internal errors, none in the last batch after /tmp was cleared). The
+lock-hunt v2 build (5efcc72 + P/L/X records, 75/37.5) closed on all three
+seeds; s980: clk_sys +0.905, clk_mem +0.188, holds >= +0.140, HDMI -0.220,
+RBF 604e22481fbdb5b43121db8acf177751.
