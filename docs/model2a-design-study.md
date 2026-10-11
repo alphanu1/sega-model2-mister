@@ -30304,3 +30304,12 @@ s998-s1000 (7f07bf1 + SPCULL = 0): all three close every core clock --
 s999 setup >= +0.209, hold >= +0.208, HDMI -0.847 (report-only); 41,437 ALM.
 RBF build/Model2_20261011_s999_clrdraw.rbf 49c9517b5d52f71d97e31f843aa9ddd3.
 s994 meanwhile: 150 min from load, no lock.
+s999 on the board (Rev A, from 18:05): no lock in 240 min of fps readings;
+Ben: speed "seems the same" as s994 -- R813's clear under the draw does not
+show. Read with R813's bench (heavy race lists 7.7-10.7 ms idle, 10.3-13.2
+contended, against 17.4): the draw may no longer be the stage that misses.
+Next: R814, a build that classifies every vblank (held for the draw / walk
+busy / game late) -- s1001 (7f07bf1 + SPCULL 0 + the 'V' 'D' 'S' records,
+75/37.5; core >= +0.263, hold >= +0.219, HDMI -0.951; RBF
+build/Model2_20261011_s1001_why.rbf 7066d457, patch
+build/worktree_patches/why-r814-7f07bf1.patch).
