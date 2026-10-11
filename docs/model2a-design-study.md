@@ -30055,3 +30055,14 @@ readings (89 readings at ~100 s, every one 36-58 fps after boot; Ben: "nearly
 3 hours, no lockup"). The lock it targets came at 20-60 min on every earlier
 build (s980: ~35 min, same set and scene). Deluxe (whose lock showed at the
 attract backdrop) not yet soaked.
+
+**R808 ON THE BOARD.** s991 (7b41994 = s985 + the R808 writer hold only,
+80/40, RBF 933a21ae), Revision A, texel step 1. Ben: "Attract is solid
+57fps. Ingame is 57fps 80-90% of the time". Before it, on s945/s985 at step
+1: attract ~98% of full speed with visible dips, in game "mostly 30" with
+slowdowns, and only step 8 reached full speed (R808a). So the writer's
+two-cycle intake was the main per-lookup cost, as the bench said; the
+remaining 10-20% in game is the next target (R808's measured levers: four
+span sets -5..-9%, hidden-group runs, next span on the last issue).
+Also this build's first board run of R807 (s983's broken textures): no
+texture fault reported.

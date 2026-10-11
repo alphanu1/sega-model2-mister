@@ -28,6 +28,8 @@ hold), HDMI -1.302 (all in ascal's polyphase filter -- the worst HDMI miss
 yet, report-only by the rule); 98% ALM. RBF
 build/Model2_20261011_s991_fbwhold.rbf 933a21aed8d21c7d0e0d67dda7f30165.
 s989/s990 missed core clocks. s987 ON THE BOARD: Rev A 156 min attract, NO LOCK (was 20-60 min). Deluxe soak next.
+s991 ON THE BOARD (speed): attract solid 57 fps, in game 57 fps 80-90% of
+the time (was mostly 30) -- R808 confirmed.
 NOTE: s991 does NOT carry the lock fix (7b41994 predates 27943dd) -- a release
 build must come from HEAD (R808 + R810 + R812 together). Next levers measured in R808 (4 span sets
 -5..-9% more, ~+300 ALM).
