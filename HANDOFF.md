@@ -10,6 +10,16 @@ section, and a new "Not finished" list. Top-level README speed/video rows
 updated. Merged to main by PR (merge commit). s994 on the board with a 4 h
 fps/lock watch from 14:51. NEXT: speed -- the remaining 10-20% of race frames
 (an agent is measuring R808's levers per ALM in sm2-builds/sm2-speed2-5bc60fb).
+R810 CONFIRMED on the board (s994: the G is back). PR #3: README corrections
+(original Model 2, not 2A-CRX; fixed items out of the open lists).
+SPEED NEXT, R813 (7f07bf1): the FB clear runs under the draw (a window waits
+for the clear to pass its line; frame published only after the clear) and a
+span whose pixels are all painted is dropped at the span walk's input; the
+walk's x/y narrowed to 16 bits to pay for it. Bench -16..-25% draw (L12),
+answers and frames identical, ~+97 ALUT. BUILDING s995-s997 = s994 + R813
+only (sm2-builds/sm2-rel-7f07bf1). Next after that: NSP4 (-5..-9% more,
++100..240 ALM placed; patch in scratch speed2/nsp4_on_r813.patch; needs a
+saving -- col_p/tex_p into MLAB untried).
 
 ## 2026-10-11 (late morning): THE LOCK FOUND AND FIXED IN SIM (R811/R812)
 
