@@ -30287,3 +30287,6 @@ clear really costs.
 MLAB is the place to look for its saving); the fill's supply (queue empty 0.38
 a lookup, m2_raster_fill's per-quad setup) is now visible; the rest is the
 texel round trip.
+s994 (the release: R812 with R808 and R810, 80/40) -- Ben's play and attract,
+72 min from load with no lock (41 fps readings, none zero). The build without
+R812 at the same speed (s991) locked in a race at ~10-14 min.
