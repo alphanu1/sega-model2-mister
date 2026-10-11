@@ -29723,3 +29723,39 @@ alternative, now settled). Suspects: an i-cache tag/data race on refill
 prefetch path (pf_insn / pf_ip / pf_armed in i960_top: a prefetched word
 tagged with the wrong IP -- the off-by-one word fits this). R777's lock
 outlives FAST_ACK because it is not in the bridge.
+
+**R812 -- THE LOCK'S MECHANISM: A LATE I-CACHE ANSWER TAKEN FOR THE NEXT FETCH.**
+R811's wrong word is the word after a `ret`: line 0x222120 holds
+{mov, ret 0x0A000000, 0x881F602E, ...}, so the task returns from 0x222124 and
+the front end, predicting sequential, prefetched 0x222128 as it accepted the
+`ret`. That prefetch's answer is normally back two cycles later and absorbed
+into pf_insn (pf_armed). But if the cache was busy on a fill when the request
+arrived, it is answered later, through S_FILL's redirect-hit path and S_DONE.
+`ret` from the register cache takes a few cycles; the sequencer reached
+T_FETCH for 0x192C, dropped pf_armed, issued 0x192C and entered T_FETCH_W --
+and T_FETCH_W accepted ANY `ic_valid`. The delayed answer for 0x222128 landed
+in that first cycle and was executed as 0x192C. Then 0x1930 was prefetched
+into the line now filling for 0x192C, renamed onto it, and answered with the
+operand 0x005011FC -> trap. Every word in R811's capture follows.
+Why rare: the answer has to land in exactly the cycle after T_FETCH, which
+needs the cache busy when the prefetch went out and a particular bus delay --
+which is why it tracks busy scenes (SDRAM contention) and took 20-60 min.
+Why no bench saw it: every i960 bench acked the bus in the cycle it was asked,
+so the cache was never busy at a prefetch and no answer was ever late.
+FIX: the cache already reports which address a `valid` answers (vaddr, written
+for a prefetch queue and never read). All four consumers -- T_FETCH's landing
+prefetch, T_FETCH_W, T_FETCH2_W, the pf_insn capture -- now take
+`ic_ok = ic_valid && vaddr == fetch_addr[31:2]` (every request goes out on
+fetch_addr). And the cache's S_DONE now renames vaddr when a hit is taken
+there, which it already answered at the new address but labelled with the
+old (harmless until vaddr was read; it would hang the fetch now).
+BENCH: tb_i960_top +lat=N holds every bus access 0..N cycles, latching the
+address at the request. Without the fix: PREFETCH-invariant failures at lat=1
+and lat=3 (wrong word at the IP, pf_ip one fetch behind -- the board's
+signature). With it: 3,000 random programs pass at lat 0,1,2,3,5,12,40,100,
+loops mode at 0/3/40. `make test_i960_top_lat`. Interrupt runs stay at lat 0:
+the harness raises IRQs on cycle counts, which latency shifts against the
+reference. Cost: m2_cpu_real (real bridge + SDRAM) 12.03 CPI before and after
+-- the check rejects only answers nobody was waiting for.
+Not yet measured on the board; the soak is the test (R811's lock at ~35 min,
+earlier ones 20-60 min, so >= 2 h clean before calling it).

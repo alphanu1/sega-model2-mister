@@ -381,6 +381,9 @@ module i960_icache #(
             fill_base   <= {addr[31:4], 4'd0};
             state       <= S_FILL;   // R768: invalidated by inv_idle
           end else begin
+            // R812: a hit arriving now is read at ITS address (req_accept), so
+            // `vaddr` must name it too -- the requester now checks it.
+            if (req) req_addr_q <= addr;
             valid <= 1'b1;
             state <= S_IDLE;
           end
