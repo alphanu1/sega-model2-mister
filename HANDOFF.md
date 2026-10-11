@@ -12,10 +12,19 @@ only `ic_valid && vaddr == fetch_addr`; S_DONE renames vaddr on a hit.
 BENCH: tb_i960_top +lat=N (random bus latency) fails without the fix at
 lat 1/3 with the board's signature, passes with it at 0..100 and loops;
 `make test_i960_top_lat` (in `make test`). m2_cpu_real CPI 12.03 both ways.
-BUILDING: s987/s988 = 5efcc72 (s945, 80/40) + the fix ONLY
-(build/worktree_patches/lockfix-r812.patch, sm2-builds/sm2-lockfix-5efcc72)
--- a one-change regression test of s945. Soak >= 2 h in attract on BOTH
-sets (Rev A V.R. demo, Deluxe backdrop) before calling it fixed.
+READY: s987 = 5efcc72 (s945, 80/40) + the lock fix ONLY
+(build/worktree_patches/lockfix-r812.patch), core clocks >= +0.142, holds
+>= +0.22, HDMI -0.258 (framework, reported only); 99% ALM. RBF
+build/Model2_20261011_s987_lockfix.rbf 82ef63d4dcece338c122671e61df118d.
+(s988 closed core clocks at +0.016, HDMI -0.727; not used.) Soak >= 2 h in
+attract on BOTH sets (Rev A V.R. demo, Deluxe backdrop) before calling it
+fixed.
+SPEED (R808, 3078de0): the per-lookup cost was the FB WRITER taking a span
+every 2 cycles (R551's fault again); at step 1 a textured span is 1 px. A
+one-span hold at m2_fb_wcomb's intake: bench draw -6..-12%, texel answers
+and frames identical. BUILDING s989-s991 = 7b41994 (s985) + R808 only
+(sm2-builds/sm2-fbw-7b41994). Next levers measured in R808 (4 span sets
+-5..-9% more, ~+300 ALM).
 WATCH NOTE: watch980.sh misses a lock on debug builds -- after a trap 'G'
 carries RIP/PFP, so its flip/vbl count reads 0 and was treated as no data.
 A debug-build watch must count "all G records identical" as a lock.
@@ -28,7 +37,6 @@ clear cycle (swap_d) and lost. Fix: q_ready low during swap_d. Bench proves
 it on MAME's own list (HEAD draws "AMEOV"); board timing inferred, not
 measured. NOT in s987/s988 -- its own build after the lock soak, one change
 at a time. Races may lose polygon 0 too (a HUD quad) -- unchecked.
-Agent still running: span per-lookup profile (sm2-spanprof-7b41994, R808).
 
 ## 2026-10-11 (early hours): LOCK HUNT v2 READY; SPEED BUILD STILL SEEDING
 
