@@ -16,8 +16,9 @@ SPEED NEXT, R813 (7f07bf1): the FB clear runs under the draw (a window waits
 for the clear to pass its line; frame published only after the clear) and a
 span whose pixels are all painted is dropped at the span walk's input; the
 walk's x/y narrowed to 16 bits to pay for it. Bench -16..-25% draw (L12),
-answers and frames identical, ~+97 ALUT. BUILDING s995-s997 = s994 + R813
-only (sm2-builds/sm2-rel-7f07bf1). Next after that: NSP4 (-5..-9% more,
+answers and frames identical, ~+97 ALUT. s995-s997 = s994 + R813 DID NOT CLOSE
+(2 clk_sys misses outside R813's logic, 1 no-fit; 99%). BUILDING s998-s1000
+= R813 with SPCULL=0 (sm2-builds/sm2-clr-7f07bf1, spcull-off.patch). Next after that: NSP4 (-5..-9% more,
 +100..240 ALM placed; patch in scratch speed2/nsp4_on_r813.patch; needs a
 saving -- col_p/tex_p into MLAB untried).
 
