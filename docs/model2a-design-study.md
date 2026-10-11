@@ -29695,3 +29695,31 @@ shape); iverilog would have caught R807.
     m2_raster3d.sv:1317 (an unselected ?: arm), m2_texel_bl.sv:372 (SW
     aliases slots only for NS > 4). unique/priority cases complete; no signed
     indexes. Run `make lint_idx` on changed RTL before a seed sweep.
+
+**R811 -- THE LOCK CAUGHT: THE i960 WAS HANDED THE WRONG INSTRUCTION WORD.**
+s980 (lock hunt v2, 5efcc72 at 75/37.5), Revision A attract, locked at ~35
+min (the watch missed it: after a trap 'G' carries RIP/PFP, so its flip
+count stops moving and read as "no data" -- fixed in the next watch).
+Captured by hand at the lock:
+  C   trap at IP 0x00001930, trapped word 0x005011FC
+  G   RIP 0x0000192C, PFP 0x005FF500
+  P   previous instruction: IP 0x0000192C, word 0x881F602E
+  L   last task load (IP 0x1924): from 0x0051072C returned 0x00D50000
+  X   last store into that record: by IP 0x00222610, data 0x00222630
+Revision A's ROM (epr-16722a/16723a, lo/hi 16-bit interleave) holds
+0x90303000 at 0x192C -- the two-word `ld 0x5011FC`, operand 0x005011FC at
+0x1930. The CPU executed 0x881F602E at 0x192C instead: a one-word
+instruction, so it stepped to 0x1930 and executed the operand -> trap.
+0x881F602E occurs at 19 ROM addresses; the ONLY 16-byte line with i-cache
+index 0x12 (the index of 0x192C, 32 lines x 16 B) that contains it is
+0x22120 = {5cf01e00, 0a000000, 881f602e, 5c181603} -- word 2, where 0x192C
+is word 3 of line 0x1920 = {30f9200c, 902f600c, 86015000, 90303000}. Task
+code runs from the 0x220000 mirror (X: IP 0x222610), so 0x222120 and the
+dispatcher's 0x1920 share a cache line. So the fetch returned another line's
+word from the same cache slot, one word position off. The task pointer and
+memory data are not the fault (R750's reading, and R806's "CPU-side"
+alternative, now settled). Suspects: an i-cache tag/data race on refill
+(R768's valid-in-tag / S_SWEEP design, the fill vs lookup timing) or the
+prefetch path (pf_insn / pf_ip / pf_armed in i960_top: a prefetched word
+tagged with the wrong IP -- the off-by-one word fits this). R777's lock
+outlives FAST_ACK because it is not in the bridge.
