@@ -194,6 +194,10 @@ int main(int argc, char **argv) {
     d->in_valid = 1; d->in_y = y; d->in_x0 = x0; d->in_x1 = x1; d->in_col = col; d->in_moire = moire;
     reader(); tick(); reader_after();
     d->in_valid = 0;
+    // R808: AND THE PAYLOAD CHANGES ONCE IT IS TAKEN, as m2_span_tex's does
+    // (the next pixel). Held steady, a writer that read it after the
+    // handshake -- from the input instead of what it latched -- passed.
+    d->in_y = rnd() % H; d->in_x0 = rnd() % W; d->in_x1 = rnd() % W; d->in_col = rnd() & 0xFFFFFF; d->in_moire = rnd() & 1;
     for (int x = x0; x <= x1; x++)
       if (!moire || ((x ^ y) & 1)) {
         if (FTBM) { if (rmask[y * 512 + x]) continue; rmask[y * 512 + x] = 1; }   // first write wins

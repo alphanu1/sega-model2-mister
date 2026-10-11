@@ -29854,3 +29854,197 @@ went (the trigger mode and walk timing set how often a walk starts before
 its swap; under R220's original flip trigger, mid-frame starts were the
 rule). In a race polygon 0 is a HUD quad (centre 1, z 0, untextured; the
 race walks of the HUD work), so races may have lost it too -- not checked.
+
+**R808 -- THE COST PER TEXEL LOOKUP IS NOT THE DIVIDE. THE FRAMEBUFFER WRITER
+TOOK A SPAN EVERY TWO CYCLES, AND AT STEP 1 A TEXTURED SPAN IS ONE PIXEL --
+R551's FAULT, BACK IN THE WRITER THAT REPLACED THE BAND PAINTER.**
+
+Ben, 2026-10-11, on the board: race and attract slow down on busy frames.
+Textures Off runs at a full 60; texel step 8 runs at full speed; Point and
+Bilinear look the same; R789's four misses in flight helped, and R796-R807's
+128-bit lines (fewer misses) did not. The bench agreed: the heavy lists draw in
+9.9-13.6 ms even with a 1-cycle texel memory, against 5.7-7.4 ms with textures
+off (R780). So the cost is per LOOKUP, it does not depend on the filter, and
+misses explain only a little of it.
+
+*Believed:* the per-lookup cost was the perspective divide. m2_span_tex's own
+comment (lines 211-222) says "four cycles of divide serialised ahead of every
+texel fetch". The other suspects were the texel_cdc round trip, m2_texel_bl's
+hit pipeline (R804 added a cycle to it), the span walker's issue rate, and the
+handoff from the fill to the span walk.
+
+*Now known:*
+  1. THE DIVIDE IS NOT SERIAL, and has not been since R446/R476. That comment
+     describes the walk before R446. Since then u/z, v/z and 1/z go through a
+     7-stage pipeline (d0..d4, R718), one group a cycle, and an issue pointer
+     walks the span. The divide costs nothing per lookup. It costs only a
+     refill at the start of a span when the next span loads late:
+     0.51 clk_sys a lookup (~3.6 a span), and nearly all of that comes from
+     the two span parameter sets (item 3 below). The floor is one bubble a
+     span (0.15 a lookup).
+  2. THE WRITER SET THE PACE. m2_fb_wcomb accepted a span only in I_IDLE,
+     then spent a cycle in I_RUN walking its word, then went back to I_IDLE.
+     That is two cycles a span however short the span is. At texel step 1 a
+     textured span from m2_span_tex is one pixel, so the writer took at most
+     0.5 pixels a cycle. The 16 credits then filled: answers queued in the
+     cdc behind a take every second cycle. Measured issue->take latency was
+     31 clk_sys for 46% of lookups (16 credits / 0.5 a cycle). R551 found and
+     fixed exactly this fault in m2_raster_band ("the band painter took one
+     textured group every two cycles"). When the framebuffer writer replaced
+     the band path (R640, R661, R683, R685), the same intake came back.
+  3. Next behind it: span slots. m2_span_tex holds TWO span parameter sets
+     (R490). A span averages 6.8 lookups + 6.5 hidden groups. A new span
+     cannot load until the span two back has emitted its last pixel, which
+     is ~30 clk_sys after that span's last issue (7 pipe stages + ~24
+     issue->take). Spans end-to-end wait on
+     this (0.45-0.91 a lookup) and the divide refill after it (0.51).
+  4. Hidden groups (FTB) cost a cycle each. A group whose pixels are already
+     painted takes the issue slot and the retire slot like a lookup does:
+     0.96 skipped groups per real lookup on these lists (953k against 997k).
+  5. Misses matter only at the margin. At L12 the cache's accept->answer is
+     14.0 clk_sys on average and 10 (12.5 clk_mem) for a hit. At L30 it is
+     21.9. With 16 credits the walk can hide about 16 cycles of it.
+
+*How established* (tb_m2_raster3d, the core's configuration -- FTB, PXC,
+FRB 2, M2COV, SPLIT_TRI, FB_DDR3 + wcomb, TXLATE 3, TXNS 4 / TXRSP 4 / TXK 16,
+TXLW8, UZF 4, step 1, bilinear, 100:80 (R107 RN 10 RD 8). MAME's lists r57,
+r66, apk, rpk and f2200 (L_m2200). Memory: L1 = TEXMEM latency 1 (the near-
+perfect memory), L12 = idle (TEXMEM 12), L30 = contended (30 + 0..30
+jitter). Baseline 7b41994 reproduces R804's numbers to the 0.01 ms.) The
+bench was instrumented in a scratch copy only, with no RTL change. During
+the draw (fb_busy rising to fb_complete), every clk_sys cycle of m2_span_tex
+was put in one class: issue, skip, no credit (split three ways: the head's
+answer not back, the writer stalling the emit, or answers standing queued),
+in-flight queue full, divide pipe refilling, span end (another span waiting
+with no free slot, or the queue empty, or the next span flat), or idle (flat
+pass-through, flat blocked, queue empty). Every clk_mem cycle of the cdc and
+the cache was classified too. Each lookup was time-stamped at issue, at cache
+accept, at the cache's answer, at reaching the head and at the take.
+Cycles per real lookup, mean of the five lists (clk_sys):
+
+                                         L12                    L30
+                                 HEAD   R808  +NSP4     HEAD   R808  +NSP4
+  lookup issued                  1.000  1.000  1.000    1.000  1.000  1.000
+  hidden (FTB) group skipped     0.957  0.957  0.957    0.957  0.957  0.956
+  credit: head texel not back    0.127  0.182  0.249    0.555  0.614  0.821
+  credit: writer stalling emit   0.103  0.100  0.109    0.112  0.102  0.121
+  credit: answers queued (take)  0.467  0.077  0.092    0.464  0.078  0.092
+  in-flight queue (16) full      0.198  0.142  0.203    0.415  0.361  0.523
+  divide pipe refill             0.531  0.513  0.295    0.526  0.507  0.293
+  span end: two spans in flight  0.470  0.445  0.118    0.929  0.911  0.305
+  span end: other                0.090  0.084  0.088    0.097  0.093  0.095
+  idle: flat span / writer       0.133  0.112  0.112    0.134  0.114  0.114
+  idle: queue empty              0.800  0.806  0.890    0.760  0.766  0.827
+    (of which the FB clear: 105,577 cycles every draw, 0.53 a lookup)
+  TOTAL                          4.877  4.420  4.112    5.948  5.501  5.149
+  latency issue->cache accept    5.16   5.70   6.46     9.66  10.21  12.25
+          accept->cache answer  14.00  14.29  14.75    21.94  22.20  23.31
+          answer->head of queue 10.98   4.17   4.36    10.86   4.15   4.42
+  issue gap of 1 cycle (% gaps)  36.6   78.7   77.0     36.8   78.5   76.9
+
+HEAD's issue gaps: 2 cycles 48-60% of the time and 1 cycle 29-45%. Take gaps:
+2 cycles 59-72%. The bench also reproduces the board's three facts. Step 8:
+7.60 / 8.73 / 10.08 ms (r57 / apk / rpk, L12), against textures off at
+5.68 / 6.06 / 7.41. Point: 10.59 / 12.05 / 14.08, against bilinear's
+10.79 / 12.32 / 14.24 -- 1-2%.
+
+*The change* (m2_fb_wcomb only):
+  * One span is held at the intake (n_v + 68 payload bits). in_ready =
+    !n_v && !clear_req && !clearing, all registers (was ist == I_IDLE &&
+    !clear_req), so no cross-module path gets longer.
+  * A takes its next span when idle, as before, OR in I_RUN as the
+    current span's last word moves to B (a_go && x_nx > x1_r). It takes the
+    held span if there is one, else the input directly. If A is not free,
+    the input goes into the hold. The data source is chosen by the register
+    n_v. Only the load ENABLE waits on a_go. The hold's payload is written
+    on every take, with no a_go in its enable.
+  * A span held when a clear is asked for is drawn before the clear starts.
+    By construction this never happens in the core: the writer is empty at
+    the swap. `empty` includes !n_v.
+  * Throughput: a one-word span costs one cycle (was two). Long spans are
+    unchanged (a word a cycle). Flat spans save a cycle each too.
+  * tb_m2_fbw_chain: once a span is taken, the bench now changes the
+    payload, as m2_span_tex does (the next pixel). Held steady, it let a
+    writer that read the input after the handshake pass (mutations f1 / f6
+    below passed before this).
+
+*Measured* (draw at 80 MHz, ms):
+
+                      r57    r66    apk    rpk    f2200
+  L1   HEAD          10.19  10.50  11.44  13.81  11.82
+       R808           9.08   9.33  10.22  12.58  10.37   -8.9..-12.2%
+  L12  HEAD          10.79  11.06  12.32  14.24  12.37
+       R808           9.75  10.01  11.16  13.16  11.00   -7.6..-11.0%
+  L30  HEAD          13.41  13.72  16.00  16.32  14.68
+       R808          12.31  12.66  14.89  15.32  13.38   -6.2..-8.8%
+  (step 8, L12: r57 7.60 -> 7.42, apk 8.73 -> 8.48, rpk 10.08 -> 9.88)
+
+Under the bench's HPS write-queue model (M2_R3D_WQ 4, scaler 30%), where the
+draw is bound by DDR3 write beats (18-21 ms), the gain is only 1-3%. The
+board is NOT in that regime: step 8 writes the same pixels in the same
+bursts and runs at full speed there.
+
+*Answers.* Every texel answer common to HEAD and R808 is identical:
+2,990,995 fetches over five lists x L1/L12/L30, 0 differ. The displayed
+frame's hash is identical in 15 of 15 runs. The fetch counts differ by a
+few, from the FTB mask's timing, as in R782.
+
+*Benches* (the worktree): test_m2_fb_wcomb 38/0; test_m2_fbw_chain
+(WCOMB 0 / 1 / 1+FTB x BUSY 0/300/900, with the stronger payload) all pass;
+test_m2_fb_write, test_m2_span_tex 7,214/0, test_m2_raster_fill
+152,373/0, test_m2_raster3d 23/0 pass; lint_top clean; quartus_map
+--analyze_file clean. Mutations against the chain bench (fails out of
+13 / 15 checks, at every BUSY):
+  f1 y from the input instead of the hold        1 / 3
+  f2 the hold never released                     5 / 4
+  f3 in_ready ignoring the hold                  2 / 3
+  f4 A reloaded on any a_go (mid-span)           2 / 3
+  f5 no a_same merge (now also across spans)     0 / 4 (FTB only, as R685)
+  f6 px from the input                           1 / 1
+  f7 x0 from the input                           2 / 3
+  f8 a span never held                           2 / 3
+  f9 a clear before the held span                0 / 0 -- not exercised
+                                                 (cannot occur in the core)
+f6 in the whole renderer (r57 L12): frame hash 1149a338... -> ad65b4fd...
+
+*Cost.* Full-design quartus_map (17.0, Model2.qsf), HEAD -> R808:
+  m2_fb_wcomb       449 -> 483 ALUT (+34), 378 -> 448 registers (+70)
+  m2_raster3d     11,299 -> 11,353 ALUT (+54), 10,406 -> 10,466 regs (+60)
+  design estimate   40,409 -> 40,401 ALM (-8: map noise), 48,749 -> 48,808
+                    registers (+59); DSP 87 and block bits unchanged; the
+                    same 10 uninferred-RAM notices
+  standalone        m2_fb_wcomb 385 -> 429 ALM (+44), 426 -> 496 registers
+Budget, by R798's calibration (+64 ALUT / +194 regs -> +20..+40 placed) and
+the 2.5x standalone rule: ~+50..+110 ALM placed. 0 M10K, 0 DSP.
+
+*Timing, by construction:* in_ready is now a register (n_v, ist, clear_req),
+so m2_span_tex's out_ready -> rt_take / tx_take / span-queue pop paths are
+unchanged. Inside the writer, the A registers' enable becomes c_fits -> c_go
+-> a_go -> a_free -> ld_a. That is one or two LUT levels more than the old
+a_go -> x_r enable, and more fanout (~70 registers). Their data gains one 2:1
+selected by the register n_v, and tfin's product reaches px_r through it.
+The writer's known near-miss, s972 wlo -> mk_valid (c_go -> pg_we), is not
+touched. Not timed: no fit.
+
+*Next levers, measured on the bench* (on top of R808; ms at 80 MHz):
+  * FOUR SPAN PARAMETER SETS (NSP 4; a ring in place of sp_iss / sp_out's
+    toggle, 2-bit slot tags; scratch RTL, not in this change): L12 r57 9.01,
+    r66 9.29, apk 10.19, rpk 12.47, f2200 10.30. That is -5..-9% more
+    (-12..-17% against HEAD). L30 -5..-8% more. Answers identical, hash
+    15/15. Full-map delta against R808: m2_raster3d +104 ALUT / +193 regs,
+    design estimate +87 ALM. ~+300 ALM placed by the 2.5x rule. A
+    study-level ALM decision.
+  * Hidden groups in runs: 0.96 cycles a lookup. If a fully painted run went
+    8 groups a cycle (iss_u += du << 3 is the same sum, bit for bit), the
+    upper bound is 80k-257k cycles a draw (1.0-3.2 ms, L12). Needs the
+    mask read at issue time, before the divide pipeline. Not built.
+  * Loading a span on its predecessor's last issue (ld_over on iss_last)
+    saves one bubble a span: <= 0.15 a lookup, ~3%. It puts iss_last on
+    in_ready, so it needs a registered next-iss_last.
+  * Credits 32: -0.8..-1.2%; the cache's response queue 8: -1.4..-4.2%
+    (r57 / apk / rpk, L12 and L30). Both with NSP 4: L30 apk 13.72 -> 12.94 (RSP 8).
+  * The framebuffer clear is SERIAL with every draw: 105,577 clk_sys (1.32 ms)
+    before the first band, the same for every list. Not texture cost, but
+    1.3 ms of every frame, textures on or off.
+
+*Not verified:* the fit, timing at 80 MHz, the board.
