@@ -22,8 +22,13 @@ A debug-build watch must count "all G records identical" as a lock.
 soak2.sh (fps) is the watch for release builds and is fine.
 PENDING: s985 (HEAD 7b41994 R807 fix, 128-bit lines) awaits Ben's texture +
 speed test; if textures right but speed = s945, drop R796/R798/R804.
-Agents: span per-lookup profile (sm2-spanprof-7b41994, R808), GAME OVER
-missing "G" quad (sm2-gameover-821b47e, R810).
+GAME OVER "G" (R810, 00b06aa): the G is polygon 0 of every GAME OVER list;
+a walk held waiting for the swap had its first quad taken in the store's
+clear cycle (swap_d) and lost. Fix: q_ready low during swap_d. Bench proves
+it on MAME's own list (HEAD draws "AMEOV"); board timing inferred, not
+measured. NOT in s987/s988 -- its own build after the lock soak, one change
+at a time. Races may lose polygon 0 too (a HUD quad) -- unchecked.
+Agent still running: span per-lookup profile (sm2-spanprof-7b41994, R808).
 
 ## 2026-10-11 (early hours): LOCK HUNT v2 READY; SPEED BUILD STILL SEEDING
 
