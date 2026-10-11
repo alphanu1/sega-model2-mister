@@ -851,6 +851,12 @@ int main(int argc, char **argv) {
     auto wide = [](double pu) -> uint32_t { if (!(pu >= 1.0)) return 0; double w = std::floor(pu / 2.0 + 0.5); return w > 32767 ? 32767u : (uint32_t)w; };
     auto widet = [](double pu) -> uint32_t { if (!(pu >= 2.0)) return 0; double w = std::floor(pu / 2.0); return w > 32767 ? 32767u : (uint32_t)w; };
     long nq = 0, nq_refused = 0;
+    // R810: M2_R3D_HOLDFIRST -- the list's FIRST quad is presented while the
+    // store is not collecting (the previous list READY, waiting for its swap)
+    // and HELD, as the clipper holds it, across the frame_start that swaps;
+    // the board's case when a walk overran a vblank (R763). A copy of the
+    // list is collected first to be that READY list.
+    bool hold_next = false; long held_ticks = 0;
     auto push_quad = [&](const P &p, int a, int b, int c, int e, bool last) {
       const int ix[4] = {a, b, c, e};
       int32_t X[4], Y[4]; uint16_t OZ[4]; uint32_t U[4], Vv[4];
@@ -891,7 +897,7 @@ int main(int argc, char **argv) {
                          | (((h0 >> 13) & 1) << 8) | (((h0 >> 8) & 1) << 9) | (((h0 >> 9) & 1) << 10) | (((h0 >> 15) & 1) << 11)
                          | (((h2 >> 12) & 1) << 12) | ((h2 & 0x3f) << 13) | (((h2 >> 6) & 0x1f) << 19);
       (void)h1;
-      { int g = 0; d->q_valid = 0; d->eval(); while (!d->q_ready && g++ < 200000) tick(); }
+      if (!hold_next) { int g = 0; d->q_valid = 0; d->eval(); while (!d->q_ready && g++ < 200000) tick(); }
       d->q_valid = 1;
       d->q_x0 = X[0]; d->q_y0 = Y[0]; d->q_x1 = X[1]; d->q_y1 = Y[1];
       d->q_x2 = X[2]; d->q_y2 = Y[2]; d->q_x3 = X[3]; d->q_y3 = Y[3];
@@ -912,6 +918,22 @@ int main(int argc, char **argv) {
       }
       d->q_z = 0x3F800000u | (p.z & 0xffff);
       d->q_end = last;
+      if (hold_next) {   // R810: held across the swap, taken on the first edge that sees q_ready
+        hold_next = false;
+        bool taken = false;
+        auto ht = [&]() { if (!taken) { d->eval(); if (d->q_ready) { tick(); taken = true; d->q_valid = 0; return; } ++held_ticks; } tick(); };
+        for (int f = 0; f < 16 && !taken; f++) {
+          d->scan_y = SCR_H; d->scan_x = 0; ht();
+          d->frame_start = 1; ht(); d->frame_start = 0;
+          for (int y = SCR_H; y < V_TOTAL; y++) for (int t = 0; t < TPL; t++) { d->scan_y = y; d->scan_x = 0; ht(); }
+          for (int y = 0; y < SCR_H; y++) for (int t = 0; t < TPL; t++) { d->scan_y = y; d->scan_x = (t < SCR_W) ? t : SCR_W - 1; ht(); }
+        }
+        std::printf("  R810 HOLDFIRST: the first quad held %ld ticks, %s; store count after it %d\n", held_ticks,
+                    taken ? "taken" : "NEVER TAKEN", (int)d->dbg_quads);
+        ++nq;
+        d->q_valid = 0; d->q_end = 0;
+        return;
+      }
       if (!d->q_ready) ++nq_refused;   // R650: a quad the store did not take is LOST
       tick(); ++nq;
       d->q_valid = 0; d->q_end = 0;
@@ -955,6 +977,13 @@ int main(int argc, char **argv) {
                   pa.size(), intr, (int)d->rootp->m2_raster3d__DOT__fb_busy,
                   (int)d->rootp->m2_raster3d__DOT__fb_complete, (int)d->rootp->m2_raster3d__DOT__fill_band);
       g_draws.clear();
+    }
+    if (std::getenv("M2_R3D_HOLDFIRST")) {   // R810
+      push_all(polys);
+      { int g = 0; while (d->rootp->m2_raster3d__DOT__pst != 3 && g++ < 2000000) tick(); }
+      std::printf("  R810 HOLDFIRST: the first copy READY (pst %d, q_ready %d)\n", (int)d->rootp->m2_raster3d__DOT__pst, (int)d->q_ready);
+      g_draws.clear();
+      hold_next = true;
     }
     push_all(polys);
     std::printf("  R615: %ld quads pushed, %ld REFUSED by the store (lost)\n", nq, nq_refused);
@@ -1255,6 +1284,90 @@ int main(int argc, char **argv) {
     CHECK(fine_now() == 1, "a light list after the heavy one did not return to fine");
     auto r3 = show(tyre, &tiny, &drop);
     CHECK(tiny == 0 && r3.first == (int)must.size(), "tyre fine again: tiny %d, %d of %zu ring pixels painted", tiny, r3.first, must.size());
+  }
+
+  // R810: THE WALK'S FIRST QUAD, HELD AT THE STORE WHILE A READY LIST WAITS
+  // FOR ITS SWAP. Every push above waits for q_ready BEFORE raising q_valid,
+  // so no bench had ever presented a quad to a store that was not collecting.
+  // The board does: a walk that starts while the previous list is P_READY
+  // (it overran a vblank, R763) is held by the clipper with its first quad on
+  // q_valid, and q_ready rises in the cycle after the swap -- the cycle the
+  // store's clear lands (swap_d). That quad was taken and cleared: Daytona's
+  // GAME OVER draws its "G" as polygon 0 of every list (MAME walks 8881-9301),
+  // and the board showed GAME OVER without it. List A is a background square;
+  // list B is a red quad (presented and HELD before the swap, as the clipper
+  // holds it) then the same square. The red quad must be drawn. The control
+  // (the last phase) pushes the red quad the ordinary way, after the swap.
+  {
+    struct HQ { int x0, y0, x1, y1; uint32_t col, z; };
+    const HQ back = {100, 200, 300, 300, 0x0000F8, 3000};    // 565 001F
+    const HQ red  = {16, 224, 60, 269, 0xF80000, 600};       // 565 F800, the G's box, nearest
+    auto setq = [&](const HQ &q, bool end) {
+      d->q_x0 = q.x0; d->q_y0 = q.y1; d->q_x1 = q.x0; d->q_y1 = q.y0;
+      d->q_x2 = q.x1; d->q_y2 = q.y0; d->q_x3 = q.x1; d->q_y3 = q.y1;
+      d->q_col = q.col; d->q_z = 0x3F800000u | q.z; d->q_moire = 0; d->q_tex = 0; d->q_frac = 0;
+      d->q_u0 = d->q_v0 = d->q_u1 = d->q_v1 = d->q_u2 = d->q_v2 = d->q_u3 = d->q_v3 = 0;
+      d->q_end = end;
+    };
+    auto push1 = [&](const HQ &q, bool end) {
+      { int g = 0; d->q_valid = 0; d->eval(); while (!d->q_ready && g++ < 4000000) tick(); }
+      setq(q, end); d->q_valid = 1; tick();
+      d->q_valid = 0; d->q_end = 0;
+    };
+    // one video frame whose ticks complete a HELD quad's handshake: taken on
+    // the first edge that sees q_ready, then q_valid drops (the clipper's pop)
+    bool held = false; long held_ticks = 0;
+    auto htick = [&]() {
+      if (held) { d->eval(); if (d->q_ready) { tick(); held = false; d->q_valid = 0; return; } ++held_ticks; }
+      tick();
+    };
+    auto held_frame = [&](bool fs) {
+      d->scan_y = SCR_H; d->scan_x = 0; htick();
+      d->frame_start = fs; htick(); d->frame_start = 0;
+      for (int y = SCR_H; y < V_TOTAL; y++) for (int t = 0; t < TPL; t++) { d->scan_y = y; d->scan_x = 0; htick(); }
+      for (int y = 0; y < SCR_H; y++) for (int t = 0; t < TPL; t++) { d->scan_y = y; d->scan_x = (t < SCR_W) ? t : SCR_W - 1; htick(); }
+    };
+    auto red_px = [&]() {
+      long h = 0;
+      for (int k = 0; k < 4; k++) video_frame(false, &h);   // B swapped in, drawn and (FB) published
+      g_pix.assign(SCR_W * SCR_H, -1); g_cap = true;
+      video_frame(true, &h);
+      g_cap = false;
+      int n = 0;
+      for (int y = red.y0 + 2; y < red.y1 - 2; y++) for (int x = red.x0 + 2; x < red.x1 - 2; x++) n += g_pix[y * SCR_W + x] == 0xF800;
+      return n;
+    };
+    const int want = (red.y1 - red.y0 - 4) * (red.x1 - red.x0 - 4);
+    // phases 0-2: held across the swap after 0, 3 and 30 video frames with
+    // no frame_start (the walk waits that long, as under R652's hold);
+    // phase 3: the control
+    const int hold_frames[3] = {0, 3, 30};
+    for (int phase = 0; phase < 4; phase++) {
+      const bool ctl = (phase == 3);
+      push1(back, true);                      // list A
+      { int g = 0; while (d->rootp->m2_raster3d__DOT__pst != 3 && g++ < 200000) tick(); }   // P_READY
+      const bool ready_wait = d->rootp->m2_raster3d__DOT__pst == 3 && !d->q_ready;
+      if (!ctl) {
+        CHECK(ready_wait, "R810: list A is not READY, or the store is collecting (pst %d q_ready %d)",
+              (int)d->rootp->m2_raster3d__DOT__pst, (int)d->q_ready);
+        setq(red, false); d->q_valid = 1; held = true; held_ticks = 0;   // B's first quad, HELD
+        for (int f = 0; f < hold_frames[phase]; f++) held_frame(false);
+        CHECK(held, "R810: the held quad was taken with no frame_start");
+        for (int f = 0; f < 8 && held; f++) held_frame(true);
+        CHECK(!held, "R810: the held quad was never taken");
+      } else {
+        long h = 0;
+        for (int f = 0; f < 8 && d->rootp->m2_raster3d__DOT__pst != 0; f++) video_frame(false, &h);
+        push1(red, false);                    // the control: B's first quad after the swap
+      }
+      const int c0 = (int)d->dbg_quads;
+      push1(back, true);
+      const int n = red_px();
+      std::printf("  R810 %s: held %ld ticks, list B's count after its first quad %d (want 1), red quad %d of %d px\n",
+                  ctl ? "control (pushed after the swap)" : "first quad held across the swap", ctl ? 0L : held_ticks, c0, n, want);
+      CHECK(c0 == 1, "R810 %s: list B's count after its first quad is %d", ctl ? "control" : "held", c0);
+      CHECK(n == want, "R810 %s: the first quad of list B painted %d of %d px", ctl ? "control" : "held", n, want);
+    }
   }
   std::printf("m2_raster3d: checks=%d fails=%d\n", checks, fails);
   std::printf(fails ? "FAIL\n" : "PASS\n");

@@ -29759,3 +29759,98 @@ reference. Cost: m2_cpu_real (real bridge + SDRAM) 12.03 CPI before and after
 -- the check rejects only answers nobody was waiting for.
 Not yet measured on the board; the soak is the test (R811's lock at ~35 min,
 earlier ones 20-60 min, so >= 2 h clean before calling it).
+
+**R810 -- THE GAME OVER "G": A WALK'S FIRST QUAD, HELD WHILE THE PREVIOUS
+LIST WAITED FOR ITS SWAP, WAS TAKEN IN THE CYCLE THE STORE'S CLEAR LANDED,
+AND LOST.** Ben, 2026-10-11: on the results screen after a race the "G" of
+GAME OVER is missing -- "a missing 3D quad with transparent texture". First
+recorded at s377 (2026-09-26, the open issues under R614), apparently gone
+for a while, now back.
+
+MAME (0.289 m2lod, daytona93, coin + start, the car left standing until the
+timer runs out): RESULTS / 40th from machine frame ~8,640, GAME OVER from
+~8,860 to ~9,300 -- the letters fly in one at a time, turn about their
+vertical axis (mirrored at ~9,240) and turn back. Walk dumps at 8,881,
+8,941, 9,001 ... 9,301 (eight walks): the G is POLYGON 0 OF EVERY ONE.
+h=6400,0000,1e9b,00c0 -- textured, translucent (h0 bit 13), 32x32, sheet 1
+at (0x1b*32, 0x1a*32); luma 255; z 599-633, the nearest polygon in the
+list; on frame 9,000 a 45 x 45 px square at x 15.6-60.4, y 224.3-269.1,
+owning 1,517 of MAME's pixels. The other letters are polygons 1-5 with the
+same header word 0.
+
+NOT THE STAGES THE BRIEF SUSPECTED. Each was run on MAME's data at 821b47e:
+  * the walk, engine, clipper and projector (geodiff_ra, walk 9,001): 805
+    polygons -> 818 quads; the G is quad 0, vertices exact, texture word
+    d37101 exactly as tb_m2_raster3d packs it from MAME's header. (Polygon
+    266, the near road, is split differently -- covered by two quads of
+    ours instead of one; a pre-existing difference, not a loss.)
+  * the store, sort, fill, span walk and texels in the core configuration
+    (FTB, FB_DDR3, SPLIT_TRI, R769/R776 cull, R784 colour, R791 UZF,
+    R789/R796 texel; tb_m2_raster3d M2_R3D_LIST + REALCOL, frame 9,000):
+    816 quads pushed, 0 refused, 0 culled as tiny; the G drawn; 41 of
+    MAME's textured pixels unpainted in the frame. Not the tiny cull, not
+    the fill mask, not the translucent texel test.
+Both halves draw the G. What neither bench had ever done is join them the
+way the board does.
+
+THE JUNCTION. R220 made q_ready = (pst == P_COLLECT): a walk that starts
+before the swap is held by the clipper (valid/ready, out_valid kept) with
+its first quad on q_valid until the store collects again. R211's clear is
+swap_d, one cycle after the swap, "the walk's first quad is many cycles
+away". The two contradict each other. At the swap pst becomes P_COLLECT, so
+q_ready rises in the very cycle swap_d is high; the held quad is taken
+(q_take, and the clipper pops it) while m2_quad_store drops it --
+`a_v <= in_valid && !clear` (m2_quad_store.sv:444) and the clear branch
+(:466) skips the RAM write and the count. The list is then drawn without
+its polygon 0. MAME has no such gap: geo_parse calls render_frame_start(),
+which resets poly_list_index, before the walk's first polygon, and every
+polygon walked is in the list. Model 1 has no counterpart to compare: its
+store takes q_valid directly, with no q_ready -- the backpressure is R220's
+own design.
+
+When it happens: any frame_start that does NOT swap -- the walk still
+collecting at the vblank (R763 measured on the board that attract walks
+span vblanks and include waiting for the swap) -- leaves frame_pend set,
+so with "After flip" the next walk starts at the game's next flip, while
+the previous list is P_SORT/P_READY; it is held, and loses its first quad
+at the next swap. Once a walk runs late, every list can start that way.
+
+  * m2_raster3d.sv:361: q_ready = (pst == P_COLLECT) && !swap_d. The held
+    quad waits one more cycle and lands in slot 0 after the clear. No
+    area; q_ready gains one register input. swap_d is declared before both
+    uses. quartus_map --analyze_file: 0 errors.
+
+Bench:
+  * tb_m2_raster3d, new R810 phase: list A (a background square) READY; list
+    B's first quad (a red square in the G's box) presented and HELD with
+    q_ready low, for 0, 3 and 30 video frames with no frame_start, then
+    across the frame_start that swaps; the control pushes it the ordinary
+    way after the swap. 821b47e: all three held cases fail -- count 0 after
+    the quad, 0 of 1,640 px; the control draws 1,640. Fixed: 1,640 of 1,640
+    every case. Default build 40 checks, 0 fail (23 + 17 new). Core
+    configuration (FB_DDR3 ..., M2_R3D_FB=1): 821b47e 18 fail, fixed 12 --
+    the same 12 pre-existing failures in both (the older phases expect the
+    non-framebuffer build's publish latency).
+  * M2_R3D_HOLDFIRST=1 (list mode): a copy of the list is collected first
+    and left READY, then the list's first quad is held across the swap.
+    MAME frame 9,000, core configuration: 821b47e draws "AMEOV" -- 1,520
+    pixels differ from the clean draw, every one inside the G's box (x
+    17-58, y 226-267), the road behind showing through. Fixed: the PX dump
+    is identical to the clean draw (and the clean draw is unchanged by the
+    fix).
+  * test_m2_quad_store 23/0, test_m2_geo 130/0, test_m2_geometry 53/0,
+    test_m2_span_tex 7,214/0, test_m2_eng_ra 0 fail; lint_top clean;
+    lint_idx: no new candidates in m2_raster3d.
+
+Verified: the G is MAME's polygon 0 on every GAME OVER walk dumped; our
+walk/geometry emits it and our renderer draws it given the list; a quad
+held across the swap is lost at 821b47e and stored with the fix, in both
+the bench build and the core configuration, on MAME's own GAME OVER list.
+Inferred, not measured: that the board's GAME OVER walks start before
+their swap (R763's attract measurement shows the condition exists; the
+results screen's walk timing was not measured), and so that this is the
+board's fault -- the board is the test. Also inferred: why it came and
+went (the trigger mode and walk timing set how often a walk starts before
+its swap; under R220's original flip trigger, mid-frame starts were the
+rule). In a race polygon 0 is a HUD quad (centre 1, z 0, untextured; the
+race walks of the HUD work), so races may have lost it too -- not checked.

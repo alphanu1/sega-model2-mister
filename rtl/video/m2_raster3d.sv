@@ -348,7 +348,17 @@ module m2_raster3d #(
   // seen as wrong wedges and an on-off flicker (dbuf13 s15). The geometry
   // pipeline honours this line (the clipper holds out_valid), so the walk
   // waits for the swap, which is the frame's own cadence.
-  assign q_ready = (pst == P_COLLECT);
+  // R810: AND NOT IN THE CYCLE THE CLEAR LANDS. A walk that starts while the
+  // previous list is P_READY (it overran a vblank, R763) is held here with its
+  // FIRST quad on q_valid; q_ready rose the cycle after the swap -- the cycle
+  // of swap_d, the store's clear, which wins over in_valid -- so that quad was
+  // taken and thrown away, and the geometry moved on. Daytona's GAME OVER
+  // draws its "G" as polygon 0 of every list: the board showed GAME OVER
+  // without it. MAME's list has no such gap (render_frame_start() resets
+  // poly_list_index before the walk's first polygon). One cycle later the
+  // clear is done and the quad lands in slot 0.
+  logic swap_d;   // the store's clear (below)
+  assign q_ready = (pst == P_COLLECT) && !swap_d;
   wire   q_take  = q_valid && q_ready;
 
   // One two-bank store: collect into `bank`, replay `~bank` (R213 shares the
@@ -1516,8 +1526,9 @@ module m2_raster3d #(
   // (`swap` is declared with the framebuffer above, R640.)
   // The store clears count[wbank]. On the swap cycle `bank` has not flipped
   // yet, so the clear is delayed one cycle to land on the new collect bank
-  // (the one coming off display). The walk's first quad is many cycles away.
-  logic swap_d;
+  // (the one coming off display). The walk's first quad is many cycles away
+  // -- unless the walk was held waiting for this swap (R810: q_ready is low
+  // in the clear's cycle, above).
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) swap_d <= 1'b0; else swap_d <= swap;
   end
