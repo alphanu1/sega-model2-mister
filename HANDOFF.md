@@ -1,5 +1,30 @@
 # Handoff
 
+## 2026-10-11 (late morning): THE LOCK FOUND AND FIXED IN SIM (R811/R812)
+
+CAUGHT: s980 (lock hunt v2) locked at ~35 min on Revision A. 0x192C executed
+0x881F602E -- the word after `ret` at 0x222124 (line 0x222120, same i-cache
+index) -- then trapped on the operand at 0x1930. R811.
+CAUSE (R812): a prefetch's late I-cache answer (cache busy on a fill when it
+went out, answered via S_DONE) landed in the first cycle of T_FETCH_W for the
+return target, and T_FETCH_W took any ic_valid. FIX 27943dd: consumers take
+only `ic_valid && vaddr == fetch_addr`; S_DONE renames vaddr on a hit.
+BENCH: tb_i960_top +lat=N (random bus latency) fails without the fix at
+lat 1/3 with the board's signature, passes with it at 0..100 and loops;
+`make test_i960_top_lat` (in `make test`). m2_cpu_real CPI 12.03 both ways.
+BUILDING: s987/s988 = 5efcc72 (s945, 80/40) + the fix ONLY
+(build/worktree_patches/lockfix-r812.patch, sm2-builds/sm2-lockfix-5efcc72)
+-- a one-change regression test of s945. Soak >= 2 h in attract on BOTH
+sets (Rev A V.R. demo, Deluxe backdrop) before calling it fixed.
+WATCH NOTE: watch980.sh misses a lock on debug builds -- after a trap 'G'
+carries RIP/PFP, so its flip/vbl count reads 0 and was treated as no data.
+A debug-build watch must count "all G records identical" as a lock.
+soak2.sh (fps) is the watch for release builds and is fine.
+PENDING: s985 (HEAD 7b41994 R807 fix, 128-bit lines) awaits Ben's texture +
+speed test; if textures right but speed = s945, drop R796/R798/R804.
+Agents: span per-lookup profile (sm2-spanprof-7b41994, R808), GAME OVER
+missing "G" quad (sm2-gameover-821b47e, R810).
+
 ## 2026-10-11 (early hours): LOCK HUNT v2 READY; SPEED BUILD STILL SEEDING
 
 ON THE BOARD: s945 (5efcc72, 80/40) -- judder fix + CRT MRA flag; tester has
