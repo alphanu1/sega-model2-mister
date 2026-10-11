@@ -30300,3 +30300,7 @@ same picture as R796's first 128-bit build. Next: s998-s1000 = 7f07bf1 with
 SPCULL = 0 (build/worktree_patches/spcull-off.patch) -- the clear under the
 draw and the 16-bit narrowing, the cull removed by its parameter. Bench:
 the clear alone -10..-14% (L12) for +15 ALUT.
+s998-s1000 (7f07bf1 + SPCULL = 0): all three close every core clock --
+s999 setup >= +0.209, hold >= +0.208, HDMI -0.847 (report-only); 41,437 ALM.
+RBF build/Model2_20261011_s999_clrdraw.rbf 49c9517b5d52f71d97e31f843aa9ddd3.
+s994 meanwhile: 150 min from load, no lock.
