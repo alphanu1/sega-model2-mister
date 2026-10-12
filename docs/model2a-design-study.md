@@ -30329,3 +30329,15 @@ Every draw fits the 17.39 ms vblank even at 75 MHz (0 of 29,870 sampled
 periods over one vblank). So after R808 the attract drops are the GAME --
 the i960 and TGP not finishing a frame -- and R813 could not show there,
 as Ben saw. Race capture to follow (Ben, later).
+The game-late vblanks are NOT spread: they repeat with the attract loop
+(55.4 s), the same places every loop -- a 29-vblank pause (0.5 s) at one
+scene change, 3-5 at +6.5 s and ~+40 s. In the no-flip vblanks the TGP
+retires 0 instructions (963 median the vblank before, 19,312 in a normal
+one): it is idle, not the limit. The i960 is flat out: 57,577 instructions
+a vblank in the pauses (3.31 MIPS at 37.5 MHz) against 24,445 elsewhere
+(1.41 -- it normally waits for the TGP and the vblank). So each pause is
+~1.7 M instructions of CPU work, a scene's setup. Inferred, not measured:
+the arcade pauses there too -- a 25 MHz i960KB cannot do 1.7 M instructions
+in one vblank at any plausible rate -- but for fewer vblanks; ours is the
+CPU's own speed (CPI ~11-12 at 40 MHz on s999). Never take a MAME cycle
+count as the real length (standing rule).
