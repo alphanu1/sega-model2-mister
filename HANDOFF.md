@@ -1,5 +1,20 @@
 # Handoff
 
+## 2026-10-12: THE GAME IS THE LIMIT (R814); 8 KB I-CACHE BACK (R815)
+
+R814 (why builds s1001/s1005, 75/37.5): the draw is NEVER behind, in attract
+or a race; the game is (race: 15.5% of vblanks). The i960 spent ~32% of its
+cycles waiting on instruction fetch; the TGP holds it only 1-5%. Attract's
+drops are scene-setup pauses on the 55.4 s attract loop (CPU flat out, TGP
+idle). R815: the 8 KB i-cache (R768's, cut by R786) costs no ALM here; on
+s1009 the race's late vblanks went 15.5% -> 1.0%; Ben: "99% of the time
+full speed". Committed 5422e84 (LINES 512, and SPCULL default 0 -- R813's
+cull did not fit). BUILDING s1010-s1012 = 5422e84 at 80/40 (release
+candidate: s999 + 8 KB). Agent measuring the fetch miss path in sim
+(sm2-builds/sm2-ifetch-1546abf, R816 draft to come). s999 ran ~19 h with
+no core lock (Ben's frozen view was OBS; board screenshots were live).
+Debug patches: build/worktree_patches/why-r814 / why2-r814 (75/37.5).
+
 ## 2026-10-11 (afternoon): RELEASED Model2_20261011.rbf = s994 (c02b233)
 
 releases/: Model2_20261011.rbf (232ce65807684c4b676d584b133ea385), the two
