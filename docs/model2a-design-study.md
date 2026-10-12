@@ -30415,3 +30415,14 @@ left is centred, so pressing the pedals on a pad's right stick can drift the
 steering only by more than the dead zone, and only with the left stick
 released. The Steering sensitivity applies to both. lint_top clean; Quartus
 parse clean. Not yet on the board.
+
+**R815 ON THE BOARD AT 80/40.** s1011 (5422e84: s999 + the 8 KB i-cache,
+80/40; core >= +0.144, hold >= +0.214, HDMI -0.676; RBF 3dec0ace), Revision
+A, m2-fps.py (framebuffer clears from Linux; no telemetry in a release
+build). Attract 20 s: 57.5 fps, 99% of 3D frames in one vblank. Race (Ben
+driving), 119 s: mean 57.0 fps, 99% in one vblank; dips only at ~51-52 s
+(42, 48 fps), and single seconds at 53-54. One 504 ms frame (29 vblanks) and
+a 452 ms one (26) in the two logs were the race's end and start -- Ben: going
+back to the menu and attract -- scene changes, the same class as R814's
+29-vblank attract pause (CPU-bound setup). The race itself is at the
+arcade's rate for nearly all of its frames.
