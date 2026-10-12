@@ -20,7 +20,7 @@ names them. Nothing here contains ROM data.
 
 | zip | what for |
 |---|---|
-| `daytona93.zip` | `Daytona USA (Deluxe 93)` — program, data, polygons, textures, tiles, samples |
+| `daytona93.zip` | `Daytona USA (Deluxe 93)`. A **split** set also needs `daytona.zip` beside it, for the files the two share; a **merged** `daytona.zip` alone also works. |
 | `daytona.zip` | `Daytona USA (Revision A)`, the 1994 set (MAME's `daytona`) — the whole set |
 | `model1io.zip` **or** the game's zip | the I/O board's Z80 ROM, `epr-14869c.25` |
 
@@ -163,12 +163,33 @@ which TV, how it's connected, and which settings work.
 
 | | |
 |---|---|
-| Steer | left stick |
+| Steer | left stick (left/right), a wheel that MiSTer reports as a **paddle**, or the d-pad |
 | Accelerate / brake | right stick up / down, or the `Accel` and `Brake` buttons |
 | Gears | `Gear Up` / `Gear Down` |
 | View buttons | `VR1 Red`, `VR2 Blue`, `VR3 Yellow`, `VR4 Green` |
 | Start, Coin | `Start`, `Coin` |
 | Test, Service | available to map in MiSTer's input settings |
+
+**How the core reads the analogue controls:**
+
+- **Steering** comes from the first of these that is in use: a **paddle**
+  (MiSTer can report a wheel's rotation as a paddle), then the **left stick's
+  left/right axis**, then the **d-pad**, which steers gradually and recentres
+  when released.
+- **Both pedals are on one axis: the right stick's up/down.** One direction
+  is the accelerator, the other the brake, and the further you push, the
+  harder it presses. Which direction is which depends on the controller, so
+  if they come out backwards, set `Pedals` to `Swapped` in the OSD. The
+  `Accel` and `Brake` buttons always press fully.
+- **`Steering`** in the OSD sets how much stick gives full lock: `3/4`,
+  `Full`, `5/4` or `Half`.
+
+**With a wheel and pedals:** in MiSTer's controller setup, map the wheel's
+rotation to the **left stick's left/right** (or let MiSTer use it as a
+paddle), and the pedals to the **right stick's up/down**: the accelerator one
+way and the brake the other. If the pedals come out reversed, use `Pedals:
+Swapped`. The core does not read the right stick's left/right, so a wheel
+mapped entirely onto the right stick will not steer.
 
 ## Not finished, as of `Model2_20261011.rbf`
 
