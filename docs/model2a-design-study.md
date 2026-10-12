@@ -30341,3 +30341,19 @@ the arcade pauses there too -- a 25 MHz i960KB cannot do 1.7 M instructions
 in one vblank at any plausible rate -- but for fewer vblanks; ours is the
 CPU's own speed (CPI ~11-12 at 40 MHz on s999). Never take a MAME cycle
 count as the real length (standing rule).
+RACE (Ben driving, Revision A, 150 s, 8,627 vblanks, s1001 at 75/37.5):
+new picture 85.8%, draw behind 0.0%, walk behind 0.5%, GAME behind 13.6%.
+Draw median 11.4 ms, p90 13.7, max 16.6 -- 0 of 10,667 periods over a
+vblank. SDRAM busy 65% (p90 73%); waits texel 4.4%, i960 3.0%, geo 6.9%.
+So the race, too, is limited by the game, not the 3D. Unlike attract, the
+TGP is BUSY in the late vblanks (57,006 instructions median, 64,097 max;
+50k in on-time ones), and game frames that took 2+ vblanks carried more TGP
+work (median 66k, p90 116k, against 50k). The i960 ran 18,474 instructions
+a vblank median -- a third of its flat-out 57,577 -- so neither unit is
+saturated: at CPI ~4.9 the TGP's 57k instructions are ~22% of a vblank. The
+frame is the CPU and the TGP waiting on each other (R770: the i960 held
+4.8-5.5 ms a frame on the TGP's output FIFO). Inferred: our i960 (CPI
+~11-12) is the slow half -- a real i960KB at 25 MHz retires several times
+more per second; our TGP at CPI 4.9 x 80 MHz is near a real MB86234's one
+instruction a cycle at 16 MHz. Next measurement: the i960's cycles split
+into executing, instruction fetch, data memory, and held on the TGP FIFO.
