@@ -4926,7 +4926,16 @@ wire [7:0] iob_in1 = {1'b1, gearval, 3'b111, ~joystick_0[9]};
 // because a menu that needs left and right is unusable on a d-pad otherwise,
 // and it is a RAMP rather than a jump to the rail so the wheel sweeps as a real
 // one would.
-wire signed [7:0] ax = joy_analog[7:0];
+// R816: OR THE RIGHT STICK'S LEFT/RIGHT. MiSTer maps a wheel there -- steering
+// on the right stick's X with the pedals on its Y (Ben, from a tester's wheel)
+// -- and this core read only the left stick, so a wheel did not steer. Both
+// sticks steer: the left when it is pushed past the dead zone, otherwise the
+// right. A pad is unchanged; a wheel needs no setting.
+wire signed [7:0] ax_l  = joy_analog[7:0];
+wire signed [7:0] ax_r  = joy_ranalog[7:0];
+wire              use_l = (ax_l > 8'sd12) || (ax_l < -8'sd12);
+wire              use_r = (ax_r > 8'sd12) || (ax_r < -8'sd12);
+wire signed [7:0] ax    = use_l ? ax_l : ax_r;
 
 // STEERING SENSITIVITY, because three quarters is a choice and not a law.
 //
@@ -4975,7 +4984,7 @@ always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
 		end
 	end
 end
-wire use_stick = (ax > 8'sd12) || (ax < -8'sd12);
+wire use_stick = use_l || use_r;   // R816
 wire [7:0] steer = |paddle ? paddle
                  : use_stick ? steer_an
                  : steer_dig;

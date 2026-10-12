@@ -30403,3 +30403,15 @@ Attract's remaining drops are R814's scene-setup pauses, which a cache does
 not shorten. The CPU's i-fetch wait is still 22% in a race: an agent is
 measuring the miss path in simulation (fill latency, footprint, next-line
 prefetch) -- R816 to follow.
+
+**R816 -- A WHEEL STEERS FROM THE RIGHT STICK.** Ben (from a tester's wheel):
+MiSTer maps a wheel onto the right stick -- steering on its X, the pedals on
+its Y. The core read steering only from the paddle, the left stick's X or
+the d-pad, so the pedals worked and the wheel did not steer. Now: paddle,
+then the left stick's X if past the dead zone (+-12), then the right stick's
+X past the same dead zone, then the d-pad. No OSD option, at Ben's call: a
+pad keeps the left stick, and the right stick's X only steers while the
+left is centred, so pressing the pedals on a pad's right stick can drift the
+steering only by more than the dead zone, and only with the left stick
+released. The Steering sensitivity applies to both. lint_top clean; Quartus
+parse clean. Not yet on the board.

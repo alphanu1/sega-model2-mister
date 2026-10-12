@@ -163,7 +163,7 @@ which TV, how it's connected, and which settings work.
 
 | | |
 |---|---|
-| Steer | left stick (left/right), a wheel that MiSTer reports as a **paddle**, or the d-pad |
+| Steer | left stick or right stick (left/right), a wheel that MiSTer reports as a **paddle**, or the d-pad |
 | Accelerate / brake | right stick up / down, or the `Accel` and `Brake` buttons |
 | Gears | `Gear Up` / `Gear Down` |
 | View buttons | `VR1 Red`, `VR2 Blue`, `VR3 Yellow`, `VR4 Green` |
@@ -173,9 +173,11 @@ which TV, how it's connected, and which settings work.
 **How the core reads the analogue controls:**
 
 - **Steering** comes from the first of these that is in use: a **paddle**
-  (MiSTer can report a wheel's rotation as a paddle), then the **left stick's
-  left/right axis**, then the **d-pad**, which steers gradually and recentres
-  when released.
+  (MiSTer can report a wheel's rotation as a paddle), then the **left
+  stick's left/right**, then the **right stick's left/right**, then the
+  **d-pad**, which steers gradually and recentres when released. Both sticks
+  ignore a small movement around the centre, so the left stick always wins
+  while it is held.
 - **Both pedals are on one axis: the right stick's up/down.** One direction
   is the accelerator, the other the brake, and the further you push, the
   harder it presses. Which direction is which depends on the controller, so
@@ -184,12 +186,11 @@ which TV, how it's connected, and which settings work.
 - **`Steering`** in the OSD sets how much stick gives full lock: `3/4`,
   `Full`, `5/4` or `Half`.
 
-**With a wheel and pedals:** in MiSTer's controller setup, map the wheel's
-rotation to the **left stick's left/right** (or let MiSTer use it as a
-paddle), and the pedals to the **right stick's up/down**: the accelerator one
-way and the brake the other. If the pedals come out reversed, use `Pedals:
-Swapped`. The core does not read the right stick's left/right, so a wheel
-mapped entirely onto the right stick will not steer.
+**With a wheel and pedals:** MiSTer maps a wheel onto the **right stick**:
+steering on its left/right and the pedals on its up/down, the accelerator
+one way and the brake the other. That works as it is, with no setting to
+change. If the pedals come out reversed, use `Pedals: Swapped`; if the
+steering feels too light or too heavy, try the `Steering` options.
 
 ## Not finished, as of `Model2_20261011.rbf`
 
