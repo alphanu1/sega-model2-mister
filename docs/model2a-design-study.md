@@ -30659,3 +30659,12 @@ RP_ER), tb_m2_cpu_real's IFETCH_PROF build (make prof_m2_cpu_ifetch: every
 fetch-wait cycle booked by phase, every fill timed; M2_IP_OUT / M2_DA_OUT for
 the replay), sim/ifetch/ (MAME trace + taps, conversion, footprint and
 reuse). The traces are ROM-derived and stay outside the repository.
+
+**R817 BUILT.** s1013-s1015 (5504691, R816 only) gave no RBF: Quartus
+internal errors (STA; a fitter segfault) while the R817 agent's replays and
+maps ran beside them -- memory pressure, the standing reading -- and s1015
+missed clk_sys by 1.771. s1016-s1018 = 7932d11 (s1011 + R816 + R817, 80/40):
+s1017 closes, core >= +0.448, hold >= +0.165, HDMI -0.776, 41,498 ALM; RBF
+build/Model2_20261012_s1017_r817.rbf 77dc39cf. On the board from 20:26 with
+Ben's go-ahead, Revision A, 4 h fps/lock watch. s1011 before it: 64 min of
+the watch, no lock, 57.0-57.4 fps at the end.
