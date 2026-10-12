@@ -80,7 +80,7 @@ module m2_span_tex #(
   // R813: SPAN CULL. A span whose pixels are all painted already (FTB) is
   // dropped at the input instead of being walked a group a cycle. CULLG
   // pixels are checked as one (a span's ends are rounded out to them).
-  parameter bit          SPCULL = 1'b1,
+  parameter bit          SPCULL = 1'b0,   // R813: off -- the whole of R813 did not fit (s995-s997); s999 closes without it
   parameter int unsigned CULLG  = 4,
   // R616: SAMPLE EACH GROUP AT ITS CENTRE. One texel serves PIXSTEP pixels;
   // taken at the group's first pixel it lags the rest by up to PIXSTEP-1

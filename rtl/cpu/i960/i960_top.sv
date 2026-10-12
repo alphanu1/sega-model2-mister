@@ -788,7 +788,7 @@ module i960_top (
   // board (R768: the menus' trouble was the capture card, R770), the game
   // now keeps up and the 3D draw is the limit (R780), and its tag RAM was
   // ~264 ALM the texel path needs. The valid-bit-in-tag design stays.
-  i960_icache #(.LINES(32)) u_icache (
+  i960_icache #(.LINES(512)) u_icache (   // R815: 8 KB again -- the game is the limit now (R814)
     .clk(clk), .rst_n(rst_n), .inval(1'b0),
     .req(ic_req), .req_demand(1'b1), .addr(fetch_addr[31:2]), .data(ic_data),
     .valid(ic_valid), .vaddr(ic_vaddr), .busy(ic_busy),

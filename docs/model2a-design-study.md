@@ -30378,3 +30378,28 @@ the limit; now the CPU is, so it is measured again: s1007-s1009 = s1005 with
 LINES 512 (8 KB). m2_cpu_real (boot code, 100k instructions) is 12.03 CPI
 at 32, 128 and 512 lines alike -- the boot's loops fit any of them, so it
 cannot answer this; the board can.
+
+**R815 -- THE 8 KB I-CACHE BACK: R786 WAS RIGHT THEN AND WRONG NOW.** R786
+cut the i960's i-cache 8 KB -> 512 B for the texel path's room, because the
+8 KB cache "changed nothing on the board" -- true while the 3D draw was the
+limit (R780). After R808 the game is the limit (R814), and a third of the
+i960's cycles were instruction-fetch wait. s1009 = s1005 (the why2 build,
+75/37.5) with LINES 512: core >= +0.497, hold >= +0.158, HDMI -0.915; 41,398
+ALM -- the same as the 512 B build (41,283-41,393): R786's "~264 ALM" does
+not hold on this design (the valid-in-tag LUT-RAM, R768). RBF
+build/Model2_20261012_s1009_why8k.rbf 1df24dfa.
+                       attract 512 B / 8 KB     race 512 B / 8 KB
+  game behind           1.3% / 1.2%              15.5% / 1.0%
+  walk behind           0.0% / 0.0%               0.0% / 1.0%
+  new picture          98.7% / 98.8%             84.5% / 98.0%
+  i-fetch wait         33.7% / 31.1%             31.7% / 22.4%
+  data wait            25.7% / 27.4%             30.4% / 37.5%
+    held by the TGP     0.8% / 0.8%               3.2% / 5.0%
+  instructions/vblank  24,905 / 26,335           18,510 / 20,665
+Ben, racing on s1009: "it made a huge difference in game. I would say 99%
+of the time full speed. still not 100 but really good." (Two different
+races, so the per-race numbers are indicative; Ben's judgement agrees.)
+Attract's remaining drops are R814's scene-setup pauses, which a cache does
+not shorten. The CPU's i-fetch wait is still 22% in a race: an agent is
+measuring the miss path in simulation (fill latency, footprint, next-line
+prefetch) -- R816 to follow.

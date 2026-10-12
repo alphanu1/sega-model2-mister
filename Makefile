@@ -1109,7 +1109,7 @@ test_m2_span_tex_ftb: obj_spantex_ftb/Vm2_span_tex
 
 obj_spantex_ftb/Vm2_span_tex: rtl/video/m2_span_tex.sv sim/video/tb_m2_span_tex.cpp
 	$(VERILATOR) --cc --exe --build -j 0 $(VFLAGS) --top-module m2_span_tex --public-flat-rw \
-	  -GPIXSTEP=$(PIXSTEP) -GFTB=1 --Mdir obj_spantex_ftb -o Vm2_span_tex \
+	  -GPIXSTEP=$(PIXSTEP) -GFTB=1 -GSPCULL=1 --Mdir obj_spantex_ftb -o Vm2_span_tex \
 	  -CFLAGS "-O2 -DTB_PIXSTEP=$(PIXSTEP) -DTB_FTB" \
 	  rtl/video/m2_span_tex.sv sim/video/tb_m2_span_tex.cpp
 
