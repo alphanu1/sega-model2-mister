@@ -30357,3 +30357,24 @@ frame is the CPU and the TGP waiting on each other (R770: the i960 held
 more per second; our TGP at CPI 4.9 x 80 MHz is near a real MB86234's one
 instruction a cycle at 16 MHz. Next measurement: the i960's cycles split
 into executing, instruction fetch, data memory, and held on the TGP FIFO.
+
+**R814 v2 -- WHERE THE i960's CYCLES GO.** s1005 (the why build plus 'I'
+{T_FETCH_W + T_FETCH2_W cycles | T_MEM_W cycles} and 'K' {copro_stall |
+geo_push_stall cycles}; 75/37.5; core >= +0.610, hold >= +0.212, HDMI
+-0.809; RBF build/Model2_20261012_s1005_why2.rbf 302aa10b, patch
+why2-r814-7f07bf1.patch). Medians per vblank (651,947 i960 cycles):
+                              attract     race (Ben driving)
+  instruction-fetch wait       33.7%       31.7%
+  data access wait (T_MEM_W)   25.7%       30.4%
+    held by the TGP             0.8%        3.2%
+    held by the geometry push   0.0%        0.0%
+  instructions retired         24,905      18,510
+  game behind (vblanks)         1.3%       15.5%   draw behind 0.0% both
+A third of the CPU's time is waiting on instruction fetch -- ~11 cycles a
+retired instruction -- and the TGP holds it for only 1-3%. R770's "4.8-5.5
+ms on the TGP" is gone with R771-R775. The remaining data wait is the CPU's
+own memory traffic. R786 cut the i-cache 8 KB -> 512 B when the draw was
+the limit; now the CPU is, so it is measured again: s1007-s1009 = s1005 with
+LINES 512 (8 KB). m2_cpu_real (boot code, 100k instructions) is 12.03 CPI
+at 32, 128 and 512 lines alike -- the boot's loops fit any of them, so it
+cannot answer this; the board can.
