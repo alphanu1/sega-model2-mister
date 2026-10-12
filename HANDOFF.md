@@ -9,8 +9,10 @@ drops are scene-setup pauses on the 55.4 s attract loop (CPU flat out, TGP
 idle). R815: the 8 KB i-cache (R768's, cut by R786) costs no ALM here; on
 s1009 the race's late vblanks went 15.5% -> 1.0%; Ben: "99% of the time
 full speed". Committed 5422e84 (LINES 512, and SPCULL default 0 -- R813's
-cull did not fit). BUILDING s1010-s1012 = 5422e84 at 80/40 (release
-candidate: s999 + 8 KB). Agent measuring the fetch miss path in sim
+cull did not fit). READY: s1011 = 5422e84 at 80/40 (release candidate:
+s999 + 8 KB; core >= +0.144, hold >= +0.214, HDMI -0.676; RBF
+build/Model2_20261012_s1011_8k.rbf 3dec0ace). Since: R816 right-stick
+steering (1c63a20), split/merged-set Deluxe MRAs (fe29fb8) -- not in s1011. Agent measuring the fetch miss path in sim
 (sm2-builds/sm2-ifetch-1546abf, R816 draft to come). s999 ran ~19 h with
 no core lock (Ben's frozen view was OBS; board screenshots were live).
 Debug patches: build/worktree_patches/why-r814 / why2-r814 (75/37.5).
