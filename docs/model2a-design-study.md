@@ -30313,3 +30313,19 @@ busy / game late) -- s1001 (7f07bf1 + SPCULL 0 + the 'V' 'D' 'S' records,
 75/37.5; core >= +0.263, hold >= +0.219, HDMI -0.951; RBF
 build/Model2_20261011_s1001_why.rbf 7066d457, patch
 build/worktree_patches/why-r814-7f07bf1.patch).
+
+**R814 -- IN ATTRACT THE DRAW IS NEVER LATE; THE DROPS ARE THE GAME.** s1001
+(the why build, 75/37.5) on the board, Revision A attract, two captures
+(120 s and 300 s, 24,158 vblanks):
+                                     120 s      300 s
+  new picture possible (flipped)     98.9%      98.7%
+  draw behind (game held, R652)       0.0%       0.0%
+  walk behind (no flip, walk busy)    0.0%       0.0%
+  game behind (no flip, walk idle)    1.1%       1.3%
+  draw ms: median / p90 / max        8.1/12.3/16.1   8.1/12.5/16.8
+  SDRAM busy median (p90)            60% (69%)  60% (70%)
+  waits: texel / i960 / geometry     4.2/2.4/7.5%    3.9/2.3/7.2%
+Every draw fits the 17.39 ms vblank even at 75 MHz (0 of 29,870 sampled
+periods over one vblank). So after R808 the attract drops are the GAME --
+the i960 and TGP not finishing a frame -- and R813 could not show there,
+as Ben saw. Race capture to follow (Ben, later).
