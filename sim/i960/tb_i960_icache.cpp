@@ -45,8 +45,16 @@ uint32_t peek(uint32_t a) {
   return (it == mem.end()) ? 0xffffffffu : it->second;   // never zero
 }
 
+// R817: A MISS IS A LINE FETCHED, counted on the bus. With early restart a
+// fetch is answered from its first word and the next sequential fetch, in the
+// same line, is answered by the fill still running -- it waits with bus_req
+// up, which the old "saw the bus while waiting" count booked as a second miss.
+uint32_t last_fill_line = 0xffffffffu;
 void tick() {
-  if (dut->bus_req) { dut->bus_rdata = peek(dut->bus_addr); dut->bus_ack = 1; }
+  if (dut->bus_req) {
+    dut->bus_rdata = peek(dut->bus_addr); dut->bus_ack = 1;
+    if ((dut->bus_addr >> 4) != last_fill_line) { ++misses; last_fill_line = dut->bus_addr >> 4; }
+  }
   else              { dut->bus_ack = 0; }
   dut->clk = 0; dut->eval();
   dut->clk = 1; dut->eval();
@@ -72,7 +80,7 @@ bool fetch(uint32_t a, const char *why) {
     std::printf("STALL fetch addr=%08x (%s) bus_req=%d\n", a, why, dut->bus_req);
     ++fails; return false;
   }
-  if (saw_bus) ++misses;
+  (void)saw_bus;
 
   ++fetches;
   const uint32_t want = peek(a);
@@ -127,8 +135,13 @@ bool abort_case(uint32_t a, uint32_t b, int delay, const char *why) {
 // the line is corrupted, with nothing pointing at the cache.
 bool spec_during_fill(uint32_t line, uint32_t spec, int delay, const char *why) {
   // Demand miss on `line` starts a fill.
+  // R817: with early restart the demand word is answered as it arrives --
+  // possibly before the speculative request below -- so it is watched for
+  // from the first cycle.
+  bool answered = false;
   dut->addr = line >> 2; dut->req = 1; dut->req_demand = 1; tick(); dut->req = 0;
-  for (int i = 0; i < delay; i++) tick();
+  if (dut->valid && (uint32_t(dut->vaddr) << 2) == line) answered = true;
+  for (int i = 0; i < delay; i++) { tick(); if (dut->valid && (uint32_t(dut->vaddr) << 2) == line) answered = true; }
 
   // Speculative request mid-fill. It must not abort the fill, must not rename
   // the answer, and must not leave the line marked valid with partial data.
@@ -136,7 +149,7 @@ bool spec_during_fill(uint32_t line, uint32_t spec, int delay, const char *why) 
   dut->req = 0; dut->req_demand = 1;
 
   int i = 0;
-  for (; i < 200 && !dut->valid; i++) tick();
+  for (; i < 200 && !answered && !dut->valid; i++) tick();
   if (i == 200) {
     std::printf("  STALL   [%s] fill %08x + spec %08x after %d\n",
                 why, line, spec, delay);

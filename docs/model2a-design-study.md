@@ -30426,3 +30426,236 @@ a 452 ms one (26) in the two logs were the race's end and start -- Ben: going
 back to the menu and attract -- scene changes, the same class as R814's
 29-vblank attract pause (CPU-bound setup). The race itself is at the
 arcade's rate for nearly all of its frames.
+
+**R817 -- WHERE THE i960's FETCH WAIT GOES ON THE GAME'S OWN CODE; WHY 8 KB
+MOVED THE RACE AND NOT ATTRACT; HIT UNDER FILL, EARLY RESTART, AND THE
+PREFETCH AFTER A TWO-WORD INSTRUCTION.**
+
+*What was believed.* R814 v2 / R815: a third of the i960's cycles are
+instruction-fetch wait (33.7% attract, 31.7% race); the 8 KB cache took the
+race's late vblanks 15.5% -> 1.0% but moved attract's fetch share only 33.7 ->
+31.1%, so "the fetch wait is not capacity misses of a 512 B cache, or not
+only". R768 (MAME trace): ~80% of misses are fall-through, so next-line
+prefetch was the next lever. m2_cpu_real (boot code) could not answer any of
+it: its loops fit every cache size.
+
+*The telemetry decoder undercounts (verified).* decode_why.py takes medians of
+rates between ADJACENT records and drops pairs with no vblank edge between
+them. The records are not vblank-synchronous (10,667 'V' and 20,258 'P' in
+8,627 vblanks), so 11,629 of 20,256 'P' pairs and 2,100 of 10,667 'I' pairs
+were dropped and the rest span ~0.8 of a vblank: instructions were low by
+~60%, fetch wait by ~20%. Whole-capture totals (last minus first counter over
+the vblanks between), and medians over 30-vblank windows, agree to <2%:
+                           attract 512 B / 8 KB    race 512 B / 8 KB
+  instructions / vblank     63,128 / 66,255          51,658 / 54,205
+  fetch wait                42.2% / 38.9%            40.0% / 29.6%
+    a retired instruction   4.36 / 3.83              5.05 / 3.56 cycles
+  data wait (T_MEM_W)       32.1% / 34.3%            36.6% / 44.5%
+  held by the TGP           2.4% / 3.0%              6.5% / 9.8%
+  CPI over the vblank       10.3 / 9.8               12.6 / 12.0
+(37.5 MHz, 651,947 cycles a vblank; R814 v2's and R815's tables used the
+medians.) The corrected decoder is the same script with rates over >= 30-
+vblank windows.
+
+*How the game's code was run through the real fetch path.* The full-system
+bench never leaves the settings screen (R733), so: MAME 0.289, daytona
+(Revision A, the board's set), cold NVRAM, nine windows of six frames traced
+uncollapsed AND with read/write taps on the i960's space in the same run
+(sim/ifetch/tracetap.lua), so every instruction carries its own loads and
+stores (tapconv.py; the tap stream's instruction sequence equals the trace's,
+645,735 of 645,735 etc. in every window). Attract: frames 1200, 2800, 4200,
+5100, 5900 (17,050-31,000 busy instructions a frame). Race: coin, start, full
+throttle, frames 2000, 2400, 3000, 3600 (38,134-47,652 busy a frame; R768's
+race 47,371). "Busy" = everything but the frame-sync spin (Revision A: ldob
+0x500000 / cmpibe at 0x1394-0x139c, 71-84% of MAME's attract instructions).
+tb_m2_ifetch_replay drives the REAL i960_icache, i960_top's grant, the real
+m2_cpu_bridge (FAST_ACK 0, CC_EN 0, as the board) and m2_sdram_cdc + m2_sdram
+at 40 / 80 / 100 MHz from that stream; only the sequencer is a model of
+i960_top's front end (T_FETCH / T_FETCH_W / T_FETCH2_W / prefetch / T_EXEC /
+the load-store held to its acknowledge). Competing SDRAM traffic: none (c0) or
+ports 2 and 3 asking 40% of controller cycles (c40); the board (60-65% busy,
+R814) sits between the two in every check below.
+The model checked against the REAL i960_top on the same path
+(tb_m2_cpu_real + its retired stream and load/stores fed to the replay):
+                                   real CPU             replay
+  boot 100k, R815 cache            fetch 1.53/insn       1.54     CPI 11.40 / 11.14
+  boot 100k, hit under fill        fetch 0.51            0.51     CPI 10.66 / 10.36
+  3 M (a two-word poll), R815      FW 1.91 FW2 0.83      1.91 0.83 CPI 7.21 / 7.17
+  3 M, + early restart             FW 1.74 FW2 0.83      1.74 0.83 CPI 7.05 / 7.03
+  3 M, + two-word prefetch         FW 0.91 FW2 0.83      0.91 0.83 CPI 6.22 / 6.20
+
+*Footprint (MAME stream, 16-byte lines, demand line changes, verified).*
+Distinct code a frame: attract 22-25 KB (1,400-1,630 lines), race 31-37 KB
+(2,000-2,400). Reuse distance is bimodal: ~45-50% within 64 lines, ~30% at
+128-256 lines (2-4 KB), and 13-15% at 1-4 K lines -- code run once a frame.
+So 16 KB buys almost nothing over 8 KB; only >= 32 KB holds the frame.
+  misses (line changes)    512 B      2 KB      8 KB      32 KB    8 KB 2-way/4-way
+  attract                  47-60%    37-46%    20-24%     8-11%     17-22 / 16-22%
+  race                     56-65%    36-45%    18-22%    10-13%     17-19 / 13-18%
+~80% of misses at every size are line N+1 after N (R768's figure stands).
+
+*Where the fetch wait goes at R815 (8 KB), cycles a busy instruction, 40 MHz
+(c0 / c40, averaged over the windows):*
+                               attract        race
+  busy CPI                   10.03 / 13.34   9.45 / 12.24
+  fetch wait                  3.36 / 4.70    3.12 / 4.28
+    SDRAM (fill's line not
+      in the bridge's d-cache)1.26 / 2.42    1.08 / 2.07
+    hit pipeline (T_FETCH_W
+      after a redirect or a
+      two-word instruction)   0.77 / 0.77    0.87 / 0.87
+    words 2-4 from the line
+      buffer (word-0-first)   0.66 / 0.65    0.56 / 0.56
+    a mispredicted prefetch's
+      fill (the redirect waits
+      for its first word)     0.24 / 0.41    0.22 / 0.38
+    crossings, d-cache, ack,
+      S_DONE                  0.45 / 0.45    0.40 / 0.40
+    behind a load/store       0.00           0.00
+  data (T_MEM_W)              4.34 / 6.31    3.97 / 5.61
+A demand miss: the wanted word 24 cycles after the fill starts at c0, 39 at
+c40 (600 / 975 ns); 80% of i-cache misses also miss the bridge's 16 KB data
+cache and go to the SDRAM -- as two four-word reads, one per half line.
+
+*Why 8 KB moved the race and not attract (inferred from the above and the
+board's totals).* The model's busy CPI falls 11-14% (attract) and 15-18%
+(race) from 512 B to 8 KB (c40 / c0). A race frame's busy work at 512 B is 38-48 k instructions
+x 11.5-14 CPI = 440-660 k cycles -- at the 652 k budget -- so the cut shows as
+frames made (late 15.5% -> 1.0%). Attract's is 17-31 k x 11.6-15 = 200-470 k:
+it fitted already, and the time freed goes into the frame-sync spin. The spin
+is fetch-heavy at any cache size (a two-word ldob and a backward cmpibe,
+2-4 cycles of fetch wait an instruction, c0-c40), so the fetch SHARE barely moves and the
+instructions rise +3,127 a vblank -- all spin. The board's measured share is
+mostly the idle loop's composition, not the work's. (The model's attract
+gain is 21-65 k cycles a frame by scene; the board's +3,127 spin instructions
+a vblank at ~8.5-10 cycles each imply ~27-31 k averaged over the attract loop
+-- the same order, not checked scene by scene.)
+
+*Found: a fall-through fill abandoned every time round a loop (verified).*
+Every accepted one-word instruction prefetches ip+4. When that word starts a
+line the cache lacks and the instruction is a taken branch, the prefetch
+starts a fill; the branch target is a hit; R548's redirect waited for the
+fill's outstanding word and then ABANDONED the fill -- its line never
+installed -- so the next iteration did it again, at any cache size. On the
+real CPU path (boot, 8 KB): 24,692 of 24,730 fills abandoned, 1.52 of 1.53
+fetch-wait cycles an instruction. In the game it is 0.22-0.41 a busy
+instruction, and every iteration of Revision A's frame-sync spin (cmpibe is
+the last word of line 0x1390).
+
+*The changes (i960_icache, i960_top; on by parameter, default on):*
+  * HUF (hit under fill): a request for a line already present is answered
+    during a fill, from the read port the fill does not use; the fill runs on
+    and installs its line; a fill nobody waits for ends without a `valid`
+    (fill_wanted). A request for the fill's own line, or a hit answered under
+    it, supersedes a redirect still waiting for its acknowledge (redir_live).
+  * ER (critical word first, early restart): a fill starts at the word asked
+    for and wraps (fill_cnt counts four); that word is answered as it arrives
+    -- registered (byp_q), `data` = byp_sel ? byp_q : cdata_q -- with the line
+    completing behind it; a request for the line's later words is answered as
+    each arrives.
+  * PF2W (i960_top): when a two-word instruction's displacement lands in
+    T_FETCH2_W, ip+8 is prefetched exactly as a one-word accept prefetches
+    ip+4 (fetch_addr, pf_ip, pf_issued; R812's ic_ok covers it). Two-word
+    instructions are 11-16% of the busy stream and each made the next
+    instruction pay T_FETCH + two T_FETCH_W even on a hit.
+
+*Measured (busy CPI, cycles a busy instruction; c0 / c40; MAME windows
+through the real fetch path):*
+                                attract          race          busy fetch wait (race)
+  R815 (8 KB)                10.03 / 13.34    9.45 / 12.24     3.12 / 4.28
+  + HUF                       9.89 / 13.20    9.32 / 12.10     2.95 / 4.00
+  + HUF + ER                  9.50 / 12.82    8.97 / 11.75     2.62 / 3.73
+  + HUF + ER + PF2W           9.24 / 12.55    8.66 / 11.45     2.30 / 3.41
+     (all three: -7.9% / -5.9% attract, -8.4% / -6.5% race)
+  for comparison:
+  LINES 32 as R786 (512 B)   11.60 / 15.02   11.53 / 14.42     5.27 / 6.76
+  LINES 32 + all three       10.23 / 13.62    9.97 / 12.83     3.66 / 5.13
+  32 KB (2048 lines) + HUF    8.81 / 11.69    8.64 / 11.18     2.28 / 3.03
+Evaluated and NOT kept:
+  * Next-line prefetch in the cache (fill N+1 when a waited-for fill of N
+    completes): fetch wait -1.0 a busy instruction, but CPI only -0.18 / -0.10
+    on top of HUF and ~0 on top of ER -- the bridge takes one transaction at a
+    time, so the speculative line read (two SDRAM reads) delays loads and
+    stores by as much as it saves. Streaming (every completed fill arms the
+    next) is worse than none (+0.3..+1.4 CPI). Patch kept (build/ is not
+    tracked): build/worktree_patches/r817-icache-with-nlp.patch.
+  * A static branch-target prefetch (unconditional and backward branches): a
+    further -0.13 / -0.13 race on top of all three -- model only, an i960_top
+    change for 1.5%.
+  * 2-way 8 KB: 10-18% fewer misses -- a second tag RAM; not built.
+  * 32 KB: -0.8 / -1.0 CPI more, +24 M10K and four times the tag MLAB.
+  * R728's code cache: a second 8 KB holds what the first holds -- the
+    misses left are at reuse distances of 1-4 K lines.
+  * The i-fetch port's SDRAM priority: already first (R766).
+Per busy race frame (47.7 k instructions, c40) that is 584 k -> 546 k cycles of
+the 652 k at 37.5 MHz (695 k at 40).
+
+*Where the rest goes, after all three (race, c0 / c40):* SDRAM 1.10 / 2.13,
+hit pipeline 0.51 / 0.50, line-buffer words 0.27 / 0.27, a mispredicted
+prefetch's fill 0.11 / 0.19, crossings and ack 0.31 / 0.31. The SDRAM part is
+two four-word reads per line, one after the other. Next lever, inferred and
+not built: line reads as one eight-word burst on port 1 (R787's p_long; the
+CPU's port crosses m2_sdram_cdc, which carries one 64-bit half today), worth
+an estimated -0.5..-0.9 CPI at c40.
+
+*Area (quartus_map 17.0, the whole design, f552eaa vs f552eaa + R817):*
+ALMs-needed estimate 40,581 -> 40,562; ALUT 57,771 -> 57,765; registers
+48,832 -> 48,866; block memory bits identical (4,297,979). By entity:
+i960_icache 347 -> 411 ALUT, 138 -> 174 registers; i960_top's own logic 3,803
+-> 3,828 ALUT. cdata still M10K (2048 x 32), ctag still MLAB (512 x 20).
+Calibrated as R798 (+64 ALUT / +194 registers -> +20..+40 ALM placed), +89
+ALUT / +36 registers is an estimated +40..+70 ALM placed: under the ~150 that
+would need a saving, not measured by a fit.
+
+*Timing (inferred, no fit yet).* Everything is on clk_i960 (40 MHz, 25 ns;
+setup slack +2.1..+2.6 ns on s1010-s1012). HUF's huf_hit and redir_live are
+the existing redirect compares (the LUT-RAM tag read, idx/tag == fill) feeding
+flop enables. ER adds a 2-bit compare and, on `data`, one 2:1 mux whose select
+is a register -- one LUT on the cdata_q -> fetch_word -> decode path, the one
+to read in the first fit's clk_i960 report. PF2W adds an input to the
+fetch_addr / pf_ip muxes (ip+8 already exists for ip_next). Nothing on clk_sys
+or clk_mem changes; the bridge is untouched.
+
+*Verified.* Retired-IP hash a95ee045a6c3424b unchanged (tb_m2_cpu_real, 100 k,
+25/40 MHz and 40/80/100); 3 M instructions c6e8c0509640f463 identical with all
+three on and off. test_i960_icache, test_i960_top, _irq, _lat, test_i960_rom,
+test_m2_cpu_real, test_m2_cpu_bridge (925/0), test_m2_cpu_sdram, test_m2_boot
+pass; lint_top clean; lint_idx: nothing in rtl/cpu/i960. NEW test_i960_icache_
+r817: the cache against a bus answering each word after 0..N cycles (N = 0,
+3, 12, 40; a moved address under an outstanding word is a failure) and a
+requester that keeps one current address, accepts only a `valid` naming it
+(R812), abandons only prefetches and never a demand fetch; every `valid` is
+checked against memory, a demand unanswered for 4,000 cycles is a hang; plus
+"a loop's fall-through line is fetched once" (HUF) and "a miss on word 3 is
+answered before its line completes" (ER). 8 KB and 512 B with HUF + ER, HUF
+alone, and R815's cache: 1.6 M answers each, 0 fails. Planted faults caught:
+the stale-redirect fix removed (hangs), early restart on the first word
+instead of the wanted one (wrong words), the hit under fill not renaming
+vaddr (wrong words and the loop hangs), `data` without the bypass (wrong
+words). The stale-redirect fault was real: the first HUF version hung the
+replay on game code (a prefetch of 0x1360 deferred while 0x1900 filled, then
+a demand for 0x1900), which no existing bench reached; without HUF the CPU
+cannot issue a request while a redirect is pending, so R815's cache cannot
+reach it.
+
+tb_i960_icache changed twice for early restart, both in what it observes:
+a miss is now a line fetched on the bus (a sequential fetch answered by the
+fill still running waited with bus_req up and was booked as a miss: 0.750
+"out of bounds"), and the speculative-during-fill case watches for the demand
+word's early answer from the first cycle (it arrives before the speculative
+request: 9 "stalls"). It passes R815's cache, HUF alone, and HUF + ER at 512 B
+and 8 KB (i960_icache's defaults are now HUF 1, ER 1, as i960_top uses them).
+
+*Not established.* That the board shows the gain: the model brackets the
+board's contention between c0 and c40 but its loads are cheaper than the
+board's. Board telemetry will read differently for a reason that is not the
+game: the spin's own fetch wait changes with HUF and PF2W, so attract's
+fetch share is not the measure -- late vblanks in a race are, and busy cycles
+need the IP-tagged sample (R721's 'C') or a spin-excluding counter.
+
+Tools (committed with this): sim/mem/tb_m2_ifetch_replay.cpp +
+m2_ifetch_replay_harness.sv (make replay_m2_ifetch; RP_LINES / RP_HUF /
+RP_ER), tb_m2_cpu_real's IFETCH_PROF build (make prof_m2_cpu_ifetch: every
+fetch-wait cycle booked by phase, every fill timed; M2_IP_OUT / M2_DA_OUT for
+the replay), sim/ifetch/ (MAME trace + taps, conversion, footprint and
+reuse). The traces are ROM-derived and stay outside the repository.
