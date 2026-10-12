@@ -30668,3 +30668,6 @@ s1017 closes, core >= +0.448, hold >= +0.165, HDMI -0.776, 41,498 ALM; RBF
 build/Model2_20261012_s1017_r817.rbf 77dc39cf. On the board from 20:26 with
 Ben's go-ahead, Revision A, 4 h fps/lock watch. s1011 before it: 64 min of
 the watch, no lock, 57.0-57.4 fps at the end.
+s1017: NO LOCK in 240 min of the watch (135 readings, none zero, 103 at
+>= 57 fps, none under 50; attract, unattended). The first long soak of R817's
+fetch changes on the board.

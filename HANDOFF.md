@@ -2,6 +2,10 @@
 
 ## 2026-10-12 (evening): R816 steering, R817 fetch -- building in turn
 
+ON THE BOARD: s1017 = 7932d11 (s1011 + R816 + R817, 80/40), RBF
+build/Model2_20261012_s1017_r817.rbf 77dc39cf -- 240 min attract, no lock.
+To check: a race (vs s1011's 99%), a wheel / pad, longer soaks.
+
 s1011 (8 KB, 80/40) ON THE BOARD: races at the arcade rate ~99% of frames.
 BUILDING s1013-s1015 = 5504691 (s1011 + R816 right-stick steering).
 R817 (9eb2e92, NOT yet built): i960_icache hit under fill (fixes fills
