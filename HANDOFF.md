@@ -1,5 +1,20 @@
 # Handoff
 
+## 2026-10-12 (evening): R816 steering, R817 fetch -- building in turn
+
+s1011 (8 KB, 80/40) ON THE BOARD: races at the arcade rate ~99% of frames.
+BUILDING s1013-s1015 = 5504691 (s1011 + R816 right-stick steering).
+R817 (9eb2e92, NOT yet built): i960_icache hit under fill (fixes fills
+abandoned on every taken branch -- R548's redirect), critical word first
+with early restart, and a prefetch after a two-word instruction (i960_top
+PF2W). Replay of MAME's game code through the real bridge/SDRAM: race CPI
+-6.5..-8.4%; m2_cpu_real 12.03 -> 11.26; test_m2_boot (3M) PASS; ~+40-70
+ALM placed (map). Same state machine as R811/R812's lock: SOAK it long.
+R817 also corrects R814 v2 / R815's tables: decode_why.py's medians read
+instructions ~60% and fetch wait ~20% low (scratchpad decode_why.py is now
+the fixed one; decode_why_old.py kept). Next build after s1013: HEAD with
+R817 at 80/40, then a race + a long soak.
+
 ## 2026-10-12: THE GAME IS THE LIMIT (R814); 8 KB I-CACHE BACK (R815)
 
 R814 (why builds s1001/s1005, 75/37.5): the draw is NEVER behind, in attract
