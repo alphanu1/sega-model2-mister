@@ -32348,3 +32348,11 @@ through the 60 fps capture/OBS path or a display that converts (Ben's ini:
 vsync_adjust=1, so the HDMI output itself follows the core's 57.5 Hz).
 Asked Ben: is the jerk on the directly connected display, and what rate does
 the display report?
+Ben: the display runs at the game's 57.5 Hz with vsync -- the 57.5-on-60
+judder is RULED OUT. And the recomp's renderer derives from MAME, so the
+recomp is not independent evidence: MAME's hardware model is the shared
+suspect. Next hypothesis: the game's own per-frame backdrop scroll is uneven
+(MAME log: 31% of race frames move hscr2 by 0 px) because the game derives
+its motion from a timing input (timer, vblank/frame counter, the 0x98000c
+frame bit, interrupt rate) that MAME -- and this core after it -- models
+differently from the board.
