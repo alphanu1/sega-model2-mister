@@ -198,10 +198,24 @@ reg signed [21:0] acc_l, acc_r;
 // from 1 (where the fetching step left it) to 7 and one more enable -- seven
 // enables after the acknowledge at the least -- so out_l and out_r latch the
 // same sums on the same edges as before.
+// R819 puts a multiply between the two: the acknowledge edge takes the byte
+// and each side's gain, the next edge multiplies, the one after adds. Two
+// edges of the seven, and an enable is never more than one clk, so the sums
+// still close before the wrap reads them.
 reg        ac_v;
 reg  [7:0] ac_byte;
-reg  [6:0] ac_tl;
-reg  [3:0] ac_pan;
+// R819: the level and pan as MAME's chip has them, per side, taken at the
+// acknowledge: a 0.375 dB fraction (ac_g*) and a 6 dB shift (ac_s*).
+reg  [8:0] ac_gl, ac_gr;
+reg  [3:0] ac_sl, ac_sr;
+// R819: the products, one edge after ac_v, accumulated on the edge after that.
+// Two 8 x 10 multiplies a chip; DSP, not logic -- the device has DSP to spare
+// and no ALM (R818).
+reg        pm_v;
+reg signed [17:0] pm_l, pm_r;
+reg  [3:0] pm_sl, pm_sr;
+(* multstyle = "dsp" *) wire signed [17:0] mul_l = $signed(ac_byte) * $signed({1'b0, ac_gl});
+(* multstyle = "dsp" *) wire signed [17:0] mul_r = $signed(ac_byte) * $signed({1'b0, ac_gr});
 
 integer ri;
 integer rj;
@@ -243,34 +257,54 @@ begin
 end
 endfunction
 
-function automatic signed [15:0] pan_sample(
-    input signed [15:0] sample,
-    input [3:0] pan,
-    input is_left
-);
-    reg [3:0] distance;
+// R819: THE LEVEL IS MAME's 0.375 dB STEP, NOT A 6 dB SHIFT.
+//
+// This was `sample >>> (tl >> 4)` and then a pan shift of one bit per two pan
+// steps: total level in 6 dB steps, TRUNCATED, so every TL from 16n to 16n+15
+// played at -6n dB. MAME's gew.cpp has -0.375 dB a step (`level * -24 / 64`)
+// and -3 dB a pan step (`pan * -12 / 4`), multiplied together. Daytona writes
+// its music at TL 30-60 and its speech and engine at TL 0, so the truncation
+// lifted the music by +2.4 to +3.5 dB and left the speech where it was:
+// against MAME, driven by MAME's own register stream, the game-over and
+// course-select speech sat 2.5-3.6 dB too low under the music.
+//
+// The pan is the same scale -- 3 dB is eight TL steps -- so each side is one
+// attenuation in 0.375 dB units, TL + 8 x pan steps, split into a 6 dB shift
+// (a >> 4) and one of sixteen fractions (a & 15), round(256 x 10^(-0.375k/20)).
+// At TL 0, pan 0 the fraction is 256 and the voice is the old sample exactly.
+// The per-octave error against MAME is 0.02 dB (6.0206 vs 6.0), so 0.23 dB at
+// the deepest attenuation used, and each fraction is within 0.03 dB.
+// Mutes are MAME's: pan 8 both sides, pan 7 the left, pan 9 the right.
+function automatic [7:0] att_side(input [6:0] tl, input [3:0] pan, input is_left);
+    reg [2:0] p;
 begin
-    if (pan == 4'h8) begin
-        pan_sample = 16'sd0;
-    end
-    else if (pan == 4'h0) begin
-        pan_sample = sample;
-    end
-    else if (!pan[3]) begin
-        // 1..7 attenuate left; 7 is hard-left mute.
-        if (!is_left) pan_sample = sample;
-        else if (pan == 4'h7) pan_sample = 16'sd0;
-        else pan_sample = sample >>> ((pan + 1'b1) >> 1);
-    end
-    else begin
-        // 9..15 attenuate right using MAME's inverted distance.
-        distance = 4'd0 - pan;
-        if (is_left) pan_sample = sample;
-        else if (distance == 4'h7) pan_sample = 16'sd0;
-        else pan_sample = sample >>> ((distance + 1'b1) >> 1);
-    end
+    if (is_left) p = (pan[3] || pan == 4'h0) ? 3'd0 : pan[2:0];        // 1..7
+    else         p = (!pan[3] || pan == 4'h8) ? 3'd0 : 3'd0 - pan[2:0]; // 16-pan
+    att_side = {1'b0, tl} + {2'b00, p, 3'b000};
 end
 endfunction
+
+function automatic mute_side(input [3:0] pan, input is_left);
+    mute_side = (pan == 4'h8) || (is_left ? (pan == 4'h7) : (pan == 4'h9));
+endfunction
+
+function automatic [8:0] frac_gain(input [3:0] k);
+begin
+    case (k)
+        4'd0:  frac_gain = 9'd256;  4'd1:  frac_gain = 9'd245;
+        4'd2:  frac_gain = 9'd235;  4'd3:  frac_gain = 9'd225;
+        4'd4:  frac_gain = 9'd215;  4'd5:  frac_gain = 9'd206;
+        4'd6:  frac_gain = 9'd198;  4'd7:  frac_gain = 9'd189;
+        4'd8:  frac_gain = 9'd181;  4'd9:  frac_gain = 9'd174;
+        4'd10: frac_gain = 9'd166;  4'd11: frac_gain = 9'd159;
+        4'd12: frac_gain = 9'd152;  4'd13: frac_gain = 9'd146;
+        4'd14: frac_gain = 9'd140;  default: frac_gain = 9'd134;
+    endcase
+end
+endfunction
+
+wire [7:0] att_l = att_side(lvl_cur, pan_cur, 1'b1);
+wire [7:0] att_r = att_side(lvl_cur, pan_cur, 1'b0);
 
 function automatic signed [15:0] clamp16(input signed [21:0] value);
 begin
@@ -306,6 +340,7 @@ always @(posedge clk) begin
         out_r <= 0;
         pv_we <= 1'b0;                    // R738
         ac_v  <= 1'b0;                    // R738
+        pm_v  <= 1'b0;                    // R819
         for (ri = 0; ri < 28; ri = ri + 1) begin
             s_fmt12[ri] <= 0;
             s_active[ri] <= 0;
@@ -320,6 +355,7 @@ always @(posedge clk) begin
         desc_fwd <= 1'b0;                 // R221: the forwarded word lives one cycle
         pv_we    <= 1'b0;                 // R738: one write per step
         ac_v     <= 1'b0;                 // R738: one add per acknowledge
+        pm_v     <= ac_v;                 // R819: and one edge later, the add
         // Register writes are on the Z80 clock domain represented by clk and
         // must not be dropped merely because the audio sample CE is low.
         if (cs && we) begin
@@ -389,28 +425,32 @@ always @(posedge clk) begin
             end
             else begin
                 // R738: taken now, added on the next edge (below).
+                // R819: with each side's fraction and shift, not TL and pan.
                 ac_v    <= 1'b1;
                 ac_byte <= rom_data;
-                ac_tl   <= lvl_cur;
-                ac_pan  <= pan_cur;
+                ac_gl   <= mute_side(pan_cur, 1'b1) ? 9'd0 : frac_gain(att_l[3:0]);
+                ac_gr   <= mute_side(pan_cur, 1'b0) ? 9'd0 : frac_gain(att_r[3:0]);
+                ac_sl   <= att_l[7:4];
+                ac_sr   <= att_r[7:4];
             end
         end
 
+        // MultiPCM 8-bit samples are signed two's-complement, not
+        // unsigned/offset-binary.  Byte 80h therefore means -32768.
+        // R819: byte x fraction is byte x 256 x gain -- the old {byte, 8'h00}
+        // at unity -- so the scale into the accumulator is unchanged.
         if (ac_v) begin                   // R738: the acknowledge one edge ago
-            reg signed [15:0] sample;
-            reg signed [15:0] attenuated;
-            reg signed [15:0] panned_l;
-            reg signed [15:0] panned_r;
-            reg [6:0] tl;
-            // MultiPCM 8-bit samples are signed two's-complement, not
-            // unsigned/offset-binary.  Byte 80h therefore means -32768.
-            sample = {ac_byte, 8'h00};
-            tl = ac_tl;
-            attenuated = sample >>> (tl >> 4);
-            panned_l = pan_sample(attenuated, ac_pan, 1'b1);
-            panned_r = pan_sample(attenuated, ac_pan, 1'b0);
-            acc_l <= acc_l + {{6{panned_l[15]}}, panned_l};
-            acc_r <= acc_r + {{6{panned_r[15]}}, panned_r};
+            pm_l  <= mul_l;
+            pm_r  <= mul_r;
+            pm_sl <= ac_sl;
+            pm_sr <= ac_sr;
+        end
+        if (pm_v) begin                   // R819: the products one edge ago
+            reg signed [17:0] vl, vr;
+            vl = pm_l >>> pm_sl;
+            vr = pm_r >>> pm_sr;
+            acc_l <= acc_l + {{4{vl[17]}}, vl};
+            acc_r <= acc_r + {{4{vr[17]}}, vr};
         end
 
         sample_stb <= 1'b0;

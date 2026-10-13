@@ -264,8 +264,17 @@ module m2_sound_board #(
   // the note here said whoever moved the core clock must restore the ratio;
   // R573 (60) and R580 (70) moved it and did not. At 70 the chip ran at
   // 11.67 MHz: every FM note 40% sharp and the music 40% fast.
-  localparam int unsigned YM_NUM = 25;
-  localparam int unsigned YM_DEN = 3 * TICK_DEN;
+  //
+  // R820: AND 8.333 WAS NEVER THE CHIP's CLOCK. MAME's is 8,000,000 Hz --
+  // `YM3438(config, m_ym, 16_MHz_XTAL / 2)` in segam1audio.cpp, and -listxml
+  // says the same, as does the note above: a divide by six is 8 MHz only from
+  // 48 MHz. From 50 it was 8.333, and R227 kept that as if it were the part's
+  // own clock. The 68000 sequences the music on the
+  // YM's timer B, so every tempo ran 4.2% fast: the sound board, driven by
+  // MAME's own link bytes, played the attract tune's first 426 notes in MAME's
+  // order and 3.8% sooner. 8 / TICK_DEN of clk_sys is 8 MHz at any core clock.
+  localparam int unsigned YM_NUM = 8;
+  localparam int unsigned YM_DEN = TICK_DEN;
   logic [$clog2(YM_DEN):0] ym_acc;
   logic       ym_cen;
   logic       ym_wr_pend, ym_bus_d;
@@ -505,6 +514,17 @@ module m2_sound_board #(
   // values well past 16 bits and its 0.30/0.5 route gains bring them back
   // down, while ours arrive already scaled. Doubling lands at 18,496 against
   // its 17,140, and the saturation below is what keeps that safe.
+  //
+  // R819: THE GAIN IS RIGHT, THE BALANCE ARGUMENT ABOVE IS NOT. A MultiPCM's
+  // output here is its voices summed and shifted right by two, MAME's is the
+  // sum at unity, so x2 is exactly MAME's 0.5 route gain. But Daytona never
+  // voices the YM3438 -- MAME's ymsnd output is zero through 300 s of attract
+  // and a whole game -- and the 5,120 above was jt12 settling in its first
+  // 0.3 s. The music-to-effects balance is set inside the two MultiPCMs, by
+  // their per-voice level (m2_multipcm, R819). Measured against MAME the YM
+  // path here is ~20 dB hot (x2 on jt12, which is +3.8 dB over ymfm per
+  // operator, against MAME's 0.30): inaudible in Daytona, not yet checked in a
+  // game that voices the FM.
   wire signed [17:0] sum_l = {{2{ym_l[15]}}, ym_l}
                            + {{2{p1_l[15]}}, p1_l}
                            + {{2{p2_l[15]}}, p2_l};

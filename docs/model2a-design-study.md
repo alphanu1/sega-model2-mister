@@ -30682,3 +30682,163 @@ cannot isolate one corner's dip; the eye can.
 Ben: the half-second frames going into and out of a race are the game's own
 2D loading screen -- no 3D frames there by design, not a stall to fix. The
 release notes no longer list them.
+
+**R819 -- THE MUSIC WAS NOT QUIET AGAINST MAME; THE SPEECH WAS, BY 3-4 dB,
+AND THE MULTIPCM's 6 dB LEVEL STEPS WERE WHY.** R703 item 3: "the background
+music and the game-over samples are too quiet". R703's first reading put the
+suspect inside m2_multipcm (level, pan law or envelope) and not in the mix.
+That was the right place; half of the complaint reproduces against MAME and
+half does not.
+
+THE ORACLE, PER CHIP. MAME 0.289's Lua sound hook gives each device's own
+output before the route gains. sim/sound/mame_m2_sound_levels.lua captures it,
+with every write the sound 68000 makes to the MultiPCMs and the YM and the
+link bytes, over a 200 s game (three coins, start, defaults, no driving: the
+race times out into RESULTS / GAME OVER) and 300 s of attract:
+
+    MAME, dBFS RMS (pcm1 / pcm2 / ym)      attract      race 50-110 s   GAME OVER 120-122 s
+    pcm1  (music)                          -15.9        -20.7           -24.1
+    pcm2  (engine, effects, speech)        silent       -8.2 (2.7% clamped)  -7.5 (6% clamped)
+    ym3438                                 0            0               0
+
+VERIFIED: DAYTONA NEVER VOICES THE YM3438. Its output is exactly zero for all
+500 s; the boot sets every operator to TL 127, and from then on the 68000
+writes the chip ~1,700 times a second, reloading timer B, which paces its
+sequencer. The music is MultiPCM 1 (twenty-odd voices at TL 30-60); the
+engine, effects and speech are MultiPCM 2, keyed at TL 0 (the engine's TL is
+then rewritten ~3,200 times a second, mostly 0-24, with interpolation).
+The game-over words are one sample keyed on TWELVE voices at once, four
+centre, four hard left, four hard right (pcm2 samples 122 then 136); the
+course-select speech is one voice a side, also at TL 0.
+
+A MODEL OF THE REFERENCE, CHECKED AGAINST IT. A C++ port of gew.cpp +
+multipcm.cpp driven by the captured writes reproduces MAME's chip output to
+within 0.03 dB in every window (pcm1 0-200 s -17.58 / -17.58; pcm2 race -8.18
+/ -8.17), with switches for each approximation the RTL makes. Our RTL, driven
+by the same writes, equals that model with all the switches on, -12.04 dB
+(the chip's >> 2), over all 300 s of attract (-25.59 against -25.54). What
+each approximation is worth, on the mean level (verified, model):
+
+                                    pcm1 race    pcm2 race
+    TL as >> (tl >> 4), truncated   +3.47 dB     +2.0 dB
+    no envelope (attack/decay/rel.) -0.07        +0.02
+    pan 6 dB per 2 steps            0.00         +0.01
+    nearest sample, no interp.      -0.03        +0.14
+    no LFO; no TL interpolation     0.00         0.00
+
+So the one approximation that moves level is the total level. MAME's is 0.375
+dB a step and 3 dB a pan step; ours was 6 dB a step, rounded towards loud, so
+TL 16n..16n+15 all played at -6n dB -- up to 5.6 dB hot. The music lives at
+TL 30-60 and got +3.5 dB in a race; the engine and effects, TL 0-24, got
++2.0; the speech, at TL 0, got nothing. Against MAME the speech fell under the
+music, and the music rose slightly over the effects.
+
+tb_m2_mpcm_level part C (the RTL itself on MAME's register stream, 2 s windows,
+0-130 s, ours clamped to one voice as MAME's stream is; VERIFIED):
+
+                                    before (6 dB TL)          after
+    pcm1 against MAME               mean +3.29, worst +4.96   mean -0.09, worst +0.83
+    pcm2 against MAME               mean +1.94, worst +5.73   mean +0.21, worst -1.03
+    pcm2 - pcm1 against MAME        mean -1.54, worst -4.56   mean +0.33, worst -1.11
+    GAME OVER, speech over music    +12.3 dB (MAME +16.5)     +16.6
+    course select, 22-40 s          2.4-3.4 dB under MAME     0.2-1.1 over
+
+THE FIX (m2_multipcm, THIRD_PARTY.md): each side is one attenuation in 0.375
+dB units, TL + 8 x pan step, split into a 6 dB shift and one of sixteen
+fractions round(256 x 10^(-0.375k/20)) -- 0.03 dB from exact; 0.02 dB an
+octave from MAME's 6.0, so 0.23 dB at the deepest attenuation used. An 8 x 10
+multiply per side on the fetched byte, `multstyle = "dsp"`; one more register
+stage between multiply and add (two edges of the seven R738 proved). Unity is
+the old {byte, 8'h00} exactly; MAME's mutes kept. Part A keys a synthetic
+square wave (no ROM) at TL 0..127 and every pan: 352 checks, 0 off MAME's
+formula, worst -0.36 dB at TL 100 pan 5 (19 LSB); the old law fails 292 of
+them, worst +5.62 dB at TL 15. Part B keys 1..28 voices at TL 0: linear to
+four voices (32,512), then saturates at 32,767 / -32,768 on every count to 28
+with exactly 20 sign changes in 640 samples -- no wrap.
+
+THE BACKGROUND MUSIC: NOT REPRODUCED, AND THIS MOVES IT THE OTHER WAY. In a
+race MAME puts the effects 12.7 dB over the music. Our board, as built, had
+them 0.4 dB under that (the music a little hot) and now has them 0.6 dB over
+(0.3 with MAME's chip clamp applied): the music drops ~1 dB against the engine
+with this change, to within 0.6 dB of MAME. At GAME OVER the speech goes from
+3.0 dB under MAME's balance to 1.3 dB over it. If the race music still sounds
+quiet on the board, the cause is not a difference from MAME in the sound
+board's computation, which part C covers end to end, and nothing here is an
+oracle for changing it. (OPTION, not taken: clamping each chip's output at one
+full-scale voice, as MAME's stream does, would put the race within 0.3 dB and
+GAME OVER at parity -- the speech 1.3 dB quieter than this change leaves it --
+for a compare in clamp16 and no other cost.)
+
+THE MIX AND CLIPPING (verified, final mix sat16(2 x (pcm1 + pcm2)) against
+MAME's 0.5 + 0.5): the saturation removes at most 0.13 dB of RMS anywhere;
+clipped samples before / after: race 0.10% / 0.03%, race end 0.34 / 0.08,
+GAME OVER 0.38 / 0.37, its tail 0.15 / 0.15 -- nothing new clips. The speech
+still sums past full scale (pre-saturation peak 58,536); MAME clamps the same
+speech harder, at the chip (6% of its samples). Ours clamps a chip at four
+voices and the mix at two; MAME clamps a chip at one. Kept: the firmware
+stacking twelve voices argues the silicon had headroom (INFERRED), and the
+difference is +0.3-1.4 dB on stacked pcm2 content only.
+
+R267, CORRECTED. Its "FM peaks at 5,120" was jt12 settling in the first 0.3 s
+of boot (MAME's own YM writes replayed into jt12: 5,120 then zero); the FM is
+silent in Daytona, and comparing that transient's peak with the 0.30 : 0.5
+route gains was not a balance measurement. Its x2 is right for another reason:
+our chip is MAME's / 4, so x2 is MAME's 0.5. ALSO VERIFIED, NOT CHANGED: the
+YM path is ~20 dB hot against MAME -- one operator at TL 0 is 9,872 peak /
+5,951 RMS from jt12 and 5,461 / 3,852 from ymfm (MAME, Lua-written patch), and
+the board mixes jt12 at 2 where MAME mixes ymfm at 0.30. Silent in Daytona;
+it matters to any game that voices the FM (Model 1's notes already ask for
+the YM at MAME's 0.30, on the assumption that jt12 and ymfm agree; they
+differ by 3.8 dB RMS a voice).
+
+ALSO VERIFIED, NOT CHANGED: the sound 68000 reads 0xC00001 bit 0 in its
+note-on path (`btst #0, $c00001` at 0x9CA) to choose one of two velocity
+curves. MAME maps nothing there and reads 0x00; our board answers 0xFFFF (the
+unwritten-memory rule) and so takes the other curve. Driven by MAME's link
+bytes the board plays the attract tune's first 426 notes in MAME's order on
+the same samples, with soft notes 1-5 TL steps apart. Measured by forcing the
+read to 0xFF in MAME: music +0.03 to +0.32 dB, effects within 0.06. Which value
+the PCB returns (a jumper?) is not known; MAME is not an oracle for an
+unmapped address.
+
+MODEL 1: tools/model1-ref @ 0b5d04f carries the same m2_multipcm and
+m2_sound_board (copied from here), so the same TL law. Its docs record a 6 dB
+overall shortfall (>> 2 against 0.5) fixed long ago and no music/speech
+balance complaint; its Virtua Racing music is FM, which is where its YM-gain
+note applies. No independent oracle for this from Model 1.
+
+AREA (INFERRED, not mapped -- Quartus was in use): per chip, two 8 x 10
+multiplies in one DSP block (18 x 18 mode), 16-entry fraction tables, two 8-bit
+attenuation adders, two 18-bit shifters by 0..11 replacing a 16-bit shifter by
+0..7 and two pan shifters, ~40 more flip-flops: about +10 to +40 ALM a chip,
++20 to +80 in all, and +2 DSP (87 -> 89 of 112). If Quartus builds the
+multiplies in logic instead it is ~+350 ALM, which does not fit (412 free at
+s1017): the map must confirm 2 DSP. NEEDS: quartus_map --analyze_file on
+m2_multipcm.sv and m2_sound_board.sv, a map for the DSP count and ALM, then a
+fit. lint_top clean; make lint_idx: the same 25 pre-existing findings in these
+two files, none new; test_m2_sndboard, test_m2_sndlink, test_fx68k,
+test_m2_mpcm_level PASS.
+
+Not built, each under 0.2 dB of level on Daytona: the envelope, LFOs, TL
+interpolation (reg 5 bit 0), linear interpolation between samples.
+
+**R820 -- THE SOUND BOARD's MUSIC RAN 4% FAST: THE YM3438 WAS AT 8.333 MHz,
+NOT 8.** MAME: `YM3438(config, m_ym, 16_MHz_XTAL / 2)` in segam1audio.cpp;
+-listxml clock="8000000". m2_sound_board's first version said so ("48/8 is six
+exactly") and used /6 -- right only at 48 MHz. At 50 it was 8.333, and R227
+carried 8.333 forward as the part's own clock ("8.333 MHz at any core clock"),
+as did R680. The 68000 sequences the music on the YM's timer B, so every
+tempo was 4.2% fast. VERIFIED in simulation: the whole sound board (fx68k,
+jt12, both MultiPCMs, cache, rate stage) driven by MAME's own link bytes at
+MAME's times played the attract tune's first 426 key-ons in MAME's exact order
+of samples, 3.8% sooner (18.61 s against MAME's 19.32 s). Now YM_NUM / YM_DEN
+= 8 / TICK_DEN: 8 MHz at any core clock. After, same bench, 12 s: 133 of 133
+key-ons in MAME's order, 11.933 s against MAME's 11.923 -- tempo 0.999 of
+MAME's (VERIFIED). The FM's pitch moves by the same 4% where a game voices it
+(not Daytona). Area: the accumulator loses a bit (240 -> 80), ~0 ALM.
+
+BOTH, ON THE WHOLE BOARD (verified, the same full-board bench, attract
+3-11.5 s): music -16.16 dBFS against MAME's -16.11 (x4, MAME's units); the
+board's mix -22.18 dBFS against MAME's speaker -22.13, peak 16,070 against
+15,190. Before both changes the same board was +3.1 to +3.8 dB on the music
+and 3.8% fast.

@@ -160,12 +160,31 @@ bypassed, and sample latencies of 1, 6 and 60 cycles, and over 150 M cycles at
 bench's own checks still pass; a mutant in the loop wrap changes only the
 150 M-cycle hash, so that run is the one that reaches a sample loop.
 
+**CHANGED (R819, 2026-10-13): the total level and pan are MAME's, not shifts.**
+Upstream applied TL as `sample >>> (tl >> 4)` (6 dB steps, truncated, so TL
+16n..16n+15 all played at -6n dB) and pan as one more shift per two pan steps.
+MAME's `gew.cpp` has 0.375 dB per TL step and 3 dB per pan step. Each side is
+now one attenuation in 0.375 dB units, TL + 8 x pan, split into a 6 dB shift
+and one of sixteen fractions (a 16 x 9-bit table, within 0.03 dB of
+10^(-0.375k/20)), applied as an 8 x 10 multiply per side on the fetched byte:
+`pan_sample()` is gone, `ac_tl`/`ac_pan` became each side's fraction and shift,
+and one more register stage (`pm_*`) sits between the multiply and the add --
+two edges of the seven the R738 note proves are there. Unity (TL 0, pan 0) is
+the old `{byte, 8'h00}` exactly; MAME's mutes (pan 8; 7 left; 9 right) kept.
+Checked by `tb_m2_mpcm_level`: every TL and every pan against MAME's formula,
+28 voices saturating without wrapping, and MAME's own register stream.
+Not changed: the envelope, the LFOs, TL interpolation (reg 5 bit 0) and linear
+interpolation between samples, all still absent; each measured at under 0.2 dB
+of level on Daytona (R819).
+
 ### jotego/jt12 — GPL-3.0
 *IN USE 2026-08-29 · `rtl/sound/jt12/` @ **`4cf1c5b`** · UNMODIFIED*
 
 The YM3438 (OPN2C) on the sound board, at MAME's own figure of 8,000,000 Hz —
 which divides 48 MHz by exactly six, so it takes a counter rather than the phase
-accumulator the 10 MHz 68000 needs. Copyright Jose Tejada Gomez; GPL-3 to GPL-3,
+accumulator the 10 MHz 68000 needs. (Since the core left 48 MHz it has been an
+accumulator, and until R820 it ran at 8.333 MHz -- a /6 of 50 kept as if it
+were the part's clock; it is 8 / TICK_DEN of clk_sys now, 8 MHz exactly.) Copyright Jose Tejada Gomez; GPL-3 to GPL-3,
 so reuse is direct.
 
 `cfg/jt12.yaml` declares `hdl/*.v` plus `hdl/adpcm/*.v` — 57 files. The ADPCM
