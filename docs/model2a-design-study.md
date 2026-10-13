@@ -32182,3 +32182,9 @@ departure from what the silicon computes, to be measured against MAME's
 choice and recorded as a decision if taken -- and skip the level+1 blend
 (nearest level + the existing bilinear) unless measurement says it is
 needed. An agent is measuring and designing it.
+
+**R825 FITTED.** s1039-s1041 = ee636e1 (s1035 + the pipelined ring, LB_RING
+1, PCM_SHARED 0), 80/40: all three close every core clock -- clk_mem no longer
+fails (R823's -2.6 ns). s1041: clk_sys +0.029, clk_mem +0.208, clk_i960
++1.697, holds >= +0.240, HDMI -0.576; 41,360 ALM. RBF
+build/Model2_20261013_s1041_ring.rbf 38d4837a. Not yet on the board.
