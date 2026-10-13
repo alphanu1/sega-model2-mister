@@ -33499,3 +33499,8 @@ dimension, a texture the game never mips, or mirror/wrap/sheet handling at a
 level). Screenshot sm2-builds/mipmaps/board/s1068_sharp_rails_white.png.
 Also (Ben, s1068 mip on): the sky reflection on the car windows breaks --
 corrected: ONLY on the car select screen; in game it is fine. Same investigation as the rails.
+R826_STEP BUILT: s1069-s1071 = d9f52c3 + MIP 1 (menu) + R826_STEP, depth 2
+(mip-step-on.patch): s1070 closes, clk_sys +0.032, holds >= +0.225, HDMI
+-0.580; 41,413 ALM; s1069 clk_mem -0.034, s1071 did not route. RBF
+build/Model2_20261014_s1070_step.rbf. Has the s1068 mip fetch fault (rails,
+car-select reflection) -- for the alignment check with Mip-mapping Off.
