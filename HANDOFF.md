@@ -2,6 +2,9 @@
 
 ## 2026-10-13 (later): BRANCH headroom
 
+DECISION: audio filter back LAST, only if room remains (Ben). R821 shared
+MultiPCM passed on the board (s1037) and is on by default (de9796c).
+
 DECISIONS (Ben): R813's span cull is paid for by R818 (+66 vs -227 est) --
 next after the audio build, not yet on. Audio filter back (~+700 est) needs
 the FP32 FPU or a shared MultiPCM -- no action. NOW: testing one MultiPCM

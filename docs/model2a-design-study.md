@@ -32166,3 +32166,6 @@ R821 ON THE BOARD: Ben A/B'd s1037 (shared) against s1035 (two engines): the
 right-channel-only voices are the same on both -- "it's correct" (the game's
 own pan) -- and the shared engine "seems good". PCM_SHARED is now 1 in
 Model2.sv. Fit (s1037): -327..-382 ALM placed, -2 DSP, every clock closed.
+DECISION (Ben, 2026-10-13): the framework audio filter (R788) waits until
+everything else is done -- added back at the end, if the room is still
+there. The room freed by R818 and R821 is not reserved for it.
