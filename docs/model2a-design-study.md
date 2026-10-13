@@ -31877,3 +31877,9 @@ scroll quantised (a lost fine-scroll bit); (3) a scroll register read at the
 wrong time or from the wrong word (R823's agent found hscr_r reading the
 previous sequencer address -- zero on its dumps). An agent is comparing
 against MAME frame by frame.
+R826 evidence (Ben): his Windows static recompilation of Daytona jerks the
+same way -- so not our framebuffer path -- and the REAL ARCADE IS SMOOTH. A
+hardware behaviour neither models (likely inherited from MAME's segaic24 /
+model2 video model): the agent now works from the game's own tilemap/scroll
+write log (with beam position) during a slide, for the latch or per-line
+behaviour that would make the displayed motion smooth.
