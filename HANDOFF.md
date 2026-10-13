@@ -1,5 +1,15 @@
 # Handoff
 
+## 2026-10-13 (later): BRANCH headroom
+
+Released Model2_20261013 (s1017) is on main (PRs #5, #6). New branch
+`headroom` from 8172b41. In flight: (1) an area / M10K audit
+(sm2-builds/sm2-area-8172b41, R818 draft) -- ALM 99%, M10K 553/553, bits
+76% -- to pay for the audio filter, tile overruns (char cache), R813's cull,
+eventually mip (R665); (2) the quiet music / game-over speech against MAME
+(sm2-builds/sm2-audio-8172b41, R819 draft). Wheel steering (R816) still
+untested on a real wheel.
+
 ## 2026-10-13: RELEASED Model2_20261013.rbf = s1017 (7932d11)
 
 releases/: Model2_20261013.rbf (77dc39cf90c61c6ea2538b3b5f2f7b79), the
