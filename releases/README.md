@@ -56,11 +56,6 @@ lit polygons over the 2D layers, with sound.
 | Attract mode | **57**, solid |
 | In a race | **57**: 99% of frames on time, and no slowdown seen in testing, including the heaviest corners |
 
-The game pauses briefly at a few scene changes: going into and out of a
-race, and a couple of points in the attract loop. That is the main CPU
-setting up the next scene. The real board pauses there too, though for
-less time.
-
 - **The whole board is in the FPGA:** the i960 main CPU, the TGP geometry
   coprocessor and its microcode, the geometrizer, a hardware 3D renderer, the
   2D tilemap layers, the I/O board, and the sound board — its own 68000, the
@@ -217,8 +212,6 @@ steering feels too light or too heavy, try the `Steering` options.
 This list describes the RBF named above. **The heading carries the RBF's name so
 that if the two disagree, you trust neither and check.**
 
-- **Brief pauses at scene changes**, about half a second going into and
-  out of a race. See *What this build does*.
 - **Background music and the game-over speech are too quiet** against the
   rest of the sound.
 - **No mip-mapping**, so distant textures shimmer.
