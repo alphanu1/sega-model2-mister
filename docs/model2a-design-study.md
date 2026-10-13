@@ -32799,3 +32799,10 @@ FP; e.g. at the zero crossing of the slide angle) that MAME emulates wrongly
 and this core reproduces. An agent is tracing it. Smoothing the 2D scroll in
 the display was considered and rejected: it would make the backdrop lag the
 3D on every frame.
+
+**R828 FITTED.** s1048-s1050 (662002b + MIP 1, mip-on.patch) missed narrowly
+(clk_mem -0.031 in the SDRAM arbiter; clk_sys -0.344 fx68k -> the shared
+MultiPCM's key_wait; -0.334 in the fill's oz normaliser). s1051-s1053: s1052
+closes, clk_sys +0.041, holds >= +0.240, HDMI -0.106; 41,352 ALM. RBF
+build/Model2_20261013_s1052_mip.rbf. Contents: ring + shared MultiPCM + MIP
+(R826 off, no volume). Not yet on the board.
