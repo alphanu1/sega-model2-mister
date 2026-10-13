@@ -30679,3 +30679,6 @@ s1011 -- that pause is not shortened by R817, so it is not fetch-bound).
 Ben: "I did not visually see or feel a slowdown, compared to s1011, where I
 did see and feel a slowdown on one corner every time." The per-second log
 cannot isolate one corner's dip; the eye can.
+Ben: the half-second frames going into and out of a race are the game's own
+2D loading screen -- no 3D frames there by design, not a stall to fix. The
+release notes no longer list them.

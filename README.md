@@ -35,13 +35,11 @@ README with the ROMs you need, the settings, and what is not finished.
 | **Sound board** | Working on hardware — the board's own 68000 (fx68k), its FM (jt12) and its MultiPCM samples. |
 | **TGP coprocessor** | Implemented. The MB86233 runs, and Daytona's 2,024-word microcode uploads and executes — verified on hardware, not only in simulation. The microcode is **not a separate download**: it lives inside the game's own data ROM and `tools/extract_tgp_microcode.py` locates it. |
 | **3D renderer** | **Working on hardware.** Display-list walker, geometry (transform, lighting, clipping, projection), quad store and a textured rasteriser drawing **front to back** into a **DDR3 framebuffer**, shown only when a frame is complete. Checked against MAME frame by frame in simulation, and by eye on the board. |
-| **Speed** | With `Draw method: Double Buffered` (the default) and `Texel step 1`: **57 frames a second** of 57.5 in attract and in a race, 99% of frames on time, with brief pauses only at scene changes. The main CPU now sets the pace, not the 3D (design study R814-R817). |
+| **Speed** | With `Draw method: Double Buffered` (the default) and `Texel step 1`: **57 frames a second** of 57.5 in attract and in a race, 99% of frames on time. The main CPU now sets the pace, not the 3D (design study R814-R817). |
 | **Video** | Native 24 kHz, and 15 kHz interlaced for CRTs, confirmed on a set. `[15kHz CRT]` MRAs start the core in 15 kHz. |
 
 ### What is open
 
-- **Brief pauses at scene changes** (into and out of a race): the main CPU
-  setting up the next scene (R814).
 - **Background music and the game-over speech** are too quiet.
 - **No mip-mapping**, so distant textures shimmer.
 
