@@ -2,7 +2,8 @@
 
 ## 2026-10-13 (later): BRANCH headroom
 
-DECISION: audio filter back LAST, only if room remains (Ben). R821 shared
+DECISION: audio filter back LAST, only if room remains (Ben). Reduced FPU
+(FP_EXT 0, ~-1,000..-1,250 placed, R818) = LAST RESORT, not started. R821 shared
 MultiPCM passed on the board (s1037) and is on by default (de9796c).
 
 DECISIONS (Ben): R813's span cull is paid for by R818 (+66 vs -227 est) --

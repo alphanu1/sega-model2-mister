@@ -32188,3 +32188,6 @@ needed. An agent is measuring and designing it.
 fails (R823's -2.6 ns). s1041: clk_sys +0.029, clk_mem +0.208, clk_i960
 +1.697, holds >= +0.240, HDMI -0.576; 41,360 ALM. RBF
 build/Model2_20261013_s1041_ring.rbf 38d4837a. Not yet on the board.
+DECISION (Ben, 2026-10-13): the reduced FPU (FP_EXT 0, ~-1,000..-1,250 ALM
+placed, R818) is the LAST RESORT -- not started; used only if nothing else
+can pay for a wanted feature. Its evidence and requirements stand above.
