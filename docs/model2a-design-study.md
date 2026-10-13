@@ -30673,3 +30673,9 @@ s1017: NO LOCK in 240 min of the watch (135 readings, none zero, 103 at
 fetch changes on the board.
 s1017 at 07:43 the next morning: ~11 h 17 min from load, still 57.6 fps,
 every 3D frame in one vblank (m2-fps.py); Ben: "still running over 7 hours".
+s1017 race (Ben driving, ~11.5 h after load): m2-fps.py 119 s, mean 56.8,
+99% of frames in one vblank, the race-start frame 452 ms (26 vblanks, as
+s1011 -- that pause is not shortened by R817, so it is not fetch-bound).
+Ben: "I did not visually see or feel a slowdown, compared to s1011, where I
+did see and feel a slowdown on one corner every time." The per-second log
+cannot isolate one corner's dip; the eye can.
