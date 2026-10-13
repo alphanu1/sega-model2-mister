@@ -32191,3 +32191,149 @@ build/Model2_20261013_s1041_ring.rbf 38d4837a. Not yet on the board.
 DECISION (Ben, 2026-10-13): the reduced FPU (FP_EXT 0, ~-1,000..-1,250 ALM
 placed, R818) is the LAST RESORT -- not started; used only if nothing else
 can pay for a wanted feature. Its evidence and requirements stand above.
+
+**R826 -- THE JERKY BACKGROUND IS THE 2D AND THE 3D SHOWING DIFFERENT GAME
+FRAMES. The game writes the backdrop's scroll for the list it flipped TWO
+iterations earlier, which is right only if a list reaches the screen two
+frames after its flip. MAME shows it one frame after (3D a frame early, every
+frame); this core shows it two or three after, and in the race, where the
+board runs the game at ~30 Hz, about a third of the frames show the 3D a game
+step ahead of the 2D, alternating. Fix built behind R826_SYNC (default off),
+not fitted.**
+
+Ben (long standing): the background jerks when sliding and turning; the same
+on the straight in a slide. Then: his Windows static recompilation of Daytona
+jerks the same way, and the real arcade is smooth.
+
+WHAT THE BACKGROUND IS (MAME 0.289, Revision A, headless, Lua
+sim/video/mame_m2_scrlog.lua; race driven at full lock left/right):
+  * Tilemap 2: pair 2/3 in window mode 1, ctrl 0x5006 = 0x2012-0x22xx, so
+    v = (-ctrl) & 0x1ff >= 384 and map 2 alone covers the screen -- the sky
+    and the mountains. Its horizontal scroll is 0x5002 (hscr2), in whole
+    pixels, written once a frame. Pair 0/1 (the HUD) is window mode 2,
+    ctrl 0x4000. Per-line H tables: only map 0's (56 words a frame, lines
+    184-239, the banner); none for the backdrop.
+
+VERIFIED (MAME):
+  * Every scroll write in a race is in vblank: 14,537 writes at lines 384-413
+    (6,888 at 385), 12 in the visible area, all at the race's set-up (f1854).
+    8 words a frame, every frame. Not mid-frame, no per-line scroll, no fine
+    bits, no 30 Hz alternation: candidates (a), (b), (d), (e) of the open
+    entry are out.
+  * The list flip (0x803008) once a frame in the race, lines 122-187
+    (median 145): 60 Hz in MAME.
+  * hscr2 per frame over 1,501 race frames: step 0 on 31%, 1-9 px on 59%,
+    10+ on 10%. Normal cornering is smooth (e.g. f2590-2700: 7,7,7,4,4,5,6,
+    ... 2,2,2). The big steps are spins and the game's own SHAKE: wall
+    scrapes put hscr0 through 0x0010, 0, 0xfff0, 0 (the HUD shaken +-16 px,
+    period 4 frames) and hscr2 through a +-8 period-4 wobble on its ramp
+    (+13,+13,-3,-3); repeated bumps give a decaying 12-frame pattern
+    (8,-7,-4,8,3,-5,-2,2,2,-2,-1,1).
+  * The 3D shakes too, and ONE FRAME EARLIER. Snapshots of the same frames
+    (r826_shift.py, best integer shift per frame of a region): the 3D
+    grandstand/pits against the tilemap mountains, correlation of the 3D's
+    motion at frame t with the 2D's at t + lag:
+        f2871-2929 (bumps)        lag +1: 0.991   lag 0: -0.25   lag +2: -0.17
+        f2796-2829 (wall scrape)  lag +1: 0.981   lag 0: +0.04   lag +2: -0.02
+    The 12-frame pattern rules out lag -3 (0.51). The motion also stops a
+    frame earlier in the 3D (f2829) than in the 2D (f2830). So in MAME the
+    backdrop moves AGAINST the scene by the shake every frame (e.g. -13, +3,
+    +14, -2 px) and by the change of the turn rate in a slide.
+  * Why MAME is a frame early (source): screen_vblank runs geo_parse at
+    vblank START (model2.cpp:2420), and with VIDEO_UPDATE_AFTER_VBLANK
+    (model2.cpp:2517, screen.cpp vblank_end) the frame is composited at
+    vblank END -- the list flipped in frame F with the scroll written in the
+    vblank after F, shown as frame F+1. No pipeline for the 3D at all.
+
+INFERRED (from the above and Ben's "the arcade is smooth"):
+  * The game pairs list k with the scroll of iteration k+2. The scroll for
+    list k cannot be shown before frame F+2 (it is written in the vblank
+    after F+1), so on the board a list is shown two frames after its flip:
+    flip in F, geometry and drawing in F+1, the swap at that vblank. The
+    other way round -- a tile chip latching late -- would make MAME's 2D
+    later still, not earlier. The recompilation shares MAME's zero-frame 3D
+    (not checked: it is Ben's code) and so MAME's one-frame lead.
+  * Nothing here is a MAME cycle count: the evidence is the game's own
+    pairing of what it writes, and where MAME composites.
+
+THIS CORE (RTL and benches; the board not measured):
+  * 2D: m2_video reads the eight words from tile RAM a line or three ahead
+    of the beam, so a vblank write is on screen from the next frame.
+  * 3D: m2_geo "After flip" (trig_after = frame_pend && flip_seen) walks at
+    the first vblank after the flip -- OR AT THE FLIP ITSELF when a vblank
+    has passed with no flip: frame_pend is set by every vblank and cleared
+    only by a walk. tb_m2_geo (new R826 test): vblank with no flip, then a
+    mid-frame flip -> the walk starts at the flip. m2_raster3d swaps a
+    P_READY list in only at a frame_start and publishes the draw at the
+    frame_start after it (scratch FB_DDR3 bench: list complete -> on the
+    beam two frame_starts later; show_tag below moved with it).
+  * So: lists every frame (60) -- shown at flip + 3, the 2D one game frame
+    AHEAD of the 3D on every frame. Lists every second frame (Daytona's race
+    on the board, R763: 28.4-28.7 lists/s) -- the game flips in the second
+    frame of its iteration, the middle vblank found no flip, the walk starts
+    at the flip; when walk + sort end before the next vblank the list is
+    shown one vblank early, with the scroll of the iteration before its own,
+    then with its own: misaligned, then aligned, for every such list.
+  * Event model of exactly these rules (scratch, not committed; board inputs:
+    walk 0-0.6 frame (R763 median 0-6 ms, p90 10-12), draw 0.5-1.02 frame
+    (p90 15-17 ms of 17.4), flip anywhere in the iteration's last frame),
+    share of frames whose 2D is the iteration written for the 3D shown, and
+    changes of slip per 1,000 frames (each change is a jump of one game step
+    of the backdrop against the scene):
+                        60 Hz        30 Hz        30 + 2% 3-frame   15% 1-frame
+      MAME              0  (-1 all)  0            0                 0
+      board-as-inferred 100          50 (1000)    50 (990)          54 (920)
+      core now          0  (+1 all)  64 (713)     64 (715)          66 (670)
+      core strict       0  (+1 all)  98 (33)      97 (53)           90 (162)
+      core strict+gate  100          100 (0)      99 (18)           100 (0)
+    (At 30 Hz even the inferred board alternates -- the game is built for 60.)
+    The core's race jerk is therefore expected to be a shudder of the
+    backdrop against the scene at ~20 Hz whenever the view turns, plus the
+    game's shake landing a frame apart. Not yet seen on the board.
+
+THE FIX (default off; Model2.sv localparams R826_STRICT, R826_SYNC, R826_HSCR):
+  1. m2_geo AFTER_STRICT: in "After flip" the walk waits for a vblank that
+     came after the flip (vbl_after_flip, set at frame_start when a flip has
+     been made, cleared by the walk). The 3D can then never be early: a list
+     is on screen no sooner than the vblank its scroll is written in.
+     tb_m2_geo built both ways (135 checks each; R699/R711 and the rest pass
+     strict too). Costs a flip-to-screen frame at 30 Hz -- the frame the game
+     expects. 1 FF.
+  2. m2_video SCR_SYNC: the 2D never early. The game's flips (a toggle) and
+     the list on screen (m2_raster3d show_tag: Model2.sv tags each walk with
+     the flip count - 1, the tag rides q_end -> swap -> publish) cross to
+     clk_mem; tile RAM's words for iteration j are shown only once list j-2
+     is on screen, and until then the copy taken at flip j-2 stands in (two
+     copies, from the sequencer's own reads of the eight words). Three or
+     more lists behind (3D stalled, no 3D): tile RAM as written. Implies 3.
+  3. m2_video HSCR_FIX (found on the way, R823's side finding): Q_HSCR set
+     the tile-RAM address in the same cycle Q_HSCR_W took the data, so
+     hscr_r was the previous sequencer address's word -- the last row-mask
+     word of the layer before. Only plain-mode scroll uses hscr_r; Daytona's
+     race is window mode on both pairs (in 3,600 MAME frames, 2 had a plain
+     pair with hscr != 0), so not this jerk. Now the address is set on entry
+     to Q_HSCR.
+  Benches: make test_m2_video_r826 (new; m2_video_ovr_top with HSF/SSY):
+     hscr-eq (window mode) d == r; hscr-trap/1-3 (plain mode, r's wrong
+     word made equal to 0x5000+L) d == r, every pixel; hscr-disc (0x5000+L
+     changed) 6 of 6 frames differ. SCR_SYNC against r fed the words the
+     rule should show, scripted game + 3D: sync-none, sync-play/1-3 (1-3
+     frame iterations), sync-60, sync-stall -- 0 differing pixels in 217
+     frames (one sync-stall frame, released mid-frame, not compared); sync-disc (r on tile RAM as written) 40 of 42 frames differ.
+     Aligned frames in the scripted game: gated 37-38 of 39 against 25-28
+     ungated; sync-60 39 of 39 against 0.
+     test_m2_video_ovr (+quick) PASS, test_m2_raster3d 40/0, test_m2_geo
+     135/0 x2, geodiff and boot harness build. lint_top clean with R826 off
+     and on, no new Verilator warning either way; lint_idx 146 candidates,
+     the same, both ways. quartus_map --analyze_file: m2_video, m2_geo,
+     m2_raster3d, Model2.sv 0 errors.
+  Area (estimated, not fitted): strict ~2 ALM; tags ~22 FF (~12 ALM); the
+     gate two copies of ~96 used bits (Quartus prunes the unread bits of the
+     16) + four 16:1 read muxes, ~150-250 ALM. All of it prunes away with the
+     localparams at 0. Timing: the copy mux reaches the hscr/vscr/ctrl registers
+     beside the tile-RAM output (one LUT on that path); the select is
+     registered.
+  Not done: a fit; the board. Ben to try R826_STRICT alone first (nearly free,
+     the 30 Hz race's case) and then with the gate.
+  For MAME / the recompilation: show the polygons one frame later than now
+     (present the previous frame's 3D with this frame's tilemaps).

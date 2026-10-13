@@ -81,7 +81,27 @@ module m2_video #(
   // is counted only for a VISIBLE line whose buffer was not ready at its
   // line_start -- the two-bank count included blanking lines.
   parameter bit          LB_RING = 1'b0,
-  parameter int unsigned RING_LEAD = 2      // render at most line_number + this
+  parameter int unsigned RING_LEAD = 2,     // render at most line_number + this
+  // R826: Q_HSCR READ THE WORD BEFORE ITS OWN. The tile RAM answers a cycle
+  // after its address, and Q_HSCR set the address in the same cycle Q_HSCR_W
+  // took the data -- so hscr_r was the word at the PREVIOUS sequencer address
+  // (the last row-mask word of the layer before). Only the plain (non-window)
+  // scroll path uses hscr_r; Daytona's race runs both pairs in window mode,
+  // whose scroll comes from hctrl_r (read correctly), so the race never saw
+  // it. 1: the address is set on entry to Q_HSCR. 0: unchanged.
+  parameter bit          HSCR_FIX = 1'b0,
+  // R826: THE 2D WAITS FOR ITS 3D. The game writes the eight scroll words at
+  // the start of each iteration for the list it flipped TWO iterations before
+  // (measured in MAME: the 3D's per-frame motion leads the 2D's by exactly
+  // one frame, r = 0.98-0.99, because MAME shows a list one frame sooner than
+  // the board). Here the 3D is published two or three vblanks after its flip
+  // while tile RAM is shown at once, so the backdrop and the HUD shake move
+  // against the 3D whenever the view turns. 1: the scroll words written for
+  // iteration j are shown only once list j-2 is on screen (scr_tag); until
+  // then the copy taken at flip j (two copies kept) stands in. Falls back to
+  // tile RAM when the 3D is three or more lists behind. Implies HSCR_FIX (the
+  // copies are taken from the sequencer's own reads). 0: unchanged.
+  parameter bit          SCR_SYNC = 1'b0
 ) (
   input  logic        clk,
   input  logic        ce_pix,
@@ -234,6 +254,11 @@ module m2_video #(
   // R682: 15 kHz interlaced (clk domain, held): vid_y is then the displayed
   // line of field vid_field, and the render-ahead line steps by two
   input  logic        interlace,
+  // R826 (SCR_SYNC): asynchronous to clk -- scr_flip toggles at each game flip
+  // (0x803008), scr_tag is m2_raster3d's show_tag (changes at most once a
+  // frame, at its frame_start).
+  input  logic        scr_flip,
+  input  logic  [3:0] scr_tag,
   input  logic        ntsc_lines,   // R783: 262.5-line fields when interlaced
   output logic        vid_field
 );
@@ -767,6 +792,63 @@ module m2_video #(
   end
 `endif
 
+
+  // ------------------------------------------- R826: scroll words held to the 3D
+  // Word i is tile RAM 0x5000 + i: 0-3 the hscr of tilemaps 0-3, 4-7 their
+  // vscr (4 and 6 are also the pairs' ctrl). ss_c holds two copies, taken at
+  // the game's flips from the sequencer's latest reads of each word (dbg_hscr
+  // / dbg_vscr: under a line old, and the game writes these only in vblank).
+  //   ss_nf   flips seen = the iteration the game is in now
+  //   ss_p    the list on screen (scr_tag)
+  //   ss_d    ss_nf - (ss_p + 2): > 0 means tile RAM holds words for a list
+  //           not yet on screen; 1-2 take the copy from flip ss_p + 2, more
+  //           than that (the 3D stalled, or no 3D) take tile RAM.
+  localparam bit HSCR_RD = HSCR_FIX || SCR_SYNC;
+  logic [2:0]  ss_fs;                 // scr_flip synchroniser + edge
+  logic [3:0]  ss_t1, ss_t2, ss_p;    // scr_tag synchroniser, taken when stable
+  logic [3:0]  ss_nf;
+  logic [15:0] ss_c [2][8];
+  wire  [3:0]  ss_a   = ss_p + 4'd2;
+  wire  [3:0]  ss_d   = ss_nf - ss_a;
+  // Registered: the choice moves only at a flip or a publish, so a cycle's
+  // delay costs nothing and keeps the 4-bit arithmetic out of the read path.
+  logic        ss_use, ss_slot;
+  always_ff @(posedge clk or negedge rst_n)
+    if (!rst_n) begin ss_use <= 1'b0; ss_slot <= 1'b0; end
+    else begin
+      ss_use  <= SCR_SYNC && ((ss_d == 4'd1) || (ss_d == 4'd2));
+      ss_slot <= ss_a[0];
+    end
+  // The copy standing in for each of the sequencer's four reads of a layer.
+  wire  [15:0] ss_h  = ss_c[ss_slot][{1'b0, cur_layer}];         // hscr
+  wire  [15:0] ss_v  = ss_c[ss_slot][{1'b1, cur_layer}];         // vscr
+  wire  [15:0] ss_cw = ss_c[ss_slot][{1'b1, cur_layer[1], 1'b0}]; // ctrl
+  wire  [15:0] ss_hc = ss_c[ss_slot][{1'b0, cur_layer[1], 1'b0}]; // hctrl
+  generate if (SCR_SYNC) begin : g_ss
+    always_ff @(posedge clk or negedge rst_n) begin
+      if (!rst_n) begin
+        ss_fs <= '0; ss_t1 <= '0; ss_t2 <= '0; ss_p <= '0; ss_nf <= '0;
+      end else begin
+        ss_fs <= {ss_fs[1:0], scr_flip};
+        ss_t1 <= scr_tag; ss_t2 <= ss_t1;
+        if (ss_t1 == ss_t2) ss_p <= ss_t2;
+        if (ss_fs[2] != ss_fs[1]) ss_nf <= ss_nf + 4'd1;
+      end
+    end
+    // Not reset: values, and ss_use cannot select them before two flips.
+    always_ff @(posedge clk)
+      if (ss_fs[2] != ss_fs[1])
+        for (int i = 0; i < 4; i++) begin
+          ss_c[ss_nf[0]][i]     <= dbg_hscr[i];
+          ss_c[ss_nf[0]][4 + i] <= dbg_vscr[i];
+        end
+  end else begin : g_no_ss
+    assign ss_fs = '0; assign ss_t1 = '0; assign ss_t2 = '0;
+    assign ss_p  = '0; assign ss_nf = '0;
+    always_comb for (int b = 0; b < 2; b++) for (int i = 0; i < 8; i++) ss_c[b][i] = '0;
+    wire _unused_ss = &{1'b0, scr_flip, scr_tag, ss_fs, ss_t1, ss_t2};
+  end endgenerate
+
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       q <= Q_IDLE; cur_layer <= '0; cur_line <= '0;
@@ -813,6 +895,7 @@ module m2_video #(
             if (rg_start) begin
               cur_line    <= rg_line;
               cur_layer   <= 2'd0;
+              if (HSCR_RD) seq_tram_addr <= 15'h5000;   // R826
               dbg_fetches <= '0;
               rg_wb       <= free_q;
               if (rg_cnt == 2'd0) rg_hd <= free_q;    // keeps rg_hd + rg_cnt == rg_wb
@@ -826,6 +909,7 @@ module m2_video #(
             // see the overrun note on Q_RUN.
             cur_line    <= line_number;
             cur_layer   <= 2'd0;
+            if (HSCR_RD) seq_tram_addr <= 15'h5000;   // R826
             dbg_fetches <= '0;
             // Flip on the line boundary: what was just rendered becomes what
             // is displayed.
@@ -840,14 +924,14 @@ module m2_video #(
           q             <= Q_HSCR_W;
         end
         Q_HSCR_W: begin
-          hscr_r        <= tram_data;
+          hscr_r        <= ss_use ? ss_h  : tram_data;
           dbg_hscr[cur_layer] <= tram_data;
           seq_tram_addr <= 15'h5004 + {13'd0, cur_layer};
           q             <= Q_VSCR;
         end
         Q_VSCR: q <= Q_VSCR_W;
         Q_VSCR_W: begin
-          vscr_r        <= tram_data;
+          vscr_r        <= ss_use ? ss_v  : tram_data;
           dbg_vscr[cur_layer] <= tram_data;
           // ctrl is the PAIR's EVEN vscr, not this layer's own register:
           // MAME reads tile_ram[0x5004 + ((layer >> 1) & 2)], which for our
@@ -860,7 +944,7 @@ module m2_video #(
 
         Q_CTRL: q <= Q_CTRL_W;
         Q_CTRL_W: begin
-          ctrl_r        <= tram_data;
+          ctrl_r        <= ss_use ? ss_cw : tram_data;
           // Same value the window logic is about to act on, kept for the
           // overlay. Latched here rather than re-read at vblank so it cannot
           // disagree with what actually drove the decision.
@@ -872,7 +956,7 @@ module m2_video #(
 
         Q_HCTRL: q <= Q_HCTRL_W;
         Q_HCTRL_W: begin
-          hctrl_r       <= tram_data;
+          hctrl_r       <= ss_use ? ss_hc : tram_data;
           // Per-line H-scroll word, read unconditionally (used only when the
           // governing hscr has bit 15 set). Window mode: the pair's EVEN table;
           // otherwise this map's own. ctrl_r is already latched here.
@@ -976,6 +1060,7 @@ module m2_video #(
           end
           else begin
             cur_layer <= cur_layer + 2'd1;
+            if (HSCR_RD) seq_tram_addr <= 15'h5000 + {13'd0, cur_layer + 2'd1};   // R826
             q         <= Q_HSCR;
           end
         end

@@ -845,6 +845,46 @@ int main(int argc,char**argv){
     d->eng_busy = 0;
   }
 
+  // ---- R826: AFTER FLIP WAITS FOR A VBLANK THAT CAME AFTER THE FLIP
+  // (AFTER_STRICT). A vblank with no flip leaves frame_pend set; the flip
+  // then started the walk at once, mid-frame. Strict: not until the next
+  // vblank. Either way a flip followed by a vblank walks once.
+  {
+#ifndef AFTER_STRICT_BUILD
+#define AFTER_STRICT_BUILD 0
+#endif
+    d->rst_n = 0; for (int i = 0; i < 4; i++) tick(); d->rst_n = 1; idle(2);
+    d->trig_mode = 2; d->skip = 0; d->eng_busy = 0;
+    auto run_ends = [&](int n) {
+      unsigned st = 0;
+      for (int i = 0; i < n; i++) {
+        d->rd_ack = 0;
+        if (d->rd_req) { d->rd_data = 0x07800000u; d->rd_ack = 1; }   // end
+        d->eval(); if (d->walk_started) ++st;
+        tick();
+      }
+      return st;
+    };
+    d->frame_start = 1; tick(); d->frame_start = 0;
+    const unsigned w0 = run_ends(3000);                 // a vblank, no flip
+    w(2, 0x00000000);                                   // the flip, mid-frame
+    const unsigned w1 = run_ends(3000);
+    d->frame_start = 1; tick(); d->frame_start = 0;     // the next vblank
+    const unsigned w2 = run_ends(3000);
+    w(2, 0x00000000);                                   // steady: flip, then vblank
+    const unsigned w3a = run_ends(500);                 // (not strict: frame_pend is still set -- at once)
+    d->frame_start = 1; tick(); d->frame_start = 0;
+    const unsigned w3 = w3a + run_ends(3000);
+    ck("R826 strict: nothing before the vblank", AFTER_STRICT_BUILD ? w3a : 0u, 0u);
+    std::printf("test: R826 AFTER_STRICT=%d walks: vblank w/o flip %u, at the flip %u, next vblank %u, flip+vblank %u\n",
+                AFTER_STRICT_BUILD, w0, w1, w2, w3);
+    ck("R826 no walk on a vblank without a flip", w0, 0);
+    ck("R826 walk at the flip", w1, AFTER_STRICT_BUILD ? 0u : 1u);
+    ck("R826 walk at the vblank after it", w2, AFTER_STRICT_BUILD ? 1u : 0u);
+    ck("R826 flip then vblank walks once", w3, 1);
+    d->trig_mode = 0;
+  }
+
   std::printf("m2_geo: checks=%d fails=%d\n", checks, fails);
   std::printf("%s\n", fails?"FAIL":"PASS");
   delete d; return fails?1:0;

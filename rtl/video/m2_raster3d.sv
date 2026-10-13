@@ -141,6 +141,14 @@ module m2_raster3d #(
   input  logic [12:0] q_u2, q_v2, q_u3, q_v3,
   input  logic [23:0] q_tex,
   input  logic        q_end,                // last quad of the frame
+  // R826: WHICH LIST IS ON SCREEN. q_tag names the list being collected (the
+  // top level's flip count at its walk); it rides with the list through the
+  // sort, the draw and the publish, and show_tag names the list the beam is
+  // showing -- so the 2D can be held to the list its scroll belongs to
+  // (m2_video SCR_SYNC). Four registers of four bits; nothing reads them in
+  // here.
+  input  logic  [3:0] q_tag,
+  output logic  [3:0] show_tag,
 
   // ---- scan-out, on the video clock
   input  logic        scan_clk,
@@ -818,6 +826,22 @@ module m2_raster3d #(
           if (!(&dbg_fb_pub)) dbg_fb_pub <= dbg_fb_pub + 16'd1;
         end
       end else if (fb_complete) fb_busy <= 1'b0;
+    end
+  end
+
+  // R826: the list's tag, collected -> drawn -> shown, on the same events as
+  // the list itself: q_end in P_COLLECT, the swap, and the publish (FB_DDR3:
+  // fb_show taking fb_draw; the band path shows the list from its swap).
+  logic [3:0] tag_coll, tag_draw;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      tag_coll <= '0; tag_draw <= '0; show_tag <= '0;
+    end else begin
+      if ((pst == P_COLLECT) && q_end) tag_coll <= q_tag;
+      if (swap) tag_draw <= tag_coll;
+      if (FB_DDR3) begin
+        if (frame_start && fb_complete && !fb_test) show_tag <= tag_draw;
+      end else if (swap) show_tag <= tag_coll;
     end
   end
 

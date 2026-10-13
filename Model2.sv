@@ -2933,6 +2933,27 @@ wire        copro_fn_sel   = cpu_io_sel && (cpu_io_addr[23:14] == 10'h220);
 wire geo_wr_ctl   = cpu_io_sel && cpu_io_we && (cpu_io_addr[23:0]  == 24'h980008);
 wire geo_wr_setwp = cpu_io_sel && cpu_io_we && (cpu_io_addr[23:0]  == 24'h801008);
 wire geo_wr_setrp = cpu_io_sel && cpu_io_we && (cpu_io_addr[23:0]  == 24'h803008);
+// R826: the game's flips, counted and toggled for m2_video (SCR_SYNC), and
+// the list each walk takes -- the latest flipped, flip count - 1 -- for
+// m2_raster3d to carry to the screen. Synthesised away when R826_SYNC is 0
+// (m2_video ignores scr_flip / scr_tag then, and nothing else reads them).
+// R826_STRICT and R826_SYNC are independent; both are needed for the race.
+wire        geo_walk_started;
+logic [3:0] r826_fc, r826_wtag;
+logic       r826_flip_tgl, r826_setrp_d;
+wire  [3:0] r826_stag;
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+	if (!mem_rst_n) begin
+		r826_fc <= 4'd0; r826_wtag <= 4'd0; r826_flip_tgl <= 1'b0; r826_setrp_d <= 1'b0;
+	end else begin
+		r826_setrp_d <= geo_wr_setrp;
+		if (geo_wr_setrp && !r826_setrp_d) begin
+			r826_fc       <= r826_fc + 4'd1;
+			r826_flip_tgl <= ~r826_flip_tgl;
+		end
+		if (geo_walk_started) r826_wtag <= r826_fc - 4'd1;
+	end
+end
 // THE OPCODE IS IN THE ADDRESS, NOT IN THE DATA, and missing that is why no
 // geometry has ever drawn.
 //
@@ -3086,7 +3107,16 @@ m2_geo_view #(.CRTC_X(0), .CRTC_Y(128)) u_geo_view (
 	.a_bottom(gv_a_bottom), .a_top(gv_a_top)
 );
 
-m2_geo #(.AW(SDR_AW), .DEPTH(128)) u_geo (
+// R826: THE 2D HELD TO ITS 3D (default off). AFTER_STRICT makes the walk
+// in "After flip" wait for a vblank that came after the flip, so a list is
+// never on screen before the scroll the game wrote for it; m2_video SCR_SYNC
+// holds the scroll words back until their list is on screen. Both directions
+// are needed: the first stops the 3D running early (30 Hz race), the second
+// the 2D (60 Hz, and the frames after a short iteration).
+localparam bit R826_STRICT = 1'b0;   // m2_geo AFTER_STRICT: the 3D never early
+localparam bit R826_SYNC   = 1'b0;   // m2_video SCR_SYNC: the 2D never early
+localparam bit R826_HSCR   = 1'b0;   // m2_video HSCR_FIX: hscr_r read from its own word
+m2_geo #(.AW(SDR_AW), .DEPTH(128), .AFTER_STRICT(R826_STRICT)) u_geo (
 	.clk(clk_sys), .rst_n(mem_rst_n),
 	.wr_ctl(geo_wr_ctl), .wr_setwp(geo_wr_setwp), .wr_setrp(geo_wr_setrp),
 	.trig_mode(wtrig_s2),
@@ -3105,6 +3135,7 @@ m2_geo #(.AW(SDR_AW), .DEPTH(128)) u_geo (
 	.dbg_walk_frames(geo_walk_frames), .dbg_walk_unknown(geo_walk_unknown),
 	.dbg_walk_state(geo_walk_state),
 	.dbg_rp(geo_dbg_rp), .dbg_wp(geo_dbg_wp),
+	.walk_started(geo_walk_started),   // R826
 	.mtx0(), .mtx4(), .mtx8(), .mtx11(),
 	.mat_we(geo_mat_we), .mat_idx(geo_mat_idx), .mat_data(geo_mat_data),
 	.eng_busy(eng_busy | eng_ra_busy),   // R709: and the read-ahead's last fetch off port 4
@@ -6237,6 +6268,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1), .FB_DD
 	// shadow and the minimap panel. The band has stippled since R225; it was
 	// fed a constant 0, so every checker polygon came out solid.
 	.q_moire(q3d_tex[11]), .q_end(q3d_end),
+	.q_tag(r826_wtag), .show_tag(r826_stag),   // R826
 	.scan_clk(clk_mem), .scan_x(vid_x_d), .scan_y(vid_y),   // R564: the video's clock; R779: x one pixel behind
 	.scan_il(vid_il), .scan_field(vid_field),               // R682
 	.scan_col(r3d_col), .scan_hit(r3d_hit),
@@ -6301,7 +6333,7 @@ wire cc_rst_n_s  = cc_rst_sync[1];
 // R823: four line banks as a ring, rendering up to two lines ahead -- a
 // layer's burst of glyph misses borrows time from the lines around it.
 // Tile overruns: 0 on 114 MAME frames at the board's latency (was 8 a frame).
-m2_video #(.LB_RING(1'b1)) u_tilemap (
+m2_video #(.LB_RING(1'b1), .HSCR_FIX(R826_HSCR), .SCR_SYNC(R826_SYNC)) u_tilemap (
 		// cal_done too: on a GAME image game_image short-circuits cp_done without
 	// reading anything, so the character fetch on port 3 would otherwise issue
 	// at CL+0 until the calibration caught up. Those are live re-reads rather
@@ -6335,7 +6367,8 @@ m2_video #(.LB_RING(1'b1)) u_tilemap (
 	.vid_x(vid_x), .vid_y(vid_y),
 	.interlace(vid_il), .ntsc_lines(vid_nl), .vid_field(vid_field),   // R682, R783
 	.dbg_layer_px(vid_layer_px), .dbg_ctrl(vid_ctrl),
-	.dbg_layer_have(vid_layer_have)
+	.dbg_layer_have(vid_layer_have),
+	.scr_flip(r826_flip_tgl), .scr_tag(r826_stag)   // R826
 );
 
 ///////////////////////   VIDEO   ////////////////////////////////

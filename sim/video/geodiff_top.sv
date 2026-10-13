@@ -101,7 +101,7 @@ module geodiff_top #(
     .dbg_walk_ops(walk_ops), .dbg_walk_objs(walk_objs),
     .dbg_walk_frames(walk_frames), .dbg_walk_unknown(walk_unknown),
     .dbg_walk_state(),
-    .dbg_rp(), .dbg_wp(),
+    .dbg_rp(), .dbg_wp(), .walk_started(),
     .mtx0(), .mtx4(), .mtx8(), .mtx11(),
     .mat_we(mat_we), .mat_idx(mat_idx), .mat_data(mat_data),
     .eng_busy(geo_eng_busy),
