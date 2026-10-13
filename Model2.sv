@@ -5072,7 +5072,7 @@ wire [7:0] iob_in1 = {1'b1, gearval, 3'b111, ~joystick_0[9]};
 wire signed [7:0] ax_l  = joy_analog[7:0];
 wire signed [7:0] ax_r  = joy_ranalog[7:0];
 wire              use_l = (ax_l > 8'sd12) || (ax_l < -8'sd12);
-// R831: ONLY WHEN THE OSD SAYS SO. "Right stick: Accel/Brake" (the default)
+// R831: ONLY WHEN THE OSD SAYS SO. "Right stick: Pedals only" (the default)
 // ignores the right stick's left/right, so a pad's pedal stick cannot steer;
 // "Steering" is R816's behaviour, for a wheel MiSTer maps onto that stick.
 reg  [2:0]        rsteer_s;
