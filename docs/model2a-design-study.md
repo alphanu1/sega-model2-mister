@@ -33482,3 +33482,9 @@ NEXT:
      and which case.
   2. If the 3D-late backlog shows: R826_STEP with depth 2 (or 3 if the decoder
      shows the 3D two lists late). If only over-vblank steps: depth 2.
+
+R828 BUILD: s1063-s1065 = 0e34aeb + MIP 1 and the mip menu (mip-on-r828a
+patch; s1060's config + mip): s1063 / s1064 "Can't fit" -- routing, the
+last attempt with only TWO contested LAB inputs (X42_Y7, X21_Y45);
+41,382 / 41,288 ALM placed; s1065 a Quartus TDC internal error. Marginal, not
+a resource count: more seeds.
