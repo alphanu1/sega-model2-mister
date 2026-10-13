@@ -33878,3 +33878,8 @@ NEXT: a fit with YM_STUB 1 (one-character change in Model2.sv) for the
 placed ALM, M10K and timing; listen on the board (silence where jt12's boot
 burst was is the only audible difference expected).
 Merged with YM_STUB 1 set in Model2.sv (the release configuration).
+
+**THE RELEASE CANDIDATE FITS.** s1081-s1083 = db9fbc9 (51bb563 + R833 YM
+stand-in): 40,841 / 40,872 / 39,707 ALM (97-98%, was 41,316-41,446), M10K
+529/553 (was 540). s1082 closes: clk_sys +0.350, holds >= +0.240, HDMI
+-0.632. RBF build/Model2_20261014_s1082_rc.rbf. Not yet on the board.
