@@ -32514,3 +32514,6 @@ NEXT:
 R825 ON THE BOARD: s1041 (s1035 + the pipelined ring) -- Ben: "looking good,
 tile overruns seem to be gone". R823-R825 closes the tile-overrun item
 (R85/R276's line shown twice) at 24 kHz; 15 kHz to be confirmed on the CRT.
+s1041 at 15 kHz interlaced (Ben, a monitor that accepts 15 kHz but
+deinterlaces): no overruns seen. A user's real CRT is still wanted to confirm
+the interlaced picture itself.
