@@ -1,5 +1,20 @@
 # Handoff
 
+## 2026-10-13 (evening): headroom -- overruns fixed, mip built, R826 building
+
+ON THE BOARD: s1041 (ring) -- tile overruns gone (24 kHz; 15 kHz on a
+deinterlacing monitor; a user CRT test wanted). Passed on the board this
+branch: R819/R820 sound, R821 shared MultiPCM (s1037), R823-R825 ring.
+MERGED, OFF: R826 2D/3D alignment (STRICT + SYNC; the game's backdrop and 3D
+camera share one yaw, so any 2D/3D frame offset jerks in slides -- MAME is +1,
+we were -1); R828 MIP (edge-footprint level, nearest level + bilinear,
+~+145..260 ALM est; shimmer ~2x -> ~1x reference; draw -2..-26%).
+BUILDING: s1045-s1047 = 78ab95b + R826 STRICT/SYNC (s1042-s1044 missed
+clk_sys in fill/store/geometry paths, not R826's). QUEUED: s1048-s1050 =
+662002b + MIP 1 (starts when the fits end). Local only, ~2.7 GB:
+build/mipdump, build/mame289-mip (ROM-derived, git-ignored).
+DECISIONS: audio filter last; reduced FPU last resort.
+
 ## 2026-10-13 (later): BRANCH headroom
 
 DECISION: audio filter back LAST, only if room remains (Ben). Reduced FPU
