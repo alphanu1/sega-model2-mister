@@ -1839,7 +1839,14 @@ check_mra:
 	  print('mra: %d file(s) parse' % len(glob.glob('mra/*.mra')))"
 
 .PHONY: release check_mra
-release: check_mra
+# The release README is written ahead of the release with NEXT_RBF / NEXT_MD5
+# standing in for the file name and md5; publishing with them left in would
+# tell users to check against a placeholder.
+check_release_readme:
+	@! grep -n "NEXT_RBF\|NEXT_MD5" releases/README.md || { \
+	  echo "releases/README.md still has NEXT_RBF / NEXT_MD5 -- fill them in"; exit 1; }
+
+release: check_mra check_release_readme
 	@test -f output_files/Model2.rbf || { \
 	  echo "no output_files/Model2.rbf -- run: quartus_sh --flow compile Model2"; exit 1; }
 	@# REFUSE A STALE BITSTREAM. This has now shipped the wrong core twice: a

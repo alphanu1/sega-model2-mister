@@ -98,8 +98,9 @@ Study M2-F.
 *IN USE 2026-08-30 · `rtl/sound/m2_multipcm.sv` from `rtl/audio/s32_multipcm.sv` @ **`7905361`***
 
 The Sega 315-5560 MultiPCM (Yamaha YMW-258-F GEW8), two of them, at MAME's
-figure of 10,000,000 Hz. **Changed: module renamed `s32_multipcm` → `m2_multipcm`.
-Nothing else.** System 32 and the Model 1 sound board carry the same part, and the
+figure of 10,000,000 Hz. **Changed: module renamed `s32_multipcm` → `m2_multipcm`;
+the total level and pan rewritten to MAME's law (R819, below); and a two-chip
+variant added (R821, below).** System 32 and the Model 1 sound board carry the same part, and the
 register, descriptor and pitch semantics follow MAME's `multipcm.cpp`.
 
 **It is an HLE and says so in its own header**: "Envelope curves, interpolation
@@ -179,8 +180,9 @@ of level on Daytona (R819).
 
 **ADDED (R821, 2026-10-13): `rtl/sound/m2_multipcm_dual.sv`, both chips on one
 engine -- derived from `m2_multipcm.sv` above, so the same upstream, licence and
-commit.** Selected by `m2_sound_board`'s `PCM_SHARED` (default 0: not built,
-the two `m2_multipcm` as before). The arithmetic is `m2_multipcm.sv`'s verbatim
+commit.** Selected by `m2_sound_board`'s `PCM_SHARED`. The module's default is
+0 (the two `m2_multipcm`); `Model2.sv` sets 1, so the core uses the shared
+engine since it passed on the board (s1037). The arithmetic is `m2_multipcm.sv`'s verbatim
 (`banked()` takes the page as an argument); the schedule is new: one sequencer
 over 56 slots `{slot, chip}` at 4 enables each (224 a pass, as before), one
 step / pitch / level / multiply datapath, per-slot state in 64-deep MLABs and
