@@ -31036,3 +31036,14 @@ build/area-r818/ (miter, bench and map scripts, map summaries, draw table).
 the line buffer's read address gains an inverter on a register; the copy
 engine only loses logic); block counts not read from a fit report; every
 "placed" figure; the board.
+
+**R818 -- DECISIONS (Ben, 2026-10-13): RECORDED, NO ACTION YET.**
+  * R813's span cull (SPCULL 1): draw -3..-13% (L12), +66 ALM estimate. PAID
+    FOR by R818's savings (-227 estimate). Not switched on yet; it is the
+    next change after the audio build (R819/R820) is proven on the board.
+  * The framework audio filter back (R788): ~+700 ALM estimate (+8 DSP; 432
+    placed in s927). NOT paid for: needs the single-precision i960 FPU
+    (~-1,000..-1,250 placed) or one MultiPCM serving both chips (~-500..-600).
+    No action on either for now.
+Next, at Ben's call: TEST one MultiPCM shared by both sound chips (R821) --
+measured equivalence and area first, nothing switched in until both hold.

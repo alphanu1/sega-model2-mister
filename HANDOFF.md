@@ -2,6 +2,11 @@
 
 ## 2026-10-13 (later): BRANCH headroom
 
+DECISIONS (Ben): R813's span cull is paid for by R818 (+66 vs -227 est) --
+next after the audio build, not yet on. Audio filter back (~+700 est) needs
+the FP32 FPU or a shared MultiPCM -- no action. NOW: testing one MultiPCM
+shared by both chips (R821).
+
 Since: R819/R820 audio (016ef91) -- s1019/s1020 missed clk_sys in the
 geometry FP pool / TGP divider (placement), not the sound logic. R818 area
 savings (fc1b5b5: -227 ALM est, -17 M10K). BUILDING s1021-s1023 = fc1b5b5
