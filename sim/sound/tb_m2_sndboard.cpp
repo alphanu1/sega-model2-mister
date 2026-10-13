@@ -239,6 +239,40 @@ int main(int argc, char **argv) {
     0xbe, 0x18, 0x04,  0xbe, 0x35, 0x00,  0xbe, 0x34, 0x00,
     0xae, 0x10, 0x08,  0xbe, 0x17, 0x00,  0xbe, 0x19, 0x00
   };
+  // R821: MAME's OWN LINK BYTES AT MAME's TIMES, optionally. M2_SND_LINKLOG
+  // is mame_m2_sound_levels.lua's link.log; its "R" lines are the bytes the
+  // sound 68000 read from its UART and when. Each is offered no earlier than
+  // 0.3 ms before MAME read it (and never faster than the line rate). With
+  // M2_SND_LINKFROM=<s>, the bytes of the first 4 s (the boot) are kept and
+  // those from <s> on follow them, moved to 4 s -- so a late scene, such as
+  // GAME OVER, can be reached without simulating the minutes before it.
+  // M2_SND_MHZ is the bench's clock in MHz (TICK_DEN; 50 by default).
+  std::vector<uint8_t> link_v(link, link + sizeof link);
+  std::vector<long> link_at(sizeof link, 0);
+  const double MHZ = std::getenv("M2_SND_MHZ") ? std::atof(std::getenv("M2_SND_MHZ")) : 50.0;
+  if (const char *ll = std::getenv("M2_SND_LINKLOG")) {
+    const double from = std::getenv("M2_SND_LINKFROM") ? std::atof(std::getenv("M2_SND_LINKFROM")) : 0.0;
+    FILE *f = std::fopen(ll, "r");
+    if (f) {
+      link_v.clear(); link_at.clear();
+      char line[256]; double t; char k; int b;
+      while (std::fgets(line, sizeof line, f)) {
+        if (std::sscanf(line, "%lf %c %d", &t, &k, &b) != 3 || k != 'R') continue;
+        if (from > 0 && t >= 4.0 && t < from) continue;
+        if (from > 0 && t >= from) t = t - from + 4.0;
+        link_v.push_back(uint8_t(b));
+        link_at.push_back(long((t - 0.0003) * MHZ * 1e6));
+      }
+      std::fclose(f);
+      std::printf("  link: %zu bytes from %s%s\n", link_v.size(), ll, from > 0 ? " (boot, then a late scene)" : "");
+    }
+  }
+  // R821: each chip's raw samples, as it strobes them, for comparing designs.
+  FILE *dump1 = nullptr, *dump2 = nullptr;
+  if (const char *dp = std::getenv("M2_SND_PCMDUMP")) {
+    dump1 = std::fopen((std::string(dp) + ".p1").c_str(), "wb");
+    dump2 = std::fopen((std::string(dp) + ".p2").c_str(), "wb");
+  }
   const bool do_link = std::getenv("M2_SND_NOLINK") == nullptr;
   const long LINK_AT   = std::getenv("M2_SND_LINKAT")
                        ? std::atol(std::getenv("M2_SND_LINKAT")) : 3000000L;
@@ -302,8 +336,8 @@ int main(int argc, char **argv) {
   long c = 0;
   for (; c < MAXC; ++c) {
     // Offer the next byte when the wire is free and its line time has passed.
-    if (do_link && link_i < sizeof link && c >= link_next && !d->rx_valid) {
-      d->rx_data  = link[link_i];
+    if (do_link && link_i < link_v.size() && c >= link_next && c >= link_at[link_i] && !d->rx_valid) {
+      d->rx_data  = link_v[link_i];
       d->rx_valid = 1;
     }
     if (d->rx_valid && d->rx_ack) {
@@ -320,6 +354,8 @@ int main(int argc, char **argv) {
     fold((uint32_t(uint16_t(d->obs_p2_raw_l)) << 16) | uint16_t(d->obs_p2_raw_r));
     fold((uint32_t(d->obs_p1_stb) << 1) | d->obs_p2_stb);
     p1_stbs += d->obs_p1_stb; p2_stbs += d->obs_p2_stb;
+    if (dump1 && d->obs_p1_stb) { int16_t v[2] = {int16_t(d->obs_p1_raw_l), int16_t(d->obs_p1_raw_r)}; std::fwrite(v, 2, 2, dump1); }
+    if (dump2 && d->obs_p2_stb) { int16_t v[2] = {int16_t(d->obs_p2_raw_l), int16_t(d->obs_p2_raw_r)}; std::fwrite(v, 2, 2, dump2); }
     if (d->obs_as && !prev_as) {
       uint32_t ad = d->obs_addr;
       if (!d->obs_we && ad < 0x100000) {
@@ -458,7 +494,7 @@ int main(int argc, char **argv) {
   std::printf("  register writes: YM3438 %u, MULTIPCM %u\n",
               (unsigned)d->dbg_ym_writes, (unsigned)d->dbg_pcm_writes);
   std::printf("  link: %ld of %zu bytes taken by the sound board\n",
-              link_sent, sizeof link);
+              link_sent, link_v.size());
   std::printf("  rate-stage underruns: %u\n", (unsigned)d->obs_under);
   if (per_n > 0) {
     double mean = double(per_sum) / per_n;
@@ -482,6 +518,8 @@ int main(int argc, char **argv) {
   int fails = 0;
 
   if (wavpath) wav_write(wavpath, wav, 44100);
+  if (dump1) std::fclose(dump1);
+  if (dump2) std::fclose(dump2);
   std::printf("  sample cache: %ld reads, %ld wrong\n", cache_reads, cache_bad);
   if (cache_bad) {
     std::printf("  FAIL the sample cache returns wrong bytes\n");
@@ -505,7 +543,7 @@ int main(int argc, char **argv) {
   // blocks with the second byte in hand. That is precisely what the hardware
   // reported -- two bytes across the link, one of them still held -- and what
   // VPA tied high produces.
-  if (do_link && link_i < sizeof link) {
+  if (do_link && link_i < link_v.size() && !std::getenv("M2_SND_LINKLOG")) {
     std::printf("  FAIL the sound board stopped reading its UART after %ld bytes\n",
                 link_sent);
     ++fails;

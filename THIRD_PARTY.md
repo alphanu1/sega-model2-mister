@@ -177,6 +177,24 @@ Not changed: the envelope, the LFOs, TL interpolation (reg 5 bit 0) and linear
 interpolation between samples, all still absent; each measured at under 0.2 dB
 of level on Daytona (R819).
 
+**ADDED (R821, 2026-10-13): `rtl/sound/m2_multipcm_dual.sv`, both chips on one
+engine -- derived from `m2_multipcm.sv` above, so the same upstream, licence and
+commit.** Selected by `m2_sound_board`'s `PCM_SHARED` (default 0: not built,
+the two `m2_multipcm` as before). The arithmetic is `m2_multipcm.sv`'s verbatim
+(`banked()` takes the page as an argument); the schedule is new: one sequencer
+over 56 slots `{slot, chip}` at 4 enables each (224 a pass, as before), one
+step / pitch / level / multiply datapath, per-slot state in 64-deep MLABs and
+56-bit vectors, each chip keeping its own register selection, accumulators,
+output and fetch port. Differences from two `m2_multipcm`, all in the file's
+header: a fetch holds the sequencer only when that chip's next slot would step
+while it is still outstanding; level and pan are read at the step, not at the
+acknowledge; one descriptor fetch at a time for both chips; the sample number
+is an MLAB not cleared by reset (read registered, so a descriptor starts one
+cycle after its pick); the sample fetch is issued one edge after the step. Proven by `tb_m2_mpcm_dual`: with register writes applied between passes,
+and with them applied mid-pass at the same slot of both, every sample of both
+chips equals two `m2_multipcm`'s, on random register streams and on MAME's own
+(R821).
+
 ### jotego/jt12 — GPL-3.0
 *IN USE 2026-08-29 · `rtl/sound/jt12/` @ **`4cf1c5b`** · UNMODIFIED*
 

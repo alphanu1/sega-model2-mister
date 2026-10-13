@@ -31613,3 +31613,235 @@ but is unfitted. Next: an agent pipelines the ring's decisions (R825); and
 s1033-s1035 = 2e8e1fc with LB_RING 0, SIBLING 0 (build/worktree_patches/
 ring-off.patch) -- R823's bench: SIBLING 0 alone takes native overruns 8.04
 -> 1.11 a frame (57% -> 11% of frames) at 14+U[0,30], and interlaced to 0.
+
+**R821 -- ONE MULTIPCM ENGINE FOR BOTH SOUND CHIPS: BUILT, BIT-IDENTICAL
+WHEREVER A WRITE LANDS AT A SLOT BOUNDARY, -631 ALMs-NEEDED IN THE MAP
+(-759 ALUT, -880 REGISTERS, -2 DSP), AND HALF OF IT IS NOT SHARING.**
+(R818 decisions: "TEST one MultiPCM shared by both sound chips". Nothing is
+switched in: m2_sound_board PCM_SHARED defaults to 0, and with it at 0 the
+board is the same RTL -- tb_m2_sndboard's every-cycle hash is HEAD's,
+be5d9fc834bffead.)
+
+*Believed (R818 item d):* one engine running 56 slots at twice the rate saves
+~500-600 placed ALM (each chip 745 placed in s1017 / ~800 in s999); the fetch
+window per slot halves, and R738's timing and the PCM cache decide whether it
+holds.
+
+*Model 1 (the oracle):* tools/model1-ref @ 0b5d04f (= the local repository's
+HEAD) instantiates two m2_multipcm (copied from here, pre-R738), each with its
+own m2_pcm_fetch and m2_pcm_rate. It has never shared one; no finding either
+way. Nothing in MAME bears on it: sharing is an implementation question, and
+the arithmetic below is m2_multipcm's verbatim.
+
+THE DESIGN (rtl/sound/m2_multipcm_dual.sv, THIRD_PARTY.md: derived from
+m2_multipcm.sv, i.e. meathax/s32 @ 7905361, GPL-3.0):
+  * One sequencer over 56 slots {slot, chip} -- c0s0, c1s0, c0s1, ... -- at
+    4 enables a slot: 224 a pass, exactly one chip's 28 x 8, so the rate
+    stage's enable (20 / TICK_DEN) and its 2x headroom are unchanged. Both
+    chips strobe their sample at the end of the pass.
+  * One step / pitch / level / multiply datapath (R819's 8 x 10 multiply now
+    once, not twice); per-slot state in 64-deep MLABs (pan, level, pitch,
+    octave, sample number, descriptor, position) and 56-bit vectors (active,
+    pending, key-wait, position-zero); per chip only the register selection,
+    the accumulators, the output, the gains of the sample in flight and the
+    fetch port.
+  * Each chip keeps its OWN m2_pcm_fetch and SDRAM port (6 and 7). Model2.sv
+    and the arbiter are untouched.
+  * Where it differs from two m2_multipcm, all in the file header:
+      1. a fetch does not freeze the sequencer: a slot waits only if it would
+         step while ITS chip's previous sample is still being fetched or
+         multiplied, so a fetch has the other chip's slot (8 enables) to land
+         in; the pass end waits for everything in flight;
+      2. level and pan are read at the step, not at the acknowledge;
+      3. one descriptor fetch at a time for both chips;
+      4. the sample number (reg 1, reg 2 bit 0) is an MLAB, NOT cleared by
+         reset -- the same as the single chip after power-up, different after
+         a soft reset that is followed by a key-on of a never-written slot;
+      5. the sample fetch issues one edge after the step, from the step's
+         registered operands (the 56:1 pos_zero select, the 22-bit add and the
+         bank page are not on the end of the step's path -- R738's lesson);
+      6. the descriptor's sample number is taken one cycle after the pick
+         (a registered MLAB read; see "found on the way").
+  * m2_sound_board: PCM_SHARED selects the dual by parameter-constant wires;
+    u_pcm1 / u_pcm2 keep their names and are pruned when unused. u_rate1's
+    enable drives the engine; both rate stages push on the same strobe and pop
+    on identical accumulators, so their levels -- and throttles -- are equal.
+
+*Now known -- VERIFIED (simulation; Verilator 5.052):*
+
+ Q1, STATE AGAINST DATAPATH (standalone quartus_map 17.0, module alone):
+                                    ALMs-needed  comb ALUT  mem ALUT  regs  DSP
+   m2_multipcm (HEAD)                  750         1,024      118     934    2
+   m2_multipcm, sample no. in MLAB     639           901      127     692    2
+   m2_multipcm_dual                  1,052         1,473      254   1,000    2
+   So against two chips (1,500): -448. Of that, -222 is the sample-number
+   registers (252 flip-flops and their 28:1 select per chip) moving to an
+   MLAB, which the two-instance design could take WITHOUT sharing; the
+   sharing itself is the other -226 (1,278 -> 1,052). Registers: the dual
+   keeps 1,000 against 2 x 692 -- what does not share is the per-slot state
+   (4 x 56 status bits, the MLAB output registers) and per chip the
+   accumulators and outputs (2 x 76), fetch address, gains and register
+   selection; what does is the step, pitch, level and multiply datapath and
+   its pipeline, the descriptor engine and its 8-byte buffer, the
+   forwarding registers and the sequencer.
+   TIME: a pass is 224 enables either way. At 80 MHz the enable is every 4th
+   clk (20/80) and a sample is 1,792 clk; the pass takes 896 clk plus stalls.
+   The single chip stops its tick for every fetch; the dual's fetch overlaps
+   the other chip's slot (8 enables = 32 clk at 80 MHz) and costs nothing
+   until it is longer than that. Measured cycles a sample (random register
+   streams, enable 20/80, mean / max):
+     latency 0..6      reference (slower chip) 961 / 2,149   shared 909 / 3,277
+     latency 0..60          1,210 / 3,365          1,029 / 5,173
+     latency 20..120        1,568 / 5,269          1,405 / 8,769
+     latency 0..600         3,691 / 16,769         4,225 / 26,689
+   The shared engine is faster up to ~100 cycles of latency and ~14% slower
+   past it, where two chips' stalls in one sequencer cost max(L0, L1) a slot
+   pair where two sequencers cost each its own. Its worst samples are
+   longer (descriptor bursts are serialised for both chips); the rate stage's
+   16-sample FIFO absorbs them -- see the board below. On MAME's own 200 s
+   stream at 20/80, latency 0..30: reference 918 / 1,166, shared 897 / 1,038.
+
+ Q2, THE FETCH: two ports, as now, each one request outstanding; per port
+   the requests are what they were (one per active voice per pass, plus 12 a
+   key-on), so the arbiter sees the same thing. One shared port is NOT
+   implemented: it would halve the per-fetch window back to one slot and save
+   one m2_pcm_fetch (~116 ALUT / 122 registers in the map) plus an arbiter
+   port. Board-level latency limit, whole sound board at TICK_DEN 80 driven by
+   MAME's link bytes into GAME OVER (constant sample-port latency, 18.5 s):
+     latency (clk)      20     200     400        600
+     reference          0      0       14 underr.  9,944 underr., 9,945 samples lost
+     shared             0      0       0           8,835 underr., 8,835 samples lost
+   (each chip: 825,909 samples where nothing is lost; the cache returned 0
+   wrong bytes of 5.3-5.4 M in every run.) The shared engine holds to the
+   same latency as two chips, slightly further; the SDRAM's own latency is
+   tens of clk, so 400 is an order of magnitude past it.
+
+ Q3, OUTPUT-IDENTICAL -- the same samples from the same register state:
+   tb_m2_mpcm_dual runs two m2_multipcm and the dual side by side, each chip
+   behind its own m2_pcm_fetch, every output sample of both chips compared.
+   Register writes land (a) between passes, every engine stopped at the end
+   of its own pass, or (b) mid-pass: both engines stopped just before the same
+   slot of the same chip steps, the last write followed on the very next edge
+   by that slot's step (the cycle in which only the forward carries it).
+   Swept: enable every clk / 20/80 / 20/50 / random 50%; latency 0..6, 1, 0..60,
+   20..120, 0..600, 300..3,000, 2,000..6,000 (random a fetch), acknowledge held
+   1-3 cycles.
+   * random register streams on random 4 MB sample ROMs (512 descriptors,
+     loops and no-loops, holes in the slot select, bank writes): 12
+     configurations x 4 seeds x 3,000 samples, between passes; 4 x 4 x 3,000
+     mid-pass (45,024 writes at 6,038 stops a configuration): 0 samples
+     differ. The reference's own outputs hash identically in every
+     configuration (6a33266e3062b3d9 / 8e55bb7d40832be0): the latency and the
+     enable do not reach the output once the write position is fixed.
+   * MAME 0.289's own register stream (mame_m2_sound_levels.lua, 200 s:
+     attract, three coins, a race left to time out, RESULTS, GAME OVER;
+     3,479,917 writes to the MultiPCMs): 8,928,771 samples x 2 chips, 0
+     differ -- between passes at 20/80 latency 0..30 and at random enables
+     latency 0..600, and mid-pass (1,030,033 stops, 869,302 writes there) at
+     random enables latency 0..60. The shared engine against MAME, as
+     tb_m2_mpcm_level C: pcm1 98 windows mean -0.02 dB worst +1.15, pcm2 45
+     windows mean +0.21 worst -1.03 (R819: -0.09 / +0.83 and +0.21 / -1.03
+     over 0-130 s).
+   * Mutants, each caught: a gain-table LSB, the loop-wrap compare (>= to >,
+     3 samples in 9,000), the bank page of chip 1, the descriptor byte select,
+     the pass-end wait on the multiply, the RAM read look-ahead, the hold on a
+     sample still being multiplied (needs latency > 6 to show), and each of the
+     four register forwards (mid-pass only; between passes cannot see them --
+     the first version of the mid-pass test could not either, until the step
+     was made to follow the write on the next edge). Not caught, and
+     unreachable by construction: the hold on a fetch about to issue (the
+     same chip's next step is >= 4 enables after its step).
+   * The whole board (test_m2_sndboard_shared, fx68k on the real sound ROM,
+     MAME's link bytes at MAME's times): PASS, 0 underruns, 0 wrong cache
+     bytes. Free-running, the 68000's writes land at different points of the
+     two designs' passes, so the sample streams are NOT bit-identical; and the
+     reference is not identical to itself either. Per chip, fraction of
+     samples identical / difference energy re signal:
+                                        pcm1               pcm2
+     80 MHz GAME OVER, ref L20 vs ref L200    83.6% / -18.7 dB   97.0% / -29.7
+     80 MHz GAME OVER, ref L20 vs shared L20  97.8% / -29.1 dB   99.4% / -46.3
+     50 MHz GAME OVER, ref L6 vs shared L6    91.6% / -29.4 dB   97.7% / -34.7
+     50 MHz attract,   ref L6 vs ref L60      98.1% / -39.8 dB   (silent)
+     50 MHz attract,   ref L6 vs shared L6    59.1% / -17.0 dB   (silent)
+     Level, every active 1 s window, all pairs: within 0.024 dB. The
+     differences start at a note and re-converge after it (attract: 100% to
+     4 s, 59.5 / 1.4 / 78.4 / 32.9% identical over 5-8 s); -17 dB is what a
+     one-sample offset of ~1 kHz content is (|1 - e^-jw|^2). At the core's
+     own clock the shared engine is closer to the reference than the
+     reference is to itself at another latency.
+
+*Now known -- VERIFIED (quartus_map 17.0, whole design from Model2.qsf,
+  PCM_SHARED 0 vs 1, no fit):*
+                                  OFF        ON        delta
+   ALMs needed (estimate)        40,440     39,809     -631
+   comb ALUT (logic)             57,618     56,859     -759
+   memory ALUT                    1,428      1,446      +18
+   registers                     48,863     47,983     -880
+   block memory bits          4,297,211  4,297,211        0   (M10K unchanged)
+   DSP blocks                        91         89       -2
+   Entities: u_pcm1 + u_pcm2 1,023 + 1,030 ALUT / 926 + 934 reg -> the dual
+   1,370 / 1,000; u_rate2 93 -> 71 ALUT (its unused enable is pruned);
+   fetchers unchanged; m2_sound_board subtree 6,569 -> 5,873 ALUT,
+   4,545 -> 3,672 registers.
+
+*Now known -- INFERRED (not measured; what would settle each):*
+  a. PLACED: ~-400..-550 ALM. s1017 placed the same six entities (two
+     chips, two fetchers, two rate stages) at 1,843 ALM for 2,383 ALUT in its
+     fit report (0.77 ALM / ALUT, MLAB included; pre-R819, no multiply); the
+     map's delta for them is -700 ALUT: ~-540. R788's filter went +700
+     estimate -> +432 placed (0.62): -631 x 0.62 = ~-390. A fit settles it.
+  b. Against the asks: the audio filter is +700 estimate / 432 placed
+     (s927). This alone is -631 / ~-400..-550, so it pays for the filter in
+     placed ALM and nearly in the estimate; with R818's remaining -161
+     (-227, less the cull's +66) the estimate is covered too.
+  c. TIMING at 80 MHz (no fit): the paths that changed are the descriptor
+     pick (56-bit priority encode -> MLAB read address, data registered:
+     ~3 LUT levels + a registered MLAB read), st_rd_addr (6-bit increment and
+     compare, as before, into more MLAB read ports), the shared multiply's
+     2:1 input select before the DSP, and a 2:1 on the CPU slot select. The
+     step's path is shorter than the single chip's (the address add moved a
+     cycle later, item 5). The worst new candidate is the 56:1 pos_zero /
+     s_active selects (one LUT level over 28:1) into pv_pos and the hold
+     logic's wide enable fan-out. A fit (sta.rpt for *u_pcm*) settles it.
+  d. Sharing the SDRAM port as well (one m2_pcm_fetch, 64 lines): a further
+     ~-60..-90 ALM and one arbiter port, for half the per-fetch window
+     (Q1's numbers say the window is not what limits it below ~100 clk).
+     Not built.
+  e. The sample-number MLAB in the TWO-instance design (-222 estimate,
+     standalone) is available alone, cycle-different only in the descriptor
+     fetch starting one cycle later. Not built in RTL here (the standalone
+     variant was for measurement only).
+
+*Found on the way:*
+  * An asynchronous MLAB read is not inferred by Quartus 17 here ("RAM logic
+    ... uninferred due to unsupported read-during-write behavior"), nor is a
+    read inside the reset branch of a control always block: both left the
+    sample number in 504 registers, and the first ON map read -325, not
+    -631. Read registered in the RAM's own block, it infers.
+  * The first dual took a descriptor byte from whichever port still had
+    rom_is_desc set -- chip 1's flag stays set after its descriptor fetch --
+    so chip 0's descriptors read chip 1's ROM: caught at once (1,999 of 2,000
+    samples) by the random-stream bench.
+  * A soft reset between two random streams without a fresh model differed
+    in 1,981 of 2,000 samples: the reference clears its sample numbers in
+    reset, the MLAB does not (item 4). Power-up is identical; the bench now
+    uses a fresh model a seed.
+  * Ack-after-step gains: the hold has to cover a sample that has been
+    acknowledged but not yet multiplied, or a step overwrites its gains;
+    without it 1,063 of 9,000 samples differed at latency 0..30 and none at
+    0..6.
+
+*Changed (uncommitted, sm2-builds/sm2-mpcm1-d697fda):* rtl/sound/
+m2_multipcm_dual.sv (new), rtl/sound/m2_sound_board.sv (PCM_SHARED, default
+0), Model2.qsf (the file), THIRD_PARTY.md, sim/sound/m2_mpcm_dual_harness.sv
++ tb_m2_mpcm_dual.cpp (new; Makefile test_m2_mpcm_dual, in `make test`),
+sim/sound/m2_sndboard_harness.sv (PCM_SHARED), tb_m2_sndboard.cpp
+(M2_SND_LINKLOG / LINKFROM / MHZ: MAME's link bytes at MAME's times;
+M2_SND_PCMDUMP: each chip's samples), Makefile (test_m2_sndboard_shared,
+SNDB_G). lint_top clean; with PCM_SHARED 1 no Verilator warning in the new
+module; lint_idx 146 candidates both ways, the same 146, none new.
+test_m2_mpcm_level, test_m2_sndlink, test_m2_sndboard (hash unchanged),
+test_m2_sndboard_shared, test_m2_mpcm_dual PASS.
+
+*Not verified:* any fit, its timing or placed ALM; the board. Not switched
+in.

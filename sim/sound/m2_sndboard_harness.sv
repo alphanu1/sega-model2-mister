@@ -12,6 +12,7 @@ module m2_sndboard_harness #(
   parameter int unsigned ROM_LAT = 6,     // clk_sys cycles, ~ an SDRAM burst
   parameter bit PCM_CACHE = 1'b1,
   parameter bit PCM_RATE  = 1'b1,
+  parameter bit PCM_SHARED = 1'b0,        // R821
   // R738: the core clock in MHz, as Model2.sv passes SYS_MHZ. 50 keeps every
   // existing figure; 80 runs the enables at the ratios the board gets at 80.
   parameter int unsigned TICK_DEN = 50
@@ -85,7 +86,7 @@ module m2_sndboard_harness #(
   output logic        obs_p1_stb, obs_p2_stb
 );
 
-  m2_sound_board #(.PCM_CACHE(PCM_CACHE), .PCM_RATE(PCM_RATE), .TICK_DEN(TICK_DEN)) u_board (
+  m2_sound_board #(.PCM_CACHE(PCM_CACHE), .PCM_RATE(PCM_RATE), .PCM_SHARED(PCM_SHARED), .TICK_DEN(TICK_DEN)) u_board (
     .clk(clk), .rst_n(rst_n),
     .rx_data(rx_data), .rx_valid(rx_valid), .rx_ack(rx_ack),
     .tx_data(tx_data), .tx_valid(tx_valid), .tx_ack(tx_ack),
@@ -116,7 +117,12 @@ module m2_sndboard_harness #(
   assign obs_p1_stb   = u_board.p1_stb;
   assign obs_p2_stb   = u_board.p2_stb;
 
-  assign obs_pcm_slot = u_board.u_pcm1.slot;
+  // R821: the shared engine's slot is the top five bits of its {slot, chip}.
+  generate if (PCM_SHARED) begin : g_obs
+    assign obs_pcm_slot = u_board.g_shared.u_pcm.v[5:1];
+  end else begin : g_obs
+    assign obs_pcm_slot = u_board.u_pcm1.slot;
+  end endgenerate
   assign obs_p1_req   = u_board.p1_creq;
   assign obs_p1_ack   = u_board.p1_cack;
   assign obs_p1_addr  = u_board.p1_caddr;
