@@ -31845,3 +31845,8 @@ test_m2_sndboard_shared, test_m2_mpcm_dual PASS.
 
 *Not verified:* any fit, its timing or placed ALM; the board. Not switched
 in.
+s1033-s1035 = 2e8e1fc with LB_RING 0, SIBLING 0 (ring-off.patch), 80/40:
+s1035 closes, core >= +0.115, hold >= +0.245, HDMI -0.320; 41,255 ALM,
+M10K 539/553. RBF build/Model2_20261013_s1035_sib0.rbf 5a13cfd2. Contents:
+s1017 + R819/R820 audio + R818 area + R822 glyph priority + SIBLING 0. Not
+yet on the board.
