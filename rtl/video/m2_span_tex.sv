@@ -92,6 +92,14 @@ module m2_span_tex #(
   // Must equal the fill's. The divide's answer is the same 16.16 quarter-
   // texel coordinate for every UZF: the un-normalise shifts two more.
   parameter int unsigned UZF    = 4,
+  // R828: MIP LEVELS. Each group's level is chosen from the span's in_mipk (the
+  // quad's edge footprint, m2_raster_fill MIP) and the group's own 1/z, where
+  // the divide already has its log: L = floor((K - 2 log2(ooz)) / 4), clamped
+  // to [0, min(log2 min(w, h) - 1, 7)]. The divide's un-normalising shift takes
+  // L more, so u and v leave already at the level, and L rides to m2_texel_bl
+  // in tx_tex[26:24], which addresses the level's copy. 0: level 0 always, and
+  // the walk is the one before R828.
+  parameter bit          MIP    = 1'b0,
   parameter int unsigned SCR_W  = 496,
   parameter int unsigned BAND_H = 8,
   // Derived -- never overridden. PARAMETERS, not localparams: Quartus 17.0
@@ -131,6 +139,11 @@ module m2_span_tex #(
   input  logic signed [23:0] in_doozdx,
   input  logic [23:0]        in_tex,
   input  logic               in_tex_en,
+  // R828: the span's mip bias (m2_raster_fill span_mipk), quarter levels with
+  // the constant folded in; -512 = no level (the quad had no usable edge)
+  /* verilator lint_off UNUSEDSIGNAL */
+  input  logic signed [9:0]  in_mipk,
+  /* verilator lint_on UNUSEDSIGNAL */
 
   // ---- span out, to the band buffers
   // R310: A SPAN IS STILL INSIDE THIS UNIT. With a FIFO in front, the quad
@@ -212,6 +225,9 @@ module m2_span_tex #(
   logic  [1:0] sp_n;
   logic [23:0]        col_p [2];
   logic               moire_p [2];
+  // R828: each span's mip bias and deepest level, latched with it
+  logic signed [9:0]  mipk_p [2];
+  logic [2:0]         mipl_p [2];
   // R476: u_r/v_r/ooz_r are gone -- the issue pointer walks the span and the
   // gradients are all the consumer needs.
   logic signed [31:0] du_r, dv_r;
@@ -756,6 +772,18 @@ module m2_span_tex #(
   logic signed [31:0] d4_u, d4_v;
   logic        [63:0] d4a_pu, d4a_pv;   // R468: the product, before the shift
   logic         [4:0] d4a_sh;
+  // R828: the group's mip level, chosen as it enters d1 and carried down the
+  // divide beside it; d4a_sr is the un-normalising shift past the first 18
+  // (always at least 18) plus the level: 0..15
+  logic         [2:0] d1_L, d2_L, d3_L, d4a_L, d4_L;
+  logic         [3:0] d4a_sr;
+  /* verilator lint_off UNUSEDSIGNAL */
+  wire signed  [10:0] mp_l4 = 11'(mipk_p[sh_p[1]]) - 11'({1'b0, d1a_e, d1a_m[22:21], 1'b0});
+  /* verilator lint_on UNUSEDSIGNAL */
+  wire          [2:0] mp_ml = mipl_p[sh_p[1]];
+  wire          [2:0] mp_L  = !MIP || mp_l4[10]          ? 3'd0
+                            : (mp_l4[9:2] > 8'(mp_ml))   ? mp_ml
+                            : mp_l4[4:2];
   // The coordinate that entered the pipeline with the 1/z now emerging from it,
   // delayed three cycles to match. Getting this wrong pairs a texel coordinate
   // with the wrong pixel's depth, which is the whole fault this change exists
@@ -765,7 +793,21 @@ module m2_span_tex #(
   // R539: the register R496 asked for now lives in m2_texel_x2, which loads
   // each request into f_tex/f_u/f_v before the cache's adders see it. Here the
   // payload goes straight into the adapter's request queue with the issue.
-  assign tx_tex = {8'd0, tex_p[res_p]};
+  // R828: WITH MIP the request carries what m2_texel_bl would otherwise work
+  // out on clk_mem: the level (26:24), the sheet already texsheet[L & 1]
+  // (bit 12), and each axis's mirror decision (27 u, 28 v) -- the
+  // coordinate's bit at the level's width, (u >> L) & ((w >> L) << 8) in
+  // model2rd.ipp, i.e. bit 13 + code - L of the level's u. A 4096-wide
+  // texture's bit is 20, past the coordinate: never mirrored, as before.
+  wire [23:0] mt_t  = tex_p[res_p];
+  wire [31:0] mt_u  = {12'd0, tx_u};   // 32 wide: every 5-bit index is in range (R807)
+  wire [31:0] mt_v  = {12'd0, tx_v};
+  wire [4:0]  mt_bu = 5'd13 + {2'd0, mt_t[3:1]} - {2'd0, d4_L};
+  wire [4:0]  mt_bv = 5'd13 + {2'd0, mt_t[6:4]} - {2'd0, d4_L};
+  wire        mt_fu = mt_t[9]  && mt_u[mt_bu];
+  wire        mt_fv = mt_t[10] && mt_v[mt_bv];
+  assign tx_tex = MIP ? {3'd0, mt_fv, mt_fu, d4_L, mt_t[23:13], mt_t[12] ^ d4_L[0], mt_t[11:0]}
+                      : {8'd0, tex_p[res_p]};
   // R339: the DIVIDED coordinates, not u/z and v/z themselves.
   assign tx_u   = to_tx(d4_u);
   assign tx_v   = to_tx(d4_v);
@@ -779,14 +821,14 @@ module m2_span_tex #(
   logic signed [31:0] dbg_fetch_y /*verilator public_flat_rd*/;
   logic        [19:0] dbg_fetch_u /*verilator public_flat_rd*/;
   logic        [19:0] dbg_fetch_v /*verilator public_flat_rd*/;
-  logic        [23:0] dbg_fetch_t /*verilator public_flat_rd*/;
+  logic        [26:0] dbg_fetch_t /*verilator public_flat_rd*/;   // R828: {level, texture}
   logic        [23:0] dbg_fetch_c /*verilator public_flat_rd*/;
   assign dbg_fetch   = tx_req;
   assign dbg_fetch_x = res_x;
   assign dbg_fetch_y = 32'(y_p[res_p]);
   assign dbg_fetch_u = tx_u;
   assign dbg_fetch_v = tx_v;
-  assign dbg_fetch_t = tex_p[res_p];
+  assign dbg_fetch_t = {MIP ? d4_L : 3'd0, tex_p[res_p]};
   assign dbg_fetch_c = col_p[res_p];
 
   always_ff @(posedge clk or negedge rst_n) begin
@@ -796,6 +838,7 @@ module m2_span_tex #(
       d2_nd <= '0; d2_e <= '0; d2_r <= '0;
       d3_r1 <= '0; d3_e <= '0; d4_u <= '0; d4_v <= '0;
       d4a_pu <= '0; d4a_pv <= '0; d4a_sh <= '0;   // R468
+      d1_L <= '0; d2_L <= '0; d3_L <= '0; d4a_L <= '0; d4_L <= '0; d4a_sr <= '0;   // R828
       u_h1 <= '0; v_h1 <= '0; u_h2 <= '0; v_h2 <= '0; u_h3 <= '0; v_h3 <= '0;
       u_h4 <= '0; v_h4 <= '0; u_h5 <= '0; v_h5 <= '0; sh_m <= 1'b0;   // R607
       mq_f1 <= 1'b0; mq_f0 <= 1'b1; mq_wi <= '0; mq_need <= '0;   // R631
@@ -892,6 +935,7 @@ module m2_span_tex #(
       d1a_m <= (d0_e >= 6'd23) ? (d0_o >> (d0_e - 6'd23))
                                : (d0_o << (6'd23 - d0_e));
       d1_e <= d1a_e; d1_m <= d1a_m; d1_r <= rcp_tab[d1a_m[22:16]];
+      d1_L <= mp_L;  d2_L <= d1_L;  d3_L <= d2_L;  d4a_L <= d3_L;  d4_L <= d4a_L;   // R828
       // stage 2: the Newton residual
       d2_nd <= 32'((((64'd1 <<< 48) - (64'(d1_m) * 64'(d1_r))) >> 24));
       d2_e  <= d1_e; d2_r <= d1_r;
@@ -919,10 +963,12 @@ module m2_span_tex #(
       // R791: u/z is times 2^18 now, not 2^16 -- two more, so the answer is
       // still 16.16 quarter-texels. 18..26, inside the five bits.
       d4a_sh <= (d3_e < 6'd23) ? 5'd18 : 5'(d3_e - 6'd5);
+      d4a_sr <= ((d3_e < 6'd23) ? 4'd0 : 4'(d3_e - 6'd23)) + 4'(d3_L);   // R828
 
       // stage 4b: the un-normalise and the clamp, on the registered product.
-      d4_u <= sat32(d4a_pu >> d4a_sh);
-      d4_v <= sat32(d4a_pv >> d4a_sh);
+      // R828: with MIP the same shift as 18 and then the rest, plus the level
+      d4_u <= MIP ? sat32((d4a_pu >> 18) >> d4a_sr) : sat32(d4a_pu >> d4a_sh);
+      d4_v <= MIP ? sat32((d4a_pv >> 18) >> d4a_sr) : sat32(d4a_pv >> d4a_sh);
       u_h1 <= dv_u;  v_h1 <= dv_v;
       u_h2 <= u_h1;  v_h2 <= v_h1;
       u_h3 <= u_h2;  v_h3 <= v_h2;
@@ -939,6 +985,7 @@ module m2_span_tex #(
       for (int k = 0; k < 2; k++) begin
         y_p[k] <= '0; x1_p[k] <= '0; col_p[k] <= '0; k_p[k] <= '0;
         moire_p[k] <= 1'b0; tex_p[k] <= '0;
+        mipk_p[k] <= '0; mipl_p[k] <= '0;   // R828
       end
       sp_iss <= 1'b0; sp_out <= 1'b0; sp_n <= 2'd0; e_last <= 1'b0;   // R490
       rt_p <= 1'b0; e_p <= 1'b0; rt_skip <= 1'b0;                     // R490, R607
@@ -988,6 +1035,12 @@ module m2_span_tex #(
           col_p[slot]   <= in_col;
           moire_p[slot] <= in_moire;
           tex_p[slot]   <= in_tex;
+          // R828: the bias, and the deepest level: log2(min(w, h)) - 1 (down
+          // to 2x2, as the reference), at most 7
+          mipk_p[slot]  <= in_mipk;
+          mipl_p[slot]  <= (in_tex[3:1] < in_tex[6:4])
+                             ? ((in_tex[3:1] >= 3'd3) ? 3'd7 : 3'd4 + in_tex[3:1])
+                             : ((in_tex[6:4] >= 3'd3) ? 3'd7 : 3'd4 + in_tex[6:4]);
           du_r          <= (32'(in_dudx)   <<< (UVS - 8)) <<< pxk;   // R650: a group's step; R791
           dv_r          <= (32'(in_dvdx)   <<< (UVS - 8)) <<< pxk;
           doz_r         <= (32'(in_doozdx) <<< 8) <<< pxk;

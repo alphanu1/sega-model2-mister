@@ -686,6 +686,89 @@ static void test_judder(Vm2_raster_fill* d) {
   d->in_tex = 0;
 }
 
+#ifdef TB_MIP
+// R828: THE QUAD'S MIP BIAS, span_mipk, against the formula worked out here
+// from the quad as presented (not from the RTL's registers): for each edge
+// (0,1), (1,2), (2,3), (3,0) whose ends both have a usable 1/z,
+//   K_e = lq(|du| OR |dv|) - lq(|dx| OR |dy|) + lo_a + lo_b + 120,
+// magnitudes as one's complements, lq(v) = 4 msb(v) + the two bits below,
+// lo = 4 (14 - (emax - e)) + m[7:6] -- and K the largest, or -512 with none.
+// Random quads, a fifth of them triangles (a corner repeated: an edge of
+// length zero), a third with a vertex 9 to 23 octaves deeper than the
+// nearest (16 or more: no usable 1/z), and 1/z exponents over a 40-octave range.
+static int lq_m(uint32_t v) {
+  int m = 31 - __builtin_clz(v);
+  int f = m >= 2 ? int((v >> (m - 2)) & 3) : int((v << (2 - m)) & 3);
+  return 4 * m + f;
+}
+static void test_mip(Vm2_raster_fill* d, std::mt19937 &rng) {
+  printf("test: R828, the quad's mip bias\n");
+  auto tickf = [&]() { d->clk = 0; d->eval(); d->clk = 1; d->eval(); };
+  const long N = getenv("M2_MIP_N") ? atol(getenv("M2_MIP_N")) : 4000;
+  d->view_x1 = 0; d->view_x2 = 495; d->view_y1 = 0; d->view_y2 = 383;
+  long seen = 0, bad = 0, none = 0;
+  for (long n = 0; n < N; n++) {
+    int32_t X[4], Y[4]; uint32_t U[4], V[4]; uint16_t MF[4];
+    const int ebase = 100 + int(rng() % 40);
+    for (int i = 0; i < 4; i++) {
+      X[i] = int32_t(rng() % 700) - 100; Y[i] = int32_t(rng() % 500) - 60;
+      U[i] = rng() % 8192; V[i] = rng() % 8192;
+      MF[i] = uint16_t(((ebase + int(rng() % 6)) << 8) | (rng() & 0xff));
+    }
+    if (n % 4 == 1) { for (int i = 0; i < 4; i++) { U[i] = (U[0] + rng() % 64) & 8191; V[i] = (V[0] + rng() % 64) & 8191; } }   // small, magnified
+    if ((n % 5) == 0) { X[3] = X[2]; Y[3] = Y[2]; U[3] = U[2]; V[3] = V[2]; MF[3] = MF[2]; }
+    if ((n % 3) == 0) MF[rng() & 3] = uint16_t((ebase - 9 - int(rng() % 10)) << 8 | (rng() & 0xff));   // 9..23 octaves deeper: around the 16 limit
+    if ((n % 13) == 0) MF[rng() & 3] = 0;                // 1/z of zero
+    // the model
+    int emax = 0;
+    for (int i = 0; i < 4; i++) emax = std::max(emax, int(MF[i] >> 8));
+    int K = -512;
+    for (int i = 0; i < 4; i++) {
+      const int j = (i + 1) & 3;
+      const int ea = MF[i] >> 8, eb = MF[j] >> 8, da = emax - ea, db = emax - eb;
+      if (ea == 0 || eb == 0 || da >= 16 || db >= 16) continue;
+      const int la = 56 - 4 * da + ((MF[i] >> 6) & 3), lb = 56 - 4 * db + ((MF[j] >> 6) & 3);
+      auto oc = [](int v) { return v < 0 ? ~v : v; };
+      const uint32_t dt = uint32_t(oc(int(U[j]) - int(U[i])) | oc(int(V[j]) - int(V[i]))) & 0x1fff;
+      const uint32_t ds = uint32_t(oc(X[j] - X[i]) | oc(Y[j] - Y[i])) & 0x7fff;
+      if (!dt || !ds) continue;
+      const int ke = lq_m(dt) - lq_m(ds) + la + lb + 120;
+      if (ke > K) K = ke;
+    }
+    d->in_x0 = X[0]; d->in_y0 = Y[0]; d->in_x1 = X[1]; d->in_y1 = Y[1];
+    d->in_x2 = X[2]; d->in_y2 = Y[2]; d->in_x3 = X[3]; d->in_y3 = Y[3];
+    d->in_u0 = U[0]; d->in_v0 = V[0]; d->in_u1 = U[1]; d->in_v1 = V[1];
+    d->in_u2 = U[2]; d->in_v2 = V[2]; d->in_u3 = U[3]; d->in_v3 = V[3];
+    d->in_oz0 = MF[0]; d->in_oz1 = MF[1]; d->in_oz2 = MF[2]; d->in_oz3 = MF[3];
+    d->in_frac = 0; d->in_col = 0xffffff; d->in_moire = 0; d->in_tex = 1;
+    d->in_valid = 1; d->span_ready = 1; d->eval();
+    bool acc = false, ret = false, got = false; int quiet = 0; long g = 0;
+    for (;;) {
+      d->eval();
+      if (d->span_valid && d->span_ready && d->span_tex_en && !got) {
+        got = true; ++seen;
+        const int k = int(int16_t(uint16_t(d->span_mipk) << 6) >> 6);
+        if (k != K) { if (bad++ < 6) printf("  FAIL R828 quad %ld: span_mipk %d want %d\n", n, k, K); }
+        if (K == -512) ++none;
+      }
+      if (d->quad_done && acc) ret = true;
+      if (d->in_ready && d->in_valid) acc = true;
+      const bool drained = ret && !d->span_valid && ++quiet >= 2;
+      tickf();
+      if (acc) { d->in_valid = 0; d->eval(); }
+      if (drained) break;
+      if (++g > 400000) { printf("  FAIL R828 quad %ld timeout\n", n); ++bad; break; }
+    }
+    d->in_valid = 0; d->eval();
+    for (int k = 0; k < 4; k++) tickf();
+  }
+  printf("  R828: %ld quads, %ld textured with a span (%ld with no usable edge), %ld wrong\n", N, seen, none, bad);
+  tex_checks += seen + 1; tex_fails += bad;
+  if (seen < N / 4) { printf("  FAIL R828: only %ld quads drew\n", seen); ++tex_fails; }
+  d->in_tex = 0;
+}
+#endif
+
 int main(int argc, char** argv) {
   Verilated::commandArgs(argc, argv);
   std::mt19937 rng(20260815u);
@@ -1057,6 +1140,9 @@ int main(int argc, char** argv) {
 
   test_plane(dut.d);
   test_judder(dut.d);   // R791
+#ifdef TB_MIP
+  test_mip(dut.d, rng);   // R828
+#endif
   checks += tex_checks; fails += tex_fails;
 
   printf("m2_raster_fill: checks=%ld fails=%ld spans=%ld lines=%ld empty=%ld\n",

@@ -113,6 +113,11 @@ module m2_raster3d #(
   // along the edges. Needs M2COV, whose pixel-centre rule shares the diagonal
   // without a gap or a pixel drawn twice.
   parameter bit SPLIT_TRI = 1'b0,
+  // R828: MIP LEVELS -- the level chosen from each quad's edge footprint and
+  // each group's 1/z (m2_raster_fill, m2_span_tex), the level's copy read from
+  // the sheets (m2_texel_bl). Nearest level, the existing bilinear, no blend.
+  // 0 is level 0 always: every module as before R828.
+  parameter bit MIP = 1'b0,
   // R275: the SDRAM address width the texel fetch drives.
   parameter int unsigned TEX_AW = 25
 ) (
@@ -446,6 +451,7 @@ module m2_raster3d #(
   logic signed [23:0] fl_span_dudx, fl_span_dvdx;   // R286: 8.8; R618: 16.8
   logic [23:0] fl_span_tex;
   logic        fl_span_tex_en;
+  logic signed [9:0] fl_span_mipk;   // R828
 
   // R310: A SPAN FIFO, BECAUSE THE TEXEL FETCH BLOCKS EVERY SPAN BEHIND IT.
   //
@@ -478,7 +484,9 @@ module m2_raster3d #(
   // R337: 194 -> 242, carrying 1/z (32) and its gradient (16) for the
   // perspective divide. The queue is MLAB since R332, so this is ALM and not
   // M10K -- which is the only reason it is affordable at 553/553 blocks.
-  localparam int unsigned SQ_DW = 266;   // R618: three gradients 16 -> 24 bits
+  // R828: + 10 with MIP, the quad's mip bias -- 276 of the 280 bits seven
+  // M10K hold at 32 x 40, so no block more
+  localparam int unsigned SQ_DW = MIP ? 276 : 266;   // R618: three gradients 16 -> 24 bits
   logic [SQ_DW-1:0] sq_din, sq_q;
   logic             sq_in_rdy, sq_qv, sq_rdy, sq_busy, sq_full;
   logic [15:0]      sq_cnt16;
@@ -488,12 +496,15 @@ module m2_raster3d #(
   // silently, and a silently dropped span is a hole in the picture.
   assign fl_span_ready = sq_in_rdy;
 
-  assign sq_din = { fl_span_y, fl_span_x0, fl_span_x1,
+  wire [265:0] sq_din0 = { fl_span_y, fl_span_x0, fl_span_x1,
                     fl_span_ooz, fl_span_doozdx,                   // R337
                     fl_span_u, fl_span_v,
                     fl_span_dudx, fl_span_dvdx,
                     fl_span_col, fl_span_tex,
                     fl_span_moire, fl_span_tex_en };
+  // R828: the bias above the rest, so every other field keeps its slice
+  // (without MIP the cast drops it again)
+  assign sq_din = SQ_DW'({fl_span_mipk, sq_din0});
 
   // R313: BACK TO BLOCK MEMORY, to trade ALM for M10K. The register queue
   // (R312) is the better part -- no bubble -- but it costs ~484 ALM, and ALM is
@@ -538,6 +549,7 @@ module m2_raster3d #(
   wire        [23:0] sq_tex  = sq_q[25:2];
   wire               sq_moire  = sq_q[1];
   wire               sq_tex_en = sq_q[0];
+  wire signed [9:0]  sq_mipk = MIP ? sq_q[SQ_DW-1 -: 10] : 10'sd0;   // R828
   // R275: the textured span, expanded a pixel at a time. tx_* is the span as
   // the band buffers see it -- identical in shape, one pixel wide when the
   // polygon wears a texture.
@@ -552,7 +564,7 @@ module m2_raster3d #(
   wire signed [15:0] band_y1 = 16'(fill_band) * 16'(BAND_H);
   wire signed [15:0] band_y2 = band_y1 + 16'(BAND_H) - 16'sd1;
 
-  m2_raster_fill #(.PXC(PXC), .FRB(FRB), .M2COV(M2COV), .UZF(UZF)) u_fill (   // R616, R626, R658, R791
+  m2_raster_fill #(.PXC(PXC), .FRB(FRB), .M2COV(M2COV), .UZF(UZF), .MIP(MIP)) u_fill (   // R828   // R616, R626, R658, R791
     .clk(clk), .rst_n(rst_n),
     .in_valid(fl_in_valid), .in_ready(fl_in_ready),
     // R327: no sign extension. m2_quad_store already saturates these to 13
@@ -576,6 +588,7 @@ module m2_raster3d #(
     .span_dudx(fl_span_dudx), .span_dvdx(fl_span_dvdx),
     .span_ooz(fl_span_ooz), .span_doozdx(fl_span_doozdx),     // R337
     .span_tex(fl_span_tex), .span_tex_en(fl_span_tex_en),
+    .span_mipk(fl_span_mipk),                                  // R828
     .quad_done(fl_quad_done), .line_case(fl_line_case),
     .dbg_hot(dbg_fill_hot), .dbg_hotcyc(dbg_fill_hotcyc)   // R436
   );
@@ -629,7 +642,7 @@ module m2_raster3d #(
   logic signed [15:0]    mk_y0;
 
   m2_span_tex #(.PIXSTEP(PIXSTEP), .TXK(TXK), .FTB(FTB), .GC(PXC), .SCR_W(SCR_W), .BAND_H(BAND_H),
-                .REUSE(TXREUSE), .UZF(UZF)) u_spantex (   // R633, R791
+                .REUSE(TXREUSE), .UZF(UZF), .MIP(MIP)) u_spantex (   // R633, R791, R828
     .clk(clk), .rst_n(rst_n),
     .pxk(tex_pxk),   // R650
     .gamma_sel(tex_gamma),   // R784
@@ -644,6 +657,7 @@ module m2_raster3d #(
     .in_dudx(sq_dudx), .in_dvdx(sq_dvdx),
     .in_ooz(sq_ooz), .in_doozdx(sq_doozdx),                   // R337
     .in_tex(sq_tex), .in_tex_en(sq_tex_en),
+    .in_mipk(sq_mipk),                                        // R828
     .out_valid(tx_span_valid), .out_ready(tx_span_ready),
     .out_y(tx_span_y), .out_x0(tx_span_x0), .out_x1(tx_span_x1),
     .out_col(tx_span_col), .out_moire(tx_span_moire),
@@ -749,7 +763,7 @@ module m2_raster3d #(
   // R620: m2_texel_bl, the bilinear fetch -- the same 4,096 lines as two
   // 2,048-line banks by row-pair parity (IB 11), so a 2x2 block comes back in
   // one access 87.5% of the time. Point mode is the old picture.
-  m2_texel_bl #(.AW(TEX_AW), .IB(11), .RSP_D(TXRSP), .NS(TXNS), .LW8(TXLW8)) u_texel (   // R622: 4 entries, measured equal; R789: TXRSP; R787: LW8
+  m2_texel_bl #(.AW(TEX_AW), .IB(11), .RSP_D(TXRSP), .NS(TXNS), .LW8(TXLW8), .MIP(MIP)) u_texel (   // R828   // R622: 4 entries, measured equal; R789: TXRSP; R787: LW8
     .clk(clk_mem), .rst_n(rst_n),
     .base_s0(tex_base0), .base_s1(tex_base1), .bilinear(tex_bilinear),
     .req(txf_req), .rdy(txf_rdy), .ack(txf_ack), .tex(txf_tex),

@@ -32517,3 +32517,251 @@ tile overruns seem to be gone". R823-R825 closes the tile-overrun item
 s1041 at 15 kHz interlaced (Ben, a monitor that accepts 15 kHz but
 deinterlaces): no overruns seen. A user's real CRT is still wanted to confirm
 the interlaced picture itself.
+
+**R828 -- MIP-MAPPING (R827), BUILT BEHIND MIP (DEFAULT 0). THE LEVEL COMES
+FROM EACH QUAD'S EDGES AND THE PIXEL'S 1/z, NOT FROM MAME'S z/texlod FORMULA.
+MAME'S OWN LEVEL BARELY MIPS DAYTONA, SO MATCHING IT WOULD NOT REMOVE THE
+SHIMMER. NEAREST LEVEL, THE EXISTING BILINEAR, NO BLEND. +260 ALMs NEEDED
+(MAP), THE DRAW 2-26% FASTER, SDRAM LINE READS -43..-73%.**
+
+*Believed (R606 / R665 / R827):*
+  1. Mip-mapping needs the geometrizer's per-polygon texlod (cb[10] and the
+     game's log RAM), which R665 priced past the device.
+  2. The mip levels are already in the texture sheets, so the cost is the
+     level choice and an address shift.
+  3. MAME's level formula is the silicon's, so the target is agreement with
+     MAME's level.
+  4. R606: 95% of MAME's pixels are at level 0, so mip "moves misses 7%".
+
+*Now known -- VERIFIED:*
+  1. MAME'S LEVEL SITS 2-6 LEVELS BELOW THE TEXEL FOOTPRINT, AND MAME
+     SHIMMERS. This was measured in MAME 0.289 with M2MIP instrumentation (a
+     copy in build/mame289-mip; the env vars M2MIP_RANGES and M2MIP_OUT). The
+     instrumentation dumps every iterated textured pixel (1/z, u/z, v/z,
+     MAME's mml and level, the final texel), each polygon's texture state and
+     texlod, and its vertices. The run was Daytona attract with
+     -numprocessors 1, over frames 2000-2023 (race), 5000-5023 (race),
+     7000-7007 (attract) and 9000-9023 (oval).
+     - An offline C port of fetch_bilinear_texel / draw_scanline_tex
+       reproduces MAME's final texel for every drawn pixel: 12.6 M pixels, 0
+       differ.
+     - MAME's level among drawn pixels: L0 97.0 / 93.7 / 99.2 / 97.7%.
+       The level+1 blend is active on 6.1 / 14.7 / 2.7 / 6.4% of pixels (with
+       a weight of 16/128 or more on 5.1 / 12.1 / 1.8 / 5.2%). The
+       microtexture is used on 0%. Textured polygons with any pixel above
+       level 0: 17 / 32 / 8 / 15%.
+     - The true footprint is rho = max |du/dx|, |dv/dx|, |du/dy|, |dv/dy|,
+       taken from each polygon's planes. Of the drawn pixels, 53 / 58 / 45 /
+       40% are minified (rho > 1). floor(log2 rho) puts L0 at 77 / 57 / 76 /
+       76% of pixels.
+     - MAME's mml/128 minus log2 rho, with median and p10..p90:
+       - frames 2000-2023: -3.0, from -3.5 to -2.25.
+       - frames 5000-5023: -3.5, from -5.0 to -2.25.
+       - frames 7000-7007: -3.5, from -5.5 to -2.5.
+       - frames 9000-9023: -2.5, from -4.25 to -2.5.
+     - So MAME's level is not even a constant offset of the footprint.
+     - log_ram is u8 in MAME (model2.h), so a game write of 0xFFFF lands as
+       +255, about 2 levels of bias. Whether the board reads it otherwise is
+       not known.
+  2. THE LEVELS ARE IN THE SHEETS WHERE MAME ADDRESSES THEM. Levels 0..max
+     of the most-drawn textures were rendered from frame 2000's sheets at
+     MAME's origin ((t - 2048) >> L & 2047, (t - 1024) >> L & 1023) and
+     sheet texsheet[L & 1]. Each is a halved copy of level 0.
+     - Correlation with a 2^L box downsample of level 0, levels 1-4:
+       - road, 256x256: 0.96 / 0.94 / 0.85 / 0.87.
+       - tree, 256x128: 0.92 / 0.89 / 0.85 / 0.81, and 0.68 at L5.
+     - Some L5+ levels (8x8 and smaller) correlate weakly. That is not
+       settled (see inferred d).
+     - No mip generation is needed.
+  3. THE FOOTPRINT, CHEAPLY: N z^2 WITH N FROM THE QUAD'S EDGES. For a
+     projective map, the texel footprint along any screen direction is
+     N * z^2, and N is constant along that direction. Along an edge,
+     N = |duv| * oz_a * oz_b / |dxy|. This is the same z^2 law as MAME's
+     2 log2 z. The edges supply the per-polygon scale that texlod supplies in
+     MAME.
+     - So each quad gets K = max over its edges of log2 N. Each pixel's level
+       is floor(K - 2 log2(1/z)).
+     - The bit-level model of the RTL (Kh) uses:
+       - 4 msb + 2 bits as the log;
+       - ORs as the maxima and one's complements as the magnitudes;
+       - the fill's normalised 1/z.
+     - Kh against the exact floor(log2 rho), equal / within 1:
+       80.4 / 99.0%, 69.4 / 95.6%, 85.6 / 99.2%, 89.4 / 99.5%.
+     - Kh against MAME's level, equal: 67.5 / 48.1 / 71.3 / 74.6%. That is
+       mostly both at 0.
+     - The variants tried:
+       - Only two edges: shimmer 1.3x GT.
+       - x-only footprint, the span walker's own du/dx: shimmer 1.14-1.21x
+         GT (0.86 on f7000) and more blur in x. The road's depth direction is y.
+       - The log with no mantissa bits: over-blurs.
+       - A global bias on 2 log2 z: MAME's 3-level spread above shows the
+         per-polygon term is needed.
+  4. SHIMMER. Every sampled minified pixel (rho > 1) was re-rendered at 8
+     positions panning 1/8 px right and 1/16 px down a step. The figure is
+     the mean |change| per step, against a box-supersampled level-0 ground
+     truth (GT), as a ratio to GT:
+
+       variant                         f2000  f5000  f7000  f9000
+       today (L0 bilinear)              2.02   2.57   1.65   2.14
+       MAME, full (L/L+1 blend)         1.77   2.06   1.47   1.94
+       MAME's level, nearest            1.88   2.29   1.52   2.03
+       exact footprint, floor           1.12   0.98   0.75   1.11
+       Kh per quad                      0.98   1.00   0.77   1.06
+       Kh per split triangle (BUILT)    1.08   1.09   0.88   1.14
+       trilinear on the footprint       0.79   0.69   0.58   0.81
+
+     - Frame to frame, the mean |change| of minified pixels over the 24
+       consecutive frames:
+       - GT: 19.8 / 11.4 / 33.4 / 19.4.
+       - today: 24.6 / 15.6 / 38.4 / 21.8, which is +13..+37%.
+       - MAME: 23.6 / 14.4 / 37.5 / 21.3.
+       - edge-K: 20.5 / 12.0 / 32.1 / 19.4, which is -4..+5%.
+     - The price is blur. The mean |difference| from GT on minified pixels
+       goes from 6-8 to 11-18 (of 255). Part of that is the game's own
+       level content.
+     - The per-triangle K (SPLIT_TRI) equals the per-quad K on 92.6-96.0% of
+       pixels.
+  5. THE RTL, BEHIND m2_raster3d MIP (Model2.sv .MIP(1'b0)).
+     - m2_raster_fill:
+       - Beside S_OZ's normaliser, which already walks the vertices with
+         their raw u, v and 1/z, one edge a cycle (closing 3 -> 0).
+       - Three pipeline stages (magnitudes; logs; K_e), then a running max.
+       - K is final 4 cycles after S_OZ, and the first span waits for the
+         plane fit anyway.
+       - span_mipk is 10 bits and rides the span queue: 276 of the 280 bits
+         its seven M10K hold.
+     - m2_span_tex:
+       - L = clamp((K - 2 lq(ooz)) >> 2, 0, min(log2 min(w,h) - 1, 7)). It is
+         chosen as a group enters d1, from the divide's own leading-one and
+         normalised mantissa, and is carried down d1..d4.
+       - The un-normalising shift takes L more, so u and v leave at the
+         level. It is rebased past its fixed 18: 4 bits instead of 5.
+       - tx_tex[26:24] = L. Bit 12 is the sheet already ^ L[0]. Bits 27/28
+         are the mirror decisions (bit 13 + code - L of the level's u, v).
+     - m2_texel_bl:
+       - At K: the level's width masks and origin, registered.
+       - At A/P: they replace the level-0 ones.
+       - The nibble is chosen by the texture-relative parity, as get_texel
+         does it. That is the same at level 0, and it differs from L5 where
+         the origin can be odd.
+     - Nothing waits on any of this, and no stage or handshake is added.
+     - Model 1 has no mip. The change sits inside the stages Model 1's walk
+       already has.
+  6. MIP 0 IS HEAD. tb_m2_raster3d, core configuration:
+     - The configuration: FTB, PXC, FRB 2, M2COV, SPLIT_TRI, FB_DDR3 + wcomb,
+       TXLATE 3, TXNS 4 / TXRSP 4 / TXK 16, TXLW8 with -DR3D_LW8, step 1,
+       bilinear, R107.
+     - MAME lists f2000, f2300, f3910, f5000 and f9000, at TEXMEM latency 12
+       and at 30 + 0..30 jitter.
+     - Pixel hash, draw cycles, fetch count and SDRAM line reads are all
+       identical to HEAD in 10 of 10 runs (10e0093, and again on 78ab95b for
+       three lists at L12).
+  7. MIP 1, EVERY TEXEL EXACT. Every texel answer in those runs was checked
+     against a Python model of fetch_bilinear_texel written from MAME at the
+     fetch's level (plus the documented x*0x11 widening): 1,991,570
+     answers, 0 differ.
+     - Fetches by level (f5000): 79.7k / 36.3k / 23.9k / 11.1k / 7.0k /
+       2.5k / 136 / 33.
+     - Draw at 80 MHz, MIP 0 -> 1:
+
+                 L12                          L30
+       f2000   8.94 -> 8.58 ms  -4.1%     10.82 ->  9.79  -9.5%
+       f2300  10.59 -> 10.16    -4.0%     12.56 -> 11.21 -10.8%
+       f3910   7.14 -> 6.99     -2.0%      8.27 ->  7.76  -6.2%
+       f5000   6.67 -> 5.96    -10.7%      9.22 ->  6.82 -26.0%
+       f9000   7.09 -> 6.61     -6.8%      9.28 ->  7.75 -16.6%
+
+     - SDRAM line reads (L12): 12,995 -> 6,367; 14,627 -> 5,869;
+       8,983 -> 5,158; 19,720 -> 5,390; 16,728 -> 5,720. That is -43..-73%.
+     - Mip reduces texel-cache misses at distance, as R827 expected. R606's
+       "7%" was MAME's own, barely-mipped level.
+  8. BENCHES. Each takes a level, and each check was mutated to make sure it
+     can fail:
+     - test_m2_texel_bl_mip: random levels, the model at the level, 200k x 2
+       memory models, and 2 M with latency to 300. Mutations caught: the
+       level's top bit dropped; the mirror decision ignored.
+     - test_m2_span_tex_mip: every test above with K = -512, then 3,000
+       random back-to-back spans (30,000 swept). It checks every fetch's
+       level, the coordinate against the divide's arithmetic at the level
+       and the exact quotient, and the texture word. Mutations caught: the
+       wrong slot's K; the wrong mantissa bits; the level shift off by a
+       stage; the mirror bit index off by one.
+     - test_m2_raster_fill_mip: 4,000 quads (40,000 swept), span_mipk
+       against the formula from the quad as presented. Mutations caught: no
+       closing edge; the wrong lq bits; the 16-octave limit off by one; the
+       closing edge from the wrong vertex.
+     - All existing texel, span, fill, cdc and raster3d benches pass.
+     - lint_top clean. lint_idx: no new candidates.
+     - quartus_map --analyze_file (17.0) on the four modules and Model2.sv:
+       0 errors.
+  9. AREA. quartus_map 17.0, whole design, the same tree, MIP 0 -> 1:
+     - ALMs needed: 39,920 -> 40,180 (+260).
+     - Combinational ALUT: 56,995 -> 57,432 (+437).
+     - Registers: 48,112 -> 48,395 (+283).
+     - Memory ALUT: 1,446, unchanged.
+     - Block memory bits: +368. The span queue is 252 -> 261 bits after
+       pruning, still at most 280, so 7 M10K by construction. The cdc gains
+       5 bits x 16.
+     - DSP: 89 -> 89.
+     - By entity, ALUT / registers:
+
+       entity            ALUT              registers
+       m2_raster_fill    4,981 -> 5,199    3,629 -> 3,825
+       m2_span_tex       1,517 -> 1,477    1,452 -> 1,454
+       m2_texel_bl       1,690 -> 1,799    1,286 -> 1,352
+       m2_texel_cdc         93 -> 95         206 -> 216
+
+  10. TIMING. quartus_sta --post_map, slow model. R825 calibrated it as
+      pessimistic by 2.3-4 ns.
+      - clk_sys:
+        - d1a -> d1_L: +5.13.
+        - d3 -> d4a_sr: +8.41.
+        - d4a -> d4: +5.75. MIP 0 is +2.47 here; the rebased shift is
+          shorter.
+        - d4 -> cdc: +7.99.
+        - fill E1 / E2 / E3 / k_r: +4.56 / +8.48 / +5.53 / +5.18.
+        - In one cycle that edge was -8.15, hence the stages.
+      - clk_mem (m2_texel_bl):
+
+        path                   MIP 0     MIP 1
+        cdc f_* -> K           +3.18     +1.44
+        K -> A                 +1.62     +2.21
+        A -> P                 +2.71     +1.62
+
+        - With the level worked out where it is used (first try), these were
+          +0.01 / -1.28 / -0.13.
+        - The module's worst clk_mem paths are p2_tex_f's stall into K and P
+          (-7.0..-8.2 and -4.53 post-map). They are the same in both builds.
+
+*Decision (recorded as a departure from what MAME computes):* the level is
+the footprint's (edge K + 2 log2 z), not model2rd.ipp's
+(-texlod + log2 z^2) >> 7. MAME's formula, fed the game's texlod as MAME
+reads it, is 2-6 levels sharper than the footprint (item 1) and shimmers
+1.5-2.1x the supersampled reference. Following it would leave the shimmer
+R827 exists to remove. The blend with level+1 and the microtexture are left
+out: nearest level + bilinear already brings the shimmer to the reference's
+(item 4). The addressing at a level (origin, size, sheet, u/v >> L, parity)
+is MAME's, bit for bit.
+
+*Now known -- INFERRED (each says what would settle it):*
+  a. Placed area +145..+260 ALM. The map delta (+260 ALMs needed) has
+     placed at 0.55-0.62x in R821 / R788, but R798 saw small deltas grow up
+     to 2.5x. R821 freed -327..-382. Settles it: a fit with .MIP(1'b1).
+  b. Timing should close. Every new path is +1.4 ns or better post-map, and
+     the clk_mem worst paths are unchanged. Settles it: the same fit.
+  c. Visible: distant road and walls smooth, with lane dashes fading at
+     distance (the game's own level content). In 4-7% of pixels the level
+     steps by one along the split diagonal (per-triangle K). The level also
+     steps in bands, as any nearest-level mip does: there is no blend.
+     Settles it: Ben on the board, R827's "distant textures shimmer".
+  d. Levels 5-7 (8x8 and smaller copies, 0.5-3% of fetches) may not be
+     where the board keeps them. Some correlate weakly with level 0, MAME
+     never exercises them, and the parity rule there is MAME's. Settles it:
+     the board image at distance; capping L at 4 is a one-constant change
+     (mipl_p).
+  e. Whether the arcade itself mips this much: MAME's log RAM read (u8) is
+     the only source for texlod, and it is suspect. Settles it: board video
+     of the arcade, or the log RAM's real width.
+
+*Not verified:* any fit; the board; MIP with texel step 2-8 (the level
+ignores the step, so step > 1 still aliases along x); interlace.
