@@ -32782,3 +32782,11 @@ bits in. lint_top clean; Model2.sv parses in Quartus 17. The constant-fold
 check (project memory, R662) could not read the values -- Quartus kept the
 constant multiply in DSP -- so the board test is the check: 100% must sound
 identical to before, 80% quieter. Not yet built.
+R826 ON THE BOARD: s1046 (STRICT + SYNC): Ben -- "background sky is better
+but still a bit jerky; e.g. quick start a slide then swap to the other
+direction -- really jerky, but better". Alignment was a large part of it; some
+frames are still mismatched. Suspects: the gate's fallback (3D >= 3 lists
+behind shows tile RAM as written), game steps that take two vblanks (~1%),
+and R652's held vblank (Hold game), each breaking the one-step-a-vblank
+pairing. Next: telemetry of the per-frame 2D/3D offset, fallbacks and
+two-vblank steps on the board, and the cases in simulation.
