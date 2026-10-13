@@ -31078,3 +31078,6 @@ use the reduced unit does not cover. The evidence for "never used" is
 Daytona's traced code only (R818); other Model 2 games (Virtua Cop, Desert
 Tank) must be traced, or built with FP_EXT 1. Still no action (R818
 decisions).
+Ben: Virtua Cop and Desert Tank need different I/O boards and will be
+separate cores anyway -- so this core is Daytona-only, which is exactly what
+R818's traces cover, and every other core sets FP_EXT for itself.
