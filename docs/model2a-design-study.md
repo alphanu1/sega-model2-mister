@@ -32790,3 +32790,12 @@ behind shows tile RAM as written), game steps that take two vblanks (~1%),
 and R652's held vblank (Hold game), each breaking the one-step-a-vblank
 pairing. Next: telemetry of the per-frame 2D/3D offset, fallbacks and
 two-vblank steps on the board, and the cases in simulation.
+Ben, refining R826: on the arcade a slide swung from one side to the other
+"mostly sweeps" the view across; in emulation it jumps instantly. The game
+smooths its own camera (car+0x2a = car+0x48 + ((car+0x58 - car+0x48) >> 2) +
+(car+0xbc >> 5)), so a jump means a term feeding it -- likely car+0xbc --
+changes discontinuously. Hypothesis: an op on the physics path (TGP or i960
+FP; e.g. at the zero crossing of the slide angle) that MAME emulates wrongly
+and this core reproduces. An agent is tracing it. Smoothing the 2D scroll in
+the display was considered and rejected: it would make the backdrop lag the
+3D on every frame.
