@@ -32169,3 +32169,16 @@ Model2.sv. Fit (s1037): -327..-382 ALM placed, -2 DSP, every clock closed.
 DECISION (Ben, 2026-10-13): the framework audio filter (R788) waits until
 everything else is done -- added back at the end, if the room is still
 there. The room freed by R818 and R821 is not reserved for it.
+
+**R827 -- OPEN: MIP-MAPPING, AS SMALL AS POSSIBLE (Ben: "the important one,
+and it needs to be small").** R665's route (the geometrizer's per-polygon
+texlod + a capture of the game's log RAM + log2(z) per pixel + a second
+fetch for the blend) priced past the device. The small route to test: the
+mip levels are already in texture ROM (MAME: origin, size and u/v shifted by
+the level, sheet = texsheet[level & 1]), so the cost is the level choice and
+an address shift. Choose the level from the span walker's existing texture
+gradients (the footprint method) instead of the z/texlod formula -- a
+departure from what the silicon computes, to be measured against MAME's
+choice and recorded as a decision if taken -- and skip the level+1 blend
+(nearest level + the existing bilinear) unless measurement says it is
+needed. An agent is measuring and designing it.
