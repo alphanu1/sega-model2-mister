@@ -31857,3 +31857,8 @@ All three close every core clock; s1037 closes EVERY clock including HDMI
 against s1035's 41,255 (same config, PCM_SHARED 0): -327..-382 placed; DSP
 91 -> 89. RBF build/Model2_20261013_s1037_pcmshared.rbf. Not yet on the
 board: Ben to listen for any difference against s1035.
+s1024 (audio + R818 + R822): 213 min of the watch, 119 readings, no lock --
+then the board was rebooted (ssh timeout, uptime 2 min at the next load),
+which cleared /tmp/m2-fps.py; restored from tools/. s1035 on the board from
+14:04 (board time), Revision A, 4 h watch: Ben to check tile overruns at 24
+and 15 kHz.
