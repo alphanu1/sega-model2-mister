@@ -775,6 +775,30 @@ obj_m2_vr826s/Vm2_video_ovr_top: $(M2VOVR_RTL) sim/video/tb_m2_video_r826.cpp
 	$(VBUILD) -Wno-fatal --top-module m2_video_ovr_top -CFLAGS "-O2 -DSSY_BUILD=1" -GLBR=1 -GSIB=0 -GHSF=0 -GSSY=1 \
 	  --Mdir obj_m2_vr826s -o Vm2_video_ovr_top $(M2VOVR_RTL) sim/video/tb_m2_video_r826.cpp
 
+# R826b: m2_video SCR_SYNC and SCR_STEP played from the R826 event model's
+# schedules (sim/video/tb_m2_video_r826b.cpp; schedules from
+# sim/video/r826_evmodel.py). Three builds: SCR_SYNC (R826), SCR_STEP depth 2
+# and depth 3.
+R826B_OBJ := obj_m2_vr826b0/Vm2_video_ovr_top obj_m2_vr826b2/Vm2_video_ovr_top obj_m2_vr826b3/Vm2_video_ovr_top
+r826b_benches: $(R826B_OBJ)
+
+obj_m2_vr826b0/Vm2_video_ovr_top: $(M2VOVR_RTL) sim/video/tb_m2_video_r826b.cpp sim/video/r826b.vlt
+	$(VBUILD) -Wno-fatal sim/video/r826b.vlt --top-module m2_video_ovr_top -CFLAGS "-O2" -GLBR=1 -GSIB=0 -GHSF=0 -GSSY=1 -GSST=0 \
+	  --Mdir obj_m2_vr826b0 -o Vm2_video_ovr_top $(M2VOVR_RTL) sim/video/tb_m2_video_r826b.cpp
+
+obj_m2_vr826b2/Vm2_video_ovr_top: $(M2VOVR_RTL) sim/video/tb_m2_video_r826b.cpp sim/video/r826b.vlt
+	$(VBUILD) -Wno-fatal sim/video/r826b.vlt --top-module m2_video_ovr_top -CFLAGS "-O2" -GLBR=1 -GSIB=0 -GHSF=0 -GSSY=1 -GSST=1 -GSDP=2 \
+	  --Mdir obj_m2_vr826b2 -o Vm2_video_ovr_top $(M2VOVR_RTL) sim/video/tb_m2_video_r826b.cpp
+
+obj_m2_vr826b3/Vm2_video_ovr_top: $(M2VOVR_RTL) sim/video/tb_m2_video_r826b.cpp sim/video/r826b.vlt
+	$(VBUILD) -Wno-fatal sim/video/r826b.vlt --top-module m2_video_ovr_top -CFLAGS "-O2" -GLBR=1 -GSIB=0 -GHSF=0 -GSSY=1 -GSST=1 -GSDP=3 \
+	  --Mdir obj_m2_vr826b3 -o Vm2_video_ovr_top $(M2VOVR_RTL) sim/video/tb_m2_video_r826b.cpp
+
+test_m2_video_r826b: $(R826B_OBJ)
+	@echo "== test m2_video R826b (SCR_SYNC / SCR_STEP from the event model's schedules)"
+	@python3 sim/video/r826_evmodel.py bench --obj0 obj_m2_vr826b0/Vm2_video_ovr_top \
+	  --obj2 obj_m2_vr826b2/Vm2_video_ovr_top --obj3 obj_m2_vr826b3/Vm2_video_ovr_top $(TEST_ARGS)
+
 # The CPU bridge: decode, the 32-to-16 split, and the 25-to-40 MHz crossing.
 test_m2_geo: obj_m2_geo/Vm2_geo obj_m2_geo_s/Vm2_geo
 	@echo "== test m2_geo (geometrizer front door + display-list walk)"

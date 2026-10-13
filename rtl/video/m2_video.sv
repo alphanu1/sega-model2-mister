@@ -101,7 +101,26 @@ module m2_video #(
   // then the copy taken at flip j (two copies kept) stands in. Falls back to
   // tile RAM when the 3D is three or more lists behind. Implies HSCR_FIX (the
   // copies are taken from the sequencer's own reads). 0: unchanged.
-  parameter bit          SCR_SYNC = 1'b0
+  parameter bit          SCR_SYNC = 1'b0,
+  // R826b: THE COPIES TAKEN AT THE GAME'S VBLANKS AND NAMED BY THE LIST THEY
+  // BELONG TO (SCR_SYNC only). SCR_SYNC numbers tile RAM by the flips it has
+  // seen and copies it at each flip; that is right only while every flip comes
+  // before the vblank that ends its step. A step whose flip lands after that
+  // vblank (the game ~1% late) has had its scroll rewritten by the vblank IRQ
+  // already, and the copy and the count are then a step ahead (the 2D one step
+  // ahead for a frame); and a 3D one vblank late (walk + sort past the vblank)
+  // takes the gate to three lists behind at the next flip, where it falls back
+  // to tile RAM mid-frame -- two steps ahead below the flip line, every frame,
+  // until the game next misses a vblank. Here each vblank the game is given
+  // (scr_vtgl) moves the words just shown into a history of SCR_DEPTH copies,
+  // and every copy and tile RAM carry the list their words were written for
+  // (scr_ttag, worked out at the top level from the flips and the vblank IRQ);
+  // the copy whose list is the one on screen (scr_tag) is shown. None: one
+  // list older than the oldest copy shows the oldest copy (the nearest);
+  // anything else shows tile RAM (the 3D stalled, or no 3D). 0: SCR_SYNC as it
+  // was. The same two copies as SCR_SYNC at SCR_DEPTH 2.
+  parameter bit          SCR_STEP  = 1'b0,
+  parameter int unsigned SCR_DEPTH = 2     // 2 or 3
 ) (
   input  logic        clk,
   input  logic        ce_pix,
@@ -259,6 +278,12 @@ module m2_video #(
   // frame, at its frame_start).
   input  logic        scr_flip,
   input  logic  [3:0] scr_tag,
+  // R826b (SCR_STEP): asynchronous to clk. scr_vtgl toggles at each vblank
+  // whose IRQ the game is given (not at a vblank R652 withholds); scr_ttag,
+  // set at least a cycle of its own clock before that toggle and held for the
+  // frame, names the list the scroll words written in that vblank are for.
+  input  logic        scr_vtgl,
+  input  logic  [3:0] scr_ttag,
   input  logic        ntsc_lines,   // R783: 262.5-line fields when interlaced
   output logic        vid_field
 );
@@ -804,6 +829,8 @@ module m2_video #(
   //           not yet on screen; 1-2 take the copy from flip ss_p + 2, more
   //           than that (the 3D stalled, or no 3D) take tile RAM.
   localparam bit HSCR_RD = HSCR_FIX || SCR_SYNC;
+  localparam bit SS_STEP = SCR_SYNC && SCR_STEP;            // R826b
+  localparam int SD      = (SCR_DEPTH >= 3) ? 3 : 2;
   logic [2:0]  ss_fs;                 // scr_flip synchroniser + edge
   logic [3:0]  ss_t1, ss_t2, ss_p;    // scr_tag synchroniser, taken when stable
   logic [3:0]  ss_nf;
@@ -813,17 +840,103 @@ module m2_video #(
   // Registered: the choice moves only at a flip or a publish, so a cycle's
   // delay costs nothing and keeps the 4-bit arithmetic out of the read path.
   logic        ss_use, ss_slot;
+  logic [1:0]  sv_sel;                // R826b: 0 tile RAM, n copy n-1
   always_ff @(posedge clk or negedge rst_n)
     if (!rst_n) begin ss_use <= 1'b0; ss_slot <= 1'b0; end
-    else begin
+    else if (SS_STEP) begin
+      ss_use  <= (sv_sel != 2'd0);
+      ss_slot <= 1'b0;
+    end else begin
       ss_use  <= SCR_SYNC && ((ss_d == 4'd1) || (ss_d == 4'd2));
       ss_slot <= ss_a[0];
     end
   // The copy standing in for each of the sequencer's four reads of a layer.
-  wire  [15:0] ss_h  = ss_c[ss_slot][{1'b0, cur_layer}];         // hscr
-  wire  [15:0] ss_v  = ss_c[ss_slot][{1'b1, cur_layer}];         // vscr
-  wire  [15:0] ss_cw = ss_c[ss_slot][{1'b1, cur_layer[1], 1'b0}]; // ctrl
-  wire  [15:0] ss_hc = ss_c[ss_slot][{1'b0, cur_layer[1], 1'b0}]; // hctrl
+  logic [15:0] ss_h, ss_v, ss_cw, ss_hc;
+  // R826b: the history, newest first, and the list each copy's words are for
+  logic [15:0] sv_c [SD][8];
+  logic [3:0]  sv_ht [SD];
+  logic [SD-1:0] sv_hv;
+  logic [3:0]  sv_tt;                 // the list tile RAM's words are for
+  logic [2:0]  sv_s;                  // scr_vtgl synchroniser + edge
+  logic [3:0]  sv_t1, sv_t2;          // scr_ttag synchroniser
+  logic        sv_ld;                 // a vblank seen, its tag not yet taken
+  logic [1:0]  sv_q;                  // registered copy index (sv_sel - 1)
+  always_comb begin
+    if (SS_STEP) begin
+      // constant copy indices only (an index past SD would wrap, R807)
+      ss_h  = sv_c[0][{1'b0, cur_layer}];
+      ss_v  = sv_c[0][{1'b1, cur_layer}];
+      ss_cw = sv_c[0][{1'b1, cur_layer[1], 1'b0}];
+      ss_hc = sv_c[0][{1'b0, cur_layer[1], 1'b0}];
+      if (sv_q == 2'd1) begin
+        ss_h  = sv_c[1][{1'b0, cur_layer}];
+        ss_v  = sv_c[1][{1'b1, cur_layer}];
+        ss_cw = sv_c[1][{1'b1, cur_layer[1], 1'b0}];
+        ss_hc = sv_c[1][{1'b0, cur_layer[1], 1'b0}];
+      end
+      if (sv_q == 2'd2) begin
+        ss_h  = sv_c[SD-1][{1'b0, cur_layer}];
+        ss_v  = sv_c[SD-1][{1'b1, cur_layer}];
+        ss_cw = sv_c[SD-1][{1'b1, cur_layer[1], 1'b0}];
+        ss_hc = sv_c[SD-1][{1'b0, cur_layer[1], 1'b0}];
+      end
+    end else begin
+      ss_h  = ss_c[ss_slot][{1'b0, cur_layer}];         // hscr
+      ss_v  = ss_c[ss_slot][{1'b1, cur_layer}];         // vscr
+      ss_cw = ss_c[ss_slot][{1'b1, cur_layer[1], 1'b0}]; // ctrl
+      ss_hc = ss_c[ss_slot][{1'b0, cur_layer[1], 1'b0}]; // hctrl
+    end
+  end
+  generate if (SS_STEP) begin : g_sv
+    // The vblank toggle three flops deep against the tag's two, so the tag is
+    // settled when the edge is seen (it is also set a cycle ahead at source);
+    // sv_ld then takes it only once two samples agree.
+    always_ff @(posedge clk or negedge rst_n) begin
+      if (!rst_n) begin
+        sv_s <= '0; sv_t1 <= '0; sv_t2 <= '0; sv_ld <= 1'b0; sv_tt <= 4'd8;
+        sv_hv <= '0; sv_sel <= 2'd0; sv_q <= 2'd0;
+        for (int i = 0; i < SD; i++) sv_ht[i] <= 4'd8;
+      end else begin
+        sv_s  <= {sv_s[1:0], scr_vtgl};
+        sv_t1 <= scr_ttag; sv_t2 <= sv_t1;
+        if (sv_s[2] != sv_s[1]) begin
+          // the words shown since the last vblank become the newest copy
+          sv_ht[0] <= sv_tt; sv_hv[0] <= 1'b1;
+          for (int i = 1; i < SD; i++) begin sv_ht[i] <= sv_ht[i-1]; sv_hv[i] <= sv_hv[i-1]; end
+          sv_ld <= 1'b1;
+        end else if (sv_ld && (sv_t1 == sv_t2)) begin
+          sv_tt <= sv_t2; sv_ld <= 1'b0;
+        end
+        // The choice, registered (it moves only at a vblank or a publish).
+        // Tile RAM, then the copies newest first; failing those, one list
+        // older than the oldest copy takes the oldest; otherwise tile RAM.
+        sv_sel <= 2'd0;
+        if (sv_tt != ss_p) begin
+          if (sv_hv[SD-1] && (sv_ht[SD-1] - ss_p == 4'd1)) sv_sel <= 2'(SD);
+          for (int i = SD - 1; i >= 0; i--)
+            if (sv_hv[i] && (sv_ht[i] == ss_p)) sv_sel <= 2'(i + 1);
+        end
+        sv_q <= (sv_sel == 2'd0) ? 2'd0 : sv_sel - 2'd1;
+      end
+    end
+    // Not reset: values, selected only once their valid bit is set.
+    always_ff @(posedge clk)
+      if (sv_s[2] != sv_s[1])
+        for (int i = 0; i < 4; i++) begin
+          sv_c[0][i]     <= dbg_hscr[i];
+          sv_c[0][4 + i] <= dbg_vscr[i];
+          for (int k = 1; k < SD; k++) begin
+            sv_c[k][i]     <= sv_c[k-1][i];
+            sv_c[k][4 + i] <= sv_c[k-1][4 + i];
+          end
+        end
+  end else begin : g_no_sv
+    assign sv_s = '0; assign sv_t1 = '0; assign sv_t2 = '0; assign sv_ld = 1'b0;
+    assign sv_tt = '0; assign sv_hv = '0; assign sv_sel = 2'd0; assign sv_q = 2'd0;
+    always_comb for (int i = 0; i < SD; i++) sv_ht[i] = '0;
+    always_comb for (int b = 0; b < SD; b++) for (int i = 0; i < 8; i++) sv_c[b][i] = '0;
+    wire _unused_sv = &{1'b0, scr_vtgl, scr_ttag, sv_s, sv_t1, sv_t2, sv_ld, sv_tt, sv_hv, sv_ht[0], sv_ht[1]};
+  end endgenerate
   generate if (SCR_SYNC) begin : g_ss
     always_ff @(posedge clk or negedge rst_n) begin
       if (!rst_n) begin

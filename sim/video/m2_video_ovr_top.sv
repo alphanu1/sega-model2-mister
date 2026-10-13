@@ -13,10 +13,15 @@ module m2_video_ovr_top #(
   parameter bit SIB = 1'b1,      // d: m2_char_cache SIBLING
   // R826 (tb_m2_video_r826): d's HSCR_FIX / SCR_SYNC, and its flip / tag
   parameter bit HSF = 1'b0,
-  parameter bit SSY = 1'b0
+  parameter bit SSY = 1'b0,
+  // R826b: d's SCR_STEP / SCR_DEPTH, and its vblank toggle / tile-RAM tag
+  parameter bit SST = 1'b0,
+  parameter int SDP = 2
 ) (
   input  logic        d_flip,
   input  logic  [3:0] d_tag,
+  input  logic        d_vtgl,
+  input  logic  [3:0] d_ttag,
   input  logic        clk,
   input  logic        ce_pix,
   input  logic        rst_n,
@@ -55,7 +60,8 @@ module m2_video_ovr_top #(
     .vid_cat1(), .vid_r(), .vid_g(), .vid_b(), .vid_hs(), .vid_vs(), .vid_hb(), .vid_vb(),
     .vblank_irq(vblank_start), .dbg_fetches(), .dbg_overruns(r_ovr), .dbg_ovr_frame(),
     .dbg_layer_px(), .dbg_ctrl(), .dbg_hscr(), .dbg_vscr(), .dbg_layer_have(),
-    .vid_x(hcnt), .vid_y(vcnt), .interlace(interlace), .ntsc_lines(ntsc_lines), .vid_field(), .scr_flip(1'b0), .scr_tag(4'd0)
+    .vid_x(hcnt), .vid_y(vcnt), .interlace(interlace), .ntsc_lines(ntsc_lines), .vid_field(), .scr_flip(1'b0), .scr_tag(4'd0),
+    .scr_vtgl(1'b0), .scr_ttag(4'd0)
   );
   m2_char_cache #(.IDX_BITS(13)) u_rc (
     .clk(clk), .rst_n(rst_n),
@@ -65,7 +71,7 @@ module m2_video_ovr_top #(
     .dbg_hits(), .dbg_misses(), .dbg_fills()
   );
 
-  m2_video #(.LB_RING(LBR), .HSCR_FIX(HSF), .SCR_SYNC(SSY)) u_d (
+  m2_video #(.LB_RING(LBR), .HSCR_FIX(HSF), .SCR_SYNC(SSY), .SCR_STEP(SST), .SCR_DEPTH(SDP)) u_d (
     .clk(clk), .ce_pix(ce_pix), .rst_n(rst_n), .tile_mask(14'h3fff),
     .gamma_sel(2'd0), .xlat_clk(clk), .xlat_we(1'b0), .xlat_addr(7'd0), .xlat_din(8'd0),
     .tram_addr(d_tram_addr), .tram_data(d_tram_data),
@@ -74,7 +80,8 @@ module m2_video_ovr_top #(
     .vid_cat1(), .vid_r(), .vid_g(), .vid_b(), .vid_hs(), .vid_vs(), .vid_hb(), .vid_vb(),
     .vblank_irq(), .dbg_fetches(), .dbg_overruns(d_ovr), .dbg_ovr_frame(),
     .dbg_layer_px(), .dbg_ctrl(), .dbg_hscr(), .dbg_vscr(), .dbg_layer_have(),
-    .vid_x(d_hcnt), .vid_y(d_vcnt), .interlace(interlace), .ntsc_lines(ntsc_lines), .vid_field(), .scr_flip(d_flip), .scr_tag(d_tag)
+    .vid_x(d_hcnt), .vid_y(d_vcnt), .interlace(interlace), .ntsc_lines(ntsc_lines), .vid_field(), .scr_flip(d_flip), .scr_tag(d_tag),
+    .scr_vtgl(d_vtgl), .scr_ttag(d_ttag)
   );
   m2_char_cache #(.IDX_BITS(13), .SIBLING(SIB)) u_dc (
     .clk(clk), .rst_n(rst_n),

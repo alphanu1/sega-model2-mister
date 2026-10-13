@@ -3005,6 +3005,33 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		if (geo_walk_started) r826_wtag <= r826_fc - 4'd1;
 	end
 end
+// R826b: THE LIST THE SCROLL WORDS WRITTEN AT EACH VBLANK ARE FOR (m2_video
+// SCR_STEP; synthesised away while R826_STEP is 0). The game starts a step only
+// after a vblank IRQ that comes after its last step's flip (0x138c waits for
+// the IRQ's count to change, MAME debugger, Rev A), and that IRQ writes the
+// scroll for the list two before the new step: so the words written at a
+// vblank are for list (flips acknowledged before it) - 1, a flip being
+// acknowledged by the first vblank the game is given after it -- or by the
+// vblank whose IRQ is still pending when it lands (the game flipped before it
+// took the IRQ). A vblank R652 withholds writes nothing and moves nothing.
+// The tag is set a cycle before the toggle, and both held for the frame.
+logic [3:0] r826_ack, r826_ttag;
+logic       r826_vtgl, r826_vtgl_p;
+wire        r826_vgive = vbl_d && !vbl_dd && !r3d_game_hold;   // the IRQ's own condition
+wire        r826_fnow  = geo_wr_setrp && !r826_setrp_d;          // the edge r826_fc counts
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+	if (!mem_rst_n) begin
+		r826_ack <= 4'd0; r826_ttag <= 4'd15; r826_vtgl <= 1'b0; r826_vtgl_p <= 1'b0;
+	end else begin
+		r826_vtgl_p <= 1'b0;
+		if (r826_vtgl_p) r826_vtgl <= ~r826_vtgl;
+		if (r826_vgive) begin
+			r826_ttag   <= r826_ack - 4'd1;
+			r826_ack    <= r826_fc + {3'd0, r826_fnow};
+			r826_vtgl_p <= 1'b1;
+		end else if (r826_fnow && io_intreq[0]) r826_ack <= r826_fc + 4'd1;
+	end
+end
 // THE OPCODE IS IN THE ADDRESS, NOT IN THE DATA, and missing that is why no
 // geometry has ever drawn.
 //
@@ -3167,6 +3194,12 @@ m2_geo_view #(.CRTC_X(0), .CRTC_Y(128)) u_geo_view (
 localparam bit R826_STRICT = 1'b1;   // m2_geo AFTER_STRICT: the 3D never early
 localparam bit R826_SYNC   = 1'b1;   // m2_video SCR_SYNC: the 2D never early
 localparam bit R826_HSCR   = 1'b0;   // m2_video HSCR_FIX: hscr_r read from its own word
+// R826b: with R826_SYNC, the copies taken at each vblank the game is given and
+// chosen by the list they are for (r826_ttag), not by counting flips -- right
+// across a step that takes two vblanks, and one vblank of 3D lateness without
+// the tile-RAM fallback. Needs R826_SYNC (and R826_STRICT).
+localparam bit          R826_STEP  = 1'b0;
+localparam int unsigned R826_DEPTH = 2;   // copies (2 or 3)
 m2_geo #(.AW(SDR_AW), .DEPTH(128), .AFTER_STRICT(R826_STRICT)) u_geo (
 	.clk(clk_sys), .rst_n(mem_rst_n),
 	.wr_ctl(geo_wr_ctl), .wr_setwp(geo_wr_setwp), .wr_setrp(geo_wr_setrp),
@@ -6421,7 +6454,8 @@ wire cc_rst_n_s  = cc_rst_sync[1];
 // R823: four line banks as a ring, rendering up to two lines ahead -- a
 // layer's burst of glyph misses borrows time from the lines around it.
 // Tile overruns: 0 on 114 MAME frames at the board's latency (was 8 a frame).
-m2_video #(.LB_RING(1'b1), .HSCR_FIX(R826_HSCR), .SCR_SYNC(R826_SYNC)) u_tilemap (
+m2_video #(.LB_RING(1'b1), .HSCR_FIX(R826_HSCR), .SCR_SYNC(R826_SYNC),
+           .SCR_STEP(R826_STEP), .SCR_DEPTH(R826_DEPTH)) u_tilemap (
 		// cal_done too: on a GAME image game_image short-circuits cp_done without
 	// reading anything, so the character fetch on port 3 would otherwise issue
 	// at CL+0 until the calibration caught up. Those are live re-reads rather
@@ -6456,7 +6490,8 @@ m2_video #(.LB_RING(1'b1), .HSCR_FIX(R826_HSCR), .SCR_SYNC(R826_SYNC)) u_tilemap
 	.interlace(vid_il), .ntsc_lines(vid_nl), .vid_field(vid_field),   // R682, R783
 	.dbg_layer_px(vid_layer_px), .dbg_ctrl(vid_ctrl),
 	.dbg_layer_have(vid_layer_have),
-	.scr_flip(r826_flip_tgl), .scr_tag(r826_stag)   // R826
+	.scr_flip(r826_flip_tgl), .scr_tag(r826_stag),   // R826
+	.scr_vtgl(r826_vtgl), .scr_ttag(r826_ttag)        // R826b
 );
 
 ///////////////////////   VIDEO   ////////////////////////////////

@@ -33292,3 +33292,193 @@ is halved. Ben picks after the board.
 *Not verified:* any fit; the board; the images in
 sm2-builds/mipmaps/img/mipbias_*.png are grey texel values from the offline
 model, not the core's colours.
+
+R826 ADDENDUM 2 (draft) -- THE RESIDUAL. SCR_SYNC NUMBERS THE SCROLL BY THE
+FLIPS IT HAS SEEN, BUT THE GAME'S VBLANK IRQ REWRITES THE SCROLL ON EVERY
+VBLANK FROM THE YAW ITS LAST STEP LATCHED; AND AT 60 Hz THE GATE ENDS EVERY
+FRAME AT ITS LAST COPY. A STEP OVER A VBLANK PUTS THE 2D A STEP AHEAD FOR A
+FRAME; A 3D ONE VBLANK LATE STAYS LATE AND TEARS THE 2D AT THE FLIP LINE ON
+EVERY FRAME UNTIL THE GAME NEXT MISSES A VBLANK. R826_STEP (DEFAULT OFF):
+THE COPIES TAKEN AT THE GAME'S VBLANKS AND NAMED BY THE LIST THEY ARE FOR.
+NOT FITTED, NOT ON THE BOARD; A TELEMETRY PATCH MEASURES WHICH CASE IT IS.
+
+(Section: §10, R826 and its addenda; R830 for the snap that is the game's own.
+Model 1 shows a list two vblanks after its flip, this core three -- that one
+frame is why the 2D is delayed by copies at all; nothing here changes the 3D.)
+
+*What was believed (R826, R826 ON THE BOARD):*
+  1. The game writes iteration j's eight scroll words at the vblank the
+     iteration starts in, and they stand until the next iteration; SCR_SYNC
+     therefore numbers tile RAM by the flips seen (ss_nf) and keeps the words
+     of iteration j by copying them at flip j.
+  2. R826's event model: "core strict+gate" 100% aligned at 30 Hz, 99% with
+     2% three-frame iterations, 100% with 15% one-frame ones.
+  3. The residual Ben sees on s1046 ("better but still a bit jerky ... quick
+     slide reversal really jerky") is the gate's fallback, the ~1% two-vblank
+     steps, or R652's held vblank.
+
+*Now known -- VERIFIED:*
+  1. THE GAME LOOP (MAME 0.289 debugger, Revision A, dasm 0x12f0-0x13d0,
+     0x17c00-0x17f50, 0x1c4a8, 0xe34):
+       0x131c-0x1374  the step: ... 0x1354 call 0x17ed8, 0x183c, 0x1900,
+                      0x1360 call 0x17ef0 -- which reads the TGP and then
+                      FLIPS (0x17f10 st r3,0x3008(g10) = 0x803008) -- then
+                      0x1364 call 0x1c4a8 (ten instructions, one I/O-board
+                      DPRAM byte at 0x1c00022), 0x1370 call 0x138c.
+       0x138c         g0 = count (0x500000); spin until count != g0; if
+                      count >= 2, 0x5010b4 += 1; count = 0; call 0x17f1c
+                      (reads 0x98000c, picks the list buffer); next step.
+     So a step starts only after a vblank IRQ that comes AFTER the step
+     before it ended; a step that overruns a vblank waits for the next one
+     (there are no back-to-back steps). The flip is ~20 instructions before
+     the wait. (The R826 addendum's "waits for the count to change" is exact:
+     it waits for a change from the value it found, not for non-zero.)
+  2. With the addendum's chain (0x4500 latches 0x5fe11a = the yaw of the step
+     before, at each step start; every vblank IRQ writes hscr2 from
+     0x5fe11a): THE WORDS WRITTEN AT A GIVEN VBLANK ARE FOR LIST N - 2, N =
+     steps started before it. In a step that spans a vblank, that middle
+     vblank already writes the NEXT list's scroll, before the step has
+     flipped. Belief 1 is wrong there, and R826's event model and
+     tb_m2_video_r826's sync-play both encode belief 1 -- which is why
+     neither could show it.
+  3. THE RTL AGREES WITH THE MODEL THAT SAYS SO. sim/video/r826_evmodel.py
+     is the game (item 1-2), m2_geo AFTER_STRICT (walk at a frame_start
+     after the flip, the latest list, tag fc - 1), m2_raster3d (store
+     P_COLLECT -> sort -> P_READY; swap at a frame_start when P_READY and
+     the draw idle; publish at the frame_start after the draw; list_hold ->
+     no IRQ, no walk, no swap, no publish) and m2_video SCR_SYNC (flip-time
+     copies of the sequencer's last read; ss_d 1-2 a copy, else tile RAM),
+     rule for rule. tb_m2_video_r826b (new) plays its schedules -- the IRQ's
+     writes, flips, publishes at their line and cycle -- into m2_video and
+     reads back the scroll tilemap 2 latched (hctrl_r) on every line:
+     12 schedules x 3 builds (SCR_SYNC; SCR_STEP depth 2; depth 3), 788
+     compared frames a build, the RTL equal to the model at lines 0 and 383
+     on every one of the 2,364 (make test_m2_video_r826b). It can fail: the
+     SCR_SYNC build played the STEP model's "walk late once" schedule agrees
+     on 12 of 43 frames and exits 1.
+  4. THE CASES (STRICT + SYNC, today's default; 60 Hz otherwise steady).
+     Offsets are the 2D's list minus the 3D's list; +1 = the backdrop a game
+     step ahead of the scene.
+       step over a vblank, its flip after the frame's
+         first scroll read (line -2)              one frame +1
+       ... its flip inside that vblank, before the
+         first read                               aligned (the flip-time copy
+                                                  still holds the old words)
+       step over two vblanks                      one frame +1
+       tail over the vblank (flip just before
+         it, wait just after)                     aligned
+       flip between the vblank edge and the IRQ   one frame torn, +2 below
+                                                  the flip (a list skipped)
+       3D one vblank late (walk + sort past the
+         vblank after its walk starts)            the 3D stays one list late:
+                                                  each later walk queues
+                                                  behind the P_READY list.
+                                                  Every frame, the mid-frame
+                                                  flip takes ss_d 2 -> 3: the
+                                                  tile-RAM fallback, +2 below
+                                                  the flip line. Ends only
+                                                  when the game misses a
+                                                  vblank, or a walk starts
+                                                  after the next flip (a
+                                                  list skipped).
+       draw over a vblank, a list waiting         R652 holds: no IRQ, no swap,
+                                                  no publish -- 2D and 3D
+                                                  freeze together, aligned
+                                                  (a missed game step, not a
+                                                  jerk). Never at today's draw
+                                                  (max 15.6 ms at 80, 16.6 at
+                                                  75, of 17.39).
+       every step two vblanks (30 Hz)             50% aligned, +1 alternating
+                                                  (belief 2 said 100%)
+       30% of steps two vblanks                   78% aligned
+     The tag crossings add nothing: show_tag moves once a frame at the
+     frame_start and is taken when two samples agree, ~40 lines before the
+     first read; a flip that crosses during a line changes the choice only
+     between identical words (the copy taken at a flip is tile RAM's words
+     then). The copies are overwritten exactly when ss_d reaches 3 -- the
+     fallback above, not a separate case.
+
+*Now known -- INFERRED (each says what settles it):*
+  a. HOW OFTEN, at today's measured timing (event model, 30,000 frames a
+     row; 1% of steps over a vblank (R815 race); "walk late" = a list's walk +
+     sort ending after the next vblank, never measured as such; flip times
+     either clustered late (N(0.80, 0.086) frames after the step start) or
+     spread (0.4-0.95, 1% at 1.0-1.4)). Aligned % / torn % (changes of
+     offset per 1,000 frames):
+                       walk late 0     0.2%          0.5%          1%
+       SYNC, clustered   99.95/0 (1)  86.9/13.0 (5) 69.7/29.9 (11) 53.2/45.9 (19)
+       SYNC, spread      99.31/0 (14) 95.6/3.7 (18) 92.7/6.5 (24)  88.0/11.1 (32)
+       STEP 2, clustered 100 (0)      99.93 (0.7)   99.60 (4)      99.11 (9)
+       STEP 2, spread    100 (0)      99.99 (0.1)   99.90 (1)      99.76 (2)
+       STEP 3, either    100 (0)      100 (0)       100 (0)        100 (0.1)
+     With no late walks SYNC's residual is the over-vblank steps whose flip
+     lands after the first read: 0.05-0.7% of frames, 1 to 24 one-frame
+     jerks a minute. Any late walk at all makes the fallback tear dominate.
+     A torn frame shows only where the tilemap does, above the 3D: a flip
+     low on the screen hides most of it under the road. Settles it: the
+     telemetry below (flip line, 3D latency, ss_d, game-late vblanks).
+  b. The slide reversal itself is R830's (the game's own camera snap at pad
+     speeds); misalignment adds to it in the same frames, because heavy
+     frames (spins, smoke) are the ones that overrun a vblank (R814: 2+
+     vblank frames carried more TGP work). Settles it: telemetry during a
+     reversal, Steering smoothing Off and Wheel.
+  c. R826_STEP depth 2 costs about what SCR_SYNC does (the same two copies;
+     SCR_SYNC's flip counter and copies prune away; +4-bit tags, valid bits,
+     three comparators, ~10 FF at the top): +0..+30 ALM. Depth 3: one more
+     copy and a 3:1 mux, ~+60..+100 ALM. Settles it: a fit.
+
+*The fix, behind R826_STEP (Model2.sv, default 0), needs R826_SYNC:*
+  * Model2.sv (clk_sys): r826_ack counts the flips acknowledged -- by the
+    first vblank the game is given after them, or by the vblank whose IRQ is
+    still pending when they land (io_intreq[0]). At each given vblank
+    (r826_vgive = the IRQ's own condition, so R652's withheld vblanks do
+    nothing) r826_ttag = r826_ack - 1, the list the IRQ is about to write
+    the scroll for, and a cycle later r826_vtgl toggles.
+  * m2_video SCR_STEP / SCR_DEPTH (2 or 3): at each r826_vtgl edge (three
+    flops; the tag two flops, taken when two samples agree) the words the
+    sequencer read in the frame just shown become copy 0 with tile RAM's tag
+    (a shift history), and tile RAM takes the new tag. Shown: tile RAM if
+    its tag is the 3D's list (scr_tag), else the newest copy whose tag is,
+    else -- one list older than the oldest copy -- the oldest copy, else
+    tile RAM (no 3D, or the 3D stalled: the 2D runs live, as SCR_SYNC's
+    fallback did). The choice is registered; constant copy indices only.
+  * tb_m2_video_r826b: depth 2 aligned on every frame of every case except
+    two late walks ten frames apart (2 frames +1); depth 3 aligned on every
+    frame of every case, both stochastic runs included. SCR_SYNC in the same
+    bench shows each case above. test_m2_video_r826 (SCR_STEP 0) and
+    test_m2_video_ovr +quick unchanged; lint_top: no new warning with
+    R826_STEP 0, 1 and depth 3; lint_idx: the same candidates as HEAD in all
+    three; quartus_map --analyze_file (17.0): m2_video.sv, Model2.sv and a
+    STEP 1 / depth 3 copy, 0 errors.
+  * At 30 Hz and with mixed 1/2-vblank steps, STEP is 100% in the model
+    (SYNC 50% / 78%).
+
+*Telemetry (build/worktree_patches/r826-telemetry.patch, applies to headroom
+bff8982 and 64e7a7b -- R826 STRICT/SYNC on, MIP off, as they are; DEBUG_LITE,
+75 / 37.5 as R814's why builds; SPCULL left on):* an 'R' record every
+vblank in place of 'G': the 2D's list against the 3D's list at lines 0 and
+383, by GAME STEP -- independent of the RTL's own numbering: a step is
+counted where Daytona's wait loop clears 0x500000 (i960 bus, clk_i960), each
+flip is mapped to the step it came in, the scroll written at a given vblank
+is the list N - 2, SCR_SYNC's copies are traced by flip -- plus ss_d (the
+fallback), held / game-late / walk-late / 3D-late / swap / publish / draw-busy
+/ flip-during-IRQ flags, the frame's flip and step-start times, and the shown
+list's flip-to-screen latency in vblanks (3 on time). Decoder:
+build/m2scripts/decode_r826.py (a copy in the session scratchpad): per-frame
+histogram aligned / +1 / -1 / torn, ss_d, event rates, flip-time
+distribution, 3D latency, the cause of each misaligned frame, runs, and per
+10 s. Checked against the event model's own records (it reproduces the
+model's numbers); the Verilog itself only linted (lint, lint_idx, LITE + NO_DEBUG
+both) and parsed (analyze_file with the macros), not simulated. Daytona Rev A
+and 24 kHz only (the 2D's list is taken at line 420).
+
+*Not verified:* any fit; the board; whether walks are ever late at today's
+timing (no record has ever separated a late P_READY from the rest); 15 kHz;
+games other than Daytona (the step model is Daytona's loop).
+
+NEXT:
+  1. The telemetry build, a race with slides and reversals (Steering
+     smoothing Off), and the attract loop: the share of frames misaligned,
+     and which case.
+  2. If the 3D-late backlog shows: R826_STEP with depth 2 (or 3 if the decoder
+     shows the 3D two lists late). If only over-vblank steps: depth 2.
