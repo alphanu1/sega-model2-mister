@@ -47,8 +47,9 @@ assign HDMI_BOB_DEINT = 0;
 // becomes a very loud positive one, which is the classic full-scale buzz over
 // the top of otherwise correct music.
 assign AUDIO_S   = 1;
-assign AUDIO_L   = snd_l;
-assign AUDIO_R   = snd_r;
+logic signed [15:0] vol_l, vol_r;   // R829: the sound after the OSD's Volume (below)
+assign AUDIO_L   = vol_l;
+assign AUDIO_R   = vol_r;
 assign AUDIO_MIX = 0;
 
 // LED_USER included deliberately: the first build left it undriven, which is
@@ -222,6 +223,9 @@ localparam CONF_STR = {
 	// mapped below to the palette's encoding (0 MAME, 1 mild, 2/3 off).
 	// R790: MAME first now -- Ben's default. Menu 0 MAME, 1 Off, 2 Mild.
 	"O[33:32],Gamma,MAME,Off,Mild;",
+	// R829: Volume, 80% by default (Ben). Index 0 is the default, so the list
+	// runs 80, 90, 100, then wraps through 0..70 -- one press steps 10%.
+	"O[49:46],Volume,80%,90%,100%,0%,10%,20%,30%,40%,50%,60%,70%;",
 	// Which half of the right stick's Y is the throttle. Axis polarity is not
 	// standardised across pads, so this is a setting rather than a rebuild.
 	"O[28],Pedals,Normal,Swapped;",
@@ -2703,6 +2707,33 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 end
 
 wire signed [15:0] snd_l, snd_r;
+// R829: THE OSD VOLUME. status[49:46] indexes 80, 90, 100, 0, 10 .. 70 %;
+// the gain is that percentage of 256 (rounded), applied as one 16 x 10
+// signed multiply per channel and the product's [23:8]: at 100% exactly the
+// input, never louder, so it cannot clip. Three flops bring the OSD bits into
+// clk_sys like every other option here.
+reg  [3:0] vol_s1, vol_s2, vol_s3;
+always_ff @(posedge clk_sys) begin vol_s1 <= status[49:46]; vol_s2 <= vol_s1; vol_s3 <= vol_s2; end
+reg  [8:0] vol_gain;
+always_comb begin
+	case (vol_s3)
+		4'd0:  vol_gain = 9'd205;   // 80%
+		4'd1:  vol_gain = 9'd230;   // 90%
+		4'd2:  vol_gain = 9'd256;   // 100%
+		4'd3:  vol_gain = 9'd0;     // 0%
+		4'd4:  vol_gain = 9'd26;    // 10%
+		4'd5:  vol_gain = 9'd51;    // 20%
+		4'd6:  vol_gain = 9'd77;    // 30%
+		4'd7:  vol_gain = 9'd102;   // 40%
+		4'd8:  vol_gain = 9'd128;   // 50%
+		4'd9:  vol_gain = 9'd154;   // 60%
+		4'd10: vol_gain = 9'd179;   // 70%
+		default: vol_gain = 9'd205;
+	endcase
+end
+(* multstyle = "dsp" *) wire signed [25:0] vol_pl = snd_l * $signed({1'b0, vol_gain});
+(* multstyle = "dsp" *) wire signed [25:0] vol_pr = snd_r * $signed({1'b0, vol_gain});
+always_ff @(posedge clk_sys) begin vol_l <= vol_pl[23:8]; vol_r <= vol_pr[23:8]; end
 
 // Byte out of the burst: word by [2:1], byte within it by [0].
 // The byte select moved INTO m2_pcm_fetch with the burst, and doing it here as

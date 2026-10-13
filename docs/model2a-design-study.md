@@ -32771,3 +32771,14 @@ paths, none R826's); s1046 passes the rule: clk_sys +0.173, clk_mem +0.267,
 clk_i960 +1.980, holds >= +0.145, HDMI -1.116 (report-only); 41,288 ALM. RBF
 build/Model2_20261013_s1046_r826.rbf 2b870c07. (Fitter success, then the
 usual Quartus segfault on exit.) Not yet on the board.
+
+**R829 -- AN OSD VOLUME, 80% BY DEFAULT (Ben).** status[49:46] ("Volume":
+80%, 90%, 100%, 0%, 10% .. 70% -- index 0 is the default, so the list starts
+at 80 and wraps). Gain = round(pct x 256 / 100), one 16 x 10 signed multiply
+per channel (multstyle dsp: +2 DSP, 89 -> 91 of 112), the product's [23:8]
+registered on clk_sys, into AUDIO_L/R. At 100% the output equals the sound
+board's exactly; never louder, so it cannot clip. Three flops bring the OSD
+bits in. lint_top clean; Model2.sv parses in Quartus 17. The constant-fold
+check (project memory, R662) could not read the values -- Quartus kept the
+constant multiply in DSP -- so the board test is the check: 100% must sound
+identical to before, 80% quieter. Not yet built.
