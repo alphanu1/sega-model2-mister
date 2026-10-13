@@ -32162,3 +32162,7 @@ the right channel". s1035 (PCM_SHARED 0, R819's pan law) reloaded for an A/B
 sound test: if s1035 is right, the shared engine mis-pans (bench claimed
 bit-identical per chip -- check whether it compared L and R separately); if
 s1035 does it too, R819's att_side / mute_side pan law is the suspect.
+R821 ON THE BOARD: Ben A/B'd s1037 (shared) against s1035 (two engines): the
+right-channel-only voices are the same on both -- "it's correct" (the game's
+own pan) -- and the shared engine "seems good". PCM_SHARED is now 1 in
+Model2.sv. Fit (s1037): -327..-382 ALM placed, -2 DSP, every clock closed.
