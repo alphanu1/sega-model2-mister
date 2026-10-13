@@ -79,9 +79,10 @@ finished, so there's no tearing.
   move the steering, so a pad flicked from lock to lock snaps the view in a
   way a real wheel never could. `Light` or `Wheel` limits how fast the
   steering can move, so a slide sweeps across instead. Off by default.
-- **Right stick option.** By default the right stick only works the pedals.
-  Set `Right stick` to `Steering` if you use a wheel that MiSTer maps onto the
-  right stick. See Controls.
+- **Right stick option.** By default the right stick only works the pedals
+  (`Pedals only`). Set `Right stick` to `Pedals+steer` if you use a wheel that
+  MiSTer maps onto the right stick: then left/right steers and up/down still
+  works the pedals. See Controls.
 - **A shorter menu.** Texel step, 3D pacing, Texture brightness and Draw
   method's "every 3rd frame" are gone. They're fixed at the settings that work
   best now the core runs at full speed.
@@ -117,7 +118,7 @@ sky; the "G" of GAME OVER is back; and 15 kHz CRT support with its own MRAs.
 | `Pedals` | swaps accelerator and brake if your controller has them the other way round |
 | `Steering` | how much stick gives full lock: `3/4` (default), `Full`, `5/4` or `Half` |
 | `Steering smoothing` | `Off` (default), `Light` or `Wheel` — see above |
-| `Right stick` | `Accel/Brake` (default) or `Steering` |
+| `Right stick` | `Pedals only` (default), or `Pedals+steer`: left/right steers as well, for a wheel |
 | `Save settings (NVRAM)` | writes the game's own settings and records to the SD card |
 
 ## Controls
@@ -142,7 +143,7 @@ and recentres. A small movement around the centre of a stick is ignored.
 
 **With a wheel:** MiSTer usually maps a wheel onto the right stick, with
 steering on left/right and the pedals on up/down. Set `Right stick` to
-`Steering` and it will work. If the pedals are reversed, use `Pedals`. If the
+`Pedals+steer` and it will work. If the pedals are reversed, use `Pedals`. If the
 steering feels too light or too heavy, try the `Steering` settings. I'd love
 to hear from wheel owners: this has been built to how MiSTer maps wheels, but
 not yet tried on one.

@@ -236,7 +236,7 @@ localparam CONF_STR = {
 	// lock; the others are taste.
 	"O[30:29],Steering,3/4,Full,5/4,Half;",
 	"O[51:50],Steering smoothing,Off,Light,Wheel;",   // R830
-	"O[54],Right stick,Accel/Brake,Steering;",          // R831: Steering = R816 (a wheel)
+	"O[54],Right stick,Pedals only,Pedals+steer;",      // R831: Pedals+steer = R816 (a wheel): X steers, Y still the pedals
 	// R828a: the mip rule (m2_raster3d MIP; no effect without it). How far
 	// each quad's level moves from its footprint's major axis (R828, the
 	// mountains right, the near road blurry) towards the minor: Sharp half

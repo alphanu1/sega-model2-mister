@@ -33504,3 +33504,6 @@ R826_STEP BUILT: s1069-s1071 = d9f52c3 + MIP 1 (menu) + R826_STEP, depth 2
 -0.580; 41,413 ALM; s1069 clk_mem -0.034, s1071 did not route. RBF
 build/Model2_20261014_s1070_step.rbf. Has the s1068 mip fetch fault (rails,
 car-select reflection) -- for the alignment check with Mip-mapping Off.
+R831 (cont., Ben): the Right stick labels were unclear -- "Steering" meant
+pedals AND steering. Now "Right stick: Pedals only (default) / Pedals+steer"
+(short: the OSD shows ~28 characters a line). Release README updated.
