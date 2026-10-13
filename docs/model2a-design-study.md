@@ -30842,3 +30842,197 @@ BOTH, ON THE WHOLE BOARD (verified, the same full-board bench, attract
 board's mix -22.18 dBFS against MAME's speaker -22.13, peak 16,070 against
 15,190. Before both changes the same board was +3.1 to +3.8 dB on the music
 and 3.8% fast.
+
+**R818 -- THE AREA AUDIT AFTER s1017: WHERE THE ROOM IS, PRICED. THE TILEMAP'S
+LINE BUFFERS TAKE 16 M10K, NOT 32; THE TEST-IMAGE COPY ENGINE LEAVES THE
+RELEASE; THE TEXEL SPEED FEATURES ALL STILL EARN THEIR AREA.**
+
+s1017 (7932d11, the 20261013 release) at 80/40: 41,498 / 41,910 ALM (99%),
+4,191 / 4,191 LABs, M10K 553 / 553 with block memory BITS at 76%. Wanted, in
+Ben's order: the framework audio filter back (R788, ~430 ALM placed), fewer
+tile overruns (a bigger m2_char_cache, or the glyph port's SDRAM priority),
+R813's span cull (SPCULL, <= ~170 placed), mip-mapping (R665, large).
+
+*Method.* Whole-design quartus_map 17.0 from Model2.qsf, one at a time
+(~160-240 s each), against the s1017 map -- reproduced exactly at 8172b41
+(40,562 ALMs-needed estimate, 57,765 ALUT, 48,866 registers, 4,297,979 bits:
+map is deterministic for identical input). Draw time on tb_m2_raster3d, the
+core's configuration as R813 (FTB, PXC, FRB 2, M2COV, SPLIT_TRI, FB_DDR3 +
+wcomb, TXLATE 3, TXNS 4 / TXRSP 4 / TXK 16, TXLW8, UZF 4, step 1), MAME's
+r57 / r66 / apk / rpk / f2200 at L1 / L12 / L30; HEAD reproduces R813's
+"clear under draw" row to the 0.01 ms. No fit was run: block counts below are
+by construction from the RAM shapes unless the fit report is cited, and
+placed ALM is estimated (the map estimate and R798's calibration bracket it;
+R788's filter was +700 in this map and 432 placed in s927 -- the map
+estimate is not a placed number in either direction).
+
+*Believed:*
+  1. M10K is exhausted (553 / 553) and only a smaller cache somewhere could
+     pay for a larger char cache.
+  2. The texel speed features of R789 / R796-R798 might be surplus now the
+     draw has headroom (R814: worst draw ~15.6 ms at 80 MHz against 17.39).
+  3. There is debug-only logic still synthesised in the release.
+
+*Now known -- VERIFIED (measured):*
+  1. THE FIT REPORT'S 553 IS PACKED, NOT THE DEMAND. s1017's RAM summary lists
+     567 logical blocks; the fitter already shares blocks between RAMs that
+     have matching addressing (uvt_n + vtx_n 3 each, lbe + lbo 4, the loader's
+     three FIFOs 1, the PCM rate pairs 2). 18 more are Quartus's own
+     shift-register replacement (altshift_taps: TGP pop 3, jt12 7, shadowmask
+     2, dv_hs1 2, five others 1 each, 3,487 bits in 18 blocks). Those are
+     ELASTIC, as R313 found: turning recognition off for seven of them
+     (instance assignments) freed 226 bits net -- Quartus put five other
+     shift registers into M10K instead (audmix_l a1, emu vil_s, TGP pint,
+     jt12 egpad, vga_scaler csync1). Off globally
+     (AUTO_SHIFT_REGISTER_RECOGNITION OFF): all 3,487 bits leave M10K for
+     +3,409 registers, -202 ALUT, +450 map estimate.
+  2. THE WORST-USED MEMORY WAS THE TILEMAP'S LINE BUFFER: 32 x (128 x 15),
+     one M10K each, 18.8% full -- 26 blocks of air. The bank (written at
+     `bank`, read at `~bank`) is now the top ADDRESS bit of one 256 x 15
+     memory per (layer, lane): 16 memories, one M10K each by shape (256 deep
+     is the x40 mode). Map: block bits identical (4,297,979), m2_video own
+     logic 1,143 -> 1,008 ALUT (the 2:1 bank select after the read is gone),
+     design estimate 40,562 -> 40,480. Inline in the generate it was NOT
+     inferred -- 61,440 registers, no warning, (* ramstyle *) or not (the old
+     128-word arrays were only ever recovered from registers after
+     elaboration, "mem[0][14]__7"); as a module of its own (m2_lbuf_ram) it
+     infers as 16 altsyncram. Equivalence: the old and new m2_video side by
+     side (a miter, random tile / char / palette contents, char latency 0-90
+     including 565-706 overruns a run): every output equal on every cycle, 3
+     seeds x 4 latencies x 2 frames; tram and char requests identical; the
+     palette address differs only in the cycle after a flip (hcnt =
+     H_TOTAL - 1, blanking) and never reaches the picture. Mutations caught:
+     read bank not inverted (585,782 visible cycles differ), write bank
+     dropped (337,662). lint_top clean; lint_idx 146 candidates, the same 146
+     as 8172b41; test_m2_video_timing 39/0; test_m2_video_frame SKIP (no
+     dumps).
+  3. DEBUG-ONLY IN THE RELEASE: the copy engine for the 2D tilemap test image
+     (the "small" image, a development fixture no MRA loads) and its 96-byte
+     staging array xlat_stage (1 M10K). Under M2_NO_DEBUG (TESTIMG 0) cp_done
+     rises with rom_loaded -- on a game image the same cycle as before,
+     since game_image is rom_loaded there -- and every copy branch is gated.
+     Gating only cp_done did NOT remove it: the commit phase stayed reachable
+     to synthesis and xlat_stage still inferred (map, block bits unchanged).
+     Gated throughout: -768 bits (xlat_stage), emu's own logic 869 -> 744
+     ALUT and 869 -> 741 registers, design estimate -145. Sweeper (SWEEP_EN
+     0), overlay and stream were already gone.
+  4. Items 2 + 3 together (8172b41 + both): 40,562 -> 40,335 estimate (-227),
+     ALUT 57,765 -> 57,456 (-309), registers 48,866 -> 48,735 (-131), M10K -17
+     (16 + 1, by shape). DSP 87 unchanged.
+  5. THE TEXEL SPEED FEATURES ALL EARN THEIR AREA. Every answer identical to
+     HEAD in all variants (2.99 M common fetches, 0 differ, frame hash 15 of
+     15 each). Draw at 80 MHz, ms, L30 (L12 in brackets where it matters):
+                      r57    r66    apk    rpk   f2200   map vs HEAD
+     HEAD            11.08  11.33  13.54  14.00  12.01
+     TXLW8 0         11.73  12.45  15.05  15.47  13.60   +270 est, +188 ALUT,
+                                                         +295 regs, +14,336 bits
+     TXNS 2          13.07  13.09  16.49  14.87  13.11   (not mapped alone)
+     TXK 8           12.66  13.40  15.50  16.24  14.56   (small: cdc + span_tex)
+     TXNS 2 + TXK 8  14.67  15.09  18.32  17.08  15.65   -230 est, -180 ALUT,
+                                                         -337 regs, ~0 M10K
+     + TXLW8 0       15.82  16.70  20.81  18.91  17.64   (= R782's state)
+     TXLW8 0, IB 10  14.39  15.40  20.99  19.91  20.82   texel cache halved,
+                                                         -12..-13 M10K
+     The board's worst draw is ~11% above the bench's worst L30 list (15.6
+     vs 14.00 ms), so a removal costing more than ~+6% on the worst list
+     passes 16.5 ms. All do: 128-bit lines +6..+13% (and since R798 they are
+     CHEAPER than 64-bit lines -- the slots' lines are LUT RAM, LW8 0 puts
+     them back in flops and doubles the tags); two slots +6..+22% (~19 ms on
+     the board); eight credits +14..+21%; both +22..+35% (~21 ms). At L1 the
+     128-bit lines cost 2-5% (lw0 7.50 8.46 11.06 against 7.81 8.91 11.27) --
+     they pay only when the bus is contended, which is the board's case.
+  6. R813's cull on today's tree: span_tex +129 ALUT / +23 registers, design
+     estimate +66; draw L30 -2.4..-9.4% (10.27 10.26 13.22 13.02 11.63), L12
+     -3.9..-12.8%, answers identical (2,991,041 / 0, hash 15 / 15) -- R813's
+     numbers to the 0.01 ms.
+  7. The framework audio filter (MISTER_DISABLE_AUDIO_FILTER removed): IIR
+     +701 ALUT / +353 registers, +8 DSP, design estimate +700 (s927's fit
+     placed it at 432 ALM).
+  8. An analog-only build (MISTER_DEBUG_NOHDMI, a sys_top macro, no patch):
+     -3,861 estimate, -5,451 ALUT, -7,068 registers, -279,687 bits (ascal 35,
+     HDMI OSD 4, shadowmask 3, vga_scaler 1 by the fit report: ~43 M10K), -13
+     DSP. No HDMI at all.
+  9. What Daytona's i960 runs of the FPU (MAME 0.289 trace windows of R817:
+     5 attract + 4 race, 6 frames each, 1.68 M instructions outside the
+     frame-sync spin): FP-class instructions are 1.4% (attract) / 1.5%
+     (race) of busy instructions -- cvtri 0.45%, subr 0.40%, addr 0.29-0.31%,
+     cmpr 0.12-0.24%, cvtzri 0.03-0.08%, scaler 0.017%, cvtir 0.015%. NO
+     mulr, divr, sqrtr, logbnr, roundr or movr in any window, and every FP
+     instruction reads and writes general registers (m-bits): fp0-fp3 are
+     never a destination. i960_fpmisc's cost is one shared 64-bit datapath:
+     restricting its op set in a standalone map (STAGED, registered outputs)
+     moves nothing (1,690-1,701 ALUT for every subset).
+ 10. The char cache with (* max_depth = 2048 *) on cdata: +69 ALUT in the
+     map (the 4:1 read select); the data RAM is generated as 2048-deep slices
+     (256 primitives, 4 x 64) instead of 8192-deep (64).
+
+*Now known -- INFERRED (not measured; each says what would settle it):*
+  a. max_depth 2048 packs the char cache's 8192 x 64 into 2048 x 5 blocks:
+     13 x 4 = 52 against 64 (-12; the fitter used x5 packing for uvt's 2048 x
+     192 -- 41 blocks, under the 48 of x4). A fit settles it.
+  b. Doubling the char cache (IDX_BITS 14) as written: data 16,384 x 64 at
+     8192-deep slices = 128 blocks, tags 16,384 x 3 = 6: +66 M10K over today's
+     68. With max_depth 2048: 8 x 13 = 104 + tags 8 = ~112: +42..+44, for an
+     8:1 select (~+140 ALUT). R283's measurement is the only evidence of the
+     gain: 128 KB 694 misses / 12 overruns a frame against 64 KB 2,146 / 51.
+  c. A single-precision FPU datapath. The core decodes only the single
+     forms; for single operands and general-register destinations, double
+     arithmetic narrowed to single equals single arithmetic for + - x / sqrt
+     (53 >= 2 x 24 + 2) and is exact for cvt / cmp / round / logb / scale. So
+     on all traced code the answers are the same; they differ only if the
+     game writes fp0-fp3 (never seen). fpadd + fpmisc + fpmul + fpdiv +
+     fpsqrt are 2,304 ALM placed in s1017 (3,645 ALUT); at 24-bit mantissas
+     roughly half: ~-1,000..-1,250 placed. A study-level decision (section
+     2.2 chose 64-bit to follow MAME's doubles); the benches and tb_i960_rom
+     would verify it.
+  d. One MultiPCM datapath for both chips (each is 745 ALM; 28 slots x 8
+     ticks at a 10 MHz enable, cycle-deterministic): ~-500..-600 placed if it
+     runs the 56 slots at twice the rate with its state RAMs (MLAB) doubled.
+     The ROM fetch window per slot halves -- R738's timing and the PCM fetch
+     cache decide whether it holds.
+  e. divr and sqrtr (never traced) sharing one iterative unit: ~-150..-200.
+  f. M10K to MLAB where a block holds almost nothing: span_q 32 x 252 (7
+     blocks -> 13 MLAB LABs), sk_mem 20 x 163 (5 -> 9), texel_cdc q 16 x 144
+     (2 -> 8), ascal's i/o_dpram 32 x 128 (4 -> 7 each, a sys/ patch). Each
+     MLAB is a whole LAB at 100% LABs; R684 moved span_q the other way for
+     exactly that reason.
+  g. The SDRAM's glyph port (3) ahead of the i960 in the priority class: no
+     area; the glyph fetch's worst latency in the saturating bench is 398 of
+     a ~6,600-cycle line (R796). Whether the overruns are miss-bound or
+     fetch-engine-bound at today's clocks is not measured (m2_video's own
+     note says four dense layers want ~6,456 cycles a line against ~3,280);
+     a bigger cache does nothing for the second.
+
+*Framework, without a patch:* MISTER_DOWNSCALE_NN, _DISABLE_ADAPTIVE,
+_DISABLE_YC, _DISABLE_ALSA are set; _SMALL_VBUF saves DDR3, not FPGA;
+_DUAL_SDRAM takes the VGA pins (no analog video, no CRT MRA); _DEBUG_NOHDMI is
+item 8. QSF instance assignments (AUTO_SHIFT_REGISTER_RECOGNITION) reach
+framework registers with no patch to sys/. With a patch (fit-report ALM):
+pll_hdmi_adj 453 (vsync_adjust 1/2 stop working), video_calc 317 (the
+resolution Main uses for scaling, vsync_adjust and the info line), vga_osd
+462 + 4 M10K (no menu on analog), shadowmask 145 + 3 (no HDMI masks),
+vga_scaler_out 135 + 1 (vga_scaler=1 gone), aud_mix 160 (audio_mix gone),
+ascal pal1_mem 2 M10K (framebuffer palette; unused without MISTER_FB, not
+tried). None is free to a user.
+
+*So, against the asks (placed ALM; the map estimate in brackets):*
+  * R813's cull (~+66 est, <= ~170 placed) -- items 2 + 3 (-227 est, -309
+    ALUT) cover it in the same currency. The measured next build.
+  * The audio filter (~430-620 placed, +700 est) -- items 2 + 3 cover about
+    a third of it. Nothing measured and free covers the rest; c (FPU
+    single precision) or d (one MultiPCM) would, each alone. Or the filter
+    goes into an analog-only RBF where room is not the question (item 8).
+  * A char-cache doubling (+42..+66 M10K) -- items 2 + 3 give 17. The rest
+    needs a+b's packing (+~140 ALUT) and either the 18 shift-tap blocks
+    (+3,409 registers) or MLAB moves (f) -- ALM the design does not have
+    until c or d lands. Measure g first: it is free.
+  * Mip-mapping (R665) is out of reach of anything listed short of c + d.
+
+*Changed (uncommitted, sm2-builds/sm2-area-8172b41):* rtl/video/m2_video.sv
+(R818 line buffers, m2_lbuf_ram), Model2.sv (TESTIMG). Tools and numbers:
+build/area-r818/ (miter, bench and map scripts, map summaries, draw table).
+
+*Not verified:* the fit and its timing for items 2 + 3 (by construction:
+the line buffer's read address gains an inverter on a register; the copy
+engine only loses logic); block counts not read from a fit report; every
+"placed" figure; the board.

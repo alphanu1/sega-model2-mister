@@ -2072,6 +2072,13 @@ end
 // part way through has already corrupted the entries before it: writing on
 // arrival and blocking the rest leaves a half-replaced table, which is worse
 // than either accepting or rejecting the lot.
+// R818: the copy engine exists only for the tilemap test image, which is a
+// development fixture -- off in a release build (M2_NO_DEBUG).
+`ifdef M2_NO_DEBUG
+localparam bit TESTIMG = 1'b0;
+`else
+localparam bit TESTIMG = 1'b1;
+`endif
 logic [7:0] xlat_stage [96];
 logic       xlat_ok;
 logic [7:0] xlat_first;
@@ -2092,11 +2099,22 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		xlat_we_r  <= 1'b0;
 		cp_tram_we <= 1'b0;
 		cp_pal_we  <= 1'b0;
-		if (game_image) begin
+		// R818: IN A RELEASE BUILD (M2_NO_DEBUG) THE COPY NEVER RUNS. The
+		// small image is the 2D tilemap test, a development fixture an MRA
+		// never loads; its copy engine and the 96-byte staging array (one M10K,
+		// xlat_stage_rtl_0) were built into every release regardless. With
+		// TESTIMG 0 cp_done rises with rom_loaded -- on a game image the same
+		// cycle as before, since game_image is rom_loaded there -- and the
+		// copy, the staging and their port-2 requests synthesise away. A test
+		// image on a release build leaves the CPU in reset (game_image) and
+		// the tilemap as it powered up. Every branch below is gated by
+		// TESTIMG too: gating only cp_done left the commit phase reachable as
+		// far as synthesis could tell, and xlat_stage still inferred.
+		if (TESTIMG ? game_image : rom_loaded) begin
 			// Nothing to copy: the CPU writes tile RAM, the palette and the
 			// translation table itself.
 			cp_done <= 1'b1;
-		end else if (cp_phase == 2'd3) begin
+		end else if (TESTIMG && cp_phase == 2'd3) begin
 			// Commit phase: no bus traffic, one entry per cycle.
 			xlat_we_r   <= xlat_ok;
 			xlat_addr_r <= cp_idx[6:0];
@@ -2105,14 +2123,14 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 			else cp_idx <= cp_idx + 16'd1;
 		// NOT UNTIL THE CAPTURE IS CALIBRATED. This copy is made once and kept
 		// (study R47), so reading it at the wrong depth is permanent.
-		end else if (!cp_req && rom_loaded && cal_done) begin
+		end else if (TESTIMG && !cp_req && rom_loaded && cal_done) begin
 			case (cp_phase)
 				2'd0:    cp_addr <= TRAM_BASE + SDR_AW'(cp_idx);
 				2'd1:    cp_addr <= PAL_BASE  + SDR_AW'(cp_idx);
 				default: cp_addr <= xlat_rd_addr;
 			endcase
 			cp_req  <= 1'b1;
-		end else if (cp_req && p2s_ack) begin   // R561
+		end else if (TESTIMG && cp_req && p2s_ack) begin   // R561
 			cp_req   <= 1'b0;
 			cp_wdata <= p_dout[2][15:0];
 			case (cp_phase)

@@ -277,7 +277,10 @@ module m2_video #(
   // a single M10K. Both banks are read every cycle at the same address and the
   // result is muxed afterwards, which costs a 14-bit mux instead of an address
   // mux and keeps the memories inferrable.
-  wire [14:0] lb_q [2][4];
+  // R818: the bank is now an ADDRESS bit of each (layer, lane) memory --
+  // a constant-indexed array, read and written at {bank, ...} / {~bank, ...}
+  // -- which is not the dynamic selection across arrays described above; see
+  // the line buffers below.
 
   // ---------------------------------------------------------- sequencer
   typedef enum logic [3:0] {
@@ -713,81 +716,70 @@ module m2_video #(
   // A per-lane byte-enable would have been the obvious alternative and Quartus
   // 17.0 does not infer RAM from it at all — see rtl/m1_mainram.sv, where that
   // idiom cost 28,816 ALM before it was found.
-  genvar gb, gl, gn;
+  //
+  // R818: ONE MEMORY PER (LAYER, LANE), THE BANK AS ITS TOP ADDRESS BIT.
+  //
+  // This was one 128 x 15 memory per (bank, layer, lane), and Quartus put each
+  // in an M10K of its own: 32 blocks holding 61,440 bits, 18.8% of their
+  // capacity, with M10K at 553 of 553. The bank is written at `bank` and read
+  // at `~bank`, so as an address bit it never puts the write and the read on
+  // the same word, and each (layer, lane) is still one write port and one read
+  // port -- 256 x 15, one M10K. 32 blocks -> 16, and the 2:1 bank select after
+  // the read is gone.
+  //
+  // The one difference: the bank now selects at the read's address, one cycle
+  // before the old select at its output. The two disagree only in the cycle
+  // after the flip, and that read is for hcnt = H_TOTAL - 1 -- the last column
+  // of the horizontal blank (line_start is ce_pix at hcnt == H_TOTAL - 1).
+  //
+  // (Recorded from the version before: (* ramstyle = "MLAB" *) on these
+  // memories was declined by Quartus 17.0 -- the summary kept them AUTO.)
+  genvar gl, gn;
   generate
-    for (gb = 0; gb < 2; gb++) begin : g_bank
-      for (gl = 0; gl < 4; gl++) begin : g_layer
-        logic [14:0] lane_q [4];
-        logic [1:0]  sel_q;
+    for (gl = 0; gl < 4; gl++) begin : g_layer
+      logic [14:0] lane_q [4];
+      logic [1:0]  sel_q;
 
-        for (gn = 0; gn < 4; gn++) begin : g_lane
-          // TRIED AS MLAB AND QUARTUS DECLINED IT. Recorded so it is not
-          // tried a third time without new information.
-          //
-          //
-          // 128 words of 15 bits is 1,920 bits. Untagged, Quartus puts each of
-          // these in an M10K, which holds 10,240 -- so the sixteen per bank,
-          // thirty-two in all, spend 32 blocks to store 61,440 bits. That is
-          // the worst efficiency of any memory in the design by a factor of
-          // four: 5.3x, against 1.2-1.4x everywhere else.
-          //
-          // A Cyclone V MLAB is 32 words by 20 bits, built out of the LUT
-          // storage that is already there, so 128x15 is four of them -- about
-          // 40 ALMs -- and thirty-two instances cost roughly 1,280 ALM.
-          //
-          // That trade only makes sense in one direction and this is it: M10K
-          // is 553 of 553 with texture still to come, ALM is 89% with ~4,600
-          // free.
-          //
-          // BUT (* ramstyle = "MLAB" *) AND "MLAB, no_rw_check" BOTH LEAVE IT
-          // AS `AUTO` in the synthesis RAM summary, and block memory bits do
-          // not move. The attribute is not being ignored generally -- 47
-          // memories in this design report "M10K block" and one reports "MLAB"
-          // -- so Quartus is declining it for THIS access pattern rather than
-          // for the syntax. Whatever the reason, it is not a one-line change,
-          // and the 32 blocks are not the biggest prize anyway: m2_quad_store
-          // holds 2,048 quads in ~66 blocks while the board is emitting ~216
-          // per frame.
-          logic [14:0] mem [128];
+      for (gn = 0; gn < 4; gn++) begin : g_lane
+        // Which incoming pixel belongs to this lane, and which group it
+        // lands in. Pixels before the base's own lane have wrapped into the
+        // next group.
+        logic [1:0] widx;
+        logic [8:0] wpos;
+        logic [6:0] waddr;
+        logic       wen;
+        assign widx  = 2'(gn[1:0] - f_lb_addr[1:0]);
+        // The screen position this lane is writing, then its group. Written
+        // as the sum rather than "base group plus a carry" because the carry
+        // form makes lane 3's comparison constant, which is true but reads
+        // as a mistake and trips -Wall.
+        assign wpos  = f_lb_addr + 9'(widx);
+        assign waddr = wpos[8:2];
+        assign wen   = f_lb_we[widx] && (cur_layer == 2'(gl));
 
-          // Which incoming pixel belongs to this lane, and which group it
-          // lands in. Pixels before the base's own lane have wrapped into the
-          // next group.
-          logic [1:0] widx;
-          logic [8:0] wpos;
-          logic [6:0] waddr;
-          logic       wen;
-          assign widx  = 2'(gn[1:0] - f_lb_addr[1:0]);
-          // The screen position this lane is writing, then its group. Written
-          // as the sum rather than "base group plus a carry" because the carry
-          // form makes lane 3's comparison constant, which is true but reads
-          // as a mistake and trips -Wall.
-          assign wpos  = f_lb_addr + 9'(widx);
-          assign waddr = wpos[8:2];
-          assign wen   = f_lb_we[widx] && (bank == gb[0])
-                       && (cur_layer == 2'(gl));
-
-          always_ff @(posedge clk) begin
-            if (wen)
-              mem[waddr] <= {f_lb_masked[widx], f_lb_prio[widx], f_lb_transparent[widx],
-                             f_lb_pal[widx]};
-            lane_q[gn] <= mem[hcnt[8:2]];
-          end
-        end
-
-        // The select is registered from the same hcnt as the address, so the
-        // mux picks the lane that address fetched. Registering only the data
-        // and muxing with live hcnt would take the wrong lane for the cycles
-        // between a counter step and the read landing.
-        always_ff @(posedge clk) sel_q <= hcnt[1:0];
-        assign lb_q[gb][gl] = lane_q[sel_q];
+        // Writes go to the bank being rendered; reads come from the other.
+        // A module of its own: inline in this generate, as {bank, waddr} /
+        // {~bank, hcnt[8:2]} indices into a 256-word array, Quartus 17.0
+        // built all 32 lanes as flip-flops (61,440 registers, no warning,
+        // ramstyle attribute or not). The 128-word arrays before this were
+        // only ever recovered from registers after elaboration
+        // ("mem[0][14]__7"), never inferred from the HDL.
+        m2_lbuf_ram u_ram (
+          .clk(clk),
+          .we(wen), .wa({bank, waddr}),
+          .wd({f_lb_masked[widx], f_lb_prio[widx], f_lb_transparent[widx], f_lb_pal[widx]}),
+          .ra({~bank, hcnt[8:2]}), .q(lane_q[gn])
+        );
       end
+
+      // The select is registered from the same hcnt as the address, so the
+      // mux picks the lane that address fetched. Registering only the data
+      // and muxing with live hcnt would take the wrong lane for the cycles
+      // between a counter step and the read landing.
+      always_ff @(posedge clk) sel_q <= hcnt[1:0];
+      assign rd_q[gl] = lane_q[sel_q];
     end
   endgenerate
-
-  // Writes go to the bank being rendered; reads come from the other one.
-  always_comb
-    for (int L = 0; L < 4; L++) rd_q[L] = lb_q[bank ? 0 : 1][L];
 
   // ------------------------------------------------------------- mixing
   logic [3:0][11:0] mix_pal;
@@ -968,4 +960,21 @@ module m2_video #(
     end
   end
 
+endmodule
+
+// R818: one tilemap line-buffer lane, both banks: 256 x 15, one write port,
+// one registered read port -- one M10K.
+module m2_lbuf_ram (
+  input  logic        clk,
+  input  logic        we,
+  input  logic  [7:0] wa,
+  input  logic [14:0] wd,
+  input  logic  [7:0] ra,
+  output logic [14:0] q
+);
+  (* ramstyle = "M10K" *) logic [14:0] mem [256];
+  always_ff @(posedge clk) begin
+    if (we) mem[wa] <= wd;
+    q <= mem[ra];
+  end
 endmodule
