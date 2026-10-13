@@ -32995,3 +32995,72 @@ R828 (Ben, s1052): "mip mapping on the mountains is good" -- the face-on
 distance is right with the major-axis rule; only the oblique near road is too
 blurry. Decision: mip becomes a user choice in the OSD (Off + rules/biases,
 R828's own behaviour kept as one choice); Ben picks the default on the board.
+
+**R832 -- THE MODEL 2 FAMILY, BOARD BY BOARD: WHAT CARRIES OVER, AND WHICH
+GAMES SHARE A SETUP (Ben: "record it, and which other games use the same
+board").** Source: MAME 0.289 sega/model2.cpp (machine configs and GAME()
+lines; mame -listdevices). MAME's MACHINE_NOT_WORKING flags describe MAME's
+emulation, not the hardware. Board identity is MAME's; a real board may
+differ in details MAME does not model (notably the 2A/2B/2C "CRX" video
+boards, which MAME renders with the original Model 2's code).
+
+COMMON TO EVERY BOARD: i960KB at 25 MHz, the System 24 tilemap, the
+geometrizer / 3D renderer (as MAME models it), timers, video timing,
+the comms board. So this core's CPU, tilemap and renderer carry to all.
+
+ORIGINAL MODEL 2 (model2o_state): MB86234 TGP at 50 MHz; Model 1 sound board
+(68000 at 10 MHz, two MultiPCM, YM3438, serial link); Model 1 I/O board
+(own Z80 + MB8421 dual-port RAM at 0x01c00000, ADC); 128 KB work RAM at
+0x200000 with a program-ROM mirror at 0x220000.
+  * Daytona USA -- daytona, daytona93, daytonase, daytonas (config daytona:
+    I/O board + the sj25-0207-01 drive/force-feedback board, analog steer /
+    accel / brake). THIS CORE. daytonam ("To The MAXX") and daytonagtx (GTX
+    2004 Edition) are Daytona with their own CPU memory maps
+    (model2o_maxx_mem / model2o_gtx_mem) -- a map change from this core.
+  * Desert Tank -- desert (config desert): the SAME Model 1 I/O board as
+    Daytona (default BIOS epr-14869c), analog STEER / ACCEL / BRAKE, no drive
+    board. Per MAME a candidate for THIS core with its own MRA and input
+    mapping (MAME flags it not working -- why is not yet checked).
+  * Virtua Cop -- vcop, vcopa (config vcop): Model 1 I/O board 2 (model1io2,
+    BIOS epr-17181) with light guns: a different I/O board, so its own core
+    (as Ben said).
+
+MODEL 2A-CRX (model2a_state): same i960 and MB86234 TGP; sound is a Yamaha
+SCSP (YMF292, the Saturn's: 32 voices + effects DSP, 22.58 MHz) driven by a
+68000 at 11.29 MHz; I/O is a single Sega 315-5649 controller on the main
+board read directly by the i960 (no Z80, no dual-port RAM), plus a 93C46
+EEPROM; 256 KB work RAM over 0x200000-0x23ffff (no ROM mirror); an optional
+lamp "billboard" (its own Z80). For a 2A branch: remove the Model 1 sound
+board (~4,650 ALM in s999's fit) and the I/O Z80 (~950); add an SCSP (the
+MiSTer Saturn core has one -- the obvious source, licence to be checked; its
+area is THE unknown for the fit); small: the 315-5649, the EEPROM, the map.
+ROMs fit: vf2 is 47.2 MB (Daytona 46.4).
+  * Plain model2a: Virtua Fighter 2 (vf2 + clones), Hanguk Pro Yagu 98.
+  * With analog / special inputs: Sega Rally Championship (srallyc: drive
+    board + steer/accel/brake), Manx TT Superbike (manxtt: throttle/brake/
+    bank; manxttdx also carries a Model 1 sound board), Motor Raid (manxtt
+    config), Sky Target (analog stick), Virtua Cop 2 (light guns over the
+    315-5649's serial channel), Air Walkers (four-player inputs).
+  * With protection: model2a_0229 (Dead or Alive Model 2A sets: doaa,
+    doaab, doaae -- the 315-5838 compression/protection chip) and
+    model2a_5881 (Dynamite Cop / Dynamite Deka 2, Pilot Kids 2A, Zero
+    Gunner 2A -- the 315-5881 decryption chip).
+
+MODEL 2B-CRX (model2b_state): the TGP is replaced by an Analog Devices
+ADSP-21062 SHARC DSP at 32 MHz (the geometry runs as SHARC code); SCSP sound
+and 315-5649 I/O as 2A. Virtua Striker, Fighting Vipers, Virtual-On, Sonic
+Championship, Last Bronx (model2b); Gunblade NY; Dead or Alive (2B); Super GT
+24h (indy500 config); Power Sled; Dynamite Baseball / '97; Zero Gunner;
+Pilot Kids; Rail Chase 2.
+
+MODEL 2C-CRX (model2c_state): the geometry processor is a Fujitsu MB86235
+"TGPx4" at 20 MHz; SCSP and 315-5649 as 2A. Sega Ski Super G, Wave Runner,
+Behind Enemy Lines, The House of the Dead, Over Rev, Royal Ascot II, Sega
+Water Ski, Top Skater.
+
+WHAT THIS MEANS FOR FUTURE CORES (Ben: each its own branch, then its own
+repository): original Model 2 games are this core plus an MRA (Desert Tank,
+maybe) or plus an I/O board (Virtua Cop: model1io2 + light guns). Model 2A
+is this core with the SCSP sound and the 315-5649 I/O swapped in. 2B swaps
+the geometry processor for a SHARC and 2C for a TGPx4 -- each a large new
+CPU core on top of 2A's sound and I/O.
