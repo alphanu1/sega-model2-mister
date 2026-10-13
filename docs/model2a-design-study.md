@@ -33488,3 +33488,7 @@ patch; s1060's config + mip): s1063 / s1064 "Can't fit" -- routing, the
 last attempt with only TWO contested LAB inputs (X42_Y7, X21_Y45);
 41,382 / 41,288 ALM placed; s1065 a Quartus TDC internal error. Marginal, not
 a resource count: more seeds.
+s1066-s1068 (the same mip build): all route; s1068 closes, clk_sys +0.081,
+holds >= +0.210, HDMI -0.850; 41,300 ALM. RBF
+build/Model2_20261014_s1068_mip.rbf. = s1060 + MIP with the Sharp / Medium /
+Smooth / Off menu (Sharp the default). Not yet on the board.
