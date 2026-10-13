@@ -32360,3 +32360,154 @@ Ben: his displays run VRR (every frame shown as produced) and MAME itself
 shows the jerk -- "it's a MAME issue, needs fixing by us". The fault is in
 the hardware model MAME has and this core inherited; MAME is not the oracle
 for it. Agent: find the timing input the game's backdrop motion depends on.
+
+R826 ADDENDUM -- NO TIMING INPUT: THE BACKDROP'S SCROLL IS A FIXED-STEP
+FUNCTION OF THE GAME'S CAMERA YAW, ONE STEP A VBLANK IN MAME. THE GAME'S OWN
+MOTION IS UNEVEN IN SLIDES, KICKS, SHAKES AND CRASHES, AND WOULD BE ON ANY
+HARDWARE THAT RUNS ONE STEP A VBLANK. WHAT IS LEFT IS ALIGNMENT.
+
+What was believed (the previous R826 entry): the game works out the
+backdrop's motion from a timing input -- a timer, the vblank or frame
+count, the 0x98000c frame bit, the interrupt rate, or the copro's
+completion. MAME, and this core after it, would model that input
+differently from the board, so the backdrop moves by uneven amounts.
+
+How it was checked: MAME 0.289, Revision A. The MAME debugger was used to
+disassemble the code, and Lua write and read taps were placed on every link
+of the chain. The new instruments are sim/video/mame_m2_bgtime.lua (a log per
+frame) and sim/video/r826_bgtime.py (the analysis). Drives:
+  * t100: from 2560, a constant left turn (Paddle 100), pedal floored.
+  * t60: the same with Paddle 60.
+  * slide: straight, then at 2800 the wheel to 30, at 2900 to 200, at 3000
+    back to 128.
+  * The earlier scrlog drive, which includes the rolling start.
+Frames 2560-3400 of each drive are the race under the player's control.
+Before 2560 the game is in the rolling start: AUTO DRIVE with a keyframed
+camera.
+
+VERIFIED (MAME, Revision A):
+
+THE CHAIN, from the tile register back to the car:
+  * hscr2 (tile word 0x5002, byte 0x0100A004) is written from the shadow
+    0x501308 by the vblank IRQ's copy at 0x1ba58 (0x1b9a0 copies all eight
+    words). The handler entry is at 0xe34. The order is the I/O call
+    0x1d750, then the copy 0x1b9a0, then the vblank count 0x500000 += 1.
+  * The shadow is set in the same IRQ, at line 384, by 0x1df9c-0x1dfb8:
+    0x501308 = (0x5fe11a >> 5) & 0x1ff. The yaw is a 16-bit angle, 32 angle
+    units = 1 px, 2,048 px a turn, wrapping on the 512 px map. First, 0x1dfd0
+    streams the tile columns that have come into view between the old angle
+    (0x5fe118) and the new one (0x5fe11a). In the race it always returns 0,
+    so the scroll is written on every vblank.
+  * 0x5fe118/0x5fe11a are set by 0x4500, at line ~386, at the START of each
+    game step: 0x5fe118 = the old value, 0x5fe11a = [0x50174c] +
+    [0x501748] << 5. In the race 0x501748 = 0.
+  * In the chase views, 0x50174c = 0x5014a8 = Y. This is 0x6d88-0x6da0 and
+    0x6e4c, with Y = car+0x2a + car+0xf2 + [0x501834]:
+      - car = [0x501220];
+      - +0x2a is the display yaw;
+      - +0xf2 is an offset, non-zero only on impact;
+      - 0x501834 is the game's shake.
+    View 2 uses car+0x4e (plus +0xa4) in place of +0x2a. The same Y goes to
+    the 3D camera object (g13+0x2a, 0x6de4).
+  * The car's display yaw is car+0x2a = car+0x48 + ((car+0x58 - car+0x48) >>
+    2) + (car+0xbc >> 5), at 0x102b4-0x102d8. The heading itself is
+    car+0x58 += cvtri(...) once per step, at 0x101c8: a fixed step.
+  * Rolling start only: a keyframed camera (0x65b4-0x69e0; keyframes in data
+    ROM; 0x5014a0 is a step counter). The yaw there is an atan2 on the TGP of
+    a camera position interpolated between keyframes.
+
+THE TIMING INPUTS. These are every read in 3 x 841 race frames, outside the
+vblank wait at 0x138c:
+  * Timers 0xf00000-f: 0 reads. Timer 0 is loaded with 0xfffff (42 ms at
+    25 MHz) at the top of every step (0x134c). Its IRQ handler (0xeb0) only
+    reloads it, so it is a watchdog, not a clock.
+  * Vblank count 0x500000: read only by the wait loop (0x1394, 0x13a8) and
+    the IRQ's own increment (0xe44). The loop runs one step, waits for the
+    count to change, increments 0x5010b4 if the count reached 2 (an overrun
+    tally that is never read), clears the count, and loops.
+  * 0x98000c: one read a step (0x17f24). Bit 2 picks the list buffer
+    (0x501368 -> geo 0x1008 / 0x3008), and nothing else.
+  * 0x5010b0: a counter of steps, not of vblanks (0x1858, 0x1b0fc).
+  * TGP: its results come back through blocking FIFO reads. They are
+    deterministic in value; when they arrive changes nothing.
+  * Inputs: 0x1d9f0 reads the DPRAM analog channels once a step into a
+    4-sample box filter (0x5fe5d0). In MAME the I/O board answers every
+    vblank: 0x1c00040 is read 0 and written 1 at line 384 in every frame.
+    Under a 1/frame Paddle ramp the steering byte follows with 2 frames'
+    latency and moves 1 per frame, and the filtered value moves 256 per
+    frame.
+  * Game steps per frame in MAME: 1 in every frame of 3 x 841 race frames
+    and of 1,701 frames of the rolling-start drive.
+
+SO MAME's PER-FRAME hscr2 IS THE GAME'S PER-STEP hscr2. Per frame, in
+units of yaw (32 = 1 px of backdrop):
+  * Steady turn (t100, 2850-3150): a yaw rate of 87-89 a frame, changing
+    by <= 3. hscr2 steps 2,3,3,2,3,3. t60: 113-116, steps 3,4,3,4. The
+    only unevenness is the whole-pixel truncation of the angle. The tile
+    chip has no fine scroll, so that is the hardware, not MAME.
+  * The game's shake, 0x501834: a square wave of +-256 (+-8 px), period 4
+    frames, decaying 256/128/64/32, on every wall contact.
+  * Crash spins: a constant 276-351 a frame for ~30 frames, with entries
+    of +-1,000 to 2,900 in one frame.
+  * Slide onset (slide drive, 2800): 0, 229, 655, -71, -297, -129, 15, 60,
+    then a smooth 51 -> 155.
+  * Kicks off the road and on kerbs: a yaw-rate sawtooth with a period of
+    6-8 frames. Examples: 140 105 82 79 60 40 31 34 | 137 97 76 ... and
+    58 57 17 41 48 51 52 122 97 83 86 88 89 138.
+  Counts of frames whose yaw rate changed by >= 128 (4 px): t100 40, t60 41,
+  slide 263, of 841 each. Backdrop step change of >= 4 px: t100 39,
+  t60 43, slide 292.
+  All of this is fixed-step game state, and any hardware that runs one step
+  a vblank shows the same values. THE GAME'S PER-FRAME MOTION IS GENUINELY
+  UNEVEN in slides, kicks, shakes and crashes, in screen terms. But the 3D
+  camera takes the same Y, so the 3D moves with it.
+
+THIS CORE'S SIDE OF THE SAME INPUTS (Model2.sv):
+  * 0x98000c is MAME's videoctl_r (R765).
+  * Vblank IRQ: on tile_vb, but WITHHELD while r3d_game_hold (R652). A
+    withheld vblank is a step the game does not take. That is a hitch MAME
+    never has, though not a slide jerk.
+  * The timers 0xf00000 are not implemented: writes are ignored and reads
+    return 0. This is harmless to Revision A, which never reads them and
+    whose watchdog only reloads them. It is a gap for any game that reads
+    them.
+  * The I/O board is the real Z80 program (m2_ioz80), as in MAME.
+  * At 99% one step a vblank (R815, R817), the core is in the 60 Hz row of
+    R826's table: the 2D one step AHEAD of the 3D on every frame.
+
+INFERRED (not measured on the board or the arcade):
+  * The arcade can look smooth only if the backdrop and the 3D move
+    together, so that the game's uneven yaw reads as the whole view turning.
+    The game's own pairing points that way: R826 found that the scroll for
+    list k is written two steps late, which is right for a flip-to-screen of
+    2 frames. Model 1's RTL (tools/model1-ref m1_raster3d.sv:1174-1176,
+    :1112-1114, :1425) gets the same 2 frames on its board design: the walk
+    starts at the vblank after the flip, the swap comes just before the next
+    vblank, and the pass is shown 2 vblanks after the flip.
+  * The backdrop's jump against the scene per frame is its offset from the
+    3D. The sizes below are from the MAME yaw logs above, with
+    d = 0: aligned; d = +1: MAME (3D early); d = -1: this core at one step a
+    vblank.
+                     d=0     d=+1 or d=-1           d=+2
+       t100 (turn)    0      >=2 px 50, >=4 px 39   76 / 62
+       slide          0      >=2 px 369, >=4 px 261 518 / 414
+    Steady cornering gives ~0 in every case, and slides and kicks give a
+    lot. That matches Ben: "jerky when sliding and turning corners ... the
+    same on the straight if you throw the car into a slide."
+  * Ben's recompilation test (3D delayed one frame, jerk unchanged)
+    contradicts this only if the recompilation started at MAME's d=+1. If
+    it started at d=+2 or d=-1, a one-frame delay leaves it at |d| = 1,
+    which looks the same: d=+1 and d=-1 give equal counts above. This is not
+    checked; the recompilation is Ben's code.
+
+NEXT:
+  1. Measure the recompilation's d directly, before and after the delay:
+     r826_shift.py on its snapshots, or its hscr2 against the list index
+     shown.
+  2. On the board: R826_STRICT + R826_SYNC (the gate). This is the only
+     switch that gives d = 0 at one step a vblank. R826_STRICT alone leaves
+     the core at -1 at 60.
+  3. Keep the R652 hold and the 1% two-vblank steps apart from this jerk:
+     they freeze the whole picture for a frame.
+  Nothing in the RTL was changed for this addendum. No timing input was
+  found, so there was nothing to put behind a parameter.
