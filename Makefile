@@ -556,11 +556,19 @@ obj_m2_sdram/Vm2_sdram_harness: $(SDR_RTL) sim/mem/tb_m2_sdram.cpp
 
 # R789: Model2.sv's thirteen ports and its priority class (1, 2, 3, 4, 10, 11, 12;
 # cap 2) -- the texel cache's four miss ports with the glyph fetch's deadline
-test_m2_sdram13: obj_m2_sdram13/Vm2_sdram_harness
+test_m2_sdram13: obj_m2_sdram13/Vm2_sdram_harness obj_m2_sdram13t/Vm2_sdram_harness
 	@echo "== test m2_sdram, Model2.sv's 13 ports and priority class (R789)"
 	./obj_m2_sdram13/Vm2_sdram_harness
 	@echo "== ... with the four texel miss ports (2, 10, 11, 12) reading eight words (R796)"
 	M2_SDRAM_LONG=1c04 ./obj_m2_sdram13/Vm2_sdram_harness
+	@echo "== ... and port 3 first within the class, as Model2.sv sets it (R822)"
+	M2_SDRAM_LONG=1c04 ./obj_m2_sdram13t/Vm2_sdram_harness
+
+obj_m2_sdram13t/Vm2_sdram_harness: $(SDR_RTL) sim/mem/tb_m2_sdram.cpp
+	$(VBUILD) --top-module m2_sdram_harness -CFLAGS "-O2 -I../sim/mem -DTB_NP=13" \
+	  -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-WIDTHEXPAND -Wno-SYNCASYNCNET \
+	  -GNPP=13 -GPRI=13\'b1110000011110 -GPRI_TOP=13\'b0000000001000 \
+	  --Mdir obj_m2_sdram13t -o Vm2_sdram_harness $(SDR_RTL) sim/mem/tb_m2_sdram.cpp
 
 obj_m2_sdram13/Vm2_sdram_harness: $(SDR_RTL) sim/mem/tb_m2_sdram.cpp
 	$(VBUILD) --top-module m2_sdram_harness -CFLAGS "-O2 -I../sim/mem -DTB_NP=13" \

@@ -31047,3 +31047,22 @@ engine only loses logic); block counts not read from a fit report; every
     No action on either for now.
 Next, at Ben's call: TEST one MultiPCM shared by both sound chips (R821) --
 measured equivalence and area first, nothing switched in until both hold.
+
+**R822 -- THE GLYPH FETCH FIRST WITHIN THE SDRAM PRIORITY CLASS (TILE
+OVERRUNS).** The R814 captures show tile overruns -- a scanline the fetch
+engine does not finish is shown twice (R85, m2_video Q_RUN) -- in 55-62% of
+frames, 5-12 lines a frame, worst 75, unchanged by the 8 KB i-cache (R815).
+Port 3 (the glyph cache's misses) has been in the class since R639, but the
+class grants its LOWEST set port, so it waited behind the i960 (1, R766) and
+the texel port (2). Its traffic is small (~558 of a 3,280-cycle line, R283),
+so the cost is queueing per miss, not bandwidth. m2_sdram gains PRI_TOP
+(default 0 = unchanged): a ready PRI_TOP port is granted before the rest of
+the class; Model2.sv sets port 3. Cost: one AND (PRI_TOP is a constant
+one-hot) and a 2:1 select in front of arb_sel on clk_mem.
+Bench: test_m2_sdram13 gains a PRI_TOP = port 3 run: 2,279,440 checks, 0
+fails, 0 violations, max latency 507 (as without it); test_m2_sdram,
+test_m2_sdram128, test_m2_cpu_sdram PASS; m2_cpu_real 11.26 CPI unchanged.
+Quartus parse clean. NOT YET MEASURED where it matters: whether overruns fall
+needs the 'G' record (a why build); the area agent's caution stands -- m2_video
+notes four dense layers can want ~6,456 cycles against ~3,280, and no SDRAM
+priority helps that.

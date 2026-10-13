@@ -1313,7 +1313,12 @@ m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(781),
            // texel port 2, the glyph fetch (3, R639's per-scanline deadline) and
            // the walker (4) still go first; the cap (2) still lets one
            // round-robin grant through after two class grants.
-           .PRI(13'b1_1100_0001_1110), .PRI_CAP(2)) u_sdram (
+           // R822: and port 3 (the glyph fetch) FIRST within the class. Its
+           // misses have a per-scanline deadline (R639) -- a line it does not
+           // finish is shown twice (a tile overrun, 55-62% of frames on the
+           // board, R814 captures) -- and it uses ~558 of a 3,280-cycle line
+           // (R283), so its wait is queueing behind 1 and 2, not bandwidth.
+           .PRI(13'b1_1100_0001_1110), .PRI_CAP(2), .PRI_TOP(13'b0_0000_0000_1000)) u_sdram (
 	.clk(clk_mem), .rst_n(mem_rst_n), .ready(mem_ready),
 	// CL+2, FIXED, NO OSD OVERRIDE (R411). Only one capture depth can ever be
 	// right -- CL+1 samples the previous word of the burst, CL+3 the next -- so
